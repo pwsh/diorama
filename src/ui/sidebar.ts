@@ -258,7 +258,7 @@ export class Sidebar extends LitElement {
                                    ${isOn ? 'box-shadow:0 0 6px #ce93d8' : ''}"></div>
           <div class="nm">${m.label || 'Motion'}</div>
           ${bound
-            ? html`<div class="badge bound">${isOn ? 'ON' : 'off'}</div>`
+            ? html`<div class="badge bound">${isOn ? 'ON' : 'OFF'}</div>`
             : html`
                 <button class="btn" style="font-size:10px;padding:2px 6px"
                         title="Bind to a Home Assistant entity"
@@ -925,7 +925,7 @@ export class Sidebar extends LitElement {
     const icon = kind === 'light'
       ? (LIGHT_KINDS.find(k => k.id === lightIconKind(it as Light))?.glyph ?? '💡')
       : '⏻';
-    const badge = !bound ? '—' : unavail ? 'n/a' : isOn ? 'ON' : 'off';
+    const badge = !bound ? '—' : unavail ? 'n/a' : isOn ? 'ON' : 'OFF';
     const badgeClass = bound && !unavail && isOn ? 'bound' : '';
     const exp = this._fxExpanded.has(it.id);
     return html`
