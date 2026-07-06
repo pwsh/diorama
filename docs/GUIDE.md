@@ -296,12 +296,31 @@ so a kiosk device can boot straight into a configured view:
 | `view3d` | saved 3D view name or id | initial camera |
 | `cam` | `x,y,z,tx,ty,tz` | explicit camera pose (overrides `view3d`) |
 
-Example:
-`/diorama?mode=kiosk&lock=1&view=3d&floor=First&view3d=Living%20room`
+**Example recipes** (prefix with your HA origin; works for both the native
+panel path `/diorama` and iframe mode `/local/diorama/index.html`):
+
+```text
+# Wall tablet by the front door: locked kiosk, 3D, a saved camera angle,
+# tap lights/switches/doors to control them
+/diorama?mode=kiosk&lock=1&view=3d&floor=First&view3d=Entry%20corner
+
+# Hallway TV: pure visualization, minimal 2D floorplan that highlights
+# rooms with lights on or motion — no touch interaction at all
+/diorama?mode=view&lock=1&view=2d&floor=First&layers=simple
+
+# Office monitor: 3D overview with an exact camera pose — cam= carries the
+# numbers, so it keeps working even if every saved view is deleted
+/diorama?mode=view&view=3d&cam=-3200,4200,-5200,0,900,0
+
+# Quick kiosk on your phone (mode switcher stays available to hop back
+# into editing)
+/diorama?mode=kiosk&view=3d&floor=Basement
+```
 
 **Fallback**: named templates that no longer exist fail gracefully — a
 missing floor or layer preset leaves the defaults, and a missing saved 3D
 view falls back to the standard isometric framing after the store loads.
+Explicit `cam=` poses never depend on saved data, so they can't go stale.
 
 The **🔗 Kiosk link** button in the topbar (edit mode) copies a URL
 reproducing your current floor, view, and exact 3D camera — paste it into a

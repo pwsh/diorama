@@ -14,6 +14,23 @@ but the model is generic — any HA entity can be placed and bound.
 **[User guide with screenshots →](docs/GUIDE.md)** — furniture, lighting,
 walls & rooms, sensors, target rendering, HA binding, hotkeys, and views.
 
+### Kiosk & view-only modes
+
+The topbar mode selector (or URL parameters) switches between **Edit**,
+**Kiosk** (views + device control, nothing editable, nothing persisted) and
+**View only** (pure visualization). Boot a wall tablet straight into a
+configured view:
+
+```text
+/diorama?mode=kiosk&lock=1&view=3d&floor=First&view3d=Living%20room
+/diorama?mode=view&lock=1&view=2d&layers=simple
+```
+
+Supported parameters: `mode`, `lock`, `view`, `floor`, `layers`, `view3d`,
+`cam` — named templates fall back to defaults if they no longer exist. The
+**🔗 Kiosk link** topbar button copies a URL reproducing your current view.
+See the [full parameter table](docs/GUIDE.md#kiosk--view-only-modes).
+
 ## Layout
 
 ```

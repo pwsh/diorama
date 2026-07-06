@@ -30,6 +30,9 @@ Click anything to control it.
   floorplan with activity glow.
 - **Synced through HA** — the whole model lives in Home Assistant user
   data, so every browser and tablet sees the same home.
+- **Kiosk & view-only modes** — pin a wall tablet to a configured view with
+  a URL (`?mode=kiosk&lock=1&view=3d&floor=…`): devices stay tappable but
+  nothing can be edited; view-only drops interaction entirely.
 
 📖 **[Full user guide with screenshots](https://github.com/pwsh/diorama/blob/main/docs/GUIDE.md)**
 
