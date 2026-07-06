@@ -35,8 +35,11 @@ Click anything to control it.
 
 ## Setup
 
-After installing through HACS, register the panel in `configuration.yaml`
-and restart Home Assistant:
+**Add as a HACS custom repository**: HACS → ⋮ → *Custom repositories* →
+repository `https://github.com/pwsh/diorama`, type **Dashboard** → Add,
+then download **Diorama**.
+
+Register the panel in `configuration.yaml` and restart Home Assistant:
 
 ```yaml
 panel_custom:

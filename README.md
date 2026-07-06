@@ -64,11 +64,28 @@ load.
 
 ## Install via HACS (recommended)
 
-1. HACS → ⋮ → **Custom repositories** → add this repo URL, category
-   **Dashboard**.
-2. Install **Diorama**. HACS downloads the release zip into
-   `config/www/community/diorama/`.
-3. Register the panel in `configuration.yaml`:
+Diorama is distributed as a HACS **custom repository** (it is not in the
+HACS default store). You need [HACS](https://hacs.xyz) installed first.
+
+**1. Add the custom repository**
+
+- Open **HACS** in the Home Assistant sidebar.
+- Click the **⋮** menu (top right) → **Custom repositories**.
+- Repository: `https://github.com/pwsh/diorama`
+- Type: **Dashboard**
+- Click **Add**, then close the dialog.
+
+**2. Install Diorama**
+
+- Search HACS for **Diorama** and open it (the store page shows the
+  feature overview).
+- Click **Download** and pick the latest release. HACS unpacks the release
+  zip into `config/www/community/diorama/`.
+
+**3. Register the panel**
+
+Add this to `configuration.yaml` and **restart Home Assistant**
+(`panel_custom` is only read at startup):
 
 ```yaml
 panel_custom:
@@ -79,6 +96,27 @@ panel_custom:
     module_url: /hacsfiles/diorama/diorama-panel.js
     embed_iframe: false
 ```
+
+**4. Open it**
+
+**Diorama** appears in the HA sidebar. Panel mode rides HA's own
+authentication — no tokens needed. Draw walls, place devices, and bind
+entities (see the [user guide](docs/GUIDE.md)).
+
+**Updating**: HACS shows updates when new releases are published — update
+from HACS, then hard-refresh the browser (or bump a `?v=` query on
+`module_url` + restart) if the panel looks stale; HA caches panel modules
+aggressively.
+
+**Troubleshooting**
+- *"Unable to load custom panel"* — the release zip didn't land in
+  `config/www/community/diorama/` (re-download in HACS) or the
+  `module_url` doesn't match; it must be exactly
+  `/hacsfiles/diorama/diorama-panel.js`.
+- *Panel shows an old version after updating* — browser/service-worker
+  cache; do a hard refresh, or clear site data for your HA origin once.
+- *No versions offered in HACS* — the repository has no published release
+  yet; HACS `zip_release` installs only from releases.
 
 Releases are built + zipped automatically by GitHub Actions
 (`.github/workflows/release.yml`); `hacs.json` uses `zip_release` so the
