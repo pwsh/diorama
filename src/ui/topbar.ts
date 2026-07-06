@@ -1,4 +1,4 @@
-import { LitElement, html } from 'lit';
+import { LitElement, html, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { fmtLen } from '../geometry.js';
 import type { Planner } from '../planner.js';
@@ -24,6 +24,26 @@ export class Topbar extends LitElement {
   }
   private _tick = () => { this._++; };
 
+  private _copyKioskLink = async () => {
+    const p = this.planner;
+    const u = new URL(window.location.href);
+    u.searchParams.set('mode', 'kiosk');
+    u.searchParams.set('view', p.view);
+    u.searchParams.set('floor', p.floor().name);
+    if (p.view === '3d' && p.lastCam3d) {
+      const c = [...p.lastCam3d.pos, ...p.lastCam3d.target].map(n => Math.round(n));
+      u.searchParams.set('cam', c.join(','));
+    } else {
+      u.searchParams.delete('cam');
+    }
+    try {
+      await navigator.clipboard.writeText(u.toString());
+      alert('Kiosk URL copied to clipboard.');
+    } catch {
+      prompt('Kiosk URL:', u.toString());
+    }
+  };
+
   override render() {
     const p = this.planner;
     const connClass = p.conn === 'connected' ? 'connected'
@@ -34,10 +54,12 @@ export class Topbar extends LitElement {
     return html`
       <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;padding:0 12px;height:48px;
                   background:var(--surface2);border-bottom:1px solid var(--border)">
-        <button class="btn-sm ${p.sidebarOpen ? 'active' : ''}"
-                title=${p.sidebarOpen ? 'Hide side panel' : 'Show side panel'}
-                style="font-size:14px;padding:4px 8px"
-                @click=${() => p.toggleSidebar()}>☰</button>
+        ${p.uiMode === 'edit' ? html`
+          <button class="btn-sm ${p.sidebarOpen ? 'active' : ''}"
+                  title=${p.sidebarOpen ? 'Hide side panel' : 'Show side panel'}
+                  style="font-size:14px;padding:4px 8px"
+                  @click=${() => p.toggleSidebar()}>☰</button>
+        ` : nothing}
         <button class="btn-sm" title="Open Home Assistant menu"
                 style="font-size:14px;padding:4px 8px"
                 @click=${this._openHaMenu}>🏠</button>
@@ -53,9 +75,26 @@ export class Topbar extends LitElement {
             </option>
           `)}
         </select>
-        <button class="btn" title="New floor" @click=${this._openNew}>+ Floor</button>
-        <button class="btn" title="Edit floor size / name" @click=${this._openEdit}>✎</button>
-        <button class="btn danger" title="Delete current floor" @click=${this._delFloor}>🗑</button>
+        ${p.uiMode === 'edit' ? html`
+          <button class="btn" title="New floor" @click=${this._openNew}>+ Floor</button>
+          <button class="btn" title="Edit floor size / name" @click=${this._openEdit}>✎</button>
+          <button class="btn danger" title="Delete current floor" @click=${this._delFloor}>🗑</button>
+        ` : nothing}
+        ${!p.uiModeLocked ? html`
+          <select title="UI mode: Edit (full editor) / Kiosk (interact with devices, no editing) / View only (visualization, no interaction)"
+                  style="background:#111;color:var(--text);border:1px solid var(--border);
+                         border-radius:5px;padding:5px 8px;font-size:12px"
+                  .value=${p.uiMode}
+                  @change=${(e: Event) => p.setUiMode((e.target as HTMLSelectElement).value as 'edit' | 'kiosk' | 'view')}>
+            <option value="edit">✏️ Edit</option>
+            <option value="kiosk">🖥 Kiosk</option>
+            <option value="view">👁 View only</option>
+          </select>
+        ` : nothing}
+        ${p.uiMode === 'edit' ? html`
+          <button class="btn" title="Copy a kiosk URL reproducing the current floor, view, and 3D camera — open it on a wall tablet (add &lock=1 in the URL to hide the mode switcher there)"
+                  @click=${this._copyKioskLink}>🔗 Kiosk link</button>
+        ` : nothing}
         <span style="flex:1"></span>
         <div style="display:flex;gap:4px">
           <button class="btn-sm ${p.view === '2d' ? 'active' : ''}"
@@ -96,7 +135,9 @@ export class Topbar extends LitElement {
         <button class="btn-sm ${p.showDetails ? 'active' : ''}"
                 title="Toggle target detail overlay"
                 @click=${this._toggleDetails}>ⓘ</button>
-        <button class="btn-sm" title="Settings" @click=${this._openSettings}>⚙</button>
+        ${p.uiMode === 'edit' ? html`
+          <button class="btn-sm" title="Settings" @click=${this._openSettings}>⚙</button>
+        ` : nothing}
         <span class="pill ${connClass}">${connText}</span>
       </div>
     `;

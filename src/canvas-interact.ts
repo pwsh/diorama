@@ -214,6 +214,7 @@ export function connectWallEnds(
 }
 
 export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: View, e: MouseEvent): void {
+  if (p.uiMode !== 'edit') return;  // kiosk/view: no drags, no selections
   if (p.editZone) return;
   const mm = pxToMm(canvas, view, e);
   if (p.tool !== 'select') return;
@@ -624,6 +625,14 @@ export function onCanvasMouseMove(p: Planner, canvas: HTMLCanvasElement, view: V
   }
 
   // Cursor hint
+  if (p.uiMode === 'view') { canvas.style.cursor = 'default'; return; }
+  if (p.uiMode === 'kiosk') {
+    const overDevice =
+      hitFixture(p, mm, Math.max(250, hitPx(view) * 3)) ||
+      hitDoor(p, view, mm) || hitWindow(p, view, mm);
+    canvas.style.cursor = overDevice ? 'pointer' : 'default';
+    return;
+  }
   if (p.tool === 'select') {
     const bgc = hitBgCorner(p, view, mm);
     if (bgc) canvas.style.cursor = (bgc.sx * bgc.sy > 0) ? 'nwse-resize' : 'nesw-resize';
@@ -760,6 +769,23 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
   if (p.dragJustEnded) { p.dragJustEnded = false; return; }
   const mm = pxToMm(canvas, view, e);
   const f = p.floor();
+
+  // View-only: pure visualization, clicks do nothing.
+  if (p.uiMode === 'view') return;
+  // Kiosk: clicks interact with devices (toggle) but never edit.
+  if (p.uiMode === 'kiosk') {
+    const fx2 = hitFixture(p, mm, Math.max(250, hitPx(view) * 3));
+    if (fx2) {
+      const it = (fx2.kind === 'light' ? f.lights : f.switches)[fx2.idx];
+      if (it?.entity_id) p.toggleEntity(it.entity_id);
+      return;
+    }
+    const dHit2 = hitDoor(p, view, mm);
+    if (dHit2?.door.entity_id) { p.toggleEntity(dHit2.door.entity_id); return; }
+    const wHit2 = hitWindow(p, view, mm);
+    if (wHit2?.win.entity_id) { p.toggleEntity(wHit2.win.entity_id); return; }
+    return;
+  }
 
   if (p.editZone) {
     const sa = p.activeSensor(); if (!sa) return;
@@ -960,6 +986,21 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
 
 export function onCanvasDblClick(p: Planner, canvas: HTMLCanvasElement, view: View, e: MouseEvent): void {
   const mm = pxToMm(canvas, view, e);
+  if (p.uiMode === 'view') return;
+  if (p.uiMode === 'kiosk') {
+    // Device interaction only: dblclick a bound light opens its
+    // color/brightness config (an HA control, not an edit). Nothing else.
+    const fx3 = hitFixture(p, mm, Math.max(250, 18 / Math.max(view.scale, 1e-9)));
+    if (fx3) {
+      const it = (fx3.kind === 'light' ? p.floor().lights : p.floor().switches)[fx3.idx];
+      if (it && p.isLightEntity(it.entity_id)) {
+        canvas.dispatchEvent(new CustomEvent('open-light-config', {
+          bubbles: true, composed: true, detail: { entityId: it.entity_id },
+        }));
+      }
+    }
+    return;
+  }
   if (p.editZone) { finishZoneEdit(p); return; }
   if (p.tool === 'wall' && p.drawingWall && p.drawingWall.points.length >= 2) {
     p.drawingWall.id = newId('w');

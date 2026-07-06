@@ -19,7 +19,7 @@ development docs see the [README](../README.md).
 - [Switches](#switches)
 - [Hotkeys](#hotkeys)
 - [View setup](#view-setup)
-  - [2D view](#2d-view) · [3D view](#3d-view)
+  - [2D view](#2d-view) · [3D view](#3d-view) · [Kiosk & view-only modes](#kiosk--view-only-modes)
 - [Time-of-day lighting](#time-of-day-lighting)
 - [Sensor placement](#sensor-placement)
   - [mmWave (LD2450) sensors](#mmwave-ld2450-sensors) · [Motion sensors](#motion-sensors) · [Environmental sensors](#environmental-sensors)
@@ -266,6 +266,46 @@ The **3D Scene** sidebar section sets floor color/texture (wood, tile,
 concrete), wall color, and per-floor overrides of each ("This floor only").
 
 ---
+
+### Kiosk & view-only modes
+
+The mode selector in the topbar switches between three UI modes:
+
+| Mode | Change views | Interact with devices | Edit anything |
+|------|--------------|----------------------|---------------|
+| ✏️ **Edit** | ✔ | ✔ | ✔ |
+| 🖥 **Kiosk** | ✔ | ✔ (click to toggle, double-click lights for color/brightness) | ✘ |
+| 👁 **View only** | ✔ | ✘ | ✘ |
+
+In kiosk and view-only modes the sidebar and all editing affordances
+disappear, edit hotkeys are disabled, and **nothing is ever saved** — a wall
+tablet can't write its runtime tweaks back to Home Assistant. Pan, zoom,
+2D/3D switching, floor switching, camera presets, and saved views all still
+work.
+
+**URL templates** — every mode and view setting can be passed in the URL,
+so a kiosk device can boot straight into a configured view:
+
+| Parameter | Values | Effect |
+|-----------|--------|--------|
+| `mode` | `kiosk` \| `view` | start in that mode |
+| `lock` | `1` | hide the mode switcher (can't leave kiosk/view) |
+| `view` | `2d` \| `3d` | initial view |
+| `floor` | floor name or id | initial floor |
+| `layers` | preset name/id, `simple`, `full` | 2D layer preset |
+| `view3d` | saved 3D view name or id | initial camera |
+| `cam` | `x,y,z,tx,ty,tz` | explicit camera pose (overrides `view3d`) |
+
+Example:
+`/diorama?mode=kiosk&lock=1&view=3d&floor=First&view3d=Living%20room`
+
+**Fallback**: named templates that no longer exist fail gracefully — a
+missing floor or layer preset leaves the defaults, and a missing saved 3D
+view falls back to the standard isometric framing after the store loads.
+
+The **🔗 Kiosk link** button in the topbar (edit mode) copies a URL
+reproducing your current floor, view, and exact 3D camera — paste it into a
+wall tablet's browser (append `&lock=1` to pin it).
 
 ## Time-of-day lighting
 

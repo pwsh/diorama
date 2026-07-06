@@ -50,15 +50,19 @@ export class ThreeView extends LitElement {
             <option value="">Saved…</option>
             ${saved.map(v => html`<option value=${v.id}>${v.name}</option>`)}
           </select>
-          <button title="Delete a saved view"
-                  style="font-size:10px;padding:3px 5px;background:#1c2733;border:1px solid #33465a;
-                         border-radius:3px;color:#cfd8dc;cursor:pointer"
-                  @click=${() => this._deleteSavedView()}>🗑</button>
+          ${p.uiMode === 'edit' ? html`
+            <button title="Delete a saved view"
+                    style="font-size:10px;padding:3px 5px;background:#1c2733;border:1px solid #33465a;
+                           border-radius:3px;color:#cfd8dc;cursor:pointer"
+                    @click=${() => this._deleteSavedView()}>🗑</button>
+          ` : nothing}
         ` : nothing}
-        <button title="Save the current camera as a named view"
-                style="font-size:10px;padding:3px 7px;background:#1c2733;border:1px solid #33465a;
-                       border-radius:3px;color:#ffd54f;cursor:pointer"
-                @click=${() => this._saveCurrentView()}>💾 Save</button>
+        ${p.uiMode === 'edit' ? html`
+          <button title="Save the current camera as a named view"
+                  style="font-size:10px;padding:3px 7px;background:#1c2733;border:1px solid #33465a;
+                         border-radius:3px;color:#ffd54f;cursor:pointer"
+                  @click=${() => this._saveCurrentView()}>💾 Save</button>
+        ` : nothing}
       </div>
     `;
   }
@@ -110,13 +114,17 @@ export class ThreeView extends LitElement {
     // Fixture click → toggle whatever entity is bound (uses entity's actual
     // domain so a "switch" fixture bound to a light entity does light.toggle).
     this._renderer.onFixtureClick(({ entity_id }) => {
+      // toggleEntity itself refuses in view-only mode.
       this.planner.toggleEntity(entity_id);
     });
     this._renderer.onFixtureDblClick(({ kind, entity_id, fixtureId }) => {
+      if (this.planner.uiMode === 'view') return;
       if (this.planner.isLightEntity(entity_id)) {
         this.dispatchEvent(new CustomEvent('open-light-config', {
           bubbles: true, composed: true, detail: { entityId: entity_id },
         }));
+      } else if (this.planner.uiMode !== 'edit') {
+        return;  // kiosk: no binding pickers
       } else if (!entity_id) {
         const f = this.planner.floor();
         const arr = kind === 'light' ? f.lights : f.switches;
@@ -143,6 +151,36 @@ export class ThreeView extends LitElement {
   }
 
   private _lastFloorId: string | null = null;
+  // ?view3d= / ?cam= template application. Saved views live in the HA store,
+  // which loads async — retry each tick until found, then fall back to the
+  // default iso framing if the named view never appears.
+  private _tplPending = true;
+  private _tplStart = 0;
+
+  private _applyUrlTemplate(): void {
+    if (!this._tplPending || !this._renderer?.loaded) return;
+    const p = this.planner;
+    const tpl = p.urlTemplate;
+    if (!tpl.cam && !tpl.view3d) { this._tplPending = false; return; }
+    if (!this._tplStart) this._tplStart = performance.now();
+    if (tpl.cam && tpl.cam.length === 6) {
+      const c = tpl.cam;
+      this._renderer.setCameraView([c[0], c[1], c[2]], [c[3], c[4], c[5]]);
+      this._tplPending = false;
+      return;
+    }
+    const want = (tpl.view3d ?? '').toLowerCase();
+    const v = (p.store.views3d ?? []).find(x =>
+      x.id === tpl.view3d || x.name.toLowerCase() === want);
+    if (v) {
+      this._renderer.setCameraView(v.pos, v.target);
+      this._tplPending = false;
+    } else if (performance.now() - this._tplStart > 15000) {
+      // Named view no longer exists — fail back to the default framing.
+      this._renderer.applyViewPreset('iso');
+      this._tplPending = false;
+    }
+  }
 
   // Resolve the lighting preset for auto modes. 'clock' prefers HA's sun.sun
   // elevation and falls back to the local clock; 'lux' maps an illuminance
@@ -200,6 +238,8 @@ export class ThreeView extends LitElement {
   private _tickOnce(): void {
       const r = this._renderer; if (!r || !r.loaded) return;
       const p = this.planner;
+      this._applyUrlTemplate();
+      p.lastCam3d = r.cameraView();
       const f = p.floor();
       const states = p.hass?.states ?? {};
       const stOf = (id: string | null | undefined): string =>

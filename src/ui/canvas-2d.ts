@@ -313,6 +313,8 @@ export class Canvas2D extends LitElement {
       if (p.store.activeSensorId) { p.store.activeSensorId = null; p.save(); p.emitConfig(); }
     }
     if (e.key === 'Enter' && p.editZone) { finishZoneEdit(p); return; }
+    if (e.key === '0' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); p.resetView(); return; }
+    if (this.planner.uiMode !== 'edit') return;  // kiosk/view: no edit keys
     if (e.key === 'Delete' || e.key === 'Backspace') {
       const f = p.floor();
       if (p.activeMotionId) {
@@ -328,7 +330,6 @@ export class Canvas2D extends LitElement {
         p.save(); p.emitConfig();
       }
     }
-    if (e.key === '0' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); p.resetView(); return; }
     const tk: Record<string, import('../planner.js').Tool> = {
       '1': 'select', '2': 'wall', '3': 'sensor', '4': 'motion',
       '5': 'furniture', '6': 'light', '7': 'switch', '8': 'delete',

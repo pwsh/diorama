@@ -32,12 +32,76 @@ export class App extends LitElement {
     this._planner = p;
     this._planner.addEventListener('config', () => this.requestUpdate());
     this._connected = true;
+    this._applyUrlParams(p);
     this.requestUpdate();
+  }
+
+  // ?mode=kiosk|view (&lock=1)  ?view=2d|3d  ?floor=<name|id>
+  // ?layers=<preset name|id>|simple|full  ?view3d=<saved view name|id>
+  // ?cam=x,y,z,tx,ty,tz
+  // Floor / layer templates live in the HA store, which loads async — retry
+  // on config events for 20 s, then give up (defaults remain = fallback).
+  private _tplDone = { floor: false, layers: false };
+  private _applyUrlParams(p: Planner): void {
+    const q = new URLSearchParams(window.location.search);
+    const mode = q.get('mode');
+    if (mode === 'kiosk' || mode === 'view') {
+      p.setUiMode(mode);
+      if (q.get('lock') === '1') p.uiModeLocked = true;
+    }
+    const view = q.get('view');
+    if (view === '2d' || view === '3d') p.view = view;
+    p.urlTemplate = {
+      floor: q.get('floor') ?? undefined,
+      layers: q.get('layers') ?? undefined,
+      view3d: q.get('view3d') ?? undefined,
+      cam: q.get('cam')?.split(',').map(Number).filter(n => isFinite(n)),
+    };
+    if (!p.urlTemplate.floor) this._tplDone.floor = true;
+    if (!p.urlTemplate.layers) this._tplDone.layers = true;
+    const started = performance.now();
+    const attempt = () => {
+      if (!this._tplDone.floor) {
+        const want = (p.urlTemplate.floor ?? '').toLowerCase();
+        const fl = p.store.floors.find(f => f.id === p.urlTemplate.floor ||
+                                            f.name.toLowerCase() === want);
+        if (fl) {
+          p.store.currentFloorId = fl.id;
+          p.viewCenter = null; p.zoom = 1;
+          this._tplDone.floor = true;
+          p.emitConfig();
+        }
+      }
+      if (!this._tplDone.layers) {
+        const want = (p.urlTemplate.layers ?? '').toLowerCase();
+        if (want === 'simple') {
+          p.store.layers2d = { bg: false, furniture: false, lights: false, sensors: false,
+                               motion: false, env: false, zones: false, targets: true, activity: true };
+          this._tplDone.layers = true; p.emitConfig();
+        } else if (want === 'full') {
+          p.store.layers2d = undefined;
+          this._tplDone.layers = true; p.emitConfig();
+        } else {
+          const pr = (p.store.layerPresets2d ?? []).find(x =>
+            x.id === p.urlTemplate.layers || x.name.toLowerCase() === want);
+          if (pr) {
+            p.store.layers2d = { ...pr.layers };
+            this._tplDone.layers = true; p.emitConfig();
+          }
+        }
+      }
+      if ((!this._tplDone.floor || !this._tplDone.layers) &&
+          performance.now() - started < 20000) return;  // keep listening
+      p.removeEventListener('config', attempt);  // done or timed out → defaults stand
+    };
+    p.addEventListener('config', attempt);
+    attempt();
   }
 
   override connectedCallback(): void {
     super.connectedCallback();
     injectSharedStyles();
+    if (this._planner) this._applyUrlParams(this._planner);
     if (!this._planner) {
       const token = localStorage.getItem('diorama:token');
       if (token) {
@@ -91,7 +155,7 @@ export class App extends LitElement {
       <div style="display:flex;flex-direction:column;height:100%">
         <diorama-topbar .planner=${p}></diorama-topbar>
         <div style="display:flex;flex:1;overflow:hidden;position:relative">
-          ${p.sidebarOpen ? html`
+          ${p.uiMode === 'edit' && p.sidebarOpen ? html`
             <div class="sidebar-backdrop" @click=${() => p.toggleSidebar()}></div>
             <diorama-sidebar .planner=${p}></diorama-sidebar>
           ` : nothing}

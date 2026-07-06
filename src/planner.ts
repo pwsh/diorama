@@ -78,6 +78,30 @@ export class Planner extends EventTarget {
   // Active environmental sensor (sidebar selection / canvas highlight)
   activeEnvId: string | null = null;
 
+  // UI mode. Runtime + URL-driven, never persisted.
+  //   edit  — full editor (default)
+  //   kiosk — views + device interaction only; nothing editable, nothing saved
+  //   view  — pure visualization; no device interaction either
+  uiMode: 'edit' | 'kiosk' | 'view' = 'edit';
+  // ?lock=1 hides the mode switcher (wall tablets).
+  uiModeLocked = false;
+  // Parsed ?floor/?layers/?view3d/?cam template args (applied by app/three-view
+  // with fallback to defaults when the named things no longer exist).
+  urlTemplate: { floor?: string; layers?: string; view3d?: string; cam?: number[] } = {};
+  // Live 3D camera pose (scene coords), updated by three-view each tick so
+  // the topbar can mint kiosk links that reproduce the current view.
+  lastCam3d: { pos: [number, number, number]; target: [number, number, number] } | null = null;
+
+  setUiMode(m: 'edit' | 'kiosk' | 'view'): void {
+    this.uiMode = m;
+    if (m !== 'edit') {
+      // Leave no edit affordances dangling.
+      this.drag = null; this.editZone = null; this.drawingWall = null;
+      this.tool = 'select';
+    }
+    this.emitConfig();
+  }
+
   // Which furniture kind the next drop should create. Runtime only.
   pendingFurnitureKind: import('./types.js').FurnitureKind = 'block';
 
@@ -132,6 +156,10 @@ export class Planner extends EventTarget {
     return this.floor().sensors.find(s => s.id === this.store.activeSensorId) || null;
   }
   save(): void {
+    // Kiosk / view-only modes never persist anything — a wall tablet must
+    // not write its runtime view tweaks (or anything else) back to HA or
+    // even its own localStorage cache.
+    if (this.uiMode !== 'edit') return;
     // Local cache is always written immediately so it survives reload.
     saveStore(this.store);
     // HA is the source of truth: debounce a push so rapid edits (drag, slider)
@@ -652,6 +680,7 @@ export class Planner extends EventTarget {
   // based on the entity_id, so a "switch" fixture wired to a light entity
   // calls light.toggle (not switch.toggle, which would 404).
   toggleEntity(entity_id: string | null | undefined): void {
+    if (this.uiMode === 'view') return;  // visualization only — no control
     if (!this.hass || !entity_id) return;
     const dot = entity_id.indexOf('.');
     const domain = dot > 0 ? entity_id.slice(0, dot) : '';
