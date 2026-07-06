@@ -5,7 +5,7 @@ import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
 import { MTLLoader } from 'three/examples/jsm/loaders/MTLLoader.js';
 import type {
   Floor, Sensor, Light, SwitchFixture, MotionSensor, Vec2, HassState,
-  Scene3D, ScenePreset, FloorTexKind, Model3D,
+  Scene3D, ScenePreset, FloorTexKind, Model3D, Furniture,
 } from './types.js';
 import {
   lightHeight, lightRadius, lightIntensity, lightIconKind, lightRotation, lightLength,
@@ -15,7 +15,7 @@ import {
   ENV_KINDS, envKindOf, envColor, envValueText, envHeight, envScale,
 } from './geometry.js';
 import type { Door, Window as WindowType, EnvSensor } from './types.js';
-import { wallCutsForSegment, closedWallLoops, wallKind, WALL_KINDS } from './geometry.js';
+import { wallCutsForSegment, closedWallLoops, wallKind, WALL_KINDS, furnitureLocalToWorld, furnitureWorldToLocal, pointInPolygon as pip } from './geometry.js';
 
 export interface ZoneWorld { vertices: Vec2[]; color: number; occupied: boolean; }
 export interface HaloWorld { x: number; y: number; radius: number; occupied: boolean; }
@@ -44,6 +44,7 @@ interface Humanoid {
   facing: number;      // body yaw derived from smoothed velocity
   amp: number;         // eased limb-swing amplitude (rad) — smooths gait starts/stops
   sit: number;         // eased sitting blend 0 (standing) .. 1 (seated)
+  groundY: number;     // eased terrain height under the figure (stairs/landings)
   dwell: number;       // seconds of near-zero speed (sitting trigger)
   sitSpot: SitSpot | null;  // anchor seat; retained while easing back up
   scale: number;       // eased spawn/despawn scale (0..1)
@@ -94,6 +95,10 @@ export class ThreeDRenderer {
   // Fan rotor groups spun in the render loop. rps ≤ 1 (100% = 1 rev/s).
   // Angle derives from the absolute clock, so rebuilds don't jump phase.
   private _fanRotors: { obj: THREE.Object3D; rps: number }[] = [];
+  // Walkable terrain (stairs + landings): humanoids stand on the computed
+  // surface height instead of the floor plane.
+  private _terrain: { x: number; y: number; w: number; h: number; rotation?: number;
+                      ht: number; elevation: number; kind: string }[] = [];
 
   // Lighting rig (preset-tunable).
   private _ambient: THREE.AmbientLight | null = null;
@@ -300,6 +305,7 @@ export class ThreeDRenderer {
     this._humanoids = {};
     this._sitSpots = [];
     this._fanRotors = [];
+    this._terrain = [];
   }
 
   // ── Camera views ────────────────────────────────────────────────────────
@@ -330,6 +336,28 @@ export class ThreeDRenderer {
     };
     const v = views[kind] ?? views.iso;
     this.setCameraView(v, [0, 0, 0]);
+  }
+
+  // Surface height (mm) under a world point: the highest stair tread or
+  // landing containing it, else the floor (0). Stair treads quantize to the
+  // same step layout the builder renders, so figures stand ON treads.
+  private _groundYAt(wx: number, wy: number): number {
+    let g = 0, found = false;
+    for (const t of this._terrain) {
+      const l = furnitureWorldToLocal(t.rotation, wx - t.x, wy - t.y);
+      if (Math.abs(l.x) > t.w / 2 || Math.abs(l.y) > t.h / 2) continue;
+      let gy: number;
+      if (t.kind === 'stair_landing') {
+        gy = t.elevation + t.ht;
+      } else {
+        const n = Math.max(3, Math.round(t.h / 280));
+        const frac = (l.y + t.h / 2) / t.h;  // 0 at the front → 1 at the top
+        const step = Math.min(n - 1, Math.max(0, Math.floor(frac * n)));
+        gy = t.elevation + (t.ht / n) * (step + 1);
+      }
+      if (!found || gy > g) { g = gy; found = true; }
+    }
+    return found ? g : 0;
   }
 
   // World→3D mapping: flip X so screen-right matches 2D world +X; world Y → 3D Z.
@@ -507,6 +535,22 @@ export class ThreeDRenderer {
     // walls count, so an open-plan boundary can close a region without
     // rendering a wall. No closed loop → classic full-rectangle floor.
     const loops = closedWallLoops(f.walls ?? []);
+    // Stairs sunk below the floor (negative elevation) cut a stairwell
+    // opening so the descending flight is visible from above.
+    const wellCuts = (f.furniture ?? []).filter(fu =>
+      (fu.kind === 'stairs' || fu.kind === 'stairs_half' || fu.kind === 'stair_landing') &&
+      (fu.elevation ?? 0) < 0);
+    const wellPath = (fu: Furniture): { path: THREE.Path; center: { x: number; y: number } } => {
+      const path = new THREE.Path();
+      const cs: [number, number][] = [[-1, -1], [1, -1], [1, 1], [-1, 1]];
+      cs.forEach(([sx, sy], i) => {
+        const lw = furnitureLocalToWorld(fu.rotation, sx * fu.w / 2, sy * fu.h / 2);
+        const px = f.w / 2 - (fu.x + lw.x), py = f.d / 2 - (fu.y + lw.y);
+        if (i === 0) path.moveTo(px, py); else path.lineTo(px, py);
+      });
+      path.closePath();
+      return { path, center: { x: fu.x, y: fu.y } };
+    };
     const floorMat = new THREE.MeshStandardMaterial({
       color: floorColor, map: floorTex ?? null,
       side: THREE.DoubleSide, roughness: 0.9, metalness: 0.0,
@@ -524,11 +568,30 @@ export class ThreeDRenderer {
           if (i === 0) shape.moveTo(sx, sy); else shape.lineTo(sx, sy);
         });
         shape.closePath();
+        // Stairwell holes whose center falls inside this loop.
+        for (const fu of wellCuts) {
+          const { path, center } = wellPath(fu);
+          if (pip(center.x, center.y, loop)) shape.holes.push(path);
+        }
         const mesh = new THREE.Mesh(new THREE.ShapeGeometry(shape), floorMat);
         mesh.rotation.x = -Math.PI / 2;
         mesh.receiveShadow = true;
         this._floorGroup.add(mesh);
       }
+    } else if (wellCuts.length) {
+      // Full-rectangle floor as a Shape so stairwells can pierce it.
+      if (floorTex) floorTex.repeat.set(1 / 800, 1 / 800);
+      const shape = new THREE.Shape();
+      shape.moveTo(f.w / 2, f.d / 2);
+      shape.lineTo(-f.w / 2, f.d / 2);
+      shape.lineTo(-f.w / 2, -f.d / 2);
+      shape.lineTo(f.w / 2, -f.d / 2);
+      shape.closePath();
+      for (const fu of wellCuts) shape.holes.push(wellPath(fu).path);
+      const mesh = new THREE.Mesh(new THREE.ShapeGeometry(shape), floorMat);
+      mesh.rotation.x = -Math.PI / 2;
+      mesh.receiveShadow = true;
+      this._floorGroup.add(mesh);
     } else {
       const floor = new THREE.Mesh(new THREE.PlaneGeometry(f.w, f.d), floorMat);
       floor.rotation.x = -Math.PI / 2;
@@ -647,14 +710,22 @@ export class ThreeDRenderer {
     // sofas / beds) maps to local -Z after the X-mirror in `_w`, so backrests
     // get placed at child.position.z = -depth/2.
     this._sitSpots = [];
+    this._terrain = [];
     for (const fu of f.furniture) {
       const grp = this._buildFurniture(fu);
       this._shadowFlags(grp);
       this._floorGroup.add(grp);
+      const def = furnitureDef(fu);
+      // Stairs and landings are walkable terrain for humanoid targets.
+      if (fu.kind === 'stairs' || fu.kind === 'stairs_half' || fu.kind === 'stair_landing') {
+        this._terrain.push({
+          x: fu.x, y: fu.y, w: fu.w, h: fu.h, rotation: fu.rotation,
+          ht: def.ht, elevation: fu.elevation ?? 0, kind: fu.kind,
+        });
+      }
       // Sittable kinds (def.seat set) become seating anchors for humanoids.
       // Facing: person sits facing away from the backrest — body-local -Z,
       // which is the furniture group's yaw.
-      const def = furnitureDef(fu);
       if (def.seat) {
         const c = this._w(fu.x, fu.y, 0);
         this._sitSpots.push({
@@ -981,6 +1052,17 @@ export class ThreeDRenderer {
           addBox(W, hStep, treadD, wood, 0, hStep / 2, -D / 2 + (i + 0.5) * treadD);
           // Tread cap for a visible nosing line.
           addBox(W, 22, treadD, treadMat, 0, hStep - 11, -D / 2 + (i + 0.5) * treadD);
+        }
+        // Sunk below the floor (descending flight): line the stairwell with
+        // dark shaft walls up to floor level so the opening reads as a well.
+        if ((fu.elevation ?? 0) < 0) {
+          const shaftMat = new THREE.MeshStandardMaterial({
+            color: 0x2a2d31, roughness: 0.9, side: THREE.DoubleSide,
+          });
+          const wellH = -(fu.elevation ?? 0);
+          addBox(24, wellH, D, shaftMat, -W / 2 + 12, wellH / 2, 0);
+          addBox(24, wellH, D, shaftMat, W / 2 - 12, wellH / 2, 0);
+          addBox(W, wellH, 24, shaftMat, 0, wellH / 2, D / 2 - 12);  // wall under the top edge
         }
         break;
       }
@@ -2229,6 +2311,11 @@ export class ThreeDRenderer {
       h.scale += (1 - h.scale) * Math.min(1, dt * 10);
       h.group.scale.setScalar(h.scale);
 
+      // Terrain: figures on stairs/landings stand at the surface height,
+      // eased so climbing reads as a glide up the treads rather than pops.
+      const gTarget = this._groundYAt(t.x, t.y);
+      h.groundY += (gTarget - h.groundY) * Math.min(1, dt * 8);
+
       // Subtle vertical bob — peaks twice per stride cycle. When seated the
       // root drops so the hip pivot (870 mm in the rig) rests on the seat,
       // and x/z pull onto the seat center.
@@ -2236,7 +2323,7 @@ export class ThreeDRenderer {
       const HIP_Y = 870;
       const px2 = spot ? p.x * stand + spot.x * sit : p.x;
       const pz2 = spot ? p.z * stand + spot.z * sit : p.z;
-      const py2 = (p.y + bob) * stand + (spot ? (spot.seatY - HIP_Y) * sit : 0);
+      const py2 = (h.groundY + bob) * stand + (spot ? (spot.seatY - HIP_Y) * sit : 0);
       h.group.position.set(px2, py2, pz2);
     }
 
@@ -2416,7 +2503,7 @@ export class ThreeDRenderer {
       rightElbow: rightArm.elbow,
       phase: 0, facing: 0,
       amp: 0, scale: 0,
-      sit: 0, dwell: 0, sitSpot: null,
+      sit: 0, groundY: 0, dwell: 0, sitSpot: null,
       idleOffset: Math.random() * Math.PI * 2,
       vx: 0, vz: 0,
       lastX: 0, lastZ: 0, lastUpdate: 0, initialized: false,

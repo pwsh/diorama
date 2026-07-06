@@ -98,6 +98,15 @@ lines and an up-arrow):
 For an L or U staircase: half flight → landing → another half flight rotated
 90/180° with its **Elevation** set to 1372 so it starts at the landing.
 
+**Going downstairs**: set a flight's Elevation *negative* (−2743 for a full
+storey) and it sinks below this floor — the 3D floor opens a stairwell above
+it, lined with dark shaft walls, and the 2D symbol flips its arrow and reads
+**DN**. Tracked people walking across the stairwell descend the treads.
+
+**Targets on stairs**: humanoid figures stand at the surface height of
+whatever tread or landing is under them, so someone walking up or down a
+staircase visibly climbs it step by step.
+
 ![Stairs](images/stairs.png)
 
 ### Locking

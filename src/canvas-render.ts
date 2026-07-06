@@ -771,13 +771,27 @@ function drawFurniturePrimitiveLocal(
         const ty = y + (h * i) / nSteps;
         ctx.beginPath(); ctx.moveTo(x + 2, ty); ctx.lineTo(x + w - 2, ty); ctx.stroke();
       }
+      // Ascending: arrow points to the back (top). Sunk flights (negative
+      // elevation = going downstairs) flip the arrow and label it DN.
+      const down = (piece.elevation ?? 0) < 0;
       ctx.strokeStyle = '#eceff1'; ctx.lineWidth = 1.5;
       const ax = x + w / 2;
       ctx.beginPath();
-      ctx.moveTo(ax, y + h * 0.86); ctx.lineTo(ax, y + h * 0.14);
-      ctx.moveTo(ax - 5, y + h * 0.14 + 7); ctx.lineTo(ax, y + h * 0.14);
-      ctx.lineTo(ax + 5, y + h * 0.14 + 7);
+      if (down) {
+        ctx.moveTo(ax, y + h * 0.14); ctx.lineTo(ax, y + h * 0.86);
+        ctx.moveTo(ax - 5, y + h * 0.86 - 7); ctx.lineTo(ax, y + h * 0.86);
+        ctx.lineTo(ax + 5, y + h * 0.86 - 7);
+      } else {
+        ctx.moveTo(ax, y + h * 0.86); ctx.lineTo(ax, y + h * 0.14);
+        ctx.moveTo(ax - 5, y + h * 0.14 + 7); ctx.lineTo(ax, y + h * 0.14);
+        ctx.lineTo(ax + 5, y + h * 0.14 + 7);
+      }
       ctx.stroke();
+      if (down) {
+        ctx.fillStyle = '#eceff1'; ctx.font = '9px sans-serif';
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText('DN', ax, y + h * 0.5);
+      }
       break;
     }
     case 'stair_landing':
