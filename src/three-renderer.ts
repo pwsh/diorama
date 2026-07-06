@@ -905,8 +905,9 @@ export class ThreeDRenderer {
           addBox(retW, seatT, retD, cushion, sx * (W / 2 - retW / 2), seatY, retZ);
           addBox(retW, seatY - seatT / 2, retD * 0.95, dark, sx * (W / 2 - retW / 2), (seatY - seatT / 2) / 2, retZ);
           // Outer arm runs the FULL side — from the back band to the chaise
-          // front — not just the return section.
-          addBox(160, HT * 0.62, D - backT, cushion, sx * (W / 2 - 80), HT * 0.62 / 2, -backT / 2);
+          // front — and rises well above the seat cushions so it reads as an
+          // arm from every angle (0.62·HT barely cleared the 450 mm seat).
+          addBox(180, HT * 0.78, D - backT, cushion, sx * (W / 2 - 90), HT * 0.78 / 2, -backT / 2);
         }
         // Armrest on any main-run end without a return.
         for (const sx of [-1, 1]) {
