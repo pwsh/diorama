@@ -102,6 +102,9 @@ For an L or U staircase: half flight → landing → another half flight rotated
 storey) and it sinks below this floor — the 3D floor opens a stairwell above
 it, lined with dark shaft walls, and the 2D symbol flips its arrow and reads
 **DN**. Tracked people walking across the stairwell descend the treads.
+Elevation is always the piece's *base*: a landing's walking surface sits at
+elevation + 1372, so the landing halfway down a basement stair goes at
+−2743 (surface at −1371, matching the first half-flight's bottom).
 
 **Targets on stairs**: humanoid figures stand at the surface height of
 whatever tread or landing is under them, so someone walking up or down a

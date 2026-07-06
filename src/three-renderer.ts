@@ -555,6 +555,17 @@ export class ThreeDRenderer {
       color: floorColor, map: floorTex ?? null,
       side: THREE.DoubleSide, roughness: 0.9, metalness: 0.0,
     });
+    if (wellCuts.length) {
+      // Dark void plane below the deepest well so stairwell openings show
+      // depth instead of the sky behind the scene.
+      const deepest = Math.min(...wellCuts.map(fu => fu.elevation ?? 0));
+      const voidPlane = new THREE.Mesh(
+        new THREE.PlaneGeometry(f.w * 1.2, f.d * 1.2),
+        new THREE.MeshBasicMaterial({ color: 0x101216, side: THREE.DoubleSide }));
+      voidPlane.rotation.x = -Math.PI / 2;
+      voidPlane.position.y = deepest - 120;
+      this._floorGroup.add(voidPlane);
+    }
     if (loops.length) {
       // ShapeGeometry UVs are raw shape coords (mm); one texture repeat per
       // 800 mm matches the plane path's repeat = size/800.
@@ -1071,6 +1082,21 @@ export class ThreeDRenderer {
         addBox(W * 1.02, 40, D * 1.02,
                new THREE.MeshStandardMaterial({ color: 0xa1887f, roughness: 0.6 }),
                0, HT - 20, 0);
+        // Sunk landings line their well with shaft walls from the landing
+        // surface up to floor level (same treatment as sunken stairs).
+        if ((fu.elevation ?? 0) < 0) {
+          const shaftMat = new THREE.MeshStandardMaterial({
+            color: 0x2a2d31, roughness: 0.9, side: THREE.DoubleSide,
+          });
+          const floorLvl = -(fu.elevation ?? 0);  // local y of this floor's level
+          const wallH2 = Math.max(0, floorLvl - HT);
+          if (wallH2 > 10) {
+            addBox(24, wallH2, D, shaftMat, -W / 2 + 12, HT + wallH2 / 2, 0);
+            addBox(24, wallH2, D, shaftMat, W / 2 - 12, HT + wallH2 / 2, 0);
+            addBox(W, wallH2, 24, shaftMat, 0, HT + wallH2 / 2, D / 2 - 12);
+            addBox(W, wallH2, 24, shaftMat, 0, HT + wallH2 / 2, -D / 2 + 12);
+          }
+        }
         break;
       }
       // ── casework: box body + top slab + door/drawer seams on the front

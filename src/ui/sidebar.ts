@@ -863,7 +863,7 @@ export class Sidebar extends LitElement {
         </div>
         <div class="row"><label>Elevation (mm)</label>
           <input type="number" step="50" .value=${String(Math.round(piece.elevation ?? 0))}
-                 title="Base height above the floor. Positive raises (1372 = upper flight of an L staircase); negative sinks below — stairs at −2743 descend a full storey and cut a stairwell opening in the 3D floor"
+                 title="Base height above the floor (the piece's BOTTOM). Positive raises (1372 = upper flight of an L staircase); negative sinks — stairs at −2743 descend a full storey and cut a stairwell. A landing's walking surface sits at elevation + 1372, so a landing halfway down a basement stair needs −2743"
                  @input=${(e: Event) => upd(() => {
                    const v = parseFloat((e.target as HTMLInputElement).value);
                    piece.elevation = isFinite(v) && v !== 0 ? v : undefined;
