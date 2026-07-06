@@ -1,0 +1,384 @@
+import { LitElement, html } from 'lit';
+import { customElement, property, query } from 'lit/decorators.js';
+import { computeView, drawAll, pxToMm, type View } from '../canvas-render.js';
+import {
+  onCanvasMouseDown, onCanvasMouseMove, onCanvasMouseUp,
+  onCanvasClick, onCanvasDblClick, finishZoneEdit, cancelZoneEdit,
+} from '../canvas-interact.js';
+import type { Planner } from '../planner.js';
+
+@customElement('diorama-canvas-2d')
+export class Canvas2D extends LitElement {
+  @property({ attribute: false }) planner!: Planner;
+  @query('#main-canvas') private _canvas!: HTMLCanvasElement;
+
+  private _ctx: CanvasRenderingContext2D | null = null;
+  private _ro: ResizeObserver | null = null;
+  private _raf = 0;
+  private _bgImg: HTMLImageElement | null = null;
+  private _bgUrl: string | null = null;
+  private _lastFrame = 0;
+  private _view: View = { ox: 0, oy: 0, scale: 1 };
+  private _spaceHeld = false;
+  private _panFrom: { px: number; py: number; vc: { x: number; y: number } } | null = null;
+  // Touch pinch state. `anchor` is the world point under the fingers'
+  // midpoint at gesture start; every move solves viewCenter so that anchor
+  // stays under the current midpoint (absolute, no incremental drift).
+  private _pinch: { d: number; anchor: { x: number; y: number }; zoom: number } | null = null;
+
+  protected override createRenderRoot() { return this; }
+
+  override render() {
+    return html`
+      <canvas id="main-canvas"
+              style="display:block;width:100%;height:100%;cursor:crosshair;touch-action:none">
+      </canvas>
+      <button class="btn-sm" title="Reset view"
+              style="position:absolute;bottom:10px;left:10px;z-index:5"
+              @click=${this._resetView}>⟳ Reset view</button>
+    `;
+  }
+
+  override firstUpdated(): void {
+    this._ctx = this._canvas.getContext('2d');
+    this._bindEvents();
+    this._ro = new ResizeObserver(() => this._resize());
+    this._ro.observe(this._canvas);
+    // Also observe parent (for visibility changes that don't always fire on canvas).
+    if (this._canvas.parentElement) this._ro.observe(this._canvas.parentElement);
+    this._resize();
+    this._startRaf();
+    // Re-resize when view switches back to 2d (display:none → '' transition).
+    this.planner.addEventListener('config', this._onConfig);
+  }
+
+  override disconnectedCallback(): void {
+    super.disconnectedCallback();
+    this._ro?.disconnect();
+    if (this._raf) cancelAnimationFrame(this._raf);
+    window.removeEventListener('mouseup', this._onUp);
+    window.removeEventListener('keydown', this._onKey);
+    window.removeEventListener('keyup', this._onKeyUp);
+    this.planner.removeEventListener('config', this._onConfig);
+  }
+
+  private _onConfig = () => {
+    if (this.planner.view === '2d') {
+      // Wait one frame so the wrapper's display has flipped before we measure.
+      requestAnimationFrame(() => this._resize());
+    }
+  };
+
+  private _resize(): void {
+    if (!this._canvas) return;
+    const dpr = window.devicePixelRatio || 1;
+    const w = this._canvas.clientWidth || 600, h = this._canvas.clientHeight || 400;
+    if (w < 4 || h < 4) return;  // hidden — skip, don't shrink to default
+    this._canvas.width = w * dpr; this._canvas.height = h * dpr;
+    this._recomputeView();
+  }
+
+  private _recomputeView(): void {
+    const f = this.planner.floor();
+    this._view = computeView(this._canvas, f.w, f.d, this.planner.viewCenter, this.planner.zoom);
+  }
+
+  private _resetView = () => {
+    this.planner.resetView();
+  };
+
+  // Convert canvas-pixel point (scaled by dpr) to world mm using current view.
+  private _pxPointToMm(canvasX: number, canvasY: number): { x: number; y: number } {
+    return {
+      x: (canvasX - this._view.ox) / this._view.scale,
+      y: (this._view.oy - canvasY) / this._view.scale,
+    };
+  }
+
+  private _bindEvents(): void {
+    // Wheel zoom — anchored at cursor position.
+    this._canvas.addEventListener('wheel', e => {
+      e.preventDefault();
+      const before = pxToMm(this._canvas, this._view, e);
+      const factor = Math.exp(-e.deltaY * 0.0015);
+      const newZoom = Math.max(0.1, Math.min(20, this.planner.zoom * factor));
+      this.planner.zoom = newZoom;
+      // Set viewCenter if it was auto-fit
+      if (!this.planner.viewCenter) {
+        const f = this.planner.floor();
+        this.planner.viewCenter = { x: f.w / 2, y: f.d / 2 };
+      }
+      this._recomputeView();
+      const after = pxToMm(this._canvas, this._view, e);
+      this.planner.viewCenter = {
+        x: this.planner.viewCenter.x + (before.x - after.x),
+        y: this.planner.viewCenter.y + (before.y - after.y),
+      };
+      this._recomputeView();
+    }, { passive: false });
+
+    // Pan: middle/right mouse, or Space+left.
+    this._canvas.addEventListener('mousedown', e => {
+      this._panEnded = false;
+      const isPan = (e.button === 1) || (e.button === 2) ||
+                    (e.button === 0 && this._spaceHeld);
+      if (isPan) {
+        e.preventDefault();
+        const f = this.planner.floor();
+        const vc = this.planner.viewCenter ?? { x: f.w / 2, y: f.d / 2 };
+        this._panFrom = { px: e.clientX, py: e.clientY, vc: { ...vc } };
+        this._canvas.style.cursor = 'grabbing';
+        return;
+      }
+      try {
+        onCanvasMouseDown(this.planner, this._canvas, this._view, e);
+      } catch (err) { console.error('canvas mousedown failed:', err); }
+    });
+    this._canvas.addEventListener('contextmenu', e => e.preventDefault());
+
+    this._canvas.addEventListener('mousemove', e => {
+      if (this._panFrom) {
+        const dpr = window.devicePixelRatio || 1;
+        const dx = (e.clientX - this._panFrom.px) * dpr;
+        const dy = (e.clientY - this._panFrom.py) * dpr;
+        const s = this._view.scale;
+        this.planner.viewCenter = {
+          x: this._panFrom.vc.x - dx / s,
+          y: this._panFrom.vc.y + dy / s,
+        };
+        this._recomputeView();
+        return;
+      }
+      try {
+        onCanvasMouseMove(this.planner, this._canvas, this._view, e);
+      } catch (err) { console.error('canvas mousemove failed:', err); }
+    });
+
+    this._canvas.addEventListener('click',    e => {
+      // A Space+left pan ends in a synthetic click (mouseup clears _panFrom
+      // BEFORE the click event fires) — without the _panEnded latch, ending
+      // a pan while a placement tool was active dropped an object at the
+      // release point.
+      if (this._panFrom || this._panEnded) { this._panEnded = false; return; }
+      try {
+        onCanvasClick(this.planner, this._canvas, this._view, e);
+      } catch (err) { console.error('canvas click failed:', err); }
+    });
+    this._canvas.addEventListener('dblclick', e => {
+      try {
+        onCanvasDblClick(this.planner, this._canvas, this._view, e);
+      } catch (err) { console.error('canvas dblclick failed:', err); }
+    });
+    this._canvas.addEventListener('mouseleave', () => { this.planner.cursor = null; });
+
+    window.addEventListener('mouseup', this._onUp);
+    window.addEventListener('keydown', this._onKey);
+    window.addEventListener('keyup', this._onKeyUp);
+
+    // Touch — 1 finger uses mouse path; 2 fingers do pinch+pan.
+    const toEvt = (t: Touch): MouseEvent => new MouseEvent('mousemove', {
+      clientX: t.clientX, clientY: t.clientY, bubbles: false,
+    });
+    this._canvas.addEventListener('touchstart', e => {
+      // Never let touches bubble to HA frontend — its drawer interprets
+      // rightward swipes as "open sidebar" and hijacks 2-finger pans.
+      e.stopPropagation();
+      if (e.touches.length === 1 && !this._pinch) {
+        e.preventDefault();
+        onCanvasMouseDown(this.planner, this._canvas, this._view, toEvt(e.touches[0]));
+      } else if (e.touches.length === 2) {
+        e.preventDefault();
+        const t1 = e.touches[0], t2 = e.touches[1];
+        const mid = { x: (t1.clientX + t2.clientX) / 2, y: (t1.clientY + t2.clientY) / 2 };
+        this._pinch = {
+          d: Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY),
+          // World point currently under the midpoint — the gesture keeps
+          // this point glued to the midpoint for its entire duration.
+          anchor: pxToMm(this._canvas, this._view, { clientX: mid.x, clientY: mid.y }),
+          zoom: this.planner.zoom,
+        };
+        // Cancel any in-flight 1-finger drag so the object doesn't jump.
+        this.planner.drag = null;
+        this.planner.dragJustEnded = false;
+      }
+    }, { passive: false });
+    this._canvas.addEventListener('touchmove', e => {
+      e.stopPropagation();
+      if (this._pinch && e.touches.length >= 2) {
+        e.preventDefault();
+        const t1 = e.touches[0], t2 = e.touches[1];
+        const d = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
+        const mid = { x: (t1.clientX + t2.clientX) / 2, y: (t1.clientY + t2.clientY) / 2 };
+        // Absolute zoom from gesture-start ratio.
+        this.planner.zoom = Math.max(0.1, Math.min(20, this._pinch.zoom * (d / Math.max(this._pinch.d, 1))));
+        this._recomputeView();
+        // Solve viewCenter so the anchor world point sits exactly under the
+        // CURRENT midpoint. From computeView: wx = cx + (px − w/2)/s and
+        // wy = cy + (h/2 − py)/s  →  cx = ax − (px − w/2)/s, etc. Absolute
+        // solve every event — no accumulation, no drift.
+        const rect = this._canvas.getBoundingClientRect();
+        const dpr = window.devicePixelRatio || 1;
+        const px = (mid.x - rect.left) * dpr;
+        const py = (mid.y - rect.top) * dpr;
+        const s = this._view.scale;
+        const w = this._canvas.width, h = this._canvas.height;
+        this.planner.viewCenter = {
+          x: this._pinch.anchor.x - (px - w / 2) / s,
+          y: this._pinch.anchor.y - (h / 2 - py) / s,
+        };
+        this._recomputeView();
+        return;
+      }
+      if (this._pinch && e.touches.length === 1) {
+        // Finger lifted mid-pinch: remaining finger pans (anchor re-set at
+        // lift time in endPinchOrDrag). Zoom stays put.
+        e.preventDefault();
+        const t = e.touches[0];
+        const rect = this._canvas.getBoundingClientRect();
+        const dpr = window.devicePixelRatio || 1;
+        const px = (t.clientX - rect.left) * dpr;
+        const py = (t.clientY - rect.top) * dpr;
+        const s = this._view.scale;
+        const w = this._canvas.width, h = this._canvas.height;
+        this.planner.viewCenter = {
+          x: this._pinch.anchor.x - (px - w / 2) / s,
+          y: this._pinch.anchor.y - (h / 2 - py) / s,
+        };
+        this._recomputeView();
+        return;
+      }
+      if (e.touches.length === 1 && !this._pinch) {
+        e.preventDefault();
+        onCanvasMouseMove(this.planner, this._canvas, this._view, toEvt(e.touches[0]));
+      }
+    }, { passive: false });
+    const endPinchOrDrag = (e: TouchEvent) => {
+      e.stopPropagation();
+      if (this._pinch) {
+        if (e.touches.length >= 2) return;
+        if (e.touches.length === 1) {
+          // One finger lifted mid-pinch: re-anchor on the remaining finger
+          // so the view doesn't jump, and keep treating it as a pan (not a
+          // 1-finger object drag — that would grab whatever is underneath).
+          const t = e.touches[0];
+          this._pinch = {
+            d: 1,
+            anchor: pxToMm(this._canvas, this._view, { clientX: t.clientX, clientY: t.clientY }),
+            zoom: this.planner.zoom,
+          };
+          // Degenerate distance: treat single remaining finger as pan-only.
+          return;
+        }
+        this._pinch = null;
+        return;
+      }
+      if (e.touches.length === 0) onCanvasMouseUp(this.planner, this._canvas);
+    };
+    this._canvas.addEventListener('touchend', endPinchOrDrag);
+    // App WebViews fire touchcancel when the OS steals the gesture
+    // (notification shade, back-swipe). Without this the pinch state wedges.
+    this._canvas.addEventListener('touchcancel', e => {
+      e.stopPropagation();
+      this._pinch = null;
+      if (e.touches.length === 0) onCanvasMouseUp(this.planner, this._canvas);
+    });
+  }
+
+  private _panEnded = false;  // swallow the browser 'click' a pan release fires
+
+  private _onUp = () => {
+    if (this._panFrom) {
+      this._panFrom = null;
+      this._panEnded = true;
+      this._canvas.style.cursor = 'default';
+      return;
+    }
+    onCanvasMouseUp(this.planner, this._canvas);
+  };
+
+  private _onKey = (e: KeyboardEvent) => {
+    // Ignore keys aimed at ANY form control or editable content (sidebar
+    // <select>s, textareas, the entity-picker search box, …). The old guard
+    // only covered INPUT — typing 'm' while a <select> had focus (e.g.
+    // jumping to "Microwave" in the kind dropdown) silently switched to the
+    // Motion tool, so the user's next canvas click planted a motion sensor.
+    const t = e.target as HTMLElement | null;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' ||
+              t.tagName === 'SELECT' || t.isContentEditable)) return;
+    if (e.code === 'Space') { this._spaceHeld = true; this._canvas.style.cursor = 'grab'; return; }
+    const p = this.planner;
+    if (e.key === 'Escape') {
+      if (p.editZone) { cancelZoneEdit(p); return; }
+      if (p.drawingWall) { p.drawingWall = null; p.emitConfig(); return; }
+      if (p.store.activeSensorId) { p.store.activeSensorId = null; p.save(); p.emitConfig(); }
+    }
+    if (e.key === 'Enter' && p.editZone) { finishZoneEdit(p); return; }
+    if (e.key === 'Delete' || e.key === 'Backspace') {
+      const f = p.floor();
+      if (p.activeMotionId) {
+        f.motionSensors = f.motionSensors.filter(x => x.id !== p.activeMotionId);
+        p.activeMotionId = null;
+        p.save(); p.emitConfig();
+        return;
+      }
+      const sa = p.activeSensor();
+      if (sa) {
+        f.sensors = f.sensors.filter(x => x.id !== sa.id);
+        p.store.activeSensorId = null;
+        p.save(); p.emitConfig();
+      }
+    }
+    if (e.key === '0' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); p.resetView(); return; }
+    const tk: Record<string, import('../planner.js').Tool> = {
+      '1': 'select', '2': 'wall', '3': 'sensor', '4': 'motion',
+      '5': 'furniture', '6': 'light', '7': 'switch', '8': 'delete',
+      'm': 'motion',
+    };
+    // Bare keys only — Ctrl/Cmd/Alt combos are browser shortcuts, not tool picks.
+    if (tk[e.key] && !e.ctrlKey && !e.metaKey && !e.altKey) p.setTool(tk[e.key]);
+  };
+
+  private _onKeyUp = (e: KeyboardEvent) => {
+    if (e.code === 'Space') { this._spaceHeld = false; this._canvas.style.cursor = 'default'; }
+  };
+
+  private _ensureBg(): HTMLImageElement | null {
+    const bg = this.planner.floor().bg;
+    if (!bg?.dataUrl) { this._bgImg = null; this._bgUrl = null; return null; }
+    if (this._bgUrl === bg.dataUrl && this._bgImg) return this._bgImg;
+    const img = new Image();
+    this._bgUrl = bg.dataUrl;
+    this._bgImg = img;
+    img.src = bg.dataUrl;
+    return img;
+  }
+
+  private _startRaf(): void {
+    const tick = (now: number) => {
+      // Reschedule first so a thrown exception in render doesn't pause the
+      // RAF and leave stale pixels on the canvas across e.g. a floor switch.
+      this._raf = requestAnimationFrame(tick);
+      try {
+        const dt = this._lastFrame ? Math.min((now - this._lastFrame) / 1000, 0.1) : 0.016;
+        this._lastFrame = now;
+        this.planner.stepLerp(dt);
+        const dpr = window.devicePixelRatio || 1;
+        const cw = this._canvas.clientWidth, ch = this._canvas.clientHeight;
+        if (cw > 4 && ch > 4 &&
+            (this._canvas.width !== cw * dpr || this._canvas.height !== ch * dpr)) {
+          this._resize();
+        }
+        this._recomputeView();
+        const bgImg = this._ensureBg();
+        if (this._ctx) drawAll(this._ctx, this.planner, this._view, bgImg);
+      } catch (err) {
+        console.error('canvas-2d render failed:', err);
+        // Wipe so a partial draw can't leave the screen wedged on old data.
+        if (this._ctx && this._canvas) {
+          this._ctx.clearRect(0, 0, this._canvas.width, this._canvas.height);
+        }
+      }
+    };
+    this._raf = requestAnimationFrame(tick);
+  }
+}

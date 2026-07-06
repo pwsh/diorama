@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- Diorama favicon: dark plan with rooms, sensor + target dots, light glow. -->
+  <rect width="64" height="64" rx="10" fill="#0d0d1a"/>
+  <!-- Floor outline -->
+  <rect x="8" y="8" width="48" height="48" rx="3" fill="#101820" stroke="#2e3a55" stroke-width="2"/>
+  <!-- Interior walls dividing rooms -->
+  <g stroke="#bfc9d6" stroke-width="3" stroke-linecap="round">
+    <line x1="32" y1="8"  x2="32" y2="32"/>
+    <line x1="8"  y1="32" x2="56" y2="32"/>
+    <line x1="44" y1="32" x2="44" y2="56"/>
+  </g>
+  <!-- Light pool (top-right room) -->
+  <circle cx="44" cy="20" r="11" fill="#ffe082" fill-opacity="0.22"/>
+  <circle cx="44" cy="20" r="3"  fill="#ffd54f"/>
+  <!-- LD2450 sensor + heading nub (bottom-left room) -->
+  <circle cx="18" cy="46" r="3.2" fill="#4fc3f7" stroke="#ffffff" stroke-width="1"/>
+  <line   x1="18" y1="46" x2="26" y2="42" stroke="#bbdefb" stroke-width="1.5" stroke-linecap="round"/>
+  <!-- Coverage wedge -->
+  <path d="M18 46 L34 28 A 22 22 0 0 1 38 38 Z" fill="#4fc3f7" fill-opacity="0.14" stroke="#4fc3f7" stroke-opacity="0.55" stroke-width="0.8"/>
+  <!-- Target dot (bottom-right room) -->
+  <circle cx="50" cy="48" r="2.8" fill="#81c784" stroke="#ffffff" stroke-width="0.6"/>
+</svg>

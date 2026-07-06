@@ -1,0 +1,12 @@
+node_modules/
+dist/
+*.tsbuildinfo
+# local build artifacts / unzipped release copies
+diorama.zip
+/diorama/
+# editor / personal
+*.code-workspace
+.claude/settings.local.json
+.DS_Store
+# machine-local deploy target (private)
+deploy.local.json

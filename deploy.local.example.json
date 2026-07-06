@@ -1,0 +1,4 @@
+{
+  "smb": "smb://<ha-host>/config",
+  "wwwDir": "/path/to/mounted/config/www/community/diorama"
+}

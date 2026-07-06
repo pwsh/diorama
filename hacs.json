@@ -1,0 +1,7 @@
+{
+  "name": "Diorama",
+  "render_readme": true,
+  "zip_release": true,
+  "filename": "diorama.zip",
+  "homeassistant": "2024.6.0"
+}

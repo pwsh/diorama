@@ -1,0 +1,39 @@
+# Builds the panel and attaches diorama.zip to the GitHub release so HACS
+# (zip_release mode in hacs.json) can install it into
+# config/www/community/<repo>/.
+name: Release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+      - name: Zip dist
+        run: cd dist && zip -r ../diorama.zip .
+
+      - name: Upload release asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: diorama.zip
