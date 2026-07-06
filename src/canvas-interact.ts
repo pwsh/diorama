@@ -1,4 +1,4 @@
-import { snap, snapVertex15, distMM, worldToLocal, localToWorld, FURNITURE_KINDS, envScale, ENV_SCALE_MIN, ENV_SCALE_MAX } from './geometry.js';
+import { snap, snapVertex15, distMM, worldToLocal, localToWorld, FURNITURE_KINDS, furnitureCorners, envScale, ENV_SCALE_MIN, ENV_SCALE_MAX } from './geometry.js';
 import { newId } from './storage.js';
 import {
   pxToMm, type View,
@@ -58,6 +58,36 @@ function bestWeldTarget(f: WeldWalls,
     if (d < WALL_SNAP_MM && (!bestEnd || d < bestEnd.d)) bestEnd = { p: selfOpposite, d };
   }
   return bestEnd ?? bestSeg;
+}
+
+// Stairs / landings lock edges with each other: after a drop, move, or
+// resize, the piece's nearest corner within 250 mm of another stair-family
+// piece's corner snaps onto it, so flight → landing → flight compositions
+// sit flush without pixel-nudging. Position-only — elevation stays manual.
+const STAIR_KINDS = new Set(['stairs', 'stairs_half', 'stair_landing']);
+
+export function snapStairEdges(
+  f: { furniture: { id: string; x: number; y: number; w: number; h: number;
+                    kind?: string; rotation?: number; locked?: boolean }[] },
+  piece: { id: string; x: number; y: number; w: number; h: number;
+           kind?: string; rotation?: number; locked?: boolean },
+): boolean {
+  if (piece.locked || !STAIR_KINDS.has(piece.kind ?? '')) return false;
+  const mine = furnitureCorners(piece);
+  let best: { d: number; dx: number; dy: number } | null = null;
+  for (const other of f.furniture) {
+    if (other.id === piece.id || !STAIR_KINDS.has(other.kind ?? '')) continue;
+    for (const oc of furnitureCorners(other)) {
+      for (const mc of mine) {
+        const d = Math.hypot(oc.x - mc.x, oc.y - mc.y);
+        if (d < 250 && (!best || d < best.d)) best = { d, dx: oc.x - mc.x, dy: oc.y - mc.y };
+      }
+    }
+  }
+  if (!best) return false;
+  piece.x = Math.round(piece.x + best.dx);
+  piece.y = Math.round(piece.y + best.dy);
+  return true;
 }
 
 // Remove one vertex from a wall; a wall reduced below 2 points is removed
@@ -628,8 +658,11 @@ export function onCanvasMouseUp(p: Planner, canvas: HTMLCanvasElement): void {
     const w = f.walls.find(x => x.id === drag.wallId);
     if (w) connectWallEnds(f, w, true);
     p.save();
-  } else if (drag.kind === 'furnMove' || drag.kind === 'furnCorner' ||
-             drag.kind === 'bgMove' || drag.kind === 'bgCorner') {
+  } else if (drag.kind === 'furnMove' || drag.kind === 'furnCorner') {
+    const piece = f.furniture[drag.idx];
+    if (piece) snapStairEdges(f, piece);
+    p.save();
+  } else if (drag.kind === 'bgMove' || drag.kind === 'bgCorner') {
     p.save();
   } else if (drag.kind === 'doorMove') {
     const door = f.doors[drag.idx];
@@ -769,11 +802,13 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
   if (p.tool === 'furniture') {
     const kind = p.pendingFurnitureKind;
     const def = FURNITURE_KINDS[kind];
-    f.furniture.push({
+    const piece = {
       id: newId('fu'),
       x: snap(mm.x, 10), y: snap(mm.y, 10),
       w: def.w, h: def.h, label: '', kind,
-    });
+    };
+    f.furniture.push(piece);
+    snapStairEdges(f, piece);
     p.save(); p.setTool('select'); p.emitConfig(); return;
   }
   if (p.tool === 'light') {
