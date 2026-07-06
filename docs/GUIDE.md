@@ -97,9 +97,10 @@ lines and an up-arrow):
 
 For an L or U staircase: half flight → landing → another half flight rotated
 90/180° with its **Elevation** set to 1372 so it starts at the landing.
-Stair pieces **lock edges with each other**: dropping, dragging, or resizing
-a flight or landing within 25 cm of another stair piece snaps their corners
-flush, so compositions line up without nudging.
+Stair pieces **lock edges with each other** — drag the whole piece (no
+corner handle needed): within 25 cm, corners snap to corners, and otherwise
+near-parallel edges close their gap flush while keeping your placement
+along the edge, so a flight can meet a wider landing mid-edge.
 
 **Going downstairs**: set a flight's Elevation *negative* (−2743 for a full
 storey) and it sinks below this floor — the 3D floor opens a stairwell above

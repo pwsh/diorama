@@ -1,4 +1,4 @@
-import { snap, snapVertex15, distMM, worldToLocal, localToWorld, FURNITURE_KINDS, furnitureCorners, envScale, ENV_SCALE_MIN, ENV_SCALE_MAX } from './geometry.js';
+import { snap, snapVertex15, distMM, worldToLocal, localToWorld, FURNITURE_KINDS, furnitureCorners, furnitureLocalToWorld, envScale, ENV_SCALE_MIN, ENV_SCALE_MAX } from './geometry.js';
 import { newId } from './storage.js';
 import {
   pxToMm, type View,
@@ -60,27 +60,69 @@ function bestWeldTarget(f: WeldWalls,
   return bestEnd ?? bestSeg;
 }
 
-// Stairs / landings lock edges with each other: after a drop, move, or
-// resize, the piece's nearest corner within 250 mm of another stair-family
-// piece's corner snaps onto it, so flight → landing → flight compositions
-// sit flush without pixel-nudging. Position-only — elevation stays manual.
+// Stairs / landings lock edges with each other after a drop, whole-piece
+// move, or resize (no corner-handle dragging needed):
+//   1. Corner snap — a corner within 250 mm of another stair piece's corner
+//      pulls exactly onto it (square compositions).
+//   2. Parallel-edge snap — otherwise, an edge near-parallel (≤6°) to
+//      another stair piece's edge with ≥150 mm of overlap closes just the
+//      perpendicular gap, preserving your placement ALONG the edge — so a
+//      flight can meet a wider landing mid-edge.
+// Position-only — elevation stays manual. Locked pieces never move.
 const STAIR_KINDS = new Set(['stairs', 'stairs_half', 'stair_landing']);
 
+type StairPiece = { id: string; x: number; y: number; w: number; h: number;
+                    kind?: string; rotation?: number; locked?: boolean };
+
+function perimeterCorners(p: StairPiece): { x: number; y: number }[] {
+  const cs: [number, number][] = [[-1, -1], [1, -1], [1, 1], [-1, 1]];
+  return cs.map(([sx, sy]) => {
+    const l = furnitureLocalToWorld(p.rotation, sx * p.w / 2, sy * p.h / 2);
+    return { x: p.x + l.x, y: p.y + l.y };
+  });
+}
+
 export function snapStairEdges(
-  f: { furniture: { id: string; x: number; y: number; w: number; h: number;
-                    kind?: string; rotation?: number; locked?: boolean }[] },
-  piece: { id: string; x: number; y: number; w: number; h: number;
-           kind?: string; rotation?: number; locked?: boolean },
+  f: { furniture: StairPiece[] },
+  piece: StairPiece,
 ): boolean {
   if (piece.locked || !STAIR_KINDS.has(piece.kind ?? '')) return false;
-  const mine = furnitureCorners(piece);
+  const mine = perimeterCorners(piece);
+  const others = f.furniture.filter(o => o.id !== piece.id && STAIR_KINDS.has(o.kind ?? ''));
+  // 1. Corner-to-corner.
   let best: { d: number; dx: number; dy: number } | null = null;
-  for (const other of f.furniture) {
-    if (other.id === piece.id || !STAIR_KINDS.has(other.kind ?? '')) continue;
-    for (const oc of furnitureCorners(other)) {
+  for (const other of others) {
+    for (const oc of perimeterCorners(other)) {
       for (const mc of mine) {
         const d = Math.hypot(oc.x - mc.x, oc.y - mc.y);
         if (d < 250 && (!best || d < best.d)) best = { d, dx: oc.x - mc.x, dy: oc.y - mc.y };
+      }
+    }
+  }
+  // 2. Parallel-edge gap closing.
+  if (!best) {
+    for (const other of others) {
+      const theirs = perimeterCorners(other);
+      for (let i = 0; i < 4; i++) {
+        const p1 = mine[i], p2 = mine[(i + 1) % 4];
+        const eLen = Math.hypot(p2.x - p1.x, p2.y - p1.y) || 1;
+        const dax = (p2.x - p1.x) / eLen, day = (p2.y - p1.y) / eLen;
+        const nx = -day, ny = dax;  // edge normal
+        for (let j = 0; j < 4; j++) {
+          const q1 = theirs[j], q2 = theirs[(j + 1) % 4];
+          const bLen = Math.hypot(q2.x - q1.x, q2.y - q1.y) || 1;
+          const dbx = (q2.x - q1.x) / bLen, dby = (q2.y - q1.y) / bLen;
+          if (Math.abs(dax * dby - day * dbx) > 0.105) continue;  // >6° off-parallel
+          const gap = (q1.x - p1.x) * nx + (q1.y - p1.y) * ny;
+          if (Math.abs(gap) > 250) continue;
+          // Overlap along the edge direction.
+          const tb1 = (q1.x - p1.x) * dax + (q1.y - p1.y) * day;
+          const tb2 = (q2.x - p1.x) * dax + (q2.y - p1.y) * day;
+          const lo = Math.min(tb1, tb2), hi = Math.max(tb1, tb2);
+          if (Math.min(eLen, hi) - Math.max(0, lo) < 150) continue;
+          const d = Math.abs(gap);
+          if (!best || d < best.d) best = { d, dx: nx * gap, dy: ny * gap };
+        }
       }
     }
   }
