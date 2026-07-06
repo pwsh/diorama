@@ -4,7 +4,7 @@
 and watch Home Assistant state in real spatial context — in 2D and 3D.
 Click anything to control it.
 
-![Diorama overview](docs/images/overview-iso.png)
+![Diorama overview](https://raw.githubusercontent.com/pwsh/diorama/main/docs/images/overview-iso.png)
 
 ## Highlights
 
@@ -31,7 +31,7 @@ Click anything to control it.
 - **Synced through HA** — the whole model lives in Home Assistant user
   data, so every browser and tablet sees the same home.
 
-📖 **[Full user guide with screenshots](docs/GUIDE.md)**
+📖 **[Full user guide with screenshots](https://github.com/pwsh/diorama/blob/main/docs/GUIDE.md)**
 
 ## Setup
 
