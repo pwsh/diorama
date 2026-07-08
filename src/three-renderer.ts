@@ -723,7 +723,7 @@ export class ThreeDRenderer {
     this._sitSpots = [];
     this._terrain = [];
     for (const fu of f.furniture) {
-      const grp = this._buildFurniture(fu);
+      const grp = this._buildFurniture(fu, f.furniture);
       this._shadowFlags(grp);
       this._floorGroup.add(grp);
       const def = furnitureDef(fu);
@@ -844,7 +844,8 @@ export class ThreeDRenderer {
   // _w mirrors world +X.
   private _buildFurniture(fu: { x: number; y: number; w: number; h: number;
                                  kind?: import('./types.js').FurnitureKind;
-                                 rotation?: number; elevation?: number }): THREE.Group {
+                                 rotation?: number; elevation?: number },
+                          neighbors?: Furniture[]): THREE.Group {
     const def = furnitureDef(fu);
     const W = fu.w, D = fu.h, HT = def.ht;
     const tint = def.color;
@@ -900,6 +901,23 @@ export class ThreeDRenderer {
       m.position.set(px, py, pz);
       grp.add(m);
       return m;
+    };
+
+    // A well face is left OPEN when another sunken stair-family piece
+    // adjoins it (flight → landing → flight compositions must connect, not
+    // brick each other over). Probes a point just beyond the face center.
+    const faceOpen = (lxOff: number, lyOff: number): boolean => {
+      if (!neighbors) return false;
+      const wpt = furnitureLocalToWorld(fu.rotation, lxOff, lyOff);
+      const px = fu.x + wpt.x, py = fu.y + wpt.y;
+      return neighbors.some(nb => {
+        if (nb.x === fu.x && nb.y === fu.y && nb.w === fu.w && nb.h === fu.h &&
+            nb.kind === fu.kind && nb.rotation === fu.rotation) return false;
+        if (!(nb.kind === 'stairs' || nb.kind === 'stairs_half' || nb.kind === 'stair_landing')) return false;
+        if ((nb.elevation ?? 0) >= 0) return false;
+        const l = furnitureWorldToLocal(nb.rotation, px - nb.x, py - nb.y);
+        return Math.abs(l.x) <= nb.w / 2 + 60 && Math.abs(l.y) <= nb.h / 2 + 60;
+      });
     };
 
     const kind = fu.kind ?? 'block';
@@ -1071,9 +1089,12 @@ export class ThreeDRenderer {
             color: 0x2a2d31, roughness: 0.9, side: THREE.DoubleSide,
           });
           const wellH = -(fu.elevation ?? 0);
-          addBox(24, wellH, D, shaftMat, -W / 2 + 12, wellH / 2, 0);
-          addBox(24, wellH, D, shaftMat, W / 2 - 12, wellH / 2, 0);
-          addBox(W, wellH, 24, shaftMat, 0, wellH / 2, D / 2 - 12);  // wall under the top edge
+          // Skip any face that connects to an adjoining sunken stair piece
+          // (e.g. this flight's top meeting a landing) — walling it over
+          // blocked the staircase.
+          if (!faceOpen(-W / 2 - 150, 0)) addBox(24, wellH, D, shaftMat, -W / 2 + 12, wellH / 2, 0);
+          if (!faceOpen(W / 2 + 150, 0))  addBox(24, wellH, D, shaftMat, W / 2 - 12, wellH / 2, 0);
+          if (!faceOpen(0, D / 2 + 150))  addBox(W, wellH, 24, shaftMat, 0, wellH / 2, D / 2 - 12);
         }
         break;
       }
@@ -1091,10 +1112,11 @@ export class ThreeDRenderer {
           const floorLvl = -(fu.elevation ?? 0);  // local y of this floor's level
           const wallH2 = Math.max(0, floorLvl - HT);
           if (wallH2 > 10) {
-            addBox(24, wallH2, D, shaftMat, -W / 2 + 12, HT + wallH2 / 2, 0);
-            addBox(24, wallH2, D, shaftMat, W / 2 - 12, HT + wallH2 / 2, 0);
-            addBox(W, wallH2, 24, shaftMat, 0, HT + wallH2 / 2, D / 2 - 12);
-            addBox(W, wallH2, 24, shaftMat, 0, HT + wallH2 / 2, -D / 2 + 12);
+            // Faces adjoining sunken flights stay open (that's the path).
+            if (!faceOpen(-W / 2 - 150, 0)) addBox(24, wallH2, D, shaftMat, -W / 2 + 12, HT + wallH2 / 2, 0);
+            if (!faceOpen(W / 2 + 150, 0))  addBox(24, wallH2, D, shaftMat, W / 2 - 12, HT + wallH2 / 2, 0);
+            if (!faceOpen(0, D / 2 + 150))  addBox(W, wallH2, 24, shaftMat, 0, HT + wallH2 / 2, D / 2 - 12);
+            if (!faceOpen(0, -D / 2 - 150)) addBox(W, wallH2, 24, shaftMat, 0, HT + wallH2 / 2, -D / 2 + 12);
           }
         }
         break;
