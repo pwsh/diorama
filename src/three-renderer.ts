@@ -146,6 +146,21 @@ export class ThreeDRenderer {
   private _sitSpots: SitSpot[] = [];
   // Contextual-activity anchors collected from the current floor's furniture.
   private _activityAnchors: ActivityAnchor[] = [];
+  // TVs grouped by the room they sit in — the watch_tv seated activity checks
+  // whether a bound TV in the seated person's room is on. Rebuilt in updateFloor.
+  private _tvsByRoom: Record<string, { furnitureId: string; hasEntity: boolean }[]> = {};
+  // Beds captured in updateFloor for the two-in-bed covers effect (world coords
+  // for footprint tests + scene coords + mattress-top height + def tint).
+  private _beds: { id: string; x: number; y: number; w: number; h: number;
+                   rotation?: number; color: number; matressTop: number;
+                   cx: number; cz: number }[] = [];
+  // Per-bed settle accumulator (seconds) and live cover meshes. Covers are
+  // transient and parented under _targetGroup so no floor rebuild is needed to
+  // clear them.
+  private _bedDwell: Record<string, number> = {};
+  private _bedCovers: Record<string, { mesh: THREE.Mesh; grp: THREE.Group; t: number }> = {};
+  // Wall-clock of the last updateTargets call — the bed pass derives its own dt.
+  private _lastTargetsNow = 0;
   // Fan rotor groups spun in the render loop. rps ≤ 1 (100% = 1 rev/s).
   // Angle derives from the absolute clock, so rebuilds don't jump phase.
   private _fanRotors: { obj: THREE.Object3D; rps: number }[] = [];
@@ -522,8 +537,26 @@ export class ThreeDRenderer {
     this._humanoids = {};
     this._sitSpots = [];
     this._activityAnchors = [];
+    this._tvsByRoom = {};
+    this._beds = [];
+    this._disposeBedCovers();
     this._fanRotors = [];
     this._terrain = [];
+  }
+
+  // Remove + dispose every live bed cover and clear the dwell accumulators.
+  // The cover meshes live under _targetGroup, so a _clearGroup on that group
+  // already frees the GPU buffers — this just drops our tracking records and
+  // covers the standalone (destroy) call.
+  private _disposeBedCovers(): void {
+    for (const id of Object.keys(this._bedCovers)) {
+      const c = this._bedCovers[id];
+      this._targetGroup.remove(c.grp);
+      c.mesh.geometry.dispose();
+      (c.mesh.material as THREE.Material).dispose();
+    }
+    this._bedCovers = {};
+    this._bedDwell = {};
   }
 
   // ── Camera views ────────────────────────────────────────────────────────
@@ -955,6 +988,8 @@ export class ThreeDRenderer {
     // get placed at child.position.z = -depth/2.
     this._sitSpots = [];
     this._activityAnchors = [];
+    this._tvsByRoom = {};
+    this._beds = [];
     this._terrain = [];
     const rooms = f.rooms ?? [];
     for (const fu of showFurniture ? f.furniture : []) {
@@ -976,15 +1011,30 @@ export class ThreeDRenderer {
       // Facing: person sits facing away from the backrest — body-local -Z,
       // which is the furniture group's yaw.
       if (def.seat) {
+        // The seat's own activity (e.g. a desk/table authored as sittable)
+        // wins; otherwise probe for an adjacent table/desk whose footprint
+        // (expanded 400 mm) contains the seat center, so a plain chair pulled
+        // up to a table/desk becomes an eat/work seat. Reads the HOST's
+        // resolved def.activity so custom recipes with those activities work.
+        let hostActivity = def.activity;
+        if (!hostActivity) {
+          for (const host of f.furniture) {
+            if (host === fu) continue;
+            const ha = resolveFurnitureDef(host, customObjects).activity;
+            if (ha !== 'eat_at_table' && ha !== 'work_at_desk') continue;
+            const l = furnitureWorldToLocal(host.rotation, fu.x - host.x, fu.y - host.y);
+            if (Math.abs(l.x) <= host.w / 2 + 400 && Math.abs(l.y) <= host.h / 2 + 400) {
+              hostActivity = ha; break;
+            }
+          }
+        }
         const c = this._w(fu.x, fu.y, 0);
         this._sitSpots.push({
           x: c.x, z: c.z, seatY: def.seat + (fu.elevation ?? 0),
           facing: -((fu.rotation || 0) * Math.PI / 180),
           r: Math.max(fu.w, fu.h) / 2 + 350,
           roomId,
-          // The seat's own activity (e.g. a desk/table authored as sittable);
-          // chairs gain table/desk adjacency in a later phase.
-          hostActivity: def.activity,
+          hostActivity,
         });
       }
       // Pieces whose def carries an `activity` register a contextual anchor
@@ -998,6 +1048,22 @@ export class ThreeDRenderer {
           kind: def.activity,
           roomId,
           hasEntity: fu.entity_id != null,
+        });
+      }
+      // TVs per room: a seated person in a room whose bound TV is on watches it.
+      // Skip roomless TVs (can't scope them to a seat's room).
+      if ((fu.kind === 'tv' || def.activity === 'watch_tv') && roomId) {
+        (this._tvsByRoom[roomId] ??= []).push({
+          furnitureId: fu.id, hasEntity: fu.entity_id != null,
+        });
+      }
+      // Beds captured for the two-in-bed covers effect. Mattress top matches the
+      // bed builder: frame HT*0.45 + mattress spanning to HT*1.05.
+      if (fu.kind === 'bed') {
+        const c = this._w(fu.x, fu.y, 0);
+        this._beds.push({
+          id: fu.id, x: fu.x, y: fu.y, w: fu.w, h: fu.h, rotation: fu.rotation,
+          color: def.color, matressTop: def.ht * 1.05, cx: c.x, cz: c.z,
         });
       }
     }
@@ -2566,13 +2632,21 @@ export class ThreeDRenderer {
   updateTargets(targets: TargetWorld[], ctx?: ActivityContext): void {
     if (!this._scene) return;
     const now = performance.now() / 1000;
+    // Bed pass derives its own dt from the previous call (per-humanoid dt is
+    // already consumed by the walk integrator).
+    const frameDt = this._lastTargetsNow ? Math.min(0.1, now - this._lastTargetsNow) : 0.016;
+    this._lastTargetsNow = now;
     const seen = new Set<string>();
     // Stale-chunk defense: a mixed-version module graph could call the old
     // 1-arg signature. Treat a missing context as no live entities.
     const entityOn = ctx?.entityOn ?? EMPTY_ENTITY_ON;
+    // RAW world target positions this frame, keyed by target — the bed-covers
+    // pass tests footprint containment in world coords.
+    const rawPos: Record<string, { x: number; y: number }> = {};
 
     for (const t of targets) {
       seen.add(t.key);
+      rawPos[t.key] = { x: t.x, y: t.y };
       let h = this._humanoids[t.key];
       // Rebuild on tint change (user recolored the sensor mid-track) —
       // materials are baked in at build time.
@@ -2587,6 +2661,10 @@ export class ThreeDRenderer {
         this._humanoids[t.key] = h;
         this._targetGroup.add(h.group);
       }
+      // Restore visibility on every seen rig: the two-in-bed pass hides
+      // occupants each frame, so a rig that left a bed (or the covers
+      // disengaged) is made visible again here before the bed pass re-decides.
+      h.group.visible = true;
       const p = this._w(t.x, t.y, 0);
 
       // First sighting of this target: anchor lastX/Z to the spawn point
@@ -2700,6 +2778,28 @@ export class ThreeDRenderer {
       if (anchor && act > 0.05) h.activity = anchor.kind;
       else if (toiletSit) h.activity = 'toilet';
       else if (act < 0.05) h.activity = null;
+
+      // Seated contextual activities (Phase 5): while settled on a seat and not
+      // in a privacy activity, resolve eat / work / watch from the seat's
+      // context. These are narrative + tiny pose offsets keyed on h.sit; they
+      // never grab an activity anchor (that path is standing-only).
+      if (sit > 0.5 && !toiletSit && h.activity !== 'toilet') {
+        const ha = spot?.hostActivity;
+        if (ha === 'eat_at_table' || ha === 'work_at_desk') {
+          h.activity = ha;
+        } else if (spot && spot.roomId) {
+          // Watch only a BOUND, ON TV in the seat's room — reflecting real HA
+          // state. An unbound TV never auto-triggers "watching".
+          let tvOn = false;
+          const tvs = this._tvsByRoom[spot.roomId];
+          if (tvs) for (const tv of tvs) {
+            if (tv.hasEntity ? entityOn[tv.furnitureId] : false) { tvOn = true; break; }
+          }
+          h.activity = tvOn ? 'watch_tv' : null;
+        } else {
+          h.activity = null;  // plain sitting
+        }
+      }
 
       // Stand point: OFFSET from the anchor center along +facing so the figure
       // stands beside the appliance and looks back at it (body-forward is
@@ -2842,6 +2942,31 @@ export class ThreeDRenderer {
         leanX = wLeanX * na + pLean * a;
         rollZ = wRollZ * na;  // no stride roll while engaged
         squatDrop *= a;
+      } else if (sit > 0.05) {
+        // Seated contextual pose add-ons (Phase 5) — subtle, layered on top of
+        // the SIT_* pose and blended by `sit`. No anchor is involved. Cheap:
+        // only the elbows / shoulders / head lean move.
+        switch (h.activity) {
+          case 'eat_at_table': {
+            // Left forearm lifts toward the mouth on a slow 0.8 Hz cycle; the
+            // right stays at rest — reads as bringing food up and down.
+            const s = (Math.sin(now * 0.8 * 2 * Math.PI) + 1) / 2;  // 0..1
+            lEl = wLEl * stand + (SIT_ELBOW + (1.3 - SIT_ELBOW) * s) * sit;
+            lSh = wLSh * stand + (SIT_SHOULDER + 0.25 * s) * sit;
+            break;
+          }
+          case 'work_at_desk':
+            // Both forearms up to the desk surface, slight head-down lean.
+            lEl = wLEl * stand + 1.15 * sit;
+            rEl = wREl * stand + 1.15 * sit;
+            leanX = wLeanX * stand - 0.06 * sit;
+            break;
+          case 'watch_tv':
+            // Completely still except breathing — hands rest a touch lower.
+            lEl = wLEl * stand + 0.9 * sit;
+            rEl = wREl * stand + 0.9 * sit;
+            break;
+        }
       }
 
       h.leftHip.rotation.x = lHip; h.rightHip.rotation.x = rHip;
@@ -2949,6 +3074,105 @@ export class ThreeDRenderer {
         h.group.scale.setScalar(h.scale);
       }
     }
+
+    // ── Two-in-bed covers: ≥2 settled targets inside a bed footprint hide the
+    // rigs and raise a breathing blanket (the joke is the lump). Triggers read
+    // the RAW target positions; occupancy is sustained via a per-bed dwell
+    // accumulator with hysteresis (engage >2 s, disengage <0.3 s).
+    this._updateBedCovers(rawPos, frameDt, now);
+  }
+
+  private _updateBedCovers(rawPos: Record<string, { x: number; y: number }>,
+                           frameDt: number, now: number): void {
+    for (const bed of this._beds) {
+      // Targets inside this bed's footprint (raw world coords) and how many are
+      // settled (smoothed speed < 0.15 m/s).
+      const inside: string[] = [];
+      let settled = 0;
+      for (const key in rawPos) {
+        const rp = rawPos[key];
+        const l = furnitureWorldToLocal(bed.rotation, rp.x - bed.x, rp.y - bed.y);
+        if (Math.abs(l.x) > bed.w / 2 || Math.abs(l.y) > bed.h / 2) continue;
+        inside.push(key);
+        const hh = this._humanoids[key];
+        if (hh && Math.hypot(hh.vx, hh.vz) / 1000 < 0.15) settled++;
+      }
+      const prev = this._bedDwell[bed.id] ?? 0;
+      const dwell = settled >= 2 ? prev + frameDt : Math.max(0, prev - frameDt * 3);
+      this._bedDwell[bed.id] = dwell;
+
+      let cover = this._bedCovers[bed.id];
+      // Engage at >2 s of sustained occupancy; the cover's presence carries the
+      // engaged state until the dwell decays under 0.3 s (hysteresis).
+      if (!cover && dwell > 2) {
+        cover = this._buildBedCover(bed);
+        this._bedCovers[bed.id] = cover;
+      }
+      if (!cover) continue;
+      const stayEngaged = dwell > 0.3;
+      cover.t += ((stayEngaged ? 1 : 0) - cover.t) * Math.min(1, frameDt * 3);
+      if (cover.t > 0.02) {
+        // Hide every rig inside the footprint (and its plumbob — the whole
+        // group goes) while the lump is showing.
+        for (const key of inside) {
+          const hh = this._humanoids[key];
+          if (hh) hh.group.visible = false;
+        }
+        cover.grp.visible = true;
+        this._animateBedCover(cover, bed, now);
+      } else if (!stayEngaged) {
+        // Fully faded out → remove + dispose; rig visibility is restored by the
+        // per-target loop next frame.
+        this._targetGroup.remove(cover.grp);
+        cover.mesh.geometry.dispose();
+        (cover.mesh.material as THREE.Material).dispose();
+        delete this._bedCovers[bed.id];
+      }
+    }
+  }
+
+  // Lazy-build a blanket plane for a bed, parented under _targetGroup (transient
+  // — cleared without a floor rebuild). Flat grid; the height is displaced per
+  // frame in _animateBedCover.
+  private _buildBedCover(bed: { x: number; y: number; w: number; h: number;
+                                rotation?: number; color: number; matressTop: number }):
+      { mesh: THREE.Mesh; grp: THREE.Group; t: number } {
+    const grp = new THREE.Group();
+    const p = this._w(bed.x, bed.y, 0);
+    grp.position.set(p.x, 0, p.z);
+    grp.rotation.y = -((bed.rotation || 0) * Math.PI / 180);
+    const geo = new THREE.PlaneGeometry(bed.w * 0.96, bed.h * 0.9, 10, 14);
+    geo.rotateX(-Math.PI / 2);  // lie flat; height becomes the local +Y axis
+    const mesh = new THREE.Mesh(geo, this._mat({
+      color: bed.color, roughness: 0.95, metalness: 0.0, side: THREE.DoubleSide,
+    }));
+    mesh.position.y = bed.matressTop + 60;
+    mesh.userData.outlineSkip = true;
+    grp.add(mesh);
+    grp.visible = false;
+    this._targetGroup.add(grp);
+    return { mesh, grp, t: 0 };
+  }
+
+  // CPU vertex displacement: two fixed gaussian lumps (occupants are hidden, so
+  // artistic license) plus a slow breathing ripple, all scaled by the eased
+  // engage blend so the blanket grows in / out smoothly. Writes in place.
+  private _animateBedCover(cover: { mesh: THREE.Mesh; t: number },
+                           bed: { w: number }, now: number): void {
+    const geo = cover.mesh.geometry as THREE.PlaneGeometry;
+    const pos = geo.attributes.position as THREE.BufferAttribute;
+    const blend = cover.t;
+    const cx = bed.w * 0.22, sig = bed.w * 0.15, twoSig2 = 2 * sig * sig;
+    for (let i = 0; i < pos.count; i++) {
+      const x = pos.getX(i), y = pos.getZ(i);  // local plan coords after rotateX
+      const dy = y * 0.6;  // stretch the lumps along the bed length
+      const l1 = 170 * Math.exp(-(((x - cx) * (x - cx)) + dy * dy) / twoSig2);
+      const l2 = 170 * Math.exp(-(((x + cx) * (x + cx)) + dy * dy) / twoSig2);
+      const ripple = 18 * Math.sin(now * 1.7 + x * 0.004) + 12 * Math.sin(now * 1.1 + y * 0.005);
+      pos.setY(i, (l1 + l2 + ripple) * blend);
+    }
+    pos.needsUpdate = true;
+    geo.computeVertexNormals();
   }
 
   // ── Humanoid construction ──────────────────────────────────────────────
@@ -3182,6 +3406,7 @@ export class ThreeDRenderer {
       this._disposeHumanoid(this._humanoids[key]);
     }
     this._humanoids = {};
+    this._disposeBedCovers();
     if (this._bgTexCache) {
       this._bgTexCache.tex.dispose();
       this._bgTexCache = null;
