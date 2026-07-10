@@ -84,6 +84,14 @@ interface Humanoid {
   act: number;         // eased 0..1 activity-pose blend (mirrors `sit`)
   privacy: number;     // eased 0..1 privacy-blur blend (shower/bathe/toilet)
   blurSprite: THREE.Sprite | null;     // lazy censor sprite shown above ~0.5 privacy
+  // Thought bubble (Phase 6): a context/time-aware glyph cloud above the head.
+  // `bubbleWant` tracks the raw per-frame resolution; `bubbleDwell` accumulates
+  // while it stays equal; `bubbleKind` commits (and rebuilds the sprite) only
+  // after 2.5 s of stability so the canvas is (re)painted rarely.
+  bubble: THREE.Sprite | null;
+  bubbleKind: string | null;
+  bubbleWant: string | null;
+  bubbleDwell: number;
   scale: number;       // eased spawn/despawn scale (0..1)
   idleOffset: number;  // per-rig phase offset so idle sway / breathing desync
   vx: number;          // smoothed velocity in 3D coords (mm/s)
@@ -98,6 +106,10 @@ type StateProvider = (id: string) => HassState | null;
 
 // Shared empty entity map for the stale-chunk fallback (no per-frame alloc).
 const EMPTY_ENTITY_ON: Record<string, boolean> = {};
+// Thought-bubble geometry (Phase 6). World-mm sprite size + the local offset
+// above the head (headY + HEAD_R + 700 ≈ 2462, clearing the plumbob at ~2002),
+// nudged to the side Sims-comic style.
+const BUBBLE_W = 620, BUBBLE_H = 580, BUBBLE_LOCAL_Y = 2462, BUBBLE_X = 180;
 // Solo activities wired up this phase (Phase 4). watch_tv / eat_at_table /
 // work_at_desk / sleep_shared are seated/contextual and land in Phase 5.
 const PHASE4_ACTIVITIES: ReadonlySet<ActivityKind> = new Set<ActivityKind>([
@@ -159,6 +171,17 @@ export class ThreeDRenderer {
   // clear them.
   private _bedDwell: Record<string, number> = {};
   private _bedCovers: Record<string, { mesh: THREE.Mesh; grp: THREE.Group; t: number }> = {};
+  // Each named room paired with the wall loop that currently contains its
+  // anchor, cached in updateFloor so updateTargets can cheaply resolve which
+  // room each target stands in (a pip walk per target). Rooms whose anchor
+  // falls outside every loop are skipped. Reset with the other per-floor caches.
+  private _roomZones: { roomId: string; loop: Vec2[] }[] = [];
+  // Bed occupancy summary produced by _updateBedCovers for NEXT frame's thought-
+  // bubble resolution (one-frame lag is fine — bubble commit has 2.5 s
+  // hysteresis). hiddenKeys: rigs currently hidden under the two-in-bed covers.
+  // soloKeys: targets that are the sole occupant of a bed footprint.
+  private _bedState: { hiddenKeys: Set<string>; soloKeys: Set<string> } =
+    { hiddenKeys: new Set(), soloKeys: new Set() };
   // Wall-clock of the last updateTargets call — the bed pass derives its own dt.
   private _lastTargetsNow = 0;
   // Fan rotor groups spun in the render loop. rps ≤ 1 (100% = 1 rev/s).
@@ -539,6 +562,7 @@ export class ThreeDRenderer {
     this._activityAnchors = [];
     this._tvsByRoom = {};
     this._beds = [];
+    this._roomZones = [];
     this._disposeBedCovers();
     this._fanRotors = [];
     this._terrain = [];
@@ -990,6 +1014,7 @@ export class ThreeDRenderer {
     this._activityAnchors = [];
     this._tvsByRoom = {};
     this._beds = [];
+    this._roomZones = [];
     this._terrain = [];
     const rooms = f.rooms ?? [];
     for (const fu of showFurniture ? f.furniture : []) {
@@ -1074,6 +1099,8 @@ export class ThreeDRenderer {
     for (const rm of rooms) {
       const loop = loopContaining(loops, rm.anchor.x, rm.anchor.y);
       if (!loop) continue;
+      // Cache the room ↔ loop pairing for per-frame target-room resolution.
+      this._roomZones.push({ roomId: rm.id, loop });
       const c = centroid(loop);
       const wp = this._w(c.x, c.y, 50);
       const sprite = this._makeRoomLabelSprite(rm.name);
@@ -3055,6 +3082,30 @@ export class ThreeDRenderer {
         h.blurSprite.visible = false;
         for (const child of h.group.children) child.visible = true;
       }
+
+      // ── Thought bubbles (Phase 6): a context/time-aware glyph cloud above the
+      // head. Per-frame cost is string compares + one pip walk to find the room;
+      // the canvas is only (re)painted on a committed kind change (2.5 s
+      // hysteresis makes that rare). Runs AFTER the privacy block so it has the
+      // final say on the bubble sprite's visibility.
+      const tb = ctx?.timeBucket ?? 'day';
+      let roomName = '';
+      for (const rz of this._roomZones) {
+        if (pip(t.x, t.y, rz.loop)) {
+          roomName = (ctx?.roomNames?.[rz.roomId] ?? '').toLowerCase();
+          break;
+        }
+      }
+      const bedHidden = this._bedState.hiddenKeys.has(t.key);
+      const inBedAlone = this._bedState.soloKeys.has(t.key);
+      const want = this._resolveBubbleKind(h, tb, roomName, inBedAlone, bedHidden);
+      // Hysteresis: accumulate dwell only while the raw resolution holds steady;
+      // any change resets the timer. Commit (and rebuild) once it's been stable
+      // for 2.5 s.
+      if (want === h.bubbleWant) h.bubbleDwell += dt;
+      else { h.bubbleWant = want; h.bubbleDwell = 0; }
+      if (h.bubbleDwell > 2.5 && h.bubbleKind !== h.bubbleWant) h.bubbleKind = h.bubbleWant;
+      this._syncBubble(h, dt);
     }
 
     // Despawn: ease out instead of popping. Brief LD2450 dropouts (a target
@@ -3082,8 +3133,103 @@ export class ThreeDRenderer {
     this._updateBedCovers(rawPos, frameDt, now);
   }
 
+  // Resolve the thought-bubble glyph for a humanoid this frame (raw, pre-
+  // hysteresis). String compares only. Priority (first match wins):
+  //   1. engaged activity / privacy → null (the pose already says it all).
+  //   2. hidden under bed covers → null.
+  //   3. late-night|night, kitchen, standing idle → snack.
+  //   4. morning, kitchen, standing idle → coffee.
+  //   5. evening|night|late-night, seated → reading (activity is null here, so
+  //      the room's TV is off — otherwise h.activity would be 'watch_tv').
+  //   6. sole occupant idling in a bed → phone.
+  private _resolveBubbleKind(h: Humanoid, tb: import('./time-of-day.js').TimeBucket,
+                             roomName: string, inBedAlone: boolean,
+                             bedHidden: boolean): string | null {
+    if (h.activity != null || h.privacy > 0.3) return null;
+    if (bedHidden) return null;
+    const inKitchen = roomName.includes('kitchen');
+    const standingIdle = h.sit < 0.3 && h.dwell > 1.5;
+    if ((tb === 'late_night' || tb === 'night') && inKitchen && standingIdle) return '🍪';
+    if (tb === 'morning' && inKitchen && standingIdle) return '☕';
+    if ((tb === 'evening' || tb === 'night' || tb === 'late_night') && h.sit > 0.5) return '📖';
+    if (inBedAlone && h.dwell > 2) return '📱';
+    return null;
+  }
+
+  // Reconcile a humanoid's committed bubble kind with its live sprite: build /
+  // pop-in / shrink-out + dispose. Pop-in eases scale 0→1 over ~0.25 s; a
+  // commit to null (or a privacy blur / hidden rig) shrinks it back out and
+  // frees the per-rig canvas texture. Called every frame; canvas work happens
+  // only when the committed glyph actually changes.
+  private _syncBubble(h: Humanoid, dt: number): void {
+    const forceHide = h.privacy > 0.3 || !h.group.visible;
+    const wantVisible = h.bubbleKind != null && !forceHide;
+    if (wantVisible && (!h.bubble || h.bubble.userData.glyph !== h.bubbleKind)) {
+      if (h.bubble) this._disposeBubble(h);
+      const spr = this._makeBubbleSprite(h.bubbleKind!);
+      spr.userData.glyph = h.bubbleKind;
+      spr.userData.outlineSkip = true;
+      spr.userData.s = 0;  // eased 0..1 pop-in
+      spr.position.set(BUBBLE_X, BUBBLE_LOCAL_Y, 0);
+      h.group.add(spr);
+      h.bubble = spr;
+    }
+    if (!h.bubble) return;
+    const spr = h.bubble;
+    const target = wantVisible ? 1 : 0;
+    let s = (spr.userData.s as number) ?? 0;
+    s += (target - s) * Math.min(1, dt * 8);  // ~0.25 s ease
+    spr.userData.s = s;
+    spr.scale.set(BUBBLE_W * s, BUBBLE_H * s, 1);
+    spr.visible = wantVisible && s > 0.01;
+    if (!wantVisible && s < 0.02) this._disposeBubble(h);
+  }
+
+  private _disposeBubble(h: Humanoid): void {
+    if (!h.bubble) return;
+    h.group.remove(h.bubble);
+    const m = h.bubble.material as THREE.SpriteMaterial;
+    m.map?.dispose();
+    m.dispose();
+    h.bubble = null;
+  }
+
+  // Classic comic thought cloud on a small canvas: a cluster of white puffs with
+  // a uniform dark rim (drawn as slightly-larger dark discs UNDER white discs so
+  // interior seams vanish and only the union boundary shows), the glyph centered,
+  // plus two trailing tail circles bottom-left. Transparent background.
+  private _makeBubbleSprite(glyph: string): THREE.Sprite {
+    const cv = document.createElement('canvas');
+    cv.width = 160; cv.height = 150;
+    const ctx = cv.getContext('2d')!;
+    // [x, y, r] — main cloud puffs then the two trailing tail circles.
+    const parts: [number, number, number][] = [
+      [78, 60, 44], [44, 66, 28], [112, 64, 30], [60, 40, 26], [98, 38, 26], [80, 82, 26],
+      [34, 108, 12], [20, 128, 7],
+    ];
+    const OUT = 3;  // rim thickness (px)
+    ctx.fillStyle = '#242424';
+    for (const [x, y, r] of parts) { ctx.beginPath(); ctx.arc(x, y, r + OUT, 0, Math.PI * 2); ctx.fill(); }
+    ctx.fillStyle = '#fdfdfd';
+    for (const [x, y, r] of parts) { ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill(); }
+    ctx.font = '64px system-ui, "Apple Color Emoji", "Noto Color Emoji", "Segoe UI Emoji", sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#242424';
+    ctx.fillText(glyph, 78, 62);
+    const tex = new THREE.CanvasTexture(cv);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    const spr = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: tex, transparent: true, depthWrite: false,
+    }));
+    spr.scale.set(BUBBLE_W, BUBBLE_H, 1);
+    return spr;
+  }
+
   private _updateBedCovers(rawPos: Record<string, { x: number; y: number }>,
                            frameDt: number, now: number): void {
+    // Occupancy summary for NEXT frame's thought-bubble resolution.
+    const hiddenKeys = new Set<string>();
+    const soloKeys = new Set<string>();
     for (const bed of this._beds) {
       // Targets inside this bed's footprint (raw world coords) and how many are
       // settled (smoothed speed < 0.15 m/s).
@@ -3097,6 +3243,9 @@ export class ThreeDRenderer {
         const hh = this._humanoids[key];
         if (hh && Math.hypot(hh.vx, hh.vz) / 1000 < 0.15) settled++;
       }
+      // Sole occupant → "in bed alone" candidate (idle gating happens in the
+      // bubble resolver via h.dwell).
+      if (inside.length === 1) soloKeys.add(inside[0]);
       const prev = this._bedDwell[bed.id] ?? 0;
       const dwell = settled >= 2 ? prev + frameDt : Math.max(0, prev - frameDt * 3);
       this._bedDwell[bed.id] = dwell;
@@ -3117,6 +3266,7 @@ export class ThreeDRenderer {
         for (const key of inside) {
           const hh = this._humanoids[key];
           if (hh) hh.group.visible = false;
+          hiddenKeys.add(key);
         }
         cover.grp.visible = true;
         this._animateBedCover(cover, bed, now);
@@ -3129,6 +3279,7 @@ export class ThreeDRenderer {
         delete this._bedCovers[bed.id];
       }
     }
+    this._bedState = { hiddenKeys, soloKeys };
   }
 
   // Lazy-build a blanket plane for a bed, parented under _targetGroup (transient
@@ -3360,6 +3511,7 @@ export class ThreeDRenderer {
       sit: 0, groundY: 0, dwell: 0, sitSpot: null,
       activity: null, activityAnchor: null, activityDwell: 0,
       act: 0, privacy: 0, blurSprite: null,
+      bubble: null, bubbleKind: null, bubbleWant: null, bubbleDwell: 0,
       idleOffset: Math.random() * Math.PI * 2,
       vx: 0, vz: 0,
       lastX: 0, lastZ: 0, lastUpdate: 0, initialized: false,
@@ -3374,9 +3526,14 @@ export class ThreeDRenderer {
         if (Array.isArray(m.material)) m.material.forEach(mm => mm.dispose());
         else m.material.dispose();
       } else if ((obj as THREE.Sprite).isSprite) {
-        // Dispose the sprite's material but NOT its map — the blur textures are
-        // shared across all rigs (disposed once in destroy()).
-        (obj as THREE.Sprite).material.dispose();
+        // Dispose the sprite's material. Per-rig maps (thought-bubble canvas
+        // textures) must be freed too; the blur silhouette maps are SHARED
+        // across all rigs (disposed once in destroy()) so leave those alone.
+        const sm = (obj as THREE.Sprite).material as THREE.SpriteMaterial;
+        if (sm.map && sm.map !== this._blurTexStand && sm.map !== this._blurTexSit) {
+          sm.map.dispose();
+        }
+        sm.dispose();
       }
     });
   }
