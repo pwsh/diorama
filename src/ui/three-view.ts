@@ -4,9 +4,9 @@ import { customElement } from './define.js';
 // Type-only import — erased at build time. The actual module (which pulls in
 // all of three.js, ~600 kB) is loaded lazily in firstUpdated so the 2D-only
 // startup path never downloads it.
-import type { ThreeDRenderer, ZoneWorld, HaloWorld, TargetWorld } from '../three-renderer.js';
+import type { ThreeDRenderer, ZoneWorld, HaloWorld, TargetWorld, ActivityContext } from '../three-renderer.js';
 import { localToWorld, transformVerts, pointInPolygon, sensorColor, hexToInt } from '../geometry.js';
-import { resolveScenePreset } from '../time-of-day.js';
+import { resolveScenePreset, resolveTimeBucket } from '../time-of-day.js';
 import { loadModel } from '../model-store.js';
 import { newId } from '../storage.js';
 import type { Planner } from '../planner.js';
@@ -398,8 +398,20 @@ export class ThreeView extends LitElement {
         this._keyHalos = keyHalos;
         r.updateHalos(halos);
       }
+      // Per-frame activity context (cheap plain-JS; never dirty-keyed): which
+      // bound appliance entities are on/playing, room names, and the coarse
+      // time bucket. Drives the Sims-style solo activities in updateTargets.
+      const entityOn: Record<string, boolean> = {};
+      for (const fu of f.furniture) {
+        if (!fu.entity_id) continue;
+        const st = states[fu.entity_id];
+        entityOn[fu.id] = st?.state === 'on' || st?.state === 'playing';
+      }
+      const roomNames: Record<string, string> = {};
+      for (const rm of f.rooms ?? []) roomNames[rm.id] = rm.name;
+      const ctx: ActivityContext = { entityOn, roomNames, timeBucket: resolveTimeBucket(states) };
       // Targets every frame — persistent rigs mutate in place (no rebuild).
-      r.updateTargets(targets);
+      r.updateTargets(targets, ctx);
   }
 
   // ── Imported 3D model sync ────────────────────────────────────────────

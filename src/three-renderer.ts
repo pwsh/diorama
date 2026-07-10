@@ -20,6 +20,16 @@ export interface ZoneWorld { vertices: Vec2[]; color: number; occupied: boolean;
 export interface HaloWorld { x: number; y: number; radius: number; occupied: boolean; }
 export interface TargetWorld { key: string; x: number; y: number; color: number; }
 
+// Per-frame context for the Sims-style activity system. Built cheaply every
+// tick in three-view._tickOnce and passed to updateTargets. Optional so a
+// stale renderer chunk (older app.js pairing) still animates walking / sitting
+// — a missing ctx is treated as empty entityOn/roomNames + a 'day' bucket.
+export interface ActivityContext {
+  entityOn: Record<string, boolean>;   // furnitureId → bound HA entity is on/playing
+  roomNames: Record<string, string>;   // roomId → name
+  timeBucket: import('./time-of-day.js').TimeBucket;
+}
+
 // A seat a humanoid can settle onto (scene coords). Collected from sittable
 // furniture (any kind whose def has `seat`) during updateFloor. roomId /
 // hostActivity tag the seat for later contextual-activity resolution.
@@ -39,6 +49,7 @@ interface ActivityAnchor {
   facing: number;
   kind: ActivityKind;
   roomId: string | null;
+  hasEntity: boolean;   // furniture has a bound HA entity (gates entity-driven kinds)
 }
 
 interface Humanoid {
@@ -65,6 +76,14 @@ interface Humanoid {
   groundY: number;     // eased terrain height under the figure (stairs/landings)
   dwell: number;       // seconds of near-zero speed (sitting trigger)
   sitSpot: SitSpot | null;  // anchor seat; retained while easing back up
+  // Contextual-activity state (Sims solo activities). Mutually exclusive with
+  // sitting: an anchor is only acquired while sit ≈ 0.
+  activity: ActivityKind | null;       // engaged activity (drives poses + privacy)
+  activityAnchor: ActivityAnchor | null;  // retained while easing back out (act > 0.05)
+  activityDwell: number;               // reserved; the dwell trigger reuses `dwell`
+  act: number;         // eased 0..1 activity-pose blend (mirrors `sit`)
+  privacy: number;     // eased 0..1 privacy-blur blend (shower/bathe/toilet)
+  blurSprite: THREE.Sprite | null;     // lazy censor sprite shown above ~0.5 privacy
   scale: number;       // eased spawn/despawn scale (0..1)
   idleOffset: number;  // per-rig phase offset so idle sway / breathing desync
   vx: number;          // smoothed velocity in 3D coords (mm/s)
@@ -76,6 +95,21 @@ interface Humanoid {
 }
 
 type StateProvider = (id: string) => HassState | null;
+
+// Shared empty entity map for the stale-chunk fallback (no per-frame alloc).
+const EMPTY_ENTITY_ON: Record<string, boolean> = {};
+// Solo activities wired up this phase (Phase 4). watch_tv / eat_at_table /
+// work_at_desk / sleep_shared are seated/contextual and land in Phase 5.
+const PHASE4_ACTIVITIES: ReadonlySet<ActivityKind> = new Set<ActivityKind>([
+  'shower', 'bathe', 'toilet', 'wash_hands', 'load_dishwasher',
+  'make_coffee', 'forage_fridge', 'exercise',
+]);
+// Activities whose dwell trigger reads the bound appliance's on/off state:
+// dishwasher loading / coffee brewing only look right while it's actually
+// running. Other kinds don't gate on entity state.
+const ENTITY_GATED_ACTIVITIES: ReadonlySet<ActivityKind> = new Set<ActivityKind>([
+  'load_dishwasher', 'make_coffee',
+]);
 
 export class ThreeDRenderer {
   loaded = false;
@@ -355,6 +389,54 @@ export class ThreeDRenderer {
     this._blobTex = new THREE.CanvasTexture(c);
     return this._blobTex;
   }
+  // Privacy-blur silhouette textures (shared, built once). A chunky
+  // pixel-mosaic of a standing / seated body — NearestFilter for the censored
+  // look. Shared like the blob/gradient maps: never disposed per-instance, only
+  // in destroy(). The pattern is deterministic (hand-coded body mask + a hash
+  // over gray/blue blocks).
+  private _blurTexStand: THREE.CanvasTexture | null = null;
+  private _blurTexSit: THREE.CanvasTexture | null = null;
+  private _blurTexture(sit: boolean): THREE.CanvasTexture {
+    const cached = sit ? this._blurTexSit : this._blurTexStand;
+    if (cached) return cached;
+    const W = 20, H = 30;
+    const c = document.createElement('canvas');
+    c.width = W; c.height = H;
+    const g = c.getContext('2d')!;
+    g.clearRect(0, 0, W, H);
+    const PAL = ['#6b7280', '#7c8794', '#8b95a5', '#5b6472', '#9aa4b2', '#4a5563'];
+    // Body mask: returns true where a body block should be painted. Columns are
+    // 0..19, rows 0 (top) .. 29 (bottom).
+    const inMask = (x: number, y: number): boolean => {
+      if (sit) {
+        if (y >= 3 && y <= 8 && x >= 7 && x <= 12) return true;         // head
+        if (y >= 9 && y <= 17 && x >= 5 && x <= 14) return true;        // torso
+        if (y >= 18 && y <= 22 && x >= 4 && x <= 15) return true;       // lap / thighs
+        if (y >= 23 && y <= 29 && ((x >= 5 && x <= 8) || (x >= 11 && x <= 14))) return true; // shins
+        return false;
+      }
+      if (y >= 2 && y <= 7 && x >= 7 && x <= 12) return true;           // head
+      if (y === 8 && x >= 9 && x <= 10) return true;                    // neck
+      if (y >= 9 && y <= 18 && x >= 5 && x <= 14) return true;          // torso
+      if (y >= 9 && y <= 16 && ((x >= 3 && x <= 4) || (x >= 15 && x <= 16))) return true; // arms
+      if (y >= 19 && y <= 29 && ((x >= 6 && x <= 9) || (x >= 10 && x <= 13))) return true; // legs
+      return false;
+    };
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        if (!inMask(x, y)) continue;
+        g.fillStyle = PAL[(x * 7 + y * 13) % PAL.length];
+        g.fillRect(x, y, 1, 1);
+      }
+    }
+    const tex = new THREE.CanvasTexture(c);
+    tex.magFilter = THREE.NearestFilter;
+    tex.minFilter = THREE.NearestFilter;
+    tex.generateMipmaps = false;
+    if (sit) this._blurTexSit = tex; else this._blurTexStand = tex;
+    return tex;
+  }
+
   // rx/rz are half-extents (mm) of the shadow ellipse in the parent's local
   // frame. The shared texture must never be disposed per-instance —
   // _disposeSubtree only disposes materials, not maps, so this is safe.
@@ -915,6 +997,7 @@ export class ThreeDRenderer {
           facing: -((fu.rotation || 0) * Math.PI / 180),
           kind: def.activity,
           roomId,
+          hasEntity: fu.entity_id != null,
         });
       }
     }
@@ -2480,10 +2563,13 @@ export class ThreeDRenderer {
     }
   }
 
-  updateTargets(targets: TargetWorld[]): void {
+  updateTargets(targets: TargetWorld[], ctx?: ActivityContext): void {
     if (!this._scene) return;
     const now = performance.now() / 1000;
     const seen = new Set<string>();
+    // Stale-chunk defense: a mixed-version module graph could call the old
+    // 1-arg signature. Treat a missing context as no live entities.
+    const entityOn = ctx?.entityOn ?? EMPTY_ENTITY_ON;
 
     for (const t of targets) {
       seen.add(t.key);
@@ -2570,7 +2656,68 @@ export class ThreeDRenderer {
       const sit = h.sit;
       const spot = h.sitSpot;
 
-      if (spot && sit > 0.3) {
+      // ── Solo activities (Phase 4): a target dwelling near an activity anchor
+      // (sink / dishwasher / fridge / coffee maker / exercise / shower / …)
+      // eases into a kind-specific pose. Activities and sitting are separate
+      // systems: no anchor is acquired while sitting (guard sit ≈ 0), so a
+      // person seated on a chair never also grabs a standing appliance anchor.
+      // Toilet is handled through the sit system (its seat) with a privacy
+      // hook below. Release mirrors the sit hysteresis (hold the anchor while
+      // the pose eases back out). All triggers read the RAW position `p`.
+      let wantAct = false;
+      if (h.activityAnchor) {
+        const a = h.activityAnchor;
+        const dA = Math.hypot(p.x - a.x, p.z - a.z);
+        wantAct = !(rawSpeedMs > 0.4 || dA > a.r + 250);
+        if (!wantAct) {
+          h.dwell = 0;
+          if (h.act < 0.05) h.activityAnchor = null;  // fully disengaged → release
+        }
+      }
+      if (!h.activityAnchor && sit < 0.1) {
+        let best: ActivityAnchor | null = null, bd = Infinity;
+        for (const a of this._activityAnchors) {
+          if (!PHASE4_ACTIVITIES.has(a.kind)) continue;
+          const dA = Math.hypot(p.x - a.x, p.z - a.z);
+          if (dA >= a.r || dA >= bd) continue;
+          const need = (a.kind === 'toilet' || a.kind === 'bathe') ? 2.0 : 1.2;
+          if (h.dwell <= need) continue;
+          // Entity-gated kinds only read while the appliance is actually on.
+          // No binding → don't gate (users without HA still get the anim).
+          if (ENTITY_GATED_ACTIVITIES.has(a.kind) && a.hasEntity && !entityOn[a.furnitureId]) continue;
+          bd = dA; best = a;
+        }
+        if (best) { h.activityAnchor = best; wantAct = true; }
+      }
+      h.act += ((wantAct ? 1 : 0) - h.act) * Math.min(1, dt * 3);
+      const act = h.act;
+      const anchor = h.activityAnchor;
+
+      // Toilet reaches through the SIT system (a toilet is sittable); flag it
+      // so the privacy blur still kicks in on the seated pose.
+      const toiletSit = !!(spot && spot.hostActivity === 'toilet' && sit > 0.5);
+      // Resolve the engaged activity for pose + privacy purposes.
+      if (anchor && act > 0.05) h.activity = anchor.kind;
+      else if (toiletSit) h.activity = 'toilet';
+      else if (act < 0.05) h.activity = null;
+
+      // Stand point: OFFSET from the anchor center along +facing so the figure
+      // stands beside the appliance and looks back at it (body-forward is
+      // local -Z; with yaw = anchor.facing the figure looks toward the anchor
+      // from the (sinθ, cosθ) side). standOff ≈ 45% of the footprint radius.
+      let standX = p.x, standZ = p.z;
+      if (anchor) {
+        const standOff = Math.max(350, anchor.r * 0.45);
+        standX = anchor.x + Math.sin(anchor.facing) * standOff;
+        standZ = anchor.z + Math.cos(anchor.facing) * standOff;
+      }
+
+      if (anchor && act > 0.3) {
+        // Turn to face the appliance while engaging.
+        let d = anchor.facing - h.facing;
+        d -= Math.round(d / (2 * Math.PI)) * 2 * Math.PI;
+        h.facing += d * Math.min(1, dt * 6);
+      } else if (spot && sit > 0.3) {
         // Turn to the seat's facing while settling.
         let d = spot.facing - h.facing;
         d -= Math.round(d / (2 * Math.PI)) * 2 * Math.PI;
@@ -2620,31 +2767,89 @@ export class ThreeDRenderer {
       const SIT_HIP = 1.45, SIT_KNEE = -1.45, SIT_SHOULDER = 0.45, SIT_ELBOW = 0.85;
       const stand = 1 - sit;
 
-      // Hip swing: opposing legs.
-      h.leftHip.rotation.x  = (sinP * amp + idle) * stand + SIT_HIP * sit;
-      h.rightHip.rotation.x = (-sinP * amp + idle) * stand + SIT_HIP * sit;
-
-      // Knee bend: leg flexes only while it swings forward (positive sin).
-      // Negative rotation = shin folds backward toward butt (anatomical).
-      const kneeAmp = 0.9 * ampNorm;
-      h.leftKnee.rotation.x  = -Math.max(0, sinP)  * kneeAmp * stand + SIT_KNEE * sit;
-      h.rightKnee.rotation.x = -Math.max(0, -sinP) * kneeAmp * stand + SIT_KNEE * sit;
-
-      // Shoulder swing: counter-rotation to same-side hip (right arm with
-      // left leg) at ~80% amplitude — full counter-swing read as marching.
-      h.leftShoulder.rotation.x  = (-sinP * amp * 0.8 - idle) * stand + SIT_SHOULDER * sit;
-      h.rightShoulder.rotation.x = ( sinP * amp * 0.8 - idle) * stand + SIT_SHOULDER * sit;
-
-      // Elbow bend: a constant baseline so arms aren't rigid sticks, plus
-      // extra flexion as the arm swings forward.
-      h.leftElbow.rotation.x  = (0.25 + Math.max(0, -sinP) * 0.5 * ampNorm) * stand + SIT_ELBOW * sit;
-      h.rightElbow.rotation.x = (0.25 + Math.max(0, sinP)  * 0.5 * ampNorm) * stand + SIT_ELBOW * sit;
-
+      // Walk pose values for each joint (rad), before any sit / activity blend.
+      const wLHip = sinP * amp + idle, wRHip = -sinP * amp + idle;
+      const wLKnee = -Math.max(0, sinP) * (0.9 * ampNorm);
+      const wRKnee = -Math.max(0, -sinP) * (0.9 * ampNorm);
+      const wLSh = -sinP * amp * 0.8 - idle, wRSh = sinP * amp * 0.8 - idle;
+      const wLEl = 0.25 + Math.max(0, -sinP) * 0.5 * ampNorm;
+      const wREl = 0.25 + Math.max(0, sinP) * 0.5 * ampNorm;
       // Whole-body English (root rotation order is YXZ: yaw = facing above,
-      // pitch = forward lean into the direction of travel, roll = lateral
-      // weight sway once per stride). Suppressed while seated.
-      h.group.rotation.x = -0.12 * speedNorm * ampNorm * stand;
-      h.group.rotation.z = sinP * 0.045 * ampNorm * stand;
+      // pitch = forward lean into the direction of travel — NEGATIVE is a
+      // forward lean — roll = lateral weight sway once per stride).
+      const wLeanX = -0.12 * speedNorm * ampNorm;
+      const wRollZ = sinP * 0.045 * ampNorm;
+
+      // Per-joint final values. Sitting and activities are mutually exclusive
+      // (anchor only acquired while sit ≈ 0), so an engaged activity overrides
+      // the sit-blend path entirely.
+      let lHip = wLHip * stand + SIT_HIP * sit;
+      let rHip = wRHip * stand + SIT_HIP * sit;
+      let lKnee = wLKnee * stand + SIT_KNEE * sit;
+      let rKnee = wRKnee * stand + SIT_KNEE * sit;
+      let lSh = wLSh * stand + SIT_SHOULDER * sit;
+      let rSh = wRSh * stand + SIT_SHOULDER * sit;
+      let lEl = wLEl * stand + SIT_ELBOW * sit;
+      let rEl = wREl * stand + SIT_ELBOW * sit;
+      let leanX = wLeanX * stand;
+      let rollZ = wRollZ * stand;
+      let squatDrop = 0;  // mm the exercise squat lowers the root (blended by act)
+
+      if (anchor) {
+        // Activity pose targets (rad). Legs default to straight standing;
+        // forward lean is negative (see wLeanX). See DESIGN-sims Phase 4.
+        let pLHip = 0, pRHip = 0, pLKnee = 0, pRKnee = 0;
+        let pLSh = 0, pRSh = 0, pLEl = 0.2, pREl = 0.2, pLean = 0;
+        switch (h.activity) {
+          case 'wash_hands':
+            pLSh = pRSh = 0.55;
+            pLEl = pREl = 0.95 + Math.sin(now * 5) * 0.18;  // scrubbing
+            pLean = -0.08;
+            break;
+          case 'load_dishwasher':
+            pLSh = pRSh = 0.7; pLEl = pREl = 0.35;
+            pLean = -(0.18 + Math.max(0, Math.sin(now * 1.3)) * 0.42);  // bend down / up
+            break;
+          case 'make_coffee':
+            pRSh = 0.85; pREl = 1.1;  // asymmetric: right arm works the machine
+            pLSh = 0; pLEl = 0.2 + Math.sin(now * 1.6 + h.idleOffset) * 0.05;
+            break;
+          case 'forage_fridge':
+            pLSh = pRSh = 0.5; pLEl = pREl = 0.6;
+            pLean = -0.3;  // static peer-into-the-fridge lean
+            break;
+          case 'exercise': {
+            const sq = Math.max(0, Math.sin(now * 3.4));  // squat cycle
+            pLHip = pRHip = 0.9 * sq; pLKnee = pRKnee = -1.5 * sq;
+            pLSh = pRSh = (Math.PI / 2) * 0.9; pLEl = pREl = 0.15;  // arms raised
+            squatDrop = 180 * sq;
+            break;
+          }
+          case 'toilet':
+            // Defensive: the toilet normally routes through the sit system, but
+            // if reached via anchor, reuse the seated pose.
+            pLHip = pRHip = SIT_HIP; pLKnee = pRKnee = SIT_KNEE;
+            pLSh = pRSh = SIT_SHOULDER; pLEl = pREl = SIT_ELBOW;
+            break;
+          // shower / bathe: pose is hidden behind the privacy blur — leave the
+          // relaxed standing default.
+        }
+        const a = act, na = 1 - act;
+        lHip = wLHip * na + pLHip * a; rHip = wRHip * na + pRHip * a;
+        lKnee = wLKnee * na + pLKnee * a; rKnee = wRKnee * na + pRKnee * a;
+        lSh = wLSh * na + pLSh * a; rSh = wRSh * na + pRSh * a;
+        lEl = wLEl * na + pLEl * a; rEl = wREl * na + pREl * a;
+        leanX = wLeanX * na + pLean * a;
+        rollZ = wRollZ * na;  // no stride roll while engaged
+        squatDrop *= a;
+      }
+
+      h.leftHip.rotation.x = lHip; h.rightHip.rotation.x = rHip;
+      h.leftKnee.rotation.x = lKnee; h.rightKnee.rotation.x = rKnee;
+      h.leftShoulder.rotation.x = lSh; h.rightShoulder.rotation.x = rSh;
+      h.leftElbow.rotation.x = lEl; h.rightElbow.rotation.x = rEl;
+      h.group.rotation.x = leanX;
+      h.group.rotation.z = rollZ;
 
       // Breathing — subtle torso rise/fall, always on.
       h.torso.scale.y = 1 + Math.sin(now * 1.8 + h.idleOffset) * 0.012;
@@ -2664,9 +2869,23 @@ export class ThreeDRenderer {
       // and x/z pull onto the seat center.
       const bob = Math.abs(sinP) * 40 * ampNorm;
       const HIP_Y = 870;
-      const px2 = spot ? p.x * stand + spot.x * sit : p.x;
-      const pz2 = spot ? p.z * stand + spot.z * sit : p.z;
-      const py2 = (h.groundY + bob) * stand + (spot ? (spot.seatY - HIP_Y) * sit : 0);
+      let px2: number, pz2: number, py2: number;
+      if (anchor) {
+        // Standing activity: pull onto the stand point beside the appliance;
+        // stay on the walking surface (minus the exercise squat drop).
+        const a = act, na = 1 - act;
+        px2 = p.x * na + standX * a;
+        pz2 = p.z * na + standZ * a;
+        py2 = h.groundY + bob - squatDrop;
+      } else if (spot) {
+        // Seated: drop the root so the hip pivot rests on the seat, pull x/z
+        // onto the seat center.
+        px2 = p.x * stand + spot.x * sit;
+        pz2 = p.z * stand + spot.z * sit;
+        py2 = (h.groundY + bob) * stand + (spot.seatY - HIP_Y) * sit;
+      } else {
+        px2 = p.x; pz2 = p.z; py2 = h.groundY + bob;
+      }
       h.group.position.set(px2, py2, pz2);
 
       // Plumbob spin (absolute clock + per-rig offset so rigs desync) and
@@ -2674,6 +2893,43 @@ export class ThreeDRenderer {
       // shadow must stay glued to the walking surface below.
       h.plumbob.rotation.y = (now * 1.6 + h.idleOffset) % (2 * Math.PI);
       h.blob.position.y = h.groundY + 10 - py2;
+
+      // ── Privacy blur: shower / bathe / toilet censor the rig behind a chunky
+      // pixel-mosaic silhouette sprite. The plumbob + blob shadow stay (a
+      // plumbob floating over a censored blob is peak Sims).
+      const sitPose = h.activity === 'toilet' || h.activity === 'bathe';
+      const wantPrivacy =
+        ((h.activity === 'shower' || h.activity === 'bathe') && act > 0.5) ||
+        (h.activity === 'toilet' && (toiletSit || act > 0.5));
+      h.privacy += ((wantPrivacy ? 1 : 0) - h.privacy) * Math.min(1, dt * 4);
+      if (h.privacy > 0.5) {
+        if (!h.blurSprite) {
+          const mat = new THREE.SpriteMaterial({
+            map: this._blurTexture(sitPose), transparent: true, depthWrite: false,
+          });
+          h.blurSprite = new THREE.Sprite(mat);
+          h.blurSprite.userData.outlineSkip = true;
+          h.group.add(h.blurSprite);
+        }
+        const spr = h.blurSprite;
+        const wantTex = this._blurTexture(sitPose);
+        const sm = spr.material as THREE.SpriteMaterial;
+        if (sm.map !== wantTex) { sm.map = wantTex; sm.needsUpdate = true; }
+        const spriteH = sitPose ? 1250 : 1750;
+        spr.scale.set(900, spriteH, 1);
+        // Ground the sprite bottom on the walking surface (blob height is the
+        // ground in group-local space); gentle sway so it isn't a dead billboard.
+        spr.position.set(Math.sin(now * 2.2) * 30, h.blob.position.y + spriteH / 2, 0);
+        spr.visible = true;
+        // Hide the rig body; keep the blob shadow, plumbob, and sprite.
+        for (const child of h.group.children) {
+          if (child === h.blob || child === h.plumbob || child === spr) continue;
+          child.visible = false;
+        }
+      } else if (h.blurSprite && h.blurSprite.visible) {
+        h.blurSprite.visible = false;
+        for (const child of h.group.children) child.visible = true;
+      }
     }
 
     // Despawn: ease out instead of popping. Brief LD2450 dropouts (a target
@@ -2878,6 +3134,8 @@ export class ThreeDRenderer {
       phase: 0, facing: 0,
       amp: 0, scale: 0,
       sit: 0, groundY: 0, dwell: 0, sitSpot: null,
+      activity: null, activityAnchor: null, activityDwell: 0,
+      act: 0, privacy: 0, blurSprite: null,
       idleOffset: Math.random() * Math.PI * 2,
       vx: 0, vz: 0,
       lastX: 0, lastZ: 0, lastUpdate: 0, initialized: false,
@@ -2891,6 +3149,10 @@ export class ThreeDRenderer {
         m.geometry.dispose();
         if (Array.isArray(m.material)) m.material.forEach(mm => mm.dispose());
         else m.material.dispose();
+      } else if ((obj as THREE.Sprite).isSprite) {
+        // Dispose the sprite's material but NOT its map — the blur textures are
+        // shared across all rigs (disposed once in destroy()).
+        (obj as THREE.Sprite).material.dispose();
       }
     });
   }
@@ -2928,6 +3190,8 @@ export class ThreeDRenderer {
     // _blobShadow / _addOutlines).
     this._gradientMapTex?.dispose(); this._gradientMapTex = null;
     this._blobTex?.dispose(); this._blobTex = null;
+    this._blurTexStand?.dispose(); this._blurTexStand = null;
+    this._blurTexSit?.dispose(); this._blurTexSit = null;
     this._outlineMaterial?.dispose(); this._outlineMaterial = null;
     this._controls?.dispose();
     if (this._renderer) {
