@@ -15,6 +15,9 @@ binding (see `sensor-discovery.ts`).
 
 ---
 
+**Active feature arc**: the Sims-2000 restyle + character activity system —
+plan, phase status, and design decisions live in `docs/DESIGN-sims.md`.
+
 ## Layout
 
 ```
@@ -134,8 +137,47 @@ UI Lit components are thin wrappers that read planner state and dispatch events 
 ### Lazy 3D chunk (code splitting)
 `three-view.ts` imports `three-renderer.js` **type-only** at the top and does the real `await import('../three-renderer.js')` inside `firstUpdated`. That keeps three.js (~600 kB minified / ~157 kB gzip) out of the startup bundle — the 2D-only path loads ~178 kB. Don't add a static value import of `three-renderer.js` (or `three`) anywhere outside that dynamic import or the split silently collapses.
 
-### Shadows
-`renderer.shadowMap` is always enabled; only the **day** preset sets `sun.castShadow = true` (night/dusk pay zero shadow cost). Mesh flags are set at build time via `_shadowFlags(subtree)` — walls/furniture/doors/windows/models cast+receive, floor plane receives only, humanoids cast only. New mesh builders must call `_shadowFlags` (or set flags) or the geometry won't shadow in day mode.
+### Sims-style rendering (the whole 3D look — load-bearing)
+The 3D view renders in a 2000-era-Sims style. There is NO PBR path anymore:
+
+- **Materials**: everything goes through `ThreeDRenderer._mat(params)` — a factory
+  returning `MeshToonMaterial` with one shared 4-step `DataTexture` gradient map
+  (NearestFilter, cached in `_gradientMapTex`). It accepts
+  `MeshStandardMaterialParameters` so legacy call sites converted mechanically;
+  PBR-only knobs (`roughness`/`metalness`/`envMapIntensity`) are silently dropped.
+  Colors get a saturation push in `_simsColor`. **Never construct
+  `MeshStandardMaterial` directly** — new builders call `this._mat({...})`.
+- **No tone mapping, no PMREM environment** (`NoToneMapping`; `scene.environment`
+  unset). Preset light levels in `applyScenePreset` are tuned for this — a strong
+  directional sun component is what makes the toon bands show.
+- **Shadows**: `renderer.shadowMap` is **disabled**. `_shadowFlags` is a kept-for-
+  interface-stability no-op. Soft radial **blob-shadow decals** replace shadow maps:
+  `_blobShadow(rx, rz)` returns an alpha quad using the shared `_blobTex`
+  CanvasTexture. Furniture builders add one automatically (skipped for rugs, the
+  stairs family, and elevated pieces); each humanoid rig carries one (`h.blob`),
+  re-grounded every frame in `updateTargets` so it stays on the walking surface
+  while the body bobs / sits. Don't give blob quads a negative renderOrder — the
+  opaque floor would paint over them.
+- **Cartoon outlines**: `_addOutlines(root, thick, minDim)` adds inverted-hull
+  shells — child meshes SHARING the host geometry, `BackSide`, one shared dark
+  `_outlineMaterial` (polygonOffset on), scaled outward per-axis about the
+  geometry bbox center. Applied to furniture groups, door panels, light-fixture
+  bodies, and humanoids. Transparent materials, thin sheets (<8 mm), and small
+  parts (<minDim) are skipped; `userData.outline` marks shells,
+  `userData.outlineSkip` opts a mesh out. Thickness staggers 3 mm per shell —
+  shells of ABUTTING boxes can land coplanar and z-fight (the shared
+  polygonOffset can't break a shell-vs-shell tie).
+- **Coincident-face gotcha**: composite builders must NOT give two sibling boxes
+  exactly coplanar visible faces (e.g. sofa plinth vs armrest, bed blanket vs
+  mattress foot — both fixed). PBR shading used to mask these; flat toon banding
+  makes them hatch visibly.
+- **Humanoids** are Sims-flavored: oversized head/hands, a spinning green
+  **plumbob** octahedron above the head (`h.plumbob`, spun from the absolute
+  clock in `updateTargets`).
+- Shared style resources (`_gradientMapTex`, `_blobTex`, `_outlineMaterial`) are
+  created once and disposed only in `destroy()` — per-instance disposal must NOT
+  touch them (`_disposeSubtree` disposes materials but not maps, which is what
+  makes the shared textures safe).
 
 ### HACS
 `hacs.json` uses `zip_release: true` + `filename: diorama.zip`; `.github/workflows/release.yml` builds and attaches the zip on each GitHub release. Module URL under HACS is `/hacsfiles/diorama/diorama-panel.js`. The zip mode is required because the build is multi-chunk (code-split three.js) — single-file HACS plugin mode would break the dynamic import.

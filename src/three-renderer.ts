@@ -1,6 +1,5 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
 import { MTLLoader } from 'three/examples/jsm/loaders/MTLLoader.js';
 import type {
@@ -40,6 +39,8 @@ interface Humanoid {
   rightHip: THREE.Group;
   leftKnee: THREE.Group;
   rightKnee: THREE.Group;
+  plumbob: THREE.Object3D;  // rotating Sims diamond above the head
+  blob: THREE.Mesh;    // soft floor shadow decal; re-grounded every frame
   phase: number;       // walk-cycle radians
   facing: number;      // body yaw derived from smoothed velocity
   amp: number;         // eased limb-swing amplitude (rad) — smooths gait starts/stops
@@ -138,17 +139,14 @@ export class ThreeDRenderer {
     this._renderer.setSize(w, h);
     this._renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     this._renderer.outputColorSpace = THREE.SRGBColorSpace;
-    // Filmic tone mapping + a PMREM room environment give every
-    // MeshStandardMaterial soft image-based reflections — the "realistic
-    // rendering" method chosen here: zero assets, one-time bake cost, no
-    // per-frame post-processing (SSAO etc. was rejected for tablet perf).
-    // environmentIntensity is retuned per lighting preset.
-    this._renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this._renderer.toneMappingExposure = 1.15;
-    // Shadow map stays enabled; cost is only paid when a light actually
-    // casts (sun.castShadow is gated per preset — day only).
-    this._renderer.shadowMap.enabled = true;
-    this._renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    // Sims-2000 rendering: every surface is a MeshToonMaterial with a shared
+    // stepped gradient map (see _mat), lit only by the ambient/hemi/sun rig.
+    // No tone mapping (toon bands want the raw curve), no PMREM environment
+    // (IBL washes the bands out), and no shadow maps — soft blob-shadow
+    // decals under furniture and people replace them (cheaper on tablets
+    // and exactly what the original game did).
+    this._renderer.toneMapping = THREE.NoToneMapping;
+    this._renderer.shadowMap.enabled = false;
     this._container.appendChild(this._renderer.domElement);
     // Prevent touch from fighting page scroll on mobile.
     this._renderer.domElement.style.touchAction = 'none';
@@ -164,16 +162,7 @@ export class ThreeDRenderer {
     this._hemi = new THREE.HemisphereLight(0xbcd2ff, 0x202018, 0.0);
     this._sun = new THREE.DirectionalLight(0xffffff, 1.0);
     this._sun.position.set(3000, 8000, 3000);
-    // Ortho shadow camera sized to cover a typical floor + margin.
-    const sc = this._sun.shadow.camera;
-    sc.left = -12000; sc.right = 12000; sc.top = 12000; sc.bottom = -12000;
-    sc.near = 100; sc.far = 40000;
-    this._sun.shadow.mapSize.set(2048, 2048);
-    this._sun.shadow.bias = -0.0005;
     this._scene.add(this._ambient, this._hemi, this._sun);
-    const pmrem = new THREE.PMREMGenerator(this._renderer);
-    this._scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-    pmrem.dispose();
     this.applyScenePreset(this._preset);
 
     this._grid = new THREE.GridHelper(20000, 20, 0x334466, 0x1a2235);
@@ -290,6 +279,131 @@ export class ThreeDRenderer {
     }
   }
 
+  // ── Sims-style material factory ─────────────────────────────────────────
+  // The whole scene renders as MeshToonMaterial with one shared stepped
+  // gradient map — flat, saturated color bands instead of PBR (the 2000-era
+  // Sims look). The factory accepts MeshStandardMaterial-style params so the
+  // ~50 legacy construction sites converted mechanically: PBR-only knobs
+  // (roughness / metalness / envMapIntensity) are silently dropped, every
+  // toon-valid param (color / map / emissive / transparent / opacity / side /
+  // depthWrite) passes through. Colors get a gentle saturation push so the
+  // palette reads game-y without clobbering user-picked hues.
+  private _gradientMapTex: THREE.DataTexture | null = null;
+  private _gradientMap(): THREE.DataTexture {
+    if (this._gradientMapTex) return this._gradientMapTex;
+    // 4 bands: enough steps to keep night scenes readable, few enough to
+    // read as cel shading. Nearest filtering keeps the band edges hard.
+    const steps = new Uint8Array([90, 150, 210, 255]);
+    const tex = new THREE.DataTexture(steps, steps.length, 1, THREE.RedFormat);
+    tex.minFilter = THREE.NearestFilter;
+    tex.magFilter = THREE.NearestFilter;
+    tex.generateMipmaps = false;
+    tex.needsUpdate = true;
+    this._gradientMapTex = tex;
+    return tex;
+  }
+  private _simsColor(c: THREE.ColorRepresentation): THREE.Color {
+    const col = new THREE.Color(c);
+    const hsl = { h: 0, s: 0, l: 0 };
+    col.getHSL(hsl);
+    col.setHSL(hsl.h, Math.min(1, hsl.s * 1.25 + 0.02), hsl.l);
+    return col;
+  }
+  private _mat(p: THREE.MeshStandardMaterialParameters = {}): THREE.MeshToonMaterial {
+    const { roughness: _r, metalness: _m, envMapIntensity: _e, color, ...rest } = p;
+    const m = new THREE.MeshToonMaterial({
+      ...(rest as THREE.MeshToonMaterialParameters),
+      gradientMap: this._gradientMap(),
+    });
+    if (color !== undefined) m.color.copy(this._simsColor(color));
+    return m;
+  }
+
+  // Soft radial blob shadow — one shared texture, an alpha quad per user.
+  // Replaces shadow maps entirely (Sims-style, and a tablet perf win).
+  private _blobTex: THREE.CanvasTexture | null = null;
+  private _blobTexture(): THREE.CanvasTexture {
+    if (this._blobTex) return this._blobTex;
+    const c = document.createElement('canvas');
+    c.width = 128; c.height = 128;
+    const g = c.getContext('2d')!;
+    const grad = g.createRadialGradient(64, 64, 8, 64, 64, 62);
+    grad.addColorStop(0, 'rgba(10,12,18,0.42)');
+    grad.addColorStop(0.7, 'rgba(10,12,18,0.28)');
+    grad.addColorStop(1, 'rgba(10,12,18,0)');
+    g.fillStyle = grad;
+    g.fillRect(0, 0, 128, 128);
+    this._blobTex = new THREE.CanvasTexture(c);
+    return this._blobTex;
+  }
+  // rx/rz are half-extents (mm) of the shadow ellipse in the parent's local
+  // frame. The shared texture must never be disposed per-instance —
+  // _disposeSubtree only disposes materials, not maps, so this is safe.
+  private _blobShadow(rx: number, rz: number, y = 8): THREE.Mesh {
+    const m = new THREE.Mesh(
+      new THREE.PlaneGeometry(rx * 2, rz * 2),
+      new THREE.MeshBasicMaterial({
+        map: this._blobTexture(), transparent: true, depthWrite: false,
+      }),
+    );
+    m.rotation.x = -Math.PI / 2;
+    m.position.y = y;
+    // No renderOrder tweak: transparent materials draw after the opaque
+    // floor anyway; forcing them earlier let the floor paint over them.
+    m.userData.outlineSkip = true;
+    return m;
+  }
+
+  // Cartoon outlines: inverted-hull shells. Each qualifying opaque mesh gets
+  // a child mesh SHARING its geometry, rendered BackSide in flat dark, scaled
+  // outward so ~`thick` mm of rim shows. Scaling is compensated about the
+  // geometry's bounding-box center, so translated geometries (limb segments
+  // hang below their origin) inflate symmetrically. Shells share one
+  // material and the host's geometry — double-dispose is idempotent.
+  private _outlineMaterial: THREE.MeshBasicMaterial | null = null;
+  private _addOutlines(rootObj: THREE.Object3D, thick = 12, minDim = 90): void {
+    if (!this._outlineMaterial) {
+      // polygonOffset pushes shell fragments slightly deeper so a shell face
+      // that lands nearly coplanar with a NEIGHBOR mesh face (abutting boxes
+      // in composite furniture) loses the depth contest cleanly instead of
+      // cross-hatch z-fighting. Silhouette rims stick out far enough that
+      // the offset doesn't dent them.
+      this._outlineMaterial = new THREE.MeshBasicMaterial({
+        color: 0x14161c, side: THREE.BackSide,
+        polygonOffset: true, polygonOffsetFactor: 2, polygonOffsetUnits: 2,
+      });
+    }
+    const targets: THREE.Mesh[] = [];
+    rootObj.traverse(o => {
+      const m = o as THREE.Mesh;
+      if (!m.isMesh || m.userData.outline || m.userData.outlineSkip) return;
+      const mat = m.material as THREE.Material;
+      if (Array.isArray(m.material) || !mat || mat.transparent) return;
+      targets.push(m);
+    });
+    let idx = 0;
+    for (const m of targets) {
+      const geo = m.geometry;
+      if (!geo.boundingBox) geo.computeBoundingBox();
+      const bb = geo.boundingBox;
+      if (!bb) continue;
+      const sx = bb.max.x - bb.min.x, sy = bb.max.y - bb.min.y, sz = bb.max.z - bb.min.z;
+      if (Math.min(sx, sy, sz) < 8) continue;          // thin sheets: shell z-fights
+      if (Math.max(sx, sy, sz) < minDim) continue;     // tiny detail parts: noise
+      // Stagger thickness per shell: two shells from ABUTTING boxes (sofa
+      // seat vs armrest) can otherwise land coplanar and z-fight — the
+      // shared polygonOffset can't break a shell-vs-shell tie.
+      const th = thick + (idx++ % 3) * 3;
+      const fx = (sx + th * 2) / sx, fy = (sy + th * 2) / sy, fz = (sz + th * 2) / sz;
+      const cx = (bb.min.x + bb.max.x) / 2, cy = (bb.min.y + bb.max.y) / 2, cz = (bb.min.z + bb.max.z) / 2;
+      const shell = new THREE.Mesh(geo, this._outlineMaterial);
+      shell.userData.outline = true;
+      shell.scale.set(fx, fy, fz);
+      shell.position.set(cx * (1 - fx), cy * (1 - fy), cz * (1 - fz));
+      m.add(shell);
+    }
+  }
+
   // Strip every per-floor mesh group. Called when the user switches floors so
   // a transient bug or render hiccup can't leave the previous floor's
   // sensors / fixtures / zones / halos / targets visible.
@@ -373,50 +487,42 @@ export class ThreeDRenderer {
   //   dusk  — low warm sun, stronger sky bounce
   //   night — dim blue ambient so bound HA lights dominate (default; the
   //           original look)
+  // Tuned for the toon pipeline: no tone mapping, no environment map, no
+  // shadow maps — light levels are what you see. Toon bands want a strong
+  // directional component (the sun) so surfaces facing away drop a band.
   applyScenePreset(preset: ScenePreset): void {
     this._preset = preset;
     if (!this._scene || !this._ambient || !this._hemi || !this._sun) return;
     switch (preset) {
       case 'day':
-        this._scene.background = new THREE.Color(0x9db8d8);
-        this._ambient.intensity = 0.45;
+        this._scene.background = new THREE.Color(0xa9c4e0);
+        this._ambient.intensity = 0.85;
         this._hemi.color.set(0xcfe5ff); this._hemi.groundColor.set(0x8a7f6a);
-        this._hemi.intensity = 0.8;
-        this._sun.color.set(0xfff6e0); this._sun.intensity = 1.6;
+        this._hemi.intensity = 0.55;
+        this._sun.color.set(0xfff6e0); this._sun.intensity = 1.15;
         this._sun.position.set(4000, 10000, 2500);
-        this._sun.castShadow = true;
-        this._scene.environmentIntensity = 0.85;
         break;
       case 'dusk':
         this._scene.background = new THREE.Color(0x2a2030);
-        this._ambient.intensity = 0.3;
+        this._ambient.intensity = 0.45;
         this._hemi.color.set(0xff9d6a); this._hemi.groundColor.set(0x202028);
-        this._hemi.intensity = 0.5;
-        this._sun.color.set(0xff8a4a); this._sun.intensity = 0.7;
+        this._hemi.intensity = 0.4;
+        this._sun.color.set(0xff8a4a); this._sun.intensity = 0.6;
         this._sun.position.set(-6000, 2500, 4000);
-        this._sun.castShadow = false;
-        this._scene.environmentIntensity = 0.3;
         break;
       default: // night
         this._scene.background = new THREE.Color(0x0d0d1a);
-        this._ambient.intensity = 0.55;
+        this._ambient.intensity = 0.5;
         this._hemi.color.set(0x223048); this._hemi.groundColor.set(0x101018);
         this._hemi.intensity = 0.25;
-        this._sun.color.set(0xffffff); this._sun.intensity = 1.0;
+        this._sun.color.set(0xdfe6ff); this._sun.intensity = 0.45;
         this._sun.position.set(3000, 8000, 3000);
-        this._sun.castShadow = false;
-        this._scene.environmentIntensity = 0.15;
     }
   }
 
-  // Mark every mesh in a subtree as shadow caster + receiver. Flags are
-  // ignored while no light casts (night/dusk), so it's safe to set always.
-  private _shadowFlags(obj: THREE.Object3D, cast = true, receive = true): void {
-    obj.traverse(o => {
-      const m = o as THREE.Mesh;
-      if (m.isMesh) { m.castShadow = cast; m.receiveShadow = receive; }
-    });
-  }
+  // Shadow maps are gone (blob decals instead) — kept as a no-op so the many
+  // builder call sites didn't need touching and the signature stays stable.
+  private _shadowFlags(_obj: THREE.Object3D, _cast = true, _receive = true): void {}
 
   // Cheap procedural floor textures drawn to a canvas once and cached.
   // Keeps the bundle free of binary assets and works offline.
@@ -571,7 +677,7 @@ export class ThreeDRenderer {
       path.closePath();
       return { path, center: { x: fu.x, y: fu.y } };
     };
-    const floorMat = new THREE.MeshStandardMaterial({
+    const floorMat = this._mat({
       color: floorColor, map: floorTex ?? null,
       side: THREE.DoubleSide, roughness: 0.9, metalness: 0.0,
     });
@@ -671,7 +777,7 @@ export class ThreeDRenderer {
     // sits inside the 9 ft wall. Open doors/windows reveal a real gap.
     const wallH = 2743 /* 9 ft */, wallThick = 100;
     const SILL_TOP = 900, HEADER_BOT = 1700, DOOR_HEAD = 2050;
-    const wallMatFor = () => new THREE.MeshStandardMaterial({
+    const wallMatFor = () => this._mat({
       color: scene3d?.wallColor ? hexToInt(scene3d.wallColor) : 0xbbbbbb,
       emissive: 0x444444, emissiveIntensity: 0.1,
       transparent: true, opacity: 0.45, side: THREE.DoubleSide, depthWrite: false,
@@ -691,7 +797,7 @@ export class ThreeDRenderer {
         const angle = Math.atan2(-dx, dy);
         if (kind === 'railing') {
           // Banister: end/interval posts + top rail + thin balusters.
-          const railMat = new THREE.MeshStandardMaterial({
+          const railMat = this._mat({
             color: scene3d?.wallColor ? hexToInt(scene3d.wallColor) : 0x8d8d92,
             metalness: 0.3, roughness: 0.5,
           });
@@ -781,12 +887,12 @@ export class ThreeDRenderer {
 
   private _buildWindows(windows: WindowType[], stateOf: (id: string) => HassState | null): void {
     const PANE_H = 800, PANE_T = 50, PANE_BOTTOM = 900;
-    const closedMat = new THREE.MeshStandardMaterial({
+    const closedMat = this._mat({
       color: 0x64b5f6, emissive: 0x1565c0, emissiveIntensity: 0.2,
       transparent: true, opacity: 0.55, roughness: 0.2, metalness: 0.1,
       side: THREE.DoubleSide, depthWrite: false,
     });
-    const openMat = new THREE.MeshStandardMaterial({
+    const openMat = this._mat({
       color: 0x66bb6a, emissive: 0x1b5e20, emissiveIntensity: 0.3,
       transparent: true, opacity: 0.45, roughness: 0.3, metalness: 0.1,
       side: THREE.DoubleSide, depthWrite: false,
@@ -819,10 +925,10 @@ export class ThreeDRenderer {
 
   private _buildDoors(doors: Door[], stateOf: (id: string) => HassState | null): void {
     const DOOR_H = 2000, DOOR_T = 60;
-    const closedMat = new THREE.MeshStandardMaterial({
+    const closedMat = this._mat({
       color: 0x90a4ae, roughness: 0.65, metalness: 0.1,
     });
-    const openMat = new THREE.MeshStandardMaterial({
+    const openMat = this._mat({
       color: 0x66bb6a, emissive: 0x1b5e20, emissiveIntensity: 0.35,
       roughness: 0.5, metalness: 0.1,
     });
@@ -852,8 +958,8 @@ export class ThreeDRenderer {
         mat,
       );
       panel.position.set(-d.w / 2, DOOR_H / 2, 0);
-      panel.castShadow = true; panel.receiveShadow = true;
       hinge.add(panel);
+      this._addOutlines(hinge);
       this._doorGroup.add(hinge);
     }
   }
@@ -873,33 +979,33 @@ export class ThreeDRenderer {
     // as ghostly and produced depth-sort artifacts; with the scene environment
     // map (see _init) opaque standard materials pick up soft reflections and
     // look far more physical for zero per-frame cost.
-    const wood = new THREE.MeshStandardMaterial({
+    const wood = this._mat({
       color: tint, metalness: 0.05, roughness: 0.7,
       side: THREE.DoubleSide,
     });
-    const dark = new THREE.MeshStandardMaterial({
+    const dark = this._mat({
       color: 0x2b1d18, roughness: 0.8, metalness: 0.05,
     });
-    const cushion = new THREE.MeshStandardMaterial({
+    const cushion = this._mat({
       color: tint, roughness: 0.95, metalness: 0.0,
     });
-    const pillow = new THREE.MeshStandardMaterial({
+    const pillow = this._mat({
       color: 0xeceff1, roughness: 0.9, metalness: 0.0,
     });
-    const steel = new THREE.MeshStandardMaterial({
+    const steel = this._mat({
       color: tint, metalness: 0.75, roughness: 0.3,
     });
-    const porcelain = new THREE.MeshStandardMaterial({
+    const porcelain = this._mat({
       color: 0xf5f5f0, metalness: 0.0, roughness: 0.15,
     });
-    const screen = new THREE.MeshStandardMaterial({
+    const screen = this._mat({
       color: 0x0a0d12, metalness: 0.4, roughness: 0.12,
     });
-    const glass = new THREE.MeshStandardMaterial({
+    const glass = this._mat({
       color: 0xd7e5ea, metalness: 0.1, roughness: 0.05,
       transparent: true, opacity: 0.25, depthWrite: false, side: THREE.DoubleSide,
     });
-    const leaf = new THREE.MeshStandardMaterial({
+    const leaf = this._mat({
       color: 0x4c8c2b, roughness: 0.9, metalness: 0.0,
     });
 
@@ -1039,10 +1145,14 @@ export class ThreeDRenderer {
       case 'sofa': {
         const seatH2 = def.seat ?? 450;
         const seatT = 110, seatY = seatH2 - seatT / 2;
-        addBox(W, seatY - seatT / 2, D * 0.96, dark, 0, (seatY - seatT / 2) / 2, 0);  // plinth
+        const armW = W * 0.08;
+        // Plinth sits BETWEEN the armrests — a full-width plinth put its side
+        // faces exactly coplanar with the armrest outer faces (dark vs
+        // cushion z-fight, invisible under PBR, ugly hatching under toon).
+        addBox(W - armW * 2, seatY - seatT / 2, D * 0.96, dark, 0, (seatY - seatT / 2) / 2, 0);
         addBox(W, seatT, D, cushion, 0, seatY, 0);
         // Seat cushion seams (one per ~700 mm of width).
-        const seamMat = new THREE.MeshStandardMaterial({ color: 0x1f262b, roughness: 0.95 });
+        const seamMat = this._mat({ color: 0x1f262b, roughness: 0.95 });
         const nCush = Math.max(2, Math.round(W / 700));
         for (let k = 1; k < nCush; k++) {
           addBox(12, seatT * 0.5, D * 0.9, seamMat, -W / 2 + (W * k) / nCush, seatH2 - seatT * 0.2, -D * 0.02);
@@ -1051,7 +1161,6 @@ export class ThreeDRenderer {
         const backH = HT - seatH2, backT = D * 0.25;
         addBox(W, backH, backT, cushion, 0, seatH2 + backH / 2, D / 2 - backT / 2);
         // Armrests on -X / +X sides.
-        const armW = W * 0.08;
         addBox(armW, HT * 0.85, D, cushion, -W / 2 + armW / 2, HT * 0.85 / 2, 0);
         addBox(armW, HT * 0.85, D, cushion,  W / 2 - armW / 2, HT * 0.85 / 2, 0);
         break;
@@ -1060,11 +1169,13 @@ export class ThreeDRenderer {
         // Frame + mattress + blanket + pillows.
         addBox(W + 60, HT * 0.45, D + 60, dark, 0, HT * 0.45 / 2, 0);  // frame/box spring
         addBox(W, HT * 0.6, D, pillow, 0, HT * 0.45 + HT * 0.3, 0);   // mattress (white)
-        // Blanket draped over the foot 2/3 of the bed, slightly wider.
-        const blanket = new THREE.MeshStandardMaterial({ color: tint, roughness: 0.95 });
-        const blD = D * 0.62;
+        // Blanket draped over the foot 2/3 of the bed, slightly wider AND
+        // slightly proud of the mattress foot face — a shared front plane
+        // z-fought (white vs tint) under flat toon shading.
+        const blanket = this._mat({ color: tint, roughness: 0.95 });
+        const blD = D * 0.62 + 30;
         const bl = new THREE.Mesh(new THREE.BoxGeometry(W + 20, 60, blD), blanket);
-        bl.position.set(0, HT * 0.45 + HT * 0.6 - 10, -D / 2 + blD / 2);
+        bl.position.set(0, HT * 0.45 + HT * 0.6 - 10, -D / 2 - 30 + blD / 2);
         grp.add(bl);
         // Headboard on +Z side.
         const hbH = 800, hbT = 60;
@@ -1095,7 +1206,7 @@ export class ThreeDRenderer {
         // count follows the run depth (~280 mm treads); riser = HT / n.
         const n = Math.max(3, Math.round(D / 280));
         const riser = HT / n, treadD = D / n;
-        const treadMat = new THREE.MeshStandardMaterial({ color: 0xa1887f, roughness: 0.6 });
+        const treadMat = this._mat({ color: 0xa1887f, roughness: 0.6 });
         for (let i = 0; i < n; i++) {
           const hStep = riser * (i + 1);
           addBox(W, hStep, treadD, wood, 0, hStep / 2, -D / 2 + (i + 0.5) * treadD);
@@ -1105,7 +1216,7 @@ export class ThreeDRenderer {
         // Sunk below the floor (descending flight): line the stairwell with
         // dark shaft walls up to floor level so the opening reads as a well.
         if ((fu.elevation ?? 0) < 0) {
-          const shaftMat = new THREE.MeshStandardMaterial({
+          const shaftMat = this._mat({
             color: 0x2a2d31, roughness: 0.9, side: THREE.DoubleSide,
           });
           const wellH = -(fu.elevation ?? 0);
@@ -1121,12 +1232,12 @@ export class ThreeDRenderer {
       case 'stair_landing': {
         addBox(W, HT - 40, D, wood, 0, (HT - 40) / 2, 0);
         addBox(W * 1.02, 40, D * 1.02,
-               new THREE.MeshStandardMaterial({ color: 0xa1887f, roughness: 0.6 }),
+               this._mat({ color: 0xa1887f, roughness: 0.6 }),
                0, HT - 20, 0);
         // Sunk landings line their well with shaft walls from the landing
         // surface up to floor level (same treatment as sunken stairs).
         if ((fu.elevation ?? 0) < 0) {
-          const shaftMat = new THREE.MeshStandardMaterial({
+          const shaftMat = this._mat({
             color: 0x2a2d31, roughness: 0.9, side: THREE.DoubleSide,
           });
           const floorLvl = -(fu.elevation ?? 0);  // local y of this floor's level
@@ -1152,14 +1263,14 @@ export class ThreeDRenderer {
       case 'island': {
         addBox(W, HT - 30, D, wood, 0, (HT - 30) / 2, 0);
         const topMat = kind === 'counter' || kind === 'island'
-          ? new THREE.MeshStandardMaterial({ color: 0xcfd8dc, roughness: 0.25, metalness: 0.05 })
+          ? this._mat({ color: 0xcfd8dc, roughness: 0.25, metalness: 0.05 })
           : dark;
         addBox(W * 1.02, 30, D * 1.02, topMat, 0, HT - 15, 0);
         // Proud door / drawer fronts with metal pulls on the front face
         // (-Z). Panels float 8 mm off the carcass so the gaps read as real
         // joinery lines from any angle.
-        const panelMat = new THREE.MeshStandardMaterial({ color: tint, roughness: 0.55, metalness: 0.05 });
-        const pull = new THREE.MeshStandardMaterial({ color: 0x3a444d, metalness: 0.8, roughness: 0.35 });
+        const panelMat = this._mat({ color: tint, roughness: 0.55, metalness: 0.05 });
+        const pull = this._mat({ color: 0x3a444d, metalness: 0.8, roughness: 0.35 });
         const door = (cx: number, w0: number, y0: number, h0: number, handleX: number) => {
           addBox(w0, h0, 16, panelMat, cx, y0 + h0 / 2, -D / 2 - 8);
           addBox(22, Math.min(260, h0 * 0.45), 20, pull, handleX, y0 + h0 * 0.55, -D / 2 - 28);
@@ -1204,7 +1315,7 @@ export class ThreeDRenderer {
       }
       case 'plant': {
         const potH = HT * 0.28;
-        addCyl(W * 0.32, W * 0.24, potH, new THREE.MeshStandardMaterial({ color: 0x8d5524, roughness: 0.8 }), 0, potH / 2, 0, 12);
+        addCyl(W * 0.32, W * 0.24, potH, this._mat({ color: 0x8d5524, roughness: 0.8 }), 0, potH / 2, 0, 12);
         const s1 = new THREE.Mesh(new THREE.SphereGeometry(W * 0.42, 10, 8), leaf);
         s1.position.set(0, HT * 0.7, 0); grp.add(s1);
         const s2 = new THREE.Mesh(new THREE.SphereGeometry(W * 0.3, 10, 8), leaf);
@@ -1216,7 +1327,7 @@ export class ThreeDRenderer {
       // ── appliances (front = -Z) ──
       case 'fridge': {
         addBox(W, HT, D, steel, 0, HT / 2, 0);
-        const seam = new THREE.MeshStandardMaterial({ color: 0x546069, roughness: 0.6 });
+        const seam = this._mat({ color: 0x546069, roughness: 0.6 });
         addBox(W * 0.96, 10, 6, seam, 0, HT * 0.65, -D / 2 - 2);           // freezer split
         addBox(24, HT * 0.28, 20, seam, -W * 0.32, HT * 0.42, -D / 2 - 14); // handle
         addBox(24, HT * 0.2, 20, seam, -W * 0.32, HT * 0.82, -D / 2 - 14);  // freezer handle
@@ -1228,13 +1339,13 @@ export class ThreeDRenderer {
         for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]] as const) {
           addCyl(W * 0.14, W * 0.14, 8, dark, sx * W * 0.22, HT + 4, sz * D * 0.2, 20);
         }
-        const seam = new THREE.MeshStandardMaterial({ color: 0x546069, roughness: 0.6 });
+        const seam = this._mat({ color: 0x546069, roughness: 0.6 });
         addBox(W * 0.9, 12, 6, seam, 0, HT * 0.55, -D / 2 - 2);  // oven door
         break;
       }
       case 'dishwasher': {
         addBox(W, HT, D, steel, 0, HT / 2, 0);
-        const seam = new THREE.MeshStandardMaterial({ color: 0x546069, roughness: 0.6 });
+        const seam = this._mat({ color: 0x546069, roughness: 0.6 });
         addBox(W * 0.94, 10, 6, seam, 0, HT * 0.86, -D / 2 - 2);  // control strip
         addBox(W * 0.7, 20, 14, seam, 0, HT * 0.74, -D / 2 - 8);  // handle bar
         break;
@@ -1280,7 +1391,7 @@ export class ThreeDRenderer {
       }
       case 'bathtub': {
         addBox(W, HT, D, porcelain, 0, HT / 2, 0);
-        const water = new THREE.MeshStandardMaterial({
+        const water = this._mat({
           color: 0x9bc7cf, roughness: 0.2, metalness: 0.05,
         });
         addBox(W * 0.82, 20, D * 0.72, water, 0, HT - 60, 0);  // inner basin hint
@@ -1291,7 +1402,7 @@ export class ThreeDRenderer {
         // Glass on the two front-facing sides (leave back corner walls open).
         addBox(W, HT - 80, 12, glass, 0, 80 + (HT - 80) / 2, -D / 2 + 6);
         addBox(12, HT - 80, D, glass, -W / 2 + 6, 80 + (HT - 80) / 2, 0);
-        const headArm = new THREE.MeshStandardMaterial({ color: 0xb9c2c9, metalness: 0.8, roughness: 0.3 });
+        const headArm = this._mat({ color: 0xb9c2c9, metalness: 0.8, roughness: 0.3 });
         addCyl(12, 12, 250, headArm, W * 0.3, HT - 200, D * 0.3, 8);
         const head = new THREE.Mesh(new THREE.SphereGeometry(55, 12, 10), headArm);
         head.position.set(W * 0.3, HT - 320, D * 0.3);
@@ -1300,6 +1411,20 @@ export class ThreeDRenderer {
       }
       default:
         addBox(W, HT, D, wood, 0, HT / 2, 0);
+    }
+
+    // Sims dressing: cartoon outline shells on the main body meshes, plus a
+    // soft blob shadow under anything that actually sits on the floor.
+    // Rugs / stairs read wrong with a blob (they ARE floor), and elevated
+    // pieces (counter-top appliances, sunken stairs) don't touch it.
+    this._addOutlines(grp);
+    const onFloor = !def.rug &&
+      kind !== 'stairs' && kind !== 'stairs_half' && kind !== 'stair_landing' &&
+      Math.abs(fu.elevation ?? 0) < 100;
+    if (onFloor) {
+      const blob = this._blobShadow(W / 2 * 1.12 + 60, D / 2 * 1.12 + 60);
+      blob.position.y = 8 - (fu.elevation ?? 0);
+      grp.add(blob);
     }
     return grp;
   }
@@ -1335,14 +1460,14 @@ export class ThreeDRenderer {
 
       const mesh = new THREE.Mesh(
         new THREE.BoxGeometry(180, 80, 60),
-        new THREE.MeshStandardMaterial({ color: 0x42a5f5, emissive: 0x0a2340 }),
+        this._mat({ color: 0x42a5f5, emissive: 0x0a2340 }),
       );
       tiltGrp.add(mesh);
 
       // Small forward-pointing nub so heading + tilt are obvious in 3D.
       const nub = new THREE.Mesh(
         new THREE.ConeGeometry(20, 60, 8),
-        new THREE.MeshStandardMaterial({ color: 0xbbdefb, emissive: 0x0a2340 }),
+        this._mat({ color: 0xbbdefb, emissive: 0x0a2340 }),
       );
       nub.rotation.x = Math.PI / 2;  // cone tip → +Z
       nub.position.set(0, 0, 70);    // just in front of the box face
@@ -1401,7 +1526,7 @@ export class ThreeDRenderer {
       // Body marker
       const body = new THREE.Mesh(
         new THREE.SphereGeometry(120, 16, 12),
-        new THREE.MeshStandardMaterial({
+        this._mat({
           color, emissive: color,
           emissiveIntensity: (isOn ? 0.6 : 0.15) * intensity,
           metalness: 0.2, roughness: 0.6,
@@ -1431,7 +1556,7 @@ export class ThreeDRenderer {
       }
       if (!fov360) shape.lineTo(0, 0);
       const geo = new THREE.ExtrudeGeometry(shape, { depth: CONE_H, bevelEnabled: false });
-      const mat = new THREE.MeshStandardMaterial({
+      const mat = this._mat({
         color, emissive: color,
         emissiveIntensity: (isOn ? 0.4 : 0.05) * intensity,
         transparent: true,
@@ -1470,7 +1595,7 @@ export class ThreeDRenderer {
 
       const body = new THREE.Mesh(
         new THREE.SphereGeometry(55 * sc, 14, 10),
-        new THREE.MeshStandardMaterial({
+        this._mat({
           color, emissive: color, emissiveIntensity: 0.5,
           metalness: 0.1, roughness: 0.5,
         }));
@@ -1556,19 +1681,19 @@ export class ThreeDRenderer {
       }
       const color = new THREE.Color(r, g, b);
       const ud = { kind: 'light', entity_id: l.entity_id, fixtureId: l.id };
-      const bodyMat = new THREE.MeshStandardMaterial({
+      const bodyMat = this._mat({
         color: isOn ? color.getHex() : 0x444444,
         emissive: isOn ? color.getHex() : 0x111111,
         emissiveIntensity: isOn ? 0.9 * intensity * flickerMul : 0.05,
         metalness: 0.2, roughness: 0.4,
       });
-      const shadeMat = new THREE.MeshStandardMaterial({
+      const shadeMat = this._mat({
         color: 0xeeeeee, emissive: isOn ? color.getHex() : 0x000000,
         emissiveIntensity: isOn ? 0.35 * intensity : 0.0,
         metalness: 0.1, roughness: 0.7,
         transparent: true, opacity: 0.85, side: THREE.DoubleSide,
       });
-      const stemMat = new THREE.MeshStandardMaterial({
+      const stemMat = this._mat({
         color: 0x222227, metalness: 0.3, roughness: 0.6,
       });
       const buildBody = (): { group: THREE.Group; bodyY: number } => {
@@ -1593,7 +1718,7 @@ export class ThreeDRenderer {
           case 'spot': {
             // Cylindrical housing with an emissive lens at the mouth + a
             // faint beam shaft toward the floor pool.
-            const housingMat = new THREE.MeshStandardMaterial({
+            const housingMat = this._mat({
               color: 0x2b2e33, roughness: 0.5, metalness: 0.5,
             });
             const housing = new THREE.Mesh(
@@ -1643,7 +1768,7 @@ export class ThreeDRenderer {
             // the rotation option so the plate sits against the wall).
             const plate = new THREE.Mesh(
               new THREE.BoxGeometry(LIGHT_BODY_R * 1.6, LIGHT_BODY_R * 2.4, 28),
-              new THREE.MeshStandardMaterial({ color: 0x8d8f94, roughness: 0.4, metalness: 0.5 }));
+              this._mat({ color: 0x8d8f94, roughness: 0.4, metalness: 0.5 }));
             plate.position.z = 40;
             plate.userData = ud;
             g.add(plate);
@@ -1659,7 +1784,7 @@ export class ThreeDRenderer {
           case 'strip': {
             // Aluminum channel + inset emissive diffuser, sized by Length.
             const Ls = lightLength(l);
-            const chanMat2 = new THREE.MeshStandardMaterial({
+            const chanMat2 = this._mat({
               color: 0x84898f, metalness: 0.7, roughness: 0.4,
             });
             const chan2 = new THREE.Mesh(new THREE.BoxGeometry(Ls, 46, 74), chanMat2);
@@ -1680,10 +1805,10 @@ export class ThreeDRenderer {
             bodyY = 500;
             const W2 = 1000, H2 = 1000, D2 = 450;   // overall firebox
             const OPEN_W = 700, OPEN_H = 620;       // front opening
-            const brick = new THREE.MeshStandardMaterial({
+            const brick = this._mat({
               color: 0x4a4442, metalness: 0.05, roughness: 0.9,
             });
-            const inner = new THREE.MeshStandardMaterial({
+            const inner = this._mat({
               color: 0x17120f, roughness: 0.95,
               emissive: isOn ? 0xff5a1a : 0x1a0d06,
               emissiveIntensity: isOn ? 0.25 * flickerMul : 0.08,
@@ -1709,7 +1834,7 @@ export class ThreeDRenderer {
             // Mantel shelf on top.
             const mantel = new THREE.Mesh(
               new THREE.BoxGeometry(W2 * 1.15, 70, D2 * 1.2),
-              new THREE.MeshStandardMaterial({ color: 0x5d4037, roughness: 0.6 }));
+              this._mat({ color: 0x5d4037, roughness: 0.6 }));
             mantel.position.set(0, H2 / 2 + 35, 0);
             g.add(mantel);
             // Firebox interior floor + back glow panel (visible through the opening).
@@ -1721,7 +1846,7 @@ export class ThreeDRenderer {
             glowBack.rotation.y = Math.PI;  // face the opening (-Z)
             g.add(glowBack);
             // Logs.
-            const logMat = new THREE.MeshStandardMaterial({ color: 0x4e342e, roughness: 0.9 });
+            const logMat = this._mat({ color: 0x4e342e, roughness: 0.9 });
             for (const [ly, lr2, lz] of [[70, 55, -40], [150, 45, 30]] as const) {
               const log = new THREE.Mesh(new THREE.CylinderGeometry(lr2, lr2, OPEN_W * 0.7, 10), logMat);
               log.rotation.z = Math.PI / 2;
@@ -1741,7 +1866,7 @@ export class ThreeDRenderer {
                 const sway = 30 * Math.sin(tNow * fl.om * 0.8 + fl.ph * 1.7);
                 const flame = new THREE.Mesh(
                   new THREE.ConeGeometry(fl.r, h3, 10),
-                  new THREE.MeshStandardMaterial({
+                  this._mat({
                     color: fl.col, emissive: fl.col,
                     emissiveIntensity: 1.6 * flickerMul,
                     transparent: true, opacity: 0.85, depthWrite: false,
@@ -1754,7 +1879,7 @@ export class ThreeDRenderer {
               const coreH = 240 * (1 + 0.14 * Math.sin(tNow * 1.9 + 1.1));
               const core = new THREE.Mesh(
                 new THREE.ConeGeometry(60, coreH, 8),
-                new THREE.MeshStandardMaterial({
+                this._mat({
                   color: 0xffd54f, emissive: 0xffd54f, emissiveIntensity: 2.2 * flickerMul,
                   transparent: true, opacity: 0.95, depthWrite: false,
                 }));
@@ -1770,10 +1895,10 @@ export class ThreeDRenderer {
           }
           case 'fan':
           case 'fan_light': {
-            const metal = new THREE.MeshStandardMaterial({
+            const metal = this._mat({
               color: 0x8a8f94, metalness: 0.7, roughness: 0.35,
             });
-            const bladeMat = new THREE.MeshStandardMaterial({
+            const bladeMat = this._mat({
               color: 0x5d4037, roughness: 0.6, metalness: 0.1,
             });
             // Downrod up toward the ceiling + motor hub at the fixture height.
@@ -1819,7 +1944,7 @@ export class ThreeDRenderer {
             // local +Z (against the wall — aim with the rotation option);
             // soft cones wash up and down the wall face when on.
             bodyY = l.height ?? 1700;
-            const plateMat = new THREE.MeshStandardMaterial({
+            const plateMat = this._mat({
               color: 0x54585e, metalness: 0.6, roughness: 0.4,
             });
             const plate2 = new THREE.Mesh(new THREE.BoxGeometry(140, 200, 24), plateMat);
@@ -1857,7 +1982,7 @@ export class ThreeDRenderer {
             // slat louvers, emissive panel behind, and a downward wash onto
             // the tread when on. Face points local -Z (aim with rotation).
             bodyY = l.height ?? 300;
-            const faceMat = new THREE.MeshStandardMaterial({
+            const faceMat = this._mat({
               color: 0xb9bec4, metalness: 0.4, roughness: 0.45,
             });
             const face2 = new THREE.Mesh(new THREE.BoxGeometry(190, 130, 22), faceMat);
@@ -1894,7 +2019,7 @@ export class ThreeDRenderer {
             // light washes whatever sits below (counter, island, …) via PBR.
             bodyY = l.height ?? 1350;
             const Lmm = lightLength(l);
-            const chanMat = new THREE.MeshStandardMaterial({
+            const chanMat = this._mat({
               color: 0x9aa0a6, metalness: 0.7, roughness: 0.4,
             });
             const chan = new THREE.Mesh(new THREE.BoxGeometry(Lmm, 22, 38), chanMat);
@@ -1912,7 +2037,7 @@ export class ThreeDRenderer {
             const Lmm = lightLength(l);
             const n = Math.max(4, Math.round(Lmm / 160));
             const sag = Math.min(400, Lmm * 0.07);
-            const orbMat = new THREE.MeshStandardMaterial({
+            const orbMat = this._mat({
               color: isOn ? color.getHex() : 0x333338,
               emissive: isOn ? color.getHex() : 0x111114,
               emissiveIntensity: isOn ? 1.4 * intensity : 0.05,
@@ -1974,7 +2099,7 @@ export class ThreeDRenderer {
             // Flush ceiling can: wide FLAT trim ring + recessed emissive lens
             // slightly above the trim (looking up you see a lit disc inside a
             // ring, not a protruding body) + a faint light shaft below.
-            const ringMat = new THREE.MeshStandardMaterial({
+            const ringMat = this._mat({
               color: 0xd8dade, roughness: 0.5, metalness: 0.1,
             });
             const ring = new THREE.Mesh(
@@ -2061,7 +2186,7 @@ export class ThreeDRenderer {
             g.add(stem2);
             const socket = new THREE.Mesh(
               new THREE.CylinderGeometry(52, 62, 90, 14),
-              new THREE.MeshStandardMaterial({ color: 0x6f7378, metalness: 0.7, roughness: 0.35 }));
+              this._mat({ color: 0x6f7378, metalness: 0.7, roughness: 0.35 }));
             socket.position.y = LIGHT_BODY_R + 20;
             g.add(socket);
             const sphere = new THREE.Mesh(
@@ -2084,6 +2209,10 @@ export class ThreeDRenderer {
       // finds the click target even when the geometry hit lacks userData
       // (e.g. furniture children, decorative meshes, etc.).
       body.userData = ud;
+      // Cartoon outlines on the fixture body (opaque meshes only — pools,
+      // shafts, and glass are transparent and skip automatically). Shells
+      // are raycast hits too, but the parent-walk still lands on `body`.
+      this._addOutlines(body, 8, 60);
       this._lightGroup.add(body);
       // Always-on invisible click target. Light bodies vary wildly per kind —
       // open-ended cones (spot, lamp shade), thin strips, sconces, fireplace
@@ -2135,7 +2264,7 @@ export class ThreeDRenderer {
         // 3D plate tracks the user-set size (2D plate mm × the original
         // 140/320 3D proportion).
         new THREE.BoxGeometry(switchSize(sw) * 0.44, switchSize(sw) * 0.44 * 1.4, 40),
-        new THREE.MeshStandardMaterial({
+        this._mat({
           color: col, emissive: col,
           emissiveIntensity: isOn ? 0.4 : 0.08, metalness: 0.1, roughness: 0.7,
         }));
@@ -2156,7 +2285,7 @@ export class ThreeDRenderer {
     for (const z of zones) {
       const v = z.vertices;
       if (v.length < 3) continue;
-      const wallMat = new THREE.MeshStandardMaterial({
+      const wallMat = this._mat({
         color: z.color, emissive: z.color, emissiveIntensity: z.occupied ? 0.3 : 0.1,
         transparent: true, opacity: z.occupied ? 0.28 : 0.15,
         side: THREE.DoubleSide, depthWrite: false,
@@ -2194,7 +2323,7 @@ export class ThreeDRenderer {
       const color = h.occupied ? 0xff9800 : 0x888888;
       const cyl = new THREE.Mesh(
         new THREE.CylinderGeometry(h.radius, h.radius, wallH, 48, 1, true),
-        new THREE.MeshStandardMaterial({
+        this._mat({
           color, emissive: color, emissiveIntensity: h.occupied ? 0.3 : 0.1,
           transparent: true, opacity: h.occupied ? 0.22 : 0.12,
           side: THREE.DoubleSide, depthWrite: false,
@@ -2393,6 +2522,12 @@ export class ThreeDRenderer {
       const pz2 = spot ? p.z * stand + spot.z * sit : p.z;
       const py2 = (h.groundY + bob) * stand + (spot ? (spot.seatY - HIP_Y) * sit : 0);
       h.group.position.set(px2, py2, pz2);
+
+      // Plumbob spin (absolute clock + per-rig offset so rigs desync) and
+      // blob-shadow grounding: the root bobs / drops onto seats, but the
+      // shadow must stay glued to the walking surface below.
+      h.plumbob.rotation.y = (now * 1.6 + h.idleOffset) % (2 * Math.PI);
+      h.blob.position.y = h.groundY + 10 - py2;
     }
 
     // Despawn: ease out instead of popping. Brief LD2450 dropouts (a target
@@ -2419,11 +2554,13 @@ export class ThreeDRenderer {
   // rotated via group.rotation.y to match velocity direction. Each limb is
   // a 2-segment chain so knees / elbows can flex during the walk cycle.
   private _buildHumanoid(color: number): Humanoid {
-    const HEAD_R = 110;
+    // Sims proportions: head and hands run oversized (~1.15×) so figures
+    // read as game characters rather than mannequins.
+    const HEAD_R = 126;
     const TORSO_W = 240, TORSO_H = 600, TORSO_D = 140;
     const ARM_UPPER_R = 52, ARM_UPPER_LEN = 320;
     const ARM_LOWER_R = 44, ARM_LOWER_LEN = 280;
-    const HAND_R = 58;
+    const HAND_R = 67;
     const LEG_UPPER_R = 80, LEG_UPPER_LEN = 430;
     const LEG_LOWER_R = 65, LEG_LOWER_LEN = 380;
     const FOOT_W = 90, FOOT_H = 60, FOOT_D = 230;
@@ -2433,14 +2570,14 @@ export class ThreeDRenderer {
     const headY = hipY + TORSO_H + HEAD_R + 40;
     const shoulderY = hipY + TORSO_H * 0.88;
 
-    const skin = new THREE.MeshStandardMaterial({
+    const skin = this._mat({
       color, emissive: color, emissiveIntensity: 0.25,
       metalness: 0.1, roughness: 0.6,
     });
-    const dark = new THREE.MeshStandardMaterial({
+    const dark = this._mat({
       color: 0x202024, roughness: 0.75, metalness: 0.0,
     });
-    const shoeMat = new THREE.MeshStandardMaterial({
+    const shoeMat = this._mat({
       color: 0x1a1a1f, roughness: 0.8, metalness: 0.05,
     });
 
@@ -2555,12 +2692,35 @@ export class ThreeDRenderer {
     leftArm.shoulder.rotation.z  = -0.08;
     rightArm.shoulder.rotation.z =  0.08;
     root.add(leftLeg.hip, rightLeg.hip, leftArm.shoulder, rightArm.shoulder);
-    this._shadowFlags(root, true, false);  // people cast, don't self-receive
+
+    // Cartoon outlines on the body (thinner than furniture; minDim catches
+    // limbs and head but skips eyes / nose / mouth detail).
+    this._addOutlines(root, 8, 50);
+
+    // The plumbob: elongated spinning octahedron floating above the head.
+    // Transparent → automatically skipped by the outline pass.
+    const plumbob = new THREE.Mesh(
+      new THREE.OctahedronGeometry(85),
+      this._mat({
+        color: 0x2ee56a, emissive: 0x1faa44, emissiveIntensity: 0.9,
+        transparent: true, opacity: 0.88,
+      }),
+    );
+    plumbob.scale.set(0.72, 1.45, 0.72);
+    plumbob.position.set(0, headY + HEAD_R + 240, 0);
+    root.add(plumbob);
+
+    // Blob shadow; re-grounded every frame in updateTargets (the root bobs
+    // and drops onto seats — the blob must stay on the walking surface).
+    const blob = this._blobShadow(430, 430);
+    root.add(blob);
 
     return {
       group: root,
       color,
       torso,
+      plumbob,
+      blob,
       leftHip: leftLeg.hip,
       rightHip: rightLeg.hip,
       leftKnee: leftLeg.knee,
@@ -2618,6 +2778,11 @@ export class ThreeDRenderer {
       this._bgTexCache.tex.dispose();
       this._bgTexCache = null;
     }
+    // Shared style resources (never disposed per-instance — see _mat /
+    // _blobShadow / _addOutlines).
+    this._gradientMapTex?.dispose(); this._gradientMapTex = null;
+    this._blobTex?.dispose(); this._blobTex = null;
+    this._outlineMaterial?.dispose(); this._outlineMaterial = null;
     this._controls?.dispose();
     if (this._renderer) {
       this._renderer.dispose();
