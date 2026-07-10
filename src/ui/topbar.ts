@@ -1,5 +1,6 @@
 import { LitElement, html, nothing } from 'lit';
-import { customElement, property, state } from 'lit/decorators.js';
+import { property, state } from 'lit/decorators.js';
+import { customElement } from './define.js';
 import { fmtLen } from '../geometry.js';
 import type { Planner } from '../planner.js';
 import type { Floor } from '../types.js';

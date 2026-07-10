@@ -1,5 +1,6 @@
 import { LitElement, html } from 'lit';
-import { customElement, state } from 'lit/decorators.js';
+import { state } from 'lit/decorators.js';
+import { customElement } from './define.js';
 
 @customElement('diorama-auth')
 export class AuthScreen extends LitElement {

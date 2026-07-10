@@ -1,5 +1,6 @@
 import { LitElement, html, nothing } from 'lit';
-import { customElement, property, query } from 'lit/decorators.js';
+import { property, query } from 'lit/decorators.js';
+import { customElement } from './define.js';
 // Type-only import — erased at build time. The actual module (which pulls in
 // all of three.js, ~600 kB) is loaded lazily in firstUpdated so the 2D-only
 // startup path never downloads it.

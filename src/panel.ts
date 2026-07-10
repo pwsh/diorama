@@ -50,5 +50,5 @@ class DioramaPanel extends HTMLElement {
 }
 
 if (!customElements.get('diorama-panel')) {
-  customElements.define('diorama-panel', DioramaPanel);
+  if (!customElements.get('diorama-panel')) customElements.define('diorama-panel', DioramaPanel);
 }

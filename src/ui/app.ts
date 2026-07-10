@@ -1,5 +1,6 @@
 import { LitElement, html, nothing } from 'lit';
-import { customElement, query, state } from 'lit/decorators.js';
+import { query, state } from 'lit/decorators.js';
+import { customElement } from './define.js';
 import { Planner } from '../planner.js';
 import { fmtLen } from '../geometry.js';
 import { injectSharedStyles } from '../styles.js';
