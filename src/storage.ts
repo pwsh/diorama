@@ -6,7 +6,7 @@ function defaultFloor(): Floor {
   return {
     id: 'f1', name: 'Floor 1', w: 8000, d: 6000,
     walls: [], furniture: [], lights: [], switches: [], sensors: [], motionSensors: [],
-    envSensors: [], doors: [], windows: [], bg: null,
+    envSensors: [], doors: [], windows: [], bg: null, rooms: [],
   };
 }
 
@@ -37,6 +37,7 @@ export function repairFloor(f: Partial<Floor> & { id: string; name: string; w: n
     windows: (f as Partial<Floor>).windows ?? [],
     bg: f.bg ?? null,
     model3d: (f as Partial<Floor>).model3d ?? null,
+    rooms: f.rooms ?? [],
   };
 }
 

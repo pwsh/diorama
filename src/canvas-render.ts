@@ -6,6 +6,7 @@ import {
   hexToRgba, lighten, furnitureKind, furnitureCorners, resolveFurnitureDef,
   doorEndpoint, doorOpenDeltaDeg, windowEndpoints, wallCutsForSegment, wallKind,
   ENV_KINDS, envKindOf, envColor, envValueText, envScale,
+  closedWallLoops, loopContaining,
 } from './geometry.js';
 import type { Planner } from './planner.js';
 import type { Vec2, LightIconKind, Furniture, ObjectRecipe } from './types.js';
@@ -132,6 +133,7 @@ export function drawAll(ctx: CanvasRenderingContext2D, p: Planner, view: View,
   const on = (v: boolean | undefined) => v !== false;
   drawFloor(ctx, p, view, on(L.bg) ? bgImg : null);
   drawWalls(ctx, p, view);
+  drawRooms(ctx, p, view);
   drawDoors(ctx, p, view);
   drawWindows(ctx, p, view);
   if (on(L.furniture)) drawFurniture(ctx, p, view);
@@ -391,6 +393,30 @@ function drawFloor(ctx: CanvasRenderingContext2D, p: Planner, view: View,
   ctx.translate(p1.x - 10 * dpr, (p0.y + p1.y) / 2);
   ctx.rotate(-Math.PI / 2); ctx.textBaseline = 'bottom';
   ctx.fillText(fmtLen(f.d, p.store.imperial), 0, 0);
+  ctx.restore();
+}
+
+// Dim small-caps room-name labels at the centroid of each room's containing
+// wall loop. The room IS whichever closed loop currently holds its anchor, so
+// labels track wall edits; anchors outside every loop draw nothing. Loops are
+// recomputed here (cheap) only when the floor actually has rooms.
+function drawRooms(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
+  const f = p.floor();
+  const rooms = f.rooms;
+  if (!rooms || rooms.length === 0) return;
+  const dpr = window.devicePixelRatio || 1;
+  const loops = closedWallLoops(f.walls ?? []);
+  ctx.save();
+  ctx.fillStyle = 'rgba(207,216,230,0.5)';
+  ctx.font = `600 ${11 * dpr}px sans-serif`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  for (const rm of rooms) {
+    const loop = loopContaining(loops, rm.anchor.x, rm.anchor.y);
+    if (!loop) continue;
+    const c = centroid(loop);
+    const px = mmToPx(view, c.x, c.y);
+    ctx.fillText(rm.name.toUpperCase(), px.x, px.y);
+  }
   ctx.restore();
 }
 

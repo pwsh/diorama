@@ -4,6 +4,7 @@ import { customElement } from './define.js';
 import { startZoneEdit } from '../canvas-interact.js';
 import { repairFloor } from '../storage.js';
 import type { Planner, Tool } from '../planner.js';
+import { NEW_ROOM } from '../planner.js';
 import type {
   Sensor, Zone, ObjectHalo, BgImage, MotionSensor, EnvSensor, EnvKind, Light, SwitchFixture, LightIconKind,
   Furniture, FurnitureKind, Door, Window as WindowType, Layers2D,
@@ -15,6 +16,7 @@ import {
   ENV_KINDS, ENV_DEFAULTS, ENV_SCALE_MIN, ENV_SCALE_MAX,
   envKindOf, envColor, envValueText, envHeight, envScale,
   furnitureCat, type FurnitureCat,
+  closedWallLoops, loopContaining,
 } from '../geometry.js';
 import { saveModel, deleteModel } from '../model-store.js';
 import { newId } from '../storage.js';
@@ -153,6 +155,7 @@ export class Sidebar extends LitElement {
         ${this._windowsSection()}
         ${this._furnitureSection()}
         ${this._customObjectsSection()}
+        ${this._roomsSection()}
         ${this._fixturesSection()}
         ${this._activeSensorSection()}
         ${this._haSections()}
@@ -518,6 +521,60 @@ export class Sidebar extends LitElement {
 
   // ── Doors section ─────────────────────────────────────────────────────
   @state() private _doorExpanded = new Set<string>();
+
+  // ── Rooms ───────────────────────────────────────────────────────────────
+  private _roomsSection() {
+    const p = this.planner;
+    const f = p.floor();
+    const rooms = f.rooms ?? [];
+    const placing = p.placingRoomId;
+    // Resolve wall loops once to flag anchors that fall outside every room.
+    const loops = rooms.length ? closedWallLoops(f.walls ?? []) : [];
+    const upd = (mut: () => void) => { mut(); p.save(); p.emitConfig(); };
+    return html`
+      <div class="section">
+        <h3>Rooms</h3>
+        ${placing ? html`
+          <div style="display:flex;align-items:center;gap:6px;font-size:11px;
+                      color:var(--text-dim);padding:4px 0">
+            <span style="flex:1">📍 Click inside a room on the plan…</span>
+            <button class="btn" style="font-size:10px;padding:2px 6px"
+                    @click=${() => { p.placingRoomId = null; p.emitConfig(); }}>Cancel</button>
+          </div>
+        ` : nothing}
+        ${rooms.length === 0 && !placing
+          ? html`<div style="color:var(--text-dim);font-size:11px;padding:4px 0">
+              No rooms yet — add one, then click inside a walled area to anchor it.
+            </div>`
+          : nothing}
+        ${rooms.map(rm => {
+          const inside = loopContaining(loops, rm.anchor.x, rm.anchor.y) !== null;
+          return html`
+            <div class="sensor-item" style="cursor:default;gap:4px">
+              <input type="text" .value=${rm.name} style="flex:1;min-width:0"
+                     @input=${(e: Event) => upd(() => { rm.name = (e.target as HTMLInputElement).value; })}>
+              ${!inside ? html`<span class="badge" title="Anchor is outside every wall loop"
+                                     style="color:#ffb74d">⚠ not inside walls</span>` : nothing}
+              <button class="icon-btn" title="Re-place anchor"
+                      @click=${() => { p.placingRoomId = rm.id; p.emitConfig(); }}>📍</button>
+              <button class="icon-btn" title="Delete"
+                      @click=${() => this._deleteRoom(rm.id)}>✕</button>
+            </div>
+          `;
+        })}
+        <button class="btn" style="width:100%;margin-top:6px"
+                @click=${() => { p.placingRoomId = NEW_ROOM; p.emitConfig(); }}>
+          + Add room
+        </button>
+      </div>
+    `;
+  }
+
+  private _deleteRoom(id: string): void {
+    const f = this.planner.floor();
+    if (f.rooms) f.rooms = f.rooms.filter(r => r.id !== id);
+    this.planner.save(); this.planner.emitConfig();
+  }
 
   private _doorsSection() {
     const p = this.planner;

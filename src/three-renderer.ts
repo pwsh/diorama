@@ -13,16 +13,33 @@ import {
   furnitureDef, resolveFurnitureDef, doorOpenDeltaDeg,
   ENV_KINDS, envKindOf, envColor, envValueText, envHeight, envScale,
 } from './geometry.js';
-import type { Door, Window as WindowType, EnvSensor, ObjectRecipe } from './types.js';
-import { wallCutsForSegment, closedWallLoops, wallKind, WALL_KINDS, furnitureLocalToWorld, furnitureWorldToLocal, pointInPolygon as pip } from './geometry.js';
+import type { Door, Window as WindowType, EnvSensor, ObjectRecipe, ActivityKind } from './types.js';
+import { wallCutsForSegment, closedWallLoops, wallKind, WALL_KINDS, furnitureLocalToWorld, furnitureWorldToLocal, pointInPolygon as pip, centroid, loopContaining, resolveRoomForPoint } from './geometry.js';
 
 export interface ZoneWorld { vertices: Vec2[]; color: number; occupied: boolean; }
 export interface HaloWorld { x: number; y: number; radius: number; occupied: boolean; }
 export interface TargetWorld { key: string; x: number; y: number; color: number; }
 
 // A seat a humanoid can settle onto (scene coords). Collected from sittable
-// furniture (any kind whose def has `seat`) during updateFloor.
-interface SitSpot { x: number; z: number; seatY: number; facing: number; r: number; }
+// furniture (any kind whose def has `seat`) during updateFloor. roomId /
+// hostActivity tag the seat for later contextual-activity resolution.
+interface SitSpot {
+  x: number; z: number; seatY: number; facing: number; r: number;
+  roomId?: string | null;         // named room the seat sits in (live loop resolve)
+  hostActivity?: ActivityKind;    // the seat piece's own activity, if any
+}
+
+// A contextual-activity anchor collected from furniture whose def carries an
+// `activity` (Sims-style behavior — dwell triggers fill in during later
+// phases). Scene coords, mirroring SitSpot's frame.
+interface ActivityAnchor {
+  furnitureId: string;
+  x: number; z: number;
+  r: number;
+  facing: number;
+  kind: ActivityKind;
+  roomId: string | null;
+}
 
 interface Humanoid {
   group: THREE.Group;
@@ -93,6 +110,8 @@ export class ThreeDRenderer {
   private _humanoids: Record<string, Humanoid> = {};
   // Seats collected from the current floor's sittable furniture.
   private _sitSpots: SitSpot[] = [];
+  // Contextual-activity anchors collected from the current floor's furniture.
+  private _activityAnchors: ActivityAnchor[] = [];
   // Fan rotor groups spun in the render loop. rps ≤ 1 (100% = 1 rev/s).
   // Angle derives from the absolute clock, so rebuilds don't jump phase.
   private _fanRotors: { obj: THREE.Object3D; rps: number }[] = [];
@@ -420,6 +439,7 @@ export class ThreeDRenderer {
     }
     this._humanoids = {};
     this._sitSpots = [];
+    this._activityAnchors = [];
     this._fanRotors = [];
     this._terrain = [];
   }
@@ -643,6 +663,10 @@ export class ThreeDRenderer {
               customObjects?: ObjectRecipe[]): void {
     if (!this._scene) return;
     this._fw = f.w; this._fd = f.d;
+    // Room-name labels are Sprites whose CanvasTextures _clearGroup won't touch;
+    // drop them explicitly (mirrors the _envGroup pairing in updateEnvSensors)
+    // before wiping the group, or every rebuild leaks a GPU texture.
+    this._disposeSpriteMaps(this._floorGroup);
     this._clearGroup(this._floorGroup);
     if (scene3d?.preset && scene3d.preset !== this._preset) {
       this.applyScenePreset(scene3d.preset);
@@ -848,7 +872,9 @@ export class ThreeDRenderer {
     // sofas / beds) maps to local -Z after the X-mirror in `_w`, so backrests
     // get placed at child.position.z = -depth/2.
     this._sitSpots = [];
+    this._activityAnchors = [];
     this._terrain = [];
+    const rooms = f.rooms ?? [];
     for (const fu of showFurniture ? f.furniture : []) {
       const grp = this._buildFurniture(fu, f.furniture, customObjects);
       this._shadowFlags(grp);
@@ -861,6 +887,9 @@ export class ThreeDRenderer {
           ht: def.ht, elevation: fu.elevation ?? 0, kind: fu.kind,
         });
       }
+      // Which named room this piece sits in (live loop resolution; null when
+      // its center falls outside every closed loop).
+      const roomId = resolveRoomForPoint(rooms, loops, fu.x, fu.y)?.id ?? null;
       // Sittable kinds (def.seat set) become seating anchors for humanoids.
       // Facing: person sits facing away from the backrest — body-local -Z,
       // which is the furniture group's yaw.
@@ -870,10 +899,64 @@ export class ThreeDRenderer {
           x: c.x, z: c.z, seatY: def.seat + (fu.elevation ?? 0),
           facing: -((fu.rotation || 0) * Math.PI / 180),
           r: Math.max(fu.w, fu.h) / 2 + 350,
+          roomId,
+          // The seat's own activity (e.g. a desk/table authored as sittable);
+          // chairs gain table/desk adjacency in a later phase.
+          hostActivity: def.activity,
+        });
+      }
+      // Pieces whose def carries an `activity` register a contextual anchor
+      // (dwell triggers wire these up in a later phase).
+      if (def.activity) {
+        const a = this._w(fu.x, fu.y, 0);
+        this._activityAnchors.push({
+          furnitureId: fu.id, x: a.x, z: a.z,
+          r: Math.max(fu.w, fu.h) / 2 + 350,
+          facing: -((fu.rotation || 0) * Math.PI / 180),
+          kind: def.activity,
+          roomId,
         });
       }
     }
 
+    // Room-name labels: a dim billboard at the centroid of each room's
+    // containing wall loop. The room IS whichever closed loop currently holds
+    // its anchor, so labels track wall edits. Skip anchors outside all loops.
+    for (const rm of rooms) {
+      const loop = loopContaining(loops, rm.anchor.x, rm.anchor.y);
+      if (!loop) continue;
+      const c = centroid(loop);
+      const wp = this._w(c.x, c.y, 50);
+      const sprite = this._makeRoomLabelSprite(rm.name);
+      sprite.position.set(wp.x, wp.y, wp.z);
+      this._floorGroup.add(sprite);
+    }
+  }
+
+  // Dim floor-label sprite for a room name — quieter than the env-sensor chips
+  // (no border, muted fill, smaller world size), billboarded toward the camera.
+  private _makeRoomLabelSprite(text: string): THREE.Sprite {
+    const label = text.toUpperCase();
+    const font = '600 40px system-ui, sans-serif';
+    const cv = document.createElement('canvas');
+    const ctx = cv.getContext('2d')!;
+    ctx.font = font;
+    const tw = ctx.measureText(label).width;
+    const padX = 20, h = 64;
+    cv.width = Math.max(4, Math.ceil(tw + padX * 2));
+    cv.height = h;
+    ctx.font = font;  // canvas resize resets ctx state
+    ctx.fillStyle = 'rgba(205,216,230,0.72)';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(label, cv.width / 2, h / 2 + 2);
+    const tex = new THREE.CanvasTexture(cv);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: tex, transparent: true, depthWrite: false, opacity: 0.85,
+    }));
+    const H = 360;  // world-mm text height — reads at room scale without dominating
+    sprite.scale.set(H * (cv.width / cv.height), H, 1);
+    return sprite;
   }
 
   // Doors + windows live in their own group so floor geometry doesn't churn

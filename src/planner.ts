@@ -41,6 +41,10 @@ export interface EditZone {
 
 export type Tool = 'select' | 'wall' | 'sensor' | 'motion' | 'env' | 'furniture' | 'light' | 'switch' | 'door' | 'window' | 'delete';
 
+// Sentinel for Planner.placingRoomId meaning "create a new room at the next
+// canvas click" (vs an existing room id = re-place that room's anchor).
+export const NEW_ROOM = '__new_room__';
+
 // Single-source-of-truth Planner. Lit components subscribe via addEventListener.
 export class Planner extends EventTarget {
   store: Store;
@@ -101,7 +105,7 @@ export class Planner extends EventTarget {
     if (m !== 'edit') {
       // Leave no edit affordances dangling.
       this.drag = null; this.editZone = null; this.drawingWall = null;
-      this.tool = 'select';
+      this.tool = 'select'; this.placingRoomId = null;
     }
     this.emitConfig();
   }
@@ -115,6 +119,11 @@ export class Planner extends EventTarget {
 
   // Which wall kind the next drawn wall gets. Runtime only.
   pendingWallKind: import('./types.js').WallKind = 'full';
+
+  // Room placement latch: when set, the next 2D canvas click sets a room's
+  // anchor. Holds the room id being re-placed, or NEW_ROOM to create a fresh
+  // room at the click point. Runtime + edit-only, never persisted.
+  placingRoomId: string | null = null;
 
   // Sidebar visibility. Persisted locally (not in HA store — it's a
   // per-device preference). Defaults open on wide screens, closed on phones.
@@ -669,6 +678,7 @@ export class Planner extends EventTarget {
   setTool(t: Tool): void {
     this.tool = t;
     if (t !== 'wall') this.drawingWall = null;
+    this.placingRoomId = null;  // picking any tool cancels a pending room placement
     this.emitConfig();
   }
 

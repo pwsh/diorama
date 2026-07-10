@@ -6,6 +6,7 @@ import { customElement } from './define.js';
 // startup path never downloads it.
 import type { ThreeDRenderer, ZoneWorld, HaloWorld, TargetWorld } from '../three-renderer.js';
 import { localToWorld, transformVerts, pointInPolygon, sensorColor, hexToInt } from '../geometry.js';
+import { resolveScenePreset } from '../time-of-day.js';
 import { loadModel } from '../model-store.js';
 import { newId } from '../storage.js';
 import type { Planner } from '../planner.js';
@@ -183,29 +184,14 @@ export class ThreeView extends LitElement {
     }
   }
 
-  // Resolve the lighting preset for auto modes. 'clock' prefers HA's sun.sun
-  // elevation and falls back to the local clock; 'lux' maps an illuminance
-  // entity through fixed thresholds. Checked every tick — the result feeds
-  // _keyFloor, so the scene only rebuilds when the resolved preset changes.
+  // Thin wrapper over the shared resolver (src/time-of-day.ts) — kept so the
+  // tick call site and the _keyFloor dependency stay put. Checked every tick;
+  // the result feeds _keyFloor, so the scene only rebuilds when it changes.
   private _effectivePreset(
     sc: import('../types.js').Scene3D,
     states: Record<string, import('../types.js').HassState>,
   ): import('../types.js').ScenePreset {
-    const mode = sc.lightMode ?? 'manual';
-    if (mode === 'clock') {
-      const sun = states['sun.sun'];
-      const elev = sun ? parseFloat(String((sun.attributes as Record<string, unknown>)?.elevation)) : NaN;
-      if (isFinite(elev)) return elev > 10 ? 'day' : elev > -4 ? 'dusk' : 'night';
-      const h = new Date().getHours();
-      if (h >= 7 && h < 17) return 'day';
-      if ((h >= 5 && h < 7) || (h >= 17 && h < 20)) return 'dusk';
-      return 'night';
-    }
-    if (mode === 'lux' && sc.luxEntity) {
-      const v = parseFloat(states[sc.luxEntity]?.state ?? '');
-      if (isFinite(v)) return v >= 3000 ? 'day' : v >= 300 ? 'dusk' : 'night';
-    }
-    return sc.preset ?? 'night';
+    return resolveScenePreset(sc, states);
   }
 
   private _startSync(): void {

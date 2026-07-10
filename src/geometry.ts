@@ -1,7 +1,7 @@
 // Pure geometry helpers — no DOM, no state.
 
 import type { Vec2, Sensor, BgImage, LightIconKind, FurnitureKind, EnvKind, WallKind,
-  ActivityKind, ObjectRecipe, Furniture } from './types.js';
+  ActivityKind, ObjectRecipe, Furniture, Room } from './types.js';
 
 export const MM_PER_IN = 25.4;
 export const IN_PER_FT = 12;
@@ -178,6 +178,29 @@ export function closedWallLoops(walls: { points: Vec2[] }[]): Vec2[][] {
     if (chain.length >= 4 && key(chain[0]) === key(chain[chain.length - 1])) loops.push(chain.slice(0, -1));
   }
   return loops.filter(l => Math.abs(polygonArea(l)) > 5e5);
+}
+
+// ── Rooms ────────────────────────────────────────────────────────────────
+// A room is a name + anchor point; the room IS whichever closed wall loop
+// currently contains the anchor. These two helpers resolve that live.
+
+// First loop (in order) that geometrically contains (x, y), or null.
+export function loopContaining(loops: Vec2[][], x: number, y: number): Vec2[] | null {
+  for (const loop of loops) if (pointInPolygon(x, y, loop)) return loop;
+  return null;
+}
+
+// The named room that owns (x, y): find the loop containing the point, then
+// return the room whose anchor resolves to that SAME loop. Reference equality
+// on the loop array holds within one loops computation (both lookups use the
+// same array instances), so two points share a room iff they share a loop.
+export function resolveRoomForPoint(rooms: Room[], loops: Vec2[][], x: number, y: number): Room | null {
+  const loop = loopContaining(loops, x, y);
+  if (!loop) return null;
+  for (const rm of rooms) {
+    if (loopContaining(loops, rm.anchor.x, rm.anchor.y) === loop) return rm;
+  }
+  return null;
 }
 
 // ── Wall openings (doors / windows cut gaps into wall segments) ──────────

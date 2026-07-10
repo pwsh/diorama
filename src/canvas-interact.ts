@@ -12,6 +12,7 @@ import {
   hitDoor, hitDoorEnd, hitWindow, hitWindowEnd,
 } from './canvas-hit.js';
 import type { Planner } from './planner.js';
+import { NEW_ROOM } from './planner.js';
 import type { Vec2, Furniture, ObjectRecipe } from './types.js';
 
 // Auto-snap a mountable piece (coffee maker, toaster, …) onto a counter-height
@@ -237,6 +238,7 @@ export function connectWallEnds(
 export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: View, e: MouseEvent): void {
   if (p.uiMode !== 'edit') return;  // kiosk/view: no drags, no selections
   if (p.editZone) return;
+  if (p.placingRoomId) return;  // room-placement latch: let the click set the anchor
   const mm = pxToMm(canvas, view, e);
   if (p.tool !== 'select') return;
 
@@ -810,6 +812,24 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
     if (dHit2?.door.entity_id) { p.toggleEntity(dHit2.door.entity_id); return; }
     const wHit2 = hitWindow(p, view, mm);
     if (wHit2?.win.entity_id) { p.toggleEntity(wHit2.win.entity_id); return; }
+    return;
+  }
+
+  // Room-placement latch: the next click sets a room's anchor (Rooms UI). New
+  // rooms prompt for a name; re-placing an existing room just moves its anchor.
+  if (p.placingRoomId) {
+    const anchor = { x: Math.round(mm.x), y: Math.round(mm.y) };
+    if (p.placingRoomId === NEW_ROOM) {
+      if (!f.rooms) f.rooms = [];
+      const n = f.rooms.length + 1;
+      const name = prompt('Room name:', `Room ${n}`);
+      if (name !== null) f.rooms.push({ id: newId('rm'), name: name.trim() || `Room ${n}`, anchor });
+    } else {
+      const rm = (f.rooms ?? []).find(r => r.id === p.placingRoomId);
+      if (rm) rm.anchor = anchor;
+    }
+    p.placingRoomId = null;
+    p.save(); p.emitConfig();
     return;
   }
 

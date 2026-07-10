@@ -275,6 +275,16 @@ export interface Scene3D {
   wallColor?: string;        // hex; default '#bbbbbb'
 }
 
+// A named room. No polygon is persisted — the room IS whichever closed wall
+// loop currently contains `anchor`, re-resolved each frame (see
+// resolveRoomForPoint in geometry.ts). This keeps room identity robust against
+// wall edits: move / reshape the walls and the label follows the loop.
+export interface Room {
+  id: string;
+  name: string;
+  anchor: Vec2;   // world-mm point that pins the room to a wall loop
+}
+
 export interface Floor {
   id: string;
   name: string;
@@ -291,6 +301,7 @@ export interface Floor {
   windows: Window[];
   bg: BgImage | null;
   model3d?: Model3D | null;
+  rooms?: Room[];   // named rooms (anchor → live wall loop); repairFloor backfills []
 }
 
 export interface Store {
