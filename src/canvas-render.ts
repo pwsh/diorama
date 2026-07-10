@@ -3,12 +3,12 @@ import {
   pointInPolygon, localToWorld, bgLocalToWorld,
   lightRadius, lightIntensity, lightIconKind, lightRotation, lightLength, switchRotation, switchSize, switchLabelPos,
   motionColor, motionIntensity, sensorColor,
-  hexToRgba, lighten, furnitureKind, furnitureCorners,
+  hexToRgba, lighten, furnitureKind, furnitureCorners, resolveFurnitureDef,
   doorEndpoint, doorOpenDeltaDeg, windowEndpoints, wallCutsForSegment, wallKind,
   ENV_KINDS, envKindOf, envColor, envValueText, envScale,
 } from './geometry.js';
 import type { Planner } from './planner.js';
-import type { Vec2, LightIconKind, Furniture } from './types.js';
+import type { Vec2, LightIconKind, Furniture, ObjectRecipe } from './types.js';
 
 // Default per-target color palette (kept for back-compat; actual color now
 // comes from sensorColor(s, idx)).
@@ -605,6 +605,8 @@ function drawWindows(ctx: CanvasRenderingContext2D, p: Planner, view: View): voi
 
 function drawFurniture(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
   const f = p.floor();
+  const customObjects = p.store.customObjects;
+  const isEdit = p.uiMode === 'edit';
   for (const piece of f.furniture) {
     const center = mmToPx(view, piece.x, piece.y);
     const halfW = (piece.w / 2) * view.scale;
@@ -616,11 +618,24 @@ function drawFurniture(ctx: CanvasRenderingContext2D, p: Planner, view: View): v
     // Local rect: -halfW..+halfW (X), -halfH..+halfH (canvas Y). Canvas-Y top
     // corresponds to world +Y after the canvas Y-flip, so draw the kind's
     // "front" decorations (backrest, headboard, pillows) at canvas-Y = -halfH.
-    drawFurniturePrimitiveLocal(ctx, piece, halfW, halfH);
+    drawFurniturePrimitiveLocal(ctx, piece, halfW, halfH, customObjects);
     if (piece.label) {
       ctx.fillStyle = '#ddd'; ctx.font = '10px sans-serif';
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
       ctx.fillText(piece.label, 0, 0);
+    }
+    // Front chevron: subtle orange arrow just past the front edge (canvas-Y
+    // top = -halfH, the "front" side) for the active selection in edit mode.
+    const def = resolveFurnitureDef(piece, customObjects);
+    if (isEdit && p.activeFurnitureId === piece.id && def.frontArrow !== false) {
+      const s = Math.max(5, Math.min(12, halfW * 0.4));
+      ctx.strokeStyle = '#ffb74d';
+      ctx.lineWidth = 2; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+      ctx.beginPath();
+      ctx.moveTo(-s, -halfH);
+      ctx.lineTo(0, -halfH - s * 0.9);
+      ctx.lineTo(s, -halfH);
+      ctx.stroke();
     }
     ctx.restore();
     // Corner handles drawn at rotation-aware world positions so resize stays
@@ -645,11 +660,21 @@ function drawFurniturePrimitiveLocal(
   piece: Furniture,
   halfW: number,
   halfH: number,
+  customObjects?: ObjectRecipe[],
 ): void {
   const kind = furnitureKind(piece);
   const x = -halfW, y = -halfH, w = halfW * 2, h = halfH * 2;
   const fill = (c: string) => { ctx.fillStyle = c; ctx.fillRect(x, y, w, h); };
   const stroke = (c: string) => { ctx.strokeStyle = c; ctx.lineWidth = 1; ctx.strokeRect(x, y, w, h); };
+  // Custom object recipes draw as a generic rect tinted by the recipe color
+  // (grey when the recipe is missing). The piece label is drawn by the caller.
+  if (piece.customKindId) {
+    const rec = customObjects?.find(o => o.id === piece.customKindId);
+    const hex = '#' + ((rec?.color ?? 0x8a8a8a) & 0xffffff).toString(16).padStart(6, '0');
+    fill(hexToRgba(hex, 0.5));
+    stroke(hex);
+    return;
+  }
   // "+Y side" (the implied front of the piece) is the TOP edge in canvas px
   // because canvas Y is flipped. Backrest, headboard, pillows live there.
   switch (kind) {
@@ -912,6 +937,37 @@ function drawFurniturePrimitiveLocal(
       ctx.fillStyle = '#90a4ae';
       ctx.beginPath(); ctx.arc(x + w * 0.15, y + h * 0.15, 3, 0, 2 * Math.PI); ctx.fill();
       break;
+    case 'coffee_maker': {
+      // Small rounded body + carafe circle at the front.
+      ctx.fillStyle = 'rgba(55,71,79,0.6)';
+      ctx.beginPath(); ctx.roundRect(x, y, w, h, Math.min(w, h) * 0.25); ctx.fill();
+      ctx.strokeStyle = '#90a4ae'; ctx.lineWidth = 1; ctx.stroke();
+      ctx.strokeStyle = '#cfd8dc';
+      ctx.beginPath(); ctx.arc(0, h * 0.18, Math.min(halfW, halfH) * 0.42, 0, 2 * Math.PI); ctx.stroke();
+      break;
+    }
+    case 'toaster': {
+      // Rounded body + two slot lines on top (back/+Y edge).
+      ctx.fillStyle = 'rgba(176,190,197,0.6)';
+      ctx.beginPath(); ctx.roundRect(x, y, w, h, Math.min(w, h) * 0.3); ctx.fill();
+      ctx.strokeStyle = '#78909c'; ctx.lineWidth = 1; ctx.stroke();
+      ctx.strokeStyle = '#37474f'; ctx.lineWidth = 1.5;
+      for (const sx of [-0.22, 0.22]) {
+        ctx.beginPath(); ctx.moveTo(x + w * (0.5 + sx) - w * 0.12, y + h * 0.32);
+        ctx.lineTo(x + w * (0.5 + sx) + w * 0.12, y + h * 0.32); ctx.stroke();
+      }
+      break;
+    }
+    case 'exercise_equipment': {
+      // Treadmill: deck rect + a console band along the front (-Y / top) edge.
+      fill('rgba(66,66,66,0.55)');
+      stroke('#9e9e9e');
+      ctx.fillStyle = '#212121';
+      ctx.fillRect(x + w * 0.12, y + h * 0.28, w * 0.76, h * 0.62);  // running belt
+      ctx.fillStyle = '#546e7a';
+      ctx.fillRect(x, y, w, Math.max(4, h * 0.16));                  // console band at front
+      break;
+    }
     default:
       fill('rgba(140,140,140,0.25)');
       stroke('#888');

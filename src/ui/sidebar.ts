@@ -7,10 +7,11 @@ import type { Planner, Tool } from '../planner.js';
 import type {
   Sensor, Zone, ObjectHalo, BgImage, MotionSensor, EnvSensor, EnvKind, Light, SwitchFixture, LightIconKind,
   Furniture, FurnitureKind, Door, Window as WindowType, Layers2D,
+  ObjectRecipe, RecipePrimitive, RecipeShape, ActivityKind,
 } from '../types.js';
 import {
   motionColor, motionIntensity, sensorColor, lightIconKind, MOTION_DEFAULTS,
-  FURNITURE_KINDS, furnitureKind,
+  FURNITURE_KINDS, furnitureKind, resolveFurnitureDef,
   ENV_KINDS, ENV_DEFAULTS, ENV_SCALE_MIN, ENV_SCALE_MAX,
   envKindOf, envColor, envValueText, envHeight, envScale,
   furnitureCat, type FurnitureCat,
@@ -109,13 +110,14 @@ export class Sidebar extends LitElement {
           ${p.tool === 'furniture' ? html`
             <div class="row" style="margin-top:6px">
               <label>Type</label>
-              <select .value=${p.pendingFurnitureKind}
+              <select .value=${p.pendingCustomObjectId ? 'custom:' + p.pendingCustomObjectId : p.pendingFurnitureKind}
                       @change=${(e: Event) => {
-                        p.pendingFurnitureKind =
-                          (e.target as HTMLSelectElement).value as FurnitureKind;
+                        const v = (e.target as HTMLSelectElement).value;
+                        if (v.startsWith('custom:')) p.pendingCustomObjectId = v.slice(7);
+                        else { p.pendingFurnitureKind = v as FurnitureKind; p.pendingCustomObjectId = null; }
                         this.requestUpdate();
                       }}>
-                ${this._kindOptions(p.pendingFurnitureKind)}
+                ${this._kindOptions(p.pendingCustomObjectId ? 'custom:' + p.pendingCustomObjectId : p.pendingFurnitureKind)}
               </select>
             </div>
           ` : nothing}
@@ -150,6 +152,7 @@ export class Sidebar extends LitElement {
         ${this._doorsSection()}
         ${this._windowsSection()}
         ${this._furnitureSection()}
+        ${this._customObjectsSection()}
         ${this._fixturesSection()}
         ${this._activeSensorSection()}
         ${this._haSections()}
@@ -215,19 +218,28 @@ export class Sidebar extends LitElement {
     `;
   }
 
-  // Furniture kind options grouped by category.
-  private _kindOptions(selected: FurnitureKind) {
+  // Furniture kind options grouped by category. `selected` is either a
+  // FurnitureKind or `custom:<recipeId>` for a custom object.
+  private _kindOptions(selected: string) {
     const cats: { cat: FurnitureCat; label: string }[] = [
       { cat: 'furniture', label: 'Furniture' },
       { cat: 'appliance', label: 'Appliances' },
       { cat: 'bathroom', label: 'Bathroom' },
     ];
     const kinds = Object.keys(FURNITURE_KINDS) as FurnitureKind[];
-    return cats.map(c => html`
-      <optgroup label=${c.label}>
-        ${kinds.filter(k => furnitureCat(FURNITURE_KINDS[k]) === c.cat).map(k => html`
-          <option value=${k} ?selected=${selected === k}>${FURNITURE_KINDS[k].label}</option>`)}
-      </optgroup>`);
+    const custom = this.planner.store.customObjects ?? [];
+    return html`
+      ${cats.map(c => html`
+        <optgroup label=${c.label}>
+          ${kinds.filter(k => furnitureCat(FURNITURE_KINDS[k]) === c.cat).map(k => html`
+            <option value=${k} ?selected=${selected === k}>${FURNITURE_KINDS[k].label}</option>`)}
+        </optgroup>`)}
+      ${custom.length ? html`
+        <optgroup label="Custom">
+          ${custom.map(o => html`
+            <option value=${'custom:' + o.id} ?selected=${selected === 'custom:' + o.id}>${o.label}</option>`)}
+        </optgroup>` : nothing}
+    `;
   }
 
   // ── Motion sensors section ────────────────────────────────────────────
@@ -835,21 +847,33 @@ export class Sidebar extends LitElement {
         </div>
         ${this._lockRow(piece)}
         <div class="row"><label>Type</label>
-          <select .value=${curKind}
+          <select .value=${piece.customKindId ? 'custom:' + piece.customKindId : curKind}
                   @change=${(e: Event) => upd(() => {
-                    const newKind = (e.target as HTMLSelectElement).value as FurnitureKind;
-                    const wasDefault =
-                      piece.w === FURNITURE_KINDS[curKind].w && piece.h === FURNITURE_KINDS[curKind].h;
-                    piece.kind = newKind;
-                    // Resize to new kind's defaults if user hadn't customized.
-                    if (wasDefault) {
-                      piece.w = FURNITURE_KINDS[newKind].w;
-                      piece.h = FURNITURE_KINDS[newKind].h;
+                    const v = (e.target as HTMLSelectElement).value;
+                    const curDef = resolveFurnitureDef(piece, p.store.customObjects);
+                    const wasDefault = piece.w === curDef.w && piece.h === curDef.h;
+                    if (v.startsWith('custom:')) {
+                      // Recipe reference; kind stays as the plain-block fallback.
+                      piece.customKindId = v.slice(7);
+                      if (wasDefault) {
+                        const rec = p.store.customObjects?.find(o => o.id === piece.customKindId);
+                        if (rec) { piece.w = rec.w; piece.h = rec.h; }
+                      }
+                    } else {
+                      const newKind = v as FurnitureKind;
+                      piece.customKindId = undefined;
+                      piece.kind = newKind;
+                      // Resize to new kind's defaults if user hadn't customized.
+                      if (wasDefault) {
+                        piece.w = FURNITURE_KINDS[newKind].w;
+                        piece.h = FURNITURE_KINDS[newKind].h;
+                      }
                     }
                   })}>
-            ${this._kindOptions(curKind)}
+            ${this._kindOptions(piece.customKindId ? 'custom:' + piece.customKindId : curKind)}
           </select>
         </div>
+        ${this._furnitureBindRow(piece, upd)}
         <div class="row"><label>Width (mm)</label>
           <input type="number" min="50" .value=${String(Math.round(piece.w))}
                  @input=${(e: Event) => upd(() => {
@@ -892,6 +916,222 @@ export class Sidebar extends LitElement {
         <div style="font-size:10px;color:var(--text-dim);margin-top:4px;line-height:1.3">
           Front (backrest, headboard, pillows) faces +Y world at rotation 0.
           Snaps to 15° increments. Corner-resize handles hide while rotated.
+        </div>
+      </div>
+    `;
+  }
+
+  // Entity binding for activity-anchoring pieces (appliances) + the TV. Mirrors
+  // the env-sensor bind row. TV binds a media_player; everything else a switch
+  // (the picker still lets the user change domains).
+  private _furnitureBindRow(piece: Furniture, upd: (mut: () => void) => void) {
+    const p = this.planner;
+    const def = resolveFurnitureDef(piece, p.store.customObjects);
+    if (!def.activity && furnitureKind(piece) !== 'tv') return nothing;
+    return html`
+      <div class="row"><label>HA entity</label>
+        <span style="font-size:11px;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+          ${piece.entity_id || '— unbound —'}
+        </span>
+      </div>
+      <div style="display:flex;gap:4px;margin-top:4px">
+        <button class="btn" style="flex:1;font-size:11px" @click=${() => this._pickFurnitureEntity(piece)}>
+          ${piece.entity_id ? 'Rebind' : 'Bind'}…
+        </button>
+        ${piece.entity_id ? html`
+          <button class="btn" style="font-size:11px"
+                  @click=${() => upd(() => { piece.entity_id = null; })}>Unbind</button>
+        ` : nothing}
+      </div>
+    `;
+  }
+
+  private _pickFurnitureEntity(piece: Furniture): void {
+    const domain = furnitureKind(piece) === 'tv' ? 'media_player' : 'switch';
+    this.dispatchEvent(new CustomEvent('open-entity-picker', {
+      bubbles: true, composed: true,
+      detail: {
+        domain,
+        onPick: (id: string) => {
+          piece.entity_id = id;
+          this.planner.save();
+          this.planner.emitConfig();
+        },
+      },
+    }));
+  }
+
+  // ── Custom objects section ────────────────────────────────────────────
+  // Form-based recipe editor. Every mutation runs save() + emitConfig(), which
+  // bumps configRev — the auto-placed instance rebuilds as its own live preview.
+  @state() private _customExpanded = new Set<string>();
+
+  private _customObjectsSection() {
+    const objs = this.planner.store.customObjects ?? [];
+    return html`
+      <div class="section">
+        <h3>Custom Objects</h3>
+        ${objs.length === 0 ? html`
+          <div style="color:var(--text-dim);font-size:11px;padding:2px 0 6px">
+            Build reusable objects from primitive parts, then place them like any furniture kind.
+          </div>` : nothing}
+        ${objs.map(o => this._customObjectItem(o))}
+        <button class="btn" style="width:100%;margin-top:6px" @click=${() => this._addCustomObject()}>
+          + New object
+        </button>
+      </div>
+    `;
+  }
+
+  private _customObjectItem(rec: ObjectRecipe) {
+    const exp = this._customExpanded.has(rec.id);
+    return html`
+      <div style="border-bottom:1px solid var(--border)">
+        <div class="sensor-item" style="cursor:pointer"
+             @click=${() => this._toggleCustomExpanded(rec.id)}>
+          <div class="nm">${rec.label || 'Custom object'}</div>
+          <button class="icon-btn" title=${exp ? 'Hide' : 'Edit'}
+                  @click=${(e: Event) => { e.stopPropagation(); this._toggleCustomExpanded(rec.id); }}>${exp ? '▾' : '▸'}</button>
+          <button class="icon-btn" title="Delete"
+                  @click=${(e: Event) => { e.stopPropagation(); this._deleteCustomObject(rec); }}>✕</button>
+        </div>
+        ${exp ? this._customObjectEditor(rec) : nothing}
+      </div>
+    `;
+  }
+
+  private _toggleCustomExpanded(id: string): void {
+    if (this._customExpanded.has(id)) this._customExpanded.delete(id);
+    else                              this._customExpanded.add(id);
+    this.requestUpdate();
+  }
+
+  private _addCustomObject(): void {
+    const p = this.planner;
+    if (!p.store.customObjects) p.store.customObjects = [];
+    const rec: ObjectRecipe = {
+      id: newId('obj'), label: 'Custom object',
+      w: 600, h: 600, ht: 800, color: 0x8d6e63, cat: 'furniture',
+      primitives: [{ shape: 'box', size: [600, 800, 600], pos: [0, 400, 0] }],
+    };
+    p.store.customObjects.push(rec);
+    this._customExpanded.add(rec.id);
+    // Auto-place an instance at the current view center so the edit is visible.
+    const f = p.floor();
+    const c = p.viewCenter ?? { x: f.w / 2, y: f.d / 2 };
+    f.furniture.push({
+      id: newId('fu'), x: Math.round(c.x), y: Math.round(c.y),
+      w: rec.w, h: rec.h, label: '', kind: 'block', customKindId: rec.id,
+    });
+    p.save(); p.emitConfig();
+  }
+
+  private _deleteCustomObject(rec: ObjectRecipe): void {
+    if (!confirm(`Delete "${rec.label || 'Custom object'}"? Placed instances stay but fall back to plain blocks.`)) return;
+    const p = this.planner;
+    p.store.customObjects = (p.store.customObjects ?? []).filter(o => o.id !== rec.id);
+    this._customExpanded.delete(rec.id);
+    p.save(); p.emitConfig();
+  }
+
+  private _customObjectEditor(rec: ObjectRecipe) {
+    const p = this.planner;
+    const upd = (mut: () => void) => { mut(); p.save(); p.emitConfig(); };
+    const activities: (ActivityKind | 'none')[] = [
+      'none', 'shower', 'bathe', 'toilet', 'wash_hands', 'load_dishwasher',
+      'make_coffee', 'forage_fridge', 'watch_tv', 'eat_at_table',
+      'work_at_desk', 'exercise', 'sleep_shared',
+    ];
+    return html`
+      <div style="background:rgba(0,0,0,0.25);border-radius:4px;padding:6px;margin:4px 0">
+        <div class="row"><label>Label</label>
+          <input type="text" .value=${rec.label}
+                 @input=${(e: Event) => upd(() => { rec.label = (e.target as HTMLInputElement).value; })}>
+        </div>
+        <div class="row"><label>Width (mm)</label>
+          <input type="number" min="50" .value=${String(Math.round(rec.w))}
+                 @input=${(e: Event) => upd(() => { rec.w = Math.max(50, parseFloat((e.target as HTMLInputElement).value) || 0); })}>
+        </div>
+        <div class="row"><label>Depth (mm)</label>
+          <input type="number" min="50" .value=${String(Math.round(rec.h))}
+                 @input=${(e: Event) => upd(() => { rec.h = Math.max(50, parseFloat((e.target as HTMLInputElement).value) || 0); })}>
+        </div>
+        <div class="row"><label>Height (mm)</label>
+          <input type="number" min="10" .value=${String(Math.round(rec.ht))}
+                 @input=${(e: Event) => upd(() => { rec.ht = Math.max(10, parseFloat((e.target as HTMLInputElement).value) || 0); })}>
+        </div>
+        <div class="row"><label>Surface</label>
+          <input type="checkbox" .checked=${!!rec.surface}
+                 @change=${(e: Event) => upd(() => { rec.surface = (e.target as HTMLInputElement).checked || undefined; })}>
+          <label style="margin-left:12px">Mountable</label>
+          <input type="checkbox" .checked=${!!rec.mountable}
+                 @change=${(e: Event) => upd(() => { rec.mountable = (e.target as HTMLInputElement).checked || undefined; })}>
+        </div>
+        <div class="row"><label>Activity</label>
+          <select .value=${rec.activity ?? 'none'}
+                  @change=${(e: Event) => upd(() => {
+                    const v = (e.target as HTMLSelectElement).value;
+                    rec.activity = v === 'none' ? undefined : v as ActivityKind;
+                  })}>
+            ${activities.map(a => html`<option value=${a} ?selected=${(rec.activity ?? 'none') === a}>${a}</option>`)}
+          </select>
+        </div>
+        <div class="row"><label>Seat (mm)</label>
+          <input type="number" min="0" placeholder="none"
+                 title="Seat-top height; set it to make the object sittable"
+                 .value=${rec.seat != null ? String(Math.round(rec.seat)) : ''}
+                 @input=${(e: Event) => upd(() => {
+                   const v = parseFloat((e.target as HTMLInputElement).value);
+                   rec.seat = isFinite(v) && v > 0 ? v : undefined;
+                 })}>
+        </div>
+        <div style="font-size:11px;color:var(--text-dim);margin:6px 0 2px">Parts</div>
+        ${rec.primitives.map((prim, i) => this._customPartRow(rec, prim, i))}
+        <button class="btn" style="width:100%;margin-top:4px" @click=${() => upd(() => {
+          rec.primitives.push({ shape: 'box', size: [200, 200, 200], pos: [0, 100, 0] });
+        })}>+ part</button>
+      </div>
+    `;
+  }
+
+  private _customPartRow(rec: ObjectRecipe, prim: RecipePrimitive, idx: number) {
+    const p = this.planner;
+    const upd = (mut: () => void) => { mut(); p.save(); p.emitConfig(); };
+    const numIn = (v: number, on: (n: number) => void) => html`
+      <input type="number" style="width:46px;font-size:10px" .value=${String(Math.round(v))}
+             @input=${(e: Event) => upd(() => on(parseFloat((e.target as HTMLInputElement).value) || 0))}>`;
+    const setRot = (i: number, n: number) => { if (!prim.rot) prim.rot = [0, 0, 0]; prim.rot[i] = n; };
+    return html`
+      <div style="border-top:1px solid var(--border);padding:4px 0">
+        <div class="row" style="gap:4px">
+          <select style="flex:1" .value=${prim.shape}
+                  @change=${(e: Event) => upd(() => { prim.shape = (e.target as HTMLSelectElement).value as RecipeShape; })}>
+            <option value="box" ?selected=${prim.shape === 'box'}>Box</option>
+            <option value="cylinder" ?selected=${prim.shape === 'cylinder'}>Cylinder</option>
+            <option value="sphere" ?selected=${prim.shape === 'sphere'}>Sphere</option>
+            <option value="cone" ?selected=${prim.shape === 'cone'}>Cone</option>
+          </select>
+          <input type="color" .value=${prim.color ?? '#8a8a8a'}
+                 @input=${(e: Event) => upd(() => { prim.color = (e.target as HTMLInputElement).value; })}>
+          <button class="icon-btn" title="Duplicate" @click=${() => upd(() => {
+            rec.primitives.splice(idx + 1, 0, {
+              shape: prim.shape,
+              size: [...prim.size] as [number, number, number],
+              pos: [...prim.pos] as [number, number, number],
+              rot: prim.rot ? [...prim.rot] as [number, number, number] : undefined,
+              color: prim.color,
+            });
+          })}>⧉</button>
+          <button class="icon-btn" title="Delete" @click=${() => upd(() => { rec.primitives.splice(idx, 1); })}>✕</button>
+        </div>
+        <div class="row" style="gap:3px;font-size:10px;color:var(--text-dim)"><span style="min-width:30px">size</span>
+          ${numIn(prim.size[0], n => prim.size[0] = n)}${numIn(prim.size[1], n => prim.size[1] = n)}${numIn(prim.size[2], n => prim.size[2] = n)}
+        </div>
+        <div class="row" style="gap:3px;font-size:10px;color:var(--text-dim)"><span style="min-width:30px">pos</span>
+          ${numIn(prim.pos[0], n => prim.pos[0] = n)}${numIn(prim.pos[1], n => prim.pos[1] = n)}${numIn(prim.pos[2], n => prim.pos[2] = n)}
+        </div>
+        <div class="row" style="gap:3px;font-size:10px;color:var(--text-dim)"><span style="min-width:30px">rot°</span>
+          ${numIn(prim.rot?.[0] ?? 0, n => setRot(0, n))}${numIn(prim.rot?.[1] ?? 0, n => setRot(1, n))}${numIn(prim.rot?.[2] ?? 0, n => setRot(2, n))}
         </div>
       </div>
     `;

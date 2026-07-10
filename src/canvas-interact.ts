@@ -1,4 +1,4 @@
-import { snap, snapVertex15, distMM, worldToLocal, localToWorld, FURNITURE_KINDS, furnitureCorners, furnitureLocalToWorld, envScale, ENV_SCALE_MIN, ENV_SCALE_MAX } from './geometry.js';
+import { snap, snapVertex15, distMM, worldToLocal, localToWorld, FURNITURE_KINDS, furnitureCorners, furnitureLocalToWorld, furnitureWorldToLocal, resolveFurnitureDef, envScale, ENV_SCALE_MIN, ENV_SCALE_MAX } from './geometry.js';
 import { newId } from './storage.js';
 import {
   pxToMm, type View,
@@ -12,7 +12,28 @@ import {
   hitDoor, hitDoorEnd, hitWindow, hitWindowEnd,
 } from './canvas-hit.js';
 import type { Planner } from './planner.js';
-import type { Vec2 } from './types.js';
+import type { Vec2, Furniture, ObjectRecipe } from './types.js';
+
+// Auto-snap a mountable piece (coffee maker, toaster, …) onto a counter-height
+// `surface` piece it's dropped/dragged over: its center testing inside the
+// host footprint raises it to the host's top (`mountOnId` is bookkeeping only —
+// NOT live parenting; moving the host re-snaps on the next drag). Leaving every
+// surface clears a prior mount back to the floor.
+function snapFurnitureToSurface(f: { furniture: Furniture[] }, piece: Furniture,
+                                customObjects?: ObjectRecipe[]): void {
+  if (!resolveFurnitureDef(piece, customObjects).mountable) return;
+  for (const host of f.furniture) {
+    if (host.id === piece.id) continue;
+    if (!resolveFurnitureDef(host, customObjects).surface) continue;
+    const l = furnitureWorldToLocal(host.rotation, piece.x - host.x, piece.y - host.y);
+    if (Math.abs(l.x) <= host.w / 2 && Math.abs(l.y) <= host.h / 2) {
+      piece.elevation = resolveFurnitureDef(host, customObjects).ht;
+      piece.mountOnId = host.id;
+      return;
+    }
+  }
+  if (piece.mountOnId) { piece.mountOnId = null; piece.elevation = 0; }
+}
 
 const SENSOR_DEFAULTS = { fov: 120, range: 6000 };
 const MOTION_DEFAULTS = { fov: 110, range: 5000 };
@@ -268,6 +289,7 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
   const fc = hitFurnitureCorner(p, view, mm);
   if (fc) {
     p.drag = { kind: 'furnCorner', idx: fc.idx, anchor: fc.anchor };
+    p.activeFurnitureId = p.floor().furniture[fc.idx]?.id ?? null;
     canvas.style.cursor = (fc.sx * fc.sy > 0) ? 'nwse-resize' : 'nesw-resize';
     e.preventDefault(); return;
   }
@@ -283,6 +305,7 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
   if (fhi) {
     p.drag = { kind: 'furnMove', idx: fhi.idx, startMm: mm,
                start: { x: fhi.item.x, y: fhi.item.y } };
+    p.activeFurnitureId = fhi.item.id;
     canvas.style.cursor = 'grabbing'; e.preventDefault(); return;
   }
   // Door endpoint takes priority over door body so the rotate-handle works
@@ -711,7 +734,10 @@ export function onCanvasMouseUp(p: Planner, canvas: HTMLCanvasElement): void {
     p.save();
   } else if (drag.kind === 'furnMove' || drag.kind === 'furnCorner') {
     const piece = f.furniture[drag.idx];
-    if (piece) snapStairEdges(f, piece);
+    if (piece) {
+      snapStairEdges(f, piece);
+      snapFurnitureToSurface(f, piece, p.store.customObjects);
+    }
     p.save();
   } else if (drag.kind === 'bgMove' || drag.kind === 'bgCorner') {
     p.save();
@@ -868,15 +894,23 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
     return;
   }
   if (p.tool === 'furniture') {
+    // A pending custom object drops a recipe instance (kind stays 'block' as a
+    // fallback); otherwise the built-in pending kind.
+    const rec = p.pendingCustomObjectId
+      ? p.store.customObjects?.find(o => o.id === p.pendingCustomObjectId)
+      : undefined;
     const kind = p.pendingFurnitureKind;
-    const def = FURNITURE_KINDS[kind];
-    const piece = {
+    const def = rec ?? FURNITURE_KINDS[kind];
+    const piece: Furniture = {
       id: newId('fu'),
       x: snap(mm.x, 10), y: snap(mm.y, 10),
-      w: def.w, h: def.h, label: '', kind,
+      w: def.w, h: def.h, label: '', kind: rec ? 'block' : kind,
+      ...(rec ? { customKindId: rec.id } : {}),
     };
     f.furniture.push(piece);
+    p.activeFurnitureId = piece.id;
     snapStairEdges(f, piece);
+    snapFurnitureToSurface(f, piece, p.store.customObjects);
     p.save(); p.setTool('select'); p.emitConfig(); return;
   }
   if (p.tool === 'light') {

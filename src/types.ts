@@ -1,5 +1,9 @@
 // Domain types. All length units are mm unless noted.
 
+// Type-only import (erased at compile time — no runtime cycle with geometry.ts,
+// which imports the value-side FURNITURE_KINDS from here-adjacent types).
+import type { FurnitureKindDef } from './geometry.js';
+
 export interface Vec2 { x: number; y: number; }
 
 export type WallKind = 'full' | 'half' | 'railing' | 'invisible';
@@ -32,8 +36,42 @@ export type FurnitureKind =
   | 'ottoman' | 'stool' | 'plant' | 'counter' | 'island' | 'cabinet'
   // appliances
   | 'fridge' | 'stove' | 'dishwasher' | 'washer' | 'dryer' | 'microwave' | 'tv'
+  | 'coffee_maker' | 'toaster'
   // bathroom
-  | 'toilet' | 'sink' | 'bathtub' | 'shower';
+  | 'toilet' | 'sink' | 'bathtub' | 'shower'
+  // fitness
+  | 'exercise_equipment';
+
+// Contextual activity a piece of furniture anchors (Sims-style character
+// behavior — later phases dwell-trigger these). Set on the kind def (or an
+// ObjectRecipe) via `activity`.
+export type ActivityKind =
+  | 'shower' | 'bathe' | 'toilet' | 'wash_hands' | 'load_dishwasher'
+  | 'make_coffee' | 'forage_fridge' | 'watch_tv' | 'eat_at_table'
+  | 'work_at_desk' | 'exercise' | 'sleep_shared';
+
+// ── Custom object recipes ────────────────────────────────────────────────
+// A user-authored object built from a list of primitive parts. Stored in
+// Store.customObjects; the 3D renderer builds it generically, 2D draws a
+// labeled rect. Extends the furniture kind def so it carries the same
+// footprint/height/flag metadata (label, w/h/ht, seat, activity, surface, …).
+export type RecipeShape = 'box' | 'cylinder' | 'sphere' | 'cone';
+
+export interface RecipePrimitive {
+  shape: RecipeShape;
+  // mm. box: [w, ht, d]; cylinder: [rTop, rBot, ht]; sphere: [r, _, _];
+  // cone: [r, ht, _].
+  size: [number, number, number];
+  // local mm; origin = piece center at floor level, +Z = front side.
+  pos: [number, number, number];
+  rot?: [number, number, number];   // deg XYZ
+  color?: string;                    // hex
+}
+
+export interface ObjectRecipe extends FurnitureKindDef {
+  id: string;
+  primitives: RecipePrimitive[];
+}
 
 export interface Furniture {
   id: string;
@@ -45,6 +83,9 @@ export interface Furniture {
   elevation?: number; // mm the piece's base sits above the floor (upper stair
                       // flights, items on counters, wall-hung units); default 0
   locked?: boolean;   // canvas move/resize/rotate/delete disabled
+  entity_id?: string | null;  // HA binding for appliances / TV (media_player etc.)
+  customKindId?: string;      // ObjectRecipe reference (Store.customObjects); `kind` stays as fallback
+  mountOnId?: string | null;  // host surface id set by auto-snap; bookkeeping only, NOT live parenting
 }
 
 export type LightIconKind =
@@ -266,6 +307,7 @@ export interface Store {
   views3d?: SavedView3D[];    // user-saved 3D camera views
   layers2d?: Layers2D;        // active 2D layer visibility (undefined = everything on)
   layerPresets2d?: Layer2DPreset[];  // user-saved 2D layer presets
+  customObjects?: ObjectRecipe[];    // user-authored object recipes
 }
 
 // Saved 3D camera pose (scene coords, mm — floor-centered frame).

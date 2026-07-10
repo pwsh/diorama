@@ -263,7 +263,10 @@ export class ThreeView extends LitElement {
       const keyFloor = `${p.configRev}|${effPreset}`;
       if (keyFloor !== this._keyFloor) {
         this._keyFloor = keyFloor;
-        r.updateFloor(f, { ...scBase, ...(f.look3d ?? {}), preset: effPreset });
+        // customObjects edits bump configRev (via emitConfig) → keyFloor flips
+        // → the placed recipe instance rebuilds as its own live preview.
+        r.updateFloor(f, { ...scBase, ...(f.look3d ?? {}), preset: effPreset },
+          undefined, p.store.customObjects);
       }
 
       // Imported 3D model: reload text from IDB when rev changes; rebuild

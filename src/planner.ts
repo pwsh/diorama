@@ -78,6 +78,10 @@ export class Planner extends EventTarget {
   // Active environmental sensor (sidebar selection / canvas highlight)
   activeEnvId: string | null = null;
 
+  // Active furniture piece (last grabbed/dropped) — drives the 2D front-arrow
+  // chevron. Runtime only.
+  activeFurnitureId: string | null = null;
+
   // UI mode. Runtime + URL-driven, never persisted.
   //   edit  — full editor (default)
   //   kiosk — views + device interaction only; nothing editable, nothing saved
@@ -104,6 +108,10 @@ export class Planner extends EventTarget {
 
   // Which furniture kind the next drop should create. Runtime only.
   pendingFurnitureKind: import('./types.js').FurnitureKind = 'block';
+
+  // When set, the next furniture drop creates an instance of this custom
+  // object recipe (kind stays 'block' as the fallback). Runtime only.
+  pendingCustomObjectId: string | null = null;
 
   // Which wall kind the next drawn wall gets. Runtime only.
   pendingWallKind: import('./types.js').WallKind = 'full';
@@ -307,6 +315,7 @@ export class Planner extends EventTarget {
             views3d:        remote.views3d        ?? undefined,
             layers2d:       remote.layers2d       ?? undefined,
             layerPresets2d: remote.layerPresets2d ?? undefined,
+            customObjects:  remote.customObjects  ?? undefined,
           };
           // Reset transient view state to match the loaded store.
           this.activeMotionId = null;
@@ -705,6 +714,7 @@ export class Planner extends EventTarget {
     this.store.activeSensorId = null;
     this.activeMotionId = null;
     this.activeEnvId = null;
+    this.activeFurnitureId = null;
     // Reset pan/zoom — viewCenter is in world mm and a different floor has
     // a different coord space; keeping it would leave the new floor offscreen.
     this.viewCenter = null;

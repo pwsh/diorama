@@ -10,10 +10,10 @@ import {
   lightHeight, lightRadius, lightIntensity, lightIconKind, lightRotation, lightLength,
   switchHeight, switchRotation, switchSize,
   motionColor, motionIntensity, hexToInt,
-  furnitureDef, doorOpenDeltaDeg,
+  furnitureDef, resolveFurnitureDef, doorOpenDeltaDeg,
   ENV_KINDS, envKindOf, envColor, envValueText, envHeight, envScale,
 } from './geometry.js';
-import type { Door, Window as WindowType, EnvSensor } from './types.js';
+import type { Door, Window as WindowType, EnvSensor, ObjectRecipe } from './types.js';
 import { wallCutsForSegment, closedWallLoops, wallKind, WALL_KINDS, furnitureLocalToWorld, furnitureWorldToLocal, pointInPolygon as pip } from './geometry.js';
 
 export interface ZoneWorld { vertices: Vec2[]; color: number; occupied: boolean; }
@@ -639,7 +639,8 @@ export class ThreeDRenderer {
     this._targetGroup.visible = v.targets !== false;
   }
 
-  updateFloor(f: Floor, scene3d?: Scene3D, layers?: import('./types.js').Layers2D): void {
+  updateFloor(f: Floor, scene3d?: Scene3D, layers?: import('./types.js').Layers2D,
+              customObjects?: ObjectRecipe[]): void {
     if (!this._scene) return;
     this._fw = f.w; this._fd = f.d;
     this._clearGroup(this._floorGroup);
@@ -849,10 +850,10 @@ export class ThreeDRenderer {
     this._sitSpots = [];
     this._terrain = [];
     for (const fu of showFurniture ? f.furniture : []) {
-      const grp = this._buildFurniture(fu, f.furniture);
+      const grp = this._buildFurniture(fu, f.furniture, customObjects);
       this._shadowFlags(grp);
       this._floorGroup.add(grp);
-      const def = furnitureDef(fu);
+      const def = resolveFurnitureDef(fu, customObjects);
       // Stairs and landings are walkable terrain for humanoid targets.
       if (fu.kind === 'stairs' || fu.kind === 'stairs_half' || fu.kind === 'stair_landing') {
         this._terrain.push({
@@ -970,9 +971,12 @@ export class ThreeDRenderer {
   // _w mirrors world +X.
   private _buildFurniture(fu: { x: number; y: number; w: number; h: number;
                                  kind?: import('./types.js').FurnitureKind;
-                                 rotation?: number; elevation?: number },
-                          neighbors?: Furniture[]): THREE.Group {
-    const def = furnitureDef(fu);
+                                 rotation?: number; elevation?: number;
+                                 customKindId?: string },
+                          neighbors?: Furniture[],
+                          customObjects?: ObjectRecipe[]): THREE.Group {
+    const recipe = fu.customKindId ? customObjects?.find(o => o.id === fu.customKindId) : undefined;
+    const def = recipe ?? furnitureDef(fu);
     const W = fu.w, D = fu.h, HT = def.ht;
     const tint = def.color;
     // Opaque PBR materials. Furniture used to be ~55% transparent, which read
@@ -1047,7 +1051,10 @@ export class ThreeDRenderer {
     };
 
     const kind = fu.kind ?? 'block';
-    switch (kind) {
+    // Custom object recipes build from their generic primitive list, then get
+    // the SAME Sims dressing (outlines + blob) as built-in kinds below.
+    if (recipe) this._buildFromRecipe(grp, recipe);
+    else switch (kind) {
       case 'rug':
         addBox(W, HT, D, wood, 0, HT / 2, 0);
         break;
@@ -1409,6 +1416,39 @@ export class ThreeDRenderer {
         grp.add(head);
         break;
       }
+      // ── extra appliances (front = -Z) ──
+      case 'coffee_maker': {
+        const bodyD = D * 0.55;
+        addBox(W, 28, D, dark, 0, 14, 0);                                       // base slab
+        addBox(W, HT - 28, bodyD, wood, 0, 28 + (HT - 28) / 2, D / 2 - bodyD / 2);  // upright body at back
+        addBox(W * 0.9, 30, D * 0.42, wood, 0, HT - 15, -D * 0.04);             // brew head over the carafe
+        addCyl(W * 0.26, W * 0.3, HT * 0.42, glass, 0, 28 + HT * 0.21, -D * 0.12, 12);  // glass carafe
+        break;
+      }
+      case 'toaster': {
+        addBox(W, HT, D, steel, 0, HT / 2, 0);                       // chrome body
+        const slotW = W * 0.34, slotD = D * 0.5;
+        addBox(slotW, 16, slotD, dark, -W * 0.18, HT + 2, 0);        // two bread slots on top
+        addBox(slotW, 16, slotD, dark,  W * 0.18, HT + 2, 0);
+        addBox(46, HT * 0.4, 28, dark, W / 2 - 4, HT * 0.42, D * 0.18);  // side lever
+        break;
+      }
+      case 'exercise_equipment': {
+        // Treadmill: raised running deck + side rails, uprights + console at
+        // the front (-Z), matching the appliance front-faces-camera convention.
+        const deckT = 80, deckD = D * 0.72, deckZ = D * 0.12;
+        addBox(W, deckT, deckD, dark, 0, 30 + deckT / 2, deckZ);               // deck body
+        addBox(W * 0.82, 22, deckD * 0.94, screen, 0, 30 + deckT - 5, deckZ);  // dark running belt
+        const railT = 70, railH = 130;
+        addBox(railT, railH, deckD, steel, -W / 2 + railT / 2, 30 + deckT + railH / 2 - 6, deckZ);
+        addBox(railT, railH, deckD, steel,  W / 2 - railT / 2, 30 + deckT + railH / 2 - 6, deckZ);
+        const upH = HT, upZ = -D / 2 + 90;
+        addCyl(35, 35, upH, steel, -W / 2 + 70, upH / 2, upZ, 10);             // uprights
+        addCyl(35, 35, upH, steel,  W / 2 - 70, upH / 2, upZ, 10);
+        addBox(W - 90, 55, 70, steel, 0, upH - 40, upZ + 40);                  // handlebar
+        addBox(W * 0.66, HT * 0.28, 55, screen, 0, upH, upZ + 70);            // console
+        break;
+      }
       default:
         addBox(W, HT, D, wood, 0, HT / 2, 0);
     }
@@ -1427,6 +1467,29 @@ export class ThreeDRenderer {
       grp.add(blob);
     }
     return grp;
+  }
+
+  // Generic recipe builder: each primitive → a toon-material mesh. Size units
+  // are per-shape (box [w,ht,d]; cylinder [rTop,rBot,ht]; sphere [r,_,_];
+  // cone [r,ht,_]); pos/rot are local mm / deg. The caller applies the shared
+  // Sims dressing (outlines + blob) afterward, same as the built-in kinds.
+  private _buildFromRecipe(grp: THREE.Group, recipe: ObjectRecipe): void {
+    const d2r = (d: number) => d * Math.PI / 180;
+    for (const prim of recipe.primitives) {
+      const [a, b, c] = prim.size;
+      let geo: THREE.BufferGeometry;
+      switch (prim.shape) {
+        case 'cylinder': geo = new THREE.CylinderGeometry(a, b, c, 14); break;
+        case 'sphere':   geo = new THREE.SphereGeometry(a, 12, 10); break;
+        case 'cone':     geo = new THREE.ConeGeometry(a, b, 14); break;
+        case 'box':
+        default:         geo = new THREE.BoxGeometry(a, b, c); break;
+      }
+      const m = new THREE.Mesh(geo, this._mat({ color: hexToInt(prim.color ?? '#8a8a8a') }));
+      m.position.set(prim.pos[0], prim.pos[1], prim.pos[2]);
+      if (prim.rot) m.rotation.set(d2r(prim.rot[0]), d2r(prim.rot[1]), d2r(prim.rot[2]));
+      grp.add(m);
+    }
   }
 
   // poseProvider gives per-sensor mount height (mm above floor) and mount

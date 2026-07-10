@@ -1,6 +1,7 @@
 // Pure geometry helpers — no DOM, no state.
 
-import type { Vec2, Sensor, BgImage, LightIconKind, FurnitureKind, EnvKind, WallKind } from './types.js';
+import type { Vec2, Sensor, BgImage, LightIconKind, FurnitureKind, EnvKind, WallKind,
+  ActivityKind, ObjectRecipe, Furniture } from './types.js';
 
 export const MM_PER_IN = 25.4;
 export const IN_PER_FT = 12;
@@ -351,22 +352,26 @@ export interface FurnitureKindDef {
   color: number;                   // 3D tint
   rug?: boolean;                   // flat-on-floor flag
   cat?: FurnitureCat;              // sidebar grouping; default 'furniture'
+  activity?: ActivityKind;         // contextual activity this piece anchors (Sims behavior)
+  surface?: boolean;               // counter-height top other pieces can sit ON (auto-snap host)
+  mountable?: boolean;             // sits on a `surface` piece rather than the floor (auto-snap subject)
+  frontArrow?: boolean;            // show the 2D front chevron when selected; default true, set false on symmetric kinds
 }
 
 export const FURNITURE_KINDS: Record<FurnitureKind, FurnitureKindDef> = {
-  block:         { label: 'Block',         w: 600,  h: 600,  ht: 600,  back: 'none', color: 0x8d6e63 },
-  table:         { label: 'Table',         w: 1500, h: 900,  ht: 750,  back: 'none', color: 0x8d6e63 },
+  block:         { label: 'Block',         w: 600,  h: 600,  ht: 600,  back: 'none', color: 0x8d6e63, frontArrow: false },
+  table:         { label: 'Table',         w: 1500, h: 900,  ht: 750,  back: 'none', color: 0x8d6e63, activity: 'eat_at_table' },
   chair:         { label: 'Chair',         w: 500,  h: 500,  ht: 900,  seat: 450, back: 'tall', color: 0x6d4c41 },
   rocking_chair: { label: 'Rocking chair', w: 600,  h: 800,  ht: 1000, seat: 450, back: 'tall', color: 0x5d4037 },
   chaise:        { label: 'Chaise',        w: 1800, h: 750,  ht: 600,  seat: 400, back: 'low',  color: 0x795548 },
   bench:         { label: 'Bench',         w: 1500, h: 400,  ht: 450,  seat: 440, back: 'none', color: 0x6d4c41 },
-  desk:          { label: 'Desk',          w: 1400, h: 700,  ht: 750,  back: 'none', color: 0x4e342e },
+  desk:          { label: 'Desk',          w: 1400, h: 700,  ht: 750,  back: 'none', color: 0x4e342e, surface: true, activity: 'work_at_desk' },
   sofa:          { label: 'Sofa',          w: 2000, h: 900,  ht: 850,  seat: 450, back: 'tall', color: 0x37474f },
   sofa_l_left:   { label: 'Sofa · L (left)',  w: 2600, h: 1800, ht: 850, seat: 450, back: 'tall', color: 0x37474f },
   sofa_l_right:  { label: 'Sofa · L (right)', w: 2600, h: 1800, ht: 850, seat: 450, back: 'tall', color: 0x37474f },
   sofa_u:        { label: 'Sofa · U',         w: 3200, h: 2000, ht: 850, seat: 450, back: 'tall', color: 0x37474f },
-  bed:           { label: 'Bed',           w: 2000, h: 1500, ht: 500,  back: 'low',  color: 0x546e7a },
-  rug:           { label: 'Rug',           w: 2000, h: 1400, ht: 5,    back: 'none', color: 0x5d4037, rug: true },
+  bed:           { label: 'Bed',           w: 2000, h: 1500, ht: 500,  back: 'low',  color: 0x546e7a, activity: 'sleep_shared' },
+  rug:           { label: 'Rug',           w: 2000, h: 1400, ht: 5,    back: 'none', color: 0x5d4037, rug: true, frontArrow: false },
   bookshelf:     { label: 'Bookshelf',     w: 800,  h: 350,  ht: 1800, back: 'none', color: 0x3e2723 },
   // Stairs rise toward the piece's back (plan-top); rotate to aim. Full run
   // climbs a 9 ft storey; half run + landing + rotated half run composes an
@@ -375,29 +380,33 @@ export const FURNITURE_KINDS: Record<FurnitureKind, FurnitureKindDef> = {
   stairs_half:   { label: 'Stairs (half flight)', w: 1000, h: 1800, ht: 1372, back: 'none', color: 0x8d6e63 },
   stair_landing: { label: 'Stair landing',        w: 1000, h: 1000, ht: 1372, back: 'none', color: 0x8d6e63 },
   coffee_table:  { label: 'Coffee table',  w: 1100, h: 600,  ht: 450,  back: 'none', color: 0x795548 },
-  tv_stand:      { label: 'TV stand',      w: 1600, h: 450,  ht: 550,  back: 'none', color: 0x4e342e },
-  dresser:       { label: 'Dresser',       w: 1200, h: 500,  ht: 900,  back: 'none', color: 0x6d4c41 },
-  nightstand:    { label: 'Nightstand',    w: 500,  h: 400,  ht: 600,  back: 'none', color: 0x6d4c41 },
+  tv_stand:      { label: 'TV stand',      w: 1600, h: 450,  ht: 550,  back: 'none', color: 0x4e342e, surface: true },
+  dresser:       { label: 'Dresser',       w: 1200, h: 500,  ht: 900,  back: 'none', color: 0x6d4c41, surface: true },
+  nightstand:    { label: 'Nightstand',    w: 500,  h: 400,  ht: 600,  back: 'none', color: 0x6d4c41, surface: true },
   wardrobe:      { label: 'Wardrobe',      w: 1200, h: 600,  ht: 2000, back: 'none', color: 0x5d4037 },
-  ottoman:       { label: 'Ottoman',       w: 700,  h: 700,  ht: 400,  seat: 380, back: 'none', color: 0x607d8b },
-  stool:         { label: 'Stool',         w: 400,  h: 400,  ht: 650,  seat: 620, back: 'none', color: 0x6d4c41 },
-  plant:         { label: 'Plant',         w: 400,  h: 400,  ht: 1400, back: 'none', color: 0x33691e },
-  counter:       { label: 'Counter',       w: 1800, h: 650,  ht: 900,  back: 'none', color: 0x8d6e63 },
-  island:        { label: 'Island',        w: 2000, h: 1000, ht: 900,  back: 'none', color: 0x8d6e63 },
+  ottoman:       { label: 'Ottoman',       w: 700,  h: 700,  ht: 400,  seat: 380, back: 'none', color: 0x607d8b, frontArrow: false },
+  stool:         { label: 'Stool',         w: 400,  h: 400,  ht: 650,  seat: 620, back: 'none', color: 0x6d4c41, frontArrow: false },
+  plant:         { label: 'Plant',         w: 400,  h: 400,  ht: 1400, back: 'none', color: 0x33691e, frontArrow: false },
+  counter:       { label: 'Counter',       w: 1800, h: 650,  ht: 900,  back: 'none', color: 0x8d6e63, surface: true },
+  island:        { label: 'Island',        w: 2000, h: 1000, ht: 900,  back: 'none', color: 0x8d6e63, surface: true, frontArrow: false },
   cabinet:       { label: 'Cabinet',       w: 900,  h: 400,  ht: 2000, back: 'none', color: 0x5d4037 },
   // Appliances — footprints follow common US spec sizes.
-  fridge:        { label: 'Refrigerator',  w: 910,  h: 760,  ht: 1780, back: 'none', color: 0x9fa8b3, cat: 'appliance' },
+  fridge:        { label: 'Refrigerator',  w: 910,  h: 760,  ht: 1780, back: 'none', color: 0x9fa8b3, cat: 'appliance', activity: 'forage_fridge' },
   stove:         { label: 'Stove / range', w: 760,  h: 660,  ht: 910,  back: 'none', color: 0x90979e, cat: 'appliance' },
-  dishwasher:    { label: 'Dishwasher',    w: 610,  h: 620,  ht: 860,  back: 'none', color: 0x9fa8b3, cat: 'appliance' },
+  dishwasher:    { label: 'Dishwasher',    w: 610,  h: 620,  ht: 860,  back: 'none', color: 0x9fa8b3, cat: 'appliance', activity: 'load_dishwasher' },
   washer:        { label: 'Washer',        w: 690,  h: 700,  ht: 990,  back: 'none', color: 0xcfd8dc, cat: 'appliance' },
   dryer:         { label: 'Dryer',         w: 690,  h: 700,  ht: 990,  back: 'none', color: 0xcfd8dc, cat: 'appliance' },
-  microwave:     { label: 'Microwave',     w: 520,  h: 390,  ht: 320,  back: 'none', color: 0x37474f, cat: 'appliance' },
-  tv:            { label: 'TV',            w: 1450, h: 250,  ht: 1100, back: 'none', color: 0x212529, cat: 'appliance' },
+  microwave:     { label: 'Microwave',     w: 520,  h: 390,  ht: 320,  back: 'none', color: 0x37474f, cat: 'appliance', mountable: true },
+  tv:            { label: 'TV',            w: 1450, h: 250,  ht: 1100, back: 'none', color: 0x212529, cat: 'appliance', activity: 'watch_tv' },
+  coffee_maker:  { label: 'Coffee maker',  w: 250,  h: 250,  ht: 350,  back: 'none', color: 0x37474f, cat: 'appliance', activity: 'make_coffee', mountable: true },
+  toaster:       { label: 'Toaster',       w: 300,  h: 200,  ht: 220,  back: 'none', color: 0xb0bec5, cat: 'appliance', mountable: true },
   // Bathroom
-  toilet:        { label: 'Toilet',        w: 480,  h: 700,  ht: 780,  back: 'none', color: 0xf5f5f0, cat: 'bathroom' },
-  sink:          { label: 'Sink',          w: 560,  h: 470,  ht: 860,  back: 'none', color: 0xf5f5f0, cat: 'bathroom' },
-  bathtub:       { label: 'Bathtub',       w: 1520, h: 760,  ht: 560,  back: 'none', color: 0xf5f5f0, cat: 'bathroom' },
-  shower:        { label: 'Shower',        w: 910,  h: 910,  ht: 2000, back: 'none', color: 0xe3e6e8, cat: 'bathroom' },
+  toilet:        { label: 'Toilet',        w: 480,  h: 700,  ht: 780,  seat: 420, back: 'none', color: 0xf5f5f0, cat: 'bathroom', activity: 'toilet' },
+  sink:          { label: 'Sink',          w: 560,  h: 470,  ht: 860,  back: 'none', color: 0xf5f5f0, cat: 'bathroom', activity: 'wash_hands' },
+  bathtub:       { label: 'Bathtub',       w: 1520, h: 760,  ht: 560,  back: 'none', color: 0xf5f5f0, cat: 'bathroom', activity: 'bathe' },
+  shower:        { label: 'Shower',        w: 910,  h: 910,  ht: 2000, back: 'none', color: 0xe3e6e8, cat: 'bathroom', activity: 'shower' },
+  // Fitness
+  exercise_equipment: { label: 'Exercise equipment', w: 700, h: 1600, ht: 1300, back: 'none', color: 0x424242, cat: 'furniture', activity: 'exercise' },
 };
 
 export function furnitureCat(def: FurnitureKindDef): FurnitureCat { return def.cat ?? 'furniture'; }
@@ -407,6 +416,17 @@ export function furnitureKind(f: { kind?: FurnitureKind }): FurnitureKind {
 }
 export function furnitureDef(f: { kind?: FurnitureKind }): FurnitureKindDef {
   return FURNITURE_KINDS[furnitureKind(f)];
+}
+
+// Resolve the effective def for a piece: a custom recipe when `customKindId`
+// points to one, else the built-in kind def. A dangling customKindId (recipe
+// deleted) falls back to `block` so orphaned instances still render.
+export function resolveFurnitureDef(f: Furniture, customObjects?: ObjectRecipe[]): FurnitureKindDef {
+  if (f.customKindId) {
+    const rec = customObjects?.find(o => o.id === f.customKindId);
+    return rec ?? FURNITURE_KINDS.block;
+  }
+  return furnitureDef(f);
 }
 
 // Convert a world delta (dx, dy) into the piece-local frame, where rotation

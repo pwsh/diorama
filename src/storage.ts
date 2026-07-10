@@ -18,6 +18,7 @@ export function defaultStore(): Store {
     activeSensorId: null,
     coverage: true, imperial: false, showDetails: false, useRawTargets: false,
     showMotionZones: true,
+    customObjects: [],
   };
 }
 
