@@ -273,6 +273,8 @@ export interface Scene3D {
   floorColor?: string;       // hex; default '#101820'
   floorTex?: FloorTexKind;   // procedural texture overlay; default 'none'
   wallColor?: string;        // hex; default '#bbbbbb'
+  glassHouse?: boolean;      // render every OTHER floor as a translucent shell stacked at its story height
+  wallCutaway?: boolean;     // fade walls between the camera and the room (Sims dollhouse); default ON (opt-out)
 }
 
 // A named room. No polygon is persisted — the room IS whichever closed wall

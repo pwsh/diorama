@@ -47,6 +47,12 @@ export class ThreeView extends LitElement {
                          ? 'background:#2e7d32;border:1px solid #43a047;color:#e8f5e9'
                          : 'background:#1c2733;border:1px solid #33465a;color:#a5d6a7'}"
                 @click=${() => this._toggleSimsCam()}>💎 Sims</button>
+        <button title="Glass house — show every floor at once, other stories translucent"
+                style="font-size:10px;padding:3px 7px;border-radius:3px;cursor:pointer;
+                       ${p?.store.scene3d?.glassHouse
+                         ? 'background:#2e7d32;border:1px solid #43a047;color:#e8f5e9'
+                         : 'background:#1c2733;border:1px solid #33465a;color:#a5d6a7'}"
+                @click=${() => this._toggleGlassHouse()}>🏠</button>
         ${saved.length ? html`
           <select style="font-size:10px;background:#1c2733;border:1px solid #33465a;border-radius:3px;
                          color:#cfd8dc;max-width:110px"
@@ -82,6 +88,16 @@ export class ThreeView extends LitElement {
     this._simsCamOn = !this._simsCamOn;
     if (this._simsCamOn) this._renderer?.applyViewPreset('sims');
     this._renderer?.setSimsCam(this._simsCamOn);
+    this.requestUpdate();
+  }
+
+  // Glass-house toggle: flip scene3d.glassHouse (creating scene3d if absent),
+  // persist, and emit config so the ghost-floor key flips and rebuilds.
+  private _toggleGlassHouse(): void {
+    const p = this.planner;
+    if (!p.store.scene3d) p.store.scene3d = { preset: 'night' };
+    p.store.scene3d.glassHouse = !p.store.scene3d.glassHouse;
+    p.save(); p.emitConfig();
     this.requestUpdate();
   }
 
@@ -258,6 +274,7 @@ export class ThreeView extends LitElement {
   private _keyLights = '';
   private _keyZones = '';
   private _keyHalos = '';
+  private _keyGhost = '';
 
   private _tickOnce(): void {
       const r = this._renderer; if (!r || !r.loaded) return;
@@ -276,6 +293,7 @@ export class ThreeView extends LitElement {
         r.clearTransientGroups();
         this._keyFloor = this._keyDoors = this._keySensors = '';
         this._keyMotion = this._keyEnv = this._keyLights = this._keyZones = this._keyHalos = '';
+        this._keyGhost = '';
       }
 
       // Layer visibility (shared with the 2D layer flags): group-scoped
@@ -289,14 +307,22 @@ export class ThreeView extends LitElement {
       // look overrides + build-time-gated layers.
       const scBase = p.store.scene3d ?? { preset: 'night' as const };
       const effPreset = this._effectivePreset(scBase, states);
+      const scMerged = { ...scBase, ...(f.look3d ?? {}), preset: effPreset };
       const keyFloor = `${p.configRev}|${effPreset}|` +
         `${layers.furniture !== false}|${layers.bg !== false}`;
       if (keyFloor !== this._keyFloor) {
         this._keyFloor = keyFloor;
         // customObjects edits bump configRev (via emitConfig) → keyFloor flips
         // → the placed recipe instance rebuilds as its own live preview.
-        r.updateFloor(f, { ...scBase, ...(f.look3d ?? {}), preset: effPreset },
-          layers, p.store.customObjects);
+        r.updateFloor(f, scMerged, layers, p.store.customObjects);
+      }
+
+      // Glass-house ghost floors: every OTHER story as a translucent shell.
+      // Cheap to rebuild; keyed on the glassHouse flag + active floor id.
+      const keyGhost = `${p.configRev}|${!!scBase.glassHouse}|${f.id}`;
+      if (keyGhost !== this._keyGhost) {
+        this._keyGhost = keyGhost;
+        r.updateGhostFloors(p.store.floors, f.id, scMerged, p.store.customObjects);
       }
 
       // Imported 3D model: reload text from IDB when rev changes; rebuild

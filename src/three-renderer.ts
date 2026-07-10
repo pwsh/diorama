@@ -154,6 +154,9 @@ export class ThreeDRenderer {
   private _envGroup = new THREE.Group();
   private _lightGroup = new THREE.Group();
   private _targetGroup = new THREE.Group();
+  // Ghost (glass-house) floors: translucent shells of every OTHER story,
+  // stacked at their story heights. Cleared with _clearGroup (no sprites).
+  private _ghostGroup = new THREE.Group();
   private _bgTexCache: { dataUrl: string; tex: THREE.Texture } | null = null;
   private _rafId: number | null = null;
   private _fw = 8000;
@@ -216,6 +219,16 @@ export class ThreeDRenderer {
   private _nav: { cell: number; nx: number; ny: number;
                   blocked: Uint8Array; rev: number; blockedCount: number } | null = null;
   private _navRev = 0;
+
+  // Foreground wall-cutaway (Sims dollhouse). Tagged wall meshes — active-floor
+  // walls and ghost-floor walls kept in separate lists so each builder rebuilds
+  // only its own portion. Each mesh carries userData.wallCut = { mx, mz, nx, nz }
+  // (segment midpoint in scene coords + horizontal perpendicular unit vector)
+  // and userData.baseOpacity. `_cutaway` (set from updateFloor's scene3d) gates
+  // the effect; default ON (opt-out via scene3d.wallCutaway === false).
+  private _cutawayWalls: THREE.Mesh[] = [];
+  private _cutawayGhostWalls: THREE.Mesh[] = [];
+  private _cutaway = true;
 
   // Lighting rig (preset-tunable).
   private _ambient: THREE.AmbientLight | null = null;
@@ -286,7 +299,7 @@ export class ThreeDRenderer {
     this._scene.add(this._floorGroup, this._doorGroup, this._modelGroup,
                     this._zoneGroup, this._haloGroup,
                     this._sensorGroup, this._motionGroup, this._envGroup,
-                    this._lightGroup, this._targetGroup);
+                    this._lightGroup, this._targetGroup, this._ghostGroup);
 
     this._controls = new OrbitControls(this._camera, this._renderer.domElement);
     this._controls.enableDamping = true;
@@ -595,10 +608,14 @@ export class ThreeDRenderer {
   clearTransientGroups(): void {
     for (const g of [
       this._floorGroup, this._doorGroup, this._modelGroup, this._zoneGroup, this._haloGroup,
-      this._sensorGroup, this._motionGroup, this._lightGroup, this._targetGroup,
+      this._sensorGroup, this._motionGroup, this._lightGroup, this._targetGroup, this._ghostGroup,
     ]) {
       this._clearGroup(g);
     }
+    // Drop cutaway-wall references (their meshes were just disposed) so the
+    // per-frame fader can't touch stale geometry before the next rebuild.
+    this._cutawayWalls = [];
+    this._cutawayGhostWalls = [];
     // Drop persistent rigs so updateTargets rebuilds fresh on the next tick.
     for (const key of Object.keys(this._humanoids)) {
       this._disposeHumanoid(this._humanoids[key]);
@@ -880,6 +897,9 @@ export class ThreeDRenderer {
               customObjects?: ObjectRecipe[]): void {
     if (!this._scene) return;
     this._fw = f.w; this._fd = f.d;
+    // Foreground wall cutaway: default ON, opt out with wallCutaway === false.
+    this._cutaway = scene3d?.wallCutaway !== false;
+    this._cutawayWalls = [];
     // Room-name labels are Sprites whose CanvasTextures _clearGroup won't touch;
     // drop them explicitly (mirrors the _envGroup pairing in updateEnvSensors)
     // before wiping the group, or every rebuild leaks a GPU texture.
@@ -1067,6 +1087,10 @@ export class ThreeDRenderer {
           const p = this._w(a.x + ux * mid, a.y + uy * mid, (y0 + yTop) / 2);
           mesh.position.set(p.x, p.y, p.z);
           mesh.rotation.y = angle;
+          // Cutaway tag: scene-space midpoint + horizontal perpendicular (the
+          // scene-space wall direction is (-ux, uy) after the X-mirror, so its
+          // normal is (-uy, -ux)). Either sign is fine — the fader re-orients.
+          this._tagCutawayWall(mesh, p.x, p.z, -uy, -ux, this._cutawayWalls);
           group.add(mesh);
         };
         const { solids, openings } = wallCutsForSegment(a, b, f.doors ?? [], f.windows ?? []);
@@ -1188,6 +1212,162 @@ export class ThreeDRenderer {
 
     // Rebuild the humanoid navigation grid from the same walls + furniture.
     this._buildNav(f, showFurniture ? undefined : null, customObjects);
+  }
+
+  // Tag a wall mesh for the foreground-cutaway fader. Records the segment
+  // midpoint (scene XZ) + a horizontal perpendicular unit vector + the build-
+  // time opacity, and enrolls the mesh in `list` so _updateWallCutaway iterates
+  // it without a per-frame scene traversal.
+  private _tagCutawayWall(mesh: THREE.Mesh, mx: number, mz: number,
+                          nx: number, nz: number, list: THREE.Mesh[]): void {
+    const nlen = Math.hypot(nx, nz) || 1;
+    const mat = mesh.material as THREE.Material & { opacity?: number; transparent?: boolean };
+    mesh.userData.wallCut = { mx, mz, nx: nx / nlen, nz: nz / nlen };
+    mesh.userData.baseOpacity = mat.opacity ?? 1;
+    list.push(mesh);
+  }
+
+  // ── Glass-house multi-story view ─────────────────────────────────────────
+  // Render every OTHER floor as a translucent shell stacked at its story
+  // height (the ACTIVE floor is drawn live by the normal pipeline at y=0).
+  // Lightweight: loop-clipped (or full-rect) floor slab, single-box wall runs
+  // (no opening cuts), footprint furniture boxes — no outlines, blobs, shadows,
+  // or raycast targets. Each ghost floor uses ITS OWN w/d for coordinate
+  // mapping but is centered on the scene origin, so all stories line up.
+  updateGhostFloors(floors: Floor[], currentId: string, scene3d?: Scene3D,
+                    customObjects?: ObjectRecipe[]): void {
+    if (!this._scene) return;
+    this._clearGroup(this._ghostGroup);
+    this._cutawayGhostWalls = [];
+    if (!scene3d?.glassHouse) return;
+
+    const STORY_H = 3000;   // 2743 mm wall + slab
+    const curIdx = Math.max(0, floors.findIndex(fl => fl.id === currentId));
+
+    for (let i = 0; i < floors.length; i++) {
+      if (floors[i].id === currentId) continue;   // active floor is live
+      const gf = floors[i];
+      const yOff = (i - curIdx) * STORY_H;
+      const gw = gf.w, gd = gf.d;
+      // Ghost-floor world→scene map: same formula as _w but with THIS floor's
+      // dimensions (both stories centered at the origin). Inline — _w reads
+      // this._fw/_fd (the active floor's dims).
+      const gsx = (wx: number) => gw / 2 - wx;
+      const gsz = (wy: number) => wy - gd / 2;
+
+      const gGrp = new THREE.Group();
+      gGrp.position.y = yOff;
+
+      const wallColor = gf.look3d?.wallColor ?? scene3d.wallColor;
+      const floorColor = gf.look3d?.floorColor ?? scene3d.floorColor;
+
+      // Floor slab — loop-clipped when the walls trace closed loops, else a
+      // full rectangle. No stairwell cuts (ghosts stay cheap).
+      const slabMat = this._mat({
+        color: floorColor ? hexToInt(floorColor) : 0x101820,
+        transparent: true, opacity: 0.30, side: THREE.DoubleSide, depthWrite: false,
+      });
+      const loops = closedWallLoops(gf.walls ?? []);
+      if (loops.length) {
+        for (const loop of loops) {
+          const shape = new THREE.Shape();
+          loop.forEach((pt, k) => {
+            const sx = gsx(pt.x), sy = gsz(pt.y);
+            if (k === 0) shape.moveTo(sx, sy); else shape.lineTo(sx, sy);
+          });
+          shape.closePath();
+          const slab = new THREE.Mesh(new THREE.ShapeGeometry(shape), slabMat);
+          slab.rotation.x = -Math.PI / 2;
+          gGrp.add(slab);
+        }
+      } else {
+        const slab = new THREE.Mesh(new THREE.PlaneGeometry(gw, gd), slabMat);
+        slab.rotation.x = -Math.PI / 2;
+        gGrp.add(slab);
+      }
+
+      // Walls — one box per polyline segment at full run length (no opening
+      // cuts), height per wall kind. Railings/invisible skipped. Tagged for
+      // cutaway (dollhouse applies to ghost stories too).
+      const wallThick = 100;
+      for (const wall of gf.walls ?? []) {
+        if (wall.points.length < 2) continue;
+        const kind = wallKind(wall);
+        if (kind === 'invisible' || kind === 'railing') continue;
+        const kindH = WALL_KINDS[kind].h;
+        for (let s = 0; s < wall.points.length - 1; s++) {
+          const a = wall.points[s], b = wall.points[s + 1];
+          const dx = b.x - a.x, dy = b.y - a.y;
+          const len = Math.hypot(dx, dy);
+          if (len < 10) continue;
+          const ux = dx / len, uy = dy / len;
+          const angle = Math.atan2(-dx, dy);
+          const mesh = new THREE.Mesh(
+            new THREE.BoxGeometry(wallThick, kindH, len),
+            this._mat({ color: wallColor ? hexToInt(wallColor) : 0xbbbbbb,
+              transparent: true, opacity: 0.15, side: THREE.DoubleSide, depthWrite: false }));
+          const mxw = a.x + ux * len / 2, myw = a.y + uy * len / 2;
+          mesh.position.set(gsx(mxw), kindH / 2, gsz(myw));
+          mesh.rotation.y = angle;
+          this._tagCutawayWall(mesh, gsx(mxw), gsz(myw), -uy, -ux, this._cutawayGhostWalls);
+          gGrp.add(mesh);
+        }
+      }
+
+      // Furniture — simple footprint boxes (w × def.ht × h), no outlines/blobs.
+      for (const fu of gf.furniture ?? []) {
+        const def = resolveFurnitureDef(fu, customObjects);
+        const mesh = new THREE.Mesh(
+          new THREE.BoxGeometry(fu.w, def.ht, fu.h),
+          this._mat({ color: def.color, transparent: true, opacity: 0.18,
+            side: THREE.DoubleSide, depthWrite: false }));
+        mesh.position.set(gsx(fu.x), def.ht / 2 + (fu.elevation ?? 0), gsz(fu.y));
+        mesh.rotation.y = -((fu.rotation || 0) * Math.PI / 180);
+        gGrp.add(mesh);
+      }
+
+      this._ghostGroup.add(gGrp);
+    }
+  }
+
+  // ── Foreground wall cutaway (Sims dollhouse) ──────────────────────────────
+  // Fade walls that sit between the camera and the room center so an iso view
+  // sees inside. Runs per-frame from _animate (camera damping moves the camera
+  // between input events). Only dot products over the pre-collected tagged
+  // meshes — no scene traversal.
+  private _updateWallCutaway(): void {
+    if (!this._camera) return;
+    const cam = this._camera.position;
+    const camHoriz = Math.hypot(cam.x, cam.z);
+    const camLen = camHoriz || 1;
+    // Camera nearly overhead (top view) → the horizontal direction is
+    // undefined and no wall is "in front"; restore everything.
+    const overhead = camHoriz < Math.max(this._fw, this._fd) * 1.35 * 0.12;
+    const apply = (mesh: THREE.Mesh) => {
+      const cut = mesh.userData.wallCut as
+        { mx: number; mz: number; nx: number; nz: number } | undefined;
+      if (!cut) return;
+      const mat = mesh.material as THREE.Material & { opacity: number; transparent: boolean };
+      const base = (mesh.userData.baseOpacity as number) ?? 1;
+      let target = base;
+      if (this._cutaway && !overhead) {
+        // Outward normal = the perpendicular sign pointing away from origin.
+        let onx = cut.nx, onz = cut.nz;
+        if (onx * cut.mx + onz * cut.mz < 0) { onx = -onx; onz = -onz; }
+        const midLen = Math.hypot(cut.mx, cut.mz) || 1;
+        const foreground =
+          // camera on the wall's outward side (between camera and interior)
+          onx * (cam.x - cut.mx) + onz * (cam.z - cut.mz) > 0 &&
+          // wall roughly between the camera and the scene center
+          (cam.x * cut.mx + cam.z * cut.mz) / (camLen * midLen) > 0.3;
+        if (foreground) target = 0.06;
+      }
+      // Ease toward the target so walls fade rather than pop.
+      mat.opacity += (target - mat.opacity) * 0.1;
+      mat.transparent = true;
+    };
+    for (const m of this._cutawayWalls) apply(m);
+    for (const m of this._cutawayGhostWalls) apply(m);
   }
 
   // ── Humanoid navigation (collision-aware pathfinding) ────────────────────
@@ -4103,6 +4283,8 @@ export class ThreeDRenderer {
       }
     }
     if (this._controls) this._controls.update();
+    // Foreground wall cutaway — cheap per-frame dot products over tagged walls.
+    this._updateWallCutaway();
     // Spin fan rotors — angle from the absolute clock so scene rebuilds
     // (which recreate rotor groups) never jump the blade phase.
     if (this._fanRotors.length) {

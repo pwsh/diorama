@@ -1937,6 +1937,18 @@ export class Sidebar extends LitElement {
                    p.store.scene3d!.wallColor = (e.target as HTMLInputElement).value;
                  })}>
         </div>
+        <div class="row"><label>Glass house</label>
+          <input type="checkbox" .checked=${!!sc.glassHouse}
+                 @change=${(e: Event) => upd(() => {
+                   p.store.scene3d!.glassHouse = (e.target as HTMLInputElement).checked;
+                 })}>
+        </div>
+        <div class="row"><label>Wall cutaway</label>
+          <input type="checkbox" .checked=${sc.wallCutaway !== false}
+                 @change=${(e: Event) => upd(() => {
+                   p.store.scene3d!.wallCutaway = (e.target as HTMLInputElement).checked;
+                 })}>
+        </div>
         ${this._floorLookOverrides(sc)}
       </div>
     `;
