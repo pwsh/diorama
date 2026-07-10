@@ -8,17 +8,32 @@ Click anything to control it.
 
 ## Highlights
 
-- **Live presence** — first-class HLK-LD2450 mmWave support: multi-sensor,
-  multi-target tracking rendered as animated figures that walk, stand, and
-  even sit down on your furniture. Zone and object-halo editing writes back
-  to the device.
+- **The Sims, for your house** — the whole 3D view renders in a 2000-era
+  *Sims* cartoon style: flat toon shading, bold outlines, blob shadows, a
+  dimetric "Sims cam" with 45° snap, and green plumbobs over the people it's
+  tracking.
+- **Live presence with personality** — first-class HLK-LD2450 mmWave
+  support: multi-sensor, multi-target tracking rendered as animated figures
+  with plumbobs that **walk, sit down, and do contextual activities** —
+  making coffee, loading the dishwasher, watching a TV that's actually on,
+  working out, getting **censored in the shower**, and hiding under the
+  **covers** two-to-a-bed. Zone and object-halo editing writes back to the
+  device.
+- **Thought bubbles** — idle figures show time- and place-aware bubbles: a
+  late-night kitchen snack, a morning coffee, reading on the couch at night,
+  a phone in bed.
+- **Named rooms** — name the spaces your walls enclose (anchors that follow
+  the walls as you edit); labels show in 2D and 3D and feed the activity and
+  bubble systems.
 - **Real floor plans** — walls with 15° snapping and auto-welding, half
   walls, railings, doors and windows that cut real openings and swing/tilt
   with their sensors, stairs with landings, and floors clipped to your
   rooms.
-- **A full furniture catalog** — seating, sectionals, beds, casework with
-  door pulls, kitchen appliances at spec sizes, bathroom fixtures, plants,
-  rugs, stairs.
+- **A full furniture catalog + a custom object editor** — seating,
+  sectionals, beds, casework with door pulls, kitchen appliances at spec
+  sizes, counter-mounted coffee makers/toasters, bathroom fixtures, exercise
+  equipment, plants, rugs, stairs — and a **form-based editor** to build
+  your own objects from primitive parts, with the live scene as the preview.
 - **Every kind of light** — recessed cans with light shafts, pendants,
   sconces, step lights, LED strips and strings, under-cabinet lighting,
   ceiling fans that spin at the fan's actual speed, and a crackling

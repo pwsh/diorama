@@ -10,20 +10,31 @@ mmWave radar, rendered as animated figures.
 This guide covers the editing tools and every object type. For install and
 development docs see the [README](../README.md).
 
+**The look.** The 3D view renders in the style of the 2000-era *Sims* games:
+flat cel/toon shading with a few crisp light bands instead of smooth
+realistic gradients, bold cartoon outlines around furniture and figures,
+soft round "blob" shadows under everything, saturated colors, and a
+spinning green diamond **plumbob** floating over each tracked person. There
+is no photoreal mode — the whole scene commits to the cartoon look.
+
 ## Contents
 
 - [Room layout](#room-layout)
   - [Walls](#walls) · [Floor clipping](#floor-clipping) · [Doors & windows](#doors--windows) · [Stairs](#stairs) · [Locking](#locking)
+- [Rooms](#rooms)
 - [Furniture](#furniture)
+- [Custom objects](#custom-objects)
 - [Lighting](#lighting)
 - [Switches](#switches)
 - [Hotkeys](#hotkeys)
 - [View setup](#view-setup)
-  - [2D view](#2d-view) · [3D view](#3d-view) · [Kiosk & view-only modes](#kiosk--view-only-modes)
+  - [2D view](#2d-view) · [3D view](#3d-view) · [Sims cam](#sims-cam) · [Kiosk & view-only modes](#kiosk--view-only-modes)
 - [Time-of-day lighting](#time-of-day-lighting)
 - [Sensor placement](#sensor-placement)
   - [mmWave (LD2450) sensors](#mmwave-ld2450-sensors) · [Motion sensors](#motion-sensors) · [Environmental sensors](#environmental-sensors)
 - [Target rendering](#target-rendering)
+- [Activities](#activities)
+- [Thought bubbles](#thought-bubbles)
 - [Binding objects to Home Assistant](#binding-objects-to-home-assistant)
 - [Other functionality](#other-functionality)
 
@@ -127,6 +138,28 @@ stay editable, and bound lights/switches/doors still click-to-toggle. A
 
 ---
 
+## Rooms
+
+Give the spaces enclosed by your walls **names**. The **Rooms** sidebar
+section drives it: **+ Add room**, then click inside a walled area on the
+2D plan to drop the room's anchor. The name is resolved to whichever closed
+wall loop contains that anchor, so room identity survives wall edits — move
+or reshape the walls and the label follows the space it still sits in. The
+📍 button re-places an existing anchor; ✕ deletes the room.
+
+Room names show as faint labels centered in each room in both the 2D plan
+and the 3D scene.
+
+![Room labels](images/rooms.png)
+
+Names matter beyond labeling: the [activity](#activities) and
+[thought-bubble](#thought-bubbles) systems read them. In particular a room
+whose name contains **"kitchen"** (case-insensitive) is where the
+late-night snack and morning-coffee thought bubbles can appear, and a
+seated person's room is where a bound, ON **TV** makes them "watch TV".
+
+---
+
 ## Furniture
 
 Place with the **Furn** tool: pick a type in the tools panel, then click the
@@ -159,8 +192,51 @@ dishwasher, washer, dryer, microwave, TV:
 
 ![Bathroom](images/bathroom.png)
 
+**Countertop & fitness** — the **coffee maker** and **toaster** are
+*mountable*: drop one near a counter, island, or other counter-height
+surface and it snaps up onto the top instead of sitting on the floor (move
+the host and re-drag to re-snap). **Exercise equipment** (a treadmill)
+anchors the "working out" activity.
+
+![Countertop appliances and exercise equipment](images/custom-object.png)
+
 Plus rug, plant, and a plain block. Seating pieces are **sittable** — see
 [Target rendering](#target-rendering).
+
+Every piece has a defined **front** (where a chair's back, a sofa's arms, a
+bed's headboard, or an appliance's door face). Select a piece in 2D and a
+small **chevron** marks that front edge, so you can tell which way it's
+turned before you rotate it.
+
+---
+
+## Custom objects
+
+Not every object has a built-in kind — so build your own from primitive
+parts. The **Custom Objects** sidebar section holds a form editor; there is
+no code or JSON to write, and **the live 3D scene is the preview** (a new
+object is auto-dropped at the view center so you can watch it take shape as
+you type).
+
+**+ New object**, then fill in the form:
+
+- **Label**, and the overall **Width / Depth / Height** footprint (mm).
+- **Surface** / **Mountable** flags — *Surface* makes the object a
+  counter-height top that mountable pieces can snap onto; *Mountable* makes
+  this object snap onto a surface instead of the floor.
+- **Activity** — optionally anchor one of the [activities](#activities)
+  (e.g. give a home-made arcade cabinet `exercise`, or a bar its own
+  `make_coffee`).
+- **Seat** height — set it to make the object **sittable**.
+- **Parts** — add box / cylinder / sphere / cone primitives, each with a
+  size, a position relative to the object center (with **+Z = the front**),
+  an optional rotation, and a color. **+ part** adds another.
+
+![A recipe-built object](images/custom-object.png)
+
+Once defined, the object appears in the furniture kind dropdown under a
+**Custom** group and drops like any other piece. In the 2D plan custom
+objects draw as a labeled rectangle; the full part geometry renders in 3D.
 
 ---
 
@@ -265,6 +341,17 @@ the dropdown. Saved views persist to HA.
 
 The **3D Scene** sidebar section sets floor color/texture (wood, tile,
 concrete), wall color, and per-floor overrides of each ("This floor only").
+
+### Sims cam
+
+The **💎 Sims** button in the 3D button bar frames a **dimetric "Sims cam"**:
+a 45° corner-on view at the classic ~35° elevation, so two walls of a room
+are equally foreshortened and the plan reads like a doll's house. With it
+on, the camera's **rotation snaps to the nearest 45°** every time you finish
+an orbit drag — a short glide eases it onto the diagonal, keeping the tidy
+isometric feel while still letting you tilt and zoom freely. Click the
+button again to release the snap (the pose stays put). It's a runtime view
+toggle, not a saved setting.
 
 ---
 
@@ -380,9 +467,12 @@ orange handle or use the Size slider) and show as floating value labels in
 
 ## Target rendering
 
-People tracked by mmWave sensors render as animated figures, tinted per
-sensor (configurable). Motion is smoothed by a critically-damped spring so
-figures glide continuously between radar updates.
+People tracked by mmWave sensors render as animated, *Sims*-flavored stick
+figures — oversized head and hands, bold cartoon outlines, a soft round
+blob shadow on the floor below, and a spinning green **plumbob** diamond
+hovering above the head. Each figure is tinted by the sensor that sees it
+(configurable). Motion is smoothed by a critically-damped spring so figures
+glide continuously between radar updates.
 
 **In motion** — the walk cycle is driven by actual on-screen displacement:
 cadence and stride match ground speed (no foot-skating), the body faces the
@@ -406,12 +496,86 @@ pose.
 
 ---
 
+## Activities
+
+Beyond walking, standing, and sitting, figures fall into **contextual
+activities** the way Sims do. When a tracked person lingers near a piece of
+furniture that anchors an activity (about 1.2 s of near-stillness), they
+ease into a matching pose. Move away — or start moving briskly — and they
+stand back up.
+
+![Several activities at once](images/activities.png)
+
+| Trigger (dwell near / on…) | Behavior |
+|---|---|
+| In a **shower** | figure rendered blurred (censored) |
+| Idle in a **bathtub** | blurred, bathing |
+| Idle at a **toilet** | blurred, seated |
+| At a **sink** | washing hands (scrubbing) |
+| At a **dishwasher** | loading it (bends down and up) |
+| At a **coffee maker** | making coffee |
+| At a **refrigerator** | looking for food |
+| Near **exercise equipment** | working out |
+| Seated in a room whose **TV** is ON | watching TV |
+| Seated at a **table** | eating a meal |
+| Seated at a **desk** | working |
+| **Two people** in one **bed** | hidden under the covers, sheets breathing |
+
+**Entity-gated activities.** A few activities only look right while the
+appliance is actually running, so they read live HA state: **loading the
+dishwasher** and **making coffee** engage only when the bound entity is on,
+and **watching TV** needs a *bound, ON* TV in the seated person's room.
+Bind these via the **🔗 Bind** row in the piece's furniture editor (the
+dishwasher/coffee maker take a `switch`/`sensor`, the TV a `media_player`).
+An unbound appliance never triggers its activity on its own.
+
+**Privacy blur.** Shower, bathtub, and toilet activities replace the figure
+with a pixelated silhouette so a bathroom on a wall-tablet dashboard stays
+decent — you still see *someone is there*, just not the details.
+
+![Privacy blur in the bathroom](images/privacy-blur.png)
+
+**Two in a bed.** When two people settle into the footprint of a single
+bed, both rigs hide and a rumpled blanket rises over them and gently
+breathes.
+
+![Two people under the covers](images/bed-covers.png)
+
+---
+
+## Thought bubbles
+
+Idle figures sometimes show a **thought bubble** — a little comic cloud with
+a glyph — chosen from the time of day (see
+[Time-of-day lighting](#time-of-day-lighting); the same day/dusk/night sun
+signal drives a finer morning / day / evening / night / late-night bucket)
+and where they are:
+
+| When & where | Bubble |
+|---|---|
+| Late night / night, standing idle in a **kitchen** | 🍪 snack |
+| Morning, standing idle in a **kitchen** | ☕ coffee |
+| Evening / night, **seated** (with no TV on) | 📖 reading |
+| Sole person idling in a **bed** | 📱 phone |
+
+Bubbles are deliberately quiet: an **engaged [activity](#activities) or a
+privacy blur suppresses the bubble** (the pose already tells the story), a
+person hidden under bed covers shows nothing, and a candidate glyph must
+hold steady for ~2.5 s before it actually pops in — so bubbles don't
+flicker as someone drifts around.
+
+![A reading thought bubble](images/thought-bubble.png)
+
+---
+
 ## Binding objects to Home Assistant
 
 Every placeable binds through the **entity picker** — search by entity,
 friendly name, or device; filter by domain or HA device. Ways in:
 
-- The 🔗 **Bind** button on any item's sidebar row/editor.
+- The 🔗 **Bind** button on any item's sidebar row/editor — including
+  **furniture**: bind a dishwasher/coffee maker or a TV so its
+  [activity](#activities) reflects real HA state.
 - **Double-click** an unbound light/switch (2D or 3D) or any env sensor.
 - mmWave sensors bind to a **device** (not an entity) via the HA Device
   dropdown — all of the device's zones/objects/pose entities are discovered
@@ -435,8 +599,10 @@ Connection settings live per-device.
   set opacity, lock it.
 - **Sweet Home 3D import** — import an OBJ/MTL export as a 3D backdrop
   (stored locally in the browser; placement syncs via HA).
-- **Simple/complex rendering** — the 3D renderer uses filmic tone mapping
-  and image-based lighting; day preset casts real sun shadows.
+- **Cartoon rendering** — the 3D view is drawn entirely in a 2000-era
+  *Sims* style: flat toon/cel shading, inverted-hull cartoon outlines, soft
+  blob shadows (no real shadow maps), saturated colors, and plumbobs over
+  tracked people. There is no photoreal mode.
 - **Units** — everything is millimeters internally; the topbar toggles
   imperial display.
 - **Details toggle** — shows per-target tooltips (position, speed, distance)

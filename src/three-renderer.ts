@@ -146,6 +146,11 @@ export class ThreeDRenderer {
   private _rafId: number | null = null;
   private _fw = 8000;
   private _fd = 6000;
+  // Sims cam: when on, the camera azimuth snaps to the nearest 45° after each
+  // orbit gesture (an eased per-frame glide toward `_snapAzimuth`). Polar angle
+  // is left wherever the user put it — only azimuth locks.
+  private _simsCam = false;
+  private _snapAzimuth: number | null = null;
   private _ZONE_H = 305;  // 1 ft — low outlines that don't wall off the room
   private _OBJ_H = 900;
   private _onFixtureClick: ((info: { kind: 'light' | 'switch'; entity_id: string | null; fixtureId: string }) => void) | null = null;
@@ -271,6 +276,18 @@ export class ThreeDRenderer {
     this._controls.minDistance = 1000;
     this._controls.maxDistance = 45000;
     this._controls.update();
+
+    // Sims cam azimuth snap: after any orbit gesture ends, if the snap mode is
+    // on, pick the nearest 45° azimuth about the target and let `_animate`
+    // glide there. Registered once; gated on the runtime `_simsCam` flag.
+    this._controls.addEventListener('end', () => {
+      if (!this._simsCam || !this._camera || !this._controls) return;
+      const t = this._controls.target;
+      const az = Math.atan2(this._camera.position.x - t.x,
+                            this._camera.position.z - t.z);
+      const step = Math.PI / 4;
+      this._snapAzimuth = Math.round(az / step) * step;
+    });
 
     // Recover from iOS Safari context loss without a full reload.
     this._renderer.domElement.addEventListener('webglcontextlost', e => {
@@ -598,9 +615,23 @@ export class ThreeDRenderer {
   }
 
   // Built-in camera views framed to the current floor extents. 'front' is
-  // the scene -Z side, which matches the bottom edge of the 2D plan.
-  applyViewPreset(kind: 'iso' | 'top' | 'front' | 'back' | 'left' | 'right'): void {
+  // the scene -Z side, which matches the bottom edge of the 2D plan. 'sims' is
+  // a dimetric-feel pose (45° azimuth, ~35.26° elevation = atan(1/√2)) framed
+  // on the floor center at eye height — pair with setSimsCam(true) for the snap.
+  applyViewPreset(kind: 'iso' | 'top' | 'front' | 'back' | 'left' | 'right' | 'sims'): void {
     const d = Math.max(this._fw, this._fd) * 1.35;
+    if (kind === 'sims') {
+      // Dimetric: azimuth 45°, elevation atan(1/√2). Horizontal radius r and
+      // height h satisfy h/r = 1/√2, |(r,h)| = d.
+      const el = Math.atan(1 / Math.SQRT2);
+      const r = d * Math.cos(el), h = d * Math.sin(el);
+      const a = Math.PI / 4;
+      const target: [number, number, number] = [0, 600, 0];
+      this.setCameraView(
+        [target[0] - r * Math.sin(a), target[1] + h, target[2] - r * Math.cos(a)],
+        target);
+      return;
+    }
     const views: Record<string, [number, number, number]> = {
       iso:   [-d * 0.75, d * 0.75, -d * 0.75],
       top:   [0, d * 1.6, -d * 0.02],
@@ -612,6 +643,21 @@ export class ThreeDRenderer {
     const v = views[kind] ?? views.iso;
     this.setCameraView(v, [0, 0, 0]);
   }
+
+  // Toggle Sims-cam azimuth snapping. Turning it on snaps immediately from the
+  // current pose; turning it off cancels any in-flight glide.
+  setSimsCam(on: boolean): void {
+    this._simsCam = on;
+    if (!on) { this._snapAzimuth = null; return; }
+    if (!this._camera || !this._controls) return;
+    const t = this._controls.target;
+    const az = Math.atan2(this._camera.position.x - t.x,
+                          this._camera.position.z - t.z);
+    const step = Math.PI / 4;
+    this._snapAzimuth = Math.round(az / step) * step;
+  }
+
+  simsCamOn(): boolean { return this._simsCam; }
 
   // Surface height (mm) under a world point: the highest stair tread or
   // landing containing it, else the floor (0). Stair treads quantize to the
@@ -3587,6 +3633,24 @@ export class ThreeDRenderer {
 
   private _animate = (): void => {
     this._rafId = requestAnimationFrame(this._animate);
+    // Sims-cam azimuth glide: rotate the camera about the target toward the
+    // snap goal, easing the shortest arc. Cleared once within ~0.5°.
+    if (this._snapAzimuth != null && this._camera && this._controls) {
+      const t = this._controls.target;
+      const dx = this._camera.position.x - t.x, dz = this._camera.position.z - t.z;
+      const cur = Math.atan2(dx, dz);
+      let delta = this._snapAzimuth - cur;
+      while (delta > Math.PI) delta -= 2 * Math.PI;
+      while (delta < -Math.PI) delta += 2 * Math.PI;
+      if (Math.abs(delta) < 0.009) {   // ~0.5°
+        this._snapAzimuth = null;
+      } else {
+        const a = cur + delta * 0.2;   // eased step
+        const r = Math.hypot(dx, dz);
+        this._camera.position.x = t.x + r * Math.sin(a);
+        this._camera.position.z = t.z + r * Math.cos(a);
+      }
+    }
     if (this._controls) this._controls.update();
     // Spin fan rotors — angle from the absolute clock so scene rebuilds
     // (which recreate rotor groups) never jump the blade phase.

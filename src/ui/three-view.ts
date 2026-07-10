@@ -18,6 +18,7 @@ export class ThreeView extends LitElement {
   private _renderer: ThreeDRenderer | null = null;
   private _ro: ResizeObserver | null = null;
   private _raf = 0;
+  private _simsCamOn = false;   // runtime-only Sims-cam azimuth-snap toggle
 
   protected override createRenderRoot() { return this; }
 
@@ -40,6 +41,12 @@ export class ThreeView extends LitElement {
         ${btn('Back', 'Back elevation', 'back')}
         ${btn('Left', 'Left elevation', 'left')}
         ${btn('Right', 'Right elevation', 'right')}
+        <button title="Sims cam — dimetric view with 45° azimuth snap on orbit"
+                style="font-size:10px;padding:3px 7px;border-radius:3px;cursor:pointer;
+                       ${this._simsCamOn
+                         ? 'background:#2e7d32;border:1px solid #43a047;color:#e8f5e9'
+                         : 'background:#1c2733;border:1px solid #33465a;color:#a5d6a7'}"
+                @click=${() => this._toggleSimsCam()}>💎 Sims</button>
         ${saved.length ? html`
           <select style="font-size:10px;background:#1c2733;border:1px solid #33465a;border-radius:3px;
                          color:#cfd8dc;max-width:110px"
@@ -67,6 +74,15 @@ export class ThreeView extends LitElement {
         ` : nothing}
       </div>
     `;
+  }
+
+  // Toggle Sims cam: first click frames the dimetric preset and enables the
+  // 45°-azimuth snap; second click releases the snap (leaving the pose alone).
+  private _toggleSimsCam(): void {
+    this._simsCamOn = !this._simsCamOn;
+    if (this._simsCamOn) this._renderer?.applyViewPreset('sims');
+    this._renderer?.setSimsCam(this._simsCamOn);
+    this.requestUpdate();
   }
 
   private _saveCurrentView(): void {

@@ -76,26 +76,28 @@ Sims — contextual activities near objects, named rooms, and thought bubbles.
   replace shadow maps, inverted-hull outlines, plumbob, bigger head/hands.
   Fixed pre-existing coincident-face z-fights the flat shading exposed (sofa
   plinth/armrest, bed blanket/mattress).
-- [ ] **Phase 2 — Object library.** `FurnitureKindDef` metadata
+- [x] **Phase 2 — Object library.** `FurnitureKindDef` metadata
   (activity/surface/mountable/frontArrow), `ObjectRecipe` + generic 3D recipe
   builder, `Store.customObjects` + form-based sidebar editor, new kinds
   (`coffee_maker`, `toaster`, `exercise_equipment`), 2D front chevron,
   surface auto-snap on drop, `Furniture.entity_id` binding UI.
-- [ ] **Phase 3 — Rooms + plumbing.** `Floor.rooms` + click-to-name UI + 2D/3D
+- [x] **Phase 3 — Rooms + plumbing.** `Floor.rooms` + click-to-name UI + 2D/3D
   labels, `src/time-of-day.ts`, activity-anchor collection, SitSpot roomId /
   host-activity tagging, `_floorGroup` sprite-disposal pairing fix.
-- [ ] **Phase 4 — Solo activities.** ActivityContext per tick; dwell-triggered
+- [x] **Phase 4 — Solo activities.** ActivityContext per tick; dwell-triggered
   activities; poses for wash_hands / load_dishwasher / make_coffee /
   forage_fridge / exercise; privacy blur for shower / bathtub / toilet;
   `_disposeHumanoid` sprite branch.
-- [ ] **Phase 5 — Contextual seated activities + shared bed.** watch_tv
+- [x] **Phase 5 — Contextual seated activities + shared bed.** watch_tv
   (room-scoped TV state), eat_at_table / work_at_desk (seat-adjacency), 2-in-a-
   bed covers with breathing displacement.
-- [ ] **Phase 6 — Thought bubbles.** Bubble sprite per humanoid, priority
+- [x] **Phase 6 — Thought bubbles.** Bubble sprite per humanoid, priority
   rules (suppressed during activities; snack / reading / phone / coffee
   heuristics on time bucket + room name substring), 2.5 s hysteresis.
-- [ ] **Phase 7 — Sims cam + docs + release.** Dimetric camera preset with 45°
-  azimuth snap, GUIDE.md / info.md refresh with new screenshots, release cut.
+- [x] **Phase 7 — Sims cam + docs + release.** Dimetric camera preset with 45°
+  azimuth snap (`applyViewPreset('sims')` + `setSimsCam`), GUIDE.md / info.md /
+  CLAUDE.md refresh with new Sims-style screenshots. (Release cut handled
+  outside this repo.)
 
 ## Verification
 
