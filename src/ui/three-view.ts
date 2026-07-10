@@ -5,7 +5,7 @@ import { customElement } from './define.js';
 // all of three.js, ~600 kB) is loaded lazily in firstUpdated so the 2D-only
 // startup path never downloads it.
 import type { ThreeDRenderer, ZoneWorld, HaloWorld, TargetWorld, ActivityContext } from '../three-renderer.js';
-import { localToWorld, transformVerts, pointInPolygon, sensorColor, hexToInt } from '../geometry.js';
+import { localToWorld, transformVerts, pointInPolygon, sensorColor, hexToInt, motionColor } from '../geometry.js';
 import { resolveScenePreset, resolveTimeBucket } from '../time-of-day.js';
 import { loadModel } from '../model-store.js';
 import { newId } from '../storage.js';
@@ -53,6 +53,12 @@ export class ThreeView extends LitElement {
                          ? 'background:#2e7d32;border:1px solid #43a047;color:#e8f5e9'
                          : 'background:#1c2733;border:1px solid #33465a;color:#a5d6a7'}"
                 @click=${() => this._toggleGlassHouse()}>🏠</button>
+        <button title="Auto-follow — camera tracks and frames the active people"
+                style="font-size:10px;padding:3px 7px;border-radius:3px;cursor:pointer;
+                       ${p?.store.scene3d?.autoFollow
+                         ? 'background:#2e7d32;border:1px solid #43a047;color:#e8f5e9'
+                         : 'background:#1c2733;border:1px solid #33465a;color:#a5d6a7'}"
+                @click=${() => this._toggleAutoFollow()}>🎥</button>
         ${saved.length ? html`
           <select style="font-size:10px;background:#1c2733;border:1px solid #33465a;border-radius:3px;
                          color:#cfd8dc;max-width:110px"
@@ -97,6 +103,16 @@ export class ThreeView extends LitElement {
     const p = this.planner;
     if (!p.store.scene3d) p.store.scene3d = { preset: 'night' };
     p.store.scene3d.glassHouse = !p.store.scene3d.glassHouse;
+    p.save(); p.emitConfig();
+    this.requestUpdate();
+  }
+
+  // Auto-follow toggle: flip scene3d.autoFollow (creating scene3d if absent),
+  // persist, and emit config. The renderer reads the flag each tick.
+  private _toggleAutoFollow(): void {
+    const p = this.planner;
+    if (!p.store.scene3d) p.store.scene3d = { preset: 'night' };
+    p.store.scene3d.autoFollow = !p.store.scene3d.autoFollow;
     p.save(); p.emitConfig();
     this.requestUpdate();
   }
@@ -302,6 +318,9 @@ export class ThreeView extends LitElement {
       const layers = p.store.layers2d ?? {};
       r.setLayerVisibility(layers);
 
+      // Auto-follow camera flag (cheap; the renderer does the per-frame easing).
+      r.setAutoFollow(!!p.store.scene3d?.autoFollow);
+
       // Floor / walls / furniture / bg: structural + effective lighting
       // preset (auto modes flip it as the sun/lux sensor moves) + per-floor
       // look overrides + build-time-gated layers.
@@ -450,9 +469,28 @@ export class ThreeView extends LitElement {
             const sl = lerp[i];
             if (!sl.active) continue;
             const wp = localToWorld(s, sl.cx, sl.cy);
-            targets.push({ key: `${s.id}_${i}`, x: wp.x, y: wp.y, color: tColor });
+            // Edge-of-coverage flag (drives the despawn style — see updateTargets).
+            // Sensor-local frame: cy = distance ahead, cx = lateral, so the
+            // bearing off boresight is atan2(cx, cy) and range is hypot (matches
+            // the 2D coverage-wedge convention in canvas-render).
+            const dist = Math.hypot(sl.cx, sl.cy);
+            const range = s.range ?? 6000;
+            const halfFov = (s.fov ?? 120) / 2;
+            const bearing = Math.abs(Math.atan2(sl.cx, sl.cy) * 180 / Math.PI);
+            const edge = dist > range - 600 || Math.abs(bearing - halfFov) < 8;
+            targets.push({ key: `${s.id}_${i}`, x: wp.x, y: wp.y, color: tColor, edge });
           }
         }
+      }
+      // AI avatars: each motion sensor with `avatar` on whose bound entity is
+      // firing projects a synthetic wandering target anchored at the sensor
+      // position. The renderer's AI controller owns the actual movement (see
+      // updateTargets); x/y here is only the spawn/wander anchor. Synthetic
+      // targets never set `edge`, so presence-off runs the slow fade-out.
+      for (const m of f.motionSensors) {
+        if (!m.avatar || !m.entity_id) continue;
+        if (states[m.entity_id]?.state !== 'on') continue;
+        targets.push({ key: 'ai_' + m.id, x: m.x, y: m.y, color: hexToInt(motionColor(m)), ai: true });
       }
       // Zones / halos rebuild only when shape or occupancy changes — not on
       // every target movement frame.

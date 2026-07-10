@@ -180,10 +180,16 @@ export class Canvas2D extends LitElement {
     const toEvt = (t: Touch): MouseEvent => new MouseEvent('mousemove', {
       clientX: t.clientX, clientY: t.clientY, bubbles: false,
     });
+    // Keep touches from bubbling to HA frontend — its drawer interprets
+    // rightward swipes (from the left screen edge) as "open sidebar" and hijacks
+    // 2-finger pans. EXCEPTION: a gesture STARTING within 24 px of the window's
+    // left edge is left to bubble so an intentional edge-swipe still opens the
+    // drawer. `touchStopping` latches at touchstart (true only when every touch
+    // point clears the edge) and gates the stopPropagation on later events.
+    let touchStopping = false;
     this._canvas.addEventListener('touchstart', e => {
-      // Never let touches bubble to HA frontend — its drawer interprets
-      // rightward swipes as "open sidebar" and hijacks 2-finger pans.
-      e.stopPropagation();
+      touchStopping = Array.from(e.touches).every(t => t.clientX > 24);
+      if (touchStopping) e.stopPropagation();
       if (e.touches.length === 1 && !this._pinch) {
         e.preventDefault();
         onCanvasMouseDown(this.planner, this._canvas, this._view, toEvt(e.touches[0]));
@@ -204,7 +210,7 @@ export class Canvas2D extends LitElement {
       }
     }, { passive: false });
     this._canvas.addEventListener('touchmove', e => {
-      e.stopPropagation();
+      if (touchStopping) e.stopPropagation();
       if (this._pinch && e.touches.length >= 2) {
         e.preventDefault();
         const t1 = e.touches[0], t2 = e.touches[1];
@@ -254,7 +260,8 @@ export class Canvas2D extends LitElement {
       }
     }, { passive: false });
     const endPinchOrDrag = (e: TouchEvent) => {
-      e.stopPropagation();
+      if (touchStopping) e.stopPropagation();
+      if (e.touches.length === 0) touchStopping = false;
       if (this._pinch) {
         if (e.touches.length >= 2) return;
         if (e.touches.length === 1) {
@@ -279,7 +286,8 @@ export class Canvas2D extends LitElement {
     // App WebViews fire touchcancel when the OS steals the gesture
     // (notification shade, back-swipe). Without this the pinch state wedges.
     this._canvas.addEventListener('touchcancel', e => {
-      e.stopPropagation();
+      if (touchStopping) e.stopPropagation();
+      touchStopping = false;
       this._pinch = null;
       if (e.touches.length === 0) onCanvasMouseUp(this.planner, this._canvas);
     });

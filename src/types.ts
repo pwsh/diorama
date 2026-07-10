@@ -48,7 +48,8 @@ export type FurnitureKind =
 export type ActivityKind =
   | 'shower' | 'bathe' | 'toilet' | 'wash_hands' | 'load_dishwasher'
   | 'make_coffee' | 'forage_fridge' | 'watch_tv' | 'eat_at_table'
-  | 'work_at_desk' | 'exercise' | 'sleep_shared';
+  | 'work_at_desk' | 'exercise' | 'sleep_shared'
+  | 'browse_bookshelf' | 'tend_plant';
 
 // ── Custom object recipes ────────────────────────────────────────────────
 // A user-authored object built from a list of primitive parts. Stored in
@@ -86,6 +87,8 @@ export interface Furniture {
   entity_id?: string | null;  // HA binding for appliances / TV (media_player etc.)
   customKindId?: string;      // ObjectRecipe reference (Store.customObjects); `kind` stays as fallback
   mountOnId?: string | null;  // host surface id set by auto-snap; bookkeeping only, NOT live parenting
+  sharedBedCovers?: boolean;  // bed only: two-in-bed shared-covers effect (default/undefined = on).
+                              // false → occupants lie side by side, no blanket lump.
 }
 
 export type LightIconKind =
@@ -191,6 +194,7 @@ export interface MotionSensor {
   entity_id: string | null;  // HA binary_sensor entity
   color?: string;            // hex; default '#ba68c8'
   intensity?: number;        // 0..2 multiplier on highlight fill/glow; default 1
+  avatar?: boolean;          // 3D: project a wandering AI person while presence is on; default off
   locked?: boolean;          // canvas move/rotate/delete disabled
 }
 
@@ -275,6 +279,7 @@ export interface Scene3D {
   wallColor?: string;        // hex; default '#bbbbbb'
   glassHouse?: boolean;      // render every OTHER floor as a translucent shell stacked at its story height
   wallCutaway?: boolean;     // fade walls between the camera and the room (Sims dollhouse); default ON (opt-out)
+  autoFollow?: boolean;      // camera auto-frames active people (eases; manual orbit pauses it 6 s); default off
 }
 
 // A named room. No polygon is persisted — the room IS whichever closed wall

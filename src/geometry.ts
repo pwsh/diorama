@@ -395,7 +395,7 @@ export const FURNITURE_KINDS: Record<FurnitureKind, FurnitureKindDef> = {
   sofa_u:        { label: 'Sofa · U',         w: 3200, h: 2000, ht: 850, seat: 450, back: 'tall', color: 0x37474f },
   bed:           { label: 'Bed',           w: 2000, h: 1500, ht: 500,  back: 'low',  color: 0x546e7a, activity: 'sleep_shared' },
   rug:           { label: 'Rug',           w: 2000, h: 1400, ht: 5,    back: 'none', color: 0x5d4037, rug: true, frontArrow: false },
-  bookshelf:     { label: 'Bookshelf',     w: 800,  h: 350,  ht: 1800, back: 'none', color: 0x3e2723 },
+  bookshelf:     { label: 'Bookshelf',     w: 800,  h: 350,  ht: 1800, back: 'none', color: 0x3e2723, activity: 'browse_bookshelf' },
   // Stairs rise toward the piece's back (plan-top); rotate to aim. Full run
   // climbs a 9 ft storey; half run + landing + rotated half run composes an
   // L or U staircase.
@@ -409,7 +409,7 @@ export const FURNITURE_KINDS: Record<FurnitureKind, FurnitureKindDef> = {
   wardrobe:      { label: 'Wardrobe',      w: 1200, h: 600,  ht: 2000, back: 'none', color: 0x5d4037 },
   ottoman:       { label: 'Ottoman',       w: 700,  h: 700,  ht: 400,  seat: 380, back: 'none', color: 0x607d8b, frontArrow: false },
   stool:         { label: 'Stool',         w: 400,  h: 400,  ht: 650,  seat: 620, back: 'none', color: 0x6d4c41, frontArrow: false },
-  plant:         { label: 'Plant',         w: 400,  h: 400,  ht: 1400, back: 'none', color: 0x33691e, frontArrow: false },
+  plant:         { label: 'Plant',         w: 400,  h: 400,  ht: 1400, back: 'none', color: 0x33691e, frontArrow: false, activity: 'tend_plant' },
   counter:       { label: 'Counter',       w: 1800, h: 650,  ht: 900,  back: 'none', color: 0x8d6e63, surface: true },
   island:        { label: 'Island',        w: 2000, h: 1000, ht: 900,  back: 'none', color: 0x8d6e63, surface: true, frontArrow: false },
   cabinet:       { label: 'Cabinet',       w: 900,  h: 400,  ht: 2000, back: 'none', color: 0x5d4037 },

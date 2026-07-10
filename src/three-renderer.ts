@@ -18,7 +18,20 @@ import { wallCutsForSegment, closedWallLoops, wallKind, WALL_KINDS, furnitureLoc
 
 export interface ZoneWorld { vertices: Vec2[]; color: number; occupied: boolean; }
 export interface HaloWorld { x: number; y: number; radius: number; occupied: boolean; }
-export interface TargetWorld { key: string; x: number; y: number; color: number; }
+export interface TargetWorld {
+  key: string; x: number; y: number; color: number;
+  // Optional (additive): the raw target sits near the sensor's coverage edge
+  // (range fringe or fov limit). Used by the despawn logic — a target that
+  // vanishes while fast-moving at the edge dropped out of coverage (walked
+  // out of frame → FAST scale-out); one that vanishes mid-coverage more likely
+  // sat still and stopped reflecting (→ slow 10 s opacity fade).
+  edge?: boolean;
+  // Optional (additive): this is a synthetic AI avatar (from a presence sensor
+  // with `avatar` on), not a radar target. The renderer's AI controller owns a
+  // virtual raw position that it rewrites into x/y each frame; the anchor passed
+  // in is the sensor location. See _advanceAi.
+  ai?: boolean;
+}
 
 // Per-frame context for the Sims-style activity system. Built cheaply every
 // tick in three-view._tickOnce and passed to updateTargets. Optional so a
@@ -47,9 +60,29 @@ interface ActivityAnchor {
   x: number; z: number;
   r: number;
   facing: number;
+  standOff: number;     // mm from the anchor center along +facing to the stand
+                        // point — clears the footprint front face + a person's
+                        // width so the rig never renders INSIDE the appliance.
   kind: ActivityKind;
   roomId: string | null;
   hasEntity: boolean;   // furniture has a bound HA entity (gates entity-driven kinds)
+}
+
+// AI-avatar controller state for a synthetic presence-sensor target. Owns a
+// virtual RAW position (world mm) that _advanceAi rewrites into the target's
+// x/y each frame, so the whole downstream pipeline (nav / dwell / sit /
+// activity / bubbles) treats it exactly like radar truth. A simple 3-state
+// machine: WANDER (walking a planned path to a goal) → IDLE (holding still so
+// the dwell systems can capture it) → ENGAGED (frozen while sit/activity/lie
+// owns the rig) → back to WANDER when the freeze timer expires.
+interface AiState {
+  x: number; y: number;               // virtual raw position, world mm
+  goalX: number; goalY: number;       // current wander goal (last path waypoint)
+  state: 'wander' | 'idle' | 'engaged';
+  timer: number;                      // seconds left in idle / engaged
+  path: { x: number; y: number }[] | null;  // world-mm waypoints toward the goal
+  speed: number;                      // m/s for the current leg (0.55..1.0)
+  anchorX: number; anchorY: number;   // sensor position (goal search center)
 }
 
 interface Humanoid {
@@ -105,6 +138,16 @@ interface Humanoid {
   // logic (sit/activity/dwell/bubbles) keeps reading the RAW radar position.
   navX: number;        // rendered walk position, scene coords (like p.x/p.z)
   navZ: number;
+  // Carrot-chaser smoothing: `carrot*` is a point that slides ALONG the route
+  // polyline by arc-length at the seek speed (turning corners exactly on the
+  // line, never popping). nav then chases the carrot with a critically damped
+  // spring (`nvx`/`nvz` = spring velocity, same math as Planner.stepLerp) so
+  // rendered motion — and the gait/facing derived from it — stays
+  // velocity-continuous through waypoint transitions.
+  carrotX: number;
+  carrotZ: number;
+  nvx: number;
+  nvz: number;
   rawVx: number;       // smoothed RAW-target velocity (mm/s) — drives triggers
   rawVz: number;
   rawLastX: number;    // previous RAW target position (scene coords)
@@ -112,6 +155,44 @@ interface Humanoid {
   path: { x: number; z: number }[] | null;  // scene-coord waypoints, walk order
   pathRev: number;     // _nav.rev the cached path was built against (-1 = none)
   goalCell: number;    // grid index the cached path targets (-1 = none)
+  // Genuinely-unreachable-goal handling: `stuckT` accumulates seconds the goal
+  // region differs from the rig's region (radar sees the person through a wall
+  // into a room nav can't reach). Past a threshold the rig fades out fast and
+  // respawns snapped into the goal region (`respawnPhase` 1 = fading out).
+  stuckT: number;
+  respawnPhase: number;
+  // Lay-in-bed pose (Bed feature): eased 0 (upright) .. 1 (lying flat). `lieBedId`
+  // is the bed footprint currently laid in (retained while easing back up).
+  lie: number;
+  lieBedId: string | null;
+  // Despawn bookkeeping (edge-aware): `lastEdge`/`lastRawSpeed` snapshot the last
+  // seen frame; `despawnMode` is decided once when the target first goes missing
+  // ('fast' scale-out for a fast edge exit, 'slow' 10 s opacity fade otherwise).
+  lastEdge: boolean;
+  lastRawSpeed: number;
+  despawnMode: 'fast' | 'slow' | null;
+  fadeAlpha: number;   // slow-despawn opacity multiplier (1 = fully opaque)
+  // Per-rig CLONE of the shared outline material so a slow opacity fade can drop
+  // this rig's outline alpha without touching every other rig's shells. Disposed
+  // in _disposeHumanoid (guarded: never the shared _outlineMaterial).
+  outlineMat: THREE.MeshBasicMaterial;
+  // ── Idle fidgets. Overlays that blend in only while the rig stands still
+  // (idleBlend eases 0→1 on a standing-idle gate). The ambient look-around scan
+  // + weight-shift sway are always on while idle; `fidgetKind` is a one-shot
+  // pose (stretch / phone) chosen by the picker every 8-20 s; `waveT` runs a
+  // one-shot greeting wave over the first second of the rig's life. `fidgetLog`
+  // is instrumentation only (test harness reads it).
+  idleBlend: number;
+  fidgetKind: string | null;
+  fidgetT: number;       // elapsed in the current one-shot fidget
+  fidgetDur: number;     // its total duration
+  fidgetNext: number;    // seconds until the next pick (counts down while idle)
+  scanState: number;     // look-around held-swing sub-behavior: 0 idle, 1 swinging
+  scanT: number;
+  scanNext: number;
+  scanDir: number;
+  waveT: number;         // greeting-wave elapsed (>= 1 = done)
+  fidgetLog: string[];
 }
 
 type StateProvider = (id: string) => HassState | null;
@@ -127,6 +208,7 @@ const BUBBLE_W = 620, BUBBLE_H = 580, BUBBLE_LOCAL_Y = 2462, BUBBLE_X = 180;
 const PHASE4_ACTIVITIES: ReadonlySet<ActivityKind> = new Set<ActivityKind>([
   'shower', 'bathe', 'toilet', 'wash_hands', 'load_dishwasher',
   'make_coffee', 'forage_fridge', 'exercise',
+  'browse_bookshelf', 'tend_plant',
 ]);
 // Activities whose dwell trigger reads the bound appliance's on/off state:
 // dishwasher loading / coffee brewing only look right while it's actually
@@ -166,6 +248,12 @@ export class ThreeDRenderer {
   // is left wherever the user put it — only azimuth locks.
   private _simsCam = false;
   private _snapAzimuth: number | null = null;
+  // Auto-follow camera: when on, `_animate` eases the camera each frame to frame
+  // the active people (or the whole floor when nobody is about). Manual orbit /
+  // pan suspends it until `_followPauseUntil` (refreshed 6 s past every gesture).
+  private _autoFollow = false;
+  private _followPauseUntil = 0;
+  private _lastAnimT = 0;   // performance.now()/1000 of the previous _animate frame
   private _ZONE_H = 305;  // 1 ft — low outlines that don't wall off the room
   private _OBJ_H = 900;
   private _onFixtureClick: ((info: { kind: 'light' | 'switch'; entity_id: string | null; fixtureId: string }) => void) | null = null;
@@ -174,6 +262,11 @@ export class ThreeDRenderer {
   // Per-target humanoid rigs, persisted across frames so we can carry
   // walk-cycle phase + smoothed body facing.
   private _humanoids: Record<string, Humanoid> = {};
+  // AI-avatar controllers, keyed by target key (`ai_<motionSensorId>`). Persist
+  // independently of the rig so a brief presence dropout resumes the same wander
+  // when it re-acquires; dropped when the rig finally despawns or the floor
+  // switches.
+  private _aiState: Record<string, AiState> = {};
   // Seats collected from the current floor's sittable furniture.
   private _sitSpots: SitSpot[] = [];
   // Contextual-activity anchors collected from the current floor's furniture.
@@ -185,7 +278,7 @@ export class ThreeDRenderer {
   // for footprint tests + scene coords + mattress-top height + def tint).
   private _beds: { id: string; x: number; y: number; w: number; h: number;
                    rotation?: number; color: number; matressTop: number;
-                   cx: number; cz: number }[] = [];
+                   cx: number; cz: number; sharedCovers: boolean }[] = [];
   // Per-bed settle accumulator (seconds) and live cover meshes. Covers are
   // transient and parented under _targetGroup so no floor rebuild is needed to
   // clear them.
@@ -216,8 +309,15 @@ export class ThreeDRenderer {
   // (inflated by PERSON_R) or a solid wall run (door/window openings stay
   // walkable). `rev` bumps every rebuild so cached per-humanoid paths
   // invalidate. `blockedCount` gives a zero-obstacle fast path (skip A*).
+  // `region` labels each free cell with a connected-component id (blocked cells
+  // = -1). Connectivity matches A* reachability (8-connected, no corner
+  // cutting), so two free cells share a region iff a path exists between them.
+  // Used to keep spawn snaps / blocked-goal retargets on the SAME side of a wall
+  // as the target — a counter backing a wall no longer flings the rig into the
+  // next room — and to detect a genuinely-unreachable goal (stuck respawn).
   private _nav: { cell: number; nx: number; ny: number;
-                  blocked: Uint8Array; rev: number; blockedCount: number } | null = null;
+                  blocked: Uint8Array; region: Int32Array;
+                  rev: number; blockedCount: number } | null = null;
   private _navRev = 0;
 
   // Foreground wall-cutaway (Sims dollhouse). Tagged wall meshes — active-floor
@@ -280,9 +380,27 @@ export class ThreeDRenderer {
     // Prevent touch from fighting page scroll on mobile.
     this._renderer.domElement.style.touchAction = 'none';
     // Keep touches out of HA frontend's reach — its drawer treats rightward
-    // swipes as "open sidebar" and would hijack orbit / pan gestures.
-    for (const ev of ['touchstart', 'touchmove', 'touchend', 'touchcancel'] as const) {
-      this._renderer.domElement.addEventListener(ev, e => e.stopPropagation());
+    // swipes (from the left screen edge) as "open sidebar" and would hijack
+    // orbit / pan gestures. EXCEPTION: a gesture that STARTS within 24 px of the
+    // window's left edge is left to bubble so an intentional edge-swipe can
+    // still open the HA drawer. `_touchStopping` latches per-gesture at
+    // touchstart (true only when every touch point clears the edge).
+    {
+      const dom = this._renderer.domElement;
+      let stopping = false;
+      dom.addEventListener('touchstart', e => {
+        stopping = Array.from(e.touches).every(t => t.clientX > 24);
+        if (stopping) e.stopPropagation();
+      });
+      dom.addEventListener('touchmove', e => { if (stopping) e.stopPropagation(); });
+      dom.addEventListener('touchend', e => {
+        if (stopping) e.stopPropagation();
+        if (e.touches.length === 0) stopping = false;
+      });
+      dom.addEventListener('touchcancel', e => {
+        if (stopping) e.stopPropagation();
+        stopping = false;
+      });
     }
 
     // Lighting rig: ambient + hemisphere (sky/ground bounce) + sun. Members
@@ -313,7 +431,14 @@ export class ThreeDRenderer {
     // Sims cam azimuth snap: after any orbit gesture ends, if the snap mode is
     // on, pick the nearest 45° azimuth about the target and let `_animate`
     // glide there. Registered once; gated on the runtime `_simsCam` flag.
+    // Any manual orbit/pan suspends auto-follow: push the resume deadline out
+    // 6 s on gesture start AND end (so it resumes 6 s after the interaction
+    // finishes, not 6 s after it began).
+    this._controls.addEventListener('start', () => {
+      this._followPauseUntil = performance.now() / 1000 + 6;
+    });
     this._controls.addEventListener('end', () => {
+      this._followPauseUntil = performance.now() / 1000 + 6;
       if (!this._simsCam || !this._camera || !this._controls) return;
       const t = this._controls.target;
       const az = Math.atan2(this._camera.position.x - t.x,
@@ -559,7 +684,10 @@ export class ThreeDRenderer {
   // hang below their origin) inflate symmetrically. Shells share one
   // material and the host's geometry — double-dispose is idempotent.
   private _outlineMaterial: THREE.MeshBasicMaterial | null = null;
-  private _addOutlines(rootObj: THREE.Object3D, thick = 12, minDim = 90): void {
+  // `materialOverride` lets a caller (humanoids) give shells a per-rig material
+  // clone so its opacity can be faded independently of every other rig's shells.
+  private _addOutlines(rootObj: THREE.Object3D, thick = 12, minDim = 90,
+                       materialOverride?: THREE.MeshBasicMaterial): void {
     if (!this._outlineMaterial) {
       // polygonOffset pushes shell fragments slightly deeper so a shell face
       // that lands nearly coplanar with a NEIGHBOR mesh face (abutting boxes
@@ -594,7 +722,7 @@ export class ThreeDRenderer {
       const th = thick + (idx++ % 3) * 3;
       const fx = (sx + th * 2) / sx, fy = (sy + th * 2) / sy, fz = (sz + th * 2) / sz;
       const cx = (bb.min.x + bb.max.x) / 2, cy = (bb.min.y + bb.max.y) / 2, cz = (bb.min.z + bb.max.z) / 2;
-      const shell = new THREE.Mesh(geo, this._outlineMaterial);
+      const shell = new THREE.Mesh(geo, materialOverride ?? this._outlineMaterial);
       shell.userData.outline = true;
       shell.scale.set(fx, fy, fz);
       shell.position.set(cx * (1 - fx), cy * (1 - fy), cz * (1 - fz));
@@ -621,6 +749,7 @@ export class ThreeDRenderer {
       this._disposeHumanoid(this._humanoids[key]);
     }
     this._humanoids = {};
+    this._aiState = {};
     this._sitSpots = [];
     this._activityAnchors = [];
     this._tvsByRoom = {};
@@ -707,6 +836,10 @@ export class ThreeDRenderer {
   }
 
   simsCamOn(): boolean { return this._simsCam; }
+
+  // Auto-follow toggle. Turning it on lets `_animate` take over the camera pose
+  // (eased); off returns full manual control immediately.
+  setAutoFollow(on: boolean): void { this._autoFollow = on; }
 
   // Surface height (mm) under a world point: the highest stair tread or
   // landing containing it, else the floor (0). Stair treads quantize to the
@@ -1172,6 +1305,9 @@ export class ThreeDRenderer {
           furnitureId: fu.id, x: a.x, z: a.z,
           r: Math.max(fu.w, fu.h) / 2 + 350,
           facing: -((fu.rotation || 0) * Math.PI / 180),
+          // Stand in FRONT of the piece (+facing = local +Z / world +Y depth
+          // axis), clear of its front face (fu.h/2) plus a body's half-width.
+          standOff: fu.h / 2 + 340,
           kind: def.activity,
           roomId,
           hasEntity: fu.entity_id != null,
@@ -1191,6 +1327,8 @@ export class ThreeDRenderer {
         this._beds.push({
           id: fu.id, x: fu.x, y: fu.y, w: fu.w, h: fu.h, rotation: fu.rotation,
           color: def.color, matressTop: def.ht * 1.05, cx: c.x, cz: c.z,
+          // Two-person shared-covers effect on unless explicitly disabled.
+          sharedCovers: fu.sharedBedCovers !== false,
         });
       }
     }
@@ -1397,6 +1535,10 @@ export class ThreeDRenderer {
       const def = resolveFurnitureDef(fu, customObjects);
       if (def.rug) continue;
       if (fu.kind === 'stairs' || fu.kind === 'stairs_half' || fu.kind === 'stair_landing') continue;
+      // Beds are occupiable — people walk in and lie down / get covered. Blocking
+      // the footprint makes nav steer settling occupants back OUT (breaking the
+      // lie + shared-covers settle), so leave beds walkable like rugs/stairs.
+      if (fu.kind === 'bed') continue;
       if ((fu.elevation ?? 0) >= 300) continue;
       const halfW = fu.w / 2 + PERSON_R, halfH = fu.h / 2 + PERSON_R;
       // AABB of the inflated footprint (rotation-agnostic: the max extent is
@@ -1455,7 +1597,75 @@ export class ThreeDRenderer {
 
     let blockedCount = 0;
     for (let i = 0; i < blocked.length; i++) if (blocked[i]) blockedCount++;
-    this._nav = { cell, nx, ny, blocked, rev: ++this._navRev, blockedCount };
+
+    // Connected-component labelling of the free cells (BFS flood fill). Matches
+    // A* moves: 8-neighbours, but a diagonal only connects when BOTH shared
+    // orthogonals are free (no corner cutting) so region membership == reachability.
+    const region = new Int32Array(nx * ny).fill(-1);
+    const queue = new Int32Array(nx * ny);
+    let nextRegion = 0;
+    for (let s = 0; s < blocked.length; s++) {
+      if (blocked[s] || region[s] !== -1) continue;
+      const id = nextRegion++;
+      let head = 0, tail = 0;
+      queue[tail++] = s; region[s] = id;
+      while (head < tail) {
+        const cur = queue[head++];
+        const cx = cur % nx, cy = (cur / nx) | 0;
+        for (let dy = -1; dy <= 1; dy++) {
+          for (let dx = -1; dx <= 1; dx++) {
+            if (dx === 0 && dy === 0) continue;
+            const ncx = cx + dx, ncy = cy + dy;
+            if (ncx < 0 || ncy < 0 || ncx >= nx || ncy >= ny) continue;
+            const ni = ncy * nx + ncx;
+            if (blocked[ni] || region[ni] !== -1) continue;
+            if (dx !== 0 && dy !== 0 &&
+                (blocked[cy * nx + ncx] || blocked[ncy * nx + cx])) continue;
+            region[ni] = id; queue[tail++] = ni;
+          }
+        }
+      }
+    }
+
+    this._nav = { cell, nx, ny, blocked, region, rev: ++this._navRev, blockedCount };
+  }
+
+  // Region id of the FREE cell nearest a world point: if the cell is free,
+  // its own region; if blocked, the region of the closest free cell found by an
+  // expanding ring search (≤ ~1.8 m). -1 when nothing free is near.
+  private _regionOfWorld(wx: number, wy: number): number {
+    const n = this._nav;
+    if (!n) return -1;
+    const idx = this._cellIdxOf(wx, wy);
+    if (n.blocked[idx] === 0) return n.region[idx];
+    const free = this._nearestFreeCell(idx);
+    return n.blocked[free] === 0 ? n.region[free] : -1;
+  }
+
+  // Nearest free cell to `idx` whose region matches `regionId` (expanding ring).
+  // Falls back to any nearest free cell when regionId < 0 or no in-region cell
+  // is found nearby, so callers always get a walkable landing spot.
+  private _nearestFreeCellInRegion(idx: number, regionId: number): number {
+    const n = this._nav!;
+    if (regionId < 0) return this._nearestFreeCell(idx);
+    if (n.blocked[idx] === 0 && n.region[idx] === regionId) return idx;
+    const cx0 = idx % n.nx, cy0 = (idx / n.nx) | 0;
+    for (let r = 1; r <= 40; r++) {
+      let best = -1, bestD = Infinity;
+      for (let dy = -r; dy <= r; dy++) {
+        for (let dx = -r; dx <= r; dx++) {
+          if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;  // ring only
+          const cx = cx0 + dx, cy = cy0 + dy;
+          if (cx < 0 || cy < 0 || cx >= n.nx || cy >= n.ny) continue;
+          const i = cy * n.nx + cx;
+          if (n.blocked[i] || n.region[i] !== regionId) continue;
+          const d = dx * dx + dy * dy;
+          if (d < bestD) { bestD = d; best = i; }
+        }
+      }
+      if (best >= 0) return best;
+    }
+    return this._nearestFreeCell(idx);  // region unreachable nearby → any free cell
   }
 
   // World point → grid index (clamped into range).
@@ -1635,11 +1845,14 @@ export class ThreeDRenderer {
     return out;
   }
 
-  // Steer a humanoid's nav position toward the raw target this frame, routing
-  // around obstacles. Chooses among: straight seek (no obstacles / direct LOS),
-  // a cached path (grid + goal cell unchanged, next waypoint still reachable),
-  // or a fresh A* plan. On an unreachable goal it falls back to a straight seek
-  // (clip through rather than freeze). Mutates h.nav*/h.path*.
+  // Steer a humanoid toward the raw target this frame, routing around obstacles.
+  // The CARROT (`h.carrot*`) is the pathfinding walker — all region / LOS / A*
+  // math below runs off it, and `_seek` slides it along the route; nav is then a
+  // critically damped spring shadow of the carrot (velocity-continuous render).
+  // Chooses among: straight seek (no obstacles / direct LOS), a cached path
+  // (grid + goal cell unchanged, next waypoint still reachable), or a fresh A*
+  // plan. On an unreachable goal it falls back to a straight seek (clip through
+  // rather than freeze). Mutates h.carrot*/h.nav*/h.path*.
   private _steerNav(h: Humanoid, t: TargetWorld, dt: number, rawSpeedMms: number): void {
     const nav = this._nav;
     const goalP = this._w(t.x, t.y, 0);
@@ -1652,13 +1865,16 @@ export class ThreeDRenderer {
       return;
     }
 
-    const navWx = this._fw / 2 - h.navX, navWy = h.navZ + this._fd / 2;
+    const navWx = this._fw / 2 - h.carrotX, navWy = h.carrotZ + this._fd / 2;
+    const navRegion = this._regionOfWorld(navWx, navWy);
     // Effective goal: if the radar drops the person inside a footprint (seated /
-    // leaning), retarget to the nearest free cell so we don't chase an
-    // unreachable point.
+    // leaning) OR on the far side of a wall from where the rig actually is
+    // (radar sees through walls; a goal inside a counter can back onto another
+    // room), retarget to the nearest free cell IN THE RIG'S OWN REGION so the
+    // detour stays reachable and never crosses the wall.
     let goalCell = this._cellIdxOf(t.x, t.y);
-    if (nav.blocked[goalCell]) {
-      goalCell = this._nearestFreeCell(goalCell);
+    if (nav.blocked[goalCell] || nav.region[goalCell] !== navRegion) {
+      goalCell = this._nearestFreeCellInRegion(goalCell, navRegion);
       goalScene = this._cellToScene(goalCell);
     }
     const goalWx = this._fw / 2 - goalScene.x, goalWy = goalScene.z + this._fd / 2;
@@ -1692,30 +1908,63 @@ export class ThreeDRenderer {
     this._seek(h, h.path, goalScene, dt, rawSpeedMms);
   }
 
-  // Advance h.nav* toward the next waypoint (or the goal when no path) at a
-  // speed tracking the target's real motion, with a distance catch-up term so a
-  // figure that detoured can close the gap. Consumes reached waypoints (≤ 120
-  // mm) from the (mutated) path. Uses the CLAMPED dt.
+  // Advance the CARROT along the route (waypoints, or straight toward the goal
+  // when no path) at a speed tracking the target's real motion, with a distance
+  // catch-up term so a figure that detoured can close the gap. The carrot slides
+  // by arc-length and turns corners exactly on the polyline — it NEVER pops — so
+  // when nav chases it with the spring below, the rendered velocity stays
+  // continuous through waypoint transitions (the pre-pathfinding motion was a
+  // spring and was praised for exactly this; the old code advanced nav directly
+  // and jerked at every corner). Consumes reached waypoints (≤ 120 mm) from the
+  // (mutated) path. Then springs nav toward the carrot. Uses the CLAMPED dt.
   private _seek(h: Humanoid, path: { x: number; z: number }[] | null,
                 goal: { x: number; z: number }, dt: number, rawSpeedMms: number): void {
     let seek = Math.max(300, Math.min(2200, 1.15 * rawSpeedMms));
-    const far = Math.hypot(h.navX - goal.x, h.navZ - goal.z);
+    const far = Math.hypot(h.carrotX - goal.x, h.carrotZ - goal.z);
     if (far > 1200) seek += Math.min(800, far - 1200);
     let travel = seek * dt;
     for (let guard = 0; guard < 16 && travel > 1e-3; guard++) {
       while (path && path.length &&
-             Math.hypot(path[0].x - h.navX, path[0].z - h.navZ) <= 120) path.shift();
+             Math.hypot(path[0].x - h.carrotX, path[0].z - h.carrotZ) <= 120) path.shift();
       const wp = (path && path.length) ? path[0] : goal;
-      const dxw = wp.x - h.navX, dzw = wp.z - h.navZ;
+      const dxw = wp.x - h.carrotX, dzw = wp.z - h.carrotZ;
       const d = Math.hypot(dxw, dzw);
       if (d < 1e-3) break;
       if (d <= travel) {
-        h.navX = wp.x; h.navZ = wp.z; travel -= d;
+        h.carrotX = wp.x; h.carrotZ = wp.z; travel -= d;
         if (path && path.length) path.shift(); else break;
       } else {
-        h.navX += (dxw / d) * travel; h.navZ += (dzw / d) * travel; travel = 0;
+        h.carrotX += (dxw / d) * travel; h.carrotZ += (dzw / d) * travel; travel = 0;
       }
     }
+    this._springNav(h, dt);
+  }
+
+  // Critically damped spring driving nav toward the carrot — identical math to
+  // Planner.stepLerp (ω = 9 rad/s, ~0.6 s settle, trails ~0.3 m at walk speed).
+  // MUST substep so ω·h ≤ ~0.36: a single semi-implicit Euler step at the 0.1 s
+  // dt clamp puts ω·dt at 0.9, where the velocity coefficient (1 − 2ω·dt) goes
+  // negative and the spring DIVERGES/rings — documented gotcha, don't inline a
+  // single step. Velocity state (nvx/nvz) is what keeps rendered motion
+  // velocity-continuous when the carrot turns a corner.
+  private _springNav(h: Humanoid, dt: number): void {
+    const w = 9;
+    const steps = Math.max(1, Math.ceil(dt / 0.04));
+    const hs = dt / steps;
+    for (let k = 0; k < steps; k++) {
+      h.nvx += ((h.carrotX - h.navX) * w * w - 2 * w * h.nvx) * hs;
+      h.nvz += ((h.carrotZ - h.navZ) * w * w - 2 * w * h.nvz) * hs;
+      h.navX += h.nvx * hs;
+      h.navZ += h.nvz * hs;
+    }
+  }
+
+  // Re-anchor the carrot onto nav and kill the spring velocity. Called whenever
+  // nav is hard-set (spawn, snap out of a footprint, respawn) or held by an
+  // anchored pose — otherwise a stale carrot left across a wall would make the
+  // straight-line spring drag nav through it when walking resumes.
+  private _pinCarrot(h: Humanoid): void {
+    h.carrotX = h.navX; h.carrotZ = h.navZ; h.nvx = 0; h.nvz = 0;
   }
 
   // Dim floor-label sprite for a room name — quieter than the env-sensor chips
@@ -3265,6 +3514,156 @@ export class ThreeDRenderer {
     }
   }
 
+  // ── AI avatars (wandering people for simple presence sensors) ────────────
+  // Scene→world inverse of _w (drops the height).
+  private _sceneToWorld(sx: number, sz: number): { x: number; y: number } {
+    return { x: this._fw / 2 - sx, y: sz + this._fd / 2 };
+  }
+
+  // Advance one AI avatar's virtual raw position for this frame and rewrite the
+  // synthetic target's x/y in place. Everything downstream then treats it as a
+  // radar target. See AiState. `dt` is the shared frame dt.
+  private _advanceAi(t: TargetWorld, dt: number): void {
+    let ai = this._aiState[t.key];
+    if (!ai) {
+      // First sighting: seed the virtual raw at the anchor, snapped to a free
+      // cell in the anchor's own region so it never spawns inside a footprint /
+      // across a wall. Start IDLE so it settles a beat before wandering.
+      let x = t.x, y = t.y;
+      if (this._nav && this._nav.blockedCount > 0) {
+        const gi = this._cellIdxOf(t.x, t.y);
+        if (this._nav.blocked[gi] || this._nav.region[gi] < 0) {
+          const gr = this._regionOfWorld(t.x, t.y);
+          const sc = this._cellToScene(this._nearestFreeCellInRegion(gi, gr));
+          const w = this._sceneToWorld(sc.x, sc.z);
+          x = w.x; y = w.y;
+        }
+      }
+      ai = {
+        x, y, goalX: x, goalY: y, state: 'idle', timer: 1 + Math.random() * 2,
+        path: null, speed: 0.7, anchorX: t.x, anchorY: t.y,
+      };
+      this._aiState[t.key] = ai;
+      t.x = x; t.y = y;
+      return;
+    }
+    ai.anchorX = t.x; ai.anchorY = t.y;   // sensor may have been moved / re-placed
+
+    if (ai.state === 'wander') {
+      // Walk the virtual raw along the planned waypoint chain at leg speed.
+      let travel = ai.speed * 1000 * dt;
+      for (let guard = 0; guard < 32 && ai.path && ai.path.length && travel > 1e-3; guard++) {
+        const wp = ai.path[0];
+        const dx = wp.x - ai.x, dy = wp.y - ai.y;
+        const d = Math.hypot(dx, dy);
+        if (d <= 150) { ai.path.shift(); continue; }
+        if (d <= travel) { ai.x = wp.x; ai.y = wp.y; travel -= d; ai.path.shift(); }
+        else { ai.x += (dx / d) * travel; ai.y += (dy / d) * travel; travel = 0; }
+      }
+      if (!ai.path || !ai.path.length) {
+        ai.state = 'idle'; ai.timer = 4 + Math.random() * 11;   // dwell 4..15 s
+      }
+    } else {
+      // IDLE / ENGAGED: hold position so the dwell systems can capture it. Once
+      // the rig is actually captured (sit / activity / lie), freeze longer so the
+      // avatar visibly uses the furniture; the freeze release moves it away and
+      // the existing hysteresis stands it back up.
+      const h = this._humanoids[t.key];
+      const captured = !!h && (h.sit > 0.5 || h.act > 0.5 || h.lie > 0.5);
+      if (captured && ai.state !== 'engaged') {
+        ai.state = 'engaged'; ai.timer = 20 + Math.random() * 25;  // 20..45 s
+      }
+      ai.timer -= dt;
+      if (ai.timer <= 0) {
+        this._aiPickGoal(ai);
+        ai.state = 'wander';
+        if (!ai.path || !ai.path.length) { ai.state = 'idle'; ai.timer = 3 + Math.random() * 4; }
+      }
+    }
+    t.x = ai.x; t.y = ai.y;
+  }
+
+  // Choose the AI's next wander goal and plan a walkable path to it. 25% of the
+  // time the goal is near a sit / activity anchor in the same region (so the
+  // avatar visibly uses the room); otherwise it's a random free cell within
+  // ~4.5 m of the anchor, biased into the anchor's room loop when there is one.
+  private _aiPickGoal(ai: AiState): void {
+    const region = this._regionOfWorld(ai.anchorX, ai.anchorY);
+    let gx: number | null = null, gy = 0;
+    if (Math.random() < 0.25) {
+      const cands: { x: number; y: number }[] = [];
+      const consider = (sx: number, sz: number) => {
+        const w = this._sceneToWorld(sx, sz);
+        if (Math.hypot(w.x - ai.anchorX, w.y - ai.anchorY) > 6000) return;
+        if (this._regionOfWorld(w.x, w.y) !== region) return;
+        cands.push(w);
+      };
+      for (const a of this._activityAnchors) consider(a.x, a.z);
+      for (const sp of this._sitSpots) consider(sp.x, sp.z);
+      if (cands.length) { const c = cands[(Math.random() * cands.length) | 0]; gx = c.x; gy = c.y; }
+    }
+    if (gx === null) {
+      const c = this._aiRandomCell(ai.anchorX, ai.anchorY, region);
+      if (c) { gx = c.x; gy = c.y; }
+    }
+    ai.speed = 0.55 + Math.random() * 0.45;   // m/s per leg
+    if (gx === null) { ai.path = null; ai.goalX = ai.x; ai.goalY = ai.y; return; }
+
+    const n = this._nav;
+    if (!n || n.blockedCount === 0) {
+      ai.path = [{ x: gx, y: gy }]; ai.goalX = gx; ai.goalY = gy; return;
+    }
+    // Snap the goal to a walkable cell in the region (anchors sit inside blocked
+    // footprints; we want the avatar to STOP just outside, within dwell range).
+    const goalCell = this._nearestFreeCellInRegion(this._cellIdxOf(gx, gy), region);
+    const gs = this._cellToScene(goalCell);
+    const gw = this._sceneToWorld(gs.x, gs.z);
+    const start = this._nearestFreeCell(this._cellIdxOf(ai.x, ai.y));
+    const cells = (start === goalCell) ? [goalCell] : this._aStar(start, goalCell);
+    if (!cells) { ai.path = [{ x: gw.x, y: gw.y }]; ai.goalX = gw.x; ai.goalY = gw.y; return; }
+    const wp = this._stringPull(cells, gs).map(s => this._sceneToWorld(s.x, s.z));
+    ai.path = wp.length ? wp : [{ x: gw.x, y: gw.y }];
+    const last = ai.path[ai.path.length - 1];
+    ai.goalX = last.x; ai.goalY = last.y;
+  }
+
+  // A random free cell within `R` mm of the anchor whose region matches, biased
+  // toward cells inside the anchor's room loop. World-mm center, or null.
+  private _aiRandomCell(anchorWx: number, anchorWy: number, region: number):
+      { x: number; y: number } | null {
+    const n = this._nav;
+    if (!n) {
+      return { x: anchorWx + (Math.random() - 0.5) * 4000,
+               y: anchorWy + (Math.random() - 0.5) * 4000 };
+    }
+    const R = 4500;
+    let loop: Vec2[] | null = null;
+    for (const rz of this._roomZones) {
+      if (pip(anchorWx, anchorWy, rz.loop)) { loop = rz.loop; break; }
+    }
+    const c0 = this._cellIdxOf(anchorWx, anchorWy);
+    const cx0 = c0 % n.nx, cy0 = (c0 / n.nx) | 0;
+    const rad = Math.ceil(R / n.cell);
+    const any: { x: number; y: number }[] = [];
+    const inLoop: { x: number; y: number }[] = [];
+    for (let cy = cy0 - rad; cy <= cy0 + rad; cy++) {
+      if (cy < 0 || cy >= n.ny) continue;
+      for (let cx = cx0 - rad; cx <= cx0 + rad; cx++) {
+        if (cx < 0 || cx >= n.nx) continue;
+        const i = cy * n.nx + cx;
+        if (n.blocked[i]) continue;
+        if (region >= 0 && n.region[i] !== region) continue;
+        const wx = (cx + 0.5) * n.cell, wy = (cy + 0.5) * n.cell;
+        if (Math.hypot(wx - anchorWx, wy - anchorWy) > R) continue;
+        const p = { x: wx, y: wy };
+        any.push(p);
+        if (loop && pip(wx, wy, loop)) inLoop.push(p);
+      }
+    }
+    const pool = inLoop.length ? inLoop : any;
+    return pool.length ? pool[(Math.random() * pool.length) | 0] : null;
+  }
+
   updateTargets(targets: TargetWorld[], ctx?: ActivityContext): void {
     if (!this._scene) return;
     const now = performance.now() / 1000;
@@ -3282,6 +3681,33 @@ export class ThreeDRenderer {
     // Walking (non-anchored, visible) rigs eligible for mutual separation this
     // frame, resolved after the main loop so they gently push apart.
     const movers: { h: Humanoid; key: string }[] = [];
+
+    // AI-avatar pre-pass: advance each synthetic target's virtual raw position
+    // and rewrite its x/y IN PLACE (the targets array is rebuilt each frame in
+    // three-view, so mutating is safe). Must run before the bed pre-pass and the
+    // main loop so both see the avatar's real position.
+    for (const t of targets) if (t.ai) this._advanceAi(t, frameDt);
+
+    // Pre-pass: per-bed occupancy from RAW footprint containment, for the
+    // lay-in-bed gate. A bed with shared covers ON + ≥2 occupants runs the
+    // hidden-under-covers effect instead of lying; a covers-OFF bed lays every
+    // occupant side by side (±w·0.22 local x). bedOfTarget maps each target to
+    // the first bed it's inside; lieLateral gives its side offset.
+    const bedOfTarget: Record<string, { id: string; count: number }> = {};
+    const lieLateral: Record<string, number> = {};
+    for (const bed of this._beds) {
+      const keys: string[] = [];
+      for (const t of targets) {
+        const l = furnitureWorldToLocal(bed.rotation, t.x - bed.x, t.y - bed.y);
+        if (Math.abs(l.x) <= bed.w / 2 && Math.abs(l.y) <= bed.h / 2) keys.push(t.key);
+      }
+      for (const k of keys) if (!(k in bedOfTarget)) bedOfTarget[k] = { id: bed.id, count: keys.length };
+      if (!bed.sharedCovers && keys.length >= 2) {
+        const sorted = [...keys].sort();
+        for (let k = 0; k < sorted.length; k++)
+          lieLateral[sorted[k]] = (k % 2 === 0 ? -1 : 1) * bed.w * 0.22;
+      }
+    }
 
     for (const t of targets) {
       seen.add(t.key);
@@ -3304,6 +3730,12 @@ export class ThreeDRenderer {
       // occupants each frame, so a rig that left a bed (or the covers
       // disengaged) is made visible again here before the bed pass re-decides.
       h.group.visible = true;
+      // Re-acquired mid-despawn: cancel any fade and restore full opacity so a
+      // brief radar dropout doesn't leave a half-transparent rig.
+      if (h.despawnMode) {
+        if (h.despawnMode === 'slow') { h.fadeAlpha = 1; this._fadeRig(h, 1); }
+        h.despawnMode = null;
+      }
       const p = this._w(t.x, t.y, 0);   // RAW radar goal, scene coords
 
       // First sighting of this target: anchor the raw + nav trackers to the
@@ -3315,12 +3747,17 @@ export class ThreeDRenderer {
         h.navX = p.x; h.navZ = p.z;
         if (this._nav && this._nav.blockedCount > 0) {
           const gi = this._cellIdxOf(t.x, t.y);
-          if (this._nav.blocked[gi]) {
-            const sc = this._cellToScene(this._nearestFreeCell(gi));
+          // Snap into the region the target actually occupies (the free cell
+          // nearest the raw point) so a spawn inside a footprint lands on the
+          // reachable side — never across a wall into the neighbouring room.
+          if (this._nav.blocked[gi] || this._nav.region[gi] < 0) {
+            const gr = this._regionOfWorld(t.x, t.y);
+            const sc = this._cellToScene(this._nearestFreeCellInRegion(gi, gr));
             h.navX = sc.x; h.navZ = sc.z;
           }
         }
         h.lastX = h.navX; h.lastZ = h.navZ;
+        this._pinCarrot(h);
         h.rawLastX = p.x; h.rawLastZ = p.z;
         h.lastUpdate = now;
         h.vx = 0; h.vz = 0; h.rawVx = 0; h.rawVz = 0;
@@ -3350,6 +3787,9 @@ export class ThreeDRenderer {
       }
       h.rawLastX = p.x; h.rawLastZ = p.z;
       const rawSpeedMms = Math.hypot(h.rawVx, h.rawVz);
+      // Snapshot for the edge-aware despawn decision (made once when missed).
+      h.lastEdge = !!t.edge;
+      h.lastRawSpeed = rawSpeedMms / 1000;
 
       // ── Seating v1: a target dwelling (near-zero speed) within reach of a
       // sittable piece eases into a seated pose anchored on it; real movement
@@ -3452,19 +3892,77 @@ export class ThreeDRenderer {
       // from the (sinθ, cosθ) side). standOff ≈ 45% of the footprint radius.
       let standX = p.x, standZ = p.z;
       if (anchor) {
-        const standOff = Math.max(350, anchor.r * 0.45);
+        const standOff = anchor.standOff;
         standX = anchor.x + Math.sin(anchor.facing) * standOff;
         standZ = anchor.z + Math.cos(anchor.facing) * standOff;
       }
 
+      // ── Lay-in-bed: a target settled (raw speed < 0.15 for > 2 s) inside a bed
+      // footprint eases flat onto the mattress, unless the shared-covers effect
+      // is about to hide it (covers ON + ≥2 occupants). Covers-OFF beds lay every
+      // occupant. Mirrors the sit hysteresis: stand up on raw speed > 0.4 or
+      // leaving the footprint. All triggers read the RAW position.
+      const inBed = bedOfTarget[t.key];
+      const coversWouldHide = !!inBed && inBed.count >= 2 &&
+        (this._beds.find(b => b.id === inBed.id)?.sharedCovers ?? true);
+      let wantLie = false;
+      if (h.lieBedId && inBed && inBed.id === h.lieBedId && !coversWouldHide) {
+        wantLie = rawSpeedMs <= 0.4;               // stay lying until they get up / leave
+      } else if (!h.lieBedId && inBed && !coversWouldHide &&
+                 sit < 0.1 && act < 0.1 && rawSpeedMs < 0.15 && h.dwell > 2) {
+        wantLie = true; h.lieBedId = inBed.id;      // settle in
+      }
+      if (!wantLie && h.lieBedId && h.lie < 0.05) h.lieBedId = null;  // fully up → release
+      h.lie += ((wantLie ? 1 : 0) - h.lie) * Math.min(1, dt * 2.5);
+      const lie = h.lie;
+      const lieBed = h.lieBedId ? this._beds.find(b => b.id === h.lieBedId) : null;
+      const bedYaw = lieBed ? -((lieBed.rotation || 0) * Math.PI / 180) : 0;
+
       // ── Collision-aware navigation. While walking, the rig renders at `nav`
       // (steered around furniture/walls) rather than the raw radar point.
-      // Anchored rigs (seated / activity, blend > 0.3) skip nav entirely — the
-      // sit/activity blend already owns the position — and just ease nav toward
+      // Anchored rigs (seated / activity / lying, blend > 0.3) skip nav entirely
+      // — the pose blend already owns the position — and just ease nav toward
       // the rendered spot (done after px2/pz2 resolve) so stand-up is
       // continuous. See _steerNav / _aStar.
-      const anchored = sit > 0.3 || act > 0.3;
-      if (!anchored) this._steerNav(h, t, dt, rawSpeedMms);
+      const anchored = sit > 0.3 || act > 0.3 || lie > 0.3;
+      if (!anchored) {
+        // Just released a seat/appliance (or radar dropped the person into a
+        // footprint): if the CARROT (pathfinding walker) sits in a blocked cell,
+        // snap it out to the nearest free cell in the TARGET'S region before
+        // steering, so the next path doesn't start blocked (A* from a blocked
+        // start fails → straight-seek ghost) and never straight-seeks out
+        // through the obstacle. nav is re-grounded onto the carrot (discontinuous
+        // release — a snap here is expected) so the spring resumes cleanly.
+        if (this._nav && this._nav.blockedCount > 0) {
+          const nwx = this._fw / 2 - h.carrotX, nwy = h.carrotZ + this._fd / 2;
+          if (this._blockedWorld(nwx, nwy)) {
+            const gr = this._regionOfWorld(t.x, t.y);
+            const sc = this._cellToScene(
+              this._nearestFreeCellInRegion(this._cellIdxOf(nwx, nwy), gr));
+            const gap = Math.hypot(sc.x - h.carrotX, sc.z - h.carrotZ);
+            h.carrotX = sc.x; h.carrotZ = sc.z;
+            // A genuine footprint DROP (radar teleported the person into a piece)
+            // is a big jump → hard-ground nav too. A mere corner graze mid-walk is
+            // small → leave nav to the spring so it doesn't teleport (that spike
+            // was the old jerk this smoothing exists to kill).
+            if (gap > 600) { h.navX = sc.x; h.navZ = sc.z; h.nvx = 0; h.nvz = 0; }
+          }
+        }
+        this._steerNav(h, t, dt, rawSpeedMms);
+      }
+
+      // ── Unreachable-goal (stuck) detection + respawn. When the radar sees the
+      // person through a wall into a room nav can't reach, the goal region
+      // differs from the rig's; after 3 s the rig fades out fast and respawns
+      // snapped into the goal region (same key → color/state carry over).
+      if (!anchored && this._nav && this._nav.blockedCount > 0) {
+        const nwx = this._fw / 2 - h.carrotX, nwy = h.carrotZ + this._fd / 2;
+        const navRegion = this._regionOfWorld(nwx, nwy);
+        const goalRegion = this._regionOfWorld(t.x, t.y);
+        if (navRegion >= 0 && goalRegion >= 0 && navRegion !== goalRegion) h.stuckT += dt;
+        else h.stuckT = 0;
+      } else h.stuckT = 0;
+      if (h.stuckT > 3 && h.respawnPhase === 0) h.respawnPhase = 1;
       // NAV velocity (drives gait + facing): low-passed nav displacement.
       {
         const nix = (h.navX - h.lastX) / dtFull, niz = (h.navZ - h.lastZ) / dtFull;
@@ -3477,7 +3975,13 @@ export class ThreeDRenderer {
       // velocity heading (walking branch below).
       const speedMms = Math.hypot(h.vx, h.vz);
 
-      if (anchor && act > 0.3) {
+      if (lieBed && lie > 0.3) {
+        // Head toward the headboard (+local-Z of the bed = bedYaw), so the
+        // pitched-back rig lies with its head on the pillows.
+        let d = bedYaw - h.facing;
+        d -= Math.round(d / (2 * Math.PI)) * 2 * Math.PI;
+        h.facing += d * Math.min(1, dt * 5);
+      } else if (anchor && act > 0.3) {
         // Turn to face the appliance while engaging.
         let d = anchor.facing - h.facing;
         d -= Math.round(d / (2 * Math.PI)) * 2 * Math.PI;
@@ -3596,6 +4100,19 @@ export class ThreeDRenderer {
             pLHip = pRHip = SIT_HIP; pLKnee = pRKnee = SIT_KNEE;
             pLSh = pRSh = SIT_SHOULDER; pLEl = pREl = SIT_ELBOW;
             break;
+          case 'browse_bookshelf':
+            // Reach to a shelf; a slow ±0.15 rad page-turn pulse every ~3 s.
+            pLSh = pRSh = 0.6;
+            pLEl = pREl = 0.5 + Math.sin(now * (2 * Math.PI / 3)) * 0.15;
+            pLean = -0.1;
+            break;
+          case 'tend_plant': {
+            // Light crouch + reach, with a slow 2 s lean cycle over the leaves.
+            pLHip = pRHip = 0.3; pLKnee = pRKnee = -0.3;
+            pLSh = pRSh = 0.5; pLEl = pREl = 0.6;
+            pLean = -0.15 + Math.sin(now * Math.PI) * 0.05;
+            break;
+          }
           // shower / bathe: pose is hidden behind the privacy blur — leave the
           // relaxed standing default.
         }
@@ -3634,19 +4151,124 @@ export class ThreeDRenderer {
         }
       }
 
+      // Lay-in-bed override: straighten the limbs and pitch the whole body flat
+      // (root rotation.x → +π/2 lays body-forward −Z onto world +Y, face up).
+      // Suppresses the walk lean/sway/bob (handled below via `lie`).
+      if (lie > 0.01) {
+        const L = lie, nL = 1 - L;
+        const LIE_HIP = 0.1, LIE_KNEE = -0.1, LIE_SH = 0.1, LIE_EL = 0.2;
+        lHip = lHip * nL + LIE_HIP * L; rHip = rHip * nL + LIE_HIP * L;
+        lKnee = lKnee * nL + LIE_KNEE * L; rKnee = rKnee * nL + LIE_KNEE * L;
+        lSh = lSh * nL + LIE_SH * L; rSh = rSh * nL + LIE_SH * L;
+        lEl = lEl * nL + LIE_EL * L; rEl = rEl * nL + LIE_EL * L;
+        leanX = leanX * nL + (Math.PI / 2) * L;
+        rollZ = rollZ * nL;
+      }
+
+      // ── Idle fidgets (overlays; compose additively / by blend with the pose
+      // above). Gated on a standing-idle condition eased into idleBlend so they
+      // fade in/out rather than snap, and never fight walking or the seated /
+      // activity / lying blends (which drive the gate to 0). See DESIGN-sims.
+      const idleStanding = h.sit < 0.1 && h.act < 0.1 && h.lie < 0.1 &&
+        rawSpeedMs < 0.15 && h.dwell > 2;
+      h.idleBlend += ((idleStanding ? 1 : 0) - h.idleBlend) * Math.min(1, dt * 3);
+      const ib = h.idleBlend;
+      let yawFidget = 0;
+      if (idleStanding) {
+        // Look-around scan sub-behavior: a held ±0.35 rad swing for 0.8 s every
+        // 6-10 s, eased in/out. (The ambient 0.4 Hz wobble below is always on.)
+        if (h.scanState === 0) {
+          h.scanNext -= dt;
+          if (h.scanNext <= 0) { h.scanState = 1; h.scanT = 0; h.scanDir = Math.random() < 0.5 ? -1 : 1; }
+        } else {
+          h.scanT += dt;
+          if (h.scanT >= 0.8) { h.scanState = 0; h.scanNext = 6 + Math.random() * 4; }
+        }
+        // Fidget picker: one-shot stretch / phone-check every 8-20 s.
+        if (h.fidgetKind) {
+          h.fidgetT += dt;
+          if (h.fidgetT >= h.fidgetDur) { h.fidgetKind = null; h.fidgetNext = 8 + Math.random() * 12; }
+        } else {
+          h.fidgetNext -= dt;
+          if (h.fidgetNext <= 0) {
+            const pick = Math.random() < 0.5 ? 'stretch' : 'phone';
+            h.fidgetKind = pick; h.fidgetT = 0;
+            h.fidgetDur = pick === 'stretch' ? 2.0 : (2.5 + Math.random() * 0.5);
+            h.fidgetLog.push(pick);
+          }
+        }
+      } else if (h.fidgetKind) {
+        h.fidgetKind = null;  // interrupted (started moving / sat down)
+      }
+
+      if (ib > 0.001) {
+        // Ambient #1 look-around: 0.4 Hz yaw wobble ±0.15 rad + the held scan.
+        yawFidget = Math.sin(now * 0.4 * 2 * Math.PI + h.idleOffset) * 0.15;
+        if (h.scanState === 1) yawFidget += h.scanDir * 0.35 * Math.sin(Math.PI * h.scanT / 0.8);
+        // Ambient #2 weight-shift: 0.15 Hz root roll ±0.04 + antiphase hip/knee.
+        const swayPh = now * 0.15 * 2 * Math.PI + h.idleOffset;
+        const swayHK = Math.sin(swayPh) * 0.03 * ib;
+        lHip += swayHK; rHip += swayHK; lKnee -= swayHK; rKnee -= swayHK;
+        rollZ += Math.sin(swayPh) * 0.04 * ib;
+        // One-shot fidget pose blends (sit-blend idiom: joint → target by weight).
+        if (h.fidgetKind === 'stretch') {
+          const t = h.fidgetT, D = h.fidgetDur;
+          const env = t < 0.6 ? t / 0.6 : (t < D - 0.6 ? 1 : Math.max(0, (D - t) / 0.6));
+          const w = env * ib;
+          lSh = lSh * (1 - w) + 2.6 * w; rSh = rSh * (1 - w) + 2.6 * w;   // arms sweep up
+          lEl = lEl * (1 - w) + 0.05 * w; rEl = rEl * (1 - w) + 0.05 * w;
+          leanX = leanX * (1 - w) + (-0.1) * w;
+        } else if (h.fidgetKind === 'phone') {
+          const t = h.fidgetT, D = h.fidgetDur;
+          const env = t < 0.4 ? t / 0.4 : (t < D - 0.4 ? 1 : Math.max(0, (D - t) / 0.4));
+          const w = env * ib;
+          const micro = Math.sin(now * 2 * 2 * Math.PI) * 0.03;   // 2 Hz elbow oscillation
+          rSh = rSh * (1 - w) + 0.5 * w;
+          rEl = rEl * (1 - w) + (1.3 + micro) * w;
+          leanX = leanX * (1 - w) + (-0.05) * w;
+        }
+      }
+      // Greeting wave on acquire: one-shot ~1 s over the rig's spawn window.
+      // Fires regardless of idle (a greeting on arrival), not gated on idleBlend.
+      if (h.waveT < 1.0) {
+        if (h.waveT === 0) h.fidgetLog.push('wave');
+        h.waveT += dt;
+        const t = h.waveT;
+        const env = t < 0.15 ? t / 0.15 : (t > 0.85 ? Math.max(0, (1.0 - t) / 0.15) : 1);
+        const osc = 0.6 + 0.3 * Math.sin(t * 3 * 2 * Math.PI);   // 0.3↔0.9 at 3 Hz ×3
+        rSh = rSh * (1 - env) + 2.2 * env;
+        rEl = rEl * (1 - env) + osc * env;
+      }
+
       h.leftHip.rotation.x = lHip; h.rightHip.rotation.x = rHip;
       h.leftKnee.rotation.x = lKnee; h.rightKnee.rotation.x = rKnee;
       h.leftShoulder.rotation.x = lSh; h.rightShoulder.rotation.x = rSh;
       h.leftElbow.rotation.x = lEl; h.rightElbow.rotation.x = rEl;
       h.group.rotation.x = leanX;
+      h.group.rotation.y = h.facing + yawFidget;
       h.group.rotation.z = rollZ;
 
       // Breathing — subtle torso rise/fall, always on.
       h.torso.scale.y = 1 + Math.sin(now * 1.8 + h.idleOffset) * 0.012;
 
       // Spawn ease-in (rig grows up from the floor; also recovers a rig
-      // caught mid-despawn when a flickering target re-acquires).
-      h.scale += (1 - h.scale) * Math.min(1, dt * 10);
+      // caught mid-despawn when a flickering target re-acquires). During a stuck
+      // respawn, shrink out fast (~0.4 s) instead; once gone, teleport into the
+      // goal region and let it grow back in from the new spot.
+      if (h.respawnPhase === 1) {
+        h.scale -= h.scale * Math.min(1, dt * 12);
+        if (h.scale < 0.05) {
+          const gi = this._cellIdxOf(t.x, t.y);
+          const gr = this._regionOfWorld(t.x, t.y);
+          const sc = this._cellToScene(this._nearestFreeCellInRegion(gi, gr));
+          h.navX = sc.x; h.navZ = sc.z; h.lastX = sc.x; h.lastZ = sc.z;
+          this._pinCarrot(h);
+          h.vx = 0; h.vz = 0; h.path = null; h.pathRev = -1; h.goalCell = -1;
+          h.stuckT = 0; h.respawnPhase = 0;
+        }
+      } else {
+        h.scale += (1 - h.scale) * Math.min(1, dt * 10);
+      }
       h.group.scale.setScalar(h.scale);
 
       // Terrain: figures on stairs/landings stand at the surface height under
@@ -3678,12 +4300,30 @@ export class ThreeDRenderer {
       } else {
         px2 = h.navX; pz2 = h.navZ; py2 = h.groundY + bob;
       }
+      // Lay-in-bed position: blend the root onto the mattress, offset toward the
+      // FOOT so the (pitched-back) body reaches the pillows at the headboard end;
+      // side-by-side occupants slide ±lieLateral along the bed's local x.
+      if (lieBed && lie > 0.01) {
+        const L = lie;
+        const hdx = Math.sin(bedYaw), hdz = Math.cos(bedYaw);   // headboard dir (scene)
+        const ldx = Math.cos(bedYaw), ldz = -Math.sin(bedYaw);  // bed local +x (scene)
+        const LIE_HEAD_REACH = 1636;  // ≈ head height above the rig root (_buildHumanoid)
+        const along = lieBed.h / 2 - 200 - LIE_HEAD_REACH;      // root offset from center toward foot
+        const lat = lieLateral[t.key] ?? 0;
+        const lieX = lieBed.cx + hdx * along + ldx * lat;
+        const lieZ = lieBed.cz + hdz * along + ldz * lat;
+        const lieY = lieBed.matressTop + 170;
+        px2 = px2 * (1 - L) + lieX * L;
+        pz2 = pz2 * (1 - L) + lieZ * L;
+        py2 = py2 * (1 - L) + lieY * L;
+      }
       h.group.position.set(px2, py2, pz2);
       // While anchored, ease nav toward the rendered position so there's no
       // jump when the blend releases and nav takes over walking again.
       if (anchored) {
         h.navX += (px2 - h.navX) * Math.min(1, dt * 3);
         h.navZ += (pz2 - h.navZ) * Math.min(1, dt * 3);
+        this._pinCarrot(h);   // keep the carrot on nav so walk-resume starts clean
       }
 
       // Plumbob spin (absolute clock + per-rig offset so rigs desync) and
@@ -3729,6 +4369,12 @@ export class ThreeDRenderer {
         for (const child of h.group.children) child.visible = true;
       }
 
+      // Lying: the plumbob would tilt away with the pitched-back body, so hide
+      // it (and the now-vertical blob) above the lie midpoint.
+      h.plumbob.visible = lie <= 0.5;
+      if (lie > 0.5) h.blob.visible = false;
+      else if (h.privacy <= 0.5) h.blob.visible = true;
+
       // ── Thought bubbles (Phase 6): a context/time-aware glyph cloud above the
       // head. Per-frame cost is string compares + one pip walk to find the room;
       // the canvas is only (re)painted on a committed kind change (2.5 s
@@ -3752,10 +4398,28 @@ export class ThreeDRenderer {
       else { h.bubbleWant = want; h.bubbleDwell = 0; }
       if (h.bubbleDwell > 2.5 && h.bubbleKind !== h.bubbleWant) h.bubbleKind = h.bubbleWant;
       this._syncBubble(h, dt);
+      // Bubble while lying: the root is pitched flat, so the child bubble's
+      // authored local offset would swing sideways. Simpler v1 (chosen over
+      // reparenting): repin it in WORLD space just above the pillow via
+      // worldToLocal each frame; restore the authored local offset otherwise.
+      if (h.bubble) {
+        if (lie > 0.5 && lieBed) {
+          h.group.updateMatrixWorld(true);
+          const world = new THREE.Vector3(
+            px2 + Math.sin(bedYaw) * (lieBed.h * 0.18),
+            py2 + 950,
+            pz2 + Math.cos(bedYaw) * (lieBed.h * 0.18));
+          h.bubble.position.copy(h.group.worldToLocal(world));
+        } else {
+          h.bubble.position.set(BUBBLE_X, BUBBLE_LOCAL_Y, 0);
+        }
+      }
 
-      // Eligible for mutual separation: walking (not sit/activity anchored),
+      // Eligible for mutual separation: walking (not sit/activity/lie anchored),
       // visible, and not hidden under bed covers (previous frame's summary).
-      if (sit < 0.3 && act < 0.3 && !this._bedState.hiddenKeys.has(t.key)) {
+      // Lying rigs are excluded — separation overwrites x/z from nav space and
+      // would knock the side-by-side occupants off their lie positions.
+      if (sit < 0.3 && act < 0.3 && lie < 0.3 && !this._bedState.hiddenKeys.has(t.key)) {
         movers.push({ h, key: t.key });
       }
     }
@@ -3769,13 +4433,20 @@ export class ThreeDRenderer {
       for (let j = i + 1; j < movers.length; j++) {
         const a = movers[i].h, b = movers[j].h;
         let ddx = a.navX - b.navX, ddz = a.navZ - b.navZ;
-        let d = Math.hypot(ddx, ddz);
+        const d = Math.hypot(ddx, ddz);
         if (d >= SEP) continue;
-        if (d < 1e-3) { ddx = 1; ddz = 0; d = 1e-3; }  // coincident → arbitrary axis
         const push = Math.min(60, (SEP - d) / 2);
-        ddx /= d; ddz /= d;
+        // Unit pair axis. Coincident → arbitrary axis; otherwise normalize.
+        // (Normalizing must NOT reuse a clamped d — dividing (1,0) by 1e-3 once
+        // flung figures 60 000 mm apart when two targets exactly overlapped.)
+        if (d < 1e-3) { ddx = 1; ddz = 0; } else { ddx /= d; ddz /= d; }
+        // Push nav (this frame's render) AND the carrot (the pathfinding walker)
+        // so the spring holds the gap instead of pulling the figures back
+        // together next frame.
         a.navX += ddx * push; a.navZ += ddz * push;
         b.navX -= ddx * push; b.navZ -= ddz * push;
+        a.carrotX += ddx * push; a.carrotZ += ddz * push;
+        b.carrotX -= ddx * push; b.carrotZ -= ddz * push;
       }
     }
     for (const m of movers) {
@@ -3791,13 +4462,29 @@ export class ThreeDRenderer {
       const h = this._humanoids[key];
       const dt = Math.min(0.1, now - h.lastUpdate);
       h.lastUpdate = now;
-      h.scale -= h.scale * Math.min(1, dt * 7);
-      if (h.scale < 0.03) {
+      // Decide the despawn style once, from the last seen frame: a target that
+      // vanished while moving fast AT the coverage edge walked out of frame →
+      // FAST scale-out (a brief blink barely dents the rig). A target that
+      // vanished mid-coverage more likely just stopped reflecting (sat still) →
+      // a SLOW 10 s opacity fade so it lingers, ghost-like, before clearing.
+      if (!h.despawnMode) h.despawnMode = (h.lastEdge && h.lastRawSpeed > 0.3) ? 'fast' : 'slow';
+      let dead = false;
+      if (h.despawnMode === 'fast') {
+        h.scale -= h.scale * Math.min(1, dt * 7);
+        h.group.scale.setScalar(h.scale);
+        dead = h.scale < 0.03;
+      } else {
+        // Opacity fade (scale held — a 10 s shrink reads wrong). Fades the whole
+        // rig incl. blob / plumbob / bubble via per-rig / per-instance materials.
+        h.fadeAlpha = Math.max(0, h.fadeAlpha - dt / 10);
+        this._fadeRig(h, h.fadeAlpha);
+        dead = h.fadeAlpha <= 0.001;
+      }
+      if (dead) {
         this._targetGroup.remove(h.group);
         this._disposeHumanoid(h);
         delete this._humanoids[key];
-      } else {
-        h.group.scale.setScalar(h.scale);
+        delete this._aiState[key];   // drop the AI controller with its rig
       }
     }
 
@@ -3906,6 +4593,9 @@ export class ThreeDRenderer {
     const hiddenKeys = new Set<string>();
     const soloKeys = new Set<string>();
     for (const bed of this._beds) {
+      // Two-person covers disabled for this bed → no blanket lump; the occupants
+      // lie side by side instead (handled in the per-target lay-in-bed pass).
+      if (!bed.sharedCovers) continue;
       // Targets inside this bed's footprint (raw world coords) and how many are
       // settled (smoothed speed < 0.15 m/s).
       const inside: string[] = [];
@@ -4146,8 +4836,12 @@ export class ThreeDRenderer {
     root.add(leftLeg.hip, rightLeg.hip, leftArm.shoulder, rightArm.shoulder);
 
     // Cartoon outlines on the body (thinner than furniture; minDim catches
-    // limbs and head but skips eyes / nose / mouth detail).
-    this._addOutlines(root, 8, 50);
+    // limbs and head but skips eyes / nose / mouth detail). Per-rig material
+    // CLONE so a slow despawn can fade THIS rig's outline alpha alone. Force the
+    // shared material to exist first, then clone it.
+    this._addOutlines(new THREE.Group(), 8, 50);  // ensure _outlineMaterial exists
+    const outlineMat = this._outlineMaterial!.clone();
+    this._addOutlines(root, 8, 50, outlineMat);
 
     // The plumbob: elongated spinning octahedron floating above the head.
     // Transparent → automatically skipped by the outline pass.
@@ -4190,9 +4884,44 @@ export class ThreeDRenderer {
       idleOffset: Math.random() * Math.PI * 2,
       vx: 0, vz: 0,
       lastX: 0, lastZ: 0, lastUpdate: 0, initialized: false,
-      navX: 0, navZ: 0, rawVx: 0, rawVz: 0, rawLastX: 0, rawLastZ: 0,
+      navX: 0, navZ: 0, carrotX: 0, carrotZ: 0, nvx: 0, nvz: 0,
+      rawVx: 0, rawVz: 0, rawLastX: 0, rawLastZ: 0,
       path: null, pathRev: -1, goalCell: -1,
+      stuckT: 0, respawnPhase: 0,
+      lie: 0, lieBedId: null,
+      lastEdge: false, lastRawSpeed: 0, despawnMode: null, fadeAlpha: 1,
+      outlineMat,
+      idleBlend: 0, fidgetKind: null, fidgetT: 0, fidgetDur: 0,
+      fidgetNext: 8 + Math.random() * 12,
+      scanState: 0, scanT: 0, scanNext: 4 + Math.random() * 4, scanDir: 1,
+      waveT: 0, fidgetLog: [],
     };
+  }
+
+  // Set a rig's overall opacity multiplier (slow despawn fade / restore).
+  // Every material under a humanoid is per-rig or per-instance (skin/dark/shoe,
+  // the per-rig outline clone, the per-instance blob + plumbob, bubble/blur
+  // sprites), so scaling their opacity never touches another rig. Base opacity /
+  // transparency is captured on the material's userData the first time so a
+  // restore (`alpha` = 1) returns each to its authored look. `transparent` only
+  // toggles (and recompiles) when it actually changes.
+  private _fadeRig(h: Humanoid, alpha: number): void {
+    const apply = (mat: THREE.Material & { opacity?: number }) => {
+      const ud = mat.userData as { baseOpacity?: number; baseTransparent?: boolean };
+      if (ud.baseOpacity === undefined) {
+        ud.baseOpacity = mat.opacity ?? 1;
+        ud.baseTransparent = mat.transparent ?? false;
+      }
+      mat.opacity = ud.baseOpacity * alpha;
+      const wantT = alpha < 0.999 ? true : (ud.baseTransparent ?? false);
+      if (mat.transparent !== wantT) { mat.transparent = wantT; mat.needsUpdate = true; }
+    };
+    h.group.traverse(obj => {
+      const anyObj = obj as THREE.Mesh & THREE.Sprite;
+      const m = anyObj.material as THREE.Material | THREE.Material[] | undefined;
+      if (!m) return;
+      if (Array.isArray(m)) m.forEach(apply); else apply(m);
+    });
   }
 
   private _disposeHumanoid(h: Humanoid): void {
@@ -4200,8 +4929,12 @@ export class ThreeDRenderer {
       if ((obj as THREE.Mesh).isMesh) {
         const m = obj as THREE.Mesh;
         m.geometry.dispose();
-        if (Array.isArray(m.material)) m.material.forEach(mm => mm.dispose());
-        else m.material.dispose();
+        // Outline shells share this rig's per-rig clone (h.outlineMat); it's
+        // disposed once below, so skip it here (dispose is idempotent anyway).
+        const mm0 = m.material as THREE.Material;
+        if (mm0 === h.outlineMat) { /* shared per-rig clone; freed below */ }
+        else if (Array.isArray(m.material)) m.material.forEach(mm => mm.dispose());
+        else mm0.dispose();
       } else if ((obj as THREE.Sprite).isSprite) {
         // Dispose the sprite's material. Per-rig maps (thought-bubble canvas
         // textures) must be freed too; the blur silhouette maps are SHARED
@@ -4213,6 +4946,8 @@ export class ThreeDRenderer {
         sm.dispose();
       }
     });
+    // Per-rig outline clone (never the shared _outlineMaterial).
+    if (h.outlineMat && h.outlineMat !== this._outlineMaterial) h.outlineMat.dispose();
   }
 
   resize(w: number, h: number): void {
@@ -4262,8 +4997,75 @@ export class ThreeDRenderer {
     this._controls = null;
   }
 
+  // Auto-follow camera: ease `controls.target` + `camera.position` each frame to
+  // frame the ACTIVE humanoids (scale > 0.3, bed-hidden ones included — their
+  // group position stays on the mattress). One cluster → tight framing; figures
+  // far apart → the padded bounding box naturally widens so all stay in view.
+  // Nobody about → eases back to the full-floor sims/iso framing. Keeps the
+  // current azimuth; eases elevation toward the dimetric ~35.26°. Never snaps.
+  private _updateAutoFollow(dt: number): void {
+    if (!this._autoFollow || !this._camera || !this._controls) return;
+    if (performance.now() / 1000 < this._followPauseUntil) return;  // manual-input pause
+
+    const cam = this._camera, ctrl = this._controls;
+    const floorFitD = Math.max(this._fw, this._fd) * 1.35;
+
+    let n = 0, minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+    for (const key of Object.keys(this._humanoids)) {
+      const h = this._humanoids[key];
+      if (h.scale <= 0.3) continue;
+      const px = h.group.position.x, pz = h.group.position.z;
+      if (px < minX) minX = px; if (px > maxX) maxX = px;
+      if (pz < minZ) minZ = pz; if (pz > maxZ) maxZ = pz;
+      n++;
+    }
+
+    let tgtX: number, tgtZ: number, desiredDist: number;
+    if (n === 0) {
+      tgtX = 0; tgtZ = 0; desiredDist = floorFitD;
+    } else {
+      const PAD = 2200;
+      minX -= PAD; maxX += PAD; minZ -= PAD; maxZ += PAD;
+      tgtX = (minX + maxX) / 2; tgtZ = (minZ + maxZ) / 2;
+      const maxExtent = Math.max(maxX - minX, maxZ - minZ);
+      // Fit the padded box to the vertical fov, narrowing the effective angle on
+      // portrait viewports (aspect < 1) so the box still fits horizontally.
+      const fovV = cam.fov * Math.PI / 180;
+      const aspectAdjust = Math.min(1, cam.aspect);
+      desiredDist = (maxExtent / 2) / Math.tan((fovV / 2) * aspectAdjust);
+      desiredDist = Math.max(4500, Math.min(floorFitD, desiredDist));
+    }
+    const tgtY = 600;
+
+    const dx = cam.position.x - ctrl.target.x, dz = cam.position.z - ctrl.target.z;
+    const dy = cam.position.y - ctrl.target.y;
+    const az = Math.atan2(dx, dz);                    // preserved
+    const elCur = Math.atan2(dy, Math.hypot(dx, dz));
+    const elGoal = Math.atan(1 / Math.SQRT2);         // ≈ 35.26°
+    const el = elCur + (elGoal - elCur) * Math.min(1, dt * 0.8);
+
+    const r = desiredDist * Math.cos(el), hgt = desiredDist * Math.sin(el);
+    const desCamX = tgtX + r * Math.sin(az);
+    const desCamZ = tgtZ + r * Math.cos(az);
+    const desCamY = tgtY + hgt;
+
+    const k = Math.min(1, dt * 0.8);                  // τ ≈ 1.2 s
+    ctrl.target.x += (tgtX - ctrl.target.x) * k;
+    ctrl.target.y += (tgtY - ctrl.target.y) * k;
+    ctrl.target.z += (tgtZ - ctrl.target.z) * k;
+    cam.position.x += (desCamX - cam.position.x) * k;
+    cam.position.y += (desCamY - cam.position.y) * k;
+    cam.position.z += (desCamZ - cam.position.z) * k;
+  }
+
   private _animate = (): void => {
     this._rafId = requestAnimationFrame(this._animate);
+    const nowS = performance.now() / 1000;
+    const frameDt = this._lastAnimT ? Math.min(0.1, nowS - this._lastAnimT) : 0.016;
+    this._lastAnimT = nowS;
+    // Auto-follow camera: ease the pose to frame the active people (runs before
+    // the azimuth glide + controls.update() so it plays nicely with damping).
+    this._updateAutoFollow(frameDt);
     // Sims-cam azimuth glide: rotate the camera about the target toward the
     // snap goal, easing the shortest arc. Cleared once within ~0.5°.
     if (this._snapAzimuth != null && this._camera && this._controls) {

@@ -63,8 +63,17 @@ export class Planner extends EventTarget {
   editObject: Record<string, number> = {};
   drawingWall: { points: Vec2[]; id?: string } | null = null;
 
-  // Interaction state
-  view: '2d' | '3d' = '2d';
+  // Interaction state. The last view is remembered PER DEVICE in localStorage
+  // (not the HA store — different tablets want different views). A ?view= URL
+  // param still wins: app._applyUrlParams sets `view` directly after construction
+  // without persisting, so an explicit link doesn't clobber the saved default.
+  view: '2d' | '3d' = (() => {
+    try {
+      const v = localStorage.getItem('diorama:view');
+      if (v === '2d' || v === '3d') return v;
+    } catch { /* private-mode Safari throws */ }
+    return '2d';
+  })();
   tool: Tool = 'select';
   cursor: Vec2 | null = null;
   drag: Drag | null = null;
@@ -693,7 +702,12 @@ export class Planner extends EventTarget {
   }
 
   // ── View ────────────────────────────────────────────────────────────────
-  setView(v: '2d' | '3d'): void { this.view = v; this.emitConfig(); }
+  setView(v: '2d' | '3d'): void {
+    this.view = v;
+    // Persist per-device so re-entering the panel restores the last view.
+    try { localStorage.setItem('diorama:view', v); } catch { /* private-mode Safari throws */ }
+    this.emitConfig();
+  }
 
   // Toggle whatever entity is bound — chooses the correct domain service
   // based on the entity_id, so a "switch" fixture wired to a light entity

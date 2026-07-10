@@ -343,6 +343,13 @@ export class Sidebar extends LitElement {
             ${motionIntensity(m).toFixed(2)}
           </span>
         </div>
+        <div class="row" title="Render a simulated person wandering the room in 3D while presence is detected">
+          <label>Avatar</label>
+          <button class="btn" style="font-size:11px;flex:1"
+                  @click=${() => upd(() => { m.avatar = !m.avatar; })}>
+            ${m.avatar ? '🧍 On' : '— Off'}
+          </button>
+        </div>
         ${this._lockRow(m)}
         <div class="row"><label>HA entity</label>
           <span style="font-size:11px;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
@@ -931,6 +938,13 @@ export class Sidebar extends LitElement {
           </select>
         </div>
         ${this._furnitureBindRow(piece, upd)}
+        ${curKind === 'bed' ? html`
+          <div class="row"><label title="Two occupants hide under a shared blanket (the lump breathes). Off: they lie side by side, no blanket.">Two-person covers</label>
+            <input type="checkbox" .checked=${piece.sharedBedCovers !== false}
+                   @change=${(e: Event) => upd(() => {
+                     piece.sharedBedCovers = (e.target as HTMLInputElement).checked;
+                   })}>
+          </div>` : nothing}
         <div class="row"><label>Width (mm)</label>
           <input type="number" min="50" .value=${String(Math.round(piece.w))}
                  @input=${(e: Event) => upd(() => {
@@ -1947,6 +1961,12 @@ export class Sidebar extends LitElement {
           <input type="checkbox" .checked=${sc.wallCutaway !== false}
                  @change=${(e: Event) => upd(() => {
                    p.store.scene3d!.wallCutaway = (e.target as HTMLInputElement).checked;
+                 })}>
+        </div>
+        <div class="row"><label>Auto-follow camera</label>
+          <input type="checkbox" .checked=${!!sc.autoFollow}
+                 @change=${(e: Event) => upd(() => {
+                   p.store.scene3d!.autoFollow = (e.target as HTMLInputElement).checked;
                  })}>
         </div>
         ${this._floorLookOverrides(sc)}
