@@ -245,9 +245,10 @@ Hotkeys are ignored while typing in any input, dropdown, or text area.
 
 ### 2D view
 
-Wheel zooms at the cursor; two-finger touch pinches and pans. The **2D
+Wheel zooms at the cursor; two-finger touch pinches and pans. The **View
 Layers** sidebar section toggles each layer (background image, furniture,
-lights, sensors, zones, targets…) and has presets:
+lights, sensors, zones, targets…) in **both the 2D plan and the 3D scene**
+("activity glow" is 2D-only) and has presets:
 
 - **Full** — everything (default).
 - **Simple floorplan** — bare walls/doors/windows plus **activity glow**:

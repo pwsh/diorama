@@ -247,6 +247,8 @@ export class ThreeDRenderer {
     // Recurse from the lightGroup itself so all descendants are tested in one
     // call (avoids edge cases where iterating children misses deeply nested
     // meshes).
+    // Layer-hidden lights are not click targets.
+    if (!this._lightGroup.visible) return null;
     const hits = this._raycaster.intersectObject(this._lightGroup, true);
     for (const h of hits) {
       // Walk up to find the first ancestor that carries our userData tag.
@@ -516,7 +518,22 @@ export class ThreeDRenderer {
     }
   }
 
-  updateFloor(f: Floor, scene3d?: Scene3D): void {
+  // Layer visibility (shared with the 2D layer flags): cheap per-tick
+  // group.visible flips — no rebuilds. Furniture and the bg image live
+  // inside _floorGroup and are gated at build time in updateFloor instead.
+  setLayerVisibility(v: { lights?: boolean; sensors?: boolean; motion?: boolean;
+                          env?: boolean; zones?: boolean; targets?: boolean }): void {
+    this._lightGroup.visible = v.lights !== false;
+    this._sensorGroup.visible = v.sensors !== false;
+    this._motionGroup.visible = v.motion !== false;
+    this._envGroup.visible = v.env !== false;
+    const z = v.zones !== false;
+    this._zoneGroup.visible = z;
+    this._haloGroup.visible = z;
+    this._targetGroup.visible = v.targets !== false;
+  }
+
+  updateFloor(f: Floor, scene3d?: Scene3D, layers?: import('./types.js').Layers2D): void {
     if (!this._scene) return;
     this._fw = f.w; this._fd = f.d;
     this._clearGroup(this._floorGroup);
@@ -535,9 +552,12 @@ export class ThreeDRenderer {
     // walls count, so an open-plan boundary can close a region without
     // rendering a wall. No closed loop → classic full-rectangle floor.
     const loops = closedWallLoops(f.walls ?? []);
+    const showFurniture = layers?.furniture !== false;
+    const showBg = layers?.bg !== false;
     // Stairs sunk below the floor (negative elevation) cut a stairwell
-    // opening so the descending flight is visible from above.
-    const wellCuts = (f.furniture ?? []).filter(fu =>
+    // opening so the descending flight is visible from above. No holes when
+    // furniture (incl. stairs) is layer-hidden.
+    const wellCuts = (showFurniture ? (f.furniture ?? []) : []).filter(fu =>
       (fu.kind === 'stairs' || fu.kind === 'stairs_half' || fu.kind === 'stair_landing') &&
       (fu.elevation ?? 0) < 0);
     const wellPath = (fu: Furniture): { path: THREE.Path; center: { x: number; y: number } } => {
@@ -612,7 +632,7 @@ export class ThreeDRenderer {
 
     // Background image (overlays grid when visible)
     const bg = f.bg;
-    const bgVisible = !!(bg && bg.visible !== false && bg.dataUrl);
+    const bgVisible = !!(bg && bg.visible !== false && bg.dataUrl) && showBg;
     if (this._grid) this._grid.visible = !bgVisible;
     if (!bgVisible && this._bgTexCache) {
       this._bgTexCache.tex.dispose();
@@ -722,7 +742,7 @@ export class ThreeDRenderer {
     // get placed at child.position.z = -depth/2.
     this._sitSpots = [];
     this._terrain = [];
-    for (const fu of f.furniture) {
+    for (const fu of showFurniture ? f.furniture : []) {
       const grp = this._buildFurniture(fu, f.furniture);
       this._shadowFlags(grp);
       this._floorGroup.add(grp);
