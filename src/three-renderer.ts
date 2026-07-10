@@ -94,12 +94,24 @@ interface Humanoid {
   bubbleDwell: number;
   scale: number;       // eased spawn/despawn scale (0..1)
   idleOffset: number;  // per-rig phase offset so idle sway / breathing desync
-  vx: number;          // smoothed velocity in 3D coords (mm/s)
+  vx: number;          // smoothed NAV velocity in 3D coords (mm/s) — drives gait/facing
   vz: number;
-  lastX: number;
+  lastX: number;       // previous NAV position (scene coords) for the vx/vz delta
   lastZ: number;
   lastUpdate: number;  // performance.now() / 1000, last seen
   initialized: boolean;
+  // ── Collision-aware navigation (renderer-internal). The rig renders at the
+  // nav position while walking (steered around furniture/walls); all TRIGGER
+  // logic (sit/activity/dwell/bubbles) keeps reading the RAW radar position.
+  navX: number;        // rendered walk position, scene coords (like p.x/p.z)
+  navZ: number;
+  rawVx: number;       // smoothed RAW-target velocity (mm/s) — drives triggers
+  rawVz: number;
+  rawLastX: number;    // previous RAW target position (scene coords)
+  rawLastZ: number;
+  path: { x: number; z: number }[] | null;  // scene-coord waypoints, walk order
+  pathRev: number;     // _nav.rev the cached path was built against (-1 = none)
+  goalCell: number;    // grid index the cached path targets (-1 = none)
 }
 
 type StateProvider = (id: string) => HassState | null;
@@ -196,6 +208,14 @@ export class ThreeDRenderer {
   // surface height instead of the floor plane.
   private _terrain: { x: number; y: number; w: number; h: number; rotation?: number;
                       ht: number; elevation: number; kind: string }[] = [];
+  // Navigation grid (world coords, mm), rebuilt by every updateFloor. cell =
+  // 150 mm. `blocked` marks cells whose center is inside a furniture footprint
+  // (inflated by PERSON_R) or a solid wall run (door/window openings stay
+  // walkable). `rev` bumps every rebuild so cached per-humanoid paths
+  // invalidate. `blockedCount` gives a zero-obstacle fast path (skip A*).
+  private _nav: { cell: number; nx: number; ny: number;
+                  blocked: Uint8Array; rev: number; blockedCount: number } | null = null;
+  private _navRev = 0;
 
   // Lighting rig (preset-tunable).
   private _ambient: THREE.AmbientLight | null = null;
@@ -592,6 +612,9 @@ export class ThreeDRenderer {
     this._disposeBedCovers();
     this._fanRotors = [];
     this._terrain = [];
+    // updateFloor rebuilds this every call, but null it on floor switch so a
+    // stale grid can't briefly route targets against the previous floor.
+    this._nav = null;
   }
 
   // Remove + dispose every live bed cover and clear the dwell accumulators.
@@ -1161,6 +1184,357 @@ export class ThreeDRenderer {
       const sprite = this._makeRoomLabelSprite(rm.name);
       sprite.position.set(wp.x, wp.y, wp.z);
       this._floorGroup.add(sprite);
+    }
+
+    // Rebuild the humanoid navigation grid from the same walls + furniture.
+    this._buildNav(f, showFurniture ? undefined : null, customObjects);
+  }
+
+  // ── Humanoid navigation (collision-aware pathfinding) ────────────────────
+  // Build the nav grid in world coords (mm). Furniture footprints (inflated by
+  // PERSON_R) and solid wall runs block cells; door/window openings stay
+  // walkable. Build cost is cells × pieces + segment tests — build-time only.
+  // `furnitureOn` mirrors the layer gate: pass `null` to treat furniture as
+  // layer-hidden (don't block on it), else `undefined`.
+  private _buildNav(f: Floor, furnitureOn: null | undefined,
+                    customObjects?: ObjectRecipe[]): void {
+    const cell = 150;
+    const PERSON_R = 170;
+    const nx = Math.max(1, Math.ceil(f.w / cell));
+    const ny = Math.max(1, Math.ceil(f.d / cell));
+    const blocked = new Uint8Array(nx * ny);
+    const clampX = (c: number) => Math.max(0, Math.min(nx - 1, c));
+    const clampY = (c: number) => Math.max(0, Math.min(ny - 1, c));
+
+    // Furniture: block cells whose center is inside the (rotated) footprint
+    // inflated by PERSON_R. Skip rugs (they ARE floor), stairs/landings
+    // (walkable terrain), and pieces lifted ≥ 300 mm off the floor (wall-hung /
+    // counter-top items don't obstruct the body). A counter at elevation 0 with
+    // a 900 mm top still blocks — the test is whether the PIECE is raised, not
+    // its height.
+    const furniture = furnitureOn === null ? [] : (f.furniture ?? []);
+    for (const fu of furniture) {
+      const def = resolveFurnitureDef(fu, customObjects);
+      if (def.rug) continue;
+      if (fu.kind === 'stairs' || fu.kind === 'stairs_half' || fu.kind === 'stair_landing') continue;
+      if ((fu.elevation ?? 0) >= 300) continue;
+      const halfW = fu.w / 2 + PERSON_R, halfH = fu.h / 2 + PERSON_R;
+      // AABB of the inflated footprint (rotation-agnostic: the max extent is
+      // the diagonal), used only to bound the cell scan.
+      const reach = Math.hypot(halfW, halfH);
+      const c0x = clampX(Math.floor((fu.x - reach) / cell));
+      const c1x = clampX(Math.floor((fu.x + reach) / cell));
+      const c0y = clampY(Math.floor((fu.y - reach) / cell));
+      const c1y = clampY(Math.floor((fu.y + reach) / cell));
+      for (let cy = c0y; cy <= c1y; cy++) {
+        for (let cx = c0x; cx <= c1x; cx++) {
+          const wx = (cx + 0.5) * cell, wy = (cy + 0.5) * cell;
+          const l = furnitureWorldToLocal(fu.rotation, wx - fu.x, wy - fu.y);
+          if (Math.abs(l.x) <= halfW && Math.abs(l.y) <= halfH) blocked[cy * nx + cx] = 1;
+        }
+      }
+    }
+
+    // Walls: rasterize each solid run of every non-invisible segment as a thick
+    // capsule (half-thickness 50 mm + PERSON_R). Door / window OPENINGS stay
+    // walkable — people walk through doorways, and radar can track a person
+    // straight through a window, so blocking a ~900 mm window gap that sits
+    // next to an open doorway would strand paths worse than letting it pass.
+    // railing / half walls are full-height at body level → they block.
+    const WALL_HALF = 100 / 2;
+    const rad = WALL_HALF + PERSON_R;
+    for (const wall of f.walls ?? []) {
+      if (wall.points.length < 2) continue;
+      if (wallKind(wall) === 'invisible') continue;
+      for (let i = 0; i < wall.points.length - 1; i++) {
+        const a = wall.points[i], b = wall.points[i + 1];
+        const dx = b.x - a.x, dy = b.y - a.y;
+        const len = Math.hypot(dx, dy);
+        if (len < 1) continue;
+        const ux = dx / len, uy = dy / len;
+        const { solids } = wallCutsForSegment(a, b, f.doors ?? [], f.windows ?? []);
+        for (const s of solids) {
+          const s0x = a.x + ux * s.t0, s0y = a.y + uy * s.t0;
+          const s1x = a.x + ux * s.t1, s1y = a.y + uy * s.t1;
+          const minx = Math.min(s0x, s1x) - rad, maxx = Math.max(s0x, s1x) + rad;
+          const miny = Math.min(s0y, s1y) - rad, maxy = Math.max(s0y, s1y) + rad;
+          const c0x = clampX(Math.floor(minx / cell)), c1x = clampX(Math.floor(maxx / cell));
+          const c0y = clampY(Math.floor(miny / cell)), c1y = clampY(Math.floor(maxy / cell));
+          for (let cy = c0y; cy <= c1y; cy++) {
+            for (let cx = c0x; cx <= c1x; cx++) {
+              const wx = (cx + 0.5) * cell, wy = (cy + 0.5) * cell;
+              // Distance from cell center to the solid run segment.
+              const t = Math.max(s.t0, Math.min(s.t1, (wx - a.x) * ux + (wy - a.y) * uy));
+              const px = a.x + ux * t, py = a.y + uy * t;
+              if (Math.hypot(wx - px, wy - py) <= rad) blocked[cy * nx + cx] = 1;
+            }
+          }
+        }
+      }
+    }
+
+    let blockedCount = 0;
+    for (let i = 0; i < blocked.length; i++) if (blocked[i]) blockedCount++;
+    this._nav = { cell, nx, ny, blocked, rev: ++this._navRev, blockedCount };
+  }
+
+  // World point → grid index (clamped into range).
+  private _cellIdxOf(wx: number, wy: number): number {
+    const n = this._nav!;
+    const cx = Math.max(0, Math.min(n.nx - 1, Math.floor(wx / n.cell)));
+    const cy = Math.max(0, Math.min(n.ny - 1, Math.floor(wy / n.cell)));
+    return cy * n.nx + cx;
+  }
+
+  // Grid index → scene coords of the cell center (inverse of _w on the center).
+  private _cellToScene(idx: number): { x: number; z: number } {
+    const n = this._nav!;
+    const cx = idx % n.nx, cy = (idx / n.nx) | 0;
+    const wx = (cx + 0.5) * n.cell, wy = (cy + 0.5) * n.cell;
+    return { x: this._fw / 2 - wx, z: wy - this._fd / 2 };
+  }
+
+  // Is the cell containing this world point blocked (out-of-range = blocked)?
+  private _blockedWorld(wx: number, wy: number): boolean {
+    const n = this._nav;
+    if (!n) return false;
+    const cx = Math.floor(wx / n.cell), cy = Math.floor(wy / n.cell);
+    if (cx < 0 || cy < 0 || cx >= n.nx || cy >= n.ny) return true;
+    return n.blocked[cy * n.nx + cx] === 1;
+  }
+
+  // Line-of-sight between two WORLD points: sample the segment at ≤ half-cell
+  // steps and reject if any sample lands in a blocked cell. Half-cell (75 mm)
+  // sampling can't tunnel — the thinnest blocked span is a wall run (≥ 340 mm)
+  // or an inflated footprint (≥ 340 mm), both several samples wide.
+  private _losClearWorld(ax: number, ay: number, bx: number, by: number): boolean {
+    const n = this._nav;
+    if (!n) return true;
+    const dx = bx - ax, dy = by - ay;
+    const dist = Math.hypot(dx, dy);
+    const steps = Math.max(1, Math.ceil(dist / (n.cell * 0.5)));
+    for (let i = 0; i <= steps; i++) {
+      const wx = ax + dx * (i / steps), wy = ay + dy * (i / steps);
+      if (this._blockedWorld(wx, wy)) return false;
+    }
+    return true;
+  }
+
+  // Nearest free cell to a blocked one via expanding ring search (≤ ~1.8 m).
+  // Returns the input index if already free or nothing free is found nearby.
+  private _nearestFreeCell(idx: number): number {
+    const n = this._nav!;
+    if (n.blocked[idx] === 0) return idx;
+    const cx0 = idx % n.nx, cy0 = (idx / n.nx) | 0;
+    for (let r = 1; r <= 12; r++) {
+      let best = -1, bestD = Infinity;
+      for (let dy = -r; dy <= r; dy++) {
+        for (let dx = -r; dx <= r; dx++) {
+          if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;  // ring only
+          const cx = cx0 + dx, cy = cy0 + dy;
+          if (cx < 0 || cy < 0 || cx >= n.nx || cy >= n.ny) continue;
+          const i = cy * n.nx + cx;
+          if (n.blocked[i]) continue;
+          const d = dx * dx + dy * dy;
+          if (d < bestD) { bestD = d; best = i; }
+        }
+      }
+      if (best >= 0) return best;
+    }
+    return idx;
+  }
+
+  // 8-connected A* over the nav grid (no corner cutting: a diagonal step needs
+  // both shared orthogonal cells free; octile heuristic). Returns the cell-index
+  // path start→goal, or null if unreachable within the explored-node cap.
+  private _aStar(start: number, goal: number): number[] | null {
+    const n = this._nav!;
+    const { nx, ny, blocked } = n;
+    const N = nx * ny;
+    if (start === goal) return [start];
+    const g = new Float64Array(N).fill(Infinity);
+    const came = new Int32Array(N).fill(-1);
+    const closed = new Uint8Array(N);
+    const SQRT2 = Math.SQRT2, D2 = SQRT2 - 2;
+    const gx = goal % nx, gy = (goal / nx) | 0;
+    const heur = (idx: number) => {
+      const cx = idx % nx, cy = (idx / nx) | 0;
+      const ax = Math.abs(cx - gx), ay = Math.abs(cy - gy);
+      return (ax + ay) + D2 * Math.min(ax, ay);
+    };
+    // Binary min-heap keyed on f = g + h.
+    const heapIdx: number[] = [];
+    const heapF: number[] = [];
+    const push = (idx: number, f: number) => {
+      heapIdx.push(idx); heapF.push(f);
+      let c = heapIdx.length - 1;
+      while (c > 0) {
+        const par = (c - 1) >> 1;
+        if (heapF[par] <= heapF[c]) break;
+        [heapF[par], heapF[c]] = [heapF[c], heapF[par]];
+        [heapIdx[par], heapIdx[c]] = [heapIdx[c], heapIdx[par]];
+        c = par;
+      }
+    };
+    const pop = (): number => {
+      const top = heapIdx[0];
+      const last = heapIdx.length - 1;
+      heapIdx[0] = heapIdx[last]; heapF[0] = heapF[last];
+      heapIdx.pop(); heapF.pop();
+      let c = 0; const len = heapIdx.length;
+      while (true) {
+        const l = 2 * c + 1, r = 2 * c + 2; let s = c;
+        if (l < len && heapF[l] < heapF[s]) s = l;
+        if (r < len && heapF[r] < heapF[s]) s = r;
+        if (s === c) break;
+        [heapF[s], heapF[c]] = [heapF[c], heapF[s]];
+        [heapIdx[s], heapIdx[c]] = [heapIdx[c], heapIdx[s]];
+        c = s;
+      }
+      return top;
+    };
+    g[start] = 0;
+    push(start, heur(start));
+    let expanded = 0;
+    while (heapIdx.length) {
+      const cur = pop();
+      if (cur === goal) {
+        const path: number[] = [];
+        for (let i = goal; i >= 0; i = came[i]) path.push(i);
+        path.reverse();
+        return path;
+      }
+      if (closed[cur]) continue;
+      closed[cur] = 1;
+      if (++expanded > 4000) return null;
+      const cx = cur % nx, cy = (cur / nx) | 0;
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if (dx === 0 && dy === 0) continue;
+          const ncx = cx + dx, ncy = cy + dy;
+          if (ncx < 0 || ncy < 0 || ncx >= nx || ncy >= ny) continue;
+          const ni = ncy * nx + ncx;
+          if (blocked[ni] || closed[ni]) continue;
+          if (dx !== 0 && dy !== 0) {
+            // No corner cutting: both shared orthogonals must be free.
+            if (blocked[cy * nx + ncx] || blocked[ncy * nx + cx]) continue;
+          }
+          const step = (dx !== 0 && dy !== 0) ? SQRT2 : 1;
+          const ng = g[cur] + step;
+          if (ng < g[ni]) {
+            g[ni] = ng; came[ni] = cur;
+            push(ni, ng + heur(ni));
+          }
+        }
+      }
+    }
+    return null;
+  }
+
+  // Greedy string-pull: collapse a cell-index path to the fewest scene-coord
+  // waypoints whose consecutive legs each have world-space line of sight.
+  // `goalScene` overrides the final waypoint with the exact target position so
+  // the figure lands precisely rather than on the goal cell's center.
+  private _stringPull(cells: number[], goalScene: { x: number; z: number }): { x: number; z: number }[] {
+    const sceneOf = (i: number, isLast: boolean) => isLast ? goalScene : this._cellToScene(cells[i]);
+    const worldOf = (s: { x: number; z: number }) => ({ x: this._fw / 2 - s.x, y: s.z + this._fd / 2 });
+    const out: { x: number; z: number }[] = [];
+    let anchorScene = sceneOf(0, cells.length === 1);
+    for (let i = 2; i < cells.length; i++) {
+      const isLast = i === cells.length - 1;
+      const cand = sceneOf(i, isLast);
+      const aw = worldOf(anchorScene), cw = worldOf(cand);
+      if (!this._losClearWorld(aw.x, aw.y, cw.x, cw.y)) {
+        // Previous cell becomes a committed waypoint; re-anchor there.
+        const prevScene = sceneOf(i - 1, false);
+        out.push(prevScene);
+        anchorScene = prevScene;
+      }
+    }
+    out.push(goalScene);  // exact target as the final waypoint
+    return out;
+  }
+
+  // Steer a humanoid's nav position toward the raw target this frame, routing
+  // around obstacles. Chooses among: straight seek (no obstacles / direct LOS),
+  // a cached path (grid + goal cell unchanged, next waypoint still reachable),
+  // or a fresh A* plan. On an unreachable goal it falls back to a straight seek
+  // (clip through rather than freeze). Mutates h.nav*/h.path*.
+  private _steerNav(h: Humanoid, t: TargetWorld, dt: number, rawSpeedMms: number): void {
+    const nav = this._nav;
+    const goalP = this._w(t.x, t.y, 0);
+    let goalScene = { x: goalP.x, z: goalP.z };
+
+    // No grid, or an entirely free floor → straight-line seek, no path.
+    if (!nav || nav.blockedCount === 0) {
+      h.path = null; h.pathRev = -1; h.goalCell = -1;
+      this._seek(h, null, goalScene, dt, rawSpeedMms);
+      return;
+    }
+
+    const navWx = this._fw / 2 - h.navX, navWy = h.navZ + this._fd / 2;
+    // Effective goal: if the radar drops the person inside a footprint (seated /
+    // leaning), retarget to the nearest free cell so we don't chase an
+    // unreachable point.
+    let goalCell = this._cellIdxOf(t.x, t.y);
+    if (nav.blocked[goalCell]) {
+      goalCell = this._nearestFreeCell(goalCell);
+      goalScene = this._cellToScene(goalCell);
+    }
+    const goalWx = this._fw / 2 - goalScene.x, goalWy = goalScene.z + this._fd / 2;
+
+    // Direct line of sight → steer straight, drop any cached path.
+    if (this._losClearWorld(navWx, navWy, goalWx, goalWy)) {
+      h.path = null; h.pathRev = -1; h.goalCell = goalCell;
+      this._seek(h, null, goalScene, dt, rawSpeedMms);
+      return;
+    }
+
+    // Reuse the cached path when the grid + goal cell are unchanged and the next
+    // waypoint is still directly reachable; otherwise replan with A*.
+    const reusable = h.path && h.path.length > 0 && h.pathRev === nav.rev &&
+      h.goalCell === goalCell &&
+      this._losClearWorld(navWx, navWy,
+        this._fw / 2 - h.path[0].x, h.path[0].z + this._fd / 2);
+    if (!reusable) {
+      const navCell = this._nearestFreeCell(this._cellIdxOf(navWx, navWy));
+      const cells = this._aStar(navCell, goalCell);
+      if (cells && cells.length > 1) {
+        h.path = this._stringPull(cells, goalScene);
+        h.pathRev = nav.rev; h.goalCell = goalCell;
+      } else {
+        // Unreachable within the node cap → straight seek fallback.
+        h.path = null; h.pathRev = -1; h.goalCell = goalCell;
+        this._seek(h, null, goalScene, dt, rawSpeedMms);
+        return;
+      }
+    }
+    this._seek(h, h.path, goalScene, dt, rawSpeedMms);
+  }
+
+  // Advance h.nav* toward the next waypoint (or the goal when no path) at a
+  // speed tracking the target's real motion, with a distance catch-up term so a
+  // figure that detoured can close the gap. Consumes reached waypoints (≤ 120
+  // mm) from the (mutated) path. Uses the CLAMPED dt.
+  private _seek(h: Humanoid, path: { x: number; z: number }[] | null,
+                goal: { x: number; z: number }, dt: number, rawSpeedMms: number): void {
+    let seek = Math.max(300, Math.min(2200, 1.15 * rawSpeedMms));
+    const far = Math.hypot(h.navX - goal.x, h.navZ - goal.z);
+    if (far > 1200) seek += Math.min(800, far - 1200);
+    let travel = seek * dt;
+    for (let guard = 0; guard < 16 && travel > 1e-3; guard++) {
+      while (path && path.length &&
+             Math.hypot(path[0].x - h.navX, path[0].z - h.navZ) <= 120) path.shift();
+      const wp = (path && path.length) ? path[0] : goal;
+      const dxw = wp.x - h.navX, dzw = wp.z - h.navZ;
+      const d = Math.hypot(dxw, dzw);
+      if (d < 1e-3) break;
+      if (d <= travel) {
+        h.navX = wp.x; h.navZ = wp.z; travel -= d;
+        if (path && path.length) path.shift(); else break;
+      } else {
+        h.navX += (dxw / d) * travel; h.navZ += (dzw / d) * travel; travel = 0;
+      }
     }
   }
 
@@ -2725,6 +3099,9 @@ export class ThreeDRenderer {
     // RAW world target positions this frame, keyed by target — the bed-covers
     // pass tests footprint containment in world coords.
     const rawPos: Record<string, { x: number; y: number }> = {};
+    // Walking (non-anchored, visible) rigs eligible for mutual separation this
+    // frame, resolved after the main loop so they gently push apart.
+    const movers: { h: Humanoid; key: string }[] = [];
 
     for (const t of targets) {
       seen.add(t.key);
@@ -2747,17 +3124,28 @@ export class ThreeDRenderer {
       // occupants each frame, so a rig that left a bed (or the covers
       // disengaged) is made visible again here before the bed pass re-decides.
       h.group.visible = true;
-      const p = this._w(t.x, t.y, 0);
+      const p = this._w(t.x, t.y, 0);   // RAW radar goal, scene coords
 
-      // First sighting of this target: anchor lastX/Z to the spawn point
-      // so the next frame's delta is a real velocity, not the bogus
-      // origin-to-spawn vector (which used to lock facing in a wrong
-      // direction and make the figure walk backwards).
+      // First sighting of this target: anchor the raw + nav trackers to the
+      // spawn point so the next frame's delta is a real velocity, not the bogus
+      // origin-to-spawn vector (which used to lock facing in a wrong direction
+      // and make the figure walk backwards). Snap nav to the nearest free cell
+      // if the radar drops the person inside a footprint.
       if (!h.initialized) {
-        h.lastX = p.x; h.lastZ = p.z;
+        h.navX = p.x; h.navZ = p.z;
+        if (this._nav && this._nav.blockedCount > 0) {
+          const gi = this._cellIdxOf(t.x, t.y);
+          if (this._nav.blocked[gi]) {
+            const sc = this._cellToScene(this._nearestFreeCell(gi));
+            h.navX = sc.x; h.navZ = sc.z;
+          }
+        }
+        h.lastX = h.navX; h.lastZ = h.navZ;
+        h.rawLastX = p.x; h.rawLastZ = p.z;
         h.lastUpdate = now;
-        h.vx = 0; h.vz = 0;
+        h.vx = 0; h.vz = 0; h.rawVx = 0; h.rawVz = 0;
         h.facing = 0;     // arbitrary; updated as soon as motion is detected
+        h.path = null; h.pathRev = -1; h.goalCell = -1;
         h.initialized = true;
       }
 
@@ -2768,32 +3156,27 @@ export class ThreeDRenderer {
       const dtFull = Math.max(1e-3, now - h.lastUpdate);
       const dt = Math.min(0.1, dtFull);
       h.lastUpdate = now;
-      const dx = p.x - h.lastX, dz = p.z - h.lastZ;
 
-      // Low-pass the velocity so brief lerp jitter doesn't whip the body
-      // around. Time-constant ~0.25 s.
-      if (dt > 0) {
-        const ix = dx / dtFull, iz = dz / dtFull;
-        const alpha = Math.min(1, dt * 4);
-        h.vx = h.vx * (1 - alpha) + ix * alpha;
-        h.vz = h.vz * (1 - alpha) + iz * alpha;
+      // Two speeds (see DESIGN): `rawSpeed` = the low-passed RAW radar velocity,
+      // drives sit/activity/dwell TRIGGERS and the seek pace; `navSpeed` (below,
+      // h.vx/h.vz) = the low-passed NAV velocity, drives gait + facing so the
+      // feet/turns follow the actual detour path. Keeping them separate stops
+      // detour walking from feeding back into the dwell gates.
+      {
+        const rix = (p.x - h.rawLastX) / dtFull, riz = (p.z - h.rawLastZ) / dtFull;
+        const al = Math.min(1, dt * 4);
+        h.rawVx = h.rawVx * (1 - al) + rix * al;
+        h.rawVz = h.rawVz * (1 - al) + riz * al;
       }
-      h.lastX = p.x; h.lastZ = p.z;
-
-      // Body-forward in this rig is local -Z (face / toes / leading-leg
-      // step land there), so we align local -Z with the velocity vector by
-      // negating both atan2 args — equivalent to atan2(vx,vz) + π.
-      // Facing EASES toward the heading along the shortest arc instead of
-      // snapping — a noisy heading no longer whips the body frame-to-frame.
-      // Below ~5 cm/s the heading is noise; hold the previous facing.
-      const speedMms = Math.hypot(h.vx, h.vz);
+      h.rawLastX = p.x; h.rawLastZ = p.z;
+      const rawSpeedMms = Math.hypot(h.rawVx, h.rawVz);
 
       // ── Seating v1: a target dwelling (near-zero speed) within reach of a
       // sittable piece eases into a seated pose anchored on it; real movement
       // (or the target leaving the seat radius) stands it back up. All checks
       // use the RAW target position `p`, so the visual blend below can't
       // feed back into the dwell/velocity logic.
-      const rawSpeedMs = speedMms / 1000;
+      const rawSpeedMs = rawSpeedMms / 1000;
       if (rawSpeedMs < 0.15) h.dwell += dt; else h.dwell = Math.max(0, h.dwell - dt * 3);
       let wantSit = false;
       if (h.sitSpot) {
@@ -2893,6 +3276,26 @@ export class ThreeDRenderer {
         standX = anchor.x + Math.sin(anchor.facing) * standOff;
         standZ = anchor.z + Math.cos(anchor.facing) * standOff;
       }
+
+      // ── Collision-aware navigation. While walking, the rig renders at `nav`
+      // (steered around furniture/walls) rather than the raw radar point.
+      // Anchored rigs (seated / activity, blend > 0.3) skip nav entirely — the
+      // sit/activity blend already owns the position — and just ease nav toward
+      // the rendered spot (done after px2/pz2 resolve) so stand-up is
+      // continuous. See _steerNav / _aStar.
+      const anchored = sit > 0.3 || act > 0.3;
+      if (!anchored) this._steerNav(h, t, dt, rawSpeedMms);
+      // NAV velocity (drives gait + facing): low-passed nav displacement.
+      {
+        const nix = (h.navX - h.lastX) / dtFull, niz = (h.navZ - h.lastZ) / dtFull;
+        const al = Math.min(1, dt * 4);
+        h.vx = h.vx * (1 - al) + nix * al;
+        h.vz = h.vz * (1 - al) + niz * al;
+      }
+      h.lastX = h.navX; h.lastZ = h.navZ;
+      // Body-forward in this rig is local -Z; facing eases toward the nav
+      // velocity heading (walking branch below).
+      const speedMms = Math.hypot(h.vx, h.vz);
 
       if (anchor && act > 0.3) {
         // Turn to face the appliance while engaging.
@@ -3066,14 +3469,16 @@ export class ThreeDRenderer {
       h.scale += (1 - h.scale) * Math.min(1, dt * 10);
       h.group.scale.setScalar(h.scale);
 
-      // Terrain: figures on stairs/landings stand at the surface height,
-      // eased so climbing reads as a glide up the treads rather than pops.
-      const gTarget = this._groundYAt(t.x, t.y);
+      // Terrain: figures on stairs/landings stand at the surface height under
+      // the NAV position (they climb along their detour path), eased so
+      // climbing reads as a glide up the treads rather than pops.
+      const gTarget = this._groundYAt(this._fw / 2 - h.navX, h.navZ + this._fd / 2);
       h.groundY += (gTarget - h.groundY) * Math.min(1, dt * 8);
 
       // Subtle vertical bob — peaks twice per stride cycle. When seated the
       // root drops so the hip pivot (870 mm in the rig) rests on the seat,
-      // and x/z pull onto the seat center.
+      // and x/z pull onto the seat center. The WALKING term is the nav
+      // position (obstacle-avoided), not the raw radar point.
       const bob = Math.abs(sinP) * 40 * ampNorm;
       const HIP_Y = 870;
       let px2: number, pz2: number, py2: number;
@@ -3081,19 +3486,25 @@ export class ThreeDRenderer {
         // Standing activity: pull onto the stand point beside the appliance;
         // stay on the walking surface (minus the exercise squat drop).
         const a = act, na = 1 - act;
-        px2 = p.x * na + standX * a;
-        pz2 = p.z * na + standZ * a;
+        px2 = h.navX * na + standX * a;
+        pz2 = h.navZ * na + standZ * a;
         py2 = h.groundY + bob - squatDrop;
       } else if (spot) {
         // Seated: drop the root so the hip pivot rests on the seat, pull x/z
         // onto the seat center.
-        px2 = p.x * stand + spot.x * sit;
-        pz2 = p.z * stand + spot.z * sit;
+        px2 = h.navX * stand + spot.x * sit;
+        pz2 = h.navZ * stand + spot.z * sit;
         py2 = (h.groundY + bob) * stand + (spot.seatY - HIP_Y) * sit;
       } else {
-        px2 = p.x; pz2 = p.z; py2 = h.groundY + bob;
+        px2 = h.navX; pz2 = h.navZ; py2 = h.groundY + bob;
       }
       h.group.position.set(px2, py2, pz2);
+      // While anchored, ease nav toward the rendered position so there's no
+      // jump when the blend releases and nav takes over walking again.
+      if (anchored) {
+        h.navX += (px2 - h.navX) * Math.min(1, dt * 3);
+        h.navZ += (pz2 - h.navZ) * Math.min(1, dt * 3);
+      }
 
       // Plumbob spin (absolute clock + per-rig offset so rigs desync) and
       // blob-shadow grounding: the root bobs / drops onto seats, but the
@@ -3161,6 +3572,35 @@ export class ThreeDRenderer {
       else { h.bubbleWant = want; h.bubbleDwell = 0; }
       if (h.bubbleDwell > 2.5 && h.bubbleKind !== h.bubbleWant) h.bubbleKind = h.bubbleWant;
       this._syncBubble(h, dt);
+
+      // Eligible for mutual separation: walking (not sit/activity anchored),
+      // visible, and not hidden under bed covers (previous frame's summary).
+      if (sit < 0.3 && act < 0.3 && !this._bedState.hiddenKeys.has(t.key)) {
+        movers.push({ h, key: t.key });
+      }
+    }
+
+    // ── Mutual separation: keep crossing pedestrians from overlapping. For each
+    // eligible pair closer than 380 mm in nav space, push both apart along the
+    // pair axis by half the overlap (capped 60 mm/frame each). Applied to the
+    // nav positions (so it persists) and re-committed to the rendered x/z.
+    const SEP = 380;
+    for (let i = 0; i < movers.length; i++) {
+      for (let j = i + 1; j < movers.length; j++) {
+        const a = movers[i].h, b = movers[j].h;
+        let ddx = a.navX - b.navX, ddz = a.navZ - b.navZ;
+        let d = Math.hypot(ddx, ddz);
+        if (d >= SEP) continue;
+        if (d < 1e-3) { ddx = 1; ddz = 0; d = 1e-3; }  // coincident → arbitrary axis
+        const push = Math.min(60, (SEP - d) / 2);
+        ddx /= d; ddz /= d;
+        a.navX += ddx * push; a.navZ += ddz * push;
+        b.navX -= ddx * push; b.navZ -= ddz * push;
+      }
+    }
+    for (const m of movers) {
+      m.h.group.position.x = m.h.navX;
+      m.h.group.position.z = m.h.navZ;
     }
 
     // Despawn: ease out instead of popping. Brief LD2450 dropouts (a target
@@ -3570,6 +4010,8 @@ export class ThreeDRenderer {
       idleOffset: Math.random() * Math.PI * 2,
       vx: 0, vz: 0,
       lastX: 0, lastZ: 0, lastUpdate: 0, initialized: false,
+      navX: 0, navZ: 0, rawVx: 0, rawVz: 0, rawLastX: 0, rawLastZ: 0,
+      path: null, pathRev: -1, goalCell: -1,
     };
   }
 
