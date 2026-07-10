@@ -45,6 +45,23 @@ export class App extends LitElement {
   private _tplDone = { floor: false, layers: false };
   private _applyUrlParams(p: Planner): void {
     const q = new URLSearchParams(window.location.search);
+    // ?debug3d=1 — on-screen error console for environments with no devtools
+    // (the HA companion app). Captures uncaught errors + rejections so a
+    // failure can be diagnosed from a screenshot.
+    if (q.get('debug3d') === '1' && !document.getElementById('diorama-debug-log')) {
+      const log = document.createElement('div');
+      log.id = 'diorama-debug-log';
+      log.style.cssText = 'position:fixed;left:4px;bottom:4px;right:4px;z-index:9999;' +
+        'background:rgba(0,0,0,0.82);color:#9fe89f;font:10px/1.4 monospace;padding:6px;' +
+        'max-height:35vh;overflow:auto;pointer-events:none;white-space:pre-wrap;word-break:break-all';
+      log.textContent = `debug3d on — ${navigator.userAgent}\n`;
+      document.body.appendChild(log);
+      const add = (msg: string) => { log.textContent += msg + '\n'; log.scrollTop = log.scrollHeight; };
+      window.addEventListener('error', e =>
+        add(`ERROR ${e.message} @ ${e.filename?.split('/').pop()}:${e.lineno}`));
+      window.addEventListener('unhandledrejection', e =>
+        add(`REJECTION ${(e.reason as Error)?.stack || e.reason}`));
+    }
     const mode = q.get('mode');
     if (mode === 'kiosk' || mode === 'view') {
       p.setUiMode(mode);

@@ -210,6 +210,7 @@ export class ThreeView extends LitElement {
     return resolveScenePreset(sc, states);
   }
 
+  private _tickFails = 0;
   private _startSync(): void {
     const tick = () => {
       // Always reschedule first so a thrown exception below cannot leave the
@@ -217,11 +218,31 @@ export class ThreeView extends LitElement {
       this._raf = requestAnimationFrame(tick);
       try {
         this._tickOnce();
+        if (this._tickFails) { this._tickFails = 0; this._hideTickError(); }
       } catch (err) {
         console.error('three-view sync tick failed:', err);
+        // A one-off bad frame recovers silently, but a PERSISTENTLY failing
+        // tick used to render as an inexplicable frozen/blank view (the iOS
+        // app has no console). Surface the actual error on screen instead.
+        if (++this._tickFails === 30) this._showTickError(err);
       }
     };
     this._raf = requestAnimationFrame(tick);
+  }
+
+  private _showTickError(err: unknown): void {
+    this._hideTickError();
+    const d = document.createElement('div');
+    d.id = 'three-tick-error';
+    d.style.cssText = 'position:absolute;left:8px;bottom:8px;right:8px;z-index:30;' +
+      'background:rgba(120,20,20,0.92);color:#ffd7d7;font-size:11px;padding:8px 10px;' +
+      'border-radius:6px;max-height:40%;overflow:auto;white-space:pre-wrap;word-break:break-all';
+    d.textContent = '3D view is failing to render:\n' +
+      ((err as Error)?.stack || (err as Error)?.message || String(err));
+    this._area.appendChild(d);
+  }
+  private _hideTickError(): void {
+    this._area.querySelector('#three-tick-error')?.remove();
   }
 
   // Dirty keys per scene group. Each update* call rebuilds geometry +
@@ -257,18 +278,25 @@ export class ThreeView extends LitElement {
         this._keyMotion = this._keyEnv = this._keyLights = this._keyZones = this._keyHalos = '';
       }
 
+      // Layer visibility (shared with the 2D layer flags): group-scoped
+      // layers are cheap per-tick visible flips; furniture + bg gate at
+      // floor build time below (they live inside _floorGroup).
+      const layers = p.store.layers2d ?? {};
+      r.setLayerVisibility(layers);
+
       // Floor / walls / furniture / bg: structural + effective lighting
       // preset (auto modes flip it as the sun/lux sensor moves) + per-floor
-      // look overrides.
+      // look overrides + build-time-gated layers.
       const scBase = p.store.scene3d ?? { preset: 'night' as const };
       const effPreset = this._effectivePreset(scBase, states);
-      const keyFloor = `${p.configRev}|${effPreset}`;
+      const keyFloor = `${p.configRev}|${effPreset}|` +
+        `${layers.furniture !== false}|${layers.bg !== false}`;
       if (keyFloor !== this._keyFloor) {
         this._keyFloor = keyFloor;
         // customObjects edits bump configRev (via emitConfig) → keyFloor flips
         // → the placed recipe instance rebuilds as its own live preview.
         r.updateFloor(f, { ...scBase, ...(f.look3d ?? {}), preset: effPreset },
-          undefined, p.store.customObjects);
+          layers, p.store.customObjects);
       }
 
       // Imported 3D model: reload text from IDB when rev changes; rebuild

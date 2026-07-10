@@ -290,9 +290,18 @@ export class ThreeDRenderer {
     });
 
     // Recover from iOS Safari context loss without a full reload.
+    // preventDefault on `lost` is what allows the browser to fire
+    // `restored` at all; on restore, force a frame so a backgrounded
+    // HA-app WebView doesn't come back to a black canvas.
     this._renderer.domElement.addEventListener('webglcontextlost', e => {
       e.preventDefault();
       console.warn('WebGL context lost — will restore on next event.');
+    });
+    this._renderer.domElement.addEventListener('webglcontextrestored', () => {
+      console.warn('WebGL context restored.');
+      if (this._renderer && this._scene && this._camera) {
+        this._renderer.render(this._scene, this._camera);
+      }
     });
 
     // Fixture click / dblclick — manual pointerdown/pointerup pair instead of
