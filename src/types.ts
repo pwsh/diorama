@@ -85,6 +85,7 @@ export interface Furniture {
   rotation?: number;  // degrees, screen-CW (matches motion sensor heading convention); default 0
   elevation?: number; // mm the piece's base sits above the floor (upper stair
                       // flights, items on counters, wall-hung units); default 0
+  color?: string;     // hex override of the kind's default tint; undefined = use def color
   locked?: boolean;   // canvas move/resize/rotate/delete disabled
   entity_id?: string | null;  // HA binding for appliances / TV (media_player etc.)
   customKindId?: string;      // ObjectRecipe reference (Store.customObjects); `kind` stays as fallback

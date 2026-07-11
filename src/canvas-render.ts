@@ -697,11 +697,16 @@ function drawFurniturePrimitiveLocal(
   const x = -halfW, y = -halfH, w = halfW * 2, h = halfH * 2;
   const fill = (c: string) => { ctx.fillStyle = c; ctx.fillRect(x, y, w, h); };
   const stroke = (c: string) => { ctx.strokeStyle = c; ctx.lineWidth = 1; ctx.strokeRect(x, y, w, h); };
+  // Body fill honours a per-piece color override (Furniture.color); with no
+  // override the kind's tuned default constant is kept so the plan look is
+  // unchanged. Glyphs that hardcode a material (porcelain white, steel) opt out.
+  const bodyFill = (fallback: string, alpha: number) =>
+    piece.color ? hexToRgba(piece.color, alpha) : fallback;
   // Custom object recipes draw as a generic rect tinted by the recipe color
   // (grey when the recipe is missing). The piece label is drawn by the caller.
   if (piece.customKindId) {
     const rec = customObjects?.find(o => o.id === piece.customKindId);
-    const hex = '#' + ((rec?.color ?? 0x8a8a8a) & 0xffffff).toString(16).padStart(6, '0');
+    const hex = piece.color ?? ('#' + ((rec?.color ?? 0x8a8a8a) & 0xffffff).toString(16).padStart(6, '0'));
     fill(hexToRgba(hex, 0.5));
     stroke(hex);
     return;
@@ -710,7 +715,7 @@ function drawFurniturePrimitiveLocal(
   // because canvas Y is flipped. Backrest, headboard, pillows live there.
   switch (kind) {
     case 'rug':
-      fill('rgba(141,110,99,0.30)');
+      fill(bodyFill('rgba(141,110,99,0.30)', 0.30));
       ctx.strokeStyle = '#8d6e63';
       ctx.setLineDash([6, 4]);
       ctx.lineWidth = 1.5;
@@ -720,7 +725,7 @@ function drawFurniturePrimitiveLocal(
     case 'table':
     case 'desk':
     case 'coffee_table':
-      fill('rgba(120,90,70,0.45)');
+      fill(bodyFill('rgba(120,90,70,0.45)', 0.45));
       stroke('#a1887f');
       // Leg dots at corners.
       ctx.fillStyle = '#5d4037';
@@ -765,7 +770,7 @@ function drawFurniturePrimitiveLocal(
       // forward. Same back-at-top convention as chairs/sofas.
       const mainH = h * 0.5;
       const retW = kind === 'sofa_u' ? w * 0.3 : w * 0.35;
-      ctx.fillStyle = 'rgba(55,71,79,0.65)';
+      ctx.fillStyle = bodyFill('rgba(55,71,79,0.65)', 0.65);
       ctx.strokeStyle = '#90a4ae'; ctx.lineWidth = 1;
       const rects: [number, number, number, number][] = [[x, y, w, mainH]];
       if (kind !== 'sofa_l_right') rects.push([x, y + mainH, retW, h - mainH]);           // left return
@@ -781,7 +786,7 @@ function drawFurniturePrimitiveLocal(
       break;
     }
     case 'sofa':
-      fill('rgba(55,71,79,0.65)');
+      fill(bodyFill('rgba(55,71,79,0.65)', 0.65));
       stroke('#90a4ae');
       // Back band on +Y edge.
       ctx.fillStyle = '#263238';
@@ -791,7 +796,7 @@ function drawFurniturePrimitiveLocal(
       ctx.fillRect(x + w - Math.min(w, w * 0.10), y, Math.min(w, w * 0.10), h);
       break;
     case 'bed':
-      fill('rgba(84,110,122,0.55)');
+      fill(bodyFill('rgba(84,110,122,0.55)', 0.55));
       stroke('#b0bec5');
       // Headboard on +Y edge.
       ctx.fillStyle = '#37474f';
@@ -863,7 +868,7 @@ function drawFurniturePrimitiveLocal(
     case 'cabinet':
     case 'counter':
     case 'island': {
-      fill('rgba(109,76,65,0.5)');
+      fill(bodyFill('rgba(109,76,65,0.5)', 0.5));
       stroke('#a1887f');
       ctx.strokeStyle = '#4e342e'; ctx.lineWidth = 1;
       if (kind === 'dresser' || kind === 'nightstand') {
@@ -1036,7 +1041,8 @@ function drawFurniturePrimitiveLocal(
       break;
     }
     default:
-      fill('rgba(140,140,140,0.25)');
+      // Covers `block` and any unhandled kind; the override recolors the body.
+      fill(bodyFill('rgba(140,140,140,0.25)', 0.35));
       stroke('#888');
   }
 }

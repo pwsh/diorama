@@ -324,6 +324,27 @@ export class Canvas2D extends LitElement {
     if (e.key === 'Enter' && p.editZone) { finishZoneEdit(p); return; }
     if (e.key === '0' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); p.resetView(); return; }
     if (this.planner.uiMode !== 'edit') return;  // kiosk/view: no edit keys
+    // Arrow keys nudge the ACTIVE furniture piece by 25 mm (100 with Shift) in
+    // world mm. This is the manual escape hatch to fine-position a piece (e.g.
+    // away from a wall), so it deliberately does NOT run the drag-time
+    // wall/seat collision solvers — just move, persist (debounced save, same as
+    // a drag), and re-render. Bare arrows only; the form-control guard above
+    // already blocks INPUT/SELECT/TEXTAREA/contentEditable.
+    if (e.key.startsWith('Arrow') && p.activeFurnitureId &&
+        !e.ctrlKey && !e.metaKey && !e.altKey) {
+      const piece = p.floor().furniture.find(x => x.id === p.activeFurnitureId);
+      if (piece && !piece.locked) {
+        const step = e.shiftKey ? 100 : 25;
+        // Canvas Y is screen-down but world +Y is screen-up: ArrowUp raises y.
+        if (e.key === 'ArrowUp') piece.y += step;
+        else if (e.key === 'ArrowDown') piece.y -= step;
+        else if (e.key === 'ArrowLeft') piece.x -= step;
+        else if (e.key === 'ArrowRight') piece.x += step;
+        e.preventDefault();
+        p.save(); p.emitConfig();
+        return;
+      }
+    }
     if (e.key === 'Delete' || e.key === 'Backspace') {
       const f = p.floor();
       if (p.activeMotionId) {

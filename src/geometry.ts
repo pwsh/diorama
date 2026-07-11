@@ -366,6 +366,17 @@ export function sensorColor(s: { color?: string }, idx: number): string {
   return s.color ?? SENSOR_PALETTE[idx % SENSOR_PALETTE.length];
 }
 
+// Effective 3D/2D tint for a furniture piece: per-piece `color` override (hex)
+// wins, else the resolved kind/recipe default. Returns an int (0xRRGGBB) so it
+// drops straight into the material factories / hexToRgba call sites.
+export function furnitureColor(
+  f: { color?: string; kind?: FurnitureKind; customKindId?: string },
+  customObjects?: ObjectRecipe[],
+): number {
+  if (f.color) return hexToInt(f.color);
+  return resolveFurnitureDef(f as Furniture, customObjects).color;
+}
+
 // ── Environmental sensor kinds ────────────────────────────────────────────
 // Glyph + base color per kind, plus alert thresholds (value ≥ warn → amber,
 // ≥ danger → red) for the kinds where the reading has a health meaning.

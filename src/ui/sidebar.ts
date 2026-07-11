@@ -7,10 +7,11 @@ import type { Planner, Tool } from '../planner.js';
 import { NEW_ROOM } from '../planner.js';
 import type {
   Sensor, Zone, ObjectHalo, BgImage, MotionSensor, EnvSensor, EnvKind, Light, SwitchFixture, LightIconKind,
-  Furniture, FurnitureKind, Door, Window as WindowType, Layers2D,
+  Furniture, FurnitureKind, Door, Window as WindowType, Layers2D, Floor,
   ObjectRecipe, RecipePrimitive, RecipeShape, ActivityKind,
 } from '../types.js';
 import {
+  fmtLen,
   motionColor, motionIntensity, sensorColor, lightIconKind, MOTION_DEFAULTS,
   FURNITURE_KINDS, furnitureKind, resolveFurnitureDef,
   ENV_KINDS, ENV_DEFAULTS, ENV_SCALE_MIN, ENV_SCALE_MAX,
@@ -82,6 +83,7 @@ export class Sidebar extends LitElement {
       <div style="width:250px;flex-shrink:0;border-right:1px solid var(--border);
                   background:var(--surface);overflow-y:auto;overflow-x:hidden;
                   display:flex;flex-direction:column;height:100%;min-height:0">
+        ${this._floorsSection()}
         <div class="section">
           <h3>Tools</h3>
           <div style="display:flex;flex-wrap:wrap;gap:4px">
@@ -174,6 +176,60 @@ export class Sidebar extends LitElement {
       </div>
     `;
   }
+
+  // ── Floors section ────────────────────────────────────────────────────
+  private _floorsSection() {
+    const p = this.planner;
+    return html`
+      <div class="section">
+        <h3>Floors</h3>
+        <div class="row" style="margin-bottom:6px">
+          <select title="Current floor" style="flex:1;min-width:0"
+                  .value=${p.store.currentFloorId}
+                  @change=${(e: Event) => p.switchFloor((e.target as HTMLSelectElement).value)}>
+            ${p.store.floors.map(f => html`
+              <option value=${f.id}>
+                ${f.name} — ${fmtLen(f.w, p.store.imperial)} × ${fmtLen(f.d, p.store.imperial)}
+              </option>
+            `)}
+          </select>
+        </div>
+        <div style="display:flex;gap:4px">
+          <button class="btn" style="flex:1" title="New floor" @click=${this._openNewFloor}>+ Floor</button>
+          <button class="btn" title="Edit floor size / name" @click=${this._openEditFloor}>✎</button>
+          <button class="btn danger" title="Delete current floor" @click=${this._delFloor}>🗑</button>
+        </div>
+        <label class="row" style="padding:0;margin-top:8px"
+               title="Show all dimensions in feet / inches instead of millimetres">
+          <span style="color:var(--text-dim);font-size:11px;flex:1">Imperial units</span>
+          <span class="mini-toggle">
+            <input type="checkbox" .checked=${p.store.imperial}
+                   @change=${(e: Event) => { p.store.imperial = (e.target as HTMLInputElement).checked; p.save(); p.emitConfig(); }}>
+            <span></span>
+          </span>
+        </label>
+      </div>
+    `;
+  }
+
+  private _openNewFloor = () => {
+    this.dispatchEvent(new CustomEvent('open-floor-modal', {
+      bubbles: true, composed: true, detail: { floor: null },
+    }));
+  };
+  private _openEditFloor = () => {
+    this.dispatchEvent(new CustomEvent('open-floor-modal', {
+      bubbles: true, composed: true, detail: { floor: this.planner.floor() as Floor },
+    }));
+  };
+  private _delFloor = () => {
+    const p = this.planner;
+    const f = p.floor();
+    if (p.store.floors.length <= 1) { alert('At least one floor is required.'); return; }
+    if (confirm('Export a backup before deleting?')) this._exportJson();
+    if (!confirm(`Delete floor "${f.name}"? This cannot be undone.`)) return;
+    p.deleteFloor(f.id);
+  };
 
   // ── Tool hint ─────────────────────────────────────────────────────────
   private _toolHint(tool: Tool): string {
@@ -938,6 +994,15 @@ export class Sidebar extends LitElement {
           </select>
         </div>
         ${this._furnitureBindRow(piece, upd)}
+        <div class="row"><label>Color</label>
+          <input type="color"
+                 .value=${piece.color ?? ('#' + (resolveFurnitureDef(piece, p.store.customObjects).color & 0xffffff).toString(16).padStart(6, '0'))}
+                 style="width:36px;height:24px;padding:0;border:1px solid var(--border);background:#111"
+                 @input=${(e: Event) => upd(() => { piece.color = (e.target as HTMLInputElement).value; })}>
+          <button class="btn" style="font-size:10px;padding:2px 6px;margin-left:4px"
+                  title="Reset to the kind's default color"
+                  @click=${() => upd(() => { piece.color = undefined; })}>✕</button>
+        </div>
         ${curKind === 'bed' ? html`
           <div class="row"><label title="Two occupants hide under a shared blanket (the lump breathes). Off: they lie side by side, no blanket.">Two-person covers</label>
             <input type="checkbox" .checked=${piece.sharedBedCovers !== false}
@@ -1839,6 +1904,38 @@ export class Sidebar extends LitElement {
               <span></span>
             </span>
           </label>`)}
+        <div style="border-top:1px solid var(--border);margin:6px 0"></div>
+        <label class="row" style="padding:0"
+               title="Show mmWave sensor coverage cones (2D + 3D)">
+          <span style="color:var(--text-dim);font-size:11px;flex:1">mmWave coverage</span>
+          <span class="mini-toggle">
+            <input type="checkbox" .checked=${p.store.coverage}
+                   @change=${(e: Event) => { p.store.coverage = (e.target as HTMLInputElement).checked; p.save(); p.emitConfig(); }}>
+            <span></span>
+          </span>
+        </label>
+        <label class="row" style="padding:0"
+               title="Show motion sensor coverage zones">
+          <span style="color:var(--text-dim);font-size:11px;flex:1">Motion zones</span>
+          <span class="mini-toggle">
+            <input type="checkbox" .checked=${p.store.showMotionZones !== false}
+                   @change=${(e: Event) => { p.store.showMotionZones = (e.target as HTMLInputElement).checked; p.save(); p.emitConfig(); }}>
+            <span></span>
+          </span>
+        </label>
+        <label class="row" style="padding:0"
+               title="Show the per-target detail overlay">
+          <span style="color:var(--text-dim);font-size:11px;flex:1">Target details</span>
+          <span class="mini-toggle">
+            <input type="checkbox" .checked=${p.showDetails}
+                   @change=${(e: Event) => {
+                     p.showDetails = (e.target as HTMLInputElement).checked;
+                     p.store.showDetails = p.showDetails;
+                     p.save(); p.emitConfig();
+                   }}>
+            <span></span>
+          </span>
+        </label>
         <div style="display:flex;gap:4px;margin-top:6px">
           <button class="btn" style="flex:1;font-size:11px" @click=${() => {
             const name = prompt('Preset name:', `Layers ${presets.length + 1}`);

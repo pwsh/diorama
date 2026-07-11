@@ -10,7 +10,7 @@ import {
   lightHeight, lightRadius, lightIntensity, lightIconKind, lightRotation, lightLength,
   switchHeight, switchRotation, switchSize,
   motionColor, motionIntensity, hexToInt,
-  furnitureDef, resolveFurnitureDef, doorOpenDeltaDeg,
+  furnitureDef, resolveFurnitureDef, furnitureColor, doorOpenDeltaDeg,
   ENV_KINDS, envKindOf, envColor, envValueText, envHeight, envScale,
 } from './geometry.js';
 import type { Door, Window as WindowType, EnvSensor, ObjectRecipe, ActivityKind } from './types.js';
@@ -2136,13 +2136,17 @@ export class ThreeDRenderer {
   private _buildFurniture(fu: { x: number; y: number; w: number; h: number;
                                  kind?: import('./types.js').FurnitureKind;
                                  rotation?: number; elevation?: number;
-                                 customKindId?: string },
+                                 color?: string; customKindId?: string },
                           neighbors?: Furniture[],
                           customObjects?: ObjectRecipe[]): THREE.Group {
     const recipe = fu.customKindId ? customObjects?.find(o => o.id === fu.customKindId) : undefined;
     const def = recipe ?? furnitureDef(fu);
     const W = fu.w, D = fu.h, HT = def.ht;
-    const tint = def.color;
+    // Per-piece color override wins over the kind/recipe default tint. Custom
+    // recipe primitives that fix their own color/role keep it (see
+    // _buildFromRecipe); the override only flows into `tint`, which the
+    // wood/cushion/steel/panel materials below pick up.
+    const tint = furnitureColor(fu, customObjects);
     // Opaque PBR materials. Furniture used to be ~55% transparent, which read
     // as ghostly and produced depth-sort artifacts; with the scene environment
     // map (see _init) opaque standard materials pick up soft reflections and
@@ -2216,8 +2220,10 @@ export class ThreeDRenderer {
 
     const kind = fu.kind ?? 'block';
     // Custom object recipes build from their generic primitive list, then get
-    // the SAME Sims dressing (outlines + blob) as built-in kinds below.
-    if (recipe) this._buildFromRecipe(grp, recipe);
+    // the SAME Sims dressing (outlines + blob) as built-in kinds below. A
+    // per-piece color override recolors ONLY the primitives that left their
+    // color unset (recipe primitives with an explicit color keep it).
+    if (recipe) this._buildFromRecipe(grp, recipe, fu.color ? hexToInt(fu.color) : undefined);
     else switch (kind) {
       case 'rug':
         addBox(W, HT, D, wood, 0, HT / 2, 0);
@@ -2265,9 +2271,11 @@ export class ThreeDRenderer {
       case 'chaise': {
         const seatT = 80, seatY = (def.seat ?? 400) - seatT / 2;
         addBox(W, seatT, D, cushion, 0, seatY, 0);
-        // Low back at one end (head end = -X side); backrest depth = D, height ~ HT - seat.
+        // Low back at the head end. `_w` mirrors X, so the 2D glyph's head end
+        // (plan-left, drawn at local -X unmirrored) maps to local +X here — put
+        // the back on local +X so 2D and 3D agree on which end the head is.
         const backH = HT - (def.seat ?? 400), backW = W * 0.30;
-        addBox(backW, backH, D, cushion, -W / 2 + backW / 2, (def.seat ?? 400) + backH / 2, 0);
+        addBox(backW, backH, D, cushion, W / 2 - backW / 2, (def.seat ?? 400) + backH / 2, 0);
         // Legs hidden by skirt — single low base plate.
         addBox(W * 0.95, seatY, D * 0.95, dark, 0, seatY / 2, 0);
         break;
@@ -2286,7 +2294,11 @@ export class ThreeDRenderer {
       case 'sofa_l_right':
       case 'sofa_u': {
         // Sectionals: back band + main seat along +Z (the back), return
-        // arm(s) reaching toward the front (-Z). Plan-left = local -X.
+        // arm(s) reaching toward the front (-Z). NOTE `_w` mirrors X, so
+        // world/plan +X = local -X and plan-left (world -X) = local +X. The
+        // return therefore goes on local +X for the *left* variant and local
+        // -X for the *right* variant so the chaise lands on the labelled plan
+        // side and matches the 2D glyph (which draws unmirrored).
         const seatH2 = def.seat ?? 450;
         const seatT = 100, seatY = seatH2 - seatT / 2;
         const backH = HT - seatH2, backT = 220;
@@ -2297,7 +2309,7 @@ export class ThreeDRenderer {
         addBox(W, seatT, mainD, cushion, 0, seatY, D / 2 - mainD / 2);
         addBox(W, seatY - seatT / 2, mainD * 0.95, dark, 0, (seatY - seatT / 2) / 2, D / 2 - mainD / 2);
         const sides: number[] = kind === 'sofa_u' ? [-1, 1]
-          : [kind === 'sofa_l_left' ? -1 : 1];
+          : [kind === 'sofa_l_left' ? 1 : -1];
         for (const sx of sides) {
           addBox(retW, seatT, retD, cushion, sx * (W / 2 - retW / 2), seatY, retZ);
           addBox(retW, seatY - seatT / 2, retD * 0.95, dark, sx * (W / 2 - retW / 2), (seatY - seatT / 2) / 2, retZ);
@@ -2727,7 +2739,7 @@ export class ThreeDRenderer {
   // are per-shape (box [w,ht,d]; cylinder [rTop,rBot,ht]; sphere [r,_,_];
   // cone [r,ht,_]); pos/rot are local mm / deg. The caller applies the shared
   // Sims dressing (outlines + blob) afterward, same as the built-in kinds.
-  private _buildFromRecipe(grp: THREE.Group, recipe: ObjectRecipe): void {
+  private _buildFromRecipe(grp: THREE.Group, recipe: ObjectRecipe, override?: number): void {
     const d2r = (d: number) => d * Math.PI / 180;
     for (const prim of recipe.primitives) {
       const [a, b, c] = prim.size;
@@ -2739,7 +2751,9 @@ export class ThreeDRenderer {
         case 'box':
         default:         geo = new THREE.BoxGeometry(a, b, c); break;
       }
-      const m = new THREE.Mesh(geo, this._mat({ color: hexToInt(prim.color ?? '#8a8a8a') }));
+      // Primitive's own color wins; else the piece override (when set); else grey.
+      const col = prim.color ? hexToInt(prim.color) : (override ?? 0x8a8a8a);
+      const m = new THREE.Mesh(geo, this._mat({ color: col }));
       m.position.set(prim.pos[0], prim.pos[1], prim.pos[2]);
       if (prim.rot) m.rotation.set(d2r(prim.rot[0]), d2r(prim.rot[1]), d2r(prim.rot[2]));
       grp.add(m);
