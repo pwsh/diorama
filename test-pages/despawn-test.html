@@ -1,0 +1,84 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>despawn test</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<script type="module">
+  const q = new URLSearchParams(location.search);
+  const test = q.get('test') || 'fast';
+  const mod = await import('./assets/three-renderer.js');
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+  const FW = 8000, FD = 6000;
+  const floor = {
+    id: 'f1', name: 'Open', w: FW, d: FD,
+    walls: [], furniture: [],
+    lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [], windows: [], bg: null, model3d: null, look3d: null, rooms: [],
+  };
+  r.updateFloor(floor, { preset: 'day', floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6' });
+
+  const realNow = performance.now.bind(performance);
+  let fakeNow = realNow();
+  performance.now = () => fakeNow;
+  const DT = 16.7;
+  const step = (targets) => { fakeNow += DT; r.updateTargets(targets); };
+  const KEY = 't1';
+
+  if (test === 'fast') {
+    // Moving fast at the coverage EDGE, then vanish → FAST scale-out.
+    let x = 2000;
+    for (let i = 0; i < 60; i++) { x += 20; step([{ key: KEY, x, y: 3000, color: 0x4fc3f7, edge: true }]); }
+    const spd = r._humanoids[KEY].lastRawSpeed;
+    // vanish
+    let mode = null, framesToGone = -1;
+    for (let i = 0; i < 120; i++) {
+      step([]);
+      const h = r._humanoids[KEY];
+      if (h) { mode = h.despawnMode; }
+      else if (framesToGone < 0) { framesToGone = i; break; }
+    }
+    const secs = (framesToGone * DT / 1000).toFixed(2);
+    document.title = `FAST spd=${spd.toFixed(2)} mode=${mode} gone@${secs}s ` +
+      `${mode === 'fast' && framesToGone >= 0 && framesToGone * DT / 1000 < 1 ? 'PASS' : 'FAIL'}`;
+  } else if (test === 'slow') {
+    // Mid-coverage, standing still, then vanish → SLOW 10 s opacity fade.
+    for (let i = 0; i < 120; i++)
+      step([{ key: KEY, x: 4000 + Math.sin(fakeNow/900)*4, y: 3000, color: 0x4fc3f7, edge: false }]);
+    // vanish; run ~5 s of fade
+    let mode = null, alpha = 1;
+    const secs = parseFloat(q.get('s') || '5');
+    const frames = Math.round(secs / (DT/1000));
+    for (let i = 0; i < frames; i++) {
+      step([]);
+      const h = r._humanoids[KEY];
+      if (h) { mode = h.despawnMode; alpha = h.fadeAlpha; }
+    }
+    // sample the head material opacity to confirm the fade reached the meshes
+    const h = r._humanoids[KEY];
+    let matOp = -1, outlineOp = -1;
+    if (h) h.group.traverse(o => {
+      const m = o.material;
+      if (!m || Array.isArray(m)) return;
+      if (o === h.torso) matOp = m.opacity;
+      if (m === h.outlineMat) outlineOp = m.opacity;
+    });
+    r.applyViewPreset('iso');
+    document.title = `SLOW mode=${mode} alpha=${alpha.toFixed(2)} torsoOp=${matOp.toFixed(2)} ` +
+      `outlineOp=${outlineOp.toFixed(2)} alive=${!!h}`;
+  } else if (test === 'reacquire') {
+    // Mid-coverage vanish then RE-ACQUIRE mid-fade → opacity restored to 1.
+    for (let i = 0; i < 120; i++)
+      step([{ key: KEY, x: 4000, y: 3000, color: 0x4fc3f7, edge: false }]);
+    for (let i = 0; i < 180; i++) step([]);        // ~3s fade
+    const midAlpha = r._humanoids[KEY].fadeAlpha;
+    for (let i = 0; i < 30; i++) step([{ key: KEY, x: 4000, y: 3000, color: 0x4fc3f7, edge: false }]);
+    const h = r._humanoids[KEY];
+    let torsoOp = -1;
+    h.group.traverse(o => { if (o === h.torso && o.material) torsoOp = o.material.opacity; });
+    document.title = `REACQUIRE midAlpha=${midAlpha.toFixed(2)} mode=${h.despawnMode} ` +
+      `fadeAlpha=${h.fadeAlpha.toFixed(2)} torsoOp=${torsoOp.toFixed(2)} ` +
+      `${h.despawnMode === null && h.fadeAlpha > 0.99 && torsoOp > 0.99 ? 'PASS' : 'FAIL'}`;
+  }
+  performance.now = realNow;
+</script>

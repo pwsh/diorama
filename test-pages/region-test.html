@@ -1,0 +1,83 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>region test</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<script type="module">
+  const q = new URLSearchParams(location.search);
+  const test = q.get('test') || 'rooms';
+  const mod = await import('./assets/three-renderer.js');
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+
+  // Two rooms split by a GAPLESS vertical wall at x=4000 (y 0..6000). Left room
+  // x<4000, right room x>4000. A radar can "see through" the wall, so a target
+  // teleported to the right room while the rig is on the left must NOT walk
+  // through — it should fade out and respawn on the right side.
+  const FW = 8000, FD = 6000;
+  const floor = {
+    id: 'f1', name: 'Two rooms', w: FW, d: FD,
+    walls: [
+      { id: 'perim', points: [{x:0,y:0},{x:FW,y:0},{x:FW,y:FD},{x:0,y:FD},{x:0,y:0}] },
+      { id: 'divider', points: [{ x: 4000, y: 0 }, { x: 4000, y: FD }] },
+    ],
+    furniture: [],
+    lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [], windows: [], bg: null, model3d: null, look3d: null, rooms: [],
+  };
+  r.updateFloor(floor, { preset: 'day', floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6' });
+  r.applyViewPreset('top');
+
+  const realNow = performance.now.bind(performance);
+  let fakeNow = realNow();
+  performance.now = () => fakeNow;
+  const DT = 16.7;
+  const step = (targets) => { fakeNow += DT; r.updateTargets(targets); };
+  const navWorld = (h) => ({ x: FW / 2 - h.navX, y: h.navZ + FD / 2 });
+  const regionAt = (wx, wy) => {
+    const n = r._nav; const cell = n.cell;
+    const cx = Math.max(0, Math.min(n.nx-1, Math.floor(wx/cell)));
+    const cy = Math.max(0, Math.min(n.ny-1, Math.floor(wy/cell)));
+    return n.region[cy*n.nx+cx];
+  };
+
+  if (test === 'rooms') {
+    const KEY = 't1';
+    const nRegions = Math.max(...r._nav.region) + 1;
+    const leftReg = regionAt(2000, 3000), rightReg = regionAt(6000, 3000);
+    // Settle in the LEFT room.
+    const left = { key: KEY, x: 2000, y: 3000, color: 0x4fc3f7 };
+    for (let i = 0; i < 30; i++) step([left]);
+    const h = r._humanoids[KEY];
+    const spawnW = navWorld(h);
+    const samples = [];
+    // Teleport raw target to the RIGHT room. Watch the rig: it must not cross
+    // x=4000 (wall), should accumulate stuckT, fade, then respawn on the right.
+    const rightTgt = { key: KEY, x: 6000, y: 3000, color: 0x4fc3f7 };
+    let maxNavX = -1, everRight = false, crossedWall = false;
+    let respawnedRight = false;
+    const FR = 360; // 6s
+    for (let i = 0; i < FR; i++) {
+      step([rightTgt]);
+      const hh = r._humanoids[KEY];
+      const w = navWorld(hh);
+      maxNavX = Math.max(maxNavX, w.x);
+      if (w.x > 4100) everRight = true;
+      // "crossed wall" = while on the wrong side, physically at x within the wall
+      if (Math.abs(w.x - 4000) < 120) crossedWall = true;
+      if (i % 30 === 0) samples.push({ t: (i*DT/1000).toFixed(1), wx: Math.round(w.x),
+        wy: Math.round(w.y), reg: regionAt(w.x, w.y), stuck: hh.stuckT.toFixed(1),
+        ph: hh.respawnPhase, sc: hh.scale.toFixed(2) });
+    }
+    const hh = r._humanoids[KEY];
+    const finalW = navWorld(hh);
+    respawnedRight = finalW.x > 4100 && regionAt(finalW.x, finalW.y) === rightReg;
+    const pass = respawnedRight && !crossedWall;
+    window.__RESULT__ = { nRegions, leftReg, rightReg, spawnW, finalW, respawnedRight,
+      crossedWall, pass, samples };
+    document.title = `ROOMS ${pass ? 'PASS' : 'FAIL'} regs=${nRegions} L=${leftReg} R=${rightReg} ` +
+      `respawnR=${respawnedRight} crossedWall=${crossedWall} final=(${Math.round(finalW.x)},${Math.round(finalW.y)}) | ` +
+      JSON.stringify(samples);
+  }
+  performance.now = realNow;
+</script>

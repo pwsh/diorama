@@ -1,0 +1,30 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>walls</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<script type="module">
+  const q = new URLSearchParams(location.search);
+  const mod = await import('./assets/three-renderer.js');
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+  const floor = {
+    id: 'f1', name: 'T', w: 12000, d: 8000,
+    walls: [
+      // closed main room (full walls)
+      { id: 'w1', points: [{x:1000,y:1000},{x:7000,y:1000},{x:7000,y:7000},{x:1000,y:7000},{x:1000,y:1000}] },
+      // half wall inside
+      { id: 'w2', points: [{x:4000,y:1000},{x:4000,y:4000}], kind: 'half' },
+      // railing inside
+      { id: 'w3', points: [{x:4000,y:4000},{x:7000,y:4000}], kind: 'railing' },
+      // second region closed by an invisible wall (patio)
+      { id: 'w4', points: [{x:7000,y:1000},{x:11000,y:1000},{x:11000,y:7000},{x:7000,y:7000}] },
+      { id: 'w5', points: [{x:7000,y:7000},{x:7000,y:1000}], kind: 'invisible' },
+    ],
+    furniture: [], lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [], windows: [], bg: null, model3d: null,
+  };
+  r.updateFloor(floor, { preset: 'day', floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6' });
+  r.applyViewPreset(q.get('view') || 'top');
+  document.title = 'walls ok';
+</script>

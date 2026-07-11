@@ -1,0 +1,23 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>sofas</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<script type="module">
+  const mod = await import('./assets/three-renderer.js');
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+  const floor = {
+    id: 'f1', name: 'T', w: 12000, d: 6000,
+    walls: [], lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [], windows: [], bg: null, model3d: null,
+    furniture: [
+      { id: 'a', x: 2000, y: 3000, w: 2600, h: 1800, kind: 'sofa_l_left' },
+      { id: 'b', x: 5800, y: 3000, w: 2600, h: 1800, kind: 'sofa_l_right' },
+      { id: 'c', x: 9800, y: 3000, w: 3200, h: 2000, kind: 'sofa_u' },
+    ],
+  };
+  r.updateFloor(floor, { preset: 'day', floorColor: '#8a7860', floorTex: 'none', wallColor: '#cfd2d6' });
+  r.setCameraView([-1500, 2400, -6200], [0, 400, 0]);
+  document.title = 'sofas ok';
+</script>

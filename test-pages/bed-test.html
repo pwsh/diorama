@@ -1,0 +1,61 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>bed test</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<script type="module">
+  const q = new URLSearchParams(location.search);
+  const test = q.get('test') || 'solo';
+  const view = q.get('view') || 'iso';
+  const mod = await import('./assets/three-renderer.js');
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+  const FW = 8000, FD = 6000;
+  const bed = { id: 'bed1', x: 4000, y: 3000, w: 2000, h: 1500, kind: 'bed', rotation: 0 };
+  if (test === 'coversoff') bed.sharedBedCovers = false;
+  const floor = {
+    id: 'f1', name: 'Bedroom', w: FW, d: FD,
+    walls: [], furniture: [bed],
+    lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [], windows: [], bg: null, model3d: null, look3d: null, rooms: [],
+  };
+  r.updateFloor(floor, { preset: 'day', floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6' });
+
+  const realNow = performance.now.bind(performance);
+  let fakeNow = realNow();
+  performance.now = () => fakeNow;
+  const DT = 16.7;
+  const jit = () => Math.sin(fakeNow / 950) * 5;
+  const step = (targets) => { fakeNow += DT; r.updateTargets(targets); };
+
+  if (test === 'solo') {
+    const KEY = 's1';
+    // settle at bed center for ~5 s → lie engages
+    for (let i = 0; i < 300; i++)
+      step([{ key: KEY, x: 4000 + jit(), y: 3000 + jit(), color: 0x4fc3f7 }]);
+    const h = r._humanoids[KEY];
+    r.applyViewPreset(view);
+    document.title = `SOLO lie=${h.lie.toFixed(2)} rotX=${h.group.rotation.x.toFixed(2)} ` +
+      `rotY=${h.group.rotation.y.toFixed(2)} pos=(${Math.round(h.group.position.x)},` +
+      `${Math.round(h.group.position.y)},${Math.round(h.group.position.z)}) plumbobVis=${h.plumbob.visible}`;
+  } else if (test === 'coversoff' || test === 'coverson') {
+    const A = 'a', B = 'b';
+    // two occupants settle in the bed
+    for (let i = 0; i < 360; i++)
+      step([
+        { key: A, x: 4000 - 350 + jit(), y: 3000 + jit(), color: 0x4fc3f7 },
+        { key: B, x: 4000 + 350 + jit(), y: 3000 + jit(), color: 0xf06292 },
+      ]);
+    const ha = r._humanoids[A], hb = r._humanoids[B];
+    const spA = (Math.hypot(ha.vx, ha.vz)/1000).toFixed(2), spB = (Math.hypot(hb.vx, hb.vz)/1000).toFixed(2);
+    const bdwell = (r._bedDwell[bed.id] ?? 0).toFixed(1);
+    const coverT = r._bedCovers[bed.id] ? r._bedCovers[bed.id].t.toFixed(2) : 'none';
+    console.log('bedDwell', bdwell, 'spA', spA, 'spB', spB);
+    r.applyViewPreset(view);
+    document.title = `${test.toUpperCase()} lieA=${ha.lie.toFixed(2)} lieB=${hb.lie.toFixed(2)} ` +
+      `visA=${ha.group.visible} visB=${hb.group.visible} cover=${coverT} bdwell=${bdwell} spA=${spA} spB=${spB} ` +
+      `posA=(${Math.round(ha.group.position.x)},${Math.round(ha.group.position.z)}) ` +
+      `posB=(${Math.round(hb.group.position.x)},${Math.round(hb.group.position.z)})`;
+  }
+  performance.now = realNow;
+</script>

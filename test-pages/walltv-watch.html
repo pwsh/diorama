@@ -1,0 +1,47 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>walltv watch</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<script type="module">
+  const q = new URLSearchParams(location.search);
+  const on = q.get('on') !== '0';   // TV entity on by default
+  const frames = parseInt(q.get('frames') || '460', 10);
+  const mod = await import('./assets/three-renderer.js');
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+  const fu = (id, kind, x, y, w, h, rot = 0, extra = {}) => ({ id, x, y, w, h, kind, rotation: rot, ...extra });
+
+  const walls = [{ id: 'w1', points: [
+    {x:200,y:200},{x:10800,y:200},{x:10800,y:6800},{x:200,y:6800},{x:200,y:200}] }];
+  const rooms = [{ id: 'rm1', name: 'Living', anchor: {x: 5000, y: 3500} }];
+
+  const furniture = [
+    fu('sofa1', 'sofa', 2500, 5200, 2000, 900, 0),
+    // Wall-mount TV, bound to a media_player entity, on the far wall.
+    fu('wtv1', 'wall_tv', 2500, 6600, 1300, 180, 0, { entity_id: 'media_player.tv' }),
+  ];
+  const parked = [ { key: 'tv', x: 2500, y: 5200, color: 0x4fc3f7 } ];
+  const ctx = { entityOn: on ? { wtv1: true } : {}, roomNames: { rm1: 'Living' }, timeBucket: 'evening' };
+
+  const floor = {
+    id: 'f1', name: 'Test', w: 11000, d: 7000, walls, rooms, furniture,
+    lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [], windows: [], bg: null, model3d: null, look3d: null,
+  };
+  r.updateFloor(floor, { preset: 'dusk', floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6' });
+  r.applyViewPreset('iso');
+
+  const realNow = performance.now.bind(performance);
+  let fakeNow = realNow();
+  performance.now = () => fakeNow;
+  for (let i = 0; i < frames; i++) { fakeNow += 16.7; r.updateTargets(parked, ctx); }
+  performance.now = realNow;
+
+  const tvsRooms = r._tvsByRoom || {};
+  const tvCap = JSON.stringify(tvsRooms.rm1 || []);
+  const hs = r._humanoids ?? {};
+  const dump = Object.entries(hs).map(([k, h]) =>
+    `${k}:vis=${h.group.visible ? 1 : 0},act=${h.activity || '-'},sit=${h.sit.toFixed(2)}`).join('  ');
+  document.title = `on=${on} tvCap=${tvCap} | ${dump}`;
+</script>

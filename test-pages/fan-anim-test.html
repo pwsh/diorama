@@ -1,0 +1,21 @@
+<!doctype html>
+<meta charset="utf-8"><title>fan</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<script type="module">
+  const mod = await import('./assets/three-renderer.js?v=' + Date.now());
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+  const floor = { id:'f1', name:'T', w:6000, d:5000, walls:[], furniture:[],
+    lights: [{ id:'f1x', x:3000, y:2500, entity_id:'fan.living', iconKind:'fan', label:'' }],
+    switches:[], sensors:[], motionSensors:[], envSensors:[], doors:[], windows:[], bg:null, model3d:null };
+  const stOf = () => ({ state:'on', attributes:{ percentage: 60 } });
+  r.updateFloor(floor, { preset:'day', floorColor:'#b9a88c', floorTex:'none' });
+  r.updateLightsSwitches(floor.lights, [], stOf);
+  r.setCameraView([2200, 2600, -2600], [3000, 2300, -100]);
+  // Sample rotor angle over time to prove motion
+  const rot0 = r._fanRotors.length ? r._fanRotors[0].obj.rotation.y : -1;
+  await new Promise(res => setTimeout(res, 800));
+  const rot1 = r._fanRotors.length ? r._fanRotors[0].obj.rotation.y : -1;
+  document.title = `rotors=${r._fanRotors.length} a0=${rot0.toFixed(3)} a1=${rot1.toFixed(3)} moved=${Math.abs(rot1-rot0)>0.05}`;
+</script>

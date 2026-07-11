@@ -1,0 +1,39 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>realism</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<script type="module">
+  const q = new URLSearchParams(location.search);
+  const mod = await import('./assets/three-renderer.js');
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+  const mode = q.get('mode') || 'lights';
+  const floor = {
+    id: 'f1', name: 'T', w: 12000, d: 5000,
+    walls: [], furniture: [], lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [], windows: [], bg: null, model3d: null,
+  };
+  const states = { 'light.on': { state: 'on', attributes: { brightness: 230 } } };
+  if (mode === 'lights') {
+    const kinds = ['recessed', 'strip'];
+    floor.lights = kinds.map((k, i) => ({
+      id: 'l' + i, x: 4000 + i * 3800, y: 2500, entity_id: 'light.on', iconKind: k,
+      length: 1400, label: '',
+    }));
+    r.updateFloor(floor, { preset: 'dusk', floorColor: '#4a4640', floorTex: 'none', wallColor: '#cfd2d6' });
+    r.updateLightsSwitches(floor.lights, [], id => states[id] || null);
+    r.setCameraView([0, 2000, -5800], [0, 1300, 0]);
+  } else {
+    floor.furniture = [
+      { id: 'a', x: 1400, y: 2500, w: 1500, h: 900, kind: 'table' },
+      { id: 'b', x: 3600, y: 2500, w: 2000, h: 900, kind: 'sofa' },
+      { id: 'c', x: 6200, y: 2500, w: 2000, h: 1500, kind: 'bed' },
+      { id: 'd', x: 8600, y: 2500, w: 800, h: 350, kind: 'bookshelf', rotation: 180 },
+      { id: 'e', x: 10600, y: 2500, w: 1200, h: 500, kind: 'dresser', rotation: 180 },
+    ];
+    r.updateFloor(floor, { preset: 'day', floorColor: '#8a7860', floorTex: 'none', wallColor: '#cfd2d6' });
+    r.setCameraView([0, 2600, -5400], [0, 700, 0]);
+  }
+  document.title = 'ok';
+</script>

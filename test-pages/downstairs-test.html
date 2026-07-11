@@ -1,0 +1,22 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>downstairs</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<script type="module">
+  const mod = await import('./assets/three-renderer.js');
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+  const floor = {
+    id: 'f1', name: 'T', w: 10000, d: 6000,
+    walls: [], lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [], windows: [], bg: null, model3d: null,
+    furniture: [
+      { id: 'up', x: 2500, y: 3000, w: 1000, h: 3600, kind: 'stairs' },
+      { id: 'dn', x: 6500, y: 3000, w: 1000, h: 3600, kind: 'stairs', rotation: 180, elevation: -2743 },
+    ],
+  };
+  r.updateFloor(floor, { preset: 'day', floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6' });
+  r.setCameraView([-2600, 3600, -5600], [500, 0, 0]);
+  document.title = 'dn ok';
+</script>

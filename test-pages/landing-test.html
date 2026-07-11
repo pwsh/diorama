@@ -1,0 +1,24 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>landing</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<script type="module">
+  const mod = await import('./assets/three-renderer.js');
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+  const floor = {
+    id: 'f1', name: 'T', w: 10000, d: 7000,
+    walls: [], lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [], windows: [], bg: null, model3d: null,
+    furniture: [
+      // Descending L: half flight down, sunken landing, second half flight
+      { id: 'a', x: 4000, y: 2400, w: 1100, h: 1800, kind: 'stairs_half', rotation: 180, elevation: -1372 },
+      { id: 'b', x: 4000, y: 3900, w: 1100, h: 1100, kind: 'stair_landing', elevation: -2743 },
+      { id: 'c', x: 5600, y: 3900, w: 1100, h: 1800, kind: 'stairs_half', rotation: 270, elevation: -2743 },
+    ],
+  };
+  r.updateFloor(floor, { preset: 'day', floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6' });
+  r.setCameraView([-2800, 4200, -4800], [500, -800, 500]);
+  document.title = 'landing ok';
+</script>

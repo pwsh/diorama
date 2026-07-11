@@ -1,0 +1,33 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>well</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<script type="module">
+  const mod = await import('./assets/three-renderer.js');
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+  // Two adjacent rooms sharing the wall at x=4000. Each is a self-closed loop.
+  const roomA = { id:'wa', kind:'full', points:[
+    {x:200,y:200},{x:4000,y:200},{x:4000,y:3800},{x:200,y:3800},{x:200,y:200} ] };
+  const roomB = { id:'wb', kind:'full', points:[
+    {x:4000,y:200},{x:7800,y:200},{x:7800,y:3800},{x:4000,y:3800},{x:4000,y:200} ] };
+  const floor = {
+    id: 'f1', name: 'T', w: 8000, d: 4000,
+    walls: [roomA, roomB], lights: [], switches: [], sensors: [],
+    motionSensors: [], envSensors: [], doors: [], windows: [], bg: null, model3d: null,
+    furniture: [
+      // Well #1: stairs+landing composition centered EXACTLY on the shared
+      // wall (x=4000) — the nastiest case, since pip(center) is ambiguous on
+      // the boundary and the old code cut the hole from at most one loop.
+      { id:'s1', x:4000, y:1600, w:2400, h:1800, kind:'stairs', elevation:-2743 },
+      { id:'s1b', x:4000, y:2900, w:2400, h:1000, kind:'stair_landing', elevation:-2743 },
+      // Well #2: fully inside room B (regression — should cut cleanly).
+      { id:'s2', x:6200, y:2000, w:1000, h:1600, kind:'stairs', elevation:-2743 },
+    ],
+  };
+  r.updateFloor(floor, { preset:'day', floorColor:'#8a7860', floorTex:'none', wallColor:'#cfd2d6' });
+  const view = location.hash.replace('#','') || 'top';
+  r.applyViewPreset(view === 'top' ? 'top' : 'iso');
+  document.title = 'well ok ' + view;
+</script>

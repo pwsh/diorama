@@ -15,8 +15,10 @@ binding (see `sensor-discovery.ts`).
 
 ---
 
-**Active feature arc**: the Sims-2000 restyle + character activity system —
-plan, phase status, and design decisions live in `docs/DESIGN-sims.md`.
+**Project status & pick-up guide**: `docs/STATUS.md` — current state, release
+runbook, working practices, open threads. The original Sims-2000 arc plan
+lives in `docs/DESIGN-sims.md`. Deterministic renderer test pages (the
+verification harness) live in `test-pages/` (see its README).
 
 ## Layout
 

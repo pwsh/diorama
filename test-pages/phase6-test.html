@@ -1,0 +1,81 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>phase6 test</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<script type="module">
+  const q = new URLSearchParams(location.search);
+  const scene = q.get('scene') || 'kitchen';   // kitchen | den | bed
+  const tb = q.get('tb') || 'late_night';       // ActivityContext.timeBucket
+  const sink = q.get('sink') === '1';           // negative: engage an activity
+  const frames = parseInt(q.get('frames') || '420', 10);  // ~7 s of fake time
+  const mod = await import('./assets/three-renderer.js');
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+  const fu = (id, kind, x, y, w, h, rot = 0, extra = {}) => ({ id, x, y, w, h, kind, rotation: rot, ...extra });
+
+  // Two closed wall loops → two named rooms: Kitchen (left) + Den (right).
+  const kitchenLoop = { id: 'wk', points: [
+    {x:200,y:200},{x:5200,y:200},{x:5200,y:6800},{x:200,y:6800},{x:200,y:200}] };
+  const denLoop = { id: 'wd', points: [
+    {x:5800,y:200},{x:10800,y:200},{x:10800,y:6800},{x:5800,y:6800},{x:5800,y:200}] };
+
+  let walls, rooms, furniture, parked;
+  if (scene === 'den') {
+    walls = [kitchenLoop, denLoop];
+    rooms = [
+      { id: 'rk', name: 'Kitchen', anchor: {x: 2700, y: 3500} },
+      { id: 'rd', name: 'Den',     anchor: {x: 8300, y: 3500} },
+    ];
+    // Sofa in the Den, no TV → seated + evening/night ⇒ reading.
+    furniture = [ fu('sofa1', 'sofa', 8300, 4000, 2000, 900, 0) ];
+    parked = [ { key: 'reader', x: 8300, y: 4000, color: 0x4fc3f7 } ];
+  } else if (scene === 'bed') {
+    // Single big Bedroom loop; one solo occupant in a bed ⇒ phone.
+    walls = [{ id: 'wb', points: [
+      {x:200,y:200},{x:10800,y:200},{x:10800,y:6800},{x:200,y:6800},{x:200,y:200}] }];
+    rooms = [ { id: 'rb', name: 'Bedroom', anchor: {x: 5500, y: 3500} } ];
+    furniture = [ fu('bed1', 'bed', 5500, 3500, 2000, 1500, 0) ];
+    parked = [ { key: 'sleeper', x: 5500, y: 3500, color: 0xffd54f } ];
+  } else {
+    // Kitchen: a standing idler. Optionally parked at a sink (activity engaged)
+    // as the negative case — an engaged activity suppresses the bubble.
+    walls = [kitchenLoop, denLoop];
+    rooms = [
+      { id: 'rk', name: 'Kitchen', anchor: {x: 2700, y: 3500} },
+      { id: 'rd', name: 'Den',     anchor: {x: 8300, y: 3500} },
+    ];
+    furniture = sink ? [ fu('sink1', 'sink', 2700, 3500, 560, 470, 0) ] : [];
+    parked = [ { key: 'idler', x: 2700, y: 3500, color: 0x81c784 } ];
+  }
+
+  const floor = {
+    id: 'f1', name: 'Test', w: 11000, d: 7000, walls, rooms, furniture,
+    lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [], windows: [], bg: null, model3d: null, look3d: null,
+  };
+  const roomNames = {};
+  for (const rm of rooms) roomNames[rm.id] = rm.name;
+  const ctx = { entityOn: {}, roomNames, timeBucket: tb };
+
+  r.updateFloor(floor, { preset: q.get('preset') || 'night',
+                         floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6' });
+  r.applyViewPreset(q.get('view') || 'iso');
+  const cam = q.get('cam');
+  if (cam) { const n = cam.split(',').map(Number); r.setCameraView([n[0],n[1],n[2]], [n[3],n[4],n[5]]); }
+
+  const realNow = performance.now.bind(performance);
+  let fakeNow = realNow();
+  performance.now = () => fakeNow;
+  for (let i = 0; i < frames; i++) { fakeNow += 16.7; r.updateTargets(parked, ctx); }
+  performance.now = realNow;
+
+  const hs = r._humanoids ?? {};
+  const dump = Object.entries(hs).map(([k, h]) =>
+    `${k}:bub=${h.bubbleKind||'-'},want=${h.bubbleWant||'-'},bdw=${h.bubbleDwell.toFixed(1)}` +
+    `,act=${h.activity||'-'},sit=${h.sit.toFixed(2)},dw=${h.dwell.toFixed(1)}` +
+    `,bvis=${h.bubble&&h.bubble.visible?1:0}`).join('  ');
+  const rz = (r._roomZones || []).map(z => z.roomId).join(',');
+  document.title = `scene=${scene} tb=${tb}${sink?'+sink':''} f=${frames} | rooms[${rz}] | ${dump}`;
+  window.__DUMP = document.title;
+</script>

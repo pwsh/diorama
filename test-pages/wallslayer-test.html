@@ -1,0 +1,34 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>wallslayer</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<script type="module">
+  const q = new URLSearchParams(location.search);
+  const mod = await import('./assets/three-renderer.js');
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+  // Two rooms sharing a wall, a door + window on walls, furniture in each.
+  const floor = {
+    id:'f1', name:'T', w:8000, d:5000,
+    walls:[
+      { id:'a', kind:'full', points:[{x:400,y:400},{x:4000,y:400},{x:4000,y:4600},{x:400,y:4600},{x:400,y:400}] },
+      { id:'b', kind:'full', points:[{x:4000,y:400},{x:7600,y:400},{x:7600,y:4600},{x:4000,y:4600},{x:4000,y:400}] },
+    ],
+    furniture:[
+      { id:'sofa', x:2000, y:1400, w:2000, h:900, kind:'sofa', rotation:180 },
+      { id:'tbl', x:2000, y:3200, w:1500, h:900, kind:'table' },
+      { id:'bed', x:5800, y:1400, w:2000, h:1500, kind:'bed', rotation:180 },
+      { id:'drs', x:5800, y:4000, w:1200, h:500, kind:'dresser', rotation:180 },
+    ],
+    lights:[], switches:[], sensors:[], motionSensors:[], envSensors:[],
+    doors:[ { id:'d1', x:4000, y:2500, w:900, rotation:90, entity_id:null } ],
+    windows:[ { id:'wn1', x:900, y:400, w:1000, rotation:0 } ],
+    bg:null, model3d:null, look3d:null,
+  };
+  const wallsOff = q.get('walls') === 'off';
+  const layers = wallsOff ? { walls:false } : {};
+  r.updateFloor(floor, { preset:'day', floorColor:'#8a7860', floorTex:'wood', wallColor:'#cfd2d6', wallCutaway:false }, layers);
+  r.applyViewPreset(q.get('view') || 'iso');
+  document.title = 'wallslayer ok walls=' + (wallsOff?'off':'on');
+</script>

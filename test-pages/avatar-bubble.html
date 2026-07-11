@@ -1,0 +1,65 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>avatar personality bubbles</title>
+<style>html,body{margin:0;background:#111}#c{width:1100px;height:750px}</style>
+<div id="c"></div>
+<script type="module">
+ try {
+  const q = new URLSearchParams(location.search);
+  const kind = q.get('kind') || 'cowboy';
+  const mode = q.get('mode') || 'walk';   // walk | wash
+  const secs = parseFloat(q.get('secs') || '95');
+  const mod = await import('./assets/three-renderer.js');
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+  const walls = [{ id: 'w1', points: [
+    {x:200,y:200},{x:11800,y:200},{x:11800,y:6800},{x:200,y:6800},{x:200,y:200}] }];
+  const rooms = [{ id: 'rm1', name: 'Living', anchor: {x: 6000, y: 3500} }];
+  const furniture = mode === 'wash'
+    ? [{ id: 'sink1', x: 2000, y: 800, w: 560, h: 470, kind: 'sink', rotation: 180 }]
+    : [];
+  const floor = {
+    id: 'f1', name: 'B', w: 12000, d: 7000, walls, rooms, furniture,
+    lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [], windows: [], bg: null, model3d: null, look3d: null,
+  };
+  r.updateFloor(floor, { preset: 'day', floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6' });
+  r.applyViewPreset('iso');
+
+  const ctx = { entityOn: {}, roomNames: { rm1: 'Living' }, timeBucket: 'day' };
+  const realNow = performance.now.bind(performance);
+  let fakeNow = realNow();
+  performance.now = () => fakeNow;
+  const DT = 0.1;
+  const transitions = [];
+  let last;
+  let t = 0;
+  for (let i = 0; i < secs / DT; i++) {
+    fakeNow += DT * 1000; t += DT;
+    let x, y;
+    if (mode === 'wash') {
+      // park at the sink's stand point (front of the sink) the whole time
+      x = 2000; y = 1400;
+    } else {
+      // walk back and forth along x at 0.9 m/s
+      const span = 8000, v = 900;
+      const p = (v * t) % (2 * span);
+      x = 1800 + (p < span ? p : 2 * span - p);
+      y = 3500;
+    }
+    r.updateTargets([{ key: 'bt', x, y, color: 0xffd54f, avatar: kind }], ctx);
+    const h = r._humanoids['bt'];
+    const bk = h ? h.bubbleKind : null;
+    if (bk !== last) { transitions.push(`${t.toFixed(1)}s:${bk ?? '-'}`); last = bk; }
+    // stop=1: freeze ~1.5 s after the first committed bubble for a screenshot
+    if (q.get('stop') === '1' && transitions.length >= 2) {
+      if (!window.__stopAt) window.__stopAt = t + 1.5;
+      if (t >= window.__stopAt) break;
+    }
+  }
+  performance.now = realNow;
+  const h = r._humanoids['bt'];
+  document.title = `mode=${mode} kind=${kind} act=${h?.activity ?? '-'} chatterT=${h?.chatterT.toFixed(1)} ` +
+    `next=${h?.chatterNext.toFixed(1)} trans=[${transitions.join(' ')}]`;
+ } catch (e) { document.title = 'ERR: ' + (e && e.stack ? e.stack.split('\n').slice(0,2).join(' | ') : e); }
+</script>

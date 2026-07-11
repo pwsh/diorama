@@ -1,0 +1,41 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>plumbob test</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<script type="module">
+  const q = new URLSearchParams(location.search);
+  const on = q.get('plumbob') !== 'off';   // default ON
+  const mod = await import('./assets/three-renderer.js');
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+
+  const FW = 8000, FD = 6000;
+  const floor = {
+    id: 'f1', name: 'Empty', w: FW, d: FD,
+    walls: [{ id: 'perim', points: [{x:200,y:200},{x:7800,y:200},{x:7800,y:5800},{x:200,y:5800},{x:200,y:200}] }],
+    furniture: [],
+    lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [], windows: [], bg: null, model3d: null, look3d: null, rooms: [],
+  };
+  r.updateFloor(floor, { preset: 'day', floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6' });
+  r.applyViewPreset('front');
+
+  const realNow = performance.now.bind(performance);
+  let fakeNow = realNow();
+  performance.now = () => fakeNow;
+  const DT = 16.7;
+  const KEY = 't1';
+  const ctx = { entityOn: {}, roomNames: {}, timeBucket: 'day' };
+  const TGT = { key: KEY, x: 4000, y: 3000, color: 0xffb74d };  // stationary → standing idle
+
+  r.setPlumbobs(on);
+  const frames = Math.round(2000 / DT);   // ~2 s of settling
+  for (let i = 0; i < frames; i++) { fakeNow += DT; r.updateTargets([TGT], ctx); }
+
+  const h = r._humanoids[KEY];
+  const vis = h ? h.plumbob.visible : null;
+  document.title = `PLUMBOB flag=${on?'ON':'OFF'} visible=${vis}`;
+  window.__RESULT__ = { flag: on, visible: vis };
+  performance.now = realNow;
+</script>

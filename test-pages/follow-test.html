@@ -1,0 +1,66 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>follow test</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<script type="module">
+  const q = new URLSearchParams(location.search);
+  const phase = q.get('phase') || 'late';       // early | late | empty
+  const mod = await import('./assets/three-renderer.js');
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+
+  const FW = 12000, FD = 10000;
+  const floor = {
+    id: 'f1', name: 'Follow', w: FW, d: FD,
+    walls: [], furniture: [],
+    lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [], windows: [], bg: null, model3d: null, look3d: null, rooms: [],
+  };
+  r.updateFloor(floor, { preset: 'day', floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6' });
+  r.applyViewPreset('iso');       // give the camera a defined azimuth to preserve
+  r.setAutoFollow(true);
+
+  const realNow = performance.now.bind(performance);
+  let fakeNow = realNow();
+  performance.now = () => fakeNow;
+  const DT = 16.7, DT_S = DT / 1000;
+  const camDist = () => {
+    const v = r.cameraView();
+    return Math.hypot(v.pos[0] - v.target[0], v.pos[1] - v.target[1], v.pos[2] - v.target[2]);
+  };
+  // Drive updateTargets AND the follow easing on the same fake clock so the run
+  // is deterministic (the real rAF _animate also eases, only speeding convergence).
+  const step = (targets) => { fakeNow += DT; r.updateTargets(targets); r._updateAutoFollow(DT_S); };
+
+  // Two figures near floor center; `spread` mm sets how far apart they hold.
+  const cx = FW / 2, cy = FD / 2;
+  const A = 'a', B = 'b';
+  const distTrace = [];
+  const runHeld = (frames, spread) => {
+    for (let i = 0; i < frames; i++) {
+      step([
+        { key: A, x: cx - spread / 2, y: cy, color: 0x4fc3f7 },
+        { key: B, x: cx + spread / 2, y: cy, color: 0xf06292 },
+      ]);
+      if (i % 20 === 0) distTrace.push(Math.round(camDist()));
+    }
+  };
+
+  let label;
+  if (phase === 'early') {
+    runHeld(360, 1400);                // ONE tight cluster (1.4 m apart) → tight framing
+    label = 'EARLY';
+  } else if (phase === 'late') {
+    runHeld(360, 7600);                // two figures far apart → wide framing, both in view
+    label = 'LATE';
+  } else {                             // empty: no figures at all → full-floor pose
+    for (let i = 0; i < 360; i++) { step([]); if (i % 20 === 0) distTrace.push(Math.round(camDist())); }
+    label = 'EMPTY';
+  }
+
+  const nActive = Object.keys(r._humanoids).filter(k => r._humanoids[k].scale > 0.3).length;
+  document.title = `FOLLOW ${label} dist=${Math.round(camDist())} active=${nActive} ` +
+    `floorFitD=${Math.round(Math.max(FW, FD) * 1.35)} trace=[${distTrace.join(',')}]`;
+  performance.now = realNow;
+</script>

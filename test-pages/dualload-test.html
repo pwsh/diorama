@@ -1,0 +1,12 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>dual</title>
+<script type="module">
+  try {
+    await import('./assets/app.js?v=aaa');
+    await import('./assets/app.js?v=bbb');  // second instance — used to throw on duplicate define
+    document.title = 'dual ok: ' + (customElements.get('diorama-auth') ? 'defined once' : 'MISSING');
+  } catch (e) {
+    document.title = 'dual FAIL: ' + e.message;
+  }
+</script>

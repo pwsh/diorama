@@ -1,0 +1,113 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>table arms test</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<script type="module">
+ try {
+  const q = new URLSearchParams(location.search);
+  const scene = q.get('scene') || 'eat';   // eat | work | tall
+  const frames = parseInt(q.get('frames') || '460', 10);
+  const mod = await import('./assets/three-renderer.js');
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+  const fu = (id, kind, x, y, w, h, rot = 0, extra = {}) => ({ id, x, y, w, h, kind, rotation: rot, ...extra });
+
+  const walls = [{ id: 'w1', points: [
+    {x:200,y:200},{x:10800,y:200},{x:10800,y:6800},{x:200,y:6800},{x:200,y:200}] }];
+  const rooms = [{ id: 'rm1', name: 'Living', anchor: {x: 5000, y: 3500} }];
+
+  // Table front edge (in +y) sits at y = 2000 + 900/2 = 2450. Post-constraint,
+  // a tucked chair's center rests at edge + 20 = 2470. Chair faces the table
+  // (rot 180 → faces -y). Person target parked on the chair center.
+  let furniture, parked, ctx;
+  const TABLE_TOP = { eat: 750, work: 750, tall: 900 };
+  if (scene === 'eat') {
+    furniture = [
+      fu('table1', 'table', 2000, 2000, 1500, 900, 0),
+      fu('dchair1', 'chair', 2000, 2470, 500, 500, 0),
+    ];
+    parked = [{ key: 'eat', x: 2000, y: 2470, color: 0xffb74d }];
+    ctx = { entityOn: {}, roomNames: { rm1: 'Living' }, timeBucket: 'evening' };
+  } else if (scene === 'work') {
+    // Desk 1400x700 → front edge y = 2000+350 = 2350; chair center 2370.
+    furniture = [
+      fu('desk1', 'desk', 2000, 2000, 1400, 700, 0),
+      fu('wchair1', 'chair', 2000, 2370, 500, 500, 0),
+    ];
+    parked = [{ key: 'work', x: 2000, y: 2370, color: 0x81c784 }];
+    ctx = { entityOn: {}, roomNames: { rm1: 'Living' }, timeBucket: 'day' };
+  } else {
+    // Tall table: a normal eat table raised 150 mm on elevation → tabletop at
+    // ht 750 + 150 = 900 (island/bar height). hostTopY − seatY = 900 − 450 =
+    // 450 > 380, so the tall-cheat raises the effective seat (seatYeff = 520).
+    furniture = [
+      fu('table1', 'table', 2000, 2000, 1500, 900, 0, { elevation: 150 }),
+      fu('tchair1', 'chair', 2000, 2470, 500, 500, 0),
+    ];
+    parked = [{ key: 'tall', x: 2000, y: 2470, color: 0x4fc3f7 }];
+    ctx = { entityOn: {}, roomNames: { rm1: 'Living' }, timeBucket: 'day' };
+  }
+
+  const customObjects = [];
+
+  const floor = {
+    id: 'f1', name: 'Test', w: 11000, d: 7000, walls, rooms, furniture,
+    lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [], windows: [], bg: null, model3d: null, look3d: null,
+    customObjects,
+  };
+  // updateFloor reads customObjects off the store arg in the real app; pass via
+  // floor + a second store-ish arg is not how it's wired, so stash on floor.
+  r.updateFloor(floor, { preset: q.get('preset') || 'day',
+                         floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6' },
+                 undefined, customObjects);
+
+  // Side/profile camera: look purely along world −x at the seat/table depth so
+  // the forearm's forward reach (scene z) is horizontal and the tabletop height
+  // (y) is vertical. Seat scene x = 5500−2000 = 3500. The table center sits at
+  // world y 2000 (scene z −1500); the seat a bit toward +z. Frame the midpoint.
+  const seatWy = (scene==='work'? 2370 : 2470);
+  const midZ = ((2000) + seatWy)/2 - 3500;   // between table center and seat
+  const cam = q.get('cam');
+  if (cam) { const n = cam.split(',').map(Number); r.setCameraView([n[0],n[1],n[2]], [n[3],n[4],n[5]]); }
+  else r.setCameraView([3500 + 4000, 950, midZ], [3500, 700, midZ]);
+
+  const av = q.get('avatar');
+  if (av) parked = parked.map(t => ({ ...t, avatar: av }));
+  const realNow = performance.now.bind(performance);
+  let fakeNow = realNow();
+  performance.now = () => fakeNow;
+  for (let i = 0; i < frames; i++) { fakeNow += 16.7; r.updateTargets(parked, ctx); }
+  performance.now = realNow;
+
+  // Numeric verification: hand + ELBOW world Y vs the tabletop, and the seated
+  // root's world-y distance outside the host's chair-side edge (want >= 190).
+  const hs = r._humanoids ?? {};
+  const handY = (rig, elbowGroup) => {
+    rig.group.updateMatrixWorld(true);   // refresh the whole rig's world matrices
+    // The hand is the sphere hanging farthest down the forearm.
+    let spheres = [];
+    elbowGroup.traverse(o => { if (o.geometry && o.geometry.type === 'SphereGeometry') spheres.push(o); });
+    const target = spheres[spheres.length - 1];
+    if (!target) return NaN;
+    return target.matrixWorld.elements[13];   // world Y (column-major translation)
+  };
+  const elbowWY = (rig, elbowGroup) => {
+    rig.group.updateMatrixWorld(true);
+    return elbowGroup.matrixWorld.elements[13];   // elbow joint world height
+  };
+  const top = TABLE_TOP[scene];
+  // Host chair-side edge in world mm: center 2000 + h/2 (table 900 → 2450,
+  // desk 700 → 2350).
+  const edgeWy = scene === 'work' ? 2350 : 2450;
+  const dump = Object.entries(hs).map(([k, h]) => {
+    const lY = handY(h, h.leftElbow), rY = handY(h, h.rightElbow);
+    const eL = elbowWY(h, h.leftElbow), eR = elbowWY(h, h.rightElbow);
+    const rootWy = h.group.position.z + 3500;   // scene z → world y (fd 7000)
+    return `${k}[${h.avatarKind},hip${h.hipY|0}]:sit=${h.sit.toFixed(2)},act=${h.activity||'-'},dHandL=${(lY-top).toFixed(0)},dHandR=${(rY-top).toFixed(0)},dElbL=${(eL-top).toFixed(0)},dElbR=${(eR-top).toFixed(0)},rootEdge=${(rootWy-edgeWy).toFixed(0)}`;
+  }).join('  ');
+  document.title = `scene=${scene} f=${frames} top=${top} | ${dump}`;
+  window.__DUMP = document.title;
+ } catch (e) { document.title = 'ERR: ' + (e && e.stack ? e.stack.split('\n').slice(0,2).join(' | ') : e); }
+</script>

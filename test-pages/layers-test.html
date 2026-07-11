@@ -1,0 +1,21 @@
+<!doctype html>
+<meta charset="utf-8"><title>layers</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<script type="module">
+  const q = new URLSearchParams(location.search);
+  const mod = await import('./assets/three-renderer.js');
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+  const fu=(k,x,y,w,h,rot=0)=>({id:k+x,x,y,w,h,kind:k,rotation:rot});
+  const floor={id:'f1',name:'T',w:8000,d:5000,walls:[],
+    furniture:[fu('sofa',2000,2500,2000,900),fu('bed',5500,2500,1530,2030)],
+    lights:[{id:'l1',x:4000,y:2500,entity_id:'light.on',label:''}],
+    switches:[],sensors:[],motionSensors:[],envSensors:[],doors:[],windows:[],bg:null,model3d:null};
+  const layers = q.get('nofurn') ? { furniture: false, lights: false } : {};
+  r.setLayerVisibility(layers);
+  r.updateFloor(floor,{preset:'day',floorColor:'#b9a88c',floorTex:'none'},layers);
+  r.updateLightsSwitches(floor.lights, [], id => ({state:'on',attributes:{brightness:200}}));
+  r.applyViewPreset('iso');
+  document.title='ok';
+</script>

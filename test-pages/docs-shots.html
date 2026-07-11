@@ -1,0 +1,93 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>docs</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<script type="module">
+  const q = new URLSearchParams(location.search);
+  const mode = q.get('mode');
+  const mod = await import('./assets/three-renderer.js');
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+  const F = (kind, x, y, w, h, rot = 0, extra = {}) => ({ id: kind + x, x, y, w, h, kind, rotation: rot, ...extra });
+  const floor = {
+    id: 'f1', name: 'T', w: 12000, d: 6000,
+    walls: [], furniture: [], lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [], windows: [], bg: null, model3d: null,
+  };
+  const states = {
+    'light.on': { state: 'on', attributes: { brightness: 230 } },
+    'sensor.temp': { state: '21.4', attributes: { device_class: 'temperature', unit_of_measurement: '°C' } },
+    'sensor.co2': { state: '640', attributes: { device_class: 'carbon_dioxide', unit_of_measurement: 'ppm' } },
+  };
+  const stOf = id => states[id] || null;
+  const day = { preset: 'day', floorColor: '#8a7860', floorTex: 'none', wallColor: '#cfd2d6' };
+  const dusk = { preset: 'dusk', floorColor: '#4a4640', floorTex: 'none', wallColor: '#cfd2d6' };
+
+  if (mode === 'seating') {
+    floor.furniture = [
+      F('chair', 900, 2500, 500, 500), F('rocking_chair', 2100, 2500, 600, 800),
+      F('bench', 3600, 2500, 1500, 400), F('stool', 4900, 2500, 400, 400),
+      F('ottoman', 5900, 2500, 700, 700), F('chaise', 7600, 2500, 1800, 750),
+      F('sofa', 10200, 2500, 2000, 900),
+    ];
+    r.updateFloor(floor, day); r.setCameraView([0, 2400, -5200], [0, 400, 0]);
+  } else if (mode === 'kitchen') {
+    floor.furniture = [
+      F('fridge', 1000, 2500, 910, 760, 180), F('stove', 2200, 2500, 760, 660, 180),
+      F('dishwasher', 3300, 2500, 610, 620, 180), F('counter', 5000, 2500, 1800, 650, 180),
+      F('island', 7300, 2500, 2000, 1000, 180), F('washer', 9500, 2500, 690, 700, 180),
+      F('dryer', 10400, 2500, 690, 700, 180),
+    ];
+    r.updateFloor(floor, day); r.setCameraView([0, 2400, -5200], [0, 700, 0]);
+  } else if (mode === 'bath') {
+    floor.furniture = [
+      F('toilet', 3000, 2500, 480, 700, 180), F('sink', 4300, 2500, 560, 470, 180),
+      F('bathtub', 6200, 2500, 1520, 760, 180), F('shower', 8600, 2500, 910, 910, 180),
+    ];
+    r.updateFloor(floor, day); r.setCameraView([0, 2000, -4200], [0, 600, 0]);
+  } else if (mode === 'decor') {
+    floor.lights = [
+      { id: 'a', x: 1200, y: 2500, entity_id: 'light.on', iconKind: 'lamp', label: '' },
+      { id: 'b', x: 3000, y: 2500, entity_id: 'light.on', iconKind: 'sconce', height: 1800, label: '' },
+      { id: 'c', x: 4800, y: 2500, entity_id: 'light.on', iconKind: 'wall_sconce', label: '' },
+      { id: 'd', x: 6600, y: 2500, entity_id: 'light.on', iconKind: 'step', label: '' },
+      { id: 'e', x: 8400, y: 2500, entity_id: 'light.on', iconKind: 'bowl', label: '' },
+      { id: 'f', x: 10200, y: 2500, entity_id: 'light.on', iconKind: 'under_cabinet', length: 1400, label: '' },
+    ];
+    r.updateFloor(floor, dusk);
+    r.updateLightsSwitches(floor.lights, [], stOf);
+    r.setCameraView([0, 2000, -6800], [0, 1000, 0]);
+  } else if (mode === 'env') {
+    floor.envSensors = [
+      { id: 'e1', x: 4500, y: 3000, entity_id: 'sensor.temp', label: '', scale: 1.6 },
+      { id: 'e2', x: 7500, y: 3000, entity_id: 'sensor.co2', label: '', scale: 1.6 },
+    ];
+    r.updateFloor(floor, dusk);
+    r.updateEnvSensors(floor.envSensors, stOf);
+    r.setCameraView([0, 1800, -4400], [0, 1200, 0]);
+  } else if (mode === 'coverage') {
+    floor.sensors = [
+      { id: 's1', x: 6000, y: 400, heading: 0, fov: 140, range: 5500, label: 'K', deviceSlug: null },
+    ];
+    r.updateFloor(floor, day);
+    r.updateSensors(floor.sensors, () => ({ height: 2000, tilt: 20 }), true);
+    r.applyViewPreset('iso');
+  } else if (mode === 'walk' || mode === 'stand') {
+    floor.furniture = [];
+    r.updateFloor(floor, day);
+    r.setCameraView([-1800, 1500, -3800], [0, 800, 0]);
+    const realNow = performance.now.bind(performance);
+    let fakeNow = realNow();
+    performance.now = () => fakeNow;
+    const frames = mode === 'walk' ? 170 : 400;
+    for (let i = 0; i < frames; i++) {
+      fakeNow += 16.7;
+      const t = i * 0.0167;
+      const x = mode === 'walk' ? 2600 + 1200 * t : 6000;
+      r.updateTargets([{ key: 't1', x, y: 3000, color: 0x4fc3f7 }]);
+    }
+    performance.now = realNow;
+  }
+  document.title = 'docs ok';
+</script>

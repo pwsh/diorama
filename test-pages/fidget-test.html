@@ -1,0 +1,81 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>fidget test</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<script type="module">
+  const q = new URLSearchParams(location.search);
+  const test = q.get('test') || 'run';
+  const mod = await import('./assets/three-renderer.js');
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+
+  const FW = 8000, FD = 6000;
+  // Bare room, NO seats near the target so it stays STANDING idle (fidget gate
+  // needs sit<0.1). One motionless real (non-AI) target parked at the center.
+  const floor = {
+    id: 'f1', name: 'Empty', w: FW, d: FD,
+    walls: [{ id: 'perim', points: [{x:200,y:200},{x:7800,y:200},{x:7800,y:5800},{x:200,y:5800},{x:200,y:200}] }],
+    furniture: [],
+    lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [], windows: [], bg: null, model3d: null, look3d: null, rooms: [],
+  };
+  r.updateFloor(floor, { preset: 'day', floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6' });
+  r.applyViewPreset('front');
+
+  const realNow = performance.now.bind(performance);
+  let fakeNow = realNow();
+  performance.now = () => fakeNow;
+  const DT = 16.7;
+  const KEY = 't1';
+  const ctx = { entityOn: {}, roomNames: {}, timeBucket: 'day' };
+  const TGT = { key: KEY, x: 4000, y: 3000, color: 0xffb74d };  // stationary, no ai flag
+  const step = () => { fakeNow += DT; r.updateTargets([TGT], ctx); };
+
+  if (test === 'run') {
+    const frames = Math.round(60 * 1000 / DT);
+    let waveLoggedByFrame = -1;
+    let firstRShAtSpawn = null;
+    for (let i = 0; i < frames; i++) {
+      step();
+      const h = r._humanoids[KEY];
+      if (h && waveLoggedByFrame < 0 && h.fidgetLog.includes('wave')) waveLoggedByFrame = i;
+      // Right-shoulder rotation early (wave should raise it toward ~2.2).
+      if (h && i === 20) firstRShAtSpawn = +h.rightShoulder.rotation.x.toFixed(2);
+    }
+    const h = r._humanoids[KEY];
+    const log = h ? h.fidgetLog : [];
+    const counts = {};
+    for (const f of log) counts[f] = (counts[f] || 0) + 1;
+    const sawWave = log.includes('wave');
+    const sawStretch = log.includes('stretch');
+    const sawPhone = log.includes('phone');
+    const pass = sawWave && (sawStretch || sawPhone);
+    window.__RESULT__ = { log, counts, sawWave, sawStretch, sawPhone, waveLoggedByFrame, firstRShAtSpawn };
+    document.title = `FIDGET ${pass?'PASS':'FAIL'} wave=${sawWave}(f${waveLoggedByFrame},rSh@20=${firstRShAtSpawn}) ` +
+      `stretch=${sawStretch} phone=${sawPhone} counts=${JSON.stringify(counts)} log=[${log.join(',')}]`;
+  } else if (test === 'wave') {
+    // Freeze during the greeting wave (first ~0.5 s of life) for a screenshot.
+    for (let i = 0; i < 26; i++) step();   // ~0.43 s → near wave peak
+    const h = r._humanoids[KEY];
+    document.title = `WAVE waveT=${h.waveT.toFixed(2)} rSh=${h.rightShoulder.rotation.x.toFixed(2)} rEl=${h.rightElbow.rotation.x.toFixed(2)}`;
+  } else if (test === 'stretch' || test === 'phone') {
+    // Step until the requested one-shot fidget is at its plateau, then stop.
+    const frames = Math.round(60 * 1000 / DT);
+    let stopped = false, info = {};
+    for (let i = 0; i < frames && !stopped; i++) {
+      step();
+      const h = r._humanoids[KEY];
+      if (!h) continue;
+      const midT = h.fidgetKind === test && h.fidgetT > (test === 'stretch' ? 0.9 : 1.2) && h.idleBlend > 0.9;
+      if (midT) {
+        stopped = true;
+        info = { kind: h.fidgetKind, t: +h.fidgetT.toFixed(2), ib: +h.idleBlend.toFixed(2),
+          lSh: +h.leftShoulder.rotation.x.toFixed(2), rSh: +h.rightShoulder.rotation.x.toFixed(2),
+          lEl: +h.leftElbow.rotation.x.toFixed(2), rEl: +h.rightElbow.rotation.x.toFixed(2) };
+      }
+    }
+    document.title = `${test.toUpperCase()} stopped=${stopped} | ${JSON.stringify(info)}`;
+  }
+  performance.now = realNow;
+</script>

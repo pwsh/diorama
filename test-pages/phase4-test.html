@@ -1,0 +1,59 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>phase4 test</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<script type="module">
+  const q = new URLSearchParams(location.search);
+  const mod = await import('./assets/three-renderer.js');
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+  const fu = (id, kind, x, y, w, h, rot = 0, extra = {}) => ({ id, x, y, w, h, kind, rotation: rot, ...extra });
+  const floor = {
+    id: 'f1', name: 'Test', w: 11000, d: 7000,
+    walls: [{ id: 'w1', points: [
+      {x:200,y:200},{x:10800,y:200},{x:10800,y:6800},{x:200,y:6800},{x:200,y:200}] }],
+    rooms: [{ id: 'rm1', name: 'Bathroom', anchor: {x: 2000, y: 5500} }],
+    furniture: [
+      // appliances along the top wall (rotation 0 → front faces +world-y / into room)
+      fu('sink1', 'sink', 1400, 900, 560, 470, 0),
+      fu('dw1', 'dishwasher', 3400, 900, 610, 620, 0, { entity_id: 'switch.dw' }),
+      fu('fridge1', 'fridge', 5600, 900, 910, 760, 0),
+      fu('exer1', 'exercise_equipment', 8000, 1100, 700, 1600, 90),
+      // shower down in the bathroom
+      fu('shower1', 'shower', 2000, 5300, 910, 910, 0),
+    ],
+    lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [], windows: [], bg: null, model3d: null, look3d: null,
+  };
+  r.updateFloor(floor, { preset: q.get('preset') || 'day', floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6' });
+  r.applyViewPreset(q.get('view') || 'iso');
+
+  // One target parked (dead still) at each anchor so each one dwells long
+  // enough to engage its activity. ~7 s of synthesized frames.
+  const parked = [
+    { key: 'wash',  x: 1400, y: 900,  color: 0x4fc3f7 },
+    { key: 'dish',  x: 3400, y: 900,  color: 0x81c784 },
+    { key: 'food',  x: 5600, y: 900,  color: 0xffb74d },
+    { key: 'exer',  x: 8000, y: 1100, color: 0xe57373 },
+    { key: 'shwr',  x: 2000, y: 5300, color: 0xba68c8 },
+  ];
+  const ctx = { entityOn: { dw1: true }, roomNames: { rm1: 'Bathroom' }, timeBucket: 'day' };
+  const av = q.get('avatar');
+  const pk = av ? parked.map(t => ({ ...t, avatar: av })) : parked;
+
+  const realNow = performance.now.bind(performance);
+  let fakeNow = realNow();
+  performance.now = () => fakeNow;
+  for (let i = 0; i < 460; i++) {
+    fakeNow += 16.7;
+    r.updateTargets(pk, ctx);
+  }
+  performance.now = realNow;
+
+  const hs = r._humanoids ?? {};
+  const dump = Object.entries(hs).map(([k, h]) =>
+    `${k}:act=${h.act.toFixed(2)},priv=${h.privacy.toFixed(2)},anc=${h.activityAnchor?h.activityAnchor.kind:'-'}`).join('  ');
+  document.title = 'anchors=' + r._activityAnchors.length + ' | ' + dump;
+  window.__DUMP = document.title;
+</script>

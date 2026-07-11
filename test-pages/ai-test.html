@@ -1,0 +1,155 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>ai test</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<script type="module">
+  const q = new URLSearchParams(location.search);
+  const test = q.get('test') || 'run';
+  const mod = await import('./assets/three-renderer.js');
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+
+  const FW = 8000, FD = 6000;
+  // One room loop (perimeter) + a partial interior divider at x=4000 (y 200..4000)
+  // leaving an 1800 mm doorway gap along the bottom, so left/right stay ONE region
+  // but the avatar must A*-route around the wall to reach the far furniture.
+  const floor = {
+    id: 'f1', name: 'AI room', w: FW, d: FD,
+    walls: [
+      { id: 'perim', points: [{x:200,y:200},{x:7800,y:200},{x:7800,y:5800},{x:200,y:5800},{x:200,y:200}] },
+      { id: 'divider', points: [{ x: 4000, y: 200 }, { x: 4000, y: 4000 }] },
+    ],
+    furniture: [
+      { id: 'chair',  x: 1500, y: 1500, w: 500,  h: 500,  kind: 'chair',     rotation: 0 },
+      { id: 'shelf',  x: 1000, y: 5000, w: 800,  h: 350,  kind: 'bookshelf', rotation: 180 },
+      { id: 'bed',    x: 2600, y: 5100, w: 2000, h: 1500, kind: 'bed',       rotation: 0 },
+      { id: 'sofa',   x: 5600, y: 3000, w: 2000, h: 900,  kind: 'sofa',      rotation: 90 },
+      { id: 'plant',  x: 6000, y: 5000, w: 400,  h: 400,  kind: 'plant',     rotation: 0 },
+      { id: 'table',  x: 5600, y: 1400, w: 1500, h: 900,  kind: 'table',     rotation: 0 },
+    ],
+    lights: [], switches: [], sensors: [],
+    motionSensors: [
+      { id: 'm1', x: 2500, y: 3000, heading: 0, fov: 360, range: 6000,
+        label: 'Hall', entity_id: 'binary_sensor.hall', color: '#4fc3f7',
+        intensity: 1, avatar: true },
+    ],
+    envSensors: [], doors: [], windows: [], bg: null, model3d: null, look3d: null,
+    rooms: [{ id: 'rm1', name: 'Living Room', anchor: { x: 2500, y: 3000 } }],
+  };
+  r.updateFloor(floor, { preset: 'day', floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6' });
+  r.applyViewPreset(test === 'run' ? 'top' : 'iso');
+
+  const realNow = performance.now.bind(performance);
+  let fakeNow = realNow();
+  performance.now = () => fakeNow;
+  const DT = 16.7;
+  const KEY = 'ai_m1';
+  const AITGT = () => ({ key: KEY, x: 2500, y: 3000, color: 0x4fc3f7, ai: true });
+  const ctx = { entityOn: {}, roomNames: { rm1: 'Living Room' }, timeBucket: 'day' };
+  const step = (targets) => { fakeNow += DT; r.updateTargets(targets, ctx); };
+  const navWorld = (h) => ({ x: FW / 2 - h.navX, y: h.navZ + FD / 2 });
+  const cellBlocked = (wx, wy) => {
+    const n = r._nav; if (!n) return false;
+    const cx = Math.floor(wx / n.cell), cy = Math.floor(wy / n.cell);
+    if (cx < 0 || cy < 0 || cx >= n.nx || cy >= n.ny) return true;
+    return n.blocked[cy * n.nx + cx] === 1;
+  };
+  const pip = (px, py, vs) => { let inside=false; for(let i=0,j=vs.length-1;i<vs.length;j=i++){
+    const xi=vs[i].x,yi=vs[i].y,xj=vs[j].x,yj=vs[j].y;
+    if(((yi>py)!==(yj>py))&&px<((xj-xi)*(py-yi))/(yj-yi)+xi) inside=!inside;} return inside; };
+  const LOOP = floor.walls[0].points.slice(0,-1);
+
+  if (test === 'run' || test === 'fade') {
+    const dur = test === 'fade' ? 90 : 90;   // seconds sending the avatar
+    const frames = Math.round(dur * 1000 / DT);
+    const goals = [];
+    let lastGoal = null;
+    const samples = [];
+    const engage = [];         // list of engagements: {t, kind}
+    let engagedNow = null;
+    let anyOutside = false, anyBlocked = false;
+    let lastSampleT = -10;
+    for (let i = 0; i < frames; i++) {
+      step([AITGT()]);
+      const ai = r._aiState[KEY];
+      const h = r._humanoids[KEY];
+      const tsec = i * DT / 1000;
+      // Track distinct goals.
+      if (ai && (!lastGoal || Math.hypot(ai.goalX - lastGoal.x, ai.goalY - lastGoal.y) > 200)) {
+        lastGoal = { x: ai.goalX, y: ai.goalY };
+        goals.push({ t: +tsec.toFixed(1), x: Math.round(ai.goalX), y: Math.round(ai.goalY) });
+      }
+      // Engagement transitions.
+      if (h) {
+        const isEng = h.sit > 0.5 || h.act > 0.5 || h.lie > 0.5;
+        const kind = h.lie > 0.5 ? 'lie' : (h.act > 0.5 ? (h.activity || 'act') : (h.sit > 0.5 ? (h.activity || 'sit') : null));
+        if (isEng && engagedNow !== kind) { engagedNow = kind; engage.push({ t: +tsec.toFixed(1), kind }); }
+        if (!isEng) engagedNow = null;
+      }
+      // Sample every 2 s.
+      if (tsec - lastSampleT >= 2 && h && ai) {
+        lastSampleT = tsec;
+        const w = navWorld(h);
+        const inside = pip(w.x, w.y, LOOP);
+        const blk = cellBlocked(w.x, w.y);
+        if (!inside) anyOutside = true;
+        if (blk) anyBlocked = true;
+        samples.push({ t: +tsec.toFixed(0), x: Math.round(w.x), y: Math.round(w.y),
+          st: ai.state[0], si: +h.sit.toFixed(1), ac: +h.act.toFixed(1), li: +h.lie.toFixed(1),
+          in: inside ? 1 : 0, blk: blk ? 1 : 0 });
+      }
+    }
+    if (test === 'run') {
+      const distinctGoals = goals.length;
+      const kinds = [...new Set(engage.map(e => e.kind))];
+      const engagedTarget = kinds.some(k => ['sit','lie','watch_tv','eat_at_table','browse_bookshelf','tend_plant'].includes(k) || k);
+      const moved = distinctGoals >= 3;
+      const inRegion = !anyOutside && !anyBlocked;
+      const pass = moved && inRegion && engage.length > 0;
+      window.__RESULT__ = { pass, distinctGoals, goals, engage, kinds, samples, anyOutside, anyBlocked };
+      document.title = `AIRUN ${pass?'PASS':'FAIL'} goals=${distinctGoals} moved=${moved} ` +
+        `inRegion=${inRegion} (outside=${anyOutside} blocked=${anyBlocked}) engagements=${engage.length} ` +
+        `kinds=[${kinds.join(',')}] | eng=${JSON.stringify(engage)} | goals=${JSON.stringify(goals.slice(0,8))}`;
+    } else {
+      // Presence OFF: stop sending the avatar; watch the slow fade.
+      const h0 = r._humanoids[KEY];
+      const before = h0 ? { present: true } : { present: false };
+      const fadeSamp = [];
+      const offFrames = Math.round(8 * 1000 / DT);
+      let at5 = null;
+      for (let i = 0; i < offFrames; i++) {
+        step([]);   // no targets → despawn logic runs
+        const tsec = i * DT / 1000;
+        const h = r._humanoids[KEY];
+        if (i % 30 === 0) fadeSamp.push({ t: +tsec.toFixed(1),
+          mode: h ? h.despawnMode : 'gone', fa: h ? +h.fadeAlpha.toFixed(2) : 0, sc: h ? +h.scale.toFixed(2) : 0 });
+        if (at5 === null && tsec >= 5) at5 = { mode: h ? h.despawnMode : 'gone', fa: h ? +h.fadeAlpha.toFixed(2) : null };
+      }
+      const hEnd = r._humanoids[KEY];
+      window.__RESULT__ = { before, at5, fadeSamp, aliveEnd: !!hEnd };
+      document.title = `AIFADE mode@5s=${at5?.mode} alpha@5s=${at5?.fa} aliveEnd=${!!hEnd} | ${JSON.stringify(fadeSamp)}`;
+    }
+  } else if (test === 'wander' || test === 'activity') {
+    // Step until the avatar is in the requested state, then STOP so the final
+    // rendered frame (screenshot) shows it. Cap at 90 s.
+    const frames = Math.round(90 * 1000 / DT);
+    let stopped = false, atFrame = -1, info = {};
+    for (let i = 0; i < frames && !stopped; i++) {
+      step([AITGT()]);
+      const ai = r._aiState[KEY]; const h = r._humanoids[KEY];
+      if (!h || !ai) continue;
+      const eng = h.sit > 0.5 || h.act > 0.5 || h.lie > 0.5;
+      if (test === 'activity' && eng && h.act > 0.6 && (h.activity === 'browse_bookshelf' || h.activity === 'tend_plant')) {
+        // Prefer the two new anchor activities for the mid-activity shot.
+        stopped = true; atFrame = i;
+        info = { activity: h.activity, act: +h.act.toFixed(2), pos: navWorld(h) };
+      } else if (test === 'wander' && ai.state === 'wander' && Math.hypot(h.vx, h.vz) > 200 && i > 200) {
+        stopped = true; atFrame = i;
+        info = { state: ai.state, speed: Math.round(Math.hypot(h.vx, h.vz)), pos: navWorld(h), goal: {x:Math.round(ai.goalX),y:Math.round(ai.goalY)} };
+      }
+    }
+    document.title = `AI-${test.toUpperCase()} stopped=${stopped} atFrame=${atFrame} | ${JSON.stringify(info)}`;
+  }
+  performance.now = realNow;
+</script>

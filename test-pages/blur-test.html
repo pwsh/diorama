@@ -1,0 +1,41 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>blur test</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<script type="module">
+  const q = new URLSearchParams(location.search);
+  const mod = await import('./assets/three-renderer.js');
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+  const fu = (id, kind, x, y, w, h, rot = 0) => ({ id, x, y, w, h, kind, rotation: rot });
+  const floor = {
+    id: 'f1', name: 'Bath', w: 8000, d: 5000,
+    walls: [{ id: 'w1', points: [
+      {x:200,y:200},{x:7800,y:200},{x:7800,y:4800},{x:200,y:4800},{x:200,y:200}] }],
+    rooms: [{ id: 'rm1', name: 'Bathroom', anchor: {x: 4000, y: 2500} }],
+    furniture: [
+      fu('shower1', 'shower', 1400, 1000, 910, 910, 0),
+      fu('tub1', 'bathtub', 4000, 900, 1520, 760, 0),
+      fu('toilet1', 'toilet', 6800, 1000, 480, 700, 0),
+    ],
+    lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [], windows: [], bg: null, model3d: null, look3d: null,
+  };
+  r.updateFloor(floor, { preset: 'dusk', floorColor: '#6a6660', floorTex: 'tile', wallColor: '#cfd2d6' });
+  r.setCameraView([1200, 1500, -4200], [400, 950, -1500]);
+  const ctx = { entityOn: {}, roomNames: { rm1: 'Bathroom' }, timeBucket: 'day' };
+  const parked = [
+    { key: 'shwr', x: 1400, y: 1000, color: 0x4fc3f7 },
+    { key: 'bath', x: 4000, y: 900,  color: 0xffb74d },
+    { key: 'wc',   x: 6800, y: 1050, color: 0xba68c8 },
+  ];
+  const realNow = performance.now.bind(performance);
+  let fakeNow = realNow();
+  performance.now = () => fakeNow;
+  for (let i = 0; i < 480; i++) { fakeNow += 16.7; r.updateTargets(parked, ctx); }
+  performance.now = realNow;
+  const hs = r._humanoids ?? {};
+  document.title = Object.entries(hs).map(([k,h]) => `${k}:priv=${h.privacy.toFixed(2)},act=${h.activity||'-'}`).join(' ');
+  window.__DUMP = document.title;
+</script>

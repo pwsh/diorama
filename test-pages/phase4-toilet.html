@@ -1,0 +1,20 @@
+<!doctype html>
+<meta charset="utf-8"><title>toilet</title>
+<style>html,body{margin:0;background:#111}#c{width:900px;height:700px}</style>
+<div id="c"></div>
+<script type="module">
+  const mod = await import('./assets/three-renderer.js');
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+  const floor = { id:'f1', name:'T', w:5000, d:5000,
+    walls:[{id:'w1',points:[{x:200,y:200},{x:4800,y:200},{x:4800,y:4800},{x:200,y:4800},{x:200,y:200}]}],
+    rooms:[], furniture:[{id:'toi1',x:2500,y:2500,w:480,h:700,kind:'toilet',rotation:0}],
+    lights:[],switches:[],sensors:[],motionSensors:[],envSensors:[],doors:[],windows:[],bg:null,model3d:null,look3d:null };
+  r.updateFloor(floor, {preset:'day',floorColor:'#8a7860',floorTex:'tile',wallColor:'#cfd2d6'});
+  r.applyViewPreset('iso');
+  const realNow=performance.now.bind(performance); let f=realNow(); performance.now=()=>f;
+  for(let i=0;i<420;i++){f+=16.7;r.updateTargets([{key:'t1',x:2500,y:2500,color:0x4fc3f7}],{entityOn:{},roomNames:{},timeBucket:'day'});}
+  performance.now=realNow;
+  const h=Object.values(r._humanoids)[0];
+  document.title=`sit=${h.sit.toFixed(2)} act=${h.act.toFixed(2)} activity=${h.activity} priv=${h.privacy.toFixed(2)} spots=${r._sitSpots.length} anchors=${r._activityAnchors.length}`;
+</script>

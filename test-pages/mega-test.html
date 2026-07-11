@@ -1,0 +1,49 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>mega test</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<script type="module">
+  const q = new URLSearchParams(location.search);
+  const mod = await import('./assets/three-renderer.js');
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+  const fu = (kind, x, y, w, h, rot = 0) => ({ id: kind + x, x, y, w, h, kind, rotation: rot });
+  const floor = {
+    id: 'f1', name: 'Test', w: 10000, d: 8000,
+    walls: [{ id: 'w1', points: [{x:200,y:200},{x:9800,y:200},{x:9800,y:7800},{x:200,y:7800},{x:200,y:200}] }],
+    furniture: [
+      // kitchen row along top
+      fu('fridge', 900, 7200, 910, 760, 180), fu('stove', 2000, 7200, 760, 660, 180),
+      fu('dishwasher', 3000, 7200, 610, 620, 180), fu('counter', 4600, 7200, 1800, 650, 180),
+      fu('island', 3000, 5600, 2000, 1000),
+      // laundry
+      fu('washer', 8200, 7200, 690, 700, 180), fu('dryer', 9100, 7200, 690, 700, 180),
+      // bathroom corner
+      fu('toilet', 700, 4600, 480, 700, 90), fu('sink', 700, 3600, 560, 470, 90),
+      fu('bathtub', 1200, 2400, 1520, 760, 90), fu('shower', 700, 1000, 910, 910),
+      // living room
+      fu('sofa', 6500, 2000, 2000, 900), fu('coffee_table', 6500, 3100, 1100, 600),
+      fu('tv_stand', 6500, 4600, 1600, 450, 180), fu('tv', 6500, 4600, 1450, 250, 180),
+      fu('plant', 8800, 1000, 400, 400), fu('ottoman', 8300, 2600, 700, 700),
+      fu('stool', 4400, 4800, 400, 400), fu('dresser', 9200, 4600, 1200, 500, 270),
+    ],
+    lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [], windows: [], bg: null, model3d: null, look3d: null,
+  };
+  r.updateFloor(floor, { preset: q.get('preset') || 'day', floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6' });
+  r.applyViewPreset(q.get('view') || 'iso');
+  // Deterministic seating check: drive updateTargets with a synthesized
+  // clock — 420 frames x 16.7 ms = ~7 s of dwell on the sofa.
+  const target = { key: 't1', x: 6500, y: 2000, color: 0x4fc3f7 };
+  const realNow = performance.now.bind(performance);
+  let fakeNow = realNow();
+  performance.now = () => fakeNow;
+  for (let i = 0; i < 420; i++) {
+    fakeNow += 16.7;
+    r.updateTargets([{ ...target, x: target.x + Math.sin(fakeNow / 900) * 10 }]);
+  }
+  performance.now = realNow;
+  const h = Object.values(r._humanoids ?? {})[0];
+  document.title = h ? `sit=${h.sit.toFixed(2)} dwell=${h.dwell.toFixed(1)} spot=${!!h.sitSpot} spots=${r._sitSpots.length}` : 'no humanoid';
+</script>

@@ -1,0 +1,130 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>pathfind test</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<script type="module">
+  const q = new URLSearchParams(location.search);
+  const test = q.get('test') || 'path';
+  const mod = await import('./assets/three-renderer.js');
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+
+  const fu = (kind, x, y, w, h, rot = 0, extra = {}) =>
+    ({ id: kind + '_' + x + '_' + y, x, y, w, h, kind, rotation: rot, ...extra });
+
+  // Floor: a FULL-WIDTH horizontal wall at world y=4000 (x 0..10000) with a
+  // single 1000mm door gap centered at x=2500 — the only crossing. A big sofa
+  // island sits just above the door (footprint x 1300..3700, y 4700..5700), so
+  // a figure that comes through the door and heads for the goal above must
+  // detour around it.
+  const FW = 10000, FD = 8000;
+  const WALL_Y = 4000;
+  const door = { id: 'd1', x: 2000, y: WALL_Y, w: 1000, rotation: 0, hinge: 'left' };
+  const sofa = fu('sofa', 2500, 5200, 2400, 1000);  // x[1300,3700] y[4700,5700]
+  const chair = fu('chair', 8000, 2000, 500, 500, 0);
+  const floor = {
+    id: 'f1', name: 'Nav', w: FW, d: FD,
+    walls: [{ id: 'w1', points: [{ x: 0, y: WALL_Y }, { x: FW, y: WALL_Y }] }],
+    furniture: [sofa, chair],
+    lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [door], windows: [], bg: null, model3d: null, look3d: null, rooms: [],
+  };
+  r.updateFloor(floor, { preset: 'day', floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6' });
+  r.applyViewPreset('top');
+
+  const realNow = performance.now.bind(performance);
+  let fakeNow = realNow();
+  performance.now = () => fakeNow;
+  const DT = 16.7;
+  const step = (targets) => { fakeNow += DT; r.updateTargets(targets); };
+  // scene(nav) -> world helpers
+  const navWorld = (h) => ({ x: FW / 2 - h.navX, y: h.navZ + FD / 2 });
+
+  const insideSofa = (wx, wy) =>
+    wx >= sofa.x - sofa.w / 2 && wx <= sofa.x + sofa.w / 2 &&
+    wy >= sofa.y - sofa.h / 2 && wy <= sofa.y + sofa.h / 2;
+
+  if (test === 'path') {
+    const KEY = 't1';
+    // Seed at below-left, let the rig initialize.
+    const start = { key: KEY, x: 2500, y: 1500, color: 0x4fc3f7 };
+    for (let i = 0; i < 6; i++) step([start]);
+    // Radar JUMP to above-left of the wall (past the sofa).
+    const goal = { key: KEY, x: 2500, y: 7400, color: 0x4fc3f7 };
+    const samples = [];
+    const traj = [];
+    let crossings = [];       // world x at each below->above wall crossing
+    let sofaHits = 0;
+    let prevY = null;
+    const FRAMES = 840;       // ~14s
+    for (let i = 0; i < FRAMES; i++) {
+      step([goal]);
+      const h = r._humanoids[KEY];
+      const w = navWorld(h);
+      traj.push([Math.round(w.x), Math.round(w.y)]);
+      if (insideSofa(w.x, w.y)) sofaHits++;
+      if (prevY !== null && prevY < WALL_Y && w.y >= WALL_Y) crossings.push(Math.round(w.x));
+      if (prevY !== null && prevY >= WALL_Y && w.y < WALL_Y) crossings.push(Math.round(w.x));
+      prevY = w.y;
+      if (i % 60 === 0)
+        samples.push({ t: (i / 60) | 0, wx: Math.round(w.x), wy: Math.round(w.y),
+                       path: h.path ? h.path.length : 0, rev: h.pathRev });
+    }
+    const h = r._humanoids[KEY];
+    const finalW = navWorld(h);
+    // Assertions
+    const crossOk = crossings.length > 0 && crossings.every(x => x >= 1900 && x <= 3100);
+    const sofaOk = sofaHits === 0;
+    const arrivedOk = Math.hypot(finalW.x - goal.x, finalW.y - goal.y) < 900;
+    const pass = crossOk && sofaOk && arrivedOk;
+    window.__RESULT__ = { samples, crossings, sofaHits, finalW, pass, crossOk, sofaOk, arrivedOk,
+                          navBlocked: r._nav.blockedCount };
+    document.title = `PATH ${pass ? 'PASS' : 'FAIL'} cross=${crossOk}[${crossings.join(',')}] sofa=${sofaOk}(${sofaHits}) arrive=${arrivedOk} | ` +
+      JSON.stringify(samples);
+  } else if (test === 'shot') {
+    // Mid-walk overhead screenshot: run partway through the same journey.
+    const KEY = 't1';
+    const start = { key: KEY, x: 2500, y: 1500, color: 0x4fc3f7 };
+    for (let i = 0; i < 6; i++) step([start]);
+    const goal = { key: KEY, x: 2500, y: 7400, color: 0x4fc3f7 };
+    const frames = parseInt(q.get('f') || '360', 10);
+    for (let i = 0; i < frames; i++) step([goal]);
+    const h = r._humanoids[KEY];
+    const w = navWorld(h);
+    document.title = `SHOT wx=${Math.round(w.x)} wy=${Math.round(w.y)} inSofa=${insideSofa(w.x, w.y)}`;
+    // keep rendering the current pose
+    r._renderOnce ? r._renderOnce() : null;
+  } else if (test === 'sit') {
+    // Sitting regression: park the target on the chair; sit should engage.
+    const KEY = 's1';
+    const onChair = { key: KEY, x: chair.x, y: chair.y, color: 0x81c784 };
+    for (let i = 0; i < 480; i++)
+      step([{ ...onChair, x: onChair.x + Math.sin(fakeNow / 900) * 8 }]);
+    const h = r._humanoids[KEY];
+    document.title = `SIT sit=${h.sit.toFixed(2)} dwell=${h.dwell.toFixed(1)} spot=${!!h.sitSpot} spots=${r._sitSpots.length}`;
+  } else if (test === 'sep') {
+    // Two targets crossing paths on an OPEN area (no obstacles between): they
+    // should never overlap closer than ~300mm thanks to mutual separation.
+    const A = 'a', B = 'b';
+    // A goes left->right at y=1000; B goes right->left at y=1000; they cross.
+    let minDist = Infinity;
+    const FRAMES = 480;
+    for (let i = 0; i < FRAMES; i++) {
+      const s = i / FRAMES;
+      const ax = 2000 + s * 5000, bx = 7000 - s * 5000;
+      step([
+        { key: A, x: ax, y: 1000, color: 0x4fc3f7 },
+        { key: B, x: bx, y: 1000, color: 0xf06292 },
+      ]);
+      const ha = r._humanoids[A], hb = r._humanoids[B];
+      if (ha && hb) {
+        // distance in nav space (scene coords)
+        const d = Math.hypot(ha.navX - hb.navX, ha.navZ - hb.navZ);
+        if (i > 40) minDist = Math.min(minDist, d);  // skip spawn-in
+      }
+    }
+    document.title = `SEP minDist=${minDist.toFixed(0)}mm ${minDist >= 300 ? 'PASS' : 'FAIL'}`;
+  }
+  performance.now = realNow;
+</script>

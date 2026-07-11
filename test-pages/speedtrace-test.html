@@ -1,0 +1,91 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>speed trace</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<script type="module">
+  const q = new URLSearchParams(location.search);
+  const mod = await import('./assets/three-renderer.js');
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+
+  const fu = (kind, x, y, w, h, rot = 0, extra = {}) =>
+    ({ id: kind + '_' + x + '_' + y, x, y, w, h, kind, rotation: rot, ...extra });
+
+  // Same 2-corner nav scenario as pathfind-test: a wall with one door gap and a
+  // sofa island just above it force a detour with two real corners.
+  const FW = 10000, FD = 8000, WALL_Y = 4000;
+  const door = { id: 'd1', x: 2000, y: WALL_Y, w: 1000, rotation: 0, hinge: 'left' };
+  const sofa = fu('sofa', 2500, 5200, 2400, 1000);
+  const chair = fu('chair', 8000, 2000, 500, 500, 0);
+  const floor = {
+    id: 'f1', name: 'Nav', w: FW, d: FD,
+    walls: [{ id: 'w1', points: [{ x: 0, y: WALL_Y }, { x: FW, y: WALL_Y }] }],
+    furniture: [sofa, chair],
+    lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [door], windows: [], bg: null, model3d: null, look3d: null, rooms: [],
+  };
+  r.updateFloor(floor, { preset: 'day', floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6' });
+  r.applyViewPreset('top');
+
+  const realNow = performance.now.bind(performance);
+  let fakeNow = realNow();
+  performance.now = () => fakeNow;
+  const DT = 16.7, DT_S = DT / 1000;
+  const KEY = 't1';
+  const navWorld = (h) => ({ x: FW / 2 - h.navX, y: h.navZ + FD / 2 });
+  const step = (targets) => { fakeNow += DT; r.updateTargets(targets); };
+
+  // Continuous walk: the radar target itself moves smoothly (not a teleport) so
+  // we measure gait/velocity continuity of a realistic follow, then also a jump.
+  const start = { key: KEY, x: 2500, y: 1500, color: 0x4fc3f7 };
+  for (let i = 0; i < 6; i++) step([start]);
+  const goal = { key: KEY, x: 2500, y: 7400, color: 0x4fc3f7 };
+
+  const speeds = [];      // per-frame nav speed (mm/s)
+  const pathLens = [];
+  let prev = navWorld(r._humanoids[KEY]);
+  const FRAMES = 720;
+  for (let i = 0; i < FRAMES; i++) {
+    step([goal]);
+    const h = r._humanoids[KEY];
+    const w = navWorld(h);
+    const s = Math.hypot(w.x - prev.x, w.y - prev.y) / DT_S;
+    speeds.push(s);
+    pathLens.push(h.path ? h.path.length : 0);
+    prev = w;
+  }
+
+  // Walking window: frames where the figure is actually moving (>50 mm/s) and
+  // hasn't yet arrived. Measure per-frame relative change and stall count.
+  let maxRel = 0, maxRelAt = -1, stalls = 0, moving = 0;
+  const transitions = [];   // frames where path length dropped (waypoint pop)
+  const LAUNCH = 15;   // frames the spring takes to ramp up from the teleport
+  for (let i = 1; i < speeds.length; i++) {
+    if (pathLens[i] !== pathLens[i - 1]) transitions.push(i);
+    if (i < LAUNCH) continue;                // skip the launch-from-standstill ramp
+    const a = speeds[i - 1], b = speeds[i];
+    if (a < 50 && b < 50) continue;          // not in a moving stretch
+    moving++;
+    if (b < 20) stalls++;                    // near-zero mid-walk = a stall/pop
+    // Steady-walk continuity only: both neighbours clearly CRUISING (> 300 mm/s)
+    // so the launch-from-standstill and arrival-decel transients (inherently big
+    // relative changes off a near-zero base) don't count.
+    if (a < 300 || b < 300) continue;
+    const rel = Math.abs(b - a) / Math.max(a, 1);
+    if (rel > maxRel) { maxRel = rel; maxRelAt = i; }
+  }
+  // Worst relative change AT a waypoint transition specifically.
+  let transRel = 0;
+  for (const ti of transitions) {
+    if (ti < 2 || ti >= speeds.length) continue;
+    const a = speeds[ti - 1], b = speeds[ti];
+    if (a < 50 && b < 50) continue;
+    transRel = Math.max(transRel, Math.abs(b - a) / Math.max(a, 1));
+  }
+  const pass = maxRel < 0.15 && stalls === 0;
+  window.__RESULT__ = { maxRel, maxRelAt, transRel, stalls, moving, transitions };
+  document.title = `SPEEDTRACE ${pass ? 'PASS' : 'FAIL'} maxRel=${maxRel.toFixed(3)}@${maxRelAt} ` +
+    `transRel=${transRel.toFixed(3)} stalls=${stalls} moving=${moving} pops@[${transitions.join(',')}]`;
+  performance.now = realNow;
+</script>

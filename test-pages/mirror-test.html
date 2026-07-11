@@ -1,0 +1,36 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>mirror test</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<script type="module">
+  const q = new URLSearchParams(location.search);
+  const mod = await import('./assets/three-renderer.js');
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+  const fu = (kind, x, y, w, h, rot = 0, color) => ({ id: kind + x, x, y, w, h, kind, rotation: rot, color });
+  const floor = {
+    id: 'f1', name: 'Test', w: 12000, d: 9000,
+    walls: [{ id: 'w1', points: [{x:200,y:200},{x:11800,y:200},{x:11800,y:8800},{x:200,y:8800},{x:200,y:200}] }],
+    furniture: [
+      // X-asymmetric sectionals + chaise, rotation 0. Chaise/return should be
+      // on the plan-RIGHT for *_right, plan-LEFT for *_left.
+      fu('sofa_l_left',  3000, 6800, 2600, 1800),
+      fu('sofa_l_right', 9000, 6800, 2600, 1800),
+      fu('sofa_u',       6000, 6800, 3200, 2000),
+      fu('chaise',       3000, 3800, 1800, 750),
+      fu('chaise',       9000, 3800, 1800, 750),
+      // orientation reference: fridge (freezer handle on plan-left in 3D),
+      // and a recolored sofa + fridge for item 2.
+      fu('fridge',       6000, 3800, 910, 760),
+      fu('sofa',         3000, 1400, 2000, 900, 0, q.get('recolor') ? '#d32f2f' : undefined),
+      fu('fridge',       6000, 1400, 910, 760, 0, q.get('recolor') ? '#111111' : undefined),
+      fu('bed',          9000, 1400, 2000, 1500, 0, q.get('recolor') ? '#c2185b' : undefined),
+    ],
+    lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [], windows: [], bg: null, model3d: null, look3d: null,
+  };
+  r.updateFloor(floor, { preset: q.get('preset') || 'day', floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6' });
+  r.applyViewPreset(q.get('view') || 'top');
+  document.title = 'mirror-' + (q.get('view') || 'top');
+</script>

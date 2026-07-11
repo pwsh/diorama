@@ -1,0 +1,30 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>fans</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<script type="module">
+  const mod = await import('./assets/three-renderer.js');
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+  const floor = {
+    id: 'f1', name: 'T', w: 9000, d: 5000,
+    walls: [], furniture: [], lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [], windows: [], bg: null, model3d: null,
+  };
+  const lights = [
+    { id: 'f1x', x: 1500, y: 2500, entity_id: 'fan.off', iconKind: 'fan', label: '' },
+    { id: 'f2x', x: 4500, y: 2500, entity_id: 'light.on', fanEntity: 'fan.spin', iconKind: 'fan_light', label: '' },
+    { id: 's1x', x: 7000, y: 2500, entity_id: 'light.str', iconKind: 'string', length: 3000, rotation: 30, label: '' },
+  ];
+  const states = {
+    'fan.off':  { state: 'off', attributes: {} },
+    'fan.spin': { state: 'on', attributes: { percentage: 60 } },
+    'light.on': { state: 'on', attributes: { brightness: 220 } },
+    'light.str':{ state: 'on', attributes: { brightness: 255, rgb_color: [255, 180, 90] } },
+  };
+  r.updateFloor(floor, { preset: 'dusk', floorColor: '#4a4640', floorTex: 'none', wallColor: '#cfd2d6' });
+  r.updateLightsSwitches(lights, [], id => states[id] || null);
+  r.setCameraView([0, 2200, -4600], [0, 1500, 0]);
+  document.title = 'fans ok';
+</script>

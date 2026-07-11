@@ -1,0 +1,52 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>avatar walk personalities</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<script type="module">
+ try {
+  const q = new URLSearchParams(location.search);
+  const kinds = (q.get('kinds') || 'cartoon_duck,astronaut').split(',');
+  const secs = parseFloat(q.get('secs') || '6');
+  const mod = await import('./assets/three-renderer.js');
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+  const floor = {
+    id: 'f1', name: 'Walk', w: 12000, d: 6000, walls: [], furniture: [],
+    lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [], windows: [], bg: null, model3d: null, look3d: null,
+  };
+  r.updateFloor(floor, { preset: 'day', floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6' });
+
+  // Walk each figure left→right at 0.9 m/s, side by side.
+  const realNow = performance.now.bind(performance);
+  let fakeNow = realNow();
+  performance.now = () => fakeNow;
+  const SPEED = 0.9;   // m/s
+  const DT = 0.05;     // 50 ms steps
+  let t = 0;
+  const step = () => {
+    fakeNow += DT * 1000; t += DT;
+    const x0 = 1500 + SPEED * 1000 * t;
+    r.updateTargets(kinds.map((k, i) => ({
+      key: 'w' + i, x: x0, y: 1800 + i * 1400, color: [0xffd54f, 0x4fc3f7, 0xff8a65][i % 3], avatar: k,
+    })));
+  };
+  for (let i = 0; i < secs / DT; i++) step();
+  performance.now = realNow;
+
+  // Side view down the walking line.
+  r.applyViewPreset('front');
+  const cv = r.cameraView(); const tg = cv.target;
+  const zoom = parseFloat(q.get('zoom') || '0.35');
+  const panx = parseFloat(q.get('panx') || '0');
+  r.setCameraView(
+    [tg[0] + (cv.pos[0]-tg[0])*zoom + panx, tg[1] + (cv.pos[1]-tg[1])*zoom, tg[2] + (cv.pos[2]-tg[2])*zoom],
+    [tg[0] + panx, tg[1] + 300, tg[2]]);
+
+  const dump = Object.entries(r._humanoids).map(([k, h]) =>
+    `${k}[${h.avatarKind}] pers(b${h.persBob},s${h.persSway},c${h.persCadence},a${h.persAmp}) ` +
+    `rollZ=${h.group.rotation.z.toFixed(3)} y=${h.group.position.y.toFixed(0)} amp=${h.amp.toFixed(2)}`).join(' | ');
+  document.title = `t=${t.toFixed(1)}s ${dump}`;
+ } catch (e) { document.title = 'ERR: ' + (e && e.stack ? e.stack.split('\n').slice(0,2).join(' | ') : e); }
+</script>

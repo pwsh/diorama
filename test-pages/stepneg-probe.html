@@ -1,0 +1,35 @@
+<!doctype html>
+<meta charset="utf-8"><title>probe</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<script type="module">
+  const mod = await import('./assets/three-renderer.js?v=' + Date.now());
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+  const floor = {
+    id:'f1', name:'T', w:8000, d:6000, walls:[],
+    furniture: [
+      { id:'st1', x:4000, y:3000, w:1000, h:2800, kind:'stairs', rotation:0, elevation:-2743 },
+    ],
+    lights: [
+      { id:'l1', x:3400, y:3000, entity_id:'light.on', iconKind:'step', height:-800, rotation:270, label:'' },
+    ],
+    switches:[], sensors:[], motionSensors:[], envSensors:[], doors:[], windows:[], bg:null, model3d:null,
+  };
+  r.updateFloor(floor, { preset:'night', floorColor:'#8a7860', floorTex:'none' });
+  r.updateLightsSwitches(floor.lights, [], () => ({ state:'on', attributes:{ brightness:230 } }));
+  r.setCameraView([-1500, 900, -1200], [4200, -1200, 200]);
+  // Dump the world-space Y span of every open-ended cylinder (the wash cones)
+  // in the light group.
+  let dump = '';
+  r._lightGroup.updateMatrixWorld(true);
+  r._lightGroup.traverse(o => {
+    if (o.isMesh && o.geometry?.type === 'CylinderGeometry') {
+      const p = o.geometry.parameters;
+      o.geometry.computeBoundingBox();
+      const bb = o.geometry.boundingBox.clone().applyMatrix4(o.matrixWorld);
+      dump += ` cyl(h=${p.height},open=${p.openEnded?1:0}) worldY ${bb.min.y.toFixed(0)}..${bb.max.y.toFixed(0)};`;
+    }
+  });
+  document.title = dump || 'no cyl';
+</script>

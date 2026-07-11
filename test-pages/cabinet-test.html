@@ -1,0 +1,25 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>cabinets</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<script type="module">
+  const mod = await import('./assets/three-renderer.js');
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+  const fu = (kind, x, w, h) => ({ id: kind, x, y: 2000, w, h, kind, rotation: 180 });
+  const floor = {
+    id: 'f1', name: 'T', w: 11000, d: 4000,
+    walls: [], lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [], windows: [], bg: null, model3d: null,
+    furniture: [
+      fu('wardrobe', 900, 1200, 600), fu('cabinet', 2300, 900, 400),
+      fu('dresser', 3600, 1200, 500), fu('nightstand', 4700, 500, 400),
+      fu('tv_stand', 5900, 1600, 450), fu('counter', 7900, 1800, 650),
+      fu('island', 9900, 2000, 1000),
+    ],
+  };
+  r.updateFloor(floor, { preset: 'day', floorColor: '#8a7860', floorTex: 'none', wallColor: '#cfd2d6' });
+  r.setCameraView([0, 2600, 6500], [0, 800, 0]);
+  document.title = 'cab ok';
+</script>

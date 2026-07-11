@@ -1,0 +1,60 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>step</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<script type="module">
+  const q = new URLSearchParams(location.search);
+  const mode = q.get('mode') || 'top';
+  const mod = await import('./assets/three-renderer.js');
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+  const states = { 'light.on': { state: 'on', attributes: { brightness: 255, rgb_color: [255, 240, 200] } } };
+  const stOf = id => states[id] || null;
+  const night = { preset: 'night', floorColor: '#3a3f4a', floorTex: 'none', wallColor: '#9aa4b4' };
+
+  if (mode === 'top') {
+    // A wall running along X at y=3000. One step light snapped on each side.
+    const floor = {
+      id: 'f1', name: 'T', w: 6000, d: 6000,
+      walls: [{ id: 'w1', kind: 'full', points: [{ x: 500, y: 3000 }, { x: 5500, y: 3000 }] }],
+      furniture: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+      doors: [], windows: [], bg: null, model3d: null,
+      lights: [
+        // North (+Y) side: face points +Y (rotation 180). Pos on the +Y face.
+        { id: 'a', x: 2000, y: 3050, entity_id: 'light.on', iconKind: 'step', rotation: 180, label: '' },
+        // South (-Y) side: face points -Y (rotation 0). Pos on the -Y face.
+        { id: 'b', x: 4000, y: 2950, entity_id: 'light.on', iconKind: 'step', rotation: 0, label: '' },
+      ],
+    };
+    r.updateFloor(floor, night);
+    r.updateLightsSwitches(floor.lights, [], stOf);
+    r.applyViewPreset('top');
+    document.title = 'step top ok';
+  } else if (mode === 'sunken') {
+    // Sunken stairway: a stairs piece dropped a full storey, with a step light
+    // embedded in the shaft wall at height -800 (below floor level).
+    const floor = {
+      id: 'f1', name: 'T', w: 6000, d: 6000,
+      walls: [{ id: 'w1', kind: 'full', points: [{ x: 1000, y: 3600 }, { x: 5000, y: 3600 }] }],
+      furniture: [
+        { id: 's1', x: 3000, y: 2400, w: 2400, h: 2000, kind: 'stairs', elevation: -2743 },
+      ],
+      switches: [], sensors: [], motionSensors: [], envSensors: [],
+      doors: [], windows: [], bg: null, model3d: null,
+      lights: [
+        // Mounted on the shaft wall (y=3600), facing -Y (into the well),
+        // sunk to -800 mm.
+        { id: 'a', x: 3000, y: 3550, entity_id: 'light.on', iconKind: 'step',
+          rotation: 0, height: -800, label: '' },
+      ],
+    };
+    r.updateFloor(floor, night);
+    r.updateLightsSwitches(floor.lights, [], stOf);
+    // Close side view from the -Y (well) side, low, so the floor plane (y=0)
+    // sits high in frame and the fixture + pool at y=-800 read clearly below it.
+    const cam = (q.get('cam') || '0,-250,-1500,0,-800,600').split(',').map(Number);
+    r.setCameraView([cam[0], cam[1], cam[2]], [cam[3], cam[4], cam[5]]);
+    document.title = 'step sunken ok';
+  }
+</script>

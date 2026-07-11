@@ -1,0 +1,26 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>stairs</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<script type="module">
+  const mod = await import('./assets/three-renderer.js');
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+  const floor = {
+    id: 'f1', name: 'T', w: 10000, d: 6000,
+    walls: [], lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [], windows: [], bg: null, model3d: null,
+    furniture: [
+      // straight full flight
+      { id: 'a', x: 2000, y: 3000, w: 1000, h: 3600, kind: 'stairs' },
+      // L-staircase: half up (rising north) + landing + half rotated 90°
+      { id: 'b', x: 6000, y: 2200, w: 1000, h: 1800, kind: 'stairs_half' },
+      { id: 'c', x: 6000, y: 3600, w: 1000, h: 1000, kind: 'stair_landing' },
+      { id: 'd', x: 7400, y: 3600, w: 1000, h: 1800, kind: 'stairs_half', rotation: 90, elevation: 1372 },
+    ],
+  };
+  r.updateFloor(floor, { preset: 'day', floorColor: '#8a7860', floorTex: 'none', wallColor: '#cfd2d6' });
+  r.setCameraView([-3200, 3400, -5200], [0, 900, 0]);
+  document.title = 'stairs ok';
+</script>

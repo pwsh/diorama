@@ -1,0 +1,41 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>avatar random</title>
+<style>html,body{margin:0;background:#111}#c{width:900px;height:600px}</style>
+<div id="c"></div>
+<script type="module">
+ try {
+  const mod = await import('./assets/three-renderer.js');
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+  const floor = {
+    id: 'f1', name: 'R', w: 8000, d: 4000, walls: [], furniture: [],
+    lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [], windows: [], bg: null, model3d: null, look3d: null,
+  };
+  r.updateFloor(floor, { preset: 'day', floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6' });
+  const targets = [
+    { key: 'rand_A', x: 2500, y: 2000, color: 0x4fc3f7, avatar: 'random' },
+    { key: 'rand_B', x: 5500, y: 2000, color: 0xff8a65, avatar: 'random' },
+  ];
+  const realNow = performance.now.bind(performance);
+  let fakeNow = realNow();
+  performance.now = () => fakeNow;
+  let atFrame1 = '';
+  // Track object identity to prove no rebuild happened between frame 1 and 300.
+  let idFrame1 = {};
+  for (let i = 0; i < 300; i++) {
+    fakeNow += 16.7;
+    r.updateTargets(targets.map(t => ({ ...t })));
+    if (i === 0) {
+      atFrame1 = Object.entries(r._humanoids).map(([k, h]) => `${k}=${h.avatarKind}`).join(',');
+      for (const [k, h] of Object.entries(r._humanoids)) idFrame1[k] = h;
+    }
+  }
+  performance.now = realNow;
+  const atFrame300 = Object.entries(r._humanoids).map(([k, h]) => `${k}=${h.avatarKind}`).join(',');
+  const sameObj = Object.entries(r._humanoids).every(([k, h]) => idFrame1[k] === h);
+  const stable = atFrame1 === atFrame300;
+  document.title = `f1[${atFrame1}] f300[${atFrame300}] stable=${stable} sameObj=${sameObj}`;
+ } catch (e) { document.title = 'ERR: ' + (e && e.stack ? e.stack.split('\n').slice(0,2).join(' | ') : e); }
+</script>

@@ -1,0 +1,66 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>guide extra</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<script type="module">
+  const q = new URLSearchParams(location.search);
+  const mode = q.get('mode');
+  const mod = await import('./assets/three-renderer.js');
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+  const F = (kind, x, y, w, h, rot = 0, extra = {}) => ({ id: kind + x, x, y, w, h, kind, rotation: rot, ...extra });
+  const floor = {
+    id: 'f1', name: 'T', w: 12000, d: 6000,
+    walls: [], furniture: [], lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [], windows: [], bg: null, model3d: null, look3d: null,
+  };
+  const states = { 'light.on': { state: 'on', attributes: { brightness: 235 } } };
+  const stOf = id => states[id] || null;
+  const day = { preset: 'day', floorColor: '#8a7860', floorTex: 'none', wallColor: '#cfd2d6' };
+  const dusk = { preset: 'dusk', floorColor: '#4a4640', floorTex: 'none', wallColor: '#cfd2d6' };
+
+  if (mode === 'common') {
+    floor.furniture = [
+      F('table', 1400, 2600, 1500, 900), F('desk', 3500, 2600, 1400, 700),
+      F('coffee_table', 5300, 2600, 1100, 600), F('bookshelf', 6800, 2500, 1000, 350, 180),
+      F('bed', 9200, 2700, 1530, 2030, 0), F('plant', 11000, 2500, 400, 400),
+      F('rug', 5300, 4200, 2000, 1400),
+    ];
+    r.updateFloor(floor, day); r.setCameraView([0, 2600, -5600], [0, 400, 0]);
+  } else if (mode === 'ceiling') {
+    floor.lights = [
+      { id: 'a', x: 1400, y: 2600, entity_id: 'light.on', iconKind: 'bulb', label: '' },
+      { id: 'b', x: 3300, y: 2600, entity_id: 'light.on', iconKind: 'pendant', label: '' },
+      { id: 'c', x: 5200, y: 2600, entity_id: 'light.on', iconKind: 'spot', label: '' },
+      { id: 'd', x: 7100, y: 2600, entity_id: 'light.on', iconKind: 'round', label: '' },
+      { id: 'e', x: 9000, y: 2600, entity_id: 'light.on', iconKind: 'tiered', label: '' },
+      { id: 'f', x: 10900, y: 2600, entity_id: 'light.on', iconKind: 'jar', label: '' },
+    ];
+    r.updateFloor(floor, dusk);
+    r.updateLightsSwitches(floor.lights, [], stOf);
+    r.setCameraView([0, 2400, -6600], [0, 1300, 0]);
+  } else if (mode === 'recessed') {
+    floor.lights = [
+      { id: 'a', x: 3500, y: 2600, entity_id: 'light.on', iconKind: 'recessed', label: '' },
+      { id: 'b', x: 6000, y: 2600, entity_id: 'light.on', iconKind: 'recessed', label: '' },
+      { id: 'c', x: 8500, y: 2600, entity_id: 'light.on', iconKind: 'strip', length: 2000, rotation: 0, label: '' },
+    ];
+    r.updateFloor(floor, dusk);
+    r.updateLightsSwitches(floor.lights, [], stOf);
+    r.setCameraView([0, 2200, -5200], [0, 1400, 0]);
+  } else if (mode === 'sit') {
+    floor.furniture = [ F('sofa', 6000, 3000, 2000, 900, 0) ];
+    r.updateFloor(floor, day);
+    r.setCameraView([-2400, 1500, -3600], [0, 700, 300]);
+    const realNow = performance.now.bind(performance);
+    let fakeNow = realNow();
+    performance.now = () => fakeNow;
+    for (let i = 0; i < 460; i++) {
+      fakeNow += 16.7;
+      r.updateTargets([{ key: 't1', x: 6000, y: 3000, color: 0x4fc3f7 }]);
+    }
+    performance.now = realNow;
+  }
+  document.title = 'extra ok';
+</script>

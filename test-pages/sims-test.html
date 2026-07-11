@@ -1,0 +1,42 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>sims style test</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<script type="module">
+  const q = new URLSearchParams(location.search);
+  const mod = await import('./assets/three-renderer.js');
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+  const fu = (kind, x, y, w, h, rot = 0) => ({ id: kind + x, x, y, w, h, kind, rotation: rot });
+  const floor = {
+    id: 'f1', name: 'Test', w: 6000, d: 5000,
+    walls: [],
+    furniture: [
+      fu('sofa', 1500, 1200, 2000, 900),
+      fu('coffee_table', 1500, 2400, 1100, 600),
+      fu('bed', 4600, 1400, 1530, 2030, 0),
+      fu('fridge', 4800, 4200, 910, 760, 180),
+      fu('plant', 3000, 4200, 400, 400),
+      fu('chair', 3000, 2400, 500, 520, 90),
+    ],
+    lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [], windows: [], bg: null, model3d: null, look3d: null,
+  };
+  r.updateFloor(floor, { preset: q.get('preset') || 'day', floorColor: '#b9a88c', floorTex: 'none', wallColor: '#cfd2d6' });
+  r.setCameraView([-3800, 2600, -3400], [200, 500, -400]);
+  // One walking figure mid-stride + one idle stander.
+  const realNow = performance.now.bind(performance);
+  let fakeNow = realNow();
+  performance.now = () => fakeNow;
+  for (let i = 0; i < 240; i++) {
+    fakeNow += 16.7;
+    const t = i * 16.7 / 1000;
+    r.updateTargets([
+      { key: 'w1', x: 2400 + t * 700, y: 3600, color: 0x4fc3f7 },   // walker, 0.7 m/s
+      { key: 's1', x: 1200, y: 3600, color: 0xffb74d },              // stander
+    ]);
+  }
+  performance.now = realNow;
+  document.title = 'ok';
+</script>

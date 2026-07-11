@@ -1,0 +1,31 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>phase3</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<script type="module">
+  const mod = await import('./assets/three-renderer.js');
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+  const floor = {
+    id: 'f1', name: 'T', w: 9000, d: 6000,
+    walls: [
+      { id: 'w1', points: [{x:300,y:300},{x:4500,y:300},{x:4500,y:5700},{x:300,y:5700},{x:300,y:300}] },
+      { id: 'w2', points: [{x:4500,y:300},{x:8700,y:300},{x:8700,y:5700},{x:4500,y:5700},{x:4500,y:300}] },
+    ],
+    rooms: [
+      { id: 'r1', name: 'Kitchen', anchor: {x: 2000, y: 3000} },
+      { id: 'r2', name: 'Living Room', anchor: {x: 6500, y: 3000} },
+    ],
+    furniture: [
+      { id: 'sink1', x: 1500, y: 900, w: 560, h: 470, kind: 'sink', rotation: 0 },
+      { id: 'sofa1', x: 6500, y: 4500, w: 2000, h: 900, kind: 'sofa', rotation: 180 },
+    ],
+    lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [], windows: [], bg: null, model3d: null,
+  };
+  r.updateFloor(floor, { preset: 'day', floorColor: '#b9a88c', floorTex: 'none', wallColor: '#cfd2d6' });
+  r.setCameraView([250, 4200, -4600], [250, 200, 200]);
+  document.title = 'anchors=' + (r._activityAnchors ? r._activityAnchors.length : 'n/a') +
+    ' sitrooms=' + JSON.stringify((r._sitSpots||[]).map(s=>s.roomId));
+</script>

@@ -1,0 +1,120 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>media raycast pending</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<script type="module">
+  const mod = await import('./assets/three-renderer.js');
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+
+  const FW = 8000, FD = 6000;
+  const floor = {
+    id: 'f1', name: 'Media', w: FW, d: FD,
+    walls: [{ id: 'perim', points: [{x:200,y:200},{x:7800,y:200},{x:7800,y:5800},{x:200,y:5800},{x:200,y:200}] }],
+    furniture: [
+      // Bound TVs (should become media clickables).
+      { id: 'tv1', x: 2000, y: 3000, w: 1450, h: 250, kind: 'tv', rotation: 0, entity_id: 'media_player.living_tv' },
+      { id: 'wtv1', x: 6000, y: 3000, w: 1300, h: 180, kind: 'wall_tv', rotation: 0, entity_id: 'switch.bedroom_tv' },
+      // Unbound TV (must NOT be a clickable).
+      { id: 'tv2', x: 4000, y: 5000, w: 1450, h: 250, kind: 'tv', rotation: 0 },
+      // Non-media furniture (control).
+      { id: 'sofa', x: 4000, y: 1500, w: 2000, h: 900, kind: 'sofa', rotation: 0 },
+    ],
+    lights: [
+      { id: 'l1', x: 4000, y: 3000, entity_id: 'light.ceiling', iconKind: 'bulb', height: 2500, radius: 900 },
+    ],
+    switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [], windows: [], bg: null, model3d: null, look3d: null, rooms: [],
+  };
+  r.updateFloor(floor, { preset: 'day', floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6' });
+  // Lights are built here, not in updateFloor — needed for the light-integrity probe.
+  r.updateLightsSwitches(floor.lights, floor.switches,
+    id => ({ state: 'on', attributes: { brightness: 200 } }));
+  r.applyViewPreset('iso');
+  r.resize(1280, 880);
+ try {
+  // Force camera + world matrices current before we project/raycast.
+  r._scene.updateMatrixWorld(true);
+  r._camera.updateMatrixWorld(true);
+  r._camera.matrixWorldInverse.copy(r._camera.matrixWorld).invert();
+
+  const results = [];
+  const ok = (cond, msg) => { results.push((cond ? 'PASS ' : 'FAIL ') + msg); };
+
+  // 1. Two media clickables collected.
+  const mc = r._mediaClickables;
+  ok(Array.isArray(mc) && mc.length === 2, `mediaClickables.length=${mc?.length} (want 2)`);
+
+  // 2. userData stamped correctly (kind + entity + fixtureId), sorted by fixtureId.
+  const uds = mc.map(g => g.userData).sort((a,b)=> String(a.fixtureId).localeCompare(String(b.fixtureId)));
+  ok(uds.every(u => u.kind === 'media'), 'all media groups userData.kind==="media"');
+  const byId = Object.fromEntries(mc.map(g => [g.userData.fixtureId, g.userData]));
+  ok(byId.tv1 && byId.tv1.entity_id === 'media_player.living_tv', 'tv1 -> media_player.living_tv');
+  ok(byId.wtv1 && byId.wtv1.entity_id === 'switch.bedroom_tv', 'wtv1 -> switch.bedroom_tv');
+
+  // 3. Parent-walk replication: pick a descendant mesh of a media group, climb
+  //    to find kind==='media' (mirrors _raycastFixture's walk).
+  function walkKind(obj) {
+    let o = obj;
+    while (o) { const u = o.userData; if (u && (u.kind==='light'||u.kind==='switch'||u.kind==='media')) return u; o = o.parent; }
+    return null;
+  }
+  let leaf = null;
+  mc[0].traverse(o => { if (!leaf && o.isMesh) leaf = o; });
+  const walked = leaf ? walkKind(leaf) : null;
+  ok(walked && walked.kind === 'media', `parent-walk from leaf mesh finds media (got ${walked?.kind})`);
+
+  // 4/5. Real raycast intersect + parent-walk. We reproduce the exact roots and
+  //    walk _raycastFixture uses, but feed NDC computed by projecting the target
+  //    through the camera (headless getBoundingClientRect is unreliable, so we
+  //    skip the rect round-trip and go straight to NDC — same intersect logic).
+  const cam = r._camera;
+  const rc = r._raycaster;
+  function realRaycast(ndcVec) {
+    const roots = [];
+    if (r._lightGroup.visible) roots.push(r._lightGroup);
+    for (const g of r._mediaClickables) roots.push(g);
+    rc.setFromCamera({ x: ndcVec.x, y: ndcVec.y }, cam);
+    const hits = rc.intersectObjects(roots, true);
+    for (const h of hits) { const u = walkKind(h.object); if (u) return u; }
+    return null;
+  }
+  function ndcOf(obj, dy = 0) {
+    const v = obj.getWorldPosition(obj.position.clone());
+    v.y += dy;
+    v.project(cam);
+    return v;
+  }
+  const tvGrp = mc.find(g => g.userData.fixtureId === 'tv1');
+  const hitTv = realRaycast(ndcOf(tvGrp, 300));
+  ok(hitTv && hitTv.kind === 'media' && hitTv.entity_id === 'media_player.living_tv',
+     `raycast tv1 -> ${hitTv ? hitTv.kind+':'+hitTv.entity_id : 'null'}`);
+
+  // Light click userData still intact — reframe top-down so a ray through the
+  // light's projected center hits it cleanly, then raycast an actual body mesh.
+  r.applyViewPreset('top');
+  r._scene.updateMatrixWorld(true);
+  r._camera.updateMatrixWorld(true);
+  r._camera.matrixWorldInverse.copy(r._camera.matrixWorld).invert();
+  let lightMesh = null, lightMeshCount = 0;
+  r._lightGroup.traverse(o => { if (o.isMesh && walkKind(o)?.kind === 'light') { lightMeshCount++; if (!lightMesh) lightMesh = o; } });
+  let lightHits = -1;
+  let lightHit = null;
+  if (lightMesh) {
+    const nd = ndcOf(lightMesh);
+    const roots2 = [r._lightGroup, ...r._mediaClickables];
+    rc.setFromCamera({ x: nd.x, y: nd.y }, cam);
+    const hh = rc.intersectObjects(roots2, true);
+    lightHits = hh.length;
+    for (const h of hh) { const u = walkKind(h.object); if (u) { lightHit = u; break; } }
+  }
+  ok(lightHit && lightHit.kind === 'light' && lightHit.entity_id === 'light.ceiling',
+     `raycast light -> ${lightHit ? lightHit.kind+':'+lightHit.entity_id : 'null'} [meshes=${lightMeshCount} hits=${lightHits}]`);
+
+  const pass = results.every(x => x.startsWith('PASS'));
+  document.title = (pass ? 'ALL-PASS | ' : 'SOME-FAIL | ') + results.join(' || ');
+ } catch (e) {
+  document.title = 'THREW | ' + (e && e.stack ? e.stack.split('\n').slice(0,3).join(' ') : String(e));
+ }
+</script>

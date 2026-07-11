@@ -1,0 +1,114 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>appliance test</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<script type="module">
+  const q = new URLSearchParams(location.search);
+  const test = q.get('test') || 'row';
+  const mod = await import('./assets/three-renderer.js');
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+
+  const fu = (kind, x, y, w, h, rot = 0, extra = {}) =>
+    ({ id: kind + '_' + x + '_' + y, x, y, w, h, kind, rotation: rot, ...extra });
+
+  // A kitchen wall along world y=1500 with a row of appliances hugging it.
+  // Fridge, stove, dishwasher spaced across x. A target walks straight along
+  // x at y=1500 (through them). Nav must route the rig AROUND the footprints.
+  const FW = 8000, FD = 4000;
+  const fridge = fu('fridge', 2000, 1200, 910, 760);
+  const stove = fu('stove', 3500, 1200, 760, 660);
+  const dishwasher = fu('dishwasher', 5000, 1200, 610, 620);
+  const floor = {
+    id: 'f1', name: 'Kitchen', w: FW, d: FD,
+    walls: [{ id: 'w1', points: [{ x: 0, y: 500 }, { x: FW, y: 500 }] }],
+    furniture: [fridge, stove, dishwasher],
+    lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [], windows: [], bg: null, model3d: null, look3d: null, rooms: [],
+  };
+  r.updateFloor(floor, { preset: 'day', floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6' });
+  r.applyViewPreset('top');
+
+  const realNow = performance.now.bind(performance);
+  let fakeNow = realNow();
+  performance.now = () => fakeNow;
+  const DT = 16.7;
+  const step = (targets) => { fakeNow += DT; r.updateTargets(targets); };
+  const navWorld = (h) => ({ x: FW / 2 - h.navX, y: h.navZ + FD / 2 });
+
+  const inside = (piece, wx, wy) =>
+    wx >= piece.x - piece.w / 2 && wx <= piece.x + piece.w / 2 &&
+    wy >= piece.y - piece.h / 2 && wy <= piece.y + piece.h / 2;
+  const pieces = [fridge, stove, dishwasher];
+  const insideAny = (wx, wy) => pieces.find(pp => inside(pp, wx, wy));
+
+  if (test === 'dwell') {
+    // Approach fridge from below, dwell (engage forage_fridge), then leave to
+    // the right. Track containment across approach+engage+depart, plus where
+    // the rig stands while foraging (should be OUTSIDE / in front, not inside).
+    const KEY = 'd1';
+    const start = { key: KEY, x: 2000, y: 3200, color: 0x81c784 };
+    for (let i = 0; i < 6; i++) step([start]);
+    const samples = []; let hits = 0, engageMaxIn = 0;
+    // walk up to fridge front (y ~ 1750, just below footprint bottom at 820)
+    const stand = { x: 2000, y: 1900 };
+    for (let i = 0; i < 90; i++) step([{ key: KEY, x: stand.x, y: stand.y, color: 0x81c784 }]);
+    // dwell 6 s (raw jitter tiny) so forage engages
+    for (let i = 0; i < 360; i++) {
+      step([{ key: KEY, x: stand.x + Math.sin(fakeNow / 800) * 6, y: stand.y, color: 0x81c784 }]);
+      const h = r._humanoids[KEY]; const w = navWorld(h);
+      // rendered rig position (group), not nav — the visible thing
+      const gx = FW / 2 - h.group.position.x, gy = h.group.position.z + FD / 2;
+      if (insideAny(gx, gy)) hits++;
+      if (i % 60 === 0) samples.push({ ph: 'dwell', t: (i / 60) | 0, act: h.act.toFixed(2),
+        gx: Math.round(gx), gy: Math.round(gy), in: insideAny(gx, gy) ? insideAny(gx, gy).kind : '-' });
+    }
+    const hAfter = r._humanoids[KEY];
+    // depart to the right
+    for (let i = 0; i < 200; i++) {
+      const rx = 2000 + (i / 200) * 4000;
+      step([{ key: KEY, x: rx, y: 1900, color: 0x81c784 }]);
+      const h = r._humanoids[KEY];
+      const gx = FW / 2 - h.group.position.x, gy = h.group.position.z + FD / 2;
+      if (insideAny(gx, gy)) hits++;
+      if (i % 40 === 0) samples.push({ ph: 'leave', t: i, act: h.act.toFixed(2),
+        gx: Math.round(gx), gy: Math.round(gy), in: insideAny(gx, gy) ? insideAny(gx, gy).kind : '-' });
+    }
+    window.__RESULT__ = { hits, samples };
+    document.title = `DWELL hits=${hits} | ` + JSON.stringify(samples);
+  } else if (test === 'row') {
+    const KEY = 't1';
+    // Spawn far left below the appliances.
+    const start = { key: KEY, x: 500, y: 1200, color: 0x4fc3f7 };
+    for (let i = 0; i < 6; i++) step([start]);
+    // Drive raw target straight through the row: x 500 -> 6500 at y=1200
+    // (dead center of the appliances), moving ~1 m/s.
+    const samples = [];
+    let hits = 0, hitPieces = {};
+    const totalX = 6000;
+    const speed = 1200; // mm/s
+    const dur = totalX / speed; // s
+    const frames = Math.ceil(dur / (DT / 1000));
+    let prevSecond = -1;
+    for (let i = 0; i < frames; i++) {
+      const frac = i / frames;
+      const rx = 500 + frac * totalX;
+      step([{ key: KEY, x: rx, y: 1200, color: 0x4fc3f7 }]);
+      const h = r._humanoids[KEY];
+      const w = navWorld(h);
+      const hp = insideAny(w.x, w.y);
+      if (hp) { hits++; hitPieces[hp.kind] = (hitPieces[hp.kind] || 0) + 1; }
+      const sec = Math.floor(fakeNow / 1000) - Math.floor((fakeNow - i * DT) / 1000);
+      if (i % 30 === 0)
+        samples.push({ t: (i * DT / 1000).toFixed(1), rx: Math.round(rx),
+          nx: Math.round(w.x), ny: Math.round(w.y), in: hp ? hp.kind : '-',
+          act: h.act.toFixed(2) });
+    }
+    const pass = hits === 0;
+    window.__RESULT__ = { hits, hitPieces, samples, pass, blocked: r._nav.blockedCount };
+    document.title = `ROW ${pass ? 'PASS' : 'FAIL'} hits=${hits} ${JSON.stringify(hitPieces)} | ` +
+      JSON.stringify(samples);
+  }
+  performance.now = realNow;
+</script>

@@ -1,0 +1,66 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>new kinds lineup</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<script type="module">
+  const q = new URLSearchParams(location.search);
+  const view = q.get('view') || 'iso';
+  const mod = await import('./assets/three-renderer.js');
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+
+  const fu = (kind, x, y, rot = 0, extra = {}) => {
+    const g = mod && null;
+    return { id: kind + '_' + x + '_' + rot, x, y, kind, rotation: rot, ...extra };
+  };
+  // pull default footprints from the def so we don't hardcode
+  const FW = 8000, FD = 4000;
+  const KINDS = ['wall_tv', 'sink_vanity', 'kitchen_sink'];
+  const DEF = { wall_tv: [1300,180], sink_vanity: [760,550], kitchen_sink: [900,650] };
+  const xs = [1700, 4000, 6300];
+  const furniture = [];
+  KINDS.forEach((k, i) => {
+    const [w, h] = DEF[k];
+    // rot 0 row near back wall (y large); rot 180 row near front wall
+    furniture.push({ id: k+'_0', x: xs[i], y: 3250, w, h, kind: k, rotation: 0 });
+    furniture.push({ id: k+'_180', x: xs[i], y: 1000, w, h, kind: k, rotation: 180 });
+  });
+
+  const floor = {
+    id: 'f1', name: 'Lineup', w: FW, d: FD,
+    walls: [
+      { id: 'wb', points: [{ x: 200, y: 3450 }, { x: FW-200, y: 3450 }] },
+      { id: 'wf', points: [{ x: 200, y: 750 }, { x: FW-200, y: 750 }] },
+    ],
+    furniture,
+    lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [], windows: [], bg: null, model3d: null, look3d: null, rooms: [],
+  };
+  r.updateFloor(floor, { preset: 'day', floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6' });
+
+  if (view === 'iso') {
+    r.applyViewPreset('iso');
+  } else if (view === 'close') {
+    // 3/4 close on the rot-0 sink_vanity + kitchen_sink area.
+    // scene = (FW/2 - x, h, y - FD/2). x=4000->0, y=3250-> z=1250.
+    r.setCameraView([2600, 1500, 4200], [-400, 500, 1150]);
+  } else if (view === 'ksink') {
+    // tight top-down-ish on the kitchen_sink rot-0 (world 6300,3250 -> scene x=-2300,z=1250)
+    r.setCameraView([-2300, 1700, 2900], [-2300, 850, 1250]);
+  } else if (view === 'vanity') {
+    // tight on the sink_vanity rot-0 (world 4000,3250 -> scene x=0,z=1250)
+    r.setCameraView([300, 1500, 3100], [0, 700, 1250]);
+  } else if (view === 'tvfront') {
+    // straight-ish on the wall_tv rot-0 (world x=1700,y=3250 -> scene x=2300,z=1250)
+    r.setCameraView([2300, 1400, 4600], [2300, 1300, 1250]);
+  }
+
+  // advance a couple frames so materials/outlines settle
+  const realNow = performance.now.bind(performance);
+  let fakeNow = realNow();
+  performance.now = () => fakeNow;
+  for (let i = 0; i < 4; i++) { fakeNow += 16.7; r.updateTargets([]); }
+  performance.now = realNow;
+  document.title = 'LINEUP ok kinds=' + KINDS.join(',') + ' pieces=' + furniture.length;
+</script>

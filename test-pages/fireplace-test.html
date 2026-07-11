@@ -1,0 +1,23 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>fireplace</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<script type="module">
+  const mod = await import('./assets/three-renderer.js');
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+  const floor = {
+    id: 'f1', name: 'T', w: 6000, d: 4000,
+    walls: [], furniture: [], lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [], windows: [], bg: null, model3d: null,
+  };
+  const lights = [
+    { id: 'fp1', x: 3000, y: 2600, entity_id: 'light.fire', iconKind: 'fireplace', label: '' },
+  ];
+  const states = { 'light.fire': { state: 'on', attributes: { brightness: 255 } } };
+  r.updateFloor(floor, { preset: 'night', floorColor: '#3a3f4a', floorTex: 'none', wallColor: '#7a8494' });
+  r.updateLightsSwitches(lights, [], id => states[id] || null);
+  r.setCameraView([0, 1400, -3400], [0, 600, 0]);
+  document.title = 'fp ok';
+</script>

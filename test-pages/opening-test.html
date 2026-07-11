@@ -1,0 +1,31 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>openings</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<script type="module">
+  const mod = await import('./assets/three-renderer.js');
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+  const floor = {
+    id: 'f1', name: 'T', w: 9000, d: 5000,
+    walls: [{ id: 'w1', points: [{x:500,y:2500},{x:8500,y:2500}] }],
+    furniture: [], lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [
+      { id: 'd1', x: 1500, y: 2500, w: 800, rotation: 0, entity_id: 'binary_sensor.closed', label: '' },
+      { id: 'd2', x: 4000, y: 2500, w: 800, rotation: 0, entity_id: 'binary_sensor.open', label: '' },
+    ],
+    windows: [
+      { id: 'n1', x: 6800, y: 2500, w: 1200, rotation: 0, entity_id: 'binary_sensor.open', label: '' },
+    ],
+    bg: null, model3d: null,
+  };
+  const states = {
+    'binary_sensor.closed': { state: 'off', attributes: {} },
+    'binary_sensor.open':   { state: 'on', attributes: {} },
+  };
+  r.updateFloor(floor, { preset: 'day', floorColor: '#8a7860', floorTex: 'none', wallColor: '#cfd2d6' });
+  r.updateDoorsWindows(floor.doors, floor.windows, id => states[id] || null);
+  r.setCameraView([-1500, 2200, -5200], [0, 900, 0]);
+  document.title = 'openings ok';
+</script>

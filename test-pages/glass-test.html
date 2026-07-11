@@ -1,0 +1,62 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>glass test</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<script type="module">
+  const q = new URLSearchParams(location.search);
+  const mod = await import('./assets/three-renderer.js');
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+  const fu = (kind, x, y, w, h, rot = 0) => ({ id: kind + x + '_' + y, x, y, w, h, kind, rotation: rot });
+
+  // Ground floor: full perimeter loop + a room of furniture.
+  const ground = {
+    id: 'g', name: 'Ground', w: 10000, d: 8000,
+    walls: [{ id: 'gw', points: [
+      {x:500,y:500},{x:9500,y:500},{x:9500,y:7500},{x:500,y:7500},{x:500,y:500} ] }],
+    furniture: [
+      fu('sofa', 6500, 2000, 2000, 900),
+      fu('coffee_table', 6500, 3100, 1100, 600),
+      fu('tv_stand', 6500, 4600, 1600, 450, 180),
+      fu('table', 2600, 2600, 1500, 900),
+      fu('chair', 2600, 1900, 500, 500),
+      fu('fridge', 1000, 7000, 910, 760, 180),
+      fu('counter', 2600, 7000, 1800, 650, 180),
+      fu('plant', 8800, 7000, 400, 400),
+    ],
+    lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [], windows: [], bg: null, model3d: null, look3d: null, rooms: [],
+  };
+  // Upper floor: smaller loop with a bed.
+  const upper = {
+    id: 'u', name: 'Upper', w: 10000, d: 8000,
+    walls: [{ id: 'uw', points: [
+      {x:2500,y:2000},{x:7500,y:2000},{x:7500,y:6000},{x:2500,y:6000},{x:2500,y:2000} ] }],
+    furniture: [ fu('bed', 5000, 4000, 2000, 1500) ],
+    lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [], windows: [], bg: null, model3d: null, look3d: null, rooms: [],
+  };
+
+  const scene3d = {
+    preset: q.get('preset') || 'day', floorColor: '#8a7860', floorTex: 'wood',
+    wallColor: '#cfd2d6',
+    glassHouse: q.get('glass') !== '0',
+    wallCutaway: q.get('cut') !== '0',
+  };
+  r.updateFloor(ground, scene3d);
+  r.updateGhostFloors([ground, upper], 'g', scene3d);
+  r.applyViewPreset(q.get('view') || 'iso');
+
+  // Settle the cutaway fade deterministically: run the per-frame updater +
+  // force renders (~120 frames >> the ~60 needed for 0.45→0.06 at 10%/frame).
+  for (let i = 0; i < 120; i++) {
+    r._updateWallCutaway();
+    r._renderer.render(r._scene, r._camera);
+  }
+
+  // Report the settled opacity of each active-floor wall for inspection.
+  const ops = r._cutawayWalls.map(m => (m.material.opacity).toFixed(2)).join(',');
+  const gh = r._ghostGroup.children.length;
+  document.title = `glass=${scene3d.glassHouse} cut=${scene3d.wallCutaway} ghosts=${gh} wallOps=[${ops}]`;
+</script>

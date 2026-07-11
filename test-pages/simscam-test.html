@@ -1,0 +1,24 @@
+<!doctype html>
+<meta charset="utf-8"><title>simscam</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<script type="module">
+  const mod = await import('./assets/three-renderer.js');
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+  const fu=(k,x,y,w,h,rot=0,e={})=>({id:k+x,x,y,w,h,kind:k,rotation:rot,...e});
+  const floor={id:'f1',name:'T',w:9000,d:6000,
+    walls:[{id:'w1',points:[{x:300,y:300},{x:4500,y:300},{x:4500,y:5700},{x:300,y:5700},{x:300,y:300}]},
+           {id:'w2',points:[{x:4500,y:300},{x:8700,y:300},{x:8700,y:5700},{x:4500,y:5700},{x:4500,y:300}]}],
+    rooms:[{id:'r1',name:'Kitchen',anchor:{x:2000,y:3000}},{id:'r2',name:'Living Room',anchor:{x:6500,y:3000}}],
+    furniture:[fu('counter',1500,900,1800,650,0),fu('coffee_maker',1200,850,250,250,0,{elevation:920}),
+      fu('fridge',3500,900,910,760,0),fu('sofa',6500,4600,2000,900,180),fu('tv_stand',6500,1000,1600,450),
+      fu('tv',6500,1000,1450,250),fu('coffee_table',6500,3300,1100,600),fu('plant',8200,4900,400,400)],
+    lights:[],switches:[],sensors:[],motionSensors:[],envSensors:[],doors:[],windows:[],bg:null,model3d:null};
+  r.updateFloor(floor,{preset:'day',floorColor:'#b9a88c',floorTex:'wood',wallColor:'#cfd2d6'});
+  r.applyViewPreset('sims');
+  const realNow=performance.now.bind(performance);let fakeNow=realNow();performance.now=()=>fakeNow;
+  for(let i=0;i<420;i++){fakeNow+=16.7;r.updateTargets([{key:'t1',x:6500,y:4600,color:0x4fc3f7},{key:'t2',x:2600+i*4,y:2600,color:0xffb74d}],{entityOn:{},roomNames:{r1:'Kitchen',r2:'Living Room'},timeBucket:'day'});}
+  performance.now=realNow;
+  document.title='ok';
+</script>

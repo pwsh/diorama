@@ -1,0 +1,43 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>avatar multi-select</title>
+<style>html,body{margin:0;background:#111}#c{width:900px;height:600px}</style>
+<div id="c"></div>
+<script type="module">
+ try {
+  const mod = await import('./assets/three-renderer.js');
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+  const floor = {
+    id: 'f1', name: 'M', w: 9000, d: 4000, walls: [], furniture: [],
+    lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [], windows: [], bg: null, model3d: null, look3d: null,
+  };
+  r.updateFloor(floor, { preset: 'day', floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6' });
+  const pool = ['ninja', 'cowboy'];
+  const targets = [
+    { key: 's1_0', x: 2000, y: 2000, color: 0x4fc3f7, avatars: pool },
+    { key: 's1_1', x: 4500, y: 2000, color: 0x4fc3f7, avatars: pool },
+    { key: 's1_2', x: 7000, y: 2000, color: 0x4fc3f7, avatars: pool },
+    // legacy back-compat: single 'random' still resolves over ALL kinds
+    { key: 'legacy_r', x: 4500, y: 3200, color: 0xff8a65, avatar: 'random' },
+  ];
+  const realNow = performance.now.bind(performance);
+  let fakeNow = realNow();
+  performance.now = () => fakeNow;
+  let f1 = '', ids = {};
+  for (let i = 0; i < 300; i++) {
+    fakeNow += 16.7;
+    r.updateTargets(targets.map(t => ({ ...t, avatars: t.avatars ? [...t.avatars] : undefined })));
+    if (i === 0) {
+      f1 = Object.entries(r._humanoids).map(([k, h]) => `${k}=${h.avatarKind}`).join(',');
+      for (const [k, h] of Object.entries(r._humanoids)) ids[k] = h;
+    }
+  }
+  performance.now = realNow;
+  const f300 = Object.entries(r._humanoids).map(([k, h]) => `${k}=${h.avatarKind}`).join(',');
+  const sameObj = Object.entries(r._humanoids).every(([k, h]) => ids[k] === h);
+  const inPool = ['s1_0','s1_1','s1_2'].every(k => pool.includes(r._humanoids[k]?.avatarKind));
+  document.title = `f1[${f1}] f300[${f300}] stable=${f1===f300} sameObj=${sameObj} inPool=${inPool}`;
+ } catch (e) { document.title = 'ERR: ' + (e && e.stack ? e.stack.split('\n').slice(0,2).join(' | ') : e); }
+</script>
