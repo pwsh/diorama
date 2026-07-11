@@ -34,6 +34,20 @@ deployed to the live HA instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **World Outside — G2 (GPS device pins)**: `Planner.gpsPins` resolves each
+  `Store.people` GPS source (person entity preferred, else device_tracker) to a
+  pin — projects lat/lon via the `geoFit()` transform and classifies vs the
+  current floor rect: `indoor` (lost-device hint, dimmed), `yard` (true pos +
+  accuracy ring), `beyond` (clamped to the floor-bbox+`boundaryM` ring along the
+  true bearing, `Name · 320 m NE` label). New pure geo helpers `clampToBoundary`
+  / `planBearingDeg` / `compass8` (tested in `test-pages/gps-test.html`). 2D
+  `drawGpsPins` (teardrop + initials + ring + staleness) and 3D camera-facing
+  sprite pins + 3D landmark pins in a new `_gpsGroup` (`updateGpsPins`, dirty key
+  `_keyGps`; `_disposeSpriteMaps` pairing kept). Bound GPS source ids are
+  config-path so the sidebar GPS status line (People section) + GPS-pins preview
+  (GPS/Geo section) refresh on a new fix. Kiosk/view-safe. `HassState` gained
+  optional `last_updated`/`last_changed` (staleness). Test page
+  `test-pages/gps-test.html` (`GPS PASS 28/28`).
 - **World Outside — G1 (geo calibration)**: `Store.geo` (`GeoConfig` —
   property-wide landmarks, `northDeg`/`boundaryM`/`accuracyGateM`) + new pure
   `src/geo.ts` (equirectangular projection, 2D Procrustes fit with scale FIXED

@@ -2,7 +2,8 @@ import { HassClient, type HaApi } from './ha-client.js';
 import { SensorDiscovery } from './sensor-discovery.js';
 import { loadStore, saveStore, newId, repairFloor } from './storage.js';
 import { slugToName, normMac } from './geometry.js';
-import { fitGeoTransform, medianLatLon, type GeoTransform, type GeoPair, type LatLonSample } from './geo.js';
+import { fitGeoTransform, latLonToPlan, clampToBoundary, planBearingDeg, medianLatLon,
+         type GeoTransform, type GeoPair, type LatLonSample } from './geo.js';
 import type { GeoConfig, GeoLandmark } from './types.js';
 
 // ── Bermuda BLE discovery (runtime-only) ──────────────────────────────────
@@ -61,6 +62,27 @@ export interface BlePerson {
 // A stored per-device solve result (world mm) before lerp smoothing.
 interface BleSolve {
   x: number; y: number; floorId: string; confidenceMm: number; updatedAt: number;
+}
+
+// One resolved GPS device pin for rendering (Feature G, phase G2). Recomputed
+// from Store.people GPS sources + the geo transform on demand (getter) — not
+// persisted. Positions are world mm on the CURRENT floor's plan; `zone` decides
+// how a view draws it. See Planner.gpsPins.
+export type GpsZone = 'indoor' | 'yard' | 'beyond';
+export interface GpsPin {
+  key: string;                 // synthetic key: `gps_<personId>`
+  personId: string;
+  name: string;
+  color: string;               // hex tint (person color, else a default)
+  isPet: boolean;
+  x: number; y: number;        // TRUE world-mm position (unclamped)
+  accuracyMm: number;          // gps_accuracy → mm (0 when absent)
+  lastUpdated: number;         // ms epoch of the source entity's last_updated (0 = unknown)
+  stale: boolean;              // last_updated older than the staleness window
+  zone: GpsZone;               // indoor (inside floor rect) | yard (within boundary) | beyond
+  clampedX: number; clampedY: number;  // render position (== x,y unless beyond → boundary edge)
+  bearingDeg: number;          // true compass bearing (0..360) from floor centre to the true pos
+  distanceM: number;           // plan distance (m) from floor centre to the true pos
 }
 
 // Drag state covers every interaction kind. Only active during a mousedown→up.
@@ -194,6 +216,9 @@ export class Planner extends EventTarget {
   // from the solve; a device unheard-from for RETIRE stops rendering entirely.
   private static readonly BLE_STALE_MS = 30_000;
   private static readonly BLE_RETIRE_MS = 120_000;
+  // GPS pin staleness: a device_tracker / person fix older than this reads as
+  // stale (dimmed + age caption). GPS pushes are minutes apart, so 15 min.
+  private static readonly GPS_STALE_MS = 15 * 60 * 1000;
 
   // ── Weather (runtime-only; recomputed from the configured source) ─────────
   // Normalized current weather. Chip + (later) 3D effects read this. Local
@@ -564,6 +589,12 @@ export class Planner extends EventTarget {
     // the current floor qualify — a blanket sensor.* rule would emit config
     // for every sensor state change in HA.
     if (this.floor().envSensors.some(e => e.entity_id === id)) return true;
+    // GPS source entities (a person.* or device_tracker.* bound to a Store.people
+    // entry) are config-path so the sidebar GPS status line + 3D pins refresh on
+    // a new fix. Bounded to the specific bound ids (GPS pushes are minutes apart,
+    // so the extra config emits are negligible) — same precedent as env/weather;
+    // the 2D canvas RAF reads gpsPins live regardless.
+    if ((this.store.people ?? []).some(pe => pe.haPersonId === id || pe.gpsTrackerId === id)) return true;
     // Bound weather source entities are config-path too (chip + sidebar preview
     // re-render on change). Only the specific bound ids qualify.
     return this._weatherEntityIds().includes(id);
@@ -947,6 +978,7 @@ export class Planner extends EventTarget {
 
   geoLandmarks(): GeoLandmark[] { return this.store.geo?.landmarks ?? []; }
   geoAccuracyGate(): number { return this.store.geo?.accuracyGateM ?? 30; }
+  geoBoundaryM(): number { return this.store.geo?.boundaryM ?? 30; }
 
   setGeo(mut: (g: GeoConfig) => void): void {
     mut(this._ensureGeo());
@@ -989,6 +1021,70 @@ export class Planner extends EventTarget {
     if (cal.length === 0) return null;
     const pairs: GeoPair[] = cal.map(l => ({ x: l.x, y: l.y, lat: l.lat!, lon: l.lon! }));
     return { transform: fitGeoTransform(pairs, this.store.geo?.northDeg), landmarks: cal };
+  }
+
+  // Resolve the GPS device pins for rendering (Feature G, phase G2). For each
+  // Store.people entry with a GPS source (person.* entity preferred, else the
+  // device_tracker.* override) read latitude/longitude/gps_accuracy off the
+  // entity, project via the fitted geo transform, and classify the pin against
+  // the CURRENT floor rect:
+  //   • indoor  — inside 0..fw × 0..fd (GPS indoors is tens of metres off, so
+  //               the pin is a "find my phone" hint, not a placement).
+  //   • yard    — within that rect inflated by geo.boundaryM; drawn at true pos.
+  //   • beyond  — outside the boundary; clamped to the boundary edge along the
+  //               true bearing (kept as bearingDeg/distanceM for the label).
+  // Cheap (a handful of people) — safe to call each frame from 2D/3D. Recompute
+  // lives on the config path (bound GPS source ids are slow-classified) so the
+  // sidebar re-renders; the 2D canvas RAF reads this getter every frame anyway.
+  get gpsPins(): GpsPin[] {
+    const fitR = this.geoFit();
+    if (!fitR || fitR.transform.quality === 'none') return [];
+    const states = this.hass?.states;
+    if (!states) return [];
+    const t = fitR.transform;
+    const f = this.floor();
+    const fw = f.w, fd = f.d;
+    const boundaryMm = this.geoBoundaryM() * 1000;
+    const cx = fw / 2, cy = fd / 2;
+    const now = Date.now();
+    const out: GpsPin[] = [];
+    for (const pe of this.store.people ?? []) {
+      const eid = pe.haPersonId || pe.gpsTrackerId;
+      if (!eid) continue;
+      const st = states[eid];
+      if (!st) continue;
+      const a = st.attributes as Record<string, unknown>;
+      const lat = a.latitude, lon = a.longitude;
+      if (typeof lat !== 'number' || typeof lon !== 'number') continue;
+      const plan = latLonToPlan(t, lat, lon);
+      if (!plan) continue;
+      const accM = typeof a.gps_accuracy === 'number' ? a.gps_accuracy : null;
+      const lu = st.last_updated ? Date.parse(st.last_updated) : NaN;
+      const lastUpdated = isFinite(lu) ? lu : 0;
+      const stale = lastUpdated > 0 && (now - lastUpdated) > Planner.GPS_STALE_MS;
+      const indoor = plan.x >= 0 && plan.x <= fw && plan.y >= 0 && plan.y <= fd;
+      const inYard = plan.x >= -boundaryMm && plan.x <= fw + boundaryMm
+                  && plan.y >= -boundaryMm && plan.y <= fd + boundaryMm;
+      let zone: GpsZone; let clampedX: number; let clampedY: number;
+      if (indoor) { zone = 'indoor'; clampedX = plan.x; clampedY = plan.y; }
+      else if (inYard) { zone = 'yard'; clampedX = plan.x; clampedY = plan.y; }
+      else {
+        zone = 'beyond';
+        const cl = clampToBoundary(fw, fd, boundaryMm, plan.x, plan.y);
+        clampedX = cl.x; clampedY = cl.y;
+      }
+      const dx = plan.x - cx, dy = plan.y - cy;
+      out.push({
+        key: `gps_${pe.id}`, personId: pe.id, name: pe.name || 'Person',
+        color: pe.color || '#90caf9', isPet: !!pe.isPet,
+        x: plan.x, y: plan.y,
+        accuracyMm: accM != null ? accM * 1000 : 0,
+        lastUpdated, stale, zone, clampedX, clampedY,
+        bearingDeg: planBearingDeg(t.thetaRad, dx, dy),
+        distanceM: Math.hypot(dx, dy) / 1000,
+      });
+    }
+    return out;
   }
 
   // Derive the companion-app notify service slug from a device_tracker entity id

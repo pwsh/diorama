@@ -18,6 +18,11 @@ import { wallCutsForSegment, closedWallLoops, wallKind, WALL_KINDS, furnitureLoc
 
 export interface ZoneWorld { vertices: Vec2[]; color: number; occupied: boolean; }
 export interface HaloWorld { x: number; y: number; radius: number; occupied: boolean; }
+// GPS device pin / landmark pin inputs for updateGpsPins (Feature G, phase G2).
+// Pre-shaped by three-view (label + color already resolved) so the renderer
+// stays free of geo-math imports. x/y are world mm on the current floor's plan.
+export interface GpsPinWorld { x: number; y: number; label: string; color: string; stale: boolean; }
+export interface GpsLandmarkWorld { x: number; y: number; name: string; }
 export interface TargetWorld {
   key: string; x: number; y: number; color: number;
   // Optional (additive): the raw target sits near the sensor's coverage edge
@@ -369,6 +374,10 @@ export class ThreeDRenderer {
   private _bleGroup = new THREE.Group();
   private _lightGroup = new THREE.Group();
   private _targetGroup = new THREE.Group();
+  // GPS device pins + 3D landmark pins (Feature G, phase G2). Camera-facing
+  // sprites; rebuilt under _keyGps. Carries CanvasTextures → always pair
+  // _disposeSpriteMaps with _clearGroup (see updateGpsPins / destroy).
+  private _gpsGroup = new THREE.Group();
   // Ghost (glass-house) floors: translucent shells of every OTHER story,
   // stacked at their story heights. Cleared with _clearGroup (no sprites).
   private _ghostGroup = new THREE.Group();
@@ -562,7 +571,8 @@ export class ThreeDRenderer {
                     this._zoneGroup, this._haloGroup,
                     this._sensorGroup, this._motionGroup, this._envGroup,
                     this._bleGroup,
-                    this._lightGroup, this._targetGroup, this._ghostGroup);
+                    this._lightGroup, this._targetGroup, this._ghostGroup,
+                    this._gpsGroup);
 
     this._controls = new OrbitControls(this._camera, this._renderer.domElement);
     this._controls.enableDamping = true;
@@ -1170,7 +1180,8 @@ export class ThreeDRenderer {
   // group.visible flips — no rebuilds. Furniture and the bg image live
   // inside _floorGroup and are gated at build time in updateFloor instead.
   setLayerVisibility(v: { lights?: boolean; sensors?: boolean; motion?: boolean;
-                          env?: boolean; zones?: boolean; targets?: boolean }): void {
+                          env?: boolean; zones?: boolean; targets?: boolean;
+                          geo?: boolean }): void {
     this._lightGroup.visible = v.lights !== false;
     this._sensorGroup.visible = v.sensors !== false;
     // BLE proxy pucks ride the sensors layer (same as mmWave bodies).
@@ -1181,6 +1192,8 @@ export class ThreeDRenderer {
     this._zoneGroup.visible = z;
     this._haloGroup.visible = z;
     this._targetGroup.visible = v.targets !== false;
+    // GPS + landmark pins ride the geo layer (shared with 2D landmark pins).
+    this._gpsGroup.visible = v.geo !== false;
   }
 
   updateFloor(f: Floor, scene3d?: Scene3D, layers?: import('./types.js').Layers2D,
@@ -3177,6 +3190,32 @@ export class ThreeDRenderer {
       const sprite = this._makeTextSprite(`${ENV_KINDS[kind].glyph} ${text}`, colorHex, sc);
       sprite.position.set(p.x, p.y + 170 * sc, p.z);
       this._envGroup.add(sprite);
+    }
+  }
+
+  // GPS device pins + 3D landmark pins (Feature G, phase G2). Camera-facing
+  // text sprites in _gpsGroup: a landmark sits near the ground (📍 name); a GPS
+  // pin floats at ~1800 mm at its render position (yard true pos / boundary edge
+  // for 'beyond', where the label already carries the distance + compass). No
+  // humanoid rig — this is a device location, not a room-presence claim. Sprite
+  // CanvasTextures aren't freed by _clearGroup, so pair _disposeSpriteMaps with
+  // it (the same gotcha as updateEnvSensors).
+  updateGpsPins(pins: GpsPinWorld[], landmarks: GpsLandmarkWorld[]): void {
+    if (!this._scene) return;
+    this._disposeSpriteMaps(this._gpsGroup);
+    this._clearGroup(this._gpsGroup);
+    for (const lm of landmarks) {
+      const sp = this._makeTextSprite(`📍 ${lm.name || 'Landmark'}`, '#4dd0e1', 0.7);
+      const p = this._w(lm.x, lm.y, 300);
+      sp.position.set(p.x, p.y, p.z);
+      this._gpsGroup.add(sp);
+    }
+    for (const pin of pins) {
+      const sp = this._makeTextSprite(pin.label, pin.color, 1);
+      const p = this._w(pin.x, pin.y, 1800);
+      sp.position.set(p.x, p.y, p.z);
+      if (pin.stale) sp.material.opacity = 0.4;
+      this._gpsGroup.add(sp);
     }
   }
 
@@ -6424,7 +6463,7 @@ export class ThreeDRenderer {
     for (const g of [
       this._floorGroup, this._doorGroup, this._modelGroup, this._zoneGroup, this._haloGroup,
       this._sensorGroup, this._motionGroup, this._envGroup, this._bleGroup,
-      this._lightGroup, this._targetGroup,
+      this._lightGroup, this._targetGroup, this._gpsGroup,
     ]) {
       this._disposeSpriteMaps(g);
       this._clearGroup(g);

@@ -145,6 +145,49 @@ export function planToLatLon(t: GeoTransform, x: number, y: number): { lat: numb
   return unprojectMeters(px / 1000, py / 1000, t.originLat, t.originLon);
 }
 
+// ── GPS device-pin geometry (Feature G, phase G2) ─────────────────────────
+// The GPS render boundary is the floor rect (0..fw, 0..fd) inflated by
+// boundaryMm on every side. A pin BEYOND that inflated rect is clamped back
+// onto its edge along the ray from the floor CENTRE, so a far-away device sits
+// on the boundary in its true direction instead of rendering hundreds of metres
+// out over the void (there is no yard slab in v1). Pure + deterministic — the
+// gps-test page transpiles this file and asserts the clamp/bearing math.
+export function clampToBoundary(fw: number, fd: number, boundaryMm: number,
+                                x: number, y: number): { x: number; y: number } {
+  const cx = fw / 2, cy = fd / 2;
+  const minX = -boundaryMm, maxX = fw + boundaryMm;
+  const minY = -boundaryMm, maxY = fd + boundaryMm;
+  const dx = x - cx, dy = y - cy;
+  if (dx === 0 && dy === 0) return { x: cx, y: cy };
+  // Parametric ray C + t·(dx,dy); smallest t≥0 that reaches a rect edge.
+  let t = Infinity;
+  if (dx > 0) t = Math.min(t, (maxX - cx) / dx);
+  else if (dx < 0) t = Math.min(t, (minX - cx) / dx);
+  if (dy > 0) t = Math.min(t, (maxY - cy) / dy);
+  else if (dy < 0) t = Math.min(t, (minY - cy) / dy);
+  if (!isFinite(t)) return { x, y };
+  return { x: cx + t * dx, y: cy + t * dy };
+}
+
+// Compass bearing (° clockwise from true north, 0..360) of a PLAN-frame vector
+// (dx, dy) — plan +X right, +Y up. Uses the fitted transform's rotation
+// (thetaRad) so plan north is recovered from calibration data (≥2 landmarks) or,
+// for the single-landmark path, from northDeg (thetaRad === northDeg·π/180).
+// Inverse-rotates the vector back to geo local metres (x east, y north) and
+// takes atan2(east, north). northDeg=0 ⇒ plan +Y bears 0° (north); plan +X 90°.
+export function planBearingDeg(thetaRad: number, dx: number, dy: number): number {
+  const c = Math.cos(thetaRad), s = Math.sin(thetaRad);
+  const east  =  c * dx + s * dy;   // R(−θ)·(dx,dy)
+  const north = -s * dx + c * dy;
+  return ((Math.atan2(east, north) * 180 / Math.PI) % 360 + 360) % 360;
+}
+
+// 8-point compass label (N/NE/E/…/NW) for a bearing in degrees.
+export function compass8(deg: number): string {
+  const dirs = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+  return dirs[Math.round((((deg % 360) + 360) % 360) / 45) % 8];
+}
+
 export interface LatLonSample { lat: number; lon: number; accuracy?: number; }
 export interface MedianLatLon { lat: number; lon: number; count: number; accuracy: number | null; }
 

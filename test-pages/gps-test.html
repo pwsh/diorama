@@ -1,0 +1,163 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>GPS …</title>
+  <style>
+    body { margin:0; background:#0d1116; color:#cfd8dc; font:13px/1.4 sans-serif; padding:14px; }
+    h1 { font-size:15px; margin:0 0 10px; }
+    .grid { display:flex; flex-wrap:wrap; gap:10px; }
+    .card { background:#141b22; border:1px solid #26323d; border-radius:6px; padding:8px 10px; width:340px; }
+    .row { display:flex; justify-content:space-between; font-size:11px; gap:8px; }
+    .pass { color:#69f0ae; } .fail { color:#ff5252; }
+    #summary { font-size:14px; font-weight:bold; margin:10px 0; padding:8px 10px; border-radius:5px; }
+    .okbg { background:#12331f; color:#69f0ae; } .badbg { background:#3a1414; color:#ff8a80; }
+    code { color:#ffd54f; }
+  </style>
+</head>
+<body>
+  <h1>GPS device pins — boundary clamp · bearing/distance · zones · staleness</h1>
+  <div id="summary">Running…</div>
+  <div class="grid" id="grid"></div>
+
+  <!-- geo.ts is a pure, dependency-free module. Transpile it next to this html
+       before serving (same flow as geo-test.html):
+         npx esbuild src/geo.ts --format=esm --outfile=<harness>/geo.mod.js -->
+  <script type="module">
+    import {
+      fitGeoTransform, latLonToPlan, planToLatLon,
+      clampToBoundary, planBearingDeg, compass8,
+    } from './geo.mod.js';
+
+    const tests = [];
+    const ok = (name, cond, detail) => tests.push({ name, ok: !!cond, detail });
+    const near = (name, got, want, tol, extra = '') =>
+      tests.push({ name, ok: Math.abs(got - want) <= tol, detail: `got ${got.toFixed?.(4) ?? got} ≈ ${want} ±${tol} ${extra}` });
+
+    const DEG = Math.PI / 180;
+
+    // ── Fixture: a floor rect + a fake transform ─────────────────────────────
+    // Floor 8 m × 6 m; boundary 30 m → inflated rect [-30000..38000] × [-30000..36000] mm.
+    const FW = 8000, FD = 6000, BOUND_M = 30, BOUND_MM = BOUND_M * 1000;
+    const CX = FW / 2, CY = FD / 2;   // (4000, 3000)
+
+    // Single-landmark transform pinned at the floor centre with northDeg = 0, so
+    // plan +Y faces true north and plan mm map straight to geo about the centre.
+    const ORIGIN = { lat: 45, lon: -93 };
+    const LM = { x: CX, y: CY, lat: ORIGIN.lat, lon: ORIGIN.lon };
+    const T = fitGeoTransform([LM], 0);
+    ok('transform: quality single', T.quality === 'single', T.quality);
+
+    // Zone classifier mirroring Planner.gpsPins (kept in-page — the classifier is
+    // trivial; the exported PURE math it leans on is what we assert numerically).
+    function classify(x, y) {
+      const indoor = x >= 0 && x <= FW && y >= 0 && y <= FD;
+      const inYard = x >= -BOUND_MM && x <= FW + BOUND_MM && y >= -BOUND_MM && y <= FD + BOUND_MM;
+      if (indoor) return 'indoor';
+      if (inYard) return 'yard';
+      return 'beyond';
+    }
+    // Build a synthetic pin from a TRUE plan position, going through the real geo
+    // round-trip (plan → lat/lon → plan) so latLonToPlan is exercised, not bypassed.
+    function pinAt(planX, planY, lastUpdatedMs) {
+      const ll = planToLatLon(T, planX, planY);
+      const p = latLonToPlan(T, ll.lat, ll.lon);
+      const zone = classify(p.x, p.y);
+      const cl = zone === 'beyond' ? clampToBoundary(FW, FD, BOUND_MM, p.x, p.y) : { x: p.x, y: p.y };
+      const dx = p.x - CX, dy = p.y - CY;
+      const STALE_MS = 15 * 60 * 1000;
+      return {
+        x: p.x, y: p.y, zone, clampedX: cl.x, clampedY: cl.y,
+        bearingDeg: planBearingDeg(T.thetaRad, dx, dy),
+        distanceM: Math.hypot(dx, dy) / 1000,
+        stale: lastUpdatedMs != null && (Date.now() - lastUpdatedMs) > STALE_MS,
+      };
+    }
+
+    // ── Zone classification: all three ───────────────────────────────────────
+    const indoor = pinAt(2000, 2000);
+    ok('indoor: zone indoor', indoor.zone === 'indoor', indoor.zone);
+    ok('indoor: render at true pos', indoor.clampedX === indoor.x && indoor.clampedY === indoor.y, `(${indoor.clampedX.toFixed(0)},${indoor.clampedY.toFixed(0)})`);
+
+    const yard = pinAt(-10000, 3000);   // 10 m west of the left wall, inside the 30 m ring
+    ok('yard: zone yard', yard.zone === 'yard', yard.zone);
+    ok('yard: render at true pos', yard.clampedX === yard.x && yard.clampedY === yard.y, `(${yard.clampedX.toFixed(0)},${yard.clampedY.toFixed(0)})`);
+
+    const beyondE = pinAt(100000, 3000); // far east — beyond the ring
+    ok('beyond E: zone beyond', beyondE.zone === 'beyond', beyondE.zone);
+
+    // ── Clamp geometry (numeric) ─────────────────────────────────────────────
+    // Due east: clamps to maxX = FW + BOUND_MM = 38000, y unchanged.
+    near('beyond E: clampX = 38000', beyondE.clampedX, 38000, 1e-6, 'mm');
+    near('beyond E: clampY = 3000', beyondE.clampedY, 3000, 1e-6, 'mm');
+    near('beyond E: bearing = 90° (E)', beyondE.bearingDeg, 90, 1e-6, 'deg');
+    ok('beyond E: compass E', compass8(beyondE.bearingDeg) === 'E', compass8(beyondE.bearingDeg));
+    // Distance from centre (4000,3000) to true (100000,3000) = 96000 mm = 96 m.
+    near('beyond E: distance = 96 m', beyondE.distanceM, 96, 1e-6, 'm');
+
+    // Diagonal NE: from centre, +50 m E and +50 m N (plan +X/+Y). Hits the top
+    // edge (maxY=36000) first: ty=(36000-3000)/50000=0.66 < tx=0.68. So
+    // clampY = 36000, clampX = 4000 + 0.66*50000 = 37000.
+    const beyondNE = pinAt(CX + 50000, CY + 50000);
+    ok('beyond NE: zone beyond', beyondNE.zone === 'beyond', beyondNE.zone);
+    near('beyond NE: clampX = 37000', beyondNE.clampedX, 37000, 1e-3, 'mm');
+    near('beyond NE: clampY = 36000', beyondNE.clampedY, 36000, 1e-3, 'mm');
+    near('beyond NE: bearing = 45°', beyondNE.bearingDeg, 45, 1e-6, 'deg');
+    ok('beyond NE: compass NE', compass8(beyondNE.bearingDeg) === 'NE', compass8(beyondNE.bearingDeg));
+    ok('beyond NE: clamp on ring edge', Math.abs(beyondNE.clampedY - 36000) < 1e-3, 'on maxY');
+
+    // ── Bearing sanity for the four cardinals (plan vector → compass) ─────────
+    near('bearing N (plan +Y)', planBearingDeg(0, 0, 1000), 0, 1e-6);
+    near('bearing E (plan +X)', planBearingDeg(0, 1000, 0), 90, 1e-6);
+    near('bearing S (plan −Y)', planBearingDeg(0, 0, -1000), 180, 1e-6);
+    near('bearing W (plan −X)', planBearingDeg(0, -1000, 0), 270, 1e-6);
+    ok('compass8 wraps 360→N', compass8(359.9) === 'N', compass8(359.9));
+    ok('compass8 SW at 225', compass8(225) === 'SW', compass8(225));
+
+    // northDeg rotates the frame: plan +Y at northDeg=90 bears EAST (matches geo-test).
+    const T90 = fitGeoTransform([LM], 90);
+    near('northDeg90: plan +Y bears 90° (E)', planBearingDeg(T90.thetaRad, 0, 1000), 90, 1e-6);
+
+    // ── Clamp edge cases ─────────────────────────────────────────────────────
+    // A point AT the centre returns the centre (no direction to clamp along).
+    (() => {
+      const c = clampToBoundary(FW, FD, BOUND_MM, CX, CY);
+      ok('clamp: centre → centre', c.x === CX && c.y === CY, `(${c.x},${c.y})`);
+    })();
+    // Clamped point always lands ON the ring (max coord equals a boundary edge).
+    (() => {
+      const c = clampToBoundary(FW, FD, BOUND_MM, 100000, 90000);
+      const onX = Math.abs(c.x - 38000) < 1e-3 || Math.abs(c.x - (-30000)) < 1e-3;
+      const onY = Math.abs(c.y - 36000) < 1e-3 || Math.abs(c.y - (-30000)) < 1e-3;
+      ok('clamp: lands on a ring edge', onX || onY, `(${c.x.toFixed(0)},${c.y.toFixed(0)})`);
+    })();
+
+    // ── Staleness flag ───────────────────────────────────────────────────────
+    const fresh = pinAt(2000, 2000, Date.now() - 60 * 1000);        // 1 min old
+    const old   = pinAt(2000, 2000, Date.now() - 20 * 60 * 1000);   // 20 min old
+    ok('stale: fresh fix not stale', fresh.stale === false, `stale=${fresh.stale}`);
+    ok('stale: 20-min fix is stale', old.stale === true, `stale=${old.stale}`);
+
+    // ── run + render ─────────────────────────────────────────────────────────
+    const grid = document.getElementById('grid');
+    let pass = 0;
+    const fails = [];
+    for (const t of tests) {
+      if (t.ok) pass++; else fails.push(t.name);
+      const card = document.createElement('div');
+      card.className = 'card';
+      card.innerHTML = `<div class="row">
+        <span>${t.ok ? '<span class=pass>PASS</span>' : '<span class=fail>FAIL</span>'} ${t.name}</span>
+        <span>${t.detail ?? ''}</span></div>`;
+      grid.appendChild(card);
+    }
+    const total = tests.length;
+    const allPass = pass === total;
+    const title = allPass ? `GPS PASS ${pass}/${total}` : `GPS FAIL ${pass}/${total} [${fails.join(',')}]`;
+    document.title = title;
+    const sum = document.getElementById('summary');
+    sum.textContent = title;
+    sum.className = allPass ? 'okbg' : 'badbg';
+  </script>
+</body>
+</html>

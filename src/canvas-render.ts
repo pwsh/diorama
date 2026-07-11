@@ -8,6 +8,7 @@ import {
   ENV_KINDS, envKindOf, envColor, envValueText, envScale,
   closedWallLoops, loopContaining, roomLabel,
 } from './geometry.js';
+import { compass8 } from './geo.js';
 import type { Planner } from './planner.js';
 import type { Vec2, LightIconKind, Furniture, ObjectRecipe } from './types.js';
 
@@ -154,8 +155,96 @@ export function drawAll(ctx: CanvasRenderingContext2D, p: Planner, view: View,
   drawBgEditOverlay(ctx, p, view, bgImg);
   if (on(L.targets)) drawTargets(ctx, p, view);
   if (on(L.targets)) drawBlePeople(ctx, p, view);
-  // Geo landmark pins (2D-only this phase; GPS device pins join here in G2).
-  if (on(L.geo)) drawGeoLandmarks(ctx, p, view);
+  // Geo landmark pins + GPS device pins (both ride the `geo` layer).
+  if (on(L.geo)) { drawGeoLandmarks(ctx, p, view); drawGpsPins(ctx, p, view); }
+}
+
+// GPS device pins (Feature G, phase G2). Person-colored teardrop + initials,
+// positioned at the pin's render coords (true position, or the boundary edge for
+// 'beyond'). indoor pins dim + caution (GPS indoors is lost-device grade); yard
+// pins draw an accuracy ring (capped so a huge ±m circle can't blow up); beyond
+// pins sit on the boundary with a "Name · 320 m NE" bearing label; stale pins
+// extra-dimmed with an age caption.
+function ageText(ts: number): string {
+  const s = (Date.now() - ts) / 1000;
+  if (s < 60) return `${Math.round(s)}s ago`;
+  const m = s / 60;
+  if (m < 60) return `${Math.round(m)} min ago`;
+  const h = m / 60;
+  if (h < 24) return `${Math.round(h)} h ago`;
+  return `${Math.round(h / 24)} d ago`;
+}
+
+function drawGpsPins(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
+  const dpr = window.devicePixelRatio || 1;
+  const pins = p.gpsPins;
+  if (!pins.length) return;
+  const boundaryMm = p.geoBoundaryM() * 1000;
+  ctx.save();
+  ctx.textAlign = 'center';
+  for (const pin of pins) {
+    const at = mmToPx(view, pin.clampedX, pin.clampedY);
+    const beyond = pin.zone === 'beyond';
+    const indoor = pin.zone === 'indoor';
+    const alpha = pin.stale ? 0.32 : indoor ? 0.6 : 1;
+    ctx.globalAlpha = alpha;
+    const col = pin.color;
+    // Accuracy ring (not for beyond — the true pos is off-screen). Cap the mm
+    // radius at the boundary so an indoor ±74 m circle stays sane.
+    if (!beyond && pin.accuracyMm > 0) {
+      const r = Math.min(pin.accuracyMm, boundaryMm) * view.scale;
+      if (r > 2) {
+        ctx.beginPath(); ctx.arc(at.x, at.y, r, 0, 2 * Math.PI);
+        ctx.fillStyle = hexToRgba(col, indoor ? 0.05 : 0.09); ctx.fill();
+        ctx.strokeStyle = hexToRgba(col, 0.30); ctx.lineWidth = 1 * dpr;
+        ctx.setLineDash([4 * dpr, 4 * dpr]); ctx.stroke(); ctx.setLineDash([]);
+      }
+    }
+    // Teardrop pin: head circle above the anchor + a tapering tail down to it.
+    const R = 9 * dpr;
+    const headCy = at.y - 3 * R;
+    ctx.beginPath();
+    ctx.moveTo(at.x, at.y);
+    ctx.lineTo(at.x - R * 0.72, headCy);
+    ctx.lineTo(at.x + R * 0.72, headCy);
+    ctx.closePath();
+    ctx.fillStyle = col; ctx.fill();
+    ctx.beginPath(); ctx.arc(at.x, headCy, R, 0, 2 * Math.PI);
+    ctx.fillStyle = col; ctx.fill();
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5 * dpr;
+    if (pin.stale) ctx.setLineDash([2 * dpr, 2 * dpr]);
+    ctx.stroke(); ctx.setLineDash([]);
+    // Initials in the head.
+    const initials = pin.name.trim().split(/\s+/).map(w => w[0] || '')
+      .join('').slice(0, 2).toUpperCase() || '?';
+    ctx.fillStyle = '#fff'; ctx.font = `bold ${9 * dpr}px sans-serif`;
+    ctx.textBaseline = 'middle';
+    ctx.fillText(pin.isPet ? '🐾' : initials, at.x, headCy);
+    // Caption lines below the anchor.
+    const lines: { txt: string; color: string }[] = [];
+    if (beyond) {
+      lines.push({ txt: `${pin.name} · ${Math.round(pin.distanceM)} m ${compass8(pin.bearingDeg)}`, color: '#fff' });
+    } else {
+      lines.push({ txt: pin.name || 'Person', color: '#fff' });
+      if (indoor) lines.push({ txt: `~±${Math.round(pin.accuracyMm / 1000)} m indoors`, color: '#ffb74d' });
+    }
+    if (pin.stale) lines.push({ txt: ageText(pin.lastUpdated), color: 'rgba(255,255,255,0.7)' });
+    ctx.font = `${10 * dpr}px sans-serif`;
+    ctx.textBaseline = 'top';
+    let tw = 0;
+    for (const ln of lines) tw = Math.max(tw, ctx.measureText(ln.txt).width);
+    tw += 8 * dpr;
+    const boxY = at.y + 4 * dpr;
+    ctx.fillStyle = 'rgba(0,0,0,0.7)';
+    ctx.fillRect(at.x - tw / 2, boxY, tw, lines.length * 13 * dpr + 2 * dpr);
+    let ly = boxY + 2 * dpr;
+    for (const ln of lines) {
+      ctx.fillStyle = ln.color;
+      ctx.fillText(ln.txt, at.x, ly);
+      ly += 13 * dpr;
+    }
+  }
+  ctx.restore();
 }
 
 // Geo landmark pins (Feature G). Store-level (property-wide), so drawn on every

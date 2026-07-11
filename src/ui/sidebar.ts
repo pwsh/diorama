@@ -5,6 +5,7 @@ import { startZoneEdit } from '../canvas-interact.js';
 import { repairFloor } from '../storage.js';
 import type { Planner, Tool } from '../planner.js';
 import { NEW_ROOM, NEW_LANDMARK } from '../planner.js';
+import { compass8 } from '../geo.js';
 import type {
   Sensor, Zone, ObjectHalo, BgImage, MotionSensor, EnvSensor, EnvKind, Light, SwitchFixture, LightIconKind,
   Furniture, FurnitureKind, Door, Window as WindowType, Layers2D, Floor, Room,
@@ -38,6 +39,21 @@ import {
   closedWallLoops, loopContaining, resolveRoomForPoint, roomLabel,
 } from '../geometry.js';
 import type { Vec2 } from '../types.js';
+
+// Compact relative-age label for a GPS fix timestamp (ms epoch).
+function gpsAgeText(ts: number): string {
+  const s = (Date.now() - ts) / 1000;
+  if (s < 60) return `${Math.round(s)}s ago`;
+  const m = s / 60;
+  if (m < 60) return `${Math.round(m)} min ago`;
+  const h = m / 60;
+  if (h < 24) return `${Math.round(h)} h ago`;
+  return `${Math.round(h / 24)} d ago`;
+}
+// Zone → glyph for GPS status lines (indoor lost-device / yard / clamped-beyond).
+function gpsZoneGlyph(zone: 'indoor' | 'yard' | 'beyond'): string {
+  return zone === 'indoor' ? '🏠' : zone === 'yard' ? '🌳' : '🧭';
+}
 import { saveModel, deleteModel } from '../model-store.js';
 import { newId } from '../storage.js';
 
@@ -879,9 +895,28 @@ export class Sidebar extends LitElement {
             ${pe.bermudaDeviceId ? '📶' : pe.haPersonId ? 'GPS' : '—'}
           </div>
         </div>
+        ${this._gpsStatusLine(pe)}
         ${sel ? this._personEditor(pe) : nothing}
       </div>
     `;
+  }
+
+  // GPS status subtitle for a person: zone glyph + distance/accuracy +
+  // staleness. Shown only when the person has a GPS source. A bound source with
+  // no current fix (uncalibrated transform or missing lat/lon) reads muted.
+  private _gpsStatusLine(pe: DioramaPerson) {
+    if (!pe.haPersonId && !pe.gpsTrackerId) return nothing;
+    const pin = this.planner.gpsPins.find(g => g.personId === pe.id);
+    if (!pin) {
+      return html`<div style="font-size:10px;color:var(--text-dim);padding:0 0 3px 20px">
+        GPS: no current fix</div>`;
+    }
+    const where = pin.zone === 'indoor'
+      ? `indoors ~±${Math.round(pin.accuracyMm / 1000)} m`
+      : `${Math.round(pin.distanceM)} m ${compass8(pin.bearingDeg)}`;
+    const stale = pin.stale ? ` · ${gpsAgeText(pin.lastUpdated)}` : '';
+    return html`<div style="font-size:10px;color:${pin.stale ? 'var(--text-dim)' : '#4dd0e1'};padding:0 0 3px 20px">
+      ${gpsZoneGlyph(pin.zone)} ${where}${stale}</div>`;
   }
 
   private _personEditor(pe: DioramaPerson) {
@@ -2601,6 +2636,7 @@ export class Sidebar extends LitElement {
         </button>
 
         ${fit ? this._geoFitReadout(fit) : nothing}
+        ${this._gpsPinsPreview()}
 
         ${calCount === 1 ? html`
           <div class="row" style="margin-top:8px"
@@ -2751,6 +2787,29 @@ export class Sidebar extends LitElement {
                       background:rgba(0,0,0,0.3);line-height:1.35">${this._calibMsg}</div>` : nothing}
       </div>
     `;
+  }
+
+  // Live GPS pin preview: each person with a current fix, with zone glyph +
+  // distance/accuracy + staleness. Mirrors what the 2D/3D pins show.
+  private _gpsPinsPreview() {
+    const pins = this.planner.gpsPins;
+    if (!pins.length) return nothing;
+    return html`
+      <div style="margin-top:8px">
+        <div style="font-size:11px;color:var(--text-dim);margin-bottom:3px">GPS pins</div>
+        ${pins.map(pin => {
+          const where = pin.zone === 'indoor'
+            ? `indoors ~±${Math.round(pin.accuracyMm / 1000)} m`
+            : `${Math.round(pin.distanceM)} m ${compass8(pin.bearingDeg)}`;
+          return html`
+            <div style="display:flex;align-items:center;gap:6px;font-size:11px;padding:2px 0">
+              <span style="width:8px;height:8px;border-radius:50%;background:${pin.color};flex:none"></span>
+              <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${pin.name}</span>
+              <span style="color:${pin.stale ? 'var(--text-dim)' : '#4dd0e1'}">
+                ${gpsZoneGlyph(pin.zone)} ${where}${pin.stale ? ' · stale' : ''}</span>
+            </div>`;
+        })}
+      </div>`;
   }
 
   private _geoFitReadout(fit: NonNullable<ReturnType<Planner['geoFit']>>) {

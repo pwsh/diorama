@@ -473,6 +473,8 @@ export interface HassState {
   state: string;
   attributes: Record<string, unknown>;
   entity_id: string;
+  last_updated?: string;  // ISO timestamp; present on live HA states (used for GPS staleness)
+  last_changed?: string;
 }
 
 export type ConnStatus = 'connected' | 'disconnected' | 'error' | 'auth_invalid';

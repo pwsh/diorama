@@ -4,8 +4,10 @@ import { customElement } from './define.js';
 // Type-only import — erased at build time. The actual module (which pulls in
 // all of three.js, ~600 kB) is loaded lazily in firstUpdated so the 2D-only
 // startup path never downloads it.
-import type { ThreeDRenderer, ZoneWorld, HaloWorld, TargetWorld, ActivityContext } from '../three-renderer.js';
+import type { ThreeDRenderer, ZoneWorld, HaloWorld, TargetWorld, ActivityContext,
+  GpsPinWorld, GpsLandmarkWorld } from '../three-renderer.js';
 import { localToWorld, transformVerts, pointInPolygon, sensorColor, hexToInt, motionColor } from '../geometry.js';
+import { compass8 } from '../geo.js';
 import { resolveScenePreset, resolveTimeBucket } from '../time-of-day.js';
 import { loadModel } from '../model-store.js';
 import { newId } from '../storage.js';
@@ -340,6 +342,7 @@ export class ThreeView extends LitElement {
   private _keyZones = '';
   private _keyHalos = '';
   private _keyGhost = '';
+  private _keyGps = '';
 
   private _tickOnce(): void {
       const r = this._renderer; if (!r || !r.loaded) return;
@@ -359,7 +362,7 @@ export class ThreeView extends LitElement {
         this._keyFloor = this._keyDoors = this._keySensors = '';
         this._keyMotion = this._keyEnv = this._keyBle = '';
         this._keyLights = this._keyZones = this._keyHalos = '';
-        this._keyGhost = '';
+        this._keyGhost = this._keyGps = '';
       }
 
       // Layer visibility (shared with the 2D layer flags): group-scoped
@@ -378,10 +381,8 @@ export class ThreeView extends LitElement {
       const scBase = p.store.scene3d ?? { preset: 'night' as const };
       const effPreset = this._effectivePreset(scBase, states);
       const scMerged = { ...scBase, ...(f.look3d ?? {}), preset: effPreset };
-      // NOTE (G2): the `geo` layer is 2D-only in G1 (landmark pins draw in
-      // canvas-render). When G2 adds 3D landmark/GPS pins, fold
-      // `layers.geo !== false` into this key (and build them in updateFloor or a
-      // dedicated group) so the 3D scene rebuilds when the geo layer toggles.
+      // The `geo` layer's 3D pins (landmarks + GPS devices) build in a dedicated
+      // _gpsGroup under the _keyGps dirty key below (not part of keyFloor).
       const keyFloor = `${p.configRev}|${effPreset}|` +
         `${layers.furniture !== false}|${layers.bg !== false}|${layers.walls !== false}|` +
         `${layers.labels !== false}`;
@@ -459,6 +460,28 @@ export class ThreeView extends LitElement {
       if (keyBle !== this._keyBle) {
         this._keyBle = keyBle;
         r.updateBleProxies(f.bleProxies ?? []);
+      }
+
+      // GPS device pins + 3D landmark pins (both ride the geo layer). Coarse
+      // dirty key: positions rounded to 500 mm + zone + stale, so the sprites
+      // rebuild on real movement but not every frame. When the layer is off the
+      // inputs go empty (group also hidden via setLayerVisibility above).
+      const geoOn = layers.geo !== false;
+      const gpsPins = geoOn ? p.gpsPins : [];
+      const gpsLandmarks = geoOn ? p.geoLandmarks().filter(l => !l.hidden) : [];
+      const keyGps = `${p.configRev}|${geoOn}|` +
+        gpsPins.map(pn => `${pn.personId}:${Math.round(pn.clampedX / 500)}:${Math.round(pn.clampedY / 500)}:${pn.zone}:${pn.stale ? 1 : 0}`).join(',') + '|' +
+        gpsLandmarks.map(l => `${l.id}:${Math.round(l.x / 500)}:${Math.round(l.y / 500)}`).join(',');
+      if (keyGps !== this._keyGps) {
+        this._keyGps = keyGps;
+        const pinsW: GpsPinWorld[] = gpsPins.map(pn => ({
+          x: pn.clampedX, y: pn.clampedY, color: pn.color, stale: pn.stale,
+          label: pn.zone === 'beyond'
+            ? `${pn.isPet ? '🐾' : '📍'} ${pn.name} · ${Math.round(pn.distanceM)} m ${compass8(pn.bearingDeg)}`
+            : `${pn.isPet ? '🐾' : '📍'} ${pn.name}`,
+        }));
+        const lmW: GpsLandmarkWorld[] = gpsLandmarks.map(l => ({ x: l.x, y: l.y, name: l.name || 'Landmark' }));
+        r.updateGpsPins(pinsW, lmW);
       }
 
       // Lights + switches: structural + state/brightness/color per entity.
