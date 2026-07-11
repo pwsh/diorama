@@ -100,6 +100,14 @@ deployed to the live HA instance.
 - Every commit message and doc change keeps `CLAUDE.md` load-bearing
   sections current (rendering, activity system, pathfinding, gotchas).
 
+## Next arc (planned, not started)
+
+`docs/DESIGN-world.md` (2026-07-11): BLE identity + panel-side trilateration
+via Bermuda per-scanner distances, GPS landmark calibration + device pins,
+weather displays + outdoor 3D effects. Phases B1→B2→W1→G1→G2→W2→B3; model
+assignments per phase are recorded in the doc (Fable plans/reviews, Opus 4.8
+implements, Sonnet 5 researches).
+
 ## Open threads / known deferrals
 
 - Dragging a **table** onto chairs doesn't push the table (only dragged

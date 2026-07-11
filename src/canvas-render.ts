@@ -2,7 +2,7 @@ import {
   GRID_MM, mmToCanvas, fmtLen, distMM, transformVerts, centroid,
   pointInPolygon, localToWorld, bgLocalToWorld,
   lightRadius, lightIntensity, lightIconKind, lightRotation, lightLength, switchRotation, switchSize, switchLabelPos,
-  motionColor, motionIntensity, sensorColor,
+  motionColor, motionIntensity, sensorColor, BLE_PROXY_DEFAULTS,
   hexToRgba, lighten, furnitureKind, furnitureCorners, resolveFurnitureDef,
   doorEndpoint, doorOpenDeltaDeg, windowEndpoints, wallCutsForSegment, wallKind,
   ENV_KINDS, envKindOf, envColor, envValueText, envScale,
@@ -143,6 +143,7 @@ export function drawAll(ctx: CanvasRenderingContext2D, p: Planner, view: View,
   if (on(L.motion)) drawMotionSensors(ctx, p, view);
   if (on(L.env)) drawEnvSensors(ctx, p, view);
   if (on(L.sensors)) drawSensors(ctx, p, view);
+  if (on(L.sensors)) drawBleProxies(ctx, p, view);
   // LD2450 inclusion / filter polygons + object halos draw per the zones
   // layer. The Motion toggle only hides motion-sensor cones (drawMotionSensors
   // gates its own cone block).
@@ -260,6 +261,41 @@ function drawMotionSensors(ctx: CanvasRenderingContext2D, p: Planner, view: View
       ctx.beginPath(); ctx.arc(rhx, rhy, 5 * dpr, 0, 2 * Math.PI);
       ctx.fill(); ctx.stroke();
     }
+  }
+}
+
+// BLE proxies (Bluetooth scanners) render as a small antenna puck: a filled
+// dot with a broadcast glyph and the name below. Bound (haDeviceId set) pucks
+// read solid; unbound ones read dashed. Rides the sensors layer (gated by
+// the caller).
+function drawBleProxies(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
+  const dpr = window.devicePixelRatio || 1;
+  const f = p.floor();
+  const base = BLE_PROXY_DEFAULTS.color;
+  for (const b of f.bleProxies ?? []) {
+    if (b.hidden) continue;
+    const c = mmToPx(view, b.x, b.y);
+    const selected = p.activeBleId === b.id;
+    const bound = !!b.haDeviceId;
+    // Body dot
+    ctx.fillStyle = selected ? lighten(base, 0.25) : base;
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5;
+    if (!bound) ctx.setLineDash([3, 3]);
+    ctx.beginPath(); ctx.arc(c.x, c.y, 7 * dpr, 0, 2 * Math.PI);
+    ctx.fill(); ctx.stroke(); ctx.setLineDash([]);
+    // Broadcast glyph
+    ctx.fillStyle = '#04252b'; ctx.font = `${9 * dpr}px sans-serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('📶', c.x, c.y);
+    // Label below
+    ctx.font = `${10 * dpr}px sans-serif`;
+    ctx.textBaseline = 'top';
+    const txt = b.name || 'Proxy';
+    const tw = ctx.measureText(txt).width + 8 * dpr;
+    ctx.fillStyle = 'rgba(0,0,0,0.7)';
+    ctx.fillRect(c.x - tw / 2, c.y + 11 * dpr, tw, 13 * dpr);
+    ctx.fillStyle = '#fff';
+    ctx.fillText(txt, c.x, c.y + 13 * dpr);
   }
 }
 

@@ -335,6 +335,7 @@ export class ThreeView extends LitElement {
   private _keySensors = '';
   private _keyMotion = '';
   private _keyEnv = '';
+  private _keyBle = '';
   private _keyLights = '';
   private _keyZones = '';
   private _keyHalos = '';
@@ -356,7 +357,8 @@ export class ThreeView extends LitElement {
         this._lastFloorId = f.id;
         r.clearTransientGroups();
         this._keyFloor = this._keyDoors = this._keySensors = '';
-        this._keyMotion = this._keyEnv = this._keyLights = this._keyZones = this._keyHalos = '';
+        this._keyMotion = this._keyEnv = this._keyBle = '';
+        this._keyLights = this._keyZones = this._keyHalos = '';
         this._keyGhost = '';
       }
 
@@ -444,6 +446,15 @@ export class ThreeView extends LitElement {
       if (keyEnv !== this._keyEnv) {
         this._keyEnv = keyEnv;
         r.updateEnvSensors(f.envSensors, id => states[id] || null);
+      }
+
+      // BLE proxies: purely structural (no bound live state) — key on config
+      // rev + the fixture list so a placement / hide / delete rebuilds it.
+      const keyBle = `${p.configRev}|` +
+        (f.bleProxies ?? []).map(b => `${b.id}:${Math.round(b.x)}:${Math.round(b.y)}:${b.hidden ? 'h' : ''}`).join(',');
+      if (keyBle !== this._keyBle) {
+        this._keyBle = keyBle;
+        r.updateBleProxies(f.bleProxies ?? []);
       }
 
       // Lights + switches: structural + state/brightness/color per entity.

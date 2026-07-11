@@ -9,11 +9,11 @@ import type {
 import {
   lightHeight, lightRadius, lightIntensity, lightIconKind, lightRotation, lightLength,
   switchHeight, switchRotation, switchSize,
-  motionColor, motionIntensity, hexToInt,
+  motionColor, motionIntensity, hexToInt, bleProxyHeight, BLE_PROXY_DEFAULTS,
   furnitureDef, resolveFurnitureDef, furnitureColor, doorOpenDeltaDeg,
   ENV_KINDS, envKindOf, envColor, envValueText, envHeight, envScale,
 } from './geometry.js';
-import type { Door, Window as WindowType, EnvSensor, ObjectRecipe, ActivityKind } from './types.js';
+import type { Door, Window as WindowType, EnvSensor, BleProxy, ObjectRecipe, ActivityKind } from './types.js';
 import { wallCutsForSegment, closedWallLoops, wallKind, WALL_KINDS, furnitureLocalToWorld, furnitureWorldToLocal, pointInPolygon as pip, centroid, loopContaining, resolveRoomForPoint, roomLabel, intersectLoopWithRect, polygonArea } from './geometry.js';
 
 export interface ZoneWorld { vertices: Vec2[]; color: number; occupied: boolean; }
@@ -337,6 +337,7 @@ export class ThreeDRenderer {
   private _sensorGroup = new THREE.Group();
   private _motionGroup = new THREE.Group();
   private _envGroup = new THREE.Group();
+  private _bleGroup = new THREE.Group();
   private _lightGroup = new THREE.Group();
   private _targetGroup = new THREE.Group();
   // Ghost (glass-house) floors: translucent shells of every OTHER story,
@@ -399,6 +400,10 @@ export class ThreeDRenderer {
   // room each target stands in (a pip walk per target). Rooms whose anchor
   // falls outside every loop are skipped. Reset with the other per-floor caches.
   private _roomZones: { roomId: string; loop: Vec2[] }[] = [];
+  // ALL closed wall loops of the current floor (named-room or not). AI avatars
+  // from simple presence sensors are hard-confined to the loop containing
+  // their sensor — radar-driven targets roam wherever the radar says.
+  private _wallLoops: Vec2[][] = [];
   // Bed occupancy summary produced by _updateBedCovers for NEXT frame's thought-
   // bubble resolution (one-frame lag is fine — bubble commit has 2.5 s
   // hysteresis). hiddenKeys: rigs currently hidden under the two-in-bed covers.
@@ -527,6 +532,7 @@ export class ThreeDRenderer {
     this._scene.add(this._floorGroup, this._doorGroup, this._modelGroup,
                     this._zoneGroup, this._haloGroup,
                     this._sensorGroup, this._motionGroup, this._envGroup,
+                    this._bleGroup,
                     this._lightGroup, this._targetGroup, this._ghostGroup);
 
     this._controls = new OrbitControls(this._camera, this._renderer.domElement);
@@ -852,7 +858,8 @@ export class ThreeDRenderer {
   clearTransientGroups(): void {
     for (const g of [
       this._floorGroup, this._doorGroup, this._modelGroup, this._zoneGroup, this._haloGroup,
-      this._sensorGroup, this._motionGroup, this._lightGroup, this._targetGroup, this._ghostGroup,
+      this._sensorGroup, this._motionGroup, this._bleGroup,
+      this._lightGroup, this._targetGroup, this._ghostGroup,
     ]) {
       this._clearGroup(g);
     }
@@ -872,6 +879,7 @@ export class ThreeDRenderer {
     this._tvsByRoom = {};
     this._beds = [];
     this._roomZones = [];
+    this._wallLoops = [];
     this._disposeBedCovers();
     this._fanRotors = [];
     this._terrain = [];
@@ -1136,6 +1144,8 @@ export class ThreeDRenderer {
                           env?: boolean; zones?: boolean; targets?: boolean }): void {
     this._lightGroup.visible = v.lights !== false;
     this._sensorGroup.visible = v.sensors !== false;
+    // BLE proxy pucks ride the sensors layer (same as mmWave bodies).
+    this._bleGroup.visible = v.sensors !== false;
     this._motionGroup.visible = v.motion !== false;
     this._envGroup.visible = v.env !== false;
     const z = v.zones !== false;
@@ -1171,6 +1181,7 @@ export class ThreeDRenderer {
     // walls count, so an open-plan boundary can close a region without
     // rendering a wall. No closed loop → classic full-rectangle floor.
     const loops = closedWallLoops(f.walls ?? []);
+    this._wallLoops = loops;
     const showFurniture = layers?.furniture !== false;
     const showBg = layers?.bg !== false;
     const showWalls = layers?.walls !== false;
@@ -1843,6 +1854,41 @@ export class ThreeDRenderer {
       if (best >= 0) return best;
     }
     return this._nearestFreeCell(idx);  // region unreachable nearby → any free cell
+  }
+
+  // Like _nearestFreeCellInRegion but additionally requires the cell center to
+  // fall inside `loop` (an AI avatar's home room). Falls back to the plain
+  // region search when no in-loop cell is found nearby, so callers always get
+  // a walkable landing spot even for degenerate loops.
+  private _nearestFreeCellInLoop(idx: number, regionId: number, loop: Vec2[] | null): number {
+    if (!loop) return this._nearestFreeCellInRegion(idx, regionId);
+    const n = this._nav!;
+    const centerIn = (i: number): boolean => {
+      const cx = i % n.nx, cy = (i / n.nx) | 0;
+      return pip((cx + 0.5) * n.cell, (cy + 0.5) * n.cell, loop);
+    };
+    if (n.blocked[idx] === 0 && (regionId < 0 || n.region[idx] === regionId) && centerIn(idx)) {
+      return idx;
+    }
+    const cx0 = idx % n.nx, cy0 = (idx / n.nx) | 0;
+    for (let r = 1; r <= 40; r++) {
+      let best = -1, bestD = Infinity;
+      for (let dy = -r; dy <= r; dy++) {
+        for (let dx = -r; dx <= r; dx++) {
+          if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;  // ring only
+          const cx = cx0 + dx, cy = cy0 + dy;
+          if (cx < 0 || cy < 0 || cx >= n.nx || cy >= n.ny) continue;
+          const i = cy * n.nx + cx;
+          if (n.blocked[i]) continue;
+          if (regionId >= 0 && n.region[i] !== regionId) continue;
+          if (!centerIn(i)) continue;
+          const d = dx * dx + dy * dy;
+          if (d < bestD) { bestD = d; best = i; }
+        }
+      }
+      if (best >= 0) return best;
+    }
+    return this._nearestFreeCellInRegion(idx, regionId);
   }
 
   // World point → grid index (clamped into range).
@@ -3036,6 +3082,35 @@ export class ThreeDRenderer {
     }
   }
 
+  // BLE proxies (Bluetooth scanners): a small antenna puck — a short mast with
+  // an emissive bead on top — at the fixture's mount height. Structural only
+  // (no live state), rebuilt on the _keyBle dirty key. Rides the sensors layer.
+  updateBleProxies(proxies: BleProxy[]): void {
+    if (!this._scene) return;
+    this._clearGroup(this._bleGroup);
+    const color = hexToInt(BLE_PROXY_DEFAULTS.color);
+    for (const b of proxies) {
+      if (b.hidden) continue;
+      const h = bleProxyHeight(b);
+      const grp = new THREE.Group();
+      // Mast
+      const mast = new THREE.Mesh(
+        new THREE.CylinderGeometry(24, 30, 260, 10),
+        this._mat({ color: 0x263238, roughness: 0.7 }));
+      mast.position.y = 130;
+      grp.add(mast);
+      // Bead (antenna node)
+      const bead = new THREE.Mesh(
+        new THREE.SphereGeometry(85, 16, 12),
+        this._mat({ color, emissive: color, emissiveIntensity: 0.55 }));
+      bead.position.y = 300;
+      grp.add(bead);
+      const p = this._w(b.x, b.y, h);
+      grp.position.set(p.x, p.y, p.z);
+      this._bleGroup.add(grp);
+    }
+  }
+
   // Environmental sensors: a small emissive puck at mount height plus a
   // camera-facing value sprite (canvas-rendered text) floating above it.
   // Rebuilt only when the _keyEnv dirty key changes (bound values update at
@@ -3854,6 +3929,15 @@ export class ThreeDRenderer {
     return { x: this._fw / 2 - sx, y: sz + this._fd / 2 };
   }
 
+  // The AI avatar's home room: the closed wall loop containing its sensor.
+  // Simple presence sensors only know "someone is in this room", so the
+  // avatar is HARD-confined to this loop (spawn, wander goals, activity
+  // anchors). Sensors outside every loop roam their nav region as before —
+  // and radar targets from positional sensors are never confined at all.
+  private _aiHomeLoop(wx: number, wy: number): Vec2[] | null {
+    return loopContaining(this._wallLoops, wx, wy);
+  }
+
   // Advance one AI avatar's virtual raw position for this frame and rewrite the
   // synthetic target's x/y in place. Everything downstream then treats it as a
   // radar target. See AiState. `dt` is the shared frame dt.
@@ -3861,14 +3945,17 @@ export class ThreeDRenderer {
     let ai = this._aiState[t.key];
     if (!ai) {
       // First sighting: seed the virtual raw at the anchor, snapped to a free
-      // cell in the anchor's own region so it never spawns inside a footprint /
-      // across a wall. Start IDLE so it settles a beat before wandering.
+      // cell in the anchor's own region AND home room so it never spawns inside
+      // a footprint / across a wall (a wall-mounted sensor's nearest free cell
+      // can be on the far side of the wall — the loop check keeps the spawn in
+      // the sensor's room). Start IDLE so it settles a beat before wandering.
       let x = t.x, y = t.y;
       if (this._nav && this._nav.blockedCount > 0) {
         const gi = this._cellIdxOf(t.x, t.y);
         if (this._nav.blocked[gi] || this._nav.region[gi] < 0) {
+          const loop = this._aiHomeLoop(t.x, t.y);
           const gr = this._regionOfWorld(t.x, t.y);
-          const sc = this._cellToScene(this._nearestFreeCellInRegion(gi, gr));
+          const sc = this._cellToScene(this._nearestFreeCellInLoop(gi, gr, loop));
           const w = this._sceneToWorld(sc.x, sc.z);
           x = w.x; y = w.y;
         }
@@ -3920,9 +4007,12 @@ export class ThreeDRenderer {
   // Choose the AI's next wander goal and plan a walkable path to it. 25% of the
   // time the goal is near a sit / activity anchor in the same region (so the
   // avatar visibly uses the room); otherwise it's a random free cell within
-  // ~4.5 m of the anchor, biased into the anchor's room loop when there is one.
+  // ~4.5 m of the anchor. When the sensor sits inside a closed wall loop the
+  // goal MUST fall inside that loop — a simple presence sensor only vouches
+  // for its own room, so its avatar never wanders into adjacent rooms.
   private _aiPickGoal(ai: AiState): void {
     const region = this._regionOfWorld(ai.anchorX, ai.anchorY);
+    const loop = this._aiHomeLoop(ai.anchorX, ai.anchorY);
     let gx: number | null = null, gy = 0;
     if (Math.random() < 0.25) {
       const cands: { x: number; y: number }[] = [];
@@ -3930,6 +4020,7 @@ export class ThreeDRenderer {
         const w = this._sceneToWorld(sx, sz);
         if (Math.hypot(w.x - ai.anchorX, w.y - ai.anchorY) > 6000) return;
         if (this._regionOfWorld(w.x, w.y) !== region) return;
+        if (loop && !pip(w.x, w.y, loop)) return;
         cands.push(w);
       };
       for (const a of this._activityAnchors) consider(a.x, a.z);
@@ -3937,7 +4028,7 @@ export class ThreeDRenderer {
       if (cands.length) { const c = cands[(Math.random() * cands.length) | 0]; gx = c.x; gy = c.y; }
     }
     if (gx === null) {
-      const c = this._aiRandomCell(ai.anchorX, ai.anchorY, region);
+      const c = this._aiRandomCell(ai.anchorX, ai.anchorY, region, loop);
       if (c) { gx = c.x; gy = c.y; }
     }
     ai.speed = 0.55 + Math.random() * 0.45;   // m/s per leg
@@ -3947,9 +4038,10 @@ export class ThreeDRenderer {
     if (!n || n.blockedCount === 0) {
       ai.path = [{ x: gx, y: gy }]; ai.goalX = gx; ai.goalY = gy; return;
     }
-    // Snap the goal to a walkable cell in the region (anchors sit inside blocked
-    // footprints; we want the avatar to STOP just outside, within dwell range).
-    const goalCell = this._nearestFreeCellInRegion(this._cellIdxOf(gx, gy), region);
+    // Snap the goal to a walkable cell in the region + home loop (anchors sit
+    // inside blocked footprints; we want the avatar to STOP just outside,
+    // within dwell range — and still inside its room).
+    const goalCell = this._nearestFreeCellInLoop(this._cellIdxOf(gx, gy), region, loop);
     const gs = this._cellToScene(goalCell);
     const gw = this._sceneToWorld(gs.x, gs.z);
     const start = this._nearestFreeCell(this._cellIdxOf(ai.x, ai.y));
@@ -3961,9 +4053,12 @@ export class ThreeDRenderer {
     ai.goalX = last.x; ai.goalY = last.y;
   }
 
-  // A random free cell within `R` mm of the anchor whose region matches, biased
-  // toward cells inside the anchor's room loop. World-mm center, or null.
-  private _aiRandomCell(anchorWx: number, anchorWy: number, region: number):
+  // A random free cell within `R` mm of the anchor whose region matches.
+  // `loop` is the anchor's home room: when set it's a HARD filter (the AI
+  // avatar never leaves its sensor's room); null = unroomed sensor, any
+  // in-region cell within range qualifies. World-mm center, or null.
+  private _aiRandomCell(anchorWx: number, anchorWy: number, region: number,
+                        loop: Vec2[] | null):
       { x: number; y: number } | null {
     const n = this._nav;
     if (!n) {
@@ -3971,15 +4066,10 @@ export class ThreeDRenderer {
                y: anchorWy + (Math.random() - 0.5) * 4000 };
     }
     const R = 4500;
-    let loop: Vec2[] | null = null;
-    for (const rz of this._roomZones) {
-      if (pip(anchorWx, anchorWy, rz.loop)) { loop = rz.loop; break; }
-    }
     const c0 = this._cellIdxOf(anchorWx, anchorWy);
     const cx0 = c0 % n.nx, cy0 = (c0 / n.nx) | 0;
     const rad = Math.ceil(R / n.cell);
     const any: { x: number; y: number }[] = [];
-    const inLoop: { x: number; y: number }[] = [];
     for (let cy = cy0 - rad; cy <= cy0 + rad; cy++) {
       if (cy < 0 || cy >= n.ny) continue;
       for (let cx = cx0 - rad; cx <= cx0 + rad; cx++) {
@@ -3989,13 +4079,11 @@ export class ThreeDRenderer {
         if (region >= 0 && n.region[i] !== region) continue;
         const wx = (cx + 0.5) * n.cell, wy = (cy + 0.5) * n.cell;
         if (Math.hypot(wx - anchorWx, wy - anchorWy) > R) continue;
-        const p = { x: wx, y: wy };
-        any.push(p);
-        if (loop && pip(wx, wy, loop)) inLoop.push(p);
+        if (loop && !pip(wx, wy, loop)) continue;   // hard room confinement
+        any.push({ x: wx, y: wy });
       }
     }
-    const pool = inLoop.length ? inLoop : any;
-    return pool.length ? pool[(Math.random() * pool.length) | 0] : null;
+    return any.length ? any[(Math.random() * any.length) | 0] : null;
   }
 
   updateTargets(targets: TargetWorld[], ctx?: ActivityContext): void {
@@ -5953,7 +6041,8 @@ export class ThreeDRenderer {
     // GC isn't dumped a giant orphaned graph all at once on view-switch.
     for (const g of [
       this._floorGroup, this._doorGroup, this._modelGroup, this._zoneGroup, this._haloGroup,
-      this._sensorGroup, this._motionGroup, this._envGroup, this._lightGroup, this._targetGroup,
+      this._sensorGroup, this._motionGroup, this._envGroup, this._bleGroup,
+      this._lightGroup, this._targetGroup,
     ]) {
       this._disposeSpriteMaps(g);
       this._clearGroup(g);

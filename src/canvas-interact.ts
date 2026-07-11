@@ -9,6 +9,7 @@ import {
   hitVertexOrZone, hitObject, hitObjectRadiusHandle,
   hitBgBody, hitBgCorner, bgEditable,
   hitMotionSensor, hitMotionRotateHandle, hitEnvSensor, hitEnvResizeHandle,
+  hitBleProxy,
   hitDoor, hitDoorEnd, hitWindow, hitWindowEnd,
 } from './canvas-hit.js';
 import type { Planner } from './planner.js';
@@ -361,6 +362,12 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
     p.drag = { kind: 'motion', id: mh.id, startMm: mm, start: { x: mh.x, y: mh.y } };
     canvas.style.cursor = 'grabbing'; e.preventDefault(); p.emitConfig(); return;
   }
+  const bh = hitBleProxy(p, view, mm);
+  if (bh) {
+    if (p.activeBleId !== bh.id) p.activeBleId = bh.id;
+    p.drag = { kind: 'ble', id: bh.id, startMm: mm, start: { x: bh.x, y: bh.y } };
+    canvas.style.cursor = 'grabbing'; e.preventDefault(); p.emitConfig(); return;
+  }
   const sh = hitSensor(p, view, mm);
   if (sh) {
     if (p.store.activeSensorId !== sh.id) p.setActiveSensor(sh.id);
@@ -429,6 +436,14 @@ export function onCanvasMouseMove(p: Planner, canvas: HTMLCanvasElement, view: V
         if (en && !en.locked) {
           en.x = Math.max(0, Math.min(f.w, drag.start.x + mm.x - drag.startMm.x));
           en.y = Math.max(0, Math.min(f.d, drag.start.y + mm.y - drag.startMm.y));
+        }
+        break;
+      }
+      case 'ble': {
+        const bp = (f.bleProxies ?? []).find(x => x.id === drag.id);
+        if (bp && !bp.locked) {
+          bp.x = Math.max(0, Math.min(f.w, drag.start.x + mm.x - drag.startMm.x));
+          bp.y = Math.max(0, Math.min(f.d, drag.start.y + mm.y - drag.startMm.y));
         }
         break;
       }
@@ -665,6 +680,7 @@ export function onCanvasMouseMove(p: Planner, canvas: HTMLCanvasElement, view: V
     else if (hitEnvResizeHandle(p, view, mm)) canvas.style.cursor = 'ew-resize';
     else if (hitEnvSensor(p, view, mm)) canvas.style.cursor = 'grab';
     else if (hitMotionSensor(p, view, mm)) canvas.style.cursor = 'grab';
+    else if (hitBleProxy(p, view, mm)) canvas.style.cursor = 'grab';
     else if (hitSensorRotateHandle(p, view, mm)) canvas.style.cursor = 'grab';
     else if (hitObjectRadiusHandle(p, view, mm)) canvas.style.cursor = 'ew-resize';
     else if (hitObject(p, view, mm) || hitVertexOrZone(p, view, mm)) canvas.style.cursor = 'grab';
@@ -701,6 +717,10 @@ export function onCanvasMouseUp(p: Planner, canvas: HTMLCanvasElement): void {
   } else if (drag.kind === 'env') {
     const en = f.envSensors.find(x => x.id === drag.id);
     if (en) { en.x = snap(en.x, 10); en.y = snap(en.y, 10); }
+    p.save();
+  } else if (drag.kind === 'ble') {
+    const bp = (f.bleProxies ?? []).find(x => x.id === drag.id);
+    if (bp) { bp.x = snap(bp.x, 10); bp.y = snap(bp.y, 10); }
     p.save();
   } else if (drag.kind === 'envResize') {
     p.save();
@@ -908,6 +928,21 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
     p.emitConfig();
     return;
   }
+  if (p.tool === 'bleproxy') {
+    if (!f.bleProxies) f.bleProxies = [];
+    const id = newId('ble');
+    f.bleProxies.push({
+      id,
+      x: snap(Math.max(0, Math.min(f.w, mm.x)), 10),
+      y: snap(Math.max(0, Math.min(f.d, mm.y)), 10),
+      name: `Proxy ${f.bleProxies.length + 1}`, haDeviceId: null,
+    });
+    p.activeBleId = id;
+    p.save();
+    p.setTool('select');
+    p.emitConfig();
+    return;
+  }
   if (p.tool === 'wall') {
     // First vertex: free placement. Subsequent vertices snap to a 15°
     // increment from the previous vertex via snapVertex15 (preserves cursor
@@ -992,6 +1027,13 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
       if (mh.locked) return;
       f.motionSensors = f.motionSensors.filter(x => x.id !== mh.id);
       if (p.activeMotionId === mh.id) p.activeMotionId = null;
+      p.save(); p.emitConfig(); return;
+    }
+    const bhit = hitBleProxy(p, view, mm);
+    if (bhit) {
+      if (bhit.locked) return;
+      f.bleProxies = (f.bleProxies ?? []).filter(x => x.id !== bhit.id);
+      if (p.activeBleId === bhit.id) p.activeBleId = null;
       p.save(); p.emitConfig(); return;
     }
     const sh = hitSensor(p, view, mm);

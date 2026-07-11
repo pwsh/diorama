@@ -9,7 +9,9 @@ import type {
   Sensor, Zone, ObjectHalo, BgImage, MotionSensor, EnvSensor, EnvKind, Light, SwitchFixture, LightIconKind,
   Furniture, FurnitureKind, Door, Window as WindowType, Layers2D, Floor, Room,
   ObjectRecipe, RecipePrimitive, RecipeShape, ActivityKind, AvatarKind,
+  BleProxy, DioramaPerson,
 } from '../types.js';
+import type { BermudaDevice } from '../planner.js';
 
 // Avatar model options (shared by the mmWave + motion checkbox grids). All 22
 // concrete kinds; the old 'Random' entry is gone — checking MULTIPLE kinds is
@@ -26,6 +28,7 @@ const AVATAR_OPTIONS: ReadonlyArray<[AvatarKind, string]> = [
 import {
   fmtLen,
   motionColor, motionIntensity, sensorColor, lightIconKind, MOTION_DEFAULTS,
+  BLE_PROXY_DEFAULTS, bleProxyHeight,
   FURNITURE_KINDS, furnitureKind, resolveFurnitureDef,
   ENV_KINDS, ENV_DEFAULTS, ENV_SCALE_MIN, ENV_SCALE_MAX,
   envKindOf, envColor, envValueText, envHeight, envScale,
@@ -64,6 +67,7 @@ const TOOLS: { id: Tool; label: string }[] = [
   { id: 'sensor', label: 'mmWave' },
   { id: 'motion', label: 'Motion' },
   { id: 'env', label: 'Env' },
+  { id: 'bleproxy', label: 'BLE' },
   { id: 'furniture', label: 'Furn' },
   { id: 'light', label: 'Light' },
   { id: 'switch', label: 'Switch' },
@@ -223,6 +227,8 @@ export class Sidebar extends LitElement {
 
         ${this._motionSensorsSection()}
         ${this._envSensorsSection()}
+        ${this._bleProxiesSection()}
+        ${this._peopleSection()}
         ${this._doorsSection()}
         ${this._windowsSection()}
         ${this._furnitureSection()}
@@ -308,6 +314,7 @@ export class Sidebar extends LitElement {
       case 'sensor': return 'Click the canvas to drop a mmWave positional sensor.';
       case 'motion': return 'Click to drop a binary motion sensor (PIR).';
       case 'env': return 'Click to drop an environmental sensor (temp, humidity, CO₂, …).';
+      case 'bleproxy': return 'Click to drop a BLE scanner (Bluetooth proxy) puck. Bind it to the physical proxy device.';
       case 'furniture': return 'Click to drop a 600 × 600 mm piece.';
       case 'light': return 'Click to drop a light. Bind via the active panel.';
       case 'switch': return 'Click to drop a switch. Bind via the active panel.';
@@ -697,6 +704,350 @@ export class Sidebar extends LitElement {
         },
       },
     }));
+  }
+
+  // ── BLE proxies section ───────────────────────────────────────────────
+  private _bleProxiesSection() {
+    const p = this.planner;
+    const f = p.floor();
+    const list = f.bleProxies ?? [];
+    return html`
+      <div class="section">
+        <h3>BLE Proxies</h3>
+        ${list.length === 0
+          ? html`<div style="color:var(--text-dim);font-size:11px;padding:4px 0">
+              None yet — pick the BLE tool and click the floor. Bind each puck to
+              the physical Bluetooth proxy device so trilateration can place people.
+            </div>`
+          : this._groupedList(list, b => this._bleItem(b))}
+      </div>
+    `;
+  }
+
+  private _bleItem(b: BleProxy) {
+    const p = this.planner;
+    const sel = p.activeBleId === b.id;
+    const bound = !!b.haDeviceId;
+    return html`
+      <div style="border-bottom:1px solid var(--border)">
+        <div class="sensor-item ${sel ? 'sel' : ''}" @click=${() => p.setActiveBle(b.id)}>
+          <div class="dot" style="background:${BLE_PROXY_DEFAULTS.color}"></div>
+          <div class="nm">${b.name || 'Proxy'}</div>
+          <div class="badge ${bound ? 'bound' : ''}">${bound ? '📶' : '—'}</div>
+        </div>
+        ${sel ? this._bleEditor(b) : nothing}
+      </div>
+    `;
+  }
+
+  private _bleEditor(b: BleProxy) {
+    const p = this.planner;
+    const upd = (mut: () => void) => { mut(); p.save(); p.emitConfig(); };
+    const devName = b.haDeviceId ? (this._deviceNames[b.haDeviceId] || b.haDeviceId) : null;
+    return html`
+      <div style="background:rgba(0,0,0,0.25);border-radius:4px;padding:6px;margin:4px 0">
+        <div class="row"><label>Name</label>
+          <input type="text" .value=${b.name}
+                 @input=${(e: Event) => upd(() => { b.name = (e.target as HTMLInputElement).value; })}>
+        </div>
+        <div class="row"><label>X (mm)</label>
+          <input type="number" .value=${String(Math.round(b.x))}
+                 @input=${(e: Event) => upd(() => { b.x = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
+        </div>
+        <div class="row"><label>Y (mm)</label>
+          <input type="number" .value=${String(Math.round(b.y))}
+                 @input=${(e: Event) => upd(() => { b.y = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
+        </div>
+        <div class="row"><label>Height (mm)</label>
+          <input type="number" min="0" .value=${String(Math.round(bleProxyHeight(b)))}
+                 @input=${(e: Event) => upd(() => {
+                   const v = parseFloat((e.target as HTMLInputElement).value);
+                   b.height = isFinite(v) ? Math.max(0, v) : BLE_PROXY_DEFAULTS.height;
+                 })}>
+        </div>
+        <div class="row"><label>Hidden</label>
+          <span class="mini-toggle">
+            <input type="checkbox" .checked=${!!b.hidden}
+                   @change=${(e: Event) => upd(() => { b.hidden = (e.target as HTMLInputElement).checked; })}>
+            <span></span>
+          </span>
+        </div>
+        ${this._lockRow(b)}
+        <div class="row"><label>Proxy device</label>
+          <span style="font-size:11px;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+            ${devName || '— unbound —'}
+          </span>
+        </div>
+        <div style="display:flex;gap:4px;margin-top:4px">
+          <button class="btn" style="flex:1;font-size:11px" @click=${() => this._pickBleDevice(b)}>
+            ${b.haDeviceId ? 'Rebind' : 'Bind'} device…
+          </button>
+          ${b.haDeviceId ? html`
+            <button class="btn" style="font-size:11px"
+                    @click=${() => upd(() => { b.haDeviceId = null; })}>Unbind</button>
+          ` : nothing}
+        </div>
+        <button class="btn danger" style="width:100%;margin-top:6px" @click=${() => {
+          const f = p.floor();
+          f.bleProxies = (f.bleProxies ?? []).filter(x => x.id !== b.id);
+          p.activeBleId = null;
+          p.save(); p.emitConfig();
+        }}>Delete</button>
+      </div>
+    `;
+  }
+
+  // Cache of device id → friendly name, filled lazily when a device picker
+  // opens (shared by BLE proxy binding + person bindings).
+  private _deviceNames: Record<string, string> = {};
+
+  private async _pickBleDevice(b: BleProxy): Promise<void> {
+    const hass = this.planner.hass;
+    if (!hass) return;
+    let devs: Awaited<ReturnType<typeof hass.getDevices>> = [];
+    try { devs = await hass.getDevices(); } catch { /* offline — empty list */ }
+    const rows = devs.map(d => {
+      const name = d.name_by_user || d.name || d.id;
+      this._deviceNames[d.id] = name;
+      const macs = (d.connections ?? []).map(([, v]) => v).filter(Boolean);
+      return { id: d.id, name, subtitle: macs.length ? macs.join(', ') : undefined };
+    }).sort((r1, r2) => r1.name.localeCompare(r2.name));
+    this.dispatchEvent(new CustomEvent('open-entity-picker', {
+      bubbles: true, composed: true,
+      detail: {
+        devices: rows, title: 'Pick the Bluetooth proxy device',
+        onPick: (id: string) => {
+          b.haDeviceId = id;
+          this.planner.save();
+          this.planner.emitConfig();
+        },
+      },
+    }));
+  }
+
+  // ── People section (identity registry) ────────────────────────────────
+  private _bermudaKicked = false;
+
+  private _peopleSection() {
+    const p = this.planner;
+    const people = p.store.people ?? [];
+    // Kick a one-shot Bermuda scan the first time this section renders with a
+    // live connection so the person-binding device list is ready.
+    if (!this._bermudaKicked && p.hass && !p.bermuda) {
+      this._bermudaKicked = true;
+      void p.scanBermuda();
+    }
+    return html`
+      <div class="section">
+        <h3>People</h3>
+        <label class="row" style="padding:0;margin-bottom:6px"
+               title="Show BLE devices configured in Bermuda but not mapped to a person (uses the fallback avatar pool). Consumed by trilateration in a later phase.">
+          <span style="color:var(--text-dim);font-size:11px;flex:1">Show unknown BLE devices</span>
+          <span class="mini-toggle">
+            <input type="checkbox" .checked=${p.store.bleShowUnknown !== false}
+                   @change=${(e: Event) => p.setBleShowUnknown((e.target as HTMLInputElement).checked)}>
+            <span></span>
+          </span>
+        </label>
+        ${people.length === 0
+          ? html`<div style="color:var(--text-dim);font-size:11px;padding:4px 0">
+              None yet. Add people to give BLE / GPS presence a name, avatar, and color.
+            </div>`
+          : people.map(pe => this._personItem(pe))}
+        <button class="btn" style="width:100%;margin-top:6px" @click=${() => p.addPerson()}>
+          + Add person
+        </button>
+        ${this._bermudaSubsection()}
+      </div>
+    `;
+  }
+
+  private _personItem(pe: DioramaPerson) {
+    const p = this.planner;
+    const sel = p.activePersonId === pe.id;
+    const color = pe.color || '#90caf9';
+    return html`
+      <div style="border-bottom:1px solid var(--border)">
+        <div class="sensor-item ${sel ? 'sel' : ''}" @click=${() => p.setActivePerson(pe.id)}>
+          <div class="dot" style="background:${color}"></div>
+          <div class="nm">${pe.name || 'Person'}${pe.isPet ? ' 🐾' : ''}</div>
+          <div class="badge ${pe.bermudaDeviceId || pe.haPersonId ? 'bound' : ''}">
+            ${pe.bermudaDeviceId ? '📶' : pe.haPersonId ? 'GPS' : '—'}
+          </div>
+        </div>
+        ${sel ? this._personEditor(pe) : nothing}
+      </div>
+    `;
+  }
+
+  private _personEditor(pe: DioramaPerson) {
+    const p = this.planner;
+    const upd = (mut: (x: DioramaPerson) => void) => p.updatePerson(pe.id, mut);
+    const bermudaName = pe.bermudaDeviceId
+      ? (p.bermuda?.devices.find(d => d.deviceId === pe.bermudaDeviceId)?.name || pe.bermudaDeviceId)
+      : null;
+    return html`
+      <div style="background:rgba(0,0,0,0.25);border-radius:4px;padding:6px;margin:4px 0">
+        <div class="row"><label>Name</label>
+          <input type="text" .value=${pe.name}
+                 @input=${(e: Event) => upd(x => { x.name = (e.target as HTMLInputElement).value; })}>
+        </div>
+        <div class="row"><label>Avatar</label>
+          <select @change=${(e: Event) => upd(x => {
+                    const v = (e.target as HTMLSelectElement).value;
+                    x.avatarKind = v ? v as AvatarKind : undefined;
+                  })}>
+            <option value="" ?selected=${!pe.avatarKind}>Auto (fallback pool)</option>
+            ${AVATAR_OPTIONS.map(([val, lbl]) => html`
+              <option value=${val} ?selected=${pe.avatarKind === val}>${lbl}</option>`)}
+          </select>
+        </div>
+        <div class="row"><label>Color</label>
+          <input type="color" .value=${pe.color || '#90caf9'}
+                 style="width:36px;height:24px;padding:0;border:1px solid var(--border);background:#111"
+                 @input=${(e: Event) => upd(x => { x.color = (e.target as HTMLInputElement).value; })}>
+          <button class="btn" style="font-size:10px;padding:2px 6px;margin-left:4px"
+                  title="Clear color" @click=${() => upd(x => { x.color = undefined; })}>↺</button>
+        </div>
+        <div class="row"><label>Pet</label>
+          <span class="mini-toggle">
+            <input type="checkbox" .checked=${!!pe.isPet}
+                   @change=${(e: Event) => upd(x => { x.isPet = (e.target as HTMLInputElement).checked; })}>
+            <span></span>
+          </span>
+        </div>
+        <div class="row"><label>Person entity</label>
+          <span style="font-size:11px;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+            ${pe.haPersonId || '—'}
+          </span>
+        </div>
+        <div style="display:flex;gap:4px;margin-top:2px">
+          <button class="btn" style="flex:1;font-size:11px" @click=${() => this._pickPersonEntity(pe)}>
+            ${pe.haPersonId ? 'Rebind' : 'Bind'}…
+          </button>
+          ${pe.haPersonId ? html`
+            <button class="btn" style="font-size:11px"
+                    @click=${() => upd(x => { x.haPersonId = undefined; })}>Unbind</button>` : nothing}
+        </div>
+        <div class="row" style="margin-top:4px"><label>Bermuda device</label>
+          <span style="font-size:11px;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+            ${bermudaName || '—'}
+          </span>
+        </div>
+        <div style="display:flex;gap:4px;margin-top:2px">
+          <button class="btn" style="flex:1;font-size:11px" @click=${() => this._pickBermudaDevice(pe)}>
+            ${pe.bermudaDeviceId ? 'Rebind' : 'Bind'}…
+          </button>
+          ${pe.bermudaDeviceId ? html`
+            <button class="btn" style="font-size:11px"
+                    @click=${() => upd(x => { x.bermudaDeviceId = undefined; })}>Unbind</button>` : nothing}
+        </div>
+        <div class="row" style="margin-top:4px"><label>GPS tracker</label>
+          <span style="font-size:11px;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+            ${pe.gpsTrackerId || '—'}
+          </span>
+        </div>
+        <div style="display:flex;gap:4px;margin-top:2px">
+          <button class="btn" style="flex:1;font-size:11px" @click=${() => this._pickGpsTracker(pe)}>
+            ${pe.gpsTrackerId ? 'Rebind' : 'Bind'}…
+          </button>
+          ${pe.gpsTrackerId ? html`
+            <button class="btn" style="font-size:11px"
+                    @click=${() => upd(x => { x.gpsTrackerId = undefined; })}>Unbind</button>` : nothing}
+        </div>
+        <button class="btn danger" style="width:100%;margin-top:6px"
+                @click=${() => { if (confirm(`Delete "${pe.name || 'Person'}"?`)) p.deletePerson(pe.id); }}>
+          Delete
+        </button>
+      </div>
+    `;
+  }
+
+  private _pickPersonEntity(pe: DioramaPerson): void {
+    this.dispatchEvent(new CustomEvent('open-entity-picker', {
+      bubbles: true, composed: true,
+      detail: {
+        domain: 'person',
+        onPick: (id: string) => this.planner.updatePerson(pe.id, x => { x.haPersonId = id; }),
+      },
+    }));
+  }
+
+  private _pickGpsTracker(pe: DioramaPerson): void {
+    this.dispatchEvent(new CustomEvent('open-entity-picker', {
+      bubbles: true, composed: true,
+      detail: {
+        domain: 'device_tracker',
+        onPick: (id: string) => this.planner.updatePerson(pe.id, x => { x.gpsTrackerId = id; }),
+      },
+    }));
+  }
+
+  private _pickBermudaDevice(pe: DioramaPerson): void {
+    const p = this.planner;
+    const devs = p.bermuda?.devices ?? [];
+    const rows = devs.filter(d => d.deviceId).map(d => ({
+      id: d.deviceId!,
+      name: d.name,
+      subtitle: `${d.scanners.length} scanner(s)` + (d.mac ? ` · ${d.mac}` : ''),
+    }));
+    this.dispatchEvent(new CustomEvent('open-entity-picker', {
+      bubbles: true, composed: true,
+      detail: {
+        devices: rows, title: 'Pick the Bermuda tracked device',
+        onPick: (id: string) => this.planner.updatePerson(pe.id, x => { x.bermudaDeviceId = id; }),
+      },
+    }));
+  }
+
+  // Bermuda discovery + per-scanner distance-entity enable flow.
+  private _bermudaSubsection() {
+    const p = this.planner;
+    const berm = p.bermuda;
+    const devices = berm?.devices ?? [];
+    return html`
+      <div style="margin-top:10px;border-top:1px solid var(--border);padding-top:8px">
+        <div class="row" style="margin-bottom:4px">
+          <label style="font-weight:600">Bermuda BLE</label>
+          <button class="btn" style="font-size:10px;padding:2px 8px"
+                  @click=${() => p.scanBermuda()}>Rescan</button>
+        </div>
+        ${!berm
+          ? html`<div style="color:var(--text-dim);font-size:11px;padding:2px 0">
+              Scanning… (needs the Bermuda integration + a live HA connection)</div>`
+          : devices.length === 0
+            ? html`<div style="color:var(--text-dim);font-size:11px;padding:2px 0">
+                No Bermuda devices found.</div>`
+            : devices.map(d => this._bermudaDeviceRow(d))}
+      </div>
+    `;
+  }
+
+  private _bermudaDeviceRow(d: BermudaDevice) {
+    const p = this.planner;
+    const total = d.scanners.filter(s => s.rangeEntityId).length;
+    const matched = d.scanners.filter(s => s.proxyId).length;
+    return html`
+      <div style="font-size:11px;padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.06)">
+        <div style="display:flex;align-items:center;gap:6px">
+          <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${d.name}</span>
+          <span style="color:var(--text-dim);font-size:10px">${total} scanner(s)</span>
+        </div>
+        <div style="color:var(--text-dim);font-size:10px;margin-top:2px">
+          ${matched} matched to a proxy · ${d.disabledCount} distance entit${d.disabledCount === 1 ? 'y' : 'ies'} disabled
+        </div>
+        ${d.disabledCount > 0 ? html`
+          <button class="btn" style="width:100%;font-size:10px;margin-top:3px"
+                  title="Enables the disabled per-scanner distance entities. HA may take ~30 s (or an integration reload) before they report."
+                  @click=${() => p.enableBermudaDevice(d)}>
+            Enable ${d.disabledCount} distance entit${d.disabledCount === 1 ? 'y' : 'ies'}
+          </button>
+          <div style="color:var(--text-dim);font-size:9px;margin-top:2px;line-height:1.3">
+            HA may take ~30 s or an integration reload to start reporting.
+          </div>
+        ` : nothing}
+      </div>
+    `;
   }
 
   // ── Doors section ─────────────────────────────────────────────────────

@@ -342,6 +342,16 @@ export function wallCutsForSegment(
 export const LIGHT_DEFAULTS = { height: 2500, radius: 900, intensity: 1, iconKind: 'bulb' as LightIconKind };
 export const SWITCH_DEFAULTS = { height: 1200, rotation: 0, size: 320, labelPos: 'bottom' as const };
 export const MOTION_DEFAULTS = { color: '#ba68c8', intensity: 1 };
+export const BLE_PROXY_DEFAULTS = { height: 2400, color: '#26c6da' };
+
+export function bleProxyHeight(b: { height?: number }): number {
+  return b.height ?? BLE_PROXY_DEFAULTS.height;
+}
+// Normalize a MAC / bluetooth connection value to bare lowercase hex for
+// comparison (strips colons / dashes so `aa:bb…` and `aabb…` match).
+export function normMac(v: string | null | undefined): string {
+  return (v ?? '').toLowerCase().replace(/[^0-9a-f]/g, '');
+}
 
 // Per-sensor target tint palette. Sensor index in floor.sensors picks the
 // default; users can override via Sensor.color.

@@ -16,14 +16,40 @@ interface RawWsMsg {
 // HassClient (standalone WS + token, iframe mode) and HassPanelAdapter
 // (native panel_custom mode where HA injects an authenticated `hass`
 // object — see ha-panel-adapter.ts).
+// A device-registry row. `connections` is HA's list of [type, value] tuples
+// (e.g. ["mac", "aa:bb:cc:dd:ee:ff"]) — used to match a BLE proxy fixture's
+// bound device to Bermuda scanner MACs.
+export interface HaDevice {
+  id: string;
+  name: string | null;
+  name_by_user: string | null;
+  connections?: Array<[string, string]>;
+}
+
+// An entity-registry row. Extended additively with the fields Bermuda
+// discovery needs: `platform` (integration), `unique_id`, `disabled_by`
+// (null = enabled), and the naming fields.
+export interface HaEntityReg {
+  entity_id: string;
+  device_id: string | null;
+  platform?: string | null;
+  unique_id?: string | null;
+  disabled_by?: string | null;
+  original_name?: string | null;
+  name?: string | null;
+}
+
 export interface HaApi {
   states: Record<string, HassState>;
   connect(): void;
   onState(fn: StateListener): void;
   onConn(fn: ConnListener): void;
   callService(domain: string, service: string, data: Record<string, unknown>): unknown;
-  getDevices(): Promise<Array<{ id: string; name: string | null; name_by_user: string | null }>>;
-  getEntityRegistry(): Promise<Array<{ entity_id: string; device_id: string | null }>>;
+  getDevices(): Promise<Array<HaDevice>>;
+  getEntityRegistry(): Promise<Array<HaEntityReg>>;
+  // Update an entity-registry entry (e.g. { disabled_by: null } to enable a
+  // disabled entity). Resolves true on success.
+  updateEntityRegistry(entityId: string, changes: Record<string, unknown>): Promise<boolean>;
   getUserData<T = unknown>(key: string): Promise<T | null>;
   setUserData(key: string, value: unknown): Promise<boolean>;
   refreshStates(): Promise<void>;
@@ -72,22 +98,38 @@ export class HassClient implements HaApi {
   // HA registry helpers — used by the entity picker so users can search by
   // device name. The result type uses 'unknown' since HA doesn't formally
   // version this WS endpoint and we only read a few well-known fields.
-  async getDevices(): Promise<Array<{ id: string; name: string | null; name_by_user: string | null }>> {
+  async getDevices(): Promise<Array<HaDevice>> {
     const res = await this._send({ type: 'config/device_registry/list' });
     if (!res.success || !Array.isArray(res.result)) return [];
     return (res.result as Array<Record<string, unknown>>).map(d => ({
       id: String(d.id),
       name: typeof d.name === 'string' ? d.name : null,
       name_by_user: typeof d.name_by_user === 'string' ? d.name_by_user : null,
+      connections: Array.isArray(d.connections)
+        ? (d.connections as unknown[]).filter(c => Array.isArray(c) && c.length === 2)
+            .map(c => [String((c as unknown[])[0]), String((c as unknown[])[1])] as [string, string])
+        : undefined,
     }));
   }
-  async getEntityRegistry(): Promise<Array<{ entity_id: string; device_id: string | null }>> {
+  async getEntityRegistry(): Promise<Array<HaEntityReg>> {
     const res = await this._send({ type: 'config/entity_registry/list' });
     if (!res.success || !Array.isArray(res.result)) return [];
     return (res.result as Array<Record<string, unknown>>).map(e => ({
       entity_id: String(e.entity_id),
       device_id: typeof e.device_id === 'string' ? e.device_id : null,
+      platform: typeof e.platform === 'string' ? e.platform : null,
+      unique_id: typeof e.unique_id === 'string' ? e.unique_id : null,
+      disabled_by: typeof e.disabled_by === 'string' ? e.disabled_by : null,
+      original_name: typeof e.original_name === 'string' ? e.original_name : null,
+      name: typeof e.name === 'string' ? e.name : null,
     }));
+  }
+
+  async updateEntityRegistry(entityId: string, changes: Record<string, unknown>): Promise<boolean> {
+    const res = await this._send({
+      type: 'config/entity_registry/update', entity_id: entityId, ...changes,
+    });
+    return res.success;
   }
 
   // Per-user JSON storage backed by HA's `frontend.user_data.<userid>` table.

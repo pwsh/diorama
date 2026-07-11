@@ -1,7 +1,33 @@
 import { HassClient, type HaApi } from './ha-client.js';
 import { SensorDiscovery } from './sensor-discovery.js';
 import { loadStore, saveStore, newId, repairFloor } from './storage.js';
-import { slugToName } from './geometry.js';
+import { slugToName, normMac } from './geometry.js';
+
+// ── Bermuda BLE discovery (runtime-only) ──────────────────────────────────
+// One per-scanner distance sensor for a tracked device. `disabled` reflects
+// the smoothed range entity's registry disabled_by (per-scanner sensors are
+// disabled by default in Bermuda).
+export interface BermudaScannerLink {
+  scannerMac: string;         // normalized (bare hex) scanner MAC from the unique_id
+  rangeEntityId: string | null;     // number/sensor smoothed `Distance to <scanner>`
+  rangeRawEntityId: string | null;  // `Unfiltered Distance to <scanner>`
+  disabled: boolean;          // smoothed range entity disabled in the registry
+  proxyId: string | null;     // matched BleProxy fixture id (via device connections), else null
+}
+
+// A Bermuda tracked BLE device (a config-flow-selected device / iBeacon / IRK).
+export interface BermudaDevice {
+  deviceId: string | null;    // HA device id (registry) — the bind target for a person
+  mac: string;                // best-effort device MAC (normalized) from the unique_ids
+  name: string;               // friendly name (device registry, else entity original_name)
+  scanners: BermudaScannerLink[];
+  disabledCount: number;      // per-scanner smoothed range entities still disabled
+}
+
+export interface BermudaDiscovery {
+  devices: BermudaDevice[];
+  scannedAt: number;
+}
 import type {
   Store, Floor, Sensor, ZonesLive, ObjectHalo, LerpSlot,
   HassState, ConnStatus, DiscoveredDevice, Vec2,
@@ -24,6 +50,7 @@ export type Drag =
   | { kind: 'bgCorner'; sx: number; sy: number; startBg: { x: number; y: number; w: number; h: number; rotation: number } }
   | { kind: 'motion'; id: string; startMm: Vec2; start: Vec2 }
   | { kind: 'motionRotate'; id: string }
+  | { kind: 'ble'; id: string; startMm: Vec2; start: Vec2 }
   | { kind: 'env'; id: string; startMm: Vec2; start: Vec2 }
   | { kind: 'envResize'; id: string; startDist: number; startScale: number }
   | { kind: 'doorMove'; idx: number; startMm: Vec2; start: Vec2 }
@@ -39,7 +66,7 @@ export interface EditZone {
   mousePos: Vec2 | null;
 }
 
-export type Tool = 'select' | 'wall' | 'sensor' | 'motion' | 'env' | 'furniture' | 'light' | 'switch' | 'door' | 'window' | 'delete';
+export type Tool = 'select' | 'wall' | 'sensor' | 'motion' | 'env' | 'bleproxy' | 'furniture' | 'light' | 'switch' | 'door' | 'window' | 'delete';
 
 // Sentinel for Planner.placingRoomId meaning "create a new room at the next
 // canvas click" (vs an existing room id = re-place that room's anchor).
@@ -90,6 +117,15 @@ export class Planner extends EventTarget {
 
   // Active environmental sensor (sidebar selection / canvas highlight)
   activeEnvId: string | null = null;
+
+  // Active BLE proxy fixture (sidebar selection / canvas highlight)
+  activeBleId: string | null = null;
+
+  // Active person (sidebar People list expansion). Runtime only.
+  activePersonId: string | null = null;
+
+  // Bermuda discovery result (runtime-only; scanned on demand via scanBermuda).
+  bermuda: BermudaDiscovery | null = null;
 
   // Active furniture piece (last grabbed/dropped) — drives the 2D front-arrow
   // chevron. Runtime only.
@@ -334,9 +370,14 @@ export class Planner extends EventTarget {
             layers2d:       remote.layers2d       ?? undefined,
             layerPresets2d: remote.layerPresets2d ?? undefined,
             customObjects:  remote.customObjects  ?? undefined,
+            people:         remote.people         ?? undefined,
+            bleShowUnknown: remote.bleShowUnknown ?? undefined,
           };
           // Reset transient view state to match the loaded store.
           this.activeMotionId = null;
+          this.activeEnvId = null;
+          this.activeBleId = null;
+          this.activePersonId = null;
           this.viewCenter = null;
           this.zoom = 1;
           this.drag = null;
@@ -701,6 +742,174 @@ export class Planner extends EventTarget {
     this.emitConfig();
   }
 
+  setActiveBle(id: string | null): void {
+    this.activeBleId = (this.activeBleId === id) ? null : id;
+    this.emitConfig();
+  }
+
+  setActivePerson(id: string | null): void {
+    this.activePersonId = (this.activePersonId === id) ? null : id;
+    this.emitConfig();
+  }
+
+  // ── People registry ───────────────────────────────────────────────────
+  addPerson(): string {
+    if (!this.store.people) this.store.people = [];
+    const id = newId('pe');
+    this.store.people.push({ id, name: `Person ${this.store.people.length + 1}` });
+    this.activePersonId = id;
+    this.save();
+    this.emitConfig();
+    return id;
+  }
+
+  updatePerson(id: string, mut: (p: import('./types.js').DioramaPerson) => void): void {
+    const person = this.store.people?.find(x => x.id === id);
+    if (!person) return;
+    mut(person);
+    this.save();
+    this.emitConfig();
+  }
+
+  deletePerson(id: string): void {
+    if (!this.store.people) return;
+    this.store.people = this.store.people.filter(x => x.id !== id);
+    if (this.activePersonId === id) this.activePersonId = null;
+    this.save();
+    this.emitConfig();
+  }
+
+  setBleShowUnknown(v: boolean): void {
+    this.store.bleShowUnknown = v;
+    this.save();
+    this.emitConfig();
+  }
+
+  // ── Bermuda BLE discovery ─────────────────────────────────────────────
+  // Scans the HA entity registry for platform === 'bermuda', groups per-scanner
+  // distance entities by tracked device, and matches scanner MACs to placed BLE
+  // proxy fixtures through each proxy's bound device's registry `connections`.
+  // Runtime-only; call from the sidebar (on demand / refresh button).
+  async scanBermuda(): Promise<void> {
+    if (!this.hass) return;
+    let ents: Awaited<ReturnType<HaApi['getEntityRegistry']>>;
+    let devs: Awaited<ReturnType<HaApi['getDevices']>>;
+    try {
+      [ents, devs] = await Promise.all([
+        this.hass.getEntityRegistry(),
+        this.hass.getDevices(),
+      ]);
+    } catch (err) {
+      console.warn('Bermuda scan failed:', err);
+      return;
+    }
+
+    // Device registry: id → friendly name, plus normalized connection MACs.
+    const devName: Record<string, string> = {};
+    const devMacs: Record<string, string[]> = {};
+    for (const d of devs) {
+      devName[d.id] = d.name_by_user || d.name || d.id;
+      const macs: string[] = [];
+      for (const [, val] of d.connections ?? []) {
+        const m = normMac(val);
+        if (m.length >= 12) macs.push(m);
+      }
+      devMacs[d.id] = macs;
+    }
+
+    // Placed BLE proxies (across all floors) → their bound device MACs, so a
+    // scanner MAC parsed from a unique_id can resolve to a proxy fixture.
+    const proxyByMac: Record<string, string> = {};
+    for (const fl of this.store.floors) {
+      for (const bp of fl.bleProxies ?? []) {
+        if (!bp.haDeviceId) continue;
+        for (const m of devMacs[bp.haDeviceId] ?? []) proxyByMac[m] = bp.id;
+      }
+    }
+
+    // Group bermuda entities by tracked device_id. The per-scanner range
+    // entities carry unique_id `{device_token}_{scanner_mac}_range[_raw]`.
+    // The SCANNER token is always a colon-MAC (wifi or BLE address of the
+    // proxy), but the DEVICE token is a colon-MAC only for plain BLE devices —
+    // iBeacon / Private-BLE metadevices (iPhones, rotating-MAC tags, Bermuda's
+    // "preferred" bucket) use uuid-ish tokens, so it must stay permissive.
+    const MAC = '[0-9a-f]{2}(?::[0-9a-f]{2}){5}';
+    const macOnlyRe = new RegExp(`^${MAC}$`, 'i');
+    const rangeRe = new RegExp(`^(.+)_(${MAC})_range(_raw)?$`, 'i');
+    interface Acc { deviceId: string | null; mac: string;
+                    links: Record<string, BermudaScannerLink>; }
+    const byDevice: Record<string, Acc> = {};
+    const keyFor = (e: { device_id: string | null; unique_id?: string | null }) =>
+      e.device_id ?? `uid:${e.unique_id ?? ''}`;
+
+    for (const e of ents) {
+      if (e.platform !== 'bermuda') continue;
+      const uid = e.unique_id ?? '';
+      const k = keyFor(e);
+      if (!byDevice[k]) byDevice[k] = { deviceId: e.device_id, mac: '', links: {} };
+      const acc = byDevice[k];
+      const m = rangeRe.exec(uid);
+      if (m) {
+        // Metadevice tokens (iBeacon uuid_major_minor etc.) aren't MACs —
+        // keep them verbatim for display instead of hex-stripping them.
+        const devMac = macOnlyRe.test(m[1]) ? normMac(m[1]) : m[1];
+        const scannerMac = normMac(m[2]);
+        const raw = !!m[3];
+        if (devMac) acc.mac = devMac;
+        if (!acc.links[scannerMac]) {
+          acc.links[scannerMac] = {
+            scannerMac, rangeEntityId: null, rangeRawEntityId: null,
+            disabled: false, proxyId: proxyByMac[scannerMac] ?? null,
+          };
+        }
+        const link = acc.links[scannerMac];
+        if (raw) link.rangeRawEntityId = e.entity_id;
+        else { link.rangeEntityId = e.entity_id; link.disabled = !!e.disabled_by; }
+      } else if (!acc.mac) {
+        // Device-level sensor (Area/Distance/Floor): unique_id is the device
+        // MAC (optionally with a suffix). Grab the leading MAC token if present.
+        const dm = new RegExp(`^(${MAC})`, 'i').exec(uid);
+        if (dm) acc.mac = normMac(dm[1]);
+      }
+    }
+
+    const devicesOut: BermudaDevice[] = [];
+    for (const k of Object.keys(byDevice)) {
+      const acc = byDevice[k];
+      const scanners = Object.values(acc.links);
+      // Skip groups with no per-scanner range entities at all (pure noise).
+      if (scanners.length === 0 && !acc.deviceId) continue;
+      const disabledCount = scanners.filter(s => s.rangeEntityId && s.disabled).length;
+      const name = (acc.deviceId && devName[acc.deviceId])
+        ? devName[acc.deviceId]
+        : (acc.mac || 'Bermuda device');
+      devicesOut.push({
+        deviceId: acc.deviceId, mac: acc.mac, name, scanners, disabledCount,
+      });
+    }
+    devicesOut.sort((a, b) => a.name.localeCompare(b.name));
+    this.bermuda = { devices: devicesOut, scannedAt: Date.now() };
+    this.emitConfig();
+  }
+
+  // Consent-gated enable: flip disabled_by to null on every disabled per-scanner
+  // smoothed range entity of a tracked device. HA reloads those entities (may
+  // take ~30 s / an integration reload before they report).
+  async enableBermudaDevice(dev: BermudaDevice): Promise<void> {
+    if (!this.hass) return;
+    const targets = dev.scanners.filter(s => s.rangeEntityId && s.disabled);
+    for (const s of targets) {
+      try {
+        await this.hass.updateEntityRegistry(s.rangeEntityId!, { disabled_by: null });
+        s.disabled = false;
+      } catch (err) {
+        console.warn('Bermuda enable failed for', s.rangeEntityId, err);
+      }
+    }
+    dev.disabledCount = dev.scanners.filter(s => s.rangeEntityId && s.disabled).length;
+    this.emitConfig();
+  }
+
   // ── View ────────────────────────────────────────────────────────────────
   setView(v: '2d' | '3d'): void {
     this.view = v;
@@ -738,6 +947,7 @@ export class Planner extends EventTarget {
     this.store.activeSensorId = null;
     this.activeMotionId = null;
     this.activeEnvId = null;
+    this.activeBleId = null;
     this.activeFurnitureId = null;
     // Reset pan/zoom — viewCenter is in world mm and a different floor has
     // a different coord space; keeping it would leave the new floor offscreen.

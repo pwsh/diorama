@@ -6,7 +6,7 @@ function defaultFloor(): Floor {
   return {
     id: 'f1', name: 'Floor 1', w: 8000, d: 6000,
     walls: [], furniture: [], lights: [], switches: [], sensors: [], motionSensors: [],
-    envSensors: [], doors: [], windows: [], bg: null, rooms: [],
+    envSensors: [], doors: [], windows: [], bg: null, rooms: [], bleProxies: [],
   };
 }
 
@@ -19,6 +19,8 @@ export function defaultStore(): Store {
     coverage: true, imperial: false, showDetails: false, useRawTargets: false,
     showMotionZones: true,
     customObjects: [],
+    people: [],
+    bleShowUnknown: true,
   };
 }
 
@@ -38,6 +40,7 @@ export function repairFloor(f: Partial<Floor> & { id: string; name: string; w: n
     bg: f.bg ?? null,
     model3d: (f as Partial<Floor>).model3d ?? null,
     rooms: f.rooms ?? [],
+    bleProxies: f.bleProxies ?? [],
   };
 }
 

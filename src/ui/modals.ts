@@ -108,6 +108,10 @@ export class ZoneEditBar extends LitElement {
 // Supports either a single domain (e.g. 'binary_sensor') or null/'' (all).
 // Pulls HA device + entity registries on first open so the user can search by
 // device name, and so each row can show its parent device as a subtitle.
+// A device row for the picker's device mode (bind a fixture to an HA device or
+// a discovered Bermuda tracked device rather than an entity).
+export interface PickerDevice { id: string; name: string; subtitle?: string }
+
 @customElement('diorama-entity-picker')
 export class EntityPicker extends LitElement {
   @property({ attribute: false }) planner!: Planner;
@@ -115,6 +119,10 @@ export class EntityPicker extends LitElement {
   @state() private _domain = '';
   @state() private _q = '';
   @state() private _deviceFilter = '';
+  // Device mode: when non-null, the picker lists these devices and onPick
+  // returns a device id. Set via showDevices(); cleared by show() (entity mode).
+  @state() private _devices: PickerDevice[] | null = null;
+  @state() private _title = 'Pick an entity';
   private _onPick: ((id: string) => void) | null = null;
 
   // Cache loaded once per session: entity_id → device_id, device_id → name.
@@ -129,8 +137,19 @@ export class EntityPicker extends LitElement {
     this._onPick = onPick;
     this._q = '';
     this._deviceFilter = '';
+    this._devices = null;
+    this._title = 'Pick an entity';
     this.open = true;
     void this._loadRegistries();
+  }
+
+  // Device mode: pick from an explicit device list (returns the device id).
+  showDevices(devices: PickerDevice[], onPick: (id: string) => void, title = 'Pick a device'): void {
+    this._devices = devices;
+    this._onPick = onPick;
+    this._q = '';
+    this._title = title;
+    this.open = true;
   }
 
   private async _loadRegistries(): Promise<void> {
@@ -153,6 +172,38 @@ export class EntityPicker extends LitElement {
 
   override render() {
     if (!this.open) return nothing;
+
+    // Device mode: a flat filterable device list.
+    if (this._devices) {
+      const q = this._q.toLowerCase();
+      const rows = this._devices.filter(d =>
+        !q || (d.name + ' ' + (d.subtitle || '') + ' ' + d.id).toLowerCase().includes(q));
+      return html`
+        <div class="modal-ov" @click=${(e: MouseEvent) => { if (e.target === e.currentTarget) this.open = false; }}>
+          <div class="modal">
+            <h3>${this._title}<button class="close" @click=${() => this.open = false}>✕</button></h3>
+            <input class="search" placeholder="Search devices…"
+                   .value=${this._q}
+                   @input=${(e: Event) => this._q = (e.target as HTMLInputElement).value}>
+            <div class="entity-list">
+              ${rows.length === 0
+                ? html`<div class="entity-item" style="cursor:default;color:var(--text-dim)">
+                    No devices match.</div>`
+                : rows.slice(0, 300).map(d => html`
+                    <div class="entity-item" @click=${() => { this._onPick?.(d.id); this.open = false; }}>
+                      <div style="flex:1;overflow:hidden">
+                        <div class="name">${d.name}</div>
+                        ${d.subtitle ? html`
+                          <div style="font-size:10px;color:var(--text-dim)">${d.subtitle}</div>
+                        ` : nothing}
+                      </div>
+                    </div>`)}
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
     const states = this.planner.hass?.states || {};
     const allDomains = new Set<string>();
     const allDevices = new Set<string>();

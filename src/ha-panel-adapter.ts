@@ -9,7 +9,7 @@
 // across both modes).
 
 import type { ConnStatus, HassState } from './types.js';
-import type { HaApi, StateListener, ConnListener } from './ha-client.js';
+import type { HaApi, StateListener, ConnListener, HaDevice, HaEntityReg } from './ha-client.js';
 
 // Loose typing for HA frontend's hass object — we only touch a small,
 // long-stable subset (connection.sendMessagePromise / subscribeEvents).
@@ -63,7 +63,7 @@ export class HassPanelAdapter implements HaApi {
     });
   }
 
-  async getDevices(): Promise<Array<{ id: string; name: string | null; name_by_user: string | null }>> {
+  async getDevices(): Promise<Array<HaDevice>> {
     if (!this._conn) return [];
     try {
       const res = await this._conn.sendMessagePromise<Array<Record<string, unknown>>>(
@@ -72,11 +72,15 @@ export class HassPanelAdapter implements HaApi {
         id: String(d.id),
         name: typeof d.name === 'string' ? d.name : null,
         name_by_user: typeof d.name_by_user === 'string' ? d.name_by_user : null,
+        connections: Array.isArray(d.connections)
+          ? (d.connections as unknown[]).filter(c => Array.isArray(c) && c.length === 2)
+              .map(c => [String((c as unknown[])[0]), String((c as unknown[])[1])] as [string, string])
+          : undefined,
       }));
     } catch { return []; }
   }
 
-  async getEntityRegistry(): Promise<Array<{ entity_id: string; device_id: string | null }>> {
+  async getEntityRegistry(): Promise<Array<HaEntityReg>> {
     if (!this._conn) return [];
     try {
       const res = await this._conn.sendMessagePromise<Array<Record<string, unknown>>>(
@@ -84,8 +88,23 @@ export class HassPanelAdapter implements HaApi {
       return (res ?? []).map(e => ({
         entity_id: String(e.entity_id),
         device_id: typeof e.device_id === 'string' ? e.device_id : null,
+        platform: typeof e.platform === 'string' ? e.platform : null,
+        unique_id: typeof e.unique_id === 'string' ? e.unique_id : null,
+        disabled_by: typeof e.disabled_by === 'string' ? e.disabled_by : null,
+        original_name: typeof e.original_name === 'string' ? e.original_name : null,
+        name: typeof e.name === 'string' ? e.name : null,
       }));
     } catch { return []; }
+  }
+
+  async updateEntityRegistry(entityId: string, changes: Record<string, unknown>): Promise<boolean> {
+    if (!this._conn) return false;
+    try {
+      await this._conn.sendMessagePromise({
+        type: 'config/entity_registry/update', entity_id: entityId, ...changes,
+      });
+      return true;
+    } catch { return false; }
   }
 
   async getUserData<T = unknown>(key: string): Promise<T | null> {

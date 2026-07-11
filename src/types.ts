@@ -153,6 +153,35 @@ export type AvatarKind =
   | 'cowboy' | 'magician' | 'farmer' | 'tech_expert' | 'supermodel'
   | 'wise_oracle' | 'astronaut';
 
+// A person (or pet) in the household. The shared identity concept for the
+// "World Outside" arc: BLE trilateration and GPS both resolve to a person;
+// rendering resolves a person to an avatar. Stored in Store.people.
+export interface DioramaPerson {
+  id: string;
+  name: string;
+  color?: string;              // chip / label / target tint
+  avatarKind?: AvatarKind;     // custom avatar from the 22-model list (else fallback pool)
+  isPet?: boolean;             // pets are BLE tags (iBeacon on collar) — quadruped rig in a later phase
+  haPersonId?: string;         // person.* entity (GPS identity; survives phone swaps)
+  bermudaDeviceId?: string;    // HA device id of the Bermuda tracked BLE device
+  gpsTrackerId?: string;       // explicit device_tracker.* override (else via person entity)
+}
+
+// A BLE scanner (ESPHome/Shelly Bluetooth proxy) placed on the plan. Rendered
+// as a small antenna puck; the scanner-MAC ↔ fixture match runs through the
+// bound HA device's registry `connections`. Trilateration (B2) reads the plan
+// positions of these to solve BLE person positions. Visibility rides the
+// `sensors` layer (same as mmWave).
+export interface BleProxy {
+  id: string;
+  name: string;
+  x: number; y: number;
+  height?: number;           // mm above floor for the 3D puck; default 2400
+  haDeviceId?: string | null; // bound physical proxy device (device registry id)
+  locked?: boolean;          // canvas move/delete disabled
+  hidden?: boolean;          // per-fixture hide (in addition to the sensors layer)
+}
+
 export interface Sensor {
   id: string;
   x: number; y: number;
@@ -327,6 +356,7 @@ export interface Floor {
   bg: BgImage | null;
   model3d?: Model3D | null;
   rooms?: Room[];   // named rooms (anchor → live wall loop); repairFloor backfills []
+  bleProxies?: BleProxy[];  // BLE scanner fixtures; repairFloor backfills []
 }
 
 export interface Store {
@@ -344,6 +374,8 @@ export interface Store {
   layers2d?: Layers2D;        // active 2D layer visibility (undefined = everything on)
   layerPresets2d?: Layer2DPreset[];  // user-saved 2D layer presets
   customObjects?: ObjectRecipe[];    // user-authored object recipes
+  people?: DioramaPerson[];          // household identity registry (BLE / GPS resolve to a person)
+  bleShowUnknown?: boolean;          // show BLE devices not mapped to a person (absent = true); consumed in B2
 }
 
 // Saved 3D camera pose (scene coords, mm — floor-centered frame).

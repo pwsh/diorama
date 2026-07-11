@@ -130,6 +130,11 @@ export default defineConfig({
     emptyOutDir: true,
     sourcemap: true,
     target: 'es2020',
+    // three-renderer.js (~700 kB min / ~185 kB gzip) is DELIBERATELY one big
+    // lazily-loaded chunk (dynamic import in three-view.ts keeps it out of the
+    // 2D startup path). Raise the warning threshold just past it so the build
+    // stays quiet on the known chunk but still flags real size regressions.
+    chunkSizeWarningLimit: 800,
     rollupOptions: {
       input: {
         main: resolve(__dirname, 'index.html'),
