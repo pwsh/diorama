@@ -148,7 +148,7 @@ export interface SwitchFixture {
 // their look for its lifetime (see resolveAvatar in three-renderer.ts).
 export type AvatarKind =
   | 'adult' | 'child' | 'robot' | 'alien' | 'professional'
-  | 'hacker' | 'movie_star' | 'ninja_cyborg' | 'athlete';
+  | 'hacker' | 'movie_star' | 'ninja' | 'cyborg' | 'ninja_cyborg' | 'athlete';
 
 export interface Sensor {
   id: string;

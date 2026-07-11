@@ -16,7 +16,8 @@ import type {
 const AVATAR_OPTIONS: ReadonlyArray<[string, string]> = [
   ['adult', 'Adult'], ['child', 'Child'], ['robot', 'Robot'], ['alien', 'Alien'],
   ['professional', 'Professional'], ['hacker', 'Hacker'], ['movie_star', 'Movie star'],
-  ['ninja_cyborg', 'Ninja cyborg'], ['athlete', 'Athlete'], ['random', 'Random'],
+  ['ninja', 'Ninja'], ['cyborg', 'Cyborg'], ['ninja_cyborg', 'Ninja cyborg'],
+  ['athlete', 'Athlete'], ['random', 'Random'],
 ];
 import {
   fmtLen,

@@ -230,7 +230,7 @@ const EMPTY_ENTITY_ON: Record<string, boolean> = {};
 // a target key into this list so a given person keeps their look for life.
 const AVATAR_KINDS: readonly AvatarKind[] = [
   'adult', 'child', 'robot', 'alien', 'professional',
-  'hacker', 'movie_star', 'ninja_cyborg', 'athlete',
+  'hacker', 'movie_star', 'ninja', 'cyborg', 'ninja_cyborg', 'athlete',
 ];
 const AVATAR_KIND_SET: ReadonlySet<string> = new Set(AVATAR_KINDS);
 
@@ -5146,8 +5146,9 @@ export class ThreeDRenderer {
       );
       stripe.position.set(0, torsoY, frontZ - 6 * sk);
       root.add(stripe);
-    } else if (kind === 'ninja_cyborg') {
-      // Katana slung diagonally across the back (+Z side).
+    } else if (kind === 'ninja_cyborg' || kind === 'ninja') {
+      // Katana slung diagonally across the back (+Z side) — shared by both
+      // ninja flavors.
       const katana = new THREE.Group();
       const blade = new THREE.Mesh(
         new THREE.BoxGeometry(26 * sk, TORSO_H * 1.35, 26 * sk),
@@ -5163,6 +5164,46 @@ export class ThreeDRenderer {
       katana.position.set(-TORSO_W * 0.1, torsoY, backZ + 30 * sk);
       katana.rotation.z = 0.55;
       root.add(katana);
+      if (kind === 'ninja') {
+        // Full hood wrap: a near-complete dark shell around the head — the
+        // skin-tone eye-slit band (face pass) pokes proud of it at the front.
+        // NO metal, NO emissive: this is the classic-shinobi look, distinct
+        // from ninja_cyborg's red visor + steel arm.
+        const hood = new THREE.Mesh(
+          new THREE.SphereGeometry(HEAD_R * 1.14, 18, 14, 0, Math.PI * 2, 0, Math.PI * 0.85),
+          this._mat({ color: 0x131317, roughness: 0.9, metalness: 0.0 }),
+        );
+        hood.position.set(0, headY, 0);
+        root.add(hood);
+        // Waist sash: thin tint band around the lower torso (slightly proud —
+        // coincident-face gotcha).
+        const sash = new THREE.Mesh(
+          new THREE.BoxGeometry(TORSO_W * 1.06, TORSO_H * 0.12, TORSO_D * 1.06),
+          c.accent,
+        );
+        sash.position.set(0, torsoY - TORSO_H * 0.28, 0);
+        root.add(sash);
+      }
+    } else if (kind === 'cyborg') {
+      // Head half-plate: a steel shell over the +x side of the head (the same
+      // side as the red implant eye, steel arm, and steel leg).
+      const steel = this._mat({ color: 0x8a9099, emissive: 0x8a9099, emissiveIntensity: 0.1, metalness: 0.8, roughness: 0.3 });
+      // Half-sphere shell (phi 0..π), rotated so the open seam runs down the
+      // head's centerline and the shell covers the +x half.
+      const plate = new THREE.Mesh(
+        new THREE.SphereGeometry(HEAD_R * 1.06, 16, 12, 0, Math.PI),
+        steel,
+      );
+      plate.rotation.y = Math.PI / 2;
+      plate.position.set(0, headY, 0);
+      root.add(plate);
+      // Small tint chest panel (slightly proud of the torso front face).
+      const panel = new THREE.Mesh(
+        new THREE.BoxGeometry(TORSO_W * 0.34, TORSO_H * 0.22, 22 * sk),
+        c.accent,
+      );
+      panel.position.set(TORSO_W * 0.18, torsoY + TORSO_H * 0.16, frontZ - 6 * sk);
+      root.add(panel);
     } else if (kind === 'athlete') {
       // White headband around the forehead.
       const band = new THREE.Mesh(
@@ -5196,7 +5237,8 @@ export class ThreeDRenderer {
     interface Spec {
       sk: number; headR: number; headShape: 'sphere' | 'box'; limbR: number;
       skin: number; body: number; shoe: number; emI: number;
-      hands: 'sphere' | 'box'; eyes: 'dots' | 'visor' | 'almond' | 'redvisor' | 'shades';
+      hands: 'sphere' | 'box';
+      eyes: 'dots' | 'visor' | 'almond' | 'redvisor' | 'shades' | 'slit' | 'halfred';
       steel: boolean;
     }
     const SPECS: Record<AvatarKind, Spec> = {
@@ -5207,6 +5249,12 @@ export class ThreeDRenderer {
       professional: { sk: 1,    headR: 126, headShape: 'sphere', limbR: 1,   skin: color, body: CHARCOAL,  shoe: 0x141416, emI: 0.20, hands: 'sphere', eyes: 'dots',    steel: false },
       hacker:       { sk: 1,    headR: 126, headShape: 'sphere', limbR: 1,   skin: PALE,  body: NEARBLACK, shoe: 0x141416, emI: 0.15, hands: 'sphere', eyes: 'dots',    steel: false },
       movie_star:   { sk: 1,    headR: 126, headShape: 'sphere', limbR: 1,   skin: color, body: GOLD,      shoe: 0x0a0a0c, emI: 0.20, hands: 'sphere', eyes: 'shades',  steel: false },
+      // Classic shinobi: matte black + full hood wrap + skin-tone eye slit +
+      // katana + tint sash. NO metal, NO emissive (distinct from ninja_cyborg).
+      ninja:        { sk: 1,    headR: 120, headShape: 'sphere', limbR: 1,   skin: MATTE, body: MATTE,     shoe: 0x0a0a0c, emI: 0.05, hands: 'sphere', eyes: 'slit',    steel: false },
+      // Half-man half-machine: adult tint body/head, steel right arm + right
+      // leg, steel head half-plate + red implant eye on the plated (+x) side.
+      cyborg:       { sk: 1,    headR: 126, headShape: 'sphere', limbR: 1,   skin: color, body: color,     shoe: 0x1a1a1f, emI: 0.25, hands: 'sphere', eyes: 'halfred', steel: false },
       ninja_cyborg: { sk: 1,    headR: 120, headShape: 'sphere', limbR: 1,   skin: MATTE, body: MATTE,     shoe: 0x0a0a0c, emI: 0.05, hands: 'sphere', eyes: 'redvisor',steel: false },
       athlete:      { sk: 1,    headR: 126, headShape: 'sphere', limbR: 1,   skin: color, body: color,     shoe: 0xf2f2f2, emI: 0.25, hands: 'sphere', eyes: 'dots',    steel: false },
     };
@@ -5262,19 +5310,20 @@ export class ThreeDRenderer {
     };
 
     // Two-segment leg: hip pivot → thigh → knee pivot → shin → foot.
-    const makeLeg = (xOffset: number) => {
+    // `legMat` lets a variant swap the whole leg (cyborg's steel right leg).
+    const makeLeg = (xOffset: number, legMat: THREE.Material = skin) => {
       const hip = new THREE.Group();
       hip.position.set(xOffset, hipY, 0);
-      hip.add(segment(LEG_UPPER_R, LEG_UPPER_R * 0.9, LEG_UPPER_LEN));
+      hip.add(segment(LEG_UPPER_R, LEG_UPPER_R * 0.9, LEG_UPPER_LEN, legMat));
       // Visible knee bump
-      const kneeBall = new THREE.Mesh(new THREE.SphereGeometry(LEG_UPPER_R * 0.95, 10, 8), skin);
+      const kneeBall = new THREE.Mesh(new THREE.SphereGeometry(LEG_UPPER_R * 0.95, 10, 8), legMat);
       kneeBall.position.set(0, -LEG_UPPER_LEN, 0);
       hip.add(kneeBall);
 
       const knee = new THREE.Group();
       knee.position.set(0, -LEG_UPPER_LEN, 0);
       hip.add(knee);
-      knee.add(segment(LEG_LOWER_R, LEG_LOWER_R * 0.85, LEG_LOWER_LEN));
+      knee.add(segment(LEG_LOWER_R, LEG_LOWER_R * 0.85, LEG_LOWER_LEN, legMat));
 
       const foot = new THREE.Mesh(
         new THREE.BoxGeometry(FOOT_W, FOOT_H, FOOT_D),
@@ -5371,9 +5420,38 @@ export class ThreeDRenderer {
       );
       shades.position.set(0, headY + HEAD_R * 0.08, faceZ - HEAD_R * 0.06);
       root.add(shades);
+    } else if (spec.eyes === 'slit') {
+      // Ninja: horizontal SKIN-TONE eye-slit band through the hood wrap, with
+      // normal dark eyes visible in the slit. No glow, no metal.
+      const band = new THREE.Mesh(
+        new THREE.BoxGeometry(HEAD_R * 1.3, HEAD_R * 0.36, HEAD_R * 0.24),
+        this._mat({ color: PALE, emissive: PALE, emissiveIntensity: 0.15, roughness: 0.6, metalness: 0.05 }),
+      );
+      // Proud of the hood shell (r ≈ 1.14·HEAD_R, added in accessories) so the
+      // slit reads as an opening in the wrap.
+      band.position.set(0, headY + HEAD_R * 0.1, -HEAD_R * 1.08);
+      root.add(band);
+      for (const sx of [-1, 1]) {
+        const eye = new THREE.Mesh(new THREE.SphereGeometry(HEAD_R * 0.14, 10, 8), dark);
+        eye.position.set(sx * HEAD_R * 0.36, headY + HEAD_R * 0.1, -HEAD_R * 1.2);
+        root.add(eye);
+      }
+    } else if (spec.eyes === 'halfred') {
+      // Cyborg: organic left eye, red emissive implant on the plated (+x) side.
+      const eyeR = HEAD_R * 0.18;
+      const eyeL = new THREE.Mesh(new THREE.SphereGeometry(eyeR, 10, 8), dark);
+      eyeL.position.set(-HEAD_R * 0.38, headY + HEAD_R * 0.12, faceZ);
+      root.add(eyeL);
+      const eyeRed = new THREE.Mesh(
+        new THREE.SphereGeometry(eyeR * 0.9, 10, 8),
+        this._mat({ color: 0x330000, emissive: 0xff2a2a, emissiveIntensity: 1.2, metalness: 0.2, roughness: 0.4 }),
+      );
+      eyeRed.position.set(HEAD_R * 0.38, headY + HEAD_R * 0.12, faceZ - HEAD_R * 0.04);
+      eyeRed.userData.outlineSkip = true;
+      root.add(eyeRed);
     }
-    // Nose + mouth (skipped on the faceless robot; kept subtle elsewhere).
-    if (spec.eyes !== 'visor' && spec.eyes !== 'almond') {
+    // Nose + mouth (skipped on the faceless robot / masked ninja; subtle elsewhere).
+    if (spec.eyes !== 'visor' && spec.eyes !== 'almond' && spec.eyes !== 'slit') {
       const nose = new THREE.Mesh(
         new THREE.SphereGeometry(HEAD_R * 0.14, 8, 6),
         skin,
@@ -5381,7 +5459,7 @@ export class ThreeDRenderer {
       nose.position.set(0, headY - HEAD_R * 0.05, faceZ - HEAD_R * 0.13);
       root.add(nose);
     }
-    if (spec.eyes !== 'visor') {
+    if (spec.eyes !== 'visor' && spec.eyes !== 'slit') {
       const mouth = new THREE.Mesh(
         new THREE.BoxGeometry(HEAD_R * 0.45, HEAD_R * 0.07, HEAD_R * 0.04),
         dark,
@@ -5390,15 +5468,16 @@ export class ThreeDRenderer {
       root.add(mouth);
     }
 
-    // Limbs
-    const leftLeg  = makeLeg(-TORSO_W / 4);
-    const rightLeg = makeLeg( TORSO_W / 4);
-    // Ninja cyborg: steel right arm (a brushed-metal prosthetic).
-    const steelArm = kind === 'ninja_cyborg'
+    // Limbs. Cyborg kinds get a brushed-steel prosthetic right (+x) arm; the
+    // plain cyborg additionally gets a steel right leg (same side as its arm
+    // + head plate).
+    const steelMat = (kind === 'ninja_cyborg' || kind === 'cyborg')
       ? this._mat({ color: 0x8a9099, emissive: 0x8a9099, emissiveIntensity: 0.1, metalness: 0.8, roughness: 0.3 })
       : skin;
+    const leftLeg  = makeLeg(-TORSO_W / 4);
+    const rightLeg = makeLeg( TORSO_W / 4, kind === 'cyborg' ? steelMat : skin);
     const leftArm  = makeArm(-(TORSO_W / 2 + ARM_UPPER_R * 0.7));
-    const rightArm = makeArm( TORSO_W / 2 + ARM_UPPER_R * 0.7, steelArm);
+    const rightArm = makeArm( TORSO_W / 2 + ARM_UPPER_R * 0.7, steelMat);
     // Relaxed A-pose: arms splay a touch outward so the silhouette isn't a
     // rigid soldier. Static roll — updateTargets only animates rotation.x.
     leftArm.shoulder.rotation.z  = -0.08;
