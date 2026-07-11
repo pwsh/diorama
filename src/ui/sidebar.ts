@@ -12,6 +12,7 @@ import type {
   BleProxy, DioramaPerson,
 } from '../types.js';
 import type { BermudaDevice } from '../planner.js';
+import { CONDITION_GLYPH, CONDITION_LABEL, tempText } from '../weather.js';
 
 // Avatar model options (shared by the mmWave + motion checkbox grids). All 22
 // concrete kinds; the old 'Random' entry is gone — checking MULTIPLE kinds is
@@ -240,6 +241,7 @@ export class Sidebar extends LitElement {
         ${this._haSections()}
         ${this._layers2dSection()}
         ${this._scene3dSection()}
+        ${this._weatherSection()}
         ${this._model3dSection()}
         ${this._bgSection()}
 
@@ -2445,6 +2447,118 @@ export class Sidebar extends LitElement {
   }
 
   // ── 3D scene appearance ───────────────────────────────────────────────
+  // ── Weather section (Feature W) ───────────────────────────────────────
+  private _weatherSection() {
+    const p = this.planner;
+    const w = p.store.weather;
+    const src = w?.source ?? 'openmeteo';
+    const now = p.weatherNow;
+    const set = (mut: (x: import('../types.js').WeatherConfig) => void) => p.setWeather(mut);
+
+    const sourceRadio = (val: 'entity' | 'sensors' | 'openmeteo', label: string) => html`
+      <label class="row" style="padding:0;cursor:pointer;gap:6px">
+        <input type="radio" name="weather-src" .checked=${src === val}
+               @change=${() => set(x => { x.source = val; })}>
+        <span style="font-size:12px;flex:1">${label}</span>
+      </label>`;
+
+    const bindRow = (labelTxt: string, cur: string | undefined,
+                     domain: string, onPick: (id: string) => void) => html`
+      <div class="row" style="margin-top:2px"><label>${labelTxt}</label>
+        <span style="font-size:11px;color:var(--text);flex:1;overflow:hidden;
+                     text-overflow:ellipsis;white-space:nowrap">${cur || '—'}</span>
+        <button class="btn" style="font-size:10px;padding:2px 6px" @click=${() => {
+          this.dispatchEvent(new CustomEvent('open-entity-picker', {
+            bubbles: true, composed: true, detail: { domain, onPick },
+          }));
+        }}>🔗</button>
+      </div>`;
+
+    // Live preview / source-health line.
+    let preview;
+    if (!w) {
+      preview = html`<span style="color:var(--text-dim)">Pick a source to enable the chip.</span>`;
+    } else if (now) {
+      const glyph = CONDITION_GLYPH[now.condition] ?? '❓';
+      const temp = now.tempC == null ? '' : ' · ' + tempText(now.tempC, p.store.imperial);
+      preview = html`<span style="${now.stale ? 'opacity:0.55' : ''}">
+        ${glyph} ${CONDITION_LABEL[now.condition] ?? now.condition}${temp}
+        ${now.label ? html`<span style="color:var(--text-dim)"> · ${now.label}</span>` : nothing}
+        ${now.stale ? html`<span style="color:#ffab91"> · stale</span>` : nothing}
+      </span>`;
+    } else {
+      preview = html`<span style="color:var(--text-dim)">${
+        src === 'openmeteo'
+          ? (w.zip || w.lat != null ? 'Fetching…' : 'Set a zip (or configure zone.home in HA).')
+          : 'Bind the source entities above.'}</span>`;
+    }
+
+    return html`
+      <div class="section" id="diorama-weather-section">
+        <h3>Weather</h3>
+        <div style="display:flex;flex-direction:column;gap:2px;margin-bottom:6px">
+          ${sourceRadio('entity', 'HA weather entity')}
+          ${sourceRadio('sensors', 'Local station sensors')}
+          ${sourceRadio('openmeteo', 'Open-Meteo (online)')}
+        </div>
+
+        ${src === 'entity' ? bindRow('Entity', w?.entityId, 'weather',
+            (id: string) => set(x => { x.entityId = id; })) : nothing}
+
+        ${src === 'sensors' ? html`
+          ${bindRow('Precip (mm/h)', w?.sensors?.precip, 'sensor',
+              (id: string) => set(x => { (x.sensors ??= {}).precip = id; }))}
+          ${bindRow('Wind speed', w?.sensors?.windSpeed, 'sensor',
+              (id: string) => set(x => { (x.sensors ??= {}).windSpeed = id; }))}
+          ${bindRow('Temperature', w?.sensors?.temp, 'sensor',
+              (id: string) => set(x => { (x.sensors ??= {}).temp = id; }))}
+          ${bindRow('Lightning', w?.sensors?.lightning, 'binary_sensor',
+              (id: string) => set(x => { (x.sensors ??= {}).lightning = id; }))}
+          <div style="font-size:10px;color:var(--text-dim);line-height:1.3;margin:2px 0 0">
+            Condition is derived: precip → rainy/pouring, cold precip → snowy,
+            high wind → windy, lightning → storm; else clear by the sun.
+          </div>
+        ` : nothing}
+
+        ${src === 'openmeteo' ? html`
+          <div class="row"><label>Zip / place</label>
+            <input type="text" placeholder="e.g. 90210" .value=${w?.zip ?? ''}
+                   style="flex:1;min-width:0"
+                   @change=${(e: Event) => set(x => { x.zip = (e.target as HTMLInputElement).value.trim(); })}>
+            <button class="btn" style="font-size:10px;padding:2px 8px;margin-left:4px"
+                    @click=${() => p.refreshWeatherLocation()}>Search</button>
+          </div>
+          <div style="font-size:11px;color:var(--text-dim);margin:2px 0 0">
+            ${w?.placeLabel
+              ? html`📍 ${w.placeLabel}`
+              : (w?.lat != null ? html`📍 ${w.lat.toFixed(2)}, ${w.lon?.toFixed(2)}`
+                                : 'No location — uses HA zone.home if no zip.')}
+          </div>
+        ` : nothing}
+
+        <label class="row" style="margin-top:8px"><span style="flex:1">Show chip</span>
+          <input type="checkbox" .checked=${w?.chip !== false}
+                 @change=${(e: Event) => set(x => { x.chip = (e.target as HTMLInputElement).checked; })}>
+        </label>
+        <label class="row"><span style="flex:1">3D effects</span>
+          <input type="checkbox" .checked=${w?.effects3d !== false}
+                 @change=${(e: Event) => set(x => { x.effects3d = (e.target as HTMLInputElement).checked; })}>
+        </label>
+        <label class="row"><span style="flex:1">Affect lighting</span>
+          <input type="checkbox" .checked=${w?.affectLighting !== false}
+                 @change=${(e: Event) => set(x => { x.affectLighting = (e.target as HTMLInputElement).checked; })}>
+        </label>
+        <div style="font-size:10px;color:var(--text-dim);line-height:1.3;margin:2px 0 6px">
+          (3D effects arrive in the next phase)
+        </div>
+
+        <div style="font-size:11px;padding:6px 8px;background:rgba(0,0,0,0.25);border-radius:4px;line-height:1.4">
+          ${preview}
+        </div>
+      </div>
+    `;
+  }
+
   private _scene3dSection() {
     const p = this.planner;
     const sc = p.store.scene3d ?? { preset: 'night' as const };

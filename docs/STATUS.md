@@ -34,6 +34,17 @@ deployed to the live HA instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **World Outside — W1 (weather core)**: `Store.weather` + `src/weather.ts`
+  (pure normalization to `WeatherNow` over HA's 15-condition vocabulary; three
+  sources — a `weather.*` entity, local station sensors via a derive heuristic,
+  or keyless Open-Meteo with the HA-core WMO→HA table + zip geocoding). First
+  third-party network call in the repo — isolated, try/catch'd, offline-tolerant
+  (holds last value, stale after 45 min). `Planner.weatherNow` recomputes on
+  bound-entity `state_changed` (added to `_isSlowEntity`) or a 15-min Open-Meteo
+  poll. New `<diorama-weather-chip>` corner overlay (both views, kiosk-safe,
+  °F-aware) + sidebar "Weather" section with a live preview. `effects3d` /
+  `affectLighting` persist now, consumed in W2. Test page
+  `test-pages/weather-test.html` (`WEATHER PASS 48/48`).
 - **World Outside — P1 (pet rigs)**: quadruped cat/dog avatar kinds with a
   dedicated `_buildQuadruped` builder (4-leg body, ears/snout, 2-segment tail;
   cat ≈ 58% of the dog) and `_applyQuadPose` trot gait + sit (haunches) / curl

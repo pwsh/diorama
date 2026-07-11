@@ -363,6 +363,20 @@ export interface Floor {
   bleProxies?: BleProxy[];  // BLE scanner fixtures; repairFloor backfills []
 }
 
+// Weather source + display config (the "World Outside" arc, Feature W). All
+// three sources normalize to a runtime WeatherNow (see src/weather.ts). Stored
+// whole in Store.weather; effects3d / affectLighting persist now but are only
+// consumed in phase W2 (3D effects + lighting modifier).
+export interface WeatherConfig {
+  source: 'entity' | 'sensors' | 'openmeteo';
+  entityId?: string;                      // weather.* (preferred when it exists)
+  sensors?: { precip?: string; windSpeed?: string; temp?: string; lightning?: string };
+  zip?: string; lat?: number; lon?: number; placeLabel?: string;  // Open-Meteo location (zip geocoded → lat/lon cached)
+  chip?: boolean;          // default true — corner display, 2D + 3D
+  effects3d?: boolean;     // default true — consumed in W2
+  affectLighting?: boolean;// default true — cloudy/precip dims the day preset; consumed in W2
+}
+
 export interface Store {
   v: number;
   floors: Floor[];
@@ -380,6 +394,7 @@ export interface Store {
   customObjects?: ObjectRecipe[];    // user-authored object recipes
   people?: DioramaPerson[];          // household identity registry (BLE / GPS resolve to a person)
   bleShowUnknown?: boolean;          // show BLE devices not mapped to a person (absent = true); consumed in B2
+  weather?: WeatherConfig;           // weather source + chip config (Feature W)
 }
 
 // Saved 3D camera pose (scene coords, mm — floor-centered frame).

@@ -1,0 +1,126 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>WEATHER …</title>
+  <style>
+    body { margin:0; background:#0d1116; color:#cfd8dc; font:13px/1.4 sans-serif; padding:14px; }
+    h1 { font-size:15px; margin:0 0 10px; }
+    .grid { display:flex; flex-wrap:wrap; gap:10px; }
+    .card { background:#141b22; border:1px solid #26323d; border-radius:6px; padding:8px 10px; width:300px; }
+    .card h2 { font-size:12px; margin:0 0 6px; color:#90caf9; }
+    .row { display:flex; justify-content:space-between; font-size:11px; gap:8px; }
+    .pass { color:#69f0ae; } .fail { color:#ff5252; }
+    #summary { font-size:14px; font-weight:bold; margin:10px 0; padding:8px 10px; border-radius:5px; }
+    .okbg { background:#12331f; color:#69f0ae; } .badbg { background:#3a1414; color:#ff8a80; }
+    code { color:#ffd54f; }
+  </style>
+</head>
+<body>
+  <h1>Weather core — WMO table · sensor heuristic · unit normalization</h1>
+  <div id="summary">Running…</div>
+  <div class="grid" id="grid"></div>
+
+  <!-- weather.ts imports time-of-day.ts (type-only imports of types.ts are
+       erased), so bundle it into a standalone module before serving:
+         npx esbuild src/weather.ts --bundle --format=esm \
+           --outfile=<harness>/weather.mod.js
+       (matches the trilateration.html build-then-copy flow; no live HA). -->
+  <script type="module">
+    import {
+      wmoToCondition, deriveFromSensors, resolveWeatherEntity,
+      toCelsius, toKmh, toMmPerH,
+    } from './weather.mod.js';
+
+    const tests = [];
+    const eq = (name, got, want) =>
+      tests.push({ name, ok: got === want, detail: `got ${JSON.stringify(got)} want ${JSON.stringify(want)}` });
+    const near = (name, got, want, tol = 1e-6) =>
+      tests.push({ name, ok: Math.abs(got - want) <= tol, detail: `got ${got} ≈ ${want}` });
+
+    // ── WMO → HA condition table (HA core open_meteo/const.py) ──────────────
+    eq('wmo 0 day → sunny',            wmoToCondition(0, true),  'sunny');
+    eq('wmo 0 night → clear-night',    wmoToCondition(0, false), 'clear-night');
+    eq('wmo 1 day → sunny',            wmoToCondition(1, true),  'sunny');
+    eq('wmo 2 → partlycloudy',         wmoToCondition(2, true),  'partlycloudy');
+    eq('wmo 3 → cloudy',               wmoToCondition(3, true),  'cloudy');
+    eq('wmo 45 → fog',                 wmoToCondition(45, true), 'fog');
+    eq('wmo 48 → fog',                 wmoToCondition(48, true), 'fog');
+    eq('wmo 51 → rainy',               wmoToCondition(51, true), 'rainy');
+    eq('wmo 55 → rainy',               wmoToCondition(55, true), 'rainy');
+    eq('wmo 61 → rainy',               wmoToCondition(61, true), 'rainy');
+    eq('wmo 65 → pouring',             wmoToCondition(65, true), 'pouring');
+    eq('wmo 66 → rainy',               wmoToCondition(66, true), 'rainy');
+    eq('wmo 71 → snowy',               wmoToCondition(71, true), 'snowy');
+    eq('wmo 77 → snowy',               wmoToCondition(77, true), 'snowy');
+    eq('wmo 80 → rainy',               wmoToCondition(80, true), 'rainy');
+    eq('wmo 82 → pouring',             wmoToCondition(82, true), 'pouring');
+    eq('wmo 85 → snowy',               wmoToCondition(85, true), 'snowy');
+    eq('wmo 95 → lightning',           wmoToCondition(95, true), 'lightning');
+    eq('wmo 96 → lightning-rainy',     wmoToCondition(96, true), 'lightning-rainy');
+    eq('wmo 99 → lightning-rainy',     wmoToCondition(99, true), 'lightning-rainy');
+    eq('wmo unmapped 7 night → clear', wmoToCondition(7, false), 'clear-night');
+
+    // ── Sensor heuristic (DESIGN-world Feature W) ──────────────────────────
+    eq('drizzle 0.5mm → rainy',        deriveFromSensors({ precipMmH: 0.5, tempC: 12, isDay: true }).condition, 'rainy');
+    eq('heavy 8mm → pouring',          deriveFromSensors({ precipMmH: 8, tempC: 12, isDay: true }).condition, 'pouring');
+    eq('cold precip → snowy',          deriveFromSensors({ precipMmH: 2, tempC: 0, isDay: true }).condition, 'snowy');
+    eq('cold heavy precip → snowy',    deriveFromSensors({ precipMmH: 9, tempC: -3, isDay: false }).condition, 'snowy');
+    eq('high wind dry → windy',        deriveFromSensors({ precipMmH: 0, windKmh: 45, isDay: true }).condition, 'windy');
+    eq('lightning dry → lightning',    deriveFromSensors({ lightning: true, isDay: true }).condition, 'lightning');
+    eq('lightning + rain → l-rainy',   deriveFromSensors({ lightning: true, precipMmH: 3, isDay: true }).condition, 'lightning-rainy');
+    eq('calm day → sunny',             deriveFromSensors({ precipMmH: 0, windKmh: 5, tempC: 20, isDay: true }).condition, 'sunny');
+    eq('calm night → clear-night',     deriveFromSensors({ precipMmH: 0, windKmh: 5, isDay: false }).condition, 'clear-night');
+    eq('below wind threshold → clear', deriveFromSensors({ windKmh: 30, isDay: true }).condition, 'sunny');
+    eq('no data → stale',              deriveFromSensors({ isDay: true }).stale, true);
+    eq('has data → not stale',         deriveFromSensors({ tempC: 20, isDay: true }).stale, false);
+
+    // ── Unit normalization ─────────────────────────────────────────────────
+    near('32°F → 0°C',        toCelsius(32, '°F'), 0);
+    near('212°F → 100°C',     toCelsius(212, 'fahrenheit'), 100);
+    near('300K → 26.85°C',    toCelsius(300, 'K'), 26.85, 1e-2);
+    near('°C passthrough',    toCelsius(18, '°C'), 18);
+    near('10 m/s → 36 km/h',  toKmh(10, 'm/s'), 36);
+    near('10 mph → 16.09',    toKmh(10, 'mph'), 16.09344, 1e-3);
+    near('10 kn → 18.52',     toKmh(10, 'kn'), 18.52, 1e-2);
+    near('km/h passthrough',  toKmh(25, 'km/h'), 25);
+    near('0.5 in/h → 12.7mm', toMmPerH(0.5, 'in/h'), 12.7);
+    near('mm/h passthrough',  toMmPerH(3, 'mm/h'), 3);
+
+    // ── Entity source: sunny↔clear-night re-gated by sun ───────────────────
+    eq('entity sunny @night → clear-night',
+       resolveWeatherEntity('sunny', { temperature: 20, temperature_unit: '°C' },
+         { 'sun.sun': { state: 'below_horizon', attributes: {} } }).condition, 'clear-night');
+    eq('entity clear-night @day → sunny',
+       resolveWeatherEntity('clear-night', {},
+         { 'sun.sun': { state: 'above_horizon', attributes: {} } }).condition, 'sunny');
+    eq('entity rainy passthrough',
+       resolveWeatherEntity('rainy', {}, {}).condition, 'rainy');
+    near('entity temp 50°F → 10°C',
+       resolveWeatherEntity('cloudy', { temperature: 50, temperature_unit: '°F' }, {}).tempC, 10);
+    eq('entity unavailable → stale',
+       resolveWeatherEntity('unavailable', {}, {}).stale, true);
+
+    // ── run + render ────────────────────────────────────────────────────────
+    const grid = document.getElementById('grid');
+    let pass = 0;
+    const fails = [];
+    for (const t of tests) {
+      if (t.ok) pass++; else fails.push(t.name);
+      const card = document.createElement('div');
+      card.className = 'card';
+      card.innerHTML = `<div class="row">
+        <span>${t.ok ? '<span class=pass>PASS</span>' : '<span class=fail>FAIL</span>'} ${t.name}</span>
+        <span>${t.detail}</span></div>`;
+      grid.appendChild(card);
+    }
+    const total = tests.length;
+    const allPass = pass === total;
+    const title = allPass ? `WEATHER PASS ${pass}/${total}` : `WEATHER FAIL ${pass}/${total} [${fails.join(',')}]`;
+    document.title = title;
+    const sum = document.getElementById('summary');
+    sum.textContent = title;
+    sum.className = allPass ? 'okbg' : 'badbg';
+  </script>
+</body>
+</html>

@@ -30,9 +30,14 @@ export interface BermudaDiscovery {
 }
 import type {
   Store, Floor, Sensor, ZonesLive, ObjectHalo, LerpSlot,
-  HassState, ConnStatus, DiscoveredDevice, Vec2, AvatarKind,
+  HassState, ConnStatus, DiscoveredDevice, Vec2, AvatarKind, WeatherConfig,
 } from './types.js';
 import { solvePosition, type ProxyObs } from './trilateration.js';
+import {
+  fetchOpenMeteo, geocodeZip, resolveWeatherEntity, deriveFromSensors,
+  toCelsius, toKmh, toMmPerH, type WeatherNow,
+} from './weather.js';
+import { isDay } from './time-of-day.js';
 
 // ── BLE trilateration output (runtime-only) ───────────────────────────────
 // One resolved BLE person/pet position for rendering. Not persisted — recomputed
@@ -165,6 +170,18 @@ export class Planner extends EventTarget {
   // from the solve; a device unheard-from for RETIRE stops rendering entirely.
   private static readonly BLE_STALE_MS = 30_000;
   private static readonly BLE_RETIRE_MS = 120_000;
+
+  // ── Weather (runtime-only; recomputed from the configured source) ─────────
+  // Normalized current weather. Chip + (later) 3D effects read this. Local
+  // sources (entity/sensors) recompute from state_changed; Open-Meteo polls.
+  weatherNow: WeatherNow | null = null;
+  private _weatherTimer: ReturnType<typeof setInterval> | null = null;
+  private _weatherInited = false;
+  private _weatherGeocoding = false;
+  private _weatherFetching = false;
+  private _weatherOkAt = 0;     // ms epoch of the last successful Open-Meteo fetch
+  private static readonly WEATHER_POLL_MS = 15 * 60 * 1000;
+  private static readonly WEATHER_STALE_MS = 45 * 60 * 1000;
 
   // Active furniture piece (last grabbed/dropped) — drives the 2D front-arrow
   // chevron. Runtime only.
@@ -365,6 +382,24 @@ export class Planner extends EventTarget {
       }
     }
 
+    // Weather (local sources): recompute when a bound weather/sensor entity
+    // changes, or on a full refresh. Open-Meteo runs on its own timer instead.
+    // Mutates weatherNow only — the emitConfig that follows on the slow path
+    // (these entities are slow-classified) repaints the chip + sidebar.
+    const w = this.store.weather;
+    if (w && w.source !== 'openmeteo') {
+      if (changedId === undefined || this._weatherEntityIds().includes(changedId)) {
+        this._recomputeLocalWeather(states);
+      }
+    }
+    // One-time weather setup on the first full state load (starts the Open-Meteo
+    // poll if that source is configured in the local cache). _loadFromHa may
+    // replace the config afterward and re-runs _reconfigureWeather itself.
+    if (!this._weatherInited && changedId === undefined) {
+      this._weatherInited = true;
+      this._reconfigureWeather();
+    }
+
     this.emitLive();
 
     const slow = changedId === undefined || this._isSlowEntity(changedId);
@@ -438,6 +473,7 @@ export class Planner extends EventTarget {
             customObjects:  remote.customObjects  ?? undefined,
             people:         remote.people         ?? undefined,
             bleShowUnknown: remote.bleShowUnknown ?? undefined,
+            weather:        remote.weather        ?? undefined,
           };
           // Reset transient view state to match the loaded store.
           this.activeMotionId = null;
@@ -456,6 +492,9 @@ export class Planner extends EventTarget {
         } finally {
           this._suppressHaSave = false;
         }
+        // Re-apply the weather source now that the authoritative config loaded
+        // (restarts / stops the Open-Meteo poll, recomputes local sources).
+        this._reconfigureWeather();
         this.emitConfig();
       } else {
         // HA is empty — promote the local cache to be the source of truth.
@@ -487,7 +526,23 @@ export class Planner extends EventTarget {
     // the sidebar's live readings re-render. Only entities actually bound on
     // the current floor qualify — a blanket sensor.* rule would emit config
     // for every sensor state change in HA.
-    return this.floor().envSensors.some(e => e.entity_id === id);
+    if (this.floor().envSensors.some(e => e.entity_id === id)) return true;
+    // Bound weather source entities are config-path too (chip + sidebar preview
+    // re-render on change). Only the specific bound ids qualify.
+    return this._weatherEntityIds().includes(id);
+  }
+
+  // Entity ids the current (local) weather source depends on. Empty for the
+  // Open-Meteo source (no HA entity) or when unconfigured.
+  private _weatherEntityIds(): string[] {
+    const w = this.store.weather;
+    if (!w) return [];
+    if (w.source === 'entity') return w.entityId ? [w.entityId] : [];
+    if (w.source === 'sensors') {
+      const s = w.sensors ?? {};
+      return [s.precip, s.windSpeed, s.temp, s.lightning].filter((x): x is string => !!x);
+    }
+    return [];
   }
 
   // Cheap occupancy refresh — runs on every state event so live data stays current.
@@ -1132,6 +1187,131 @@ export class Planner extends EventTarget {
     }
     dev.disabledCount = dev.scanners.filter(s => s.rangeEntityId && s.disabled).length;
     this.emitConfig();
+  }
+
+  // ── Weather ───────────────────────────────────────────────────────────────
+  // Mutate the weather config (creating a sensible default the first time),
+  // persist, re-apply the source, and repaint. The sidebar edits go through
+  // here so switching sources restarts / stops the Open-Meteo poll cleanly.
+  setWeather(mut: (w: WeatherConfig) => void): void {
+    if (!this.store.weather) {
+      this.store.weather = { source: 'openmeteo', chip: true, effects3d: true, affectLighting: true };
+    }
+    mut(this.store.weather);
+    this.save();
+    this._reconfigureWeather();
+    this.emitConfig();
+  }
+
+  // Force a fresh geocode of the configured zip (clears the cached lat/lon) and
+  // re-poll. Sidebar "Search" button.
+  async refreshWeatherLocation(): Promise<void> {
+    const w = this.store.weather;
+    if (!w) return;
+    w.lat = undefined; w.lon = undefined; w.placeLabel = undefined;
+    this.save();
+    this.emitConfig();
+    await this._pollOpenMeteo();
+  }
+
+  // (Re)apply the current weather source: (re)start or stop the Open-Meteo
+  // timer, or recompute a local source from current states. Idempotent.
+  private _reconfigureWeather(): void {
+    if (this._weatherTimer) { clearInterval(this._weatherTimer); this._weatherTimer = null; }
+    const w = this.store.weather;
+    if (!w) { this.weatherNow = null; return; }
+    if (w.source === 'openmeteo') {
+      void this._pollOpenMeteo();
+      this._weatherTimer = setInterval(() => void this._pollOpenMeteo(), Planner.WEATHER_POLL_MS);
+    } else {
+      this._recomputeLocalWeather(this.hass?.states ?? {});
+    }
+  }
+
+  // Recompute WeatherNow from a weather.* entity or the local station sensors.
+  // Pure read of `states` + weather.ts helpers; never touches the network.
+  private _recomputeLocalWeather(states: Record<string, HassState>): void {
+    const w = this.store.weather;
+    if (!w) { this.weatherNow = null; return; }
+    if (w.source === 'entity') {
+      const st = w.entityId ? states[w.entityId] : null;
+      if (!st) {
+        this.weatherNow = w.entityId
+          ? { condition: 'exceptional', tempC: null, windKmh: null, windBearing: null, isDay: isDay(states), stale: true }
+          : null;
+        return;
+      }
+      this.weatherNow = resolveWeatherEntity(st.state, st.attributes, states);
+    } else if (w.source === 'sensors') {
+      const s = w.sensors ?? {};
+      const read = (id?: string): { v: number; unit: string } | null => {
+        if (!id) return null;
+        const e = states[id];
+        if (!e) return null;
+        const v = parseFloat(e.state);
+        if (isNaN(v)) return null;
+        return { v, unit: String((e.attributes as Record<string, unknown>)?.unit_of_measurement ?? '') };
+      };
+      const p = read(s.precip), t = read(s.temp), wd = read(s.windSpeed);
+      const lightE = s.lightning ? states[s.lightning] : null;
+      this.weatherNow = deriveFromSensors({
+        precipMmH: p ? toMmPerH(p.v, p.unit) : null,
+        tempC: t ? toCelsius(t.v, t.unit) : null,
+        windKmh: wd ? toKmh(wd.v, wd.unit) : null,
+        lightning: lightE ? lightE.state === 'on' : false,
+        isDay: isDay(states),
+      });
+    }
+  }
+
+  // Poll Open-Meteo: resolve a location (cached lat/lon → geocode the zip →
+  // zone.home), fetch, and hold the last value on failure (marking it stale
+  // after WEATHER_STALE_MS). All network work is inside weather.ts try/catch —
+  // this never throws into the tick/RAF path.
+  private async _pollOpenMeteo(): Promise<void> {
+    const w = this.store.weather;
+    if (!w || w.source !== 'openmeteo') return;
+    let lat = w.lat, lon = w.lon;
+    // Geocode the zip once, then cache lat/lon/label via save() (no-op in kiosk).
+    if ((lat == null || lon == null) && w.zip && !this._weatherGeocoding) {
+      this._weatherGeocoding = true;
+      try {
+        const g = await geocodeZip(w.zip);
+        if (g && this.store.weather && this.store.weather.source === 'openmeteo') {
+          this.store.weather.lat = lat = g.lat;
+          this.store.weather.lon = lon = g.lon;
+          this.store.weather.placeLabel = g.label;
+          this.save();
+          this.emitConfig();
+        }
+      } catch { /* geocode failure — try zone.home below */ }
+      finally { this._weatherGeocoding = false; }
+    }
+    // Fall back to HA's zone.home coordinates when no zip / geocode result.
+    if (lat == null || lon == null) {
+      const home = this.hass?.states?.['zone.home'];
+      const a = (home?.attributes ?? {}) as Record<string, unknown>;
+      const hlat = parseFloat(String(a.latitude)), hlon = parseFloat(String(a.longitude));
+      if (isFinite(hlat) && isFinite(hlon)) { lat = hlat; lon = hlon; }
+    }
+    if (lat == null || lon == null) return;   // no location resolvable yet
+    if (this._weatherFetching) return;
+    this._weatherFetching = true;
+    try {
+      const now = await fetchOpenMeteo(lat, lon);
+      if (now) {
+        now.label = w.placeLabel ?? now.label;
+        this.weatherNow = now;
+        this._weatherOkAt = Date.now();
+        this.emitConfig();
+      } else if (this.weatherNow && Date.now() - this._weatherOkAt > Planner.WEATHER_STALE_MS && !this.weatherNow.stale) {
+        // Offline / failing past the freshness window — keep the last value but mark it stale.
+        this.weatherNow = { ...this.weatherNow, stale: true };
+        this.emitConfig();
+      }
+    } finally {
+      this._weatherFetching = false;
+    }
   }
 
   // ── View ────────────────────────────────────────────────────────────────

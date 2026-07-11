@@ -9,9 +9,22 @@ import type { Scene3D, ScenePreset, HassState } from './types.js';
 
 type States = Record<string, HassState> | null | undefined;
 
-function sunElevation(states: States): number {
+export function sunElevation(states: States): number {
   const sun = states?.['sun.sun'];
   return sun ? parseFloat(String((sun.attributes as Record<string, unknown>)?.elevation)) : NaN;
+}
+
+// Is the sun up? The single source of truth for sunny ↔ clear-night gating
+// (weather) and any other day/night decision. Prefers HA's sun.sun state
+// string, then its elevation, then the local clock (07:00–18:59 = day).
+export function isDay(states: States): boolean {
+  const sun = states?.['sun.sun'];
+  if (sun?.state === 'above_horizon') return true;
+  if (sun?.state === 'below_horizon') return false;
+  const elev = sunElevation(states);
+  if (isFinite(elev)) return elev > 0;
+  const h = new Date().getHours();
+  return h >= 7 && h < 19;
 }
 
 // Resolve the lighting preset for auto modes. 'clock' prefers HA's sun.sun

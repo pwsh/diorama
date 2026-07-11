@@ -9,6 +9,7 @@ import './topbar.js';
 import './sidebar.js';
 import './canvas-2d.js';
 import './three-view.js';
+import './weather-chip.js';
 import './modals.js';
 import type { AuthScreen } from './auth-screen.js';
 import type { FloorModal, EntityPicker, LightConfig, MediaConfig, SettingsDrawer } from './modals.js';
@@ -155,6 +156,15 @@ export class App extends LitElement {
       else this._entPicker?.show(domain ?? '', onPick);
     });
     this.addEventListener('open-settings', () => this._settings?.show());
+    // Weather chip click → reveal the sidebar Weather section (edit mode only).
+    this.addEventListener('open-weather', () => {
+      const p = this._planner;
+      if (!p || p.uiMode !== 'edit') return;
+      if (!p.sidebarOpen) p.toggleSidebar();
+      requestAnimationFrame(() =>
+        document.getElementById('diorama-weather-section')
+          ?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+    });
   }
 
   private _launch(url: string, token: string): void {
@@ -195,6 +205,9 @@ export class App extends LitElement {
               <diorama-canvas-2d .planner=${p}></diorama-canvas-2d>
             </div>
             ${p.view === '3d' ? html`<diorama-three-view .planner=${p}></diorama-three-view>` : nothing}
+            <!-- Weather chip overlays the shared canvas area so it shows in
+                 both 2D and 3D without a duplicate mount / duplicate interval. -->
+            <diorama-weather-chip .planner=${p}></diorama-weather-chip>
             <diorama-zone-edit-bar .planner=${p}></diorama-zone-edit-bar>
             <div style="position:absolute;bottom:10px;right:10px;color:var(--text-dim);font-size:11px;
                         padding:2px 6px;pointer-events:none;
