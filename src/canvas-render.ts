@@ -128,11 +128,12 @@ export function drawAll(ctx: CanvasRenderingContext2D, p: Planner, view: View,
   ctx.clearRect(0, 0, c.width, c.height);
   // 2D layer flags (store.layers2d). Absent flag = layer on, except
   // `activity` which defaults off — so an old store renders the classic
-  // full view. Walls / doors / windows always draw: they ARE the floorplan.
+  // full view. Doors / windows always draw (placed relative to walls but
+  // still inspectable when the Walls layer is off).
   const L = p.store.layers2d ?? {};
   const on = (v: boolean | undefined) => v !== false;
   drawFloor(ctx, p, view, on(L.bg) ? bgImg : null);
-  drawWalls(ctx, p, view);
+  if (on(L.walls)) drawWalls(ctx, p, view);
   drawRooms(ctx, p, view);
   drawDoors(ctx, p, view);
   drawWindows(ctx, p, view);

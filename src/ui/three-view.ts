@@ -328,7 +328,7 @@ export class ThreeView extends LitElement {
       const effPreset = this._effectivePreset(scBase, states);
       const scMerged = { ...scBase, ...(f.look3d ?? {}), preset: effPreset };
       const keyFloor = `${p.configRev}|${effPreset}|` +
-        `${layers.furniture !== false}|${layers.bg !== false}`;
+        `${layers.furniture !== false}|${layers.bg !== false}|${layers.walls !== false}`;
       if (keyFloor !== this._keyFloor) {
         this._keyFloor = keyFloor;
         // customObjects edits bump configRev (via emitConfig) → keyFloor flips

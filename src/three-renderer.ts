@@ -14,7 +14,7 @@ import {
   ENV_KINDS, envKindOf, envColor, envValueText, envHeight, envScale,
 } from './geometry.js';
 import type { Door, Window as WindowType, EnvSensor, ObjectRecipe, ActivityKind } from './types.js';
-import { wallCutsForSegment, closedWallLoops, wallKind, WALL_KINDS, furnitureLocalToWorld, furnitureWorldToLocal, pointInPolygon as pip, centroid, loopContaining, resolveRoomForPoint } from './geometry.js';
+import { wallCutsForSegment, closedWallLoops, wallKind, WALL_KINDS, furnitureLocalToWorld, furnitureWorldToLocal, pointInPolygon as pip, centroid, loopContaining, resolveRoomForPoint, intersectLoopWithRect, polygonArea } from './geometry.js';
 
 export interface ZoneWorld { vertices: Vec2[]; color: number; occupied: boolean; }
 export interface HaloWorld { x: number; y: number; radius: number; occupied: boolean; }
@@ -1055,23 +1055,37 @@ export class ThreeDRenderer {
     const loops = closedWallLoops(f.walls ?? []);
     const showFurniture = layers?.furniture !== false;
     const showBg = layers?.bg !== false;
+    const showWalls = layers?.walls !== false;
     // Stairs sunk below the floor (negative elevation) cut a stairwell
     // opening so the descending flight is visible from above. No holes when
     // furniture (incl. stairs) is layer-hidden.
     const wellCuts = (showFurniture ? (f.furniture ?? []) : []).filter(fu =>
       (fu.kind === 'stairs' || fu.kind === 'stairs_half' || fu.kind === 'stair_landing') &&
       (fu.elevation ?? 0) < 0);
-    const wellPath = (fu: Furniture): { path: THREE.Path; center: { x: number; y: number } } => {
-      const path = new THREE.Path();
+    // World-space corners of a well rect, inset 3 mm so a clipped hole edge
+    // never lands exactly coincident with a loop boundary (earcut degenerates
+    // on coincident edges).
+    const wellRectWorld = (fu: Furniture): Vec2[] => {
       const cs: [number, number][] = [[-1, -1], [1, -1], [1, 1], [-1, 1]];
-      cs.forEach(([sx, sy], i) => {
-        const lw = furnitureLocalToWorld(fu.rotation, sx * fu.w / 2, sy * fu.h / 2);
-        const px = f.w / 2 - (fu.x + lw.x), py = f.d / 2 - (fu.y + lw.y);
-        if (i === 0) path.moveTo(px, py); else path.lineTo(px, py);
+      return cs.map(([sx, sy]) => {
+        const lw = furnitureLocalToWorld(fu.rotation, sx * (fu.w / 2 - 3), sy * (fu.h / 2 - 3));
+        return { x: fu.x + lw.x, y: fu.y + lw.y };
+      });
+    };
+    // A world-space polygon → THREE.Path in floor-shape coords. three.js
+    // ShapeGeometry re-winds contour + holes itself (ShapeUtils.isClockWise),
+    // so the source winding here doesn't matter — only that the hole stays
+    // INSIDE its shape, which the caller guarantees by clipping first.
+    const scenePathFor = (poly: Vec2[]): THREE.Path => {
+      const path = new THREE.Path();
+      poly.forEach((pt, i) => {
+        const sx = f.w / 2 - pt.x, sy = f.d / 2 - pt.y;
+        if (i === 0) path.moveTo(sx, sy); else path.lineTo(sx, sy);
       });
       path.closePath();
-      return { path, center: { x: fu.x, y: fu.y } };
+      return path;
     };
+    const MIN_HOLE_AREA = 1e4;  // 0.01 m² in mm² — ignore slivers
     const floorMat = this._mat({
       color: floorColor, map: floorTex ?? null,
       side: THREE.DoubleSide, roughness: 0.9, metalness: 0.0,
@@ -1100,10 +1114,15 @@ export class ThreeDRenderer {
           if (i === 0) shape.moveTo(sx, sy); else shape.lineTo(sx, sy);
         });
         shape.closePath();
-        // Stairwell holes whose center falls inside this loop.
+        // Stairwell holes: clip each well rect to THIS loop so a well that
+        // straddles the boundary only cuts the part actually over this floor
+        // patch — a raw rect poking outside the shape makes earcut produce the
+        // diagonal floor shards the bug report showed.
         for (const fu of wellCuts) {
-          const { path, center } = wellPath(fu);
-          if (pip(center.x, center.y, loop)) shape.holes.push(path);
+          const clipped = intersectLoopWithRect(loop, wellRectWorld(fu));
+          if (clipped && Math.abs(polygonArea(clipped)) >= MIN_HOLE_AREA) {
+            shape.holes.push(scenePathFor(clipped));
+          }
         }
         const mesh = new THREE.Mesh(new THREE.ShapeGeometry(shape), floorMat);
         mesh.rotation.x = -Math.PI / 2;
@@ -1119,7 +1138,17 @@ export class ThreeDRenderer {
       shape.lineTo(-f.w / 2, -f.d / 2);
       shape.lineTo(f.w / 2, -f.d / 2);
       shape.closePath();
-      for (const fu of wellCuts) shape.holes.push(wellPath(fu).path);
+      // Clip each well to the floor rect (world [0,f.w]×[0,f.d]); a well fully
+      // inside comes back unchanged, one poking past an edge gets trimmed.
+      const floorRect: Vec2[] = [
+        { x: 0, y: 0 }, { x: f.w, y: 0 }, { x: f.w, y: f.d }, { x: 0, y: f.d },
+      ];
+      for (const fu of wellCuts) {
+        const clipped = intersectLoopWithRect(floorRect, wellRectWorld(fu));
+        if (clipped && Math.abs(polygonArea(clipped)) >= MIN_HOLE_AREA) {
+          shape.holes.push(scenePathFor(clipped));
+        }
+      }
       const mesh = new THREE.Mesh(new THREE.ShapeGeometry(shape), floorMat);
       mesh.rotation.x = -Math.PI / 2;
       mesh.receiveShadow = true;
@@ -1177,7 +1206,7 @@ export class ThreeDRenderer {
       emissive: 0x444444, emissiveIntensity: 0.1,
       transparent: true, opacity: 0.45, side: THREE.DoubleSide, depthWrite: false,
     });
-    for (const wall of f.walls) {
+    for (const wall of showWalls ? f.walls : []) {
       if (wall.points.length < 2) continue;
       const kind = wallKind(wall);
       if (kind === 'invisible') continue;  // planning boundary only
@@ -1349,7 +1378,8 @@ export class ThreeDRenderer {
     }
 
     // Rebuild the humanoid navigation grid from the same walls + furniture.
-    this._buildNav(f, showFurniture ? undefined : null, customObjects);
+    // Hidden walls don't block (consistent with hidden furniture).
+    this._buildNav(f, showFurniture ? undefined : null, customObjects, showWalls);
   }
 
   // Tag a wall mesh for the foreground-cutaway fader. Records the segment
@@ -1515,7 +1545,7 @@ export class ThreeDRenderer {
   // `furnitureOn` mirrors the layer gate: pass `null` to treat furniture as
   // layer-hidden (don't block on it), else `undefined`.
   private _buildNav(f: Floor, furnitureOn: null | undefined,
-                    customObjects?: ObjectRecipe[]): void {
+                    customObjects?: ObjectRecipe[], wallsOn = true): void {
     const cell = 150;
     const PERSON_R = 170;
     const nx = Math.max(1, Math.ceil(f.w / cell));
@@ -1565,7 +1595,7 @@ export class ThreeDRenderer {
     // railing / half walls are full-height at body level → they block.
     const WALL_HALF = 100 / 2;
     const rad = WALL_HALF + PERSON_R;
-    for (const wall of f.walls ?? []) {
+    for (const wall of wallsOn ? (f.walls ?? []) : []) {
       if (wall.points.length < 2) continue;
       if (wallKind(wall) === 'invisible') continue;
       for (let i = 0; i < wall.points.length - 1; i++) {

@@ -1792,6 +1792,7 @@ export class Sidebar extends LitElement {
     const presets = p.store.layerPresets2d ?? [];
     const defs: { key: keyof Layers2D; label: string }[] = [
       { key: 'bg', label: 'Background image' },
+      { key: 'walls', label: 'Walls' },
       { key: 'furniture', label: 'Furniture' },
       { key: 'lights', label: 'Light / switch markers' },
       { key: 'sensors', label: 'mmWave sensors' },
@@ -1803,7 +1804,7 @@ export class Sidebar extends LitElement {
     ];
     return html`
       <div class="section">
-        <h3>2D Layers</h3>
+        <h3>Layers</h3>
         <div class="row"><label>Preset</label>
           <select @change=${(e: Event) => {
                     const el = e.target as HTMLSelectElement;

@@ -508,6 +508,119 @@ export function furnitureCorners(piece: { x: number; y: number; w: number; h: nu
   return out;
 }
 
+// ── Furniture ↔ wall collision (keep pieces off wall slabs) ───────────────
+// Walls are 100 mm thick, so each face sits 50 mm off the polyline axis.
+// A dropped / moved piece whose rotated footprint straddles a wall segment is
+// pushed out perpendicular to that segment so its near edge sits flush against
+// the wall face (+5 mm clearance). The same push also acts "magnetically":
+// when the piece isn't overlapping but its near edge is within 150 mm of the
+// wall face, it snaps flush. Doors/windows are ON walls and never call this;
+// invisible walls (planning boundaries) are skipped. Two passes resolve the
+// common case where clearing one wall creates a small overlap with a
+// perpendicular neighbour. Mutates piece.x / piece.y; returns whether it moved.
+const WALL_FACE_MM = 50;      // half of the 100 mm wall thickness
+const WALL_CLEAR_MM = 5;      // small gap so the edge isn't exactly coincident
+const WALL_MAGNET_MM = 150;   // pull-to-flush range measured from the wall face
+
+export function resolveFurnitureWallCollision(
+  piece: { x: number; y: number; w: number; h: number; rotation?: number },
+  walls: { points: Vec2[]; kind?: WallKind }[],
+  passes = 2,
+): boolean {
+  const FLUSH = WALL_FACE_MM + WALL_CLEAR_MM;   // 55: resting distance of the near edge
+  const REACH = WALL_FACE_MM + WALL_MAGNET_MM;  // 200: act when the near edge is closer than this
+  let movedAny = false;
+  for (let pass = 0; pass < passes; pass++) {
+    let passMoved = false;
+    for (const wall of walls) {
+      if (wallKind(wall) === 'invisible') continue;
+      const pts = wall.points;
+      for (let i = 0; i < pts.length - 1; i++) {
+        const a = pts[i], b = pts[i + 1];
+        const dx = b.x - a.x, dy = b.y - a.y;
+        const len = Math.hypot(dx, dy);
+        if (len < 1) continue;
+        const ux = dx / len, uy = dy / len;   // along the wall
+        const nx = -uy, ny = ux;              // wall normal (unit)
+        const corners = furnitureCorners(piece);
+        let pmin = Infinity, pmax = -Infinity, tmin = Infinity, tmax = -Infinity;
+        for (const c of corners) {
+          const rx = c.x - a.x, ry = c.y - a.y;
+          const pp = rx * nx + ry * ny;   // perp offset from axis
+          const tt = rx * ux + ry * uy;   // distance along the segment
+          if (pp < pmin) pmin = pp;
+          if (pp > pmax) pmax = pp;
+          if (tt < tmin) tmin = tt;
+          if (tt > tmax) tmax = tt;
+        }
+        // No overlap with the segment span along the wall → this wall's face
+        // isn't beside the piece; ignore it entirely.
+        if (tmax <= 0 || tmin >= len) continue;
+        // Which side is the piece's center on? That side wins (push outward).
+        const cpp = (piece.x - a.x) * nx + (piece.y - a.y) * ny;
+        if (cpp >= 0) {
+          // Near edge is pmin; act if it's overlapping the slab or within magnet
+          // range of the +face, then set it flush at +FLUSH.
+          if (pmin < REACH) {
+            const delta = FLUSH - pmin;
+            piece.x += nx * delta; piece.y += ny * delta;
+            passMoved = true; movedAny = true;
+          }
+        } else {
+          // Symmetric on the − side: near edge is pmax.
+          if (pmax > -REACH) {
+            const delta = -FLUSH - pmax;
+            piece.x += nx * delta; piece.y += ny * delta;
+            passMoved = true; movedAny = true;
+          }
+        }
+      }
+    }
+    if (!passMoved) break;
+  }
+  if (movedAny) { piece.x = Math.round(piece.x); piece.y = Math.round(piece.y); }
+  return movedAny;
+}
+
+// Clip a simple polygon `loop` against the convex quad `rect` (Sutherland–
+// Hodgman, rect as the clipper). Returns the intersection polygon (world mm),
+// or null when the overlap is empty. Exact for a convex rect clipper against
+// any simple subject — used to trim a stairwell well-rect to the part that
+// actually lies inside a given floor loop before punching it as a hole.
+export function intersectLoopWithRect(loop: Vec2[], rect: Vec2[]): Vec2[] | null {
+  if (loop.length < 3 || rect.length < 3) return null;
+  // Orient the rect CCW so "inside" is consistently the left of each edge.
+  // NOTE: polygonArea here returns the NEGATIVE of the standard shoelace area,
+  // so a CCW ring yields a negative value — reverse when it's positive (CW).
+  const clip = polygonArea(rect) > 0 ? [...rect].reverse() : rect;
+  let output: Vec2[] = loop.slice();
+  for (let e = 0; e < clip.length; e++) {
+    if (output.length === 0) break;
+    const A = clip[e], B = clip[(e + 1) % clip.length];
+    const ex = B.x - A.x, ey = B.y - A.y;    // edge direction
+    // Signed side: >0 means left of A→B (inside for a CCW clipper).
+    const side = (p: Vec2) => ex * (p.y - A.y) - ey * (p.x - A.x);
+    const input = output;
+    output = [];
+    for (let i = 0; i < input.length; i++) {
+      const cur = input[i], prev = input[(i + input.length - 1) % input.length];
+      const dCur = side(cur), dPrev = side(prev);
+      const curIn = dCur >= 0, prevIn = dPrev >= 0;
+      if (curIn) {
+        if (!prevIn) {
+          const t = dPrev / (dPrev - dCur);
+          output.push({ x: prev.x + t * (cur.x - prev.x), y: prev.y + t * (cur.y - prev.y) });
+        }
+        output.push(cur);
+      } else if (prevIn) {
+        const t = dPrev / (dPrev - dCur);
+        output.push({ x: prev.x + t * (cur.x - prev.x), y: prev.y + t * (cur.y - prev.y) });
+      }
+    }
+  }
+  return output.length >= 3 ? output : null;
+}
+
 // Hex (#rgb / #rrggbb) → {r,g,b} 0..255. Returns null on parse failure.
 export function hexToRgb(hex: string): { r: number; g: number; b: number } | null {
   let h = hex.trim().replace('#', '');

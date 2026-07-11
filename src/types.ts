@@ -340,6 +340,7 @@ export interface SavedView3D {
 // absent/partial object renders like the classic full view.
 export interface Layers2D {
   bg?: boolean;
+  walls?: boolean;      // wall bodies (2D strokes + 3D meshes); doors/windows stay
   furniture?: boolean;
   lights?: boolean;     // light + switch fixture markers
   sensors?: boolean;    // mmWave bodies + coverage wedges
