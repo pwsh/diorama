@@ -1054,6 +1054,20 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
   }
 }
 
+// Dblclick on a TV / wall_tv furniture piece with a bound entity → open the
+// media control modal. Returns true if it consumed the event. Unbound TVs (and
+// non-TV furniture) return false so the caller keeps its normal handling.
+function dblClickMediaFurniture(p: Planner, canvas: HTMLCanvasElement, mm: Vec2): boolean {
+  const fh = hitFurniture(p, mm);
+  if (!fh) return false;
+  const fu = fh.item;
+  if ((fu.kind !== 'tv' && fu.kind !== 'wall_tv') || !fu.entity_id) return false;
+  canvas.dispatchEvent(new CustomEvent('open-media-config', {
+    bubbles: true, composed: true, detail: { entityId: fu.entity_id },
+  }));
+  return true;
+}
+
 export function onCanvasDblClick(p: Planner, canvas: HTMLCanvasElement, view: View, e: MouseEvent): void {
   const mm = pxToMm(canvas, view, e);
   if (p.uiMode === 'view') return;
@@ -1068,7 +1082,10 @@ export function onCanvasDblClick(p: Planner, canvas: HTMLCanvasElement, view: Vi
           bubbles: true, composed: true, detail: { entityId: it.entity_id },
         }));
       }
+      return;
     }
+    // Bound TV furniture → media controls.
+    if (dblClickMediaFurniture(p, canvas, mm)) return;
     return;
   }
   if (p.editZone) { finishZoneEdit(p); return; }
@@ -1099,6 +1116,9 @@ export function onCanvasDblClick(p: Planner, canvas: HTMLCanvasElement, view: Vi
     }));
     return;
   }
+  // Bound TV furniture → media controls (same modal as kiosk). Non-TV
+  // furniture falls through to the existing sensor/wall dblclick behavior.
+  if (dblClickMediaFurniture(p, canvas, mm)) return;
   const fx = hitFixture(p, mm, Math.max(250, 18 / Math.max(view.scale, 1e-9)));
   if (fx) {
     const arr = fx.kind === 'light' ? p.floor().lights : p.floor().switches;

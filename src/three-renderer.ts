@@ -53,6 +53,13 @@ interface SitSpot {
   hostTopY?: number;              // world-Y of the eat/work host's tabletop
                                   // (def.ht + host elevation) — drives seated
                                   // arm IK so hands rest ON the surface
+  host?: { x: number; y: number; w: number; h: number; rotation?: number };
+                                  // the ADJACENT eat/work host's world footprint
+                                  // — lets the seated root clamp keep the torso
+                                  // outside the slab even for pre-constraint /
+                                  // nudged-deep seats. Unset when the seat is
+                                  // its own eat/work surface (clamping outside
+                                  // one's own footprint would break sitting).
 }
 
 // A contextual-activity anchor collected from furniture whose def carries an
@@ -261,8 +268,8 @@ export class ThreeDRenderer {
   private _lastAnimT = 0;   // performance.now()/1000 of the previous _animate frame
   private _ZONE_H = 305;  // 1 ft — low outlines that don't wall off the room
   private _OBJ_H = 900;
-  private _onFixtureClick: ((info: { kind: 'light' | 'switch'; entity_id: string | null; fixtureId: string }) => void) | null = null;
-  private _onFixtureDblClick: ((info: { kind: 'light' | 'switch'; entity_id: string | null; fixtureId: string }) => void) | null = null;
+  private _onFixtureClick: ((info: { kind: 'light' | 'switch' | 'media'; entity_id: string | null; fixtureId: string }) => void) | null = null;
+  private _onFixtureDblClick: ((info: { kind: 'light' | 'switch' | 'media'; entity_id: string | null; fixtureId: string }) => void) | null = null;
   private _raycaster = new THREE.Raycaster();
   // Per-target humanoid rigs, persisted across frames so we can carry
   // walk-cycle phase + smoothed body facing.
@@ -274,6 +281,11 @@ export class ThreeDRenderer {
   private _aiState: Record<string, AiState> = {};
   // Seats collected from the current floor's sittable furniture.
   private _sitSpots: SitSpot[] = [];
+  // Bound media furniture (tv / wall_tv with an entity) collected during
+  // updateFloor so _raycastFixture can make them clickable like lights without
+  // raycasting the entire (heavy) floor group. Each entry is the furniture
+  // group carrying userData.kind === 'media'.
+  private _mediaClickables: THREE.Group[] = [];
   // Contextual-activity anchors collected from the current floor's furniture.
   private _activityAnchors: ActivityAnchor[] = [];
   // TVs grouped by the room they sit in — the watch_tv seated activity checks
@@ -497,15 +509,15 @@ export class ThreeDRenderer {
     this._animate();
   }
 
-  onFixtureClick(fn: (info: { kind: 'light' | 'switch'; entity_id: string | null; fixtureId: string }) => void): void {
+  onFixtureClick(fn: (info: { kind: 'light' | 'switch' | 'media'; entity_id: string | null; fixtureId: string }) => void): void {
     this._onFixtureClick = fn;
   }
-  onFixtureDblClick(fn: (info: { kind: 'light' | 'switch'; entity_id: string | null; fixtureId: string }) => void): void {
+  onFixtureDblClick(fn: (info: { kind: 'light' | 'switch' | 'media'; entity_id: string | null; fixtureId: string }) => void): void {
     this._onFixtureDblClick = fn;
   }
 
   private _raycastFixture(clientX: number, clientY: number):
-      { kind: 'light' | 'switch'; entity_id: string | null; fixtureId: string } | null {
+      { kind: 'light' | 'switch' | 'media'; entity_id: string | null; fixtureId: string } | null {
     if (!this._renderer || !this._camera) return null;
     const rect = this._renderer.domElement.getBoundingClientRect();
     const ndc = new THREE.Vector2(
@@ -516,15 +528,21 @@ export class ThreeDRenderer {
     // Recurse from the lightGroup itself so all descendants are tested in one
     // call (avoids edge cases where iterating children misses deeply nested
     // meshes).
-    // Layer-hidden lights are not click targets.
-    if (!this._lightGroup.visible) return null;
-    const hits = this._raycaster.intersectObject(this._lightGroup, true);
+    // Candidate roots: the light group (layer-hidden lights are not click
+    // targets) plus every bound media-furniture group. intersectObjects sorts
+    // hits by distance across all roots, so a nearer light beats a TV behind it
+    // and vice-versa.
+    const roots: THREE.Object3D[] = [];
+    if (this._lightGroup.visible) roots.push(this._lightGroup);
+    for (const g of this._mediaClickables) roots.push(g);
+    if (!roots.length) return null;
+    const hits = this._raycaster.intersectObjects(roots, true);
     for (const h of hits) {
       // Walk up to find the first ancestor that carries our userData tag.
       let obj: THREE.Object3D | null = h.object;
       while (obj) {
         const ud = obj.userData;
-        if (ud && (ud.kind === 'light' || ud.kind === 'switch')) {
+        if (ud && (ud.kind === 'light' || ud.kind === 'switch' || ud.kind === 'media')) {
           return { kind: ud.kind, entity_id: ud.entity_id ?? null, fixtureId: String(ud.fixtureId) };
         }
         obj = obj.parent;
@@ -756,6 +774,7 @@ export class ThreeDRenderer {
     this._humanoids = {};
     this._aiState = {};
     this._sitSpots = [];
+    this._mediaClickables = [];
     this._activityAnchors = [];
     this._tvsByRoom = {};
     this._beds = [];
@@ -1281,6 +1300,7 @@ export class ThreeDRenderer {
     // sofas / beds) maps to local -Z after the X-mirror in `_w`, so backrests
     // get placed at child.position.z = -depth/2.
     this._sitSpots = [];
+    this._mediaClickables = [];
     this._activityAnchors = [];
     this._tvsByRoom = {};
     this._beds = [];
@@ -1292,6 +1312,13 @@ export class ThreeDRenderer {
       this._shadowFlags(grp);
       this._floorGroup.add(grp);
       const def = resolveFurnitureDef(fu, customObjects);
+      // Bound TVs become clickable like light fixtures: tag the group so the
+      // raycaster's parent-walk finds the media binding, and register it in the
+      // dedicated clickable list (raycasting all of _floorGroup would be heavy).
+      if ((fu.kind === 'tv' || fu.kind === 'wall_tv') && fu.entity_id) {
+        grp.userData = { ...grp.userData, kind: 'media', entity_id: fu.entity_id, fixtureId: fu.id };
+        this._mediaClickables.push(grp);
+      }
       // Stairs and landings are walkable terrain for humanoid targets.
       if (fu.kind === 'stairs' || fu.kind === 'stairs_half' || fu.kind === 'stair_landing') {
         this._terrain.push({
@@ -1315,9 +1342,12 @@ export class ThreeDRenderer {
         // Tabletop height of the eat/work host, so the seated arm IK can rest
         // the hands ON the surface (Part B). Set only for eat/work seats.
         let hostTopY: number | undefined;
+        // Adjacent host's world footprint — the seated root clamps outside it
+        // so a too-deep chair can't bury the torso in the slab.
+        let hostRef: SitSpot['host'];
         if (hostActivity === 'eat_at_table' || hostActivity === 'work_at_desk') {
           // Seat authored as its own eat/work surface (custom recipe) — the top
-          // is this piece's own def.ht.
+          // is this piece's own def.ht. No host clamp (own footprint).
           hostTopY = def.ht + (fu.elevation ?? 0);
         } else if (!hostActivity) {
           for (const host of f.furniture) {
@@ -1329,6 +1359,7 @@ export class ThreeDRenderer {
             if (Math.abs(l.x) <= host.w / 2 + 400 && Math.abs(l.y) <= host.h / 2 + 400) {
               hostActivity = ha;
               hostTopY = hdef.ht + (host.elevation ?? 0);
+              hostRef = { x: host.x, y: host.y, w: host.w, h: host.h, rotation: host.rotation };
               break;
             }
           }
@@ -1341,6 +1372,7 @@ export class ThreeDRenderer {
           roomId,
           hostActivity,
           hostTopY,
+          host: hostRef,
         });
       }
       // Pieces whose def carries an `activity` register a contextual anchor
@@ -3332,14 +3364,22 @@ export class ThreeDRenderer {
             }
             if (isOn) {
               // Short wash down the wall to the floor in front of the plate.
+              // Wash LENGTH must stay positive: at a NEGATIVE fixture height
+              // (sunken stairway) `bodyY` fed straight into CylinderGeometry
+              // inverted the cone (wide end up) and positioned it ABOVE the
+              // plate, painting a V-shaped glow up the shaft wall to y≈0 —
+              // the "step light points up" bug. A sunken plate has no floor
+              // at y=0 below it, so it gets a fixed short downward wash to
+              // the treads instead.
+              const washH = bodyY > 0 ? bodyY : 500;
               const wash2 = new THREE.Mesh(
-                new THREE.CylinderGeometry(70, Math.min(500, lr * 0.6), bodyY, 14, 1, true),
+                new THREE.CylinderGeometry(70, Math.min(500, lr * 0.6), washH, 14, 1, true),
                 new THREE.MeshBasicMaterial({
                   color: color.getHex(), transparent: true,
                   opacity: Math.min(0.16, 0.08 * intensity),
                   side: THREE.DoubleSide, depthWrite: false,
                 }));
-              wash2.position.set(0, -bodyY / 2, -90);
+              wash2.position.set(0, -washH / 2, -90);
               g.add(wash2);
             }
             break;
@@ -3566,19 +3606,28 @@ export class ThreeDRenderer {
         const yaw = lightRotation(l) * Math.PI / 180;
         const fdx = Math.sin(yaw), fdz = -Math.cos(yaw);
         if (kind === 'step') {
-          // Embedded in a wall / stair edge: a ~155° cone from the FRONT only
-          // so light never bleeds behind the wall. Aimed along the fixture
-          // front, tilted ~35° down to wash the tread below. The SpotLight's
-          // .target must live in the scene graph — parent it into _lightGroup
-          // too so _clearGroup disposes both on the next rebuild.
-          const spot = new THREE.SpotLight(color.getHex(), li, dist, 1.35, 0.6, 1.5);
-          spot.position.set(p.x, p.y - 50, p.z);
-          const tilt = 35 * Math.PI / 180, ch = Math.cos(tilt), D = 1500;
+          // Embedded in a wall / stair edge: a forward cone only, so light
+          // never bleeds behind the wall — AND never above the fixture. The
+          // cone half-angle (57°) plus the 60° downward tilt keep the cone's
+          // upper edge at ~horizontal: the previous 155°/35° combo threw its
+          // upper edge 42° ABOVE horizontal, which painted the opposite
+          // stairwell wall up near floor level when the fixture sat at a
+          // negative height ("light points up at the floor" bug). The
+          // SpotLight's .target must live in the scene graph — parent it
+          // into _lightGroup too so _clearGroup disposes both on rebuild.
+          const spot = new THREE.SpotLight(color.getHex(), li, dist, 1.0, 0.5, 1.5);
+          // Origin sits 120 mm out along the FRONT so the wall the plate is
+          // flush-mounted in is never between the light and the treads (shadow
+          // maps are off — an origin inside/behind the wall slab would blast
+          // the slab's near face at point-blank range instead).
+          const ox = p.x + fdx * 120, oz = p.z + fdz * 120;
+          spot.position.set(ox, p.y - 50, oz);
+          const tilt = 60 * Math.PI / 180, ch = Math.cos(tilt), D = 1500;
           const tgt = new THREE.Object3D();
           tgt.position.set(
-            p.x + fdx * ch * D,
+            ox + fdx * ch * D,
             (p.y - 50) - Math.sin(tilt) * D,
-            p.z + fdz * ch * D,
+            oz + fdz * ch * D,
           );
           this._lightGroup.add(tgt);
           spot.target = tgt;
@@ -4248,16 +4297,33 @@ export class ThreeDRenderer {
       // body-local −Z (forward) — see the humanoid section in CLAUDE.md. Angles
       // clamped to sane ranges (shoulder 0.2..1.4, elbow 0.2..2.2).
       const tableArmIK = (handY: number): { sh: number; el: number } => {
+        const cl = (v: number) => Math.max(-1, Math.min(1, v));
         const down = shoulderWorldY - handY;            // vertical drop shoulder→hand
         let d = Math.hypot(TABLE_ARM_FWD, down);
         d = Math.max(Math.abs(ARM_L1 - ARM_L2) + 1, Math.min(ARM_L1 + ARM_L2 - 1, d));
-        const cl = (v: number) => Math.max(-1, Math.min(1, v));
         const alpha = Math.atan2(TABLE_ARM_FWD, down);  // target dir from +down axis
         const beta = Math.acos(cl((d * d + ARM_L1 * ARM_L1 - ARM_L2 * ARM_L2) / (2 * ARM_L1 * d)));
         const gamma = Math.acos(cl((ARM_L1 * ARM_L1 + ARM_L2 * ARM_L2 - d * d) / (2 * ARM_L1 * ARM_L2)));
+        let sh = alpha - beta;
+        let el = Math.PI - gamma;
+        // Elbow-above-the-slab bound, applied BEFORE accepting the elbow solve:
+        // the elbow sits at elbowY = shoulderWorldY − L1·cos(sh) and must stay
+        // ≥ hostTopY + 30 or the forearm cuts diagonally through the table
+        // edge. cos falls as sh grows, so the bound is a MINIMUM shoulder angle.
+        const shMin = hostTopY == null ? 0
+          : Math.acos(cl((shoulderWorldY - hostTopY - 30) / ARM_L1));
+        if (sh < shMin) {
+          sh = shMin;
+          // Re-solve the forearm for the hand HEIGHT with the raised elbow
+          // (flatter forearm, larger forward reach). If the target drop exceeds
+          // the forearm's reach, the cl() clamp raises the hand to the closest
+          // reachable height — never lowers the elbow back below the top.
+          const elbowY = shoulderWorldY - ARM_L1 * Math.cos(sh);
+          el = Math.acos(cl((elbowY - handY) / ARM_L2)) - sh;
+        }
         return {
-          sh: Math.max(0.2, Math.min(1.4, alpha - beta)),
-          el: Math.max(0.2, Math.min(2.2, Math.PI - gamma)),
+          sh: Math.max(0.2, Math.min(1.4, sh)),
+          el: Math.max(0.2, Math.min(2.2, el)),
         };
       };
 
@@ -4541,8 +4607,29 @@ export class ThreeDRenderer {
         // Seated: drop the root so the hip pivot rests on the seat, pull x/z
         // onto the seat center. `seatYeff` (Part B) equals spot.seatY for normal
         // seats but is raised for tall eat/work hosts so the arms can reach.
-        px2 = h.navX * stand + spot.x * sit;
-        pz2 = h.navZ * stand + spot.z * sit;
+        // Root-outside-the-slab clamp: the seated torso extends ~70 mm forward
+        // of the root (TORSO_D 140) with the belly toward the table, so when an
+        // eat/work host footprint is known, hold the SEAT-blend target ≥190 mm
+        // outside its edge — covers seats placed before the placement
+        // constraint existed, arrow-key-nudged chairs, and any deep tuck.
+        let sx = spot.x, sz = spot.z;
+        if (spot.host && hostTopY != null) {
+          const host = spot.host;
+          const wx = this._fw / 2 - sx, wy = sz + this._fd / 2;   // scene → world mm
+          const l = furnitureWorldToLocal(host.rotation, wx - host.x, wy - host.y);
+          const ex = host.w / 2 + 190, ey = host.h / 2 + 190;
+          if (Math.abs(l.x) < ex && Math.abs(l.y) < ey) {
+            const penX = ex - Math.abs(l.x), penY = ey - Math.abs(l.y);
+            let nlx = l.x, nly = l.y;
+            if (penX <= penY) nlx = (l.x >= 0 ? 1 : -1) * ex;
+            else nly = (l.y >= 0 ? 1 : -1) * ey;
+            const w = furnitureLocalToWorld(host.rotation, nlx, nly);
+            sx = this._fw / 2 - (host.x + w.x);
+            sz = (host.y + w.y) - this._fd / 2;
+          }
+        }
+        px2 = h.navX * stand + sx * sit;
+        pz2 = h.navZ * stand + sz * sit;
         py2 = (h.groundY + bob) * stand + (seatYeff - HIP_Y) * sit;
       } else {
         px2 = h.navX; pz2 = h.navZ; py2 = h.groundY + bob;

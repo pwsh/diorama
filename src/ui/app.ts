@@ -11,7 +11,7 @@ import './canvas-2d.js';
 import './three-view.js';
 import './modals.js';
 import type { AuthScreen } from './auth-screen.js';
-import type { FloorModal, EntityPicker, LightConfig, SettingsDrawer } from './modals.js';
+import type { FloorModal, EntityPicker, LightConfig, MediaConfig, SettingsDrawer } from './modals.js';
 
 @customElement('diorama-app')
 export class App extends LitElement {
@@ -22,6 +22,7 @@ export class App extends LitElement {
   @query('diorama-floor-modal') private _floorModal?: FloorModal;
   @query('diorama-entity-picker') private _entPicker?: EntityPicker;
   @query('diorama-light-config') private _lightConfig?: LightConfig;
+  @query('diorama-media-config') private _mediaConfig?: MediaConfig;
   @query('diorama-settings-drawer') private _settings?: SettingsDrawer;
 
   protected override createRenderRoot() { return this; }
@@ -136,8 +137,13 @@ export class App extends LitElement {
       this._floorModal?.show(floor);
     });
     this.addEventListener('open-light-config', e => {
+      const { entityId, fanEntityId } = (e as CustomEvent).detail as
+        { entityId: string | null; fanEntityId?: string | null };
+      this._lightConfig?.show(entityId, fanEntityId ?? null);
+    });
+    this.addEventListener('open-media-config', e => {
       const { entityId } = (e as CustomEvent).detail as { entityId: string };
-      this._lightConfig?.show(entityId);
+      this._mediaConfig?.show(entityId);
     });
     this.addEventListener('open-entity-picker', e => {
       const { domain, onPick } = (e as CustomEvent).detail as
@@ -198,6 +204,7 @@ export class App extends LitElement {
         <diorama-floor-modal .planner=${p}></diorama-floor-modal>
         <diorama-entity-picker .planner=${p}></diorama-entity-picker>
         <diorama-light-config .planner=${p}></diorama-light-config>
+        <diorama-media-config .planner=${p}></diorama-media-config>
         <diorama-settings-drawer .planner=${p}></diorama-settings-drawer>
       </div>
     `;

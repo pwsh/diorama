@@ -233,22 +233,52 @@ export class EntityPicker extends LitElement {
   }
 }
 
-// ── Light config modal ───────────────────────────────────────────────────
+// ── Light (+ fan) config modal ───────────────────────────────────────────
+// Handles a light.* entity (color / brightness / temp) and, for ceiling-fan
+// fixtures, an optional bound fan.* entity (power + speed). fan_light fixtures
+// with both bound show both sections; a pure fan fixture shows only the fan
+// section (entityId null).
 @customElement('diorama-light-config')
 export class LightConfig extends LitElement {
   @property({ attribute: false }) planner!: Planner;
   @state() open = false;
   @state() private _entityId = '';
+  @state() private _fanEntityId: string | null = null;
+  // Suppress live re-render while the user drags a slider, so incoming HA
+  // states can't yank the control's value mid-gesture.
+  private _interacting = false;
 
   protected override createRenderRoot() { return this; }
 
-  show(entityId: string): void { this._entityId = entityId; this.open = true; }
+  override connectedCallback(): void {
+    super.connectedCallback();
+    this.planner.addEventListener('config', this._tick);
+    this.planner.addEventListener('live', this._tick);
+    window.addEventListener('pointerup', this._pointerUp, true);
+  }
+  override disconnectedCallback(): void {
+    super.disconnectedCallback();
+    this.planner.removeEventListener('config', this._tick);
+    this.planner.removeEventListener('live', this._tick);
+    window.removeEventListener('pointerup', this._pointerUp, true);
+  }
+  private _tick = () => { if (this.open && !this._interacting) this.requestUpdate(); };
+  private _pointerUp = () => { if (this._interacting) { this._interacting = false; this.requestUpdate(); } };
+
+  show(entityId: string | null, fanEntityId: string | null = null): void {
+    this._entityId = entityId ?? '';
+    this._fanEntityId = fanEntityId;
+    this.open = true;
+  }
 
   override render() {
     if (!this.open) return nothing;
-    const st = this.planner.hass?.states?.[this._entityId];
-    if (!st) return nothing;
-    const attrs = (st.attributes || {}) as Record<string, unknown>;
+    const states = this.planner.hass?.states ?? {};
+    const st = this._entityId ? states[this._entityId] : undefined;
+    const fanSt = this._fanEntityId ? states[this._fanEntityId] : undefined;
+    // Nothing resolvable → close silently.
+    if (!st && !fanSt) return nothing;
+    const attrs = (st?.attributes || {}) as Record<string, unknown>;
     const modes = Array.isArray(attrs.supported_color_modes) ? attrs.supported_color_modes as string[] : [];
     const supportsBri = modes.some(m => m !== 'onoff') || typeof attrs.brightness === 'number';
     const supportsRgb = modes.some(m => ['rgb','rgbw','rgbww','hs','xy'].includes(m)) || Array.isArray(attrs.rgb_color);
@@ -259,16 +289,30 @@ export class LightConfig extends LitElement {
     const curRgb = Array.isArray(attrs.rgb_color) ? (attrs.rgb_color as number[]) : [255, 230, 180];
     const curK = typeof attrs.color_temp_kelvin === 'number' ? (attrs.color_temp_kelvin as number)
                : Math.round((minK + maxK) / 2);
-    const isOn = st.state === 'on';
+    const isOn = st?.state === 'on';
     const hex = '#' + curRgb.map(v => Math.max(0, Math.min(255, v)).toString(16).padStart(2, '0')).join('');
     const call = (data: Record<string, unknown>) =>
       this.planner.hass?.callService('light', 'turn_on', { entity_id: this._entityId, ...data });
+    const grab = () => { this._interacting = true; };
+
+    // Fan section (fan.* entity). percentage 0–100, step 5.
+    const fanAttrs = (fanSt?.attributes || {}) as Record<string, unknown>;
+    const fanOn = fanSt?.state === 'on';
+    const fanPct = typeof fanAttrs.percentage === 'number'
+      ? (fanAttrs.percentage as number) : (fanOn ? 100 : 0);
+    const fanCall = (service: string, data: Record<string, unknown> = {}) =>
+      this.planner.hass?.callService('fan', service, { entity_id: this._fanEntityId, ...data });
+
+    const title = st ? ((attrs.friendly_name as string) || this._entityId)
+                     : ((fanAttrs.friendly_name as string) || this._fanEntityId || 'Fan');
+
     return html`
       <div class="modal-ov" @click=${(e: MouseEvent) => { if (e.target === e.currentTarget) this.open = false; }}>
         <div class="modal">
-          <h3>${(attrs.friendly_name as string) || this._entityId}
+          <h3>${title}
             <button class="close" @click=${() => this.open = false}>✕</button>
           </h3>
+          ${st ? html`
           <div style="display:flex;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid var(--border)">
             <label style="font-size:12px;color:var(--text-dim);flex:0 0 80px">Power</label>
             <label class="mini-toggle" style="width:36px;height:20px">
@@ -283,7 +327,7 @@ export class LightConfig extends LitElement {
             <label style="font-size:12px;color:var(--text-dim);flex:0 0 80px">Brightness</label>
             ${supportsBri ? html`
               <input type="range" min="1" max="255" .value=${String(curBri)}
-                     style="flex:1"
+                     style="flex:1" @pointerdown=${grab}
                      @input=${(e: Event) => call({ brightness: parseInt((e.target as HTMLInputElement).value) })}>
               <span style="font-size:11px;font-family:monospace;min-width:40px;text-align:right">
                 ${Math.round(curBri / 255 * 100)}%
@@ -302,15 +346,153 @@ export class LightConfig extends LitElement {
               <span style="font-size:11px;font-family:monospace">${hex.toUpperCase()}</span>
             ` : html`<span style="font-size:11px;color:var(--text-dim);font-style:italic">not supported</span>`}
           </div>
-          <div style="display:flex;gap:10px;align-items:center;padding:8px 0">
+          <div style="display:flex;gap:10px;align-items:center;padding:8px 0;${fanSt ? 'border-bottom:1px solid var(--border)' : ''}">
             <label style="font-size:12px;color:var(--text-dim);flex:0 0 80px">Temperature</label>
             ${supportsTemp ? html`
               <input type="range" min=${minK} max=${maxK} step="50" .value=${String(curK)}
-                     style="flex:1"
+                     style="flex:1" @pointerdown=${grab}
                      @input=${(e: Event) => call({ color_temp_kelvin: parseInt((e.target as HTMLInputElement).value) })}>
               <span style="font-size:11px;font-family:monospace">${curK} K</span>
             ` : html`<span style="font-size:11px;color:var(--text-dim);font-style:italic">not supported</span>`}
           </div>
+          ` : nothing}
+          ${fanSt ? html`
+          <div style="display:flex;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid var(--border)">
+            <label style="font-size:12px;color:var(--text-dim);flex:0 0 80px">Fan</label>
+            <label class="mini-toggle" style="width:36px;height:20px">
+              <input type="checkbox" .checked=${fanOn}
+                     @change=${(e: Event) => fanCall((e.target as HTMLInputElement).checked ? 'turn_on' : 'turn_off')}>
+              <span></span>
+            </label>
+          </div>
+          <div style="display:flex;gap:10px;align-items:center;padding:8px 0">
+            <label style="font-size:12px;color:var(--text-dim);flex:0 0 80px">Speed</label>
+            <input type="range" min="0" max="100" step="5" .value=${String(Math.round(fanPct))}
+                   style="flex:1" @pointerdown=${grab}
+                   @change=${(e: Event) => {
+                     const v = parseInt((e.target as HTMLInputElement).value);
+                     if (v <= 0) fanCall('turn_off');
+                     else fanCall('set_percentage', { percentage: v });
+                   }}>
+            <span style="font-size:11px;font-family:monospace;min-width:40px;text-align:right">
+              ${Math.round(fanPct)}%
+            </span>
+          </div>
+          ` : nothing}
+        </div>
+      </div>
+    `;
+  }
+}
+
+// ── Media config modal ───────────────────────────────────────────────────
+// Controls a bound media_player (or a plain switch) behind a TV / wall_tv
+// furniture piece. Only renders controls whose backing attributes exist, so a
+// dumb on/off TV switch just gets a power toggle. Live-updates like the light
+// modal (config + live events, drag-guarded).
+@customElement('diorama-media-config')
+export class MediaConfig extends LitElement {
+  @property({ attribute: false }) planner!: Planner;
+  @state() open = false;
+  @state() private _entityId = '';
+  private _interacting = false;
+
+  protected override createRenderRoot() { return this; }
+
+  override connectedCallback(): void {
+    super.connectedCallback();
+    this.planner.addEventListener('config', this._tick);
+    this.planner.addEventListener('live', this._tick);
+    window.addEventListener('pointerup', this._pointerUp, true);
+  }
+  override disconnectedCallback(): void {
+    super.disconnectedCallback();
+    this.planner.removeEventListener('config', this._tick);
+    this.planner.removeEventListener('live', this._tick);
+    window.removeEventListener('pointerup', this._pointerUp, true);
+  }
+  private _tick = () => { if (this.open && !this._interacting) this.requestUpdate(); };
+  private _pointerUp = () => { if (this._interacting) { this._interacting = false; this.requestUpdate(); } };
+
+  show(entityId: string): void { this._entityId = entityId; this.open = true; }
+
+  override render() {
+    if (!this.open) return nothing;
+    const st = this.planner.hass?.states?.[this._entityId];
+    if (!st) return nothing;
+    const attrs = (st.attributes || {}) as Record<string, unknown>;
+    const dot = this._entityId.indexOf('.');
+    const domain = dot > 0 ? this._entityId.slice(0, dot) : 'media_player';
+    const isMedia = domain === 'media_player';
+    const state = st.state;
+    // "on" for the power toggle: anything that isn't clearly off/unavailable.
+    const powerOn = state !== 'off' && state !== 'unavailable' && state !== 'standby';
+    const sf = typeof attrs.supported_features === 'number' ? (attrs.supported_features as number) : 0;
+    const canPlayPause = isMedia && ((sf & 1) !== 0 || (sf & 16384) !== 0 ||
+      state === 'playing' || state === 'paused');
+    const hasVolume = isMedia && typeof attrs.volume_level === 'number';
+    const sources = Array.isArray(attrs.source_list) ? (attrs.source_list as string[]) : [];
+    const hasSources = isMedia && sources.length > 0;
+    const vol = typeof attrs.volume_level === 'number' ? (attrs.volume_level as number) : 0;
+    const grab = () => { this._interacting = true; };
+    const call = (service: string, data: Record<string, unknown> = {}) =>
+      this.planner.hass?.callService(domain, service, { entity_id: this._entityId, ...data });
+    const stateLabel = state.charAt(0).toUpperCase() + state.slice(1);
+
+    return html`
+      <div class="modal-ov" @click=${(e: MouseEvent) => { if (e.target === e.currentTarget) this.open = false; }}>
+        <div class="modal">
+          <h3>${(attrs.friendly_name as string) || this._entityId}
+            <button class="close" @click=${() => this.open = false}>✕</button>
+          </h3>
+          <div style="display:flex;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid var(--border)">
+            <label style="font-size:12px;color:var(--text-dim);flex:0 0 80px">Power</label>
+            <label class="mini-toggle" style="width:36px;height:20px">
+              <input type="checkbox" .checked=${powerOn}
+                     @change=${(e: Event) => call((e.target as HTMLInputElement).checked ? 'turn_on' : 'turn_off')}>
+              <span></span>
+            </label>
+            <span style="font-size:11px;color:var(--text-dim);font-family:monospace">${stateLabel}</span>
+          </div>
+          ${canPlayPause ? html`
+          <div style="display:flex;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid var(--border)">
+            <label style="font-size:12px;color:var(--text-dim);flex:0 0 80px">Playback</label>
+            <button class="btn" @click=${() => call('media_play_pause')}>
+              ${state === 'playing' ? '⏸ Pause' : '▶ Play'}
+            </button>
+          </div>
+          ` : nothing}
+          ${hasVolume ? html`
+          <div style="display:flex;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid var(--border)">
+            <label style="font-size:12px;color:var(--text-dim);flex:0 0 80px">Volume</label>
+            <input type="range" min="0" max="1" step="0.01" .value=${String(vol)}
+                   style="flex:1" @pointerdown=${grab}
+                   @change=${(e: Event) => call('volume_set',
+                     { volume_level: parseFloat((e.target as HTMLInputElement).value) })}>
+            <span style="font-size:11px;font-family:monospace;min-width:40px;text-align:right">
+              ${Math.round(vol * 100)}%
+            </span>
+          </div>
+          ` : nothing}
+          ${hasSources ? html`
+          <div style="display:flex;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid var(--border)">
+            <label style="font-size:12px;color:var(--text-dim);flex:0 0 80px">Source</label>
+            <select .value=${(attrs.source as string) || ''}
+                    @change=${(e: Event) => call('select_source', { source: (e.target as HTMLSelectElement).value })}
+                    style="flex:1;background:#111;color:var(--text);border:1px solid var(--border);
+                           border-radius:5px;padding:6px 8px;font-size:12px">
+              ${sources.map(s => html`<option value=${s} ?selected=${attrs.source === s}>${s}</option>`)}
+            </select>
+          </div>
+          ` : nothing}
+          ${isMedia && state === 'playing' && attrs.media_title ? html`
+          <div style="display:flex;gap:10px;align-items:center;padding:8px 0">
+            <label style="font-size:12px;color:var(--text-dim);flex:0 0 80px">Now playing</label>
+            <span style="font-size:12px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+              ${attrs.media_title as string}
+            </span>
+          </div>
+          ` : nothing}
         </div>
       </div>
     `;

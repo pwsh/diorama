@@ -681,14 +681,16 @@ export function resolveFurnitureWallCollision(
 // until its CENTER reaches the host footprint edge — a sitting body still needs
 // to clear the tabletop. If the seat's center lands INSIDE a host's rotation-
 // aware footprint, push it OUT along the host-local minimal-translation axis so
-// the center rests on the host edge + 20 mm outward. Only the DRAGGED seat
+// the center rests on the host edge + 150 mm outward — a seated torso extends
+// ~70 mm forward of the root (TORSO_D 140) with the belly toward the table, so
+// a mere edge-touch still buried the stomach in the slab. Only the DRAGGED seat
 // moves (matches the drag-the-seat UX); dragging a table onto chairs is out of
 // scope — the table has no `seat`, so this no-ops on it, leaving those seats
 // swallowed. Counters / islands are intentionally NOT hosts (only eat/work).
 // Runs after resolveFurnitureWallCollision at the same two hooks; the caller's
 // `!piece.locked` guard keeps locked seats put. Mutates piece.x/y; returns
 // whether it moved.
-const SEAT_TUCK_CLEAR_MM = 20;   // outward gap so the center clears the tabletop
+const SEAT_TUCK_CLEAR_MM = 150;  // outward gap so a seated torso clears the slab
 export function resolveSeatTableCollision(
   piece: Furniture,
   furniture: Furniture[],

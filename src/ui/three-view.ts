@@ -168,15 +168,63 @@ export class ThreeView extends LitElement {
       this.planner.toggleEntity(entity_id);
     });
     this._renderer.onFixtureDblClick(({ kind, entity_id, fixtureId }) => {
-      if (this.planner.uiMode === 'view') return;
-      if (this.planner.isLightEntity(entity_id)) {
+      const p = this.planner;
+      if (p.uiMode === 'view') return;
+      const f = p.floor();
+
+      // Bound media furniture (TVs): open the media control modal. Unbound in
+      // edit → pick a media_player entity (only reachable in 2D today since
+      // unbound TVs aren't raycast targets, but kept for symmetry).
+      if (kind === 'media') {
+        if (entity_id) {
+          this.dispatchEvent(new CustomEvent('open-media-config', {
+            bubbles: true, composed: true, detail: { entityId: entity_id },
+          }));
+        } else if (p.uiMode === 'edit') {
+          const fu = f.furniture.find(x => x.id === fixtureId);
+          if (fu) this.dispatchEvent(new CustomEvent('open-entity-picker', {
+            bubbles: true, composed: true,
+            detail: {
+              domain: 'media_player',
+              onPick: (id: string) => { fu.entity_id = id; p.save(); p.emitConfig(); },
+            },
+          }));
+        }
+        return;
+      }
+
+      // Fan / fan_light light-fixtures: open the combined light+fan control.
+      if (kind === 'light') {
+        const l = f.lights.find(x => x.id === fixtureId);
+        if (l && (l.iconKind === 'fan' || l.iconKind === 'fan_light')) {
+          const lightEnt = p.isLightEntity(l.entity_id) ? l.entity_id : null;
+          const fanEnt = l.fanEntity
+            || (l.entity_id && l.entity_id.startsWith('fan.') ? l.entity_id : null);
+          if (lightEnt || fanEnt) {
+            this.dispatchEvent(new CustomEvent('open-light-config', {
+              bubbles: true, composed: true,
+              detail: { entityId: lightEnt, fanEntityId: fanEnt },
+            }));
+          } else if (p.uiMode === 'edit') {
+            this.dispatchEvent(new CustomEvent('open-entity-picker', {
+              bubbles: true, composed: true,
+              detail: {
+                domain: 'fan',
+                onPick: (id: string) => { l.fanEntity = id; p.save(); p.emitConfig(); },
+              },
+            }));
+          }
+          return;
+        }
+      }
+
+      if (p.isLightEntity(entity_id)) {
         this.dispatchEvent(new CustomEvent('open-light-config', {
           bubbles: true, composed: true, detail: { entityId: entity_id },
         }));
-      } else if (this.planner.uiMode !== 'edit') {
+      } else if (p.uiMode !== 'edit') {
         return;  // kiosk: no binding pickers
       } else if (!entity_id) {
-        const f = this.planner.floor();
         const arr = kind === 'light' ? f.lights : f.switches;
         const it = arr.find(x => x.id === fixtureId);
         if (!it) return;
@@ -184,7 +232,7 @@ export class ThreeView extends LitElement {
           bubbles: true, composed: true,
           detail: {
             domain: kind,
-            onPick: (id: string) => { it.entity_id = id; this.planner.save(); this.planner.emitConfig(); },
+            onPick: (id: string) => { it.entity_id = id; p.save(); p.emitConfig(); },
           },
         }));
       }
