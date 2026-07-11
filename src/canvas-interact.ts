@@ -1,4 +1,4 @@
-import { snap, snapVertex15, distMM, worldToLocal, localToWorld, FURNITURE_KINDS, furnitureCorners, furnitureLocalToWorld, furnitureWorldToLocal, resolveFurnitureDef, resolveFurnitureWallCollision, resolveSeatTableCollision, envScale, ENV_SCALE_MIN, ENV_SCALE_MAX } from './geometry.js';
+import { snap, snapVertex15, distMM, worldToLocal, localToWorld, FURNITURE_KINDS, furnitureCorners, furnitureLocalToWorld, furnitureWorldToLocal, resolveFurnitureDef, resolveFurnitureWallCollision, resolveSeatTableCollision, snapStepLightToSurface, envScale, ENV_SCALE_MIN, ENV_SCALE_MAX } from './geometry.js';
 import { newId } from './storage.js';
 import {
   pxToMm, type View,
@@ -13,7 +13,7 @@ import {
 } from './canvas-hit.js';
 import type { Planner } from './planner.js';
 import { NEW_ROOM } from './planner.js';
-import type { Vec2, Furniture, ObjectRecipe } from './types.js';
+import type { Vec2, Furniture, ObjectRecipe, Light } from './types.js';
 
 // Auto-snap a mountable piece (coffee maker, toaster, …) onto a counter-height
 // `surface` piece it's dropped/dragged over: its center testing inside the
@@ -727,6 +727,9 @@ export function onCanvasMouseUp(p: Planner, canvas: HTMLCanvasElement): void {
         it.x = drag.start.x; it.y = drag.start.y;
         p.toggleEntity(it.entity_id);
       } else {
+        // Step lights snap flush to the nearest wall face / stair edge on
+        // release (like doors/windows snapOpeningToWall). No-op otherwise.
+        if (drag.fxKind === 'light') snapStepLightToSurface(it as Light, f.walls, f.furniture);
         p.save();
       }
     }
@@ -945,7 +948,9 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
     p.save(); p.setTool('select'); p.emitConfig(); return;
   }
   if (p.tool === 'light') {
-    f.lights.push({ id: newId('lt'), x: snap(mm.x, 10), y: snap(mm.y, 10), entity_id: null, label: '' });
+    const lt: Light = { id: newId('lt'), x: snap(mm.x, 10), y: snap(mm.y, 10), entity_id: null, label: '' };
+    snapStepLightToSurface(lt, f.walls, f.furniture);  // no-op unless it's a step light
+    f.lights.push(lt);
     p.save(); p.setTool('select'); p.emitConfig(); return;
   }
   if (p.tool === 'switch') {

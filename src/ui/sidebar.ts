@@ -1366,7 +1366,8 @@ export class Sidebar extends LitElement {
                       })}>↻</button>
             </div>
           ` : nothing}
-          ${numRow('Height (mm)', l.height ?? (curKind === 'under_cabinet' ? 1350 : curKind === 'wall_sconce' ? 1700 : curKind === 'step' ? 300 : 2500), 0, 6000, 50, v => upd(() => { l.height = v; }))}
+          ${/* Height may go negative (down to −3000) for lights sunk below the floor — e.g. a step light on a sunken stairway shaft. */ ''}
+          ${numRow('Height (mm)', l.height ?? (curKind === 'under_cabinet' ? 1350 : curKind === 'wall_sconce' ? 1700 : curKind === 'step' ? 300 : 2500), -3000, 6000, 50, v => upd(() => { l.height = v; }))}
           ${numRow('Radius (mm)', l.radius ?? 900, 100, 5000, 50, v => upd(() => { l.radius = v; }))}
           ${numRow('Intensity', l.intensity ?? 1, 0, 2, 0.05, v => upd(() => { l.intensity = v; }))}
           <div style="font-size:10px;color:var(--text-dim);margin-top:4px;line-height:1.3">

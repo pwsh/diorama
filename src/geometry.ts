@@ -272,6 +272,84 @@ export function lightLength(l: { length?: number }): number {
 export function lightIconKind(l: { iconKind?: LightIconKind }): LightIconKind {
   return l.iconKind ?? LIGHT_DEFAULTS.iconKind;
 }
+
+// Stairs-family kinds a step light can mount flush against.
+export const STEP_LIGHT_EDGE_KINDS = new Set<FurnitureKind>(['stairs', 'stairs_half', 'stair_landing']);
+
+// Snap a 'step' light flush to the nearest wall face or stairs-family footprint
+// edge (whichever is nearer within `maxDist`). On a WALL: the position lands on
+// the wall FACE (the axis offset by wallThick/2 = 50 mm toward the light's
+// original side) and the rotation orients the emitting face AWAY from the wall.
+// On a STAIR edge: the position lands ON the edge and the face points outward
+// from the footprint. Mutates x / y / rotation; returns true iff it snapped.
+// No-op for any non-step light.
+//
+// Front-direction convention: the 3D body faces local -Z with
+// body.rotation.y = -rotation·π/180, and `_w` mirrors X, so a world-2D front
+// vector (fx, fy) maps to rotation = atan2(-fx, -fy) degrees (see setFront).
+export function snapStepLightToSurface(
+  light: { x: number; y: number; rotation?: number; iconKind?: LightIconKind },
+  walls: { points: Vec2[]; kind?: WallKind }[],
+  furniture: { x: number; y: number; w: number; h: number; kind?: FurnitureKind; rotation?: number }[],
+  maxDist = 500,
+): boolean {
+  if ((light.iconKind ?? LIGHT_DEFAULTS.iconKind) !== 'step') return false;
+  const WALL_HALF = 50;  // wallThick / 2
+
+  const closest = (a: Vec2, b: Vec2): Vec2 => {
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const len2 = dx * dx + dy * dy;
+    const t = len2 > 0
+      ? Math.max(0, Math.min(1, ((light.x - a.x) * dx + (light.y - a.y) * dy) / len2))
+      : 0;
+    return { x: a.x + t * dx, y: a.y + t * dy };
+  };
+
+  type Cand = { d: number; qx: number; qy: number; fx: number; fy: number };
+  let best: Cand | null = null;
+
+  // 1. Wall faces (skip invisible walls — they're loop-closers, not surfaces).
+  for (const w of walls) {
+    if ((w.kind ?? 'full') === 'invisible') continue;
+    for (let i = 0; i < w.points.length - 1; i++) {
+      const A = w.points[i], B = w.points[i + 1];
+      const q = closest(A, B);
+      const d = Math.hypot(light.x - q.x, light.y - q.y);
+      if (d > maxDist || (best && d >= best.d)) continue;
+      const ex = B.x - A.x, ey = B.y - A.y;
+      const eLen = Math.hypot(ex, ey) || 1;
+      let nx = -ey / eLen, ny = ex / eLen;               // wall normal
+      if ((light.x - q.x) * nx + (light.y - q.y) * ny < 0) { nx = -nx; ny = -ny; }
+      best = { d, qx: q.x + nx * WALL_HALF, qy: q.y + ny * WALL_HALF, fx: nx, fy: ny };
+    }
+  }
+
+  // 2. Stairs-family footprint edges (front points outward from the footprint).
+  for (const fp of furniture) {
+    if (!STEP_LIGHT_EDGE_KINDS.has(fp.kind ?? ('' as FurnitureKind))) continue;
+    const corners = ([[-1, -1], [1, -1], [1, 1], [-1, 1]] as [number, number][]).map(([sx, sy]) => {
+      const l = furnitureLocalToWorld(fp.rotation, sx * fp.w / 2, sy * fp.h / 2);
+      return { x: fp.x + l.x, y: fp.y + l.y };
+    });
+    for (let i = 0; i < 4; i++) {
+      const A = corners[i], B = corners[(i + 1) % 4];
+      const q = closest(A, B);
+      const d = Math.hypot(light.x - q.x, light.y - q.y);
+      if (d > maxDist || (best && d >= best.d)) continue;
+      const ex = B.x - A.x, ey = B.y - A.y;
+      const eLen = Math.hypot(ex, ey) || 1;
+      let nx = -ey / eLen, ny = ex / eLen;               // edge normal
+      if ((q.x - fp.x) * nx + (q.y - fp.y) * ny < 0) { nx = -nx; ny = -ny; }  // outward
+      best = { d, qx: q.x, qy: q.y, fx: nx, fy: ny };
+    }
+  }
+
+  if (!best) return false;
+  light.x = Math.round(best.qx);
+  light.y = Math.round(best.qy);
+  light.rotation = Math.atan2(-best.fx, -best.fy) * 180 / Math.PI;
+  return true;
+}
 export function switchHeight(s: { height?: number }): number  { return s.height ?? SWITCH_DEFAULTS.height; }
 export function switchRotation(s: { rotation?: number }): number { return s.rotation ?? SWITCH_DEFAULTS.rotation; }
 export function switchSize(s: { size?: number }): number {

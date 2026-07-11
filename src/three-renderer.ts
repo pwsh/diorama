@@ -3544,27 +3544,62 @@ export class ThreeDRenderer {
       hitMesh.userData = ud;
       this._lightGroup.add(hitMesh);
       if (isOn) {
-        const pl = new THREE.PointLight(
-          color.getHex(),
-          (0.6 + 1.4 * (bri / 255)) * intensity * flickerMul,
-          Math.max(2000, lr * 5),
-          1.5,
-        );
-        pl.position.set(p.x, p.y - 50, p.z);
-        this._lightGroup.add(pl);
+        const li = (0.6 + 1.4 * (bri / 255)) * intensity * flickerMul;
+        const dist = Math.max(2000, lr * 5);
+        // Scene-space front direction (unit, horizontal). Body faces local -Z
+        // with body.rotation.y = -lightRotation·π/180 and _w mirrors X, so the
+        // emitting face points scene (sin φ, 0, -cos φ), φ = lightRotation·rad.
+        const yaw = lightRotation(l) * Math.PI / 180;
+        const fdx = Math.sin(yaw), fdz = -Math.cos(yaw);
+        if (kind === 'step') {
+          // Embedded in a wall / stair edge: a ~155° cone from the FRONT only
+          // so light never bleeds behind the wall. Aimed along the fixture
+          // front, tilted ~35° down to wash the tread below. The SpotLight's
+          // .target must live in the scene graph — parent it into _lightGroup
+          // too so _clearGroup disposes both on the next rebuild.
+          const spot = new THREE.SpotLight(color.getHex(), li, dist, 1.35, 0.6, 1.5);
+          spot.position.set(p.x, p.y - 50, p.z);
+          const tilt = 35 * Math.PI / 180, ch = Math.cos(tilt), D = 1500;
+          const tgt = new THREE.Object3D();
+          tgt.position.set(
+            p.x + fdx * ch * D,
+            (p.y - 50) - Math.sin(tilt) * D,
+            p.z + fdz * ch * D,
+          );
+          this._lightGroup.add(tgt);
+          spot.target = tgt;
+          this._lightGroup.add(spot);
+        } else {
+          const pl = new THREE.PointLight(color.getHex(), li, dist, 1.5);
+          pl.position.set(p.x, p.y - 50, p.z);
+          this._lightGroup.add(pl);
+        }
         // Skip floor pool for sconce (wall), plain fan (no light), and
         // under-cabinet strips (their wash lands on the counter below via
         // the point light, not the floor).
         if (kind !== 'sconce' && kind !== 'fan' && kind !== 'under_cabinet' && kind !== 'wall_sconce') {
+          // Step lights emit from one face only → a HALF-disc pool bulging
+          // toward the front, its flat diameter lying along the wall line
+          // (centered on the fixture). After rotation.x=-π/2 a CircleGeometry
+          // vertex at angle a lands at scene (cos a, 0, -sin a); the arc
+          // midpoint sits at scene (-sin start, -cos start), which we align to
+          // the front (fdx, fdz) via start = atan2(-fdx, -fdz).
+          const poolGeo = kind === 'step'
+            ? new THREE.CircleGeometry(lr, 24, Math.atan2(-fdx, -fdz), Math.PI)
+            : new THREE.CircleGeometry(lr, 48);
           const disc = new THREE.Mesh(
-            new THREE.CircleGeometry(lr, 48),
+            poolGeo,
             new THREE.MeshBasicMaterial({
               color: color.getHex(), transparent: true,
               opacity: Math.min(1, (0.18 + 0.22 * (bri / 255)) * intensity * flickerMul),
               side: THREE.DoubleSide, depthWrite: false,
             }));
           disc.rotation.x = -Math.PI / 2;
-          const dp2 = this._w(l.x, l.y, 3);
+          // The pool represents light hitting the walking surface. For a light
+          // sunk below the floor (negative height — a step light on a sunken
+          // stair shaft) the surface it washes is lower too, so draw the pool
+          // at its own level; ceiling lights (height ≫ 3) still pool at y≈3.
+          const dp2 = this._w(l.x, l.y, Math.min(3, lightHeight(l) + 3));
           disc.position.set(dp2.x, dp2.y, dp2.z);
           // Floor pool is also a click target — much bigger than the body, so
           // a bird's-eye click anywhere in the lit area toggles the light.
