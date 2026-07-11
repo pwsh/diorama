@@ -35,7 +35,12 @@ export interface TargetWorld {
   // 'random' (or an unknown value) resolves per-target to a concrete kind via a
   // stable hash of `key`; undefined / 'adult' → the classic adult rig. See
   // resolveAvatar. A stale renderer chunk simply ignores this and builds adults.
+  // LEGACY single-pick — superseded by `avatars` but still honored.
   avatar?: AvatarKind | 'random';
+  // Optional (additive): a POOL of allowed rig variants; each target stably
+  // hash-picks one via djb2(key) mod pool length. Takes precedence over the
+  // legacy `avatar` when non-empty.
+  avatars?: AvatarKind[];
 }
 
 // Per-frame context for the Sims-style activity system. Built cheaply every
@@ -114,6 +119,13 @@ interface Humanoid {
   armUpper: number;    // upper-arm length (adult 320) — table IK link 1
   armLower: number;    // forearm+hand length (adult 313) — table IK link 2
   legM: number;        // hip height in metres for stride matching (adult 0.81)
+  // Walk-personality multipliers (resolved from AVATAR_PERSONALITY at build).
+  persBob: number; persSway: number; persCadence: number; persAmp: number;
+  // Personality thought-bubble chatter: `chatterNext` counts down to the next
+  // firing (25–60 s, idleOffset-seeded); while `chatterT` > 0 the resolver's
+  // lowest tier returns `chatterGlyph` (held ~7.5 s so the 2.5 s hysteresis
+  // commits it and it shows ~5 s before timing back out).
+  chatterNext: number; chatterT: number; chatterGlyph: string | null;
   torso: THREE.Mesh;   // breathing scale
   // Two-segment limb chains: shoulder/hip pivot drives the upper segment;
   // elbow/knee pivot is a child group at the joint that drives the lower
@@ -231,8 +243,39 @@ const EMPTY_ENTITY_ON: Record<string, boolean> = {};
 const AVATAR_KINDS: readonly AvatarKind[] = [
   'adult', 'child', 'robot', 'alien', 'professional',
   'hacker', 'movie_star', 'ninja', 'cyborg', 'ninja_cyborg', 'athlete',
+  'teddy_bear', 'cartoon_mouse', 'cartoon_dog', 'cartoon_duck',
+  'cowboy', 'magician', 'farmer', 'tech_expert', 'supermodel',
+  'wise_oracle', 'astronaut',
 ];
 const AVATAR_KIND_SET: ReadonlySet<string> = new Set(AVATAR_KINDS);
+
+// ── Light per-kind walk personalities. Multipliers applied in updateTargets
+// where bob / roll-sway / cadence / swing-amp are computed (walking only —
+// bob/sway already scale by ampNorm so they vanish when idle). Absent = 1.
+interface AvatarPersonality { bobMul?: number; swayMul?: number; cadenceMul?: number; ampMul?: number; }
+const AVATAR_PERSONALITY: Partial<Record<AvatarKind, AvatarPersonality>> = {
+  child:        { bobMul: 1.25 },
+  cartoon_duck: { swayMul: 1.7, cadenceMul: 1.15 },   // waddle
+  teddy_bear:   { bobMul: 1.3, cadenceMul: 0.85 },
+  cartoon_mouse:{ cadenceMul: 1.25, bobMul: 1.2 },
+  cartoon_dog:  { cadenceMul: 1.1 },
+  supermodel:   { swayMul: 1.35, ampMul: 1.1 },       // strut
+  wise_oracle:  { cadenceMul: 0.8, swayMul: 0.6 },
+  astronaut:    { bobMul: 1.5, cadenceMul: 0.75 },    // moon-bounce
+};
+
+// Per-kind personality thought-bubble glyph pools (lowest-priority bubble
+// tier — see _resolveBubbleKind). Fired periodically per rig, incl. while
+// walking; a kind absent here would fall back to adult's 💭.
+const AVATAR_BUBBLES: Partial<Record<AvatarKind, string[]>> = {
+  adult: ['💭'], child: ['🎈', '🍭'], robot: ['⚙️', '🔋'], alien: ['🛸', '❓'],
+  professional: ['📊', '☕'], hacker: ['💻', '🔓'], movie_star: ['🎬', '🌟'],
+  ninja: ['🥷', '💨'], cyborg: ['🔧', '⚡'], ninja_cyborg: ['⚔️'],
+  athlete: ['🏆', '💪'], teddy_bear: ['🍯', '🤗'], cartoon_mouse: ['🧀'],
+  cartoon_dog: ['🦴', '🎾'], cartoon_duck: ['💦', '🐟'], cowboy: ['🤠', '🐴'],
+  magician: ['🎩', '✨', '🐇'], farmer: ['🌽', '🚜'], tech_expert: ['💡', '🔌'],
+  supermodel: ['📸', '💅'], wise_oracle: ['🔮', '📜'], astronaut: ['🚀', '⭐'],
+};
 
 // djb2 hash of a string → unsigned 32-bit. Used to map a target key to a stable
 // concrete avatar kind when the sensor requests 'random'.
@@ -242,11 +285,19 @@ function djb2(s: string): number {
   return h >>> 0;
 }
 
-// Resolve a target's requested avatar (per-sensor setting) into a concrete kind.
-// undefined → 'adult'. A known concrete kind passes through. 'random' (or any
-// unrecognized string, defensively) hashes the target key so the choice is
-// stable across rebuilds and frames for the life of that target.
-function resolveAvatar(want: AvatarKind | 'random' | undefined, key: string): AvatarKind {
+// Resolve a target's requested avatar into a concrete kind. Precedence:
+//   1. `list` (avatarKinds pool) non-empty → stable djb2(key) pick from it.
+//   2. legacy single `want`: concrete kind passes through; 'random' (or any
+//      unrecognized string, defensively) hashes the key over ALL kinds.
+//   3. nothing → 'adult'.
+// The djb2 pick is stable across rebuilds/frames for the life of the target.
+function resolveAvatar(want: AvatarKind | 'random' | undefined,
+                       list: AvatarKind[] | undefined, key: string): AvatarKind {
+  if (list && list.length) {
+    const valid = list.filter(k => AVATAR_KIND_SET.has(k));
+    if (valid.length === 1) return valid[0];
+    if (valid.length) return valid[djb2(key) % valid.length];
+  }
   if (!want) return 'adult';
   if (want !== 'random' && AVATAR_KIND_SET.has(want)) return want;
   return AVATAR_KINDS[djb2(key) % AVATAR_KINDS.length];
@@ -3992,7 +4043,7 @@ export class ThreeDRenderer {
       let h = this._humanoids[t.key];
       // Resolve the requested avatar variant to a concrete kind (stable per
       // target key so 'random' keeps its choice across rebuilds/frames).
-      const wantKind = resolveAvatar(t.avatar, t.key);
+      const wantKind = resolveAvatar(t.avatar, t.avatars, t.key);
       // Rebuild on tint OR avatar-kind change (user recolored / re-chose the
       // variant mid-track) — materials and geometry are baked in at build time.
       if (h && (h.color !== t.color || h.avatarKind !== wantKind)) {
@@ -4287,7 +4338,11 @@ export class ThreeDRenderer {
       // linearly down to glacial giant steps.
       const speedMs = speedMms / 1000;
       const walking = speedMs > 0.08;
-      const cadence = walking ? Math.max(speedMs / 1.2, 0.7) : 0;  // cycles/s
+      // Per-kind walk personality (duck waddle, astronaut moon-bounce, …).
+      // Multiplicative on cadence / amp / bob / roll-sway only — pose/IK math
+      // untouched. Since stride matching divides by cadence below, a slower
+      // personality cadence automatically lengthens the stride to compensate.
+      const cadence = walking ? Math.max(speedMs / 1.2, 0.7) * h.persCadence : 0;  // cycles/s
       h.phase = (h.phase + cadence * 2 * Math.PI * dt) % (2 * Math.PI);
 
       // Swing amplitude from stride matching: step length ≈ 2·L·amp
@@ -4299,7 +4354,7 @@ export class ThreeDRenderer {
       const LEG_M = h.legM;  // per-rig hip height in m (adult 0.81; child scaled)
       const speedNorm = Math.min(1, speedMs / 1.4);
       const targetAmp = walking
-        ? Math.min(0.55, Math.max(0.05, speedMs / (4 * LEG_M * cadence)))
+        ? Math.min(0.55, Math.max(0.05, speedMs / (4 * LEG_M * cadence))) * h.persAmp
         : 0;
       h.amp += (targetAmp - h.amp) * Math.min(1, dt * 6);
       const amp = h.amp;
@@ -4383,7 +4438,7 @@ export class ThreeDRenderer {
       // pitch = forward lean into the direction of travel — NEGATIVE is a
       // forward lean — roll = lateral weight sway once per stride).
       const wLeanX = -0.12 * speedNorm * ampNorm;
-      const wRollZ = sinP * 0.045 * ampNorm;
+      const wRollZ = sinP * 0.045 * ampNorm * h.persSway;
 
       // Per-joint final values. Sitting and activities are mutually exclusive
       // (anchor only acquired while sit ≈ 0), so an engaged activity overrides
@@ -4638,7 +4693,7 @@ export class ThreeDRenderer {
       // root drops so the hip pivot (870 mm in the rig) rests on the seat,
       // and x/z pull onto the seat center. The WALKING term is the nav
       // position (obstacle-avoided), not the raw radar point.
-      const bob = Math.abs(sinP) * 40 * ampNorm;
+      const bob = Math.abs(sinP) * 40 * ampNorm * h.persBob;
       const HIP_Y = h.hipY;
       let px2: number, pz2: number, py2: number;
       if (anchor) {
@@ -4771,6 +4826,27 @@ export class ThreeDRenderer {
       }
       const bedHidden = this._bedState.hiddenKeys.has(t.key);
       const inBedAlone = this._bedState.soloKeys.has(t.key);
+      // Personality-chatter timer: fires the per-kind flavor glyph every
+      // 25–60 s (idleOffset-seeded) — allowed while WALKING, but paused (and any
+      // active chatter cancelled) while an activity / privacy / bed-hide owns
+      // the rig. The glyph is held ~7.5 s so the 2.5 s hysteresis below commits
+      // it and it stays visible ~5 s before timing back out.
+      if (h.activity == null && h.privacy <= 0.3 && !bedHidden) {
+        if (h.chatterT > 0) {
+          h.chatterT -= dt;
+          if (h.chatterT <= 0) h.chatterNext = 25 + Math.random() * 35;
+        } else {
+          h.chatterNext -= dt;
+          if (h.chatterNext <= 0) {
+            const pool = AVATAR_BUBBLES[h.avatarKind] ?? AVATAR_BUBBLES.adult!;
+            h.chatterGlyph = pool[(Math.random() * pool.length) | 0];
+            h.chatterT = 7.5;
+          }
+        }
+      } else if (h.chatterT > 0) {
+        h.chatterT = 0;
+        h.chatterNext = 25 + Math.random() * 35;
+      }
       const want = this._resolveBubbleKind(h, tb, roomName, inBedAlone, bedHidden);
       // Hysteresis: accumulate dwell only while the raw resolution holds steady;
       // any change resets the timer. Commit (and rebuild) once it's been stable
@@ -4896,6 +4972,10 @@ export class ThreeDRenderer {
     if (tb === 'morning' && inKitchen && standingIdle) return '☕';
     if ((tb === 'evening' || tb === 'night' || tb === 'late_night') && h.sit > 0.5) return '📖';
     if (inBedAlone && h.dwell > 2) return '📱';
+    // 7. Personality chatter (LOWEST priority): per-kind flavor glyph, fired
+    //    periodically by the timer in updateTargets. Unlike the context tiers
+    //    above, this one is allowed while walking around.
+    if (h.chatterT > 0 && h.chatterGlyph) return h.chatterGlyph;
     return null;
   }
 
@@ -5087,14 +5167,21 @@ export class ThreeDRenderer {
     root: THREE.Group,
     c: {
       color: number; accent: THREE.Material; dark: THREE.Material;
-      shoeMat: THREE.Material; skin: THREE.Material;
-      HEAD_R: number; headY: number; torsoY: number;
+      shoeMat: THREE.Material; skin: THREE.Material; bodyMat: THREE.Material;
+      HEAD_R: number; headY: number; torsoY: number; hipY: number;
       TORSO_W: number; TORSO_H: number; TORSO_D: number; sk: number;
     },
   ): void {
-    const { HEAD_R, headY, torsoY, TORSO_W, TORSO_H, TORSO_D, sk } = c;
+    const { HEAD_R, headY, torsoY, hipY, TORSO_W, TORSO_H, TORSO_D, sk } = c;
     const frontZ = -TORSO_D / 2;   // torso front face (body-forward = -Z)
     const backZ = TORSO_D / 2;
+    // Small helpers to keep the variant blocks tidy.
+    const box = (w: number, h: number, d: number, mat: THREE.Material) =>
+      new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+    const sphere = (r: number, mat: THREE.Material) =>
+      new THREE.Mesh(new THREE.SphereGeometry(r, 14, 10), mat);
+    const cyl = (r: number, h: number, mat: THREE.Material) =>
+      new THREE.Mesh(new THREE.CylinderGeometry(r, r, h, 16), mat);
 
     if (kind === 'robot') {
       // Antenna: thin stalk up from the crown + a tiny tint ball.
@@ -5221,6 +5308,211 @@ export class ThreeDRenderer {
       );
       shorts.position.set(0, torsoY - TORSO_H * 0.32, 0);
       root.add(shorts);
+    } else if (kind === 'teddy_bear') {
+      // Round ears on top, lighter muzzle + belly patch, stubby round tail.
+      const lite = this._mat({ color: 0xc9a87c, emissive: 0xc9a87c, emissiveIntensity: 0.15, roughness: 0.7, metalness: 0.0 });
+      for (const sx of [-1, 1]) {
+        const ear = sphere(HEAD_R * 0.42, c.skin);
+        ear.position.set(sx * HEAD_R * 0.62, headY + HEAD_R * 0.78, 0);
+        root.add(ear);
+      }
+      const muzzle = sphere(HEAD_R * 0.42, lite);
+      muzzle.scale.set(1, 0.72, 0.7);
+      muzzle.position.set(0, headY - HEAD_R * 0.28, -HEAD_R * 0.8);
+      root.add(muzzle);
+      const belly = sphere(TORSO_W * 0.42, lite);
+      belly.scale.set(1, 1.25, 0.35);
+      belly.position.set(0, torsoY - TORSO_H * 0.08, frontZ - 8 * sk);
+      root.add(belly);
+      const tail = sphere(66 * sk, lite);
+      tail.position.set(0, torsoY - TORSO_H * 0.34, backZ + 30 * sk);
+      root.add(tail);
+    } else if (kind === 'cartoon_mouse') {
+      // BIG round ear discs with pink inner discs + a thin two-segment tail.
+      const pink = this._mat({ color: 0xf2a0b5, emissive: 0xf2a0b5, emissiveIntensity: 0.2, roughness: 0.65, metalness: 0.0 });
+      for (const sx of [-1, 1]) {
+        const ear = cyl(HEAD_R * 0.56, 26 * sk, c.skin);
+        ear.rotation.x = Math.PI / 2;   // disc plane faces the body-forward -Z
+        ear.position.set(sx * HEAD_R * 0.74, headY + HEAD_R * 0.86, 0);
+        root.add(ear);
+        const inner = cyl(HEAD_R * 0.36, 10 * sk, pink);
+        inner.rotation.x = Math.PI / 2;
+        inner.position.set(sx * HEAD_R * 0.74, headY + HEAD_R * 0.86, -12 * sk);
+        root.add(inner);
+      }
+      const tail1 = cyl(15 * sk, 300 * sk, c.skin);
+      tail1.rotation.x = -1.15;   // sweeps down-back from the lower spine
+      tail1.position.set(0, hipY * 0.9, backZ + 90 * sk);
+      root.add(tail1);
+      const tail2 = cyl(11 * sk, 240 * sk, c.skin);
+      tail2.rotation.x = -0.35;   // tip curls back up
+      tail2.position.set(0, hipY * 0.72, backZ + 300 * sk);
+      root.add(tail2);
+    } else if (kind === 'cartoon_dog') {
+      // Floppy ear slabs, lighter muzzle box + dark nose sphere, tail.
+      const earMat = this._mat({ color: 0x6b4226, emissive: 0x6b4226, emissiveIntensity: 0.15, roughness: 0.75, metalness: 0.0 });
+      const muzzleMat = this._mat({ color: 0xc99e6a, emissive: 0xc99e6a, emissiveIntensity: 0.15, roughness: 0.7, metalness: 0.0 });
+      for (const sx of [-1, 1]) {
+        const ear = box(44 * sk, HEAD_R * 1.1, HEAD_R * 0.6, earMat);
+        ear.rotation.z = -sx * 0.18;   // outward flop
+        ear.position.set(sx * HEAD_R * 1.05, headY + HEAD_R * 0.05, 0);
+        root.add(ear);
+      }
+      const snout = box(HEAD_R * 0.64, HEAD_R * 0.46, HEAD_R * 0.6, muzzleMat);
+      snout.position.set(0, headY - HEAD_R * 0.28, -HEAD_R * 1.0);
+      root.add(snout);
+      const nose = sphere(HEAD_R * 0.18, c.dark);
+      nose.position.set(0, headY - HEAD_R * 0.18, -HEAD_R * 1.32);
+      root.add(nose);
+      const tail = cyl(18 * sk, 250 * sk, earMat);
+      tail.rotation.x = -0.9;   // wags up-back
+      tail.position.set(0, hipY * 0.95, backZ + 90 * sk);
+      root.add(tail);
+    } else if (kind === 'cartoon_duck') {
+      // Wide flat yellow-orange bill (legs/feet handled by spec legColor/footMul).
+      const billMat = this._mat({ color: 0xe8931d, emissive: 0xe8931d, emissiveIntensity: 0.25, roughness: 0.55, metalness: 0.0 });
+      const bill = box(HEAD_R * 1.05, HEAD_R * 0.17, HEAD_R * 0.6, billMat);
+      bill.position.set(0, headY - HEAD_R * 0.14, -HEAD_R * 1.08);
+      root.add(bill);
+    } else if (kind === 'cowboy') {
+      // Wide-brim hat + tint bandana + brown vest front panels.
+      const hatMat = this._mat({ color: 0x7a5230, emissive: 0x7a5230, emissiveIntensity: 0.12, roughness: 0.75, metalness: 0.0 });
+      const brim = cyl(HEAD_R * 1.42, 24 * sk, hatMat);
+      brim.position.set(0, headY + HEAD_R * 0.55, 0);
+      root.add(brim);
+      const crown = cyl(HEAD_R * 0.72, HEAD_R * 0.72, hatMat);
+      crown.position.set(0, headY + HEAD_R * 0.55 + HEAD_R * 0.36, 0);
+      root.add(crown);
+      const bandana = box(TORSO_W * 0.78, 55 * sk, TORSO_D * 0.9, c.accent);
+      bandana.position.set(0, torsoY + TORSO_H * 0.5 + 20 * sk, 0);
+      root.add(bandana);
+      const vestMat = this._mat({ color: 0x6b4226, emissive: 0x6b4226, emissiveIntensity: 0.12, roughness: 0.75, metalness: 0.0 });
+      for (const sx of [-1, 1]) {
+        const panel = box(TORSO_W * 0.32, TORSO_H * 0.72, 18 * sk, vestMat);
+        panel.position.set(sx * TORSO_W * 0.33, torsoY + TORSO_H * 0.05, frontZ - 8 * sk);
+        root.add(panel);
+      }
+    } else if (kind === 'magician') {
+      // Black top hat + white shirt V (professional's cone) + tint bowtie.
+      const hatMat = this._mat({ color: 0x111114, roughness: 0.6, metalness: 0.1 });
+      const brim = cyl(HEAD_R * 1.12, 18 * sk, hatMat);
+      brim.position.set(0, headY + HEAD_R * 0.6, 0);
+      root.add(brim);
+      const crown = cyl(HEAD_R * 0.7, HEAD_R * 1.25, hatMat);
+      crown.position.set(0, headY + HEAD_R * 0.6 + HEAD_R * 0.63, 0);
+      root.add(crown);
+      const shirt = new THREE.Mesh(
+        new THREE.ConeGeometry(TORSO_W * 0.34, TORSO_H * 0.6, 3),
+        this._mat({ color: 0xf2f2f0, roughness: 0.6, metalness: 0.0 }),
+      );
+      shirt.rotation.x = Math.PI;
+      shirt.rotation.y = Math.PI / 4;
+      shirt.position.set(0, torsoY + TORSO_H * 0.02, frontZ - 8 * sk);
+      root.add(shirt);
+      const bowtie = box(TORSO_W * 0.3, 45 * sk, 22 * sk, c.accent);
+      bowtie.position.set(0, torsoY + TORSO_H * 0.44, frontZ - 12 * sk);
+      root.add(bowtie);
+    } else if (kind === 'farmer') {
+      // Straw hat (lighter tan) + denim overall bib with shoulder straps.
+      const straw = this._mat({ color: 0xd9b36a, emissive: 0xd9b36a, emissiveIntensity: 0.15, roughness: 0.8, metalness: 0.0 });
+      const brim = cyl(HEAD_R * 1.3, 20 * sk, straw);
+      brim.position.set(0, headY + HEAD_R * 0.55, 0);
+      root.add(brim);
+      const crown = cyl(HEAD_R * 0.7, HEAD_R * 0.55, straw);
+      crown.position.set(0, headY + HEAD_R * 0.55 + HEAD_R * 0.28, 0);
+      root.add(crown);
+      const denim = this._mat({ color: 0x3f5f8a, emissive: 0x3f5f8a, emissiveIntensity: 0.15, roughness: 0.7, metalness: 0.0 });
+      const bib = box(TORSO_W * 0.56, TORSO_H * 0.5, 20 * sk, denim);
+      bib.position.set(0, torsoY - TORSO_H * 0.05, frontZ - 10 * sk);
+      root.add(bib);
+      for (const sx of [-1, 1]) {
+        const strap = box(48 * sk, TORSO_H * 0.5, 16 * sk, denim);
+        strap.position.set(sx * TORSO_W * 0.26, torsoY + TORSO_H * 0.28, frontZ - 8 * sk);
+        root.add(strap);
+      }
+    } else if (kind === 'tech_expert') {
+      // Rectangular glasses + headset band with mic stub + tint utility belt.
+      const frame = this._mat({ color: 0x17181c, roughness: 0.5, metalness: 0.2 });
+      for (const sx of [-1, 1]) {
+        const lens = box(HEAD_R * 0.4, HEAD_R * 0.3, 20 * sk, frame);
+        lens.position.set(sx * HEAD_R * 0.38, headY + HEAD_R * 0.12, -HEAD_R * 0.92);
+        root.add(lens);
+      }
+      const bridge = box(HEAD_R * 0.2, 16 * sk, 16 * sk, frame);
+      bridge.position.set(0, headY + HEAD_R * 0.12, -HEAD_R * 0.94);
+      root.add(bridge);
+      const bandMat = this._mat({ color: 0x2c2e34, roughness: 0.6, metalness: 0.2 });
+      const band = new THREE.Mesh(
+        new THREE.TorusGeometry(HEAD_R * 1.02, 16 * sk, 8, 18, Math.PI),
+        bandMat,
+      );
+      band.position.set(0, headY, 0);   // arcs ear-to-ear over the crown
+      root.add(band);
+      const mic = cyl(10 * sk, HEAD_R * 0.7, bandMat);
+      mic.rotation.z = 1.15;
+      mic.position.set(HEAD_R * 0.62, headY - HEAD_R * 0.35, -HEAD_R * 0.5);
+      root.add(mic);
+      const micTip = sphere(22 * sk, c.accent);
+      micTip.position.set(HEAD_R * 0.32, headY - HEAD_R * 0.5, -HEAD_R * 0.5);
+      root.add(micTip);
+      const belt = box(TORSO_W * 1.05, TORSO_H * 0.1, TORSO_D * 1.05, c.accent);
+      belt.position.set(0, torsoY - TORSO_H * 0.42, 0);
+      root.add(belt);
+    } else if (kind === 'supermodel') {
+      // Long dark hair shell + sunglasses pushed up + tint dress below the hips.
+      const hairMat = this._mat({ color: 0x2a2026, roughness: 0.75, metalness: 0.05 });
+      const cap = new THREE.Mesh(
+        new THREE.SphereGeometry(HEAD_R * 1.12, 16, 12, 0, Math.PI * 2, 0, Math.PI * 0.55),
+        hairMat,
+      );
+      cap.position.set(0, headY, 0);
+      root.add(cap);
+      const fall = box(HEAD_R * 1.5, HEAD_R * 1.9, HEAD_R * 0.42, hairMat);
+      fall.position.set(0, headY - HEAD_R * 0.4, HEAD_R * 0.78);
+      root.add(fall);
+      const glasses = box(HEAD_R * 1.1, HEAD_R * 0.22, HEAD_R * 0.16,
+        this._mat({ color: 0x0a0a0c, metalness: 0.5, roughness: 0.2 }));
+      glasses.position.set(0, headY + HEAD_R * 0.62, -HEAD_R * 0.72);
+      root.add(glasses);
+      const dress = box(TORSO_W * 1.06, TORSO_H * 0.46, TORSO_D * 1.06, c.accent);
+      dress.position.set(0, torsoY - TORSO_H * 0.5, 0);   // hem lands below the hips
+      root.add(dress);
+    } else if (kind === 'wise_oracle') {
+      // Ankle-length robe skirt (shares the torso material — a static shell
+      // around the still-working leg joints; Sims-style it may intersect
+      // seats while sitting), white beard block, tint amulet at the chest.
+      const skirtH = hipY - 20 * sk;
+      const skirt = box(TORSO_W * 1.18, skirtH, TORSO_D * 1.35, c.bodyMat);
+      skirt.position.set(0, hipY + 40 * sk - skirtH / 2, 0);
+      root.add(skirt);
+      const beard = box(HEAD_R * 0.62, HEAD_R * 0.85, HEAD_R * 0.28,
+        this._mat({ color: 0xe8e8e4, emissive: 0xe8e8e4, emissiveIntensity: 0.1, roughness: 0.85, metalness: 0.0 }));
+      beard.position.set(0, headY - HEAD_R * 0.78, -HEAD_R * 0.72);
+      root.add(beard);
+      const amulet = sphere(50 * sk, c.accent);
+      amulet.position.set(0, torsoY + TORSO_H * 0.22, frontZ - 24 * sk);
+      root.add(amulet);
+    } else if (kind === 'astronaut') {
+      // Translucent helmet bubble + grey chest control panel + backpack.
+      const helmet = sphere(HEAD_R * 1.26, this._mat({
+        color: 0xbfd8e8, roughness: 0.15, metalness: 0.1,
+        transparent: true, opacity: 0.22,
+      }));
+      helmet.userData.outlineSkip = true;   // transparent anyway, but explicit
+      helmet.position.set(0, headY, 0);
+      root.add(helmet);
+      const panelMat = this._mat({ color: 0x8a9099, roughness: 0.5, metalness: 0.3 });
+      const panel = box(TORSO_W * 0.5, TORSO_H * 0.28, 26 * sk, panelMat);
+      panel.position.set(0, torsoY + TORSO_H * 0.1, frontZ - 10 * sk);
+      root.add(panel);
+      // Tiny tint status light on the panel keeps sensor colour coding.
+      const lamp = sphere(20 * sk, c.accent);
+      lamp.position.set(TORSO_W * 0.14, torsoY + TORSO_H * 0.18, frontZ - 26 * sk);
+      root.add(lamp);
+      const pack = box(TORSO_W * 0.85, TORSO_H * 0.6, TORSO_D * 0.6,
+        this._mat({ color: 0xd8d8dc, roughness: 0.6, metalness: 0.1 }));
+      pack.position.set(0, torsoY + TORSO_H * 0.05, backZ + TORSO_D * 0.32);
+      root.add(pack);
     }
     // adult / child / alien: no extra accessory meshes.
   }
@@ -5234,12 +5526,19 @@ export class ThreeDRenderer {
     // `steel` swaps a brushed-metal look on the skin material.
     const GREY = 0x9aa3ad, CHARCOAL = 0x2c2e34, NEARBLACK = 0x161619;
     const PALE = 0xe7c6a4, MATTE = 0x1a1a1e, GOLD = 0xcaa53a, GREEN = 0x86d46a;
+    const PLUSH = 0x8b5e3c, MOUSE = 0x9e9e9e, DOG = 0xa1704a, DUCKW = 0xf2f0e6;
+    const WHITE = 0xf2f2f2, ROBE = 0x7b718f;
     interface Spec {
       sk: number; headR: number; headShape: 'sphere' | 'box'; limbR: number;
       skin: number; body: number; shoe: number; emI: number;
       hands: 'sphere' | 'box';
       eyes: 'dots' | 'visor' | 'almond' | 'redvisor' | 'shades' | 'slit' | 'halfred';
       steel: boolean;
+      // Optional proportion/colour knobs (default 1 / unset):
+      armL?: number;      // arm length multiplier (duck's stubby wings)
+      legL?: number;      // leg length multiplier (teddy's stubby legs)
+      footMul?: [number, number, number];  // foot w/h/d multipliers (duck flippers)
+      legColor?: number;  // leg material colour override (duck's yellow legs)
     }
     const SPECS: Record<AvatarKind, Spec> = {
       adult:        { sk: 1,    headR: 126, headShape: 'sphere', limbR: 1,   skin: color, body: color,     shoe: 0x1a1a1f, emI: 0.25, hands: 'sphere', eyes: 'dots',    steel: false },
@@ -5257,21 +5556,38 @@ export class ThreeDRenderer {
       cyborg:       { sk: 1,    headR: 126, headShape: 'sphere', limbR: 1,   skin: color, body: color,     shoe: 0x1a1a1f, emI: 0.25, hands: 'sphere', eyes: 'halfred', steel: false },
       ninja_cyborg: { sk: 1,    headR: 120, headShape: 'sphere', limbR: 1,   skin: MATTE, body: MATTE,     shoe: 0x0a0a0c, emI: 0.05, hands: 'sphere', eyes: 'redvisor',steel: false },
       athlete:      { sk: 1,    headR: 126, headShape: 'sphere', limbR: 1,   skin: color, body: color,     shoe: 0xf2f2f2, emI: 0.25, hands: 'sphere', eyes: 'dots',    steel: false },
+      // ── Mascots & characters ─────────────────────────────────────────────
+      teddy_bear:   { sk: 0.9,  headR: 140, headShape: 'sphere', limbR: 1.3, skin: PLUSH, body: PLUSH,     shoe: PLUSH,    emI: 0.20, hands: 'sphere', eyes: 'dots',    steel: false, armL: 0.8, legL: 0.8 },
+      cartoon_mouse:{ sk: 0.85, headR: 120, headShape: 'sphere', limbR: 0.9, skin: MOUSE, body: MOUSE,     shoe: 0x555a60, emI: 0.20, hands: 'sphere', eyes: 'dots',    steel: false },
+      cartoon_dog:  { sk: 0.95, headR: 128, headShape: 'sphere', limbR: 1,   skin: DOG,   body: DOG,       shoe: 0x5a3d28, emI: 0.20, hands: 'sphere', eyes: 'dots',    steel: false },
+      cartoon_duck: { sk: 0.85, headR: 122, headShape: 'sphere', limbR: 0.9, skin: DUCKW, body: DUCKW,     shoe: 0xe8a020, emI: 0.20, hands: 'sphere', eyes: 'dots',    steel: false, armL: 0.6, footMul: [1.6, 0.7, 1.35], legColor: 0xe8a020 },
+      // ── Occupations & archetypes ─────────────────────────────────────────
+      cowboy:       { sk: 1,    headR: 126, headShape: 'sphere', limbR: 1,   skin: color, body: color,     shoe: 0x5a3d28, emI: 0.22, hands: 'sphere', eyes: 'dots',    steel: false },
+      magician:     { sk: 1,    headR: 126, headShape: 'sphere', limbR: 1,   skin: color, body: NEARBLACK, shoe: 0x0a0a0c, emI: 0.20, hands: 'sphere', eyes: 'dots',    steel: false },
+      farmer:       { sk: 1,    headR: 126, headShape: 'sphere', limbR: 1,   skin: color, body: color,     shoe: 0x5a3d28, emI: 0.22, hands: 'sphere', eyes: 'dots',    steel: false },
+      tech_expert:  { sk: 1,    headR: 126, headShape: 'sphere', limbR: 1,   skin: color, body: NEARBLACK, shoe: 0x33363c, emI: 0.20, hands: 'sphere', eyes: 'dots',    steel: false },
+      supermodel:   { sk: 1.05, headR: 124, headShape: 'sphere', limbR: 0.9, skin: color, body: color,     shoe: 0xf2f2f2, emI: 0.25, hands: 'sphere', eyes: 'dots',    steel: false },
+      wise_oracle:  { sk: 1,    headR: 126, headShape: 'sphere', limbR: 1,   skin: PALE,  body: ROBE,      shoe: 0x3a3542, emI: 0.15, hands: 'sphere', eyes: 'dots',    steel: false },
+      astronaut:    { sk: 1,    headR: 118, headShape: 'sphere', limbR: 1.1, skin: WHITE, body: WHITE,     shoe: WHITE,    emI: 0.15, hands: 'sphere', eyes: 'dots',    steel: false },
     };
     const spec = SPECS[kind] ?? SPECS.adult;
     const sk = spec.sk;
+    const armL = spec.armL ?? 1, legL = spec.legL ?? 1;
+    const [fmW, fmH, fmD] = spec.footMul ?? [1, 1, 1];
+    const pers = AVATAR_PERSONALITY[kind] ?? {};
+    const idleOffset = Math.random() * Math.PI * 2;
 
     // Sims proportions: head and hands run oversized (~1.15×) so figures read
     // as game characters rather than mannequins. Lengths scale with `sk`; the
     // head radius is absolute (spec.headR).
     const HEAD_R = spec.headR;
     const TORSO_W = 240 * sk, TORSO_H = 600 * sk, TORSO_D = 140 * sk;
-    const ARM_UPPER_R = 52 * sk * spec.limbR, ARM_UPPER_LEN = 320 * sk;
-    const ARM_LOWER_R = 44 * sk * spec.limbR, ARM_LOWER_LEN = 280 * sk;
+    const ARM_UPPER_R = 52 * sk * spec.limbR, ARM_UPPER_LEN = 320 * sk * armL;
+    const ARM_LOWER_R = 44 * sk * spec.limbR, ARM_LOWER_LEN = 280 * sk * armL;
     const HAND_R = 67 * sk;
-    const LEG_UPPER_R = 80 * sk * spec.limbR, LEG_UPPER_LEN = 430 * sk;
-    const LEG_LOWER_R = 65 * sk * spec.limbR, LEG_LOWER_LEN = 380 * sk;
-    const FOOT_W = 90 * sk, FOOT_H = 60 * sk, FOOT_D = 230 * sk;
+    const LEG_UPPER_R = 80 * sk * spec.limbR, LEG_UPPER_LEN = 430 * sk * legL;
+    const LEG_LOWER_R = 65 * sk * spec.limbR, LEG_LOWER_LEN = 380 * sk * legL;
+    const FOOT_W = 90 * sk * fmW, FOOT_H = 60 * sk * fmH, FOOT_D = 230 * sk * fmD;
 
     const hipY = LEG_UPPER_LEN + LEG_LOWER_LEN + FOOT_H;
     const torsoY = hipY + TORSO_H / 2;
@@ -5470,12 +5786,15 @@ export class ThreeDRenderer {
 
     // Limbs. Cyborg kinds get a brushed-steel prosthetic right (+x) arm; the
     // plain cyborg additionally gets a steel right leg (same side as its arm
-    // + head plate).
+    // + head plate). `legColor` (duck's yellow legs) recolors BOTH legs.
     const steelMat = (kind === 'ninja_cyborg' || kind === 'cyborg')
       ? this._mat({ color: 0x8a9099, emissive: 0x8a9099, emissiveIntensity: 0.1, metalness: 0.8, roughness: 0.3 })
       : skin;
-    const leftLeg  = makeLeg(-TORSO_W / 4);
-    const rightLeg = makeLeg( TORSO_W / 4, kind === 'cyborg' ? steelMat : skin);
+    const baseLegMat = spec.legColor != null
+      ? this._mat({ color: spec.legColor, emissive: spec.legColor, emissiveIntensity: 0.2, metalness: 0.1, roughness: 0.6 })
+      : skin;
+    const leftLeg  = makeLeg(-TORSO_W / 4, baseLegMat);
+    const rightLeg = makeLeg( TORSO_W / 4, kind === 'cyborg' ? steelMat : baseLegMat);
     const leftArm  = makeArm(-(TORSO_W / 2 + ARM_UPPER_R * 0.7));
     const rightArm = makeArm( TORSO_W / 2 + ARM_UPPER_R * 0.7, steelMat);
     // Relaxed A-pose: arms splay a touch outward so the silhouette isn't a
@@ -5487,8 +5806,8 @@ export class ThreeDRenderer {
     // ── Per-variant accessories (added BEFORE the outline pass so they get
     // cartoon shells too; emissive parts opt out via userData.outlineSkip).
     this._addAvatarAccessories(kind, spec, root, {
-      color, accent, dark, shoeMat, skin,
-      HEAD_R, headY, torsoY, TORSO_W, TORSO_H, TORSO_D, sk,
+      color, accent, dark, shoeMat, skin, bodyMat,
+      HEAD_R, headY, torsoY, hipY, TORSO_W, TORSO_H, TORSO_D, sk,
     });
 
     // Cartoon outlines on the body (thinner than furniture; minDim catches
@@ -5523,6 +5842,9 @@ export class ThreeDRenderer {
       avatarKind: kind,
       hipY, shoulderY, headTopReach: headY,
       armUpper: armUpperLen, armLower: armLowerReach, legM,
+      persBob: pers.bobMul ?? 1, persSway: pers.swayMul ?? 1,
+      persCadence: pers.cadenceMul ?? 1, persAmp: pers.ampMul ?? 1,
+      chatterNext: 25 + idleOffset / (Math.PI * 2) * 35, chatterT: 0, chatterGlyph: null,
       torso,
       plumbob,
       blob,
@@ -5540,7 +5862,7 @@ export class ThreeDRenderer {
       activity: null, activityAnchor: null, activityDwell: 0,
       act: 0, privacy: 0, blurSprite: null,
       bubble: null, bubbleKind: null, bubbleWant: null, bubbleDwell: 0,
-      idleOffset: Math.random() * Math.PI * 2,
+      idleOffset,
       vx: 0, vz: 0,
       lastX: 0, lastZ: 0, lastUpdate: 0, initialized: false,
       navX: 0, navZ: 0, carrotX: 0, carrotZ: 0, nvx: 0, nvz: 0,

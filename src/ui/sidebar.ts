@@ -11,13 +11,17 @@ import type {
   ObjectRecipe, RecipePrimitive, RecipeShape, ActivityKind, AvatarKind,
 } from '../types.js';
 
-// Avatar model dropdown options (shared by the mmWave + motion editors).
-// 'adult' is the default; picking it clears avatarKind back to undefined.
-const AVATAR_OPTIONS: ReadonlyArray<[string, string]> = [
+// Avatar model options (shared by the mmWave + motion checkbox grids). All 22
+// concrete kinds; the old 'Random' entry is gone — checking MULTIPLE kinds is
+// the new way to randomize (each target stably hash-picks from the checked set).
+const AVATAR_OPTIONS: ReadonlyArray<[AvatarKind, string]> = [
   ['adult', 'Adult'], ['child', 'Child'], ['robot', 'Robot'], ['alien', 'Alien'],
   ['professional', 'Professional'], ['hacker', 'Hacker'], ['movie_star', 'Movie star'],
   ['ninja', 'Ninja'], ['cyborg', 'Cyborg'], ['ninja_cyborg', 'Ninja cyborg'],
-  ['athlete', 'Athlete'], ['random', 'Random'],
+  ['athlete', 'Athlete'], ['teddy_bear', 'Teddy bear'], ['cartoon_mouse', 'Cartoon mouse'],
+  ['cartoon_dog', 'Cartoon dog'], ['cartoon_duck', 'Cartoon duck'], ['cowboy', 'Cowboy'],
+  ['magician', 'Magician'], ['farmer', 'Farmer'], ['tech_expert', 'Tech expert'],
+  ['supermodel', 'Supermodel'], ['wise_oracle', 'Wise oracle'], ['astronaut', 'Astronaut'],
 ];
 import {
   fmtLen,
@@ -343,6 +347,52 @@ export class Sidebar extends LitElement {
     `;
   }
 
+  // Shared avatar-pool checkbox grid (mmWave sensor + motion AI editors).
+  // Checked kinds land in `avatarKinds` (each target stably hash-picks one);
+  // the legacy single `avatarKind` is only READ (pre-checks its kind when the
+  // list is unset) and cleared on any change — the new UI writes avatarKinds
+  // exclusively. Nothing checked = default adult.
+  private _avatarGrid(
+    item: { avatarKind?: AvatarKind | 'random'; avatarKinds?: AvatarKind[] },
+    upd: (mut: () => void) => void,
+  ) {
+    const legacy = item.avatarKind && item.avatarKind !== 'random'
+      ? [item.avatarKind] : [];
+    const checked = new Set<AvatarKind>(item.avatarKinds ?? legacy);
+    const write = (set: Set<AvatarKind>) => upd(() => {
+      item.avatarKinds = set.size ? [...set] : undefined;
+      item.avatarKind = undefined;   // legacy single-pick superseded
+    });
+    const toggle = (k: AvatarKind) => {
+      const s = new Set(checked);
+      if (s.has(k)) s.delete(k); else s.add(k);
+      write(s);
+    };
+    return html`
+      <div class="row" title="3D character models for this sensor's targets. Check several — each person stably picks one. None checked = Adult.">
+        <label>Avatars</label>
+        <span style="flex:1;text-align:right;font-size:10px">
+          <button class="btn" style="font-size:10px;padding:1px 6px"
+                  @click=${() => write(new Set(AVATAR_OPTIONS.map(([v]) => v)))}>All</button>
+          <button class="btn" style="font-size:10px;padding:1px 6px;margin-left:4px"
+                  @click=${() => write(new Set())}>None</button>
+        </span>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:1px 6px;
+                  background:rgba(0,0,0,0.2);border-radius:4px;padding:4px 6px;margin:2px 0 4px">
+        ${AVATAR_OPTIONS.map(([val, lbl]) => html`
+          <label style="display:flex;align-items:center;gap:4px;font-size:10px;
+                        color:var(--text);cursor:pointer;white-space:nowrap;overflow:hidden">
+            <input type="checkbox" style="margin:0;flex:none"
+                   .checked=${checked.has(val)}
+                   @change=${() => toggle(val)}>
+            ${lbl}
+          </label>
+        `)}
+      </div>
+    `;
+  }
+
   // Furniture kind options grouped by category. `selected` is either a
   // FurnitureKind or `custom:<recipeId>` for a custom object.
   private _kindOptions(selected: string) {
@@ -472,17 +522,7 @@ export class Sidebar extends LitElement {
             ${m.avatar ? '🧍 On' : '— Off'}
           </button>
         </div>
-        ${m.avatar ? html`
-          <div class="row" title="3D character model used for this avatar">
-            <label>Model</label>
-            <select .value=${m.avatarKind || 'adult'}
-                    @change=${(e: Event) => upd(() => {
-                      const v = (e.target as HTMLSelectElement).value;
-                      m.avatarKind = v === 'adult' ? undefined : (v as AvatarKind | 'random');
-                    })}>
-              ${AVATAR_OPTIONS.map(([val, lbl]) => html`<option value=${val}>${lbl}</option>`)}
-            </select>
-          </div>` : nothing}
+        ${m.avatar ? this._avatarGrid(m, upd) : nothing}
         ${this._lockRow(m)}
         <div class="row"><label>HA entity</label>
           <span style="font-size:11px;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
@@ -1649,17 +1689,7 @@ export class Sidebar extends LitElement {
                   title="Reset to palette default — tints this sensor's T1/T2/T3 dots"
                   @click=${() => { s.color = undefined; p.save(); p.emitConfig(); }}>↺</button>
         </div>
-        <div class="row" title="3D character model used for this sensor's targets">
-          <label>Avatar</label>
-          <select .value=${s.avatarKind || 'adult'}
-                  @change=${(e: Event) => {
-                    const v = (e.target as HTMLSelectElement).value;
-                    s.avatarKind = v === 'adult' ? undefined : (v as AvatarKind | 'random');
-                    p.save(); p.emitConfig();
-                  }}>
-            ${AVATAR_OPTIONS.map(([val, lbl]) => html`<option value=${val}>${lbl}</option>`)}
-          </select>
-        </div>
+        ${this._avatarGrid(s, (mut: () => void) => { mut(); p.save(); p.emitConfig(); })}
         <div class="row"><label>HA Device</label>
           <!-- Use .value (property) not ?selected (attribute) so a freshly-
                dropped sensor with deviceSlug=null reliably resets to the
