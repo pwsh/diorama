@@ -1,13 +1,13 @@
 # Project status & pick-up guide
 
-Last updated: 2026-07-11, at **v0.8.0**. This is the single document to read
+Last updated: 2026-07-11, at **v0.9.0**. This is the single document to read
 (alongside `CLAUDE.md`) to resume work with full context.
 
 ## Where things stand
 
 Diorama is feature-complete through the Sims-2000 arc (`docs/DESIGN-sims.md`,
 all 7 phases shipped) plus five post-arc batches. Everything below is merged
-to `main`, pushed to **both remotes**, released through **v0.8.0**, and
+to `main`, pushed to **both remotes**, released through **v0.9.0**, and
 deployed to the live HA instance.
 
 ### Remotes, releases, deploy
@@ -29,7 +29,8 @@ deployed to the live HA instance.
   → v0.6.0 living avatars (AI avatars, despawn fades, beds, auto-follow) →
   v0.7.0 polish & reachability (UI reorg, sectional fix, colors, step
   lights) → v0.8.0 the cast expands (22 avatars, planar rooms, device
-  controls).
+  controls) → v0.9.0 room-label layer, unnamed-room placeholders +
+  enclosure feedback, settings version stamp.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
