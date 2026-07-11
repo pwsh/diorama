@@ -39,12 +39,48 @@ export interface HaEntityReg {
   name?: string | null;
 }
 
+// One normalized point of an entity's history (from getHistory). `ts` is epoch
+// ms; `attrs` carries lat/lon/gps_accuracy for device_tracker rows (see
+// normalizeHistory — HA's compressed rows omit `a` when attributes are
+// unchanged, so it's forward-filled from the previous row).
+export interface HistoryPoint {
+  state: string;
+  attrs: Record<string, unknown>;
+  ts: number;
+}
+
+// Normalize HA's `history/history_during_period` compressed result. Row keys:
+// s = state, a = attributes, lu = last_updated (epoch seconds), lc =
+// last_changed. Attributes are forward-filled across rows that omit `a`.
+// Tolerates the verbose (uncompressed) shape too.
+export function normalizeHistory(raw: unknown): Record<string, HistoryPoint[]> {
+  const out: Record<string, HistoryPoint[]> = {};
+  if (!raw || typeof raw !== 'object') return out;
+  for (const [eid, rows] of Object.entries(raw as Record<string, unknown>)) {
+    if (!Array.isArray(rows)) continue;
+    let lastAttrs: Record<string, unknown> = {};
+    out[eid] = rows.map(r => {
+      const row = r as Record<string, unknown>;
+      const a = (row.a ?? row.attributes) as Record<string, unknown> | undefined;
+      if (a && typeof a === 'object') lastAttrs = a;
+      const lu = (row.lu ?? row.last_updated ?? row.lc ?? row.last_changed) as number | string | undefined;
+      const ts = typeof lu === 'number' ? lu * 1000
+               : lu != null ? Date.parse(String(lu)) : 0;
+      return { state: String(row.s ?? row.state ?? ''), attrs: { ...lastAttrs }, ts };
+    });
+  }
+  return out;
+}
+
 export interface HaApi {
   states: Record<string, HassState>;
   connect(): void;
   onState(fn: StateListener): void;
   onConn(fn: ConnListener): void;
   callService(domain: string, service: string, data: Record<string, unknown>): unknown;
+  // Pull recorder history for the given entities over [startISO, endISO].
+  // Returns normalized points per entity (empty map on failure / no data).
+  getHistory(entityIds: string[], startISO: string, endISO: string): Promise<Record<string, HistoryPoint[]>>;
   getDevices(): Promise<Array<HaDevice>>;
   getEntityRegistry(): Promise<Array<HaEntityReg>>;
   // Update an entity-registry entry (e.g. { disabled_by: null } to enable a
@@ -93,6 +129,21 @@ export class HassClient implements HaApi {
 
   callService(domain: string, service: string, data: Record<string, unknown>) {
     return this._send({ type: 'call_service', domain, service, service_data: data });
+  }
+
+  async getHistory(entityIds: string[], startISO: string, endISO: string): Promise<Record<string, HistoryPoint[]>> {
+    if (!entityIds.length) return {};
+    const res = await this._send({
+      type: 'history/history_during_period',
+      start_time: startISO,
+      end_time: endISO,
+      entity_ids: entityIds,
+      significant_changes_only: false,
+      minimal_response: false,
+      no_attributes: false,
+    });
+    if (!res.success) return {};
+    return normalizeHistory(res.result);
   }
 
   // HA registry helpers — used by the entity picker so users can search by

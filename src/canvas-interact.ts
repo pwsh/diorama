@@ -13,7 +13,7 @@ import {
   hitDoor, hitDoorEnd, hitWindow, hitWindowEnd,
 } from './canvas-hit.js';
 import type { Planner } from './planner.js';
-import { NEW_ROOM } from './planner.js';
+import { NEW_ROOM, NEW_LANDMARK } from './planner.js';
 import type { Vec2, Furniture, ObjectRecipe, Light } from './types.js';
 
 // Auto-snap a mountable piece (coffee maker, toaster, …) onto a counter-height
@@ -240,6 +240,7 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
   if (p.uiMode !== 'edit') return;  // kiosk/view: no drags, no selections
   if (p.editZone) return;
   if (p.placingRoomId) return;  // room-placement latch: let the click set the anchor
+  if (p.placingLandmarkId) return;  // geo-landmark latch: let the click place the pin
   const mm = pxToMm(canvas, view, e);
   if (p.tool !== 'select') return;
 
@@ -862,6 +863,21 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
     }
     p.placingRoomId = null;
     p.save(); p.emitConfig();
+    return;
+  }
+
+  // Geo-landmark placement latch (GPS / Geo UI): the next click places a pin.
+  // NEW_LANDMARK creates a fresh (uncalibrated) landmark; an existing id
+  // re-places that pin. Landmarks are store-level (property-wide).
+  if (p.placingLandmarkId) {
+    if (p.placingLandmarkId === NEW_LANDMARK) {
+      p.addGeoLandmark(mm.x, mm.y);
+    } else {
+      const id = p.placingLandmarkId;
+      p.updateLandmark(id, l => { l.x = Math.round(mm.x); l.y = Math.round(mm.y); });
+    }
+    p.placingLandmarkId = null;
+    p.emitConfig();
     return;
   }
 

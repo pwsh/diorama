@@ -377,6 +377,32 @@ export interface WeatherConfig {
   affectLighting?: boolean;// default true — cloudy/precip dims the day preset; consumed in W2
 }
 
+// ── Geo reference (the "World Outside" arc, Feature G) ────────────────────
+// Landmarks are placed on the plan (world mm) and calibrated to a real-world
+// lat/lon by sampling a device_tracker while standing at the spot. The
+// lat/lon↔plan transform (src/geo.ts) is fit from the calibrated landmarks;
+// GPS device pins (G2) ride it. Landmarks are STORE-level (property-wide,
+// span every floor), NOT per-floor.
+export interface GeoLandmark {
+  id: string; name: string;
+  x: number; y: number;        // world mm on the plan (click-placed)
+  lat?: number; lon?: number;  // filled by calibration; absent = placed but uncalibrated
+  accuracy?: number;           // median gps_accuracy of the winning samples (m)
+  sampleCount?: number;        // usable samples the median was taken over
+  sampledAt?: string;          // ISO timestamp of the calibration
+  hidden?: boolean;            // per-landmark hide (plus the whole `geo` layer toggle)
+}
+
+export interface GeoConfig {
+  landmarks: GeoLandmark[];
+  northDeg?: number;           // compass bearing (deg CW from true north) of plan +Y;
+                               // used only when exactly 1 calibrated landmark. Default 0
+                               // → plan +Y faces true north.
+  boundaryM?: number;          // GPS render boundary beyond floor bbox (m); default 30 (G2)
+  accuracyGateM?: number;      // calibration sample filter — drop samples worse than this
+                               // gps_accuracy (m); default 30
+}
+
 export interface Store {
   v: number;
   floors: Floor[];
@@ -395,6 +421,7 @@ export interface Store {
   people?: DioramaPerson[];          // household identity registry (BLE / GPS resolve to a person)
   bleShowUnknown?: boolean;          // show BLE devices not mapped to a person (absent = true); consumed in B2
   weather?: WeatherConfig;           // weather source + chip config (Feature W)
+  geo?: GeoConfig;                   // landmarks + lat/lon↔plan calibration (Feature G)
 }
 
 // Saved 3D camera pose (scene coords, mm — floor-centered frame).
@@ -419,6 +446,7 @@ export interface Layers2D {
   zones?: boolean;      // LD2450 zone polys + halos
   targets?: boolean;    // live target dots
   activity?: boolean;   // default OFF: glow pools for lights that are ON + active motion
+  geo?: boolean;        // geo landmark pins (+ GPS device pins in G2); 2D-only this phase
 }
 
 export interface Layer2DPreset {

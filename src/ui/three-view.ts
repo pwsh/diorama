@@ -378,6 +378,10 @@ export class ThreeView extends LitElement {
       const scBase = p.store.scene3d ?? { preset: 'night' as const };
       const effPreset = this._effectivePreset(scBase, states);
       const scMerged = { ...scBase, ...(f.look3d ?? {}), preset: effPreset };
+      // NOTE (G2): the `geo` layer is 2D-only in G1 (landmark pins draw in
+      // canvas-render). When G2 adds 3D landmark/GPS pins, fold
+      // `layers.geo !== false` into this key (and build them in updateFloor or a
+      // dedicated group) so the 3D scene rebuilds when the geo layer toggles.
       const keyFloor = `${p.configRev}|${effPreset}|` +
         `${layers.furniture !== false}|${layers.bg !== false}|${layers.walls !== false}|` +
         `${layers.labels !== false}`;

@@ -2,6 +2,8 @@ import { HassClient, type HaApi } from './ha-client.js';
 import { SensorDiscovery } from './sensor-discovery.js';
 import { loadStore, saveStore, newId, repairFloor } from './storage.js';
 import { slugToName, normMac } from './geometry.js';
+import { fitGeoTransform, medianLatLon, type GeoTransform, type GeoPair, type LatLonSample } from './geo.js';
+import type { GeoConfig, GeoLandmark } from './types.js';
 
 // ── Bermuda BLE discovery (runtime-only) ──────────────────────────────────
 // One per-scanner distance sensor for a tracked device. `disabled` reflects
@@ -99,6 +101,28 @@ export type Tool = 'select' | 'wall' | 'sensor' | 'motion' | 'env' | 'bleproxy' 
 // Sentinel for Planner.placingRoomId meaning "create a new room at the next
 // canvas click" (vs an existing room id = re-place that room's anchor).
 export const NEW_ROOM = '__new_room__';
+
+// Sentinel for Planner.placingLandmarkId meaning "create a new geo landmark at
+// the next canvas click" (vs an existing landmark id = re-place that pin).
+export const NEW_LANDMARK = '__new_landmark__';
+
+// Active geo-calibration session (runtime only). Records the sampling window
+// and a live sample counter; the median is pulled from recorder history at
+// Finish so the panel need not stay open at the landmark.
+export interface GeoCalibSession {
+  landmarkId: string;
+  trackerId: string;      // device_tracker.* being sampled
+  startedAt: string;      // ISO — window start
+  notifySlug: string;     // notify.mobile_app_<slug> for high-accuracy commands ('' = none)
+  liveCount: number;      // samples seen (passing the accuracy gate) while the panel is open
+}
+
+// Result of finishGeoCalibration — surfaced to the sidebar.
+export interface GeoCalibResult {
+  ok: boolean;
+  message: string;
+  count: number;          // usable samples the median was taken over
+}
 
 // Single-source-of-truth Planner. Lit components subscribe via addEventListener.
 export class Planner extends EventTarget {
@@ -206,7 +230,7 @@ export class Planner extends EventTarget {
     if (m !== 'edit') {
       // Leave no edit affordances dangling.
       this.drag = null; this.editZone = null; this.drawingWall = null;
-      this.tool = 'select'; this.placingRoomId = null;
+      this.tool = 'select'; this.placingRoomId = null; this.placingLandmarkId = null;
     }
     this.emitConfig();
   }
@@ -225,6 +249,14 @@ export class Planner extends EventTarget {
   // anchor. Holds the room id being re-placed, or NEW_ROOM to create a fresh
   // room at the click point. Runtime + edit-only, never persisted.
   placingRoomId: string | null = null;
+
+  // Geo-landmark placement latch (same pattern as placingRoomId): the next 2D
+  // click places a landmark pin. NEW_LANDMARK = create fresh; else re-place the
+  // held landmark id. Runtime + edit-only, never persisted.
+  placingLandmarkId: string | null = null;
+
+  // Active geo-calibration session (runtime only; see GeoCalibSession).
+  geoCalib: GeoCalibSession | null = null;
 
   // Sidebar visibility. Persisted locally (not in HA store — it's a
   // per-device preference). Defaults open on wide screens, closed on phones.
@@ -382,6 +414,10 @@ export class Planner extends EventTarget {
       }
     }
 
+    // Geo calibration live counter (live path; device_tracker is not a slow
+    // entity). Cheap no-op unless a calibration session is running.
+    if (this.geoCalib) this._geoCalibSample(states, changedId);
+
     // Weather (local sources): recompute when a bound weather/sensor entity
     // changes, or on a full refresh. Open-Meteo runs on its own timer instead.
     // Mutates weatherNow only — the emitConfig that follows on the slow path
@@ -474,6 +510,7 @@ export class Planner extends EventTarget {
             people:         remote.people         ?? undefined,
             bleShowUnknown: remote.bleShowUnknown ?? undefined,
             weather:        remote.weather        ?? undefined,
+            geo:            remote.geo            ?? undefined,
           };
           // Reset transient view state to match the loaded store.
           this.activeMotionId = null;
@@ -850,6 +887,7 @@ export class Planner extends EventTarget {
     this.tool = t;
     if (t !== 'wall') this.drawingWall = null;
     this.placingRoomId = null;  // picking any tool cancels a pending room placement
+    this.placingLandmarkId = null;
     this.emitConfig();
   }
 
@@ -897,6 +935,170 @@ export class Planner extends EventTarget {
     this.store.people = this.store.people.filter(x => x.id !== id);
     if (this.activePersonId === id) this.activePersonId = null;
     this.save();
+    this.emitConfig();
+  }
+
+  // ── Geo reference (landmarks + lat/lon↔plan calibration, Feature G) ────────
+  private _ensureGeo(): GeoConfig {
+    if (!this.store.geo) this.store.geo = { landmarks: [], boundaryM: 30, accuracyGateM: 30 };
+    if (!this.store.geo.landmarks) this.store.geo.landmarks = [];
+    return this.store.geo;
+  }
+
+  geoLandmarks(): GeoLandmark[] { return this.store.geo?.landmarks ?? []; }
+  geoAccuracyGate(): number { return this.store.geo?.accuracyGateM ?? 30; }
+
+  setGeo(mut: (g: GeoConfig) => void): void {
+    mut(this._ensureGeo());
+    this.save();
+    this.emitConfig();
+  }
+
+  // Place a landmark at world-mm (x, y). Returns the new id.
+  addGeoLandmark(x: number, y: number): string {
+    const g = this._ensureGeo();
+    const id = newId('lm');
+    g.landmarks.push({ id, name: `Landmark ${g.landmarks.length + 1}`, x: Math.round(x), y: Math.round(y) });
+    this.save();
+    this.emitConfig();
+    return id;
+  }
+
+  updateLandmark(id: string, mut: (l: GeoLandmark) => void): void {
+    const lm = this.store.geo?.landmarks.find(l => l.id === id);
+    if (!lm) return;
+    mut(lm);
+    this.save();
+    this.emitConfig();
+  }
+
+  deleteLandmark(id: string): void {
+    if (!this.store.geo) return;
+    this.store.geo.landmarks = this.store.geo.landmarks.filter(l => l.id !== id);
+    if (this.placingLandmarkId === id) this.placingLandmarkId = null;
+    if (this.geoCalib?.landmarkId === id) void this.cancelGeoCalibration();
+    this.save();
+    this.emitConfig();
+  }
+
+  // Fit the current geo transform from calibrated landmarks. Returns the fit
+  // plus the calibrated-landmark list aligned to `transform.residualsMm`, so the
+  // sidebar can flag the worst outlier by name. Null when nothing is calibrated.
+  geoFit(): { transform: GeoTransform; landmarks: GeoLandmark[] } | null {
+    const cal = this.geoLandmarks().filter(l => l.lat != null && l.lon != null);
+    if (cal.length === 0) return null;
+    const pairs: GeoPair[] = cal.map(l => ({ x: l.x, y: l.y, lat: l.lat!, lon: l.lon! }));
+    return { transform: fitGeoTransform(pairs, this.store.geo?.northDeg), landmarks: cal };
+  }
+
+  // Derive the companion-app notify service slug from a device_tracker entity id
+  // (device_tracker.eric_phone → mobile_app_eric_phone). Best-effort default the
+  // calibration card pre-fills; the user can override it.
+  notifySlugFor(trackerId: string): string {
+    const local = trackerId.split('.')[1] ?? '';
+    return local ? `mobile_app_${local}` : '';
+  }
+
+  // Fire-and-forget a companion-app high-accuracy notify command. NEVER blocks
+  // the UI or throws — Android acts on it, iOS ignores the payload harmlessly.
+  private _sendHighAccuracy(slug: string, data: Record<string, unknown>): void {
+    if (!slug || !this.hass) return;
+    try {
+      void Promise.resolve(this.hass.callService('notify', slug, {
+        message: 'command_high_accuracy_mode', data,
+      })).catch(() => { /* ignore */ });
+    } catch { /* ignore */ }
+  }
+
+  // Start sampling a device_tracker at a landmark. Records the window start and
+  // (Android) forces high-accuracy mode + a 5 s update interval.
+  startGeoCalibration(landmarkId: string, trackerId: string, notifySlug?: string): void {
+    const slug = notifySlug ?? this.notifySlugFor(trackerId);
+    this.geoCalib = {
+      landmarkId, trackerId, startedAt: new Date().toISOString(),
+      notifySlug: slug, liveCount: 0,
+    };
+    this._sendHighAccuracy(slug, { command: 'force_on' });
+    this._sendHighAccuracy(slug, { command: 'high_accuracy_set_update_interval', high_accuracy_update_interval: 5 });
+    this.emitConfig();
+  }
+
+  // Does a device_tracker attribute set pass the calibration filter?
+  // source_type must be 'gps' (missing tolerated), gps_accuracy within the gate.
+  private _geoSamplePasses(attrs: Record<string, unknown>): boolean {
+    const src = attrs.source_type;
+    if (src != null && src !== 'gps') return false;
+    const lat = attrs.latitude, lon = attrs.longitude;
+    if (typeof lat !== 'number' || typeof lon !== 'number') return false;
+    const acc = attrs.gps_accuracy;
+    if (typeof acc === 'number' && acc > this.geoAccuracyGate()) return false;
+    return true;
+  }
+
+  // Live sample counter — bumps while the panel is open. Called from _onStates
+  // on the live path when the calibrated tracker changes.
+  private _geoCalibSample(states: Record<string, HassState>, changedId?: string): void {
+    const gc = this.geoCalib;
+    if (!gc) return;
+    if (changedId !== undefined && changedId !== gc.trackerId) return;
+    const st = states[gc.trackerId];
+    if (st && this._geoSamplePasses(st.attributes as Record<string, unknown>)) {
+      gc.liveCount++;
+      this.emitConfig();
+    }
+  }
+
+  // Finish: pull the sampling window from recorder history, filter to usable GPS
+  // fixes, and store the independent median lat/lon on the landmark. Keeps old
+  // values (with an explanation) if fewer than 5 usable samples. Always sends
+  // force_off and clears the session.
+  async finishGeoCalibration(): Promise<GeoCalibResult> {
+    const gc = this.geoCalib;
+    if (!gc) return { ok: false, message: 'No calibration in progress.', count: 0 };
+    const { landmarkId, trackerId, startedAt, notifySlug } = gc;
+    this._sendHighAccuracy(notifySlug, { command: 'force_off' });
+    this.geoCalib = null;
+    const lm = this.store.geo?.landmarks.find(l => l.id === landmarkId);
+    if (!lm) { this.emitConfig(); return { ok: false, message: 'Landmark gone.', count: 0 }; }
+
+    let samples: LatLonSample[] = [];
+    try {
+      const hist = this.hass ? await this.hass.getHistory([trackerId], startedAt, new Date().toISOString()) : {};
+      const rows = hist[trackerId] ?? [];
+      samples = rows
+        .filter(r => this._geoSamplePasses(r.attrs))
+        .map(r => ({
+          lat: r.attrs.latitude as number,
+          lon: r.attrs.longitude as number,
+          accuracy: typeof r.attrs.gps_accuracy === 'number' ? r.attrs.gps_accuracy as number : undefined,
+        }));
+    } catch { samples = []; }
+
+    if (samples.length < 5) {
+      this.emitConfig();
+      return {
+        ok: false, count: samples.length,
+        message: `${samples.length} usable sample${samples.length === 1 ? '' : 's'} — need ≥5. Try an open-sky spot away from walls and sample longer.`,
+      };
+    }
+    const m = medianLatLon(samples)!;
+    this.updateLandmark(landmarkId, l => {
+      l.lat = m.lat; l.lon = m.lon;
+      l.accuracy = m.accuracy ?? undefined;
+      l.sampleCount = m.count;
+      l.sampledAt = new Date().toISOString();
+    });
+    return {
+      ok: true, count: m.count,
+      message: `Calibrated: ${m.count} samples${m.accuracy != null ? ` · ±${Math.round(m.accuracy)} m` : ''}.`,
+    };
+  }
+
+  cancelGeoCalibration(): void {
+    const gc = this.geoCalib;
+    if (!gc) return;
+    this._sendHighAccuracy(gc.notifySlug, { command: 'force_off' });
+    this.geoCalib = null;
     this.emitConfig();
   }
 

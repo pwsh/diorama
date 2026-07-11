@@ -4,12 +4,12 @@ import { customElement } from './define.js';
 import { startZoneEdit } from '../canvas-interact.js';
 import { repairFloor } from '../storage.js';
 import type { Planner, Tool } from '../planner.js';
-import { NEW_ROOM } from '../planner.js';
+import { NEW_ROOM, NEW_LANDMARK } from '../planner.js';
 import type {
   Sensor, Zone, ObjectHalo, BgImage, MotionSensor, EnvSensor, EnvKind, Light, SwitchFixture, LightIconKind,
   Furniture, FurnitureKind, Door, Window as WindowType, Layers2D, Floor, Room,
   ObjectRecipe, RecipePrimitive, RecipeShape, ActivityKind, AvatarKind,
-  BleProxy, DioramaPerson,
+  BleProxy, DioramaPerson, GeoLandmark,
 } from '../types.js';
 import type { BermudaDevice } from '../planner.js';
 import { CONDITION_GLYPH, CONDITION_LABEL, tempText } from '../weather.js';
@@ -242,6 +242,7 @@ export class Sidebar extends LitElement {
         ${this._layers2dSection()}
         ${this._scene3dSection()}
         ${this._weatherSection()}
+        ${this._geoSection()}
         ${this._model3dSection()}
         ${this._bgSection()}
 
@@ -2348,6 +2349,7 @@ export class Sidebar extends LitElement {
       { key: 'env', label: 'Env sensors' },
       { key: 'zones', label: 'Zones & halos' },
       { key: 'targets', label: 'Targets' },
+      { key: 'geo', label: 'Geo landmarks' },
       { key: 'activity', label: 'Activity glow' },
     ];
     return html`
@@ -2555,6 +2557,223 @@ export class Sidebar extends LitElement {
         <div style="font-size:11px;padding:6px 8px;background:rgba(0,0,0,0.25);border-radius:4px;line-height:1.4">
           ${preview}
         </div>
+      </div>
+    `;
+  }
+
+  // ── GPS / Geo section (Feature G, phase G1) ───────────────────────────────
+  // Landmark calibration UI. Runtime-only card state (which landmark's card is
+  // open + the chosen tracker/slug/message); the active sampling SESSION lives
+  // in Planner.geoCalib so the live sample counter survives re-renders. The
+  // whole section (and calibration flow) is edit-only — the sidebar itself only
+  // renders in edit mode (see app.ts).
+  @state() private _calibLandmarkId: string | null = null;
+  @state() private _calibTrackerId = '';
+  @state() private _calibSlug = '';
+  @state() private _calibMsg = '';
+  @state() private _calibBusy = false;
+
+  private _geoSection() {
+    const p = this.planner;
+    const landmarks = p.geoLandmarks();
+    const fit = p.geoFit();
+    const calCount = landmarks.filter(l => l.lat != null && l.lon != null).length;
+    const placingNew = p.placingLandmarkId === NEW_LANDMARK;
+    const geo = p.store.geo;
+    return html`
+      <div class="section">
+        <h3>GPS / Geo</h3>
+        ${placingNew ? html`
+          <div style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text-dim);padding:4px 0">
+            <span style="flex:1">📍 Click on the plan to place the landmark…</span>
+            <button class="btn" style="font-size:10px;padding:2px 6px"
+                    @click=${() => { p.placingLandmarkId = null; p.emitConfig(); }}>Cancel</button>
+          </div>` : nothing}
+        ${landmarks.length === 0 && !placingNew ? html`
+          <div style="color:var(--text-dim);font-size:11px;padding:4px 0">
+            No landmarks yet. Add one, click a known spot on the plan, then calibrate
+            it by standing there with your phone (open-sky, away from walls).
+          </div>` : nothing}
+        ${landmarks.map(lm => this._landmarkItem(lm))}
+        <button class="btn" style="width:100%;margin-top:6px"
+                @click=${() => { p.placingLandmarkId = NEW_LANDMARK; p.emitConfig(); }}>
+          + Add landmark
+        </button>
+
+        ${fit ? this._geoFitReadout(fit) : nothing}
+
+        ${calCount === 1 ? html`
+          <div class="row" style="margin-top:8px"
+               title="Compass bearing (° clockwise from true north) that plan +Y points. 0 = plan +Y faces true north. Used only with a single calibrated landmark.">
+            <label>North bearing°</label>
+            <input type="number" step="1" .value=${String(geo?.northDeg ?? 0)}
+                   @change=${(e: Event) => p.setGeo(g => {
+                     const v = parseFloat((e.target as HTMLInputElement).value);
+                     g.northDeg = isFinite(v) ? ((v % 360) + 360) % 360 : 0;
+                   })}>
+          </div>` : nothing}
+
+        <div class="row" style="margin-top:8px"
+             title="How far past the floor bounding box GPS pins may render (metres). Used in G2.">
+          <label>Boundary (m)</label>
+          <input type="number" min="0" step="5" .value=${String(geo?.boundaryM ?? 30)}
+                 @change=${(e: Event) => p.setGeo(g => {
+                   const v = parseFloat((e.target as HTMLInputElement).value);
+                   g.boundaryM = isFinite(v) ? Math.max(0, v) : 30;
+                 })}>
+        </div>
+        <div class="row"
+             title="Calibration drops GPS samples worse than this accuracy (metres).">
+          <label>Accuracy gate (m)</label>
+          <input type="number" min="1" step="5" .value=${String(geo?.accuracyGateM ?? 30)}
+                 @change=${(e: Event) => p.setGeo(g => {
+                   const v = parseFloat((e.target as HTMLInputElement).value);
+                   g.accuracyGateM = isFinite(v) ? Math.max(1, v) : 30;
+                 })}>
+        </div>
+      </div>
+    `;
+  }
+
+  private _landmarkItem(lm: GeoLandmark) {
+    const p = this.planner;
+    const calibrated = lm.lat != null && lm.lon != null;
+    const status = calibrated
+      ? `${lm.accuracy != null ? `±${Math.round(lm.accuracy)} m` : 'calibrated'}`
+        + ` · ${lm.sampleCount ?? '?'} samples`
+        + (lm.sampledAt ? ` · ${new Date(lm.sampledAt).toLocaleDateString()}` : '')
+      : 'uncalibrated';
+    const cardOpen = this._calibLandmarkId === lm.id;
+    return html`
+      <div style="border-bottom:1px solid var(--border)">
+        <div class="sensor-item" style="cursor:default;gap:4px">
+          <div class="dot" style="background:${calibrated ? '#4dd0e1' : '#90a4ae'}"></div>
+          <input type="text" .value=${lm.name} style="flex:1;min-width:0" placeholder="Landmark name…"
+                 @input=${(e: Event) => p.updateLandmark(lm.id, l => { l.name = (e.target as HTMLInputElement).value; })}>
+          <button class="icon-btn" title=${lm.hidden ? 'Show pin' : 'Hide pin'}
+                  @click=${() => p.updateLandmark(lm.id, l => { l.hidden = !l.hidden; })}>
+            ${lm.hidden ? '🙈' : '👁'}</button>
+          <button class="icon-btn" title="Re-place pin on the plan"
+                  @click=${() => { p.placingLandmarkId = lm.id; p.emitConfig(); }}>📍</button>
+          <button class="icon-btn" title="Delete"
+                  @click=${() => { if (this._calibLandmarkId === lm.id) this._calibLandmarkId = null; p.deleteLandmark(lm.id); }}>✕</button>
+        </div>
+        <div style="font-size:10px;color:${calibrated ? 'var(--text-dim)' : '#ffb74d'};padding:0 0 3px 20px">
+          ${status}
+        </div>
+        <div style="padding:0 0 4px 20px">
+          <button class="btn" style="font-size:10px;padding:2px 8px"
+                  @click=${() => {
+                    if (cardOpen) { this._calibLandmarkId = null; return; }
+                    this._calibLandmarkId = lm.id;
+                    this._calibMsg = '';
+                    // Default the tracker from a Person's GPS tracker if any.
+                    if (!this._calibTrackerId) {
+                      const tid = (p.store.people ?? []).map(pe => pe.gpsTrackerId).find(Boolean);
+                      if (tid) { this._calibTrackerId = tid; this._calibSlug = p.notifySlugFor(tid); }
+                    }
+                    this.requestUpdate();
+                  }}>
+            ${cardOpen ? 'Close' : 'Calibrate…'}
+          </button>
+        </div>
+        ${cardOpen ? this._calibCard(lm) : nothing}
+      </div>
+    `;
+  }
+
+  private _calibCard(lm: GeoLandmark) {
+    const p = this.planner;
+    const gc = p.geoCalib;
+    const active = gc?.landmarkId === lm.id;
+    const iosNote = html`<div style="font-size:10px;color:var(--text-dim);line-height:1.35;margin-top:4px">
+      iOS has no high-accuracy command — keep the HA app open at the spot and
+      pull-to-refresh occasionally. Android is forced to 5 s updates automatically.
+    </div>`;
+    return html`
+      <div style="background:rgba(0,0,0,0.28);border-radius:4px;padding:6px;margin:2px 0 6px 20px">
+        ${active ? html`
+          <div style="font-size:11px;margin-bottom:4px">
+            Sampling <code>${gc!.trackerId}</code> — <b>${gc!.liveCount}</b> sample${gc!.liveCount === 1 ? '' : 's'} so far
+            <span style="color:var(--text-dim)">(closing the panel is fine)</span>
+          </div>
+          <div style="font-size:10px;color:var(--text-dim);margin-bottom:4px">
+            Stand at the landmark ≥3–5 min, then Finish. The median is pulled from
+            history, so you can walk back inside first.
+          </div>
+          <div style="display:flex;gap:4px">
+            <button class="btn" style="flex:1;font-size:11px" ?disabled=${this._calibBusy}
+                    @click=${async () => {
+                      this._calibBusy = true; this.requestUpdate();
+                      const res = await p.finishGeoCalibration();
+                      this._calibBusy = false;
+                      this._calibMsg = res.message;
+                      this.requestUpdate();
+                    }}>${this._calibBusy ? 'Finishing…' : 'Finish'}</button>
+            <button class="btn" style="font-size:11px" ?disabled=${this._calibBusy}
+                    @click=${() => { p.cancelGeoCalibration(); this._calibMsg = 'Calibration cancelled.'; }}>Cancel</button>
+          </div>
+        ` : html`
+          <div class="row" style="margin-top:0"><label>Tracker</label>
+            <span style="font-size:11px;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+              ${this._calibTrackerId || '— pick a device_tracker —'}
+            </span>
+            <button class="btn" style="font-size:10px;padding:2px 6px" @click=${() => {
+              this.dispatchEvent(new CustomEvent('open-entity-picker', {
+                bubbles: true, composed: true,
+                detail: {
+                  domain: 'device_tracker',
+                  onPick: (id: string) => {
+                    this._calibTrackerId = id;
+                    this._calibSlug = this.planner.notifySlugFor(id);
+                    this.requestUpdate();
+                  },
+                },
+              }));
+            }}>🔗</button>
+          </div>
+          <div class="row"
+               title="Companion-app notify service used for the Android high-accuracy command. Auto-derived from the tracker; override if your device's notify slug differs.">
+            <label>Notify slug</label>
+            <input type="text" placeholder="mobile_app_…" .value=${this._calibSlug}
+                   @input=${(e: Event) => { this._calibSlug = (e.target as HTMLInputElement).value; }}>
+          </div>
+          <button class="btn" style="width:100%;margin-top:6px;font-size:11px"
+                  ?disabled=${!this._calibTrackerId}
+                  @click=${() => {
+                    p.startGeoCalibration(this._calibLandmarkId!, this._calibTrackerId, this._calibSlug);
+                    this._calibMsg = '';
+                  }}>▶ Start sampling</button>
+          ${iosNote}
+        `}
+        ${this._calibMsg ? html`
+          <div style="font-size:11px;margin-top:6px;padding:5px 7px;border-radius:4px;
+                      background:rgba(0,0,0,0.3);line-height:1.35">${this._calibMsg}</div>` : nothing}
+      </div>
+    `;
+  }
+
+  private _geoFitReadout(fit: NonNullable<ReturnType<Planner['geoFit']>>) {
+    const t = fit.transform;
+    const scaleWarn = Math.abs(t.fittedScale - 1) > 0.15;
+    let worst: { name: string; res: number } | null = null;
+    if (t.quality === 'full' && t.residualsMm.length) {
+      let mi = 0;
+      for (let i = 1; i < t.residualsMm.length; i++) if (t.residualsMm[i] > t.residualsMm[mi]) mi = i;
+      worst = { name: fit.landmarks[mi]?.name || 'Landmark', res: t.residualsMm[mi] };
+    }
+    return html`
+      <div style="font-size:11px;margin-top:8px;padding:6px 8px;background:rgba(0,0,0,0.25);border-radius:4px;line-height:1.5">
+        <div><b>Fit:</b> ${t.quality === 'single'
+          ? '1 landmark + north bearing'
+          : `${fit.landmarks.length} landmarks (Procrustes, scale locked at 1)`}</div>
+        ${t.quality === 'full' ? html`
+          <div>RMS residual: ${(t.rmsMm / 1000).toFixed(2)} m</div>
+          <div>Fitted scale: ${t.fittedScale.toFixed(3)}
+            ${scaleWarn ? html`<span style="color:#ff8a80"> ⚠ far from 1.0 — a landmark may be bad</span>` : nothing}
+          </div>
+          ${worst ? html`<div style="color:var(--text-dim)">Worst: ${worst.name} (±${(worst.res / 1000).toFixed(2)} m)</div>` : nothing}
+        ` : html`<div style="color:var(--text-dim)">Add a second calibrated landmark to solve rotation from data.</div>`}
       </div>
     `;
   }

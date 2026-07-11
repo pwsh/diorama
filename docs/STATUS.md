@@ -34,6 +34,21 @@ deployed to the live HA instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **World Outside — G1 (geo calibration)**: `Store.geo` (`GeoConfig` —
+  property-wide landmarks, `northDeg`/`boundaryM`/`accuracyGateM`) + new pure
+  `src/geo.ts` (equirectangular projection, 2D Procrustes fit with scale FIXED
+  at 1 + `fittedScale` diagnostic, 1-landmark `northDeg` path, `latLonToPlan`/
+  `planToLatLon`, independent lat/lon median). Landmarks placed on the 2D plan
+  via the room-latch pattern (`placingLandmarkId`/`NEW_LANDMARK`), rendered as
+  📍 pins under a new `Layers2D.geo` layer (default on, 2D-only this phase — the
+  3D fold-in point is commented at `three-view._keyFloor`). Sidebar "GPS / Geo"
+  section: per-landmark calibrate flow (pick a `device_tracker`, fire the
+  Android `command_high_accuracy_mode` notify commands fire-and-forget, live
+  sample counter, Finish pulls the window from `history/history_during_period`
+  and stores the median of `source_type==='gps'` samples within the accuracy
+  gate, ≥5 required) + fit-quality readout. New `HaApi.getHistory` in both
+  `HassClient` and `HassPanelAdapter` (`normalizeHistory` shared). Test page
+  `test-pages/geo-test.html` (`GEO PASS 38/38`). GPS device pins deferred to G2.
 - **World Outside — W1 (weather core)**: `Store.weather` + `src/weather.ts`
   (pure normalization to `WeatherNow` over HA's 15-condition vocabulary; three
   sources — a `weather.*` entity, local station sensors via a derive heuristic,

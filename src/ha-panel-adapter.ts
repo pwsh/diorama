@@ -9,7 +9,8 @@
 // across both modes).
 
 import type { ConnStatus, HassState } from './types.js';
-import type { HaApi, StateListener, ConnListener, HaDevice, HaEntityReg } from './ha-client.js';
+import type { HaApi, StateListener, ConnListener, HaDevice, HaEntityReg, HistoryPoint } from './ha-client.js';
+import { normalizeHistory } from './ha-client.js';
 
 // Loose typing for HA frontend's hass object — we only touch a small,
 // long-stable subset (connection.sendMessagePromise / subscribeEvents).
@@ -61,6 +62,22 @@ export class HassPanelAdapter implements HaApi {
     return this._conn?.sendMessagePromise({
       type: 'call_service', domain, service, service_data: data,
     });
+  }
+
+  async getHistory(entityIds: string[], startISO: string, endISO: string): Promise<Record<string, HistoryPoint[]>> {
+    if (!this._conn || !entityIds.length) return {};
+    try {
+      const raw = await this._conn.sendMessagePromise({
+        type: 'history/history_during_period',
+        start_time: startISO,
+        end_time: endISO,
+        entity_ids: entityIds,
+        significant_changes_only: false,
+        minimal_response: false,
+        no_attributes: false,
+      });
+      return normalizeHistory(raw);
+    } catch { return {}; }
   }
 
   async getDevices(): Promise<Array<HaDevice>> {

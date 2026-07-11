@@ -1,0 +1,198 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>GEO …</title>
+  <style>
+    body { margin:0; background:#0d1116; color:#cfd8dc; font:13px/1.4 sans-serif; padding:14px; }
+    h1 { font-size:15px; margin:0 0 10px; }
+    .grid { display:flex; flex-wrap:wrap; gap:10px; }
+    .card { background:#141b22; border:1px solid #26323d; border-radius:6px; padding:8px 10px; width:320px; }
+    .row { display:flex; justify-content:space-between; font-size:11px; gap:8px; }
+    .pass { color:#69f0ae; } .fail { color:#ff5252; }
+    #summary { font-size:14px; font-weight:bold; margin:10px 0; padding:8px 10px; border-radius:5px; }
+    .okbg { background:#12331f; color:#69f0ae; } .badbg { background:#3a1414; color:#ff8a80; }
+    code { color:#ffd54f; }
+  </style>
+</head>
+<body>
+  <h1>Geo calibration — projection · Procrustes fit · median</h1>
+  <div id="summary">Running…</div>
+  <div class="grid" id="grid"></div>
+
+  <!-- geo.ts is a pure, dependency-free module (like trilateration.ts). It is
+       NOT a code-split chunk, so import a standalone transpile. Generate it into
+       the harness dir NEXT TO this html before serving:
+         npx esbuild src/geo.ts --format=esm \
+           --outfile=<harness>/geo.mod.js
+       (matches the trilateration.html build-then-copy flow; no live HA). -->
+  <script type="module">
+    import {
+      projectLatLon, fitGeoTransform, latLonToPlan, planToLatLon, medianLatLon,
+    } from './geo.mod.js';
+
+    const tests = [];
+    const ok = (name, cond, detail) => tests.push({ name, ok: !!cond, detail });
+    const near = (name, got, want, tol, extra = '') =>
+      tests.push({ name, ok: Math.abs(got - want) <= tol, detail: `got ${got.toFixed?.(4) ?? got} ≈ ${want} ±${tol} ${extra}` });
+
+    const DEG = Math.PI / 180;
+
+    // deterministic gaussian noise (fixed seed).
+    function mulberry32(a) {
+      return function () {
+        a |= 0; a = (a + 0x6D2B79F5) | 0;
+        let t = Math.imul(a ^ (a >>> 15), 1 | a);
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      };
+    }
+    function gauss(rng) {
+      let u = 0, v = 0;
+      while (u === 0) u = rng();
+      while (v === 0) v = rng();
+      return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+    }
+
+    const ORIGIN = { lat: 45, lon: -93 };
+
+    // Build geo→plan pairs from geo offsets under a KNOWN transform (theta rad,
+    // translation mm), optional scale (for the fixed-scale diagnostic test) and
+    // optional gaussian noise (mm) on the plan side.
+    function synth(offsets, theta, t, scale = 1, noise = 0, rng = null) {
+      const c = Math.cos(theta), s = Math.sin(theta);
+      return offsets.map(o => {
+        const lat = ORIGIN.lat + o.dlat, lon = ORIGIN.lon + o.dlon;
+        const m = projectLatLon(lat, lon, ORIGIN.lat, ORIGIN.lon);
+        const px = m.x * 1000 * scale, py = m.y * 1000 * scale;
+        let qx = c * px - s * py + t.x;
+        let qy = s * px + c * py + t.y;
+        if (noise && rng) { qx += gauss(rng) * noise; qy += gauss(rng) * noise; }
+        return { x: qx, y: qy, lat, lon };
+      });
+    }
+    // Worst geo→plan round-trip error (mm) across the pairs.
+    function roundTripErr(T, pairs) {
+      let worst = 0;
+      for (const p of pairs) {
+        const q = latLonToPlan(T, p.lat, p.lon);
+        worst = Math.max(worst, Math.hypot(q.x - p.x, q.y - p.y));
+      }
+      return worst;
+    }
+
+    // ── 1. projection scale sanity at a mid latitude ─────────────────────────
+    // 1° of latitude = R·π/180 ≈ 111194.9 m (independent of longitude).
+    near('proj 1° lat → 111.19 km', projectLatLon(46, -93, 45, -93).y, 111194.93, 1, 'm');
+    // 1° of longitude at 45°N ≈ 111194.9·cos(45°) ≈ 78626.6 m.
+    near('proj 1° lon @45N → 78.63 km', projectLatLon(45, -92, 45, -93).x, 78626.55, 1, 'm');
+    ok('proj origin → (0,0)', (() => { const m = projectLatLon(45, -93, 45, -93); return Math.hypot(m.x, m.y) < 1e-6; })(), '≈0');
+
+    // ── 2/3/5-point Procrustes recovery of a known rotation + translation ────
+    const OFFS5 = [
+      { dlat: 0, dlon: 0 }, { dlat: 0.0008, dlon: 0.0011 }, { dlat: -0.0006, dlon: 0.0009 },
+      { dlat: 0.0004, dlon: -0.0012 }, { dlat: -0.001, dlon: -0.0005 },
+    ];
+    const THETA = 30 * DEG, T = { x: 120000, y: -80000 };
+    for (const [nlbl, k] of [['2pt', 2], ['3pt', 3], ['5pt', 5]]) {
+      const pairs = synth(OFFS5.slice(0, k), THETA, T);
+      const F = fitGeoTransform(pairs);
+      ok(`recover ${nlbl}: quality full`, F.quality === 'full', F.quality);
+      near(`recover ${nlbl}: θ=30°`, F.thetaRad / DEG, 30, 1e-3, 'deg');
+      near(`recover ${nlbl}: fittedScale≈1`, F.fittedScale, 1, 1e-6);
+      ok(`recover ${nlbl}: rms≈0`, F.rmsMm < 1e-3, `rms ${F.rmsMm.toExponential(2)} mm`);
+      ok(`recover ${nlbl}: round-trip <1e-3mm`, roundTripErr(F, pairs) < 1e-3, `${roundTripErr(F, pairs).toExponential(2)} mm`);
+    }
+
+    // ── noisy 5-point: rms>0 but transform stays close ───────────────────────
+    (() => {
+      const rng = mulberry32(9182);
+      const pairs = synth(OFFS5, THETA, T, 1, 300, rng); // σ = 300 mm plan noise
+      const F = fitGeoTransform(pairs);
+      ok('noisy: rms > 0', F.rmsMm > 0, `rms ${F.rmsMm.toFixed(1)} mm`);
+      near('noisy: θ within 2° of 30°', F.thetaRad / DEG, 30, 2, 'deg');
+      ok('noisy: fittedScale within 0.05 of 1', Math.abs(F.fittedScale - 1) < 0.05, `scale ${F.fittedScale.toFixed(4)}`);
+      // residuals reported per pair; worst is a real outlier flag for the caller.
+      ok('noisy: 5 residuals reported', F.residualsMm.length === 5, `n=${F.residualsMm.length}`);
+    })();
+
+    // ── fixed-scale behaviour: input implies scale ≠ 1 ───────────────────────
+    // Synthesize plan points at 1.2× the physical metre scale. The fit must
+    // REPORT fittedScale≈1.2 (a bad-landmark flag) yet the transform itself
+    // ignores it (scale locked to 1 → the round-trip does NOT collapse to 0).
+    (() => {
+      const pairs = synth(OFFS5, THETA, T, 1.2);
+      const F = fitGeoTransform(pairs);
+      near('fixed-scale: fittedScale≈1.2', F.fittedScale, 1.2, 1e-3);
+      ok('fixed-scale: flagged |s−1|>0.15', Math.abs(F.fittedScale - 1) > 0.15, `|Δ| ${(Math.abs(F.fittedScale - 1)).toFixed(3)}`);
+      near('fixed-scale: θ still 30°', F.thetaRad / DEG, 30, 1e-3, 'deg');
+      ok('fixed-scale: transform uses scale 1 (rms>0)', F.rmsMm > 1, `rms ${F.rmsMm.toFixed(0)} mm`);
+    })();
+
+    // ── 1-landmark + northDeg path ───────────────────────────────────────────
+    (() => {
+      // northDeg = 0 → plan +Y faces true north. Landmark at plan (2000,3000).
+      const lm = { x: 2000, y: 3000, lat: ORIGIN.lat, lon: ORIGIN.lon };
+      const F0 = fitGeoTransform([lm], 0);
+      ok('single: quality single', F0.quality === 'single', F0.quality);
+      const self = latLonToPlan(F0, lm.lat, lm.lon);
+      ok('single: landmark round-trips to its plan pos', Math.hypot(self.x - 2000, self.y - 3000) < 1e-6, `(${self.x.toFixed(1)},${self.y.toFixed(1)})`);
+      // A point due NORTH of the landmark → plan +Y (north0 convention).
+      const north = latLonToPlan(F0, lm.lat + 0.001, lm.lon);
+      ok('single north0: north → plan +Y', north.y > 3000 && Math.abs(north.x - 2000) < 1, `(${north.x.toFixed(1)},${north.y.toFixed(1)})`);
+      // northDeg = 90 → plan +Y faces EAST, so an EAST-offset point → plan +Y.
+      const F90 = fitGeoTransform([lm], 90);
+      const east = latLonToPlan(F90, lm.lat, lm.lon + 0.001);
+      ok('single north90: east → plan +Y', east.y > 3000 && Math.abs(east.x - 2000) < 1, `(${east.x.toFixed(1)},${east.y.toFixed(1)})`);
+      // planToLatLon inverse round-trips.
+      const back = planToLatLon(F0, self.x, self.y);
+      ok('single: planToLatLon inverse', Math.abs(back.lat - lm.lat) < 1e-9 && Math.abs(back.lon - lm.lon) < 1e-9, `${back.lat},${back.lon}`);
+    })();
+
+    // ── 0 landmarks → quality none ───────────────────────────────────────────
+    (() => {
+      const F = fitGeoTransform([]);
+      ok('empty: quality none', F.quality === 'none', F.quality);
+      ok('empty: latLonToPlan → null', latLonToPlan(F, 45, -93) === null, 'null');
+    })();
+
+    // ── median with outliers ─────────────────────────────────────────────────
+    (() => {
+      const samples = [
+        { lat: 45.0000, lon: -93.0000, accuracy: 5 },
+        { lat: 45.0001, lon: -93.0001, accuracy: 6 },
+        { lat: 45.0002, lon: -92.9999, accuracy: 4 },
+        { lat: 45.0001, lon: -93.0002, accuracy: 7 },
+        { lat: 48.5000, lon: -80.0000, accuracy: 90 }, // wild outlier
+      ];
+      const m = medianLatLon(samples);
+      ok('median: count 5', m.count === 5, `count ${m.count}`);
+      ok('median: lat resists outlier', Math.abs(m.lat - 45.0001) < 1e-6, `lat ${m.lat}`);
+      ok('median: lon resists outlier', Math.abs(m.lon - (-93.0000)) < 1e-6, `lon ${m.lon}`);
+      near('median: accuracy median = 6', m.accuracy, 6, 1e-9);
+      ok('median: empty → null', medianLatLon([]) === null, 'null');
+    })();
+
+    // ── run + render ─────────────────────────────────────────────────────────
+    const grid = document.getElementById('grid');
+    let pass = 0;
+    const fails = [];
+    for (const t of tests) {
+      if (t.ok) pass++; else fails.push(t.name);
+      const card = document.createElement('div');
+      card.className = 'card';
+      card.innerHTML = `<div class="row">
+        <span>${t.ok ? '<span class=pass>PASS</span>' : '<span class=fail>FAIL</span>'} ${t.name}</span>
+        <span>${t.detail ?? ''}</span></div>`;
+      grid.appendChild(card);
+    }
+    const total = tests.length;
+    const allPass = pass === total;
+    const title = allPass ? `GEO PASS ${pass}/${total}` : `GEO FAIL ${pass}/${total} [${fails.join(',')}]`;
+    document.title = title;
+    const sum = document.getElementById('summary');
+    sum.textContent = title;
+    sum.className = allPass ? 'okbg' : 'badbg';
+  </script>
+</body>
+</html>

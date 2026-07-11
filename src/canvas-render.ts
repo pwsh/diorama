@@ -154,6 +154,58 @@ export function drawAll(ctx: CanvasRenderingContext2D, p: Planner, view: View,
   drawBgEditOverlay(ctx, p, view, bgImg);
   if (on(L.targets)) drawTargets(ctx, p, view);
   if (on(L.targets)) drawBlePeople(ctx, p, view);
+  // Geo landmark pins (2D-only this phase; GPS device pins join here in G2).
+  if (on(L.geo)) drawGeoLandmarks(ctx, p, view);
+}
+
+// Geo landmark pins (Feature G). Store-level (property-wide), so drawn on every
+// floor. Calibrated pins render solid with a ±accuracy caption; uncalibrated
+// pins render dashed + dim. A pin pending (re)placement or active calibration
+// gets a highlight ring.
+function drawGeoLandmarks(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
+  const dpr = window.devicePixelRatio || 1;
+  const landmarks = p.geoLandmarks();
+  if (!landmarks.length) return;
+  ctx.save();
+  ctx.textAlign = 'center';
+  for (const lm of landmarks) {
+    if (lm.hidden) continue;
+    const c = mmToPx(view, lm.x, lm.y);
+    const calibrated = lm.lat != null && lm.lon != null;
+    const active = p.placingLandmarkId === lm.id || p.geoCalib?.landmarkId === lm.id;
+    const base = calibrated ? '#4dd0e1' : '#90a4ae';
+    // Highlight ring for active (placing / calibrating) pins.
+    if (active) {
+      ctx.strokeStyle = '#ffd54f'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(c.x, c.y, 12 * dpr, 0, 2 * Math.PI); ctx.stroke();
+    }
+    // Pin body.
+    ctx.fillStyle = calibrated ? base : 'rgba(144,164,174,0.6)';
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5;
+    if (!calibrated) ctx.setLineDash([3, 3]);
+    ctx.beginPath(); ctx.arc(c.x, c.y, 7 * dpr, 0, 2 * Math.PI);
+    ctx.fill(); ctx.stroke(); ctx.setLineDash([]);
+    // Pin glyph.
+    ctx.fillStyle = '#06232a'; ctx.font = `${9 * dpr}px sans-serif`;
+    ctx.textBaseline = 'middle';
+    ctx.fillText('📍', c.x, c.y);
+    // Name + calibration caption below.
+    ctx.textBaseline = 'top';
+    const txt = lm.name || 'Landmark';
+    const cap = calibrated
+      ? (lm.accuracy != null ? `±${Math.round(lm.accuracy)} m` : 'calibrated')
+      : 'uncalibrated';
+    ctx.font = `${10 * dpr}px sans-serif`;
+    const tw = Math.max(ctx.measureText(txt).width, ctx.measureText(cap).width) + 8 * dpr;
+    ctx.fillStyle = 'rgba(0,0,0,0.7)';
+    ctx.fillRect(c.x - tw / 2, c.y + 11 * dpr, tw, 25 * dpr);
+    ctx.fillStyle = '#fff';
+    ctx.fillText(txt, c.x, c.y + 13 * dpr);
+    ctx.fillStyle = calibrated ? 'rgba(129,212,250,0.85)' : 'rgba(176,190,197,0.75)';
+    ctx.font = `${9 * dpr}px sans-serif`;
+    ctx.fillText(cap, c.x, c.y + 25 * dpr);
+  }
+  ctx.restore();
 }
 
 // Activity overlay for the "simple floorplan" style: soft glow pools where
