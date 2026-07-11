@@ -64,6 +64,9 @@ export interface ActivityContext {
 interface SitSpot {
   x: number; z: number; seatY: number; facing: number; r: number;
   roomId?: string | null;         // named room the seat sits in (live loop resolve)
+  soft?: boolean;                 // soft lounge piece (sofa/chaise/ottoman/bed) —
+                                  // quadruped pets curl up on these instead of
+                                  // taking the upright haunches-sit pose.
   hostActivity?: ActivityKind;    // the seat piece's own activity, if any
   hostTopY?: number;              // world-Y of the eat/work host's tabletop
                                   // (def.ht + host elevation) — drives seated
@@ -149,6 +152,17 @@ interface Humanoid {
   rightKnee: THREE.Group;
   plumbob: THREE.Object3D;  // rotating Sims diamond above the head
   blob: THREE.Mesh;    // soft floor shadow decal; re-grounded every frame
+  // ── Quadruped pets (cat/dog). `quad` switches BOTH the builder and the
+  // per-frame pose branch (_applyQuadPose). The humanoid joint fields above
+  // (leftHip … rightElbow) alias the four leg pivots so the shared
+  // Humanoid contract holds, but only the quad branch animates them via
+  // `quadLegs`; the humanoid pose math is gated off. Everything else
+  // (nav/carrot/spring, facing, scale/fade, blob, outline, plumbob) is shared.
+  quad?: boolean;
+  quadLegs?: { hip: THREE.Group; knee: THREE.Group }[];  // FL, FR, BL, BR
+  quadTail?: THREE.Group[];   // [base pivot, mid pivot] — 2-segment sway
+  quadHead?: THREE.Group;     // head pivot for bob / nod / curl-down
+  quadEars?: THREE.Group[];   // ear pivots for idle flicks
   phase: number;       // walk-cycle radians
   facing: number;      // body yaw derived from smoothed velocity
   amp: number;         // eased limb-swing amplitude (rad) — smooths gait starts/stops
@@ -256,7 +270,13 @@ const AVATAR_KINDS: readonly AvatarKind[] = [
   'cowboy', 'magician', 'farmer', 'tech_expert', 'supermodel',
   'wise_oracle', 'astronaut',
 ];
-const AVATAR_KIND_SET: ReadonlySet<string> = new Set(AVATAR_KINDS);
+// Quadruped pet rigs — valid, explicitly-selectable avatar kinds, but kept OUT
+// of AVATAR_KINDS so the bare-'random' human fallback never surprises an
+// unidentified person with a cat/dog. A user opting cat/dog into a sensor pool
+// (avatarKinds) still works — resolveAvatar validates the pool against the SET.
+const PET_KINDS: readonly AvatarKind[] = ['cat', 'dog'];
+const PET_KIND_SET: ReadonlySet<string> = new Set(PET_KINDS);
+const AVATAR_KIND_SET: ReadonlySet<string> = new Set([...AVATAR_KINDS, ...PET_KINDS]);
 
 // ── Light per-kind walk personalities. Multipliers applied in updateTargets
 // where bob / roll-sway / cadence / swing-amp are computed (walking only —
@@ -1478,11 +1498,16 @@ export class ThreeDRenderer {
           }
         }
         const c = this._w(fu.x, fu.y, 0);
+        // Soft lounge pieces a pet curls up on rather than sitting upright.
+        const softKind = fu.kind === 'sofa' || fu.kind === 'sofa_l_left' ||
+          fu.kind === 'sofa_l_right' || fu.kind === 'sofa_u' || fu.kind === 'chaise' ||
+          fu.kind === 'ottoman' || fu.kind === 'bed';
         this._sitSpots.push({
           x: c.x, z: c.z, seatY: def.seat + (fu.elevation ?? 0),
           facing: -((fu.rotation || 0) * Math.PI / 180),
           r: Math.max(fu.w, fu.h) / 2 + 350,
           roomId,
+          soft: softKind,
           hostActivity,
           hostTopY,
           host: hostRef,
@@ -4212,7 +4237,9 @@ export class ThreeDRenderer {
         h = undefined as unknown as Humanoid;
       }
       if (!h) {
-        h = this._buildHumanoid(t.color, wantKind);
+        h = PET_KIND_SET.has(wantKind)
+          ? this._buildQuadruped(t.color, wantKind)
+          : this._buildHumanoid(t.color, wantKind);
         this._humanoids[t.key] = h;
         this._targetGroup.add(h.group);
       }
@@ -4327,7 +4354,9 @@ export class ThreeDRenderer {
           if (h.act < 0.05) h.activityAnchor = null;  // fully disengaged → release
         }
       }
-      if (!h.activityAnchor && sit < 0.1) {
+      // Pets (quadruped rigs) never grab standing appliance anchors, so a cat
+      // walking past the dishwasher doesn't strike a "loading" pose.
+      if (!h.quad && !h.activityAnchor && sit < 0.1) {
         let best: ActivityAnchor | null = null, bd = Infinity;
         for (const a of this._activityAnchors) {
           if (!PHASE4_ACTIVITIES.has(a.kind)) continue;
@@ -4358,7 +4387,7 @@ export class ThreeDRenderer {
       // in a privacy activity, resolve eat / work / watch from the seat's
       // context. These are narrative + tiny pose offsets keyed on h.sit; they
       // never grab an activity anchor (that path is standing-only).
-      if (sit > 0.5 && !toiletSit && h.activity !== 'toilet') {
+      if (!h.quad && sit > 0.5 && !toiletSit && h.activity !== 'toilet') {
         const ha = spot?.hostActivity;
         if (ha === 'eat_at_table' || ha === 'work_at_desk') {
           h.activity = ha;
@@ -4523,21 +4552,10 @@ export class ThreeDRenderer {
       // Gentle fore/aft weight shift while idle, desynced between rigs.
       const idle = Math.sin(now * 1.4 + h.idleOffset) * 0.02 * (1 - ampNorm);
 
-      // Seated pose targets: thighs horizontal forward (hip +90°-ish), shins
-      // vertical (knee −90°-ish, foot lands ≈ floor for the rig's leg
-      // proportions), arms resting toward the lap. Walk pose blends toward it
-      // by `sit`.
-      const SIT_HIP = 1.45, SIT_KNEE = -1.45, SIT_SHOULDER = 0.45, SIT_ELBOW = 0.85;
+      // Shared seated-root geometry — used by BOTH the humanoid pose math and
+      // the position block below, so it lives OUTSIDE the rig-kind branch.
       const stand = 1 - sit;
-
-      // ── Table-aware seated arms (Part B). When the seat serves an eat/work
-      // host, rest the hands ON the tabletop via a closed-form 2-link IK rather
-      // than sweeping the forearms through the slab. Rig geometry is per-variant
-      // (adult hip pivot 870, shoulder pivot 1398, upper arm 320, forearm+hand
-      // ≈ 313) — a shorter child rig scales all of these, so read them off `h`.
-      const HIP_Y_RIG = h.hipY, SHOULDER_Y_RIG = h.shoulderY;
-      const ARM_L1 = h.armUpper, ARM_L2 = h.armLower;
-      const TABLE_ARM_FWD = 380 * (h.hipY / 870);   // forward (−Z local) reach, scaled to rig size
+      let squatDrop = 0;  // mm the exercise squat lowers the root (humanoid only)
       const hostTopY = spot?.hostTopY;
       let seatYeff = spot ? spot.seatY : 0;
       if (spot && hostTopY != null && hostTopY - spot.seatY > 380) {
@@ -4546,6 +4564,30 @@ export class ThreeDRenderer {
         // illusion) so its proportions read right instead of stretching arms.
         seatYeff = hostTopY - 380;
       }
+
+      if (h.quad) {
+        // ── Quadruped pets: dedicated trot / sit / curl pose branch. Reuses the
+        // walk-cycle phase/amp resolved above and the position / plumbob / blob
+        // grounding below; the humanoid joint + activity + fidget math is
+        // skipped (pets have no thought bubbles, privacy blur, or standing
+        // appliance activities).
+        this._applyQuadPose(h, {
+          sinP, amp, ampNorm, speedMs, sit, lie, dt, now,
+          soft: !!(spot && spot.soft),
+        });
+      } else {
+      // Seated pose targets: thighs horizontal forward (hip +90°-ish), shins
+      // vertical (knee −90°-ish, foot lands ≈ floor for the rig's leg
+      // proportions), arms resting toward the lap. Walk pose blends toward it
+      // by `sit`.
+      const SIT_HIP = 1.45, SIT_KNEE = -1.45, SIT_SHOULDER = 0.45, SIT_ELBOW = 0.85;
+
+      // ── Table-aware seated arms (Part B). Rig geometry is per-variant (adult
+      // hip pivot 870, shoulder pivot 1398, upper arm 320, forearm+hand ≈ 313) —
+      // a shorter child rig scales all of these, so read them off `h`.
+      const HIP_Y_RIG = h.hipY, SHOULDER_Y_RIG = h.shoulderY;
+      const ARM_L1 = h.armUpper, ARM_L2 = h.armLower;
+      const TABLE_ARM_FWD = 380 * (h.hipY / 870);   // forward (−Z local) reach, scaled to rig size
       // Shoulder world height when fully seated: the root drops so the hip pivot
       // lands on seatYeff, and the seated body pitch ≈ 0, so the shoulder rides
       // SHOULDER_Y_RIG above the root origin.
@@ -4612,7 +4654,6 @@ export class ThreeDRenderer {
       let rEl = wREl * stand + SIT_ELBOW * sit;
       let leanX = wLeanX * stand;
       let rollZ = wRollZ * stand;
-      let squatDrop = 0;  // mm the exercise squat lowers the root (blended by act)
 
       if (anchor) {
         // Activity pose targets (rad). Legs default to straight standing;
@@ -4818,6 +4859,7 @@ export class ThreeDRenderer {
       h.group.rotation.x = leanX;
       h.group.rotation.y = h.facing + yawFidget;
       h.group.rotation.z = rollZ;
+      }  // end humanoid (non-quad) pose branch
 
       // Breathing — subtle torso rise/fall, always on.
       h.torso.scale.y = 1 + Math.sin(now * 1.8 + h.idleOffset) * 0.012;
@@ -4974,7 +5016,9 @@ export class ThreeDRenderer {
       // head. Per-frame cost is string compares + one pip walk to find the room;
       // the canvas is only (re)painted on a committed kind change (2.5 s
       // hysteresis makes that rare). Runs AFTER the privacy block so it has the
-      // final say on the bubble sprite's visibility.
+      // final say on the bubble sprite's visibility. Pets (quadrupeds) get no
+      // thought bubbles at all.
+      if (!h.quad) {
       const tb = ctx?.timeBucket ?? 'day';
       let roomName = '';
       for (const rz of this._roomZones) {
@@ -5030,6 +5074,7 @@ export class ThreeDRenderer {
           h.bubble.position.set(BUBBLE_X, BUBBLE_LOCAL_Y, 0);
         }
       }
+      }  // end thought-bubble block (non-quad)
 
       // Eligible for mutual separation: walking (not sit/activity/lie anchored),
       // visible, and not hidden under bed covers (previous frame's summary).
@@ -5676,6 +5721,277 @@ export class ThreeDRenderer {
     // adult / child / alien: no extra accessory meshes.
   }
 
+  // ── Quadruped pet rig (cat / dog) ──────────────────────────────────────────
+  // A separate builder from _buildHumanoid: horizontal torso, 4 two-segment
+  // legs, head with ears + snout, 2-segment tail. Body-forward is local -Z (the
+  // head/face end) — the SAME convention as the humanoids, so the shared facing
+  // math (updateTargets) turns the pet to face its velocity. Shares ALL the
+  // Humanoid bookkeeping (nav/carrot/spring, scale/fade, blob shadow, outline
+  // shells, plumbob); `quad: true` flips the per-frame pose to _applyQuadPose.
+  private _buildQuadruped(color: number, kind: AvatarKind): Humanoid {
+    const isCat = kind === 'cat';
+    // Cat ≈ 58% of the dog. Dog ≈ beagle: ~520 mm shoulder height.
+    const sk = isCat ? 0.58 : 1;
+    const idleOffset = Math.random() * Math.PI * 2;
+
+    // Coat driven by the sensor tint (per-sensor colour coding survives);
+    // ears/snout/paws use fixed relatives.
+    const bodyMat = this._mat({ color, emissive: color, emissiveIntensity: 0.18, roughness: 0.7, metalness: 0.05 });
+    const dark = this._mat({ color: 0x202024, roughness: 0.75, metalness: 0.0 });
+    const pawMat = this._mat({ color: 0x2a2a2e, roughness: 0.8, metalness: 0.05 });
+    const earMat = this._mat({ color: isCat ? 0xf2a0b5 : 0x6b4226, emissive: isCat ? 0xf2a0b5 : 0x6b4226, emissiveIntensity: 0.12, roughness: 0.75, metalness: 0.0 });
+    const snoutMat = this._mat({ color: 0xd9c3a5, emissive: 0xd9c3a5, emissiveIntensity: 0.1, roughness: 0.7, metalness: 0.0 });
+
+    // Proportions (mm). Body-forward = -Z (head end).
+    const LEG_UPPER_LEN = 235 * sk, LEG_LOWER_LEN = 220 * sk, PAW_H = 50 * sk;
+    const LEG_UPPER_R = 44 * sk, LEG_LOWER_R = 34 * sk;
+    const backHeight = LEG_UPPER_LEN + LEG_LOWER_LEN + PAW_H;   // pivot height (~505 dog)
+    const BODY_LEN = 640 * sk, BODY_W = 200 * sk, BODY_H = 240 * sk;
+    const bodyY = backHeight + BODY_H * 0.30;                   // body center height
+    const HEAD_R = 132 * sk;
+    const frontZ = -BODY_LEN / 2, rearZ = BODY_LEN / 2;
+
+    const root = new THREE.Group();
+    root.rotation.order = 'YXZ';   // yaw → pitch → roll (shared convention)
+
+    // Cylinder segment hanging DOWN from local origin (as in _buildHumanoid).
+    const segment = (rTop: number, rBot: number, len: number, mat: THREE.Material): THREE.Mesh => {
+      const geo = new THREE.CylinderGeometry(rTop, rBot, len, 10);
+      geo.translate(0, -len / 2, 0);
+      return new THREE.Mesh(geo, mat);
+    };
+
+    // Torso (box) + rounded chest/rump spheres. h.torso is the box so the shared
+    // breathing scale reads.
+    const torso = new THREE.Mesh(new THREE.BoxGeometry(BODY_W, BODY_H, BODY_LEN), bodyMat);
+    torso.position.set(0, bodyY, 0);
+    root.add(torso);
+    const chest = new THREE.Mesh(new THREE.SphereGeometry(BODY_W * 0.6, 14, 10), bodyMat);
+    chest.scale.set(1, 1, 0.7);
+    chest.position.set(0, bodyY, frontZ + BODY_W * 0.2);
+    root.add(chest);
+    const rump = new THREE.Mesh(new THREE.SphereGeometry(BODY_W * 0.62, 14, 10), bodyMat);
+    rump.scale.set(1, 1, 0.7);
+    rump.position.set(0, bodyY, rearZ - BODY_W * 0.2);
+    root.add(rump);
+
+    // Two-segment leg: pivot → thigh → knee → shin → paw. Paw toes point -Z.
+    const makeLeg = (x: number, z: number) => {
+      const hip = new THREE.Group();
+      hip.position.set(x, backHeight, z);
+      hip.add(segment(LEG_UPPER_R, LEG_UPPER_R * 0.9, LEG_UPPER_LEN, bodyMat));
+      const knee = new THREE.Group();
+      knee.position.set(0, -LEG_UPPER_LEN, 0);
+      hip.add(knee);
+      knee.add(segment(LEG_LOWER_R, LEG_LOWER_R * 0.85, LEG_LOWER_LEN, bodyMat));
+      const paw = new THREE.Mesh(new THREE.BoxGeometry(LEG_LOWER_R * 2.3, PAW_H, LEG_LOWER_R * 3.2), pawMat);
+      paw.position.set(0, -LEG_LOWER_LEN - PAW_H / 2, -LEG_LOWER_R * 0.7);
+      knee.add(paw);
+      return { hip, knee };
+    };
+    const legX = BODY_W * 0.42;
+    const FL = makeLeg(-legX, frontZ + BODY_LEN * 0.14);
+    const FR = makeLeg( legX, frontZ + BODY_LEN * 0.14);
+    const BL = makeLeg(-legX, rearZ  - BODY_LEN * 0.14);
+    const BR = makeLeg( legX, rearZ  - BODY_LEN * 0.14);
+    root.add(FL.hip, FR.hip, BL.hip, BR.hip);
+
+    // Head group at the front, raised on a short neck.
+    const headG = new THREE.Group();
+    headG.position.set(0, bodyY + BODY_H * 0.42, frontZ - HEAD_R * 0.25);
+    root.add(headG);
+    const head = new THREE.Mesh(new THREE.SphereGeometry(HEAD_R, 16, 12), bodyMat);
+    if (!isCat) head.scale.set(1, 0.95, 1.05);
+    headG.add(head);
+    const snout = new THREE.Mesh(
+      new THREE.BoxGeometry(HEAD_R * (isCat ? 0.5 : 0.62), HEAD_R * 0.42, HEAD_R * (isCat ? 0.5 : 0.7)),
+      snoutMat);
+    snout.position.set(0, -HEAD_R * 0.24, -HEAD_R * (isCat ? 0.85 : 1.0));
+    headG.add(snout);
+    const nose = new THREE.Mesh(new THREE.SphereGeometry(HEAD_R * 0.16, 8, 6), dark);
+    nose.position.set(0, -HEAD_R * 0.16, -HEAD_R * (isCat ? 1.12 : 1.35));
+    headG.add(nose);
+    for (const ex of [-1, 1]) {
+      const eye = new THREE.Mesh(new THREE.SphereGeometry(HEAD_R * 0.15, 10, 8), dark);
+      eye.position.set(ex * HEAD_R * 0.36, HEAD_R * 0.12, -HEAD_R * 0.86);
+      headG.add(eye);
+    }
+    // Ears on pivots (idle flick). Cat = pointed tri-cones; dog = floppy boxes.
+    const ears: THREE.Group[] = [];
+    for (const ex of [-1, 1]) {
+      const earPivot = new THREE.Group();
+      earPivot.position.set(ex * HEAD_R * 0.55, HEAD_R * 0.6, HEAD_R * 0.1);
+      if (isCat) {
+        const ear = new THREE.Mesh(new THREE.ConeGeometry(HEAD_R * 0.34, HEAD_R * 0.75, 4), earMat);
+        ear.position.set(0, HEAD_R * 0.3, 0);
+        earPivot.add(ear);
+      } else {
+        const ear = new THREE.Mesh(new THREE.BoxGeometry(HEAD_R * 0.34, HEAD_R * 0.85, HEAD_R * 0.14), earMat);
+        ear.position.set(0, -HEAD_R * 0.2, 0);   // hangs down (floppy)
+        earPivot.add(ear);
+        earPivot.rotation.z = ex * 0.25;          // baked outward flop
+      }
+      headG.add(earPivot);
+      ears.push(earPivot);
+    }
+
+    // Tail: base pivot at the rump + a mid pivot at the first segment's tip. The
+    // base segment is tilted up-and-back (baked into the mesh); animation sways
+    // rotation.y and tucks with rotation.x on curl.
+    const tailBase = new THREE.Group();
+    tailBase.position.set(0, bodyY + BODY_H * 0.18, rearZ - 10 * sk);
+    const tLen1 = (isCat ? 230 : 160) * sk, tLen2 = (isCat ? 200 : 130) * sk;
+    const tTheta = -2.35;
+    const tseg1 = segment(22 * sk, 16 * sk, tLen1, bodyMat);
+    tseg1.rotation.x = tTheta;
+    tailBase.add(tseg1);
+    const tailMid = new THREE.Group();
+    // tip of seg1 in tailBase frame: (0,-tLen1,0) rotated by Rx(tTheta).
+    tailMid.position.set(0, -tLen1 * Math.cos(tTheta), -tLen1 * Math.sin(tTheta));
+    tailBase.add(tailMid);
+    const tseg2 = segment(15 * sk, 10 * sk, tLen2, bodyMat);
+    tseg2.rotation.x = -2.0;
+    tailMid.add(tseg2);
+    root.add(tailBase);
+
+    // Cartoon outlines (per-rig clone so a slow despawn fades this rig alone).
+    this._addOutlines(new THREE.Group(), 8, 50);   // ensure the shared material exists
+    const outlineMat = this._outlineMaterial!.clone();
+    this._addOutlines(root, 8, Math.round(60 * sk), outlineMat);
+
+    // Plumbob, scaled ~0.7× vs the humanoid (pets are smaller), above the head.
+    const plumbob = new THREE.Mesh(
+      new THREE.OctahedronGeometry(60),
+      this._mat({ color: 0x2ee56a, emissive: 0x1faa44, emissiveIntensity: 0.9, transparent: true, opacity: 0.88 }),
+    );
+    plumbob.scale.set(0.72, 1.45, 0.72);
+    plumbob.position.set(0, headG.position.y + HEAD_R + 200 * sk, frontZ - HEAD_R * 0.25);
+    root.add(plumbob);
+
+    // Blob shadow sized to the body footprint; re-grounded every frame.
+    const blob = this._blobShadow(BODY_W * 1.5, BODY_LEN * 0.62);
+    root.add(blob);
+
+    const legM = 0.81 * (backHeight / 870);   // stride-match scale (short legs → bigger swing)
+    return {
+      group: root,
+      color,
+      avatarKind: kind,
+      quad: true,
+      quadLegs: [FL, FR, BL, BR],
+      quadTail: [tailBase, tailMid],
+      quadHead: headG,
+      quadEars: ears,
+      hipY: backHeight, shoulderY: bodyY, headTopReach: headG.position.y,
+      armUpper: LEG_UPPER_LEN, armLower: LEG_LOWER_LEN, legM,
+      persBob: 1, persSway: 1, persCadence: 1, persAmp: 1,
+      chatterNext: 9e9, chatterT: 0, chatterGlyph: null,   // pets never chatter
+      torso,
+      plumbob,
+      blob,
+      // Alias the four leg pivots onto the humanoid joint fields so the shared
+      // Humanoid contract holds; only _applyQuadPose animates them (via quadLegs).
+      leftHip: FL.hip, leftKnee: FL.knee,
+      rightHip: FR.hip, rightKnee: FR.knee,
+      leftShoulder: BL.hip, leftElbow: BL.knee,
+      rightShoulder: BR.hip, rightElbow: BR.knee,
+      phase: 0, facing: 0,
+      amp: 0, scale: 0,
+      sit: 0, groundY: 0, dwell: 0, sitSpot: null,
+      activity: null, activityAnchor: null, activityDwell: 0,
+      act: 0, privacy: 0, blurSprite: null,
+      bubble: null, bubbleKind: null, bubbleWant: null, bubbleDwell: 0,
+      idleOffset,
+      vx: 0, vz: 0,
+      lastX: 0, lastZ: 0, lastUpdate: 0, initialized: false,
+      navX: 0, navZ: 0, carrotX: 0, carrotZ: 0, nvx: 0, nvz: 0,
+      rawVx: 0, rawVz: 0, rawLastX: 0, rawLastZ: 0,
+      path: null, pathRev: -1, goalCell: -1,
+      stuckT: 0, respawnPhase: 0,
+      lie: 0, lieBedId: null,
+      lastEdge: false, lastRawSpeed: 0, despawnMode: null, fadeAlpha: 1,
+      outlineMat,
+      idleBlend: 0, fidgetKind: null, fidgetT: 0, fidgetDur: 0,
+      fidgetNext: 8 + Math.random() * 12,
+      scanState: 0, scanT: 0, scanNext: 4 + Math.random() * 4, scanDir: 1,
+      waveT: 0, fidgetLog: [],
+    };
+  }
+
+  // ── Quadruped per-frame pose. Trot gait (diagonal leg pairs in antiphase) +
+  // tail sway + head bob + idle ear flicks; sit (haunches) / curl (lie) blends
+  // driven by the SAME h.sit / h.lie the humanoids use. Reads the walk-cycle
+  // phase/amp resolved in updateTargets. NO privacy blur / activity anchors /
+  // thought bubbles (all gated on !quad upstream).
+  private _applyQuadPose(h: Humanoid, p: {
+    sinP: number; amp: number; ampNorm: number; speedMs: number;
+    sit: number; lie: number; dt: number; now: number; soft: boolean;
+  }): void {
+    const legs = h.quadLegs;
+    if (!legs) return;
+    const { sinP, amp, ampNorm, speedMs, now } = p;
+    const walking = speedMs > 0.08;
+    // Soft lounge seat (sofa/bed) → curl up; hard seat (chair/floor) → haunches.
+    const curl = Math.min(1, p.lie + (p.soft ? p.sit : 0));
+    const haunch = p.soft ? 0 : p.sit;
+    const settle = Math.max(curl, haunch);
+    // Trot: legs = [FL, FR, BL, BR]; diagonals FL+BR and FR+BL share a phase and
+    // the two diagonals are antiphase.
+    const legSign = [1, -1, -1, 1];
+    const isFront = [true, true, false, false];
+    for (let i = 0; i < 4; i++) {
+      const s = legSign[i] * sinP;
+      let hipR = s * amp;                            // fore/aft swing
+      let kneeR = -Math.max(0, s) * 0.7 * ampNorm;   // lift/flex on the forward swing
+      if (haunch > 0.001) {   // "sit": rear legs fold, front legs plant straight
+        const sHip = isFront[i] ? 0.05 : 1.05;
+        const sKnee = isFront[i] ? -0.05 : -1.6;
+        hipR = hipR * (1 - haunch) + sHip * haunch;
+        kneeR = kneeR * (1 - haunch) + sKnee * haunch;
+      }
+      if (curl > 0.001) {     // "lie": all four tuck under the curled body
+        hipR = hipR * (1 - curl) + 0.6 * curl;
+        kneeR = kneeR * (1 - curl) + (-1.75) * curl;
+      }
+      legs[i].hip.rotation.x = hipR;
+      legs[i].knee.rotation.x = kneeR;
+    }
+    // Body english. Haunch drops the rear (nose up); curl flattens a touch.
+    const bodyPitch = haunch * 0.34 - curl * 0.04;
+    const stillness = 1 - Math.min(1, speedMs / 0.4);
+    const idleRoll = Math.sin(now * 0.6 + h.idleOffset) * 0.03 * stillness * (1 - settle);
+    h.group.rotation.x = bodyPitch;
+    h.group.rotation.y = h.facing;
+    h.group.rotation.z = idleRoll;
+    // Head bob/nod while trotting, gentle look-around while idle; curl tucks the
+    // nose down.
+    if (h.quadHead) {
+      const nod = walking
+        ? Math.sin(h.phase * 2) * 0.05 * ampNorm
+        : Math.sin(now * 1.2 + h.idleOffset) * 0.03 * stillness;
+      h.quadHead.rotation.x = nod + curl * 0.7 + haunch * 0.05;
+      h.quadHead.rotation.y = Math.sin(now * 0.5 + h.idleOffset) * 0.08 * stillness * (1 - settle);
+    }
+    // Tail: fast wag while moving, slow swish when idle; tucked on curl.
+    if (h.quadTail && h.quadTail.length >= 2) {
+      const wag = walking
+        ? Math.sin(now * 8) * 0.35 * ampNorm
+        : Math.sin(now * 1.6 + h.idleOffset) * 0.22;
+      h.quadTail[0].rotation.y = wag * (1 - curl);
+      h.quadTail[1].rotation.y = wag * 0.6 * (1 - curl);
+      h.quadTail[0].rotation.x = curl * 1.1;   // wrap the tail around when curled
+    }
+    // Ears: occasional flick when idle (a short pulse every ~4 s).
+    if (h.quadEars) {
+      const flickPh = (((now * 0.26 + h.idleOffset) % 1) + 1) % 1;
+      const flick = (flickPh < 0.12 ? Math.sin((flickPh / 0.12) * Math.PI) : 0) * 0.4 * stillness;
+      for (let i = 0; i < h.quadEars.length; i++) {
+        // Preserve the dog's baked outward flop (rotation.z); only pulse x.
+        h.quadEars[i].rotation.x = flick;
+      }
+    }
+  }
+
   private _buildHumanoid(color: number, kind: AvatarKind = 'adult'): Humanoid {
     // ── Per-variant constants (one tidy block). `sk` scales the whole skeleton
     // length; `headR` is an ABSOLUTE head radius (so the child stays big-headed
@@ -5699,7 +6015,8 @@ export class ThreeDRenderer {
       footMul?: [number, number, number];  // foot w/h/d multipliers (duck flippers)
       legColor?: number;  // leg material colour override (duck's yellow legs)
     }
-    const SPECS: Record<AvatarKind, Spec> = {
+    // Partial: cat/dog are quadrupeds built by _buildQuadruped, never here.
+    const SPECS: Partial<Record<AvatarKind, Spec>> = {
       adult:        { sk: 1,    headR: 126, headShape: 'sphere', limbR: 1,   skin: color, body: color,     shoe: 0x1a1a1f, emI: 0.25, hands: 'sphere', eyes: 'dots',    steel: false },
       child:        { sk: 0.6,  headR: 107, headShape: 'sphere', limbR: 1,   skin: color, body: color,     shoe: 0x1a1a1f, emI: 0.25, hands: 'sphere', eyes: 'dots',    steel: false },
       robot:        { sk: 1,    headR: 128, headShape: 'box',    limbR: 1,   skin: GREY,  body: GREY,      shoe: 0x33363c, emI: 0.10, hands: 'box',    eyes: 'visor',   steel: true  },
@@ -5729,7 +6046,7 @@ export class ThreeDRenderer {
       wise_oracle:  { sk: 1,    headR: 126, headShape: 'sphere', limbR: 1,   skin: PALE,  body: ROBE,      shoe: 0x3a3542, emI: 0.15, hands: 'sphere', eyes: 'dots',    steel: false },
       astronaut:    { sk: 1,    headR: 118, headShape: 'sphere', limbR: 1.1, skin: WHITE, body: WHITE,     shoe: WHITE,    emI: 0.15, hands: 'sphere', eyes: 'dots',    steel: false },
     };
-    const spec = SPECS[kind] ?? SPECS.adult;
+    const spec = SPECS[kind] ?? SPECS.adult!;
     const sk = spec.sk;
     const armL = spec.armL ?? 1, legL = spec.legL ?? 1;
     const [fmW, fmH, fmD] = spec.footMul ?? [1, 1, 1];

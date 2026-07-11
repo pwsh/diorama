@@ -566,7 +566,9 @@ export class ThreeView extends LitElement {
         if (bp.floorId !== f.id) continue;
         targets.push({
           key: bp.key, x: bp.x, y: bp.y, color: hexToInt(bp.color),
-          ble: true, avatar: bp.avatarKind ?? 'random',
+          // Pets with no explicit avatar default to the cat quadruped rig;
+          // other unknown devices fall through to the stable human pool pick.
+          ble: true, avatar: bp.avatarKind ?? (bp.isPet ? 'cat' : 'random'),
         });
       }
       // Zones / halos rebuild only when shape or occupancy changes — not on

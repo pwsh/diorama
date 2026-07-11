@@ -24,6 +24,7 @@ const AVATAR_OPTIONS: ReadonlyArray<[AvatarKind, string]> = [
   ['cartoon_dog', 'Cartoon dog'], ['cartoon_duck', 'Cartoon duck'], ['cowboy', 'Cowboy'],
   ['magician', 'Magician'], ['farmer', 'Farmer'], ['tech_expert', 'Tech expert'],
   ['supermodel', 'Supermodel'], ['wise_oracle', 'Wise oracle'], ['astronaut', 'Astronaut'],
+  ['cat', '🐱 Cat'], ['dog', '🐶 Dog'],
 ];
 import {
   fmtLen,

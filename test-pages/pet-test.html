@@ -1,0 +1,113 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>pet test</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<script type="module">
+  // Deterministic quadruped-rig (cat/dog) verification. Synthesized clock.
+  //  - Walks a cat + a dog: asserts leg joints ANIMATE (change frame-to-frame)
+  //    and NO NaN anywhere in the pose graph.
+  //  - Dwells a dog onto a sofa: asserts the curl (lie) blend engages.
+  //  - Asserts plumbob spins + blob shadow stays grounded on the floor.
+  const q = new URLSearchParams(location.search);
+  const mod = await import('./assets/three-renderer.js?v=' + Date.now());
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+
+  const FW = 8000, FD = 6000;
+  const floor = {
+    id: 'f1', name: 'Pet room', w: FW, d: FD,
+    walls: [{ id: 'perim', points: [{x:200,y:200},{x:7800,y:200},{x:7800,y:5800},{x:200,y:5800},{x:200,y:200}] }],
+    furniture: [
+      { id: 'sofa', x: 6200, y: 4600, w: 2000, h: 900, kind: 'sofa', rotation: 0 },
+    ],
+    lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [], windows: [], bg: null, model3d: null, look3d: null,
+    rooms: [{ id: 'rm1', name: 'Den', anchor: { x: 3000, y: 3000 } }],
+  };
+  r.updateFloor(floor, { preset: q.get('preset') || 'day', floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6' });
+  r.applyViewPreset(q.get('view') || 'iso');
+
+  const realNow = performance.now.bind(performance);
+  let fakeNow = realNow();
+  performance.now = () => fakeNow;
+  const DT = 16.7;
+  const ctx = { entityOn: {}, roomNames: { rm1: 'Den' }, timeBucket: 'day' };
+  const step = (targets) => { fakeNow += DT; r.updateTargets(targets, ctx); };
+
+  // World-space Y of the blob shadow (group transform applied) — should stay on
+  // the floor (~0) while the body bobs above it.
+  const blobWorldY = (h) => {
+    h.group.updateMatrixWorld(true);
+    const m = h.blob.matrixWorld.elements;
+    return m[13];
+  };
+  const legRots = (h) => h.quadLegs.flatMap(l => [l.hip.rotation.x, l.knee.rotation.x]);
+  const allFinite = (arr) => arr.every(v => Number.isFinite(v));
+
+  // Plain radar-style targets: raw position is exactly what we pass (no AI
+  // goal-walker), so the dwell trigger is deterministic (mega-test pattern).
+  // The BLE-pet flow (avatar defaulting to 'cat', ble goal-walk) is covered
+  // separately by three-view + ble-walk-test.
+  const CAT = 'cat1', DOG = 'dog1';
+  const catAt = (t) => ({ key: CAT, x: 1200 + t * 4200, y: 2400, color: 0x9aa3ad, avatar: 'cat' });
+  const dogAt = () => ({ key: DOG, x: 6200, y: 4600, color: 0xa1704a, avatar: 'dog' });
+
+  // ── Phase 1: walk both around for ~2.5 s so gait settles, capturing leg
+  // rotations at two spaced frames to prove the legs move.
+  let catLegsA = null, catLegsB = null, dogLegsA = null, dogLegsB = null;
+  let anyNaN = false;
+  const NPHASE1 = Math.round(2600 / DT);
+  for (let i = 0; i < NPHASE1; i++) {
+    const t = Math.min(1, i / NPHASE1);
+    // Dog walks a small loop in phase 1 (before it settles on the sofa later).
+    const dogWalk = { key: DOG, x: 2500 + i * 22, y: 3400, color: 0xa1704a, avatar: 'dog' };
+    step([catAt(t), dogWalk]);
+    const hc = r._humanoids[CAT], hd = r._humanoids[DOG];
+    if (hc) { const rr = legRots(hc); if (!allFinite(rr)) anyNaN = true; if (i === 90) catLegsA = rr; if (i === 110) catLegsB = rr; }
+    if (hd) { const rr = legRots(hd); if (!allFinite(rr)) anyNaN = true; if (i === 90) dogLegsA = rr; if (i === 110) dogLegsB = rr; }
+  }
+
+  // Plumbob spin: sample its yaw across two frames.
+  const hcat = r._humanoids[CAT];
+  const pb0 = hcat.plumbob.rotation.y;
+  step([catAt(1)]);
+  const pb1 = r._humanoids[CAT].plumbob.rotation.y;
+  const plumbobSpins = Math.abs(pb1 - pb0) > 1e-4 && Number.isFinite(pb1);
+
+  // Blob grounded while the cat walks (body bobs, blob stays ~floor).
+  const catBlobY = blobWorldY(r._humanoids[CAT]);
+  const blobGrounded = Math.abs(catBlobY) < 80;
+
+  const legsChanged = (a, b) => a && b && a.some((v, i) => Math.abs(v - b[i]) > 1e-3);
+  const catAnimates = legsChanged(catLegsA, catLegsB);
+  const dogAnimates = legsChanged(dogLegsA, dogLegsB);
+  const catIsQuad = !!hcat.quad;
+  const dogIsQuad = !!r._humanoids[DOG].quad;
+
+  // ── Phase 2: park the dog on the sofa ~7 s → curl (lie-style) blend engages.
+  const NPHASE2 = Math.round(7000 / DT);
+  for (let i = 0; i < NPHASE2; i++) {
+    step([catAt(1), dogAt()]);
+  }
+  const hdog = r._humanoids[DOG];
+  const dogSit = hdog.sit;
+  const dogCurlPose = hdog.quadLegs[2].knee.rotation.x;  // rear-left knee tucked when curled
+  // Soft-seat sofa → the quad routes sit into the curl pose: rear knee heavily
+  // flexed (< -1) confirms the tuck rather than an upright human-style sit.
+  const curlEngaged = dogSit > 0.5 && dogCurlPose < -1.0;
+  const poseFinite = allFinite(legRots(hdog)) && Number.isFinite(hdog.group.rotation.x);
+
+  performance.now = realNow;
+
+  const pass = catIsQuad && dogIsQuad && catAnimates && dogAnimates && !anyNaN &&
+    plumbobSpins && blobGrounded && curlEngaged && poseFinite;
+  window.__RESULT__ = {
+    pass, catIsQuad, dogIsQuad, catAnimates, dogAnimates, anyNaN,
+    plumbobSpins, blobGrounded, catBlobY: +catBlobY.toFixed(1),
+    dogSit: +dogSit.toFixed(2), dogCurlPose: +dogCurlPose.toFixed(2), curlEngaged, poseFinite,
+  };
+  document.title = `PET ${pass ? 'PASS' : 'FAIL'} quad=${catIsQuad && dogIsQuad} ` +
+    `animate=[cat=${catAnimates},dog=${dogAnimates}] nan=${anyNaN} plumbob=${plumbobSpins} ` +
+    `blob=${blobGrounded}(${catBlobY.toFixed(0)}) curl=${curlEngaged}(sit=${dogSit.toFixed(2)},knee=${dogCurlPose.toFixed(2)})`;
+</script>

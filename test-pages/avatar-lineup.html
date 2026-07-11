@@ -17,7 +17,7 @@
   };
   r.updateFloor(floor, { preset: q.get('preset') || 'day', floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6' });
 
-  const kinds = (q.get('kinds') || 'adult,child,robot,alien,professional,hacker,movie_star,ninja,cyborg,ninja_cyborg,athlete').split(',');
+  const kinds = (q.get('kinds') || 'adult,child,robot,alien,professional,hacker,movie_star,ninja,cyborg,ninja_cyborg,athlete,cat,dog').split(',');
   const colsAll = [0x4fc3f7,0xff8a65,0x90a4ae,0xba68c8,0x64b5f6,0x81c784,0xffd54f,0xff7043,0x4fc3f7,0xe57373,0x4db6ac];
   const cols = kinds.map((_, i) => colsAll[i % colsAll.length]);
   const targets = kinds.map((k, i) => ({

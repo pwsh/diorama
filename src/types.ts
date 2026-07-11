@@ -151,7 +151,11 @@ export type AvatarKind =
   | 'hacker' | 'movie_star' | 'ninja' | 'cyborg' | 'ninja_cyborg' | 'athlete'
   | 'teddy_bear' | 'cartoon_mouse' | 'cartoon_dog' | 'cartoon_duck'
   | 'cowboy' | 'magician' | 'farmer' | 'tech_expert' | 'supermodel'
-  | 'wise_oracle' | 'astronaut';
+  | 'wise_oracle' | 'astronaut'
+  // Quadruped pet rigs (own builder + trot/sit/curl animation branch — see
+  // three-renderer). A DioramaPerson with `isPet` and no explicit avatarKind
+  // defaults to 'cat'. Kept OUT of the 'random' human fallback pool.
+  | 'cat' | 'dog';
 
 // A person (or pet) in the household. The shared identity concept for the
 // "World Outside" arc: BLE trilateration and GPS both resolve to a person;

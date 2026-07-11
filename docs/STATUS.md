@@ -34,6 +34,16 @@ deployed to the live HA instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **World Outside — P1 (pet rigs)**: quadruped cat/dog avatar kinds with a
+  dedicated `_buildQuadruped` builder (4-leg body, ears/snout, 2-segment tail;
+  cat ≈ 58% of the dog) and `_applyQuadPose` trot gait + sit (haunches) / curl
+  (lie) blends off the shared humanoid dwell triggers (soft SitSpots → curl).
+  Reuses all shared rig bookkeeping (nav/carrot/spring, scale/fade, blob,
+  outline, plumbob@0.7×); pets skip privacy blur / activity anchors / bubbles.
+  `cat`/`dog` are selectable (sidebar) but out of the random-human pool; a
+  `DioramaPerson.isPet` with no avatarKind renders as `cat`. Test page
+  `test-pages/pet-test.html` (PET PASS: legs animate, no NaN, plumbob spins,
+  blob grounded, sofa curl engages).
 - **World Outside — B2 (BLE trilateration)**: panel-side solver
   `src/trilateration.ts` (pure weighted Gauss-Newton, warm-started, step-clamped,
   Levenberg-damped; 2-proxy segment + 1-proxy constraint degenerate cases;
