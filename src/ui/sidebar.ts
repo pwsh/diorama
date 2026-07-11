@@ -8,8 +8,16 @@ import { NEW_ROOM } from '../planner.js';
 import type {
   Sensor, Zone, ObjectHalo, BgImage, MotionSensor, EnvSensor, EnvKind, Light, SwitchFixture, LightIconKind,
   Furniture, FurnitureKind, Door, Window as WindowType, Layers2D, Floor, Room,
-  ObjectRecipe, RecipePrimitive, RecipeShape, ActivityKind,
+  ObjectRecipe, RecipePrimitive, RecipeShape, ActivityKind, AvatarKind,
 } from '../types.js';
+
+// Avatar model dropdown options (shared by the mmWave + motion editors).
+// 'adult' is the default; picking it clears avatarKind back to undefined.
+const AVATAR_OPTIONS: ReadonlyArray<[string, string]> = [
+  ['adult', 'Adult'], ['child', 'Child'], ['robot', 'Robot'], ['alien', 'Alien'],
+  ['professional', 'Professional'], ['hacker', 'Hacker'], ['movie_star', 'Movie star'],
+  ['ninja_cyborg', 'Ninja cyborg'], ['athlete', 'Athlete'], ['random', 'Random'],
+];
 import {
   fmtLen,
   motionColor, motionIntensity, sensorColor, lightIconKind, MOTION_DEFAULTS,
@@ -463,6 +471,17 @@ export class Sidebar extends LitElement {
             ${m.avatar ? '🧍 On' : '— Off'}
           </button>
         </div>
+        ${m.avatar ? html`
+          <div class="row" title="3D character model used for this avatar">
+            <label>Model</label>
+            <select .value=${m.avatarKind || 'adult'}
+                    @change=${(e: Event) => upd(() => {
+                      const v = (e.target as HTMLSelectElement).value;
+                      m.avatarKind = v === 'adult' ? undefined : (v as AvatarKind | 'random');
+                    })}>
+              ${AVATAR_OPTIONS.map(([val, lbl]) => html`<option value=${val}>${lbl}</option>`)}
+            </select>
+          </div>` : nothing}
         ${this._lockRow(m)}
         <div class="row"><label>HA entity</label>
           <span style="font-size:11px;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
@@ -1628,6 +1647,17 @@ export class Sidebar extends LitElement {
           <button class="btn" style="font-size:10px;padding:2px 6px"
                   title="Reset to palette default — tints this sensor's T1/T2/T3 dots"
                   @click=${() => { s.color = undefined; p.save(); p.emitConfig(); }}>↺</button>
+        </div>
+        <div class="row" title="3D character model used for this sensor's targets">
+          <label>Avatar</label>
+          <select .value=${s.avatarKind || 'adult'}
+                  @change=${(e: Event) => {
+                    const v = (e.target as HTMLSelectElement).value;
+                    s.avatarKind = v === 'adult' ? undefined : (v as AvatarKind | 'random');
+                    p.save(); p.emitConfig();
+                  }}>
+            ${AVATAR_OPTIONS.map(([val, lbl]) => html`<option value=${val}>${lbl}</option>`)}
+          </select>
         </div>
         <div class="row"><label>HA Device</label>
           <!-- Use .value (property) not ?selected (attribute) so a freshly-

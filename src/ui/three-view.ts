@@ -527,7 +527,7 @@ export class ThreeView extends LitElement {
             const halfFov = (s.fov ?? 120) / 2;
             const bearing = Math.abs(Math.atan2(sl.cx, sl.cy) * 180 / Math.PI);
             const edge = dist > range - 600 || Math.abs(bearing - halfFov) < 8;
-            targets.push({ key: `${s.id}_${i}`, x: wp.x, y: wp.y, color: tColor, edge });
+            targets.push({ key: `${s.id}_${i}`, x: wp.x, y: wp.y, color: tColor, edge, avatar: s.avatarKind });
           }
         }
       }
@@ -539,7 +539,7 @@ export class ThreeView extends LitElement {
       for (const m of f.motionSensors) {
         if (!m.avatar || !m.entity_id) continue;
         if (states[m.entity_id]?.state !== 'on') continue;
-        targets.push({ key: 'ai_' + m.id, x: m.x, y: m.y, color: hexToInt(motionColor(m)), ai: true });
+        targets.push({ key: 'ai_' + m.id, x: m.x, y: m.y, color: hexToInt(motionColor(m)), ai: true, avatar: m.avatarKind });
       }
       // Zones / halos rebuild only when shape or occupancy changes — not on
       // every target movement frame.

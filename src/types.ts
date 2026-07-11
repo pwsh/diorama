@@ -143,6 +143,13 @@ export interface SwitchFixture {
   locked?: boolean;    // canvas move/delete disabled (click-to-toggle still works)
 }
 
+// Avatar (humanoid rig) variant for a 3D target. `random` resolves per-target
+// to a concrete kind by a stable hash of the target key, so a given person keeps
+// their look for its lifetime (see resolveAvatar in three-renderer.ts).
+export type AvatarKind =
+  | 'adult' | 'child' | 'robot' | 'alien' | 'professional'
+  | 'hacker' | 'movie_star' | 'ninja_cyborg' | 'athlete';
+
 export interface Sensor {
   id: string;
   x: number; y: number;
@@ -153,6 +160,7 @@ export interface Sensor {
   deviceSlug: string | null;
   locked?: boolean;   // canvas move/rotate/delete disabled
   color?: string;  // hex; tints all targets seen by this sensor in 2D + 3D
+  avatarKind?: AvatarKind | 'random';  // 3D rig variant for this sensor's targets; default 'adult'
   // Last-known-good zone vertices. Persisted so a reload paints zones from
   // store immediately, before HA's first state push completes — protects
   // against the case where firmware re-publishes partial / zeroed values
@@ -198,6 +206,7 @@ export interface MotionSensor {
   color?: string;            // hex; default '#ba68c8'
   intensity?: number;        // 0..2 multiplier on highlight fill/glow; default 1
   avatar?: boolean;          // 3D: project a wandering AI person while presence is on; default off
+  avatarKind?: AvatarKind | 'random';  // 3D rig variant for the projected AI avatar; default 'adult'
   locked?: boolean;          // canvas move/rotate/delete disabled
 }
 
