@@ -1,4 +1,4 @@
-import { snap, snapVertex15, distMM, worldToLocal, localToWorld, FURNITURE_KINDS, furnitureCorners, furnitureLocalToWorld, furnitureWorldToLocal, resolveFurnitureDef, resolveFurnitureWallCollision, envScale, ENV_SCALE_MIN, ENV_SCALE_MAX } from './geometry.js';
+import { snap, snapVertex15, distMM, worldToLocal, localToWorld, FURNITURE_KINDS, furnitureCorners, furnitureLocalToWorld, furnitureWorldToLocal, resolveFurnitureDef, resolveFurnitureWallCollision, resolveSeatTableCollision, envScale, ENV_SCALE_MIN, ENV_SCALE_MAX } from './geometry.js';
 import { newId } from './storage.js';
 import {
   pxToMm, type View,
@@ -741,7 +741,11 @@ export function onCanvasMouseUp(p: Planner, canvas: HTMLCanvasElement): void {
       snapFurnitureToSurface(f, piece, p.store.customObjects);
       // Keep the piece off wall slabs (edge locks flush to the wall face).
       // Mounted-on-surface items follow their host; locked pieces never move.
-      if (!piece.locked && !piece.mountOnId) resolveFurnitureWallCollision(piece, f.walls);
+      if (!piece.locked && !piece.mountOnId) {
+        resolveFurnitureWallCollision(piece, f.walls);
+        // Then keep a tucked seat from sinking into the tabletop it serves.
+        resolveSeatTableCollision(piece, f.furniture, p.store.customObjects);
+      }
     }
     p.save();
   } else if (drag.kind === 'bgMove' || drag.kind === 'bgCorner') {
@@ -934,7 +938,10 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
     p.activeFurnitureId = piece.id;
     snapStairEdges(f, piece);
     snapFurnitureToSurface(f, piece, p.store.customObjects);
-    if (!piece.locked && !piece.mountOnId) resolveFurnitureWallCollision(piece, f.walls);
+    if (!piece.locked && !piece.mountOnId) {
+      resolveFurnitureWallCollision(piece, f.walls);
+      resolveSeatTableCollision(piece, f.furniture, p.store.customObjects);
+    }
     p.save(); p.setTool('select'); p.emitConfig(); return;
   }
   if (p.tool === 'light') {

@@ -50,6 +50,9 @@ interface SitSpot {
   x: number; z: number; seatY: number; facing: number; r: number;
   roomId?: string | null;         // named room the seat sits in (live loop resolve)
   hostActivity?: ActivityKind;    // the seat piece's own activity, if any
+  hostTopY?: number;              // world-Y of the eat/work host's tabletop
+                                  // (def.ht + host elevation) — drives seated
+                                  // arm IK so hands rest ON the surface
 }
 
 // A contextual-activity anchor collected from furniture whose def carries an
@@ -1309,14 +1312,24 @@ export class ThreeDRenderer {
         // up to a table/desk becomes an eat/work seat. Reads the HOST's
         // resolved def.activity so custom recipes with those activities work.
         let hostActivity = def.activity;
-        if (!hostActivity) {
+        // Tabletop height of the eat/work host, so the seated arm IK can rest
+        // the hands ON the surface (Part B). Set only for eat/work seats.
+        let hostTopY: number | undefined;
+        if (hostActivity === 'eat_at_table' || hostActivity === 'work_at_desk') {
+          // Seat authored as its own eat/work surface (custom recipe) — the top
+          // is this piece's own def.ht.
+          hostTopY = def.ht + (fu.elevation ?? 0);
+        } else if (!hostActivity) {
           for (const host of f.furniture) {
             if (host === fu) continue;
-            const ha = resolveFurnitureDef(host, customObjects).activity;
+            const hdef = resolveFurnitureDef(host, customObjects);
+            const ha = hdef.activity;
             if (ha !== 'eat_at_table' && ha !== 'work_at_desk') continue;
             const l = furnitureWorldToLocal(host.rotation, fu.x - host.x, fu.y - host.y);
             if (Math.abs(l.x) <= host.w / 2 + 400 && Math.abs(l.y) <= host.h / 2 + 400) {
-              hostActivity = ha; break;
+              hostActivity = ha;
+              hostTopY = hdef.ht + (host.elevation ?? 0);
+              break;
             }
           }
         }
@@ -1327,6 +1340,7 @@ export class ThreeDRenderer {
           r: Math.max(fu.w, fu.h) / 2 + 350,
           roomId,
           hostActivity,
+          hostTopY,
         });
       }
       // Pieces whose def carries an `activity` register a contextual anchor
@@ -4159,6 +4173,45 @@ export class ThreeDRenderer {
       const SIT_HIP = 1.45, SIT_KNEE = -1.45, SIT_SHOULDER = 0.45, SIT_ELBOW = 0.85;
       const stand = 1 - sit;
 
+      // ── Table-aware seated arms (Part B). When the seat serves an eat/work
+      // host, rest the hands ON the tabletop via a closed-form 2-link IK rather
+      // than sweeping the forearms through the slab. Rig geometry (see
+      // _buildHumanoid): hip pivot 870 above the root, shoulder pivot 1398
+      // above the root; upper arm 320, forearm+hand ≈ 313.
+      const HIP_Y_RIG = 870, SHOULDER_Y_RIG = 1398;
+      const ARM_L1 = 320, ARM_L2 = 313;
+      const TABLE_ARM_FWD = 380;   // forward (−Z local) reach of the hands
+      const hostTopY = spot?.hostTopY;
+      let seatYeff = spot ? spot.seatY : 0;
+      if (spot && hostTopY != null && hostTopY - spot.seatY > 380) {
+        // Tall table (bar / island height): a normal seat can't reach the top.
+        // Deliberate Sims-style cheat — the avatar "sits taller" (barstool
+        // illusion) so its proportions read right instead of stretching arms.
+        seatYeff = hostTopY - 380;
+      }
+      // Shoulder world height when fully seated: the root drops so the hip pivot
+      // lands on seatYeff, and the seated body pitch ≈ 0, so the shoulder rides
+      // SHOULDER_Y_RIG above the root origin.
+      const shoulderWorldY = (seatYeff - HIP_Y_RIG) + SHOULDER_Y_RIG;
+      // Solve shoulder + elbow rotation.x that lands the hand at world height
+      // `handY`, TABLE_ARM_FWD forward of the shoulder, via the law of cosines
+      // in the sagittal plane. Positive rotation.x swings a hanging limb toward
+      // body-local −Z (forward) — see the humanoid section in CLAUDE.md. Angles
+      // clamped to sane ranges (shoulder 0.2..1.4, elbow 0.2..2.2).
+      const tableArmIK = (handY: number): { sh: number; el: number } => {
+        const down = shoulderWorldY - handY;            // vertical drop shoulder→hand
+        let d = Math.hypot(TABLE_ARM_FWD, down);
+        d = Math.max(Math.abs(ARM_L1 - ARM_L2) + 1, Math.min(ARM_L1 + ARM_L2 - 1, d));
+        const cl = (v: number) => Math.max(-1, Math.min(1, v));
+        const alpha = Math.atan2(TABLE_ARM_FWD, down);  // target dir from +down axis
+        const beta = Math.acos(cl((d * d + ARM_L1 * ARM_L1 - ARM_L2 * ARM_L2) / (2 * ARM_L1 * d)));
+        const gamma = Math.acos(cl((ARM_L1 * ARM_L1 + ARM_L2 * ARM_L2 - d * d) / (2 * ARM_L1 * ARM_L2)));
+        return {
+          sh: Math.max(0.2, Math.min(1.4, alpha - beta)),
+          el: Math.max(0.2, Math.min(2.2, Math.PI - gamma)),
+        };
+      };
+
       // Walk pose values for each joint (rad), before any sit / activity blend.
       const wLHip = sinP * amp + idle, wRHip = -sinP * amp + idle;
       const wLKnee = -Math.max(0, sinP) * (0.9 * ampNorm);
@@ -4251,17 +4304,38 @@ export class ThreeDRenderer {
         // Seated contextual pose add-ons (Phase 5) — subtle, layered on top of
         // the SIT_* pose and blended by `sit`. No anchor is involved. Cheap:
         // only the elbows / shoulders / head lean move.
-        switch (h.activity) {
+        const tableHands = spot && hostTopY != null &&
+          (h.activity === 'eat_at_table' || h.activity === 'work_at_desk');
+        if (tableHands) {
+          // Rest the hands ~40 mm above the tabletop via IK, so forearms lie ON
+          // the slab instead of sweeping through it. Blended by `sit`.
+          const rest = tableArmIK(hostTopY! + 40);
+          if (h.activity === 'work_at_desk') {
+            // Both forearms up to the desk surface, slight head-down lean.
+            lSh = wLSh * stand + rest.sh * sit; rSh = wRSh * stand + rest.sh * sit;
+            lEl = wLEl * stand + rest.el * sit; rEl = wREl * stand + rest.el * sit;
+            leanX = wLeanX * stand - 0.06 * sit;
+          } else {
+            // eat_at_table: right hand rests on the table; the left forearm
+            // lifts toward the mouth on a 0.8 Hz cycle — the LIFT now rises from
+            // the tabletop pose UP to 120 mm above it (was from the lap), so the
+            // forearm never dips through the slab.
+            const s = (Math.sin(now * 0.8 * 2 * Math.PI) + 1) / 2;  // 0..1
+            const lift = tableArmIK(hostTopY! + 40 + 120 * s);
+            rSh = wRSh * stand + rest.sh * sit; rEl = wREl * stand + rest.el * sit;
+            lSh = wLSh * stand + lift.sh * sit; lEl = wLEl * stand + lift.el * sit;
+          }
+        } else switch (h.activity) {
           case 'eat_at_table': {
-            // Left forearm lifts toward the mouth on a slow 0.8 Hz cycle; the
-            // right stays at rest — reads as bringing food up and down.
+            // Fallback (no resolved tabletop): left forearm lifts toward the
+            // mouth on a slow 0.8 Hz cycle; the right stays at rest.
             const s = (Math.sin(now * 0.8 * 2 * Math.PI) + 1) / 2;  // 0..1
             lEl = wLEl * stand + (SIT_ELBOW + (1.3 - SIT_ELBOW) * s) * sit;
             lSh = wLSh * stand + (SIT_SHOULDER + 0.25 * s) * sit;
             break;
           }
           case 'work_at_desk':
-            // Both forearms up to the desk surface, slight head-down lean.
+            // Fallback: both forearms up to the desk surface, slight lean.
             lEl = wLEl * stand + 1.15 * sit;
             rEl = wREl * stand + 1.15 * sit;
             leanX = wLeanX * stand - 0.06 * sit;
@@ -4416,10 +4490,11 @@ export class ThreeDRenderer {
         py2 = h.groundY + bob - squatDrop;
       } else if (spot) {
         // Seated: drop the root so the hip pivot rests on the seat, pull x/z
-        // onto the seat center.
+        // onto the seat center. `seatYeff` (Part B) equals spot.seatY for normal
+        // seats but is raised for tall eat/work hosts so the arms can reach.
         px2 = h.navX * stand + spot.x * sit;
         pz2 = h.navZ * stand + spot.z * sit;
-        py2 = (h.groundY + bob) * stand + (spot.seatY - HIP_Y) * sit;
+        py2 = (h.groundY + bob) * stand + (seatYeff - HIP_Y) * sit;
       } else {
         px2 = h.navX; pz2 = h.navZ; py2 = h.groundY + bob;
       }

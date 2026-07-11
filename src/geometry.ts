@@ -585,6 +585,58 @@ export function resolveFurnitureWallCollision(
   return movedAny;
 }
 
+// ── Seat ↔ table tuck limit ──────────────────────────────────────────────
+// A seat-bearing piece (resolved def has `seat` — chair / bench / stool / …)
+// may tuck under an eat/work host (a table or desk: resolved def.activity
+// 'eat_at_table' | 'work_at_desk', incl. custom recipes carrying those) only
+// until its CENTER reaches the host footprint edge — a sitting body still needs
+// to clear the tabletop. If the seat's center lands INSIDE a host's rotation-
+// aware footprint, push it OUT along the host-local minimal-translation axis so
+// the center rests on the host edge + 20 mm outward. Only the DRAGGED seat
+// moves (matches the drag-the-seat UX); dragging a table onto chairs is out of
+// scope — the table has no `seat`, so this no-ops on it, leaving those seats
+// swallowed. Counters / islands are intentionally NOT hosts (only eat/work).
+// Runs after resolveFurnitureWallCollision at the same two hooks; the caller's
+// `!piece.locked` guard keeps locked seats put. Mutates piece.x/y; returns
+// whether it moved.
+const SEAT_TUCK_CLEAR_MM = 20;   // outward gap so the center clears the tabletop
+export function resolveSeatTableCollision(
+  piece: Furniture,
+  furniture: Furniture[],
+  customObjects?: ObjectRecipe[],
+  passes = 2,
+): boolean {
+  if (!resolveFurnitureDef(piece, customObjects).seat) return false;
+  let movedAny = false;
+  for (let pass = 0; pass < passes; pass++) {
+    let passMoved = false;
+    for (const host of furniture) {
+      if (host.id === piece.id) continue;
+      const ha = resolveFurnitureDef(host, customObjects).activity;
+      if (ha !== 'eat_at_table' && ha !== 'work_at_desk') continue;
+      // Seat center in the host's local frame (rotation-aware).
+      const l = furnitureWorldToLocal(host.rotation, piece.x - host.x, piece.y - host.y);
+      const hx = host.w / 2, hy = host.h / 2;
+      if (Math.abs(l.x) >= hx || Math.abs(l.y) >= hy) continue;  // center already outside
+      const penX = hx - Math.abs(l.x);   // depth to the ±x edges
+      const penY = hy - Math.abs(l.y);   // depth to the ±y edges
+      let nlx = l.x, nly = l.y;
+      if (penX <= penY) {                 // shallower along local x → push out on x
+        nlx = (l.x >= 0 ? 1 : -1) * (hx + SEAT_TUCK_CLEAR_MM);
+      } else {                            // push out on local y
+        nly = (l.y >= 0 ? 1 : -1) * (hy + SEAT_TUCK_CLEAR_MM);
+      }
+      const w = furnitureLocalToWorld(host.rotation, nlx, nly);
+      piece.x = host.x + w.x;
+      piece.y = host.y + w.y;
+      passMoved = true; movedAny = true;
+    }
+    if (!passMoved) break;
+  }
+  if (movedAny) { piece.x = Math.round(piece.x); piece.y = Math.round(piece.y); }
+  return movedAny;
+}
+
 // Clip a simple polygon `loop` against the convex quad `rect` (Sutherland–
 // Hodgman, rect as the clipper). Returns the intersection polygon (world mm),
 // or null when the overlap is empty. Exact for a convex rect clipper against
