@@ -168,7 +168,7 @@ const WMO_TO_HA: Record<number, HaCondition> = {
   63: 'rainy',          // Rain: moderate
   65: 'pouring',        // Rain: heavy
   66: 'rainy',          // Freezing rain: light
-  67: 'rainy',          // Freezing rain: heavy
+  67: 'pouring',        // Freezing rain: heavy
   71: 'snowy',          // Snow fall: slight
   73: 'snowy',          // Snow fall: moderate
   75: 'snowy',          // Snow fall: heavy
@@ -296,4 +296,34 @@ export const CONDITION_LABEL: Record<HaCondition, string> = {
 export function tempText(tempC: number, imperial: boolean): string {
   if (imperial) return `${Math.round(tempC * 9 / 5 + 32)}°F`;
   return `${Math.round(tempC)}°C`;
+}
+
+// ── W2: 3D-effect intensity (0..1) per condition ────────────────────────────
+// Kept here (pure + testable) so three-view's WeatherFxState derivation and the
+// weather-fx-test page share ONE source of truth. Drives particle counts
+// (600 + intensity·1900), fall speed, and flash energy. Conditions with no
+// particle effect (clear/cloudy/exceptional) return 0. The heaviest sky
+// (pouring / hail) maxes out; a plain thunderstorm (lightning-rainy) and windy
+// sit high; ordinary rain / snow are mid; anything unmapped falls to a light
+// drizzle-ish 0.4.
+export function conditionIntensity(condition: HaCondition | string): number {
+  switch (condition) {
+    case 'pouring':
+    case 'hail':            return 1.0;
+    case 'lightning-rainy': return 0.8;
+    case 'windy':
+    case 'windy-variant':   return 0.65;
+    case 'lightning':       return 0.6;
+    case 'rainy':
+    case 'snowy':
+    case 'snowy-rainy':     return 0.55;
+    case 'fog':             return 0.5;
+    // Clear / overcast / exceptional: lighting + chip only, no particles.
+    case 'sunny':
+    case 'clear-night':
+    case 'partlycloudy':
+    case 'cloudy':
+    case 'exceptional':     return 0;
+    default:                return 0.4;   // unknown → light drizzle-ish
+  }
 }

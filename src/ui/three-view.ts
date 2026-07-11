@@ -5,10 +5,11 @@ import { customElement } from './define.js';
 // all of three.js, ~600 kB) is loaded lazily in firstUpdated so the 2D-only
 // startup path never downloads it.
 import type { ThreeDRenderer, ZoneWorld, HaloWorld, TargetWorld, ActivityContext,
-  GpsPinWorld, GpsLandmarkWorld } from '../three-renderer.js';
+  GpsPinWorld, GpsLandmarkWorld, WeatherFxState } from '../three-renderer.js';
 import { localToWorld, transformVerts, pointInPolygon, sensorColor, hexToInt, motionColor } from '../geometry.js';
 import { compass8 } from '../geo.js';
 import { resolveScenePreset, resolveTimeBucket } from '../time-of-day.js';
+import { conditionIntensity } from '../weather.js';
 import { loadModel } from '../model-store.js';
 import { newId } from '../storage.js';
 import type { Planner } from '../planner.js';
@@ -289,7 +290,51 @@ export class ThreeView extends LitElement {
     sc: import('../types.js').Scene3D,
     states: Record<string, import('../types.js').HassState>,
   ): import('../types.js').ScenePreset {
-    return resolveScenePreset(sc, states);
+    // W2 weather lighting modifier: when affectLighting is on, a live weather
+    // condition can downgrade a bright day preset to dusk (see resolveScenePreset).
+    const p = this.planner;
+    const w = p.store.weather;
+    const wnow = p.weatherNow;
+    const weatherMod = wnow
+      ? { condition: wnow.condition, affect: w?.affectLighting !== false }
+      : undefined;
+    return resolveScenePreset(sc, states, weatherMod);
+  }
+
+  // W2: derive the renderer WeatherFxState from planner.weatherNow, mapping the
+  // meteorological wind bearing into the PLAN frame (geo θ when calibrated, else
+  // plan-north-relative). Returns a no-effect 'sunny' state whenever the layer
+  // is off, effects3d is disabled, or there's no live weather — updateWeather
+  // then clears any active particles / fog.
+  private _weatherFxState(layers: import('../types.js').Layers2D): WeatherFxState {
+    const p = this.planner;
+    const w = p.store.weather;
+    const wnow = p.weatherNow;
+    const on = layers.weatherFx !== false && w?.effects3d !== false && !!wnow;
+    if (!on || !wnow) {
+      return { condition: 'sunny', intensity01: 0, windKmh: 0, windBearingPlanRad: null, isDay: true };
+    }
+    // Meteorological bearing = direction wind blows FROM (deg CW from geo north).
+    // Wind blows TOWARD from+180. Map that geo direction into the plan frame via
+    // the fitted transform θ (recovers plan-north from calibration), else θ=0.
+    let planRad: number | null = null;
+    if (wnow.windBearing != null && isFinite(wnow.windBearing)) {
+      const fit = p.geoFit();
+      const theta = fit && fit.transform.quality !== 'none' ? fit.transform.thetaRad : 0;
+      const b = ((wnow.windBearing + 180) * Math.PI) / 180;   // toward-direction, geo
+      const east = Math.sin(b), north = Math.cos(b);
+      // geo (east,north) → plan (dx,dy) = R(θ)·(east,north).
+      const c = Math.cos(theta), s = Math.sin(theta);
+      const dx = c * east - s * north, dy = s * east + c * north;
+      planRad = Math.atan2(dy, dx);
+    }
+    return {
+      condition: wnow.condition,
+      intensity01: conditionIntensity(wnow.condition),
+      windKmh: wnow.windKmh ?? 0,
+      windBearingPlanRad: planRad,
+      isDay: wnow.isDay,
+    };
   }
 
   private _tickFails = 0;
@@ -343,6 +388,7 @@ export class ThreeView extends LitElement {
   private _keyHalos = '';
   private _keyGhost = '';
   private _keyGps = '';
+  private _keyWeather = '';
 
   private _tickOnce(): void {
       const r = this._renderer; if (!r || !r.loaded) return;
@@ -362,7 +408,7 @@ export class ThreeView extends LitElement {
         this._keyFloor = this._keyDoors = this._keySensors = '';
         this._keyMotion = this._keyEnv = this._keyBle = '';
         this._keyLights = this._keyZones = this._keyHalos = '';
-        this._keyGhost = this._keyGps = '';
+        this._keyGhost = this._keyGps = this._keyWeather = '';
       }
 
       // Layer visibility (shared with the 2D layer flags): group-scoped
@@ -482,6 +528,23 @@ export class ThreeView extends LitElement {
         }));
         const lmW: GpsLandmarkWorld[] = gpsLandmarks.map(l => ({ x: l.x, y: l.y, name: l.name || 'Landmark' }));
         r.updateGpsPins(pinsW, lmW);
+      }
+
+      // Outdoor weather effects (W2). The renderer group is rebuilt only when the
+      // condition / intensity bucket / layer flags change; per-frame particle,
+      // fog, and lightning motion happens inside the renderer's _animate loop.
+      // The effective lighting preset already folds the weather dim into
+      // _keyFloor above, so no extra floor plumbing is needed here.
+      const fx = this._weatherFxState(layers);
+      // Wind drift is baked into each cloud at build time, so a coarse wind
+      // speed/bearing bucket joins the key (rebuild on a meaningful wind change).
+      const windBucket = `${Math.round(fx.windKmh / 10)}:` +
+        `${fx.windBearingPlanRad == null ? 'n' : Math.round(fx.windBearingPlanRad * 4)}`;
+      const keyWeather = `${p.configRev}|${f.id}|${fx.condition}|` +
+        `${Math.round(fx.intensity01 * 4)}|${windBucket}|${layers.weatherFx !== false}`;
+      if (keyWeather !== this._keyWeather) {
+        this._keyWeather = keyWeather;
+        r.updateWeather(fx);
       }
 
       // Lights + switches: structural + state/brightness/color per entity.

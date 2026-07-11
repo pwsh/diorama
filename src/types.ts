@@ -447,6 +447,7 @@ export interface Layers2D {
   targets?: boolean;    // live target dots
   activity?: boolean;   // default OFF: glow pools for lights that are ON + active motion
   geo?: boolean;        // geo landmark pins (+ GPS device pins in G2); 2D-only this phase
+  weatherFx?: boolean;  // 3D outdoor weather effects (rain/snow/fog/lightning/wind); default on (W2)
 }
 
 export interface Layer2DPreset {

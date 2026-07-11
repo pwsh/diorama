@@ -1,0 +1,120 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>WFX …</title>
+<style>
+  html,body{margin:0;background:#0b0f14;color:#cfd8dc;font:13px/1.4 sans-serif}
+  #c{width:1000px;height:640px}
+  #log{position:fixed;right:8px;top:8px;width:360px;max-height:96vh;overflow:auto;
+       background:#111820;border:1px solid #263340;border-radius:6px;padding:8px 10px;font-size:11px}
+  .pass{color:#69f0ae}.fail{color:#ff5252}.hd{font-weight:bold;margin:2px 0 6px}
+</style>
+<div id="c"></div>
+<div id="log"></div>
+<script type="module">
+  // Renderer-harness weather test (W2). Drives ThreeDRenderer.updateWeather then
+  // steps the renderer's own per-frame _advanceWeather with a synthesized clock,
+  // so particle motion / fog easing / lightning flashes are deterministic. The
+  // background _animate RAF cannot interleave — this whole body is synchronous
+  // (no awaits after updateWeather), so every read reflects only manual steps.
+  const q = new URLSearchParams(location.search);
+  const scene = q.get('c') || 'pouring';
+  const mod = await import('./assets/three-renderer.js?v=' + Date.now());
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+
+  // Minimal floor so _fw/_fd (spawn box) are realistic.
+  const floor = {
+    id: 'f1', name: 'T', w: 10000, d: 8000,
+    walls: [{ id: 'w', points: [{x:200,y:200},{x:9800,y:200},{x:9800,y:7800},{x:200,y:7800},{x:200,y:200}] }],
+    furniture: [], lights: [], switches: [], sensors: [], motionSensors: [],
+    envSensors: [], doors: [], windows: [], bg: null, model3d: null, look3d: null,
+  };
+  r.updateFloor(floor, { preset: 'day', floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6' });
+  r.applyViewPreset('iso');
+
+  const tests = [];
+  const ok = (name, cond, detail) => tests.push({ name, ok: !!cond, detail: detail ?? '' });
+
+  const fx = (over) => Object.assign(
+    { condition: 'sunny', intensity01: 0, windKmh: 0, windBearingPlanRad: null, isDay: true }, over);
+
+  // Step the renderer's per-frame weather advance N times at dt seconds.
+  let clk = 1000;
+  const step = (n, dt = 1 / 60) => {
+    for (let i = 0; i < n; i++) { clk += dt; r._advanceWeather(dt, clk); }
+  };
+
+  if (scene === 'pouring') {
+    r.updateWeather(fx({ condition: 'pouring', intensity01: 1.0, windKmh: 20, windBearingPlanRad: 0.3, isDay: true }));
+    const cl = r._weatherClouds[0];
+    ok('one rain cloud', r._weatherClouds.length === 1 && cl && cl.kind === 'rain', `clouds=${r._weatherClouds.length}`);
+    ok('count in [1500,2500]', cl && cl.count >= 1500 && cl.count <= 2500, `count=${cl?.count}`);
+    // Snapshot a few Y before / after → assert movement.
+    const before = [cl.pos[1], cl.pos[4], cl.pos[7], cl.pos[10]];
+    step(20);
+    const after = [cl.pos[1], cl.pos[4], cl.pos[7], cl.pos[10]];
+    const moved = before.some((y, i) => Math.abs(y - after[i]) > 1e-3);
+    ok('particles move between frames', moved, `dy0=${(before[0] - after[0]).toFixed(1)}`);
+    // All Y within the 0..4000 recycle band after stepping.
+    let inBand = true, worst = 0;
+    for (let i = 0; i < cl.count; i++) { const y = cl.pos[i * 3 + 1]; if (y < -1 || y > 4001) { inBand = false; worst = y; } }
+    ok('all Y within 0..4000 band', inBand, inBand ? 'ok' : `worst=${worst.toFixed(0)}`);
+    step(600);   // long run — must stay bounded (wrap wind drift + recycle)
+    let stillBand = true;
+    for (let i = 0; i < cl.count; i++) { const y = cl.pos[i * 3 + 1]; if (y < -1 || y > 4001) stillBand = false; }
+    ok('band stable after 10 s', stillBand);
+    ok('no scene fog', r._scene.fog == null, `fog=${r._scene.fog}`);
+
+  } else if (scene === 'fog') {
+    r.updateWeather(fx({ condition: 'fog', intensity01: 0.5, isDay: true }));
+    ok('scene.fog is FogExp2', !!r._scene.fog && r._scene.fog.isFogExp2, `fog=${r._scene.fog?.constructor?.name}`);
+    ok('two ground planes', r._weatherFogPlanes.length === 2, `planes=${r._weatherFogPlanes.length}`);
+    step(30);                                   // ~0.5 s in
+    const mid = r._scene.fog.density;
+    step(330);                                  // ~6 s total → near target
+    const late = r._scene.fog.density;
+    const TARGET = 0.00018;
+    ok('density eases in (mid < late)', mid < late, `mid=${mid.toExponential(2)} late=${late.toExponential(2)}`);
+    ok('mid density below target', mid < TARGET * 0.6, `mid=${mid.toExponential(2)}`);
+    ok('late density near target', late > TARGET * 0.75, `late=${late.toExponential(2)} tgt=${TARGET}`);
+    // Leaving fog: sunny → target 0, eases out and nulls scene.fog.
+    r.updateWeather(fx({ condition: 'sunny' }));
+    step(600);                                  // ~10 s ease-out
+    ok('fog cleared on leave', r._scene.fog == null, `fog=${r._scene.fog}`);
+
+  } else if (scene === 'lightning') {
+    r.updateWeather(fx({ condition: 'lightning', intensity01: 0.6, isDay: false }));
+    ok('flash light built', !!r._weatherFlash, `flash=${!!r._weatherFlash}`);
+    ok('flash idle at rest', r._weatherFlash.intensity === 0, `i=${r._weatherFlash.intensity}`);
+    // Simulate 30 s. Track a flash pulse over threshold, then a return to ~0.
+    let peak = 0, sawFlash = false, sawReturn = false;
+    for (let i = 0; i < 1800; i++) {
+      step(1);
+      const inten = r._weatherFlash.intensity;
+      if (inten > peak) peak = inten;
+      if (inten > 2) sawFlash = true;
+      else if (sawFlash && inten < 0.05) sawReturn = true;
+    }
+    ok('>=1 flash pulse in 30 s', sawFlash, `peak=${peak.toFixed(2)}`);
+    ok('flash returns to ~0', sawReturn, `final=${r._weatherFlash.intensity.toFixed(3)}`);
+    ok('no particles (dry lightning)', r._weatherClouds.length === 0, `clouds=${r._weatherClouds.length}`);
+
+  } else if (scene === 'sunny') {
+    r.updateWeather(fx({ condition: 'sunny', isDay: true }));
+    step(60);
+    ok('no clouds', r._weatherClouds.length === 0, `clouds=${r._weatherClouds.length}`);
+    ok('weather group empty', r._weatherGroup.children.length === 0, `children=${r._weatherGroup.children.length}`);
+    ok('no scene fog', r._scene.fog == null, `fog=${r._scene.fog}`);
+    ok('no flash light', !r._weatherFlash, `flash=${!!r._weatherFlash}`);
+  }
+
+  // ── report ──────────────────────────────────────────────────────────────
+  const pass = tests.filter(t => t.ok).length, total = tests.length;
+  const allPass = pass === total;
+  const fails = tests.filter(t => !t.ok).map(t => t.name);
+  const title = allPass ? `WFX PASS ${scene} ${pass}/${total}` : `WFX FAIL ${scene} ${pass}/${total} [${fails.join(',')}]`;
+  document.title = title;
+  const log = document.getElementById('log');
+  log.innerHTML = `<div class="hd ${allPass ? 'pass' : 'fail'}">${title}</div>` +
+    tests.map(t => `<div><span class="${t.ok ? 'pass' : 'fail'}">${t.ok ? 'PASS' : 'FAIL'}</span> ${t.name} <span style="color:#78909c">${t.detail}</span></div>`).join('');
+</script>

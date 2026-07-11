@@ -32,22 +32,46 @@ export function isDay(states: States): boolean {
 // entity through fixed thresholds; 'manual' (default) uses sc.preset. Behavior
 // is identical to the former three-view._effectivePreset — it now delegates
 // here so the resolved preset still feeds the 3D dirty key.
-export function resolveScenePreset(sc: Scene3D | undefined, states: States): ScenePreset {
+// Weather lighting modifier (W2). The SINGLE mechanism is a day→dusk preset
+// DOWNGRADE: overcast / precipitation / fog / lightning conditions knock a
+// bright day scene down to the warmer, dimmer dusk rig; night/dusk are already
+// dark and stay put; clear / partlycloudy / windy days keep full sun. Because
+// three-view folds the effective preset into `_keyFloor`, a condition flip that
+// changes the downgraded preset triggers exactly one floor rebuild — no new
+// dirty-key plumbing. Consumed only when `weather.affectLighting !== false`.
+export interface WeatherLightMod { condition: string; affect: boolean; }
+
+const WEATHER_DIM_CONDITIONS = new Set<string>([
+  'cloudy', 'fog', 'rainy', 'pouring', 'snowy', 'snowy-rainy', 'hail',
+  'lightning', 'lightning-rainy',
+]);
+
+export function resolveScenePreset(
+  sc: Scene3D | undefined, states: States, weather?: WeatherLightMod,
+): ScenePreset {
   const st = states ?? {};
   const mode = sc?.lightMode ?? 'manual';
+  let preset: ScenePreset;
   if (mode === 'clock') {
     const elev = sunElevation(st);
-    if (isFinite(elev)) return elev > 10 ? 'day' : elev > -4 ? 'dusk' : 'night';
-    const h = new Date().getHours();
-    if (h >= 7 && h < 17) return 'day';
-    if ((h >= 5 && h < 7) || (h >= 17 && h < 20)) return 'dusk';
-    return 'night';
-  }
-  if (mode === 'lux' && sc?.luxEntity) {
+    if (isFinite(elev)) preset = elev > 10 ? 'day' : elev > -4 ? 'dusk' : 'night';
+    else {
+      const h = new Date().getHours();
+      preset = (h >= 7 && h < 17) ? 'day'
+             : ((h >= 5 && h < 7) || (h >= 17 && h < 20)) ? 'dusk' : 'night';
+    }
+  } else if (mode === 'lux' && sc?.luxEntity) {
     const v = parseFloat(st[sc.luxEntity]?.state ?? '');
-    if (isFinite(v)) return v >= 3000 ? 'day' : v >= 300 ? 'dusk' : 'night';
+    preset = isFinite(v) ? (v >= 3000 ? 'day' : v >= 300 ? 'dusk' : 'night') : (sc?.preset ?? 'night');
+  } else {
+    preset = sc?.preset ?? 'night';
   }
-  return sc?.preset ?? 'night';
+  // Weather dim: only a bright DAY is knocked to dusk (night/dusk already dark).
+  if (weather && weather.affect && preset === 'day'
+      && WEATHER_DIM_CONDITIONS.has(weather.condition)) {
+    return 'dusk';
+  }
+  return preset;
 }
 
 export type TimeBucket = 'morning' | 'day' | 'evening' | 'night' | 'late_night';

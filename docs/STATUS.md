@@ -34,6 +34,21 @@ deployed to the live HA instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **World Outside — W2 (3D weather effects)**: renderer `_weatherGroup` +
+  `updateWeather(fx)` driven by `Planner.weatherNow` — precipitation `THREE.Points`
+  clouds (rain streaks / snow flakes / hail dots / wind dust; count
+  `600 + intensity·1900`, DPR-capped, 0..4000 mm recycle band, wind drift +
+  wobble, buffers mutated in place = zero per-frame alloc), scene `FogExp2` eased
+  in/out over ~2 s + scrolling ground planes, and a lightning flash
+  `DirectionalLight` with a double-flash decay envelope (8–25 s gaps, no audio).
+  Rebuilt under three-view's `_keyWeather`; per-frame motion in `_advanceWeather`
+  from `_animate`. New `Layers2D.weatherFx` (default on; sidebar layer + 3D group
+  visibility). Lighting modulation: `resolveScenePreset(sc, states, weather?)`
+  downgrades a day preset to dusk under overcast/precip/fog/lightning (single
+  mechanism; folds into `_keyFloor`). `conditionIntensity` in `weather.ts`
+  (pure). `PointsMaterial`/`SpriteMaterial` documented exempt from the `_mat`
+  toon factory; shared particle maps disposed only in `destroy()`. Test page
+  `weather-fx-test.html` (`WFX PASS` for `?c=pouring|fog|lightning|sunny`).
 - **World Outside — G2 (GPS device pins)**: `Planner.gpsPins` resolves each
   `Store.people` GPS source (person entity preferred, else device_tracker) to a
   pin — projects lat/lon via the `geoFit()` transform and classifies vs the
