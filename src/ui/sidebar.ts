@@ -30,7 +30,7 @@ import {
   ENV_KINDS, ENV_DEFAULTS, ENV_SCALE_MIN, ENV_SCALE_MAX,
   envKindOf, envColor, envValueText, envHeight, envScale,
   furnitureCat, type FurnitureCat,
-  closedWallLoops, loopContaining, resolveRoomForPoint,
+  closedWallLoops, loopContaining, resolveRoomForPoint, roomLabel,
 } from '../geometry.js';
 import type { Vec2 } from '../types.js';
 import { saveModel, deleteModel } from '../model-store.js';
@@ -121,7 +121,7 @@ export class Sidebar extends LitElement {
     const out: { label: string; items: T[] }[] = [];
     for (const rm of rooms) {                       // already name-sorted
       const arr = byId.get(rm.id);
-      if (arr && arr.length) out.push({ label: rm.name, items: arr });
+      if (arr && arr.length) out.push({ label: roomLabel(rm).text, items: arr });
     }
     if (none.length) out.push({ label: '— No room —', items: none });
     return out;
@@ -732,6 +732,7 @@ export class Sidebar extends LitElement {
           return html`
             <div class="sensor-item" style="cursor:default;gap:4px">
               <input type="text" .value=${rm.name} style="flex:1;min-width:0"
+                     placeholder="Room name…"
                      @input=${(e: Event) => upd(() => { rm.name = (e.target as HTMLInputElement).value; })}>
               ${!inside ? html`<span class="badge" title="Anchor is outside every wall loop"
                                      style="color:#ffb74d">⚠ not inside walls</span>` : nothing}
@@ -1985,6 +1986,7 @@ export class Sidebar extends LitElement {
     const defs: { key: keyof Layers2D; label: string }[] = [
       { key: 'bg', label: 'Background image' },
       { key: 'walls', label: 'Walls' },
+      { key: 'labels', label: 'Room labels' },
       { key: 'furniture', label: 'Furniture' },
       { key: 'lights', label: 'Light / switch markers' },
       { key: 'sensors', label: 'mmWave sensors' },

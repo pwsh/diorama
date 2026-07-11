@@ -6,7 +6,7 @@ import {
   hexToRgba, lighten, furnitureKind, furnitureCorners, resolveFurnitureDef,
   doorEndpoint, doorOpenDeltaDeg, windowEndpoints, wallCutsForSegment, wallKind,
   ENV_KINDS, envKindOf, envColor, envValueText, envScale,
-  closedWallLoops, loopContaining,
+  closedWallLoops, loopContaining, roomLabel,
 } from './geometry.js';
 import type { Planner } from './planner.js';
 import type { Vec2, LightIconKind, Furniture, ObjectRecipe } from './types.js';
@@ -134,7 +134,7 @@ export function drawAll(ctx: CanvasRenderingContext2D, p: Planner, view: View,
   const on = (v: boolean | undefined) => v !== false;
   drawFloor(ctx, p, view, on(L.bg) ? bgImg : null);
   if (on(L.walls)) drawWalls(ctx, p, view);
-  drawRooms(ctx, p, view);
+  if (on(L.labels)) drawRooms(ctx, p, view);
   drawDoors(ctx, p, view);
   drawWindows(ctx, p, view);
   if (on(L.furniture)) drawFurniture(ctx, p, view);
@@ -399,8 +399,9 @@ function drawFloor(ctx: CanvasRenderingContext2D, p: Planner, view: View,
 
 // Dim small-caps room-name labels at the centroid of each room's containing
 // wall loop. The room IS whichever closed loop currently holds its anchor, so
-// labels track wall edits; anchors outside every loop draw nothing. Loops are
-// recomputed here (cheap) only when the floor actually has rooms.
+// labels track wall edits. Unnamed rooms show an italic placeholder; anchors
+// outside every loop get an amber "not enclosed" marker at the anchor. Loops
+// are recomputed here (cheap) only when the floor actually has rooms.
 function drawRooms(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
   const f = p.floor();
   const rooms = f.rooms;
@@ -408,15 +409,29 @@ function drawRooms(ctx: CanvasRenderingContext2D, p: Planner, view: View): void 
   const dpr = window.devicePixelRatio || 1;
   const loops = closedWallLoops(f.walls ?? []);
   ctx.save();
-  ctx.fillStyle = 'rgba(207,216,230,0.5)';
-  ctx.font = `600 ${11 * dpr}px sans-serif`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   for (const rm of rooms) {
+    const { text, placeholder } = roomLabel(rm);
     const loop = loopContaining(loops, rm.anchor.x, rm.anchor.y);
-    if (!loop) continue;
-    const c = centroid(loop);
-    const px = mmToPx(view, c.x, c.y);
-    ctx.fillText(rm.name.toUpperCase(), px.x, px.y);
+    if (loop) {
+      // Label at the loop centroid confirms the walls enclose the anchor.
+      // Placeholder (unnamed) rooms draw italic + dimmer.
+      const c = centroid(loop);
+      const px = mmToPx(view, c.x, c.y);
+      ctx.fillStyle = placeholder ? 'rgba(207,216,230,0.32)' : 'rgba(207,216,230,0.5)';
+      ctx.font = `${placeholder ? 'italic ' : ''}600 ${11 * dpr}px sans-serif`;
+      ctx.fillText(text.toUpperCase(), px.x, px.y);
+    } else {
+      // No enclosing loop: amber marker at the anchor itself so the user can
+      // see the room exists but its walls don't close around it.
+      const px = mmToPx(view, rm.anchor.x, rm.anchor.y);
+      ctx.fillStyle = 'rgba(255,183,77,0.8)';
+      ctx.font = `${placeholder ? 'italic ' : ''}600 ${11 * dpr}px sans-serif`;
+      ctx.fillText(`⚠ ${text.toUpperCase()}`, px.x, px.y);
+      ctx.fillStyle = 'rgba(255,183,77,0.55)';
+      ctx.font = `${9 * dpr}px sans-serif`;
+      ctx.fillText('not enclosed by walls', px.x, px.y + 12 * dpr);
+    }
   }
   ctx.restore();
 }

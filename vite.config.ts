@@ -115,8 +115,15 @@ function haDeploy(): Plugin {
 //   - index.html        → iframe mode (panel_iframe + long-lived token)
 //   - src/panel.ts      → native panel mode (panel_custom, HA injects hass)
 //     emitted as diorama-panel.js at the dist root so the module_url is stable.
+// App version (from package.json) compiled into the bundle so the UI can show
+// what's actually running — release runbook bumps package.json, so the
+// settings drawer stamp tracks it for free.
+const pkgVersion: string =
+  JSON.parse(readFileSync(resolve(__dirname, 'package.json'), 'utf8')).version;
+
 export default defineConfig({
   base: './',
+  define: { __DIORAMA_VERSION__: JSON.stringify(pkgVersion) },
   plugins: [chunkVersionQuery(), haDeploy()],
   build: {
     outDir: 'dist',

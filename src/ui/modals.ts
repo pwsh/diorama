@@ -549,6 +549,11 @@ export class SettingsDrawer extends LitElement {
           </button>
           <button class="danger-btn" @click=${this._clearConn}>Clear &amp; Log Out</button>
         </div>
+        <div style="border-top:1px solid var(--border);padding-top:10px;font-size:11px;
+                    color:var(--text-dim)"
+             title="Diorama build version (from package.json)">
+          Diorama v${__DIORAMA_VERSION__}
+        </div>
       </div>
     `;
   }

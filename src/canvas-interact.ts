@@ -826,14 +826,16 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
   }
 
   // Room-placement latch: the next click sets a room's anchor (Rooms UI). New
-  // rooms prompt for a name; re-placing an existing room just moves its anchor.
+  // rooms are created UNNAMED — the canvas immediately shows an "Unnamed room"
+  // placeholder at the enclosing loop's centroid (or a "not enclosed" warning
+  // at the anchor), so the user gets instant feedback on wall enclosure and
+  // names the room in the sidebar. Re-placing an existing room just moves its
+  // anchor.
   if (p.placingRoomId) {
     const anchor = { x: Math.round(mm.x), y: Math.round(mm.y) };
     if (p.placingRoomId === NEW_ROOM) {
       if (!f.rooms) f.rooms = [];
-      const n = f.rooms.length + 1;
-      const name = prompt('Room name:', `Room ${n}`);
-      if (name !== null) f.rooms.push({ id: newId('rm'), name: name.trim() || `Room ${n}`, anchor });
+      f.rooms.push({ id: newId('rm'), name: '', anchor });
     } else {
       const rm = (f.rooms ?? []).find(r => r.id === p.placingRoomId);
       if (rm) rm.anchor = anchor;

@@ -283,6 +283,14 @@ export function resolveRoomForPoint(rooms: Room[], loops: Vec2[][], x: number, y
   return null;
 }
 
+// Display text for a room label. Rooms are created unnamed (placeholder shows
+// immediately so the user sees the loop was detected); `placeholder` lets
+// renderers style the fallback text dimmer / italic.
+export function roomLabel(rm: Room): { text: string; placeholder: boolean } {
+  const t = rm.name.trim();
+  return t ? { text: t, placeholder: false } : { text: 'Unnamed room', placeholder: true };
+}
+
 // ── Wall openings (doors / windows cut gaps into wall segments) ──────────
 // A door's (x, y) is its HINGE; its span runs w mm along its rotation.
 // doorSpanCenter gives the midpoint used for wall cutting. Windows' (x, y)

@@ -14,7 +14,7 @@ import {
   ENV_KINDS, envKindOf, envColor, envValueText, envHeight, envScale,
 } from './geometry.js';
 import type { Door, Window as WindowType, EnvSensor, ObjectRecipe, ActivityKind } from './types.js';
-import { wallCutsForSegment, closedWallLoops, wallKind, WALL_KINDS, furnitureLocalToWorld, furnitureWorldToLocal, pointInPolygon as pip, centroid, loopContaining, resolveRoomForPoint, intersectLoopWithRect, polygonArea } from './geometry.js';
+import { wallCutsForSegment, closedWallLoops, wallKind, WALL_KINDS, furnitureLocalToWorld, furnitureWorldToLocal, pointInPolygon as pip, centroid, loopContaining, resolveRoomForPoint, roomLabel, intersectLoopWithRect, polygonArea } from './geometry.js';
 
 export interface ZoneWorld { vertices: Vec2[]; color: number; occupied: boolean; }
 export interface HaloWorld { x: number; y: number; radius: number; occupied: boolean; }
@@ -1507,14 +1507,19 @@ export class ThreeDRenderer {
     // Room-name labels: a dim billboard at the centroid of each room's
     // containing wall loop. The room IS whichever closed loop currently holds
     // its anchor, so labels track wall edits. Skip anchors outside all loops.
+    // The `labels` layer gates only the sprites — the room ↔ loop pairing must
+    // stay live for target-room resolution (activities, TV rooms).
+    const showLabels = layers?.labels !== false;
     for (const rm of rooms) {
       const loop = loopContaining(loops, rm.anchor.x, rm.anchor.y);
       if (!loop) continue;
       // Cache the room ↔ loop pairing for per-frame target-room resolution.
       this._roomZones.push({ roomId: rm.id, loop });
+      if (!showLabels) continue;
       const c = centroid(loop);
       const wp = this._w(c.x, c.y, 50);
-      const sprite = this._makeRoomLabelSprite(rm.name);
+      const lbl = roomLabel(rm);
+      const sprite = this._makeRoomLabelSprite(lbl.text, lbl.placeholder);
       sprite.position.set(wp.x, wp.y, wp.z);
       this._floorGroup.add(sprite);
     }
@@ -2141,9 +2146,10 @@ export class ThreeDRenderer {
 
   // Dim floor-label sprite for a room name — quieter than the env-sensor chips
   // (no border, muted fill, smaller world size), billboarded toward the camera.
-  private _makeRoomLabelSprite(text: string): THREE.Sprite {
+  private _makeRoomLabelSprite(text: string, placeholder = false): THREE.Sprite {
     const label = text.toUpperCase();
-    const font = '600 40px system-ui, sans-serif';
+    // Placeholder (unnamed room) labels draw italic + dimmer.
+    const font = `${placeholder ? 'italic ' : ''}600 40px system-ui, sans-serif`;
     const cv = document.createElement('canvas');
     const ctx = cv.getContext('2d')!;
     ctx.font = font;
@@ -2152,7 +2158,7 @@ export class ThreeDRenderer {
     cv.width = Math.max(4, Math.ceil(tw + padX * 2));
     cv.height = h;
     ctx.font = font;  // canvas resize resets ctx state
-    ctx.fillStyle = 'rgba(205,216,230,0.72)';
+    ctx.fillStyle = placeholder ? 'rgba(205,216,230,0.45)' : 'rgba(205,216,230,0.72)';
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillText(label, cv.width / 2, h / 2 + 2);
     const tex = new THREE.CanvasTexture(cv);

@@ -359,6 +359,7 @@ export interface SavedView3D {
 export interface Layers2D {
   bg?: boolean;
   walls?: boolean;      // wall bodies (2D strokes + 3D meshes); doors/windows stay
+  labels?: boolean;     // room-name labels (2D text + 3D billboards)
   furniture?: boolean;
   lights?: boolean;     // light + switch fixture markers
   sensors?: boolean;    // mmWave bodies + coverage wedges
