@@ -629,10 +629,18 @@ export class ThreeView extends LitElement {
             const halfFov = (s.fov ?? 120) / 2;
             const bearing = Math.abs(Math.atan2(sl.cx, sl.cy) * 180 / Math.PI);
             const edge = dist > range - 600 || Math.abs(bearing - halfFov) < 8;
+            // Identity fusion (B3): if a BLE person is fused onto this radar
+            // target, pass their identity so the renderer swaps in the person's
+            // avatar/color + a name label. Undefined otherwise (per-sensor pool).
+            const key = `${s.id}_${i}`;
+            const fusion = p.fusions[key];
             // avatarKinds pool wins; legacy single avatarKind kept for
             // back-compat (incl. stale-chunk pairings that only read `avatar`).
-            targets.push({ key: `${s.id}_${i}`, x: wp.x, y: wp.y, color: tColor, edge,
-                           avatar: s.avatarKind, avatars: s.avatarKinds });
+            targets.push({ key, x: wp.x, y: wp.y, color: tColor, edge,
+                           avatar: s.avatarKind, avatars: s.avatarKinds,
+                           person: fusion ? { name: fusion.name, color: fusion.color,
+                             avatarKind: fusion.avatarKind, isPet: fusion.isPet,
+                             identified: fusion.personId != null } : undefined });
           }
         }
       }
@@ -651,14 +659,21 @@ export class ThreeView extends LitElement {
       // (lerped) solved position — the renderer's goal controller walks the rig
       // there at human speed (see _advanceAi goal mode). Identified people carry
       // their avatar; unknown devices fall through to a stable per-key pool pick
-      // ('random'). Full rigs — no ghost style (user decision B, #2).
-      for (const bp of p.blePeople) {
+      // ('random'). Full rigs — no ghost style (user decision B, #2). Only
+      // UNFUSED people render as BLE rigs: a person fused onto a radar target
+      // hides here (that target carries their avatar/label) so nobody renders
+      // twice (B3).
+      for (const bp of p.bleUnfused) {
         if (bp.floorId !== f.id) continue;
         targets.push({
           key: bp.key, x: bp.x, y: bp.y, color: hexToInt(bp.color),
           // Pets with no explicit avatar default to the cat quadruped rig;
           // other unknown devices fall through to the stable human pool pick.
           ble: true, avatar: bp.avatarKind ?? (bp.isPet ? 'cat' : 'random'),
+          // Identified BLE people (personId set) get a name label; unknown
+          // devices do not (decision #4 — labels only when confident).
+          person: bp.personId != null ? { name: bp.name, color: bp.color,
+            avatarKind: bp.avatarKind, isPet: bp.isPet, identified: true } : undefined,
         });
       }
       // Zones / halos rebuild only when shape or occupancy changes — not on

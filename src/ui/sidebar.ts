@@ -2386,6 +2386,7 @@ export class Sidebar extends LitElement {
       { key: 'targets', label: 'Targets' },
       { key: 'geo', label: 'Geo landmarks' },
       { key: 'weatherFx', label: 'Weather effects (3D)' },
+      { key: 'nameLabels', label: 'Name labels' },
       { key: 'activity', label: 'Activity glow' },
     ];
     return html`

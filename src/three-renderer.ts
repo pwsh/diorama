@@ -88,6 +88,18 @@ export interface TargetWorld {
   // solve; the controller A*-walks the rig there at human speed and idles when
   // close. No random wander, no room confinement (real movement). See _advanceAi.
   ble?: boolean;
+  // Optional (additive): identity-fusion result (phase B3). Present when a BLE
+  // person has been fused onto THIS radar target OR when this IS an identified
+  // BLE person's own rig. The rig adopts `avatarKind` (else keeps its own pool
+  // pick) and `color`, and — when `identified` — floats a name label. A stale
+  // renderer chunk ignores this field entirely (no label, no reskin).
+  person?: {
+    name: string;
+    color: string;              // hex tint
+    avatarKind?: AvatarKind;
+    isPet?: boolean;
+    identified: boolean;        // gates the name label (unknown devices = false)
+  };
 }
 
 // Per-frame context for the Sims-style activity system. Built cheaply every
@@ -228,6 +240,14 @@ interface Humanoid {
   bubbleKind: string | null;
   bubbleWant: string | null;
   bubbleDwell: number;
+  // Name label (phase B3): a camera-facing sprite above the plumbob showing the
+  // fused / identified person's name + a colored underline. Persistent-rig
+  // sprite — its CanvasTexture is freed in _disposeHumanoid (like bubble), NOT
+  // by a group clear. `nameText` / `nameColor` cache what the sprite currently
+  // renders so the canvas is only repainted when the name/color changes.
+  nameSprite: THREE.Sprite | null;
+  nameText: string | null;
+  nameColor: string | null;
   scale: number;       // eased spawn/despawn scale (0..1)
   idleOffset: number;  // per-rig phase offset so idle sway / breathing desync
   vx: number;          // smoothed NAV velocity in 3D coords (mm/s) — drives gait/facing
@@ -377,6 +397,9 @@ function resolveAvatar(want: AvatarKind | 'random' | undefined,
 // above the head (headY + HEAD_R + 700 ≈ 2462, clearing the plumbob at ~2002),
 // nudged to the side Sims-comic style.
 const BUBBLE_W = 620, BUBBLE_H = 580, BUBBLE_LOCAL_Y = 2462, BUBBLE_X = 180;
+// Name-label local Y (phase B3): above the plumbob (~2002) by ~300 mm. Sits
+// centered over the head; the thought bubble is offset sideways so they coexist.
+const NAME_LOCAL_Y = 2320;
 // Solo activities wired up this phase (Phase 4). watch_tv / eat_at_table /
 // work_at_desk / sleep_shared are seated/contextual and land in Phase 5.
 const PHASE4_ACTIVITIES: ReadonlySet<ActivityKind> = new Set<ActivityKind>([
@@ -1325,7 +1348,7 @@ export class ThreeDRenderer {
   // inside _floorGroup and are gated at build time in updateFloor instead.
   setLayerVisibility(v: { lights?: boolean; sensors?: boolean; motion?: boolean;
                           env?: boolean; zones?: boolean; targets?: boolean;
-                          geo?: boolean; weatherFx?: boolean }): void {
+                          geo?: boolean; weatherFx?: boolean; nameLabels?: boolean }): void {
     this._lightGroup.visible = v.lights !== false;
     this._sensorGroup.visible = v.sensors !== false;
     // BLE proxy pucks ride the sensors layer (same as mmWave bodies).
@@ -1342,7 +1365,12 @@ export class ThreeDRenderer {
     // per-frame particle motion (gated on visibility in _advanceWeather); the
     // scene fog is driven separately by three-view sending a no-effect condition.
     this._weatherGroup.visible = v.weatherFx !== false;
+    // Name labels ride their own layer. Persistent-rig sprites live inside
+    // _targetGroup, so this can't be a group flip — updateTargets gates each
+    // rig's label sprite visibility on this flag every frame.
+    this._showNameLabels = v.nameLabels !== false;
   }
+  private _showNameLabels = true;
 
   updateFloor(f: Floor, scene3d?: Scene3D, layers?: import('./types.js').Layers2D,
               customObjects?: ObjectRecipe[]): void {
@@ -4637,10 +4665,20 @@ export class ThreeDRenderer {
       let h = this._humanoids[t.key];
       // Resolve the requested avatar variant to a concrete kind (stable per
       // target key so 'random' keeps its choice across rebuilds/frames).
-      const wantKind = resolveAvatar(t.avatar, t.avatars, t.key);
+      // Identity fusion (B3): a fused person overrides the kind (their chosen
+      // avatar, else a pet default, else keep this target's own pool pick) AND
+      // the tint. The existing rebuild-on-kind/color-change path swaps the rig
+      // cleanly — including humanoid⇄quadruped when a pet is fused on.
+      let wantKind = resolveAvatar(t.avatar, t.avatars, t.key);
+      let wantColor = t.color;
+      if (t.person) {
+        wantKind = t.person.avatarKind
+          ?? (t.person.isPet ? 'cat' : wantKind);
+        wantColor = hexToInt(t.person.color);
+      }
       // Rebuild on tint OR avatar-kind change (user recolored / re-chose the
       // variant mid-track) — materials and geometry are baked in at build time.
-      if (h && (h.color !== t.color || h.avatarKind !== wantKind)) {
+      if (h && (h.color !== wantColor || h.avatarKind !== wantKind)) {
         this._targetGroup.remove(h.group);
         this._disposeHumanoid(h);
         delete this._humanoids[t.key];
@@ -4648,8 +4686,8 @@ export class ThreeDRenderer {
       }
       if (!h) {
         h = PET_KIND_SET.has(wantKind)
-          ? this._buildQuadruped(t.color, wantKind)
-          : this._buildHumanoid(t.color, wantKind);
+          ? this._buildQuadruped(wantColor, wantKind)
+          : this._buildHumanoid(wantColor, wantKind);
         this._humanoids[t.key] = h;
         this._targetGroup.add(h.group);
       }
@@ -5486,6 +5524,10 @@ export class ThreeDRenderer {
       }
       }  // end thought-bubble block (non-quad)
 
+      // Name label (B3): floats above the plumbob for a confident (identified /
+      // fused) rig — pets included, so it sits OUTSIDE the non-quad bubble block.
+      this._syncNameLabel(h, t);
+
       // Eligible for mutual separation: walking (not sit/activity/lie anchored),
       // visible, and not hidden under bed covers (previous frame's summary).
       // Lying rigs are excluded — separation overwrites x/z from nav space and
@@ -5620,6 +5662,79 @@ export class ThreeDRenderer {
     spr.scale.set(BUBBLE_W * s, BUBBLE_H * s, 1);
     spr.visible = wantVisible && s > 0.01;
     if (!wantVisible && s < 0.02) this._disposeBubble(h);
+  }
+
+  // ── Name label (phase B3) ───────────────────────────────────────────────
+  // Camera-facing sprite above the plumbob for a confident rig (a fused radar
+  // target or an identified BLE person's own rig). The canvas is (re)painted
+  // only when the name/color changes — cached in h.nameText/h.nameColor — so
+  // this is per-frame cheap (just a visibility flip otherwise). The sprite is a
+  // child of h.group, so it fades with the rig via _fadeRig and its CanvasTexture
+  // is freed by _disposeHumanoid's sprite traverse (per-rig map, not shared).
+  private _syncNameLabel(h: Humanoid, t: TargetWorld): void {
+    const person = t.person;
+    if (!person || !person.identified) {
+      if (h.nameSprite) this._disposeNameLabel(h);
+      return;
+    }
+    if (!h.nameSprite || h.nameText !== person.name || h.nameColor !== person.color) {
+      if (h.nameSprite) this._disposeNameLabel(h);
+      const spr = this._makeNameSprite(person.name, person.color);
+      spr.userData.outlineSkip = true;
+      spr.position.set(0, NAME_LOCAL_Y, 0);
+      h.group.add(spr);
+      h.nameSprite = spr;
+      h.nameText = person.name;
+      h.nameColor = person.color;
+    }
+    // Layer gate + suppress while the rig lies flat (root pitched → the label
+    // would swing sideways); reappears when it stands.
+    h.nameSprite.visible = this._showNameLabels && h.group.visible && h.lie < 0.5;
+  }
+
+  private _disposeNameLabel(h: Humanoid): void {
+    if (!h.nameSprite) return;
+    h.group.remove(h.nameSprite);
+    const m = h.nameSprite.material as THREE.SpriteMaterial;
+    m.map?.dispose();
+    m.dispose();
+    h.nameSprite = null; h.nameText = null; h.nameColor = null;
+  }
+
+  // Name plate: white name text on a dark rounded chip with a person-colored
+  // underline bar. Mirrors _makeTextSprite's canvas idiom (SRGB CanvasTexture,
+  // world-mm sprite scale from the canvas aspect).
+  private _makeNameSprite(name: string, colorHex: string): THREE.Sprite {
+    const font = '600 46px system-ui, sans-serif';
+    const cv = document.createElement('canvas');
+    const ctx = cv.getContext('2d')!;
+    ctx.font = font;
+    const text = (name || '?').slice(0, 24);
+    const tw = ctx.measureText(text).width;
+    const padX = 30, h = 96, bar = 10;
+    cv.width = Math.ceil(tw + padX * 2);
+    cv.height = h;
+    ctx.font = font;  // canvas resize resets ctx state
+    ctx.beginPath();
+    ctx.roundRect(2, 2, cv.width - 4, h - bar - 4, 20);
+    ctx.fillStyle = 'rgba(8,10,16,0.86)';
+    ctx.fill();
+    ctx.fillStyle = '#f5f7fa';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(text, cv.width / 2, (h - bar) / 2 + 2);
+    // Person-colored underline bar.
+    ctx.fillStyle = colorHex;
+    ctx.beginPath();
+    ctx.roundRect(cv.width * 0.5 - tw / 2 - 6, h - bar - 1, tw + 12, bar, bar / 2);
+    ctx.fill();
+    const tex = new THREE.CanvasTexture(cv);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: tex, transparent: true, depthWrite: false, depthTest: false,
+    }));
+    const H = 300;
+    sprite.scale.set(H * (cv.width / cv.height), H, 1);
+    return sprite;
   }
 
   private _disposeBubble(h: Humanoid): void {
@@ -6311,6 +6426,7 @@ export class ThreeDRenderer {
       activity: null, activityAnchor: null, activityDwell: 0,
       act: 0, privacy: 0, blurSprite: null,
       bubble: null, bubbleKind: null, bubbleWant: null, bubbleDwell: 0,
+      nameSprite: null, nameText: null, nameColor: null,
       idleOffset,
       vx: 0, vz: 0,
       lastX: 0, lastZ: 0, lastUpdate: 0, initialized: false,
@@ -6748,6 +6864,7 @@ export class ThreeDRenderer {
       activity: null, activityAnchor: null, activityDwell: 0,
       act: 0, privacy: 0, blurSprite: null,
       bubble: null, bubbleKind: null, bubbleWant: null, bubbleDwell: 0,
+      nameSprite: null, nameText: null, nameColor: null,
       idleOffset,
       vx: 0, vz: 0,
       lastX: 0, lastZ: 0, lastUpdate: 0, initialized: false,

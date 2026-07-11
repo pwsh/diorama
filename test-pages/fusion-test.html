@@ -1,0 +1,221 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>FUSION …</title>
+  <style>
+    body { margin:0; background:#0d1116; color:#cfd8dc; font:13px/1.4 sans-serif; padding:14px; }
+    h1 { font-size:15px; margin:0 0 10px; }
+    .grid { display:flex; flex-wrap:wrap; gap:10px; }
+    .card { background:#141b22; border:1px solid #26323d; border-radius:6px; padding:8px 10px; width:340px; }
+    .pass { color:#69f0ae; } .fail { color:#ff5252; }
+    #summary { font-size:14px; font-weight:bold; margin:10px 0; padding:8px 10px; border-radius:5px; }
+    .okbg { background:#12331f; color:#69f0ae; } .badbg { background:#3a1414; color:#ff8a80; }
+    #stage { width:1000px; height:520px; margin-top:12px; }
+    code { color:#ffd54f; }
+  </style>
+</head>
+<body>
+  <h1>Identity fusion — matcher hysteresis (pure) + renderer labels</h1>
+  <div id="summary">Running…</div>
+  <div class="grid" id="grid"></div>
+  <div id="stage"></div>
+
+  <!-- The matcher core (src/fusion.ts) is a pure, dependency-free module — NOT a
+       code-split chunk. Transpile it into the harness dir before serving:
+         npx esbuild src/fusion.ts --format=esm \
+           --outfile=<harness>/fusion.solver.js
+       The renderer part imports the built chunk like the other 3D pages. -->
+  <script type="module">
+    import { stepFusion, newFusionState, DEFAULT_FUSION_CFG } from './fusion.solver.js';
+
+    const results = [];
+    const add = (name, ok, detail) => results.push({ name, ok, detail });
+
+    // ── Matcher driver ──────────────────────────────────────────────────────
+    // One tick: build candidate proximities from person/target positions (all
+    // pairs, same floor), presence sets, and advance the pure state machine.
+    function tick(state, persons, targets, dt) {
+      const cands = [];
+      const presentPersons = new Set(), stalePersons = new Set(), presentTargets = new Set();
+      for (const t of targets) presentTargets.add(t.key);
+      for (const p of persons) {
+        presentPersons.add(p.id);
+        if (p.stale) stalePersons.add(p.id);
+        const gate = p.gate ?? DEFAULT_FUSION_CFG.baseGateMm;
+        for (const t of targets)
+          cands.push({ personId: p.id, targetKey: t.key,
+                       distMm: Math.hypot(p.x - t.x, p.y - t.y), gateMm: gate });
+      }
+      stepFusion(state, { cands, presentPersons, stalePersons, presentTargets }, dt);
+      return state;
+    }
+    const fusedTo = (st, key) => st.fused[key]?.personId ?? null;
+    const DT = 500;
+    const run = (st, persons, targets, ticks) => { for (let i = 0; i < ticks; i++) tick(st, persons, targets, DT); };
+
+    // A — clean approach fuses after ~4 s (not before). Single person, single
+    //     in-gate target → unique → accrues → commits at FUSE_HOLD_MS.
+    (() => {
+      const st = newFusionState();
+      const P = [{ id: 'A', x: 0, y: 0 }], T = [{ key: 'T', x: 500, y: 0 }];
+      run(st, P, T, 7);                        // 3500 ms
+      const before = fusedTo(st, 'T') === null;
+      run(st, P, T, 1);                        // 4000 ms → fuse
+      const after = fusedTo(st, 'T') === 'A';
+      add('clean approach → fuses at 4 s', before && after,
+          `notFused@3.5s=${before} fused@4s=${after}`);
+    })();
+
+    // B — ambiguity never fuses. Two in-gate targets within gate×1.25 of the
+    //     person → the pair is never unique → pending never accrues.
+    (() => {
+      const st = newFusionState();
+      const P = [{ id: 'A', x: 0, y: 0 }];
+      const T = [{ key: 'T1', x: 400, y: 0 }, { key: 'T2', x: 700, y: 0 }];
+      run(st, P, T, 20);                       // 10 s
+      const none = fusedTo(st, 'T1') === null && fusedTo(st, 'T2') === null;
+      add('ambiguity (2 targets in gate) → never fuses', none,
+          `T1=${fusedTo(st, 'T1')} T2=${fusedTo(st, 'T2')}`);
+    })();
+
+    // C — a fused pair survives a brief dropout of the OTHER candidate. A↔T1 is
+    //     fused; the unrelated person B (whose target T2 was fused) disappears
+    //     for a few ticks. A↔T1 must hold throughout (release keys off ITS OWN
+    //     target/person only, never a neighbour's).
+    (() => {
+      const st = newFusionState();
+      const A = { id: 'A', x: 0, y: 0 }, B = { id: 'B', x: 5000, y: 0 };
+      const T1 = { key: 'T1', x: 300, y: 0 }, T2 = { key: 'T2', x: 5300, y: 0 };
+      run(st, [A, B], [T1, T2], 10);           // both fuse
+      const both = fusedTo(st, 'T1') === 'A' && fusedTo(st, 'T2') === 'B';
+      // B + T2 vanish for 3 ticks (the "other candidate" dropout).
+      run(st, [A], [T1], 3);
+      const survived = fusedTo(st, 'T1') === 'A';
+      add('fused pair survives other-candidate dropout', both && survived,
+          `bothFused=${both} A↔T1AfterDropout=${survived}`);
+    })();
+
+    // D — release on sustained separation (>2× gate for ≥6 s), not before.
+    (() => {
+      const st = newFusionState();
+      const P = [{ id: 'A', x: 0, y: 0 }];
+      run(st, P, [{ key: 'T', x: 300, y: 0 }], 10);   // fuse
+      const fused = fusedTo(st, 'T') === 'A';
+      const T_far = [{ key: 'T', x: 4000, y: 0 }];     // dist 4000 > 2×1500
+      run(st, P, T_far, 11);                            // 5500 ms separated
+      const stillFused = fusedTo(st, 'T') === 'A';
+      run(st, P, T_far, 1);                             // 6000 ms → release
+      const released = fusedTo(st, 'T') === null;
+      add('release on sustained separation (6 s)', fused && stillFused && released,
+          `fused=${fused} still@5.5s=${stillFused} released@6s=${released}`);
+    })();
+
+    // E — release on stale (identity no longer trusted) — immediate.
+    (() => {
+      const st = newFusionState();
+      const T = [{ key: 'T', x: 300, y: 0 }];
+      run(st, [{ id: 'A', x: 0, y: 0 }], T, 10);        // fuse
+      const fused = fusedTo(st, 'T') === 'A';
+      tick(st, [{ id: 'A', x: 0, y: 0, stale: true }], T, DT);   // person goes stale
+      const released = fusedTo(st, 'T') === null;
+      add('release on BLE-person stale', fused && released,
+          `fused=${fused} releasedOnStale=${released}`);
+    })();
+
+    // F — release when the radar target disappears — immediate.
+    (() => {
+      const st = newFusionState();
+      run(st, [{ id: 'A', x: 0, y: 0 }], [{ key: 'T', x: 300, y: 0 }], 10);
+      const fused = fusedTo(st, 'T') === 'A';
+      tick(st, [{ id: 'A', x: 0, y: 0 }], [], DT);      // target gone
+      const released = fusedTo(st, 'T') === null;
+      add('release on radar-target disappear', fused && released,
+          `fused=${fused} releasedOnGone=${released}`);
+    })();
+
+    // ── Renderer scene: labels + person avatar swap + layer flag ─────────────
+    await (async () => {
+      const mod = await import('./assets/three-renderer.js');
+      const r = new mod.ThreeDRenderer(document.getElementById('stage'));
+      await r.load();
+      const floor = {
+        id: 'f1', name: 'Fusion', w: 10000, d: 8000,
+        walls: [], furniture: [], lights: [], switches: [], sensors: [],
+        motionSensors: [], envSensors: [], doors: [], windows: [], bg: null,
+        model3d: null, look3d: null, rooms: [],
+      };
+      r.updateFloor(floor, { preset: 'day', floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6' });
+      r.applyViewPreset('top');
+      r.setLayerVisibility({});   // nameLabels undefined → on (default)
+
+      const realNow = performance.now.bind(performance);
+      let fakeNow = realNow();
+      performance.now = () => fakeNow;
+      const targets = () => ([
+        // fused radar target — identified person picks the robot rig + pink.
+        { key: 'f1_0', x: 2000, y: 2000, color: 0x26c6da,
+          person: { name: 'Alice', color: '#e91e63', avatarKind: 'robot', isPet: false, identified: true } },
+        // plain radar target — no fusion.
+        { key: 'f1_1', x: 4000, y: 2000, color: 0x26c6da },
+        // unknown-device fusion — reskin (grey) but NO label (identified false).
+        { key: 'f1_2', x: 6000, y: 2000, color: 0x26c6da,
+          person: { name: 'Unknown', color: '#9e9e9e', identified: false } },
+        // pet fusion — no avatarKind → quadruped cat, WITH a label.
+        { key: 'f1_3', x: 8000, y: 2000, color: 0x26c6da,
+          person: { name: 'Rex', color: '#8d6e63', isPet: true, identified: true } },
+      ]);
+      for (let i = 0; i < 40; i++) { fakeNow += 16.7; r.updateTargets(targets()); }
+
+      const H = k => r._humanoids[k];
+      const alice = H('f1_0'), bob = H('f1_1'), unknown = H('f1_2'), rex = H('f1_3');
+
+      add('fused target → label sprite + person avatar',
+          !!(alice && alice.nameSprite && alice.nameSprite.visible && alice.avatarKind === 'robot'
+             && alice.color === 0xe91e63),
+          `sprite=${!!alice?.nameSprite} visible=${alice?.nameSprite?.visible} kind=${alice?.avatarKind} color=${alice?.color?.toString(16)}`);
+
+      add('plain radar target → no label', !!(bob && bob.nameSprite === null),
+          `sprite=${bob?.nameSprite}`);
+
+      add('unknown fusion → reskin, no label',
+          !!(unknown && unknown.nameSprite === null && unknown.color === 0x9e9e9e),
+          `sprite=${unknown?.nameSprite} color=${unknown?.color?.toString(16)}`);
+
+      add('pet fusion → quadruped + label',
+          !!(rex && rex.quad === true && rex.nameSprite && rex.nameSprite.visible),
+          `quad=${rex?.quad} sprite=${!!rex?.nameSprite} visible=${rex?.nameSprite?.visible}`);
+
+      // Layer flag hides every label without destroying the sprites.
+      r.setLayerVisibility({ nameLabels: false });
+      for (let i = 0; i < 4; i++) { fakeNow += 16.7; r.updateTargets(targets()); }
+      const hiddenOff = alice.nameSprite && !alice.nameSprite.visible && rex.nameSprite && !rex.nameSprite.visible;
+      r.setLayerVisibility({ nameLabels: true });
+      for (let i = 0; i < 4; i++) { fakeNow += 16.7; r.updateTargets(targets()); }
+      const shownOn = alice.nameSprite.visible && rex.nameSprite.visible;
+      add('nameLabels layer flag hides / shows labels', !!(hiddenOff && shownOn),
+          `hiddenWhenOff=${hiddenOff} shownWhenOn=${shownOn}`);
+
+      performance.now = realNow;
+    })();
+
+    // ── Render results ────────────────────────────────────────────────────────
+    const grid = document.getElementById('grid');
+    let pass = 0;
+    for (const r of results) {
+      if (r.ok) pass++;
+      const card = document.createElement('div');
+      card.className = 'card';
+      card.innerHTML = `<div><b>${r.ok ? '<span class=pass>PASS</span>' : '<span class=fail>FAIL</span>'}</b> ${r.name}</div>
+        <div style="font-size:11px;color:#90a4ae">${r.detail}</div>`;
+      grid.appendChild(card);
+    }
+    const total = results.length, allPass = pass === total;
+    const title = `FUSION ${allPass ? 'PASS' : 'FAIL'} ${pass}/${total}`;
+    document.title = title;
+    const sum = document.getElementById('summary');
+    sum.textContent = title;
+    sum.className = allPass ? 'okbg' : 'badbg';
+  </script>
+</body>
+</html>

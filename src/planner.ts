@@ -1,7 +1,9 @@
 import { HassClient, type HaApi } from './ha-client.js';
 import { SensorDiscovery } from './sensor-discovery.js';
 import { loadStore, saveStore, newId, repairFloor } from './storage.js';
-import { slugToName, normMac } from './geometry.js';
+import { slugToName, normMac, localToWorld } from './geometry.js';
+import { stepFusion, newFusionState, DEFAULT_FUSION_CFG,
+         type FusionState, type FusionCand } from './fusion.js';
 import { fitGeoTransform, latLonToPlan, clampToBoundary, planBearingDeg, medianLatLon,
          type GeoTransform, type GeoPair, type LatLonSample } from './geo.js';
 import type { GeoConfig, GeoLandmark } from './types.js';
@@ -57,6 +59,18 @@ export interface BlePerson {
   confidenceMm: number;        // uncertainty radius (2D confidence circle)
   updatedAt: number;           // ms epoch of the last successful solve
   stale: boolean;              // no fresh samples within the staleness window
+}
+
+// One committed identity fusion for rendering (Feature B, phase B3). A live
+// mmWave radar target (keyed `<sensorId>_<i>`) has adopted a BLE person's
+// identity. Runtime-only — never persisted; recomputed by _fuseIdentities.
+export interface Fusion {
+  personId?: string;           // matched Store.people id (undefined = unknown device)
+  name: string;
+  color: string;               // person tint
+  avatarKind?: AvatarKind;
+  isPet?: boolean;
+  since: number;               // ms epoch the fusion first committed
 }
 
 // A stored per-device solve result (world mm) before lerp smoothing.
@@ -216,6 +230,21 @@ export class Planner extends EventTarget {
   // from the solve; a device unheard-from for RETIRE stops rendering entirely.
   private static readonly BLE_STALE_MS = 30_000;
   private static readonly BLE_RETIRE_MS = 120_000;
+
+  // ── Identity fusion (runtime-only, phase B3) ──────────────────────────────
+  // The matcher's persistent state (pending + committed pairs) plus its rendered
+  // output. `fusions` maps a radar targetKey → the adopted person; `fusedPersonIds`
+  // is the set of BLE person join-keys (BlePerson.key — a stable per-device key
+  // that also covers unknown devices with no Store.people id) currently fused, so
+  // `bleUnfused` can hide their ghost rigs. Recomputed by _fuseIdentities on each
+  // BLE solve + a ~2 s timer (both no-ops when no BLE people exist).
+  private _fusionState: FusionState = newFusionState();
+  fusions: Record<string, Fusion> = {};
+  fusedPersonIds: Set<string> = new Set();
+  private _fusionSince: Record<string, number> = {};   // targetKey → commit epoch
+  private _lastFuseAt = 0;
+  private _fusionTimer: ReturnType<typeof setInterval> | null = null;
+  private static readonly FUSION_TICK_MS = 2000;
   // GPS pin staleness: a device_tracker / person fix older than this reads as
   // stale (dimmed + age caption). GPS pushes are minutes apart, so 15 min.
   private static readonly GPS_STALE_MS = 15 * 60 * 1000;
@@ -375,6 +404,15 @@ export class Planner extends EventTarget {
     this.hass.onConn(s => { this.conn = s; this.emitConn(); });
     this.hass.onState((states, changedId) => this._onStates(states, changedId));
     this.hass.connect();
+    // Identity fusion re-runs on a light ~2 s cadence (between the ~0.1 Hz BLE
+    // solves) so a radar target that walks toward / away from a settled BLE
+    // person still fuses / releases promptly against the LERPED positions.
+    // Cheap no-op when there are no BLE people (guarded inside _fuseIdentities).
+    if (!this._fusionTimer && typeof setInterval !== 'undefined') {
+      this._fusionTimer = setInterval(() => {
+        if (Object.keys(this.bleSolves).length) this._fuseIdentities();
+      }, Planner.FUSION_TICK_MS);
+    }
     // Auto-poll when the tab regains focus. WS state_changed events can be
     // missed while the page is backgrounded (browsers throttle WS on hidden
     // tabs); a fresh get_states resyncs everything cheaply.
@@ -433,9 +471,11 @@ export class Planner extends EventTarget {
         for (const eid of Object.keys(this.bleEntityMap))
           if (states[eid]) this._recordBleSample(eid);
         this._solveBle();
+        this._fuseIdentities();
       } else if (this.bleEntityMap[changedId]) {
         this._recordBleSample(changedId);
         this._solveBle();
+        this._fuseIdentities();
       }
     }
 
@@ -1467,6 +1507,114 @@ export class Planner extends EventTarget {
       });
     }
     return out;
+  }
+
+  // BLE people whose identity has NOT been fused onto a radar target. Renderers
+  // draw ghost rigs only for these — a fused person's ghost hides (the radar
+  // target now carries their avatar/label), so a physical person never renders
+  // twice. Reads the last _fuseIdentities result (fusedPersonIds).
+  get bleUnfused(): BlePerson[] {
+    return this.blePeople.filter(bp => !this.fusedPersonIds.has(bp.key));
+  }
+
+  // ── Identity fusion (Feature B, phase B3) ─────────────────────────────────
+  // Match each live BLE person to at most one live mmWave radar target on the
+  // SAME floor, with hysteresis both ways (see src/fusion.ts). Candidates use the
+  // LERPED radar positions — the same source the renderer/2D draw — so the gate
+  // is judged against what the user sees. Runs on each BLE solve and a ~2 s timer;
+  // both are no-ops when no BLE people exist. Deterministic core; this method only
+  // gathers candidates, times the tick, and decorates the output.
+  private _fuseIdentities(): void {
+    const people = this.blePeople;
+    const now = Date.now();
+    const dtMs = this._lastFuseAt ? Math.max(0, now - this._lastFuseAt) : 0;
+    this._lastFuseAt = now;
+
+    if (people.length === 0) {
+      // Nothing to match — clear any residual fusion output/state cheaply.
+      if (this.fusedPersonIds.size || Object.keys(this.fusions).length) {
+        this._fusionState = newFusionState();
+        this.fusions = {}; this.fusedPersonIds = new Set(); this._fusionSince = {};
+        this.emitConfig();
+      }
+      return;
+    }
+
+    // Live radar targets (lerped world positions) grouped by floor, mirroring
+    // three-view / canvas-render: per bound sensor, up to 3 active lerp slots.
+    interface RTarget { key: string; x: number; y: number; floorId: string }
+    const radar: RTarget[] = [];
+    for (const fl of this.store.floors) {
+      for (const s of fl.sensors) {
+        if (!s.deviceSlug || !this.discBy[s.id]) continue;
+        const lerp = this.lerpBy[s.id];
+        if (!lerp) continue;
+        for (let i = 0; i < 3; i++) {
+          const sl = lerp[i];
+          if (!sl || !sl.active) continue;
+          const wp = localToWorld(s, sl.cx, sl.cy);
+          radar.push({ key: `${s.id}_${i}`, x: wp.x, y: wp.y, floorId: fl.id });
+        }
+      }
+    }
+
+    // Candidate proximities: every (person, target) pair on a shared floor. N is
+    // tiny (a few people × ≤3 targets/sensor). All pairs are supplied — even
+    // beyond the gate — so the release logic can measure a fused pair separating.
+    const cands: FusionCand[] = [];
+    const presentPersons = new Set<string>();
+    const stalePersons = new Set<string>();
+    const presentTargets = new Set<string>();
+    for (const rt of radar) presentTargets.add(rt.key);
+    for (const bp of people) {
+      presentPersons.add(bp.key);
+      if (bp.stale) stalePersons.add(bp.key);
+      const gate = Math.max(DEFAULT_FUSION_CFG.baseGateMm, bp.confidenceMm);
+      for (const rt of radar) {
+        if (rt.floorId !== bp.floorId) continue;
+        cands.push({
+          personId: bp.key, targetKey: rt.key,
+          distMm: Math.hypot(rt.x - bp.x, rt.y - bp.y), gateMm: gate,
+        });
+      }
+    }
+
+    stepFusion(this._fusionState, { cands, presentPersons, stalePersons, presentTargets }, dtMs);
+
+    // Decorate the committed pairs into the render-ready `fusions` map. `since`
+    // is stamped once per targetKey and cleared when the pair releases.
+    const byKey: Record<string, BlePerson> = {};
+    for (const bp of people) byKey[bp.key] = bp;
+    const nextFusions: Record<string, Fusion> = {};
+    const nextFused = new Set<string>();
+    const nextSince: Record<string, number> = {};
+    for (const targetKey of Object.keys(this._fusionState.fused)) {
+      const pid = this._fusionState.fused[targetKey].personId;
+      const bp = byKey[pid];
+      if (!bp) continue;   // person vanished between step + decorate (guard)
+      const since = this._fusionSince[targetKey] ?? now;
+      nextSince[targetKey] = since;
+      nextFusions[targetKey] = {
+        personId: bp.personId, name: bp.name, color: bp.color,
+        avatarKind: bp.avatarKind, isPet: bp.isPet, since,
+      };
+      nextFused.add(bp.key);
+    }
+    this._fusionSince = nextSince;
+
+    // Repaint only when the fusion set actually changed (targetKey↔person pairs),
+    // so the ~2 s timer doesn't churn the sidebar/config every tick.
+    const changed = this._fusionSetChanged(nextFusions);
+    this.fusions = nextFusions;
+    this.fusedPersonIds = nextFused;
+    if (changed) this.emitConfig();
+  }
+
+  private _fusionSetChanged(next: Record<string, Fusion>): boolean {
+    const a = Object.keys(this.fusions), b = Object.keys(next);
+    if (a.length !== b.length) return true;
+    for (const k of b) if (!this.fusions[k] || this.fusions[k].personId !== next[k].personId) return true;
+    return false;
   }
 
   // Consent-gated enable: flip disabled_by to null on every disabled per-scanner

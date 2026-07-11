@@ -34,6 +34,25 @@ deployed to the live HA instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **World Outside — B3 (identity fusion + name labels)**: the arc's payoff —
+  mmWave precision wearing BLE identity. New pure `src/fusion.ts` (`stepFusion`,
+  deterministic, no Date/random) matches each BLE person to at most one live
+  radar target with two-sided hysteresis: a UNIQUE in-gate pair (person's nearest
+  target ∧ target's nearest person, no 2nd candidate within `gate×1.25`) held
+  continuously 4 s fuses; releases only after separating past `gate×2` for 6 s, or
+  instantly on target-gone / person-stale. Gate = `max(1500 mm, confidenceMm)`.
+  `Planner._fuseIdentities` (on each BLE solve + a 2 s timer, no-op without BLE
+  people) runs it against the LERPED radar positions and exposes
+  `Planner.fusions` (targetKey→person) + `fusedPersonIds` + `bleUnfused` (a fused
+  person's ghost rig hides — nobody renders twice). 3D: fused radar targets adopt
+  the person's avatar (incl. humanoid⇄quadruped for a fused pet) + color; new
+  camera-facing **name label** sprite above the plumbob, shown only when confident
+  (fused target OR identified BLE rig), on a new `Layers2D.nameLabels` layer
+  (default on) — canvas repainted only on name change, freed via `_disposeHumanoid`
+  like the bubble sprite, faded with the rig by `_fadeRig`. 2D: fused dots draw the
+  person initials chip + name line (shared helpers). Runtime-only; `nameLabels` is
+  the sole schema addition. Test page `test-pages/fusion-test.html`
+  (`FUSION PASS 11/11` — 6 matcher scenarios + 5 renderer assertions).
 - **World Outside — W2 (3D weather effects)**: renderer `_weatherGroup` +
   `updateWeather(fx)` driven by `Planner.weatherNow` — precipitation `THREE.Points`
   clouds (rain streaks / snow flakes / hail dots / wind dust; count
@@ -179,13 +198,15 @@ deployed to the live HA instance.
 - Every commit message and doc change keeps `CLAUDE.md` load-bearing
   sections current (rendering, activity system, pathfinding, gotchas).
 
-## Next arc (planned, not started)
+## Next arc
 
-`docs/DESIGN-world.md` (2026-07-11): BLE identity + panel-side trilateration
-via Bermuda per-scanner distances, GPS landmark calibration + device pins,
-weather displays + outdoor 3D effects. Phases B1→B2→W1→G1→G2→W2→B3; model
-assignments per phase are recorded in the doc (Fable plans/reviews, Opus 4.8
-implements, Sonnet 5 researches).
+The "World Outside" arc (`docs/DESIGN-world.md`, 2026-07-11) is **shipped
+through B3** — every phase landed (B1 people/proxies → B2 trilateration → P1
+pet rigs → W1 weather core → G1 geo calibration → G2 GPS pins → W2 weather
+effects → **B3 identity fusion + name labels**). BLE identity + panel-side
+trilateration, GPS landmark calibration + device pins, weather displays +
+outdoor 3D effects, and the mmWave↔BLE identity fusion that ties precision to
+identity are all in `main`. No successor arc is planned yet.
 
 ## Open threads / known deferrals
 

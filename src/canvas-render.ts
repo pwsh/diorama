@@ -1718,14 +1718,47 @@ function drawBgEditOverlay(ctx: CanvasRenderingContext2D, p: Planner, view: View
   ctx.restore();
 }
 
+// Up to 2 initials from a name (uppercased), '?' fallback.
+function nameInitials(name: string): string {
+  return name.trim().split(/\s+/).map(w => w[0] || '')
+    .join('').slice(0, 2).toUpperCase() || '?';
+}
+
+// Person-colored initials chip just below a dot (shared by BLE dots + fused
+// radar dots — B3). Returns the chip's bottom Y so a name label can stack under.
+function drawInitialsChip(ctx: CanvasRenderingContext2D, dpr: number,
+                          cx: number, cy: number, name: string, color: string): number {
+  const initials = nameInitials(name);
+  ctx.font = `bold ${10 * dpr}px sans-serif`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+  const cw = ctx.measureText(initials).width + 8 * dpr;
+  const top = cy + 10 * dpr;
+  ctx.fillStyle = hexToRgba(color, 0.85);
+  ctx.fillRect(cx - cw / 2, top, cw, 14 * dpr);
+  ctx.fillStyle = '#fff';
+  ctx.fillText(initials, cx, top + 2 * dpr);
+  return top + 14 * dpr;
+}
+
+// Small dim person-colored name label under a dot (B3, `nameLabels` layer).
+function drawNameLabel(ctx: CanvasRenderingContext2D, dpr: number,
+                       cx: number, topY: number, name: string, color: string): void {
+  ctx.font = `${9 * dpr}px sans-serif`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+  ctx.fillStyle = hexToRgba(color, 0.9);
+  ctx.fillText(name.slice(0, 24), cx, topY + 2 * dpr);
+}
+
 // BLE-trilaterated people: a person-colored dot + an initials chip + a faint
 // confidence circle (radius = the solve's uncertainty). Only people whose
 // winning floor is the active floor draw here; stale fixes dim. Gated by the
-// `targets` layer (same as radar dots).
+// `targets` layer (same as radar dots). Only UNFUSED people draw — a person
+// fused onto a radar target is drawn there instead (B3), via p.bleUnfused.
 function drawBlePeople(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
   const dpr = window.devicePixelRatio || 1;
   const f = p.floor();
-  for (const bp of p.blePeople) {
+  const nameLabelsOn = (p.store.layers2d?.nameLabels) !== false;
+  for (const bp of p.bleUnfused) {
     if (bp.floorId !== f.id) continue;
     const pt = mmToPx(view, bp.x, bp.y);
     const alpha = bp.stale ? 0.4 : 1;
@@ -1745,17 +1778,10 @@ function drawBlePeople(ctx: CanvasRenderingContext2D, p: Planner, view: View): v
     ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5 * dpr;
     if (bp.stale) ctx.setLineDash([2 * dpr, 2 * dpr]);
     ctx.stroke(); ctx.setLineDash([]);
-    // Initials chip (up to 2 letters from the name)
-    const initials = bp.name.trim().split(/\s+/).map(w => w[0] || '')
-      .join('').slice(0, 2).toUpperCase() || '?';
-    ctx.font = `bold ${10 * dpr}px sans-serif`;
-    ctx.textAlign = 'center'; ctx.textBaseline = 'top';
-    const cw = ctx.measureText(initials).width + 8 * dpr;
-    const cx = pt.x - cw / 2, cy = pt.y + 10 * dpr;
-    ctx.fillStyle = hexToRgba(bp.color, 0.85);
-    ctx.fillRect(cx, cy, cw, 14 * dpr);
-    ctx.fillStyle = '#fff';
-    ctx.fillText(initials, pt.x, cy + 2 * dpr);
+    const chipBottom = drawInitialsChip(ctx, dpr, pt.x, pt.y, bp.name, bp.color);
+    // Name label only for identified people, when the layer is on (decision #4).
+    if (bp.personId != null && nameLabelsOn)
+      drawNameLabel(ctx, dpr, pt.x, chipBottom, bp.name, bp.color);
     ctx.restore();
   }
 }
@@ -1782,9 +1808,22 @@ function drawTargets(ctx: CanvasRenderingContext2D, p: Planner, view: View): voi
       const canvasAngle = dist > 0 ? Math.atan2(-dyW, dxW) : -Math.PI / 2;
       // Slight per-target shading so T1/T2/T3 within one sensor stay
       // distinguishable while sharing the sensor's hue.
-      const tintColor = i === 0 ? baseColor : lighten(baseColor, i === 1 ? 0.20 : 0.40);
-      drawTargetDot(ctx, pt.x, pt.y, tintColor, `T${i + 1}`,
+      // Identity fusion (B3): a fused radar dot adopts the person's color, an
+      // initials chip, and (layer-gated) a name label — mmWave precision wearing
+      // the BLE person's identity.
+      const fusion = p.fusions[`${s.id}_${i}`];
+      const tintColor = fusion ? fusion.color
+        : (i === 0 ? baseColor : lighten(baseColor, i === 1 ? 0.20 : 0.40));
+      drawTargetDot(ctx, pt.x, pt.y, tintColor, fusion ? '' : `T${i + 1}`,
         speed, canvasAngle, res * view.scale);
+      if (fusion) {
+        const dpr2 = window.devicePixelRatio || 1;
+        ctx.save();
+        const chipBottom = drawInitialsChip(ctx, dpr2, pt.x, pt.y, fusion.name, fusion.color);
+        if (fusion.personId != null && (p.store.layers2d?.nameLabels) !== false)
+          drawNameLabel(ctx, dpr2, pt.x, chipBottom, fusion.name, fusion.color);
+        ctx.restore();
+      }
       if (p.showDetails) {
         const angDeg = (Math.atan2(sl.cx, Math.max(sl.cy, 0.0001)) * 180 / Math.PI);
         const dirs = ['N','NE','E','SE','S','SW','W','NW'];

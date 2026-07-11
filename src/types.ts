@@ -448,6 +448,7 @@ export interface Layers2D {
   activity?: boolean;   // default OFF: glow pools for lights that are ON + active motion
   geo?: boolean;        // geo landmark pins (+ GPS device pins in G2); 2D-only this phase
   weatherFx?: boolean;  // 3D outdoor weather effects (rain/snow/fog/lightning/wind); default on (W2)
+  nameLabels?: boolean; // name labels above confident rigs/dots (fused mmWave + identified BLE); default on (B3)
 }
 
 export interface Layer2DPreset {
