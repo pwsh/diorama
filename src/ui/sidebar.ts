@@ -1970,6 +1970,12 @@ export class Sidebar extends LitElement {
                    p.store.scene3d!.autoFollow = (e.target as HTMLInputElement).checked;
                  })}>
         </div>
+        <div class="row"><label>Plumbobs</label>
+          <input type="checkbox" .checked=${sc.plumbobs !== false}
+                 @change=${(e: Event) => upd(() => {
+                   p.store.scene3d!.plumbobs = (e.target as HTMLInputElement).checked;
+                 })}>
+        </div>
         ${this._floorLookOverrides(sc)}
       </div>
     `;

@@ -36,9 +36,11 @@ export type FurnitureKind =
   | 'ottoman' | 'stool' | 'plant' | 'counter' | 'island' | 'cabinet'
   // appliances
   | 'fridge' | 'stove' | 'dishwasher' | 'washer' | 'dryer' | 'microwave' | 'tv'
+  | 'wall_tv'       // wall-mounted flat TV, no stand
+  | 'kitchen_sink'  // stainless double basin embedded in a counter
   | 'coffee_maker' | 'toaster'
   // bathroom
-  | 'toilet' | 'sink' | 'bathtub' | 'shower'
+  | 'toilet' | 'sink' | 'sink_vanity' | 'bathtub' | 'shower'
   // fitness
   | 'exercise_equipment';
 
@@ -280,6 +282,7 @@ export interface Scene3D {
   glassHouse?: boolean;      // render every OTHER floor as a translucent shell stacked at its story height
   wallCutaway?: boolean;     // fade walls between the camera and the room (Sims dollhouse); default ON (opt-out)
   autoFollow?: boolean;      // camera auto-frames active people (eases; manual orbit pauses it 6 s); default off
+  plumbobs?: boolean;        // show the spinning Sims plumbob diamonds above targets; default ON (opt-out)
 }
 
 // A named room. No polygon is persisted — the room IS whichever closed wall

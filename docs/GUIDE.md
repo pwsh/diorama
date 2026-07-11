@@ -203,10 +203,11 @@ anchors the "working out" activity.
 Plus rug, plant, and a plain block. Seating pieces are **sittable** — see
 [Target rendering](#target-rendering).
 
-Every piece has a defined **front** (where a chair's back, a sofa's arms, a
-bed's headboard, or an appliance's door face). Select a piece in 2D and a
-small **chevron** marks that front edge, so you can tell which way it's
-turned before you rotate it.
+Every piece has a defined **front** — the side it faces: cabinet and
+appliance doors, TV screens, the open side of a sofa or chair. Select a
+piece in 2D and a small **chevron** marks that front edge, so you can tell
+which way it's turned before you rotate it. Point the chevron into the
+room and the doors face the room.
 
 ---
 

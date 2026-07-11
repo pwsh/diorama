@@ -317,6 +317,7 @@ export class ThreeView extends LitElement {
       // floor build time below (they live inside _floorGroup).
       const layers = p.store.layers2d ?? {};
       r.setLayerVisibility(layers);
+      r.setPlumbobs((p.store.scene3d?.plumbobs) !== false);
 
       // Auto-follow camera flag (cheap; the renderer does the per-frame easing).
       r.setAutoFollow(!!p.store.scene3d?.autoFollow);

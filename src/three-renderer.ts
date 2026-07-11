@@ -253,6 +253,8 @@ export class ThreeDRenderer {
   // pan suspends it until `_followPauseUntil` (refreshed 6 s past every gesture).
   private _autoFollow = false;
   private _followPauseUntil = 0;
+  // Global toggle for the spinning Sims plumbob diamonds above targets.
+  private _plumbobs = true;
   private _lastAnimT = 0;   // performance.now()/1000 of the previous _animate frame
   private _ZONE_H = 305;  // 1 ft — low outlines that don't wall off the room
   private _OBJ_H = 900;
@@ -840,6 +842,7 @@ export class ThreeDRenderer {
   // Auto-follow toggle. Turning it on lets `_animate` take over the camera pose
   // (eased); off returns full manual control immediately.
   setAutoFollow(on: boolean): void { this._autoFollow = on; }
+  setPlumbobs(on: boolean): void { this._plumbobs = on; }
 
   // Surface height (mm) under a world point: the highest stair tread or
   // landing containing it, else the floor (0). Stair treads quantize to the
@@ -2528,6 +2531,19 @@ export class ThreeDRenderer {
         addBox(W * 0.4, 24, D, dark, 0, 12, 0);  // base plate
         break;
       }
+      case 'wall_tv': {
+        // Wall-mounted flat TV, NO stand — floats at height. Front faces the
+        // room (-Z); a bracket sits behind (+Z) against the wall. Blob shadow
+        // is skipped below (it hangs on a wall, not the floor).
+        const bezelH = 720, bezelD = 60, scY = 1350;  // screen center height (mm)
+        addBox(W, bezelH, bezelD, dark, 0, scY, 0);                       // slim dark bezel
+        // Inset screen face, slightly proud of the bezel front (-Z) so it
+        // reads inside the frame without coplanar z-fight with the bezel face.
+        addBox(W * 0.92, bezelH - 100, 20, screen, 0, scY, -bezelD / 2 - 2);
+        // Wall bracket behind the bezel (+Z), up near the top.
+        addBox(W * 0.26, 180, 45, dark, 0, scY + bezelH / 2 - 140, bezelD / 2 + 25);
+        break;
+      }
       // ── bathroom (front = -Z; toilet tank sits at the back +Z) ──
       case 'toilet': {
         const bowl = new THREE.Mesh(new THREE.CylinderGeometry(W * 0.42, W * 0.3, 380, 18), porcelain);
@@ -2541,6 +2557,82 @@ export class ThreeDRenderer {
       case 'sink': {
         addCyl(70, 90, HT - 120, porcelain, 0, (HT - 120) / 2, 0, 12);   // pedestal
         addCyl(W * 0.48, W * 0.34, 130, porcelain, 0, HT - 65, 0, 18);   // basin
+        break;
+      }
+      case 'sink_vanity': {
+        // Cabinet base (casework idiom) + overhanging stone counter with a
+        // raised rim framing a recessed basin bowl + a steel faucet at the back.
+        const carcassTop = HT - 40;
+        addBox(W, carcassTop, D, wood, 0, carcassTop / 2, 0);            // cabinet body
+        // Double door split on the front (-Z).
+        const vPanel = this._mat({ color: tint, roughness: 0.55, metalness: 0.05 });
+        const vPull = this._mat({ color: 0x3a444d, metalness: 0.8, roughness: 0.35 });
+        const vdw = W / 2 - 26, vdh = carcassTop - 100;
+        for (const sx of [-1, 1]) {
+          addBox(vdw, vdh, 16, vPanel, sx * (W / 4 - 4), 50 + vdh / 2, -D / 2 - 8);
+          addBox(22, Math.min(240, vdh * 0.45), 20, vPull, sx * 40, 50 + vdh * 0.55, -D / 2 - 28);
+        }
+        const stone = this._mat({ color: 0xeceff1, roughness: 0.2, metalness: 0.05 });
+        // Basin opening: a raised counter rim tiled around a central hole (no
+        // boolean cut — front/back bands span full width, side bands fill the
+        // gaps, so no overlapping coplanar top faces).
+        const openW = W * 0.5, openD = D * 0.5, zc = -D * 0.05;
+        const rimBot = carcassTop, rimTop = HT, rimH = rimTop - rimBot;  // 40 mm
+        const rimY = rimBot + rimH / 2;
+        const zBack = zc + openD / 2, zFront = zc - openD / 2;
+        addBox(W + 40, rimH, (D / 2 + 20) - zBack, stone, 0, rimY, (zBack + D / 2 + 20) / 2);   // back band
+        addBox(W + 40, rimH, zFront - (-D / 2 - 20), stone, 0, rimY, (zFront + (-D / 2 - 20)) / 2); // front band
+        addBox((W + 40) / 2 - openW / 2, rimH, openD, stone, -(openW / 2 + ((W + 40) / 2 - openW / 2) / 2), rimY, zc); // left filler
+        addBox((W + 40) / 2 - openW / 2, rimH, openD, stone,  (openW / 2 + ((W + 40) / 2 - openW / 2) / 2), rimY, zc); // right filler
+        // Recessed bowl: rim top 15 mm below the counter surface.
+        addCyl(openW * 0.42, openW * 0.30, 150, porcelain, 0, HT - 15 - 75, zc, 20);
+        addCyl(openW * 0.30, openW * 0.30, 12, dark, 0, HT - 15 - 148, zc, 16);  // drain
+        // Faucet at the back edge: vertical body + horizontal spout. The shared
+        // `steel` mat is tinted by the piece color, so use explicit steel grey.
+        const vSteel = this._mat({ color: 0xb8c0c6, metalness: 0.8, roughness: 0.28 });
+        const faucetZ = zBack + 30;
+        addCyl(16, 18, 200, vSteel, 0, HT + 100, faucetZ, 10);
+        const spout = addCyl(12, 12, 130, vSteel, 0, HT + 185, faucetZ - 60, 10);
+        spout.rotation.x = Math.PI / 2;
+        break;
+      }
+      case 'kitchen_sink': {
+        // Counter-matching cabinet base + stone slab (reusing the counter
+        // idiom) with a stainless double basin recessed into it and a tall
+        // arched faucet at the back center.
+        addBox(W, HT - 30, D, wood, 0, (HT - 30) / 2, 0);               // cabinet base
+        const ksTop = this._mat({ color: 0xcfd8dc, roughness: 0.25, metalness: 0.05 });
+        // The shared `steel` mat is tinted by the piece color (brown here), so
+        // use an explicit stainless grey for the basin + faucet.
+        const stainless = this._mat({ color: 0xb8c0c6, metalness: 0.8, roughness: 0.28 });
+        // Counter slab as a raised rim tiled around the sink opening.
+        const sinkW = W * 0.72, sinkD = D * 0.6, zc = -D * 0.03;
+        const rimBot = HT - 30, rimTop = HT, rimH = rimTop - rimBot, rimY = rimBot + rimH / 2;
+        const zBack = zc + sinkD / 2, zFront = zc - sinkD / 2;
+        addBox(W * 1.02, rimH, (D * 1.02 / 2) - zBack, ksTop, 0, rimY, (zBack + D * 1.02 / 2) / 2);        // back band
+        addBox(W * 1.02, rimH, zFront + D * 1.02 / 2, ksTop, 0, rimY, (zFront - D * 1.02 / 2) / 2);        // front band
+        const sideW = (W * 1.02) / 2 - sinkW / 2;
+        addBox(sideW, rimH, sinkD, ksTop, -(sinkW / 2 + sideW / 2), rimY, zc);   // left filler
+        addBox(sideW, rimH, sinkD, ksTop,  (sinkW / 2 + sideW / 2), rimY, zc);   // right filler
+        // Stainless double basin, mirroring the vanity bowl trick: two SOLID
+        // stainless pans whose tops sit ~20 mm below the counter (so they read
+        // recessed) split by a center divider that rises to the rim. Solid tops
+        // sit just above the cabinet carcass (rimBot) so no wood shows through
+        // — hollow wells buried in the solid cabinet showed the wood floor.
+        const div = 60, panTop = HT - 20;                 // 880 mm, 20 below the 900 rim
+        addBox(div, rimH + 10, sinkD, stainless, 0, HT - (rimH + 10) / 2, zc);  // center divider, flush at rim
+        const panW = sinkW / 2 - div / 2;
+        const panCx = div / 2 + panW / 2;
+        for (const sx of [-1, 1]) {
+          // solid pan: top at panTop (above the cabinet carcass so stainless
+          // shows), base sunk into the cabinet.
+          addBox(panW, panTop - (rimBot - 50), sinkD, stainless, sx * panCx, (panTop + (rimBot - 50)) / 2, zc);
+        }
+        // Tall arched faucet at the back center (stainless).
+        const kfZ = zBack + 30;
+        addCyl(18, 20, 260, stainless, 0, HT + 130, kfZ, 10);
+        const kspout = addCyl(14, 14, 200, stainless, 0, HT + 250, kfZ - 90, 10);
+        kspout.rotation.x = Math.PI / 2.2;   // gooseneck: slight forward-down arch
         break;
       }
       case 'bathtub': {
@@ -2607,6 +2699,7 @@ export class ThreeDRenderer {
     this._addOutlines(grp);
     const onFloor = !def.rug &&
       kind !== 'stairs' && kind !== 'stairs_half' && kind !== 'stair_landing' &&
+      kind !== 'wall_tv' &&   // hangs on a wall, never touches the floor
       Math.abs(fu.elevation ?? 0) < 100;
     if (onFloor) {
       const blob = this._blobShadow(W / 2 * 1.12 + 60, D / 2 * 1.12 + 60);
@@ -4400,8 +4493,10 @@ export class ThreeDRenderer {
       }
 
       // Lying: the plumbob would tilt away with the pitched-back body, so hide
-      // it (and the now-vertical blob) above the lie midpoint.
-      h.plumbob.visible = lie <= 0.5;
+      // it (and the now-vertical blob) above the lie midpoint. The global
+      // `_plumbobs` flag hides it everywhere (still kept during privacy blur —
+      // the peak-Sims joke — but respecting the global toggle).
+      h.plumbob.visible = this._plumbobs && lie <= 0.5;
       if (lie > 0.5) h.blob.visible = false;
       else if (h.privacy <= 0.5) h.blob.visible = true;
 

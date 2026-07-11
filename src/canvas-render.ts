@@ -643,25 +643,28 @@ function drawFurniture(ctx: CanvasRenderingContext2D, p: Planner, view: View): v
     ctx.translate(center.x, center.y);
     ctx.rotate(rotR);
     // Local rect: -halfW..+halfW (X), -halfH..+halfH (canvas Y). Canvas-Y top
-    // corresponds to world +Y after the canvas Y-flip, so draw the kind's
-    // "front" decorations (backrest, headboard, pillows) at canvas-Y = -halfH.
+    // (-halfH) corresponds to world +Y after the canvas Y-flip — the BACK-side
+    // decorations edge (backrest, headboard, pillows). The functional FRONT
+    // (cabinet doors/pulls, TV screens, seat openings, faces — local -Z = world
+    // -Y) is at canvas-Y +halfH.
     drawFurniturePrimitiveLocal(ctx, piece, halfW, halfH, customObjects);
     if (piece.label) {
       ctx.fillStyle = '#ddd'; ctx.font = '10px sans-serif';
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
       ctx.fillText(piece.label, 0, 0);
     }
-    // Front chevron: subtle orange arrow just past the front edge (canvas-Y
-    // top = -halfH, the "front" side) for the active selection in edit mode.
+    // Front chevron: subtle orange arrow just past the functional front edge
+    // (canvas-Y +halfH, local -Z = world -Y — where doors/screens/seats/faces
+    // live), pointing outward, for the active selection in edit mode.
     const def = resolveFurnitureDef(piece, customObjects);
     if (isEdit && p.activeFurnitureId === piece.id && def.frontArrow !== false) {
       const s = Math.max(5, Math.min(12, halfW * 0.4));
       ctx.strokeStyle = '#ffb74d';
       ctx.lineWidth = 2; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
       ctx.beginPath();
-      ctx.moveTo(-s, -halfH);
-      ctx.lineTo(0, -halfH - s * 0.9);
-      ctx.lineTo(s, -halfH);
+      ctx.moveTo(-s, halfH);
+      ctx.lineTo(0, halfH + s * 0.9);
+      ctx.lineTo(s, halfH);
       ctx.stroke();
     }
     ctx.restore();
@@ -681,7 +684,8 @@ function drawFurniture(ctx: CanvasRenderingContext2D, p: Planner, view: View): v
 // Plan-view shape per furniture kind, drawn in piece-local canvas frame
 // after `ctx.translate(center)` and `ctx.rotate(rotation)`. `halfW` and
 // `halfH` are half extents in canvas px. Canvas-Y top (-halfH) is the
-// piece's "front" — backrests, headboards, and pillows live there.
+// piece's BACK — backrests, headboards, and pillows live there; the functional
+// front (doors/seats/screens/faces, local -Z) is at canvas-Y +halfH.
 function drawFurniturePrimitiveLocal(
   ctx: CanvasRenderingContext2D,
   piece: Furniture,
@@ -931,6 +935,28 @@ function drawFurniturePrimitiveLocal(
       fill('rgba(33,37,41,0.8)');
       stroke('#78909c');
       break;
+    case 'wall_tv':
+      // Thin dark screen rect + a heavier accent line along the front (screen)
+      // edge. Front = local -Z = the -Y / BOTTOM edge in canvas px.
+      fill('rgba(28,31,35,0.85)');
+      stroke('#78909c');
+      ctx.strokeStyle = '#4fc3f7'; ctx.lineWidth = 2.5;
+      ctx.beginPath(); ctx.moveTo(x + 2, y + h); ctx.lineTo(x + w - 2, y + h); ctx.stroke();
+      break;
+    case 'kitchen_sink': {
+      // Counter-tone rect + two steel basin rects + faucet dot at the back
+      // (+Z = TOP edge in canvas).
+      fill('rgba(109,76,65,0.5)');
+      stroke('#a1887f');
+      ctx.fillStyle = 'rgba(176,190,197,0.85)';
+      ctx.strokeStyle = '#607d8b'; ctx.lineWidth = 1;
+      const kbw = w * 0.32, kbh = h * 0.5, kby = -kbh / 2 + h * 0.04;
+      ctx.fillRect(-kbw - w * 0.03, kby, kbw, kbh); ctx.strokeRect(-kbw - w * 0.03, kby, kbw, kbh);
+      ctx.fillRect(w * 0.03, kby, kbw, kbh); ctx.strokeRect(w * 0.03, kby, kbw, kbh);
+      ctx.fillStyle = '#607d8b';
+      ctx.beginPath(); ctx.arc(0, y + h * 0.15, 3.5, 0, 2 * Math.PI); ctx.fill();
+      break;
+    }
     case 'toilet': {
       // Tank on +Y (back) edge + bowl ellipse.
       ctx.fillStyle = 'rgba(245,245,240,0.75)';
@@ -948,6 +974,20 @@ function drawFurniturePrimitiveLocal(
       ctx.strokeStyle = '#78909c'; ctx.lineWidth = 1;
       ctx.beginPath(); ctx.ellipse(0, 0, halfW * 0.6, halfH * 0.6, 0, 0, 2 * Math.PI); ctx.stroke();
       break;
+    case 'sink_vanity': {
+      // Painted cabinet rect (door split) + inset basin oval + faucet dot at
+      // the back (+Z = TOP edge in canvas).
+      fill('rgba(215,204,200,0.6)');
+      stroke('#a1887f');
+      ctx.strokeStyle = '#8d6e63'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(0, y + h * 0.28); ctx.lineTo(0, y + h - 3); ctx.stroke();
+      ctx.fillStyle = 'rgba(236,239,241,0.9)';
+      ctx.strokeStyle = '#90a4ae'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.ellipse(0, h * 0.06, halfW * 0.55, halfH * 0.5, 0, 0, 2 * Math.PI); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#78909c';
+      ctx.beginPath(); ctx.arc(0, y + h * 0.14, 3, 0, 2 * Math.PI); ctx.fill();
+      break;
+    }
     case 'bathtub':
       fill('rgba(245,245,240,0.6)');
       stroke('#b0bec5');

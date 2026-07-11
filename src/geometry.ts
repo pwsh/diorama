@@ -421,11 +421,14 @@ export const FURNITURE_KINDS: Record<FurnitureKind, FurnitureKindDef> = {
   dryer:         { label: 'Dryer',         w: 690,  h: 700,  ht: 990,  back: 'none', color: 0xcfd8dc, cat: 'appliance' },
   microwave:     { label: 'Microwave',     w: 520,  h: 390,  ht: 320,  back: 'none', color: 0x37474f, cat: 'appliance', mountable: true },
   tv:            { label: 'TV',            w: 1450, h: 250,  ht: 1100, back: 'none', color: 0x212529, cat: 'appliance', activity: 'watch_tv' },
+  wall_tv:       { label: 'Wall-mount TV', w: 1300, h: 180,  ht: 1550, back: 'none', color: 0x1c1f23, cat: 'appliance', activity: 'watch_tv' },
+  kitchen_sink:  { label: 'Kitchen sink',  w: 900,  h: 650,  ht: 900,  back: 'none', color: 0x8d6e63, cat: 'appliance', surface: true, activity: 'wash_hands' },
   coffee_maker:  { label: 'Coffee maker',  w: 250,  h: 250,  ht: 350,  back: 'none', color: 0x37474f, cat: 'appliance', activity: 'make_coffee', mountable: true },
   toaster:       { label: 'Toaster',       w: 300,  h: 200,  ht: 220,  back: 'none', color: 0xb0bec5, cat: 'appliance', mountable: true },
   // Bathroom
   toilet:        { label: 'Toilet',        w: 480,  h: 700,  ht: 780,  seat: 420, back: 'none', color: 0xf5f5f0, cat: 'bathroom', activity: 'toilet' },
   sink:          { label: 'Sink',          w: 560,  h: 470,  ht: 860,  back: 'none', color: 0xf5f5f0, cat: 'bathroom', activity: 'wash_hands' },
+  sink_vanity:   { label: 'Sink vanity',   w: 760,  h: 550,  ht: 860,  back: 'none', color: 0xd7ccc8, cat: 'bathroom', activity: 'wash_hands' },
   bathtub:       { label: 'Bathtub',       w: 1520, h: 760,  ht: 560,  back: 'none', color: 0xf5f5f0, cat: 'bathroom', activity: 'bathe' },
   shower:        { label: 'Shower',        w: 910,  h: 910,  ht: 2000, back: 'none', color: 0xe3e6e8, cat: 'bathroom', activity: 'shower' },
   // Fitness
