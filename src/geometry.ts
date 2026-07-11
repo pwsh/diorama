@@ -141,43 +141,123 @@ export function polygonArea(pts: Vec2[]): number {
   return a / 2;
 }
 
-// Trace closed loops through the wall graph (self-closed polylines plus
-// chains of walls stitched at exactly-equal endpoints — welding guarantees
-// exact coordinates). Loops smaller than ~0.5 m² are noise and dropped.
-// Invisible walls participate: they exist precisely to close floor regions
-// without rendering anything.
+// Extract the closed floor regions bounded by the walls, as CCW polygons
+// (loops smaller than ~0.5 m² are noise and dropped). This is a proper planar
+// face decomposition, NOT plain chain-following: it welds coincident endpoints
+// (rounded to 1 mm), SPLITS walls where another wall's endpoint lands on their
+// interior (T-junctions) or where two walls cross, then traces the minimal
+// interior faces of the resulting planar graph. That means an interior wall
+// (e.g. an INVISIBLE planning boundary drawn across an already-closed area, or
+// meeting existing walls mid-segment) subdivides the enclosing region into
+// separate rooms — a plain single-cycle trace could not. Invisible walls
+// participate fully: they exist precisely to close / subdivide floor regions
+// without rendering anything. Callers must treat the returned arrays as owned
+// (resolveRoomForPoint relies on reference equality within one call).
 export function closedWallLoops(walls: { points: Vec2[] }[]): Vec2[][] {
-  const key = (p: Vec2) => `${Math.round(p.x)},${Math.round(p.y)}`;
-  const loops: Vec2[][] = [];
-  const used = new Array(walls.length).fill(false);
-  for (let i = 0; i < walls.length; i++) {
-    const pts = walls[i].points;
-    if (pts.length >= 4 && key(pts[0]) === key(pts[pts.length - 1])) {
-      loops.push(pts.slice(0, -1));
-      used[i] = true;
+  const EPS = 1.5;  // mm: on-segment / coincidence tolerance (weld snaps exact)
+  const key = (x: number, y: number) => `${Math.round(x)},${Math.round(y)}`;
+  const nodeMap = new Map<string, Vec2>();
+  const node = (x: number, y: number): string => {
+    const k = key(x, y);
+    if (!nodeMap.has(k)) nodeMap.set(k, { x: Math.round(x), y: Math.round(y) });
+    return k;
+  };
+  // 1. Break every polyline into its individual segments (rounded endpoints).
+  const segs: { ax: number; ay: number; bx: number; by: number }[] = [];
+  for (const w of walls) {
+    const pts = w.points;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const a = node(pts[i].x, pts[i].y), b = node(pts[i + 1].x, pts[i + 1].y);
+      if (a === b) continue;
+      const A = nodeMap.get(a)!, B = nodeMap.get(b)!;
+      segs.push({ ax: A.x, ay: A.y, bx: B.x, by: B.y });
     }
   }
-  for (let i = 0; i < walls.length; i++) {
-    if (used[i] || walls[i].points.length < 2) continue;
-    used[i] = true;
-    const chain = [...walls[i].points];
-    for (let guard = 0; guard < walls.length; guard++) {
-      if (key(chain[0]) === key(chain[chain.length - 1])) break;
-      const endK = key(chain[chain.length - 1]);
-      let found = false;
-      for (let j = 0; j < walls.length; j++) {
-        if (used[j] || walls[j].points.length < 2) continue;
-        const pts = walls[j].points;
-        if (key(pts[0]) === endK) { chain.push(...pts.slice(1)); used[j] = true; found = true; break; }
-        if (key(pts[pts.length - 1]) === endK) {
-          chain.push(...pts.slice(0, -1).reverse()); used[j] = true; found = true; break;
-        }
+  // 2. Strict interior crossings (e.g. two invisible chords forming a +) become
+  //    split nodes so both segments break at the crossing point.
+  for (let i = 0; i < segs.length; i++) {
+    for (let j = i + 1; j < segs.length; j++) {
+      const p = segs[i], q = segs[j];
+      const r1x = p.bx - p.ax, r1y = p.by - p.ay;
+      const r2x = q.bx - q.ax, r2y = q.by - q.ay;
+      const den = r1x * r2y - r1y * r2x;
+      if (Math.abs(den) < 1e-6) continue;  // parallel / collinear
+      const t = ((q.ax - p.ax) * r2y - (q.ay - p.ay) * r2x) / den;
+      const u = ((q.ax - p.ax) * r1y - (q.ay - p.ay) * r1x) / den;
+      const e = 1e-4;
+      if (t <= e || t >= 1 - e || u <= e || u >= 1 - e) continue;  // endpoints handled elsewhere
+      node(p.ax + t * r1x, p.ay + t * r1y);
+    }
+  }
+  // 3. Build the undirected graph: split each segment at every node lying on it
+  //    (its own endpoints, T-junctions, crossings), edge between neighbours.
+  const allNodes = [...nodeMap.values()];
+  const adj = new Map<string, Set<string>>();
+  const edgeSet = new Set<string>();
+  const addEdge = (ka: string, kb: string) => {
+    if (ka === kb) return;
+    const e = ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`;
+    if (edgeSet.has(e)) return;
+    edgeSet.add(e);
+    (adj.get(ka) ?? adj.set(ka, new Set()).get(ka)!).add(kb);
+    (adj.get(kb) ?? adj.set(kb, new Set()).get(kb)!).add(ka);
+  };
+  for (const s of segs) {
+    const dx = s.bx - s.ax, dy = s.by - s.ay, len2 = dx * dx + dy * dy;
+    if (len2 === 0) continue;
+    const on: { t: number; k: string }[] = [];
+    for (const n of allNodes) {
+      const t = ((n.x - s.ax) * dx + (n.y - s.ay) * dy) / len2;
+      if (t < -1e-6 || t > 1 + 1e-6) continue;
+      const px = s.ax + t * dx, py = s.ay + t * dy;
+      if (Math.hypot(n.x - px, n.y - py) <= EPS)
+        on.push({ t: Math.max(0, Math.min(1, t)), k: key(n.x, n.y) });
+    }
+    on.sort((a, b) => a.t - b.t);
+    for (let i = 0; i < on.length - 1; i++)
+      if (on[i].k !== on[i + 1].k) addEdge(on[i].k, on[i + 1].k);
+  }
+  // 4. Trace minimal faces. At each node keep neighbours sorted CCW by angle;
+  //    walking (u→v) then taking the neighbour just CCW of the reverse edge at v
+  //    traces one minimal face per lap. Interior faces come out clockwise
+  //    (negative signed area); the single outer boundary comes out CCW.
+  const pos = (k: string) => nodeMap.get(k)!;
+  const sortedAdj = new Map<string, string[]>();
+  for (const [k, set] of adj) {
+    const P = pos(k);
+    sortedAdj.set(k, [...set].sort((a, b) => {
+      const A = pos(a), B = pos(b);
+      return Math.atan2(A.y - P.y, A.x - P.x) - Math.atan2(B.y - P.y, B.x - P.x);
+    }));
+  }
+  const signed = (f: Vec2[]) => {
+    let a = 0;
+    for (let i = 0, j = f.length - 1; i < f.length; j = i++)
+      a += f[j].x * f[i].y - f[i].x * f[j].y;
+    return a / 2;  // >0 CCW (y-up)
+  };
+  const visited = new Set<string>();
+  const out: Vec2[][] = [];
+  for (const [k, set] of adj) {
+    for (const v0 of set) {
+      if (visited.has(`${k}>${v0}`)) continue;
+      const face: string[] = [];
+      let u = k, cur = v0, guard = 0;
+      while (guard++ < 100000) {
+        visited.add(`${u}>${cur}`);
+        face.push(cur);
+        const arr = sortedAdj.get(cur)!;
+        const w = arr[(arr.indexOf(u) + 1) % arr.length];
+        u = cur; cur = w;
+        if (u === k && cur === v0) break;
       }
-      if (!found) break;
+      if (face.length < 3) continue;
+      const poly = face.map(kk => ({ x: pos(kk).x, y: pos(kk).y }));
+      // Keep interior (CW) faces above the noise threshold, oriented CCW.
+      if (signed(poly) < -5e5) out.push(poly.reverse());
     }
-    if (chain.length >= 4 && key(chain[0]) === key(chain[chain.length - 1])) loops.push(chain.slice(0, -1));
   }
-  return loops.filter(l => Math.abs(polygonArea(l)) > 5e5);
+  return out;
 }
 
 // ── Rooms ────────────────────────────────────────────────────────────────

@@ -7,7 +7,7 @@ import type { Planner, Tool } from '../planner.js';
 import { NEW_ROOM } from '../planner.js';
 import type {
   Sensor, Zone, ObjectHalo, BgImage, MotionSensor, EnvSensor, EnvKind, Light, SwitchFixture, LightIconKind,
-  Furniture, FurnitureKind, Door, Window as WindowType, Layers2D, Floor,
+  Furniture, FurnitureKind, Door, Window as WindowType, Layers2D, Floor, Room,
   ObjectRecipe, RecipePrimitive, RecipeShape, ActivityKind,
 } from '../types.js';
 import {
@@ -17,8 +17,9 @@ import {
   ENV_KINDS, ENV_DEFAULTS, ENV_SCALE_MIN, ENV_SCALE_MAX,
   envKindOf, envColor, envValueText, envHeight, envScale,
   furnitureCat, type FurnitureCat,
-  closedWallLoops, loopContaining,
+  closedWallLoops, loopContaining, resolveRoomForPoint,
 } from '../geometry.js';
+import type { Vec2 } from '../types.js';
 import { saveModel, deleteModel } from '../model-store.js';
 import { newId } from '../storage.js';
 
@@ -76,7 +77,63 @@ export class Sidebar extends LitElement {
   }
   private _tick = () => { this._++; };
 
+  // Room-grouping cache: loops + sorted rooms are resolved once per render pass
+  // (config-event driven, so cheap) and shared by every list section.
+  private _rgToken = 0;
+  private _rgCache: { token: number; loops: Vec2[][]; rooms: Room[] } | null = null;
+
+  private _roomGroupsCtx(): { loops: Vec2[][]; rooms: Room[] } {
+    if (this._rgCache && this._rgCache.token === this._rgToken) return this._rgCache;
+    const f = this.planner.floor();
+    const rooms = (f.rooms ?? []).slice().sort((a, b) => a.name.localeCompare(b.name));
+    const loops = rooms.length ? closedWallLoops(f.walls ?? []) : [];
+    this._rgCache = { token: this._rgToken, loops, rooms };
+    return this._rgCache;
+  }
+
+  // Bucket placeable items by the named room whose wall loop contains (x, y).
+  // Rooms come out in name order (see ctx); items in no room land in a trailing
+  // "— No room —" bucket. When the floor has no rooms, everything stays in one
+  // unlabelled bucket so sections render exactly as before.
+  private _groupByRoom<T extends { x: number; y: number }>(items: T[]): { label: string; items: T[] }[] {
+    const { loops, rooms } = this._roomGroupsCtx();
+    if (rooms.length === 0) return items.length ? [{ label: '', items }] : [];
+    const byId = new Map<string, T[]>();
+    const none: T[] = [];
+    for (const it of items) {
+      const rm = resolveRoomForPoint(rooms, loops, it.x, it.y);
+      if (rm) (byId.get(rm.id) ?? byId.set(rm.id, []).get(rm.id)!).push(it);
+      else none.push(it);
+    }
+    const out: { label: string; items: T[] }[] = [];
+    for (const rm of rooms) {                       // already name-sorted
+      const arr = byId.get(rm.id);
+      if (arr && arr.length) out.push({ label: rm.name, items: arr });
+    }
+    if (none.length) out.push({ label: '— No room —', items: none });
+    return out;
+  }
+
+  private _roomGroupHeader(label: string) {
+    return label
+      ? html`<div style="font-size:10px;color:var(--text-dim);text-transform:uppercase;
+                         letter-spacing:0.06em;padding:6px 0 2px;opacity:0.85">${label}</div>`
+      : nothing;
+  }
+
+  // Render a flat item list bucketed by room (shared by every list section).
+  private _groupedList<T extends { x: number; y: number }>(
+    items: T[], renderItem: (it: T) => unknown,
+  ) {
+    return this._groupByRoom(items).map(g => html`
+      ${this._roomGroupHeader(g.label)}
+      ${g.items.map(renderItem)}
+    `);
+  }
+
   override render() {
+    this._rgToken++;
+    this._rgCache = null;
     const p = this.planner;
     const f = p.floor();
     return html`
@@ -148,7 +205,7 @@ export class Sidebar extends LitElement {
             ? html`<div style="color:var(--text-dim);font-size:11px;padding:4px 0">
                 No mmWave sensors yet — pick the mmWave tool and click the floor.
               </div>`
-            : f.sensors.map(s => this._sensorListItem(s))}
+            : this._groupedList(f.sensors, s => this._sensorListItem(s))}
         </div>
 
         ${this._motionSensorsSection()}
@@ -312,7 +369,7 @@ export class Sidebar extends LitElement {
           ? html`<div style="color:var(--text-dim);font-size:11px;padding:4px 0">
               None yet — pick the Motion tool and click the floor.
             </div>`
-          : f.motionSensors.map(m => this._motionItem(m))}
+          : this._groupedList(f.motionSensors, m => this._motionItem(m))}
       </div>
     `;
   }
@@ -460,7 +517,7 @@ export class Sidebar extends LitElement {
               None yet — pick the Env tool and click the floor.
               Shows temperature, humidity, CO₂, CO, PM, … from any sensor entity.
             </div>`
-          : f.envSensors.map(en => this._envItem(en))}
+          : this._groupedList(f.envSensors, en => this._envItem(en))}
       </div>
     `;
   }
@@ -646,7 +703,7 @@ export class Sidebar extends LitElement {
     return html`
       <div class="section">
         <h3>Doors</h3>
-        ${f.doors.map((d, i) => this._doorItem(d, i))}
+        ${this._groupedList(f.doors, d => this._doorItem(d, f.doors.indexOf(d)))}
       </div>
     `;
   }
@@ -786,7 +843,7 @@ export class Sidebar extends LitElement {
     return html`
       <div class="section">
         <h3>Windows</h3>
-        ${f.windows.map((w, i) => this._windowItem(w, i))}
+        ${this._groupedList(f.windows, w => this._windowItem(w, f.windows.indexOf(w)))}
       </div>
     `;
   }
@@ -914,7 +971,7 @@ export class Sidebar extends LitElement {
     return html`
       <div class="section">
         <h3>Furniture</h3>
-        ${f.furniture.map((piece, i) => this._furnitureItem(piece, i))}
+        ${this._groupedList(f.furniture, piece => this._furnitureItem(piece, f.furniture.indexOf(piece)))}
       </div>
     `;
   }
@@ -1280,11 +1337,19 @@ export class Sidebar extends LitElement {
     const p = this.planner;
     const f = p.floor();
     if (f.lights.length === 0 && f.switches.length === 0) return nothing;
+    // Lights and switches share one room-grouped list; each wrapper keeps a
+    // back-pointer so the item renderer still gets the original array index.
+    type Fx = { x: number; y: number; k: 'light' | 'switch'; ref: Light | SwitchFixture };
+    const fixtures: Fx[] = [
+      ...f.lights.map(l => ({ x: l.x, y: l.y, k: 'light' as const, ref: l })),
+      ...f.switches.map(sw => ({ x: sw.x, y: sw.y, k: 'switch' as const, ref: sw })),
+    ];
     return html`
       <div class="section">
         <h3>Lights &amp; Switches</h3>
-        ${f.lights.map((l, i) => this._fixtureItem('light', l, i))}
-        ${f.switches.map((sw, i) => this._fixtureItem('switch', sw, i))}
+        ${this._groupedList(fixtures, w => this._fixtureItem(
+          w.k, w.ref,
+          w.k === 'light' ? f.lights.indexOf(w.ref as Light) : f.switches.indexOf(w.ref as SwitchFixture)))}
       </div>
     `;
   }
