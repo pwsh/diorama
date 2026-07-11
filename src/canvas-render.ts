@@ -153,6 +153,7 @@ export function drawAll(ctx: CanvasRenderingContext2D, p: Planner, view: View,
   }
   drawBgEditOverlay(ctx, p, view, bgImg);
   if (on(L.targets)) drawTargets(ctx, p, view);
+  if (on(L.targets)) drawBlePeople(ctx, p, view);
 }
 
 // Activity overlay for the "simple floorplan" style: soft glow pools where
@@ -1574,6 +1575,48 @@ function drawBgEditOverlay(ctx: CanvasRenderingContext2D, p: Planner, view: View
     ctx.fill(); ctx.stroke();
   }
   ctx.restore();
+}
+
+// BLE-trilaterated people: a person-colored dot + an initials chip + a faint
+// confidence circle (radius = the solve's uncertainty). Only people whose
+// winning floor is the active floor draw here; stale fixes dim. Gated by the
+// `targets` layer (same as radar dots).
+function drawBlePeople(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
+  const dpr = window.devicePixelRatio || 1;
+  const f = p.floor();
+  for (const bp of p.blePeople) {
+    if (bp.floorId !== f.id) continue;
+    const pt = mmToPx(view, bp.x, bp.y);
+    const alpha = bp.stale ? 0.4 : 1;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    // Confidence circle
+    if (bp.confidenceMm > 0) {
+      ctx.beginPath();
+      ctx.arc(pt.x, pt.y, bp.confidenceMm * view.scale, 0, 2 * Math.PI);
+      ctx.strokeStyle = hexToRgba(bp.color, 0.30); ctx.lineWidth = 1.5 * dpr;
+      ctx.setLineDash([4 * dpr, 4 * dpr]); ctx.stroke(); ctx.setLineDash([]);
+      ctx.fillStyle = hexToRgba(bp.color, 0.06); ctx.fill();
+    }
+    // Dot
+    ctx.beginPath(); ctx.arc(pt.x, pt.y, 6 * dpr, 0, 2 * Math.PI);
+    ctx.fillStyle = bp.color; ctx.fill();
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5 * dpr;
+    if (bp.stale) ctx.setLineDash([2 * dpr, 2 * dpr]);
+    ctx.stroke(); ctx.setLineDash([]);
+    // Initials chip (up to 2 letters from the name)
+    const initials = bp.name.trim().split(/\s+/).map(w => w[0] || '')
+      .join('').slice(0, 2).toUpperCase() || '?';
+    ctx.font = `bold ${10 * dpr}px sans-serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+    const cw = ctx.measureText(initials).width + 8 * dpr;
+    const cx = pt.x - cw / 2, cy = pt.y + 10 * dpr;
+    ctx.fillStyle = hexToRgba(bp.color, 0.85);
+    ctx.fillRect(cx, cy, cw, 14 * dpr);
+    ctx.fillStyle = '#fff';
+    ctx.fillText(initials, pt.x, cy + 2 * dpr);
+    ctx.restore();
+  }
 }
 
 function drawTargets(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {

@@ -1,0 +1,221 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>TRILAT …</title>
+  <style>
+    body { margin:0; background:#0d1116; color:#cfd8dc; font:13px/1.4 sans-serif; padding:14px; }
+    h1 { font-size:15px; margin:0 0 10px; }
+    .grid { display:flex; flex-wrap:wrap; gap:14px; }
+    .card { background:#141b22; border:1px solid #26323d; border-radius:6px; padding:10px; width:280px; }
+    .card h2 { font-size:12px; margin:0 0 6px; color:#90caf9; }
+    .row { display:flex; justify-content:space-between; font-size:11px; }
+    .pass { color:#69f0ae; } .fail { color:#ff5252; }
+    canvas { background:#0a0e13; border:1px solid #1e2831; border-radius:4px; display:block; margin-top:6px; }
+    #summary { font-size:14px; font-weight:bold; margin:10px 0; padding:8px 10px; border-radius:5px; }
+    .okbg { background:#12331f; color:#69f0ae; } .badbg { background:#3a1414; color:#ff8a80; }
+    code { color:#ffd54f; }
+  </style>
+</head>
+<body>
+  <h1>Trilateration solver — deterministic scenarios</h1>
+  <div id="summary">Running…</div>
+  <div class="grid" id="grid"></div>
+
+  <!-- The solver is a pure, dependency-free module (src/trilateration.ts). It is
+       NOT a code-split chunk, so unlike the renderer pages this one imports a
+       standalone transpile. Generate it into the harness dir before serving:
+         npx esbuild src/trilateration.ts --format=esm \
+           --outfile=<harness>/trilateration.solver.js
+       (matches the README build-then-copy flow; no live HA needed). -->
+  <script type="module">
+    import { solvePosition } from './trilateration.solver.js';
+
+    // ── deterministic gaussian noise (fixed seed) — solver stays pure; only the
+    // TEST synthesizes noise, and it does so reproducibly. ──────────────────
+    function mulberry32(a) {
+      return function () {
+        a |= 0; a = (a + 0x6D2B79F5) | 0;
+        let t = Math.imul(a ^ (a >>> 15), 1 | a);
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      };
+    }
+    function gauss(rng) {
+      let u = 0, v = 0;
+      while (u === 0) u = rng();
+      while (v === 0) v = rng();
+      return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+    }
+    const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+    const rings = (proxies, truth, w = 1) =>
+      proxies.map(p => ({ x: p.x, y: p.y, d: dist(p, truth), w }));
+    const err = (sol, truth) => Math.hypot(sol.x - truth.x, sol.y - truth.y);
+
+    const scenarios = [];
+    const add = (name, fn) => scenarios.push({ name, fn });
+
+    // 1 — 3 proxies, exact distances → near-perfect fix.
+    add('3 proxies · exact', () => {
+      const P = [{ x: 0, y: 0 }, { x: 6000, y: 0 }, { x: 3000, y: 5000 }];
+      const truth = { x: 3000, y: 2000 };
+      const sol = solvePosition(rings(P, truth));
+      const e = err(sol, truth);
+      return { P, truth, sol, ok: e < 1, detail: `err ${e.toFixed(2)} mm < 1` };
+    });
+
+    // 2 — 3 proxies + fixed-seed gaussian distance noise (σ = 200 mm).
+    add('3 proxies · noise σ200', () => {
+      const P = [{ x: 0, y: 0 }, { x: 6000, y: 0 }, { x: 3000, y: 5000 }];
+      const truth = { x: 2500, y: 1800 };
+      const rng = mulberry32(12345);
+      const obs = rings(P, truth).map(o => ({ ...o, d: Math.max(0, o.d + gauss(rng) * 200) }));
+      const sol = solvePosition(obs);
+      const e = err(sol, truth);
+      return { P, truth, sol, ok: e < 500, detail: `err ${e.toFixed(1)} mm < 500` };
+    });
+
+    // 3 — collinear proxies, truth ON the line → along-line solve is exact.
+    add('collinear · on-line', () => {
+      const P = [{ x: 0, y: 0 }, { x: 3000, y: 0 }, { x: 6000, y: 0 }];
+      const truth = { x: 4000, y: 0 };
+      const sol = solvePosition(rings(P, truth));
+      const e = err(sol, truth);
+      const finite = isFinite(sol.x) && isFinite(sol.y);
+      return { P, truth, sol, ok: e < 50 && finite, detail: `err ${e.toFixed(2)} mm < 50, finite` };
+    });
+
+    // 4 — collinear proxies, truth OFF the line: perpendicular is unobservable,
+    //     so we only require the along-line coordinate to be recovered and the
+    //     result to stay finite (graceful degradation, no NaN/blow-up).
+    add('collinear · off-line', () => {
+      const P = [{ x: 0, y: 0 }, { x: 3000, y: 0 }, { x: 6000, y: 0 }];
+      const truth = { x: 4000, y: 2000 };
+      const sol = solvePosition(rings(P, truth), { x: 3000, y: 0 });
+      const xe = Math.abs(sol.x - truth.x);
+      const finite = isFinite(sol.x) && isFinite(sol.y);
+      return { P, truth, sol, ok: xe < 600 && finite, detail: `x-err ${xe.toFixed(1)} mm < 600, finite` };
+    });
+
+    // 5 — two proxies, truth ON the segment → distance-ratio split is exact.
+    add('2 proxies · on-segment', () => {
+      const a = { x: 0, y: 0 }, b = { x: 6000, y: 0 };
+      const truth = { x: 2000, y: 0 };
+      const sol = solvePosition([{ ...a, d: dist(a, truth), w: 1 }, { ...b, d: dist(b, truth), w: 1 }]);
+      const e = err(sol, truth);
+      return { P: [a, b], truth, sol, ok: sol.kind === 'segment' && e < 50, detail: `${sol.kind} err ${e.toFixed(2)} mm < 50` };
+    });
+
+    // 6 — two proxies, truth OFF the segment: the estimate lands on the segment;
+    //     require the along-segment projection to be sane + finite.
+    add('2 proxies · off-segment', () => {
+      const a = { x: 0, y: 0 }, b = { x: 6000, y: 0 };
+      const truth = { x: 2000, y: 1500 };
+      const sol = solvePosition([{ ...a, d: dist(a, truth), w: 1 }, { ...b, d: dist(b, truth), w: 1 }]);
+      const xe = Math.abs(sol.x - truth.x);
+      const finite = isFinite(sol.x) && isFinite(sol.y);
+      return { P: [a, b], truth, sol, ok: sol.kind === 'segment' && xe < 400 && finite, detail: `${sol.kind} x-err ${xe.toFixed(1)} mm < 400` };
+    });
+
+    // 7 — uniform distance overestimate (+15% multipath bias), 4 proxies.
+    add('4 proxies · overest +15%', () => {
+      const P = [{ x: 0, y: 0 }, { x: 6000, y: 0 }, { x: 3000, y: 5000 }, { x: 1000, y: 4000 }];
+      const truth = { x: 3000, y: 2000 };
+      const obs = rings(P, truth).map(o => ({ ...o, d: o.d * 1.15 }));
+      const sol = solvePosition(obs);
+      const e = err(sol, truth);
+      return { P, truth, sol, ok: e < 600, detail: `err ${e.toFixed(1)} mm < 600` };
+    });
+
+    // 8 — single proxy → constraint-only (null position, hold-last hint).
+    add('1 proxy · constraint', () => {
+      const sol = solvePosition([{ x: 1000, y: 2000, d: 3500, w: 1 }]);
+      const ok = sol && sol.kind === 'single' && sol.x === null && sol.y === null &&
+                 sol.constraint && sol.constraint.d === 3500 &&
+                 sol.constraint.x === 1000 && sol.constraint.y === 2000;
+      return { P: [{ x: 1000, y: 2000 }], truth: null, sol, ok,
+               detail: `kind=single, pos=null, constraint d=${sol?.constraint?.d}` };
+    });
+
+    // 9 — no proxies → null.
+    add('0 proxies · null', () => {
+      const sol = solvePosition([]);
+      return { P: [], truth: null, sol, ok: sol === null, detail: `returns ${sol}` };
+    });
+
+    // 10 — warm-started sequence (a moving device) converges each step.
+    add('warm-start · moving', () => {
+      const P = [{ x: 0, y: 0 }, { x: 6000, y: 0 }, { x: 3000, y: 5000 }];
+      let ws, worst = 0, last;
+      for (const truth of [{ x: 1000, y: 1000 }, { x: 1500, y: 1200 }, { x: 2000, y: 1500 }]) {
+        const sol = solvePosition(rings(P, truth), ws);
+        ws = { x: sol.x, y: sol.y }; last = { sol, truth };
+        worst = Math.max(worst, err(sol, truth));
+      }
+      return { P, truth: last.truth, sol: last.sol, ok: worst < 5, detail: `worst err ${worst.toFixed(3)} mm < 5` };
+    });
+
+    // ── run + render ────────────────────────────────────────────────────────
+    const grid = document.getElementById('grid');
+    let pass = 0;
+    const fails = [];
+
+    function drawScene(canvas, P, truth, sol) {
+      const ctx = canvas.getContext('2d');
+      const W = canvas.width, H = canvas.height, pad = 18;
+      // world extents
+      const xs = P.map(p => p.x), ys = P.map(p => p.y);
+      if (truth) { xs.push(truth.x); ys.push(truth.y); }
+      if (sol && sol.x != null) { xs.push(sol.x); ys.push(sol.y); }
+      const minx = Math.min(...xs) - 1000, maxx = Math.max(...xs) + 1000;
+      const miny = Math.min(...ys) - 1000, maxy = Math.max(...ys) + 1000;
+      const sc = Math.min((W - 2 * pad) / (maxx - minx || 1), (H - 2 * pad) / (maxy - miny || 1));
+      const tx = wx => pad + (wx - minx) * sc;
+      const ty = wy => H - (pad + (wy - miny) * sc);
+      ctx.clearRect(0, 0, W, H);
+      // proxies + rings
+      for (const p of P) {
+        ctx.strokeStyle = '#37474f'; ctx.beginPath();
+        if (p.d != null) { ctx.arc(tx(p.x), ty(p.y), p.d * sc, 0, 7); ctx.stroke(); }
+        ctx.fillStyle = '#26c6da'; ctx.beginPath(); ctx.arc(tx(p.x), ty(p.y), 4, 0, 7); ctx.fill();
+      }
+      // truth
+      if (truth) {
+        ctx.strokeStyle = '#69f0ae'; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(tx(truth.x) - 6, ty(truth.y)); ctx.lineTo(tx(truth.x) + 6, ty(truth.y));
+        ctx.moveTo(tx(truth.x), ty(truth.y) - 6); ctx.lineTo(tx(truth.x), ty(truth.y) + 6); ctx.stroke();
+        ctx.lineWidth = 1;
+      }
+      // solved
+      if (sol && sol.x != null) {
+        ctx.fillStyle = '#ffca28'; ctx.beginPath(); ctx.arc(tx(sol.x), ty(sol.y), 5, 0, 7); ctx.fill();
+      }
+    }
+
+    for (const s of scenarios) {
+      let r;
+      try { r = s.fn(); } catch (e) { r = { ok: false, detail: 'threw: ' + e.message, P: [], truth: null, sol: null }; }
+      if (r.ok) pass++; else fails.push(s.name);
+      // add ring distances for drawing
+      if (r.P && r.truth) r.P = r.P.map(p => ({ ...p, d: dist(p, r.truth) }));
+      const card = document.createElement('div');
+      card.className = 'card';
+      card.innerHTML = `<h2>${s.name}</h2>
+        <div class="row"><span>${r.ok ? '<span class=pass>PASS</span>' : '<span class=fail>FAIL</span>'}</span>
+        <span>${r.detail}</span></div>`;
+      const cv = document.createElement('canvas'); cv.width = 258; cv.height = 150;
+      card.appendChild(cv);
+      drawScene(cv, r.P || [], r.truth, r.sol);
+      grid.appendChild(card);
+    }
+
+    const total = scenarios.length;
+    const allPass = pass === total;
+    const title = allPass ? `TRILAT PASS ${pass}/${total}` : `TRILAT FAIL ${pass}/${total} [${fails.join(',')}]`;
+    document.title = title;
+    const sum = document.getElementById('summary');
+    sum.textContent = title;
+    sum.className = allPass ? 'okbg' : 'badbg';
+  </script>
+</body>
+</html>

@@ -557,6 +557,18 @@ export class ThreeView extends LitElement {
         targets.push({ key: 'ai_' + m.id, x: m.x, y: m.y, color: hexToInt(motionColor(m)), ai: true,
                        avatar: m.avatarKind, avatars: m.avatarKinds });
       }
+      // BLE people on the CURRENT floor: synthetic goal-walk targets. x/y is the
+      // (lerped) solved position — the renderer's goal controller walks the rig
+      // there at human speed (see _advanceAi goal mode). Identified people carry
+      // their avatar; unknown devices fall through to a stable per-key pool pick
+      // ('random'). Full rigs — no ghost style (user decision B, #2).
+      for (const bp of p.blePeople) {
+        if (bp.floorId !== f.id) continue;
+        targets.push({
+          key: bp.key, x: bp.x, y: bp.y, color: hexToInt(bp.color),
+          ble: true, avatar: bp.avatarKind ?? 'random',
+        });
+      }
       // Zones / halos rebuild only when shape or occupancy changes — not on
       // every target movement frame.
       const keyZones = zones.map(z =>

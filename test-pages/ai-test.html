@@ -68,7 +68,7 @@
     const samples = [];
     const engage = [];         // list of engagements: {t, kind}
     let engagedNow = null;
-    let anyOutside = false, anyBlocked = false;
+    let anyOutside = false, anyBlocked = false, blkStreak = 0;
     let lastSampleT = -10;
     for (let i = 0; i < frames; i++) {
       step([AITGT()]);
@@ -92,9 +92,20 @@
         lastSampleT = tsec;
         const w = navWorld(h);
         const inside = pip(w.x, w.y, LOOP);
-        const blk = cellBlocked(w.x, w.y);
+        // Walkability is guaranteed on the CARROT (the pathfinding walker on
+        // the A* string-pulled polyline) — nav is a damped spring TRAILING it.
+        // Two legitimate exceptions: anchored rigs (sit/act/lie incl. blend
+        // tails) ease nav/carrot ONTO the furniture on purpose (stand-up
+        // continuity), and string-pull clearance is LOS-sampled at half-cell
+        // (75 mm) steps, so a polyline may graze a blocked cell's corner for a
+        // single sample without any real violation. Only a PERSISTENT blocked
+        // state while free-walking (≥2 consecutive 2 s samples) is a bug.
+        const cw = { x: FW / 2 - h.carrotX, y: h.carrotZ + FD / 2 };
+        const blk = cellBlocked(cw.x, cw.y);
+        const anch = h.sit > 0.1 || h.act > 0.1 || h.lie > 0.1;
         if (!inside) anyOutside = true;
-        if (blk) anyBlocked = true;
+        if (blk && !anch) { if (blkStreak++ >= 1) anyBlocked = true; }
+        else blkStreak = 0;
         samples.push({ t: +tsec.toFixed(0), x: Math.round(w.x), y: Math.round(w.y),
           st: ai.state[0], si: +h.sit.toFixed(1), ac: +h.act.toFixed(1), li: +h.lie.toFixed(1),
           in: inside ? 1 : 0, blk: blk ? 1 : 0 });

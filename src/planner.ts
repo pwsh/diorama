@@ -30,8 +30,31 @@ export interface BermudaDiscovery {
 }
 import type {
   Store, Floor, Sensor, ZonesLive, ObjectHalo, LerpSlot,
-  HassState, ConnStatus, DiscoveredDevice, Vec2,
+  HassState, ConnStatus, DiscoveredDevice, Vec2, AvatarKind,
 } from './types.js';
+import { solvePosition, type ProxyObs } from './trilateration.js';
+
+// ── BLE trilateration output (runtime-only) ───────────────────────────────
+// One resolved BLE person/pet position for rendering. Not persisted — recomputed
+// from Bermuda samples + placed proxies on every solve. See Planner.blePeople.
+export interface BlePerson {
+  key: string;                 // synthetic target key: `ble_<deviceKey>`
+  personId?: string;           // matched Store.people id, else undefined (unknown device)
+  name: string;
+  color: string;               // hex tint
+  avatarKind?: AvatarKind;     // person's chosen rig (undefined → fallback pool)
+  isPet?: boolean;
+  x: number; y: number;        // smoothed (lerped) solve position, world mm
+  floorId: string;             // floor whose proxies won the solve
+  confidenceMm: number;        // uncertainty radius (2D confidence circle)
+  updatedAt: number;           // ms epoch of the last successful solve
+  stale: boolean;              // no fresh samples within the staleness window
+}
+
+// A stored per-device solve result (world mm) before lerp smoothing.
+interface BleSolve {
+  x: number; y: number; floorId: string; confidenceMm: number; updatedAt: number;
+}
 
 // Drag state covers every interaction kind. Only active during a mousedown→up.
 export type Drag =
@@ -126,6 +149,22 @@ export class Planner extends EventTarget {
 
   // Bermuda discovery result (runtime-only; scanned on demand via scanBermuda).
   bermuda: BermudaDiscovery | null = null;
+
+  // ── BLE trilateration (runtime-only) ──────────────────────────────────
+  // Latest distance sample per (deviceKey × scannerMac): mm + arrival time.
+  // Populated on the LIVE path from state_changed (never slow/config).
+  private bleSamples: Record<string, Record<string, { mm: number; at: number }>> = {};
+  // Reverse map entityId → {deviceKey, scannerMac}, rebuilt from `bermuda`.
+  private bleEntityMap: Record<string, { deviceKey: string; scannerMac: string }> = {};
+  // Latest solved position per deviceKey (pre-lerp), keyed for hold/staleness.
+  private bleSolves: Record<string, BleSolve> = {};
+  // Best-effort deviceKey → friendly name / HA device id, from the last scan.
+  private bleDeviceInfo: Record<string, { name: string; deviceId: string | null }> = {};
+  private _bleAutoScanned = false;
+  // Staleness / retirement windows (ms). A sample older than STALE is dropped
+  // from the solve; a device unheard-from for RETIRE stops rendering entirely.
+  private static readonly BLE_STALE_MS = 30_000;
+  private static readonly BLE_RETIRE_MS = 120_000;
 
   // Active furniture piece (last grabbed/dropped) — drives the 2D front-arrow
   // chevron. Runtime only.
@@ -310,6 +349,22 @@ export class Planner extends EventTarget {
       this.ensureLiveState(s.id);
     }
     this._syncOccupancy(states);
+
+    // BLE trilateration (live path only): record fresh per-scanner distances and
+    // re-solve on new samples. A full refresh (changedId undefined) re-reads
+    // every mapped entity; a single change records just that one. Solve cadence
+    // follows Bermuda's ~0.1 Hz push rate — never per frame.
+    if (Object.keys(this.bleEntityMap).length) {
+      if (changedId === undefined) {
+        for (const eid of Object.keys(this.bleEntityMap))
+          if (states[eid]) this._recordBleSample(eid);
+        this._solveBle();
+      } else if (this.bleEntityMap[changedId]) {
+        this._recordBleSample(changedId);
+        this._solveBle();
+      }
+    }
+
     this.emitLive();
 
     const slow = changedId === undefined || this._isSlowEntity(changedId);
@@ -333,6 +388,17 @@ export class Planner extends EventTarget {
       }
       // Load diorama from HA (source of truth). Localstorage is a cache.
       void this._loadFromHa();
+    }
+
+    // One-time Bermuda auto-scan so BLE trilateration works without a manual
+    // sidebar click when the house is already set up (people bound / proxies
+    // placed). scanBermuda rebuilds bleEntityMap; the next state event onward
+    // records samples + solves. Cheap, guarded to run once.
+    if (!this._bleAutoScanned && changedId === undefined) {
+      this._bleAutoScanned = true;
+      const wantsBle = (this.store.people ?? []).some(p => p.bermudaDeviceId)
+        || this.store.floors.some(fl => (fl.bleProxies ?? []).length > 0);
+      if (wantsBle) void this.scanBermuda();
     }
   }
 
@@ -889,7 +955,165 @@ export class Planner extends EventTarget {
     }
     devicesOut.sort((a, b) => a.name.localeCompare(b.name));
     this.bermuda = { devices: devicesOut, scannedAt: Date.now() };
+    this._rebuildBleEntityMap();
     this.emitConfig();
+  }
+
+  // A stable per-device key for the trilateration pipeline (sample buckets,
+  // solve results, lerp slots). The HA device id when present (survives MAC
+  // rotation for iPhone/Private-BLE metadevices), else the MAC.
+  private bleDeviceKey(dev: BermudaDevice): string {
+    return dev.deviceId ?? `mac:${dev.mac}`;
+  }
+
+  // Rebuild the entityId → {deviceKey, scannerMac} reverse map from the current
+  // Bermuda discovery so the live state_changed path can attribute each range
+  // sample to a (device × scanner) bucket. Uses the SMOOTHED range entity only
+  // (the raw/unfiltered sensor is noisier and both would double-count).
+  private _rebuildBleEntityMap(): void {
+    const map: Record<string, { deviceKey: string; scannerMac: string }> = {};
+    const info: Record<string, { name: string; deviceId: string | null }> = {};
+    for (const dev of this.bermuda?.devices ?? []) {
+      const deviceKey = this.bleDeviceKey(dev);
+      info[deviceKey] = { name: dev.name, deviceId: dev.deviceId };
+      for (const s of dev.scanners) {
+        if (s.rangeEntityId) map[s.rangeEntityId] = { deviceKey, scannerMac: s.scannerMac };
+      }
+    }
+    this.bleEntityMap = map;
+    this.bleDeviceInfo = info;
+  }
+
+  // Record a live BLE range sample (called from _onStates for mapped entities).
+  // Bermuda reports meters (with unit attrs) → mm via stateMm. Live-path only —
+  // never routed through the config channel (would churn the sidebar).
+  private _recordBleSample(entityId: string): void {
+    const link = this.bleEntityMap[entityId];
+    if (!link) return;
+    const mm = this.stateMm(entityId, 1000);   // default native→mm = meters
+    if (!isFinite(mm) || mm < 0) return;
+    let bucket = this.bleSamples[link.deviceKey];
+    if (!bucket) bucket = this.bleSamples[link.deviceKey] = {};
+    bucket[link.scannerMac] = { mm, at: Date.now() };
+  }
+
+  // Solve every tracked device's position from its fresh per-scanner distances.
+  // Per device: on EACH floor, gather the proxies with a fresh distance (scanner
+  // link proxyId → placed BleProxy fixture position), solve, and keep the floor
+  // with the best (lowest weighted RMS) fix. Event-driven (~0.1 Hz, on new
+  // samples), never per frame. Feeds a per-device lerp slot so the 2D dot and
+  // 3D rig read one smoothed source.
+  private _solveBle(): void {
+    if (!this.bermuda) return;
+    const now = Date.now();
+    const STALE = Planner.BLE_STALE_MS;
+    // scannerMac → proxy fixture {x,y} per floor, so a device's scanner samples
+    // map to plan positions. Built once per solve (cheap: few proxies).
+    for (const dev of this.bermuda.devices) {
+      const deviceKey = this.bleDeviceKey(dev);
+      const samples = this.bleSamples[deviceKey];
+      if (!samples) continue;
+      // scannerMac → proxyId from this device's links.
+      const proxyIdOf: Record<string, string> = {};
+      for (const s of dev.scanners) if (s.proxyId) proxyIdOf[s.scannerMac] = s.proxyId;
+
+      let best: { x: number | null; y: number; floorId: string; conf: number; rms: number; multi: boolean } | null = null;
+      const warm = this.bleSolves[deviceKey];
+      for (const fl of this.store.floors) {
+        const byId: Record<string, { x: number; y: number }> = {};
+        for (const bp of fl.bleProxies ?? []) byId[bp.id] = { x: bp.x, y: bp.y };
+        const obs: ProxyObs[] = [];
+        for (const mac of Object.keys(samples)) {
+          const smp = samples[mac];
+          const age = now - smp.at;
+          if (age > STALE) continue;
+          const pid = proxyIdOf[mac];
+          if (!pid) continue;
+          const pos = byId[pid];
+          if (!pos) continue;   // proxy lives on a different floor
+          const w = Math.max(0.02, 1 - age / STALE);   // linear staleness decay
+          obs.push({ x: pos.x, y: pos.y, d: smp.mm, w });
+        }
+        if (obs.length === 0) continue;
+        const warmSame = warm && warm.floorId === fl.id ? { x: warm.x, y: warm.y } : undefined;
+        const sol = solvePosition(obs, warmSame);
+        if (!sol) continue;
+        let x: number | null, y = 0, conf: number, rms: number, multi = false;
+        if (sol.kind === 'single') {
+          // Hold last position on THIS floor if we had one; confidence = ring.
+          if (!warm || warm.floorId !== fl.id) continue;   // nothing to hold
+          x = warm.x; y = warm.y; conf = sol.constraint!.d; rms = sol.constraint!.d;
+        } else {
+          x = sol.x!; y = sol.y!; multi = sol.kind === 'gn';
+          rms = sol.rms;
+          conf = sol.kind === 'gn'
+            ? Math.min(8000, Math.max(400, rms * 1.5))
+            : Math.min(8000, Math.max(800, obs.reduce((m, o) => Math.min(m, o.d), Infinity)));
+        }
+        // Rank: multi-proxy (gn) beats segment beats single; tie-break by rms.
+        const better = !best
+          || (multi && !best.multi)
+          || (multi === best.multi && rms < best.rms);
+        if (better && x !== null) best = { x, y, floorId: fl.id, conf, rms, multi };
+      }
+      if (best && best.x !== null) {
+        this.bleSolves[deviceKey] = {
+          x: best.x, y: best.y, floorId: best.floorId, confidenceMm: best.conf, updatedAt: now,
+        };
+        // Feed the per-device lerp slot (snap on first activation).
+        const lk = `ble_${deviceKey}`;
+        let slot = this.lerpBy[lk]?.[0];
+        if (!slot) {
+          slot = { cx: best.x, cy: best.y, tx: best.x, ty: best.y, vx: 0, vy: 0, active: true };
+          this.lerpBy[lk] = [slot];
+        } else if (!slot.active) {
+          slot.cx = best.x; slot.cy = best.y; slot.vx = 0; slot.vy = 0; slot.active = true;
+        }
+        slot.tx = best.x; slot.ty = best.y; slot.active = true;
+      }
+    }
+  }
+
+  // Resolve the runtime BLE people list for rendering. Reads the latest solves,
+  // maps each to a Store.people identity (else "unknown", gated by
+  // bleShowUnknown), and returns the LERPED position so 2D and 3D agree. Retires
+  // devices unheard-from past BLE_RETIRE_MS (drops their lerp slot too). Cheap
+  // (a handful of devices) — safe to call each frame.
+  get blePeople(): BlePerson[] {
+    const now = Date.now();
+    const showUnknown = this.store.bleShowUnknown !== false;
+    const out: BlePerson[] = [];
+    for (const deviceKey of Object.keys(this.bleSolves)) {
+      const sol = this.bleSolves[deviceKey];
+      const age = now - sol.updatedAt;
+      if (age > Planner.BLE_RETIRE_MS) {
+        delete this.bleSolves[deviceKey];
+        delete this.bleSamples[deviceKey];
+        delete this.lerpBy[`ble_${deviceKey}`];
+        continue;
+      }
+      const info = this.bleDeviceInfo[deviceKey];
+      const devId = info?.deviceId ?? null;
+      const person = devId ? this.store.people?.find(p => p.bermudaDeviceId === devId) : undefined;
+      if (!person && !showUnknown) continue;
+      const slot = this.lerpBy[`ble_${deviceKey}`]?.[0];
+      const x = slot ? slot.cx : sol.x;
+      const y = slot ? slot.cy : sol.y;
+      out.push({
+        key: `ble_${deviceKey}`,
+        personId: person?.id,
+        name: person?.name ?? info?.name ?? 'Unknown',
+        color: person?.color ?? '#9e9e9e',
+        avatarKind: person?.avatarKind,
+        isPet: person?.isPet,
+        x, y,
+        floorId: sol.floorId,
+        confidenceMm: sol.confidenceMm,
+        updatedAt: sol.updatedAt,
+        stale: age > Planner.BLE_STALE_MS,
+      });
+    }
+    return out;
   }
 
   // Consent-gated enable: flip disabled_by to null on every disabled per-scanner

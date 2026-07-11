@@ -41,6 +41,11 @@ export interface TargetWorld {
   // hash-picks one via djb2(key) mod pool length. Takes precedence over the
   // legacy `avatar` when non-empty.
   avatars?: AvatarKind[];
+  // Optional (additive): this is a BLE-trilaterated person (real device, not a
+  // radar target). Driven by the AI controller in GOAL mode: x/y is the latest
+  // solve; the controller A*-walks the rig there at human speed and idles when
+  // close. No random wander, no room confinement (real movement). See _advanceAi.
+  ble?: boolean;
 }
 
 // Per-frame context for the Sims-style activity system. Built cheaply every
@@ -103,6 +108,10 @@ interface AiState {
   path: { x: number; y: number }[] | null;  // world-mm waypoints toward the goal
   speed: number;                      // m/s for the current leg (0.55..1.0)
   anchorX: number; anchorY: number;   // sensor position (goal search center)
+  // Controller mode. 'wander' = presence-sensor AI avatar (random in-region/room
+  // goals). 'goal' = BLE-trilaterated person: the ONLY goal source is the latest
+  // solve passed in each frame; no random wander, no room confinement.
+  mode: 'wander' | 'goal';
 }
 
 interface Humanoid {
@@ -3942,18 +3951,19 @@ export class ThreeDRenderer {
   // synthetic target's x/y in place. Everything downstream then treats it as a
   // radar target. See AiState. `dt` is the shared frame dt.
   private _advanceAi(t: TargetWorld, dt: number): void {
+    const goalMode = !!t.ble;
     let ai = this._aiState[t.key];
     if (!ai) {
-      // First sighting: seed the virtual raw at the anchor, snapped to a free
-      // cell in the anchor's own region AND home room so it never spawns inside
-      // a footprint / across a wall (a wall-mounted sensor's nearest free cell
-      // can be on the far side of the wall — the loop check keeps the spawn in
-      // the sensor's room). Start IDLE so it settles a beat before wandering.
+      // First sighting: seed the virtual raw at the anchor / solve, snapped to a
+      // free cell so it never spawns inside a footprint / across a wall. Wander
+      // avatars additionally snap into their sensor's home room (loop); BLE
+      // people are real devices, so no room confinement (loop = null). Start
+      // IDLE so it settles a beat before moving.
       let x = t.x, y = t.y;
       if (this._nav && this._nav.blockedCount > 0) {
         const gi = this._cellIdxOf(t.x, t.y);
         if (this._nav.blocked[gi] || this._nav.region[gi] < 0) {
-          const loop = this._aiHomeLoop(t.x, t.y);
+          const loop = goalMode ? null : this._aiHomeLoop(t.x, t.y);
           const gr = this._regionOfWorld(t.x, t.y);
           const sc = this._cellToScene(this._nearestFreeCellInLoop(gi, gr, loop));
           const w = this._sceneToWorld(sc.x, sc.z);
@@ -3963,24 +3973,28 @@ export class ThreeDRenderer {
       ai = {
         x, y, goalX: x, goalY: y, state: 'idle', timer: 1 + Math.random() * 2,
         path: null, speed: 0.7, anchorX: t.x, anchorY: t.y,
+        mode: goalMode ? 'goal' : 'wander',
       };
       this._aiState[t.key] = ai;
       t.x = x; t.y = y;
       return;
     }
+
+    // BLE goal mode: the only goal source is the latest solve (t.x/t.y). Replan
+    // an A* path when the solve jumps >400 mm from the last planned goal; walk
+    // the path at human speed; idle when arrived so the dwell systems (sit on a
+    // nearby couch, etc.) can capture the rig.
+    if (ai.mode === 'goal') {
+      this._advanceBleGoal(ai, t, dt);
+      t.x = ai.x; t.y = ai.y;
+      return;
+    }
+
     ai.anchorX = t.x; ai.anchorY = t.y;   // sensor may have been moved / re-placed
 
     if (ai.state === 'wander') {
       // Walk the virtual raw along the planned waypoint chain at leg speed.
-      let travel = ai.speed * 1000 * dt;
-      for (let guard = 0; guard < 32 && ai.path && ai.path.length && travel > 1e-3; guard++) {
-        const wp = ai.path[0];
-        const dx = wp.x - ai.x, dy = wp.y - ai.y;
-        const d = Math.hypot(dx, dy);
-        if (d <= 150) { ai.path.shift(); continue; }
-        if (d <= travel) { ai.x = wp.x; ai.y = wp.y; travel -= d; ai.path.shift(); }
-        else { ai.x += (dx / d) * travel; ai.y += (dy / d) * travel; travel = 0; }
-      }
+      this._walkAlongPath(ai, dt);
       if (!ai.path || !ai.path.length) {
         ai.state = 'idle'; ai.timer = 4 + Math.random() * 11;   // dwell 4..15 s
       }
@@ -4002,6 +4016,57 @@ export class ThreeDRenderer {
       }
     }
     t.x = ai.x; t.y = ai.y;
+  }
+
+  // Walk a virtual raw position along its planned waypoint chain by arc-length
+  // for this frame (leg speed × dt). Shared by wander + BLE-goal controllers.
+  // Mutates ai.x/ai.y and consumes ai.path in place.
+  private _walkAlongPath(ai: AiState, dt: number): void {
+    let travel = ai.speed * 1000 * dt;
+    for (let guard = 0; guard < 32 && ai.path && ai.path.length && travel > 1e-3; guard++) {
+      const wp = ai.path[0];
+      const dx = wp.x - ai.x, dy = wp.y - ai.y;
+      const d = Math.hypot(dx, dy);
+      if (d <= 150) { ai.path.shift(); continue; }
+      if (d <= travel) { ai.x = wp.x; ai.y = wp.y; travel -= d; ai.path.shift(); }
+      else { ai.x += (dx / d) * travel; ai.y += (dy / d) * travel; travel = 0; }
+    }
+  }
+
+  // BLE goal-mode step: the incoming solve (t.x/t.y) is the sole goal. Replan an
+  // A*-verified path when the solve moves >400 mm from the last planned goal (or
+  // we have none and are far from it); otherwise keep walking the current path.
+  // When close / arrived, hold still so the dwell systems can capture the rig
+  // (sitting on a couch near the fix is the desired outcome). No wander, no room
+  // confinement — a real device really is where the radios say it is.
+  private _advanceBleGoal(ai: AiState, t: TargetWorld, dt: number): void {
+    const gx = t.x, gy = t.y;
+    const moved = Math.hypot(gx - ai.goalX, gy - ai.goalY);
+    const far = Math.hypot(gx - ai.x, gy - ai.y);
+    if (moved > 400 || (!ai.path && far > 400)) {
+      ai.speed = 0.7 + Math.random() * 0.35;   // m/s — human walk pace
+      this._bleReplan(ai, gx, gy);
+    }
+    if (ai.path && ai.path.length) this._walkAlongPath(ai, dt);
+    if (!ai.path || !ai.path.length) ai.state = 'idle';
+    else ai.state = 'wander';
+  }
+
+  // Plan a walkable path from the BLE rig's virtual raw to the goal (solve). Nav
+  // is region-aware (snap goal to a reachable free cell) but NOT loop-confined.
+  private _bleReplan(ai: AiState, gx: number, gy: number): void {
+    ai.goalX = gx; ai.goalY = gy;
+    const n = this._nav;
+    if (!n || n.blockedCount === 0) { ai.path = [{ x: gx, y: gy }]; return; }
+    const region = this._regionOfWorld(ai.x, ai.y);
+    const goalCell = this._nearestFreeCellInRegion(this._cellIdxOf(gx, gy), region);
+    const gs = this._cellToScene(goalCell);
+    const gw = this._sceneToWorld(gs.x, gs.z);
+    const start = this._nearestFreeCell(this._cellIdxOf(ai.x, ai.y));
+    const cells = (start === goalCell) ? [goalCell] : this._aStar(start, goalCell);
+    if (!cells) { ai.path = [{ x: gw.x, y: gw.y }]; return; }
+    const wp = this._stringPull(cells, gs).map(s => this._sceneToWorld(s.x, s.z));
+    ai.path = wp.length ? wp : [{ x: gw.x, y: gw.y }];
   }
 
   // Choose the AI's next wander goal and plan a walkable path to it. 25% of the
@@ -4108,7 +4173,7 @@ export class ThreeDRenderer {
     // and rewrite its x/y IN PLACE (the targets array is rebuilt each frame in
     // three-view, so mutating is safe). Must run before the bed pre-pass and the
     // main loop so both see the avatar's real position.
-    for (const t of targets) if (t.ai) this._advanceAi(t, frameDt);
+    for (const t of targets) if (t.ai || t.ble) this._advanceAi(t, frameDt);
 
     // Pre-pass: per-bed occupancy from RAW footprint containment, for the
     // lay-in-bed gate. A bed with shared covers ON + ≥2 occupants runs the

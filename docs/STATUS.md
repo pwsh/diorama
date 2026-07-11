@@ -34,6 +34,20 @@ deployed to the live HA instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **World Outside — B2 (BLE trilateration)**: panel-side solver
+  `src/trilateration.ts` (pure weighted Gauss-Newton, warm-started, step-clamped,
+  Levenberg-damped; 2-proxy segment + 1-proxy constraint degenerate cases;
+  deterministic test page `test-pages/trilateration.html`, 10/10). `Planner`
+  tracks live per-scanner Bermuda distances (`stateMm`, >30 s drop), re-solves
+  per floor on new samples (~0.1 Hz), picks the best-RMS floor, resolves identity
+  via `Store.people.bermudaDeviceId` (unknown gated by `bleShowUnknown`), and
+  exposes `Planner.blePeople` through per-device lerp slots. BLE people render as
+  full goal-walk rigs (`TargetWorld.ble`, AI-controller GOAL mode — A* to the
+  solve at human speed, no wander/room-confinement; smoke test
+  `ble-walk-test.html`) plus 2D dot + initials chip + confidence circle.
+- **World Outside — B1**: `Store.people` registry + sidebar CRUD, `Floor.bleProxies`
+  fixtures, Bermuda discovery + consent-gated entity enable, `HaApi` registry
+  additions.
 - **Avatar system**: 22 selectable models (multi-select checkbox grid per
   mmWave/motion sensor; stable djb2-per-target resolution; legacy
   single/'random' fields still read). Per-kind walk personalities

@@ -1,0 +1,90 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>ble walk test</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<script type="module">
+  // BLE goal-walk controller regression. A `ble: true` target is driven through
+  // updateTargets exactly as three-view would build it: x/y is the latest solve.
+  // The renderer's AI controller (GOAL mode) must A*-walk the rig to the solve
+  // at human speed — NOT teleport — detour around furniture, arrive, then hold
+  // still (no random wander). Same door+sofa nav layout as pathfind-test.
+  const mod = await import('./assets/three-renderer.js');
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+
+  const fu = (kind, x, y, w, h, rot = 0, extra = {}) =>
+    ({ id: kind + '_' + x + '_' + y, x, y, w, h, kind, rotation: rot, ...extra });
+
+  const FW = 10000, FD = 8000, WALL_Y = 4000;
+  const door = { id: 'd1', x: 2000, y: WALL_Y, w: 1000, rotation: 0, hinge: 'left' };
+  const sofa = fu('sofa', 2500, 5200, 2400, 1000);   // x[1300,3700] y[4700,5700]
+  const floor = {
+    id: 'f1', name: 'Nav', w: FW, d: FD,
+    walls: [{ id: 'w1', points: [{ x: 0, y: WALL_Y }, { x: FW, y: WALL_Y }] }],
+    furniture: [sofa],
+    lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [door], windows: [], bg: null, model3d: null, look3d: null, rooms: [],
+  };
+  r.updateFloor(floor, { preset: 'day', floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6' });
+  r.applyViewPreset('top');
+
+  const realNow = performance.now.bind(performance);
+  let fakeNow = realNow();
+  performance.now = () => fakeNow;
+  const DT = 16.7;
+  const step = (targets) => { fakeNow += DT; r.updateTargets(targets); };
+  const navWorld = (h) => ({ x: FW / 2 - h.navX, y: h.navZ + FD / 2 });
+  const insideSofa = (wx, wy) =>
+    wx >= sofa.x - sofa.w / 2 && wx <= sofa.x + sofa.w / 2 &&
+    wy >= sofa.y - sofa.h / 2 && wy <= sofa.y + sofa.h / 2;
+
+  const KEY = 'ble_dev1';
+  // Seed below the wall; solve is momentarily static here.
+  const seed = { key: KEY, x: 2500, y: 1500, color: 0x26c6da, ble: true, avatar: 'random' };
+  for (let i = 0; i < 6; i++) step([seed]);
+  const spawn = navWorld(r._humanoids[KEY]);
+
+  // Solve JUMPS across the wall (a new fix 10 s later). The rig must walk there.
+  // three-view rebuilds the targets array every frame (fresh objects) — the
+  // controller rewrites t.x/t.y in place — so the test MUST mint a new object
+  // each frame carrying the intended solve, or the goal gets clobbered.
+  const goal = { x: 2500, y: 7400 };
+  const bleT = () => ({ key: KEY, x: goal.x, y: goal.y, color: 0x26c6da, ble: true, avatar: 'random' });
+  let maxJump = 0, sofaHits = 0, crossings = [], prevY = null, prevW = null;
+  const FRAMES = 900;   // ~15 s
+  for (let i = 0; i < FRAMES; i++) {
+    step([bleT()]);
+    const w = navWorld(r._humanoids[KEY]);
+    if (prevW) maxJump = Math.max(maxJump, Math.hypot(w.x - prevW.x, w.y - prevW.y));
+    if (insideSofa(w.x, w.y)) sofaHits++;
+    if (prevY !== null && prevY < WALL_Y && w.y >= WALL_Y) crossings.push(Math.round(w.x));
+    prevY = w.y; prevW = w;
+  }
+  const finalW = navWorld(r._humanoids[KEY]);
+
+  // Assertions:
+  //  walked   — the rig actually moved from spawn toward the far goal.
+  //  noTeleport — no single-frame jump near the ~5900 mm goal gap (walked it).
+  //  door     — it crossed the wall through the door gap (x within the opening).
+  //  sofa     — never walked through the sofa footprint (A* detour held).
+  //  arrived  — ended near the solve.
+  //  held     — after arriving it idles at the goal (no random wander away).
+  const walked = Math.hypot(finalW.x - spawn.x, finalW.y - spawn.y) > 3000;
+  const noTeleport = maxJump < 300;
+  const doorOk = crossings.length > 0 && crossings.every(x => x >= 1800 && x <= 3200);
+  const sofaOk = sofaHits === 0;
+  const arrived = Math.hypot(finalW.x - goal.x, finalW.y - goal.y) < 900;
+  // Hold check: run more frames with the SAME goal; position must stay put.
+  let drift = 0; const held0 = navWorld(r._humanoids[KEY]);
+  for (let i = 0; i < 240; i++) { step([bleT()]); const w = navWorld(r._humanoids[KEY]);
+    drift = Math.max(drift, Math.hypot(w.x - held0.x, w.y - held0.y)); }
+  const held = drift < 700;
+
+  const pass = walked && noTeleport && doorOk && sofaOk && arrived && held;
+  window.__RESULT__ = { spawn, finalW, maxJump, crossings, sofaHits, drift,
+                        walked, noTeleport, doorOk, sofaOk, arrived, held };
+  document.title = `BLEWALK ${pass ? 'PASS' : 'FAIL'} walked=${walked} noTeleport=${noTeleport}(${maxJump|0}) ` +
+    `door=${doorOk}[${crossings.join(',')}] sofa=${sofaOk}(${sofaHits}) arrive=${arrived} held=${held}(${drift|0})`;
+  performance.now = realNow;
+</script>
