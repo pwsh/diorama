@@ -546,8 +546,11 @@ export class ThreeDRenderer {
   // Used to keep spawn snaps / blocked-goal retargets on the SAME side of a wall
   // as the target — a counter backing a wall no longer flings the rig into the
   // next room — and to detect a genuinely-unreachable goal (stuck respawn).
+  // `regionSize[id]` = free-cell count of region `id`, so a snap can prefer the
+  // real open room over a tiny sliver channel (e.g. the strip between a sofa's
+  // inflated footprint and the wall behind it) when both are near the query.
   private _nav: { cell: number; nx: number; ny: number;
-                  blocked: Uint8Array; region: Int32Array;
+                  blocked: Uint8Array; region: Int32Array; regionSize: number[];
                   rev: number; blockedCount: number } | null = null;
   private _navRev = 0;
 
@@ -2014,6 +2017,7 @@ export class ThreeDRenderer {
     // orthogonals are free (no corner cutting) so region membership == reachability.
     const region = new Int32Array(nx * ny).fill(-1);
     const queue = new Int32Array(nx * ny);
+    const regionSize: number[] = [];
     let nextRegion = 0;
     for (let s = 0; s < blocked.length; s++) {
       if (blocked[s] || region[s] !== -1) continue;
@@ -2036,9 +2040,10 @@ export class ThreeDRenderer {
           }
         }
       }
+      regionSize[id] = tail;  // cells enqueued for this component == its size
     }
 
-    this._nav = { cell, nx, ny, blocked, region, rev: ++this._navRev, blockedCount };
+    this._nav = { cell, nx, ny, blocked, region, regionSize, rev: ++this._navRev, blockedCount };
   }
 
   // Region id of the FREE cell nearest a world point: if the cell is free,
@@ -2158,12 +2163,21 @@ export class ThreeDRenderer {
 
   // Nearest free cell to a blocked one via expanding ring search (≤ ~1.8 m).
   // Returns the input index if already free or nothing free is found nearby.
+  // Nearest free cell to `idx`, but region-quality-aware: once the first ring
+  // radius `r0` with any free candidate is found, keep scanning up to r0+4 rings
+  // and return the candidate in the LARGEST region (tie-break nearest). This
+  // steers spawn / retarget snaps into the real open room rather than a tiny
+  // sliver channel (e.g. behind a sofa) whose free cells happen to be closest to
+  // a wall-mounted sensor. Falls back to plain nearest when regionSize is
+  // missing (stale chunk). The strip is never rejected outright — if it's the
+  // ONLY free region nearby it still wins.
   private _nearestFreeCell(idx: number): number {
     const n = this._nav!;
     if (n.blocked[idx] === 0) return idx;
     const cx0 = idx % n.nx, cy0 = (idx / n.nx) | 0;
-    for (let r = 1; r <= 12; r++) {
-      let best = -1, bestD = Infinity;
+    const rs = n.regionSize;
+    let best = -1, bestD = Infinity, bestSize = -1, r0 = -1;
+    for (let r = 1; r <= 16; r++) {
       for (let dy = -r; dy <= r; dy++) {
         for (let dx = -r; dx <= r; dx++) {
           if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;  // ring only
@@ -2172,12 +2186,22 @@ export class ThreeDRenderer {
           const i = cy * n.nx + cx;
           if (n.blocked[i]) continue;
           const d = dx * dx + dy * dy;
-          if (d < bestD) { bestD = d; best = i; }
+          const size = rs ? (rs[n.region[i]] ?? 0) : 0;
+          if (size > bestSize || (size === bestSize && d < bestD)) {
+            bestSize = size; bestD = d; best = i;
+          }
         }
       }
-      if (best >= 0) return best;
+      if (best >= 0) {
+        if (r0 < 0) r0 = r;               // first ring with a candidate
+        // The window past the first hit must clear a real sofa: ~750 mm
+        // footprint + 2×170 mm person inflation ≈ 1.1 m ≈ 8 rings at 150 mm
+        // cells. A 4-ring window relocated console-sliver spawns but not
+        // sofa-sliver ones (the common case).
+        if (!rs || r >= r0 + 8) break;    // no region data → old behavior (first hit)
+      }
     }
-    return idx;
+    return best >= 0 ? best : idx;
   }
 
   // 8-connected A* over the nav grid (no corner cutting: a diagonal step needs

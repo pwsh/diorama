@@ -1,0 +1,123 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>ROOMS …</title>
+  <style>
+    body { margin:0; background:#0d1116; color:#cfd8dc; font:13px/1.4 sans-serif; padding:14px; }
+    h1 { font-size:15px; margin:0 0 10px; }
+    .grid { display:flex; flex-wrap:wrap; gap:10px; }
+    .card { background:#141b22; border:1px solid #26323d; border-radius:6px; padding:8px 10px; width:340px; }
+    .row { display:flex; justify-content:space-between; font-size:11px; gap:8px; }
+    .pass { color:#69f0ae; } .fail { color:#ff5252; }
+    #summary { font-size:14px; font-weight:bold; margin:10px 0; padding:8px 10px; border-radius:5px; }
+    .okbg { background:#12331f; color:#69f0ae; } .badbg { background:#3a1414; color:#ff8a80; }
+    canvas { background:#141b22; border:1px solid #26323d; border-radius:6px; margin-top:10px; }
+    code { color:#ffd54f; }
+  </style>
+</head>
+<body>
+  <h1>Room-loop detection — closedWallLoops on the user's 2026-07-12 export</h1>
+  <div id="summary">Running…</div>
+  <div class="grid" id="grid"></div>
+  <canvas id="cv" width="640" height="560"></canvas>
+
+  <!-- geometry.ts is imported as a standalone transpile (it is NOT a code-split
+       chunk; like geo.mod.js / trilateration). Generate it into the harness dir
+       NEXT TO this html before serving:
+         npx esbuild src/geometry.ts --bundle --format=esm \
+           --outfile=<harness>/geometry.mod.js
+       Regression fixture below is REAL user data — four named rooms that all
+       collapsed into one loop before the 25 mm weld tolerance / locked-wall
+       weld-target fixes. Asserts ≥4 loops and the 4 anchors in 4 DISTINCT loops. -->
+  <script type="module">
+    import { closedWallLoops, loopContaining } from './geometry.mod.js';
+
+    // Real floor-plan export. Structural walls locked; invisible room-divider
+    // chords were drawn onto them but landed 3–22 mm off before the fix.
+    const walls = [
+      { id: 'w_h5z7m8b', points: [{x:3040,y:8540},{x:3040,y:5570},{x:911.617798415838,y:5570}] },
+      { id: 'w_upyogug', points: [{x:911.617798415838,y:5570},{x:920,y:9960},{x:3150,y:9980}] },
+      { id: 'w_9s4qt5p', points: [{x:930,y:8560},{x:2020,y:8560},{x:2020,y:6560}] },
+      { id: 'w_dbivtbl', points: [{x:8610,y:10800},{x:3150,y:10800},{x:3150,y:9980}] },
+      { id: 'w_n75gjly', points: [{x:3040,y:5570},{x:3030,y:1360}] },
+      { id: 'w_ofzpgdp', points: [{x:8630,y:5820},{x:12500,y:5820}] },
+      { id: 'w_wmmf4c0', points: [{x:3030,y:1360},{x:8660,y:1360}] },
+      { id: 'w_97ry60x', points: [{x:8630,y:5820},{x:8620,y:5050},{x:8630,y:5050}] },
+      { id: 'w_ati533e', points: [{x:8630,y:5820},{x:8630,y:10800},{x:8610,y:10800}] },
+      { id: 'w_fr8jp81', points: [{x:8660,y:1360},{x:8660,y:3240},{x:8630,y:3240}] },
+      { id: 'w_1yxpgmw', points: [{x:8660,y:2460},{x:12500,y:2420}] },
+      { id: 'w_vjfvgil', points: [{x:12500,y:2420},{x:12500,y:5820},{x:12500,y:5820}] },
+      { id: 'w_5e76nnr', points: [{x:8620,y:5050},{x:8620,y:3240}], kind: 'invisible' },
+      { id: 'w_1chmmbv', points: [{x:3040,y:4230},{x:8620,y:4230}], kind: 'invisible' },
+      { id: 'w_15s9i26', points: [{x:3030,y:8520},{x:3030,y:9980}], kind: 'invisible' },
+      { id: 'w_qw9sn7e', points: [{x:3040,y:6350},{x:8620,y:6350},{x:8620,y:6350}], kind: 'invisible' },
+    ];
+    const rooms = [
+      { name: 'Great Room',  anchor: {x:5609, y:8823} },
+      { name: 'Dining Room', anchor: {x:7044, y:5212} },
+      { name: 'Four Season', anchor: {x:9753, y:4174} },
+      { name: 'Kitchen',     anchor: {x:7390, y:3052} },
+    ];
+
+    const tests = [];
+    const ok = (name, cond, detail) => tests.push({ name, ok: !!cond, detail });
+
+    const loops = closedWallLoops(walls);
+    ok('≥4 closed loops detected', loops.length >= 4, `loops=${loops.length}`);
+
+    // Each anchor resolves to a loop.
+    const idxByRoom = rooms.map(rm => {
+      const lp = loopContaining(loops, rm.anchor.x, rm.anchor.y);
+      return lp ? loops.indexOf(lp) : -1;
+    });
+    rooms.forEach((rm, i) => ok(`${rm.name} → a loop`, idxByRoom[i] >= 0, `loop ${idxByRoom[i]}`));
+
+    // The 4 anchors must live in 4 DISTINCT loops (the bug: all 4 → loop 0).
+    const distinct = new Set(idxByRoom.filter(i => i >= 0));
+    ok('4 anchors in 4 distinct loops', distinct.size === 4, `distinct=${distinct.size} [${idxByRoom.join(',')}]`);
+
+    // ── run + render ─────────────────────────────────────────────────────────
+    const grid = document.getElementById('grid');
+    let pass = 0;
+    const fails = [];
+    for (const t of tests) {
+      if (t.ok) pass++; else fails.push(t.name);
+      const card = document.createElement('div');
+      card.className = 'card';
+      card.innerHTML = `<div class="row">
+        <span>${t.ok ? '<span class=pass>PASS</span>' : '<span class=fail>FAIL</span>'} ${t.name}</span>
+        <span>${t.detail ?? ''}</span></div>`;
+      grid.appendChild(card);
+    }
+    const total = tests.length;
+    const allPass = pass === total;
+    const title = allPass ? `ROOMS PASS ${pass}/${total}` : `ROOMS FAIL ${pass}/${total} [${fails.join(',')}]`;
+    document.title = title;
+    const sum = document.getElementById('summary');
+    sum.textContent = title;
+    sum.className = allPass ? 'okbg' : 'badbg';
+
+    // Visual: draw loops (filled, distinct hues) + anchors.
+    const cv = document.getElementById('cv'), ctx = cv.getContext('2d');
+    const pad = 20, sx = (cv.width - 2*pad) / 13000, sy = (cv.height - 2*pad) / 11500;
+    const s = Math.min(sx, sy);
+    const X = x => pad + x * s, Y = y => cv.height - pad - y * s;
+    const hues = ['#4fc3f7','#81c784','#ffb74d','#ba68c8','#f06292','#4dd0e1'];
+    loops.forEach((lp, i) => {
+      ctx.beginPath();
+      lp.forEach((v, j) => { const px = X(v.x), py = Y(v.y); j ? ctx.lineTo(px, py) : ctx.moveTo(px, py); });
+      ctx.closePath();
+      ctx.fillStyle = hues[i % hues.length] + '44';
+      ctx.strokeStyle = hues[i % hues.length];
+      ctx.fill(); ctx.stroke();
+    });
+    ctx.font = '11px sans-serif';
+    rooms.forEach((rm, i) => {
+      ctx.fillStyle = '#fff';
+      ctx.beginPath(); ctx.arc(X(rm.anchor.x), Y(rm.anchor.y), 4, 0, 7); ctx.fill();
+      ctx.fillText(`${rm.name} (loop ${idxByRoom[i]})`, X(rm.anchor.x) + 6, Y(rm.anchor.y) + 3);
+    });
+  </script>
+</body>
+</html>

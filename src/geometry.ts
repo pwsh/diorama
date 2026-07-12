@@ -143,8 +143,8 @@ export function polygonArea(pts: Vec2[]): number {
 
 // Extract the closed floor regions bounded by the walls, as CCW polygons
 // (loops smaller than ~0.5 m² are noise and dropped). This is a proper planar
-// face decomposition, NOT plain chain-following: it welds coincident endpoints
-// (rounded to 1 mm), SPLITS walls where another wall's endpoint lands on their
+// face decomposition, NOT plain chain-following: it welds nearby endpoints
+// (clustered within 25 mm), SPLITS walls where another wall's endpoint lands on their
 // interior (T-junctions) or where two walls cross, then traces the minimal
 // interior faces of the resulting planar graph. That means an interior wall
 // (e.g. an INVISIBLE planning boundary drawn across an already-closed area, or
@@ -154,15 +154,29 @@ export function polygonArea(pts: Vec2[]): number {
 // without rendering anything. Callers must treat the returned arrays as owned
 // (resolveRoomForPoint relies on reference equality within one call).
 export function closedWallLoops(walls: { points: Vec2[] }[]): Vec2[][] {
-  const EPS = 1.5;  // mm: on-segment / coincidence tolerance (weld snaps exact)
-  const key = (x: number, y: number) => `${Math.round(x)},${Math.round(y)}`;
+  // 25 mm tolerance heals small gaps already baked into saved plans (measured
+  // 3–22 mm) without merging genuinely distinct walls: the 2D grid snap is
+  // 100 mm and walls are 80+ mm thick, so no legitimate plan has two DISTINCT
+  // parallel walls within 25 mm. Node welding uses nearest-existing clustering
+  // (NOT grid-bucket rounding — a bucket boundary would split a near pair).
+  const WELD = 25;  // mm: cluster an endpoint onto an already-registered node
+  const EPS = 25;   // mm: on-segment / crossing coincidence tolerance
   const nodeMap = new Map<string, Vec2>();
+  const nodes: { x: number; y: number; k: string }[] = [];
   const node = (x: number, y: number): string => {
-    const k = key(x, y);
-    if (!nodeMap.has(k)) nodeMap.set(k, { x: Math.round(x), y: Math.round(y) });
+    let bestK = '', bestD = WELD * WELD;
+    for (const nd of nodes) {
+      const dx = nd.x - x, dy = nd.y - y, d = dx * dx + dy * dy;
+      if (d <= bestD) { bestD = d; bestK = nd.k; }  // greedy nearest within WELD
+    }
+    if (bestK) return bestK;
+    const k = `n${nodes.length}`;
+    const nd = { x, y, k };
+    nodes.push(nd);
+    nodeMap.set(k, { x, y });
     return k;
   };
-  // 1. Break every polyline into its individual segments (rounded endpoints).
+  // 1. Break every polyline into its individual segments (welded endpoints).
   const segs: { ax: number; ay: number; bx: number; by: number }[] = [];
   for (const w of walls) {
     const pts = w.points;
@@ -191,7 +205,7 @@ export function closedWallLoops(walls: { points: Vec2[] }[]): Vec2[][] {
   }
   // 3. Build the undirected graph: split each segment at every node lying on it
   //    (its own endpoints, T-junctions, crossings), edge between neighbours.
-  const allNodes = [...nodeMap.values()];
+  const allNodes = [...nodeMap.entries()];  // [key, pos]
   const adj = new Map<string, Set<string>>();
   const edgeSet = new Set<string>();
   const addEdge = (ka: string, kb: string) => {
@@ -206,12 +220,12 @@ export function closedWallLoops(walls: { points: Vec2[] }[]): Vec2[][] {
     const dx = s.bx - s.ax, dy = s.by - s.ay, len2 = dx * dx + dy * dy;
     if (len2 === 0) continue;
     const on: { t: number; k: string }[] = [];
-    for (const n of allNodes) {
+    for (const [nk, n] of allNodes) {
       const t = ((n.x - s.ax) * dx + (n.y - s.ay) * dy) / len2;
       if (t < -1e-6 || t > 1 + 1e-6) continue;
       const px = s.ax + t * dx, py = s.ay + t * dy;
       if (Math.hypot(n.x - px, n.y - py) <= EPS)
-        on.push({ t: Math.max(0, Math.min(1, t)), k: key(n.x, n.y) });
+        on.push({ t: Math.max(0, Math.min(1, t)), k: nk });
     }
     on.sort((a, b) => a.t - b.t);
     for (let i = 0; i < on.length - 1; i++)

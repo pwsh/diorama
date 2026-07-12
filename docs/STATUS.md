@@ -36,6 +36,17 @@ deployed to the live HA instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Fixes (rooms + avatar spawn)**: (1) rooms all resolving to one loop — locked
+  walls are now valid weld **targets** (`bestWeldTarget` dropped the `w.locked`
+  skip) so invisible room-divider chords snap onto locked structural walls, and
+  `closedWallLoops` node welding / `EPS` raised 1.5 → **25 mm** (nearest-node
+  clustering) to heal the 3–22 mm gaps already saved in real plans. Pinned by
+  `test-pages/rooms-test.html` (real export fixture → `ROOMS PASS 6/6`). (2) AI
+  avatars spawning in the sliver behind furniture — `_buildNav` now records
+  `regionSize` and `_nearestFreeCell` scans `r0..r0+4` rings preferring the
+  LARGEST region, so spawns/retargets pick the open room over a tiny sliver.
+  Pinned by `test-pages/sliver-test.html` (`SLIVER PASS 7/7`); pathfind/ai/
+  ble-walk/mega baselines unaffected.
 - **World Outside — B3 (identity fusion + name labels)**: the arc's payoff —
   mmWave precision wearing BLE identity. New pure `src/fusion.ts` (`stepFusion`,
   deterministic, no Date/random) matches each BLE person to at most one live

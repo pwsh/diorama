@@ -47,6 +47,8 @@ the screenshot fires before first render.
 | glass-test.html | `ghosts=1 wallOps=[0.06,0.06,0.45,0.45]` (cutaway) |
 | step-test.html / stepneg-test.html | step-light pools front-only; sunken wash down |
 | layers-test.html | `?nofurn=1` hides furniture+lights in 3D |
+| rooms-test.html | `ROOMS PASS n/n` — real export: ≥4 loops, 4 anchors in 4 distinct loops (25 mm weld heal). Uses `geometry.mod.js` (`npx esbuild src/geometry.ts --bundle --format=esm --outfile=<harness>/geometry.mod.js`) |
+| sliver-test.html | `SLIVER PASS n/n` — region-size-aware `_nearestFreeCell`: AI spawns in the open room, not the sliver behind furniture |
 
 These were written incrementally by coding agents; fixtures reference the
 entity-shape the renderer expects (`stateProvider`-style closures), not a

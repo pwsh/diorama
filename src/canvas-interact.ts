@@ -53,11 +53,14 @@ function closestOnSegment(pt: Vec2, a: Vec2, b: Vec2): Vec2 {
   return { x: a.x + t * dx, y: a.y + t * dy };
 }
 
-// Best weld target for one wall endpoint: another unlocked wall's endpoint
-// (corner join) or the nearest point anywhere along its segments
-// (T-junction). Corner joins win when both are in range. `selfOpposite`
-// lets a wall close onto its own far endpoint (room loops) — its own
-// segments are never targets (the adjacent one always matches trivially).
+// Best weld target for one wall endpoint: any other wall's endpoint (corner
+// join) or the nearest point anywhere along its segments (T-junction). Corner
+// joins win when both are in range. `selfOpposite` lets a wall close onto its
+// own far endpoint (room loops) — its own segments are never targets (the
+// adjacent one always matches trivially). LOCKED walls stay valid TARGETS: the
+// welding wall snaps ONTO them without mutating them, so a user who locks
+// structural walls can still weld room-divider chords onto them. (Locked walls
+// can't be weld SOURCES — that guard lives in the caller's drag/move flow.)
 function bestWeldTarget(f: WeldWalls,
                         excludeId: string | undefined,
                         pt: Vec2,
@@ -65,7 +68,7 @@ function bestWeldTarget(f: WeldWalls,
   let bestEnd: { p: Vec2; d: number } | null = null;
   let bestSeg: { p: Vec2; d: number } | null = null;
   for (const w of f.walls) {
-    if (w.id === excludeId || w.locked || w.points.length === 0) continue;
+    if (w.id === excludeId || w.points.length === 0) continue;
     for (const e of [w.points[0], w.points[w.points.length - 1]]) {
       const d = distMM(pt, e);
       if (d < WALL_SNAP_MM && (!bestEnd || d < bestEnd.d)) bestEnd = { p: e, d };

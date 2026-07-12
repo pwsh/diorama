@@ -1,0 +1,144 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>sliver test</title>
+<style>html,body{margin:0;background:#111;color:#ccc;font:12px sans-serif}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<!--
+  Region-quality-aware spawn snapping (Bug 2). A long shallow console is pulled
+  500 mm off the bottom wall, leaving a thin free CHANNEL behind it. Person +
+  wall inflation seals the channel's ends, so it is its OWN tiny nav region
+  (~34 cells) distinct from the open room (~816 cells). A wall-mounted motion
+  sensor (avatar:true) sits on that back wall — its naive nearest free cell is
+  in the sliver. The old _nearestFreeCell returned that sliver, so the AI rig
+  spawned behind the console and paced the strip. The fix makes _nearestFreeCell
+  scan r0..r0+4 rings and prefer the LARGER region, so the spawn (via
+  _regionOfWorld -> _nearestFreeCell) lands in the open room instead.
+
+  The window is r0+8 rings (~1.2 m past the first hit) specifically so a REAL
+  sofa-depth separator (750 mm footprint + 2x170 mm person inflation) still
+  puts the open room in reach — the fixture uses a 750 mm sofa to pin exactly
+  that case (the user's reported one). Separators deeper than ~1.2 m remain an
+  accepted limitation: the fix never FAILS there, it just can't relocate.
+  Serve the built renderer chunk next to this file (see README).
+-->
+<script type="module">
+  const mod = await import('./assets/three-renderer.js');
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+
+  const FW = 6000, FD = 5000;
+  const floor = {
+    id: 'f1', name: 'Sliver room', w: FW, d: FD,
+    walls: [
+      { id: 'w_bot', points: [{x:200,y:200},{x:FW-200,y:200}] },
+      { id: 'w_top', points: [{x:200,y:FD-200},{x:FW-200,y:FD-200}] },
+      { id: 'w_lft', points: [{x:200,y:200},{x:200,y:FD-200}] },
+      { id: 'w_rgt', points: [{x:FW-200,y:200},{x:FW-200,y:FD-200}] },
+      // welded rectangle loop (endpoints coincide at the corners)
+      { id: 'w_close', points: [{x:200,y:200},{x:FW-200,y:200},{x:FW-200,y:FD-200},{x:200,y:FD-200},{x:200,y:200}] },
+    ],
+    // Real sofa depth (750 mm) pulled 500 mm off the bottom wall -> free
+    // sliver behind it. This is the user's reported case; a 200 mm console
+    // also passed but under-tested the ring window.
+    furniture: [
+      { id: 'sofa', x: FW/2, y: 1125, w: 4700, h: 750, kind: 'sofa', rotation: 0 },
+    ],
+    lights: [], switches: [], sensors: [],
+    motionSensors: [
+      { id: 'm1', x: FW/2, y: 280, heading: 90, fov: 180, range: 6000,
+        label: 'Back wall', entity_id: 'binary_sensor.back', color: '#4fc3f7',
+        intensity: 1, avatar: true },
+    ],
+    envSensors: [], doors: [], windows: [], bg: null, model3d: null, look3d: null,
+    rooms: [{ id: 'rm1', name: 'Living Room', anchor: { x: FW/2, y: 3000 } }],
+  };
+  r.updateFloor(floor, { preset: 'day', floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6' });
+  r.applyViewPreset('top');
+
+  const realNow = performance.now.bind(performance);
+  let fakeNow = realNow();
+  performance.now = () => fakeNow;
+  const DT = 16.7, KEY = 'ai_m1';
+  const AITGT = () => ({ key: KEY, x: FW/2, y: 280, color: 0x4fc3f7, ai: true });
+  const ctx = { entityOn: {}, roomNames: { rm1: 'Living Room' }, timeBucket: 'day' };
+  const step = () => { fakeNow += DT; r.updateTargets([AITGT()], ctx); };
+
+  // Nav helpers (read the renderer's own grid).
+  const n0 = r._nav;
+  const cellIdx = (wx, wy) => {
+    const cx = Math.max(0, Math.min(n0.nx - 1, Math.floor(wx / n0.cell)));
+    const cy = Math.max(0, Math.min(n0.ny - 1, Math.floor(wy / n0.cell)));
+    return cy * n0.nx + cx;
+  };
+  const regionAt = (wx, wy) => n0.region[cellIdx(wx, wy)];
+  // Local NAIVE nearest (old behavior) — proves the sliver is what it would pick.
+  const naiveNearest = (idx) => {
+    if (n0.blocked[idx] === 0) return idx;
+    const cx0 = idx % n0.nx, cy0 = (idx / n0.nx) | 0;
+    for (let rr = 1; rr <= 12; rr++) {
+      let best = -1, bestD = Infinity;
+      for (let dy = -rr; dy <= rr; dy++) for (let dx = -rr; dx <= rr; dx++) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) !== rr) continue;
+        const cx = cx0 + dx, cy = cy0 + dy;
+        if (cx < 0 || cy < 0 || cx >= n0.nx || cy >= n0.ny) continue;
+        const i = cy * n0.nx + cx;
+        if (n0.blocked[i]) continue;
+        const d = dx*dx + dy*dy;
+        if (d < bestD) { bestD = d; best = i; }
+      }
+      if (best >= 0) return best;
+    }
+    return idx;
+  };
+
+  const bigRegion = n0.regionSize.indexOf(Math.max(...n0.regionSize));
+  const sensorIdx = cellIdx(FW/2, 280);
+  const naiveIdx = naiveNearest(sensorIdx);
+  const naiveRegion = n0.region[naiveIdx];
+
+  // Step a beat so the AI seeds/spawns, then keep sampling.
+  step();
+  const ai0 = r._aiState[KEY];
+  const spawnRegion = ai0 ? regionAt(ai0.x, ai0.y) : -2;
+
+  // Wander for a while; sample the rig's nav-world position each 2 s.
+  const navWorld = (h) => ({ x: FW/2 - h.navX, y: h.navZ + FD/2 });
+  const samples = [];
+  let everSliver = false, lastS = -10;
+  const frames = Math.round(60 * 1000 / DT);
+  for (let i = 0; i < frames; i++) {
+    step();
+    const h = r._humanoids[KEY]; const tsec = i * DT / 1000;
+    if (h && tsec - lastS >= 2) {
+      lastS = tsec;
+      const w = navWorld(h);
+      const reg = regionAt(w.x, w.y);
+      if (reg === naiveRegion && naiveRegion !== bigRegion) everSliver = true;
+      samples.push({ t:+tsec.toFixed(0), x:Math.round(w.x), y:Math.round(w.y), reg });
+    }
+  }
+  performance.now = realNow;
+
+  const tests = [];
+  const ok = (name, cond, detail) => tests.push({ name, ok: !!cond, detail });
+  ok('sensor cell blocked (wall-mounted)', n0.blocked[sensorIdx] === 1, `idx=${sensorIdx}`);
+  ok('sliver is a distinct small region', naiveRegion !== bigRegion,
+     `naiveReg=${naiveRegion}(sz${n0.regionSize[naiveRegion]}) big=${bigRegion}(sz${n0.regionSize[bigRegion]})`);
+  ok('OLD nearest would pick the sliver', naiveRegion !== bigRegion, `region ${naiveRegion}`);
+  ok('spawn region == open room (fix)', spawnRegion === bigRegion, `spawn=${spawnRegion}`);
+  ok('spawn region != sliver', spawnRegion !== naiveRegion, `spawn=${spawnRegion} sliver=${naiveRegion}`);
+  ok('never wanders into the sliver', !everSliver, `samples=${samples.length}`);
+  ok('rig moved (>=1 sample)', samples.length > 0, `n=${samples.length}`);
+
+  let pass = 0; const fails = [];
+  for (const t of tests) { if (t.ok) pass++; else fails.push(t.name); }
+  const total = tests.length, allPass = pass === total;
+  const title = allPass ? `SLIVER PASS ${pass}/${total}` : `SLIVER FAIL ${pass}/${total} [${fails.join(',')}]`;
+  document.title = title;
+  window.__RESULT__ = { title, spawnRegion, naiveRegion, bigRegion, regionSize: n0.regionSize, samples: samples.slice(0,10) };
+  document.body.insertAdjacentHTML('beforeend',
+    `<pre style="position:fixed;left:8px;top:8px;color:#8f8">${title}\n` +
+    `sensorBlocked=${n0.blocked[sensorIdx]} naiveReg=${naiveRegion} spawnReg=${spawnRegion} big=${bigRegion}\n` +
+    `regionSizes=${JSON.stringify(n0.regionSize)}\n` +
+    tests.map(t => `${t.ok?'PASS':'FAIL'} ${t.name} — ${t.detail??''}`).join('\n') + `</pre>`);
+</script>
