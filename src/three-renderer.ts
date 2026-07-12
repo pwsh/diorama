@@ -116,7 +116,20 @@ export interface ActivityContext {
 // furniture (any kind whose def has `seat`) during updateFloor. roomId /
 // hostActivity tag the seat for later contextual-activity resolution.
 interface SitSpot {
+  // Seating v2: a stable per-spot id (`${furnitureId}:${i}`) so a rig can hold a
+  // CLAIM on one spot across frames + rebuilds (see the claim map in
+  // updateTargets). Wide pieces register several spots (multi-seat sofas / beds
+  // register one per usable cushion run), each independently claimable so two
+  // avatars never settle onto the same cushion.
+  id: string;
   x: number; z: number; seatY: number; facing: number; r: number;
+  // Front-only entry (seating v2): `frontNx/frontNz` is the scene-XZ unit vector
+  // pointing OUT the functional front of the seat (where a person approaches
+  // from); `approachX/approachZ` is a staging point ~350 mm in front of the seat
+  // edge. Capture is gated to the front halfspace and the sit ease routes the
+  // root through the approach point so it never blends THROUGH the backrest.
+  frontNx: number; frontNz: number;
+  approachX: number; approachZ: number;
   roomId?: string | null;         // named room the seat sits in (live loop resolve)
   soft?: boolean;                 // soft lounge piece (sofa/chaise/ottoman/bed) —
                                   // quadruped pets curl up on these instead of
@@ -224,6 +237,12 @@ interface Humanoid {
   groundY: number;     // eased terrain height under the figure (stairs/landings)
   dwell: number;       // seconds of near-zero speed (sitting trigger)
   sitSpot: SitSpot | null;  // anchor seat; retained while easing back up
+  // Seating v2 CLAIM: the stable id of the seat this rig owns (mirrors
+  // sitSpot.id). Persists across furniture rebuilds — sitSpot is re-resolved
+  // from the live _sitSpots by this id each frame, and the per-frame claim map
+  // is rebuilt from every live rig's sitSpotId so a despawned rig can't leak a
+  // claim. Cleared the moment the rig fully stands up.
+  sitSpotId: string | null;
   // Contextual-activity state (Sims solo activities). Mutually exclusive with
   // sitting: an anchor is only acquired while sit ≈ 0.
   activity: ActivityKind | null;       // engaged activity (drives poses + privacy)
@@ -414,21 +433,43 @@ function djb2(s: string): number {
 }
 
 // Resolve a target's requested avatar into a concrete kind. Precedence:
-//   1. `list` (avatarKinds pool) non-empty → stable djb2(key) pick from it.
+//   1. `list` (avatarKinds pool) non-empty → pick from it (see below).
 //   2. legacy single `want`: concrete kind passes through; 'random' (or any
-//      unrecognized string, defensively) hashes the key over ALL kinds.
+//      unrecognized string, defensively) picks over ALL kinds.
 //   3. nothing → 'adult'.
-// The djb2 pick is stable across rebuilds/frames for the life of the target.
+// Pool / 'random' picks are STABLE (djb2(key)) by default so a rebuild mid-life
+// keeps the same look. Pass `rng` (e.g. Math.random) to pick RANDOMLY instead —
+// used ONLY when a rig is first spawned so respawns re-roll their look
+// (avatarFromPool decides eligibility). Single-element pools and concrete kinds
+// are deterministic regardless of rng.
 function resolveAvatar(want: AvatarKind | 'random' | undefined,
-                       list: AvatarKind[] | undefined, key: string): AvatarKind {
+                       list: AvatarKind[] | undefined, key: string,
+                       rng?: () => number): AvatarKind {
+  const pick = (n: number) => rng ? (Math.floor(rng() * n) % n + n) % n : djb2(key) % n;
   if (list && list.length) {
     const valid = list.filter(k => AVATAR_KIND_SET.has(k));
     if (valid.length === 1) return valid[0];
-    if (valid.length) return valid[djb2(key) % valid.length];
+    if (valid.length) return valid[pick(valid.length)];
   }
   if (!want) return 'adult';
   if (want !== 'random' && AVATAR_KIND_SET.has(want)) return want;
-  return AVATAR_KINDS[djb2(key) % AVATAR_KINDS.length];
+  return AVATAR_KINDS[pick(AVATAR_KINDS.length)];
+}
+
+// Whether resolveAvatar's pick for this spec is NON-deterministic (a pool of ≥2
+// valid kinds, or 'random'/unknown over all kinds). Only these re-roll on a
+// fresh spawn AND must NOT trigger a rebuild when the per-frame stable pick
+// differs from the rig's rolled kind. A single-kind pool or a concrete kind is
+// fixed — mismatches there are genuine identity changes and DO rebuild.
+function avatarFromPool(want: AvatarKind | 'random' | undefined,
+                        list: AvatarKind[] | undefined): boolean {
+  if (list && list.length) {
+    const valid = list.filter(k => AVATAR_KIND_SET.has(k));
+    if (valid.length === 1) return false;
+    if (valid.length) return true;
+  }
+  if (!want) return false;
+  return want === 'random' || !AVATAR_KIND_SET.has(want);
 }
 // Thought-bubble geometry (Phase 6). World-mm sprite size + side nudge (Sims-
 // comic style). The local Y is NOT a fixed constant — it is derived per-rig from
@@ -1745,15 +1786,75 @@ export class ThreeDRenderer {
         const softKind = fu.kind === 'sofa' || fu.kind === 'sofa_l_left' ||
           fu.kind === 'sofa_l_right' || fu.kind === 'sofa_u' || fu.kind === 'chaise' ||
           fu.kind === 'ottoman' || fu.kind === 'bed';
-        this._sitSpots.push({
-          x: c.x, z: c.z, seatY: def.seat + (fu.elevation ?? 0),
-          facing: -((fu.rotation || 0) * Math.PI / 180),
-          r: Math.max(fu.w, fu.h) / 2 + 350,
-          roomId,
-          soft: softKind,
-          hostActivity,
-          hostTopY,
-          host: hostRef,
+        const facing = -((fu.rotation || 0) * Math.PI / 180);
+        const cosF = Math.cos(facing), sinF = Math.sin(facing);
+        const fNx = -sinF, fNz = -cosF;   // scene-XZ unit normal out the seat front (local -Z)
+        const W = fu.w, D = fu.h;
+        const r = Math.max(fu.w, fu.h) / 2 + 350;
+        const seatH = def.seat;   // captured for the forEach closure (narrowing)
+        // ── Seating v2 spot distribution. Each entry is a seat anchor in the
+        // piece-LOCAL frame (X = width, +Z = back / -Z = functional front) with
+        // its own cushion depth. Wide pieces register several so multiple avatars
+        // can share the couch; the default is one centered spot. `SEAT_PITCH`
+        // (≈ hip-to-hip) sets how many fit; `SEAT_FRONT_INSET` seats the buttocks
+        // near the cushion front so the shins hang CLEAR of the cushion box (the
+        // leg-crop fix — parametrized off the actual seat depth, per anchor).
+        const SEAT_PITCH = 600, SEAT_FRONT_INSET = 140;
+        const seatLocals: { lx: number; lz: number; depth: number }[] = [];
+        if (fu.kind === 'sofa') {
+          // Count from full width (floor(W/600)); distribute within the usable,
+          // arm-excluded width (armW = W*0.08 per the sofa builder) so cushions
+          // stay ~504 mm apart and clear of the armrests.
+          const armW = W * 0.08;
+          const usable = Math.max(SEAT_PITCH, W - 2 * armW);
+          const n = Math.max(1, Math.floor(W / SEAT_PITCH));
+          for (let i = 0; i < n; i++)
+            seatLocals.push({ lx: usable * ((i + 0.5) / n - 0.5), lz: 0, depth: D });
+        } else if (fu.kind === 'bench') {
+          const n = Math.max(1, Math.floor(W / SEAT_PITCH));
+          for (let i = 0; i < n; i++)
+            seatLocals.push({ lx: W * ((i + 0.5) / n - 0.5), lz: 0, depth: D });
+        } else if (fu.kind === 'sofa_l_left' || fu.kind === 'sofa_l_right' || fu.kind === 'sofa_u') {
+          // Sectionals: spots along the main run (X, near the back) PLUS one per
+          // return arm — matching the builder's main-seat + return geometry.
+          const mainD = Math.min(950, D * 0.5);
+          const mainZ = D / 2 - mainD / 2;
+          const retW = Math.min(950, W * (fu.kind === 'sofa_u' ? 0.3 : 0.35));
+          const retZ = -mainD / 2, retD = D - mainD;
+          const sides: number[] = fu.kind === 'sofa_u' ? [-1, 1]
+            : [fu.kind === 'sofa_l_left' ? 1 : -1];
+          const nMain = Math.max(1, Math.floor(W / SEAT_PITCH));
+          for (let i = 0; i < nMain; i++) {
+            const lx = W * ((i + 0.5) / nMain - 0.5);
+            // The corner where a return meets the main run is served by the
+            // return spot — skip main spots that fall inside a return column.
+            if (sides.some(sx => Math.abs(lx - sx * (W / 2 - retW / 2)) < retW / 2)) continue;
+            seatLocals.push({ lx, lz: mainZ, depth: mainD });
+          }
+          for (const sx of sides)
+            seatLocals.push({ lx: sx * (W / 2 - retW / 2), lz: retZ, depth: retD });
+        } else {
+          seatLocals.push({ lx: 0, lz: 0, depth: D });   // single centered spot
+        }
+        seatLocals.forEach((s, i) => {
+          // Forward-shift the hip toward the cushion front (lounge seats only —
+          // eat/work seats keep centered so the legs tuck UNDER the table and the
+          // host-outside clamp still governs the torso).
+          const shift = hostTopY == null ? Math.max(0, s.depth / 2 - SEAT_FRONT_INSET) : 0;
+          const lz = s.lz - shift;
+          const ox = s.lx * cosF + lz * sinF, oz = -s.lx * sinF + lz * cosF;
+          const sx = c.x + ox, sz = c.z + oz;
+          // Approach staging point ~350 mm in front of the cushion front edge
+          // (the front edge sits SEAT_FRONT_INSET in front of the hip).
+          const APPROACH = 350 + SEAT_FRONT_INSET;
+          this._sitSpots.push({
+            id: `${fu.id}:${i}`,
+            x: sx, z: sz, seatY: seatH + (fu.elevation ?? 0),
+            facing, r,
+            frontNx: fNx, frontNz: fNz,
+            approachX: sx + fNx * APPROACH, approachZ: sz + fNz * APPROACH,
+            roomId, soft: softKind, hostActivity, hostTopY, host: hostRef,
+          });
         });
       }
       // Pieces whose def carries an `activity` register a contextual anchor
@@ -4772,11 +4873,13 @@ export class ThreeDRenderer {
     for (const t of targets) if (t.ai || t.ble) this._advanceAi(t, frameDt);
 
     // Pre-pass: per-bed occupancy from RAW footprint containment, for the
-    // lay-in-bed gate. A bed with shared covers ON + ≥2 occupants runs the
-    // hidden-under-covers effect instead of lying; a covers-OFF bed lays every
-    // occupant side by side (±w·0.22 local x). bedOfTarget maps each target to
-    // the first bed it's inside; lieLateral gives its side offset.
-    const bedOfTarget: Record<string, { id: string; count: number }> = {};
+    // lay-in-bed gate. Lying capacity = max(1, floor(bedWidth / 700)) side-by-
+    // side lanes; occupants beyond capacity do NOT lie (they stand — `lane < 0`).
+    // A bed with shared covers ON + ≥2 occupants runs the hidden-under-covers
+    // effect instead of lying; a covers-OFF bed lays every in-capacity occupant
+    // in its lane. bedOfTarget maps each target to the first bed it's inside;
+    // lieLateral gives its lane's local-x offset.
+    const bedOfTarget: Record<string, { id: string; count: number; lane: number; cap: number }> = {};
     const lieLateral: Record<string, number> = {};
     for (const bed of this._beds) {
       const keys: string[] = [];
@@ -4784,12 +4887,29 @@ export class ThreeDRenderer {
         const l = furnitureWorldToLocal(bed.rotation, t.x - bed.x, t.y - bed.y);
         if (Math.abs(l.x) <= bed.w / 2 && Math.abs(l.y) <= bed.h / 2) keys.push(t.key);
       }
-      for (const k of keys) if (!(k in bedOfTarget)) bedOfTarget[k] = { id: bed.id, count: keys.length };
-      if (!bed.sharedCovers && keys.length >= 2) {
-        const sorted = [...keys].sort();
-        for (let k = 0; k < sorted.length; k++)
-          lieLateral[sorted[k]] = (k % 2 === 0 ? -1 : 1) * bed.w * 0.22;
+      const cap = Math.max(1, Math.floor(bed.w / 700));
+      const sorted = [...keys].sort();
+      // Lanes centered across the bed width (used lanes ≤ capacity); occupants
+      // past capacity get lane −1 and never lie.
+      const used = Math.min(cap, sorted.length);
+      for (let i = 0; i < sorted.length; i++) {
+        const k = sorted[i];
+        const lane = i < cap ? i : -1;
+        if (!(k in bedOfTarget)) bedOfTarget[k] = { id: bed.id, count: keys.length, lane, cap };
+        if (lane >= 0 && used > 1)
+          lieLateral[k] = (lane - (used - 1) / 2) * (bed.w / (used + 1));
       }
+    }
+
+    // ── Seating v2 CLAIM map: seat-spot id → the key of the rig that owns it.
+    // Rebuilt every frame from LIVE rigs (this._humanoids) so a despawned/disposed
+    // rig can never leak a claim, and updated in-loop as rigs capture so two
+    // avatars converging in the same frame don't grab the same cushion. A rig may
+    // only capture a spot that is unclaimed or already its own.
+    const seatClaims = new Map<string, string>();
+    for (const key in this._humanoids) {
+      const hh = this._humanoids[key];
+      if (hh.sitSpotId) seatClaims.set(hh.sitSpotId, key);
     }
 
     for (const t of targets) {
@@ -4802,25 +4922,41 @@ export class ThreeDRenderer {
       // avatar, else a pet default, else keep this target's own pool pick) AND
       // the tint. The existing rebuild-on-kind/color-change path swaps the rig
       // cleanly — including humanoid⇄quadruped when a pet is fused on.
-      let wantKind = resolveAvatar(t.avatar, t.avatars, t.key);
+      // `stableKind` is the deterministic (djb2) resolution — used for the
+      // rebuild comparison so a per-frame pool pick never triggers a rebuild.
+      // `fromPool` marks a non-deterministic spec (pool of ≥2 / 'random'): those
+      // RE-ROLL their concrete kind on a FRESH spawn (Math.random) and are exempt
+      // from the kind-mismatch rebuild. Explicit single kinds + identified people
+      // never re-roll.
+      let stableKind = resolveAvatar(t.avatar, t.avatars, t.key);
+      let fromPool = avatarFromPool(t.avatar, t.avatars);
       let wantColor = t.color;
       if (t.person) {
-        wantKind = t.person.avatarKind
-          ?? (t.person.isPet ? 'cat' : wantKind);
+        // A fused person with an explicit avatar / pet default is a fixed
+        // identity (no pool re-roll); a person without one keeps the pool pick.
+        if (t.person.avatarKind) { stableKind = t.person.avatarKind; fromPool = false; }
+        else if (t.person.isPet) { stableKind = 'cat'; fromPool = false; }
         wantColor = hexToInt(t.person.color);
       }
-      // Rebuild on tint OR avatar-kind change (user recolored / re-chose the
-      // variant mid-track) — materials and geometry are baked in at build time.
-      if (h && (h.color !== wantColor || h.avatarKind !== wantKind)) {
+      // Rebuild on tint change, or a genuine identity (non-pool) kind change.
+      // Pool rigs keep their rolled look on recolor (forcedKind carries it over).
+      let forcedKind: AvatarKind | null = null;
+      if (h && h.color !== wantColor && fromPool) forcedKind = h.avatarKind;
+      if (h && (h.color !== wantColor || (!fromPool && h.avatarKind !== stableKind))) {
         this._targetGroup.remove(h.group);
         this._disposeHumanoid(h);
         delete this._humanoids[t.key];
         h = undefined as unknown as Humanoid;
       }
       if (!h) {
-        h = PET_KIND_SET.has(wantKind)
-          ? this._buildQuadruped(wantColor, wantKind)
-          : this._buildHumanoid(wantColor, wantKind);
+        // Fresh spawn: re-roll a pool/random look with Math.random (respawns look
+        // different); keep a carried-over look on recolor; else the stable pick.
+        const kind = forcedKind ?? (fromPool
+          ? resolveAvatar(t.avatar, t.avatars, t.key, Math.random)
+          : stableKind);
+        h = PET_KIND_SET.has(kind)
+          ? this._buildQuadruped(wantColor, kind)
+          : this._buildHumanoid(wantColor, kind);
         this._humanoids[t.key] = h;
         this._targetGroup.add(h.group);
       }
@@ -4889,29 +5025,56 @@ export class ThreeDRenderer {
       h.lastEdge = !!t.edge;
       h.lastRawSpeed = rawSpeedMms / 1000;
 
-      // ── Seating v1: a target dwelling (near-zero speed) within reach of a
-      // sittable piece eases into a seated pose anchored on it; real movement
-      // (or the target leaving the seat radius) stands it back up. All checks
-      // use the RAW target position `p`, so the visual blend below can't
-      // feed back into the dwell/velocity logic.
+      // ── Seating v2: a target dwelling (near-zero speed) IN FRONT of a sittable
+      // piece eases into a seated pose anchored on it; real movement (or leaving
+      // the seat radius) stands it back up. Spots are CLAIMED so two avatars never
+      // land on the same cushion, and capture is gated to the seat's front
+      // halfspace so a rig behind the couch walks around instead of blending
+      // through the backrest. Speed/dwell TRIGGERS read the RAW position `p` (the
+      // visual blend can't feed back); the front-side gate reads the NAV position
+      // (where the rig actually renders while walking).
       const rawSpeedMs = rawSpeedMms / 1000;
       if (rawSpeedMs < 0.15) h.dwell += dt; else h.dwell = Math.max(0, h.dwell - dt * 3);
+      // Re-resolve the held spot from the LIVE array (furniture may have rebuilt);
+      // if it's gone (piece deleted), drop the claim.
+      if (h.sitSpotId) {
+        h.sitSpot = this._sitSpots.find(s => s.id === h.sitSpotId) ?? null;
+        if (!h.sitSpot) { seatClaims.delete(h.sitSpotId); h.sitSpotId = null; }
+      }
       let wantSit = false;
       if (h.sitSpot) {
         const dSpot = Math.hypot(p.x - h.sitSpot.x, p.z - h.sitSpot.z);
         wantSit = rawSpeedMs <= 0.4 && dSpot <= h.sitSpot.r + 250;
         if (!wantSit) {
           h.dwell = 0;
-          if (h.sit < 0.05) h.sitSpot = null;  // fully stood up → release anchor
+          if (h.sit < 0.05) {   // fully stood up → release anchor + claim
+            if (h.sitSpotId) seatClaims.delete(h.sitSpotId);
+            h.sitSpot = null; h.sitSpotId = null;
+          }
         }
       }
       if (!h.sitSpot && h.dwell > 1.2) {
         let best: SitSpot | null = null, bd = Infinity;
         for (const sp of this._sitSpots) {
+          // Skip spots another rig has claimed.
+          const owner = seatClaims.get(sp.id);
+          if (owner && owner !== t.key) continue;
           const d2 = Math.hypot(p.x - sp.x, p.z - sp.z);
-          if (d2 < sp.r && d2 < bd) { bd = d2; best = sp; }
+          if (d2 >= sp.r || d2 >= bd) continue;
+          // Front-only entry: the rig's NAV position must be on the front side of
+          // the seat (dot the seat→rig vector with the front normal), OR staged
+          // in the approach zone. A rig behind the backrest is rejected — its nav
+          // walks it around (nav blocks the footprint) until it dwells in front.
+          // Exception: a RAW position already on the cushion (< 500 mm from the
+          // spot — radar dropped the person onto the seat) sits regardless of the
+          // nav side, since nav may have been snapped off the blocked footprint.
+          const rawOnSeat = d2 < 500;
+          const frontDot = (h.navX - sp.x) * sp.frontNx + (h.navZ - sp.z) * sp.frontNz;
+          const dAppr = Math.hypot(h.navX - sp.approachX, h.navZ - sp.approachZ);
+          if (!rawOnSeat && frontDot < -60 && dAppr > sp.r) continue;
+          bd = d2; best = sp;
         }
-        if (best) { h.sitSpot = best; wantSit = true; }
+        if (best) { h.sitSpot = best; h.sitSpotId = best.id; seatClaims.set(best.id, t.key); wantSit = true; }
       }
       h.sit += ((wantSit ? 1 : 0) - h.sit) * Math.min(1, dt * 3);
       const sit = h.sit;
@@ -5005,10 +5168,13 @@ export class ThreeDRenderer {
       const inBed = bedOfTarget[t.key];
       const coversWouldHide = !!inBed && inBed.count >= 2 &&
         (this._beds.find(b => b.id === inBed.id)?.sharedCovers ?? true);
+      // Only occupants within the bed's lane capacity lie down (lane ≥ 0); anyone
+      // beyond it stands (no stacking).
+      const canLie = !!inBed && inBed.lane >= 0;
       let wantLie = false;
-      if (h.lieBedId && inBed && inBed.id === h.lieBedId && !coversWouldHide) {
+      if (h.lieBedId && inBed && inBed.id === h.lieBedId && !coversWouldHide && canLie) {
         wantLie = rawSpeedMs <= 0.4;               // stay lying until they get up / leave
-      } else if (!h.lieBedId && inBed && !coversWouldHide &&
+      } else if (!h.lieBedId && inBed && !coversWouldHide && canLie &&
                  sit < 0.1 && act < 0.1 && rawSpeedMs < 0.15 && h.dwell > 2) {
         wantLie = true; h.lieBedId = inBed.id;      // settle in
       }
@@ -5585,8 +5751,20 @@ export class ThreeDRenderer {
             sz = (host.y + w.y) - this._fd / 2;
           }
         }
-        px2 = h.navX * stand + sx * sit;
-        pz2 = h.navZ * stand + sz * sit;
+        // Front-approach routing: the seat blend passes THROUGH the approach
+        // point (in front of the seat) so the root never cuts across the backrest
+        // — nav→approach over the first half of `sit`, approach→seat over the
+        // second. Height blends linearly (no pass-through risk on Y).
+        const ax = spot.approachX, az = spot.approachZ;
+        if (sit < 0.5) {
+          const u = sit / 0.5;
+          px2 = h.navX * (1 - u) + ax * u;
+          pz2 = h.navZ * (1 - u) + az * u;
+        } else {
+          const u = (sit - 0.5) / 0.5;
+          px2 = ax * (1 - u) + sx * u;
+          pz2 = az * (1 - u) + sz * u;
+        }
         py2 = (h.groundY + bob) * stand + (seatYeff - HIP_Y) * sit;
       } else {
         px2 = h.navX; pz2 = h.navZ; py2 = h.groundY + bob;
@@ -5604,8 +5782,16 @@ export class ThreeDRenderer {
         const lieX = lieBed.cx + hdx * along + ldx * lat;
         const lieZ = lieBed.cz + hdz * along + ldz * lat;
         const lieY = lieBed.matressTop + 170;
-        px2 = px2 * (1 - L) + lieX * L;
-        pz2 = pz2 * (1 - L) + lieZ * L;
+        // Enter the lane from the FOOT end (never through the headboard): route
+        // the X/Z blend through a foot-side approach point in the same lane so the
+        // rig slides up its lane rather than dropping in over the pillows. Height
+        // blends straight (no pass-through on Y).
+        const apX = lieBed.cx - hdx * (lieBed.h / 2 - 150) + ldx * lat;
+        const apZ = lieBed.cz - hdz * (lieBed.h / 2 - 150) + ldz * lat;
+        let bx: number, bz: number;
+        if (L < 0.5) { const u = L / 0.5; bx = px2 * (1 - u) + apX * u; bz = pz2 * (1 - u) + apZ * u; }
+        else { const u = (L - 0.5) / 0.5; bx = apX * (1 - u) + lieX * u; bz = apZ * (1 - u) + lieZ * u; }
+        px2 = bx; pz2 = bz;
         py2 = py2 * (1 - L) + lieY * L;
       }
       h.group.position.set(px2, py2, pz2);
@@ -6660,7 +6846,7 @@ export class ThreeDRenderer {
       rightShoulder: BR.hip, rightElbow: BR.knee,
       phase: 0, facing: 0,
       amp: 0, scale: 0,
-      sit: 0, groundY: 0, dwell: 0, sitSpot: null,
+      sit: 0, groundY: 0, dwell: 0, sitSpot: null, sitSpotId: null,
       activity: null, activityAnchor: null, activityDwell: 0,
       act: 0, privacy: 0, blurSprite: null,
       bubble: null, bubbleKind: null, bubbleWant: null, bubbleDwell: 0,
@@ -7174,7 +7360,7 @@ export class ThreeDRenderer {
       rightElbow: rightArm.elbow,
       phase: 0, facing: 0,
       amp: 0, scale: 0,
-      sit: 0, groundY: 0, dwell: 0, sitSpot: null,
+      sit: 0, groundY: 0, dwell: 0, sitSpot: null, sitSpotId: null,
       activity: null, activityAnchor: null, activityDwell: 0,
       act: 0, privacy: 0, blurSprite: null,
       bubble: null, bubbleKind: null, bubbleWant: null, bubbleDwell: 0,

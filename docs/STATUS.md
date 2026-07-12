@@ -46,6 +46,34 @@ asks for).
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Seating v2 + avatar lifecycle batch** (5 user requests; `src/three-renderer.ts`
+  + `src/ui/three-view.ts` + `src/types.ts` + `src/ui/sidebar.ts`; one new Store
+  field `MotionSensor.demo`; typecheck + build clean; new `seating-test.html`
+  `SEATING PASS`, all existing pages green — mega now `spots=6`):
+  1. *Seat claims (never sit on each other)*: `SitSpot` gained a stable `id`; each
+     rig stores `sitSpotId`; a per-frame `seatClaims` map rebuilt from LIVE rigs
+     (can't leak to a dead rig) makes claimed spots invisible to other rigs. Covers
+     AI/BLE/demo avatars (same dwell path). `sitSpot` re-resolves from the live
+     array by id each frame (survives furniture rebuilds).
+  2. *Multi-seat pieces*: sofas register `floor(W/600)` spots across the arm-excluded
+     usable width (~504 mm pitch); benches across full width; sectionals along the
+     main run + one per return arm; beds get `floor(bedWidth/700)` lie-lanes (over-
+     capacity occupants stand). NEAREST-FREE capture; shared-covers still hides
+     in-capacity rigs.
+  3. *Front-only entry + no pass-through*: each spot carries a front normal +
+     approach point; capture is gated to the front halfspace (or approach zone, or a
+     raw-on-cushion exception); the seat/lie x-z blend routes THROUGH the approach
+     point (bed lie enters from the foot) so the root never crosses the backrest /
+     headboard.
+  4. *Seated leg clearance*: lounge seats forward-shift the hip toward the cushion
+     front by `depth/2 − 140` (parametrized off the actual seat depth per anchor) so
+     shins clear the cushion box; eat/work seats keep centered (verified chair +
+     sofa + chaise + table via tabletest/seating-test).
+  5. *Respawn re-roll + demo mode*: fresh pool/`'random'` rigs re-roll their kind via
+     `Math.random` (`resolveAvatar` rng param + `avatarFromPool` gate; explicit
+     kinds/identified people never re-roll; recolor keeps the rolled look).
+     `MotionSensor.demo` projects an always-on AI avatar with no entity binding
+     (sidebar "Demo avatar" checkbox; kiosk/view render it too).
 - **Avatar appearance + behavior batch** (4 user requests, `src/three-renderer.ts`
   + test pages; no Store changes; typecheck + build clean; regression titles
   green). Builds on the pants change (kept, not reverted):

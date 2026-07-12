@@ -249,6 +249,8 @@ export interface MotionSensor {
   color?: string;            // hex; default '#ba68c8'
   intensity?: number;        // 0..2 multiplier on highlight fill/glow; default 1
   avatar?: boolean;          // 3D: project a wandering AI person while presence is on; default off
+  demo?: boolean;            // 3D: project the AI avatar ALWAYS (no entity binding / state
+                             //     required) — a display/demo presence. Persisted item-level.
   avatarKind?: AvatarKind | 'random';  // LEGACY single-pick (kept for back-compat reads; new UI writes avatarKinds)
   avatarKinds?: AvatarKind[];          // pool of rig variants for the projected AI avatar
   locked?: boolean;          // canvas move/rotate/delete disabled

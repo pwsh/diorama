@@ -36,7 +36,8 @@ the screenshot fires before first render.
 
 | Page | Asserts (title) |
 |---|---|
-| mega-test.html | seating: `sit=1.00 dwell=7.0 spot=true spots=4` |
+| mega-test.html | seating: `sit=1.00 dwell=7.0 spot=true spots=6` (seating v2: the 2000 mm sofa registers 3 spots, + toilet/ottoman/stool) |
+| seating-test.html | `SEATING PASS` — v2 claims/multi-seat/approach: two rigs on one chair → exactly one sits (roots ≥ 300 mm apart); 2400 mm sofa → 4 spots, three rigs sit at distinct spots ≥ 500 mm apart; approach-from-behind never captures until the raw pos is in front; 1500 mm bed → 2 lie-lanes, third occupant stands |
 | pathfind-test.html | `PATH PASS cross=true[door-x] sofa=true(0) arrive=true` + nav samples |
 | phase4-test.html | all solo activities engage, shower `priv=1.00` |
 | phase5-test.html | `?scene=a` eat/work/tv seated; `?scene=b` bed covers hide rigs |

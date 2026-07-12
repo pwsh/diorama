@@ -649,11 +649,19 @@ export class ThreeView extends LitElement {
       // position. The renderer's AI controller owns the actual movement (see
       // updateTargets); x/y here is only the spawn/wander anchor. Synthetic
       // targets never set `edge`, so presence-off runs the slow fade-out.
+      //
+      // Demo mode (`m.demo`): project the avatar ALWAYS — no entity binding or
+      // ON state required. A pure display presence that uses the sensor's avatar
+      // pool + room confinement exactly like a normal AI avatar. Rendered in
+      // kiosk/view modes too (it is display, not interaction).
       for (const m of f.motionSensors) {
-        if (!m.avatar || !m.entity_id) continue;
-        if (states[m.entity_id]?.state !== 'on') continue;
+        const demo = m.demo === true;
+        if (!demo) {
+          if (!m.avatar || !m.entity_id) continue;
+          if (states[m.entity_id]?.state !== 'on') continue;
+        }
         targets.push({ key: 'ai_' + m.id, x: m.x, y: m.y, color: hexToInt(motionColor(m)), ai: true,
-                       avatar: m.avatarKind, avatars: m.avatarKinds });
+                       avatar: m.avatarKind ?? (demo ? 'random' : undefined), avatars: m.avatarKinds });
       }
       // BLE people on the CURRENT floor: synthetic goal-walk targets. x/y is the
       // (lerped) solved position — the renderer's goal controller walks the rig

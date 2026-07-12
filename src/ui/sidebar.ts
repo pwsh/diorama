@@ -668,7 +668,14 @@ export class Sidebar extends LitElement {
             ${m.avatar ? '🧍 On' : '— Off'}
           </button>
         </div>
-        ${m.avatar ? this._avatarGrid(m, upd) : nothing}
+        <div class="row" title="Always render the avatar in 3D — no entity binding or presence needed. A display/demo presence that wanders the room using this sensor's avatar pool.">
+          <label>Demo avatar</label>
+          <button class="btn" style="font-size:11px;flex:1"
+                  @click=${() => upd(() => { m.demo = !m.demo; })}>
+            ${m.demo ? '🎬 On (no entity needed)' : '— Off'}
+          </button>
+        </div>
+        ${(m.avatar || m.demo) ? this._avatarGrid(m, upd) : nothing}
         ${this._lockRow(m)}
         <div class="row"><label>HA entity</label>
           <span style="font-size:11px;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">

@@ -1,0 +1,120 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>seating test</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<script type="module">
+ try {
+  const mod = await import('./assets/three-renderer.js?v=' + Date.now());
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+  const fu = (id, kind, x, y, w, h, rot = 0, extra = {}) => ({ id, x, y, w, h, kind, rotation: rot, ...extra });
+  const scene3d = { preset: 'day', floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6' };
+  const mkFloor = (furniture) => ({
+    id: 'f1', name: 'R', w: 12000, d: 8000, walls: [], furniture,
+    lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [], windows: [], bg: null, model3d: null, look3d: null, rooms: [],
+  });
+  const realNow = performance.now.bind(performance);
+  let fakeNow = realNow();
+  performance.now = () => fakeNow;
+  // Drive updateTargets `frames` times; `mut(i)` may mutate the target list.
+  const drive = (targets, frames, mut) => {
+    for (let i = 0; i < frames; i++) {
+      fakeNow += 16.7;
+      const ts = (mut ? mut(i) : targets).map(t => ({ ...t }));
+      r.updateTargets(ts);
+    }
+  };
+  const dist = (a, b) => Math.hypot(a.position.x - b.position.x, a.position.z - b.position.z);
+  const results = [];
+
+  // ── Scene A: two targets converge on ONE chair → exactly one sits, the other
+  // stands nearby (roots never overlap < 300 mm while both settled).
+  r.clearTransientGroups();
+  r.updateFloor(mkFloor([fu('chair', 'chair', 2000, 2000, 500, 500)]), scene3d);
+  {
+    const targets = [
+      { key: 'A0', x: 1950, y: 1600, color: 0x4fc3f7 },
+      { key: 'A1', x: 2250, y: 1550, color: 0xff8a65 },
+    ];
+    drive(targets, 420);
+    const h0 = r._humanoids['A0'], h1 = r._humanoids['A1'];
+    const sits = [h0.sit, h1.sit];
+    const nSit = sits.filter(s => s > 0.9).length;
+    const rootGap = dist(h0.group, h1.group);
+    const pass = nSit === 1 && rootGap > 300;
+    results.push(`A[oneSits=${nSit === 1} gap=${rootGap | 0} sit=${sits.map(s => s.toFixed(2)).join('/')} ${pass ? 'PASS' : 'FAIL'}]`);
+  }
+
+  // ── Scene B: 2400 mm sofa → 4 spots; three targets → three DISTINCT spots,
+  // each pair ≥ 500 mm apart.
+  r.clearTransientGroups();
+  r.updateFloor(mkFloor([fu('sofa', 'sofa', 6000, 2000, 2400, 900)]), scene3d);
+  {
+    const nSpots = r._sitSpots.length;
+    const targets = [
+      { key: 'B0', x: 5300, y: 1600, color: 0x4fc3f7 },
+      { key: 'B1', x: 6000, y: 1600, color: 0x81c784 },
+      { key: 'B2', x: 6700, y: 1600, color: 0xff8a65 },
+    ];
+    drive(targets, 480);
+    const hs = ['B0', 'B1', 'B2'].map(k => r._humanoids[k]);
+    const nSit = hs.filter(h => h.sit > 0.9).length;
+    const ids = hs.map(h => h.sitSpotId);
+    const distinct = new Set(ids).size === 3 && ids.every(x => x != null);
+    // Pairwise seat-spot distances.
+    let minGap = Infinity;
+    for (let i = 0; i < hs.length; i++) for (let j = i + 1; j < hs.length; j++) {
+      const a = hs[i].sitSpot, b = hs[j].sitSpot;
+      if (a && b) minGap = Math.min(minGap, Math.hypot(a.x - b.x, a.z - b.z));
+    }
+    const pass = nSpots === 4 && nSit === 3 && distinct && minGap >= 500;
+    results.push(`B[spots=${nSpots} sit=${nSit} distinct=${distinct} minGap=${minGap | 0} ${pass ? 'PASS' : 'FAIL'}]`);
+  }
+
+  // ── Scene C: approach from BEHIND the sofa → the rig does NOT capture (front-
+  // gate) while behind (sit stays < 0.1); once its raw position moves to the
+  // FRONT it captures normally. Also asserts it never sits from inside/behind.
+  r.clearTransientGroups();
+  r.updateFloor(mkFloor([fu('sofa', 'sofa', 6000, 2000, 2000, 900)]), scene3d);
+  {
+    let maxSitBehind = 0;
+    const behind = [{ key: 'C0', x: 6000, y: 2650, color: 0x4fc3f7 }]; // +Y = behind backrest
+    drive(behind, 260, () => {
+      const h = r._humanoids['C0'];
+      if (h) maxSitBehind = Math.max(maxSitBehind, h.sit);
+      return behind;
+    });
+    // Now walk it around to the FRONT (raw jumps to the front approach zone).
+    const front = [{ key: 'C0', x: 6000, y: 1500, color: 0x4fc3f7 }];
+    drive(front, 320);
+    const h = r._humanoids['C0'];
+    const pass = maxSitBehind < 0.1 && h.sit > 0.9;
+    results.push(`C[behindSit=${maxSitBehind.toFixed(2)} frontSit=${h.sit.toFixed(2)} ${pass ? 'PASS' : 'FAIL'}]`);
+  }
+
+  // ── Scene D: bed capacity. 1500 mm bed → cap = floor(1500/700) = 2 lanes.
+  // Three occupants (covers OFF so they lie visibly): exactly two lie, the third
+  // stands (no stacking).
+  r.clearTransientGroups();
+  r.updateFloor(mkFloor([fu('bed', 'bed', 6000, 2000, 1500, 2000, 0, { sharedBedCovers: false })]), scene3d);
+  {
+    const targets = [
+      { key: 'D0', x: 5650, y: 2000, color: 0x4fc3f7 },
+      { key: 'D1', x: 6000, y: 2000, color: 0x81c784 },
+      { key: 'D2', x: 6350, y: 2000, color: 0xff8a65 },
+    ];
+    drive(targets, 480);
+    const hs = ['D0', 'D1', 'D2'].map(k => r._humanoids[k]);
+    const nLie = hs.filter(h => h.lie > 0.9).length;
+    const nUp = hs.filter(h => h.lie < 0.1).length;
+    const pass = nLie === 2 && nUp === 1;
+    results.push(`D[lie=${nLie} up=${nUp} vals=${hs.map(h => h.lie.toFixed(2)).join('/')} ${pass ? 'PASS' : 'FAIL'}]`);
+  }
+
+  performance.now = realNow;
+  const allPass = results.every(s => s.includes('PASS'));
+  document.title = `SEATING ${allPass ? 'PASS' : 'FAIL'} ${results.join(' ')}`;
+ } catch (e) { document.title = 'ERR: ' + (e && e.stack ? e.stack.split('\n').slice(0,3).join(' | ') : e); }
+</script>
