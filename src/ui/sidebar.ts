@@ -100,6 +100,58 @@ export class Sidebar extends LitElement {
   @state() private _ = 0;
   @state() private _cfgOpen = false;
 
+  // Collapsed sidebar sections + room-groups. DEVICE-LOCAL (not the HA store):
+  // a JSON array of stable keys in localStorage. Absent from the set = expanded
+  // (default). Section keys are the stable slugs assigned in `render`; room-group
+  // keys are `<sectionSlug>/<roomId>` (the "— No room —" bucket uses `/none`).
+  @state() private _collapsed = new Set<string>(this._loadCollapsed());
+
+  private _loadCollapsed(): string[] {
+    try {
+      const raw = localStorage.getItem('diorama:sidebar:collapsed');
+      const arr = raw ? JSON.parse(raw) : [];
+      return Array.isArray(arr) ? arr.filter((x): x is string => typeof x === 'string') : [];
+    } catch { return []; }
+  }
+  private _persistCollapsed(): void {
+    try { localStorage.setItem('diorama:sidebar:collapsed', JSON.stringify([...this._collapsed])); }
+    catch { /* private mode / quota — collapse state is best-effort */ }
+  }
+  private _toggleCollapsed(key: string): void {
+    if (this._collapsed.has(key)) this._collapsed.delete(key);
+    else                          this._collapsed.add(key);
+    this._persistCollapsed();
+    this.requestUpdate();
+  }
+
+  // Collapsible section wrapper. `slug` is the stable persistence key. The body
+  // is rendered through a thunk and only invoked while expanded, so a collapsed
+  // section costs nothing; expanded sections always render through the same code
+  // path, so Lit's surgical (config-channel) reconciliation is unaffected.
+  private _section(
+    slug: string, title: unknown, body: () => unknown,
+    opts?: { style?: string; id?: string },
+  ) {
+    const collapsed = this._collapsed.has(slug);
+    return html`
+      <div class="section" style=${opts?.style ?? nothing} id=${opts?.id ?? nothing}>
+        <h3 class="collapsible-header ${collapsed ? '' : 'open'}"
+            style=${collapsed ? 'margin-bottom:0' : nothing}
+            @click=${() => this._toggleCollapsed(slug)}>
+          <span style="flex:1">${title}</span>
+          <span class="collapse-arrow">▸</span>
+        </h3>
+        ${collapsed ? nothing : body()}
+      </div>
+    `;
+  }
+
+  // Per-room collapse header used inside room-grouped lists. `sectionSlug` scopes
+  // the key so the same room name in two sections toggles independently.
+  private _roomGroupKey(sectionSlug: string, roomId: string): string {
+    return `${sectionSlug}/${roomId}`;
+  }
+
   protected override createRenderRoot() { return this; }
 
   override connectedCallback(): void {
@@ -130,9 +182,9 @@ export class Sidebar extends LitElement {
   // Rooms come out in name order (see ctx); items in no room land in a trailing
   // "— No room —" bucket. When the floor has no rooms, everything stays in one
   // unlabelled bucket so sections render exactly as before.
-  private _groupByRoom<T extends { x: number; y: number }>(items: T[]): { label: string; items: T[] }[] {
+  private _groupByRoom<T extends { x: number; y: number }>(items: T[]): { id: string; label: string; items: T[] }[] {
     const { loops, rooms } = this._roomGroupsCtx();
-    if (rooms.length === 0) return items.length ? [{ label: '', items }] : [];
+    if (rooms.length === 0) return items.length ? [{ id: '', label: '', items }] : [];
     const byId = new Map<string, T[]>();
     const none: T[] = [];
     for (const it of items) {
@@ -140,35 +192,63 @@ export class Sidebar extends LitElement {
       if (rm) (byId.get(rm.id) ?? byId.set(rm.id, []).get(rm.id)!).push(it);
       else none.push(it);
     }
-    const out: { label: string; items: T[] }[] = [];
+    const out: { id: string; label: string; items: T[] }[] = [];
     for (const rm of rooms) {                       // already name-sorted
       const arr = byId.get(rm.id);
-      if (arr && arr.length) out.push({ label: roomLabel(rm).text, items: arr });
+      if (arr && arr.length) out.push({ id: rm.id, label: roomLabel(rm).text, items: arr });
     }
-    if (none.length) out.push({ label: '— No room —', items: none });
+    if (none.length) out.push({ id: 'none', label: '— No room —', items: none });
     return out;
   }
 
-  private _roomGroupHeader(label: string) {
+  // Collapsible per-room group header. Plain (unlabelled) buckets — the no-rooms
+  // case — render no header and no toggle. `key` scopes the collapse state.
+  private _roomGroupHeader(label: string, key: string, collapsed: boolean) {
     return label
-      ? html`<div style="font-size:10px;color:var(--text-dim);text-transform:uppercase;
-                         letter-spacing:0.06em;padding:6px 0 2px;opacity:0.85">${label}</div>`
+      ? html`<div class="collapsible-header"
+                  style="font-size:10px;color:var(--text-dim);text-transform:uppercase;
+                         letter-spacing:0.06em;padding:6px 0 2px;opacity:0.85"
+                  @click=${() => this._toggleCollapsed(key)}>
+                <span style="flex:1">${label}</span>
+                <span class="collapse-arrow" style="transition:transform 0.15s;
+                      ${collapsed ? '' : 'transform:rotate(90deg)'}">▸</span>
+              </div>`
       : nothing;
   }
 
   // Render a flat item list bucketed by room (shared by every list section).
+  // `sectionSlug` scopes the per-room-group collapse keys.
   private _groupedList<T extends { x: number; y: number }>(
-    items: T[], renderItem: (it: T) => unknown,
+    sectionSlug: string, items: T[], renderItem: (it: T) => unknown,
   ) {
-    return this._groupByRoom(items).map(g => html`
-      ${this._roomGroupHeader(g.label)}
-      ${g.items.map(renderItem)}
-    `);
+    return this._groupByRoom(items).map(g => {
+      const key = g.id ? this._roomGroupKey(sectionSlug, g.id) : '';
+      const collapsed = !!key && this._collapsed.has(key);
+      return html`
+        ${this._roomGroupHeader(g.label, key, collapsed)}
+        ${collapsed ? nothing : g.items.map(renderItem)}
+      `;
+    });
+  }
+
+  // Auto-expand the section holding the currently active/selected item so its
+  // editor is visible when the user picks it (e.g. clicking a sensor on canvas).
+  // Only removes from the collapsed set — never forces a section closed.
+  private _autoExpandActive(): void {
+    const p = this.planner;
+    const expand = (slug: string) => { if (this._collapsed.delete(slug)) this._persistCollapsed(); };
+    if (p.store.activeSensorId) { expand('sensors'); expand('active-sensor'); expand('ha-sensor'); }
+    if (p.activeMotionId)   expand('motion');
+    if (p.activeEnvId)      expand('env');
+    if (p.activeBleId)      expand('ble');
+    if (p.activePersonId)   expand('people');
+    if (p.activeFurnitureId) expand('furniture');
   }
 
   override render() {
     this._rgToken++;
     this._rgCache = null;
+    this._autoExpandActive();
     const p = this.planner;
     const f = p.floor();
     return html`
@@ -176,8 +256,7 @@ export class Sidebar extends LitElement {
                   background:var(--surface);overflow-y:auto;overflow-x:hidden;
                   display:flex;flex-direction:column;height:100%;min-height:0">
         ${this._floorsSection()}
-        <div class="section">
-          <h3>Tools</h3>
+        ${this._section('tools', 'Tools', () => html`
           <div style="display:flex;flex-wrap:wrap;gap:4px">
             ${TOOLS.map(t => html`
               <button class="btn ${p.tool === t.id ? 'active' : ''}"
@@ -232,16 +311,15 @@ export class Sidebar extends LitElement {
               </button>
             </div>
           ` : nothing}
-        </div>
+        `)}
 
-        <div class="section">
-          <h3>mmWave Sensors on this floor</h3>
+        ${this._section('sensors', 'mmWave Sensors on this floor', () => html`
           ${f.sensors.length === 0
             ? html`<div style="color:var(--text-dim);font-size:11px;padding:4px 0">
                 No mmWave sensors yet — pick the mmWave tool and click the floor.
               </div>`
-            : this._groupedList(f.sensors, s => this._sensorListItem(s))}
-        </div>
+            : this._groupedList('sensors', f.sensors, s => this._sensorListItem(s))}
+        `)}
 
         ${this._motionSensorsSection()}
         ${this._envSensorsSection()}
@@ -262,13 +340,12 @@ export class Sidebar extends LitElement {
         ${this._model3dSection()}
         ${this._bgSection()}
 
-        <div class="section">
-          <h3>Data</h3>
+        ${this._section('data', 'Data', () => html`
           <button class="btn" style="width:100%;margin-bottom:4px" @click=${this._exportJson}>
             Export JSON
           </button>
           <button class="btn" style="width:100%" @click=${this._importJson}>Import JSON</button>
-        </div>
+        `)}
       </div>
     `;
   }
@@ -276,9 +353,7 @@ export class Sidebar extends LitElement {
   // ── Floors section ────────────────────────────────────────────────────
   private _floorsSection() {
     const p = this.planner;
-    return html`
-      <div class="section">
-        <h3>Floors</h3>
+    return this._section('floors', 'Floors', () => html`
         <div class="row" style="margin-bottom:6px">
           <select title="Current floor" style="flex:1;min-width:0"
                   .value=${p.store.currentFloorId}
@@ -304,8 +379,7 @@ export class Sidebar extends LitElement {
             <span></span>
           </span>
         </label>
-      </div>
-    `;
+    `);
   }
 
   private _openNewFloor = () => {
@@ -448,16 +522,13 @@ export class Sidebar extends LitElement {
   private _motionSensorsSection() {
     const p = this.planner;
     const f = p.floor();
-    return html`
-      <div class="section">
-        <h3>Motion Sensors</h3>
+    return this._section('motion', 'Motion Sensors', () => html`
         ${f.motionSensors.length === 0
           ? html`<div style="color:var(--text-dim);font-size:11px;padding:4px 0">
               None yet — pick the Motion tool and click the floor.
             </div>`
-          : this._groupedList(f.motionSensors, m => this._motionItem(m))}
-      </div>
-    `;
+          : this._groupedList('motion', f.motionSensors, m => this._motionItem(m))}
+    `);
   }
 
   private _motionItem(m: MotionSensor) {
@@ -596,17 +667,14 @@ export class Sidebar extends LitElement {
   private _envSensorsSection() {
     const p = this.planner;
     const f = p.floor();
-    return html`
-      <div class="section">
-        <h3>Environmental Sensors</h3>
+    return this._section('env', 'Environmental Sensors', () => html`
         ${f.envSensors.length === 0
           ? html`<div style="color:var(--text-dim);font-size:11px;padding:4px 0">
               None yet — pick the Env tool and click the floor.
               Shows temperature, humidity, CO₂, CO, PM, … from any sensor entity.
             </div>`
-          : this._groupedList(f.envSensors, en => this._envItem(en))}
-      </div>
-    `;
+          : this._groupedList('env', f.envSensors, en => this._envItem(en))}
+    `);
   }
 
   private _envItem(en: EnvSensor) {
@@ -731,17 +799,19 @@ export class Sidebar extends LitElement {
     const p = this.planner;
     const f = p.floor();
     const list = f.bleProxies ?? [];
-    return html`
-      <div class="section">
-        <h3>BLE Proxies</h3>
+    const bermudaOff = p.store.bermudaEnabled === false;
+    return this._section('ble', 'BLE Proxies', () => html`
+        ${bermudaOff ? html`
+          <div style="color:var(--text-dim);font-size:10px;padding:2px 0 6px;opacity:0.7;font-style:italic">
+            (Bermuda integration disabled in Settings)
+          </div>` : nothing}
         ${list.length === 0
           ? html`<div style="color:var(--text-dim);font-size:11px;padding:4px 0">
               None yet — pick the BLE tool and click the floor. Bind each puck to
               the physical Bluetooth proxy device so trilateration can place people.
             </div>`
-          : this._groupedList(list, b => this._bleItem(b))}
-      </div>
-    `;
+          : this._groupedList('ble', list, b => this._bleItem(b))}
+    `);
   }
 
   private _bleItem(b: BleProxy) {
@@ -851,24 +921,24 @@ export class Sidebar extends LitElement {
   private _peopleSection() {
     const p = this.planner;
     const people = p.store.people ?? [];
+    const bermudaOn = p.store.bermudaEnabled !== false;
     // Kick a one-shot Bermuda scan the first time this section renders with a
     // live connection so the person-binding device list is ready.
-    if (!this._bermudaKicked && p.hass && !p.bermuda) {
+    if (bermudaOn && !this._bermudaKicked && p.hass && !p.bermuda) {
       this._bermudaKicked = true;
       void p.scanBermuda();
     }
-    return html`
-      <div class="section">
-        <h3>People</h3>
-        <label class="row" style="padding:0;margin-bottom:6px"
-               title="Show BLE devices configured in Bermuda but not mapped to a person (uses the fallback avatar pool). Consumed by trilateration in a later phase.">
-          <span style="color:var(--text-dim);font-size:11px;flex:1">Show unknown BLE devices</span>
-          <span class="mini-toggle">
-            <input type="checkbox" .checked=${p.store.bleShowUnknown !== false}
-                   @change=${(e: Event) => p.setBleShowUnknown((e.target as HTMLInputElement).checked)}>
-            <span></span>
-          </span>
-        </label>
+    return this._section('people', 'People', () => html`
+        ${bermudaOn ? html`
+          <label class="row" style="padding:0;margin-bottom:6px"
+                 title="Show BLE devices configured in Bermuda but not mapped to a person (uses the fallback avatar pool). Consumed by trilateration in a later phase.">
+            <span style="color:var(--text-dim);font-size:11px;flex:1">Show unknown BLE devices</span>
+            <span class="mini-toggle">
+              <input type="checkbox" .checked=${p.store.bleShowUnknown !== false}
+                     @change=${(e: Event) => p.setBleShowUnknown((e.target as HTMLInputElement).checked)}>
+              <span></span>
+            </span>
+          </label>` : nothing}
         ${people.length === 0
           ? html`<div style="color:var(--text-dim);font-size:11px;padding:4px 0">
               None yet. Add people to give BLE / GPS presence a name, avatar, and color.
@@ -877,9 +947,8 @@ export class Sidebar extends LitElement {
         <button class="btn" style="width:100%;margin-top:6px" @click=${() => p.addPerson()}>
           + Add person
         </button>
-        ${this._bermudaSubsection()}
-      </div>
-    `;
+        ${bermudaOn ? this._bermudaSubsection() : nothing}
+    `);
   }
 
   private _personItem(pe: DioramaPerson) {
@@ -968,19 +1037,21 @@ export class Sidebar extends LitElement {
             <button class="btn" style="font-size:11px"
                     @click=${() => upd(x => { x.haPersonId = undefined; })}>Unbind</button>` : nothing}
         </div>
-        <div class="row" style="margin-top:4px"><label>Bermuda device</label>
-          <span style="font-size:11px;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
-            ${bermudaName || '—'}
-          </span>
-        </div>
-        <div style="display:flex;gap:4px;margin-top:2px">
-          <button class="btn" style="flex:1;font-size:11px" @click=${() => this._pickBermudaDevice(pe)}>
-            ${pe.bermudaDeviceId ? 'Rebind' : 'Bind'}…
-          </button>
-          ${pe.bermudaDeviceId ? html`
-            <button class="btn" style="font-size:11px"
-                    @click=${() => upd(x => { x.bermudaDeviceId = undefined; })}>Unbind</button>` : nothing}
-        </div>
+        ${p.store.bermudaEnabled !== false ? html`
+          <div class="row" style="margin-top:4px"><label>Bermuda device</label>
+            <span style="font-size:11px;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+              ${bermudaName || '—'}
+            </span>
+          </div>
+          <div style="display:flex;gap:4px;margin-top:2px">
+            <button class="btn" style="flex:1;font-size:11px" @click=${() => this._pickBermudaDevice(pe)}>
+              ${pe.bermudaDeviceId ? 'Rebind' : 'Bind'}…
+            </button>
+            ${pe.bermudaDeviceId ? html`
+              <button class="btn" style="font-size:11px"
+                      @click=${() => upd(x => { x.bermudaDeviceId = undefined; })}>Unbind</button>` : nothing}
+          </div>
+        ` : nothing}
         <div class="row" style="margin-top:4px"><label>GPS tracker</label>
           <span style="font-size:11px;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
             ${pe.gpsTrackerId || '—'}
@@ -1101,9 +1172,7 @@ export class Sidebar extends LitElement {
     // Resolve wall loops once to flag anchors that fall outside every room.
     const loops = rooms.length ? closedWallLoops(f.walls ?? []) : [];
     const upd = (mut: () => void) => { mut(); p.save(); p.emitConfig(); };
-    return html`
-      <div class="section">
-        <h3>Rooms</h3>
+    return this._section('rooms', 'Rooms', () => html`
         ${placing ? html`
           <div style="display:flex;align-items:center;gap:6px;font-size:11px;
                       color:var(--text-dim);padding:4px 0">
@@ -1137,8 +1206,7 @@ export class Sidebar extends LitElement {
                 @click=${() => { p.placingRoomId = NEW_ROOM; p.emitConfig(); }}>
           + Add room
         </button>
-      </div>
-    `;
+    `);
   }
 
   private _deleteRoom(id: string): void {
@@ -1151,12 +1219,8 @@ export class Sidebar extends LitElement {
     const p = this.planner;
     const f = p.floor();
     if (f.doors.length === 0) return nothing;
-    return html`
-      <div class="section">
-        <h3>Doors</h3>
-        ${this._groupedList(f.doors, d => this._doorItem(d, f.doors.indexOf(d)))}
-      </div>
-    `;
+    return this._section('doors', 'Doors', () =>
+      this._groupedList('doors', f.doors, d => this._doorItem(d, f.doors.indexOf(d))));
   }
 
   private _doorItem(d: Door, idx: number) {
@@ -1291,12 +1355,8 @@ export class Sidebar extends LitElement {
     const p = this.planner;
     const f = p.floor();
     if (f.windows.length === 0) return nothing;
-    return html`
-      <div class="section">
-        <h3>Windows</h3>
-        ${this._groupedList(f.windows, w => this._windowItem(w, f.windows.indexOf(w)))}
-      </div>
-    `;
+    return this._section('windows', 'Windows', () =>
+      this._groupedList('windows', f.windows, w => this._windowItem(w, f.windows.indexOf(w))));
   }
 
   private _windowItem(w: WindowType, idx: number) {
@@ -1419,12 +1479,8 @@ export class Sidebar extends LitElement {
     const p = this.planner;
     const f = p.floor();
     if (f.furniture.length === 0) return nothing;
-    return html`
-      <div class="section">
-        <h3>Furniture</h3>
-        ${this._groupedList(f.furniture, piece => this._furnitureItem(piece, f.furniture.indexOf(piece)))}
-      </div>
-    `;
+    return this._section('furniture', 'Furniture', () =>
+      this._groupedList('furniture', f.furniture, piece => this._furnitureItem(piece, f.furniture.indexOf(piece))));
   }
 
   private _furnitureItem(piece: Furniture, idx: number) {
@@ -1612,9 +1668,7 @@ export class Sidebar extends LitElement {
 
   private _customObjectsSection() {
     const objs = this.planner.store.customObjects ?? [];
-    return html`
-      <div class="section">
-        <h3>Custom Objects</h3>
+    return this._section('custom', 'Custom Objects', () => html`
         ${objs.length === 0 ? html`
           <div style="color:var(--text-dim);font-size:11px;padding:2px 0 6px">
             Build reusable objects from primitive parts, then place them like any furniture kind.
@@ -1623,8 +1677,7 @@ export class Sidebar extends LitElement {
         <button class="btn" style="width:100%;margin-top:6px" @click=${() => this._addCustomObject()}>
           + New object
         </button>
-      </div>
-    `;
+    `);
   }
 
   private _customObjectItem(rec: ObjectRecipe) {
@@ -1795,14 +1848,10 @@ export class Sidebar extends LitElement {
       ...f.lights.map(l => ({ x: l.x, y: l.y, k: 'light' as const, ref: l })),
       ...f.switches.map(sw => ({ x: sw.x, y: sw.y, k: 'switch' as const, ref: sw })),
     ];
-    return html`
-      <div class="section">
-        <h3>Lights &amp; Switches</h3>
-        ${this._groupedList(fixtures, w => this._fixtureItem(
-          w.k, w.ref,
-          w.k === 'light' ? f.lights.indexOf(w.ref as Light) : f.switches.indexOf(w.ref as SwitchFixture)))}
-      </div>
-    `;
+    return this._section('fixtures', 'Lights & Switches', () =>
+      this._groupedList('fixtures', fixtures, w => this._fixtureItem(
+        w.k, w.ref,
+        w.k === 'light' ? f.lights.indexOf(w.ref as Light) : f.switches.indexOf(w.ref as SwitchFixture))));
   }
 
   private _fixtureItem(kind: 'light' | 'switch', it: Light | SwitchFixture, idx: number) {
@@ -2038,9 +2087,7 @@ export class Sidebar extends LitElement {
       (s as unknown as Record<string, unknown>)[k as string] = parse((e.target as HTMLInputElement).value);
       p.save(); p.emitConfig();
     };
-    return html`
-      <div class="section">
-        <h3>Sensor — ${s.label || 'Unnamed'}</h3>
+    return this._section('active-sensor', `Sensor — ${s.label || 'Unnamed'}`, () => html`
         <div class="row"><label>Label</label>
           <input type="text" .value=${s.label} @input=${u('label')}></div>
         ${this._lockRow(s)}
@@ -2106,8 +2153,7 @@ export class Sidebar extends LitElement {
                   p.store.activeSensorId = null;
                   p.save(); p.emitConfig();
                 }}>Delete sensor</button>
-      </div>
-    `;
+    `);
   }
 
   // ── HA sections (zones / objects / targets / sensor cfg) ──────────────
@@ -2125,9 +2171,7 @@ export class Sidebar extends LitElement {
     // overwritten on the next slow-sync.
     const ready = d.inclusionZoneSlugs.length > 0 || d.objectSlugs.length > 0;
     if (!ready) {
-      return html`
-        <div class="section">
-          <h3>${s.label || 'Sensor'}</h3>
+      return this._section('ha-sensor', s.label || 'Sensor', () => html`
           <div style="font-size:11px;color:var(--text-dim);padding:8px;text-align:center;
                       border:1px dashed var(--border);border-radius:4px">
             Loading entities from <code>${s.deviceSlug}</code>…<br>
@@ -2136,13 +2180,11 @@ export class Sidebar extends LitElement {
               will appear once the device finishes its initial publish.
             </span>
           </div>
-        </div>
-      `;
+      `);
     }
 
     const zones = p.zonesBy[s.id]; const objs = p.objectsBy[s.id];
-    return html`
-      <div class="section">
+    return this._section('ha-sensor', `${s.label || 'Sensor'} — HA data`, () => html`
         <h3>Inclusion Zones</h3>
         ${d.inclusionZoneSlugs.length === 0
           ? html`<div style="font-size:11px;color:var(--text-dim);padding:4px 0">Loading…</div>`
@@ -2182,8 +2224,7 @@ export class Sidebar extends LitElement {
           Sensor Configuration <span class="collapse-arrow">▸</span>
         </h3>
         ${this._cfgOpen ? this._sensorCfgBody(s, d) : nothing}
-      </div>
-    `;
+    `);
   }
 
   private _zoneRow(s: Sensor, prefix: 'iz' | 'fz', zi: number, z: Zone, dotColor: string) {
@@ -2389,9 +2430,10 @@ export class Sidebar extends LitElement {
       { key: 'nameLabels', label: 'Name labels' },
       { key: 'activity', label: 'Activity glow' },
     ];
-    return html`
-      <div class="section">
-        <h3>Layers</h3>
+    // Display order only: alphabetical by label (locale compare). The preset
+    // save loop keys by `d.key`, so display order doesn't affect semantics.
+    const sortedDefs = [...defs].sort((a, b) => a.label.localeCompare(b.label));
+    return this._section('layers', 'Layers', () => html`
         <div class="row"><label>Preset</label>
           <select @change=${(e: Event) => {
                     const el = e.target as HTMLSelectElement;
@@ -2412,7 +2454,7 @@ export class Sidebar extends LitElement {
             ${presets.map(pr => html`<option value=${pr.id}>${pr.name}</option>`)}
           </select>
         </div>
-        ${defs.map(d => html`
+        ${sortedDefs.map(d => html`
           <label class="row" style="padding:0">
             <span style="color:var(--text-dim);font-size:11px;flex:1">${d.label}</span>
             <span class="mini-toggle">
@@ -2481,8 +2523,7 @@ export class Sidebar extends LitElement {
           "Simple floorplan" hides fixtures but keeps activity glow: rooms with
           lights on or motion light up on the bare plan.
         </div>
-      </div>
-    `;
+    `);
   }
 
   // ── 3D scene appearance ───────────────────────────────────────────────
@@ -2532,9 +2573,7 @@ export class Sidebar extends LitElement {
           : 'Bind the source entities above.'}</span>`;
     }
 
-    return html`
-      <div class="section" id="diorama-weather-section">
-        <h3>Weather</h3>
+    return this._section('weather', 'Weather', () => html`
         <div style="display:flex;flex-direction:column;gap:2px;margin-bottom:6px">
           ${sourceRadio('entity', 'HA weather entity')}
           ${sourceRadio('sensors', 'Local station sensors')}
@@ -2594,8 +2633,7 @@ export class Sidebar extends LitElement {
         <div style="font-size:11px;padding:6px 8px;background:rgba(0,0,0,0.25);border-radius:4px;line-height:1.4">
           ${preview}
         </div>
-      </div>
-    `;
+    `, { id: 'diorama-weather-section' });
   }
 
   // ── GPS / Geo section (Feature G, phase G1) ───────────────────────────────
@@ -2617,9 +2655,7 @@ export class Sidebar extends LitElement {
     const calCount = landmarks.filter(l => l.lat != null && l.lon != null).length;
     const placingNew = p.placingLandmarkId === NEW_LANDMARK;
     const geo = p.store.geo;
-    return html`
-      <div class="section">
-        <h3>GPS / Geo</h3>
+    return this._section('geo', 'GPS / Geo', () => html`
         ${placingNew ? html`
           <div style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text-dim);padding:4px 0">
             <span style="flex:1">📍 Click on the plan to place the landmark…</span>
@@ -2669,8 +2705,7 @@ export class Sidebar extends LitElement {
                    g.accuracyGateM = isFinite(v) ? Math.max(1, v) : 30;
                  })}>
         </div>
-      </div>
-    `;
+    `);
   }
 
   private _landmarkItem(lm: GeoLandmark) {
@@ -2846,9 +2881,7 @@ export class Sidebar extends LitElement {
       if (!p.store.scene3d) p.store.scene3d = { preset: 'night' };
       mut(); p.save(); p.emitConfig();
     };
-    return html`
-      <div class="section">
-        <h3>3D Scene</h3>
+    return this._section('scene3d', '3D Scene', () => html`
         <div class="row"><label>Mode</label>
           <select .value=${sc.lightMode ?? 'manual'}
                   @change=${(e: Event) => upd(() => {
@@ -2949,8 +2982,7 @@ export class Sidebar extends LitElement {
                  })}>
         </div>
         ${this._floorLookOverrides(sc)}
-      </div>
-    `;
+    `);
   }
 
   // Per-floor overrides of the global colors/texture — lets each floor keep
@@ -3008,9 +3040,7 @@ export class Sidebar extends LitElement {
     const f = p.floor();
     const m = f.model3d;
     const upd = (mut: () => void) => { mut(); p.save(); p.emitConfig(); };
-    return html`
-      <div class="section">
-        <h3>3D Model (Sweet Home 3D)</h3>
+    return this._section('model3d', '3D Model (Sweet Home 3D)', () => html`
         <button class="btn" style="width:100%;margin-bottom:4px" @click=${this._importObj}>
           Import OBJ (+ MTL)…
         </button>
@@ -3072,8 +3102,7 @@ export class Sidebar extends LitElement {
             on other devices. Placement settings sync via HA.
           </div>
         ` : nothing}
-      </div>
-    `;
+    `);
   }
 
   private _importObj = () => {
@@ -3125,15 +3154,12 @@ export class Sidebar extends LitElement {
     const p = this.planner;
     const f = p.floor();
     const bg = f.bg;
-    return html`
-      <div class="section" style="margin-top:auto">
-        <h3>Background image</h3>
+    return this._section('bg', 'Background image', () => html`
         <button class="btn" style="width:100%;margin-bottom:4px" @click=${this._uploadBg}>
           Upload image…
         </button>
         ${bg ? this._bgControls(bg) : nothing}
-      </div>
-    `;
+    `, { style: 'margin-top:auto' });
   }
 
   private _bgControls(bg: BgImage) {

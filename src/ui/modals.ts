@@ -600,6 +600,19 @@ export class SettingsDrawer extends LitElement {
           </button>
           <button class="danger-btn" @click=${this._clearConn}>Clear &amp; Log Out</button>
         </div>
+        ${this.planner.uiMode === 'edit' ? html`
+          <div style="margin-bottom:18px">
+            <h3 style="font-size:11px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:8px">
+              Integrations
+            </h3>
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text)"
+                   title="When off, the Bermuda BLE tracking integration is neither scanned nor displayed. BLE proxy fixtures stay placeable.">
+              <input type="checkbox" .checked=${this.planner.store.bermudaEnabled !== false}
+                     @change=${(e: Event) => this._setBermudaEnabled((e.target as HTMLInputElement).checked)}>
+              <span style="flex:1">Bermuda BLE tracking</span>
+            </label>
+          </div>
+        ` : nothing}
         <div style="border-top:1px solid var(--border);padding-top:10px;font-size:11px;
                     color:var(--text-dim)"
              title="Diorama build version (from package.json)">
@@ -620,4 +633,13 @@ export class SettingsDrawer extends LitElement {
     localStorage.removeItem('diorama:token');
     location.reload();
   };
+
+  private _setBermudaEnabled(on: boolean): void {
+    // Absent/true = enabled; store false explicitly to disable. save() no-ops
+    // outside edit mode, so this row only renders in edit anyway.
+    this.planner.store.bermudaEnabled = on ? undefined : false;
+    this.planner.save();
+    this.planner.emitConfig();
+    this.requestUpdate();
+  }
 }

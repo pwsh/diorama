@@ -472,7 +472,7 @@ export class Planner extends EventTarget {
     // re-solve on new samples. A full refresh (changedId undefined) re-reads
     // every mapped entity; a single change records just that one. Solve cadence
     // follows Bermuda's ~0.1 Hz push rate — never per frame.
-    if (Object.keys(this.bleEntityMap).length) {
+    if (this.store.bermudaEnabled !== false && Object.keys(this.bleEntityMap).length) {
       if (changedId === undefined) {
         for (const eid of Object.keys(this.bleEntityMap))
           if (states[eid]) this._recordBleSample(eid);
@@ -536,7 +536,7 @@ export class Planner extends EventTarget {
     // sidebar click when the house is already set up (people bound / proxies
     // placed). scanBermuda rebuilds bleEntityMap; the next state event onward
     // records samples + solves. Cheap, guarded to run once.
-    if (!this._bleAutoScanned && changedId === undefined) {
+    if (!this._bleAutoScanned && changedId === undefined && this.store.bermudaEnabled !== false) {
       this._bleAutoScanned = true;
       const wantsBle = (this.store.people ?? []).some(p => p.bermudaDeviceId)
         || this.store.floors.some(fl => (fl.bleProxies ?? []).length > 0);
@@ -579,6 +579,7 @@ export class Planner extends EventTarget {
             layerPresets2d: remote.layerPresets2d ?? undefined,
             customObjects:  remote.customObjects  ?? undefined,
             people:         remote.people         ?? undefined,
+            bermudaEnabled: remote.bermudaEnabled ?? undefined,
             bleShowUnknown: remote.bleShowUnknown ?? undefined,
             weather:        remote.weather        ?? undefined,
             geo:            remote.geo            ?? undefined,
@@ -1257,6 +1258,7 @@ export class Planner extends EventTarget {
   // Runtime-only; call from the sidebar (on demand / refresh button).
   async scanBermuda(): Promise<void> {
     if (!this.hass) return;
+    if (this.store.bermudaEnabled === false) return;   // integration disabled in Settings
     let ents: Awaited<ReturnType<HaApi['getEntityRegistry']>>;
     let devs: Awaited<ReturnType<HaApi['getDevices']>>;
     try {
@@ -1479,6 +1481,7 @@ export class Planner extends EventTarget {
   // devices unheard-from past BLE_RETIRE_MS (drops their lerp slot too). Cheap
   // (a handful of devices) — safe to call each frame.
   get blePeople(): BlePerson[] {
+    if (this.store.bermudaEnabled === false) return [];   // integration disabled: hide all BLE targets/dots/fusion
     const now = Date.now();
     const showUnknown = this.store.bleShowUnknown !== false;
     const out: BlePerson[] = [];

@@ -419,6 +419,7 @@ export interface Store {
   layerPresets2d?: Layer2DPreset[];  // user-saved 2D layer presets
   customObjects?: ObjectRecipe[];    // user-authored object recipes
   people?: DioramaPerson[];          // household identity registry (BLE / GPS resolve to a person)
+  bermudaEnabled?: boolean;          // Bermuda BLE tracking on/off (absent or true = enabled; false = neither displayed nor used)
   bleShowUnknown?: boolean;          // show BLE devices not mapped to a person (absent = true); consumed in B2
   weather?: WeatherConfig;           // weather source + chip config (Feature W)
   geo?: GeoConfig;                   // landmarks + lat/lon↔plan calibration (Feature G)

@@ -36,6 +36,23 @@ deployed to the live HA instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Sidebar UX + Bermuda disable** (UI-only batch): (1) every sidebar `.section`
+  is collapsible via `Sidebar._section(slug, title, bodyThunk, opts?)` — a
+  clickable `<h3 class="collapsible-header">` with a `▸`/rotated arrow; collapsed
+  keys persist device-local in `localStorage['diorama:sidebar:collapsed']` (JSON
+  array, NOT the HA store), default expanded. Room-grouped lists get per-room
+  collapse rows keyed `<sectionSlug>/<roomId>` (`/none` bucket). `_autoExpandActive()`
+  (top of `render`) expands the section holding the active/selected item so
+  canvas selection reveals its editor; it only ever expands. Body thunks fire
+  only while expanded, so Lit's config-channel reconciliation (focused-input
+  survival) is unchanged. (2) 2D Layers rows now sort alphabetically by label for
+  display only (preset save loop keys by `d.key`, so semantics are untouched).
+  (3) `Store.bermudaEnabled` (absent/true = on) — a Settings-drawer "Integrations"
+  checkbox (edit-mode only). When false the whole Bermuda BLE path is inert
+  (`scanBermuda` early-return, no auto-scan, no sample recording/`_solveBle`,
+  `blePeople → []`), and the People Bermuda subsection / unknown-BLE toggle /
+  per-person device-binding row hide while BLE Proxies shows a dim disabled hint.
+  Added to `_loadFromHa`'s explicit field list.
 - **Editor snapping (fireplace / switch wall lock + smart guides)**: fireplace
   lights (`snapFireplaceToWall`) and switches (`snapSwitchToWall`) now lock flush
   to the nearest wall on drop + move-release via a shared `snapToWallEdge`
