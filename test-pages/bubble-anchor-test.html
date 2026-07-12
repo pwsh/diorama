@@ -1,0 +1,77 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>bubble anchor</title>
+<style>html,body{margin:0;background:#111}#c{width:1100px;height:750px}</style>
+<div id="c"></div>
+<script type="module">
+ try {
+  const mod = await import('./assets/three-renderer.js?v=' + Date.now());
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+  const floor = {
+    id: 'f1', name: 'B', w: 12000, d: 7000,
+    walls: [{ id: 'w1', points: [{x:200,y:200},{x:11800,y:200},{x:11800,y:6800},{x:200,y:6800},{x:200,y:200}] }],
+    furniture: [{ id: 'sofa1', x: 6000, y: 3500, w: 2000, h: 900, kind: 'sofa', rotation: 0 }],
+    lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [], windows: [], bg: null, model3d: null, look3d: null, rooms: [],
+  };
+  r.updateFloor(floor, { preset: 'night', floorColor: '#3a3f4a', floorTex: 'none', wallColor: '#7a8494' });
+  r.applyViewPreset('iso');
+  const ctx = { entityOn: {}, roomNames: {}, timeBucket: 'night' };
+  const realNow = performance.now.bind(performance);
+  let fakeNow = realNow();
+  performance.now = () => fakeNow;
+
+  const MARGIN = 460;          // BUBBLE_ABOVE_PLUMBOB in the renderer
+  const results = [];
+  const ok = (name, cond, detail = '') => results.push(`${cond ? 'ok' : 'FAIL'}:${name}${detail ? '(' + detail + ')' : ''}`);
+
+  // Force a committed bubble on a rig, run one frame so the sprite is created +
+  // positioned, and return {bubbleY, plumbobY, headY}.
+  const probe = (key, forceKind) => {
+    const h = r._humanoids[key];
+    h.bubbleKind = forceKind;                 // commit directly (bypass hysteresis)
+    fakeNow += 100; r.updateTargets(currentTargets, ctx);  // _syncBubble builds + positions
+    return { h, by: h.bubble ? h.bubble.position.y : null, py: h.plumbob.position.y, hy: h.headTopReach };
+  };
+
+  // Standing rigs of very different proportions.
+  let currentTargets = [
+    { key: 'child', x: 2000, y: 2000, color: 0xffd54f, avatar: 'child' },
+    { key: 'super', x: 4000, y: 2000, color: 0xff8a65, avatar: 'supermodel' },
+    { key: 'adult', x: 8000, y: 2000, color: 0x4fc3f7, avatar: 'adult' },
+  ];
+  fakeNow += 100; r.updateTargets(currentTargets, ctx);   // spawn rigs
+
+  const pChild = probe('child', '\u{1F4D6}');
+  const pSuper = probe('super', '\u{1F4D6}');
+  const pAdult = probe('adult', '\u{1F4D6}');
+
+  for (const [nm, p] of [['child', pChild], ['super', pSuper], ['adult', pAdult]]) {
+    ok('bubble_over_plumbob_' + nm, p.by != null && Math.abs(p.by - (p.py + MARGIN)) < 1, p.by == null ? 'no-bubble' : `${p.by.toFixed(0)} vs ${(p.py + MARGIN).toFixed(0)}`);
+    ok('bubble_above_head_' + nm, p.by != null && p.by > p.hy, `${p.by?.toFixed(0)}>${p.hy.toFixed(0)}`);
+  }
+  // Per-rig, not a constant: a short child's bubble must sit well below the tall
+  // supermodel's (proves the anchor tracks head height).
+  ok('child_below_super', pChild.by < pSuper.by - 100, `${pChild.by.toFixed(0)} < ${pSuper.by.toFixed(0)}`);
+
+  // Seated: park the adult on the sofa ~7 s, then re-probe. The whole root drops
+  // when seated, so the bubble (anchored to the plumbob, child of the root) must
+  // stay MARGIN above the plumbob and the bubble's WORLD height must drop.
+  const seatTarget = { key: 'seat', x: 6000, y: 3500, color: 0x4fc3f7, avatar: 'adult' };
+  currentTargets = [seatTarget];
+  for (let i = 0; i < 480; i++) { fakeNow += 16.7; r.updateTargets(currentTargets, ctx); }
+  const hs = r._humanoids['seat'];
+  ok('seated', hs && hs.sit > 0.5, hs ? hs.sit.toFixed(2) : 'no-rig');
+  const pSeat = probe('seat', '\u{1F4D6}');
+  ok('bubble_over_plumbob_seated', pSeat.by != null && Math.abs(pSeat.by - (pSeat.py + MARGIN)) < 1, pSeat.by == null ? 'no-bubble' : `${pSeat.by.toFixed(0)} vs ${(pSeat.py + MARGIN).toFixed(0)}`);
+  const seatWorld = hs.bubble.getWorldPosition(new (hs.plumbob.position.constructor)()).y;
+  const standWorld = pAdult.py + MARGIN;  // adult stood at root y=0 ⇒ world≈local
+  ok('seated_bubble_drops', seatWorld < standWorld - 100, `${seatWorld.toFixed(0)} < ${standWorld.toFixed(0)}`);
+
+  performance.now = realNow;
+  const pass = results.every(x => x.startsWith('ok'));
+  const n = results.length, p = results.filter(x => x.startsWith('ok')).length;
+  document.title = `BUBBLE ${pass ? 'PASS' : 'FAIL'} ${p}/${n} ${results.join(' ')}`;
+ } catch (e) { document.title = 'ERR: ' + (e && e.stack ? e.stack.split('\n').slice(0,3).join(' | ') : e); }
+</script>

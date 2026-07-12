@@ -8,7 +8,7 @@ import { NEW_ROOM, NEW_LANDMARK } from '../planner.js';
 import { compass8 } from '../geo.js';
 import type {
   Sensor, Zone, ObjectHalo, BgImage, MotionSensor, EnvSensor, EnvKind, Light, SwitchFixture, LightIconKind,
-  Furniture, FurnitureKind, Door, Window as WindowType, Layers2D, Floor, Room,
+  Furniture, FurnitureKind, Door, Window as WindowType, WindowKind, Layers2D, Floor, Room,
   ObjectRecipe, RecipePrimitive, RecipeShape, ActivityKind, AvatarKind,
   BleProxy, DioramaPerson, GeoLandmark,
 } from '../types.js';
@@ -32,7 +32,7 @@ import {
   fmtLen,
   motionColor, motionIntensity, sensorColor, lightIconKind, MOTION_DEFAULTS,
   BLE_PROXY_DEFAULTS, bleProxyHeight,
-  FURNITURE_KINDS, furnitureKind, resolveFurnitureDef,
+  FURNITURE_KINDS, furnitureKind, resolveFurnitureDef, WINDOW_DEFAULTS,
   ENV_KINDS, ENV_DEFAULTS, ENV_SCALE_MIN, ENV_SCALE_MAX,
   envKindOf, envColor, envValueText, envHeight, envScale,
   furnitureCat, type FurnitureCat,
@@ -77,6 +77,14 @@ const LIGHT_KINDS: { id: LightIconKind; label: string; glyph: string }[] = [
   { id: 'under_cabinet', label: 'Under-cabinet strip', glyph: '▂' },
   { id: 'wall_sconce', label: 'Wall sconce (up/down)', glyph: '◨' },
   { id: 'step',        label: 'Step light',            glyph: '▤' },
+];
+
+const WINDOW_KINDS: { id: WindowKind; label: string }[] = [
+  { id: 'single',        label: 'Single pane' },
+  { id: 'double_hung',   label: 'Double-hung' },
+  { id: 'casement_pair', label: 'Casement pair' },
+  { id: 'sliding',       label: 'Sliding' },
+  { id: 'picture',       label: 'Picture (fixed)' },
 ];
 
 const TOOLS: { id: Tool; label: string }[] = [
@@ -1448,6 +1456,30 @@ export class Sidebar extends LitElement {
                  @input=${(e: Event) => upd(() => {
                    const v = parseFloat((e.target as HTMLInputElement).value) || 0;
                    w.rotation = ((Math.round(v / 15) * 15) % 360 + 360) % 360;
+                 })}>
+        </div>
+        <div class="row"><label>Type</label>
+          <select @change=${(e: Event) => upd(() => {
+                    w.kind = (e.target as HTMLSelectElement).value as WindowKind;
+                  })}>
+            ${WINDOW_KINDS.map(k => html`
+              <option value=${k.id} ?selected=${(w.kind ?? 'single') === k.id}>${k.label}</option>`)}
+          </select>
+        </div>
+        <div class="row"><label>Sill (mm)</label>
+          <input type="number" min="0" max="2400" step="50"
+                 .value=${String(Math.round(w.sill ?? WINDOW_DEFAULTS.sill))}
+                 @input=${(e: Event) => upd(() => {
+                   const v = parseFloat((e.target as HTMLInputElement).value);
+                   w.sill = isFinite(v) ? Math.max(0, Math.min(2400, v)) : WINDOW_DEFAULTS.sill;
+                 })}>
+        </div>
+        <div class="row"><label>Height (mm)</label>
+          <input type="number" min="200" max="2600" step="50"
+                 .value=${String(Math.round(w.height ?? WINDOW_DEFAULTS.height))}
+                 @input=${(e: Event) => upd(() => {
+                   const v = parseFloat((e.target as HTMLInputElement).value);
+                   w.height = isFinite(v) ? Math.max(200, Math.min(2600, v)) : WINDOW_DEFAULTS.height;
                  })}>
         </div>
         <div class="row"><label>HA entity</label>

@@ -1,0 +1,94 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>windows</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<script type="module">
+ try {
+  const q = new URLSearchParams(location.search);
+  const mod = await import('./assets/three-renderer.js?v=' + Date.now());
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+  const scene3d = { preset: 'day', floorColor: '#8a7860', floorTex: 'none', wallColor: '#cfd2d6' };
+  const wallY = 2500;
+  const mkFloor = (windows) => ({
+    id: 'f1', name: 'T', w: 12000, d: 5000,
+    walls: [{ id: 'w1', points: [{x:500,y:wallY},{x:11500,y:wallY}] }],
+    furniture: [], lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [], windows, bg: null, model3d: null, look3d: null, rooms: [],
+  });
+
+  const KINDS = ['single', 'double_hung', 'casement_pair', 'sliding', 'picture'];
+  // Glass-pane count expected per kind (frame bars/mullions excluded).
+  const EXPECT_PANES = { single: 1, double_hung: 2, casement_pair: 2, sliding: 2, picture: 1 };
+
+  // --- Helpers reading BoxGeometry params directly (Y-rotation doesn't move Y).
+  const isTransparentGlass = m => m.material && m.material.transparent === true;
+  const paneMeshes = grp => { const out = []; grp.traverse(o => { if (o.isMesh && isTransparentGlass(o)) out.push(o); }); return out; };
+  const worldY = o => { let y = 0, n = o; while (n) { y += (n.position ? n.position.y : 0); n = n.parent; } return y; };
+  const paneTop = m => worldY(m) + m.geometry.parameters.height / 2;
+  const paneBot = m => worldY(m) - m.geometry.parameters.height / 2;
+
+  const results = [];
+  const ok = (name, cond, detail = '') => results.push(`${cond ? 'ok' : 'FAIL'}:${name}${detail ? '(' + detail + ')' : ''}`);
+
+  // === 1. Closed: pane counts per kind =====================================
+  const closedWindows = KINDS.map((k, i) => ({
+    id: 'wc' + i, x: 1500 + i * 2000, y: wallY, w: 1400, rotation: 0,
+    entity_id: null, kind: k,
+  }));
+  r.updateFloor(mkFloor(closedWindows), scene3d);
+  r.updateDoorsWindows([], closedWindows, () => null);
+  KINDS.forEach((k, i) => {
+    const grp = r._doorGroup.children[i];
+    const n = paneMeshes(grp).length;
+    ok('panes_' + k, n === EXPECT_PANES[k], `${n}/${EXPECT_PANES[k]}`);
+  });
+
+  // === 2. Open behaviour per kind ==========================================
+  const openWindows = KINDS.map((k, i) => ({
+    id: 'wo' + i, x: 1500 + i * 2000, y: wallY, w: 1400, rotation: 0,
+    entity_id: 'binary_sensor.o' + i, kind: k,
+  }));
+  const openStates = {}; openWindows.forEach(w => openStates[w.entity_id] = { state: 'on', attributes: {} });
+  r.updateDoorsWindows([], openWindows, id => openStates[id] || null);
+  const g = i => r._doorGroup.children[i];
+  // single: pane tilts (rotation.x != 0)
+  { const p = paneMeshes(g(0))[0]; ok('single_tilts', Math.abs(p.rotation.x) > 0.1, p.rotation.x.toFixed(2)); }
+  // double_hung: lower sash raised to the upper sash's Y
+  { const ps = paneMeshes(g(1)).sort((a, b) => a.position.y - b.position.y);
+    ok('dh_slides_up', Math.abs(ps[0].position.y - ps[1].position.y) < 1, `${ps[0].position.y.toFixed(0)},${ps[1].position.y.toFixed(0)}`); }
+  // casement_pair: both hinge groups rotated about Y, opposite signs
+  { const hinges = g(2).children.filter(c => c.isGroup);
+    const rots = hinges.map(h => h.rotation.y);
+    ok('casement_swings', hinges.length === 2 && Math.abs(rots[0]) > 0.1 && Math.abs(rots[1]) > 0.1 && Math.sign(rots[0]) !== Math.sign(rots[1]), rots.map(x => x.toFixed(2)).join(',')); }
+  // sliding: the two sashes share the same X when open
+  { const ps = paneMeshes(g(3));
+    ok('sliding_overlaps', Math.abs(ps[0].position.x - ps[1].position.x) < 1, `${ps[0].position.x.toFixed(0)},${ps[1].position.x.toFixed(0)}`); }
+  // picture: no movement (rotation.x == 0, z == 0) even when "open"
+  { const p = paneMeshes(g(4))[0]; ok('picture_static', Math.abs(p.rotation.x) < 1e-6 && Math.abs(p.position.z) < 1e-6, `rx=${p.rotation.x} z=${p.position.z}`); }
+
+  // === 3. Custom sill/height moves glass + wall cut boxes ===================
+  const custom = [{ id: 'cust', x: 4000, y: wallY, w: 1600, rotation: 0, entity_id: null, kind: 'single', sill: 400, height: 1400 }];
+  r.updateFloor(mkFloor(custom), scene3d);
+  r.updateDoorsWindows([], custom, () => null);
+  // Glass pane bottom ≈ sill(400), top ≈ sill+height(1800)
+  { const p = paneMeshes(r._doorGroup.children[0])[0];
+    ok('glass_bottom', Math.abs(paneBot(p) - 400) < 5, paneBot(p).toFixed(0));
+    ok('glass_top', Math.abs(paneTop(p) - 1800) < 5, paneTop(p).toFixed(0)); }
+  // Wall sub-sill + header boxes: the 100 mm-thick wall pieces. Sub-sill top≈400,
+  // header bottom≈1800.
+  { const wp = [];
+    r._floorGroup.traverse(o => { if (o.isMesh && o.geometry.parameters && o.geometry.parameters.width === 100) wp.push(o); });
+    const tops = wp.map(paneTop), bots = wp.map(paneBot);
+    const minTop = Math.min(...tops);              // the sub-sill's top
+    const headerBot = Math.max(...bots);           // the header's bottom
+    ok('subsill_top', Math.abs(minTop - 400) < 5, minTop.toFixed(0));
+    ok('header_bottom', Math.abs(headerBot - 1800) < 5, headerBot.toFixed(0)); }
+
+  const pass = results.every(x => x.startsWith('ok'));
+  const n = results.length, p = results.filter(x => x.startsWith('ok')).length;
+  document.title = `WINDOW ${pass ? 'PASS' : 'FAIL'} ${p}/${n} ${results.join(' ')}`;
+  r.applyViewPreset('iso');
+ } catch (e) { document.title = 'ERR: ' + (e && e.stack ? e.stack.split('\n').slice(0,3).join(' | ') : e); }
+</script>

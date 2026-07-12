@@ -36,6 +36,25 @@ deployed to the live HA instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Rendering/model fixes batch** (4 user-reported): (1) thought bubbles +
+  B3 name labels now anchor per-rig off `h.plumbob.position.y`
+  (`BUBBLE_ABOVE_PLUMBOB` 460 / `NAME_ABOVE_PLUMBOB` 318) instead of fixed
+  constants, so they track child/teddy/supermodel proportions and drop with
+  the root when seated (`bubble-anchor-test.html`, BUBBLE PASS). (2) Vertical
+  jamb seams at door/window openings fixed — each sub-sill/header/lintel is
+  extended ~3 mm INTO the abutting jamb runs (`JAMB_OVL`) so their end caps
+  aren't coplanar with the jamb (the coincident-face gotcha on transparent
+  toon walls). (3) `Window` gains item-level `kind` (single/double_hung/
+  casement_pair/sliding/picture) + `sill`/`height` (`WINDOW_DEFAULTS` 900/800);
+  `wallCutsForSegment` threads sill/height onto the cut so the 3D sub-sill/
+  header size per-window, `_buildWindows` builds per-kind panes (opaque
+  overlapping mullions to avoid new coincident faces), sidebar adds a kind
+  dropdown + sill/height inputs (`window-test.html`, WINDOW PASS 14/14).
+  (4) Fireplace mantel back aligned FLUSH with the firebox back plane (`D2/2`),
+  overhang moved to the FRONT, so a wall-snapped fireplace no longer pokes the
+  shelf through the wall; 2D hearth footprint bumped to 1000×450 to match
+  `W2`×`D2`/the flush-snap assumption (`fireplace-wall-test.html`, FIREPLACE
+  PASS). Regression: mega/pet/phase4-6/glass/fusion/rooms/wallsnap all green.
 - **Sidebar UX + Bermuda disable** (UI-only batch): (1) every sidebar `.section`
   is collapsible via `Sidebar._section(slug, title, bodyThunk, opts?)` — a
   clickable `<h3 class="collapsible-header">` with a `▸`/rotated arrow; collapsed

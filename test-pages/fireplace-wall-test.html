@@ -1,0 +1,60 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>fireplace wall</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<script type="module">
+ try {
+  const mod = await import('./assets/three-renderer.js?v=' + Date.now());
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+  // Wall along y=1000; fireplace snapped flush to it (back on the wall face,
+  // opening facing the room). rotation=180 aims the opening at +Y (into the room).
+  const floor = {
+    id: 'f1', name: 'T', w: 6000, d: 4000,
+    walls: [{ id: 'w1', points: [{x:500,y:1000},{x:5500,y:1000}] }],
+    furniture: [], lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [], windows: [], bg: null, model3d: null, look3d: null, rooms: [],
+  };
+  const lights = [{ id: 'fp1', x: 3000, y: 1275, entity_id: 'light.fire', iconKind: 'fireplace', rotation: 180, label: '' }];
+  const states = { 'light.fire': { state: 'on', attributes: { brightness: 255 } } };
+  r.updateFloor(floor, { preset: 'night', floorColor: '#3a3f4a', floorTex: 'none', wallColor: '#7a8494' });
+  r.updateLightsSwitches(lights, [], id => states[id] || null);
+
+  // Find the fireplace body group (holds a back slab BoxGeometry width 1000).
+  let fpGroup = null;
+  r._lightGroup.traverse(o => {
+    if (o.isGroup && o.children.some(c => c.geometry && c.geometry.parameters && c.geometry.parameters.width === 1000)) fpGroup = o;
+  });
+
+  // Axis-aligned brick/mantel box parts (skip transparent hit box + flames +
+  // the glow plane which has no depth param + inverted-hull OUTLINE shells,
+  // which are nested under their host mesh so their local z is meaningless).
+  // Work in LOCAL space so the group's yaw doesn't matter: back plane =
+  // child.position.z + depth/2 along local +Z (parts are direct children of g).
+  const parts = [];
+  fpGroup.traverse(o => {
+    if (o.isMesh && o.parent === fpGroup && !o.userData.outline
+        && o.geometry.parameters && o.geometry.parameters.width && o.geometry.parameters.depth
+        && o.material && o.material.transparent !== true) parts.push(o);
+  });
+  const localBack = m => m.position.z + m.geometry.parameters.depth / 2;
+
+  // Mantel = widest part (W2*1.15 = 1150). Its back must not sit proud of the
+  // firebox back (the max back of every other brick part, = D2/2 = 225).
+  let mantel = null, maxW = 0;
+  for (const m of parts) { const w = m.geometry.parameters.width; if (w > maxW) { maxW = w; mantel = m; } }
+  const others = parts.filter(m => m !== mantel);
+  const fireboxBack = Math.max(...others.map(localBack));
+  const mantelBack = localBack(mantel);
+  const flush = mantelBack <= fireboxBack + 2;
+
+  const results = [];
+  results.push(`${maxW === 1150 ? 'ok' : 'FAIL'}:mantel_found(${maxW})`);
+  results.push(`${Math.abs(fireboxBack - 225) < 2 ? 'ok' : 'FAIL'}:firebox_back(${fireboxBack.toFixed(0)})`);
+  results.push(`${flush ? 'ok' : 'FAIL'}:mantel_flush(mantel=${mantelBack.toFixed(0)} firebox=${fireboxBack.toFixed(0)})`);
+  const pass = results.every(x => x.startsWith('ok'));
+  document.title = `FIREPLACE ${pass ? 'PASS' : 'FAIL'} ${results.join(' ')}`;
+  r.setCameraView([0, 1600, -3600], [0, 600, 400]);
+ } catch (e) { document.title = 'ERR: ' + (e && e.stack ? e.stack.split('\n').slice(0,3).join(' | ') : e); }
+</script>

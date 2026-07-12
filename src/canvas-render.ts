@@ -1279,8 +1279,8 @@ function drawFireplace2D(ctx: CanvasRenderingContext2D, cx0: number, cy0: number
   ctx.translate(cx0, cy0);
   ctx.rotate(rotationDeg * Math.PI / 180);  // ctx.rotate is screen-CW, matching the convention
   const cx = 0, cy = 0;
-  const hw = Math.max(14, 450 * view.scale);   // half width (~900 mm hearth)
-  const hh = Math.max(7, 210 * view.scale);    // half depth
+  const hw = Math.max(14, 500 * view.scale);   // half width (1000 mm — matches 3D firebox W2)
+  const hh = Math.max(7, 225 * view.scale);    // half depth (450 mm — matches 3D firebox D2 / flush-snap)
   // Stone surround
   ctx.beginPath();
   ctx.roundRect(cx - hw, cy - hh, hw * 2, hh * 2, Math.min(hw, hh) * 0.25);

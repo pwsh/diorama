@@ -14,7 +14,7 @@ import {
   ENV_KINDS, envKindOf, envColor, envValueText, envHeight, envScale,
 } from './geometry.js';
 import type { Door, Window as WindowType, EnvSensor, BleProxy, ObjectRecipe, ActivityKind } from './types.js';
-import { wallCutsForSegment, closedWallLoops, wallKind, WALL_KINDS, furnitureLocalToWorld, furnitureWorldToLocal, pointInPolygon as pip, centroid, loopContaining, resolveRoomForPoint, roomLabel, intersectLoopWithRect, polygonArea } from './geometry.js';
+import { wallCutsForSegment, WINDOW_DEFAULTS, closedWallLoops, wallKind, WALL_KINDS, furnitureLocalToWorld, furnitureWorldToLocal, pointInPolygon as pip, centroid, loopContaining, resolveRoomForPoint, roomLabel, intersectLoopWithRect, polygonArea } from './geometry.js';
 
 export interface ZoneWorld { vertices: Vec2[]; color: number; occupied: boolean; }
 export interface HaloWorld { x: number; y: number; radius: number; occupied: boolean; }
@@ -393,13 +393,17 @@ function resolveAvatar(want: AvatarKind | 'random' | undefined,
   if (want !== 'random' && AVATAR_KIND_SET.has(want)) return want;
   return AVATAR_KINDS[djb2(key) % AVATAR_KINDS.length];
 }
-// Thought-bubble geometry (Phase 6). World-mm sprite size + the local offset
-// above the head (headY + HEAD_R + 700 ≈ 2462, clearing the plumbob at ~2002),
-// nudged to the side Sims-comic style.
-const BUBBLE_W = 620, BUBBLE_H = 580, BUBBLE_LOCAL_Y = 2462, BUBBLE_X = 180;
-// Name-label local Y (phase B3): above the plumbob (~2002) by ~300 mm. Sits
-// centered over the head; the thought bubble is offset sideways so they coexist.
-const NAME_LOCAL_Y = 2320;
+// Thought-bubble geometry (Phase 6). World-mm sprite size + side nudge (Sims-
+// comic style). The local Y is NOT a fixed constant — it is derived per-rig from
+// each variant's actual plumbob height (`h.plumbob.position.y`, itself head-top +
+// margin) so the bubble tracks child / teddy / supermodel / seated proportions
+// instead of floating detached above short rigs. Adult plumbob ≈ 2002 mm →
+// bubble ≈ 2462 (matching the old constant); the offsets below are added to it.
+const BUBBLE_W = 620, BUBBLE_H = 580, BUBBLE_X = 180;
+const BUBBLE_ABOVE_PLUMBOB = 460;   // bubble center this far above the plumbob
+// Name label (phase B3) rides the same per-rig plumbob anchor, a bit lower than
+// the bubble so both coexist over the head (the bubble is offset sideways).
+const NAME_ABOVE_PLUMBOB = 318;
 // Solo activities wired up this phase (Phase 4). watch_tv / eat_at_table /
 // work_at_desk / sleep_shared are seated/contextual and land in Phase 5.
 const PHASE4_ACTIVITIES: ReadonlySet<ActivityKind> = new Set<ActivityKind>([
@@ -1546,11 +1550,12 @@ export class ThreeDRenderer {
     }
 
     // Walls. Door / window openings cut real gaps: solid runs are full-height
-    // boxes; a window keeps a sill below (0–900) and a header above 1700;
+    // boxes; a window keeps a sub-sill below (0–sill) and a header above
+    // sill+height (both per-window, defaulting to 900 / 800 → 900 / 1700);
     // a door (2000 panel) keeps a header/lintel above 2050 so the opening
     // sits inside the 9 ft wall. Open doors/windows reveal a real gap.
     const wallH = 2743 /* 9 ft */, wallThick = 100;
-    const SILL_TOP = 900, HEADER_BOT = 1700, DOOR_HEAD = 2050;
+    const SILL_TOP = WINDOW_DEFAULTS.sill, WINDOW_GLASS_H = WINDOW_DEFAULTS.height, DOOR_HEAD = 2050;
     const wallMatFor = () => this._mat({
       color: scene3d?.wallColor ? hexToInt(scene3d.wallColor) : 0xbbbbbb,
       emissive: 0x444444, emissiveIntensity: 0.1,
@@ -1607,12 +1612,21 @@ export class ThreeDRenderer {
         };
         const { solids, openings } = wallCutsForSegment(a, b, f.doors ?? [], f.windows ?? []);
         for (const sv of solids) piece(sv.t0, sv.t1, 0, kindH);
+        // Overlap each sub-sill / header / lintel a few mm INTO the abutting
+        // solid jamb runs. Without this their end-cap faces are exactly coplanar
+        // with the jamb's — coincident faces (the CLAUDE.md gotcha) that hatch
+        // into thin vertical seams up the wall on the flat toon shading. The
+        // overlap buries the caps inside the full-height jamb (never a gap).
+        const JAMB_OVL = 3;
         for (const op of openings) {
+          const o0 = op.t0 - JAMB_OVL, o1 = op.t1 + JAMB_OVL;
           if (op.kind === 'window') {
-            piece(op.t0, op.t1, 0, SILL_TOP);        // sill
-            piece(op.t0, op.t1, HEADER_BOT, kindH);  // header (skipped on low walls)
+            const sillTop = op.sill ?? SILL_TOP;                 // bottom of glass
+            const headerBot = (op.sill ?? SILL_TOP) + (op.height ?? WINDOW_GLASS_H);
+            piece(o0, o1, 0, sillTop);         // sub-sill
+            piece(o0, o1, headerBot, kindH);   // header (skipped on low walls)
           } else {
-            piece(op.t0, op.t1, DOOR_HEAD, kindH);   // lintel (skipped on low walls)
+            piece(o0, o1, DOOR_HEAD, kindH);   // lintel (skipped on low walls)
           }
         }
       }
@@ -2475,7 +2489,7 @@ export class ThreeDRenderer {
   }
 
   private _buildWindows(windows: WindowType[], stateOf: (id: string) => HassState | null): void {
-    const PANE_H = 800, PANE_T = 50, PANE_BOTTOM = 900;
+    const PANE_T = 50;
     const closedMat = this._mat({
       color: 0x64b5f6, emissive: 0x1565c0, emissiveIntensity: 0.2,
       transparent: true, opacity: 0.55, roughness: 0.2, metalness: 0.1,
@@ -2486,26 +2500,79 @@ export class ThreeDRenderer {
       transparent: true, opacity: 0.45, roughness: 0.3, metalness: 0.1,
       side: THREE.DoubleSide, depthWrite: false,
     });
+    // Mullions / meeting rails are OPAQUE frame bars, deliberately thicker than
+    // the glass and overlapping the pane edges by a couple mm so their shared
+    // planes are hidden (no coincident-face hatching against the transparent
+    // sashes — the CLAUDE.md gotcha).
+    const frameMat = this._mat({ color: 0x9aa4ad, roughness: 0.6, metalness: 0.1 });
     for (const w of windows) {
       const st = w.entity_id ? stateOf(w.entity_id) : null;
       const isOpen = st?.state === 'on';
       const mat = isOpen ? openMat : closedMat;
+      const kind = w.kind ?? 'single';
+      const sill = w.sill ?? WINDOW_DEFAULTS.sill;      // bottom of glass
+      const glassH = w.height ?? WINDOW_DEFAULTS.height; // glass height
+      const W = w.w;
+      const cy = sill + glassH / 2;                     // vertical center of glazing
       // Pane center group at (w.x, w.y); rotation matches wall axis.
       const grp = new THREE.Group();
       const wp = this._w(w.x, w.y, 0);
       grp.position.set(wp.x, wp.y, wp.z);
       grp.rotation.y = -((w.rotation || 0) * Math.PI / 180);
-      const pane = new THREE.Mesh(
-        new THREE.BoxGeometry(w.w, PANE_H, PANE_T),
-        mat,
-      );
-      pane.position.set(0, PANE_BOTTOM + PANE_H / 2, 0);
-      grp.add(pane);
-      // Open: tilt the pane outward (+Z scene-local = +Y world) so the
-      // user can see at a glance that the window is ajar.
-      if (isOpen) {
-        pane.rotation.x = -Math.PI / 6;  // 30° tilt outward
-        pane.position.z = PANE_T;
+      const glass = (pw: number, ph: number) => new THREE.Mesh(new THREE.BoxGeometry(pw, ph, PANE_T), mat);
+      const bar = (bw: number, bh: number) => new THREE.Mesh(new THREE.BoxGeometry(bw, bh, PANE_T * 1.6), frameMat);
+      switch (kind) {
+        case 'picture': {
+          // Fixed single pane; open state = tint only (no movement).
+          const p = glass(W, glassH); p.position.set(0, cy, 0);
+          grp.add(p);
+          break;
+        }
+        case 'double_hung': {
+          // Two stacked sashes at slightly different depths + a horizontal
+          // meeting rail; the lower sash slides up behind the upper when open.
+          const sashH = glassH / 2 - 20;
+          const upper = glass(W, sashH); upper.position.set(0, cy + glassH / 4 + 10, 12);
+          const lower = glass(W, sashH); lower.position.set(0, cy - glassH / 4 - 10, -12);
+          if (isOpen) lower.position.y = upper.position.y;  // raised behind the upper sash
+          const rail = bar(W + 6, 46); rail.position.set(0, cy, 0);
+          grp.add(upper, lower, rail);
+          break;
+        }
+        case 'casement_pair': {
+          // Vertical center mullion + two leaves hinged on their OUTER edges,
+          // swinging open symmetrically (each about its outer vertical edge).
+          const mull = bar(54, glassH); mull.position.set(0, cy, 0);
+          grp.add(mull);
+          const leafW = (W - 50) / 2;
+          for (const side of [-1, 1]) {
+            const hinge = new THREE.Group();
+            hinge.position.set(side * W / 2, cy, 0);       // outer vertical edge
+            const leaf = glass(leafW, glassH);
+            leaf.position.set(-side * leafW / 2, 0, 0);    // extends inward toward the mullion
+            hinge.add(leaf);
+            if (isOpen) hinge.rotation.y = side * (Math.PI / 5);  // swing outward
+            grp.add(hinge);
+          }
+          break;
+        }
+        case 'sliding': {
+          // Two side-by-side sashes at slightly different depths; the movable
+          // (right) sash slides behind its neighbor when open.
+          const sashW = W / 2;
+          const left = glass(sashW, glassH); left.position.set(-sashW / 2, cy, 12);
+          const right = glass(sashW, glassH);
+          right.position.set(isOpen ? -sashW / 2 : sashW / 2, cy, -12);  // slides behind `left`
+          const mull = bar(40, glassH); mull.position.set(0, cy, 0);
+          grp.add(left, right, mull);
+          break;
+        }
+        default: {  // 'single' — legacy one pane; tilts outward when open
+          const p = glass(W, glassH); p.position.set(0, cy, 0);
+          if (isOpen) { p.rotation.x = -Math.PI / 6; p.position.z = PANE_T; }
+          grp.add(p);
+          break;
+        }
       }
       this._shadowFlags(grp);
       this._doorGroup.add(grp);
@@ -3864,11 +3931,16 @@ export class ThreeDRenderer {
             const header = new THREE.Mesh(new THREE.BoxGeometry(OPEN_W, headerH, D2), brick);
             header.position.set(0, openTop + headerH / 2, 0);
             g.add(header);
-            // Mantel shelf on top.
+            // Mantel shelf on top. Its back is aligned FLUSH with the firebox
+            // back plane (+D2/2) — never proud of it — so a wall-snapped
+            // fireplace (snapFireplaceToWall parks the back on the wall face)
+            // doesn't poke the shelf through the wall. A real mantel overhangs
+            // the FRONT, so the extra depth extends toward the opening (−Z).
+            const mantelD = D2 * 1.2;
             const mantel = new THREE.Mesh(
-              new THREE.BoxGeometry(W2 * 1.15, 70, D2 * 1.2),
+              new THREE.BoxGeometry(W2 * 1.15, 70, mantelD),
               this._mat({ color: 0x5d4037, roughness: 0.6 }));
-            mantel.position.set(0, H2 / 2 + 35, 0);
+            mantel.position.set(0, H2 / 2 + 35, D2 / 2 - mantelD / 2);
             g.add(mantel);
             // Firebox interior floor + back glow panel (visible through the opening).
             const hearthFloor = new THREE.Mesh(new THREE.BoxGeometry(OPEN_W, 40, D2 - 140), inner);
@@ -5543,7 +5615,7 @@ export class ThreeDRenderer {
             pz2 + Math.cos(bedYaw) * (lieBed.h * 0.18));
           h.bubble.position.copy(h.group.worldToLocal(world));
         } else {
-          h.bubble.position.set(BUBBLE_X, BUBBLE_LOCAL_Y, 0);
+          h.bubble.position.set(BUBBLE_X, h.plumbob.position.y + BUBBLE_ABOVE_PLUMBOB, 0);
         }
       }
       }  // end thought-bubble block (non-quad)
@@ -5673,7 +5745,7 @@ export class ThreeDRenderer {
       spr.userData.glyph = h.bubbleKind;
       spr.userData.outlineSkip = true;
       spr.userData.s = 0;  // eased 0..1 pop-in
-      spr.position.set(BUBBLE_X, BUBBLE_LOCAL_Y, 0);
+      spr.position.set(BUBBLE_X, h.plumbob.position.y + BUBBLE_ABOVE_PLUMBOB, 0);
       h.group.add(spr);
       h.bubble = spr;
     }
@@ -5705,7 +5777,7 @@ export class ThreeDRenderer {
       if (h.nameSprite) this._disposeNameLabel(h);
       const spr = this._makeNameSprite(person.name, person.color);
       spr.userData.outlineSkip = true;
-      spr.position.set(0, NAME_LOCAL_Y, 0);
+      spr.position.set(0, h.plumbob.position.y + NAME_ABOVE_PLUMBOB, 0);
       h.group.add(spr);
       h.nameSprite = spr;
       h.nameText = person.name;

@@ -220,6 +220,9 @@ export interface Door {
   locked?: boolean;            // canvas move/rotate/delete disabled
 }
 
+// Window glazing style. `single` reproduces the legacy one-pane look.
+export type WindowKind = 'single' | 'double_hung' | 'casement_pair' | 'sliding' | 'picture';
+
 export interface Window {
   id: string;
   x: number; y: number;        // pane center in world mm
@@ -227,6 +230,9 @@ export interface Window {
   rotation: number;            // wall axis direction in degrees, screen-CW; 0 = pane along +X world
   entity_id: string | null;    // binary_sensor; "on" = open
   label?: string;
+  kind?: WindowKind;           // glazing style; default 'single' (legacy look)
+  sill?: number;               // mm above floor to the bottom of the glass; default 900
+  height?: number;             // mm of glass height (header derives as sill+height); default 800
   locked?: boolean;            // canvas move/rotate/delete disabled
 }
 

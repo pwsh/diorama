@@ -50,6 +50,9 @@ the screenshot fires before first render.
 | rooms-test.html | `ROOMS PASS n/n` — real export: ≥4 loops, 4 anchors in 4 distinct loops (25 mm weld heal). Uses `geometry.mod.js` (`npx esbuild src/geometry.ts --bundle --format=esm --outfile=<harness>/geometry.mod.js`) |
 | wallsnap-test.html | `WALLSNAP PASS n/n` — pure `snapToWallEdge` (both sides, h/v/diag), fireplace flush offset 275, switch wall-lock + `gangSlot` ganging, `nearestAlign` smart-guide selection. Uses `geometry.mod.js` (same esbuild transpile as rooms-test) |
 | sliver-test.html | `SLIVER PASS n/n` — region-size-aware `_nearestFreeCell`: AI spawns in the open room, not the sliver behind furniture |
+| window-test.html | `WINDOW PASS n/n` — per-kind pane counts (single/double_hung/casement_pair/sliding/picture), open behaviour per kind, custom sill/height moves the glass + wall sub-sill/header cut boxes (asserts mesh Y bounds) |
+| bubble-anchor-test.html | `BUBBLE PASS n/n` — thought bubble anchored per-rig off the plumbob (child < supermodel, above head top, adult ≈ 2462) + stays 460 mm above the plumbob and drops in world space when seated |
+| fireplace-wall-test.html | `FIREPLACE PASS` — mantel back flush with the firebox back plane (D2/2 = 225), never proud (skips inverted-hull outline shells via `userData.outline`) so a wall-snapped fireplace doesn't poke through |
 
 These were written incrementally by coding agents; fixtures reference the
 entity-shape the renderer expects (`stateProvider`-style closures), not a

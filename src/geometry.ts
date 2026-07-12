@@ -314,7 +314,14 @@ export function doorSpanCenter(d: { x: number; y: number; w: number; rotation: n
   return { x: d.x + Math.cos(t) * d.w / 2, y: d.y - Math.sin(t) * d.w / 2 };
 }
 
-export interface WallOpeningCut { t0: number; t1: number; kind: 'door' | 'window'; }
+// Window opening geometry defaults (mm). `sill` = bottom of glass above floor;
+// `height` = glass height (the 3D header derives as sill + height). Shared by the
+// 3D wall cut and the pane builder so the solid runs and the glass line up.
+export const WINDOW_DEFAULTS = { sill: 900, height: 800 };
+
+// A window cut also carries its sill/height so the 3D wall builder can size the
+// sub-sill and header runs per-window (doors leave these undefined).
+export interface WallOpeningCut { t0: number; t1: number; kind: 'door' | 'window'; sill?: number; height?: number; }
 
 // For one wall segment a→b: which door/window openings cut it, and what
 // solid sub-intervals remain. t values are mm along the segment. An opening
@@ -322,7 +329,7 @@ export interface WallOpeningCut { t0: number; t1: number; kind: 'door' | 'window
 export function wallCutsForSegment(
   a: Vec2, b: Vec2,
   doors: { x: number; y: number; w: number; rotation: number }[],
-  windows: { x: number; y: number; w: number }[],
+  windows: { x: number; y: number; w: number; sill?: number; height?: number }[],
   tol = 150,
 ): { solids: { t0: number; t1: number }[]; openings: WallOpeningCut[] } {
   const dx = b.x - a.x, dy = b.y - a.y;
@@ -330,16 +337,17 @@ export function wallCutsForSegment(
   if (len < 1) return { solids: [], openings: [] };
   const ux = dx / len, uy = dy / len;
   const openings: WallOpeningCut[] = [];
-  const collect = (cx: number, cy: number, w: number, kind: 'door' | 'window') => {
+  const collect = (cx: number, cy: number, w: number, kind: 'door' | 'window',
+                   extra?: { sill?: number; height?: number }) => {
     const px = cx - a.x, py = cy - a.y;
     const t = px * ux + py * uy;
     const perp = Math.abs(-uy * px + ux * py);
     if (perp > tol || t < -w / 2 || t > len + w / 2) return;
     const t0 = Math.max(0, t - w / 2), t1 = Math.min(len, t + w / 2);
-    if (t1 - t0 > 10) openings.push({ t0, t1, kind });
+    if (t1 - t0 > 10) openings.push({ t0, t1, kind, ...extra });
   };
   for (const d of doors) { const c = doorSpanCenter(d); collect(c.x, c.y, d.w, 'door'); }
-  for (const w of windows) collect(w.x, w.y, w.w, 'window');
+  for (const w of windows) collect(w.x, w.y, w.w, 'window', { sill: w.sill, height: w.height });
   if (!openings.length) return { solids: [{ t0: 0, t1: len }], openings };
   const sorted = [...openings].sort((c1, c2) => c1.t0 - c2.t0);
   const solids: { t0: number; t1: number }[] = [];
