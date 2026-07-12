@@ -46,6 +46,20 @@ asks for).
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Avatar pants** (user-reported "avatars all look like they're missing
+  pants", `src/three-renderer.ts` materials-only; no Store changes; typecheck
+  + build clean): plain rigs whose legs rendered in the raw identity tint read
+  as a head-to-toe unitard. `_buildHumanoid` now derives a trouser tone (tint ×
+  ~0.5) for both leg segments (shoes keep `spec.shoe`) whenever
+  `spec.legColor == null && spec.skin === color` — adult / child / professional
+  / movie_star / cowboy / farmer / athlete / cyborg (left leg; steel right kept)
+  / magician / tech_expert / supermodel. Derived from the passed-in `color`, so
+  it rides every recolor path (per-sensor tint, fused person, BLE person).
+  Costumed kinds with a fixed non-tint skin or explicit `legColor` (robot /
+  alien / hacker / ninja / ninja_cyborg / wise_oracle / astronaut / mascots /
+  duck) untouched; pets untouched; pose math untouched. `docs/images/avatars.png`
+  re-captured; mega/pet/fusion regression titles green.
+
 - **Sidebar mmWave batch** (3 user-reported, `src/ui/sidebar.ts` +
   `src/geometry.ts`; no Store changes; typecheck + build clean):
   - *Collapse-on-change*: `_autoExpandActive()` re-expanded any section whose
