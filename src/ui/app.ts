@@ -12,7 +12,7 @@ import './three-view.js';
 import './weather-chip.js';
 import './modals.js';
 import type { AuthScreen } from './auth-screen.js';
-import type { FloorModal, EntityPicker, LightConfig, MediaConfig, SettingsDrawer } from './modals.js';
+import type { FloorModal, EntityPicker, LightConfig, MediaConfig, AlarmModal, SettingsDrawer } from './modals.js';
 
 @customElement('diorama-app')
 export class App extends LitElement {
@@ -24,6 +24,7 @@ export class App extends LitElement {
   @query('diorama-entity-picker') private _entPicker?: EntityPicker;
   @query('diorama-light-config') private _lightConfig?: LightConfig;
   @query('diorama-media-config') private _mediaConfig?: MediaConfig;
+  @query('diorama-alarm-modal') private _alarmModal?: AlarmModal;
   @query('diorama-settings-drawer') private _settings?: SettingsDrawer;
 
   protected override createRenderRoot() { return this; }
@@ -151,6 +152,11 @@ export class App extends LitElement {
       const { entityId } = (e as CustomEvent).detail as { entityId: string };
       this._mediaConfig?.show(entityId);
     });
+    this.addEventListener('open-alarm', e => {
+      const { id } = (e as CustomEvent).detail as { id: string };
+      if (this._planner?.uiMode === 'view') return;   // view-only: no interaction
+      this._alarmModal?.show(id);
+    });
     this.addEventListener('open-entity-picker', e => {
       const { domain, onPick, devices, title } = (e as CustomEvent).detail as
         { domain?: string; onPick: (id: string) => void;
@@ -227,6 +233,7 @@ export class App extends LitElement {
         <diorama-entity-picker .planner=${p}></diorama-entity-picker>
         <diorama-light-config .planner=${p}></diorama-light-config>
         <diorama-media-config .planner=${p}></diorama-media-config>
+        <diorama-alarm-modal .planner=${p}></diorama-alarm-modal>
         <diorama-settings-drawer .planner=${p}></diorama-settings-drawer>
       </div>
     `;

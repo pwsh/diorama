@@ -735,6 +735,47 @@ export function snapSwitchToWall(
   sw.rotation = rot;
   return true;
 }
+
+// ── Alarm keypad fixture (Feature 3) ──────────────────────────────────────
+export const ALARM_DEFAULTS = { height: 1400, size: 320 };
+export const ALARM_PLATE_DEPTH_MM = 30;     // three-renderer keypad BoxGeometry Z
+// Arm-state screen colors (shared 2D + 3D). arming/pending pulse amber;
+// triggered pulses red; the rest are steady.
+export const ALARM_STATE_COLORS: Record<string, string> = {
+  disarmed:            '#66bb6a',
+  armed_home:          '#42a5f5',
+  armed_night:         '#5c6bc0',
+  armed_away:          '#7e57c2',
+  armed_vacation:      '#7e57c2',
+  armed_custom_bypass: '#7e57c2',
+  arming:              '#ffb74d',
+  pending:             '#ffb74d',
+  triggered:           '#ef5350',
+  disabled:            '#78909c',
+};
+export function alarmStateColor(state: string | null | undefined): string {
+  return (state && ALARM_STATE_COLORS[state]) || '#90a4ae';
+}
+// Alarm plates wall-snap flush like a switch (plate BACK on the wall face,
+// screen facing the room), but NEVER gang. Center = axis + normal·(wallT/2 +
+// plateDepth/2) = axis + normal·65. Rotation = atan2(nx, ny) (plate front =
+// local +Z; 0 = +Y world), matching the switch convention. Mutates x/y/rotation;
+// returns whether it snapped.
+export function snapAlarmToWall(
+  ap: { x: number; y: number; rotation?: number },
+  walls: { points: Vec2[]; kind?: WallKind }[],
+  maxMm = 500,
+): boolean {
+  const hit = snapToWallEdge(walls, ap.x, ap.y, maxMm);
+  if (!hit) return false;
+  const off = WALL_HALF_MM + ALARM_PLATE_DEPTH_MM / 2;   // 65
+  ap.x = Math.round(hit.x + hit.nx * off);
+  ap.y = Math.round(hit.y + hit.ny * off);
+  ap.rotation = Math.atan2(hit.nx, hit.ny) * 180 / Math.PI;
+  return true;
+}
+export function alarmHeight(a: { height?: number }): number { return a.height ?? ALARM_DEFAULTS.height; }
+
 // Nearest candidate coordinate to `v` within `tol` (else null). Drives the
 // smart alignment guides (Feature C) — applied per-axis independently. Pure,
 // exported for testing.

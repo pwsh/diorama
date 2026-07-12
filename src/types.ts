@@ -92,6 +92,9 @@ export interface Furniture {
                               // entity_id is set (effectiveState prefers the bound entity); kept
                               // so unbinding returns to the last local state. See Planner.effectiveState.
   customKindId?: string;      // ObjectRecipe reference (Store.customObjects); `kind` stays as fallback
+  doorEntity?: string | null; // fridge only: binary_sensor, 'on' = door open (drives the swung-open 3D door
+                              // panel + a 2D open-door wedge). Item-level optional; shown in the UI only for
+                              // fridge kinds. Separate from entity_id (which is the appliance's on/off binding).
   mountOnId?: string | null;  // host surface id set by auto-snap; bookkeeping only, NOT live parenting
   sharedBedCovers?: boolean;  // bed only: two-in-bed shared-covers effect (default/undefined = on).
                               // false → occupants lie side by side, no blanket lump.
@@ -191,6 +194,22 @@ export interface BleProxy {
   hidden?: boolean;          // per-fixture hide (in addition to the sensors layer)
 }
 
+// Alarm keypad fixture (Feature 3). Wall-mounted plate bound to an
+// alarm_control_panel.* entity; shows the arm state as a colored screen band in
+// 2D + 3D. Snaps flush to the nearest wall like a switch (no ganging). Clicking
+// opens the alarm modal — read-only unless allowControl is set + it's bound.
+export interface AlarmPanel {
+  id: string;
+  x: number; y: number;
+  rotation?: number;          // deg, wall-plate convention like switches (0 = +Y world)
+  height?: number;            // mm above floor; default 1400
+  entity_id: string | null;   // alarm_control_panel.*
+  allowControl?: boolean;     // permit arm/disarm from the panel (default false = view only)
+  localState?: string;        // local control when UNBOUND ('disarmed'|'armed_home'|'armed_away'); inert once bound
+  label?: string;
+  locked?: boolean;           // canvas move/rotate/delete disabled (click still works)
+}
+
 export interface Sensor {
   id: string;
   x: number; y: number;
@@ -221,6 +240,8 @@ export interface Door {
   entity_id: string | null;    // binary_sensor or any entity; "on" = open
   label?: string;
   localState?: string;         // local control when UNBOUND ('on'=open/'off'); inert once bound. See Planner.effectiveState.
+  lockEntity?: string | null;  // lock.* entity; DISPLAY-ONLY secondary binding. 'locked' = amber/red padlock,
+                               // 'unlocked' = green open outline, unavailable/absent = grey. No toggle/click.
   hinge?: 'right' | 'left';    // which side the hinge sits on. Determines swing direction.
                                // 'right' (default) = swings CCW on screen; 'left' = swings CW.
   locked?: boolean;            // canvas move/rotate/delete disabled
@@ -376,6 +397,7 @@ export interface Floor {
   model3d?: Model3D | null;
   rooms?: Room[];   // named rooms (anchor → live wall loop); repairFloor backfills []
   bleProxies?: BleProxy[];  // BLE scanner fixtures; repairFloor backfills []
+  alarmPanels?: AlarmPanel[];  // alarm keypad fixtures; repairFloor backfills []
   boundsLocked?: boolean;   // lock canvas-layout/floor-size editing (hides the edge handles)
   disabled?: boolean;       // hidden from the kiosk/view floor picker + glass-house stack + BLE
                             // floor solve; still editable in the sidebar — lets multiple test

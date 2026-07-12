@@ -3,6 +3,7 @@ import {
   pointInPolygon, localToWorld, bgLocalToWorld,
   lightRadius, lightIntensity, lightIconKind, lightRotation, lightLength, switchRotation, switchSize, switchLabelPos,
   motionColor, motionIntensity, sensorColor, BLE_PROXY_DEFAULTS,
+  ALARM_DEFAULTS, alarmStateColor,
   hexToRgba, lighten, furnitureKind, furnitureCorners, resolveFurnitureDef,
   doorEndpoint, doorOpenDeltaDeg, windowEndpoints, wallCutsForSegment, wallKind,
   ENV_KINDS, envKindOf, envColor, envValueText, envScale,
@@ -63,6 +64,36 @@ function drawPolygonWorld(ctx: CanvasRenderingContext2D, worldVerts: Vec2[],
     ctx.strokeStyle = opt.stroke; ctx.lineWidth = 1.5;
     ctx.setLineDash([6, 4]); ctx.stroke(); ctx.setLineDash([]);
   }
+}
+
+// Small padlock indicator (Feature 2, door lock state). `state` maps to color +
+// shackle pose: locked = filled amber/red + closed shackle; unlocked = green
+// outline + open (shifted) shackle; anything else = grey. `s` is the screen
+// half-size in px (~5). Drawn at (cx, cy). Display only.
+function drawPadlock(ctx: CanvasRenderingContext2D, cx: number, cy: number,
+                     s: number, state: string | null | undefined): void {
+  const locked = state === 'locked';
+  const unlocked = state === 'unlocked';
+  const color = locked ? '#ef5350' : unlocked ? '#66bb6a' : '#90a4ae';
+  ctx.save();
+  ctx.lineWidth = Math.max(1, s * 0.32);
+  ctx.strokeStyle = color;
+  // Shackle (arc). Open lock: hinge up on one side so it reads "unlocked".
+  const bodyTop = cy - s * 0.1;
+  ctx.beginPath();
+  if (unlocked) {
+    ctx.arc(cx + s * 0.55, bodyTop - s * 0.35, s * 0.6, Math.PI * 0.9, Math.PI * 2.05);
+  } else {
+    ctx.arc(cx, bodyTop - s * 0.35, s * 0.6, Math.PI, Math.PI * 2);
+  }
+  ctx.stroke();
+  // Body.
+  const bw = s * 1.5, bh = s * 1.2;
+  ctx.beginPath();
+  ctx.roundRect(cx - bw / 2, bodyTop, bw, bh, s * 0.2);
+  if (locked) { ctx.fillStyle = color; ctx.fill(); }
+  else { ctx.fillStyle = 'rgba(0,0,0,0.55)'; ctx.fill(); ctx.stroke(); }
+  ctx.restore();
 }
 
 function drawTargetDot(ctx: CanvasRenderingContext2D, cx: number, cy: number,
@@ -145,6 +176,7 @@ export function drawAll(ctx: CanvasRenderingContext2D, p: Planner, view: View,
   if (on(L.env)) drawEnvSensors(ctx, p, view);
   if (on(L.sensors)) drawSensors(ctx, p, view);
   if (on(L.sensors)) drawBleProxies(ctx, p, view);
+  if (on(L.sensors)) drawAlarmPanels(ctx, p, view);
   // LD2450 inclusion / filter polygons + object halos draw per the zones
   // layer. The Motion toggle only hides motion-sensor cones (drawMotionSensors
   // gates its own cone block).
@@ -524,6 +556,76 @@ function drawBleProxies(ctx: CanvasRenderingContext2D, p: Planner, view: View): 
   }
 }
 
+// Alarm keypads (Feature 3) render as a rounded plate with a state-colored
+// screen band + a keypad dot grid. arming/pending pulse amber, triggered pulses
+// hard red (RAF redraws each frame — a performance.now() pulse is the
+// fireplace-flicker idiom's 2D cousin). Unbound-with-localState reads dimmed.
+// Rides the sensors layer (gated by the caller).
+function drawAlarmPanels(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
+  const dpr = window.devicePixelRatio || 1;
+  const f = p.floor();
+  const t = performance.now() / 1000;
+  for (const a of f.alarmPanels ?? []) {
+    const c = mmToPx(view, a.x, a.y);
+    const st = p.effectiveState(a);
+    const state = st?.state ?? null;
+    const unbound = !a.entity_id;
+    const selected = p.activeAlarmId === a.id;
+    const col = alarmStateColor(state);
+    const pulsing = state === 'arming' || state === 'pending' || state === 'triggered';
+    let alpha = 1;
+    if (pulsing) {
+      const freq = state === 'triggered' ? 6 : 2.5;
+      alpha = 0.45 + 0.55 * (0.5 + 0.5 * Math.sin(t * freq));
+    }
+    const rot = (a.rotation || 0) * Math.PI / 180;
+    const hw = Math.max(8, ALARM_DEFAULTS.size * 0.36 * view.scale);
+    const hh = Math.max(11, ALARM_DEFAULTS.size * 0.5 * view.scale);
+    ctx.save();
+    ctx.translate(c.x, c.y);
+    ctx.rotate(rot);
+    // Plate
+    ctx.beginPath();
+    ctx.roundRect(-hw, -hh, hw * 2, hh * 2, Math.min(hw, hh) * 0.28);
+    ctx.fillStyle = 'rgba(18,22,28,0.92)';
+    ctx.fill();
+    ctx.lineWidth = selected ? 2.5 : 1.5;
+    ctx.strokeStyle = selected ? '#fff' : hexToRgba(col, 0.9);
+    if (state === 'triggered') { ctx.save(); ctx.shadowColor = col; ctx.shadowBlur = 14 * alpha; ctx.stroke(); ctx.restore(); }
+    else ctx.stroke();
+    // Screen band (top)
+    ctx.globalAlpha = unbound ? alpha * 0.55 : alpha;
+    ctx.beginPath();
+    ctx.roundRect(-hw * 0.74, -hh * 0.82, hw * 1.48, hh * 0.56, Math.min(hw, hh) * 0.14);
+    ctx.fillStyle = state ? col : 'rgba(120,144,156,0.5)';
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    // Keypad dot grid (3 rows × 3 cols) below the screen.
+    ctx.fillStyle = 'rgba(200,210,220,0.5)';
+    const dotR = Math.max(1, hw * 0.13);
+    for (let ry = 0; ry < 3; ry++) {
+      for (let cxi = -1; cxi <= 1; cxi++) {
+        ctx.beginPath();
+        ctx.arc(cxi * hw * 0.5, hh * 0.02 + ry * hh * 0.33, dotR, 0, 2 * Math.PI);
+        ctx.fill();
+      }
+    }
+    ctx.restore();
+    // Label below (screen space, unrotated).
+    const label = a.label?.trim() || 'Alarm';
+    ctx.font = `${10 * dpr}px sans-serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+    const badge = state ? state.replace('armed_', '').replace('_', ' ') : (unbound ? 'unbound' : '—');
+    const txt = `${label} · ${badge}`;
+    const tw = ctx.measureText(txt).width + 8 * dpr;
+    const by = c.y + hh + 4 * dpr;
+    ctx.fillStyle = 'rgba(0,0,0,0.7)';
+    ctx.fillRect(c.x - tw / 2, by, tw, 13 * dpr);
+    ctx.fillStyle = state ? hexToRgba(col, 1) : '#cfd8dc';
+    ctx.fillText(txt, c.x, by + 1 * dpr);
+  }
+}
+
 // Environmental sensors render as a value chip: kind glyph + live reading,
 // tinted by the kind's base color (escalated to amber/red past the alert
 // thresholds in ENV_KINDS). The chip is the fixture — no coverage geometry.
@@ -824,6 +926,12 @@ function drawDoors(ctx: CanvasRenderingContext2D, p: Planner, view: View): void 
     ctx.fillStyle = color; ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5;
     ctx.beginPath(); ctx.arc(hinge.x, hinge.y, 5 * dpr, 0, 2 * Math.PI);
     ctx.fill(); ctx.stroke();
+    // Lock-state padlock (display only) near the hinge, offset so it clears the
+    // hinge dot + swing arc.
+    if (d.lockEntity) {
+      const lst = p.hass?.states?.[d.lockEntity]?.state;
+      drawPadlock(ctx, hinge.x - 9 * dpr, hinge.y - 11 * dpr, 5 * dpr, lst);
+    }
     // Endpoint handle (drag to rotate) — hidden when locked
     if (!d.locked) {
       ctx.fillStyle = '#ffb74d'; ctx.strokeStyle = '#fff'; ctx.lineWidth = 1;
@@ -908,20 +1016,73 @@ function drawFurniture(ctx: CanvasRenderingContext2D, p: Planner, view: View): v
   const f = p.floor();
   const customObjects = p.store.customObjects;
   const isEdit = p.uiMode === 'edit';
+  const dpr = window.devicePixelRatio || 1;
+  const now = performance.now() / 1000;
   for (const piece of f.furniture) {
     const center = mmToPx(view, piece.x, piece.y);
     const halfW = (piece.w / 2) * view.scale;
     const halfH = (piece.h / 2) * view.scale;
     const rotR = (piece.rotation || 0) * Math.PI / 180;  // ctx.rotate is screen-CW, matching our convention
+    // Appliance in-use indicator (Feature 1): effective on/off (bound entity or
+    // unbound localState) + a fridge's bound door sensor. Applies to all
+    // appliance-category kinds incl. TVs (which have no other 2D on-state).
+    const fdef = resolveFurnitureDef(piece, customObjects);
+    const isAppliance = (fdef.cat ?? 'furniture') === 'appliance';
+    const appSt = isAppliance ? p.effectiveState(piece) : null;
+    const applianceOn = appSt?.state === 'on' || appSt?.state === 'playing';
+    const doorOpen = !!piece.doorEntity &&
+      p.effectiveState({ entity_id: piece.doorEntity })?.state === 'on';
     ctx.save();
     ctx.translate(center.x, center.y);
     ctx.rotate(rotR);
+    // Soft green glow behind an active appliance (drawn under the body).
+    if (applianceOn) {
+      ctx.save();
+      ctx.shadowColor = 'rgba(0,200,83,0.85)';
+      ctx.shadowBlur = 14 * dpr;
+      ctx.fillStyle = 'rgba(0,200,83,0.13)';
+      ctx.fillRect(-halfW, -halfH, halfW * 2, halfH * 2);
+      ctx.restore();
+    }
     // Local rect: -halfW..+halfW (X), -halfH..+halfH (canvas Y). Canvas-Y top
     // (-halfH) corresponds to world +Y after the canvas Y-flip — the BACK-side
     // decorations edge (backrest, headboard, pillows). The functional FRONT
     // (cabinet doors/pulls, TV screens, seat openings, faces — local -Z = world
     // -Y) is at canvas-Y +halfH.
     drawFurniturePrimitiveLocal(ctx, piece, halfW, halfH, customObjects);
+    // Fridge open-door wedge (amber): a mini door-swing arc at the front-right
+    // corner (the 3D hinge is on the +X edge). Front = canvas-Y +halfH.
+    if (doorOpen) {
+      const hx = halfW, hy = halfH;                     // hinge = front-right corner
+      const rr = Math.min(halfW * 1.7, halfH * 2.2, 44 * dpr) + 4;
+      const aClosed = Math.PI;                          // leaf lies along the front edge (-X)
+      const aOpen = Math.PI - 70 * Math.PI / 180;       // swung ~70° outward (+Y canvas)
+      ctx.beginPath();
+      ctx.moveTo(hx, hy);
+      ctx.arc(hx, hy, rr, aOpen, aClosed);
+      ctx.closePath();
+      ctx.fillStyle = 'rgba(255,183,77,0.16)';
+      ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(hx, hy);
+      ctx.lineTo(hx + rr * Math.cos(aOpen), hy + rr * Math.sin(aOpen));
+      ctx.strokeStyle = 'rgba(255,183,77,0.95)';
+      ctx.lineWidth = 2.5;
+      ctx.stroke();
+    }
+    // Pulsing green LED at the front-left corner of an active appliance.
+    if (applianceOn) {
+      const pulse = 0.55 + 0.45 * (0.5 + 0.5 * Math.sin(now * 3));
+      const r = Math.max(2.5, 4 * dpr);
+      ctx.save();
+      ctx.fillStyle = `rgba(0,230,118,${pulse.toFixed(3)})`;
+      ctx.shadowColor = 'rgba(0,230,118,0.9)';
+      ctx.shadowBlur = 6 * dpr;
+      ctx.beginPath();
+      ctx.arc(-halfW + r + 2, halfH - r - 2, r, 0, 2 * Math.PI);
+      ctx.fill();
+      ctx.restore();
+    }
     if (piece.label) {
       ctx.fillStyle = '#ddd'; ctx.font = '10px sans-serif';
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';

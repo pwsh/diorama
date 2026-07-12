@@ -2,6 +2,7 @@ import { LitElement, html, nothing } from 'lit';
 import { property, state } from 'lit/decorators.js';
 import { customElement } from './define.js';
 import { finishZoneEdit, cancelZoneEdit } from '../canvas-interact.js';
+import { alarmStateColor } from '../geometry.js';
 import type { Planner } from '../planner.js';
 import type { Floor, HassState } from '../types.js';
 
@@ -543,6 +544,101 @@ export class MediaConfig extends LitElement {
               ${attrs.media_title as string}
             </span>
           </div>
+          ` : nothing}
+        </div>
+      </div>
+    `;
+  }
+}
+
+// ── Alarm control modal (Feature 3) ──────────────────────────────────────
+// Shows a keypad's arm state and — when allowControl + bound — Disarm / Arm
+// Home / Arm Away buttons that call alarm_control_panel services (with an
+// optional code). Bound but view-only → read-only status. Unbound → the three
+// buttons set the panel's localState locally (demo mode). Live-updates like the
+// light modal. View mode never opens it (guarded upstream).
+@customElement('diorama-alarm-modal')
+export class AlarmModal extends LitElement {
+  @property({ attribute: false }) planner!: Planner;
+  @state() open = false;
+  @state() private _id = '';
+  @state() private _code = '';
+
+  protected override createRenderRoot() { return this; }
+
+  override connectedCallback(): void {
+    super.connectedCallback();
+    this.planner.addEventListener('config', this._tick);
+    this.planner.addEventListener('live', this._tick);
+  }
+  override disconnectedCallback(): void {
+    super.disconnectedCallback();
+    this.planner.removeEventListener('config', this._tick);
+    this.planner.removeEventListener('live', this._tick);
+  }
+  private _tick = () => { if (this.open) this.requestUpdate(); };
+
+  show(id: string): void {
+    this._id = id;
+    this._code = '';
+    this.open = true;
+  }
+
+  private _panel() {
+    return (this.planner.floor().alarmPanels ?? []).find(a => a.id === this._id) ?? null;
+  }
+
+  override render() {
+    if (!this.open) return nothing;
+    const p = this.planner;
+    const a = this._panel();
+    if (!a) return nothing;
+    const st = p.effectiveState(a);
+    const state = st?.state ?? null;
+    const col = alarmStateColor(state);
+    const bound = !!a.entity_id;
+    const canControl = bound && a.allowControl === true;
+    const demo = !bound;   // unbound → local demo control
+    const label = a.label?.trim() || 'Alarm';
+    const stateText = state ? state.replace('armed_', 'armed ').replace(/_/g, ' ') : (bound ? 'unavailable' : 'not set');
+
+    // Service call (bound + allowControl) or local demo flip (unbound).
+    const arm = (service: string, localState: string) => {
+      if (demo) { p.setAlarmLocalState(a.id, localState); return; }
+      if (!canControl || !a.entity_id) return;
+      const data: Record<string, unknown> = { entity_id: a.entity_id };
+      if (this._code.trim()) data.code = this._code.trim();
+      try { p.hass?.callService('alarm_control_panel', service, data); } catch { /* fire-and-forget */ }
+    };
+    const showButtons = canControl || demo;
+
+    return html`
+      <div class="modal-ov" @click=${(e: MouseEvent) => { if (e.target === e.currentTarget) this.open = false; }}>
+        <div class="modal">
+          <h3>${label}
+            <button class="close" @click=${() => this.open = false}>✕</button>
+          </h3>
+          <div style="display:flex;flex-direction:column;align-items:center;gap:6px;padding:14px 0;border-bottom:1px solid var(--border)">
+            <div style="width:14px;height:14px;border-radius:50%;background:${col};box-shadow:0 0 10px ${col}"></div>
+            <div style="font-size:20px;font-weight:600;color:${col};text-transform:capitalize">${stateText}</div>
+            ${demo ? html`<div style="font-size:11px;color:var(--text-dim)">Local demo (not bound to Home Assistant)</div>` : nothing}
+            ${bound && !a.allowControl ? html`<div style="font-size:11px;color:var(--text-dim)">View only — enable "Allow arm/disarm" to control</div>` : nothing}
+          </div>
+          ${showButtons ? html`
+            ${canControl ? html`
+              <div style="display:flex;gap:10px;align-items:center;padding:10px 0;border-bottom:1px solid var(--border)">
+                <label style="font-size:12px;color:var(--text-dim);flex:0 0 80px">Code</label>
+                <input type="password" inputmode="numeric" .value=${this._code}
+                       placeholder="optional"
+                       style="flex:1"
+                       @input=${(e: Event) => { this._code = (e.target as HTMLInputElement).value; }}>
+              </div>
+            ` : nothing}
+            <div style="display:flex;gap:8px;padding:12px 0">
+              <button class="btn" style="flex:1" @click=${() => arm('alarm_disarm', 'disarmed')}>Disarm</button>
+              <button class="btn" style="flex:1" @click=${() => arm('alarm_arm_home', 'armed_home')}>Arm Home</button>
+              <button class="btn" style="flex:1" @click=${() => arm('alarm_arm_away', 'armed_away')}>Arm Away</button>
+            </div>
           ` : nothing}
         </div>
       </div>

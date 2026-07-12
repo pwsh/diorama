@@ -117,6 +117,7 @@ export type Drag =
   | { kind: 'motion'; id: string; startMm: Vec2; start: Vec2 }
   | { kind: 'motionRotate'; id: string }
   | { kind: 'ble'; id: string; startMm: Vec2; start: Vec2 }
+  | { kind: 'alarm'; id: string; startMm: Vec2; start: Vec2 }
   | { kind: 'env'; id: string; startMm: Vec2; start: Vec2 }
   | { kind: 'envResize'; id: string; startDist: number; startScale: number }
   | { kind: 'doorMove'; idx: number; startMm: Vec2; start: Vec2 }
@@ -141,7 +142,7 @@ export interface EditZone {
   mousePos: Vec2 | null;
 }
 
-export type Tool = 'select' | 'wall' | 'sensor' | 'motion' | 'env' | 'bleproxy' | 'furniture' | 'light' | 'switch' | 'door' | 'window' | 'delete';
+export type Tool = 'select' | 'wall' | 'sensor' | 'motion' | 'env' | 'bleproxy' | 'alarm' | 'furniture' | 'light' | 'switch' | 'door' | 'window' | 'delete';
 
 // Sentinel for Planner.placingRoomId meaning "create a new room at the next
 // canvas click" (vs an existing room id = re-place that room's anchor).
@@ -230,6 +231,9 @@ export class Planner extends EventTarget {
 
   // Active BLE proxy fixture (sidebar selection / canvas highlight)
   activeBleId: string | null = null;
+
+  // Active alarm keypad fixture (sidebar selection / canvas highlight)
+  activeAlarmId: string | null = null;
 
   // Active person (sidebar People list expansion). Runtime only.
   activePersonId: string | null = null;
@@ -622,6 +626,7 @@ export class Planner extends EventTarget {
           this.activeMotionId = null;
           this.activeEnvId = null;
           this.activeBleId = null;
+          this.activeAlarmId = null;
           this.activePersonId = null;
           this.viewCenter = null;
           this.zoom = 1;
@@ -670,6 +675,14 @@ export class Planner extends EventTarget {
     // the current floor qualify — a blanket sensor.* rule would emit config
     // for every sensor state change in HA.
     if (this.floor().envSensors.some(e => e.entity_id === id)) return true;
+    // Fridge door sensors (Furniture.doorEntity) + door lock entities
+    // (Door.lockEntity) + alarm panel entities: bound display-only bindings that
+    // aren't number/switch, routed through the config channel so the sidebar
+    // badges (and the 3D dirty keys, which also fold these) refresh on change.
+    const f2 = this.floor();
+    if (f2.furniture.some(fu => fu.doorEntity === id)) return true;
+    if (f2.doors.some(d => d.lockEntity === id)) return true;
+    if ((f2.alarmPanels ?? []).some(a => a.entity_id === id)) return true;
     // GPS source entities (a person.* or device_tracker.* bound to a Store.people
     // entry) are config-path so the sidebar GPS status line + 3D pins refresh on
     // a new fix. Bounded to the specific bound ids (GPS pushes are minutes apart,
@@ -1015,6 +1028,22 @@ export class Planner extends EventTarget {
 
   setActiveBle(id: string | null): void {
     this.activeBleId = (this.activeBleId === id) ? null : id;
+    this.emitConfig();
+  }
+
+  setActiveAlarm(id: string | null): void {
+    this.activeAlarmId = (this.activeAlarmId === id) ? null : id;
+    this.emitConfig();
+  }
+
+  // Set an unbound alarm keypad's local (demo) state and repaint. Bound panels
+  // ignore this (effectiveState prefers the entity). save() no-ops outside edit,
+  // so a kiosk demo flip is session-only.
+  setAlarmLocalState(id: string, state: string): void {
+    const a = (this.floor().alarmPanels ?? []).find(x => x.id === id);
+    if (!a) return;
+    a.localState = state;
+    this.save();
     this.emitConfig();
   }
 
@@ -1956,6 +1985,7 @@ export class Planner extends EventTarget {
     for (const it of f.motionSensors) { it.x += dx; it.y += dy; }
     for (const it of f.envSensors ?? []) { it.x += dx; it.y += dy; }
     for (const it of f.bleProxies ?? []) { it.x += dx; it.y += dy; }
+    for (const it of f.alarmPanels ?? []) { it.x += dx; it.y += dy; }
     for (const it of f.doors ?? []) { it.x += dx; it.y += dy; }
     for (const it of f.windows ?? []) { it.x += dx; it.y += dy; }
     for (const rm of f.rooms ?? []) { rm.anchor.x += dx; rm.anchor.y += dy; }
@@ -1973,6 +2003,7 @@ export class Planner extends EventTarget {
     this.activeMotionId = null;
     this.activeEnvId = null;
     this.activeBleId = null;
+    this.activeAlarmId = null;
     this.activeFurnitureId = null;
     // Reset pan/zoom — viewCenter is in world mm and a different floor has
     // a different coord space; keeping it would leave the new floor offscreen.

@@ -10,10 +10,11 @@ import {
   lightHeight, lightRadius, lightIntensity, lightIconKind, lightRotation, lightLength,
   switchHeight, switchRotation, switchSize,
   motionColor, motionIntensity, hexToInt, bleProxyHeight, BLE_PROXY_DEFAULTS,
-  furnitureDef, resolveFurnitureDef, furnitureColor, doorOpenDeltaDeg,
+  furnitureDef, resolveFurnitureDef, furnitureColor, furnitureCat, doorOpenDeltaDeg,
+  alarmHeight, alarmStateColor, ALARM_DEFAULTS, ALARM_PLATE_DEPTH_MM,
   ENV_KINDS, envKindOf, envColor, envValueText, envHeight, envScale,
 } from './geometry.js';
-import type { Door, Window as WindowType, EnvSensor, BleProxy, ObjectRecipe, ActivityKind } from './types.js';
+import type { Door, Window as WindowType, EnvSensor, BleProxy, AlarmPanel, ObjectRecipe, ActivityKind } from './types.js';
 import { wallCutsForSegment, WINDOW_DEFAULTS, closedWallLoops, wallKind, WALL_KINDS, furnitureLocalToWorld, furnitureWorldToLocal, pointInPolygon as pip, centroid, loopContaining, resolveRoomForPoint, roomLabel, intersectLoopWithRect, polygonArea } from './geometry.js';
 
 export interface ZoneWorld { vertices: Vec2[]; color: number; occupied: boolean; }
@@ -612,6 +613,7 @@ export class ThreeDRenderer {
   private _motionGroup = new THREE.Group();
   private _envGroup = new THREE.Group();
   private _bleGroup = new THREE.Group();
+  private _alarmGroup = new THREE.Group();
   private _lightGroup = new THREE.Group();
   private _targetGroup = new THREE.Group();
   // GPS device pins + 3D landmark pins (Feature G, phase G2). Camera-facing
@@ -658,8 +660,8 @@ export class ThreeDRenderer {
   private _lastAnimT = 0;   // performance.now()/1000 of the previous _animate frame
   private _ZONE_H = 305;  // 1 ft — low outlines that don't wall off the room
   private _OBJ_H = 900;
-  private _onFixtureClick: ((info: { kind: 'light' | 'switch' | 'media'; entity_id: string | null; fixtureId: string }) => void) | null = null;
-  private _onFixtureDblClick: ((info: { kind: 'light' | 'switch' | 'media'; entity_id: string | null; fixtureId: string }) => void) | null = null;
+  private _onFixtureClick: ((info: { kind: 'light' | 'switch' | 'media' | 'alarm'; entity_id: string | null; fixtureId: string }) => void) | null = null;
+  private _onFixtureDblClick: ((info: { kind: 'light' | 'switch' | 'media' | 'alarm'; entity_id: string | null; fixtureId: string }) => void) | null = null;
   private _raycaster = new THREE.Raycaster();
   // Per-target humanoid rigs, persisted across frames so we can carry
   // walk-cycle phase + smoothed body facing.
@@ -831,7 +833,7 @@ export class ThreeDRenderer {
     this._scene.add(this._floorGroup, this._doorGroup, this._modelGroup,
                     this._zoneGroup, this._haloGroup,
                     this._sensorGroup, this._motionGroup, this._envGroup,
-                    this._bleGroup,
+                    this._bleGroup, this._alarmGroup,
                     this._lightGroup, this._targetGroup, this._ghostGroup,
                     this._gpsGroup, this._weatherGroup);
 
@@ -908,15 +910,15 @@ export class ThreeDRenderer {
     this._animate();
   }
 
-  onFixtureClick(fn: (info: { kind: 'light' | 'switch' | 'media'; entity_id: string | null; fixtureId: string }) => void): void {
+  onFixtureClick(fn: (info: { kind: 'light' | 'switch' | 'media' | 'alarm'; entity_id: string | null; fixtureId: string }) => void): void {
     this._onFixtureClick = fn;
   }
-  onFixtureDblClick(fn: (info: { kind: 'light' | 'switch' | 'media'; entity_id: string | null; fixtureId: string }) => void): void {
+  onFixtureDblClick(fn: (info: { kind: 'light' | 'switch' | 'media' | 'alarm'; entity_id: string | null; fixtureId: string }) => void): void {
     this._onFixtureDblClick = fn;
   }
 
   private _raycastFixture(clientX: number, clientY: number):
-      { kind: 'light' | 'switch' | 'media'; entity_id: string | null; fixtureId: string } | null {
+      { kind: 'light' | 'switch' | 'media' | 'alarm'; entity_id: string | null; fixtureId: string } | null {
     if (!this._renderer || !this._camera) return null;
     const rect = this._renderer.domElement.getBoundingClientRect();
     const ndc = new THREE.Vector2(
@@ -933,6 +935,8 @@ export class ThreeDRenderer {
     // and vice-versa.
     const roots: THREE.Object3D[] = [];
     if (this._lightGroup.visible) roots.push(this._lightGroup);
+    // Alarm keypads are clickable (open the control modal); ride the sensors layer.
+    if (this._alarmGroup.visible) roots.push(this._alarmGroup);
     for (const g of this._mediaClickables) roots.push(g);
     if (!roots.length) return null;
     const hits = this._raycaster.intersectObjects(roots, true);
@@ -941,7 +945,7 @@ export class ThreeDRenderer {
       let obj: THREE.Object3D | null = h.object;
       while (obj) {
         const ud = obj.userData;
-        if (ud && (ud.kind === 'light' || ud.kind === 'switch' || ud.kind === 'media')) {
+        if (ud && (ud.kind === 'light' || ud.kind === 'switch' || ud.kind === 'media' || ud.kind === 'alarm')) {
           return { kind: ud.kind, entity_id: ud.entity_id ?? null, fixtureId: String(ud.fixtureId) };
         }
         obj = obj.parent;
@@ -1243,7 +1247,7 @@ export class ThreeDRenderer {
   clearTransientGroups(): void {
     for (const g of [
       this._floorGroup, this._doorGroup, this._modelGroup, this._zoneGroup, this._haloGroup,
-      this._sensorGroup, this._motionGroup, this._bleGroup,
+      this._sensorGroup, this._motionGroup, this._bleGroup, this._alarmGroup,
       this._lightGroup, this._targetGroup, this._ghostGroup,
     ]) {
       this._clearGroup(g);
@@ -1534,8 +1538,9 @@ export class ThreeDRenderer {
                           geo?: boolean; weatherFx?: boolean; nameLabels?: boolean }): void {
     this._lightGroup.visible = v.lights !== false;
     this._sensorGroup.visible = v.sensors !== false;
-    // BLE proxy pucks ride the sensors layer (same as mmWave bodies).
+    // BLE proxy pucks + alarm keypads ride the sensors layer (like mmWave).
     this._bleGroup.visible = v.sensors !== false;
+    this._alarmGroup.visible = v.sensors !== false;
     this._motionGroup.visible = v.motion !== false;
     this._envGroup.visible = v.env !== false;
     const z = v.zones !== false;
@@ -1556,7 +1561,7 @@ export class ThreeDRenderer {
   private _showNameLabels = true;
 
   updateFloor(f: Floor, scene3d?: Scene3D, layers?: import('./types.js').Layers2D,
-              customObjects?: ObjectRecipe[]): void {
+              customObjects?: ObjectRecipe[], stateProvider?: StateProvider): void {
     if (!this._scene) return;
     this._fw = f.w; this._fd = f.d;
     // Foreground wall cutaway: default ON, opt out with wallCutaway === false.
@@ -1828,7 +1833,16 @@ export class ThreeDRenderer {
     this._terrain = [];
     const rooms = f.rooms ?? [];
     for (const fu of showFurniture ? f.furniture : []) {
-      const grp = this._buildFurniture(fu, f.furniture, customObjects);
+      // Appliance in-use indicator + fridge door: resolve effective on/off (bound
+      // entity or unbound localState) and, for a fridge, its bound door sensor.
+      const def0 = resolveFurnitureDef(fu, customObjects);
+      const isAppliance = furnitureCat(def0) === 'appliance';
+      const st0 = stateProvider ? itemState(fu, stateProvider) : null;
+      const applianceOn = isAppliance && (st0?.state === 'on' || st0?.state === 'playing');
+      const doorOpen = !!(fu.doorEntity && stateProvider &&
+        stateProvider(fu.doorEntity)?.state === 'on');
+      const grp = this._buildFurniture(fu, f.furniture, customObjects,
+                                       { applianceOn, doorOpen });
       this._shadowFlags(grp);
       this._floorGroup.add(grp);
       const def = resolveFurnitureDef(fu, customObjects);
@@ -2861,6 +2875,19 @@ export class ThreeDRenderer {
       );
       panel.position.set(-d.w / 2, DOOR_H / 2, 0);
       hinge.add(panel);
+      // Lock deadbolt (Feature 2, display only): a small emissive box near the
+      // free edge (opposite the hinge). Red = locked, green = unlocked, grey =
+      // unknown/unavailable. Held proud of the panel face (coincident-face gotcha).
+      if (d.lockEntity) {
+        const ls = itemState({ entity_id: d.lockEntity }, stateOf)?.state;
+        const lc = ls === 'locked' ? 0xef5350 : ls === 'unlocked' ? 0x66bb6a : 0x90a4ae;
+        const bolt = new THREE.Mesh(
+          new THREE.BoxGeometry(70, 100, 34),
+          this._mat({ color: lc, emissive: lc, emissiveIntensity: ls ? 0.85 : 0.25 }));
+        bolt.position.set(-d.w + 100, DOOR_H * 0.5, DOOR_T / 2 + 12);
+        bolt.userData.outlineSkip = true;
+        hinge.add(bolt);
+      }
       this._addOutlines(hinge);
       this._doorGroup.add(hinge);
     }
@@ -2875,7 +2902,8 @@ export class ThreeDRenderer {
                                  rotation?: number; elevation?: number;
                                  color?: string; customKindId?: string },
                           neighbors?: Furniture[],
-                          customObjects?: ObjectRecipe[]): THREE.Group {
+                          customObjects?: ObjectRecipe[],
+                          opts?: { applianceOn?: boolean; doorOpen?: boolean }): THREE.Group {
     const recipe = fu.customKindId ? customObjects?.find(o => o.id === fu.customKindId) : undefined;
     const def = recipe ?? furnitureDef(fu);
     const W = fu.w, D = fu.h, HT = def.ht;
@@ -3251,6 +3279,23 @@ export class ThreeDRenderer {
         addBox(W * 0.96, 10, 6, seam, 0, HT * 0.65, -D / 2 - 2);           // freezer split
         addBox(24, HT * 0.28, 20, seam, -W * 0.32, HT * 0.42, -D / 2 - 14); // handle
         addBox(24, HT * 0.2, 20, seam, -W * 0.32, HT * 0.82, -D / 2 - 14);  // freezer handle
+        // Door-open state (bound binary_sensor 'on'): swing a front door panel
+        // ~70° about the +X vertical hinge edge. Build-time swing (no anim),
+        // held slightly proud of the body front so faces never go coplanar
+        // (the coincident-face gotcha).
+        if (opts?.doorOpen) {
+          const doorMat = this._mat({ color: 0xb6bec6, metalness: 0.55, roughness: 0.35, side: THREE.DoubleSide });
+          const hinge = new THREE.Group();
+          hinge.position.set(W / 2, HT / 2, -D / 2 - 30);   // front-right edge, proud 30 mm
+          hinge.rotation.y = -Math.PI * 0.39;               // ~70° swing out toward the room (-Z)
+          const panel = new THREE.Mesh(new THREE.BoxGeometry(W, HT * 0.98, 40), doorMat);
+          panel.position.set(-W / 2, 0, 0);                 // spans from hinge toward -X
+          hinge.add(panel);
+          const dh = new THREE.Mesh(new THREE.BoxGeometry(24, HT * 0.3, 24), seam);
+          dh.position.set(-W + 24, 0, -24);                 // handle on the free edge
+          hinge.add(dh);
+          grp.add(hinge);
+        }
         break;
       }
       case 'stove': {
@@ -3453,6 +3498,22 @@ export class ThreeDRenderer {
       }
       default:
         addBox(W, HT, D, wood, 0, HT / 2, 0);
+    }
+
+    // Appliance in-use indicator: a small emissive green LED on the front
+    // control area when the appliance is on/playing (build-time on/off — no
+    // per-frame animation here; three-view folds appliance state into _keyFloor
+    // so this rebuilds on a change). Front face is local -Z.
+    if (opts?.applianceOn && furnitureCat(def) === 'appliance') {
+      const led = new THREE.Mesh(
+        new THREE.BoxGeometry(34, 34, 12),
+        this._mat({ color: 0x69f0ae, emissive: 0x00c853, emissiveIntensity: 1.0 }));
+      const ledY = kind === 'wall_tv' ? 1350 + 260
+                 : kind === 'tv' ? HT * 0.8
+                 : Math.min(HT * 0.88, HT - 55);
+      led.position.set(W * 0.36, ledY, -D / 2 - 8);
+      led.userData.outlineSkip = true;   // no dark inverted-hull shell on a glowing dot
+      grp.add(led);
     }
 
     // Sims dressing: cartoon outline shells on the main body meshes, plus a
@@ -3668,6 +3729,55 @@ export class ThreeDRenderer {
       const p = this._w(b.x, b.y, h);
       grp.position.set(p.x, p.y, p.z);
       this._bleGroup.add(grp);
+    }
+  }
+
+  // Alarm keypads (Feature 3): a wall-mounted plate at `height` with an emissive
+  // screen band colored by the arm state (palette shared with 2D via
+  // alarmStateColor). Front face = local +Z (room side), matching the switch
+  // rotation convention. Meshes carry userData.kind === 'alarm' so a raycast
+  // click opens the control modal. Rebuilt under _keyAlarm in three-view; a
+  // triggered state stays bright red (no per-frame flash needed).
+  updateAlarmPanels(panels: AlarmPanel[], stateProvider: StateProvider): void {
+    if (!this._scene) return;
+    this._clearGroup(this._alarmGroup);
+    for (const a of panels) {
+      const st = itemState(a, stateProvider);
+      const state = st?.state ?? null;
+      const col = hexToInt(alarmStateColor(state));
+      const ud = { kind: 'alarm' as const, entity_id: a.entity_id ?? null, fixtureId: a.id };
+      const grp = new THREE.Group();
+      const p = this._w(a.x, a.y, alarmHeight(a));
+      grp.position.set(p.x, p.y, p.z);
+      grp.rotation.y = -((a.rotation || 0) * Math.PI / 180);
+      const plateW = ALARM_DEFAULTS.size * 0.5;
+      const plateH = ALARM_DEFAULTS.size * 0.72;
+      const plateD = ALARM_PLATE_DEPTH_MM;
+      // Plate body (back flush on the wall; snap offset = wallT/2 + plateD/2).
+      const body = new THREE.Mesh(
+        new THREE.BoxGeometry(plateW, plateH, plateD),
+        this._mat({ color: 0x11151b, metalness: 0.2, roughness: 0.6 }));
+      body.userData = ud;
+      grp.add(body);
+      // Screen band on the front (+Z), proud of the plate so faces never go
+      // coplanar (the coincident-face gotcha). Emissive, colored by arm state.
+      const screen = new THREE.Mesh(
+        new THREE.BoxGeometry(plateW * 0.8, plateH * 0.34, 10),
+        this._mat({ color: col, emissive: col, emissiveIntensity: state ? 0.95 : 0.25 }));
+      screen.position.set(0, plateH * 0.24, plateD / 2 + 5);
+      screen.userData = { ...ud, outlineSkip: true };
+      grp.add(screen);
+      // A couple of keypad button rows below the screen (cosmetic).
+      const btnMat = this._mat({ color: 0x2b333c, metalness: 0.1, roughness: 0.7 });
+      for (let ry = 0; ry < 2; ry++) {
+        for (let cxi = -1; cxi <= 1; cxi++) {
+          const btn = new THREE.Mesh(new THREE.BoxGeometry(plateW * 0.2, plateH * 0.13, 8), btnMat);
+          btn.position.set(cxi * plateW * 0.26, -plateH * 0.08 - ry * plateH * 0.2, plateD / 2 + 4);
+          btn.userData = ud;
+          grp.add(btn);
+        }
+      }
+      this._alarmGroup.add(grp);
     }
   }
 
@@ -7618,6 +7728,7 @@ export class ThreeDRenderer {
     for (const g of [
       this._floorGroup, this._doorGroup, this._modelGroup, this._zoneGroup, this._haloGroup,
       this._sensorGroup, this._motionGroup, this._envGroup, this._bleGroup,
+      this._alarmGroup,
       this._lightGroup, this._targetGroup, this._gpsGroup, this._weatherGroup,
     ]) {
       this._disposeSpriteMaps(g);

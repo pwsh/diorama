@@ -10,7 +10,7 @@ import type {
   Sensor, Zone, ObjectHalo, BgImage, MotionSensor, EnvSensor, EnvKind, Light, SwitchFixture, LightIconKind,
   Furniture, FurnitureKind, Door, Window as WindowType, WindowKind, Layers2D, Floor, Room,
   ObjectRecipe, RecipePrimitive, RecipeShape, ActivityKind, AvatarKind,
-  BleProxy, DioramaPerson, GeoLandmark,
+  BleProxy, AlarmPanel, DioramaPerson, GeoLandmark,
 } from '../types.js';
 import type { BermudaDevice } from '../planner.js';
 import { CONDITION_GLYPH, CONDITION_LABEL, tempText } from '../weather.js';
@@ -32,6 +32,7 @@ import {
   fmtLen,
   motionColor, motionIntensity, sensorColor, lightIconKind, MOTION_DEFAULTS,
   BLE_PROXY_DEFAULTS, bleProxyHeight,
+  alarmHeight, alarmStateColor,
   FURNITURE_KINDS, furnitureKind, resolveFurnitureDef, WINDOW_DEFAULTS,
   ENV_KINDS, ENV_DEFAULTS, ENV_SCALE_MIN, ENV_SCALE_MAX,
   envKindOf, envColor, envValueText, envHeight, envScale,
@@ -94,6 +95,7 @@ const TOOLS: { id: Tool; label: string }[] = [
   { id: 'motion', label: 'Motion' },
   { id: 'env', label: 'Env' },
   { id: 'bleproxy', label: 'BLE' },
+  { id: 'alarm', label: '🚨 Alarm' },
   { id: 'furniture', label: 'Furn' },
   { id: 'light', label: 'Light' },
   { id: 'switch', label: 'Switch' },
@@ -359,6 +361,7 @@ export class Sidebar extends LitElement {
         ${this._motionSensorsSection()}
         ${this._envSensorsSection()}
         ${this._bleProxiesSection()}
+        ${this._alarmPanelsSection()}
         ${this._peopleSection()}
         ${this._doorsSection()}
         ${this._windowsSection()}
@@ -468,6 +471,7 @@ export class Sidebar extends LitElement {
       case 'motion': return 'Click to drop a binary motion sensor (PIR).';
       case 'env': return 'Click to drop an environmental sensor (temp, humidity, CO₂, …).';
       case 'bleproxy': return 'Click to drop a BLE scanner (Bluetooth proxy) puck. Bind it to the physical proxy device.';
+      case 'alarm': return 'Click to drop an alarm keypad. Bind to an alarm_control_panel entity.';
       case 'furniture': return 'Click to drop a 600 × 600 mm piece.';
       case 'light': return 'Click to drop a light. Bind via the active panel.';
       case 'switch': return 'Click to drop a switch. Bind via the active panel.';
@@ -987,6 +991,108 @@ export class Sidebar extends LitElement {
     }));
   }
 
+  // ── Alarm keypads section (Feature 3) ─────────────────────────────────
+  private _alarmPanelsSection() {
+    const list = this.planner.floor().alarmPanels ?? [];
+    if (list.length === 0) return nothing;
+    return this._section('alarm', 'Alarm', () =>
+      this._groupedList('alarm', list, a => this._alarmItem(a)));
+  }
+
+  private _alarmItem(a: AlarmPanel) {
+    const p = this.planner;
+    const sel = p.activeAlarmId === a.id;
+    const st = p.effectiveState(a);
+    const state = st?.state ?? null;
+    const col = alarmStateColor(state);
+    const badge = state ? state.replace('armed_', '').replace(/_/g, ' ') : (a.entity_id ? 'n/a' : '—');
+    return html`
+      <div style="border-bottom:1px solid var(--border)">
+        <div class="sensor-item ${sel ? 'sel' : ''}" @click=${() => p.setActiveAlarm(a.id)}>
+          <div class="dot" style="background:${state ? col : '#90a4ae'}"></div>
+          <div class="nm">${a.label?.trim() || 'Alarm'}</div>
+          <div class="badge" style=${state ? `color:${col}` : nothing}>${badge}</div>
+        </div>
+        ${sel ? this._alarmEditor(a) : nothing}
+      </div>
+    `;
+  }
+
+  private _alarmEditor(a: AlarmPanel) {
+    const p = this.planner;
+    const upd = (mut: () => void) => { mut(); p.save(); p.emitConfig(); };
+    return html`
+      <div style="background:rgba(0,0,0,0.25);border-radius:4px;padding:6px;margin:4px 0">
+        <div class="row"><label>Label</label>
+          <input type="text" .value=${a.label ?? ''} placeholder="Alarm"
+                 @input=${(e: Event) => upd(() => { a.label = (e.target as HTMLInputElement).value; })}>
+        </div>
+        ${this._lockRow(a)}
+        <div class="row"><label>X (mm)</label>
+          <input type="number" .value=${String(Math.round(a.x))}
+                 @input=${(e: Event) => upd(() => { a.x = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
+        </div>
+        <div class="row"><label>Y (mm)</label>
+          <input type="number" .value=${String(Math.round(a.y))}
+                 @input=${(e: Event) => upd(() => { a.y = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
+        </div>
+        <div class="row"><label>Height (mm)</label>
+          <input type="number" min="0" .value=${String(Math.round(alarmHeight(a)))}
+                 @input=${(e: Event) => upd(() => {
+                   const v = parseFloat((e.target as HTMLInputElement).value);
+                   a.height = isFinite(v) ? Math.max(0, v) : undefined;
+                 })}>
+        </div>
+        <div class="row"><label title="Permit arm/disarm from the panel modal. Off = view-only status.">Allow arm/disarm</label>
+          <span class="mini-toggle">
+            <input type="checkbox" .checked=${!!a.allowControl}
+                   @change=${(e: Event) => upd(() => { a.allowControl = (e.target as HTMLInputElement).checked; })}>
+            <span></span>
+          </span>
+        </div>
+        <div class="row"><label>HA entity</label>
+          <span style="font-size:11px;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+            ${a.entity_id || '— unbound —'}
+          </span>
+        </div>
+        <div style="display:flex;gap:4px;margin-top:4px">
+          <button class="btn" style="flex:1;font-size:11px" @click=${() => this._pickAlarmEntity(a)}>
+            ${a.entity_id ? 'Rebind' : 'Bind'}…
+          </button>
+          ${a.entity_id ? html`
+            <button class="btn" style="font-size:11px"
+                    @click=${() => upd(() => { a.entity_id = null; })}>Unbind</button>
+          ` : nothing}
+        </div>
+        <div style="font-size:10px;color:var(--text-dim);margin-top:4px;line-height:1.3">
+          ${a.entity_id
+            ? 'Click the keypad to open the control modal (arm/disarm needs "Allow arm/disarm").'
+            : 'Unbound: the keypad modal sets a local demo state (disarmed / armed home / armed away).'}
+        </div>
+        <button class="btn danger" style="width:100%;margin-top:6px" @click=${() => {
+          const f = p.floor();
+          f.alarmPanels = (f.alarmPanels ?? []).filter(x => x.id !== a.id);
+          p.activeAlarmId = null;
+          p.save(); p.emitConfig();
+        }}>Delete</button>
+      </div>
+    `;
+  }
+
+  private _pickAlarmEntity(a: AlarmPanel): void {
+    this.dispatchEvent(new CustomEvent('open-entity-picker', {
+      bubbles: true, composed: true,
+      detail: {
+        domain: 'alarm_control_panel',
+        onPick: (id: string) => {
+          a.entity_id = id;
+          this.planner.save();
+          this.planner.emitConfig();
+        },
+      },
+    }));
+  }
+
   // ── People section (identity registry) ────────────────────────────────
   private _bermudaKicked = false;
 
@@ -1378,6 +1484,48 @@ export class Sidebar extends LitElement {
     }));
   }
 
+  // Display-only lock.* secondary binding (Feature 2). Shows the lock state; a
+  // padlock renders near the hinge in 2D + a deadbolt in 3D. No toggle.
+  private _doorLockBindRow(d: Door, upd: (mut: () => void) => void) {
+    const p = this.planner;
+    const st = d.lockEntity && p.hass?.states ? p.hass.states[d.lockEntity] : null;
+    const s = st?.state;
+    const label = !d.lockEntity ? '— unbound —'
+      : s === 'locked' ? `${d.lockEntity} · LOCKED`
+      : s === 'unlocked' ? `${d.lockEntity} · unlocked`
+      : `${d.lockEntity} · ${s ?? 'n/a'}`;
+    const color = s === 'locked' ? '#ef9a9a' : s === 'unlocked' ? '#66bb6a' : 'var(--text-dim)';
+    return html`
+      <div class="row" style="margin-top:6px"><label title="lock.* entity — display only">Lock</label>
+        <span style="font-size:11px;color:${color};flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+          ${label}
+        </span>
+      </div>
+      <div style="display:flex;gap:4px;margin-top:4px">
+        <button class="btn" style="flex:1;font-size:11px" @click=${() => this._pickDoorLock(d)}>
+          ${d.lockEntity ? 'Rebind' : 'Bind'} lock…
+        </button>
+        ${d.lockEntity ? html`
+          <button class="btn" style="font-size:11px"
+                  @click=${() => upd(() => { d.lockEntity = null; })}>Unbind</button>
+        ` : nothing}
+      </div>
+    `;
+  }
+
+  private _pickDoorLock(d: Door): void {
+    this.dispatchEvent(new CustomEvent('open-entity-picker', {
+      bubbles: true, composed: true,
+      detail: {
+        domain: 'lock',
+        onPick: (id: string) => {
+          d.lockEntity = id;
+          this.planner.save(); this.planner.emitConfig();
+        },
+      },
+    }));
+  }
+
   private _doorEditor(d: Door) {
     const p = this.planner;
     const upd = (mut: () => void) => { mut(); p.save(); p.emitConfig(); };
@@ -1435,9 +1583,11 @@ export class Sidebar extends LitElement {
                     @click=${() => upd(() => { d.entity_id = null; })}>Unbind</button>
           ` : nothing}
         </div>
+        ${this._doorLockBindRow(d, upd)}
         <div style="font-size:10px;color:var(--text-dim);margin-top:6px;line-height:1.3">
           Hinge at (X,Y). Panel extends along rotation (15° snap). Bind to a
-          binary_sensor (state "on" = open).
+          binary_sensor (state "on" = open). Optional lock.* shows a padlock
+          (display only — no toggle).
         </div>
       </div>
     `;
@@ -1678,6 +1828,7 @@ export class Sidebar extends LitElement {
           </select>
         </div>
         ${this._furnitureBindRow(piece, upd)}
+        ${curKind === 'fridge' ? this._fridgeDoorBindRow(piece, upd) : nothing}
         <div class="row"><label>Color</label>
           <input type="color"
                  .value=${piece.color ?? ('#' + (resolveFurnitureDef(piece, p.store.customObjects).color & 0xffffff).toString(16).padStart(6, '0'))}
@@ -1764,6 +1915,44 @@ export class Sidebar extends LitElement {
         ` : nothing}
       </div>
     `;
+  }
+
+  // Fridge-only secondary binding: a door/contact binary_sensor ('on' = open)
+  // that drives the swung-open 3D door panel + the 2D open-door wedge.
+  private _fridgeDoorBindRow(piece: Furniture, upd: (mut: () => void) => void) {
+    const p = this.planner;
+    const st = piece.doorEntity && p.hass?.states ? p.hass.states[piece.doorEntity] : null;
+    const open = st?.state === 'on';
+    return html`
+      <div class="row"><label title="binary_sensor: 'on' = door open">Door sensor</label>
+        <span style="font-size:11px;color:${open ? '#66bb6a' : 'var(--text-dim)'};flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+          ${piece.doorEntity ? `${piece.doorEntity} · ${open ? 'OPEN' : 'closed'}` : '— unbound —'}
+        </span>
+      </div>
+      <div style="display:flex;gap:4px;margin-top:4px">
+        <button class="btn" style="flex:1;font-size:11px" @click=${() => this._pickFridgeDoor(piece)}>
+          ${piece.doorEntity ? 'Rebind' : 'Bind'} door…
+        </button>
+        ${piece.doorEntity ? html`
+          <button class="btn" style="font-size:11px"
+                  @click=${() => upd(() => { piece.doorEntity = null; })}>Unbind</button>
+        ` : nothing}
+      </div>
+    `;
+  }
+
+  private _pickFridgeDoor(piece: Furniture): void {
+    this.dispatchEvent(new CustomEvent('open-entity-picker', {
+      bubbles: true, composed: true,
+      detail: {
+        domain: 'binary_sensor',
+        onPick: (id: string) => {
+          piece.doorEntity = id;
+          this.planner.save();
+          this.planner.emitConfig();
+        },
+      },
+    }));
   }
 
   private _pickFurnitureEntity(piece: Furniture): void {

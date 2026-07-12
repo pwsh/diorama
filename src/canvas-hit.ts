@@ -3,7 +3,7 @@ import { switchSize, distMM, pointToSeg, transformVerts, centroid, localToWorld,
          furnitureCorners, furnitureLocalToWorld, doorEndpoint,
          doorOpenDeltaDeg, windowEndpoints } from './geometry.js';
 import type { Planner } from './planner.js';
-import type { Vec2, Wall, Sensor, Furniture, BgImage, MotionSensor, EnvSensor, BleProxy, Door, Window as WindowType, Floor } from './types.js';
+import type { Vec2, Wall, Sensor, Furniture, BgImage, MotionSensor, EnvSensor, BleProxy, AlarmPanel, Door, Window as WindowType, Floor } from './types.js';
 import type { FloorEdge } from './geometry.js';
 import { envChipHalfPx, type View } from './canvas-render.js';
 
@@ -255,6 +255,16 @@ export function hitBleProxy(p: Planner, view: View, mm: Vec2): BleProxy | null {
   const list = f.bleProxies ?? [];
   for (let i = list.length - 1; i >= 0; i--) {
     if (list[i].hidden) continue;
+    if (distMM(list[i], mm) < h) return list[i];
+  }
+  return null;
+}
+
+export function hitAlarmPanel(p: Planner, view: View, mm: Vec2): AlarmPanel | null {
+  const f = p.floor();
+  const h = hitPx(view) * 1.4;
+  const list = f.alarmPanels ?? [];
+  for (let i = list.length - 1; i >= 0; i--) {
     if (distMM(list[i], mm) < h) return list[i];
   }
   return null;

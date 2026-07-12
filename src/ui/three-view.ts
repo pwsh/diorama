@@ -6,7 +6,7 @@ import { customElement } from './define.js';
 // startup path never downloads it.
 import type { ThreeDRenderer, ZoneWorld, HaloWorld, TargetWorld, ActivityContext,
   GpsPinWorld, GpsLandmarkWorld, WeatherFxState } from '../three-renderer.js';
-import { localToWorld, transformVerts, pointInPolygon, sensorColor, hexToInt, motionColor, lightIconKind, furnitureKind } from '../geometry.js';
+import { localToWorld, transformVerts, pointInPolygon, sensorColor, hexToInt, motionColor, lightIconKind, furnitureKind, resolveFurnitureDef, furnitureCat, alarmStateColor } from '../geometry.js';
 import { compass8 } from '../geo.js';
 import { resolveScenePreset, resolveTimeBucket } from '../time-of-day.js';
 import { conditionIntensity } from '../weather.js';
@@ -168,6 +168,14 @@ export class ThreeView extends LitElement {
     // domain so a "switch" fixture bound to a light entity does light.toggle).
     this._renderer.onFixtureClick(({ kind, entity_id, fixtureId }) => {
       const p = this.planner;
+      // Alarm keypad → open the control/status modal (view mode: no interaction).
+      if (kind === 'alarm') {
+        if (p.uiMode === 'view') return;
+        this.dispatchEvent(new CustomEvent('open-alarm', {
+          bubbles: true, composed: true, detail: { id: fixtureId },
+        }));
+        return;
+      }
       // toggleEntity/toggleItem refuse in view-only mode.
       if (entity_id) { p.toggleEntity(entity_id); return; }
       // Unbound fixture → local control: resolve the item by kind + id and flip
@@ -397,6 +405,7 @@ export class ThreeView extends LitElement {
   private _keyMotion = '';
   private _keyEnv = '';
   private _keyBle = '';
+  private _keyAlarm = '';
   private _keyLights = '';
   private _keyZones = '';
   private _keyHalos = '';
@@ -420,7 +429,7 @@ export class ThreeView extends LitElement {
         this._lastFloorId = f.id;
         r.clearTransientGroups();
         this._keyFloor = this._keyDoors = this._keySensors = '';
-        this._keyMotion = this._keyEnv = this._keyBle = '';
+        this._keyMotion = this._keyEnv = this._keyBle = this._keyAlarm = '';
         this._keyLights = this._keyZones = this._keyHalos = '';
         this._keyGhost = this._keyGps = this._keyWeather = '';
         this._trigPrevOn.clear();
@@ -445,14 +454,26 @@ export class ThreeView extends LitElement {
       const scMerged = { ...scBase, ...(f.look3d ?? {}), preset: effPreset };
       // The `geo` layer's 3D pins (landmarks + GPS devices) build in a dedicated
       // _gpsGroup under the _keyGps dirty key below (not part of keyFloor).
+      // Appliance in-use indicators + fridge door swings build inside
+      // updateFloor (furniture lives in _floorGroup), so their effective states
+      // must be part of _keyFloor or the LED / open door wouldn't update on a
+      // state change (configRev only bumps on structural edits). Compact hash of
+      // each appliance's on/off + any bound fridge door sensor.
+      const applianceKey = f.furniture.map(fu => {
+        const def = resolveFurnitureDef(fu, p.store.customObjects);
+        if (furnitureCat(def) !== 'appliance') return '';
+        const on = p.effectiveState(fu)?.state ?? '-';
+        const door = fu.doorEntity ? stOf(fu.doorEntity) : '';
+        return `${fu.id}:${on}:${door}`;
+      }).filter(Boolean).join(',');
       const keyFloor = `${p.configRev}|${effPreset}|` +
         `${layers.furniture !== false}|${layers.bg !== false}|${layers.walls !== false}|` +
-        `${layers.labels !== false}`;
+        `${layers.labels !== false}|${applianceKey}`;
       if (keyFloor !== this._keyFloor) {
         this._keyFloor = keyFloor;
         // customObjects edits bump configRev (via emitConfig) → keyFloor flips
         // → the placed recipe instance rebuilds as its own live preview.
-        r.updateFloor(f, scMerged, layers, p.store.customObjects);
+        r.updateFloor(f, scMerged, layers, p.store.customObjects, id => states[id] || null);
       }
 
       // Glass-house ghost floors: every OTHER story as a translucent shell.
@@ -469,9 +490,10 @@ export class ThreeView extends LitElement {
       // mesh when transform/opacity/visibility changes.
       this._syncModel(f);
 
-      // Doors + windows: structural + bound entity states.
+      // Doors + windows: structural + bound entity states. Door lock entities
+      // (display-only deadbolt) fold in too so a lock/unlock rebuilds the panel.
       const keyDoors = `${p.configRev}|` +
-        f.doors.map(d => stOf(d.entity_id)).join(',') + '|' +
+        f.doors.map(d => `${stOf(d.entity_id)}:${stOf(d.lockEntity)}`).join(',') + '|' +
         f.windows.map(w => stOf(w.entity_id)).join(',');
       if (keyDoors !== this._keyDoors) {
         this._keyDoors = keyDoors;
@@ -524,6 +546,16 @@ export class ThreeView extends LitElement {
       if (keyBle !== this._keyBle) {
         this._keyBle = keyBle;
         r.updateBleProxies(f.bleProxies ?? []);
+      }
+
+      // Alarm keypads: structural + effective state (bound entity or unbound
+      // localState). Rebuild on a placement / state change.
+      const keyAlarm = `${p.configRev}|` +
+        (f.alarmPanels ?? []).map(a =>
+          `${a.id}:${Math.round(a.x)}:${Math.round(a.y)}:${Math.round(a.rotation ?? 0)}:${p.effectiveState(a)?.state ?? '-'}`).join(',');
+      if (keyAlarm !== this._keyAlarm) {
+        this._keyAlarm = keyAlarm;
+        r.updateAlarmPanels(f.alarmPanels ?? [], id => states[id] || null);
       }
 
       // GPS device pins + 3D landmark pins (both ride the geo layer). Coarse

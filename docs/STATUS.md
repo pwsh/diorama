@@ -48,6 +48,25 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Device bindings batch: appliance in-use + fridge door + door lock +
+  alarm keypad** (12 files; typecheck + build clean; mega / localstate /
+  appliance / walltv harness green + a new 10/10 smoke page for the 3D
+  paths): appliances with an ON `effectiveState` show a pulsing green LED +
+  glow (2D) and emissive indicator (3D) — three-view now folds an
+  appliance-state hash into `_keyFloor` and passes a stateProvider into
+  `updateFloor` (bound appliance state changes finally rebuild in 3D).
+  `Furniture.doorEntity` (fridge): binary_sensor swings the 3D fridge door
+  open ~70° + 2D amber wedge. `Door.lockEntity` (display-only): 2D padlock /
+  3D deadbolt red-locked/green-unlocked, folded into `_keyDoors`. NEW
+  `AlarmPanel` fixture (`Floor.alarmPanels`, full canvas-fixture recipe,
+  tool 🚨, wall-snap no-gang, sensors layer, `_keyAlarm`):
+  state-colored keypad (disarmed green / home blue / away purple /
+  arming-pending amber pulse / triggered red pulse), click →
+  `<diorama-alarm-modal>` — Disarm/Arm Home/Arm Away services with optional
+  code when "Allow arm/disarm" is on, read-only otherwise, local demo state
+  when unbound. CLAUDE.md sections "Device-state bindings on structural
+  items" + "Alarm keypad fixture".
+
 - **Thought-bubble expansion + fixes batch** (`src/three-renderer.ts` +
   `src/ui/three-view.ts` + `src/weather.ts` + `src/planner.ts` +
   `src/ui/sidebar.ts`; typecheck + build clean; weather-test up 49→**53/53**

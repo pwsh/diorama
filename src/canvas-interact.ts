@@ -1,4 +1,4 @@
-import { snap, snapVertex15, distMM, worldToLocal, localToWorld, FURNITURE_KINDS, furnitureCorners, furnitureLocalToWorld, furnitureWorldToLocal, resolveFurnitureDef, resolveFurnitureWallCollision, resolveSeatTableCollision, snapStepLightToSurface, snapFireplaceToWall, snapSwitchToWall, nearestAlign, envScale, ENV_SCALE_MIN, ENV_SCALE_MAX, GRID_MM, floorContentBbox, resolveFloorEdgeDrag } from './geometry.js';
+import { snap, snapVertex15, distMM, worldToLocal, localToWorld, FURNITURE_KINDS, furnitureCorners, furnitureLocalToWorld, furnitureWorldToLocal, resolveFurnitureDef, resolveFurnitureWallCollision, resolveSeatTableCollision, snapStepLightToSurface, snapFireplaceToWall, snapSwitchToWall, snapAlarmToWall, nearestAlign, envScale, ENV_SCALE_MIN, ENV_SCALE_MAX, GRID_MM, floorContentBbox, resolveFloorEdgeDrag } from './geometry.js';
 import { newId } from './storage.js';
 import {
   pxToMm, type View,
@@ -9,7 +9,7 @@ import {
   hitVertexOrZone, hitObject, hitObjectRadiusHandle,
   hitBgBody, hitBgCorner, bgEditable,
   hitMotionSensor, hitMotionRotateHandle, hitEnvSensor, hitEnvResizeHandle,
-  hitBleProxy,
+  hitBleProxy, hitAlarmPanel,
   hitDoor, hitDoorEnd, hitWindow, hitWindowEnd, hitFloorEdge,
 } from './canvas-hit.js';
 import type { Planner, Drag } from './planner.js';
@@ -305,6 +305,14 @@ export function connectWallEnds(
   return changed;
 }
 
+// Open the alarm control modal for a panel id (bubbles to app.ts). Used from
+// both the edit click-vs-drag path and the kiosk click branch.
+function openAlarmModal(canvas: HTMLCanvasElement, id: string): void {
+  canvas.dispatchEvent(new CustomEvent('open-alarm', {
+    bubbles: true, composed: true, detail: { id },
+  }));
+}
+
 export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: View, e: MouseEvent): void {
   if (p.uiMode !== 'edit') return;  // kiosk/view: no drags, no selections
   if (p.editZone) return;
@@ -449,6 +457,12 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
     p.alignCandidates = buildAlignCandidates(p, p.drag);
     canvas.style.cursor = 'grabbing'; e.preventDefault(); p.emitConfig(); return;
   }
+  const ah = hitAlarmPanel(p, view, mm);
+  if (ah) {
+    if (p.activeAlarmId !== ah.id) p.activeAlarmId = ah.id;
+    p.drag = { kind: 'alarm', id: ah.id, startMm: mm, start: { x: ah.x, y: ah.y } };
+    canvas.style.cursor = 'grabbing'; e.preventDefault(); p.emitConfig(); return;
+  }
   const sh = hitSensor(p, view, mm);
   if (sh) {
     if (p.store.activeSensorId !== sh.id) p.setActiveSensor(sh.id);
@@ -541,6 +555,14 @@ export function onCanvasMouseMove(p: Planner, canvas: HTMLCanvasElement, view: V
         if (bp && !bp.locked) {
           bp.x = Math.max(0, Math.min(f.w, drag.start.x + mm.x - drag.startMm.x));
           bp.y = Math.max(0, Math.min(f.d, drag.start.y + mm.y - drag.startMm.y));
+        }
+        break;
+      }
+      case 'alarm': {
+        const ap = (f.alarmPanels ?? []).find(x => x.id === drag.id);
+        if (ap && !ap.locked) {
+          ap.x = Math.max(0, Math.min(f.w, drag.start.x + mm.x - drag.startMm.x));
+          ap.y = Math.max(0, Math.min(f.d, drag.start.y + mm.y - drag.startMm.y));
         }
         break;
       }
@@ -797,6 +819,7 @@ export function onCanvasMouseMove(p: Planner, canvas: HTMLCanvasElement, view: V
   if (p.uiMode === 'kiosk') {
     const overDevice =
       hitFixture(p, mm, Math.max(250, hitPx(view) * 3)) ||
+      hitAlarmPanel(p, view, mm) ||
       hitDoor(p, view, mm) || hitWindow(p, view, mm);
     canvas.style.cursor = overDevice ? 'pointer' : 'default';
     return;
@@ -809,6 +832,7 @@ export function onCanvasMouseMove(p: Planner, canvas: HTMLCanvasElement, view: V
     else if (hitEnvSensor(p, view, mm)) canvas.style.cursor = 'grab';
     else if (hitMotionSensor(p, view, mm)) canvas.style.cursor = 'grab';
     else if (hitBleProxy(p, view, mm)) canvas.style.cursor = 'grab';
+    else if (hitAlarmPanel(p, view, mm)) canvas.style.cursor = 'grab';
     else if (hitSensorRotateHandle(p, view, mm)) canvas.style.cursor = 'grab';
     else if (zonesInteractive(p) && hitObjectRadiusHandle(p, view, mm)) canvas.style.cursor = 'ew-resize';
     else if (zonesInteractive(p) && (hitObject(p, view, mm) || hitVertexOrZone(p, view, mm))) canvas.style.cursor = 'grab';
@@ -857,6 +881,21 @@ export function onCanvasMouseUp(p: Planner, canvas: HTMLCanvasElement): void {
     const bp = (f.bleProxies ?? []).find(x => x.id === drag.id);
     if (bp) { bp.x = snap(bp.x, 10); bp.y = snap(bp.y, 10); }
     p.save();
+  } else if (drag.kind === 'alarm') {
+    const ap = (f.alarmPanels ?? []).find(x => x.id === drag.id);
+    if (ap) {
+      // Click-vs-drag: a tiny movement opens the alarm modal; a real move snaps
+      // the plate flush to the nearest wall (like a switch, no ganging).
+      const moved = Math.hypot(ap.x - drag.start.x, ap.y - drag.start.y);
+      if (moved < 30) {
+        ap.x = drag.start.x; ap.y = drag.start.y;
+        openAlarmModal(canvas, ap.id);
+      } else {
+        ap.x = snap(ap.x, 10); ap.y = snap(ap.y, 10);
+        snapAlarmToWall(ap, f.walls);
+        p.save();
+      }
+    }
   } else if (drag.kind === 'envResize') {
     p.save();
   } else if (drag.kind === 'motionRotate') {
@@ -988,6 +1027,9 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
       if (it) p.toggleItem(it);
       return;
     }
+    // Alarm keypad → open the control/status modal (device interaction, not edit).
+    const aHit2 = hitAlarmPanel(p, view, mm);
+    if (aHit2) { openAlarmModal(canvas, aHit2.id); return; }
     const dHit2 = hitDoor(p, view, mm);
     if (dHit2) { p.toggleItem(dHit2.door); return; }
     const wHit2 = hitWindow(p, view, mm);
@@ -1108,6 +1150,23 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
     p.emitConfig();
     return;
   }
+  if (p.tool === 'alarm') {
+    if (!f.alarmPanels) f.alarmPanels = [];
+    const id = newId('al');
+    const ap = {
+      id,
+      x: snap(Math.max(0, Math.min(f.w, mm.x)), 10),
+      y: snap(Math.max(0, Math.min(f.d, mm.y)), 10),
+      entity_id: null, label: `Alarm ${f.alarmPanels.length + 1}`,
+    };
+    snapAlarmToWall(ap, f.walls);   // flush to a wall on drop, like a switch
+    f.alarmPanels.push(ap);
+    p.activeAlarmId = id;
+    p.save();
+    p.setTool('select');
+    p.emitConfig();
+    return;
+  }
   if (p.tool === 'wall') {
     // First vertex: free placement. Subsequent vertices snap to a 15°
     // increment from the previous vertex via snapVertex15 (preserves cursor
@@ -1204,6 +1263,13 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
       if (bhit.locked) return;
       f.bleProxies = (f.bleProxies ?? []).filter(x => x.id !== bhit.id);
       if (p.activeBleId === bhit.id) p.activeBleId = null;
+      p.save(); p.emitConfig(); return;
+    }
+    const ahit = hitAlarmPanel(p, view, mm);
+    if (ahit) {
+      if (ahit.locked) return;
+      f.alarmPanels = (f.alarmPanels ?? []).filter(x => x.id !== ahit.id);
+      if (p.activeAlarmId === ahit.id) p.activeAlarmId = null;
       p.save(); p.emitConfig(); return;
     }
     const sh = hitSensor(p, view, mm);
