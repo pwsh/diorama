@@ -10,3 +10,5 @@ diorama.zip
 .DS_Store
 # machine-local deploy target (private)
 deploy.local.json
+# private infrastructure notes (remotes, hosts) — never push
+docs/STATUS.local.md

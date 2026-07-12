@@ -16,19 +16,21 @@ asks for).
 
 ### Remotes, releases, deploy
 
-- `origin` = https://repo.holzhueter.us/eric/diorama.git (Gitea, token in the
-  remote URL). `github` = https://github.com/pwsh/diorama.git (gh CLI is
-  authenticated as `pwsh`). Push **both** on every ship.
+- Two remotes: `origin` (private Gitea) and `github`
+  (https://github.com/pwsh/diorama.git, gh CLI authenticated as `pwsh`).
+  Push **both** on every ship. Private hostnames/IPs live ONLY in the
+  gitignored `docs/STATUS.local.md` (and `git remote -v`) — keep them out
+  of every tracked file.
 - Release runbook: bump `package.json` version → commit `vX.Y.Z` → tag →
   `git push origin main vX.Y.Z && git push github main vX.Y.Z` →
   `gh release create vX.Y.Z --repo pwsh/diorama --title … --notes …` → the
   `release.yml` workflow builds and attaches `diorama.zip` (HACS asset) —
   poll `gh run list --workflow=release.yml` until success and verify the
   asset. Gitea releases optional (v0.4.0 has one; later ones GitHub-only).
-- Deploy to live HA: `npm run deploy` (haDeploy plugin → GVFS SMB share at
-  10.0.0.6, `www/community/diorama`, config in gitignored
-  `deploy.local.json`). User must hard-refresh / reset the companion-app
-  frontend cache afterwards.
+- Deploy to live HA: `npm run deploy` (haDeploy plugin → the GVFS SMB
+  share configured in the gitignored `deploy.local.json`; host details in
+  the gitignored `docs/STATUS.local.md`). User must hard-refresh / reset
+  the companion-app frontend cache afterwards.
 - Releases so far: v0.4.0 Sims era → v0.5.0 pathfinding/glass house/cutaway
   → v0.6.0 living avatars (AI avatars, despawn fades, beds, auto-follow) →
   v0.7.0 polish & reachability (UI reorg, sectional fix, colors, step
