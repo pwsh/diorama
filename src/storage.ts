@@ -41,6 +41,7 @@ export function repairFloor(f: Partial<Floor> & { id: string; name: string; w: n
     model3d: (f as Partial<Floor>).model3d ?? null,
     rooms: f.rooms ?? [],
     bleProxies: f.bleProxies ?? [],
+    boundsLocked: f.boundsLocked,
   };
 }
 

@@ -6888,9 +6888,25 @@ export class ThreeDRenderer {
     const steelMat = (kind === 'ninja_cyborg' || kind === 'cyborg')
       ? this._mat({ color: 0x8a9099, emissive: 0x8a9099, emissiveIntensity: 0.1, metalness: 0.8, roughness: 0.3 })
       : skin;
+    // Trouser tone: plain rigs whose legs would otherwise render in the raw
+    // identity tint (spec.skin === the passed-in `color`) read as a head-to-toe
+    // unitard ("missing pants"). Give BOTH leg segments (upper + lower — not the
+    // shoes, which keep spec.shoe) a derived trouser tone: the tint multiplied
+    // ~0.5× to darken it, so a torso/pants boundary reads under the toon bands.
+    // Derived HERE from whatever `color` was passed in (per-sensor tint / fused
+    // person / BLE person), so it tracks every recolor path without a cached
+    // constant. Kinds with an explicit spec.legColor (duck) or a non-tint skin
+    // (robot/alien/hacker/ninja/wise_oracle/…) keep their costume legs untouched.
+    // Per-rig material (not a shared style resource).
+    const legIsTint = spec.legColor == null && spec.skin === color;
+    const pants = ((Math.round(((color >> 16) & 0xff) * 0.5) << 16)
+      | (Math.round(((color >> 8) & 0xff) * 0.5) << 8)
+      | Math.round((color & 0xff) * 0.5));
     const baseLegMat = spec.legColor != null
       ? this._mat({ color: spec.legColor, emissive: spec.legColor, emissiveIntensity: 0.2, metalness: 0.1, roughness: 0.6 })
-      : skin;
+      : legIsTint
+        ? this._mat({ color: pants, emissive: pants, emissiveIntensity: spec.emI * 0.5, metalness: 0.1, roughness: 0.68 })
+        : skin;
     const leftLeg  = makeLeg(-TORSO_W / 4, baseLegMat);
     const rightLeg = makeLeg( TORSO_W / 4, kind === 'cyborg' ? steelMat : baseLegMat);
     const leftArm  = makeArm(-(TORSO_W / 2 + ARM_UPPER_R * 0.7));

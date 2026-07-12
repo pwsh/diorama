@@ -36,7 +36,7 @@ import {
   ENV_KINDS, ENV_DEFAULTS, ENV_SCALE_MIN, ENV_SCALE_MAX,
   envKindOf, envColor, envValueText, envHeight, envScale,
   furnitureCat, type FurnitureCat,
-  closedWallLoops, loopContaining, resolveRoomForPoint, roomLabel,
+  closedWallLoops, loopContaining, resolveRoomForPointFuzzy, roomLabel,
 } from '../geometry.js';
 import type { Vec2 } from '../types.js';
 
@@ -202,7 +202,10 @@ export class Sidebar extends LitElement {
     const byId = new Map<string, T[]>();
     const none: T[] = [];
     for (const it of items) {
-      const rm = resolveRoomForPoint(rooms, loops, it.x, it.y);
+      // Fuzzy resolve so items flush ON a wall line (doors, windows,
+      // wall-mounted switches / fireplaces) group into the room they touch
+      // instead of falling into the "No room" bucket.
+      const rm = resolveRoomForPointFuzzy(rooms, loops, it.x, it.y);
       if (rm) (byId.get(rm.id) ?? byId.set(rm.id, []).get(rm.id)!).push(it);
       else none.push(it);
     }
@@ -245,18 +248,36 @@ export class Sidebar extends LitElement {
     });
   }
 
-  // Auto-expand the section holding the currently active/selected item so its
-  // editor is visible when the user picks it (e.g. clicking a sensor on canvas).
-  // Only removes from the collapsed set — never forces a section closed.
+  // Snapshot of the active/selected ids seen on the LAST render, so auto-expand
+  // fires only on an activation CHANGE (not on every render). Persisted active
+  // ids (e.g. activeSensorId) would otherwise re-expand a just-collapsed section
+  // on the very next render, making it impossible to collapse while an item
+  // stays selected.
+  private _lastActiveSnapshot: Record<string, string | null> = {};
+
+  // Auto-expand the section holding a freshly-activated item so its editor is
+  // visible when the user picks it (e.g. clicking a sensor on canvas). Expands
+  // only for ids that DIFFER from the previous render's snapshot, then records
+  // the new snapshot. Only removes from the collapsed set — never forces closed.
+  // Selecting an item still auto-expands; collapsing while it stays selected now
+  // sticks (unchanged id → no expand). The mmWave detail editors are now inline
+  // in the 'sensors' section, so only 'sensors' needs expanding for a sensor.
   private _autoExpandActive(): void {
     const p = this.planner;
     const expand = (slug: string) => { if (this._collapsed.delete(slug)) this._persistCollapsed(); };
-    if (p.store.activeSensorId) { expand('sensors'); expand('active-sensor'); expand('ha-sensor'); }
-    if (p.activeMotionId)   expand('motion');
-    if (p.activeEnvId)      expand('env');
-    if (p.activeBleId)      expand('ble');
-    if (p.activePersonId)   expand('people');
-    if (p.activeFurnitureId) expand('furniture');
+    const cur: Record<string, string | null> = {
+      sensors: p.store.activeSensorId ?? null,
+      motion: p.activeMotionId ?? null,
+      env: p.activeEnvId ?? null,
+      ble: p.activeBleId ?? null,
+      people: p.activePersonId ?? null,
+      furniture: p.activeFurnitureId ?? null,
+    };
+    const snap = this._lastActiveSnapshot;
+    for (const slug of Object.keys(cur)) {
+      if (cur[slug] && cur[slug] !== snap[slug]) expand(slug);
+    }
+    this._lastActiveSnapshot = cur;
   }
 
   override render() {
@@ -345,8 +366,6 @@ export class Sidebar extends LitElement {
         ${this._customObjectsSection()}
         ${this._roomsSection()}
         ${this._fixturesSection()}
-        ${this._activeSensorSection()}
-        ${this._haSections()}
         ${this._layers2dSection()}
         ${this._scene3dSection()}
         ${this._weatherSection()}
@@ -390,6 +409,15 @@ export class Sidebar extends LitElement {
           <span class="mini-toggle">
             <input type="checkbox" .checked=${p.store.imperial}
                    @change=${(e: Event) => { p.store.imperial = (e.target as HTMLInputElement).checked; p.save(); p.emitConfig(); }}>
+            <span></span>
+          </span>
+        </label>
+        <label class="row" style="padding:0"
+               title="Lock the canvas-layout / floor-size editing — hides the boundary drag anchors">
+          <span style="color:var(--text-dim);font-size:11px;flex:1">🔒 Lock floor size</span>
+          <span class="mini-toggle">
+            <input type="checkbox" .checked=${!!p.floor().boundsLocked}
+                   @change=${(e: Event) => { p.floor().boundsLocked = (e.target as HTMLInputElement).checked || undefined; p.save(); p.emitConfig(); }}>
             <span></span>
           </span>
         </label>
@@ -438,11 +466,17 @@ export class Sidebar extends LitElement {
     const p = this.planner;
     const sel = p.store.activeSensorId === s.id;
     const bound = !!s.deviceSlug;
+    // Selected sensor edits inline (matching the Motion section): the per-sensor
+    // configuration editor and the HA-data (zones / objects / targets / sensor
+    // config) blocks render as sub-blocks directly beneath the row.
     return html`
-      <div class="sensor-item ${sel ? 'sel' : ''}" @click=${() => p.setActiveSensor(s.id)}>
-        <div class="dot"></div>
-        <div class="nm">${s.label || 'Sensor'}</div>
-        <div class="badge ${bound ? 'bound' : ''}">${bound ? 'HA' : '—'}</div>
+      <div style="border-bottom:1px solid var(--border)">
+        <div class="sensor-item ${sel ? 'sel' : ''}" @click=${() => p.setActiveSensor(s.id)}>
+          <div class="dot"></div>
+          <div class="nm">${s.label || 'Sensor'}</div>
+          <div class="badge ${bound ? 'bound' : ''}">${bound ? 'HA' : '—'}</div>
+        </div>
+        ${sel ? html`${this._activeSensorSection()}${this._haSections()}` : nothing}
       </div>
     `;
   }
@@ -2125,7 +2159,11 @@ export class Sidebar extends LitElement {
       (s as unknown as Record<string, unknown>)[k as string] = parse((e.target as HTMLInputElement).value);
       p.save(); p.emitConfig();
     };
-    return this._section('active-sensor', `Sensor — ${s.label || 'Unnamed'}`, () => html`
+    return html`
+      <div style="background:rgba(0,0,0,0.25);border-radius:4px;padding:6px;margin:4px 0">
+        <div style="font-size:11px;font-weight:600;color:var(--text-dim);margin-bottom:4px">
+          Sensor — ${s.label || 'Unnamed'}
+        </div>
         <div class="row"><label>Label</label>
           <input type="text" .value=${s.label} @input=${u('label')}></div>
         ${this._lockRow(s)}
@@ -2191,7 +2229,8 @@ export class Sidebar extends LitElement {
                   p.store.activeSensorId = null;
                   p.save(); p.emitConfig();
                 }}>Delete sensor</button>
-    `);
+      </div>
+    `;
   }
 
   // ── HA sections (zones / objects / targets / sensor cfg) ──────────────
@@ -2209,7 +2248,11 @@ export class Sidebar extends LitElement {
     // overwritten on the next slow-sync.
     const ready = d.inclusionZoneSlugs.length > 0 || d.objectSlugs.length > 0;
     if (!ready) {
-      return this._section('ha-sensor', s.label || 'Sensor', () => html`
+      return html`
+        <div style="background:rgba(0,0,0,0.25);border-radius:4px;padding:6px;margin:4px 0">
+          <div style="font-size:11px;font-weight:600;color:var(--text-dim);margin-bottom:4px">
+            ${s.label || 'Sensor'}
+          </div>
           <div style="font-size:11px;color:var(--text-dim);padding:8px;text-align:center;
                       border:1px dashed var(--border);border-radius:4px">
             Loading entities from <code>${s.deviceSlug}</code>…<br>
@@ -2218,11 +2261,16 @@ export class Sidebar extends LitElement {
               will appear once the device finishes its initial publish.
             </span>
           </div>
-      `);
+        </div>
+      `;
     }
 
     const zones = p.zonesBy[s.id]; const objs = p.objectsBy[s.id];
-    return this._section('ha-sensor', `${s.label || 'Sensor'} — HA data`, () => html`
+    return html`
+      <div style="background:rgba(0,0,0,0.25);border-radius:4px;padding:6px;margin:4px 0">
+        <div style="font-size:11px;font-weight:600;color:var(--text-dim);margin-bottom:4px">
+          ${s.label || 'Sensor'} — HA data
+        </div>
         <h3>Inclusion Zones</h3>
         ${d.inclusionZoneSlugs.length === 0
           ? html`<div style="font-size:11px;color:var(--text-dim);padding:4px 0">Loading…</div>`
@@ -2262,7 +2310,8 @@ export class Sidebar extends LitElement {
           Sensor Configuration <span class="collapse-arrow">▸</span>
         </h3>
         ${this._cfgOpen ? this._sensorCfgBody(s, d) : nothing}
-    `);
+      </div>
+    `;
   }
 
   private _zoneRow(s: Sensor, prefix: 'iz' | 'fz', zi: number, z: Zone, dotColor: string) {

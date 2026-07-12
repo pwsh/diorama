@@ -367,6 +367,7 @@ export interface Floor {
   model3d?: Model3D | null;
   rooms?: Room[];   // named rooms (anchor → live wall loop); repairFloor backfills []
   bleProxies?: BleProxy[];  // BLE scanner fixtures; repairFloor backfills []
+  boundsLocked?: boolean;   // lock canvas-layout/floor-size editing (hides the edge handles)
 }
 
 // Weather source + display config (the "World Outside" arc, Feature W). All

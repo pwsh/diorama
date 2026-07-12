@@ -31,7 +31,7 @@
        collapsed into one loop before the 25 mm weld tolerance / locked-wall
        weld-target fixes. Asserts ≥4 loops and the 4 anchors in 4 DISTINCT loops. -->
   <script type="module">
-    import { closedWallLoops, loopContaining } from './geometry.mod.js';
+    import { closedWallLoops, loopContaining, resolveRoomForPoint, resolveRoomForPointFuzzy } from './geometry.mod.js';
 
     // Real floor-plan export. Structural walls locked; invisible room-divider
     // chords were drawn onto them but landed 3–22 mm off before the fix.
@@ -76,6 +76,35 @@
     // The 4 anchors must live in 4 DISTINCT loops (the bug: all 4 → loop 0).
     const distinct = new Set(idxByRoom.filter(i => i >= 0));
     ok('4 anchors in 4 distinct loops', distinct.size === 4, `distinct=${distinct.size} [${idxByRoom.join(',')}]`);
+
+    // ── Fuzzy room resolve (doors / windows / flush fixtures sit ON a wall) ──
+    // A point exactly on a wall line is a polygon boundary → pointInPolygon
+    // excludes it → resolveRoomForPoint returns null. resolveRoomForPointFuzzy
+    // probes a small ring and buckets it into the room it touches.
+    const rmName = rm => rm ? rm.name : null;
+
+    // Midpoint of wall w_n75gjly (the west wall of the Kitchen loop). Exact
+    // resolve drops it (on boundary); fuzzy resolves it to the adjacent Kitchen.
+    const onKitchenWall = { x: 3035, y: 3465 };
+    ok('on-wall point: exact resolve is null',
+       resolveRoomForPoint(rooms, loops, onKitchenWall.x, onKitchenWall.y) === null,
+       'boundary excluded');
+    ok('on-wall point → adjacent room (fuzzy)',
+       rmName(resolveRoomForPointFuzzy(rooms, loops, onKitchenWall.x, onKitchenWall.y)) === 'Kitchen',
+       `→ ${rmName(resolveRoomForPointFuzzy(rooms, loops, onKitchenWall.x, onKitchenWall.y))}`);
+
+    // Midpoint of wall w_dbivtbl (the south wall of the Great Room) → Great Room.
+    const onGreatWall = { x: 5880, y: 10800 };
+    ok('second on-wall point → its room (fuzzy)',
+       rmName(resolveRoomForPointFuzzy(rooms, loops, onGreatWall.x, onGreatWall.y)) === 'Great Room',
+       `→ ${rmName(resolveRoomForPointFuzzy(rooms, loops, onGreatWall.x, onGreatWall.y))}`);
+
+    // A point far outside every loop still resolves to null (probe ring can't
+    // reach any room, so unbucketed items still land in "— No room —").
+    const farOut = { x: 50000, y: 50000 };
+    ok('far-outside point → null (fuzzy)',
+       resolveRoomForPointFuzzy(rooms, loops, farOut.x, farOut.y) === null,
+       'no room in probe reach');
 
     // ── run + render ─────────────────────────────────────────────────────────
     const grid = document.getElementById('grid');

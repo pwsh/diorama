@@ -52,7 +52,7 @@ export class WeatherChip extends LitElement {
     return html`
       <div title=${title}
            @click=${this._onClick}
-           style="position:absolute;top:8px;right:8px;z-index:6;
+           style="position:absolute;bottom:8px;right:8px;z-index:6;
                   display:flex;align-items:center;gap:6px;
                   background:rgba(10,14,20,0.72);border:1px solid #2a3a4c;border-radius:6px;
                   padding:4px 9px;font-size:12px;color:#cfd8dc;

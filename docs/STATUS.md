@@ -10,8 +10,8 @@ Diorama is feature-complete through TWO arcs — the Sims-2000 arc
 (`docs/DESIGN-world.md`, 8 phases: BLE identity/trilateration/fusion, pet
 rigs, GPS geo-calibration + pins, weather core + 3D effects) — plus the
 post-arc batches listed below. Everything is merged to `main`, pushed to
-**both remotes**, and deployed to the live HA instance; the GitHub release
-lags at v0.10.0 (the three newest batches ship in the next release the user
+**both remotes**, released through **v0.11.0**, and deployed to the live HA
+instance (batches after the v0.11.0 tag ship in the next release the user
 asks for).
 
 ### Remotes, releases, deploy
@@ -46,6 +46,29 @@ asks for).
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Sidebar mmWave batch** (3 user-reported, `src/ui/sidebar.ts` +
+  `src/geometry.ts`; no Store changes; typecheck + build clean):
+  - *Collapse-on-change*: `_autoExpandActive()` re-expanded any section whose
+    active id was set on **every** render; because `activeSensorId` is persisted
+    (essentially always set), the mmWave section could never be collapsed while a
+    sensor stayed selected. It now keeps `_lastActiveSnapshot` and expands a
+    section **only when its active id differs** from the prior render — select →
+    expands once, collapse → sticks, select a different item → expands again. The
+    latent same-bug for `motion`/`env`/`ble`/`people`/`furniture` is fixed too.
+  - *Inline mmWave detail*: the per-sensor config editor (`_activeSensorSection`)
+    and HA-data block (`_haSections` — zones/objects/targets/sensor config) moved
+    from two standalone far-away `_section`s into plain bordered **sub-blocks**
+    rendered inline beneath the selected sensor's row inside the `sensors`
+    section, matching the Motion section's inline-edit pattern. Handlers/inputs
+    unchanged (a move, not a rewrite); the `active-sensor`/`ha-sensor` slugs are
+    retired (stale collapsed keys harmless).
+  - *Fuzzy room grouping*: new pure `resolveRoomForPointFuzzy(rooms, loops, x, y,
+    probeMm=250)` in geometry.ts (exact, then probe +y/-y/+x/-x + 4 diagonals);
+    `_groupByRoom` uses it so doors/windows/flush fixtures sitting ON a wall line
+    (which `pointInPolygon` excludes) bucket into the room they touch instead of
+    "— No room —". `rooms-test.html` now **ROOMS PASS 10/10** (4 new fuzzy cases:
+    on-wall → adjacent room, exact→null, far-outside→null). wallsnap-test 36/36 +
+    mega-test seating baseline unregressed.
 - **Touch tap synthesis (iOS/HA-app fix)** + **draggable floor boundaries**
   (2 interaction-layer tasks):
   - *Tap fix*: on iOS in the HA companion app the canvas `touchend` never

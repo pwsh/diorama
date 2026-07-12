@@ -366,6 +366,30 @@ export function resolveRoomForPoint(rooms: Room[], loops: Vec2[][], x: number, y
   return null;
 }
 
+// Like resolveRoomForPoint, but tolerant of points sitting exactly ON a wall
+// line — doors, windows, and flush-mounted fixtures (switches, fireplaces) land
+// on the boundary, which pointInPolygon excludes, so an exact resolve would drop
+// them into "no room". Try the exact point first, then probe a small ring of
+// offsets and return the first room hit. Deterministic probe order: +y, -y, +x,
+// -x, then the four diagonals. A boundary point touching two rooms goes to
+// whichever probe lands first — deterministic and acceptable.
+export function resolveRoomForPointFuzzy(
+  rooms: Room[], loops: Vec2[][], x: number, y: number, probeMm = 250,
+): Room | null {
+  const exact = resolveRoomForPoint(rooms, loops, x, y);
+  if (exact) return exact;
+  const d = probeMm;
+  const offsets: Vec2[] = [
+    { x: 0, y: d }, { x: 0, y: -d }, { x: d, y: 0 }, { x: -d, y: 0 },
+    { x: d, y: d }, { x: -d, y: d }, { x: d, y: -d }, { x: -d, y: -d },
+  ];
+  for (const o of offsets) {
+    const rm = resolveRoomForPoint(rooms, loops, x + o.x, y + o.y);
+    if (rm) return rm;
+  }
+  return null;
+}
+
 // Display text for a room label. Rooms are created unnamed (placeholder shows
 // immediately so the user sees the loop was detected); `placeholder` lets
 // renderers style the fallback text dimmer / italic.

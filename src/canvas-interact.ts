@@ -97,6 +97,13 @@ function snapFurnitureToSurface(f: { furniture: Furniture[] }, piece: Furniture,
 }
 
 const SENSOR_DEFAULTS = { fov: 120, range: 6000 };
+
+// Zone polys / object halos are only clickable while the zones layer is
+// visible — invisible geometry must never capture input (an invisible zone
+// edge over a sensor body swallowed the sensor's drag).
+function zonesInteractive(p: Planner): boolean {
+  return p.store.layers2d?.zones !== false;
+}
 const MOTION_DEFAULTS = { fov: 110, range: 5000 };
 
 // Wall endpoints auto-weld when they land within this of another wall's
@@ -329,22 +336,28 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
     p.drag = { kind: 'rotate', sensorId: p.store.activeSensorId! };
     canvas.style.cursor = 'grabbing'; e.preventDefault(); return;
   }
-  const orh = hitObjectRadiusHandle(p, view, mm);
-  if (orh) {
-    p.drag = { kind: 'objR', oi: orh.oi, startMm: mm, startR: orh.startR };
-    canvas.style.cursor = 'ew-resize'; e.preventDefault(); return;
-  }
-  const oh = hitObject(p, view, mm);
-  if (oh) {
-    p.drag = { kind: 'obj', oi: oh.oi, startMm: mm, startObj: oh.startObj };
-    canvas.style.cursor = 'grabbing'; e.preventDefault(); return;
-  }
-  const vh = hitVertexOrZone(p, view, mm);
-  if (vh) {
-    p.drag = vh.kind === 'vert'
-      ? { kind: 'vert', prefix: vh.prefix, zi: vh.zi, vi: vh.vi, startMm: mm, startVerts: vh.startVerts }
-      : { kind: 'zonemove', prefix: vh.prefix, zi: vh.zi, startMm: mm, startVerts: vh.startVerts };
-    canvas.style.cursor = 'grabbing'; e.preventDefault(); return;
+  // Zone polys / object halos capture input ONLY while the zones layer is
+  // visible — an invisible zone edge crossing a sensor body used to swallow
+  // the sensor's drag (mirrors the 3D rule: hidden lights stop being raycast
+  // targets).
+  if (zonesInteractive(p)) {
+    const orh = hitObjectRadiusHandle(p, view, mm);
+    if (orh) {
+      p.drag = { kind: 'objR', oi: orh.oi, startMm: mm, startR: orh.startR };
+      canvas.style.cursor = 'ew-resize'; e.preventDefault(); return;
+    }
+    const oh = hitObject(p, view, mm);
+    if (oh) {
+      p.drag = { kind: 'obj', oi: oh.oi, startMm: mm, startObj: oh.startObj };
+      canvas.style.cursor = 'grabbing'; e.preventDefault(); return;
+    }
+    const vh = hitVertexOrZone(p, view, mm);
+    if (vh) {
+      p.drag = vh.kind === 'vert'
+        ? { kind: 'vert', prefix: vh.prefix, zi: vh.zi, vi: vh.vi, startMm: mm, startVerts: vh.startVerts }
+        : { kind: 'zonemove', prefix: vh.prefix, zi: vh.zi, startMm: mm, startVerts: vh.startVerts };
+      canvas.style.cursor = 'grabbing'; e.preventDefault(); return;
+    }
   }
   const wv = hitWallVert(p, view, mm);
   if (wv) {
@@ -451,7 +464,8 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
   // Floor boundary edge — lowest priority (after every item hit, before the
   // canvas-2d pan fallback). Drag to resize the canvas space; left/bottom edges
   // also reposition the plan (see resolveFloorEdgeDrag / translateFloorContent).
-  const fe = hitFloorEdge(p.floor(), view, mm);
+  // boundsLocked hides the handles and disables the drag entirely.
+  const fe = p.floor().boundsLocked ? null : hitFloorEdge(p.floor(), view, mm);
   if (fe) {
     const f = p.floor();
     p.drag = {
@@ -796,8 +810,8 @@ export function onCanvasMouseMove(p: Planner, canvas: HTMLCanvasElement, view: V
     else if (hitMotionSensor(p, view, mm)) canvas.style.cursor = 'grab';
     else if (hitBleProxy(p, view, mm)) canvas.style.cursor = 'grab';
     else if (hitSensorRotateHandle(p, view, mm)) canvas.style.cursor = 'grab';
-    else if (hitObjectRadiusHandle(p, view, mm)) canvas.style.cursor = 'ew-resize';
-    else if (hitObject(p, view, mm) || hitVertexOrZone(p, view, mm)) canvas.style.cursor = 'grab';
+    else if (zonesInteractive(p) && hitObjectRadiusHandle(p, view, mm)) canvas.style.cursor = 'ew-resize';
+    else if (zonesInteractive(p) && (hitObject(p, view, mm) || hitVertexOrZone(p, view, mm))) canvas.style.cursor = 'grab';
     else if (hitWallVert(p, view, mm)) canvas.style.cursor = 'grab';
     else if (hitFurnitureCorner(p, view, mm)) canvas.style.cursor = 'nwse-resize';
     else if (hitDoorEnd(p, view, mm)) canvas.style.cursor = 'grab';
@@ -808,7 +822,7 @@ export function onCanvasMouseMove(p: Planner, canvas: HTMLCanvasElement, view: V
     else if (hitFurniture(p, mm) || hitWall(p, mm) || hitSensor(p, view, mm)) canvas.style.cursor = 'grab';
     else if (hitBgBody(p, mm)) canvas.style.cursor = 'grab';
     else {
-      const fe = hitFloorEdge(p.floor(), view, mm);
+      const fe = p.floor().boundsLocked ? null : hitFloorEdge(p.floor(), view, mm);
       canvas.style.cursor = fe
         ? ((fe === 'left' || fe === 'right') ? 'ew-resize' : 'ns-resize')
         : 'default';
@@ -1238,7 +1252,8 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
     // Fixture toggle is handled in mouseup (small-movement = click). The
     // click event itself is suppressed by `dragJustEnded`. So here we just
     // handle the empty-space deselect.
-    if (!hitSensor(p, view, mm) && !hitVertexOrZone(p, view, mm) && !hitObject(p, view, mm) &&
+    if (!hitSensor(p, view, mm) &&
+        !(zonesInteractive(p) && (hitVertexOrZone(p, view, mm) || hitObject(p, view, mm))) &&
         !hitFixture(p, mm, Math.max(250, 18 / Math.max(view.scale, 1e-9)))) {
       const sa = p.activeSensor();
       if (sa) {
@@ -1346,7 +1361,7 @@ export function onCanvasDblClick(p: Planner, canvas: HTMLCanvasElement, view: Vi
     }
   }
   const sa = p.activeSensor();
-  if (sa) {
+  if (sa && zonesInteractive(p)) {
     const oh = hitObject(p, view, mm);
     if (oh) {
       p.editObject[sa.id] = (p.editObject[sa.id] === oh.oi) ? -1 : oh.oi;
