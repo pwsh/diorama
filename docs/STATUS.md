@@ -1,6 +1,6 @@
 # Project status & pick-up guide
 
-Last updated: 2026-07-12, at **v0.11.0**. This is the single document to read
+Last updated: 2026-07-12, at **v0.12.0**. This is the single document to read
 (alongside `CLAUDE.md`) to resume work with full context.
 
 ## Where things stand
@@ -10,9 +10,8 @@ Diorama is feature-complete through TWO arcs — the Sims-2000 arc
 (`docs/DESIGN-world.md`, 8 phases: BLE identity/trilateration/fusion, pet
 rigs, GPS geo-calibration + pins, weather core + 3D effects) — plus the
 post-arc batches listed below. Everything is merged to `main`, pushed to
-**both remotes**, released through **v0.11.0**, and deployed to the live HA
-instance (batches after the v0.11.0 tag ship in the next release the user
-asks for).
+**both remotes**, released through **v0.12.0**, and deployed to the live HA
+instance.
 
 ### Remotes, releases, deploy
 
@@ -42,7 +41,10 @@ asks for).
   sliver-spawn fixes, wall snapping/ganging/smart guides, collapsible
   sidebar + Bermuda toggle, window types + rendering fixes, floor-boundary
   editing, iOS tap fix, manual landmark coords + calibration UX, full docs
-  refresh).
+  refresh) → v0.12.0 the living house (avatar faces + pants + fidgets +
+  bubble pools, seating claims/multi-seat/front-entry, respawn re-roll,
+  motion demo mode, local control of unbound objects, sidebar mmWave
+  fixes + zone input gating, floor-size lock, glass-house transparency).
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
