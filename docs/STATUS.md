@@ -48,6 +48,25 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Living-house batch 2: smoke/CO detectors, appliance door animation,
+  glass-house stairs/floor, cinematic orbit** (10 files; typecheck + build
+  clean; new `livefeatures-test.html` **12/12**; regressions green — mega /
+  appliance / glass (`wallOps` unchanged) / localstate 10/10 / seating /
+  pathfind / phase4): NEW `SafetySensor` fixture (`Floor.safetySensors`,
+  ⚠️ tool, smoke=red / CO=amber, ceiling disc + LED) with expanding-ring
+  beacon on alarm (2D pulse rings + 3D rings, per-frame forced update via
+  the fireplace idiom) and manual Test/click trigger when unbound.
+  Appliance doors are now CLOSED pivot groups (`_applianceDoors`: fridge /
+  dishwasher / stove / microwave / washer) eased open per frame when a
+  bound fridge door sensor is on, when an unbound appliance is clicked
+  (localState), or when an avatar anchors to it / dwells within 1.1 m
+  (raw positions). Glass-house mode: floor slab 0.45 translucent, stairs
+  0.35 + enrolled in wall cutaway with a 0.12 fade floor (per-mesh
+  `cutFloor`). `Scene3D.cinematicOrbit` (🎬 next to 🎥): ~78 s/rev azimuth
+  drift at current zoom, composing with auto-follow (it keeps target +
+  distance), pausing 6 s on manual orbit, suspending the Sims-cam snap.
+  CLAUDE.md sections added for all four.
+
 - **Device bindings batch: appliance in-use + fridge door + door lock +
   alarm keypad** (12 files; typecheck + build clean; mega / localstate /
   appliance / walltv harness green + a new 10/10 smoke page for the 3D

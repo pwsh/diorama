@@ -12,9 +12,10 @@ import {
   motionColor, motionIntensity, hexToInt, bleProxyHeight, BLE_PROXY_DEFAULTS,
   furnitureDef, resolveFurnitureDef, furnitureColor, furnitureCat, doorOpenDeltaDeg,
   alarmHeight, alarmStateColor, ALARM_DEFAULTS, ALARM_PLATE_DEPTH_MM,
+  safetyColor, SAFETY_DEFAULTS,
   ENV_KINDS, envKindOf, envColor, envValueText, envHeight, envScale,
 } from './geometry.js';
-import type { Door, Window as WindowType, EnvSensor, BleProxy, AlarmPanel, ObjectRecipe, ActivityKind } from './types.js';
+import type { Door, Window as WindowType, EnvSensor, BleProxy, AlarmPanel, SafetySensor, ObjectRecipe, ActivityKind } from './types.js';
 import { wallCutsForSegment, WINDOW_DEFAULTS, closedWallLoops, wallKind, WALL_KINDS, furnitureLocalToWorld, furnitureWorldToLocal, pointInPolygon as pip, centroid, loopContaining, resolveRoomForPoint, roomLabel, intersectLoopWithRect, polygonArea } from './geometry.js';
 
 export interface ZoneWorld { vertices: Vec2[]; color: number; occupied: boolean; }
@@ -122,6 +123,10 @@ export interface ActivityContext {
   // "someone just flipped this near me" bubble tier. three-view maintains the
   // rolling list (prev-on map + 45 s / 8-entry cap).
   recentTriggers?: { kind: 'light_on' | 'light_off' | 'fireplace' | 'tv'; x: number; y: number; ageS: number }[];
+  // OPTIONAL — appliance door-sensor states: furnitureId → the bound door
+  // binary_sensor (Furniture.doorEntity) is 'on' (open). Drives the per-frame
+  // appliance-door blend for BOUND fridges (case a). Absent → treated as closed.
+  doorSensorOpen?: Record<string, boolean>;
 }
 
 // A seat a humanoid can settle onto (scene coords). Collected from sittable
@@ -614,6 +619,7 @@ export class ThreeDRenderer {
   private _envGroup = new THREE.Group();
   private _bleGroup = new THREE.Group();
   private _alarmGroup = new THREE.Group();
+  private _safetyGroup = new THREE.Group();
   private _lightGroup = new THREE.Group();
   private _targetGroup = new THREE.Group();
   // GPS device pins + 3D landmark pins (Feature G, phase G2). Camera-facing
@@ -655,13 +661,18 @@ export class ThreeDRenderer {
   // pan suspends it until `_followPauseUntil` (refreshed 6 s past every gesture).
   private _autoFollow = false;
   private _followPauseUntil = 0;
+  // Cinematic slow-orbit: when on, `_animate` advances the camera azimuth about
+  // the orbit center (active-rig bbox, or auto-follow's target when it's also on)
+  // for ambient visual interest. Shares the manual-orbit pause timer.
+  private _cinematicOrbit = false;
+  private readonly _ORBIT_RATE = 0.08;   // rad/s → full revolution ≈ 78 s
   // Global toggle for the spinning Sims plumbob diamonds above targets.
   private _plumbobs = true;
   private _lastAnimT = 0;   // performance.now()/1000 of the previous _animate frame
   private _ZONE_H = 305;  // 1 ft — low outlines that don't wall off the room
   private _OBJ_H = 900;
-  private _onFixtureClick: ((info: { kind: 'light' | 'switch' | 'media' | 'alarm'; entity_id: string | null; fixtureId: string }) => void) | null = null;
-  private _onFixtureDblClick: ((info: { kind: 'light' | 'switch' | 'media' | 'alarm'; entity_id: string | null; fixtureId: string }) => void) | null = null;
+  private _onFixtureClick: ((info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'safety'; entity_id: string | null; fixtureId: string }) => void) | null = null;
+  private _onFixtureDblClick: ((info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'safety'; entity_id: string | null; fixtureId: string }) => void) | null = null;
   private _raycaster = new THREE.Raycaster();
   // Per-target humanoid rigs, persisted across frames so we can carry
   // walk-cycle phase + smoothed body facing.
@@ -680,6 +691,18 @@ export class ThreeDRenderer {
   private _mediaClickables: THREE.Group[] = [];
   // Contextual-activity anchors collected from the current floor's furniture.
   private _activityAnchors: ActivityAnchor[] = [];
+  // Appliance-door pivots (unbound-appliance liveliness). Rebuilt in updateFloor
+  // alongside the furniture; each entry drives one hinge Group toward an
+  // open/closed target with an eased blend. The blend + proximity-dwell maps are
+  // keyed by fixture id so they SURVIVE _keyFloor rebuilds — the pivot Object3D is
+  // recreated each build, but the stored blend is re-applied immediately so the
+  // door doesn't pop shut. wx/wy are the appliance's world-mm center (proximity
+  // test vs raw target positions).
+  private _applianceDoors: {
+    fuId: string; pivot: THREE.Object3D; axis: 'x' | 'y'; openAngle: number;
+    wx: number; wy: number; unbound: boolean; hasDoorSensor: boolean;
+  }[] = [];
+  private _applianceDoorBlend: Record<string, number> = {};
   // TVs grouped by the room they sit in — the watch_tv seated activity checks
   // whether a bound TV in the seated person's room is on. Rebuilt in updateFloor.
   private _tvsByRoom: Record<string, { furnitureId: string; hasEntity: boolean }[]> = {};
@@ -833,7 +856,7 @@ export class ThreeDRenderer {
     this._scene.add(this._floorGroup, this._doorGroup, this._modelGroup,
                     this._zoneGroup, this._haloGroup,
                     this._sensorGroup, this._motionGroup, this._envGroup,
-                    this._bleGroup, this._alarmGroup,
+                    this._bleGroup, this._alarmGroup, this._safetyGroup,
                     this._lightGroup, this._targetGroup, this._ghostGroup,
                     this._gpsGroup, this._weatherGroup);
 
@@ -910,15 +933,15 @@ export class ThreeDRenderer {
     this._animate();
   }
 
-  onFixtureClick(fn: (info: { kind: 'light' | 'switch' | 'media' | 'alarm'; entity_id: string | null; fixtureId: string }) => void): void {
+  onFixtureClick(fn: (info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'safety'; entity_id: string | null; fixtureId: string }) => void): void {
     this._onFixtureClick = fn;
   }
-  onFixtureDblClick(fn: (info: { kind: 'light' | 'switch' | 'media' | 'alarm'; entity_id: string | null; fixtureId: string }) => void): void {
+  onFixtureDblClick(fn: (info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'safety'; entity_id: string | null; fixtureId: string }) => void): void {
     this._onFixtureDblClick = fn;
   }
 
   private _raycastFixture(clientX: number, clientY: number):
-      { kind: 'light' | 'switch' | 'media' | 'alarm'; entity_id: string | null; fixtureId: string } | null {
+      { kind: 'light' | 'switch' | 'media' | 'alarm' | 'safety'; entity_id: string | null; fixtureId: string } | null {
     if (!this._renderer || !this._camera) return null;
     const rect = this._renderer.domElement.getBoundingClientRect();
     const ndc = new THREE.Vector2(
@@ -937,6 +960,8 @@ export class ThreeDRenderer {
     if (this._lightGroup.visible) roots.push(this._lightGroup);
     // Alarm keypads are clickable (open the control modal); ride the sensors layer.
     if (this._alarmGroup.visible) roots.push(this._alarmGroup);
+    // Smoke / CO detectors are clickable (unbound → manual test trigger).
+    if (this._safetyGroup.visible) roots.push(this._safetyGroup);
     for (const g of this._mediaClickables) roots.push(g);
     if (!roots.length) return null;
     const hits = this._raycaster.intersectObjects(roots, true);
@@ -945,7 +970,7 @@ export class ThreeDRenderer {
       let obj: THREE.Object3D | null = h.object;
       while (obj) {
         const ud = obj.userData;
-        if (ud && (ud.kind === 'light' || ud.kind === 'switch' || ud.kind === 'media' || ud.kind === 'alarm')) {
+        if (ud && (ud.kind === 'light' || ud.kind === 'switch' || ud.kind === 'media' || ud.kind === 'alarm' || ud.kind === 'safety')) {
           return { kind: ud.kind, entity_id: ud.entity_id ?? null, fixtureId: String(ud.fixtureId) };
         }
         obj = obj.parent;
@@ -1248,10 +1273,16 @@ export class ThreeDRenderer {
     for (const g of [
       this._floorGroup, this._doorGroup, this._modelGroup, this._zoneGroup, this._haloGroup,
       this._sensorGroup, this._motionGroup, this._bleGroup, this._alarmGroup,
+      this._safetyGroup,
       this._lightGroup, this._targetGroup, this._ghostGroup,
     ]) {
       this._clearGroup(g);
     }
+    // Appliance-door pivots + their eased blend/dwell state reset on floor
+    // switch (the pivots were just disposed with _floorGroup; the blend map is
+    // rebuilt lazily as updateFloor re-registers doors).
+    this._applianceDoors = [];
+    this._applianceDoorBlend = {};
     // Weather effects reset on floor switch (spawn box is fitted to the floor
     // bbox; three-view re-runs updateWeather next tick). _clearWeather resets the
     // tracking lists so _advanceWeather can't iterate freed buffers.
@@ -1358,6 +1389,10 @@ export class ThreeDRenderer {
   // Auto-follow toggle. Turning it on lets `_animate` take over the camera pose
   // (eased); off returns full manual control immediately.
   setAutoFollow(on: boolean): void { this._autoFollow = on; }
+  // Cinematic slow-orbit toggle. Per-frame azimuth advance in _animate; when
+  // auto-follow is also on it rides on top of auto-follow's framing (distance +
+  // target), so the two never fight (auto-follow preserves azimuth, we drive it).
+  setCinematicOrbit(on: boolean): void { this._cinematicOrbit = on; }
   setPlumbobs(on: boolean): void { this._plumbobs = on; }
 
   // Surface height (mm) under a world point: the highest stair tread or
@@ -1541,6 +1576,8 @@ export class ThreeDRenderer {
     // BLE proxy pucks + alarm keypads ride the sensors layer (like mmWave).
     this._bleGroup.visible = v.sensors !== false;
     this._alarmGroup.visible = v.sensors !== false;
+    // Smoke / CO detectors ride the sensors layer too.
+    this._safetyGroup.visible = v.sensors !== false;
     this._motionGroup.visible = v.motion !== false;
     this._envGroup.visible = v.env !== false;
     const z = v.zones !== false;
@@ -1621,9 +1658,16 @@ export class ThreeDRenderer {
       return path;
     };
     const MIN_HOLE_AREA = 1e4;  // 0.01 m² in mm² — ignore slivers
+    // Glass-house mode makes the ACTIVE floor's slab translucent so the storey
+    // below (ghost stack) reads through it. depthWrite stays ON — the floor
+    // still writes depth so furniture/blob-shadow decals (which sit just above
+    // the slab, drawn in the transparent pass) sort correctly and don't get
+    // painted over; a mostly-opaque 0.45 slab reads fine with depthWrite true.
+    const glassHouse = scene3d?.glassHouse === true;
     const floorMat = this._mat({
       color: floorColor, map: floorTex ?? null,
       side: THREE.DoubleSide, roughness: 0.9, metalness: 0.0,
+      ...(glassHouse ? { transparent: true, opacity: 0.45, depthWrite: true } : {}),
     });
     if (wellCuts.length) {
       // Dark void plane below the deepest well so stairwell openings show
@@ -1827,24 +1871,43 @@ export class ThreeDRenderer {
     this._sitSpots = [];
     this._mediaClickables = [];
     this._activityAnchors = [];
+    // Appliance-door pivots are rebuilt here; the blend / dwell maps persist
+    // (keyed by fixture id) so a _keyFloor rebuild re-applies the current door
+    // opening without a pop.
+    this._applianceDoors = [];
     this._tvsByRoom = {};
     this._beds = [];
     this._roomZones = [];
     this._terrain = [];
     const rooms = f.rooms ?? [];
     for (const fu of showFurniture ? f.furniture : []) {
-      // Appliance in-use indicator + fridge door: resolve effective on/off (bound
-      // entity or unbound localState) and, for a fridge, its bound door sensor.
+      // Appliance in-use indicator: resolve effective on/off (bound entity or
+      // unbound localState). Appliance doors are built CLOSED as hinge pivots
+      // (collected in doorSink) and animated per frame in updateTargets.
       const def0 = resolveFurnitureDef(fu, customObjects);
       const isAppliance = furnitureCat(def0) === 'appliance';
       const st0 = stateProvider ? itemState(fu, stateProvider) : null;
       const applianceOn = isAppliance && (st0?.state === 'on' || st0?.state === 'playing');
-      const doorOpen = !!(fu.doorEntity && stateProvider &&
-        stateProvider(fu.doorEntity)?.state === 'on');
+      const doorSink: { pivot: THREE.Object3D; axis: 'x' | 'y'; openAngle: number }[] = [];
       const grp = this._buildFurniture(fu, f.furniture, customObjects,
-                                       { applianceOn, doorOpen });
+                                       { applianceOn, doorSink });
       this._shadowFlags(grp);
       this._floorGroup.add(grp);
+      // Register each door pivot with the fixture-level info the per-frame blend
+      // needs, and re-apply the persisted blend so a rebuild doesn't pop the door
+      // shut (or open).
+      if (doorSink.length) {
+        const unbound = fu.entity_id == null;
+        const hasDoorSensor = fu.doorEntity != null;
+        for (const dp of doorSink) {
+          const blend = this._applianceDoorBlend[fu.id] ?? 0;
+          dp.pivot.rotation[dp.axis] = dp.openAngle * blend;
+          this._applianceDoors.push({
+            fuId: fu.id, pivot: dp.pivot, axis: dp.axis, openAngle: dp.openAngle,
+            wx: fu.x, wy: fu.y, unbound, hasDoorSensor,
+          });
+        }
+      }
       const def = resolveFurnitureDef(fu, customObjects);
       // Bound TVs become clickable like light fixtures: tag the group so the
       // raycaster's parent-walk finds the media binding, and register it in the
@@ -1860,6 +1923,28 @@ export class ThreeDRenderer {
         this._terrain.push({
           x: fu.x, y: fu.y, w: fu.w, h: fu.h, rotation: fu.rotation,
           ht: def.ht, elevation: fu.elevation ?? 0, kind: fu.kind,
+        });
+        // Glass-house: build the stairs translucent so the storey reads through.
+        // Cutaway: enroll the solid step meshes so a foreground stairwell fades
+        // like the walls (a stairwell shouldn't block the see-in view). The
+        // stair piece's meshes share per-piece materials (created in
+        // _buildFurniture), so we tag ONE mesh per unique material — that fades
+        // the whole flight uniformly without compounding the ease, and never
+        // touches the GLOBAL outline material (outline shells are skipped).
+        const c = this._w(fu.x, fu.y, 0);
+        const seenMats = new Set<THREE.Material>();
+        grp.traverse(o => {
+          const m = o as THREE.Mesh;
+          if (!m.isMesh || m.userData?.outline) return;
+          const mat = m.material as THREE.Material & { opacity?: number; transparent?: boolean };
+          if (Array.isArray(m.material) || !mat) return;
+          if (glassHouse) { mat.transparent = true; mat.opacity = 0.35; }
+          if (seenMats.has(mat)) return;   // one tag per material (uniform fade)
+          seenMats.add(mat);
+          // Radial normal (piece center dir) → the cutaway predicate treats the
+          // stair block like an outward-facing wall between camera and center.
+          m.userData.cutFloor = 0.12;      // don't fully vanish — 0.12 min
+          this._tagCutawayWall(m, c.x, c.z, c.x, c.z, this._cutawayWalls);
         });
       }
       // Which named room this piece sits in (live loop resolution; null when
@@ -2186,7 +2271,9 @@ export class ThreeDRenderer {
           onx * (cam.x - cut.mx) + onz * (cam.z - cut.mz) > 0 &&
           // wall roughly between the camera and the scene center
           (cam.x * cut.mx + cam.z * cut.mz) / (camLen * midLen) > 0.3;
-        if (foreground) target = 0.06;
+        // Walls fade to 0.06; stairs (or any mesh with a per-mesh floor) can set
+        // a higher minimum so the flight stays legible while faded.
+        if (foreground) target = (mesh.userData.cutFloor as number) ?? 0.06;
       }
       // Ease toward the target so walls fade rather than pop.
       mat.opacity += (target - mat.opacity) * 0.1;
@@ -2903,7 +2990,8 @@ export class ThreeDRenderer {
                                  color?: string; customKindId?: string },
                           neighbors?: Furniture[],
                           customObjects?: ObjectRecipe[],
-                          opts?: { applianceOn?: boolean; doorOpen?: boolean }): THREE.Group {
+                          opts?: { applianceOn?: boolean;
+                                   doorSink?: { pivot: THREE.Object3D; axis: 'x' | 'y'; openAngle: number }[] }): THREE.Group {
     const recipe = fu.customKindId ? customObjects?.find(o => o.id === fu.customKindId) : undefined;
     const def = recipe ?? furnitureDef(fu);
     const W = fu.w, D = fu.h, HT = def.ht;
@@ -3279,15 +3367,15 @@ export class ThreeDRenderer {
         addBox(W * 0.96, 10, 6, seam, 0, HT * 0.65, -D / 2 - 2);           // freezer split
         addBox(24, HT * 0.28, 20, seam, -W * 0.32, HT * 0.42, -D / 2 - 14); // handle
         addBox(24, HT * 0.2, 20, seam, -W * 0.32, HT * 0.82, -D / 2 - 14);  // freezer handle
-        // Door-open state (bound binary_sensor 'on'): swing a front door panel
-        // ~70° about the +X vertical hinge edge. Build-time swing (no anim),
-        // held slightly proud of the body front so faces never go coplanar
-        // (the coincident-face gotcha).
-        if (opts?.doorOpen) {
+        // Door: ALWAYS built CLOSED as a child of a hinge Group at the front-
+        // right vertical edge, registered in _applianceDoors so the per-frame
+        // blend swings it (bound-fridge doorEntity / unbound localState /
+        // avatar proximity). Held proud of the body front so faces never go
+        // coplanar (the coincident-face gotcha).
+        {
           const doorMat = this._mat({ color: 0xb6bec6, metalness: 0.55, roughness: 0.35, side: THREE.DoubleSide });
           const hinge = new THREE.Group();
           hinge.position.set(W / 2, HT / 2, -D / 2 - 30);   // front-right edge, proud 30 mm
-          hinge.rotation.y = -Math.PI * 0.39;               // ~70° swing out toward the room (-Z)
           const panel = new THREE.Mesh(new THREE.BoxGeometry(W, HT * 0.98, 40), doorMat);
           panel.position.set(-W / 2, 0, 0);                 // spans from hinge toward -X
           hinge.add(panel);
@@ -3295,6 +3383,7 @@ export class ThreeDRenderer {
           dh.position.set(-W + 24, 0, -24);                 // handle on the free edge
           hinge.add(dh);
           grp.add(hinge);
+          opts?.doorSink?.push({ pivot: hinge, axis: 'y', openAngle: -Math.PI * 0.42 });
         }
         break;
       }
@@ -3305,20 +3394,73 @@ export class ThreeDRenderer {
           addCyl(W * 0.14, W * 0.14, 8, dark, sx * W * 0.22, HT + 4, sz * D * 0.2, 20);
         }
         const seam = this._mat({ color: 0x546069, roughness: 0.6 });
-        addBox(W * 0.9, 12, 6, seam, 0, HT * 0.55, -D / 2 - 2);  // oven door
+        addBox(W * 0.94, 10, 6, seam, 0, HT * 0.9, -D / 2 - 2);  // control strip above door
+        // Oven door: folds DOWN ~80° about its bottom edge. Built closed +
+        // registered; the per-frame blend animates it (unbound liveliness).
+        {
+          const doorMat = this._mat({ color: tint, metalness: 0.7, roughness: 0.32, side: THREE.DoubleSide });
+          const doorH = HT * 0.5;
+          const hinge = new THREE.Group();
+          hinge.position.set(0, HT * 0.12, -D / 2 - 20);      // bottom-front edge, proud
+          const panel = new THREE.Mesh(new THREE.BoxGeometry(W * 0.86, doorH, 40), doorMat);
+          panel.position.set(0, doorH / 2, 0);                // spans upward from the hinge
+          hinge.add(panel);
+          const handle = new THREE.Mesh(new THREE.BoxGeometry(W * 0.7, 24, 24), seam);
+          handle.position.set(0, doorH - 40, -22);
+          hinge.add(handle);
+          grp.add(hinge);
+          opts?.doorSink?.push({ pivot: hinge, axis: 'x', openAngle: -Math.PI * 0.44 });
+        }
         break;
       }
       case 'dishwasher': {
         addBox(W, HT, D, steel, 0, HT / 2, 0);
         const seam = this._mat({ color: 0x546069, roughness: 0.6 });
-        addBox(W * 0.94, 10, 6, seam, 0, HT * 0.86, -D / 2 - 2);  // control strip
-        addBox(W * 0.7, 20, 14, seam, 0, HT * 0.74, -D / 2 - 8);  // handle bar
+        addBox(W * 0.94, 10, 6, seam, 0, HT * 0.94, -D / 2 - 2);  // control strip up top
+        // Front panel folds DOWN ~80° about its bottom edge. Built closed +
+        // registered for the per-frame open blend.
+        {
+          const doorMat = this._mat({ color: tint, metalness: 0.7, roughness: 0.32, side: THREE.DoubleSide });
+          const doorH = HT * 0.72;
+          const hinge = new THREE.Group();
+          hinge.position.set(0, HT * 0.1, -D / 2 - 18);       // bottom-front edge, proud
+          const panel = new THREE.Mesh(new THREE.BoxGeometry(W * 0.9, doorH, 40), doorMat);
+          panel.position.set(0, doorH / 2, 0);
+          hinge.add(panel);
+          const handle = new THREE.Mesh(new THREE.BoxGeometry(W * 0.7, 20, 14), seam);
+          handle.position.set(0, doorH - 30, -22);            // handle near the top edge
+          hinge.add(handle);
+          grp.add(hinge);
+          opts?.doorSink?.push({ pivot: hinge, axis: 'x', openAngle: -Math.PI * 0.44 });
+        }
         break;
       }
-      case 'washer':
+      case 'washer': {
+        addBox(W, HT, D, porcelain, 0, HT / 2, 0);
+        addBox(W * 0.9, HT * 0.1, 8, screen, 0, HT * 0.92, -D / 2 - 3);  // controls
+        // Side-hinged round porthole door (~100° swing). Built closed +
+        // registered for the per-frame open blend.
+        {
+          const doorMat = this._mat({ color: 0x2a2f36, metalness: 0.3, roughness: 0.4 });
+          const hinge = new THREE.Group();
+          hinge.position.set(-W * 0.3, HT * 0.45, -D / 2 - 12);   // hinge left of the porthole
+          const disc = new THREE.Mesh(new THREE.CylinderGeometry(W * 0.28, W * 0.28, 24, 24), doorMat);
+          disc.rotation.x = Math.PI / 2;
+          disc.position.set(W * 0.28, 0, 0);                       // porthole centered on the front
+          hinge.add(disc);
+          const win = new THREE.Mesh(new THREE.CylinderGeometry(W * 0.2, W * 0.2, 10, 20), glass);
+          win.rotation.x = Math.PI / 2;
+          win.position.set(W * 0.28, 0, -8);
+          hinge.add(win);
+          grp.add(hinge);
+          opts?.doorSink?.push({ pivot: hinge, axis: 'y', openAngle: Math.PI * 0.55 });
+        }
+        break;
+      }
       case 'dryer': {
         addBox(W, HT, D, porcelain, 0, HT / 2, 0);
-        // Porthole door on the front face.
+        // Static porthole door (no animation — dryer opens rarely; not a
+        // liveliness target per spec).
         const door = new THREE.Mesh(new THREE.CylinderGeometry(W * 0.3, W * 0.3, 24, 24), screen);
         door.rotation.x = Math.PI / 2;
         door.position.set(0, HT * 0.45, -D / 2 - 10);
@@ -3328,7 +3470,21 @@ export class ThreeDRenderer {
       }
       case 'microwave': {
         addBox(W, HT, D, screen, 0, HT / 2, 0);
-        addBox(W * 0.62, HT * 0.7, 6, glass, -W * 0.12, HT / 2, -D / 2 - 3);
+        // Side-hinged door (~90° about the left vertical edge). Built closed +
+        // registered for the per-frame open blend; a glass window rides it.
+        {
+          const doorMat = this._mat({ color: 0x2a2f36, metalness: 0.3, roughness: 0.4, side: THREE.DoubleSide });
+          const hinge = new THREE.Group();
+          hinge.position.set(-W / 2, HT / 2, -D / 2 - 8);     // front-left vertical edge, proud
+          const panel = new THREE.Mesh(new THREE.BoxGeometry(W * 0.72, HT * 0.8, 24), doorMat);
+          panel.position.set(W * 0.36, 0, 0);                 // spans toward the +X free edge
+          hinge.add(panel);
+          const win = new THREE.Mesh(new THREE.BoxGeometry(W * 0.5, HT * 0.58, 8), glass);
+          win.position.set(W * 0.34, 0, -6);
+          hinge.add(win);
+          grp.add(hinge);
+          opts?.doorSink?.push({ pivot: hinge, axis: 'y', openAngle: Math.PI * 0.5 });
+        }
         break;
       }
       case 'tv': {
@@ -3778,6 +3934,72 @@ export class ThreeDRenderer {
         }
       }
       this._alarmGroup.add(grp);
+    }
+  }
+
+  // Smoke / CO detectors: a white ceiling disc (mounted just below ceiling
+  // height) with a tiny status LED on its underside. While ALARMING (bound
+  // binary_sensor 'on' or unbound localState 'on') it erupts into a bright
+  // emissive pulse + 2-3 expanding translucent rings dropping/expanding beneath
+  // the detector. Rebuilt under _keySafety normally; three-view forces a
+  // per-frame rebuild while ANY detector on the floor is alarming (the fireplace
+  // idiom) so the pulse animates. Rides the sensors layer.
+  updateSafetySensors(items: SafetySensor[], stateProvider: StateProvider): void {
+    if (!this._scene) return;
+    this._clearGroup(this._safetyGroup);
+    const nowS = performance.now() / 1000;
+    const ceiling = SAFETY_DEFAULTS.ceilingMm;
+    const discR = SAFETY_DEFAULTS.discRadiusMm;
+    for (const s of items) {
+      const st = itemState(s, stateProvider);
+      const alarming = st?.state === 'on';
+      const kind = s.kind === 'co' ? 'co' : 'smoke';
+      const col = hexToInt(safetyColor(kind));
+      const ud = { kind: 'safety' as const, entity_id: s.entity_id ?? null, fixtureId: s.id };
+      const grp = new THREE.Group();
+      const p = this._w(s.x, s.y, ceiling - 60);   // disc just below the ceiling
+      grp.position.set(p.x, p.y, p.z);
+      // White detector disc (flat cylinder, axis vertical).
+      const disc = new THREE.Mesh(
+        new THREE.CylinderGeometry(discR, discR, 40, 24),
+        this._mat({ color: alarming ? col : 0xeceff1, roughness: 0.6, metalness: 0.05,
+                    emissive: alarming ? col : 0x000000, emissiveIntensity: alarming ? 0.5 : 0 }));
+      disc.userData = ud;
+      grp.add(disc);
+      // Status LED on the underside (into the room, -Y).
+      const led = new THREE.Mesh(
+        new THREE.SphereGeometry(discR * 0.22, 12, 10),
+        this._mat({ color: alarming ? col : 0x37474f,
+                    emissive: alarming ? col : 0x0a0d10,
+                    emissiveIntensity: alarming ? 1.0 : 0.25 }));
+      led.position.set(0, -26, 0);
+      led.userData = { ...ud, outlineSkip: true };
+      grp.add(led);
+      if (alarming) {
+        const pulse = 0.5 + 0.5 * Math.sin(nowS * 6);
+        // Emissive glow bulb beneath the disc.
+        const glow = new THREE.Mesh(
+          new THREE.SphereGeometry(discR * (1.05 + 0.25 * pulse), 16, 12),
+          this._mat({ color: col, emissive: col, emissiveIntensity: 0.6 + 0.6 * pulse,
+                      transparent: true, opacity: 0.22 + 0.2 * pulse }));
+        glow.position.set(0, -50, 0);
+        glow.userData = { outlineSkip: true };
+        grp.add(glow);
+        // 3 flat rings dropping + expanding beneath the detector.
+        for (let k = 0; k < 3; k++) {
+          const ph = (nowS * 1.4 + k / 3) % 1;
+          const rr = discR * (1 + ph * 4);
+          const ring = new THREE.Mesh(
+            new THREE.RingGeometry(rr * 0.86, rr, 28),
+            this._mat({ color: col, emissive: col, emissiveIntensity: 0.8,
+                        transparent: true, opacity: 0.5 * (1 - ph), side: THREE.DoubleSide }));
+          ring.rotation.x = -Math.PI / 2;            // lie flat (horizontal)
+          ring.position.set(0, -70 - ph * 520, 0);   // sink beneath the disc as it grows
+          ring.userData = { outlineSkip: true };
+          grp.add(ring);
+        }
+      }
+      this._safetyGroup.add(grp);
     }
   }
 
@@ -6218,6 +6440,59 @@ export class ThreeDRenderer {
     // the RAW target positions; occupancy is sustained via a per-bed dwell
     // accumulator with hysteresis (engage >2 s, disengage <0.3 s).
     this._updateBedCovers(rawPos, frameDt, now);
+
+    // ── Appliance-door liveliness: ease each registered door pivot toward its
+    // open/closed target (bound-fridge door sensor, unbound localState, or an
+    // avatar engaged/dwelling next to an UNBOUND appliance). Runs here so it
+    // sees this frame's raw target positions + resolved activity anchors.
+    this._advanceApplianceDoors(targets, entityOn, ctx, frameDt);
+  }
+
+  // Per-frame appliance-door blend. Each registered hinge eases a stored 0→1
+  // blend (τ ≈ 0.25 s) toward an open target and applies it as a rotation about
+  // the pivot's axis. Open target (first match wins):
+  //   a. BOUND appliance with a door sensor (fridge) → its doorEntity is 'on'.
+  //   b. UNBOUND appliance → its localState is on/playing (folded into entityOn).
+  //   c. UNBOUND appliance → an avatar is engaged: a rig's standing activity
+  //      anchor is this piece, OR any RAW target within 1100 mm with dwell
+  //      > 1.2 s. All triggers read RAW target positions (anti-feedback rule).
+  // A bound non-fridge appliance stays closed (driven purely by its entity —
+  // Batch A behavior). Blend state is keyed by fixture id in _applianceDoorBlend
+  // so it survives _keyFloor rebuilds.
+  private _advanceApplianceDoors(
+      targets: TargetWorld[], entityOn: Record<string, boolean>,
+      ctx: ActivityContext | undefined, dt: number): void {
+    if (!this._applianceDoors.length) return;
+    const doorSensorOpen = ctx?.doorSensorOpen;
+    // Appliances a rig is actively engaged with (standing activity anchor).
+    const anchoredFu = new Set<string>();
+    for (const key in this._humanoids) {
+      const h = this._humanoids[key];
+      if (h.activityAnchor && h.act > 0.1) anchoredFu.add(h.activityAnchor.furnitureId);
+    }
+    const PROX2 = 1100 * 1100;
+    const alpha = 1 - Math.exp(-dt / 0.25);   // eased approach, τ = 0.25 s
+    for (const d of this._applianceDoors) {
+      let openTarget = false;
+      if (d.hasDoorSensor) {
+        openTarget = doorSensorOpen?.[d.fuId] === true;             // case a
+      } else if (d.unbound) {
+        if (entityOn[d.fuId]) openTarget = true;                    // case b
+        else if (anchoredFu.has(d.fuId)) openTarget = true;         // case c (anchor)
+        else {
+          for (const t of targets) {                                // case c (dwell)
+            const dx = t.x - d.wx, dy = t.y - d.wy;
+            if (dx * dx + dy * dy > PROX2) continue;
+            const h = this._humanoids[t.key];
+            if (h && !h.quad && h.dwell > 1.2) { openTarget = true; break; }
+          }
+        }
+      }
+      const cur = this._applianceDoorBlend[d.fuId] ?? 0;
+      const next = cur + ((openTarget ? 1 : 0) - cur) * alpha;
+      this._applianceDoorBlend[d.fuId] = next;
+      d.pivot.rotation[d.axis] = d.openAngle * next;
+    }
   }
 
   // Resolve the thought-bubble glyph for a humanoid this frame (raw, pre-
@@ -7728,7 +8003,7 @@ export class ThreeDRenderer {
     for (const g of [
       this._floorGroup, this._doorGroup, this._modelGroup, this._zoneGroup, this._haloGroup,
       this._sensorGroup, this._motionGroup, this._envGroup, this._bleGroup,
-      this._alarmGroup,
+      this._alarmGroup, this._safetyGroup,
       this._lightGroup, this._targetGroup, this._gpsGroup, this._weatherGroup,
     ]) {
       this._disposeSpriteMaps(g);
@@ -7828,6 +8103,42 @@ export class ThreeDRenderer {
     cam.position.z += (desCamZ - cam.position.z) * k;
   }
 
+  // Cinematic slow-orbit: advance the camera azimuth about the orbit center at a
+  // fixed rate, preserving distance + elevation. When auto-follow is OFF, ease
+  // the orbit center toward the active-rig bbox (floor center if none) so we
+  // circle the avatars; when ON, auto-follow already parks the target there, so
+  // we just add the azimuth on top of its framing (it preserves azimuth, so the
+  // two compose without oscillating). Shares the manual-orbit pause timer.
+  private _updateCinematicOrbit(dt: number): void {
+    if (!this._cinematicOrbit || !this._camera || !this._controls) return;
+    if (performance.now() / 1000 < this._followPauseUntil) return;   // manual-input pause
+    const cam = this._camera, ctrl = this._controls;
+    if (!this._autoFollow) {
+      // Orbit center = active-rig bbox center (scene coords), else floor center.
+      let n = 0, minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+      for (const key of Object.keys(this._humanoids)) {
+        const h = this._humanoids[key];
+        if (h.scale <= 0.3) continue;
+        const px = h.group.position.x, pz = h.group.position.z;
+        if (px < minX) minX = px; if (px > maxX) maxX = px;
+        if (pz < minZ) minZ = pz; if (pz > maxZ) maxZ = pz;
+        n++;
+      }
+      const cx = n ? (minX + maxX) / 2 : 0, cz = n ? (minZ + maxZ) / 2 : 0;
+      const k = Math.min(1, dt * 0.8);
+      ctrl.target.x += (cx - ctrl.target.x) * k;
+      ctrl.target.z += (cz - ctrl.target.z) * k;
+    }
+    // Advance azimuth about the target; keep the horizontal radius + height (so
+    // both distance and elevation — the "current zoom level" — are preserved).
+    const t = ctrl.target;
+    const dx = cam.position.x - t.x, dz = cam.position.z - t.z;
+    const r = Math.hypot(dx, dz);
+    const a = Math.atan2(dx, dz) + this._ORBIT_RATE * dt;
+    cam.position.x = t.x + r * Math.sin(a);
+    cam.position.z = t.z + r * Math.cos(a);
+  }
+
   private _animate = (): void => {
     this._rafId = requestAnimationFrame(this._animate);
     const nowS = performance.now() / 1000;
@@ -7836,9 +8147,14 @@ export class ThreeDRenderer {
     // Auto-follow camera: ease the pose to frame the active people (runs before
     // the azimuth glide + controls.update() so it plays nicely with damping).
     this._updateAutoFollow(frameDt);
+    // Cinematic slow-orbit rides on top of auto-follow's framing (or orbits the
+    // avatars on its own when auto-follow is off).
+    this._updateCinematicOrbit(frameDt);
     // Sims-cam azimuth glide: rotate the camera about the target toward the
-    // snap goal, easing the shortest arc. Cleared once within ~0.5°.
-    if (this._snapAzimuth != null && this._camera && this._controls) {
+    // snap goal, easing the shortest arc. Cleared once within ~0.5°. SUSPENDED
+    // while cinematic orbit runs (continuous orbit vs 45° snap would fight — the
+    // user's _simsCam flag is left intact, just not applied here).
+    if (this._snapAzimuth != null && !this._cinematicOrbit && this._camera && this._controls) {
       const t = this._controls.target;
       const dx = this._camera.position.x - t.x, dz = this._camera.position.z - t.z;
       const cur = Math.atan2(dx, dz);

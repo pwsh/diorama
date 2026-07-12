@@ -10,7 +10,7 @@ import type {
   Sensor, Zone, ObjectHalo, BgImage, MotionSensor, EnvSensor, EnvKind, Light, SwitchFixture, LightIconKind,
   Furniture, FurnitureKind, Door, Window as WindowType, WindowKind, Layers2D, Floor, Room,
   ObjectRecipe, RecipePrimitive, RecipeShape, ActivityKind, AvatarKind,
-  BleProxy, AlarmPanel, DioramaPerson, GeoLandmark,
+  BleProxy, AlarmPanel, SafetySensor, DioramaPerson, GeoLandmark,
 } from '../types.js';
 import type { BermudaDevice } from '../planner.js';
 import { CONDITION_GLYPH, CONDITION_LABEL, tempText } from '../weather.js';
@@ -32,7 +32,7 @@ import {
   fmtLen,
   motionColor, motionIntensity, sensorColor, lightIconKind, MOTION_DEFAULTS,
   BLE_PROXY_DEFAULTS, bleProxyHeight,
-  alarmHeight, alarmStateColor,
+  alarmHeight, alarmStateColor, safetyColor,
   FURNITURE_KINDS, furnitureKind, resolveFurnitureDef, WINDOW_DEFAULTS,
   ENV_KINDS, ENV_DEFAULTS, ENV_SCALE_MIN, ENV_SCALE_MAX,
   envKindOf, envColor, envValueText, envHeight, envScale,
@@ -96,6 +96,7 @@ const TOOLS: { id: Tool; label: string }[] = [
   { id: 'env', label: 'Env' },
   { id: 'bleproxy', label: 'BLE' },
   { id: 'alarm', label: '🚨 Alarm' },
+  { id: 'safety', label: '⚠️ Smoke/CO' },
   { id: 'furniture', label: 'Furn' },
   { id: 'light', label: 'Light' },
   { id: 'switch', label: 'Switch' },
@@ -362,6 +363,7 @@ export class Sidebar extends LitElement {
         ${this._envSensorsSection()}
         ${this._bleProxiesSection()}
         ${this._alarmPanelsSection()}
+        ${this._safetySensorsSection()}
         ${this._peopleSection()}
         ${this._doorsSection()}
         ${this._windowsSection()}
@@ -472,6 +474,7 @@ export class Sidebar extends LitElement {
       case 'env': return 'Click to drop an environmental sensor (temp, humidity, CO₂, …).';
       case 'bleproxy': return 'Click to drop a BLE scanner (Bluetooth proxy) puck. Bind it to the physical proxy device.';
       case 'alarm': return 'Click to drop an alarm keypad. Bind to an alarm_control_panel entity.';
+      case 'safety': return 'Click to drop a ceiling smoke/CO detector. Set kind + bind a binary_sensor (smoke / carbon_monoxide).';
       case 'furniture': return 'Click to drop a 600 × 600 mm piece.';
       case 'light': return 'Click to drop a light. Bind via the active panel.';
       case 'switch': return 'Click to drop a switch. Bind via the active panel.';
@@ -1086,6 +1089,107 @@ export class Sidebar extends LitElement {
         domain: 'alarm_control_panel',
         onPick: (id: string) => {
           a.entity_id = id;
+          this.planner.save();
+          this.planner.emitConfig();
+        },
+      },
+    }));
+  }
+
+  // ── Smoke / CO detectors section ──────────────────────────────────────
+  private _safetySensorsSection() {
+    const list = this.planner.floor().safetySensors ?? [];
+    if (list.length === 0) return nothing;
+    return this._section('safety', 'Smoke / CO', () =>
+      this._groupedList('safety', list, s => this._safetyItem(s)));
+  }
+
+  private _safetyItem(s: SafetySensor) {
+    const p = this.planner;
+    const sel = p.activeSafetyId === s.id;
+    const kind = s.kind === 'co' ? 'co' : 'smoke';
+    const col = safetyColor(kind);
+    const st = p.effectiveState(s);
+    const alarming = st?.state === 'on';
+    const badge = alarming ? 'ALARM' : (st ? 'ok' : (s.entity_id ? '—' : 'unbound'));
+    return html`
+      <div style="border-bottom:1px solid var(--border)">
+        <div class="sensor-item ${sel ? 'sel' : ''}" @click=${() => p.setActiveSafety(s.id)}>
+          <div class="dot" style="background:${alarming ? col : '#90a4ae'}"></div>
+          <div class="nm">${s.label?.trim() || (kind === 'co' ? 'CO' : 'Smoke')}</div>
+          <div class="badge" style=${alarming ? `color:${col};font-weight:700` : nothing}>${badge}</div>
+        </div>
+        ${sel ? this._safetyEditor(s) : nothing}
+      </div>
+    `;
+  }
+
+  private _safetyEditor(s: SafetySensor) {
+    const p = this.planner;
+    const upd = (mut: () => void) => { mut(); p.save(); p.emitConfig(); };
+    const bound = !!s.entity_id;
+    return html`
+      <div style="background:rgba(0,0,0,0.25);border-radius:4px;padding:6px;margin:4px 0">
+        <div class="row"><label>Kind</label>
+          <select .value=${s.kind === 'co' ? 'co' : 'smoke'}
+                  @change=${(e: Event) => upd(() => { s.kind = (e.target as HTMLSelectElement).value as 'smoke' | 'co'; })}>
+            <option value="smoke">Smoke</option>
+            <option value="co">CO (carbon monoxide)</option>
+          </select>
+        </div>
+        <div class="row"><label>Label</label>
+          <input type="text" .value=${s.label ?? ''} placeholder="Detector"
+                 @input=${(e: Event) => upd(() => { s.label = (e.target as HTMLInputElement).value; })}>
+        </div>
+        ${this._lockRow(s)}
+        <div class="row"><label>X (mm)</label>
+          <input type="number" .value=${String(Math.round(s.x))}
+                 @input=${(e: Event) => upd(() => { s.x = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
+        </div>
+        <div class="row"><label>Y (mm)</label>
+          <input type="number" .value=${String(Math.round(s.y))}
+                 @input=${(e: Event) => upd(() => { s.y = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
+        </div>
+        <div class="row"><label>HA entity</label>
+          <span style="font-size:11px;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+            ${s.entity_id || '— unbound —'}
+          </span>
+        </div>
+        <div style="display:flex;gap:4px;margin-top:4px">
+          <button class="btn" style="flex:1;font-size:11px" @click=${() => this._pickSafetyEntity(s)}>
+            ${s.entity_id ? 'Rebind' : 'Bind'}…
+          </button>
+          ${s.entity_id ? html`
+            <button class="btn" style="font-size:11px"
+                    @click=${() => upd(() => { s.entity_id = null; })}>Unbind</button>
+          ` : nothing}
+          <button class="btn" style="font-size:11px"
+                  ?disabled=${bound}
+                  title=${bound ? 'bound to HA — state comes from the entity' : 'Toggle the local alarm state'}
+                  @click=${() => { if (!bound) p.toggleItem(s); }}>Test</button>
+        </div>
+        <div style="font-size:10px;color:var(--text-dim);margin-top:4px;line-height:1.3">
+          ${bound
+            ? 'Bound: alarm state follows the binary_sensor (on = alarming).'
+            : 'Unbound: Test (or clicking the detector) toggles a local alarm state.'}
+        </div>
+        <button class="btn danger" style="width:100%;margin-top:6px" @click=${() => {
+          const f = p.floor();
+          f.safetySensors = (f.safetySensors ?? []).filter(x => x.id !== s.id);
+          p.activeSafetyId = null;
+          p.save(); p.emitConfig();
+        }}>Delete</button>
+      </div>
+    `;
+  }
+
+  private _pickSafetyEntity(s: SafetySensor): void {
+    this.dispatchEvent(new CustomEvent('open-entity-picker', {
+      bubbles: true, composed: true,
+      detail: {
+        domain: 'binary_sensor',
+        onPick: (id: string) => {
+          s.entity_id = id;
           this.planner.save();
           this.planner.emitConfig();
         },
@@ -3442,6 +3546,12 @@ export class Sidebar extends LitElement {
           <input type="checkbox" .checked=${!!sc.autoFollow}
                  @change=${(e: Event) => upd(() => {
                    p.store.scene3d!.autoFollow = (e.target as HTMLInputElement).checked;
+                 })}>
+        </div>
+        <div class="row"><label title="Slowly orbit the camera around the avatars for visual interest">Cinematic orbit</label>
+          <input type="checkbox" .checked=${!!sc.cinematicOrbit}
+                 @change=${(e: Event) => upd(() => {
+                   p.store.scene3d!.cinematicOrbit = (e.target as HTMLInputElement).checked;
                  })}>
         </div>
         <div class="row"><label>Plumbobs</label>

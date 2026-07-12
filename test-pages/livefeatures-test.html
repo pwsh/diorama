@@ -1,0 +1,136 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>livefeatures test</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<script type="module">
+  // Smoke tests for the newly added paths:
+  //   safety  — smoke/CO detector beacon builds + alarming rings present
+  //   door    — appliance door pivot opens when the blend is driven, survives rebuild
+  //   glass   — glass-house floor slab translucent + stairs reduced + join cutaway
+  const q = new URLSearchParams(location.search);
+  const test = q.get('test') || 'all';
+  const mod = await import('./assets/three-renderer.js');
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+
+  const realNow = performance.now.bind(performance);
+  let fakeNow = realNow();
+  performance.now = () => fakeNow;
+  const results = [];
+  const assert = (name, cond, detail = '') => results.push(`${cond ? 'PASS' : 'FAIL'} ${name}${detail ? ' (' + detail + ')' : ''}`);
+
+  // ── safety ──────────────────────────────────────────────────────────────
+  function testSafety() {
+    const floor = {
+      id: 'f1', name: 'F', w: 6000, d: 5000,
+      walls: [], furniture: [], lights: [], switches: [], sensors: [],
+      motionSensors: [], envSensors: [], doors: [], windows: [], bg: null,
+      model3d: null, look3d: null, rooms: [],
+      safetySensors: [
+        { id: 'sf_smoke', x: 2000, y: 2000, kind: 'smoke', entity_id: null },              // idle
+        { id: 'sf_co', x: 4000, y: 2000, kind: 'co', entity_id: null, localState: 'on' },  // alarming
+      ],
+    };
+    r.updateFloor(floor, { preset: 'day' });
+    const states = {};
+    r.updateSafetySensors(floor.safetySensors, id => states[id] || null);
+    const g = r._safetyGroup;
+    assert('safety group built 2 detectors', g.children.length === 2, `children=${g.children.length}`);
+    // The alarming (co) detector adds an emissive glow + 3 expanding rings on top
+    // of the disc + LED, so it carries more meshes than the idle one.
+    const meshCount = (grp) => { let n = 0; grp.traverse(o => { if (o.isMesh) n++; }); return n; };
+    const idleN = meshCount(g.children[0]);
+    const alarmN = meshCount(g.children[1]);
+    assert('alarming CO detector has extra ring meshes', alarmN >= idleN + 3, `idle=${idleN} alarm=${alarmN}`);
+    // Detector meshes carry the safety userData so 3D click raycast can resolve them.
+    let tagged = false;
+    g.children[0].traverse(o => { if (o.userData && o.userData.kind === 'safety') tagged = true; });
+    assert('detector meshes tagged kind=safety', tagged);
+  }
+
+  // ── appliance door pivot ─────────────────────────────────────────────────
+  function testDoor() {
+    const fridge = { id: 'fr1', x: 3000, y: 2500, w: 910, h: 760, kind: 'fridge', rotation: 0, entity_id: null };
+    const floor = {
+      id: 'f2', name: 'K', w: 6000, d: 5000,
+      walls: [], furniture: [fridge], lights: [], switches: [], sensors: [],
+      motionSensors: [], envSensors: [], doors: [], windows: [], bg: null,
+      model3d: null, look3d: null, rooms: [],
+    };
+    r.updateFloor(floor, { preset: 'day' });
+    assert('fridge registered an appliance door pivot', r._applianceDoors.length === 1,
+      `doors=${r._applianceDoors.length}`);
+    const before = r._applianceDoors[0].pivot.rotation.y;
+    // Drive the door OPEN via the unbound localState-on path (case b): pass
+    // entityOn[fridgeId] = true in the activity context.
+    const ctx = { entityOn: { fr1: true }, roomNames: {}, timeBucket: 'day' };
+    for (let i = 0; i < 40; i++) { fakeNow += 16.7; r.updateTargets([], ctx); }
+    const openRot = r._applianceDoors[0].pivot.rotation.y;
+    assert('door pivot swings open when driven', Math.abs(openRot) > 1.0,
+      `before=${before.toFixed(2)} open=${openRot.toFixed(2)}`);
+    // Rebuild the floor (a _keyFloor rebuild): the pivot is recreated but the
+    // stored blend must be re-applied immediately (no pop shut).
+    r.updateFloor(floor, { preset: 'day' });
+    const afterRebuild = r._applianceDoors[0].pivot.rotation.y;
+    assert('door stays open across a rebuild (no pop)', Math.abs(afterRebuild) > 0.9,
+      `afterRebuild=${afterRebuild.toFixed(2)}`);
+    // Now drive it CLOSED (no engagement) and confirm it eases back.
+    const ctx0 = { entityOn: {}, roomNames: {}, timeBucket: 'day' };
+    for (let i = 0; i < 80; i++) { fakeNow += 16.7; r.updateTargets([], ctx0); }
+    const closedRot = r._applianceDoors[0].pivot.rotation.y;
+    assert('door eases back closed when disengaged', Math.abs(closedRot) < 0.15,
+      `closed=${closedRot.toFixed(2)}`);
+  }
+
+  // ── glass-house floor + stairs ───────────────────────────────────────────
+  function testGlass() {
+    const stairs = { id: 'st1', x: 3000, y: 2500, w: 1000, h: 2000, kind: 'stairs', rotation: 0 };
+    const floor = {
+      id: 'f3', name: 'G', w: 6000, d: 5000,
+      walls: [], furniture: [stairs], lights: [], switches: [], sensors: [],
+      motionSensors: [], envSensors: [], doors: [], windows: [], bg: null,
+      model3d: null, look3d: null, rooms: [],
+    };
+    // No closed wall loop → a single full-rect floor plane (easy to find).
+    r.updateFloor(floor, { preset: 'day', glassHouse: true });
+    // Find the floor slab plane in _floorGroup (rotated flat, PlaneGeometry).
+    let slab = null;
+    r._floorGroup.children.forEach(o => {
+      if (o.isMesh && o.geometry && o.geometry.type === 'PlaneGeometry' &&
+          Math.abs(o.rotation.x + Math.PI / 2) < 0.01 && !o.userData.wallCut) slab = o;
+    });
+    assert('glass-house floor slab found', !!slab);
+    if (slab) assert('floor slab is translucent (opacity 0.45)',
+      slab.material.transparent === true && Math.abs(slab.material.opacity - 0.45) < 0.001,
+      `transparent=${slab.material.transparent} opacity=${slab.material.opacity}`);
+    // Stairs meshes joined the cutaway list with the raised floor (0.12) and a
+    // reduced glass-house base opacity (0.35).
+    const stairCut = r._cutawayWalls.filter(m => m.userData.cutFloor === 0.12);
+    assert('stairs enrolled in cutaway with cutFloor 0.12', stairCut.length > 0,
+      `stairCutMeshes=${stairCut.length}`);
+    if (stairCut.length) {
+      const base = stairCut[0].userData.baseOpacity;
+      assert('stairs built at reduced glass opacity (0.35)', Math.abs(base - 0.35) < 0.001,
+        `baseOpacity=${base}`);
+    }
+    // Non-glass control: floor slab is opaque.
+    r.updateFloor(floor, { preset: 'day', glassHouse: false });
+    let slab2 = null;
+    r._floorGroup.children.forEach(o => {
+      if (o.isMesh && o.geometry && o.geometry.type === 'PlaneGeometry' &&
+          Math.abs(o.rotation.x + Math.PI / 2) < 0.01 && !o.userData.wallCut) slab2 = o;
+    });
+    assert('non-glass floor slab opaque', !!slab2 && slab2.material.transparent !== true,
+      slab2 ? `transparent=${slab2.material.transparent}` : 'no slab');
+  }
+
+  if (test === 'safety' || test === 'all') testSafety();
+  if (test === 'door' || test === 'all') testDoor();
+  if (test === 'glass' || test === 'all') testGlass();
+
+  performance.now = realNow;
+  const pass = results.filter(x => x.startsWith('PASS')).length;
+  const fail = results.filter(x => x.startsWith('FAIL')).length;
+  document.title = `LIVEFEATURES ${fail === 0 ? 'PASS' : 'FAIL'} ${pass}/${pass + fail} | ` + results.join(' · ');
+</script>

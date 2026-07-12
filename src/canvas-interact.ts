@@ -9,7 +9,7 @@ import {
   hitVertexOrZone, hitObject, hitObjectRadiusHandle,
   hitBgBody, hitBgCorner, bgEditable,
   hitMotionSensor, hitMotionRotateHandle, hitEnvSensor, hitEnvResizeHandle,
-  hitBleProxy, hitAlarmPanel,
+  hitBleProxy, hitAlarmPanel, hitSafetySensor,
   hitDoor, hitDoorEnd, hitWindow, hitWindowEnd, hitFloorEdge,
 } from './canvas-hit.js';
 import type { Planner, Drag } from './planner.js';
@@ -18,7 +18,7 @@ import type { Vec2, Furniture, ObjectRecipe, Light } from './types.js';
 
 // Drag kinds that move a single placeable and therefore get alignment guides
 // (Feature C). Wall vertices / doors / windows / zones are excluded.
-const ALIGN_MOVE_KINDS = new Set(['sensor', 'motion', 'env', 'ble', 'fixture', 'furnMove']);
+const ALIGN_MOVE_KINDS = new Set(['sensor', 'motion', 'env', 'ble', 'safety', 'fixture', 'furnMove']);
 
 // Peer-center candidates for alignment, snapshotted once at drag start. Same
 // category only: lights + switches share one "fixtures" pool; furniture aligns
@@ -44,6 +44,7 @@ function buildAlignCandidates(p: Planner, drag: Drag): { x: number; y: number }[
     case 'motion': for (const o of f.motionSensors) if (o.id !== drag.id) add(o); break;
     case 'env': for (const o of f.envSensors) if (o.id !== drag.id) add(o); break;
     case 'ble': for (const o of (f.bleProxies ?? [])) if (o.id !== drag.id) add(o); break;
+    case 'safety': for (const o of (f.safetySensors ?? [])) if (o.id !== drag.id) add(o); break;
   }
   return out;
 }
@@ -60,6 +61,7 @@ function draggedMoveItem(f: ReturnType<Planner['floor']>, drag: Drag)
     case 'motion': it = f.motionSensors.find(x => x.id === drag.id); break;
     case 'env': it = f.envSensors.find(x => x.id === drag.id); break;
     case 'ble': it = (f.bleProxies ?? []).find(x => x.id === drag.id); break;
+    case 'safety': it = (f.safetySensors ?? []).find(x => x.id === drag.id); break;
   }
   return it && !it.locked ? it : null;
 }
@@ -463,6 +465,13 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
     p.drag = { kind: 'alarm', id: ah.id, startMm: mm, start: { x: ah.x, y: ah.y } };
     canvas.style.cursor = 'grabbing'; e.preventDefault(); p.emitConfig(); return;
   }
+  const safeH = hitSafetySensor(p, view, mm);
+  if (safeH) {
+    if (p.activeSafetyId !== safeH.id) p.activeSafetyId = safeH.id;
+    p.drag = { kind: 'safety', id: safeH.id, startMm: mm, start: { x: safeH.x, y: safeH.y } };
+    p.alignCandidates = buildAlignCandidates(p, p.drag);
+    canvas.style.cursor = 'grabbing'; e.preventDefault(); p.emitConfig(); return;
+  }
   const sh = hitSensor(p, view, mm);
   if (sh) {
     if (p.store.activeSensorId !== sh.id) p.setActiveSensor(sh.id);
@@ -555,6 +564,14 @@ export function onCanvasMouseMove(p: Planner, canvas: HTMLCanvasElement, view: V
         if (bp && !bp.locked) {
           bp.x = Math.max(0, Math.min(f.w, drag.start.x + mm.x - drag.startMm.x));
           bp.y = Math.max(0, Math.min(f.d, drag.start.y + mm.y - drag.startMm.y));
+        }
+        break;
+      }
+      case 'safety': {
+        const ss = (f.safetySensors ?? []).find(x => x.id === drag.id);
+        if (ss && !ss.locked) {
+          ss.x = Math.max(0, Math.min(f.w, drag.start.x + mm.x - drag.startMm.x));
+          ss.y = Math.max(0, Math.min(f.d, drag.start.y + mm.y - drag.startMm.y));
         }
         break;
       }
@@ -817,9 +834,11 @@ export function onCanvasMouseMove(p: Planner, canvas: HTMLCanvasElement, view: V
   // Cursor hint
   if (p.uiMode === 'view') { canvas.style.cursor = 'default'; return; }
   if (p.uiMode === 'kiosk') {
+    const safeHit = hitSafetySensor(p, view, mm);
     const overDevice =
       hitFixture(p, mm, Math.max(250, hitPx(view) * 3)) ||
       hitAlarmPanel(p, view, mm) ||
+      (safeHit && !safeHit.entity_id) ||   // only unbound detectors are clickable
       hitDoor(p, view, mm) || hitWindow(p, view, mm);
     canvas.style.cursor = overDevice ? 'pointer' : 'default';
     return;
@@ -833,6 +852,7 @@ export function onCanvasMouseMove(p: Planner, canvas: HTMLCanvasElement, view: V
     else if (hitMotionSensor(p, view, mm)) canvas.style.cursor = 'grab';
     else if (hitBleProxy(p, view, mm)) canvas.style.cursor = 'grab';
     else if (hitAlarmPanel(p, view, mm)) canvas.style.cursor = 'grab';
+    else if (hitSafetySensor(p, view, mm)) canvas.style.cursor = 'grab';
     else if (hitSensorRotateHandle(p, view, mm)) canvas.style.cursor = 'grab';
     else if (zonesInteractive(p) && hitObjectRadiusHandle(p, view, mm)) canvas.style.cursor = 'ew-resize';
     else if (zonesInteractive(p) && (hitObject(p, view, mm) || hitVertexOrZone(p, view, mm))) canvas.style.cursor = 'grab';
@@ -893,6 +913,21 @@ export function onCanvasMouseUp(p: Planner, canvas: HTMLCanvasElement): void {
       } else {
         ap.x = snap(ap.x, 10); ap.y = snap(ap.y, 10);
         snapAlarmToWall(ap, f.walls);
+        p.save();
+      }
+    }
+  } else if (drag.kind === 'safety') {
+    const ss = (f.safetySensors ?? []).find(x => x.id === drag.id);
+    if (ss) {
+      // Click-vs-drag: a tiny movement is a click (unbound → manual test
+      // trigger via toggleItem; bound → display-only no-op). A real move just
+      // snaps to grid — ceiling-mounted, so NO wall snap.
+      const moved = Math.hypot(ss.x - drag.start.x, ss.y - drag.start.y);
+      if (moved < 30) {
+        ss.x = drag.start.x; ss.y = drag.start.y;
+        if (!ss.entity_id) p.toggleItem(ss);
+      } else {
+        ss.x = snap(ss.x, 10); ss.y = snap(ss.y, 10);
         p.save();
       }
     }
@@ -1030,6 +1065,9 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
     // Alarm keypad → open the control/status modal (device interaction, not edit).
     const aHit2 = hitAlarmPanel(p, view, mm);
     if (aHit2) { openAlarmModal(canvas, aHit2.id); return; }
+    // Smoke / CO detector → unbound: manual test trigger; bound: display-only.
+    const safe2 = hitSafetySensor(p, view, mm);
+    if (safe2) { if (!safe2.entity_id) p.toggleItem(safe2); return; }
     const dHit2 = hitDoor(p, view, mm);
     if (dHit2) { p.toggleItem(dHit2.door); return; }
     const wHit2 = hitWindow(p, view, mm);
@@ -1167,6 +1205,24 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
     p.emitConfig();
     return;
   }
+  if (p.tool === 'safety') {
+    if (!f.safetySensors) f.safetySensors = [];
+    const id = newId('sf');
+    // Ceiling-mounted: free placement (no wall snap). Defaults to a SMOKE
+    // detector; the sidebar row switches kind to CO.
+    f.safetySensors.push({
+      id,
+      x: snap(Math.max(0, Math.min(f.w, mm.x)), 10),
+      y: snap(Math.max(0, Math.min(f.d, mm.y)), 10),
+      kind: 'smoke', entity_id: null,
+      label: `Detector ${f.safetySensors.length + 1}`,
+    });
+    p.activeSafetyId = id;
+    p.save();
+    p.setTool('select');
+    p.emitConfig();
+    return;
+  }
   if (p.tool === 'wall') {
     // First vertex: free placement. Subsequent vertices snap to a 15°
     // increment from the previous vertex via snapVertex15 (preserves cursor
@@ -1270,6 +1326,13 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
       if (ahit.locked) return;
       f.alarmPanels = (f.alarmPanels ?? []).filter(x => x.id !== ahit.id);
       if (p.activeAlarmId === ahit.id) p.activeAlarmId = null;
+      p.save(); p.emitConfig(); return;
+    }
+    const safeHit = hitSafetySensor(p, view, mm);
+    if (safeHit) {
+      if (safeHit.locked) return;
+      f.safetySensors = (f.safetySensors ?? []).filter(x => x.id !== safeHit.id);
+      if (p.activeSafetyId === safeHit.id) p.activeSafetyId = null;
       p.save(); p.emitConfig(); return;
     }
     const sh = hitSensor(p, view, mm);

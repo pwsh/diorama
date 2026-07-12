@@ -210,6 +210,22 @@ export interface AlarmPanel {
   locked?: boolean;           // canvas move/rotate/delete disabled (click still works)
 }
 
+// Smoke / CO safety detector fixture. Ceiling-mounted (no wall snap; free
+// placement like a motion sensor). Bound to a binary_sensor.* whose 'on' state
+// means ALARM (device_class smoke / carbon_monoxide). Unbound detectors carry a
+// localState for a manual test trigger ('on' = alarming; inert once bound). 2D +
+// 3D render a small detector disc that erupts into pulsing rings + a colored
+// halo while alarming (red for smoke, amber for CO). Rides the sensors layer.
+export interface SafetySensor {
+  id: string;
+  x: number; y: number;
+  kind: 'smoke' | 'co';       // smoke = red beacon, co = orange/amber beacon
+  entity_id: string | null;   // binary_sensor.*; 'on' = ALARM
+  localState?: string;        // unbound manual trigger: 'on' = alarming; inert once bound
+  label?: string;
+  locked?: boolean;
+}
+
 export interface Sensor {
   id: string;
   x: number; y: number;
@@ -366,6 +382,8 @@ export interface Scene3D {
   glassHouse?: boolean;      // render every OTHER floor as a translucent shell stacked at its story height
   wallCutaway?: boolean;     // fade walls between the camera and the room (Sims dollhouse); default ON (opt-out)
   autoFollow?: boolean;      // camera auto-frames active people (eases; manual orbit pauses it 6 s); default off
+  cinematicOrbit?: boolean;  // slowly orbit the camera around the active avatars for visual interest
+                             // (~0.08 rad/s at the current zoom; follows auto-follow's framing when both on); default off
   plumbobs?: boolean;        // show the spinning Sims plumbob diamonds above targets; default ON (opt-out)
 }
 
@@ -398,6 +416,7 @@ export interface Floor {
   rooms?: Room[];   // named rooms (anchor → live wall loop); repairFloor backfills []
   bleProxies?: BleProxy[];  // BLE scanner fixtures; repairFloor backfills []
   alarmPanels?: AlarmPanel[];  // alarm keypad fixtures; repairFloor backfills []
+  safetySensors?: SafetySensor[];  // smoke / CO detectors; repairFloor backfills []
   boundsLocked?: boolean;   // lock canvas-layout/floor-size editing (hides the edge handles)
   disabled?: boolean;       // hidden from the kiosk/view floor picker + glass-house stack + BLE
                             // floor solve; still editable in the sidebar — lets multiple test

@@ -4,6 +4,7 @@ import {
   lightRadius, lightIntensity, lightIconKind, lightRotation, lightLength, switchRotation, switchSize, switchLabelPos,
   motionColor, motionIntensity, sensorColor, BLE_PROXY_DEFAULTS,
   ALARM_DEFAULTS, alarmStateColor,
+  safetyColor,
   hexToRgba, lighten, furnitureKind, furnitureCorners, resolveFurnitureDef,
   doorEndpoint, doorOpenDeltaDeg, windowEndpoints, wallCutsForSegment, wallKind,
   ENV_KINDS, envKindOf, envColor, envValueText, envScale,
@@ -177,6 +178,7 @@ export function drawAll(ctx: CanvasRenderingContext2D, p: Planner, view: View,
   if (on(L.sensors)) drawSensors(ctx, p, view);
   if (on(L.sensors)) drawBleProxies(ctx, p, view);
   if (on(L.sensors)) drawAlarmPanels(ctx, p, view);
+  if (on(L.sensors)) drawSafetySensors(ctx, p, view);
   // LD2450 inclusion / filter polygons + object halos draw per the zones
   // layer. The Motion toggle only hides motion-sensor cones (drawMotionSensors
   // gates its own cone block).
@@ -622,6 +624,83 @@ function drawAlarmPanels(ctx: CanvasRenderingContext2D, p: Planner, view: View):
     ctx.fillStyle = 'rgba(0,0,0,0.7)';
     ctx.fillRect(c.x - tw / 2, by, tw, 13 * dpr);
     ctx.fillStyle = state ? hexToRgba(col, 1) : '#cfd8dc';
+    ctx.fillText(txt, c.x, by + 1 * dpr);
+  }
+}
+
+// 2D detector disc radius (mm world). Small — these are ceiling pucks.
+const SAFETY_DISC_R_MM = 140;
+
+// Smoke / CO detectors render as a small ceiling-detector disc (white ring +
+// center dot; CO gets a "CO" label). When ALARMING (effective state on) they
+// erupt into unmissable expanding pulse rings + a strong colored halo (red for
+// smoke, amber for CO), time-based via performance.now() so the RAF redraw
+// animates it (the alarm keypad's triggered-pulse idiom). Rides the sensors
+// layer (gated by the caller).
+function drawSafetySensors(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
+  const dpr = window.devicePixelRatio || 1;
+  const f = p.floor();
+  const t = performance.now() / 1000;
+  for (const s of f.safetySensors ?? []) {
+    const c = mmToPx(view, s.x, s.y);
+    const kind = s.kind === 'co' ? 'co' : 'smoke';
+    const col = safetyColor(kind);
+    const st = p.effectiveState(s);
+    const alarming = st?.state === 'on';
+    const selected = p.activeSafetyId === s.id;
+    const rPx = Math.max(9, SAFETY_DISC_R_MM * view.scale);
+    // Alarming: pulsing halo + up to 3 expanding rings dropping outward.
+    if (alarming) {
+      const pulse = 0.5 + 0.5 * Math.sin(t * 6);
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(c.x, c.y, rPx * 2.6, 0, 2 * Math.PI);
+      ctx.fillStyle = hexToRgba(col, 0.18 + 0.22 * pulse);
+      ctx.fill();
+      for (let k = 0; k < 3; k++) {
+        const ph = (t * 1.4 + k / 3) % 1;               // 0..1 expansion phase
+        const rr = rPx * (1 + ph * 3.2);
+        ctx.beginPath();
+        ctx.arc(c.x, c.y, rr, 0, 2 * Math.PI);
+        ctx.lineWidth = Math.max(1.5, 2.5 * dpr) * (1 - ph);
+        ctx.strokeStyle = hexToRgba(col, 0.7 * (1 - ph));
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+    // Detector body: white disc, colored ring, center dot.
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(c.x, c.y, rPx, 0, 2 * Math.PI);
+    ctx.fillStyle = alarming ? hexToRgba(col, 0.9) : 'rgba(236,239,241,0.95)';
+    ctx.fill();
+    ctx.lineWidth = selected ? 2.5 : 1.5;
+    ctx.strokeStyle = selected ? '#fff' : (alarming ? '#fff' : hexToRgba(col, 0.9));
+    ctx.stroke();
+    // Center status dot / glyph.
+    if (kind === 'co') {
+      ctx.fillStyle = alarming ? '#fff' : hexToRgba(col, 1);
+      ctx.font = `bold ${Math.max(7, rPx * 0.9)}px sans-serif`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText('CO', c.x, c.y + 0.5);
+    } else {
+      ctx.beginPath();
+      ctx.arc(c.x, c.y, Math.max(1.5, rPx * 0.3), 0, 2 * Math.PI);
+      ctx.fillStyle = alarming ? '#fff' : hexToRgba(col, 1);
+      ctx.fill();
+    }
+    ctx.restore();
+    // Label below (screen space).
+    const label = s.label?.trim() || (kind === 'co' ? 'CO' : 'Smoke');
+    const badge = alarming ? 'ALARM' : (st ? 'ok' : (s.entity_id ? '—' : 'unbound'));
+    const txt = `${label} · ${badge}`;
+    ctx.font = `${10 * dpr}px sans-serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+    const tw = ctx.measureText(txt).width + 8 * dpr;
+    const by = c.y + rPx + 4 * dpr;
+    ctx.fillStyle = 'rgba(0,0,0,0.7)';
+    ctx.fillRect(c.x - tw / 2, by, tw, 13 * dpr);
+    ctx.fillStyle = alarming ? hexToRgba(col, 1) : '#cfd8dc';
     ctx.fillText(txt, c.x, by + 1 * dpr);
   }
 }

@@ -776,6 +776,18 @@ export function snapAlarmToWall(
 }
 export function alarmHeight(a: { height?: number }): number { return a.height ?? ALARM_DEFAULTS.height; }
 
+// ── Smoke / CO safety detectors (Feature: safety sensors) ──────────────────
+// Ceiling-mounted disc; the 3D puck hangs just below ceiling height. No wall
+// snap (free placement like a motion sensor).
+export const SAFETY_DEFAULTS = { ceilingMm: 2743, discRadiusMm: 120 };
+// Beacon color per kind. Shared 2D + 3D: red for smoke, amber for CO.
+export function safetyColor(kind: 'smoke' | 'co'): string {
+  return kind === 'co' ? '#ff9800' : '#ef5350';
+}
+export function safetyGlyph(kind: 'smoke' | 'co'): string {
+  return kind === 'co' ? 'CO' : '';
+}
+
 // Nearest candidate coordinate to `v` within `tol` (else null). Drives the
 // smart alignment guides (Feature C) — applied per-axis independently. Pure,
 // exported for testing.

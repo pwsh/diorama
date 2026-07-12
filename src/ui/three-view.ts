@@ -62,6 +62,12 @@ export class ThreeView extends LitElement {
                          ? 'background:#2e7d32;border:1px solid #43a047;color:#e8f5e9'
                          : 'background:#1c2733;border:1px solid #33465a;color:#a5d6a7'}"
                 @click=${() => this._toggleAutoFollow()}>🎥</button>
+        <button title="Cinematic orbit — slowly circle the camera around the avatars"
+                style="font-size:10px;padding:3px 7px;border-radius:3px;cursor:pointer;
+                       ${p?.store.scene3d?.cinematicOrbit
+                         ? 'background:#2e7d32;border:1px solid #43a047;color:#e8f5e9'
+                         : 'background:#1c2733;border:1px solid #33465a;color:#a5d6a7'}"
+                @click=${() => this._toggleCinematicOrbit()}>🎬</button>
         ${saved.length ? html`
           <select style="font-size:10px;background:#1c2733;border:1px solid #33465a;border-radius:3px;
                          color:#cfd8dc;max-width:110px"
@@ -112,6 +118,14 @@ export class ThreeView extends LitElement {
 
   // Auto-follow toggle: flip scene3d.autoFollow (creating scene3d if absent),
   // persist, and emit config. The renderer reads the flag each tick.
+  private _toggleCinematicOrbit(): void {
+    const p = this.planner;
+    if (!p.store.scene3d) p.store.scene3d = { preset: 'night' };
+    p.store.scene3d.cinematicOrbit = !p.store.scene3d.cinematicOrbit;
+    p.save(); p.emitConfig();
+    this.requestUpdate();
+  }
+
   private _toggleAutoFollow(): void {
     const p = this.planner;
     if (!p.store.scene3d) p.store.scene3d = { preset: 'night' };
@@ -174,6 +188,14 @@ export class ThreeView extends LitElement {
         this.dispatchEvent(new CustomEvent('open-alarm', {
           bubbles: true, composed: true, detail: { id: fixtureId },
         }));
+        return;
+      }
+      // Smoke / CO detector → unbound: manual test trigger (flip localState);
+      // bound: display-only no-op (a binary_sensor can't be toggled).
+      if (kind === 'safety') {
+        if (p.uiMode === 'view' || entity_id) return;
+        const s = p.floor().safetySensors?.find(x => x.id === fixtureId);
+        if (s) p.toggleItem(s);
         return;
       }
       // toggleEntity/toggleItem refuse in view-only mode.
@@ -406,6 +428,7 @@ export class ThreeView extends LitElement {
   private _keyEnv = '';
   private _keyBle = '';
   private _keyAlarm = '';
+  private _keySafety = '';
   private _keyLights = '';
   private _keyZones = '';
   private _keyHalos = '';
@@ -429,7 +452,7 @@ export class ThreeView extends LitElement {
         this._lastFloorId = f.id;
         r.clearTransientGroups();
         this._keyFloor = this._keyDoors = this._keySensors = '';
-        this._keyMotion = this._keyEnv = this._keyBle = this._keyAlarm = '';
+        this._keyMotion = this._keyEnv = this._keyBle = this._keyAlarm = this._keySafety = '';
         this._keyLights = this._keyZones = this._keyHalos = '';
         this._keyGhost = this._keyGps = this._keyWeather = '';
         this._trigPrevOn.clear();
@@ -445,6 +468,8 @@ export class ThreeView extends LitElement {
 
       // Auto-follow camera flag (cheap; the renderer does the per-frame easing).
       r.setAutoFollow(!!p.store.scene3d?.autoFollow);
+      // Cinematic slow-orbit flag (renderer advances the azimuth per frame).
+      r.setCinematicOrbit(!!p.store.scene3d?.cinematicOrbit);
 
       // Floor / walls / furniture / bg: structural + effective lighting
       // preset (auto modes flip it as the sun/lux sensor moves) + per-floor
@@ -556,6 +581,19 @@ export class ThreeView extends LitElement {
       if (keyAlarm !== this._keyAlarm) {
         this._keyAlarm = keyAlarm;
         r.updateAlarmPanels(f.alarmPanels ?? [], id => states[id] || null);
+      }
+
+      // Smoke / CO detectors: structural + effective state. An ALARMING detector
+      // pulses (rings animate via performance.now() inside the builder), so any
+      // live alarm on the floor forces a per-frame rebuild — the fireplace idiom.
+      const safetyList = f.safetySensors ?? [];
+      const hasLiveAlarm = safetyList.some(s => p.effectiveState(s)?.state === 'on');
+      const keySafety = hasLiveAlarm ? `${Math.random()}` :
+        `${p.configRev}|` + safetyList.map(s =>
+          `${s.id}:${Math.round(s.x)}:${Math.round(s.y)}:${s.kind}:${p.effectiveState(s)?.state ?? '-'}`).join(',');
+      if (keySafety !== this._keySafety) {
+        this._keySafety = keySafety;
+        r.updateSafetySensors(safetyList, id => states[id] || null);
       }
 
       // GPS device pins + 3D landmark pins (both ride the geo layer). Coarse
@@ -752,12 +790,15 @@ export class ThreeView extends LitElement {
       // bound appliance entities are on/playing, room names, and the coarse
       // time bucket. Drives the Sims-style solo activities in updateTargets.
       const entityOn: Record<string, boolean> = {};
+      // Bound appliance door sensors (Furniture.doorEntity) → open flag, for the
+      // per-frame appliance-door blend (bound fridge case).
+      const doorSensorOpen: Record<string, boolean> = {};
       for (const fu of f.furniture) {
         // effectiveState folds in a locally-ON (unbound) piece so it gates
         // activities / watch_tv exactly like a bound, on entity.
         const st = p.effectiveState(fu);
-        if (!st) continue;
-        entityOn[fu.id] = st.state === 'on' || st.state === 'playing';
+        if (st) entityOn[fu.id] = st.state === 'on' || st.state === 'playing';
+        if (fu.doorEntity && states[fu.doorEntity]?.state === 'on') doorSensorOpen[fu.id] = true;
       }
       const roomNames: Record<string, string> = {};
       for (const rm of f.rooms ?? []) roomNames[rm.id] = rm.name;
@@ -800,7 +841,7 @@ export class ThreeView extends LitElement {
       this._recentTrigs = this._recentTrigs.filter(g => nowS - g.at < 45);
       if (this._recentTrigs.length > 8) this._recentTrigs.splice(0, this._recentTrigs.length - 8);
       const recentTriggers = this._recentTrigs.map(g => ({ kind: g.kind, x: g.x, y: g.y, ageS: nowS - g.at }));
-      const ctx: ActivityContext = { entityOn, roomNames, timeBucket: resolveTimeBucket(states), weather, recentTriggers };
+      const ctx: ActivityContext = { entityOn, roomNames, timeBucket: resolveTimeBucket(states), weather, recentTriggers, doorSensorOpen };
       // Targets every frame — persistent rigs mutate in place (no rebuild).
       r.updateTargets(targets, ctx);
   }
