@@ -36,6 +36,17 @@ deployed to the live HA instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Editor snapping (fireplace / switch wall lock + smart guides)**: fireplace
+  lights (`snapFireplaceToWall`) and switches (`snapSwitchToWall`) now lock flush
+  to the nearest wall on drop + move-release via a shared `snapToWallEdge`
+  helper (firebox back flush at axis+275; switch plate at axis+70, rotation
+  aligned, 0=+Y / vertical→90). Switches also **gang** with same-wall neighbours
+  at `gangPitch = max(size)+75` (`gangSlot` walks to the nearest free slot).
+  Plus **smart alignment guides**: dragging any single placeable snaps its
+  center to peer centers (same category) on X/Y within 8 px, dashed accent
+  guide lines drawn while active (`nearestAlign`, `Planner.alignGuides`
+  runtime-only). Pinned by `test-pages/wallsnap-test.html` (`WALLSNAP PASS
+  36/36`). No Store schema change.
 - **Fixes (rooms + avatar spawn)**: (1) rooms all resolving to one loop — locked
   walls are now valid weld **targets** (`bestWeldTarget` dropped the `w.locked`
   skip) so invisible room-divider chords snap onto locked structural walls, and

@@ -1,0 +1,150 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>WALLSNAP …</title>
+  <style>
+    body { margin:0; background:#0d1116; color:#cfd8dc; font:13px/1.4 sans-serif; padding:14px; }
+    h1 { font-size:15px; margin:0 0 10px; }
+    .grid { display:flex; flex-wrap:wrap; gap:10px; }
+    .card { background:#141b22; border:1px solid #26323d; border-radius:6px; padding:8px 10px; width:360px; }
+    .row { display:flex; justify-content:space-between; font-size:11px; gap:8px; }
+    .pass { color:#69f0ae; } .fail { color:#ff5252; }
+    #summary { font-size:14px; font-weight:bold; margin:10px 0; padding:8px 10px; border-radius:5px; }
+    .okbg { background:#12331f; color:#69f0ae; } .badbg { background:#3a1414; color:#ff8a80; }
+    code { color:#ffd54f; }
+  </style>
+</head>
+<body>
+  <h1>Wall-edge snap — fireplace flush, switch ganging, smart-guide alignment</h1>
+  <div id="summary">Running…</div>
+  <div class="grid" id="grid"></div>
+
+  <!-- geometry.ts is imported as a standalone transpile (NOT a code-split
+       chunk; like rooms-test's geometry.mod.js). Generate it into the harness
+       dir NEXT TO this html before serving:
+         npx esbuild src/geometry.ts --bundle --format=esm \
+           --outfile=<harness>/geometry.mod.js -->
+  <script type="module">
+    import {
+      snapToWallEdge, snapFireplaceToWall, gangSlot, gangPitch,
+      snapSwitchToWall, nearestAlign, FIREBOX_DEPTH_MM, SWITCH_PLATE_DEPTH_MM,
+    } from './geometry.mod.js';
+
+    const tests = [];
+    const ok = (name, cond, detail) => tests.push({ name, ok: !!cond, detail });
+    const near = (a, b, e = 0.5) => Math.abs(a - b) <= e;
+
+    // ── snapToWallEdge: horizontal / vertical / diagonal, both sides ─────────
+    const hWall = [{ points: [{x:0,y:0},{x:1000,y:0}] }];
+    const hAbove = snapToWallEdge(hWall, 500, 200, 500);
+    ok('h-wall above: axis pt (500,0)', hAbove && near(hAbove.x,500) && near(hAbove.y,0),
+       hAbove && `(${hAbove.x},${hAbove.y})`);
+    ok('h-wall above: angle 0', hAbove && near(hAbove.wallAngleDeg,0), hAbove && hAbove.wallAngleDeg);
+    ok('h-wall above: side +1, n=+Y', hAbove && hAbove.side===1 && near(hAbove.nx,0) && near(hAbove.ny,1),
+       hAbove && `side=${hAbove.side} n=(${hAbove.nx},${hAbove.ny})`);
+    const hBelow = snapToWallEdge(hWall, 500, -200, 500);
+    ok('h-wall below: side -1, n=-Y', hBelow && hBelow.side===-1 && near(hBelow.ny,-1),
+       hBelow && `side=${hBelow.side} ny=${hBelow.ny}`);
+
+    const vWall = [{ points: [{x:0,y:0},{x:0,y:1000}] }];
+    const vRight = snapToWallEdge(vWall, 300, 500, 500);
+    ok('v-wall right: axis pt (0,500)', vRight && near(vRight.x,0) && near(vRight.y,500),
+       vRight && `(${vRight.x},${vRight.y})`);
+    ok('v-wall right: angle -90', vRight && near(vRight.wallAngleDeg,-90), vRight && vRight.wallAngleDeg);
+    ok('v-wall right: side -1, n=+X', vRight && vRight.side===-1 && near(vRight.nx,1) && near(vRight.ny,0),
+       vRight && `side=${vRight.side} n=(${vRight.nx},${vRight.ny})`);
+    const vLeft = snapToWallEdge(vWall, -300, 500, 500);
+    ok('v-wall left: side +1, n=-X', vLeft && vLeft.side===1 && near(vLeft.nx,-1),
+       vLeft && `side=${vLeft.side} nx=${vLeft.nx}`);
+
+    const dWall = [{ points: [{x:0,y:0},{x:1000,y:1000}] }];
+    const dUp = snapToWallEdge(dWall, 300, 700, 500);
+    const s2 = Math.SQRT1_2;
+    ok('diag upper-left: q=(500,500)', dUp && near(dUp.x,500) && near(dUp.y,500), dUp && `(${dUp.x},${dUp.y})`);
+    ok('diag upper-left: angle -45', dUp && near(dUp.wallAngleDeg,-45), dUp && dUp.wallAngleDeg);
+    ok('diag upper-left: n=(-.707,.707)', dUp && near(dUp.nx,-s2,0.01) && near(dUp.ny,s2,0.01),
+       dUp && `n=(${dUp.nx.toFixed(3)},${dUp.ny.toFixed(3)})`);
+    const dDn = snapToWallEdge(dWall, 700, 300, 500);
+    ok('diag lower-right: n=(.707,-.707)', dDn && near(dDn.nx,s2,0.01) && near(dDn.ny,-s2,0.01),
+       dDn && `n=(${dDn.nx.toFixed(3)},${dDn.ny.toFixed(3)})`);
+
+    // Out of range → null.
+    ok('out of range → null', snapToWallEdge(hWall, 500, 900, 500) === null);
+    // Invisible walls skipped.
+    ok('invisible wall skipped → null',
+       snapToWallEdge([{ points:[{x:0,y:0},{x:1000,y:0}], kind:'invisible' }], 500, 100, 500) === null);
+
+    // ── Fireplace flush offset (wallT/2 + FIREBOX/2 = 50 + 225 = 275) ───────
+    ok('FIREBOX_DEPTH_MM = 450', FIREBOX_DEPTH_MM === 450, FIREBOX_DEPTH_MM);
+    const flush = 50 + FIREBOX_DEPTH_MM / 2;
+    ok('fireplace flush = 275', flush === 275, flush);
+    const fpWall = [{ points: [{x:0,y:0},{x:2000,y:0}] }];
+    const fp = { x: 1000, y: 100, iconKind: 'fireplace' };
+    ok('fireplace snapped', snapFireplaceToWall(fp, fpWall, 500) === true);
+    ok('fireplace centre = (1000,275)', near(fp.x,1000) && near(fp.y,275), `(${fp.x},${fp.y})`);
+    ok('fireplace rot 180 (opening → room)', near(fp.rotation,180), fp.rotation);
+    const fpB = { x: 1000, y: -100, iconKind: 'fireplace' };
+    snapFireplaceToWall(fpB, fpWall, 500);
+    ok('fireplace below: centre y=-275, rot 0', near(fpB.y,-275) && near(fpB.rotation,0), `(${fpB.y},rot ${fpB.rotation})`);
+    const bulb = { x: 1000, y: 100, iconKind: 'bulb' };
+    ok('non-fireplace light: no-op', snapFireplaceToWall(bulb, fpWall, 500) === false && bulb.y === 100);
+
+    // ── gangSlot: empty / adjacent / occupied-skip / gap-fill ───────────────
+    ok('gangPitch(320,320)=395', gangPitch(320,320) === 395, gangPitch(320,320));
+    ok('gangSlot empty → drop unchanged', gangSlot([], 395, 500) === 500);
+    ok('gangSlot adjacent right', gangSlot([0], 395, 300) === 395, gangSlot([0],395,300));
+    ok('gangSlot adjacent left', gangSlot([0], 395, -300) === -395, gangSlot([0],395,-300));
+    ok('gangSlot skip occupied → next', gangSlot([0,395,790], 395, 420) === 1185, gangSlot([0,395,790],395,420));
+    ok('gangSlot fills the gap', gangSlot([0,790], 395, 420) === 395, gangSlot([0,790],395,420));
+
+    // ── snapSwitchToWall: wall snap + gang (offset 70, rotation) ─────────────
+    const swWallH = [{ points: [{x:0,y:0},{x:3000,y:0}] }];
+    ok('SWITCH_PLATE_DEPTH_MM = 40', SWITCH_PLATE_DEPTH_MM === 40, SWITCH_PLATE_DEPTH_MM);
+    const sw1 = { id:'a', x:500, y:100 };
+    snapSwitchToWall(sw1, [], swWallH, 500);
+    ok('switch1 flush (500,70) rot 0', near(sw1.x,500) && near(sw1.y,70) && near(sw1.rotation,0),
+       `(${sw1.x},${sw1.y}) rot ${sw1.rotation}`);
+    const sw2 = { id:'b', x:700, y:120 };
+    snapSwitchToWall(sw2, [sw1], swWallH, 500);
+    ok('switch2 gangs 1 pitch away (895,70)', near(sw2.x,895) && near(sw2.y,70) && near(sw2.rotation,0),
+       `(${sw2.x},${sw2.y}) rot ${sw2.rotation}`);
+    // Vertical wall → rotation 90.
+    const swWallV = [{ points: [{x:0,y:0},{x:0,y:3000}] }];
+    const swV = { id:'c', x:100, y:500 };
+    snapSwitchToWall(swV, [], swWallV, 500);
+    ok('switch on vertical wall: rot 90, (70,500)', near(swV.rotation,90) && near(swV.x,70) && near(swV.y,500),
+       `(${swV.x},${swV.y}) rot ${swV.rotation}`);
+    // No wall within range → no snap.
+    const swFar = { id:'d', x:2000, y:2000 };
+    ok('switch far from wall: no snap', snapSwitchToWall(swFar, [], swWallH, 500) === false && swFar.y === 2000);
+
+    // ── Alignment: nearest within tolerance / none outside ──────────────────
+    ok('align nearest within tol', nearestAlign(1005, [1000, 2000], 8) === 1000, nearestAlign(1005,[1000,2000],8));
+    ok('align picks nearest of two in tol', nearestAlign(1005, [1000, 1004], 8) === 1004, nearestAlign(1005,[1000,1004],8));
+    ok('align none outside tol → null', nearestAlign(1005, [1000], 3) === null);
+    ok('align empty → null', nearestAlign(1005, [], 8) === null);
+
+    // ── run + report ────────────────────────────────────────────────────────
+    const grid = document.getElementById('grid');
+    let pass = 0;
+    const fails = [];
+    for (const t of tests) {
+      if (t.ok) pass++; else fails.push(t.name);
+      const card = document.createElement('div');
+      card.className = 'card';
+      card.innerHTML = `<div class="row">
+        <span>${t.ok ? '<span class=pass>PASS</span>' : '<span class=fail>FAIL</span>'} ${t.name}</span>
+        <span>${t.detail ?? ''}</span></div>`;
+      grid.appendChild(card);
+    }
+    const total = tests.length;
+    const allPass = pass === total;
+    const title = allPass ? `WALLSNAP PASS ${pass}/${total}` : `WALLSNAP FAIL ${pass}/${total} [${fails.join(',')}]`;
+    document.title = title;
+    const sum = document.getElementById('summary');
+    sum.textContent = title;
+    sum.className = allPass ? 'okbg' : 'badbg';
+  </script>
+</body>
+</html>

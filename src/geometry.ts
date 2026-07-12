@@ -462,6 +462,190 @@ export function snapStepLightToSurface(
   light.rotation = Math.atan2(-best.fx, -best.fy) * 180 / Math.PI;
   return true;
 }
+
+// ── Wall-edge snap (fireplaces flush to a wall, switches ganged on a wall) ──
+// The 3D solid wall run is 100 mm thick (three-renderer `wallThick`), so each
+// wall FACE sits 50 mm off the polyline axis. A firebox is 450 mm deep
+// (three-renderer firebox `D2`, opening on local −Z); a switch plate box is
+// 40 mm deep (three-renderer switch `BoxGeometry` Z). Flush offsets from the
+// axis are therefore wallT/2 + halfDepth: 50 + 225 = 275 for a fireplace,
+// 50 + 20 = 70 for a switch.
+const WALL_HALF_MM = 50;                 // wallThick(100) / 2
+export const FIREBOX_DEPTH_MM = 450;     // three-renderer firebox D2
+export const SWITCH_PLATE_DEPTH_MM = 40; // three-renderer switch BoxGeometry Z
+
+export interface WallEdgeSnap {
+  x: number; y: number;          // nearest point ON the wall axis
+  wallAngleDeg: number;          // segment direction, screen-CW degrees
+  side: 1 | -1;                  // which perpendicular side the query point is on
+  nx: number; ny: number;        // unit normal pointing TOWARD the query point
+  dist: number;
+  segment: { a: Vec2; b: Vec2 };
+}
+
+// Nearest point on any (non-invisible) wall segment to (x, y), within maxMm.
+// Locked walls stay valid targets — snapping never mutates the wall. Invisible
+// walls (planning boundaries with no 3D geometry) are skipped: a fixture can't
+// sit flush against a wall that doesn't render. Returns the axis point, the
+// segment's screen-CW angle, and the outward (cursor-side) normal.
+export function snapToWallEdge(
+  walls: { points: Vec2[]; kind?: WallKind }[],
+  x: number, y: number,
+  maxMm = 500,
+): WallEdgeSnap | null {
+  let best: WallEdgeSnap | null = null;
+  for (const w of walls) {
+    if ((w.kind ?? 'full') === 'invisible') continue;
+    for (let i = 0; i < w.points.length - 1; i++) {
+      const A = w.points[i], B = w.points[i + 1];
+      const dx = B.x - A.x, dy = B.y - A.y;
+      const len2 = dx * dx + dy * dy;
+      if (len2 < 1) continue;
+      const t = Math.max(0, Math.min(1, ((x - A.x) * dx + (y - A.y) * dy) / len2));
+      const qx = A.x + t * dx, qy = A.y + t * dy;
+      const d = Math.hypot(x - qx, y - qy);
+      if (d > maxMm || (best && d >= best.dist)) continue;
+      const len = Math.sqrt(len2);
+      let nx = -dy / len, ny = dx / len;                 // canonical normal
+      const sideSign = (x - qx) * nx + (y - qy) * ny;
+      const side: 1 | -1 = sideSign < 0 ? -1 : 1;
+      if (side < 0) { nx = -nx; ny = -ny; }              // point toward the query
+      best = {
+        x: qx, y: qy,
+        wallAngleDeg: Math.atan2(-dy, dx) * 180 / Math.PI,
+        side, nx, ny, dist: d,
+        segment: { a: { x: A.x, y: A.y }, b: { x: B.x, y: B.y } },
+      };
+    }
+  }
+  return best;
+}
+
+// Fireplace lights lock flush to the nearest wall: the firebox BACK sits on the
+// wall face and the opening (local −Z) faces the room (the cursor's side).
+// Center = axis + normal·(wallT/2 + FIREBOX_DEPTH/2) = axis + normal·275.
+// Rotation follows the light front-axis convention (front = local −Z ⇒
+// rotation = atan2(−fx, −fy); see snapStepLightToSurface). No-op for
+// non-fireplace lights or when no wall is within maxMm. Mutates x / y /
+// rotation; returns whether it snapped.
+export function snapFireplaceToWall(
+  light: { x: number; y: number; rotation?: number; iconKind?: LightIconKind },
+  walls: { points: Vec2[]; kind?: WallKind }[],
+  maxMm = 500,
+): boolean {
+  if ((light.iconKind ?? LIGHT_DEFAULTS.iconKind) !== 'fireplace') return false;
+  const hit = snapToWallEdge(walls, light.x, light.y, maxMm);
+  if (!hit) return false;
+  const off = WALL_HALF_MM + FIREBOX_DEPTH_MM / 2;   // 275
+  light.x = Math.round(hit.x + hit.nx * off);
+  light.y = Math.round(hit.y + hit.ny * off);
+  light.rotation = Math.atan2(-hit.nx, -hit.ny) * 180 / Math.PI;
+  return true;
+}
+
+// Gang spacing between two switch plates: the larger plate size + a fixed gap.
+// Defaults 320 + 75 = 395 (matches the user's hand-built bank pitch).
+export const SWITCH_GANG_GAP_MM = 75;
+export function gangPitch(sizeA: number, sizeB: number): number {
+  return Math.max(sizeA, sizeB) + SWITCH_GANG_GAP_MM;
+}
+
+// Nearest FREE along-wall slot for a new gang member. `existingAlongWall` are
+// the along-wall coordinates (mm) of switches already in the gang; `pitch` the
+// center spacing; `dropAlongWall` where the user dropped along the wall.
+// Returns dropAlongWall unchanged when the gang is empty; otherwise steps one
+// pitch off the nearest member on the drop side and walks outward past any
+// occupied slots (multi-gang). Pure — exported for testing.
+export function gangSlot(existingAlongWall: number[], pitch: number, dropAlongWall: number): number {
+  if (!existingAlongWall.length) return dropAlongWall;
+  let nearest = existingAlongWall[0];
+  for (const a of existingAlongWall) {
+    if (Math.abs(a - dropAlongWall) < Math.abs(nearest - dropAlongWall)) nearest = a;
+  }
+  const dir = dropAlongWall >= nearest ? 1 : -1;
+  const tol = pitch * 0.5;
+  const occupied = (s: number) => existingAlongWall.some(a => Math.abs(a - s) < tol);
+  let slot = nearest + dir * pitch;
+  let guard = 0;
+  while (occupied(slot) && guard++ < 64) slot += dir * pitch;
+  return Math.round(slot);
+}
+
+// Switches lock onto the nearest wall (plate flush: center = axis + normal·70)
+// and GANG with other switches already on the same wall segment. A gang member
+// shares this switch's snapped rotation (±5°) and perpendicular offset (±50 mm)
+// and sits within 2.5 gang pitches along the wall; the new switch aligns into
+// that gang (its offset + rotation) at the nearest free slot on the drop side.
+// No wall within maxMm ⇒ no snap (free placement stays possible). Mutates
+// sw.x / y / rotation; returns whether it snapped.
+//
+// Rotation convention: the 2D plate tick / 3D plate front faces local +Z, so
+// with the cursor-side normal (nx, ny) the plate rotation is atan2(nx, ny)
+// (0 = +Y world; a vertical wall ⇒ 90).
+export function snapSwitchToWall(
+  sw: { id: string; x: number; y: number; rotation?: number; size?: number },
+  switches: { id: string; x: number; y: number; rotation?: number; size?: number }[],
+  walls: { points: Vec2[]; kind?: WallKind }[],
+  maxMm = 500,
+): boolean {
+  const hit = snapToWallEdge(walls, sw.x, sw.y, maxMm);
+  if (!hit) return false;
+  const A = hit.segment.a, B = hit.segment.b;
+  const dx = B.x - A.x, dy = B.y - A.y;
+  const len = Math.hypot(dx, dy) || 1;
+  const ux = dx / len, uy = dy / len;          // along the wall
+  const cx = -dy / len, cy = dx / len;         // canonical normal (matches snapToWallEdge)
+  const off = WALL_HALF_MM + SWITCH_PLATE_DEPTH_MM / 2;   // 70
+  const rotW = Math.atan2(hit.nx, hit.ny) * 180 / Math.PI;
+  const myPerp = hit.side * off;               // signed offset from the axis
+  const myAlong = (sw.x - A.x) * ux + (sw.y - A.y) * uy;
+  const mySize = switchSize(sw);
+
+  const rotDiff = (a: number, b: number) => Math.abs((((a - b) % 360) + 540) % 360 - 180);
+  const members: { along: number; perp: number; rot: number; size: number }[] = [];
+  for (const o of switches) {
+    if (o.id === sw.id) continue;
+    const operp = (o.x - A.x) * cx + (o.y - A.y) * cy;
+    const oalong = (o.x - A.x) * ux + (o.y - A.y) * uy;
+    const orot = switchRotation(o);
+    if (rotDiff(orot, rotW) > 5) continue;
+    // Same SIDE of this wall and reasonably near it — NOT compared against the
+    // flush offset: hand-placed banks sit farther off-axis (the user's at
+    // ~230 mm), and joining their gang adopts THEIR offset (below) instead of
+    // demanding they match the flush constant.
+    if (Math.sign(operp) !== hit.side || Math.abs(operp) > 400) continue;
+    if (Math.abs(oalong - myAlong) > 2.5 * gangPitch(mySize, switchSize(o))) continue;
+    members.push({ along: oalong, perp: operp, rot: orot, size: switchSize(o) });
+  }
+
+  let along = myAlong, perp = myPerp, rot = rotW;
+  if (members.length) {
+    let closest = members[0];
+    for (const m of members) {
+      if (Math.abs(m.along - myAlong) < Math.abs(closest.along - myAlong)) closest = m;
+    }
+    along = gangSlot(members.map(m => m.along), gangPitch(mySize, closest.size), myAlong);
+    perp = closest.perp;   // align the whole bank onto the gang's offset + rotation
+    rot = closest.rot;
+  }
+
+  sw.x = Math.round(A.x + ux * along + cx * perp);
+  sw.y = Math.round(A.y + uy * along + cy * perp);
+  sw.rotation = rot;
+  return true;
+}
+// Nearest candidate coordinate to `v` within `tol` (else null). Drives the
+// smart alignment guides (Feature C) — applied per-axis independently. Pure,
+// exported for testing.
+export function nearestAlign(v: number, candidates: number[], tol: number): number | null {
+  let best: number | null = null, bd = tol;
+  for (const c of candidates) {
+    const d = Math.abs(c - v);
+    if (d < bd) { bd = d; best = c; }
+  }
+  return best;
+}
+
 export function switchHeight(s: { height?: number }): number  { return s.height ?? SWITCH_DEFAULTS.height; }
 export function switchRotation(s: { rotation?: number }): number { return s.rotation ?? SWITCH_DEFAULTS.rotation; }
 export function switchSize(s: { size?: number }): number {

@@ -1,4 +1,4 @@
-import { snap, snapVertex15, distMM, worldToLocal, localToWorld, FURNITURE_KINDS, furnitureCorners, furnitureLocalToWorld, furnitureWorldToLocal, resolveFurnitureDef, resolveFurnitureWallCollision, resolveSeatTableCollision, snapStepLightToSurface, envScale, ENV_SCALE_MIN, ENV_SCALE_MAX } from './geometry.js';
+import { snap, snapVertex15, distMM, worldToLocal, localToWorld, FURNITURE_KINDS, furnitureCorners, furnitureLocalToWorld, furnitureWorldToLocal, resolveFurnitureDef, resolveFurnitureWallCollision, resolveSeatTableCollision, snapStepLightToSurface, snapFireplaceToWall, snapSwitchToWall, nearestAlign, envScale, ENV_SCALE_MIN, ENV_SCALE_MAX } from './geometry.js';
 import { newId } from './storage.js';
 import {
   pxToMm, type View,
@@ -12,9 +12,68 @@ import {
   hitBleProxy,
   hitDoor, hitDoorEnd, hitWindow, hitWindowEnd,
 } from './canvas-hit.js';
-import type { Planner } from './planner.js';
+import type { Planner, Drag } from './planner.js';
 import { NEW_ROOM, NEW_LANDMARK } from './planner.js';
 import type { Vec2, Furniture, ObjectRecipe, Light } from './types.js';
+
+// Drag kinds that move a single placeable and therefore get alignment guides
+// (Feature C). Wall vertices / doors / windows / zones are excluded.
+const ALIGN_MOVE_KINDS = new Set(['sensor', 'motion', 'env', 'ble', 'fixture', 'furnMove']);
+
+// Peer-center candidates for alignment, snapshotted once at drag start. Same
+// category only: lights + switches share one "fixtures" pool; furniture aligns
+// with furniture; each sensor kind with its own kind. The dragged item is
+// excluded.
+function buildAlignCandidates(p: Planner, drag: Drag): { x: number; y: number }[] {
+  const f = p.floor();
+  const out: { x: number; y: number }[] = [];
+  const add = (o: { x: number; y: number }) => out.push({ x: o.x, y: o.y });
+  switch (drag.kind) {
+    case 'fixture': {
+      const draggedId = (drag.fxKind === 'light' ? f.lights : f.switches)[drag.idx]?.id;
+      for (const l of f.lights) if (!(drag.fxKind === 'light' && l.id === draggedId)) add(l);
+      for (const s of f.switches) if (!(drag.fxKind === 'switch' && s.id === draggedId)) add(s);
+      break;
+    }
+    case 'furnMove': {
+      const id = f.furniture[drag.idx]?.id;
+      for (const o of f.furniture) if (o.id !== id) add(o);
+      break;
+    }
+    case 'sensor': for (const o of f.sensors) if (o.id !== drag.id) add(o); break;
+    case 'motion': for (const o of f.motionSensors) if (o.id !== drag.id) add(o); break;
+    case 'env': for (const o of f.envSensors) if (o.id !== drag.id) add(o); break;
+    case 'ble': for (const o of (f.bleProxies ?? [])) if (o.id !== drag.id) add(o); break;
+  }
+  return out;
+}
+
+// The (unlocked) item a move-drag is currently moving, or null. Returned by
+// reference so alignment can nudge its x / y in place.
+function draggedMoveItem(f: ReturnType<Planner['floor']>, drag: Drag)
+    : { x: number; y: number; locked?: boolean } | null {
+  let it: { x: number; y: number; locked?: boolean } | undefined;
+  switch (drag.kind) {
+    case 'fixture': it = (drag.fxKind === 'light' ? f.lights : f.switches)[drag.idx]; break;
+    case 'furnMove': it = f.furniture[drag.idx]; break;
+    case 'sensor': it = f.sensors.find(x => x.id === drag.id); break;
+    case 'motion': it = f.motionSensors.find(x => x.id === drag.id); break;
+    case 'env': it = f.envSensors.find(x => x.id === drag.id); break;
+    case 'ble': it = (f.bleProxies ?? []).find(x => x.id === drag.id); break;
+  }
+  return it && !it.locked ? it : null;
+}
+
+// Snap the dragged item's center to a peer center on X / Y independently (8 px
+// tolerance in mm) and record the active guides. Takes precedence over grid
+// intent — applied after the per-kind move.
+function applyAlignSnap(p: Planner, item: { x: number; y: number }, scale: number): void {
+  const tolMm = 8 / Math.max(scale, 1e-9);
+  const bx = nearestAlign(item.x, p.alignCandidates.map(c => c.x), tolMm);
+  const by = nearestAlign(item.y, p.alignCandidates.map(c => c.y), tolMm);
+  if (bx !== null) { item.x = bx; p.alignGuides.push({ axis: 'x', mm: bx }); }
+  if (by !== null) { item.y = by; p.alignGuides.push({ axis: 'y', mm: by }); }
+}
 
 // Auto-snap a mountable piece (coffee maker, toaster, …) onto a counter-height
 // `surface` piece it's dropped/dragged over: its center testing inside the
@@ -306,6 +365,7 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
     const item = arr[fx.idx];
     p.drag = { kind: 'fixture', fxKind: fx.kind, idx: fx.idx,
                startMm: mm, start: { x: item.x, y: item.y } };
+    p.alignCandidates = buildAlignCandidates(p, p.drag);
     canvas.style.cursor = 'grabbing'; e.preventDefault(); return;
   }
   const fhi = hitFurniture(p, mm);
@@ -313,6 +373,7 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
     p.drag = { kind: 'furnMove', idx: fhi.idx, startMm: mm,
                start: { x: fhi.item.x, y: fhi.item.y } };
     p.activeFurnitureId = fhi.item.id;
+    p.alignCandidates = buildAlignCandidates(p, p.drag);
     canvas.style.cursor = 'grabbing'; e.preventDefault(); return;
   }
   // Door endpoint takes priority over door body so the rotate-handle works
@@ -358,24 +419,28 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
   if (eh) {
     if (p.activeEnvId !== eh.id) p.activeEnvId = eh.id;
     p.drag = { kind: 'env', id: eh.id, startMm: mm, start: { x: eh.x, y: eh.y } };
+    p.alignCandidates = buildAlignCandidates(p, p.drag);
     canvas.style.cursor = 'grabbing'; e.preventDefault(); p.emitConfig(); return;
   }
   const mh = hitMotionSensor(p, view, mm);
   if (mh) {
     if (p.activeMotionId !== mh.id) p.activeMotionId = mh.id;
     p.drag = { kind: 'motion', id: mh.id, startMm: mm, start: { x: mh.x, y: mh.y } };
+    p.alignCandidates = buildAlignCandidates(p, p.drag);
     canvas.style.cursor = 'grabbing'; e.preventDefault(); p.emitConfig(); return;
   }
   const bh = hitBleProxy(p, view, mm);
   if (bh) {
     if (p.activeBleId !== bh.id) p.activeBleId = bh.id;
     p.drag = { kind: 'ble', id: bh.id, startMm: mm, start: { x: bh.x, y: bh.y } };
+    p.alignCandidates = buildAlignCandidates(p, p.drag);
     canvas.style.cursor = 'grabbing'; e.preventDefault(); p.emitConfig(); return;
   }
   const sh = hitSensor(p, view, mm);
   if (sh) {
     if (p.store.activeSensorId !== sh.id) p.setActiveSensor(sh.id);
     p.drag = { kind: 'sensor', id: sh.id, startMm: mm, start: { x: sh.x, y: sh.y } };
+    p.alignCandidates = buildAlignCandidates(p, p.drag);
     canvas.style.cursor = 'grabbing'; e.preventDefault(); return;
   }
   const bgBody = hitBgBody(p, mm);
@@ -665,6 +730,14 @@ export function onCanvasMouseMove(p: Planner, canvas: HTMLCanvasElement, view: V
         break;
       }
     }
+    // Smart alignment guides (Feature C): snap the moved placeable's center to
+    // peer centers on X / Y (edit mode, move-kinds only). Applied AFTER the
+    // per-kind move so guideline snap wins over grid intent.
+    p.alignGuides = [];
+    if (p.uiMode === 'edit' && ALIGN_MOVE_KINDS.has(drag.kind)) {
+      const it = draggedMoveItem(f, drag);
+      if (it) applyAlignSnap(p, it, view.scale);
+    }
     return;
   }
 
@@ -708,6 +781,8 @@ export function onCanvasMouseUp(p: Planner, canvas: HTMLCanvasElement): void {
   const drag = p.drag;
   p.drag = null;
   p.dragJustEnded = true;
+  p.alignGuides = [];
+  p.alignCandidates = [];
   canvas.style.cursor = 'default';
 
   if (drag.kind === 'sensor') {
@@ -751,9 +826,16 @@ export function onCanvasMouseUp(p: Planner, canvas: HTMLCanvasElement): void {
         it.x = drag.start.x; it.y = drag.start.y;
         p.toggleEntity(it.entity_id);
       } else {
-        // Step lights snap flush to the nearest wall face / stair edge on
-        // release (like doors/windows snapOpeningToWall). No-op otherwise.
-        if (drag.fxKind === 'light') snapStepLightToSurface(it as Light, f.walls, f.furniture);
+        // Fixtures snap on release (like doors/windows snapOpeningToWall):
+        // step lights flush to a wall face / stair edge; fireplaces flush to a
+        // wall face (back to the wall, opening to the room); switches to a wall
+        // + gang with neighbours. Each is a no-op unless the fixture qualifies.
+        if (drag.fxKind === 'light') {
+          if (!snapStepLightToSurface(it as Light, f.walls, f.furniture))
+            snapFireplaceToWall(it as Light, f.walls);
+        } else {
+          snapSwitchToWall(it, f.switches, f.walls);
+        }
         p.save();
       }
     }
@@ -1005,12 +1087,17 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
   }
   if (p.tool === 'light') {
     const lt: Light = { id: newId('lt'), x: snap(mm.x, 10), y: snap(mm.y, 10), entity_id: null, label: '' };
-    snapStepLightToSurface(lt, f.walls, f.furniture);  // no-op unless it's a step light
+    // Both no-op unless the fixture is a step light / fireplace (freshly dropped
+    // lights default to 'bulb', so these bite once the kind is set + the piece
+    // is dragged; kept here so a directly-typed kind snaps on drop too).
+    if (!snapStepLightToSurface(lt, f.walls, f.furniture)) snapFireplaceToWall(lt, f.walls);
     f.lights.push(lt);
     p.save(); p.setTool('select'); p.emitConfig(); return;
   }
   if (p.tool === 'switch') {
-    f.switches.push({ id: newId('sw'), x: snap(mm.x, 10), y: snap(mm.y, 10), entity_id: null, label: '' });
+    const swt = { id: newId('sw'), x: snap(mm.x, 10), y: snap(mm.y, 10), entity_id: null, label: '' };
+    snapSwitchToWall(swt, f.switches, f.walls);  // wall snap + gang on drop
+    f.switches.push(swt);
     p.save(); p.setTool('select'); p.emitConfig(); return;
   }
   if (p.tool === 'door') {

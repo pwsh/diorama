@@ -194,6 +194,11 @@ export class Planner extends EventTarget {
   drag: Drag | null = null;
   dragJustEnded = false;
   editZone: EditZone | null = null;
+  // Smart alignment guides (Feature C). Runtime only — never persisted.
+  // `alignGuides` are the active guide lines drawn while moving a placeable;
+  // `alignCandidates` are peer centers snapshotted once at drag start.
+  alignGuides: { axis: 'x' | 'y'; mm: number }[] = [];
+  alignCandidates: { x: number; y: number }[] = [];
 
   conn: ConnStatus | 'connecting' = 'connecting';
   showDetails: boolean;
@@ -285,6 +290,7 @@ export class Planner extends EventTarget {
       // Leave no edit affordances dangling.
       this.drag = null; this.editZone = null; this.drawingWall = null;
       this.tool = 'select'; this.placingRoomId = null; this.placingLandmarkId = null;
+      this.alignGuides = []; this.alignCandidates = [];
     }
     this.emitConfig();
   }

@@ -157,6 +157,33 @@ export function drawAll(ctx: CanvasRenderingContext2D, p: Planner, view: View,
   if (on(L.targets)) drawBlePeople(ctx, p, view);
   // Geo landmark pins + GPS device pins (both ride the `geo` layer).
   if (on(L.geo)) { drawGeoLandmarks(ctx, p, view); drawGpsPins(ctx, p, view); }
+  drawAlignGuides(ctx, p, view);
+}
+
+// Smart alignment guides (Feature C): dashed accent lines through the aligned
+// coordinate, spanning the full canvas. Edit mode only, and only while a
+// move-kind drag is in flight (stale guides never paint).
+const ALIGN_MOVE_KINDS = new Set(['sensor', 'motion', 'env', 'ble', 'fixture', 'furnMove']);
+function drawAlignGuides(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
+  if (p.uiMode !== 'edit' || !p.drag || !ALIGN_MOVE_KINDS.has(p.drag.kind)) return;
+  if (!p.alignGuides.length) return;
+  const c = ctx.canvas;
+  ctx.save();
+  ctx.strokeStyle = 'rgba(79,195,247,0.5)';
+  ctx.lineWidth = 1;
+  ctx.setLineDash([6, 5]);
+  for (const g of p.alignGuides) {
+    ctx.beginPath();
+    if (g.axis === 'x') {
+      const px = mmToPx(view, g.mm, 0).x;
+      ctx.moveTo(px, 0); ctx.lineTo(px, c.height);
+    } else {
+      const py = mmToPx(view, 0, g.mm).y;
+      ctx.moveTo(0, py); ctx.lineTo(c.width, py);
+    }
+    ctx.stroke();
+  }
+  ctx.restore();
 }
 
 // GPS device pins (Feature G, phase G2). Person-colored teardrop + initials,
