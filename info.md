@@ -10,39 +10,43 @@ Click anything to control it.
 
 - **The Sims, for your house** — the whole 3D view renders in a 2000-era
   *Sims* cartoon style: flat toon shading, bold outlines, blob shadows, a
-  dimetric "Sims cam" with 45° snap, and green plumbobs over the people it's
-  tracking.
+  dimetric "Sims cam", a glass-house / wall-cutaway doll's-house view, an
+  auto-follow camera, and green plumbobs over the people it's tracking.
 - **Live presence with personality** — first-class HLK-LD2450 mmWave
   support: multi-sensor, multi-target tracking rendered as animated figures
-  with plumbobs that **walk, sit down, and do contextual activities** —
-  making coffee, loading the dishwasher, watching a TV that's actually on,
-  working out, getting **censored in the shower**, and hiding under the
-  **covers** two-to-a-bed. Zone and object-halo editing writes back to the
-  device.
-- **Thought bubbles** — idle figures show time- and place-aware bubbles: a
-  late-night kitchen snack, a morning coffee, reading on the couch at night,
-  a phone in bed.
-- **Named rooms** — name the spaces your walls enclose (anchors that follow
-  the walls as you edit); labels show in 2D and 3D and feed the activity and
-  bubble systems.
+  that **walk around furniture and through doorways**, sit down, and run
+  contextual activities — making coffee, loading the dishwasher, watching a
+  TV that's actually on, working out, getting **censored in the shower**, and
+  hiding under the **covers** two-to-a-bed. 22 avatar models with their own
+  walk styles; motion sensors can drive room-confined **AI avatars**. Idle
+  figures show time- and place-aware **thought bubbles**.
+- **Know who's who** — a **People** registry (avatars, colors, pets),
+  **Bluetooth/Bermuda** indoor positioning solved right in the panel from
+  your BLE proxies, and **identity fusion** that dresses a precise radar
+  figure in a person's avatar and floating **name label**. **Pets** render as
+  cat/dog rigs.
+- **The world outside** — **GPS device pins** in the yard with a landmark
+  calibration flow, and **weather** (a HA entity, local sensors, or keyless
+  Open-Meteo by ZIP) with a corner chip plus 3D rain, snow, fog, wind, and
+  lightning.
 - **Real floor plans** — walls with 15° snapping and auto-welding, half
-  walls, railings, doors and windows that cut real openings and swing/tilt
-  with their sensors, stairs with landings, and floors clipped to your
-  rooms.
+  walls, railings, doors and five window styles that cut real openings,
+  stairs with landings, floors clipped to your rooms, named rooms, item
+  locking, and smart alignment guides.
 - **A full furniture catalog + a custom object editor** — seating,
-  sectionals, beds, casework with door pulls, kitchen appliances at spec
-  sizes, counter-mounted coffee makers/toasters, bathroom fixtures, exercise
-  equipment, plants, rugs, stairs — and a **form-based editor** to build
-  your own objects from primitive parts, with the live scene as the preview.
-- **Every kind of light** — recessed cans with light shafts, pendants,
-  sconces, step lights, LED strips and strings, under-cabinet lighting,
-  ceiling fans that spin at the fan's actual speed, and a crackling
-  fireplace. Click to toggle, double-click for color/brightness.
+  sectionals, beds, casework with door pulls, spec-size appliances,
+  counter-mounted gadgets, bathroom fixtures, plants, rugs, stairs — and a
+  **form-based editor** to build your own objects from primitive parts.
+- **Every kind of light** — recessed cans, pendants, sconces, step lights,
+  LED strips and strings, under-cabinet lighting, ceiling fans that spin at
+  the fan's actual speed, and a crackling wall-snapping fireplace. Click to
+  toggle, double-click for color/brightness; fans and TVs get device
+  controls.
 - **Sensors everywhere** — motion cones, environmental chips (temperature,
   humidity, CO₂/CO with health-threshold colors), coverage wedges.
 - **Scene modes** — day/dusk/night lighting that can follow the sun or a
-  lux sensor; saved 3D camera views; 2D layer presets including a minimal
-  floorplan with activity glow.
+  lux sensor; saved 3D camera views; 2D + 3D layer presets including a
+  minimal floorplan with activity glow.
 - **Synced through HA** — the whole model lives in Home Assistant user
   data, so every browser and tablet sees the same home.
 - **Kiosk & view-only modes** — pin a wall tablet to a configured view with

@@ -1,5 +1,9 @@
 # DESIGN — The World Outside arc
 
+**STATUS: SHIPPED.** All 8 phases (B1→B2→P1→W1→G1→G2→W2→B3) landed
+2026-07-11 and released as v0.10.0. This document is the historical plan;
+`docs/STATUS.md` + `CLAUDE.md` describe the as-built state.
+
 Planned 2026-07-11 (v0.9.0 baseline). Three features that extend Diorama beyond
 the floor plan: **who** is in the house (BLE identity + trilateration), **where**
 devices are in the real world (GPS + geo calibration), and **what the sky is

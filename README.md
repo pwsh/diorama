@@ -2,17 +2,55 @@
 
 A living model of your Home Assistant home — design your floor plan, drop in
 your devices, and watch state in their actual spatial context. Click anything
-to control it.
+to control it. The 3D view renders in a 2000-era *Sims* cartoon style, with the
+people (and pets) moving through the house shown as animated figures with green
+plumbobs over their heads.
 
-Built as a TypeScript + Vite + Lit project. Currently ships with first-class
-support for HLK-LD2450 mmWave radar sensors (multi-sensor on a shared floor,
-zone editing, object halos, live tracking, animated humanoid targets in 3D)
-but the model is generic — any HA entity can be placed and bound.
+Built as a TypeScript + Vite + Lit project. First-class support for HLK-LD2450
+mmWave radar (multi-sensor, multi-target, in-place zone editing, animated
+figures that walk, sit, and do contextual activities) — but the model is
+generic: any HA entity can be placed and bound, from lights and fans to media
+players and environmental sensors.
+
+![Overview](docs/images/overview-iso.png)
 
 ## Documentation
 
-**[User guide with screenshots →](docs/GUIDE.md)** — furniture, lighting,
-walls & rooms, sensors, target rendering, HA binding, hotkeys, and views.
+**[User guide with screenshots →](docs/GUIDE.md)** — building walls & rooms,
+furniture & custom objects, lighting, sensors, presence & avatars, GPS &
+weather, 3D cameras, kiosk modes, HA binding, and hotkeys.
+
+## Features
+
+- **The Sims, for your house** — flat toon shading, cartoon outlines, blob
+  shadows, a dimetric "Sims cam" with 45° snap, a glass-house / wall-cutaway
+  doll's-house view, and an auto-follow camera.
+- **Live presence with personality** — mmWave figures **walk around furniture
+  and through doorways**, sit down, and run contextual activities: making
+  coffee, loading the dishwasher, watching a TV that's actually on, working
+  out, getting **censored in the shower**, and hiding under the **covers**
+  two-to-a-bed. Time- and place-aware thought bubbles. 22 avatar models with
+  their own walk styles; motion sensors can drive room-confined **AI avatars**.
+- **Know who's who** — a **People** registry (avatars, colors, pets), **BLE /
+  Bermuda** indoor positioning solved panel-side from your Bluetooth proxies,
+  and **identity fusion** that dresses a precise radar figure in a person's
+  avatar and floating **name label**. **Pets** render as cat/dog rigs.
+- **The world outside** — **GPS device pins** in the yard with a landmark
+  calibration flow, and **weather** (entity / local sensors / keyless
+  Open-Meteo) with a corner chip plus 3D rain, snow, fog, wind, and lightning.
+- **Real floor plans** — walls with 15° snapping and auto-welding, half walls
+  and railings, doors and five window styles that cut real openings, stairs
+  with landings, floors clipped to your rooms, named rooms, item locking, and
+  smart alignment guides.
+- **A full catalog + custom objects** — seating, sectionals, beds, casework
+  with door pulls, spec-size appliances, bathroom fixtures, counter-mounted
+  gadgets — plus a form-based editor to build your own objects from primitives.
+- **Every kind of light** — recessed cans, pendants, sconces, step lights, LED
+  strips and strings, under-cabinet lighting, ceiling fans that spin at the
+  fan's real speed, and a crackling wall-snapping fireplace.
+- **Synced through HA** — the whole model lives in Home Assistant user data, so
+  every browser and tablet sees the same home.
+- **Kiosk & view-only modes** — pin a wall tablet to a configured view via URL.
 
 ### Kiosk & view-only modes
 
@@ -220,17 +258,18 @@ Connection settings live in `localStorage` under `diorama:url` and
 
 | Element       | Bind to              | What it surfaces |
 |---------------|----------------------|------------------|
-| LD2450 sensor | LD2450 ESPHome device| Live target tracking, in-place zone editing, object halos, sensor pose (height + tilt from HA), animated humanoid targets in 3D. Per-sensor color tints all of that sensor's targets in 2D + 3D. |
-| Motion sensor | `binary_sensor.*` (or any entity) | Configurable detection cone (heading / FOV / range); cone glows when ON; muted/dashed when OFF; red body when unavailable. Per-sensor **color** + **intensity** (0..2) tune the highlight in both 2D and 3D. |
-| Light         | `light.*`            | Click toggles. Dblclick → color / brightness / color-temp config. Per-fixture height (mm), radius (mm pool of light), intensity multiplier (0..2), and **icon kind** — bulb / spot / pendant / sconce / strip / fireplace / lamp. Fireplace forces warm + flickers. |
-| Switch        | `switch.*` *or* `light.*` (wall-switch wiring) | Click toggles. Dblclick → light config when bound to a light entity. Per-fixture height + rotation. |
-| Furniture     | (no entity)          | Block / table / chair / rocking chair / chaise / bench / desk / sofa / bed / rug / bookshelf. Each kind renders distinct 2D plan-view shape and 3D composite mesh (legs, backrests, headboards, pillows, shelves, etc.). Editable label, kind, width, depth. |
+| mmWave sensor | LD2450 ESPHome device| Live multi-target tracking, in-place zone/object editing, object halos, sensor pose (height + tilt from HA), animated figures in 3D. Per-sensor color + avatar pool. |
+| Motion sensor | `binary_sensor.*` (or any entity) | Configurable detection cone (heading / FOV / range); cone glows when ON. Per-sensor **color** + **intensity**. Optional room-confined **AI avatar**. |
+| Env sensor    | any `sensor.*`       | Value chip (temperature / humidity / CO₂ / CO / PM / VOC / pressure / illuminance); icon + color auto-detected from device class; health-threshold amber/red. |
+| BLE proxy     | ESPHome/Shelly proxy device | Antenna puck fixture; its Bermuda distances feed panel-side trilateration for indoor Bluetooth positioning. |
+| Light         | `light.*`            | Click toggles; dblclick → color/brightness/temp. Per-fixture height, radius, intensity, and **kind** — bulb, pendant, spot, recessed, round, tiered, sconce/wall-sconce, step, bowl/jar/oval, strip, under-cabinet, LED string, floor lamp, ceiling fan (+ light), fireplace. |
+| Switch        | `switch.*` *or* `light.*` | Click toggles; wall-snaps and gangs. Fans expose power + % slider; TVs (`media_player`) expose play/pause, volume, source. |
+| Furniture     | (optional appliance/TV entity) | Seating, sectionals, tables/desks, beds, casework (drawer pulls), spec-size appliances, bathroom fixtures, stairs, counter-mounted gadgets, rugs, plants — plus **custom objects** built from primitives. Sittable pieces anchor seating; some anchor activities. |
+| Person / pet  | Bluetooth device + `person.*`/`device_tracker.*` | Registry entry with a name, color, and avatar (incl. cat/dog pet rigs); drives BLE figures, fused radar figures, and GPS pins. |
 
 Drop on the canvas, bind via the entity picker (filterable by domain or by HA
 device, searchable by entity / friendly / device name). Click toggles,
-double-click opens the deeper config or the bind picker (for unbound
-fixtures). The Furniture tool exposes a kind dropdown so the next drop uses
-that kind's default footprint.
+double-click opens the deeper config or the bind picker.
 
 ## Interactions
 
@@ -242,7 +281,7 @@ that kind's default footprint.
 - **Click on a bound light/switch**: toggle (small movement ≤ 30 mm = click; larger = drag-to-move).
 - **Double-click on a bound light**: color/brightness/temp modal.
 - **Double-click on an unbound fixture**: open the entity picker.
-- **Tools** (sidebar or 1–8 / `m` shortcuts): Select / Wall / LD2450 / Motion / Furniture / Light / Switch / Delete.
+- **Tools**: Select / Wall / mmWave / Motion / Env / BLE / Furniture / Light / Switch / Door / Window / Delete (1–8 and `m` shortcut the first eight).
 
 ### 3D
 - **Orbit / pan / zoom**: standard Three.js OrbitControls (touch-friendly).

@@ -88,6 +88,205 @@
       r.updateTargets([{ key: 't1', x, y: 3000, color: 0x4fc3f7 }]);
     }
     performance.now = realNow;
+  } else if (mode === 'rooms') {
+    // Named rooms: three enclosed regions, two labelled + one left blank so its
+    // faint "Unnamed room" placeholder shows. Labels ride the 3D floor.
+    const rect = (id, x0, x1, y0, y1) => ({ id, points: [
+      { x: x0, y: y0 }, { x: x1, y: y0 }, { x: x1, y: y1 }, { x: x0, y: y1 }, { x: x0, y: y0 } ] });
+    floor.w = 12000; floor.d = 8000;
+    floor.walls = [
+      rect('a', 500, 4200, 500, 7500),
+      rect('b', 4200, 8000, 500, 7500),
+      rect('c', 8000, 11500, 500, 7500),
+    ];
+    floor.furniture = [
+      F('counter', 2350, 1400, 1700, 650, 180), F('fridge', 900, 1300, 900, 760, 180),
+      F('sofa', 6100, 2000, 2000, 900), F('coffee_table', 6100, 3200, 1100, 600),
+      F('bed', 9750, 2500, 1530, 2030, 0),
+    ];
+    floor.rooms = [
+      { id: 'k', name: 'Kitchen', anchor: { x: 2350, y: 4200 } },
+      { id: 'l', name: 'Living room', anchor: { x: 6100, y: 4200 } },
+      { id: 'u', name: '', anchor: { x: 9750, y: 5200 } },
+    ];
+    r.updateFloor(floor, day);
+    r.setCameraView([0, 6600, -8700], [0, 350, 900]);
+  } else if (mode === 'openings') {
+    // A door + two window kinds cut into one wall — clean jambs, real openings.
+    floor.w = 12000; floor.d = 6000;
+    floor.walls = [{ id: 'w1', points: [{ x: 500, y: 3000 }, { x: 11500, y: 3000 }] }];
+    floor.doors = [{ id: 'd1', x: 3200, y: 3000, w: 900, rotation: 0, entity_id: 'binary_sensor.door' }];
+    floor.windows = [
+      { id: 'w_a', x: 6400, y: 3000, w: 1500, rotation: 0, entity_id: 'binary_sensor.win', kind: 'double_hung' },
+      { id: 'w_b', x: 9400, y: 3000, w: 1600, rotation: 0, entity_id: null, kind: 'picture' },
+    ];
+    const st = { 'binary_sensor.door': { state: 'on', attributes: {} }, 'binary_sensor.win': { state: 'on', attributes: {} } };
+    r.updateFloor(floor, day);
+    r.updateDoorsWindows(floor.doors, floor.windows, id => st[id] || null);
+    r.setCameraView([-3000, 1900, -5600], [900, 850, 200]);
+  } else if (mode === 'windows') {
+    // All five glazing styles side by side in one wall.
+    floor.w = 12000; floor.d = 5000;
+    floor.walls = [{ id: 'w1', points: [{ x: 500, y: 2500 }, { x: 11500, y: 2500 }] }];
+    const KINDS = ['single', 'double_hung', 'casement_pair', 'sliding', 'picture'];
+    floor.windows = KINDS.map((k, i) => ({ id: 'w' + i, x: 1500 + i * 2100, y: 2500, w: 1500, rotation: 0, entity_id: null, kind: k }));
+    r.updateFloor(floor, day);
+    r.updateDoorsWindows([], floor.windows, () => null);
+    r.setCameraView([0, 2150, -8600], [0, 1200, 0]);
+  } else if (mode === 'fireplace') {
+    // Hero fireplace shot — open firebox, flush mantel, warm flicker.
+    floor.w = 6000; floor.d = 4000;
+    floor.lights = [{ id: 'fp', x: 3000, y: 2000, entity_id: 'light.fire', iconKind: 'fireplace', rotation: 0, label: '' }];
+    const st = { 'light.fire': { state: 'on', attributes: { brightness: 255 } } };
+    r.updateFloor(floor, { preset: 'night', floorColor: '#2f333c', floorTex: 'none', wallColor: '#6c7686' });
+    r.updateLightsSwitches(floor.lights, [], id => st[id] || null);
+    r.setCameraView([0, 1500, -3400], [0, 650, 0]);
+  } else if (mode === 'fireplace-snapped') {
+    // Fireplace snapped flush against a wall — back sits on the wall face, mantel
+    // no longer pokes through. rotation 180 aims the opening into the room.
+    floor.w = 6000; floor.d = 4000;
+    floor.walls = [{ id: 'w1', points: [{ x: 500, y: 1000 }, { x: 5500, y: 1000 }] }];
+    floor.lights = [{ id: 'fp', x: 3000, y: 1275, entity_id: 'light.fire', iconKind: 'fireplace', rotation: 180, label: '' }];
+    const st = { 'light.fire': { state: 'on', attributes: { brightness: 255 } } };
+    r.updateFloor(floor, { preset: 'dusk', floorColor: '#4a4640', floorTex: 'wood', wallColor: '#b9c0cc', wallCutaway: false });
+    r.updateLightsSwitches(floor.lights, [], id => st[id] || null);
+    r.setCameraView([1900, 1450, 2700], [0, 600, -725]);
+  } else if (mode === 'pets') {
+    // A cat standing + a dog curled on the sofa.
+    floor.w = 8000; floor.d = 6000;
+    floor.walls = [{ id: 'p', points: [{ x: 200, y: 200 }, { x: 7800, y: 200 }, { x: 7800, y: 5800 }, { x: 200, y: 5800 }, { x: 200, y: 200 }] }];
+    floor.furniture = [F('sofa', 6200, 4600, 2000, 900), F('rug', 3000, 3000, 2400, 1600)];
+    floor.rooms = [{ id: 'rm', name: 'Den', anchor: { x: 3000, y: 3000 } }];
+    r.updateFloor(floor, { preset: 'day', floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6' });
+    const ctx = { entityOn: {}, roomNames: { rm: 'Den' }, timeBucket: 'day' };
+    const realNow = performance.now.bind(performance);
+    let fakeNow = realNow();
+    performance.now = () => fakeNow;
+    for (let i = 0; i < 520; i++) {
+      fakeNow += 16.7;
+      r.updateTargets([
+        { key: 'cat', x: 2600, y: 2400, color: 0x9aa3ad, avatar: 'cat' },
+        { key: 'dog', x: 6200, y: 4600, color: 0xa1704a, avatar: 'dog' },
+      ], ctx);
+    }
+    performance.now = realNow;
+    r.setCameraView([-2600, 1700, -4200], [200, 500, 400]);
+  } else if (mode === 'weather-rain' || mode === 'weather-fog') {
+    // Outdoor weather effects over a small furnished house.
+    floor.w = 10000; floor.d = 8000;
+    floor.walls = [{ id: 'w', points: [{ x: 400, y: 400 }, { x: 9600, y: 400 }, { x: 9600, y: 7600 }, { x: 400, y: 7600 }, { x: 400, y: 400 }] }];
+    floor.furniture = [
+      F('sofa', 6600, 2200, 2000, 900), F('coffee_table', 6600, 3400, 1100, 600),
+      F('table', 2600, 2600, 1500, 900), F('bed', 2600, 6200, 1530, 2030),
+    ];
+    r.updateFloor(floor, mode === 'weather-fog'
+      ? { preset: 'dusk', floorColor: '#5a5348', floorTex: 'wood', wallColor: '#c2c8d0' }
+      : { preset: 'day', floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6' });
+    const fx = mode === 'weather-fog'
+      ? { condition: 'fog', intensity01: 0.85, windKmh: 6, windBearingPlanRad: 0.4, isDay: true }
+      : { condition: 'pouring', intensity01: 1.0, windKmh: 26, windBearingPlanRad: 0.35, isDay: true };
+    r.updateWeather(fx);
+    let clk = 1000;
+    const steps = mode === 'weather-fog' ? 480 : 140;
+    for (let i = 0; i < steps; i++) { clk += 1 / 60; r._advanceWeather(1 / 60, clk); }
+    r.applyViewPreset('iso');
+  } else if (mode === 'gps') {
+    // GPS pins in the three zones (indoor / yard / beyond) + a landmark.
+    floor.w = 8000; floor.d = 6000;
+    floor.walls = [{ id: 'w', points: [{ x: 400, y: 400 }, { x: 7600, y: 400 }, { x: 7600, y: 5600 }, { x: 400, y: 5600 }, { x: 400, y: 400 }] }];
+    r.updateFloor(floor, day);
+    r.updateGpsPins([
+      { x: 3200, y: 2600, label: 'Al · indoors', color: '#4fc3f7', stale: true },
+      { x: -3000, y: 3200, label: 'Bo · yard', color: '#81c784', stale: false },
+      { x: 10800, y: 900, label: 'Sam · 210 m NE', color: '#ffb74d', stale: false },
+    ], [
+      { x: 6800, y: 1200, name: 'Mailbox' },
+    ]);
+    r.setCameraView([0, 7200, -13000], [0, 200, 900]);
+  } else if (mode === 'ble') {
+    // BLE presence: antenna proxies on the walls + identified people rigs with
+    // name labels (identity from a BLE tag, position solved by the panel).
+    floor.w = 9000; floor.d = 7000;
+    floor.walls = [{ id: 'w', points: [{ x: 300, y: 300 }, { x: 8700, y: 300 }, { x: 8700, y: 6700 }, { x: 300, y: 6700 }, { x: 300, y: 300 }] }];
+    floor.furniture = [F('sofa', 7000, 5600, 2000, 900), F('table', 2600, 2600, 1500, 900)];
+    r.updateFloor(floor, day);
+    r.updateBleProxies([
+      { id: 'b1', name: 'Kitchen proxy', x: 600, y: 600, height: 2400 },
+      { id: 'b2', name: 'Living proxy', x: 8400, y: 600, height: 2400 },
+      { id: 'b3', name: 'Hall proxy', x: 4500, y: 6400, height: 2400 },
+    ]);
+    const realNow = performance.now.bind(performance);
+    let fakeNow = realNow();
+    performance.now = () => fakeNow;
+    const tgts = () => ([
+      { key: 'p1', x: 3000, y: 3400, color: 0x26c6da, person: { name: 'Alex', color: '#e91e63', avatarKind: 'adult', identified: true } },
+      { key: 'p2', x: 6200, y: 4600, color: 0x26c6da, person: { name: 'Sam', color: '#7e57c2', avatarKind: 'professional', identified: true } },
+    ]);
+    for (let i = 0; i < 150; i++) { fakeNow += 16.7; r.updateTargets(tgts()); }
+    performance.now = realNow;
+    r.setCameraView([0, 3400, -6600], [0, 700, 0]);
+  } else if (mode === 'glass-house') {
+    // Doll's-house: the active floor solid, upper floor a translucent ghost shell.
+    floor.w = 10000; floor.d = 8000;
+    floor.walls = [{ id: 'gw', points: [{ x: 500, y: 500 }, { x: 9500, y: 500 }, { x: 9500, y: 7500 }, { x: 500, y: 7500 }, { x: 500, y: 500 }] }];
+    floor.furniture = [
+      F('sofa', 6500, 2000, 2000, 900), F('coffee_table', 6500, 3100, 1100, 600),
+      F('tv_stand', 6500, 4600, 1600, 450, 180), F('table', 2600, 2600, 1500, 900),
+      F('chair', 2600, 1900, 500, 500), F('fridge', 1000, 7000, 910, 760, 180),
+      F('counter', 2600, 7000, 1800, 650, 180), F('plant', 8800, 7000, 400, 400),
+    ];
+    const upper = {
+      id: 'u', name: 'Upper', w: 10000, d: 8000,
+      walls: [{ id: 'uw', points: [{ x: 2500, y: 2000 }, { x: 7500, y: 2000 }, { x: 7500, y: 6000 }, { x: 2500, y: 6000 }, { x: 2500, y: 2000 }] }],
+      furniture: [F('bed', 5000, 4000, 2000, 1500)],
+      lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+      doors: [], windows: [], bg: null, model3d: null, look3d: null, rooms: [],
+    };
+    const sc = { preset: 'day', floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6', glassHouse: true, wallCutaway: true };
+    r.updateFloor(floor, sc);
+    r.updateGhostFloors([floor, upper], 'f1', sc);
+    r.applyViewPreset('iso');
+    for (let i = 0; i < 120; i++) { r._updateWallCutaway(); r._renderer.render(r._scene, r._camera); }
+  } else if (mode === 'overview') {
+    // Marquee: a furnished doll's-house with named people and light rain.
+    floor.w = 10000; floor.d = 8000;
+    floor.walls = [{ id: 'gw', points: [{ x: 500, y: 500 }, { x: 9500, y: 500 }, { x: 9500, y: 7500 }, { x: 500, y: 7500 }, { x: 500, y: 500 }] }];
+    floor.furniture = [
+      F('sofa', 6600, 2100, 2000, 900), F('coffee_table', 6600, 3300, 1100, 600),
+      F('tv_stand', 6600, 4700, 1600, 450, 180), F('table', 2600, 2600, 1500, 900),
+      F('chair', 2600, 1800, 500, 500), F('chair', 2600, 3400, 500, 500, 180),
+      F('fridge', 1000, 7000, 910, 760, 180), F('counter', 2800, 7000, 2000, 650, 180),
+      F('plant', 8800, 7000, 400, 400), F('rug', 6600, 3000, 2600, 2000),
+    ];
+    floor.lights = [
+      { id: 'l2', x: 1400, y: 2000, entity_id: 'light.on', iconKind: 'lamp', label: '' },
+    ];
+    const upper = {
+      id: 'u', name: 'Upper', w: 10000, d: 8000,
+      walls: [{ id: 'uw', points: [{ x: 2500, y: 2000 }, { x: 7500, y: 2000 }, { x: 7500, y: 6000 }, { x: 2500, y: 6000 }, { x: 2500, y: 2000 }] }],
+      furniture: [F('bed', 5000, 4000, 2000, 1500)],
+      lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+      doors: [], windows: [], bg: null, model3d: null, look3d: null, rooms: [],
+    };
+    const sc = { preset: 'day', floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6', glassHouse: true, wallCutaway: true };
+    r.updateFloor(floor, sc);
+    r.updateGhostFloors([floor, upper], 'f1', sc);
+    r.updateLightsSwitches(floor.lights, [], stOf);
+    const ctx = { entityOn: {}, roomNames: {}, timeBucket: 'day' };
+    const realNow = performance.now.bind(performance);
+    let fakeNow = realNow();
+    performance.now = () => fakeNow;
+    const tgts = () => ([
+      { key: 't1', x: 5600, y: 2100, color: 0x4fc3f7, person: { name: 'Alex', color: '#4fc3f7', avatarKind: 'adult', identified: true } },
+      { key: 't2', x: 3200, y: 4600, color: 0xff8a65, person: { name: 'Sam', color: '#ff8a65', avatarKind: 'professional', identified: true } },
+    ]);
+    for (let i = 0; i < 460; i++) { fakeNow += 16.7; r.updateTargets(tgts(), ctx); }
+    performance.now = realNow;
+    r.updateWeather({ condition: 'rainy', intensity01: 0.75, windKmh: 16, windBearingPlanRad: 0.3, isDay: true });
+    let clk = 1000;
+    for (let i = 0; i < 120; i++) { clk += 1 / 60; r._advanceWeather(1 / 60, clk); }
+    r.applyViewPreset('iso');
+    for (let i = 0; i < 120; i++) { r._updateWallCutaway(); r._renderer.render(r._scene, r._camera); }
   }
   document.title = 'docs ok';
 </script>

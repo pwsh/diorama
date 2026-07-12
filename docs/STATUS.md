@@ -1,14 +1,20 @@
 # Project status & pick-up guide
 
-Last updated: 2026-07-11, at **v0.10.0**. This is the single document to read
-(alongside `CLAUDE.md`) to resume work with full context.
+Last updated: 2026-07-12, at **v0.10.0 + 3 unreleased batches** (editor
+snapping/guides, sidebar UX + Bermuda toggle, rendering/model fixes). This is
+the single document to read (alongside `CLAUDE.md`) to resume work with full
+context.
 
 ## Where things stand
 
-Diorama is feature-complete through the Sims-2000 arc (`docs/DESIGN-sims.md`,
-all 7 phases shipped) plus five post-arc batches. Everything below is merged
-to `main`, pushed to **both remotes**, released through **v0.10.0**, and
-deployed to the live HA instance.
+Diorama is feature-complete through TWO arcs — the Sims-2000 arc
+(`docs/DESIGN-sims.md`, 7 phases) and the World Outside arc
+(`docs/DESIGN-world.md`, 8 phases: BLE identity/trilateration/fusion, pet
+rigs, GPS geo-calibration + pins, weather core + 3D effects) — plus the
+post-arc batches listed below. Everything is merged to `main`, pushed to
+**both remotes**, and deployed to the live HA instance; the GitHub release
+lags at v0.10.0 (the three newest batches ship in the next release the user
+asks for).
 
 ### Remotes, releases, deploy
 
@@ -283,10 +289,13 @@ identity are all in `main`. No successor arc is planned yet.
   (conflicts with watch_tv, needs disambiguation), window gazing.
 - Imported OBJ/MTL models keep their own materials (not toon-converted).
 - iOS 3D load failure unconfirmed — see hardening notes above.
-- GUIDE.md/info.md were refreshed at v0.4.0; features since then
-  (pathfinding, glass house, avatars, device controls, rooms grouping, UI
-  reorg) are **not yet in the user guide** — a docs refresh pass is the most
-  obvious next chore if the user asks for one.
+- Docs refreshed in full 2026-07-12 (GUIDE.md/README.md/info.md rewritten to
+  the current feature set; screenshots regenerated via
+  `test-pages/docs-shots.html` — 12 new modes; keep the generator's modes in
+  sync when features change their look).
+- Live-HA smoke tests still outstanding for: Bermuda discovery + entity
+  enable against a real instance, a landmark calibration walk with a phone,
+  and the Open-Meteo zip search (all code-verified only).
 
 ## Key architecture pointers
 
