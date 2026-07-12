@@ -102,6 +102,19 @@
     eq('entity unavailable → stale',
        resolveWeatherEntity('unavailable', {}, {}).stale, true);
 
+    // ── Forecast extraction (WeatherNow.forecastCondition) ─────────────────
+    eq('entity forecast attr accepted',
+       resolveWeatherEntity('sunny',
+         { forecast: [{ condition: 'rainy' }] }, {}).forecastCondition, 'rainy');
+    eq('entity forecast bogus rejected',
+       resolveWeatherEntity('sunny',
+         { forecast: [{ condition: 'drizzly-ish' }] }, {}).forecastCondition, undefined);
+    eq('entity no forecast → undefined',
+       resolveWeatherEntity('cloudy', {}, {}).forecastCondition, undefined);
+    // wmo daily→forecast mapping is the same table used for tomorrow's code
+    // (forecast is day-framed, so clear maps to sunny not clear-night).
+    eq('wmo daily 65 → pouring forecast', wmoToCondition(65, true), 'pouring');
+
     // ── run + render ────────────────────────────────────────────────────────
     const grid = document.getElementById('grid');
     let pass = 0;

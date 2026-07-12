@@ -6,7 +6,7 @@ import { customElement } from './define.js';
 // startup path never downloads it.
 import type { ThreeDRenderer, ZoneWorld, HaloWorld, TargetWorld, ActivityContext,
   GpsPinWorld, GpsLandmarkWorld, WeatherFxState } from '../three-renderer.js';
-import { localToWorld, transformVerts, pointInPolygon, sensorColor, hexToInt, motionColor } from '../geometry.js';
+import { localToWorld, transformVerts, pointInPolygon, sensorColor, hexToInt, motionColor, lightIconKind, furnitureKind } from '../geometry.js';
 import { compass8 } from '../geo.js';
 import { resolveScenePreset, resolveTimeBucket } from '../time-of-day.js';
 import { conditionIntensity } from '../weather.js';
@@ -260,6 +260,12 @@ export class ThreeView extends LitElement {
   }
 
   private _lastFloorId: string | null = null;
+  // Recent-trigger tracking for thought bubbles: prev on/off per interactive
+  // fixture (light / switch / TV) keyed by item id, and a rolling list of the
+  // last few transitions (world mm + wall-clock). Fed into ActivityContext each
+  // tick; pruned to 45 s / 8 entries; cleared on floor switch.
+  private _trigPrevOn = new Map<string, boolean>();
+  private _recentTrigs: { kind: 'light_on' | 'light_off' | 'fireplace' | 'tv'; x: number; y: number; at: number }[] = [];
   // ?view3d= / ?cam= template application. Saved views live in the HA store,
   // which loads async — retry each tick until found, then fall back to the
   // default iso framing if the named view never appears.
@@ -417,6 +423,8 @@ export class ThreeView extends LitElement {
         this._keyMotion = this._keyEnv = this._keyBle = '';
         this._keyLights = this._keyZones = this._keyHalos = '';
         this._keyGhost = this._keyGps = this._keyWeather = '';
+        this._trigPrevOn.clear();
+        this._recentTrigs.length = 0;
       }
 
       // Layer visibility (shared with the 2D layer flags): group-scoped
@@ -721,7 +729,46 @@ export class ThreeView extends LitElement {
       }
       const roomNames: Record<string, string> = {};
       for (const rm of f.rooms ?? []) roomNames[rm.id] = rm.name;
-      const ctx: ActivityContext = { entityOn, roomNames, timeBucket: resolveTimeBucket(states) };
+      // Weather for weather-flavored idle chatter (null when no source resolved).
+      const wn = p.weatherNow;
+      const weather = wn
+        ? { condition: wn.condition, tempC: wn.tempC, forecastCondition: wn.forecastCondition ?? null }
+        : null;
+      // Recent-trigger scan: detect on/off transitions of interactive fixtures on
+      // the CURRENT floor (lights, switches, TVs) against the prev-on map, and
+      // push world-mm entries. Fireplaces map to the 'fireplace' kind on ON.
+      const nowS = performance.now() / 1000;
+      const note = (id: string, on: boolean,
+                    kind: 'light_on' | 'light_off' | 'fireplace' | 'tv',
+                    x: number, y: number): void => {
+        const prev = this._trigPrevOn.get(id);
+        if (prev === undefined) { this._trigPrevOn.set(id, on); return; }
+        if (prev !== on) {
+          this._trigPrevOn.set(id, on);
+          if (on ? (kind !== 'light_off') : (kind === 'light_off'))
+            this._recentTrigs.push({ kind, x, y, at: nowS });
+        }
+      };
+      for (const l of f.lights) {
+        const st = p.effectiveState(l);
+        const on = st?.state === 'on';
+        const fire = lightIconKind(l) === 'fireplace';
+        note('L' + l.id, on, on ? (fire ? 'fireplace' : 'light_on') : 'light_off', l.x, l.y);
+      }
+      for (const sw of f.switches) {
+        const st = p.effectiveState(sw);
+        const on = st?.state === 'on';
+        note('S' + sw.id, on, on ? 'light_on' : 'light_off', sw.x, sw.y);
+      }
+      for (const fu of f.furniture) {
+        if (furnitureKind(fu) !== 'tv') continue;
+        note('F' + fu.id, entityOn[fu.id] === true, 'tv', fu.x, fu.y);
+      }
+      // Prune >45 s old, then cap at 8 (drop oldest).
+      this._recentTrigs = this._recentTrigs.filter(g => nowS - g.at < 45);
+      if (this._recentTrigs.length > 8) this._recentTrigs.splice(0, this._recentTrigs.length - 8);
+      const recentTriggers = this._recentTrigs.map(g => ({ kind: g.kind, x: g.x, y: g.y, ageS: nowS - g.at }));
+      const ctx: ActivityContext = { entityOn, roomNames, timeBucket: resolveTimeBucket(states), weather, recentTriggers };
       // Targets every frame — persistent rigs mutate in place (no rebuild).
       r.updateTargets(targets, ctx);
   }

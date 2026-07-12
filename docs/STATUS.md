@@ -48,6 +48,32 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Thought-bubble expansion + fixes batch** (`src/three-renderer.ts` +
+  `src/ui/three-view.ts` + `src/weather.ts` + `src/planner.ts` +
+  `src/ui/sidebar.ts`; typecheck + build clean; weather-test up 49→**53/53**
+  with forecast assertions; renderer smoke green — mega / avatar-bubble /
+  avatar-lineup / ai / fidget / phase6): Sonnet-researched glyph vocabulary
+  (Sims 1/2 balloon conventions). NEW top-priority **recent-trigger** bubble
+  tier (fixture flipped <45 s within 3.5 m → 💡/🌙/🔥/📺 pools; three-view
+  tracks flips of lights/switches/TVs via a prev-on map, 45 s / 8-entry list,
+  cleared on floor switch); extended kitchen/seated/bed pools; **generalized
+  idle roll** (`_rollIdleBubble`): personality ×2 + 22-glyph general pool +
+  `weatherBubblePool` (current condition, 🥵/🥶 temp extremes, ☔/⛄ forecast
+  anticipation) + social pool when facing a nearby rig (±75°, 3 m; pet
+  variant); O(n²) scan only at roll time. `WeatherNow.forecastCondition`
+  (Open-Meteo daily code[1]; legacy entity forecast attr best-effort).
+  `ActivityContext` gains OPTIONAL `weather`/`recentTriggers` (stale-chunk
+  safe). **Pants contrast guard** `trouserTone()` (dark tints pick farthest
+  neutral navy/charcoal/khaki/olive deterministically — no more unitard on
+  dark identity colors). **Athlete headband** raised 0.32→0.45·HEAD_R (ring
+  0.98→0.93) — no more monk tonsure. **People GPS status honesty**:
+  `Planner.gpsFixFor` reads the raw fix independent of geo calibration;
+  sidebar distinguishes entity-not-found / no-location / fix-but-uncalibrated
+  ("calibrate a landmark to map it") / full zone line (now always with ±m +
+  age); geo-section pin preview gains an empty-state hint. Stale sidebar
+  "(3D effects arrive in the next phase)" note replaced with an accurate
+  description of the shipped W2 effects.
+
 - **Floor ordering + per-floor disable** (`src/types.ts` + `src/storage.ts` +
   `src/planner.ts` + `src/ui/sidebar.ts` + `src/ui/topbar.ts` + `src/ui/app.ts`
   + `src/ui/three-view.ts`; typecheck + build clean): `Store.floors` array

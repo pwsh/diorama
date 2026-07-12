@@ -29,6 +29,11 @@ export interface WeatherNow {
   isDay: boolean;
   stale: boolean;               // source unhealthy / value held past its freshness window
   label?: string;               // place / entity name for the chip
+  // Tomorrow's condition, when the source exposes a forecast (Open-Meteo daily,
+  // or a legacy weather.* `forecast` attribute). Drives forecast-anticipation
+  // thought bubbles (e.g. an umbrella when rain is coming). Undefined when the
+  // source carries no forecast; null tolerated the same as undefined.
+  forecastCondition?: HaCondition | null;
 }
 
 // Normalized sensor readings fed to deriveFromSensors. All already in metric
@@ -98,7 +103,15 @@ export function resolveWeatherEntity(
   const windBearing = isFinite(wb) ? wb : null;
   const friendly = typeof attrs.friendly_name === 'string' ? attrs.friendly_name : undefined;
   const bad = state === 'unavailable' || state === 'unknown' || state === '';
-  return { condition, tempC, windKmh, windBearing, isDay: day, stale: bad, label: friendly };
+  // Best-effort forecast from the legacy `forecast` attribute (removed in modern
+  // HA; a forecast service call is out of scope). Accept the first entry's
+  // condition only if it's a known HaCondition string, else leave undefined.
+  let forecastCondition: HaCondition | undefined;
+  const fc = (attrs.forecast as Array<Record<string, unknown>> | undefined)?.[0]?.condition;
+  if (typeof fc === 'string' && HA_CONDITIONS.has(fc as HaCondition)) {
+    forecastCondition = fc as HaCondition;
+  }
+  return { condition, tempC, windKmh, windBearing, isDay: day, stale: bad, label: friendly, forecastCondition };
 }
 
 const HA_CONDITIONS = new Set<HaCondition>([
@@ -196,17 +209,27 @@ export async function fetchOpenMeteo(lat: number, lon: number): Promise<WeatherN
   const url = 'https://api.open-meteo.com/v1/forecast'
     + `?latitude=${encodeURIComponent(lat)}&longitude=${encodeURIComponent(lon)}`
     + '&current=temperature_2m,weather_code,wind_speed_10m,wind_direction_10m,is_day'
+    + '&daily=weather_code&forecast_days=2'
     + '&wind_speed_unit=kmh&temperature_unit=celsius&timezone=auto';
   try {
     const res = await fetch(url);
     if (!res.ok) return null;
-    const j = await res.json() as { current?: Record<string, unknown> };
+    const j = await res.json() as {
+      current?: Record<string, unknown>;
+      daily?: { weather_code?: unknown };
+    };
     const c = j.current;
     if (!c) return null;
     const day = c.is_day === 1 || c.is_day === true;
     const t = Number(c.temperature_2m);
     const w = Number(c.wind_speed_10m);
     const wb = Number(c.wind_direction_10m);
+    // Tomorrow's daily code (index 1; index 0 is today). Forecast is framed as
+    // day so a rainy tomorrow reads as 'rainy', not clear-night. Missing daily
+    // block → undefined.
+    const daily = Array.isArray(j.daily?.weather_code) ? j.daily!.weather_code as unknown[] : null;
+    const tomorrow = daily && daily.length > 1 ? Number(daily[1]) : NaN;
+    const forecastCondition = isFinite(tomorrow) ? wmoToCondition(tomorrow, true) : undefined;
     return {
       condition: wmoToCondition(Number(c.weather_code), day),
       tempC: isFinite(t) ? t : null,
@@ -214,6 +237,7 @@ export async function fetchOpenMeteo(lat: number, lon: number): Promise<WeatherN
       windBearing: isFinite(wb) ? wb : null,
       isDay: day,
       stale: false,
+      forecastCondition,
     };
   } catch {
     return null;

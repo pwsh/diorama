@@ -6,7 +6,7 @@ import { stepFusion, newFusionState, DEFAULT_FUSION_CFG,
          type FusionState, type FusionCand } from './fusion.js';
 import { fitGeoTransform, latLonToPlan, clampToBoundary, planBearingDeg, medianLatLon,
          type GeoTransform, type GeoPair, type LatLonSample } from './geo.js';
-import type { GeoConfig, GeoLandmark } from './types.js';
+import type { GeoConfig, GeoLandmark, DioramaPerson } from './types.js';
 
 // ── Bermuda BLE discovery (runtime-only) ──────────────────────────────────
 // One per-scanner distance sensor for a tracked device. `disabled` reflects
@@ -1117,6 +1117,32 @@ export class Planner extends EventTarget {
   // Cheap (a handful of people) — safe to call each frame from 2D/3D. Recompute
   // lives on the config path (bound GPS source ids are slow-classified) so the
   // sidebar re-renders; the 2D canvas RAF reads this getter every frame anyway.
+  // Read the RAW GPS fix for a person's bound GPS source, INDEPENDENT of geo
+  // calibration. Returns null when the person has no GPS source; `found:false`
+  // when the entity isn't in hass.states; lat/lon null when the attributes are
+  // missing/non-numeric. Shares the exact attribute reads, last_updated parse,
+  // and GPS_STALE_MS staleness rule with `gpsPins`, so the sidebar can report a
+  // fix even with no fitted transform.
+  gpsFixFor(pe: DioramaPerson): {
+    entityId: string; found: boolean; lat: number | null; lon: number | null;
+    accuracyM: number | null; lastUpdated: number; stale: boolean;
+  } | null {
+    const eid = pe.haPersonId || pe.gpsTrackerId;
+    if (!eid) return null;
+    const st = this.hass?.states?.[eid];
+    if (!st) {
+      return { entityId: eid, found: false, lat: null, lon: null, accuracyM: null, lastUpdated: 0, stale: false };
+    }
+    const a = st.attributes as Record<string, unknown>;
+    const lat = typeof a.latitude === 'number' ? a.latitude : null;
+    const lon = typeof a.longitude === 'number' ? a.longitude : null;
+    const accuracyM = typeof a.gps_accuracy === 'number' ? a.gps_accuracy : null;
+    const lu = st.last_updated ? Date.parse(st.last_updated) : NaN;
+    const lastUpdated = isFinite(lu) ? lu : 0;
+    const stale = lastUpdated > 0 && (Date.now() - lastUpdated) > Planner.GPS_STALE_MS;
+    return { entityId: eid, found: true, lat, lon, accuracyM, lastUpdated, stale };
+  }
+
   get gpsPins(): GpsPin[] {
     const fitR = this.geoFit();
     if (!fitR || fitR.transform.quality === 'none') return [];
@@ -1127,22 +1153,16 @@ export class Planner extends EventTarget {
     const fw = f.w, fd = f.d;
     const boundaryMm = this.geoBoundaryM() * 1000;
     const cx = fw / 2, cy = fd / 2;
-    const now = Date.now();
     const out: GpsPin[] = [];
     for (const pe of this.store.people ?? []) {
-      const eid = pe.haPersonId || pe.gpsTrackerId;
-      if (!eid) continue;
-      const st = states[eid];
-      if (!st) continue;
-      const a = st.attributes as Record<string, unknown>;
-      const lat = a.latitude, lon = a.longitude;
-      if (typeof lat !== 'number' || typeof lon !== 'number') continue;
+      const fix = this.gpsFixFor(pe);
+      if (!fix || !fix.found || fix.lat == null || fix.lon == null) continue;
+      const lat = fix.lat, lon = fix.lon;
       const plan = latLonToPlan(t, lat, lon);
       if (!plan) continue;
-      const accM = typeof a.gps_accuracy === 'number' ? a.gps_accuracy : null;
-      const lu = st.last_updated ? Date.parse(st.last_updated) : NaN;
-      const lastUpdated = isFinite(lu) ? lu : 0;
-      const stale = lastUpdated > 0 && (now - lastUpdated) > Planner.GPS_STALE_MS;
+      const accM = fix.accuracyM;
+      const lastUpdated = fix.lastUpdated;
+      const stale = fix.stale;
       const indoor = plan.x >= 0 && plan.x <= fw && plan.y >= 0 && plan.y <= fd;
       const inYard = plan.x >= -boundaryMm && plan.x <= fw + boundaryMm
                   && plan.y >= -boundaryMm && plan.y <= fd + boundaryMm;

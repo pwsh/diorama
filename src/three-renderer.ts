@@ -110,6 +110,17 @@ export interface ActivityContext {
   entityOn: Record<string, boolean>;   // furnitureId → bound HA entity is on/playing
   roomNames: Record<string, string>;   // roomId → name
   timeBucket: import('./time-of-day.js').TimeBucket;
+  // OPTIONAL (additive — a stale renderer chunk paired with fresh app.js must
+  // keep working; see the mixed-version gotcha in CLAUDE.md). Both feed thought
+  // bubbles only.
+  // Current weather for weather-flavored idle chatter (condition + temp + a
+  // best-effort tomorrow forecast for anticipation glyphs). Null when no source.
+  weather?: { condition: string; tempC: number | null; forecastCondition?: string | null } | null;
+  // Recently toggled interactive fixtures (lights/switches/TVs/fireplaces) —
+  // x/y in WORLD mm, ageS since the transition. Drives the top-priority
+  // "someone just flipped this near me" bubble tier. three-view maintains the
+  // rolling list (prev-on map + 45 s / 8-entry cap).
+  recentTriggers?: { kind: 'light_on' | 'light_off' | 'fireplace' | 'tv'; x: number; y: number; ageS: number }[];
 }
 
 // A seat a humanoid can settle onto (scene coords). Collected from sittable
@@ -422,20 +433,94 @@ const IDLE_FIDGET_DUR: Record<string, number> = {
   check_watch: 2.2, cross_arms: 3.6, foot_tap: 2.8, glance: 1.7,
 };
 
-// Context thought-bubble POOLS (Phase 6 refresh). The contextual tiers used to
-// map each context to ONE fixed glyph — a seated person in the evening was
-// *always* thinking about a book. They now pick at random from a weighted pool
-// (repeats bias the odds) once per engagement, held stable by the resolver so
-// the 2.5 s hysteresis still commits. Every glyph here is a plain emoji that
-// renders through the same canvas-sprite pipeline as the role / chatter bubbles
-// (verified in avatar-bubble.html), and its per-rig CanvasTexture is freed in
-// _disposeHumanoid — no new shared resources. Weather-aware options were
-// considered but the ActivityContext doesn't carry weather and threading it
-// through would be more plumbing than it's worth here, so they're omitted.
-const BUBBLE_POOL_SEATED_EVE = ['📖', '📱', '🎵', '📺', '🍪', '💤', '💭'];
-const BUBBLE_POOL_KITCHEN_MORNING = ['☕', '🥞', '🍳', '🧇'];
-const BUBBLE_POOL_KITCHEN_NIGHT = ['🍪', '🍕', '🧀', '🍫'];
-const BUBBLE_POOL_BED = ['📱', '💤', '💭', '⭐'];
+// Context thought-bubble POOLS (Phase 6 refresh + weather/social expansion).
+// The contextual tiers used to map each context to ONE fixed glyph — a seated
+// person in the evening was *always* thinking about a book. They now pick at
+// random from a weighted pool (repeats bias the odds) once per engagement, held
+// stable by the resolver so the 2.5 s hysteresis still commits. Every glyph
+// here is a plain emoji that renders through the same canvas-sprite pipeline as
+// the role / chatter bubbles (verified in avatar-bubble.html), and its per-rig
+// CanvasTexture is freed in _disposeHumanoid — no new shared resources.
+// Weather is now plumbed through ActivityContext (three-view builds it from
+// p.weatherNow), so the idle roll below folds weather + forecast anticipation
+// glyphs in — see weatherBubblePool.
+const BUBBLE_POOL_SEATED_EVE = ['📖', '📱', '🎵', '📺', '🍪', '💤', '💭', '🎧', '📻', '🍷', '🎮'];
+const BUBBLE_POOL_KITCHEN_MORNING = ['☕', '🥞', '🍳', '🧇', '🥐', '🍊', '🍳'];
+const BUBBLE_POOL_KITCHEN_NIGHT = ['🍪', '🍕', '🧀', '🍫', '🍿', '🍦'];
+const BUBBLE_POOL_BED = ['📱', '💤', '💭', '⭐', '🛌', '🧸', '🌜'];
+
+// Recent-trigger tier pools (someone just flipped a fixture near the rig). Keyed
+// by the trigger kind three-view records; repeats bias the odds.
+const BUBBLE_POOL_TRIGGER: Record<string, string[]> = {
+  light_on: ['💡', '💡', '✨', '😲'],
+  light_off: ['🌙'],
+  fireplace: ['🔥', '🔥', '😎', '🕯️'],
+  tv: ['📺', '🍿'],
+};
+
+// General idle-chatter pool (mixed into the personality roll so a walking /
+// standing rig isn't limited to its 2-glyph kind flavor).
+const BUBBLE_POOL_GENERAL = ['🍔', '☕', '📺', '📖', '🎵', '💻', '🎮', '💼', '✈️', '🛋️', '😴', '💰', '👀', '🐾', '🌱', '🎨', '🛒', '🎉', '🍳', '🎲', '🎸', '🏋️'];
+
+// Social pool — mixed in when the rig is facing a nearby peer. A noticed pet
+// swaps to the pet variant.
+const BUBBLE_POOL_SOCIAL = ['👋', '💬', '😊', '🤔', '😄', '👀', '🙋', '😂'];
+const BUBBLE_POOL_SOCIAL_PET = ['🐾', '😊', '😄'];
+
+// Map the current weather (+ tomorrow's forecast) into a small idle-chatter
+// pool. Pure — folded into the composite idle roll when ctx.weather is set.
+// Forecast anticipation: rain-ish tomorrow while dry now → umbrellas; snow-ish
+// tomorrow while not snowing now → a snowman.
+function weatherBubblePool(
+  w: { condition: string; tempC: number | null; forecastCondition?: string | null },
+): string[] {
+  const out: string[] = [];
+  switch (w.condition) {
+    case 'rainy': case 'pouring': out.push('🌧️', '☔'); break;
+    case 'lightning': case 'lightning-rainy': out.push('⛈️', '⚡'); break;
+    case 'snowy': case 'snowy-rainy': out.push('❄️', '⛄'); break;
+    case 'fog': out.push('🌫️'); break;
+    case 'windy': case 'windy-variant': out.push('💨'); break;
+    case 'sunny': out.push('☀️', '😎'); break;
+    case 'clear-night': out.push('🌜', '⭐'); break;
+    case 'cloudy': case 'partlycloudy': out.push('⛅'); break;
+  }
+  if (w.tempC != null && w.tempC >= 30) out.push('🥵');
+  if (w.tempC != null && w.tempC <= 0) out.push('🥶');
+  const rainish = (x?: string | null) => x === 'rainy' || x === 'pouring' || x === 'lightning-rainy';
+  const snowish = (x?: string | null) => x === 'snowy' || x === 'snowy-rainy';
+  const fc = w.forecastCondition;
+  if (fc && rainish(fc) && !rainish(w.condition)) out.push('☔', '☔');
+  if (fc && snowish(fc) && !snowish(w.condition)) out.push('⛄');
+  return out;
+}
+
+// Trouser tone for tint-legged rigs (see the pants block in _buildHumanoid).
+// Bright identity tints (luma ≥ 110) keep the classic derivation — the tint
+// × 0.5, same hue half brightness — which reads clearly under the toon bands.
+// DARK / deeply-saturated tints (navy, dark red, …) halve into a tone nearly
+// indistinguishable from the torso (the unitard look returns), so those pick a
+// NEUTRAL trouser from a small palette instead: deterministically (never
+// Math.random — pants must be stable across rebuilds/recolors of the same
+// identity color) the entry with the maximum summed per-channel RGB distance
+// from the tint, tie-broken by lowest palette index.
+const TROUSER_PALETTE = [0x3b4a63 /* navy */, 0x4a4f55 /* charcoal */,
+                         0x8a7a5c /* khaki */, 0x5a6b52 /* olive */];
+function trouserTone(color: number): number {
+  const r = (color >> 16) & 0xff, g = (color >> 8) & 0xff, b = color & 0xff;
+  const luma = 0.299 * r + 0.587 * g + 0.114 * b;
+  if (luma >= 110) {
+    return (Math.round(r * 0.5) << 16) | (Math.round(g * 0.5) << 8) | Math.round(b * 0.5);
+  }
+  let best = TROUSER_PALETTE[0], bestD = -1;
+  for (const p of TROUSER_PALETTE) {
+    const d = Math.abs(((p >> 16) & 0xff) - r)
+            + Math.abs(((p >> 8) & 0xff) - g)
+            + Math.abs((p & 0xff) - b);
+    if (d > bestD) { bestD = d; best = p; }   // strict > → lowest index wins ties
+  }
+  return best;
+}
 
 // djb2 hash of a string → unsigned 32-bit. Used to map a target key to a stable
 // concrete avatar kind when the sensor requests 'random'.
@@ -5907,8 +5992,7 @@ export class ThreeDRenderer {
         } else {
           h.chatterNext -= dt;
           if (h.chatterNext <= 0) {
-            const pool = AVATAR_BUBBLES[h.avatarKind] ?? AVATAR_BUBBLES.adult!;
-            h.chatterGlyph = pool[(Math.random() * pool.length) | 0];
+            h.chatterGlyph = this._rollIdleBubble(h, ctx);
             h.chatterT = 7.5;
           }
         }
@@ -5916,7 +6000,7 @@ export class ThreeDRenderer {
         h.chatterT = 0;
         h.chatterNext = 25 + Math.random() * 35;
       }
-      const want = this._resolveBubbleKind(h, tb, roomName, inBedAlone, bedHidden);
+      const want = this._resolveBubbleKind(h, tb, roomName, inBedAlone, bedHidden, ctx, t);
       // Hysteresis: accumulate dwell only while the raw resolution holds steady;
       // any change resets the timer. Commit (and rebuild) once it's been stable
       // for 2.5 s.
@@ -6027,23 +6111,44 @@ export class ThreeDRenderer {
   }
 
   // Resolve the thought-bubble glyph for a humanoid this frame (raw, pre-
-  // hysteresis). String compares only. Priority (first match wins):
+  // hysteresis). String compares + a short nearest-trigger scan. Priority
+  // (first match wins):
   //   1. engaged activity / privacy → null (the pose already says it all).
   //   2. hidden under bed covers → null.
-  //   3. late-night|night, kitchen, standing idle → kitchen-night POOL.
-  //   4. morning, kitchen, standing idle → kitchen-morning POOL.
-  //   5. evening|night|late-night, seated → seated POOL (activity is null here,
+  //   3. a fixture flipped recently (<45 s) within 3.5 m → trigger POOL.
+  //   4. late-night|night, kitchen, standing idle → kitchen-night POOL.
+  //   5. morning, kitchen, standing idle → kitchen-morning POOL.
+  //   6. evening|night|late-night, seated → seated POOL (activity is null here,
   //      so the room's TV is off — otherwise h.activity would be 'watch_tv').
-  //   6. sole occupant idling in a bed → bed POOL.
-  // The contextual tiers (3-6) pick from a weighted pool rather than one fixed
+  //   7. sole occupant idling in a bed → bed POOL.
+  // The contextual tiers (3-7) pick from a weighted pool rather than one fixed
   // glyph: `_pickCtxBubble` rolls ONCE per engagement and holds the pick while
   // the tier holds (so hysteresis still commits, and the avatar isn't locked to
   // one thought). A cleared tier falls through to personality chatter.
   private _resolveBubbleKind(h: Humanoid, tb: import('./time-of-day.js').TimeBucket,
                              roomName: string, inBedAlone: boolean,
-                             bedHidden: boolean): string | null {
+                             bedHidden: boolean,
+                             ctx?: ActivityContext, t?: TargetWorld): string | null {
     if (h.activity != null || h.privacy > 0.3) { h.ctxBubbleTier = null; return null; }
     if (bedHidden) { h.ctxBubbleTier = null; return null; }
+    // Recent-trigger tier: nearest fixture toggled in the last 45 s within
+    // 3.5 m of the rig's RAW world position (t.x/t.y — anti-feedback: never the
+    // eased visual pose). Trigger x/y are world mm, same frame as t.
+    const trigs = ctx?.recentTriggers;
+    if (trigs && trigs.length && t) {
+      const R2 = 3500 * 3500;
+      let best: { kind: string; d2: number } | null = null;
+      for (const g of trigs) {
+        if (g.ageS >= 45) continue;
+        const dx = g.x - t.x, dy = g.y - t.y;
+        const d2 = dx * dx + dy * dy;
+        if (d2 <= R2 && (!best || d2 < best.d2)) best = { kind: g.kind, d2 };
+      }
+      if (best) {
+        const pool = BUBBLE_POOL_TRIGGER[best.kind] ?? BUBBLE_POOL_TRIGGER.light_on;
+        return this._pickCtxBubble(h, 'trigger_' + best.kind, pool);
+      }
+    }
     const inKitchen = roomName.includes('kitchen');
     const standingIdle = h.sit < 0.3 && h.dwell > 1.5;
     if ((tb === 'late_night' || tb === 'night') && inKitchen && standingIdle)
@@ -6073,6 +6178,39 @@ export class ThreeDRenderer {
       h.ctxBubbleGlyph = pool[(Math.random() * pool.length) | 0];
     }
     return h.ctxBubbleGlyph;
+  }
+
+  // Roll one glyph for the lowest-priority idle-chatter tier (fired by the timer
+  // in updateTargets, allowed while walking). Composite pool, built once per
+  // roll — this is the ONLY place an O(n²) rig scan is affordable (rigs are few,
+  // rolls are ~30 s apart), NOT per frame:
+  //   • per-kind personality flavor, listed TWICE so it stays prominent,
+  //   • the shared general pool,
+  //   • a weather pool (current condition + temp extremes + forecast) when
+  //     ctx.weather is set,
+  //   • a social pool when another live rig is within 3 m and in this rig's
+  //     front hemisphere (±~75° of facing; body-forward is scene −Z).
+  private _rollIdleBubble(h: Humanoid, ctx?: ActivityContext): string {
+    const personality = AVATAR_BUBBLES[h.avatarKind] ?? AVATAR_BUBBLES.adult!;
+    const pool: string[] = [...personality, ...personality, ...BUBBLE_POOL_GENERAL];
+    if (ctx?.weather) pool.push(...weatherBubblePool(ctx.weather));
+    // Social: scan the other rigs for one this rig is looking at. Front-forward
+    // in scene XZ for a Y-rotation of `facing` is (−sin, −cos) (local −Z).
+    const fx = -Math.sin(h.facing), fz = -Math.cos(h.facing);
+    let noticedQuad = false, noticed = false;
+    for (const key in this._humanoids) {
+      const hh = this._humanoids[key];
+      if (hh === h || !hh.group.visible || hh.scale <= 0.5) continue;
+      const dx = hh.navX - h.navX, dz = hh.navZ - h.navZ;
+      const d2 = dx * dx + dz * dz;
+      if (d2 > 3000 * 3000 || d2 < 1) continue;
+      const inv = 1 / Math.sqrt(d2);
+      if ((dx * inv) * fx + (dz * inv) * fz < 0.2588) continue;  // cos 75°
+      noticed = true;
+      if (hh.quad) noticedQuad = true;
+    }
+    if (noticed) pool.push(...(noticedQuad ? BUBBLE_POOL_SOCIAL_PET : BUBBLE_POOL_SOCIAL));
+    return pool[(Math.random() * pool.length) | 0];
   }
 
   // Reconcile a humanoid's committed bubble kind with its live sprite: build /
@@ -6465,13 +6603,16 @@ export class ThreeDRenderer {
       panel.position.set(TORSO_W * 0.18, torsoY + TORSO_H * 0.16, frontZ - 6 * sk);
       root.add(panel);
     } else if (kind === 'athlete') {
-      // White headband around the forehead.
+      // White headband around the forehead. Sits high (0.45·HEAD_R above the
+      // head center) so it rides above the brow instead of reading as a monk's
+      // tonsure; the major radius hugs the sphere's smaller circle at that
+      // height (≈0.89·HEAD_R → 0.93·HEAD_R with the tube).
       const band = new THREE.Mesh(
-        new THREE.TorusGeometry(HEAD_R * 0.98, HEAD_R * 0.13, 8, 20),
+        new THREE.TorusGeometry(HEAD_R * 0.93, HEAD_R * 0.13, 8, 20),
         this._mat({ color: 0xf2f2f2, roughness: 0.65, metalness: 0.0 }),
       );
       band.rotation.x = Math.PI / 2;
-      band.position.set(0, headY + HEAD_R * 0.32, 0);
+      band.position.set(0, headY + HEAD_R * 0.45, 0);
       root.add(band);
       // Shorts: a darker lower-torso overlay (slightly proud so it never lands
       // coplanar with the torso faces — see the coincident-face gotcha).
@@ -7303,17 +7444,18 @@ export class ThreeDRenderer {
     // Trouser tone: plain rigs whose legs would otherwise render in the raw
     // identity tint (spec.skin === the passed-in `color`) read as a head-to-toe
     // unitard ("missing pants"). Give BOTH leg segments (upper + lower — not the
-    // shoes, which keep spec.shoe) a derived trouser tone: the tint multiplied
-    // ~0.5× to darken it, so a torso/pants boundary reads under the toon bands.
+    // shoes, which keep spec.shoe) a derived trouser tone via `trouserTone`:
+    // bright tints (luma ≥ 110) get the tint × 0.5 so the boundary reads under
+    // the toon bands; DARK tints (whose halved tone would be muddy/indistinct)
+    // get the farthest neutral from a small trouser palette — deterministic, so
+    // the pants stay stable across rebuilds/recolors of the same identity color.
     // Derived HERE from whatever `color` was passed in (per-sensor tint / fused
     // person / BLE person), so it tracks every recolor path without a cached
     // constant. Kinds with an explicit spec.legColor (duck) or a non-tint skin
     // (robot/alien/hacker/ninja/wise_oracle/…) keep their costume legs untouched.
     // Per-rig material (not a shared style resource).
     const legIsTint = spec.legColor == null && spec.skin === color;
-    const pants = ((Math.round(((color >> 16) & 0xff) * 0.5) << 16)
-      | (Math.round(((color >> 8) & 0xff) * 0.5) << 8)
-      | Math.round((color & 0xff) * 0.5));
+    const pants = trouserTone(color);
     const baseLegMat = spec.legColor != null
       ? this._mat({ color: spec.legColor, emissive: spec.legColor, emissiveIntensity: 0.2, metalness: 0.1, roughness: 0.6 })
       : legIsTint

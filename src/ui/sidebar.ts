@@ -1047,17 +1047,26 @@ export class Sidebar extends LitElement {
   // no current fix (uncalibrated transform or missing lat/lon) reads muted.
   private _gpsStatusLine(pe: DioramaPerson) {
     if (!pe.haPersonId && !pe.gpsTrackerId) return nothing;
+    const dim = (msg: string) => html`<div style="font-size:10px;color:var(--text-dim);padding:0 0 3px 20px">${msg}</div>`;
+    const fix = this.planner.gpsFixFor(pe);
+    if (!fix) return nothing;
+    if (!fix.found) return dim(`GPS: entity not found (${fix.entityId})`);
+    if (fix.lat == null || fix.lon == null) return dim(`GPS: no location from ${fix.entityId}`);
+    const accTxt = fix.accuracyM != null ? ` · ±${Math.round(fix.accuracyM)}m` : '';
     const pin = this.planner.gpsPins.find(g => g.personId === pe.id);
-    if (!pin) {
-      return html`<div style="font-size:10px;color:var(--text-dim);padding:0 0 3px 20px">
-        GPS: no current fix</div>`;
+    if (pin) {
+      const where = pin.zone === 'indoor'
+        ? `indoors ~±${Math.round(pin.accuracyMm / 1000)} m`
+        : `${Math.round(pin.distanceM)} m ${compass8(pin.bearingDeg)}`;
+      // Append accuracy only when the "where" text doesn't already carry it (indoor does),
+      // and the age (previously stale-only; now always so a fresh fix reads its age too).
+      const acc = pin.zone === 'indoor' ? '' : accTxt;
+      const age = ` · ${gpsAgeText(pin.lastUpdated)}`;
+      return html`<div style="font-size:10px;color:${pin.stale ? 'var(--text-dim)' : '#4dd0e1'};padding:0 0 3px 20px">
+        ${gpsZoneGlyph(pin.zone)} ${where}${acc}${age}</div>`;
     }
-    const where = pin.zone === 'indoor'
-      ? `indoors ~±${Math.round(pin.accuracyMm / 1000)} m`
-      : `${Math.round(pin.distanceM)} m ${compass8(pin.bearingDeg)}`;
-    const stale = pin.stale ? ` · ${gpsAgeText(pin.lastUpdated)}` : '';
-    return html`<div style="font-size:10px;color:${pin.stale ? 'var(--text-dim)' : '#4dd0e1'};padding:0 0 3px 20px">
-      ${gpsZoneGlyph(pin.zone)} ${where}${stale}</div>`;
+    // Fix exists but the geo transform is uncalibrated (quality 'none') → no pin.
+    return dim(`GPS: fix${accTxt} · ${gpsAgeText(fix.lastUpdated)} — calibrate a landmark to map it`);
   }
 
   private _personEditor(pe: DioramaPerson) {
@@ -2753,7 +2762,10 @@ export class Sidebar extends LitElement {
                  @change=${(e: Event) => set(x => { x.affectLighting = (e.target as HTMLInputElement).checked; })}>
         </label>
         <div style="font-size:10px;color:var(--text-dim);line-height:1.3;margin:2px 0 6px">
-          (3D effects arrive in the next phase)
+          3D effects: rain / snow / hail / fog / wind dust / lightning around the
+          house, matched to the live condition. "Affect lighting" dims the day
+          preset under overcast weather. The "Weather FX" entry in 2D Layers
+          also gates the effects.
         </div>
 
         <div style="font-size:11px;padding:6px 8px;background:rgba(0,0,0,0.25);border-radius:4px;line-height:1.4">
@@ -3090,7 +3102,15 @@ export class Sidebar extends LitElement {
   // distance/accuracy + staleness. Mirrors what the 2D/3D pins show.
   private _gpsPinsPreview() {
     const pins = this.planner.gpsPins;
-    if (!pins.length) return nothing;
+    if (!pins.length) {
+      // No pins (typically an uncalibrated geo transform). If raw fixes exist,
+      // say so — otherwise the empty section looks like nobody is reporting.
+      const reporting = (this.planner.store.people ?? [])
+        .filter(pe => { const f = this.planner.gpsFixFor(pe); return f?.found && f.lat != null && f.lon != null; }).length;
+      if (!reporting) return nothing;
+      return html`<div style="margin-top:8px;font-size:10px;color:var(--text-dim)">
+        fixes exist but need a calibrated landmark: ${reporting} person${reporting === 1 ? '' : 's'} reporting</div>`;
+    }
     return html`
       <div style="margin-top:8px">
         <div style="font-size:11px;color:var(--text-dim);margin-bottom:3px">GPS pins</div>

@@ -59,24 +59,27 @@
   }
   performance.now = realNow;
   const h = r._humanoids['bt'];
-  // Personality-chatter POOLS (mirror AVATAR_BUBBLES in three-renderer.ts for
-  // the kinds this test drives). In WALK mode every committed non-null bubble
-  // must be a glyph FROM the walking kind's pool (chatter fires while walking);
-  // in WASH mode an engaged activity must SUPPRESS the bubble (final = null).
+  // Idle-chatter POOLS. The idle roll now composites the per-kind personality
+  // pool (AVATAR_BUBBLES, listed twice) with a shared GENERAL pool (and, when
+  // present, weather + social pools — neither applies in this single-rig,
+  // no-weather scene). So in WALK mode every committed non-null bubble must be a
+  // glyph from (personality ∪ general). In WASH mode an engaged activity must
+  // SUPPRESS the bubble (final = null). Mirror the consts in three-renderer.ts.
   const CHATTER = {
     cowboy: ['🤠','🐴'], adult: ['💭'], astronaut: ['🚀','⭐'],
     magician: ['🎩','✨','🐇'], athlete: ['🏆','💪'], farmer: ['🌽','🚜'],
   };
+  const GENERAL = ['🍔','☕','📺','📖','🎵','💻','🎮','💼','✈️','🛋️','😴','💰','👀','🐾','🌱','🎨','🛒','🎉','🍳','🎲','🎸','🏋️'];
   const committed = transitions.map(s => s.split(':')[1]).filter(g => g && g !== '-');
   let pass, note;
   if (mode === 'wash') {
     pass = (h?.bubbleKind ?? null) === null && h?.activity != null;
     note = `act=${h?.activity ?? '-'} finalBub=${h?.bubbleKind ?? '-'}`;
   } else {
-    const pool = CHATTER[kind] || null;
-    const allInPool = pool ? committed.every(g => pool.includes(g)) : true;
+    const pool = (CHATTER[kind] || []).concat(GENERAL);
+    const allInPool = committed.every(g => pool.includes(g));
     pass = committed.length >= 1 && allInPool;
-    note = `pool=[${pool?pool.join(''):'?'}] committed=[${committed.join('')}] allInPool=${allInPool}`;
+    note = `pool=[${(CHATTER[kind]||['?']).join('')}+general] committed=[${committed.join('')}] allInPool=${allInPool}`;
   }
   document.title = `BUBBLE ${pass?'PASS':'FAIL'} mode=${mode} kind=${kind} ${note} ` +
     `chatterT=${h?.chatterT.toFixed(1)} next=${h?.chatterNext.toFixed(1)} trans=[${transitions.join(' ')}]`;
