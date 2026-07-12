@@ -46,6 +46,42 @@ asks for).
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Avatar appearance + behavior batch** (4 user requests, `src/three-renderer.ts`
+  + test pages; no Store changes; typecheck + build clean; regression titles
+  green). Builds on the pants change (kept, not reverted):
+  1. *Faces + hats/hair off the eyes*: every rig now has readable features
+     scaled to the oversized head — white-sclera eye + proud dark iris/pupil
+     (`makeEye`), angled brow (`makeBrow`), a small darkened-skin nose bump
+     (`noseMat`), and a slim smile (mid + up-turned corners). Skin ears
+     (`makeEar`) on the sides except side-covered kinds (`EAR_SKIP`); cyborg gets
+     only its organic ear. Kind-specific eyes (visor/almond/shades/slit/redvisor/
+     halfred) keep their look. The **hacker hood** and **supermodel hair cap**
+     were raised + tilted back with trimmed `phiLength` so their front rim rides
+     above the brow instead of draping to eye level. Verified per-kind in
+     front-view lineup screenshots (all 24 kinds).
+  2. *Bubble variety + un-rigid rules*: the contextual bubble tiers now pick from
+     weighted **pools** (`BUBBLE_POOL_*`, ~15 new glyphs) instead of one fixed
+     glyph — a seated evening avatar is no longer locked to 📖. `_pickCtxBubble`
+     rolls once per engagement and holds (`ctxBubbleTier`/`ctxBubbleGlyph`) so the
+     2.5 s commit hysteresis still works. Weather-aware bubbles skipped
+     (ActivityContext carries no weather). Role bubbles + priority unchanged.
+  3. *More idle actions*: the fidget picker grew from stretch/phone to eight
+     one-shots (`IDLE_FIDGETS`: + yawn / scratch_head / check_watch / cross_arms /
+     foot_tap / glance), each composed from existing joints with a trapezoid
+     blend. Wave-on-spawn + ambient look-around/weight-shift unchanged.
+  4. *BUG: forearms ghosting through the seated table*: short rigs (child) put the
+     seated shoulder ≈16 mm above a normal tabletop, forcing the elbow-above-slab
+     `shMin` past the 1.4 rad clamp → elbow dropped through the slab. Fixed by
+     (a) lifting `seatYeff` so the seated shoulder clears the top by 150 mm
+     (derived from the rig's torso-sit height, generalizing the old bar/island
+     barstool cheat) and (b) letting `shMin` win over the 1.4 ceiling.
+     `tabletest.html` now asserts elbow AND hand above `top − 10` for
+     adult+child × eat/work/tall (child eat went dElb −16 → +30).
+  Tests: tabletest / fidget / phase6 / avatar-bubble / mega / pet / fusion /
+  phase4 / phase5 / ai / bubble-anchor / newkinds all green (phase6 +
+  avatar-bubble + fidget assertions rewritten for pool/variety semantics).
+  `docs/images/avatars.png` re-captured.
+
 - **Avatar pants** (user-reported "avatars all look like they're missing
   pants", `src/three-renderer.ts` materials-only; no Store changes; typecheck
   + build clean): plain rigs whose legs rendered in the raw identity tint read

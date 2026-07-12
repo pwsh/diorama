@@ -76,6 +76,27 @@
     `,act=${h.activity||'-'},sit=${h.sit.toFixed(2)},dw=${h.dwell.toFixed(1)}` +
     `,bvis=${h.bubble&&h.bubble.visible?1:0}`).join('  ');
   const rz = (r._roomZones || []).map(z => z.roomId).join(',');
-  document.title = `scene=${scene} tb=${tb}${sink?'+sink':''} f=${frames} | rooms[${rz}] | ${dump}`;
+
+  // Pool-membership assertion (bubbles are now weighted POOLS, not one fixed
+  // glyph). Given scene/tb/sink, the committed bubble must be drawn FROM the
+  // expected pool (or '-' when an engaged activity suppresses it).
+  const POOLS = {
+    kitchen_night:   ['🍪','🍕','🧀','🍫'],
+    kitchen_morning: ['☕','🥞','🍳','🧇'],
+    seated_eve:      ['📖','📱','🎵','📺','🍪','💤','💭'],
+    bed:             ['📱','💤','💭','⭐'],
+  };
+  let expected;   // pool name, or 'none' when suppressed
+  if (sink) expected = 'none';
+  else if (scene === 'den') expected = 'seated_eve';
+  else if (scene === 'bed') expected = 'bed';
+  else if (scene === 'kitchen') expected = (tb === 'morning') ? 'kitchen_morning' : 'kitchen_night';
+  else expected = 'none';
+  const only = Object.values(hs)[0];
+  const bub = only ? (only.bubbleKind || null) : null;
+  const pass = expected === 'none' ? (bub === null)
+    : (bub !== null && POOLS[expected].includes(bub));
+  document.title = `PHASE6 ${pass?'PASS':'FAIL'} scene=${scene} tb=${tb}${sink?'+sink':''} ` +
+    `expect=${expected} bub=${bub||'-'} | rooms[${rz}] | ${dump}`;
   window.__DUMP = document.title;
 </script>

@@ -59,7 +59,26 @@
   }
   performance.now = realNow;
   const h = r._humanoids['bt'];
-  document.title = `mode=${mode} kind=${kind} act=${h?.activity ?? '-'} chatterT=${h?.chatterT.toFixed(1)} ` +
-    `next=${h?.chatterNext.toFixed(1)} trans=[${transitions.join(' ')}]`;
+  // Personality-chatter POOLS (mirror AVATAR_BUBBLES in three-renderer.ts for
+  // the kinds this test drives). In WALK mode every committed non-null bubble
+  // must be a glyph FROM the walking kind's pool (chatter fires while walking);
+  // in WASH mode an engaged activity must SUPPRESS the bubble (final = null).
+  const CHATTER = {
+    cowboy: ['🤠','🐴'], adult: ['💭'], astronaut: ['🚀','⭐'],
+    magician: ['🎩','✨','🐇'], athlete: ['🏆','💪'], farmer: ['🌽','🚜'],
+  };
+  const committed = transitions.map(s => s.split(':')[1]).filter(g => g && g !== '-');
+  let pass, note;
+  if (mode === 'wash') {
+    pass = (h?.bubbleKind ?? null) === null && h?.activity != null;
+    note = `act=${h?.activity ?? '-'} finalBub=${h?.bubbleKind ?? '-'}`;
+  } else {
+    const pool = CHATTER[kind] || null;
+    const allInPool = pool ? committed.every(g => pool.includes(g)) : true;
+    pass = committed.length >= 1 && allInPool;
+    note = `pool=[${pool?pool.join(''):'?'}] committed=[${committed.join('')}] allInPool=${allInPool}`;
+  }
+  document.title = `BUBBLE ${pass?'PASS':'FAIL'} mode=${mode} kind=${kind} ${note} ` +
+    `chatterT=${h?.chatterT.toFixed(1)} next=${h?.chatterNext.toFixed(1)} trans=[${transitions.join(' ')}]`;
  } catch (e) { document.title = 'ERR: ' + (e && e.stack ? e.stack.split('\n').slice(0,2).join(' | ') : e); }
 </script>

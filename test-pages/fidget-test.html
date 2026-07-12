@@ -33,7 +33,12 @@
   const step = () => { fakeNow += DT; r.updateTargets([TGT], ctx); };
 
   if (test === 'run') {
-    const frames = Math.round(60 * 1000 / DT);
+    // Sample ~240 s so the 8-24 s picker fires many idle one-shots and we can
+    // assert VARIETY (not just stretch/phone). Every logged non-'wave' entry
+    // must be a known fidget kind, ≥3 distinct kinds must appear, and the
+    // one-shot greeting wave must fire once on spawn.
+    const KNOWN = ['stretch','phone','yawn','scratch_head','check_watch','cross_arms','foot_tap','glance'];
+    const frames = Math.round(240 * 1000 / DT);
     let waveLoggedByFrame = -1;
     let firstRShAtSpawn = null;
     for (let i = 0; i < frames; i++) {
@@ -48,12 +53,13 @@
     const counts = {};
     for (const f of log) counts[f] = (counts[f] || 0) + 1;
     const sawWave = log.includes('wave');
-    const sawStretch = log.includes('stretch');
-    const sawPhone = log.includes('phone');
-    const pass = sawWave && (sawStretch || sawPhone);
-    window.__RESULT__ = { log, counts, sawWave, sawStretch, sawPhone, waveLoggedByFrame, firstRShAtSpawn };
+    const idle = log.filter(f => f !== 'wave');
+    const allKnown = idle.every(f => KNOWN.includes(f));
+    const distinct = [...new Set(idle)];
+    const pass = sawWave && allKnown && distinct.length >= 3;
+    window.__RESULT__ = { log, counts, sawWave, allKnown, distinct, waveLoggedByFrame, firstRShAtSpawn };
     document.title = `FIDGET ${pass?'PASS':'FAIL'} wave=${sawWave}(f${waveLoggedByFrame},rSh@20=${firstRShAtSpawn}) ` +
-      `stretch=${sawStretch} phone=${sawPhone} counts=${JSON.stringify(counts)} log=[${log.join(',')}]`;
+      `allKnown=${allKnown} distinct=${distinct.length}[${distinct.join(',')}] counts=${JSON.stringify(counts)}`;
   } else if (test === 'wave') {
     // Freeze during the greeting wave (first ~0.5 s of life) for a screenshot.
     for (let i = 0; i < 26; i++) step();   // ~0.43 s → near wave peak

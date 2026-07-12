@@ -40,10 +40,12 @@ the screenshot fires before first render.
 | pathfind-test.html | `PATH PASS cross=true[door-x] sofa=true(0) arrive=true` + nav samples |
 | phase4-test.html | all solo activities engage, shower `priv=1.00` |
 | phase5-test.html | `?scene=a` eat/work/tv seated; `?scene=b` bed covers hide rigs |
-| phase6-test.html / avatar-bubble.html | bubble rules + role bubbles |
+| phase6-test.html | `PHASE6 PASS` — committed bubble is drawn FROM the expected weighted POOL per scene/tb (kitchen-night/morning, seated-evening, bed), or suppressed (`-`) when an activity engages |
+| avatar-bubble.html | `BUBBLE PASS` — walk: committed chatter glyphs ∈ the kind's `AVATAR_BUBBLES` pool; wash: an engaged activity suppresses the bubble |
+| fidget-test.html | `FIDGET PASS` — wave-on-spawn fires + ≥3 distinct idle one-shots, all from the known 8-fidget set (`?test=stretch\|phone\|wave` freeze a pose) |
 | ai-test.html | AI avatar wanders in-region, engages, presence-off slow fade |
 | avatar-lineup.html / newkinds-test.html | all avatar kinds render |
-| tabletest.html | table clearances: `rootEdge=190`, hands on top |
+| tabletest.html | table clearances: `rootEdge=190`, hands AND elbows above `top − 10` across adult+child × eat/work/tall (`dHand*`/`dElb*` all ≥ 0) |
 | glass-test.html | `ghosts=1 wallOps=[0.06,0.06,0.45,0.45]` (cutaway) |
 | step-test.html / stepneg-test.html | step-light pools front-only; sunken wash down |
 | layers-test.html | `?nofurn=1` hides furniture+lights in 3D |

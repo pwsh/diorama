@@ -240,6 +240,15 @@ interface Humanoid {
   bubbleKind: string | null;
   bubbleWant: string | null;
   bubbleDwell: number;
+  // Context-pool bubble state: the contextual tiers (seated-evening, kitchen,
+  // bed) now pick a glyph at RANDOM from a weighted pool rather than mapping to
+  // one fixed glyph. To avoid re-rolling every frame (which would prevent the
+  // 2.5 s hysteresis from ever committing), the pick is made ONCE when the tier
+  // engages and held while the tier holds; `ctxBubbleTier` records which tier's
+  // pick `ctxBubbleGlyph` currently is, so a tier change re-rolls and anything
+  // else (walking away, activity engaging) clears it.
+  ctxBubbleTier: string | null;
+  ctxBubbleGlyph: string | null;
   // Name label (phase B3): a camera-facing sprite above the plumbob showing the
   // fused / identified person's name + a colored underline. Persistent-rig
   // sprite — its CanvasTexture is freed in _disposeHumanoid (like bubble), NOT
@@ -367,6 +376,34 @@ const AVATAR_BUBBLES: Partial<Record<AvatarKind, string[]>> = {
   magician: ['🎩', '✨', '🐇'], farmer: ['🌽', '🚜'], tech_expert: ['💡', '🔌'],
   supermodel: ['📸', '💅'], wise_oracle: ['🔮', '📜'], astronaut: ['🚀', '⭐'],
 };
+
+// Idle-fidget one-shots (picked every 8-20 s while a rig stands idle; see
+// updateTargets). Each composes from existing hip/knee/shoulder/elbow channels
+// + root pitch/roll — no new joints. Durations are the base hold (s); the
+// picker adds up to 0.5 s of jitter. `cross_arms` holds longest.
+const IDLE_FIDGETS = [
+  'stretch', 'phone', 'yawn', 'scratch_head', 'check_watch',
+  'cross_arms', 'foot_tap', 'glance',
+] as const;
+const IDLE_FIDGET_DUR: Record<string, number> = {
+  stretch: 2.0, phone: 2.5, yawn: 1.9, scratch_head: 2.3,
+  check_watch: 2.2, cross_arms: 3.6, foot_tap: 2.8, glance: 1.7,
+};
+
+// Context thought-bubble POOLS (Phase 6 refresh). The contextual tiers used to
+// map each context to ONE fixed glyph — a seated person in the evening was
+// *always* thinking about a book. They now pick at random from a weighted pool
+// (repeats bias the odds) once per engagement, held stable by the resolver so
+// the 2.5 s hysteresis still commits. Every glyph here is a plain emoji that
+// renders through the same canvas-sprite pipeline as the role / chatter bubbles
+// (verified in avatar-bubble.html), and its per-rig CanvasTexture is freed in
+// _disposeHumanoid — no new shared resources. Weather-aware options were
+// considered but the ActivityContext doesn't carry weather and threading it
+// through would be more plumbing than it's worth here, so they're omitted.
+const BUBBLE_POOL_SEATED_EVE = ['📖', '📱', '🎵', '📺', '🍪', '💤', '💭'];
+const BUBBLE_POOL_KITCHEN_MORNING = ['☕', '🥞', '🍳', '🧇'];
+const BUBBLE_POOL_KITCHEN_NIGHT = ['🍪', '🍕', '🧀', '🍫'];
+const BUBBLE_POOL_BED = ['📱', '💤', '💭', '⭐'];
 
 // djb2 hash of a string → unsigned 32-bit. Used to map a target key to a stable
 // concrete avatar kind when the sensor requests 'random'.
@@ -5102,11 +5139,23 @@ export class ThreeDRenderer {
       let squatDrop = 0;  // mm the exercise squat lowers the root (humanoid only)
       const hostTopY = spot?.hostTopY;
       let seatYeff = spot ? spot.seatY : 0;
-      if (spot && hostTopY != null && hostTopY - spot.seatY > 380) {
-        // Tall table (bar / island height): a normal seat can't reach the top.
-        // Deliberate Sims-style cheat — the avatar "sits taller" (barstool
-        // illusion) so its proportions read right instead of stretching arms.
-        seatYeff = hostTopY - 380;
+      if (spot && hostTopY != null) {
+        // Seat the rig tall enough that its SEATED shoulder clears the tabletop
+        // by SH_CLEAR mm. The table-rest arm IK below solves the elbow above the
+        // slab from a shoulder pivot at `shoulderWorldY = seatYeff − hipY +
+        // shoulderY`; if the shoulder sits at/below the tabletop no arm pose can
+        // keep the forearm above it (this was the forearm-ghosting bug on short
+        // rigs — a child's seated shoulder landed ≈16 mm above a normal table,
+        // forcing shMin past the 1.4 clamp and dropping the elbow through the
+        // slab). Deriving the lift from the rig's own torso-sit height
+        // (shoulderY − hipY) generalizes the old "tall table (bar/island)"
+        // barstool cheat to every rig size. Deliberate Sims-style cheat: the
+        // avatar "sits taller" so its proportions read right instead of stalling
+        // the arm IK.
+        const SH_CLEAR = 150;
+        const torsoSit = h.shoulderY - h.hipY;   // seated shoulder height above hip
+        const needSeat = hostTopY + SH_CLEAR - torsoSit;
+        if (needSeat > seatYeff) seatYeff = needSeat;
       }
 
       if (h.quad) {
@@ -5166,8 +5215,12 @@ export class ThreeDRenderer {
           const elbowY = shoulderWorldY - ARM_L1 * Math.cos(sh);
           el = Math.acos(cl((elbowY - handY) / ARM_L2)) - sh;
         }
+        // The elbow-above-slab floor (shMin) MUST win over the 1.4 sanity
+        // ceiling: a short rig can need shMin > 1.4, and clamping down to 1.4
+        // would drop the elbow back through the table (the forearm-ghosting
+        // root cause). Raise the ceiling to shMin whenever shMin is larger.
         return {
-          sh: Math.max(0.2, Math.min(1.4, sh)),
+          sh: Math.max(0.2, Math.min(Math.max(1.4, shMin), sh)),
           el: Math.max(0.2, Math.min(2.2, el)),
         };
       };
@@ -5340,16 +5393,18 @@ export class ThreeDRenderer {
           h.scanT += dt;
           if (h.scanT >= 0.8) { h.scanState = 0; h.scanNext = 6 + Math.random() * 4; }
         }
-        // Fidget picker: one-shot stretch / phone-check every 8-20 s.
+        // Fidget picker: one-shot idle action every 8-20 s. All compose from the
+        // existing hip/knee/shoulder/elbow channels + root pitch/roll (no new
+        // joints), blended in/out with a trapezoid envelope like stretch/phone.
         if (h.fidgetKind) {
           h.fidgetT += dt;
           if (h.fidgetT >= h.fidgetDur) { h.fidgetKind = null; h.fidgetNext = 8 + Math.random() * 12; }
         } else {
           h.fidgetNext -= dt;
           if (h.fidgetNext <= 0) {
-            const pick = Math.random() < 0.5 ? 'stretch' : 'phone';
+            const pick = IDLE_FIDGETS[(Math.random() * IDLE_FIDGETS.length) | 0];
             h.fidgetKind = pick; h.fidgetT = 0;
-            h.fidgetDur = pick === 'stretch' ? 2.0 : (2.5 + Math.random() * 0.5);
+            h.fidgetDur = (IDLE_FIDGET_DUR[pick] ?? 2.2) + Math.random() * 0.5;
             h.fidgetLog.push(pick);
           }
         }
@@ -5366,22 +5421,79 @@ export class ThreeDRenderer {
         const swayHK = Math.sin(swayPh) * 0.03 * ib;
         lHip += swayHK; rHip += swayHK; lKnee -= swayHK; rKnee -= swayHK;
         rollZ += Math.sin(swayPh) * 0.04 * ib;
-        // One-shot fidget pose blends (sit-blend idiom: joint → target by weight).
-        if (h.fidgetKind === 'stretch') {
+        // One-shot fidget pose blends (sit-blend idiom: joint → target by
+        // weight). `fenv` is the shared trapezoid (ramp in over `ramp` s, hold,
+        // ramp out) times the idle gate; `bl(cur, tgt, w)` = cur·(1−w)+tgt·w.
+        if (h.fidgetKind) {
           const t = h.fidgetT, D = h.fidgetDur;
-          const env = t < 0.6 ? t / 0.6 : (t < D - 0.6 ? 1 : Math.max(0, (D - t) / 0.6));
-          const w = env * ib;
-          lSh = lSh * (1 - w) + 2.6 * w; rSh = rSh * (1 - w) + 2.6 * w;   // arms sweep up
-          lEl = lEl * (1 - w) + 0.05 * w; rEl = rEl * (1 - w) + 0.05 * w;
-          leanX = leanX * (1 - w) + (-0.1) * w;
-        } else if (h.fidgetKind === 'phone') {
-          const t = h.fidgetT, D = h.fidgetDur;
-          const env = t < 0.4 ? t / 0.4 : (t < D - 0.4 ? 1 : Math.max(0, (D - t) / 0.4));
-          const w = env * ib;
-          const micro = Math.sin(now * 2 * 2 * Math.PI) * 0.03;   // 2 Hz elbow oscillation
-          rSh = rSh * (1 - w) + 0.5 * w;
-          rEl = rEl * (1 - w) + (1.3 + micro) * w;
-          leanX = leanX * (1 - w) + (-0.05) * w;
+          const fenv = (ramp: number) =>
+            (t < ramp ? t / ramp : (t < D - ramp ? 1 : Math.max(0, (D - t) / ramp))) * ib;
+          const bl = (cur: number, tgt: number, w: number) => cur * (1 - w) + tgt * w;
+          switch (h.fidgetKind) {
+            case 'stretch': {
+              const w = fenv(0.6);
+              lSh = bl(lSh, 2.6, w); rSh = bl(rSh, 2.6, w);   // arms sweep up
+              lEl = bl(lEl, 0.05, w); rEl = bl(rEl, 0.05, w);
+              leanX = bl(leanX, -0.1, w);
+              break;
+            }
+            case 'phone': {
+              const w = fenv(0.4);
+              const micro = Math.sin(now * 2 * 2 * Math.PI) * 0.03;   // 2 Hz elbow bob
+              rSh = bl(rSh, 0.5, w);
+              rEl = bl(rEl, 1.3 + micro, w);
+              leanX = bl(leanX, -0.05, w);
+              break;
+            }
+            case 'yawn': {
+              // Hand drifts to the mouth, head/torso rocks back then settles.
+              const w = fenv(0.4);
+              rSh = bl(rSh, 1.7, w);
+              rEl = bl(rEl, 2.2, w);
+              leanX = bl(leanX, 0.12 * Math.sin(Math.PI * Math.min(1, t / D)), w);
+              break;
+            }
+            case 'scratch_head': {
+              // Right hand up behind the head + a small 3 Hz scrub oscillation.
+              const w = fenv(0.4);
+              const scrub = Math.sin(now * 3 * 2 * Math.PI) * 0.12;
+              rSh = bl(rSh, 2.5, w);
+              rEl = bl(rEl, 2.5 + scrub, w);
+              leanX = bl(leanX, -0.04, w);
+              break;
+            }
+            case 'check_watch': {
+              // Left wrist raised in front, slight head-down glance at it.
+              const w = fenv(0.35);
+              lSh = bl(lSh, 0.75, w);
+              lEl = bl(lEl, 1.85, w);
+              leanX = bl(leanX, -0.09, w);
+              break;
+            }
+            case 'cross_arms': {
+              // Both forearms fold across the chest; held longer.
+              const w = fenv(0.5);
+              lSh = bl(lSh, 0.42, w); rSh = bl(rSh, 0.42, w);
+              lEl = bl(lEl, 1.95, w); rEl = bl(rEl, 1.95, w);
+              break;
+            }
+            case 'foot_tap': {
+              // Right foot taps: hip lifts + knee flicks at ~2.2 Hz; arms relaxed.
+              const w = fenv(0.4);
+              const tap = Math.max(0, Math.sin(now * 2.2 * 2 * Math.PI));
+              rHip = bl(rHip, 0.2 * tap, w);
+              rKnee = bl(rKnee, -0.5 * tap, w);
+              break;
+            }
+            case 'glance': {
+              // Turn to look off to one side (held yaw) with a tiny lean into it.
+              const w = fenv(0.35);
+              const dir = h.idleOffset < Math.PI ? 1 : -1;
+              yawFidget += dir * 0.55 * w;
+              rollZ += dir * 0.03 * w;
+              break;
+            }
+          }
         }
       }
       // Greeting wave on acquire: one-shot ~1 s over the rig's spawn window.
@@ -5708,27 +5820,49 @@ export class ThreeDRenderer {
   // hysteresis). String compares only. Priority (first match wins):
   //   1. engaged activity / privacy → null (the pose already says it all).
   //   2. hidden under bed covers → null.
-  //   3. late-night|night, kitchen, standing idle → snack.
-  //   4. morning, kitchen, standing idle → coffee.
-  //   5. evening|night|late-night, seated → reading (activity is null here, so
-  //      the room's TV is off — otherwise h.activity would be 'watch_tv').
-  //   6. sole occupant idling in a bed → phone.
+  //   3. late-night|night, kitchen, standing idle → kitchen-night POOL.
+  //   4. morning, kitchen, standing idle → kitchen-morning POOL.
+  //   5. evening|night|late-night, seated → seated POOL (activity is null here,
+  //      so the room's TV is off — otherwise h.activity would be 'watch_tv').
+  //   6. sole occupant idling in a bed → bed POOL.
+  // The contextual tiers (3-6) pick from a weighted pool rather than one fixed
+  // glyph: `_pickCtxBubble` rolls ONCE per engagement and holds the pick while
+  // the tier holds (so hysteresis still commits, and the avatar isn't locked to
+  // one thought). A cleared tier falls through to personality chatter.
   private _resolveBubbleKind(h: Humanoid, tb: import('./time-of-day.js').TimeBucket,
                              roomName: string, inBedAlone: boolean,
                              bedHidden: boolean): string | null {
-    if (h.activity != null || h.privacy > 0.3) return null;
-    if (bedHidden) return null;
+    if (h.activity != null || h.privacy > 0.3) { h.ctxBubbleTier = null; return null; }
+    if (bedHidden) { h.ctxBubbleTier = null; return null; }
     const inKitchen = roomName.includes('kitchen');
     const standingIdle = h.sit < 0.3 && h.dwell > 1.5;
-    if ((tb === 'late_night' || tb === 'night') && inKitchen && standingIdle) return '🍪';
-    if (tb === 'morning' && inKitchen && standingIdle) return '☕';
-    if ((tb === 'evening' || tb === 'night' || tb === 'late_night') && h.sit > 0.5) return '📖';
-    if (inBedAlone && h.dwell > 2) return '📱';
-    // 7. Personality chatter (LOWEST priority): per-kind flavor glyph, fired
-    //    periodically by the timer in updateTargets. Unlike the context tiers
-    //    above, this one is allowed while walking around.
+    if ((tb === 'late_night' || tb === 'night') && inKitchen && standingIdle)
+      return this._pickCtxBubble(h, 'kitchen_night', BUBBLE_POOL_KITCHEN_NIGHT);
+    if (tb === 'morning' && inKitchen && standingIdle)
+      return this._pickCtxBubble(h, 'kitchen_morning', BUBBLE_POOL_KITCHEN_MORNING);
+    if ((tb === 'evening' || tb === 'night' || tb === 'late_night') && h.sit > 0.5)
+      return this._pickCtxBubble(h, 'seated_eve', BUBBLE_POOL_SEATED_EVE);
+    if (inBedAlone && h.dwell > 2)
+      return this._pickCtxBubble(h, 'bed', BUBBLE_POOL_BED);
+    h.ctxBubbleTier = null;
+    // Personality chatter (LOWEST priority): per-kind flavor glyph, fired
+    // periodically by the timer in updateTargets. Unlike the context tiers
+    // above, this one is allowed while walking around.
     if (h.chatterT > 0 && h.chatterGlyph) return h.chatterGlyph;
     return null;
+  }
+
+  // Return the rig's held pool pick for `tier`, rolling a fresh one (uniform
+  // over the pool array — repeats bias the odds) the first time this tier
+  // engages or when switching from a different tier. Stable while the tier holds
+  // so the resolver's `want` stays constant and the 2.5 s commit hysteresis
+  // works; a tier change (or clear) re-rolls next engagement.
+  private _pickCtxBubble(h: Humanoid, tier: string, pool: readonly string[]): string {
+    if (h.ctxBubbleTier !== tier || h.ctxBubbleGlyph == null) {
+      h.ctxBubbleTier = tier;
+      h.ctxBubbleGlyph = pool[(Math.random() * pool.length) | 0];
+    }
+    return h.ctxBubbleGlyph;
   }
 
   // Reconcile a humanoid's committed bubble kind with its live sprite: build /
@@ -6043,12 +6177,16 @@ export class ThreeDRenderer {
       tie.position.set(0, torsoY - TORSO_H * 0.02, frontZ - 16 * sk);
       root.add(tie);
     } else if (kind === 'hacker') {
-      // Hoodie cowl: a dark top-dome shell capping the back/top of the head.
+      // Hoodie cowl: a dark shell capping the back/top of the head. Tilted back
+      // (rotation.x) and pushed rearward so the front rim rides ABOVE the brow —
+      // a symmetric downward bowl otherwise drapes its front rim to eye level and
+      // hides the face (the "hood covering the eyes" bug).
       const hood = new THREE.Mesh(
-        new THREE.SphereGeometry(HEAD_R * 1.28, 16, 12, 0, Math.PI * 2, 0, Math.PI * 0.62),
+        new THREE.SphereGeometry(HEAD_R * 1.22, 16, 12, 0, Math.PI * 2, 0, Math.PI * 0.6),
         this._mat({ color: 0x18181c, roughness: 0.85, metalness: 0.0 }),
       );
-      hood.position.set(0, headY - HEAD_R * 0.05, backZ * 0.2 + HEAD_R * 0.18);
+      hood.rotation.x = 0.5;
+      hood.position.set(0, headY + HEAD_R * 0.08, HEAD_R * 0.34);
       root.add(hood);
     } else if (kind === 'movie_star') {
       // Golden accent stripe down the chest (shades handled in the face pass).
@@ -6286,14 +6424,18 @@ export class ThreeDRenderer {
     } else if (kind === 'supermodel') {
       // Long dark hair shell + sunglasses pushed up + tint dress below the hips.
       const hairMat = this._mat({ color: 0x2a2026, roughness: 0.75, metalness: 0.05 });
+      // Crown cap: phiLength trimmed so the front hairline lands at the brow
+      // rather than raking down over the eyes; tilted back a touch so the bangs
+      // clear the face. The long fall behind (+Z) covers the back and sides.
       const cap = new THREE.Mesh(
-        new THREE.SphereGeometry(HEAD_R * 1.12, 16, 12, 0, Math.PI * 2, 0, Math.PI * 0.55),
+        new THREE.SphereGeometry(HEAD_R * 1.13, 16, 12, 0, Math.PI * 2, 0, Math.PI * 0.44),
         hairMat,
       );
-      cap.position.set(0, headY, 0);
+      cap.rotation.x = 0.28;
+      cap.position.set(0, headY + HEAD_R * 0.04, HEAD_R * 0.04);
       root.add(cap);
-      const fall = box(HEAD_R * 1.5, HEAD_R * 1.9, HEAD_R * 0.42, hairMat);
-      fall.position.set(0, headY - HEAD_R * 0.4, HEAD_R * 0.78);
+      const fall = box(HEAD_R * 1.6, HEAD_R * 1.9, HEAD_R * 0.5, hairMat);
+      fall.position.set(0, headY - HEAD_R * 0.4, HEAD_R * 0.72);
       root.add(fall);
       const glasses = box(HEAD_R * 1.1, HEAD_R * 0.22, HEAD_R * 0.16,
         this._mat({ color: 0x0a0a0c, metalness: 0.5, roughness: 0.2 }));
@@ -6522,6 +6664,7 @@ export class ThreeDRenderer {
       activity: null, activityAnchor: null, activityDwell: 0,
       act: 0, privacy: 0, blurSprite: null,
       bubble: null, bubbleKind: null, bubbleWant: null, bubbleDwell: 0,
+      ctxBubbleTier: null, ctxBubbleGlyph: null,
       nameSprite: null, nameText: null, nameColor: null,
       idleOffset,
       vx: 0, vz: 0,
@@ -6710,6 +6853,20 @@ export class ThreeDRenderer {
     const shoeMat = this._mat({
       color: spec.shoe, roughness: 0.8, metalness: 0.05,
     });
+    // Face-detail materials (per-rig, like `dark`). Eye whites read the sclera
+    // against the dark iris; the nose is a slightly-darkened skin tone so it
+    // catches its own toon band instead of vanishing into the head. `darken`
+    // multiplies each channel of a 0xRRGGBB toward black.
+    const darken = (col: number, f: number): number =>
+      ((Math.round(((col >> 16) & 0xff) * f) << 16)
+        | (Math.round(((col >> 8) & 0xff) * f) << 8)
+        | Math.round((col & 0xff) * f));
+    const eyeWhite = this._mat({ color: 0xf4f4f6, roughness: 0.35, metalness: 0.0 });
+    const noseCol = darken(spec.skin, 0.8);
+    const noseMat = this._mat({
+      color: noseCol, emissive: noseCol, emissiveIntensity: spec.emI * 0.5,
+      roughness: 0.6, metalness: spec.steel ? 0.5 : 0.1,
+    });
     // Accent material in the sensor tint — restores the per-sensor colour coding
     // on variants whose body/skin overrides it (robot / alien / hacker / ninja).
     const accent = this._mat({
@@ -6799,13 +6956,45 @@ export class ThreeDRenderer {
     // side (a positive hip rotation lands the foot at body-local -Z, which
     // is also where the body rotation aligns with the velocity vector).
     const faceZ = -HEAD_R * (spec.headShape === 'box' ? 0.82 : 0.86);
+    // Reusable feature builders — heads run oversized (Sims-style) so these read
+    // at typical camera distance. An eye = white sclera sphere (flattened into
+    // the face) + a proud dark iris/pupil; a brow = a small dark box angled
+    // slightly inward; ears = skin half-domes on the sides (only where hair /
+    // hats / helmets don't cover them). All small parts fall below the outline
+    // minDim (50·sk) except the ears, which read fine with a shell.
+    const makeEye = (sx: number) => {
+      const whiteR = HEAD_R * 0.2;
+      const white = new THREE.Mesh(new THREE.SphereGeometry(whiteR, 12, 10), eyeWhite);
+      white.scale.set(1, 1.12, 0.62);   // taller than wide, flattened onto the face
+      white.position.set(sx * HEAD_R * 0.4, headY + HEAD_R * 0.12, faceZ);
+      white.userData.outlineSkip = true;   // shell would darken the sclera rim
+      root.add(white);
+      const pupil = new THREE.Mesh(new THREE.SphereGeometry(whiteR * 0.56, 10, 8), dark);
+      pupil.position.set(sx * HEAD_R * 0.4, headY + HEAD_R * 0.12, faceZ - whiteR * 0.5);
+      root.add(pupil);
+    };
+    const makeBrow = (sx: number) => {
+      const brow = new THREE.Mesh(
+        new THREE.BoxGeometry(HEAD_R * 0.34, HEAD_R * 0.08, HEAD_R * 0.06), dark);
+      brow.position.set(sx * HEAD_R * 0.4, headY + HEAD_R * 0.33, faceZ - HEAD_R * 0.02);
+      brow.rotation.z = -sx * 0.14;   // inner end dips toward the nose
+      root.add(brow);
+    };
+    // Kinds whose accessory hair / hood / helmet / ears cover the side of the
+    // head — no skin ears for these (they'd poke through the costume).
+    const EAR_SKIP: ReadonlySet<AvatarKind> = new Set<AvatarKind>([
+      'robot', 'alien', 'ninja', 'ninja_cyborg', 'astronaut', 'supermodel',
+      'tech_expert', 'hacker', 'wise_oracle',
+      'teddy_bear', 'cartoon_mouse', 'cartoon_dog', 'cartoon_duck',
+    ]);
+    const makeEar = (sx: number) => {
+      const ear = new THREE.Mesh(new THREE.SphereGeometry(HEAD_R * 0.25, 10, 8), skin);
+      ear.scale.set(0.5, 0.95, 0.72);
+      ear.position.set(sx * HEAD_R * 0.95, headY + HEAD_R * 0.02, HEAD_R * 0.05);
+      root.add(ear);
+    };
     if (spec.eyes === 'dots') {
-      const eyeR = HEAD_R * 0.18;
-      for (const sx of [-1, 1]) {
-        const eye = new THREE.Mesh(new THREE.SphereGeometry(eyeR, 10, 8), dark);
-        eye.position.set(sx * HEAD_R * 0.38, headY + HEAD_R * 0.12, faceZ);
-        root.add(eye);
-      }
+      for (const sx of [-1, 1]) { makeEye(sx); makeBrow(sx); }
     } else if (spec.eyes === 'almond') {
       // Big black almond eyes — scaled spheres, angled inward.
       for (const sx of [-1, 1]) {
@@ -6851,35 +7040,48 @@ export class ThreeDRenderer {
         root.add(eye);
       }
     } else if (spec.eyes === 'halfred') {
-      // Cyborg: organic left eye, red emissive implant on the plated (+x) side.
-      const eyeR = HEAD_R * 0.18;
-      const eyeL = new THREE.Mesh(new THREE.SphereGeometry(eyeR, 10, 8), dark);
-      eyeL.position.set(-HEAD_R * 0.38, headY + HEAD_R * 0.12, faceZ);
-      root.add(eyeL);
+      // Cyborg: organic left eye (full detail) + brow, red emissive implant on
+      // the plated (+x) side.
+      makeEye(-1); makeBrow(-1);
       const eyeRed = new THREE.Mesh(
-        new THREE.SphereGeometry(eyeR * 0.9, 10, 8),
+        new THREE.SphereGeometry(HEAD_R * 0.18 * 0.9, 10, 8),
         this._mat({ color: 0x330000, emissive: 0xff2a2a, emissiveIntensity: 1.2, metalness: 0.2, roughness: 0.4 }),
       );
       eyeRed.position.set(HEAD_R * 0.38, headY + HEAD_R * 0.12, faceZ - HEAD_R * 0.04);
       eyeRed.userData.outlineSkip = true;
       root.add(eyeRed);
     }
-    // Nose + mouth (skipped on the faceless robot / masked ninja; subtle elsewhere).
+    // Nose: a small darkened-skin bump (catches its own toon band so it reads),
+    // skipped on the faceless robot visor / almond alien / masked ninja slit.
     if (spec.eyes !== 'visor' && spec.eyes !== 'almond' && spec.eyes !== 'slit') {
-      const nose = new THREE.Mesh(
-        new THREE.SphereGeometry(HEAD_R * 0.14, 8, 6),
-        skin,
-      );
-      nose.position.set(0, headY - HEAD_R * 0.05, faceZ - HEAD_R * 0.13);
+      const nose = new THREE.Mesh(new THREE.SphereGeometry(HEAD_R * 0.15, 8, 6), noseMat);
+      nose.scale.set(0.8, 1, 0.9);
+      nose.position.set(0, headY - HEAD_R * 0.06, faceZ - HEAD_R * 0.12);
       root.add(nose);
     }
+    // Mouth: a slim dark line, given a gentle downward bow (two side segments
+    // dipped at the corners) so it reads as a friendly closed smile rather than
+    // a flat dash. Skipped on the robot visor / ninja slit.
     if (spec.eyes !== 'visor' && spec.eyes !== 'slit') {
-      const mouth = new THREE.Mesh(
-        new THREE.BoxGeometry(HEAD_R * 0.45, HEAD_R * 0.07, HEAD_R * 0.04),
-        dark,
-      );
-      mouth.position.set(0, headY - HEAD_R * 0.42, faceZ);
-      root.add(mouth);
+      const mouthMat = dark;
+      const mid = new THREE.Mesh(
+        new THREE.BoxGeometry(HEAD_R * 0.3, HEAD_R * 0.07, HEAD_R * 0.05), mouthMat);
+      mid.position.set(0, headY - HEAD_R * 0.44, faceZ);
+      root.add(mid);
+      for (const sx of [-1, 1]) {
+        const corner = new THREE.Mesh(
+          new THREE.BoxGeometry(HEAD_R * 0.14, HEAD_R * 0.07, HEAD_R * 0.05), mouthMat);
+        corner.position.set(sx * HEAD_R * 0.19, headY - HEAD_R * 0.4, faceZ);
+        corner.rotation.z = sx * 0.5;   // corners turn up into a smile
+        root.add(corner);
+      }
+    }
+    // Ears: skin half-domes on the sides for kinds not wearing side-covering
+    // hair / hoods / helmets. Cyborg shows only its organic (−x) ear (the +x
+    // side carries the steel head plate).
+    if (!EAR_SKIP.has(kind) && spec.headShape !== 'box') {
+      if (kind === 'cyborg') makeEar(-1);
+      else { makeEar(-1); makeEar(1); }
     }
 
     // Limbs. Cyborg kinds get a brushed-steel prosthetic right (+x) arm; the
@@ -6976,6 +7178,7 @@ export class ThreeDRenderer {
       activity: null, activityAnchor: null, activityDwell: 0,
       act: 0, privacy: 0, blurSprite: null,
       bubble: null, bubbleKind: null, bubbleWant: null, bubbleDwell: 0,
+      ctxBubbleTier: null, ctxBubbleGlyph: null,
       nameSprite: null, nameText: null, nameColor: null,
       idleOffset,
       vx: 0, vz: 0,
