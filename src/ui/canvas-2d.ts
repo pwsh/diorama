@@ -155,21 +155,15 @@ export class Canvas2D extends LitElement {
       } catch (err) { console.error('canvas mousemove failed:', err); }
     });
 
-    this._canvas.addEventListener('click',    e => {
-      // A Space+left pan ends in a synthetic click (mouseup clears _panFrom
-      // BEFORE the click event fires) — without the _panEnded latch, ending
-      // a pan while a placement tool was active dropped an object at the
-      // release point.
-      if (this._panFrom || this._panEnded) { this._panEnded = false; return; }
-      try {
-        onCanvasClick(this.planner, this._canvas, this._view, e);
-      } catch (err) { console.error('canvas click failed:', err); }
+    this._canvas.addEventListener('click', e => {
+      // iOS in the HA app never delivers this native click (touch handlers
+      // preventDefault to keep HA's drawer out), so the touch path synthesizes
+      // one. On browsers that DO still fire a compatibility click after a
+      // synthetic dispatch, ignore it (700 ms window) to avoid a double-fire.
+      if (performance.now() - this._lastSyntheticClick < 700) return;
+      this._dispatchClick(e);
     });
-    this._canvas.addEventListener('dblclick', e => {
-      try {
-        onCanvasDblClick(this.planner, this._canvas, this._view, e);
-      } catch (err) { console.error('canvas dblclick failed:', err); }
-    });
+    this._canvas.addEventListener('dblclick', e => this._dispatchDblClick(e));
     this._canvas.addEventListener('mouseleave', () => { this.planner.cursor = null; });
 
     window.addEventListener('mouseup', this._onUp);
@@ -192,9 +186,12 @@ export class Canvas2D extends LitElement {
       if (touchStopping) e.stopPropagation();
       if (e.touches.length === 1 && !this._pinch) {
         e.preventDefault();
-        onCanvasMouseDown(this.planner, this._canvas, this._view, toEvt(e.touches[0]));
+        const t = e.touches[0];
+        this._tap = { x: t.clientX, y: t.clientY, t: performance.now(), moved: false };
+        onCanvasMouseDown(this.planner, this._canvas, this._view, toEvt(t));
       } else if (e.touches.length === 2) {
         e.preventDefault();
+        this._tap = null;  // second finger down → not a tap
         const t1 = e.touches[0], t2 = e.touches[1];
         const mid = { x: (t1.clientX + t2.clientX) / 2, y: (t1.clientY + t2.clientY) / 2 };
         this._pinch = {
@@ -256,7 +253,11 @@ export class Canvas2D extends LitElement {
       }
       if (e.touches.length === 1 && !this._pinch) {
         e.preventDefault();
-        onCanvasMouseMove(this.planner, this._canvas, this._view, toEvt(e.touches[0]));
+        const t = e.touches[0];
+        if (this._tap && Math.hypot(t.clientX - this._tap.x, t.clientY - this._tap.y) > 12) {
+          this._tap.moved = true;  // moved past the tap threshold → it's a drag
+        }
+        onCanvasMouseMove(this.planner, this._canvas, this._view, toEvt(t));
       }
     }, { passive: false });
     const endPinchOrDrag = (e: TouchEvent) => {
@@ -278,9 +279,14 @@ export class Canvas2D extends LitElement {
           return;
         }
         this._pinch = null;
+        this._tap = null;  // a pinch is never a tap
         return;
       }
-      if (e.touches.length === 0) onCanvasMouseUp(this.planner, this._canvas);
+      if (e.touches.length === 0) {
+        onCanvasMouseUp(this.planner, this._canvas);
+        // AFTER mouseup (same order as mouse) so drag-vs-click logic holds.
+        this._maybeTap(e);
+      }
     };
     this._canvas.addEventListener('touchend', endPinchOrDrag);
     // App WebViews fire touchcancel when the OS steals the gesture
@@ -289,11 +295,62 @@ export class Canvas2D extends LitElement {
       if (touchStopping) e.stopPropagation();
       touchStopping = false;
       this._pinch = null;
+      this._tap = null;  // OS stole the gesture → not a tap
       if (e.touches.length === 0) onCanvasMouseUp(this.planner, this._canvas);
     });
   }
 
   private _panEnded = false;  // swallow the browser 'click' a pan release fires
+
+  // Touch → click/dblclick synthesis (Task 1). iOS in the HA companion app
+  // never fires the compatibility 'click' after our preventDefault'd touch
+  // handlers, so onCanvasClick-only flows (landmark / room placement, kiosk
+  // tap-to-toggle) silently never ran. The touch path below records a tap
+  // candidate and, on a clean lift, dispatches through _dispatchClick.
+  private _lastSyntheticClick = -Infinity;   // ts of the last synthesized dispatch
+  private _tap: { x: number; y: number; t: number; moved: boolean } | null = null;
+  private _lastTap: { x: number; y: number; t: number } | null = null;  // for double-tap
+
+  // Shared click body: reused by the native listener and the touch tap path.
+  // Preserves the Space+left-pan swallow guard (mouse ordering: mouseup→click).
+  private _dispatchClick(evt: { clientX: number; clientY: number }): void {
+    if (this._panFrom || this._panEnded) { this._panEnded = false; return; }
+    try {
+      onCanvasClick(this.planner, this._canvas, this._view, evt as MouseEvent);
+    } catch (err) { console.error('canvas click failed:', err); }
+  }
+
+  private _dispatchDblClick(evt: { clientX: number; clientY: number }): void {
+    try {
+      onCanvasDblClick(this.planner, this._canvas, this._view, evt as MouseEvent);
+    } catch (err) { console.error('canvas dblclick failed:', err); }
+  }
+
+  // On a clean single-finger lift (no pinch, no drag past threshold, quick),
+  // synthesize a click — or a dblclick when it's the second quick tap in the
+  // same spot. Runs AFTER onCanvasMouseUp so the drag-vs-click logic in
+  // canvas-interact sees the same mouseup→click ordering as a real mouse.
+  private _maybeTap(e: TouchEvent): void {
+    const tap = this._tap; this._tap = null;
+    if (!tap || tap.moved) return;
+    if (performance.now() - tap.t > 600) return;     // long-press, not a tap
+    const ct = e.changedTouches[0];
+    if (!ct) return;
+    if (Math.hypot(ct.clientX - tap.x, ct.clientY - tap.y) > 12) return;
+    const now = performance.now();
+    this._lastSyntheticClick = now;
+    const prev = this._lastTap;
+    const isDouble = !!prev && (now - prev.t) < 350 &&
+      Math.hypot(ct.clientX - prev.x, ct.clientY - prev.y) < 24;
+    const evt = { clientX: ct.clientX, clientY: ct.clientY };
+    if (isDouble) {
+      this._lastTap = null;
+      this._dispatchDblClick(evt);
+    } else {
+      this._lastTap = { x: ct.clientX, y: ct.clientY, t: now };
+      this._dispatchClick(evt);
+    }
+  }
 
   private _onUp = () => {
     if (this._panFrom) {

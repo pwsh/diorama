@@ -122,7 +122,16 @@ export type Drag =
   | { kind: 'doorMove'; idx: number; startMm: Vec2; start: Vec2 }
   | { kind: 'doorRotate'; idx: number; startMm: Vec2; start: { rotation: number } }
   | { kind: 'windowMove'; idx: number; startMm: Vec2; start: Vec2 }
-  | { kind: 'windowRotate'; idx: number; startMm: Vec2; start: { rotation: number } };
+  | { kind: 'windowRotate'; idx: number; startMm: Vec2; start: { rotation: number } }
+  // Dragging a floor boundary edge. Input is measured in FROZEN start-of-drag
+  // screen space (startClient + startScale) so resizing the floor — which
+  // rescales the fit-to-canvas view — can't feed back into the cursor→world
+  // mapping. `startBbox` is the content bbox at drag start (clamp reference);
+  // `applied` is the content translation already applied this gesture.
+  | { kind: 'floorEdge'; edge: import('./geometry.js').FloorEdge;
+      startClient: Vec2; startScale: number;
+      startW: number; startD: number;
+      startBbox: import('./geometry.js').FloorBox | null; applied: Vec2 };
 
 export interface EditZone {
   sensorId: string;
@@ -332,6 +341,16 @@ export class Planner extends EventTarget {
     this.sidebarOpen = !this.sidebarOpen;
     try { localStorage.setItem('diorama:sidebarOpen', this.sidebarOpen ? '1' : '0'); } catch { /* ignore */ }
     this.emitConfig();
+  }
+
+  // When a placement latch (room / geo landmark) is armed from the sidebar on a
+  // narrow (overlay) screen, auto-close the sidebar so the FIRST canvas tap
+  // lands on the map rather than the dimmed backdrop. 900 px matches the
+  // overlay breakpoint in styles.ts.
+  maybeCloseSidebarForPlacement(): void {
+    if (this.sidebarOpen && typeof window !== 'undefined' && window.innerWidth <= 900) {
+      this.toggleSidebar();
+    }
   }
 
   // 2D view pan/zoom — runtime only, reset on reload.
@@ -1798,6 +1817,35 @@ export class Planner extends EventTarget {
     this.viewCenter = null;
     this.zoom = 1;
     this.emitConfig();
+  }
+
+  // Translate ALL content on the current floor by (dx, dy) world mm. Used by the
+  // floor-edge drag when the left / bottom boundary moves (so the plan stays
+  // glued to the opposite edge). This is a FRAME change, not an individual item
+  // edit, so LOCKED items translate too. Covers every placeable + bg / model3d
+  // offsets + room anchors. Sensor zoneCaches are sensor-local so they ride
+  // along for free. Geo landmarks are world-frame + shared across floors, so
+  // they only translate for single-floor plans (a shared frame must not be
+  // silently shifted by a per-floor origin edit on multi-floor plans).
+  translateFloorContent(dx: number, dy: number): void {
+    if (dx === 0 && dy === 0) return;
+    const f = this.floor();
+    for (const w of f.walls) w.points = w.points.map(p => ({ x: p.x + dx, y: p.y + dy }));
+    for (const it of f.furniture) { it.x += dx; it.y += dy; }
+    for (const it of f.lights) { it.x += dx; it.y += dy; }
+    for (const it of f.switches) { it.x += dx; it.y += dy; }
+    for (const it of f.sensors) { it.x += dx; it.y += dy; }
+    for (const it of f.motionSensors) { it.x += dx; it.y += dy; }
+    for (const it of f.envSensors ?? []) { it.x += dx; it.y += dy; }
+    for (const it of f.bleProxies ?? []) { it.x += dx; it.y += dy; }
+    for (const it of f.doors ?? []) { it.x += dx; it.y += dy; }
+    for (const it of f.windows ?? []) { it.x += dx; it.y += dy; }
+    for (const rm of f.rooms ?? []) { rm.anchor.x += dx; rm.anchor.y += dy; }
+    if (f.bg) { f.bg.x += dx; f.bg.y += dy; }
+    if (f.model3d) { f.model3d.x += dx; f.model3d.y += dy; }
+    if (this.store.floors.length === 1 && this.store.geo?.landmarks) {
+      for (const lm of this.store.geo.landmarks) { lm.x += dx; lm.y += dy; }
+    }
   }
 
   // ── Floor management ────────────────────────────────────────────────────

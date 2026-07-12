@@ -42,6 +42,31 @@ asks for).
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Touch tap synthesis (iOS/HA-app fix)** + **draggable floor boundaries**
+  (2 interaction-layer tasks):
+  - *Tap fix*: on iOS in the HA companion app the canvas `touchend` never
+    produced a browser `click` (our touch handlers `preventDefault` to keep
+    HA's drawer out), so every flow living only in `onCanvasClick` — geo-landmark
+    placement, room-anchor placement, kiosk tap-to-toggle, AND tap-to-place for
+    every tool — silently never fired. `canvas-2d.ts` now records a single-finger
+    tap candidate (invalidated by a 2nd finger, >12 px move, or >600 ms) and, on
+    a clean lift, synthesizes a click through the shared `_dispatchClick` (native
+    listener guards a 700 ms window to drop any Android compatibility click).
+    Runs AFTER `onCanvasMouseUp` so `dragJustEnded` swallows the synthetic click
+    exactly like the mouse `mouseup→click` order. Double-tap (2 taps <350 ms /
+    <24 px) synthesizes `dblclick` (light-config on tablets). Arming a placement
+    latch on a narrow screen auto-closes the overlay sidebar
+    (`maybeCloseSidebarForPlacement`, 900 px breakpoint) so the first tap lands
+    on the map. Not headless-testable (touch synthesis).
+  - *Floor-edge editing*: EDIT + Select, hovering ~10 px from a boundary edge
+    shows a resize cursor + always-drawn mid-edge handles; dragging resizes
+    `floor.w/d`. Left/bottom edges also translate all content
+    (`Planner.translateFloorContent`) so the plan stays glued to the opposite
+    edge. Grid-snapped, min 2000 mm, clamped against the content bbox + 100 mm
+    margin (`resolveFloorEdgeDrag`/`floorContentBbox` in geometry.ts, pure —
+    `floor-edge-test.html` FLOOREDGE PASS 19/19). Input measured in frozen
+    start-scale screen space so the fit-view rescale can't feed back. Geo
+    landmarks translate only for single-floor plans.
 - **Rendering/model fixes batch** (4 user-reported): (1) thought bubbles +
   B3 name labels now anchor per-rig off `h.plumbob.position.y`
   (`BUBBLE_ABOVE_PLUMBOB` 460 / `NAME_ABOVE_PLUMBOB` 318) instead of fixed

@@ -1204,14 +1204,14 @@ export class Sidebar extends LitElement {
               ${!inside ? html`<span class="badge" title="Anchor is outside every wall loop"
                                      style="color:#ffb74d">⚠ not inside walls</span>` : nothing}
               <button class="icon-btn" title="Re-place anchor"
-                      @click=${() => { p.placingRoomId = rm.id; p.emitConfig(); }}>📍</button>
+                      @click=${() => { p.placingRoomId = rm.id; p.maybeCloseSidebarForPlacement(); p.emitConfig(); }}>📍</button>
               <button class="icon-btn" title="Delete"
                       @click=${() => this._deleteRoom(rm.id)}>✕</button>
             </div>
           `;
         })}
         <button class="btn" style="width:100%;margin-top:6px"
-                @click=${() => { p.placingRoomId = NEW_ROOM; p.emitConfig(); }}>
+                @click=${() => { p.placingRoomId = NEW_ROOM; p.maybeCloseSidebarForPlacement(); p.emitConfig(); }}>
           + Add room
         </button>
     `);
@@ -2701,7 +2701,7 @@ export class Sidebar extends LitElement {
           </div>` : nothing}
         ${landmarks.map(lm => this._landmarkItem(lm))}
         <button class="btn" style="width:100%;margin-top:6px"
-                @click=${() => { p.placingLandmarkId = NEW_LANDMARK; p.emitConfig(); }}>
+                @click=${() => { p.placingLandmarkId = NEW_LANDMARK; p.maybeCloseSidebarForPlacement(); p.emitConfig(); }}>
           + Add landmark
         </button>
 
@@ -2759,7 +2759,7 @@ export class Sidebar extends LitElement {
                   @click=${() => p.updateLandmark(lm.id, l => { l.hidden = !l.hidden; })}>
             ${lm.hidden ? '🙈' : '👁'}</button>
           <button class="icon-btn" title="Re-place pin on the plan"
-                  @click=${() => { p.placingLandmarkId = lm.id; p.emitConfig(); }}>📍</button>
+                  @click=${() => { p.placingLandmarkId = lm.id; p.maybeCloseSidebarForPlacement(); p.emitConfig(); }}>📍</button>
           <button class="icon-btn" title="Delete"
                   @click=${() => { if (this._calibLandmarkId === lm.id) this._calibLandmarkId = null; p.deleteLandmark(lm.id); }}>✕</button>
         </div>

@@ -1,7 +1,7 @@
 // Pure geometry helpers — no DOM, no state.
 
 import type { Vec2, Sensor, BgImage, LightIconKind, FurnitureKind, EnvKind, WallKind,
-  ActivityKind, ObjectRecipe, Furniture, Room } from './types.js';
+  ActivityKind, ObjectRecipe, Furniture, Room, Floor } from './types.js';
 
 export const MM_PER_IN = 25.4;
 export const IN_PER_FT = 12;
@@ -27,6 +27,75 @@ export function fmtLen(mm: number, imperial: boolean): string {
   const m = Math.trunc(mm / 1000);
   const cm = Math.abs(mm - m * 1000) / 10;
   return `${m} m ${cm.toFixed(1)} cm`;
+}
+
+// ── Floor boundary editing (drag the canvas edges) ─────────────────────────
+export interface FloorBox { minX: number; minY: number; maxX: number; maxY: number; }
+export type FloorEdge = 'left' | 'right' | 'top' | 'bottom';
+
+// Bounding box of a floor's movable content (wall vertices + item centers),
+// world mm. Null when the floor is empty. Used to clamp a shrinking boundary
+// edge so no content is stranded outside the plan.
+export function floorContentBbox(f: Floor): FloorBox | null {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity, any = false;
+  const acc = (x: number, y: number) => {
+    any = true;
+    if (x < minX) minX = x; if (y < minY) minY = y;
+    if (x > maxX) maxX = x; if (y > maxY) maxY = y;
+  };
+  for (const w of f.walls) for (const pt of w.points) acc(pt.x, pt.y);
+  for (const it of f.furniture) acc(it.x, it.y);
+  for (const it of f.lights) acc(it.x, it.y);
+  for (const it of f.switches) acc(it.x, it.y);
+  for (const it of f.sensors) acc(it.x, it.y);
+  for (const it of f.motionSensors) acc(it.x, it.y);
+  for (const it of f.envSensors ?? []) acc(it.x, it.y);
+  for (const it of f.bleProxies ?? []) acc(it.x, it.y);
+  for (const it of f.doors ?? []) acc(it.x, it.y);
+  for (const it of f.windows ?? []) acc(it.x, it.y);
+  for (const rm of f.rooms ?? []) acc(rm.anchor.x, rm.anchor.y);
+  return any ? { minX, minY, maxX, maxY } : null;
+}
+
+// Resolve a floor-edge drag. `delta` is the grid-snapped world-mm displacement
+// of the dragged edge along its axis (world sign: +x = right, +y = up). The
+// `right` / `top` edges only resize (w / d); the `left` / `bottom` edges resize
+// AND translate the content by `tx` / `ty` so the plan stays glued to the
+// opposite edge (`tx`/`ty` are the TOTAL translation from the drag-start
+// positions). Enforces a minimum floor size and keeps the content bbox
+// (+ `margin`) inside the plan.
+export function resolveFloorEdgeDrag(
+  edge: FloorEdge, delta: number,
+  startW: number, startD: number,
+  bbox: FloorBox | null,
+  margin = GRID_MM, minSize = 2000,
+): { w: number; d: number; tx: number; ty: number } {
+  let w = startW, d = startD, tx = 0, ty = 0;
+  if (edge === 'right') {
+    let min = minSize;
+    if (bbox) min = Math.max(min, bbox.maxX + margin);
+    w = Math.max(min, startW + delta);
+  } else if (edge === 'top') {
+    let min = minSize;
+    if (bbox) min = Math.max(min, bbox.maxY + margin);
+    d = Math.max(min, startD + delta);
+  } else if (edge === 'left') {
+    // Positive delta shrinks from the left; cap it so width stays >= minSize
+    // and content near the left edge keeps its margin. Negative delta (enlarge)
+    // is always allowed.
+    let maxDelta = startW - minSize;
+    if (bbox) maxDelta = Math.min(maxDelta, bbox.minX - margin);
+    maxDelta = Math.max(0, maxDelta);
+    const dd = Math.min(delta, maxDelta);
+    w = startW - dd; tx = -dd;
+  } else {  // bottom
+    let maxDelta = startD - minSize;
+    if (bbox) maxDelta = Math.min(maxDelta, bbox.minY - margin);
+    maxDelta = Math.max(0, maxDelta);
+    const dd = Math.min(delta, maxDelta);
+    d = startD - dd; ty = -dd;
+  }
+  return { w, d, tx, ty };
 }
 
 export function pointToSeg(px: number, py: number, ax: number, ay: number,

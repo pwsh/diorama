@@ -158,6 +158,62 @@ export function drawAll(ctx: CanvasRenderingContext2D, p: Planner, view: View,
   // Geo landmark pins + GPS device pins (both ride the `geo` layer).
   if (on(L.geo)) { drawGeoLandmarks(ctx, p, view); drawGpsPins(ctx, p, view); }
   drawAlignGuides(ctx, p, view);
+  drawFloorEditHandles(ctx, p, view);
+}
+
+// Floor-boundary edit affordance (Task: drag the canvas edges). In edit + select
+// mode, small square handles sit at each edge midpoint so the resize is
+// discoverable. While a floorEdge drag is live, the dragged edge highlights and
+// a dims label follows it. Gated internally; drawn last so it sits on top.
+function drawFloorEditHandles(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
+  if (p.uiMode !== 'edit' || p.tool !== 'select') return;
+  const dpr = window.devicePixelRatio || 1;
+  const f = p.floor();
+  const dragging = p.drag?.kind === 'floorEdge' ? p.drag.edge : null;
+  const a = mmToPx(view, 0, 0);       // world (0,0) → screen bottom-left
+  const b = mmToPx(view, f.w, f.d);   // world (w,d) → screen top-right
+  const left = Math.min(a.x, b.x), right = Math.max(a.x, b.x);
+  const topS = Math.min(a.y, b.y), botS = Math.max(a.y, b.y);
+  const midX = (left + right) / 2, midY = (topS + botS) / 2;
+  const edges: { e: 'left' | 'right' | 'top' | 'bottom'; x: number; y: number }[] = [
+    { e: 'left',   x: left,  y: midY },
+    { e: 'right',  x: right, y: midY },
+    { e: 'top',    x: midX,  y: topS },   // world +Y (depth) is screen-up
+    { e: 'bottom', x: midX,  y: botS },
+  ];
+  ctx.save();
+  for (const ed of edges) {
+    const active = dragging === ed.e;
+    const s = (active ? 6 : 4.5) * dpr;
+    ctx.fillStyle = active ? '#ffb74d' : 'rgba(120,170,220,0.9)';
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 1;
+    ctx.fillRect(ed.x - s, ed.y - s, 2 * s, 2 * s);
+    ctx.strokeRect(ed.x - s, ed.y - s, 2 * s, 2 * s);
+  }
+  if (dragging) {
+    ctx.strokeStyle = '#ffb74d'; ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    if (dragging === 'left') { ctx.moveTo(left, topS); ctx.lineTo(left, botS); }
+    else if (dragging === 'right') { ctx.moveTo(right, topS); ctx.lineTo(right, botS); }
+    else if (dragging === 'top') { ctx.moveTo(left, topS); ctx.lineTo(right, topS); }
+    else { ctx.moveTo(left, botS); ctx.lineTo(right, botS); }
+    ctx.stroke();
+    const label = `${fmtLen(f.w, p.store.imperial)} × ${fmtLen(f.d, p.store.imperial)}`;
+    ctx.font = `${12 * dpr}px sans-serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    let lx = midX, ly = midY;
+    const off = 18 * dpr;
+    if (dragging === 'left') lx = left + off * 3;
+    else if (dragging === 'right') lx = right - off * 3;
+    else if (dragging === 'top') ly = topS + off;
+    else ly = botS - off;
+    const tw = ctx.measureText(label).width + 10 * dpr;
+    ctx.fillStyle = 'rgba(0,0,0,0.78)';
+    ctx.fillRect(lx - tw / 2, ly - 9 * dpr, tw, 18 * dpr);
+    ctx.fillStyle = '#ffd54f';
+    ctx.fillText(label, lx, ly);
+  }
+  ctx.restore();
 }
 
 // Smart alignment guides (Feature C): dashed accent lines through the aligned

@@ -1,4 +1,4 @@
-import { snap, snapVertex15, distMM, worldToLocal, localToWorld, FURNITURE_KINDS, furnitureCorners, furnitureLocalToWorld, furnitureWorldToLocal, resolveFurnitureDef, resolveFurnitureWallCollision, resolveSeatTableCollision, snapStepLightToSurface, snapFireplaceToWall, snapSwitchToWall, nearestAlign, envScale, ENV_SCALE_MIN, ENV_SCALE_MAX } from './geometry.js';
+import { snap, snapVertex15, distMM, worldToLocal, localToWorld, FURNITURE_KINDS, furnitureCorners, furnitureLocalToWorld, furnitureWorldToLocal, resolveFurnitureDef, resolveFurnitureWallCollision, resolveSeatTableCollision, snapStepLightToSurface, snapFireplaceToWall, snapSwitchToWall, nearestAlign, envScale, ENV_SCALE_MIN, ENV_SCALE_MAX, GRID_MM, floorContentBbox, resolveFloorEdgeDrag } from './geometry.js';
 import { newId } from './storage.js';
 import {
   pxToMm, type View,
@@ -10,7 +10,7 @@ import {
   hitBgBody, hitBgCorner, bgEditable,
   hitMotionSensor, hitMotionRotateHandle, hitEnvSensor, hitEnvResizeHandle,
   hitBleProxy,
-  hitDoor, hitDoorEnd, hitWindow, hitWindowEnd,
+  hitDoor, hitDoorEnd, hitWindow, hitWindowEnd, hitFloorEdge,
 } from './canvas-hit.js';
 import type { Planner, Drag } from './planner.js';
 import { NEW_ROOM, NEW_LANDMARK } from './planner.js';
@@ -448,6 +448,20 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
     p.drag = { kind: 'bgMove', startMm: mm, start: { x: bgBody.x, y: bgBody.y } };
     canvas.style.cursor = 'grabbing'; e.preventDefault(); return;
   }
+  // Floor boundary edge — lowest priority (after every item hit, before the
+  // canvas-2d pan fallback). Drag to resize the canvas space; left/bottom edges
+  // also reposition the plan (see resolveFloorEdgeDrag / translateFloorContent).
+  const fe = hitFloorEdge(p.floor(), view, mm);
+  if (fe) {
+    const f = p.floor();
+    p.drag = {
+      kind: 'floorEdge', edge: fe,
+      startClient: { x: e.clientX, y: e.clientY }, startScale: view.scale,
+      startW: f.w, startD: f.d, startBbox: floorContentBbox(f), applied: { x: 0, y: 0 },
+    };
+    canvas.style.cursor = (fe === 'left' || fe === 'right') ? 'ew-resize' : 'ns-resize';
+    e.preventDefault(); return;
+  }
 }
 
 export function onCanvasMouseMove(p: Planner, canvas: HTMLCanvasElement, view: View, e: MouseEvent): void {
@@ -729,6 +743,29 @@ export function onCanvasMouseMove(p: Planner, canvas: HTMLCanvasElement, view: V
         }
         break;
       }
+      case 'floorEdge': {
+        // Measure the cursor delta in FROZEN start-of-drag screen space so the
+        // fit-view rescale that follows a resize can't feed back. Screen +Y is
+        // down; world +Y is up → invert for the top/bottom (vertical) edges.
+        const dpr = window.devicePixelRatio || 1;
+        const horiz = drag.edge === 'left' || drag.edge === 'right';
+        const screenDelta = horiz
+          ? (e.clientX - drag.startClient.x)
+          : (e.clientY - drag.startClient.y);
+        let worldDelta = screenDelta * dpr / Math.max(drag.startScale, 1e-9);
+        if (!horiz) worldDelta = -worldDelta;
+        const r = resolveFloorEdgeDrag(drag.edge, snap(worldDelta, GRID_MM),
+                                       drag.startW, drag.startD, drag.startBbox);
+        f.w = r.w; f.d = r.d;
+        // `tx`/`ty` are TOTAL translation from drag start; apply only the delta
+        // since last frame so live mutation stays consistent.
+        const needX = r.tx - drag.applied.x, needY = r.ty - drag.applied.y;
+        if (needX !== 0 || needY !== 0) {
+          p.translateFloorContent(needX, needY);
+          drag.applied.x = r.tx; drag.applied.y = r.ty;
+        }
+        break;
+      }
     }
     // Smart alignment guides (Feature C): snap the moved placeable's center to
     // peer centers on X / Y (edit mode, move-kinds only). Applied AFTER the
@@ -770,7 +807,12 @@ export function onCanvasMouseMove(p: Planner, canvas: HTMLCanvasElement, view: V
     else if (hitFixture(p, mm, Math.max(250, hitPx(view) * 3))) canvas.style.cursor = 'grab';
     else if (hitFurniture(p, mm) || hitWall(p, mm) || hitSensor(p, view, mm)) canvas.style.cursor = 'grab';
     else if (hitBgBody(p, mm)) canvas.style.cursor = 'grab';
-    else canvas.style.cursor = 'default';
+    else {
+      const fe = hitFloorEdge(p.floor(), view, mm);
+      canvas.style.cursor = fe
+        ? ((fe === 'left' || fe === 'right') ? 'ew-resize' : 'ns-resize')
+        : 'default';
+    }
   } else { canvas.style.cursor = 'crosshair'; }
 }
 
@@ -858,6 +900,12 @@ export function onCanvasMouseUp(p: Planner, canvas: HTMLCanvasElement): void {
     }
     p.save();
   } else if (drag.kind === 'bgMove' || drag.kind === 'bgCorner') {
+    p.save();
+  } else if (drag.kind === 'floorEdge') {
+    // Round the final dims to the grid (translation already applied live). The
+    // 100 mm content margin absorbs the <=50 mm rounding so nothing strands.
+    // configRev (emitConfig below) flows to _keyFloor → 3D + nav rebuild.
+    f.w = snap(f.w, GRID_MM); f.d = snap(f.d, GRID_MM);
     p.save();
   } else if (drag.kind === 'doorMove') {
     const door = f.doors[drag.idx];

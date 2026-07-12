@@ -1,0 +1,110 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>FLOOREDGE …</title>
+  <style>
+    body { margin:0; background:#0d1116; color:#cfd8dc; font:13px/1.4 sans-serif; padding:14px; }
+    h1 { font-size:15px; margin:0 0 10px; }
+    .grid { display:flex; flex-wrap:wrap; gap:10px; }
+    .card { background:#141b22; border:1px solid #26323d; border-radius:6px; padding:8px 10px; width:420px; }
+    .row { display:flex; justify-content:space-between; font-size:11px; gap:8px; }
+    .pass { color:#69f0ae; } .fail { color:#ff5252; }
+    #summary { font-size:14px; font-weight:bold; margin:10px 0; padding:8px 10px; border-radius:5px; }
+    .okbg { background:#12331f; color:#69f0ae; } .badbg { background:#3a1414; color:#ff8a80; }
+    code { color:#ffd54f; }
+  </style>
+</head>
+<body>
+  <h1>Floor-edge editing — content bbox + resize/translate clamp math</h1>
+  <div id="summary">Running…</div>
+  <div class="grid" id="grid"></div>
+
+  <!-- geometry.ts transpiled standalone (same as wallsnap/rooms tests):
+         npx esbuild src/geometry.ts --bundle --format=esm \
+           --outfile=<harness>/geometry.mod.js -->
+  <script type="module">
+    import { floorContentBbox, resolveFloorEdgeDrag, GRID_MM } from './geometry.mod.js';
+
+    const tests = [];
+    const ok = (name, cond, detail) => tests.push({ name, ok: !!cond, detail });
+    const near = (a, b, e = 0.5) => Math.abs(a - b) <= e;
+
+    // ── floorContentBbox ────────────────────────────────────────────────────
+    ok('empty floor → null', floorContentBbox({
+      walls: [], furniture: [], lights: [], switches: [], sensors: [], motionSensors: [],
+    }) === null);
+
+    const bb = floorContentBbox({
+      walls: [{ points: [{ x: 500, y: 400 }, { x: 3000, y: 400 }] }],
+      furniture: [{ x: 1200, y: 2800 }],
+      lights: [{ x: 200, y: 200 }],
+      switches: [], sensors: [{ x: 3400, y: 100 }], motionSensors: [],
+      envSensors: [], bleProxies: [], doors: [], windows: [],
+      rooms: [{ anchor: { x: 150, y: 1500 } }],
+    });
+    ok('bbox minX = 150 (room anchor)', bb && near(bb.minX, 150), bb && `minX=${bb.minX}`);
+    ok('bbox minY = 100 (sensor)', bb && near(bb.minY, 100), bb && `minY=${bb.minY}`);
+    ok('bbox maxX = 3400 (sensor)', bb && near(bb.maxX, 3400), bb && `maxX=${bb.maxX}`);
+    ok('bbox maxY = 2800 (furniture)', bb && near(bb.maxY, 2800), bb && `maxY=${bb.maxY}`);
+
+    // ── resolveFloorEdgeDrag: right edge (resize only) ──────────────────────
+    let r = resolveFloorEdgeDrag('right', 1000, 5000, 4000, null);
+    ok('right enlarge: w=6000, no translate', near(r.w, 6000) && r.tx === 0 && r.ty === 0 && near(r.d, 4000),
+       `w=${r.w} tx=${r.tx}`);
+    r = resolveFloorEdgeDrag('right', -4000, 5000, 4000, null);
+    ok('right shrink clamps to minSize 2000', near(r.w, 2000), `w=${r.w}`);
+    r = resolveFloorEdgeDrag('right', -4000, 5000, 4000, { minX: 0, minY: 0, maxX: 4300, maxY: 100 });
+    ok('right shrink clamps to content maxX+margin (4400)', near(r.w, 4400), `w=${r.w}`);
+
+    // ── top edge (resize only, +Y) ──────────────────────────────────────────
+    r = resolveFloorEdgeDrag('top', 500, 5000, 4000, null);
+    ok('top enlarge: d=4500', near(r.d, 4500) && r.tx === 0 && r.ty === 0, `d=${r.d}`);
+    r = resolveFloorEdgeDrag('top', -3000, 5000, 4000, { minX: 0, minY: 0, maxX: 100, maxY: 2600 });
+    ok('top shrink clamps to content maxY+margin (2700)', near(r.d, 2700), `d=${r.d}`);
+
+    // ── left edge (resize + translate) ──────────────────────────────────────
+    r = resolveFloorEdgeDrag('left', -1000, 5000, 4000, null);
+    ok('left enlarge (drag out): w=6000, content +1000', near(r.w, 6000) && near(r.tx, 1000) && r.ty === 0,
+       `w=${r.w} tx=${r.tx}`);
+    r = resolveFloorEdgeDrag('left', 1000, 5000, 4000, { minX: 1500, minY: 0, maxX: 4000, maxY: 100 });
+    ok('left shrink 1000: w=4000, content -1000', near(r.w, 4000) && near(r.tx, -1000), `w=${r.w} tx=${r.tx}`);
+    r = resolveFloorEdgeDrag('left', 2000, 5000, 4000, { minX: 1500, minY: 0, maxX: 4000, maxY: 100 });
+    ok('left shrink clamps by content margin (dd=1400)', near(r.w, 3600) && near(r.tx, -1400), `w=${r.w} tx=${r.tx}`);
+    ok('  → content minX lands at margin', near(1500 + r.tx, GRID_MM), `minX'=${1500 + r.tx}`);
+    r = resolveFloorEdgeDrag('left', 4000, 5000, 4000, null);
+    ok('left shrink clamps to minSize (w=2000, tx=-3000)', near(r.w, 2000) && near(r.tx, -3000), `w=${r.w} tx=${r.tx}`);
+    r = resolveFloorEdgeDrag('left', 500, 5000, 4000, { minX: 50, minY: 0, maxX: 4000, maxY: 100 });
+    ok('left already-stranded content: no shrink, no forced enlarge', near(r.w, 5000) && r.tx === 0, `w=${r.w} tx=${r.tx}`);
+
+    // ── bottom edge (resize + translate, +Y up so drag-down enlarges) ───────
+    r = resolveFloorEdgeDrag('bottom', -1000, 5000, 4000, null);
+    ok('bottom enlarge: d=5000, content +1000 (up)', near(r.d, 5000) && near(r.ty, 1000), `d=${r.d} ty=${r.ty}`);
+    r = resolveFloorEdgeDrag('bottom', 1500, 5000, 4000, { minX: 0, minY: 1700, maxX: 100, maxY: 3000 });
+    ok('bottom shrink 1500 (room to spare): d=2500, content -1500', near(r.d, 2500) && near(r.ty, -1500), `d=${r.d} ty=${r.ty}`);
+    r = resolveFloorEdgeDrag('bottom', 3000, 5000, 4000, { minX: 0, minY: 700, maxX: 100, maxY: 3000 });
+    ok('bottom shrink clamps by content (dd=600)', near(r.d, 3400) && near(r.ty, -600), `d=${r.d} ty=${r.ty}`);
+
+    // ── run + report ────────────────────────────────────────────────────────
+    const grid = document.getElementById('grid');
+    let pass = 0;
+    const fails = [];
+    for (const t of tests) {
+      if (t.ok) pass++; else fails.push(t.name);
+      const card = document.createElement('div');
+      card.className = 'card';
+      card.innerHTML = `<div class="row">
+        <span>${t.ok ? '<span class=pass>PASS</span>' : '<span class=fail>FAIL</span>'} ${t.name}</span>
+        <span>${t.detail ?? ''}</span></div>`;
+      grid.appendChild(card);
+    }
+    const total = tests.length;
+    const allPass = pass === total;
+    const title = allPass ? `FLOOREDGE PASS ${pass}/${total}` : `FLOOREDGE FAIL ${pass}/${total} [${fails.join(',')}]`;
+    document.title = title;
+    const sum = document.getElementById('summary');
+    sum.textContent = title;
+    sum.className = allPass ? 'okbg' : 'badbg';
+  </script>
+</body>
+</html>

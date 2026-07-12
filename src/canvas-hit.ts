@@ -3,11 +3,31 @@ import { switchSize, distMM, pointToSeg, transformVerts, centroid, localToWorld,
          furnitureCorners, furnitureLocalToWorld, doorEndpoint,
          doorOpenDeltaDeg, windowEndpoints } from './geometry.js';
 import type { Planner } from './planner.js';
-import type { Vec2, Wall, Sensor, Furniture, BgImage, MotionSensor, EnvSensor, BleProxy, Door, Window as WindowType } from './types.js';
+import type { Vec2, Wall, Sensor, Furniture, BgImage, MotionSensor, EnvSensor, BleProxy, Door, Window as WindowType, Floor } from './types.js';
+import type { FloorEdge } from './geometry.js';
 import { envChipHalfPx, type View } from './canvas-render.js';
 
 export function hitPx(view: View): number {
   return Math.max(60, 12 / Math.max(view.scale, 1e-9));
+}
+
+// Nearest floor boundary edge within ~10 px (screen) of the cursor, or null.
+// Only the edge alongside the cursor qualifies (the perpendicular coordinate
+// must be within the rect span + tolerance) so a distant corner never grabs.
+// Ties (a corner) resolve to the closer edge. Callers gate on edit + select.
+export function hitFloorEdge(f: Floor, view: View, mm: Vec2): FloorEdge | null {
+  const dpr = window.devicePixelRatio || 1;
+  const tol = 10 * dpr / Math.max(view.scale, 1e-9);
+  const inX = mm.x >= -tol && mm.x <= f.w + tol;
+  const inY = mm.y >= -tol && mm.y <= f.d + tol;
+  const cands: { edge: FloorEdge; dist: number }[] = [];
+  if (inY && Math.abs(mm.x) <= tol) cands.push({ edge: 'left', dist: Math.abs(mm.x) });
+  if (inY && Math.abs(mm.x - f.w) <= tol) cands.push({ edge: 'right', dist: Math.abs(mm.x - f.w) });
+  if (inX && Math.abs(mm.y - f.d) <= tol) cands.push({ edge: 'top', dist: Math.abs(mm.y - f.d) });
+  if (inX && Math.abs(mm.y) <= tol) cands.push({ edge: 'bottom', dist: Math.abs(mm.y) });
+  if (!cands.length) return null;
+  cands.sort((a, b) => a.dist - b.dist);
+  return cands[0].edge;
 }
 
 export function hitSensor(p: Planner, view: View, mm: Vec2): Sensor | null {
