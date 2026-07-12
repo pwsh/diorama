@@ -5,7 +5,7 @@ import { startZoneEdit } from '../canvas-interact.js';
 import { repairFloor } from '../storage.js';
 import type { Planner, Tool } from '../planner.js';
 import { NEW_ROOM, NEW_LANDMARK } from '../planner.js';
-import { compass8 } from '../geo.js';
+import { compass8, parseLatLon } from '../geo.js';
 import type {
   Sensor, Zone, ObjectHalo, BgImage, MotionSensor, EnvSensor, EnvKind, Light, SwitchFixture, LightIconKind,
   Furniture, FurnitureKind, Door, Window as WindowType, WindowKind, Layers2D, Floor, Room,
@@ -169,6 +169,12 @@ export class Sidebar extends LitElement {
   override disconnectedCallback(): void {
     super.disconnectedCallback();
     this.planner.removeEventListener('config', this._tick);
+    if (this._calibLiveTimer) { clearInterval(this._calibLiveTimer); this._calibLiveTimer = null; }
+  }
+  override updated(): void {
+    // Start/stop the geo-calibration liveness ticker based on whether an active
+    // session's card is currently visible (session running + section expanded).
+    this._reconcileCalibLiveTimer();
   }
   private _tick = () => { this._++; };
 
@@ -2675,10 +2681,31 @@ export class Sidebar extends LitElement {
   // whole section (and calibration flow) is edit-only — the sidebar itself only
   // renders in edit mode (see app.ts).
   @state() private _calibLandmarkId: string | null = null;
+  // Manual lat/lon entry (per-landmark): which landmark's editor is open + its
+  // draft field strings (prefilled from the landmark, or split from a pasted
+  // "lat, lon" clipboard string). Runtime-only, edit-mode only.
+  @state() private _manualLandmarkId: string | null = null;
+  @state() private _manualLat = '';
+  @state() private _manualLon = '';
+  @state() private _manualErr = '';
   @state() private _calibTrackerId = '';
   @state() private _calibSlug = '';
   @state() private _calibMsg = '';
   @state() private _calibBusy = false;
+  // 1 s liveness ticker: while an active session's card is on screen we force a
+  // re-render every second so elapsed time / "last fix ago" stay current even
+  // when zero samples arrive. Reconciled in updated(); cleared on disconnect.
+  private _calibLiveTimer: ReturnType<typeof setInterval> | null = null;
+  private _reconcileCalibLiveTimer(): void {
+    const gc = this.planner.geoCalib;
+    const show = !!gc && !this._collapsed.has('geo') && this._calibLandmarkId === gc.landmarkId;
+    if (show && !this._calibLiveTimer) {
+      this._calibLiveTimer = setInterval(() => this.requestUpdate(), 1000);
+    } else if (!show && this._calibLiveTimer) {
+      clearInterval(this._calibLiveTimer);
+      this._calibLiveTimer = null;
+    }
+  }
 
   private _geoSection() {
     const p = this.planner;
@@ -2743,12 +2770,17 @@ export class Sidebar extends LitElement {
   private _landmarkItem(lm: GeoLandmark) {
     const p = this.planner;
     const calibrated = lm.lat != null && lm.lon != null;
-    const status = calibrated
-      ? `${lm.accuracy != null ? `±${Math.round(lm.accuracy)} m` : 'calibrated'}`
-        + ` · ${lm.sampleCount ?? '?'} samples`
-        + (lm.sampledAt ? ` · ${new Date(lm.sampledAt).toLocaleDateString()}` : '')
-      : 'uncalibrated';
+    // Manually-entered landmarks have no sampling run (sampleCount absent).
+    const manual = calibrated && lm.sampleCount == null;
+    const dateStr = lm.sampledAt ? ` · ${new Date(lm.sampledAt).toLocaleDateString()}` : '';
+    const status = !calibrated
+      ? 'uncalibrated'
+      : manual
+        ? `manual${dateStr}`
+        : `${lm.accuracy != null ? `±${Math.round(lm.accuracy)} m` : 'calibrated'}`
+          + ` · ${lm.sampleCount} samples${dateStr}`;
     const cardOpen = this._calibLandmarkId === lm.id;
+    const manualOpen = this._manualLandmarkId === lm.id;
     return html`
       <div style="border-bottom:1px solid var(--border)">
         <div class="sensor-item" style="cursor:default;gap:4px">
@@ -2766,7 +2798,7 @@ export class Sidebar extends LitElement {
         <div style="font-size:10px;color:${calibrated ? 'var(--text-dim)' : '#ffb74d'};padding:0 0 3px 20px">
           ${status}
         </div>
-        <div style="padding:0 0 4px 20px">
+        <div style="padding:0 0 4px 20px;display:flex;gap:4px;flex-wrap:wrap;align-items:center">
           <button class="btn" style="font-size:10px;padding:2px 8px"
                   @click=${() => {
                     if (cardOpen) { this._calibLandmarkId = null; return; }
@@ -2781,8 +2813,93 @@ export class Sidebar extends LitElement {
                   }}>
             ${cardOpen ? 'Close' : 'Calibrate…'}
           </button>
+          <button class="btn" style="font-size:10px;padding:2px 8px"
+                  title="Type or paste lat/lon directly (skips GPS sampling)"
+                  @click=${() => {
+                    if (manualOpen) { this._manualLandmarkId = null; return; }
+                    this._manualLandmarkId = lm.id;
+                    this._manualErr = '';
+                    this._manualLat = lm.lat != null ? lm.lat.toFixed(6) : '';
+                    this._manualLon = lm.lon != null ? lm.lon.toFixed(6) : '';
+                    this.requestUpdate();
+                  }}>
+            ${manualOpen ? 'Close' : '✏️ Set coordinates…'}
+          </button>
+          ${calibrated ? html`
+            <button class="btn" style="font-size:10px;padding:2px 8px"
+                    title="Clear lat/lon — return to uncalibrated"
+                    @click=${() => {
+                      if (this._manualLandmarkId === lm.id) this._manualLandmarkId = null;
+                      p.updateLandmark(lm.id, l => {
+                        delete l.lat; delete l.lon;
+                        delete l.accuracy; delete l.sampleCount; delete l.sampledAt;
+                      });
+                    }}>✕ clear coords</button>` : nothing}
         </div>
+        ${manualOpen ? this._manualCoordCard(lm) : nothing}
         ${cardOpen ? this._calibCard(lm) : nothing}
+      </div>
+    `;
+  }
+
+  // Manual lat/lon entry card. The Latitude field accepts a pasted combined
+  // "lat, lon" string (Google/Apple Maps copy format) and splits it across both
+  // fields. Apply validates ranges, sets lat/lon + sampledAt, and CLEARS the
+  // sampling metadata (accuracy/sampleCount) — those describe a sampling run
+  // that didn't happen, so the fit-quality readout stays honest.
+  private _manualCoordCard(lm: GeoLandmark) {
+    const p = this.planner;
+    // Split a pasted "lat, lon" pair across both fields (Latitude field only).
+    const trySplit = (raw: string): boolean => {
+      const pair = parseLatLon(raw);
+      if (!pair) return false;
+      this._manualLat = pair.lat.toFixed(6);
+      this._manualLon = pair.lon.toFixed(6);
+      this._manualErr = '';
+      this.requestUpdate();
+      return true;
+    };
+    const apply = () => {
+      const lat = Number(this._manualLat.trim());
+      const lon = Number(this._manualLon.trim());
+      if (!this._manualLat.trim() || !this._manualLon.trim() || !isFinite(lat) || !isFinite(lon)) {
+        this._manualErr = 'Enter both latitude and longitude.'; this.requestUpdate(); return;
+      }
+      if (lat < -90 || lat > 90) { this._manualErr = 'Latitude must be between −90 and 90.'; this.requestUpdate(); return; }
+      if (lon < -180 || lon > 180) { this._manualErr = 'Longitude must be between −180 and 180.'; this.requestUpdate(); return; }
+      p.updateLandmark(lm.id, l => {
+        l.lat = lat; l.lon = lon;
+        l.sampledAt = new Date().toISOString();
+        delete l.accuracy; delete l.sampleCount;
+      });
+      this._manualErr = '';
+      this._manualLandmarkId = null;
+      this.requestUpdate();
+    };
+    return html`
+      <div style="background:rgba(0,0,0,0.28);border-radius:4px;padding:6px;margin:2px 0 6px 20px">
+        <div style="font-size:10px;color:var(--text-dim);margin-bottom:4px;line-height:1.35">
+          Type or paste coordinates. Pasting a <code>lat, lon</code> pair into Latitude fills both.
+        </div>
+        <div class="row" style="margin-top:0"><label>Latitude</label>
+          <input type="number" step="any" placeholder="e.g. 45.123456" .value=${this._manualLat}
+                 @paste=${(e: ClipboardEvent) => {
+                   const raw = e.clipboardData?.getData('text') ?? '';
+                   if (trySplit(raw)) e.preventDefault();
+                 }}
+                 @input=${(e: Event) => {
+                   const v = (e.target as HTMLInputElement).value;
+                   if (!trySplit(v)) this._manualLat = v;
+                 }}>
+        </div>
+        <div class="row"><label>Longitude</label>
+          <input type="number" step="any" placeholder="e.g. -93.123456" .value=${this._manualLon}
+                 @input=${(e: Event) => { this._manualLon = (e.target as HTMLInputElement).value; }}>
+        </div>
+        <button class="btn" style="width:100%;margin-top:6px;font-size:11px" @click=${apply}>Apply coordinates</button>
+        ${this._manualErr ? html`
+          <div style="font-size:11px;margin-top:6px;padding:5px 7px;border-radius:4px;
+                      background:rgba(120,0,0,0.35);color:#ff8a80;line-height:1.35">${this._manualErr}</div>` : nothing}
       </div>
     `;
   }
@@ -2791,22 +2908,45 @@ export class Sidebar extends LitElement {
     const p = this.planner;
     const gc = p.geoCalib;
     const active = gc?.landmarkId === lm.id;
-    const iosNote = html`<div style="font-size:10px;color:var(--text-dim);line-height:1.35;margin-top:4px">
-      iOS has no high-accuracy command — keep the HA app open at the spot and
-      pull-to-refresh occasionally. Android is forced to 5 s updates automatically.
+    // Platform guidance: both platforms now get a request_location_update pump.
+    const guidance = html`<div style="font-size:10px;color:var(--text-dim);line-height:1.35;margin-top:4px">
+      Keep the HA app open in the foreground — the panel is requesting fixes every
+      25 s, but iOS may still take minutes to answer. Android is also forced to 5 s
+      high-accuracy updates.
     </div>`;
+    // Live liveness readout (recomputed each render; the 1 s ticker drives it).
+    let live = null;
+    if (active && gc) {
+      const now = Date.now();
+      const totalSec = Math.max(0, Math.floor((now - new Date(gc.startedAt).getTime()) / 1000));
+      const mmss = `${Math.floor(totalSec / 60)}:${String(totalSec % 60).padStart(2, '0')}`;
+      const lastFix = gc.lastSeenAt
+        ? `last fix: ${Math.max(0, Math.round((now - new Date(gc.lastSeenAt).getTime()) / 1000))}s ago`
+        : 'no fixes yet…';
+      const excl = gc.exclAccuracy + gc.exclSource;
+      live = html`
+        <div style="font-size:11px;margin-bottom:4px;display:flex;align-items:center;gap:6px">
+          <span class="diorama-calib-dot"></span>
+          <span>Sampling <code>${gc.trackerId}</code></span>
+        </div>
+        <div style="font-size:11px;margin-bottom:2px">
+          <b>${mmss}</b> elapsed · ${lastFix}
+        </div>
+        <div style="font-size:11px;margin-bottom:4px">
+          <b>${gc.used}</b> used · ${excl} excluded
+          <span style="color:var(--text-dim)">(${gc.exclAccuracy} accuracy · ${gc.exclSource} source)</span>
+        </div>`;
+    }
     return html`
       <div style="background:rgba(0,0,0,0.28);border-radius:4px;padding:6px;margin:2px 0 6px 20px">
         ${active ? html`
-          <div style="font-size:11px;margin-bottom:4px">
-            Sampling <code>${gc!.trackerId}</code> — <b>${gc!.liveCount}</b> sample${gc!.liveCount === 1 ? '' : 's'} so far
-            <span style="color:var(--text-dim)">(closing the panel is fine)</span>
-          </div>
+          ${live}
           <div style="font-size:10px;color:var(--text-dim);margin-bottom:4px">
             Stand at the landmark ≥3–5 min, then Finish. The median is pulled from
-            history, so you can walk back inside first.
+            history, so you can walk back inside first (closing the panel is fine).
           </div>
-          <div style="display:flex;gap:4px">
+          ${guidance}
+          <div style="display:flex;gap:4px;margin-top:6px">
             <button class="btn" style="flex:1;font-size:11px" ?disabled=${this._calibBusy}
                     @click=${async () => {
                       this._calibBusy = true; this.requestUpdate();
@@ -2849,7 +2989,7 @@ export class Sidebar extends LitElement {
                     p.startGeoCalibration(this._calibLandmarkId!, this._calibTrackerId, this._calibSlug);
                     this._calibMsg = '';
                   }}>▶ Start sampling</button>
-          ${iosNote}
+          ${guidance}
         `}
         ${this._calibMsg ? html`
           <div style="font-size:11px;margin-top:6px;padding:5px 7px;border-radius:4px;

@@ -29,6 +29,7 @@
   <script type="module">
     import {
       projectLatLon, fitGeoTransform, latLonToPlan, planToLatLon, medianLatLon,
+      parseLatLon,
     } from './geo.mod.js';
 
     const tests = [];
@@ -171,6 +172,39 @@
       ok('median: lon resists outlier', Math.abs(m.lon - (-93.0000)) < 1e-6, `lon ${m.lon}`);
       near('median: accuracy median = 6', m.accuracy, 6, 1e-9);
       ok('median: empty → null', medianLatLon([]) === null, 'null');
+    })();
+
+    // ── parseLatLon: manual coordinate entry / paste ─────────────────────────
+    (() => {
+      const eq = (name, got, wantLat, wantLon) =>
+        ok(name, got && Math.abs(got.lat - wantLat) < 1e-9 && Math.abs(got.lon - wantLon) < 1e-9,
+           got ? `(${got.lat},${got.lon})` : 'null');
+      // Plain comma pair (Google Maps copy format).
+      eq('parse comma pair', parseLatLon('45.123456,-93.456789'), 45.123456, -93.456789);
+      // Comma + space (Apple / Google share text).
+      eq('parse comma+space', parseLatLon('45.123456, -93.456789'), 45.123456, -93.456789);
+      // Leading/trailing whitespace tolerated.
+      eq('parse padded', parseLatLon('  12.5 , -0.25  '), 12.5, -0.25);
+      // Whitespace-only separator (no comma).
+      eq('parse space-separated', parseLatLon('10 20'), 10, 20);
+      // Explicit + sign.
+      eq('parse +lat', parseLatLon('+1.5, +2.5'), 1.5, 2.5);
+      // A single bare float is NOT a pair → null (the Latitude field's split
+      // path ignores it and keeps the typed value).
+      ok('parse single float → null', parseLatLon('45.123') === null, `${parseLatLon('45.123')}`);
+      // Junk → null.
+      ok('parse junk → null', parseLatLon('hello world') === null, `${parseLatLon('hello world')}`);
+      ok('parse trailing junk → null', parseLatLon('45.1abc, -93.2') === null, `${parseLatLon('45.1abc, -93.2')}`);
+      ok('parse empty → null', parseLatLon('') === null, `${parseLatLon('')}`);
+      // Three tokens → null.
+      ok('parse 3 tokens → null', parseLatLon('1, 2, 3') === null, `${parseLatLon('1, 2, 3')}`);
+      // Range validation.
+      ok('parse lat >90 → null', parseLatLon('91, 0') === null, `${parseLatLon('91, 0')}`);
+      ok('parse lat <-90 → null', parseLatLon('-90.1, 0') === null, `${parseLatLon('-90.1, 0')}`);
+      ok('parse lon >180 → null', parseLatLon('0, 181') === null, `${parseLatLon('0, 181')}`);
+      ok('parse lon <-180 → null', parseLatLon('0, -180.5') === null, `${parseLatLon('0, -180.5')}`);
+      // Range extremes are inclusive.
+      eq('parse range extremes', parseLatLon('-90, 180'), -90, 180);
     })();
 
     // ── run + render ─────────────────────────────────────────────────────────

@@ -159,7 +159,15 @@ export interface GeoCalibSession {
   trackerId: string;      // device_tracker.* being sampled
   startedAt: string;      // ISO — window start
   notifySlug: string;     // notify.mobile_app_<slug> for high-accuracy commands ('' = none)
-  liveCount: number;      // samples seen (passing the accuracy gate) while the panel is open
+  // Live accounting, bumped on every tracker state_changed with lat/lon while the
+  // panel is open. seen = used + exclAccuracy + exclSource (buckets are exclusive).
+  seen: number;           // fixes with lat/lon observed
+  used: number;           // passed the filters (accuracy gate + source_type)
+  exclAccuracy: number;   // dropped: gps_accuracy > gate
+  exclSource: number;     // dropped: source_type present and !== 'gps'
+  lastSeenAt: string | null; // ISO of the last fix with lat/lon (used OR excluded)
+  // Repeated `request_location_update` notify pump (works on iOS + Android).
+  reqTimer: ReturnType<typeof setInterval> | null;
 }
 
 // Result of finishGeoCalibration — surfaced to the sidebar.
@@ -1172,42 +1180,82 @@ export class Planner extends EventTarget {
     } catch { /* ignore */ }
   }
 
-  // Start sampling a device_tracker at a landmark. Records the window start and
-  // (Android) forces high-accuracy mode + a 5 s update interval.
+  // Fire-and-forget the officially-documented `request_location_update` companion
+  // notify command. Works on BOTH iOS and Android (iOS has no high-accuracy
+  // command but does answer this, subject to OS throttling). Never blocks/throws.
+  private _requestLocationUpdate(slug: string): void {
+    if (!slug || !this.hass) return;
+    try {
+      void Promise.resolve(this.hass.callService('notify', slug, {
+        message: 'request_location_update',
+      })).catch(() => { /* ignore */ });
+    } catch { /* ignore */ }
+  }
+
+  // Clear the active session's `request_location_update` interval, if any.
+  private _clearGeoCalibTimer(): void {
+    if (this.geoCalib?.reqTimer) {
+      clearInterval(this.geoCalib.reqTimer);
+      this.geoCalib.reqTimer = null;
+    }
+  }
+
+  // Start sampling a device_tracker at a landmark. Records the window start,
+  // (Android) forces high-accuracy mode + a 5 s update interval, and pumps a
+  // `request_location_update` every 25 s (both platforms).
   startGeoCalibration(landmarkId: string, trackerId: string, notifySlug?: string): void {
+    this._clearGeoCalibTimer(); // never leak a prior session's pump
     const slug = notifySlug ?? this.notifySlugFor(trackerId);
     this.geoCalib = {
       landmarkId, trackerId, startedAt: new Date().toISOString(),
-      notifySlug: slug, liveCount: 0,
+      notifySlug: slug, seen: 0, used: 0, exclAccuracy: 0, exclSource: 0,
+      lastSeenAt: null, reqTimer: null,
     };
     this._sendHighAccuracy(slug, { command: 'force_on' });
     this._sendHighAccuracy(slug, { command: 'high_accuracy_set_update_interval', high_accuracy_update_interval: 5 });
+    if (slug) {
+      this._requestLocationUpdate(slug); // one immediately, then every 25 s
+      this.geoCalib.reqTimer = setInterval(() => this._requestLocationUpdate(slug), 25000);
+    }
     this.emitConfig();
+  }
+
+  // Classify a device_tracker attribute set against the calibration filter.
+  // Returns null when there's no usable lat/lon (not counted as a "seen" fix);
+  // otherwise 'source' / 'accuracy' (exclusion buckets) or 'used' (passes).
+  // Buckets are exclusive and checked in the same order as the pass test.
+  private _geoSampleClass(attrs: Record<string, unknown>): 'used' | 'accuracy' | 'source' | null {
+    const lat = attrs.latitude, lon = attrs.longitude;
+    if (typeof lat !== 'number' || typeof lon !== 'number') return null;
+    const src = attrs.source_type;
+    if (src != null && src !== 'gps') return 'source';
+    const acc = attrs.gps_accuracy;
+    if (typeof acc === 'number' && acc > this.geoAccuracyGate()) return 'accuracy';
+    return 'used';
   }
 
   // Does a device_tracker attribute set pass the calibration filter?
   // source_type must be 'gps' (missing tolerated), gps_accuracy within the gate.
   private _geoSamplePasses(attrs: Record<string, unknown>): boolean {
-    const src = attrs.source_type;
-    if (src != null && src !== 'gps') return false;
-    const lat = attrs.latitude, lon = attrs.longitude;
-    if (typeof lat !== 'number' || typeof lon !== 'number') return false;
-    const acc = attrs.gps_accuracy;
-    if (typeof acc === 'number' && acc > this.geoAccuracyGate()) return false;
-    return true;
+    return this._geoSampleClass(attrs) === 'used';
   }
 
-  // Live sample counter — bumps while the panel is open. Called from _onStates
+  // Live sample accounting — bumps while the panel is open. Called from _onStates
   // on the live path when the calibrated tracker changes.
   private _geoCalibSample(states: Record<string, HassState>, changedId?: string): void {
     const gc = this.geoCalib;
     if (!gc) return;
     if (changedId !== undefined && changedId !== gc.trackerId) return;
     const st = states[gc.trackerId];
-    if (st && this._geoSamplePasses(st.attributes as Record<string, unknown>)) {
-      gc.liveCount++;
-      this.emitConfig();
-    }
+    if (!st) return;
+    const cls = this._geoSampleClass(st.attributes as Record<string, unknown>);
+    if (cls === null) return; // no lat/lon → not a fix
+    gc.seen++;
+    gc.lastSeenAt = new Date().toISOString();
+    if (cls === 'used') gc.used++;
+    else if (cls === 'accuracy') gc.exclAccuracy++;
+    else gc.exclSource++;
+    this.emitConfig();
   }
 
   // Finish: pull the sampling window from recorder history, filter to usable GPS
@@ -1218,29 +1266,39 @@ export class Planner extends EventTarget {
     const gc = this.geoCalib;
     if (!gc) return { ok: false, message: 'No calibration in progress.', count: 0 };
     const { landmarkId, trackerId, startedAt, notifySlug } = gc;
+    this._clearGeoCalibTimer();
     this._sendHighAccuracy(notifySlug, { command: 'force_off' });
     this.geoCalib = null;
     const lm = this.store.geo?.landmarks.find(l => l.id === landmarkId);
     if (!lm) { this.emitConfig(); return { ok: false, message: 'Landmark gone.', count: 0 }; }
 
     let samples: LatLonSample[] = [];
+    let exclAccuracy = 0, exclSource = 0;
     try {
       const hist = this.hass ? await this.hass.getHistory([trackerId], startedAt, new Date().toISOString()) : {};
       const rows = hist[trackerId] ?? [];
-      samples = rows
-        .filter(r => this._geoSamplePasses(r.attrs))
-        .map(r => ({
+      for (const r of rows) {
+        const cls = this._geoSampleClass(r.attrs);
+        if (cls === null) continue; // no lat/lon → not a fix
+        if (cls === 'accuracy') { exclAccuracy++; continue; }
+        if (cls === 'source') { exclSource++; continue; }
+        samples.push({
           lat: r.attrs.latitude as number,
           lon: r.attrs.longitude as number,
           accuracy: typeof r.attrs.gps_accuracy === 'number' ? r.attrs.gps_accuracy as number : undefined,
-        }));
-    } catch { samples = []; }
+        });
+      }
+    } catch { samples = []; exclAccuracy = 0; exclSource = 0; }
+
+    // "N used / M excluded (accuracy: k, source: j)" — makes a failure explainable.
+    const excluded = exclAccuracy + exclSource;
+    const tally = `${samples.length} used / ${excluded} excluded (accuracy: ${exclAccuracy}, source: ${exclSource})`;
 
     if (samples.length < 5) {
       this.emitConfig();
       return {
         ok: false, count: samples.length,
-        message: `${samples.length} usable sample${samples.length === 1 ? '' : 's'} — need ≥5. Try an open-sky spot away from walls and sample longer.`,
+        message: `${tally} — need ≥5 used. Try an open-sky spot away from walls and sample longer.`,
       };
     }
     const m = medianLatLon(samples)!;
@@ -1252,13 +1310,14 @@ export class Planner extends EventTarget {
     });
     return {
       ok: true, count: m.count,
-      message: `Calibrated: ${m.count} samples${m.accuracy != null ? ` · ±${Math.round(m.accuracy)} m` : ''}.`,
+      message: `Calibrated: ${tally}${m.accuracy != null ? ` · ±${Math.round(m.accuracy)} m` : ''}.`,
     };
   }
 
   cancelGeoCalibration(): void {
     const gc = this.geoCalib;
     if (!gc) return;
+    this._clearGeoCalibTimer();
     this._sendHighAccuracy(gc.notifySlug, { command: 'force_off' });
     this.geoCalib = null;
     this.emitConfig();

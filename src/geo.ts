@@ -188,6 +188,22 @@ export function compass8(deg: number): string {
   return dirs[Math.round((((deg % 360) + 360) % 360) / 45) % 8];
 }
 
+// Parse a manually typed/pasted coordinate string into a validated {lat, lon}
+// pair, or null. Accepts the "lat, lon" clipboard format that Google / Apple
+// Maps produce (comma- and/or whitespace-separated); requires EXACTLY two
+// numeric tokens and enforces lat ∈ [−90, 90], lon ∈ [−180, 180]. A single
+// number, junk, or a 3+ token string returns null. Pure (no DOM / state).
+export function parseLatLon(text: string): { lat: number; lon: number } | null {
+  if (typeof text !== 'string') return null;
+  const toks = text.trim().replace(/,/g, ' ').split(/\s+/).filter(Boolean);
+  if (toks.length !== 2) return null;
+  if (!toks.every(t => /^[+-]?(\d+\.?\d*|\.\d+)$/.test(t))) return null;
+  const lat = Number(toks[0]), lon = Number(toks[1]);
+  if (!isFinite(lat) || !isFinite(lon)) return null;
+  if (lat < -90 || lat > 90 || lon < -180 || lon > 180) return null;
+  return { lat, lon };
+}
+
 export interface LatLonSample { lat: number; lon: number; accuracy?: number; }
 export interface MedianLatLon { lat: number; lon: number; count: number; accuracy: number | null; }
 

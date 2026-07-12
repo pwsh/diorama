@@ -162,6 +162,18 @@ diorama-canvas-2d, diorama-three-view { display: block; width: 100%; height: 100
   /* Topbar carries many controls; allow sideways scroll instead of wrap. */
   diorama-topbar > div { overflow-x: auto; }
 }
+
+/* Liveness pulse for the geo-calibration card (so a zero-sample window still
+   visibly animates, signalling the panel is alive and waiting on the phone). */
+@keyframes diorama-calib-pulse {
+  0%, 100% { opacity: 0.25; transform: scale(0.85); }
+  50%      { opacity: 1;    transform: scale(1.15); }
+}
+.diorama-calib-dot {
+  display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+  background: #4dd0e1; vertical-align: middle;
+  animation: diorama-calib-pulse 1.1s ease-in-out infinite;
+}
 `;
 
 // Inject the shared CSS. `target` defaults to document.head (iframe mode).
