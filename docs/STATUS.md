@@ -1,9 +1,7 @@
 # Project status & pick-up guide
 
-Last updated: 2026-07-12, at **v0.10.0 + 3 unreleased batches** (editor
-snapping/guides, sidebar UX + Bermuda toggle, rendering/model fixes). This is
-the single document to read (alongside `CLAUDE.md`) to resume work with full
-context.
+Last updated: 2026-07-12, at **v0.11.0**. This is the single document to read
+(alongside `CLAUDE.md`) to resume work with full context.
 
 ## Where things stand
 
@@ -38,7 +36,11 @@ asks for).
   controls) → v0.9.0 room-label layer, unnamed-room placeholders +
   enclosure feedback, settings version stamp → v0.10.0 the World Outside
   arc (BLE identity + trilateration + fusion, pet rigs, GPS landmarks +
-  pins, weather core + 3D effects).
+  pins, weather core + 3D effects) → v0.11.0 editor & polish (room-loop +
+  sliver-spawn fixes, wall snapping/ganging/smart guides, collapsible
+  sidebar + Bermuda toggle, window types + rendering fixes, floor-boundary
+  editing, iOS tap fix, manual landmark coords + calibration UX, full docs
+  refresh).
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
