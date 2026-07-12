@@ -47,7 +47,7 @@ the screenshot fires before first render.
 | ai-test.html | AI avatar wanders in-region, engages, presence-off slow fade |
 | avatar-lineup.html / newkinds-test.html | all avatar kinds render |
 | tabletest.html | table clearances: `rootEdge=190`, hands AND elbows above `top − 10` across adult+child × eat/work/tall (`dHand*`/`dElb*` all ≥ 0) |
-| glass-test.html | `ghosts=1 wallOps=[0.06,0.06,0.45,0.45]` (cutaway) |
+| glass-test.html | `ghosts=1 wallOps=[0.06,0.06,0.22,0.22]` (cutaway) |
 | step-test.html / stepneg-test.html | step-light pools front-only; sunken wash down |
 | layers-test.html | `?nofurn=1` hides furniture+lights in 3D |
 | rooms-test.html | `ROOMS PASS n/n` — real export: ≥4 loops, 4 anchors in 4 distinct loops (25 mm weld heal). Uses `geometry.mod.js` (`npx esbuild src/geometry.ts --bundle --format=esm --outfile=<harness>/geometry.mod.js`) |

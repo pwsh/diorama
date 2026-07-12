@@ -1647,10 +1647,15 @@ export class ThreeDRenderer {
     // sits inside the 9 ft wall. Open doors/windows reveal a real gap.
     const wallH = 2743 /* 9 ft */, wallThick = 100;
     const SILL_TOP = WINDOW_DEFAULTS.sill, WINDOW_GLASS_H = WINDOW_DEFAULTS.height, DOOR_HEAD = 2050;
+    // Glass-house mode drops the ACTIVE floor's wall opacity too (0.45 → 0.22)
+    // — the ghost stories were already faint, but rear active walls at 0.45
+    // clouded the view through the building. configRev covers the rebuild on
+    // toggle (the checkbox save/emitConfig bumps it into _keyFloor).
+    const wallOpacity = scene3d?.glassHouse ? 0.22 : 0.45;
     const wallMatFor = () => this._mat({
       color: scene3d?.wallColor ? hexToInt(scene3d.wallColor) : 0xbbbbbb,
       emissive: 0x444444, emissiveIntensity: 0.1,
-      transparent: true, opacity: 0.45, side: THREE.DoubleSide, depthWrite: false,
+      transparent: true, opacity: wallOpacity, side: THREE.DoubleSide, depthWrite: false,
     });
     for (const wall of showWalls ? f.walls : []) {
       if (wall.points.length < 2) continue;
@@ -2027,7 +2032,7 @@ export class ThreeDRenderer {
           const mesh = new THREE.Mesh(
             new THREE.BoxGeometry(wallThick, kindH, len),
             this._mat({ color: wallColor ? hexToInt(wallColor) : 0xbbbbbb,
-              transparent: true, opacity: 0.15, side: THREE.DoubleSide, depthWrite: false }));
+              transparent: true, opacity: 0.10, side: THREE.DoubleSide, depthWrite: false }));
           const mxw = a.x + ux * len / 2, myw = a.y + uy * len / 2;
           mesh.position.set(gsx(mxw), kindH / 2, gsz(myw));
           mesh.rotation.y = angle;
