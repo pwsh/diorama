@@ -75,7 +75,7 @@ export class Topbar extends LitElement {
                          border-radius:5px;padding:5px 8px;font-size:12px"
                   .value=${p.store.currentFloorId}
                   @change=${(e: Event) => p.switchFloor((e.target as HTMLSelectElement).value)}>
-            ${p.store.floors.map(f => html`
+            ${p.enabledFloors().map(f => html`
               <option value=${f.id}>
                 ${f.name} — ${fmtLen(f.w, p.store.imperial)} × ${fmtLen(f.d, p.store.imperial)}
               </option>

@@ -377,6 +377,9 @@ export interface Floor {
   rooms?: Room[];   // named rooms (anchor → live wall loop); repairFloor backfills []
   bleProxies?: BleProxy[];  // BLE scanner fixtures; repairFloor backfills []
   boundsLocked?: boolean;   // lock canvas-layout/floor-size editing (hides the edge handles)
+  disabled?: boolean;       // hidden from the kiosk/view floor picker + glass-house stack + BLE
+                            // floor solve; still editable in the sidebar — lets multiple test
+                            // iterations coexist without cluttering the live views.
 }
 
 // Weather source + display config (the "World Outside" arc, Feature W). All

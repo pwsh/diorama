@@ -48,6 +48,19 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Floor ordering + per-floor disable** (`src/types.ts` + `src/storage.ts` +
+  `src/planner.ts` + `src/ui/sidebar.ts` + `src/ui/topbar.ts` + `src/ui/app.ts`
+  + `src/ui/three-view.ts`; typecheck + build clean): `Store.floors` array
+  order is canonical everywhere, so `Planner.moveFloor(id, ±1)` reorders the
+  sidebar list, kiosk floor picker, and glass-house stack together.
+  `Floor.disabled?` (repairFloor explicit list) keeps a floor editable but
+  hides it from the kiosk/view picker (`enabledFloors()`, all-disabled
+  fallback), the ghost stack, the `floor=` URL param outside edit, and the BLE
+  paths (proxy-MAC claiming, `_solveBle` floor ranking, `_fuseIdentities`) —
+  built for coexisting test iterations of a plan. Sidebar Floors section is
+  now a row list (click to switch, ▲/▼, 👁/🚫; disabled rows dim). CLAUDE.md
+  section "Floor ordering & per-floor disable".
+
 - **Local control of unbound interactive objects** (`src/types.ts` +
   `src/planner.ts` + `src/canvas-render.ts` + `src/canvas-interact.ts` +
   `src/three-renderer.ts` + `src/ui/three-view.ts` + `src/ui/sidebar.ts`;

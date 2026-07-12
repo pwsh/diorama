@@ -386,17 +386,34 @@ export class Sidebar extends LitElement {
   // ── Floors section ────────────────────────────────────────────────────
   private _floorsSection() {
     const p = this.planner;
+    const floors = p.store.floors;
     return this._section('floors', 'Floors', () => html`
-        <div class="row" style="margin-bottom:6px">
-          <select title="Current floor" style="flex:1;min-width:0"
-                  .value=${p.store.currentFloorId}
-                  @change=${(e: Event) => p.switchFloor((e.target as HTMLSelectElement).value)}>
-            ${p.store.floors.map(f => html`
-              <option value=${f.id}>
-                ${f.name} — ${fmtLen(f.w, p.store.imperial)} × ${fmtLen(f.d, p.store.imperial)}
-              </option>
-            `)}
-          </select>
+        <div style="display:flex;flex-direction:column;gap:3px;margin-bottom:6px">
+          ${floors.map((f, i) => {
+            const cur = f.id === p.store.currentFloorId;
+            return html`
+              <div style="display:flex;align-items:center;gap:3px;padding:5px 6px;border-radius:5px;
+                          cursor:pointer;opacity:${f.disabled ? '0.5' : '1'};
+                          background:${cur ? 'var(--accent)' : '#1a1a1a'};
+                          border:1px solid ${cur ? 'var(--accent)' : 'var(--border)'}"
+                   @click=${() => p.switchFloor(f.id)}>
+                <span style="flex:1;min-width:0;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+                  ${f.name} — ${fmtLen(f.w, p.store.imperial)} × ${fmtLen(f.d, p.store.imperial)}${
+                    f.disabled ? html`<span style="color:var(--text-dim)"> (disabled)</span>` : nothing}
+                </span>
+                <button class="btn btn-sm" title="Move floor up" ?disabled=${i === 0}
+                        @click=${(e: Event) => { e.stopPropagation(); p.moveFloor(f.id, -1); }}>▲</button>
+                <button class="btn btn-sm" title="Move floor down" ?disabled=${i === floors.length - 1}
+                        @click=${(e: Event) => { e.stopPropagation(); p.moveFloor(f.id, 1); }}>▼</button>
+                <button class="btn btn-sm"
+                        title=${f.disabled
+                          ? 'Enable this floor'
+                          : 'Disable this floor — hidden from the kiosk/view floor picker, glass-house stack, and BLE floor solve; still editable here'}
+                        @click=${(e: Event) => { e.stopPropagation(); p.setFloorDisabled(f.id, !f.disabled); }}>
+                  ${f.disabled ? '🚫' : '👁'}
+                </button>
+              </div>`;
+          })}
         </div>
         <div style="display:flex;gap:4px">
           <button class="btn" style="flex:1" title="New floor" @click=${this._openNewFloor}>+ Floor</button>

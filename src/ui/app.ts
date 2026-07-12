@@ -85,7 +85,12 @@ export class App extends LitElement {
         const want = (p.urlTemplate.floor ?? '').toLowerCase();
         const fl = p.store.floors.find(f => f.id === p.urlTemplate.floor ||
                                             f.name.toLowerCase() === want);
-        if (fl) {
+        // A disabled floor is hidden from the kiosk/view picker — ignore the
+        // param there (fall through to the default/current floor). In edit mode
+        // a disabled floor is a legitimate target.
+        if (fl && fl.disabled && p.uiMode !== 'edit') {
+          this._tplDone.floor = true;   // give up on the param; don't keep retrying
+        } else if (fl) {
           p.store.currentFloorId = fl.id;
           p.viewCenter = null; p.zoom = 1;
           this._tplDone.floor = true;

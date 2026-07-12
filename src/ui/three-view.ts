@@ -452,7 +452,9 @@ export class ThreeView extends LitElement {
       const keyGhost = `${p.configRev}|${!!scBase.glassHouse}|${f.id}`;
       if (keyGhost !== this._keyGhost) {
         this._keyGhost = keyGhost;
-        r.updateGhostFloors(p.store.floors, f.id, scMerged, p.store.customObjects);
+        r.updateGhostFloors(
+          p.store.floors.filter(fl => !fl.disabled || fl.id === f.id),
+          f.id, scMerged, p.store.customObjects);
       }
 
       // Imported 3D model: reload text from IDB when rev changes; rebuild

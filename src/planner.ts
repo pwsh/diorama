@@ -308,6 +308,13 @@ export class Planner extends EventTarget {
       this.drag = null; this.editZone = null; this.drawingWall = null;
       this.tool = 'select'; this.placingRoomId = null; this.placingLandmarkId = null;
       this.alignGuides = []; this.alignCandidates = [];
+      // A disabled floor is hidden from the kiosk/view picker — don't strand the
+      // view on one. Jump to the first enabled floor (if any exists).
+      const cur = this.store.floors.find(f => f.id === this.store.currentFloorId);
+      if (cur?.disabled) {
+        const enabled = this.store.floors.filter(f => !f.disabled);
+        if (enabled.length) this.switchFloor(enabled[0].id);
+      }
     }
     this.emitConfig();
   }
@@ -1366,6 +1373,7 @@ export class Planner extends EventTarget {
     // scanner MAC parsed from a unique_id can resolve to a proxy fixture.
     const proxyByMac: Record<string, string> = {};
     for (const fl of this.store.floors) {
+      if (fl.disabled) continue;   // a disabled test floor's proxies must not claim scanner MACs
       for (const bp of fl.bleProxies ?? []) {
         if (!bp.haDeviceId) continue;
         for (const m of devMacs[bp.haDeviceId] ?? []) proxyByMac[m] = bp.id;
@@ -1499,6 +1507,7 @@ export class Planner extends EventTarget {
       let best: { x: number | null; y: number; floorId: string; conf: number; rms: number; multi: boolean } | null = null;
       const warm = this.bleSolves[deviceKey];
       for (const fl of this.store.floors) {
+        if (fl.disabled) continue;   // disabled floors don't participate in the BLE floor solve
         const byId: Record<string, { x: number; y: number }> = {};
         for (const bp of fl.bleProxies ?? []) byId[bp.id] = { x: bp.x, y: bp.y };
         const obs: ProxyObs[] = [];
@@ -1632,6 +1641,7 @@ export class Planner extends EventTarget {
     interface RTarget { key: string; x: number; y: number; floorId: string }
     const radar: RTarget[] = [];
     for (const fl of this.store.floors) {
+      if (fl.disabled) continue;   // don't fuse identities onto a disabled test floor's radar targets
       for (const s of fl.sensors) {
         if (!s.deviceSlug || !this.discBy[s.id]) continue;
         const lerp = this.lerpBy[s.id];
@@ -1966,6 +1976,39 @@ export class Planner extends EventTarget {
       this.store.currentFloorId = id;
       this.store.activeSensorId = null;
     }
+    this.save();
+    this.emitConfig();
+  }
+
+  // Move a floor up/down in the canonical Store.floors order (which every
+  // consumer — sidebar list, topbar select, glass-house ghost stacking —
+  // renders in). No-op at the array ends.
+  moveFloor(id: string, dir: -1 | 1): void {
+    const floors = this.store.floors;
+    const i = floors.findIndex(f => f.id === id);
+    if (i < 0) return;
+    const j = i + dir;
+    if (j < 0 || j >= floors.length) return;
+    [floors[i], floors[j]] = [floors[j], floors[i]];
+    this.save();
+    this.emitConfig();
+  }
+
+  // Floors visible to the kiosk/view floor picker (and glass-house / BLE). A
+  // disabled floor stays editable but drops out of the live views. Robust
+  // fallback: if EVERY floor is disabled, return all — never an empty picker.
+  enabledFloors(): Floor[] {
+    const enabled = this.store.floors.filter(f => !f.disabled);
+    return enabled.length ? enabled : this.store.floors;
+  }
+
+  // Toggle a floor's disabled flag. `disabled || undefined` so a cleared flag
+  // doesn't persist. Does NOT auto-switch away from a disabled current floor in
+  // edit mode — editing a disabled floor is the whole point.
+  setFloorDisabled(id: string, disabled: boolean): void {
+    const f = this.store.floors.find(x => x.id === id);
+    if (!f) return;
+    f.disabled = disabled || undefined;
     this.save();
     this.emitConfig();
   }
