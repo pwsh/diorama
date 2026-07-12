@@ -348,6 +348,19 @@ interface Humanoid {
 
 type StateProvider = (id: string) => HassState | null;
 
+// Effective state for an interactive item via a StateProvider closure. Mirrors
+// Planner.effectiveState so localState flows through the SAME provider the
+// three-view (and the test harness) already passes: bound → the live entity;
+// unbound but with a localState → a synthetic envelope; else null. Keeping the
+// resolution renderer-side (rather than teaching every builder about localState)
+// means only the per-item read changes.
+function itemState(item: { entity_id?: string | null; localState?: string },
+                   stateOf: StateProvider): HassState | null {
+  if (item.entity_id) return stateOf(item.entity_id);
+  if (item.localState) return { state: item.localState, attributes: {}, entity_id: '' } as HassState;
+  return null;
+}
+
 // Shared empty entity map for the stale-chunk fallback (no per-frame alloc).
 const EMPTY_ENTITY_ON: Record<string, boolean> = {};
 
@@ -1732,8 +1745,10 @@ export class ThreeDRenderer {
       // Bound TVs become clickable like light fixtures: tag the group so the
       // raycaster's parent-walk finds the media binding, and register it in the
       // dedicated clickable list (raycasting all of _floorGroup would be heavy).
-      if ((fu.kind === 'tv' || fu.kind === 'wall_tv') && fu.entity_id) {
-        grp.userData = { ...grp.userData, kind: 'media', entity_id: fu.entity_id, fixtureId: fu.id };
+      // TVs are clickable regardless of binding so an UNBOUND set can still be
+      // toggled locally (entity_id null → the click handler flips localState).
+      if (fu.kind === 'tv' || fu.kind === 'wall_tv') {
+        grp.userData = { ...grp.userData, kind: 'media', entity_id: fu.entity_id ?? null, fixtureId: fu.id };
         this._mediaClickables.push(grp);
       }
       // Stairs and landings are walkable terrain for humanoid targets.
@@ -1870,14 +1885,17 @@ export class ThreeDRenderer {
           standOff: fu.h / 2 + 340,
           kind: def.activity,
           roomId,
-          hasEntity: fu.entity_id != null,
+          // A local control state counts as a state source (entity-gated
+          // activities fire off entityOn[fu.id], which effectiveState populates
+          // for locally-ON pieces too).
+          hasEntity: fu.entity_id != null || fu.localState != null,
         });
       }
-      // TVs per room: a seated person in a room whose bound TV is on watches it.
-      // Skip roomless TVs (can't scope them to a seat's room).
+      // TVs per room: a seated person in a room whose bound-or-locally-ON TV is
+      // on watches it. Skip roomless TVs (can't scope them to a seat's room).
       if ((fu.kind === 'tv' || def.activity === 'watch_tv') && roomId) {
         (this._tvsByRoom[roomId] ??= []).push({
-          furnitureId: fu.id, hasEntity: fu.entity_id != null,
+          furnitureId: fu.id, hasEntity: fu.entity_id != null || fu.localState != null,
         });
       }
       // Beds captured for the two-in-bed covers effect. Mattress top matches the
@@ -2644,7 +2662,7 @@ export class ThreeDRenderer {
     // sashes — the CLAUDE.md gotcha).
     const frameMat = this._mat({ color: 0x9aa4ad, roughness: 0.6, metalness: 0.1 });
     for (const w of windows) {
-      const st = w.entity_id ? stateOf(w.entity_id) : null;
+      const st = itemState(w, stateOf);
       const isOpen = st?.state === 'on';
       const mat = isOpen ? openMat : closedMat;
       const kind = w.kind ?? 'single';
@@ -2727,7 +2745,7 @@ export class ThreeDRenderer {
       roughness: 0.5, metalness: 0.1,
     });
     for (const d of doors) {
-      const st = d.entity_id ? stateOf(d.entity_id) : null;
+      const st = itemState(d, stateOf);
       const isOpen = st?.state === 'on';
       const mat = isOpen ? openMat : closedMat;
       // Hinge Group at world (d.x, d.y). Closed panel runs along world +X at
@@ -3897,7 +3915,7 @@ export class ThreeDRenderer {
     this._clearGroup(this._lightGroup);
     const LIGHT_BODY_R = 200;
     for (const l of lights) {
-      const st = l.entity_id ? stateProvider(l.entity_id) : null;
+      const st = itemState(l, stateProvider);
       const isOn = st?.state === 'on';
       const attrs = (st?.attributes || {}) as Record<string, unknown>;
       const rgb = Array.isArray(attrs.rgb_color) && (attrs.rgb_color as number[]).length === 3
@@ -4552,7 +4570,7 @@ export class ThreeDRenderer {
       }
     }
     for (const sw of switches) {
-      const st = sw.entity_id ? stateProvider(sw.entity_id) : null;
+      const st = itemState(sw, stateProvider);
       const isOn = st?.state === 'on';
       const col = isOn ? 0x4caf50 : 0x555555;
       const box = new THREE.Mesh(
@@ -5136,8 +5154,9 @@ export class ThreeDRenderer {
         if (ha === 'eat_at_table' || ha === 'work_at_desk') {
           h.activity = ha;
         } else if (spot && spot.roomId) {
-          // Watch only a BOUND, ON TV in the seat's room — reflecting real HA
-          // state. An unbound TV never auto-triggers "watching".
+          // Watch only a TV that is ON in the seat's room — from real HA state
+          // when bound, or the local control state when unbound (hasEntity is
+          // set for both; entityOn reflects effectiveState).
           let tvOn = false;
           const tvs = this._tvsByRoom[spot.roomId];
           if (tvs) for (const tv of tvs) {

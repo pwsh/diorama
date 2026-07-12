@@ -1,0 +1,132 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>localstate</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<script type="module">
+ try {
+  const mod = await import('./assets/three-renderer.js');
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+
+  const results = [];
+  let pass = true, n = 0, p = 0;
+  const check = (name, cond) => { n++; if (cond) p++; else pass = false; results.push(`${name}=${cond ? 'ok' : 'FAIL'}`); };
+
+  // A mesh is "open" (green emissive door/window sash) — openMat uses emissive
+  // 0x1b5e20 (green dominant). Closed windows carry a BLUE emissive tint whose
+  // green channel is also high, so require green > red AND green > blue.
+  const emissiveGreen = grp => {
+    let g = false;
+    grp.traverse(o => {
+      if (o.isMesh && o.material && o.material.emissive && !o.userData.outline) {
+        const e = o.material.emissive;
+        if (e.g > e.r + 0.05 && e.g > e.b + 0.05 && e.g > 0.05) g = true;
+      }
+    });
+    return g;
+  };
+
+  // ── Doors / windows: UNBOUND, driven purely by localState ────────────────
+  // The stateProvider closure is the SAME `id => states[id] || null` the app
+  // passes; these items have no entity_id so it is never consulted — the
+  // renderer's itemState() resolves their localState internally.
+  const floor = {
+    id: 'f1', name: 'T', w: 9000, d: 5000,
+    walls: [{ id: 'w1', points: [{x:500,y:2500},{x:8500,y:2500}] }],
+    furniture: [], lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [
+      { id: 'd_closed', x: 1500, y: 2500, w: 800, rotation: 0, entity_id: null, localState: 'off', label: '' },
+      { id: 'd_open',   x: 4000, y: 2500, w: 800, rotation: 0, entity_id: null, localState: 'on',  label: '' },
+    ],
+    windows: [
+      { id: 'w_open',   x: 6800, y: 2500, w: 1200, rotation: 0, entity_id: null, localState: 'on',  kind: 'double_hung', label: '' },
+      { id: 'w_closed', x: 8000, y: 2500, w: 900,  rotation: 0, entity_id: null, localState: 'off', kind: 'sliding',     label: '' },
+    ],
+    bg: null, model3d: null,
+  };
+  const noStates = {};
+  r.updateFloor(floor, { preset: 'day', floorColor: '#8a7860', floorTex: 'none', wallColor: '#cfd2d6' });
+  r.updateDoorsWindows(floor.doors, floor.windows, id => noStates[id] || null);
+
+  // _doorGroup holds doors first, then windows (see updateDoorsWindows).
+  const dg = r._doorGroup.children;
+  check('door_unbound_open', emissiveGreen(dg[1]));       // d_open (localState:on)
+  check('door_unbound_closed_notopen', !emissiveGreen(dg[0])); // d_closed stays closed
+  check('window_unbound_open', emissiveGreen(dg[2]));     // w_open (localState:on)
+  check('window_unbound_closed_notopen', !emissiveGreen(dg[3]));
+
+  // ── Lights: unbound lit bulb + unbound flickering fireplace ──────────────
+  const lights = [
+    { id: 'bulb_on',  x: 2000, y: 2000, entity_id: null, localState: 'on',  iconKind: 'bulb', label: '' },
+    { id: 'bulb_off', x: 4000, y: 2000, entity_id: null, localState: 'off', iconKind: 'bulb', label: '' },
+    { id: 'fp_on',    x: 6000, y: 2000, entity_id: null, localState: 'on',  iconKind: 'fireplace', label: '' },
+  ];
+  r.updateLightsSwitches(lights, [], id => noStates[id] || null);
+  // A light can produce several _lightGroup children (body group + floor disc),
+  // so find by userData.fixtureId rather than positional index.
+  // Effective emission = emissiveIntensity × emissive-colour luminance. Some
+  // decorative parts carry intensity 1 with a BLACK emissive (emits nothing),
+  // so intensity alone is misleading; weight by the colour.
+  const emForFixture = id => {
+    let m = 0;
+    for (const g of r._lightGroup.children) {
+      if (g.userData && g.userData.fixtureId === id)
+        g.traverse(o => {
+          if (o.isMesh && o.material && o.material.emissive) {
+            const e = o.material.emissive;
+            const lum = (e.r + e.g + e.b) / 3 * (o.material.emissiveIntensity ?? 1);
+            m = Math.max(m, lum);
+          }
+        });
+    }
+    return m;
+  };
+  check('light_group_built', r._lightGroup.children.length >= 3);
+  // The lit bulb (localState:on) has a much brighter emissive body than the off one.
+  check('bulb_local_on_lit', emForFixture('bulb_on') > 0.15);
+  check('bulb_local_off_dim', emForFixture('bulb_off') < 0.05);
+  // Unbound fireplace lit purely by localState:'on'.
+  check('fireplace_local_on_lit', emForFixture('fp_on') > 0.15);
+
+  // ── Activity gating: a locally-ON (unbound) TV drives watch_tv ───────────
+  // Mirrors three-view: entityOn is built from effectiveState, so an unbound
+  // TV with localState:'on' produces entityOn[tv]=true; the renderer's
+  // hasEntity flag (now set for localState too) lets that gate watch_tv.
+  const effOn = st => st === 'on' || st === 'playing';
+  const scene = (tvLocal) => {
+    const walls = [{ id: 'w1', points: [
+      {x:200,y:200},{x:10800,y:200},{x:10800,y:6800},{x:200,y:6800},{x:200,y:200}] }];
+    const rooms = [{ id: 'rm1', name: 'Living', anchor: {x: 5000, y: 3500} }];
+    const fu = (id, kind, x, y, w, h, rot = 0, extra = {}) => ({ id, x, y, w, h, kind, rotation: rot, ...extra });
+    const furniture = [
+      fu('sofa1', 'sofa', 2500, 5200, 2000, 900, 0),
+      fu('tv1', 'tv', 2500, 6400, 1450, 250, 0, { entity_id: null, localState: tvLocal }),
+    ];
+    const fl = { id: 'f1', name: 'Test', w: 11000, d: 7000, walls, rooms, furniture,
+      lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+      doors: [], windows: [], bg: null, model3d: null, look3d: null };
+    r.updateFloor(fl, { preset: 'dusk', floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6' });
+    // entityOn as three-view computes it (effectiveState over furniture).
+    const entityOn = {};
+    for (const f2 of furniture) { const ls = f2.localState; if (ls) entityOn[f2.id] = effOn(ls); }
+    const ctx = { entityOn, roomNames: { rm1: 'Living' }, timeBucket: 'evening' };
+    const target = [{ key: 'tvwatch', x: 2500, y: 5200, color: 0x4fc3f7 }];
+    const realNow = performance.now.bind(performance);
+    let fakeNow = realNow();
+    performance.now = () => fakeNow;
+    for (let i = 0; i < 460; i++) { fakeNow += 16.7; r.updateTargets(target, ctx); }
+    performance.now = realNow;
+    const h = (r._humanoids || {})['tvwatch'];
+    return h ? h.activity : null;
+  };
+  const actOn = scene('on');
+  const actOff = scene('off');
+  check('local_tv_on_watch_tv', actOn === 'watch_tv');
+  check('local_tv_off_no_watch', actOff !== 'watch_tv');
+
+  document.title = `LOCALSTATE ${pass ? 'PASS' : 'FAIL'} ${p}/${n} ${results.join(' ')}`;
+ } catch (e) {
+  document.title = 'ERR: ' + (e && e.stack ? e.stack.split('\n').slice(0,3).join(' | ') : e);
+ }
+</script>

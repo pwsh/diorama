@@ -1278,6 +1278,19 @@ export class Sidebar extends LitElement {
       this._groupedList('doors', f.doors, d => this._doorItem(d, f.doors.indexOf(d))));
   }
 
+  // Unbound-item state badge. When the item carries a local control state
+  // (set by clicking it on the canvas) show a dim, clickable "local: on/off"
+  // badge so the user understands why it renders active without an HA binding
+  // — and can flip it here too. Otherwise the plain "—" (unconfigured).
+  private _localBadge(item: { entity_id?: string | null; localState?: string }) {
+    const p = this.planner;
+    if (!item.localState) return html`<span class="badge">—</span>`;
+    return html`
+      <button class="badge" style="cursor:pointer;border:none;font-family:inherit;opacity:0.65"
+              title="Local control (not bound to HA) — click to toggle"
+              @click=${() => p.toggleItem(item)}>local: ${item.localState}</button>`;
+  }
+
   private _doorItem(d: Door, idx: number) {
     const p = this.planner;
     const exp = this._doorExpanded.has(d.id);
@@ -1286,12 +1299,13 @@ export class Sidebar extends LitElement {
     const isOpen = st?.state === 'on';
     const unavail = st && (st.state === 'unavailable' || st.state === 'unknown');
     const bound = !!d.entity_id;
+    const effOpen = !bound && d.localState ? d.localState === 'on' : isOpen;
     const badge = !bound ? '—' : unavail ? 'n/a' : isOpen ? 'OPEN' : 'closed';
     const badgeClass = bound && !unavail && isOpen ? 'bound' : '';
     return html`
       <div style="border-bottom:1px solid var(--border)">
         <div class="sensor-item" style="cursor:default">
-          <div class="dot" style="background:${isOpen ? '#66bb6a' : '#90a4ae'}"></div>
+          <div class="dot" style="background:${effOpen ? '#66bb6a' : '#90a4ae'}"></div>
           <div class="nm">${d.label?.trim() || 'Door'}</div>
           ${bound ? html`
             <button class="badge ${badgeClass}" style="cursor:pointer;border:none;font-family:inherit"
@@ -1300,7 +1314,7 @@ export class Sidebar extends LitElement {
                     @click=${() => p.toggleEntity(d.entity_id)}>
               ${badge}
             </button>
-          ` : html`<span class="badge">${badge}</span>`}
+          ` : this._localBadge(d)}
           <button class="icon-btn" title=${bound ? 'Rebind' : 'Bind'}
                   @click=${() => this._pickDoorEntity(d)}>🔗</button>
           <button class="icon-btn" title=${exp ? 'Hide' : 'Edit'}
@@ -1422,12 +1436,13 @@ export class Sidebar extends LitElement {
     const isOpen = st?.state === 'on';
     const unavail = st && (st.state === 'unavailable' || st.state === 'unknown');
     const bound = !!w.entity_id;
+    const effOpen = !bound && w.localState ? w.localState === 'on' : isOpen;
     const badge = !bound ? '—' : unavail ? 'n/a' : isOpen ? 'OPEN' : 'closed';
     const badgeClass = bound && !unavail && isOpen ? 'bound' : '';
     return html`
       <div style="border-bottom:1px solid var(--border)">
         <div class="sensor-item" style="cursor:default">
-          <div class="dot" style="background:${isOpen ? '#66bb6a' : '#64b5f6'}"></div>
+          <div class="dot" style="background:${effOpen ? '#66bb6a' : '#64b5f6'}"></div>
           <div class="nm">${w.label?.trim() || 'Window'}</div>
           ${bound ? html`
             <button class="badge ${badgeClass}" style="cursor:pointer;border:none;font-family:inherit"
@@ -1436,7 +1451,7 @@ export class Sidebar extends LitElement {
                     @click=${() => p.toggleEntity(w.entity_id)}>
               ${badge}
             </button>
-          ` : html`<span class="badge">${badge}</span>`}
+          ` : this._localBadge(w)}
           <button class="icon-btn" title=${bound ? 'Rebind' : 'Bind'}
                   @click=${() => this._pickWindowEntity(w)}>🔗</button>
           <button class="icon-btn" title=${exp ? 'Hide' : 'Edit'}
@@ -1961,7 +1976,7 @@ export class Sidebar extends LitElement {
                     @click=${() => p.toggleEntity(it.entity_id)}>
               ${badge}
             </button>
-          ` : html`<span class="badge">${badge}</span>`}
+          ` : this._localBadge(it)}
           <button class="icon-btn" title=${bound ? 'Rebind' : 'Bind'}
                   @click=${() => this._pickFixtureEntity(kind, it)}>🔗</button>
           ${bound && p.isLightEntity(it.entity_id) ? html`

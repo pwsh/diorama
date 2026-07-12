@@ -166,9 +166,17 @@ export class ThreeView extends LitElement {
     this._ro.observe(this._area);
     // Fixture click → toggle whatever entity is bound (uses entity's actual
     // domain so a "switch" fixture bound to a light entity does light.toggle).
-    this._renderer.onFixtureClick(({ entity_id }) => {
-      // toggleEntity itself refuses in view-only mode.
-      this.planner.toggleEntity(entity_id);
+    this._renderer.onFixtureClick(({ kind, entity_id, fixtureId }) => {
+      const p = this.planner;
+      // toggleEntity/toggleItem refuse in view-only mode.
+      if (entity_id) { p.toggleEntity(entity_id); return; }
+      // Unbound fixture → local control: resolve the item by kind + id and flip
+      // its localState (media = TV/wall_tv furniture).
+      const f = p.floor();
+      const item = kind === 'light' ? f.lights.find(x => x.id === fixtureId)
+        : kind === 'switch' ? f.switches.find(x => x.id === fixtureId)
+        : f.furniture.find(x => x.id === fixtureId);
+      if (item) p.toggleItem(item);
     });
     this._renderer.onFixtureDblClick(({ kind, entity_id, fixtureId }) => {
       const p = this.planner;
@@ -551,7 +559,7 @@ export class ThreeView extends LitElement {
       // Fireplace lights flicker via Math.random() inside the builder, so an
       // active fireplace forces a rebuild every frame (cheap: few lights).
       const hasLiveFireplace = f.lights.some(l =>
-        (l.iconKind === 'fireplace') && l.entity_id && states[l.entity_id]?.state === 'on');
+        (l.iconKind === 'fireplace') && p.effectiveState(l)?.state === 'on');
       const keyLights = hasLiveFireplace ? `${Math.random()}` :
         `${p.configRev}|` + f.lights.map(l => {
           const st = l.entity_id ? states[l.entity_id] : null;
@@ -703,9 +711,11 @@ export class ThreeView extends LitElement {
       // time bucket. Drives the Sims-style solo activities in updateTargets.
       const entityOn: Record<string, boolean> = {};
       for (const fu of f.furniture) {
-        if (!fu.entity_id) continue;
-        const st = states[fu.entity_id];
-        entityOn[fu.id] = st?.state === 'on' || st?.state === 'playing';
+        // effectiveState folds in a locally-ON (unbound) piece so it gates
+        // activities / watch_tv exactly like a bound, on entity.
+        const st = p.effectiveState(fu);
+        if (!st) continue;
+        entityOn[fu.id] = st.state === 'on' || st.state === 'playing';
       }
       const roomNames: Record<string, string> = {};
       for (const rm of f.rooms ?? []) roomNames[rm.id] = rm.name;

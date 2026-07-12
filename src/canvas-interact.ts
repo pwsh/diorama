@@ -878,9 +878,10 @@ export function onCanvasMouseUp(p: Planner, canvas: HTMLCanvasElement): void {
     if (it) {
       const moved = Math.hypot(it.x - drag.start.x, it.y - drag.start.y);
       if (moved < 30) {
-        // Treat as click — restore exact start position; toggle if bound.
+        // Treat as click — restore exact start position; toggle bound entity
+        // or (unbound) the item's local control state.
         it.x = drag.start.x; it.y = drag.start.y;
-        p.toggleEntity(it.entity_id);
+        p.toggleItem(it);
       } else {
         // Fixtures snap on release (like doors/windows snapOpeningToWall):
         // step lights flush to a wall face / stair edge; fireplaces flush to a
@@ -924,11 +925,12 @@ export function onCanvasMouseUp(p: Planner, canvas: HTMLCanvasElement): void {
   } else if (drag.kind === 'doorMove') {
     const door = f.doors[drag.idx];
     if (door) {
-      // Click-vs-drag: tiny movement on a bound door toggles its entity.
+      // Click-vs-drag: tiny movement toggles the door's bound entity (or, when
+      // unbound, its local control state).
       const moved = Math.hypot(door.x - drag.start.x, door.y - drag.start.y);
-      if (moved < 30 && door.entity_id) {
+      if (moved < 30) {
         door.x = drag.start.x; door.y = drag.start.y;
-        p.toggleEntity(door.entity_id);
+        p.toggleItem(door);
       } else {
         door.x = snap(door.x, 10); door.y = snap(door.y, 10);
         snapOpeningToWall(f, door);
@@ -941,9 +943,9 @@ export function onCanvasMouseUp(p: Planner, canvas: HTMLCanvasElement): void {
     const win = f.windows[drag.idx];
     if (win) {
       const moved = Math.hypot(win.x - drag.start.x, win.y - drag.start.y);
-      if (moved < 30 && win.entity_id) {
+      if (moved < 30) {
         win.x = drag.start.x; win.y = drag.start.y;
-        p.toggleEntity(win.entity_id);
+        p.toggleItem(win);
       } else {
         win.x = snap(win.x, 10); win.y = snap(win.y, 10);
         snapOpeningToWall(f, win);
@@ -983,13 +985,13 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
     const fx2 = hitFixture(p, mm, Math.max(250, hitPx(view) * 3));
     if (fx2) {
       const it = (fx2.kind === 'light' ? f.lights : f.switches)[fx2.idx];
-      if (it?.entity_id) p.toggleEntity(it.entity_id);
+      if (it) p.toggleItem(it);
       return;
     }
     const dHit2 = hitDoor(p, view, mm);
-    if (dHit2?.door.entity_id) { p.toggleEntity(dHit2.door.entity_id); return; }
+    if (dHit2) { p.toggleItem(dHit2.door); return; }
     const wHit2 = hitWindow(p, view, mm);
-    if (wHit2?.win.entity_id) { p.toggleEntity(wHit2.win.entity_id); return; }
+    if (wHit2) { p.toggleItem(wHit2.win); return; }
     return;
   }
 

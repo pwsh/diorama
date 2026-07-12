@@ -386,10 +386,8 @@ function drawGeoLandmarks(ctx: CanvasRenderingContext2D, p: Planner, view: View)
 // still shows which rooms are alive. Drawn under fixture markers.
 function drawActivity(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
   const f = p.floor();
-  const states = p.hass?.states;
-  if (!states) return;
   for (const l of f.lights) {
-    const st = l.entity_id ? states[l.entity_id] : null;
+    const st = p.effectiveState(l);
     if (st?.state !== 'on') continue;
     const c = mmToPx(view, l.x, l.y);
     const r = Math.max(20, lightRadius(l) * 1.4 * view.scale);
@@ -403,8 +401,9 @@ function drawActivity(ctx: CanvasRenderingContext2D, p: Planner, view: View): vo
     ctx.fillStyle = g;
     ctx.beginPath(); ctx.arc(c.x, c.y, r, 0, 2 * Math.PI); ctx.fill();
   }
+  const states = p.hass?.states;
   for (const m of f.motionSensors) {
-    const st = m.entity_id ? states[m.entity_id] : null;
+    const st = m.entity_id && states ? states[m.entity_id] : null;
     if (st?.state !== 'on') continue;
     const c = mmToPx(view, m.x, m.y);
     const r = Math.max(20, m.range * 0.55 * view.scale);
@@ -790,10 +789,9 @@ function drawWalls(ctx: CanvasRenderingContext2D, p: Planner, view: View): void 
 function drawDoors(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
   const dpr = window.devicePixelRatio || 1;
   const f = p.floor();
-  const states = p.hass?.states;
   if (!f.doors) return;
   for (const d of f.doors) {
-    const st = d.entity_id && states ? states[d.entity_id] : null;
+    const st = p.effectiveState(d);
     const isOpen = st?.state === 'on';
     const unavail = st && (st.state === 'unavailable' || st.state === 'unknown');
     const closedColor = unavail ? '#c62828' : '#90a4ae';
@@ -835,7 +833,7 @@ function drawDoors(ctx: CanvasRenderingContext2D, p: Planner, view: View): void 
     // Label + state pill
     const pillX = (hinge.x + endPt.x) / 2;
     const pillY = (hinge.y + endPt.y) / 2 - 12 * dpr;
-    const txt = (d.label?.trim() || 'Door') + (d.entity_id ? ` · ${isOpen ? 'OPEN' : 'closed'}` : '');
+    const txt = (d.label?.trim() || 'Door') + (st ? ` · ${isOpen ? 'OPEN' : 'closed'}` : '');
     ctx.font = `${10 * dpr}px sans-serif`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     const tw = ctx.measureText(txt).width + 8 * dpr;
@@ -849,10 +847,9 @@ function drawDoors(ctx: CanvasRenderingContext2D, p: Planner, view: View): void 
 function drawWindows(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
   const dpr = window.devicePixelRatio || 1;
   const f = p.floor();
-  const states = p.hass?.states;
   if (!f.windows) return;
   for (const w of f.windows) {
-    const st = w.entity_id && states ? states[w.entity_id] : null;
+    const st = p.effectiveState(w);
     const isOpen = st?.state === 'on';
     const unavail = st && (st.state === 'unavailable' || st.state === 'unknown');
     const closedColor = unavail ? '#c62828' : '#64b5f6';
@@ -895,7 +892,7 @@ function drawWindows(ctx: CanvasRenderingContext2D, p: Planner, view: View): voi
     ctx.beginPath(); ctx.arc(c.x, c.y, 4 * dpr, 0, 2 * Math.PI);
     ctx.fill(); ctx.stroke();
     // Label + state pill
-    const txt = (w.label?.trim() || 'Window') + (w.entity_id ? ` · ${isOpen ? 'OPEN' : 'closed'}` : '');
+    const txt = (w.label?.trim() || 'Window') + (st ? ` · ${isOpen ? 'OPEN' : 'closed'}` : '');
     ctx.font = `${10 * dpr}px sans-serif`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     const tw = ctx.measureText(txt).width + 8 * dpr;
@@ -1405,12 +1402,11 @@ function drawFireplace2D(ctx: CanvasRenderingContext2D, cx0: number, cy0: number
 function drawFixtures(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
   const dpr = window.devicePixelRatio || 1;
   const f = p.floor();
-  const stateOf = (id: string) => p.hass?.states?.[id] || null;
   const fxBodyR = Math.max(6, 180 * view.scale);
 
   for (const l of f.lights) {
     const pt = mmToPx(view, l.x, l.y);
-    const st = l.entity_id ? stateOf(l.entity_id) : null;
+    const st = p.effectiveState(l);
     const isOn = st?.state === 'on';
     const unavail = st && (st.state === 'unavailable' || st.state === 'unknown');
     const attrs = (st?.attributes || {}) as Record<string, unknown>;
@@ -1440,7 +1436,7 @@ function drawFixtures(ctx: CanvasRenderingContext2D, p: Planner, view: View): vo
       ctx.beginPath(); ctx.arc(pt.x, pt.y, glowR, 0, 2 * Math.PI); ctx.fill();
     }
     if (kind === 'fireplace') {
-      drawFireplace2D(ctx, pt.x, pt.y, view, isOn, !!unavail, !!l.entity_id, lightRotation(l));
+      drawFireplace2D(ctx, pt.x, pt.y, view, isOn, !!unavail, !!st, lightRotation(l));
     } else if (kind === 'under_cabinet') {
       // Slim bar along the rotation; warm glow stroke when on.
       const rotR = lightRotation(l) * Math.PI / 180;
@@ -1479,7 +1475,7 @@ function drawFixtures(ctx: CanvasRenderingContext2D, p: Planner, view: View): vo
       else if (unavail) ctx.fillStyle = 'rgba(120,60,60,0.7)';
       else ctx.fillStyle = 'rgba(60,60,80,0.85)';
       ctx.fill();
-      ctx.strokeStyle = !l.entity_id ? '#888' : isOn ? '#fff' : unavail ? '#c62828' : '#555';
+      ctx.strokeStyle = !st ? '#888' : isOn ? '#fff' : unavail ? '#c62828' : '#555';
       ctx.lineWidth = 1.5; ctx.stroke();
       ctx.font = `${Math.max(9, fxBodyR * 1.1)}px sans-serif`;
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
@@ -1494,7 +1490,7 @@ function drawFixtures(ctx: CanvasRenderingContext2D, p: Planner, view: View): vo
 
   for (const sw of f.switches) {
     const pt = mmToPx(view, sw.x, sw.y);
-    const st = sw.entity_id ? stateOf(sw.entity_id) : null;
+    const st = p.effectiveState(sw);
     const isOn = st?.state === 'on';
     const unavail = st && (st.state === 'unavailable' || st.state === 'unknown');
     const half = (switchSize(sw) / 2) * view.scale;
@@ -1505,7 +1501,7 @@ function drawFixtures(ctx: CanvasRenderingContext2D, p: Planner, view: View): vo
     ctx.rotate(rot);
     ctx.fillStyle = isOn ? 'rgba(76,175,80,0.55)' : unavail ? 'rgba(120,60,60,0.6)' : 'rgba(100,100,120,0.45)';
     ctx.fillRect(-halfPx, -halfPx, 2 * halfPx, 2 * halfPx);
-    ctx.strokeStyle = !sw.entity_id ? '#888' : isOn ? '#4caf50' : unavail ? '#c62828' : '#777';
+    ctx.strokeStyle = !st ? '#888' : isOn ? '#4caf50' : unavail ? '#c62828' : '#777';
     ctx.lineWidth = 2;
     ctx.strokeRect(-halfPx, -halfPx, 2 * halfPx, 2 * halfPx);
     // Tiny tick on the "front" face so rotation is visible

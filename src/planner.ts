@@ -1867,6 +1867,35 @@ export class Planner extends EventTarget {
     this.hass.callService(domain || 'homeassistant', 'toggle', { entity_id });
   }
 
+  // Effective state for an interactive item (light / switch / door / window /
+  // furniture): the SINGLE resolver every render + interaction consumer routes
+  // through. Bound → the live HA state (exactly today's semantics). Unbound but
+  // carrying a `localState` → a synthetic envelope so the panel renders the
+  // locally-set state without any HA entity. Unbound + no localState → null
+  // (unconfigured, renders inert). Once an entity is bound the localState is
+  // inert (bound wins) but is kept, so unbinding returns to the last local state.
+  effectiveState(item: { entity_id?: string | null; localState?: string }): HassState | null {
+    if (item.entity_id) return this.hass?.states?.[item.entity_id] ?? null;
+    if (item.localState) return { state: item.localState, attributes: {}, entity_id: '' } as HassState;
+    return null;
+  }
+
+  // Toggle an interactive item. Bound → toggle the HA entity (correct domain,
+  // as toggleEntity). Unbound → flip the item's local control state ('on'↔'off';
+  // 'playing' counts as on) so an object without an HA binding can still be
+  // controlled from the panel. Local toggles emitConfig (so 3D dirty keys that
+  // hash configRev rebuild) and save() — but save() no-ops outside edit mode, so
+  // a kiosk device's local toggles are SESSION-ONLY (never written back to HA or
+  // even localStorage). View mode makes no changes at all.
+  toggleItem(item: { entity_id?: string | null; localState?: string }): void {
+    if (this.uiMode === 'view') return;  // visualization only — no control
+    if (item.entity_id) { this.toggleEntity(item.entity_id); return; }
+    const on = item.localState === 'on' || item.localState === 'playing';
+    item.localState = on ? 'off' : 'on';
+    this.save();        // no-op outside edit → kiosk local toggles are session-only
+    this.emitConfig();  // bumps configRev → 3D dirty keys rebuild; sidebar re-renders
+  }
+
   // Whether the bound entity is something the LightConfig modal can handle.
   isLightEntity(entity_id: string | null | undefined): boolean {
     return !!entity_id && entity_id.startsWith('light.');

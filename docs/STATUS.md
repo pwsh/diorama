@@ -46,6 +46,28 @@ asks for).
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Local control of unbound interactive objects** (`src/types.ts` +
+  `src/planner.ts` + `src/canvas-render.ts` + `src/canvas-interact.ts` +
+  `src/three-renderer.ts` + `src/ui/three-view.ts` + `src/ui/sidebar.ts`;
+  typecheck + build clean; new `localstate-test.html` `LOCALSTATE PASS 10/10`;
+  full regression green — fusion/ai/tabletest/window/fireplace-wall/mega/
+  seating/pet + phase5a/b): doors, windows, lights, switches, fireplaces, TVs
+  and appliances can be controlled from the panel **without** an HA binding.
+  Item-level optional `localState?: string` (no Store schema, no repairFloor/
+  loadFromHa change). ONE resolver `Planner.effectiveState(item)` (bound →
+  live HA state, exactly as before; unbound → synthetic `{state: localState,
+  attributes: {}}`) threaded through every 2D + 3D render/interaction consumer
+  (renderer mirror `itemState(item, provider)` keeps the SAME stateProvider
+  closures). `Planner.toggleItem(item)` flips `localState` on unbound items
+  (`'on'`↔`'off'`, playing = on) + `emitConfig` (configRev already in the dirty
+  keys); wired into 2D click paths (edit + kiosk), 3D raycast, and the sidebar
+  dim `local: on/off` badge. Binding makes localState inert (resolver prefers
+  the entity) but keeps it — unbinding returns to the last local state.
+  **Kiosk local toggles are session-only** (save() no-ops outside edit; never
+  written to HA/localStorage); view mode makes no changes. A locally-ON TV/
+  appliance also gates the Sims `watch_tv` / entity-gated activities
+  (furniture `hasEntity` = entity-or-local). See CLAUDE.md → Toggle dispatch.
+
 - **Seating v2 + avatar lifecycle batch** (5 user requests; `src/three-renderer.ts`
   + `src/ui/three-view.ts` + `src/types.ts` + `src/ui/sidebar.ts`; one new Store
   field `MotionSensor.demo`; typecheck + build clean; new `seating-test.html`

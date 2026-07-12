@@ -56,6 +56,7 @@ the screenshot fires before first render.
 | window-test.html | `WINDOW PASS n/n` — per-kind pane counts (single/double_hung/casement_pair/sliding/picture), open behaviour per kind, custom sill/height moves the glass + wall sub-sill/header cut boxes (asserts mesh Y bounds) |
 | bubble-anchor-test.html | `BUBBLE PASS n/n` — thought bubble anchored per-rig off the plumbob (child < supermodel, above head top, adult ≈ 2462) + stays 460 mm above the plumbob and drops in world space when seated |
 | fireplace-wall-test.html | `FIREPLACE PASS` — mantel back flush with the firebox back plane (D2/2 = 225), never proud (skips inverted-hull outline shells via `userData.outline`) so a wall-snapped fireplace doesn't poke through |
+| localstate-test.html | `LOCALSTATE PASS n/n` — local control of UNBOUND objects (`entity_id: null` + `localState`): door/window open via localState (green sash emissive), unbound bulb lit + off dim + fireplace lit, and a locally-`'on'` TV gating `watch_tv` (off ≠ watch_tv). Exercises `itemState()` + the `hasEntity` (entity-or-local) flag; the same `stateProvider` closures carry it through |
 
 These were written incrementally by coding agents; fixtures reference the
 entity-shape the renderer expects (`stateProvider`-style closures), not a

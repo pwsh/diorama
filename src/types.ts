@@ -88,6 +88,9 @@ export interface Furniture {
   color?: string;     // hex override of the kind's default tint; undefined = use def color
   locked?: boolean;   // canvas move/resize/rotate/delete disabled
   entity_id?: string | null;  // HA binding for appliances / TV (media_player etc.)
+  localState?: string;        // local control when UNBOUND ('on'/'off'/'playing'). Inert once
+                              // entity_id is set (effectiveState prefers the bound entity); kept
+                              // so unbinding returns to the last local state. See Planner.effectiveState.
   customKindId?: string;      // ObjectRecipe reference (Store.customObjects); `kind` stays as fallback
   mountOnId?: string | null;  // host surface id set by auto-snap; bookkeeping only, NOT live parenting
   sharedBedCovers?: boolean;  // bed only: two-in-bed shared-covers effect (default/undefined = on).
@@ -128,6 +131,7 @@ export interface Light {
   rotation?: number;   // degrees, screen-CW; orients directional kinds (fireplace/strip/sconce/string)
   length?: number;     // mm, for strip/string kinds; default 2000
   fanEntity?: string | null;  // fan.* entity driving blade spin (fan kinds); falls back to entity_id
+  localState?: string; // local control when UNBOUND ('on'/'off'); inert once bound. See Planner.effectiveState.
   locked?: boolean;    // canvas move/delete disabled (click-to-toggle still works)
 }
 
@@ -140,6 +144,7 @@ export interface SwitchFixture {
   rotation?: number;   // degrees, 0 = +Y world (CW on screen); default 0
   size?: number;       // plate extent mm (2D marker + 3D body); default 320
   labelPos?: 'bottom' | 'top' | 'left' | 'right' | 'hide';  // 2D label placement; default bottom
+  localState?: string; // local control when UNBOUND ('on'/'off'); inert once bound. See Planner.effectiveState.
   locked?: boolean;    // canvas move/delete disabled (click-to-toggle still works)
 }
 
@@ -215,6 +220,7 @@ export interface Door {
   rotation: number;            // panel direction (closed) in degrees, screen-CW; 0 = panel along +X world
   entity_id: string | null;    // binary_sensor or any entity; "on" = open
   label?: string;
+  localState?: string;         // local control when UNBOUND ('on'=open/'off'); inert once bound. See Planner.effectiveState.
   hinge?: 'right' | 'left';    // which side the hinge sits on. Determines swing direction.
                                // 'right' (default) = swings CCW on screen; 'left' = swings CW.
   locked?: boolean;            // canvas move/rotate/delete disabled
@@ -230,6 +236,7 @@ export interface Window {
   rotation: number;            // wall axis direction in degrees, screen-CW; 0 = pane along +X world
   entity_id: string | null;    // binary_sensor; "on" = open
   label?: string;
+  localState?: string;         // local control when UNBOUND ('on'=open/'off'); inert once bound. See Planner.effectiveState.
   kind?: WindowKind;           // glazing style; default 'single' (legacy look)
   sill?: number;               // mm above floor to the bottom of the glass; default 900
   height?: number;             // mm of glass height (header derives as sill+height); default 800
