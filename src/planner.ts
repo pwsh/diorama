@@ -1,12 +1,13 @@
 import { HassClient, type HaApi } from './ha-client.js';
 import { SensorDiscovery } from './sensor-discovery.js';
 import { loadStore, saveStore, newId, repairFloor } from './storage.js';
-import { slugToName, normMac, localToWorld } from './geometry.js';
+import { slugToName, normMac, localToWorld, segCrossesSolidWall, mowerSweepWaypoints,
+         ROBOT_DEFAULTS, robotLedColor } from './geometry.js';
 import { stepFusion, newFusionState, DEFAULT_FUSION_CFG,
          type FusionState, type FusionCand } from './fusion.js';
 import { fitGeoTransform, latLonToPlan, clampToBoundary, planBearingDeg, medianLatLon,
          type GeoTransform, type GeoPair, type LatLonSample } from './geo.js';
-import type { GeoConfig, GeoLandmark, DioramaPerson } from './types.js';
+import type { GeoConfig, GeoLandmark, DioramaPerson, RobotFixture } from './types.js';
 
 // ── Bermuda BLE discovery (runtime-only) ──────────────────────────────────
 // One per-scanner distance sensor for a tracked device. `disabled` reflects
@@ -119,6 +120,7 @@ export type Drag =
   | { kind: 'ble'; id: string; startMm: Vec2; start: Vec2 }
   | { kind: 'alarm'; id: string; startMm: Vec2; start: Vec2 }
   | { kind: 'safety'; id: string; startMm: Vec2; start: Vec2 }
+  | { kind: 'robot'; id: string; startMm: Vec2; start: Vec2 }
   | { kind: 'env'; id: string; startMm: Vec2; start: Vec2 }
   | { kind: 'envResize'; id: string; startDist: number; startScale: number }
   | { kind: 'doorMove'; idx: number; startMm: Vec2; start: Vec2 }
@@ -143,7 +145,25 @@ export interface EditZone {
   mousePos: Vec2 | null;
 }
 
-export type Tool = 'select' | 'wall' | 'sensor' | 'motion' | 'env' | 'bleproxy' | 'alarm' | 'safety' | 'furniture' | 'light' | 'switch' | 'door' | 'window' | 'delete';
+export type Tool = 'select' | 'wall' | 'sensor' | 'motion' | 'env' | 'bleproxy' | 'alarm' | 'safety' | 'robot' | 'furniture' | 'light' | 'switch' | 'door' | 'window' | 'delete';
+
+// Live robot state (runtime-only). `x/y/heading/phase/activity/led` are the
+// DISPLAY fields both canvases read; the rest are the movement controller's
+// bookkeeping. See Planner.stepRobots.
+export interface RobotState {
+  x: number; y: number;       // live plan position (world mm)
+  heading: number;            // radians; body-forward direction (renderer −Z aligns to this)
+  phase: number;              // animation phase (spin/bob/LED)
+  activity: string;           // resolved: cleaning/mowing/returning/docked/idle/paused/error
+  led: string;                // resolved LED color hex
+  goalX: number; goalY: number;
+  demoPhase: 'run' | 'return' | 'dock';   // unbound autonomous cycle
+  demoTimer: number;          // seconds remaining in the current demo phase
+  wpIdx: number;              // mower sweep-waypoint cursor
+  wpDir: 1 | -1;              // mower sweep direction (ping-pong)
+  ellipseAng: number;         // mower fallback ellipse-orbit angle
+  goalTimer: number;          // vacuum goal re-pick countdown
+}
 
 // Sentinel for Planner.placingRoomId meaning "create a new room at the next
 // canvas click" (vs an existing room id = re-place that room's anchor).
@@ -238,6 +258,17 @@ export class Planner extends EventTarget {
 
   // Active smoke / CO detector fixture (sidebar selection / canvas highlight)
   activeSafetyId: string | null = null;
+
+  // Active robot fixture (sidebar selection / canvas highlight)
+  activeRobotId: string | null = null;
+
+  // Live robot positions (runtime-only, advanced by stepRobots from the 2D RAF —
+  // like stepLerp). BOTH the 2D canvas and the 3D renderer read this, so the
+  // robot moves consistently whether or not the 3D view was ever opened. See
+  // RobotState / stepRobots below.
+  robotStates: Record<string, RobotState> = {};
+  // Cached mower sweep waypoints, keyed by floor id + configRev (walls change).
+  private _robotWpCache: { key: string; wps: Vec2[] } | null = null;
 
   // Active person (sidebar People list expansion). Runtime only.
   activePersonId: string | null = null;
@@ -632,6 +663,8 @@ export class Planner extends EventTarget {
           this.activeBleId = null;
           this.activeAlarmId = null;
           this.activeSafetyId = null;
+          this.activeRobotId = null;
+          this.robotStates = {};
           this.activePersonId = null;
           this.viewCenter = null;
           this.zoom = 1;
@@ -691,6 +724,11 @@ export class Planner extends EventTarget {
     // Smoke / CO detector binary_sensors: display-only bindings routed through
     // the config channel so 2D/3D dirty keys + sidebar badges refresh on alarm.
     if ((f2.safetySensors ?? []).some(s => s.entity_id === id)) return true;
+    // Robot bindings (vacuum/lawn_mower activity + mower GPS source ids): route
+    // through the config channel so the sidebar state badge + GPS status refresh
+    // on change. Scoped to the current floor's bound ids only.
+    if ((f2.robots ?? []).some(r =>
+      r.entity_id === id || r.trackerEntity === id || r.latEntity === id || r.lonEntity === id)) return true;
     // GPS source entities (a person.* or device_tracker.* bound to a Store.people
     // entry) are config-path so the sidebar GPS status line + 3D pins refresh on
     // a new fix. Bounded to the specific bound ids (GPS pushes are minutes apart,
@@ -1046,6 +1084,11 @@ export class Planner extends EventTarget {
 
   setActiveSafety(id: string | null): void {
     this.activeSafetyId = (this.activeSafetyId === id) ? null : id;
+    this.emitConfig();
+  }
+
+  setActiveRobot(id: string | null): void {
+    this.activeRobotId = (this.activeRobotId === id) ? null : id;
     this.emitConfig();
   }
 
@@ -2000,6 +2043,7 @@ export class Planner extends EventTarget {
     for (const it of f.bleProxies ?? []) { it.x += dx; it.y += dy; }
     for (const it of f.alarmPanels ?? []) { it.x += dx; it.y += dy; }
     for (const it of f.safetySensors ?? []) { it.x += dx; it.y += dy; }
+    for (const it of f.robots ?? []) { it.x += dx; it.y += dy; }
     for (const it of f.doors ?? []) { it.x += dx; it.y += dy; }
     for (const it of f.windows ?? []) { it.x += dx; it.y += dy; }
     for (const rm of f.rooms ?? []) { rm.anchor.x += dx; rm.anchor.y += dy; }
@@ -2019,6 +2063,8 @@ export class Planner extends EventTarget {
     this.activeBleId = null;
     this.activeAlarmId = null;
     this.activeSafetyId = null;
+    this.activeRobotId = null;
+    this.robotStates = {};   // positions are per-floor; recomputed on the new floor
     this.activeFurnitureId = null;
     // Reset pan/zoom — viewCenter is in world mm and a different floor has
     // a different coord space; keeping it would leave the new floor offscreen.
@@ -2143,6 +2189,256 @@ export class Planner extends EventTarget {
           sl.cy += sl.vy * h;
         }
       }
+    }
+  }
+
+  // ── Robot controller (vacuum / mower) ──────────────────────────────────────
+  // MOVEMENT ARCHITECTURE: the controller lives HERE in the Planner (runtime-
+  // only) and is advanced from the 2D RAF via stepRobots(dt), exactly like
+  // stepLerp. `robotStates` is the single source of truth read by BOTH the 2D
+  // canvas and the 3D renderer, so a robot moves consistently whether or not the
+  // 3D view was ever opened. Steering is STRAIGHT-LINE with wall avoidance
+  // (segment-vs-solid-wall-run intersection tests + goal re-pick on block), NOT
+  // the renderer's full A* nav grid — a pragmatic single-source-of-truth choice
+  // that keeps 2D and 3D consistent without duplicating the nav system. Visually
+  // fine for a puck; documented shortcut.
+
+  // Resolve the current activity string for a robot (used by the controller, the
+  // 2D/3D LED visuals, and the sidebar badge). Bound → normalize the entity's
+  // VacuumActivity / LawnMowerActivity state. Unbound → localState 'paused'
+  // freezes; else the runtime demo phase (see stepRobots).
+  robotActivity(r: RobotFixture): string {
+    if (r.entity_id) {
+      const s = this.hass?.states?.[r.entity_id]?.state ?? '';
+      if (s === 'cleaning' || s === 'mowing') return s;
+      if (s === 'on') return r.kind === 'mower' ? 'mowing' : 'cleaning';
+      if (s === 'returning') return 'returning';
+      if (s === 'docked') return 'docked';
+      if (s === 'paused') return 'paused';
+      if (s === 'error') return 'error';
+      return 'idle';   // idle / off / unknown / unavailable
+    }
+    if (r.localState === 'paused') return 'paused';
+    const dp = this.robotStates[r.id]?.demoPhase ?? 'dock';
+    if (dp === 'run') return r.kind === 'mower' ? 'mowing' : 'cleaning';
+    if (dp === 'return') return 'returning';
+    return 'docked';
+  }
+
+  // Click handler. Bound → run/dock via the domain service (cleaning/mowing →
+  // return/dock; else start). Unbound → flip the demo between running and
+  // returning-to-dock (runtime). View mode: no-op.
+  toggleRobot(r: RobotFixture): void {
+    if (this.uiMode === 'view') return;
+    if (r.entity_id) {
+      const act = this.robotActivity(r);
+      const working = act === 'cleaning' || act === 'mowing';
+      try {
+        if (r.kind === 'mower') {
+          this.hass?.callService('lawn_mower', working ? 'dock' : 'start_mowing', { entity_id: r.entity_id });
+        } else {
+          this.hass?.callService('vacuum', working ? 'return_to_base' : 'start', { entity_id: r.entity_id });
+        }
+      } catch { /* fire-and-forget */ }
+      return;
+    }
+    const rs = this.robotStates[r.id];
+    if (!rs) return;
+    if (rs.demoPhase === 'run') { rs.demoPhase = 'return'; }
+    else { rs.demoPhase = 'run'; rs.demoTimer = 90 + Math.random() * 90; rs.goalTimer = 0; }
+    this.emitConfig();
+  }
+
+  private _spawnRobot(r: RobotFixture): RobotState {
+    // Desync multiple robots' demo cycles by hashing the id.
+    let h = 0;
+    for (let i = 0; i < r.id.length; i++) h = (h * 31 + r.id.charCodeAt(i)) & 0xffff;
+    return {
+      x: r.x, y: r.y, heading: 0, phase: h % 100,
+      activity: 'docked', led: robotLedColor('docked'),
+      goalX: r.x, goalY: r.y,
+      demoPhase: 'dock', demoTimer: 15 + (h % 60),   // start parked, then run
+      wpIdx: 0, wpDir: 1, ellipseAng: (h % 628) / 100, goalTimer: 0,
+    };
+  }
+
+  // Does the segment (x0,y0)→(x1,y1) cross any SOLID wall run on the current
+  // floor? Invisible walls (planning boundaries) are passable; door/window spans
+  // are gaps (via wallCutsForSegment) so a robot walks through openings.
+  private _segCrossesWall(f: Floor, x0: number, y0: number, x1: number, y1: number): boolean {
+    return segCrossesSolidWall(f.walls, f.doors ?? [], f.windows ?? [], x0, y0, x1, y1);
+  }
+
+  // Pick a random reachable goal inside the floor rect (straight line-of-sight
+  // from the current position — no wall crossing). Falls back to the dock.
+  private _pickVacuumGoal(r: RobotFixture, rs: RobotState, f: Floor): void {
+    const m = 250;
+    const w = Math.max(2 * m + 1, f.w), d = Math.max(2 * m + 1, f.d);
+    for (let k = 0; k < 14; k++) {
+      const gx = m + Math.random() * (w - 2 * m);
+      const gy = m + Math.random() * (d - 2 * m);
+      if (!this._segCrossesWall(f, rs.x, rs.y, gx, gy)) {
+        rs.goalX = gx; rs.goalY = gy; rs.goalTimer = 4 + Math.random() * 4;
+        return;
+      }
+    }
+    rs.goalX = r.x; rs.goalY = r.y; rs.goalTimer = 4;
+  }
+
+  // Coarse outdoor sweep waypoints for a simulated mower: grid cells inside the
+  // floor rect but OUTSIDE every closed wall loop, ordered boustrophedon. Cached
+  // per (floor, configRev). Empty → the caller orbits an ellipse ring.
+  private _mowerWaypoints(f: Floor): Vec2[] {
+    const key = `${f.id}:${this.configRev}`;
+    if (this._robotWpCache?.key === key) return this._robotWpCache.wps;
+    const wps = mowerSweepWaypoints(f.walls, f.w, f.d);
+    this._robotWpCache = { key, wps };
+    return wps;
+  }
+
+  // GPS position for a bound mower (tracker attrs or a lat/lon sensor pair),
+  // projected to plan mm via the fitted geo transform + boundary clamp. Null when
+  // no GPS source, no calibration, or no numeric fix. `headingRad` from a
+  // tracker `direction` attribute (compass °) mapped into the plan frame.
+  private _mowerGps(r: RobotFixture): { x: number; y: number; headingRad: number | null } | null {
+    if (r.kind !== 'mower') return null;
+    const fit = this.geoFit();
+    if (!fit || fit.transform.quality === 'none') return null;
+    let lat: number | null = null, lon: number | null = null, dirDeg: number | null = null;
+    if (r.trackerEntity) {
+      const a = this.hass?.states?.[r.trackerEntity]?.attributes as Record<string, unknown> | undefined;
+      if (a && typeof a.latitude === 'number' && typeof a.longitude === 'number') {
+        lat = a.latitude; lon = a.longitude;
+        if (typeof a.direction === 'number') dirDeg = a.direction;
+      }
+    } else if (r.latEntity && r.lonEntity) {
+      const la = parseFloat(this.hass?.states?.[r.latEntity]?.state ?? '');
+      const lo = parseFloat(this.hass?.states?.[r.lonEntity]?.state ?? '');
+      if (isFinite(la) && isFinite(lo)) { lat = la; lon = lo; }
+    }
+    if (lat == null || lon == null) return null;
+    const t = fit.transform;
+    const plan = latLonToPlan(t, lat, lon);
+    if (!plan) return null;
+    const f = this.floor();
+    const boundaryMm = this.geoBoundaryM() * 1000;
+    const inYard = plan.x >= -boundaryMm && plan.x <= f.w + boundaryMm
+                && plan.y >= -boundaryMm && plan.y <= f.d + boundaryMm;
+    const pos = inYard ? plan : clampToBoundary(f.w, f.d, boundaryMm, plan.x, plan.y);
+    let headingRad: number | null = null;
+    if (dirDeg != null) {
+      const B = dirDeg * Math.PI / 180;                  // compass ° of travel
+      const east = Math.sin(B), north = Math.cos(B);
+      const c = Math.cos(t.thetaRad), s = Math.sin(t.thetaRad);
+      headingRad = Math.atan2(s * east + c * north, c * east - s * north);  // geo→plan, then atan2(dy,dx)
+    }
+    return { x: pos.x, y: pos.y, headingRad };
+  }
+
+  // Advance all robots on the current floor (called from the 2D RAF).
+  stepRobots(dt: number): void {
+    const f = this.floor();
+    const robots = f.robots ?? [];
+    if (robots.length === 0) {
+      if (Object.keys(this.robotStates).length) this.robotStates = {};
+      return;
+    }
+    const ids = new Set(robots.map(r => r.id));
+    for (const k of Object.keys(this.robotStates)) if (!ids.has(k)) delete this.robotStates[k];
+
+    for (const r of robots) {
+      let rs = this.robotStates[r.id];
+      if (!rs) { rs = this._spawnRobot(r); this.robotStates[r.id] = rs; }
+      rs.phase += dt;   // always advance (LED breathing / blink)
+
+      // Demo cycle for unbound robots (paused freezes it).
+      if (!r.entity_id && r.localState !== 'paused') {
+        rs.demoTimer -= dt;
+        if (rs.demoPhase === 'run' && rs.demoTimer <= 0) rs.demoPhase = 'return';
+        else if (rs.demoPhase === 'dock' && rs.demoTimer <= 0) {
+          rs.demoPhase = 'run'; rs.demoTimer = 90 + Math.random() * 90; rs.goalTimer = 0;
+        }
+      }
+
+      const act = this.robotActivity(r);
+      rs.activity = act;
+      rs.led = robotLedColor(act);
+
+      if (act === 'idle' || act === 'paused' || act === 'error') continue;   // freeze in place
+
+      if (r.kind === 'mower') this._stepMower(r, rs, f, act, dt);
+      else this._stepVacuum(r, rs, f, act, dt);
+    }
+  }
+
+  private _stepVacuum(r: RobotFixture, rs: RobotState, f: Floor, act: string, dt: number): void {
+    const spd = ROBOT_DEFAULTS.vacuum.speed;
+    if (act === 'docked' || act === 'returning') {
+      rs.goalX = r.x; rs.goalY = r.y;   // head to / hold the dock
+    } else {
+      rs.goalTimer -= dt;
+      const dg = Math.hypot(rs.goalX - rs.x, rs.goalY - rs.y);
+      if (dg < 200 || rs.goalTimer <= 0) this._pickVacuumGoal(r, rs, f);
+    }
+    const dx = rs.goalX - rs.x, dy = rs.goalY - rs.y;
+    const d = Math.hypot(dx, dy);
+    if (d > 1) {
+      let ux = dx / d, uy = dy / d;
+      if (act === 'cleaning') {   // serpentine wiggle on the carrot (vacuum-y)
+        const perp = 0.35 * Math.sin(rs.phase * 3);
+        const wx = ux - uy * perp, wy = uy + ux * perp;   // perpendicular offset
+        const nn = Math.hypot(wx, wy) || 1; ux = wx / nn; uy = wy / nn;
+      }
+      const step = Math.min(spd * dt, d);
+      const nx = rs.x + ux * step, ny = rs.y + uy * step;
+      if (act !== 'docked' && this._segCrossesWall(f, rs.x, rs.y, nx, ny)) {
+        this._pickVacuumGoal(r, rs, f);   // blocked → re-pick, hold position this frame
+      } else {
+        rs.x = nx; rs.y = ny;
+        rs.heading = Math.atan2(dy, dx);   // face the raw goal (not the wiggle)
+      }
+    }
+    if (act === 'returning' && !r.entity_id && Math.hypot(r.x - rs.x, r.y - rs.y) < 150) {
+      rs.demoPhase = 'dock'; rs.demoTimer = 60 + Math.random() * 60;
+    }
+  }
+
+  private _stepMower(r: RobotFixture, rs: RobotState, f: Floor, act: string, dt: number): void {
+    const spd = ROBOT_DEFAULTS.mower.speed;
+    // GPS reality (when calibrated + a fix exists) overrides the sim while working.
+    const gps = (act === 'mowing' || act === 'returning') ? this._mowerGps(r) : null;
+    if (gps) {
+      const px = rs.x, py = rs.y;
+      const dx = gps.x - rs.x, dy = gps.y - rs.y, d = Math.hypot(dx, dy);
+      if (d > 1) { const step = Math.min(spd * 3 * dt, d); rs.x += dx / d * step; rs.y += dy / d * step; }
+      if (gps.headingRad != null) rs.heading = gps.headingRad;
+      else { const vx = rs.x - px, vy = rs.y - py; if (Math.hypot(vx, vy) > 1) rs.heading = Math.atan2(vy, vx); }
+      return;
+    }
+    if (act === 'docked' || act === 'returning') {
+      const dx = r.x - rs.x, dy = r.y - rs.y, d = Math.hypot(dx, dy);
+      if (d > 1) { const step = Math.min(spd * dt, d); rs.x += dx / d * step; rs.y += dy / d * step; rs.heading = Math.atan2(dy, dx); }
+      if (act === 'returning' && !r.entity_id && d < 150) { rs.demoPhase = 'dock'; rs.demoTimer = 60 + Math.random() * 60; }
+      return;
+    }
+    // Simulated mowing: sweep outdoor waypoints (boustrophedon), else orbit a ring.
+    const wps = this._mowerWaypoints(f);
+    if (wps.length >= 2) {
+      let g = wps[Math.max(0, Math.min(wps.length - 1, rs.wpIdx))];
+      if (Math.hypot(g.x - rs.x, g.y - rs.y) < 300) {
+        rs.wpIdx += rs.wpDir;
+        if (rs.wpIdx >= wps.length) { rs.wpIdx = wps.length - 1; rs.wpDir = -1; }
+        else if (rs.wpIdx < 0) { rs.wpIdx = 0; rs.wpDir = 1; }
+        g = wps[rs.wpIdx];
+      }
+      const dx = g.x - rs.x, dy = g.y - rs.y, d = Math.hypot(dx, dy);
+      if (d > 1) { const step = Math.min(spd * dt, d); rs.x += dx / d * step; rs.y += dy / d * step; rs.heading = Math.atan2(dy, dx); }
+    } else {
+      rs.ellipseAng += (spd / Math.max(1, Math.max(f.w, f.d))) * dt;
+      const a = f.w / 2 + 900, b = f.d / 2 + 900;
+      const gx = f.w / 2 + a * Math.cos(rs.ellipseAng), gy = f.d / 2 + b * Math.sin(rs.ellipseAng);
+      const dx = gx - rs.x, dy = gy - rs.y, d = Math.hypot(dx, dy);
+      if (d > 1) { const step = Math.min(spd * dt, d); rs.x += dx / d * step; rs.y += dy / d * step; rs.heading = Math.atan2(dy, dx); }
     }
   }
 

@@ -5,6 +5,7 @@ import {
   motionColor, motionIntensity, sensorColor, BLE_PROXY_DEFAULTS,
   ALARM_DEFAULTS, alarmStateColor,
   safetyColor,
+  robotGlyph, robotColor, ROBOT_DEFAULTS,
   hexToRgba, lighten, furnitureKind, furnitureCorners, resolveFurnitureDef,
   doorEndpoint, doorOpenDeltaDeg, windowEndpoints, wallCutsForSegment, wallKind,
   ENV_KINDS, envKindOf, envColor, envValueText, envScale,
@@ -179,6 +180,7 @@ export function drawAll(ctx: CanvasRenderingContext2D, p: Planner, view: View,
   if (on(L.sensors)) drawBleProxies(ctx, p, view);
   if (on(L.sensors)) drawAlarmPanels(ctx, p, view);
   if (on(L.sensors)) drawSafetySensors(ctx, p, view);
+  if (on(L.sensors)) drawRobots(ctx, p, view);
   // LD2450 inclusion / filter polygons + object halos draw per the zones
   // layer. The Motion toggle only hides motion-sensor cones (drawMotionSensors
   // gates its own cone block).
@@ -702,6 +704,89 @@ function drawSafetySensors(ctx: CanvasRenderingContext2D, p: Planner, view: View
     ctx.fillRect(c.x - tw / 2, by, tw, 13 * dpr);
     ctx.fillStyle = alarming ? hexToRgba(col, 1) : '#cfd8dc';
     ctx.fillText(txt, c.x, by + 1 * dpr);
+  }
+}
+
+// Robot fixtures: a small dock icon at the base (x,y) plus a moving robot dot at
+// the live Planner.robotStates position, colored by resolved activity + a heading
+// tick. Rides the sensors layer (gated at the call site). Reads robotStates (set
+// by Planner.stepRobots from the 2D RAF) — the single source of truth for both
+// 2D and 3D so the robot moves even when the 3D view was never opened.
+function drawRobots(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
+  const dpr = window.devicePixelRatio || 1;
+  const f = p.floor();
+  for (const r of f.robots ?? []) {
+    const kind = r.kind === 'mower' ? 'mower' : 'vacuum';
+    const baseCol = robotColor(kind);
+    const rs = p.robotStates[r.id];
+    const act = rs?.activity ?? p.robotActivity(r);
+    const led = rs?.led ?? '#78909c';
+    const phase = rs?.phase ?? 0;
+    const selected = p.activeRobotId === r.id;
+
+    // ── Dock / charging base ──
+    const dc = mmToPx(view, r.x, r.y);
+    const mv = ROBOT_DEFAULTS.mower, vac = ROBOT_DEFAULTS.vacuum;
+    const dockW = kind === 'mower' ? mv.dockW : vac.dockW;
+    const dockD = kind === 'mower' ? mv.dockD : vac.dockD;
+    const bodyMm = kind === 'mower' ? mv.bodyW / 2 : vac.bodyR;
+    const dw = Math.max(14, dockW * view.scale);
+    const dd = Math.max(10, dockD * view.scale);
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(dc.x - dw / 2, dc.y - dd / 2, dw, dd);
+    ctx.fillStyle = hexToRgba(baseCol, 0.25);
+    ctx.fill();
+    ctx.lineWidth = selected ? 2.5 : 1.5;
+    ctx.strokeStyle = selected ? '#fff' : hexToRgba(baseCol, 0.85);
+    ctx.setLineDash([3 * dpr, 2 * dpr]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.restore();
+
+    // ── Moving robot body ──
+    const bx = rs ? rs.x : r.x, by = rs ? rs.y : r.y;
+    const bc = mmToPx(view, bx, by);
+    const bodyR = Math.max(7, bodyMm * view.scale);
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(bc.x, bc.y, bodyR, 0, 2 * Math.PI);
+    ctx.fillStyle = hexToRgba(baseCol, 0.95);
+    ctx.fill();
+    // State ring.
+    ctx.lineWidth = Math.max(1.5, 2.5 * dpr);
+    ctx.strokeStyle = led;
+    ctx.stroke();
+    // Heading tick (body-forward = plan heading; canvas Y flips).
+    if (rs) {
+      const hx = Math.cos(rs.heading), hy = -Math.sin(rs.heading);
+      ctx.beginPath();
+      ctx.moveTo(bc.x, bc.y);
+      ctx.lineTo(bc.x + hx * bodyR, bc.y + hy * bodyR);
+      ctx.lineWidth = Math.max(1, 1.5 * dpr);
+      ctx.strokeStyle = '#fff';
+      ctx.stroke();
+    }
+    // Status LED dot: docked breathes, error blinks, else steady.
+    let ledA = 1;
+    if (act === 'docked') ledA = 0.4 + 0.6 * (0.5 + 0.5 * Math.sin(phase * 2));
+    else if (act === 'error') ledA = Math.sin(phase * 8) > 0 ? 1 : 0.1;
+    ctx.beginPath();
+    ctx.arc(bc.x, bc.y - bodyR - 3 * dpr, Math.max(2, 2.5 * dpr), 0, 2 * Math.PI);
+    ctx.fillStyle = hexToRgba(led, ledA);
+    ctx.fill();
+    ctx.restore();
+
+    // Label: glyph + activity.
+    const txt = `${robotGlyph(kind)} ${r.label?.trim() || (kind === 'mower' ? 'Mower' : 'Vacuum')} · ${act}`;
+    ctx.font = `${10 * dpr}px sans-serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+    const tw = ctx.measureText(txt).width + 8 * dpr;
+    const ty = bc.y + bodyR + 4 * dpr;
+    ctx.fillStyle = 'rgba(0,0,0,0.7)';
+    ctx.fillRect(bc.x - tw / 2, ty, tw, 13 * dpr);
+    ctx.fillStyle = '#cfd8dc';
+    ctx.fillText(txt, bc.x, ty + 1 * dpr);
   }
 }
 

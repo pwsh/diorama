@@ -48,6 +48,24 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Robot vacuum + lawn mower** (11 files; typecheck + build clean; new
+  `robot-test.html` **ROBOT PASS 24/24** — 120 s roam with 0 wall
+  crossings, doorway traversal, dock convergence <150 mm, mower sweep
+  outside loops + ellipse fallback, GPS round-trip + boundary clamp;
+  mega + livefeatures unchanged): `RobotFixture` (`Floor.robots`, 🤖
+  tool) — dock at the placed x/y, persistent per-frame rig (vacuum puck /
+  mower body). Planner-side movement controller (`stepRobots` from the 2D
+  RAF; `robotStates` read by both views), straight-line LOS steering
+  against `segCrossesSolidWall`. Binds `vacuum.*`/`lawn_mower.*`; mower
+  GPS via device_tracker (Mammotion `<name>_gps` shape, `direction`
+  heading) or separate lat/lon sensors, projected through the geo
+  calibration with boundary clamp; simulated boustrophedon sweep outside
+  the wall loops otherwise. Unbound robots run autonomous
+  run/return/dock demo cycles (kiosk/view included). Click = start/dock
+  service toggle (bound) or demo flip (unbound). LED state palette
+  green/blue/amber/red. CLAUDE.md section "Robot vacuum & lawn mower
+  fixtures".
+
 - **Living-house batch 2: smoke/CO detectors, appliance door animation,
   glass-house stairs/floor, cinematic orbit** (10 files; typecheck + build
   clean; new `livefeatures-test.html` **12/12**; regressions green — mega /

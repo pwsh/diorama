@@ -198,6 +198,12 @@ export class ThreeView extends LitElement {
         if (s) p.toggleItem(s);
         return;
       }
+      // Robot → run/dock (bound) or demo toggle (unbound). Refuses in view mode.
+      if (kind === 'robot') {
+        const ro = p.floor().robots?.find(x => x.id === fixtureId);
+        if (ro) p.toggleRobot(ro);
+        return;
+      }
       // toggleEntity/toggleItem refuse in view-only mode.
       if (entity_id) { p.toggleEntity(entity_id); return; }
       // Unbound fixture → local control: resolve the item by kind + id and flip
@@ -429,6 +435,7 @@ export class ThreeView extends LitElement {
   private _keyBle = '';
   private _keyAlarm = '';
   private _keySafety = '';
+  private _keyRobots = '';
   private _keyLights = '';
   private _keyZones = '';
   private _keyHalos = '';
@@ -595,6 +602,20 @@ export class ThreeView extends LitElement {
         this._keySafety = keySafety;
         r.updateSafetySensors(safetyList, id => states[id] || null);
       }
+
+      // Robot DOCKS are static (build-time): key on config rev + the fixture
+      // list + kind/binding. The moving robot BODIES are updated every frame from
+      // Planner.robotStates just below (persistent rigs — not dirty-keyed).
+      const robotList = f.robots ?? [];
+      const keyRobots = `${p.configRev}|` + robotList.map(ro =>
+        `${ro.id}:${ro.kind}:${Math.round(ro.x)}:${Math.round(ro.y)}:${ro.entity_id ?? '-'}`).join(',');
+      if (keyRobots !== this._keyRobots) {
+        this._keyRobots = keyRobots;
+        r.updateRobotDocks(robotList);
+      }
+      // Per-frame: position/animate the moving robot bodies from the planner's
+      // controller state (the single source of truth shared with 2D).
+      r.updateRobotRigs(robotList, p.robotStates);
 
       // GPS device pins + 3D landmark pins (both ride the geo layer). Coarse
       // dirty key: positions rounded to 500 mm + zone + stale, so the sprites

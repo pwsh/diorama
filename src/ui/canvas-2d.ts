@@ -450,6 +450,7 @@ export class Canvas2D extends LitElement {
         const dt = this._lastFrame ? Math.min((now - this._lastFrame) / 1000, 0.1) : 0.016;
         this._lastFrame = now;
         this.planner.stepLerp(dt);
+        this.planner.stepRobots(dt);
         const dpr = window.devicePixelRatio || 1;
         const cw = this._canvas.clientWidth, ch = this._canvas.clientHeight;
         if (cw > 4 && ch > 4 &&

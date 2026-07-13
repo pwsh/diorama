@@ -13,9 +13,25 @@ import {
   furnitureDef, resolveFurnitureDef, furnitureColor, furnitureCat, doorOpenDeltaDeg,
   alarmHeight, alarmStateColor, ALARM_DEFAULTS, ALARM_PLATE_DEPTH_MM,
   safetyColor, SAFETY_DEFAULTS,
+  robotColor, robotLedColor, ROBOT_DEFAULTS,
   ENV_KINDS, envKindOf, envColor, envValueText, envHeight, envScale,
 } from './geometry.js';
-import type { Door, Window as WindowType, EnvSensor, BleProxy, AlarmPanel, SafetySensor, ObjectRecipe, ActivityKind } from './types.js';
+import type { Door, Window as WindowType, EnvSensor, BleProxy, AlarmPanel, SafetySensor, RobotFixture, ObjectRecipe, ActivityKind } from './types.js';
+
+// The subset of Planner.RobotState the renderer reads (structural — keeps the
+// renderer decoupled from the planner). Positions are plan-frame world mm.
+export interface RobotRenderState {
+  x: number; y: number; heading: number; phase: number; activity: string; led: string;
+}
+
+// Persistent moving-robot rig (like a humanoid: built once, mutated per frame).
+interface RobotRig {
+  group: THREE.Group;
+  kind: 'vacuum' | 'mower';
+  ledMat: THREE.MeshToonMaterial;   // status LED — recolored per frame
+  spin: THREE.Object3D;             // sub-part that spins while working
+  blob: THREE.Mesh;
+}
 import { wallCutsForSegment, WINDOW_DEFAULTS, closedWallLoops, wallKind, WALL_KINDS, furnitureLocalToWorld, furnitureWorldToLocal, pointInPolygon as pip, centroid, loopContaining, resolveRoomForPoint, roomLabel, intersectLoopWithRect, polygonArea } from './geometry.js';
 
 export interface ZoneWorld { vertices: Vec2[]; color: number; occupied: boolean; }
@@ -620,6 +636,9 @@ export class ThreeDRenderer {
   private _bleGroup = new THREE.Group();
   private _alarmGroup = new THREE.Group();
   private _safetyGroup = new THREE.Group();
+  private _robotGroup = new THREE.Group();       // static robot docks (build-time, _keyRobots)
+  private _robotRigGroup = new THREE.Group();    // moving robot bodies (per-frame, persistent)
+  private _robotRigs: Record<string, RobotRig> = {};  // keyed by robot id
   private _lightGroup = new THREE.Group();
   private _targetGroup = new THREE.Group();
   // GPS device pins + 3D landmark pins (Feature G, phase G2). Camera-facing
@@ -671,8 +690,8 @@ export class ThreeDRenderer {
   private _lastAnimT = 0;   // performance.now()/1000 of the previous _animate frame
   private _ZONE_H = 305;  // 1 ft — low outlines that don't wall off the room
   private _OBJ_H = 900;
-  private _onFixtureClick: ((info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'safety'; entity_id: string | null; fixtureId: string }) => void) | null = null;
-  private _onFixtureDblClick: ((info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'safety'; entity_id: string | null; fixtureId: string }) => void) | null = null;
+  private _onFixtureClick: ((info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'safety' | 'robot'; entity_id: string | null; fixtureId: string }) => void) | null = null;
+  private _onFixtureDblClick: ((info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'safety' | 'robot'; entity_id: string | null; fixtureId: string }) => void) | null = null;
   private _raycaster = new THREE.Raycaster();
   // Per-target humanoid rigs, persisted across frames so we can carry
   // walk-cycle phase + smoothed body facing.
@@ -857,6 +876,7 @@ export class ThreeDRenderer {
                     this._zoneGroup, this._haloGroup,
                     this._sensorGroup, this._motionGroup, this._envGroup,
                     this._bleGroup, this._alarmGroup, this._safetyGroup,
+                    this._robotGroup, this._robotRigGroup,
                     this._lightGroup, this._targetGroup, this._ghostGroup,
                     this._gpsGroup, this._weatherGroup);
 
@@ -933,15 +953,15 @@ export class ThreeDRenderer {
     this._animate();
   }
 
-  onFixtureClick(fn: (info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'safety'; entity_id: string | null; fixtureId: string }) => void): void {
+  onFixtureClick(fn: (info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'safety' | 'robot'; entity_id: string | null; fixtureId: string }) => void): void {
     this._onFixtureClick = fn;
   }
-  onFixtureDblClick(fn: (info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'safety'; entity_id: string | null; fixtureId: string }) => void): void {
+  onFixtureDblClick(fn: (info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'safety' | 'robot'; entity_id: string | null; fixtureId: string }) => void): void {
     this._onFixtureDblClick = fn;
   }
 
   private _raycastFixture(clientX: number, clientY: number):
-      { kind: 'light' | 'switch' | 'media' | 'alarm' | 'safety'; entity_id: string | null; fixtureId: string } | null {
+      { kind: 'light' | 'switch' | 'media' | 'alarm' | 'safety' | 'robot'; entity_id: string | null; fixtureId: string } | null {
     if (!this._renderer || !this._camera) return null;
     const rect = this._renderer.domElement.getBoundingClientRect();
     const ndc = new THREE.Vector2(
@@ -962,6 +982,9 @@ export class ThreeDRenderer {
     if (this._alarmGroup.visible) roots.push(this._alarmGroup);
     // Smoke / CO detectors are clickable (unbound → manual test trigger).
     if (this._safetyGroup.visible) roots.push(this._safetyGroup);
+    // Robots (docks + moving bodies) are clickable → run/dock.
+    if (this._robotGroup.visible) roots.push(this._robotGroup);
+    if (this._robotRigGroup.visible) roots.push(this._robotRigGroup);
     for (const g of this._mediaClickables) roots.push(g);
     if (!roots.length) return null;
     const hits = this._raycaster.intersectObjects(roots, true);
@@ -970,7 +993,7 @@ export class ThreeDRenderer {
       let obj: THREE.Object3D | null = h.object;
       while (obj) {
         const ud = obj.userData;
-        if (ud && (ud.kind === 'light' || ud.kind === 'switch' || ud.kind === 'media' || ud.kind === 'alarm' || ud.kind === 'safety')) {
+        if (ud && (ud.kind === 'light' || ud.kind === 'switch' || ud.kind === 'media' || ud.kind === 'alarm' || ud.kind === 'safety' || ud.kind === 'robot')) {
           return { kind: ud.kind, entity_id: ud.entity_id ?? null, fixtureId: String(ud.fixtureId) };
         }
         obj = obj.parent;
@@ -1273,11 +1296,14 @@ export class ThreeDRenderer {
     for (const g of [
       this._floorGroup, this._doorGroup, this._modelGroup, this._zoneGroup, this._haloGroup,
       this._sensorGroup, this._motionGroup, this._bleGroup, this._alarmGroup,
-      this._safetyGroup,
+      this._safetyGroup, this._robotGroup, this._robotRigGroup,
       this._lightGroup, this._targetGroup, this._ghostGroup,
     ]) {
       this._clearGroup(g);
     }
+    // Robot rigs live in _robotRigGroup (just cleared); drop their bookkeeping so
+    // updateRobotRigs rebuilds fresh on the next floor.
+    this._robotRigs = {};
     // Appliance-door pivots + their eased blend/dwell state reset on floor
     // switch (the pivots were just disposed with _floorGroup; the blend map is
     // rebuilt lazily as updateFloor re-registers doors).
@@ -1578,6 +1604,9 @@ export class ThreeDRenderer {
     this._alarmGroup.visible = v.sensors !== false;
     // Smoke / CO detectors ride the sensors layer too.
     this._safetyGroup.visible = v.sensors !== false;
+    // Robot docks + moving bodies ride the sensors layer too.
+    this._robotGroup.visible = v.sensors !== false;
+    this._robotRigGroup.visible = v.sensors !== false;
     this._motionGroup.visible = v.motion !== false;
     this._envGroup.visible = v.env !== false;
     const z = v.zones !== false;
@@ -4001,6 +4030,152 @@ export class ThreeDRenderer {
       }
       this._safetyGroup.add(grp);
     }
+  }
+
+  // ── Robots (vacuum / mower) ────────────────────────────────────────────────
+  // Docks are static (build-time, rebuilt under three-view's _keyRobots). The
+  // moving robot bodies are persistent per-frame rigs (see updateRobotRigs) whose
+  // positions come from Planner.robotStates — the renderer never runs the robot
+  // movement itself, so 2D and 3D stay in lock-step.
+  updateRobotDocks(robots: RobotFixture[]): void {
+    if (!this._scene) return;
+    this._clearGroup(this._robotGroup);
+    for (const r of robots) {
+      const kind = r.kind === 'mower' ? 'mower' : 'vacuum';
+      const ud = { kind: 'robot' as const, entity_id: r.entity_id ?? null, fixtureId: r.id };
+      const grp = new THREE.Group();
+      const col = hexToInt(robotColor(kind));
+      if (kind === 'mower') {
+        // Garage-ish charging station: base plate + low back wall + slanted roof.
+        const base = new THREE.Mesh(new THREE.BoxGeometry(720, 40, 520),
+          this._mat({ color: 0x37474f, roughness: 0.8 }));
+        base.position.y = 20; base.userData = ud; grp.add(base);
+        const back = new THREE.Mesh(new THREE.BoxGeometry(720, 320, 60),
+          this._mat({ color: col, roughness: 0.7 }));
+        back.position.set(0, 180, 260); back.userData = ud; grp.add(back);
+        const roof = new THREE.Mesh(new THREE.BoxGeometry(740, 30, 360),
+          this._mat({ color: col, roughness: 0.6 }));
+        roof.position.set(0, 350, 130); roof.rotation.x = -0.2; roof.userData = ud; grp.add(roof);
+      } else {
+        // Flat ramp/base plate with a charging LED.
+        const base = new THREE.Mesh(new THREE.BoxGeometry(420, 30, 260),
+          this._mat({ color: 0x263238, roughness: 0.8 }));
+        base.position.y = 15; base.userData = ud; grp.add(base);
+        const contact = new THREE.Mesh(new THREE.BoxGeometry(120, 50, 20),
+          this._mat({ color: col, emissive: col, emissiveIntensity: 0.4, roughness: 0.5 }));
+        contact.position.set(0, 40, 120); contact.userData = ud; grp.add(contact);
+      }
+      this._addOutlines(grp);
+      const p = this._w(r.x, r.y, 0);
+      grp.position.set(p.x, p.y, p.z);
+      this._robotGroup.add(grp);
+    }
+  }
+
+  // Persistent moving-robot rigs, positioned from Planner.robotStates each frame.
+  updateRobotRigs(robots: RobotFixture[], states: Record<string, RobotRenderState>): void {
+    if (!this._scene) return;
+    const live = new Set<string>();
+    for (const r of robots) {
+      const st = states[r.id];
+      if (!st) continue;
+      live.add(r.id);
+      const kind = r.kind === 'mower' ? 'mower' : 'vacuum';
+      let rig = this._robotRigs[r.id];
+      if (rig && rig.kind !== kind) { this._disposeRobotRig(rig); delete this._robotRigs[r.id]; rig = undefined as unknown as RobotRig; }
+      if (!rig) {
+        rig = this._buildRobotRig(kind, r);
+        this._robotRigs[r.id] = rig;
+        this._robotRigGroup.add(rig.group);
+      }
+      // Position + facing (plan heading → scene yaw; body-forward = local −Z).
+      const p = this._w(st.x, st.y, 0);
+      const working = st.activity === 'cleaning' || st.activity === 'mowing';
+      const bob = working ? Math.abs(Math.sin(st.phase * 4)) * 12 : 0;
+      rig.group.position.set(p.x, bob, p.z);
+      rig.group.rotation.y = Math.atan2(Math.cos(st.heading), -Math.sin(st.heading));
+      // Spin the top part while working (vacuum brush plate / mower disc).
+      rig.spin.rotation.y = working ? st.phase * 4 : 0;
+      // LED: color from resolved led; docked breathes, error blinks.
+      let inten = 0.9;
+      if (st.activity === 'docked') inten = 0.3 + 0.7 * (0.5 + 0.5 * Math.sin(st.phase * 2));
+      else if (st.activity === 'error') inten = Math.sin(st.phase * 8) > 0 ? 1.2 : 0.05;
+      else if (st.activity === 'idle' || st.activity === 'paused') inten = 0.3;
+      const ledHex = hexToInt(st.led);
+      rig.ledMat.color.setHex(ledHex);
+      rig.ledMat.emissive.setHex(ledHex);
+      rig.ledMat.emissiveIntensity = inten;
+      // Re-ground the blob shadow.
+      rig.blob.position.y = 6 - bob;
+    }
+    // Dispose rigs whose robot vanished.
+    for (const id of Object.keys(this._robotRigs)) {
+      if (!live.has(id)) { this._disposeRobotRig(this._robotRigs[id]); delete this._robotRigs[id]; }
+    }
+  }
+
+  private _buildRobotRig(kind: 'vacuum' | 'mower', r: RobotFixture): RobotRig {
+    const ud = { kind: 'robot' as const, entity_id: r.entity_id ?? null, fixtureId: r.id };
+    const grp = new THREE.Group();
+    const bodyCol = hexToInt(robotColor(kind));
+    const ledMat = this._mat({ color: 0x43a047, emissive: 0x43a047, emissiveIntensity: 0.9 });
+    const spin = new THREE.Group();
+    if (kind === 'vacuum') {
+      const R = ROBOT_DEFAULTS.vacuum.bodyR, H = ROBOT_DEFAULTS.vacuum.bodyH;
+      const body = new THREE.Mesh(new THREE.CylinderGeometry(R, R, H, 28),
+        this._mat({ color: bodyCol, roughness: 0.6 }));
+      body.position.y = H / 2; body.userData = ud; grp.add(body);
+      // Colored top ring.
+      const ring = new THREE.Mesh(new THREE.CylinderGeometry(R * 0.98, R * 0.98, 10, 28),
+        ledMat);
+      ring.position.y = H; ring.userData = { ...ud, outlineSkip: true }; grp.add(ring);
+      // Raised bump (sensor tower) on the front (−Z), part of the spin group.
+      const bump = new THREE.Mesh(new THREE.CylinderGeometry(R * 0.28, R * 0.28, 40, 16),
+        this._mat({ color: 0x263238, roughness: 0.5 }));
+      bump.position.set(0, H + 20, -R * 0.4); bump.userData = ud;
+      spin.add(bump);
+      grp.add(spin);
+    } else {
+      const W = ROBOT_DEFAULTS.mower.bodyW, D = ROBOT_DEFAULTS.mower.bodyD, H = ROBOT_DEFAULTS.mower.bodyH;
+      const body = new THREE.Mesh(new THREE.BoxGeometry(W, H * 0.7, D),
+        this._mat({ color: bodyCol, roughness: 0.55 }));
+      body.position.y = H * 0.5; body.userData = ud; grp.add(body);
+      // Dark hood over the front.
+      const hood = new THREE.Mesh(new THREE.BoxGeometry(W * 0.9, H * 0.35, D * 0.5),
+        this._mat({ color: 0x1b2a1b, roughness: 0.5 }));
+      hood.position.set(0, H * 0.8, -D * 0.22); hood.userData = ud; grp.add(hood);
+      // LED strip across the top.
+      const strip = new THREE.Mesh(new THREE.BoxGeometry(W * 0.5, 24, 40), ledMat);
+      strip.position.set(0, H * 0.9, D * 0.28); strip.userData = { ...ud, outlineSkip: true };
+      grp.add(strip);
+      // Cutting-disc plate underneath (spins while mowing).
+      const disc = new THREE.Mesh(new THREE.CylinderGeometry(D * 0.35, D * 0.35, 20, 20),
+        this._mat({ color: 0x9e9e9e, roughness: 0.4 }));
+      disc.position.y = 40; disc.userData = { ...ud, outlineSkip: true };
+      spin.add(disc);
+      grp.add(spin);
+      // Wheel hints.
+      for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
+        const wheel = new THREE.Mesh(new THREE.CylinderGeometry(H * 0.28, H * 0.28, 60, 12),
+          this._mat({ color: 0x111111, roughness: 0.7 }));
+        wheel.rotation.z = Math.PI / 2;
+        wheel.position.set(sx * W * 0.42, H * 0.28, sz * D * 0.32);
+        wheel.userData = { ...ud, outlineSkip: true };
+        grp.add(wheel);
+      }
+    }
+    this._addOutlines(grp);
+    const blob = kind === 'mower'
+      ? this._blobShadow(ROBOT_DEFAULTS.mower.bodyW * 0.62, ROBOT_DEFAULTS.mower.bodyD * 0.62)
+      : this._blobShadow(ROBOT_DEFAULTS.vacuum.bodyR * 1.3, ROBOT_DEFAULTS.vacuum.bodyR * 1.3);
+    blob.position.y = 6;
+    grp.add(blob);
+    return { group: grp, kind, ledMat, spin, blob };
+  }
+
+  private _disposeRobotRig(rig: RobotRig): void {
+    this._robotRigGroup.remove(rig.group);
+    this._disposeSubtree(rig.group);
   }
 
   // Environmental sensors: a small emissive puck at mount height plus a
@@ -8003,7 +8178,7 @@ export class ThreeDRenderer {
     for (const g of [
       this._floorGroup, this._doorGroup, this._modelGroup, this._zoneGroup, this._haloGroup,
       this._sensorGroup, this._motionGroup, this._envGroup, this._bleGroup,
-      this._alarmGroup, this._safetyGroup,
+      this._alarmGroup, this._safetyGroup, this._robotGroup, this._robotRigGroup,
       this._lightGroup, this._targetGroup, this._gpsGroup, this._weatherGroup,
     ]) {
       this._disposeSpriteMaps(g);

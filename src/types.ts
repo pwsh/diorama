@@ -226,6 +226,28 @@ export interface SafetySensor {
   locked?: boolean;
 }
 
+// Robot fixture (Feature: robot vacuum / lawn mower). The (x,y) is the DOCK /
+// charging base position (world mm); the live robot roams away from it and
+// returns to dock. Bound to a vacuum.* (VacuumActivity: cleaning/docked/idle/
+// paused/returning/error) or lawn_mower.* (LawnMowerActivity: mowing/docked/
+// paused/returning/error) entity. Mowers can additionally bind a GPS source: a
+// device_tracker with latitude/longitude attrs (+ optional `direction` heading
+// attr, e.g. Mammotion `<name>_gps`) OR a separate lat/lon sensor pair. Live
+// position is computed by Planner.stepRobots (runtime-only) and read by BOTH the
+// 2D canvas and the 3D renderer. Rides the `sensors` layer.
+export interface RobotFixture {
+  id: string;
+  x: number; y: number;          // DOCK / charging base position (world mm)
+  kind: 'vacuum' | 'mower';
+  entity_id: string | null;      // vacuum.* or lawn_mower.*
+  trackerEntity?: string | null; // mower: device_tracker with latitude/longitude (+ optional `direction` heading)
+  latEntity?: string | null;     // mower alt-source: separate lat sensor (degrees)
+  lonEntity?: string | null;     //                  + lon sensor (degrees)
+  label?: string;
+  localState?: string;           // unbound manual pause: 'paused' (else demo runs autonomously). Inert once bound.
+  locked?: boolean;              // canvas move/delete disabled (click-to-toggle still works)
+}
+
 export interface Sensor {
   id: string;
   x: number; y: number;
@@ -417,6 +439,7 @@ export interface Floor {
   bleProxies?: BleProxy[];  // BLE scanner fixtures; repairFloor backfills []
   alarmPanels?: AlarmPanel[];  // alarm keypad fixtures; repairFloor backfills []
   safetySensors?: SafetySensor[];  // smoke / CO detectors; repairFloor backfills []
+  robots?: RobotFixture[];  // robot vacuum / mower fixtures; repairFloor backfills []
   boundsLocked?: boolean;   // lock canvas-layout/floor-size editing (hides the edge handles)
   disabled?: boolean;       // hidden from the kiosk/view floor picker + glass-house stack + BLE
                             // floor solve; still editable in the sidebar — lets multiple test

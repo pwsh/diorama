@@ -9,7 +9,7 @@ import {
   hitVertexOrZone, hitObject, hitObjectRadiusHandle,
   hitBgBody, hitBgCorner, bgEditable,
   hitMotionSensor, hitMotionRotateHandle, hitEnvSensor, hitEnvResizeHandle,
-  hitBleProxy, hitAlarmPanel, hitSafetySensor,
+  hitBleProxy, hitAlarmPanel, hitSafetySensor, hitRobot,
   hitDoor, hitDoorEnd, hitWindow, hitWindowEnd, hitFloorEdge,
 } from './canvas-hit.js';
 import type { Planner, Drag } from './planner.js';
@@ -18,7 +18,7 @@ import type { Vec2, Furniture, ObjectRecipe, Light } from './types.js';
 
 // Drag kinds that move a single placeable and therefore get alignment guides
 // (Feature C). Wall vertices / doors / windows / zones are excluded.
-const ALIGN_MOVE_KINDS = new Set(['sensor', 'motion', 'env', 'ble', 'safety', 'fixture', 'furnMove']);
+const ALIGN_MOVE_KINDS = new Set(['sensor', 'motion', 'env', 'ble', 'safety', 'robot', 'fixture', 'furnMove']);
 
 // Peer-center candidates for alignment, snapshotted once at drag start. Same
 // category only: lights + switches share one "fixtures" pool; furniture aligns
@@ -45,6 +45,7 @@ function buildAlignCandidates(p: Planner, drag: Drag): { x: number; y: number }[
     case 'env': for (const o of f.envSensors) if (o.id !== drag.id) add(o); break;
     case 'ble': for (const o of (f.bleProxies ?? [])) if (o.id !== drag.id) add(o); break;
     case 'safety': for (const o of (f.safetySensors ?? [])) if (o.id !== drag.id) add(o); break;
+    case 'robot': for (const o of (f.robots ?? [])) if (o.id !== drag.id) add(o); break;
   }
   return out;
 }
@@ -62,6 +63,7 @@ function draggedMoveItem(f: ReturnType<Planner['floor']>, drag: Drag)
     case 'env': it = f.envSensors.find(x => x.id === drag.id); break;
     case 'ble': it = (f.bleProxies ?? []).find(x => x.id === drag.id); break;
     case 'safety': it = (f.safetySensors ?? []).find(x => x.id === drag.id); break;
+    case 'robot': it = (f.robots ?? []).find(x => x.id === drag.id); break;
   }
   return it && !it.locked ? it : null;
 }
@@ -472,6 +474,14 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
     p.alignCandidates = buildAlignCandidates(p, p.drag);
     canvas.style.cursor = 'grabbing'; e.preventDefault(); p.emitConfig(); return;
   }
+  const roboH = hitRobot(p, view, mm);
+  if (roboH) {
+    if (p.activeRobotId !== roboH.id) p.activeRobotId = roboH.id;
+    // Drag anchor is the DOCK (roboH.x/y); the live body follows separately.
+    p.drag = { kind: 'robot', id: roboH.id, startMm: mm, start: { x: roboH.x, y: roboH.y } };
+    p.alignCandidates = buildAlignCandidates(p, p.drag);
+    canvas.style.cursor = 'grabbing'; e.preventDefault(); p.emitConfig(); return;
+  }
   const sh = hitSensor(p, view, mm);
   if (sh) {
     if (p.store.activeSensorId !== sh.id) p.setActiveSensor(sh.id);
@@ -580,6 +590,15 @@ export function onCanvasMouseMove(p: Planner, canvas: HTMLCanvasElement, view: V
         if (ap && !ap.locked) {
           ap.x = Math.max(0, Math.min(f.w, drag.start.x + mm.x - drag.startMm.x));
           ap.y = Math.max(0, Math.min(f.d, drag.start.y + mm.y - drag.startMm.y));
+        }
+        break;
+      }
+      case 'robot': {
+        const ro = (f.robots ?? []).find(x => x.id === drag.id);
+        if (ro && !ro.locked) {
+          // Free placement — a mower dock lives OUTSIDE the wall loops / rect.
+          ro.x = drag.start.x + mm.x - drag.startMm.x;
+          ro.y = drag.start.y + mm.y - drag.startMm.y;
         }
         break;
       }
@@ -839,6 +858,7 @@ export function onCanvasMouseMove(p: Planner, canvas: HTMLCanvasElement, view: V
       hitFixture(p, mm, Math.max(250, hitPx(view) * 3)) ||
       hitAlarmPanel(p, view, mm) ||
       (safeHit && !safeHit.entity_id) ||   // only unbound detectors are clickable
+      hitRobot(p, view, mm) ||             // robots are always click-toggleable
       hitDoor(p, view, mm) || hitWindow(p, view, mm);
     canvas.style.cursor = overDevice ? 'pointer' : 'default';
     return;
@@ -853,6 +873,7 @@ export function onCanvasMouseMove(p: Planner, canvas: HTMLCanvasElement, view: V
     else if (hitBleProxy(p, view, mm)) canvas.style.cursor = 'grab';
     else if (hitAlarmPanel(p, view, mm)) canvas.style.cursor = 'grab';
     else if (hitSafetySensor(p, view, mm)) canvas.style.cursor = 'grab';
+    else if (hitRobot(p, view, mm)) canvas.style.cursor = 'grab';
     else if (hitSensorRotateHandle(p, view, mm)) canvas.style.cursor = 'grab';
     else if (zonesInteractive(p) && hitObjectRadiusHandle(p, view, mm)) canvas.style.cursor = 'ew-resize';
     else if (zonesInteractive(p) && (hitObject(p, view, mm) || hitVertexOrZone(p, view, mm))) canvas.style.cursor = 'grab';
@@ -928,6 +949,26 @@ export function onCanvasMouseUp(p: Planner, canvas: HTMLCanvasElement): void {
         if (!ss.entity_id) p.toggleItem(ss);
       } else {
         ss.x = snap(ss.x, 10); ss.y = snap(ss.y, 10);
+        p.save();
+      }
+    }
+  } else if (drag.kind === 'robot') {
+    const ro = (f.robots ?? []).find(x => x.id === drag.id);
+    if (ro) {
+      // Click-vs-drag: a tiny move is a click → run/dock (bound) or toggle the
+      // demo (unbound). A real move relocates the DOCK (free placement) + shifts
+      // the live robot state by the same delta so the body moves with its base.
+      const dx = ro.x - drag.start.x, dy = ro.y - drag.start.y;
+      if (Math.hypot(dx, dy) < 30) {
+        ro.x = drag.start.x; ro.y = drag.start.y;
+        p.toggleRobot(ro);
+      } else {
+        ro.x = snap(ro.x, 10); ro.y = snap(ro.y, 10);
+        const rs = p.robotStates[ro.id];
+        if (rs) {
+          const sdx = ro.x - drag.start.x, sdy = ro.y - drag.start.y;
+          rs.x += sdx; rs.y += sdy; rs.goalX += sdx; rs.goalY += sdy;
+        }
         p.save();
       }
     }
@@ -1068,6 +1109,9 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
     // Smoke / CO detector → unbound: manual test trigger; bound: display-only.
     const safe2 = hitSafetySensor(p, view, mm);
     if (safe2) { if (!safe2.entity_id) p.toggleItem(safe2); return; }
+    // Robot → run/dock (bound) or demo toggle (unbound).
+    const robo2 = hitRobot(p, view, mm);
+    if (robo2) { p.toggleRobot(robo2); return; }
     const dHit2 = hitDoor(p, view, mm);
     if (dHit2) { p.toggleItem(dHit2.door); return; }
     const wHit2 = hitWindow(p, view, mm);
@@ -1223,6 +1267,23 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
     p.emitConfig();
     return;
   }
+  if (p.tool === 'robot') {
+    if (!f.robots) f.robots = [];
+    const id = newId('ro');
+    // Free placement — the click point is the DOCK. Defaults to a VACUUM; the
+    // sidebar kind dropdown switches to a mower (typically placed outside walls).
+    f.robots.push({
+      id,
+      x: snap(mm.x, 10), y: snap(mm.y, 10),
+      kind: 'vacuum', entity_id: null,
+      label: `Robot ${f.robots.length + 1}`,
+    });
+    p.activeRobotId = id;
+    p.save();
+    p.setTool('select');
+    p.emitConfig();
+    return;
+  }
   if (p.tool === 'wall') {
     // First vertex: free placement. Subsequent vertices snap to a 15°
     // increment from the previous vertex via snapVertex15 (preserves cursor
@@ -1333,6 +1394,14 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
       if (safeHit.locked) return;
       f.safetySensors = (f.safetySensors ?? []).filter(x => x.id !== safeHit.id);
       if (p.activeSafetyId === safeHit.id) p.activeSafetyId = null;
+      p.save(); p.emitConfig(); return;
+    }
+    const roHit = hitRobot(p, view, mm);
+    if (roHit) {
+      if (roHit.locked) return;
+      f.robots = (f.robots ?? []).filter(x => x.id !== roHit.id);
+      delete p.robotStates[roHit.id];
+      if (p.activeRobotId === roHit.id) p.activeRobotId = null;
       p.save(); p.emitConfig(); return;
     }
     const sh = hitSensor(p, view, mm);

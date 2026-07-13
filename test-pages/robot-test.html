@@ -1,0 +1,196 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>ROBOT …</title>
+  <style>
+    body { margin:0; background:#0d1116; color:#cfd8dc; font:13px/1.4 sans-serif; padding:14px; }
+    h1 { font-size:15px; margin:0 0 10px; }
+    .grid { display:flex; flex-wrap:wrap; gap:10px; }
+    .card { background:#141b22; border:1px solid #26323d; border-radius:6px; padding:8px 10px; width:360px; }
+    .row { display:flex; justify-content:space-between; font-size:11px; gap:8px; }
+    .pass { color:#69f0ae; } .fail { color:#ff5252; }
+    #summary { font-size:14px; font-weight:bold; margin:10px 0; padding:8px 10px; border-radius:5px; }
+    .okbg { background:#12331f; color:#69f0ae; } .badbg { background:#3a1414; color:#ff8a80; }
+    code { color:#ffd54f; }
+  </style>
+</head>
+<body>
+  <h1>Robot vacuum / mower — wall-avoidance, dock return, outdoor sweep, GPS projection</h1>
+  <div id="summary">Running…</div>
+  <div class="grid" id="grid"></div>
+
+  <!-- Pure-logic test: geometry.ts + geo.ts imported as standalone transpiles
+       (NOT code-split chunks). Generate them into the harness dir next to this
+       html before serving:
+         npx esbuild src/geometry.ts --bundle --format=esm --outfile=<harness>/geometry.mod.js
+         npx esbuild src/geo.ts       --bundle --format=esm --outfile=<harness>/geo.mod.js
+       These exercise the SAME pure helpers the Planner robot controller uses
+       (segCrossesSolidWall / mowerSweepWaypoints) plus the geo projection. -->
+  <script type="module">
+    import {
+      segCrossesSolidWall, mowerSweepWaypoints, segmentsIntersect,
+      pointInPolygon, closedWallLoops, robotLedColor, ROBOT_DEFAULTS,
+    } from './geometry.mod.js';
+    import { fitGeoTransform, latLonToPlan, clampToBoundary } from './geo.mod.js';
+
+    const tests = [];
+    const ok = (name, cond, detail) => tests.push({ name, ok: !!cond, detail });
+    const near = (a, b, e = 1) => Math.abs(a - b) <= e;
+
+    // ── Fixtures: two rooms split by a wall with a DOORWAY gap ────────────────
+    // Left room 0..3000, right room 3000..6000; divider wall at x=3000 with a
+    // door opening centered at y=2000 (width 900).
+    const walls = [
+      { points: [{x:0,y:0},{x:6000,y:0}] },        // south
+      { points: [{x:0,y:4000},{x:6000,y:4000}] },  // north
+      { points: [{x:0,y:0},{x:0,y:4000}] },        // west
+      { points: [{x:6000,y:0},{x:6000,y:4000}] },  // east
+      { points: [{x:3000,y:0},{x:3000,y:4000}] },  // interior divider
+    ];
+    const doors = [{ x: 3000, y: 2000, w: 900, rotation: 90 }]; // opening in the divider
+    const windows = [];
+
+    // ── segCrossesSolidWall: blocks a wall, passes a door gap + open floor ────
+    ok('crosses solid divider (blocked)',
+       segCrossesSolidWall(walls, doors, windows, 1500, 1000, 4500, 1000) === true);
+    ok('passes through the doorway gap',
+       segCrossesSolidWall(walls, doors, windows, 1500, 2000, 4500, 2000) === false);
+    ok('open floor within a room (clear)',
+       segCrossesSolidWall(walls, doors, windows, 500, 500, 2500, 3500) === false);
+    ok('invisible wall is passable',
+       segCrossesSolidWall(
+         [{ points:[{x:1000,y:0},{x:1000,y:4000}], kind:'invisible' }], [], [],
+         500, 2000, 1500, 2000) === false);
+    ok('segmentsIntersect crossing X = true',
+       segmentsIntersect({x:0,y:0},{x:10,y:10},{x:0,y:10},{x:10,y:0}) === true);
+    ok('segmentsIntersect parallel = false',
+       segmentsIntersect({x:0,y:0},{x:10,y:0},{x:0,y:5},{x:10,y:5}) === false);
+
+    // ── Vacuum roam invariant: over N seconds the vacuum never crosses a solid
+    // wall run. Faithfully mirrors Planner._stepVacuum: pick LOS-validated goals,
+    // walk straight in speed·dt steps, re-pick on arrival. Assert 0 crossings. ─
+    const spd = ROBOT_DEFAULTS.vacuum.speed;   // mm/s
+    const dt = 0.05, seconds = 120;            // simulate 2 minutes @ 20 Hz
+    let rng = 12345;                           // deterministic LCG
+    const rand = () => (rng = (rng * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+    const pickGoal = (x, y) => {
+      const m = 250;
+      for (let k = 0; k < 14; k++) {
+        const gx = m + rand() * (6000 - 2*m), gy = m + rand() * (4000 - 2*m);
+        if (!segCrossesSolidWall(walls, doors, windows, x, y, gx, gy)) return { gx, gy };
+      }
+      return { gx: 500, gy: 500 };   // dock fallback
+    };
+    let rx = 500, ry = 500;          // start in the left room
+    let g = pickGoal(rx, ry);
+    let crossings = 0, steps = 0, reachedRight = false;
+    for (let t = 0; t < seconds / dt; t++) {
+      const dgoal = Math.hypot(g.gx - rx, g.gy - ry);
+      if (dgoal < 200) g = pickGoal(rx, ry);
+      const dx = g.gx - rx, dy = g.gy - ry, d = Math.hypot(dx, dy);
+      if (d > 1) {
+        const step = Math.min(spd * dt, d);
+        const nx = rx + dx/d*step, ny = ry + dy/d*step;
+        if (segCrossesSolidWall(walls, doors, windows, rx, ry, nx, ny)) {
+          crossings++; g = pickGoal(rx, ry);   // (should never happen — LOS validated)
+        } else {
+          rx = nx; ry = ny; steps++;
+          if (rx > 3050) reachedRight = true;   // reached the far room via the door
+        }
+      }
+    }
+    ok('vacuum roam: 0 wall crossings over 120 s', crossings === 0, `crossings=${crossings} steps=${steps}`);
+    ok('vacuum reaches the far room via the doorway', reachedRight, `x=${Math.round(rx)}`);
+
+    // ── Vacuum dock return: straight walk to the dock converges within 150 mm ─
+    let bx = 5500, by = 3500; const dockX = 500, dockY = 500;
+    for (let t = 0; t < 400; t++) {
+      const dx = dockX - bx, dy = dockY - by, d = Math.hypot(dx, dy);
+      if (d < 1) break;
+      const step = Math.min(spd * dt, d);
+      bx += dx/d*step; by += dy/d*step;
+    }
+    ok('vacuum returns to dock (<150 mm)', Math.hypot(dockX - bx, dockY - by) < 150,
+       `dist=${Math.round(Math.hypot(dockX - bx, dockY - by))}`);
+
+    // ── Mower sweep waypoints: house loop inside a bigger yard ────────────────
+    // Outer rect 12000×9000; a closed house loop 4000..8000 × 3000..6000 in the
+    // middle. Waypoints must all be OUTSIDE the house loop and inside the rect.
+    const yardW = 12000, yardD = 9000;
+    const houseWalls = [
+      { points: [{x:4000,y:3000},{x:8000,y:3000},{x:8000,y:6000},{x:4000,y:6000},{x:4000,y:3000}] },
+    ];
+    const loops = closedWallLoops(houseWalls);
+    ok('house forms ≥1 closed loop', loops.length >= 1, `loops=${loops.length}`);
+    const wps = mowerSweepWaypoints(houseWalls, yardW, yardD);
+    ok('mower has outdoor waypoints', wps.length > 10, `n=${wps.length}`);
+    let insideHouse = 0, outOfRect = 0;
+    for (const w of wps) {
+      for (const lp of loops) if (pointInPolygon(w.x, w.y, lp)) { insideHouse++; break; }
+      if (w.x < 0 || w.y < 0 || w.x > yardW || w.y > yardD) outOfRect++;
+    }
+    ok('no waypoint inside the house loop', insideHouse === 0, `insideHouse=${insideHouse}`);
+    ok('all waypoints inside the yard rect', outOfRect === 0, `outOfRect=${outOfRect}`);
+
+    // Loop that fills the whole rect → no outdoor cells → ellipse fallback.
+    const fullWalls = [
+      { points: [{x:0,y:0},{x:6000,y:0},{x:6000,y:4000},{x:0,y:4000},{x:0,y:0}] },
+    ];
+    const wpsFull = mowerSweepWaypoints(fullWalls, 6000, 4000);
+    ok('loop fills rect → 0 waypoints (ellipse fallback)', wpsFull.length === 0, `n=${wpsFull.length}`);
+
+    // ── GPS-mode mower: project a lat/lon to the calibrated plan point ────────
+    // Two landmarks calibrate the geo→plan transform, then a THIRD known lat/lon
+    // must project to its expected plan position (round-trip through the fit).
+    // Scale is FIXED at 1 in the fit, so the geo ground distance L1→L2 must equal
+    // the plan distance (hypot(5000,4000)=6403.1 mm = 6.4031 m). Place L2 that far
+    // due NORTH of L1 (Δlat = 6.4031 m / earthR / deg); the fit rotates to align.
+    const L1 = { x: 0,    y: 0,    lat: 40.00000000, lon: -105.00000 };
+    const L2 = { x: 5000, y: 4000, lat: 40.00005758, lon: -105.00000 };
+    const fit = fitGeoTransform([L1, L2]);
+    ok('geo fit quality full', fit.quality === 'full', fit.quality);
+    ok('geo fit RMS small (<50 mm)', fit.rmsMm < 50, `rms=${fit.rmsMm.toFixed(1)}`);
+    // Round-trip: L1 and L2 land back on their plan coords.
+    const p1 = latLonToPlan(fit, L1.lat, L1.lon);
+    const p2 = latLonToPlan(fit, L2.lat, L2.lon);
+    ok('L1 projects to (0,0)', p1 && near(p1.x, 0, 30) && near(p1.y, 0, 30), p1 && `(${p1.x.toFixed(0)},${p1.y.toFixed(0)})`);
+    ok('L2 projects to (5000,4000)', p2 && near(p2.x, 5000, 30) && near(p2.y, 4000, 30), p2 && `(${p2.x.toFixed(0)},${p2.y.toFixed(0)})`);
+    // A midpoint lat/lon lands near the plan midpoint.
+    const mid = latLonToPlan(fit, (L1.lat+L2.lat)/2, (L1.lon+L2.lon)/2);
+    ok('midpoint lat/lon → plan midpoint', mid && near(mid.x, 2500, 60) && near(mid.y, 2000, 60),
+       mid && `(${mid.x.toFixed(0)},${mid.y.toFixed(0)})`);
+    // Beyond-boundary point clamps onto the inflated rect edge (true bearing).
+    const boundaryMm = 30000;
+    const far = clampToBoundary(5000, 4000, boundaryMm, 90000, 2000);  // way east
+    ok('beyond-boundary clamps onto ring edge', near(far.x, 5000 + boundaryMm, 1),
+       `(${far.x.toFixed(0)},${far.y.toFixed(0)})`);
+
+    // ── LED color mapping (visual state) ─────────────────────────────────────
+    ok('LED cleaning = green', robotLedColor('cleaning') === '#43a047');
+    ok('LED returning = blue', robotLedColor('returning') === '#2196f3');
+    ok('LED error = red', robotLedColor('error') === '#e53935');
+    ok('LED docked = amber', robotLedColor('docked') === '#ffca28');
+
+    // ── run + report ─────────────────────────────────────────────────────────
+    const grid = document.getElementById('grid');
+    let pass = 0; const fails = [];
+    for (const t of tests) {
+      if (t.ok) pass++; else fails.push(t.name);
+      const card = document.createElement('div');
+      card.className = 'card';
+      card.innerHTML = `<div class="row">
+        <span>${t.ok ? '<span class=pass>PASS</span>' : '<span class=fail>FAIL</span>'} ${t.name}</span>
+        <span>${t.detail ?? ''}</span></div>`;
+      grid.appendChild(card);
+    }
+    const total = tests.length;
+    const allPass = pass === total;
+    const title = allPass ? `ROBOT PASS ${pass}/${total}` : `ROBOT FAIL ${pass}/${total} [${fails.join(',')}]`;
+    document.title = title;
+    const sum = document.getElementById('summary');
+    sum.textContent = title;
+    sum.className = allPass ? 'okbg' : 'badbg';
+  </script>
+</body>
+</html>

@@ -3,7 +3,7 @@ import { switchSize, distMM, pointToSeg, transformVerts, centroid, localToWorld,
          furnitureCorners, furnitureLocalToWorld, doorEndpoint,
          doorOpenDeltaDeg, windowEndpoints } from './geometry.js';
 import type { Planner } from './planner.js';
-import type { Vec2, Wall, Sensor, Furniture, BgImage, MotionSensor, EnvSensor, BleProxy, AlarmPanel, SafetySensor, Door, Window as WindowType, Floor } from './types.js';
+import type { Vec2, Wall, Sensor, Furniture, BgImage, MotionSensor, EnvSensor, BleProxy, AlarmPanel, SafetySensor, RobotFixture, Door, Window as WindowType, Floor } from './types.js';
 import type { FloorEdge } from './geometry.js';
 import { envChipHalfPx, type View } from './canvas-render.js';
 
@@ -276,6 +276,22 @@ export function hitSafetySensor(p: Planner, view: View, mm: Vec2): SafetySensor 
   const list = f.safetySensors ?? [];
   for (let i = list.length - 1; i >= 0; i--) {
     if (distMM(list[i], mm) < h) return list[i];
+  }
+  return null;
+}
+
+// Robot fixtures: hit either the DOCK (x,y — the fixture / drag anchor) or the
+// live robot body (Planner.robotStates position — moves), so a click lands on
+// whichever the user aimed at.
+export function hitRobot(p: Planner, view: View, mm: Vec2): RobotFixture | null {
+  const f = p.floor();
+  const h = hitPx(view) * 1.6;
+  const list = f.robots ?? [];
+  for (let i = list.length - 1; i >= 0; i--) {
+    const r = list[i];
+    if (distMM(r, mm) < h) return r;
+    const rs = p.robotStates[r.id];
+    if (rs && Math.hypot(rs.x - mm.x, rs.y - mm.y) < h) return r;
   }
   return null;
 }

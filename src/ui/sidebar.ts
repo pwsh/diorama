@@ -10,7 +10,7 @@ import type {
   Sensor, Zone, ObjectHalo, BgImage, MotionSensor, EnvSensor, EnvKind, Light, SwitchFixture, LightIconKind,
   Furniture, FurnitureKind, Door, Window as WindowType, WindowKind, Layers2D, Floor, Room,
   ObjectRecipe, RecipePrimitive, RecipeShape, ActivityKind, AvatarKind,
-  BleProxy, AlarmPanel, SafetySensor, DioramaPerson, GeoLandmark,
+  BleProxy, AlarmPanel, SafetySensor, RobotFixture, DioramaPerson, GeoLandmark,
 } from '../types.js';
 import type { BermudaDevice } from '../planner.js';
 import { CONDITION_GLYPH, CONDITION_LABEL, tempText } from '../weather.js';
@@ -33,6 +33,7 @@ import {
   motionColor, motionIntensity, sensorColor, lightIconKind, MOTION_DEFAULTS,
   BLE_PROXY_DEFAULTS, bleProxyHeight,
   alarmHeight, alarmStateColor, safetyColor,
+  robotGlyph, robotColor, robotLedColor,
   FURNITURE_KINDS, furnitureKind, resolveFurnitureDef, WINDOW_DEFAULTS,
   ENV_KINDS, ENV_DEFAULTS, ENV_SCALE_MIN, ENV_SCALE_MAX,
   envKindOf, envColor, envValueText, envHeight, envScale,
@@ -97,6 +98,7 @@ const TOOLS: { id: Tool; label: string }[] = [
   { id: 'bleproxy', label: 'BLE' },
   { id: 'alarm', label: '🚨 Alarm' },
   { id: 'safety', label: '⚠️ Smoke/CO' },
+  { id: 'robot', label: '🤖 Robot' },
   { id: 'furniture', label: 'Furn' },
   { id: 'light', label: 'Light' },
   { id: 'switch', label: 'Switch' },
@@ -364,6 +366,7 @@ export class Sidebar extends LitElement {
         ${this._bleProxiesSection()}
         ${this._alarmPanelsSection()}
         ${this._safetySensorsSection()}
+        ${this._robotsSection()}
         ${this._peopleSection()}
         ${this._doorsSection()}
         ${this._windowsSection()}
@@ -475,6 +478,7 @@ export class Sidebar extends LitElement {
       case 'bleproxy': return 'Click to drop a BLE scanner (Bluetooth proxy) puck. Bind it to the physical proxy device.';
       case 'alarm': return 'Click to drop an alarm keypad. Bind to an alarm_control_panel entity.';
       case 'safety': return 'Click to drop a ceiling smoke/CO detector. Set kind + bind a binary_sensor (smoke / carbon_monoxide).';
+      case 'robot': return 'Click to place a robot dock. Set kind (vacuum / mower) + bind a vacuum.* or lawn_mower.* entity; mowers can bind a GPS tracker.';
       case 'furniture': return 'Click to drop a 600 × 600 mm piece.';
       case 'light': return 'Click to drop a light. Bind via the active panel.';
       case 'switch': return 'Click to drop a switch. Bind via the active panel.';
@@ -1192,6 +1196,166 @@ export class Sidebar extends LitElement {
           s.entity_id = id;
           this.planner.save();
           this.planner.emitConfig();
+        },
+      },
+    }));
+  }
+
+  // ── Robots section (vacuum / mower) ───────────────────────────────────
+  private _robotsSection() {
+    const list = this.planner.floor().robots ?? [];
+    if (list.length === 0) return nothing;
+    return this._section('robots', 'Robots', () =>
+      this._groupedList('robots', list, r => this._robotItem(r)));
+  }
+
+  private _robotItem(r: RobotFixture) {
+    const p = this.planner;
+    const sel = p.activeRobotId === r.id;
+    const kind = r.kind === 'mower' ? 'mower' : 'vacuum';
+    const act = p.robotActivity(r);
+    const led = robotLedColor(act);
+    const working = act === 'cleaning' || act === 'mowing';
+    return html`
+      <div style="border-bottom:1px solid var(--border)">
+        <div class="sensor-item ${sel ? 'sel' : ''}" @click=${() => p.setActiveRobot(r.id)}>
+          <div class="dot" style="background:${robotColor(kind)}"></div>
+          <div class="nm">${robotGlyph(kind)} ${r.label?.trim() || (kind === 'mower' ? 'Mower' : 'Vacuum')}</div>
+          <div class="badge" style="color:${led};${working ? 'font-weight:700' : ''}">${act}</div>
+        </div>
+        ${sel ? this._robotEditor(r) : nothing}
+      </div>
+    `;
+  }
+
+  private _robotEditor(r: RobotFixture) {
+    const p = this.planner;
+    const upd = (mut: () => void) => { mut(); p.save(); p.emitConfig(); };
+    const kind = r.kind === 'mower' ? 'mower' : 'vacuum';
+    const bound = !!r.entity_id;
+    const act = p.robotActivity(r);
+    return html`
+      <div style="background:rgba(0,0,0,0.25);border-radius:4px;padding:6px;margin:4px 0">
+        <div class="row"><label>Kind</label>
+          <select .value=${kind}
+                  @change=${(e: Event) => upd(() => {
+                    r.kind = (e.target as HTMLSelectElement).value as 'vacuum' | 'mower';
+                    r.entity_id = null;   // binding domain differs per kind
+                    delete p.robotStates[r.id];
+                  })}>
+            <option value="vacuum">Vacuum (indoors)</option>
+            <option value="mower">Mower (outdoors)</option>
+          </select>
+        </div>
+        <div class="row"><label>Label</label>
+          <input type="text" .value=${r.label ?? ''} placeholder="Robot"
+                 @input=${(e: Event) => upd(() => { r.label = (e.target as HTMLInputElement).value; })}>
+        </div>
+        ${this._lockRow(r)}
+        <div class="row"><label>Dock X</label>
+          <input type="number" .value=${String(Math.round(r.x))}
+                 @input=${(e: Event) => upd(() => { r.x = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
+        </div>
+        <div class="row"><label>Dock Y</label>
+          <input type="number" .value=${String(Math.round(r.y))}
+                 @input=${(e: Event) => upd(() => { r.y = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
+        </div>
+        <div class="row"><label>${kind === 'mower' ? 'lawn_mower' : 'vacuum'}</label>
+          <span style="font-size:11px;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+            ${r.entity_id || '— unbound —'}
+          </span>
+        </div>
+        <div style="display:flex;gap:4px;margin-top:4px">
+          <button class="btn" style="flex:1;font-size:11px" @click=${() => this._pickRobotEntity(r)}>
+            ${r.entity_id ? 'Rebind' : 'Bind'}…
+          </button>
+          ${r.entity_id ? html`
+            <button class="btn" style="font-size:11px"
+                    @click=${() => upd(() => { r.entity_id = null; })}>Unbind</button>
+          ` : nothing}
+          <button class="btn" style="font-size:11px"
+                  title=${bound ? 'Run / dock the robot' : 'Toggle the demo run/return'}
+                  @click=${() => p.toggleRobot(r)}>${act === 'cleaning' || act === 'mowing' ? 'Dock' : 'Run'}</button>
+        </div>
+        ${kind === 'mower' ? this._robotGpsRows(r) : nothing}
+        <div style="font-size:10px;color:var(--text-dim);margin-top:4px;line-height:1.3">
+          ${bound
+            ? 'Bound: state follows the entity. Click the robot to run/dock.'
+            : 'Unbound: roams autonomously (demo). Click the robot to toggle run/return.'}
+        </div>
+        <button class="btn danger" style="width:100%;margin-top:6px" @click=${() => {
+          const f = p.floor();
+          f.robots = (f.robots ?? []).filter(x => x.id !== r.id);
+          delete p.robotStates[r.id];
+          p.activeRobotId = null;
+          p.save(); p.emitConfig();
+        }}>Delete</button>
+      </div>
+    `;
+  }
+
+  // Mower GPS binds: a device_tracker (lat/lon attrs, preferred) OR a separate
+  // lat + lon sensor pair. Tracker wins when both are set.
+  private _robotGpsRows(r: RobotFixture) {
+    const p = this.planner;
+    const upd = (mut: () => void) => { mut(); p.save(); p.emitConfig(); };
+    return html`
+      <div style="border-top:1px solid var(--border);margin-top:6px;padding-top:6px">
+        <div style="font-size:10px;color:var(--text-dim);margin-bottom:3px">GPS position (mower)</div>
+        <div class="row"><label>Tracker</label>
+          <span style="font-size:11px;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+            ${r.trackerEntity || '—'}
+          </span>
+        </div>
+        <div style="display:flex;gap:4px">
+          <button class="btn" style="flex:1;font-size:11px"
+                  @click=${() => this._pickRobotTracker(r)}>${r.trackerEntity ? 'Rebind' : 'Bind'} tracker…</button>
+          ${r.trackerEntity ? html`<button class="btn" style="font-size:11px"
+                  @click=${() => upd(() => { r.trackerEntity = null; })}>×</button>` : nothing}
+        </div>
+        <div class="row" style="margin-top:4px"><label>Lat</label>
+          <span style="font-size:11px;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r.latEntity || '—'}</span>
+          <button class="btn" style="font-size:11px" @click=${() => this._pickRobotLatLon(r, 'lat')}>Bind</button>
+        </div>
+        <div class="row"><label>Lon</label>
+          <span style="font-size:11px;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r.lonEntity || '—'}</span>
+          <button class="btn" style="font-size:11px" @click=${() => this._pickRobotLatLon(r, 'lon')}>Bind</button>
+        </div>
+        <div style="font-size:10px;color:var(--text-dim);margin-top:3px;line-height:1.3">
+          Needs calibrated GPS landmarks (GPS/Geo section). No fix / no calibration → simulated mowing.
+        </div>
+      </div>
+    `;
+  }
+
+  private _pickRobotEntity(r: RobotFixture): void {
+    this.dispatchEvent(new CustomEvent('open-entity-picker', {
+      bubbles: true, composed: true,
+      detail: {
+        domain: r.kind === 'mower' ? 'lawn_mower' : 'vacuum',
+        onPick: (id: string) => { r.entity_id = id; this.planner.save(); this.planner.emitConfig(); },
+      },
+    }));
+  }
+
+  private _pickRobotTracker(r: RobotFixture): void {
+    this.dispatchEvent(new CustomEvent('open-entity-picker', {
+      bubbles: true, composed: true,
+      detail: {
+        domain: 'device_tracker',
+        onPick: (id: string) => { r.trackerEntity = id; this.planner.save(); this.planner.emitConfig(); },
+      },
+    }));
+  }
+
+  private _pickRobotLatLon(r: RobotFixture, which: 'lat' | 'lon'): void {
+    this.dispatchEvent(new CustomEvent('open-entity-picker', {
+      bubbles: true, composed: true,
+      detail: {
+        domain: 'sensor',
+        onPick: (id: string) => {
+          if (which === 'lat') r.latEntity = id; else r.lonEntity = id;
+          this.planner.save(); this.planner.emitConfig();
         },
       },
     }));

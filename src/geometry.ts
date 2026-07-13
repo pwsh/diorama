@@ -788,6 +788,100 @@ export function safetyGlyph(kind: 'smoke' | 'co'): string {
   return kind === 'co' ? 'CO' : '';
 }
 
+// ── Robot fixtures (vacuum / mower) ────────────────────────────────────────
+// Dock footprint (mm) + robot body dims + roam speeds. The dock is the parked
+// charging base; the robot body roams away and returns.
+export const ROBOT_DEFAULTS = {
+  vacuum: { bodyR: 170, bodyH: 95, speed: 300, dockW: 420, dockD: 260 },   // ~340 mm dia puck; 0.30 m/s
+  mower:  { bodyW: 600, bodyD: 450, bodyH: 260, speed: 420, dockW: 720, dockD: 520 }, // 0.42 m/s
+};
+export function robotGlyph(kind: 'vacuum' | 'mower'): string {
+  return kind === 'mower' ? '🌱' : '🧹';
+}
+// Color of the status LED for a resolved robot activity string (shared 2D + 3D).
+export function robotLedColor(activity: string): string {
+  switch (activity) {
+    case 'cleaning': case 'mowing': return '#43a047';  // green — working
+    case 'returning':               return '#2196f3';  // blue — heading to dock
+    case 'error':                   return '#e53935';  // red — fault (blinks)
+    case 'paused':                  return '#ffb300';  // amber — stopped
+    case 'docked':                  return '#ffca28';  // amber — charging (breathes)
+    default:                        return '#78909c';  // idle — dim
+  }
+}
+export function robotColor(kind: 'vacuum' | 'mower'): string {
+  return kind === 'mower' ? '#66bb6a' : '#455a64';
+}
+
+// Do segments p1→p2 and p3→p4 properly intersect? Pure, deterministic. Used by
+// the robot movement controller for straight-line wall avoidance (test a
+// proposed move segment against solid wall runs). Colinear/touching-endpoint
+// cases return false (treated as non-blocking — good enough for a puck).
+export function segmentsIntersect(
+  p1: Vec2, p2: Vec2, p3: Vec2, p4: Vec2,
+): boolean {
+  const d = (a: Vec2, b: Vec2, c: Vec2) =>
+    (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+  const d1 = d(p3, p4, p1), d2 = d(p3, p4, p2);
+  const d3 = d(p1, p2, p3), d4 = d(p1, p2, p4);
+  return ((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) &&
+         ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0));
+}
+
+// Does the segment (x0,y0)→(x1,y1) cross any SOLID wall run? Invisible walls
+// (planning boundaries) are passable; door/window spans are gaps (via
+// wallCutsForSegment) so a robot walks through openings. Pure — shared by the
+// robot controller (Planner._segCrossesWall) and its test page.
+export function segCrossesSolidWall(
+  walls: { points: Vec2[]; kind?: WallKind }[],
+  doors: { x: number; y: number; w: number; rotation: number }[],
+  windows: { x: number; y: number; w: number; sill?: number; height?: number }[],
+  x0: number, y0: number, x1: number, y1: number,
+): boolean {
+  const p1 = { x: x0, y: y0 }, p2 = { x: x1, y: y1 };
+  for (const w of walls) {
+    if (wallKind(w) === 'invisible') continue;
+    const pts = w.points;
+    for (let i = 0; i + 1 < pts.length; i++) {
+      const a = pts[i], b = pts[i + 1];
+      const len = Math.hypot(b.x - a.x, b.y - a.y);
+      if (len < 1) continue;
+      const ux = (b.x - a.x) / len, uy = (b.y - a.y) / len;
+      const { solids } = wallCutsForSegment(a, b, doors, windows);
+      for (const s of solids) {
+        const sa = { x: a.x + ux * s.t0, y: a.y + uy * s.t0 };
+        const sb = { x: a.x + ux * s.t1, y: a.y + uy * s.t1 };
+        if (segmentsIntersect(p1, p2, sa, sb)) return true;
+      }
+    }
+  }
+  return false;
+}
+
+// Coarse outdoor sweep waypoints for a simulated mower: grid cells inside the
+// floor rect (0..w × 0..d) but OUTSIDE every closed wall loop, ordered
+// boustrophedon (alternate rows reversed). Empty → the caller orbits an ellipse
+// ring. Pure — shared by Planner._mowerWaypoints and its test page.
+export function mowerSweepWaypoints(
+  walls: { points: Vec2[]; kind?: WallKind }[],
+  w: number, d: number, cell = 800, margin = 300,
+): Vec2[] {
+  const loops = closedWallLoops(walls);
+  const wps: Vec2[] = [];
+  let row = 0;
+  for (let gy = margin; gy <= d - margin; gy += cell, row++) {
+    const cells: Vec2[] = [];
+    for (let gx = margin; gx <= w - margin; gx += cell) {
+      let inside = false;
+      for (const lp of loops) { if (pointInPolygon(gx, gy, lp)) { inside = true; break; } }
+      if (!inside) cells.push({ x: gx, y: gy });
+    }
+    if (row % 2) cells.reverse();
+    for (const c of cells) wps.push(c);
+  }
+  return wps;
+}
+
 // Nearest candidate coordinate to `v` within `tol` (else null). Drives the
 // smart alignment guides (Feature C) — applied per-axis independently. Pure,
 // exported for testing.
