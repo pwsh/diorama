@@ -51,6 +51,10 @@
     const h = r._humanoids['bt'];
     const bk = h ? h.bubbleKind : null;
     if (bk !== last) { transitions.push(`${t.toFixed(1)}s:${bk ?? '-'}`); last = bk; }
+    // Capture the bubble sprite geometry the first frame a committed bubble exists.
+    if (h?.bubble && !window.__bubbleGeom) {
+      window.__bubbleGeom = { cx: h.bubble.center.x, cy: h.bubble.center.y, px: h.bubble.position.x };
+    }
     // stop=1: freeze ~1.5 s after the first committed bubble for a screenshot
     if (q.get('stop') === '1' && transitions.length >= 2) {
       if (!window.__stopAt) window.__stopAt = t + 1.5;
@@ -78,8 +82,16 @@
   } else {
     const pool = (CHATTER[kind] || []).concat(GENERAL);
     const allInPool = committed.every(g => pool.includes(g));
-    pass = committed.length >= 1 && allInPool;
-    note = `pool=[${(CHATTER[kind]||['?']).join('')}+general] committed=[${committed.join('')}] allInPool=${allInPool}`;
+    // Bubble sprite geometry: the tail tip is anchored over head center (position
+    // x === 0) and the sprite.center points at the tail-tip pixel (~0.125, ~0.147)
+    // so the cloud body floats up-right — NOT the default (0.5, 0.5).
+    const bg = window.__bubbleGeom;
+    const centerOk = !!bg &&
+      Math.abs(bg.cx - 0.125) < 0.02 && Math.abs(bg.cy - (1 - 128/150)) < 0.02
+      && Math.abs(bg.px) < 1;
+    pass = committed.length >= 1 && allInPool && centerOk;
+    note = `pool=[${(CHATTER[kind]||['?']).join('')}+general] committed=[${committed.join('')}] allInPool=${allInPool} ` +
+      `center=${bg?`(${bg.cx.toFixed(3)},${bg.cy.toFixed(3)})posX=${bg.px.toFixed(0)}`:'-'}`;
   }
   document.title = `BUBBLE ${pass?'PASS':'FAIL'} mode=${mode} kind=${kind} ${note} ` +
     `chatterT=${h?.chatterT.toFixed(1)} next=${h?.chatterNext.toFixed(1)} trans=[${transitions.join(' ')}]`;

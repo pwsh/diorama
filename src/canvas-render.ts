@@ -4,8 +4,9 @@ import {
   lightRadius, lightIntensity, lightIconKind, lightRotation, lightLength, switchRotation, switchSize, switchLabelPos,
   motionColor, motionIntensity, sensorColor, BLE_PROXY_DEFAULTS,
   ALARM_DEFAULTS, alarmStateColor,
-  safetyColor,
+  safetyColor, safetyGlyph, safetyIsFloor, SAFETY_DEFAULTS,
   robotGlyph, robotColor, ROBOT_DEFAULTS,
+  powerGlowScale,
   hexToRgba, lighten, furnitureKind, furnitureCorners, resolveFurnitureDef,
   doorEndpoint, doorOpenDeltaDeg, windowEndpoints, wallCutsForSegment, wallKind,
   ENV_KINDS, envKindOf, envColor, envValueText, envScale,
@@ -40,6 +41,51 @@ const LIGHT_GLYPH: Record<LightIconKind, string> = {
 
 export interface View {
   ox: number; oy: number; scale: number;
+}
+
+// Low-battery warning badge (#7). Self-gating: draws nothing unless the `battery`
+// 2D layer is on (absent = on), the entity has a resolvable battery sibling
+// (Planner.batteryFor), AND that level is ≤ LOW. A small red battery glyph at
+// (x, y) — the corner of the fixture's marker. Cheap map hit per call.
+const BATTERY_LOW = 20;
+export function drawBatteryBadge(
+  ctx: CanvasRenderingContext2D, p: Planner, entityId: string | null | undefined,
+  x: number, y: number,
+): void {
+  if (p.store.layers2d?.battery === false) return;
+  drawBatteryGlyph(ctx, p.batteryFor(entityId), x, y);
+}
+// Device-bound fixtures (BLE proxies) resolve battery from the device directly.
+export function drawBatteryBadgeForDevice(
+  ctx: CanvasRenderingContext2D, p: Planner, deviceId: string | null | undefined,
+  x: number, y: number,
+): void {
+  if (p.store.layers2d?.battery === false) return;
+  drawBatteryGlyph(ctx, p.batteryForDevice(deviceId), x, y);
+}
+function drawBatteryGlyph(
+  ctx: CanvasRenderingContext2D, lvl: number | null, x: number, y: number,
+): void {
+  if (lvl == null || lvl > BATTERY_LOW) return;
+  const dpr = window.devicePixelRatio || 1;
+  const w = 11 * dpr, h = 6 * dpr;
+  ctx.save();
+  ctx.translate(x, y);
+  // Body outline.
+  ctx.fillStyle = '#b71c1c';
+  ctx.strokeStyle = '#ff5252';
+  ctx.lineWidth = Math.max(1, dpr);
+  ctx.beginPath();
+  ctx.rect(-w / 2, -h / 2, w, h);
+  ctx.fill(); ctx.stroke();
+  // Terminal nub.
+  ctx.fillStyle = '#ff5252';
+  ctx.fillRect(w / 2, -h / 4, 1.6 * dpr, h / 2);
+  // Fill bar proportional to level (min sliver so it reads even near 0).
+  const frac = Math.max(0.12, lvl / 100);
+  ctx.fillStyle = '#ff8a80';
+  ctx.fillRect(-w / 2 + 1 * dpr, -h / 2 + 1 * dpr, (w - 2 * dpr) * frac, h - 2 * dpr);
+  ctx.restore();
 }
 
 interface PolyOpt {
@@ -422,6 +468,31 @@ function drawGeoLandmarks(ctx: CanvasRenderingContext2D, p: Planner, view: View)
 // still shows which rooms are alive. Drawn under fixture markers.
 function drawActivity(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
   const f = p.floor();
+  // Room occupancy glow (#1): fill each occupied room's wall-loop polygon with a
+  // soft warm wash (Frigate zone / FP2 / any bound occupancy binary_sensor 'on').
+  const states0 = p.hass?.states;
+  const rooms = f.rooms ?? [];
+  if (rooms.some(rm => rm.occupancyEntity)) {
+    const loops = closedWallLoops(f.walls ?? []);
+    for (const rm of rooms) {
+      if (!rm.occupancyEntity) continue;
+      if (states0?.[rm.occupancyEntity]?.state !== 'on') continue;
+      const loop = loopContaining(loops, rm.anchor.x, rm.anchor.y);
+      if (!loop || loop.length < 3) continue;
+      ctx.save();
+      ctx.beginPath();
+      const p0 = mmToPx(view, loop[0].x, loop[0].y);
+      ctx.moveTo(p0.x, p0.y);
+      for (let i = 1; i < loop.length; i++) {
+        const pi = mmToPx(view, loop[i].x, loop[i].y);
+        ctx.lineTo(pi.x, pi.y);
+      }
+      ctx.closePath();
+      ctx.fillStyle = 'rgba(255,183,77,0.10)';
+      ctx.fill();
+      ctx.restore();
+    }
+  }
   for (const l of f.lights) {
     const st = p.effectiveState(l);
     if (st?.state !== 'on') continue;
@@ -514,6 +585,7 @@ function drawMotionSensors(ctx: CanvasRenderingContext2D, p: Planner, view: View
     ctx.fillRect(c.x - tw / 2, c.y + 11 * dpr, tw, 13 * dpr);
     ctx.fillStyle = isOn ? lit : '#fff';
     ctx.fillText(txt, c.x, c.y + 13 * dpr);
+    drawBatteryBadge(ctx, p, m.entity_id, c.x + 8 * dpr, c.y - 8 * dpr);
     // Rotate handle when active and not omnidirectional (locked = no anchor)
     if (selected && !fov360 && !m.locked) {
       const rhx = c.x + Math.cos(base) * 28 * dpr;
@@ -557,6 +629,7 @@ function drawBleProxies(ctx: CanvasRenderingContext2D, p: Planner, view: View): 
     ctx.fillRect(c.x - tw / 2, c.y + 11 * dpr, tw, 13 * dpr);
     ctx.fillStyle = '#fff';
     ctx.fillText(txt, c.x, c.y + 13 * dpr);
+    drawBatteryBadgeForDevice(ctx, p, b.haDeviceId, c.x + 8 * dpr, c.y - 8 * dpr);
   }
 }
 
@@ -627,6 +700,7 @@ function drawAlarmPanels(ctx: CanvasRenderingContext2D, p: Planner, view: View):
     ctx.fillRect(c.x - tw / 2, by, tw, 13 * dpr);
     ctx.fillStyle = state ? hexToRgba(col, 1) : '#cfd8dc';
     ctx.fillText(txt, c.x, by + 1 * dpr);
+    drawBatteryBadge(ctx, p, a.entity_id, c.x + hw * 0.9, c.y - hh * 0.9);
   }
 }
 
@@ -639,18 +713,78 @@ const SAFETY_DISC_R_MM = 140;
 // smoke, amber for CO), time-based via performance.now() so the RAF redraw
 // animates it (the alarm keypad's triggered-pulse idiom). Rides the sensors
 // layer (gated by the caller).
+// Per-leak-detector alarm-onset timestamps (s), so the 2D puddle grows over
+// SAFETY_DEFAULTS.leakGrowSec from the moment the leak starts. Cleared when the
+// detector stops alarming. Keyed by fixture id.
+const _leakAlarmStart = new Map<string, number>();
+
 function drawSafetySensors(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
   const dpr = window.devicePixelRatio || 1;
   const f = p.floor();
   const t = performance.now() / 1000;
   for (const s of f.safetySensors ?? []) {
     const c = mmToPx(view, s.x, s.y);
-    const kind = s.kind === 'co' ? 'co' : 'smoke';
+    const kind: import('./types.js').SafetyKind =
+      s.kind === 'co' ? 'co' : s.kind === 'gas' ? 'gas' : s.kind === 'leak' ? 'leak' : 'smoke';
     const col = safetyColor(kind);
     const st = p.effectiveState(s);
     const alarming = st?.state === 'on';
     const selected = p.activeSafetyId === s.id;
     const rPx = Math.max(9, SAFETY_DISC_R_MM * view.scale);
+
+    // ── Leak detector: floor puck + spreading blue puddle (no beacon rings) ──
+    if (kind === 'leak') {
+      if (alarming) {
+        if (!_leakAlarmStart.has(s.id)) _leakAlarmStart.set(s.id, t);
+        const started = _leakAlarmStart.get(s.id)!;
+        const grow = Math.min(1, (t - started) / SAFETY_DEFAULTS.leakGrowSec);
+        const pulse = 0.5 + 0.5 * Math.sin(t * 2.5);
+        const puddleMm = SAFETY_DEFAULTS.leakMaxRadiusMm * grow;
+        const prx = Math.max(rPx * 1.2, puddleMm * view.scale);
+        ctx.save();
+        // Spreading water ellipse (alpha pulses gently — W3 puddle idiom).
+        const grad = ctx.createRadialGradient(c.x, c.y, prx * 0.15, c.x, c.y, prx);
+        grad.addColorStop(0, hexToRgba(col, 0.35 + 0.12 * pulse));
+        grad.addColorStop(0.7, hexToRgba(col, 0.22 + 0.08 * pulse));
+        grad.addColorStop(1, hexToRgba(col, 0));
+        ctx.beginPath();
+        ctx.ellipse(c.x, c.y, prx, prx * 0.7, 0, 0, 2 * Math.PI);
+        ctx.fillStyle = grad;
+        ctx.fill();
+        ctx.restore();
+      } else {
+        _leakAlarmStart.delete(s.id);
+      }
+      // Detector puck: small disc, droplet glyph.
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(c.x, c.y, rPx, 0, 2 * Math.PI);
+      ctx.fillStyle = alarming ? hexToRgba(col, 0.9) : 'rgba(236,239,241,0.95)';
+      ctx.fill();
+      ctx.lineWidth = selected ? 2.5 : 1.5;
+      ctx.strokeStyle = selected ? '#fff' : hexToRgba(col, 0.9);
+      ctx.stroke();
+      ctx.fillStyle = alarming ? '#fff' : hexToRgba(col, 1);
+      ctx.font = `${Math.max(8, rPx * 1.1)}px sans-serif`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText('💧', c.x, c.y + 0.5);
+      ctx.restore();
+      const label = s.label?.trim() || 'Leak';
+      const badge = alarming ? 'LEAK' : (st ? 'dry' : (s.entity_id ? '—' : 'unbound'));
+      const txt = `${label} · ${badge}`;
+      ctx.font = `${10 * dpr}px sans-serif`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+      const tw = ctx.measureText(txt).width + 8 * dpr;
+      const by = c.y + rPx + 4 * dpr;
+      ctx.fillStyle = 'rgba(0,0,0,0.7)';
+      ctx.fillRect(c.x - tw / 2, by, tw, 13 * dpr);
+      ctx.fillStyle = alarming ? hexToRgba(col, 1) : '#cfd8dc';
+      ctx.fillText(txt, c.x, by + 1 * dpr);
+      drawBatteryBadge(ctx, p, s.entity_id, c.x + rPx * 0.8, c.y - rPx * 0.8);
+      continue;
+    }
+
+    // ── Ceiling beacons (smoke / co / gas) ──
     // Alarming: pulsing halo + up to 3 expanding rings dropping outward.
     if (alarming) {
       const pulse = 0.5 + 0.5 * Math.sin(t * 6);
@@ -680,11 +814,12 @@ function drawSafetySensors(ctx: CanvasRenderingContext2D, p: Planner, view: View
     ctx.strokeStyle = selected ? '#fff' : (alarming ? '#fff' : hexToRgba(col, 0.9));
     ctx.stroke();
     // Center status dot / glyph.
-    if (kind === 'co') {
+    const bodyGlyph = safetyGlyph(kind);   // '' for smoke, 'CO'/'GAS' otherwise
+    if (bodyGlyph) {
       ctx.fillStyle = alarming ? '#fff' : hexToRgba(col, 1);
-      ctx.font = `bold ${Math.max(7, rPx * 0.9)}px sans-serif`;
+      ctx.font = `bold ${Math.max(6, rPx * (bodyGlyph.length > 2 ? 0.66 : 0.9))}px sans-serif`;
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.fillText('CO', c.x, c.y + 0.5);
+      ctx.fillText(bodyGlyph, c.x, c.y + 0.5);
     } else {
       ctx.beginPath();
       ctx.arc(c.x, c.y, Math.max(1.5, rPx * 0.3), 0, 2 * Math.PI);
@@ -693,7 +828,8 @@ function drawSafetySensors(ctx: CanvasRenderingContext2D, p: Planner, view: View
     }
     ctx.restore();
     // Label below (screen space).
-    const label = s.label?.trim() || (kind === 'co' ? 'CO' : 'Smoke');
+    const label = s.label?.trim() ||
+      (kind === 'co' ? 'CO' : kind === 'gas' ? 'Gas' : 'Smoke');
     const badge = alarming ? 'ALARM' : (st ? 'ok' : (s.entity_id ? '—' : 'unbound'));
     const txt = `${label} · ${badge}`;
     ctx.font = `${10 * dpr}px sans-serif`;
@@ -704,6 +840,7 @@ function drawSafetySensors(ctx: CanvasRenderingContext2D, p: Planner, view: View
     ctx.fillRect(c.x - tw / 2, by, tw, 13 * dpr);
     ctx.fillStyle = alarming ? hexToRgba(col, 1) : '#cfd8dc';
     ctx.fillText(txt, c.x, by + 1 * dpr);
+    drawBatteryBadge(ctx, p, s.entity_id, c.x + rPx * 0.8, c.y - rPx * 0.8);
   }
 }
 
@@ -787,6 +924,8 @@ function drawRobots(ctx: CanvasRenderingContext2D, p: Planner, view: View): void
     ctx.fillRect(bc.x - tw / 2, ty, tw, 13 * dpr);
     ctx.fillStyle = '#cfd8dc';
     ctx.fillText(txt, bc.x, ty + 1 * dpr);
+    // Battery badge at the dock (the fixture's fixed marker).
+    drawBatteryBadge(ctx, p, r.entity_id, dc.x + dw / 2, dc.y - dd / 2);
   }
 }
 
@@ -862,6 +1001,7 @@ function drawEnvSensors(ctx: CanvasRenderingContext2D, p: Planner, view: View): 
       ctx.fillStyle = '#fff';
       ctx.fillText(e.label, c.x, c.y + h / 2 + 5 * dpr);
     }
+    drawBatteryBadge(ctx, p, e.entity_id, c.x + w / 2, c.y - h / 2);
   }
 }
 
@@ -1095,6 +1235,8 @@ function drawDoors(ctx: CanvasRenderingContext2D, p: Planner, view: View): void 
     if (d.lockEntity) {
       const lst = p.hass?.states?.[d.lockEntity]?.state;
       drawPadlock(ctx, hinge.x - 9 * dpr, hinge.y - 11 * dpr, 5 * dpr, lst);
+      // Low-battery badge for the lock (locks are commonly battery-powered).
+      drawBatteryBadge(ctx, p, d.lockEntity, hinge.x + 9 * dpr, hinge.y - 11 * dpr);
     }
     // Endpoint handle (drag to rotate) — hidden when locked
     if (!d.locked) {
@@ -1196,7 +1338,16 @@ function drawFurniture(ctx: CanvasRenderingContext2D, p: Planner, view: View,
     // Appliances ride their own layer; everything else the furniture layer.
     if (isAppliance ? !showAppliances : !showFurniture) continue;
     const appSt = isAppliance ? p.effectiveState(piece) : null;
-    const applianceOn = appSt?.state === 'on' || appSt?.state === 'playing';
+    const stateOn = appSt?.state === 'on' || appSt?.state === 'playing';
+    // Per-device power glow (#8): a bound power sensor scales the in-use glow/LED;
+    // an UNBOUND appliance reading > 10 W counts as in-use (visual only — power
+    // never feeds effectiveState/activities).
+    const powerW = isAppliance && piece.powerEntity && p.hass?.states
+      ? parseFloat(p.hass.states[piece.powerEntity]?.state ?? '') : NaN;
+    const powerInUse = !piece.entity_id && isFinite(powerW) && powerW > 10;
+    const applianceOn = stateOn || powerInUse;
+    // Intensity multiplier: scale by power when a reading > 5 W exists, else full.
+    const glowScale = isFinite(powerW) && powerW > 5 ? powerGlowScale(powerW) : 1;
     const doorOpen = !!piece.doorEntity &&
       p.effectiveState({ entity_id: piece.doorEntity })?.state === 'on';
     ctx.save();
@@ -1205,9 +1356,9 @@ function drawFurniture(ctx: CanvasRenderingContext2D, p: Planner, view: View,
     // Soft green glow behind an active appliance (drawn under the body).
     if (applianceOn) {
       ctx.save();
-      ctx.shadowColor = 'rgba(0,200,83,0.85)';
-      ctx.shadowBlur = 14 * dpr;
-      ctx.fillStyle = 'rgba(0,200,83,0.13)';
+      ctx.shadowColor = `rgba(0,200,83,${(0.85 * glowScale).toFixed(3)})`;
+      ctx.shadowBlur = 14 * dpr * glowScale;
+      ctx.fillStyle = `rgba(0,200,83,${(0.13 * glowScale).toFixed(3)})`;
       ctx.fillRect(-halfW, -halfH, halfW * 2, halfH * 2);
       ctx.restore();
     }
@@ -1239,12 +1390,12 @@ function drawFurniture(ctx: CanvasRenderingContext2D, p: Planner, view: View,
     }
     // Pulsing green LED at the front-left corner of an active appliance.
     if (applianceOn) {
-      const pulse = 0.55 + 0.45 * (0.5 + 0.5 * Math.sin(now * 3));
+      const pulse = (0.55 + 0.45 * (0.5 + 0.5 * Math.sin(now * 3))) * glowScale;
       const r = Math.max(2.5, 4 * dpr);
       ctx.save();
       ctx.fillStyle = `rgba(0,230,118,${pulse.toFixed(3)})`;
       ctx.shadowColor = 'rgba(0,230,118,0.9)';
-      ctx.shadowBlur = 6 * dpr;
+      ctx.shadowBlur = 6 * dpr * glowScale;
       ctx.beginPath();
       ctx.arc(-halfW + r + 2, halfH - r - 2, r, 0, 2 * Math.PI);
       ctx.fill();
@@ -1864,6 +2015,16 @@ function drawSensors(ctx: CanvasRenderingContext2D, p: Planner, view: View): voi
   // can be hidden / shown independently.
   if (p.store.coverage) for (const s of f.sensors) drawCoverage(ctx, view, s);
   for (const s of f.sensors) drawSensorBody(ctx, p, view, s);
+  // Battery: an LD2450 device is usually mains-powered, but honor a battery
+  // sibling if HA exposes one — resolve via any discovered entity on the device.
+  const dpr = window.devicePixelRatio || 1;
+  for (const s of f.sensors) {
+    const disc = p.discBy[s.id];
+    const repEnt = disc?.hasTarget ?? disc?.targetCount ?? disc?.sensorHeight ?? null;
+    if (!repEnt) continue;
+    const c = mmToPx(view, s.x, s.y);
+    drawBatteryBadge(ctx, p, repEnt, c.x + 10 * dpr, c.y - 10 * dpr);
+  }
 }
 
 function drawCoverage(ctx: CanvasRenderingContext2D, view: View,

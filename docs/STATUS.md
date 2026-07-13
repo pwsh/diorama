@@ -48,6 +48,24 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Roadmap batch E + nav wall fix** (12 files; typecheck + build clean;
+  NEW `bookcase-los-test.html` **11/11**; livefeatures extended
+  **19/19**; avatar-bubble + phase6 updated; mega/robot/weather/full
+  sweep green): **nav wall-LOS filter** — `_nearestFreeCell` candidates
+  filtered by solid-wall line-of-sight (`_nav.wallSolids`) before the
+  largest-region tie-break, fixing avatars snapping through wall-backed
+  bookcases and locking outside; door openings still pass. Roadmap top-12
+  quick wins: EnvKinds radon/sound/NO₂/O₃/AQI; SafetySensor kinds gas
+  (ceiling beacon) + leak (floor puck, growing blue puddle via the W3
+  texture); battery badge layer (`scanBatteryRegistry` device-sibling
+  resolution, 2D badges ≤20% + sidebar 🔋 rows); appliance
+  `powerEntity` glow (sqrt ramp, live-path, 50 W-bucketed into
+  `_keyFloor`); `Room.occupancyEntity` glow (2D loop fill on the
+  activity layer + 3D warm loop patch — the Frigate-zone quick win).
+  Plus the bubble tail now originates at head center (body floats
+  up-right). CLAUDE.md sections "Nav snap wall-LOS filter" + "Roadmap
+  quick wins (batch E)".
+
 - **Weather W3 + layer split batch** (12 files; typecheck + build clean,
   code split intact; weather-test **90/90** (was 53), weather-fx-test
   gained `?c=w3` 12/12; mega / livefeatures 12/12 / robot 24/24

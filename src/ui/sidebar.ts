@@ -501,7 +501,7 @@ export class Sidebar extends LitElement {
       <div style="border-bottom:1px solid var(--border)">
         <div class="sensor-item ${sel ? 'sel' : ''}" @click=${() => p.setActiveSensor(s.id)}>
           <div class="dot"></div>
-          <div class="nm">${s.label || 'Sensor'}</div>
+          <div class="nm">${s.label || 'Sensor'}${this._batteryText(p.discBy[s.id]?.hasTarget ?? p.discBy[s.id]?.targetCount ?? p.discBy[s.id]?.sensorHeight ?? null)}</div>
           <div class="badge ${bound ? 'bound' : ''}">${bound ? 'HA' : '—'}</div>
         </div>
         ${sel ? html`${this._activeSensorSection()}${this._haSections()}` : nothing}
@@ -511,6 +511,16 @@ export class Sidebar extends LitElement {
 
   // Shared lock toggle row. Locked items can't be moved / rotated / resized /
   // deleted on the canvas — sidebar editing (including unlock) stays available.
+  // Dim inline "🔋 N%" text for a bound fixture whose HA device has a battery
+  // sibling (Planner.batteryFor). Red at/below 20 %. Empty when none. `forDevice`
+  // resolves via the device id (BLE proxies) instead of an entity id.
+  private _batteryText(entityId: string | null | undefined, forDevice = false) {
+    const lvl = forDevice ? this.planner.batteryForDevice(entityId) : this.planner.batteryFor(entityId);
+    if (lvl == null) return nothing;
+    const low = lvl <= 20;
+    return html`<span style="font-size:10px;margin-left:4px;color:${low ? '#ef5350' : 'var(--text-dim)'}">🔋 ${Math.round(lvl)}%</span>`;
+  }
+
   private _lockRow(item: { locked?: boolean }) {
     const p = this.planner;
     return html`
@@ -618,7 +628,7 @@ export class Sidebar extends LitElement {
         <div class="sensor-item ${sel ? 'sel' : ''}" @click=${() => p.setActiveMotion(m.id)}>
           <div class="dot" style="background:${isOn ? '#ce93d8' : '#ba68c8'};
                                    ${isOn ? 'box-shadow:0 0 6px #ce93d8' : ''}"></div>
-          <div class="nm">${m.label || 'Motion'}</div>
+          <div class="nm">${m.label || 'Motion'}${this._batteryText(m.entity_id)}</div>
           ${bound
             ? html`<div class="badge bound">${isOn ? 'ON' : 'OFF'}</div>`
             : html`
@@ -772,7 +782,7 @@ export class Sidebar extends LitElement {
       <div style="border-bottom:1px solid var(--border)">
         <div class="sensor-item ${sel ? 'sel' : ''}" @click=${() => p.setActiveEnv(en.id)}>
           <div class="dot" style="background:${color}"></div>
-          <div class="nm">${en.label || 'Env'}</div>
+          <div class="nm">${en.label || 'Env'}${this._batteryText(en.entity_id)}</div>
           ${bound
             ? html`<div class="badge bound" style="color:${color}">${envValueText(st)}</div>`
             : html`
@@ -905,7 +915,7 @@ export class Sidebar extends LitElement {
       <div style="border-bottom:1px solid var(--border)">
         <div class="sensor-item ${sel ? 'sel' : ''}" @click=${() => p.setActiveBle(b.id)}>
           <div class="dot" style="background:${BLE_PROXY_DEFAULTS.color}"></div>
-          <div class="nm">${b.name || 'Proxy'}</div>
+          <div class="nm">${b.name || 'Proxy'}${this._batteryText(b.haDeviceId, true)}</div>
           <div class="badge ${bound ? 'bound' : ''}">${bound ? '📶' : '—'}</div>
         </div>
         ${sel ? this._bleEditor(b) : nothing}
@@ -1017,7 +1027,7 @@ export class Sidebar extends LitElement {
       <div style="border-bottom:1px solid var(--border)">
         <div class="sensor-item ${sel ? 'sel' : ''}" @click=${() => p.setActiveAlarm(a.id)}>
           <div class="dot" style="background:${state ? col : '#90a4ae'}"></div>
-          <div class="nm">${a.label?.trim() || 'Alarm'}</div>
+          <div class="nm">${a.label?.trim() || 'Alarm'}${this._batteryText(a.entity_id)}</div>
           <div class="badge" style=${state ? `color:${col}` : nothing}>${badge}</div>
         </div>
         ${sel ? this._alarmEditor(a) : nothing}
@@ -1104,23 +1114,25 @@ export class Sidebar extends LitElement {
   private _safetySensorsSection() {
     const list = this.planner.floor().safetySensors ?? [];
     if (list.length === 0) return nothing;
-    return this._section('safety', 'Smoke / CO', () =>
+    return this._section('safety', 'Safety sensors', () =>
       this._groupedList('safety', list, s => this._safetyItem(s)));
   }
 
   private _safetyItem(s: SafetySensor) {
     const p = this.planner;
     const sel = p.activeSafetyId === s.id;
-    const kind = s.kind === 'co' ? 'co' : 'smoke';
+    const kind = s.kind;
     const col = safetyColor(kind);
     const st = p.effectiveState(s);
     const alarming = st?.state === 'on';
-    const badge = alarming ? 'ALARM' : (st ? 'ok' : (s.entity_id ? '—' : 'unbound'));
+    const dfl = kind === 'co' ? 'CO' : kind === 'gas' ? 'Gas' : kind === 'leak' ? 'Leak' : 'Smoke';
+    const badge = alarming ? (kind === 'leak' ? 'LEAK' : 'ALARM')
+                           : (st ? (kind === 'leak' ? 'dry' : 'ok') : (s.entity_id ? '—' : 'unbound'));
     return html`
       <div style="border-bottom:1px solid var(--border)">
         <div class="sensor-item ${sel ? 'sel' : ''}" @click=${() => p.setActiveSafety(s.id)}>
           <div class="dot" style="background:${alarming ? col : '#90a4ae'}"></div>
-          <div class="nm">${s.label?.trim() || (kind === 'co' ? 'CO' : 'Smoke')}</div>
+          <div class="nm">${s.label?.trim() || dfl}${this._batteryText(s.entity_id)}</div>
           <div class="badge" style=${alarming ? `color:${col};font-weight:700` : nothing}>${badge}</div>
         </div>
         ${sel ? this._safetyEditor(s) : nothing}
@@ -1135,10 +1147,12 @@ export class Sidebar extends LitElement {
     return html`
       <div style="background:rgba(0,0,0,0.25);border-radius:4px;padding:6px;margin:4px 0">
         <div class="row"><label>Kind</label>
-          <select .value=${s.kind === 'co' ? 'co' : 'smoke'}
-                  @change=${(e: Event) => upd(() => { s.kind = (e.target as HTMLSelectElement).value as 'smoke' | 'co'; })}>
+          <select .value=${s.kind}
+                  @change=${(e: Event) => upd(() => { s.kind = (e.target as HTMLSelectElement).value as SafetySensor['kind']; })}>
             <option value="smoke">Smoke</option>
             <option value="co">CO (carbon monoxide)</option>
+            <option value="gas">Gas</option>
+            <option value="leak">Leak (floor / water)</option>
           </select>
         </div>
         <div class="row"><label>Label</label>
@@ -1220,7 +1234,7 @@ export class Sidebar extends LitElement {
       <div style="border-bottom:1px solid var(--border)">
         <div class="sensor-item ${sel ? 'sel' : ''}" @click=${() => p.setActiveRobot(r.id)}>
           <div class="dot" style="background:${robotColor(kind)}"></div>
-          <div class="nm">${robotGlyph(kind)} ${r.label?.trim() || (kind === 'mower' ? 'Mower' : 'Vacuum')}</div>
+          <div class="nm">${robotGlyph(kind)} ${r.label?.trim() || (kind === 'mower' ? 'Mower' : 'Vacuum')}${this._batteryText(r.entity_id)}</div>
           <div class="badge" style="color:${led};${working ? 'font-weight:700' : ''}">${act}</div>
         </div>
         ${sel ? this._robotEditor(r) : nothing}
@@ -1643,8 +1657,11 @@ export class Sidebar extends LitElement {
           : nothing}
         ${rooms.map(rm => {
           const inside = loopContaining(loops, rm.anchor.x, rm.anchor.y) !== null;
+          const occ = rm.occupancyEntity && p.hass?.states?.[rm.occupancyEntity]?.state === 'on';
           return html`
             <div class="sensor-item" style="cursor:default;gap:4px">
+              ${rm.occupancyEntity ? html`<span title="${occ ? 'Occupied' : 'Not occupied'}"
+                     style="color:${occ ? '#66bb6a' : 'var(--text-dim)'};font-size:12px">●</span>` : nothing}
               <input type="text" .value=${rm.name} style="flex:1;min-width:0"
                      placeholder="Room name…"
                      @input=${(e: Event) => upd(() => { rm.name = (e.target as HTMLInputElement).value; })}>
@@ -1654,6 +1671,18 @@ export class Sidebar extends LitElement {
                       @click=${() => { p.placingRoomId = rm.id; p.maybeCloseSidebarForPlacement(); p.emitConfig(); }}>📍</button>
               <button class="icon-btn" title="Delete"
                       @click=${() => this._deleteRoom(rm.id)}>✕</button>
+            </div>
+            <div class="row" style="gap:4px;margin:0 0 4px 0">
+              <label style="font-size:10px" title="Frigate zone / FP2 / any occupancy binary_sensor">Occupancy</label>
+              <span style="font-size:10px;color:${occ ? '#66bb6a' : 'var(--text-dim)'};flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+                ${rm.occupancyEntity || '— unbound —'}
+              </span>
+              <button class="btn" style="font-size:10px;padding:2px 6px" @click=${() => this._pickRoomOccupancy(rm)}>
+                ${rm.occupancyEntity ? 'Rebind' : 'Bind'}
+              </button>
+              ${rm.occupancyEntity ? html`
+                <button class="btn" style="font-size:10px;padding:2px 6px"
+                        @click=${() => upd(() => { rm.occupancyEntity = null; })}>✕</button>` : nothing}
             </div>
           `;
         })}
@@ -1668,6 +1697,22 @@ export class Sidebar extends LitElement {
     const f = this.planner.floor();
     if (f.rooms) f.rooms = f.rooms.filter(r => r.id !== id);
     this.planner.save(); this.planner.emitConfig();
+  }
+
+  // Room occupancy binding (#1): any binary_sensor whose 'on' state means the
+  // room is occupied (Frigate zone occupancy, Aqara FP2, generic PIR, …).
+  private _pickRoomOccupancy(rm: Room): void {
+    this.dispatchEvent(new CustomEvent('open-entity-picker', {
+      bubbles: true, composed: true,
+      detail: {
+        domain: 'binary_sensor',
+        onPick: (id: string) => {
+          rm.occupancyEntity = id;
+          this.planner.save();
+          this.planner.emitConfig();
+        },
+      },
+    }));
   }
 
   private _doorsSection() {
@@ -2097,6 +2142,8 @@ export class Sidebar extends LitElement {
         </div>
         ${this._furnitureBindRow(piece, upd)}
         ${curKind === 'fridge' ? this._fridgeDoorBindRow(piece, upd) : nothing}
+        ${furnitureCat(resolveFurnitureDef(piece, p.store.customObjects)) === 'appliance'
+          ? this._powerBindRow(piece, upd) : nothing}
         <div class="row"><label>Color</label>
           <input type="color"
                  .value=${piece.color ?? ('#' + (resolveFurnitureDef(piece, p.store.customObjects).color & 0xffffff).toString(16).padStart(6, '0'))}
@@ -2216,6 +2263,45 @@ export class Sidebar extends LitElement {
         domain: 'binary_sensor',
         onPick: (id: string) => {
           piece.doorEntity = id;
+          this.planner.save();
+          this.planner.emitConfig();
+        },
+      },
+    }));
+  }
+
+  // Appliance power sensor (#8): a device_class-power sensor.* whose live wattage
+  // scales the in-use glow/LED. VISUAL ONLY — never feeds effectiveState.
+  private _powerBindRow(piece: Furniture, upd: (mut: () => void) => void) {
+    const p = this.planner;
+    const st = piece.powerEntity && p.hass?.states ? p.hass.states[piece.powerEntity] : null;
+    const w = st ? parseFloat(st.state) : NaN;
+    const wTxt = isFinite(w) ? `${Math.round(w)} W` : (st ? st.state : '');
+    return html`
+      <div class="row"><label title="sensor.* (W) — scales the in-use glow; visual only">Power sensor</label>
+        <span style="font-size:11px;color:${isFinite(w) && w > 5 ? '#66bb6a' : 'var(--text-dim)'};flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+          ${piece.powerEntity ? `${piece.powerEntity}${wTxt ? ` · ${wTxt}` : ''}` : '— unbound —'}
+        </span>
+      </div>
+      <div style="display:flex;gap:4px;margin-top:4px">
+        <button class="btn" style="flex:1;font-size:11px" @click=${() => this._pickPowerEntity(piece)}>
+          ${piece.powerEntity ? 'Rebind' : 'Bind'} power…
+        </button>
+        ${piece.powerEntity ? html`
+          <button class="btn" style="font-size:11px"
+                  @click=${() => upd(() => { piece.powerEntity = null; })}>Unbind</button>
+        ` : nothing}
+      </div>
+    `;
+  }
+
+  private _pickPowerEntity(piece: Furniture): void {
+    this.dispatchEvent(new CustomEvent('open-entity-picker', {
+      bubbles: true, composed: true,
+      detail: {
+        domain: 'sensor',
+        onPick: (id: string) => {
+          piece.powerEntity = id;
           this.planner.save();
           this.planner.emitConfig();
         },
@@ -3022,6 +3108,7 @@ export class Sidebar extends LitElement {
       { key: 'geo', label: 'Geo landmarks' },
       { key: 'weatherFx', label: 'Weather effects (3D)' },
       { key: 'nameLabels', label: 'Name labels' },
+      { key: 'battery', label: 'Battery warnings' },
       { key: 'activity', label: 'Activity glow' },
     ];
     // Display order only: alphabetical by label (locale compare). The preset

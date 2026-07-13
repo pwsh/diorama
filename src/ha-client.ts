@@ -37,6 +37,7 @@ export interface HaEntityReg {
   disabled_by?: string | null;
   original_name?: string | null;
   name?: string | null;
+  original_device_class?: string | null;   // registry-side device_class (battery-badge sibling resolution)
 }
 
 // One normalized point of an entity's history (from getHistory). `ts` is epoch
@@ -214,6 +215,7 @@ export class HassClient implements HaApi {
       disabled_by: typeof e.disabled_by === 'string' ? e.disabled_by : null,
       original_name: typeof e.original_name === 'string' ? e.original_name : null,
       name: typeof e.name === 'string' ? e.name : null,
+      original_device_class: typeof e.original_device_class === 'string' ? e.original_device_class : null,
     }));
   }
 

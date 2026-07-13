@@ -1,0 +1,183 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>bookcase los test</title>
+<style>html,body{margin:0;background:#111;color:#ccc;font:12px sans-serif}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<!--
+  Wall line-of-sight filter on snap candidates (USER BUG: an avatar passes through
+  the front of a bookcase and through the wall behind it, ending up locked
+  outside). A bookcase sits against an EXTERIOR wall inside a smallish room; the
+  floor rect is large so the OUTDOOR free area is the LARGEST nav region. The raw
+  radar point drifts into the bookcase's inflated (blocked) footprint. Nearest
+  free cells exist BOTH room-side and just across the wall (outdoors); the
+  outdoor cell is both nearer AND in the larger region, so the OLD
+  _nearestFreeCell picked it — teleporting the rig outside.
+
+  The fix precomputes solid wall RUNS (openings excised, invisible walls skipped)
+  on _nav.wallSolids and, in _nearestFreeCell, keeps only candidates whose
+  cell-center<->query segment does NOT cross a solid run (falling back to the full
+  set only when every candidate is walled off). So the resolved cell stays
+  room-side. Door openings are GAPS in the solid runs, so a target walking out
+  through a doorway still tracks. Serve the built renderer chunk next to this file.
+-->
+<script type="module">
+  const mod = await import('./assets/three-renderer.js');
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+
+  const FW = 8000, FD = 6000;
+  // Room rectangle inside a large floor -> outdoors is the biggest region.
+  const RX0 = 500, RX1 = 4000, RY0 = 500, RY1 = 5500;
+  const roomWalls = (extra = []) => ([
+    { id: 'w_bot', points: [{x:RX0,y:RY0},{x:RX1,y:RY0}] },
+    { id: 'w_top', points: [{x:RX0,y:RY1},{x:RX1,y:RY1}] },
+    { id: 'w_lft', points: [{x:RX0,y:RY0},{x:RX0,y:RY1}] },
+    { id: 'w_rgt', points: [{x:RX1,y:RY0},{x:RX1,y:RY1}] },
+    { id: 'w_close', points: [{x:RX0,y:RY0},{x:RX1,y:RY0},{x:RX1,y:RY1},{x:RX0,y:RY1},{x:RX0,y:RY0}] },
+    ...extra,
+  ]);
+  // Bookcase against the right (exterior) wall: deep footprint (700 mm along x)
+  // so the room-side free cells sit FARTHER from a point drifted near the wall
+  // than the outdoor cells just across it — i.e. the naive nearest genuinely
+  // reaches outdoors (reproduces the reported teleport).
+  const bookcase = { id: 'bc', x: 3650, y: 2800, w: 700, h: 1000, kind: 'bookshelf', rotation: 0 };
+  const baseFloor = (walls) => ({
+    id: 'f1', name: 'Bookcase room', w: FW, d: FD,
+    walls, furniture: [bookcase],
+    lights: [], switches: [], sensors: [], motionSensors: [],
+    envSensors: [], doors: [], windows: [], bg: null, model3d: null, look3d: null,
+    rooms: [{ id: 'rm1', name: 'Study', anchor: { x: 2000, y: 2800 } }],
+  });
+
+  // ── Build the closed-room floor (no door): outdoor is a separate, LARGER region.
+  r.updateFloor(baseFloor(roomWalls()), { preset: 'day', floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6' });
+  r.applyViewPreset('top');
+
+  const n0 = r._nav;
+  const cellIdx = (wx, wy) => {
+    const cx = Math.max(0, Math.min(n0.nx - 1, Math.floor(wx / n0.cell)));
+    const cy = Math.max(0, Math.min(n0.ny - 1, Math.floor(wy / n0.cell)));
+    return cy * n0.nx + cx;
+  };
+  const regionAt = (wx, wy) => n0.region[cellIdx(wx, wy)];
+  const cellWorld = (i) => ({ x: ((i % n0.nx) + 0.5) * n0.cell, y: (((i / n0.nx) | 0) + 0.5) * n0.cell });
+  // Old NAIVE nearest (plain nearest, no LOS/region) — proves the sliver bug.
+  const naiveNearest = (idx) => {
+    if (n0.blocked[idx] === 0) return idx;
+    const cx0 = idx % n0.nx, cy0 = (idx / n0.nx) | 0;
+    for (let rr = 1; rr <= 16; rr++) {
+      let best = -1, bestD = Infinity;
+      for (let dy = -rr; dy <= rr; dy++) for (let dx = -rr; dx <= rr; dx++) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) !== rr) continue;
+        const cx = cx0 + dx, cy = cy0 + dy;
+        if (cx < 0 || cy < 0 || cx >= n0.nx || cy >= n0.ny) continue;
+        const i = cy * n0.nx + cx;
+        if (n0.blocked[i]) continue;
+        const d = dx*dx + dy*dy;
+        if (d < bestD) { bestD = d; best = i; }
+      }
+      if (best >= 0) return best;
+    }
+    return idx;
+  };
+
+  const roomRegion = regionAt(2000, 2800);
+  const outdoorRegion = regionAt(6000, 2800);
+  const bigRegion = n0.regionSize.indexOf(Math.max(...n0.regionSize));
+  // Query point drifted into the bookcase footprint, close to the wall.
+  const QX = 3850, QY = 2800;
+  const qIdx = cellIdx(QX, QY);
+  const naiveIdx = naiveNearest(qIdx);
+  const naiveW = cellWorld(naiveIdx);
+  const fixIdx = r._nearestFreeCell(qIdx);
+  const fixW = cellWorld(fixIdx);
+  const fixRegionOfWorld = r._regionOfWorld(QX, QY);
+  // LOS primitive sanity: room->outdoor across the solid wall crosses; room->room does not.
+  const losAcrossWall = r._segCrossesNavWall(QX, QY, 4600, QY);
+  const losRoomSide = r._segCrossesNavWall(QX, QY, 3200, QY);
+
+  // ── Drive a radar target into the bookcase footprint; rig must stay room-side.
+  const realNow = performance.now.bind(performance);
+  let fakeNow = realNow();
+  performance.now = () => fakeNow;
+  const DT = 16.7, KEY = 'r1';
+  const ctx = { entityOn: {}, roomNames: { rm1: 'Study' }, timeBucket: 'day' };
+  const mkTgt = (x, y) => ({ key: KEY, x, y, color: 0x4fc3f7 });
+  const step = (x, y) => { fakeNow += DT; r.updateTargets([mkTgt(x, y)], ctx); };
+  const navWorld = (h) => ({ x: FW/2 - h.navX, y: h.navZ + FD/2 });
+
+  // Approach: from room center to the bookcase footprint over ~4 s, then hold 4 s.
+  let maxNavX = -Infinity, everOutdoorRegion = false, lastNav = null;
+  const drive = (fromX, fromY, toX, toY, secs, sample) => {
+    const steps = Math.round(secs * 1000 / DT);
+    for (let i = 0; i < steps; i++) {
+      const t = (i + 1) / steps;
+      step(fromX + (toX - fromX) * t, fromY + (toY - fromY) * t);
+      const h = r._humanoids[KEY];
+      if (h && sample) {
+        const w = navWorld(h); lastNav = w;
+        maxNavX = Math.max(maxNavX, w.x);
+        if (regionAt(w.x, w.y) === outdoorRegion && outdoorRegion !== roomRegion) everOutdoorRegion = true;
+      }
+    }
+  };
+  drive(2000, 2800, 3850, 2800, 4, false);   // walk toward the bookcase
+  drive(3850, 2800, 3850, 2800, 4, true);    // dwell inside the footprint (sampled)
+  const bookNav = lastNav;
+
+  // ── Door-follow: rebuild with a DOOR in the right wall; a target walking OUT
+  // through the opening must be followed (LOS through the gap is clear).
+  const doorWalls = roomWalls([]);
+  // Door in the right wall well AWAY from the bookcase (y=4800) so the follow
+  // path isn't tangled in the bookcase footprint. The opening is a GAP in the
+  // solid run, so LOS through it is clear and the target can be tracked out.
+  const DOORY = 3900;
+  const doorFloor = baseFloor(doorWalls);
+  // rotation 90 → doorSpanCenter offsets the opening to d.y − w/2, so hinge y is
+  // DOORY + w/2 to center the gap at DOORY (clear of the bookcase's y-band).
+  doorFloor.doors = [{ id: 'd1', x: 4000, y: DOORY + 450, w: 900, rotation: 90, entity_id: null }];
+  r.updateFloor(doorFloor, { preset: 'day', floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6' });
+  // LOS through the door opening should be CLEAR (false) at the door y.
+  const losThroughDoor = r._segCrossesNavWall(3600, DOORY, 4600, DOORY);
+  // Seed the rig just inside the door, then drive the radar target out to outside.
+  fakeNow += DT; r.updateTargets([mkTgt(3200, DOORY)], ctx);
+  let outsideReached = false, lastNav2 = null;
+  const steps2 = Math.round(10 * 1000 / DT);
+  for (let i = 0; i < steps2; i++) {
+    const t = (i + 1) / steps2;
+    const x = 3200 + (5600 - 3200) * t, y = DOORY;
+    fakeNow += DT; r.updateTargets([mkTgt(x, y)], ctx);
+    const h = r._humanoids[KEY];
+    if (h) { const w = { x: FW/2 - h.navX, y: h.navZ + FD/2 }; lastNav2 = w; if (w.x > 4100) outsideReached = true; }
+  }
+  performance.now = realNow;
+
+  const tests = [];
+  const ok = (name, cond, detail) => tests.push({ name, ok: !!cond, detail });
+  ok('query cell blocked (in bookcase footprint)', n0.blocked[qIdx] === 1, `idx=${qIdx}`);
+  ok('outdoor is a distinct, larger region', outdoorRegion !== roomRegion && outdoorRegion === bigRegion,
+     `room=${roomRegion}(${n0.regionSize[roomRegion]}) outdoor=${outdoorRegion}(${n0.regionSize[outdoorRegion]}) big=${bigRegion}`);
+  ok('OLD naive nearest picks OUTDOOR (the bug)', n0.region[naiveIdx] === outdoorRegion,
+     `naiveReg=${n0.region[naiveIdx]} naiveX=${Math.round(naiveW.x)}`);
+  ok('fixed _nearestFreeCell picks ROOM side', fixW.x < RX1 && n0.region[fixIdx] === roomRegion,
+     `fixX=${Math.round(fixW.x)} fixReg=${n0.region[fixIdx]}`);
+  ok('_regionOfWorld resolves to ROOM', fixRegionOfWorld === roomRegion, `got=${fixRegionOfWorld}`);
+  ok('LOS crosses the solid wall (room->outdoor)', losAcrossWall === true, `${losAcrossWall}`);
+  ok('LOS clear within the room', losRoomSide === false, `${losRoomSide}`);
+  ok('driven rig stays room-side (navX < wall)', maxNavX < RX1,
+     `maxNavX=${Math.round(maxNavX)} wall=${RX1}`);
+  ok('driven rig never enters outdoor region', !everOutdoorRegion, `bookNav=${bookNav?JSON.stringify({x:Math.round(bookNav.x),y:Math.round(bookNav.y)}):'-'}`);
+  ok('LOS clear THROUGH the door opening', losThroughDoor === false, `${losThroughDoor}`);
+  ok('rig follows the target OUT through the door', outsideReached === true,
+     `lastNav=${lastNav2?JSON.stringify({x:Math.round(lastNav2.x),y:Math.round(lastNav2.y)}):'-'}`);
+
+  let pass = 0; const fails = [];
+  for (const t of tests) { if (t.ok) pass++; else fails.push(t.name); }
+  const total = tests.length, allPass = pass === total;
+  const title = allPass ? `BOOKCASE-LOS PASS ${pass}/${total}` : `BOOKCASE-LOS FAIL ${pass}/${total} [${fails.join(',')}]`;
+  document.title = title;
+  window.__RESULT__ = { title, roomRegion, outdoorRegion, bigRegion, maxNavX, everOutdoorRegion, outsideReached };
+  document.body.insertAdjacentHTML('beforeend',
+    `<pre style="position:fixed;left:8px;top:8px;color:#8f8">${title}\n` +
+    tests.map(t => `${t.ok?'PASS':'FAIL'} ${t.name} — ${t.detail??''}`).join('\n') + `</pre>`);
+</script>

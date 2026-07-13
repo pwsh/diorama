@@ -122,6 +122,7 @@ export class HassPanelAdapter implements HaApi {
         disabled_by: typeof e.disabled_by === 'string' ? e.disabled_by : null,
         original_name: typeof e.original_name === 'string' ? e.original_name : null,
         name: typeof e.name === 'string' ? e.name : null,
+        original_device_class: typeof e.original_device_class === 'string' ? e.original_device_class : null,
       }));
     } catch { return []; }
   }

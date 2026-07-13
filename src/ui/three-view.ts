@@ -540,12 +540,25 @@ export class ThreeView extends LitElement {
         if (furnitureCat(def) !== 'appliance') return '';
         const on = p.effectiveState(fu)?.state ?? '-';
         const door = fu.doorEntity ? stOf(fu.doorEntity) : '';
-        return `${fu.id}:${on}:${door}`;
+        // Per-device power glow (#8): bucket the live power reading to 50 W so the
+        // LED-intensity rebuild only fires on a meaningful step (power can be
+        // chatty; the live-path RAF reads 2D directly, so bucketing suffices here).
+        let pw = '';
+        if (fu.powerEntity) {
+          const w = parseFloat(states[fu.powerEntity]?.state ?? '');
+          pw = isFinite(w) ? String(Math.round(w / 50)) : 'x';
+        }
+        return `${fu.id}:${on}:${door}:${pw}`;
       }).filter(Boolean).join(',');
+      // Room occupancy glow (#1): fold each occupancy-bound room's on/off into
+      // _keyFloor so the tinted floor patch rebuilds on an occupancy flip.
+      const roomOccKey = (f.rooms ?? [])
+        .filter(rm => rm.occupancyEntity)
+        .map(rm => `${rm.id}:${stOf(rm.occupancyEntity!)}`).join(',');
       const keyFloor = `${p.configRev}|${effPreset}|` +
         `${layers.furniture !== false}|${layers.appliances !== false}|` +
         `${layers.bg !== false}|${layers.walls !== false}|` +
-        `${layers.labels !== false}|${applianceKey}`;
+        `${layers.labels !== false}|${applianceKey}|${roomOccKey}`;
       if (keyFloor !== this._keyFloor) {
         this._keyFloor = keyFloor;
         // customObjects edits bump configRev (via emitConfig) → keyFloor flips

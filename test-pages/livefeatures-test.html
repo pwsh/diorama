@@ -125,9 +125,128 @@
       slab2 ? `transparent=${slab2.material.transparent}` : 'no slab');
   }
 
+  // ── leak detector: floor puck + growing puddle decal (#2) ────────────────
+  function testLeak() {
+    const floor = {
+      id: 'fl', name: 'L', w: 6000, d: 5000,
+      walls: [], furniture: [], lights: [], switches: [], sensors: [],
+      motionSensors: [], envSensors: [], doors: [], windows: [], bg: null,
+      model3d: null, look3d: null, rooms: [],
+      safetySensors: [{ id: 'lk1', x: 2500, y: 2500, kind: 'leak', entity_id: null, localState: 'on' }],
+    };
+    r.updateFloor(floor, { preset: 'day' });
+    const puddleWidth = () => {
+      let w = 0, y = null;
+      r._safetyGroup.children[0].traverse(o => {
+        if (!o.isMesh) return;
+        if (o.geometry?.type === 'PlaneGeometry') w = o.geometry.parameters.width;
+      });
+      y = r._safetyGroup.children[0].position.y;
+      return { w, y };
+    };
+    // First call sets the alarm onset (grow≈0). Floor-mounted puck sits ~15 mm.
+    r.updateSafetySensors(floor.safetySensors, () => null);
+    const a = puddleWidth();
+    assert('leak detector is FLOOR-mounted (y ~15 mm, not ceiling)', a.y < 100, `y=${a.y}`);
+    fakeNow += 10000;
+    r.updateSafetySensors(floor.safetySensors, () => null);
+    const b = puddleWidth();
+    fakeNow += 12000;
+    r.updateSafetySensors(floor.safetySensors, () => null);
+    const c = puddleWidth();
+    assert('leak puddle grows while alarming', c.w > b.w && b.w > 0, `t10=${Math.round(b.w)} t22=${Math.round(c.w)}`);
+    // Not alarming → no puddle plane.
+    const dry = [{ id: 'lk1', x: 2500, y: 2500, kind: 'leak', entity_id: null }];
+    r.updateSafetySensors(dry, () => null);
+    let hasPlane = false;
+    r._safetyGroup.children[0].traverse(o => { if (o.isMesh && o.geometry?.type === 'PlaneGeometry') hasPlane = true; });
+    assert('dry leak detector has no puddle', !hasPlane);
+  }
+
+  // ── gas detector: ceiling beacon like CO (#2) ────────────────────────────
+  function testGas() {
+    const floor = {
+      id: 'fg', name: 'G2', w: 6000, d: 5000,
+      walls: [], furniture: [], lights: [], switches: [], sensors: [],
+      motionSensors: [], envSensors: [], doors: [], windows: [], bg: null,
+      model3d: null, look3d: null, rooms: [],
+      safetySensors: [
+        { id: 'g_idle', x: 1500, y: 2000, kind: 'gas', entity_id: null },
+        { id: 'g_alarm', x: 4500, y: 2000, kind: 'gas', entity_id: null, localState: 'on' },
+      ],
+    };
+    r.updateFloor(floor, { preset: 'day' });
+    r.updateSafetySensors(floor.safetySensors, () => null);
+    const g = r._safetyGroup;
+    const meshCount = (grp) => { let n = 0; grp.traverse(o => { if (o.isMesh) n++; }); return n; };
+    assert('gas detector ceiling-mounted (y near ceiling)', g.children[0].position.y > 2000,
+      `y=${Math.round(g.children[0].position.y)}`);
+    assert('alarming gas detector has beacon rings', meshCount(g.children[1]) >= meshCount(g.children[0]) + 3,
+      `idle=${meshCount(g.children[0])} alarm=${meshCount(g.children[1])}`);
+  }
+
+  // ── new EnvKind renders a 3D puck + sprite (#12) ─────────────────────────
+  function testEnvKind() {
+    const floor = {
+      id: 'fe', name: 'E', w: 6000, d: 5000,
+      walls: [], furniture: [], lights: [], switches: [], sensors: [],
+      motionSensors: [],
+      envSensors: [
+        { id: 'e_no2', x: 2000, y: 2000, entity_id: 'sensor.no2' },
+        { id: 'e_radon', x: 4000, y: 2000, entity_id: 'sensor.radon', kind: 'radon' },
+      ],
+      doors: [], windows: [], bg: null, model3d: null, look3d: null, rooms: [],
+    };
+    r.updateFloor(floor, { preset: 'day' });
+    const states = {
+      'sensor.no2': { state: '55', attributes: { device_class: 'nitrogen_dioxide', unit_of_measurement: 'µg/m³' } },
+      'sensor.radon': { state: '140', attributes: { unit_of_measurement: 'Bq/m³' } },
+    };
+    r.updateEnvSensors(floor.envSensors, id => states[id] || null);
+    assert('new-kind env sensors render (puck + sprite)', r._envGroup.children.length >= 2,
+      `children=${r._envGroup.children.length}`);
+  }
+
+  // ── room occupancy tints the 3D floor patch (#1) ─────────────────────────
+  function testRoomOccupancy() {
+    // Closed square loop so the floor is a ShapeGeometry patch (per-loop material).
+    const W = 6000, D = 6000, X0 = 500, X1 = 5500, Y0 = 500, Y1 = 5500;
+    const walls = [
+      { id: 'a', points: [{x:X0,y:Y0},{x:X1,y:Y0},{x:X1,y:Y1},{x:X0,y:Y1},{x:X0,y:Y0}] },
+    ];
+    const floor = {
+      id: 'fo', name: 'O', w: W, d: D, walls,
+      furniture: [], lights: [], switches: [], sensors: [], motionSensors: [],
+      envSensors: [], doors: [], windows: [], bg: null, model3d: null, look3d: null,
+      rooms: [{ id: 'rm', name: 'Den', anchor: { x: 3000, y: 3000 }, occupancyEntity: 'binary_sensor.occ' }],
+    };
+    // Warm emissive COLOR marks an occupied patch (default floor emissive is black,
+    // even though MeshToon's default emissiveIntensity is 1).
+    const patchEmissiveHex = () => {
+      let hex = 0;
+      r._floorGroup.children.forEach(o => {
+        if (o.isMesh && o.geometry?.type === 'ShapeGeometry' && o.material?.emissive)
+          hex = Math.max(hex, o.material.emissive.getHex());
+      });
+      return hex;
+    };
+    // Unoccupied first.
+    r.updateFloor(floor, { preset: 'day' }, undefined, undefined, () => ({ state: 'off', attributes: {} }));
+    const off = patchEmissiveHex();
+    // Occupied → the patch gets a warm emissive tint (non-black).
+    r.updateFloor(floor, { preset: 'day' }, undefined, undefined, () => ({ state: 'on', attributes: {} }));
+    const on = patchEmissiveHex();
+    assert('occupied room floor patch is emissive-tinted', on > 0 && off === 0,
+      `off=0x${off.toString(16)} on=0x${on.toString(16)}`);
+  }
+
   if (test === 'safety' || test === 'all') testSafety();
   if (test === 'door' || test === 'all') testDoor();
   if (test === 'glass' || test === 'all') testGlass();
+  if (test === 'leak' || test === 'all') testLeak();
+  if (test === 'gas' || test === 'all') testGas();
+  if (test === 'envkind' || test === 'all') testEnvKind();
+  if (test === 'roomocc' || test === 'all') testRoomOccupancy();
 
   performance.now = realNow;
   const pass = results.filter(x => x.startsWith('PASS')).length;

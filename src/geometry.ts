@@ -1,7 +1,7 @@
 // Pure geometry helpers — no DOM, no state.
 
 import type { Vec2, Sensor, BgImage, LightIconKind, FurnitureKind, EnvKind, WallKind,
-  ActivityKind, ObjectRecipe, Furniture, Room, Floor } from './types.js';
+  ActivityKind, ObjectRecipe, Furniture, Room, Floor, SafetyKind } from './types.js';
 
 export const MM_PER_IN = 25.4;
 export const IN_PER_FT = 12;
@@ -779,14 +779,32 @@ export function alarmHeight(a: { height?: number }): number { return a.height ??
 // ── Smoke / CO safety detectors (Feature: safety sensors) ──────────────────
 // Ceiling-mounted disc; the 3D puck hangs just below ceiling height. No wall
 // snap (free placement like a motion sensor).
-export const SAFETY_DEFAULTS = { ceilingMm: 2743, discRadiusMm: 120 };
-// Beacon color per kind. Shared 2D + 3D: red for smoke, amber for CO.
-export function safetyColor(kind: 'smoke' | 'co'): string {
-  return kind === 'co' ? '#ff9800' : '#ef5350';
+export const SAFETY_DEFAULTS = {
+  ceilingMm: 2743, discRadiusMm: 120,
+  leakFloorMm: 15,        // leak detectors sit ON the floor (small puck)
+  leakMaxRadiusMm: 600,   // puddle grows to this radius while alarming
+  leakGrowSec: 30,        // seconds to reach full puddle radius
+};
+// Beacon / puck color per kind. Shared 2D + 3D: red smoke, amber CO, amber-green
+// gas, blue leak (its puddle).
+export function safetyColor(kind: SafetyKind): string {
+  switch (kind) {
+    case 'co': return '#ff9800';
+    case 'gas': return '#c0ca33';   // amber-green
+    case 'leak': return '#42a5f5';  // water blue
+    default: return '#ef5350';      // smoke red
+  }
 }
-export function safetyGlyph(kind: 'smoke' | 'co'): string {
-  return kind === 'co' ? 'CO' : '';
+export function safetyGlyph(kind: SafetyKind): string {
+  switch (kind) {
+    case 'co': return 'CO';
+    case 'gas': return 'GAS';
+    case 'leak': return '💧';
+    default: return '';
+  }
 }
+// leak sits on the floor; smoke/co/gas hang from the ceiling.
+export function safetyIsFloor(kind: SafetyKind): boolean { return kind === 'leak'; }
 
 // ── Robot fixtures (vacuum / mower) ────────────────────────────────────────
 // Dock footprint (mm) + robot body dims + roam speeds. The dock is the parked
@@ -894,6 +912,15 @@ export function nearestAlign(v: number, candidates: number[], tol: number): numb
   return best;
 }
 
+// Per-device power glow (#8). Maps a live power reading (W) to a 0..1 intensity
+// multiplier for the in-use appliance glow / LED: sqrt ramp, full at ~1500 W,
+// floored at 0.25 so a barely-on device still reads. A non-finite / ≤5 W reading
+// returns 1 (no scaling — the caller uses this only when a reading exists). Pure.
+export function powerGlowScale(watts: number): number {
+  if (!isFinite(watts) || watts <= 5) return 1;
+  return Math.max(0.25, Math.min(1, Math.sqrt(watts / 1500)));
+}
+
 export function switchHeight(s: { height?: number }): number  { return s.height ?? SWITCH_DEFAULTS.height; }
 export function switchRotation(s: { rotation?: number }): number { return s.rotation ?? SWITCH_DEFAULTS.rotation; }
 export function switchSize(s: { size?: number }): number {
@@ -944,6 +971,16 @@ export const ENV_KINDS: Record<EnvKind, EnvKindDef> = {
   voc:         { glyph: '⌬', color: '#9ccc65', warn: 500, danger: 1500 },
   pressure:    { glyph: '◉', color: '#b0bec5' },
   illuminance: { glyph: '☀', color: '#ffd54f' },
+  // radon (Bq/m³): WHO reference level ~100, EPA action ≈148 — use 100 warn / 300 danger.
+  radon:       { glyph: '☢', color: '#7e57c2', warn: 100, danger: 300 },
+  // sound (dB, device_class sound_pressure): 70 warn / 85 danger (OSHA hearing-risk band).
+  sound:       { glyph: '🔊', color: '#4dd0e1', warn: 70, danger: 85 },
+  // NO₂ (µg/m³): WHO 1-h ~200, annual ~40 — 40 warn / 200 danger.
+  no2:         { glyph: 'NO₂', color: '#a1887f', warn: 40, danger: 200 },
+  // O₃ (µg/m³): WHO 8-h ~100, 1-h high ~180 — 100 warn / 180 danger.
+  o3:          { glyph: 'O₃', color: '#4db6ac', warn: 100, danger: 180 },
+  // AQI (unitless US bands): 100 = moderate/unhealthy-for-sensitive edge, 150 = unhealthy.
+  aqi:         { glyph: 'AQI', color: '#7986cb', warn: 100, danger: 150 },
   generic:     { glyph: '◈', color: '#90a4ae' },
 };
 
@@ -965,6 +1002,11 @@ export function envKindOf(
     case 'volatile_organic_compounds_parts': return 'voc';
     case 'pressure': case 'atmospheric_pressure': return 'pressure';
     case 'illuminance': return 'illuminance';
+    case 'radon': return 'radon';
+    case 'sound_pressure': return 'sound';
+    case 'nitrogen_dioxide': return 'no2';
+    case 'ozone': return 'o3';
+    case 'aqi': return 'aqi';
     default: return 'generic';
   }
 }

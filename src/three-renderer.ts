@@ -12,7 +12,8 @@ import {
   motionColor, motionIntensity, hexToInt, bleProxyHeight, BLE_PROXY_DEFAULTS,
   furnitureDef, resolveFurnitureDef, furnitureColor, furnitureCat, doorOpenDeltaDeg,
   alarmHeight, alarmStateColor, ALARM_DEFAULTS, ALARM_PLATE_DEPTH_MM,
-  safetyColor, SAFETY_DEFAULTS,
+  safetyColor, safetyIsFloor, SAFETY_DEFAULTS,
+  powerGlowScale,
   robotColor, robotLedColor, ROBOT_DEFAULTS,
   ENV_KINDS, envKindOf, envColor, envValueText, envHeight, envScale,
 } from './geometry.js';
@@ -627,8 +628,15 @@ function avatarFromPool(want: AvatarKind | 'random' | undefined,
 // margin) so the bubble tracks child / teddy / supermodel / seated proportions
 // instead of floating detached above short rigs. Adult plumbob ≈ 2002 mm →
 // bubble ≈ 2462 (matching the old constant); the offsets below are added to it.
-const BUBBLE_W = 620, BUBBLE_H = 580, BUBBLE_X = 180;
-const BUBBLE_ABOVE_PLUMBOB = 460;   // bubble center this far above the plumbob
+const BUBBLE_W = 620, BUBBLE_H = 580;
+// Sprite anchor point (fraction of the quad, THREE y-up) placed at the rig's
+// world position — the TAIL TIP (the smallest trailing circle, canvas px (20,128)
+// of the 160×150 texture) so the tail emanates from directly over the head
+// CENTER, and the cloud body floats up-and-to-the-right (classic comic look).
+// Adjusting `sprite.center` (not the world position) keeps the lying-pose
+// worldToLocal repin + fade/dispose lifecycle untouched.
+const BUBBLE_TAIL_CENTER: [number, number] = [20 / 160, 1 - 128 / 150];
+const BUBBLE_ABOVE_PLUMBOB = 460;   // tail tip this far above the plumbob (over head center)
 // Name label (phase B3) rides the same per-rig plumbob anchor, a bit lower than
 // the bubble so both coexist over the head (the bubble is offset sideways).
 const NAME_ABOVE_PLUMBOB = 318;
@@ -666,6 +674,9 @@ export class ThreeDRenderer {
   private _bleGroup = new THREE.Group();
   private _alarmGroup = new THREE.Group();
   private _safetyGroup = new THREE.Group();
+  // Leak-detector alarm-onset timestamps (s) so the 3D puddle decal grows over
+  // SAFETY_DEFAULTS.leakGrowSec from leak onset. Cleared when it stops alarming.
+  private _leakAlarmStart: Record<string, number> = {};
   private _robotGroup = new THREE.Group();       // static robot docks (build-time, _keyRobots)
   private _robotRigGroup = new THREE.Group();    // moving robot bodies (per-frame, persistent)
   private _robotRigs: Record<string, RobotRig> = {};  // keyed by robot id
@@ -830,7 +841,12 @@ export class ThreeDRenderer {
   // inflated footprint and the wall behind it) when both are near the query.
   private _nav: { cell: number; nx: number; ny: number;
                   blocked: Uint8Array; region: Int32Array; regionSize: number[];
-                  rev: number; blockedCount: number } | null = null;
+                  rev: number; blockedCount: number;
+                  // Solid wall RUNS (openings excised) as plain segments, prepared
+                  // once at build time for cheap repeated line-of-sight tests in
+                  // snap candidate filtering. Invisible walls are excluded (they're
+                  // passable dividers), matching the nav rasterizer + movement.
+                  wallSolids: Float64Array } | null = null;
   private _navRev = 0;
 
   // Foreground wall-cutaway (Sims dollhouse). Tagged wall meshes — active-floor
@@ -1805,6 +1821,23 @@ export class ThreeDRenderer {
       voidPlane.position.y = deepest - 120;
       this._floorGroup.add(voidPlane);
     }
+    // Room occupancy glow (#1): tint the floor patch of any room whose bound
+    // occupancy sensor is 'on' with a warm emissive wash. The patch↔room link is
+    // the loop that contains the room's anchor. Rebuilt under _keyFloor (three-view
+    // folds an occupied-rooms hash), so this only re-runs on an occupancy flip.
+    const occLoops = new Set<Vec2[]>();
+    for (const rm of f.rooms ?? []) {
+      if (!rm.occupancyEntity || stateProvider?.(rm.occupancyEntity)?.state !== 'on') continue;
+      const lp = loopContaining(loops, rm.anchor.x, rm.anchor.y);
+      if (lp) occLoops.add(lp);
+    }
+    let floorMatOcc: THREE.Material | null = null;
+    const occMat = (): THREE.Material => floorMatOcc ??= this._mat({
+      color: floorColor, map: floorTex ?? null,
+      side: THREE.DoubleSide, roughness: 0.9, metalness: 0.0,
+      emissive: 0xffa030, emissiveIntensity: 0.32,
+      ...(glassHouse ? { transparent: true, opacity: 0.45, depthWrite: true } : {}),
+    });
     if (loops.length) {
       // ShapeGeometry UVs are raw shape coords (mm); one texture repeat per
       // 800 mm matches the plane path's repeat = size/800.
@@ -1828,7 +1861,8 @@ export class ThreeDRenderer {
             shape.holes.push(scenePathFor(clipped));
           }
         }
-        const mesh = new THREE.Mesh(new THREE.ShapeGeometry(shape), floorMat);
+        const mesh = new THREE.Mesh(new THREE.ShapeGeometry(shape),
+                                    occLoops.has(loop) ? occMat() : floorMat);
         mesh.rotation.x = -Math.PI / 2;
         mesh.receiveShadow = true;
         this._floorGroup.add(mesh);
@@ -2012,10 +2046,16 @@ export class ThreeDRenderer {
       const def0 = resolveFurnitureDef(fu, customObjects);
       const isAppliance = furnitureCat(def0) === 'appliance';
       const st0 = stateProvider ? itemState(fu, stateProvider) : null;
-      const applianceOn = isAppliance && (st0?.state === 'on' || st0?.state === 'playing');
+      const stateOn = isAppliance && (st0?.state === 'on' || st0?.state === 'playing');
+      // Per-device power glow (#8): bound power sensor scales the LED intensity;
+      // an unbound appliance reading > 10 W counts as in-use (visual only).
+      const powerSt = isAppliance && fu.powerEntity && stateProvider ? stateProvider(fu.powerEntity) : null;
+      const powerW = powerSt ? parseFloat(powerSt.state) : NaN;
+      const applianceOn = stateOn || (fu.entity_id == null && isFinite(powerW) && powerW > 10);
+      const ledScale = isFinite(powerW) && powerW > 5 ? powerGlowScale(powerW) : 1;
       const doorSink: { pivot: THREE.Object3D; axis: 'x' | 'y'; openAngle: number }[] = [];
       const grp = this._buildFurniture(fu, f.furniture, customObjects,
-                                       { applianceOn, doorSink });
+                                       { applianceOn, ledScale, doorSink });
       this._shadowFlags(grp);
       this._floorGroup.add(grp);
       // Register each door pivot with the fixture-level info the per-frame blend
@@ -2467,6 +2507,8 @@ export class ThreeDRenderer {
     // railing / half walls are full-height at body level → they block.
     const WALL_HALF = 100 / 2;
     const rad = WALL_HALF + PERSON_R;
+    // Collect solid wall runs (openings excised) as raw segments for LOS tests.
+    const wallSolidRuns: number[] = [];
     for (const wall of wallsOn ? (f.walls ?? []) : []) {
       if (wall.points.length < 2) continue;
       if (wallKind(wall) === 'invisible') continue;
@@ -2480,6 +2522,7 @@ export class ThreeDRenderer {
         for (const s of solids) {
           const s0x = a.x + ux * s.t0, s0y = a.y + uy * s.t0;
           const s1x = a.x + ux * s.t1, s1y = a.y + uy * s.t1;
+          wallSolidRuns.push(s0x, s0y, s1x, s1y);
           const minx = Math.min(s0x, s1x) - rad, maxx = Math.max(s0x, s1x) + rad;
           const miny = Math.min(s0y, s1y) - rad, maxy = Math.max(s0y, s1y) + rad;
           const c0x = clampX(Math.floor(minx / cell)), c1x = clampX(Math.floor(maxx / cell));
@@ -2531,7 +2574,29 @@ export class ThreeDRenderer {
       regionSize[id] = tail;  // cells enqueued for this component == its size
     }
 
-    this._nav = { cell, nx, ny, blocked, region, regionSize, rev: ++this._navRev, blockedCount };
+    this._nav = { cell, nx, ny, blocked, region, regionSize, rev: ++this._navRev,
+                  blockedCount, wallSolids: Float64Array.from(wallSolidRuns) };
+  }
+
+  // Does the segment (ax,ay)→(bx,by) cross any prepared solid wall run? Cheap
+  // segment-intersection sweep over _nav.wallSolids (openings already excised,
+  // invisible walls excluded). Used to reject snap candidates on the far side of
+  // a wall so a rig never teleports outdoors through a bookcase-backed wall.
+  private _segCrossesNavWall(ax: number, ay: number, bx: number, by: number): boolean {
+    const n = this._nav;
+    if (!n) return false;
+    const ws = n.wallSolids;
+    for (let i = 0; i + 3 < ws.length; i += 4) {
+      const cx = ws[i], cy = ws[i + 1], dxp = ws[i + 2], dyp = ws[i + 3];
+      // Standard segment-segment intersection (AB vs CD).
+      const d1 = (dxp - cx) * (ay - cy) - (dyp - cy) * (ax - cx);
+      const d2 = (dxp - cx) * (by - cy) - (dyp - cy) * (bx - cx);
+      const d3 = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
+      const d4 = (bx - ax) * (dyp - ay) - (by - ay) * (dxp - ax);
+      if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) &&
+          ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))) return true;
+    }
+    return false;
   }
 
   // Region id of the FREE cell nearest a world point: if the cell is free,
@@ -2664,8 +2729,13 @@ export class ThreeDRenderer {
     if (n.blocked[idx] === 0) return idx;
     const cx0 = idx % n.nx, cy0 = (idx / n.nx) | 0;
     const rs = n.regionSize;
-    let best = -1, bestD = Infinity, bestSize = -1, r0 = -1;
+    const cell = n.cell;
+    const qx = (cx0 + 0.5) * cell, qy = (cy0 + 0.5) * cell;   // query world point
+    // Collect all free candidates in the r0..r0+8 ring window, then choose.
+    const cands: number[] = [];
+    let r0 = -1;
     for (let r = 1; r <= 16; r++) {
+      let hitThisR = false;
       for (let dy = -r; dy <= r; dy++) {
         for (let dx = -r; dx <= r; dx++) {
           if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;  // ring only
@@ -2673,20 +2743,39 @@ export class ThreeDRenderer {
           if (cx < 0 || cy < 0 || cx >= n.nx || cy >= n.ny) continue;
           const i = cy * n.nx + cx;
           if (n.blocked[i]) continue;
-          const d = dx * dx + dy * dy;
-          const size = rs ? (rs[n.region[i]] ?? 0) : 0;
-          if (size > bestSize || (size === bestSize && d < bestD)) {
-            bestSize = size; bestD = d; best = i;
-          }
+          cands.push(i); hitThisR = true;
         }
       }
-      if (best >= 0) {
+      if (hitThisR) {
         if (r0 < 0) r0 = r;               // first ring with a candidate
         // The window past the first hit must clear a real sofa: ~750 mm
         // footprint + 2×170 mm person inflation ≈ 1.1 m ≈ 8 rings at 150 mm
         // cells. A 4-ring window relocated console-sliver spawns but not
         // sofa-sliver ones (the common case).
         if (!rs || r >= r0 + 8) break;    // no region data → old behavior (first hit)
+      }
+    }
+    if (cands.length === 0) return idx;
+    // Wall line-of-sight filter: prefer candidates reachable WITHOUT crossing a
+    // solid wall — this stops a query point drifting into a wall-backed footprint
+    // (e.g. a bookcase against an exterior wall) from snapping OUTDOORS across the
+    // wall, where the outdoor region is often the largest and would win the size
+    // preference. Fall back to the full set when every candidate is walled off
+    // (query deep inside an enclosed footprint) so we never fail where the old
+    // code succeeded.
+    let pool = cands.filter(i => {
+      const cx = i % n.nx, cy = (i / n.nx) | 0;
+      return !this._segCrossesNavWall(qx, qy, (cx + 0.5) * cell, (cy + 0.5) * cell);
+    });
+    if (pool.length === 0) pool = cands;
+    // Largest-region preference, tie-break nearest to the query cell.
+    let best = -1, bestD = Infinity, bestSize = -1;
+    for (const i of pool) {
+      const cx = i % n.nx, cy = (i / n.nx) | 0;
+      const d = (cx - cx0) * (cx - cx0) + (cy - cy0) * (cy - cy0);
+      const size = rs ? (rs[n.region[i]] ?? 0) : 0;
+      if (size > bestSize || (size === bestSize && d < bestD)) {
+        bestSize = size; bestD = d; best = i;
       }
     }
     return best >= 0 ? best : idx;
@@ -3117,7 +3206,7 @@ export class ThreeDRenderer {
                                  color?: string; customKindId?: string },
                           neighbors?: Furniture[],
                           customObjects?: ObjectRecipe[],
-                          opts?: { applianceOn?: boolean;
+                          opts?: { applianceOn?: boolean; ledScale?: number;
                                    doorSink?: { pivot: THREE.Object3D; axis: 'x' | 'y'; openAngle: number }[] }): THREE.Group {
     const recipe = fu.customKindId ? customObjects?.find(o => o.id === fu.customKindId) : undefined;
     const def = recipe ?? furnitureDef(fu);
@@ -3790,7 +3879,8 @@ export class ThreeDRenderer {
     if (opts?.applianceOn && furnitureCat(def) === 'appliance') {
       const led = new THREE.Mesh(
         new THREE.BoxGeometry(34, 34, 12),
-        this._mat({ color: 0x69f0ae, emissive: 0x00c853, emissiveIntensity: 1.0 }));
+        this._mat({ color: 0x69f0ae, emissive: 0x00c853,
+                    emissiveIntensity: 1.0 * (opts.ledScale ?? 1) }));
       const ledY = kind === 'wall_tv' ? 1350 + 260
                  : kind === 'tv' ? HT * 0.8
                  : Math.min(HT * 0.88, HT - 55);
@@ -4077,12 +4167,50 @@ export class ThreeDRenderer {
     const nowS = performance.now() / 1000;
     const ceiling = SAFETY_DEFAULTS.ceilingMm;
     const discR = SAFETY_DEFAULTS.discRadiusMm;
+    const liveLeak = new Set<string>();
     for (const s of items) {
       const st = itemState(s, stateProvider);
       const alarming = st?.state === 'on';
-      const kind = s.kind === 'co' ? 'co' : 'smoke';
+      const kind = s.kind;
       const col = hexToInt(safetyColor(kind));
       const ud = { kind: 'safety' as const, entity_id: s.entity_id ?? null, fixtureId: s.id };
+
+      // ── Leak detector: small FLOOR puck + spreading blue puddle decal ──
+      if (safetyIsFloor(kind)) {
+        liveLeak.add(s.id);
+        const grp = new THREE.Group();
+        const fp = this._w(s.x, s.y, SAFETY_DEFAULTS.leakFloorMm);
+        grp.position.set(fp.x, fp.y, fp.z);
+        // Squat puck body on the floor.
+        const puck = new THREE.Mesh(
+          new THREE.CylinderGeometry(discR * 0.8, discR * 0.9, 30, 20),
+          this._mat({ color: alarming ? col : 0xeceff1, roughness: 0.6,
+                      emissive: alarming ? col : 0x000000, emissiveIntensity: alarming ? 0.4 : 0 }));
+        puck.userData = ud;
+        grp.add(puck);
+        if (alarming) {
+          if (this._leakAlarmStart[s.id] == null) this._leakAlarmStart[s.id] = nowS;
+          const grow = Math.min(1, (nowS - this._leakAlarmStart[s.id]) / SAFETY_DEFAULTS.leakGrowSec);
+          const pulse = 0.5 + 0.5 * Math.sin(nowS * 2.5);
+          const rr = SAFETY_DEFAULTS.leakMaxRadiusMm * grow;
+          // Flat translucent blue ellipse decal on the floor (shared _puddleTex —
+          // never disposed per-fixture; _clearGroup leaves shared maps alone).
+          const puddle = new THREE.Mesh(
+            new THREE.PlaneGeometry(rr * 2, rr * 2),
+            new THREE.MeshBasicMaterial({ map: this._puddleTexture(), transparent: true,
+                                          opacity: 0.5 + 0.15 * pulse, depthWrite: false }));
+          puddle.rotation.x = -Math.PI / 2;
+          puddle.position.y = -SAFETY_DEFAULTS.leakFloorMm + 6;   // just above the floor
+          puddle.userData = { outlineSkip: true };
+          grp.add(puddle);
+        } else {
+          delete this._leakAlarmStart[s.id];
+        }
+        this._safetyGroup.add(grp);
+        continue;
+      }
+
+      // ── Ceiling beacons (smoke / co / gas) ──
       const grp = new THREE.Group();
       const p = this._w(s.x, s.y, ceiling - 60);   // disc just below the ceiling
       grp.position.set(p.x, p.y, p.z);
@@ -4128,6 +4256,9 @@ export class ThreeDRenderer {
       }
       this._safetyGroup.add(grp);
     }
+    // Drop alarm-onset timers for leak detectors no longer present.
+    for (const id of Object.keys(this._leakAlarmStart))
+      if (!liveLeak.has(id)) delete this._leakAlarmStart[id];
   }
 
   // ── Robots (vacuum / mower) ────────────────────────────────────────────────
@@ -6915,7 +7046,7 @@ export class ThreeDRenderer {
             pz2 + Math.cos(bedYaw) * (lieBed.h * 0.18));
           h.bubble.position.copy(h.group.worldToLocal(world));
         } else {
-          h.bubble.position.set(BUBBLE_X, h.plumbob.position.y + BUBBLE_ABOVE_PLUMBOB, 0);
+          h.bubble.position.set(0, h.plumbob.position.y + BUBBLE_ABOVE_PLUMBOB, 0);
         }
       }
       }  // end thought-bubble block (non-quad)
@@ -7174,7 +7305,7 @@ export class ThreeDRenderer {
       spr.userData.glyph = h.bubbleKind;
       spr.userData.outlineSkip = true;
       spr.userData.s = 0;  // eased 0..1 pop-in
-      spr.position.set(BUBBLE_X, h.plumbob.position.y + BUBBLE_ABOVE_PLUMBOB, 0);
+      spr.position.set(0, h.plumbob.position.y + BUBBLE_ABOVE_PLUMBOB, 0);
       h.group.add(spr);
       h.bubble = spr;
     }
@@ -7299,6 +7430,9 @@ export class ThreeDRenderer {
       map: tex, transparent: true, depthWrite: false,
     }));
     spr.scale.set(BUBBLE_W, BUBBLE_H, 1);
+    // Anchor the tail tip (bottom-left trailing circle) at the sprite position so
+    // it sits over the head center; the body floats up-right from there.
+    spr.center.set(BUBBLE_TAIL_CENTER[0], BUBBLE_TAIL_CENTER[1]);
     return spr;
   }
 

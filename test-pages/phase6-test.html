@@ -80,11 +80,12 @@
   // Pool-membership assertion (bubbles are now weighted POOLS, not one fixed
   // glyph). Given scene/tb/sink, the committed bubble must be drawn FROM the
   // expected pool (or '-' when an engaged activity suppresses it).
+  // Kept in sync with the renderer's BUBBLE_POOL_* constants (three-renderer.ts).
   const POOLS = {
-    kitchen_night:   ['🍪','🍕','🧀','🍫'],
-    kitchen_morning: ['☕','🥞','🍳','🧇'],
-    seated_eve:      ['📖','📱','🎵','📺','🍪','💤','💭'],
-    bed:             ['📱','💤','💭','⭐'],
+    kitchen_night:   ['🍪','🍕','🧀','🍫','🍿','🍦'],
+    kitchen_morning: ['☕','🥞','🍳','🧇','🥐','🍊'],
+    seated_eve:      ['📖','📱','🎵','📺','🍪','💤','💭','🎧','📻','🍷','🎮'],
+    bed:             ['📱','💤','💭','⭐','🛌','🧸','🌜'],
   };
   let expected;   // pool name, or 'none' when suppressed
   if (sink) expected = 'none';

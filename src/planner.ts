@@ -293,6 +293,20 @@ export class Planner extends EventTarget {
   private static readonly BLE_STALE_MS = 30_000;
   private static readonly BLE_RETIRE_MS = 120_000;
 
+  // ── Battery-badge sibling resolution (runtime-only, from the entity registry) ──
+  // HA's own frontend convention: a low-battery warning comes from a SIBLING
+  // sensor with device_class 'battery' on the SAME HA device. We mirror that —
+  // resolve a bound fixture's entity → its device → a battery sensor on that
+  // device. Registry fetch is async, so batteryFor() no-ops until it lands.
+  private _batteryRegLoaded = false;
+  private _entityToDevice: Record<string, string> = {};        // entity_id → device_id
+  private _deviceSensors: Record<string, string[]> = {};       // device_id → sensor.* entity ids on it
+  private _entityDeviceClass: Record<string, string> = {};     // entity_id → registry original_device_class
+  // Cached RESOLUTION so per-frame batteryFor() calls are cheap map hits:
+  // bound entity id → battery sensor entity id, or null when the device has no
+  // battery sibling. `undefined` (absent) = not resolved yet (retry next call).
+  private _batteryResolve: Record<string, string | null> = {};
+
   // ── Identity fusion (runtime-only, phase B3) ──────────────────────────────
   // The matcher's persistent state (pending + committed pairs) plus its rendered
   // output. `fusions` maps a radar targetKey → the adopted person; `fusedPersonIds`
@@ -527,6 +541,7 @@ export class Planner extends EventTarget {
     // discBy entries refresh too.
     for (const sid of Object.keys(this.discBy)) delete this.discBy[sid];
     await this.hass.refreshStates();
+    void this.scanBatteryRegistry();   // registry may have gained/lost battery siblings
     this.emitConfig();
   }
 
@@ -625,6 +640,10 @@ export class Planner extends EventTarget {
         || this.store.floors.some(fl => (fl.bleProxies ?? []).length > 0);
       if (wantsBle) void this.scanBermuda();
     }
+
+    // One-time battery-sibling registry scan (first full state snapshot). Cheap;
+    // batteryFor() no-ops gracefully until it lands.
+    if (!this._batteryRegLoaded && changedId === undefined) void this.scanBatteryRegistry();
   }
 
   // Pull the persisted store from HA's frontend/user_data. If HA has data,
@@ -734,6 +753,10 @@ export class Planner extends EventTarget {
     // Smoke / CO detector binary_sensors: display-only bindings routed through
     // the config channel so 2D/3D dirty keys + sidebar badges refresh on alarm.
     if ((f2.safetySensors ?? []).some(s => s.entity_id === id)) return true;
+    // Room occupancy sensors (#1): config-path so the sidebar ● indicator + the
+    // 3D floor-patch tint (folded into _keyFloor) rebuild on an occupancy flip
+    // (infrequent). The 2D activity glow reads live regardless.
+    if ((f2.rooms ?? []).some(rm => rm.occupancyEntity === id)) return true;
     // Robot bindings (vacuum/lawn_mower activity + mower GPS source ids): route
     // through the config channel so the sidebar state badge + GPS status refresh
     // on change. Scoped to the current floor's bound ids only.
@@ -1456,6 +1479,88 @@ export class Planner extends EventTarget {
   // distance entities by tracked device, and matches scanner MACs to placed BLE
   // proxy fixtures through each proxy's bound device's registry `connections`.
   // Runtime-only; call from the sidebar (on demand / refresh button).
+  // Build the entity→device + device→sensors maps from the entity registry so
+  // batteryFor() can resolve a fixture's low-battery sibling. Called once on
+  // connect and again on a manual full refresh (registry could have changed).
+  // Fire-and-forget; never throws into the caller.
+  async scanBatteryRegistry(): Promise<void> {
+    if (!this.hass) return;
+    let ents: Awaited<ReturnType<HaApi['getEntityRegistry']>>;
+    try {
+      ents = await this.hass.getEntityRegistry();
+    } catch (err) {
+      console.warn('battery registry scan failed:', err);
+      return;
+    }
+    const e2d: Record<string, string> = {};
+    const devSensors: Record<string, string[]> = {};
+    const devClass: Record<string, string> = {};
+    for (const e of ents) {
+      if (e.device_id) e2d[e.entity_id] = e.device_id;
+      if (e.original_device_class) devClass[e.entity_id] = e.original_device_class;
+      if (e.device_id && e.entity_id.startsWith('sensor.')) {
+        (devSensors[e.device_id] ??= []).push(e.entity_id);
+      }
+    }
+    this._entityToDevice = e2d;
+    this._deviceSensors = devSensors;
+    this._entityDeviceClass = devClass;
+    this._batteryResolve = {};        // invalidate cached resolutions
+    this._batteryRegLoaded = true;
+    this.emitConfig();                // sidebar battery text + 2D badges re-render
+  }
+
+  // Battery % (0..100) for the HA device that owns `entityId`, from a sibling
+  // sensor whose device_class is 'battery'. Returns null when: the registry
+  // isn't loaded yet, the entity has no device, no battery sibling exists, or
+  // the reading isn't numeric. Cheap — caches the entity→battery-sensor lookup.
+  batteryFor(entityId: string | null | undefined): number | null {
+    if (!entityId || !this._batteryRegLoaded || !this.hass) return null;
+    let battId = this._batteryResolve[entityId];
+    if (battId === undefined) {
+      battId = this._resolveBatterySibling(entityId);
+      // Only cache a definitive result: a positive hit, or a device that simply
+      // has no sensor siblings (stable until the registry reloads). Leave the
+      // "candidates exist but none identified yet" case unresolved so a sibling
+      // whose state loads later still gets picked up.
+      const dev = this._entityToDevice[entityId];
+      const cands = dev ? (this._deviceSensors[dev] ?? []) : [];
+      if (battId !== null || cands.length === 0) this._batteryResolve[entityId] = battId;
+    }
+    if (!battId) return null;
+    const st = this.hass.states[battId];
+    if (!st) return null;
+    const v = parseFloat(st.state);
+    return isFinite(v) ? v : null;
+  }
+
+  // Battery % for an HA device directly (used for device-bound fixtures like BLE
+  // proxies, which bind a device id rather than an entity id).
+  batteryForDevice(deviceId: string | null | undefined): number | null {
+    if (!deviceId || !this._batteryRegLoaded || !this.hass) return null;
+    const battId = this._resolveDeviceBattery(deviceId);
+    if (!battId) return null;
+    const v = parseFloat(this.hass.states[battId]?.state ?? '');
+    return isFinite(v) ? v : null;
+  }
+
+  private _resolveDeviceBattery(deviceId: string): string | null {
+    for (const sib of this._deviceSensors[deviceId] ?? []) {
+      const regClass = this._entityDeviceClass[sib];
+      const stClass = String(this.hass?.states[sib]?.attributes?.device_class ?? '');
+      if (regClass === 'battery' || stClass === 'battery') {
+        const v = parseFloat(this.hass?.states[sib]?.state ?? '');
+        if (isFinite(v)) return sib;
+      }
+    }
+    return null;
+  }
+
+  private _resolveBatterySibling(entityId: string): string | null {
+    const dev = this._entityToDevice[entityId];
+    return dev ? this._resolveDeviceBattery(dev) : null;
+  }
+
   async scanBermuda(): Promise<void> {
     if (!this.hass) return;
     if (this.store.bermudaEnabled === false) return;   // integration disabled in Settings

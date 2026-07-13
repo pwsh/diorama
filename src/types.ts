@@ -96,6 +96,9 @@ export interface Furniture {
                               // panel + a 2D open-door wedge). Item-level optional; shown in the UI only for
                               // fridge kinds. Separate from entity_id (which is the appliance's on/off binding).
   mountOnId?: string | null;  // host surface id set by auto-snap; bookkeeping only, NOT live parenting
+  powerEntity?: string | null; // appliance/TV: sensor.* (device_class power, W) driving the in-use
+                              // glow/LED intensity (#8). VISUAL ONLY — never feeds effectiveState /
+                              // activities. An unbound appliance reading > 10 W renders as in-use.
   sharedBedCovers?: boolean;  // bed only: two-in-bed shared-covers effect (default/undefined = on).
                               // false → occupants lie side by side, no blanket lump.
 }
@@ -216,10 +219,15 @@ export interface AlarmPanel {
 // localState for a manual test trigger ('on' = alarming; inert once bound). 2D +
 // 3D render a small detector disc that erupts into pulsing rings + a colored
 // halo while alarming (red for smoke, amber for CO). Rides the sensors layer.
+// smoke = red ceiling beacon, co = amber ceiling beacon, gas = amber-green
+// ceiling beacon (device_class gas), leak = FLOOR-mounted moisture detector that
+// spreads a blue puddle decal when alarming (not a beacon).
+export type SafetyKind = 'smoke' | 'co' | 'gas' | 'leak';
+
 export interface SafetySensor {
   id: string;
   x: number; y: number;
-  kind: 'smoke' | 'co';       // smoke = red beacon, co = orange/amber beacon
+  kind: SafetyKind;           // smoke/co/gas = ceiling beacon; leak = floor puck + puddle
   entity_id: string | null;   // binary_sensor.*; 'on' = ALARM
   localState?: string;        // unbound manual trigger: 'on' = alarming; inert once bound
   label?: string;
@@ -328,7 +336,9 @@ export interface MotionSensor {
 // device_class (see envKindOf in geometry.ts) but can be overridden.
 export type EnvKind =
   | 'temperature' | 'humidity' | 'co2' | 'co' | 'pm' | 'voc'
-  | 'pressure' | 'illuminance' | 'generic';
+  | 'pressure' | 'illuminance'
+  | 'radon' | 'sound' | 'no2' | 'o3' | 'aqi'
+  | 'generic';
 
 export interface EnvSensor {
   id: string;
@@ -417,6 +427,8 @@ export interface Room {
   id: string;
   name: string;
   anchor: Vec2;   // world-mm point that pins the room to a wall loop
+  occupancyEntity?: string | null;  // binary_sensor.* (Frigate zone / FP2 / any occupancy);
+                                    // 'on' → the room's wall-loop fills with a warm glow (#1).
 }
 
 export interface Floor {
@@ -546,6 +558,7 @@ export interface Layers2D {
   geo?: boolean;        // geo landmark pins (+ GPS device pins in G2); 2D-only this phase
   weatherFx?: boolean;  // 3D outdoor weather effects (rain/snow/fog/lightning/wind); default on (W2)
   nameLabels?: boolean; // name labels above confident rigs/dots (fused mmWave + identified BLE); default on (B3)
+  battery?: boolean;    // low-battery warning badges on bound fixtures (2D); default on
 }
 
 export interface Layer2DPreset {
