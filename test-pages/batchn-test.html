@@ -1,0 +1,117 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>batchn test</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<script type="module">
+  // Smoke tests for batch N (three new features):
+  //   bins  — trash/recycle curbside bins: lid closed (empty) vs propped (full),
+  //           recycle emblem panel present, click-tagged like appliances
+  //   flood — floodlight body (plate + twin heads) + WIDER elliptical pool disc
+  //   cam   — camera alert snapshot sprite appears when alerting, text fallback,
+  //           and clears when the alerting set empties (linger-out at renderer)
+  const q = new URLSearchParams(location.search);
+  const test = q.get('test') || 'all';
+  const mod = await import('./assets/three-renderer.js?v=' + Date.now());
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+
+  const results = [];
+  const assert = (name, cond, detail = '') => results.push(`${cond ? 'PASS' : 'FAIL'} ${name}${detail ? ' (' + detail + ')' : ''}`);
+  const meshCount = (o) => { let n = 0; o.traverse(x => { if (x.isMesh) n++; }); return n; };
+  const findByFixtureId = (grp, id) => {
+    let found = null;
+    grp.traverse(o => { if (!found && o.userData && o.userData.fixtureId === id) found = o; });
+    return found;
+  };
+
+  const baseFloor = (furniture, lights) => ({
+    id: 'f1', name: 'F', w: 8000, d: 6000,
+    walls: [], furniture: furniture || [], lights: lights || [], switches: [],
+    sensors: [], motionSensors: [], envSensors: [], doors: [], windows: [],
+    bg: null, model3d: null, look3d: null, rooms: [],
+  });
+
+  // ── bins ──────────────────────────────────────────────────────────────
+  function testBins() {
+    const trashEmpty = { id: 'bin_te', x: 1000, y: 1000, w: 600, h: 700, kind: 'trash_bin', entity_id: null };
+    const trashFull  = { id: 'bin_tf', x: 2000, y: 1000, w: 600, h: 700, kind: 'trash_bin', entity_id: null, localState: 'on' };
+    const recycle    = { id: 'bin_rc', x: 3000, y: 1000, w: 600, h: 700, kind: 'recycle_bin', entity_id: null };
+    const floor = baseFloor([trashEmpty, trashFull, recycle]);
+    const states = {};
+    r.updateFloor(floor, { preset: 'day' }, undefined, undefined, id => states[id] || null);
+
+    // Locate each bin group + its lid hinge (the only child THREE.Group).
+    const lidRot = (id) => {
+      const g = findByFixtureId(r._floorGroup, id);
+      if (!g) return null;
+      const hinge = g.children.find(o => o.type === 'Group');
+      return hinge ? hinge.rotation.x : null;
+    };
+    const empR = lidRot('bin_te');
+    const fulR = lidRot('bin_tf');
+    assert('empty trash lid is closed (rot.x ~ 0)', empR !== null && Math.abs(empR) < 0.02, `rot=${empR}`);
+    assert('full trash lid is propped open (rot.x ~ -0.26)', fulR !== null && fulR < -0.2, `rot=${fulR}`);
+    assert('full bin adds overflow mesh vs empty',
+      meshCount(findByFixtureId(r._floorGroup, 'bin_tf')) > meshCount(findByFixtureId(r._floorGroup, 'bin_te')),
+      `full=${meshCount(findByFixtureId(r._floorGroup,'bin_tf'))} empty=${meshCount(findByFixtureId(r._floorGroup,'bin_te'))}`);
+    assert('recycle bin adds emblem panel (more meshes than trash)',
+      meshCount(findByFixtureId(r._floorGroup, 'bin_rc')) > meshCount(findByFixtureId(r._floorGroup, 'bin_te')),
+      `rec=${meshCount(findByFixtureId(r._floorGroup,'bin_rc'))} trash=${meshCount(findByFixtureId(r._floorGroup,'bin_te'))}`);
+    // Bins are click-tagged (kind:'media') so unbound click toggles localState.
+    const teGrp = findByFixtureId(r._floorGroup, 'bin_te');
+    assert('bin is click-tagged (media clickable)',
+      teGrp && teGrp.userData.kind === 'media' && r._mediaClickables.includes(teGrp));
+  }
+
+  // ── flood ─────────────────────────────────────────────────────────────
+  function testFlood() {
+    const flood = { id: 'lt_flood', x: 4000, y: 3000, entity_id: null, iconKind: 'flood', localState: 'on', radius: 1000, height: 2400 };
+    const bulb  = { id: 'lt_bulb',  x: 6000, y: 3000, entity_id: null, iconKind: 'bulb',  localState: 'on', radius: 1000 };
+    const floor = baseFloor([], [flood, bulb]);
+    const states = {};
+    r.updateLightsSwitches(floor.lights, floor.switches, id => states[id] || null);
+
+    // Floor pool discs are CircleGeometry meshes in _lightGroup.
+    const discs = [];
+    r._lightGroup.traverse(o => { if (o.isMesh && o.geometry && o.geometry.type === 'CircleGeometry') discs.push(o); });
+    // The flood disc is the widest (radius 1000 * 1.4 = 1400) with scale.x 1.3.
+    const floodDisc = discs.find(d => Math.abs((d.geometry.parameters.radius || 0) - 1400) < 1);
+    const bulbDisc  = discs.find(d => Math.abs((d.geometry.parameters.radius || 0) - 1000) < 1);
+    assert('flood pool disc radius = lr * 1.4 (1400)', !!floodDisc, `radii=${discs.map(d=>Math.round(d.geometry.parameters.radius)).join(',')}`);
+    assert('flood pool is elliptical (scale.x 1.3)', !!floodDisc && Math.abs(floodDisc.scale.x - 1.3) < 0.01, floodDisc ? `sx=${floodDisc.scale.x}` : '');
+    assert('flood pool wider than a same-radius bulb pool',
+      !!floodDisc && !!bulbDisc && floodDisc.geometry.parameters.radius > bulbDisc.geometry.parameters.radius);
+    // Flood body: a group with userData.kind='light' + two angled head sub-groups.
+    const body = findByFixtureId(r._lightGroup, 'lt_flood');
+    const heads = body ? body.children.filter(o => o.type === 'Group') : [];
+    assert('flood body has two lamp heads', heads.length === 2, `heads=${heads.length}`);
+  }
+
+  // ── cam (alert cards) ───────────────────────────────────────────────────
+  function testCam() {
+    // A camera with an entity that carries NO entity_picture → text fallback.
+    const cam = { id: 'cam1', x: 3000, y: 2000, rotation: 0, entity_id: 'camera.front', alertEntity: 'binary_sensor.front_motion' };
+    // Alerting: pass the camera in the alerting subset (three-view does the
+    // cameraAlerting() filtering; the renderer just renders what it's given).
+    const states = { 'camera.front': { state: 'idle', attributes: {}, entity_id: 'camera.front' } };
+    r.updateCameraAlerts([cam], id => states[id] || null, '');
+    const g = r._camAlertGroup;
+    assert('alert card sprite built when alerting', g.children.length === 1, `children=${g.children.length}`);
+    const sp = g.children[0];
+    assert('alert card is a Sprite with a canvas texture',
+      sp && sp.isSprite && sp.material && sp.material.map && sp.material.map.image && sp.material.map.image.width > 0);
+    assert('alert card sits above the camera (y > cam height)', sp && sp.position.y > 2400, sp ? `y=${Math.round(sp.position.y)}` : '');
+    // Linger-out: an empty alerting set clears the group (no ghost cards).
+    r.updateCameraAlerts([], id => states[id] || null, '');
+    assert('alert cards cleared when no camera alerting', g.children.length === 0, `children=${g.children.length}`);
+  }
+
+  const tests = { bins: testBins, flood: testFlood, cam: testCam };
+  if (test === 'all') { for (const k of Object.keys(tests)) tests[k](); }
+  else if (tests[test]) tests[test]();
+
+  const pass = results.filter(x => x.startsWith('PASS')).length;
+  const fail = results.filter(x => x.startsWith('FAIL')).length;
+  document.title = `BATCHN ${fail === 0 ? 'PASS' : 'FAIL'} ${pass}/${pass + fail} | ` + results.join(' · ');
+</script>

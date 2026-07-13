@@ -8,7 +8,7 @@ import {
   robotGlyph, robotColor, ROBOT_DEFAULTS,
   presenceZoneColor, cameraFov, cameraRange, cameraStateColor,
   powerGlowScale,
-  hexToRgba, lighten, furnitureKind, furnitureCorners, resolveFurnitureDef,
+  hexToRgba, lighten, furnitureKind, furnitureCorners, resolveFurnitureDef, isBinKind, binStateIsFull,
   doorEndpoint, doorOpenDeltaDeg, doorOpenFraction, doorSpanCenter, windowEndpoints, wallCutsForSegment, wallKind,
   ENV_KINDS, envKindOf, envColor, envValueText, envScale,
   closedWallLoops, loopContaining, roomLabel,
@@ -16,7 +16,7 @@ import {
 } from './geometry.js';
 import { compass8 } from './geo.js';
 import type { Planner } from './planner.js';
-import type { Vec2, LightIconKind, Furniture, ObjectRecipe } from './types.js';
+import type { Vec2, LightIconKind, Furniture, ObjectRecipe, HassState } from './types.js';
 
 // Default per-target color palette (kept for back-compat; actual color now
 // comes from sensorColor(s, idx)).
@@ -38,7 +38,7 @@ const LIGHT_GLYPH: Record<LightIconKind, string> = {
   strip: '▬', fireplace: '🔥', lamp: '🪔',
   bowl: '🥣', tiered: '☰', round: '⭕', recessed: '⊙',
   jar: '🫙', oval: '🥚', fan: '❋', fan_light: '✺', string: '✨', under_cabinet: '▂',
-  wall_sconce: '◨', step: '▤',
+  wall_sconce: '◨', step: '▤', flood: '🔆',
 };
 
 export interface View {
@@ -979,6 +979,26 @@ function drawRobots(ctx: CanvasRenderingContext2D, p: Planner, view: View): void
   }
 }
 
+// Camera-snapshot image cache for alert cards (mirrors canvas-2d's _ensureBg
+// idiom). Keyed by the full cache-busted URL — a new 3 s refresh bucket mints a
+// new key, triggering a fresh load; old entries are pruned. Returns the image
+// only once it has finished loading (else null → the card shows the ALERT
+// fallback until the first frame is ready).
+const _camSnapCache = new Map<string, HTMLImageElement>();
+function camSnapshot(url: string): HTMLImageElement | null {
+  const hit = _camSnapCache.get(url);
+  if (hit) return hit.complete && hit.naturalWidth > 0 ? hit : null;
+  const img = new Image();
+  img.crossOrigin = 'anonymous';
+  img.src = url;
+  _camSnapCache.set(url, img);
+  if (_camSnapCache.size > 16) {
+    const oldest = _camSnapCache.keys().next().value;
+    if (oldest !== undefined) _camSnapCache.delete(oldest);
+  }
+  return null;
+}
+
 // Camera fixtures (roadmap #10): a small camera glyph + a translucent FOV wedge
 // (fov / range / rotation — the mmWave coverage-wedge idiom). The wedge tint
 // shifts red when the camera entity state is 'recording'. Rides the sensors
@@ -997,19 +1017,25 @@ function drawCameras(ctx: CanvasRenderingContext2D, p: Planner, view: View): voi
     const base = -Math.PI / 2 + ((cam.rotation || 0) * Math.PI / 180);
     const half = (cameraFov(cam) * Math.PI / 180) / 2;
     const selected = p.activeCameraId === cam.id;
+    // Alert: pulse the FOV wedge (alpha oscillation) + snapshot card below.
+    const alerting = p.cameraAlerting(cam);
+    const now = performance.now() / 1000;
+    const pulse = alerting ? 0.5 + 0.5 * Math.sin(now * 5) : 0;
+    const wedgeCol = alerting ? '#ef5350' : col;
     // FOV wedge.
     ctx.beginPath();
     ctx.moveTo(c.x, c.y);
     ctx.arc(c.x, c.y, r, base - half, base + half);
     ctx.closePath();
-    ctx.fillStyle = hexToRgba(col, recording ? 0.16 : 0.10);
-    ctx.strokeStyle = hexToRgba(col, 0.55);
-    ctx.lineWidth = 1;
+    ctx.fillStyle = hexToRgba(wedgeCol, alerting ? 0.10 + 0.22 * pulse : (recording ? 0.16 : 0.10));
+    ctx.strokeStyle = hexToRgba(wedgeCol, alerting ? 0.5 + 0.5 * pulse : 0.55);
+    ctx.lineWidth = alerting ? 2 : 1;
     ctx.fill();
-    if (!recording) ctx.setLineDash([4, 4]);
+    if (!recording && !alerting) ctx.setLineDash([4, 4]);
     ctx.stroke(); ctx.setLineDash([]);
+    if (alerting) drawCameraAlertCard(ctx, p, cam, c, st, dpr);
     // Body dot.
-    ctx.fillStyle = recording ? '#ef5350' : selected ? lighten(col, 0.2) : col;
+    ctx.fillStyle = (recording || alerting) ? '#ef5350' : selected ? lighten(col, 0.2) : col;
     ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5;
     ctx.beginPath(); ctx.arc(c.x, c.y, 7 * dpr, 0, 2 * Math.PI);
     ctx.fill(); ctx.stroke();
@@ -1035,6 +1061,64 @@ function drawCameras(ctx: CanvasRenderingContext2D, p: Planner, view: View): voi
       ctx.fill(); ctx.stroke();
     }
   }
+}
+
+// Camera alert snapshot card (#10 extension): a screen-fixed ~220×140 px thumb
+// of the camera's entity_picture with an alert-red border, anchored beside the
+// camera marker and clamped on-canvas. The image is cache-busted every ~3 s
+// while alerting (camSnapshot); a text "ALERT" fallback draws until the first
+// frame loads or if the image errors. drawImage is try/caught (cross-origin
+// taint tolerated).
+function drawCameraAlertCard(
+  ctx: CanvasRenderingContext2D, p: Planner, cam: { entity_id: string | null; label?: string },
+  c: { x: number; y: number }, st: HassState | null, dpr: number,
+): void {
+  const CW = 220 * dpr, CH = 140 * dpr;
+  const gap = 14 * dpr;
+  const cv = ctx.canvas;
+  // Prefer the right side of the marker; flip left if it would overflow.
+  let cardX = c.x + gap;
+  if (cardX + CW > cv.width) cardX = c.x - gap - CW;
+  cardX = Math.max(4 * dpr, Math.min(cardX, cv.width - CW - 4 * dpr));
+  let cardY = c.y - CH / 2;
+  cardY = Math.max(4 * dpr, Math.min(cardY, cv.height - CH - 4 * dpr));
+  // Card background.
+  ctx.save();
+  ctx.fillStyle = 'rgba(8,10,16,0.9)';
+  ctx.beginPath(); ctx.roundRect(cardX, cardY, CW, CH, 6 * dpr); ctx.fill();
+  // Snapshot image (refreshed every ~3 s via a cache-bust bucket).
+  const pic = cam.entity_id && st ? (st.attributes as Record<string, unknown> | undefined)?.entity_picture : null;
+  let drew = false;
+  if (typeof pic === 'string' && pic) {
+    const bucket = Math.floor(Date.now() / 3000);
+    const url = p.haBaseUrl + pic + (pic.includes('?') ? '&' : '?') + '_cb=' + bucket;
+    const img = camSnapshot(url);
+    if (img) {
+      try {
+        ctx.save();
+        ctx.beginPath(); ctx.roundRect(cardX + 3 * dpr, cardY + 3 * dpr, CW - 6 * dpr, CH - 24 * dpr, 4 * dpr); ctx.clip();
+        ctx.drawImage(img, cardX + 3 * dpr, cardY + 3 * dpr, CW - 6 * dpr, CH - 24 * dpr);
+        ctx.restore();
+        drew = true;
+      } catch { /* taint → fall through to text */ }
+    }
+  }
+  if (!drew) {
+    ctx.fillStyle = '#ef5350';
+    ctx.font = `700 ${16 * dpr}px sans-serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('⚠ ALERT', cardX + CW / 2, cardY + (CH - 20 * dpr) / 2);
+  }
+  // Caption bar with the camera name.
+  ctx.fillStyle = '#ffcdd2';
+  ctx.font = `${11 * dpr}px sans-serif`;
+  ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+  ctx.fillText((cam.label?.trim() || 'Camera') + ' · ALERT', cardX + 8 * dpr, cardY + CH - 11 * dpr);
+  // Alert-red border on top.
+  ctx.lineWidth = 2.5 * dpr;
+  ctx.strokeStyle = '#ef5350';
+  ctx.beginPath(); ctx.roundRect(cardX, cardY, CW, CH, 6 * dpr); ctx.stroke();
+  ctx.restore();
 }
 
 // FP2-style presence zones (roadmap #5): world-mm polygons bound to occupancy
@@ -1619,6 +1703,8 @@ function drawFurniture(ctx: CanvasRenderingContext2D, p: Planner, view: View,
     const isAppliance = (fdef.cat ?? 'furniture') === 'appliance';
     // Appliances ride their own layer; everything else the furniture layer.
     if (isAppliance ? !showAppliances : !showFurniture) continue;
+    // Curbside bins carry a full/empty visual off their effective state.
+    const binFull = isBinKind(piece.kind) && binStateIsFull(p.effectiveState(piece)?.state);
     const appSt = isAppliance ? p.effectiveState(piece) : null;
     const stateOn = appSt?.state === 'on' || appSt?.state === 'playing';
     // Per-device power glow (#8): a bound power sensor scales the in-use glow/LED;
@@ -1649,7 +1735,7 @@ function drawFurniture(ctx: CanvasRenderingContext2D, p: Planner, view: View,
     // decorations edge (backrest, headboard, pillows). The functional FRONT
     // (cabinet doors/pulls, TV screens, seat openings, faces — local -Z = world
     // -Y) is at canvas-Y +halfH.
-    drawFurniturePrimitiveLocal(ctx, piece, halfW, halfH, customObjects);
+    drawFurniturePrimitiveLocal(ctx, piece, halfW, halfH, customObjects, binFull);
     // Fridge open-door wedge (amber): a mini door-swing arc at the front-right
     // corner (the 3D hinge is on the +X edge). Front = canvas-Y +halfH.
     if (doorOpen) {
@@ -1757,6 +1843,7 @@ function drawFurniturePrimitiveLocal(
   halfW: number,
   halfH: number,
   customObjects?: ObjectRecipe[],
+  binFull = false,
 ): void {
   const kind = furnitureKind(piece);
   const x = -halfW, y = -halfH, w = halfW * 2, h = halfH * 2;
@@ -2103,6 +2190,37 @@ function drawFurniturePrimitiveLocal(
       ctx.fillRect(x + w * 0.12, y + h * 0.28, w * 0.76, h * 0.62);  // running belt
       ctx.fillStyle = '#546e7a';
       ctx.fillRect(x, y, w, Math.max(4, h * 0.16));                  // console band at front
+      break;
+    }
+    case 'trash_bin':
+    case 'recycle_bin': {
+      // Wheeled curbside bin (plan view): body rect + lid line at the front
+      // (hinge on the -Y/front edge), two wheel ticks at the back (+Y/top).
+      // EMPTY → desaturated body, closed lid; FULL → brighter + a fill dot.
+      const isRecycle = kind === 'recycle_bin';
+      const baseHex = piece.color ?? (isRecycle ? '#1f6fb2' : '#3a3f45');
+      fill(hexToRgba(baseHex, binFull ? 0.72 : 0.42));
+      stroke(isRecycle ? '#4fa3dd' : '#9aa0a6');
+      // Lid line across the body near the front (hinge) edge.
+      ctx.strokeStyle = binFull ? '#ffd54f' : (isRecycle ? '#4fa3dd' : '#9aa0a6');
+      ctx.lineWidth = binFull ? 2.5 : 1.5;
+      ctx.beginPath(); ctx.moveTo(x + 3, y + h * 0.24); ctx.lineTo(x + w - 3, y + h * 0.24); ctx.stroke();
+      // Recycle emblem hint: a small ♻ triangle glyph on the front panel.
+      if (isRecycle) {
+        ctx.fillStyle = 'rgba(255,255,255,0.85)';
+        ctx.font = `${Math.max(8, Math.min(halfW, halfH) * 0.9)}px sans-serif`;
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText('♻', 0, h * 0.12);
+      }
+      // Wheel ticks at the back edge.
+      ctx.fillStyle = '#20242a';
+      ctx.fillRect(x + w * 0.14, y + h - 5, w * 0.12, 5);
+      ctx.fillRect(x + w * 0.74, y + h - 5, w * 0.12, 5);
+      // FULL fill dot at the front-right corner.
+      if (binFull) {
+        ctx.fillStyle = 'rgba(255,213,79,0.95)';
+        ctx.beginPath(); ctx.arc(x + w - 8, y + 8, 4, 0, 2 * Math.PI); ctx.fill();
+      }
       break;
     }
     default:

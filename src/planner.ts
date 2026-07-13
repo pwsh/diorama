@@ -37,8 +37,12 @@ export interface BermudaDiscovery {
 }
 import type {
   Store, Floor, Sensor, ZonesLive, ObjectHalo, LerpSlot,
-  HassState, ConnStatus, DiscoveredDevice, Vec2, AvatarKind, WeatherConfig,
+  HassState, ConnStatus, DiscoveredDevice, Vec2, AvatarKind, WeatherConfig, CameraFixture,
 } from './types.js';
+
+// How long a camera alert lingers (snapshot card + FOV pulse) after its
+// alertEntity flips back off. See Planner.cameraAlerting.
+const CAMERA_ALERT_LINGER_MS = 6000;
 import { solvePosition, type ProxyObs } from './trilateration.js';
 import {
   fetchOpenMeteo, geocodeZip, resolveWeatherEntity, deriveFromSensors,
@@ -407,6 +411,12 @@ export class Planner extends EventTarget {
   doorbellRings: { doorId: string; at: number }[] = [];
   private _doorbellPrev: Record<string, string> = {};
 
+  // Camera alert linger (#10 extension): the last time each current-floor camera's
+  // alertEntity was seen 'on' (Date.now() ms). `cameraAlerting(cam)` returns true
+  // while the sensor is on OR within CAMERA_ALERT_LINGER_MS of the last on-time,
+  // so the FOV-wedge pulse + snapshot card stay up briefly after the sensor clears.
+  private _camAlertLastOn: Record<string, number> = {};
+
   setUiMode(m: 'edit' | 'kiosk' | 'view'): void {
     this.uiMode = m;
     if (m !== 'edit') {
@@ -610,6 +620,7 @@ export class Planner extends EventTarget {
     }
     this._syncOccupancy(states);
     this._detectDoorbells(states);
+    this._detectCameraAlerts(states);
 
     // BLE trilateration (live path only): record fresh per-scanner distances and
     // re-solve on new samples. A full refresh (changedId undefined) re-reads
@@ -813,9 +824,10 @@ export class Planner extends EventTarget {
     // Presence-zone occupancy sensors (#5): config-path so 2D/3D dirty keys +
     // sidebar badge refresh on an occupancy flip. The 2D RAF reads the glow live.
     if ((f2.presenceZones ?? []).some(z => z.entity_id === id)) return true;
-    // Camera entities (#10): recording-state changes are rare; the sidebar wants
-    // to refresh the badge + the 2D/3D wedge tint. Scoped to current-floor ids.
-    if ((f2.cameras ?? []).some(c => c.entity_id === id)) return true;
+    // Camera entities + alert sensors (#10): recording-state / alert changes are
+    // rare; the sidebar wants to refresh the badge + the alert-row status. The
+    // 2D/3D canvases read the alert live regardless. Scoped to current-floor ids.
+    if ((f2.cameras ?? []).some(c => c.entity_id === id || c.alertEntity === id)) return true;
     // GPS source entities (a person.* or device_tracker.* bound to a Store.people
     // entry) are config-path so the sidebar GPS status line + 3D pins refresh on
     // a new fix. Bounded to the specific bound ids (GPS pushes are minutes apart,
@@ -891,6 +903,28 @@ export class Planner extends EventTarget {
       if (this.doorbellRings.length > 8)
         this.doorbellRings.splice(0, this.doorbellRings.length - 8);
     }
+  }
+
+  // Camera-alert linger tracking (LIVE path). Records the last time each
+  // current-floor camera's alertEntity was 'on' so the snapshot card + FOV pulse
+  // can linger CAMERA_ALERT_LINGER_MS after the sensor clears. Cheap no-op with
+  // no cameras / no alert bindings.
+  private _detectCameraAlerts(states: Record<string, HassState>): void {
+    const now = Date.now();
+    for (const cam of this.floor().cameras ?? []) {
+      if (!cam.alertEntity) continue;
+      if (states[cam.alertEntity]?.state === 'on') this._camAlertLastOn[cam.id] = now;
+    }
+  }
+
+  // Whether a camera is currently alerting — its alertEntity is 'on', or within
+  // CAMERA_ALERT_LINGER_MS of the last observed 'on'. Read live by both canvases
+  // (2D RAF + 3D tick). No-op false with no binding.
+  cameraAlerting(cam: CameraFixture): boolean {
+    if (!cam.alertEntity) return false;
+    if (this.hass?.states?.[cam.alertEntity]?.state === 'on') return true;
+    const last = this._camAlertLastOn[cam.id];
+    return last != null && Date.now() - last < CAMERA_ALERT_LINGER_MS;
   }
 
   ensureLiveState(sensorId: string): void {

@@ -579,6 +579,7 @@ export function snapStepLightToSurface(
 const WALL_HALF_MM = 50;                 // wallThick(100) / 2
 export const FIREBOX_DEPTH_MM = 450;     // three-renderer firebox D2
 export const SWITCH_PLATE_DEPTH_MM = 40; // three-renderer switch BoxGeometry Z
+export const FLOOD_PLATE_DEPTH_MM = 40;  // three-renderer floodlight mount-plate Z
 
 export interface WallEdgeSnap {
   x: number; y: number;          // nearest point ON the wall axis
@@ -643,6 +644,27 @@ export function snapFireplaceToWall(
   const hit = snapToWallEdge(walls, light.x, light.y, maxMm);
   if (!hit) return false;
   const off = WALL_HALF_MM + FIREBOX_DEPTH_MM / 2;   // 275
+  light.x = Math.round(hit.x + hit.nx * off);
+  light.y = Math.round(hit.y + hit.ny * off);
+  light.rotation = Math.atan2(-hit.nx, -hit.ny) * 180 / Math.PI;
+  return true;
+}
+
+// Floodlights lock flush to the nearest wall (like a fireplace, but a thin plate):
+// the mount plate's back sits on the wall face and the twin heads (local −Z) aim
+// into the room. Center = axis + normal·(wallT/2 + FLOOD_PLATE_DEPTH/2) = axis +
+// normal·70. Rotation follows the light front-axis convention (front = local −Z ⇒
+// rotation = atan2(−nx, −ny)). NO ganging. No-op for non-flood lights or when no
+// wall is within maxMm. Mutates x / y / rotation; returns whether it snapped.
+export function snapFloodlightToWall(
+  light: { x: number; y: number; rotation?: number; iconKind?: LightIconKind },
+  walls: { points: Vec2[]; kind?: WallKind }[],
+  maxMm = 500,
+): boolean {
+  if ((light.iconKind ?? LIGHT_DEFAULTS.iconKind) !== 'flood') return false;
+  const hit = snapToWallEdge(walls, light.x, light.y, maxMm);
+  if (!hit) return false;
+  const off = WALL_HALF_MM + FLOOD_PLATE_DEPTH_MM / 2;   // 70
   light.x = Math.round(hit.x + hit.nx * off);
   light.y = Math.round(hit.y + hit.ny * off);
   light.rotation = Math.atan2(-hit.nx, -hit.ny) * 180 / Math.PI;
@@ -1172,7 +1194,7 @@ export function envValueText(st: { state: string; attributes: Record<string, unk
 
 // Furniture kind defaults: footprint (mm) + 3D height (mm) + tint.
 // `back` flags whether the kind has an implied backrest on the +Y edge.
-export type FurnitureCat = 'furniture' | 'appliance' | 'bathroom';
+export type FurnitureCat = 'furniture' | 'appliance' | 'bathroom' | 'outdoor';
 
 export interface FurnitureKindDef {
   label: string;
@@ -1243,9 +1265,22 @@ export const FURNITURE_KINDS: Record<FurnitureKind, FurnitureKindDef> = {
   shower:        { label: 'Shower',        w: 910,  h: 910,  ht: 2000, back: 'none', color: 0xe3e6e8, cat: 'bathroom', activity: 'shower' },
   // Fitness
   exercise_equipment: { label: 'Exercise equipment', w: 700, h: 1600, ht: 1300, back: 'none', color: 0x424242, cat: 'furniture', activity: 'exercise' },
+  // Outdoor — wheeled curbside bins. Entity 'on'/'full' = FULL (lid propped, overflow
+  // hint); unbound → localState click-toggle. Front (lid hinge, wheels at back = +Z).
+  trash_bin:     { label: 'Trash bin',     w: 600,  h: 700,  ht: 1100, back: 'none', color: 0x3a3f45, cat: 'outdoor', frontArrow: false },
+  recycle_bin:   { label: 'Recycling bin', w: 600,  h: 700,  ht: 1100, back: 'none', color: 0x1f6fb2, cat: 'outdoor', frontArrow: false },
 };
 
 export function furnitureCat(def: FurnitureKindDef): FurnitureCat { return def.cat ?? 'furniture'; }
+
+// Curbside bins (trash_bin / recycle_bin) carry a full/empty state via the
+// standard entity_id (or unbound localState). 'on' OR 'full' = FULL.
+export function isBinKind(kind: FurnitureKind | undefined): boolean {
+  return kind === 'trash_bin' || kind === 'recycle_bin';
+}
+export function binStateIsFull(state: string | null | undefined): boolean {
+  return state === 'on' || state === 'full';
+}
 
 export function furnitureKind(f: { kind?: FurnitureKind }): FurnitureKind {
   return f.kind ?? 'block';

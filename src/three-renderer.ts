@@ -10,7 +10,7 @@ import {
   lightHeight, lightRadius, lightIntensity, lightIconKind, lightRotation, lightLength,
   switchHeight, switchRotation, switchSize,
   motionColor, motionIntensity, hexToInt, bleProxyHeight, BLE_PROXY_DEFAULTS,
-  furnitureDef, resolveFurnitureDef, furnitureColor, furnitureCat, doorOpenDeltaDeg,
+  furnitureDef, resolveFurnitureDef, furnitureColor, furnitureCat, isBinKind, binStateIsFull, doorOpenDeltaDeg,
   doorOpenFraction, GARAGE_DOOR_H,
   alarmHeight, alarmStateColor, ALARM_DEFAULTS, ALARM_PLATE_DEPTH_MM,
   safetyColor, safetyIsFloor, SAFETY_DEFAULTS,
@@ -706,6 +706,10 @@ export class ThreeDRenderer {
   private _robotGroup = new THREE.Group();       // static robot docks (build-time, _keyRobots)
   private _robotRigGroup = new THREE.Group();    // moving robot bodies (per-frame, persistent)
   private _cameraGroup = new THREE.Group();      // camera fixtures + FOV frustum (build-time, _keyCameras)
+  // Camera alert snapshot cards (#10 extension): camera-facing sprites above an
+  // ALERTING camera. Own _keyCamAlerts dirty key (refresh bucket while live);
+  // CanvasTextures → pair _disposeSpriteMaps with _clearGroup. Rides sensors layer.
+  private _camAlertGroup = new THREE.Group();
   private _pzoneGroup = new THREE.Group();       // FP2-style presence-zone patches (build-time, _keyPzones)
   private _robotRigs: Record<string, RobotRig> = {};  // keyed by robot id
   private _lightGroup = new THREE.Group();
@@ -985,7 +989,7 @@ export class ThreeDRenderer {
                     this._zoneGroup, this._haloGroup,
                     this._sensorGroup, this._motionGroup, this._envGroup,
                     this._bleGroup, this._alarmGroup, this._safetyGroup,
-                    this._robotGroup, this._robotRigGroup, this._cameraGroup, this._pzoneGroup,
+                    this._robotGroup, this._robotRigGroup, this._cameraGroup, this._camAlertGroup, this._pzoneGroup,
                     this._lightGroup, this._switchGroup, this._targetGroup, this._ghostGroup,
                     this._gpsGroup, this._weatherGroup, this._pulseGroup, this._nowPlayingGroup);
 
@@ -1443,7 +1447,7 @@ export class ThreeDRenderer {
     for (const g of [
       this._floorGroup, this._doorGroup, this._modelGroup, this._zoneGroup, this._haloGroup,
       this._sensorGroup, this._motionGroup, this._bleGroup, this._alarmGroup,
-      this._safetyGroup, this._robotGroup, this._robotRigGroup, this._cameraGroup, this._pzoneGroup,
+      this._safetyGroup, this._robotGroup, this._robotRigGroup, this._cameraGroup, this._camAlertGroup, this._pzoneGroup,
       this._lightGroup, this._switchGroup, this._targetGroup, this._ghostGroup,
       this._pulseGroup, this._nowPlayingGroup,
     ]) {
@@ -1759,6 +1763,7 @@ export class ThreeDRenderer {
     this._robotRigGroup.visible = v.sensors !== false;
     // Camera fixtures + FOV frustum ride the sensors layer too.
     this._cameraGroup.visible = v.sensors !== false;
+    this._camAlertGroup.visible = v.sensors !== false;   // alert cards ride the sensors layer
     this._motionGroup.visible = v.motion !== false;
     this._envGroup.visible = v.env !== false;
     const z = v.zones !== false;
@@ -2089,6 +2094,8 @@ export class ThreeDRenderer {
       const isAppliance = furnitureCat(def0) === 'appliance';
       const st0 = stateProvider ? itemState(fu, stateProvider) : null;
       const stateOn = isAppliance && (st0?.state === 'on' || st0?.state === 'playing');
+      // Curbside bins: 'on'/'full' props the lid + adds an overflow hint.
+      const binFull = isBinKind(fu.kind) && binStateIsFull(st0?.state);
       // Per-device power glow (#8): bound power sensor scales the LED intensity;
       // an unbound appliance reading > 10 W counts as in-use (visual only).
       const powerSt = isAppliance && fu.powerEntity && stateProvider ? stateProvider(fu.powerEntity) : null;
@@ -2107,7 +2114,7 @@ export class ThreeDRenderer {
       }
       const doorSink: { pivot: THREE.Object3D; axis: 'x' | 'y'; openAngle: number }[] = [];
       const grp = this._buildFurniture(fu, f.furniture, customObjects,
-                                       { applianceOn, ledScale, doorSink, tempLabel });
+                                       { applianceOn, ledScale, doorSink, tempLabel, binFull });
       this._shadowFlags(grp);
       this._floorGroup.add(grp);
       // Register each door pivot with the fixture-level info the per-frame blend
@@ -2139,6 +2146,13 @@ export class ThreeDRenderer {
       // TVs are clickable regardless of binding so an UNBOUND set can still be
       // toggled locally (entity_id null → the click handler flips localState).
       if (fu.kind === 'tv' || fu.kind === 'wall_tv') {
+        grp.userData = { ...grp.userData, kind: 'media', entity_id: fu.entity_id ?? null, fixtureId: fu.id };
+        this._mediaClickables.push(grp);
+      }
+      // Bins are clickable (unbound → flip localState full/empty; bound →
+      // toggle the entity). Reuse the 'media' click path (click → toggleItem/
+      // toggleEntity; the bin-specific dblclick is guarded in three-view).
+      if (isBinKind(fu.kind)) {
         grp.userData = { ...grp.userData, kind: 'media', entity_id: fu.entity_id ?? null, fixtureId: fu.id };
         this._mediaClickables.push(grp);
       }
@@ -3461,7 +3475,7 @@ export class ThreeDRenderer {
                           customObjects?: ObjectRecipe[],
                           opts?: { applianceOn?: boolean; ledScale?: number;
                                    doorSink?: { pivot: THREE.Object3D; axis: 'x' | 'y'; openAngle: number }[];
-                                   tempLabel?: string }): THREE.Group {
+                                   tempLabel?: string; binFull?: boolean }): THREE.Group {
     const recipe = fu.customKindId ? customObjects?.find(o => o.id === fu.customKindId) : undefined;
     const def = recipe ?? furnitureDef(fu);
     const W = fu.w, D = fu.h, HT = def.ht;
@@ -4122,6 +4136,62 @@ export class ThreeDRenderer {
         addBox(W * 0.66, HT * 0.28, 55, screen, 0, upH, upZ + 70);            // console
         break;
       }
+      case 'trash_bin':
+      case 'recycle_bin': {
+        // Wheeled curbside bin: tapered body + hinged domed lid + two rear
+        // wheels. Front = local -Z (lid hinge on the back +Z edge, opening
+        // toward the front). FULL → lid propped ~15° + a small overflow lump.
+        const isRecycle = kind === 'recycle_bin';
+        const bodyH = HT - 120;                         // leave room for the lid dome
+        const bodyMat = this._mat({ color: tint, roughness: 0.85, metalness: 0.05, side: THREE.DoubleSide });
+        // Body tapers slightly inward toward the base (curbside cart look).
+        const body = new THREE.Mesh(
+          new THREE.CylinderGeometry(1, 1, bodyH, 4, 1, false, Math.PI / 4),
+          bodyMat);
+        body.scale.set(W * 0.5 * 1.18, 1, D * 0.44 * 1.18);   // square cross-section → box-ish
+        body.position.y = bodyH / 2;
+        grp.add(body);
+        // Recycle emblem: a lighter panel on the front (-Z) face with a ♻ tone.
+        if (isRecycle) {
+          const panel = new THREE.Mesh(
+            new THREE.BoxGeometry(W * 0.6, bodyH * 0.5, 12),
+            this._mat({ color: 0xeaf4fb, emissive: 0x2f7fbf, emissiveIntensity: 0.25, roughness: 0.7 }));
+          panel.position.set(0, bodyH * 0.55, -D / 2 - 2);
+          grp.add(panel);
+        }
+        // Hinged lid: a slightly domed box pivoting about the back (+Z) top edge.
+        const lidHinge = new THREE.Group();
+        lidHinge.position.set(0, bodyH, D / 2 - 20);
+        const lidCol = new THREE.Color(tint).multiplyScalar(0.82).getHex();
+        const lidMat = this._mat({ color: lidCol, roughness: 0.8, metalness: 0.05 });
+        const lid = new THREE.Mesh(new THREE.BoxGeometry(W * 0.96, 70, D * 0.96), lidMat);
+        lid.position.set(0, 35, -(D / 2 - 20));   // sits centered over the body when closed
+        lidHinge.add(lid);
+        // A shallow dome ridge on top of the lid.
+        const dome = new THREE.Mesh(new THREE.BoxGeometry(W * 0.6, 40, D * 0.5), lidMat);
+        dome.position.set(0, 80, -(D / 2 - 20));
+        lidHinge.add(dome);
+        // FULL: prop the lid open ~15° (about the back hinge, X axis) + overflow.
+        if (opts?.binFull) {
+          lidHinge.rotation.x = -15 * Math.PI / 180;
+          const overflow = new THREE.Mesh(
+            new THREE.SphereGeometry(Math.min(W, D) * 0.26, 10, 8),
+            this._mat({ color: 0x6d5a3f, roughness: 0.95 }));
+          overflow.position.set(0, bodyH + 30, 0);
+          overflow.scale.y = 0.6;
+          grp.add(overflow);
+        }
+        grp.add(lidHinge);
+        // Two small wheels at the back (+Z), low.
+        const wheelMat = this._mat({ color: 0x18191c, roughness: 0.9, metalness: 0.1 });
+        for (const sx of [-1, 1]) {
+          const wheel = new THREE.Mesh(new THREE.CylinderGeometry(70, 70, 50, 14), wheelMat);
+          wheel.rotation.z = Math.PI / 2;
+          wheel.position.set(sx * W * 0.32, 70, D / 2 - 60);
+          grp.add(wheel);
+        }
+        break;
+      }
       default:
         addBox(W, HT, D, wood, 0, HT / 2, 0);
     }
@@ -4435,6 +4505,83 @@ export class ThreeDRenderer {
         this._cameraGroup.add(o);
       }
     }
+  }
+
+  // Camera alert cards (#10 extension): for each ALERTING camera, a camera-facing
+  // sprite above it showing the camera's entity_picture (snapshot), or an "ALERT"
+  // text fallback until the image loads / on error. Mirrors updateNowPlaying:
+  // per-camera CanvasTexture (freed by _disposeSpriteMaps), async image load then
+  // repaint. `cameras` is already the alerting subset (three-view filters). Rides
+  // the sensors layer; rebuilt under three-view's _keyCamAlerts (refresh bucket).
+  updateCameraAlerts(cameras: CameraFixture[], stateProvider: StateProvider, haBaseUrl: string): void {
+    if (!this._scene) return;
+    this._disposeSpriteMaps(this._camAlertGroup);
+    this._clearGroup(this._camAlertGroup);
+    for (const cam of cameras) {
+      if (cam.hidden) continue;
+      const cv = document.createElement('canvas');
+      const tex = new THREE.CanvasTexture(cv);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: tex, transparent: true, depthWrite: false,
+      }));
+      const rec = { sprite, cv, tex };
+      this._applyCameraAlertCard(rec, cam.label?.trim() || 'Camera', null);
+      const pos = this._w(cam.x, cam.y, cameraHeight(cam) + 700);
+      sprite.position.set(pos.x, pos.y, pos.z);
+      sprite.userData.outlineSkip = true;
+      this._camAlertGroup.add(sprite);
+      // Best-effort snapshot: load CORS-safe, repaint on success, ignore failure.
+      const st = cam.entity_id ? stateProvider(cam.entity_id) : null;
+      const pic = st ? (st.attributes as Record<string, unknown> | undefined)?.entity_picture : null;
+      if (typeof pic === 'string' && pic) {
+        const bucket = Math.floor(Date.now() / 3000);
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.onload = () => {
+          if (sprite.parent !== this._camAlertGroup) return;   // rebuilt meanwhile
+          try { this._applyCameraAlertCard(rec, cam.label?.trim() || 'Camera', img); } catch { /* taint → text-only */ }
+        };
+        img.onerror = () => { /* text-only fallback stays */ };
+        img.src = (haBaseUrl || '') + pic + (pic.includes('?') ? '&' : '?') + '_cb=' + bucket;
+      }
+    }
+  }
+
+  // Paint a camera-alert card canvas (snapshot on top, "· ALERT" caption below)
+  // and size the sprite. `img` null → an "⚠ ALERT" placeholder.
+  private _applyCameraAlertCard(
+    rec: { sprite: THREE.Sprite; cv: HTMLCanvasElement; tex: THREE.CanvasTexture },
+    name: string, img: HTMLImageElement | null,
+  ): void {
+    const cv = rec.cv;
+    const W = 440, H = 300, capH = 54;
+    cv.width = W; cv.height = H;
+    const ctx = cv.getContext('2d')!;
+    ctx.clearRect(0, 0, W, H);
+    ctx.beginPath(); ctx.roundRect(3, 3, W - 6, H - 6, 16); ctx.fillStyle = 'rgba(8,10,16,0.9)'; ctx.fill();
+    if (img) {
+      ctx.save();
+      ctx.beginPath(); ctx.roundRect(10, 10, W - 20, H - capH - 10, 10); ctx.clip();
+      ctx.drawImage(img, 10, 10, W - 20, H - capH - 10);   // caller catches taint
+      ctx.restore();
+    } else {
+      ctx.fillStyle = '#ef5350';
+      ctx.font = '700 46px system-ui, sans-serif';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText('⚠ ALERT', W / 2, (H - capH) / 2);
+    }
+    let cap = name + ' · ALERT';
+    if (cap.length > 26) cap = cap.slice(0, 25) + '…';
+    ctx.fillStyle = '#ffcdd2';
+    ctx.font = '500 30px system-ui, sans-serif';
+    ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    ctx.fillText(cap, 16, H - capH / 2);
+    ctx.lineWidth = 6; ctx.strokeStyle = '#ef5350';
+    ctx.beginPath(); ctx.roundRect(3, 3, W - 6, H - 6, 16); ctx.stroke();
+    rec.tex.needsUpdate = true;
+    const SH = 700;
+    rec.sprite.scale.set(SH * (W / H), SH, 1);
   }
 
   // FP2-style presence zones (roadmap #5): a flat translucent polygon patch at
@@ -6035,6 +6182,38 @@ export class ThreeDRenderer {
             g.add(bulb);
             break;
           }
+          case 'flood': {
+            // Wall/eave-mount floodlight at lh: a mount plate against the wall
+            // (local +Z) + two angled rectangular lamp heads aimed down-outward
+            // (front = local -Z). Heads carry the emissive lens; strongly
+            // emissive when on. Aim the whole body with the rotation option.
+            const plateMat = this._mat({ color: 0x3a3d42, metalness: 0.6, roughness: 0.4 });
+            const plate = new THREE.Mesh(new THREE.BoxGeometry(360, 130, 40), plateMat);   // 40 = FLOOD_PLATE_DEPTH_MM
+            plate.position.z = 20;                 // sits against the wall behind
+            plate.userData = ud;
+            g.add(plate);
+            // A brighter lens material so an ON flood reads punchy vs the toon body.
+            const lensMat = this._mat({
+              color: isOn ? color.getHex() : 0x2a2d31,
+              emissive: isOn ? color.getHex() : 0x0a0a0a,
+              emissiveIntensity: isOn ? 1.4 * intensity : 0.04,
+              metalness: 0.2, roughness: 0.35,
+            });
+            for (const sx of [-1, 1]) {
+              const head = new THREE.Group();
+              head.position.set(sx * 100, -10, -30);
+              head.rotation.x = 0.55;              // tilt the head down-and-forward
+              const housing = new THREE.Mesh(new THREE.BoxGeometry(150, 96, 120), plateMat);
+              housing.userData = ud;
+              head.add(housing);
+              const lens = new THREE.Mesh(new THREE.BoxGeometry(128, 74, 16), lensMat);
+              lens.position.set(0, 0, -66);        // front face of the head
+              lens.userData = ud;
+              head.add(lens);
+              g.add(head);
+            }
+            break;
+          }
           default: {
             // Bulb: short stem + socket from the (implied) ceiling with the
             // globe hanging just below — not a free-floating ball.
@@ -6133,9 +6312,11 @@ export class ThreeDRenderer {
           // vertex at angle a lands at scene (cos a, 0, -sin a); the arc
           // midpoint sits at scene (-sin start, -cos start), which we align to
           // the front (fdx, fdz) via start = atan2(-fdx, -fdz).
+          // Floodlights cast a WIDER, more elliptical pool (lr × 1.4).
+          const poolR = kind === 'flood' ? lr * 1.4 : lr;
           const poolGeo = kind === 'step'
             ? new THREE.CircleGeometry(lr, 24, Math.atan2(-fdx, -fdz), Math.PI)
-            : new THREE.CircleGeometry(lr, 48);
+            : new THREE.CircleGeometry(poolR, 48);
           const disc = new THREE.Mesh(
             poolGeo,
             new THREE.MeshBasicMaterial({
@@ -6144,6 +6325,8 @@ export class ThreeDRenderer {
               side: THREE.DoubleSide, depthWrite: false,
             }));
           disc.rotation.x = -Math.PI / 2;
+          // Elliptical feel for the flood pool (stretched along the local x/z).
+          if (kind === 'flood') disc.scale.set(1.3, 0.82, 1);
           // The pool represents light hitting the walking surface. For a light
           // sunk below the floor (negative height — a step light on a sunken
           // stair shaft) the surface it washes is lower too, so draw the pool
@@ -9188,7 +9371,7 @@ export class ThreeDRenderer {
       this._floorGroup, this._doorGroup, this._modelGroup, this._zoneGroup, this._haloGroup,
       this._sensorGroup, this._motionGroup, this._envGroup, this._bleGroup,
       this._alarmGroup, this._safetyGroup, this._robotGroup, this._robotRigGroup,
-      this._cameraGroup, this._pzoneGroup,
+      this._cameraGroup, this._camAlertGroup, this._pzoneGroup,
       this._lightGroup, this._switchGroup, this._targetGroup, this._gpsGroup, this._weatherGroup,
       this._pulseGroup, this._nowPlayingGroup,
     ]) {

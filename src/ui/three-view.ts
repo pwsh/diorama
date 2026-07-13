@@ -6,7 +6,7 @@ import { customElement } from './define.js';
 // startup path never downloads it.
 import type { ThreeDRenderer, ZoneWorld, HaloWorld, TargetWorld, ActivityContext,
   GpsPinWorld, GpsLandmarkWorld, GeoEventWorld, WeatherFxState } from '../three-renderer.js';
-import { localToWorld, transformVerts, pointInPolygon, sensorColor, hexToInt, motionColor, lightIconKind, furnitureKind, resolveFurnitureDef, furnitureCat, alarmStateColor, doorSpanCenter } from '../geometry.js';
+import { localToWorld, transformVerts, pointInPolygon, sensorColor, hexToInt, motionColor, lightIconKind, furnitureKind, resolveFurnitureDef, furnitureCat, isBinKind, alarmStateColor, doorSpanCenter } from '../geometry.js';
 import { compass8 } from '../geo.js';
 import { resolveScenePreset, resolveTimeBucket } from '../time-of-day.js';
 import { conditionIntensity, weatherEffectEnabled } from '../weather.js';
@@ -238,6 +238,21 @@ export class ThreeView extends LitElement {
       // edit → pick a media_player entity (only reachable in 2D today since
       // unbound TVs aren't raycast targets, but kept for symmetry).
       if (kind === 'media') {
+        const fu0 = f.furniture.find(x => x.id === fixtureId);
+        // Bins reuse the 'media' click tag but bind a binary_sensor ('on'/'full'
+        // = full), not a media_player. Single click already toggles full/empty.
+        if (fu0 && isBinKind(fu0.kind)) {
+          if (p.uiMode === 'edit' && !entity_id) {
+            this.dispatchEvent(new CustomEvent('open-entity-picker', {
+              bubbles: true, composed: true,
+              detail: {
+                domain: 'binary_sensor',
+                onPick: (id: string) => { fu0.entity_id = id; p.save(); p.emitConfig(); },
+              },
+            }));
+          }
+          return;
+        }
         if (entity_id) {
           this.dispatchEvent(new CustomEvent('open-media-config', {
             bubbles: true, composed: true, detail: { entityId: entity_id },
@@ -512,6 +527,7 @@ export class ThreeView extends LitElement {
   private _keyRobots = '';
   private _keyNowPlaying = '';
   private _keyCameras = '';
+  private _keyCamAlerts = '';
   private _keyPzones = '';
   private _keyLights = '';
   private _keyZones = '';
@@ -537,7 +553,7 @@ export class ThreeView extends LitElement {
         r.clearTransientGroups();
         this._keyFloor = this._keyDoors = this._keySensors = '';
         this._keyMotion = this._keyEnv = this._keyBle = this._keyAlarm = this._keySafety = '';
-        this._keyCameras = this._keyPzones = this._keyNowPlaying = '';
+        this._keyCameras = this._keyCamAlerts = this._keyPzones = this._keyNowPlaying = '';
         this._keyLights = this._keyZones = this._keyHalos = '';
         this._keyGhost = this._keyGps = this._keyWeather = '';
         this._trigPrevOn.clear();
@@ -571,7 +587,9 @@ export class ThreeView extends LitElement {
       // each appliance's on/off + any bound fridge door sensor.
       const applianceKey = f.furniture.map(fu => {
         const def = resolveFurnitureDef(fu, p.store.customObjects);
-        if (furnitureCat(def) !== 'appliance') return '';
+        // Bins (outdoor cat) also carry a bound/local state (full/empty) that
+        // drives the 3D lid pivot inside updateFloor — fold it in too.
+        if (furnitureCat(def) !== 'appliance' && !isBinKind(fu.kind)) return '';
         const on = p.effectiveState(fu)?.state ?? '-';
         const door = fu.doorEntity ? stOf(fu.doorEntity) : '';
         // Per-device power glow (#8): bucket the live power reading to 50 W so the
@@ -762,6 +780,25 @@ export class ThreeView extends LitElement {
       if (keyCameras !== this._keyCameras) {
         this._keyCameras = keyCameras;
         r.updateCameras(cameraList, id => states[id] || null);
+      }
+
+      // Camera alert cards (#10 extension): snapshot sprites above ALERTING
+      // cameras. Own dirty key = configRev + sensors-layer flag + per-alerting-
+      // camera (picture + 3 s refresh bucket) hash. The refresh bucket rotates
+      // the key every 3 s while an alert is live so the snapshot re-fetches; an
+      // idle floor (no alerts) yields a stable key → no churn. cameraAlerting()
+      // reads live (state 'on' OR within the linger window), so the set shrinks
+      // and the group clears once the last alert lingers out.
+      const camAlerting = cameraList.filter(c => !c.hidden && p.cameraAlerting(c));
+      const camRefreshBucket = Math.floor(nowMs / 3000);
+      const keyCamAlerts = `${p.configRev}|${layers.sensors !== false}|` +
+        camAlerting.map(c => {
+          const pic = c.entity_id ? ((states[c.entity_id]?.attributes as Record<string, unknown> | undefined)?.entity_picture ?? '') : '';
+          return `${c.id}:${pic}:${camRefreshBucket}`;
+        }).join(',');
+      if (keyCamAlerts !== this._keyCamAlerts) {
+        this._keyCamAlerts = keyCamAlerts;
+        r.updateCameraAlerts(camAlerting, id => states[id] || null, p.haBaseUrl);
       }
 
       // Presence zones (#5): structural + bound occupancy state. Rides the zones

@@ -56,6 +56,16 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Batch J: trash/recycle bins, floodlight, camera alert popups**
+  (8 files + new `batchn-test.html` **13/13**; full green set intact):
+  wheeled curbside `trash_bin`/`recycle_bin` kinds (new `outdoor` cat) —
+  bound sensor 'on'/'full' props the lid + overflow hint, unbound
+  click-toggles; `flood` light kind (twin angled heads, ×1.4 elliptical
+  pool, 70 mm wall snap); `CameraFixture.alertEntity` — alerts pulse
+  the FOV wedge and pop a live-refreshing (3 s) snapshot card beside
+  the camera in 2D + a sprite card in 3D, 6 s linger, all UI modes.
+  CLAUDE.md "Bins, floodlight, camera alerts (batch J)".
+
 - **Batch I: continuous walls, interactive locks, oven, bg-image fixes**
   (9 files; window-test 14→**15/15** incl. `wall_single_mesh`, new
   `lockoven-test.html` **8/8**, glass `wallOps` unchanged, full sweep

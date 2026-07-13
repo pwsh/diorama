@@ -1,4 +1,4 @@
-import { snap, snapVertex15, distMM, worldToLocal, localToWorld, FURNITURE_KINDS, furnitureCorners, furnitureLocalToWorld, furnitureWorldToLocal, resolveFurnitureDef, resolveFurnitureWallCollision, resolveSeatTableCollision, snapStepLightToSurface, snapFireplaceToWall, snapSwitchToWall, snapAlarmToWall, nearestAlign, envScale, ENV_SCALE_MIN, ENV_SCALE_MAX, GRID_MM, floorContentBbox, resolveFloorEdgeDrag } from './geometry.js';
+import { snap, snapVertex15, distMM, worldToLocal, localToWorld, FURNITURE_KINDS, furnitureCorners, furnitureLocalToWorld, furnitureWorldToLocal, resolveFurnitureDef, resolveFurnitureWallCollision, resolveSeatTableCollision, snapStepLightToSurface, snapFireplaceToWall, snapFloodlightToWall, snapSwitchToWall, snapAlarmToWall, isBinKind, nearestAlign, envScale, ENV_SCALE_MIN, ENV_SCALE_MAX, GRID_MM, floorContentBbox, resolveFloorEdgeDrag } from './geometry.js';
 import { newId } from './storage.js';
 import {
   pxToMm, type View,
@@ -1082,8 +1082,9 @@ export function onCanvasMouseUp(p: Planner, canvas: HTMLCanvasElement): void {
         // wall face (back to the wall, opening to the room); switches to a wall
         // + gang with neighbours. Each is a no-op unless the fixture qualifies.
         if (drag.fxKind === 'light') {
-          if (!snapStepLightToSurface(it as Light, f.walls, f.furniture))
-            snapFireplaceToWall(it as Light, f.walls);
+          if (!snapStepLightToSurface(it as Light, f.walls, f.furniture) &&
+              !snapFireplaceToWall(it as Light, f.walls))
+            snapFloodlightToWall(it as Light, f.walls);
         } else {
           snapSwitchToWall(it, f.switches, f.walls);
         }
@@ -1099,11 +1100,18 @@ export function onCanvasMouseUp(p: Planner, canvas: HTMLCanvasElement): void {
     if (piece) {
       // Stove/oven click-vs-drag: a barely-moved single click toggles the oven
       // door (persistent doorOpen) instead of nudging the piece.
-      const stoveClick = drag.kind === 'furnMove' && piece.kind === 'stove' &&
+      const barelyMoved = drag.kind === 'furnMove' &&
         Math.hypot(piece.x - drag.start.x, piece.y - drag.start.y) < 30;
-      if (stoveClick) {
+      const stoveClick = drag.kind === 'furnMove' && piece.kind === 'stove' && barelyMoved;
+      // Curbside bins: a barely-moved click toggles full/empty (bound entity or
+      // unbound localState) instead of nudging the piece.
+      const binClick = drag.kind === 'furnMove' && isBinKind(piece.kind) && barelyMoved;
+      if (stoveClick && drag.kind === 'furnMove') {
         piece.x = drag.start.x; piece.y = drag.start.y;
         piece.doorOpen = !piece.doorOpen;
+      } else if (binClick && drag.kind === 'furnMove') {
+        piece.x = drag.start.x; piece.y = drag.start.y;
+        p.toggleItem(piece);
       } else {
         snapStairEdges(f, piece);
         snapFurnitureToSurface(f, piece, p.store.customObjects);
@@ -1215,6 +1223,8 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
     if (fu2 && fu2.item.kind === 'stove') {
       fu2.item.doorOpen = !fu2.item.doorOpen; p.save(); p.emitConfig(); return;
     }
+    // Bins → toggle full/empty (session-only in kiosk; save() no-ops).
+    if (fu2 && isBinKind(fu2.item.kind)) { p.toggleItem(fu2.item); return; }
     return;
   }
 
@@ -1456,7 +1466,8 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
     // Both no-op unless the fixture is a step light / fireplace (freshly dropped
     // lights default to 'bulb', so these bite once the kind is set + the piece
     // is dragged; kept here so a directly-typed kind snaps on drop too).
-    if (!snapStepLightToSurface(lt, f.walls, f.furniture)) snapFireplaceToWall(lt, f.walls);
+    if (!snapStepLightToSurface(lt, f.walls, f.furniture) && !snapFireplaceToWall(lt, f.walls))
+      snapFloodlightToWall(lt, f.walls);
     f.lights.push(lt);
     p.save(); p.setTool('select'); p.emitConfig(); return;
   }

@@ -41,6 +41,8 @@ export type FurnitureKind =
   | 'coffee_maker' | 'toaster'
   // bathroom
   | 'toilet' | 'sink' | 'sink_vanity' | 'bathtub' | 'shower'
+  // outdoor
+  | 'trash_bin' | 'recycle_bin'   // wheeled curbside bins; entity 'on'/'full' = full
   // fitness
   | 'exercise_equipment';
 
@@ -126,7 +128,8 @@ export type LightIconKind =
   | 'string'    // LED string: sagging run of small glowing orbs
   | 'under_cabinet'   // slim LED channel for mounting under cabinets/counters
   | 'wall_sconce'     // wall-mounted up/down cylinder washer
-  | 'step';           // small louvered step light embedded low in a wall
+  | 'step'            // small louvered step light embedded low in a wall
+  | 'flood';          // wall/eave-mount floodlight: twin angled heads, wide floor pool
 
 export interface Light {
   id: string;
@@ -487,6 +490,9 @@ export interface CameraFixture {
   range?: number;       // mm, wedge reach; default 6000
   height?: number;      // mm above floor for the 3D body; default 2200 (wall/eave mount)
   entity_id: string | null;   // camera.*
+  alertEntity?: string | null;  // binary_sensor (motion/person/doorbell from the camera's
+                              // integration); 'on' pulses the FOV wedge + pops a snapshot
+                              // card (2D canvas + 3D sprite) with a ~6 s linger after off.
   label?: string;
   hidden?: boolean;
   locked?: boolean;     // canvas move/rotate/delete disabled

@@ -39,7 +39,7 @@ import {
   FURNITURE_KINDS, furnitureKind, resolveFurnitureDef, WINDOW_DEFAULTS,
   ENV_KINDS, ENV_DEFAULTS, ENV_SCALE_MIN, ENV_SCALE_MAX,
   envKindOf, envColor, envValueText, envHeight, envScale,
-  furnitureCat, type FurnitureCat,
+  furnitureCat, type FurnitureCat, isBinKind,
   closedWallLoops, loopContaining, resolveRoomForPointFuzzy, roomLabel,
 } from '../geometry.js';
 import type { Vec2 } from '../types.js';
@@ -81,6 +81,7 @@ const LIGHT_KINDS: { id: LightIconKind; label: string; glyph: string }[] = [
   { id: 'under_cabinet', label: 'Under-cabinet strip', glyph: '▂' },
   { id: 'wall_sconce', label: 'Wall sconce (up/down)', glyph: '◨' },
   { id: 'step',        label: 'Step light',            glyph: '▤' },
+  { id: 'flood',       label: 'Floodlight',            glyph: '🔆' },
 ];
 
 const WINDOW_KINDS: { id: WindowKind; label: string }[] = [
@@ -1550,6 +1551,27 @@ export class Sidebar extends LitElement {
                     @click=${() => { this._camSnapCb = Date.now(); this.requestUpdate(); }}>↻</button>
           </div>
         ` : nothing}
+        ${(() => {
+          // Alert sensor: a binary_sensor (motion/person/doorbell) whose 'on'
+          // pulses the FOV wedge + pops a snapshot card (2D + 3D). ~6 s linger.
+          const alerting = p.cameraAlerting(c);
+          return html`
+            <div class="row" style="margin-top:6px"><label title="binary_sensor: 'on' pops a snapshot alert card (6 s linger after off)">Alert sensor</label>
+              <span style="font-size:11px;color:${alerting ? '#ef5350' : 'var(--text-dim)'};flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+                ${c.alertEntity ? `${c.alertEntity}${alerting ? ' · ALERT' : ''}` : '— unbound —'}
+              </span>
+            </div>
+            <div style="display:flex;gap:4px;margin-top:4px">
+              <button class="btn" style="flex:1;font-size:11px" @click=${() => this._pickCameraAlert(c)}>
+                ${c.alertEntity ? 'Rebind' : 'Bind'} alert…
+              </button>
+              ${c.alertEntity ? html`
+                <button class="btn" style="font-size:11px"
+                        @click=${() => upd(() => { c.alertEntity = null; })}>Unbind</button>
+              ` : nothing}
+            </div>
+          `;
+        })()}
         <button class="btn danger" style="width:100%;margin-top:6px" @click=${() => {
           const f = p.floor();
           f.cameras = (f.cameras ?? []).filter(x => x.id !== c.id);
@@ -1568,6 +1590,20 @@ export class Sidebar extends LitElement {
         domain: 'camera',
         onPick: (id: string) => {
           c.entity_id = id;
+          this.planner.save();
+          this.planner.emitConfig();
+        },
+      },
+    }));
+  }
+
+  private _pickCameraAlert(c: CameraFixture): void {
+    this.dispatchEvent(new CustomEvent('open-entity-picker', {
+      bubbles: true, composed: true,
+      detail: {
+        domain: 'binary_sensor',
+        onPick: (id: string) => {
+          c.alertEntity = id;
           this.planner.save();
           this.planner.emitConfig();
         },
@@ -2624,7 +2660,7 @@ export class Sidebar extends LitElement {
   private _furnitureBindRow(piece: Furniture, upd: (mut: () => void) => void) {
     const p = this.planner;
     const def = resolveFurnitureDef(piece, p.store.customObjects);
-    if (!def.activity && furnitureKind(piece) !== 'tv') return nothing;
+    if (!def.activity && furnitureKind(piece) !== 'tv' && !isBinKind(piece.kind)) return nothing;
     return html`
       <div class="row"><label>HA entity</label>
         <span style="font-size:11px;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
@@ -2761,7 +2797,9 @@ export class Sidebar extends LitElement {
   }
 
   private _pickFurnitureEntity(piece: Furniture): void {
-    const domain = furnitureKind(piece) === 'tv' ? 'media_player' : 'switch';
+    const domain = furnitureKind(piece) === 'tv' ? 'media_player'
+      : isBinKind(piece.kind) ? 'binary_sensor'   // bins: 'on'/'full' = full
+      : 'switch';
     this.dispatchEvent(new CustomEvent('open-entity-picker', {
       bubbles: true, composed: true,
       detail: {
@@ -3091,7 +3129,7 @@ export class Sidebar extends LitElement {
                      })}>
             </div>
           ` : nothing}
-          ${['fireplace', 'strip', 'sconce', 'string', 'under_cabinet', 'wall_sconce', 'step'].includes(curKind) ? html`
+          ${['fireplace', 'strip', 'sconce', 'string', 'under_cabinet', 'wall_sconce', 'step', 'flood'].includes(curKind) ? html`
             <div class="row"><label>Rotation (°)</label>
               <input type="number" step="15" .value=${String(Math.round(l.rotation ?? 0))}
                      @input=${(e: Event) => upd(() => {
@@ -3111,7 +3149,7 @@ export class Sidebar extends LitElement {
             </div>
           ` : nothing}
           ${/* Height may go negative (down to −3000) for lights sunk below the floor — e.g. a step light on a sunken stairway shaft. */ ''}
-          ${numRow('Height (mm)', l.height ?? (curKind === 'under_cabinet' ? 1350 : curKind === 'wall_sconce' ? 1700 : curKind === 'step' ? 300 : 2500), -3000, 6000, 50, v => upd(() => { l.height = v; }))}
+          ${numRow('Height (mm)', l.height ?? (curKind === 'under_cabinet' ? 1350 : curKind === 'wall_sconce' ? 1700 : curKind === 'step' ? 300 : curKind === 'flood' ? 2400 : 2500), -3000, 6000, 50, v => upd(() => { l.height = v; }))}
           ${numRow('Radius (mm)', l.radius ?? 900, 100, 5000, 50, v => upd(() => { l.radius = v; }))}
           ${numRow('Intensity', l.intensity ?? 1, 0, 2, 0.05, v => upd(() => { l.intensity = v; }))}
           <div style="font-size:10px;color:var(--text-dim);margin-top:4px;line-height:1.3">
