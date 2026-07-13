@@ -2,7 +2,8 @@ import { HassClient, type HaApi } from './ha-client.js';
 import { SensorDiscovery } from './sensor-discovery.js';
 import { loadStore, saveStore, newId, repairFloor } from './storage.js';
 import { slugToName, normMac, localToWorld, segCrossesSolidWall, mowerSweepWaypoints,
-         ROBOT_DEFAULTS, robotLedColor } from './geometry.js';
+         ROBOT_DEFAULTS, robotLedColor, parseVacuumPosition, vacuumRawToWorld,
+         vacuumRawHeadingRad } from './geometry.js';
 import { stepFusion, newFusionState, DEFAULT_FUSION_CFG,
          type FusionState, type FusionCand } from './fusion.js';
 import { fitGeoTransform, latLonToPlan, clampToBoundary, planBearingDeg, compass8, medianLatLon,
@@ -2703,6 +2704,22 @@ export class Planner extends EventTarget {
     return { x: pos.x, y: pos.y, headingRad };
   }
 
+  // LIVE vacuum position (#6): when a `posEntity` is bound and its
+  // `vacuum_position` attribute parses, project the raw map units into plan world
+  // mm via the calibration transform. `headingRad` comes from the raw map angle
+  // when present (best-effort, same flip/rotation as the position); else null so
+  // the controller derives heading from the motion vector. Null when unbound / no
+  // entity / unparseable → the controller falls back to the simulated roam.
+  private _vacuumLive(r: RobotFixture): { x: number; y: number; headingRad: number | null } | null {
+    if (r.kind !== 'vacuum' || !r.posEntity) return null;
+    const attrs = this.hass?.states?.[r.posEntity]?.attributes as Record<string, unknown> | undefined;
+    const raw = parseVacuumPosition(attrs);
+    if (!raw) return null;
+    const w = vacuumRawToWorld(raw, r);
+    const headingRad = raw.a != null && isFinite(raw.a) ? vacuumRawHeadingRad(raw.a, r) : null;
+    return { x: w.x, y: w.y, headingRad };
+  }
+
   // Advance all robots on the current floor (called from the 2D RAF).
   stepRobots(dt: number): void {
     const f = this.floor();
@@ -2732,15 +2749,30 @@ export class Planner extends EventTarget {
       rs.activity = act;
       rs.led = robotLedColor(act);
 
-      if (act === 'idle' || act === 'paused' || act === 'error') continue;   // freeze in place
+      // A live vacuum position tracks even while idle/paused (the real robot may
+      // be paused mid-room); the sim freeze-gate only applies without a live fix.
+      const liveVac = r.kind === 'vacuum' ? this._vacuumLive(r) : null;
+      if (!liveVac && (act === 'idle' || act === 'paused' || act === 'error')) continue;   // freeze in place
 
       if (r.kind === 'mower') this._stepMower(r, rs, f, act, dt);
-      else this._stepVacuum(r, rs, f, act, dt);
+      else this._stepVacuum(r, rs, f, act, dt, liveVac);
     }
   }
 
-  private _stepVacuum(r: RobotFixture, rs: RobotState, f: Floor, act: string, dt: number): void {
+  private _stepVacuum(r: RobotFixture, rs: RobotState, f: Floor, act: string, dt: number,
+                      live?: { x: number; y: number; headingRad: number | null } | null): void {
     const spd = ROBOT_DEFAULTS.vacuum.speed;
+    // LIVE mode: ease toward the real position (never snap-park on docked — the
+    // live fix already sits on the dock). Heading from the map angle when present,
+    // else the on-screen motion vector. Overrides all simulated goal-picking.
+    if (live) {
+      const px = rs.x, py = rs.y;
+      const dx = live.x - rs.x, dy = live.y - rs.y, d = Math.hypot(dx, dy);
+      if (d > 1) { const step = Math.min(spd * 3 * dt, d); rs.x += dx / d * step; rs.y += dy / d * step; }
+      if (live.headingRad != null) rs.heading = live.headingRad;
+      else { const vx = rs.x - px, vy = rs.y - py; if (Math.hypot(vx, vy) > 1) rs.heading = Math.atan2(vy, vx); }
+      return;
+    }
     if (act === 'docked' || act === 'returning') {
       rs.goalX = r.x; rs.goalY = r.y;   // head to / hold the dock
     } else {

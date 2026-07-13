@@ -42,9 +42,11 @@
   const results = [];
   const ok = (cond, msg) => { results.push((cond ? 'PASS ' : 'FAIL ') + msg); };
 
-  // 1. Two media clickables collected.
+  // 1. Three media clickables collected — 3 since the local-control batch:
+  // unbound TVs (tv2) are intentionally clickable regardless of binding
+  // (click flips localState).
   const mc = r._mediaClickables;
-  ok(Array.isArray(mc) && mc.length === 2, `mediaClickables.length=${mc?.length} (want 2)`);
+  ok(Array.isArray(mc) && mc.length === 3, `mediaClickables.length=${mc?.length} (want 3)`);
 
   // 2. userData stamped correctly (kind + entity + fixtureId), sorted by fixtureId.
   const uds = mc.map(g => g.userData).sort((a,b)=> String(a.fixtureId).localeCompare(String(b.fixtureId)));

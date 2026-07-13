@@ -1,0 +1,88 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>nowplaying test</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<script type="module">
+  // Now-playing cards (#11): a camera-facing sprite above media_player-bound
+  // furniture that is playing/paused. Renderer-level smoke test:
+  //   • playing with a title builds one sprite in _nowPlayingGroup (text canvas)
+  //   • off/idle → no sprite; non-media binding → no sprite
+  //   • paused builds a (dimmed) sprite; sprite sits above the piece
+  //   • a category-layer-off skips the piece
+  //   • rebuild replaces (never leaks) the sprite; the three-view _keyNowPlaying
+  //     hash flips on a title change (pure formula, mirrored here)
+  const mod = await import('./assets/three-renderer.js');
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+
+  const results = [];
+  const assert = (name, cond, detail = '') => results.push(`${cond ? 'PASS' : 'FAIL'} ${name}${detail ? ' (' + detail + ')' : ''}`);
+
+  const tv = { id: 'tv1', x: 3000, y: 2500, w: 1200, h: 200, kind: 'tv', rotation: 0, entity_id: 'media_player.living' };
+  const lampMedia = { id: 'sp1', x: 1000, y: 1000, w: 300, h: 300, kind: 'block', rotation: 0, entity_id: 'light.not_media' };
+  const floor = {
+    id: 'f1', name: 'F', w: 6000, d: 5000,
+    walls: [], furniture: [tv, lampMedia], lights: [], switches: [], sensors: [],
+    motionSensors: [], envSensors: [], doors: [], windows: [], bg: null,
+    model3d: null, look3d: null, rooms: [],
+  };
+  r.updateFloor(floor, { preset: 'day' });
+
+  const sp = (s = 'playing', title = 'Bohemian Rhapsody', artist = 'Queen', picture = '') =>
+    ({ [tv.entity_id]: { state: s, attributes: { media_title: title, media_artist: artist, entity_picture: picture } } });
+  const npCount = () => r._nowPlayingGroup.children.length;
+
+  // ── playing → one sprite with a text canvas ──────────────────────────────
+  let states = sp('playing');
+  r.updateNowPlaying(floor.furniture, undefined, id => states[id] || null, '');
+  assert('playing builds exactly one now-playing sprite', npCount() === 1, `n=${npCount()}`);
+  const rec = r._nowPlaying['tv1'];
+  assert('record tracked for the media piece', !!rec && rec.sprite.isSprite === true);
+  assert('sprite canvas carries rendered text (width > 100)', !!rec && rec.cv.width > 100, rec && `w=${rec.cv.width}`);
+  // Sits above the piece (piece top = def.ht + 350; TV ht is ~1100+, well above 0).
+  assert('sprite floats above the piece', !!rec && rec.sprite.position.y > 500, rec && `y=${Math.round(rec.sprite.position.y)}`);
+
+  // ── paused → dimmer sprite still builds ──────────────────────────────────
+  states = sp('paused');
+  r.updateNowPlaying(floor.furniture, undefined, id => states[id] || null, '');
+  assert('paused builds a (dimmed) sprite', npCount() === 1, `n=${npCount()}`);
+
+  // ── off / idle → no sprite; non-media binding never counts ───────────────
+  states = sp('idle');
+  r.updateNowPlaying(floor.furniture, undefined, id => states[id] || null, '');
+  assert('idle → no now-playing sprite', npCount() === 0, `n=${npCount()}`);
+  assert('idle → record cleared', !r._nowPlaying['tv1']);
+  states = { 'media_player.living': { state: 'off', attributes: {} } };
+  r.updateNowPlaying(floor.furniture, undefined, id => states[id] || null, '');
+  assert('off → no sprite', npCount() === 0);
+  // A playing state with NO title must not render (nothing to show).
+  states = { 'media_player.living': { state: 'playing', attributes: { media_artist: 'X' } } };
+  r.updateNowPlaying(floor.furniture, undefined, id => states[id] || null, '');
+  assert('playing without a title → no sprite', npCount() === 0);
+
+  // ── category-layer skip (TV is an appliance) ─────────────────────────────
+  states = sp('playing');
+  r.updateNowPlaying(floor.furniture, undefined, id => states[id] || null, '', { appliances: false });
+  assert('appliances layer off skips the TV card', npCount() === 0, `n=${npCount()}`);
+  r.updateNowPlaying(floor.furniture, undefined, id => states[id] || null, '', { appliances: true, furniture: true });
+  assert('appliances layer on shows the card again', npCount() === 1, `n=${npCount()}`);
+
+  // ── rebuild replaces (no leak): title change → still exactly one sprite ───
+  states = sp('playing', 'A Different Song');
+  r.updateNowPlaying(floor.furniture, undefined, id => states[id] || null, '');
+  assert('title change rebuild keeps exactly one sprite', npCount() === 1, `n=${npCount()}`);
+
+  // ── three-view _keyNowPlaying flips on a title change (pure formula) ──────
+  const keyOf = (title, pic = '') => {
+    const s = { state: 'playing', attributes: { media_title: title, entity_picture: pic } };
+    return `1|11|tv1:${s.state}:${s.attributes.media_title}:${s.attributes.entity_picture}`;
+  };
+  assert('_keyNowPlaying flips on title change', keyOf('One') !== keyOf('Two'));
+  assert('_keyNowPlaying flips on album-art change', keyOf('One', '/a.jpg') !== keyOf('One', '/b.jpg'));
+  assert('_keyNowPlaying stable when unchanged', keyOf('One') === keyOf('One'));
+
+  const pass = results.filter(x => x.startsWith('PASS')).length;
+  const fail = results.filter(x => x.startsWith('FAIL')).length;
+  document.title = `NOWPLAYING ${fail === 0 ? 'PASS' : 'FAIL'} ${pass}/${pass + fail} | ` + results.join(' · ');
+</script>

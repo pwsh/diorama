@@ -480,6 +480,7 @@ export class ThreeView extends LitElement {
   private _keyAlarm = '';
   private _keySafety = '';
   private _keyRobots = '';
+  private _keyNowPlaying = '';
   private _keyCameras = '';
   private _keyPzones = '';
   private _keyLights = '';
@@ -506,7 +507,7 @@ export class ThreeView extends LitElement {
         r.clearTransientGroups();
         this._keyFloor = this._keyDoors = this._keySensors = '';
         this._keyMotion = this._keyEnv = this._keyBle = this._keyAlarm = this._keySafety = '';
-        this._keyCameras = this._keyPzones = '';
+        this._keyCameras = this._keyPzones = this._keyNowPlaying = '';
         this._keyLights = this._keyZones = this._keyHalos = '';
         this._keyGhost = this._keyGps = this._keyWeather = '';
         this._trigPrevOn.clear();
@@ -701,6 +702,20 @@ export class ThreeView extends LitElement {
       // Per-frame: position/animate the moving robot bodies from the planner's
       // controller state (the single source of truth shared with 2D).
       r.updateRobotRigs(robotList, p.robotStates);
+
+      // Now-playing cards (#11): sprites above media_player-bound furniture that
+      // is playing/paused. Own dirty key = configRev + per-media (state|title|
+      // picture) hash + the furniture/appliance layer flags (per-piece skipping).
+      const keyNP = `${p.configRev}|${layers.furniture !== false ? 1 : 0}${layers.appliances !== false ? 1 : 0}|` +
+        f.furniture.filter(fu => fu.entity_id?.startsWith('media_player.')).map(fu => {
+          const s = states[fu.entity_id!];
+          const a = s?.attributes as Record<string, unknown> | undefined;
+          return `${fu.id}:${s?.state ?? '-'}:${(a?.media_title as string) ?? ''}:${(a?.entity_picture as string) ?? ''}`;
+        }).join('|');
+      if (keyNP !== this._keyNowPlaying) {
+        this._keyNowPlaying = keyNP;
+        r.updateNowPlaying(f.furniture, p.store.customObjects, id => states[id] || null, p.haBaseUrl, layers);
+      }
 
       // Camera fixtures (#10): structural + entity state (recording tint). Rides
       // the sensors layer. Rebuild on placement / rotation / state change.

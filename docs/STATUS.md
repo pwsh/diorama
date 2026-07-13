@@ -48,6 +48,20 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Roadmap batch H: Roborock live position + media now-playing —
+  TOP 12 COMPLETE** (8 files; robot-test extended 24→**48/48**, new
+  `nowplaying-test.html` **15/15**; media-raycast expectation corrected
+  to 3 (stale since the local-control batch); full green set intact):
+  `RobotFixture.posEntity` + map calibration (scale/offset/flip/rot,
+  one-click "Set dock as reference" solve) — a bound Roborock map
+  entity's live `vacuum_position` drives the 3D/2D vacuum instead of
+  the simulated roam, with seamless fallback. Media now-playing: any
+  furniture bound to a media_player floats a title/artist card with
+  best-effort CORS album art (dedicated `_nowPlayingGroup` +
+  `_keyNowPlaying`) + a 2D ♪ line. All twelve docs/ROADMAP.md picks are
+  now shipped (batches E–H); the roadmap's top-12 list is checked off.
+  CLAUDE.md "Roborock live position & media now-playing (batch H)".
+
 - **Roadmap batch G: presence zones, geo event pins, cameras, plumbob
   colors** (11 files + 3 new test pages: roadmap-geom 25/25, geoevents
   16/16, plumbob-color 12/12; full green set intact): FP2/Frigate-style

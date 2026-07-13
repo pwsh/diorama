@@ -12,6 +12,7 @@ import {
   doorEndpoint, doorOpenDeltaDeg, doorOpenFraction, doorSpanCenter, windowEndpoints, wallCutsForSegment, wallKind,
   ENV_KINDS, envKindOf, envColor, envValueText, envScale,
   closedWallLoops, loopContaining, roomLabel,
+  parseNowPlaying, isMediaPlayerId,
 } from './geometry.js';
 import { compass8 } from './geo.js';
 import type { Planner } from './planner.js';
@@ -1685,6 +1686,19 @@ function drawFurniture(ctx: CanvasRenderingContext2D, p: Planner, view: View,
       ctx.fillStyle = '#ddd'; ctx.font = '10px sans-serif';
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
       ctx.fillText(piece.label, 0, 0);
+    }
+    // Now-playing (#11): a `♪ title` line under the label for a media_player-bound
+    // piece that is playing. Reads live state (LIVE-path; the RAF redraws every
+    // frame). Paused/idle → nothing in 2D (the 3D card shows paused dimmed).
+    if (isMediaPlayerId(piece.entity_id) && p.hass?.states) {
+      const np = parseNowPlaying(p.hass.states[piece.entity_id!]);
+      if (np && np.tier === 'playing') {
+        let txt = `♪ ${np.title}`;
+        if (txt.length > 30) txt = txt.slice(0, 29) + '…';
+        ctx.fillStyle = 'rgba(0,230,118,0.95)'; ctx.font = '9px sans-serif';
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText(txt, 0, (piece.label ? 11 : 0));
+      }
     }
     // Front chevron: subtle orange arrow just past the functional front edge
     // (canvas-Y +halfH, local -Z = world -Y — where doors/screens/seats/faces

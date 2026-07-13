@@ -34,6 +34,7 @@ import {
   BLE_PROXY_DEFAULTS, bleProxyHeight,
   alarmHeight, alarmStateColor, safetyColor,
   robotGlyph, robotColor, robotLedColor,
+  parseVacuumPosition, solveVacuumDockOffset,
   presenceZoneColor, cameraFov, cameraRange, cameraHeight, CAMERA_DEFAULTS,
   FURNITURE_KINDS, furnitureKind, resolveFurnitureDef, WINDOW_DEFAULTS,
   ENV_KINDS, ENV_DEFAULTS, ENV_SCALE_MIN, ENV_SCALE_MAX,
@@ -1309,7 +1310,7 @@ export class Sidebar extends LitElement {
                   title=${bound ? 'Run / dock the robot' : 'Toggle the demo run/return'}
                   @click=${() => p.toggleRobot(r)}>${act === 'cleaning' || act === 'mowing' ? 'Dock' : 'Run'}</button>
         </div>
-        ${kind === 'mower' ? this._robotGpsRows(r) : nothing}
+        ${kind === 'mower' ? this._robotGpsRows(r) : this._robotVacuumPosRows(r)}
         <div style="font-size:10px;color:var(--text-dim);margin-top:4px;line-height:1.3">
           ${bound
             ? 'Bound: state follows the entity. Click the robot to run/dock.'
@@ -1358,6 +1359,73 @@ export class Sidebar extends LitElement {
         </div>
       </div>
     `;
+  }
+
+  // Vacuum LIVE position (#6): bind a Roborock map camera/image/sensor entity
+  // carrying `vacuum_position`, calibrate the map→plan transform, and one-click
+  // solve the offset by parking on the dock. The RAW readout below refreshes on
+  // each sidebar render (posEntity is LIVE-path, so park + click to calibrate).
+  private _robotVacuumPosRows(r: RobotFixture) {
+    const p = this.planner;
+    const upd = (mut: () => void) => { mut(); p.save(); p.emitConfig(); };
+    const rawAttrs = r.posEntity
+      ? (p.hass?.states?.[r.posEntity]?.attributes as Record<string, unknown> | undefined) : undefined;
+    const raw = parseVacuumPosition(rawAttrs);
+    const numRow = (label: string, val: number, mut: (n: number) => void, step = 1) => html`
+      <div class="row"><label>${label}</label>
+        <input type="number" step=${step} .value=${String(val)}
+               @input=${(e: Event) => upd(() => mut(parseFloat((e.target as HTMLInputElement).value) || 0))}>
+      </div>`;
+    return html`
+      <div style="border-top:1px solid var(--border);margin-top:6px;padding-top:6px">
+        <div style="font-size:10px;color:var(--text-dim);margin-bottom:3px">Live position (Roborock map)</div>
+        <div class="row"><label>Position entity</label>
+          <span style="font-size:11px;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r.posEntity || '— none —'}</span>
+        </div>
+        <div style="display:flex;gap:4px">
+          <button class="btn" style="flex:1;font-size:11px"
+                  @click=${() => this._pickRobotPosEntity(r)}>${r.posEntity ? 'Rebind' : 'Bind'} map…</button>
+          ${r.posEntity ? html`<button class="btn" style="font-size:11px"
+                  @click=${() => upd(() => { r.posEntity = null; })}>×</button>` : nothing}
+        </div>
+        ${r.posEntity ? html`
+          <div style="font-size:10px;color:var(--text-dim);margin-top:4px">Map calibration</div>
+          ${numRow('Scale (mm/unit)', r.posScale ?? 1, n => { r.posScale = n; }, 0.001)}
+          ${numRow('Offset X (mm)', Math.round(r.posOffsetX ?? 0), n => { r.posOffsetX = n; })}
+          ${numRow('Offset Y (mm)', Math.round(r.posOffsetY ?? 0), n => { r.posOffsetY = n; })}
+          ${numRow('Rotation (deg)', r.posRotDeg ?? 0, n => { r.posRotDeg = n; })}
+          <div class="row"><label>Flip Y</label>
+            <input type="checkbox" .checked=${!!r.posFlipY}
+                   @change=${(e: Event) => upd(() => { r.posFlipY = (e.target as HTMLInputElement).checked; })}>
+          </div>
+          <div style="font-size:10px;color:var(--text-dim);margin-top:3px">
+            Raw: ${raw ? `x=${raw.x.toFixed(0)} y=${raw.y.toFixed(0)}${raw.a != null ? ` a=${raw.a.toFixed(0)}°` : ''}` : '— no vacuum_position —'}
+          </div>
+          <button class="btn" style="width:100%;margin-top:4px;font-size:11px"
+                  ?disabled=${!raw}
+                  title="Park the vacuum on its dock, then click to solve the X/Y offset"
+                  @click=${() => upd(() => {
+                    const rr = parseVacuumPosition(p.hass?.states?.[r.posEntity!]?.attributes as Record<string, unknown> | undefined);
+                    if (!rr) return;
+                    const sol = solveVacuumDockOffset(rr, { x: r.x, y: r.y }, r);
+                    r.posOffsetX = sol.posOffsetX; r.posOffsetY = sol.posOffsetY;
+                  })}>Set dock as reference</button>
+          <div style="font-size:10px;color:var(--text-dim);margin-top:3px;line-height:1.3">
+            No fix / unparseable → simulated roam. Park on the dock and click above to align the map origin.
+          </div>
+        ` : nothing}
+      </div>
+    `;
+  }
+
+  private _pickRobotPosEntity(r: RobotFixture): void {
+    this.dispatchEvent(new CustomEvent('open-entity-picker', {
+      bubbles: true, composed: true,
+      detail: {
+        domain: ['camera', 'image', 'sensor'],
+        onPick: (id: string) => { r.posEntity = id; this.planner.save(); this.planner.emitConfig(); },
+      },
+    }));
   }
 
   private _pickRobotEntity(r: RobotFixture): void {

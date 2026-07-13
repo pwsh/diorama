@@ -31,6 +31,7 @@
     import {
       segCrossesSolidWall, mowerSweepWaypoints, segmentsIntersect,
       pointInPolygon, closedWallLoops, robotLedColor, ROBOT_DEFAULTS,
+      parseVacuumPosition, vacuumRawToWorld, vacuumRawHeadingRad, solveVacuumDockOffset,
     } from './geometry.mod.js';
     import { fitGeoTransform, latLonToPlan, clampToBoundary } from './geo.mod.js';
 
@@ -165,6 +166,107 @@
     const far = clampToBoundary(5000, 4000, boundaryMm, 90000, 2000);  // way east
     ok('beyond-boundary clamps onto ring edge', near(far.x, 5000 + boundaryMm, 1),
        `(${far.x.toFixed(0)},${far.y.toFixed(0)})`);
+
+    // ── Roborock live vacuum position (#6): parsing ──────────────────────────
+    // Object, array, and JSON-string forms of vacuum_position + fallback attrs.
+    ok('parse object {x,y,a}', (() => {
+      const p = parseVacuumPosition({ vacuum_position: { x: 25000, y: -12000, a: 90 } });
+      return p && p.x === 25000 && p.y === -12000 && p.a === 90;
+    })());
+    ok('parse array [x,y,a]', (() => {
+      const p = parseVacuumPosition({ vacuum_position: [1000, 2000, 45] });
+      return p && p.x === 1000 && p.y === 2000 && p.a === 45;
+    })());
+    ok('parse array [x,y] (no angle)', (() => {
+      const p = parseVacuumPosition({ vacuum_position: [1000, 2000] });
+      return p && p.x === 1000 && p.y === 2000 && p.a === undefined;
+    })());
+    ok('parse JSON-string object', (() => {
+      const p = parseVacuumPosition({ vacuum_position: '{"x":300,"y":-400,"angle":180}' });
+      return p && p.x === 300 && p.y === -400 && p.a === 180;   // `angle` alias
+    })());
+    ok('parse JSON-string array', (() => {
+      const p = parseVacuumPosition({ vacuum_position: '[7,8]' });
+      return p && p.x === 7 && p.y === 8;
+    })());
+    ok('fallback to robot_position', (() => {
+      const p = parseVacuumPosition({ robot_position: { x: 5, y: 6 } });
+      return p && p.x === 5 && p.y === 6;
+    })());
+    ok('fallback to position', (() => {
+      const p = parseVacuumPosition({ position: [9, 10] });
+      return p && p.x === 9 && p.y === 10;
+    })());
+    ok('garbage → null', parseVacuumPosition({ vacuum_position: 'not json' }) === null);
+    ok('missing attr → null', parseVacuumPosition({ foo: 1 }) === null);
+    ok('null attrs → null', parseVacuumPosition(null) === null);
+    ok('non-finite coords → null', parseVacuumPosition({ vacuum_position: { x: 'a', y: 2 } }) === null);
+
+    // ── Calibration transform: raw map units → plan world mm ─────────────────
+    // world = R(rot)·S(scale, flipY)·raw + offset.
+    const idn = vacuumRawToWorld({ x: 100, y: 200 }, {});
+    ok('identity transform', near(idn.x, 100) && near(idn.y, 200), `(${idn.x},${idn.y})`);
+    const scl = vacuumRawToWorld({ x: 100, y: 200 }, { posScale: 10 });
+    ok('scale 10 mm/unit', near(scl.x, 1000) && near(scl.y, 2000), `(${scl.x},${scl.y})`);
+    const flp = vacuumRawToWorld({ x: 100, y: 200 }, { posScale: 10, posFlipY: true });
+    ok('flipY mirrors Y', near(flp.x, 1000) && near(flp.y, -2000), `(${flp.x},${flp.y})`);
+    const rot = vacuumRawToWorld({ x: 100, y: 0 }, { posScale: 1, posRotDeg: 90 });
+    ok('rotate 90° maps +x→+y', near(rot.x, 0) && near(rot.y, 100), `(${rot.x},${rot.y})`);
+    const off = vacuumRawToWorld({ x: 10, y: 20 }, { posScale: 1, posOffsetX: 500, posOffsetY: -300 });
+    ok('offset added last', near(off.x, 510) && near(off.y, -280), `(${off.x},${off.y})`);
+    const combo = vacuumRawToWorld({ x: 100, y: 200 },
+      { posScale: 10, posFlipY: true, posRotDeg: 90, posOffsetX: 1000, posOffsetY: 2000 });
+    // S: (1000,-2000); R90: (2000,1000); +offset: (3000,3000).
+    ok('combined scale+flip+rot+offset', near(combo.x, 3000) && near(combo.y, 3000), `(${combo.x},${combo.y})`);
+
+    // Heading transform: map angle → plan heading (radians).
+    ok('heading rot only', near(vacuumRawHeadingRad(0, { posRotDeg: 90 }), Math.PI / 2, 1e-6));
+    ok('heading flip negates', near(vacuumRawHeadingRad(90, { posFlipY: true }), -Math.PI / 2, 1e-6));
+
+    // ── Dock-reference one-click solve ───────────────────────────────────────
+    // Park raw at (250,-120) map units; dock world = (1500,900); scale 10, rot 0.
+    // Solve offset so the transform lands the raw point on the dock.
+    const cal = { posScale: 10, posRotDeg: 0, posFlipY: false };
+    const rawDock = { x: 250, y: -120 };
+    const dock = { x: 1500, y: 900 };
+    const sol = solveVacuumDockOffset(rawDock, dock, cal);
+    const back = vacuumRawToWorld(rawDock, { ...cal, ...sol });
+    ok('dock-solve maps raw onto dock', near(back.x, dock.x) && near(back.y, dock.y),
+       `off=(${sol.posOffsetX.toFixed(0)},${sol.posOffsetY.toFixed(0)}) back=(${back.x.toFixed(0)},${back.y.toFixed(0)})`);
+    // With rotation + flip the solve still lands exactly on the dock.
+    const cal2 = { posScale: 5, posRotDeg: 90, posFlipY: true };
+    const sol2 = solveVacuumDockOffset({ x: 300, y: 200 }, { x: -800, y: 640 }, cal2);
+    const back2 = vacuumRawToWorld({ x: 300, y: 200 }, { ...cal2, ...sol2 });
+    ok('dock-solve with rot+flip lands on dock', near(back2.x, -800) && near(back2.y, 640),
+       `back=(${back2.x.toFixed(0)},${back2.y.toFixed(0)})`);
+
+    // ── LIVE mode overrides simulation + fallback on parse failure ───────────
+    // Mirror Planner._vacuumLive + the LIVE branch of _stepVacuum: given a bound
+    // posEntity whose vacuum_position parses, the puck eases toward the live world
+    // point (spd·3 catch-up) regardless of simulated goals; a parse failure yields
+    // no live fix → the controller falls back to the sim roam.
+    const calL = { posScale: 10, posOffsetX: 0, posOffsetY: 0, posRotDeg: 0 };
+    const vacuumLive = (attrs) => {
+      const raw = parseVacuumPosition(attrs);
+      if (!raw) return null;
+      const w = vacuumRawToWorld(raw, calL);
+      return { x: w.x, y: w.y, headingRad: raw.a != null ? vacuumRawHeadingRad(raw.a, calL) : null };
+    };
+    ok('parse failure → no live fix (sim fallback)', vacuumLive({ foo: 1 }) === null);
+    // Ease toward a fixed live target from a wrong start; must converge, ignoring
+    // any random sim goal-picking (there is none in LIVE mode).
+    const live = vacuumLive({ vacuum_position: { x: 400, y: 250 } });   // → world (4000,2500)
+    ok('live fix projects to world mm', live && near(live.x, 4000) && near(live.y, 2500),
+       live && `(${live.x},${live.y})`);
+    let lx = 0, ly = 0; const spdL = ROBOT_DEFAULTS.vacuum.speed;
+    for (let t = 0; t < 400; t++) {
+      const dx = live.x - lx, dy = live.y - ly, dd = Math.hypot(dx, dy);
+      if (dd < 1) break;
+      const step = Math.min(spdL * 3 * dt, dd);   // LIVE catch-up factor
+      lx += dx / dd * step; ly += dy / dd * step;
+    }
+    ok('LIVE easing converges to the live position', Math.hypot(live.x - lx, live.y - ly) < 5,
+       `dist=${Math.hypot(live.x - lx, live.y - ly).toFixed(1)}`);
 
     // ── LED color mapping (visual state) ─────────────────────────────────────
     ok('LED cleaning = green', robotLedColor('cleaning') === '#43a047');

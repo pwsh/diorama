@@ -859,6 +859,113 @@ export function robotColor(kind: 'vacuum' | 'mower'): string {
   return kind === 'mower' ? '#66bb6a' : '#455a64';
 }
 
+// ── Roborock live vacuum position (#6) ─────────────────────────────────────
+// The core Roborock integration's map camera/image entity carries a live
+// `vacuum_position` attribute (x/y/angle in the robot's internal map units).
+// Parse it robustly: accept an object `{x,y,a?}`, an array `[x,y,a?]`, or a JSON
+// string of either; fall back to `robot_position` then `position`. `a`/`angle`
+// is the optional heading in map degrees. Null on anything unparseable.
+export interface VacuumPos { x: number; y: number; a?: number; }
+export function parseVacuumPosition(
+  attrs: Record<string, unknown> | null | undefined,
+): VacuumPos | null {
+  if (!attrs) return null;
+  for (const key of ['vacuum_position', 'robot_position', 'position']) {
+    let v: unknown = attrs[key];
+    if (v == null) continue;
+    if (typeof v === 'string') {
+      try { v = JSON.parse(v); } catch { continue; }
+    }
+    const p = _coerceVacuumPos(v);
+    if (p) return p;
+  }
+  return null;
+}
+function _coerceVacuumPos(v: unknown): VacuumPos | null {
+  if (Array.isArray(v)) {
+    const x = Number(v[0]), y = Number(v[1]);
+    if (!isFinite(x) || !isFinite(y)) return null;
+    const a = Number(v[2]);
+    return isFinite(a) && v.length > 2 ? { x, y, a } : { x, y };
+  }
+  if (v && typeof v === 'object') {
+    const o = v as Record<string, unknown>;
+    const x = Number(o.x), y = Number(o.y);
+    if (!isFinite(x) || !isFinite(y)) return null;
+    const araw = o.a ?? o.angle;
+    const a = Number(araw);
+    return araw != null && isFinite(a) ? { x, y, a } : { x, y };
+  }
+  return null;
+}
+
+// Calibration transform mapping a raw map-unit vacuum position → plan world mm:
+//   world = R(posRotDeg) · S(posScale, posFlipY) · raw + offset
+// i.e. scale first (optionally mirroring Y for a flipped map frame), then rotate
+// by posRotDeg (screen-standard CCW about the origin), then translate by the
+// offset. Defaults are identity (scale 1, rot 0, no flip, zero offset).
+export interface VacuumCal {
+  posScale?: number; posOffsetX?: number; posOffsetY?: number;
+  posFlipY?: boolean; posRotDeg?: number;
+}
+export function vacuumRawToWorld(raw: VacuumPos, cal: VacuumCal): Vec2 {
+  const scale = cal.posScale ?? 1;
+  const sx = raw.x * scale;
+  const sy = raw.y * scale * (cal.posFlipY ? -1 : 1);
+  const th = (cal.posRotDeg ?? 0) * Math.PI / 180;
+  const c = Math.cos(th), s = Math.sin(th);
+  return {
+    x: c * sx - s * sy + (cal.posOffsetX ?? 0),
+    y: s * sx + c * sy + (cal.posOffsetY ?? 0),
+  };
+}
+// Plan-frame heading (radians, atan2(dy,dx) convention) for a raw map angle
+// `a` (degrees), applying the same flip + rotation as the position transform.
+// Flip mirrors Y → negates the angle; rotation adds posRotDeg. Best-effort — the
+// robot's angle convention varies, so callers fall back to the motion vector.
+export function vacuumRawHeadingRad(a: number, cal: VacuumCal): number {
+  const deg = (cal.posFlipY ? -a : a) + (cal.posRotDeg ?? 0);
+  return deg * Math.PI / 180;
+}
+// One-click dock-reference solve: given the RAW position read while the vacuum is
+// parked on its dock and the dock's world coords, solve posOffsetX/posOffsetY so
+// vacuumRawToWorld(rawDock) lands exactly on the dock — holding scale/rot/flip.
+export function solveVacuumDockOffset(
+  rawDock: VacuumPos, dock: Vec2, cal: VacuumCal,
+): { posOffsetX: number; posOffsetY: number } {
+  const scale = cal.posScale ?? 1;
+  const sx = rawDock.x * scale;
+  const sy = rawDock.y * scale * (cal.posFlipY ? -1 : 1);
+  const th = (cal.posRotDeg ?? 0) * Math.PI / 180;
+  const c = Math.cos(th), s = Math.sin(th);
+  const rx = c * sx - s * sy, ry = s * sx + c * sy;
+  return { posOffsetX: dock.x - rx, posOffsetY: dock.y - ry };
+}
+
+// ── Media now-playing (#11) ────────────────────────────────────────────────
+// Resolve a media_player entity's state into a now-playing card model, or null
+// when nothing should show. Only playing/buffering ('playing' tier) and paused
+// ('paused' tier, rendered dimmed) qualify AND a media_title must be present.
+export interface NowPlaying { tier: 'playing' | 'paused'; title: string; artist: string; picture: string; }
+export function parseNowPlaying(
+  st: { state: string; attributes?: Record<string, unknown> } | null | undefined,
+): NowPlaying | null {
+  if (!st) return null;
+  const s = st.state;
+  const tier: 'playing' | 'paused' | null =
+    (s === 'playing' || s === 'buffering') ? 'playing' : (s === 'paused' ? 'paused' : null);
+  if (!tier) return null;
+  const a = st.attributes ?? {};
+  const title = typeof a.media_title === 'string' ? a.media_title : '';
+  if (!title) return null;
+  const artist = typeof a.media_artist === 'string' ? a.media_artist : '';
+  const picture = typeof a.entity_picture === 'string' ? a.entity_picture : '';
+  return { tier, title, artist, picture };
+}
+export function isMediaPlayerId(id: string | null | undefined): boolean {
+  return !!id && id.startsWith('media_player.');
+}
+
 // Do segments p1→p2 and p3→p4 properly intersect? Pure, deterministic. Used by
 // the robot movement controller for straight-line wall avoidance (test a
 // proposed move segment against solid wall runs). Colinear/touching-endpoint

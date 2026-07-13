@@ -136,15 +136,22 @@ codebase so this doc stays honest as items land.
 
 ## Top 12 picks (wow ÷ effort, Diorama-fit weighted)
 
-1. Frigate zone occupancy → room glow (S/5)
-2. Water-leak puddles (S/4 — W3 puddle tech exists)
-3. Covers: garage door + window blinds (M/4)
-4. Doorbell transient pulse (M/4 — buys the pulse primitive)
-5. Aqara FP2 zone polygons (M/5)
-6. Roborock live vacuum position (M/4)
-7. Battery badge layer (S/3)
-8. Per-device power glow (S/3)
-9. geo_location event pins (M/4)
-10. Camera FOV + snapshot fixture (M/4)
-11. Media now-playing art (M/4)
-12. New EnvKinds: radon / noise / NO₂ / O₃ / AQI (S/2 each)
+**All twelve shipped July 2026** (batches E–H; see docs/STATUS.md ledger):
+
+1. ✅ Frigate zone occupancy → room glow (`Room.occupancyEntity`)
+2. ✅ Water-leak puddles (SafetySensor kind `leak`)
+3. ✅ Covers: garage door (`Door.kind 'garage'`) + window blinds (`Window.coverEntity`)
+4. ✅ Doorbell transient pulse (`Door.doorbellEntity` + TransientPulse primitive)
+5. ✅ Aqara FP2 zone polygons (`Floor.presenceZones`)
+6. ✅ Roborock live vacuum position (`RobotFixture.posEntity` + dock calibration)
+7. ✅ Battery badge layer (`scanBatteryRegistry` sibling resolution)
+8. ✅ Per-device power glow (`Furniture.powerEntity`)
+9. ✅ geo_location event pins (`Planner.geoEventPins`)
+10. ✅ Camera FOV + snapshot fixture (`Floor.cameras`)
+11. ✅ Media now-playing art (`_nowPlayingGroup`)
+12. ✅ New EnvKinds: radon / noise / NO₂ / O₃ / AQI
+
+Next candidates now live in Tiers 2–4 above (sirens, climate hvac_action
+cues, moon phase, EV charger shape, plant droop) plus the architectural
+prerequisites (direct-MQTT bridge for Frigate boxes / Valetudo maps,
+yard/terrain concept).

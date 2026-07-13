@@ -251,6 +251,16 @@ export interface RobotFixture {
   trackerEntity?: string | null; // mower: device_tracker with latitude/longitude (+ optional `direction` heading)
   latEntity?: string | null;     // mower alt-source: separate lat sensor (degrees)
   lonEntity?: string | null;     //                  + lon sensor (degrees)
+  // Vacuum LIVE position (#6): a Roborock map camera/image/sensor entity carrying
+  // a `vacuum_position` attribute (x/y/angle in the robot's internal map units).
+  // Bound → the controller drives the puck from the real position (see
+  // Planner._vacuumLive / vacuumRawToWorld); unbound/parse-fail → simulated roam.
+  posEntity?: string | null;
+  posScale?: number;             // mm per map unit (default 1)
+  posOffsetX?: number;           // world-mm offset (default 0)
+  posOffsetY?: number;
+  posFlipY?: boolean;            // mirror the map Y axis
+  posRotDeg?: number;            // map→plan rotation (0/90/180/270 typical, default 0)
   label?: string;
   localState?: string;           // unbound manual pause: 'paused' (else demo runs autonomously). Inert once bound.
   locked?: boolean;              // canvas move/delete disabled (click-to-toggle still works)

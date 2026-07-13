@@ -16,6 +16,7 @@ import {
   safetyColor, safetyIsFloor, SAFETY_DEFAULTS,
   powerGlowScale,
   robotColor, robotLedColor, ROBOT_DEFAULTS,
+  parseNowPlaying, isMediaPlayerId, type NowPlaying,
   presenceZoneColor, cameraFov, cameraRange, cameraHeight, cameraStateColor,
   ENV_KINDS, envKindOf, envColor, envValueText, envHeight, envScale,
 } from './geometry.js';
@@ -717,6 +718,12 @@ export class ThreeDRenderer {
   // Transient event pulses (doorbell rings). Rebuilt cheaply per tick ONLY while
   // pulses exist; empty + idle = zero cost (see updateDoorbellPulses).
   private _pulseGroup = new THREE.Group();
+  // Now-playing cards (#11): camera-facing sprites above media_player-bound
+  // furniture that is playing/paused. NOT inside _floorGroup (own _keyNowPlaying
+  // dirty key so _keyFloor rebuilds don't churn them). CanvasTextures → pair
+  // _disposeSpriteMaps with _clearGroup. Album art loads async then repaints.
+  private _nowPlayingGroup = new THREE.Group();
+  private _nowPlaying: Record<string, { sprite: THREE.Sprite; cv: HTMLCanvasElement; tex: THREE.CanvasTexture; picUrl: string }> = {};
   private _pulseActive = false;
   // Ghost (glass-house) floors: translucent shells of every OTHER story,
   // stacked at their story heights. Cleared with _clearGroup (no sprites).
@@ -980,7 +987,7 @@ export class ThreeDRenderer {
                     this._bleGroup, this._alarmGroup, this._safetyGroup,
                     this._robotGroup, this._robotRigGroup, this._cameraGroup, this._pzoneGroup,
                     this._lightGroup, this._switchGroup, this._targetGroup, this._ghostGroup,
-                    this._gpsGroup, this._weatherGroup, this._pulseGroup);
+                    this._gpsGroup, this._weatherGroup, this._pulseGroup, this._nowPlayingGroup);
 
     this._controls = new OrbitControls(this._camera, this._renderer.domElement);
     this._controls.enableDamping = true;
@@ -1435,10 +1442,12 @@ export class ThreeDRenderer {
       this._sensorGroup, this._motionGroup, this._bleGroup, this._alarmGroup,
       this._safetyGroup, this._robotGroup, this._robotRigGroup, this._cameraGroup, this._pzoneGroup,
       this._lightGroup, this._switchGroup, this._targetGroup, this._ghostGroup,
-      this._pulseGroup,
+      this._pulseGroup, this._nowPlayingGroup,
     ]) {
+      this._disposeSpriteMaps(g);
       this._clearGroup(g);
     }
+    this._nowPlaying = {};
     this._pulseActive = false;
     // Robot rigs live in _robotRigGroup (just cleared); drop their bookkeeping so
     // updateRobotRigs rebuilds fresh on the next floor.
@@ -1755,6 +1764,10 @@ export class ThreeDRenderer {
     // FP2-style presence-zone patches ride the zones layer.
     this._pzoneGroup.visible = z;
     this._targetGroup.visible = v.targets !== false;
+    // Now-playing cards ride the furniture/appliance layers (a media piece can be
+    // either category); show while either is visible. Per-piece skipping in
+    // updateNowPlaying handles the mixed case.
+    this._nowPlayingGroup.visible = v.furniture !== false || v.appliances !== false;
     // GPS + landmark pins ride the geo layer (shared with 2D landmark pins).
     this._gpsGroup.visible = v.geo !== false;
     // Weather effects ride their own layer. Hiding the group also stops the
@@ -4643,6 +4656,106 @@ export class ThreeDRenderer {
   private _disposeRobotRig(rig: RobotRig): void {
     this._robotRigGroup.remove(rig.group);
     this._disposeSubtree(rig.group);
+  }
+
+  // Now-playing cards (#11): a camera-facing sprite above each media_player-bound
+  // furniture piece that is playing/paused, showing the media title (+ artist)
+  // and — best-effort — album art loaded async (CORS) from HA's entity_picture.
+  // Rebuilt under three-view's _keyNowPlaying (per-media state|title|picture
+  // hash). Layer-skips pieces whose category layer is off. Sprite CanvasTextures
+  // are freed via _disposeSpriteMaps (paired with _clearGroup) — the documented
+  // sprite-dispose gotcha.
+  updateNowPlaying(furniture: Furniture[], customObjects: ObjectRecipe[] | undefined,
+                   stateProvider: StateProvider, haBaseUrl: string,
+                   layers?: import('./types.js').Layers2D): void {
+    if (!this._scene) return;
+    this._disposeSpriteMaps(this._nowPlayingGroup);
+    this._clearGroup(this._nowPlayingGroup);
+    this._nowPlaying = {};
+    for (const fu of furniture) {
+      if (!isMediaPlayerId(fu.entity_id)) continue;
+      const def = resolveFurnitureDef(fu, customObjects);
+      // Skip pieces on a hidden category layer (appliances vs furniture).
+      if (layers) {
+        const isApp = (furnitureCat(def) === 'appliance');
+        if (isApp ? layers.appliances === false : layers.furniture === false) continue;
+      }
+      const np = parseNowPlaying(stateProvider(fu.entity_id!));
+      if (!np) continue;
+      const cv = document.createElement('canvas');
+      const tex = new THREE.CanvasTexture(cv);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: tex, transparent: true, depthWrite: false,
+      }));
+      const rec = { sprite, cv, tex, picUrl: np.picture };
+      this._applyNowPlayingCard(rec, np, null);
+      const topY = (fu.elevation ?? 0) + def.ht + 350;
+      const pos = this._w(fu.x, fu.y, topY);
+      sprite.position.set(pos.x, pos.y, pos.z);
+      sprite.userData.outlineSkip = true;
+      this._nowPlayingGroup.add(sprite);
+      this._nowPlaying[fu.id] = rec;
+      // Best-effort album art: load CORS-safe, repaint on success, ignore failure.
+      if (np.picture) {
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.onload = () => {
+          // Guard: a rebuild may have replaced/removed this record meanwhile.
+          if (this._nowPlaying[fu.id] !== rec) return;
+          try { this._applyNowPlayingCard(rec, np, img); } catch { /* taint → keep text-only */ }
+        };
+        img.onerror = () => { /* text-only */ };
+        img.src = (haBaseUrl || '') + np.picture;
+      }
+    }
+  }
+
+  // Paint a now-playing card canvas (text, optional album art on the left) and
+  // resize the sprite to match. `img` null → text-only. Paused tier renders
+  // dimmer with a grey accent + pause glyph.
+  private _applyNowPlayingCard(
+    rec: { sprite: THREE.Sprite; cv: HTMLCanvasElement; tex: THREE.CanvasTexture },
+    np: NowPlaying, img: HTMLImageElement | null,
+  ): void {
+    const cv = rec.cv;
+    const ctx = cv.getContext('2d')!;
+    const dim = np.tier === 'paused';
+    let line = np.title + (np.artist ? ' — ' + np.artist : '');
+    if (line.length > 28) line = line.slice(0, 27) + '…';
+    const glyph = dim ? '⏸ ' : '♪ ';
+    const font = '500 40px system-ui, sans-serif';
+    ctx.font = font;
+    const tw = ctx.measureText(glyph + line).width;
+    const h = 96, pad = 20, art = img ? 72 : 0, gap = img ? 14 : 0;
+    cv.width = Math.ceil(pad * 2 + art + gap + tw);
+    cv.height = h;
+    ctx.font = font;   // resize resets ctx state
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    ctx.beginPath();
+    ctx.roundRect(2, 2, cv.width - 4, h - 4, 20);
+    ctx.fillStyle = dim ? 'rgba(8,10,16,0.72)' : 'rgba(8,10,16,0.86)';
+    ctx.fill();
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = dim ? '#78909c' : '#00e676';
+    ctx.stroke();
+    let tx = pad;
+    if (img) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.roundRect(pad, (h - art) / 2, art, art, 8);
+      ctx.clip();
+      ctx.drawImage(img, pad, (h - art) / 2, art, art);   // only after CORS load; caller catches taint
+      ctx.restore();
+      tx = pad + art + gap;
+    }
+    ctx.font = font;
+    ctx.fillStyle = dim ? '#b0bec5' : '#f5f7fa';
+    ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    ctx.fillText(glyph + line, tx, h / 2 + 2);
+    rec.tex.needsUpdate = true;
+    const H = 300;
+    rec.sprite.scale.set(H * (cv.width / cv.height), H, 1);
   }
 
   // Environmental sensors: a small emissive puck at mount height plus a
@@ -8961,11 +9074,12 @@ export class ThreeDRenderer {
       this._alarmGroup, this._safetyGroup, this._robotGroup, this._robotRigGroup,
       this._cameraGroup, this._pzoneGroup,
       this._lightGroup, this._switchGroup, this._targetGroup, this._gpsGroup, this._weatherGroup,
-      this._pulseGroup,
+      this._pulseGroup, this._nowPlayingGroup,
     ]) {
       this._disposeSpriteMaps(g);
       this._clearGroup(g);
     }
+    this._nowPlaying = {};
     this._weatherClouds = []; this._weatherFogPlanes = []; this._weatherFlash = null;
     this._weatherCloudShadows = []; this._weatherPuddles = []; this._weatherIcicles = [];
     for (const key of Object.keys(this._humanoids)) {
