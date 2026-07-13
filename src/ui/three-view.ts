@@ -9,7 +9,7 @@ import type { ThreeDRenderer, ZoneWorld, HaloWorld, TargetWorld, ActivityContext
 import { localToWorld, transformVerts, pointInPolygon, sensorColor, hexToInt, motionColor, lightIconKind, furnitureKind, resolveFurnitureDef, furnitureCat, alarmStateColor } from '../geometry.js';
 import { compass8 } from '../geo.js';
 import { resolveScenePreset, resolveTimeBucket } from '../time-of-day.js';
-import { conditionIntensity } from '../weather.js';
+import { conditionIntensity, weatherEffectEnabled } from '../weather.js';
 import { loadModel } from '../model-store.js';
 import { newId } from '../storage.js';
 import type { Planner } from '../planner.js';
@@ -360,30 +360,74 @@ export class ThreeView extends LitElement {
     const p = this.planner;
     const w = p.store.weather;
     const wnow = p.weatherNow;
-    const on = layers.weatherFx !== false && w?.effects3d !== false && !!wnow;
-    if (!on || !wnow) {
-      return { condition: 'sunny', intensity01: 0, windKmh: 0, windBearingPlanRad: null, isDay: true };
+    const states = p.hass?.states ?? {};
+    // Effect-resolution flow (W3): the weatherFx LAYER + the effects3d MASTER +
+    // the presence of live weather gate every effect-GROUP member; each member
+    // ALSO honors its own per-key toggle (weatherEffectEnabled). `sunPosition` is
+    // a lighting behavior (not a group member), so it is gated ONLY on its own
+    // key + a live source — never on effects3d or the layer.
+    const groupOn = layers.weatherFx !== false && w?.effects3d !== false && !!wnow;
+    const mk = (k: import('../types.js').WeatherEffectKey) => groupOn && weatherEffectEnabled(w, k);
+    const effects: Record<import('../types.js').WeatherEffectKey, boolean> = {
+      precip: mk('precip'), fog: mk('fog'), lightning: mk('lightning'),
+      wind: mk('wind'), clouds: mk('clouds'), frost: mk('frost'),
+      puddles: mk('puddles'), precipForecast: mk('precipForecast'),
+      sunPosition: !!wnow && weatherEffectEnabled(w, 'sunPosition'),
+    };
+
+    // Fitted geo θ recovers plan-north from calibration (else θ = 0 = plan-north).
+    const fit = p.geoFit();
+    const theta = fit && fit.transform.quality !== 'none' ? fit.transform.thetaRad : 0;
+    const c = Math.cos(theta), s = Math.sin(theta);
+
+    if (!wnow) {
+      return {
+        condition: 'sunny', intensity01: 0, windKmh: 0, windBearingPlanRad: null,
+        isDay: true, effects,
+      };
     }
+
     // Meteorological bearing = direction wind blows FROM (deg CW from geo north).
-    // Wind blows TOWARD from+180. Map that geo direction into the plan frame via
-    // the fitted transform θ (recovers plan-north from calibration), else θ=0.
+    // Wind blows TOWARD from+180. Map that geo direction into the plan frame.
     let planRad: number | null = null;
     if (wnow.windBearing != null && isFinite(wnow.windBearing)) {
-      const fit = p.geoFit();
-      const theta = fit && fit.transform.quality !== 'none' ? fit.transform.thetaRad : 0;
       const b = ((wnow.windBearing + 180) * Math.PI) / 180;   // toward-direction, geo
       const east = Math.sin(b), north = Math.cos(b);
-      // geo (east,north) → plan (dx,dy) = R(θ)·(east,north).
-      const c = Math.cos(theta), s = Math.sin(theta);
       const dx = c * east - s * north, dy = s * east + c * north;
       planRad = Math.atan2(dy, dx);
     }
+
+    // Sun azimuth (compass ° CW from true north) → PLAN-frame azimuth degrees via
+    // the same geo θ mapping used for wind; elevation passed raw. Absent → null.
+    let sunAzimuthDeg: number | null = null;
+    let sunElevationDeg: number | null = null;
+    const sun = states['sun.sun'];
+    if (sun) {
+      const sa = parseFloat(String((sun.attributes as Record<string, unknown>)?.azimuth));
+      const se = parseFloat(String((sun.attributes as Record<string, unknown>)?.elevation));
+      if (isFinite(sa)) {
+        const a = (sa * Math.PI) / 180;
+        const east = Math.sin(a), north = Math.cos(a);
+        const dx = c * east - s * north, dy = s * east + c * north;
+        sunAzimuthDeg = (Math.atan2(dx, dy) * 180) / Math.PI;   // plan compass (0=+Y,90=+X)
+      }
+      if (isFinite(se)) sunElevationDeg = se;
+    }
+
     return {
       condition: wnow.condition,
       intensity01: conditionIntensity(wnow.condition),
       windKmh: wnow.windKmh ?? 0,
       windBearingPlanRad: planRad,
       isDay: wnow.isDay,
+      effects,
+      cloudCoverage: wnow.cloudCoverage ?? null,
+      visibilityKm: wnow.visibilityKm ?? null,
+      windGustKmh: wnow.windGustKmh ?? null,
+      apparentC: wnow.apparentC ?? null,
+      rainSoon: wnow.rainSoon,
+      sunAzimuthDeg,
+      sunElevationDeg,
     };
   }
 
@@ -499,7 +543,8 @@ export class ThreeView extends LitElement {
         return `${fu.id}:${on}:${door}`;
       }).filter(Boolean).join(',');
       const keyFloor = `${p.configRev}|${effPreset}|` +
-        `${layers.furniture !== false}|${layers.bg !== false}|${layers.walls !== false}|` +
+        `${layers.furniture !== false}|${layers.appliances !== false}|` +
+        `${layers.bg !== false}|${layers.walls !== false}|` +
         `${layers.labels !== false}|${applianceKey}`;
       if (keyFloor !== this._keyFloor) {
         this._keyFloor = keyFloor;
@@ -649,8 +694,18 @@ export class ThreeView extends LitElement {
       // speed/bearing bucket joins the key (rebuild on a meaningful wind change).
       const windBucket = `${Math.round(fx.windKmh / 10)}:` +
         `${fx.windBearingPlanRad == null ? 'n' : Math.round(fx.windBearingPlanRad * 4)}`;
+      // W3 extended inputs, coarsely bucketed so rebuilds stay rare (per-frame
+      // motion / eased lighting continue in the renderer's _advanceWeather).
+      const b = (v: number | null | undefined, d: number) =>
+        v == null ? 'n' : Math.round(v / d);
+      const effKey = (Object.keys(fx.effects ?? {}) as Array<keyof NonNullable<typeof fx.effects>>)
+        .map(k => (fx.effects![k] ? '1' : '0')).join('');
+      const w3Bucket = `${b(fx.cloudCoverage, 10)}:${b(fx.visibilityKm, 2)}:` +
+        `${b(fx.windGustKmh, 10)}:${b(fx.apparentC, 3)}:${b(fx.sunAzimuthDeg, 5)}:` +
+        `${fx.sunElevationDeg == null ? 'n' : (fx.sunElevationDeg > 0 ? 'u' : 'd')}:` +
+        `${fx.rainSoon ? 'r' : '-'}:${effKey}`;
       const keyWeather = `${p.configRev}|${f.id}|${fx.condition}|` +
-        `${Math.round(fx.intensity01 * 4)}|${windBucket}|${layers.weatherFx !== false}`;
+        `${Math.round(fx.intensity01 * 4)}|${windBucket}|${w3Bucket}`;
       if (keyWeather !== this._keyWeather) {
         this._keyWeather = keyWeather;
         r.updateWeather(fx);

@@ -9,8 +9,8 @@
 // across both modes).
 
 import type { ConnStatus, HassState } from './types.js';
-import type { HaApi, StateListener, ConnListener, HaDevice, HaEntityReg, HistoryPoint } from './ha-client.js';
-import { normalizeHistory } from './ha-client.js';
+import type { HaApi, StateListener, ConnListener, HaDevice, HaEntityReg, HistoryPoint, ForecastRecord } from './ha-client.js';
+import { normalizeHistory, normalizeForecasts } from './ha-client.js';
 
 // Loose typing for HA frontend's hass object — we only touch a small,
 // long-stable subset (connection.sendMessagePromise / subscribeEvents).
@@ -78,6 +78,18 @@ export class HassPanelAdapter implements HaApi {
       });
       return normalizeHistory(raw);
     } catch { return {}; }
+  }
+
+  async getWeatherForecasts(entityId: string, type: 'daily' | 'hourly'): Promise<ForecastRecord[] | null> {
+    if (!this._conn || !entityId) return null;
+    try {
+      const raw = await this._conn.sendMessagePromise({
+        type: 'call_service', domain: 'weather', service: 'get_forecasts',
+        service_data: { type }, target: { entity_id: entityId },
+        return_response: true,
+      });
+      return normalizeForecasts(raw, entityId);
+    } catch { return null; }
   }
 
   async getDevices(): Promise<Array<HaDevice>> {

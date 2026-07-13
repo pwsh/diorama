@@ -101,7 +101,8 @@ export class App extends LitElement {
       if (!this._tplDone.layers) {
         const want = (p.urlTemplate.layers ?? '').toLowerCase();
         if (want === 'simple') {
-          p.store.layers2d = { bg: false, furniture: false, lights: false, sensors: false,
+          p.store.layers2d = { bg: false, furniture: false, appliances: false, lights: false,
+                               switches: false, sensors: false,
                                motion: false, env: false, zones: false, targets: true, activity: true };
           this._tplDone.layers = true; p.emitConfig();
         } else if (want === 'full') {

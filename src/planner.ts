@@ -41,7 +41,8 @@ import type {
 import { solvePosition, type ProxyObs } from './trilateration.js';
 import {
   fetchOpenMeteo, geocodeZip, resolveWeatherEntity, deriveFromSensors,
-  toCelsius, toKmh, toMmPerH, type WeatherNow,
+  toCelsius, toKmh, toMmPerH, forecastRainSoon,
+  type WeatherNow, type HaCondition,
 } from './weather.js';
 import { isDay } from './time-of-day.js';
 
@@ -321,6 +322,15 @@ export class Planner extends EventTarget {
   private _weatherOkAt = 0;     // ms epoch of the last successful Open-Meteo fetch
   private static readonly WEATHER_POLL_MS = 15 * 60 * 1000;
   private static readonly WEATHER_STALE_MS = 45 * 60 * 1000;
+  // Forecast plumbing (entity source only — Open-Meteo carries its forecast in
+  // the same fetch). weather.get_forecasts (HA 2024.4+) replaces the removed
+  // `forecast` state attribute. Refreshed every 30 min + on reconfigure; the
+  // derived bits are re-applied over weatherNow after each local recompute (which
+  // rebuilds weatherNow from scratch). Undefined = not fetched yet / unsupported.
+  private _weatherFcTimer: ReturnType<typeof setInterval> | null = null;
+  private static readonly WEATHER_FC_MS = 30 * 60 * 1000;
+  private _fcCond: HaCondition | null | undefined;
+  private _fcRainSoon: boolean | undefined;
 
   // Active furniture piece (last grabbed/dropped) — drives the 2D front-arrow
   // chevron. Runtime only.
@@ -1866,6 +1876,10 @@ export class Planner extends EventTarget {
   // timer, or recompute a local source from current states. Idempotent.
   private _reconfigureWeather(): void {
     if (this._weatherTimer) { clearInterval(this._weatherTimer); this._weatherTimer = null; }
+    if (this._weatherFcTimer) { clearInterval(this._weatherFcTimer); this._weatherFcTimer = null; }
+    // Forecast state is source-specific — drop it so a source switch can't leak
+    // the previous entity's forecast onto a new one.
+    this._fcCond = undefined; this._fcRainSoon = undefined;
     const w = this.store.weather;
     if (!w) { this.weatherNow = null; return; }
     if (w.source === 'openmeteo') {
@@ -1874,6 +1888,49 @@ export class Planner extends EventTarget {
     } else {
       this._recomputeLocalWeather(this.hass?.states ?? {});
     }
+    // Entity source: pull the forecast via the modern service call (30 min poll).
+    if (w.source === 'entity' && w.entityId) {
+      void this._refreshEntityForecasts();
+      this._weatherFcTimer = setInterval(
+        () => void this._refreshEntityForecasts(), Planner.WEATHER_FC_MS);
+    }
+  }
+
+  // Fetch the bound weather entity's daily + hourly forecast (HA 2024.4+ service
+  // path) and fold the derived bits over weatherNow. All failures are swallowed
+  // (getWeatherForecasts returns null); never throws into the tick path.
+  private async _refreshEntityForecasts(): Promise<void> {
+    const w = this.store.weather;
+    if (!w || w.source !== 'entity' || !w.entityId || !this.hass) return;
+    const eid = w.entityId;
+    try {
+      const daily = await this.hass.getWeatherForecasts(eid, 'daily');
+      if (daily && daily.length && typeof daily[0].condition === 'string') {
+        this._fcCond = daily[0].condition as HaCondition;
+      }
+      const hourly = await this.hass.getWeatherForecasts(eid, 'hourly');
+      // null → entity exposes no hourly forecast; leave rainSoon undefined.
+      if (hourly) this._fcRainSoon = forecastRainSoon(hourly, Date.now());
+      if (this._applyForecastToNow()) this.emitConfig();
+    } catch { /* never throw into the tick/RAF path */ }
+  }
+
+  // Overlay the service-fetched forecast (condition + rainSoon) onto the current
+  // weatherNow (entity source only — the local recompute rebuilds weatherNow
+  // from scratch, so this re-applies each time). The service condition wins over
+  // the legacy `forecast` attribute; when unfetched, the attribute value stands.
+  // Returns true when it changed something (so the caller can repaint).
+  private _applyForecastToNow(): boolean {
+    const w = this.store.weather;
+    if (!w || w.source !== 'entity' || !this.weatherNow) return false;
+    let changed = false;
+    if (this._fcCond !== undefined && this.weatherNow.forecastCondition !== this._fcCond) {
+      this.weatherNow.forecastCondition = this._fcCond; changed = true;
+    }
+    if (this._fcRainSoon !== undefined && this.weatherNow.rainSoon !== this._fcRainSoon) {
+      this.weatherNow.rainSoon = this._fcRainSoon; changed = true;
+    }
+    return changed;
   }
 
   // Recompute WeatherNow from a weather.* entity or the local station sensors.
@@ -1890,6 +1947,8 @@ export class Planner extends EventTarget {
         return;
       }
       this.weatherNow = resolveWeatherEntity(st.state, st.attributes, states);
+      // Re-apply the service-fetched forecast (recompute rebuilt weatherNow).
+      this._applyForecastToNow();
     } else if (w.source === 'sensors') {
       const s = w.sensors ?? {};
       const read = (id?: string): { v: number; unit: string } | null => {

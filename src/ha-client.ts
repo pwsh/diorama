@@ -49,6 +49,18 @@ export interface HistoryPoint {
   ts: number;
 }
 
+// One forecast record from weather.get_forecasts (HA 2024.4+; the legacy
+// `forecast` state attribute is gone). Subset of the fields providers expose —
+// all optional since coverage varies by integration + forecast type.
+export interface ForecastRecord {
+  datetime?: string;
+  condition?: string;
+  temperature?: number;
+  templow?: number;
+  precipitation?: number;
+  precipitation_probability?: number | null;
+}
+
 // Normalize HA's `history/history_during_period` compressed result. Row keys:
 // s = state, a = attributes, lu = last_updated (epoch seconds), lc =
 // last_changed. Attributes are forward-filled across rows that omit `a`.
@@ -72,6 +84,18 @@ export function normalizeHistory(raw: unknown): Record<string, HistoryPoint[]> {
   return out;
 }
 
+// Normalize the weather.get_forecasts response envelope
+// ({ response: { <entity_id>: { forecast: [...] } } }) down to the forecast
+// array for `entityId`. Shared by both HaApi implementations. null on any
+// missing / malformed piece.
+export function normalizeForecasts(raw: unknown, entityId: string): ForecastRecord[] | null {
+  const resp = (raw as { response?: Record<string, unknown> } | null)?.response;
+  const entry = resp?.[entityId] as { forecast?: unknown } | undefined;
+  const fc = entry?.forecast;
+  if (!Array.isArray(fc)) return null;
+  return fc as ForecastRecord[];
+}
+
 export interface HaApi {
   states: Record<string, HassState>;
   connect(): void;
@@ -81,6 +105,10 @@ export interface HaApi {
   // Pull recorder history for the given entities over [startISO, endISO].
   // Returns normalized points per entity (empty map on failure / no data).
   getHistory(entityIds: string[], startISO: string, endISO: string): Promise<Record<string, HistoryPoint[]>>;
+  // Fetch a weather entity's forecast via the modern service call (the legacy
+  // `forecast` state attribute was removed in HA 2024.4). Returns the forecast
+  // records for the requested type, or null on any failure / no data.
+  getWeatherForecasts(entityId: string, type: 'daily' | 'hourly'): Promise<ForecastRecord[] | null>;
   getDevices(): Promise<Array<HaDevice>>;
   getEntityRegistry(): Promise<Array<HaEntityReg>>;
   // Update an entity-registry entry (e.g. { disabled_by: null } to enable a
@@ -144,6 +172,19 @@ export class HassClient implements HaApi {
     });
     if (!res.success) return {};
     return normalizeHistory(res.result);
+  }
+
+  async getWeatherForecasts(entityId: string, type: 'daily' | 'hourly'): Promise<ForecastRecord[] | null> {
+    if (!entityId) return null;
+    try {
+      const res = await this._send({
+        type: 'call_service', domain: 'weather', service: 'get_forecasts',
+        service_data: { type }, target: { entity_id: entityId },
+        return_response: true,
+      });
+      if (!res.success) return null;
+      return normalizeForecasts(res.result, entityId);
+    } catch { return null; }
   }
 
   // HA registry helpers — used by the entity picker so users can search by

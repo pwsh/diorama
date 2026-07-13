@@ -171,9 +171,9 @@ export function drawAll(ctx: CanvasRenderingContext2D, p: Planner, view: View,
   if (on(L.labels)) drawRooms(ctx, p, view);
   drawDoors(ctx, p, view);
   drawWindows(ctx, p, view);
-  if (on(L.furniture)) drawFurniture(ctx, p, view);
+  if (on(L.furniture) || on(L.appliances)) drawFurniture(ctx, p, view, on(L.furniture), on(L.appliances));
   if (L.activity === true) drawActivity(ctx, p, view);
-  if (on(L.lights)) drawFixtures(ctx, p, view);
+  if (on(L.lights) || on(L.switches)) drawFixtures(ctx, p, view, on(L.lights), on(L.switches));
   if (on(L.motion)) drawMotionSensors(ctx, p, view);
   if (on(L.env)) drawEnvSensors(ctx, p, view);
   if (on(L.sensors)) drawSensors(ctx, p, view);
@@ -1176,7 +1176,8 @@ function drawWindows(ctx: CanvasRenderingContext2D, p: Planner, view: View): voi
   }
 }
 
-function drawFurniture(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
+function drawFurniture(ctx: CanvasRenderingContext2D, p: Planner, view: View,
+                       showFurniture = true, showAppliances = true): void {
   const f = p.floor();
   const customObjects = p.store.customObjects;
   const isEdit = p.uiMode === 'edit';
@@ -1192,6 +1193,8 @@ function drawFurniture(ctx: CanvasRenderingContext2D, p: Planner, view: View): v
     // appliance-category kinds incl. TVs (which have no other 2D on-state).
     const fdef = resolveFurnitureDef(piece, customObjects);
     const isAppliance = (fdef.cat ?? 'furniture') === 'appliance';
+    // Appliances ride their own layer; everything else the furniture layer.
+    if (isAppliance ? !showAppliances : !showFurniture) continue;
     const appSt = isAppliance ? p.effectiveState(piece) : null;
     const applianceOn = appSt?.state === 'on' || appSt?.state === 'playing';
     const doorOpen = !!piece.doorEntity &&
@@ -1724,12 +1727,13 @@ function drawFireplace2D(ctx: CanvasRenderingContext2D, cx0: number, cy0: number
   ctx.restore();
 }
 
-function drawFixtures(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
+function drawFixtures(ctx: CanvasRenderingContext2D, p: Planner, view: View,
+                      showLights = true, showSwitches = true): void {
   const dpr = window.devicePixelRatio || 1;
   const f = p.floor();
   const fxBodyR = Math.max(6, 180 * view.scale);
 
-  for (const l of f.lights) {
+  if (showLights) for (const l of f.lights) {
     const pt = mmToPx(view, l.x, l.y);
     const st = p.effectiveState(l);
     const isOn = st?.state === 'on';
@@ -1813,7 +1817,7 @@ function drawFixtures(ctx: CanvasRenderingContext2D, p: Planner, view: View): vo
     }
   }
 
-  for (const sw of f.switches) {
+  if (showSwitches) for (const sw of f.switches) {
     const pt = mmToPx(view, sw.x, sw.y);
     const st = p.effectiveState(sw);
     const isOn = st?.state === 'on';

@@ -48,6 +48,26 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Weather W3 + layer split batch** (12 files; typecheck + build clean,
+  code split intact; weather-test **90/90** (was 53), weather-fx-test
+  gained `?c=w3` 12/12; mega / livefeatures 12/12 / robot 24/24
+  unchanged): per-effect weather toggles
+  (`WeatherConfig.effects` + pure `weatherEffectEnabled`; effects3d stays
+  master, sunPosition gated only by its own key), new visuals — cloud
+  shadows from `cloud_coverage`, continuous visibility-driven fog,
+  TRUE sun position from `sun.sun` azimuth+elevation through the geo θ,
+  gust bursts, frost/icicles (opt-in), lingering rain puddles
+  (~10 min fade, survives rebuilds), forecast storm-brewing (opt-in).
+  `WeatherNow` gained cloudCoverage/visibilityKm/uvIndex/windGustKmh/
+  apparentC/humidity/rainSoon; Open-Meteo fetch extended; NEW
+  `HaApi.getWeatherForecasts` (weather.get_forecasts via
+  return_response, both clients) refreshed every 30 min for entity
+  sources. Layers: `targets` relabeled "Avatars"; lights/switches SPLIT
+  (`Layers2D.switches`, own 3D `_switchGroup`, raycast parity);
+  NEW `appliances` layer (furniture = non-appliance pieces; hidden
+  appliances drop anchors/doors/nav). CLAUDE.md "Weather visuals W3"
+  + layers section updated.
+
 - **Robot vacuum + lawn mower** (11 files; typecheck + build clean; new
   `robot-test.html` **ROBOT PASS 24/24** — 120 s roam with 0 wall
   crossings, doorway traversal, dock convergence <150 mm, mower sweep

@@ -13,7 +13,7 @@ import type {
   BleProxy, AlarmPanel, SafetySensor, RobotFixture, DioramaPerson, GeoLandmark,
 } from '../types.js';
 import type { BermudaDevice } from '../planner.js';
-import { CONDITION_GLYPH, CONDITION_LABEL, tempText } from '../weather.js';
+import { CONDITION_GLYPH, CONDITION_LABEL, tempText, weatherEffectEnabled } from '../weather.js';
 
 // Avatar model options (shared by the mmWave + motion checkbox grids). All 22
 // concrete kinds; the old 'Random' entry is gone — checking MULTIPLE kinds is
@@ -3011,12 +3011,14 @@ export class Sidebar extends LitElement {
       { key: 'walls', label: 'Walls' },
       { key: 'labels', label: 'Room labels' },
       { key: 'furniture', label: 'Furniture' },
-      { key: 'lights', label: 'Light / switch markers' },
+      { key: 'appliances', label: 'Appliances' },
+      { key: 'lights', label: 'Lights' },
+      { key: 'switches', label: 'Switches' },
       { key: 'sensors', label: 'mmWave sensors' },
       { key: 'motion', label: 'Motion sensors' },
       { key: 'env', label: 'Env sensors' },
       { key: 'zones', label: 'Zones & halos' },
-      { key: 'targets', label: 'Targets' },
+      { key: 'targets', label: 'Avatars' },
       { key: 'geo', label: 'Geo landmarks' },
       { key: 'weatherFx', label: 'Weather effects (3D)' },
       { key: 'nameLabels', label: 'Name labels' },
@@ -3032,7 +3034,8 @@ export class Sidebar extends LitElement {
                     const v = el.value; el.value = '';
                     if (v === 'full') setLayers(undefined);
                     else if (v === 'simple') setLayers({
-                      bg: false, furniture: false, lights: false, sensors: false,
+                      bg: false, furniture: false, appliances: false, lights: false,
+                      switches: false, sensors: false,
                       motion: false, env: false, zones: false, targets: true, activity: true,
                     });
                     else {
@@ -3119,6 +3122,42 @@ export class Sidebar extends LitElement {
   }
 
   // ── 3D scene appearance ───────────────────────────────────────────────
+  // Per-effect toggle list (W3), indented under the "3D effects" master. Only
+  // meaningful when the master is on — rendered dimmed + disabled when it's off.
+  // `sunPosition` is a lighting behavior (not gated by the master) but is listed
+  // here for discoverability; it's left enabled even when the master is off.
+  private _weatherEffectToggles(
+    w: import('../types.js').WeatherConfig | undefined,
+    set: (mut: (x: import('../types.js').WeatherConfig) => void) => void,
+  ) {
+    const master = w?.effects3d !== false;
+    const defs: Array<[import('../types.js').WeatherEffectKey, string]> = [
+      ['precip', 'Precipitation'],
+      ['fog', 'Fog'],
+      ['lightning', 'Lightning'],
+      ['wind', 'Wind dust & gusts'],
+      ['clouds', 'Cloud shadows'],
+      ['sunPosition', 'True sun position'],
+      ['frost', 'Frost & icicles'],
+      ['puddles', 'Rain puddles'],
+      ['precipForecast', 'Forecast storm-brewing'],
+    ];
+    // sunPosition stays live even when the effect-group master is off.
+    const dimmed = (k: import('../types.js').WeatherEffectKey) => !master && k !== 'sunPosition';
+    return html`
+      <div style="margin:2px 0 2px 14px;display:flex;flex-direction:column;gap:1px">
+        ${defs.map(([key, label]) => html`
+          <label class="row" style="padding:1px 0;${dimmed(key) ? 'opacity:0.45' : ''}">
+            <span style="flex:1;font-size:11px">${label}</span>
+            <input type="checkbox" .checked=${weatherEffectEnabled(w, key)}
+                   ?disabled=${dimmed(key)}
+                   @change=${(e: Event) => set(x => {
+                     (x.effects ??= {})[key] = (e.target as HTMLInputElement).checked;
+                   })}>
+          </label>`)}
+      </div>`;
+  }
+
   // ── Weather section (Feature W) ───────────────────────────────────────
   private _weatherSection() {
     const p = this.planner;
@@ -3214,6 +3253,7 @@ export class Sidebar extends LitElement {
           <input type="checkbox" .checked=${w?.effects3d !== false}
                  @change=${(e: Event) => set(x => { x.effects3d = (e.target as HTMLInputElement).checked; })}>
         </label>
+        ${this._weatherEffectToggles(w, set)}
         <label class="row"><span style="flex:1">Affect lighting</span>
           <input type="checkbox" .checked=${w?.affectLighting !== false}
                  @change=${(e: Event) => set(x => { x.affectLighting = (e.target as HTMLInputElement).checked; })}>

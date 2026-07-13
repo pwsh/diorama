@@ -106,6 +106,37 @@
     ok('weather group empty', r._weatherGroup.children.length === 0, `children=${r._weatherGroup.children.length}`);
     ok('no scene fog', r._scene.fog == null, `fog=${r._scene.fog}`);
     ok('no flash light', !r._weatherFlash, `flash=${!!r._weatherFlash}`);
+
+  } else if (scene === 'w3') {
+    // Cloud coverage + visibility + gust + frost + puddles + sun-position, all on.
+    const allOn = { precip:true, fog:true, lightning:true, wind:true, clouds:true,
+      sunPosition:true, frost:true, puddles:true, precipForecast:true };
+    r.updateWeather(fx({ condition:'rainy', intensity01:0.55, windKmh:20, windBearingPlanRad:0.3,
+      isDay:true, effects:allOn, cloudCoverage:90, visibilityKm:1, windGustKmh:45,
+      apparentC:-5, sunAzimuthDeg:120, sunElevationDeg:30, rainSoon:true }));
+    ok('rain cloud built (precip)', r._weatherClouds.some(c => c.kind === 'rain'), `clouds=${r._weatherClouds.length}`);
+    ok('cloud shadows built (90%)', r._weatherCloudShadows.length >= 3, `shadows=${r._weatherCloudShadows.length}`);
+    ok('puddles built', r._weatherPuddles.length >= 4, `puddles=${r._weatherPuddles.length}`);
+    ok('frost icicles built (feels −5)', r._weatherIcicles.length > 0, `icicles=${r._weatherIcicles.length}`);
+    ok('sun target set (elev 30)', !!r._weatherSunTarget, `t=${!!r._weatherSunTarget}`);
+    ok('visibility fog (1 km)', !!r._scene.fog && r._scene.fog.isFogExp2, `fog=${r._scene.fog?.constructor?.name}`);
+    // Visibility 1 km ⇒ target 4.2e-4 (well above the condition-fog 1.8e-4 floor).
+    step(360);   // ~6 s → fog + puddle fade ease up
+    ok('visibility fog denser than fog-floor', r._scene.fog.density > 0.0002, `d=${r._scene.fog.density.toExponential(2)}`);
+    ok('puddle fade eased in', (r._puddleFade['f1'] ?? 0) > 0.1, `fade=${(r._puddleFade['f1'] ?? 0).toFixed(3)}`);
+    ok('cloud shadows drift', (() => {
+      const s0 = r._weatherCloudShadows[0].mesh.position.x; step(30);
+      return Math.abs(r._weatherCloudShadows[0].mesh.position.x - s0) > 1e-3;
+    })());
+    // Low coverage ⇒ no cloud shadows.
+    r.updateWeather(fx({ condition:'cloudy', effects:allOn, cloudCoverage:15, isDay:true }));
+    ok('low coverage → no shadows', r._weatherCloudShadows.length === 0, `shadows=${r._weatherCloudShadows.length}`);
+    // Per-effect gating: clouds off ⇒ no shadows even at 90%.
+    r.updateWeather(fx({ condition:'cloudy', effects:{ ...allOn, clouds:false }, cloudCoverage:90, isDay:true }));
+    ok('clouds key off → no shadows', r._weatherCloudShadows.length === 0, `shadows=${r._weatherCloudShadows.length}`);
+    // Puddles linger after rain stops (fade > 0 keeps them built).
+    r.updateWeather(fx({ condition:'sunny', effects:allOn, isDay:true }));
+    ok('puddles linger after rain', r._weatherPuddles.length >= 4, `puddles=${r._weatherPuddles.length}`);
   }
 
   // ── report ──────────────────────────────────────────────────────────────

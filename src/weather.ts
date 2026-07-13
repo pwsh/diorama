@@ -9,7 +9,7 @@
 // unit normalizers, resolveWeatherEntity) have no network dependency and are
 // exported cleanly so W2 / test pages can import them.
 
-import type { HassState } from './types.js';
+import type { HassState, WeatherConfig, WeatherEffectKey } from './types.js';
 import { isDay } from './time-of-day.js';
 
 type States = Record<string, HassState> | null | undefined;
@@ -34,6 +34,19 @@ export interface WeatherNow {
   // thought bubbles (e.g. an umbrella when rain is coming). Undefined when the
   // source carries no forecast; null tolerated the same as undefined.
   forecastCondition?: HaCondition | null;
+  // Rain-ish is coming within ~3 h (from an hourly forecast) while it isn't
+  // raining now. Drives the "storm brewing" 3D effect. Undefined when the source
+  // exposes no hourly forecast.
+  rainSoon?: boolean;
+  // ── W3 extended attributes (all optional per provider — every visual no-ops
+  // when its field is absent). Populated by resolveWeatherEntity / fetchOpenMeteo;
+  // the local-sensors source leaves them null.
+  cloudCoverage?: number | null;   // %
+  visibilityKm?: number | null;    // km (mi → km normalized)
+  uvIndex?: number | null;
+  windGustKmh?: number | null;     // km/h (same normalization as wind_speed)
+  apparentC?: number | null;       // feels-like °C
+  humidity?: number | null;        // %
 }
 
 // Normalized sensor readings fed to deriveFromSensors. All already in metric
@@ -76,6 +89,78 @@ export function toMmPerH(v: number, unit?: string): number {
   return v;                                 // mm/h or mm
 }
 
+// Visibility → km. Miles → km; metres → km; km / blank passed through.
+export function toKm(v: number, unit?: string): number {
+  const u = (unit ?? '').toLowerCase().trim();
+  if (u === 'mi' || u.includes('mile')) return v * 1.609344;
+  if (u === 'm') return v / 1000;
+  return v;   // km / blank
+}
+
+// wind_bearing may be a compass cardinal string ("N", "SالسE"…) rather than a
+// number. Map the 16-point compass to degrees; unknown → NaN (caller nulls it).
+const COMPASS_16: Record<string, number> = {
+  n: 0, nne: 22.5, ne: 45, ene: 67.5, e: 90, ese: 112.5, se: 135, sse: 157.5,
+  s: 180, ssw: 202.5, sw: 225, wsw: 247.5, w: 270, wnw: 292.5, nw: 315, nnw: 337.5,
+};
+export function parseWindBearing(raw: unknown): number | null {
+  const n = parseFloat(String(raw));
+  if (isFinite(n)) return n;
+  const key = String(raw ?? '').trim().toLowerCase();
+  const deg = COMPASS_16[key];
+  return deg == null ? null : deg;
+}
+
+// ── W3: per-effect toggle resolver ──────────────────────────────────────────
+// Each 3D weather visualization is individually toggleable. Absent from the
+// config = the per-key default below. `effects3d === false` (the master
+// kill-switch) is folded in by the CALLER (three-view) for effect-GROUP members,
+// NOT here — this resolver is purely the per-key on/off with defaults, so it
+// stays a pure lookup the test page and sidebar share.
+const WEATHER_EFFECT_DEFAULTS: Record<WeatherEffectKey, boolean> = {
+  precip: true, fog: true, lightning: true, wind: true, clouds: true,
+  sunPosition: true, puddles: true,
+  frost: false, precipForecast: false,
+};
+
+export function weatherEffectEnabled(
+  cfg: WeatherConfig | undefined, key: WeatherEffectKey,
+): boolean {
+  const v = cfg?.effects?.[key];
+  return v == null ? WEATHER_EFFECT_DEFAULTS[key] : v;
+}
+
+// ── W3: visibility → FogExp2 density (pure, testable) ───────────────────────
+// Low visibility ⇒ denser fog. Continuous mapping used when the source reports
+// `visibility`; the `fog` condition additionally floors the density in the
+// renderer. Clamped so a 0 km reading can't blow the density up.
+export function visibilityToFogDensity(visibilityKm: number): number {
+  const v = Math.max(visibilityKm, 0.15);
+  return Math.max(0, Math.min(0.0009, 0.00042 / v));
+}
+
+// ── W3: "rain is coming soon" from an hourly forecast (pure, testable) ──────
+// True when any hourly record within `horizonH` hours of `nowMs` is rain-ish
+// (precipitation_probability ≥ 60, or a rain/pour/storm condition). Records
+// without a parseable datetime are treated as imminent (index-order proxy).
+const RAINY_CONDITIONS = new Set<string>([
+  'rainy', 'pouring', 'lightning-rainy', 'snowy-rainy', 'hail', 'lightning',
+]);
+export function forecastRainSoon(
+  records: Array<{ datetime?: string; condition?: string; precipitation_probability?: number | null }>,
+  nowMs: number, horizonH = 3,
+): boolean {
+  const horizon = nowMs + horizonH * 3600_000;
+  for (const r of records) {
+    const t = r.datetime ? Date.parse(r.datetime) : NaN;
+    if (isFinite(t) && (t < nowMs - 3600_000 || t > horizon)) continue;
+    const prob = r.precipitation_probability;
+    if (typeof prob === 'number' && prob >= 60) return true;
+    if (r.condition && RAINY_CONDITIONS.has(r.condition)) return true;
+  }
+  return false;
+}
+
 // ── Source: HA weather.* entity ─────────────────────────────────────────────
 // condition = state; temperature/wind normalized from the entity's own unit
 // attributes. sunny ↔ clear-night is re-gated through the shared sun logic so a
@@ -96,12 +181,24 @@ export function resolveWeatherEntity(
     ? toCelsius(t, String(attrs.temperature_unit ?? ''))
     : null;
   const w = parseFloat(String(attrs.wind_speed));
-  const windKmh = isFinite(w)
-    ? toKmh(w, String(attrs.wind_speed_unit ?? ''))
-    : null;
-  const wb = parseFloat(String(attrs.wind_bearing));
-  const windBearing = isFinite(wb) ? wb : null;
+  const windUnit = String(attrs.wind_speed_unit ?? '');
+  const windKmh = isFinite(w) ? toKmh(w, windUnit) : null;
+  const windBearing = parseWindBearing(attrs.wind_bearing);
   const friendly = typeof attrs.friendly_name === 'string' ? attrs.friendly_name : undefined;
+  // ── W3 extended attributes (all optional per provider) ──
+  const num = (v: unknown): number | null => {
+    const n = parseFloat(String(v));
+    return isFinite(n) ? n : null;
+  };
+  const cloudCoverage = num(attrs.cloud_coverage);
+  const vis = num(attrs.visibility);
+  const visibilityKm = vis == null ? null : toKm(vis, String(attrs.visibility_unit ?? ''));
+  const uvIndex = num(attrs.uv_index);
+  const gust = num(attrs.wind_gust_speed);
+  const windGustKmh = gust == null ? null : toKmh(gust, windUnit);
+  const app = num(attrs.apparent_temperature);
+  const apparentC = app == null ? null : toCelsius(app, String(attrs.temperature_unit ?? ''));
+  const humidity = num(attrs.humidity);
   const bad = state === 'unavailable' || state === 'unknown' || state === '';
   // Best-effort forecast from the legacy `forecast` attribute (removed in modern
   // HA; a forecast service call is out of scope). Accept the first entry's
@@ -111,7 +208,10 @@ export function resolveWeatherEntity(
   if (typeof fc === 'string' && HA_CONDITIONS.has(fc as HaCondition)) {
     forecastCondition = fc as HaCondition;
   }
-  return { condition, tempC, windKmh, windBearing, isDay: day, stale: bad, label: friendly, forecastCondition };
+  return {
+    condition, tempC, windKmh, windBearing, isDay: day, stale: bad, label: friendly,
+    forecastCondition, cloudCoverage, visibilityKm, uvIndex, windGustKmh, apparentC, humidity,
+  };
 }
 
 const HA_CONDITIONS = new Set<HaCondition>([
@@ -209,7 +309,9 @@ export async function fetchOpenMeteo(lat: number, lon: number): Promise<WeatherN
   const url = 'https://api.open-meteo.com/v1/forecast'
     + `?latitude=${encodeURIComponent(lat)}&longitude=${encodeURIComponent(lon)}`
     + '&current=temperature_2m,weather_code,wind_speed_10m,wind_direction_10m,is_day'
+    +   ',cloud_cover,relative_humidity_2m,apparent_temperature,wind_gusts_10m,visibility'
     + '&daily=weather_code&forecast_days=2'
+    + '&hourly=precipitation_probability,weather_code&forecast_hours=4'
     + '&wind_speed_unit=kmh&temperature_unit=celsius&timezone=auto';
   try {
     const res = await fetch(url);
@@ -217,6 +319,7 @@ export async function fetchOpenMeteo(lat: number, lon: number): Promise<WeatherN
     const j = await res.json() as {
       current?: Record<string, unknown>;
       daily?: { weather_code?: unknown };
+      hourly?: { time?: unknown; precipitation_probability?: unknown; weather_code?: unknown };
     };
     const c = j.current;
     if (!c) return null;
@@ -224,12 +327,30 @@ export async function fetchOpenMeteo(lat: number, lon: number): Promise<WeatherN
     const t = Number(c.temperature_2m);
     const w = Number(c.wind_speed_10m);
     const wb = Number(c.wind_direction_10m);
+    const numOM = (v: unknown): number | null => {
+      const n = Number(v); return isFinite(n) ? n : null;
+    };
+    const vis = numOM(c.visibility);   // Open-Meteo visibility is in metres
     // Tomorrow's daily code (index 1; index 0 is today). Forecast is framed as
     // day so a rainy tomorrow reads as 'rainy', not clear-night. Missing daily
     // block → undefined.
     const daily = Array.isArray(j.daily?.weather_code) ? j.daily!.weather_code as unknown[] : null;
     const tomorrow = daily && daily.length > 1 ? Number(daily[1]) : NaN;
     const forecastCondition = isFinite(tomorrow) ? wmoToCondition(tomorrow, true) : undefined;
+    // rainSoon from the 4-hour hourly block (single fetch): probability ≥ 60 or a
+    // rain-ish weather_code within the horizon. Undefined when no hourly block.
+    let rainSoon: boolean | undefined;
+    const times = Array.isArray(j.hourly?.time) ? j.hourly!.time as unknown[] : null;
+    if (times) {
+      const probs = Array.isArray(j.hourly?.precipitation_probability) ? j.hourly!.precipitation_probability as unknown[] : [];
+      const codes = Array.isArray(j.hourly?.weather_code) ? j.hourly!.weather_code as unknown[] : [];
+      const recs = times.map((tm, i) => ({
+        datetime: String(tm),
+        precipitation_probability: numOM(probs[i]),
+        condition: isFinite(Number(codes[i])) ? wmoToCondition(Number(codes[i]), true) : undefined,
+      }));
+      rainSoon = forecastRainSoon(recs, Date.now());
+    }
     return {
       condition: wmoToCondition(Number(c.weather_code), day),
       tempC: isFinite(t) ? t : null,
@@ -238,6 +359,13 @@ export async function fetchOpenMeteo(lat: number, lon: number): Promise<WeatherN
       isDay: day,
       stale: false,
       forecastCondition,
+      rainSoon,
+      cloudCoverage: numOM(c.cloud_cover),
+      visibilityKm: vis == null ? null : vis / 1000,
+      uvIndex: null,
+      windGustKmh: numOM(c.wind_gusts_10m),
+      apparentC: numOM(c.apparent_temperature),
+      humidity: numOM(c.relative_humidity_2m),
     };
   } catch {
     return null;

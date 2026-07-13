@@ -456,9 +456,20 @@ export interface WeatherConfig {
   sensors?: { precip?: string; windSpeed?: string; temp?: string; lightning?: string };
   zip?: string; lat?: number; lon?: number; placeLabel?: string;  // Open-Meteo location (zip geocoded → lat/lon cached)
   chip?: boolean;          // default true — corner display, 2D + 3D
-  effects3d?: boolean;     // default true — consumed in W2
-  affectLighting?: boolean;// default true — cloudy/precip dims the day preset; consumed in W2
+  effects3d?: boolean;     // default true — master kill-switch for the 3D effect GROUP
+  affectLighting?: boolean;// default true — cloudy/precip dims the day preset
+  // Per-effect toggles (W3). Absent key = the per-key default (see
+  // weatherEffectEnabled in weather.ts): ON for precip/fog/lightning/wind/
+  // clouds/sunPosition/puddles, OFF for frost/precipForecast. `sunPosition` is
+  // a LIGHTING behavior (orients the sun light), NOT an effect-group member, so
+  // it is gated only on its own key — never on effects3d.
+  effects?: Partial<Record<WeatherEffectKey, boolean>>;
 }
+
+// One toggleable 3D weather visualization (W3). See weatherEffectEnabled.
+export type WeatherEffectKey =
+  | 'precip' | 'fog' | 'lightning' | 'wind' | 'clouds'
+  | 'sunPosition' | 'frost' | 'puddles' | 'precipForecast';
 
 // ── Geo reference (the "World Outside" arc, Feature G) ────────────────────
 // Landmarks are placed on the plan (world mm) and calibrated to a real-world
@@ -522,8 +533,10 @@ export interface Layers2D {
   bg?: boolean;
   walls?: boolean;      // wall bodies (2D strokes + 3D meshes); doors/windows stay
   labels?: boolean;     // room-name labels (2D text + 3D billboards)
-  furniture?: boolean;
-  lights?: boolean;     // light + switch fixture markers
+  furniture?: boolean;  // non-appliance furniture (appliances ride their own key)
+  appliances?: boolean; // appliance furniture (fridge/stove/tv/…, cat === 'appliance')
+  lights?: boolean;     // light fixture markers
+  switches?: boolean;   // switch fixture markers (split from lights)
   sensors?: boolean;    // mmWave bodies + coverage wedges
   motion?: boolean;     // motion sensor bodies + cones
   env?: boolean;

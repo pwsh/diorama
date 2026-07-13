@@ -4,7 +4,7 @@ import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
 import { MTLLoader } from 'three/examples/jsm/loaders/MTLLoader.js';
 import type {
   Floor, Sensor, Light, SwitchFixture, MotionSensor, Vec2, HassState,
-  Scene3D, ScenePreset, FloorTexKind, Model3D, Furniture, AvatarKind,
+  Scene3D, ScenePreset, FloorTexKind, Model3D, Furniture, AvatarKind, WeatherEffectKey,
 } from './types.js';
 import {
   lightHeight, lightRadius, lightIntensity, lightIconKind, lightRotation, lightLength,
@@ -33,6 +33,14 @@ interface RobotRig {
   blob: THREE.Mesh;
 }
 import { wallCutsForSegment, WINDOW_DEFAULTS, closedWallLoops, wallKind, WALL_KINDS, furnitureLocalToWorld, furnitureWorldToLocal, pointInPolygon as pip, centroid, loopContaining, resolveRoomForPoint, roomLabel, intersectLoopWithRect, polygonArea } from './geometry.js';
+import { visibilityToFogDensity } from './weather.js';
+
+// All effect-group members ON — the fallback when a stale caller sends a
+// WeatherFxState without the W3 `effects` map (preserves legacy W2 behavior).
+const WEATHER_ALL_EFFECTS: Record<WeatherEffectKey, boolean> = {
+  precip: true, fog: true, lightning: true, wind: true, clouds: true,
+  sunPosition: true, frost: true, puddles: true, precipForecast: true,
+};
 
 export interface ZoneWorld { vertices: Vec2[]; color: number; occupied: boolean; }
 export interface HaloWorld { x: number; y: number; radius: number; occupied: boolean; }
@@ -54,12 +62,34 @@ export interface GpsLandmarkWorld { x: number; y: number; name: string; }
 //                        to a gentle default). three-view maps the meteorological
 //                        FROM-bearing into the plan frame (geo θ when calibrated).
 //   isDay              — gates flash brightness (a daytime flash is subtler).
+//   effects            — resolved per-effect on/off (W3). three-view has ALREADY
+//                        folded the master effects3d kill-switch + the weatherFx
+//                        layer into every effect-GROUP member; `sunPosition`
+//                        (a lighting behavior, not a group member) reflects only
+//                        its own key. A stale caller omits this → treated as all
+//                        group members ON (legacy W2 behavior).
+//   cloudCoverage …    — extended attributes (W3), all optional per provider;
+//                        every visual no-ops when its field is null/undefined.
+//   sunAzimuthDeg      — PLAN-frame azimuth in degrees (three-view already
+//                        rotated the raw compass azimuth through the geo θ, like
+//                        windBearingPlanRad). 0 = plan +Y, 90 = plan +X. null
+//                        when sun.sun exposes no azimuth.
+//   sunElevationDeg    — sun elevation (deg); the true-sun-position effect only
+//                        acts when > 0. null when absent.
 export interface WeatherFxState {
   condition: string;
   intensity01: number;
   windKmh: number;
   windBearingPlanRad: number | null;
   isDay: boolean;
+  effects?: Record<WeatherEffectKey, boolean>;
+  cloudCoverage?: number | null;
+  visibilityKm?: number | null;
+  windGustKmh?: number | null;
+  apparentC?: number | null;
+  rainSoon?: boolean;
+  sunAzimuthDeg?: number | null;
+  sunElevationDeg?: number | null;
 }
 
 // One precipitation / dust point cloud (W2). `pos` aliases the geometry's
@@ -640,6 +670,7 @@ export class ThreeDRenderer {
   private _robotRigGroup = new THREE.Group();    // moving robot bodies (per-frame, persistent)
   private _robotRigs: Record<string, RobotRig> = {};  // keyed by robot id
   private _lightGroup = new THREE.Group();
+  private _switchGroup = new THREE.Group();   // switch fixtures (own layer, split from lights)
   private _targetGroup = new THREE.Group();
   // GPS device pins + 3D landmark pins (Feature G, phase G2). Camera-facing
   // sprites; rebuilt under _keyGps. Carries CanvasTextures → always pair
@@ -666,10 +697,34 @@ export class ThreeDRenderer {
   // clock; Math.random only picks the next gap, like the fireplace flicker).
   private _flashCountdown = 0;   // seconds until the next strike
   private _flashAge = -1;        // seconds since the current strike (<0 = idle)
+  // W3 effect state. Cloud shadows drift like precip (position mutated in
+  // _advanceWeather, wrapped in a spawn box). Puddles fade in/out via a per-floor
+  // opacity that SURVIVES _keyWeather rebuilds (module/instance field keyed by
+  // floor id) so they linger + fade over ~10 min after rain stops. Sun target,
+  // gust envelope, and storm-brewing darkening are all eased per frame.
+  private _weatherCloudShadows: Array<{
+    mesh: THREE.Mesh; driftX: number; driftZ: number;
+    minX: number; minZ: number; sizeX: number; sizeZ: number;
+  }> = [];
+  private _weatherPuddles: Array<{ mesh: THREE.Mesh; baseOpacity: number }> = [];
+  private _weatherIcicles: THREE.Object3D[] = [];   // frost group members (disposed via _clearGroup)
+  private _cloudShadowTex: THREE.CanvasTexture | null = null;
+  private _puddleTex: THREE.CanvasTexture | null = null;
+  private _puddleFade: Record<string, number> = {};   // floorId → current opacity 0..1
+  private _puddleFloorId = '';
+  private _puddleTarget = 0;
+  private _gustCountdown = 4;    // seconds until the next gust burst
+  private _gustAge = -1;         // seconds into the current 1.5 s burst (<0 = idle)
+  private _gustEnabled = false;  // windGust exceeds wind speed by the margin
+  private _weatherSunTarget: THREE.Vector3 | null = null;  // eased true-sun-position goal
+  private _stormDark = false;    // precipForecast sky darkening currently wanted
+  private _stormDarkAmt = 0;     // eased 0..1 darkening amount
+  private _stormBaseBg: THREE.Color | null = null;   // preset tint captured when darkening began
   private _bgTexCache: { dataUrl: string; tex: THREE.Texture } | null = null;
   private _rafId: number | null = null;
   private _fw = 8000;
   private _fd = 6000;
+  private _floorId = '';   // current floor id (for per-floor weather state like puddle fade)
   // Sims cam: when on, the camera azimuth snaps to the nearest 45° after each
   // orbit gesture (an eased per-frame glide toward `_snapAzimuth`). Polar angle
   // is left wherever the user put it — only azimuth locks.
@@ -877,7 +932,7 @@ export class ThreeDRenderer {
                     this._sensorGroup, this._motionGroup, this._envGroup,
                     this._bleGroup, this._alarmGroup, this._safetyGroup,
                     this._robotGroup, this._robotRigGroup,
-                    this._lightGroup, this._targetGroup, this._ghostGroup,
+                    this._lightGroup, this._switchGroup, this._targetGroup, this._ghostGroup,
                     this._gpsGroup, this._weatherGroup);
 
     this._controls = new OrbitControls(this._camera, this._renderer.domElement);
@@ -978,6 +1033,8 @@ export class ThreeDRenderer {
     // and vice-versa.
     const roots: THREE.Object3D[] = [];
     if (this._lightGroup.visible) roots.push(this._lightGroup);
+    // Switches ride their own layer; layer-hidden switches aren't click targets.
+    if (this._switchGroup.visible) roots.push(this._switchGroup);
     // Alarm keypads are clickable (open the control modal); ride the sensors layer.
     if (this._alarmGroup.visible) roots.push(this._alarmGroup);
     // Smoke / CO detectors are clickable (unbound → manual test trigger).
@@ -1169,6 +1226,39 @@ export class ThreeDRenderer {
     this._fogPlaneTex = t;
     return this._fogPlaneTex;
   }
+  // Soft dark blob for drifting cloud shadows (W3). Like _blobTex but darker /
+  // wider-falloff so overlapping decals read as a big moving overcast patch.
+  private _cloudShadowTexture(): THREE.CanvasTexture {
+    if (this._cloudShadowTex) return this._cloudShadowTex;
+    const c = document.createElement('canvas');
+    c.width = c.height = 128;
+    const g = c.getContext('2d')!;
+    const grad = g.createRadialGradient(64, 64, 4, 64, 64, 64);
+    grad.addColorStop(0, 'rgba(20,24,32,0.55)');
+    grad.addColorStop(0.6, 'rgba(20,24,32,0.28)');
+    grad.addColorStop(1, 'rgba(20,24,32,0)');
+    g.fillStyle = grad; g.fillRect(0, 0, 128, 128);
+    this._cloudShadowTex = new THREE.CanvasTexture(c);
+    return this._cloudShadowTex;
+  }
+  // Soft dark-blue ellipse for rain puddles (W3). Slightly glossy center.
+  private _puddleTexture(): THREE.CanvasTexture {
+    if (this._puddleTex) return this._puddleTex;
+    const c = document.createElement('canvas');
+    c.width = c.height = 128;
+    const g = c.getContext('2d')!;
+    const grad = g.createRadialGradient(64, 60, 4, 64, 64, 64);
+    grad.addColorStop(0, 'rgba(70,96,130,0.85)');
+    grad.addColorStop(0.7, 'rgba(40,58,86,0.7)');
+    grad.addColorStop(1, 'rgba(40,58,86,0)');
+    g.fillStyle = grad; g.fillRect(0, 0, 128, 128);
+    // A faint sky-reflection highlight streak.
+    g.globalCompositeOperation = 'lighter';
+    g.fillStyle = 'rgba(150,180,215,0.35)';
+    g.beginPath(); g.ellipse(56, 52, 26, 9, -0.4, 0, Math.PI * 2); g.fill();
+    this._puddleTex = new THREE.CanvasTexture(c);
+    return this._puddleTex;
+  }
 
   // Privacy-blur silhouette textures (shared, built once). A chunky
   // pixel-mosaic of a standing / seated body — NearestFilter for the censored
@@ -1297,7 +1387,7 @@ export class ThreeDRenderer {
       this._floorGroup, this._doorGroup, this._modelGroup, this._zoneGroup, this._haloGroup,
       this._sensorGroup, this._motionGroup, this._bleGroup, this._alarmGroup,
       this._safetyGroup, this._robotGroup, this._robotRigGroup,
-      this._lightGroup, this._targetGroup, this._ghostGroup,
+      this._lightGroup, this._switchGroup, this._targetGroup, this._ghostGroup,
     ]) {
       this._clearGroup(g);
     }
@@ -1594,10 +1684,9 @@ export class ThreeDRenderer {
   // Layer visibility (shared with the 2D layer flags): cheap per-tick
   // group.visible flips — no rebuilds. Furniture and the bg image live
   // inside _floorGroup and are gated at build time in updateFloor instead.
-  setLayerVisibility(v: { lights?: boolean; sensors?: boolean; motion?: boolean;
-                          env?: boolean; zones?: boolean; targets?: boolean;
-                          geo?: boolean; weatherFx?: boolean; nameLabels?: boolean }): void {
+  setLayerVisibility(v: import('./types.js').Layers2D): void {
     this._lightGroup.visible = v.lights !== false;
+    this._switchGroup.visible = v.switches !== false;
     this._sensorGroup.visible = v.sensors !== false;
     // BLE proxy pucks + alarm keypads ride the sensors layer (like mmWave).
     this._bleGroup.visible = v.sensors !== false;
@@ -1629,7 +1718,7 @@ export class ThreeDRenderer {
   updateFloor(f: Floor, scene3d?: Scene3D, layers?: import('./types.js').Layers2D,
               customObjects?: ObjectRecipe[], stateProvider?: StateProvider): void {
     if (!this._scene) return;
-    this._fw = f.w; this._fd = f.d;
+    this._fw = f.w; this._fd = f.d; this._floorId = f.id;
     // Foreground wall cutaway: default ON, opt out with wallCutaway === false.
     this._cutaway = scene3d?.wallCutaway !== false;
     this._cutawayWalls = [];
@@ -1655,8 +1744,15 @@ export class ThreeDRenderer {
     const loops = closedWallLoops(f.walls ?? []);
     this._wallLoops = loops;
     const showFurniture = layers?.furniture !== false;
+    const showAppliances = layers?.appliances !== false;
     const showBg = layers?.bg !== false;
     const showWalls = layers?.walls !== false;
+    // Furniture pieces visible under the current layers: appliances ride their
+    // own layer, everything else the furniture layer. Feeds the build loop AND
+    // nav so a hidden category's anchors / door pivots / footprints all drop out.
+    const visFurniture = (f.furniture ?? []).filter(fu =>
+      furnitureCat(resolveFurnitureDef(fu, customObjects)) === 'appliance'
+        ? showAppliances : showFurniture);
     // Stairs sunk below the floor (negative elevation) cut a stairwell
     // opening so the descending flight is visible from above. No holes when
     // furniture (incl. stairs) is layer-hidden.
@@ -1909,7 +2005,7 @@ export class ThreeDRenderer {
     this._roomZones = [];
     this._terrain = [];
     const rooms = f.rooms ?? [];
-    for (const fu of showFurniture ? f.furniture : []) {
+    for (const fu of visFurniture) {
       // Appliance in-use indicator: resolve effective on/off (bound entity or
       // unbound localState). Appliance doors are built CLOSED as hinge pivots
       // (collected in doorSink) and animated per frame in updateTargets.
@@ -2151,7 +2247,7 @@ export class ThreeDRenderer {
 
     // Rebuild the humanoid navigation grid from the same walls + furniture.
     // Hidden walls don't block (consistent with hidden furniture).
-    this._buildNav(f, showFurniture ? undefined : null, customObjects, showWalls);
+    this._buildNav(f, visFurniture, customObjects, showWalls);
   }
 
   // Tag a wall mesh for the foreground-cutaway fader. Records the segment
@@ -2318,7 +2414,7 @@ export class ThreeDRenderer {
   // walkable. Build cost is cells × pieces + segment tests — build-time only.
   // `furnitureOn` mirrors the layer gate: pass `null` to treat furniture as
   // layer-hidden (don't block on it), else `undefined`.
-  private _buildNav(f: Floor, furnitureOn: null | undefined,
+  private _buildNav(f: Floor, furnitureOn: Furniture[] | null | undefined,
                     customObjects?: ObjectRecipe[], wallsOn = true): void {
     const cell = 150;
     const PERSON_R = 170;
@@ -2334,7 +2430,9 @@ export class ThreeDRenderer {
     // counter-top items don't obstruct the body). A counter at elevation 0 with
     // a 900 mm top still blocks — the test is whether the PIECE is raised, not
     // its height.
-    const furniture = furnitureOn === null ? [] : (f.furniture ?? []);
+    // null → no furniture; an explicit list → exactly those pieces (used to drop
+    // layer-hidden categories from nav); undefined → all of f.furniture.
+    const furniture = furnitureOn === null ? [] : (furnitureOn ?? f.furniture ?? []);
     for (const fu of furniture) {
       const def = resolveFurnitureDef(fu, customObjects);
       if (def.rug) continue;
@@ -4297,6 +4395,9 @@ export class ThreeDRenderer {
 
     const cond = fx.condition;
     const I = Math.max(0, Math.min(1, fx.intensity01));
+    // A stale caller (older app.js) omits `effects` → treat every effect-GROUP
+    // member as ON so legacy W2 behavior (precip/fog/lightning/wind) is preserved.
+    const eff = fx.effects ?? WEATHER_ALL_EFFECTS;
 
     // Wind drift in the SCENE frame. windBearingPlanRad = plan-frame angle the
     // wind blows TOWARD; plan (cos,sin) maps to scene via _w's mirror
@@ -4309,27 +4410,74 @@ export class ThreeDRenderer {
     } else if (windMmS > 0) {
       wdx = windMmS * 0.5;
     }
+    // Gust envelope active when the gust exceeds the sustained wind by > 15 km/h.
+    const gust = fx.windGustKmh ?? null;
+    this._gustEnabled = !!eff.wind && gust != null && gust > (fx.windKmh || 0) + 15;
+    if (!this._gustEnabled) { this._gustAge = -1; }
 
-    switch (cond) {
-      case 'rainy': case 'pouring': case 'lightning-rainy':
-        this._buildPrecipCloud('rain', I, wdx, wdz); break;
-      case 'snowy':
-        this._buildPrecipCloud('snow', I, wdx, wdz); break;
-      case 'snowy-rainy':   // one rain + one snow cloud, half counts each
-        this._buildPrecipCloud('rain', I, wdx, wdz, 0.5);
-        this._buildPrecipCloud('snow', I, wdx, wdz, 0.5); break;
-      case 'hail':
-        this._buildPrecipCloud('hail', I, wdx, wdz); break;
-      case 'windy': case 'windy-variant':
-        this._buildPrecipCloud('dust', I, wdx, wdz); break;
-      case 'fog':
-        this._buildFog(); break;
-      default: break;  // clear / cloudy / partlycloudy / exceptional: no particles
+    // ── Precipitation / dust (precip, wind keys) ──
+    if (eff.precip) {
+      switch (cond) {
+        case 'rainy': case 'pouring': case 'lightning-rainy':
+          this._buildPrecipCloud('rain', I, wdx, wdz); break;
+        case 'snowy':
+          this._buildPrecipCloud('snow', I, wdx, wdz); break;
+        case 'snowy-rainy':   // one rain + one snow cloud, half counts each
+          this._buildPrecipCloud('rain', I, wdx, wdz, 0.5);
+          this._buildPrecipCloud('snow', I, wdx, wdz, 0.5); break;
+        case 'hail':
+          this._buildPrecipCloud('hail', I, wdx, wdz); break;
+      }
     }
-    // Lightning flash rig for the two lightning conditions.
-    if (cond === 'lightning' || cond === 'lightning-rainy') this._buildFlash();
-    // Any non-fog condition eases the global scene fog back out (if it was on).
-    if (cond !== 'fog') this._fogTarget = 0;
+    if (eff.wind && (cond === 'windy' || cond === 'windy-variant')) {
+      this._buildPrecipCloud('dust', I, wdx, wdz);
+    }
+
+    // ── Fog (fog key): condition floor + continuous visibility scaling ──
+    // condition 'fog' floors the density; a reported visibilityKm scales it
+    // continuously (low visibility ⇒ denser) even under other conditions.
+    let fogTarget = 0;
+    if (eff.fog) {
+      if (cond === 'fog') fogTarget = 0.00018;
+      if (fx.visibilityKm != null && isFinite(fx.visibilityKm)) {
+        fogTarget = Math.max(fogTarget, visibilityToFogDensity(fx.visibilityKm));
+      }
+    }
+    if (fogTarget > 0) this._buildFog(fogTarget);
+    else this._fogTarget = 0;   // ease any active fog back out
+
+    // ── Cloud shadows (clouds key) ──
+    if (eff.clouds && fx.cloudCoverage != null) this._buildCloudShadows(fx.cloudCoverage, wdx, wdz);
+
+    // ── Lightning flash (lightning key) ──
+    if (eff.lightning && (cond === 'lightning' || cond === 'lightning-rainy')) this._buildFlash();
+
+    // ── Frost & icicles (frost key, default off) ──
+    const feels = fx.apparentC ?? null;
+    if (eff.frost && feels != null && feels <= -3) this._buildFrost();
+
+    // ── Rain puddles (puddles key) — persist the fade across rebuilds ──
+    this._puddleFloorId = this._floorId;
+    const wetNow = !!eff.puddles &&
+      (cond === 'rainy' || cond === 'pouring' || cond === 'snowy-rainy');
+    this._puddleTarget = wetNow ? 1 : 0;
+    const curFade = this._puddleFade[this._floorId] ?? 0;
+    if (wetNow || curFade > 0.001) this._buildPuddles();
+
+    // ── Storm brewing (precipForecast key, default off) ──
+    const brewing = !!eff.precipForecast && !!fx.rainSoon &&
+      cond !== 'rainy' && cond !== 'pouring' && cond !== 'lightning-rainy' &&
+      cond !== 'lightning' && cond !== 'hail';
+    if (brewing) this._buildStormBank(wdx, wdz);
+    this._setStormDark(brewing);
+
+    // ── True sun position (sunPosition key) — target eased in _animate ──
+    if (eff.sunPosition && fx.sunElevationDeg != null && fx.sunElevationDeg > 0
+        && fx.sunAzimuthDeg != null) {
+      this._weatherSunTarget = this._sunTargetFromSky(fx.sunAzimuthDeg, fx.sunElevationDeg);
+    } else {
+      this._weatherSunTarget = null;
+    }
   }
 
   private _clearWeather(): void {
@@ -4339,6 +4487,9 @@ export class ThreeDRenderer {
     // lists so the per-frame advance stops touching freed buffers.
     this._weatherClouds = [];
     this._weatherFogPlanes = [];
+    this._weatherCloudShadows = [];
+    this._weatherPuddles = [];
+    this._weatherIcicles = [];
     this._weatherFlash = null;
     this._flashAge = -1;
     this._clearGroup(this._weatherGroup);
@@ -4398,14 +4549,14 @@ export class ThreeDRenderer {
     });
   }
 
-  private _buildFog(): void {
+  private _buildFog(target = 0.00018): void {
     if (!this._scene) return;
     const existing = this._scene.fog as THREE.FogExp2 | null;
     if (!existing || !(existing as { isFogExp2?: boolean }).isFogExp2) {
       // Start at density 0 and let _advanceWeather ease in over ~2 s (no pop).
       this._scene.fog = new THREE.FogExp2(0xc2c8d2, 0);
     }
-    this._fogTarget = 0.00018;
+    this._fogTarget = target;
     // Two large translucent ground planes OUTSIDE the walls, scrolled slowly in
     // opposite directions in _advanceWeather for a drifting-mist feel.
     const w = this._fw + 12000, d = this._fd + 12000;
@@ -4433,6 +4584,173 @@ export class ThreeDRenderer {
     this._flashAge = -1;
   }
 
+  // Drifting cloud shadows (W3, clouds key). Count + darkness scale with
+  // cloud_coverage: < 30% → none; overcast → more, darker blobs sliding across
+  // the yard with the wind. Shared _cloudShadowTex; positions mutated in
+  // _advanceWeather (zero alloc), wrapped in an inflated spawn box.
+  private _buildCloudShadows(coveragePct: number, wdx: number, wdz: number): void {
+    const cov = Math.max(0, Math.min(100, coveragePct));
+    if (cov < 30) return;
+    const t = (cov - 30) / 70;                     // 0..1 above the 30% floor
+    const count = Math.round(3 + t * 3);           // 3..6
+    const opacity = 0.12 + t * 0.20;               // 0.12..0.32
+    const INF = 5000;
+    const minX = -this._fw / 2 - INF, sizeX = this._fw + 2 * INF;
+    const minZ = -this._fd / 2 - INF, sizeZ = this._fd + 2 * INF;
+    // A gentle default drift when there's no wind, so shadows are never static.
+    const dx = wdx || 220, dz = wdz || 90;
+    for (let i = 0; i < count; i++) {
+      const r = 2600 + Math.random() * 2600;       // blob radius, mm
+      const geo = new THREE.PlaneGeometry(r * 2, r * 2);
+      const mat = new THREE.MeshBasicMaterial({
+        map: this._cloudShadowTexture(), transparent: true, opacity,
+        depthWrite: false, color: 0xffffff,
+      });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.rotation.x = -Math.PI / 2;
+      mesh.position.set(minX + Math.random() * sizeX, 12, minZ + Math.random() * sizeZ);
+      mesh.renderOrder = 1;                          // above floor, below particles
+      mesh.userData.outlineSkip = true;
+      this._weatherGroup.add(mesh);
+      this._weatherCloudShadows.push({ mesh, driftX: dx, driftZ: dz, minX, minZ, sizeX, sizeZ });
+    }
+  }
+
+  // Frost & icicles (W3, frost key, default off). A handful of small white
+  // icicle cones hanging from the floor perimeter (proxy for exterior wall top
+  // runs) + a faint white rim strip. Build-time; counts kept tiny.
+  private _buildFrost(): void {
+    const iceMat = this._mat({ color: 0xeaf4ff, transparent: true, opacity: 0.92 });
+    const hw = this._fw / 2, hd = this._fd / 2;
+    const H = 2743;   // full wall top
+    // Deterministic-ish placement along the four perimeter edges.
+    const edges: Array<[number, number, number, number]> = [
+      [-hw, -hd, hw, -hd], [-hw, hd, hw, hd],   // front / back runs (vary X)
+      [-hw, -hd, -hw, hd], [hw, -hd, hw, hd],   // left / right runs (vary Z)
+    ];
+    let seed = 0x9e37;
+    const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+    for (const [x0, z0, x1, z1] of edges) {
+      const n = 5;
+      for (let i = 0; i < n; i++) {
+        const f = (i + 0.5) / n + (rnd() - 0.5) * 0.06;
+        const x = x0 + (x1 - x0) * f, z = z0 + (z1 - z0) * f;
+        const len = 180 + rnd() * 260;
+        const cone = new THREE.Mesh(new THREE.ConeGeometry(45 + rnd() * 30, len, 6), iceMat);
+        cone.position.set(x, H - len / 2, z);       // tip points down
+        cone.rotation.x = Math.PI;
+        cone.userData.outlineSkip = true;
+        this._weatherGroup.add(cone);
+        this._weatherIcicles.push(cone);
+      }
+      // Faint rim strip along the top of the run.
+      const len = Math.hypot(x1 - x0, z1 - z0);
+      const rim = new THREE.Mesh(
+        new THREE.BoxGeometry(x1 === x0 ? 60 : len, 40, z1 === z0 ? 60 : len),
+        this._mat({ color: 0xdff0ff, transparent: true, opacity: 0.5, depthWrite: false }));
+      rim.position.set((x0 + x1) / 2, H - 20, (z0 + z1) / 2);
+      rim.userData.outlineSkip = true;
+      this._weatherGroup.add(rim);
+      this._weatherIcicles.push(rim);
+    }
+  }
+
+  // Rain puddles (W3, puddles key). Flat dark-blue ellipse decals at DETERMINISTIC
+  // seeded floor-edge spots (seed from the floor id hash so rebuilds never
+  // reshuffle). Opacity is driven per-frame by _puddleFade[floorId], which
+  // survives _keyWeather rebuilds so puddles linger + fade out over ~10 min after
+  // rain stops (a Sims touch).
+  private _buildPuddles(): void {
+    const seedBase = this._hashStr(this._floorId || 'f');
+    const fade = this._puddleFade[this._floorId] ?? 0;
+    const hw = this._fw / 2, hd = this._fd / 2;
+    let seed = seedBase;
+    const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+    const count = 4 + (seedBase % 5);   // 4..8
+    for (let i = 0; i < count; i++) {
+      const rx = 500 + rnd() * 1100, rz = 400 + rnd() * 900;
+      // Bias toward the yard band just outside the floor edges + some interior.
+      const edge = rnd() < 0.6;
+      let x: number, z: number;
+      if (edge) {
+        const side = Math.floor(rnd() * 4);
+        const along = (rnd() * 2 - 1);
+        if (side === 0) { x = along * hw; z = hd + 900 + rnd() * 1600; }
+        else if (side === 1) { x = along * hw; z = -hd - 900 - rnd() * 1600; }
+        else if (side === 2) { x = hw + 900 + rnd() * 1600; z = along * hd; }
+        else { x = -hw - 900 - rnd() * 1600; z = along * hd; }
+      } else {
+        x = (rnd() * 2 - 1) * hw * 0.8; z = (rnd() * 2 - 1) * hd * 0.8;
+      }
+      const baseOpacity = 0.55;
+      const geo = new THREE.PlaneGeometry(rx * 2, rz * 2);
+      const mat = new THREE.MeshBasicMaterial({
+        map: this._puddleTexture(), transparent: true, opacity: baseOpacity * fade,
+        depthWrite: false, color: 0xffffff,
+      });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.rotation.x = -Math.PI / 2;
+      mesh.position.set(x, 6, z);   // just above the slab / yard void
+      mesh.renderOrder = 1;
+      mesh.userData.outlineSkip = true;
+      this._weatherGroup.add(mesh);
+      this._weatherPuddles.push({ mesh, baseOpacity });
+    }
+  }
+
+  // Distant dark cloud-bank on the upwind horizon (W3, precipForecast key). A
+  // couple of overlapping dark billboards far out in the direction the weather is
+  // coming FROM (opposite the wind's blow-toward drift).
+  private _buildStormBank(wdx: number, wdz: number): void {
+    // Upwind = opposite the drift; default to −X when there's no wind.
+    let ux = -wdx, uz = -wdz;
+    const m = Math.hypot(ux, uz);
+    if (m < 1e-3) { ux = -1; uz = 0; } else { ux /= m; uz /= m; }
+    const dist = Math.max(this._fw, this._fd) + 14000;
+    const cx = ux * dist, cz = uz * dist;
+    const tex = this._cloudShadowTexture();
+    for (let i = 0; i < 3; i++) {
+      const s = 9000 + i * 3500;
+      const spr = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: tex, color: 0x2b3340, transparent: true, opacity: 0.5, depthWrite: false,
+      }));
+      spr.scale.set(s, s * 0.55, 1);
+      spr.position.set(cx + (i - 1) * 3800, 4200 + i * 600, cz + (i - 1) * 1400 * uz);
+      spr.renderOrder = 1;
+      this._weatherGroup.add(spr);
+    }
+  }
+
+  // Apply / release the slight sky darkening that accompanies a brewing storm.
+  // The amount is eased in _advanceWeather between the captured preset tint and a
+  // darkened copy; when it eases back to 0 the exact preset tint returns (no
+  // applyScenePreset needed, so it never fights per-frame sun easing).
+  private _setStormDark(on: boolean): void {
+    if (on && !this._stormDark) {
+      const bg = this._scene?.background;
+      if (bg instanceof THREE.Color) this._stormBaseBg = bg.clone();
+    }
+    this._stormDark = on;
+  }
+
+  // Convert a plan-frame sky azimuth (deg; three-view already applied geo θ) +
+  // elevation into a scene-frame directional-light POSITION at a fixed radius.
+  // Compass: 0° = plan +Y (north), 90° = plan +X (east). _w mirrors X, maps plan
+  // +Y → scene +Z: sceneX = −planX, sceneZ = +planY.
+  private _sunTargetFromSky(azDeg: number, elevDeg: number): THREE.Vector3 {
+    const R = 12000;
+    const az = azDeg * Math.PI / 180, el = Math.max(0, Math.min(90, elevDeg)) * Math.PI / 180;
+    const horiz = Math.cos(el) * R, y = Math.sin(el) * R + 600;
+    const planX = Math.sin(az) * horiz, planY = Math.cos(az) * horiz;
+    return new THREE.Vector3(-planX, y, planY);
+  }
+
+  private _hashStr(s: string): number {
+    let h = 5381;
+    for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) & 0x7fffffff;
+    return h;
+  }
+
   // Per-frame weather advance — called every frame from _animate. All motion is
   // buffer mutation (no allocation). Fog density easing runs even when the group
   // is hidden so toggling the layer / leaving fog clears the global scene fog.
@@ -4446,6 +4764,45 @@ export class ThreeDRenderer {
         if (this._fogTarget === 0 && fog.density < 1e-5) this._scene.fog = null;
       }
     }
+
+    // True sun position (W3): ease the directional sun light toward the real
+    // sky direction (τ ≈ 2 s). Runs even when the group is hidden — the sun light
+    // lives outside _weatherGroup. Cleared target → leave the preset placement.
+    if (this._sun && this._weatherSunTarget) {
+      const k = Math.min(1, dt / 2);
+      this._sun.position.lerp(this._weatherSunTarget, k);
+    }
+
+    // Storm-brewing sky darkening (W3): ease the background between the captured
+    // preset tint and a darkened copy. Only touches background while easing.
+    this._stormDarkAmt += ((this._stormDark ? 1 : 0) - this._stormDarkAmt) * Math.min(1, dt / 2.5);
+    if (this._scene && this._stormBaseBg && this._scene.background instanceof THREE.Color) {
+      if (this._stormDarkAmt > 0.002) {
+        const dark = this._stormBaseBg.clone().multiplyScalar(0.82);
+        this._scene.background.copy(this._stormBaseBg).lerp(dark, this._stormDarkAmt);
+      } else if (!this._stormDark) {
+        this._scene.background.copy(this._stormBaseBg);
+        this._stormBaseBg = null;
+      }
+    }
+
+    // Rain puddles (W3): ease the per-floor fade — fast in (~2 s), slow out
+    // (~10 min lingering) — and apply it to each puddle decal's opacity. Runs
+    // regardless of group visibility so the fade progresses (applied opacity is
+    // still gated by the group's visibility flag for display).
+    const fid = this._puddleFloorId;
+    if (fid) {
+      const cur = this._puddleFade[fid] ?? 0;
+      const target = this._puddleTarget;
+      const next = target > cur
+        ? Math.min(target, cur + dt / 2)        // fade in over ~2 s
+        : Math.max(target, cur - dt / 600);     // linger + fade out over ~10 min
+      this._puddleFade[fid] = next;
+      for (const pu of this._weatherPuddles) {
+        (pu.mesh.material as THREE.MeshBasicMaterial).opacity = pu.baseOpacity * next;
+      }
+    }
+
     if (!this._weatherGroup.visible) return;
 
     // Scrolling ground-fog planes.
@@ -4455,6 +4812,35 @@ export class ThreeDRenderer {
       pl.position.x += (i % 2 === 0 ? 1 : -1) * 200 * dt;   // 200 mm/s
       if (pl.position.x > span) pl.position.x -= 2 * span;
       else if (pl.position.x < -span) pl.position.x += 2 * span;
+    }
+
+    // Wind gust envelope (W3): every 6–14 s a 1.5 s burst doubles the horizontal
+    // drift of precip + dust. Pure decay schedule; only the gap is random.
+    let gustMul = 1;
+    if (this._gustEnabled) {
+      if (this._gustAge < 0) {
+        this._gustCountdown -= dt;
+        if (this._gustCountdown <= 0) this._gustAge = 0;
+      } else {
+        this._gustAge += dt;
+        if (this._gustAge > 1.5) {
+          this._gustAge = -1;
+          this._gustCountdown = 6 + Math.random() * 8;
+        } else {
+          // Smooth 0→1→0 hump over the burst; peak ≈ 2× drift.
+          gustMul = 1 + Math.sin((this._gustAge / 1.5) * Math.PI);
+        }
+      }
+    }
+
+    // Drifting cloud shadows (W3): slide across the yard with the wind, wrap in
+    // the spawn box. Zero allocation — mutate mesh.position in place.
+    for (const cs of this._weatherCloudShadows) {
+      const pmesh = cs.mesh.position;
+      pmesh.x += cs.driftX * dt; pmesh.z += cs.driftZ * dt;
+      const maxX = cs.minX + cs.sizeX, maxZ = cs.minZ + cs.sizeZ;
+      if (pmesh.x > maxX) pmesh.x -= cs.sizeX; else if (pmesh.x < cs.minX) pmesh.x += cs.sizeX;
+      if (pmesh.z > maxZ) pmesh.z -= cs.sizeZ; else if (pmesh.z < cs.minZ) pmesh.z += cs.sizeZ;
     }
 
     // Precip / dust clouds: fall + wind drift + wobble, recycled in the band and
@@ -4469,7 +4855,7 @@ export class ThreeDRenderer {
           p[j + 1] -= cl.fall * dt;
           if (p[j + 1] < 0) p[j + 1] += BAND;
         }
-        let vx = cl.driftX, vz = cl.driftZ;
+        let vx = cl.driftX * gustMul, vz = cl.driftZ * gustMul;
         if (cl.wobble) {
           const ph = cl.phase[i] + nowS * 1.3;
           vx += Math.cos(ph) * cl.wobble;
@@ -4510,6 +4896,7 @@ export class ThreeDRenderer {
     if (!this._scene) return;
     this._fanRotors = [];  // rebuilt below; never spin disposed objects
     this._clearGroup(this._lightGroup);
+    this._clearGroup(this._switchGroup);   // switches build into their own layer group
     const LIGHT_BODY_R = 200;
     for (const l of lights) {
       const st = itemState(l, stateProvider);
@@ -5184,7 +5571,7 @@ export class ThreeDRenderer {
       // mirror in `_w` is also CW from above, so negate to match.
       box.rotation.y = -switchRotation(sw) * Math.PI / 180;
       box.userData = { kind: 'switch', entity_id: sw.entity_id, fixtureId: sw.id };
-      this._lightGroup.add(box);
+      this._switchGroup.add(box);
     }
   }
 
@@ -8179,12 +8566,13 @@ export class ThreeDRenderer {
       this._floorGroup, this._doorGroup, this._modelGroup, this._zoneGroup, this._haloGroup,
       this._sensorGroup, this._motionGroup, this._envGroup, this._bleGroup,
       this._alarmGroup, this._safetyGroup, this._robotGroup, this._robotRigGroup,
-      this._lightGroup, this._targetGroup, this._gpsGroup, this._weatherGroup,
+      this._lightGroup, this._switchGroup, this._targetGroup, this._gpsGroup, this._weatherGroup,
     ]) {
       this._disposeSpriteMaps(g);
       this._clearGroup(g);
     }
     this._weatherClouds = []; this._weatherFogPlanes = []; this._weatherFlash = null;
+    this._weatherCloudShadows = []; this._weatherPuddles = []; this._weatherIcicles = [];
     for (const key of Object.keys(this._humanoids)) {
       this._disposeHumanoid(this._humanoids[key]);
     }
@@ -8206,6 +8594,8 @@ export class ThreeDRenderer {
     this._hailTex?.dispose(); this._hailTex = null;
     this._dustTex?.dispose(); this._dustTex = null;
     this._fogPlaneTex?.dispose(); this._fogPlaneTex = null;
+    this._cloudShadowTex?.dispose(); this._cloudShadowTex = null;
+    this._puddleTex?.dispose(); this._puddleTex = null;
     this._outlineMaterial?.dispose(); this._outlineMaterial = null;
     this._controls?.dispose();
     if (this._renderer) {

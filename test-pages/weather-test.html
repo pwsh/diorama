@@ -29,7 +29,8 @@
   <script type="module">
     import {
       wmoToCondition, deriveFromSensors, resolveWeatherEntity,
-      toCelsius, toKmh, toMmPerH,
+      toCelsius, toKmh, toMmPerH, toKm, parseWindBearing,
+      weatherEffectEnabled, visibilityToFogDensity, forecastRainSoon,
     } from './weather.mod.js';
 
     const tests = [];
@@ -114,6 +115,65 @@
     // wmo daily→forecast mapping is the same table used for tomorrow's code
     // (forecast is day-framed, so clear maps to sunny not clear-night).
     eq('wmo daily 65 → pouring forecast', wmoToCondition(65, true), 'pouring');
+
+    // ── W3: per-effect toggle defaults + override ──────────────────────────
+    eq('effect precip default on',        weatherEffectEnabled(undefined, 'precip'), true);
+    eq('effect fog default on',           weatherEffectEnabled(undefined, 'fog'), true);
+    eq('effect lightning default on',     weatherEffectEnabled(undefined, 'lightning'), true);
+    eq('effect wind default on',          weatherEffectEnabled(undefined, 'wind'), true);
+    eq('effect clouds default on',        weatherEffectEnabled(undefined, 'clouds'), true);
+    eq('effect sunPosition default on',   weatherEffectEnabled(undefined, 'sunPosition'), true);
+    eq('effect puddles default on',       weatherEffectEnabled(undefined, 'puddles'), true);
+    eq('effect frost default OFF',        weatherEffectEnabled(undefined, 'frost'), false);
+    eq('effect precipForecast default OFF', weatherEffectEnabled(undefined, 'precipForecast'), false);
+    eq('effect override off',   weatherEffectEnabled({ source:'openmeteo', effects:{ precip:false } }, 'precip'), false);
+    eq('effect override on',    weatherEffectEnabled({ source:'openmeteo', effects:{ frost:true } }, 'frost'), true);
+    eq('effect absent key → default', weatherEffectEnabled({ source:'openmeteo', effects:{ fog:false } }, 'precip'), true);
+
+    // ── W3: visibility → fog density ───────────────────────────────────────
+    near('vis 10km → 4.2e-5',  visibilityToFogDensity(10), 0.000042, 1e-9);
+    near('vis 1km → 4.2e-4',   visibilityToFogDensity(1), 0.00042, 1e-9);
+    eq('vis 0km clamps to max', visibilityToFogDensity(0), 0.0009);
+    eq('vis 0.05km clamps max', visibilityToFogDensity(0.05), 0.0009);
+    eq('vis huge → ~0 floor',   visibilityToFogDensity(1e6) < 1e-6, true);
+
+    // ── W3: visibility unit normalization (toKm) + wind_bearing cardinals ──
+    near('5 mi → 8.05 km',    toKm(5, 'mi'), 8.04672, 1e-3);
+    near('1000 m → 1 km',     toKm(1000, 'm'), 1);
+    near('km passthrough',    toKm(5, 'km'), 5);
+    eq('bearing 90 num',      parseWindBearing(90), 90);
+    eq('bearing NW → 315',    parseWindBearing('NW'), 315);
+    eq('bearing e → 90',      parseWindBearing('e'), 90);
+    eq('bearing bogus → null', parseWindBearing('zzz'), null);
+    eq('bearing missing → null', parseWindBearing(undefined), null);
+
+    // ── W3: extended entity attributes (unit-normalized) ───────────────────
+    const ext = resolveWeatherEntity('cloudy', {
+      cloud_coverage: 80, visibility: 5, visibility_unit: 'mi',
+      wind_gust_speed: 20, wind_speed_unit: 'mph',
+      apparent_temperature: 23, temperature_unit: '°F',
+      humidity: 66, wind_bearing: 'NW',
+    }, {});
+    eq('ext cloud_coverage',   ext.cloudCoverage, 80);
+    near('ext visibility mi→km', ext.visibilityKm, 8.04672, 1e-3);
+    near('ext gust mph→kmh',   ext.windGustKmh, 32.18688, 1e-3);
+    near('ext apparent °F→°C', ext.apparentC, -5, 1e-6);
+    eq('ext humidity',         ext.humidity, 66);
+    eq('ext wind_bearing cardinal', ext.windBearing, 315);
+    eq('ext absent → null',    resolveWeatherEntity('sunny', {}, {}).cloudCoverage, null);
+
+    // ── W3: rainSoon from an hourly forecast ───────────────────────────────
+    const nowMs = Date.parse('2026-07-12T12:00:00Z');
+    const iso = (h) => new Date(nowMs + h * 3600000).toISOString();
+    eq('rainSoon prob≥60 within 3h',
+       forecastRainSoon([{ datetime: iso(1), precipitation_probability: 70 }], nowMs), true);
+    eq('rainSoon rainy condition within 3h',
+       forecastRainSoon([{ datetime: iso(2), condition: 'rainy', precipitation_probability: 10 }], nowMs), true);
+    eq('rainSoon dry → false',
+       forecastRainSoon([{ datetime: iso(1), condition: 'sunny', precipitation_probability: 10 }], nowMs), false);
+    eq('rainSoon beyond 3h → false',
+       forecastRainSoon([{ datetime: iso(8), precipitation_probability: 90 }], nowMs), false);
+    eq('rainSoon empty → false', forecastRainSoon([], nowMs), false);
 
     // ── run + render ────────────────────────────────────────────────────────
     const grid = document.getElementById('grid');
