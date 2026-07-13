@@ -1,6 +1,6 @@
 # Project status & pick-up guide
 
-Last updated: 2026-07-13, at **v0.13.0**. This is the single document to read
+Last updated: 2026-07-13, at **v0.14.0**. This is the single document to read
 (alongside `CLAUDE.md`) to resume work with full context.
 
 ## Where things stand
@@ -10,7 +10,7 @@ Diorama is feature-complete through TWO arcs — the Sims-2000 arc
 (`docs/DESIGN-world.md`, 8 phases: BLE identity/trilateration/fusion, pet
 rigs, GPS geo-calibration + pins, weather core + 3D effects) — plus the
 post-arc batches listed below. Everything is merged to `main`, pushed to
-**both remotes**, released through **v0.13.0**, and deployed to the live HA
+**both remotes**, released through **v0.14.0**, and deployed to the live HA
 instance.
 
 ### Remotes, releases, deploy
@@ -52,7 +52,13 @@ instance.
   GPS and Roborock live position, weather W3 per-effect visuals +
   true sun, presence zones, geo event pins, camera fixtures, battery +
   power + occupancy layers, garage doors + blinds + doorbell pulses,
-  now-playing, plumbob colors, nav wall-LOS fix, cinematic orbit).
+  now-playing, plumbob colors, nav wall-LOS fix, cinematic orbit)
+  → v0.14.0 curb appeal (continuous single-mesh walls — translucent
+  seam fix, interactive two-sided door locks, oven temp binding +
+  click-open door, background-image bug fixes, curbside trash/recycle
+  bins, floodlight kind, camera alert snapshot popups, yard arc:
+  ground coverings + nine outdoor objects + sittable lawn chair +
+  3D grid layer toggle).
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
