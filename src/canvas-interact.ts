@@ -11,6 +11,7 @@ import {
   hitMotionSensor, hitMotionRotateHandle, hitEnvSensor, hitEnvResizeHandle,
   hitBleProxy, hitAlarmPanel, hitSafetySensor, hitRobot,
   hitCamera, hitCameraRotateHandle, hitPresenceZone, hitPresenceZoneVertex,
+  hitGroundArea, hitGroundAreaVertex,
   hitDoor, hitDoorEnd, hitDoorLock, hitWindow, hitWindowEnd, hitFloorEdge,
 } from './canvas-hit.js';
 import type { Planner, Drag } from './planner.js';
@@ -110,6 +111,11 @@ const SENSOR_DEFAULTS = { fov: 120, range: 6000 };
 // edge over a sensor body swallowed the sensor's drag).
 function zonesInteractive(p: Planner): boolean {
   return p.store.layers2d?.zones !== false;
+}
+// Ground areas are only select/vertex-drag interactive while the ground layer
+// is visible — a hidden ground layer must never capture input (same rule as zones).
+function groundInteractive(p: Planner): boolean {
+  return p.store.layers2d?.ground !== false;
 }
 const MOTION_DEFAULTS = { fov: 110, range: 5000 };
 
@@ -366,6 +372,16 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
       canvas.style.cursor = 'grabbing'; e.preventDefault(); return;
     }
   }
+  // Ground-area vertex handles (active area, ground layer visible) — drag to
+  // reshape. Mirrors the presence-zone vertex path.
+  if (groundInteractive(p)) {
+    const gv = hitGroundAreaVertex(p, view, mm);
+    if (gv) {
+      p.drag = { kind: 'groundVert', id: gv.area.id, idx: gv.idx,
+                 startMm: mm, startPts: gv.area.points.map(pt => ({ ...pt })) };
+      canvas.style.cursor = 'grabbing'; e.preventDefault(); return;
+    }
+  }
   // Zone polys / object halos capture input ONLY while the zones layer is
   // visible — an invisible zone edge crossing a sensor body used to swallow
   // the sensor's drag (mirrors the 3D rule: hidden lights stop being raycast
@@ -535,6 +551,16 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
     p.drag = { kind: 'bgMove', startMm: mm, start: { x: bgBody.x, y: bgBody.y } };
     canvas.style.cursor = 'grabbing'; e.preventDefault(); return;
   }
+  // Ground-area body — select it (shows vertex handles); low priority (after
+  // every item hit) so ground paint never swallows a click meant for something
+  // resting on it. Only when the ground layer is on. No whole-area drag in v1.
+  if (groundInteractive(p)) {
+    const gH = hitGroundArea(p, view, mm);
+    if (gH) {
+      if (p.activeGroundAreaId !== gH.id) { p.activeGroundAreaId = gH.id; p.emitConfig(); }
+      e.preventDefault(); return;
+    }
+  }
   // Floor boundary edge — lowest priority (after every item hit, before the
   // canvas-2d pan fallback). Drag to resize the canvas space; left/bottom edges
   // also reposition the plan (see resolveFloorEdgeDrag / translateFloorContent).
@@ -664,6 +690,13 @@ export function onCanvasMouseMove(p: Planner, canvas: HTMLCanvasElement, view: V
         const z = (f.presenceZones ?? []).find(x => x.id === drag.id);
         if (z && !z.locked && z.points[drag.idx]) {
           z.points[drag.idx] = { x: snap(mm.x, 10), y: snap(mm.y, 10) };
+        }
+        break;
+      }
+      case 'groundVert': {
+        const g = (f.groundAreas ?? []).find(x => x.id === drag.id);
+        if (g && !g.locked && g.points[drag.idx]) {
+          g.points[drag.idx] = { x: snap(mm.x, 10), y: snap(mm.y, 10) };
         }
         break;
       }
@@ -942,6 +975,7 @@ export function onCanvasMouseMove(p: Planner, canvas: HTMLCanvasElement, view: V
     else if (hitCameraRotateHandle(p, view, mm)) canvas.style.cursor = 'grab';
     else if (hitCamera(p, view, mm)) canvas.style.cursor = 'grab';
     else if (zonesInteractive(p) && hitPresenceZoneVertex(p, view, mm)) canvas.style.cursor = 'grab';
+    else if (groundInteractive(p) && hitGroundAreaVertex(p, view, mm)) canvas.style.cursor = 'grab';
     else if (hitSensorRotateHandle(p, view, mm)) canvas.style.cursor = 'grab';
     else if (zonesInteractive(p) && hitObjectRadiusHandle(p, view, mm)) canvas.style.cursor = 'ew-resize';
     else if (zonesInteractive(p) && (hitObject(p, view, mm) || hitVertexOrZone(p, view, mm))) canvas.style.cursor = 'grab';
@@ -1050,6 +1084,10 @@ export function onCanvasMouseUp(p: Planner, canvas: HTMLCanvasElement): void {
   } else if (drag.kind === 'pzoneVert') {
     const z = (f.presenceZones ?? []).find(x => x.id === drag.id);
     if (z && z.points[drag.idx]) z.points[drag.idx] = { x: snap(z.points[drag.idx].x, 10), y: snap(z.points[drag.idx].y, 10) };
+    p.save();
+  } else if (drag.kind === 'groundVert') {
+    const g = (f.groundAreas ?? []).find(x => x.id === drag.id);
+    if (g && g.points[drag.idx]) g.points[drag.idx] = { x: snap(g.points[drag.idx].x, 10), y: snap(g.points[drag.idx].y, 10) };
     p.save();
   } else if (drag.kind === 'envResize') {
     p.save();
@@ -1420,6 +1458,15 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
     p.emitConfig();
     return;
   }
+  if (p.tool === 'ground') {
+    // Ground-area polygon draw latch (mirrors the pzone tool): each click appends
+    // a world-mm vertex; double-click / Enter finishes (≥3 pts, capped at 20).
+    const v = { x: snap(mm.x, 10), y: snap(mm.y, 10) };
+    if (!p.drawingGroundArea) p.drawingGroundArea = { points: [v] };
+    else if (p.drawingGroundArea.points.length < 20) p.drawingGroundArea.points.push(v);
+    p.emitConfig();
+    return;
+  }
   if (p.tool === 'wall') {
     // First vertex: free placement. Subsequent vertices snap to a 15°
     // increment from the previous vertex via snapVertex15 (preserves cursor
@@ -1558,6 +1605,8 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
       }
     }
     const sh = hitSensor(p, view, mm);
+    // (ground-area delete is handled lower, after item hits, so the delete tool
+    // still reaches items resting on a ground area first.)
     if (sh) {
       if (sh.locked) return;
       f.sensors = f.sensors.filter(x => x.id !== sh.id);
@@ -1599,6 +1648,16 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
       if (wh.locked) return;
       f.walls = f.walls.filter(x => x.id !== wh.id);
       p.save(); p.emitConfig(); return;
+    }
+    // Ground areas — lowest delete priority (paint under everything).
+    if (groundInteractive(p)) {
+      const gHit = hitGroundArea(p, view, mm);
+      if (gHit) {
+        if (gHit.locked) return;
+        f.groundAreas = (f.groundAreas ?? []).filter(x => x.id !== gHit.id);
+        if (p.activeGroundAreaId === gHit.id) p.activeGroundAreaId = null;
+        p.save(); p.emitConfig(); return;
+      }
     }
   }
   if (p.tool === 'select') {
@@ -1658,6 +1717,12 @@ export function onCanvasDblClick(p: Planner, canvas: HTMLCanvasElement, view: Vi
   if (p.tool === 'pzone' && p.drawingPresenceZone) {
     if (p.drawingPresenceZone.points.length >= 3) p.finishPresenceZone();
     else { p.drawingPresenceZone = null; p.emitConfig(); }
+    p.setTool('select');
+    return;
+  }
+  if (p.tool === 'ground' && p.drawingGroundArea) {
+    if (p.drawingGroundArea.points.length >= 3) p.finishGroundArea();
+    else { p.drawingGroundArea = null; p.emitConfig(); }
     p.setTool('select');
     return;
   }

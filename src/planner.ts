@@ -149,6 +149,7 @@ export type Drag =
   | { kind: 'camera'; id: string; startMm: Vec2; start: Vec2 }
   | { kind: 'cameraRotate'; id: string }
   | { kind: 'pzoneVert'; id: string; idx: number; startMm: Vec2; startPts: Vec2[] }
+  | { kind: 'groundVert'; id: string; idx: number; startMm: Vec2; startPts: Vec2[] }
   | { kind: 'env'; id: string; startMm: Vec2; start: Vec2 }
   | { kind: 'envResize'; id: string; startDist: number; startScale: number }
   | { kind: 'doorMove'; idx: number; startMm: Vec2; start: Vec2 }
@@ -174,7 +175,7 @@ export interface EditZone {
   mousePos: Vec2 | null;
 }
 
-export type Tool = 'select' | 'wall' | 'sensor' | 'motion' | 'env' | 'bleproxy' | 'alarm' | 'safety' | 'robot' | 'camera' | 'pzone' | 'furniture' | 'light' | 'switch' | 'door' | 'window' | 'delete';
+export type Tool = 'select' | 'wall' | 'sensor' | 'motion' | 'env' | 'bleproxy' | 'alarm' | 'safety' | 'robot' | 'camera' | 'pzone' | 'ground' | 'furniture' | 'light' | 'switch' | 'door' | 'window' | 'delete';
 
 // Live robot state (runtime-only). `x/y/heading/phase/activity/led` are the
 // DISPLAY fields both canvases read; the rest are the movement controller's
@@ -302,6 +303,11 @@ export class Planner extends EventTarget {
   // (≥3 pts). Runtime-only. `id` is set when re-drawing an existing zone.
   drawingPresenceZone: { points: Vec2[]; id?: string } | null = null;
 
+  // Ground / yard covering area (the "yard" arc). Mirrors the presence-zone
+  // polygon flow exactly (parallel field, same latch idiom).
+  activeGroundAreaId: string | null = null;
+  drawingGroundArea: { points: Vec2[]; id?: string } | null = null;
+
   // Live robot positions (runtime-only, advanced by stepRobots from the 2D RAF —
   // like stepLerp). BOTH the 2D canvas and the 3D renderer read this, so the
   // robot moves consistently whether or not the 3D view was ever opened. See
@@ -422,7 +428,7 @@ export class Planner extends EventTarget {
     if (m !== 'edit') {
       // Leave no edit affordances dangling.
       this.drag = null; this.editZone = null; this.drawingWall = null;
-      this.drawingPresenceZone = null;
+      this.drawingPresenceZone = null; this.drawingGroundArea = null;
       this.tool = 'select'; this.placingRoomId = null; this.placingLandmarkId = null;
       this.alignGuides = []; this.alignCandidates = [];
       // A disabled floor is hidden from the kiosk/view picker — don't strand the
@@ -751,6 +757,7 @@ export class Planner extends EventTarget {
           this.activeRobotId = null;
           this.activeCameraId = null;
           this.activePZoneId = null;
+          this.activeGroundAreaId = null;
           this.robotStates = {};
           this.activePersonId = null;
           this.viewCenter = null;
@@ -759,6 +766,7 @@ export class Planner extends EventTarget {
           this.editZone = null;
           this.drawingWall = null;
           this.drawingPresenceZone = null;
+          this.drawingGroundArea = null;
           this.showDetails = this.store.showDetails === true;
           this.useRawTargets = this.store.useRawTargets === true;
           // Mirror to localStorage as the local cache.
@@ -1208,6 +1216,7 @@ export class Planner extends EventTarget {
     this.tool = t;
     if (t !== 'wall') this.drawingWall = null;
     if (t !== 'pzone') this.drawingPresenceZone = null;
+    if (t !== 'ground') this.drawingGroundArea = null;
     this.placingRoomId = null;  // picking any tool cancels a pending room placement
     this.placingLandmarkId = null;
     this.emitConfig();
@@ -1269,6 +1278,33 @@ export class Planner extends EventTarget {
       const id = newId('pz');
       f.presenceZones.push({ id, name: `Zone ${f.presenceZones.length + 1}`, points: pts, entity_id: null });
       this.activePZoneId = id;
+    }
+    this.save();
+    this.emitConfig();
+  }
+
+  setActiveGroundArea(id: string | null): void {
+    this.activeGroundAreaId = (this.activeGroundAreaId === id) ? null : id;
+    this.emitConfig();
+  }
+
+  // Commit the in-progress ground-area polygon (≥3 pts). Mirrors finishPresenceZone.
+  // Replaces an existing area's points when re-drawing (drawingGroundArea.id set),
+  // else creates a new grass area.
+  finishGroundArea(): void {
+    const d = this.drawingGroundArea;
+    this.drawingGroundArea = null;
+    if (!d || d.points.length < 3) { this.emitConfig(); return; }
+    const f = this.floor();
+    if (!f.groundAreas) f.groundAreas = [];
+    const pts = d.points.slice(0, 20).map(p => ({ x: Math.round(p.x), y: Math.round(p.y) }));
+    if (d.id) {
+      const g = f.groundAreas.find(x => x.id === d.id);
+      if (g) g.points = pts;
+    } else {
+      const id = newId('ga');
+      f.groundAreas.push({ id, name: `Area ${f.groundAreas.length + 1}`, points: pts, kind: 'grass' });
+      this.activeGroundAreaId = id;
     }
     this.save();
     this.emitConfig();
@@ -2475,6 +2511,7 @@ export class Planner extends EventTarget {
     for (const it of f.robots ?? []) { it.x += dx; it.y += dy; }
     for (const it of f.cameras ?? []) { it.x += dx; it.y += dy; }
     for (const z of f.presenceZones ?? []) z.points = z.points.map(p => ({ x: p.x + dx, y: p.y + dy }));
+    for (const g of f.groundAreas ?? []) g.points = g.points.map(p => ({ x: p.x + dx, y: p.y + dy }));
     for (const it of f.doors ?? []) { it.x += dx; it.y += dy; }
     for (const it of f.windows ?? []) { it.x += dx; it.y += dy; }
     for (const rm of f.rooms ?? []) { rm.anchor.x += dx; rm.anchor.y += dy; }
@@ -2498,6 +2535,8 @@ export class Planner extends EventTarget {
     this.activeCameraId = null;
     this.activePZoneId = null;
     this.drawingPresenceZone = null;
+    this.activeGroundAreaId = null;
+    this.drawingGroundArea = null;
     this.robotStates = {};   // positions are per-floor; recomputed on the new floor
     this.activeFurnitureId = null;
     // Reset pan/zoom — viewCenter is in world mm and a different floor has

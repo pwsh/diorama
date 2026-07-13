@@ -4,7 +4,7 @@ import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
 import { MTLLoader } from 'three/examples/jsm/loaders/MTLLoader.js';
 import type {
   Floor, Sensor, Light, SwitchFixture, MotionSensor, Vec2, HassState,
-  Scene3D, ScenePreset, FloorTexKind, Model3D, Furniture, AvatarKind, WeatherEffectKey,
+  Scene3D, ScenePreset, FloorTexKind, GroundKind, GroundArea, Model3D, Furniture, AvatarKind, WeatherEffectKey,
 } from './types.js';
 import {
   lightHeight, lightRadius, lightIntensity, lightIconKind, lightRotation, lightLength,
@@ -18,6 +18,7 @@ import {
   robotColor, robotLedColor, ROBOT_DEFAULTS,
   parseNowPlaying, isMediaPlayerId, type NowPlaying,
   presenceZoneColor, cameraFov, cameraRange, cameraHeight, cameraStateColor,
+  GROUND_KINDS,
   ENV_KINDS, envKindOf, envColor, envValueText, envHeight, envScale,
 } from './geometry.js';
 import type { Door, Window as WindowType, EnvSensor, BleProxy, AlarmPanel, SafetySensor, RobotFixture, CameraFixture, PresenceZone, ObjectRecipe, ActivityKind } from './types.js';
@@ -689,6 +690,7 @@ export class ThreeDRenderer {
   private _renderer: THREE.WebGLRenderer | null = null;
   private _controls: OrbitControls | null = null;
   private _grid: THREE.GridHelper | null = null;
+  private _bgVisibleNow = false;   // last-computed bg-image visibility (grid suppression; set in updateFloor)
   private _floorGroup = new THREE.Group();
   private _doorGroup = new THREE.Group();
   private _modelGroup = new THREE.Group();
@@ -711,6 +713,7 @@ export class ThreeDRenderer {
   // CanvasTextures → pair _disposeSpriteMaps with _clearGroup. Rides sensors layer.
   private _camAlertGroup = new THREE.Group();
   private _pzoneGroup = new THREE.Group();       // FP2-style presence-zone patches (build-time, _keyPzones)
+  private _groundGroup = new THREE.Group();       // ground / yard covering patches (build-time, _keyGround)
   private _robotRigs: Record<string, RobotRig> = {};  // keyed by robot id
   private _lightGroup = new THREE.Group();
   private _switchGroup = new THREE.Group();   // switch fixtures (own layer, split from lights)
@@ -990,6 +993,7 @@ export class ThreeDRenderer {
                     this._sensorGroup, this._motionGroup, this._envGroup,
                     this._bleGroup, this._alarmGroup, this._safetyGroup,
                     this._robotGroup, this._robotRigGroup, this._cameraGroup, this._camAlertGroup, this._pzoneGroup,
+                    this._groundGroup,
                     this._lightGroup, this._switchGroup, this._targetGroup, this._ghostGroup,
                     this._gpsGroup, this._weatherGroup, this._pulseGroup, this._nowPlayingGroup);
 
@@ -1448,6 +1452,7 @@ export class ThreeDRenderer {
       this._floorGroup, this._doorGroup, this._modelGroup, this._zoneGroup, this._haloGroup,
       this._sensorGroup, this._motionGroup, this._bleGroup, this._alarmGroup,
       this._safetyGroup, this._robotGroup, this._robotRigGroup, this._cameraGroup, this._camAlertGroup, this._pzoneGroup,
+      this._groundGroup,
       this._lightGroup, this._switchGroup, this._targetGroup, this._ghostGroup,
       this._pulseGroup, this._nowPlayingGroup,
     ]) {
@@ -1700,6 +1705,121 @@ export class ThreeDRenderer {
     return tex;
   }
 
+  // Procedural ground / yard covering textures (the "yard" arc). Same cache
+  // pattern + lifecycle as _floorTexture — built once, disposed only in
+  // destroy(). Each kind is its own cache key so its `.repeat` is independent.
+  private _groundTexCache: Partial<Record<GroundKind, THREE.Texture>> = {};
+  private _groundTexture(kind: GroundKind): THREE.Texture {
+    const cached = this._groundTexCache[kind];
+    if (cached) return cached;
+    const c = document.createElement('canvas');
+    c.width = 256; c.height = 256;
+    const g = c.getContext('2d')!;
+    const speckle = (n: number, r: number, colors: string[]) => {
+      for (let i = 0; i < n; i++) {
+        g.fillStyle = colors[(Math.random() * colors.length) | 0];
+        const rr = r * (0.5 + Math.random());
+        g.beginPath(); g.arc(Math.random() * 256, Math.random() * 256, rr, 0, 2 * Math.PI); g.fill();
+      }
+    };
+    if (kind === 'grass') {
+      g.fillStyle = '#3f6b2c'; g.fillRect(0, 0, 256, 256);
+      speckle(900, 2.2, ['#4c8130', '#57923a', '#335a24', '#5fa043']);
+      // short blade strokes for texture
+      for (let i = 0; i < 500; i++) {
+        g.strokeStyle = Math.random() < 0.5 ? 'rgba(90,150,60,0.5)' : 'rgba(45,90,30,0.5)';
+        g.lineWidth = 1;
+        const x = Math.random() * 256, y = Math.random() * 256;
+        g.beginPath(); g.moveTo(x, y); g.lineTo(x + (Math.random() * 4 - 2), y - 4 - Math.random() * 4); g.stroke();
+      }
+    } else if (kind === 'rock') {
+      g.fillStyle = '#83888e'; g.fillRect(0, 0, 256, 256);
+      speckle(700, 3.5, ['#6f747a', '#9aa0a6', '#5c6167', '#adb2b7']);
+      speckle(300, 1.5, ['#4f5358', '#c2c6ca']);
+    } else if (kind === 'concrete') {
+      g.fillStyle = '#b6b6ba'; g.fillRect(0, 0, 256, 256);
+      const img = g.getImageData(0, 0, 256, 256);
+      for (let i = 0; i < img.data.length; i += 4) {
+        const n = (Math.random() - 0.5) * 14;
+        img.data[i] += n; img.data[i + 1] += n; img.data[i + 2] += n;
+      }
+      g.putImageData(img, 0, 0);
+      // faint control joints
+      g.strokeStyle = 'rgba(120,120,124,0.6)'; g.lineWidth = 2;
+      g.beginPath(); g.moveTo(128, 0); g.lineTo(128, 256); g.moveTo(0, 128); g.lineTo(256, 128); g.stroke();
+    } else if (kind === 'blacktop') {
+      g.fillStyle = '#2b2f33'; g.fillRect(0, 0, 256, 256);
+      speckle(1400, 1.1, ['#3a3f45', '#22262a', '#454b52', '#1c2024']);
+    } else if (kind === 'mulch') {
+      g.fillStyle = '#5c3f24'; g.fillRect(0, 0, 256, 256);
+      // wood-chip flecks (short rotated strokes)
+      for (let i = 0; i < 600; i++) {
+        g.save();
+        g.translate(Math.random() * 256, Math.random() * 256);
+        g.rotate(Math.random() * Math.PI);
+        g.fillStyle = ['#6b4a2b', '#7a5636', '#4c331d', '#835f3c'][(Math.random() * 4) | 0];
+        g.fillRect(-4 - Math.random() * 3, -1.2, 8 + Math.random() * 6, 2.4);
+        g.restore();
+      }
+    } else if (kind === 'sand') {
+      g.fillStyle = '#d6c496'; g.fillRect(0, 0, 256, 256);
+      speckle(1600, 1.0, ['#e0d0a4', '#c9b485', '#d8c99b', '#bfa878']);
+    } else { // water
+      g.fillStyle = '#3877b4'; g.fillRect(0, 0, 256, 256);
+      // lighter horizontal ripple lines
+      for (let i = 0; i < 40; i++) {
+        g.strokeStyle = `rgba(150,200,235,${0.12 + Math.random() * 0.18})`;
+        g.lineWidth = 1 + Math.random() * 1.5;
+        const y = Math.random() * 256;
+        g.beginPath();
+        g.moveTo(0, y);
+        for (let x = 0; x <= 256; x += 32) g.lineTo(x, y + Math.sin(x / 24 + i) * 3);
+        g.stroke();
+      }
+    }
+    const tex = new THREE.CanvasTexture(c);
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.colorSpace = THREE.SRGBColorSpace;
+    this._groundTexCache[kind] = tex;
+    return tex;
+  }
+
+  // Ground / yard covering patches (the "yard" arc). One textured ShapeGeometry
+  // patch per area at y≈4 — above the floor slab (y=0), BELOW furniture blob
+  // shadows (y=8, transparent) so shadows still paint on top. Rebuilt under
+  // _keyGround in three-view. Points are world-mm; mapped via _w like the floor
+  // loop patches. Rides the `ground` layer. Never blocks nav (pure paint).
+  updateGroundAreas(areas: GroundArea[]): void {
+    if (!this._scene) return;
+    this._clearGroup(this._groundGroup);
+    for (const a of areas) {
+      if (a.hidden || a.points.length < 3) continue;
+      const kd = GROUND_KINDS[a.kind] ?? GROUND_KINDS.grass;
+      const tex = this._groundTexture(a.kind);
+      tex.repeat.set(1 / 800, 1 / 800);   // raw-mm ShapeGeometry UVs → one tile / 800 mm
+      const isWater = a.kind === 'water';
+      // rotation.x = -π/2 maps a shape vertex (sx, sy) → world (sx, 0, -sy);
+      // feed (w.x, -w.z) so the patch lands at world (w.x, y, w.z).
+      const shape = new THREE.Shape();
+      for (let i = 0; i < a.points.length; i++) {
+        const w = this._w(a.points[i].x, a.points[i].y, 0);
+        if (i === 0) shape.moveTo(w.x, -w.z); else shape.lineTo(w.x, -w.z);
+      }
+      shape.closePath();
+      const mat = this._mat({
+        color: hexToInt(kd.color), map: tex, side: THREE.DoubleSide,
+        roughness: 0.95, metalness: 0,
+        ...(isWater ? { transparent: true, opacity: kd.opacity ?? 0.85 } : {}),
+      });
+      const patch = new THREE.Mesh(new THREE.ShapeGeometry(shape), mat);
+      patch.rotation.x = -Math.PI / 2;
+      patch.position.y = 4;
+      patch.receiveShadow = true;
+      patch.userData.outlineSkip = true;
+      this._groundGroup.add(patch);
+    }
+  }
+
   // ── Imported 3D model (Sweet Home 3D OBJ) ───────────────────────────────
   // Loads parsed OBJ/MTL text into the model group. Caller gates on
   // model3d.rev / transform changes. SH3D exports cm with Y-up and plan-Y
@@ -1771,6 +1891,11 @@ export class ThreeDRenderer {
     this._haloGroup.visible = z;
     // FP2-style presence-zone patches ride the zones layer.
     this._pzoneGroup.visible = z;
+    // Ground / yard covering patches ride their own layer (default on). The 3D
+    // grid helper also rides `grid` but its visibility is owned by updateFloor
+    // (folds in the bg-image suppression); see _keyFloor + line ~1962.
+    this._groundGroup.visible = v.ground !== false;
+    if (this._grid) this._grid.visible = (v.grid !== false) && !this._bgVisibleNow;
     this._targetGroup.visible = v.targets !== false;
     // Now-playing cards ride the furniture/appliance layers (a media piece can be
     // either category); show while either is visible. Per-piece skipping in
@@ -1959,7 +2084,12 @@ export class ThreeDRenderer {
     // Background image (overlays grid when visible)
     const bg = f.bg;
     const bgVisible = !!(bg && bg.visible !== false && bg.dataUrl) && showBg;
-    if (this._grid) this._grid.visible = !bgVisible;
+    // Grid rides the `grid` layer AND is suppressed by a visible bg image.
+    // _bgVisibleNow is cached so setLayerVisibility (per tick) can apply the
+    // same predicate without the floor's bg state.
+    this._bgVisibleNow = bgVisible;
+    const gridLayerOn = (layers?.grid !== false);
+    if (this._grid) this._grid.visible = gridLayerOn && !bgVisible;
     if (!bgVisible && this._bgTexCache) {
       this._bgTexCache.tex.dispose();
       this._bgTexCache = null;
@@ -3842,6 +3972,131 @@ export class ThreeDRenderer {
         s2.position.set(W * 0.2, HT * 0.5, -W * 0.12); grp.add(s2);
         const s3 = new THREE.Mesh(new THREE.SphereGeometry(W * 0.26, 10, 8), leaf);
         s3.position.set(-W * 0.2, HT * 0.55, W * 0.1); grp.add(s3);
+        break;
+      }
+      // ── outdoor / yard objects ──
+      case 'tree': {
+        const trunk = this._mat({ color: 0x6b4a2b, roughness: 0.9 });
+        const green = this._mat({ color: 0x3f7d2e, roughness: 0.95 });
+        const trunkH = HT * 0.42;
+        addCyl(W * 0.10, W * 0.14, trunkH, trunk, 0, trunkH / 2, 0, 10);
+        const r = Math.min(W, D) * 0.5;
+        const c1 = new THREE.Mesh(new THREE.SphereGeometry(r, 12, 10), green);
+        c1.position.set(0, trunkH + r * 0.6, 0); grp.add(c1);
+        const c2 = new THREE.Mesh(new THREE.SphereGeometry(r * 0.82, 12, 10), green);
+        c2.position.set(r * 0.28, trunkH + r * 1.4, -r * 0.15); grp.add(c2);
+        const c3 = new THREE.Mesh(new THREE.SphereGeometry(r * 0.72, 12, 10), green);
+        c3.position.set(-r * 0.3, trunkH + r * 2.05, r * 0.12); grp.add(c3);
+        break;
+      }
+      case 'pine_tree': {
+        const trunk = this._mat({ color: 0x6b4a2b, roughness: 0.9 });
+        const green = this._mat({ color: 0x2f6d3a, roughness: 0.95 });
+        const trunkH = HT * 0.16;
+        addCyl(W * 0.09, W * 0.12, trunkH, trunk, 0, trunkH / 2, 0, 10);
+        const r = Math.min(W, D) * 0.5;
+        const span = HT - trunkH;
+        const tiers = 3;
+        for (let i = 0; i < tiers; i++) {
+          const rr = r * (1 - i * 0.26);
+          const ch = (span / tiers) * 1.3;
+          const cone = new THREE.Mesh(new THREE.ConeGeometry(rr, ch, 12), green);
+          cone.position.set(0, trunkH + span * (i / tiers) + ch * 0.38, 0);
+          grp.add(cone);
+        }
+        break;
+      }
+      case 'bush': {
+        const green = this._mat({ color: 0x4f9130, roughness: 0.95 });
+        const r = Math.min(W, D) * 0.5;
+        const b1 = new THREE.Mesh(new THREE.SphereGeometry(r, 12, 8), green);
+        b1.scale.y = 0.72; b1.position.set(0, r * 0.6, 0); grp.add(b1);
+        const b2 = new THREE.Mesh(new THREE.SphereGeometry(r * 0.68, 12, 8), green);
+        b2.scale.y = 0.72; b2.position.set(r * 0.32, r * 0.5, r * 0.1); grp.add(b2);
+        break;
+      }
+      case 'flower_bed': {
+        const soil = this._mat({ color: 0x5c3d22, roughness: 1 });
+        const soilH = Math.min(HT, 120);
+        addBox(W, soilH, D, soil, 0, soilH / 2, 0);
+        const stem = this._mat({ color: 0x2f6d2a, roughness: 0.9 });
+        const petals = [0xe23b6d, 0xf2c53d, 0xe07be0, 0xffffff, 0xff8c42];
+        for (let i = 0; i < 6; i++) {
+          const fx = (Math.random() - 0.5) * W * 0.8;
+          const fz = (Math.random() - 0.5) * D * 0.7;
+          const fh = Math.max(60, HT - soilH);
+          addCyl(8, 8, fh, stem, fx, soilH + fh / 2, fz, 6);
+          const flower = new THREE.Mesh(
+            new THREE.SphereGeometry(Math.min(W, D) * 0.08, 8, 6),
+            this._mat({ color: petals[i % petals.length], roughness: 0.8 }));
+          flower.position.set(fx, soilH + fh, fz); grp.add(flower);
+        }
+        break;
+      }
+      case 'bird_bath': {
+        const stone = this._mat({ color: 0xb0b6bb, roughness: 0.85 });
+        const water = this._mat({ color: 0x3d7bb8, roughness: 0.2, transparent: true, opacity: 0.8 });
+        const pedH = HT * 0.75;
+        addCyl(W * 0.14, W * 0.2, pedH, stone, 0, pedH / 2, 0, 12);
+        addCyl(W * 0.45, W * 0.3, HT * 0.12, stone, 0, pedH + HT * 0.06, 0, 16);
+        const disc = new THREE.Mesh(new THREE.CylinderGeometry(W * 0.4, W * 0.4, 8, 16), water);
+        disc.position.set(0, pedH + HT * 0.1, 0); disc.userData.outlineSkip = true; grp.add(disc);
+        break;
+      }
+      case 'fountain': {
+        const stone = this._mat({ color: 0xa8aeb4, roughness: 0.85 });
+        const water = this._mat({ color: 0x3877b4, roughness: 0.2, transparent: true, opacity: 0.75 });
+        addCyl(W * 0.5, W * 0.5, HT * 0.22, stone, 0, HT * 0.11, 0, 20);
+        const w1 = new THREE.Mesh(new THREE.CylinderGeometry(W * 0.44, W * 0.44, 10, 20), water);
+        w1.position.set(0, HT * 0.2, 0); w1.userData.outlineSkip = true; grp.add(w1);
+        addCyl(W * 0.1, W * 0.14, HT * 0.5, stone, 0, HT * 0.47, 0, 12);
+        addCyl(W * 0.26, W * 0.16, HT * 0.1, stone, 0, HT * 0.72, 0, 16);
+        const w2 = new THREE.Mesh(new THREE.CylinderGeometry(W * 0.22, W * 0.22, 8, 16), water);
+        w2.position.set(0, HT * 0.77, 0); w2.userData.outlineSkip = true; grp.add(w2);
+        const col = new THREE.Mesh(new THREE.CylinderGeometry(W * 0.03, W * 0.05, HT * 0.28, 10), water);
+        col.position.set(0, HT * 0.86, 0); col.userData.outlineSkip = true; grp.add(col);
+        break;
+      }
+      case 'swingset': {
+        const frame = this._mat({ color: 0x8a5a2b, roughness: 0.8 });
+        const ropeM = this._mat({ color: 0x4a4a4a, roughness: 0.9 });
+        const seatM = this._mat({ color: 0x2e6da4, roughness: 0.8 });
+        const legH = HT, halfW = W / 2, halfD = D / 2;
+        for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
+          const leg = addCyl(35, 45, legH * 1.02, frame, sx * (halfW - 60), legH / 2, sz * (halfD - 80), 8);
+          leg.rotation.x = sz * 0.18;
+        }
+        addCyl(45, 45, W - 120, frame, 0, legH, 0, 10).rotation.z = Math.PI / 2;
+        for (const sx of [-0.28, 0.28]) {
+          const sxp = sx * W, ropeH = legH * 0.55;
+          addCyl(8, 8, ropeH, ropeM, sxp - 120, legH - ropeH / 2, 0, 6);
+          addCyl(8, 8, ropeH, ropeM, sxp + 120, legH - ropeH / 2, 0, 6);
+          addBox(300, 30, 140, seatM, sxp, legH - ropeH, 0);
+        }
+        break;
+      }
+      case 'lawn_chair': {
+        const frameM = this._mat({ color: tint, roughness: 0.6, metalness: 0.3 });
+        const seatH = def.seat ?? 380;
+        const seat = addBox(W * 0.9, 40, D * 0.55, frameM, 0, seatH, D * 0.05);
+        seat.rotation.x = -0.08;
+        const back = addBox(W * 0.9, D * 0.5, 40, frameM, 0, seatH + D * 0.18, D * 0.3);
+        back.rotation.x = 0.5;
+        for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
+          addBox(40, seatH, 40, frameM, sx * W * 0.4, seatH / 2, sz * D * 0.22);
+        }
+        break;
+      }
+      case 'picnic_table': {
+        const woodM = this._mat({ color: tint, roughness: 0.85 });
+        const topH = HT;
+        addBox(W, 50, D * 0.45, woodM, 0, topH, 0);
+        for (const sx of [-1, 1]) addBox(60, topH, D * 0.5, woodM, sx * (W / 2 - 80), topH / 2, 0);
+        const benchH = topH * 0.58;
+        for (const sz of [-1, 1]) {
+          addBox(W * 0.96, 40, D * 0.16, woodM, 0, benchH, sz * D * 0.4);
+          for (const sx of [-1, 1]) addBox(50, benchH, D * 0.14, woodM, sx * (W / 2 - 100), benchH / 2, sz * D * 0.4);
+        }
         break;
       }
       // ── appliances (front = -Z) ──
@@ -9371,7 +9626,7 @@ export class ThreeDRenderer {
       this._floorGroup, this._doorGroup, this._modelGroup, this._zoneGroup, this._haloGroup,
       this._sensorGroup, this._motionGroup, this._envGroup, this._bleGroup,
       this._alarmGroup, this._safetyGroup, this._robotGroup, this._robotRigGroup,
-      this._cameraGroup, this._camAlertGroup, this._pzoneGroup,
+      this._cameraGroup, this._camAlertGroup, this._pzoneGroup, this._groundGroup,
       this._lightGroup, this._switchGroup, this._targetGroup, this._gpsGroup, this._weatherGroup,
       this._pulseGroup, this._nowPlayingGroup,
     ]) {
@@ -9394,6 +9649,11 @@ export class ThreeDRenderer {
     // _blobShadow / _addOutlines).
     this._gradientMapTex?.dispose(); this._gradientMapTex = null;
     this._blobTex?.dispose(); this._blobTex = null;
+    // Shared floor + ground procedural textures (built once, cached).
+    for (const t of Object.values(this._texCache)) t?.dispose();
+    this._texCache = {};
+    for (const t of Object.values(this._groundTexCache)) t?.dispose();
+    this._groundTexCache = {};
     this._blurTexStand?.dispose(); this._blurTexStand = null;
     this._blurTexSit?.dispose(); this._blurTexSit = null;
     // Shared weather particle / fog-plane maps (W2) — freed once here.

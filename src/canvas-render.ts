@@ -7,6 +7,7 @@ import {
   safetyColor, safetyGlyph, safetyIsFloor, SAFETY_DEFAULTS,
   robotGlyph, robotColor, ROBOT_DEFAULTS,
   presenceZoneColor, cameraFov, cameraRange, cameraStateColor,
+  groundAreaColor, groundKindLabel,
   powerGlowScale,
   hexToRgba, lighten, furnitureKind, furnitureCorners, resolveFurnitureDef, isBinKind, binStateIsFull,
   doorEndpoint, doorOpenDeltaDeg, doorOpenFraction, doorSpanCenter, windowEndpoints, wallCutsForSegment, wallKind,
@@ -215,6 +216,9 @@ export function drawAll(ctx: CanvasRenderingContext2D, p: Planner, view: View,
   const L = p.store.layers2d ?? {};
   const on = (v: boolean | undefined) => v !== false;
   drawFloor(ctx, p, view, on(L.bg) ? bgImg : null);
+  // Ground / yard covering areas — painted right after the floor, under walls /
+  // furniture / everything structural.
+  if (on(L.ground)) drawGroundAreas(ctx, p, view);
   if (on(L.walls)) drawWalls(ctx, p, view);
   if (on(L.labels)) drawRooms(ctx, p, view);
   drawDoors(ctx, p, view);
@@ -1126,6 +1130,71 @@ function drawCameraAlertCard(
 // ON, a filled glow (inclusion-zone glow idiom). Draggable vertex handles show
 // on the active zone. In-progress draw preview mirrors the wall-draw latch.
 // Gated on the `zones` layer at the call site.
+// Ground / yard covering areas (the "yard" arc). Flat kind-colored fill + a
+// dashed selection outline; drawn early (under everything) as pure paint. In
+// edit mode the active area shows orange vertex handles + the in-progress
+// draw preview (mirrors the presence-zone latch).
+function drawGroundAreas(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
+  const dpr = window.devicePixelRatio || 1;
+  const f = p.floor();
+  for (const g of f.groundAreas ?? []) {
+    if (g.hidden || g.points.length < 3) continue;
+    const col = groundAreaColor(g);
+    const active = p.activeGroundAreaId === g.id;
+    const pts = g.points.map(v => mmToPx(view, v.x, v.y));
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+    ctx.closePath();
+    ctx.fillStyle = hexToRgba(col, g.kind === 'water' ? 0.55 : 0.72);
+    ctx.fill();
+    ctx.strokeStyle = hexToRgba(col, active ? 0.95 : 0.6);
+    ctx.lineWidth = active ? 2 : 1;
+    ctx.stroke();
+    // Kind label at the centroid.
+    const ctr = centroid(g.points);
+    const cp = mmToPx(view, ctr.x, ctr.y);
+    ctx.fillStyle = hexToRgba('#ffffff', 0.85);
+    ctx.font = `${11 * dpr}px sans-serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(g.name?.trim() || groundKindLabel(g.kind), cp.x, cp.y);
+    // Vertex handles on the active (unlocked) area.
+    if (active && !g.locked) {
+      for (const pt of pts) {
+        ctx.beginPath(); ctx.arc(pt.x, pt.y, 5 * dpr, 0, 2 * Math.PI);
+        ctx.fillStyle = '#ffb74d'; ctx.strokeStyle = '#fff'; ctx.lineWidth = 1;
+        ctx.fill(); ctx.stroke();
+      }
+    }
+  }
+  // In-progress draw preview (drawingGroundArea) — mirrors the pzone latch.
+  const dg = p.drawingGroundArea;
+  if (dg?.points.length) {
+    const col = '#4c7a34';
+    ctx.save();
+    ctx.strokeStyle = col; ctx.lineWidth = 2; ctx.setLineDash([5, 4]);
+    ctx.beginPath();
+    const a = mmToPx(view, dg.points[0].x, dg.points[0].y);
+    ctx.moveTo(a.x, a.y);
+    for (let i = 1; i < dg.points.length; i++) {
+      const pt = mmToPx(view, dg.points[i].x, dg.points[i].y);
+      ctx.lineTo(pt.x, pt.y);
+    }
+    if (p.cursor) {
+      const c2 = mmToPx(view, p.cursor.x, p.cursor.y);
+      ctx.lineTo(c2.x, c2.y);
+    }
+    ctx.stroke();
+    ctx.setLineDash([]);
+    for (const v of dg.points) {
+      const pt = mmToPx(view, v.x, v.y);
+      ctx.beginPath(); ctx.arc(pt.x, pt.y, 4 * dpr, 0, 2 * Math.PI);
+      ctx.fillStyle = col; ctx.fill();
+    }
+    ctx.restore();
+  }
+}
+
 function drawPresenceZones(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
   const dpr = window.devicePixelRatio || 1;
   const f = p.floor();
@@ -2221,6 +2290,87 @@ function drawFurniturePrimitiveLocal(
         ctx.fillStyle = 'rgba(255,213,79,0.95)';
         ctx.beginPath(); ctx.arc(x + w - 8, y + 8, 4, 0, 2 * Math.PI); ctx.fill();
       }
+      break;
+    }
+    // ── outdoor / yard objects ──
+    case 'tree':
+    case 'bush': {
+      // Canopy circle + trunk dot.
+      const r = Math.min(halfW, halfH);
+      ctx.fillStyle = bodyFill(kind === 'bush' ? 'rgba(79,145,48,0.6)' : 'rgba(63,125,46,0.6)', 0.6);
+      ctx.beginPath(); ctx.arc(0, 0, r, 0, 2 * Math.PI); ctx.fill();
+      ctx.strokeStyle = kind === 'bush' ? '#3f7d2e' : '#2f6d3a'; ctx.lineWidth = 1; ctx.stroke();
+      if (kind === 'tree') {
+        ctx.fillStyle = 'rgba(107,74,43,0.9)';
+        ctx.beginPath(); ctx.arc(0, 0, r * 0.22, 0, 2 * Math.PI); ctx.fill();
+      }
+      break;
+    }
+    case 'pine_tree': {
+      // Concentric triangle hint (top-down cone stack).
+      const r = Math.min(halfW, halfH);
+      ctx.fillStyle = bodyFill('rgba(47,109,58,0.6)', 0.6);
+      ctx.beginPath(); ctx.arc(0, 0, r, 0, 2 * Math.PI); ctx.fill();
+      ctx.strokeStyle = '#2f6d3a'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.arc(0, 0, r * 0.6, 0, 2 * Math.PI); ctx.stroke();
+      ctx.fillStyle = 'rgba(107,74,43,0.9)';
+      ctx.beginPath(); ctx.arc(0, 0, r * 0.16, 0, 2 * Math.PI); ctx.fill();
+      break;
+    }
+    case 'flower_bed': {
+      fill(bodyFill('rgba(92,61,34,0.5)', 0.5));
+      stroke('#5c3d22');
+      const cols = ['#e23b6d', '#f2c53d', '#e07be0', '#ff8c42'];
+      for (let i = 0; i < 5; i++) {
+        ctx.fillStyle = cols[i % cols.length];
+        const fx = x + w * (0.15 + 0.7 * (i / 4));
+        ctx.beginPath(); ctx.arc(fx, 0, Math.min(halfW, halfH) * 0.22, 0, 2 * Math.PI); ctx.fill();
+      }
+      break;
+    }
+    case 'bird_bath':
+    case 'fountain': {
+      const r = Math.min(halfW, halfH);
+      ctx.fillStyle = bodyFill('rgba(168,174,180,0.55)', 0.55);
+      ctx.beginPath(); ctx.arc(0, 0, r, 0, 2 * Math.PI); ctx.fill();
+      ctx.strokeStyle = '#8a9096'; ctx.lineWidth = 1; ctx.stroke();
+      ctx.fillStyle = 'rgba(61,123,184,0.75)';
+      ctx.beginPath(); ctx.arc(0, 0, r * (kind === 'fountain' ? 0.5 : 0.65), 0, 2 * Math.PI); ctx.fill();
+      break;
+    }
+    case 'swingset': {
+      fill(bodyFill('rgba(138,90,43,0.22)', 0.22));
+      ctx.strokeStyle = '#8a5a2b'; ctx.lineWidth = 1.5;
+      // A-frame diagonals from top-center to both end corners.
+      ctx.beginPath();
+      ctx.moveTo(x, y + h); ctx.lineTo(0, y); ctx.lineTo(x + w, y + h);
+      ctx.moveTo(x, y); ctx.lineTo(0, y + h); ctx.lineTo(x + w, y); ctx.stroke();
+      // top beam
+      ctx.beginPath(); ctx.moveTo(x + 3, y + h * 0.5); ctx.lineTo(x + w - 3, y + h * 0.5); ctx.stroke();
+      // two swing seats
+      ctx.fillStyle = '#2e6da4';
+      ctx.fillRect(x + w * 0.28 - 6, y + h * 0.5, 12, h * 0.28);
+      ctx.fillRect(x + w * 0.72 - 6, y + h * 0.5, 12, h * 0.28);
+      break;
+    }
+    case 'lawn_chair': {
+      fill(bodyFill('rgba(46,139,139,0.4)', 0.4));
+      stroke('#2e8b8b');
+      // backrest bar at the back (+Y/top) edge, slat lines across.
+      ctx.strokeStyle = '#1f6b6b'; ctx.lineWidth = 1;
+      for (let i = 1; i < 4; i++) {
+        const yy = y + h * (0.25 + 0.18 * i);
+        ctx.beginPath(); ctx.moveTo(x + 3, yy); ctx.lineTo(x + w - 3, yy); ctx.stroke();
+      }
+      break;
+    }
+    case 'picnic_table': {
+      fill(bodyFill('rgba(138,106,68,0.45)', 0.45));
+      stroke('#8a6a44');
+      // bench strips along both long edges.
+      ctx.fillStyle = 'rgba(138,106,68,0.7)';
+      ctx.fillRect(x, y + 1, w, h * 0.14);
+      ctx.fillRect(x, y + h - h * 0.14 - 1, w, h * 0.14);
       break;
     }
     default:

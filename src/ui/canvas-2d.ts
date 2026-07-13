@@ -377,10 +377,12 @@ export class Canvas2D extends LitElement {
       if (p.editZone) { cancelZoneEdit(p); return; }
       if (p.drawingWall) { p.drawingWall = null; p.emitConfig(); return; }
       if (p.drawingPresenceZone) { p.drawingPresenceZone = null; p.emitConfig(); return; }
+      if (p.drawingGroundArea) { p.drawingGroundArea = null; p.emitConfig(); return; }
       if (p.store.activeSensorId) { p.store.activeSensorId = null; p.save(); p.emitConfig(); }
     }
     if (e.key === 'Enter' && p.editZone) { finishZoneEdit(p); return; }
     if (e.key === 'Enter' && p.drawingPresenceZone) { p.finishPresenceZone(); return; }
+    if (e.key === 'Enter' && p.drawingGroundArea) { p.finishGroundArea(); return; }
     if (e.key === '0' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); p.resetView(); return; }
     if (this.planner.uiMode !== 'edit') return;  // kiosk/view: no edit keys
     // Arrow keys nudge the ACTIVE furniture piece by 25 mm (100 with Shift) in

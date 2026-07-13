@@ -10,7 +10,7 @@ import type {
   Sensor, Zone, ObjectHalo, BgImage, MotionSensor, EnvSensor, EnvKind, Light, SwitchFixture, LightIconKind,
   Furniture, FurnitureKind, Door, Window as WindowType, WindowKind, Layers2D, Floor, Room,
   ObjectRecipe, RecipePrimitive, RecipeShape, ActivityKind, AvatarKind,
-  BleProxy, AlarmPanel, SafetySensor, RobotFixture, CameraFixture, PresenceZone, DioramaPerson, GeoLandmark,
+  BleProxy, AlarmPanel, SafetySensor, RobotFixture, CameraFixture, PresenceZone, GroundArea, GroundKind, DioramaPerson, GeoLandmark,
 } from '../types.js';
 import type { BermudaDevice } from '../planner.js';
 import { CONDITION_GLYPH, CONDITION_LABEL, tempText, weatherEffectEnabled } from '../weather.js';
@@ -36,6 +36,7 @@ import {
   robotGlyph, robotColor, robotLedColor,
   parseVacuumPosition, solveVacuumDockOffset,
   presenceZoneColor, cameraFov, cameraRange, cameraHeight, CAMERA_DEFAULTS,
+  GROUND_KINDS, groundAreaColor,
   FURNITURE_KINDS, furnitureKind, resolveFurnitureDef, WINDOW_DEFAULTS,
   ENV_KINDS, ENV_DEFAULTS, ENV_SCALE_MIN, ENV_SCALE_MAX,
   envKindOf, envColor, envValueText, envHeight, envScale,
@@ -104,6 +105,7 @@ const TOOLS: { id: Tool; label: string }[] = [
   { id: 'robot', label: '🤖 Robot' },
   { id: 'camera', label: '📷 Camera' },
   { id: 'pzone', label: '▱ Presence zone' },
+  { id: 'ground', label: '▨ Ground area' },
   { id: 'furniture', label: 'Furn' },
   { id: 'light', label: 'Light' },
   { id: 'switch', label: 'Switch' },
@@ -282,6 +284,7 @@ export class Sidebar extends LitElement {
       ble: p.activeBleId ?? null,
       cameras: p.activeCameraId ?? null,
       pzones: p.activePZoneId ?? null,
+      ground: p.activeGroundAreaId ?? null,
       people: p.activePersonId ?? null,
       furniture: p.activeFurnitureId ?? null,
     };
@@ -376,6 +379,7 @@ export class Sidebar extends LitElement {
         ${this._robotsSection()}
         ${this._camerasSection()}
         ${this._presenceZonesSection()}
+        ${this._groundSection()}
         ${this._peopleSection()}
         ${this._doorsSection()}
         ${this._windowsSection()}
@@ -490,6 +494,7 @@ export class Sidebar extends LitElement {
       case 'robot': return 'Click to place a robot dock. Set kind (vacuum / mower) + bind a vacuum.* or lawn_mower.* entity; mowers can bind a GPS tracker.';
       case 'camera': return 'Click to drop a camera. Drag the orange dot to aim it; bind a camera.* entity for the FOV tint + snapshot.';
       case 'pzone': return 'Click to add polygon vertices; double-click (or Enter) to finish (≥3 pts). Bind a binary_sensor (FP2 zone / occupancy) — the zone glows when occupied. ESC cancels.';
+      case 'ground': return 'Click to add polygon vertices; double-click (or Enter) to finish (3–20 pts). Paints a ground covering (grass/rock/water/…) under the plan. ESC cancels.';
       case 'furniture': return 'Click to drop a 600 × 600 mm piece.';
       case 'light': return 'Click to drop a light. Bind via the active panel.';
       case 'switch': return 'Click to drop a switch. Bind via the active panel.';
@@ -598,6 +603,7 @@ export class Sidebar extends LitElement {
       { cat: 'furniture', label: 'Furniture' },
       { cat: 'appliance', label: 'Appliances' },
       { cat: 'bathroom', label: 'Bathroom' },
+      { cat: 'outdoor', label: 'Outdoor' },
     ];
     const kinds = Object.keys(FURNITURE_KINDS) as FurnitureKind[];
     const custom = this.planner.store.customObjects ?? [];
@@ -1713,6 +1719,77 @@ export class Sidebar extends LitElement {
         },
       },
     }));
+  }
+
+  // ── Ground / Yard section (ground covering polygons) ──────────────────
+  private _groundSection() {
+    const p = this.planner;
+    const list = p.floor().groundAreas ?? [];
+    const drawing = !!p.drawingGroundArea;
+    return this._section('ground', 'Ground / Yard', () => html`
+      ${drawing ? html`
+        <div style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text-dim);padding:4px 0">
+          <span style="flex:1">▨ Click to add vertices; double-click / Enter to finish (${p.drawingGroundArea!.points.length} pts).</span>
+          <button class="btn" style="font-size:10px;padding:2px 6px"
+                  @click=${() => { p.drawingGroundArea = null; p.emitConfig(); }}>Cancel</button>
+        </div>` : nothing}
+      ${list.map(g => this._groundItem(g))}
+      <button class="btn" style="width:100%;margin-top:6px" @click=${() => { p.setTool('ground'); p.maybeCloseSidebarForPlacement(); }}>
+        + Add area
+      </button>
+    `);
+  }
+
+  private _groundItem(g: GroundArea) {
+    const p = this.planner;
+    const sel = p.activeGroundAreaId === g.id;
+    const col = groundAreaColor(g);
+    return html`
+      <div style="border-bottom:1px solid var(--border)">
+        <div class="sensor-item ${sel ? 'sel' : ''}" @click=${() => p.setActiveGroundArea(g.id)}>
+          <div class="dot" style="background:${col}"></div>
+          <div class="nm">▨ ${g.name?.trim() || GROUND_KINDS[g.kind]?.label || g.kind}</div>
+          <div class="badge">${GROUND_KINDS[g.kind]?.label ?? g.kind}</div>
+        </div>
+        ${sel ? this._groundEditor(g) : nothing}
+      </div>
+    `;
+  }
+
+  private _groundEditor(g: GroundArea) {
+    const p = this.planner;
+    const upd = (mut: () => void) => { mut(); p.save(); p.emitConfig(); };
+    return html`
+      <div style="background:rgba(0,0,0,0.25);border-radius:4px;padding:6px;margin:4px 0">
+        <div class="row"><label>Kind</label>
+          <select @change=${(e: Event) => upd(() => { g.kind = (e.target as HTMLSelectElement).value as GroundKind; })}>
+            ${(Object.keys(GROUND_KINDS) as GroundKind[]).map(k => html`
+              <option value=${k} ?selected=${g.kind === k}>${GROUND_KINDS[k].label}</option>`)}
+          </select>
+        </div>
+        <div class="row"><label>Name</label>
+          <input type="text" .value=${g.name ?? ''} placeholder=${GROUND_KINDS[g.kind]?.label ?? 'Area'}
+                 @input=${(e: Event) => upd(() => { g.name = (e.target as HTMLInputElement).value; })}>
+        </div>
+        <div class="row"><label>Hidden</label>
+          <button class="btn" style="font-size:11px;flex:1"
+                  @click=${() => upd(() => { g.hidden = !g.hidden; })}>${g.hidden ? '🙈 Hidden' : '👁 Shown'}</button>
+        </div>
+        ${this._lockRow(g)}
+        <div style="font-size:10px;color:var(--text-dim);margin:2px 0">${g.points.length} vertices · drag the orange handles to reshape (Select mode)</div>
+        <div style="display:flex;gap:4px;margin-top:4px">
+          <button class="btn" style="flex:1;font-size:11px"
+                  title="Re-draw the polygon on the plan (replaces the points)"
+                  @click=${() => { p.drawingGroundArea = { points: [], id: g.id }; p.setTool('ground'); p.maybeCloseSidebarForPlacement(); p.emitConfig(); }}>Redraw</button>
+        </div>
+        <button class="btn danger" style="width:100%;margin-top:6px" @click=${() => {
+          const f = p.floor();
+          f.groundAreas = (f.groundAreas ?? []).filter(x => x.id !== g.id);
+          p.activeGroundAreaId = null;
+          p.save(); p.emitConfig();
+        }}>Delete area</button>
+      </div>
+    `;
   }
 
   // ── People section (identity registry) ────────────────────────────────
@@ -3602,6 +3679,8 @@ export class Sidebar extends LitElement {
       { key: 'motion', label: 'Motion sensors' },
       { key: 'env', label: 'Env sensors' },
       { key: 'zones', label: 'Zones & halos' },
+      { key: 'ground', label: 'Ground / yard' },
+      { key: 'grid', label: '3D grid' },
       { key: 'targets', label: 'Avatars' },
       { key: 'geo', label: 'Geo landmarks' },
       { key: 'weatherFx', label: 'Weather effects (3D)' },

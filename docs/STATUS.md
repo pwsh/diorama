@@ -56,6 +56,18 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Batch K: the yard arc** (11 files + new `yard-test.html` **4/4**;
+  full green set intact): drawable `GroundArea` polygons (grass / rock /
+  concrete / blacktop / mulch / sand / water) with procedural toon
+  textures at y=4 under blob shadows, own `ground` layer + tool +
+  vertex editing; `Layers2D.grid` toggle for the 3D GridHelper backdrop
+  (still auto-suppressed by a visible bg image); nine outdoor
+  FurnitureKinds — tree, pine, bush, flower bed, bird bath, fountain,
+  swingset, sittable lawn_chair (real SitSpot), picnic_table
+  (surface + eat activity) — and the previously-unreachable `outdoor`
+  optgroup surfaced. The roadmap's "yard/terrain concept" prerequisite
+  is now real. CLAUDE.md "Yard arc (batch K)".
+
 - **Batch J: trash/recycle bins, floodlight, camera alert popups**
   (8 files + new `batchn-test.html` **13/13**; full green set intact):
   wheeled curbside `trash_bin`/`recycle_bin` kinds (new `outdoor` cat) —

@@ -365,6 +365,31 @@ export function hitPresenceZoneVertex(p: Planner, view: View, mm: Vec2): { zone:
   return null;
 }
 
+// A ground area is hit when the point is inside its polygon (respect hidden).
+// Mirrors hitPresenceZone.
+export function hitGroundArea(p: Planner, view: View, mm: Vec2): import('./types.js').GroundArea | null {
+  void view;
+  const list = p.floor().groundAreas ?? [];
+  for (let i = list.length - 1; i >= 0; i--) {
+    const g = list[i];
+    if (g.hidden) continue;
+    if (g.points.length >= 3 && pointInPolygon(mm.x, mm.y, g.points)) return g;
+  }
+  return null;
+}
+
+// A draggable vertex handle of the ACTIVE ground area. Mirrors hitPresenceZoneVertex.
+export function hitGroundAreaVertex(p: Planner, view: View, mm: Vec2): { area: import('./types.js').GroundArea; idx: number } | null {
+  const id = p.activeGroundAreaId; if (!id) return null;
+  const g = (p.floor().groundAreas ?? []).find(x => x.id === id);
+  if (!g || g.locked || g.hidden) return null;
+  const h = hitPx(view);
+  for (let i = 0; i < g.points.length; i++) {
+    if (distMM(g.points[i], mm) < h) return { area: g, idx: i };
+  }
+  return null;
+}
+
 export function hitEnvSensor(p: Planner, view: View, mm: Vec2): EnvSensor | null {
   const f = p.floor();
   const fallback = hitPx(view) * 2;

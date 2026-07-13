@@ -529,6 +529,7 @@ export class ThreeView extends LitElement {
   private _keyCameras = '';
   private _keyCamAlerts = '';
   private _keyPzones = '';
+  private _keyGround = '';
   private _keyLights = '';
   private _keyZones = '';
   private _keyHalos = '';
@@ -554,6 +555,7 @@ export class ThreeView extends LitElement {
         this._keyFloor = this._keyDoors = this._keySensors = '';
         this._keyMotion = this._keyEnv = this._keyBle = this._keyAlarm = this._keySafety = '';
         this._keyCameras = this._keyCamAlerts = this._keyPzones = this._keyNowPlaying = '';
+        this._keyGround = '';
         this._keyLights = this._keyZones = this._keyHalos = '';
         this._keyGhost = this._keyGps = this._keyWeather = '';
         this._trigPrevOn.clear();
@@ -617,6 +619,7 @@ export class ThreeView extends LitElement {
       const keyFloor = `${p.configRev}|${effPreset}|` +
         `${layers.furniture !== false}|${layers.appliances !== false}|` +
         `${layers.bg !== false}|${layers.walls !== false}|` +
+        `${layers.grid !== false}|` +
         `${layers.labels !== false}|${applianceKey}|${roomOccKey}`;
       if (keyFloor !== this._keyFloor) {
         this._keyFloor = keyFloor;
@@ -809,6 +812,16 @@ export class ThreeView extends LitElement {
       if (keyPzones !== this._keyPzones) {
         this._keyPzones = keyPzones;
         r.updatePresenceZones(pzoneList, id => states[id] || null);
+      }
+
+      // Ground / yard covering areas (the "yard" arc): structural only (no bound
+      // state). Rides the `ground` layer. Rebuild on shape / kind / hidden edits.
+      const groundList = f.groundAreas ?? [];
+      const keyGround = `${p.configRev}|` + groundList.map(g =>
+        `${g.id}:${g.kind}:${g.hidden ? 'h' : ''}:${g.points.map(v => `${v.x | 0},${v.y | 0}`).join(';')}`).join('|');
+      if (keyGround !== this._keyGround) {
+        this._keyGround = keyGround;
+        r.updateGroundAreas(groundList);
       }
 
       // GPS device pins + 3D landmark pins (both ride the geo layer). Coarse

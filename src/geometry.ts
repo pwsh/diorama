@@ -1,7 +1,7 @@
 // Pure geometry helpers — no DOM, no state.
 
 import type { Vec2, Sensor, BgImage, LightIconKind, FurnitureKind, EnvKind, WallKind,
-  ActivityKind, ObjectRecipe, Furniture, Room, Floor, SafetyKind } from './types.js';
+  ActivityKind, ObjectRecipe, Furniture, Room, Floor, SafetyKind, GroundKind } from './types.js';
 
 export const MM_PER_IN = 25.4;
 export const IN_PER_FT = 12;
@@ -1269,7 +1269,34 @@ export const FURNITURE_KINDS: Record<FurnitureKind, FurnitureKindDef> = {
   // hint); unbound → localState click-toggle. Front (lid hinge, wheels at back = +Z).
   trash_bin:     { label: 'Trash bin',     w: 600,  h: 700,  ht: 1100, back: 'none', color: 0x3a3f45, cat: 'outdoor', frontArrow: false },
   recycle_bin:   { label: 'Recycling bin', w: 600,  h: 700,  ht: 1100, back: 'none', color: 0x1f6fb2, cat: 'outdoor', frontArrow: false },
+  // Outdoor — yard objects (the "yard" arc). Symmetric pieces skip the front chevron.
+  tree:          { label: 'Tree',          w: 900,  h: 900,  ht: 3000, back: 'none', color: 0x4c8c2b, cat: 'outdoor', frontArrow: false },
+  pine_tree:     { label: 'Pine tree',     w: 800,  h: 800,  ht: 3200, back: 'none', color: 0x2f6d3a, cat: 'outdoor', frontArrow: false },
+  bush:          { label: 'Bush',          w: 700,  h: 700,  ht: 700,  back: 'none', color: 0x5a9e35, cat: 'outdoor', frontArrow: false },
+  flower_bed:    { label: 'Flower bed',    w: 900,  h: 450,  ht: 300,  back: 'none', color: 0x6b4a2b, cat: 'outdoor', frontArrow: false },
+  bird_bath:     { label: 'Bird bath',     w: 450,  h: 450,  ht: 950,  back: 'none', color: 0xb0b6bb, cat: 'outdoor', frontArrow: false },
+  fountain:      { label: 'Fountain',      w: 1200, h: 1200, ht: 1400, back: 'none', color: 0xa8aeb4, cat: 'outdoor', frontArrow: false },
+  swingset:      { label: 'Swing set',     w: 2800, h: 1600, ht: 2200, back: 'none', color: 0x6d7378, cat: 'outdoor', frontArrow: false },
+  lawn_chair:    { label: 'Lawn chair',    w: 700,  h: 1200, ht: 900,  seat: 380, back: 'low', color: 0x2e8b8b, cat: 'outdoor' },
+  // picnic_table is a `surface` table (eat_at_table host); no `seat` — its centered
+  // seat spot would land ON the tabletop. Sit AT it via adjacent lawn_chairs.
+  picnic_table:  { label: 'Picnic table',  w: 1800, h: 1500, ht: 750,  back: 'none', color: 0x8a6a44, cat: 'outdoor', surface: true, activity: 'eat_at_table', frontArrow: false },
 };
+
+// Ground / yard covering kinds (the "yard" arc): a flat display color for the 2D
+// fill + a base tint for the 3D toon material under the procedural texture. Water
+// is drawn translucent. Textures are built procedurally in three-renderer.
+export const GROUND_KINDS: Record<GroundKind, { label: string; color: string; opacity?: number }> = {
+  grass:    { label: 'Grass',    color: '#4c7a34' },
+  rock:     { label: 'Rock',     color: '#8a8f95' },
+  concrete: { label: 'Concrete', color: '#b8b8bc' },
+  blacktop: { label: 'Blacktop', color: '#2e3236' },
+  mulch:    { label: 'Mulch',    color: '#6b4a2b' },
+  sand:     { label: 'Sand',     color: '#d8c69a' },
+  water:    { label: 'Water',    color: '#3d7bb8', opacity: 0.85 },
+};
+export function groundKindLabel(k: GroundKind): string { return GROUND_KINDS[k]?.label ?? k; }
+export function groundAreaColor(g: { kind: GroundKind }): string { return GROUND_KINDS[g.kind]?.color ?? '#4c7a34'; }
 
 export function furnitureCat(def: FurnitureKindDef): FurnitureCat { return def.cat ?? 'furniture'; }
 

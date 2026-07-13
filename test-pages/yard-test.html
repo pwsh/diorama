@@ -1,0 +1,103 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>yard test</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<script type="module">
+ try {
+  const mod = await import('./assets/three-renderer.js?v=' + Date.now());
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+  const fu = (id, kind, x, y, w, h, rot = 0, extra = {}) => ({ id, x, y, w, h, kind, rotation: rot, ...extra });
+  const scene3d = { preset: 'day', floorColor: '#8a7860', floorTex: 'none', wallColor: '#cfd2d6' };
+  const mkFloor = (furniture, groundAreas = [], bg = null) => ({
+    id: 'f1', name: 'R', w: 12000, d: 8000, walls: [], furniture,
+    lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [], windows: [], bg, model3d: null, look3d: null, rooms: [], groundAreas,
+  });
+  const results = [];
+
+  // Count body meshes in a furniture group (exclude cartoon-outline shells; the
+  // group gets exactly one blob-shadow decal on the floor, subtracted here).
+  const countBodies = (grp) => {
+    let n = 0;
+    grp.traverse(o => { if (o.isMesh && !o.userData.outline) n++; });
+    return n - 1; // one auto blob shadow
+  };
+
+  // ── Scene A: ground patches build with correct kind/texture, y=4 (under blob
+  // shadows), and water is translucent (~0.85).
+  r.clearTransientGroups();
+  const groundAreas = [
+    { id: 'g1', kind: 'grass', points: [{ x: 500, y: 500 }, { x: 4000, y: 500 }, { x: 4000, y: 3500 }, { x: 500, y: 3500 }] },
+    { id: 'g2', kind: 'water', points: [{ x: 6000, y: 500 }, { x: 9000, y: 500 }, { x: 9000, y: 3500 }] },
+  ];
+  r.updateFloor(mkFloor([], groundAreas), scene3d);
+  r.updateGroundAreas(groundAreas);
+  {
+    const patches = r._groundGroup.children;
+    const grass = patches[0], water = patches[1];
+    const grassOk = !!grass && grass.position.y === 4 && !!grass.material.map && grass.material.transparent !== true;
+    const waterOk = !!water && water.position.y === 4 && water.material.transparent === true &&
+      Math.abs((water.material.opacity ?? 1) - 0.85) < 0.01;
+    // A furniture blob shadow sits at y=8 → strictly above the ground patch (y=4).
+    const chairGrp = r._buildFurniture(fu('c', 'chair', 2000, 2000, 500, 500));
+    let blobY = null;
+    chairGrp.traverse(o => { if (o.isMesh && o.userData.outlineSkip && o.geometry.type === 'PlaneGeometry') blobY = o.position.y; });
+    const orderOk = blobY === 8 && grass.position.y < blobY;
+    const pass = grassOk && waterOk && orderOk && patches.length === 2;
+    results.push(`A[patches=${patches.length} grassY=${grass?.position.y} waterOpacity=${(water?.material.opacity ?? 0).toFixed(2)} blobY=${blobY} ${pass ? 'PASS' : 'FAIL'}]`);
+  }
+
+  // ── Scene B: grid layer flag flips the grid object; a visible bg image
+  // suppresses the grid regardless of the flag. Ground layer flag flips the group.
+  {
+    r.updateFloor(mkFloor([], []), scene3d, { grid: true });
+    const gridOnNoBg = r._grid.visible === true;
+    r.updateFloor(mkFloor([], []), scene3d, { grid: false });
+    const gridOffFlag = r._grid.visible === false;
+    // bg visible → grid stays hidden even with grid:true
+    const bg = { dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', x: 6000, y: 4000, w: 4000, h: 3000, rotation: 0, opacity: 1, visible: true, locked: false };
+    r.updateFloor(mkFloor([], [], bg), scene3d, { grid: true });
+    const gridBgSuppress = r._grid.visible === false;
+    // setLayerVisibility flips the ground group.
+    r.setLayerVisibility({ ground: false });
+    const groundOff = r._groundGroup.visible === false;
+    r.setLayerVisibility({ ground: true });
+    const groundOn = r._groundGroup.visible === true;
+    const pass = gridOnNoBg && gridOffFlag && gridBgSuppress && groundOff && groundOn;
+    results.push(`B[gridOn=${gridOnNoBg} gridOffFlag=${gridOffFlag} bgSuppress=${gridBgSuppress} groundOff=${groundOff} groundOn=${groundOn} ${pass ? 'PASS' : 'FAIL'}]`);
+  }
+
+  // ── Scene C: yard-object mesh counts (tree=4 bodies, fountain=6, swingset=11).
+  {
+    const tree = countBodies(r._buildFurniture(fu('t', 'tree', 0, 0, 900, 900)));
+    const pine = countBodies(r._buildFurniture(fu('p', 'pine_tree', 0, 0, 800, 800)));
+    const fountain = countBodies(r._buildFurniture(fu('f', 'fountain', 0, 0, 1200, 1200)));
+    const swing = countBodies(r._buildFurniture(fu('s', 'swingset', 0, 0, 2800, 1600)));
+    const bush = countBodies(r._buildFurniture(fu('b', 'bush', 0, 0, 700, 700)));
+    const pass = tree === 4 && pine === 4 && fountain === 6 && swing === 11 && bush === 2;
+    results.push(`C[tree=${tree} pine=${pine} fountain=${fountain} swing=${swing} bush=${bush} ${pass ? 'PASS' : 'FAIL'}]`);
+  }
+
+  // ── Scene D: lawn_chair is sittable — generates a SitSpot and a dwelling rig
+  // sits in it (reuses the seating dwell path).
+  r.clearTransientGroups();
+  r.updateFloor(mkFloor([fu('lc', 'lawn_chair', 2000, 2000, 700, 1200)]), scene3d);
+  {
+    const nSpots = r._sitSpots.length;
+    const realNow = performance.now.bind(performance);
+    let fakeNow = realNow();
+    performance.now = () => fakeNow;
+    const target = [{ key: 'L0', x: 2000, y: 1500, color: 0x4fc3f7 }];
+    for (let i = 0; i < 460; i++) { fakeNow += 16.7; r.updateTargets(target.map(t => ({ ...t }))); }
+    performance.now = realNow;
+    const h = r._humanoids['L0'];
+    const pass = nSpots >= 1 && h && h.sit > 0.9;
+    results.push(`D[spots=${nSpots} sit=${h ? h.sit.toFixed(2) : 'n/a'} ${pass ? 'PASS' : 'FAIL'}]`);
+  }
+
+  const allPass = results.every(s => s.includes('PASS'));
+  document.title = `YARD ${allPass ? 'PASS' : 'FAIL'} ${results.length}/4 ${results.join(' ')}`;
+ } catch (e) { document.title = 'ERR: ' + (e && e.stack ? e.stack.split('\n').slice(0,3).join(' | ') : e); }
+</script>

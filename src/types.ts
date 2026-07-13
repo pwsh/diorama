@@ -43,6 +43,8 @@ export type FurnitureKind =
   | 'toilet' | 'sink' | 'sink_vanity' | 'bathtub' | 'shower'
   // outdoor
   | 'trash_bin' | 'recycle_bin'   // wheeled curbside bins; entity 'on'/'full' = full
+  | 'tree' | 'pine_tree' | 'bush' | 'flower_bed' | 'bird_bath'
+  | 'fountain' | 'swingset' | 'lawn_chair' | 'picnic_table'
   // fitness
   | 'exercise_equipment';
 
@@ -297,6 +299,21 @@ export interface Sensor {
   };
 }
 
+// A ground / yard covering area (the "yard" arc). A user-drawn world-mm polygon
+// painted with a procedural ground texture (grass/rock/concrete/…). Pure paint:
+// non-interactive except select + vertex-drag in edit mode, and never blocks
+// nav. Per-floor (Floor.groundAreas), rides the `ground` layer (2D + 3D).
+export type GroundKind = 'grass' | 'rock' | 'concrete' | 'blacktop' | 'mulch' | 'sand' | 'water';
+
+export interface GroundArea {
+  id: string;
+  name?: string;
+  points: Vec2[];              // world-mm polygon (3..20 verts)
+  kind: GroundKind;
+  locked?: boolean;            // canvas vertex-drag / delete disabled
+  hidden?: boolean;            // per-area hide (plus the whole ground layer toggle)
+}
+
 export type DoorKind = 'swing' | 'garage';
 
 export interface Door {
@@ -521,6 +538,7 @@ export interface Floor {
   robots?: RobotFixture[];  // robot vacuum / mower fixtures; repairFloor backfills []
   presenceZones?: PresenceZone[];  // FP2-style occupancy zones; repairFloor backfills []
   cameras?: CameraFixture[];  // camera fixtures (FOV frustum + snapshot); repairFloor backfills []
+  groundAreas?: GroundArea[];  // yard/ground covering polygons; repairFloor backfills []
   boundsLocked?: boolean;   // lock canvas-layout/floor-size editing (hides the edge handles)
   disabled?: boolean;       // hidden from the kiosk/view floor picker + glass-house stack + BLE
                             // floor solve; still editable in the sidebar — lets multiple test
@@ -630,6 +648,8 @@ export interface Layers2D {
   weatherFx?: boolean;  // 3D outdoor weather effects (rain/snow/fog/lightning/wind); default on (W2)
   nameLabels?: boolean; // name labels above confident rigs/dots (fused mmWave + identified BLE); default on (B3)
   battery?: boolean;    // low-battery warning badges on bound fixtures (2D); default on
+  grid?: boolean;       // 3D ground grid helper; default on (3D-only — no 2D plan grid exists)
+  ground?: boolean;     // ground / yard covering polygons (2D fill + 3D patches); default on
 }
 
 export interface Layer2DPreset {
