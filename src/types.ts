@@ -101,6 +101,10 @@ export interface Furniture {
                               // activities. An unbound appliance reading > 10 W renders as in-use.
   sharedBedCovers?: boolean;  // bed only: two-in-bed shared-covers effect (default/undefined = on).
                               // false → occupants lie side by side, no blanket lump.
+  tempEntity?: string | null; // stove/oven (also fridge): sensor.* temperature reading. Shown as a
+                              // small N° chip (2D) + camera-facing sprite (3D). Display only.
+  doorOpen?: boolean;         // stove/oven only: persistent oven-door open flag, toggled by clicking
+                              // the piece (2D/3D). ORed with the avatar-proximity / localState door open.
 }
 
 export type LightIconKind =
@@ -301,8 +305,11 @@ export interface Door {
   entity_id: string | null;    // binary_sensor ("on" = open) OR cover.* ('open'/'closed', current_position for partial)
   label?: string;
   localState?: string;         // local control when UNBOUND ('on'=open/'off'); inert once bound. See Planner.effectiveState.
-  lockEntity?: string | null;  // lock.* entity; DISPLAY-ONLY secondary binding. 'locked' = amber/red padlock,
-                               // 'unlocked' = green open outline, unavailable/absent = grey. No toggle/click.
+  lockEntity?: string | null;  // lock.* entity secondary binding. 'locked' = amber/red padlock,
+                               // 'unlocked' = green open outline, unavailable/absent = grey. Clicking the
+                               // deadbolt (3D) / padlock (2D) toggles lock.lock ↔ lock.unlock.
+  lockLocalState?: 'locked' | 'unlocked'; // local control when UNBOUND (no lockEntity): clicking the
+                               // deadbolt/padlock flips this. Inert once lockEntity is bound. Mirrors localState idiom.
   doorbellEntity?: string | null; // event.* (device_class doorbell) / binary_sensor.* / button.* — a state-string
                                // CHANGE fires a transient ring pulse (Planner.doorbellRings). Display only, no toggle.
   hinge?: 'right' | 'left';    // which side the hinge sits on. Determines swing direction.

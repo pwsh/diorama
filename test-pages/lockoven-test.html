@@ -1,0 +1,67 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>lock+oven</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<script type="module">
+ try {
+  const mod = await import('./assets/three-renderer.js?v=' + Date.now());
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+  const realNow = performance.now.bind(performance);
+  let fakeNow = 1000; performance.now = () => fakeNow;
+
+  const results = [];
+  const assert = (name, cond, detail = '') => results.push(`${cond ? 'PASS' : 'FAIL'} ${name}${detail ? ' (' + detail + ')' : ''}`);
+
+  // ── 1. Door lock deadbolt: rendered on BOTH panel faces, tagged kind='lock' ──
+  {
+    const door = { id: 'd1', x: 2000, y: 2500, w: 900, rotation: 0, entity_id: null, kind: 'swing', lockEntity: 'lock.front' };
+    const stateOf = id => id === 'lock.front' ? { state: 'locked', attributes: {} } : null;
+    r.updateDoorsWindows([door], [], stateOf);
+    const bolts = [];
+    r._doorGroup.traverse(o => { if (o.isMesh && o.userData && o.userData.kind === 'lock') bolts.push(o); });
+    assert('two deadbolt meshes (one per face)', bolts.length === 2, `n=${bolts.length}`);
+    assert('bolts on OPPOSITE faces', bolts.length === 2 && bolts[0].position.z * bolts[1].position.z < 0,
+      bolts.map(b => b.position.z.toFixed(0)).join(','));
+    assert('bolts carry the door id', bolts.every(b => b.userData.fixtureId === 'd1'));
+
+    // Unbound lock via lockLocalState also renders the deadbolt.
+    const door2 = { id: 'd2', x: 4000, y: 2500, w: 900, rotation: 0, entity_id: null, kind: 'swing', lockLocalState: 'unlocked' };
+    r.updateDoorsWindows([door2], [], () => null);
+    const bolts2 = [];
+    r._doorGroup.traverse(o => { if (o.isMesh && o.userData && o.userData.kind === 'lock') bolts2.push(o); });
+    assert('unbound lockLocalState renders 2 bolts', bolts2.length === 2, `n=${bolts2.length}`);
+  }
+
+  // ── 2. Oven doorOpen drives the pivot blend + tags the stove clickable ──
+  {
+    const stove = { id: 'st1', x: 3000, y: 2500, w: 760, h: 650, kind: 'stove', rotation: 0, entity_id: null, doorOpen: true };
+    const floor = {
+      id: 'f1', name: 'K', w: 6000, d: 5000, walls: [], furniture: [stove],
+      lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+      doors: [], windows: [], bg: null, model3d: null, look3d: null, rooms: [],
+    };
+    r.updateFloor(floor, { preset: 'day' });
+    assert('stove registered an appliance door pivot', r._applianceDoors.length === 1, `n=${r._applianceDoors.length}`);
+    assert('stove tagged clickable kind=appliance',
+      r._mediaClickables.some(g => g.userData && g.userData.kind === 'appliance' && g.userData.fixtureId === 'st1'));
+    // Drive frames with an EMPTY context (no avatar / localState) — only doorOpen
+    // (forceOpen) should hold the door open.
+    const ctx = { entityOn: {}, roomNames: {}, timeBucket: 'day' };
+    for (let i = 0; i < 60; i++) { fakeNow += 16.7; r.updateTargets([], ctx); }
+    const openRot = r._applianceDoors[0].pivot.rotation.x;
+    assert('doorOpen holds the oven door open', Math.abs(openRot) > 1.0, `rot=${openRot.toFixed(2)}`);
+    // Clear doorOpen, rebuild, drive → it eases shut.
+    stove.doorOpen = false;
+    r.updateFloor(floor, { preset: 'day' });
+    for (let i = 0; i < 100; i++) { fakeNow += 16.7; r.updateTargets([], ctx); }
+    const closedRot = r._applianceDoors[0].pivot.rotation.x;
+    assert('clearing doorOpen closes the oven door', Math.abs(closedRot) < 0.1, `rot=${closedRot.toFixed(2)}`);
+  }
+
+  performance.now = realNow;
+  const n = results.length, p = results.filter(x => x.startsWith('PASS')).length;
+  document.title = `LOCKOVEN ${p === n ? 'PASS' : 'FAIL'} ${p}/${n} · ${results.join(' · ')}`;
+ } catch (e) { document.title = 'ERR: ' + (e && e.stack ? e.stack.split('\n').slice(0, 3).join(' | ') : e); }
+</script>

@@ -2140,20 +2140,26 @@ export class Sidebar extends LitElement {
     `;
   }
 
-  // Display-only lock.* secondary binding (Feature 2). Shows the lock state; a
-  // padlock renders near the hinge in 2D + a deadbolt in 3D. No toggle.
+  // lock.* secondary binding. Shows the lock state (padlock in 2D, deadbolt in
+  // 3D); the state label is CLICKABLE to toggle — bound → lock.lock/unlock,
+  // unbound → the local lockLocalState flag.
   private _doorLockBindRow(d: Door, upd: (mut: () => void) => void) {
     const p = this.planner;
-    const st = d.lockEntity && p.hass?.states ? p.hass.states[d.lockEntity] : null;
-    const s = st?.state;
-    const label = !d.lockEntity ? '— unbound —'
-      : s === 'locked' ? `${d.lockEntity} · LOCKED`
-      : s === 'unlocked' ? `${d.lockEntity} · unlocked`
-      : `${d.lockEntity} · ${s ?? 'n/a'}`;
+    const s = p.doorLockState(d);
+    const bound = !!d.lockEntity;
+    const raw = bound ? p.hass?.states?.[d.lockEntity!]?.state : undefined;
+    const label = bound
+      ? (s === 'locked' ? `${d.lockEntity} · LOCKED`
+         : s === 'unlocked' ? `${d.lockEntity} · unlocked`
+         : `${d.lockEntity} · ${raw ?? 'n/a'}`)
+      : (d.lockLocalState ? `local · ${d.lockLocalState}` : '— unbound —');
     const color = s === 'locked' ? '#ef9a9a' : s === 'unlocked' ? '#66bb6a' : 'var(--text-dim)';
+    const clickable = bound || !!d.lockLocalState;
     return html`
-      <div class="row" style="margin-top:6px"><label title="lock.* entity — display only">Lock</label>
-        <span style="font-size:11px;color:${color};flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+      <div class="row" style="margin-top:6px"><label title="lock.* entity — click the state to toggle">Lock</label>
+        <span role="button" title=${clickable ? 'Click to toggle lock' : ''}
+              style="font-size:11px;color:${color};flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:${clickable ? 'pointer' : 'default'}"
+              @click=${() => { if (clickable) { p.toggleDoorLock(d); this.requestUpdate(); } }}>
           ${label}
         </span>
       </div>
@@ -2161,10 +2167,15 @@ export class Sidebar extends LitElement {
         <button class="btn" style="flex:1;font-size:11px" @click=${() => this._pickDoorLock(d)}>
           ${d.lockEntity ? 'Rebind' : 'Bind'} lock…
         </button>
-        ${d.lockEntity ? html`
+        ${bound ? html`
           <button class="btn" style="font-size:11px"
                   @click=${() => upd(() => { d.lockEntity = null; })}>Unbind</button>
-        ` : nothing}
+        ` : html`
+          <button class="btn" style="font-size:11px"
+                  title="Add / toggle a local (unbound) lock state"
+                  @click=${() => upd(() => { d.lockLocalState = d.lockLocalState === 'locked' ? 'unlocked' : 'locked'; })}>
+            ${d.lockLocalState ? 'Toggle local' : 'Add local lock'}</button>
+        `}
       </div>
     `;
   }
@@ -2538,6 +2549,12 @@ export class Sidebar extends LitElement {
         ${curKind === 'fridge' ? this._fridgeDoorBindRow(piece, upd) : nothing}
         ${furnitureCat(resolveFurnitureDef(piece, p.store.customObjects)) === 'appliance'
           ? this._powerBindRow(piece, upd) : nothing}
+        ${curKind === 'stove' || curKind === 'fridge' ? this._tempBindRow(piece, upd) : nothing}
+        ${curKind === 'stove' ? html`
+          <div class="row"><label title="Persistent oven-door open state (also toggled by clicking the stove in 2D/3D)">Oven door open</label>
+            <input type="checkbox" .checked=${!!piece.doorOpen}
+                   @change=${(e: Event) => upd(() => { piece.doorOpen = (e.target as HTMLInputElement).checked; })}>
+          </div>` : nothing}
         <div class="row"><label>Color</label>
           <input type="color"
                  .value=${piece.color ?? ('#' + (resolveFurnitureDef(piece, p.store.customObjects).color & 0xffffff).toString(16).padStart(6, '0'))}
@@ -2696,6 +2713,46 @@ export class Sidebar extends LitElement {
         domain: 'sensor',
         onPick: (id: string) => {
           piece.powerEntity = id;
+          this.planner.save();
+          this.planner.emitConfig();
+        },
+      },
+    }));
+  }
+
+  // Stove/oven (or fridge freezer) temperature sensor. Display only: a 2D N° chip
+  // + a 3D camera-facing sprite above the piece.
+  private _tempBindRow(piece: Furniture, upd: (mut: () => void) => void) {
+    const p = this.planner;
+    const st = piece.tempEntity && p.hass?.states ? p.hass.states[piece.tempEntity] : null;
+    const v = st ? parseFloat(st.state) : NaN;
+    const unit = String(st?.attributes?.unit_of_measurement ?? '');
+    const vTxt = isFinite(v) ? `${Math.round(v)}°${/F/i.test(unit) ? 'F' : ''}` : (st ? st.state : '');
+    return html`
+      <div class="row"><label title="sensor.* temperature — shown as an N° chip; display only">Temperature</label>
+        <span style="font-size:11px;color:${isFinite(v) ? '#ff8a65' : 'var(--text-dim)'};flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+          ${piece.tempEntity ? `${piece.tempEntity}${vTxt ? ` · ${vTxt}` : ''}` : '— unbound —'}
+        </span>
+      </div>
+      <div style="display:flex;gap:4px;margin-top:4px">
+        <button class="btn" style="flex:1;font-size:11px" @click=${() => this._pickTempEntity(piece)}>
+          ${piece.tempEntity ? 'Rebind' : 'Bind'} temp…
+        </button>
+        ${piece.tempEntity ? html`
+          <button class="btn" style="font-size:11px"
+                  @click=${() => upd(() => { piece.tempEntity = null; })}>Unbind</button>
+        ` : nothing}
+      </div>
+    `;
+  }
+
+  private _pickTempEntity(piece: Furniture): void {
+    this.dispatchEvent(new CustomEvent('open-entity-picker', {
+      bubbles: true, composed: true,
+      detail: {
+        domain: 'sensor',
+        onPick: (id: string) => {
+          piece.tempEntity = id;
           this.planner.save();
           this.planner.emitConfig();
         },
@@ -4435,10 +4492,16 @@ export class Sidebar extends LitElement {
     const p = this.planner;
     const f = p.floor();
     const bg = f.bg;
+    const bgLayerOff = (p.store.layers2d?.bg === false);
     return this._section('bg', 'Background image', () => html`
         <button class="btn" style="width:100%;margin-bottom:4px" @click=${this._uploadBg}>
           Upload image…
         </button>
+        ${bg && bgLayerOff ? html`
+          <div style="font-size:10px;color:#ffb74d;margin-bottom:4px;line-height:1.3">
+            The Background layer is off (2D Layers) — this image won't show until
+            it's turned on.
+          </div>` : nothing}
         ${bg ? this._bgControls(bg) : nothing}
     `, { style: 'margin-top:auto' });
   }
@@ -4498,22 +4561,58 @@ export class Sidebar extends LitElement {
   };
 
   private _applyBg(dataUrl: string) {
+    const isSvg = /^data:image\/svg\+xml/i.test(dataUrl);
     const img = new Image();
     img.onload = () => {
       const p = this.planner;
       const f = p.floor();
-      const natW = img.naturalWidth || 1, natH = img.naturalHeight || 1;
-      const ratio = natW / natH;
-      let bw, bh;
-      if (ratio > f.w / f.d) { bw = f.w; bh = f.w / ratio; }
-      else                   { bh = f.d; bw = f.d * ratio; }
+      let natW = img.naturalWidth, natH = img.naturalHeight;
+      // (d) An SVG (or any image) that reports no intrinsic size can't be sized
+      // by aspect — fall back to the floor rect so it isn't drawn degenerate.
+      const degenerate = !natW || !natH;
+      let finalUrl = dataUrl;
+      // (c) A multi-MB dataURL bloats HA's user_data table and can fail the WS
+      // push SILENTLY (save() only console.warns on error). Downscale big rasters
+      // to <=2000 px max dimension (JPEG q0.85) before storing. SVG is vector
+      // text with no pixels — exempt.
+      if (!isSvg && !degenerate && dataUrl.length > 2_500_000) {
+        const scale = Math.min(1, 2000 / Math.max(natW, natH));
+        const cw = Math.max(1, Math.round(natW * scale));
+        const ch = Math.max(1, Math.round(natH * scale));
+        const cv = document.createElement('canvas');
+        cv.width = cw; cv.height = ch;
+        const cx = cv.getContext('2d');
+        if (cx) {
+          cx.drawImage(img, 0, 0, cw, ch);
+          try { finalUrl = cv.toDataURL('image/jpeg', 0.85); natW = cw; natH = ch; }
+          catch { /* keep the original on any toDataURL failure */ }
+        }
+      }
+      const floorRatio = f.w / f.d;
+      let bw: number, bh: number;
+      if (degenerate) { bw = f.w; bh = f.d; }
+      else {
+        const ratio = natW / natH;
+        if (ratio > floorRatio) { bw = f.w; bh = f.w / ratio; }
+        else                    { bh = f.d; bw = f.d * ratio; }
+      }
       f.bg = {
-        dataUrl, x: f.w / 2, y: f.d / 2, w: bw, h: bh,
+        dataUrl: finalUrl, x: f.w / 2, y: f.d / 2, w: bw, h: bh,
         rotation: 0, opacity: 1, visible: true, locked: false,
       };
+      // (a) Adding an image is explicit intent to SEE it. If the bg layer is off
+      // (e.g. a "Simple floorplan" preset is active) turn it back on, else the
+      // new image silently never draws.
+      const L = (p.store.layers2d ??= {});
+      if (L.bg === false) L.bg = true;
       p.save(); p.emitConfig();
+      this.requestUpdate();
     };
-    img.onerror = () => alert('Failed to load image.');
+    // (b) Name the likely cause: iPhone HEIC/AVIF, TIFF, etc. don't decode.
+    img.onerror = () => alert(
+      "This image couldn't be decoded. Some camera formats (HEIC / AVIF from " +
+      "iPhone, or TIFF) aren't supported by the browser — convert it to PNG, " +
+      'JPG, SVG, or WebP and try again.');
     img.src = dataUrl;
   }
 

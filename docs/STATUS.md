@@ -56,6 +56,20 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Batch I: continuous walls, interactive locks, oven, bg-image fixes**
+  (9 files; window-test 14→**15/15** incl. `wall_single_mesh`, new
+  `lockoven-test.html` **8/8**, glass `wallOps` unchanged, full sweep
+  green): wall segments rebuilt as ONE watertight ExtrudeGeometry with
+  door notches + window holes (windowed segment 4 boxes → 1 mesh; the
+  translucent-seam "just boxes" bug is gone; JAMB_OVL retired).
+  Door locks render on both faces and are INTERACTIVE (click →
+  lock.lock/unlock bound, lockLocalState unbound; kiosk yes, view no).
+  Oven: tempEntity binding (2D ° chip + 3D sprite) + click-to-open
+  persisted oven door alongside avatar-proximity. Background-image bug
+  root-caused: layer preset hid new images (auto re-enable + hint) +
+  silent HA-push failure on huge dataURLs (auto-downscale >2.5 MB) +
+  HEIC error naming + zero-size SVG guard.
+
 - **Roadmap batch H: Roborock live position + media now-playing —
   TOP 12 COMPLETE** (8 files; robot-test extended 24→**48/48**, new
   `nowplaying-test.html` **15/15**; media-raycast expectation corrected

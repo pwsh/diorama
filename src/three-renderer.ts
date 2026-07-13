@@ -794,8 +794,8 @@ export class ThreeDRenderer {
   private _lastAnimT = 0;   // performance.now()/1000 of the previous _animate frame
   private _ZONE_H = 305;  // 1 ft — low outlines that don't wall off the room
   private _OBJ_H = 900;
-  private _onFixtureClick: ((info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'safety' | 'robot'; entity_id: string | null; fixtureId: string }) => void) | null = null;
-  private _onFixtureDblClick: ((info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'safety' | 'robot'; entity_id: string | null; fixtureId: string }) => void) | null = null;
+  private _onFixtureClick: ((info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'safety' | 'robot' | 'lock' | 'appliance'; entity_id: string | null; fixtureId: string }) => void) | null = null;
+  private _onFixtureDblClick: ((info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'safety' | 'robot' | 'lock' | 'appliance'; entity_id: string | null; fixtureId: string }) => void) | null = null;
   private _raycaster = new THREE.Raycaster();
   // Per-target humanoid rigs, persisted across frames so we can carry
   // walk-cycle phase + smoothed body facing.
@@ -823,7 +823,7 @@ export class ThreeDRenderer {
   // test vs raw target positions).
   private _applianceDoors: {
     fuId: string; pivot: THREE.Object3D; axis: 'x' | 'y'; openAngle: number;
-    wx: number; wy: number; unbound: boolean; hasDoorSensor: boolean;
+    wx: number; wy: number; unbound: boolean; hasDoorSensor: boolean; forceOpen?: boolean;
   }[] = [];
   private _applianceDoorBlend: Record<string, number> = {};
   // TVs grouped by the room they sit in — the watch_tv seated activity checks
@@ -1062,15 +1062,15 @@ export class ThreeDRenderer {
     this._animate();
   }
 
-  onFixtureClick(fn: (info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'safety' | 'robot'; entity_id: string | null; fixtureId: string }) => void): void {
+  onFixtureClick(fn: (info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'safety' | 'robot' | 'lock' | 'appliance'; entity_id: string | null; fixtureId: string }) => void): void {
     this._onFixtureClick = fn;
   }
-  onFixtureDblClick(fn: (info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'safety' | 'robot'; entity_id: string | null; fixtureId: string }) => void): void {
+  onFixtureDblClick(fn: (info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'safety' | 'robot' | 'lock' | 'appliance'; entity_id: string | null; fixtureId: string }) => void): void {
     this._onFixtureDblClick = fn;
   }
 
   private _raycastFixture(clientX: number, clientY: number):
-      { kind: 'light' | 'switch' | 'media' | 'alarm' | 'safety' | 'robot'; entity_id: string | null; fixtureId: string } | null {
+      { kind: 'light' | 'switch' | 'media' | 'alarm' | 'safety' | 'robot' | 'lock' | 'appliance'; entity_id: string | null; fixtureId: string } | null {
     if (!this._renderer || !this._camera) return null;
     const rect = this._renderer.domElement.getBoundingClientRect();
     const ndc = new THREE.Vector2(
@@ -1097,6 +1097,9 @@ export class ThreeDRenderer {
     if (this._robotGroup.visible) roots.push(this._robotGroup);
     if (this._robotRigGroup.visible) roots.push(this._robotRigGroup);
     for (const g of this._mediaClickables) roots.push(g);
+    // Door lock deadbolts (userData.kind='lock') ride the always-visible door
+    // group; the door panel itself carries no clickable tag, so only the bolt hits.
+    if (this._doorGroup.visible) roots.push(this._doorGroup);
     if (!roots.length) return null;
     const hits = this._raycaster.intersectObjects(roots, true);
     for (const h of hits) {
@@ -1104,7 +1107,7 @@ export class ThreeDRenderer {
       let obj: THREE.Object3D | null = h.object;
       while (obj) {
         const ud = obj.userData;
-        if (ud && (ud.kind === 'light' || ud.kind === 'switch' || ud.kind === 'media' || ud.kind === 'alarm' || ud.kind === 'safety' || ud.kind === 'robot')) {
+        if (ud && (ud.kind === 'light' || ud.kind === 'switch' || ud.kind === 'media' || ud.kind === 'alarm' || ud.kind === 'safety' || ud.kind === 'robot' || ud.kind === 'lock' || ud.kind === 'appliance')) {
           return { kind: ud.kind, entity_id: ud.entity_id ?? null, fixtureId: String(ud.fixtureId) };
         }
         obj = obj.parent;
@@ -2034,39 +2037,28 @@ export class ThreeDRenderer {
           for (let k = 1; k < nBal; k++) bar((len * k) / nBal, 28, 100, kindH - 60, 28);
           continue;
         }
-        const piece = (t0: number, t1: number, y0: number, y1: number) => {
-          const yTop = Math.min(y1, kindH);
-          if (t1 - t0 < 10 || yTop - y0 < 10) return;
-          const geo = new THREE.BoxGeometry(wallThick, yTop - y0, t1 - t0);
-          const mesh = new THREE.Mesh(geo, wallMatFor());
-          const mid = (t0 + t1) / 2;
-          const p = this._w(a.x + ux * mid, a.y + uy * mid, (y0 + yTop) / 2);
-          mesh.position.set(p.x, p.y, p.z);
-          mesh.rotation.y = angle;
-          // Cutaway tag: scene-space midpoint + horizontal perpendicular (the
-          // scene-space wall direction is (-ux, uy) after the X-mirror, so its
-          // normal is (-uy, -ux)). Either sign is fine — the fader re-orients.
-          this._tagCutawayWall(mesh, p.x, p.z, -uy, -ux, this._cutawayWalls);
+        // Build the solid wall for this segment as ONE extruded prism whose 2D
+        // profile (along-wall t × height) has rectangular holes/notches punched
+        // for each door/window opening — instead of separate boxes per solid
+        // run + sub-sill/header/lintel. Separate boxes left INTERNAL end-cap
+        // faces (jamb seams) and double-blended overlaps that were visible
+        // through the translucent wall material as horizontal/vertical seam
+        // lines. A single watertight mesh has only exterior faces, so the
+        // translucency reads as a continuous wall. Nav + loop-clipped floor read
+        // the wall DATA (wallCutsForSegment), not these meshes, so they're
+        // unaffected.
+        const { openings } = wallCutsForSegment(a, b, f.doors ?? [], f.windows ?? []);
+        const angleY = Math.atan2(-uy, -ux);   // shape t-axis → scene along-wall dir
+        const basePos = this._w(a.x, a.y, 0);   // shape origin (t=0, y=0) in scene
+        for (const mesh of this._buildSolidWallSegment(openings, len, kindH, wallThick, SILL_TOP, WINDOW_GLASS_H, DOOR_HEAD, wallMatFor)) {
+          mesh.position.set(basePos.x, basePos.y, basePos.z);
+          mesh.rotation.y = angleY;
+          // Cutaway tag: scene-space segment midpoint + horizontal perpendicular
+          // (the scene-space wall direction is (-ux, uy) after the X-mirror, so
+          // its normal is (-uy, -ux)). Either sign is fine — the fader re-orients.
+          const mp = this._w((a.x + b.x) / 2, (a.y + b.y) / 2, 0);
+          this._tagCutawayWall(mesh, mp.x, mp.z, -uy, -ux, this._cutawayWalls);
           group.add(mesh);
-        };
-        const { solids, openings } = wallCutsForSegment(a, b, f.doors ?? [], f.windows ?? []);
-        for (const sv of solids) piece(sv.t0, sv.t1, 0, kindH);
-        // Overlap each sub-sill / header / lintel a few mm INTO the abutting
-        // solid jamb runs. Without this their end-cap faces are exactly coplanar
-        // with the jamb's — coincident faces (the CLAUDE.md gotcha) that hatch
-        // into thin vertical seams up the wall on the flat toon shading. The
-        // overlap buries the caps inside the full-height jamb (never a gap).
-        const JAMB_OVL = 3;
-        for (const op of openings) {
-          const o0 = op.t0 - JAMB_OVL, o1 = op.t1 + JAMB_OVL;
-          if (op.kind === 'window') {
-            const sillTop = op.sill ?? SILL_TOP;                 // bottom of glass
-            const headerBot = (op.sill ?? SILL_TOP) + (op.height ?? WINDOW_GLASS_H);
-            piece(o0, o1, 0, sillTop);         // sub-sill
-            piece(o0, o1, headerBot, kindH);   // header (skipped on low walls)
-          } else {
-            piece(o0, o1, op.head ?? DOOR_HEAD, kindH);   // lintel (garage: taller head)
-          }
         }
       }
       this._shadowFlags(group);
@@ -2103,14 +2095,25 @@ export class ThreeDRenderer {
       const powerW = powerSt ? parseFloat(powerSt.state) : NaN;
       const applianceOn = stateOn || (fu.entity_id == null && isFinite(powerW) && powerW > 10);
       const ledScale = isFinite(powerW) && powerW > 5 ? powerGlowScale(powerW) : 1;
+      // Bound temperature reading (stove/oven/fridge): a rounded chip/sprite.
+      let tempLabel: string | undefined;
+      if (fu.tempEntity && stateProvider) {
+        const ts = stateProvider(fu.tempEntity);
+        const v = ts ? parseFloat(ts.state) : NaN;
+        if (isFinite(v)) {
+          const unit = (ts?.attributes?.unit_of_measurement as string | undefined) ?? '';
+          tempLabel = `${Math.round(v)}°${/F/i.test(unit) ? 'F' : ''}`;
+        }
+      }
       const doorSink: { pivot: THREE.Object3D; axis: 'x' | 'y'; openAngle: number }[] = [];
       const grp = this._buildFurniture(fu, f.furniture, customObjects,
-                                       { applianceOn, ledScale, doorSink });
+                                       { applianceOn, ledScale, doorSink, tempLabel });
       this._shadowFlags(grp);
       this._floorGroup.add(grp);
       // Register each door pivot with the fixture-level info the per-frame blend
       // needs, and re-apply the persisted blend so a rebuild doesn't pop the door
-      // shut (or open).
+      // shut (or open). `forceOpen` (stove/oven doorOpen) is ORed in as an always-
+      // open input alongside the door-sensor / localState / proximity triggers.
       if (doorSink.length) {
         const unbound = fu.entity_id == null;
         const hasDoorSensor = fu.doorEntity != null;
@@ -2119,9 +2122,15 @@ export class ThreeDRenderer {
           dp.pivot.rotation[dp.axis] = dp.openAngle * blend;
           this._applianceDoors.push({
             fuId: fu.id, pivot: dp.pivot, axis: dp.axis, openAngle: dp.openAngle,
-            wx: fu.x, wy: fu.y, unbound, hasDoorSensor,
+            wx: fu.x, wy: fu.y, unbound, hasDoorSensor, forceOpen: fu.doorOpen === true,
           });
         }
+      }
+      // Stoves/ovens are clickable (userData.kind='appliance') so a raycast click
+      // toggles the oven door. Tagged regardless of binding, like TVs.
+      if (fu.kind === 'stove') {
+        grp.userData = { ...grp.userData, kind: 'appliance', entity_id: fu.entity_id ?? null, fixtureId: fu.id };
+        this._mediaClickables.push(grp);
       }
       const def = resolveFurnitureDef(fu, customObjects);
       // Bound TVs become clickable like light fixtures: tag the group so the
@@ -2351,6 +2360,91 @@ export class ThreeDRenderer {
     mesh.userData.wallCut = { mx, mz, nx: nx / nlen, nz: nz / nlen };
     mesh.userData.baseOpacity = mat.opacity ?? 1;
     list.push(mesh);
+  }
+
+  // Build the solid part of ONE wall segment as extruded prism mesh(es). The
+  // 2D profile is the along-wall (t) × height (y) rectangle [0..len]×[0..kindH]
+  // with each door/window opening punched out: interior voids (a normal
+  // window's sill→header gap) become extrude HOLES, floor-reaching voids (a
+  // door up to its lintel) notch the bottom edge, ceiling-reaching voids notch
+  // the top edge, and a full-height void (a door/window taller than a half
+  // wall) splits the run into separate meshes. One watertight mesh per run means
+  // NO internal jamb/sill/header end-cap faces — the previous per-box build left
+  // those visible as seam lines through the translucent wall material. The
+  // meshes are returned in the profile frame (local +X = t, +Y = height, +Z =
+  // thickness, centered); the caller positions/rotates them into the segment.
+  private _buildSolidWallSegment(
+    openings: { t0: number; t1: number; kind: 'door' | 'window'; sill?: number; height?: number; head?: number }[],
+    len: number, kindH: number, wallThick: number,
+    sillTop: number, glassH: number, doorHead: number,
+    matFactory: () => THREE.Material,
+  ): THREE.Mesh[] {
+    const EPS = 6;
+    type Void = { t0: number; t1: number; y0: number; y1: number };
+    const voids: Void[] = [];
+    for (const op of openings) {
+      const t0 = Math.max(0, Math.min(op.t0, len)), t1 = Math.max(0, Math.min(op.t1, len));
+      if (t1 - t0 < EPS) continue;
+      let y0: number, y1: number;
+      if (op.kind === 'window') {
+        y0 = Math.max(0, Math.min(op.sill ?? sillTop, kindH));
+        y1 = Math.max(0, Math.min((op.sill ?? sillTop) + (op.height ?? glassH), kindH));
+      } else {
+        y0 = 0; y1 = Math.min(op.head ?? doorHead, kindH);
+      }
+      if (y1 - y0 < EPS) continue;
+      voids.push({ t0, t1, y0, y1 });
+    }
+    voids.sort((p, q) => p.t0 - q.t0);
+    const floorR = (v: Void) => v.y0 <= EPS;
+    const ceilR = (v: Void) => v.y1 >= kindH - EPS;
+    // Full-height voids split the wall into disconnected runs.
+    const runs: { rs: number; re: number }[] = [];
+    let cursor = 0;
+    for (const s of voids.filter(v => floorR(v) && ceilR(v))) {
+      if (s.t0 > cursor + EPS) runs.push({ rs: cursor, re: s.t0 });
+      cursor = Math.max(cursor, s.t1);
+    }
+    if (cursor < len - EPS) runs.push({ rs: cursor, re: len });
+    if (!runs.length) return [];   // whole segment is one full-height opening
+
+    const meshes: THREE.Mesh[] = [];
+    for (const { rs, re } of runs) {
+      const ops = voids.filter(v => !(floorR(v) && ceilR(v)) && v.t0 >= rs - EPS && v.t1 <= re + EPS);
+      const floorOps = ops.filter(floorR).sort((p, q) => p.t0 - q.t0);
+      const ceilOps = ops.filter(v => ceilR(v) && !floorR(v)).sort((p, q) => p.t0 - q.t0);
+      const interior = ops.filter(v => !floorR(v) && !ceilR(v));
+      const pts: [number, number][] = [[rs, 0]];
+      for (const v of floorOps) {
+        const lt = Math.max(rs, v.t0), rt = Math.min(re, v.t1);
+        pts.push([lt, 0], [lt, v.y1], [rt, v.y1], [rt, 0]);
+      }
+      pts.push([re, 0], [re, kindH]);
+      for (let i = ceilOps.length - 1; i >= 0; i--) {
+        const v = ceilOps[i];
+        const lt = Math.max(rs, v.t0), rt = Math.min(re, v.t1);
+        pts.push([rt, kindH], [rt, v.y0], [lt, v.y0], [lt, kindH]);
+      }
+      pts.push([rs, kindH]);
+      // Drop consecutive duplicate points (openings flush to a run edge).
+      const clean: [number, number][] = [];
+      for (const p of pts) {
+        const last = clean[clean.length - 1];
+        if (!last || Math.abs(last[0] - p[0]) > 0.5 || Math.abs(last[1] - p[1]) > 0.5) clean.push(p);
+      }
+      if (clean.length < 3) continue;
+      const shape = new THREE.Shape(clean.map(([x, y]) => new THREE.Vector2(x, y)));
+      for (const v of interior) {
+        shape.holes.push(new THREE.Path([
+          new THREE.Vector2(v.t0, v.y0), new THREE.Vector2(v.t1, v.y0),
+          new THREE.Vector2(v.t1, v.y1), new THREE.Vector2(v.t0, v.y1),
+        ]));
+      }
+      const geo = new THREE.ExtrudeGeometry(shape, { depth: wallThick, bevelEnabled: false });
+      geo.translate(0, 0, -wallThick / 2);   // center on thickness (faces at ±wallThick/2)
+      meshes.push(new THREE.Mesh(geo, matFactory()));
+    }
+    return meshes;
   }
 
   // ── Glass-house multi-story view ─────────────────────────────────────────
@@ -3327,18 +3421,28 @@ export class ThreeDRenderer {
       );
       panel.position.set(-d.w / 2, DOOR_H / 2, 0);
       hinge.add(panel);
-      // Lock deadbolt (Feature 2, display only): a small emissive box near the
-      // free edge (opposite the hinge). Red = locked, green = unlocked, grey =
-      // unknown/unavailable. Held proud of the panel face (coincident-face gotcha).
-      if (d.lockEntity) {
-        const ls = itemState({ entity_id: d.lockEntity }, stateOf)?.state;
-        const lc = ls === 'locked' ? 0xef5350 : ls === 'unlocked' ? 0x66bb6a : 0x90a4ae;
-        const bolt = new THREE.Mesh(
-          new THREE.BoxGeometry(70, 100, 34),
-          this._mat({ color: lc, emissive: lc, emissiveIntensity: ls ? 0.85 : 0.25 }));
-        bolt.position.set(-d.w + 100, DOOR_H * 0.5, DOOR_T / 2 + 12);
-        bolt.userData.outlineSkip = true;
-        hinge.add(bolt);
+      // Lock deadbolt: an emissive box near the free edge (opposite the hinge),
+      // rendered on BOTH panel faces so the state reads from either side. Red =
+      // locked, green = unlocked, grey = unknown/unavailable. State resolves from
+      // the bound lock.* entity OR the unbound lockLocalState. Clicking a bolt
+      // toggles the lock (userData.kind='lock' → raycast walker → planner). Each
+      // bolt's inner cap is buried inside the panel so it isn't coplanar with the
+      // panel face (coincident-face gotcha).
+      const lockSt = d.lockEntity
+        ? itemState({ entity_id: d.lockEntity }, stateOf)?.state
+        : d.lockLocalState;
+      if (d.lockEntity || d.lockLocalState) {
+        const lc = lockSt === 'locked' ? 0xef5350 : lockSt === 'unlocked' ? 0x66bb6a : 0x90a4ae;
+        const boltMat = this._mat({ color: lc, emissive: lc, emissiveIntensity: lockSt ? 0.85 : 0.25 });
+        for (const zc of [DOOR_T / 2 + 10, -(DOOR_T / 2 + 10)]) {
+          const bolt = new THREE.Mesh(new THREE.BoxGeometry(70, 100, 30), boltMat);
+          bolt.position.set(-d.w + 100, DOOR_H * 0.5, zc);
+          bolt.userData.outlineSkip = true;
+          bolt.userData.kind = 'lock';
+          bolt.userData.fixtureId = d.id;
+          bolt.userData.entity_id = d.lockEntity ?? null;
+          hinge.add(bolt);
+        }
       }
       this._addOutlines(hinge);
       this._doorGroup.add(hinge);
@@ -3356,7 +3460,8 @@ export class ThreeDRenderer {
                           neighbors?: Furniture[],
                           customObjects?: ObjectRecipe[],
                           opts?: { applianceOn?: boolean; ledScale?: number;
-                                   doorSink?: { pivot: THREE.Object3D; axis: 'x' | 'y'; openAngle: number }[] }): THREE.Group {
+                                   doorSink?: { pivot: THREE.Object3D; axis: 'x' | 'y'; openAngle: number }[];
+                                   tempLabel?: string }): THREE.Group {
     const recipe = fu.customKindId ? customObjects?.find(o => o.id === fu.customKindId) : undefined;
     const def = recipe ?? furnitureDef(fu);
     const W = fu.w, D = fu.h, HT = def.ht;
@@ -4036,6 +4141,15 @@ export class ThreeDRenderer {
       led.position.set(W * 0.36, ledY, -D / 2 - 8);
       led.userData.outlineSkip = true;   // no dark inverted-hull shell on a glowing dot
       grp.add(led);
+    }
+
+    // Temperature reading (stove/oven/fridge): a small camera-facing text sprite
+    // above the piece. Reuses the env-sensor sprite idiom; its CanvasTexture is
+    // freed by the _floorGroup's _disposeSpriteMaps pairing (with room labels).
+    if (opts?.tempLabel) {
+      const sp = this._makeTextSprite(opts.tempLabel, '#ff8a65', 0.85);
+      sp.position.set(0, HT + 320, -D / 2 - 40);
+      grp.add(sp);
     }
 
     // Sims dressing: cartoon outline shells on the main body meshes, plus a
@@ -7538,8 +7652,10 @@ export class ThreeDRenderer {
     const PROX2 = 1100 * 1100;
     const alpha = 1 - Math.exp(-dt / 0.25);   // eased approach, τ = 0.25 s
     for (const d of this._applianceDoors) {
-      let openTarget = false;
-      if (d.hasDoorSensor) {
+      // Persistent oven-door flag forces open regardless of binding; the other
+      // triggers (door sensor / localState / anchor / proximity) OR in.
+      let openTarget = d.forceOpen === true;
+      if (!openTarget && d.hasDoorSensor) {
         openTarget = doorSensorOpen?.[d.fuId] === true;             // case a
       } else if (d.unbound) {
         if (entityOn[d.fuId]) openTarget = true;                    // case b

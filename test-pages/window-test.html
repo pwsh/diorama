@@ -76,15 +76,23 @@
   { const p = paneMeshes(r._doorGroup.children[0])[0];
     ok('glass_bottom', Math.abs(paneBot(p) - 400) < 5, paneBot(p).toFixed(0));
     ok('glass_top', Math.abs(paneTop(p) - 1800) < 5, paneTop(p).toFixed(0)); }
-  // Wall sub-sill + header boxes: the 100 mm-thick wall pieces. Sub-sill top≈400,
-  // header bottom≈1800.
-  { const wp = [];
-    r._floorGroup.traverse(o => { if (o.isMesh && o.geometry.parameters && o.geometry.parameters.width === 100) wp.push(o); });
-    const tops = wp.map(paneTop), bots = wp.map(paneBot);
-    const minTop = Math.min(...tops);              // the sub-sill's top
-    const headerBot = Math.max(...bots);           // the header's bottom
-    ok('subsill_top', Math.abs(minTop - 400) < 5, minTop.toFixed(0));
-    ok('header_bottom', Math.abs(headerBot - 1800) < 5, headerBot.toFixed(0)); }
+  // Single-mesh wall (rewrite): each wall SEGMENT is now ONE watertight
+  // ExtrudeGeometry prism with the opening punched as a hole — NOT separate
+  // sub-sill/header boxes. Verify (a) the windowed segment produced exactly one
+  // solid wall mesh, and (b) the window hole's y-edges land at sill(400) and
+  // sill+height(1800) — read from the extrude geometry's vertices (Y unaffected
+  // by the segment's Y-rotation; mesh y-position is the floor at 0).
+  { const walls = [];
+    r._floorGroup.traverse(o => { if (o.isMesh && o.geometry.type === 'ExtrudeGeometry') walls.push(o); });
+    ok('wall_single_mesh', walls.length === 1, String(walls.length));
+    const ys = new Set();
+    for (const w of walls) {
+      const pos = w.geometry.attributes.position;
+      for (let i = 0; i < pos.count; i++) ys.add(Math.round(pos.getY(i)));
+    }
+    const near = t => [...ys].some(v => Math.abs(v - t) < 5);
+    ok('subsill_top', near(400), [...ys].sort((a, b) => a - b).join(','));
+    ok('header_bottom', near(1800), ''); }
 
   const pass = results.every(x => x.startsWith('ok'));
   const n = results.length, p = results.filter(x => x.startsWith('ok')).length;

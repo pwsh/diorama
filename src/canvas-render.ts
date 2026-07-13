@@ -1456,13 +1456,14 @@ function drawDoors(ctx: CanvasRenderingContext2D, p: Planner, view: View): void 
     ctx.fillStyle = color; ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5;
     ctx.beginPath(); ctx.arc(hinge.x, hinge.y, 5 * dpr, 0, 2 * Math.PI);
     ctx.fill(); ctx.stroke();
-    // Lock-state padlock (display only) near the hinge, offset so it clears the
-    // hinge dot + swing arc.
-    if (d.lockEntity) {
-      const lst = p.hass?.states?.[d.lockEntity]?.state;
+    // Lock-state padlock near the hinge, offset so it clears the hinge dot +
+    // swing arc. Clickable: toggles lock.lock/unlock (bound) or lockLocalState
+    // (unbound). State resolves from the bound entity OR the local flag.
+    if (d.lockEntity || d.lockLocalState) {
+      const lst = p.doorLockState(d);
       drawPadlock(ctx, hinge.x - 9 * dpr, hinge.y - 11 * dpr, 5 * dpr, lst);
       // Low-battery badge for the lock (locks are commonly battery-powered).
-      drawBatteryBadge(ctx, p, d.lockEntity, hinge.x + 9 * dpr, hinge.y - 11 * dpr);
+      if (d.lockEntity) drawBatteryBadge(ctx, p, d.lockEntity, hinge.x + 9 * dpr, hinge.y - 11 * dpr);
     }
     // Endpoint handle (drag to rotate) — hidden when locked
     if (!d.locked) {
@@ -1715,6 +1716,23 @@ function drawFurniture(ctx: CanvasRenderingContext2D, p: Planner, view: View,
       ctx.stroke();
     }
     ctx.restore();
+    // Temperature chip (stove/oven/fridge): a small upright N° pill above the
+    // piece (drawn in screen space so it stays readable under any rotation).
+    if (piece.tempEntity && p.hass?.states) {
+      const tv = parseFloat(p.hass.states[piece.tempEntity]?.state ?? '');
+      if (isFinite(tv)) {
+        const unit = String(p.hass.states[piece.tempEntity]?.attributes?.unit_of_measurement ?? '');
+        const txt = `${Math.round(tv)}°${/F/i.test(unit) ? 'F' : ''}`;
+        const cy = center.y - Math.max(halfW, halfH) - 8 * dpr;
+        ctx.font = `${10 * dpr}px sans-serif`;
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        const tw = ctx.measureText(txt).width + 8 * dpr;
+        ctx.fillStyle = 'rgba(0,0,0,0.65)';
+        ctx.fillRect(center.x - tw / 2, cy - 7 * dpr, tw, 14 * dpr);
+        ctx.fillStyle = '#ff8a65';
+        ctx.fillText(txt, center.x, cy);
+      }
+    }
     // Corner handles drawn at rotation-aware world positions so resize stays
     // grabbable when the piece is rotated. Locked pieces show none.
     if (!piece.locked) {

@@ -204,6 +204,21 @@ export class ThreeView extends LitElement {
         if (ro) p.toggleRobot(ro);
         return;
       }
+      // Door lock deadbolt → toggle lock.lock/unlock (bound) or lockLocalState
+      // (unbound). Refuses in view mode (handled inside toggleDoorLock).
+      if (kind === 'lock') {
+        const dr = p.floor().doors?.find(x => x.id === fixtureId);
+        if (dr) p.toggleDoorLock(dr);
+        return;
+      }
+      // Stove/oven body → toggle its persistent doorOpen flag (the oven door).
+      // The on/off entity binding is reached via dblclick / sidebar, not here.
+      if (kind === 'appliance') {
+        if (p.uiMode === 'view') return;
+        const fu = p.floor().furniture.find(x => x.id === fixtureId);
+        if (fu) { fu.doorOpen = !fu.doorOpen; p.save(); p.emitConfig(); }
+        return;
+      }
       // toggleEntity/toggleItem refuse in view-only mode.
       if (entity_id) { p.toggleEntity(entity_id); return; }
       // Unbound fixture → local control: resolve the item by kind + id and flip
@@ -237,6 +252,21 @@ export class ThreeView extends LitElement {
             },
           }));
         }
+        return;
+      }
+
+      // Stove/oven: dblclick binds the on/off entity (single click toggles the
+      // oven door). Bound → no config modal exists, so no-op.
+      if (kind === 'appliance') {
+        if (p.uiMode !== 'edit') return;
+        const fu = f.furniture.find(x => x.id === fixtureId);
+        if (fu && !fu.entity_id) this.dispatchEvent(new CustomEvent('open-entity-picker', {
+          bubbles: true, composed: true,
+          detail: {
+            domain: 'switch',
+            onPick: (id: string) => { fu.entity_id = id; p.save(); p.emitConfig(); },
+          },
+        }));
         return;
       }
 
@@ -552,7 +582,14 @@ export class ThreeView extends LitElement {
           const w = parseFloat(states[fu.powerEntity]?.state ?? '');
           pw = isFinite(w) ? String(Math.round(w / 50)) : 'x';
         }
-        return `${fu.id}:${on}:${door}:${pw}`;
+        // Rounded temperature (stove/oven/fridge) so the 3D temp sprite rebuilds
+        // on a 1° step; doorOpen so the oven-door blend target is current.
+        let tp = '';
+        if (fu.tempEntity) {
+          const t = parseFloat(states[fu.tempEntity]?.state ?? '');
+          tp = isFinite(t) ? String(Math.round(t)) : 'x';
+        }
+        return `${fu.id}:${on}:${door}:${pw}:${tp}:${fu.doorOpen ? 1 : 0}`;
       }).filter(Boolean).join(',');
       // Room occupancy glow (#1): fold each occupancy-bound room's on/off into
       // _keyFloor so the tinted floor patch rebuilds on an occupancy flip.

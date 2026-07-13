@@ -198,6 +198,26 @@ export function hitDoor(p: Planner, view: View, mm: Vec2): { door: Door; idx: nu
   return null;
 }
 
+// The small padlock glyph near a swing door's hinge (drawn at screen offset
+// (-9, -11) dpr from the hinge). Only clickable when the door carries a lock
+// binding (bound lockEntity OR unbound lockLocalState). Wins over the door-panel
+// hit within its small radius so a lock toggle doesn't also open the door.
+export function hitDoorLock(p: Planner, view: View, mm: Vec2): { door: Door; idx: number } | null {
+  const f = p.floor();
+  const dpr = window.devicePixelRatio || 1;
+  const tol = Math.max(60, (11 * dpr) / Math.max(view.scale, 1e-9));
+  for (let i = f.doors.length - 1; i >= 0; i--) {
+    const d = f.doors[i];
+    if ((d.kind ?? 'swing') === 'garage') continue;   // garage doors draw no padlock
+    if (!d.lockEntity && !d.lockLocalState) continue;
+    // Screen +Y is world −Y, so the (-9, -11) px screen offset is (−9, +11) px world.
+    const cx = d.x - (9 * dpr) / Math.max(view.scale, 1e-9);
+    const cy = d.y + (11 * dpr) / Math.max(view.scale, 1e-9);
+    if (Math.hypot(mm.x - cx, mm.y - cy) < tol) return { door: d, idx: i };
+  }
+  return null;
+}
+
 export function hitDoorEnd(p: Planner, view: View, mm: Vec2): { door: Door; idx: number } | null {
   const f = p.floor();
   const states = p.hass?.states;

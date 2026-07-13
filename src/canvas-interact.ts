@@ -11,7 +11,7 @@ import {
   hitMotionSensor, hitMotionRotateHandle, hitEnvSensor, hitEnvResizeHandle,
   hitBleProxy, hitAlarmPanel, hitSafetySensor, hitRobot,
   hitCamera, hitCameraRotateHandle, hitPresenceZone, hitPresenceZoneVertex,
-  hitDoor, hitDoorEnd, hitWindow, hitWindowEnd, hitFloorEdge,
+  hitDoor, hitDoorEnd, hitDoorLock, hitWindow, hitWindowEnd, hitFloorEdge,
 } from './canvas-hit.js';
 import type { Planner, Drag } from './planner.js';
 import { NEW_ROOM, NEW_LANDMARK } from './planner.js';
@@ -418,6 +418,13 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
     p.activeFurnitureId = fhi.item.id;
     p.alignCandidates = buildAlignCandidates(p, p.drag);
     canvas.style.cursor = 'grabbing'; e.preventDefault(); return;
+  }
+  // Door lock padlock wins over the endpoint + body (small radius near the
+  // hinge) so a lock toggle doesn't rotate or open the door.
+  const dLock = hitDoorLock(p, view, mm);
+  if (dLock) {
+    p.drag = { kind: 'doorLock', idx: dLock.idx };
+    canvas.style.cursor = 'pointer'; e.preventDefault(); return;
   }
   // Door endpoint takes priority over door body so the rotate-handle works
   // even when the panel sits on top of it.
@@ -940,6 +947,7 @@ export function onCanvasMouseMove(p: Planner, canvas: HTMLCanvasElement, view: V
     else if (zonesInteractive(p) && (hitObject(p, view, mm) || hitVertexOrZone(p, view, mm))) canvas.style.cursor = 'grab';
     else if (hitWallVert(p, view, mm)) canvas.style.cursor = 'grab';
     else if (hitFurnitureCorner(p, view, mm)) canvas.style.cursor = 'nwse-resize';
+    else if (hitDoorLock(p, view, mm)) canvas.style.cursor = 'pointer';
     else if (hitDoorEnd(p, view, mm)) canvas.style.cursor = 'grab';
     else if (hitDoor(p, view, mm)) canvas.style.cursor = 'grab';
     else if (hitWindowEnd(p, view, mm)) canvas.style.cursor = 'grab';
@@ -1089,14 +1097,23 @@ export function onCanvasMouseUp(p: Planner, canvas: HTMLCanvasElement): void {
   } else if (drag.kind === 'furnMove' || drag.kind === 'furnCorner') {
     const piece = f.furniture[drag.idx];
     if (piece) {
-      snapStairEdges(f, piece);
-      snapFurnitureToSurface(f, piece, p.store.customObjects);
-      // Keep the piece off wall slabs (edge locks flush to the wall face).
-      // Mounted-on-surface items follow their host; locked pieces never move.
-      if (!piece.locked && !piece.mountOnId) {
-        resolveFurnitureWallCollision(piece, f.walls);
-        // Then keep a tucked seat from sinking into the tabletop it serves.
-        resolveSeatTableCollision(piece, f.furniture, p.store.customObjects);
+      // Stove/oven click-vs-drag: a barely-moved single click toggles the oven
+      // door (persistent doorOpen) instead of nudging the piece.
+      const stoveClick = drag.kind === 'furnMove' && piece.kind === 'stove' &&
+        Math.hypot(piece.x - drag.start.x, piece.y - drag.start.y) < 30;
+      if (stoveClick) {
+        piece.x = drag.start.x; piece.y = drag.start.y;
+        piece.doorOpen = !piece.doorOpen;
+      } else {
+        snapStairEdges(f, piece);
+        snapFurnitureToSurface(f, piece, p.store.customObjects);
+        // Keep the piece off wall slabs (edge locks flush to the wall face).
+        // Mounted-on-surface items follow their host; locked pieces never move.
+        if (!piece.locked && !piece.mountOnId) {
+          resolveFurnitureWallCollision(piece, f.walls);
+          // Then keep a tucked seat from sinking into the tabletop it serves.
+          resolveSeatTableCollision(piece, f.furniture, p.store.customObjects);
+        }
       }
     }
     p.save();
@@ -1123,6 +1140,9 @@ export function onCanvasMouseUp(p: Planner, canvas: HTMLCanvasElement): void {
         p.save();
       }
     }
+  } else if (drag.kind === 'doorLock') {
+    const door = f.doors[drag.idx];
+    if (door) p.toggleDoorLock(door);
   } else if (drag.kind === 'doorRotate') {
     p.save();
   } else if (drag.kind === 'windowMove') {
@@ -1183,10 +1203,18 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
     // Robot → run/dock (bound) or demo toggle (unbound).
     const robo2 = hitRobot(p, view, mm);
     if (robo2) { p.toggleRobot(robo2); return; }
+    // Door lock padlock → toggle the lock (bound service / unbound session flag).
+    const dLock2 = hitDoorLock(p, view, mm);
+    if (dLock2) { p.toggleDoorLock(dLock2.door); return; }
     const dHit2 = hitDoor(p, view, mm);
     if (dHit2) { p.toggleItem(dHit2.door); return; }
     const wHit2 = hitWindow(p, view, mm);
     if (wHit2) { p.toggleItem(wHit2.win); return; }
+    // Stove/oven → toggle the oven door (session-only in kiosk; save() no-ops).
+    const fu2 = hitFurniture(p, mm);
+    if (fu2 && fu2.item.kind === 'stove') {
+      fu2.item.doorOpen = !fu2.item.doorOpen; p.save(); p.emitConfig(); return;
+    }
     return;
   }
 

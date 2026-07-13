@@ -148,6 +148,7 @@ export type Drag =
   | { kind: 'env'; id: string; startMm: Vec2; start: Vec2 }
   | { kind: 'envResize'; id: string; startDist: number; startScale: number }
   | { kind: 'doorMove'; idx: number; startMm: Vec2; start: Vec2 }
+  | { kind: 'doorLock'; idx: number }
   | { kind: 'doorRotate'; idx: number; startMm: Vec2; start: { rotation: number } }
   | { kind: 'windowMove'; idx: number; startMm: Vec2; start: Vec2 }
   | { kind: 'windowRotate'; idx: number; startMm: Vec2; start: { rotation: number } }
@@ -794,7 +795,7 @@ export class Planner extends EventTarget {
     // aren't number/switch, routed through the config channel so the sidebar
     // badges (and the 3D dirty keys, which also fold these) refresh on change.
     const f2 = this.floor();
-    if (f2.furniture.some(fu => fu.doorEntity === id)) return true;
+    if (f2.furniture.some(fu => fu.doorEntity === id || fu.tempEntity === id)) return true;
     if (f2.doors.some(d => d.lockEntity === id)) return true;
     if ((f2.alarmPanels ?? []).some(a => a.entity_id === id)) return true;
     // Smoke / CO detector binary_sensors: display-only bindings routed through
@@ -2373,6 +2374,36 @@ export class Planner extends EventTarget {
     item.localState = on ? 'off' : 'on';
     this.save();        // no-op outside edit → kiosk local toggles are session-only
     this.emitConfig();  // bumps configRev → 3D dirty keys rebuild; sidebar re-renders
+  }
+
+  // Resolve a door's lock state ('locked' | 'unlocked' | undefined): bound
+  // lock.* entity wins; else the unbound local flag.
+  doorLockState(door: { lockEntity?: string | null; lockLocalState?: 'locked' | 'unlocked' }): 'locked' | 'unlocked' | undefined {
+    if (door.lockEntity) {
+      const s = this.hass?.states?.[door.lockEntity]?.state;
+      return s === 'locked' ? 'locked' : s === 'unlocked' ? 'unlocked' : undefined;
+    }
+    return door.lockLocalState;
+  }
+
+  // Toggle a door's lock. Bound → lock.lock / lock.unlock (fire-and-forget).
+  // Unbound → flip lockLocalState (session-only in kiosk, like toggleItem).
+  // View mode refuses. Currently-locked → unlock; anything else → lock.
+  toggleDoorLock(door: { lockEntity?: string | null; lockLocalState?: 'locked' | 'unlocked' }): void {
+    if (this.uiMode === 'view') return;
+    const locked = this.doorLockState(door) === 'locked';
+    if (door.lockEntity) {
+      if (!this.hass) return;
+      try {
+        void Promise.resolve(
+          this.hass.callService('lock', locked ? 'unlock' : 'lock', { entity_id: door.lockEntity }),
+        ).catch(() => { /* ignore */ });
+      } catch { /* ignore */ }
+      return;
+    }
+    door.lockLocalState = locked ? 'unlocked' : 'locked';
+    this.save();        // no-op outside edit → kiosk lock toggles are session-only
+    this.emitConfig();  // configRev → _keyDoors rebuild (unbound state) + sidebar re-render
   }
 
   // Whether the bound entity is something the LightConfig modal can handle.
