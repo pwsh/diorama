@@ -1,0 +1,114 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>covers</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<!-- Pure doorOpenFraction cases import geometry as a standalone transpile (like
+     rooms-test / wallsnap-test's geometry.mod.js). Generate it next to this html:
+       npx esbuild src/geometry.ts --bundle --format=esm \
+         --outfile=<harness>/geometry.mod.js -->
+<script type="module">
+ try {
+  const geo = await import('./geometry.mod.js?v=' + Date.now());
+  const mod = await import('./assets/three-renderer.js?v=' + Date.now());
+  const { doorOpenFraction, GARAGE_DOOR_H } = geo;
+
+  const results = [];
+  const ok = (name, cond, detail = '') => results.push(`${cond ? 'ok' : 'FAIL'}:${name}${detail ? '(' + detail + ')' : ''}`);
+  const near = (a, b, t = 1e-6) => Math.abs(a - b) <= t;
+
+  // === 1. doorOpenFraction pure cases =====================================
+  ok('binary_on',     doorOpenFraction({ state: 'on' }) === 1);
+  ok('binary_off',    doorOpenFraction({ state: 'off' }) === 0);
+  ok('localState_on', doorOpenFraction({ state: 'on', attributes: {} }) === 1);   // synthetic unbound
+  ok('cover_open_nopos',  doorOpenFraction({ state: 'open' }) === 1);
+  ok('cover_closed_nopos', doorOpenFraction({ state: 'closed' }) === 0);
+  ok('cover_open_pos40',  near(doorOpenFraction({ state: 'open', attributes: { current_position: 40 } }), 0.4), '');
+  ok('cover_opening_nopos', doorOpenFraction({ state: 'opening' }) === 0.5);
+  ok('cover_opening_pos70', near(doorOpenFraction({ state: 'opening', attributes: { current_position: 70 } }), 0.7), '');
+  ok('cover_closing_pos25', near(doorOpenFraction({ state: 'closing', attributes: { current_position: 25 } }), 0.25), '');
+  ok('null_zero',     doorOpenFraction(null) === 0);
+  ok('unavailable',   doorOpenFraction({ state: 'unavailable' }) === 0);
+  ok('clamp_over',    doorOpenFraction({ state: 'open', attributes: { current_position: 150 } }) === 1);
+
+  // === 2. Renderer: garage slat positions at frac 0 / 0.5 / 1 =============
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+  const scene3d = { preset: 'day', floorColor: '#8a7860', floorTex: 'none', wallColor: '#cfd2d6' };
+  const wallY = 2500;
+  const mkFloor = (doors, windows) => ({
+    id: 'f1', name: 'T', w: 12000, d: 5000,
+    walls: [{ id: 'w1', points: [{x:500,y:wallY},{x:11500,y:wallY}] }],
+    furniture: [], lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors, windows, bg: null, model3d: null, look3d: null, rooms: [],
+  });
+
+  const garageDoor = { id: 'g1', x: 2000, y: wallY, w: 2400, rotation: 0, kind: 'garage', entity_id: 'cover.g' };
+  // slats = direct mesh children of the hinge group (exclude inverted-hull outline shells).
+  const slatsOf = () => {
+    const hinge = r._doorGroup.children[0];
+    return hinge.children.filter(c => c.isMesh && !c.userData.outline);
+  };
+  const setGarage = (frac) => {
+    const state = frac <= 0 ? 'closed' : 'open';
+    const st = { 'cover.g': { state, attributes: { current_position: Math.round(frac * 100) } } };
+    r.updateFloor(mkFloor([garageDoor], []), scene3d);
+    r.updateDoorsWindows([garageDoor], [], id => st[id] || null);
+    return slatsOf();
+  };
+
+  // frac 0: all 5 slats vertical (rotation.x ≈ 0), z ≈ 0, ascending Y in 0..H.
+  { const s = setGarage(0);
+    ok('garage_count', s.length === 5, String(s.length));
+    const allVert = s.every(m => near(m.rotation.x, 0, 1e-3) && near(m.position.z, 0, 1e-3));
+    ok('garage0_vertical', allVert);
+    const ys = s.map(m => m.position.y).sort((a,b)=>a-b);
+    ok('garage0_spread', ys[0] > 0 && ys[4] < GARAGE_DOOR_H && ys[4] > ys[0], ys.map(y=>y.toFixed(0)).join(',')); }
+
+  // frac 1: all slats folded flat (rotation.x ≈ -π/2) at y ≈ H, set back in -Z.
+  { const s = setGarage(1);
+    const allFold = s.every(m => near(Math.abs(m.rotation.x), Math.PI/2, 1e-3) && near(m.position.y, GARAGE_DOOR_H, 1) && m.position.z < 0);
+    ok('garage1_folded', allFold, s.map(m=>m.rotation.x.toFixed(2)).join(',')); }
+
+  // frac 0.5: bottom 3 vertical, top 2 folded (lift=1050 → pos>H for a>1050).
+  { const s = setGarage(0.5);
+    const vert = s.filter(m => near(m.rotation.x, 0, 1e-3)).length;
+    const fold = s.filter(m => near(Math.abs(m.rotation.x), Math.PI/2, 1e-3)).length;
+    ok('garage05_split', vert === 3 && fold === 2, `vert=${vert} fold=${fold}`); }
+
+  // === 3. Renderer: window roller-shade panel height at 0 / 50 / 100 ======
+  const win = { id: 'wc1', x: 6000, y: wallY, w: 1400, rotation: 0, entity_id: null, kind: 'single', coverEntity: 'cover.b' };
+  const glassH = 800;  // default height
+  // Shade fabric panel: opaque box with geometry width = W*0.96 = 1344.
+  const shadePanel = () => {
+    let found = null;
+    r._doorGroup.traverse(o => { if (o.isMesh && o.geometry.parameters && Math.abs(o.geometry.parameters.width - 1400*0.96) < 1) found = o; });
+    return found;
+  };
+  const setBlind = (posPct) => {
+    const state = posPct <= 0 ? 'closed' : 'open';
+    const st = { 'cover.b': { state, attributes: { current_position: posPct } } };
+    r.updateFloor(mkFloor([], [win]), scene3d);
+    r.updateDoorsWindows([], [win], id => st[id] || null);
+    return shadePanel();
+  };
+  // position 0 (closed) → shade covers full glass (height ≈ glassH).
+  { const pn = setBlind(0); ok('blind0_full', pn && near(pn.geometry.parameters.height, glassH, 2), pn ? pn.geometry.parameters.height.toFixed(0) : 'none'); }
+  // position 50 → shade half (height ≈ glassH/2).
+  { const pn = setBlind(50); ok('blind50_half', pn && near(pn.geometry.parameters.height, glassH/2, 2), pn ? pn.geometry.parameters.height.toFixed(0) : 'none'); }
+  // position 100 (open) → no shade panel (fully up).
+  { const pn = setBlind(100); ok('blind100_none', pn === null, pn ? pn.geometry.parameters.height.toFixed(0) : 'none'); }
+
+  // === 4. Renderer: doorbell transient pulse group ========================
+  r.updateFloor(mkFloor([garageDoor], []), scene3d);
+  r.updateDoorbellPulses([{ x: 2000, y: wallY, ageS: 0.1, kind: 'doorbell' }]);
+  ok('pulse_builds', r._pulseGroup.children.length > 0, String(r._pulseGroup.children.length));
+  r.updateDoorbellPulses([]);
+  ok('pulse_clears', r._pulseGroup.children.length === 0, String(r._pulseGroup.children.length));
+
+  const n = results.length, pcount = results.filter(x => x.startsWith('ok')).length;
+  const pass = pcount === n;
+  document.title = `COVERS ${pass ? 'PASS' : 'FAIL'} ${pcount}/${n} ${results.join(' ')}`;
+  r.applyViewPreset('iso');
+ } catch (e) { document.title = 'ERR: ' + (e && e.stack ? e.stack.split('\n').slice(0,3).join(' | ') : e); }
+</script>

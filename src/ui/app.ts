@@ -160,10 +160,10 @@ export class App extends LitElement {
     });
     this.addEventListener('open-entity-picker', e => {
       const { domain, onPick, devices, title } = (e as CustomEvent).detail as
-        { domain?: string; onPick: (id: string) => void;
+        { domain?: string | string[]; onPick: (id: string) => void;
           devices?: import('./modals.js').PickerDevice[]; title?: string };
       // Device-mode detail (a `devices` list) picks a device id; otherwise the
-      // classic entity picker filtered by `domain`.
+      // classic entity picker filtered by `domain` (a single domain or a list).
       if (devices) this._entPicker?.showDevices(devices, onPick, title);
       else this._entPicker?.show(domain ?? '', onPick);
     });

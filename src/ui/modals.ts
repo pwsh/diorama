@@ -118,6 +118,10 @@ export class EntityPicker extends LitElement {
   @property({ attribute: false }) planner!: Planner;
   @state() open = false;
   @state() private _domain = '';
+  // When set (multi-domain call site, e.g. doors accept binary_sensor OR cover),
+  // only entities in one of these domains are listed. The domain <select> still
+  // narrows further within the allowed set. null = single-domain (_domain) mode.
+  @state() private _domains: string[] | null = null;
   @state() private _q = '';
   @state() private _deviceFilter = '';
   // Device mode: when non-null, the picker lists these devices and onPick
@@ -133,8 +137,11 @@ export class EntityPicker extends LitElement {
 
   protected override createRenderRoot() { return this; }
 
-  show(domain: string | null, onPick: (id: string) => void): void {
-    this._domain = domain ?? '';
+  // `domain` accepts a single domain string, an array of allowed domains
+  // (multi-domain call sites), or null/'' for all domains.
+  show(domain: string | string[] | null, onPick: (id: string) => void): void {
+    if (Array.isArray(domain)) { this._domains = domain; this._domain = ''; }
+    else { this._domains = null; this._domain = domain ?? ''; }
     this._onPick = onPick;
     this._q = '';
     this._deviceFilter = '';
@@ -223,6 +230,7 @@ export class EntityPicker extends LitElement {
     for (const id of Object.keys(states)) {
       const dot = id.indexOf('.');
       const dom = dot > 0 ? id.slice(0, dot) : '';
+      if (this._domains && !this._domains.includes(dom)) continue;
       if (this._domain && dom !== this._domain) continue;
       const did = this._entityToDevice[id];
       if (this._deviceFilter && did !== this._deviceFilter) continue;

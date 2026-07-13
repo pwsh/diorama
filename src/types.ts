@@ -278,16 +278,21 @@ export interface Sensor {
   };
 }
 
+export type DoorKind = 'swing' | 'garage';
+
 export interface Door {
   id: string;
   x: number; y: number;        // hinge point in world mm
-  w: number;                   // panel length in mm (default 800)
+  w: number;                   // panel length in mm (default 800; garage typically 2400+)
   rotation: number;            // panel direction (closed) in degrees, screen-CW; 0 = panel along +X world
-  entity_id: string | null;    // binary_sensor or any entity; "on" = open
+  kind?: DoorKind;             // 'swing' (default, hinged panel) | 'garage' (segmented overhead door)
+  entity_id: string | null;    // binary_sensor ("on" = open) OR cover.* ('open'/'closed', current_position for partial)
   label?: string;
   localState?: string;         // local control when UNBOUND ('on'=open/'off'); inert once bound. See Planner.effectiveState.
   lockEntity?: string | null;  // lock.* entity; DISPLAY-ONLY secondary binding. 'locked' = amber/red padlock,
                                // 'unlocked' = green open outline, unavailable/absent = grey. No toggle/click.
+  doorbellEntity?: string | null; // event.* (device_class doorbell) / binary_sensor.* / button.* — a state-string
+                               // CHANGE fires a transient ring pulse (Planner.doorbellRings). Display only, no toggle.
   hinge?: 'right' | 'left';    // which side the hinge sits on. Determines swing direction.
                                // 'right' (default) = swings CCW on screen; 'left' = swings CW.
   locked?: boolean;            // canvas move/rotate/delete disabled
@@ -304,6 +309,8 @@ export interface Window {
   entity_id: string | null;    // binary_sensor; "on" = open
   label?: string;
   localState?: string;         // local control when UNBOUND ('on'=open/'off'); inert once bound. See Planner.effectiveState.
+  coverEntity?: string | null; // cover.* (blind/shade/curtain). doorOpenFraction → coverFraction: 0 = fully CLOSED
+                               // (shade DOWN, HA position 0), 1 = fully open (shade UP, HA position 100). Display only.
   kind?: WindowKind;           // glazing style; default 'single' (legacy look)
   sill?: number;               // mm above floor to the bottom of the glass; default 900
   height?: number;             // mm of glass height (header derives as sill+height); default 800

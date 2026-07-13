@@ -1788,13 +1788,52 @@ export class Sidebar extends LitElement {
     this.dispatchEvent(new CustomEvent('open-entity-picker', {
       bubbles: true, composed: true,
       detail: {
-        domain: 'binary_sensor',
+        // binary_sensor ("on" = open) OR cover.* (garage/entry door with position).
+        domain: ['binary_sensor', 'cover'],
         onPick: (id: string) => {
           d.entity_id = id;
           this.planner.save(); this.planner.emitConfig();
         },
       },
     }));
+  }
+
+  // Doorbell secondary binding (transient ring pulse). Accepts event.* (Ring/Nest
+  // doorbell), binary_sensor.* (rings while on), or button.*/input_button (press
+  // timestamp). Display only — no toggle.
+  private _pickDoorbell(d: Door): void {
+    this.dispatchEvent(new CustomEvent('open-entity-picker', {
+      bubbles: true, composed: true,
+      detail: {
+        domain: ['event', 'binary_sensor', 'button', 'input_button'],
+        onPick: (id: string) => {
+          d.doorbellEntity = id;
+          this.planner.save(); this.planner.emitConfig();
+        },
+      },
+    }));
+  }
+
+  private _doorbellBindRow(d: Door, upd: (mut: () => void) => void) {
+    const p = this.planner;
+    const st = d.doorbellEntity && p.hass?.states ? p.hass.states[d.doorbellEntity] : null;
+    const label = !d.doorbellEntity ? '— unbound —' : `${d.doorbellEntity}${st ? ` · ${st.state}` : ''}`;
+    return html`
+      <div class="row" style="margin-top:6px"><label title="event.* / binary_sensor.* / button.* — a state change rings">Doorbell</label>
+        <span style="font-size:11px;color:var(--text-dim);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+          ${label}
+        </span>
+      </div>
+      <div style="display:flex;gap:4px;margin-top:4px">
+        <button class="btn" style="flex:1;font-size:11px" @click=${() => this._pickDoorbell(d)}>
+          ${d.doorbellEntity ? 'Rebind' : 'Bind'} doorbell…
+        </button>
+        ${d.doorbellEntity ? html`
+          <button class="btn" style="font-size:11px"
+                  @click=${() => upd(() => { d.doorbellEntity = null; })}>Unbind</button>
+        ` : nothing}
+      </div>
+    `;
   }
 
   // Display-only lock.* secondary binding (Feature 2). Shows the lock state; a
@@ -1857,6 +1896,17 @@ export class Sidebar extends LitElement {
           <input type="number" .value=${String(Math.round(d.y))}
                  @input=${(e: Event) => upd(() => { d.y = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
         </div>
+        <div class="row"><label>Kind</label>
+          <select @change=${(e: Event) => upd(() => {
+                    const k = (e.target as HTMLSelectElement).value as 'swing' | 'garage';
+                    d.kind = k;
+                    // Bump a still-default swing width up to a garage-sized opening.
+                    if (k === 'garage' && d.w === 800) d.w = 2400;
+                  })}>
+            <option value="swing" ?selected=${(d.kind ?? 'swing') === 'swing'}>Swing</option>
+            <option value="garage" ?selected=${d.kind === 'garage'}>Garage</option>
+          </select>
+        </div>
         <div class="row"><label>Width (mm)</label>
           <input type="number" min="200" .value=${String(Math.round(d.w))}
                  @input=${(e: Event) => upd(() => {
@@ -1870,6 +1920,7 @@ export class Sidebar extends LitElement {
                    d.rotation = ((Math.round(v / 15) * 15) % 360 + 360) % 360;
                  })}>
         </div>
+        ${(d.kind ?? 'swing') === 'garage' ? nothing : html`
         <div class="row"><label>Hinge</label>
           <div style="display:flex;gap:4px">
             <button class="btn ${(d.hinge ?? 'right') === 'left' ? 'active' : ''}"
@@ -1881,7 +1932,7 @@ export class Sidebar extends LitElement {
                     title="Right-hand hinge: door swings counter-clockwise on screen"
                     @click=${() => upd(() => { d.hinge = 'right'; })}>Right ◑</button>
           </div>
-        </div>
+        </div>`}
         <div class="row"><label>HA entity</label>
           <span style="font-size:11px;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
             ${d.entity_id || '— unbound —'}
@@ -1897,10 +1948,11 @@ export class Sidebar extends LitElement {
           ` : nothing}
         </div>
         ${this._doorLockBindRow(d, upd)}
+        ${this._doorbellBindRow(d, upd)}
         <div style="font-size:10px;color:var(--text-dim);margin-top:6px;line-height:1.3">
           Hinge at (X,Y). Panel extends along rotation (15° snap). Bind to a
-          binary_sensor (state "on" = open). Optional lock.* shows a padlock
-          (display only — no toggle).
+          binary_sensor ("on" = open) or a cover.* (garage / position). Optional
+          lock.* padlock + doorbell (event/binary/button) are display only.
         </div>
       </div>
     `;
@@ -1978,6 +2030,43 @@ export class Sidebar extends LitElement {
     }));
   }
 
+  // Blind / shade / curtain binding (cover.*). Drives a 3D roller shade + a 2D
+  // tick. coverFraction: 1 = open (shade up), 0 = closed (shade down).
+  private _pickWindowCover(w: WindowType): void {
+    this.dispatchEvent(new CustomEvent('open-entity-picker', {
+      bubbles: true, composed: true,
+      detail: {
+        domain: 'cover',
+        onPick: (id: string) => {
+          w.coverEntity = id;
+          this.planner.save(); this.planner.emitConfig();
+        },
+      },
+    }));
+  }
+
+  private _windowCoverBindRow(w: WindowType, upd: (mut: () => void) => void) {
+    const p = this.planner;
+    const st = w.coverEntity && p.hass?.states ? p.hass.states[w.coverEntity] : null;
+    const label = !w.coverEntity ? '— unbound —' : `${w.coverEntity}${st ? ` · ${st.state}` : ''}`;
+    return html`
+      <div class="row" style="margin-top:6px"><label title="cover.* blind / shade / curtain">Blind</label>
+        <span style="font-size:11px;color:var(--text-dim);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+          ${label}
+        </span>
+      </div>
+      <div style="display:flex;gap:4px;margin-top:4px">
+        <button class="btn" style="flex:1;font-size:11px" @click=${() => this._pickWindowCover(w)}>
+          ${w.coverEntity ? 'Rebind' : 'Bind'} blind…
+        </button>
+        ${w.coverEntity ? html`
+          <button class="btn" style="font-size:11px"
+                  @click=${() => upd(() => { w.coverEntity = null; })}>Unbind</button>
+        ` : nothing}
+      </div>
+    `;
+  }
+
   private _windowEditor(w: WindowType) {
     const p = this.planner;
     const upd = (mut: () => void) => { mut(); p.save(); p.emitConfig(); };
@@ -2047,9 +2136,10 @@ export class Sidebar extends LitElement {
                     @click=${() => upd(() => { w.entity_id = null; })}>Unbind</button>
           ` : nothing}
         </div>
+        ${this._windowCoverBindRow(w, upd)}
         <div style="font-size:10px;color:var(--text-dim);margin-top:6px;line-height:1.3">
           Pane center at (X, Y). Rotation is wall axis (15° snap). Bind to a
-          binary_sensor (state "on" = open).
+          binary_sensor ("on" = open); optional cover.* blind renders a roller shade.
         </div>
       </div>
     `;

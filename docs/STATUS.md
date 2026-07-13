@@ -48,6 +48,20 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Roadmap batch F: garage doors, window blinds, doorbell pulses**
+  (9 files + new `covers-test.html` **22/22**; typecheck + build clean;
+  window 14/14 / livefeatures 19/19 / robot 24/24 / bookcase-los 11/11 /
+  weather 90/90 / mega unchanged): shared pure `doorOpenFraction`
+  resolver (binary + cover states + current_position; swing doors now
+  open proportionally); `Door.kind 'garage'` — 5-slat overhead door in a
+  2100 mm opening rolling up along a ceiling track, 2D retracting dashes
+  + % pill; `Window.coverEntity` roller shade descending per position;
+  `Door.doorbellEntity` (event/binary_sensor/button) → planner-side ring
+  detection with the new generic TransientPulse primitive (2D 🔔 rings,
+  3D `_pulseGroup`, idle = zero cost) + a doorbell bubble trigger pool.
+  Entity picker now accepts multi-domain filters. CLAUDE.md "Covers &
+  doorbell (batch F)".
+
 - **Roadmap batch E + nav wall fix** (12 files; typecheck + build clean;
   NEW `bookcase-los-test.html` **11/11**; livefeatures extended
   **19/19**; avatar-bubble + phase6 updated; mega/robot/weather/full

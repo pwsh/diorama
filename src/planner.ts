@@ -364,6 +364,14 @@ export class Planner extends EventTarget {
   // the topbar can mint kiosk links that reproduce the current view.
   lastCam3d: { pos: [number, number, number]; target: [number, number, number] } | null = null;
 
+  // Doorbell transient rings (World-Outside transient-pulse primitive). Pushed on
+  // the LIVE path when a bound Door.doorbellEntity's state STRING changes (event
+  // timestamp bump / binary off→on / button press). Pruned > 8 s, capped at 8.
+  // `_doorbellPrev` seeds silently on first observation (the _trigPrevOn idiom) so
+  // reconnecting never fires a phantom ring. `at` is Date.now() ms.
+  doorbellRings: { doorId: string; at: number }[] = [];
+  private _doorbellPrev: Record<string, string> = {};
+
   setUiMode(m: 'edit' | 'kiosk' | 'view'): void {
     this.uiMode = m;
     if (m !== 'edit') {
@@ -565,6 +573,7 @@ export class Planner extends EventTarget {
       this.ensureLiveState(s.id);
     }
     this._syncOccupancy(states);
+    this._detectDoorbells(states);
 
     // BLE trilateration (live path only): record fresh per-scanner distances and
     // re-solve on new samples. A full refresh (changedId undefined) re-reads
@@ -807,6 +816,35 @@ export class Planner extends EventTarget {
           o[i].occupied = oc?.state === 'on';
         }
       }
+    }
+  }
+
+  // Doorbell transient-pulse detection (LIVE path, every state event). Watches
+  // each current-floor Door.doorbellEntity for a state-STRING change: an event.*
+  // timestamp bump, a binary_sensor off→on (button ring), or a button.* press
+  // timestamp all change the string. First observation seeds silently (no ring on
+  // reconnect — the _trigPrevOn idiom). binary_sensor only rings on activation
+  // (new state 'on'); unavailable/unknown transitions update the seed but never
+  // ring. Rings are pruned > 8 s and capped at 8. Cheap no-op with no doorbells.
+  private _detectDoorbells(states: Record<string, HassState>): void {
+    const f = this.floor();
+    const now = Date.now();
+    for (const d of f.doors) {
+      const eid = d.doorbellEntity;
+      if (!eid) continue;
+      const cur = states[eid]?.state;
+      if (cur == null) continue;
+      const prev = this._doorbellPrev[d.id];
+      this._doorbellPrev[d.id] = cur;
+      if (prev === undefined || prev === cur) continue;         // seed / no change
+      if (cur === 'unavailable' || cur === 'unknown') continue; // not a real ring
+      if (eid.startsWith('binary_sensor.') && cur !== 'on') continue;  // only on activation
+      this.doorbellRings.push({ doorId: d.id, at: now });
+    }
+    if (this.doorbellRings.length) {
+      this.doorbellRings = this.doorbellRings.filter(r => now - r.at < 8000);
+      if (this.doorbellRings.length > 8)
+        this.doorbellRings.splice(0, this.doorbellRings.length - 8);
     }
   }
 

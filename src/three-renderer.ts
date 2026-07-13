@@ -11,6 +11,7 @@ import {
   switchHeight, switchRotation, switchSize,
   motionColor, motionIntensity, hexToInt, bleProxyHeight, BLE_PROXY_DEFAULTS,
   furnitureDef, resolveFurnitureDef, furnitureColor, furnitureCat, doorOpenDeltaDeg,
+  doorOpenFraction, GARAGE_DOOR_H,
   alarmHeight, alarmStateColor, ALARM_DEFAULTS, ALARM_PLATE_DEPTH_MM,
   safetyColor, safetyIsFloor, SAFETY_DEFAULTS,
   powerGlowScale,
@@ -169,11 +170,20 @@ export interface ActivityContext {
   // x/y in WORLD mm, ageS since the transition. Drives the top-priority
   // "someone just flipped this near me" bubble tier. three-view maintains the
   // rolling list (prev-on map + 45 s / 8-entry cap).
-  recentTriggers?: { kind: 'light_on' | 'light_off' | 'fireplace' | 'tv'; x: number; y: number; ageS: number }[];
+  recentTriggers?: { kind: 'light_on' | 'light_off' | 'fireplace' | 'tv' | 'doorbell'; x: number; y: number; ageS: number }[];
   // OPTIONAL — appliance door-sensor states: furnitureId → the bound door
   // binary_sensor (Furniture.doorEntity) is 'on' (open). Drives the per-frame
   // appliance-door blend for BOUND fridges (case a). Absent → treated as closed.
   doorSensorOpen?: Record<string, boolean>;
+}
+
+// A transient "flash then decay" event with no persistent state — the generic
+// rendering primitive for event/button domains. `x`/`y` are WORLD mm; `ageS` is
+// seconds since the event fired (the caller owns the clock + pruning). Reused for
+// future button / event visuals — keep it generic. Currently: doorbell rings.
+export interface TransientPulse {
+  x: number; y: number; ageS: number;
+  kind: 'doorbell';
 }
 
 // A seat a humanoid can settle onto (scene coords). Collected from sittable
@@ -509,6 +519,7 @@ const BUBBLE_POOL_TRIGGER: Record<string, string[]> = {
   light_off: ['🌙'],
   fireplace: ['🔥', '🔥', '😎', '🕯️'],
   tv: ['📺', '🍿'],
+  doorbell: ['🔔', '🚪', '👀'],
 };
 
 // General idle-chatter pool (mixed into the personality roll so a walking /
@@ -687,6 +698,10 @@ export class ThreeDRenderer {
   // sprites; rebuilt under _keyGps. Carries CanvasTextures → always pair
   // _disposeSpriteMaps with _clearGroup (see updateGpsPins / destroy).
   private _gpsGroup = new THREE.Group();
+  // Transient event pulses (doorbell rings). Rebuilt cheaply per tick ONLY while
+  // pulses exist; empty + idle = zero cost (see updateDoorbellPulses).
+  private _pulseGroup = new THREE.Group();
+  private _pulseActive = false;
   // Ghost (glass-house) floors: translucent shells of every OTHER story,
   // stacked at their story heights. Cleared with _clearGroup (no sprites).
   private _ghostGroup = new THREE.Group();
@@ -949,7 +964,7 @@ export class ThreeDRenderer {
                     this._bleGroup, this._alarmGroup, this._safetyGroup,
                     this._robotGroup, this._robotRigGroup,
                     this._lightGroup, this._switchGroup, this._targetGroup, this._ghostGroup,
-                    this._gpsGroup, this._weatherGroup);
+                    this._gpsGroup, this._weatherGroup, this._pulseGroup);
 
     this._controls = new OrbitControls(this._camera, this._renderer.domElement);
     this._controls.enableDamping = true;
@@ -1404,9 +1419,11 @@ export class ThreeDRenderer {
       this._sensorGroup, this._motionGroup, this._bleGroup, this._alarmGroup,
       this._safetyGroup, this._robotGroup, this._robotRigGroup,
       this._lightGroup, this._switchGroup, this._targetGroup, this._ghostGroup,
+      this._pulseGroup,
     ]) {
       this._clearGroup(g);
     }
+    this._pulseActive = false;
     // Robot rigs live in _robotRigGroup (just cleared); drop their bookkeeping so
     // updateRobotRigs rebuilds fresh on the next floor.
     this._robotRigs = {};
@@ -2015,7 +2032,7 @@ export class ThreeDRenderer {
             piece(o0, o1, 0, sillTop);         // sub-sill
             piece(o0, o1, headerBot, kindH);   // header (skipped on low walls)
           } else {
-            piece(o0, o1, DOOR_HEAD, kindH);   // lintel (skipped on low walls)
+            piece(o0, o1, op.head ?? DOOR_HEAD, kindH);   // lintel (garage: taller head)
           }
         }
       }
@@ -3051,6 +3068,45 @@ export class ThreeDRenderer {
     if (windows && windows.length) this._buildWindows(windows, stateProvider);
   }
 
+  // Transient event pulses (the generic flash-then-decay primitive; doorbell
+  // rings for now). three-view passes fresh pulses each tick while any exist and
+  // an empty list once to clear. Rebuilt cheaply per call; zero cost when idle
+  // (an empty list on an already-empty group early-returns). Each pulse emits a
+  // few expanding, fading ground rings staggered in time + a small floating bead.
+  updateDoorbellPulses(pulses: TransientPulse[]): void {
+    if (!this._scene) return;
+    if (!pulses.length && !this._pulseActive) return;   // idle → nothing to do
+    this._clearGroup(this._pulseGroup);
+    this._pulseActive = pulses.length > 0;
+    if (!pulses.length) return;
+    const ringGeoY = 1150;   // ripple centre height (≈ doorbell button)
+    for (const pu of pulses) {
+      const base = this._w(pu.x, pu.y, 0);
+      const col = pu.kind === 'doorbell' ? 0xffd54f : 0x90caf9;
+      for (let i = 0; i < 3; i++) {
+        const a = pu.ageS - i * 0.45;     // stagger the three ripples
+        if (a < 0 || a > 1.4) continue;
+        const t = a / 1.4;                // 0..1 life
+        const inner = 120 + t * 900, outer = inner + 90;
+        const mat = new THREE.MeshBasicMaterial({
+          color: col, transparent: true, opacity: (1 - t) * 0.8, side: THREE.DoubleSide,
+          depthWrite: false,
+        });
+        const ring = new THREE.Mesh(new THREE.RingGeometry(inner, outer, 40), mat);
+        ring.position.set(base.x, ringGeoY, base.z);
+        ring.rotation.x = -Math.PI / 2;   // lie flat (sonar ripple)
+        this._pulseGroup.add(ring);
+      }
+      // Floating bead at the source, bobbing while fresh.
+      if (pu.ageS < 1.2) {
+        const bead = new THREE.Mesh(new THREE.SphereGeometry(70, 12, 12),
+          new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: 1 - pu.ageS / 1.2 }));
+        bead.position.set(base.x, ringGeoY + 200 + Math.sin(pu.ageS * 12) * 60, base.z);
+        this._pulseGroup.add(bead);
+      }
+    }
+  }
+
   private _buildWindows(windows: WindowType[], stateOf: (id: string) => HassState | null): void {
     const PANE_T = 50;
     const closedMat = this._mat({
@@ -3068,6 +3124,8 @@ export class ThreeDRenderer {
     // planes are hidden (no coincident-face hatching against the transparent
     // sashes — the CLAUDE.md gotcha).
     const frameMat = this._mat({ color: 0x9aa4ad, roughness: 0.6, metalness: 0.1 });
+    // Warm-grey opaque fabric for roller shades / blinds (Window.coverEntity).
+    const shadeMat = this._mat({ color: 0xcdc4b4, roughness: 0.9, metalness: 0.0, side: THREE.DoubleSide });
     for (const w of windows) {
       const st = itemState(w, stateOf);
       const isOpen = st?.state === 'on';
@@ -3137,6 +3195,27 @@ export class ThreeDRenderer {
           break;
         }
       }
+      // Roller shade / blind (Window.coverEntity, cover.*). coverFraction: 1 =
+      // open (shade UP, no fabric), 0 = closed (fabric covers full glass). The
+      // opaque fabric descends from the header; its height = (1−frac)·glassH.
+      // Kept proud of the glass plane (coincident-face gotcha vs sashes/mullions).
+      if (w.coverEntity) {
+        const cov = stateOf(w.coverEntity);
+        const frac = doorOpenFraction(cov);
+        const shadeH = Math.max(0, (1 - frac) * glassH);
+        if (shadeH > 20) {
+          const headerY = sill + glassH;                    // top of glass
+          const panel = new THREE.Mesh(
+            new THREE.BoxGeometry(W * 0.96, shadeH, 24), shadeMat);
+          panel.position.set(0, headerY - shadeH / 2, PANE_T * 0.8);  // proud of the glass
+          grp.add(panel);
+          // Thin bottom weight bar.
+          const barM = new THREE.Mesh(
+            new THREE.BoxGeometry(W * 0.98, 36, 40), frameMat);
+          barM.position.set(0, headerY - shadeH, PANE_T * 0.8);
+          grp.add(barM);
+        }
+      }
       this._shadowFlags(grp);
       this._doorGroup.add(grp);
     }
@@ -3151,9 +3230,15 @@ export class ThreeDRenderer {
       color: 0x66bb6a, emissive: 0x1b5e20, emissiveIntensity: 0.35,
       roughness: 0.5, metalness: 0.1,
     });
+    // Neutral panel material for garage slats — the roll-up motion signals state,
+    // not a color change (the grey slabs read as a real overhead door).
+    const garageMat = this._mat({ color: 0xb0b6bc, roughness: 0.55, metalness: 0.2 });
     for (const d of doors) {
       const st = itemState(d, stateOf);
-      const isOpen = st?.state === 'on';
+      // Fractional open state (0..1): binary sensors resolve to 0|1; a cover
+      // binding drives a partial swing / roll-up via current_position.
+      const frac = doorOpenFraction(st);
+      const isOpen = frac > 0.02;
       const mat = isOpen ? openMat : closedMat;
       // Hinge Group at world (d.x, d.y). Closed panel runs along world +X at
       // rotation 0; world +X maps to scene -X via _w's mirror, so the panel
@@ -3163,13 +3248,44 @@ export class ThreeDRenderer {
       const hinge = new THREE.Group();
       const hp = this._w(d.x, d.y, 0);
       hinge.position.set(hp.x, hp.y, hp.z);
-      // 2D rotation is screen-CW. In scene the X-mirror flips the sense, so
-      // negate. Open swing direction depends on hinge side: right-hinge
-      // swings screen-CCW (+π/2 around scene-Y); left-hinge swings screen-CW
-      // (-π/2). doorOpenDeltaDeg returns degrees in world screen-CW; negate
-      // for scene-Y rotation.
       const rotR = -((d.rotation || 0) * Math.PI / 180);
-      const openR = isOpen ? -(doorOpenDeltaDeg(d) * Math.PI / 180) : 0;
+
+      if ((d.kind ?? 'swing') === 'garage') {
+        // Segmented overhead door: a stack of N horizontal slats filling the
+        // opening (0..GARAGE_DOOR_H). Opening rolls the door UP — the bottom
+        // edge lifts by frac·H, and the portion that passes the lintel folds
+        // back HORIZONTAL along a ceiling track (into local -Z). Parametrize by
+        // arc-distance `a` from the bottom edge: pos = lift + a; pos ≤ H → the
+        // slat hangs vertical in the wall plane; pos > H → it lies flat at y = H,
+        // set back by (pos − H). frac = 1 lands the whole door on the ceiling.
+        hinge.rotation.y = rotR;
+        const H = GARAGE_DOOR_H, N = 5, GAP = 6;
+        const slatH = H / N - GAP;
+        const lift = frac * H;
+        for (let i = 0; i < N; i++) {
+          const a = (i + 0.5) * (H / N);   // arc-distance of this slat's center from the bottom edge
+          const pos = lift + a;
+          const slat = new THREE.Mesh(new THREE.BoxGeometry(d.w - 40, slatH, DOOR_T), garageMat);
+          if (pos <= H) {
+            slat.position.set(-d.w / 2, pos, 0);
+          } else {
+            const overhang = pos - H;
+            slat.position.set(-d.w / 2, H, -overhang);
+            slat.rotation.x = -Math.PI / 2;   // fold flat onto the ceiling track
+          }
+          hinge.add(slat);
+        }
+        this._addOutlines(hinge);
+        this._doorGroup.add(hinge);
+        continue;
+      }
+
+      // Swing door. 2D rotation is screen-CW; the X-mirror flips the sense so we
+      // negate. Open swing direction depends on hinge side: right-hinge swings
+      // screen-CCW (+π/2 around scene-Y), left-hinge swings screen-CW (-π/2).
+      // doorOpenDeltaDeg returns degrees in world screen-CW; negate for scene-Y.
+      // Scale by `frac` so a cover-bound door swings partway open.
+      const openR = -(doorOpenDeltaDeg(d) * Math.PI / 180) * frac;
       hinge.rotation.y = rotR + openR;
 
       const panel = new THREE.Mesh(
@@ -8701,6 +8817,7 @@ export class ThreeDRenderer {
       this._sensorGroup, this._motionGroup, this._envGroup, this._bleGroup,
       this._alarmGroup, this._safetyGroup, this._robotGroup, this._robotRigGroup,
       this._lightGroup, this._switchGroup, this._targetGroup, this._gpsGroup, this._weatherGroup,
+      this._pulseGroup,
     ]) {
       this._disposeSpriteMaps(g);
       this._clearGroup(g);

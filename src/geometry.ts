@@ -413,15 +413,17 @@ export function doorSpanCenter(d: { x: number; y: number; w: number; rotation: n
 export const WINDOW_DEFAULTS = { sill: 900, height: 800 };
 
 // A window cut also carries its sill/height so the 3D wall builder can size the
-// sub-sill and header runs per-window (doors leave these undefined).
-export interface WallOpeningCut { t0: number; t1: number; kind: 'door' | 'window'; sill?: number; height?: number; }
+// sub-sill and header runs per-window (doors leave these undefined). A door cut
+// may carry `head` — the opening-top height where its lintel starts (garage doors
+// use the taller GARAGE_DOOR_H; swing doors leave it undefined → the DOOR_HEAD default).
+export interface WallOpeningCut { t0: number; t1: number; kind: 'door' | 'window'; sill?: number; height?: number; head?: number; }
 
 // For one wall segment a→b: which door/window openings cut it, and what
 // solid sub-intervals remain. t values are mm along the segment. An opening
 // counts when its center projects onto the segment within `tol` of the axis.
 export function wallCutsForSegment(
   a: Vec2, b: Vec2,
-  doors: { x: number; y: number; w: number; rotation: number }[],
+  doors: { x: number; y: number; w: number; rotation: number; kind?: 'swing' | 'garage' }[],
   windows: { x: number; y: number; w: number; sill?: number; height?: number }[],
   tol = 150,
 ): { solids: { t0: number; t1: number }[]; openings: WallOpeningCut[] } {
@@ -431,7 +433,7 @@ export function wallCutsForSegment(
   const ux = dx / len, uy = dy / len;
   const openings: WallOpeningCut[] = [];
   const collect = (cx: number, cy: number, w: number, kind: 'door' | 'window',
-                   extra?: { sill?: number; height?: number }) => {
+                   extra?: { sill?: number; height?: number; head?: number }) => {
     const px = cx - a.x, py = cy - a.y;
     const t = px * ux + py * uy;
     const perp = Math.abs(-uy * px + ux * py);
@@ -439,7 +441,10 @@ export function wallCutsForSegment(
     const t0 = Math.max(0, t - w / 2), t1 = Math.min(len, t + w / 2);
     if (t1 - t0 > 10) openings.push({ t0, t1, kind, ...extra });
   };
-  for (const d of doors) { const c = doorSpanCenter(d); collect(c.x, c.y, d.w, 'door'); }
+  for (const d of doors) {
+    const c = doorSpanCenter(d);
+    collect(c.x, c.y, d.w, 'door', d.kind === 'garage' ? { head: GARAGE_DOOR_H } : undefined);
+  }
   for (const w of windows) collect(w.x, w.y, w.w, 'window', { sill: w.sill, height: w.height });
   if (!openings.length) return { solids: [{ t0: 0, t1: len }], openings };
   const sorted = [...openings].sort((c1, c2) => c1.t0 - c2.t0);
@@ -1150,6 +1155,37 @@ export function doorEndpoint(d: { x: number; y: number; w: number; rotation: num
 // (open is rotation−90°); left-hinge = swing CW on screen (open is rotation+90°).
 export function doorOpenDeltaDeg(d: { hinge?: 'right' | 'left' }): number {
   return d.hinge === 'left' ? +90 : -90;
+}
+
+// Garage-door opening height (mm). Slats fill 0..GARAGE_DOOR_H when closed; the
+// wall opening's lintel starts here (see wallCutsForSegment's `head`). Slightly
+// taller than the swing-door lintel (DOOR_HEAD 2050) — a garage is ~7 ft.
+export const GARAGE_DOOR_H = 2100;
+
+// Shared open-state → 0..1 resolver for doors AND window covers/blinds. Takes the
+// already-RESOLVED state (from Planner.effectiveState / itemState — which fold a
+// local unbound state into a synthetic {state}), so `localState: 'on'` arrives
+// here as state 'on' → 1 for free.
+//   binary_sensor  on → 1,  off/unknown/unavailable → 0
+//   cover          open → position/100 (else 1); closed → position/100 (else 0);
+//                  opening/closing → position/100 (else 0.5)
+// For a window blind this is `coverFraction`: 1 = open (shade UP, HA position 100),
+// 0 = closed (shade fully DOWN). A garage cover uses it as the roll-up fraction.
+export function doorOpenFraction(
+  st: { state: string; attributes?: Record<string, unknown> } | null | undefined,
+): number {
+  if (!st) return 0;
+  const rawPos = st.attributes ? st.attributes['current_position'] : undefined;
+  const pos = typeof rawPos === 'number' && isFinite(rawPos)
+    ? Math.max(0, Math.min(1, rawPos / 100)) : null;
+  switch (st.state) {
+    case 'on':      return 1;
+    case 'open':    return pos != null ? pos : 1;
+    case 'closed':  return pos != null ? pos : 0;
+    case 'opening':
+    case 'closing': return pos != null ? pos : 0.5;
+    default:        return 0;   // off / unknown / unavailable → closed
+  }
 }
 
 // Window endpoints in world mm. (x, y) is the pane CENTER; pane runs ±w/2

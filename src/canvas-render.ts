@@ -8,7 +8,7 @@ import {
   robotGlyph, robotColor, ROBOT_DEFAULTS,
   powerGlowScale,
   hexToRgba, lighten, furnitureKind, furnitureCorners, resolveFurnitureDef,
-  doorEndpoint, doorOpenDeltaDeg, windowEndpoints, wallCutsForSegment, wallKind,
+  doorEndpoint, doorOpenDeltaDeg, doorOpenFraction, doorSpanCenter, windowEndpoints, wallCutsForSegment, wallKind,
   ENV_KINDS, envKindOf, envColor, envValueText, envScale,
   closedWallLoops, loopContaining, roomLabel,
 } from './geometry.js';
@@ -239,6 +239,7 @@ export function drawAll(ctx: CanvasRenderingContext2D, p: Planner, view: View,
   if (on(L.targets)) drawBlePeople(ctx, p, view);
   // Geo landmark pins + GPS device pins (both ride the `geo` layer).
   if (on(L.geo)) { drawGeoLandmarks(ctx, p, view); drawGpsPins(ctx, p, view); }
+  drawDoorbellPulses(ctx, p, view);
   drawAlignGuides(ctx, p, view);
   drawFloorEditHandles(ctx, p, view);
 }
@@ -1198,12 +1199,52 @@ function drawDoors(ctx: CanvasRenderingContext2D, p: Planner, view: View): void 
   if (!f.doors) return;
   for (const d of f.doors) {
     const st = p.effectiveState(d);
-    const isOpen = st?.state === 'on';
+    // Fractional open (0..1): binary → 0|1; a cover binding gives partial.
+    const frac = doorOpenFraction(st);
+    const isOpen = frac > 0.02;
     const unavail = st && (st.state === 'unavailable' || st.state === 'unknown');
     const closedColor = unavail ? '#c62828' : '#90a4ae';
     const openColor = '#66bb6a';
     const color = isOpen ? openColor : closedColor;
     const hinge = mmToPx(view, d.x, d.y);
+
+    // Garage door: no swing arc — a dashed line across the opening (hinge →
+    // endpoint along rotation) that RETRACTS toward the hinge as it opens (the
+    // drawn length is the still-closed fraction). Segments vanish as it rolls up.
+    if ((d.kind ?? 'swing') === 'garage') {
+      const end = doorEndpoint(d);
+      const epx = mmToPx(view, end.x, end.y);
+      const covered = 1 - frac;                     // still-covering fraction
+      const cx = hinge.x + (epx.x - hinge.x) * covered;
+      const cy = hinge.y + (epx.y - hinge.y) * covered;
+      // Faint full-span guide (the opening extent).
+      ctx.strokeStyle = 'rgba(144,164,174,0.30)'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(hinge.x, hinge.y); ctx.lineTo(epx.x, epx.y); ctx.stroke();
+      // The closed portion as a dashed panel.
+      if (covered > 0.01) {
+        ctx.strokeStyle = color; ctx.lineWidth = 5; ctx.setLineDash([7, 5]);
+        ctx.beginPath(); ctx.moveTo(hinge.x, hinge.y); ctx.lineTo(cx, cy); ctx.stroke();
+        ctx.setLineDash([]);
+      }
+      // Endpoint handle (drag to rotate) — hidden when locked.
+      if (!d.locked) {
+        ctx.fillStyle = '#ffb74d'; ctx.strokeStyle = '#fff'; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.arc(epx.x, epx.y, 5 * dpr, 0, 2 * Math.PI); ctx.fill(); ctx.stroke();
+      }
+      // Label + state pill (percentage when partially open).
+      const pillX = (hinge.x + epx.x) / 2, pillY = (hinge.y + epx.y) / 2 - 12 * dpr;
+      const pct = Math.round(frac * 100);
+      const stateStr = !st ? '' : isOpen ? (pct >= 99 ? 'OPEN' : `${pct}%`) : 'closed';
+      const txt = (d.label?.trim() || 'Garage') + (stateStr ? ` · ${stateStr}` : '');
+      ctx.font = `${10 * dpr}px sans-serif`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      const tw = ctx.measureText(txt).width + 8 * dpr;
+      ctx.fillStyle = 'rgba(0,0,0,0.7)';
+      ctx.fillRect(pillX - tw / 2, pillY - 7 * dpr, tw, 14 * dpr);
+      ctx.fillStyle = isOpen ? openColor : '#cfd8dc';
+      ctx.fillText(txt, pillX, pillY);
+      continue;
+    }
     // Closed end: along rotation. Open end: rotation + doorOpenDeltaDeg
     // (left-hinge = +90° canvas-CW; right-hinge = -90° canvas-CCW).
     const openDelta = doorOpenDeltaDeg(d);
@@ -1258,6 +1299,42 @@ function drawDoors(ctx: CanvasRenderingContext2D, p: Planner, view: View): void 
   }
 }
 
+// Doorbell transient ring pulses (the generic flash-then-decay primitive). For
+// each ring younger than ~4 s, draw 2–3 expanding, fading circles + a 🔔 glyph at
+// the door's span centre. Time-based off Planner.doorbellRings[].at (Date.now()
+// ms); RAF-driven so it animates for free.
+function drawDoorbellPulses(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
+  const rings = p.doorbellRings;
+  if (!rings.length) return;
+  const dpr = window.devicePixelRatio || 1;
+  const f = p.floor();
+  const now = Date.now();
+  for (const ring of rings) {
+    const age = (now - ring.at) / 1000;
+    if (age > 4) continue;
+    const d = f.doors.find(x => x.id === ring.doorId);
+    if (!d) continue;
+    const c = doorSpanCenter(d);
+    const cp = mmToPx(view, c.x, c.y);
+    for (let i = 0; i < 3; i++) {
+      const a = age - i * 0.45;
+      if (a < 0 || a > 1.4) continue;
+      const t = a / 1.4;
+      const rad = (10 + t * 42) * dpr;
+      ctx.strokeStyle = `rgba(255,213,79,${(1 - t) * 0.85})`;
+      ctx.lineWidth = 2.5 * dpr;
+      ctx.beginPath(); ctx.arc(cp.x, cp.y, rad, 0, 2 * Math.PI); ctx.stroke();
+    }
+    if (age < 3.5) {
+      ctx.font = `${16 * dpr}px sans-serif`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.globalAlpha = Math.max(0, 1 - age / 3.5);
+      ctx.fillText('🔔', cp.x, cp.y - 2 * dpr);
+      ctx.globalAlpha = 1;
+    }
+  }
+}
+
 function drawWindows(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
   const dpr = window.devicePixelRatio || 1;
   const f = p.floor();
@@ -1291,6 +1368,25 @@ function drawWindows(ctx: CanvasRenderingContext2D, p: Planner, view: View): voi
       ctx.strokeStyle = openColor; ctx.lineWidth = 1.5; ctx.setLineDash([4, 3]);
       ctx.beginPath(); ctx.moveTo(mid.x, mid.y); ctx.lineTo(mid.x + cdx, mid.y + cdy);
       ctx.stroke(); ctx.setLineDash([]);
+    }
+    // Blind / shade indicator (Window.coverEntity): a thin parallel line offset
+    // just inside the pane whose drawn length reflects how CLOSED the shade is
+    // (1 − coverFraction; full span = fully down). Subtle — windows are thin in plan.
+    if (w.coverEntity) {
+      const cst = p.hass?.states?.[w.coverEntity] ?? null;
+      const closed = 1 - doorOpenFraction(cst);   // 0 open (up) … 1 closed (down)
+      if (closed > 0.01) {
+        const dx = b.x - a.x, dy = b.y - a.y;
+        const len = Math.hypot(dx, dy) || 1;
+        const nx = -dy / len, ny = dx / len;       // perpendicular unit (screen)
+        const off = 4 * dpr;                        // inset toward +perp
+        const ex = a.x + dx * closed, ey = a.y + dy * closed;
+        ctx.strokeStyle = 'rgba(205,196,180,0.9)'; ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(a.x + nx * off, a.y + ny * off);
+        ctx.lineTo(ex + nx * off, ey + ny * off);
+        ctx.stroke();
+      }
     }
     // End handles (drag to rotate) — hidden when locked
     if (!w.locked) {

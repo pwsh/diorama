@@ -6,7 +6,7 @@ import { customElement } from './define.js';
 // startup path never downloads it.
 import type { ThreeDRenderer, ZoneWorld, HaloWorld, TargetWorld, ActivityContext,
   GpsPinWorld, GpsLandmarkWorld, WeatherFxState } from '../three-renderer.js';
-import { localToWorld, transformVerts, pointInPolygon, sensorColor, hexToInt, motionColor, lightIconKind, furnitureKind, resolveFurnitureDef, furnitureCat, alarmStateColor } from '../geometry.js';
+import { localToWorld, transformVerts, pointInPolygon, sensorColor, hexToInt, motionColor, lightIconKind, furnitureKind, resolveFurnitureDef, furnitureCat, alarmStateColor, doorSpanCenter } from '../geometry.js';
 import { compass8 } from '../geo.js';
 import { resolveScenePreset, resolveTimeBucket } from '../time-of-day.js';
 import { conditionIntensity, weatherEffectEnabled } from '../weather.js';
@@ -301,7 +301,7 @@ export class ThreeView extends LitElement {
   // last few transitions (world mm + wall-clock). Fed into ActivityContext each
   // tick; pruned to 45 s / 8 entries; cleared on floor switch.
   private _trigPrevOn = new Map<string, boolean>();
-  private _recentTrigs: { kind: 'light_on' | 'light_off' | 'fireplace' | 'tv'; x: number; y: number; at: number }[] = [];
+  private _recentTrigs: { kind: 'light_on' | 'light_off' | 'fireplace' | 'tv' | 'doorbell'; x: number; y: number; at: number }[] = [];
   // ?view3d= / ?cam= template application. Saved views live in the HA store,
   // which loads async — retry each tick until found, then fall back to the
   // default iso framing if the named view never appears.
@@ -582,13 +582,37 @@ export class ThreeView extends LitElement {
 
       // Doors + windows: structural + bound entity states. Door lock entities
       // (display-only deadbolt) fold in too so a lock/unlock rebuilds the panel.
+      // `openKey` also buckets a cover's current_position (5% steps) so a garage
+      // door / window blind rebuilds as it partially opens (state alone stays
+      // 'opening'/'open' while the position slides).
+      const openKey = (id: string | null | undefined): string => {
+        const s = id ? states[id] : null;
+        if (!s) return '-';
+        const pos = (s.attributes as Record<string, unknown> | undefined)?.current_position;
+        return typeof pos === 'number' ? `${s.state}:${Math.round(pos / 5)}` : s.state;
+      };
       const keyDoors = `${p.configRev}|` +
-        f.doors.map(d => `${stOf(d.entity_id)}:${stOf(d.lockEntity)}`).join(',') + '|' +
-        f.windows.map(w => stOf(w.entity_id)).join(',');
+        f.doors.map(d => `${openKey(d.entity_id)}:${stOf(d.lockEntity)}`).join(',') + '|' +
+        f.windows.map(w => `${openKey(w.entity_id)}:${openKey(w.coverEntity)}`).join(',');
       if (keyDoors !== this._keyDoors) {
         this._keyDoors = keyDoors;
         r.updateDoorsWindows(f.doors, f.windows, id => states[id] || null);
       }
+
+      // Doorbell transient pulses (generic flash-then-decay primitive). Resolve
+      // each ring to its door's span centre; pass fresh pulses while any exist and
+      // an empty list once to clear (the renderer no-ops when idle).
+      const nowMs = Date.now();
+      const pulses: import('../three-renderer.js').TransientPulse[] = [];
+      for (const ring of p.doorbellRings) {
+        const ageS = (nowMs - ring.at) / 1000;
+        if (ageS > 4) continue;
+        const dd = f.doors.find(x => x.id === ring.doorId);
+        if (!dd) continue;
+        const c = doorSpanCenter(dd);
+        pulses.push({ x: c.x, y: c.y, ageS, kind: 'doorbell' });
+      }
+      r.updateDoorbellPulses(pulses);
 
       // Sensors: structural + pose entities (height / tilt numbers) +
       // coverage-wedge toggle.
@@ -901,7 +925,7 @@ export class ThreeView extends LitElement {
       // push world-mm entries. Fireplaces map to the 'fireplace' kind on ON.
       const nowS = performance.now() / 1000;
       const note = (id: string, on: boolean,
-                    kind: 'light_on' | 'light_off' | 'fireplace' | 'tv',
+                    kind: 'light_on' | 'light_off' | 'fireplace' | 'tv' | 'doorbell',
                     x: number, y: number): void => {
         const prev = this._trigPrevOn.get(id);
         if (prev === undefined) { this._trigPrevOn.set(id, on); return; }
@@ -930,6 +954,16 @@ export class ThreeView extends LitElement {
       this._recentTrigs = this._recentTrigs.filter(g => nowS - g.at < 45);
       if (this._recentTrigs.length > 8) this._recentTrigs.splice(0, this._recentTrigs.length - 8);
       const recentTriggers = this._recentTrigs.map(g => ({ kind: g.kind, x: g.x, y: g.y, ageS: nowS - g.at }));
+      // Doorbell rings feed the same trigger-tier bubble pool (🔔🚪👀). Sourced
+      // from Planner.doorbellRings (Date.now() ms) rather than the prev-on map.
+      for (const ring of p.doorbellRings) {
+        const ageS = (Date.now() - ring.at) / 1000;
+        if (ageS >= 8) continue;
+        const dd = f.doors.find(x => x.id === ring.doorId);
+        if (!dd) continue;
+        const c = doorSpanCenter(dd);
+        recentTriggers.push({ kind: 'doorbell', x: c.x, y: c.y, ageS });
+      }
       const ctx: ActivityContext = { entityOn, roomNames, timeBucket: resolveTimeBucket(states), weather, recentTriggers, doorSensorOpen };
       // Targets every frame — persistent rigs mutate in place (no rebuild).
       r.updateTargets(targets, ctx);
