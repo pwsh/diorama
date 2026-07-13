@@ -5,7 +5,7 @@ import { slugToName, normMac, localToWorld, segCrossesSolidWall, mowerSweepWaypo
          ROBOT_DEFAULTS, robotLedColor } from './geometry.js';
 import { stepFusion, newFusionState, DEFAULT_FUSION_CFG,
          type FusionState, type FusionCand } from './fusion.js';
-import { fitGeoTransform, latLonToPlan, clampToBoundary, planBearingDeg, medianLatLon,
+import { fitGeoTransform, latLonToPlan, clampToBoundary, planBearingDeg, compass8, medianLatLon,
          type GeoTransform, type GeoPair, type LatLonSample } from './geo.js';
 import type { GeoConfig, GeoLandmark, DioramaPerson, RobotFixture } from './types.js';
 
@@ -101,6 +101,25 @@ export interface GpsPin {
   distanceM: number;           // plan distance (m) from floor centre to the true pos
 }
 
+// One resolved geo_location event pin for rendering (roadmap #9). geo_location.*
+// entities (USGS/GeoNet quakes, NSW/Qld fires, GDACS) each carry lat/lon + a
+// `source` + a state that is the distance-from-home (km). Projected through the
+// SAME geo transform as GPS pins and classified/clamped identically. Runtime-only
+// (nothing persisted) — see Planner.geoEventPins.
+export interface GeoEventPin {
+  key: string;                 // entity id
+  name: string;                // friendly_name or entity-id tail
+  source: string;              // attributes.source (e.g. 'usgs_earthquakes_feed')
+  category: 'quake' | 'fire' | 'other';  // derived from source substring → marker color
+  x: number; y: number;        // TRUE world-mm position (unclamped)
+  clampedX: number; clampedY: number;    // render position (== x,y unless beyond → boundary edge)
+  zone: GpsZone;               // indoor | yard | beyond
+  bearingDeg: number;          // true compass bearing (0..360) from floor centre
+  distanceKm: number;          // the entity state (distance from home, km)
+  magnitude: number | null;    // attributes.magnitude (earthquakes) → label prefix
+  label: string;               // e.g. 'M4.2 · 12 km NW' (composed once)
+}
+
 // Drag state covers every interaction kind. Only active during a mousedown→up.
 export type Drag =
   | { kind: 'sensor'; id: string; startMm: Vec2; start: Vec2 }
@@ -122,6 +141,9 @@ export type Drag =
   | { kind: 'alarm'; id: string; startMm: Vec2; start: Vec2 }
   | { kind: 'safety'; id: string; startMm: Vec2; start: Vec2 }
   | { kind: 'robot'; id: string; startMm: Vec2; start: Vec2 }
+  | { kind: 'camera'; id: string; startMm: Vec2; start: Vec2 }
+  | { kind: 'cameraRotate'; id: string }
+  | { kind: 'pzoneVert'; id: string; idx: number; startMm: Vec2; startPts: Vec2[] }
   | { kind: 'env'; id: string; startMm: Vec2; start: Vec2 }
   | { kind: 'envResize'; id: string; startDist: number; startScale: number }
   | { kind: 'doorMove'; idx: number; startMm: Vec2; start: Vec2 }
@@ -146,7 +168,7 @@ export interface EditZone {
   mousePos: Vec2 | null;
 }
 
-export type Tool = 'select' | 'wall' | 'sensor' | 'motion' | 'env' | 'bleproxy' | 'alarm' | 'safety' | 'robot' | 'furniture' | 'light' | 'switch' | 'door' | 'window' | 'delete';
+export type Tool = 'select' | 'wall' | 'sensor' | 'motion' | 'env' | 'bleproxy' | 'alarm' | 'safety' | 'robot' | 'camera' | 'pzone' | 'furniture' | 'light' | 'switch' | 'door' | 'window' | 'delete';
 
 // Live robot state (runtime-only). `x/y/heading/phase/activity/led` are the
 // DISPLAY fields both canvases read; the rest are the movement controller's
@@ -263,6 +285,17 @@ export class Planner extends EventTarget {
   // Active robot fixture (sidebar selection / canvas highlight)
   activeRobotId: string | null = null;
 
+  // Active camera fixture (sidebar selection / canvas highlight)
+  activeCameraId: string | null = null;
+
+  // Active presence zone (sidebar selection / canvas vertex-edit highlight)
+  activePZoneId: string | null = null;
+
+  // Presence-zone draw latch (same pattern as drawingWall): while the pzone tool
+  // is armed, each canvas click appends a world-mm vertex; double-click finishes
+  // (≥3 pts). Runtime-only. `id` is set when re-drawing an existing zone.
+  drawingPresenceZone: { points: Vec2[]; id?: string } | null = null;
+
   // Live robot positions (runtime-only, advanced by stepRobots from the 2D RAF —
   // like stepLerp). BOTH the 2D canvas and the 3D renderer read this, so the
   // robot moves consistently whether or not the 3D view was ever opened. See
@@ -377,6 +410,7 @@ export class Planner extends EventTarget {
     if (m !== 'edit') {
       // Leave no edit affordances dangling.
       this.drag = null; this.editZone = null; this.drawingWall = null;
+      this.drawingPresenceZone = null;
       this.tool = 'select'; this.placingRoomId = null; this.placingLandmarkId = null;
       this.alignGuides = []; this.alignCandidates = [];
       // A disabled floor is hidden from the kiosk/view picker — don't strand the
@@ -702,6 +736,8 @@ export class Planner extends EventTarget {
           this.activeAlarmId = null;
           this.activeSafetyId = null;
           this.activeRobotId = null;
+          this.activeCameraId = null;
+          this.activePZoneId = null;
           this.robotStates = {};
           this.activePersonId = null;
           this.viewCenter = null;
@@ -709,6 +745,7 @@ export class Planner extends EventTarget {
           this.drag = null;
           this.editZone = null;
           this.drawingWall = null;
+          this.drawingPresenceZone = null;
           this.showDetails = this.store.showDetails === true;
           this.useRawTargets = this.store.useRawTargets === true;
           // Mirror to localStorage as the local cache.
@@ -771,6 +808,12 @@ export class Planner extends EventTarget {
     // on change. Scoped to the current floor's bound ids only.
     if ((f2.robots ?? []).some(r =>
       r.entity_id === id || r.trackerEntity === id || r.latEntity === id || r.lonEntity === id)) return true;
+    // Presence-zone occupancy sensors (#5): config-path so 2D/3D dirty keys +
+    // sidebar badge refresh on an occupancy flip. The 2D RAF reads the glow live.
+    if ((f2.presenceZones ?? []).some(z => z.entity_id === id)) return true;
+    // Camera entities (#10): recording-state changes are rare; the sidebar wants
+    // to refresh the badge + the 2D/3D wedge tint. Scoped to current-floor ids.
+    if ((f2.cameras ?? []).some(c => c.entity_id === id)) return true;
     // GPS source entities (a person.* or device_tracker.* bound to a Store.people
     // entry) are config-path so the sidebar GPS status line + 3D pins refresh on
     // a new fix. Bounded to the specific bound ids (GPS pushes are minutes apart,
@@ -1128,6 +1171,7 @@ export class Planner extends EventTarget {
   setTool(t: Tool): void {
     this.tool = t;
     if (t !== 'wall') this.drawingWall = null;
+    if (t !== 'pzone') this.drawingPresenceZone = null;
     this.placingRoomId = null;  // picking any tool cancels a pending room placement
     this.placingLandmarkId = null;
     this.emitConfig();
@@ -1160,6 +1204,37 @@ export class Planner extends EventTarget {
 
   setActiveRobot(id: string | null): void {
     this.activeRobotId = (this.activeRobotId === id) ? null : id;
+    this.emitConfig();
+  }
+
+  setActiveCamera(id: string | null): void {
+    this.activeCameraId = (this.activeCameraId === id) ? null : id;
+    this.emitConfig();
+  }
+
+  setActivePZone(id: string | null): void {
+    this.activePZoneId = (this.activePZoneId === id) ? null : id;
+    this.emitConfig();
+  }
+
+  // Commit the in-progress presence-zone polygon (≥3 pts). Replaces an existing
+  // zone's points when re-drawing (drawingPresenceZone.id set), else creates one.
+  finishPresenceZone(): void {
+    const d = this.drawingPresenceZone;
+    this.drawingPresenceZone = null;
+    if (!d || d.points.length < 3) { this.emitConfig(); return; }
+    const f = this.floor();
+    if (!f.presenceZones) f.presenceZones = [];
+    const pts = d.points.map(p => ({ x: Math.round(p.x), y: Math.round(p.y) }));
+    if (d.id) {
+      const z = f.presenceZones.find(x => x.id === d.id);
+      if (z) z.points = pts;
+    } else {
+      const id = newId('pz');
+      f.presenceZones.push({ id, name: `Zone ${f.presenceZones.length + 1}`, points: pts, entity_id: null });
+      this.activePZoneId = id;
+    }
+    this.save();
     this.emitConfig();
   }
 
@@ -1342,6 +1417,92 @@ export class Planner extends EventTarget {
       });
     }
     return out;
+  }
+
+  // geo_location event pins (roadmap #9). Scans hass.states for `geo_location.*`
+  // entities with numeric lat/lon, projects each via the fitted geo transform,
+  // and classifies/clamps against the current floor boundary EXACTLY like gpsPins.
+  // Requires geoFit() quality !== 'none' and geo.showEvents !== false. Caps at 20
+  // (nearest by distance km). Cached per config-rev + a 60 s TTL so the RAF stays
+  // cheap (geo_location churn is low). Returns [] when disabled/unfitted.
+  get geoEventPins(): GeoEventPin[] {
+    if (this.store.geo?.showEvents === false) return [];
+    const now = Date.now();
+    const c = this._geoEvCache;
+    if (c && c.rev === this.configRev && (now - c.at) < 60000) return c.pins;
+    const pins = this._computeGeoEventPins();
+    this._geoEvCache = { at: now, rev: this.configRev, pins };
+    return pins;
+  }
+  private _geoEvCache: { at: number; rev: number; pins: GeoEventPin[] } | null = null;
+
+  private _computeGeoEventPins(): GeoEventPin[] {
+    const fitR = this.geoFit();
+    if (!fitR || fitR.transform.quality === 'none') return [];
+    const states = this.hass?.states;
+    if (!states) return [];
+    const t = fitR.transform;
+    const f = this.floor();
+    const fw = f.w, fd = f.d;
+    const boundaryMm = this.geoBoundaryM() * 1000;
+    const cx = fw / 2, cy = fd / 2;
+    const out: GeoEventPin[] = [];
+    for (const id in states) {
+      if (!id.startsWith('geo_location.')) continue;
+      const st = states[id];
+      const a = (st.attributes ?? {}) as Record<string, unknown>;
+      const lat = typeof a.latitude === 'number' ? a.latitude : null;
+      const lon = typeof a.longitude === 'number' ? a.longitude : null;
+      if (lat == null || lon == null) continue;
+      const plan = latLonToPlan(t, lat, lon);
+      if (!plan) continue;
+      const source = typeof a.source === 'string' ? a.source : '';
+      const src = source.toLowerCase();
+      const name = (typeof a.friendly_name === 'string' && a.friendly_name) || id.slice('geo_location.'.length);
+      const category: GeoEventPin['category'] =
+        /quake|earthquake|seismic|usgs|geonet/.test(src) ? 'quake'
+        : /fire|burn|nsw|qfes|incident/.test(src) ? 'fire' : 'other';
+      const indoor = plan.x >= 0 && plan.x <= fw && plan.y >= 0 && plan.y <= fd;
+      const inYard = plan.x >= -boundaryMm && plan.x <= fw + boundaryMm
+                  && plan.y >= -boundaryMm && plan.y <= fd + boundaryMm;
+      let zone: GpsZone; let clampedX: number; let clampedY: number;
+      if (indoor) { zone = 'indoor'; clampedX = plan.x; clampedY = plan.y; }
+      else if (inYard) { zone = 'yard'; clampedX = plan.x; clampedY = plan.y; }
+      else { zone = 'beyond'; const cl = clampToBoundary(fw, fd, boundaryMm, plan.x, plan.y); clampedX = cl.x; clampedY = cl.y; }
+      const dx = plan.x - cx, dy = plan.y - cy;
+      const stateKm = parseFloat(st.state);
+      const distanceKm = isFinite(stateKm) ? stateKm : Math.hypot(dx, dy) / 1000 / 1000; // state is km; fallback plan m→km
+      const mag = typeof a.magnitude === 'number' ? a.magnitude : null;
+      const bearingDeg = planBearingDeg(t.thetaRad, dx, dy);
+      const magStr = mag != null ? `M${mag.toFixed(1)} · ` : '';
+      out.push({
+        key: id, name, source, category,
+        x: plan.x, y: plan.y, clampedX, clampedY, zone, bearingDeg,
+        distanceKm, magnitude: mag,
+        label: `${magStr}${Math.round(distanceKm)} km ${compass8(bearingDeg)}`,
+      });
+    }
+    out.sort((p, q) => p.distanceKm - q.distanceKm);
+    return out.slice(0, 20);
+  }
+
+  geoShowEvents(): boolean { return this.store.geo?.showEvents !== false; }
+
+  // HTTP base URL of the HA instance, for building absolute camera-snapshot URLs
+  // (roadmap #10). Panel mode + iframe mode are BOTH served from the HA origin,
+  // so a relative `/api/camera_proxy/...` (entity_picture) resolves same-origin —
+  // return '' there. Only the standalone/token mode (a different origin) needs a
+  // prefix, which lives in localStorage['diorama:url']. Trailing slash stripped.
+  get haBaseUrl(): string {
+    try {
+      const u = localStorage.getItem('diorama:url') || '';
+      // Same-origin (panel/iframe): the stored url equals our own origin, or is
+      // absent → return '' so the browser resolves relative to the page.
+      if (!u) return '';
+      const base = u.replace(/\/$/, '');
+      if (base === window.location.origin) return '';
+      return base;
+    } catch { return ''; }
   }
 
   // Derive the companion-app notify service slug from a device_tracker entity id
@@ -2246,6 +2407,8 @@ export class Planner extends EventTarget {
     for (const it of f.alarmPanels ?? []) { it.x += dx; it.y += dy; }
     for (const it of f.safetySensors ?? []) { it.x += dx; it.y += dy; }
     for (const it of f.robots ?? []) { it.x += dx; it.y += dy; }
+    for (const it of f.cameras ?? []) { it.x += dx; it.y += dy; }
+    for (const z of f.presenceZones ?? []) z.points = z.points.map(p => ({ x: p.x + dx, y: p.y + dy }));
     for (const it of f.doors ?? []) { it.x += dx; it.y += dy; }
     for (const it of f.windows ?? []) { it.x += dx; it.y += dy; }
     for (const rm of f.rooms ?? []) { rm.anchor.x += dx; rm.anchor.y += dy; }
@@ -2266,6 +2429,9 @@ export class Planner extends EventTarget {
     this.activeAlarmId = null;
     this.activeSafetyId = null;
     this.activeRobotId = null;
+    this.activeCameraId = null;
+    this.activePZoneId = null;
+    this.drawingPresenceZone = null;
     this.robotStates = {};   // positions are per-floor; recomputed on the new floor
     this.activeFurnitureId = null;
     // Reset pan/zoom — viewCenter is in world mm and a different floor has

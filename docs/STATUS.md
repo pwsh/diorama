@@ -48,6 +48,20 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Roadmap batch G: presence zones, geo event pins, cameras, plumbob
+  colors** (11 files + 3 new test pages: roadmap-geom 25/25, geoevents
+  16/16, plumbob-color 12/12; full green set intact): FP2/Frigate-style
+  `PresenceZone` polygons (draw latch, draggable vertex handles, bind an
+  occupancy binary_sensor → glow in 2D + 3D on the zones layer);
+  `Planner.geoEventPins` — `geo_location.*` entities (quakes/fires)
+  projected through the geo calibration, clamped, capped 20,
+  `geo.showEvents` toggle; `CameraFixture` (📷 tool) with FOV wedge in
+  both views, recording tint, and a sidebar snapshot thumbnail via
+  entity_picture (`Planner.haBaseUrl` resolves all three connection
+  modes); per-sensor plumbob colors (mmWave + motion editors,
+  `TargetWorld.plumbobColor`, in-place recolor, iconic green default).
+  CLAUDE.md "Presence zones, geo events, cameras, plumbob colors".
+
 - **Roadmap batch F: garage doors, window blinds, doorbell pulses**
   (9 files + new `covers-test.html` **22/22**; typecheck + build clean;
   window 14/14 / livefeatures 19/19 / robot 24/24 / bookcase-los 11/11 /

@@ -811,6 +811,29 @@ export function safetyGlyph(kind: SafetyKind): string {
 // leak sits on the floor; smoke/co/gas hang from the ceiling.
 export function safetyIsFloor(kind: SafetyKind): boolean { return kind === 'leak'; }
 
+// ── Presence zones (FP2-style occupancy polygons, roadmap #5) ───────────────
+export const PRESENCE_ZONE_DEFAULTS = { color: '#26c6da', maxVerts: 12 };
+export function presenceZoneColor(z: { color?: string }): string {
+  return z.color ?? PRESENCE_ZONE_DEFAULTS.color;
+}
+
+// ── Camera fixtures (FOV frustum + snapshot, roadmap #10) ───────────────────
+export const CAMERA_DEFAULTS = { fov: 90, range: 6000, height: 2200 };
+export function cameraFov(c: { fov?: number }): number {
+  return Math.max(5, Math.min(180, c.fov ?? CAMERA_DEFAULTS.fov));
+}
+export function cameraRange(c: { range?: number }): number {
+  return Math.max(200, c.range ?? CAMERA_DEFAULTS.range);
+}
+export function cameraHeight(c: { height?: number }): number {
+  return c.height ?? CAMERA_DEFAULTS.height;
+}
+// Wedge tint by camera entity state: recording = red hint; streaming/idle = the
+// neutral camera cyan. Shared 2D + 3D.
+export function cameraStateColor(state: string | null | undefined): string {
+  return state === 'recording' ? '#ef5350' : '#4dd0e1';
+}
+
 // ── Robot fixtures (vacuum / mower) ────────────────────────────────────────
 // Dock footprint (mm) + robot body dims + roam speeds. The dock is the parked
 // charging base; the robot body roams away and returns.

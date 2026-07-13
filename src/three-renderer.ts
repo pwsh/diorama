@@ -16,9 +16,10 @@ import {
   safetyColor, safetyIsFloor, SAFETY_DEFAULTS,
   powerGlowScale,
   robotColor, robotLedColor, ROBOT_DEFAULTS,
+  presenceZoneColor, cameraFov, cameraRange, cameraHeight, cameraStateColor,
   ENV_KINDS, envKindOf, envColor, envValueText, envHeight, envScale,
 } from './geometry.js';
-import type { Door, Window as WindowType, EnvSensor, BleProxy, AlarmPanel, SafetySensor, RobotFixture, ObjectRecipe, ActivityKind } from './types.js';
+import type { Door, Window as WindowType, EnvSensor, BleProxy, AlarmPanel, SafetySensor, RobotFixture, CameraFixture, PresenceZone, ObjectRecipe, ActivityKind } from './types.js';
 
 // The subset of Planner.RobotState the renderer reads (structural — keeps the
 // renderer decoupled from the planner). Positions are plan-frame world mm.
@@ -51,6 +52,9 @@ export interface HaloWorld { x: number; y: number; radius: number; occupied: boo
 // stays free of geo-math imports. x/y are world mm on the current floor's plan.
 export interface GpsPinWorld { x: number; y: number; label: string; color: string; stale: boolean; }
 export interface GpsLandmarkWorld { x: number; y: number; name: string; }
+// geo_location event pin (roadmap #9). Pre-shaped by three-view (label + color
+// resolved) so the renderer stays geo-math-free. x/y are the clamped render pos.
+export interface GeoEventWorld { x: number; y: number; label: string; color: string; }
 
 // Outdoor weather effects (Feature W, phase W2). Pre-shaped by three-view from
 // planner.weatherNow so the renderer stays free of weather-source logic.
@@ -150,6 +154,10 @@ export interface TargetWorld {
     isPet?: boolean;
     identified: boolean;        // gates the name label (unknown devices = false)
   };
+  // Optional (additive): plumbob color (int) for this target's owning sensor —
+  // per-sensor attribution so avatars are distinguishable by which sensor saw
+  // them. Undefined → the default Sims green. A stale renderer chunk ignores it.
+  plumbobColor?: number;
 }
 
 // Per-frame context for the Sims-style activity system. Built cheaply every
@@ -292,6 +300,7 @@ interface Humanoid {
   leftKnee: THREE.Group;
   rightKnee: THREE.Group;
   plumbob: THREE.Object3D;  // rotating Sims diamond above the head
+  plumbobColor?: number;    // last-applied plumbob color (per-sensor attribution); undefined = default green
   blob: THREE.Mesh;    // soft floor shadow decal; re-grounded every frame
   // ── Quadruped pets (cat/dog). `quad` switches BOTH the builder and the
   // per-frame pose branch (_applyQuadPose). The humanoid joint fields above
@@ -648,6 +657,11 @@ const BUBBLE_W = 620, BUBBLE_H = 580;
 // worldToLocal repin + fade/dispose lifecycle untouched.
 const BUBBLE_TAIL_CENTER: [number, number] = [20 / 160, 1 - 128 / 150];
 const BUBBLE_ABOVE_PLUMBOB = 460;   // tail tip this far above the plumbob (over head center)
+// The iconic Sims plumbob green — the default when a sensor sets no plumbobColor.
+// Both the humanoid and quadruped builders create the plumbob in this color; a
+// per-target override (TargetWorld.plumbobColor) recolors the per-rig material
+// in place (updateTargets), so no shared resource is touched.
+const PLUMBOB_GREEN = 0x2ee56a;
 // Name label (phase B3) rides the same per-rig plumbob anchor, a bit lower than
 // the bubble so both coexist over the head (the bubble is offset sideways).
 const NAME_ABOVE_PLUMBOB = 318;
@@ -690,6 +704,8 @@ export class ThreeDRenderer {
   private _leakAlarmStart: Record<string, number> = {};
   private _robotGroup = new THREE.Group();       // static robot docks (build-time, _keyRobots)
   private _robotRigGroup = new THREE.Group();    // moving robot bodies (per-frame, persistent)
+  private _cameraGroup = new THREE.Group();      // camera fixtures + FOV frustum (build-time, _keyCameras)
+  private _pzoneGroup = new THREE.Group();       // FP2-style presence-zone patches (build-time, _keyPzones)
   private _robotRigs: Record<string, RobotRig> = {};  // keyed by robot id
   private _lightGroup = new THREE.Group();
   private _switchGroup = new THREE.Group();   // switch fixtures (own layer, split from lights)
@@ -962,7 +978,7 @@ export class ThreeDRenderer {
                     this._zoneGroup, this._haloGroup,
                     this._sensorGroup, this._motionGroup, this._envGroup,
                     this._bleGroup, this._alarmGroup, this._safetyGroup,
-                    this._robotGroup, this._robotRigGroup,
+                    this._robotGroup, this._robotRigGroup, this._cameraGroup, this._pzoneGroup,
                     this._lightGroup, this._switchGroup, this._targetGroup, this._ghostGroup,
                     this._gpsGroup, this._weatherGroup, this._pulseGroup);
 
@@ -1417,7 +1433,7 @@ export class ThreeDRenderer {
     for (const g of [
       this._floorGroup, this._doorGroup, this._modelGroup, this._zoneGroup, this._haloGroup,
       this._sensorGroup, this._motionGroup, this._bleGroup, this._alarmGroup,
-      this._safetyGroup, this._robotGroup, this._robotRigGroup,
+      this._safetyGroup, this._robotGroup, this._robotRigGroup, this._cameraGroup, this._pzoneGroup,
       this._lightGroup, this._switchGroup, this._targetGroup, this._ghostGroup,
       this._pulseGroup,
     ]) {
@@ -1729,11 +1745,15 @@ export class ThreeDRenderer {
     // Robot docks + moving bodies ride the sensors layer too.
     this._robotGroup.visible = v.sensors !== false;
     this._robotRigGroup.visible = v.sensors !== false;
+    // Camera fixtures + FOV frustum ride the sensors layer too.
+    this._cameraGroup.visible = v.sensors !== false;
     this._motionGroup.visible = v.motion !== false;
     this._envGroup.visible = v.env !== false;
     const z = v.zones !== false;
     this._zoneGroup.visible = z;
     this._haloGroup.visible = z;
+    // FP2-style presence-zone patches ride the zones layer.
+    this._pzoneGroup.visible = z;
     this._targetGroup.visible = v.targets !== false;
     // GPS + landmark pins ride the geo layer (shared with 2D landmark pins).
     this._gpsGroup.visible = v.geo !== false;
@@ -4221,6 +4241,108 @@ export class ThreeDRenderer {
     }
   }
 
+  // Camera fixtures (roadmap #10): a small wall/eave-mount camera body (box +
+  // lens cylinder) at `height`, aimed by rotation, plus a translucent FOV
+  // frustum wedge — an unlit floor decal (like the sensor coverage wedge) that
+  // reads red while the camera entity state is 'recording'. Rides the sensors
+  // layer; rebuilt under _keyCameras in three-view. Rotation convention 0 = +Y
+  // world (like motion sensors): group.rotation.y = -(rotation)·π/180.
+  updateCameras(cameras: CameraFixture[], stateProvider: StateProvider): void {
+    if (!this._scene) return;
+    this._clearGroup(this._cameraGroup);
+    for (const cam of cameras) {
+      if (cam.hidden) continue;
+      const st = cam.entity_id ? stateProvider(cam.entity_id) : null;
+      const recording = st?.state === 'recording';
+      const col = hexToInt(cameraStateColor(st?.state));
+      const heightMm = cameraHeight(cam);
+      // Body: pivot group aimed by heading. Local +Z faces the aim direction
+      // (matches _w's mirror + the sensor-body convention).
+      const grp = new THREE.Group();
+      const bp = this._w(cam.x, cam.y, heightMm);
+      grp.position.set(bp.x, bp.y, bp.z);
+      grp.rotation.y = -((cam.rotation || 0) * Math.PI / 180);
+      const bodyMat = this._mat({ color: 0x2b3038, metalness: 0.2, roughness: 0.6 });
+      const box = new THREE.Mesh(new THREE.BoxGeometry(180, 130, 160), bodyMat);
+      grp.add(box);
+      // Lens cylinder poking out the front (+Z).
+      const lens = new THREE.Mesh(
+        new THREE.CylinderGeometry(55, 55, 90, 16),
+        this._mat({ color: recording ? 0xef5350 : 0x11151b,
+                    emissive: recording ? 0xef5350 : col,
+                    emissiveIntensity: recording ? 0.7 : 0.3 }));
+      lens.rotation.x = Math.PI / 2;   // cylinder axis → +Z
+      lens.position.set(0, 0, 120);
+      grp.add(lens);
+      this._cameraGroup.add(grp);
+
+      // FOV frustum — flat floor decal wedge (fov / range / rotation), same
+      // 2D-canvas-angle → shape-space mapping as the sensor coverage wedge.
+      const fovRad = (cameraFov(cam) * Math.PI) / 180;
+      const range = cameraRange(cam);
+      const base = -Math.PI / 2 + ((cam.rotation || 0) * Math.PI) / 180;
+      const segs = Math.max(8, Math.round((cameraFov(cam) / 360) * 48));
+      const shape = new THREE.Shape();
+      shape.moveTo(0, 0);
+      const rimPts: THREE.Vector3[] = [new THREE.Vector3(0, 0, 0)];
+      for (let i = 0; i <= segs; i++) {
+        const a = base - fovRad / 2 + fovRad * (i / segs);
+        const dx = Math.cos(a) * range, dy = Math.sin(a) * range;
+        shape.lineTo(-dx, dy);
+        rimPts.push(new THREE.Vector3(-dx, dy, 0));
+      }
+      shape.lineTo(0, 0);
+      const wedge = new THREE.Mesh(
+        new THREE.ShapeGeometry(shape),
+        new THREE.MeshBasicMaterial({
+          color: col, transparent: true, opacity: recording ? 0.14 : 0.09,
+          side: THREE.DoubleSide, depthWrite: false,
+        }));
+      const rim = new THREE.LineLoop(
+        new THREE.BufferGeometry().setFromPoints(rimPts),
+        new THREE.LineBasicMaterial({ color: col, transparent: true, opacity: 0.5 }));
+      const fp = this._w(cam.x, cam.y, 0);
+      for (const o of [wedge, rim]) {
+        o.rotation.x = -Math.PI / 2;      // lay the XY shape flat on the floor
+        o.position.set(fp.x, 14, fp.z);   // few mm up to avoid z-fighting
+        this._cameraGroup.add(o);
+      }
+    }
+  }
+
+  // FP2-style presence zones (roadmap #5): a flat translucent polygon patch at
+  // y≈8 for each user-drawn zone, glowing (higher opacity + emissive) when its
+  // bound occupancy sensor is ON. Rides the zones layer; rebuilt under _keyPzones
+  // in three-view. Zone points are world-mm on the plan (mapped via _w).
+  updatePresenceZones(zones: PresenceZone[], stateProvider: StateProvider): void {
+    if (!this._scene) return;
+    this._clearGroup(this._pzoneGroup);
+    for (const z of zones) {
+      if (z.hidden || z.points.length < 3) continue;
+      const col = hexToInt(presenceZoneColor(z));
+      const st = z.entity_id ? stateProvider(z.entity_id) : null;
+      const occupied = st?.state === 'on';
+      // Build the shape in world scene coords. rotation.x = -π/2 maps a shape
+      // vertex (sx, sy) → world (sx, 0, -sy), so feed (w.x, -w.z) to land the
+      // patch at world (w.x, y, w.z). ShapeGeometry re-winds itself.
+      const shape = new THREE.Shape();
+      for (let i = 0; i < z.points.length; i++) {
+        const w = this._w(z.points[i].x, z.points[i].y, 0);
+        if (i === 0) shape.moveTo(w.x, -w.z); else shape.lineTo(w.x, -w.z);
+      }
+      shape.closePath();
+      const geo = new THREE.ShapeGeometry(shape);
+      const patch = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+        color: col, transparent: true,
+        opacity: occupied ? 0.34 : 0.12,
+        side: THREE.DoubleSide, depthWrite: false,
+      }));
+      patch.rotation.x = -Math.PI / 2;
+      patch.position.y = occupied ? 10 : 8;
+      this._pzoneGroup.add(patch);
+    }
+  }
+
   // Alarm keypads (Feature 3): a wall-mounted plate at `height` with an emissive
   // screen band colored by the arm state (palette shared with 2D via
   // alarmStateColor). Front face = local +Z (room side), matching the switch
@@ -4565,7 +4687,7 @@ export class ThreeDRenderer {
   // humanoid rig — this is a device location, not a room-presence claim. Sprite
   // CanvasTextures aren't freed by _clearGroup, so pair _disposeSpriteMaps with
   // it (the same gotcha as updateEnvSensors).
-  updateGpsPins(pins: GpsPinWorld[], landmarks: GpsLandmarkWorld[]): void {
+  updateGpsPins(pins: GpsPinWorld[], landmarks: GpsLandmarkWorld[], events: GeoEventWorld[] = []): void {
     if (!this._scene) return;
     this._disposeSpriteMaps(this._gpsGroup);
     this._clearGroup(this._gpsGroup);
@@ -4580,6 +4702,14 @@ export class ThreeDRenderer {
       const p = this._w(pin.x, pin.y, 1800);
       sp.position.set(p.x, p.y, p.z);
       if (pin.stale) sp.material.opacity = 0.4;
+      this._gpsGroup.add(sp);
+    }
+    // geo_location event pins (roadmap #9) — float a bit higher than GPS pins so
+    // they don't overlap a person standing in the yard.
+    for (const ev of events) {
+      const sp = this._makeTextSprite(ev.label, ev.color, 1);
+      const p = this._w(ev.x, ev.y, 2100);
+      sp.position.set(p.x, p.y, p.z);
       this._gpsGroup.add(sp);
     }
   }
@@ -6218,6 +6348,19 @@ export class ThreeDRenderer {
       if (h.despawnMode) {
         if (h.despawnMode === 'slow') { h.fadeAlpha = 1; this._fadeRig(h, 1); }
         h.despawnMode = null;
+      }
+      // Per-sensor plumbob color (additive): recolor THIS rig's own plumbob
+      // material in place when it differs (no rebuild). The plumbob material is
+      // already per-rig (built via _mat, disposed with the rig) — never a shared
+      // resource — so this is safe. Undefined spec → the default green.
+      const wantPlumbob = t.plumbobColor ?? PLUMBOB_GREEN;
+      if (h.plumbobColor !== wantPlumbob) {
+        h.plumbobColor = wantPlumbob;
+        const pm = (h.plumbob as THREE.Mesh).material as THREE.MeshToonMaterial | undefined;
+        if (pm && pm.color) {
+          pm.color.setHex(wantPlumbob);
+          if (pm.emissive) pm.emissive.setHex(wantPlumbob).multiplyScalar(0.66);
+        }
       }
       const p = this._w(t.x, t.y, 0);   // RAW radar goal, scene coords
 
@@ -8173,7 +8316,7 @@ export class ThreeDRenderer {
     // Plumbob, scaled ~0.7× vs the humanoid (pets are smaller), above the head.
     const plumbob = new THREE.Mesh(
       new THREE.OctahedronGeometry(60),
-      this._mat({ color: 0x2ee56a, emissive: 0x1faa44, emissiveIntensity: 0.9, transparent: true, opacity: 0.88 }),
+      this._mat({ color: PLUMBOB_GREEN, emissive: 0x1faa44, emissiveIntensity: 0.9, transparent: true, opacity: 0.88 }),
     );
     plumbob.scale.set(0.72, 1.45, 0.72);
     plumbob.position.set(0, headG.position.y + HEAD_R + 200 * sk, frontZ - HEAD_R * 0.25);
@@ -8688,7 +8831,7 @@ export class ThreeDRenderer {
     const plumbob = new THREE.Mesh(
       new THREE.OctahedronGeometry(85),
       this._mat({
-        color: 0x2ee56a, emissive: 0x1faa44, emissiveIntensity: 0.9,
+        color: PLUMBOB_GREEN, emissive: 0x1faa44, emissiveIntensity: 0.9,
         transparent: true, opacity: 0.88,
       }),
     );
@@ -8816,6 +8959,7 @@ export class ThreeDRenderer {
       this._floorGroup, this._doorGroup, this._modelGroup, this._zoneGroup, this._haloGroup,
       this._sensorGroup, this._motionGroup, this._envGroup, this._bleGroup,
       this._alarmGroup, this._safetyGroup, this._robotGroup, this._robotRigGroup,
+      this._cameraGroup, this._pzoneGroup,
       this._lightGroup, this._switchGroup, this._targetGroup, this._gpsGroup, this._weatherGroup,
       this._pulseGroup,
     ]) {

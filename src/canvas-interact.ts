@@ -10,6 +10,7 @@ import {
   hitBgBody, hitBgCorner, bgEditable,
   hitMotionSensor, hitMotionRotateHandle, hitEnvSensor, hitEnvResizeHandle,
   hitBleProxy, hitAlarmPanel, hitSafetySensor, hitRobot,
+  hitCamera, hitCameraRotateHandle, hitPresenceZone, hitPresenceZoneVertex,
   hitDoor, hitDoorEnd, hitWindow, hitWindowEnd, hitFloorEdge,
 } from './canvas-hit.js';
 import type { Planner, Drag } from './planner.js';
@@ -18,7 +19,7 @@ import type { Vec2, Furniture, ObjectRecipe, Light } from './types.js';
 
 // Drag kinds that move a single placeable and therefore get alignment guides
 // (Feature C). Wall vertices / doors / windows / zones are excluded.
-const ALIGN_MOVE_KINDS = new Set(['sensor', 'motion', 'env', 'ble', 'safety', 'robot', 'fixture', 'furnMove']);
+const ALIGN_MOVE_KINDS = new Set(['sensor', 'motion', 'env', 'ble', 'safety', 'robot', 'camera', 'fixture', 'furnMove']);
 
 // Peer-center candidates for alignment, snapshotted once at drag start. Same
 // category only: lights + switches share one "fixtures" pool; furniture aligns
@@ -46,6 +47,7 @@ function buildAlignCandidates(p: Planner, drag: Drag): { x: number; y: number }[
     case 'ble': for (const o of (f.bleProxies ?? [])) if (o.id !== drag.id) add(o); break;
     case 'safety': for (const o of (f.safetySensors ?? [])) if (o.id !== drag.id) add(o); break;
     case 'robot': for (const o of (f.robots ?? [])) if (o.id !== drag.id) add(o); break;
+    case 'camera': for (const o of (f.cameras ?? [])) if (o.id !== drag.id) add(o); break;
   }
   return out;
 }
@@ -64,6 +66,7 @@ function draggedMoveItem(f: ReturnType<Planner['floor']>, drag: Drag)
     case 'ble': it = (f.bleProxies ?? []).find(x => x.id === drag.id); break;
     case 'safety': it = (f.safetySensors ?? []).find(x => x.id === drag.id); break;
     case 'robot': it = (f.robots ?? []).find(x => x.id === drag.id); break;
+    case 'camera': it = (f.cameras ?? []).find(x => x.id === drag.id); break;
   }
   return it && !it.locked ? it : null;
 }
@@ -348,6 +351,21 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
     p.drag = { kind: 'rotate', sensorId: p.store.activeSensorId! };
     canvas.style.cursor = 'grabbing'; e.preventDefault(); return;
   }
+  const camRot = hitCameraRotateHandle(p, view, mm);
+  if (camRot) {
+    p.drag = { kind: 'cameraRotate', id: camRot.id };
+    canvas.style.cursor = 'grabbing'; e.preventDefault(); return;
+  }
+  // Presence-zone vertex handles (active zone, zones layer visible) — drag to
+  // reshape. Mirrors wall-vertex editing (world-mm points).
+  if (zonesInteractive(p)) {
+    const pzv = hitPresenceZoneVertex(p, view, mm);
+    if (pzv) {
+      p.drag = { kind: 'pzoneVert', id: pzv.zone.id, idx: pzv.idx,
+                 startMm: mm, startPts: pzv.zone.points.map(pt => ({ ...pt })) };
+      canvas.style.cursor = 'grabbing'; e.preventDefault(); return;
+    }
+  }
   // Zone polys / object halos capture input ONLY while the zones layer is
   // visible — an invisible zone edge crossing a sensor body used to swallow
   // the sensor's drag (mirrors the 3D rule: hidden lights stop being raycast
@@ -482,6 +500,22 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
     p.alignCandidates = buildAlignCandidates(p, p.drag);
     canvas.style.cursor = 'grabbing'; e.preventDefault(); p.emitConfig(); return;
   }
+  const camH = hitCamera(p, view, mm);
+  if (camH) {
+    if (p.activeCameraId !== camH.id) p.activeCameraId = camH.id;
+    p.drag = { kind: 'camera', id: camH.id, startMm: mm, start: { x: camH.x, y: camH.y } };
+    p.alignCandidates = buildAlignCandidates(p, p.drag);
+    canvas.style.cursor = 'grabbing'; e.preventDefault(); p.emitConfig(); return;
+  }
+  // Presence zone body — select it (shows vertex handles); no whole-zone drag in
+  // v1 (reshape via vertex handles or Redraw). Only when the zones layer is on.
+  if (zonesInteractive(p)) {
+    const pzH = hitPresenceZone(p, view, mm);
+    if (pzH) {
+      if (p.activePZoneId !== pzH.id) { p.activePZoneId = pzH.id; p.emitConfig(); }
+      e.preventDefault(); return;
+    }
+  }
   const sh = hitSensor(p, view, mm);
   if (sh) {
     if (p.store.activeSensorId !== sh.id) p.setActiveSensor(sh.id);
@@ -599,6 +633,30 @@ export function onCanvasMouseMove(p: Planner, canvas: HTMLCanvasElement, view: V
           // Free placement — a mower dock lives OUTSIDE the wall loops / rect.
           ro.x = drag.start.x + mm.x - drag.startMm.x;
           ro.y = drag.start.y + mm.y - drag.startMm.y;
+        }
+        break;
+      }
+      case 'camera': {
+        const cam = (f.cameras ?? []).find(x => x.id === drag.id);
+        if (cam && !cam.locked) {
+          cam.x = Math.max(0, Math.min(f.w, drag.start.x + mm.x - drag.startMm.x));
+          cam.y = Math.max(0, Math.min(f.d, drag.start.y + mm.y - drag.startMm.y));
+        }
+        break;
+      }
+      case 'cameraRotate': {
+        const cam = (f.cameras ?? []).find(x => x.id === drag.id);
+        if (cam && !cam.locked) {
+          const ang = Math.atan2(mm.x - cam.x, mm.y - cam.y);
+          const deg = Math.round(ang * 180 / Math.PI);
+          cam.rotation = ((deg % 360) + 360) % 360;
+        }
+        break;
+      }
+      case 'pzoneVert': {
+        const z = (f.presenceZones ?? []).find(x => x.id === drag.id);
+        if (z && !z.locked && z.points[drag.idx]) {
+          z.points[drag.idx] = { x: snap(mm.x, 10), y: snap(mm.y, 10) };
         }
         break;
       }
@@ -874,6 +932,9 @@ export function onCanvasMouseMove(p: Planner, canvas: HTMLCanvasElement, view: V
     else if (hitAlarmPanel(p, view, mm)) canvas.style.cursor = 'grab';
     else if (hitSafetySensor(p, view, mm)) canvas.style.cursor = 'grab';
     else if (hitRobot(p, view, mm)) canvas.style.cursor = 'grab';
+    else if (hitCameraRotateHandle(p, view, mm)) canvas.style.cursor = 'grab';
+    else if (hitCamera(p, view, mm)) canvas.style.cursor = 'grab';
+    else if (zonesInteractive(p) && hitPresenceZoneVertex(p, view, mm)) canvas.style.cursor = 'grab';
     else if (hitSensorRotateHandle(p, view, mm)) canvas.style.cursor = 'grab';
     else if (zonesInteractive(p) && hitObjectRadiusHandle(p, view, mm)) canvas.style.cursor = 'ew-resize';
     else if (zonesInteractive(p) && (hitObject(p, view, mm) || hitVertexOrZone(p, view, mm))) canvas.style.cursor = 'grab';
@@ -972,6 +1033,16 @@ export function onCanvasMouseUp(p: Planner, canvas: HTMLCanvasElement): void {
         p.save();
       }
     }
+  } else if (drag.kind === 'camera') {
+    const cam = (f.cameras ?? []).find(x => x.id === drag.id);
+    if (cam) { cam.x = snap(cam.x, 10); cam.y = snap(cam.y, 10); }
+    p.save();
+  } else if (drag.kind === 'cameraRotate') {
+    p.save();
+  } else if (drag.kind === 'pzoneVert') {
+    const z = (f.presenceZones ?? []).find(x => x.id === drag.id);
+    if (z && z.points[drag.idx]) z.points[drag.idx] = { x: snap(z.points[drag.idx].x, 10), y: snap(z.points[drag.idx].y, 10) };
+    p.save();
   } else if (drag.kind === 'envResize') {
     p.save();
   } else if (drag.kind === 'motionRotate') {
@@ -1284,6 +1355,33 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
     p.emitConfig();
     return;
   }
+  if (p.tool === 'camera') {
+    if (!f.cameras) f.cameras = [];
+    const id = newId('cam');
+    // Free placement (wall/eave-mount). Rotate via the handle afterward.
+    f.cameras.push({
+      id,
+      x: snap(Math.max(0, Math.min(f.w, mm.x)), 10),
+      y: snap(Math.max(0, Math.min(f.d, mm.y)), 10),
+      rotation: 0, entity_id: null,
+      label: `Camera ${f.cameras.length + 1}`,
+    });
+    p.activeCameraId = id;
+    p.save();
+    p.setTool('select');
+    p.emitConfig();
+    return;
+  }
+  if (p.tool === 'pzone') {
+    // Polygon draw latch (mirrors the wall tool): each click appends a world-mm
+    // vertex; double-click finishes (≥3 pts). No angle snap — presence zones are
+    // free-form regions.
+    const v = { x: snap(mm.x, 10), y: snap(mm.y, 10) };
+    if (!p.drawingPresenceZone) p.drawingPresenceZone = { points: [v] };
+    else p.drawingPresenceZone.points.push(v);
+    p.emitConfig();
+    return;
+  }
   if (p.tool === 'wall') {
     // First vertex: free placement. Subsequent vertices snap to a 15°
     // increment from the previous vertex via snapVertex15 (preserves cursor
@@ -1404,6 +1502,22 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
       if (p.activeRobotId === roHit.id) p.activeRobotId = null;
       p.save(); p.emitConfig(); return;
     }
+    const camHit = hitCamera(p, view, mm);
+    if (camHit) {
+      if (camHit.locked) return;
+      f.cameras = (f.cameras ?? []).filter(x => x.id !== camHit.id);
+      if (p.activeCameraId === camHit.id) p.activeCameraId = null;
+      p.save(); p.emitConfig(); return;
+    }
+    if (zonesInteractive(p)) {
+      const pzHit = hitPresenceZone(p, view, mm);
+      if (pzHit) {
+        if (pzHit.locked) return;
+        f.presenceZones = (f.presenceZones ?? []).filter(x => x.id !== pzHit.id);
+        if (p.activePZoneId === pzHit.id) p.activePZoneId = null;
+        p.save(); p.emitConfig(); return;
+      }
+    }
     const sh = hitSensor(p, view, mm);
     if (sh) {
       if (sh.locked) return;
@@ -1502,6 +1616,12 @@ export function onCanvasDblClick(p: Planner, canvas: HTMLCanvasElement, view: Vi
     return;
   }
   if (p.editZone) { finishZoneEdit(p); return; }
+  if (p.tool === 'pzone' && p.drawingPresenceZone) {
+    if (p.drawingPresenceZone.points.length >= 3) p.finishPresenceZone();
+    else { p.drawingPresenceZone = null; p.emitConfig(); }
+    p.setTool('select');
+    return;
+  }
   if (p.tool === 'wall' && p.drawingWall && p.drawingWall.points.length >= 2) {
     p.drawingWall.id = newId('w');
     const fl = p.floor();

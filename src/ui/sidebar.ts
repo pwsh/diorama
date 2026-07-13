@@ -10,7 +10,7 @@ import type {
   Sensor, Zone, ObjectHalo, BgImage, MotionSensor, EnvSensor, EnvKind, Light, SwitchFixture, LightIconKind,
   Furniture, FurnitureKind, Door, Window as WindowType, WindowKind, Layers2D, Floor, Room,
   ObjectRecipe, RecipePrimitive, RecipeShape, ActivityKind, AvatarKind,
-  BleProxy, AlarmPanel, SafetySensor, RobotFixture, DioramaPerson, GeoLandmark,
+  BleProxy, AlarmPanel, SafetySensor, RobotFixture, CameraFixture, PresenceZone, DioramaPerson, GeoLandmark,
 } from '../types.js';
 import type { BermudaDevice } from '../planner.js';
 import { CONDITION_GLYPH, CONDITION_LABEL, tempText, weatherEffectEnabled } from '../weather.js';
@@ -34,6 +34,7 @@ import {
   BLE_PROXY_DEFAULTS, bleProxyHeight,
   alarmHeight, alarmStateColor, safetyColor,
   robotGlyph, robotColor, robotLedColor,
+  presenceZoneColor, cameraFov, cameraRange, cameraHeight, CAMERA_DEFAULTS,
   FURNITURE_KINDS, furnitureKind, resolveFurnitureDef, WINDOW_DEFAULTS,
   ENV_KINDS, ENV_DEFAULTS, ENV_SCALE_MIN, ENV_SCALE_MAX,
   envKindOf, envColor, envValueText, envHeight, envScale,
@@ -99,6 +100,8 @@ const TOOLS: { id: Tool; label: string }[] = [
   { id: 'alarm', label: '🚨 Alarm' },
   { id: 'safety', label: '⚠️ Smoke/CO' },
   { id: 'robot', label: '🤖 Robot' },
+  { id: 'camera', label: '📷 Camera' },
+  { id: 'pzone', label: '▱ Presence zone' },
   { id: 'furniture', label: 'Furn' },
   { id: 'light', label: 'Light' },
   { id: 'switch', label: 'Switch' },
@@ -275,6 +278,8 @@ export class Sidebar extends LitElement {
       motion: p.activeMotionId ?? null,
       env: p.activeEnvId ?? null,
       ble: p.activeBleId ?? null,
+      cameras: p.activeCameraId ?? null,
+      pzones: p.activePZoneId ?? null,
       people: p.activePersonId ?? null,
       furniture: p.activeFurnitureId ?? null,
     };
@@ -367,6 +372,8 @@ export class Sidebar extends LitElement {
         ${this._alarmPanelsSection()}
         ${this._safetySensorsSection()}
         ${this._robotsSection()}
+        ${this._camerasSection()}
+        ${this._presenceZonesSection()}
         ${this._peopleSection()}
         ${this._doorsSection()}
         ${this._windowsSection()}
@@ -479,6 +486,8 @@ export class Sidebar extends LitElement {
       case 'alarm': return 'Click to drop an alarm keypad. Bind to an alarm_control_panel entity.';
       case 'safety': return 'Click to drop a ceiling smoke/CO detector. Set kind + bind a binary_sensor (smoke / carbon_monoxide).';
       case 'robot': return 'Click to place a robot dock. Set kind (vacuum / mower) + bind a vacuum.* or lawn_mower.* entity; mowers can bind a GPS tracker.';
+      case 'camera': return 'Click to drop a camera. Drag the orange dot to aim it; bind a camera.* entity for the FOV tint + snapshot.';
+      case 'pzone': return 'Click to add polygon vertices; double-click (or Enter) to finish (≥3 pts). Bind a binary_sensor (FP2 zone / occupancy) — the zone glows when occupied. ESC cancels.';
       case 'furniture': return 'Click to drop a 600 × 600 mm piece.';
       case 'light': return 'Click to drop a light. Bind via the active panel.';
       case 'switch': return 'Click to drop a switch. Bind via the active panel.';
@@ -688,6 +697,15 @@ export class Sidebar extends LitElement {
           <button class="btn" style="font-size:10px;padding:2px 6px;margin-left:4px"
                   title="Reset to default"
                   @click=${() => upd(() => { m.color = MOTION_DEFAULTS.color; })}>↺</button>
+        </div>
+        <div class="row" title="Color of the spinning plumbob above this sensor's AI / demo avatar — per-sensor attribution. Default = the iconic Sims green.">
+          <label>Plumbob</label>
+          <input type="color" .value=${m.plumbobColor || '#2ee56a'}
+                 style="width:36px;height:24px;padding:0;border:1px solid var(--border);background:#111"
+                 @input=${(e: Event) => upd(() => { m.plumbobColor = (e.target as HTMLInputElement).value; })}>
+          <button class="btn" style="font-size:10px;padding:2px 6px;margin-left:4px"
+                  title="Reset to the default Sims green"
+                  @click=${() => upd(() => { m.plumbobColor = undefined; })}>✕</button>
         </div>
         <div class="row"><label>Intensity</label>
           <input type="range" min="0" max="2" step="0.05" .value=${String(motionIntensity(m))}
@@ -1370,6 +1388,224 @@ export class Sidebar extends LitElement {
         onPick: (id: string) => {
           if (which === 'lat') r.latEntity = id; else r.lonEntity = id;
           this.planner.save(); this.planner.emitConfig();
+        },
+      },
+    }));
+  }
+
+  // ── Cameras section (FOV frustum + snapshot) ──────────────────────────
+  private _camerasSection() {
+    const list = this.planner.floor().cameras ?? [];
+    if (list.length === 0) return nothing;
+    return this._section('cameras', 'Cameras', () =>
+      this._groupedList('cameras', list, c => this._cameraItem(c)));
+  }
+
+  private _cameraItem(c: CameraFixture) {
+    const p = this.planner;
+    const sel = p.activeCameraId === c.id;
+    const st = c.entity_id && p.hass ? p.hass.states[c.entity_id] : null;
+    const recording = st?.state === 'recording';
+    return html`
+      <div style="border-bottom:1px solid var(--border)">
+        <div class="sensor-item ${sel ? 'sel' : ''}" @click=${() => p.setActiveCamera(c.id)}>
+          <div class="dot" style="background:${recording ? '#ef5350' : '#4dd0e1'}"></div>
+          <div class="nm">📷 ${c.label?.trim() || 'Camera'}${this._batteryText(c.entity_id)}</div>
+          <div class="badge" style=${recording ? 'color:#ef5350;font-weight:700' : nothing}>${recording ? 'REC' : (c.entity_id ? (st?.state ?? '—') : 'unbound')}</div>
+        </div>
+        ${sel ? this._cameraEditor(c) : nothing}
+      </div>
+    `;
+  }
+
+  private _cameraEditor(c: CameraFixture) {
+    const p = this.planner;
+    const upd = (mut: () => void) => { mut(); p.save(); p.emitConfig(); };
+    const pic = c.entity_id && p.hass
+      ? (p.hass.states[c.entity_id]?.attributes as Record<string, unknown> | undefined)?.entity_picture
+      : null;
+    return html`
+      <div style="background:rgba(0,0,0,0.25);border-radius:4px;padding:6px;margin:4px 0">
+        <div class="row"><label>Label</label>
+          <input type="text" .value=${c.label ?? ''} placeholder="Camera"
+                 @input=${(e: Event) => upd(() => { c.label = (e.target as HTMLInputElement).value; })}>
+        </div>
+        ${this._lockRow(c)}
+        <div class="row"><label>X (mm)</label>
+          <input type="number" .value=${String(Math.round(c.x))}
+                 @input=${(e: Event) => upd(() => { c.x = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
+        </div>
+        <div class="row"><label>Y (mm)</label>
+          <input type="number" .value=${String(Math.round(c.y))}
+                 @input=${(e: Event) => upd(() => { c.y = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
+        </div>
+        <div class="row"><label>Facing (°)</label>
+          <input type="number" .value=${String(Math.round(c.rotation ?? 0))}
+                 @input=${(e: Event) => upd(() => {
+                   const v = parseFloat((e.target as HTMLInputElement).value) || 0;
+                   c.rotation = ((Math.round(v) % 360) + 360) % 360;
+                 })}>
+        </div>
+        <div class="row"><label>FOV (°)</label>
+          <input type="number" min="5" max="180" .value=${String(cameraFov(c))}
+                 @input=${(e: Event) => upd(() => { c.fov = parseFloat((e.target as HTMLInputElement).value) || CAMERA_DEFAULTS.fov; })}>
+        </div>
+        <div class="row"><label>Range (mm)</label>
+          <input type="number" min="200" .value=${String(cameraRange(c))}
+                 @input=${(e: Event) => upd(() => { c.range = parseFloat((e.target as HTMLInputElement).value) || CAMERA_DEFAULTS.range; })}>
+        </div>
+        <div class="row"><label>Height (mm)</label>
+          <input type="number" .value=${String(cameraHeight(c))}
+                 @input=${(e: Event) => upd(() => { c.height = parseFloat((e.target as HTMLInputElement).value) || CAMERA_DEFAULTS.height; })}>
+        </div>
+        <div class="row"><label>HA entity</label>
+          <span style="font-size:11px;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+            ${c.entity_id || '— unbound —'}
+          </span>
+        </div>
+        <div style="display:flex;gap:4px;margin-top:4px">
+          <button class="btn" style="flex:1;font-size:11px" @click=${() => this._pickCameraEntity(c)}>
+            ${c.entity_id ? 'Rebind' : 'Bind'}…
+          </button>
+          ${c.entity_id ? html`
+            <button class="btn" style="font-size:11px"
+                    @click=${() => upd(() => { c.entity_id = null; })}>Unbind</button>
+          ` : nothing}
+        </div>
+        ${typeof pic === 'string' && pic ? html`
+          <div style="margin-top:6px;position:relative">
+            <img src=${p.haBaseUrl + pic + (pic.includes('?') ? '&' : '?') + '_cb=' + this._camSnapCb}
+                 style="width:100%;border-radius:4px;display:block;background:#000"
+                 @error=${(e: Event) => { (e.target as HTMLImageElement).style.display = 'none'; }}>
+            <button class="btn" style="position:absolute;top:4px;right:4px;font-size:10px;padding:2px 6px"
+                    title="Refresh snapshot"
+                    @click=${() => { this._camSnapCb = Date.now(); this.requestUpdate(); }}>↻</button>
+          </div>
+        ` : nothing}
+        <button class="btn danger" style="width:100%;margin-top:6px" @click=${() => {
+          const f = p.floor();
+          f.cameras = (f.cameras ?? []).filter(x => x.id !== c.id);
+          p.activeCameraId = null;
+          p.save(); p.emitConfig();
+        }}>Delete camera</button>
+      </div>
+    `;
+  }
+  private _camSnapCb = 0;
+
+  private _pickCameraEntity(c: CameraFixture): void {
+    this.dispatchEvent(new CustomEvent('open-entity-picker', {
+      bubbles: true, composed: true,
+      detail: {
+        domain: 'camera',
+        onPick: (id: string) => {
+          c.entity_id = id;
+          this.planner.save();
+          this.planner.emitConfig();
+        },
+      },
+    }));
+  }
+
+  // ── Presence zones section (FP2-style occupancy polygons) ─────────────
+  private _presenceZonesSection() {
+    const p = this.planner;
+    const list = p.floor().presenceZones ?? [];
+    const drawing = !!p.drawingPresenceZone;
+    if (list.length === 0 && !drawing) return nothing;
+    return this._section('pzones', 'Presence zones', () => html`
+      ${drawing ? html`
+        <div style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text-dim);padding:4px 0">
+          <span style="flex:1">▱ Click to add vertices; double-click / Enter to finish (${p.drawingPresenceZone!.points.length} pts).</span>
+          <button class="btn" style="font-size:10px;padding:2px 6px"
+                  @click=${() => { p.drawingPresenceZone = null; p.emitConfig(); }}>Cancel</button>
+        </div>` : nothing}
+      ${list.map(z => this._pzoneItem(z))}
+      <button class="btn" style="width:100%;margin-top:6px" @click=${() => { p.setTool('pzone'); p.maybeCloseSidebarForPlacement(); }}>
+        + Add zone
+      </button>
+    `);
+  }
+
+  private _pzoneItem(z: PresenceZone) {
+    const p = this.planner;
+    const sel = p.activePZoneId === z.id;
+    const st = z.entity_id && p.hass ? p.hass.states[z.entity_id] : null;
+    const occupied = st?.state === 'on';
+    const col = presenceZoneColor(z);
+    return html`
+      <div style="border-bottom:1px solid var(--border)">
+        <div class="sensor-item ${sel ? 'sel' : ''}" @click=${() => p.setActivePZone(z.id)}>
+          <div class="dot" style="background:${occupied ? col : '#607d8b'}"></div>
+          <div class="nm">▱ ${z.name?.trim() || 'Zone'}</div>
+          <div class="badge" style=${occupied ? `color:${col};font-weight:700` : nothing}>${occupied ? 'occupied' : (z.entity_id ? 'clear' : 'unbound')}</div>
+        </div>
+        ${sel ? this._pzoneEditor(z) : nothing}
+      </div>
+    `;
+  }
+
+  private _pzoneEditor(z: PresenceZone) {
+    const p = this.planner;
+    const upd = (mut: () => void) => { mut(); p.save(); p.emitConfig(); };
+    return html`
+      <div style="background:rgba(0,0,0,0.25);border-radius:4px;padding:6px;margin:4px 0">
+        <div class="row"><label>Name</label>
+          <input type="text" .value=${z.name ?? ''} placeholder="Zone"
+                 @input=${(e: Event) => upd(() => { z.name = (e.target as HTMLInputElement).value; })}>
+        </div>
+        <div class="row"><label>Color</label>
+          <input type="color" .value=${presenceZoneColor(z)}
+                 style="width:36px;height:24px;padding:0;border:1px solid var(--border);background:#111"
+                 @input=${(e: Event) => upd(() => { z.color = (e.target as HTMLInputElement).value; })}>
+          <button class="btn" style="font-size:10px;padding:2px 6px;margin-left:4px"
+                  title="Reset to default" @click=${() => upd(() => { z.color = undefined; })}>↺</button>
+        </div>
+        <div class="row"><label>Hidden</label>
+          <button class="btn" style="font-size:11px;flex:1"
+                  @click=${() => upd(() => { z.hidden = !z.hidden; })}>${z.hidden ? '🙈 Hidden' : '👁 Shown'}</button>
+        </div>
+        ${this._lockRow(z)}
+        <div style="font-size:10px;color:var(--text-dim);margin:2px 0">${z.points.length} vertices · drag the orange handles to reshape (Select mode)</div>
+        <div class="row"><label>HA entity</label>
+          <span style="font-size:11px;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+            ${z.entity_id || '— unbound —'}
+          </span>
+        </div>
+        <div style="display:flex;gap:4px;margin-top:4px">
+          <button class="btn" style="flex:1;font-size:11px" @click=${() => this._pickPZoneEntity(z)}>
+            ${z.entity_id ? 'Rebind' : 'Bind'}…
+          </button>
+          ${z.entity_id ? html`
+            <button class="btn" style="font-size:11px"
+                    @click=${() => upd(() => { z.entity_id = null; })}>Unbind</button>
+          ` : nothing}
+          <button class="btn" style="font-size:11px"
+                  title="Re-draw the polygon on the plan (replaces the points)"
+                  @click=${() => { p.drawingPresenceZone = { points: [], id: z.id }; p.setTool('pzone'); p.maybeCloseSidebarForPlacement(); p.emitConfig(); }}>Redraw</button>
+        </div>
+        <div style="font-size:10px;color:var(--text-dim);margin-top:4px;line-height:1.3">
+          Bound: the zone glows when the occupancy binary_sensor is on (FP2 zone / Frigate / any presence).
+        </div>
+        <button class="btn danger" style="width:100%;margin-top:6px" @click=${() => {
+          const f = p.floor();
+          f.presenceZones = (f.presenceZones ?? []).filter(x => x.id !== z.id);
+          p.activePZoneId = null;
+          p.save(); p.emitConfig();
+        }}>Delete zone</button>
+      </div>
+    `;
+  }
+
+  private _pickPZoneEntity(z: PresenceZone): void {
+    this.dispatchEvent(new CustomEvent('open-entity-picker', {
+      bubbles: true, composed: true,
+      detail: {
+        domain: 'binary_sensor',
+        onPick: (id: string) => {
+          z.entity_id = id;
+          this.planner.save();
+          this.planner.emitConfig();
         },
       },
     }));
@@ -2884,6 +3120,15 @@ export class Sidebar extends LitElement {
                   title="Reset to palette default — tints this sensor's T1/T2/T3 dots"
                   @click=${() => { s.color = undefined; p.save(); p.emitConfig(); }}>↺</button>
         </div>
+        <div class="row" title="Color of the spinning plumbob above avatars seen by this sensor — so you can tell which sensor detected them. Default = the iconic Sims green.">
+          <label>Plumbob</label>
+          <input type="color" .value=${s.plumbobColor || '#2ee56a'}
+                 style="width:36px;height:24px;padding:0;border:1px solid var(--border);background:#111"
+                 @input=${(e: Event) => { s.plumbobColor = (e.target as HTMLInputElement).value; p.save(); p.emitConfig(); }}>
+          <button class="btn" style="font-size:10px;padding:2px 6px"
+                  title="Reset to the default Sims green"
+                  @click=${() => { s.plumbobColor = undefined; p.save(); p.emitConfig(); }}>✕</button>
+        </div>
         ${this._avatarGrid(s, (mut: () => void) => { mut(); p.save(); p.emitConfig(); })}
         <div class="row"><label>HA Device</label>
           <!-- Use .value (property) not ?selected (attribute) so a freshly-
@@ -3537,6 +3782,14 @@ export class Sidebar extends LitElement {
                    const v = parseFloat((e.target as HTMLInputElement).value);
                    g.accuracyGateM = isFinite(v) ? Math.max(1, v) : 30;
                  })}>
+        </div>
+        <div class="row" style="margin-top:8px"
+             title="Show geo_location.* event pins (earthquakes, fires…) projected onto the plan through the geo transform. Requires ≥1 calibrated landmark.">
+          <label>Nearby events</label>
+          <button class="btn" style="font-size:11px;flex:1"
+                  @click=${() => p.setGeo(g => { g.showEvents = g.showEvents === false; })}>
+            ${p.geoShowEvents() ? '🌐 Showing (quakes, fires…)' : '— Hidden'}
+          </button>
         </div>
     `);
   }

@@ -5,7 +5,7 @@ import { customElement } from './define.js';
 // all of three.js, ~600 kB) is loaded lazily in firstUpdated so the 2D-only
 // startup path never downloads it.
 import type { ThreeDRenderer, ZoneWorld, HaloWorld, TargetWorld, ActivityContext,
-  GpsPinWorld, GpsLandmarkWorld, WeatherFxState } from '../three-renderer.js';
+  GpsPinWorld, GpsLandmarkWorld, GeoEventWorld, WeatherFxState } from '../three-renderer.js';
 import { localToWorld, transformVerts, pointInPolygon, sensorColor, hexToInt, motionColor, lightIconKind, furnitureKind, resolveFurnitureDef, furnitureCat, alarmStateColor, doorSpanCenter } from '../geometry.js';
 import { compass8 } from '../geo.js';
 import { resolveScenePreset, resolveTimeBucket } from '../time-of-day.js';
@@ -480,6 +480,8 @@ export class ThreeView extends LitElement {
   private _keyAlarm = '';
   private _keySafety = '';
   private _keyRobots = '';
+  private _keyCameras = '';
+  private _keyPzones = '';
   private _keyLights = '';
   private _keyZones = '';
   private _keyHalos = '';
@@ -504,6 +506,7 @@ export class ThreeView extends LitElement {
         r.clearTransientGroups();
         this._keyFloor = this._keyDoors = this._keySensors = '';
         this._keyMotion = this._keyEnv = this._keyBle = this._keyAlarm = this._keySafety = '';
+        this._keyCameras = this._keyPzones = '';
         this._keyLights = this._keyZones = this._keyHalos = '';
         this._keyGhost = this._keyGps = this._keyWeather = '';
         this._trigPrevOn.clear();
@@ -699,6 +702,26 @@ export class ThreeView extends LitElement {
       // controller state (the single source of truth shared with 2D).
       r.updateRobotRigs(robotList, p.robotStates);
 
+      // Camera fixtures (#10): structural + entity state (recording tint). Rides
+      // the sensors layer. Rebuild on placement / rotation / state change.
+      const cameraList = f.cameras ?? [];
+      const keyCameras = `${p.configRev}|` + cameraList.map(c =>
+        `${c.id}:${Math.round(c.x)}:${Math.round(c.y)}:${Math.round(c.rotation ?? 0)}:${Math.round(c.fov ?? 0)}:${Math.round(c.range ?? 0)}:${c.hidden ? 'h' : ''}:${stOf(c.entity_id)}`).join(',');
+      if (keyCameras !== this._keyCameras) {
+        this._keyCameras = keyCameras;
+        r.updateCameras(cameraList, id => states[id] || null);
+      }
+
+      // Presence zones (#5): structural + bound occupancy state. Rides the zones
+      // layer. Rebuild on shape edit / bind / occupancy flip.
+      const pzoneList = f.presenceZones ?? [];
+      const keyPzones = `${p.configRev}|` + pzoneList.map(z =>
+        `${z.id}:${z.hidden ? 'h' : ''}:${stOf(z.entity_id)}:${z.points.map(v => `${v.x | 0},${v.y | 0}`).join(';')}`).join('|');
+      if (keyPzones !== this._keyPzones) {
+        this._keyPzones = keyPzones;
+        r.updatePresenceZones(pzoneList, id => states[id] || null);
+      }
+
       // GPS device pins + 3D landmark pins (both ride the geo layer). Coarse
       // dirty key: positions rounded to 500 mm + zone + stale, so the sprites
       // rebuild on real movement but not every frame. When the layer is off the
@@ -706,9 +729,11 @@ export class ThreeView extends LitElement {
       const geoOn = layers.geo !== false;
       const gpsPins = geoOn ? p.gpsPins : [];
       const gpsLandmarks = geoOn ? p.geoLandmarks().filter(l => !l.hidden) : [];
+      const geoEvents = geoOn ? p.geoEventPins : [];
       const keyGps = `${p.configRev}|${geoOn}|` +
         gpsPins.map(pn => `${pn.personId}:${Math.round(pn.clampedX / 500)}:${Math.round(pn.clampedY / 500)}:${pn.zone}:${pn.stale ? 1 : 0}`).join(',') + '|' +
-        gpsLandmarks.map(l => `${l.id}:${Math.round(l.x / 500)}:${Math.round(l.y / 500)}`).join(',');
+        gpsLandmarks.map(l => `${l.id}:${Math.round(l.x / 500)}:${Math.round(l.y / 500)}`).join(',') + '|' +
+        geoEvents.map(ev => `${ev.key}:${Math.round(ev.clampedX / 500)}:${Math.round(ev.clampedY / 500)}`).join(',');
       if (keyGps !== this._keyGps) {
         this._keyGps = keyGps;
         const pinsW: GpsPinWorld[] = gpsPins.map(pn => ({
@@ -718,7 +743,12 @@ export class ThreeView extends LitElement {
             : `${pn.isPet ? '🐾' : '📍'} ${pn.name}`,
         }));
         const lmW: GpsLandmarkWorld[] = gpsLandmarks.map(l => ({ x: l.x, y: l.y, name: l.name || 'Landmark' }));
-        r.updateGpsPins(pinsW, lmW);
+        const evW: GeoEventWorld[] = geoEvents.map(ev => ({
+          x: ev.clampedX, y: ev.clampedY,
+          color: ev.category === 'quake' ? '#ffb300' : ev.category === 'fire' ? '#ef5350' : '#b388ff',
+          label: `${ev.category === 'fire' ? '🔥' : '⚠️'} ${ev.name} · ${ev.label}`,
+        }));
+        r.updateGpsPins(pinsW, lmW, evW);
       }
 
       // Outdoor weather effects (W2). The renderer group is rebuilt only when the
@@ -777,6 +807,8 @@ export class ThreeView extends LitElement {
         if (!s.deviceSlug) continue;
         const z = p.zonesBy[s.id]; const o = p.objectsBy[s.id]; const lerp = p.lerpBy[s.id];
         const tColor = hexToInt(sensorColor(s, si));
+        // Per-sensor plumbob color (attribution). Undefined = the default green.
+        const sPlumbob = s.plumbobColor ? hexToInt(s.plumbobColor) : undefined;
         // Local occupancy from lerped target positions — see canvas-render
         // for rationale. Same logic mirrored here so 3D and 2D agree.
         const inPoly = (verts: { x: number; y: number }[]): boolean => {
@@ -839,6 +871,7 @@ export class ThreeView extends LitElement {
             // back-compat (incl. stale-chunk pairings that only read `avatar`).
             targets.push({ key, x: wp.x, y: wp.y, color: tColor, edge,
                            avatar: s.avatarKind, avatars: s.avatarKinds,
+                           plumbobColor: sPlumbob,
                            person: fusion ? { name: fusion.name, color: fusion.color,
                              avatarKind: fusion.avatarKind, isPet: fusion.isPet,
                              identified: fusion.personId != null } : undefined });
@@ -862,7 +895,8 @@ export class ThreeView extends LitElement {
           if (states[m.entity_id]?.state !== 'on') continue;
         }
         targets.push({ key: 'ai_' + m.id, x: m.x, y: m.y, color: hexToInt(motionColor(m)), ai: true,
-                       avatar: m.avatarKind ?? (demo ? 'random' : undefined), avatars: m.avatarKinds });
+                       avatar: m.avatarKind ?? (demo ? 'random' : undefined), avatars: m.avatarKinds,
+                       plumbobColor: m.plumbobColor ? hexToInt(m.plumbobColor) : undefined });
       }
       // BLE people on the CURRENT floor: synthetic goal-walk targets. x/y is the
       // (lerped) solved position — the renderer's goal controller walks the rig

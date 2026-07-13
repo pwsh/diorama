@@ -1,9 +1,9 @@
 import { switchSize, distMM, pointToSeg, transformVerts, centroid, localToWorld,
          bgLocalToWorld, bgWorldToLocal, furnitureWorldToLocal,
          furnitureCorners, furnitureLocalToWorld, doorEndpoint,
-         doorOpenDeltaDeg, windowEndpoints } from './geometry.js';
+         doorOpenDeltaDeg, windowEndpoints, pointInPolygon } from './geometry.js';
 import type { Planner } from './planner.js';
-import type { Vec2, Wall, Sensor, Furniture, BgImage, MotionSensor, EnvSensor, BleProxy, AlarmPanel, SafetySensor, RobotFixture, Door, Window as WindowType, Floor } from './types.js';
+import type { Vec2, Wall, Sensor, Furniture, BgImage, MotionSensor, EnvSensor, BleProxy, AlarmPanel, SafetySensor, RobotFixture, CameraFixture, PresenceZone, Door, Window as WindowType, Floor } from './types.js';
 import type { FloorEdge } from './geometry.js';
 import { envChipHalfPx, type View } from './canvas-render.js';
 
@@ -292,6 +292,55 @@ export function hitRobot(p: Planner, view: View, mm: Vec2): RobotFixture | null 
     if (distMM(r, mm) < h) return r;
     const rs = p.robotStates[r.id];
     if (rs && Math.hypot(rs.x - mm.x, rs.y - mm.y) < h) return r;
+  }
+  return null;
+}
+
+export function hitCamera(p: Planner, view: View, mm: Vec2): CameraFixture | null {
+  const f = p.floor();
+  const h = hitPx(view) * 1.4;
+  const list = f.cameras ?? [];
+  for (let i = list.length - 1; i >= 0; i--) {
+    if (list[i].hidden) continue;
+    if (distMM(list[i], mm) < h) return list[i];
+  }
+  return null;
+}
+
+// Orange rotate handle for the active camera (mirrors the motion-sensor handle).
+export function hitCameraRotateHandle(p: Planner, view: View, mm: Vec2): CameraFixture | null {
+  const id = p.activeCameraId; if (!id) return null;
+  const c = (p.floor().cameras ?? []).find(x => x.id === id);
+  if (!c || c.locked) return null;
+  const dpr = window.devicePixelRatio || 1;
+  const rPx = 28 * dpr;
+  const t = (c.rotation || 0) * Math.PI / 180;
+  const hx = c.x + Math.sin(t) * rPx / view.scale;
+  const hy = c.y + Math.cos(t) * rPx / view.scale;
+  return distMM({ x: hx, y: hy }, mm) < hitPx(view) ? c : null;
+}
+
+// A presence zone is hit when the point is inside its polygon (respect hidden).
+export function hitPresenceZone(p: Planner, view: View, mm: Vec2): PresenceZone | null {
+  void view;
+  const list = p.floor().presenceZones ?? [];
+  for (let i = list.length - 1; i >= 0; i--) {
+    const z = list[i];
+    if (z.hidden) continue;
+    if (z.points.length >= 3 && pointInPolygon(mm.x, mm.y, z.points)) return z;
+  }
+  return null;
+}
+
+// A draggable vertex handle of the ACTIVE presence zone (mirrors wall-vertex
+// editing — vertices are world-mm like wall points). Returns the zone + index.
+export function hitPresenceZoneVertex(p: Planner, view: View, mm: Vec2): { zone: PresenceZone; idx: number } | null {
+  const id = p.activePZoneId; if (!id) return null;
+  const z = (p.floor().presenceZones ?? []).find(x => x.id === id);
+  if (!z || z.locked || z.hidden) return null;
+  const h = hitPx(view);
+  for (let i = 0; i < z.points.length; i++) {
+    if (distMM(z.points[i], mm) < h) return { zone: z, idx: i };
   }
   return null;
 }

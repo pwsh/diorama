@@ -266,6 +266,8 @@ export interface Sensor {
   deviceSlug: string | null;
   locked?: boolean;   // canvas move/rotate/delete disabled
   color?: string;  // hex; tints all targets seen by this sensor in 2D + 3D
+  plumbobColor?: string;  // hex; color of the spinning Sims plumbob above targets seen by this
+                          // sensor (per-sensor attribution). Absent = the iconic Sims green (0x2ee56a).
   avatarKind?: AvatarKind | 'random';  // LEGACY single-pick (kept for back-compat reads; new UI writes avatarKinds)
   avatarKinds?: AvatarKind[];          // pool of rig variants; each target stably hash-picks one. Empty/absent → adult
   // Last-known-good zone vertices. Persisted so a reload paints zones from
@@ -334,6 +336,7 @@ export interface MotionSensor {
                              //     required) — a display/demo presence. Persisted item-level.
   avatarKind?: AvatarKind | 'random';  // LEGACY single-pick (kept for back-compat reads; new UI writes avatarKinds)
   avatarKinds?: AvatarKind[];          // pool of rig variants for the projected AI avatar
+  plumbobColor?: string;     // hex; color of the plumbob above this sensor's AI/demo avatar. Absent = Sims green.
   locked?: boolean;          // canvas move/rotate/delete disabled
 }
 
@@ -438,6 +441,40 @@ export interface Room {
                                     // 'on' → the room's wall-loop fills with a warm glow (#1).
 }
 
+// FP2-style presence zone (roadmap #5). A user-drawn polygon (world-mm) bound to
+// an occupancy binary_sensor (Aqara FP2 per-zone sensor, Frigate zone, any
+// presence/motion/occupancy binary_sensor). When bound + ON the polygon fills
+// with a glow — per-region presence truth without positional radar. Zone SHAPES
+// aren't exposed by HA (FP2 hides them), so the user draws the polygon here and
+// binds it. Rides the `zones` layer (2D + 3D). Per-floor (Floor.presenceZones).
+export interface PresenceZone {
+  id: string;
+  name?: string;
+  points: Vec2[];              // world-mm polygon (≥3 verts; UI caps at 12)
+  entity_id: string | null;    // binary_sensor (occupancy/motion/presence); 'on' = occupied
+  color?: string;              // hex; default '#26c6da'
+  hidden?: boolean;            // per-zone hide (plus the whole zones layer toggle)
+  locked?: boolean;            // canvas vertex-drag / delete disabled
+}
+
+// Camera fixture (roadmap #10). Wall/eave-mounted camera with a translucent FOV
+// frustum wedge (2D + 3D) + a periodically refreshed snapshot thumbnail in the
+// sidebar. Bound to a camera.* entity. Free placement; rotate via the standard
+// rotate handle (rotation convention 0 = +Y world, like motion sensors). NO
+// in-scene video/stream. Rides the `sensors` layer. Per-floor (Floor.cameras).
+export interface CameraFixture {
+  id: string;
+  x: number; y: number;
+  rotation?: number;    // deg, facing direction; 0 = +Y world (CW on screen), like motion sensors
+  fov?: number;         // deg horizontal field of view; default 90
+  range?: number;       // mm, wedge reach; default 6000
+  height?: number;      // mm above floor for the 3D body; default 2200 (wall/eave mount)
+  entity_id: string | null;   // camera.*
+  label?: string;
+  hidden?: boolean;
+  locked?: boolean;     // canvas move/rotate/delete disabled
+}
+
 export interface Floor {
   id: string;
   name: string;
@@ -459,6 +496,8 @@ export interface Floor {
   alarmPanels?: AlarmPanel[];  // alarm keypad fixtures; repairFloor backfills []
   safetySensors?: SafetySensor[];  // smoke / CO detectors; repairFloor backfills []
   robots?: RobotFixture[];  // robot vacuum / mower fixtures; repairFloor backfills []
+  presenceZones?: PresenceZone[];  // FP2-style occupancy zones; repairFloor backfills []
+  cameras?: CameraFixture[];  // camera fixtures (FOV frustum + snapshot); repairFloor backfills []
   boundsLocked?: boolean;   // lock canvas-layout/floor-size editing (hides the edge handles)
   disabled?: boolean;       // hidden from the kiosk/view floor picker + glass-house stack + BLE
                             // floor solve; still editable in the sidebar — lets multiple test
@@ -514,6 +553,8 @@ export interface GeoConfig {
   boundaryM?: number;          // GPS render boundary beyond floor bbox (m); default 30 (G2)
   accuracyGateM?: number;      // calibration sample filter — drop samples worse than this
                                // gps_accuracy (m); default 30
+  showEvents?: boolean;        // show nearby geo_location event pins (earthquakes, fires…);
+                               // absent = ON. Runtime-derived pins (Planner.geoEventPins).
 }
 
 export interface Store {

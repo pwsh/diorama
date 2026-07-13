@@ -6,6 +6,7 @@ import {
   ALARM_DEFAULTS, alarmStateColor,
   safetyColor, safetyGlyph, safetyIsFloor, SAFETY_DEFAULTS,
   robotGlyph, robotColor, ROBOT_DEFAULTS,
+  presenceZoneColor, cameraFov, cameraRange, cameraStateColor,
   powerGlowScale,
   hexToRgba, lighten, furnitureKind, furnitureCorners, resolveFurnitureDef,
   doorEndpoint, doorOpenDeltaDeg, doorOpenFraction, doorSpanCenter, windowEndpoints, wallCutsForSegment, wallKind,
@@ -227,18 +228,21 @@ export function drawAll(ctx: CanvasRenderingContext2D, p: Planner, view: View,
   if (on(L.sensors)) drawAlarmPanels(ctx, p, view);
   if (on(L.sensors)) drawSafetySensors(ctx, p, view);
   if (on(L.sensors)) drawRobots(ctx, p, view);
+  if (on(L.sensors)) drawCameras(ctx, p, view);
   // LD2450 inclusion / filter polygons + object halos draw per the zones
   // layer. The Motion toggle only hides motion-sensor cones (drawMotionSensors
   // gates its own cone block).
   if (on(L.zones)) {
+    drawPresenceZones(ctx, p, view);
     drawAllZones(ctx, p, view);
     drawActiveOverlay(ctx, p, view);
   }
   drawBgEditOverlay(ctx, p, view, bgImg);
   if (on(L.targets)) drawTargets(ctx, p, view);
   if (on(L.targets)) drawBlePeople(ctx, p, view);
-  // Geo landmark pins + GPS device pins (both ride the `geo` layer).
-  if (on(L.geo)) { drawGeoLandmarks(ctx, p, view); drawGpsPins(ctx, p, view); }
+  // Geo landmark pins + GPS device pins + geo_location event pins (all ride the
+  // `geo` layer).
+  if (on(L.geo)) { drawGeoLandmarks(ctx, p, view); drawGpsPins(ctx, p, view); drawGeoEventPins(ctx, p, view); }
   drawDoorbellPulses(ctx, p, view);
   drawAlignGuides(ctx, p, view);
   drawFloorEditHandles(ctx, p, view);
@@ -460,6 +464,50 @@ function drawGeoLandmarks(ctx: CanvasRenderingContext2D, p: Planner, view: View)
     ctx.fillStyle = calibrated ? 'rgba(129,212,250,0.85)' : 'rgba(176,190,197,0.75)';
     ctx.font = `${9 * dpr}px sans-serif`;
     ctx.fillText(cap, c.x, c.y + 25 * dpr);
+  }
+  ctx.restore();
+}
+
+// geo_location event pins (roadmap #9): a warning-diamond marker in a per-source
+// color (quake amber, fire red, else violet) + name + distance/magnitude caption.
+// Dimmed beyond 50 km. Drawn with landmarks/GPS under the `geo` layer.
+function drawGeoEventPins(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
+  const dpr = window.devicePixelRatio || 1;
+  const pins = p.geoEventPins;
+  if (!pins.length) return;
+  ctx.save();
+  ctx.textAlign = 'center';
+  for (const pin of pins) {
+    const at = mmToPx(view, pin.clampedX, pin.clampedY);
+    const col = pin.category === 'quake' ? '#ffb300' : pin.category === 'fire' ? '#ef5350' : '#b388ff';
+    const far = pin.distanceKm > 50;
+    ctx.globalAlpha = far ? 0.45 : 1;
+    // Warning diamond marker.
+    const R = 9 * dpr;
+    ctx.beginPath();
+    ctx.moveTo(at.x, at.y - R);
+    ctx.lineTo(at.x + R, at.y);
+    ctx.lineTo(at.x, at.y + R);
+    ctx.lineTo(at.x - R, at.y);
+    ctx.closePath();
+    ctx.fillStyle = col; ctx.fill();
+    ctx.strokeStyle = '#1a1200'; ctx.lineWidth = 1.5 * dpr; ctx.stroke();
+    // ! glyph.
+    ctx.fillStyle = '#1a1200'; ctx.font = `bold ${10 * dpr}px sans-serif`;
+    ctx.textBaseline = 'middle';
+    ctx.fillText(pin.magnitude != null ? '!' : (pin.category === 'fire' ? '🔥' : '!'), at.x, at.y);
+    // Caption: name + distance/magnitude label.
+    const lines = [pin.name, pin.label];
+    ctx.font = `${10 * dpr}px sans-serif`;
+    ctx.textBaseline = 'top';
+    let tw = 0;
+    for (const ln of lines) tw = Math.max(tw, ctx.measureText(ln).width);
+    tw += 8 * dpr;
+    const boxY = at.y + R + 2 * dpr;
+    ctx.fillStyle = 'rgba(0,0,0,0.7)';
+    ctx.fillRect(at.x - tw / 2, boxY, tw, lines.length * 13 * dpr + 2 * dpr);
+    ctx.fillStyle = '#fff'; ctx.fillText(lines[0], at.x, boxY + 2 * dpr);
+    ctx.fillStyle = hexToRgba(col, 0.95); ctx.fillText(lines[1], at.x, boxY + 15 * dpr);
   }
   ctx.restore();
 }
@@ -927,6 +975,142 @@ function drawRobots(ctx: CanvasRenderingContext2D, p: Planner, view: View): void
     ctx.fillText(txt, bc.x, ty + 1 * dpr);
     // Battery badge at the dock (the fixture's fixed marker).
     drawBatteryBadge(ctx, p, r.entity_id, dc.x + dw / 2, dc.y - dd / 2);
+  }
+}
+
+// Camera fixtures (roadmap #10): a small camera glyph + a translucent FOV wedge
+// (fov / range / rotation — the mmWave coverage-wedge idiom). The wedge tint
+// shifts red when the camera entity state is 'recording'. Rides the sensors
+// layer (gated at the call site). Rotation convention: 0 = +Y world.
+function drawCameras(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
+  const dpr = window.devicePixelRatio || 1;
+  const f = p.floor();
+  const states = p.hass?.states;
+  for (const cam of f.cameras ?? []) {
+    if (cam.hidden) continue;
+    const c = mmToPx(view, cam.x, cam.y);
+    const st = cam.entity_id && states ? states[cam.entity_id] : null;
+    const recording = st?.state === 'recording';
+    const col = cameraStateColor(st?.state);
+    const r = cameraRange(cam) * view.scale;
+    const base = -Math.PI / 2 + ((cam.rotation || 0) * Math.PI / 180);
+    const half = (cameraFov(cam) * Math.PI / 180) / 2;
+    const selected = p.activeCameraId === cam.id;
+    // FOV wedge.
+    ctx.beginPath();
+    ctx.moveTo(c.x, c.y);
+    ctx.arc(c.x, c.y, r, base - half, base + half);
+    ctx.closePath();
+    ctx.fillStyle = hexToRgba(col, recording ? 0.16 : 0.10);
+    ctx.strokeStyle = hexToRgba(col, 0.55);
+    ctx.lineWidth = 1;
+    ctx.fill();
+    if (!recording) ctx.setLineDash([4, 4]);
+    ctx.stroke(); ctx.setLineDash([]);
+    // Body dot.
+    ctx.fillStyle = recording ? '#ef5350' : selected ? lighten(col, 0.2) : col;
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.arc(c.x, c.y, 7 * dpr, 0, 2 * Math.PI);
+    ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#fff'; ctx.font = `${9 * dpr}px sans-serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('📷', c.x, c.y);
+    // Label below.
+    const txt = cam.label?.trim() || 'Camera';
+    ctx.font = `${10 * dpr}px sans-serif`;
+    ctx.textBaseline = 'top';
+    const tw = ctx.measureText(txt).width + 8 * dpr;
+    ctx.fillStyle = 'rgba(0,0,0,0.7)';
+    ctx.fillRect(c.x - tw / 2, c.y + 11 * dpr, tw, 13 * dpr);
+    ctx.fillStyle = recording ? '#ef5350' : '#fff';
+    ctx.fillText(txt, c.x, c.y + 13 * dpr);
+    drawBatteryBadge(ctx, p, cam.entity_id, c.x + 8 * dpr, c.y - 8 * dpr);
+    // Rotate handle when active + unlocked.
+    if (selected && !cam.locked) {
+      const rhx = c.x + Math.cos(base) * 28 * dpr;
+      const rhy = c.y + Math.sin(base) * 28 * dpr;
+      ctx.fillStyle = '#ffb74d'; ctx.strokeStyle = '#fff'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.arc(rhx, rhy, 5 * dpr, 0, 2 * Math.PI);
+      ctx.fill(); ctx.stroke();
+    }
+  }
+}
+
+// FP2-style presence zones (roadmap #5): world-mm polygons bound to occupancy
+// binary_sensors. Outline in the zone color (dashed when unbound); when bound +
+// ON, a filled glow (inclusion-zone glow idiom). Draggable vertex handles show
+// on the active zone. In-progress draw preview mirrors the wall-draw latch.
+// Gated on the `zones` layer at the call site.
+function drawPresenceZones(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
+  const dpr = window.devicePixelRatio || 1;
+  const f = p.floor();
+  const states = p.hass?.states;
+  for (const z of f.presenceZones ?? []) {
+    if (z.hidden || z.points.length < 3) continue;
+    const col = presenceZoneColor(z);
+    const st = z.entity_id && states ? states[z.entity_id] : null;
+    const occupied = st?.state === 'on';
+    const bound = !!z.entity_id;
+    const active = p.activePZoneId === z.id;
+    const pts = z.points.map(v => mmToPx(view, v.x, v.y));
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+    ctx.closePath();
+    ctx.fillStyle = occupied ? hexToRgba(col, 0.42) : hexToRgba(col, 0.10);
+    ctx.fill();
+    if (occupied) {
+      ctx.save();
+      ctx.shadowColor = col; ctx.shadowBlur = 12;
+      ctx.strokeStyle = col; ctx.lineWidth = 3; ctx.stroke();
+      ctx.restore();
+    } else {
+      ctx.strokeStyle = hexToRgba(col, 0.8); ctx.lineWidth = active ? 2.5 : 1.5;
+      if (!bound) ctx.setLineDash([6, 4]);
+      ctx.stroke(); ctx.setLineDash([]);
+    }
+    // Label + occupancy badge at the centroid.
+    const ctr = centroid(z.points);
+    const cp = mmToPx(view, ctr.x, ctr.y);
+    const label = z.name?.trim() || 'Zone';
+    const badge = occupied ? ' · occupied' : bound ? ' · clear' : ' · unbound';
+    ctx.fillStyle = col; ctx.font = `${11 * dpr}px sans-serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(label + badge, cp.x, cp.y);
+    // Vertex handles on the active (unlocked) zone.
+    if (active && !z.locked) {
+      for (const pt of pts) {
+        ctx.beginPath(); ctx.arc(pt.x, pt.y, 5 * dpr, 0, 2 * Math.PI);
+        ctx.fillStyle = '#ffb74d'; ctx.strokeStyle = '#fff'; ctx.lineWidth = 1;
+        ctx.fill(); ctx.stroke();
+      }
+    }
+  }
+  // In-progress draw preview (drawingPresenceZone) — mirrors the wall-draw latch.
+  const dz = p.drawingPresenceZone;
+  if (dz?.points.length) {
+    const col = '#26c6da';
+    ctx.save();
+    ctx.strokeStyle = col; ctx.lineWidth = 2; ctx.setLineDash([5, 4]);
+    ctx.beginPath();
+    const a = mmToPx(view, dz.points[0].x, dz.points[0].y);
+    ctx.moveTo(a.x, a.y);
+    for (let i = 1; i < dz.points.length; i++) {
+      const pt = mmToPx(view, dz.points[i].x, dz.points[i].y);
+      ctx.lineTo(pt.x, pt.y);
+    }
+    if (p.cursor) {
+      const c2 = mmToPx(view, p.cursor.x, p.cursor.y);
+      ctx.lineTo(c2.x, c2.y);
+    }
+    ctx.stroke();
+    ctx.setLineDash([]);
+    for (const v of dz.points) {
+      const pt = mmToPx(view, v.x, v.y);
+      ctx.beginPath(); ctx.arc(pt.x, pt.y, 4 * dpr, 0, 2 * Math.PI);
+      ctx.fillStyle = col; ctx.fill();
+    }
+    ctx.restore();
   }
 }
 

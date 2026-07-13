@@ -1,0 +1,133 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>ROADMAP-GEOM …</title>
+  <style>
+    body { margin:0; background:#0d1116; color:#cfd8dc; font:13px/1.4 sans-serif; padding:14px; }
+    h1 { font-size:15px; margin:0 0 10px; }
+    .grid { display:flex; flex-wrap:wrap; gap:10px; }
+    .card { background:#141b22; border:1px solid #26323d; border-radius:6px; padding:8px 10px; width:360px; }
+    .row { display:flex; justify-content:space-between; font-size:11px; gap:8px; }
+    .pass { color:#69f0ae; } .fail { color:#ff5252; }
+    #summary { font-size:14px; font-weight:bold; margin:10px 0; padding:8px 10px; border-radius:5px; }
+    .okbg { background:#12331f; color:#69f0ae; } .badbg { background:#3a1414; color:#ff8a80; }
+    code { color:#ffd54f; }
+  </style>
+</head>
+<body>
+  <h1>Presence zones (point-in-polygon glow) + camera FOV wedge geometry + defaults</h1>
+  <div id="summary">Running…</div>
+  <div class="grid" id="grid"></div>
+
+  <!-- geometry.ts transpiled next to this html (like wallsnap/rooms tests):
+         npx esbuild src/geometry.ts --bundle --format=esm --outfile=<harness>/geometry.mod.js -->
+  <script type="module">
+    import {
+      pointInPolygon, presenceZoneColor, PRESENCE_ZONE_DEFAULTS,
+      cameraFov, cameraRange, cameraHeight, cameraStateColor, CAMERA_DEFAULTS,
+      hexToInt,
+    } from './geometry.mod.js';
+
+    const tests = [];
+    const ok = (name, cond, detail) => tests.push({ name, ok: !!cond, detail });
+    const near = (a, b, e = 0.5) => Math.abs(a - b) <= e;
+
+    // ── Presence-zone polygon hit (drives 2D glow + occupancy) ───────────────
+    // A square zone 1000..3000 mm.
+    const zone = [{x:1000,y:1000},{x:3000,y:1000},{x:3000,y:3000},{x:1000,y:3000}];
+    ok('pzone: center inside', pointInPolygon(2000, 2000, zone) === true);
+    ok('pzone: point outside (left)', pointInPolygon(500, 2000, zone) === false);
+    ok('pzone: point outside (above)', pointInPolygon(2000, 3500, zone) === false);
+    ok('pzone: near corner inside', pointInPolygon(1050, 1050, zone) === true);
+
+    // Occupancy glow rule mirrors the renderer/2D: bound + state 'on' → occupied.
+    const occ = (z, states) => {
+      if (z.hidden || z.points.length < 3) return { drawn: false, occupied: false };
+      const st = z.entity_id ? states[z.entity_id] : null;
+      return { drawn: true, occupied: st?.state === 'on' };
+    };
+    const boundOn = occ({ id:'z1', points: zone, entity_id: 'binary_sensor.fp2_zone' },
+                        { 'binary_sensor.fp2_zone': { state: 'on' } });
+    ok('pzone: bound + ON → glow', boundOn.drawn && boundOn.occupied, JSON.stringify(boundOn));
+    const boundOff = occ({ id:'z1', points: zone, entity_id: 'binary_sensor.fp2_zone' },
+                         { 'binary_sensor.fp2_zone': { state: 'off' } });
+    ok('pzone: bound + OFF → no glow', boundOff.drawn && !boundOff.occupied, JSON.stringify(boundOff));
+    const hidden = occ({ id:'z1', points: zone, entity_id: null, hidden: true }, {});
+    ok('pzone: hidden → not drawn', hidden.drawn === false, JSON.stringify(hidden));
+
+    // Default color.
+    ok('pzone default color = #26c6da', presenceZoneColor({}) === '#26c6da', presenceZoneColor({}));
+    ok('pzone override color honored', presenceZoneColor({ color:'#ff0000' }) === '#ff0000');
+    ok('PRESENCE_ZONE_DEFAULTS.maxVerts = 12', PRESENCE_ZONE_DEFAULTS.maxVerts === 12);
+
+    // ── Camera fixture defaults / clamps ─────────────────────────────────────
+    ok('camera default fov = 90', cameraFov({}) === 90, cameraFov({}));
+    ok('camera default range = 6000', cameraRange({}) === 6000, cameraRange({}));
+    ok('camera default height = 2200', cameraHeight({}) === 2200, cameraHeight({}));
+    ok('camera fov clamp low (2 → 5)', cameraFov({ fov: 2 }) === 5, cameraFov({ fov: 2 }));
+    ok('camera fov clamp high (300 → 180)', cameraFov({ fov: 300 }) === 180, cameraFov({ fov: 300 }));
+    ok('camera range clamp low (10 → 200)', cameraRange({ range: 10 }) === 200, cameraRange({ range: 10 }));
+    ok('camera state color recording = red', cameraStateColor('recording') === '#ef5350', cameraStateColor('recording'));
+    ok('camera state color idle = cyan', cameraStateColor('idle') === '#4dd0e1', cameraStateColor('idle'));
+    ok('CAMERA_DEFAULTS.fov = 90', CAMERA_DEFAULTS.fov === 90);
+
+    // ── Camera FOV wedge geometry (the drawCameras / updateCameras math) ──────
+    // Mirrors the wedge builder: base = -90° + rotation; rim points at
+    // base ± fov/2 reach `range`; the arc spans exactly `fov`.
+    function wedgeRim(cam) {
+      const fovRad = (cameraFov(cam) * Math.PI) / 180;
+      const range = cameraRange(cam);
+      const base = -Math.PI / 2 + ((cam.rotation || 0) * Math.PI) / 180;
+      const segs = 8;
+      const pts = [];
+      for (let i = 0; i <= segs; i++) {
+        const a = base - fovRad / 2 + fovRad * (i / segs);
+        pts.push({ a, x: Math.cos(a) * range, y: Math.sin(a) * range });
+      }
+      return { pts, base, fovRad, range };
+    }
+    // rotation 0 → base = -90° (pointing at +Y world in canvas terms; cos(-90)=0).
+    const w0 = wedgeRim({ fov: 90, range: 6000, rotation: 0 });
+    ok('wedge: rim reaches range', w0.pts.every(p => near(Math.hypot(p.x, p.y), 6000, 1)),
+       'r=' + Math.round(Math.hypot(w0.pts[4].x, w0.pts[4].y)));
+    const span = (w0.pts[w0.pts.length-1].a - w0.pts[0].a) * 180 / Math.PI;
+    ok('wedge: arc spans fov (90°)', near(span, 90, 0.01), span.toFixed(2) + '°');
+    // Center ray of a rotation-0 camera points along -Y (base=-90°): (0,-range).
+    const mid0 = w0.pts[4];
+    ok('wedge: center ray along -Y at rot 0', near(mid0.x, 0, 1) && near(mid0.y, -6000, 1),
+       `(${mid0.x.toFixed(0)},${mid0.y.toFixed(0)})`);
+    // Rotating 90° swings the center ray to +X (base = 0): (range, 0).
+    const w90 = wedgeRim({ fov: 60, range: 4000, rotation: 90 });
+    const mid90 = w90.pts[4];
+    ok('wedge: rot 90 center ray along +X', near(mid90.x, 4000, 1) && near(mid90.y, 0, 1),
+       `(${mid90.x.toFixed(0)},${mid90.y.toFixed(0)})`);
+    const span90 = (w90.pts[w90.pts.length-1].a - w90.pts[0].a) * 180 / Math.PI;
+    ok('wedge: narrower fov (60°) span', near(span90, 60, 0.01), span90.toFixed(2) + '°');
+
+    // hexToInt round-trips a camera state color (used for the 3D wedge material).
+    ok('hexToInt(#ef5350) = 0xef5350', hexToInt('#ef5350') === 0xef5350, hexToInt('#ef5350').toString(16));
+
+    // ── run + report ────────────────────────────────────────────────────────
+    const grid = document.getElementById('grid');
+    let pass = 0;
+    const fails = [];
+    for (const t of tests) {
+      if (t.ok) pass++; else fails.push(t.name);
+      const card = document.createElement('div');
+      card.className = 'card';
+      card.innerHTML = `<div class="row">
+        <span>${t.ok ? '<span class=pass>PASS</span>' : '<span class=fail>FAIL</span>'} ${t.name}</span>
+        <span>${t.detail ?? ''}</span></div>`;
+      grid.appendChild(card);
+    }
+    const total = tests.length;
+    const allPass = pass === total;
+    const title = allPass ? `ROADMAP-GEOM PASS ${pass}/${total}` : `ROADMAP-GEOM FAIL ${pass}/${total} [${fails.join(',')}]`;
+    document.title = title;
+    const sum = document.getElementById('summary');
+    sum.textContent = title;
+    sum.className = allPass ? 'okbg' : 'badbg';
+  </script>
+</body>
+</html>

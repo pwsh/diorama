@@ -1,0 +1,96 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>PLUMBOB-COLOR …</title>
+<style>html,body{margin:0;background:#111}#c{width:900px;height:640px}</style></head>
+<body>
+<div id="c"></div>
+<script type="module">
+  // Verifies TargetWorld.plumbobColor recolors the per-rig plumbob material
+  // in place, and that an absent plumbobColor keeps the iconic Sims green.
+  const mod = await import('./assets/three-renderer.js');
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+
+  const FW = 8000, FD = 6000;
+  const floor = {
+    id: 'f1', name: 'Empty', w: FW, d: FD,
+    walls: [{ id: 'perim', points: [{x:200,y:200},{x:7800,y:200},{x:7800,y:5800},{x:200,y:5800},{x:200,y:200}] }],
+    furniture: [], lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [], windows: [], bg: null, model3d: null, look3d: null, rooms: [],
+  };
+  r.updateFloor(floor, { preset: 'day' });
+
+  const realNow = performance.now.bind(performance);
+  let fakeNow = realNow();
+  performance.now = () => fakeNow;
+  const DT = 16.7;
+  const ctx = { entityOn: {}, roomNames: {}, timeBucket: 'day' };
+
+  // Rig A: default (no plumbobColor) → green. Rig B: red override.
+  // Rig C: cat (quadruped) with a blue override.
+  const RED = 0xff5555, BLUE = 0x3366ff, GREEN = 0x2ee56a;
+  const targets = [
+    { key: 'a', x: 2000, y: 3000, color: 0xffb74d },
+    { key: 'b', x: 4000, y: 3000, color: 0xffb74d, plumbobColor: RED },
+    { key: 'c', x: 6000, y: 3000, color: 0xffb74d, plumbobColor: BLUE, avatar: 'cat' },
+  ];
+  for (let i = 0; i < 90; i++) { fakeNow += DT; r.updateTargets(targets, ctx); }
+
+  const colOf = (k) => {
+    const h = r._humanoids[k];
+    if (!h) return null;
+    const m = h.plumbob.material;
+    return { hex: m.color.getHex(), emis: m.emissive ? m.emissive.getHex() : null, quad: !!h.quad, stored: h.plumbobColor };
+  };
+  const A = colOf('a'), B = colOf('b'), C = colOf('c');
+
+  const tests = [];
+  const ok = (n, c, d) => tests.push({ n, ok: !!c, d });
+  ok('rig A default plumbob = green 0x2ee56a', A && A.hex === GREEN, A && '0x' + A.hex.toString(16));
+  ok('rig A stored plumbobColor = green', A && A.stored === GREEN, A && A.stored);
+  ok('rig B plumbob = supplied red 0xff5555', B && B.hex === RED, B && '0x' + B.hex.toString(16));
+  // emissive is a darkened copy of the color (red-dominant, red channel below
+  // the full-color's 255). sRGB encoding keeps it > raw 0.66×255, that's fine.
+  const eR = B ? (B.emis>>16)&255 : 0, eG = B ? (B.emis>>8)&255 : 0, eB = B ? B.emis&255 : 0;
+  ok('rig B emissive = darkened red (R dominant, R<255)', B && B.emis != null && eR < 255 && eR > eG && eR > eB,
+     B && '0x' + (B.emis??0).toString(16));
+  ok('rig C is quadruped (cat)', C && C.quad === true, C && C.quad);
+  ok('rig C plumbob = supplied blue 0x3366ff', C && C.hex === BLUE, C && '0x' + C.hex.toString(16));
+
+  // Recolor in place: change B's plumbobColor to green → material updates, no rebuild.
+  const bGroupBefore = r._humanoids['b'].group;
+  targets[1].plumbobColor = GREEN;
+  fakeNow += DT; r.updateTargets(targets, ctx);
+  const B2 = colOf('b');
+  ok('rig B recolors in place to green', B2 && B2.hex === GREEN, B2 && '0x' + B2.hex.toString(16));
+  ok('rig B NOT rebuilt (same group object)', r._humanoids['b'].group === bGroupBefore);
+
+  // ── 3D builder smoke: camera + presence-zone groups build without throwing ─
+  // (three-view calls these; here we drive them directly.)
+  const cam = { id:'cam1', x:1000, y:1000, rotation:45, fov:80, range:5000, entity_id:'camera.front', label:'Front' };
+  r.updateCameras([cam], id => id === 'camera.front' ? { state: 'recording', attributes: {} } : null);
+  const camKinds = [];
+  r._cameraGroup.traverse(o => { if (o.userData && o.userData.kind) camKinds.push(o.userData.kind); });
+  ok('camera group built (has children)', r._cameraGroup.children.length > 0, 'n=' + r._cameraGroup.children.length);
+
+  const pz = { id:'pz1', name:'Kitchen', points:[{x:1000,y:1000},{x:3000,y:1000},{x:3000,y:3000},{x:1000,y:3000}], entity_id:'binary_sensor.fp2', color:'#26c6da' };
+  r.updatePresenceZones([pz], id => id === 'binary_sensor.fp2' ? { state:'on', attributes:{} } : null);
+  ok('presence-zone patch built (occupied)', r._pzoneGroup.children.length === 1, 'n=' + r._pzoneGroup.children.length);
+  const patch = r._pzoneGroup.children[0];
+  ok('occupied pzone patch higher opacity (0.34)', patch && patch.material && Math.abs(patch.material.opacity - 0.34) < 0.01,
+     patch && patch.material && patch.material.opacity);
+  // Hidden zone → no patch.
+  r.updatePresenceZones([{ ...pz, hidden:true }], () => null);
+  ok('hidden presence zone → not built', r._pzoneGroup.children.length === 0, 'n=' + r._pzoneGroup.children.length);
+
+  performance.now = realNow;
+  let pass = 0; const fails = [];
+  for (const t of tests) { if (t.ok) pass++; else fails.push(t.n); }
+  const total = tests.length, allPass = pass === total;
+  document.title = allPass ? `PLUMBOB-COLOR PASS ${pass}/${total}` : `PLUMBOB-COLOR FAIL ${pass}/${total} [${fails.join(',')}]`;
+  document.body.insertAdjacentHTML('beforeend',
+    `<pre style="color:#cfd8dc;font:12px monospace;padding:10px">${document.title}\n` +
+    tests.map(t => `${t.ok?'PASS':'FAIL'} ${t.n}  ${t.d ?? ''}`).join('\n') + '</pre>');
+</script>
+</body>
+</html>

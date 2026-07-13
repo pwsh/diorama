@@ -1,0 +1,153 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>GEOEVENTS …</title>
+  <style>
+    body { margin:0; background:#0d1116; color:#cfd8dc; font:13px/1.4 sans-serif; padding:14px; }
+    h1 { font-size:15px; margin:0 0 10px; }
+    .grid { display:flex; flex-wrap:wrap; gap:10px; }
+    .card { background:#141b22; border:1px solid #26323d; border-radius:6px; padding:8px 10px; width:360px; }
+    .row { display:flex; justify-content:space-between; font-size:11px; gap:8px; }
+    .pass { color:#69f0ae; } .fail { color:#ff5252; }
+    #summary { font-size:14px; font-weight:bold; margin:10px 0; padding:8px 10px; border-radius:5px; }
+    .okbg { background:#12331f; color:#69f0ae; } .badbg { background:#3a1414; color:#ff8a80; }
+    code { color:#ffd54f; }
+  </style>
+</head>
+<body>
+  <h1>geo_location event pins — projection · classify · clamp · cap 20 · label</h1>
+  <div id="summary">Running…</div>
+  <div class="grid" id="grid"></div>
+
+  <!-- geo.ts is pure/dependency-free (like gps-test); transpile next to this html:
+         npx esbuild src/geo.ts --format=esm --outfile=<harness>/geo.mod.js -->
+  <script type="module">
+    import { fitGeoTransform, latLonToPlan, clampToBoundary, planBearingDeg, compass8 } from './geo.mod.js';
+
+    const tests = [];
+    const ok = (name, cond, detail) => tests.push({ name, ok: !!cond, detail });
+    const near = (name, got, want, tol) => tests.push({ name, ok: Math.abs(got - want) <= tol, detail: `got ${got} ≈ ${want} ±${tol}` });
+
+    // Fixture: floor 8×6 m, boundary 30 m, single-landmark transform pinned at
+    // the floor centre with northDeg=0 (plan +Y faces true north). Same fixture
+    // shape as gps-test.
+    const FW = 8000, FD = 6000, BOUND_MM = 30000, CX = FW/2, CY = FD/2;
+    const ORIGIN = { lat: 45, lon: -93 };
+    const T = fitGeoTransform([{ x: CX, y: CY, lat: ORIGIN.lat, lon: ORIGIN.lon }], 0);
+
+    // Port of Planner._computeGeoEventPins (the NEW logic under test): scan a
+    // states map for geo_location.* with numeric lat/lon, project + classify +
+    // clamp + label, cap at 20 nearest by distance km.
+    function computeGeoEventPins(states, geo = {}) {
+      if (geo.showEvents === false) return [];
+      const out = [];
+      for (const id in states) {
+        if (!id.startsWith('geo_location.')) continue;
+        const st = states[id];
+        const a = st.attributes ?? {};
+        const lat = typeof a.latitude === 'number' ? a.latitude : null;
+        const lon = typeof a.longitude === 'number' ? a.longitude : null;
+        if (lat == null || lon == null) continue;
+        const plan = latLonToPlan(T, lat, lon);
+        if (!plan) continue;
+        const src = (typeof a.source === 'string' ? a.source : '').toLowerCase();
+        const name = (typeof a.friendly_name === 'string' && a.friendly_name) || id.slice('geo_location.'.length);
+        const category = /quake|earthquake|seismic|usgs|geonet/.test(src) ? 'quake'
+          : /fire|burn|nsw|qfes|incident/.test(src) ? 'fire' : 'other';
+        const indoor = plan.x >= 0 && plan.x <= FW && plan.y >= 0 && plan.y <= FD;
+        const inYard = plan.x >= -BOUND_MM && plan.x <= FW + BOUND_MM && plan.y >= -BOUND_MM && plan.y <= FD + BOUND_MM;
+        let zone, cx2, cy2;
+        if (indoor) { zone = 'indoor'; cx2 = plan.x; cy2 = plan.y; }
+        else if (inYard) { zone = 'yard'; cx2 = plan.x; cy2 = plan.y; }
+        else { zone = 'beyond'; const cl = clampToBoundary(FW, FD, BOUND_MM, plan.x, plan.y); cx2 = cl.x; cy2 = cl.y; }
+        const dx = plan.x - CX, dy = plan.y - CY;
+        const stateKm = parseFloat(st.state);
+        const distanceKm = isFinite(stateKm) ? stateKm : Math.hypot(dx, dy) / 1e6;
+        const mag = typeof a.magnitude === 'number' ? a.magnitude : null;
+        const bearingDeg = planBearingDeg(T.thetaRad, dx, dy);
+        const magStr = mag != null ? `M${mag.toFixed(1)} · ` : '';
+        out.push({ key: id, name, source: src, category, x: plan.x, y: plan.y,
+          clampedX: cx2, clampedY: cy2, zone, bearingDeg, distanceKm, magnitude: mag,
+          label: `${magStr}${Math.round(distanceKm)} km ${compass8(bearingDeg)}` });
+      }
+      out.sort((p, q) => p.distanceKm - q.distanceKm);
+      return out.slice(0, 20);
+    }
+
+    // A far-off quake north of home + magnitude. ~2 km north (2000 m) is still
+    // inside the 30 m boundary?? No — 2 km ≫ boundary → beyond, clamps N.
+    const northQuakePlan = latLonToPlan(T, 45 + 2000 / 111320, -93);  // ~2 km north
+    const states = {
+      'geo_location.usgs_m4': {
+        state: '12.0',
+        attributes: { latitude: 45 + 2000/111320, longitude: -93, source: 'usgs_earthquakes_feed', magnitude: 4.2, friendly_name: 'M 4.2 - offshore' },
+      },
+      'geo_location.nsw_fire': {
+        state: '8.0',
+        attributes: { latitude: 45, longitude: -93 + 3000/(111320*Math.cos(45*Math.PI/180)), source: 'nsw_rural_fire_service_feed', friendly_name: 'Grass fire' },
+      },
+      'geo_location.no_coords': { state: '1.0', attributes: { source: 'x' } },   // skipped (no lat/lon)
+      'sensor.not_geo': { state: '5', attributes: { latitude: 45, longitude: -93 } }, // skipped (wrong domain)
+      'geo_location.indoor_evt': { state: '0.0', attributes: { latitude: 45, longitude: -93, source: 'test' } },  // at centre → indoor
+    };
+    const pins = computeGeoEventPins(states);
+    ok('picks only geo_location.* with lat/lon (3 of 5)', pins.length === 3, `n=${pins.length}`);
+
+    const quake = pins.find(p => p.key === 'geo_location.usgs_m4');
+    ok('quake classified', quake && quake.category === 'quake', quake && quake.category);
+    ok('quake is beyond → clamped', quake && quake.zone === 'beyond', quake && quake.zone);
+    ok('quake clamped to N boundary edge (y ≈ FD+bound)', quake && Math.abs(quake.clampedY - (FD + BOUND_MM)) < 1,
+       quake && quake.clampedY.toFixed(0));
+    ok('quake bearing ≈ N (0°)', quake && (quake.bearingDeg < 2 || quake.bearingDeg > 358), quake && quake.bearingDeg.toFixed(1));
+    ok('quake compass8 = N', quake && compass8(quake.bearingDeg) === 'N', quake && compass8(quake.bearingDeg));
+    ok('quake label has magnitude + km + compass', quake && quake.label === 'M4.2 · 12 km N', quake && quake.label);
+
+    const fire = pins.find(p => p.key === 'geo_location.nsw_fire');
+    ok('fire classified', fire && fire.category === 'fire', fire && fire.category);
+    ok('fire bearing ≈ E (90°)', fire && Math.abs(fire.bearingDeg - 90) < 2, fire && fire.bearingDeg.toFixed(1));
+    ok('fire label (no magnitude)', fire && fire.label === '8 km E', fire && fire.label);
+
+    const indoor = pins.find(p => p.key === 'geo_location.indoor_evt');
+    ok('event at home centre → indoor', indoor && indoor.zone === 'indoor', indoor && indoor.zone);
+    ok('other category (source not quake/fire)', indoor && indoor.category === 'other', indoor && indoor.category);
+
+    // Sorted nearest-first (fire 8 km < quake 12 km < indoor... indoor state 0 km first).
+    ok('sorted nearest-first by km', pins[0].distanceKm <= pins[1].distanceKm && pins[1].distanceKm <= pins[2].distanceKm,
+       pins.map(p => p.distanceKm).join(','));
+
+    // Cap at 20: synthesize 25 events, expect 20 nearest.
+    const many = {};
+    for (let i = 0; i < 25; i++) {
+      many['geo_location.q' + i] = { state: String(i + 1), attributes: { latitude: 45 + (i+1)*0.5/111.32, longitude: -93, source: 'usgs' } };
+    }
+    const capped = computeGeoEventPins(many);
+    ok('cap at 20 pins', capped.length === 20, `n=${capped.length}`);
+    ok('cap keeps the 20 nearest', capped.every(p => p.distanceKm <= 20), 'max=' + Math.max(...capped.map(p=>p.distanceKm)));
+
+    // showEvents === false → disabled.
+    ok('showEvents=false → []', computeGeoEventPins(states, { showEvents: false }).length === 0);
+
+    // ── run + report ────────────────────────────────────────────────────────
+    const grid = document.getElementById('grid');
+    let pass = 0;
+    const fails = [];
+    for (const t of tests) {
+      if (t.ok) pass++; else fails.push(t.name);
+      const card = document.createElement('div');
+      card.className = 'card';
+      card.innerHTML = `<div class="row">
+        <span>${t.ok ? '<span class=pass>PASS</span>' : '<span class=fail>FAIL</span>'} ${t.name}</span>
+        <span>${t.detail ?? ''}</span></div>`;
+      grid.appendChild(card);
+    }
+    const total = tests.length;
+    const allPass = pass === total;
+    const title = allPass ? `GEOEVENTS PASS ${pass}/${total}` : `GEOEVENTS FAIL ${pass}/${total} [${fails.join(',')}]`;
+    document.title = title;
+    const sum = document.getElementById('summary');
+    sum.textContent = title;
+    sum.className = allPass ? 'okbg' : 'badbg';
+  </script>
+</body>
+</html>
