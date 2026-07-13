@@ -543,7 +543,18 @@ pet rigs → W1 weather core → G1 geo calibration → G2 GPS pins → W2 weath
 effects → **B3 identity fusion + name labels**). BLE identity + panel-side
 trilateration, GPS landmark calibration + device pins, weather displays +
 outdoor 3D effects, and the mmWave↔BLE identity fusion that ties precision to
-identity are all in `main`. No successor arc is planned yet.
+identity are all in `main`.
+
+The successor arc is scaffolded in **`docs/ROADMAP.md`** (2026-07): a
+research-driven ranking of future HA entity integrations — Tier 1 =
+real-spatial-coordinate sources (Frigate zone occupancy → room glow,
+Roborock live position, geo_location event pins, Aqara FP2 zones), plus
+covers, leak puddles, doorbell pulses, battery/power layers, EnvKind
+extensions, and the architectural prerequisites (transient-pulse
+rendering, opt-in direct-MQTT bridge, device-sibling resolution, a
+yard/terrain concept). The "living house" batches (device bindings,
+alarm keypad, smoke/CO, appliance animation, robots, weather W3, layer
+splits) shipped ahead of it in July 2026 — see the ledger above.
 
 ## Open threads / known deferrals
 
