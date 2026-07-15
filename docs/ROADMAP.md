@@ -158,6 +158,50 @@ yard/terrain concept).
 
 ---
 
+## Build-ready research (2026-07-15)
+
+**Every outstanding item below — all unshipped Tier 1–4 entries plus the
+2026-07-15 backlog — now has a build-ready research doc under
+[`docs/research/`](research/README.md)** (Sonnet-gathered, Opus-reviewed:
+verified HA data model, real-world specs, a concrete Diorama 2D+3D design
+mapped onto the canvas-fixture recipe, an integration checklist, and open
+questions). See [docs/research/README.md](research/README.md) for the index,
+the cross-cutting reusable-primitive synthesis, and a suggested build order.
+
+| Roadmap item | Research doc |
+|---|---|
+| Frigate raw boxes / Valetudo maps + direct-MQTT bridge | `research/frigate-mqtt-bridge.md` |
+| Sirens | `research/sirens-beacons.md` |
+| Climate hvac_action cues + HVAC wall control (backlog) | `research/climate-hvac-controls.md` |
+| Fans | `research/fans.md` |
+| Weather forecast entity + movable/customizable display (backlog) | `research/weather-forecast-display.md` |
+| Weather alerts, region-agnostic (backlog) | `research/weather-alerts.md` |
+| Weather as background animation (backlog) | `research/weather-background-fx.md` |
+| Generic entity-value display object (backlog) | `research/entity-value-display.md` |
+| Generic action/trigger control (backlog) | `research/generic-action-control.md` |
+| Generic logical-state light (backlog) | `research/generic-logical-light.md` |
+| Display-only door locks (backlog) | `research/locks-display-only.md` |
+| Avatar void→stairs routing (backlog) | `research/avatar-nav-stairs.md` |
+| Event-focused thought bubbles (backlog) | `research/event-thought-bubbles.md` |
+| Log events & alerting surfacing (backlog) | `research/log-events-alerting.md` |
+| Calendar on wall + news/weather on TV (backlog) | `research/calendar-tv-surfaces.md` |
+| Irrigation / sprinkler zones | `research/irrigation-sprinklers.md` |
+| EV charger fixture | `research/ev-charger.md` |
+| Pool / spa | `research/pool-spa.md` |
+| Plant health sensors + thirsty droop | `research/plant-health-sensors.md` |
+| Moon phase / UV index / garage-bay vehicle | `research/moon-uv-vehicle.md` |
+| Fun background text messages (backlog) | `research/background-text-fx.md` |
+| Mail/packages, printers, network rack | `research/peripheral-fixtures.md` |
+
+Opus review flagged four things to build ONCE (they recur across items): a
+shared **beacon/strobe** primitive, a **CanvasTexture text-plaque**, a
+mount-once **HUD overlay** beside the weather chip, and a **value→style rule
+evaluator** (shared by the entity-value display and the logical light). The
+**direct-MQTT bridge** is the one true architectural gate and carries an
+admin-session UX decision — settle that before building on it.
+
+---
+
 ## Backlog — captured 2026-07-15 (placeholders, NOT yet scoped)
 
 Raw feature/fix requests parked for later. **No design or research has been

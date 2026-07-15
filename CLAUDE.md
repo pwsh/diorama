@@ -22,6 +22,13 @@ lives in `docs/DESIGN-sims.md`. The "World Outside" arc (BLE identity/trilaterat
 and **shipped through B3** (all phases). Deterministic renderer test pages (the
 verification harness) live in `test-pages/` (see its README).
 
+**Future-work references**: `docs/ROADMAP.md` ranks unshipped HA integrations;
+`docs/models/` holds model/animation build references for household categories
+(appliances, furniture, lighting, decorations, plants, misc); `docs/research/`
+holds build-ready per-item research for every outstanding roadmap/backlog item
+(HA data model + Diorama design + integration checklist) — start at
+`docs/research/README.md` (index + cross-cutting primitives + build order).
+
 ## Layout
 
 ```
