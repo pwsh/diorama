@@ -155,3 +155,67 @@ Next candidates now live in Tiers 2–4 above (sirens, climate hvac_action
 cues, moon phase, EV charger shape, plant droop) plus the architectural
 prerequisites (direct-MQTT bridge for Frigate boxes / Valetudo maps,
 yard/terrain concept).
+
+---
+
+## Backlog — captured 2026-07-15 (placeholders, NOT yet scoped)
+
+Raw feature/fix requests parked for later. **No design or research has been
+done on these** — they are recorded verbatim-in-intent so nothing is lost.
+Do not treat any note here as a decided approach.
+
+### Avatars
+- **Movement over void → drop to stairs**: walking where there is no floor
+  should route the avatar to/through stairs instead of over empty space.
+- **Event-focused thought bubbles**: when something *happens* — a
+  dishwasher / washer / dryer finishes, severe weather arrives, rain
+  starts, lightning strikes — let a thought of that event take focus
+  (higher-priority, event-triggered bubble tier).
+
+### Weather display
+- **Forecast entity support**: consume a future/forecast weather entity per
+  `weather.get_forecasts` (https://www.home-assistant.io/actions/weather.get_forecasts/).
+- **Movable chip**: reposition the weather display to a predefined anchor
+  (top-left / top-middle / top-right / bottom-right / bottom-middle /
+  bottom-left) or a custom location.
+- **Customizable content**: show any combination of current weather +
+  future weather (by hours or by days).
+- **Current weather alerts**: as its OWN customization — could use something
+  like NWS Alerts (https://github.com/finity69x2/nws_alerts); other regions
+  may need their own alert source.
+
+### Time / entity-value display object (maybe merged with EnvSensors)
+- A placeable object that displays the value of ANY selected entity with
+  customizable formatting, size, color, etc.
+- Can stay flat on a wall, sit on a table, etc.; does NOT need to pivot to
+  face the camera, but has that option.
+- **Logical formatting**: text format + color changes by value — e.g.
+  <32 °F blue, 68–74 white, 75+ red — via ranges OR a gradient.
+
+### HVAC controls
+- Wall-mounted HVAC control with a popup control panel + animations: vents
+  blowing red / white / blue depending on mode (heat / fan-only / cool).
+
+### Generic controls
+- **Generic action control**: a wall-mounted / table-sitting / floor-placed
+  button or object that triggers any assigned entity (custom controls).
+- **Generic logical-state light**: a light whose state reflects an entity
+  state OR a logical query — e.g. temp > 200 °F → red, > 300 °F → flash red,
+  otherwise off.
+
+### Locks
+- Allow **disabling lock controls** on a door and only DISPLAYING the state
+  (display-only mode).
+
+### Research items (do not action)
+- **Log events & alerting**: research surfacing/displaying alerts from a log
+  event stream.
+- **Background text messages (fun)**: research writing text into the
+  backdrop — embedded in the sky, written on the grass, a plane towing a
+  banner, or skywriting — to present messages playfully.
+- **Weather as background animation**: research rendering current weather as
+  the background animation, with weather-coming-soon shown approaching from
+  the distance.
+- **Calendar / news surfaces**: research showing calendar events as a
+  calendar on the wall (or elsewhere); a "news of the day" scroller on the
+  TV; weather playing on the TV.
