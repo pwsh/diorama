@@ -1,8 +1,7 @@
 # Project status & pick-up guide
 
-Last updated: 2026-07-16, at **v0.14.0 + the avatar-packs arc** (unreleased).
-This is the single document to read (alongside `CLAUDE.md`) to resume work
-with full context.
+Last updated: 2026-07-16, at **v0.15.0**. This is the single document to
+read (alongside `CLAUDE.md`) to resume work with full context.
 
 ## Where things stand
 
@@ -59,7 +58,19 @@ instance.
   click-open door, background-image bug fixes, curbside trash/recycle
   bins, floodlight kind, camera alert snapshot popups, yard arc:
   ground coverings + nine outdoor objects + sittable lawn chair +
-  3D grid layer toggle).
+  3D grid layer toggle)
+  → v0.15.0 packs & portals (the avatar-packs arc: loadable/unloadable
+  avatar packs with a declarative spec + registry, core default avatar,
+  tabbed settings drawer with pack manager + JSON import/export, sidebar
+  scene3d/weather/data sections relocated; 57 built-in packs / 471
+  avatars incl. 9 base groups + 24 franchise packs + Avatar (Pandora);
+  AUTHORING.md pack-authoring reference; rig extensions: new anchors,
+  cylinder/oval heads, masked faces, opacity, hover, per-limb colors,
+  posture, parameterized quadruped; avatar-nav-stairs complete:
+  descending-stairs walking below floor level with nav rails +
+  descend/emerge behaviors, floor-void polygons blocked in nav with
+  stairs bridging, linked stairs + BLE cross-floor transits + glass-house
+  transit puppet).
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
