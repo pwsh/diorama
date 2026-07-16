@@ -1,6 +1,6 @@
 # Project status & pick-up guide
 
-Last updated: 2026-07-16, at **v0.15.0**. This is the single document to
+Last updated: 2026-07-16, at **v0.16.0**. This is the single document to
 read (alongside `CLAUDE.md`) to resume work with full context.
 
 ## Where things stand
@@ -10,7 +10,7 @@ Diorama is feature-complete through TWO arcs — the Sims-2000 arc
 (`docs/DESIGN-world.md`, 8 phases: BLE identity/trilateration/fusion, pet
 rigs, GPS geo-calibration + pins, weather core + 3D effects) — plus the
 post-arc batches listed below. Everything is merged to `main`, pushed to
-**both remotes**, released through **v0.14.0**, and deployed to the live HA
+**both remotes**, released through **v0.16.0**, and deployed to the live HA
 instance.
 
 ### Remotes, releases, deploy
@@ -70,7 +70,13 @@ instance.
   descending-stairs walking below floor level with nav rails +
   descend/emerge behaviors, floor-void polygons blocked in nav with
   stairs bridging, linked stairs + BLE cross-floor transits + glass-house
-  transit puppet).
+  transit puppet)
+  → v0.16.0 roam free (persistent roaming AI avatars with motion-sensor
+  avatar-pool selection + interior-activity bias; multiple configurations
+  — registry with save/save-as/rename/import-adds/delete + last-active
+  restore; self-contained export envelope incl. user avatar packs;
+  offline standalone mode — LocalApi over localStorage, auth-screen
+  offline path, index.html runs fully outside Home Assistant).
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
