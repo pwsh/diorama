@@ -10,5 +10,7 @@ diorama.zip
 .DS_Store
 # machine-local deploy target (private)
 deploy.local.json
+# generated documentation gallery (npm run docs:gallery) — regenerable, not committed
+docs-site/
 # private infrastructure notes (remotes, hosts) — never push
 docs/STATUS.local.md

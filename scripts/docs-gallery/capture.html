@@ -1,0 +1,15 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Diorama docs-gallery capture</title>
+<!--
+  Off-screen capture stage for the docs-gallery pipeline. Loaded head-less by
+  scripts/docs-gallery/generate.mjs, which drives window.dgCatalog / window.dgCapture
+  over CDP. NOT part of the app build — served from a temp dir alongside a copy of
+  dist/assets. See docs/GALLERY.md.
+-->
+<style>
+  html, body { margin: 0; background: #0d0d1a; overflow: hidden; }
+  #stage { width: 480px; height: 480px; }
+</style>
+<div id="stage"></div>
+<script type="module" src="./capture-main.js"></script>

@@ -1,0 +1,668 @@
+// Docs-gallery capture harness (browser side).
+//
+// esbuild-bundled at run time by scripts/docs-gallery/generate.mjs into the temp
+// serve dir (bundles gifenc + the avatar-pack manifest/data + geometry catalog).
+// The BUILT dist renderer chunk (./assets/three-renderer.js) is loaded at RUNTIME
+// via a variable-specifier dynamic import so esbuild leaves it external — exactly
+// like the test-pages harness, so the two module graphs share ONE avatars/registry
+// instance (the one registerAvatarPack populates). This file is NEVER part of the
+// app startup graph (it lives under scripts/, and `npm run build` never sees it).
+//
+// It exposes two functions on window:
+//   dgCatalog(): Promise<CatalogJSON>   — enumerate every documentable subject
+//   dgCapture(subject, opts): Promise<{len}>  — build+animate+GIF one subject,
+//       store base64 in window.__DG_B64 (chunk-read by the driver)
+//
+// See docs/GALLERY.md for the pipeline overview.
+
+import { GIFEncoder, quantize, applyPalette } from 'gifenc';
+import { AVATAR_PACK_MANIFEST } from '../../src/avatar-packs/manifest.js';
+import {
+  FURNITURE_KINDS, furnitureCat, ENV_KINDS, envValueText, robotLedColor,
+} from '../../src/geometry.js';
+import type { LightIconKind } from '../../src/types.js';
+
+// ── Renderer handle (the dist chunk's ThreeDRenderer) ──────────────────────────
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type AnyRenderer = any;
+let R: AnyRenderer = null;
+let MOD: AnyRenderer = null;
+let RENDER_PX = 480;
+
+// The renderer chunk sits next to capture-main.js under ./assets/ in the serve
+// dir. Variable specifier ⇒ esbuild does not bundle/resolve it.
+const RENDERER_URL = './assets/three-renderer.js';
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const _packDefs: Record<string, any> = {};
+let _initPromise: Promise<void> | null = null;
+function ensureInit(): Promise<void> {
+  if (_initPromise) return _initPromise;
+  _initPromise = (async () => {
+    RENDER_PX = (window as unknown as { __DG_RENDER_PX?: number }).__DG_RENDER_PX || 480;
+    MOD = await import(/* @vite-ignore */ RENDERER_URL);
+    const host = document.getElementById('stage')!;
+    host.style.width = RENDER_PX + 'px';
+    host.style.height = RENDER_PX + 'px';
+    R = new MOD.ThreeDRenderer(host, { preserveDrawingBuffer: true });
+    await R.load();
+    // Deterministic capture: no orbit damping drift, and we drive the clock.
+    if (R._controls) R._controls.enableDamping = false;
+
+    // Register every builtin + franchise pack into the RENDERER's registry
+    // (same module instance) and force them all loaded+active so any member id
+    // resolves to its real rig instead of the adult fallback. Keep the loaded
+    // pack defs so buildCatalog can enumerate members.
+    const cfg: Record<string, { loaded: boolean; active: boolean }> = {};
+    for (const row of AVATAR_PACK_MANIFEST) {
+      try {
+        const m = await row.load();
+        const def = (m as { default?: unknown; pack?: unknown }).default
+          ?? (m as { pack?: unknown }).pack;
+        if (def) { MOD.ThreeDRenderer.registerAvatarPack(def); _packDefs[row.id] = def; }
+        cfg[row.id] = { loaded: true, active: true };
+      } catch (e) { console.warn('pack load failed', row.id, e); }
+    }
+    cfg['core'] = { loaded: true, active: true };
+    MOD.ThreeDRenderer.setAvatarPacksConfig(cfg);
+  })();
+  return _initPromise;
+}
+
+// ── Scene scaffolding ──────────────────────────────────────────────────────────
+const nullState = () => null;
+const stateOf = (obj: Record<string, unknown>) => (id: string) => (obj[id] ?? null) as unknown;
+const DAY = { preset: 'day', floorColor: '#8a7860', floorTex: 'none', wallColor: '#cfd2d6', wallCutaway: false };
+const DUSK = { preset: 'dusk', floorColor: '#4a4640', floorTex: 'wood', wallColor: '#c2c8d0', wallCutaway: false };
+const NIGHT = { preset: 'night', floorColor: '#2f333c', floorTex: 'none', wallColor: '#6c7686', wallCutaway: false };
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function baseFloor(w = 6000, d = 6000): any {
+  return {
+    id: 'f1', name: 'S', w, d,
+    walls: [], furniture: [], lights: [], switches: [], sensors: [], motionSensors: [],
+    envSensors: [], doors: [], windows: [], rooms: [], groundAreas: [], presenceZones: [],
+    cameras: [], robots: [], safetySensors: [], alarmPanels: [], bleProxies: [],
+    voidAreas: [], bg: null, model3d: null, look3d: null,
+  };
+}
+
+// Full reset of every renderer group between subjects — no leak accumulation over
+// a long run (uses the shipped _clearGroup/clearTransientGroups disposal paths).
+function resetScene(): void {
+  R.clearTransientGroups();
+  R.updateTargets([]);
+  R.updateFloor(baseFloor(), DAY, undefined, undefined, nullState);
+  R.updateLightsSwitches([], [], nullState);
+  R.updateDoorsWindows([], [], nullState);
+  R.updateSensors([], () => ({ height: 2000, tilt: 20 }), false);
+  R.updateMotionSensors([], nullState, false);
+  R.updateEnvSensors([], nullState);
+  R.updateSafetySensors([], nullState);
+  R.updateAlarmPanels([], nullState);
+  R.updateCameras([], nullState);
+  R.updateBleProxies([]);
+  R.updateRobotDocks([]);
+  R.updateRobotRigs([], {});
+  R.updateGroundAreas([]);
+  R.updateWeather({ condition: 'sunny', intensity01: 0, windKmh: 0, windBearingPlanRad: 0, isDay: true });
+}
+
+// ── Fake clock (deterministic frame stepping; the renderer's own RAF + our per-
+// frame update*/render calls all read performance.now) ─────────────────────────
+let _fakeNow = 0;
+const _realNow = performance.now.bind(performance);
+function clockOn(): void { _fakeNow = _realNow(); performance.now = () => _fakeNow; }
+function clockOff(): void { performance.now = _realNow; }
+function advance(ms: number): void { _fakeNow += ms; }
+
+// ── Camera helpers (subjects sit at scene origin; _w maps floor-center→(0,·,0)) ─
+function orbitCam(target: [number, number, number], radius: number, elevDeg: number, aziRad: number): void {
+  const el = (elevDeg * Math.PI) / 180;
+  const y = target[1] + radius * Math.sin(el);
+  const hor = radius * Math.cos(el);
+  R.setCameraView([target[0] + hor * Math.sin(aziRad), y, target[2] + hor * Math.cos(aziRad)], target);
+}
+
+// ── Frame snapshot → RGBA at gif size ───────────────────────────────────────────
+let _snap: HTMLCanvasElement | null = null;
+let _snapCtx: CanvasRenderingContext2D | null = null;
+function snapshot(gifPx: number): Uint8ClampedArray {
+  if (!_snap || _snap.width !== gifPx) {
+    _snap = document.createElement('canvas');
+    _snap.width = _snap.height = gifPx;
+    _snapCtx = _snap.getContext('2d', { willReadFrequently: true });
+  }
+  const ctx = _snapCtx!;
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.clearRect(0, 0, gifPx, gifPx);
+  ctx.drawImage(R._renderer.domElement, 0, 0, gifPx, gifPx);
+  return ctx.getImageData(0, 0, gifPx, gifPx).data;
+}
+
+function render(): void { R._renderer.render(R._scene, R._camera); }
+
+// Encode a list of RGBA frames into an animated GIF (base64).
+function encodeGif(frames: Uint8ClampedArray[], gifPx: number, fps: number): string {
+  const gif = GIFEncoder();
+  const delay = Math.round(1000 / fps);
+  for (const rgba of frames) {
+    const u8 = new Uint8Array(rgba.buffer, rgba.byteOffset, rgba.byteLength);
+    const palette = quantize(u8, 256);
+    const index = applyPalette(u8, palette);
+    gif.writeFrame(index, gifPx, gifPx, { palette, delay });
+  }
+  gif.finish();
+  const bytes = gif.bytes();
+  // base64 in chunks (avoid apply-spread stack limits on large buffers)
+  let bin = '';
+  const CH = 0x8000;
+  for (let i = 0; i < bytes.length; i += CH) {
+    bin += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + CH)) as unknown as number[]);
+  }
+  return btoa(bin);
+}
+
+// ── Capture options ─────────────────────────────────────────────────────────────
+interface CapOpts { size?: number; frames?: number; fps?: number }
+
+// Generic capture loop, all under the fake clock: run `warmSteps` warmup ticks
+// (advancing sim without capturing so poses/bubbles/hover-bob settle), then
+// `tick(i, N)` mutates + renders + snapshots frame i (0..N-1). `warmFn` defaults
+// to `tick`.
+function runCapture(
+  N: number, gifPx: number, fps: number, dtMs: number,
+  tick: (i: number, N: number) => void,
+  warmSteps = 0, warmFn?: (i: number, N: number) => void,
+): string {
+  clockOn();
+  try {
+    const wf = warmFn ?? tick;
+    for (let i = 0; i < warmSteps; i++) { advance(dtMs); wf(i, N); render(); }
+    const frames: Uint8ClampedArray[] = [];
+    for (let i = 0; i < N; i++) {
+      advance(dtMs);
+      tick(i, N);
+      render();
+      frames.push(snapshot(gifPx));
+    }
+    return encodeGif(frames, gifPx, fps);
+  } finally {
+    clockOff();
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  SUBJECT BUILDERS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type Subject = { type: string; id: string; meta: any };
+
+// Turntable-spin static piece (furniture / decor / bathroom / outdoor).
+function capFurniture(sub: Subject, o: CapOpts): string {
+  const gifPx = o.size ?? 400, N = o.frames ?? 30, fps = o.fps ?? 12;
+  const { w, h, ht } = sub.meta;
+  const f = baseFloor(6000, 6000);
+  f.furniture = [{ id: 'it', x: f.w / 2, y: f.d / 2, w, h, kind: sub.id, rotation: 0 }];
+  R.updateFloor(f, DAY, undefined, undefined, nullState);
+  const maxdim = Math.max(w, h);
+  const target: [number, number, number] = [0, Math.min(ht * 0.5, 850), 0];
+  const radius = maxdim * 1.5 + ht * 0.9 + 1400;
+  return runCapture(N, gifPx, fps, 33, (i) => {
+    orbitCam(target, radius, 20, (i / N) * Math.PI * 2);
+  });
+}
+
+// Appliance: fixed 3/4 camera, animate the door open→close + in-use LED/screen on.
+function capAppliance(sub: Subject, o: CapOpts): string {
+  const gifPx = o.size ?? 400, N = o.frames ?? 30, fps = o.fps ?? 12;
+  const { w, h, ht } = sub.meta;
+  const kind = sub.id;
+  const isFridge = kind === 'fridge';
+  const f = baseFloor(6000, 6000);
+  // Unbound + localState 'on' → in-use LED/emissive screen at build; the door is
+  // registered in _applianceDoors and driven per-frame below (case a for fridge
+  // via doorSensorOpen, case b otherwise via entityOn).
+  f.furniture = [{
+    id: 'ap', x: f.w / 2, y: f.d / 2, w, h, kind, rotation: 0,
+    entity_id: null, localState: 'on',
+    doorEntity: isFridge ? 'binary_sensor.fridge_door' : null,
+  }];
+  R.updateFloor(f, DAY, undefined, undefined, nullState);
+  const hasDoor = (R._applianceDoors || []).some((d: { fuId: string }) => d.fuId === 'ap');
+  const target: [number, number, number] = [0, ht * 0.5, 0];
+  const radius = Math.max(w, h) * 1.6 + ht * 0.7 + 1500;
+  // Front (functional face, local −Z = world −Y = scene −Z) toward a 3/4 view.
+  orbitCam(target, radius, 16, Math.PI - 0.7);
+  return runCapture(N, gifPx, fps, 40, (i) => {
+    // Door open for the first ~45%, then close.
+    const open = i < N * 0.45;
+    const ctx = {
+      entityOn: { ap: !isFridge && open },
+      doorSensorOpen: isFridge ? { ap: open } : undefined,
+      roomNames: {}, timeBucket: 'day',
+    };
+    if (!hasDoor) orbitCam(target, radius, 16, Math.PI - 0.7 + Math.sin(i / N * Math.PI * 2) * 0.12);
+    R.updateTargets([], ctx);
+  });
+}
+
+// Lighting: a two-wall corner + floor; off → on → color sweep → dim → off
+// (fireplace: off → flicker → off; wall kinds mount on the wall).
+const WALL_LIGHT = new Set<LightIconKind>(['sconce', 'wall_sconce', 'step', 'flood']);
+function capLight(sub: Subject, o: CapOpts): string {
+  const gifPx = o.size ?? 400, N = o.frames ?? 34, fps = o.fps ?? 12;
+  const kind = sub.id as LightIconKind;
+  const f = baseFloor(5000, 5000);
+  f.walls = [
+    { id: 'wb', points: [{ x: 400, y: 600 }, { x: 4600, y: 600 }] },      // back wall
+    { id: 'ws', points: [{ x: 400, y: 600 }, { x: 400, y: 4600 }] },      // side wall
+  ];
+  const onWall = WALL_LIGHT.has(kind);
+  const lx = onWall ? 2400 : f.w / 2;
+  const ly = onWall ? 600 : f.d / 2;
+  const light = {
+    id: 'l', x: lx, y: ly, entity_id: 'light.demo', iconKind: kind, rotation: 0,
+    label: '', length: 1600,
+  };
+  f.lights = [light];
+  const isFire = kind === 'fireplace';
+  R.updateFloor(f, isFire ? NIGHT : DUSK, undefined, undefined, nullState);
+  const target: [number, number, number] = [0, 1200, 0];
+  orbitCam(target, 6800, 22, Math.PI * 0.86);
+  const lightState = (i: number): Record<string, unknown> => {
+    const t = i / N;
+    if (t < 0.12 || t > 0.94) return { 'light.demo': { state: 'off', attributes: {} } };
+    if (isFire) return { 'light.demo': { state: 'on', attributes: { brightness: 255 } } };
+    const attrs: Record<string, unknown> = { brightness: 255 };
+    if (t >= 0.36 && t < 0.68) {
+      // Color sweep red → green → blue.
+      const p = (t - 0.36) / 0.32;
+      const hue = p * 240;           // 0=red .. 240=blue
+      attrs.rgb_color = hsvToRgb(hue, 1, 1);
+    } else if (t >= 0.68) {
+      attrs.brightness = Math.round(255 - (t - 0.68) / 0.26 * 215);   // dim ramp
+    }
+    return { 'light.demo': { state: 'on', attributes: attrs } };
+  };
+  return runCapture(N, gifPx, fps, 40, (i) => {
+    R.updateLightsSwitches(f.lights, [], stateOf(lightState(i)));
+  });
+}
+
+// Switch/control plate on a wall + a bound ceiling bulb; toggle on/off twice.
+function capSwitch(_sub: Subject, o: CapOpts): string {
+  const gifPx = o.size ?? 400, N = o.frames ?? 28, fps = o.fps ?? 10;
+  const f = baseFloor(5000, 5000);
+  f.walls = [{ id: 'wb', points: [{ x: 400, y: 600 }, { x: 4600, y: 600 }] }];
+  f.switches = [{ id: 'sw', x: 2500, y: 600, entity_id: 'switch.demo', rotation: 0, label: '' }];
+  f.lights = [{ id: 'l', x: 2500, y: 2600, entity_id: 'switch.demo', iconKind: 'bulb', label: '' }];
+  R.updateFloor(f, DUSK, undefined, undefined, nullState);
+  orbitCam([0, 1400, 0], 6200, 20, Math.PI * 0.9);
+  return runCapture(N, gifPx, fps, 60, (i) => {
+    const on = Math.floor(i / (N / 4)) % 2 === 0;
+    const st = { 'switch.demo': { state: on ? 'on' : 'off', attributes: { brightness: 230 } } };
+    R.updateLightsSwitches(f.lights, f.switches, stateOf(st));
+  });
+}
+
+// Alarm keypad: disarmed → arming → armed_away → triggered cycle.
+function capAlarm(_sub: Subject, o: CapOpts): string {
+  const gifPx = o.size ?? 400, N = o.frames ?? 32, fps = o.fps ?? 12;
+  const f = baseFloor(5000, 5000);
+  f.walls = [{ id: 'wb', points: [{ x: 400, y: 600 }, { x: 4600, y: 600 }] }];
+  f.alarmPanels = [{ id: 'ap', x: 2500, y: 600, entity_id: 'alarm_control_panel.demo', rotation: 0, label: '' }];
+  R.updateFloor(f, DUSK, undefined, undefined, nullState);
+  orbitCam([0, 1300, 0], 4200, 12, Math.PI * 0.92);
+  const seq = ['disarmed', 'arming', 'armed_away', 'triggered'];
+  return runCapture(N, gifPx, fps, 60, (i) => {
+    const s = seq[Math.min(seq.length - 1, Math.floor(i / (N / seq.length)))];
+    R.updateAlarmPanels(f.alarmPanels, stateOf({ 'alarm_control_panel.demo': { state: s, attributes: {} } }));
+  });
+}
+
+// Door lock: locked → unlocked → locked (deadbolt + padlock glyph).
+function capDoorLock(_sub: Subject, o: CapOpts): string {
+  const gifPx = o.size ?? 400, N = o.frames ?? 26, fps = o.fps ?? 10;
+  const f = baseFloor(5000, 4000);
+  f.walls = [{ id: 'wb', points: [{ x: 400, y: 2000 }, { x: 4600, y: 2000 }] }];
+  f.doors = [{ id: 'd', x: 2100, y: 2000, w: 900, rotation: 0, entity_id: null, lockEntity: 'lock.demo' }];
+  R.updateFloor(f, DAY, undefined, undefined, nullState);
+  orbitCam([0, 1000, 0], 4600, 16, Math.PI * 0.78);
+  return runCapture(N, gifPx, fps, 60, (i) => {
+    const locked = Math.floor(i / (N / 3)) !== 1;
+    const st = { 'lock.demo': { state: locked ? 'locked' : 'unlocked', attributes: {} } };
+    R.updateDoorsWindows(f.doors, [], stateOf(st));
+  });
+}
+
+// mmWave sensor: body + coverage wedge, a target walking through coverage.
+function capMmwave(_sub: Subject, o: CapOpts): string {
+  const gifPx = o.size ?? 400, N = o.frames ?? 30, fps = o.fps ?? 12;
+  const f = baseFloor(8000, 6000);
+  f.sensors = [{ id: 's', x: 4000, y: 400, heading: 0, fov: 120, range: 5200, label: 'K', deviceSlug: null, color: '#4fc3f7' }];
+  R.updateFloor(f, DAY, undefined, undefined, nullState);
+  R.updateSensors(f.sensors, () => ({ height: 2000, tilt: 18 }), true);
+  R.applyViewPreset('iso');
+  const tick = (i: number, n: number) => {
+    const x = 2600 + 2800 * (i / n);
+    R.updateTargets([{ key: 't', x, y: 3200, color: 0x4fc3f7 }]);
+  };
+  return runCapture(N, gifPx, fps, 33, tick, 20, () => R.updateTargets([{ key: 't', x: 2600, y: 3000, color: 0x4fc3f7 }]));
+}
+
+// Motion sensor: cone + on/off pulse + an AI-projected avatar wandering.
+function capMotion(_sub: Subject, o: CapOpts): string {
+  const gifPx = o.size ?? 400, N = o.frames ?? 30, fps = o.fps ?? 12;
+  const f = baseFloor(7000, 6000);
+  f.motionSensors = [{ id: 'm', x: 3500, y: 400, heading: 0, fov: 100, range: 4200, label: '', entity_id: 'binary_sensor.motion', color: '#ba68c8', intensity: 1.3 }];
+  R.updateFloor(f, DAY, undefined, undefined, nullState);
+  R.applyViewPreset('iso');
+  const tick = (i: number, n: number) => {
+    const on = Math.floor(i / (n / 4)) % 2 === 0;
+    R.updateMotionSensors(f.motionSensors, stateOf({ 'binary_sensor.motion': { state: on ? 'on' : 'off', attributes: {} } }), false);
+    const x = 3000 + 900 * Math.sin(i / n * Math.PI * 2);
+    R.updateTargets([{ key: 't', x, y: 3000 + 400 * Math.cos(i / n * Math.PI * 2), color: 0xba68c8 }]);
+  };
+  return runCapture(N, gifPx, fps, 33, tick, 20, () => R.updateTargets([{ key: 't', x: 3000, y: 3000, color: 0xba68c8 }]));
+}
+
+// Env sensor: chip value + color band cycle (ok → warn → danger where defined).
+function capEnv(sub: Subject, o: CapOpts): string {
+  const gifPx = o.size ?? 400, N = o.frames ?? 28, fps = o.fps ?? 10;
+  const kind = sub.id as keyof typeof ENV_KINDS;
+  const def = ENV_KINDS[kind];
+  const f = baseFloor(5000, 5000);
+  f.envSensors = [{ id: 'e', x: f.w / 2, y: f.d / 2, entity_id: 'sensor.env', label: '', scale: 2.0, kind }];
+  R.updateFloor(f, DUSK, undefined, undefined, nullState);
+  orbitCam([0, 1500, 0], 4200, 14, Math.PI * 0.9);
+  // Value ramp: cross warn/danger when defined, else a plain sweep.
+  const lo = 0, hi = def.danger != null ? def.danger * 1.25 : (def.warn != null ? def.warn * 1.5 : 100);
+  const unit = kind === 'temperature' ? '°C' : kind === 'co2' ? 'ppm' : '';
+  return runCapture(N, gifPx, fps, 60, (i) => {
+    const v = Math.round(lo + (hi - lo) * (i / (N - 1)));
+    R.updateEnvSensors(f.envSensors, stateOf({ 'sensor.env': { state: String(v), attributes: { device_class: kind, unit_of_measurement: unit } } }));
+  });
+}
+
+// Safety detector: smoke/co/gas idle → ALARM rings; leak idle → puddle grow.
+function capSafety(sub: Subject, o: CapOpts): string {
+  const gifPx = o.size ?? 400, N = o.frames ?? 34, fps = o.fps ?? 12;
+  const kind = sub.id;
+  const isLeak = kind === 'leak';
+  const f = baseFloor(5000, 5000);
+  f.safetySensors = [{ id: 'sf', x: f.w / 2, y: f.d / 2, kind, entity_id: 'binary_sensor.safety', label: '' }];
+  R.updateFloor(f, DAY, undefined, undefined, nullState);
+  if (isLeak) orbitCam([0, 300, 0], 3600, 22, Math.PI * 0.85);
+  else R.applyViewPreset('iso');
+  return runCapture(N, gifPx, fps, 40, (i) => {
+    const alarm = i > N * 0.18;
+    R.updateSafetySensors(f.safetySensors, stateOf({ 'binary_sensor.safety': { state: alarm ? 'on' : 'off', attributes: {} } }));
+  });
+}
+
+// BLE proxy antenna + an identified person rig moving nearby.
+function capBleProxy(_sub: Subject, o: CapOpts): string {
+  const gifPx = o.size ?? 400, N = o.frames ?? 30, fps = o.fps ?? 12;
+  const f = baseFloor(7000, 6000);
+  R.updateFloor(f, DAY, undefined, undefined, nullState);
+  R.updateBleProxies([{ id: 'b', name: 'Proxy', x: 1200, y: 1200, height: 2400 }]);
+  R.applyViewPreset('iso');
+  const tgt = (x: number) => ([{ key: 'p', x, y: 3200, color: 0x26c6da, ble: true, person: { name: 'Alex', color: '#26c6da', avatarKind: 'adult', identified: true } }]);
+  return runCapture(N, gifPx, fps, 33, (i, n) => R.updateTargets(tgt(2400 + 2200 * (i / n))), 20, () => R.updateTargets(tgt(3000)));
+}
+
+// Camera fixture FOV wedge + recording tint.
+function capCamera(_sub: Subject, o: CapOpts): string {
+  const gifPx = o.size ?? 400, N = o.frames ?? 26, fps = o.fps ?? 10;
+  const f = baseFloor(7000, 6000);
+  f.cameras = [{ id: 'c', x: 800, y: 800, rotation: 45, fov: 90, range: 5200, height: 2200, entity_id: 'camera.demo' }];
+  R.updateFloor(f, DAY, undefined, undefined, nullState);
+  R.applyViewPreset('iso');
+  return runCapture(N, gifPx, fps, 60, (i) => {
+    const rec = Math.floor(i / (N / 4)) % 2 === 1;
+    R.updateCameras(f.cameras, stateOf({ 'camera.demo': { state: rec ? 'recording' : 'idle', attributes: {} } }));
+  });
+}
+
+// Bin: lid flip empty ↔ full (fold state into the floor build each frame).
+function capBin(sub: Subject, o: CapOpts): string {
+  const gifPx = o.size ?? 380, N = o.frames ?? 24, fps = o.fps ?? 10;
+  const def = FURNITURE_KINDS[sub.id as keyof typeof FURNITURE_KINDS];
+  const f = baseFloor(4000, 4000);
+  f.furniture = [{ id: 'bin', x: f.w / 2, y: f.d / 2, w: def.w, h: def.h, kind: sub.id, rotation: 0, entity_id: 'binary_sensor.bin' }];
+  const target: [number, number, number] = [0, def.ht * 0.5, 0];
+  const radius = def.h * 1.6 + def.ht * 0.8 + 1400;
+  orbitCam(target, radius, 16, Math.PI - 0.6);
+  return runCapture(N, gifPx, fps, 60, (i) => {
+    const full = Math.floor(i / (N / 3)) === 1;
+    R.updateFloor(f, DAY, undefined, undefined, stateOf({ 'binary_sensor.bin': { state: full ? 'on' : 'off', attributes: {} } }));
+  });
+}
+
+// Door / window: smooth open→close via a cover-shaped state (current_position ramp).
+function capOpening(sub: Subject, o: CapOpts): string {
+  const gifPx = o.size ?? 400, N = o.frames ?? 30, fps = o.fps ?? 12;
+  const isWindow = sub.type === 'window';
+  const f = baseFloor(6000, 4000);
+  f.walls = [{ id: 'wb', points: [{ x: 500, y: 2000 }, { x: 5500, y: 2000 }] }];
+  if (isWindow) {
+    f.windows = [{ id: 'w', x: 3000, y: 2000, w: 1600, rotation: 0, entity_id: 'cover.demo', kind: sub.id }];
+  } else {
+    const garage = sub.id === 'garage';
+    f.doors = [{ id: 'd', x: garage ? 1800 : 2200, y: 2000, w: garage ? 2400 : 900, rotation: 0, kind: sub.id, entity_id: 'cover.demo' }];
+  }
+  R.updateFloor(f, DAY, undefined, undefined, nullState);
+  orbitCam([0, 1100, 0], 6600, 16, Math.PI * 0.8);
+  return runCapture(N, gifPx, fps, 40, (i) => {
+    // 0→100→0 triangle: open then close.
+    const t = i / (N - 1);
+    const pos = Math.round((t < 0.5 ? t * 2 : (1 - t) * 2) * 100);
+    const st = { 'cover.demo': { state: pos > 2 ? 'open' : 'closed', attributes: { current_position: pos } } };
+    R.updateDoorsWindows(f.doors, f.windows, stateOf(st));
+  });
+}
+
+// Robot vacuum/mower: dock + rig roaming loop, LED cycling through states.
+function capRobot(sub: Subject, o: CapOpts): string {
+  const gifPx = o.size ?? 400, N = o.frames ?? 32, fps = o.fps ?? 12;
+  const kind = sub.id as 'vacuum' | 'mower';
+  const f = baseFloor(6000, 6000);
+  const dock = { id: 'r', x: 1000, y: 1000, kind, entity_id: null };
+  f.robots = [dock];
+  R.updateFloor(f, DAY, undefined, undefined, nullState);
+  R.updateRobotDocks(f.robots);
+  R.applyViewPreset('iso');
+  const acts = ['docked', kind === 'vacuum' ? 'cleaning' : 'mowing', 'returning'];
+  return runCapture(N, gifPx, fps, 40, (i) => {
+    const p = i / N;
+    const act = acts[Math.min(acts.length - 1, Math.floor(p * acts.length))];
+    // Roam a loop out from the dock and back.
+    const ang = p * Math.PI * 2;
+    const x = 1000 + (act === 'docked' ? 0 : 1800) * (0.5 - 0.5 * Math.cos(ang));
+    const y = 1000 + (act === 'docked' ? 0 : 1500) * Math.sin(ang) * 0.6 + (act === 'docked' ? 0 : 900);
+    const st = { r: { x, y, heading: ang, phase: i * 0.4, activity: act, led: robotLedColor(act) } };
+    R.updateRobotRigs(f.robots, st);
+  });
+}
+
+// Avatar: idle rig with a gentle weight-shift oscillation, camera 360° orbit, and
+// the member's own personality bubble forced visible (reuses _syncBubble).
+function capAvatar(sub: Subject, o: CapOpts): string {
+  const gifPx = o.size ?? 320, N = o.frames ?? 30, fps = o.fps ?? 12;
+  const id = sub.id;
+  const def = MOD.ThreeDRenderer.resolveAvatarDef(id);
+  const isQuad = def.rig === 'quadruped';
+  const f = baseFloor(4000, 4000);
+  R.updateFloor(f, DAY, undefined, undefined, nullState);
+  const ctx = { entityOn: {}, roomNames: {}, timeBucket: 'day' };
+  const bubble: string | null = (!isQuad && def.bubbles && def.bubbles.length) ? def.bubbles[0] : null;
+  const key = 'av';
+  const step = (i: number): void => {
+    const x = f.w / 2 + Math.sin(i * 0.12) * 150;   // subtle weight shift / stepping
+    R.updateTargets([{ key, x, y: f.d / 2, color: 0x9fb2c4, avatar: id }], ctx);
+    const h = R._humanoids?.[key];
+    if (h && bubble) { h.bubbleKind = bubble; R._syncBubble(h, 0.1); }
+  };
+  const target: [number, number, number] = [0, isQuad ? 500 : 950, 0];
+  const radius = isQuad ? 2200 : 2600;
+  // Warm (24 steps) so the rig builds + bubble pops in + hover rigs settle.
+  return runCapture(N, gifPx, fps, 55, (i, n) => {
+    step(i + 24);
+    orbitCam(target, radius, isQuad ? 14 : 11, (i / n) * Math.PI * 2);
+  }, 24, (i) => step(i));
+}
+
+// ── Dispatch ────────────────────────────────────────────────────────────────────
+function captureSubject(sub: Subject, o: CapOpts): string {
+  resetScene();
+  switch (sub.type) {
+    case 'furniture': return capFurniture(sub, o);
+    case 'appliance': return capAppliance(sub, o);
+    case 'light': return capLight(sub, o);
+    case 'switch': return capSwitch(sub, o);
+    case 'alarm': return capAlarm(sub, o);
+    case 'door_lock': return capDoorLock(sub, o);
+    case 'mmwave': return capMmwave(sub, o);
+    case 'motion': return capMotion(sub, o);
+    case 'env': return capEnv(sub, o);
+    case 'safety': return capSafety(sub, o);
+    case 'ble_proxy': return capBleProxy(sub, o);
+    case 'camera': return capCamera(sub, o);
+    case 'bin': return capBin(sub, o);
+    case 'door': case 'window': return capOpening(sub, o);
+    case 'robot': return capRobot(sub, o);
+    case 'avatar': return capAvatar(sub, o);
+    default: throw new Error('unknown subject type ' + sub.type);
+  }
+}
+
+// ── Catalog (single source of truth; enumerated dynamically) ─────────────────────
+const LIGHT_KINDS: { id: LightIconKind; label: string; glyph: string }[] = [
+  { id: 'bulb', label: 'Bulb', glyph: '💡' }, { id: 'spot', label: 'Spot', glyph: '🔦' },
+  { id: 'pendant', label: 'Pendant', glyph: '⚪' }, { id: 'sconce', label: 'Sconce', glyph: '◐' },
+  { id: 'strip', label: 'Strip', glyph: '▬' }, { id: 'fireplace', label: 'Fireplace', glyph: '🔥' },
+  { id: 'lamp', label: 'Lamp', glyph: '🪔' }, { id: 'bowl', label: 'Bowl', glyph: '🥣' },
+  { id: 'tiered', label: 'Tiered', glyph: '☰' }, { id: 'round', label: 'Round', glyph: '⭕' },
+  { id: 'recessed', label: 'Recessed', glyph: '⊙' }, { id: 'jar', label: 'Jar', glyph: '🫙' },
+  { id: 'oval', label: 'Oval', glyph: '🥚' }, { id: 'fan', label: 'Ceiling fan', glyph: '❋' },
+  { id: 'fan_light', label: 'Fan + light', glyph: '✺' }, { id: 'string', label: 'LED string', glyph: '✨' },
+  { id: 'under_cabinet', label: 'Under-cabinet strip', glyph: '▂' },
+  { id: 'wall_sconce', label: 'Wall sconce', glyph: '◨' }, { id: 'step', label: 'Step light', glyph: '▤' },
+  { id: 'flood', label: 'Floodlight', glyph: '🔆' },
+];
+const CAT_PAGE: Record<string, string> = { furniture: 'furniture', appliance: 'appliances', bathroom: 'bathroom', outdoor: 'outdoor' };
+const CAT_TITLE: Record<string, string> = { furniture: 'Furniture', appliance: 'Appliances', bathroom: 'Bathroom', outdoor: 'Outdoor & yard' };
+
+function slug(s: string): string { return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''); }
+function safeId(id: string): string { return id.replace(/[^a-zA-Z0-9_-]+/g, '_'); }
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function buildCatalog(): any {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const subjects: any[] = [];
+  const push = (s: Record<string, unknown>) => subjects.push(s);
+
+  // Furniture, grouped by furnitureCat (bins excluded here — they live on the
+  // sensors page with a state animation).
+  for (const [kind, def] of Object.entries(FURNITURE_KINDS)) {
+    if (kind === 'trash_bin' || kind === 'recycle_bin') continue;
+    const cat = furnitureCat(def);
+    const page = CAT_PAGE[cat] ?? cat;
+    const isAppliance = cat === 'appliance';
+    push({
+      type: isAppliance ? 'appliance' : 'furniture', id: kind, page,
+      group: CAT_TITLE[cat] ?? cat, label: def.label,
+      notes: `${def.w}×${def.h}×${def.ht} mm` + (def.seat ? ' · sittable' : '') + (def.activity ? ` · ${def.activity}` : '') + (def.surface ? ' · surface' : ''),
+      gif: `media/${page}/${safeId(kind)}.gif`,
+      meta: { id: kind, w: def.w, h: def.h, ht: def.ht, cat, seat: def.seat ?? null, activity: def.activity ?? null },
+    });
+  }
+
+  // Lighting.
+  for (const lk of LIGHT_KINDS) {
+    push({
+      type: 'light', id: lk.id, page: 'lighting', group: 'Light fixtures', label: lk.label,
+      notes: `${lk.glyph} · ${WALL_LIGHT.has(lk.id) ? 'wall-mounted' : 'ceiling/floor'} · off → on → color → dim`,
+      gif: `media/lighting/${safeId(lk.id)}.gif`, meta: { glyph: lk.glyph },
+    });
+  }
+
+  // Switches & controls.
+  push({ type: 'switch', id: 'switch', page: 'switches-controls', group: 'Controls', label: 'Wall switch', notes: 'plate + bound light; toggles on/off', gif: 'media/switches-controls/switch.gif', meta: {} });
+  push({ type: 'alarm', id: 'alarm', page: 'switches-controls', group: 'Controls', label: 'Alarm keypad', notes: 'disarmed → arming → armed_away → triggered', gif: 'media/switches-controls/alarm.gif', meta: {} });
+  push({ type: 'door_lock', id: 'door_lock', page: 'switches-controls', group: 'Controls', label: 'Door lock', notes: 'locked → unlocked → locked (deadbolt + padlock)', gif: 'media/switches-controls/door_lock.gif', meta: {} });
+
+  // Sensors page.
+  push({ type: 'mmwave', id: 'mmwave', page: 'sensors', group: 'Presence & radar', label: 'mmWave radar', notes: 'body + coverage wedge, live target', gif: 'media/sensors/mmwave.gif', meta: {} });
+  push({ type: 'motion', id: 'motion', page: 'sensors', group: 'Presence & radar', label: 'Motion sensor', notes: 'cone + on/off pulse + AI avatar', gif: 'media/sensors/motion.gif', meta: {} });
+  push({ type: 'ble_proxy', id: 'ble_proxy', page: 'sensors', group: 'Presence & radar', label: 'BLE proxy', notes: 'antenna puck + identified person', gif: 'media/sensors/ble_proxy.gif', meta: {} });
+  push({ type: 'camera', id: 'camera', page: 'sensors', group: 'Presence & radar', label: 'Camera', notes: 'FOV wedge + recording tint', gif: 'media/sensors/camera.gif', meta: {} });
+  for (const [kind, def] of Object.entries(ENV_KINDS)) {
+    push({ type: 'env', id: kind, page: 'sensors', group: 'Environment', label: `${def.glyph} ${kind}`, notes: def.warn != null ? `warn ${def.warn} / danger ${def.danger}` : 'live reading', gif: `media/sensors/env_${safeId(kind)}.gif`, meta: { glyph: def.glyph } });
+  }
+  for (const sk of ['smoke', 'co', 'gas', 'leak']) {
+    push({ type: 'safety', id: sk, page: 'sensors', group: 'Safety', label: `${sk.toUpperCase()} detector`, notes: sk === 'leak' ? 'floor puck → spreading puddle' : 'idle → alarm rings', gif: `media/sensors/safety_${sk}.gif`, meta: {} });
+  }
+  for (const bk of ['trash_bin', 'recycle_bin']) {
+    const def = FURNITURE_KINDS[bk as keyof typeof FURNITURE_KINDS];
+    push({ type: 'bin', id: bk, page: 'sensors', group: 'Bins', label: def.label, notes: 'lid flip empty ↔ full', gif: `media/sensors/${bk}.gif`, meta: {} });
+  }
+
+  // Doors & windows.
+  for (const dk of ['swing', 'garage']) push({ type: 'door', id: dk, page: 'doors-windows', group: 'Doors', label: dk === 'swing' ? 'Swing door' : 'Garage door', notes: 'open → close', gif: `media/doors-windows/door_${dk}.gif`, meta: {} });
+  for (const wk of ['single', 'double_hung', 'casement_pair', 'sliding', 'picture']) push({ type: 'window', id: wk, page: 'doors-windows', group: 'Windows', label: wk.replace(/_/g, ' '), notes: 'open → close', gif: `media/doors-windows/window_${safeId(wk)}.gif`, meta: {} });
+
+  // Robots.
+  for (const rk of ['vacuum', 'mower']) push({ type: 'robot', id: rk, page: 'robots', group: 'Robots', label: rk === 'vacuum' ? 'Robot vacuum' : 'Lawn mower', notes: 'dock + roam + LED states', gif: `media/robots/${rk}.gif`, meta: {} });
+
+  // Avatars — every pack, grouped by top-level path segment into pages. Members
+  // come from the pack defs loaded (and registered) during ensureInit.
+  for (const row of AVATAR_PACK_MANIFEST) {
+    const top = row.path[0] || 'Other';
+    const page = `avatars/${slug(top)}`;
+    const def = _packDefs[row.id];
+    const members: { id: string; label?: string }[] = def?.avatars ?? [];
+    for (const m of members) {
+      const ad = MOD.ThreeDRenderer.resolveAvatarDef(m.id);
+      push({
+        type: 'avatar', id: m.id, page, group: row.label, topLevel: top, packId: row.id,
+        franchise: !!row.franchise, label: m.label ?? ad.label ?? m.id, rig: ad.rig,
+        notes: `${row.label} · ${ad.rig}` + (row.franchise ? ' · franchise' : ''),
+        gif: `media/${page}/${safeId(m.id)}.gif`, meta: { bubble: (ad.bubbles && ad.bubbles[0]) || null },
+      });
+    }
+  }
+
+  return { subjects, generatedAt: new Date().toISOString() };
+}
+
+// ── window API ───────────────────────────────────────────────────────────────────
+type Win = typeof window & {
+  dgCatalog?: () => Promise<unknown>;
+  dgCapture?: (sub: Subject, o: CapOpts) => Promise<{ len: number }>;
+  __DG_B64?: string;
+  __dgChunk?: (off: number, n: number) => string;
+};
+const W = window as Win;
+W.dgCatalog = async () => { await ensureInit(); return buildCatalog(); };
+W.dgCapture = async (sub: Subject, o: CapOpts) => {
+  await ensureInit();
+  const b64 = captureSubject(sub, o);
+  W.__DG_B64 = b64;
+  return { len: b64.length };
+};
+W.__dgChunk = (off: number, n: number) => (W.__DG_B64 || '').substr(off, n);
+
+// ── tiny color helper ────────────────────────────────────────────────────────────
+function hsvToRgb(h: number, s: number, v: number): [number, number, number] {
+  const c = v * s, x = c * (1 - Math.abs(((h / 60) % 2) - 1)), m = v - c;
+  let r = 0, g = 0, b = 0;
+  if (h < 60) [r, g, b] = [c, x, 0]; else if (h < 120) [r, g, b] = [x, c, 0];
+  else if (h < 180) [r, g, b] = [0, c, x]; else if (h < 240) [r, g, b] = [0, x, c];
+  else if (h < 300) [r, g, b] = [x, 0, c]; else [r, g, b] = [c, 0, x];
+  return [Math.round((r + m) * 255), Math.round((g + m) * 255), Math.round((b + m) * 255)];
+}
+void envValueText;

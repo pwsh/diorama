@@ -917,7 +917,18 @@ export class ThreeDRenderer {
   // Procedural texture cache (generated once per kind).
   private _texCache: Partial<Record<FloorTexKind, THREE.Texture>> = {};
 
-  constructor(container: HTMLElement) { this._container = container; }
+  // Off-screen frame capture (docs gallery pipeline, scripts/docs-gallery):
+  // preserveDrawingBuffer keeps the WebGL back-buffer readable after a render
+  // so a capture harness can drawImage the canvas into a 2D context between
+  // frames. Default FALSE — a live panel never sets it (it costs a buffer copy
+  // per frame and is pointless outside capture). Renderer-internal-safe: the
+  // only effect is the WebGLRenderer context flag below.
+  private _preserveDrawingBuffer = false;
+
+  constructor(container: HTMLElement, opts?: { preserveDrawingBuffer?: boolean }) {
+    this._container = container;
+    this._preserveDrawingBuffer = !!opts?.preserveDrawingBuffer;
+  }
 
   async load(): Promise<void> {
     if (this.loaded) return;
@@ -943,7 +954,12 @@ export class ThreeDRenderer {
     this._camera = new THREE.PerspectiveCamera(50, w / h, 10, 60000);
     this._camera.position.set(0, 9000, -6000);
     this._camera.lookAt(0, 0, 0);
-    this._renderer = new THREE.WebGLRenderer({ antialias: true });
+    this._renderer = new THREE.WebGLRenderer({
+      antialias: true,
+      // Default false; set only by the docs-gallery capture harness so it can
+      // read finished frames off the canvas (see _preserveDrawingBuffer).
+      preserveDrawingBuffer: this._preserveDrawingBuffer,
+    });
     this._renderer.setSize(w, h);
     this._renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     this._renderer.outputColorSpace = THREE.SRGBColorSpace;

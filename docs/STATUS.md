@@ -80,6 +80,22 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Docs-gallery pipeline** (`npm run docs:gallery`, `docs/GALLERY.md`;
+  scripts committed, `docs-site/` output gitignored by design): fully
+  scripted documentation generator — headless Chrome + CDP over native
+  WebSocket drives `scripts/docs-gallery/capture-main.ts` (real renderer
+  chunk + in-page gifenc) to produce per-model animated GIFs and generate
+  markdown pages per placeable category (furniture/appliances/bathroom/
+  outdoor/lighting/switches-controls/sensors/doors-windows/robots, cats
+  enumerated dynamically) + an avatars section split by parent group with
+  a subsection per pack. Animation specs: avatars 360° orbit + motion +
+  own bubble glyph; appliances no-spin door/LED animations; lighting in a
+  wall+floor corner cycling off→on→RGB→dim (fireplace flickers); switches/
+  alarm/locks shown working; sensors/safety/robots state cycles. Verified
+  full run: **581/581 GIFs, 0 failures, ~7.3 min, 163 MB**. One renderer
+  addition: opt-in `preserveDrawingBuffer` constructor option (default
+  false).
+
 - **Roamers, multi-configuration & offline standalone**
   (`docs/DESIGN-roamers-config.md`; three Opus batches, Fable-designed;
   roamer-test **20/20**, config-test **42/42**, offline-test **27/27**,
