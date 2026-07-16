@@ -401,6 +401,23 @@ export interface MotionSensor {
   locked?: boolean;          // canvas move/rotate/delete disabled
 }
 
+// A roaming AI avatar (Batch A). A display-only presence stored in the config
+// (NOT bound to any sensor) that wanders the whole floor with a preference for
+// interior activities. Unlike motion-sensor AI avatars (home-room confined,
+// gated on binding/demo), roamers are free-range and always on when enabled.
+// Rendered in ALL UI modes (like demo avatars). Per-floor (Floor.roamers) —
+// repairFloor backfills []. Avatar selection reuses the motion-sensor model
+// (avatarKinds pool + legacy single avatarKind; resolveAvatar picks).
+export interface Roamer {
+  id: string;
+  name?: string;
+  avatarKind?: AvatarKind | 'random';  // LEGACY single-pick (kept for reads; new UI writes avatarKinds)
+  avatarKinds?: AvatarKind[];          // pool of rig variants; each roamer stably hash-picks one
+  plumbobColor?: string;               // hex; absent = the iconic Sims green
+  color?: string;                      // hex identity tint; absent = the default AI/target tint
+  enabled?: boolean;                   // absent = ON (rendered); false = hidden
+}
+
 // Environmental sensor fixture (temperature, humidity, CO₂, CO, PM, VOC,
 // pressure, illuminance, …). Bound to any HA sensor.* entity; shows the live
 // value in 2D and 3D. `kind` is normally derived from the entity's
@@ -549,6 +566,7 @@ export interface Floor {
   switches: SwitchFixture[];
   sensors: Sensor[];
   motionSensors: MotionSensor[];
+  roamers?: Roamer[];        // roaming AI avatars (display-only); repairFloor backfills []
   envSensors: EnvSensor[];   // older persisted stores lack it — repairFloor backfills
   look3d?: FloorLook3D | null;  // per-floor overrides of the global scene3d colors
   doors: Door[];
@@ -645,6 +663,15 @@ export interface Store {
   geo?: GeoConfig;                   // landmarks + lat/lon↔plan calibration (Feature G)
   avatarPacks?: Record<string, AvatarPackConfig>;   // per-pack loaded/active/members (avatar packs)
 }
+
+// ── Multiple-configuration registry (Batch B) ─────────────────────────────
+// A saved floor-plan configuration. The full Store body lives at HA user_data
+// key `diorama-cfg-<id>` (+ the active one mirrored in the diorama:store:v1
+// localStorage cache); this lightweight record lives in the index.
+export interface ConfigMeta { id: string; name: string; updatedAt: number; }
+// The registry index (HA user_data key `diorama-configs` + localStorage cache
+// `diorama:configs`). `activeId` is the last-active selection restored on load.
+export interface ConfigIndex { version: 1; activeId: string; configs: ConfigMeta[]; }
 
 // Saved 3D camera pose (scene coords, mm — floor-centered frame).
 export interface SavedView3D {

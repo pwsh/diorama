@@ -1,0 +1,167 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>roamer test</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<script type="module">
+  // Deterministic verification of Batch A roaming avatars (Floor.roamers).
+  //  - resolveAvatar: multi-pool differs per key + stable; single → that kind;
+  //    empty/undefined → adult. avatarFromPool: pool≥2 true, single false.
+  //  - A roam target builds a rig with NO motion sensor present.
+  //  - The AI goal picker for roam rigs is NOT loop-confined and carries an
+  //    interior-activity bias (mostly anchors / inside wall loops, some yard).
+  //  - enabled:false yields no target; kiosk/view modes still yield it (the
+  //    three-view roamer loop has no uiMode gate — mirrored here).
+  const V = '?v=' + Date.now();
+  const mod = await import('./assets/three-renderer.js' + V);
+  const R = mod.ThreeDRenderer;
+  const r = new R(document.getElementById('c'));
+  await r.load();
+  // Register a human pack so the pool has ≥2 ACTIVE ids (core is adult-only).
+  const _hum = await import('./assets/base-humans.js' + V);
+  R.registerAvatarPack(_hum.default);
+
+  const results = [];
+  const ok = (name, cond, extra = '') => results.push({ name, pass: !!cond, extra });
+
+  // ── Deterministic PRNG (mulberry32) patched over Math.random ───────────────
+  const mkRng = (seed) => () => {
+    seed |= 0; seed = (seed + 0x6D2B79F5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+
+  const pip = (px, py, vs) => { let inside = false;
+    for (let i = 0, j = vs.length - 1; i < vs.length; j = i++) {
+      const xi = vs[i].x, yi = vs[i].y, xj = vs[j].x, yj = vs[j].y;
+      if (((yi > py) !== (yj > py)) && px < ((xj - xi) * (py - yi)) / (yj - yi) + xi) inside = !inside;
+    } return inside; };
+
+  // ── (1) Avatar resolution (pure, via the static hooks) ─────────────────────
+  const POOL = ['child', 'teen', 'elder'];
+  const ka = R.resolveAvatar(undefined, POOL, 'roam_a');
+  const kb = R.resolveAvatar(undefined, POOL, 'roam_b');
+  const kc = R.resolveAvatar(undefined, POOL, 'roam_c');
+  ok('pool: picks in-pool', POOL.includes(ka) && POOL.includes(kb) && POOL.includes(kc), `${ka},${kb},${kc}`);
+  ok('pool: differs per key', new Set([ka, kb, kc]).size >= 2, `${ka},${kb},${kc}`);
+  ok('pool: stable across calls', R.resolveAvatar(undefined, POOL, 'roam_a') === ka &&
+                                   R.resolveAvatar(undefined, POOL, 'roam_b') === kb, '');
+  ok('single kind → that kind', R.resolveAvatar(undefined, ['teen'], 'roam_x') === 'teen', '');
+  ok('empty pool → adult', R.resolveAvatar(undefined, [], 'roam_x') === 'adult', '');
+  ok('undefined → adult', R.resolveAvatar(undefined, undefined, 'roam_x') === 'adult', '');
+  ok('avatarFromPool: pool≥2 true', R.avatarFromPool(undefined, POOL) === true, '');
+  ok('avatarFromPool: single false', R.avatarFromPool(undefined, ['teen']) === false, '');
+
+  // ── Floor: two closed room loops + a big yard, connected via bottom doors ──
+  const FW = 12000, FD = 9000;
+  const roomAWalls = { id: 'ra', points: [
+    { x: 1000, y: 1000 }, { x: 5000, y: 1000 }, { x: 5000, y: 6000 }, { x: 1000, y: 6000 }, { x: 1000, y: 1000 }] };
+  const roomBWalls = { id: 'rb', points: [
+    { x: 7000, y: 1000 }, { x: 11000, y: 1000 }, { x: 11000, y: 6000 }, { x: 7000, y: 6000 }, { x: 7000, y: 1000 }] };
+  const loopA = roomAWalls.points.slice(0, -1);
+  const loopB = roomBWalls.points.slice(0, -1);
+  const floor = {
+    id: 'f1', name: 'Roam', w: FW, d: FD,
+    walls: [roomAWalls, roomBWalls],
+    furniture: [
+      { id: 'chair', x: 2000, y: 2500, w: 500, h: 500, kind: 'chair', rotation: 180 },
+      { id: 'shelf', x: 1500, y: 1400, w: 800, h: 350, kind: 'bookshelf', rotation: 0 },
+      { id: 'sofa',  x: 9000, y: 2500, w: 2000, h: 900, kind: 'sofa', rotation: 0 },
+      { id: 'table', x: 9000, y: 4500, w: 1500, h: 900, kind: 'table', rotation: 0 },
+    ],
+    lights: [], switches: [], sensors: [], motionSensors: [], roamers: [], envSensors: [],
+    // Doors in each room's bottom wall (y=6000) → nav openings into the shared yard.
+    doors: [
+      { id: 'da', x: 2500, y: 6000, w: 1200, rotation: 0, hinge: 'left', entity_id: null },
+      { id: 'db', x: 8500, y: 6000, w: 1200, rotation: 0, hinge: 'left', entity_id: null },
+    ],
+    windows: [], bg: null, model3d: null, look3d: null, rooms: [],
+  };
+  r.updateFloor(floor, { preset: 'day', floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6' });
+  r.applyViewPreset('top');
+
+  ok('two closed wall loops', r._wallLoops.length >= 2, `loops=${r._wallLoops.length}`);
+
+  // Nav connectivity: room A, room B, and the yard must be ONE region (doors join
+  // them) so a roamer anchored in room A can reach room B + the yard.
+  const regA = r._regionOfWorld(2500, 3000);
+  const regB = r._regionOfWorld(9000, 3000);
+  const regYard = r._regionOfWorld(6000, 7500);
+  ok('nav: rooms+yard one region', regA >= 0 && regA === regB && regB === regYard,
+     `A=${regA} B=${regB} yard=${regYard}`);
+
+  // ── (2) A roam target builds a rig with NO motion sensor ───────────────────
+  // Mirrors three-view._tickOnce roamer loop (NO uiMode gate; enabled!==false).
+  const roamerTargets = (fl, _uiMode) => {
+    const out = [];
+    for (const rm of fl.roamers ?? []) {
+      if (rm.enabled === false) continue;
+      out.push({ key: 'roam_' + rm.id, x: fl.w / 2, y: fl.d / 2, color: 0xba68c8,
+                 ai: true, roam: true, avatar: rm.avatarKind ?? 'random', avatars: rm.avatarKinds });
+    }
+    return out;
+  };
+
+  const realNow = performance.now.bind(performance);
+  let fakeNow = realNow();
+  performance.now = () => fakeNow;
+  const DT = 16.7;
+  const ctx = { entityOn: {}, roomNames: {}, timeBucket: 'day' };
+
+  const floorOne = { ...floor, roamers: [{ id: 'r1', avatarKinds: POOL }] };
+  const tgts = roamerTargets(floorOne, 'edit');
+  ok('roam target built (no sensor)', tgts.length === 1 && tgts[0].key === 'roam_r1', `n=${tgts.length}`);
+  for (let i = 0; i < 8; i++) { fakeNow += DT; r.updateTargets(roamerTargets(floorOne, 'edit'), ctx); }
+  const rig = r._humanoids['roam_r1'];
+  ok('rig exists for roamer', !!rig, rig ? `kind=${rig.avatarKind}` : 'none');
+  const aiState = r._aiState['roam_r1'];
+  ok('ai state is roam+wander', !!aiState && aiState.roam === true && aiState.mode === 'wander',
+     aiState ? `roam=${aiState.roam} mode=${aiState.mode}` : 'none');
+
+  // ── enabled:false → no target; kiosk/view → still shown ────────────────────
+  const floorOff = { ...floor, roamers: [{ id: 'r1', enabled: false }] };
+  ok('enabled:false → no target', roamerTargets(floorOff, 'edit').length === 0, '');
+  const floorTwo = { ...floor, roamers: [{ id: 'r1' }, { id: 'r2', enabled: true }] };
+  ok('kiosk shows roamers', roamerTargets(floorTwo, 'kiosk').length === 2, '');
+  ok('view shows roamers', roamerTargets(floorTwo, 'view').length === 2, '');
+
+  // ── (3) Goal-picker interior bias + not loop-confined ──────────────────────
+  // Drive _aiPickGoal directly from a roamer anchored INSIDE room A. A CONFINED
+  // avatar could never reach room B / the yard; a roamer must.
+  const anchors = [];
+  for (const a of r._activityAnchors) anchors.push(r._sceneToWorld(a.x, a.z));
+  for (const sp of r._sitSpots) anchors.push(r._sceneToWorld(sp.x, sp.z));
+
+  const realRandom = Math.random;
+  Math.random = mkRng(0x1234);
+  const N = 400;
+  let interior = 0, yard = 0, roomB = 0, anchorHits = 0;
+  for (let i = 0; i < N; i++) {
+    const ai = { x: 2500, y: 3000, goalX: 2500, goalY: 3000, state: 'idle', timer: 0,
+                 path: null, speed: 0.7, anchorX: 2500, anchorY: 3000, mode: 'wander', roam: true };
+    r._aiPickGoal(ai);
+    const gx = ai.goalX, gy = ai.goalY;
+    const inA = pip(gx, gy, loopA), inB = pip(gx, gy, loopB);
+    if (inA || inB) interior++; else yard++;
+    if (inB) roomB++;
+    if (anchors.some(an => Math.hypot(an.x - gx, an.y - gy) < 800)) anchorHits++;
+  }
+  Math.random = realRandom;
+
+  const interiorFrac = interior / N;
+  ok('interior bias (≥0.6)', interiorFrac >= 0.6, `interiorFrac=${interiorFrac.toFixed(2)} (int=${interior} yard=${yard})`);
+  ok('reaches the yard (not confined)', yard > 0, `yard=${yard}`);
+  ok('reaches room B (loop-skip)', roomB > 0, `roomB=${roomB}`);
+  ok('anchor branch fires', anchorHits > 0, `anchorHits=${anchorHits}`);
+
+  performance.now = realNow;
+
+  const pass = results.filter(x => x.pass).length;
+  const total = results.length;
+  const fails = results.filter(x => !x.pass).map(x => x.name + (x.extra ? ` {${x.extra}}` : ''));
+  window.__RESULT__ = { pass, total, results };
+  document.title = `ROAMER ${pass === total ? 'PASS' : 'FAIL'} ${pass}/${total}` +
+    (fails.length ? ` | FAILS: ${fails.join('; ')}` : '') +
+    ` | interiorFrac=${interiorFrac.toFixed(2)} yard=${yard} roomB=${roomB} anchorHits=${anchorHits} loops=${r._wallLoops.length}`;
+</script>

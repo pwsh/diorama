@@ -213,6 +213,28 @@ panel_iframe:
 
 Reload HA. In iframe mode, paste a Long-Lived Access Token on first load.
 
+### Standalone / offline (no Home Assistant)
+
+Diorama also runs as a plain web page with no HA connection at all — for
+designing a floor plan, building a demo, or trying it out before wiring
+anything up. Serve `dist/` from any static file server (or unzip the HACS
+release and open it directly) and load `index.html`:
+
+```bash
+npm run build
+cd dist && python3 -m http.server 8080   # or any static server
+# open http://localhost:8080/index.html
+```
+
+On the connect screen, click **Use offline — no Home Assistant**. The full
+editor works: place walls, furniture, roamers, demo avatars, and unbound
+fixtures (which you can still toggle locally); weather can pull from
+Open-Meteo directly. Device bindings simply show no live state. Everything —
+including multiple named configurations — is stored **in this browser**
+(localStorage), so use **Settings ▸ Data ▸ Export / Import** to move a
+configuration between browsers or machines. To reconnect to Home Assistant
+later, open **Settings ▸ Connection** and click **Exit offline mode**.
+
 ## Sweet Home 3D import
 
 - **Plan underlay (2D)**: export your plan as SVG (Plan → Export to SVG

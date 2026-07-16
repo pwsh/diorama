@@ -1,12 +1,18 @@
-import type { Floor, Store } from './types.js';
+import type { Floor, Store, ConfigIndex } from './types.js';
 
 export const STORE_KEY = 'diorama:store:v1';
+// Config registry index cache (Batch B). The ACTIVE config body stays under
+// STORE_KEY so no cache migration is needed; this only mirrors the index.
+export const CONFIGS_CACHE_KEY = 'diorama:configs';
+
+// user_data key of a config body. The index lists ids; each body lives here.
+export function cfgBodyKey(id: string): string { return 'diorama-cfg-' + id; }
 
 function defaultFloor(): Floor {
   return {
     id: 'f1', name: 'Floor 1', w: 8000, d: 6000,
     walls: [], furniture: [], lights: [], switches: [], sensors: [], motionSensors: [],
-    envSensors: [], doors: [], windows: [], bg: null, rooms: [], bleProxies: [],
+    roamers: [], envSensors: [], doors: [], windows: [], bg: null, rooms: [], bleProxies: [],
     alarmPanels: [], safetySensors: [], robots: [], presenceZones: [], cameras: [],
     groundAreas: [], voidAreas: [],
   };
@@ -35,6 +41,7 @@ export function repairFloor(f: Partial<Floor> & { id: string; name: string; w: n
     switches: f.switches ?? [],
     sensors: f.sensors ?? [],
     motionSensors: f.motionSensors ?? [],
+    roamers: f.roamers ?? [],
     envSensors: f.envSensors ?? [],
     look3d: f.look3d ?? null,
     doors: (f as Partial<Floor>).doors ?? [],
@@ -71,6 +78,21 @@ export function loadStore(): Store {
 
 export function saveStore(s: Store): void {
   try { localStorage.setItem(STORE_KEY, JSON.stringify(s)); } catch (_) { /* ignore */ }
+}
+
+export function loadConfigsCache(): ConfigIndex | null {
+  try {
+    const raw = localStorage.getItem(CONFIGS_CACHE_KEY);
+    if (raw) {
+      const idx = JSON.parse(raw) as ConfigIndex;
+      if (idx && Array.isArray(idx.configs)) return idx;
+    }
+  } catch (_) { /* ignore */ }
+  return null;
+}
+
+export function saveConfigsCache(index: ConfigIndex): void {
+  try { localStorage.setItem(CONFIGS_CACHE_KEY, JSON.stringify(index)); } catch (_) { /* ignore */ }
 }
 
 export function newId(prefix: string): string {

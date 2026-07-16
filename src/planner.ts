@@ -1,6 +1,7 @@
 import { HassClient, type HaApi } from './ha-client.js';
 import { SensorDiscovery } from './sensor-discovery.js';
-import { loadStore, saveStore, newId, repairFloor } from './storage.js';
+import { loadStore, saveStore, newId, repairFloor, defaultStore,
+         cfgBodyKey, loadConfigsCache, saveConfigsCache } from './storage.js';
 import { slugToName, normMac, localToWorld, segCrossesSolidWall, mowerSweepWaypoints,
          ROBOT_DEFAULTS, robotLedColor, parseVacuumPosition, vacuumRawToWorld,
          vacuumRawHeadingRad, isStairsKind } from './geometry.js';
@@ -38,7 +39,20 @@ export interface BermudaDiscovery {
 import type {
   Store, Floor, Sensor, ZonesLive, ObjectHalo, LerpSlot,
   HassState, ConnStatus, DiscoveredDevice, Vec2, AvatarKind, WeatherConfig, CameraFixture,
+  ConfigIndex, ConfigMeta,
 } from './types.js';
+
+// Full export envelope (Batch B). `store` is the WHOLE Store serialized (no
+// field list on export — nothing stripped); `userAvatarPacks` carries the
+// user-imported avatar pack bodies from IndexedDB so an import on a fresh
+// browser is self-contained. Import also accepts a legacy bare-store JSON.
+export interface DioramaEnvelope {
+  diorama: 2;
+  name: string;
+  exportedAt: string;
+  store: Store;
+  userAvatarPacks?: AvatarPackDef[];
+}
 
 // How long a camera alert lingers (snapshot card + FOV pulse) after its
 // alertEntity flips back off. See Planner.cameraAlerting.
@@ -52,7 +66,7 @@ import {
 import { isDay } from './time-of-day.js';
 import {
   setAvatarPacksConfig, registerPack, getPack, unregisterPack,
-  type AvatarPackConfig, type AvatarPacksConfig,
+  type AvatarPackConfig, type AvatarPacksConfig, type AvatarPackDef,
 } from './avatars.js';
 import { AVATAR_PACK_MANIFEST } from './avatar-packs/manifest.js';
 import {
@@ -298,6 +312,10 @@ export class Planner extends EventTarget {
 
   // Active motion sensor (for selection / rotate-handle visibility on canvas)
   activeMotionId: string | null = null;
+
+  // Active roaming avatar (sidebar list expansion only; roamers have no canvas
+  // fixture — they spawn like AI avatars).
+  activeRoamerId: string | null = null;
 
   // Active environmental sensor (sidebar selection / canvas highlight)
   activeEnvId: string | null = null;
@@ -545,11 +563,20 @@ export class Planner extends EventTarget {
   private _initialSyncDone = false;
   private _retrySyncTimers: ReturnType<typeof setTimeout>[] = [];
   // HA-side JSON storage state (frontend/user_data).
+  // Legacy single-store key: read ONCE for migration, never written again after
+  // (old panel versions still find their data there).
   private static readonly HA_STORE_KEY = 'diorama';
+  // Config registry index key (Batch B — multiple configurations).
+  private static readonly INDEX_KEY = 'diorama-configs';
   private _haStoreLoaded = false;
   private _haSaveTimer: ReturnType<typeof setTimeout> | null = null;
   // Suppress save-back to HA when we're applying a freshly-loaded HA payload.
   private _suppressHaSave = false;
+  // Multi-configuration registry. Populated on first load / migration; null
+  // until then. `activeConfigId` mirrors `configIndex.activeId`.
+  configIndex: ConfigIndex | null = null;
+  activeConfigId = 'default';
+  private _lastSavedAt: number | null = null;
 
   constructor() {
     super();
@@ -574,7 +601,8 @@ export class Planner extends EventTarget {
     // not write its runtime view tweaks (or anything else) back to HA or
     // even its own localStorage cache.
     if (this.uiMode !== 'edit') return;
-    // Local cache is always written immediately so it survives reload.
+    // Local cache (diorama:store:v1) is the ACTIVE config body — written
+    // immediately so it survives reload / paints instantly next load.
     saveStore(this.store);
     // HA is the source of truth: debounce a push so rapid edits (drag, slider)
     // don't hammer the WS. Skip while applying an HA payload to avoid a save
@@ -583,11 +611,30 @@ export class Planner extends EventTarget {
     if (this._haSaveTimer) clearTimeout(this._haSaveTimer);
     this._haSaveTimer = setTimeout(() => {
       this._haSaveTimer = null;
-      if (!this.hass) return;
-      this.hass.setUserData(Planner.HA_STORE_KEY, this.store).catch(err => {
-        console.warn('HA storage save failed (kept local cache):', err);
-      });
+      void this._flushSave();
     }, 600);
+  }
+
+  // Push the ACTIVE config's body to HA + bump its index updatedAt. The index
+  // write piggybacks on the (debounced) body write so it's naturally throttled.
+  // Never writes the legacy `diorama` key.
+  private async _flushSave(): Promise<void> {
+    if (!this.hass) return;
+    const id = this.activeConfigId;
+    try {
+      await this.hass.setUserData(cfgBodyKey(id), this.store);
+      const meta = this.configIndex?.configs.find(c => c.id === id);
+      if (meta && this.configIndex) {
+        meta.updatedAt = Date.now();
+        this._lastSavedAt = meta.updatedAt;
+        saveConfigsCache(this.configIndex);
+        await this.hass.setUserData(Planner.INDEX_KEY, this.configIndex);
+      } else {
+        this._lastSavedAt = Date.now();
+      }
+    } catch (err) {
+      console.warn('HA storage save failed (kept local cache):', err);
+    }
   }
 
   // ── Eventing ────────────────────────────────────────────────────────────
@@ -874,89 +921,327 @@ export class Planner extends EventTarget {
     if (!this._batteryRegLoaded && changedId === undefined) void this.scanBatteryRegistry();
   }
 
-  // Pull the persisted store from HA's frontend/user_data. If HA has data,
-  // replace local store with it. If HA is empty, push the local cache up so
-  // future devices/browsers see it. Falls back silently to the localStorage
-  // copy already loaded in the constructor on any failure.
+  // Pull the persisted config registry from HA (source of truth). Runs once,
+  // after the first full state sync. Migrates the legacy single-store `diorama`
+  // key on first run. Falls back to the localStorage caches on any failure.
   private async _loadFromHa(): Promise<void> {
     if (!this.hass || this._haStoreLoaded) return;
     this._haStoreLoaded = true;
     try {
-      const remote = await this.hass.getUserData<Store>(Planner.HA_STORE_KEY);
-      if (remote && Array.isArray(remote.floors) && remote.floors.length > 0) {
-        // Apply remote store. Repair each floor + default top-level fields so
-        // older payloads (or partial schemas) load cleanly.
-        this._suppressHaSave = true;
-        try {
-          const floors = remote.floors.map(f => repairFloor(f));
-          this.store = {
-            v: 2,
-            floors,
-            currentFloorId: remote.currentFloorId && floors.some(f => f.id === remote.currentFloorId)
-              ? remote.currentFloorId : floors[0].id,
-            activeSensorId: null,
-            coverage:      remote.coverage      ?? true,
-            imperial:      remote.imperial      ?? false,
-            showDetails:   remote.showDetails   ?? false,
-            useRawTargets: remote.useRawTargets ?? false,
-            showMotionZones: remote.showMotionZones ?? true,
-            // Pass-through settings objects. scene3d was silently DROPPED
-            // here for a while (3D appearance reset on every load) — keep
-            // every new top-level Store field in this list.
-            scene3d:        remote.scene3d        ?? undefined,
-            views3d:        remote.views3d        ?? undefined,
-            layers2d:       remote.layers2d       ?? undefined,
-            layerPresets2d: remote.layerPresets2d ?? undefined,
-            customObjects:  remote.customObjects  ?? undefined,
-            people:         remote.people         ?? undefined,
-            bermudaEnabled: remote.bermudaEnabled ?? undefined,
-            bleShowUnknown: remote.bleShowUnknown ?? undefined,
-            weather:        remote.weather        ?? undefined,
-            geo:            remote.geo            ?? undefined,
-            avatarPacks:    remote.avatarPacks    ?? undefined,
-          };
-          // Reflect the authoritative pack config into the registry snapshot so
-          // resolveAvatar / activeAvatarIds see it, then re-hydrate loaded packs.
-          setAvatarPacksConfig(this.store.avatarPacks);
-          void this._hydrateAvatarPacks();
-          // Reset transient view state to match the loaded store.
-          this.activeMotionId = null;
-          this.activeEnvId = null;
-          this.activeBleId = null;
-          this.activeAlarmId = null;
-          this.activeSafetyId = null;
-          this.activeRobotId = null;
-          this.activeCameraId = null;
-          this.activePZoneId = null;
-          this.activeGroundAreaId = null;
-          this.activeVoidAreaId = null;
-          this.robotStates = {};
-          this.activePersonId = null;
-          this.viewCenter = null;
-          this.zoom = 1;
-          this.drag = null;
-          this.editZone = null;
-          this.drawingWall = null;
-          this.drawingPresenceZone = null;
-          this.drawingGroundArea = null;
-          this.drawingVoidArea = null;
-          this.showDetails = this.store.showDetails === true;
-          this.useRawTargets = this.store.useRawTargets === true;
-          // Mirror to localStorage as the local cache.
-          saveStore(this.store);
-        } finally {
-          this._suppressHaSave = false;
-        }
-        // Re-apply the weather source now that the authoritative config loaded
-        // (restarts / stops the Open-Meteo poll, recomputes local sources).
-        this._reconfigureWeather();
-        this.emitConfig();
-      } else {
-        // HA is empty — promote the local cache to be the source of truth.
-        await this.hass.setUserData(Planner.HA_STORE_KEY, this.store);
-      }
+      await this._loadConfigs();
     } catch (err) {
       console.warn('HA storage load failed (using local cache):', err);
+    }
+  }
+
+  // Config load order: index (HA → cache → migrate) then the ACTIVE body
+  // (HA → active-body cache), applied through the shared normalization.
+  private async _loadConfigs(): Promise<void> {
+    if (!this.hass) return;
+    let index = await this.hass.getUserData<ConfigIndex>(Planner.INDEX_KEY);
+    if (!index || !Array.isArray(index.configs) || index.configs.length === 0) {
+      index = loadConfigsCache();
+    }
+    if (!index || !Array.isArray(index.configs) || index.configs.length === 0) {
+      index = await this._migrateLegacy();
+    }
+    if (!index.configs.some(c => c.id === index!.activeId)) index.activeId = index.configs[0].id;
+    this.configIndex = index;
+    this.activeConfigId = index.activeId;
+    saveConfigsCache(index);
+    const body = await this._loadBody(index.activeId);
+    if (body) {
+      this._applyLoadedStore(body);
+    } else {
+      // Nothing stored anywhere for the active id — promote the current cache.
+      await this._writeBody(index.activeId, this.store);
+      this._reconfigureWeather();
+      this.emitConfig();
+    }
+  }
+
+  // First-run migration: the legacy single-store `diorama` key becomes config
+  // { id:'default', name:'Default' } (body copied to diorama-cfg-default, index
+  // written). Legacy key is LEFT in place but never written again. If legacy is
+  // empty, seed the default body from the current (cached / default) store.
+  private async _migrateLegacy(): Promise<ConfigIndex> {
+    let base = this.store;
+    if (this.hass) {
+      const legacy = await this.hass.getUserData<Store>(Planner.HA_STORE_KEY);
+      if (legacy && Array.isArray(legacy.floors) && legacy.floors.length > 0) base = legacy;
+    }
+    const index: ConfigIndex = {
+      version: 1, activeId: 'default',
+      configs: [{ id: 'default', name: 'Default', updatedAt: Date.now() }],
+    };
+    await this._writeBody('default', base);
+    await this.hass?.setUserData(Planner.INDEX_KEY, index);
+    return index;
+  }
+
+  // Read a config body from HA; fall back to the active-body cache only for the
+  // active id (that's the one diorama:store:v1 mirrors). null if nowhere.
+  private async _loadBody(id: string): Promise<Store | null> {
+    if (!this.hass) return null;
+    const remote = await this.hass.getUserData<Store>(cfgBodyKey(id));
+    if (remote && Array.isArray(remote.floors) && remote.floors.length > 0) return remote;
+    if (id === this.activeConfigId) {
+      const cached = loadStore();
+      if (cached && Array.isArray(cached.floors) && cached.floors.length > 0) return cached;
+    }
+    return null;
+  }
+
+  private async _writeBody(id: string, store: Store): Promise<void> {
+    if (!this.hass) return;
+    try { await this.hass.setUserData(cfgBodyKey(id), store); }
+    catch (err) { console.warn('config body write failed:', err); }
+  }
+
+  // Apply a loaded / imported / switched Store through the SAME normalization
+  // the initial load uses — the field list lives ONLY here (the _loadFromHa
+  // explicit-list gotcha: any new top-level Store field MUST be added here).
+  // Resets transient view state like a floor switch, rewrites the active-body
+  // cache, reconfigures weather, and emits config. Suppresses save-back while
+  // applying so the fresh payload isn't immediately pushed back.
+  private _applyLoadedStore(remote: Store): void {
+    this._suppressHaSave = true;
+    try {
+      const floors = remote.floors.map(f => repairFloor(f));
+      this.store = {
+        v: 2,
+        floors,
+        currentFloorId: remote.currentFloorId && floors.some(f => f.id === remote.currentFloorId)
+          ? remote.currentFloorId : floors[0].id,
+        activeSensorId: null,
+        coverage:      remote.coverage      ?? true,
+        imperial:      remote.imperial      ?? false,
+        showDetails:   remote.showDetails   ?? false,
+        useRawTargets: remote.useRawTargets ?? false,
+        showMotionZones: remote.showMotionZones ?? true,
+        // Pass-through settings objects. scene3d was silently DROPPED
+        // here for a while (3D appearance reset on every load) — keep
+        // every new top-level Store field in this list.
+        scene3d:        remote.scene3d        ?? undefined,
+        views3d:        remote.views3d        ?? undefined,
+        layers2d:       remote.layers2d       ?? undefined,
+        layerPresets2d: remote.layerPresets2d ?? undefined,
+        customObjects:  remote.customObjects  ?? undefined,
+        people:         remote.people         ?? undefined,
+        bermudaEnabled: remote.bermudaEnabled ?? undefined,
+        bleShowUnknown: remote.bleShowUnknown ?? undefined,
+        weather:        remote.weather        ?? undefined,
+        geo:            remote.geo            ?? undefined,
+        avatarPacks:    remote.avatarPacks    ?? undefined,
+      };
+      // Reflect the authoritative pack config into the registry snapshot so
+      // resolveAvatar / activeAvatarIds see it, then re-hydrate loaded packs.
+      setAvatarPacksConfig(this.store.avatarPacks);
+      void this._hydrateAvatarPacks();
+      // Reset transient view state to match the loaded store.
+      this.activeMotionId = null;
+      this.activeRoamerId = null;
+      this.activeEnvId = null;
+      this.activeBleId = null;
+      this.activeAlarmId = null;
+      this.activeSafetyId = null;
+      this.activeRobotId = null;
+      this.activeCameraId = null;
+      this.activePZoneId = null;
+      this.activeGroundAreaId = null;
+      this.activeVoidAreaId = null;
+      this.robotStates = {};
+      this.activePersonId = null;
+      this.viewCenter = null;
+      this.zoom = 1;
+      this.drag = null;
+      this.editZone = null;
+      this.drawingWall = null;
+      this.drawingPresenceZone = null;
+      this.drawingGroundArea = null;
+      this.drawingVoidArea = null;
+      this.showDetails = this.store.showDetails === true;
+      this.useRawTargets = this.store.useRawTargets === true;
+      // Mirror to localStorage as the ACTIVE config body cache.
+      saveStore(this.store);
+    } finally {
+      this._suppressHaSave = false;
+    }
+    // Re-apply the weather source now that the authoritative config loaded
+    // (restarts / stops the Open-Meteo poll, recomputes local sources).
+    this._reconfigureWeather();
+    this.emitConfig();
+  }
+
+  // ── Configuration registry API (Batch B) ─────────────────────────────────
+  // All mutating ops are edit-mode-only (guarded like save()). Kiosk/view can't
+  // reach them (settings tabs are edit-only) but the guard is belt-and-braces.
+
+  listConfigs(): ConfigMeta[] {
+    return this.configIndex ? this.configIndex.configs.map(c => ({ ...c })) : [];
+  }
+  get lastSavedAt(): number | null { return this._lastSavedAt; }
+
+  private _newConfigId(name: string): string {
+    const slug = (name || 'config').toLowerCase().replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '').slice(0, 24) || 'config';
+    const taken = new Set((this.configIndex?.configs ?? []).map(c => c.id));
+    let id = slug + '-' + Math.random().toString(36).slice(2, 7);
+    while (taken.has(id)) id = slug + '-' + Math.random().toString(36).slice(2, 7);
+    return id;
+  }
+
+  // Explicit immediate write of the active config (cancels the debounce).
+  async saveConfigNow(): Promise<void> {
+    if (this.uiMode !== 'edit') return;
+    if (this._haSaveTimer) { clearTimeout(this._haSaveTimer); this._haSaveTimer = null; }
+    saveStore(this.store);
+    await this._flushSave();
+  }
+
+  // Switch the active config: flush the current config's pending save, load the
+  // target body, persist activeId, and swap the store through the SAME
+  // normalization as initial load (full emitConfig + view/tool/selection reset).
+  async switchConfig(id: string): Promise<void> {
+    if (this.uiMode !== 'edit' || !this.configIndex) return;
+    if (id === this.activeConfigId) return;
+    if (!this.configIndex.configs.some(c => c.id === id)) return;
+    // Flush any pending save of the CURRENT config first so its edits aren't
+    // lost AND don't land on the new body (the debounce uses activeConfigId).
+    if (this._haSaveTimer) { clearTimeout(this._haSaveTimer); this._haSaveTimer = null; await this._flushSave(); }
+    const body = await this._loadBody(id) ?? defaultStore();
+    this.activeConfigId = id;
+    this.configIndex.activeId = id;
+    saveConfigsCache(this.configIndex);
+    await this.hass?.setUserData(Planner.INDEX_KEY, this.configIndex);
+    // _applyLoadedStore rewrites the diorama:store:v1 cache to the new body, so
+    // a stale cache from config A never paints config B's session.
+    this._applyLoadedStore(body);
+  }
+
+  // Clone the current store under a new id + switch to it.
+  async saveConfigAs(name: string): Promise<string> {
+    if (this.uiMode !== 'edit' || !this.configIndex) return '';
+    // Persist the current config first so its body reflects the latest edits.
+    if (this._haSaveTimer) { clearTimeout(this._haSaveTimer); this._haSaveTimer = null; await this._flushSave(); }
+    const id = this._newConfigId(name);
+    const clone = JSON.parse(JSON.stringify(this.store)) as Store;
+    await this._writeBody(id, clone);
+    this.configIndex.configs.push({ id, name: name || 'Untitled', updatedAt: Date.now() });
+    this.configIndex.activeId = id;
+    this.activeConfigId = id;
+    saveConfigsCache(this.configIndex);
+    await this.hass?.setUserData(Planner.INDEX_KEY, this.configIndex);
+    this._applyLoadedStore(clone);
+    return id;
+  }
+
+  async renameConfig(id: string, name: string): Promise<void> {
+    if (this.uiMode !== 'edit' || !this.configIndex) return;
+    const meta = this.configIndex.configs.find(c => c.id === id);
+    if (!meta) return;
+    meta.name = name || meta.name;
+    meta.updatedAt = Date.now();
+    saveConfigsCache(this.configIndex);
+    await this.hass?.setUserData(Planner.INDEX_KEY, this.configIndex);
+    this.emitConfig();
+  }
+
+  // Delete a config. Refuses when it's the only one. If active, switches to the
+  // first remaining. The body is tombstoned (empty {} — some HA builds reject a
+  // null set_user_data value) and dropped from the index.
+  async deleteConfig(id: string): Promise<void> {
+    if (this.uiMode !== 'edit' || !this.configIndex) return;
+    if (this.configIndex.configs.length <= 1) return;   // never delete the last one
+    if (!this.configIndex.configs.some(c => c.id === id)) return;
+    const wasActive = id === this.activeConfigId;
+    if (wasActive && this._haSaveTimer) { clearTimeout(this._haSaveTimer); this._haSaveTimer = null; }
+    try { await this.hass?.setUserData(cfgBodyKey(id), {}); } catch { /* best effort */ }
+    this.configIndex.configs = this.configIndex.configs.filter(c => c.id !== id);
+    if (wasActive) {
+      const first = this.configIndex.configs[0].id;
+      this.configIndex.activeId = first;
+      this.activeConfigId = first;
+    }
+    saveConfigsCache(this.configIndex);
+    await this.hass?.setUserData(Planner.INDEX_KEY, this.configIndex);
+    if (wasActive) {
+      const body = await this._loadBody(this.activeConfigId) ?? defaultStore();
+      this._applyLoadedStore(body);
+    } else {
+      this.emitConfig();
+    }
+  }
+
+  // Full export envelope. Serializes the WHOLE store (nothing stripped) +
+  // pulls the user-imported avatar pack bodies from IndexedDB so an import on a
+  // fresh browser is self-contained.
+  async exportConfig(): Promise<DioramaEnvelope> {
+    const store = JSON.parse(JSON.stringify(this.store)) as Store;
+    const name = this.listConfigs().find(c => c.id === this.activeConfigId)?.name ?? 'Diorama';
+    let userAvatarPacks: AvatarPackDef[] | undefined;
+    try {
+      const defs: AvatarPackDef[] = [];
+      for (const { json } of await loadAllPacks()) {
+        try {
+          const v = validatePackJson(JSON.parse(json));
+          if (v.ok && v.pack) defs.push(v.pack);
+        } catch { /* skip malformed */ }
+      }
+      if (defs.length) userAvatarPacks = defs;
+    } catch { /* IDB unavailable */ }
+    return { diorama: 2, name, exportedAt: new Date().toISOString(), store, userAvatarPacks };
+  }
+
+  // Import an envelope OR a legacy bare-store JSON as a NEW config + switch to
+  // it. Never overwrites the current config. Returns { ok } with a readable
+  // error (never throws).
+  async importConfig(text: string, fallbackName = 'Imported'): Promise<{ ok: boolean; id?: string; error?: string }> {
+    if (this.uiMode !== 'edit') return { ok: false, error: 'Editing disabled.' };
+    if (!this.configIndex) return { ok: false, error: 'Configs not loaded yet.' };
+    let parsed: unknown;
+    try { parsed = JSON.parse(text); }
+    catch (err) { return { ok: false, error: 'Invalid JSON: ' + (err as Error).message }; }
+    const p = parsed as Record<string, unknown> | null;
+    let store: Store;
+    let name = fallbackName;
+    let userPacks: unknown[] | undefined;
+    if (p && p.diorama === 2 && p.store && Array.isArray((p.store as Store).floors)) {
+      store = p.store as Store;
+      if (typeof p.name === 'string' && p.name.trim()) name = p.name;
+      if (Array.isArray(p.userAvatarPacks)) userPacks = p.userAvatarPacks;
+    } else if (p && Array.isArray((p as unknown as Store).floors)) {
+      store = p as unknown as Store;   // legacy bare store
+    } else {
+      return { ok: false, error: 'Not a Diorama export (no floors).' };
+    }
+    if (userPacks) await this._importUserPacks(userPacks);
+    const id = this._newConfigId(name);
+    const clone = JSON.parse(JSON.stringify(store)) as Store;
+    await this._writeBody(id, clone);
+    this.configIndex.configs.push({ id, name: name || 'Imported', updatedAt: Date.now() });
+    this.configIndex.activeId = id;
+    this.activeConfigId = id;
+    saveConfigsCache(this.configIndex);
+    await this.hass?.setUserData(Planner.INDEX_KEY, this.configIndex);
+    this._applyLoadedStore(clone);
+    return { ok: true, id };
+  }
+
+  // Register user-imported avatar packs (from an envelope) into IDB + the
+  // registry, skipping id collisions with builtins / already-present packs.
+  private async _importUserPacks(defs: unknown[]): Promise<void> {
+    for (const raw of defs) {
+      const v = validatePackJson(raw);
+      if (!v.ok || !v.pack) continue;
+      const def = v.pack;
+      if (getPack(def.id)) continue;   // skip collisions (builtins / existing)
+      try {
+        await savePackJson(def.id, JSON.stringify(def));
+        registerPack(def, 'user');
+      } catch (err) {
+        console.warn('avatar pack import failed:', err);
+      }
     }
   }
 
@@ -1401,6 +1686,40 @@ export class Planner extends EventTarget {
     this.emitConfig();
   }
 
+  // ── Roaming avatars (Batch A) ─────────────────────────────────────────────
+  setActiveRoamer(id: string | null): void {
+    this.activeRoamerId = (this.activeRoamerId === id) ? null : id;
+    this.emitConfig();
+  }
+
+  addRoamer(): string {
+    const f = this.floor();
+    if (!f.roamers) f.roamers = [];
+    const id = newId('roam');
+    f.roamers.push({ id, name: `Roamer ${f.roamers.length + 1}` });
+    this.activeRoamerId = id;
+    this.save();
+    this.emitConfig();
+    return id;
+  }
+
+  updateRoamer(id: string, mut: (r: import('./types.js').Roamer) => void): void {
+    const r = this.floor().roamers?.find(x => x.id === id);
+    if (!r) return;
+    mut(r);
+    this.save();
+    this.emitConfig();
+  }
+
+  deleteRoamer(id: string): void {
+    const f = this.floor();
+    if (!f.roamers) return;
+    f.roamers = f.roamers.filter(x => x.id !== id);
+    if (this.activeRoamerId === id) this.activeRoamerId = null;
+    this.save();
+    this.emitConfig();
+  }
+
   setActiveEnv(id: string | null): void {
     this.activeEnvId = (this.activeEnvId === id) ? null : id;
     this.emitConfig();
@@ -1766,6 +2085,13 @@ export class Planner extends EventTarget {
   // so a relative `/api/camera_proxy/...` (entity_picture) resolves same-origin —
   // return '' there. Only the standalone/token mode (a different origin) needs a
   // prefix, which lives in localStorage['diorama:url']. Trailing slash stripped.
+  // True when connected via the offline LocalApi (no Home Assistant). Reads the
+  // `offline` marker off the active HaApi so the UI (topbar pill, Settings exit
+  // button) can branch without a duplicate storage lookup.
+  get isOffline(): boolean {
+    return (this.hass as unknown as { offline?: boolean } | null)?.offline === true;
+  }
+
   get haBaseUrl(): string {
     try {
       const u = localStorage.getItem('diorama:url') || '';
@@ -2853,6 +3179,7 @@ export class Planner extends EventTarget {
     this.store.currentFloorId = id;
     this.store.activeSensorId = null;
     this.activeMotionId = null;
+    this.activeRoamerId = null;
     this.activeEnvId = null;
     this.activeBleId = null;
     this.activeAlarmId = null;

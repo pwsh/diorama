@@ -150,6 +150,13 @@ export interface TargetWorld {
   // solve; the controller A*-walks the rig there at human speed and idles when
   // close. No random wander, no room confinement (real movement). See _advanceAi.
   ble?: boolean;
+  // Optional (additive): this is a roaming AI avatar (Batch A). It is also `ai`
+  // (wander mode), but `roam` makes the controller SKIP home-loop confinement
+  // (roam the whole nav region) and use an interior-activity goal bias in
+  // _aiPickGoal (~50% activity/sit anchor, ~35% inside any wall loop, ~15%
+  // anywhere). Descend/emerge stair behaviors still apply. A stale renderer
+  // chunk ignores this and treats it as a plain unroomed AI avatar.
+  roam?: boolean;
   // Optional (additive): identity-fusion result (phase B3). Present when a BLE
   // person has been fused onto THIS radar target OR when this IS an identified
   // BLE person's own rig. The rig adopts `avatarKind` (else keeps its own pool
@@ -283,6 +290,9 @@ interface AiState {
   // goals). 'goal' = BLE-trilaterated person: the ONLY goal source is the latest
   // solve passed in each frame; no random wander, no room confinement.
   mode: 'wander' | 'goal';
+  // Roaming avatar (Batch A): wander mode but NOT home-loop confined, and the
+  // goal picker uses the interior-activity bias. Set once at seed from t.roam.
+  roam?: boolean;
   // Descend-the-stairs (wander mode only). `descendGoal` marks the current goal
   // as a sunken flight's deepest tread; on arrival the rig holds `descendDwell`
   // seconds, then `descendFade` triggers a fast scale-out + full dispose in the
@@ -642,6 +652,17 @@ export class ThreeDRenderer {
   static unregisterAvatarPack(id: string): void { unregisterPack(id); }
   static setAvatarPacksConfig(cfg: AvatarPacksConfig | undefined): void { setAvatarPacksConfig(cfg); }
   static resolveAvatarDef(id: string): AvatarDef { return resolveDef(id); }
+  // Test-harness hooks onto the pure avatar-resolution functions, resolved
+  // against THIS module's registry (same instance registerAvatarPack populates).
+  static resolveAvatar(want: AvatarKind | 'random' | undefined,
+                       list: AvatarKind[] | undefined, key: string,
+                       rng?: () => number): AvatarKind {
+    return resolveAvatar(want, list, key, rng);
+  }
+  static avatarFromPool(want: AvatarKind | 'random' | undefined,
+                        list: AvatarKind[] | undefined): boolean {
+    return avatarFromPool(want, list);
+  }
 
   private _container: HTMLElement;
   private _scene: THREE.Scene | null = null;
@@ -6811,6 +6832,7 @@ export class ThreeDRenderer {
   // radar target. See AiState. `dt` is the shared frame dt.
   private _advanceAi(t: TargetWorld, dt: number): void {
     const goalMode = !!t.ble;
+    const roam = !!t.roam;
     let ai = this._aiState[t.key];
     if (!ai) {
       // First sighting: seed the virtual raw at the anchor / solve, snapped to a
@@ -6827,7 +6849,8 @@ export class ThreeDRenderer {
       if (this._nav && this._nav.blockedCount > 0) {
         const gi = this._cellIdxOf(t.x, t.y);
         if (this._nav.blocked[gi] || this._nav.region[gi] < 0) {
-          const loop = goalMode ? null : this._aiHomeLoop(t.x, t.y);
+          // Roamers + BLE people are never home-loop confined.
+          const loop = (goalMode || roam) ? null : this._aiHomeLoop(t.x, t.y);
           const gr = this._regionOfWorld(t.x, t.y);
           const sc = this._cellToScene(this._nearestFreeCellInLoop(gi, gr, loop));
           const w = this._sceneToWorld(sc.x, sc.z);
@@ -6851,7 +6874,7 @@ export class ThreeDRenderer {
       ai = {
         x, y, goalX: x, goalY: y, state: 'idle', timer: 1 + Math.random() * 2,
         path: null, speed: 0.7, anchorX: t.x, anchorY: t.y,
-        mode: goalMode ? 'goal' : 'wander',
+        mode: goalMode ? 'goal' : 'wander', roam,
       };
       this._aiState[t.key] = ai;
       if (emerge) {
@@ -6974,9 +6997,16 @@ export class ThreeDRenderer {
   // ~4.5 m of the anchor. When the sensor sits inside a closed wall loop the
   // goal MUST fall inside that loop — a simple presence sensor only vouches
   // for its own room, so its avatar never wanders into adjacent rooms.
+  //
+  // ROAMERS (ai.roam, Batch A) are free-range: `loop` is null (no confinement)
+  // and the pick uses an interior-activity bias — ~50% an activity/sit anchor,
+  // ~35% a free cell INSIDE any closed wall loop, ~15% anywhere in the region
+  // (porch/yard excursions stay possible) — each branch falling through to the
+  // next when it has no candidates.
   private _aiPickGoal(ai: AiState, allowDescend = true): void {
     const region = this._regionOfWorld(ai.anchorX, ai.anchorY);
-    const loop = this._aiHomeLoop(ai.anchorX, ai.anchorY);
+    const roam = !!ai.roam;
+    const loop = roam ? null : this._aiHomeLoop(ai.anchorX, ai.anchorY);
     let gx: number | null = null, gy = 0;
     ai.descendGoal = false;
     // "Go downstairs": if a sunken flight's deepest tread is reachable in this
@@ -6991,7 +7021,11 @@ export class ThreeDRenderer {
         gx = fl.x; gy = fl.y; ai.descendGoal = true;
       }
     }
-    if (gx === null && Math.random() < 0.25) {
+    // Activity / sit anchor pick. Roamers weight it ~50% (vs 25% for confined
+    // avatars). `loop` null for roamers ⇒ any in-region anchor qualifies.
+    const roll = roam ? Math.random() : -1;
+    const wantAnchor = roam ? roll < 0.50 : Math.random() < 0.25;
+    if (gx === null && wantAnchor) {
       const cands: { x: number; y: number }[] = [];
       const consider = (sx: number, sz: number) => {
         const w = this._sceneToWorld(sx, sz);
@@ -7003,6 +7037,12 @@ export class ThreeDRenderer {
       for (const a of this._activityAnchors) consider(a.x, a.z);
       for (const sp of this._sitSpots) consider(sp.x, sp.z);
       if (cands.length) { const c = cands[(Math.random() * cands.length) | 0]; gx = c.x; gy = c.y; }
+    }
+    // Roamer interior bias, ~35% band: a random free cell INSIDE any closed wall
+    // loop (falls through to the region-wide pick below when there are no loops).
+    if (roam && gx === null && roll < 0.85 && this._wallLoops.length) {
+      const c = this._aiRandomCell(ai.anchorX, ai.anchorY, region, null, this._wallLoops);
+      if (c) { gx = c.x; gy = c.y; }
     }
     if (gx === null) {
       const c = this._aiRandomCell(ai.anchorX, ai.anchorY, region, loop);
@@ -7033,9 +7073,11 @@ export class ThreeDRenderer {
   // A random free cell within `R` mm of the anchor whose region matches.
   // `loop` is the anchor's home room: when set it's a HARD filter (the AI
   // avatar never leaves its sensor's room); null = unroomed sensor, any
-  // in-region cell within range qualifies. World-mm center, or null.
+  // in-region cell within range qualifies. `anyLoops` (roamer interior bias):
+  // when provided, the cell must fall inside AT LEAST ONE of the loops (used to
+  // keep roamer goals indoors). World-mm center, or null.
   private _aiRandomCell(anchorWx: number, anchorWy: number, region: number,
-                        loop: Vec2[] | null):
+                        loop: Vec2[] | null, anyLoops?: Vec2[][]):
       { x: number; y: number } | null {
     const n = this._nav;
     if (!n) {
@@ -7057,6 +7099,7 @@ export class ThreeDRenderer {
         const wx = (cx + 0.5) * n.cell, wy = (cy + 0.5) * n.cell;
         if (Math.hypot(wx - anchorWx, wy - anchorWy) > R) continue;
         if (loop && !pip(wx, wy, loop)) continue;   // hard room confinement
+        if (anyLoops && !anyLoops.some(lp => pip(wx, wy, lp))) continue;  // roamer: must be indoors
         any.push({ x: wx, y: wy });
       }
     }

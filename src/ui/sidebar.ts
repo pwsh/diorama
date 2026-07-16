@@ -9,7 +9,7 @@ import type {
   Sensor, Zone, ObjectHalo, BgImage, MotionSensor, EnvSensor, EnvKind, Light, SwitchFixture, LightIconKind,
   Furniture, FurnitureKind, Door, Window as WindowType, WindowKind, Layers2D, Floor, Room,
   ObjectRecipe, RecipePrimitive, RecipeShape, ActivityKind, AvatarKind,
-  BleProxy, AlarmPanel, SafetySensor, RobotFixture, CameraFixture, PresenceZone, GroundArea, GroundKind, VoidArea, DioramaPerson, GeoLandmark,
+  BleProxy, AlarmPanel, SafetySensor, RobotFixture, CameraFixture, PresenceZone, GroundArea, GroundKind, VoidArea, DioramaPerson, Roamer, GeoLandmark,
 } from '../types.js';
 import type { BermudaDevice } from '../planner.js';
 
@@ -274,6 +274,7 @@ export class Sidebar extends LitElement {
       ground: p.activeGroundAreaId ?? null,
       voids: p.activeVoidAreaId ?? null,
       people: p.activePersonId ?? null,
+      roamers: p.activeRoamerId ?? null,
       furniture: p.activeFurnitureId ?? null,
     };
     const snap = this._lastActiveSnapshot;
@@ -370,6 +371,7 @@ export class Sidebar extends LitElement {
         ${this._groundSection()}
         ${this._voidSection()}
         ${this._peopleSection()}
+        ${this._roamersSection()}
         ${this._doorsSection()}
         ${this._windowsSection()}
         ${this._furnitureSection()}
@@ -2112,6 +2114,83 @@ export class Sidebar extends LitElement {
             HA may take ~30 s or an integration reload to start reporting.
           </div>
         ` : nothing}
+      </div>
+    `;
+  }
+
+  // ── Roaming avatars section (Batch A) ─────────────────────────────────
+  private _roamersSection() {
+    const p = this.planner;
+    const roamers = p.floor().roamers ?? [];
+    return this._section('roamers', 'Roaming avatars', () => html`
+        <div style="color:var(--text-dim);font-size:11px;padding:2px 0 6px">
+          Free-range display avatars that wander this floor with a taste for
+          interior activities. Not bound to any sensor — always on when enabled.
+        </div>
+        ${roamers.length === 0
+          ? html`<div style="color:var(--text-dim);font-size:11px;padding:4px 0">
+              None yet. Add a roamer to populate the scene with a wandering person.
+            </div>`
+          : roamers.map(rm => this._roamerItem(rm))}
+        <button class="btn" style="width:100%;margin-top:6px" @click=${() => p.addRoamer()}>
+          + Add roamer
+        </button>
+    `);
+  }
+
+  private _roamerItem(rm: Roamer) {
+    const p = this.planner;
+    const sel = p.activeRoamerId === rm.id;
+    const on = rm.enabled !== false;
+    const color = rm.color || '#ba68c8';
+    return html`
+      <div style="border-bottom:1px solid var(--border)">
+        <div class="sensor-item ${sel ? 'sel' : ''}" @click=${() => p.setActiveRoamer(rm.id)}>
+          <div class="dot" style="background:${on ? color : '#555'}"></div>
+          <div class="nm" style="${on ? '' : 'opacity:0.5'}">${rm.name || 'Roamer'}</div>
+          <label class="mini-toggle" title="Enable / hide this roamer" @click=${(e: Event) => e.stopPropagation()}>
+            <input type="checkbox" .checked=${on}
+                   @change=${(e: Event) => p.updateRoamer(rm.id, x => { x.enabled = (e.target as HTMLInputElement).checked; })}>
+            <span></span>
+          </label>
+        </div>
+        ${sel ? this._roamerEditor(rm) : nothing}
+      </div>
+    `;
+  }
+
+  private _roamerEditor(rm: Roamer) {
+    const p = this.planner;
+    const upd = (mut: () => void) => p.updateRoamer(rm.id, () => mut());
+    return html`
+      <div style="background:rgba(0,0,0,0.25);border-radius:4px;padding:6px;margin:4px 0">
+        <div class="row"><label>Name</label>
+          <input type="text" .value=${rm.name ?? ''}
+                 @input=${(e: Event) => upd(() => { rm.name = (e.target as HTMLInputElement).value; })}>
+        </div>
+        <div class="row" title="Color of the spinning plumbob above this roamer. Default = the iconic Sims green.">
+          <label>Plumbob</label>
+          <input type="color" .value=${rm.plumbobColor || '#2ee56a'}
+                 style="width:36px;height:24px;padding:0;border:1px solid var(--border);background:#111"
+                 @input=${(e: Event) => upd(() => { rm.plumbobColor = (e.target as HTMLInputElement).value; })}>
+          <button class="btn" style="font-size:10px;padding:2px 6px;margin-left:4px"
+                  title="Reset to the default Sims green"
+                  @click=${() => upd(() => { rm.plumbobColor = undefined; })}>✕</button>
+        </div>
+        <div class="row" title="Identity tint for this roamer's rig. Default = the standard avatar tint.">
+          <label>Color</label>
+          <input type="color" .value=${rm.color || '#ba68c8'}
+                 style="width:36px;height:24px;padding:0;border:1px solid var(--border);background:#111"
+                 @input=${(e: Event) => upd(() => { rm.color = (e.target as HTMLInputElement).value; })}>
+          <button class="btn" style="font-size:10px;padding:2px 6px;margin-left:4px"
+                  title="Reset to the default tint"
+                  @click=${() => upd(() => { rm.color = undefined; })}>✕</button>
+        </div>
+        ${this._avatarGrid(rm, upd)}
+        <button class="btn" style="width:100%;margin-top:6px;color:#ef9a9a"
+                @click=${() => { if (confirm(`Delete "${rm.name || 'Roamer'}"?`)) p.deleteRoamer(rm.id); }}>
+          Delete roamer
+        </button>
       </div>
     `;
   }

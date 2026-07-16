@@ -3,9 +3,9 @@ import { property, state } from 'lit/decorators.js';
 import { customElement } from './define.js';
 import { finishZoneEdit, cancelZoneEdit } from '../canvas-interact.js';
 import { alarmStateColor } from '../geometry.js';
-import { repairFloor } from '../storage.js';
 import { CONDITION_GLYPH, CONDITION_LABEL, tempText, weatherEffectEnabled } from '../weather.js';
 import { listPacks, getPack, packEffectiveState, resolveDef } from '../avatars.js';
+import { OFFLINE_FLAG_KEY } from '../ha-local.js';
 import type { AvatarDef, AvatarPackDef } from '../avatars.js';
 import { AVATAR_PACK_MANIFEST } from '../avatar-packs/manifest.js';
 import type { Planner } from '../planner.js';
@@ -737,6 +737,19 @@ export class SettingsDrawer extends LitElement {
 
   // ── Connection tab ──────────────────────────────────────────────────────
   private _connectionTab() {
+    // Offline (LocalApi): the URL/token controls would mislead — nothing to
+    // connect to. Offer a single exit path back to the auth screen.
+    if (this.planner.isOffline) {
+      return html`
+        <div style="font-size:12px;color:var(--text);line-height:1.6;margin-bottom:14px">
+          <strong>Offline mode</strong> — running with no Home Assistant.
+          Configurations are stored in this browser. Device bindings show no
+          live state, but unbound fixtures, roamers, demo avatars, and weather
+          (via Open-Meteo) all work.
+        </div>
+        <button class="btn-primary" @click=${this._exitOffline}>Exit offline mode</button>
+      `;
+    }
     return html`
       <label style="font-size:11px;color:var(--text-dim);display:block;margin-bottom:3px">
         Home Assistant URL
@@ -1008,54 +1021,101 @@ export class SettingsDrawer extends LitElement {
     `;
   }
 
-  // ── Data tab (moved from sidebar "Data") ────────────────────────────────
+  // ── Data tab (Configurations + export/import) ───────────────────────────
   private _dataTab() {
+    const p = this.planner;
+    const configs = p.listConfigs();
+    const activeId = p.activeConfigId;
+    const savedAt = p.lastSavedAt;
+    const only = configs.length <= 1;
     return html`
-      <button class="btn" style="width:100%;margin-bottom:6px" @click=${this._exportJson}>
-        Export JSON
-      </button>
-      <button class="btn" style="width:100%" @click=${this._importJson}>Import JSON</button>
+      <h3 style="font-size:12px;margin:0 0 8px">Configurations</h3>
+      <select style="width:100%;margin-bottom:8px" @change=${this._onSelectConfig}
+              title="Switch the active configuration">
+        ${configs.length
+          ? configs.map(c => html`<option value=${c.id} ?selected=${c.id === activeId}>${c.name}</option>`)
+          : html`<option>Default</option>`}
+      </select>
+      <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px">
+        <button class="btn" style="flex:1;min-width:80px" @click=${this._saveConfig}>Save</button>
+        <button class="btn" style="flex:1;min-width:80px" @click=${this._saveAsConfig}>Save as…</button>
+        <button class="btn" style="flex:1;min-width:80px" @click=${this._renameConfig}>Rename</button>
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px">
+        <button class="btn" style="flex:1;min-width:80px" @click=${this._exportConfig}>Export</button>
+        <button class="btn" style="flex:1;min-width:80px" @click=${this._importConfig}>Import</button>
+        <button class="btn" style="flex:1;min-width:80px" ?disabled=${only}
+                title=${only ? 'The only configuration cannot be deleted' : 'Delete this configuration'}
+                @click=${this._deleteConfig}>Delete</button>
+      </div>
+      ${savedAt ? html`<div style="font-size:10px;color:var(--text-dim)">Last saved ${this._agoText(savedAt)}</div>` : nothing}
       <div style="font-size:10px;color:var(--text-dim);line-height:1.3;margin-top:8px">
-        Export a full backup of this floor plan (all floors, fixtures, and
-        settings) or restore one. Imported OBJ models and avatar packs live in
-        this browser's local storage and are re-imported per device.
+        Each configuration is a full, independent floor plan (all floors,
+        fixtures, avatars, and settings). Export downloads a self-contained
+        <code>.diorama.json</code> (including any imported avatar packs); Import
+        adds it as a new configuration. Imported OBJ models live in this
+        browser's local storage and are re-imported per device.
       </div>
     `;
   }
 
-  private _exportJson = () => {
-    const blob = new Blob([JSON.stringify(this.planner.store, null, 2)], { type: 'application/json' });
+  private _onSelectConfig = (e: Event) => {
+    void this.planner.switchConfig((e.target as HTMLSelectElement).value);
+  };
+  private _saveConfig = () => { void this.planner.saveConfigNow(); };
+  private _saveAsConfig = () => {
+    const name = prompt('New configuration name:', '');
+    if (name == null) return;
+    void this.planner.saveConfigAs(name.trim() || 'Untitled');
+  };
+  private _renameConfig = () => {
+    const p = this.planner;
+    const cur = p.listConfigs().find(c => c.id === p.activeConfigId);
+    const name = prompt('Rename configuration:', cur?.name ?? '');
+    if (name == null || !name.trim()) return;
+    void p.renameConfig(p.activeConfigId, name.trim());
+  };
+  private _deleteConfig = () => {
+    const p = this.planner;
+    if (p.listConfigs().length <= 1) return;
+    const cur = p.listConfigs().find(c => c.id === p.activeConfigId);
+    if (!confirm(`Delete configuration "${cur?.name ?? p.activeConfigId}"? This cannot be undone.`)) return;
+    void p.deleteConfig(p.activeConfigId);
+  };
+  private _exportConfig = async () => {
+    const env = await this.planner.exportConfig();
+    const safe = (env.name || 'diorama').replace(/[^a-z0-9-_]+/gi, '-').replace(/^-+|-+$/g, '') || 'diorama';
+    const blob = new Blob([JSON.stringify(env, null, 2)], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = `floor-plan-${new Date().toISOString().slice(0, 10)}.json`;
+    a.download = `${safe}.diorama.json`;
     a.click();
     URL.revokeObjectURL(a.href);
   };
-
-  private _importJson = () => {
+  private _importConfig = () => {
     const inp = document.createElement('input');
-    inp.type = 'file'; inp.accept = 'application/json';
+    inp.type = 'file'; inp.accept = 'application/json,.json';
     inp.onchange = () => {
       const file = inp.files?.[0]; if (!file) return;
       const rd = new FileReader();
-      rd.onload = () => {
-        try {
-          const obj = JSON.parse(rd.result as string);
-          if (!obj.floors || !Array.isArray(obj.floors)) throw new Error('missing floors');
-          if (!confirm('Replace current floor plan with imported data?')) return;
-          obj.floors = obj.floors.map((f: { id: string; name: string; w: number; d: number }) => repairFloor(f));
-          this.planner.store = obj;
-          this.planner.store.activeSensorId = null;
-          this.planner.save();
-          this.planner.emitConfig();
-        } catch (err) {
-          alert('Import failed: ' + (err as Error).message);
-        }
+      rd.onload = async () => {
+        const fallback = file.name.replace(/\.diorama\.json$|\.json$/i, '') || 'Imported';
+        const res = await this.planner.importConfig(rd.result as string, fallback);
+        if (!res.ok) alert('Import failed: ' + (res.error ?? 'unknown error'));
       };
       rd.readAsText(file);
     };
     inp.click();
   };
+  private _agoText(ts: number): string {
+    const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
+    if (s < 60) return s <= 2 ? 'just now' : `${s}s ago`;
+    const m = Math.round(s / 60);
+    if (m < 60) return `${m}m ago`;
+    const h = Math.round(m / 60);
+    if (h < 24) return `${h}h ago`;
+    return new Date(ts).toLocaleString();
+  }
 
   // ── Avatars tab (NEW pack manager) ──────────────────────────────────────
   private _avatarsTab() {
@@ -1262,6 +1322,12 @@ export class SettingsDrawer extends LitElement {
   private _clearConn = () => {
     localStorage.removeItem('diorama:url');
     localStorage.removeItem('diorama:token');
+    location.reload();
+  };
+  // Clear the offline flag → reload lands on the auth screen (HA connect form).
+  private _exitOffline = () => {
+    localStorage.removeItem(OFFLINE_FLAG_KEY);
+    this.open = false;
     location.reload();
   };
 

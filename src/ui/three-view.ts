@@ -1009,6 +1009,19 @@ export class ThreeView extends LitElement {
                        avatar: m.avatarKind ?? (demo ? 'random' : undefined), avatars: m.avatarKinds,
                        plumbobColor: m.plumbobColor ? hexToInt(m.plumbobColor) : undefined });
       }
+      // Roaming avatars (Batch A): display-only AI presences that live in the
+      // config (no sensor binding). Free-range wanderers with an interior-activity
+      // goal bias (see _advanceAi / _aiPickGoal — `roam` skips home-loop
+      // confinement). Rendered in ALL UI modes like demo avatars. Anchor at the
+      // floor center; the renderer's seed snaps it into a free cell. Enabled unless
+      // `enabled === false`. Never radar/BLE, so fusion never touches them.
+      for (const rm of f.roamers ?? []) {
+        if (rm.enabled === false) continue;
+        targets.push({ key: 'roam_' + rm.id, x: f.w / 2, y: f.d / 2,
+                       color: hexToInt(rm.color ?? '#ba68c8'), ai: true, roam: true,
+                       avatar: rm.avatarKind ?? 'random', avatars: rm.avatarKinds,
+                       plumbobColor: rm.plumbobColor ? hexToInt(rm.plumbobColor) : undefined });
+      }
       // BLE people on the CURRENT floor: synthetic goal-walk targets. x/y is the
       // (lerped) solved position — the renderer's goal controller walks the rig
       // there at human speed (see _advanceAi goal mode). Identified people carry

@@ -74,6 +74,21 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Roamers, multi-configuration & offline standalone**
+  (`docs/DESIGN-roamers-config.md`; three Opus batches, Fable-designed;
+  roamer-test **20/20**, config-test **42/42**, offline-test **27/27**,
+  regressions green): persistent **roaming AI avatars** (`Floor.roamers`,
+  sensor-free, motion-sensor avatar-pool selection with adult fallback,
+  interior-activity goal bias 50/35/15, all UI modes, sidebar section);
+  **config registry** (`diorama-configs` index + `diorama-cfg-<id>` bodies,
+  legacy-key migration, last-active restore, Settings ▸ Data Configurations
+  block: switch/save/save-as/rename/import-adds/export/delete-with-warning)
+  + **self-contained export envelope** (whole store + user avatar packs
+  from IDB; legacy JSON accepted); **offline standalone mode** (`LocalApi`
+  over localStorage, auth-screen "Use offline" + persistent flag + exit
+  path, Offline topbar pill, README static-serve docs) — index.html now
+  runs fully outside Home Assistant.
+
 - **Avatar-nav-stairs v2: floor voids + cross-floor stair portals**
   (completes the backlog item; `void-test` **10/10**, `stair-link-test`
   **25/25**, stairs-descend 23/23 + fusion 11/11 + full nav set green):

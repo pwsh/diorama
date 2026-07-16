@@ -1,0 +1,188 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>OFFLINE …</title>
+<style>
+  body { margin:0; background:#0d1116; color:#cfd8dc; font:13px/1.5 sans-serif; padding:14px; }
+  h1 { font-size:15px; margin:0 0 10px; }
+  #summary { font-size:14px; font-weight:bold; margin:10px 0; padding:8px 10px; border-radius:5px; }
+  .okbg { background:#12331f; color:#69f0ae; } .badbg { background:#3a1414; color:#ff8a80; }
+  .row { display:flex; justify-content:space-between; gap:10px; padding:2px 0; border-bottom:1px solid #1c2530; }
+  .pass { color:#69f0ae; } .fail { color:#ff5252; }
+  .name { color:#90caf9; } .extra { color:#ffd54f; font-size:11px; }
+</style>
+<h1>Offline standalone — real LocalApi over localStorage + Planner config seam</h1>
+<div id="summary">Running…</div>
+<div id="rows"></div>
+
+<!-- Drives the REAL LocalApi (bundled from src/ha-local.ts) AND a REAL Planner
+     (bundled with the in-memory avatar-store fake, like config-test). Build:
+       T=$(mktemp -d); cp -r src/* "$T"/
+       cp test-pages/fake-avatar-store.ts "$T"/avatar-store.ts
+       npx esbuild "$T"/planner.ts  --bundle --format=esm --outfile=<harness>/planner.mod.js
+       npx esbuild "$T"/ha-local.ts --bundle --format=esm --outfile=<harness>/ha-local.mod.js
+-->
+<script type="module">
+  const V = '?v=' + Date.now();
+  const { Planner } = await import('./planner.mod.js' + V);
+  const { LocalApi, shouldStartOffline, OFFLINE_FLAG_KEY } = await import('./ha-local.mod.js' + V);
+
+  const results = [];
+  const ok = (name, cond, extra = '') => results.push({ name, pass: !!cond, extra: String(extra) });
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  async function waitFor(cond, tries = 600) {
+    for (let i = 0; i < tries; i++) { if (cond()) return true; await sleep(4); }
+    return !!cond();
+  }
+  const clone = x => JSON.parse(JSON.stringify(x));
+  function canon(x) {
+    if (x === null || typeof x !== 'object') return x;
+    if (Array.isArray(x)) return x.map(canon);
+    const o = {};
+    for (const k of Object.keys(x).sort()) if (x[k] !== undefined) o[k] = canon(x[k]);
+    return o;
+  }
+  const deepEq = (a, b) => JSON.stringify(canon(a)) === JSON.stringify(canon(b));
+
+  const LOCAL_PREFIX = 'diorama:local:';
+  const BODY = id => 'diorama-cfg-' + id;
+  const INDEX = 'diorama-configs';
+
+  // Wipe every diorama key so each Planner starts from a truly blank browser.
+  function wipe() {
+    for (const k of Object.keys(localStorage))
+      if (k.startsWith('diorama')) localStorage.removeItem(k);
+  }
+
+  try {
+    // ── (a) user_data roundtrip + tombstone + absence + null-removal ─────────
+    {
+      wipe();
+      const api = new LocalApi();
+      ok('a: offline marker', api.offline === true, String(api.offline));
+      ok('a: absent key → null', (await api.getUserData('nope')) === null, '');
+      await api.setUserData('k1', { foo: 1, bar: [2, 3] });
+      ok('a: roundtrip value', deepEq(await api.getUserData('k1'), { foo: 1, bar: [2, 3] }), '');
+      ok('a: stored under diorama:local:', localStorage.getItem(LOCAL_PREFIX + 'k1') !== null, '');
+      // Tombstone: Batch B's deleteConfig writes {} for a deleted body.
+      await api.setUserData('k1', {});
+      ok('a: tombstone {} reads back as {}', deepEq(await api.getUserData('k1'), {}), '');
+      // null / undefined value REMOVES the slot (clean absence).
+      await api.setUserData('k1', null);
+      ok('a: null value removes slot', (await api.getUserData('k1')) === null &&
+        localStorage.getItem(LOCAL_PREFIX + 'k1') === null, '');
+    }
+
+    // ── (b) real Planner over LocalApi: connect + migrate + save/switch/saveAs
+    {
+      wipe();
+      const p = new Planner();
+      p.connectWith(new LocalApi());
+      const got = await waitFor(() => p.configIndex !== null);
+      ok('b: connectWith completes + index created', got && !!p.configIndex &&
+        p.configIndex.configs.length === 1, p.configIndex ? `n=${p.configIndex.configs.length}` : 'null');
+      ok('b: planner reports offline', p.isOffline === true, String(p.isOffline));
+      ok('b: default config id', p.configIndex.configs[0].id === 'default' &&
+        p.activeConfigId === 'default', p.activeConfigId);
+      ok('b: index persisted to localStorage', !!localStorage.getItem(LOCAL_PREFIX + INDEX), '');
+
+      // save writes the active body body to localStorage (edit mode default).
+      p.store.floors[0].name = 'OfflineHome';
+      await p.saveConfigNow();
+      const bodyRaw = localStorage.getItem(LOCAL_PREFIX + BODY('default'));
+      ok('b: save writes cfg-default body', bodyRaw && JSON.parse(bodyRaw).floors[0].name === 'OfflineHome',
+        bodyRaw ? JSON.parse(bodyRaw).floors[0].name : 'null');
+
+      // saveConfigAs clones + switches.
+      const idNew = await p.saveConfigAs('Night');
+      ok('b: saveConfigAs → 2 configs + switched', p.listConfigs().length === 2 &&
+        p.activeConfigId === idNew && idNew !== 'default', `${p.listConfigs().length}/${idNew}`);
+
+      // Edit new, switch back, content swaps (proves body isolation over LocalApi).
+      p.store.floors[0].name = 'NightEdit';
+      await p.saveConfigNow();
+      await p.switchConfig('default');
+      ok('b: switchConfig swaps store content', p.store.floors[0].name === 'OfflineHome', p.store.floors[0].name);
+      await p.switchConfig(idNew);
+      ok('b: switch back swaps again', p.store.floors[0].name === 'NightEdit', p.store.floors[0].name);
+      ok('b: activeId persisted', JSON.parse(localStorage.getItem(LOCAL_PREFIX + INDEX)).activeId === idNew, '');
+    }
+
+    // ── (b2) reload restores last-active config from localStorage ────────────
+    {
+      // Keep the localStorage from (b); a fresh Planner over a fresh LocalApi
+      // must restore the same active id + body (only clear the runtime caches,
+      // NOT the diorama:local: user_data slots).
+      localStorage.removeItem('diorama:store:v1');
+      localStorage.removeItem('diorama:configs');
+      const prevActive = JSON.parse(localStorage.getItem(LOCAL_PREFIX + INDEX)).activeId;
+      const p = new Planner();
+      p.connectWith(new LocalApi());
+      await waitFor(() => p.configIndex !== null);
+      ok('b2: reload restores active id', p.activeConfigId === prevActive, `${p.activeConfigId} vs ${prevActive}`);
+      ok('b2: reload restores active body', p.store.floors[0].name === 'NightEdit', p.store.floors[0].name);
+    }
+
+    // ── (c) callService / toggleEntity no-op without throwing ────────────────
+    {
+      wipe();
+      const p = new Planner();
+      p.connectWith(new LocalApi());
+      await waitFor(() => p.configIndex !== null);
+      let threw = false;
+      try {
+        p.hass.callService('light', 'toggle', { entity_id: 'light.x' });
+        p.toggleEntity('light.x');
+        p.toggleEntity('switch.y');
+      } catch (e) { threw = true; }
+      ok('c: callService + toggleEntity no-op (no throw)', !threw, '');
+      ok('c: no state materialized', Object.keys(p.hass.states).length === 0, '');
+    }
+
+    // ── (d) effectiveState + toggleItem local control offline ────────────────
+    {
+      wipe();
+      const p = new Planner();
+      p.connectWith(new LocalApi());
+      await waitFor(() => p.configIndex !== null);
+      const item = { entity_id: null, localState: 'off' };
+      ok('d: effectiveState(unbound localState) resolves', p.effectiveState(item)?.state === 'off',
+        p.effectiveState(item)?.state);
+      p.toggleItem(item);
+      ok('d: toggleItem flips off→on', item.localState === 'on' && p.effectiveState(item)?.state === 'on',
+        item.localState);
+      p.toggleItem(item);
+      ok('d: toggleItem flips on→off', item.localState === 'off', item.localState);
+      // Bound item with no matching state → null (no crash).
+      ok('d: bound-but-absent → null', p.effectiveState({ entity_id: 'light.absent' }) === null, '');
+    }
+
+    // ── (e) shouldStartOffline pure helper ───────────────────────────────────
+    {
+      const on = { getItem: k => (k === OFFLINE_FLAG_KEY ? '1' : null) };
+      const off = { getItem: k => (k === OFFLINE_FLAG_KEY ? '0' : null) };
+      const absent = { getItem: () => null };
+      const boom = { getItem: () => { throw new Error('blocked'); } };
+      ok('e: flag "1" → true', shouldStartOffline(on) === true, '');
+      ok('e: flag "0" → false', shouldStartOffline(off) === false, '');
+      ok('e: absent → false', shouldStartOffline(absent) === false, '');
+      ok('e: throwing storage → false (guarded)', shouldStartOffline(boom) === false, '');
+    }
+  } catch (err) {
+    ok('harness threw', false, (err && err.stack) ? err.stack.split('\n').slice(0, 3).join(' | ') : String(err));
+  }
+
+  // ── Report ──────────────────────────────────────────────────────────────
+  const pass = results.filter(r => r.pass).length;
+  const total = results.length;
+  const fails = results.filter(r => !r.pass).map(r => r.name + (r.extra ? ` {${r.extra}}` : ''));
+  document.getElementById('rows').innerHTML = results.map(r =>
+    `<div class="row"><span class="name">${r.name}</span>` +
+    `<span class="${r.pass ? 'pass' : 'fail'}">${r.pass ? 'PASS' : 'FAIL'}${r.extra ? ` <span class="extra">${r.extra}</span>` : ''}</span></div>`
+  ).join('');
+  const sum = document.getElementById('summary');
+  sum.textContent = `OFFLINE ${pass === total ? 'PASS' : 'FAIL'} ${pass}/${total}`;
+  sum.className = pass === total ? 'okbg' : 'badbg';
+  window.__RESULT__ = { pass, total, results };
+  document.title = `OFFLINE ${pass === total ? 'PASS' : 'FAIL'} ${pass}/${total}` +
+    (fails.length ? ` | FAILS: ${fails.join('; ')}` : '');
+</script>

@@ -1,0 +1,290 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>CONFIG …</title>
+<style>
+  body { margin:0; background:#0d1116; color:#cfd8dc; font:13px/1.5 sans-serif; padding:14px; }
+  h1 { font-size:15px; margin:0 0 10px; }
+  #summary { font-size:14px; font-weight:bold; margin:10px 0; padding:8px 10px; border-radius:5px; }
+  .okbg { background:#12331f; color:#69f0ae; } .badbg { background:#3a1414; color:#ff8a80; }
+  .row { display:flex; justify-content:space-between; gap:10px; padding:2px 0; border-bottom:1px solid #1c2530; }
+  .pass { color:#69f0ae; } .fail { color:#ff5252; }
+  .name { color:#90caf9; } .extra { color:#ffd54f; font-size:11px; }
+</style>
+<h1>Config registry — migration · save · switch · export/import round-trip</h1>
+<div id="summary">Running…</div>
+<div id="rows"></div>
+
+<!-- Drive the REAL Planner (bundled) with an in-page fake HaApi over a Map.
+     This proves the C-batch LocalApi seam too (config ops ride ONLY
+     HaApi.get/setUserData). Build (IndexedDB does not complete under the
+     headless --virtual-time-budget harness, so swap avatar-store for the
+     in-memory fake by copying src into a temp tree):
+       T=$(mktemp -d); cp -r src/* "$T"/
+       cp test-pages/fake-avatar-store.ts "$T"/avatar-store.ts
+       npx esbuild "$T"/planner.ts --bundle --format=esm \
+         --outfile=<harness>/planner.mod.js
+     (esbuild inlines the avatar-pack dynamic imports into one module.) -->
+<script type="module">
+  const V = '?v=' + Date.now();
+  const { Planner } = await import('./planner.mod.js' + V);
+
+  const results = [];
+  const ok = (name, cond, extra = '') => results.push({ name, pass: !!cond, extra: String(extra) });
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  async function waitFor(cond, tries = 600) {
+    for (let i = 0; i < tries; i++) { if (cond()) return true; await sleep(4); }
+    return !!cond();
+  }
+  const clone = x => JSON.parse(JSON.stringify(x));
+  function canon(x) {
+    if (x === null || typeof x !== 'object') return x;
+    if (Array.isArray(x)) return x.map(canon);
+    const o = {};
+    for (const k of Object.keys(x).sort()) if (x[k] !== undefined) o[k] = canon(x[k]);
+    return o;
+  }
+  const deepEq = (a, b) => JSON.stringify(canon(a)) === JSON.stringify(canon(b));
+
+  // ── Fake HaApi over a Map (the LocalApi seam) ──────────────────────────────
+  class FakeHa {
+    constructor(seed) {
+      this.map = new Map();
+      for (const [k, v] of Object.entries(seed || {})) this.map.set(k, clone(v));
+      this.states = {};
+      this._stateCbs = []; this._connCbs = [];
+    }
+    connect() {
+      for (const cb of this._connCbs) cb('connected');
+      // Full-state load (changedId undefined) — kicks the Planner's one-time
+      // _loadFromHa → config-registry load.
+      for (const cb of this._stateCbs) cb(this.states, undefined);
+    }
+    onState(fn) { this._stateCbs.push(fn); }
+    onConn(fn) { this._connCbs.push(fn); }
+    callService() { return Promise.resolve(); }
+    async getHistory() { return {}; }
+    async getWeatherForecasts() { return null; }
+    async getDevices() { return []; }
+    async getEntityRegistry() { return []; }
+    async updateEntityRegistry() { return true; }
+    async getUserData(key) { return this.map.has(key) ? clone(this.map.get(key)) : null; }
+    async setUserData(key, value) { this.map.set(key, clone(value)); return true; }
+    async refreshStates() {}
+    peek(key) { return this.map.has(key) ? clone(this.map.get(key)) : null; }
+    has(key) { return this.map.has(key); }
+  }
+
+  function makeStore(floorName, extra = {}) {
+    return {
+      v: 2,
+      floors: [{
+        id: 'f1', name: floorName, w: 8000, d: 6000,
+        walls: [], furniture: [], lights: [], switches: [], sensors: [], motionSensors: [],
+        roamers: [], envSensors: [], doors: [], windows: [], bg: null, rooms: [], bleProxies: [],
+        alarmPanels: [], safetySensors: [], robots: [], presenceZones: [], cameras: [],
+        groundAreas: [], voidAreas: [],
+      }],
+      currentFloorId: 'f1', activeSensorId: null,
+      coverage: true, imperial: false, showDetails: false, useRawTargets: false,
+      ...extra,
+    };
+  }
+
+  const BODY = id => 'diorama-cfg-' + id;
+  const INDEX = 'diorama-configs';
+  const LEGACY = 'diorama';
+
+  async function freshPlanner(seed) {
+    localStorage.removeItem('diorama:store:v1');
+    localStorage.removeItem('diorama:configs');
+    const stub = new FakeHa(seed);
+    const p = new Planner();
+    p.connectWith(stub);
+    await waitFor(() => p.configIndex !== null);
+    return { p, stub };
+  }
+  async function reloadWith(stub) {
+    localStorage.removeItem('diorama:store:v1');
+    localStorage.removeItem('diorama:configs');
+    const p = new Planner();
+    p.connectWith(stub);
+    await waitFor(() => p.configIndex !== null);
+    return p;
+  }
+
+  try {
+    // ── (a) Migration: legacy `diorama` body, no index ───────────────────────
+    {
+      const legacy = makeStore('LegacyHome');
+      const { p, stub } = await freshPlanner({ [LEGACY]: legacy });
+      ok('a: index created', !!p.configIndex && p.configIndex.configs.length === 1,
+        p.configIndex ? `n=${p.configIndex.configs.length}` : 'null');
+      const c0 = p.configIndex.configs[0];
+      ok('a: default entry id+name', c0.id === 'default' && c0.name === 'Default', `${c0.id}/${c0.name}`);
+      ok('a: activeId=default', p.configIndex.activeId === 'default' && p.activeConfigId === 'default', p.activeConfigId);
+      ok('a: migrated body applied', p.store.floors[0].name === 'LegacyHome', p.store.floors[0].name);
+      ok('a: body written to cfg-default', p.store.floors[0].name === 'LegacyHome' &&
+        (stub.peek(BODY('default'))?.floors?.[0]?.name === 'LegacyHome'),
+        stub.peek(BODY('default'))?.floors?.[0]?.name);
+      ok('a: index written to HA', !!stub.peek(INDEX) && stub.peek(INDEX).activeId === 'default', '');
+      ok('a: legacy key left in place', deepEq(stub.peek(LEGACY), legacy), '');
+    }
+
+    // ── (b) save writes cfg-default, never the legacy key ────────────────────
+    {
+      const legacy = makeStore('LegacyHome');
+      const { p, stub } = await freshPlanner({ [LEGACY]: legacy });
+      const legacyBefore = JSON.stringify(stub.peek(LEGACY));
+      p.store.floors[0].name = 'Edited';
+      await p.saveConfigNow();
+      ok('b: save writes cfg-default', stub.peek(BODY('default'))?.floors?.[0]?.name === 'Edited',
+        stub.peek(BODY('default'))?.floors?.[0]?.name);
+      ok('b: legacy key never rewritten', JSON.stringify(stub.peek(LEGACY)) === legacyBefore, '');
+      ok('b: cache holds active body', JSON.parse(localStorage.getItem('diorama:store:v1')).floors[0].name === 'Edited', '');
+    }
+
+    // ── (c) saveConfigAs clones + switches + index has 2 ─────────────────────
+    {
+      const { p, stub } = await freshPlanner({ [LEGACY]: makeStore('Day') });
+      p.store.floors[0].name = 'Day';
+      const idNew = await p.saveConfigAs('Night');
+      ok('c: index has 2 configs', p.listConfigs().length === 2, `n=${p.listConfigs().length}`);
+      ok('c: switched to new id', p.activeConfigId === idNew && idNew !== 'default', idNew);
+      ok('c: new body written', stub.peek(BODY(idNew))?.floors?.[0]?.name === 'Day',
+        stub.peek(BODY(idNew))?.floors?.[0]?.name);
+      ok('c: index persisted 2 + active', stub.peek(INDEX)?.configs?.length === 2 &&
+        stub.peek(INDEX)?.activeId === idNew, '');
+      ok('c: clone carries current content', p.store.floors[0].name === 'Day', p.store.floors[0].name);
+    }
+
+    // ── (d) switchConfig swaps content + persists activeId ───────────────────
+    let dStub, dIdB;
+    {
+      const { p, stub } = await freshPlanner({ [LEGACY]: makeStore('Aname') });
+      dStub = stub;
+      p.store.floors[0].name = 'Aname';
+      await p.saveConfigNow();
+      dIdB = await p.saveConfigAs('B');
+      p.store.floors[0].name = 'Bname';
+      await p.saveConfigNow();
+
+      await p.switchConfig('default');
+      ok('d: switch swaps store content', p.store.floors[0].name === 'Aname', p.store.floors[0].name);
+      ok('d: activeId persisted (default)', stub.peek(INDEX)?.activeId === 'default' && p.activeConfigId === 'default', '');
+      ok('d: active-body cache rewritten', JSON.parse(localStorage.getItem('diorama:store:v1')).floors[0].name === 'Aname', '');
+
+      await p.switchConfig(dIdB);
+      ok('d: switch back swaps again', p.store.floors[0].name === 'Bname', p.store.floors[0].name);
+      ok('d: activeId persisted (B)', stub.peek(INDEX)?.activeId === dIdB, '');
+    }
+
+    // ── (e) reload simulation restores LAST ACTIVE config ────────────────────
+    {
+      const p2 = await reloadWith(dStub);   // same stub Map, new Planner, cleared localStorage
+      ok('e: reload restores active id', p2.activeConfigId === dIdB, `${p2.activeConfigId} vs ${dIdB}`);
+      ok('e: reload restores active body', p2.store.floors[0].name === 'Bname', p2.store.floors[0].name);
+    }
+
+    // ── (f) deleteConfig refuses last / switches when active deleted ─────────
+    {
+      const { p } = await freshPlanner({ [LEGACY]: makeStore('Adef') });
+      p.store.floors[0].name = 'Adef';
+      await p.saveConfigNow();
+      await p.deleteConfig('default');
+      ok('f: refuses to delete the only config', p.listConfigs().length === 1, `n=${p.listConfigs().length}`);
+
+      const idB = await p.saveConfigAs('B');
+      p.store.floors[0].name = 'Bdel';
+      await p.saveConfigNow();
+      ok('f: two configs before delete', p.listConfigs().length === 2 && p.activeConfigId === idB, '');
+      await p.deleteConfig(idB);   // delete the ACTIVE one
+      ok('f: delete active drops to 1', p.listConfigs().length === 1, `n=${p.listConfigs().length}`);
+      ok('f: switches to first remaining', p.activeConfigId === 'default' && p.store.floors[0].name === 'Adef',
+        `${p.activeConfigId}/${p.store.floors[0].name}`);
+    }
+
+    // ── (g) export → import round-trip (nothing stripped, idempotent) ────────
+    {
+      const { p } = await freshPlanner({ [LEGACY]: makeStore('Base') });
+      const rich = makeStore('Rich', {
+        people: [{ id: 'p1', name: 'Al', color: '#ff8800', avatarKind: 'child' }],
+        avatarPacks: { 'base-humans': { loaded: true, active: true } },
+        customObjects: [{ id: 'obj1', label: 'Widget', w: 400, h: 400, ht: 400, kind: 'block', primitives: [] }],
+        views3d: [{ id: 'v1', name: 'ISO', pos: [1, 2, 3], target: [0, 0, 0] }],
+        weather: { source: 'entity', entityId: 'weather.home', chip: true },
+        geo: { landmarks: [{ id: 'lm1', name: 'Mailbox', x: 100, y: 200 }], boundaryM: 30 },
+      });
+      rich.floors[0].roamers = [{ id: 'r1', avatarKinds: ['child', 'teen', 'elder'], color: '#00ffaa', plumbobColor: '#ffcc00' }];
+      rich.floors[0].furniture = [{ id: 'tv1', x: 1000, y: 1000, w: 1200, h: 200, kind: 'tv', rotation: 0, entity_id: 'media_player.den' }];
+
+      const imp = await p.importConfig(JSON.stringify({ diorama: 2, name: 'Rich', exportedAt: 'x', store: rich }), 'Rich');
+      ok('g: import ok + new config', imp.ok && p.listConfigs().length === 2 && p.activeConfigId === imp.id,
+        imp.error ?? '');
+
+      const env = await p.exportConfig();
+      ok('g: envelope shape', env.diorama === 2 && !!env.store && typeof env.exportedAt === 'string', '');
+      ok('g: roamers survive (incl. avatarKinds)',
+        deepEq(env.store.floors[0].roamers, rich.floors[0].roamers), JSON.stringify(env.store.floors[0].roamers));
+      ok('g: entity ids survive', env.store.floors[0].furniture[0].entity_id === 'media_player.den',
+        env.store.floors[0].furniture[0].entity_id);
+      ok('g: people survive', deepEq(env.store.people, rich.people), '');
+      ok('g: avatarPacks survive', deepEq(env.store.avatarPacks, rich.avatarPacks), '');
+      ok('g: customObjects + views3d + geo survive',
+        deepEq(env.store.customObjects, rich.customObjects) &&
+        deepEq(env.store.views3d, rich.views3d) &&
+        deepEq(env.store.geo, rich.geo), '');
+
+      // Idempotent normalization: export → import → export deep-equals.
+      const imp2 = await p.importConfig(JSON.stringify(env), 'Rich2');
+      ok('g: re-import ok', imp2.ok, imp2.error ?? '');
+      const env2 = await p.exportConfig();
+      ok('g: store round-trips structurally identical', deepEq(env.store, env2.store),
+        deepEq(env.store, env2.store) ? '' : 'MISMATCH');
+    }
+
+    // ── (h) legacy bare-store import wraps + adds ────────────────────────────
+    {
+      const { p } = await freshPlanner({ [LEGACY]: makeStore('Base') });
+      const before = p.listConfigs().length;
+      const bare = makeStore('BareImported');
+      const imp = await p.importConfig(JSON.stringify(bare), 'BareFile');
+      ok('h: bare store import ok', imp.ok, imp.error ?? '');
+      ok('h: added as new config + switched', p.listConfigs().length === before + 1 && p.activeConfigId === imp.id, '');
+      ok('h: bare store content applied', p.store.floors[0].name === 'BareImported', p.store.floors[0].name);
+    }
+
+    // ── (i) import with userAvatarPacks registers them ───────────────────────
+    {
+      const { p } = await freshPlanner({ [LEGACY]: makeStore('Base') });
+      const packId = 'testpack-cfg';
+      const pack = { id: packId, label: 'Config Test Pack', version: 1, path: ['Test'],
+        avatars: [{ id: 'ctp_a', label: 'A', rig: 'humanoid', humanoid: {} }] };
+      ok('i: pack not registered before import', p.exportPackJson(packId) === null, '');
+      const env = { diorama: 2, name: 'WithPack', exportedAt: 'x', store: makeStore('WithPack'),
+        userAvatarPacks: [pack] };
+      const imp = await p.importConfig(JSON.stringify(env), 'WithPack');
+      ok('i: import ok', imp.ok, imp.error ?? '');
+      ok('i: user pack registered after import', p.exportPackJson(packId) !== null, '');
+      const exported = p.exportPackJson(packId);
+      ok('i: registered pack matches def', !!exported && JSON.parse(exported).id === packId, '');
+    }
+  } catch (err) {
+    ok('harness threw', false, (err && err.stack) ? err.stack.split('\n').slice(0, 3).join(' | ') : String(err));
+  }
+
+  // ── Report ────────────────────────────────────────────────────────────────
+  const pass = results.filter(r => r.pass).length;
+  const total = results.length;
+  const fails = results.filter(r => !r.pass).map(r => r.name + (r.extra ? ` {${r.extra}}` : ''));
+  const rowsEl = document.getElementById('rows');
+  rowsEl.innerHTML = results.map(r =>
+    `<div class="row"><span class="name">${r.name}</span>` +
+    `<span class="${r.pass ? 'pass' : 'fail'}">${r.pass ? 'PASS' : 'FAIL'}${r.extra ? ` <span class="extra">${r.extra}</span>` : ''}</span></div>`
+  ).join('');
+  const sum = document.getElementById('summary');
+  sum.textContent = `CONFIG ${pass === total ? 'PASS' : 'FAIL'} ${pass}/${total}`;
+  sum.className = pass === total ? 'okbg' : 'badbg';
+  window.__RESULT__ = { pass, total, results };
+  document.title = `CONFIG ${pass === total ? 'PASS' : 'FAIL'} ${pass}/${total}` +
+    (fails.length ? ` | FAILS: ${fails.join('; ')}` : '');
+</script>

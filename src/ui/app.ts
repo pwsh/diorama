@@ -2,6 +2,7 @@ import { LitElement, html, nothing } from 'lit';
 import { query, state } from 'lit/decorators.js';
 import { customElement } from './define.js';
 import { Planner } from '../planner.js';
+import { LocalApi, shouldStartOffline } from '../ha-local.js';
 import { fmtLen } from '../geometry.js';
 import { injectSharedStyles } from '../styles.js';
 import './auth-screen.js';
@@ -129,17 +130,25 @@ export class App extends LitElement {
     super.connectedCallback();
     injectSharedStyles();
     if (this._planner) this._applyUrlParams(this._planner);
+    // Standalone entry only (panel mode adopts a Planner before this runs, so
+    // this._planner is already set and the block is skipped — the offline flag
+    // never interferes with panel_custom).
     if (!this._planner) {
-      const token = localStorage.getItem('diorama:token');
-      if (token) {
-        const url = localStorage.getItem('diorama:url') || window.location.origin;
-        this._launch(url, token);
+      if (shouldStartOffline()) {
+        this._launchOffline();
+      } else {
+        const token = localStorage.getItem('diorama:token');
+        if (token) {
+          const url = localStorage.getItem('diorama:url') || window.location.origin;
+          this._launch(url, token);
+        }
       }
     }
     this.addEventListener('connect', e => {
       const { url, token } = (e as CustomEvent).detail as { url: string; token: string };
       this._launch(url, token);
     });
+    this.addEventListener('connect-offline', () => this._launchOffline());
     this.addEventListener('open-floor-modal', e => {
       const { floor } = (e as CustomEvent).detail as { floor: import('../types.js').Floor | null };
       this._floorModal?.show(floor);
@@ -191,6 +200,17 @@ export class App extends LitElement {
       }
     });
     // Re-render on view switches and floor changes (lit will reconcile children).
+    this._planner.addEventListener('config', () => this.requestUpdate());
+    this._connected = true;
+    this.requestUpdate();
+  }
+
+  // Offline / standalone: a Planner over LocalApi. Configs + the whole editor
+  // run with no HA (localStorage-backed user_data). Mirrors the panel-mode
+  // adoption path (connectWith + immediate connected UI, no auth flash).
+  private _launchOffline(): void {
+    this._planner = new Planner();
+    this._planner.connectWith(new LocalApi());
     this._planner.addEventListener('config', () => this.requestUpdate());
     this._connected = true;
     this.requestUpdate();

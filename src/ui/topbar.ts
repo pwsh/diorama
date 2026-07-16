@@ -46,9 +46,13 @@ export class Topbar extends LitElement {
 
   override render() {
     const p = this.planner;
-    const connClass = p.conn === 'connected' ? 'connected'
+    // Offline (LocalApi) never talks to HA — show a neutral pill instead of a
+    // connection status that would imply a live HA link.
+    const connClass = p.isOffline ? ''
+                    : p.conn === 'connected' ? 'connected'
                     : p.conn === 'auth_invalid' || p.conn === 'error' ? 'error' : '';
-    const connText = p.conn === 'connected' ? 'Connected'
+    const connText = p.isOffline ? 'Offline'
+                   : p.conn === 'connected' ? 'Connected'
                    : p.conn === 'auth_invalid' ? 'Auth Invalid'
                    : p.conn === 'connecting' ? 'Connecting…' : 'Disconnected';
     return html`
