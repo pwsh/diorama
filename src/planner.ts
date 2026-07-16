@@ -3,7 +3,7 @@ import { SensorDiscovery } from './sensor-discovery.js';
 import { loadStore, saveStore, newId, repairFloor } from './storage.js';
 import { slugToName, normMac, localToWorld, segCrossesSolidWall, mowerSweepWaypoints,
          ROBOT_DEFAULTS, robotLedColor, parseVacuumPosition, vacuumRawToWorld,
-         vacuumRawHeadingRad } from './geometry.js';
+         vacuumRawHeadingRad, isStairsKind } from './geometry.js';
 import { stepFusion, newFusionState, DEFAULT_FUSION_CFG,
          type FusionState, type FusionCand } from './fusion.js';
 import { fitGeoTransform, latLonToPlan, clampToBoundary, planBearingDeg, compass8, medianLatLon,
@@ -93,6 +93,19 @@ interface BleSolve {
   x: number; y: number; floorId: string; confidenceMm: number; updatedAt: number;
 }
 
+// A committed cross-floor transit for an identified BLE person (Tier 2 stair
+// portals). Runtime-only — NEVER persisted; recomputed by _watchFloorTransits on
+// each BLE solve. Keyed in Planner.floorTransits by the person's Store.people id.
+// `viaLinkId` is set only when a stairs-family piece carrying that same
+// stairLinkId exists on BOTH the from- and to-floor (drives the arriving/leaving
+// rig handoff); undefined = a plain pop/fade transition. Pruned after ~30 s.
+export interface FloorTransit {
+  fromFloorId: string;
+  toFloorId: string;
+  viaLinkId?: string;
+  at: number;                  // ms epoch the transit committed
+}
+
 // One resolved GPS device pin for rendering (Feature G, phase G2). Recomputed
 // from Store.people GPS sources + the geo transform on demand (getter) — not
 // persisted. Positions are world mm on the CURRENT floor's plan; `zone` decides
@@ -158,6 +171,7 @@ export type Drag =
   | { kind: 'cameraRotate'; id: string }
   | { kind: 'pzoneVert'; id: string; idx: number; startMm: Vec2; startPts: Vec2[] }
   | { kind: 'groundVert'; id: string; idx: number; startMm: Vec2; startPts: Vec2[] }
+  | { kind: 'voidVert'; id: string; idx: number; startMm: Vec2; startPts: Vec2[] }
   | { kind: 'env'; id: string; startMm: Vec2; start: Vec2 }
   | { kind: 'envResize'; id: string; startDist: number; startScale: number }
   | { kind: 'doorMove'; idx: number; startMm: Vec2; start: Vec2 }
@@ -183,7 +197,7 @@ export interface EditZone {
   mousePos: Vec2 | null;
 }
 
-export type Tool = 'select' | 'wall' | 'sensor' | 'motion' | 'env' | 'bleproxy' | 'alarm' | 'safety' | 'robot' | 'camera' | 'pzone' | 'ground' | 'furniture' | 'light' | 'switch' | 'door' | 'window' | 'delete';
+export type Tool = 'select' | 'wall' | 'sensor' | 'motion' | 'env' | 'bleproxy' | 'alarm' | 'safety' | 'robot' | 'camera' | 'pzone' | 'ground' | 'void' | 'furniture' | 'light' | 'switch' | 'door' | 'window' | 'delete';
 
 // Live robot state (runtime-only). `x/y/heading/phase/activity/led` are the
 // DISPLAY fields both canvases read; the rest are the movement controller's
@@ -316,6 +330,11 @@ export class Planner extends EventTarget {
   activeGroundAreaId: string | null = null;
   drawingGroundArea: { points: Vec2[]; id?: string } | null = null;
 
+  // Floor void / opening area (Tier-1 floor voids). Mirrors the presence-zone
+  // polygon flow exactly (parallel field, same latch idiom).
+  activeVoidAreaId: string | null = null;
+  drawingVoidArea: { points: Vec2[]; id?: string } | null = null;
+
   // Live robot positions (runtime-only, advanced by stepRobots from the 2D RAF —
   // like stepLerp). BOTH the 2D canvas and the 3D renderer read this, so the
   // robot moves consistently whether or not the 3D view was ever opened. See
@@ -374,6 +393,23 @@ export class Planner extends EventTarget {
   private _lastFuseAt = 0;
   private _fusionTimer: ReturnType<typeof setInterval> | null = null;
   private static readonly FUSION_TICK_MS = 2000;
+
+  // ── Cross-floor transits (Tier 2 stair portals, runtime-only) ─────────────
+  // When an identified BLE person's solved floor CHANGES, we don't trust a
+  // single solve (a bad multilateration can flick to an adjacent floor). The new
+  // floor must be held with fusion-style hysteresis — ≥ TRANSIT_MIN_SOLVES
+  // consecutive solves agreeing AND ≥ TRANSIT_HOLD_MS since the flip first
+  // appeared — before a transit commits into `floorTransits` (keyed by
+  // Store.people id). Committed records prune after TRANSIT_PRUNE_MS. Unknown
+  // devices (no person) never transit. Never persisted.
+  floorTransits: Record<string, FloorTransit> = {};
+  // Per-person hysteresis tracking: the ESTABLISHED floor + a pending candidate.
+  private _transitTrack: Record<string, {
+    floorId: string; candFloorId: string | null; candSince: number; candCount: number;
+  }> = {};
+  private static readonly TRANSIT_MIN_SOLVES = 2;
+  private static readonly TRANSIT_HOLD_MS = 4000;
+  private static readonly TRANSIT_PRUNE_MS = 30_000;
   // GPS pin staleness: a device_tracker / person fix older than this reads as
   // stale (dimmed + age caption). GPS pushes are minutes apart, so 15 min.
   private static readonly GPS_STALE_MS = 15 * 60 * 1000;
@@ -436,7 +472,7 @@ export class Planner extends EventTarget {
     if (m !== 'edit') {
       // Leave no edit affordances dangling.
       this.drag = null; this.editZone = null; this.drawingWall = null;
-      this.drawingPresenceZone = null; this.drawingGroundArea = null;
+      this.drawingPresenceZone = null; this.drawingGroundArea = null; this.drawingVoidArea = null;
       this.tool = 'select'; this.placingRoomId = null; this.placingLandmarkId = null;
       this.alignGuides = []; this.alignCandidates = [];
       // A disabled floor is hidden from the kiosk/view picker — don't strand the
@@ -893,6 +929,7 @@ export class Planner extends EventTarget {
           this.activeCameraId = null;
           this.activePZoneId = null;
           this.activeGroundAreaId = null;
+          this.activeVoidAreaId = null;
           this.robotStates = {};
           this.activePersonId = null;
           this.viewCenter = null;
@@ -902,6 +939,7 @@ export class Planner extends EventTarget {
           this.drawingWall = null;
           this.drawingPresenceZone = null;
           this.drawingGroundArea = null;
+          this.drawingVoidArea = null;
           this.showDetails = this.store.showDetails === true;
           this.useRawTargets = this.store.useRawTargets === true;
           // Mirror to localStorage as the local cache.
@@ -1352,6 +1390,7 @@ export class Planner extends EventTarget {
     if (t !== 'wall') this.drawingWall = null;
     if (t !== 'pzone') this.drawingPresenceZone = null;
     if (t !== 'ground') this.drawingGroundArea = null;
+    if (t !== 'void') this.drawingVoidArea = null;
     this.placingRoomId = null;  // picking any tool cancels a pending room placement
     this.placingLandmarkId = null;
     this.emitConfig();
@@ -1440,6 +1479,33 @@ export class Planner extends EventTarget {
       const id = newId('ga');
       f.groundAreas.push({ id, name: `Area ${f.groundAreas.length + 1}`, points: pts, kind: 'grass' });
       this.activeGroundAreaId = id;
+    }
+    this.save();
+    this.emitConfig();
+  }
+
+  setActiveVoidArea(id: string | null): void {
+    this.activeVoidAreaId = (this.activeVoidAreaId === id) ? null : id;
+    this.emitConfig();
+  }
+
+  // Commit the in-progress void-area polygon (≥3 pts). Mirrors finishGroundArea.
+  // Replaces an existing void's points when re-drawing (drawingVoidArea.id set),
+  // else creates a new void.
+  finishVoidArea(): void {
+    const d = this.drawingVoidArea;
+    this.drawingVoidArea = null;
+    if (!d || d.points.length < 3) { this.emitConfig(); return; }
+    const f = this.floor();
+    if (!f.voidAreas) f.voidAreas = [];
+    const pts = d.points.slice(0, 12).map(p => ({ x: Math.round(p.x), y: Math.round(p.y) }));
+    if (d.id) {
+      const v = f.voidAreas.find(x => x.id === d.id);
+      if (v) v.points = pts;
+    } else {
+      const id = newId('vd');
+      f.voidAreas.push({ id, points: pts });
+      this.activeVoidAreaId = id;
     }
     this.save();
     this.emitConfig();
@@ -2186,6 +2252,130 @@ export class Planner extends EventTarget {
         slot.tx = best.x; slot.ty = best.y; slot.active = true;
       }
     }
+    // Tier 2: watch for identified people changing floors → commit transits.
+    this._watchFloorTransits();
+  }
+
+  // ── Cross-floor transits (Tier 2) ─────────────────────────────────────────
+  // Track each identified BLE person's solved floor; commit a transit record
+  // when it changes (with hysteresis) so the renderer can hand a rig off at a
+  // linked stair. Allocation-light (runs on the LIVE solve path): a handful of
+  // people, no per-call arrays beyond a couple of small maps. Cheap no-op when
+  // no person carries a Bermuda device.
+  private _watchFloorTransits(now = Date.now()): void {
+    const people = this.store.people;
+    if (!people || !people.some(pe => pe.bermudaDeviceId)) return;
+    // deviceId → deviceKey (so a person's bermudaDeviceId finds its solve).
+    const keyOfDevice: Record<string, string> = {};
+    for (const deviceKey of Object.keys(this.bleDeviceInfo)) {
+      const id = this.bleDeviceInfo[deviceKey].deviceId;
+      if (id) keyOfDevice[id] = deviceKey;
+    }
+    let changed = false;
+    for (const pe of people) {
+      if (!pe.bermudaDeviceId) continue;
+      const deviceKey = keyOfDevice[pe.bermudaDeviceId];
+      const sol = deviceKey ? this.bleSolves[deviceKey] : undefined;
+      if (!sol) continue;                         // no live solve — nothing to track
+      const newFloor = sol.floorId;
+      let tk = this._transitTrack[pe.id];
+      if (!tk) { this._transitTrack[pe.id] = { floorId: newFloor, candFloorId: null, candSince: 0, candCount: 0 }; continue; }
+      if (newFloor === tk.floorId) {              // stable on the established floor
+        tk.candFloorId = null; tk.candCount = 0; continue;
+      }
+      // A candidate flip to a different floor — hold it before committing.
+      if (tk.candFloorId === newFloor) tk.candCount++;
+      else { tk.candFloorId = newFloor; tk.candSince = now; tk.candCount = 1; }
+      if (tk.candCount >= Planner.TRANSIT_MIN_SOLVES && (now - tk.candSince) >= Planner.TRANSIT_HOLD_MS) {
+        const viaLinkId = this._resolveStairLink(tk.floorId, newFloor);
+        this.floorTransits[pe.id] = { fromFloorId: tk.floorId, toFloorId: newFloor, viaLinkId, at: now };
+        tk.floorId = newFloor; tk.candFloorId = null; tk.candCount = 0;
+        changed = true;
+      }
+    }
+    // Prune stale committed transits.
+    for (const pid of Object.keys(this.floorTransits)) {
+      if (now - this.floorTransits[pid].at > Planner.TRANSIT_PRUNE_MS) { delete this.floorTransits[pid]; changed = true; }
+    }
+    // Repaint (sidebar "on <floor>" suffix / 2D chip) only when the set changed.
+    if (changed) this.emitConfig();
+  }
+
+  // Find a stairLinkId carried by a stairs-family piece on BOTH floors (the same
+  // opaque id on each), i.e. a stair portal linking them. undefined = no link.
+  private _resolveStairLink(floorAId: string, floorBId: string): string | undefined {
+    const linksOn = (fid: string): Set<string> => {
+      const out = new Set<string>();
+      const fl = this.store.floors.find(f => f.id === fid);
+      if (fl) for (const fu of fl.furniture)
+        if (fu.stairLinkId && isStairsKind(fu.kind)) out.add(fu.stairLinkId);
+      return out;
+    };
+    const a = linksOn(floorAId), b = linksOn(floorBId);
+    for (const id of a) if (b.has(id)) return id;
+    return undefined;
+  }
+
+  // Latest committed transit for a person id (Store.people id), or null. Cheap
+  // map hit — safe per frame. Records prune after TRANSIT_PRUNE_MS.
+  transitFor(personId: string): FloorTransit | null {
+    return this.floorTransits[personId] ?? null;
+  }
+
+  // The floor a person's BLE device is currently solved on, or null. Cheap
+  // (a couple of map hits) — used by the People sidebar "on <floor>" suffix.
+  solvedFloorIdFor(personId: string): string | null {
+    const pe = this.store.people?.find(p => p.id === personId);
+    if (!pe?.bermudaDeviceId) return null;
+    for (const deviceKey of Object.keys(this.bleDeviceInfo)) {
+      if (this.bleDeviceInfo[deviceKey].deviceId === pe.bermudaDeviceId)
+        return this.bleSolves[deviceKey]?.floorId ?? null;
+    }
+    return null;
+  }
+
+  // ── Stair-link editing (Tier 2, sidebar) ──────────────────────────────────
+  // Link a stairs-family piece on the current floor to a stairs-family partner
+  // on ANOTHER floor under one opaque id. Planner owns store.floors so it mutates
+  // BOTH pieces (the partner lives on a different floor). A link is a 1:1 pairing,
+  // so any prior link on either endpoint is cleared first. One save + emitConfig.
+  linkStairs(primaryId: string, partnerFloorId: string, partnerId: string): void {
+    const a = this.floor().furniture.find(f => f.id === primaryId);
+    const pf = this.store.floors.find(f => f.id === partnerFloorId);
+    const b = pf?.furniture.find(f => f.id === partnerId);
+    if (!a || !b || a === b) return;
+    this._unlinkStairPartners(a.stairLinkId);
+    this._unlinkStairPartners(b.stairLinkId);
+    const id = newId('sl');
+    a.stairLinkId = id; b.stairLinkId = id;
+    this.save(); this.emitConfig();
+  }
+
+  // Clear a piece's stair link from BOTH sides (also heals a broken link whose
+  // partner was deleted — the id is simply cleared off this piece).
+  clearStairLink(primaryId: string): void {
+    const a = this.floor().furniture.find(f => f.id === primaryId);
+    if (!a?.stairLinkId) return;
+    this._unlinkStairPartners(a.stairLinkId);
+    this.save(); this.emitConfig();
+  }
+
+  // Strip a stairLinkId off EVERY piece across ALL floors carrying it.
+  private _unlinkStairPartners(linkId?: string): void {
+    if (!linkId) return;
+    for (const fl of this.store.floors)
+      for (const fu of fl.furniture)
+        if (fu.stairLinkId === linkId) fu.stairLinkId = undefined;
+  }
+
+  // Find the partner piece of a linked stairs piece (same stairLinkId, different
+  // piece), plus its floor. null = unlinked OR a broken link (partner deleted).
+  stairLinkPartner(piece: { id: string; stairLinkId?: string }): { floor: Floor; piece: import('./types.js').Furniture } | null {
+    if (!piece.stairLinkId) return null;
+    for (const fl of this.store.floors)
+      for (const fu of fl.furniture)
+        if (fu.id !== piece.id && fu.stairLinkId === piece.stairLinkId) return { floor: fl, piece: fu };
+    return null;
   }
 
   // Resolve the runtime BLE people list for rendering. Reads the latest solves,
@@ -2647,6 +2837,7 @@ export class Planner extends EventTarget {
     for (const it of f.cameras ?? []) { it.x += dx; it.y += dy; }
     for (const z of f.presenceZones ?? []) z.points = z.points.map(p => ({ x: p.x + dx, y: p.y + dy }));
     for (const g of f.groundAreas ?? []) g.points = g.points.map(p => ({ x: p.x + dx, y: p.y + dy }));
+    for (const vd of f.voidAreas ?? []) vd.points = vd.points.map(p => ({ x: p.x + dx, y: p.y + dy }));
     for (const it of f.doors ?? []) { it.x += dx; it.y += dy; }
     for (const it of f.windows ?? []) { it.x += dx; it.y += dy; }
     for (const rm of f.rooms ?? []) { rm.anchor.x += dx; rm.anchor.y += dy; }
@@ -2672,6 +2863,8 @@ export class Planner extends EventTarget {
     this.drawingPresenceZone = null;
     this.activeGroundAreaId = null;
     this.drawingGroundArea = null;
+    this.activeVoidAreaId = null;
+    this.drawingVoidArea = null;
     this.robotStates = {};   // positions are per-floor; recomputed on the new floor
     this.activeFurnitureId = null;
     // Reset pan/zoom — viewCenter is in world mm and a different floor has

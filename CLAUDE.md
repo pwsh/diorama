@@ -277,7 +277,7 @@ Outdoor effects driven by `Planner.weatherNow` (W1). three-view's `_weatherFxSta
 The floor rect (`0..w × 0..d` mm) is editable by dragging its four boundary edges (EDIT + Select only). Hover within ~10 px (screen) of an edge — after all item hits fail, before the pan fallback — shows a resize cursor (`hitFloorEdge` in canvas-hit.ts); mid-edge square handles always draw so the affordance is discoverable (`drawFloorEditHandles` in canvas-render.ts). Mousedown starts a `floorEdge` `Drag` (`{edge, startClient, startScale, startW, startD, startBbox, applied}`). Input is measured in **frozen start-of-drag screen space** (`startClient`/`startScale`), NOT live world coords, because resizing rescales the fit-to-canvas view and live coords would feed back. Grid-snapped to `GRID_MM`. `resolveFloorEdgeDrag` (geometry.ts, pure) resolves new `w/d` + a content translation `tx/ty`: `right`/`top` edges only resize; `left`/`bottom` edges resize AND translate all content so the plan stays glued to the opposite edge. Minimum size 2000 mm; shrinking clamps against the content bbox (`floorContentBbox` — wall points + item centers) + 100 mm margin so nothing strands. `Planner.translateFloorContent(dx,dy)` moves every placeable + wall points + room anchors + `bg.x/y` + `model3d.x/y`; it's a **frame change, so LOCKED items translate too**. Geo landmarks (`Store.geo.landmarks`, world-frame, shared across floors) translate ONLY when `store.floors.length === 1` — a multi-floor origin edit must not silently shift the shared geo frame. Release rounds `w/d` to grid + `save()` + `emitConfig()` (configRev → `_keyFloor` → 3D/nav rebuild); `viewCenter` is untouched.
 
 ### Collapsible sidebar sections
-Every `.section` renders through `Sidebar._section(slug, title, bodyThunk, opts?)` (light-DOM wrapper: clickable `<h3 class="collapsible-header">` + `▸`/rotated arrow; the body thunk is only invoked while expanded). Collapsed keys persist **device-local** in `localStorage['diorama:sidebar:collapsed']` (JSON array, try/catch-guarded — NOT the HA store); absent from the set = expanded (default). Section keys are the stable per-section slugs (`floors`, `tools`, `sensors`, `motion`, `env`, `ble`, `alarm`, `people`, `doors`, `windows`, `furniture`, `custom`, `rooms`, `fixtures`, `layers`, `geo`, `model3d`, `bg`) — NOT the display title (which can change). The former `scene3d` / `weather` / `data` sidebar sections MOVED into the tabbed settings drawer (Display / Weather / Data tabs — see "Settings drawer & avatar packs"); the per-floor `look3d` overrides moved into the Floors section. Stale slugs in a persisted collapsed set are harmless. Room-grouped lists (`_groupedList(sectionSlug, …)`) get per-room-group collapse rows keyed `<sectionSlug>/<roomId>` (the "— No room —" bucket = `/none`). **mmWave detail editors are inline**: the selected sensor's per-sensor config editor (`_activeSensorSection()`) and its HA-data block (`_haSections()` — zones / objects / targets / sensor config) render as plain bordered **sub-blocks** directly beneath the selected sensor's row *inside* the `sensors` section (matching how the Motion section edits inline via `_motionItem`), NOT as separate `_section`s. There are no longer `active-sensor`/`ha-sensor` section slugs (stale keys in a persisted collapsed set are harmless).
+Every `.section` renders through `Sidebar._section(slug, title, bodyThunk, opts?)` (light-DOM wrapper: clickable `<h3 class="collapsible-header">` + `▸`/rotated arrow; the body thunk is only invoked while expanded). Collapsed keys persist **device-local** in `localStorage['diorama:sidebar:collapsed']` (JSON array, try/catch-guarded — NOT the HA store); absent from the set = expanded (default). Section keys are the stable per-section slugs (`floors`, `tools`, `sensors`, `motion`, `env`, `ble`, `alarm`, `people`, `doors`, `windows`, `furniture`, `custom`, `rooms`, `voids`, `fixtures`, `layers`, `geo`, `model3d`, `bg`) — NOT the display title (which can change). The former `scene3d` / `weather` / `data` sidebar sections MOVED into the tabbed settings drawer (Display / Weather / Data tabs — see "Settings drawer & avatar packs"); the per-floor `look3d` overrides moved into the Floors section. Stale slugs in a persisted collapsed set are harmless. Room-grouped lists (`_groupedList(sectionSlug, …)`) get per-room-group collapse rows keyed `<sectionSlug>/<roomId>` (the "— No room —" bucket = `/none`). **mmWave detail editors are inline**: the selected sensor's per-sensor config editor (`_activeSensorSection()`) and its HA-data block (`_haSections()` — zones / objects / targets / sensor config) render as plain bordered **sub-blocks** directly beneath the selected sensor's row *inside* the `sensors` section (matching how the Motion section edits inline via `_motionItem`), NOT as separate `_section`s. There are no longer `active-sensor`/`ha-sensor` section slugs (stale keys in a persisted collapsed set are harmless).
 
 `_autoExpandActive()` (called at the top of `render`) expands a section **only when its active id CHANGES** from the previous render: it keeps `_lastActiveSnapshot` (map of section slug → active id it read: `sensors`=`activeSensorId`, `motion`=`activeMotionId`, `env`/`ble`/`people`/`furniture` likewise) and, for each slug whose current id is set *and differs* from the snapshot, removes that slug from the collapsed set, then records the new snapshot. This fixes a bug where a **persisted** active id (`activeSensorId` is always set) re-expanded a just-collapsed section on the very next render — collapse could never stick. Now selecting an item on the canvas auto-expands once; collapsing while it stays selected sticks; selecting a *different* item expands again. It only ever *expands* — never force-collapses. Because every expanded section renders through the same `_section`/body-thunk call site in a fixed `render` hole (and the inline sensor sub-blocks keep stable identity while the same sensor stays active), Lit's surgical config-channel reconciliation (focused-input survival) is unaffected.
 
@@ -339,8 +339,38 @@ dwells ~1.5 s, fast-fades + disposes ("went downstairs" — normal spawn
 re-seeds), and ~1/4 of fresh wander spawns EMERGE at the deepest tread and
 walk up/out. Radar/BLE targets are never despawned/redirected by stairs (raw
 truth wins; they just track tread heights). Ascending stairs unchanged.
-Tier-2 cross-floor transits stay parked (docs/research/avatar-nav-stairs.md).
 Test page `stairs-descend-test.html`.
+
+**Floor voids** (`Floor.voidAreas`, repairFloor/defaultFloor backfill; v2):
+user-drawn 3–12-vertex "no floor here" polygons (presence-zone latch idiom:
+`drawingVoidArea`, `void` tool, `voidVert` drag, low-priority hit; sidebar
+`_section('voids', …)`). 2D dark hatched fill riding the **ground** layer;
+3D the polygon is cut from the floor patches as a HOLE (same earcut path as
+stairwell wells; shared dark void plane activates). **Nav: void cells are
+BLOCKED** — except cells on any stairs-family footprint (a flight bridges
+the void), so avatars route around missing floor and take the stairs when
+that's the only connection. Radar/BLE raw positions never remapped. Ghost
+floors ignore voids. Test page `void-test.html`.
+
+**Stair links & cross-floor transits** (`Furniture.stairLinkId`, item-level —
+the same opaque id on exactly two stairs-family pieces on two floors; role
+derives from `Store.floors` order (higher index = higher story), no offset
+needed): sidebar "Linked stairs" picker (writes/clears BOTH sides; broken
+links inert + clearable). `Planner.floorTransits` (runtime-only, keyed by
+person id): `_watchFloorTransits` on `_solveBle` completion commits a
+transit when an identified BLE person's solved floor changes with
+fusion-style hysteresis (≥2 consecutive solves + ≥4 s; prune 30 s;
+`viaLinkId` when both floors carry the linked pair; disabled floors skip).
+Renderer handoff via OPTIONAL `TargetWorld.spawnAt`/`leaveVia` (stale-chunk
+safe): arriving rigs fade in AT the linked stair and walk to the live solve;
+leaving rigs walk to the stair and fast-fade there (cap 6 s; `_leftAt`
+guard stops respawn while three-view still emits). 2D: linked stairs draw a
+▲/▼ chip (`stairChipArrow`, geometry.ts); People rows show "on <floor>"
+when a person's solved floor ≠ current. **Glass-house transit puppet**
+(best-effort theater): one scripted rig in the always-on `_transitGroup`
+walks the source flight while y interpolates across `STORY_H` (~8 s), then
+disposes — gated on glassHouse, cleared in clearTransientGroups/destroy.
+Test page `stair-link-test.html`.
 
 ### Nav snap wall-LOS filter (bookcase pass-through fix)
 `_nearestFreeCell`'s largest-region preference used to jump WALLS (a raw point in a wall-backed bookcase footprint snapped to the big outdoor region → rig locked outside). `_buildNav` now precomputes `_nav.wallSolids` (solid wall runs, openings excised via `wallCutsForSegment`, invisible walls excluded — consistent with the rasterizer) and `_nearestFreeCell` filters ring candidates to those with clear wall-LOS from the query point BEFORE the largest-region tie-break, falling back to unfiltered only when every candidate is walled off (never fails where the old code succeeded). `_regionOfWorld` (and through it the stuck-respawn + radar/AI goal-region resolution) inherits; `_nearestFreeCellInRegion`/`InLoop` were already constrained-safe. Door openings pass LOS, so walking out through a door still tracks. Regression: `test-pages/bookcase-los-test.html` (`BOOKCASE-LOS PASS 11/11`).

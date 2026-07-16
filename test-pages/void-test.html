@@ -1,0 +1,211 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>void test</title>
+<style>html,body{margin:0;background:#111;color:#ccc;font:12px sans-serif}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<!--
+  Floor voids (Tier 1) — user-drawn "no floor here" polygons.
+
+  Scene: an 8000 x 6000 floor with NO walls, split by a FULL-WIDTH void band
+  (x 0..8000, y 2500..3500). The band separates room A (y<2500) from room B
+  (y>3500). A flat stairs piece (elevation 0, no rails) spans the band at
+  x=4000 as the bridging flight.
+
+  Asserts:
+   (a) a void cell NOT under the stairs is BLOCKED in nav.
+   (b) a void cell UNDER the stairs footprint stays WALKABLE (flight bridges).
+   (c) the 3D floor slab has a HOLE — the slab is a ShapeGeometry (triangle
+       count differs vs the no-void plane control) AND no slab triangle
+       centroid falls inside the void polygon.
+   (d) region connectivity: with the void alone, room A and room B are DIFFERENT
+       nav regions; adding the bridging flight MERGES them into one.
+   (e) an A* route from room A to room B crosses the void ONLY on stair cells.
+   (f) repairFloor backfills voidAreas: [] (needs storage.mod.js —
+       npx esbuild src/storage.ts --bundle --format=esm --outfile=<harness>/storage.mod.js).
+
+  Serve the built renderer chunk next to this file.
+-->
+<script type="module">
+  const mod = await import('./assets/three-renderer.js');
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+
+  const FW = 8000, FD = 6000;
+  // Full-width void band separating room A (bottom) from room B (top). The x
+  // span extends past the floor edges (−1000..FW+1000) so the fringe nav-cell
+  // column (whose center can land just outside FW, since FW isn't a multiple of
+  // the 150 mm cell) is still inside the band — otherwise a sliver leaks around
+  // the edge and the two rooms wrongly connect.
+  const VOID = [
+    { x: -1000, y: 2500 }, { x: FW + 1000, y: 2500 },
+    { x: FW + 1000, y: 3500 }, { x: -1000, y: 3500 },
+  ];
+  // Flat stairs (elevation 0 → no rails, whole footprint walkable) spanning the
+  // band at x=4000. Footprint x[3500,4500] y[2200,3800] — covers the full band
+  // in y and bridges a little into each room.
+  const bridge = { id: 'st1', x: 4000, y: 3000, w: 1000, h: 1600, kind: 'stairs', rotation: 0, elevation: 0 };
+  const roomA = { id: 'ra', name: 'A', anchor: { x: 4000, y: 1000 } };
+  const roomB = { id: 'rb', name: 'B', anchor: { x: 4000, y: 5000 } };
+
+  const baseFloor = (extra = {}) => ({
+    id: 'f1', name: 'Void', w: FW, d: FD,
+    walls: [], furniture: [], lights: [], switches: [], sensors: [], motionSensors: [],
+    envSensors: [], doors: [], windows: [], bg: null, model3d: null, look3d: null,
+    rooms: [roomA, roomB], voidAreas: [],
+    ...extra,
+  });
+  const scene = { preset: 'day', floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6' };
+
+  // pointInPolygon (ray-cast) mirror of geometry.pointInPolygon.
+  const pip = (px, py, verts) => {
+    let inside = false;
+    for (let i = 0, j = verts.length - 1; i < verts.length; j = i++) {
+      const xi = verts[i].x, yi = verts[i].y, xj = verts[j].x, yj = verts[j].y;
+      if (((yi > py) !== (yj > py)) && (px < (xj - xi) * (py - yi) / (yj - yi) + xi)) inside = !inside;
+    }
+    return inside;
+  };
+  const inStairs = (wx, wy) => wx >= bridge.x - bridge.w / 2 && wx <= bridge.x + bridge.w / 2 &&
+                               wy >= bridge.y - bridge.h / 2 && wy <= bridge.y + bridge.h / 2;
+
+  // Count triangles of the floor SLAB meshes + gather ShapeGeometry slab
+  // triangle centroids in WORLD coords. The slab is the toon-material mesh
+  // rotated -pi/2; the dark void plane is a MeshBasicMaterial PlaneGeometry.
+  const slabInfo = () => {
+    let tris = 0, shapeMeshes = 0, planeMeshes = 0;
+    const centroids = [];
+    for (const ch of r._floorGroup.children) {
+      if (!ch.isMesh || !ch.geometry) continue;
+      const gt = ch.geometry.type;
+      const isVoidPlane = ch.material && ch.material.isMeshBasicMaterial;
+      if (isVoidPlane) continue;            // dark void plane, not the slab
+      const pos = ch.geometry.getAttribute('position');
+      const idx = ch.geometry.getIndex();
+      if (!pos) continue;
+      const triCount = idx ? idx.count / 3 : pos.count / 3;
+      tris += triCount;
+      if (gt === 'ShapeGeometry') {
+        shapeMeshes++;
+        // ShapeGeometry position is (sx, sy, 0) in shape coords: sx = fw/2 - wx,
+        // sy = fd/2 - wy. Invert per-triangle centroid back to world.
+        const readWorld = (vi) => {
+          const sx = pos.getX(vi), sy = pos.getY(vi);
+          return { x: FW / 2 - sx, y: FD / 2 - sy };
+        };
+        const tri = idx ? idx.count / 3 : pos.count / 3;
+        for (let t = 0; t < tri; t++) {
+          const a = idx ? idx.getX(t * 3) : t * 3;
+          const b = idx ? idx.getX(t * 3 + 1) : t * 3 + 1;
+          const c = idx ? idx.getX(t * 3 + 2) : t * 3 + 2;
+          const wa = readWorld(a), wb = readWorld(b), wc = readWorld(c);
+          centroids.push({ x: (wa.x + wb.x + wc.x) / 3, y: (wa.y + wb.y + wc.y) / 3 });
+        }
+      } else if (gt === 'PlaneGeometry') {
+        planeMeshes++;
+      }
+    }
+    return { tris, shapeMeshes, planeMeshes, centroids };
+  };
+
+  const navHelpers = () => {
+    const n = r._nav;
+    const cellIdx = (wx, wy) => {
+      const cx = Math.max(0, Math.min(n.nx - 1, Math.floor(wx / n.cell)));
+      const cy = Math.max(0, Math.min(n.ny - 1, Math.floor(wy / n.cell)));
+      return cy * n.nx + cx;
+    };
+    const regionAt = (wx, wy) => n.region[cellIdx(wx, wy)];
+    const blockedAt = (wx, wy) => n.blocked[cellIdx(wx, wy)];
+    const cellWorld = (i) => ({ x: ((i % n.nx) + 0.5) * n.cell, y: (((i / n.nx) | 0) + 0.5) * n.cell });
+    return { n, cellIdx, regionAt, blockedAt, cellWorld };
+  };
+
+  const tests = [];
+  const ok = (name, cond, detail) => tests.push({ name, ok: !!cond, detail });
+
+  // ── (c) control: NO void → plain plane slab, one region.
+  r.updateFloor(baseFloor(), scene);
+  r.applyViewPreset('top');
+  const ctrlSlab = slabInfo();
+  const ctrlNav = navHelpers();
+  const ctrlRegionA = ctrlNav.regionAt(roomA.anchor.x, roomA.anchor.y);
+  const ctrlRegionB = ctrlNav.regionAt(roomB.anchor.x, roomB.anchor.y);
+
+  // ── void-only: band, no bridge.
+  r.updateFloor(baseFloor({ voidAreas: [{ id: 'v1', points: VOID }] }), scene);
+  const vSlab = slabInfo();
+  const vNav = navHelpers();
+  const vRegionA = vNav.regionAt(roomA.anchor.x, roomA.anchor.y);
+  const vRegionB = vNav.regionAt(roomB.anchor.x, roomB.anchor.y);
+  // (a) void cell away from the bridge is blocked.
+  const aBlocked = vNav.blockedAt(1000, 3000);
+  // centroid-in-void count for the void-only slab (should be 0 — hole).
+  let centIn = 0;
+  for (const c of vSlab.centroids) if (pip(c.x, c.y, VOID)) centIn++;
+
+  // ── void + bridge: flat stairs span the band.
+  r.updateFloor(baseFloor({ voidAreas: [{ id: 'v1', points: VOID }], furniture: [bridge] }), scene);
+  const bNav = navHelpers();
+  const bRegionA = bNav.regionAt(roomA.anchor.x, roomA.anchor.y);
+  const bRegionB = bNav.regionAt(roomB.anchor.x, roomB.anchor.y);
+  // (b) void cell UNDER the stairs stays walkable.
+  const bWalkableUnderStairs = bNav.blockedAt(4000, 3000);
+  // (a-again) void cell NOT under the stairs still blocked (with bridge present).
+  const bBlockedAway = bNav.blockedAt(1000, 3000);
+
+  // (e) A* route from room A to room B crosses the void only on stair cells.
+  const startCell = r._nearestFreeCell(bNav.cellIdx(roomA.anchor.x, roomA.anchor.y));
+  const goalCell = r._nearestFreeCell(bNav.cellIdx(roomB.anchor.x, roomB.anchor.y));
+  const path = r._aStar(startCell, goalCell);
+  let routeVoidCells = 0, routeVoidNonStair = 0;
+  if (path) {
+    for (const ci of path) {
+      const w = bNav.cellWorld(ci);
+      if (pip(w.x, w.y, VOID)) {
+        routeVoidCells++;
+        if (!inStairs(w.x, w.y)) routeVoidNonStair++;
+      }
+    }
+  }
+
+  // ── (f) repairFloor backfills voidAreas (needs storage.mod.js).
+  let repairVoid = 'unknown';
+  try {
+    const st = await import('./storage.mod.js');
+    const rf = st.repairFloor({ id: 'x', name: 'x', w: 1000, d: 1000 });
+    repairVoid = Array.isArray(rf.voidAreas) && rf.voidAreas.length === 0 ? 'ok' : 'bad';
+  } catch (e) { repairVoid = 'no-module'; }
+
+  // Assertions
+  ok('(a) void cell off the bridge is BLOCKED', aBlocked === 1 && bBlockedAway === 1,
+     `voidOnly=${aBlocked} withBridge=${bBlockedAway}`);
+  ok('(b) void cell under the stairs is WALKABLE', bWalkableUnderStairs === 0,
+     `blocked=${bWalkableUnderStairs}`);
+  ok('(c) slab is a hole: ShapeGeometry + tri count differs vs plane control',
+     vSlab.shapeMeshes >= 1 && vSlab.tris !== ctrlSlab.tris,
+     `ctrlTris=${ctrlSlab.tris}(plane=${ctrlSlab.planeMeshes}) voidTris=${vSlab.tris}(shape=${vSlab.shapeMeshes})`);
+  ok('(c) no slab triangle centroid inside the void polygon', centIn === 0,
+     `centIn=${centIn}/${vSlab.centroids.length}`);
+  ok('(d) control: A and B are ONE region (no void)', ctrlRegionA === ctrlRegionB && ctrlRegionA >= 0,
+     `A=${ctrlRegionA} B=${ctrlRegionB}`);
+  ok('(d) void alone: A and B are DIFFERENT regions', vRegionA !== vRegionB && vRegionA >= 0 && vRegionB >= 0,
+     `A=${vRegionA} B=${vRegionB}`);
+  ok('(d) bridge MERGES A and B into one region', bRegionA === bRegionB && bRegionA >= 0,
+     `A=${bRegionA} B=${bRegionB}`);
+  ok('(e) A* route exists across the void', !!path && routeVoidCells > 0,
+     `pathLen=${path ? path.length : 0} voidCells=${routeVoidCells}`);
+  ok('(e) route crosses void ONLY on stair cells', !!path && routeVoidNonStair === 0,
+     `voidCells=${routeVoidCells} nonStair=${routeVoidNonStair}`);
+  ok('(f) repairFloor backfills voidAreas: []', repairVoid === 'ok', `repair=${repairVoid}`);
+
+  let pass = 0; const fails = [];
+  for (const t of tests) { if (t.ok) pass++; else fails.push(t.name); }
+  const total = tests.length, allPass = pass === total;
+  const title = allPass ? `VOID PASS ${pass}/${total}` : `VOID FAIL ${pass}/${total} [${fails.join(',')}]`;
+  document.title = title;
+  window.__RESULT__ = { title, ctrlRegionA, ctrlRegionB, vRegionA, vRegionB, bRegionA, bRegionB,
+                        routeVoidCells, routeVoidNonStair, ctrlTris: ctrlSlab.tris, voidTris: vSlab.tris };
+  document.body.insertAdjacentHTML('beforeend',
+    `<pre style="position:fixed;left:8px;top:8px;color:#8f8">${title}\n` +
+    tests.map(t => `${t.ok ? 'PASS' : 'FAIL'} ${t.name} — ${t.detail ?? ''}`).join('\n') + `</pre>`);
+</script>

@@ -390,6 +390,31 @@ export function hitGroundAreaVertex(p: Planner, view: View, mm: Vec2): { area: i
   return null;
 }
 
+// A void area is hit when the point is inside its polygon (respect hidden).
+// Mirrors hitGroundArea. Low priority — called after all item hits.
+export function hitVoidArea(p: Planner, view: View, mm: Vec2): import('./types.js').VoidArea | null {
+  void view;
+  const list = p.floor().voidAreas ?? [];
+  for (let i = list.length - 1; i >= 0; i--) {
+    const vd = list[i];
+    if (vd.hidden) continue;
+    if (vd.points.length >= 3 && pointInPolygon(mm.x, mm.y, vd.points)) return vd;
+  }
+  return null;
+}
+
+// A draggable vertex handle of the ACTIVE void area. Mirrors hitGroundAreaVertex.
+export function hitVoidAreaVertex(p: Planner, view: View, mm: Vec2): { area: import('./types.js').VoidArea; idx: number } | null {
+  const id = p.activeVoidAreaId; if (!id) return null;
+  const vd = (p.floor().voidAreas ?? []).find(x => x.id === id);
+  if (!vd || vd.locked || vd.hidden) return null;
+  const h = hitPx(view);
+  for (let i = 0; i < vd.points.length; i++) {
+    if (distMM(vd.points[i], mm) < h) return { area: vd, idx: i };
+  }
+  return null;
+}
+
 export function hitEnvSensor(p: Planner, view: View, mm: Vec2): EnvSensor | null {
   const f = p.floor();
   const fallback = hitPx(view) * 2;

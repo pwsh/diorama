@@ -10,6 +10,7 @@ import {
   groundAreaColor, groundKindLabel,
   powerGlowScale,
   hexToRgba, lighten, furnitureKind, furnitureCorners, resolveFurnitureDef, isBinKind, binStateIsFull,
+  isStairsKind, stairChipArrow,
   doorEndpoint, doorOpenDeltaDeg, doorOpenFraction, doorSpanCenter, windowEndpoints, wallCutsForSegment, wallKind,
   ENV_KINDS, envKindOf, envColor, envValueText, envScale,
   closedWallLoops, loopContaining, roomLabel,
@@ -219,6 +220,9 @@ export function drawAll(ctx: CanvasRenderingContext2D, p: Planner, view: View,
   // Ground / yard covering areas — painted right after the floor, under walls /
   // furniture / everything structural.
   if (on(L.ground)) drawGroundAreas(ctx, p, view);
+  // Floor voids / openings — dark hatched holes, drawn right after ground
+  // (rides the same `ground` layer gate).
+  if (on(L.ground)) drawVoidAreas(ctx, p, view);
   if (on(L.walls)) drawWalls(ctx, p, view);
   if (on(L.labels)) drawRooms(ctx, p, view);
   drawDoors(ctx, p, view);
@@ -1195,6 +1199,92 @@ function drawGroundAreas(ctx: CanvasRenderingContext2D, p: Planner, view: View):
   }
 }
 
+// Floor voids / openings — dark hatched holes cut from the slab (stairwell
+// well, atrium). Dark fill + diagonal hatch lines + dashed outline; dim when
+// unselected. Rides the `ground` layer. Edit mode shows orange vertex handles +
+// the in-progress draw preview (mirrors the ground-area latch).
+function drawVoidAreas(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
+  const dpr = window.devicePixelRatio || 1;
+  const f = p.floor();
+  for (const vd of f.voidAreas ?? []) {
+    if (vd.hidden || vd.points.length < 3) continue;
+    const active = p.activeVoidAreaId === vd.id;
+    const pts = vd.points.map(v => mmToPx(view, v.x, v.y));
+    // Bounding box for the hatch clip.
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const pt of pts) {
+      if (pt.x < minX) minX = pt.x; if (pt.y < minY) minY = pt.y;
+      if (pt.x > maxX) maxX = pt.x; if (pt.y > maxY) maxY = pt.y;
+    }
+    const trace = () => {
+      ctx.beginPath();
+      ctx.moveTo(pts[0].x, pts[0].y);
+      for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+      ctx.closePath();
+    };
+    // Dark base fill.
+    trace();
+    ctx.fillStyle = hexToRgba('#0a0d12', active ? 0.82 : 0.62);
+    ctx.fill();
+    // Diagonal hatch lines, clipped to the polygon.
+    ctx.save();
+    trace();
+    ctx.clip();
+    ctx.strokeStyle = hexToRgba('#8aa0b8', active ? 0.55 : 0.32);
+    ctx.lineWidth = 1;
+    const step = 12 * dpr;
+    ctx.beginPath();
+    for (let x = minX - (maxY - minY); x < maxX; x += step) {
+      ctx.moveTo(x, minY);
+      ctx.lineTo(x + (maxY - minY), maxY);
+    }
+    ctx.stroke();
+    ctx.restore();
+    // Dashed outline.
+    trace();
+    ctx.save();
+    ctx.setLineDash([6, 4]);
+    ctx.strokeStyle = hexToRgba('#c8d4e2', active ? 0.95 : 0.55);
+    ctx.lineWidth = active ? 2 : 1.5;
+    ctx.stroke();
+    ctx.restore();
+    // Vertex handles on the active (unlocked) void.
+    if (active && !vd.locked) {
+      for (const pt of pts) {
+        ctx.beginPath(); ctx.arc(pt.x, pt.y, 5 * dpr, 0, 2 * Math.PI);
+        ctx.fillStyle = '#ffb74d'; ctx.strokeStyle = '#fff'; ctx.lineWidth = 1;
+        ctx.fill(); ctx.stroke();
+      }
+    }
+  }
+  // In-progress draw preview (drawingVoidArea) — mirrors the ground-area latch.
+  const dv = p.drawingVoidArea;
+  if (dv?.points.length) {
+    const col = '#c8d4e2';
+    ctx.save();
+    ctx.strokeStyle = col; ctx.lineWidth = 2; ctx.setLineDash([5, 4]);
+    ctx.beginPath();
+    const a = mmToPx(view, dv.points[0].x, dv.points[0].y);
+    ctx.moveTo(a.x, a.y);
+    for (let i = 1; i < dv.points.length; i++) {
+      const pt = mmToPx(view, dv.points[i].x, dv.points[i].y);
+      ctx.lineTo(pt.x, pt.y);
+    }
+    if (p.cursor) {
+      const c2 = mmToPx(view, p.cursor.x, p.cursor.y);
+      ctx.lineTo(c2.x, c2.y);
+    }
+    ctx.stroke();
+    ctx.setLineDash([]);
+    for (const v of dv.points) {
+      const pt = mmToPx(view, v.x, v.y);
+      ctx.beginPath(); ctx.arc(pt.x, pt.y, 4 * dpr, 0, 2 * Math.PI);
+      ctx.fillStyle = col; ctx.fill();
+    }
+    ctx.restore();
+  }
+}
+
 function drawPresenceZones(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
   const dpr = window.devicePixelRatio || 1;
   const f = p.floor();
@@ -1760,6 +1850,7 @@ function drawFurniture(ctx: CanvasRenderingContext2D, p: Planner, view: View,
   const isEdit = p.uiMode === 'edit';
   const dpr = window.devicePixelRatio || 1;
   const now = performance.now() / 1000;
+  const curFloorIdx = p.store.floors.indexOf(f);
   for (const piece of f.furniture) {
     const center = mmToPx(view, piece.x, piece.y);
     const halfW = (piece.w / 2) * view.scale;
@@ -1886,6 +1977,32 @@ function drawFurniture(ctx: CanvasRenderingContext2D, p: Planner, view: View,
         ctx.fillRect(center.x - tw / 2, cy - 7 * dpr, tw, 14 * dpr);
         ctx.fillStyle = '#ff8a65';
         ctx.fillText(txt, center.x, cy);
+      }
+    }
+    // Linked-stairs chip (Tier 2): a small ▲/▼ near the top edge showing which
+    // way the linked partner leads (partner's story order vs this floor —
+    // higher Store.floors index = above). Drawn screen-upright, edit + view.
+    if (isStairsKind(piece.kind) && piece.stairLinkId) {
+      let partnerIdx = -1;
+      for (let fi = 0; fi < p.store.floors.length && partnerIdx < 0; fi++) {
+        if (fi === curFloorIdx) continue;
+        for (const fu of p.store.floors[fi].furniture) {
+          if (fu.id !== piece.id && fu.stairLinkId === piece.stairLinkId && isStairsKind(fu.kind)) {
+            partnerIdx = fi; break;
+          }
+        }
+      }
+      if (partnerIdx >= 0) {
+        const arrow = stairChipArrow(partnerIdx, curFloorIdx);
+        const cy = center.y - Math.max(halfW, halfH) - 9 * dpr;
+        ctx.font = `bold ${11 * dpr}px sans-serif`;
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        const r = 8 * dpr;
+        ctx.fillStyle = 'rgba(20,28,36,0.85)';
+        ctx.beginPath(); ctx.arc(center.x, cy, r, 0, 2 * Math.PI); ctx.fill();
+        ctx.strokeStyle = '#7fb4ff'; ctx.lineWidth = 1.2; ctx.stroke();
+        ctx.fillStyle = '#cfe3ff';
+        ctx.fillText(arrow, center.x, cy + 0.5 * dpr);
       }
     }
     // Corner handles drawn at rotation-aware world positions so resize stays

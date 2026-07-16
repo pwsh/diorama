@@ -109,6 +109,12 @@ export interface Furniture {
                               // small N° chip (2D) + camera-facing sprite (3D). Display only.
   doorOpen?: boolean;         // stove/oven only: persistent oven-door open flag, toggled by clicking
                               // the piece (2D/3D). ORed with the avatar-proximity / localState door open.
+  stairLinkId?: string;       // stairs-family only: an opaque id shared by EXACTLY TWO stairs-family
+                              // pieces on TWO DIFFERENT floors, marking them as the same stairwell. NO
+                              // role/offset — story order derives from Store.floors index (lower index =
+                              // lower story), transits spawn/despawn at each linked piece's own coords.
+                              // Drives cross-floor BLE rig handoff (Planner.floorTransits) + the 2D ▲/▼
+                              // chip. A stairLinkId with no partner is inert. Item-level → no repairFloor.
 }
 
 export type LightIconKind =
@@ -315,6 +321,21 @@ export interface GroundArea {
   kind: GroundKind;
   locked?: boolean;            // canvas vertex-drag / delete disabled
   hidden?: boolean;            // per-area hide (plus the whole ground layer toggle)
+}
+
+// A floor void / opening — a user-drawn "no floor here" polygon (stairwell
+// well, double-height atrium, mezzanine cutout). 3D: the polygon is subtracted
+// from the floor patches as a HOLE (same earcut path as stairwell wells), with
+// the shared dark void plane beneath. Nav: void cells are BLOCKED in _buildNav
+// so avatars route around missing floor — EXCEPT cells inside a stairs-family
+// footprint (a flight bridges the void). Rides the `ground` layer (2D + 3D).
+// Per-floor (Floor.voidAreas), repairFloor backfills []. Radar/BLE raw
+// positions are never remapped — only nav-driven rigs respect voids.
+export interface VoidArea {
+  id: string;
+  points: Vec2[];              // world-mm polygon (3..12 verts)
+  locked?: boolean;            // canvas vertex-drag / delete disabled
+  hidden?: boolean;            // per-void hide (plus the whole ground layer toggle)
 }
 
 export type DoorKind = 'swing' | 'garage';
@@ -542,6 +563,7 @@ export interface Floor {
   presenceZones?: PresenceZone[];  // FP2-style occupancy zones; repairFloor backfills []
   cameras?: CameraFixture[];  // camera fixtures (FOV frustum + snapshot); repairFloor backfills []
   groundAreas?: GroundArea[];  // yard/ground covering polygons; repairFloor backfills []
+  voidAreas?: VoidArea[];  // floor voids / openings (holes cut from the slab); repairFloor backfills []
   boundsLocked?: boolean;   // lock canvas-layout/floor-size editing (hides the edge handles)
   disabled?: boolean;       // hidden from the kiosk/view floor picker + glass-house stack + BLE
                             // floor solve; still editable in the sidebar — lets multiple test

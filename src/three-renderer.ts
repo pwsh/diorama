@@ -166,6 +166,17 @@ export interface TargetWorld {
   // per-sensor attribution so avatars are distinguishable by which sensor saw
   // them. Undefined → the default Sims green. A stale renderer chunk ignores it.
   plumbobColor?: number;
+  // Optional (additive, Tier 2 stair portals): ARRIVING handoff. When a NEW rig
+  // is created for this key, seed it here (a linked stair on THIS floor) instead
+  // of at x/y, so it fades in at the stair and its goal controller walks it to
+  // the live solve. Used ONLY at fresh rig/AI-state creation — an existing rig
+  // ignores it. A stale renderer chunk ignores the field (rig spawns at x/y).
+  spawnAt?: { x: number; y: number };
+  // Optional (additive, Tier 2 stair portals): LEAVING handoff. The person has
+  // transited OFF this floor via a linked stair; x/y is that stair on THIS floor.
+  // The rig walks there, then fast-fades + disposes (cap ~6 s). Without it, a
+  // vanishing BLE person uses the normal despawn fade. Stale chunk ignores it.
+  leaveVia?: { x: number; y: number };
 }
 
 // Per-frame context for the Sims-style activity system. Built cheaply every
@@ -432,6 +443,11 @@ interface Humanoid {
   lastRawSpeed: number;
   despawnMode: 'fast' | 'slow' | null;
   fadeAlpha: number;   // slow-despawn opacity multiplier (1 = fully opaque)
+  // Tier 2 LEAVING handoff: the rig is walking to a linked stair (leaveVia) and,
+  // on arrival or a ~6 s cap, fast-fades + disposes. `leaving` gates the fade;
+  // `leaveT` is elapsed seconds since the handoff began. Undefined when not leaving.
+  leaving?: boolean;
+  leaveT?: number;
   // Per-rig CLONE of the shared outline material so a slow opacity fade can drop
   // this rig's outline alpha without touching every other rig's shells. Disposed
   // in _disposeHumanoid (guarded: never the shared _outlineMaterial).
@@ -678,6 +694,17 @@ export class ThreeDRenderer {
   // Ghost (glass-house) floors: translucent shells of every OTHER story,
   // stacked at their story heights. Cleared with _clearGroup (no sprites).
   private _ghostGroup = new THREE.Group();
+  // Glass-house transit puppet (Tier 2, stretch): a SINGLE scripted display-only
+  // rig that walks a linked stair's run while its Y crosses STORY_H between two
+  // ghost story offsets — pure theater (no nav / raycast / bubbles), disposed on
+  // completion. Lives OUTSIDE _floorGroup so no floor rebuild churns it; cleared
+  // in clearTransientGroups / destroy. Isolated: gated entirely on the glassHouse
+  // flag + a fresh viaLink transit at the spawn site (three-view decides).
+  private _transitGroup = new THREE.Group();
+  private _transitPuppet: {
+    id: string; rig: Humanoid; t: number; dur: number;
+    x0: number; z0: number; x1: number; z1: number; y0: number; y1: number; facing: number;
+  } | null = null;
   // Outdoor weather effects (W2): precip point clouds, fog ground planes, wind
   // dust, and the lightning flash light. Rebuilt under _keyWeather in three-view
   // via updateWeather; particles/flash/fog advanced per-frame in _advanceWeather
@@ -755,6 +782,14 @@ export class ThreeDRenderer {
   // when it re-acquires; dropped when the rig finally despawns or the floor
   // switches.
   private _aiState: Record<string, AiState> = {};
+  // Tier 2 LEAVING handoff bookkeeping: key → epoch(ms) the rig finished its
+  // walk-to-stair fade + disposed. While present (< LEFT_HOLD_MS) updateTargets
+  // refuses to recreate a rig for a still-emitted leaving target, so a brief
+  // overlap with three-view's emit window can't respawn it at the stair. Cleared
+  // by any non-leaving emit for that key (a genuine re-arrival re-arms it).
+  private _leftAt: Record<string, number> = {};
+  private static readonly LEFT_HOLD_MS = 15000;
+  private static readonly LEAVE_CAP_S = 6;
   // Seats collected from the current floor's sittable furniture.
   private _sitSpots: SitSpot[] = [];
   // Bound media furniture (tv / wall_tv with an entity) collected during
@@ -944,6 +979,7 @@ export class ThreeDRenderer {
                     this._robotGroup, this._robotRigGroup, this._cameraGroup, this._camAlertGroup, this._pzoneGroup,
                     this._groundGroup,
                     this._lightGroup, this._switchGroup, this._targetGroup, this._ghostGroup,
+                    this._transitGroup,
                     this._gpsGroup, this._weatherGroup, this._pulseGroup, this._nowPlayingGroup);
 
     this._controls = new OrbitControls(this._camera, this._renderer.domElement);
@@ -1432,6 +1468,9 @@ export class ThreeDRenderer {
     }
     this._humanoids = {};
     this._aiState = {};
+    this._leftAt = {};
+    // Glass-house transit puppet is per-transit theater — kill it on floor switch.
+    this.clearTransitPuppet();
     this._sitSpots = [];
     this._mediaClickables = [];
     this._activityAnchors = [];
@@ -1907,6 +1946,12 @@ export class ThreeDRenderer {
     const wellCuts = (showFurniture ? (f.furniture ?? []) : []).filter(fu =>
       (fu.kind === 'stairs' || fu.kind === 'stairs_half' || fu.kind === 'stair_landing') &&
       (fu.elevation ?? 0) < 0);
+    // Floor voids / openings (Tier-1): user-drawn "no floor here" polygons cut
+    // from the slab as HOLES, same earcut path as stairwell wells. World-space
+    // polygons (≥3 pts, not hidden). Ghosts ignore these (stay cheap, like wells).
+    const voidPolys: Vec2[][] = (f.voidAreas ?? [])
+      .filter(vd => !vd.hidden && vd.points.length >= 3)
+      .map(vd => vd.points);
     // World-space corners of a well rect, inset 3 mm so a clipped hole edge
     // never lands exactly coincident with a loop boundary (earcut degenerates
     // on coincident edges).
@@ -1942,10 +1987,11 @@ export class ThreeDRenderer {
       side: THREE.DoubleSide, roughness: 0.9, metalness: 0.0,
       ...(glassHouse ? { transparent: true, opacity: 0.45, depthWrite: true } : {}),
     });
-    if (wellCuts.length) {
-      // Dark void plane below the deepest well so stairwell openings show
-      // depth instead of the sky behind the scene.
-      const deepest = Math.min(...wellCuts.map(fu => fu.elevation ?? 0));
+    if (wellCuts.length || voidPolys.length) {
+      // Dark void plane below the deepest well (or just below the slab for a
+      // pure floor void) so stairwell / void openings show depth instead of the
+      // sky behind the scene.
+      const deepest = Math.min(0, ...wellCuts.map(fu => fu.elevation ?? 0));
       const voidPlane = new THREE.Mesh(
         new THREE.PlaneGeometry(f.w * 1.2, f.d * 1.2),
         new THREE.MeshBasicMaterial({ color: 0x101216, side: THREE.DoubleSide }));
@@ -1993,14 +2039,22 @@ export class ThreeDRenderer {
             shape.holes.push(scenePathFor(clipped));
           }
         }
+        // Floor-void holes: clip each void polygon to THIS loop (same path as
+        // wells — intersectLoopWithRect handles a void straddling the boundary).
+        for (const vp of voidPolys) {
+          const clipped = intersectLoopWithRect(loop, vp);
+          if (clipped && Math.abs(polygonArea(clipped)) >= MIN_HOLE_AREA) {
+            shape.holes.push(scenePathFor(clipped));
+          }
+        }
         const mesh = new THREE.Mesh(new THREE.ShapeGeometry(shape),
                                     occLoops.has(loop) ? occMat() : floorMat);
         mesh.rotation.x = -Math.PI / 2;
         mesh.receiveShadow = true;
         this._floorGroup.add(mesh);
       }
-    } else if (wellCuts.length) {
-      // Full-rectangle floor as a Shape so stairwells can pierce it.
+    } else if (wellCuts.length || voidPolys.length) {
+      // Full-rectangle floor as a Shape so stairwells / voids can pierce it.
       if (floorTex) floorTex.repeat.set(1 / 800, 1 / 800);
       const shape = new THREE.Shape();
       shape.moveTo(f.w / 2, f.d / 2);
@@ -2008,13 +2062,19 @@ export class ThreeDRenderer {
       shape.lineTo(-f.w / 2, -f.d / 2);
       shape.lineTo(f.w / 2, -f.d / 2);
       shape.closePath();
-      // Clip each well to the floor rect (world [0,f.w]×[0,f.d]); a well fully
+      // Clip each well/void to the floor rect (world [0,f.w]×[0,f.d]); one fully
       // inside comes back unchanged, one poking past an edge gets trimmed.
       const floorRect: Vec2[] = [
         { x: 0, y: 0 }, { x: f.w, y: 0 }, { x: f.w, y: f.d }, { x: 0, y: f.d },
       ];
       for (const fu of wellCuts) {
         const clipped = intersectLoopWithRect(floorRect, wellRectWorld(fu));
+        if (clipped && Math.abs(polygonArea(clipped)) >= MIN_HOLE_AREA) {
+          shape.holes.push(scenePathFor(clipped));
+        }
+      }
+      for (const vp of voidPolys) {
+        const clipped = intersectLoopWithRect(floorRect, vp);
         if (clipped && Math.abs(polygonArea(clipped)) >= MIN_HOLE_AREA) {
           shape.holes.push(scenePathFor(clipped));
         }
@@ -2801,6 +2861,33 @@ export class ThreeDRenderer {
       }
       return false;
     };
+
+    // Floor voids (Tier-1): block every cell whose center is inside a void
+    // polygon — the whole point of the feature (avatars route around missing
+    // floor). EXCEPTION: a cell inside any stairs-family footprint stays
+    // walkable — a flight bridges the void, so a sunken/linked stair is the one
+    // connection across it. Regions + all snap logic inherit automatically.
+    const voidNavPolys: Vec2[][] = (f.voidAreas ?? [])
+      .filter(vd => !vd.hidden && vd.points.length >= 3)
+      .map(vd => vd.points);
+    for (const vp of voidNavPolys) {
+      let minx = Infinity, miny = Infinity, maxx = -Infinity, maxy = -Infinity;
+      for (const pt of vp) {
+        if (pt.x < minx) minx = pt.x; if (pt.y < miny) miny = pt.y;
+        if (pt.x > maxx) maxx = pt.x; if (pt.y > maxy) maxy = pt.y;
+      }
+      const c0x = clampX(Math.floor(minx / cell)), c1x = clampX(Math.floor(maxx / cell));
+      const c0y = clampY(Math.floor(miny / cell)), c1y = clampY(Math.floor(maxy / cell));
+      for (let cy = c0y; cy <= c1y; cy++) {
+        for (let cx = c0x; cx <= c1x; cx++) {
+          const wx = (cx + 0.5) * cell, wy = (cy + 0.5) * cell;
+          if (!pip(wx, wy, vp)) continue;
+          if (onStairTerrain(wx, wy)) continue;  // flight bridges the void
+          blocked[cy * nx + cx] = 1;
+        }
+      }
+    }
+
     const railBand = cell * 1.5;   // one-cell rail, thickened so rotation can't leak a gap
     for (const fu of sunkenStairs) {
       const halfW = fu.w / 2, halfH = fu.h / 2;
@@ -6731,7 +6818,12 @@ export class ThreeDRenderer {
       // avatars additionally snap into their sensor's home room (loop); BLE
       // people are real devices, so no room confinement (loop = null). Start
       // IDLE so it settles a beat before moving.
-      let x = t.x, y = t.y;
+      // Tier 2 ARRIVING handoff: a fresh BLE rig with a stair spawn point fades
+      // in AT the linked stair (spawnAt) rather than at the live solve; its goal
+      // controller then walks it from the stair to the solve (t.x/t.y) — reads as
+      // "came up/down the stairs". Only affects the initial seed.
+      let x = (goalMode && t.spawnAt) ? t.spawnAt.x : t.x;
+      let y = (goalMode && t.spawnAt) ? t.spawnAt.y : t.y;
       if (this._nav && this._nav.blockedCount > 0) {
         const gi = this._cellIdxOf(t.x, t.y);
         if (this._nav.blocked[gi] || this._nav.region[gi] < 0) {
@@ -6979,6 +7071,10 @@ export class ThreeDRenderer {
     const frameDt = this._lastTargetsNow ? Math.min(0.1, now - this._lastTargetsNow) : 0.016;
     this._lastTargetsNow = now;
     const seen = new Set<string>();
+    // Tier 2: prune the "already left via stairs" guard so a re-arrival later
+    // (same BLE key) can build a rig again.
+    for (const k of Object.keys(this._leftAt))
+      if (now - this._leftAt[k] > ThreeDRenderer.LEFT_HOLD_MS) delete this._leftAt[k];
     // Stale-chunk defense: a mixed-version module graph could call the old
     // 1-arg signature. Treat a missing context as no live entities.
     const entityOn = ctx?.entityOn ?? EMPTY_ENTITY_ON;
@@ -6993,7 +7089,8 @@ export class ThreeDRenderer {
     // and rewrite its x/y IN PLACE (the targets array is rebuilt each frame in
     // three-view, so mutating is safe). Must run before the bed pre-pass and the
     // main loop so both see the avatar's real position.
-    for (const t of targets) if (t.ai || t.ble) this._advanceAi(t, frameDt);
+    for (const t of targets)
+      if ((t.ai || t.ble) && !(t.leaveVia && this._leftAt[t.key])) this._advanceAi(t, frameDt);
 
     // Pre-pass: per-bed occupancy from RAW footprint containment, for the
     // lay-in-bed gate. Lying capacity = max(1, floor(bedWidth / 700)) side-by-
@@ -7037,6 +7134,11 @@ export class ThreeDRenderer {
 
     for (const t of targets) {
       seen.add(t.key);
+      // Tier 2 LEAVING handoff bookkeeping: a rig that finished its walk-to-stair
+      // fade stays gone even if three-view briefly still emits it; any NON-leaving
+      // emit for the key re-arms it (a real re-arrival can rebuild).
+      if (t.leaveVia && this._leftAt[t.key]) continue;
+      if (!t.leaveVia && this._leftAt[t.key]) delete this._leftAt[t.key];
       rawPos[t.key] = { x: t.x, y: t.y };
       let h = this._humanoids[t.key];
       // Resolve the requested avatar variant to a concrete kind (stable per
@@ -7847,6 +7949,29 @@ export class ThreeDRenderer {
           delete this._aiState[t.key];
         }
         continue;   // rig is fading / gone — skip the rest of its per-frame pose
+      }
+      // Tier 2 LEAVING handoff: the person transited off this floor via a linked
+      // stair. The BLE goal controller walks the rig to leaveVia (three-view sets
+      // x/y = the stair on this floor); on arrival OR a ~6 s cap, fast-fade +
+      // dispose and remember the key so a still-emitted leaving target can't
+      // respawn it. Reads as "went up/down the stairs".
+      if (t.leaveVia) {
+        h.leaving = true;
+        h.leaveT = (h.leaveT ?? 0) + dt;
+        const sv = this._w(t.leaveVia.x, t.leaveVia.y, 0);
+        const arrived = Math.hypot(h.navX - sv.x, h.navZ - sv.z) < 500;
+        if (arrived || h.leaveT > ThreeDRenderer.LEAVE_CAP_S) {
+          h.scale -= h.scale * Math.min(1, dt * 12);
+          h.group.scale.setScalar(h.scale);
+          if (h.scale < 0.05) {
+            this._targetGroup.remove(h.group);
+            this._disposeHumanoid(h);
+            delete this._humanoids[t.key];
+            delete this._aiState[t.key];
+            this._leftAt[t.key] = now;
+          }
+          continue;   // rig is fading / gone — skip the rest of its per-frame pose
+        }
       }
       if (h.respawnPhase === 1) {
         h.scale -= h.scale * Math.min(1, dt * 12);
@@ -9964,6 +10089,7 @@ export class ThreeDRenderer {
       this._disposeSpriteMaps(g);
       this._clearGroup(g);
     }
+    this.clearTransitPuppet();
     this._nowPlaying = {};
     this._weatherClouds = []; this._weatherFogPlanes = []; this._weatherFlash = null;
     this._weatherCloudShadows = []; this._weatherPuddles = []; this._weatherIcicles = [];
@@ -10148,8 +10274,79 @@ export class ThreeDRenderer {
     // Outdoor weather effects — buffer mutation only (no per-frame allocation);
     // fog easing runs even when the group is hidden (see _advanceWeather).
     this._advanceWeather(frameDt, nowS);
+    // Glass-house transit puppet — scripted cross-STORY_H walk (Tier 2 stretch).
+    this._advanceTransitPuppet(frameDt);
     if (this._renderer && this._scene && this._camera) {
       this._renderer.render(this._scene, this._camera);
     }
   };
+
+  // ── Glass-house transit puppet (Tier 2 stretch, isolated theater) ──────────
+  // Spawn ONE scripted display-only rig that, over `dur` seconds, walks the
+  // SOURCE stair fixture's run (x0,z0 → x1,z1 in scene coords) while its Y
+  // crosses from one ghost story offset (y0) to the other (y1). No nav / raycast
+  // / bubbles — pure animation. Replaces any existing puppet. `spec` carries the
+  // source stair world position + rotation + run length + the two story offsets;
+  // three-view builds it only when glassHouse is on and a fresh viaLink transit
+  // touches the current floor. Coords are the ACTIVE floor's _w frame.
+  spawnTransitPuppet(spec: {
+    id: string; colorInt: number;
+    x: number; y: number;        // source stair WORLD position (mm)
+    rotationDeg: number;         // source stair rotation (screen-CW); run heads along local +Y
+    runLength: number;           // mm walked along the run
+    yStart: number; yEnd: number;// scene-Y story offsets (mm)
+    durationS?: number;
+  }): void {
+    this.clearTransitPuppet();
+    const rig = this._buildHumanoid(spec.colorInt, 'adult');
+    this._transitGroup.add(rig.group);
+    // Run endpoints in WORLD mm: start behind the run, end at the run top,
+    // aligned to the stair's local +Y (rotation 0 = +Y world).
+    const rr = spec.rotationDeg * Math.PI / 180;
+    const dxw = -Math.sin(rr) * spec.runLength, dyw = Math.cos(rr) * spec.runLength;
+    const p0 = this._w(spec.x - dxw / 2, spec.y - dyw / 2, 0);
+    const p1 = this._w(spec.x + dxw / 2, spec.y + dyw / 2, 0);
+    // Facing: body-forward = scene −Z, so yaw = atan2(−vx, −vz) toward the run end.
+    const facing = Math.atan2(-(p1.x - p0.x), -(p1.z - p0.z));
+    this._transitPuppet = {
+      id: spec.id, rig, t: 0, dur: spec.durationS ?? 8,
+      x0: p0.x, z0: p0.z, x1: p1.x, z1: p1.z, y0: spec.yStart, y1: spec.yEnd, facing,
+    };
+    rig.group.position.set(p0.x, spec.yStart, p0.z);
+    rig.group.rotation.set(0, facing, 0);
+    rig.facing = facing;
+    rig.scale = 1; rig.group.scale.setScalar(1);
+  }
+
+  // Advance the transit puppet (from _animate). Walks the run + interpolates Y +
+  // a simple two-beat leg swing; disposes at t ≥ dur. Zero allocation.
+  private _advanceTransitPuppet(dt: number): void {
+    const tp = this._transitPuppet;
+    if (!tp) return;
+    tp.t += dt;
+    const u = Math.min(1, tp.t / tp.dur);
+    const rig = tp.rig;
+    rig.group.position.x = tp.x0 + (tp.x1 - tp.x0) * u;
+    rig.group.position.z = tp.z0 + (tp.z1 - tp.z0) * u;
+    rig.group.position.y = tp.y0 + (tp.y1 - tp.y0) * u;
+    rig.group.rotation.set(0, tp.facing, 0);
+    // Cosmetic climbing gait: swing the legs/arms from the phase clock.
+    rig.phase = (rig.phase + dt * 6);
+    const sw = Math.sin(rig.phase) * 0.5;
+    if (rig.leftHip) rig.leftHip.rotation.x = sw;
+    if (rig.rightHip) rig.rightHip.rotation.x = -sw;
+    if (rig.leftKnee) rig.leftKnee.rotation.x = Math.max(0, sw) * 0.9;
+    if (rig.rightKnee) rig.rightKnee.rotation.x = Math.max(0, -sw) * 0.9;
+    rig.leftShoulder.rotation.x = -sw * 0.6; rig.rightShoulder.rotation.x = sw * 0.6;
+    if (tp.t >= tp.dur) this.clearTransitPuppet();
+  }
+
+  // Dispose the transit puppet (completion / floor-switch / destroy). Routes
+  // through _disposeHumanoid (sprite maps) + _clearGroup semantics.
+  clearTransitPuppet(): void {
+    if (!this._transitPuppet) return;
+    this._transitGroup.remove(this._transitPuppet.rig.group);
+    this._disposeHumanoid(this._transitPuppet.rig);
+    this._transitPuppet = null;
+  }
 }

@@ -12,6 +12,7 @@ import {
   hitBleProxy, hitAlarmPanel, hitSafetySensor, hitRobot,
   hitCamera, hitCameraRotateHandle, hitPresenceZone, hitPresenceZoneVertex,
   hitGroundArea, hitGroundAreaVertex,
+  hitVoidArea, hitVoidAreaVertex,
   hitDoor, hitDoorEnd, hitDoorLock, hitWindow, hitWindowEnd, hitFloorEdge,
 } from './canvas-hit.js';
 import type { Planner, Drag } from './planner.js';
@@ -382,6 +383,16 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
       canvas.style.cursor = 'grabbing'; e.preventDefault(); return;
     }
   }
+  // Void-area vertex handles (active void, ground layer visible) — drag to
+  // reshape. Mirrors the ground-area vertex path.
+  if (groundInteractive(p)) {
+    const vv = hitVoidAreaVertex(p, view, mm);
+    if (vv) {
+      p.drag = { kind: 'voidVert', id: vv.area.id, idx: vv.idx,
+                 startMm: mm, startPts: vv.area.points.map(pt => ({ ...pt })) };
+      canvas.style.cursor = 'grabbing'; e.preventDefault(); return;
+    }
+  }
   // Zone polys / object halos capture input ONLY while the zones layer is
   // visible — an invisible zone edge crossing a sensor body used to swallow
   // the sensor's drag (mirrors the 3D rule: hidden lights stop being raycast
@@ -561,6 +572,16 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
       e.preventDefault(); return;
     }
   }
+  // Void-area body — select it (shows vertex handles); low priority (after every
+  // item hit, alongside ground paint). Only when the ground layer is on. No
+  // whole-area drag in v1 (reshape via vertex handles or Redraw).
+  if (groundInteractive(p)) {
+    const vH = hitVoidArea(p, view, mm);
+    if (vH) {
+      if (p.activeVoidAreaId !== vH.id) { p.activeVoidAreaId = vH.id; p.emitConfig(); }
+      e.preventDefault(); return;
+    }
+  }
   // Floor boundary edge — lowest priority (after every item hit, before the
   // canvas-2d pan fallback). Drag to resize the canvas space; left/bottom edges
   // also reposition the plan (see resolveFloorEdgeDrag / translateFloorContent).
@@ -697,6 +718,13 @@ export function onCanvasMouseMove(p: Planner, canvas: HTMLCanvasElement, view: V
         const g = (f.groundAreas ?? []).find(x => x.id === drag.id);
         if (g && !g.locked && g.points[drag.idx]) {
           g.points[drag.idx] = { x: snap(mm.x, 10), y: snap(mm.y, 10) };
+        }
+        break;
+      }
+      case 'voidVert': {
+        const vd = (f.voidAreas ?? []).find(x => x.id === drag.id);
+        if (vd && !vd.locked && vd.points[drag.idx]) {
+          vd.points[drag.idx] = { x: snap(mm.x, 10), y: snap(mm.y, 10) };
         }
         break;
       }
@@ -976,6 +1004,7 @@ export function onCanvasMouseMove(p: Planner, canvas: HTMLCanvasElement, view: V
     else if (hitCamera(p, view, mm)) canvas.style.cursor = 'grab';
     else if (zonesInteractive(p) && hitPresenceZoneVertex(p, view, mm)) canvas.style.cursor = 'grab';
     else if (groundInteractive(p) && hitGroundAreaVertex(p, view, mm)) canvas.style.cursor = 'grab';
+    else if (groundInteractive(p) && hitVoidAreaVertex(p, view, mm)) canvas.style.cursor = 'grab';
     else if (hitSensorRotateHandle(p, view, mm)) canvas.style.cursor = 'grab';
     else if (zonesInteractive(p) && hitObjectRadiusHandle(p, view, mm)) canvas.style.cursor = 'ew-resize';
     else if (zonesInteractive(p) && (hitObject(p, view, mm) || hitVertexOrZone(p, view, mm))) canvas.style.cursor = 'grab';
@@ -1088,6 +1117,10 @@ export function onCanvasMouseUp(p: Planner, canvas: HTMLCanvasElement): void {
   } else if (drag.kind === 'groundVert') {
     const g = (f.groundAreas ?? []).find(x => x.id === drag.id);
     if (g && g.points[drag.idx]) g.points[drag.idx] = { x: snap(g.points[drag.idx].x, 10), y: snap(g.points[drag.idx].y, 10) };
+    p.save();
+  } else if (drag.kind === 'voidVert') {
+    const vd = (f.voidAreas ?? []).find(x => x.id === drag.id);
+    if (vd && vd.points[drag.idx]) vd.points[drag.idx] = { x: snap(vd.points[drag.idx].x, 10), y: snap(vd.points[drag.idx].y, 10) };
     p.save();
   } else if (drag.kind === 'envResize') {
     p.save();
@@ -1467,6 +1500,15 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
     p.emitConfig();
     return;
   }
+  if (p.tool === 'void') {
+    // Void-area polygon draw latch (mirrors the ground tool): each click appends
+    // a world-mm vertex; double-click / Enter finishes (≥3 pts, capped at 12).
+    const v = { x: snap(mm.x, 10), y: snap(mm.y, 10) };
+    if (!p.drawingVoidArea) p.drawingVoidArea = { points: [v] };
+    else if (p.drawingVoidArea.points.length < 12) p.drawingVoidArea.points.push(v);
+    p.emitConfig();
+    return;
+  }
   if (p.tool === 'wall') {
     // First vertex: free placement. Subsequent vertices snap to a 15°
     // increment from the previous vertex via snapVertex15 (preserves cursor
@@ -1658,6 +1700,14 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
         if (p.activeGroundAreaId === gHit.id) p.activeGroundAreaId = null;
         p.save(); p.emitConfig(); return;
       }
+      // Void areas — same lowest delete priority.
+      const vHit = hitVoidArea(p, view, mm);
+      if (vHit) {
+        if (vHit.locked) return;
+        f.voidAreas = (f.voidAreas ?? []).filter(x => x.id !== vHit.id);
+        if (p.activeVoidAreaId === vHit.id) p.activeVoidAreaId = null;
+        p.save(); p.emitConfig(); return;
+      }
     }
   }
   if (p.tool === 'select') {
@@ -1723,6 +1773,12 @@ export function onCanvasDblClick(p: Planner, canvas: HTMLCanvasElement, view: Vi
   if (p.tool === 'ground' && p.drawingGroundArea) {
     if (p.drawingGroundArea.points.length >= 3) p.finishGroundArea();
     else { p.drawingGroundArea = null; p.emitConfig(); }
+    p.setTool('select');
+    return;
+  }
+  if (p.tool === 'void' && p.drawingVoidArea) {
+    if (p.drawingVoidArea.points.length >= 3) p.finishVoidArea();
+    else { p.drawingVoidArea = null; p.emitConfig(); }
     p.setTool('select');
     return;
   }

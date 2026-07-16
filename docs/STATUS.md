@@ -63,6 +63,20 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Avatar-nav-stairs v2: floor voids + cross-floor stair portals**
+  (completes the backlog item; `void-test` **10/10**, `stair-link-test`
+  **25/25**, stairs-descend 23/23 + fusion 11/11 + full nav set green):
+  `Floor.voidAreas` user-drawn no-floor polygons (presence-zone recipe,
+  `ground` layer, real floor-patch holes + void plane, NAV-BLOCKED with
+  stairs-family footprints bridging); `Furniture.stairLinkId` two-sided
+  linked stairs (sidebar picker, broken-link handling, ▲/▼ 2D chips);
+  `Planner.floorTransits` BLE floor-change detection with fusion-style
+  hysteresis (2 solves + 4 s) → renderer handoff via optional
+  `TargetWorld.spawnAt`/`leaveVia` (arrive = fade-in at the linked stair
+  walking away; leave = walk to the stair, fade there, 6 s cap); People
+  rows show "on <floor>"; glass-house transit puppet climbs `STORY_H`
+  between story offsets (~8 s, `_transitGroup`, pure theater).
+
 - **Descending stairs v1** (backlog: avatar void→stairs; renderer-only,
   `stairs-descend-test.html` **23/23**, full nav regression set green):
   nav rails confine sunken flights (blocked band on long sides + deep end,

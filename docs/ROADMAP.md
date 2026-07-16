@@ -209,8 +209,11 @@ done on these** — they are recorded verbatim-in-intent so nothing is lost.
 Do not treat any note here as a decided approach.
 
 ### Avatars
-- **Movement over void → drop to stairs**: walking where there is no floor
-  should route the avatar to/through stairs instead of over empty space.
+- ✅ **Movement over void → drop to stairs** — SHIPPED July 2026 in three
+  slices: v1 descending-stairs rails + descend/emerge behaviors; v2 floor
+  voids (`Floor.voidAreas`, nav-blocked, stairs bridge) + stair links +
+  BLE cross-floor transits + glass-house transit puppet. Design record:
+  `docs/research/avatar-nav-stairs.md`.
 - **Event-focused thought bubbles**: when something *happens* — a
   dishwasher / washer / dryer finishes, severe weather arrives, rain
   starts, lightning strikes — let a thought of that event take focus

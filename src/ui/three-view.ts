@@ -6,7 +6,7 @@ import { customElement } from './define.js';
 // startup path never downloads it.
 import type { ThreeDRenderer, ZoneWorld, HaloWorld, TargetWorld, ActivityContext,
   GpsPinWorld, GpsLandmarkWorld, GeoEventWorld, WeatherFxState } from '../three-renderer.js';
-import { localToWorld, transformVerts, pointInPolygon, sensorColor, hexToInt, motionColor, lightIconKind, furnitureKind, resolveFurnitureDef, furnitureCat, isBinKind, alarmStateColor, doorSpanCenter } from '../geometry.js';
+import { localToWorld, transformVerts, pointInPolygon, sensorColor, hexToInt, motionColor, lightIconKind, furnitureKind, resolveFurnitureDef, furnitureCat, isBinKind, isStairsKind, alarmStateColor, doorSpanCenter } from '../geometry.js';
 import { compass8 } from '../geo.js';
 import { resolveScenePreset, resolveTimeBucket } from '../time-of-day.js';
 import { conditionIntensity, weatherEffectEnabled } from '../weather.js';
@@ -536,6 +536,9 @@ export class ThreeView extends LitElement {
   private _keyGhost = '';
   private _keyGps = '';
   private _keyWeather = '';
+  // Tier 2 glass-house transit puppets already triggered (`${personId}:${at}`) so
+  // one transit spawns at most one puppet. Runtime-only; grows negligibly.
+  private _spawnedPuppets = new Set<string>();
 
   private _tickOnce(): void {
       const r = this._renderer; if (!r || !r.loaded) return;
@@ -637,6 +640,12 @@ export class ThreeView extends LitElement {
           p.store.floors.filter(fl => !fl.disabled || fl.id === f.id),
           f.id, scMerged, p.store.customObjects);
       }
+
+      // Glass-house transit puppet (Tier 2 stretch): when glass-house is on and a
+      // FRESH viaLink transit touches the current floor, spawn one scripted rig
+      // walking the source stair's run across STORY_H. Gated entirely on the
+      // glassHouse flag (turn it off → never spawns). One puppet per transit.
+      if (scBase.glassHouse) this._maybeSpawnTransitPuppet(p, f.id, r);
 
       // Imported 3D model: reload text from IDB when rev changes; rebuild
       // mesh when transform/opacity/visibility changes.
@@ -1008,15 +1017,52 @@ export class ThreeView extends LitElement {
       // UNFUSED people render as BLE rigs: a person fused onto a radar target
       // hides here (that target carries their avatar/label) so nobody renders
       // twice (B3).
+      const nowT = Date.now();
+      // Tier 2: resolve a linked stairs-family piece's plan position on a floor
+      // by its stairLinkId (cheap; a floor has few furniture pieces).
+      const stairPosOnFloor = (fl: typeof f, linkId: string): { x: number; y: number } | null => {
+        for (const fu of fl.furniture)
+          if (fu.stairLinkId === linkId && isStairsKind(fu.kind)) return { x: fu.x, y: fu.y };
+        return null;
+      };
       for (const bp of p.bleUnfused) {
         if (bp.floorId !== f.id) continue;
+        // Tier 2 ARRIVING handoff: a person who just transited ONTO this floor via
+        // a linked stair fades their rig in AT the stair (not at the live solve).
+        let spawnAt: { x: number; y: number } | undefined;
+        if (bp.personId) {
+          const tr = p.transitFor(bp.personId);
+          if (tr && tr.toFloorId === f.id && tr.viaLinkId && nowT - tr.at < 12000)
+            spawnAt = stairPosOnFloor(f, tr.viaLinkId) ?? undefined;
+        }
         targets.push({
           key: bp.key, x: bp.x, y: bp.y, color: hexToInt(bp.color),
           // Pets with no explicit avatar default to the cat quadruped rig;
           // other unknown devices fall through to the stable human pool pick.
           ble: true, avatar: bp.avatarKind ?? (bp.isPet ? 'cat' : 'random'),
+          spawnAt,
           // Identified BLE people (personId set) get a name label; unknown
           // devices do not (decision #4 — labels only when confident).
+          person: bp.personId != null ? { name: bp.name, color: bp.color,
+            avatarKind: bp.avatarKind, isPet: bp.isPet, identified: true } : undefined,
+        });
+      }
+      // Tier 2 LEAVING handoff: a person who just transited OFF this floor via a
+      // linked stair keeps their rig one more beat — the renderer walks it to the
+      // stair on THIS floor, then fast-fades + disposes. Their live solve is now on
+      // another floor, so they're absent from the bleUnfused loop above.
+      for (const personId of Object.keys(p.floorTransits)) {
+        const tr = p.floorTransits[personId];
+        if (tr.fromFloorId !== f.id || !tr.viaLinkId) continue;
+        if (nowT - tr.at > 9000) continue;                       // window > renderer cap + fade
+        const sp = stairPosOnFloor(f, tr.viaLinkId);
+        if (!sp) continue;
+        const bp = p.blePeople.find(b => b.personId === personId);
+        if (!bp || bp.floorId === f.id) continue;                // gone to another floor
+        targets.push({
+          key: bp.key, x: sp.x, y: sp.y, color: hexToInt(bp.color),
+          ble: true, avatar: bp.avatarKind ?? (bp.isPet ? 'cat' : 'random'),
+          leaveVia: sp,
           person: bp.personId != null ? { name: bp.name, color: bp.color,
             avatarKind: bp.avatarKind, isPet: bp.isPet, identified: true } : undefined,
         });
@@ -1109,6 +1155,50 @@ export class ThreeView extends LitElement {
   private _modelText: { floorId: string; rev: number; obj: string; mtl: string | null } | null = null;
   private _modelLoading = false;
   private _keyModel = '';
+
+  // Tier 2 glass-house transit puppet trigger. For a FRESH viaLink transit that
+  // touches the current floor (either direction), build the puppet spec from the
+  // SOURCE floor's stair fixture and spawn one scripted rig (once per transit).
+  // Skips if either linked fixture is missing. Isolated — only called when
+  // glassHouse is on (see the caller).
+  private _maybeSpawnTransitPuppet(p: Planner, curId: string,
+                                   r: import('../three-renderer.js').ThreeDRenderer): void {
+    const now = Date.now();
+    const STORY_H = 3000;
+    const floors = p.store.floors;
+    const curIdx = floors.findIndex(fl => fl.id === curId);
+    const stairOn = (fid: string, linkId: string) => {
+      const fl = floors.find(f => f.id === fid);
+      if (!fl) return null;
+      for (const fu of fl.furniture)
+        if (fu.stairLinkId === linkId && isStairsKind(fu.kind)) return { fl, fu };
+      return null;
+    };
+    for (const personId of Object.keys(p.floorTransits)) {
+      const tr = p.floorTransits[personId];
+      if (!tr.viaLinkId) continue;
+      if (tr.fromFloorId !== curId && tr.toFloorId !== curId) continue;   // doesn't touch us
+      if (now - tr.at > 2500) continue;                                    // only right after commit
+      const sig = `${personId}:${tr.at}`;
+      if (this._spawnedPuppets.has(sig)) continue;
+      const src = stairOn(tr.fromFloorId, tr.viaLinkId);
+      const dst = stairOn(tr.toFloorId, tr.viaLinkId);
+      if (!src || !dst) continue;                                          // missing fixture → skip
+      const srcIdx = floors.indexOf(src.fl), dstIdx = floors.indexOf(dst.fl);
+      const person = p.store.people?.find(pe => pe.id === personId);
+      this._spawnedPuppets.add(sig);
+      r.spawnTransitPuppet({
+        id: sig,
+        colorInt: hexToInt(person?.color ?? '#9e9e9e'),
+        x: src.fu.x, y: src.fu.y,
+        rotationDeg: src.fu.rotation ?? 0,
+        runLength: src.fu.h,
+        yStart: (srcIdx - curIdx) * STORY_H,
+        yEnd: (dstIdx - curIdx) * STORY_H,
+        durationS: 8,
+      });
+    }
+  }
 
   private _syncModel(f: import('../types.js').Floor): void {
     const r = this._renderer!;

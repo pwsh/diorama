@@ -1,0 +1,225 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>stair link test</title>
+<style>html,body{margin:0;background:#111;color:#ccc;font:12px sans-serif}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<!--
+  Tier 2 — stair links + cross-floor transits.
+
+  Drives PLANNER internals directly (like fusion-test drives the pure matcher) +
+  the RENDERER chunk (like ble-walk-test drives updateTargets). Deterministic.
+
+  Modules (transpile into the harness dir before serving):
+    npx esbuild src/planner.ts  --bundle --format=esm --outfile=<harness>/planner.mod.js
+    npx esbuild src/geometry.ts --bundle --format=esm --outfile=<harness>/geometry.mod.js
+    (the three-renderer chunk is served next to this file, like the other 3D pages)
+
+  Asserts:
+   (a) linkStairs writes the SAME id to BOTH pieces; deleting the partner leaves
+       a broken link (stairLinkPartner → null, id still on the piece); clear removes it.
+   (b) transit hysteresis: a solved-floor flip does NOT commit after 1 solve or
+       after 2 solves within 2 s; it DOES commit after ≥2 solves AND ≥4 s.
+   (c) viaLinkId is the shared stairLinkId when both floors carry the pair; undefined otherwise.
+   (d) committed transits prune after 30 s.
+   (e) renderer: a BLE TargetWorld with spawnAt creates the rig AT the stair (first-frame pos ≈ stair).
+   (f) leaving handoff: a rig given a stair-bound leaveVia reaches it + fast-fades + disposes,
+       and stays gone while the leaving target is still emitted.
+   (g) 2D chip direction (pure stairChipArrow): partner above → ▲, below → ▼.
+   (h) glass-house puppet: spawnTransitPuppet spawns a rig, its y interpolates between the
+       two story offsets, and it disposes after its duration.
+-->
+<script type="module">
+  const P = await import('./planner.mod.js');
+  const G = await import('./geometry.mod.js');
+  const mod = await import('./assets/three-renderer.js?v=' + Date.now());
+
+  const tests = [];
+  const ok = (name, cond, detail) => tests.push({ name, ok: !!cond, detail });
+
+  // ── Fixture: a two-floor store. f1 = lower (index 0), f2 = upper (index 1). ──
+  const stair = (id, x = 4000, y = 3000) => ({ id, x, y, w: 1000, h: 3600, kind: 'stairs', rotation: 0 });
+  const mkFloor = (id, name, furniture) => ({
+    id, name, w: 8000, d: 6000, walls: [], furniture,
+    lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [], windows: [], bg: null, model3d: null, look3d: null, rooms: [],
+  });
+  const mkStore = () => ({
+    v: 1, currentFloorId: 'f1', activeSensorId: null,
+    coverage: false, imperial: false, showDetails: false, useRawTargets: false,
+    floors: [
+      mkFloor('f1', 'Ground', [stair('sA')]),
+      mkFloor('f2', 'Upstairs', [stair('sB')]),
+    ],
+    people: [{ id: 'P1', name: 'Ada', color: '#ff7043', bermudaDeviceId: 'dev1' }],
+  });
+  const mkPlanner = () => { const p = new P.Planner(); p.store = mkStore(); p.uiMode = 'view'; return p; };
+  // uiMode 'view' → save() no-ops (no localStorage churn), but the mutations we
+  // assert happen BEFORE save() in linkStairs/clearStairLink, so state is set.
+
+  // ── (a) link write + broken-link + clear ────────────────────────────────
+  {
+    const p = mkPlanner();
+    p.linkStairs('sA', 'f2', 'sB');
+    const a = p.store.floors[0].furniture[0], b = p.store.floors[1].furniture[0];
+    ok('(a) link writes same id to both pieces',
+       a.stairLinkId && b.stairLinkId && a.stairLinkId === b.stairLinkId,
+       `a=${a.stairLinkId} b=${b.stairLinkId}`);
+    const partner = p.stairLinkPartner(a);
+    ok('(a) partner resolves across floors', partner && partner.piece.id === 'sB' && partner.floor.id === 'f2',
+       partner ? `${partner.floor.id}/${partner.piece.id}` : 'null');
+    // Delete the partner → broken link (id remains on sA, partner unresolvable).
+    p.store.floors[1].furniture = [];
+    ok('(a) broken link: id remains but no partner',
+       a.stairLinkId != null && p.stairLinkPartner(a) === null, `id=${a.stairLinkId}`);
+    p.clearStairLink('sA');
+    ok('(a) clear removes the id from the piece', a.stairLinkId == null, `id=${a.stairLinkId}`);
+  }
+
+  // ── (c) _resolveStairLink presence/absence ───────────────────────────────
+  {
+    const p = mkPlanner();
+    p.linkStairs('sA', 'f2', 'sB');
+    const id = p.store.floors[0].furniture[0].stairLinkId;
+    ok('(c) viaLinkId resolved when both floors carry the pair',
+       p._resolveStairLink('f1', 'f2') === id && id != null, `id=${id}`);
+    p.clearStairLink('sA');
+    ok('(c) viaLinkId undefined when unlinked',
+       p._resolveStairLink('f1', 'f2') === undefined, `res=${p._resolveStairLink('f1','f2')}`);
+  }
+
+  // ── (b) transit hysteresis + (c) committed viaLinkId + (d) prune ─────────
+  {
+    const p = mkPlanner();
+    p.linkStairs('sA', 'f2', 'sB');
+    const linkId = p.store.floors[0].furniture[0].stairLinkId;
+    // Wire the BLE solve source: device 'dev1' → key 'k1'.
+    p.bleDeviceInfo = { k1: { name: 'Ada phone', deviceId: 'dev1' } };
+    p.bleSolves = { k1: { x: 100, y: 100, floorId: 'f1', confidenceMm: 1000, updatedAt: 0 } };
+
+    p._watchFloorTransits(0);        // establish baseline on f1
+    ok('(b) baseline: no transit yet', !p.transitFor('P1'), '');
+
+    // Flip the solved floor to f2.
+    p.bleSolves.k1.floorId = 'f2';
+    p._watchFloorTransits(100);      // candidate solve #1
+    ok('(b) no commit after 1 solve', !p.transitFor('P1'), '');
+    p._watchFloorTransits(2100);     // candidate solve #2, but only 2 s elapsed
+    ok('(b) no commit after 2 solves within 2 s', !p.transitFor('P1'), '');
+    p._watchFloorTransits(4200);     // ≥2 solves AND ≥4 s since the flip started
+    const tr = p.transitFor('P1');
+    ok('(b) commit after ≥2 solves + ≥4 s', tr && tr.fromFloorId === 'f1' && tr.toFloorId === 'f2',
+       tr ? `${tr.fromFloorId}->${tr.toFloorId}` : 'null');
+    ok('(c) committed transit carries viaLinkId', tr && tr.viaLinkId === linkId,
+       tr ? `via=${tr.viaLinkId}` : 'null');
+
+    // (d) prune: solve stays on f2 (stable), advance past 30 s → record pruned.
+    p._watchFloorTransits(4200 + 31000);
+    ok('(d) transit pruned after 30 s', !p.transitFor('P1'), '');
+  }
+
+  // ── (b-cont) transit WITHOUT a link → viaLinkId undefined ────────────────
+  {
+    const p = mkPlanner();   // NO linkStairs
+    p.bleDeviceInfo = { k1: { name: 'Ada phone', deviceId: 'dev1' } };
+    p.bleSolves = { k1: { x: 100, y: 100, floorId: 'f1', confidenceMm: 1000, updatedAt: 0 } };
+    p._watchFloorTransits(0);
+    p.bleSolves.k1.floorId = 'f2';
+    p._watchFloorTransits(100);
+    p._watchFloorTransits(4200);
+    const tr = p.transitFor('P1');
+    ok('(c) unlinked transit has undefined viaLinkId', tr && tr.viaLinkId === undefined,
+       tr ? `via=${tr.viaLinkId}` : 'null');
+  }
+
+  // ── (g) chip direction (pure) ────────────────────────────────────────────
+  ok('(g) partner above (higher index) → ▲', G.stairChipArrow(1, 0) === '▲', G.stairChipArrow(1, 0));
+  ok('(g) partner below (lower index) → ▼', G.stairChipArrow(0, 1) === '▼', G.stairChipArrow(0, 1));
+
+  // ── Renderer setup for (e)/(f)/(h) ───────────────────────────────────────
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+  const FW = 8000, FD = 6000;
+  const rFloor = mkFloor('f1', 'Ground', []);   // empty floor (no nav blockers)
+  r.updateFloor(rFloor, { preset: 'day', floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6' });
+  r.applyViewPreset('top');
+
+  const realNow = performance.now.bind(performance);
+  let fakeNow = realNow();
+  performance.now = () => fakeNow;
+  const DT = 16.7;
+  const step = (targets) => { fakeNow += DT; r.updateTargets(targets); };
+  const navWorld = (h) => ({ x: FW / 2 - h.navX, y: h.navZ + FD / 2 });
+
+  // ── (e) spawnAt places a fresh rig at the stair, not the live solve ──────
+  {
+    const KEY = 'ble_devSp';
+    const STAIR = { x: 2000, y: 1500 };
+    const SOLVE = { x: 6000, y: 5000 };   // live solve far away
+    const t = () => ({ key: KEY, x: SOLVE.x, y: SOLVE.y, color: 0x26c6da, ble: true,
+                       avatar: 'random', spawnAt: STAIR, person: { name: 'Ada', color: '#ff7043', identified: true } });
+    step([t()]);   // FIRST frame → rig is created; must seed at STAIR
+    const h = r._humanoids[KEY];
+    const w = h ? navWorld(h) : null;
+    ok('(e) rig created', !!h, '');
+    ok('(e) first-frame position ≈ stair (not the solve)',
+       w && Math.hypot(w.x - STAIR.x, w.y - STAIR.y) < 200 && Math.hypot(w.x - SOLVE.x, w.y - SOLVE.y) > 3000,
+       w ? `pos=(${w.x|0},${w.y|0}) stair=(${STAIR.x},${STAIR.y})` : 'no rig');
+  }
+
+  // ── (f) leaving handoff: walk to stair, fast-fade, dispose, stay gone ────
+  {
+    const KEY = 'ble_devLv';
+    const HOME = { x: 3000, y: 3000 };
+    const home = () => ({ key: KEY, x: HOME.x, y: HOME.y, color: 0x26c6da, ble: true, avatar: 'random' });
+    for (let i = 0; i < 8; i++) step([home()]);   // establish the rig at HOME
+    const born = !!r._humanoids[KEY];
+    // Now the person left via a stair AT the rig's position (arrival is immediate).
+    const leave = () => ({ key: KEY, x: HOME.x, y: HOME.y, color: 0x26c6da, ble: true,
+                           avatar: 'random', leaveVia: { x: HOME.x, y: HOME.y } });
+    let gone = false, goneFrame = -1;
+    for (let i = 0; i < 90 && !gone; i++) {   // ≤ 1.5 s — fade is ~0.4 s once arrived
+      step([leave()]);
+      if (!r._humanoids[KEY]) { gone = true; goneFrame = i; }
+    }
+    ok('(f) rig existed before leaving', born, '');
+    ok('(f) leaving rig walks to the stair then fast-fades + disposes', gone, `frame=${goneFrame}`);
+    ok('(f) disposed rig recorded in _leftAt', r._leftAt[KEY] != null, '');
+    // Keep emitting the leaving target — it must NOT respawn.
+    let respawned = false;
+    for (let i = 0; i < 30; i++) { step([leave()]); if (r._humanoids[KEY]) respawned = true; }
+    ok('(f) does not respawn while still emitted', !respawned, '');
+  }
+  performance.now = realNow;
+
+  // ── (h) glass-house transit puppet ───────────────────────────────────────
+  {
+    const Y0 = 0, Y1 = 3000, DUR = 8;
+    r.spawnTransitPuppet({ id: 'P1:1000', colorInt: 0xff7043, x: 4000, y: 3000,
+                           rotationDeg: 0, runLength: 3600, yStart: Y0, yEnd: Y1, durationS: DUR });
+    const spawned = !!r._transitPuppet && r._transitGroup.children.length >= 1;
+    const yAt0 = r._transitPuppet ? r._transitPuppet.rig.group.position.y : NaN;
+    // Advance to ~halfway (t≈4 s) → y ≈ 1500.
+    for (let i = 0; i < 240; i++) r._advanceTransitPuppet(1 / 60);   // 4.0 s
+    const yMid = r._transitPuppet ? r._transitPuppet.rig.group.position.y : NaN;
+    // Advance past the duration → puppet disposes.
+    for (let i = 0; i < 300; i++) r._advanceTransitPuppet(1 / 60);   // +5.0 s → t = 9 s
+    const disposed = r._transitPuppet === null && r._transitGroup.children.length === 0;
+    ok('(h) puppet spawns', spawned, `children=${r._transitGroup.children.length}`);
+    ok('(h) starts at the source story offset', Math.abs(yAt0 - Y0) < 1, `y0=${yAt0}`);
+    ok('(h) y interpolates between story offsets (mid ≈ 1500)',
+       yMid > 1300 && yMid < 1700, `yMid=${Math.round(yMid)}`);
+    ok('(h) puppet disposes after its duration', disposed,
+       `puppet=${r._transitPuppet} children=${r._transitGroup.children.length}`);
+  }
+
+  // ── Report ───────────────────────────────────────────────────────────────
+  let pass = 0; const fails = [];
+  for (const t of tests) { if (t.ok) pass++; else fails.push(t.name); }
+  const total = tests.length, allPass = pass === total;
+  const title = allPass ? `STAIR-LINK PASS ${pass}/${total}` : `STAIR-LINK FAIL ${pass}/${total} [${fails.join(',')}]`;
+  document.title = title;
+  window.__RESULT__ = { title, pass, total };
+  document.body.insertAdjacentHTML('beforeend',
+    `<pre style="position:fixed;left:8px;top:8px;color:#8f8;white-space:pre-wrap">${title}\n` +
+    tests.map(t => `${t.ok ? 'PASS' : 'FAIL'} ${t.name} — ${t.detail ?? ''}`).join('\n') + `</pre>`);
+</script>

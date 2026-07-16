@@ -9,7 +9,7 @@ import type {
   Sensor, Zone, ObjectHalo, BgImage, MotionSensor, EnvSensor, EnvKind, Light, SwitchFixture, LightIconKind,
   Furniture, FurnitureKind, Door, Window as WindowType, WindowKind, Layers2D, Floor, Room,
   ObjectRecipe, RecipePrimitive, RecipeShape, ActivityKind, AvatarKind,
-  BleProxy, AlarmPanel, SafetySensor, RobotFixture, CameraFixture, PresenceZone, GroundArea, GroundKind, DioramaPerson, GeoLandmark,
+  BleProxy, AlarmPanel, SafetySensor, RobotFixture, CameraFixture, PresenceZone, GroundArea, GroundKind, VoidArea, DioramaPerson, GeoLandmark,
 } from '../types.js';
 import type { BermudaDevice } from '../planner.js';
 
@@ -26,7 +26,7 @@ import {
   FURNITURE_KINDS, furnitureKind, resolveFurnitureDef, WINDOW_DEFAULTS,
   ENV_KINDS, ENV_DEFAULTS, ENV_SCALE_MIN, ENV_SCALE_MAX,
   envKindOf, envColor, envValueText, envHeight, envScale,
-  furnitureCat, type FurnitureCat, isBinKind,
+  furnitureCat, type FurnitureCat, isBinKind, isStairsKind,
   closedWallLoops, loopContaining, resolveRoomForPointFuzzy, roomLabel,
 } from '../geometry.js';
 import type { Vec2 } from '../types.js';
@@ -92,6 +92,7 @@ const TOOLS: { id: Tool; label: string }[] = [
   { id: 'camera', label: '📷 Camera' },
   { id: 'pzone', label: '▱ Presence zone' },
   { id: 'ground', label: '▨ Ground area' },
+  { id: 'void', label: '🕳 Floor void' },
   { id: 'furniture', label: 'Furn' },
   { id: 'light', label: 'Light' },
   { id: 'switch', label: 'Switch' },
@@ -271,6 +272,7 @@ export class Sidebar extends LitElement {
       cameras: p.activeCameraId ?? null,
       pzones: p.activePZoneId ?? null,
       ground: p.activeGroundAreaId ?? null,
+      voids: p.activeVoidAreaId ?? null,
       people: p.activePersonId ?? null,
       furniture: p.activeFurnitureId ?? null,
     };
@@ -366,6 +368,7 @@ export class Sidebar extends LitElement {
         ${this._camerasSection()}
         ${this._presenceZonesSection()}
         ${this._groundSection()}
+        ${this._voidSection()}
         ${this._peopleSection()}
         ${this._doorsSection()}
         ${this._windowsSection()}
@@ -485,6 +488,7 @@ export class Sidebar extends LitElement {
       case 'camera': return 'Click to drop a camera. Drag the orange dot to aim it; bind a camera.* entity for the FOV tint + snapshot.';
       case 'pzone': return 'Click to add polygon vertices; double-click (or Enter) to finish (≥3 pts). Bind a binary_sensor (FP2 zone / occupancy) — the zone glows when occupied. ESC cancels.';
       case 'ground': return 'Click to add polygon vertices; double-click (or Enter) to finish (3–20 pts). Paints a ground covering (grass/rock/water/…) under the plan. ESC cancels.';
+      case 'void': return 'Click to add polygon vertices; double-click (or Enter) to finish (3–12 pts). Cuts a hole in the floor (stairwell / atrium) — avatars route around it unless a stair bridges it. ESC cancels.';
       case 'furniture': return 'Click to drop a 600 × 600 mm piece.';
       case 'light': return 'Click to drop a light. Bind via the active panel.';
       case 'switch': return 'Click to drop a switch. Bind via the active panel.';
@@ -1793,6 +1797,62 @@ export class Sidebar extends LitElement {
     `;
   }
 
+  // ── Floor voids section (holes cut from the slab) ─────────────────────
+  private _voidSection() {
+    const p = this.planner;
+    const list = p.floor().voidAreas ?? [];
+    const drawing = !!p.drawingVoidArea;
+    return this._section('voids', 'Floor voids', () => html`
+      ${drawing ? html`
+        <div style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text-dim);padding:4px 0">
+          <span style="flex:1">🕳 Click to add vertices; double-click / Enter to finish (${p.drawingVoidArea!.points.length} pts).</span>
+          <button class="btn" style="font-size:10px;padding:2px 6px"
+                  @click=${() => { p.drawingVoidArea = null; p.emitConfig(); }}>Cancel</button>
+        </div>` : nothing}
+      ${list.map((v, i) => this._voidItem(v, i))}
+      <div style="font-size:10px;color:var(--text-dim);margin:4px 0">A void cuts a hole in the floor — avatars route around it unless a stair bridges it.</div>
+      <button class="btn" style="width:100%;margin-top:6px" @click=${() => { p.setTool('void'); p.maybeCloseSidebarForPlacement(); }}>
+        + Draw void
+      </button>
+    `);
+  }
+
+  private _voidItem(v: VoidArea, i: number) {
+    const p = this.planner;
+    const sel = p.activeVoidAreaId === v.id;
+    return html`
+      <div style="border-bottom:1px solid var(--border)">
+        <div class="sensor-item ${sel ? 'sel' : ''}" @click=${() => p.setActiveVoidArea(v.id)}>
+          <div class="dot" style="background:#222"></div>
+          <div class="nm">🕳 Void ${i + 1}</div>
+          <div class="badge">${v.points.length} pts</div>
+        </div>
+        ${sel ? this._voidEditor(v) : nothing}
+      </div>
+    `;
+  }
+
+  private _voidEditor(v: VoidArea) {
+    const p = this.planner;
+    return html`
+      <div style="background:rgba(0,0,0,0.25);border-radius:4px;padding:6px;margin:4px 0">
+        ${this._lockRow(v)}
+        <div style="font-size:10px;color:var(--text-dim);margin:2px 0">${v.points.length} vertices · drag the orange handles to reshape (Select mode)</div>
+        <div style="display:flex;gap:4px;margin-top:4px">
+          <button class="btn" style="flex:1;font-size:11px"
+                  title="Re-draw the polygon on the plan (replaces the points)"
+                  @click=${() => { p.drawingVoidArea = { points: [], id: v.id }; p.setTool('void'); p.maybeCloseSidebarForPlacement(); p.emitConfig(); }}>Redraw</button>
+        </div>
+        <button class="btn danger" style="width:100%;margin-top:6px" @click=${() => {
+          const f = p.floor();
+          f.voidAreas = (f.voidAreas ?? []).filter(x => x.id !== v.id);
+          p.activeVoidAreaId = null;
+          p.save(); p.emitConfig();
+        }}>Delete void</button>
+      </div>
+    `;
+  }
+
   // ── People section (identity registry) ────────────────────────────────
   private _bermudaKicked = false;
 
@@ -1833,11 +1893,17 @@ export class Sidebar extends LitElement {
     const p = this.planner;
     const sel = p.activePersonId === pe.id;
     const color = pe.color || '#90caf9';
+    // BLE-solved floor: when it differs from the current floor, note where the
+    // person actually is ("on <floor>"). Cheap map hits (see solvedFloorIdFor).
+    const solvedFloorId = p.solvedFloorIdFor(pe.id);
+    const onFloor = solvedFloorId && solvedFloorId !== p.floor().id
+      ? (p.store.floors.find(f => f.id === solvedFloorId)?.name ?? null) : null;
     return html`
       <div style="border-bottom:1px solid var(--border)">
         <div class="sensor-item ${sel ? 'sel' : ''}" @click=${() => p.setActivePerson(pe.id)}>
           <div class="dot" style="background:${color}"></div>
-          <div class="nm">${pe.name || 'Person'}${pe.isPet ? ' 🐾' : ''}</div>
+          <div class="nm">${pe.name || 'Person'}${pe.isPet ? ' 🐾' : ''}${
+            onFloor ? html`<span style="font-size:10px;color:var(--text-dim);margin-left:5px">on ${onFloor}</span>` : nothing}</div>
           <div class="badge ${pe.bermudaDeviceId || pe.haPersonId ? 'bound' : ''}">
             ${pe.bermudaDeviceId ? '📶' : pe.haPersonId ? 'GPS' : '—'}
           </div>
@@ -2708,6 +2774,7 @@ export class Sidebar extends LitElement {
                    piece.elevation = isFinite(v) && v !== 0 ? v : undefined;
                  })}>
         </div>
+        ${isStairsKind(curKind) ? this._stairLinkRow(piece, upd) : nothing}
         <div class="row"><label>Rotation (°)</label>
           <input type="number" step="15" .value=${String(Math.round(piece.rotation ?? 0))}
                  @input=${(e: Event) => upd(() => {
@@ -2732,6 +2799,54 @@ export class Sidebar extends LitElement {
           Snaps to 15° increments. Corner-resize handles hide while rotated.
         </div>
       </div>
+    `;
+  }
+
+  // Linked-stairs picker (Tier 2 stair portals). Lists stairs-family pieces on
+  // OTHER floors; picking one links both under a shared opaque id (BLE avatars
+  // hand off between the linked pieces on a floor change). Current link shows a
+  // ✕ clear; a link whose partner was deleted reads "(broken link)" + clear.
+  private _stairLinkRow(piece: Furniture, _upd: (mut: () => void) => void) {
+    const p = this.planner;
+    const partner = p.stairLinkPartner(piece);
+    const elevTxt = (fu: Furniture) => `${Math.round(fu.elevation ?? 0)} mm`;
+    // Candidates: stairs-family pieces on every OTHER floor.
+    const opts: { floorId: string; floorName: string; id: string; label: string }[] = [];
+    for (const fl of p.store.floors) {
+      if (fl.id === p.floor().id) continue;
+      for (const fu of fl.furniture) {
+        if (!isStairsKind(fu.kind)) continue;
+        const def = FURNITURE_KINDS[furnitureKind(fu)];
+        opts.push({ floorId: fl.id, floorName: fl.name, id: fu.id,
+                    label: `${fl.name} · ${def.label} · ${elevTxt(fu)}` });
+      }
+    }
+    const linkStatus = piece.stairLinkId
+      ? (partner
+          ? html`<span style="font-size:10px;color:#66bb6a">↔ ${partner.floor.name} · ${FURNITURE_KINDS[furnitureKind(partner.piece)].label}</span>`
+          : html`<span style="font-size:10px;color:#ffb74d">(broken link)</span>`)
+      : html`<span style="font-size:10px;color:var(--text-dim)">— none —</span>`;
+    return html`
+      <div class="row"><label title="Link this flight to a stairs piece on another floor so BLE avatars hand off between them on a floor change.">Linked stairs</label>
+        ${linkStatus}
+        ${piece.stairLinkId ? html`
+          <button class="btn" style="font-size:10px;padding:2px 6px;margin-left:4px" title="Clear link (both sides)"
+                  @click=${() => p.clearStairLink(piece.id)}>✕</button>` : nothing}
+      </div>
+      ${opts.length === 0
+        ? html`<div style="font-size:10px;color:var(--text-dim);padding:0 0 2px">No stairs on other floors.</div>`
+        : html`<div class="row"><label>Link to</label>
+            <select @change=${(e: Event) => {
+              const v = (e.target as HTMLSelectElement).value;
+              (e.target as HTMLSelectElement).selectedIndex = 0;   // reset to placeholder
+              if (!v) return;
+              const [floorId, pid] = v.split('|');
+              p.linkStairs(piece.id, floorId, pid);
+            }}>
+              <option value="">— pick a stairs piece —</option>
+              ${opts.map(o => html`<option value=${o.floorId + '|' + o.id}>${o.label}</option>`)}
+            </select>
+          </div>`}
     `;
   }
 

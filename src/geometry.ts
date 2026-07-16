@@ -54,6 +54,7 @@ export function floorContentBbox(f: Floor): FloorBox | null {
   for (const it of f.doors ?? []) acc(it.x, it.y);
   for (const it of f.windows ?? []) acc(it.x, it.y);
   for (const rm of f.rooms ?? []) acc(rm.anchor.x, rm.anchor.y);
+  for (const vd of f.voidAreas ?? []) for (const pt of vd.points) acc(pt.x, pt.y);
   return any ? { minX, minY, maxX, maxY } : null;
 }
 
@@ -493,6 +494,21 @@ export function lightIconKind(l: { iconKind?: LightIconKind }): LightIconKind {
 
 // Stairs-family kinds a step light can mount flush against.
 export const STEP_LIGHT_EDGE_KINDS = new Set<FurnitureKind>(['stairs', 'stairs_half', 'stair_landing']);
+
+// Stairs-family kinds (floor transitions). Shared by the cross-floor stair-link
+// feature: only these kinds may carry a Furniture.stairLinkId and take part in a
+// transit portal. Same membership as STEP_LIGHT_EDGE_KINDS, named for its own use.
+export const STAIRS_KINDS = new Set<FurnitureKind>(['stairs', 'stairs_half', 'stair_landing']);
+export function isStairsKind(kind?: FurnitureKind): boolean {
+  return kind != null && STAIRS_KINDS.has(kind);
+}
+
+// Direction glyph for a linked-stairs chip: '▲' when the partner piece sits on a
+// HIGHER story (its floor index in Store.floors is greater — canonical story
+// order, lower index = lower story), else '▼'. Pure — drives the 2D chip + tests.
+export function stairChipArrow(partnerIndex: number, currentIndex: number): '▲' | '▼' {
+  return partnerIndex > currentIndex ? '▲' : '▼';
+}
 
 // Snap a 'step' light flush to the nearest wall face or stairs-family footprint
 // edge (whichever is nearer within `maxDist`). On a WALL: the position lands on

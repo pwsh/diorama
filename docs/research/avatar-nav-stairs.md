@@ -304,6 +304,62 @@ open, deep end blocked), A* route onto the flight reaches negative
 `groundY`, descend-goal → fade at the bottom → respawn, emerge spawn walks
 up, ascending stairs unaffected, blob/pose sanity at negative ground.
 
+## Shipped design v2 — floor voids + cross-floor stair portals (2026-07-16, Fable)
+
+Completes the item. Tiebreaks against the original Tier-1/Tier-2 proposals:
+
+**Tier 1 — `Floor.voidAreas`** (user-drawn "no floor here" polygons):
+- Full presence-zone/ground-area recipe: `VoidArea {id, points: Vec2[3..12],
+  locked?}` on `Floor` (repairFloor + defaultFloor backfill `[]`), draw
+  latch `drawingVoidArea` (parallel field convention), `void` tool, vertex
+  drag, low-priority hit. 2D: dark hatched fill + dashed outline (edit
+  layers gate: rides the `ground` layer). 3D: the polygon is cut from the
+  floor patches as a HOLE (same earcut path as stairwell wells; MIN_HOLE_AREA
+  respected) with the shared dark void plane beneath.
+- **Nav**: void cells are BLOCKED in `_buildNav` (the actual point of the
+  feature — avatars route around missing floor, and when a sunken/linked
+  stair is the only connection, they take the stairs). Rasterize like wall
+  solids; stairs-family footprints overlapping a void stay walkable (the
+  flight bridges the void).
+- Radar/BLE raw positions are never remapped; only nav-driven rigs respect
+  voids (same rule as rails).
+
+**Tier 2 — stair links + transits** (simplified from the proposal):
+- Data: `Furniture.stairLinkId?: string` ONLY (same opaque id on exactly two
+  stairs-family pieces on two different floors). NO `stairLinkRole` — the
+  role derives from `Store.floors` array order (canonical story order; ghost
+  stacking already assumes it: lower index = lower story). NO
+  `stairLinkOffset` — transits spawn/despawn AT the linked stair's own
+  coordinates on each floor, so no cross-frame translation is needed.
+  Item-level optional field → no repairFloor change.
+- Sidebar: stairs editor gains a "Linked stairs" picker listing stairs-family
+  pieces on OTHER floors (labeled floor name + kind + elevation); picking
+  writes the shared id to both; a ✕ clears both sides.
+- Planner (runtime-only): `_watchFloorTransits` — when an identified BLE
+  person's solved `floorId` changes, hold the new floor for ≥2 consecutive
+  solves AND ≥4 s (fusion-style hysteresis) before committing
+  `Planner.floorTransits[personKey] = {fromFloorId, toFloorId, viaLinkId?,
+  at}` (viaLinkId when both floors carry a linked pair; prune >30 s).
+  Unknown devices never transit (bleShowUnknown ghosts just pop as today).
+- Renderer/three-view: a person ARRIVING on the current floor with a fresh
+  transit + viaLink spawns their BLE rig AT the linked stair (fade-in,
+  walking away toward the live solve); a person LEAVING the current floor
+  with a viaLink gets a final stair-bound goal — the rig walks to the stair
+  and fades there (cap ~6 s, then normal fade wherever it is). No transit →
+  today's pop/fade unchanged.
+- 2D: linked stairs draw a small ▲/▼ chip (direction = partner floor's
+  story order relative to this floor); the People sidebar rows show
+  "on <floor name>" when the person's solved floor ≠ current.
+- **Glass-house puppet (stretch, best-effort)**: while `glassHouse` is on
+  and a transit is active, a display-only scripted rig walks the source
+  flight and rises/descends `STORY_H` between the two story offsets over
+  ~8 s in a dedicated always-on `_transitGroup` (outside `_keyFloor` /
+  `_keyGhost`; disposed on completion/floor-switch). Pure theater — no nav,
+  no interaction, skipped when either stair is missing.
+
+Out of scope (stays parked): radar-only transit inference, per-person
+transit history, elevators/ladders, multi-link routing.
+
 ## Integration steps
 
 **Tier 1** (ship first — small, self-contained, no data-model risk beyond one
