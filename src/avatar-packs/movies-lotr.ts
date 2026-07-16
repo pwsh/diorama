@@ -6,7 +6,7 @@
 import type { AvatarPackDef } from '../avatars.js';
 
 const pack: AvatarPackDef = {
-  id: 'movies-lotr', version: 1, label: 'The Lord of the Rings',
+  id: 'movies-lotr', version: 2, label: 'The Lord of the Rings',
   path: ['Pop Culture', 'Movies', 'The Lord of the Rings'], builtin: true, franchise: true,
   // Shared un-magical earthbound base: no emissive, sphere hands.
   base: { humanoid: { emI: 0, hands: 'sphere' } },
@@ -136,6 +136,35 @@ const pack: AvatarPackDef = {
       ],
       personality: { bobMul: 1.05, swayMul: 0.75, cadenceMul: 1.0, ampMul: 1.05 },
       bubbles: ['📯', '🛡️', '👑', '😔'] },
+
+    // Merry — Brandybuck hobbit: curly brown hair, blue-grey travelling cloak, bare feet.
+    // Shares the pack's hobbit foot/shoe idiom (skin-toned shoe + big footMul) with Frodo/Sam.
+    { id: 'movies-lotr/merry', label: 'Brandybuck hobbit (blue-grey cloak)', rig: 'humanoid',
+      humanoid: { sk: 0.55, headR: 112, skin: 0xe6b088, body: 0x4a4a38, shoe: 0xe6b088,
+        eyes: 'dots', limbR: 0.95, armL: 0.95, legL: 0.85, footMul: [1.3, 0.6, 1.25], legColor: 0x5c4a30 },
+      accessories: [
+        { shape: 'sphere', size: [70, 44, 70], anchor: 'crown', pos: [0, -8, 4], color: 0x4a3320 },
+        { shape: 'cylinder', size: [18, 18, 6], anchor: 'neck', pos: [0, 4, -14], rot: [1.57, 0, 0], color: 0xc8ccd0 },
+        { shape: 'cone', size: [90, 300, 90], anchor: 'back', pos: [0, -120, 14], color: 0x5c6b7a },
+        { shape: 'box', size: [180, 20, 150], anchor: 'hip', pos: [0, 0, 0], color: 0x3a2818 },
+      ],
+      personality: { bobMul: 1.05, swayMul: 1.15, cadenceMul: 1.1, ampMul: 0.9 },
+      // approx: hairy-hobbit-foot detail unsupported (no foot anchor) — enlarged bare feet via footMul + skin-toned shoe only.
+      bubbles: ['🍄', '🍺', '🌿', '😄'] },
+
+    // Pippin — Took hobbit: sandy-blond curls, tan/fawn cloak, bare feet. Same hobbit idiom.
+    { id: 'movies-lotr/pippin', label: 'Took hobbit (fawn cloak)', rig: 'humanoid',
+      humanoid: { sk: 0.55, headR: 112, skin: 0xe8b891, body: 0x6e6250, shoe: 0xe8b891,
+        eyes: 'dots', limbR: 0.9, armL: 0.95, legL: 0.85, footMul: [1.3, 0.6, 1.25], legColor: 0x6b5a3a },
+      accessories: [
+        { shape: 'sphere', size: [70, 44, 70], anchor: 'crown', pos: [0, -8, 4], color: 0xc8a35a },
+        { shape: 'cylinder', size: [18, 18, 6], anchor: 'neck', pos: [0, 4, -14], rot: [1.57, 0, 0], color: 0xc8ccd0 },
+        { shape: 'cone', size: [90, 300, 90], anchor: 'back', pos: [0, -120, 14], color: 0xbfa77e },
+        { shape: 'box', size: [180, 20, 150], anchor: 'hip', pos: [0, 0, 0], color: 0x3a2818 },
+      ],
+      personality: { bobMul: 1.1, swayMul: 1.2, cadenceMul: 1.15, ampMul: 0.9 },
+      // approx: hairy-hobbit-foot detail unsupported (no foot anchor) — enlarged bare feet via footMul + skin-toned shoe only.
+      bubbles: ['🍄', '🍎', '🌿', '😅'] },
   ],
 };
 

@@ -14,7 +14,7 @@ const bib = (col: number): AvatarPrimitive[] => [
 ];
 
 const pack: AvatarPackDef = {
-  id: 'mario', version: 1, label: 'Mario',
+  id: 'mario', version: 2, label: 'Mario',
   path: ['Video Games', 'Mario'], builtin: true, franchise: true,
   avatars: [
     // Mario
@@ -113,6 +113,20 @@ const pack: AvatarPackDef = {
         ...bib(0x6a2f9e),
       ],
       personality: { bobMul: 1.4, swayMul: 1.3, cadenceMul: 0.85, ampMul: 1.15 }, bubbles: ['💰', '😤', '🧄', '💪'] },
+    // Donkey Kong — big friendly ape (v2). NOT pet:true — matches the pack's
+    // dino-companion (Yoshi), a full character that sits/does activities; only
+    // shy-ghost (Boo) is pet:true here.
+    { id: 'mario/barrel-ape', label: 'Barrel Ape (brown, red tie)', rig: 'humanoid',
+      humanoid: { sk: 1.2, headR: 140, limbR: 1.5, skin: 0x6b4a2e, body: 0x6b4a2e, legColor: 0x6b4a2e, shoe: 0x3a2a1a, eyes: 'dots', hands: 'box', armL: 1.3, legL: 0.85, footMul: [1.3, 1.0, 1.4] },
+      accessories: [
+        { shape: 'box', size: [200, 240, 12], anchor: 'chest', pos: [0, -10, -6], color: 0xc9a06a }, // tan chest panel
+        { shape: 'box', size: [50, 120, 10], anchor: 'chest', pos: [0, 60, -8], color: 0xd21f1a }, // red tie
+        { shape: 'sphere', size: 40, anchor: 'head', pos: [-100, 10, 10], color: 0x6b4a2e }, // ear L
+        { shape: 'sphere', size: 40, anchor: 'head', pos: [100, 10, 10], color: 0x6b4a2e }, // ear R
+        { shape: 'box', size: [110, 20, 12], anchor: 'face', pos: [0, 30, -8], color: 0x2a1a12 }, // heavy brow
+        { shape: 'box', size: [90, 40, 90], anchor: 'crown', pos: [0, 10, 0], color: 0x2a1a12 }, // hair tuft
+      ],
+      personality: { bobMul: 0.7, swayMul: 0.9, cadenceMul: 0.7, ampMul: 1.2 }, bubbles: ['🍌', '🦍', '💪', '😤'] },
   ],
 };
 

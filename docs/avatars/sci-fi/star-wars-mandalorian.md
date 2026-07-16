@@ -11,7 +11,7 @@ in this doc's Reference lines and the pack's display labels.
 - **Group**: Bounty hunters, warriors & droids of *The Mandalorian* (Disney+,
   2019– ) — beskar armor is the pack's visual throughline.
 - **Hierarchy path**: `sci-fi / star-wars / mandalorian`
-- **Member count**: 8
+- **Member count**: 9 (8 original + `imperial-warlord`, appended in pack v2)
 - **Rig**: humanoid only (no quadrupeds in this pack; IG-11 is a bipedal droid
   built on the humanoid rig, see its Rig-gap notes)
 - **Shared base spec** (all members start here, then override):
@@ -459,6 +459,42 @@ pack's sole droid.
 (almost no organic bob/sway — sharp, linear, faintly jerky mechanical
 motion; the least "alive"-feeling gait in the pack by design)
 **Bubbles**: `💉🩹🤖⚠️` (medical/nurse duties, patch-up, droid nature, blunt-force warning/self-destruct)
+
+---
+
+### 9. `imperial-warlord` — "Imperial officer (black uniform, dark cape)" *(pack v2 addition)*
+
+**Reference**: An Imperial remnant warlord/Moff-style commander — the show's
+recurring human antagonist archetype: silver-grey slicked-back hair, a black
+high-collared Imperial officer uniform, black gloves, and a dark cape.
+Menacing and austere rather than ornate. (Moff Gideon as the archetype.)
+Audits flagged the pack as having no human Imperial-command antagonist —
+every prior villain-side member was a trooper or droid.
+
+**Spec**
+```
+skin: 0xd8b79a       // pale human face — unhelmeted, override the pack's 'visor' default to 'dots'
+body: 0x161616       // black officer tunic
+legColor: 0x161616   // black uniform trousers
+shoe: 0x141210
+eyes: 'dots'
+emI: 0.1
+hands: 'box'          // black gloves
+limbR: 1.0
+```
+
+**Accessories**
+- **crown** — silver-grey slicked hair, a low flattened sphere-cap, `0xb8b8b0`, tilted back off the brow.
+- **neck** — a stiff high officer's collar, box `0x0e0e10`, on the `neck` anchor.
+- **chest** — a rank insignia bar, box `color: 'tint'` — the pack's one 'tint' accent on this member so per-sensor color coding survives (the black uniform is otherwise costume-critical).
+- **back** — a dark cape, a flattened cone from the shoulders to the ground, `0x101012` (reuses Din's cape recipe, darker).
+
+**Silhouette check**: an all-black caped figure topped by silver-grey hair
+and a stiff high collar — the only unhelmeted human antagonist in the pack,
+distinct from the white/black armored troopers and the spindly droid.
+
+**Personality**: `bobMul: 0.7, swayMul: 0.5, cadenceMul: 0.85, ampMul: 0.85` (cold, unhurried, controlled menace)
+**Bubbles**: `🖤😠⚡📡` (imperial menace, cold anger, dark-side power, command comms)
 
 ## Rig gaps
 

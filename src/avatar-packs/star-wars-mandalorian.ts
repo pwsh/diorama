@@ -12,7 +12,7 @@ const pauldrons = (col: number, size: [number, number, number] = [70, 55, 50]): 
 const TVISOR: AvatarPrimitive = { shape: 'box', size: [12, 64, 8], anchor: 'face', pos: [0, -4, -10], color: 0x1a1a1a, emissiveIntensity: 0 };
 
 const pack: AvatarPackDef = {
-  id: 'star-wars-mandalorian', version: 1, label: 'Star Wars: The Mandalorian',
+  id: 'star-wars-mandalorian', version: 2, label: 'Star Wars: The Mandalorian',
   path: ['Sci-Fi', 'Star Wars', 'The Mandalorian'], builtin: true, franchise: true,
   base: {
     rig: 'humanoid',
@@ -112,6 +112,19 @@ const pack: AvatarPackDef = {
         { shape: 'box', size: [70, 10, 40], anchor: 'crown', pos: [0, 0, 0], color: 0xb0aca2, emissiveIntensity: 0 }],
       personality: { bobMul: 0.2, swayMul: 0.1, cadenceMul: 1.1, ampMul: 0.7 },
       bubbles: ['💉', '🩹', '🤖', '⚠️'] },
+    // Imperial remnant warlord (Moff-style commander): silver-grey slicked hair, black
+    // high-collar officer uniform, dark cape — menacing but simple. (v2 addition.)
+    { id: 'star-wars-mandalorian/imperial-warlord', label: 'Imperial officer (black uniform, dark cape)', rig: 'humanoid',
+      humanoid: { skin: 0xd8b79a, body: 0x161616, legColor: 0x161616, shoe: 0x141210, eyes: 'dots', emI: 0.1, hands: 'box', limbR: 1.0 },
+      accessories: [
+        { shape: 'sphere', size: [124, 40, 124], anchor: 'crown', pos: [0, -4, 4], rot: [0.25, 0, 0], color: 0xb8b8b0, emissiveIntensity: 0 },
+        // stiff high collar on the neck anchor
+        { shape: 'box', size: [150, 60, 20], anchor: 'neck', pos: [0, 10, -8], color: 0x0e0e10, emissiveIntensity: 0 },
+        // rank insignia — the pack's one 'tint' accent so sensor color coding survives
+        { shape: 'box', size: [40, 14, 6], anchor: 'chest', pos: [-50, 90, -10], color: 'tint', emissiveIntensity: 0 },
+        { shape: 'cone', size: [200, 560, 200], anchor: 'back', pos: [0, -120, 12], color: 0x101012, emissiveIntensity: 0 }],
+      personality: { bobMul: 0.7, swayMul: 0.5, cadenceMul: 0.85, ampMul: 0.85 },
+      bubbles: ['🖤', '😠', '⚡', '📡'] },
   ],
 };
 

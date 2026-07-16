@@ -332,6 +332,78 @@ legColor: '#241e1a'
 
 ---
 
+### 9. `lotr-merry` — Brandybuck Hobbit (blue-grey cloak)
+
+**Reference**: Meriadoc "Merry" Brandybuck, one of the four hobbits of the Fellowship and Pippin's inseparable cousin/companion. Curly light-brown hair, a practical Shire waistcoat/jacket, and a grey-blue travelling cloak; barefoot with the usual large hobbit feet. (Audit gap: the Fellowship's two younger hobbits were missing from the original eight — this pass adds both to complete the party.)
+
+**Spec**
+```
+sk: 0.55
+headR: 112
+headShape: 'sphere'
+limbR: 0.95
+skin: '#e6b088'
+body: '#4a4a38'         # muted olive-grey Shire jacket
+shoe: '#e6b088'         # barefoot — same tone as skin (hobbit foot/shoe idiom)
+emI: 0
+hands: 'sphere'
+eyes: 'dots'
+steel: false
+armL: 0.95
+legL: 0.85
+footMul: [1.3, 0.6, 1.25]   # big bare hobbit feet, matching Frodo/Sam
+legColor: '#5c4a30'     # earth-brown breeches
+```
+
+**Accessories**
+- `crown` sphere, ~70mm, `#4a3320` (curly light-brown hair), sits low/round — no brim to clear (hobbit hair is short), matching the Frodo/Sam crown recipe.
+- `neck` thin cylinder disc, `#c8ccd0` (leaf-brooch cloak clasp) at the collar.
+- `back` flattened cone (drapes to knee), `#5c6b7a` (blue-grey Elven travelling cloak) — the ONE cool accent that differentiates him from Frodo's green and Sam's grey at a glance.
+- `hip` thin box belt, `#3a2818`.
+
+**Silhouette check**: small hobbit stature + curly brown hair + blue-grey cloak + bare feet reads at 30px; distinguished from Sam's paler grey cloak and Frodo's green by the cooler blue tone. Same foot rig gap as the other hobbits (see Rig gap #1) — bare feet via `footMul` + skin-toned shoe only.
+
+**Personality**: `bobMul 1.05, swayMul 1.15, cadenceMul 1.1, ampMul 0.9` (quick short-legged hobbit waddle)
+**Bubbles**: 🍄 🍺 🌿 😄
+
+---
+
+### 10. `lotr-pippin` — Took Hobbit (fawn cloak)
+
+**Reference**: Peregrin "Pippin" Took, the youngest hobbit of the Fellowship and Merry's cousin/foil — impulsive and cheerful. Sandy-blond curly hair, a Shire waistcoat, and a tan/fawn travelling cloak; barefoot with large hobbit feet.
+
+**Spec**
+```
+sk: 0.55
+headR: 112
+headShape: 'sphere'
+limbR: 0.9
+skin: '#e8b891'
+body: '#6e6250'         # warm tan-grey Shire waistcoat
+shoe: '#e8b891'         # barefoot — same tone as skin
+emI: 0
+hands: 'sphere'
+eyes: 'dots'
+steel: false
+armL: 0.95
+legL: 0.85
+footMul: [1.3, 0.6, 1.25]
+legColor: '#6b5a3a'     # sandy breeches
+```
+
+**Accessories**
+- `crown` sphere, ~70mm, `#c8a35a` (sandy-blond curly hair — the same tone as Sam's, differentiating him from Merry's darker brown).
+- `neck` thin cylinder disc, `#c8ccd0` (leaf-brooch clasp).
+- `back` flattened cone, `#bfa77e` (tan/fawn travelling cloak) — the warmest cloak in the hobbit set, the ONE accent that sets him apart from Merry's cool blue-grey.
+- `hip` thin box belt, `#3a2818`.
+
+**Silhouette check**: small hobbit stature + sandy-blond curls + warm fawn cloak + bare feet reads at 30px; the blond-vs-brown hair and fawn-vs-blue cloak keep him distinct from Merry, and the paler warmer cloak keeps him distinct from Sam. Same foot rig gap (#1).
+
+**Personality**: `bobMul 1.1, swayMul 1.2, cadenceMul 1.15, ampMul 0.9` (light, quick, impulsive hobbit trot)
+**Bubbles**: 🍄 🍎 🌿 😅
+
+---
+
 ## Rig gaps
 
 1. **No foot/ankle accessory anchor.** Existing anchors are `crown / head / face / chest / torso-front / back / hip / hand` — nothing below the knee. Hairy hobbit feet (Frodo, Sam) can only be approximated via enlarged `footMul` + skin-toned `shoe`; there's no way to add the tuft-of-hair detail that actually sells "hobbit feet." A `foot` anchor (small accessory riding the foot mesh) would fix this and is broadly reusable (also useful for boots-with-buckles, claws, etc.).

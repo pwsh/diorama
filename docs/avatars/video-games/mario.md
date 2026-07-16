@@ -11,9 +11,11 @@ lines and the pack's display labels.
 
 - **Group**: The core cast of Nintendo's *Super Mario* franchise — two
   plumber brothers, a princess, a mushroom retainer, a dinosaur companion,
-  a Koopa king villain, a shy ghost, and a rival anti-hero.
+  a Koopa king villain, a shy ghost, a rival anti-hero, and a big friendly
+  ape.
 - **Hierarchy path**: `video-games / mario`
-- **Member count**: 8
+- **Member count**: 9 (pack `version: 2` — the barrel ape was appended in the
+  v2 audit pass as a missing primary the core cast lacked)
 - **Rig**: humanoid only. `dino-companion` (Yoshi) and `mushroom-toad`
   (Toad) and `shy-ghost` (Boo) are all **bipeds built on the humanoid rig**,
   exactly like the existing `cartoon_duck` kind and the `farm-cucco` member
@@ -469,6 +471,56 @@ proportion.
 (a heavy, self-satisfied swaggering stomp)
 **Bubbles**: `💰😤🧄💪` (greed/coins, gruff annoyance, garlic, brute
 strength)
+
+---
+
+### 9. `barrel-ape` — "Barrel Ape (brown, red tie)"  *(v2)*
+
+**Reference**: A huge, barrel-chested, friendly gorilla — brown fur, a
+lighter tan chest/belly patch, a heavy brow ridge, small rounded ears, and
+his single most identifying accessory, a red necktie worn on the bare chest.
+Bulky and long-armed, he knuckle-walks in canon but stands and walks upright
+on the humanoid rig here. (Donkey Kong.)
+
+**Pet decision**: **NOT `pet: true`** — he's treated as a full character,
+matching the pack's `dino-companion` (Yoshi), which sits and runs standing
+activities; only `shy-ghost` (Boo) is `pet: true` in this pack. DK is a hero
+of his own games, not a companion-pet, so he joins nothing random (franchise
+packs are already excluded from the stranger pool) but DOES get activities
+and thought bubbles.
+
+**Spec**
+```
+sk:       1.2                 # big — second only to the Koopa king's 1.35
+headR:    140
+limbR:    1.5                 # broad, barrel-chested bulk
+skin:     0x6b4a2e            # brown fur
+body:     0x6b4a2e
+legColor: 0x6b4a2e
+shoe:     0x3a2a1a
+eyes:     'dots'
+hands:    'box'              # big blocky ape hands
+armL:     1.3                 # long ape arms
+legL:     0.85                # short relative to the long arms
+footMul:  [1.3, 1.0, 1.4]     # big flat feet
+```
+
+**Accessories**
+- **chest** — tan chest/belly panel, a proud box ~200×240×12 mm, `0xc9a06a`.
+- **chest** (red tie) — a vertical box ~50×120×10 mm, `0xd21f1a`, over the
+  panel — the single most identifying accessory.
+- **head** (×2, ears) — small rounded fur spheres ~⌀40 mm, `0x6b4a2e`, at the
+  head sides.
+- **face** — a heavy dark brow ridge box ~110×20×12 mm, `0x2a1a12`.
+- **crown** — a short dark hair tuft box ~90×40×90 mm, `0x2a1a12`.
+
+**Silhouette check**: the huge brown-furred, long-armed, barrel-chested build
+(`limbR 1.5`, the widest in the pack) with a bright red tie on a bare tan
+chest is unmistakable — the only ape and the only necktie in the pack.
+
+**Personality**: `bobMul: 0.7, swayMul: 0.9, cadenceMul: 0.7, ampMul: 1.2`
+(a heavy, powerful, ground-covering knuckle-walker's roll)
+**Bubbles**: `🍌🦍💪😤` (bananas, ape nature, raw strength, gruff resolve)
 
 ---
 

@@ -18,11 +18,13 @@ and the pack's display labels (e.g. "Electric Mouse (yellow, red cheeks)").
   size relationship the same way `teddy_bear`/`cartoon_duck` read as
   companion-scale next to `adult` in the core pack.
 - **Hierarchy path**: `video-games / pokemon`
-- **Member count**: 8
+- **Member count**: 9 (pack `version: 2` — the fire dragon was appended in the
+  v2 audit pass to add a large winged-creature primary the starter set lacked)
 - **Rig mix**: 3 **quadruped** (seed dino, evolution fox, coin cat — all
   built on `_buildQuadruped` via `QuadrupedFields`, no rig extension needed)
-  + 5 **humanoid** (electric mouse, fire lizard, shell turtle, balloon imp,
-  and the trainer — all built on `_buildHumanoid` via `HumanoidFields`). The
+  + 6 **humanoid** (electric mouse, fire lizard, shell turtle, balloon imp,
+  fire dragon, and the trainer — all built on `_buildHumanoid` via
+  `HumanoidFields`). The
   four creature-bipeds all use the same "creature standing upright on the
   humanoid rig" technique the core pack's `cartoon_duck` already establishes
   (short legs, small/absent hands treatment, oversized head) — no new rig
@@ -539,6 +541,61 @@ whiskers register.
 a plain housecat)
 **Bubbles**: `['💰', '😼', '✨', '❗']` (coins/greed, sly cattiness, the
 coin's shine, alert opportunism)
+
+---
+
+### 9. `pkmn-fire-dragon` — "Fire Dragon (orange, flame tail, wings)"  *(v2)*
+
+**Reference**: A large, powerful orange dragon — the fully-evolved form of
+the fire-starter line: orange hide, a cream/pale-yellow belly-and-chest
+panel, broad teal-blue underwings, two short horns swept back off the crown,
+and the family's signature living flame burning at the tail tip. Bipedal,
+walks and stands upright. `pet: true` (a non-person creature, like the other
+mons). (Charizard.)
+
+**Spec**
+```
+rig:        humanoid
+sk:         0.7               # large — biggest creature in the pack, still
+                              #   well under the adult trainer's 1.0
+headR:      110
+limbR:      1.0
+skin:       0xf0752a          # orange hide
+body:       0xf0752a
+legColor:   0xf0752a
+shoe:       0xf2e6c8          # cream feet/claws
+eyes:       'almond'
+armL:       0.8
+legL:       1.0
+footMul:    [1.2, 0.85, 1.3]  # broad clawed hind feet
+```
+
+**Accessories**
+- `chest` — cream chest/belly panel, a proud box ~120×220×10 mm, `0xf2e6c8`
+  (matches the fire-lizard's cream-chest convention already in this pack).
+- `back` (×2, wings) — broad teal underwing boxes, ~150×190×14 mm each,
+  `0x2e8b8b`, angled out and back (`rot ~[0, ±0.4, ∓0.3]`) so they spread to
+  the sides rather than lying flat on the back.
+- `tailbone` (tail) — a tapering cylinder ~⌀12–18×240 mm, `0xf0752a`,
+  trailing back and up (**approx**: a static tail — no jointed sway, same
+  limitation as the fire-lizard's tail; see Rig gaps #2).
+- `tailbone` (flame tip) — an emissive sphere ~⌀30 mm, `0xffb020`,
+  `emissive: 0xff7a1a`, `emissiveIntensity: 0.4`, at the tail's end — the
+  family's living-flame signature, reusing the fire-lizard's emissive-tip
+  recipe.
+- `crown` (×2, horns) — short cream cones ~⌀14×60 mm, `0xf2e6c8`, swept back
+  off the crown (raised + tilted back so they clear the eye band).
+
+**Silhouette check**: the only winged member in the pack — broad teal
+underwings spread off an orange biped, topped by two swept-back horns, with
+a lit flame at the tail — reads as "the big fire dragon" at a glance, clearly
+distinct from the small fire-lizard's wingless, hornless silhouette.
+
+**Personality**: `{ bobMul: 1.0, swayMul: 0.9, cadenceMul: 1.05, ampMul: 0.9 }`
+(a heavy, confident, faintly swaggering stride — bigger and steadier than the
+skittering starters)
+**Bubbles**: `['🔥', '🐉', '😤', '💨']` (fire breath, dragon nature, fierce
+pride, the beat of its wings)
 
 ## Rig gaps
 

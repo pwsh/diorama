@@ -500,7 +500,10 @@ The state machine lives in `three-renderer.ts` (`updateTargets`) fed by an `Acti
 ### Avatar packs & settings drawer (see `docs/DESIGN-avatars.md`)
 Avatars are organized into **packs** that load/unload and activate/deactivate at
 runtime (Settings ▸ Avatars). Reference research for every pack lives in
-`docs/avatars/**` (32 regeneration-ready group/franchise docs).
+`docs/avatars/**` (56 regeneration-ready group/franchise docs). **Authoring a
+new pack** (schema, categorization taxonomy + placement tiebreaks, member
+template, conventions, checklist): `docs/avatars/AUTHORING.md` — the canonical
+reference; keep it updated when the schema grows.
 
 - **`src/avatars.ts`** (pure, three.js-FREE, shared chunk — imported by BOTH the
   app graph and the lazy renderer chunk; never import three.js or renderer code

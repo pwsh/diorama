@@ -60,10 +60,13 @@
     R.registerAvatarPack(pack);
 
     const members = pack.avatars || [];
-    // Per-pack registration check: chunk loaded, member count matches manifest.
-    ok(`pack ${row.id} registered (${members.length})`,
-       members.length === row.count && members.length > 0,
-       members.length === row.count ? '' : `count ${members.length} != manifest ${row.count}`);
+    // Per-pack registration check: chunk loaded, non-empty.
+    ok(`pack ${row.id} registered`, members.length > 0, 'empty pack');
+    // Manifest-count integrity: the hand-integrated manifest row's `count` MUST
+    // equal the pack's real member total (catches stale manifest counts).
+    ok(`pack ${row.id} manifest count (${row.count})`,
+       members.length === row.count,
+       members.length === row.count ? '' : `pack.avatars.length ${members.length} != manifest.count ${row.count}`);
     perPackCounts.push(`${row.id}=${members.length}`);
     totalMembers += members.length;
 

@@ -5,7 +5,7 @@
 import type { AvatarPackDef } from '../avatars.js';
 
 const pack: AvatarPackDef = {
-  id: 'pokemon', version: 1, label: 'Pokémon',
+  id: 'pokemon', version: 2, label: 'Pokémon',
   path: ['Video Games', 'Pokémon'], builtin: true, franchise: true,
   avatars: [
     // Pikachu — biped, tailbone zigzag tail
@@ -100,6 +100,19 @@ const pack: AvatarPackDef = {
         { shape: 'box', size: [14, 14, 6], anchor: 'qhead', pos: [0, 78, -70], color: 0x8a6a10 },
       ],
       personality: { bobMul: 0.95, swayMul: 1.15, cadenceMul: 1.1, ampMul: 0.9 }, bubbles: ['💰', '😼', '✨', '❗'] },
+    // Charizard — biped dragon: orange skin, cream chest, teal wings, flame tail (v2)
+    { id: 'pokemon/fire-dragon', label: 'Fire Dragon (orange, flame tail, wings)', rig: 'humanoid', pet: true,
+      humanoid: { sk: 0.7, headR: 110, limbR: 1.0, skin: 0xf0752a, body: 0xf0752a, legColor: 0xf0752a, shoe: 0xf2e6c8, eyes: 'almond', armL: 0.8, legL: 1.0, footMul: [1.2, 0.85, 1.3] },
+      accessories: [
+        { shape: 'box', size: [120, 220, 10], anchor: 'chest', pos: [0, -20, -4], color: 0xf2e6c8 }, // cream chest panel
+        { shape: 'box', size: [150, 190, 14], anchor: 'back', pos: [-95, 30, 20], rot: [0, 0.4, -0.3], color: 0x2e8b8b }, // teal wing L
+        { shape: 'box', size: [150, 190, 14], anchor: 'back', pos: [95, 30, 20], rot: [0, -0.4, 0.3], color: 0x2e8b8b }, // teal wing R
+        { shape: 'cylinder', size: [12, 18, 240], anchor: 'tailbone', pos: [0, -50, 110], rot: [1.1, 0, 0], color: 0xf0752a }, // approx: static tail
+        { shape: 'sphere', size: 30, anchor: 'tailbone', pos: [0, 30, 230], color: 0xffb020, emissive: 0xff7a1a, emissiveIntensity: 0.4 }, // flame tip
+        { shape: 'cone', size: [14, 60], anchor: 'crown', pos: [-30, 20, 10], rot: [0.5, 0, -0.2], color: 0xf2e6c8 }, // horn L
+        { shape: 'cone', size: [14, 60], anchor: 'crown', pos: [30, 20, 10], rot: [0.5, 0, 0.2], color: 0xf2e6c8 }, // horn R
+      ],
+      personality: { bobMul: 1.0, swayMul: 0.9, cadenceMul: 1.05, ampMul: 0.9 }, bubbles: ['🔥', '🐉', '😤', '💨'] },
   ],
 };
 

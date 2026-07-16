@@ -63,6 +63,23 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Franchise expansion + authoring reference** (Fable-orchestrated;
+  3 Sonnet survey agents + 24 Sonnet researchers + 4 Opus builders + a
+  content gate): `docs/avatars/AUTHORING.md` — the canonical pack-authoring
+  reference (pipeline, categorization taxonomy + placement tiebreaks incl.
+  games-always-under-Video-Games, base-vs-franchise semantics, primary-cast
+  rule + 30-px silhouette test, full schema, conventions, member template,
+  reviewer checklist). **24 new franchise packs** (~192 members) researched
+  from popularity surveys (TV/movies/games) and built: Breaking Bad, Game of
+  Thrones, Squid Game, Money Heist, The Office, Fresh Prince, Stranger
+  Things, Power Rangers MM, Marvel Avengers, Star Wars Prequels, Harry
+  Potter, Pirates of the Caribbean, Wizard of Oz, Despicable Me, Shrek,
+  Toy Story, Minecraft, Sonic, League of Legends, Genshin Impact, Pac-Man,
+  Street Fighter, Halo, Overwatch. Audit of shipped packs added 7 missing
+  primaries (OT mentor, Mandalorian warlord, LOTR Merry+Pippin, Pokémon
+  fire-dragon, Mario barrel-ape) with pack version bumps + research-doc
+  sync. Manifest now 56 builtin packs / ~465 members, all lazy chunks.
+
 - **The avatar-packs arc** (`docs/DESIGN-avatars.md`; four Opus batches
   A/B/C1/C2 + a 32-agent Sonnet research sweep + a content gate — all
   Fable-orchestrated): avatars are now **packs** that load/unload +

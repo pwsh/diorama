@@ -5,7 +5,7 @@
 import type { AvatarPackDef } from '../avatars.js';
 
 const pack: AvatarPackDef = {
-  id: 'star-wars-ot', version: 1, label: 'Star Wars: Original Trilogy',
+  id: 'star-wars-ot', version: 2, label: 'Star Wars: Original Trilogy',
   path: ['Sci-Fi', 'Star Wars', 'Original Trilogy'], builtin: true, franchise: true,
   avatars: [
     // Luke Skywalker
@@ -132,6 +132,21 @@ const pack: AvatarPackDef = {
         { shape: 'cylinder', size: [12, 12, 40], anchor: 'back', pos: [30, 90, 20], color: 0x4a5240, emissiveIntensity: 0 }],
       personality: { bobMul: 0.85, swayMul: 0.55, cadenceMul: 0.9, ampMul: 0.75 },
       bubbles: ['🎯', '💰', '🚀', '🔇'] },
+    // Obi-Wan "Ben" Kenobi — the aged desert hermit/mentor of A New Hope: grey-white
+    // hair + beard, tan/brown hooded Jedi robe, blue lightsaber. (v2 addition.)
+    { id: 'star-wars-ot/obi-wan', label: 'Aged mentor (brown hooded robe)', rig: 'humanoid',
+      humanoid: { sk: 1.0, headR: 124, skin: 'tint', body: 0x9c8a6a, legColor: 0x6b5a44, shoe: 0x4a3c2c, eyes: 'dots', emI: 0.13, hands: 'sphere', limbR: 1.0 },
+      posture: { pitch: 0.05 },
+      accessories: [
+        { shape: 'sphere', size: [128, 40, 128], anchor: 'crown', pos: [0, -6, 4], rot: [0.3, 0, 0], color: 0xcac6ba, emissiveIntensity: 0 },
+        { shape: 'box', size: [72, 34, 20], anchor: 'face', pos: [0, -26, -6], color: 0xc4c0b4, emissiveIntensity: 0 },
+        // brown hood shell raised + tilted back so the front rim clears the brow
+        { shape: 'sphere', size: [152, 82, 152], anchor: 'crown', pos: [0, 4, 16], rot: [0.4, 0, 0], color: 0x6b5a44, emissiveIntensity: 0, sphereArc: [0, 6.283, 0, 1.9] },
+        { shape: 'cone', size: [190, 360, 190], anchor: 'back', pos: [0, -60, 10], color: 0x5c4630, emissiveIntensity: 0 },
+        { shape: 'cylinder', size: [18, 18, 90], anchor: 'handR', pos: [0, 40, 0], color: 0xc7c9cc, emissiveIntensity: 0.05 },
+        { shape: 'cylinder', size: [12, 12, 500], anchor: 'handR', pos: [0, 320, 0], color: 0x3fa9f5, emissiveIntensity: 0.6 }],
+      personality: { bobMul: 0.8, swayMul: 0.7, cadenceMul: 0.85, ampMul: 0.8 },
+      bubbles: ['🧙', '⚔️', '🌌', '🐫'] },
   ],
 };
 

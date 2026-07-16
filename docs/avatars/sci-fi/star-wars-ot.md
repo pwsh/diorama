@@ -12,8 +12,8 @@ in this doc's Reference lines and the pack's display labels.
   trilogy (*A New Hope* 1977, *The Empire Strikes Back* 1980, *Return of the
   Jedi* 1983).
 - **Hierarchy path**: `sci-fi / star-wars / original-trilogy`
-- **Member count**: 10
-- **Rig**: humanoid only. All ten members build on the humanoid rig — even
+- **Member count**: 11 (10 original + `obi-wan`, appended in pack v2)
+- **Rig**: humanoid only. All members build on the humanoid rig — even
   `r2d2`, which is a genuine best-effort approximation of a legless droid
   rather than a faithful fit (see Rig gaps). No quadrupeds in this pack.
 - **No shared base spec.** Unlike a uniformed-cast pack (e.g. sibling
@@ -434,6 +434,47 @@ stormtrooper's smooth white armor at a glance.
 
 **Personality**: `bobMul: 0.85, swayMul: 0.55, cadenceMul: 0.9, ampMul: 0.75` (still, watchful, minimal wasted motion — a hunter's patience)
 **Bubbles**: `🎯💰🚀🔇` (bounty/targeting, credits, jetpack travel, famously few words)
+
+---
+
+### 11. `obi-wan` — "Aged Mentor (brown hooded robe)" *(pack v2 addition)*
+
+**Reference**: Obi-Wan "Ben" Kenobi as the aged desert hermit and mentor of
+*A New Hope* — grey-white hair and a full grey beard, a tan/brown Jedi tunic
+under a hooded brown robe, and a blue lightsaber. (Alec Guinness.) Distinct
+from the sibling `star-wars-prequels.md`'s `obi-wan`, who is modeled at the
+younger, reddish-bearded Master look; this OT entry is the old-hermit version
+audits flagged missing from the original-trilogy cast.
+
+**Spec**
+```
+sk: 1.0
+headR: 124
+headShape: 'sphere'
+skin: 'tint'
+body: 0x9c8a6a       // tan/brown Jedi tunic
+legColor: 0x6b5a44   // darker brown trousers/robe hem
+shoe: 0x4a3c2c
+eyes: 'dots'
+emI: 0.13
+hands: 'sphere'
+limbR: 1.0
+```
+`posture: { pitch: 0.05 }` — a slight age-stoop.
+
+**Accessories**
+- **crown** — grey-white hair, a low flattened sphere-cap, `0xcac6ba`, front rim clearing the brow.
+- **face** — a full grey beard box, `0xc4c0b4`, proud of the skin surface.
+- **crown** — brown hood shell (`sphereArc [0, 6.283, 0, 1.9]`), `0x6b5a44`, raised + tilted back (`rot.x 0.4`) so the front rim clears the brow (hacker-hood idiom), hair/beard staying visible beneath.
+- **back** — brown hooded-robe drape, a flattened cone from the shoulders down, `0x5c4630` (reuses the robe-cone technique, distinct from Yoda's hip robe).
+- **handR** — lightsaber prop, same hilt+blade recipe as the pack's other saber-wielders, blue blade (`0x3fa9f5`).
+
+**Silhouette check**: a hooded brown robe over grey hair + grey beard with a
+blue blade — reads instantly as "old Jedi hermit," distinct from the pack's
+younger, hair-and-no-hood Luke and from Yoda's tiny green build.
+
+**Personality**: `bobMul: 0.8, swayMul: 0.7, cadenceMul: 0.85, ampMul: 0.8` (measured, aged, unhurried)
+**Bubbles**: `🧙⚔️🌌🐫` (old mentor/wizard, dueling, the Force, Tatooine desert)
 
 ## Rig gaps
 
