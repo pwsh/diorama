@@ -63,6 +63,14 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Avatar (Pandora) pack** — first pack authored end-to-end through
+  `docs/avatars/AUTHORING.md` (Sonnet research doc → Opus module → manifest →
+  gate): `avatar-pandora`, `['Sci-Fi','Avatar']`, 7 primary members (4 Na'vi
+  on a shared blue body base with inline ears/tail/queue accessories + 3 RDA
+  humans). Doc surfaced one schema fact worth remembering: base-merge
+  REPLACES member `accessories` (never concatenates). Manifest 57 packs /
+  471 members; AVATAR-CONTENT PASS 589/589.
+
 - **Franchise expansion + authoring reference** (Fable-orchestrated;
   3 Sonnet survey agents + 24 Sonnet researchers + 4 Opus builders + a
   content gate): `docs/avatars/AUTHORING.md` — the canonical pack-authoring

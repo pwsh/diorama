@@ -56,6 +56,8 @@ export const AVATAR_PACK_MANIFEST: PackManifestRow[] = [
     franchise: true, load: () => import('./star-wars-prequels.js') },
   { id: 'stranger-things', label: 'Stranger Things', path: ['Sci-Fi', 'Stranger Things'], count: 9,
     franchise: true, load: () => import('./stranger-things.js') },
+  { id: 'avatar-pandora', label: 'Avatar (Pandora)', path: ['Sci-Fi', 'Avatar'], count: 7,
+    franchise: true, load: () => import('./avatar-pandora.js') },
   { id: 'power-rangers-mighty-morphin', label: 'Power Rangers: Mighty Morphin', path: ['Sci-Fi', 'Power Rangers', 'Mighty Morphin'], count: 10,
     franchise: true, load: () => import('./power-rangers-mighty-morphin.js') },
   { id: 'marvel-avengers', label: 'Marvel: The Avengers', path: ['Sci-Fi', 'Marvel', 'The Avengers'], count: 10,
