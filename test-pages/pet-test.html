@@ -14,6 +14,12 @@
   const r = new mod.ThreeDRenderer(document.getElementById('c'));
   await r.load();
 
+  // Batch C1: cat/dog moved from core into the base-domestic-animals pack, which
+  // the planner hydrates on connect. Standalone renderer tests must register it
+  // (pure-data chunk) so 'cat'/'dog' resolve to their quadruped defs.
+  const _dom = await import('./assets/base-domestic-animals.js?v=' + Date.now());
+  mod.ThreeDRenderer.registerAvatarPack(_dom.default);
+
   const FW = 8000, FD = 6000;
   const floor = {
     id: 'f1', name: 'Pet room', w: FW, d: FD,

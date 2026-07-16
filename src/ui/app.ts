@@ -167,15 +167,16 @@ export class App extends LitElement {
       if (devices) this._entPicker?.showDevices(devices, onPick, title);
       else this._entPicker?.show(domain ?? '', onPick);
     });
-    this.addEventListener('open-settings', () => this._settings?.show());
-    // Weather chip click → reveal the sidebar Weather section (edit mode only).
+    this.addEventListener('open-settings', e => {
+      const tab = (e as CustomEvent).detail?.tab as
+        undefined | 'connection' | 'display' | 'weather' | 'avatars' | 'integrations' | 'data';
+      this._settings?.show(tab);
+    });
+    // Weather chip click → open the settings drawer on the Weather tab (edit mode only).
     this.addEventListener('open-weather', () => {
       const p = this._planner;
       if (!p || p.uiMode !== 'edit') return;
-      if (!p.sidebarOpen) p.toggleSidebar();
-      requestAnimationFrame(() =>
-        document.getElementById('diorama-weather-section')
-          ?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+      this._settings?.show('weather');
     });
   }
 

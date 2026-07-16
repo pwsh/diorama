@@ -1,0 +1,280 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>avatar build test</title>
+<style>html,body{margin:0;background:#111;color:#ddd;font:12px monospace}#c{width:640px;height:480px}</style>
+<div id="c"></div>
+<pre id="out">running…</pre>
+<script type="module">
+ try {
+  // Renderer BUILD tests for the def-driven avatar refactor + Batch C1 rig
+  // extensions. Imports the built three-renderer chunk (which shares the registry
+  // singleton the app graph uses, so registering a synthetic/base pack registers
+  // into the SAME instance the builders resolve against).
+  const mod = await import('./assets/three-renderer.js?v=' + Date.now());
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+
+  // Batch C1: cat/dog moved from core into base-domestic-animals (a pure-data
+  // chunk hydrated on connect in the app). Register it for the legacy quad tests.
+  const _dom = await import('./assets/base-domestic-animals.js?v=' + Date.now());
+  mod.ThreeDRenderer.registerAvatarPack(_dom.default);
+
+  const checks = [];
+  const ok = (name, cond, extra = '') => checks.push({ name, pass: !!cond, extra });
+  const near = (a, b, tol = 2) => Math.abs(a - b) <= tol;
+  const meshes = (root) => { const o = []; root.traverse(m => { if (m.isMesh) o.push(m); }); return o; };
+  const nonOutline = (root) => meshes(root).filter(m => !m.userData.outline);
+  const shells = (root) => meshes(root).filter(m => m.userData.outline).length;
+
+  // ── Declarative humanoid ──────────────────────────────────────────────────
+  // Adult defaults: hipY 870, TORSO_H 600 → torsoY 1170, TORSO_D 140; headR 126
+  // → headY 1636, crown anchor 1762.
+  const TINT = 0x33cc88;
+  mod.ThreeDRenderer.registerAvatarPack({
+    id: 'bt', version: 1, label: 'BuildTest', path: ['BT'], builtin: true,
+    avatars: [
+      { id: 'bt/hero', label: 'Hero', rig: 'humanoid', humanoid: {}, accessories: [
+        { shape: 'box', size: [100, 100, 100], anchor: 'crown', color: 'tint' },
+        { shape: 'box', size: [90, 90, 90], anchor: 'crown', color: 'tint', pos: [0, 50, 0] },
+        { shape: 'box', size: [80, 80, 40], anchor: 'chest', color: 0xff3300 },
+        { shape: 'sphere', size: 60, anchor: 'handR', color: 'dark', outlineSkip: true },
+      ] },
+    ],
+  });
+
+  const h = r._buildHumanoid(TINT, 'bt/hero');
+  const all = nonOutline(h.group);
+
+  const crown = all.find(m => near(m.position.y, 1762) && m.geometry.type === 'BoxGeometry'
+    && Math.abs(m.geometry.parameters.width - 100) < 0.01);
+  ok('crown anchor y≈1762', crown && near(crown.position.y, 1762), crown ? crown.position.y.toFixed(0) : 'missing');
+
+  const chest = all.find(m => m.geometry.type === 'BoxGeometry'
+    && Math.abs(m.geometry.parameters.depth - 40) < 0.01);
+  ok('chest anchor y≈1170 z≈-70', chest && near(chest.position.y, 1170) && near(chest.position.z, -70),
+    chest ? `${chest.position.y.toFixed(0)},${chest.position.z.toFixed(0)}` : 'missing');
+
+  const handAcc = all.find(m => m.geometry.type === 'SphereGeometry'
+    && Math.abs(m.geometry.parameters.radius - 60) < 0.01);
+  ok('handR accessory exists', !!handAcc);
+  ok('handR parented into arm (not root)', handAcc && handAcc.parent && handAcc.parent !== h.group);
+
+  const crown2 = all.find(m => m.geometry.type === 'BoxGeometry'
+    && Math.abs(m.geometry.parameters.width - 90) < 0.01
+    && Math.abs(m.geometry.parameters.depth - 90) < 0.01);
+  ok('tint parts share material', crown && crown2 && crown.material === crown2.material);
+  ok('numeric color != tint material', chest && crown && chest.material !== crown.material);
+
+  ok('outline shells present', shells(h.group) > 0, `shells=${shells(h.group)}`);
+  ok('handR outlineSkip honored', handAcc && handAcc.userData.outlineSkip === true);
+
+  // ── C1: new accessory anchors (shoulderL/R, neck, tailbone) ────────────────
+  // shoulderX = TORSO_W/2 + ARM_UPPER_R·0.7 = 120 + 36.4 = 156.4; shoulderY =
+  // hipY + TORSO_H·0.88 = 1398; neckY = torsoY + TORSO_H/2 = 1470; tailbone z =
+  // TORSO_D/2 = 70 at hipY 870.
+  mod.ThreeDRenderer.registerAvatarPack({
+    id: 'ct', version: 1, label: 'C1', path: ['C1'], builtin: true,
+    avatars: [
+      { id: 'ct/anchors', label: 'An', rig: 'humanoid', humanoid: {}, accessories: [
+        { shape: 'box', size: [131, 12, 12], anchor: 'shoulderL', color: 'tint' },
+        { shape: 'box', size: [132, 12, 12], anchor: 'shoulderR', color: 'tint' },
+        { shape: 'box', size: [12, 133, 12], anchor: 'neck', color: 'dark' },
+        { shape: 'box', size: [12, 12, 134], anchor: 'tailbone', color: 'body' },
+      ] },
+      { id: 'ct/cyl', label: 'Cyl', rig: 'humanoid', humanoid: { headShape: 'cylinder' } },
+      { id: 'ct/oval', label: 'Oval', rig: 'humanoid', humanoid: { headShape: 'oval' } },
+      { id: 'ct/plainface', label: 'PF', rig: 'humanoid', humanoid: {} },
+      { id: 'ct/faceless', label: 'FL', rig: 'humanoid', humanoid: { eyes: 'none', noFace: true } },
+      { id: 'ct/ghost', label: 'Gh', rig: 'humanoid', humanoid: { opacity: 0.4 } },
+      { id: 'ct/limbs', label: 'Lm', rig: 'humanoid', humanoid: { limbColors: { armL: 0x112233, legR: 0x445566 } } },
+      { id: 'ct/hover', label: 'Hov', rig: 'humanoid', humanoid: { hover: 300 } },
+      { id: 'ct/stoop', label: 'St', rig: 'humanoid', humanoid: {}, posture: { pitch: 0.3 } },
+    ],
+  });
+
+  const anc = nonOutline(r._buildHumanoid(TINT, 'ct/anchors').group);
+  const byW = (w) => anc.find(m => m.geometry.type === 'BoxGeometry' && Math.abs(m.geometry.parameters.width - w) < 0.01);
+  const byH = (hh) => anc.find(m => m.geometry.type === 'BoxGeometry' && Math.abs(m.geometry.parameters.height - hh) < 0.01);
+  const byD = (d) => anc.find(m => m.geometry.type === 'BoxGeometry' && Math.abs(m.geometry.parameters.depth - d) < 0.01);
+  const shL = byW(131), shR = byW(132), neck = byH(133), tb = byD(134);
+  ok('shoulderL anchor (−156,1398,0)', shL && near(shL.position.x, -156.4, 3) && near(shL.position.y, 1398, 3) && near(shL.position.z, 0),
+    shL ? `${shL.position.x.toFixed(0)},${shL.position.y.toFixed(0)}` : 'missing');
+  ok('shoulderR anchor (+156,1398,0)', shR && near(shR.position.x, 156.4, 3) && near(shR.position.y, 1398, 3),
+    shR ? `${shR.position.x.toFixed(0)},${shR.position.y.toFixed(0)}` : 'missing');
+  ok('neck anchor (0,1470,0)', neck && near(neck.position.x, 0) && near(neck.position.y, 1470, 3),
+    neck ? neck.position.y.toFixed(0) : 'missing');
+  ok('tailbone anchor (0,870,+70)', tb && near(tb.position.y, 870, 3) && near(tb.position.z, 70, 3),
+    tb ? `${tb.position.y.toFixed(0)},${tb.position.z.toFixed(0)}` : 'missing');
+
+  // shoulder pauldrons parent directly to root (do NOT swing with the arm).
+  const anchRig = r._buildHumanoid(TINT, 'ct/anchors');
+  const shLp = nonOutline(anchRig.group).find(m => m.geometry.type === 'BoxGeometry' && Math.abs(m.geometry.parameters.width - 131) < 0.01);
+  ok('pauldron parents to root', shLp && shLp.parent === anchRig.group);
+
+  // ── C1: head shapes (cylinder + oval) build with face features ─────────────
+  const headAt = (rig, type) => nonOutline(rig.group).find(m =>
+    m.geometry.type === type && near(m.position.y, 1636) && near(m.position.x, 0) && near(m.position.z, 0));
+  const cyl = r._buildHumanoid(TINT, 'ct/cyl');
+  const oval = r._buildHumanoid(TINT, 'ct/oval');
+  const plain = r._buildHumanoid(TINT, 'ct/plainface');
+  ok('cylinder head geometry', !!headAt(cyl, 'CylinderGeometry'));
+  const ovalHead = headAt(oval, 'SphereGeometry');
+  ok('oval head sphere scaled 1.25y', ovalHead && Math.abs(ovalHead.scale.y - 1.25) < 0.01 && Math.abs(ovalHead.scale.x - 0.85) < 0.01);
+  // Face features present on cyl + oval: same non-outline mesh count as the plain
+  // (dots-eyes) control head (only the head geometry differs).
+  const nPlain = nonOutline(plain.group).length;
+  ok('cylinder head has full face', nonOutline(cyl.group).length === nPlain, `${nonOutline(cyl.group).length} vs ${nPlain}`);
+  ok('oval head has full face', nonOutline(oval.group).length === nPlain);
+
+  // ── C1: eyes:'none' + noFace produce no face meshes ────────────────────────
+  const faceless = r._buildHumanoid(TINT, 'ct/faceless');
+  const nFaceless = nonOutline(faceless.group).length;
+  // Plain adds 2 eye-whites + 2 pupils + 2 brows + 1 nose + 3 mouth segs = 10.
+  ok('faceless drops ≥8 face meshes', nPlain - nFaceless >= 8, `Δ=${nPlain - nFaceless}`);
+  ok('faceless still has head + torso', nonOutline(faceless.group).some(m => near(m.position.y, 1636))
+    && nonOutline(faceless.group).some(m => near(m.position.y, 1170)));
+
+  // ── C1: opacity → transparent skin + body; outline shells skipped ──────────
+  const ghost = r._buildHumanoid(TINT, 'ct/ghost');
+  const ghTransparent = meshes(ghost.group).filter(m => !m.userData.outline
+    && m.material && m.material.transparent && Math.abs((m.material.opacity ?? 1) - 0.4) < 0.01).length;
+  ok('opacity: transparent skin/body mats', ghTransparent >= 3, `n=${ghTransparent}`);
+  ok('opacity: fewer outline shells (transparent skipped)', shells(ghost.group) < shells(plain.group),
+    `${shells(ghost.group)} < ${shells(plain.group)}`);
+
+  // ── C1: limbColors → distinct per-limb segment materials ───────────────────
+  const cylMats = (rig) => new Set(nonOutline(rig.group)
+    .filter(m => m.geometry.type === 'CylinderGeometry').map(m => m.material));
+  const limbs = r._buildHumanoid(TINT, 'ct/limbs');
+  ok('limbColors: distinct limb materials', cylMats(limbs).size >= cylMats(plain).size + 2,
+    `${cylMats(limbs).size} vs ${cylMats(plain).size}`);
+
+  // ── C1: hover → no legs + null joints + floats + updateTargets no-throw ────
+  const hovDirect = r._buildHumanoid(TINT, 'ct/hover');
+  ok('hover: leg joints null', hovDirect.leftHip === null && hovDirect.rightHip === null
+    && hovDirect.leftKnee === null && hovDirect.rightKnee === null);
+  ok('hover: flag + hoverY', hovDirect.hover === true && hovDirect.hoverY === 300);
+  ok('hover: no foot meshes', !nonOutline(hovDirect.group).some(m => m.geometry.type === 'BoxGeometry'
+    && Math.abs(m.geometry.parameters.depth - 230) < 0.01));
+
+  // ── Frame-advance tests: minimal floor so updateTargets can run ────────────
+  const floor = {
+    id: 'f1', name: 'BT', w: 8000, d: 6000,
+    walls: [{ id: 'p', points: [{x:200,y:200},{x:7800,y:200},{x:7800,y:5800},{x:200,y:5800},{x:200,y:200}] }],
+    furniture: [], lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [], windows: [], bg: null, model3d: null, look3d: null,
+    rooms: [{ id: 'rm1', name: 'Den', anchor: { x: 3000, y: 3000 } }],
+  };
+  r.updateFloor(floor, { preset: 'day', floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6' });
+  const realNow = performance.now.bind(performance);
+  let fakeNow = realNow();
+  performance.now = () => fakeNow;
+  const ctx = { entityOn: {}, roomNames: { rm1: 'Den' }, timeBucket: 'day' };
+  const step = (targets) => { fakeNow += 16.7; r.updateTargets(targets, ctx); };
+
+  // Hover rig: advance frames — pose math must tolerate the missing legs.
+  let hoverThrew = false;
+  try {
+    for (let i = 0; i < 40; i++) step([{ key: 'hov', x: 1500 + i * 20, y: 2000, color: TINT, avatar: 'ct/hover' }]);
+  } catch (e) { hoverThrew = true; window.__hoverErr = e.stack; }
+  const hovRig = r._humanoids['hov'];
+  ok('hover: updateTargets no-throw', !hoverThrew && !!hovRig);
+  // Root floats DOWN so the hip pivot (local hipY) sits ~hoverY (300) off the
+  // floor; a gentle bob keeps it within tolerance.
+  ok('hover: hip floats ~300 off floor', hovRig && Math.abs((hovRig.group.position.y + hovRig.hipY) - 300) < 60,
+    hovRig ? (hovRig.group.position.y + hovRig.hipY).toFixed(0) : '-');
+
+  // Posture: after a frame a still stoop rig has root pitch ≈ posture.pitch.
+  for (let i = 0; i < 10; i++) step([{ key: 'st', x: 4000, y: 3000, color: TINT, avatar: 'ct/stoop' }]);
+  const stoop = r._humanoids['st'];
+  ok('posture: posturePitch stored', stoop && Math.abs(stoop.posturePitch - 0.3) < 1e-6);
+  ok('posture: root pitch ≈ 0.3', stoop && Math.abs(stoop.group.rotation.x - 0.3) < 0.06,
+    stoop ? stoop.group.rotation.x.toFixed(3) : '-');
+
+  // ── Legacy quadruped proportions (via base-domestic-animals) ───────────────
+  const dog = r._buildQuadruped(0xa1704a, 'dog');
+  const cat = r._buildQuadruped(0x9aa3ad, 'cat');
+  ok('dog shoulder pivot ~505', near(dog.hipY, 505, 3), `hipY=${dog.hipY.toFixed(0)}`);
+  ok('cat ~0.58× (~293)', near(cat.hipY, 293, 3), `hipY=${cat.hipY.toFixed(0)}`);
+  ok('dog is quad + 4 legs', dog.quad === true && dog.quadLegs.length === 4);
+  ok('dog floppy ears (2) + tail (2)', dog.quadEars.length === 2 && dog.quadTail.length === 2);
+  ok('cat pointy ears (2)', cat.quadEars.length === 2);
+
+  // ── Parameterized quadruped variants ──────────────────────────────────────
+  mod.ThreeDRenderer.registerAvatarPack({
+    id: 'btq', version: 1, label: 'BuildTestQ', path: ['BTQ'], builtin: true,
+    avatars: [
+      { id: 'btq/plain', label: 'Plain', rig: 'quadruped', pet: true, quadruped: { ears: 'floppy', tail: 'up' } },
+      { id: 'btq/giraffe', label: 'Giraffe', rig: 'quadruped', pet: true, quadruped: { neckLen: 600, ears: 'round', tail: 'tuft' } },
+      { id: 'btq/bald', label: 'Bald', rig: 'quadruped', pet: true, quadruped: { ears: 'none', tail: 'none', snout: 0 } },
+      { id: 'btq/rabbit', label: 'Rabbit', rig: 'quadruped', pet: true, quadruped: { ears: 'long', tail: 'tuft' } },
+      // C1: paw + tail-tip colors + walk personality.
+      { id: 'btq/paws', label: 'Paws', rig: 'quadruped', pet: true, quadruped: { pawColor: 0x123456, tailTipColor: 0x654321, tail: 'tuft' } },
+      { id: 'btq/fast', label: 'Fast', rig: 'quadruped', pet: true, quadruped: {}, personality: { cadenceMul: 2 } },
+      { id: 'btq/slow', label: 'Slow', rig: 'quadruped', pet: true, quadruped: {}, personality: { cadenceMul: 0.5 } },
+    ],
+  });
+  const qplain = r._buildQuadruped(0x888888, 'btq/plain');
+  const giraffe = r._buildQuadruped(0xd8b24a, 'btq/giraffe');
+  const bald = r._buildQuadruped(0x777777, 'btq/bald');
+  const rabbit = r._buildQuadruped(0xeeeeee, 'btq/rabbit');
+
+  ok('neck raises head', giraffe.quadHead.position.y > qplain.quadHead.position.y + 400,
+    `Δ=${(giraffe.quadHead.position.y - qplain.quadHead.position.y).toFixed(0)}`);
+  ok('neck segment mesh added', meshes(giraffe.group).length > meshes(qplain.group).length);
+  ok('round ears produce 2 pivots', giraffe.quadEars.length === 2);
+  ok('long (rabbit) ears produce 2', rabbit.quadEars.length === 2);
+  ok('tuft tail present', giraffe.quadTail.length === 2 && rabbit.quadTail.length === 2);
+  ok('ears:none → 0 ears', bald.quadEars.length === 0);
+  ok('tail:none → 0 tail', bald.quadTail.length === 0);
+
+  // ── C1: quad pawColor / tailTipColor override the defaults ─────────────────
+  const pawOf = (rig) => rig.quadLegs[0].knee.children.find(m => m.isMesh && m.geometry.type === 'BoxGeometry');
+  const tailTipOf = (rig) => rig.quadTail[1].children.find(m => m.isMesh && m.geometry.type === 'CylinderGeometry');
+  const paws = r._buildQuadruped(0x808080, 'btq/paws');
+  const ctrl = r._buildQuadruped(0x808080, 'btq/plain');
+  ok('pawColor overrides default paw', pawOf(paws) && pawOf(ctrl)
+    && pawOf(paws).material.color.getHex() !== pawOf(ctrl).material.color.getHex());
+  ok('tailTipColor overrides tail tip', tailTipOf(paws) && tailTipOf(rabbit)
+    && tailTipOf(paws).material.color.getHex() !== tailTipOf(rabbit).material.color.getHex());
+
+  // ── C1: quad reads def.personality walk multipliers ────────────────────────
+  const fast = r._buildQuadruped(0x808080, 'btq/fast');
+  const slow = r._buildQuadruped(0x808080, 'btq/slow');
+  ok('quad persCadence read', fast.persCadence === 2 && slow.persCadence === 0.5);
+  // Walk both identically → the faster cadence advances phase further (no wrap
+  // over this short window). Both rigs live in _humanoids under their keys.
+  for (let i = 0; i < 18; i++) {
+    const x = 1500 + i * 55;   // ~0.55 m/frame·... moving → walking
+    r.updateTargets([
+      { key: 'qf', x, y: 2500, color: 0x808080, avatar: 'btq/fast' },
+      { key: 'qs', x, y: 3500, color: 0x808080, avatar: 'btq/slow' },
+    ], ctx);
+    fakeNow += 16.7;
+  }
+  const pf = r._humanoids['qf'], ps = r._humanoids['qs'];
+  ok('quad personality alters phase advance', pf && ps && pf.phase > ps.phase + 0.2,
+    pf && ps ? `fast=${pf.phase.toFixed(2)} slow=${ps.phase.toFixed(2)}` : '-');
+  performance.now = realNow;
+
+  // ── Dispose lifecycle ─────────────────────────────────────────────────────
+  let threw = false;
+  try {
+    for (const rig of [h, cyl, oval, plain, faceless, ghost, limbs, hovDirect, dog, cat, qplain, giraffe, bald, rabbit, paws])
+      r._disposeSubtree(rig.group);
+  } catch (e) { threw = true; }
+  ok('_disposeSubtree no-throw', !threw);
+  let destroyThrew = false;
+  try { r.destroy(); } catch (e) { destroyThrew = true; }
+  ok('destroy() no-throw', !destroyThrew);
+
+  const passN = checks.filter(c => c.pass).length, total = checks.length;
+  const fails = checks.filter(c => !c.pass).map(c => c.name);
+  document.getElementById('out').textContent =
+    checks.map(c => `${c.pass ? 'ok  ' : 'FAIL'} ${c.name} ${c.extra}`).join('\n') +
+    `\n\n${passN}/${total}` + (fails.length ? `  FAILED: ${fails.join(', ')}` : '');
+  document.title = `AVATAR-BUILD ${passN === total ? 'PASS' : 'FAIL'} ${passN}/${total}`;
+ } catch (e) {
+  document.title = 'AVATAR-BUILD ERR: ' + (e && e.stack ? e.stack.split('\n').slice(0,3).join(' | ') : e);
+ }
+</script>

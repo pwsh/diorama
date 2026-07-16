@@ -2,7 +2,6 @@ import { LitElement, html, nothing } from 'lit';
 import { property, state } from 'lit/decorators.js';
 import { customElement } from './define.js';
 import { startZoneEdit } from '../canvas-interact.js';
-import { repairFloor } from '../storage.js';
 import type { Planner, Tool } from '../planner.js';
 import { NEW_ROOM, NEW_LANDMARK } from '../planner.js';
 import { compass8, parseLatLon } from '../geo.js';
@@ -13,21 +12,8 @@ import type {
   BleProxy, AlarmPanel, SafetySensor, RobotFixture, CameraFixture, PresenceZone, GroundArea, GroundKind, DioramaPerson, GeoLandmark,
 } from '../types.js';
 import type { BermudaDevice } from '../planner.js';
-import { CONDITION_GLYPH, CONDITION_LABEL, tempText, weatherEffectEnabled } from '../weather.js';
 
-// Avatar model options (shared by the mmWave + motion checkbox grids). All 22
-// concrete kinds; the old 'Random' entry is gone — checking MULTIPLE kinds is
-// the new way to randomize (each target stably hash-picks from the checked set).
-const AVATAR_OPTIONS: ReadonlyArray<[AvatarKind, string]> = [
-  ['adult', 'Adult'], ['child', 'Child'], ['robot', 'Robot'], ['alien', 'Alien'],
-  ['professional', 'Professional'], ['hacker', 'Hacker'], ['movie_star', 'Movie star'],
-  ['ninja', 'Ninja'], ['cyborg', 'Cyborg'], ['ninja_cyborg', 'Ninja cyborg'],
-  ['athlete', 'Athlete'], ['teddy_bear', 'Teddy bear'], ['cartoon_mouse', 'Cartoon mouse'],
-  ['cartoon_dog', 'Cartoon dog'], ['cartoon_duck', 'Cartoon duck'], ['cowboy', 'Cowboy'],
-  ['magician', 'Magician'], ['farmer', 'Farmer'], ['tech_expert', 'Tech expert'],
-  ['supermodel', 'Supermodel'], ['wise_oracle', 'Wise oracle'], ['astronaut', 'Astronaut'],
-  ['cat', '🐱 Cat'], ['dog', '🐶 Dog'],
-];
+import { listActivePacks } from '../avatars.js';
 import {
   fmtLen,
   motionColor, motionIntensity, sensorColor, lightIconKind, MOTION_DEFAULTS,
@@ -388,18 +374,9 @@ export class Sidebar extends LitElement {
         ${this._roomsSection()}
         ${this._fixturesSection()}
         ${this._layers2dSection()}
-        ${this._scene3dSection()}
-        ${this._weatherSection()}
         ${this._geoSection()}
         ${this._model3dSection()}
         ${this._bgSection()}
-
-        ${this._section('data', 'Data', () => html`
-          <button class="btn" style="width:100%;margin-bottom:4px" @click=${this._exportJson}>
-            Export JSON
-          </button>
-          <button class="btn" style="width:100%" @click=${this._importJson}>Import JSON</button>
-        `)}
       </div>
     `;
   }
@@ -459,6 +436,12 @@ export class Sidebar extends LitElement {
             <span></span>
           </span>
         </label>
+        <details style="margin-top:8px">
+          <summary style="cursor:pointer;font-size:11px;color:var(--text-dim);padding:2px 0">
+            This floor's 3D look (overrides global)
+          </summary>
+          ${this._floorLookOverrides(p.store.scene3d ?? {})}
+        </details>
     `);
   }
 
@@ -476,7 +459,14 @@ export class Sidebar extends LitElement {
     const p = this.planner;
     const f = p.floor();
     if (p.store.floors.length <= 1) { alert('At least one floor is required.'); return; }
-    if (confirm('Export a backup before deleting?')) this._exportJson();
+    if (confirm('Export a backup before deleting?')) {
+      const blob = new Blob([JSON.stringify(p.store, null, 2)], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `floor-plan-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    }
     if (!confirm(`Delete floor "${f.name}"? This cannot be undone.`)) return;
     p.deleteFloor(f.id);
   };
@@ -571,28 +561,39 @@ export class Sidebar extends LitElement {
       if (s.has(k)) s.delete(k); else s.add(k);
       write(s);
     };
+    // One block per loaded+active pack (core first). Per-pack All/None scope so a
+    // pack's members can be bulk-toggled without touching another pack's picks.
+    const packs = listActivePacks();
     return html`
       <div class="row" title="3D character models for this sensor's targets. Check several — each person stably picks one. None checked = Adult.">
         <label>Avatars</label>
-        <span style="flex:1;text-align:right;font-size:10px">
-          <button class="btn" style="font-size:10px;padding:1px 6px"
-                  @click=${() => write(new Set(AVATAR_OPTIONS.map(([v]) => v)))}>All</button>
-          <button class="btn" style="font-size:10px;padding:1px 6px;margin-left:4px"
-                  @click=${() => write(new Set())}>None</button>
-        </span>
       </div>
-      <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:1px 6px;
-                  background:rgba(0,0,0,0.2);border-radius:4px;padding:4px 6px;margin:2px 0 4px">
-        ${AVATAR_OPTIONS.map(([val, lbl]) => html`
-          <label style="display:flex;align-items:center;gap:4px;font-size:10px;
-                        color:var(--text);cursor:pointer;white-space:nowrap;overflow:hidden">
-            <input type="checkbox" style="margin:0;flex:none"
-                   .checked=${checked.has(val)}
-                   @change=${() => toggle(val)}>
-            ${lbl}
-          </label>
-        `)}
-      </div>
+      ${packs.map(({ def, members }) => {
+        const ids = members.map(m => m.id);
+        const setAll = () => write(new Set([...checked, ...ids]));
+        const setNone = () => write(new Set([...checked].filter(k => !ids.includes(k))));
+        return html`
+          <div class="row" style="margin:2px 0 0">
+            <label style="font-size:10px;opacity:0.8">${def.label}</label>
+            <span style="flex:1;text-align:right;font-size:10px">
+              <button class="btn" style="font-size:10px;padding:1px 6px" @click=${setAll}>All</button>
+              <button class="btn" style="font-size:10px;padding:1px 6px;margin-left:4px" @click=${setNone}>None</button>
+            </span>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:1px 6px;
+                      background:rgba(0,0,0,0.2);border-radius:4px;padding:4px 6px;margin:2px 0 4px">
+            ${members.map(m => html`
+              <label style="display:flex;align-items:center;gap:4px;font-size:10px;
+                            color:var(--text);cursor:pointer;white-space:nowrap;overflow:hidden">
+                <input type="checkbox" style="margin:0;flex:none"
+                       .checked=${checked.has(m.id)}
+                       @change=${() => toggle(m.id)}>
+                ${m.label}
+              </label>
+            `)}
+          </div>
+        `;
+      })}
     `;
   }
 
@@ -1892,8 +1893,11 @@ export class Sidebar extends LitElement {
                     x.avatarKind = v ? v as AvatarKind : undefined;
                   })}>
             <option value="" ?selected=${!pe.avatarKind}>Auto (fallback pool)</option>
-            ${AVATAR_OPTIONS.map(([val, lbl]) => html`
-              <option value=${val} ?selected=${pe.avatarKind === val}>${lbl}</option>`)}
+            ${listActivePacks().map(({ def, members }) => html`
+              <optgroup label=${def.label}>
+                ${members.map(m => html`
+                  <option value=${m.id} ?selected=${pe.avatarKind === m.id}>${m.label}</option>`)}
+              </optgroup>`)}
           </select>
         </div>
         <div class="row"><label>Color</label>
@@ -3785,156 +3789,6 @@ export class Sidebar extends LitElement {
     `);
   }
 
-  // ── 3D scene appearance ───────────────────────────────────────────────
-  // Per-effect toggle list (W3), indented under the "3D effects" master. Only
-  // meaningful when the master is on — rendered dimmed + disabled when it's off.
-  // `sunPosition` is a lighting behavior (not gated by the master) but is listed
-  // here for discoverability; it's left enabled even when the master is off.
-  private _weatherEffectToggles(
-    w: import('../types.js').WeatherConfig | undefined,
-    set: (mut: (x: import('../types.js').WeatherConfig) => void) => void,
-  ) {
-    const master = w?.effects3d !== false;
-    const defs: Array<[import('../types.js').WeatherEffectKey, string]> = [
-      ['precip', 'Precipitation'],
-      ['fog', 'Fog'],
-      ['lightning', 'Lightning'],
-      ['wind', 'Wind dust & gusts'],
-      ['clouds', 'Cloud shadows'],
-      ['sunPosition', 'True sun position'],
-      ['frost', 'Frost & icicles'],
-      ['puddles', 'Rain puddles'],
-      ['precipForecast', 'Forecast storm-brewing'],
-    ];
-    // sunPosition stays live even when the effect-group master is off.
-    const dimmed = (k: import('../types.js').WeatherEffectKey) => !master && k !== 'sunPosition';
-    return html`
-      <div style="margin:2px 0 2px 14px;display:flex;flex-direction:column;gap:1px">
-        ${defs.map(([key, label]) => html`
-          <label class="row" style="padding:1px 0;${dimmed(key) ? 'opacity:0.45' : ''}">
-            <span style="flex:1;font-size:11px">${label}</span>
-            <input type="checkbox" .checked=${weatherEffectEnabled(w, key)}
-                   ?disabled=${dimmed(key)}
-                   @change=${(e: Event) => set(x => {
-                     (x.effects ??= {})[key] = (e.target as HTMLInputElement).checked;
-                   })}>
-          </label>`)}
-      </div>`;
-  }
-
-  // ── Weather section (Feature W) ───────────────────────────────────────
-  private _weatherSection() {
-    const p = this.planner;
-    const w = p.store.weather;
-    const src = w?.source ?? 'openmeteo';
-    const now = p.weatherNow;
-    const set = (mut: (x: import('../types.js').WeatherConfig) => void) => p.setWeather(mut);
-
-    const sourceRadio = (val: 'entity' | 'sensors' | 'openmeteo', label: string) => html`
-      <label class="row" style="padding:0;cursor:pointer;gap:6px">
-        <input type="radio" name="weather-src" .checked=${src === val}
-               @change=${() => set(x => { x.source = val; })}>
-        <span style="font-size:12px;flex:1">${label}</span>
-      </label>`;
-
-    const bindRow = (labelTxt: string, cur: string | undefined,
-                     domain: string, onPick: (id: string) => void) => html`
-      <div class="row" style="margin-top:2px"><label>${labelTxt}</label>
-        <span style="font-size:11px;color:var(--text);flex:1;overflow:hidden;
-                     text-overflow:ellipsis;white-space:nowrap">${cur || '—'}</span>
-        <button class="btn" style="font-size:10px;padding:2px 6px" @click=${() => {
-          this.dispatchEvent(new CustomEvent('open-entity-picker', {
-            bubbles: true, composed: true, detail: { domain, onPick },
-          }));
-        }}>🔗</button>
-      </div>`;
-
-    // Live preview / source-health line.
-    let preview;
-    if (!w) {
-      preview = html`<span style="color:var(--text-dim)">Pick a source to enable the chip.</span>`;
-    } else if (now) {
-      const glyph = CONDITION_GLYPH[now.condition] ?? '❓';
-      const temp = now.tempC == null ? '' : ' · ' + tempText(now.tempC, p.store.imperial);
-      preview = html`<span style="${now.stale ? 'opacity:0.55' : ''}">
-        ${glyph} ${CONDITION_LABEL[now.condition] ?? now.condition}${temp}
-        ${now.label ? html`<span style="color:var(--text-dim)"> · ${now.label}</span>` : nothing}
-        ${now.stale ? html`<span style="color:#ffab91"> · stale</span>` : nothing}
-      </span>`;
-    } else {
-      preview = html`<span style="color:var(--text-dim)">${
-        src === 'openmeteo'
-          ? (w.zip || w.lat != null ? 'Fetching…' : 'Set a zip (or configure zone.home in HA).')
-          : 'Bind the source entities above.'}</span>`;
-    }
-
-    return this._section('weather', 'Weather', () => html`
-        <div style="display:flex;flex-direction:column;gap:2px;margin-bottom:6px">
-          ${sourceRadio('entity', 'HA weather entity')}
-          ${sourceRadio('sensors', 'Local station sensors')}
-          ${sourceRadio('openmeteo', 'Open-Meteo (online)')}
-        </div>
-
-        ${src === 'entity' ? bindRow('Entity', w?.entityId, 'weather',
-            (id: string) => set(x => { x.entityId = id; })) : nothing}
-
-        ${src === 'sensors' ? html`
-          ${bindRow('Precip (mm/h)', w?.sensors?.precip, 'sensor',
-              (id: string) => set(x => { (x.sensors ??= {}).precip = id; }))}
-          ${bindRow('Wind speed', w?.sensors?.windSpeed, 'sensor',
-              (id: string) => set(x => { (x.sensors ??= {}).windSpeed = id; }))}
-          ${bindRow('Temperature', w?.sensors?.temp, 'sensor',
-              (id: string) => set(x => { (x.sensors ??= {}).temp = id; }))}
-          ${bindRow('Lightning', w?.sensors?.lightning, 'binary_sensor',
-              (id: string) => set(x => { (x.sensors ??= {}).lightning = id; }))}
-          <div style="font-size:10px;color:var(--text-dim);line-height:1.3;margin:2px 0 0">
-            Condition is derived: precip → rainy/pouring, cold precip → snowy,
-            high wind → windy, lightning → storm; else clear by the sun.
-          </div>
-        ` : nothing}
-
-        ${src === 'openmeteo' ? html`
-          <div class="row"><label>Zip / place</label>
-            <input type="text" placeholder="e.g. 90210" .value=${w?.zip ?? ''}
-                   style="flex:1;min-width:0"
-                   @change=${(e: Event) => set(x => { x.zip = (e.target as HTMLInputElement).value.trim(); })}>
-            <button class="btn" style="font-size:10px;padding:2px 8px;margin-left:4px"
-                    @click=${() => p.refreshWeatherLocation()}>Search</button>
-          </div>
-          <div style="font-size:11px;color:var(--text-dim);margin:2px 0 0">
-            ${w?.placeLabel
-              ? html`📍 ${w.placeLabel}`
-              : (w?.lat != null ? html`📍 ${w.lat.toFixed(2)}, ${w.lon?.toFixed(2)}`
-                                : 'No location — uses HA zone.home if no zip.')}
-          </div>
-        ` : nothing}
-
-        <label class="row" style="margin-top:8px"><span style="flex:1">Show chip</span>
-          <input type="checkbox" .checked=${w?.chip !== false}
-                 @change=${(e: Event) => set(x => { x.chip = (e.target as HTMLInputElement).checked; })}>
-        </label>
-        <label class="row"><span style="flex:1">3D effects</span>
-          <input type="checkbox" .checked=${w?.effects3d !== false}
-                 @change=${(e: Event) => set(x => { x.effects3d = (e.target as HTMLInputElement).checked; })}>
-        </label>
-        ${this._weatherEffectToggles(w, set)}
-        <label class="row"><span style="flex:1">Affect lighting</span>
-          <input type="checkbox" .checked=${w?.affectLighting !== false}
-                 @change=${(e: Event) => set(x => { x.affectLighting = (e.target as HTMLInputElement).checked; })}>
-        </label>
-        <div style="font-size:10px;color:var(--text-dim);line-height:1.3;margin:2px 0 6px">
-          3D effects: rain / snow / hail / fog / wind dust / lightning around the
-          house, matched to the live condition. "Affect lighting" dims the day
-          preset under overcast weather. The "Weather FX" entry in 2D Layers
-          also gates the effects.
-        </div>
-
-        <div style="font-size:11px;padding:6px 8px;background:rgba(0,0,0,0.25);border-radius:4px;line-height:1.4">
-          ${preview}
-        </div>
-    `, { id: 'diorama-weather-section' });
-  }
-
   // ── GPS / Geo section (Feature G, phase G1) ───────────────────────────────
   // Landmark calibration UI. Runtime-only card state (which landmark's card is
   // open + the chosen tracker/slug/message); the active sampling SESSION lives
@@ -4323,123 +4177,6 @@ export class Sidebar extends LitElement {
     `;
   }
 
-  private _scene3dSection() {
-    const p = this.planner;
-    const sc = p.store.scene3d ?? { preset: 'night' as const };
-    const upd = (mut: () => void) => {
-      if (!p.store.scene3d) p.store.scene3d = { preset: 'night' };
-      mut(); p.save(); p.emitConfig();
-    };
-    return this._section('scene3d', '3D Scene', () => html`
-        <div class="row"><label>Mode</label>
-          <select .value=${sc.lightMode ?? 'manual'}
-                  @change=${(e: Event) => upd(() => {
-                    p.store.scene3d!.lightMode =
-                      (e.target as HTMLSelectElement).value as 'manual' | 'clock' | 'lux';
-                  })}>
-            <option value="manual">Manual preset</option>
-            <option value="clock">Follow time of day</option>
-            <option value="lux">Luminance sensor</option>
-          </select>
-        </div>
-        ${(sc.lightMode ?? 'manual') === 'manual' ? html`
-          <div class="row"><label>Lighting</label>
-            <select .value=${sc.preset ?? 'night'}
-                    @change=${(e: Event) => upd(() => {
-                      p.store.scene3d!.preset =
-                        (e.target as HTMLSelectElement).value as import('../types.js').ScenePreset;
-                    })}>
-              <option value="night">Night (default)</option>
-              <option value="day">Day</option>
-              <option value="dusk">Dusk</option>
-            </select>
-          </div>
-        ` : nothing}
-        ${(sc.lightMode ?? 'manual') === 'clock' ? html`
-          <div style="font-size:10px;color:var(--text-dim);line-height:1.3;margin:2px 0 4px">
-            Uses HA's sun.sun elevation (falls back to local clock):
-            day above 10°, dusk to −4°, night below.
-          </div>
-        ` : nothing}
-        ${(sc.lightMode ?? 'manual') === 'lux' ? html`
-          <div class="row"><label>Lux entity</label>
-            <span style="font-size:10px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
-              ${sc.luxEntity || '— pick one —'}
-            </span>
-            <button class="btn" style="font-size:10px;padding:2px 6px" @click=${() => {
-              this.dispatchEvent(new CustomEvent('open-entity-picker', {
-                bubbles: true, composed: true,
-                detail: {
-                  domain: 'sensor',
-                  onPick: (id: string) => upd(() => { p.store.scene3d!.luxEntity = id; }),
-                },
-              }));
-            }}>🔗</button>
-          </div>
-          <div style="font-size:10px;color:var(--text-dim);line-height:1.3;margin:2px 0 4px">
-            ≥3000 lx day · 300–3000 lx dusk · &lt;300 lx night.
-          </div>
-        ` : nothing}
-        <div class="row"><label>Floor color</label>
-          <input type="color" .value=${sc.floorColor ?? '#101820'}
-                 style="width:36px;height:24px;padding:0;border:1px solid var(--border);background:#111"
-                 @input=${(e: Event) => upd(() => {
-                   p.store.scene3d!.floorColor = (e.target as HTMLInputElement).value;
-                 })}>
-        </div>
-        <div class="row"><label>Floor texture</label>
-          <select .value=${sc.floorTex ?? 'none'}
-                  @change=${(e: Event) => upd(() => {
-                    p.store.scene3d!.floorTex =
-                      (e.target as HTMLSelectElement).value as import('../types.js').FloorTexKind;
-                  })}>
-            <option value="none">None</option>
-            <option value="wood">Wood</option>
-            <option value="tile">Tile</option>
-            <option value="concrete">Concrete</option>
-          </select>
-        </div>
-        <div class="row"><label>Wall color</label>
-          <input type="color" .value=${sc.wallColor ?? '#bbbbbb'}
-                 style="width:36px;height:24px;padding:0;border:1px solid var(--border);background:#111"
-                 @input=${(e: Event) => upd(() => {
-                   p.store.scene3d!.wallColor = (e.target as HTMLInputElement).value;
-                 })}>
-        </div>
-        <div class="row"><label>Glass house</label>
-          <input type="checkbox" .checked=${!!sc.glassHouse}
-                 @change=${(e: Event) => upd(() => {
-                   p.store.scene3d!.glassHouse = (e.target as HTMLInputElement).checked;
-                 })}>
-        </div>
-        <div class="row"><label>Wall cutaway</label>
-          <input type="checkbox" .checked=${sc.wallCutaway !== false}
-                 @change=${(e: Event) => upd(() => {
-                   p.store.scene3d!.wallCutaway = (e.target as HTMLInputElement).checked;
-                 })}>
-        </div>
-        <div class="row"><label>Auto-follow camera</label>
-          <input type="checkbox" .checked=${!!sc.autoFollow}
-                 @change=${(e: Event) => upd(() => {
-                   p.store.scene3d!.autoFollow = (e.target as HTMLInputElement).checked;
-                 })}>
-        </div>
-        <div class="row"><label title="Slowly orbit the camera around the avatars for visual interest">Cinematic orbit</label>
-          <input type="checkbox" .checked=${!!sc.cinematicOrbit}
-                 @change=${(e: Event) => upd(() => {
-                   p.store.scene3d!.cinematicOrbit = (e.target as HTMLInputElement).checked;
-                 })}>
-        </div>
-        <div class="row"><label>Plumbobs</label>
-          <input type="checkbox" .checked=${sc.plumbobs !== false}
-                 @change=${(e: Event) => upd(() => {
-                   p.store.scene3d!.plumbobs = (e.target as HTMLInputElement).checked;
-                 })}>
-        </div>
-        ${this._floorLookOverrides(sc)}
-    `);
-  }
-
   // Per-floor overrides of the global colors/texture — lets each floor keep
   // its own flooring and wall paint while lighting stays global.
   private _floorLookOverrides(sc: { floorColor?: string; floorTex?: string; wallColor?: string }) {
@@ -4457,9 +4194,6 @@ export class Sidebar extends LitElement {
                      title="Use global value" @click=${() => upd(clear)}>↺</button>`
       : nothing;
     return html`
-      <div style="font-size:10px;color:var(--text-dim);margin:8px 0 2px;border-top:1px solid var(--border);padding-top:6px">
-        This floor only (overrides global)
-      </div>
       <div class="row"><label>Floor color</label>
         <input type="color" .value=${lk.floorColor ?? sc.floorColor ?? '#101820'}
                style="width:36px;height:24px;padding:0;border:1px solid var(--border);background:#111"
@@ -4740,38 +4474,4 @@ export class Sidebar extends LitElement {
     this.planner.emitConfig();
   };
 
-  // ── Export / import ───────────────────────────────────────────────────
-  private _exportJson = () => {
-    const blob = new Blob([JSON.stringify(this.planner.store, null, 2)], { type: 'application/json' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = `floor-plan-${new Date().toISOString().slice(0, 10)}.json`;
-    a.click();
-    URL.revokeObjectURL(a.href);
-  };
-
-  private _importJson = () => {
-    const inp = document.createElement('input');
-    inp.type = 'file'; inp.accept = 'application/json';
-    inp.onchange = () => {
-      const file = inp.files?.[0]; if (!file) return;
-      const rd = new FileReader();
-      rd.onload = () => {
-        try {
-          const obj = JSON.parse(rd.result as string);
-          if (!obj.floors || !Array.isArray(obj.floors)) throw new Error('missing floors');
-          if (!confirm('Replace current floor plan with imported data?')) return;
-          obj.floors = obj.floors.map((f: { id: string; name: string; w: number; d: number }) => repairFloor(f));
-          this.planner.store = obj;
-          this.planner.store.activeSensorId = null;
-          this.planner.save();
-          this.planner.emitConfig();
-        } catch (err) {
-          alert('Import failed: ' + (err as Error).message);
-        }
-      };
-      rd.readAsText(file);
-    };
-    inp.click();
-  };
 }

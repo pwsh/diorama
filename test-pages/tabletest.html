@@ -11,6 +11,11 @@
   const mod = await import('./assets/three-renderer.js');
   const r = new mod.ThreeDRenderer(document.getElementById('c'));
   await r.load();
+  // Batch C1: 'child' (and the other legacy kinds) live in builtin base packs
+  // hydrated on connect; register base-humans so ?avatar=child builds the real
+  // scaled child rig.
+  const _bh = await import('./assets/base-humans.js?v=' + Date.now());
+  mod.ThreeDRenderer.registerAvatarPack(_bh.default);
   const fu = (id, kind, x, y, w, h, rot = 0, extra = {}) => ({ id, x, y, w, h, kind, rotation: rot, ...extra });
 
   const walls = [{ id: 'w1', points: [

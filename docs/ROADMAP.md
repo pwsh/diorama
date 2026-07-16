@@ -251,6 +251,23 @@ Do not treat any note here as a decided approach.
 - Allow **disabling lock controls** on a door and only DISPLAYING the state
   (display-only mode).
 
+### Avatar rig gaps (parked 2026-07-16 from the avatar-pack research triage)
+Approximated with conventions in the shipped packs; see
+`docs/DESIGN-avatars.md` § "Rig-gap triage" and per-pack `// approx:` notes:
+- Fabric patterns / prints / decals / text (deliberately against the
+  no-texture house style — revisit only with a style decision).
+- Animated appendages: tail sway, wing flap, ear posing; hop / knuckle-walk
+  gait cycles; per-tentacle idle channels; independent secondary props
+  (orbiting drones).
+- Extra eye styles (compound, T-visor, sleepy, luminous-bulbous, eye color
+  overrides) and quad eye customization.
+- Additional anchors: wrist/cuff, ankle/foot, limb-midpoint (knee/elbow pads).
+- Quad `legColor` (dark "points" legs — feet-only `pawColor` shipped),
+  giant-flap ear enum, broad-muzzle snout shape, pattern/scatter generator
+  for stripes/spots/dapples.
+- Sessile/rooted mode; pose-aware hand props; two-handed prop convention;
+  situational costume swaps (alt-looks per member).
+
 ### Research items (do not action)
 - **Log events & alerting**: research surfacing/displaying alerts from a log
   event stream.

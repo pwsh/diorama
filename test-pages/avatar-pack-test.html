@@ -1,0 +1,150 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>avatar pack test</title>
+<style>html,body{margin:0;background:#111;color:#ddd;font:12px monospace}</style>
+<pre id="out">running…</pre>
+<script type="module">
+  // Pure avatar-pack REGISTRY tests — no three.js. Imports the standalone
+  // esbuild transpile of src/avatars.ts (avatars.mod.js) so the registry is an
+  // isolated deterministic instance, then registers the REAL built base-pack
+  // chunks (dist/assets/base-*.js — pure data, type-only imports of avatars) to
+  // prove the core→base split: core ships `adult` only; the 23 legacy kinds +
+  // cat/dog live in builtin base packs that hydrate via dynamic import.
+  //
+  // Harness setup (run once, alongside `cp -r dist/* test-pages/*`):
+  //   npx esbuild src/avatars.ts --format=esm --outfile=<harness>/avatars.mod.js
+  const A = await import('./avatars.mod.js?v=' + Date.now());
+  const checks = [];
+  const ok = (name, cond, extra = '') => checks.push({ name, pass: !!cond, extra });
+
+  // ── Core ships adult ONLY (the irremovable default) ───────────────────────
+  ok('core adult', A.resolveDef('adult').id === 'adult' && A.resolveDef('adult').rig === 'humanoid');
+  ok('unknown→adult', A.resolveDef('nope/xyz').id === 'adult');
+  A.setAvatarPacksConfig(undefined);
+  ok('core has exactly 1 member', A.activeAvatarIds().length === 1 && A.activeAvatarIds()[0] === 'adult');
+  ok('pre-split fallback = [adult]', A.resolveAvatar('random', undefined, 'kZ') === 'adult');
+  ok('pre-split fromPool false', A.avatarFromPool('random', undefined) === false);
+  ok('cat unknown pre-register', A.resolveDef('cat').id === 'adult');
+
+  // ── Register the REAL built base-pack chunks (simulated dynamic import) ────
+  const BASE_PACKS = [
+    'base-humans', 'base-careers', 'base-robotic', 'base-aliens', 'base-scifi',
+    'base-pop-culture', 'base-domestic-animals', 'base-farm-animals', 'base-zoo-animals',
+  ];
+  for (const id of BASE_PACKS) {
+    const mod = await import(`./assets/${id}.js?v=` + Date.now());
+    A.registerPack(mod.default, 'builtin');
+  }
+
+  // ── Out-of-the-box: active set == union of all loaded base-pack members +
+  // core adult. (Self-derived from listActivePacks so it survives pack growth —
+  // the C2 generation grew the base packs well past the original 24-kind split.)
+  A.setAvatarPacksConfig(undefined);
+  let active = new Set(A.activeAvatarIds());
+  {
+    const expected = new Set(A.listActivePacks().flatMap(p => p.members.map(m => m.id)));
+    ok('active out of box = all loaded base+core members',
+       active.size === expected.size && [...expected].every(id => active.has(id)) && active.size > 24,
+       `n=${active.size} exp=${expected.size}`);
+  }
+  for (const id of ['adult', 'child', 'professional', 'ninja', 'astronaut', 'alien', 'robot', 'cat', 'dog'])
+    ok(`active has ${id}`, active.has(id));
+  ok('cat quad (base-domestic)', A.resolveDef('cat').rig === 'quadruped' && A.resolveDef('cat').pet === true);
+  ok('child from base-humans', A.resolveDef('child').humanoid.headR === 107);
+  ok('robot from base-robotic', A.resolveDef('robot').humanoid.headShape === 'box');
+
+  // ── Fallback pool = the active builtin non-franchise humanoids (pets excluded).
+  // Cross-check the activeAvatarIds-filter count against the listActivePacks path.
+  const HUMANS = A.activeAvatarIds().filter(id => A.resolveDef(id).rig === 'humanoid' && !A.resolveDef(id).pet);
+  {
+    const expHum = A.listActivePacks().flatMap(p => p.members)
+      .filter(m => A.resolveDef(m.id).rig === 'humanoid' && !A.resolveDef(m.id).pet).length;
+    ok('fallback humanoids = active non-pet humanoids', HUMANS.length === expHum && HUMANS.length > 22,
+       `n=${HUMANS.length} exp=${expHum}`);
+  }
+  const HSET = new Set(HUMANS);
+  const r1 = A.resolveAvatar('random', undefined, 'keyZZ');
+  const r2 = A.resolveAvatar('random', undefined, 'keyZZ');
+  ok('random ∈ humanoids, not pets', HSET.has(r1) && r1 !== 'cat' && r1 !== 'dog');
+  ok('random stable by key', r1 === r2);
+  ok('fromPool random=true (≥2)', A.avatarFromPool('random', undefined) === true);
+  ok('undefined→adult', A.resolveAvatar(undefined, undefined, 'k') === 'adult');
+  ok('active concrete passthrough', A.resolveAvatar('cat', undefined, 'k') === 'cat');
+  ok('inactive id→fallback humanoid', HSET.has(A.resolveAvatar('ghost/none', undefined, 'k')));
+
+  // Pool of 2 active humans (adult from core + robot from base-robotic).
+  const poolPick = A.resolveAvatar('random', ['adult', 'robot'], 'kPool');
+  ok('pool pick ∈ pool', poolPick === 'adult' || poolPick === 'robot');
+  ok('pool stable', A.resolveAvatar('random', ['adult', 'robot'], 'kPool') === poolPick);
+  ok('all-inactive pool→fallback', HSET.has(A.resolveAvatar('random', ['x/1', 'x/2'], 'k')));
+
+  // ── Config gating: loaded / active / members ──────────────────────────────
+  A.setAvatarPacksConfig({ 'base-careers': { active: false } });
+  active = new Set(A.activeAvatarIds());
+  ok('active:false hides careers', !active.has('professional') && active.has('adult') && active.has('child'));
+
+  A.setAvatarPacksConfig({ 'base-robotic': { loaded: false } });
+  active = new Set(A.activeAvatarIds());
+  ok('loaded:false hides robotic', !active.has('robot') && !active.has('cyborg') && active.has('adult'));
+
+  A.setAvatarPacksConfig({ 'base-robotic': { members: ['robot'] } });
+  active = new Set(A.activeAvatarIds());
+  ok('members subset', active.has('robot') && !active.has('cyborg'));
+
+  // ── Deactivating a base pack drops its members from the fallback pool ──────
+  A.setAvatarPacksConfig({ 'base-humans': { loaded: false } });
+  ok('unload base-humans hides child', !new Set(A.activeAvatarIds()).has('child'));
+  {
+    const fb = new Set(Array.from({ length: 200 }, (_, i) => A.resolveAvatar('random', undefined, 'ch' + i)));
+    const humNow = A.activeAvatarIds().filter(id => A.resolveDef(id).rig === 'humanoid' && !A.resolveDef(id).pet);
+    // Unloading base-humans drops its humanoid members from the pool: child gone,
+    // pool strictly smaller (self-derived vs the pre-unload HUMANS count).
+    ok('child excluded from fallback', !fb.has('child') && humNow.length < HUMANS.length && humNow.length > 0,
+       `hum=${humNow.length} was=${HUMANS.length}`);
+  }
+
+  // ── Everything unloaded → [adult] floor; single wants resolve to adult ────
+  const allOff = {};
+  for (const id of BASE_PACKS) allOff[id] = { loaded: false, active: false };
+  A.setAvatarPacksConfig(allOff);
+  active = new Set(A.activeAvatarIds());
+  ok('everything unloaded → adult only', active.size === 1 && active.has('adult'));
+  ok('unload→child resolves to adult', A.resolveAvatar('child', undefined, 'k') === 'adult');
+  ok('unload→random resolves to adult', A.resolveAvatar('random', undefined, 'k') === 'adult');
+  ok('unload→fromPool false ([adult] floor)', A.avatarFromPool('random', undefined) === false);
+  ok('core forced on when unloaded too', A.resolveDef('adult').id === 'adult');
+
+  // ── base spread (shared body) ─────────────────────────────────────────────
+  A.setAvatarPacksConfig(undefined);
+  A.registerPack({
+    id: 'basepack', version: 1, label: 'Base', path: ['Z'], builtin: true,
+    base: { rig: 'humanoid', humanoid: { skin: 0x113355, emI: 0.4 } },
+    avatars: [{ id: 'basepack/leo', label: 'Leo', rig: 'humanoid', humanoid: { headR: 150 } }],
+  });
+  const leo = A.resolveDef('basepack/leo');
+  ok('base spread merges', leo.humanoid.skin === 0x113355 && leo.humanoid.emI === 0.4 && leo.humanoid.headR === 150);
+
+  // ── Franchise packs excluded from the fallback pool ───────────────────────
+  A.registerPack({
+    id: 'franchisepack', version: 1, label: 'Franchise', path: ['F'], builtin: true, franchise: true,
+    avatars: [{ id: 'franchisepack/hero', label: 'Hero', rig: 'humanoid', humanoid: {} }],
+  });
+  A.setAvatarPacksConfig({ franchisepack: { loaded: true, active: true } });
+  const fbHumans = new Set(Array.from({ length: 200 }, (_, i) => A.resolveAvatar('random', undefined, 'fk' + i)));
+  ok('franchise never in fallback', !fbHumans.has('franchisepack/hero'));
+
+  // ── unregister ────────────────────────────────────────────────────────────
+  A.unregisterPack('basepack');
+  A.unregisterPack('franchisepack');
+  ok('unregister removes', A.resolveDef('basepack/leo').id === 'adult');
+  A.unregisterPack('core');
+  ok('core cannot unregister', A.resolveDef('adult').id === 'adult' && A.getPack('core') !== undefined);
+
+  const passN = checks.filter(c => c.pass).length;
+  const total = checks.length;
+  const fails = checks.filter(c => !c.pass).map(c => c.name);
+  document.getElementById('out').textContent =
+    checks.map(c => `${c.pass ? 'ok  ' : 'FAIL'} ${c.name} ${c.extra}`).join('\n') +
+    `\n\n${passN}/${total}` + (fails.length ? `  FAILED: ${fails.join(', ')}` : '');
+  document.title = `AVATAR-PACK ${passN === total ? 'PASS' : 'FAIL'} ${passN}/${total}`;
+</script>

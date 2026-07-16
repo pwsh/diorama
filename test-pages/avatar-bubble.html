@@ -12,6 +12,13 @@
   const mod = await import('./assets/three-renderer.js');
   const r = new mod.ThreeDRenderer(document.getElementById('c'));
   await r.load();
+  // Batch C1: the 23 legacy kinds moved into builtin base packs (hydrated on
+  // connect in the app). Standalone renderer tests register them explicitly.
+  for (const p of ['base-humans','base-careers','base-robotic','base-aliens',
+    'base-scifi','base-pop-culture','base-domestic-animals']) {
+    const m = await import(`./assets/${p}.js?v=` + Date.now());
+    mod.ThreeDRenderer.registerAvatarPack(m.default);
+  }
   const walls = [{ id: 'w1', points: [
     {x:200,y:200},{x:11800,y:200},{x:11800,y:6800},{x:200,y:6800},{x:200,y:200}] }];
   const rooms = [{ id: 'rm1', name: 'Living', anchor: {x: 6000, y: 3500} }];

@@ -1,7 +1,8 @@
 # Project status & pick-up guide
 
-Last updated: 2026-07-13, at **v0.14.0**. This is the single document to read
-(alongside `CLAUDE.md`) to resume work with full context.
+Last updated: 2026-07-16, at **v0.14.0 + the avatar-packs arc** (unreleased).
+This is the single document to read (alongside `CLAUDE.md`) to resume work
+with full context.
 
 ## Where things stand
 
@@ -61,6 +62,32 @@ instance.
   3D grid layer toggle).
 
 ### Shipped since the DESIGN-sims arc (reverse order)
+
+- **The avatar-packs arc** (`docs/DESIGN-avatars.md`; four Opus batches
+  A/B/C1/C2 + a 32-agent Sonnet research sweep + a content gate — all
+  Fable-orchestrated): avatars are now **packs** that load/unload +
+  activate/deactivate at runtime. `src/avatars.ts` (pure shared-chunk
+  registry + declarative `AvatarDef`/`AvatarPrimitive` schema), core pack
+  = locked `adult` default, 23 legacy kinds split into 9 `base-*` packs
+  (out-of-the-box parity: same 24 avatars + 22-humanoid random pool),
+  **23 franchise packs** (default-unloaded opt-in: Star Trek TNG/DS9,
+  Star Wars OT/Mandalorian, Transformers, Firefly, BBT, Friends,
+  I Love Lucy, Seinfeld, IT Crowd, LOTR, Zelda, Metroid, Animal
+  Crossing, Pokémon, Mario, LEGO, Disney Princess, MLP, He-Man, TMNT,
+  Disney Animals) — **266 members total**, all regeneration-documented
+  in `docs/avatars/**` (32 reference docs). Rig extensions: shoulder/
+  neck/tailbone anchors, cylinder/oval heads, `eyes:'none'`+`noFace`,
+  opacity, hover (legless float), per-limb colors, posture pitch,
+  parameterized quadruped (neck/ears/tail/snout/paw/tailTip; cat+dog
+  now data). Settings drawer → **tabbed** (Connection/Display/Weather/
+  Avatars/Integrations/Data): pack manager with Loaded/Active/member
+  subsets + JSON import/export (user packs in IndexedDB
+  `avatar-store.ts`); sidebar `scene3d`/`weather`/`data` sections moved
+  into the drawer, per-floor `look3d` into Floors. `Store.avatarPacks`
+  config (in `_loadFromHa`). Tests: avatar-pack **43/43**, avatar-build
+  **47/47**, avatar-store **23/23**, **avatar-content 302/302** (builds
+  every member of every pack + 6 live frames), fusion 11/11; full
+  regression suite green. Parked rig gaps → ROADMAP.
 
 - **Batch K: the yard arc** (11 files + new `yard-test.html` **4/4**;
   full green set intact): drawable `GroundArea` polygons (grass / rock /

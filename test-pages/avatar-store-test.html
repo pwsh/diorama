@@ -1,0 +1,81 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>avatar store test</title>
+<style>html,body{margin:0;background:#111;color:#ddd;font:12px monospace;padding:10px}</style>
+<pre id="out">running…</pre>
+<script type="module">
+  // Manual-logic tests for src/avatar-store.ts — IndexedDB pack roundtrip
+  // (put/get/delete/list) + the pure validatePackJson() accept/reject cases.
+  // Imports the esbuild transpile (avatar-store.mod.js). Deterministic title.
+  //   npx esbuild src/avatar-store.ts --format=esm --outfile=<harness>/avatar-store.mod.js
+  const S = await import('./avatar-store.mod.js?v=' + Date.now());
+  const checks = [];
+  const ok = (name, cond, extra = '') => checks.push({ name, pass: !!cond, extra });
+
+  // ── Validator: accept ──────────────────────────────────────────────────────
+  const good = {
+    id: 'my-pack', label: 'My Pack', version: 1, path: ['Custom', 'Mine'],
+    avatars: [
+      { id: 'my-pack/hero', label: 'Hero', rig: 'humanoid', humanoid: { headR: 140 } },
+      { id: 'my-pack/pet', label: 'Pet', rig: 'quadruped', quadruped: { sk: 0.6 } },
+    ],
+  };
+  let v = S.validatePackJson(good);
+  ok('accepts valid pack', v.ok === true && v.pack && v.pack.id === 'my-pack');
+  ok('accepts empty path', S.validatePackJson({ ...good, path: [] }).ok === true);
+
+  // ── Validator: reject ──────────────────────────────────────────────────────
+  const rej = (name, raw) => { const r = S.validatePackJson(raw); ok(name, r.ok === false && !!r.error, r.error || ''); };
+  rej('reject non-object', 42);
+  rej('reject null', null);
+  rej('reject array', [good]);
+  rej('reject missing id', { ...good, id: undefined });
+  rej('reject blank id', { ...good, id: '   ' });
+  rej('reject reserved core id', { ...good, id: 'core' });
+  rej('reject missing label', { ...good, label: undefined });
+  rej('reject missing version', { ...good, version: 'x' });
+  rej('reject bad path', { ...good, path: 'nope' });
+  rej('reject path non-strings', { ...good, path: ['ok', 3] });
+  rej('reject empty avatars', { ...good, avatars: [] });
+  rej('reject avatars not array', { ...good, avatars: {} });
+  rej('reject member missing id', { ...good, avatars: [{ label: 'X', rig: 'humanoid' }] });
+  rej('reject member missing label', { ...good, avatars: [{ id: 'a', rig: 'humanoid' }] });
+  rej('reject member bad rig', { ...good, avatars: [{ id: 'a', label: 'A', rig: 'blob' }] });
+
+  // ── IndexedDB roundtrip ─────────────────────────────────────────────────────
+  const id1 = 'store-test/one', id2 = 'store-test/two';
+  const json1 = JSON.stringify(good), json2 = JSON.stringify({ ...good, id: id2 });
+  // clean slate
+  await S.deletePackJson(id1); await S.deletePackJson(id2);
+
+  await S.savePackJson(id1, json1);
+  ok('load returns stored json', (await S.loadPackJson(id1)) === json1);
+
+  await S.savePackJson(id2, json2);
+  const ids = await S.listPackIds();
+  ok('listPackIds has both', ids.includes(id1) && ids.includes(id2));
+
+  const all = await S.loadAllPacks();
+  const m1 = all.find(p => p.id === id1);
+  ok('loadAllPacks pairs id+json', !!m1 && m1.json === json1 && !!all.find(p => p.id === id2));
+
+  await S.deletePackJson(id1);
+  ok('delete removes', (await S.loadPackJson(id1)) === null);
+  const ids2 = await S.listPackIds();
+  ok('list drops deleted', !ids2.includes(id1) && ids2.includes(id2));
+
+  // update-in-place (same id, new body)
+  const json2b = JSON.stringify({ ...good, id: id2, version: 2 });
+  await S.savePackJson(id2, json2b);
+  ok('put overwrites same id', (await S.loadPackJson(id2)) === json2b);
+
+  await S.deletePackJson(id2);  // cleanup
+
+  const passN = checks.filter(c => c.pass).length;
+  const total = checks.length;
+  const fails = checks.filter(c => !c.pass).map(c => c.name);
+  document.getElementById('out').textContent =
+    checks.map(c => `${c.pass ? 'ok  ' : 'FAIL'} ${c.name}${c.extra ? '  (' + c.extra + ')' : ''}`).join('\n') +
+    `\n\n${passN}/${total}` + (fails.length ? `  FAILED: ${fails.join(', ')}` : '');
+  document.title = `AVATAR-STORE ${passN === total ? 'PASS' : 'FAIL'} ${passN}/${total}`;
+</script>

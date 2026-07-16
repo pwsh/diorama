@@ -39,6 +39,12 @@ interface RobotRig {
 }
 import { wallCutsForSegment, WINDOW_DEFAULTS, closedWallLoops, wallKind, WALL_KINDS, furnitureLocalToWorld, furnitureWorldToLocal, pointInPolygon as pip, centroid, loopContaining, resolveRoomForPoint, roomLabel, intersectLoopWithRect, polygonArea } from './geometry.js';
 import { visibilityToFogDensity } from './weather.js';
+import {
+  resolveDef, resolveAvatar, avatarFromPool,
+  registerPack, unregisterPack, setAvatarPacksConfig,
+  type AvatarDef, type AvatarPrimitive, type LegacyAvatarKind, type AvatarPackDef,
+  type AvatarPacksConfig,
+} from './avatars.js';
 
 // All effect-group members ON — the fallback when a stale caller sends a
 // WeatherFxState without the W3 `effects` map (preserves legacy W2 behavior).
@@ -284,6 +290,16 @@ interface Humanoid {
   legM: number;        // hip height in metres for stride matching (adult 0.81)
   // Walk-personality multipliers (resolved from AVATAR_PERSONALITY at build).
   persBob: number; persSway: number; persCadence: number; persAmp: number;
+  // ── Batch C1 rig extensions ──
+  // Static root-pitch bias (rad) folded into the speed-proportional lean at the
+  // final rotation.x write (def.posture.pitch; both rigs).
+  posturePitch: number;
+  // Hover rigs (ghosts / floating droids): BOTH legs omitted, the root floated so
+  // the hip pivot sits `hoverY` mm off the floor + a gentle constant idle bob.
+  // When `hover` is set the leg joints (leftHip/rightHip/leftKnee/rightKnee) are
+  // NULL and every updateTargets access to them is guarded.
+  hover: boolean;
+  hoverY: number;
   // Personality thought-bubble chatter: `chatterNext` counts down to the next
   // firing (25–60 s, idleOffset-seeded); while `chatterT` > 0 the resolver's
   // lowest tier returns `chatterGlyph` (held ~7.5 s so the 2.5 s hysteresis
@@ -297,10 +313,11 @@ interface Humanoid {
   rightShoulder: THREE.Group;
   leftElbow: THREE.Group;
   rightElbow: THREE.Group;
-  leftHip: THREE.Group;
-  rightHip: THREE.Group;
-  leftKnee: THREE.Group;
-  rightKnee: THREE.Group;
+  // Leg pivots are NULL on hover rigs (legless ghosts) — see `hover` above.
+  leftHip: THREE.Group | null;
+  rightHip: THREE.Group | null;
+  leftKnee: THREE.Group | null;
+  rightKnee: THREE.Group | null;
   plumbob: THREE.Object3D;  // rotating Sims diamond above the head
   plumbobColor?: number;    // last-applied plumbob color (per-sensor attribution); undefined = default green
   blob: THREE.Mesh;    // soft floor shadow decal; re-grounded every frame
@@ -449,50 +466,6 @@ function itemState(item: { entity_id?: string | null; localState?: string },
 // Shared empty entity map for the stale-chunk fallback (no per-frame alloc).
 const EMPTY_ENTITY_ON: Record<string, boolean> = {};
 
-// Concrete avatar rig variants, in a fixed order — the 'random' resolver hashes
-// a target key into this list so a given person keeps their look for life.
-const AVATAR_KINDS: readonly AvatarKind[] = [
-  'adult', 'child', 'robot', 'alien', 'professional',
-  'hacker', 'movie_star', 'ninja', 'cyborg', 'ninja_cyborg', 'athlete',
-  'teddy_bear', 'cartoon_mouse', 'cartoon_dog', 'cartoon_duck',
-  'cowboy', 'magician', 'farmer', 'tech_expert', 'supermodel',
-  'wise_oracle', 'astronaut',
-];
-// Quadruped pet rigs — valid, explicitly-selectable avatar kinds, but kept OUT
-// of AVATAR_KINDS so the bare-'random' human fallback never surprises an
-// unidentified person with a cat/dog. A user opting cat/dog into a sensor pool
-// (avatarKinds) still works — resolveAvatar validates the pool against the SET.
-const PET_KINDS: readonly AvatarKind[] = ['cat', 'dog'];
-const PET_KIND_SET: ReadonlySet<string> = new Set(PET_KINDS);
-const AVATAR_KIND_SET: ReadonlySet<string> = new Set([...AVATAR_KINDS, ...PET_KINDS]);
-
-// ── Light per-kind walk personalities. Multipliers applied in updateTargets
-// where bob / roll-sway / cadence / swing-amp are computed (walking only —
-// bob/sway already scale by ampNorm so they vanish when idle). Absent = 1.
-interface AvatarPersonality { bobMul?: number; swayMul?: number; cadenceMul?: number; ampMul?: number; }
-const AVATAR_PERSONALITY: Partial<Record<AvatarKind, AvatarPersonality>> = {
-  child:        { bobMul: 1.25 },
-  cartoon_duck: { swayMul: 1.7, cadenceMul: 1.15 },   // waddle
-  teddy_bear:   { bobMul: 1.3, cadenceMul: 0.85 },
-  cartoon_mouse:{ cadenceMul: 1.25, bobMul: 1.2 },
-  cartoon_dog:  { cadenceMul: 1.1 },
-  supermodel:   { swayMul: 1.35, ampMul: 1.1 },       // strut
-  wise_oracle:  { cadenceMul: 0.8, swayMul: 0.6 },
-  astronaut:    { bobMul: 1.5, cadenceMul: 0.75 },    // moon-bounce
-};
-
-// Per-kind personality thought-bubble glyph pools (lowest-priority bubble
-// tier — see _resolveBubbleKind). Fired periodically per rig, incl. while
-// walking; a kind absent here would fall back to adult's 💭.
-const AVATAR_BUBBLES: Partial<Record<AvatarKind, string[]>> = {
-  adult: ['💭'], child: ['🎈', '🍭'], robot: ['⚙️', '🔋'], alien: ['🛸', '❓'],
-  professional: ['📊', '☕'], hacker: ['💻', '🔓'], movie_star: ['🎬', '🌟'],
-  ninja: ['🥷', '💨'], cyborg: ['🔧', '⚡'], ninja_cyborg: ['⚔️'],
-  athlete: ['🏆', '💪'], teddy_bear: ['🍯', '🤗'], cartoon_mouse: ['🧀'],
-  cartoon_dog: ['🦴', '🎾'], cartoon_duck: ['💦', '🐟'], cowboy: ['🤠', '🐴'],
-  magician: ['🎩', '✨', '🐇'], farmer: ['🌽', '🚜'], tech_expert: ['💡', '🔌'],
-  supermodel: ['📸', '💅'], wise_oracle: ['🔮', '📜'], astronaut: ['🚀', '⭐'],
-};
 
 // Idle-fidget one-shots (picked every 8-20 s while a rig stands idle; see
 // updateTargets). Each composes from existing hip/knee/shoulder/elbow channels
@@ -597,53 +570,6 @@ function trouserTone(color: number): number {
   return best;
 }
 
-// djb2 hash of a string → unsigned 32-bit. Used to map a target key to a stable
-// concrete avatar kind when the sensor requests 'random'.
-function djb2(s: string): number {
-  let h = 5381;
-  for (let i = 0; i < s.length; i++) h = (((h << 5) + h) ^ s.charCodeAt(i)) >>> 0;
-  return h >>> 0;
-}
-
-// Resolve a target's requested avatar into a concrete kind. Precedence:
-//   1. `list` (avatarKinds pool) non-empty → pick from it (see below).
-//   2. legacy single `want`: concrete kind passes through; 'random' (or any
-//      unrecognized string, defensively) picks over ALL kinds.
-//   3. nothing → 'adult'.
-// Pool / 'random' picks are STABLE (djb2(key)) by default so a rebuild mid-life
-// keeps the same look. Pass `rng` (e.g. Math.random) to pick RANDOMLY instead —
-// used ONLY when a rig is first spawned so respawns re-roll their look
-// (avatarFromPool decides eligibility). Single-element pools and concrete kinds
-// are deterministic regardless of rng.
-function resolveAvatar(want: AvatarKind | 'random' | undefined,
-                       list: AvatarKind[] | undefined, key: string,
-                       rng?: () => number): AvatarKind {
-  const pick = (n: number) => rng ? (Math.floor(rng() * n) % n + n) % n : djb2(key) % n;
-  if (list && list.length) {
-    const valid = list.filter(k => AVATAR_KIND_SET.has(k));
-    if (valid.length === 1) return valid[0];
-    if (valid.length) return valid[pick(valid.length)];
-  }
-  if (!want) return 'adult';
-  if (want !== 'random' && AVATAR_KIND_SET.has(want)) return want;
-  return AVATAR_KINDS[pick(AVATAR_KINDS.length)];
-}
-
-// Whether resolveAvatar's pick for this spec is NON-deterministic (a pool of ≥2
-// valid kinds, or 'random'/unknown over all kinds). Only these re-roll on a
-// fresh spawn AND must NOT trigger a rebuild when the per-frame stable pick
-// differs from the rig's rolled kind. A single-kind pool or a concrete kind is
-// fixed — mismatches there are genuine identity changes and DO rebuild.
-function avatarFromPool(want: AvatarKind | 'random' | undefined,
-                        list: AvatarKind[] | undefined): boolean {
-  if (list && list.length) {
-    const valid = list.filter(k => AVATAR_KIND_SET.has(k));
-    if (valid.length === 1) return false;
-    if (valid.length) return true;
-  }
-  if (!want) return false;
-  return want === 'random' || !AVATAR_KIND_SET.has(want);
-}
 // Thought-bubble geometry (Phase 6). World-mm sprite size + side nudge (Sims-
 // comic style). The local Y is NOT a fixed constant — it is derived per-rig from
 // each variant's actual plumbob height (`h.plumbob.position.y`, itself head-top +
@@ -683,6 +609,16 @@ const ENTITY_GATED_ACTIVITIES: ReadonlySet<ActivityKind> = new Set<ActivityKind>
 
 export class ThreeDRenderer {
   loaded = false;
+
+  // Avatar-pack registry passthroughs (retained with the exported class). The
+  // registry is a singleton in the SHARED avatars chunk, so these operate on the
+  // SAME instance the planner (app graph) and the `_build*` methods resolve
+  // against — a pack registered here is immediately visible to both. Primarily a
+  // hook for the deterministic test harness; the app registers via the planner.
+  static registerAvatarPack(def: AvatarPackDef): void { registerPack(def); }
+  static unregisterAvatarPack(id: string): void { unregisterPack(id); }
+  static setAvatarPacksConfig(cfg: AvatarPacksConfig | undefined): void { setAvatarPacksConfig(cfg); }
+  static resolveAvatarDef(id: string): AvatarDef { return resolveDef(id); }
 
   private _container: HTMLElement;
   private _scene: THREE.Scene | null = null;
@@ -6998,7 +6934,7 @@ export class ThreeDRenderer {
         const kind = forcedKind ?? (fromPool
           ? resolveAvatar(t.avatar, t.avatars, t.key, Math.random)
           : stableKind);
-        h = PET_KIND_SET.has(kind)
+        h = resolveDef(kind).rig === 'quadruped'
           ? this._buildQuadruped(wantColor, kind)
           : this._buildHumanoid(wantColor, kind);
         this._humanoids[t.key] = h;
@@ -7732,11 +7668,16 @@ export class ThreeDRenderer {
         rEl = rEl * (1 - env) + osc * env;
       }
 
-      h.leftHip.rotation.x = lHip; h.rightHip.rotation.x = rHip;
-      h.leftKnee.rotation.x = lKnee; h.rightKnee.rotation.x = rKnee;
+      // Leg joints are null on hover rigs (legless ghosts) — guard the writes;
+      // facing / nav / arm pose all still apply.
+      if (h.leftHip) h.leftHip.rotation.x = lHip;
+      if (h.rightHip) h.rightHip.rotation.x = rHip;
+      if (h.leftKnee) h.leftKnee.rotation.x = lKnee;
+      if (h.rightKnee) h.rightKnee.rotation.x = rKnee;
       h.leftShoulder.rotation.x = lSh; h.rightShoulder.rotation.x = rSh;
       h.leftElbow.rotation.x = lEl; h.rightElbow.rotation.x = rEl;
-      h.group.rotation.x = leanX;
+      // Static posture bias (elder stoop) folded into the speed-proportional lean.
+      h.group.rotation.x = leanX + h.posturePitch;
       h.group.rotation.y = h.facing + yawFidget;
       h.group.rotation.z = rollZ;
       }  // end humanoid (non-quad) pose branch
@@ -7774,7 +7715,13 @@ export class ThreeDRenderer {
       // root drops so the hip pivot (870 mm in the rig) rests on the seat,
       // and x/z pull onto the seat center. The WALKING term is the nav
       // position (obstacle-avoided), not the raw radar point.
-      const bob = Math.abs(sinP) * 40 * ampNorm * h.persBob;
+      // Hover rigs (legless ghosts) bob gently even when idle (fixed small amp),
+      // and float so the hip sits `hoverY` mm off the floor (root offset =
+      // hoverY − hipY; the blob still re-grounds on the actual floor below).
+      const bob = h.hover
+        ? Math.sin(now * 1.15 + h.idleOffset) * 34
+        : Math.abs(sinP) * 40 * ampNorm * h.persBob;
+      const floatOff = h.hover ? (h.hoverY - h.hipY) : 0;
       const HIP_Y = h.hipY;
       let px2: number, pz2: number, py2: number;
       if (anchor) {
@@ -7783,7 +7730,7 @@ export class ThreeDRenderer {
         const a = act, na = 1 - act;
         px2 = h.navX * na + standX * a;
         pz2 = h.navZ * na + standZ * a;
-        py2 = h.groundY + bob - squatDrop;
+        py2 = h.groundY + bob - squatDrop + floatOff;
       } else if (spot) {
         // Seated: drop the root so the hip pivot rests on the seat, pull x/z
         // onto the seat center. `seatYeff` (Part B) equals spot.seatY for normal
@@ -7823,9 +7770,9 @@ export class ThreeDRenderer {
           px2 = ax * (1 - u) + sx * u;
           pz2 = az * (1 - u) + sz * u;
         }
-        py2 = (h.groundY + bob) * stand + (seatYeff - HIP_Y) * sit;
+        py2 = (h.groundY + bob + floatOff) * stand + (seatYeff - HIP_Y) * sit;
       } else {
-        px2 = h.navX; pz2 = h.navZ; py2 = h.groundY + bob;
+        px2 = h.navX; pz2 = h.navZ; py2 = h.groundY + bob + floatOff;
       }
       // Lay-in-bed position: blend the root onto the mattress, offset toward the
       // FOOT so the (pitched-back) body reaches the pillows at the headboard end;
@@ -8195,7 +8142,7 @@ export class ThreeDRenderer {
   //   • a social pool when another live rig is within 3 m and in this rig's
   //     front hemisphere (±~75° of facing; body-forward is scene −Z).
   private _rollIdleBubble(h: Humanoid, ctx?: ActivityContext): string {
-    const personality = AVATAR_BUBBLES[h.avatarKind] ?? AVATAR_BUBBLES.adult!;
+    const personality = resolveDef(h.avatarKind).bubbles ?? ['💭'];
     const pool: string[] = [...personality, ...personality, ...BUBBLE_POOL_GENERAL];
     if (ctx?.weather) pool.push(...weatherBubblePool(ctx.weather));
     // Social: scan the other rigs for one this rig is looking at. Front-forward
@@ -8476,7 +8423,7 @@ export class ThreeDRenderer {
   // Everything is a child of `root` (the rig group) so the privacy-blur / fade
   // systems hide/fade them along with the body automatically.
   private _addAvatarAccessories(
-    kind: AvatarKind,
+    kind: LegacyAvatarKind,
     _spec: { skin: number; body: number },
     root: THREE.Group,
     c: {
@@ -8842,6 +8789,123 @@ export class ThreeDRenderer {
     // adult / child / alien: no extra accessory meshes.
   }
 
+  // ── Declarative accessories (pack members) ─────────────────────────────────
+  // Build `AvatarPrimitive[]` from a def onto the rig `root`. Anchors resolve to
+  // the SAME HEAD_R / headY / torsoY / hipY / TORSO_D metrics (humanoid) or quad
+  // metrics the imperative blocks use; sizes scale by `sk`; colors resolve
+  // tint/skin/body/dark/accent to the rig's materials. All parts are plain
+  // children of `root` (or the hand groups, so they swing) — the outline pass /
+  // privacy-blur / fade systems pick them up automatically (outline minDim
+  // auto-skips small parts; `outlineSkip` opts a part out). Materials via _mat().
+  private _addDeclarativeAccessories(
+    def: AvatarDef, root: THREE.Group,
+    ctx: {
+      color: number; sk: number;
+      tint: THREE.Material; skin: THREE.Material; bodyMat: THREE.Material; dark: THREE.Material;
+      // humanoid metrics
+      HEAD_R?: number; headY?: number; torsoY?: number; hipY?: number; TORSO_D?: number;
+      shoulderY?: number; shoulderX?: number; neckY?: number;
+      handL?: THREE.Group; handR?: THREE.Group;
+      // quadruped metrics
+      quadHead?: THREE.Group;
+      qBodyY?: number; qBodyH?: number; qFrontZ?: number; qRearZ?: number; qHeadR?: number;
+    },
+  ): void {
+    const prims = def.accessories;
+    if (!prims || !prims.length) return;
+    const sk = ctx.sk;
+    const HEAD_R = ctx.HEAD_R ?? 0, headY = ctx.headY ?? 0, torsoY = ctx.torsoY ?? 0;
+    const hipY = ctx.hipY ?? 0, TORSO_D = ctx.TORSO_D ?? 0;
+    const shoulderY = ctx.shoulderY ?? torsoY, shoulderX = ctx.shoulderX ?? 0;
+    const neckY = ctx.neckY ?? headY;
+    const qBodyY = ctx.qBodyY ?? 0, qBodyH = ctx.qBodyH ?? 0;
+    const qFrontZ = ctx.qFrontZ ?? 0, qRearZ = ctx.qRearZ ?? 0;
+
+    const matFor = (prim: AvatarPrimitive): THREE.Material => {
+      const col = prim.color;
+      if (col === 'tint' || col === 'accent') return ctx.tint;
+      if (col === 'skin') return ctx.skin;
+      if (col === 'body') return ctx.bodyMat;
+      if (col === 'dark') return ctx.dark;
+      return this._mat({
+        color: col, emissive: prim.emissive ?? col,
+        emissiveIntensity: prim.emissiveIntensity ?? 0.15,
+        metalness: prim.metalness ?? 0.1, roughness: prim.roughness ?? 0.6,
+      });
+    };
+
+    // Anchor → { parent, base position }. handL/handR parent the hand groups so
+    // the accessory swings; everything else parents `root`.
+    const anchorOf = (a: AvatarPrimitive['anchor']):
+      { parent: THREE.Object3D; x: number; y: number; z: number } => {
+      switch (a) {
+        case 'crown': return { parent: root, x: 0, y: headY + HEAD_R, z: 0 };
+        case 'head':  return { parent: root, x: 0, y: headY, z: 0 };
+        case 'face':  return { parent: root, x: 0, y: headY, z: -HEAD_R };
+        case 'chest': return { parent: root, x: 0, y: torsoY, z: -TORSO_D / 2 };
+        case 'back':  return { parent: root, x: 0, y: torsoY, z: TORSO_D / 2 };
+        case 'hip':   return { parent: root, x: 0, y: hipY, z: 0 };
+        // Torso-mounted shoulders (pauldrons / epaulettes) — parented to root so
+        // they do NOT swing with the arm.
+        case 'shoulderL': return { parent: root, x: -shoulderX, y: shoulderY, z: 0 };
+        case 'shoulderR': return { parent: root, x:  shoulderX, y: shoulderY, z: 0 };
+        case 'neck':  return { parent: root, x: 0, y: neckY, z: 0 };          // torso top, below head
+        case 'tailbone': return { parent: root, x: 0, y: hipY, z: TORSO_D / 2 };  // rear hip, +Z side
+        case 'handL': return { parent: ctx.handL ?? root, x: 0, y: 0, z: 0 };
+        case 'handR': return { parent: ctx.handR ?? root, x: 0, y: 0, z: 0 };
+        case 'qhead': return { parent: ctx.quadHead ?? root, x: 0, y: 0, z: 0 };
+        case 'qneck': return { parent: root, x: 0, y: qBodyY + qBodyH * 0.42, z: qFrontZ };
+        case 'qback': return { parent: root, x: 0, y: qBodyY + qBodyH * 0.5, z: 0 };
+        case 'qrump': return { parent: root, x: 0, y: qBodyY, z: qRearZ };
+        case 'root': default: return { parent: root, x: 0, y: 0, z: 0 };
+      }
+    };
+
+    for (const prim of prims) {
+      const size = prim.size;
+      // Normalize to a 3-tuple: scalars broadcast; a 2-tuple (documented cone
+      // [r,h] form) pads its last element (only cones use 2-tuples; the third
+      // slot is ignored by every branch that can receive one).
+      const arr: [number, number, number] = Array.isArray(size)
+        ? [size[0], size[1], size[2] ?? size[1]] : [size, size, size];
+      let geo: THREE.BufferGeometry;
+      const scale: [number, number, number] = [1, 1, 1];
+      switch (prim.shape) {
+        case 'box':
+          geo = new THREE.BoxGeometry(arr[0] * sk, arr[1] * sk, arr[2] * sk);
+          break;
+        case 'cylinder':
+          geo = new THREE.CylinderGeometry(arr[0] * sk, arr[1] * sk, arr[2] * sk, 16);
+          break;
+        case 'cone':
+          geo = new THREE.ConeGeometry(arr[0] * sk, arr[1] * sk, 16);
+          break;
+        case 'sphere':
+        default: {
+          const r = (Array.isArray(size) ? size[0] : size) * sk;
+          if (prim.sphereArc) {
+            const [ps, pl, ts, tl] = prim.sphereArc;
+            geo = new THREE.SphereGeometry(r, 16, 12, ps, pl, ts, tl);
+          } else {
+            geo = new THREE.SphereGeometry(r, 14, 10);
+          }
+          if (Array.isArray(size)) {   // ellipsoid: scale about the base radius
+            scale[1] = (arr[1] * sk) / r; scale[2] = (arr[2] * sk) / r;
+          }
+          break;
+        }
+      }
+      const mesh = new THREE.Mesh(geo, matFor(prim));
+      mesh.scale.set(scale[0], scale[1], scale[2]);
+      const a = anchorOf(prim.anchor);
+      const [ox, oy, oz] = prim.pos ?? [0, 0, 0];
+      mesh.position.set(a.x + ox * sk, a.y + oy * sk, a.z + oz * sk);
+      if (prim.rot) mesh.rotation.set(prim.rot[0], prim.rot[1], prim.rot[2]);
+      if (prim.outlineSkip) mesh.userData.outlineSkip = true;
+      a.parent.add(mesh);
+    }
+  }
+
   // ── Quadruped pet rig (cat / dog) ──────────────────────────────────────────
   // A separate builder from _buildHumanoid: horizontal torso, 4 two-segment
   // legs, head with ears + snout, 2-segment tail. Body-forward is local -Z (the
@@ -8849,27 +8913,51 @@ export class ThreeDRenderer {
   // math (updateTargets) turns the pet to face its velocity. Shares ALL the
   // Humanoid bookkeeping (nav/carrot/spring, scale/fade, blob shadow, outline
   // shells, plumbob); `quad: true` flips the per-frame pose to _applyQuadPose.
-  private _buildQuadruped(color: number, kind: AvatarKind): Humanoid {
-    const isCat = kind === 'cat';
-    // Cat ≈ 58% of the dog. Dog ≈ beagle: ~520 mm shoulder height.
-    const sk = isCat ? 0.58 : 1;
+  private _buildQuadruped(color: number, id: string): Humanoid {
+    // Resolve the def → quadruped spec. Defaults reproduce today's dog (beagle,
+    // ~505 mm shoulder pivot); the cat overrides sk + ears/tail/snout; pack
+    // species drive neck / ear / tail / snout / coat / belly variants.
+    const def = resolveDef(id);
+    const kind = def.id;
+    const qf = def.quadruped ?? {};
+    const qpers = def.personality ?? {};
+    const sk = qf.sk ?? 1;                       // 1.0 = dog; cat = 0.58
+    const legLen = qf.legLen ?? 1;
+    const neckLen = (qf.neckLen ?? 0) * sk;      // >0 inserts an angled neck
+    const snoutM = qf.snout ?? 1;                // snout length mult (0 = flat face)
+    const tailKind = qf.tail ?? 'up';
+    const tailLen = qf.tailLen ?? 1;
+    const earsKind = qf.ears ?? 'floppy';
+    const headScale = qf.headScale;
+    const coatCol = qf.coat === 'tint' || qf.coat === undefined ? color : qf.coat;
+    const earColor = qf.earColor ?? 0x6b4226;
+    const snoutColor = qf.snoutColor ?? 0xd9c3a5;
     const idleOffset = Math.random() * Math.PI * 2;
 
-    // Coat driven by the sensor tint (per-sensor colour coding survives);
-    // ears/snout/paws use fixed relatives.
-    const bodyMat = this._mat({ color, emissive: color, emissiveIntensity: 0.18, roughness: 0.7, metalness: 0.05 });
+    // Coat driven by the resolved tint/coat (per-sensor colour coding survives);
+    // ears/snout/paws use their own tones. `opacity` makes the whole coat
+    // translucent (ghostly pets) — the outline pass auto-skips transparent mats.
+    const coatOpacity = qf.opacity;
+    const bodyMat = this._mat({
+      color: coatCol, emissive: coatCol, emissiveIntensity: 0.18, roughness: 0.7, metalness: 0.05,
+      ...(coatOpacity !== undefined ? { transparent: true, opacity: coatOpacity } : {}),
+    });
     const dark = this._mat({ color: 0x202024, roughness: 0.75, metalness: 0.0 });
-    const pawMat = this._mat({ color: 0x2a2a2e, roughness: 0.8, metalness: 0.05 });
-    const earMat = this._mat({ color: isCat ? 0xf2a0b5 : 0x6b4226, emissive: isCat ? 0xf2a0b5 : 0x6b4226, emissiveIntensity: 0.12, roughness: 0.75, metalness: 0.0 });
-    const snoutMat = this._mat({ color: 0xd9c3a5, emissive: 0xd9c3a5, emissiveIntensity: 0.1, roughness: 0.7, metalness: 0.0 });
+    const pawMat = this._mat({ color: qf.pawColor ?? 0x2a2a2e, roughness: 0.8, metalness: 0.05 });
+    const earMat = this._mat({ color: earColor, emissive: earColor, emissiveIntensity: 0.12, roughness: 0.75, metalness: 0.0 });
+    const snoutMat = this._mat({ color: snoutColor, emissive: snoutColor, emissiveIntensity: 0.1, roughness: 0.7, metalness: 0.0 });
+    // Tail tip (segment 2 + tuft) may carry its own tone; else the coat.
+    const tailTipMat = qf.tailTipColor !== undefined
+      ? this._mat({ color: qf.tailTipColor, emissive: qf.tailTipColor, emissiveIntensity: 0.14, roughness: 0.75, metalness: 0.0 })
+      : bodyMat;
 
     // Proportions (mm). Body-forward = -Z (head end).
-    const LEG_UPPER_LEN = 235 * sk, LEG_LOWER_LEN = 220 * sk, PAW_H = 50 * sk;
+    const LEG_UPPER_LEN = 235 * sk * legLen, LEG_LOWER_LEN = 220 * sk * legLen, PAW_H = 50 * sk;
     const LEG_UPPER_R = 44 * sk, LEG_LOWER_R = 34 * sk;
     const backHeight = LEG_UPPER_LEN + LEG_LOWER_LEN + PAW_H;   // pivot height (~505 dog)
-    const BODY_LEN = 640 * sk, BODY_W = 200 * sk, BODY_H = 240 * sk;
+    const BODY_LEN = (qf.bodyLen ?? 640) * sk, BODY_W = (qf.bodyW ?? 200) * sk, BODY_H = (qf.bodyH ?? 240) * sk;
     const bodyY = backHeight + BODY_H * 0.30;                   // body center height
-    const HEAD_R = 132 * sk;
+    const HEAD_R = (qf.headR ?? 132) * sk;
     const frontZ = -BODY_LEN / 2, rearZ = BODY_LEN / 2;
 
     const root = new THREE.Group();
@@ -8895,6 +8983,13 @@ export class ThreeDRenderer {
     rump.scale.set(1, 1, 0.7);
     rump.position.set(0, bodyY, rearZ - BODY_W * 0.2);
     root.add(rump);
+    // Optional lighter under-belly panel (pack species: horse/cow/etc.).
+    if (qf.belly) {
+      const bellyMat = this._mat({ color: qf.belly, emissive: qf.belly, emissiveIntensity: 0.12, roughness: 0.72, metalness: 0.0 });
+      const belly = new THREE.Mesh(new THREE.BoxGeometry(BODY_W * 0.86, BODY_H * 0.4, BODY_LEN * 0.82), bellyMat);
+      belly.position.set(0, bodyY - BODY_H * 0.34, 0);
+      root.add(belly);
+    }
 
     // Two-segment leg: pivot → thigh → knee → shin → paw. Paw toes point -Z.
     const makeLeg = (x: number, z: number) => {
@@ -8917,63 +9012,101 @@ export class ThreeDRenderer {
     const BR = makeLeg( legX, rearZ  - BODY_LEN * 0.14);
     root.add(FL.hip, FR.hip, BL.hip, BR.hip);
 
-    // Head group at the front, raised on a short neck.
+    // Optional neck (giraffe / horse): an angled cylinder from the body front up
+    // to a raised head. Head base rises by neckLen.
+    if (neckLen > 0) {
+      const neck = segment(HEAD_R * 0.5, HEAD_R * 0.42, neckLen + HEAD_R * 0.4, bodyMat);
+      neck.position.set(0, bodyY + BODY_H * 0.42 + neckLen, frontZ);
+      neck.rotation.x = -0.5;   // leans forward toward the head
+      root.add(neck);
+    }
+
+    // Head group at the front, raised on a short neck (+ neckLen when present).
     const headG = new THREE.Group();
-    headG.position.set(0, bodyY + BODY_H * 0.42, frontZ - HEAD_R * 0.25);
+    headG.position.set(0, bodyY + BODY_H * 0.42 + neckLen, frontZ - HEAD_R * 0.25);
     root.add(headG);
     const head = new THREE.Mesh(new THREE.SphereGeometry(HEAD_R, 16, 12), bodyMat);
-    if (!isCat) head.scale.set(1, 0.95, 1.05);
+    if (headScale) head.scale.set(headScale[0], headScale[1], headScale[2]);
     headG.add(head);
-    const snout = new THREE.Mesh(
-      new THREE.BoxGeometry(HEAD_R * (isCat ? 0.5 : 0.62), HEAD_R * 0.42, HEAD_R * (isCat ? 0.5 : 0.7)),
-      snoutMat);
-    snout.position.set(0, -HEAD_R * 0.24, -HEAD_R * (isCat ? 0.85 : 1.0));
-    headG.add(snout);
-    const nose = new THREE.Mesh(new THREE.SphereGeometry(HEAD_R * 0.16, 8, 6), dark);
-    nose.position.set(0, -HEAD_R * 0.16, -HEAD_R * (isCat ? 1.12 : 1.35));
-    headG.add(nose);
+    if (snoutM > 0) {
+      const snout = new THREE.Mesh(
+        new THREE.BoxGeometry(HEAD_R * 0.62 * snoutM, HEAD_R * 0.42, HEAD_R * 0.7 * snoutM),
+        snoutMat);
+      snout.position.set(0, -HEAD_R * 0.24, -HEAD_R * (0.3 + 0.7 * snoutM));
+      headG.add(snout);
+      const nose = new THREE.Mesh(new THREE.SphereGeometry(HEAD_R * 0.16, 8, 6), dark);
+      nose.position.set(0, -HEAD_R * 0.16, -HEAD_R * (0.3 + 0.7 * snoutM) - HEAD_R * 0.35 * snoutM);
+      headG.add(nose);
+    }
     for (const ex of [-1, 1]) {
       const eye = new THREE.Mesh(new THREE.SphereGeometry(HEAD_R * 0.15, 10, 8), dark);
       eye.position.set(ex * HEAD_R * 0.36, HEAD_R * 0.12, -HEAD_R * 0.86);
       headG.add(eye);
     }
-    // Ears on pivots (idle flick). Cat = pointed tri-cones; dog = floppy boxes.
+    // Ears on pivots (idle flick). pointy=cat cones, floppy=dog hanging boxes,
+    // round=spheres, long=upright boxes (rabbit), none=no ears.
     const ears: THREE.Group[] = [];
-    for (const ex of [-1, 1]) {
-      const earPivot = new THREE.Group();
-      earPivot.position.set(ex * HEAD_R * 0.55, HEAD_R * 0.6, HEAD_R * 0.1);
-      if (isCat) {
-        const ear = new THREE.Mesh(new THREE.ConeGeometry(HEAD_R * 0.34, HEAD_R * 0.75, 4), earMat);
-        ear.position.set(0, HEAD_R * 0.3, 0);
-        earPivot.add(ear);
-      } else {
-        const ear = new THREE.Mesh(new THREE.BoxGeometry(HEAD_R * 0.34, HEAD_R * 0.85, HEAD_R * 0.14), earMat);
-        ear.position.set(0, -HEAD_R * 0.2, 0);   // hangs down (floppy)
-        earPivot.add(ear);
-        earPivot.rotation.z = ex * 0.25;          // baked outward flop
+    if (earsKind !== 'none') {
+      for (const ex of [-1, 1]) {
+        const earPivot = new THREE.Group();
+        earPivot.position.set(ex * HEAD_R * 0.55, HEAD_R * 0.6, HEAD_R * 0.1);
+        if (earsKind === 'pointy') {
+          const ear = new THREE.Mesh(new THREE.ConeGeometry(HEAD_R * 0.34, HEAD_R * 0.75, 4), earMat);
+          ear.position.set(0, HEAD_R * 0.3, 0);
+          earPivot.add(ear);
+        } else if (earsKind === 'round') {
+          const ear = new THREE.Mesh(new THREE.SphereGeometry(HEAD_R * 0.32, 12, 10), earMat);
+          ear.position.set(0, HEAD_R * 0.16, 0);
+          earPivot.add(ear);
+        } else if (earsKind === 'long') {
+          const ear = new THREE.Mesh(new THREE.BoxGeometry(HEAD_R * 0.28, HEAD_R * 1.6, HEAD_R * 0.2), earMat);
+          ear.position.set(0, HEAD_R * 0.8, 0);   // upright (rabbit)
+          earPivot.add(ear);
+        } else {   // floppy (dog)
+          const ear = new THREE.Mesh(new THREE.BoxGeometry(HEAD_R * 0.34, HEAD_R * 0.85, HEAD_R * 0.14), earMat);
+          ear.position.set(0, -HEAD_R * 0.2, 0);   // hangs down (floppy)
+          earPivot.add(ear);
+          earPivot.rotation.z = ex * 0.25;          // baked outward flop
+        }
+        headG.add(earPivot);
+        ears.push(earPivot);
       }
-      headG.add(earPivot);
-      ears.push(earPivot);
     }
 
-    // Tail: base pivot at the rump + a mid pivot at the first segment's tip. The
-    // base segment is tilted up-and-back (baked into the mesh); animation sways
-    // rotation.y and tucks with rotation.x on curl.
+    // Tail: base pivot at the rump + a mid pivot at the first segment's tip.
+    // `tail` picks the base tilt; animation sways rotation.y + tucks on curl.
+    // 'none' → no tail (the pose code guards on quadTail.length).
+    const tailPivots: THREE.Group[] = [];
     const tailBase = new THREE.Group();
-    tailBase.position.set(0, bodyY + BODY_H * 0.18, rearZ - 10 * sk);
-    const tLen1 = (isCat ? 230 : 160) * sk, tLen2 = (isCat ? 200 : 130) * sk;
-    const tTheta = -2.35;
-    const tseg1 = segment(22 * sk, 16 * sk, tLen1, bodyMat);
-    tseg1.rotation.x = tTheta;
-    tailBase.add(tseg1);
-    const tailMid = new THREE.Group();
-    // tip of seg1 in tailBase frame: (0,-tLen1,0) rotated by Rx(tTheta).
-    tailMid.position.set(0, -tLen1 * Math.cos(tTheta), -tLen1 * Math.sin(tTheta));
-    tailBase.add(tailMid);
-    const tseg2 = segment(15 * sk, 10 * sk, tLen2, bodyMat);
-    tseg2.rotation.x = -2.0;
-    tailMid.add(tseg2);
-    root.add(tailBase);
+    if (tailKind !== 'none') {
+      tailBase.position.set(0, bodyY + BODY_H * 0.18, rearZ - 10 * sk);
+      const tLen1 = 160 * sk * tailLen, tLen2 = 130 * sk * tailLen;
+      const tTheta = tailKind === 'down' ? -0.6 : -2.35;   // up-back default; down droops
+      const tseg1 = segment(22 * sk, 16 * sk, tLen1, bodyMat);
+      tseg1.rotation.x = tTheta;
+      tailBase.add(tseg1);
+      const tailMid = new THREE.Group();
+      // tip of seg1 in tailBase frame: (0,-tLen1,0) rotated by Rx(tTheta).
+      tailMid.position.set(0, -tLen1 * Math.cos(tTheta), -tLen1 * Math.sin(tTheta));
+      tailBase.add(tailMid);
+      const tseg2 = segment(15 * sk, 10 * sk, tLen2, tailTipMat);
+      tseg2.rotation.x = tailKind === 'curl' ? -2.8 : -2.0;   // curl tucks the tip further
+      tailMid.add(tseg2);
+      if (tailKind === 'tuft') {
+        const tuft = new THREE.Mesh(new THREE.SphereGeometry(24 * sk, 10, 8), tailTipMat);
+        tuft.position.set(0, -tLen2, 0);
+        tseg2.add(tuft);
+      }
+      root.add(tailBase);
+      tailPivots.push(tailBase, tailMid);
+    }
+
+    // Declarative accessories (horns, mane, wings, saddle — pack species). Added
+    // BEFORE the outline pass so they get cartoon shells too.
+    this._addDeclarativeAccessories(def, root, {
+      color, sk, tint: bodyMat, skin: bodyMat, bodyMat, dark,
+      quadHead: headG, qBodyY: bodyY, qBodyH: BODY_H, qFrontZ: frontZ, qRearZ: rearZ, qHeadR: HEAD_R,
+    });
 
     // Cartoon outlines (per-rig clone so a slow despawn fades this rig alone).
     this._addOutlines(new THREE.Group(), 8, 50);   // ensure the shared material exists
@@ -9000,12 +9133,17 @@ export class ThreeDRenderer {
       avatarKind: kind,
       quad: true,
       quadLegs: [FL, FR, BL, BR],
-      quadTail: [tailBase, tailMid],
+      quadTail: tailPivots,
       quadHead: headG,
       quadEars: ears,
       hipY: backHeight, shoulderY: bodyY, headTopReach: headG.position.y,
       armUpper: LEG_UPPER_LEN, armLower: LEG_LOWER_LEN, legM,
-      persBob: 1, persSway: 1, persCadence: 1, persAmp: 1,
+      // Quadrupeds now read def.personality walk multipliers exactly like
+      // humanoids (Batch C1); pets keep the no-bubbles rule (chatterNext stays
+      // parked, and all bubble/blur/activity paths are gated on !h.quad upstream).
+      persBob: qpers.bobMul ?? 1, persSway: qpers.swayMul ?? 1,
+      persCadence: qpers.cadenceMul ?? 1, persAmp: qpers.ampMul ?? 1,
+      posturePitch: def.posture?.pitch ?? 0, hover: false, hoverY: 0,
       chatterNext: 9e9, chatterT: 0, chatterGlyph: null,   // pets never chatter
       torso,
       plumbob,
@@ -9083,7 +9221,7 @@ export class ThreeDRenderer {
     const bodyPitch = haunch * 0.34 - curl * 0.04;
     const stillness = 1 - Math.min(1, speedMs / 0.4);
     const idleRoll = Math.sin(now * 0.6 + h.idleOffset) * 0.03 * stillness * (1 - settle);
-    h.group.rotation.x = bodyPitch;
+    h.group.rotation.x = bodyPitch + h.posturePitch;
     h.group.rotation.y = h.facing;
     h.group.rotation.z = idleRoll;
     // Head bob/nod while trotting, gentle look-around while idle; curl tucks the
@@ -9115,65 +9253,48 @@ export class ThreeDRenderer {
     }
   }
 
-  private _buildHumanoid(color: number, kind: AvatarKind = 'adult'): Humanoid {
-    // ── Per-variant constants (one tidy block). `sk` scales the whole skeleton
+  private _buildHumanoid(color: number, id: string = 'adult'): Humanoid {
+    // ── Resolve the avatar def → a concrete Spec. `sk` scales the whole skeleton
     // length; `headR` is an ABSOLUTE head radius (so the child stays big-headed
     // relative to its small body); `limbR` thins/thickens the limbs. `skin` /
-    // `body` / `shoe` are the head-limb, torso, and foot colours (0 = use the
+    // `body` / `shoe` are the head-limb, torso, and foot colours ('tint' = the
     // sensor tint). `headShape`/`hands`/`eyes` pick the silhouette details;
-    // `steel` swaps a brushed-metal look on the skin material.
-    const GREY = 0x9aa3ad, CHARCOAL = 0x2c2e34, NEARBLACK = 0x161619;
-    const PALE = 0xe7c6a4, MATTE = 0x1a1a1e, GOLD = 0xcaa53a, GREEN = 0x86d46a;
-    const PLUSH = 0x8b5e3c, MOUSE = 0x9e9e9e, DOG = 0xa1704a, DUCKW = 0xf2f0e6;
-    const WHITE = 0xf2f2f2, ROBE = 0x7b718f;
-    interface Spec {
-      sk: number; headR: number; headShape: 'sphere' | 'box'; limbR: number;
-      skin: number; body: number; shoe: number; emI: number;
-      hands: 'sphere' | 'box';
-      eyes: 'dots' | 'visor' | 'almond' | 'redvisor' | 'shades' | 'slit' | 'halfred';
-      steel: boolean;
-      // Optional proportion/colour knobs (default 1 / unset):
-      armL?: number;      // arm length multiplier (duck's stubby wings)
-      legL?: number;      // leg length multiplier (teddy's stubby legs)
-      footMul?: [number, number, number];  // foot w/h/d multipliers (duck flippers)
-      legColor?: number;  // leg material colour override (duck's yellow legs)
-    }
-    // Partial: cat/dog are quadrupeds built by _buildQuadruped, never here.
-    const SPECS: Partial<Record<AvatarKind, Spec>> = {
-      adult:        { sk: 1,    headR: 126, headShape: 'sphere', limbR: 1,   skin: color, body: color,     shoe: 0x1a1a1f, emI: 0.25, hands: 'sphere', eyes: 'dots',    steel: false },
-      child:        { sk: 0.6,  headR: 107, headShape: 'sphere', limbR: 1,   skin: color, body: color,     shoe: 0x1a1a1f, emI: 0.25, hands: 'sphere', eyes: 'dots',    steel: false },
-      robot:        { sk: 1,    headR: 128, headShape: 'box',    limbR: 1,   skin: GREY,  body: GREY,      shoe: 0x33363c, emI: 0.10, hands: 'box',    eyes: 'visor',   steel: true  },
-      alien:        { sk: 1,    headR: 158, headShape: 'sphere', limbR: 0.8, skin: GREEN, body: GREEN,     shoe: 0x1a1a1f, emI: 0.35, hands: 'sphere', eyes: 'almond',  steel: false },
-      professional: { sk: 1,    headR: 126, headShape: 'sphere', limbR: 1,   skin: color, body: CHARCOAL,  shoe: 0x141416, emI: 0.20, hands: 'sphere', eyes: 'dots',    steel: false },
-      hacker:       { sk: 1,    headR: 126, headShape: 'sphere', limbR: 1,   skin: PALE,  body: NEARBLACK, shoe: 0x141416, emI: 0.15, hands: 'sphere', eyes: 'dots',    steel: false },
-      movie_star:   { sk: 1,    headR: 126, headShape: 'sphere', limbR: 1,   skin: color, body: GOLD,      shoe: 0x0a0a0c, emI: 0.20, hands: 'sphere', eyes: 'shades',  steel: false },
-      // Classic shinobi: matte black + full hood wrap + skin-tone eye slit +
-      // katana + tint sash. NO metal, NO emissive (distinct from ninja_cyborg).
-      ninja:        { sk: 1,    headR: 120, headShape: 'sphere', limbR: 1,   skin: MATTE, body: MATTE,     shoe: 0x0a0a0c, emI: 0.05, hands: 'sphere', eyes: 'slit',    steel: false },
-      // Half-man half-machine: adult tint body/head, steel right arm + right
-      // leg, steel head half-plate + red implant eye on the plated (+x) side.
-      cyborg:       { sk: 1,    headR: 126, headShape: 'sphere', limbR: 1,   skin: color, body: color,     shoe: 0x1a1a1f, emI: 0.25, hands: 'sphere', eyes: 'halfred', steel: false },
-      ninja_cyborg: { sk: 1,    headR: 120, headShape: 'sphere', limbR: 1,   skin: MATTE, body: MATTE,     shoe: 0x0a0a0c, emI: 0.05, hands: 'sphere', eyes: 'redvisor',steel: false },
-      athlete:      { sk: 1,    headR: 126, headShape: 'sphere', limbR: 1,   skin: color, body: color,     shoe: 0xf2f2f2, emI: 0.25, hands: 'sphere', eyes: 'dots',    steel: false },
-      // ── Mascots & characters ─────────────────────────────────────────────
-      teddy_bear:   { sk: 0.9,  headR: 140, headShape: 'sphere', limbR: 1.3, skin: PLUSH, body: PLUSH,     shoe: PLUSH,    emI: 0.20, hands: 'sphere', eyes: 'dots',    steel: false, armL: 0.8, legL: 0.8 },
-      cartoon_mouse:{ sk: 0.85, headR: 120, headShape: 'sphere', limbR: 0.9, skin: MOUSE, body: MOUSE,     shoe: 0x555a60, emI: 0.20, hands: 'sphere', eyes: 'dots',    steel: false },
-      cartoon_dog:  { sk: 0.95, headR: 128, headShape: 'sphere', limbR: 1,   skin: DOG,   body: DOG,       shoe: 0x5a3d28, emI: 0.20, hands: 'sphere', eyes: 'dots',    steel: false },
-      cartoon_duck: { sk: 0.85, headR: 122, headShape: 'sphere', limbR: 0.9, skin: DUCKW, body: DUCKW,     shoe: 0xe8a020, emI: 0.20, hands: 'sphere', eyes: 'dots',    steel: false, armL: 0.6, footMul: [1.6, 0.7, 1.35], legColor: 0xe8a020 },
-      // ── Occupations & archetypes ─────────────────────────────────────────
-      cowboy:       { sk: 1,    headR: 126, headShape: 'sphere', limbR: 1,   skin: color, body: color,     shoe: 0x5a3d28, emI: 0.22, hands: 'sphere', eyes: 'dots',    steel: false },
-      magician:     { sk: 1,    headR: 126, headShape: 'sphere', limbR: 1,   skin: color, body: NEARBLACK, shoe: 0x0a0a0c, emI: 0.20, hands: 'sphere', eyes: 'dots',    steel: false },
-      farmer:       { sk: 1,    headR: 126, headShape: 'sphere', limbR: 1,   skin: color, body: color,     shoe: 0x5a3d28, emI: 0.22, hands: 'sphere', eyes: 'dots',    steel: false },
-      tech_expert:  { sk: 1,    headR: 126, headShape: 'sphere', limbR: 1,   skin: color, body: NEARBLACK, shoe: 0x33363c, emI: 0.20, hands: 'sphere', eyes: 'dots',    steel: false },
-      supermodel:   { sk: 1.05, headR: 124, headShape: 'sphere', limbR: 0.9, skin: color, body: color,     shoe: 0xf2f2f2, emI: 0.25, hands: 'sphere', eyes: 'dots',    steel: false },
-      wise_oracle:  { sk: 1,    headR: 126, headShape: 'sphere', limbR: 1,   skin: PALE,  body: ROBE,      shoe: 0x3a3542, emI: 0.15, hands: 'sphere', eyes: 'dots',    steel: false },
-      astronaut:    { sk: 1,    headR: 118, headShape: 'sphere', limbR: 1.1, skin: WHITE, body: WHITE,     shoe: WHITE,    emI: 0.15, hands: 'sphere', eyes: 'dots',    steel: false },
+    // `steel` swaps a brushed-metal look on the skin material. Fields absent from
+    // the def fall back to adult values — so a bare `{}` humanoid IS the adult.
+    const def = resolveDef(id);
+    const kind = def.id;   // concrete resolved id (used for legacy steel/ear/accessory branches)
+    const hf = def.humanoid ?? {};
+    // 'tint' → the passed-in identity color, exactly like the old `skin: color`
+    // (done BEFORE the pants check below so `spec.skin === color` still detects a
+    // tint-legged rig identically).
+    const col = (v: number | 'tint' | undefined, dflt: number): number =>
+      v === undefined ? dflt : (v === 'tint' ? color : v);
+    const spec = {
+      sk: hf.sk ?? 1,
+      headR: hf.headR ?? 126,
+      headShape: hf.headShape ?? 'sphere',
+      limbR: hf.limbR ?? 1,
+      skin: col(hf.skin, color),
+      body: col(hf.body, color),
+      shoe: hf.shoe ?? 0x1a1a1f,
+      emI: hf.emI ?? 0.25,
+      hands: hf.hands ?? 'sphere',
+      eyes: hf.eyes ?? 'dots',
+      steel: hf.steel ?? false,
+      armL: hf.armL, legL: hf.legL, footMul: hf.footMul, legColor: hf.legColor,
+      earSkip: hf.earSkip ?? false,
+      // ── Batch C1 rig extensions ──
+      noFace: hf.noFace ?? false,
+      opacity: hf.opacity,
+      hover: hf.hover,
+      limbColors: hf.limbColors ?? {},
     };
-    const spec = SPECS[kind] ?? SPECS.adult!;
     const sk = spec.sk;
+    const noFace = spec.noFace;
+    const hover = spec.hover !== undefined;   // legless floating rig
     const armL = spec.armL ?? 1, legL = spec.legL ?? 1;
     const [fmW, fmH, fmD] = spec.footMul ?? [1, 1, 1];
-    const pers = AVATAR_PERSONALITY[kind] ?? {};
+    const pers = def.personality ?? {};
     const idleOffset = Math.random() * Math.PI * 2;
 
     // Sims proportions: head and hands run oversized (~1.15×) so figures read
@@ -9198,12 +9319,15 @@ export class ThreeDRenderer {
     const armLowerReach = ARM_LOWER_LEN + HAND_R * 0.5;
     const legM = 0.81 * (hipY / 870);   // adult → 0.81 exactly; scales with height
 
+    // `opacity` (0..1) makes skin + body translucent (ghosts / energy beings).
+    // The outline pass auto-skips transparent materials, so no shells fringe them.
+    const opac = spec.opacity !== undefined ? { transparent: true, opacity: spec.opacity } : {};
     const skin = this._mat(spec.steel
-      ? { color: spec.skin, emissive: spec.skin, emissiveIntensity: spec.emI, metalness: 0.7, roughness: 0.35 }
-      : { color: spec.skin, emissive: spec.skin, emissiveIntensity: spec.emI, metalness: 0.1, roughness: 0.6 });
+      ? { color: spec.skin, emissive: spec.skin, emissiveIntensity: spec.emI, metalness: 0.7, roughness: 0.35, ...opac }
+      : { color: spec.skin, emissive: spec.skin, emissiveIntensity: spec.emI, metalness: 0.1, roughness: 0.6, ...opac });
     const bodyMat = spec.body === spec.skin ? skin : this._mat({
       color: spec.body, emissive: spec.body, emissiveIntensity: spec.emI * 0.6,
-      metalness: spec.steel ? 0.7 : 0.1, roughness: spec.steel ? 0.35 : 0.62,
+      metalness: spec.steel ? 0.7 : 0.1, roughness: spec.steel ? 0.35 : 0.62, ...opac,
     });
     const dark = this._mat({
       color: 0x202024, roughness: 0.75, metalness: 0.0,
@@ -9266,20 +9390,22 @@ export class ThreeDRenderer {
     };
 
     // Two-segment arm: shoulder pivot → upper → elbow pivot → forearm → hand.
-    // `armMat` lets a variant swap the whole arm (ninja's steel right arm).
-    const makeArm = (xOffset: number, armMat: THREE.Material = skin) => {
+    // `armMat` swaps the whole arm incl. hand (ninja's steel right arm); the
+    // optional `segMat` (Batch C1 limbColors) recolors only the two SEGMENTS +
+    // elbow bump, leaving the hand on `armMat` (defaults to armMat = today).
+    const makeArm = (xOffset: number, armMat: THREE.Material = skin, segMat: THREE.Material = armMat) => {
       const shoulder = new THREE.Group();
       shoulder.position.set(xOffset, shoulderY, 0);
-      shoulder.add(segment(ARM_UPPER_R, ARM_UPPER_R * 0.92, ARM_UPPER_LEN, armMat));
+      shoulder.add(segment(ARM_UPPER_R, ARM_UPPER_R * 0.92, ARM_UPPER_LEN, segMat));
       // Visible elbow bump
-      const elbowBall = new THREE.Mesh(new THREE.SphereGeometry(ARM_UPPER_R * 0.95, 10, 8), armMat);
+      const elbowBall = new THREE.Mesh(new THREE.SphereGeometry(ARM_UPPER_R * 0.95, 10, 8), segMat);
       elbowBall.position.set(0, -ARM_UPPER_LEN, 0);
       shoulder.add(elbowBall);
 
       const elbow = new THREE.Group();
       elbow.position.set(0, -ARM_UPPER_LEN, 0);
       shoulder.add(elbow);
-      elbow.add(segment(ARM_LOWER_R, ARM_LOWER_R * 0.85, ARM_LOWER_LEN, armMat));
+      elbow.add(segment(ARM_LOWER_R, ARM_LOWER_R * 0.85, ARM_LOWER_LEN, segMat));
 
       const hand = spec.hands === 'box'
         ? new THREE.Mesh(new THREE.BoxGeometry(HAND_R * 1.5, HAND_R * 1.5, HAND_R * 1.3), armMat)
@@ -9304,16 +9430,33 @@ export class ThreeDRenderer {
     root.add(torso);
 
     // Head + face features (eyes/nose/mouth on -Z so facing is obvious).
-    const head = spec.headShape === 'box'
-      ? new THREE.Mesh(new THREE.BoxGeometry(HEAD_R * 1.7, HEAD_R * 1.7, HEAD_R * 1.6), skin)
-      : new THREE.Mesh(new THREE.SphereGeometry(HEAD_R, 18, 14), skin);
+    //  box      — cube (robot).
+    //  cylinder — upright can ≈ minifig proportions (r 0.82·HEAD_R, h 1.7·HEAD_R).
+    //  oval     — sphere stretched tall + slim (gaunt / elongated heads).
+    //  sphere   — default round head.
+    let head: THREE.Mesh;
+    if (spec.headShape === 'box') {
+      head = new THREE.Mesh(new THREE.BoxGeometry(HEAD_R * 1.7, HEAD_R * 1.7, HEAD_R * 1.6), skin);
+    } else if (spec.headShape === 'cylinder') {
+      head = new THREE.Mesh(new THREE.CylinderGeometry(HEAD_R * 0.82, HEAD_R * 0.82, HEAD_R * 1.7, 16), skin);
+    } else if (spec.headShape === 'oval') {
+      head = new THREE.Mesh(new THREE.SphereGeometry(HEAD_R, 18, 14), skin);
+      head.scale.set(0.85, 1.25, 0.9);
+    } else {
+      head = new THREE.Mesh(new THREE.SphereGeometry(HEAD_R, 18, 14), skin);
+    }
     head.position.set(0, headY, 0);
     root.add(head);
 
     // Face features sit on the -Z side of the head: that's the body-forward
     // side (a positive hip rotation lands the foot at body-local -Z, which
-    // is also where the body rotation aligns with the velocity vector).
-    const faceZ = -HEAD_R * (spec.headShape === 'box' ? 0.82 : 0.86);
+    // is also where the body rotation aligns with the velocity vector). The face
+    // depth tracks the head's front surface so eyes/nose/mouth stay planted for
+    // box (0.82), cylinder (0.82·r), oval (0.9·z-scale), and sphere (0.86).
+    const faceZ = -HEAD_R * (
+      spec.headShape === 'box' || spec.headShape === 'cylinder' ? 0.82
+        : spec.headShape === 'oval' ? 0.9
+          : 0.86);
     // Reusable feature builders — heads run oversized (Sims-style) so these read
     // at typical camera distance. An eye = white sclera sphere (flattened into
     // the face) + a proud dark iris/pupil; a brow = a small dark box angled
@@ -9332,19 +9475,15 @@ export class ThreeDRenderer {
       root.add(pupil);
     };
     const makeBrow = (sx: number) => {
+      if (noFace) return;   // noFace skips brows (eyes still render per the enum)
       const brow = new THREE.Mesh(
         new THREE.BoxGeometry(HEAD_R * 0.34, HEAD_R * 0.08, HEAD_R * 0.06), dark);
       brow.position.set(sx * HEAD_R * 0.4, headY + HEAD_R * 0.33, faceZ - HEAD_R * 0.02);
       brow.rotation.z = -sx * 0.14;   // inner end dips toward the nose
       root.add(brow);
     };
-    // Kinds whose accessory hair / hood / helmet / ears cover the side of the
-    // head — no skin ears for these (they'd poke through the costume).
-    const EAR_SKIP: ReadonlySet<AvatarKind> = new Set<AvatarKind>([
-      'robot', 'alien', 'ninja', 'ninja_cyborg', 'astronaut', 'supermodel',
-      'tech_expert', 'hacker', 'wise_oracle',
-      'teddy_bear', 'cartoon_mouse', 'cartoon_dog', 'cartoon_duck',
-    ]);
+    // Skin ears are skipped (spec.earSkip) on kinds whose accessory hair / hood /
+    // helmet / ears cover the side of the head (they'd poke through the costume).
     const makeEar = (sx: number) => {
       const ear = new THREE.Mesh(new THREE.SphereGeometry(HEAD_R * 0.25, 10, 8), skin);
       ear.scale.set(0.5, 0.95, 0.72);
@@ -9386,7 +9525,7 @@ export class ThreeDRenderer {
       // normal dark eyes visible in the slit. No glow, no metal.
       const band = new THREE.Mesh(
         new THREE.BoxGeometry(HEAD_R * 1.3, HEAD_R * 0.36, HEAD_R * 0.24),
-        this._mat({ color: PALE, emissive: PALE, emissiveIntensity: 0.15, roughness: 0.6, metalness: 0.05 }),
+        this._mat({ color: 0xe7c6a4, emissive: 0xe7c6a4, emissiveIntensity: 0.15, roughness: 0.6, metalness: 0.05 }),   // PALE skin tone (ninja slit band)
       );
       // Proud of the hood shell (r ≈ 1.14·HEAD_R, added in accessories) so the
       // slit reads as an opening in the wrap.
@@ -9410,8 +9549,9 @@ export class ThreeDRenderer {
       root.add(eyeRed);
     }
     // Nose: a small darkened-skin bump (catches its own toon band so it reads),
-    // skipped on the faceless robot visor / almond alien / masked ninja slit.
-    if (spec.eyes !== 'visor' && spec.eyes !== 'almond' && spec.eyes !== 'slit') {
+    // skipped on the faceless robot visor / almond alien / masked ninja slit, and
+    // on any `noFace` rig (masked / skull / tentacle faces).
+    if (!noFace && spec.eyes !== 'visor' && spec.eyes !== 'almond' && spec.eyes !== 'slit') {
       const nose = new THREE.Mesh(new THREE.SphereGeometry(HEAD_R * 0.15, 8, 6), noseMat);
       nose.scale.set(0.8, 1, 0.9);
       nose.position.set(0, headY - HEAD_R * 0.06, faceZ - HEAD_R * 0.12);
@@ -9419,8 +9559,8 @@ export class ThreeDRenderer {
     }
     // Mouth: a slim dark line, given a gentle downward bow (two side segments
     // dipped at the corners) so it reads as a friendly closed smile rather than
-    // a flat dash. Skipped on the robot visor / ninja slit.
-    if (spec.eyes !== 'visor' && spec.eyes !== 'slit') {
+    // a flat dash. Skipped on the robot visor / ninja slit, and any `noFace` rig.
+    if (!noFace && spec.eyes !== 'visor' && spec.eyes !== 'slit') {
       const mouthMat = dark;
       const mid = new THREE.Mesh(
         new THREE.BoxGeometry(HEAD_R * 0.3, HEAD_R * 0.07, HEAD_R * 0.05), mouthMat);
@@ -9437,7 +9577,7 @@ export class ThreeDRenderer {
     // Ears: skin half-domes on the sides for kinds not wearing side-covering
     // hair / hoods / helmets. Cyborg shows only its organic (−x) ear (the +x
     // side carries the steel head plate).
-    if (!EAR_SKIP.has(kind) && spec.headShape !== 'box') {
+    if (!spec.earSkip && spec.headShape !== 'box') {
       if (kind === 'cyborg') makeEar(-1);
       else { makeEar(-1); makeEar(1); }
     }
@@ -9468,21 +9608,51 @@ export class ThreeDRenderer {
       : legIsTint
         ? this._mat({ color: pants, emissive: pants, emissiveIntensity: spec.emI * 0.5, metalness: 0.1, roughness: 0.68 })
         : skin;
-    const leftLeg  = makeLeg(-TORSO_W / 4, baseLegMat);
-    const rightLeg = makeLeg( TORSO_W / 4, kind === 'cyborg' ? steelMat : baseLegMat);
-    const leftArm  = makeArm(-(TORSO_W / 2 + ARM_UPPER_R * 0.7));
-    const rightArm = makeArm( TORSO_W / 2 + ARM_UPPER_R * 0.7, steelMat);
+    // Per-limb material overrides (Batch C1 limbColors): recolor BOTH segments of
+    // a limb, not its hand/shoe. undefined → the limb's default material.
+    const lc = spec.limbColors;
+    const limbMat = (c?: number): THREE.Material | undefined => c === undefined ? undefined
+      : this._mat({ color: c, emissive: c, emissiveIntensity: spec.emI * 0.5, metalness: 0.1, roughness: 0.6, ...opac });
+    const armLSeg = limbMat(lc.armL), armRSeg = limbMat(lc.armR);
+    const legLSeg = limbMat(lc.legL), legRSeg = limbMat(lc.legR);
+
+    // Hover rigs (ghosts / floating droids) omit BOTH legs entirely; the root is
+    // floated in updateTargets so the hip sits `hover` mm off the floor.
+    const leftLeg  = hover ? null : makeLeg(-TORSO_W / 4, legLSeg ?? baseLegMat);
+    const rightLeg = hover ? null : makeLeg( TORSO_W / 4, legRSeg ?? (kind === 'cyborg' ? steelMat : baseLegMat));
+    const leftArm  = makeArm(-(TORSO_W / 2 + ARM_UPPER_R * 0.7), skin, armLSeg ?? skin);
+    const rightArm = makeArm( TORSO_W / 2 + ARM_UPPER_R * 0.7, steelMat, armRSeg ?? steelMat);
     // Relaxed A-pose: arms splay a touch outward so the silhouette isn't a
     // rigid soldier. Static roll — updateTargets only animates rotation.x.
     leftArm.shoulder.rotation.z  = -0.08;
     rightArm.shoulder.rotation.z =  0.08;
-    root.add(leftLeg.hip, rightLeg.hip, leftArm.shoulder, rightArm.shoulder);
+    if (leftLeg) root.add(leftLeg.hip);
+    if (rightLeg) root.add(rightLeg.hip);
+    root.add(leftArm.shoulder, rightArm.shoulder);
+
+    // Hand pivots (children of the elbow groups) — declarative 'handL'/'handR'
+    // accessories parent here so they SWING with the arm.
+    const handL = new THREE.Group();
+    handL.position.set(0, -ARM_LOWER_LEN - HAND_R * 0.5, 0);
+    leftArm.elbow.add(handL);
+    const handR = new THREE.Group();
+    handR.position.set(0, -ARM_LOWER_LEN - HAND_R * 0.5, 0);
+    rightArm.elbow.add(handR);
 
     // ── Per-variant accessories (added BEFORE the outline pass so they get
     // cartoon shells too; emissive parts opt out via userData.outlineSkip).
-    this._addAvatarAccessories(kind, spec, root, {
-      color, accent, dark, shoeMat, skin, bodyMat,
-      HEAD_R, headY, torsoY, hipY, TORSO_W, TORSO_H, TORSO_D, sk,
+    // Legacy core kinds keep their hand-tuned imperative blocks; pack members
+    // (and any def with `accessories`) build declaratively.
+    if (def.legacyAccessories) {
+      this._addAvatarAccessories(def.legacyAccessories, spec, root, {
+        color, accent, dark, shoeMat, skin, bodyMat,
+        HEAD_R, headY, torsoY, hipY, TORSO_W, TORSO_H, TORSO_D, sk,
+      });
+    }
+    this._addDeclarativeAccessories(def, root, {
+      color, sk, tint: accent, skin, bodyMat, dark,
+      HEAD_R, headY, torsoY, hipY, TORSO_D, handL, handR,
+      shoulderY, shoulderX: TORSO_W / 2 + ARM_UPPER_R * 0.7, neckY: torsoY + TORSO_H / 2,
     });
 
     // Cartoon outlines on the body (thinner than furniture; minDim catches
@@ -9519,14 +9689,16 @@ export class ThreeDRenderer {
       armUpper: armUpperLen, armLower: armLowerReach, legM,
       persBob: pers.bobMul ?? 1, persSway: pers.swayMul ?? 1,
       persCadence: pers.cadenceMul ?? 1, persAmp: pers.ampMul ?? 1,
+      posturePitch: def.posture?.pitch ?? 0,
+      hover, hoverY: spec.hover ?? 0,
       chatterNext: 25 + idleOffset / (Math.PI * 2) * 35, chatterT: 0, chatterGlyph: null,
       torso,
       plumbob,
       blob,
-      leftHip: leftLeg.hip,
-      rightHip: rightLeg.hip,
-      leftKnee: leftLeg.knee,
-      rightKnee: rightLeg.knee,
+      leftHip: leftLeg?.hip ?? null,
+      rightHip: rightLeg?.hip ?? null,
+      leftKnee: leftLeg?.knee ?? null,
+      rightKnee: rightLeg?.knee ?? null,
       leftShoulder: leftArm.shoulder,
       rightShoulder: rightArm.shoulder,
       leftElbow: leftArm.elbow,

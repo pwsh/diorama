@@ -3,8 +3,13 @@ import { property, state } from 'lit/decorators.js';
 import { customElement } from './define.js';
 import { finishZoneEdit, cancelZoneEdit } from '../canvas-interact.js';
 import { alarmStateColor } from '../geometry.js';
+import { repairFloor } from '../storage.js';
+import { CONDITION_GLYPH, CONDITION_LABEL, tempText, weatherEffectEnabled } from '../weather.js';
+import { listPacks, getPack, packEffectiveState, resolveDef } from '../avatars.js';
+import type { AvatarDef, AvatarPackDef } from '../avatars.js';
+import { AVATAR_PACK_MANIFEST } from '../avatar-packs/manifest.js';
 import type { Planner } from '../planner.js';
-import type { Floor, HassState } from '../types.js';
+import type { Floor, HassState, WeatherConfig, WeatherEffectKey, ScenePreset, FloorTexKind } from '../types.js';
 
 // ── Floor settings modal ─────────────────────────────────────────────────
 @customElement('diorama-floor-modal')
@@ -655,75 +660,597 @@ export class AlarmModal extends LitElement {
 }
 
 // ── Settings drawer ──────────────────────────────────────────────────────
+type SettingsTab = 'connection' | 'display' | 'weather' | 'avatars' | 'integrations' | 'data';
+
 @customElement('diorama-settings-drawer')
 export class SettingsDrawer extends LitElement {
   @property({ attribute: false }) planner!: Planner;
   @state() open = false;
+  @state() private _tab: SettingsTab = 'connection';
   @state() private _url = '';
   @state() private _token = '';
+  @state() private _packErr = '';
+  // Which pack rows have their member list expanded (runtime-only).
+  private _packExpanded = new Set<string>();
 
   protected override createRenderRoot() { return this; }
 
-  show(): void {
+  override connectedCallback(): void {
+    super.connectedCallback();
+    // Re-render on config so the live weather preview + pack list stay fresh
+    // while the drawer is open.
+    this.planner.addEventListener('config', this._tick);
+  }
+  override disconnectedCallback(): void {
+    super.disconnectedCallback();
+    this.planner.removeEventListener('config', this._tick);
+  }
+  private _tick = () => { if (this.open) this.requestUpdate(); };
+
+  show(tab?: SettingsTab): void {
     this._url = localStorage.getItem('diorama:url') || '';
     this._token = '';
+    if (tab) this._tab = tab;
     this.open = true;
   }
 
   override render() {
     if (!this.open) return nothing;
+    const edit = this.planner.uiMode === 'edit';
+    // Kiosk/view: only the Connection tab is available.
+    const tabs: Array<[SettingsTab, string]> = edit
+      ? [['connection', 'Connection'], ['display', 'Display'], ['weather', 'Weather'],
+         ['avatars', 'Avatars'], ['integrations', 'Integrations'], ['data', 'Data']]
+      : [['connection', 'Connection']];
+    const tab: SettingsTab = tabs.some(t => t[0] === this._tab) ? this._tab : 'connection';
     return html`
-      <div style="position:absolute;top:0;right:0;bottom:0;width:280px;background:var(--surface);
-                  border-left:1px solid var(--border);padding:16px;overflow-y:auto;z-index:10;
+      <div style="position:absolute;top:0;right:0;bottom:0;width:min(560px,92vw);background:var(--surface);
+                  border-left:1px solid var(--border);display:flex;flex-direction:column;z-index:10;
                   box-shadow:-4px 0 16px rgba(0,0,0,0.4)">
-        <h2 style="font-size:14px;margin-bottom:16px;display:flex;justify-content:space-between;align-items:center">
-          Settings
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:14px 16px 8px">
+          <h2 style="font-size:14px;margin:0">Settings</h2>
           <button style="background:none;border:none;color:var(--text-dim);font-size:18px;cursor:pointer"
                   @click=${() => this.open = false}>✕</button>
-        </h2>
-        <div style="margin-bottom:18px">
-          <h3 style="font-size:11px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:8px">
-            Connection
-          </h3>
-          <label style="font-size:11px;color:var(--text-dim);display:block;margin-bottom:3px">
-            Home Assistant URL
-          </label>
-          <input type="url" .value=${this._url}
-                 @input=${(e: Event) => this._url = (e.target as HTMLInputElement).value}
-                 style="width:100%;padding:6px 8px;border-radius:4px;border:1px solid var(--border);
-                        background:#111;color:var(--text);font-size:12px;margin-bottom:10px">
-          <label style="font-size:11px;color:var(--text-dim);display:block;margin-bottom:3px">
-            Access Token
-          </label>
-          <input type="password" placeholder="(stored)" .value=${this._token}
-                 @input=${(e: Event) => this._token = (e.target as HTMLInputElement).value}
-                 style="width:100%;padding:6px 8px;border-radius:4px;border:1px solid var(--border);
-                        background:#111;color:var(--text);font-size:12px;margin-bottom:10px">
-          <button class="btn-primary" style="margin-bottom:8px" @click=${this._saveConn}>
-            Save &amp; Reconnect
-          </button>
-          <button class="danger-btn" @click=${this._clearConn}>Clear &amp; Log Out</button>
         </div>
-        ${this.planner.uiMode === 'edit' ? html`
-          <div style="margin-bottom:18px">
-            <h3 style="font-size:11px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:8px">
-              Integrations
-            </h3>
-            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text)"
-                   title="When off, the Bermuda BLE tracking integration is neither scanned nor displayed. BLE proxy fixtures stay placeable.">
-              <input type="checkbox" .checked=${this.planner.store.bermudaEnabled !== false}
-                     @change=${(e: Event) => this._setBermudaEnabled((e.target as HTMLInputElement).checked)}>
-              <span style="flex:1">Bermuda BLE tracking</span>
-            </label>
-          </div>
-        ` : nothing}
-        <div style="border-top:1px solid var(--border);padding-top:10px;font-size:11px;
-                    color:var(--text-dim)"
+        <div style="display:flex;gap:2px;padding:0 12px;border-bottom:1px solid var(--border);flex-wrap:wrap">
+          ${tabs.map(([id, label]) => html`
+            <button @click=${() => this._tab = id}
+                    style="background:none;border:none;border-bottom:2px solid ${tab === id ? 'var(--accent)' : 'transparent'};
+                           color:${tab === id ? 'var(--text)' : 'var(--text-dim)'};
+                           font-size:12px;padding:7px 10px;cursor:pointer">${label}</button>`)}
+        </div>
+        <div style="flex:1;overflow-y:auto;padding:16px">
+          ${tab === 'connection' ? this._connectionTab() : nothing}
+          ${tab === 'display' ? this._displayTab() : nothing}
+          ${tab === 'weather' ? this._weatherTab() : nothing}
+          ${tab === 'avatars' ? this._avatarsTab() : nothing}
+          ${tab === 'integrations' ? this._integrationsTab() : nothing}
+          ${tab === 'data' ? this._dataTab() : nothing}
+        </div>
+        <div style="border-top:1px solid var(--border);padding:10px 16px;font-size:11px;color:var(--text-dim)"
              title="Diorama build version (from package.json)">
           Diorama v${__DIORAMA_VERSION__}
         </div>
       </div>
     `;
+  }
+
+  // ── Connection tab ──────────────────────────────────────────────────────
+  private _connectionTab() {
+    return html`
+      <label style="font-size:11px;color:var(--text-dim);display:block;margin-bottom:3px">
+        Home Assistant URL
+      </label>
+      <input type="url" .value=${this._url}
+             @input=${(e: Event) => this._url = (e.target as HTMLInputElement).value}
+             style="width:100%;padding:6px 8px;border-radius:4px;border:1px solid var(--border);
+                    background:#111;color:var(--text);font-size:12px;margin-bottom:10px">
+      <label style="font-size:11px;color:var(--text-dim);display:block;margin-bottom:3px">
+        Access Token
+      </label>
+      <input type="password" placeholder="(stored)" .value=${this._token}
+             @input=${(e: Event) => this._token = (e.target as HTMLInputElement).value}
+             style="width:100%;padding:6px 8px;border-radius:4px;border:1px solid var(--border);
+                    background:#111;color:var(--text);font-size:12px;margin-bottom:10px">
+      <button class="btn-primary" style="margin-bottom:8px" @click=${this._saveConn}>
+        Save &amp; Reconnect
+      </button>
+      <button class="danger-btn" @click=${this._clearConn}>Clear &amp; Log Out</button>
+    `;
+  }
+
+  // ── Integrations tab ────────────────────────────────────────────────────
+  private _integrationsTab() {
+    return html`
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text)"
+             title="When off, the Bermuda BLE tracking integration is neither scanned nor displayed. BLE proxy fixtures stay placeable.">
+        <input type="checkbox" .checked=${this.planner.store.bermudaEnabled !== false}
+               @change=${(e: Event) => this._setBermudaEnabled((e.target as HTMLInputElement).checked)}>
+        <span style="flex:1">Bermuda BLE tracking</span>
+      </label>
+    `;
+  }
+
+  // ── Display tab (moved from sidebar "3D Scene" — global parts only) ──────
+  private _displayTab() {
+    const p = this.planner;
+    const sc = p.store.scene3d ?? { preset: 'night' as const };
+    const upd = (mut: () => void) => {
+      if (!p.store.scene3d) p.store.scene3d = { preset: 'night' };
+      mut(); p.save(); p.emitConfig();
+    };
+    const check = (label: string, checked: boolean, on: (v: boolean) => void, title = '') => html`
+      <div class="row"><label title=${title}>${label}</label>
+        <input type="checkbox" .checked=${checked}
+               @change=${(e: Event) => upd(() => on((e.target as HTMLInputElement).checked))}>
+      </div>`;
+    return html`
+      <div class="row"><label>Mode</label>
+        <select .value=${sc.lightMode ?? 'manual'}
+                @change=${(e: Event) => upd(() => {
+                  p.store.scene3d!.lightMode =
+                    (e.target as HTMLSelectElement).value as 'manual' | 'clock' | 'lux';
+                })}>
+          <option value="manual">Manual preset</option>
+          <option value="clock">Follow time of day</option>
+          <option value="lux">Luminance sensor</option>
+        </select>
+      </div>
+      ${(sc.lightMode ?? 'manual') === 'manual' ? html`
+        <div class="row"><label>Lighting</label>
+          <select .value=${sc.preset ?? 'night'}
+                  @change=${(e: Event) => upd(() => {
+                    p.store.scene3d!.preset = (e.target as HTMLSelectElement).value as ScenePreset;
+                  })}>
+            <option value="night">Night (default)</option>
+            <option value="day">Day</option>
+            <option value="dusk">Dusk</option>
+          </select>
+        </div>
+      ` : nothing}
+      ${(sc.lightMode ?? 'manual') === 'clock' ? html`
+        <div style="font-size:10px;color:var(--text-dim);line-height:1.3;margin:2px 0 4px">
+          Uses HA's sun.sun elevation (falls back to local clock):
+          day above 10°, dusk to −4°, night below.
+        </div>
+      ` : nothing}
+      ${(sc.lightMode ?? 'manual') === 'lux' ? html`
+        <div class="row"><label>Lux entity</label>
+          <span style="font-size:10px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+            ${sc.luxEntity || '— pick one —'}
+          </span>
+          <button class="btn" style="font-size:10px;padding:2px 6px" @click=${() => {
+            this.dispatchEvent(new CustomEvent('open-entity-picker', {
+              bubbles: true, composed: true,
+              detail: { domain: 'sensor', onPick: (id: string) => upd(() => { p.store.scene3d!.luxEntity = id; }) },
+            }));
+          }}>🔗</button>
+        </div>
+        <div style="font-size:10px;color:var(--text-dim);line-height:1.3;margin:2px 0 4px">
+          ≥3000 lx day · 300–3000 lx dusk · &lt;300 lx night.
+        </div>
+      ` : nothing}
+      <div class="row"><label>Floor color</label>
+        <input type="color" .value=${sc.floorColor ?? '#101820'}
+               style="width:36px;height:24px;padding:0;border:1px solid var(--border);background:#111"
+               @input=${(e: Event) => upd(() => { p.store.scene3d!.floorColor = (e.target as HTMLInputElement).value; })}>
+      </div>
+      <div class="row"><label>Floor texture</label>
+        <select .value=${sc.floorTex ?? 'none'}
+                @change=${(e: Event) => upd(() => {
+                  p.store.scene3d!.floorTex = (e.target as HTMLSelectElement).value as FloorTexKind;
+                })}>
+          <option value="none">None</option>
+          <option value="wood">Wood</option>
+          <option value="tile">Tile</option>
+          <option value="concrete">Concrete</option>
+        </select>
+      </div>
+      <div class="row"><label>Wall color</label>
+        <input type="color" .value=${sc.wallColor ?? '#bbbbbb'}
+               style="width:36px;height:24px;padding:0;border:1px solid var(--border);background:#111"
+               @input=${(e: Event) => upd(() => { p.store.scene3d!.wallColor = (e.target as HTMLInputElement).value; })}>
+      </div>
+      ${check('Glass house', !!sc.glassHouse, v => { p.store.scene3d!.glassHouse = v; })}
+      ${check('Wall cutaway', sc.wallCutaway !== false, v => { p.store.scene3d!.wallCutaway = v; })}
+      ${check('Auto-follow camera', !!sc.autoFollow, v => { p.store.scene3d!.autoFollow = v; })}
+      ${check('Cinematic orbit', !!sc.cinematicOrbit, v => { p.store.scene3d!.cinematicOrbit = v; },
+        'Slowly orbit the camera around the avatars for visual interest')}
+      ${check('Plumbobs', sc.plumbobs !== false, v => { p.store.scene3d!.plumbobs = v; })}
+      <div style="border-top:1px solid var(--border);margin:10px 0 0;padding-top:8px">
+        <div class="row" title="Show all dimensions in feet / inches instead of millimetres">
+          <label>Imperial units</label>
+          <input type="checkbox" .checked=${!!p.store.imperial}
+                 @change=${(e: Event) => { p.store.imperial = (e.target as HTMLInputElement).checked; p.save(); p.emitConfig(); this.requestUpdate(); }}>
+        </div>
+        <div style="font-size:10px;color:var(--text-dim);line-height:1.3;margin:4px 0 0">
+          Per-floor flooring / wall overrides live in the sidebar Floors section.
+        </div>
+      </div>
+    `;
+  }
+
+  // ── Weather tab (moved from sidebar "Weather") ──────────────────────────
+  private _weatherEffectToggles(
+    w: WeatherConfig | undefined,
+    set: (mut: (x: WeatherConfig) => void) => void,
+  ) {
+    const master = w?.effects3d !== false;
+    const defs: Array<[WeatherEffectKey, string]> = [
+      ['precip', 'Precipitation'], ['fog', 'Fog'], ['lightning', 'Lightning'],
+      ['wind', 'Wind dust & gusts'], ['clouds', 'Cloud shadows'],
+      ['sunPosition', 'True sun position'], ['frost', 'Frost & icicles'],
+      ['puddles', 'Rain puddles'], ['precipForecast', 'Forecast storm-brewing'],
+    ];
+    const dimmed = (k: WeatherEffectKey) => !master && k !== 'sunPosition';
+    return html`
+      <div style="margin:2px 0 2px 14px;display:flex;flex-direction:column;gap:1px">
+        ${defs.map(([key, label]) => html`
+          <label class="row" style="padding:1px 0;${dimmed(key) ? 'opacity:0.45' : ''}">
+            <span style="flex:1;font-size:11px">${label}</span>
+            <input type="checkbox" .checked=${weatherEffectEnabled(w, key)}
+                   ?disabled=${dimmed(key)}
+                   @change=${(e: Event) => set(x => {
+                     (x.effects ??= {})[key] = (e.target as HTMLInputElement).checked;
+                   })}>
+          </label>`)}
+      </div>`;
+  }
+
+  private _weatherTab() {
+    const p = this.planner;
+    const w = p.store.weather;
+    const src = w?.source ?? 'openmeteo';
+    const now = p.weatherNow;
+    const set = (mut: (x: WeatherConfig) => void) => p.setWeather(mut);
+
+    const sourceRadio = (val: 'entity' | 'sensors' | 'openmeteo', label: string) => html`
+      <label class="row" style="padding:0;cursor:pointer;gap:6px">
+        <input type="radio" name="weather-src" .checked=${src === val}
+               @change=${() => set(x => { x.source = val; })}>
+        <span style="font-size:12px;flex:1">${label}</span>
+      </label>`;
+
+    const bindRow = (labelTxt: string, cur: string | undefined,
+                     domain: string, onPick: (id: string) => void) => html`
+      <div class="row" style="margin-top:2px"><label>${labelTxt}</label>
+        <span style="font-size:11px;color:var(--text);flex:1;overflow:hidden;
+                     text-overflow:ellipsis;white-space:nowrap">${cur || '—'}</span>
+        <button class="btn" style="font-size:10px;padding:2px 6px" @click=${() => {
+          this.dispatchEvent(new CustomEvent('open-entity-picker', {
+            bubbles: true, composed: true, detail: { domain, onPick },
+          }));
+        }}>🔗</button>
+      </div>`;
+
+    let preview;
+    if (!w) {
+      preview = html`<span style="color:var(--text-dim)">Pick a source to enable the chip.</span>`;
+    } else if (now) {
+      const glyph = CONDITION_GLYPH[now.condition] ?? '❓';
+      const temp = now.tempC == null ? '' : ' · ' + tempText(now.tempC, p.store.imperial);
+      preview = html`<span style="${now.stale ? 'opacity:0.55' : ''}">
+        ${glyph} ${CONDITION_LABEL[now.condition] ?? now.condition}${temp}
+        ${now.label ? html`<span style="color:var(--text-dim)"> · ${now.label}</span>` : nothing}
+        ${now.stale ? html`<span style="color:#ffab91"> · stale</span>` : nothing}
+      </span>`;
+    } else {
+      preview = html`<span style="color:var(--text-dim)">${
+        src === 'openmeteo'
+          ? (w.zip || w.lat != null ? 'Fetching…' : 'Set a zip (or configure zone.home in HA).')
+          : 'Bind the source entities above.'}</span>`;
+    }
+
+    return html`
+      <div id="diorama-weather-section" style="display:flex;flex-direction:column;gap:2px;margin-bottom:6px">
+        ${sourceRadio('entity', 'HA weather entity')}
+        ${sourceRadio('sensors', 'Local station sensors')}
+        ${sourceRadio('openmeteo', 'Open-Meteo (online)')}
+      </div>
+
+      ${src === 'entity' ? bindRow('Entity', w?.entityId, 'weather',
+          (id: string) => set(x => { x.entityId = id; })) : nothing}
+
+      ${src === 'sensors' ? html`
+        ${bindRow('Precip (mm/h)', w?.sensors?.precip, 'sensor',
+            (id: string) => set(x => { (x.sensors ??= {}).precip = id; }))}
+        ${bindRow('Wind speed', w?.sensors?.windSpeed, 'sensor',
+            (id: string) => set(x => { (x.sensors ??= {}).windSpeed = id; }))}
+        ${bindRow('Temperature', w?.sensors?.temp, 'sensor',
+            (id: string) => set(x => { (x.sensors ??= {}).temp = id; }))}
+        ${bindRow('Lightning', w?.sensors?.lightning, 'binary_sensor',
+            (id: string) => set(x => { (x.sensors ??= {}).lightning = id; }))}
+        <div style="font-size:10px;color:var(--text-dim);line-height:1.3;margin:2px 0 0">
+          Condition is derived: precip → rainy/pouring, cold precip → snowy,
+          high wind → windy, lightning → storm; else clear by the sun.
+        </div>
+      ` : nothing}
+
+      ${src === 'openmeteo' ? html`
+        <div class="row"><label>Zip / place</label>
+          <input type="text" placeholder="e.g. 90210" .value=${w?.zip ?? ''}
+                 style="flex:1;min-width:0"
+                 @change=${(e: Event) => set(x => { x.zip = (e.target as HTMLInputElement).value.trim(); })}>
+          <button class="btn" style="font-size:10px;padding:2px 8px;margin-left:4px"
+                  @click=${() => p.refreshWeatherLocation()}>Search</button>
+        </div>
+        <div style="font-size:11px;color:var(--text-dim);margin:2px 0 0">
+          ${w?.placeLabel
+            ? html`📍 ${w.placeLabel}`
+            : (w?.lat != null ? html`📍 ${w.lat.toFixed(2)}, ${w.lon?.toFixed(2)}`
+                              : 'No location — uses HA zone.home if no zip.')}
+        </div>
+      ` : nothing}
+
+      <label class="row" style="margin-top:8px"><span style="flex:1">Show chip</span>
+        <input type="checkbox" .checked=${w?.chip !== false}
+               @change=${(e: Event) => set(x => { x.chip = (e.target as HTMLInputElement).checked; })}>
+      </label>
+      <label class="row"><span style="flex:1">3D effects</span>
+        <input type="checkbox" .checked=${w?.effects3d !== false}
+               @change=${(e: Event) => set(x => { x.effects3d = (e.target as HTMLInputElement).checked; })}>
+      </label>
+      ${this._weatherEffectToggles(w, set)}
+      <label class="row"><span style="flex:1">Affect lighting</span>
+        <input type="checkbox" .checked=${w?.affectLighting !== false}
+               @change=${(e: Event) => set(x => { x.affectLighting = (e.target as HTMLInputElement).checked; })}>
+      </label>
+      <div style="font-size:10px;color:var(--text-dim);line-height:1.3;margin:2px 0 6px">
+        3D effects: rain / snow / hail / fog / wind dust / lightning around the
+        house, matched to the live condition. "Affect lighting" dims the day
+        preset under overcast weather. The "Weather FX" entry in 2D Layers
+        also gates the effects.
+      </div>
+
+      <div style="font-size:11px;padding:6px 8px;background:rgba(0,0,0,0.25);border-radius:4px;line-height:1.4">
+        ${preview}
+      </div>
+    `;
+  }
+
+  // ── Data tab (moved from sidebar "Data") ────────────────────────────────
+  private _dataTab() {
+    return html`
+      <button class="btn" style="width:100%;margin-bottom:6px" @click=${this._exportJson}>
+        Export JSON
+      </button>
+      <button class="btn" style="width:100%" @click=${this._importJson}>Import JSON</button>
+      <div style="font-size:10px;color:var(--text-dim);line-height:1.3;margin-top:8px">
+        Export a full backup of this floor plan (all floors, fixtures, and
+        settings) or restore one. Imported OBJ models and avatar packs live in
+        this browser's local storage and are re-imported per device.
+      </div>
+    `;
+  }
+
+  private _exportJson = () => {
+    const blob = new Blob([JSON.stringify(this.planner.store, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `floor-plan-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  };
+
+  private _importJson = () => {
+    const inp = document.createElement('input');
+    inp.type = 'file'; inp.accept = 'application/json';
+    inp.onchange = () => {
+      const file = inp.files?.[0]; if (!file) return;
+      const rd = new FileReader();
+      rd.onload = () => {
+        try {
+          const obj = JSON.parse(rd.result as string);
+          if (!obj.floors || !Array.isArray(obj.floors)) throw new Error('missing floors');
+          if (!confirm('Replace current floor plan with imported data?')) return;
+          obj.floors = obj.floors.map((f: { id: string; name: string; w: number; d: number }) => repairFloor(f));
+          this.planner.store = obj;
+          this.planner.store.activeSensorId = null;
+          this.planner.save();
+          this.planner.emitConfig();
+        } catch (err) {
+          alert('Import failed: ' + (err as Error).message);
+        }
+      };
+      rd.readAsText(file);
+    };
+    inp.click();
+  };
+
+  // ── Avatars tab (NEW pack manager) ──────────────────────────────────────
+  private _avatarsTab() {
+    const p = this.planner;
+    const cfg = p.store.avatarPacks;
+    const registered = listPacks();
+    const regIds = new Set(registered.map(e => e.def.id));
+
+    interface Row {
+      id: string; label: string; path: string[]; source: 'builtin' | 'user';
+      def: AvatarPackDef | null; count: number; registered: boolean;
+      franchise: boolean; locked: boolean;
+    }
+    const rows: Row[] = registered.map(e => ({
+      id: e.def.id, label: e.def.label, path: e.def.path, source: e.source,
+      def: e.def, count: e.def.avatars.length, registered: true,
+      franchise: !!e.def.franchise, locked: !!e.def.locked,
+    }));
+    // Merge manifest rows for built-in packs not yet registered (unloaded), so
+    // they're visible and loadable from the manager.
+    for (const m of AVATAR_PACK_MANIFEST) {
+      if (regIds.has(m.id)) continue;
+      rows.push({ id: m.id, label: m.label, path: m.path, source: 'builtin',
+        def: null, count: m.count, registered: false, franchise: !!m.franchise, locked: false });
+    }
+    rows.sort((a, b) => {
+      if (a.id === 'core') return -1;
+      if (b.id === 'core') return 1;
+      return a.path.join('/').localeCompare(b.path.join('/')) || a.label.localeCompare(b.label);
+    });
+
+    // Tree headers from path segments (render only the segments that differ
+    // from the previous row's path).
+    let prevPath: string[] = [];
+
+    return html`
+      <div style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap">
+        <button class="btn" style="flex:1;min-width:120px" @click=${this._importPack}>Import pack (JSON)</button>
+      </div>
+      ${this._packErr ? html`
+        <div style="font-size:11px;color:#ff8a80;background:rgba(80,0,0,0.25);border-radius:4px;
+                    padding:6px 8px;margin-bottom:8px">${this._packErr}</div>` : nothing}
+
+      <div style="display:flex;flex-direction:column;gap:2px">
+        ${rows.map(row => {
+          const headers: unknown[] = [];
+          let i = 0;
+          while (i < row.path.length && i < prevPath.length && row.path[i] === prevPath[i]) i++;
+          for (let j = i; j < row.path.length; j++) {
+            headers.push(html`
+              <div style="font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.06em;
+                          margin:6px 0 2px;padding-left:${j * 12}px">${row.path[j]}</div>`);
+          }
+          prevPath = row.path;
+          return html`${headers}${this._packRow(row, cfg)}`;
+        })}
+      </div>
+
+      <div style="font-size:10px;color:var(--text-dim);line-height:1.3;margin-top:12px;
+                  border-top:1px solid var(--border);padding-top:8px">
+        Unknown or deactivated avatars render as the default (adult).
+      </div>
+    `;
+  }
+
+  private _packRow(
+    row: { id: string; label: string; path: string[]; source: 'builtin' | 'user';
+           def: AvatarPackDef | null; count: number; registered: boolean;
+           franchise: boolean; locked: boolean },
+    cfg: Record<string, { loaded?: boolean; active?: boolean; members?: string[] }> | undefined,
+  ) {
+    const p = this.planner;
+    const st = row.registered && row.def
+      ? packEffectiveState(row.def, cfg)
+      : { loaded: false, active: false };
+    const expanded = this._packExpanded.has(row.id);
+    const indent = row.path.length * 12;
+    const badge = row.source === 'user' ? 'imported' : 'built-in';
+    const members = row.def?.avatars ?? [];
+    const subset = cfg?.[row.id]?.members;
+
+    return html`
+      <div style="border:1px solid var(--border);border-radius:5px;padding:6px 8px;margin-left:${indent}px">
+        <div style="display:flex;align-items:center;gap:6px">
+          ${row.def && members.length ? html`
+            <button style="background:none;border:none;color:var(--text-dim);cursor:pointer;font-size:11px;
+                           transform:rotate(${expanded ? 90 : 0}deg);transition:transform 0.1s"
+                    @click=${() => { if (expanded) this._packExpanded.delete(row.id); else this._packExpanded.add(row.id); this.requestUpdate(); }}>▸</button>
+          ` : html`<span style="width:12px;display:inline-block"></span>`}
+          <div style="flex:1;min-width:0">
+            <div style="font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+              ${row.locked ? '🔒 ' : ''}${row.label}
+              <span style="color:var(--text-dim);font-size:10px"> · ${row.count}</span>
+            </div>
+            <div style="font-size:9px;color:var(--text-dim)">${badge}</div>
+          </div>
+          <label style="display:flex;align-items:center;gap:3px;font-size:10px;color:var(--text-dim)"
+                 title=${row.locked ? 'Built-in default — always available' : 'Loaded'}>
+            <input type="checkbox" .checked=${st.loaded} ?disabled=${row.locked}
+                   @change=${(e: Event) => { void p.setPackLoaded(row.id, (e.target as HTMLInputElement).checked); }}>
+            load
+          </label>
+          <label style="display:flex;align-items:center;gap:3px;font-size:10px;color:var(--text-dim)"
+                 title=${row.locked ? 'Built-in default — always active' : 'Active'}>
+            <input type="checkbox" .checked=${st.active} ?disabled=${row.locked || !st.loaded}
+                   @change=${(e: Event) => p.setPackActive(row.id, (e.target as HTMLInputElement).checked)}>
+            active
+          </label>
+          <button class="btn" style="font-size:10px;padding:2px 5px"
+                  ?disabled=${!row.registered}
+                  title="Export this pack as JSON" @click=${() => this._exportPack(row.id, row.label)}>⬇</button>
+          ${row.source === 'user' ? html`
+            <button class="btn danger" style="font-size:10px;padding:2px 5px"
+                    title="Remove imported pack" @click=${() => this._removePack(row.id, row.label)}>🗑</button>
+          ` : nothing}
+        </div>
+        ${expanded && members.length ? html`
+          <div style="margin:6px 0 2px;padding-left:18px;display:flex;flex-direction:column;gap:2px">
+            ${members.map(a => this._memberRow(row.id, a, members, subset))}
+          </div>
+        ` : nothing}
+      </div>
+    `;
+  }
+
+  private _memberRow(
+    packId: string, a: AvatarDef, all: AvatarDef[], subset: string[] | undefined,
+  ) {
+    const p = this.planner;
+    const checked = !subset || subset.includes(a.id);
+    const sw = this._swatch(a);
+    return html`
+      <label style="display:flex;align-items:center;gap:6px;font-size:11px;cursor:pointer">
+        <input type="checkbox" .checked=${checked}
+               @change=${(e: Event) => {
+                 const on = (e.target as HTMLInputElement).checked;
+                 const cur = new Set(subset ?? all.map(m => m.id));
+                 if (on) cur.add(a.id); else cur.delete(a.id);
+                 // All checked → undefined (no subset); else the explicit list.
+                 const next = cur.size >= all.length ? undefined : all.filter(m => cur.has(m.id)).map(m => m.id);
+                 p.setPackMembers(packId, next);
+               }}>
+        <span style="width:12px;height:12px;border-radius:3px;border:1px solid var(--border);
+                     background:${sw.css}" title=${sw.tip}></span>
+        <span style="flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${a.label}</span>
+      </label>`;
+  }
+
+  // Resolve a member's preview swatch color. 'tint'/'skin'/'body' sentinels (and
+  // absent) render as a neutral chip labelled 'tint'.
+  private _swatch(a: AvatarDef): { css: string; tip: string } {
+    const def = resolveDef(a.id);   // materialized (base spread applied)
+    const c = def.rig === 'quadruped'
+      ? def.quadruped?.coat
+      : (def.humanoid?.body ?? def.humanoid?.skin);
+    if (typeof c === 'number') {
+      return { css: '#' + c.toString(16).padStart(6, '0'), tip: '' };
+    }
+    return { css: 'repeating-linear-gradient(45deg,#666,#666 3px,#888 3px,#888 6px)', tip: 'tint' };
+  }
+
+  private _importPack = () => {
+    const inp = document.createElement('input');
+    inp.type = 'file'; inp.accept = 'application/json,.json';
+    inp.onchange = () => {
+      const file = inp.files?.[0]; if (!file) return;
+      const rd = new FileReader();
+      rd.onload = async () => {
+        this._packErr = '';
+        const res = await this.planner.importAvatarPack(rd.result as string);
+        if (!res.ok) { this._packErr = 'Import failed: ' + (res.error ?? 'unknown error'); }
+        this.requestUpdate();
+      };
+      rd.readAsText(file);
+    };
+    inp.click();
+  };
+
+  private _exportPack(id: string, label: string): void {
+    const json = this.planner.exportPackJson(id);
+    if (!json) return;
+    const blob = new Blob([json], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `${id}.json`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    void label;
+  }
+
+  private _removePack(id: string, label: string): void {
+    if (!confirm(`Remove imported avatar pack "${label}"? This deletes it from this browser.`)) return;
+    void this.planner.removeAvatarPack(id);
+    this._packExpanded.delete(id);
+    this._packErr = '';
   }
 
   private _saveConn = () => {

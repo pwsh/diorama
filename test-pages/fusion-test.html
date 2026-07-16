@@ -137,6 +137,14 @@
     // ── Renderer scene: labels + person avatar swap + layer flag ─────────────
     await (async () => {
       const mod = await import('./assets/three-renderer.js');
+      // Post core→base split: the legacy kinds this scene fuses onto (robot,
+      // pet cat) moved out of core into builtin base packs that the app hydrates
+      // on connect. Register the ones this test relies on so resolveDef returns
+      // the real def instead of the adult fallback (mirrors avatar-build-test).
+      for (const id of ['base-robotic', 'base-domestic-animals']) {
+        const pm = await import(`./assets/${id}.js`);
+        mod.ThreeDRenderer.registerAvatarPack(pm.default ?? pm.pack);
+      }
       const r = new mod.ThreeDRenderer(document.getElementById('stage'));
       await r.load();
       const floor = {

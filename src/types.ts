@@ -163,19 +163,22 @@ export interface SwitchFixture {
   locked?: boolean;    // canvas move/delete disabled (click-to-toggle still works)
 }
 
-// Avatar (humanoid rig) variant for a 3D target. `random` resolves per-target
-// to a concrete kind by a stable hash of the target key, so a given person keeps
-// their look for its lifetime (see resolveAvatar in three-renderer.ts).
-export type AvatarKind =
-  | 'adult' | 'child' | 'robot' | 'alien' | 'professional'
-  | 'hacker' | 'movie_star' | 'ninja' | 'cyborg' | 'ninja_cyborg' | 'athlete'
-  | 'teddy_bear' | 'cartoon_mouse' | 'cartoon_dog' | 'cartoon_duck'
-  | 'cowboy' | 'magician' | 'farmer' | 'tech_expert' | 'supermodel'
-  | 'wise_oracle' | 'astronaut'
-  // Quadruped pet rigs (own builder + trot/sit/curl animation branch — see
-  // three-renderer). A DioramaPerson with `isPet` and no explicit avatarKind
-  // defaults to 'cat'. Kept OUT of the 'random' human fallback pool.
-  | 'cat' | 'dog';
+// Avatar (rig) variant for a 3D target — now a persisted avatar id (see
+// src/avatars.ts `AvatarId`). Legacy kinds keep their bare ids ('adult',
+// 'ninja', 'cat'…); future pack members are '<packId>/<memberId>'. Widened from
+// the old 24-value union to a string so packs can add ids without a store
+// migration. `random` still resolves per-target to a concrete id by a stable
+// hash of the target key (see resolveAvatar in avatars.ts). The core pack
+// (avatars.ts) keeps the 24 legacy kinds working under their bare ids.
+export type AvatarKind = string;
+
+// Persisted per-avatar-pack config (keyed by pack id in Store.avatarPacks).
+// Absent entry ⇒ pack defaults (core + base packs loaded+active, franchise
+// packs loaded:false). `members` absent ⇒ all members active; present ⇒ subset.
+// Shape mirrors avatars.ts `AvatarPackConfig` (kept structurally identical so
+// planner can pass store.avatarPacks straight into setAvatarPacksConfig without
+// types.ts importing avatars.ts — avoids the import cycle).
+export interface AvatarPackConfig { loaded?: boolean; active?: boolean; members?: string[] }
 
 // A person (or pet) in the household. The shared identity concept for the
 // "World Outside" arc: BLE trilateration and GPS both resolve to a person;
@@ -618,6 +621,7 @@ export interface Store {
   bleShowUnknown?: boolean;          // show BLE devices not mapped to a person (absent = true); consumed in B2
   weather?: WeatherConfig;           // weather source + chip config (Feature W)
   geo?: GeoConfig;                   // landmarks + lat/lon↔plan calibration (Feature G)
+  avatarPacks?: Record<string, AvatarPackConfig>;   // per-pack loaded/active/members (avatar packs)
 }
 
 // Saved 3D camera pose (scene coords, mm — floor-centered frame).

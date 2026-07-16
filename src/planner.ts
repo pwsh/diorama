@@ -50,6 +50,14 @@ import {
   type WeatherNow, type HaCondition,
 } from './weather.js';
 import { isDay } from './time-of-day.js';
+import {
+  setAvatarPacksConfig, registerPack, getPack, unregisterPack,
+  type AvatarPackConfig, type AvatarPacksConfig,
+} from './avatars.js';
+import { AVATAR_PACK_MANIFEST } from './avatar-packs/manifest.js';
+import {
+  loadAllPacks, savePackJson, deletePackJson, validatePackJson,
+} from './avatar-store.js';
 
 // ── BLE trilateration output (runtime-only) ───────────────────────────────
 // One resolved BLE person/pet position for rendering. Not persisted — recomputed
@@ -512,6 +520,9 @@ export class Planner extends EventTarget {
     this.store = loadStore();
     this.showDetails = this.store.showDetails === true;
     this.useRawTargets = this.store.useRawTargets === true;
+    // Seed the avatar-pack registry config from the (cached) store so the very
+    // first render resolves pool/active membership correctly.
+    setAvatarPacksConfig(this.store.avatarPacks);
   }
 
   // ── Persistence ─────────────────────────────────────────────────────────
@@ -567,6 +578,9 @@ export class Planner extends EventTarget {
     this.hass.onConn(s => { this.conn = s; this.emitConn(); });
     this.hass.onState((states, changedId) => this._onStates(states, changedId));
     this.hass.connect();
+    // Hydrate loaded avatar packs (dynamic-import bodies). _loadFromHa also
+    // calls this once the authoritative config arrives; both are idempotent.
+    void this._hydrateAvatarPacks();
     // Identity fusion re-runs on a light ~2 s cadence (between the ~0.1 Hz BLE
     // solves) so a radar target that walks toward / away from a settled BLE
     // person still fuses / releases promptly against the LERPED positions.
@@ -588,6 +602,122 @@ export class Planner extends EventTarget {
         }
       });
     }
+  }
+
+  // ── Avatar packs ──────────────────────────────────────────────────────────
+  // Dynamic-import + register every built-in pack whose effective config says
+  // loaded (respecting pack defaults). Pack BODIES are code-split — never static
+  // imports — so the startup bundle stays lean. Emits config ONCE at the end so
+  // grids / dirty keys refresh. Idempotent (registerPack is a no-op at the same
+  // id+version; dynamic import is cached).
+  private async _hydrateAvatarPacks(): Promise<void> {
+    const cfg = this.store.avatarPacks;
+    let changed = false;
+    for (const row of AVATAR_PACK_MANIFEST) {
+      const c = cfg?.[row.id];
+      const defaultLoaded = !row.franchise;   // base packs default loaded; franchise opt-in
+      const loaded = c?.loaded ?? defaultLoaded;
+      if (!loaded || getPack(row.id)) continue;
+      try {
+        const mod = await row.load();
+        const def = mod.default ?? mod.pack;
+        if (def) { registerPack(def, 'builtin'); changed = true; }
+      } catch (err) {
+        console.warn(`avatar pack "${row.id}" failed to load:`, err);
+      }
+    }
+    // User-imported packs live in IndexedDB (device-local). Register ALL of them
+    // so they stay visible / removable in the pack manager even when unloaded —
+    // the per-pack config gates loaded/active, so registering an unloaded user
+    // pack never activates its members.
+    try {
+      for (const { id, json } of await loadAllPacks()) {
+        if (getPack(id)) continue;
+        let parsed: unknown;
+        try { parsed = JSON.parse(json); } catch { continue; }
+        const v = validatePackJson(parsed);
+        if (v.ok && v.pack) { registerPack(v.pack, 'user'); changed = true; }
+      }
+    } catch (err) {
+      console.warn('avatar user packs failed to load:', err);
+    }
+    if (changed) this.emitConfig();
+  }
+
+  // Import a user pack from raw JSON text: validate → persist to IDB → register
+  // → mark loaded. Returns { ok } with a readable error on rejection (never
+  // throws). save() no-ops outside edit mode, but the config write still lands
+  // in-memory so the manager reflects it for the session.
+  async importAvatarPack(text: string): Promise<{ ok: boolean; id?: string; error?: string }> {
+    let parsed: unknown;
+    try { parsed = JSON.parse(text); }
+    catch (err) { return { ok: false, error: 'Invalid JSON: ' + (err as Error).message }; }
+    const v = validatePackJson(parsed);
+    if (!v.ok || !v.pack) return { ok: false, error: v.error ?? 'Invalid pack.' };
+    const def = v.pack;
+    try { await savePackJson(def.id, JSON.stringify(def)); }
+    catch (err) { return { ok: false, error: 'Could not store pack: ' + (err as Error).message }; }
+    registerPack(def, 'user');
+    this._mutatePackConfig(def.id, c => { c.loaded = true; });   // emits config
+    return { ok: true, id: def.id };
+  }
+
+  // Remove a user-imported pack: unregister → IDB delete → drop its config entry.
+  async removeAvatarPack(id: string): Promise<void> {
+    if (id === 'core') return;
+    unregisterPack(id);
+    try { await deletePackJson(id); } catch { /* best effort */ }
+    const packs: AvatarPacksConfig = { ...(this.store.avatarPacks ?? {}) };
+    delete packs[id];
+    this.store.avatarPacks = Object.keys(packs).length ? packs : undefined;
+    setAvatarPacksConfig(this.store.avatarPacks);
+    this.save();
+    this.emitConfig();
+  }
+
+  // Serialize a registered pack's def to pretty JSON (export / update path).
+  exportPackJson(id: string): string | null {
+    const entry = getPack(id);
+    return entry ? JSON.stringify(entry.def, null, 2) : null;
+  }
+
+  // Load / register a single pack body on demand (used by setPackLoaded(true)).
+  private async _loadAvatarPack(id: string): Promise<boolean> {
+    if (getPack(id)) return true;
+    const row = AVATAR_PACK_MANIFEST.find(r => r.id === id);
+    if (!row) return false;
+    try {
+      const mod = await row.load();
+      const def = mod.default ?? mod.pack;
+      if (def) { registerPack(def, 'builtin'); return true; }
+    } catch (err) {
+      console.warn(`avatar pack "${id}" failed to load:`, err);
+    }
+    return false;
+  }
+
+  private _mutatePackConfig(id: string, mut: (c: AvatarPackConfig) => void): void {
+    const packs: AvatarPacksConfig = { ...(this.store.avatarPacks ?? {}) };
+    const c: AvatarPackConfig = { ...(packs[id] ?? {}) };
+    mut(c);
+    packs[id] = c;
+    this.store.avatarPacks = packs;
+    setAvatarPacksConfig(packs);
+    this.save();
+    this.emitConfig();
+  }
+
+  // Load ↔ unload a pack. Loading triggers the dynamic import + register first.
+  async setPackLoaded(id: string, on: boolean): Promise<void> {
+    if (on) await this._loadAvatarPack(id);
+    this._mutatePackConfig(id, c => { c.loaded = on; });
+  }
+  setPackActive(id: string, on: boolean): void {
+    this._mutatePackConfig(id, c => { c.active = on; });
+  }
+  // Set the active member subset (undefined = all members active).
+  setPackMembers(id: string, members: string[] | undefined): void {
+    this._mutatePackConfig(id, c => { c.members = members; });
   }
 
   // Manual full state re-poll (also wired to a topbar button).
@@ -747,7 +877,12 @@ export class Planner extends EventTarget {
             bleShowUnknown: remote.bleShowUnknown ?? undefined,
             weather:        remote.weather        ?? undefined,
             geo:            remote.geo            ?? undefined,
+            avatarPacks:    remote.avatarPacks    ?? undefined,
           };
+          // Reflect the authoritative pack config into the registry snapshot so
+          // resolveAvatar / activeAvatarIds see it, then re-hydrate loaded packs.
+          setAvatarPacksConfig(this.store.avatarPacks);
+          void this._hydrateAvatarPacks();
           // Reset transient view state to match the loaded store.
           this.activeMotionId = null;
           this.activeEnvId = null;

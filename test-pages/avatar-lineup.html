@@ -8,6 +8,13 @@
   const mod = await import('./assets/three-renderer.js');
   const r = new mod.ThreeDRenderer(document.getElementById('c'));
   await r.load();
+  // Batch C1: legacy kinds moved into builtin base packs; register them so the
+  // lineup renders each kind's real rig (not the adult fallback).
+  for (const p of ['base-humans','base-careers','base-robotic','base-aliens',
+    'base-scifi','base-pop-culture','base-domestic-animals']) {
+    const m = await import(`./assets/${p}.js?v=` + Date.now());
+    mod.ThreeDRenderer.registerAvatarPack(m.default);
+  }
   const floor = {
     id: 'f1', name: 'Lineup', w: 11200, d: 3000,
     walls: [],

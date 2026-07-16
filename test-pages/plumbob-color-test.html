@@ -10,6 +10,12 @@
   const mod = await import('./assets/three-renderer.js');
   const r = new mod.ThreeDRenderer(document.getElementById('c'));
   await r.load();
+  // Batch C1: legacy kinds live in builtin base packs (hydrated on connect in
+  // the app); register them for standalone renderer tests.
+  for (const _p of ['base-humans','base-careers','base-robotic','base-aliens','base-scifi','base-pop-culture','base-domestic-animals']) {
+    const _m = await import(`./assets/${_p}.js?v=` + Date.now());
+    mod.ThreeDRenderer.registerAvatarPack(_m.default);
+  }
 
   const FW = 8000, FD = 6000;
   const floor = {

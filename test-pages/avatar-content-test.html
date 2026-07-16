@@ -1,0 +1,167 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>avatar content test</title>
+<style>html,body{margin:0;background:#111;color:#ddd;font:11px monospace}#c{width:640px;height:480px}pre{white-space:pre-wrap}</style>
+<div id="c"></div>
+<pre id="out">running…</pre>
+<script type="module">
+ // CONTENT GATE for the avatar-packs arc. For EVERY pack in the manifest and
+ // EVERY member: register → resolveDef → build the real renderer rig → assert it
+ // builds, accessories attach, quad defs make quad rigs, hover rigs drop legs,
+ // dispose is clean. Then advance animation frames with ALL members alive.
+ //
+ // Harness setup (alongside `cp -r dist/* test-pages/*`):
+ //   npx esbuild src/avatar-packs/manifest.ts --format=esm --outfile=<harness>/manifest.mod.js
+ // (type-only import of AvatarPackDef is dropped; the load() closures are never
+ // invoked here — we import each pack chunk from ./assets/<id>.js directly.)
+ try {
+  const V = '?v=' + Date.now();
+  const mod = await import('./assets/three-renderer.js' + V);
+  const { AVATAR_PACK_MANIFEST } = await import('./manifest.mod.js' + V);
+  const R = mod.ThreeDRenderer;
+  const r = new R(document.getElementById('c'));
+  await r.load();
+
+  const checks = [];
+  const ok = (name, cond, extra = '') => checks.push({ name, pass: !!cond, extra });
+  const meshes = (root) => { const o = []; root.traverse(m => { if (m.isMesh) o.push(m); }); return o; };
+  const nonOutline = (root) => meshes(root).filter(m => !m.userData.outline).length;
+  const TINT = 0x33cc88;
+
+  // ── Structural floor probes: the absolute minimum non-outline mesh count for
+  // each rig class (every mesh-reducer engaged). A real member can only ADD
+  // meshes (face / ears / neck / accessories), so member >= floor + accCount.
+  R.registerAvatarPack({
+    id: 'probe', version: 1, label: 'P', path: ['P'], builtin: true,
+    avatars: [
+      { id: 'probe/hum',  label: 'H', rig: 'humanoid', humanoid: { eyes: 'none', noFace: true, earSkip: true } },
+      { id: 'probe/hov',  label: 'V', rig: 'humanoid', humanoid: { eyes: 'none', noFace: true, earSkip: true, hover: 300 } },
+      { id: 'probe/quad', label: 'Q', rig: 'quadruped', pet: true, quadruped: { ears: 'none', tail: 'none', snout: 0 } },
+    ],
+  });
+  const humFloor  = nonOutline(r._buildHumanoid(TINT, 'probe/hum').group);
+  const hovFloor  = nonOutline(r._buildHumanoid(TINT, 'probe/hov').group);
+  const quadFloor = nonOutline(r._buildQuadruped(TINT, 'probe/quad').group);
+
+  // ── Register every manifest pack from its built asset chunk, then structurally
+  // build + assert every member. Collect member ids for the frame-advance pass.
+  const allMembers = [];         // { id, isQuad } for the animation tick
+  let totalMembers = 0;
+  const perPackCounts = [];
+
+  for (const row of AVATAR_PACK_MANIFEST) {
+    let pack = null, importErr = '';
+    try {
+      const pm = await import(`./assets/${row.id}.js` + V);
+      pack = pm.default ?? pm.pack;
+    } catch (e) { importErr = (e && e.message) || String(e); }
+
+    if (!pack) { ok(`pack ${row.id} import+register`, false, importErr || 'no default export'); continue; }
+    R.registerAvatarPack(pack);
+
+    const members = pack.avatars || [];
+    // Per-pack registration check: chunk loaded, member count matches manifest.
+    ok(`pack ${row.id} registered (${members.length})`,
+       members.length === row.count && members.length > 0,
+       members.length === row.count ? '' : `count ${members.length} != manifest ${row.count}`);
+    perPackCounts.push(`${row.id}=${members.length}`);
+    totalMembers += members.length;
+
+    for (const m of members) {
+      const id = m.id;
+      const def = R.resolveAvatarDef(id);
+      const isQuad = def.rig === 'quadruped';
+      const hoverMember = !isQuad && def.humanoid && def.humanoid.hover !== undefined;
+      const accCount = (def.accessories && def.accessories.length) || 0;
+      allMembers.push({ id, isQuad });
+
+      const fails = [];
+      // (0) the member actually resolved to itself (not silently → adult).
+      if (def.id !== id) fails.push(`resolve→${def.id}`);
+
+      // (a) build must not throw.
+      let rig = null;
+      try { rig = isQuad ? r._buildQuadruped(TINT, id) : r._buildHumanoid(TINT, id); }
+      catch (e) { fails.push('build:' + ((e && e.message) || e)); }
+
+      if (rig) {
+        const n = nonOutline(rig.group);
+        // (b) accessories attached: >= structural floor + one mesh per primitive.
+        const floor = isQuad ? quadFloor : (hoverMember ? hovFloor : humFloor);
+        if (n < floor + accCount) fails.push(`mesh ${n}<${floor}+${accCount}`);
+        // (c) quadruped defs → quad rigs; humanoid defs → non-quad.
+        if (isQuad && rig.quad !== true) fails.push('not-quad');
+        if (!isQuad && rig.quad === true) fails.push('unexpected-quad');
+        // (b') hover rigs carry NO legs (all four leg joints null).
+        if (hoverMember && !(rig.leftHip === null && rig.rightHip === null
+              && rig.leftKnee === null && rig.rightKnee === null)) fails.push('hover-has-legs');
+        // (d) dispose/teardown does not throw.
+        try { r._disposeSubtree(rig.group); } catch (e) { fails.push('dispose:' + ((e && e.message) || e)); }
+      }
+
+      ok(`${id}`, fails.length === 0, fails.join('; '));
+    }
+  }
+
+  // ── Frame-advance: ALL members alive as synthetic targets through several
+  // ticks (hover / posture / personality pose math must not throw). Deterministic
+  // clock so no wall-time dependence.
+  const floor = {
+    id: 'f1', name: 'CT', w: 12000, d: 9000,
+    walls: [{ id: 'p', points: [{x:200,y:200},{x:11800,y:200},{x:11800,y:8800},{x:200,y:8800},{x:200,y:200}] }],
+    furniture: [], lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [], windows: [], bg: null, model3d: null, look3d: null,
+    rooms: [{ id: 'rm1', name: 'Den', anchor: { x: 6000, y: 4500 } }],
+  };
+  r.updateFloor(floor, { preset: 'day', floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6' });
+
+  const realNow = performance.now.bind(performance);
+  let fakeNow = realNow();
+  performance.now = () => fakeNow;
+  const ctx = { entityOn: {}, roomNames: { rm1: 'Den' }, timeBucket: 'day' };
+  const targets = allMembers.map((m, i) => ({
+    key: 'ct_' + i,
+    x: 600 + (i % 28) * 400,
+    y: 600 + Math.floor(i / 28) * 260,
+    color: TINT, avatar: m.id,
+  }));
+  let frameThrew = '';
+  try {
+    // Nudge positions each frame so gait/facing math runs (moving rigs).
+    for (let f = 0; f < 6; f++) {
+      fakeNow += 16.7;
+      const moved = targets.map((t, i) => ({ ...t, x: t.x + f * 18 + (i % 3) * 6 }));
+      r.updateTargets(moved, ctx);
+    }
+  } catch (e) { frameThrew = (e && e.stack) ? e.stack.split('\n').slice(0, 4).join(' | ') : String(e); }
+  performance.now = realNow;
+  ok('frame-advance: all members tick no-throw', !frameThrew, frameThrew);
+  ok('frame-advance: rigs alive', Object.keys(r._humanoids).length >= allMembers.length * 0.9,
+     `rigs=${Object.keys(r._humanoids).length}/${allMembers.length}`);
+
+  // ── Teardown / leak check ──────────────────────────────────────────────────
+  const geoBefore = (r._renderer && r._renderer.info) ? r._renderer.info.memory.geometries : -1;
+  let teardownThrew = '';
+  try { r.clearTransientGroups(); } catch (e) { teardownThrew = 'clearTransient:' + ((e && e.message) || e); }
+  const geoAfterClear = (r._renderer && r._renderer.info) ? r._renderer.info.memory.geometries : -1;
+  try { r.destroy(); } catch (e) { teardownThrew += ' destroy:' + ((e && e.message) || e); }
+  ok('teardown no-throw (clear+destroy)', !teardownThrew, teardownThrew);
+  // No-leak check: renderer.info.memory.geometries only tracks geometries once
+  // uploaded via render() — headless never renders, so the count stays untracked
+  // (<=1). When it IS populated, clearTransientGroups must not grow it (geometries
+  // freed, not leaked). Untracked → the no-throw teardown above is the proof.
+  ok('clearTransientGroups: no geometry leak', geoBefore <= 1 || geoAfterClear <= geoBefore,
+     `geo ${geoBefore}→${geoAfterClear}`);
+
+  const passN = checks.filter(c => c.pass).length, total = checks.length;
+  const fails = checks.filter(c => !c.pass);
+  document.getElementById('out').textContent =
+    `packs=${AVATAR_PACK_MANIFEST.length} members=${totalMembers} floors hum=${humFloor} hov=${hovFloor} quad=${quadFloor}\n` +
+    perPackCounts.join(' ') + '\n\n' +
+    fails.map(c => `FAIL ${c.name}  ${c.extra}`).join('\n') +
+    `\n\n${passN}/${total}`;
+  document.title = `AVATAR-CONTENT ${passN === total ? 'PASS' : 'FAIL'} ${passN}/${total}`;
+ } catch (e) {
+  document.title = 'AVATAR-CONTENT ERR: ' + (e && e.stack ? e.stack.split('\n').slice(0,4).join(' | ') : e);
+ }
+</script>
