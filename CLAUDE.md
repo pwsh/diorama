@@ -26,8 +26,12 @@ verification harness) live in `test-pages/` (see its README).
 `docs/models/` holds model/animation build references for household categories
 (appliances, furniture, lighting, decorations, plants, misc); `docs/research/`
 holds build-ready per-item research for every outstanding roadmap/backlog item
-(HA data model + Diorama design + integration checklist) — start at
-`docs/research/README.md` (index + cross-cutting primitives + build order).
+(HA data model + Diorama design + integration checklist) plus deployment/design
+guides (kiosk platforms, home theater, skinning textures) — start at
+`docs/research/README.md` (index + cross-cutting primitives + build order);
+`docs/demo-houses/` holds 8 reconstruction-ready floor-plan specs (studio →
+large multilevel) buildable straight into the `Floor`/`Room`/`Wall`/`Furniture`
+model — see `docs/demo-houses/README.md`.
 
 ## Layout
 

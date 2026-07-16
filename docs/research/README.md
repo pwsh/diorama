@@ -155,3 +155,66 @@ primitives and prerequisites. Building these ONCE unlocks several features:
   (Path A `mqtt/subscribe`, admin-gated) → Frigate box→floor homography
   targets + Valetudo room-segment overlays. **Medium-high conf**; Valetudo
   coordinate unit/origin must be verified on a live instance first.
+
+---
+
+## Deployment, design & content guides (2026-07-15)
+
+A second research batch — NOT roadmap features. These cover *deploying* and
+*dressing* Diorama rather than new HA integrations. Opus review: the kiosk set
+found **no renderer gap** — Diorama's existing DPR-cap, `shadowMap` off,
+toon-material (no PBR), `webglcontextlost` recovery, and `uiMode`/URL-template
+kiosk contract are already the recommended mitigations; the work is a
+per-platform **setup checklist** plus a few small web hooks (Wake Lock,
+Fullscreen, PWA manifest, D-pad focus nav) in [kiosk-web-platform.md]. The one
+hard limit: **Echo Show cannot run a WebGL panel at all** — the doc gives three
+realistic fallbacks instead.
+
+### Kiosk deployment (running Diorama as a wall display)
+- [kiosk-web-platform.md](kiosk-web-platform.md) — **start here**: the
+  cross-platform web techniques (Wake Lock, Fullscreen API, PWA manifest +
+  offline shell, viewport/safe-area/orientation, auto-refresh self-heal, D-pad
+  remote focus nav) and concrete additions to Diorama's kiosk mode. **High conf.**
+- [kiosk-android.md](kiosk-android.md) — Android tablets: Fully Kiosk Browser
+  (recommended) vs. HA Companion launcher vs. WallPanel (archived May 2025) vs.
+  MDM. No renderer gap; setup checklist + small hooks.
+- [kiosk-ios.md](kiosk-ios.md) — iPad/iPhone: PWA standalone, Guided Access,
+  HA Companion Kiosk mode (best default), iOS kiosk-browser options, wake-lock
+  + safe-area + WebGL memory limits. **Medium conf** (some HA-doc strings suspect).
+- [kiosk-windows.md](kiosk-windows.md) — Edge/Chrome `--kiosk`, Assigned
+  Access + Shell Launcher, auto-login, power/screensaver, touch. **High conf.**
+- [kiosk-smart-tv.md](kiosk-smart-tv.md) — webOS/Tizen/Android TV/Fire TV:
+  honest per-platform browser + GPU reality, casting, 10-foot no-touch nav.
+- [kiosk-echo-show.md](kiosk-echo-show.md) — **candid**: a persistent WebGL
+  panel is NOT viable on Echo Show (Silk/Vega OS, APL has no canvas); three
+  realistic fallbacks instead. **Medium-high conf.**
+
+### Home theater
+- [home-theater-equipment.md](home-theater-equipment.md) — physical elements +
+  buildable geometry: Dolby Atmos/CEDIA/THX speaker angles, projector throw,
+  screen/seating/riser sizes, acoustic panels, bias lighting (mm). **High conf.**
+- [home-theater-ha-control.md](home-theater-ha-control.md) — control surfaces:
+  `media_player`, `remote`/Harmony, AV-receiver + projector/PJLink, motorized
+  screen covers, HDMI-CEC, movie-mode scenes, bias light sync. **High conf.**
+- [home-theater-diorama.md](home-theater-diorama.md) — modeling + visualizing +
+  controlling it in Diorama: screen now-playing (reuse `_nowPlayingGroup`),
+  projector beam, speaker fixtures, tiered recliners (avatars already `watch_tv`),
+  bias lighting, movie-mode dim, click-to-control via the media raycast path.
+
+### Skinning — textures, colors, walls, flooring
+- [skin-flooring.md](skin-flooring.md) — hardwood/LVP/tile/stone/concrete/carpet
+  with mm plank/tile sizes, color families, patterns → toon `_texCache` textures.
+- [skin-walls.md](skin-walls.md) — paint/wallpaper/paneling/brick/stone/tile/
+  wainscoting + exterior siding, extending the procedural texture pipeline.
+- [skin-palettes.md](skin-palettes.md) — 8 whole-home palettes (modern →
+  transitional) with named-paint hex/LRV, **adjusted for the toon saturation
+  push** so muted real colors still read. **Medium-high conf.**
+- [skin-procedural.md](skin-procedural.md) — the CanvasTexture engineering layer:
+  a shared material recipe registry + correct mm repeat, seamless tiling, per-
+  material color params, aligned with the `_mat()` toon factory. **Medium-high.**
+
+### Demo house library
+- [../demo-houses/README.md](../demo-houses/README.md) — 8 reconstruction-ready
+  floor-plan specs (studio → large 3-level luxury), each with mm coordinates,
+  room tables, wall/door/window schedules, furniture + appliance placement, and
+  skinning — buildable directly into Diorama `Floor`/`Room`/`Wall`/`Furniture`.
