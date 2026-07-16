@@ -1,0 +1,230 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>stairs descend test</title>
+<style>html,body{margin:0;background:#111;color:#ccc;font:12px sans-serif}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<!--
+  Descending-stairs avatar walking (v1). A SUNKEN flight (elevation < 0) is
+  walkable terrain, but nav must only enter/exit it at its shallow (top, local
+  +y) edge. _buildNav now blocks a one-cell rail band along the flight's two long
+  (±x) sides + its deep (−y) end, leaving the top open — so the flight is a
+  dead-end corridor off the room's region and a rig can't step sideways off a
+  tread and pop up through the slab. Where a second sunken stairs-family
+  footprint abuts (flight → landing), the shared edge stays open (abutment
+  exception). The AI/demo controller occasionally targets the deepest tread
+  ("go downstairs" → hold → fast-fade → respawn) and occasionally spawns there
+  and climbs out ("emerge"). Ascending flights (elevation ≥ 0) are untouched.
+
+  Asserts: (a) side + deep-end rails blocked, top open; (b) A* route room→deep
+  tread exists + stays on the footprint below the top; (c) driven AI rig reaches
+  negative groundY on the flight; (d) deep-end cell has no walkable neighbour
+  beyond it; (e) ascending-stair neighbourhood unchanged (side cells walkable,
+  no sunkenFlights entry); (f) blob shadow world-y tracks the negative groundY;
+  (g) chained flight + sunken-landing abutment stays connected (deep-adjacent
+  cell railed WITHOUT the landing, walkable WITH it, regions share); (h) descend
+  goal → dwell → fast-fade dispose → normal respawn; (i) emerge spawn starts on
+  the flight and walks up/out. Serve the built renderer chunk next to this file.
+-->
+<script type="module">
+  const mod = await import('./assets/three-renderer.js?v=' + Date.now());
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+
+  const tests = [];
+  const ok = (name, cond, detail) => tests.push({ name, ok: !!cond, detail });
+
+  const FW = 8000, FD = 8000;
+  const scene3d = { preset: 'day', floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6' };
+
+  // ── MAIN scene: a walled room with a DESCENDING flight (top opens into the
+  // room) plus an ASCENDING flight out in the open floor.
+  // Room x∈[1000,4000] y∈[1000,7000]. Flight center (2500,3500), w1000×h3600 →
+  // footprint x[2000,3000] y[1700,5300]; local +y = top (y=5300, opens into the
+  // upper room), local −y = deep (y=1700). elevation −2400 → deep tread ≈ −2126.
+  const FLIGHT = { id: 'flight', x: 2500, y: 3500, w: 1000, h: 3600, kind: 'stairs', rotation: 0, elevation: -2400 };
+  const ASCEND = { id: 'ascend', x: 6000, y: 3500, w: 1000, h: 3600, kind: 'stairs', rotation: 0, elevation: 0 };
+  const RX0 = 1000, RX1 = 4000, RY0 = 1000, RY1 = 7000;
+  const roomWalls = [
+    { id: 'w_close', points: [{x:RX0,y:RY0},{x:RX1,y:RY0},{x:RX1,y:RY1},{x:RX0,y:RY1},{x:RX0,y:RY0}] },
+  ];
+  const mkFloor = (furniture, walls = []) => ({
+    id: 'f1', name: 'Stairwell', w: FW, d: FD, walls, furniture,
+    lights: [], switches: [], sensors: [], motionSensors: [],
+    envSensors: [], doors: [], windows: [], bg: null, model3d: null, look3d: null,
+    rooms: [{ id: 'rm1', name: 'Hall', anchor: { x: 2500, y: 6000 } }],
+  });
+
+  r.updateFloor(mkFloor([FLIGHT, ASCEND], roomWalls), scene3d);
+  r.applyViewPreset('top');
+
+  const n = r._nav;
+  const cellIdx = (wx, wy) => {
+    const cx = Math.max(0, Math.min(n.nx - 1, Math.floor(wx / n.cell)));
+    const cy = Math.max(0, Math.min(n.ny - 1, Math.floor(wy / n.cell)));
+    return cy * n.nx + cx;
+  };
+  const cellWorld = (i) => ({ x: ((i % n.nx) + 0.5) * n.cell, y: (((i / n.nx) | 0) + 0.5) * n.cell });
+  const blockedW = (wx, wy) => r._blockedWorld(wx, wy);
+  const regionW = (wx, wy) => n.region[cellIdx(wx, wy)];
+  // Local footprint coords of a world point relative to the flight (rotation 0).
+  const flLocal = (wx, wy) => ({ x: wx - FLIGHT.x, y: wy - FLIGHT.y });
+
+  const deep = (n.sunkenFlights || []).find(f => f.key === 'flight');
+
+  // (a) Rails: two long sides + deep end blocked; top edge open + walkable.
+  ok('left long-side railed', blockedW(1925, 3500), `l.x=${flLocal(1925,3500).x}`);
+  ok('right long-side railed', blockedW(3075, 3500), `l.x=${flLocal(3075,3500).x}`);
+  ok('deep (−y) end railed', blockedW(2500, 1600), `l.y=${flLocal(2500,1600).y}`);
+  ok('top (+y) edge OPEN', !blockedW(2500, 5450), `l.y=${flLocal(2500,5450).y}`);
+  ok('flight interior walkable', !blockedW(2500, 3500), '');
+  ok('top edge is in the room region', regionW(2500, 5450) === regionW(2500, 6000) && regionW(2500, 6000) >= 0,
+     `top=${regionW(2500,5450)} room=${regionW(2500,6000)}`);
+
+  // (b) A* route from the room to the deepest tread; stays on the footprint
+  // once it drops below the top edge (rails forbid any off-footprint sub-top cell).
+  ok('sunkenFlights recorded the deep tread', !!deep && deep.groundY < -1000,
+     deep ? `x=${Math.round(deep.x)} y=${Math.round(deep.y)} g=${Math.round(deep.groundY)}` : 'none');
+  const deepCell = deep ? cellIdx(deep.x, deep.y) : -1;
+  const startCell = r._nearestFreeCell(cellIdx(2500, 6000));
+  const path = deep ? r._aStar(startCell, deepCell) : null;
+  const TOP_Y = FLIGHT.y + FLIGHT.h / 2;   // 5300
+  let staysOnFootprint = !!path;
+  if (path) {
+    for (const ci of path) {
+      const w = cellWorld(ci);
+      if (w.y < TOP_Y - 1) {                // below the top edge → must be on the flight
+        const l = flLocal(w.x, w.y);
+        if (Math.abs(l.x) > FLIGHT.w / 2 || Math.abs(l.y) > FLIGHT.h / 2) { staysOnFootprint = false; break; }
+      }
+    }
+  }
+  ok('A* path room→deep tread exists', !!path && path.length > 1 && path[path.length - 1] === deepCell,
+     path ? `len=${path.length} end=${path[path.length-1]}(deep=${deepCell})` : 'null');
+  ok('A* path stays on the flight footprint below the top', staysOnFootprint, '');
+
+  // (d) The deepest tread cell has no walkable neighbour further into −y.
+  ok('deep-end cell has no walkable neighbour beyond it',
+     !!deep && blockedW(deep.x, deep.y - n.cell * 1.2), deep ? `probe=${Math.round(deep.y - n.cell*1.2)}` : '-');
+
+  // (e) Ascending stair untouched: side cells walkable, not in sunkenFlights.
+  ok('ascending side cell walkable', !blockedW(6600, 3500), '');
+  ok('ascending interior walkable', !blockedW(6000, 3500), '');
+  ok('ascending flight NOT recorded as sunken',
+     (n.sunkenFlights || []).every(f => f.key !== 'ascend'), `flights=${(n.sunkenFlights||[]).map(f=>f.key).join(',')}`);
+
+  // ── Deterministic clock for driving the controller.
+  const realNow = performance.now.bind(performance);
+  let fakeNow = realNow();
+  performance.now = () => fakeNow;
+  const DT = 16.7;
+  const ctx = { entityOn: {}, roomNames: { rm1: 'Hall' }, timeBucket: 'day' };
+  const mkAi = (key, x, y) => ({ key, x, y, color: 0x4fc3f7, ai: true });
+  const step = (tgt) => { fakeNow += DT; r.updateTargets([tgt], ctx); };
+
+  // (c)/(f) Drive an AI rig to the deepest tread and confirm it reaches negative
+  // groundY, with the blob shadow world-y tracking it.
+  const K = 'ai1';
+  step(mkAi(K, 2500, 6000));            // seed near the sensor
+  step(mkAi(K, 2500, 6000));           // one more so the rig builds
+  {
+    const ai = r._aiState[K];
+    ai.x = deep.x; ai.y = deep.y;       // force the raw goal onto the deep tread
+    ai.state = 'idle'; ai.timer = 999; ai.path = null; ai.descendGoal = false;
+  }
+  let minGroundY = Infinity, blobAtMin = null, groundAtMin = Infinity;
+  for (let i = 0; i < 240; i++) {
+    step(mkAi(K, 2500, 6000));
+    const h = r._humanoids[K];
+    if (!h) continue;
+    if (h.groundY < minGroundY) {
+      minGroundY = h.groundY;
+      const wb = h.group.localToWorld(h.blob.position.clone());
+      blobAtMin = wb.y; groundAtMin = h.groundY;
+    }
+  }
+  ok('driven AI rig reaches negative groundY (< −1000)', minGroundY < -1000, `minGroundY=${Math.round(minGroundY)}`);
+  ok('blob shadow world-y tracks groundY at depth',
+     blobAtMin != null && Math.abs(blobAtMin - (groundAtMin + 10)) < 40 && blobAtMin < -900,
+     `blobY=${blobAtMin!=null?Math.round(blobAtMin):'-'} groundY=${Math.round(groundAtMin)}`);
+
+  // (h) Descend behaviour: force the descend goal + arrival dwell; the rig should
+  // fast-fade + dispose, then the normal spawn path brings a fresh rig back.
+  const KF = 'fade1';
+  step(mkAi(KF, 2500, 6000));
+  step(mkAi(KF, 2500, 6000));
+  {
+    const ai = r._aiState[KF];
+    ai.x = deep.x; ai.y = deep.y; ai.path = null; ai.timer = 999;
+    ai.state = 'idle'; ai.descendGoal = true; ai.descendDwell = 1.5;
+  }
+  let disappeared = false, disappearFrame = -1;
+  for (let i = 0; i < 180; i++) {
+    step(mkAi(KF, 2500, 6000));
+    if (!r._humanoids[KF]) { disappeared = true; disappearFrame = i; break; }
+  }
+  let respawned = false;
+  for (let i = 0; i < 20 && !respawned; i++) {
+    step(mkAi(KF, 2500, 6000));
+    if (r._humanoids[KF]) respawned = true;
+  }
+  ok('descend goal fast-fades + disposes the rig at the bottom', disappeared, `frame=${disappearFrame}`);
+  ok('normal spawn logic respawns the avatar after descent', respawned, '');
+
+  // (i) Emerge: force a fresh spawn to start AT the deepest tread and climb out.
+  const KE = 'emerge1';
+  const realRandom = Math.random;
+  Math.random = () => 0.1;               // <0.25 → emerge; deterministic seed
+  step(mkAi(KE, 2500, 6000));           // seed frame (emerges)
+  Math.random = realRandom;
+  const emAi = r._aiState[KE];
+  const emergedDeep = emAi && Math.hypot(emAi.x - deep.x, emAi.y - deep.y) < n.cell * 2;
+  const emergeHasGoal = emAi && emAi.state === 'wander' && !!(emAi.path && emAi.path.length);
+  let emMinGround = Infinity;
+  for (let i = 0; i < 90; i++) {
+    step(mkAi(KE, 2500, 6000));
+    const h = r._humanoids[KE];
+    if (h) emMinGround = Math.min(emMinGround, h.groundY);
+  }
+  ok('emerge spawn starts at the deepest tread', emergedDeep,
+     emAi ? `x=${Math.round(emAi.x)} y=${Math.round(emAi.y)} deep=(${Math.round(deep.x)},${Math.round(deep.y)})` : '-');
+  ok('emerge rig has an outbound (climb-up) goal', emergeHasGoal, emAi ? `state=${emAi.state} path=${emAi.path?emAi.path.length:0}` : '-');
+  ok('emerge rig stood on the flight (negative groundY)', emMinGround < -800, `emMinGround=${Math.round(emMinGround)}`);
+
+  performance.now = realNow;
+
+  // (g) Chained flight + sunken landing: the shared edge stays open. Control =
+  // flight alone (deep-adjacent cell IS railed); with an abutting sunken landing
+  // that same cell becomes walkable and the two interiors share a region.
+  // Cell center 1575 (cy 10): a deep-rail cell of the flight (l.y ≈ −1925, off
+  // the footprint) that ALSO lies inside the landing footprint (y ∈ [700,1700]).
+  const PROBE = { x: 2500, y: 1575 };
+  r.updateFloor(mkFloor([FLIGHT]), scene3d);   // flight ALONE (no landing)
+  const railedWithoutLanding = r._blockedWorld(PROBE.x, PROBE.y);
+
+  const LANDING = { id: 'landing', x: 2500, y: 1200, w: 1000, h: 1000, kind: 'stair_landing', rotation: 0, elevation: -2400 };
+  r.updateFloor(mkFloor([FLIGHT, LANDING]), scene3d);
+  const n2 = r._nav;
+  const cellIdx2 = (wx, wy) => {
+    const cx = Math.max(0, Math.min(n2.nx - 1, Math.floor(wx / n2.cell)));
+    const cy = Math.max(0, Math.min(n2.ny - 1, Math.floor(wy / n2.cell)));
+    return cy * n2.nx + cx;
+  };
+  const walkableWithLanding = !r._blockedWorld(PROBE.x, PROBE.y);
+  const flightRegion = n2.region[cellIdx2(2500, 3500)];
+  const landingRegion = n2.region[cellIdx2(2500, 1200)];
+  ok('deep-adjacent cell IS railed without the landing (control)', railedWithoutLanding, '');
+  ok('abutting sunken landing OPENS the shared edge', walkableWithLanding, '');
+  ok('chained flight + landing interiors share a region',
+     flightRegion >= 0 && flightRegion === landingRegion, `flight=${flightRegion} landing=${landingRegion}`);
+
+  // ── Tally.
+  let pass = 0; const fails = [];
+  for (const t of tests) { if (t.ok) pass++; else fails.push(t.name); }
+  const total = tests.length, allPass = pass === total;
+  const title = allPass ? `STAIRS-DESCEND PASS ${pass}/${total}` : `STAIRS-DESCEND FAIL ${pass}/${total} [${fails.join(',')}]`;
+  document.title = title;
+  window.__RESULT__ = { title, deep, minGroundY, disappeared, respawned };
+  document.body.insertAdjacentHTML('beforeend',
+    `<pre style="position:fixed;left:8px;top:8px;color:#8f8">${title}\n` +
+    tests.map(t => `${t.ok?'PASS':'FAIL'} ${t.name} — ${t.detail??''}`).join('\n') + `</pre>`);
+</script>

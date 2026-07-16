@@ -264,6 +264,46 @@ authoring:
   same reasoning as the `localState` note in CLAUDE.md — no risk found, just
   confirm it stays true).
 
+## Shipped design v1 — "walking on stairs below floor level" (2026-07-16, Fable)
+
+Scope decision: ship the WITHIN-FLOOR descending-stairs experience now;
+Tier-2 cross-floor transits (stairLinkId / BLE floor-change handoff /
+glass-house transit group) stay parked. Everything below is
+renderer-internal — no types/store/HA changes.
+
+Facts established by recon: the stairwell "well" hole equals the sunken
+stair's own footprint (treads fill it — there is no open pit); `_terrain`
+already carries sunken flights and `_groundYAt` already returns NEGATIVE
+tread heights; rigs already ease `h.groundY` onto treads. What's missing:
+
+1. **Nav rails for sunken flights** (`_buildNav`): for each stairs-family
+   piece with `elevation < 0`, mark a one-cell BLOCKED ring along its two
+   long sides and its deep (−y local) end — the top edge stays open. Nav
+   then only enters/exits a descending flight at the top, so a rig can never
+   step sideways off mid-flight and pop up through the slab. Chained sunken
+   pieces (flight → sunken landing → flight) keep openings where two sunken
+   stairs-family footprints abut (reuse the existing stairs-adjacency
+   stitch). Ascending (elevation ≥ 0) stairs are untouched — no regression.
+2. **Descend-the-stairs behavior** (AI/demo controller): when a sunken
+   flight exists in the rig's nav region, the wander goal picker
+   occasionally (~1 in 6 goal rolls, deterministic per the existing
+   hash-desync idioms) targets the flight's DEEPEST tread cell. On arrival
+   (raw dwell at the bottom), the rig holds a beat, then **fast-fades**
+   (reuse the `TargetWorld.edge`-style scale-out) and respawns via its
+   normal spawn logic — reads as "went downstairs". Symmetric **emerge**:
+   a (re)spawn may start at the deepest tread mid-fade-IN and walk up and
+   out — "came upstairs". Radar/BLE targets are NEVER despawned by stairs
+   (raw truth wins; they simply track treads when their position maps onto
+   a flight).
+3. **Grounding polish**: blob shadow, seated/idle poses, and bubble anchors
+   already follow `h.groundY`; verify at negative heights in the test page
+   (no code expected).
+
+Test page `stairs-descend-test.html`: nav rails (side cells blocked, top
+open, deep end blocked), A* route onto the flight reaches negative
+`groundY`, descend-goal → fade at the bottom → respawn, emerge spawn walks
+up, ascending stairs unaffected, blob/pose sanity at negative ground.
+
 ## Integration steps
 
 **Tier 1** (ship first — small, self-contained, no data-model risk beyond one

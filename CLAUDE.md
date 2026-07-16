@@ -325,6 +325,23 @@ Every `.section` renders through `Sidebar._section(slug, title, bodyThunk, opts?
 - **Window blinds**: `Window.coverEntity?` (cover.*) — 3D roller shade descends from the header ((1−fraction)·glassH + weight bar, proud of the glass); 2D closedness tick. Fraction 1 = shade UP (HA position 100 = open).
 - **Doorbell pulses**: `Door.doorbellEntity?` (event/binary_sensor/button/input_button — picker now accepts `string | string[]` domains). Planner `_detectDoorbells` (LIVE path) pushes `{doorId, at}` into `Planner.doorbellRings` on state-string change (silent first-seed; prune >8 s cap 8). 2D expanding rings + 🔔; 3D generic **transient-pulse primitive** `TransientPulse {x,y,ageS,kind}` → `updateDoorbellPulses`/`_pulseGroup` (rebuilds only while pulses exist; RingGeometry/MeshBasicMaterial is a documented flat-material exemption). Rings feed the bubble trigger tier (`BUBBLE_POOL_TRIGGER.doorbell` 🔔🚪👀). Test page `covers-test.html` (`COVERS PASS 22/22`).
 
+### Descending stairs (below floor level)
+Stairs-family pieces with `elevation < 0` cut their own stairwell hole and
+build treads below the slab (dark void plane beneath); `_groundYAt` returns
+NEGATIVE tread heights and rigs ease `h.groundY` onto them. `_buildNav` adds
+**rails** around sunken flights: a one-cell blocked band on the two long
+sides + deep end, top edge open (abutting sunken stairs-family footprints
+keep shared edges open for chained flight→landing→flight), so nav can only
+enter/leave a descending flight at the top — no sideways pop-through-the-slab.
+`_nav.sunkenFlights` precomputes each flight's deepest walkable tread; the
+AI/demo controller occasionally (~1/6 goal rolls) walks a rig down to it,
+dwells ~1.5 s, fast-fades + disposes ("went downstairs" — normal spawn
+re-seeds), and ~1/4 of fresh wander spawns EMERGE at the deepest tread and
+walk up/out. Radar/BLE targets are never despawned/redirected by stairs (raw
+truth wins; they just track tread heights). Ascending stairs unchanged.
+Tier-2 cross-floor transits stay parked (docs/research/avatar-nav-stairs.md).
+Test page `stairs-descend-test.html`.
+
 ### Nav snap wall-LOS filter (bookcase pass-through fix)
 `_nearestFreeCell`'s largest-region preference used to jump WALLS (a raw point in a wall-backed bookcase footprint snapped to the big outdoor region → rig locked outside). `_buildNav` now precomputes `_nav.wallSolids` (solid wall runs, openings excised via `wallCutsForSegment`, invisible walls excluded — consistent with the rasterizer) and `_nearestFreeCell` filters ring candidates to those with clear wall-LOS from the query point BEFORE the largest-region tie-break, falling back to unfiltered only when every candidate is walled off (never fails where the old code succeeded). `_regionOfWorld` (and through it the stuck-respawn + radar/AI goal-region resolution) inherits; `_nearestFreeCellInRegion`/`InLoop` were already constrained-safe. Door openings pass LOS, so walking out through a door still tracks. Regression: `test-pages/bookcase-los-test.html` (`BOOKCASE-LOS PASS 11/11`).
 

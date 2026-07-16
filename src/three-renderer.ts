@@ -272,6 +272,13 @@ interface AiState {
   // goals). 'goal' = BLE-trilaterated person: the ONLY goal source is the latest
   // solve passed in each frame; no random wander, no room confinement.
   mode: 'wander' | 'goal';
+  // Descend-the-stairs (wander mode only). `descendGoal` marks the current goal
+  // as a sunken flight's deepest tread; on arrival the rig holds `descendDwell`
+  // seconds, then `descendFade` triggers a fast scale-out + full dispose in the
+  // main loop so the normal spawn path re-seeds the avatar ("went downstairs").
+  descendGoal?: boolean;
+  descendDwell?: number;
+  descendFade?: boolean;
 }
 
 interface Humanoid {
@@ -827,7 +834,13 @@ export class ThreeDRenderer {
                   // once at build time for cheap repeated line-of-sight tests in
                   // snap candidate filtering. Invisible walls are excluded (they're
                   // passable dividers), matching the nav rasterizer + movement.
-                  wallSolids: Float64Array } | null = null;
+                  wallSolids: Float64Array;
+                  // Per SUNKEN stairs-family flight (elevation < 0): the deepest
+                  // walkable tread cell (world mm) + its groundY. Populated in
+                  // _buildNav; the "go downstairs" AI goal picker + the emerge
+                  // spawn read it. Empty when no descending flight exists.
+                  sunkenFlights: { key: string; x: number; y: number; groundY: number }[]
+                } | null = null;
   private _navRev = 0;
 
   // Foreground wall-cutaway (Sims dollhouse). Tagged wall meshes — active-floor
@@ -2764,6 +2777,59 @@ export class ThreeDRenderer {
       }
     }
 
+    // Nav rails for SUNKEN stairs-family flights. A descending flight's treads
+    // are walkable terrain (skipped from `blocked` in the furniture loop above),
+    // but nav must only ENTER / EXIT it at its shallow (top, local +y) edge —
+    // otherwise a rig could step sideways off a tread and pop up through the
+    // slab. Block a one-cell band hugging the two long (±x) sides and the deep
+    // (−y) end; the top (+y) edge stays open, so the flight becomes a dead-end
+    // corridor off the room's region (same region, reachable only from the top).
+    // Where a second sunken stairs-family footprint abuts (chained flight →
+    // landing → flight), the shared edge stays open because those cells are the
+    // neighbour's walkable terrain (skipped below via onStairTerrain — same
+    // abutment test idiom as _buildFurniture's faceOpen). Ascending flights
+    // (elevation ≥ 0) are untouched — no regression to existing stairs.
+    const stairsFamily = furniture.filter(fu =>
+      fu.kind === 'stairs' || fu.kind === 'stairs_half' || fu.kind === 'stair_landing');
+    const sunkenStairs = stairsFamily.filter(fu => (fu.elevation ?? 0) < 0);
+    // A cell inside ANY stairs-family footprint is walkable terrain — never rail
+    // it (keeps chained sunken pieces connected at their shared edges).
+    const onStairTerrain = (wx: number, wy: number): boolean => {
+      for (const st of stairsFamily) {
+        const l = furnitureWorldToLocal(st.rotation, wx - st.x, wy - st.y);
+        if (Math.abs(l.x) <= st.w / 2 && Math.abs(l.y) <= st.h / 2) return true;
+      }
+      return false;
+    };
+    const railBand = cell * 1.5;   // one-cell rail, thickened so rotation can't leak a gap
+    for (const fu of sunkenStairs) {
+      const halfW = fu.w / 2, halfH = fu.h / 2;
+      const reach = Math.hypot(halfW, halfH) + railBand + cell;
+      const c0x = clampX(Math.floor((fu.x - reach) / cell));
+      const c1x = clampX(Math.floor((fu.x + reach) / cell));
+      const c0y = clampY(Math.floor((fu.y - reach) / cell));
+      const c1y = clampY(Math.floor((fu.y + reach) / cell));
+      for (let cy = c0y; cy <= c1y; cy++) {
+        for (let cx = c0x; cx <= c1x; cx++) {
+          const wx = (cx + 0.5) * cell, wy = (cy + 0.5) * cell;
+          const l = furnitureWorldToLocal(fu.rotation, wx - fu.x, wy - fu.y);
+          // Inside the footprint = walkable tread; never rail it.
+          if (Math.abs(l.x) <= halfW && Math.abs(l.y) <= halfH) continue;
+          // Only the three CLOSED edges; the top (l.y > halfH) is left open.
+          const rightSide = l.x > halfW && l.x <= halfW + railBand &&
+                            l.y <= halfH && l.y >= -halfH - railBand;
+          const leftSide  = l.x < -halfW && l.x >= -halfW - railBand &&
+                            l.y <= halfH && l.y >= -halfH - railBand;
+          const deepEnd   = l.y < -halfH && l.y >= -halfH - railBand &&
+                            l.x <= halfW + railBand && l.x >= -halfW - railBand;
+          if (!(rightSide || leftSide || deepEnd)) continue;
+          // Abutment: never brick over a neighbour flight's walkable terrain.
+          if (onStairTerrain(wx, wy)) continue;
+          blocked[cy * nx + cx] = 1;
+        }
+      }
+    }
+
     let blockedCount = 0;
     for (let i = 0; i < blocked.length; i++) if (blocked[i]) blockedCount++;
 
@@ -2798,8 +2864,37 @@ export class ThreeDRenderer {
       regionSize[id] = tail;  // cells enqueued for this component == its size
     }
 
+    // Per sunken flight: the deepest walkable tread cell (goal for "go
+    // downstairs" + the emerge spawn point). Scan the flight's footprint cells
+    // and pick the free one with the LOWEST groundY (deep = local −y end; ties
+    // resolve by lowest, matching _groundYAt's tread quantization). _terrain is
+    // fully populated before _buildNav (updateFloor builds furniture first), so
+    // _groundYAt is valid here.
+    const sunkenFlights: { key: string; x: number; y: number; groundY: number }[] = [];
+    for (const fu of sunkenStairs) {
+      const halfW = fu.w / 2, halfH = fu.h / 2;
+      const reach = Math.hypot(halfW, halfH) + cell;
+      const c0x = clampX(Math.floor((fu.x - reach) / cell));
+      const c1x = clampX(Math.floor((fu.x + reach) / cell));
+      const c0y = clampY(Math.floor((fu.y - reach) / cell));
+      const c1y = clampY(Math.floor((fu.y + reach) / cell));
+      let best: { x: number; y: number; groundY: number } | null = null;
+      for (let cy = c0y; cy <= c1y; cy++) {
+        for (let cx = c0x; cx <= c1x; cx++) {
+          const wx = (cx + 0.5) * cell, wy = (cy + 0.5) * cell;
+          const l = furnitureWorldToLocal(fu.rotation, wx - fu.x, wy - fu.y);
+          if (Math.abs(l.x) > halfW || Math.abs(l.y) > halfH) continue;  // off footprint
+          if (blocked[cy * nx + cx]) continue;                          // not walkable
+          const g = this._groundYAt(wx, wy);
+          if (!best || g < best.groundY) best = { x: wx, y: wy, groundY: g };
+        }
+      }
+      if (best) sunkenFlights.push({ key: fu.id, x: best.x, y: best.y, groundY: best.groundY });
+    }
+
     this._nav = { cell, nx, ny, blocked, region, regionSize, rev: ++this._navRev,
-                  blockedCount, wallSolids: Float64Array.from(wallSolidRuns) };
+                  blockedCount, wallSolids: Float64Array.from(wallSolidRuns),
+                  sunkenFlights };
   }
 
   // Does the segment (ax,ay)→(bx,by) cross any prepared solid wall run? Cheap
@@ -6647,12 +6742,32 @@ export class ThreeDRenderer {
           x = w.x; y = w.y;
         }
       }
+      // Emerge: a fresh wander spawn in a region that has a sunken flight
+      // occasionally starts AT the deepest tread (fade-in as usual) and its
+      // first goal is placed out in the room, so it walks UP the flight and out
+      // — reads as "came upstairs". BLE/goal rigs (real devices) never do this.
+      let emerge = false;
+      if (!goalMode && this._nav) {
+        const region = this._regionOfWorld(x, y);
+        const flights = (this._nav.sunkenFlights ?? []).filter(
+          fl => this._regionOfWorld(fl.x, fl.y) === region);
+        if (flights.length && Math.random() < 0.25) {
+          const fl = flights[(Math.random() * flights.length) | 0];
+          x = fl.x; y = fl.y; emerge = true;
+        }
+      }
       ai = {
         x, y, goalX: x, goalY: y, state: 'idle', timer: 1 + Math.random() * 2,
         path: null, speed: 0.7, anchorX: t.x, anchorY: t.y,
         mode: goalMode ? 'goal' : 'wander',
       };
       this._aiState[t.key] = ai;
+      if (emerge) {
+        // Climb out immediately: pick a normal (non-descend) room goal from the
+        // sensor's home loop and start walking up the flight.
+        this._aiPickGoal(ai, false);
+        if (ai.path && ai.path.length) ai.state = 'wander';
+      }
       t.x = x; t.y = y;
       return;
     }
@@ -6673,9 +6788,24 @@ export class ThreeDRenderer {
       // Walk the virtual raw along the planned waypoint chain at leg speed.
       this._walkAlongPath(ai, dt);
       if (!ai.path || !ai.path.length) {
-        ai.state = 'idle'; ai.timer = 4 + Math.random() * 11;   // dwell 4..15 s
+        if (ai.descendGoal) {
+          // Arrived at the bottom of a sunken flight: hold a beat before fading.
+          ai.state = 'idle'; ai.descendDwell = 1.5;
+        } else {
+          ai.state = 'idle'; ai.timer = 4 + Math.random() * 11;   // dwell 4..15 s
+        }
       }
     } else {
+      // Descend hold: sit at the deepest tread for ~1.5 s, then flag the rig to
+      // fast-fade + dispose (the main loop does the shrink; the normal spawn
+      // path then re-seeds the avatar at its sensor). Bypasses the usual
+      // idle/goal-repick so nothing walks it back up before it fades.
+      if (ai.descendGoal && ai.descendDwell !== undefined) {
+        ai.descendDwell -= dt;
+        if (ai.descendDwell <= 0) ai.descendFade = true;
+        t.x = ai.x; t.y = ai.y;
+        return;
+      }
       // IDLE / ENGAGED: hold position so the dwell systems can capture it. Once
       // the rig is actually captured (sit / activity / lie), freeze longer so the
       // avatar visibly uses the furniture; the freeze release moves it away and
@@ -6752,11 +6882,24 @@ export class ThreeDRenderer {
   // ~4.5 m of the anchor. When the sensor sits inside a closed wall loop the
   // goal MUST fall inside that loop — a simple presence sensor only vouches
   // for its own room, so its avatar never wanders into adjacent rooms.
-  private _aiPickGoal(ai: AiState): void {
+  private _aiPickGoal(ai: AiState, allowDescend = true): void {
     const region = this._regionOfWorld(ai.anchorX, ai.anchorY);
     const loop = this._aiHomeLoop(ai.anchorX, ai.anchorY);
     let gx: number | null = null, gy = 0;
-    if (Math.random() < 0.25) {
+    ai.descendGoal = false;
+    // "Go downstairs": if a sunken flight's deepest tread is reachable in this
+    // region, occasionally target it (~1 in 6 rolls — the goal picker is a
+    // wander path, so Math.random matches its existing pattern). On arrival the
+    // rig dwells, fast-fades, and respawns — reads as descending out of view.
+    if (allowDescend) {
+      const flights = (this._nav?.sunkenFlights ?? []).filter(
+        fl => this._regionOfWorld(fl.x, fl.y) === region);
+      if (flights.length && Math.random() < 1 / 6) {
+        const fl = flights[(Math.random() * flights.length) | 0];
+        gx = fl.x; gy = fl.y; ai.descendGoal = true;
+      }
+    }
+    if (gx === null && Math.random() < 0.25) {
       const cands: { x: number; y: number }[] = [];
       const consider = (sx: number, sz: number) => {
         const w = this._sceneToWorld(sx, sz);
@@ -7689,6 +7832,22 @@ export class ThreeDRenderer {
       // caught mid-despawn when a flickering target re-acquires). During a stuck
       // respawn, shrink out fast (~0.4 s) instead; once gone, teleport into the
       // goal region and let it grow back in from the new spot.
+      const aiCtl = this._aiState[t.key];
+      if (aiCtl && aiCtl.descendFade) {
+        // Descended to the bottom of a sunken flight: shrink out fast (~0.4 s),
+        // then FULLY dispose so the normal spawn path re-seeds the avatar at its
+        // sensor next frame (reads as "went downstairs"). Reuses the fast
+        // scale-out; unlike the stuck respawn it disposes rather than teleports.
+        h.scale -= h.scale * Math.min(1, dt * 12);
+        h.group.scale.setScalar(h.scale);
+        if (h.scale < 0.05) {
+          this._targetGroup.remove(h.group);
+          this._disposeHumanoid(h);
+          delete this._humanoids[t.key];
+          delete this._aiState[t.key];
+        }
+        continue;   // rig is fading / gone — skip the rest of its per-frame pose
+      }
       if (h.respawnPhase === 1) {
         h.scale -= h.scale * Math.min(1, dt * 12);
         if (h.scale < 0.05) {

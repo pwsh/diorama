@@ -63,6 +63,15 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Descending stairs v1** (backlog: avatar void→stairs; renderer-only,
+  `stairs-descend-test.html` **23/23**, full nav regression set green):
+  nav rails confine sunken flights (blocked band on long sides + deep end,
+  top open, chained-abutment aware), `_nav.sunkenFlights` deepest-tread
+  precompute, AI/demo descend goals (~1/6) with bottom dwell + fast-fade
+  dispose ("went downstairs") and emerge spawns (~1/4) walking up/out;
+  radar/BLE never redirected. Tier-2 cross-floor transits parked — design
+  in docs/research/avatar-nav-stairs.md § "Shipped design v1".
+
 - **Avatar (Pandora) pack** — first pack authored end-to-end through
   `docs/avatars/AUTHORING.md` (Sonnet research doc → Opus module → manifest →
   gate): `avatar-pandora`, `['Sci-Fi','Avatar']`, 7 primary members (4 Na'vi
