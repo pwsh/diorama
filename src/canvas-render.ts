@@ -12,6 +12,8 @@ import {
   robotGlyph, robotColor, ROBOT_DEFAULTS,
   presenceZoneColor, cameraFov, cameraRange, cameraStateColor,
   projectorProjecting, projectorAim, projectorBeamColor, projectorThrow, screenCenterHeight, biasLightColor,
+  VALVE_DEFAULTS, valveOpenness, valveFlowing, valveTransitional, valveRotation,
+  PLUG_DEFAULTS, plugRotation,
   groundAreaColor, groundKindLabel,
   powerGlowScale,
   hexToRgba, lighten, furnitureKind, furnitureCorners, resolveFurnitureDef, isBinKind, binStateIsFull,
@@ -257,6 +259,8 @@ export function drawAll(ctx: CanvasRenderingContext2D, p: Planner, view: View,
   if (on(L.sensors)) drawRobots(ctx, p, view);
   if (on(L.sensors)) drawCameras(ctx, p, view);
   if (on(L.sensors)) drawProjectors(ctx, p, view);
+  if (on(L.sensors)) drawValves(ctx, p, view);       // water valves ride the sensors layer
+  if (on(L.switches)) drawPlugs(ctx, p, view);        // smart plugs ride the switches layer
   // LD2450 inclusion / filter polygons + object halos draw per the zones
   // layer. The Motion toggle only hides motion-sensor cones (drawMotionSensors
   // gates its own cone block).
@@ -1394,6 +1398,175 @@ function drawProjectors(ctx: CanvasRenderingContext2D, p: Planner, view: View): 
   }
 }
 
+// Water valve fixtures (Phase 2b): a floor pipe run with a valve wheel. OPEN =
+// blue water-flow dashes animating along the pipe (RAF-driven lineDashOffset);
+// transitional (opening/closing) = pulsing. The wheel rotates ∝ openness (a
+// quarter-turn ball-valve feel). Unbound reads dimmed. Rides the sensors layer.
+function drawValves(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
+  const dpr = window.devicePixelRatio || 1;
+  const f = p.floor();
+  const t = performance.now() / 1000;
+  for (const v of f.valves ?? []) {
+    const c = mmToPx(view, v.x, v.y);
+    const st = p.effectiveState(v);
+    const open = valveOpenness(st);
+    const flowing = valveFlowing(st);
+    const trans = valveTransitional(st);
+    const unbound = !v.entity_id;
+    const selected = p.activeValveId === v.id;
+    const rot = valveRotation(v) * Math.PI / 180;
+    const halfLen = Math.max(10, VALVE_DEFAULTS.pipeLenMm * 0.5 * view.scale);
+    const pipeW = Math.max(3, VALVE_DEFAULTS.pipeRadiusMm * 2 * view.scale);
+    const wheelR = Math.max(7, VALVE_DEFAULTS.wheelRadiusMm * view.scale);
+    ctx.save();
+    ctx.translate(c.x, c.y);
+    // 0 = pipe along +Y world (screen up). Canvas Y is flipped, so use -rot for
+    // the along-pipe axis: pipe endpoints at (sin, -cos)·halfLen.
+    ctx.rotate(rot);
+    // Pipe body (vertical in local frame, running ±halfLen along local Y).
+    ctx.lineCap = 'round';
+    ctx.lineWidth = pipeW;
+    ctx.strokeStyle = 'rgba(120,144,156,0.85)';
+    ctx.beginPath();
+    ctx.moveTo(0, -halfLen); ctx.lineTo(0, halfLen);
+    ctx.stroke();
+    // Animated water flow dashes while open.
+    if (flowing) {
+      const pulse = trans ? 0.45 + 0.45 * (0.5 + 0.5 * Math.sin(t * 5)) : 0.9;
+      ctx.save();
+      ctx.lineWidth = Math.max(1.5, pipeW * 0.42);
+      ctx.strokeStyle = hexToRgba('#29b6f6', pulse * (0.4 + 0.6 * open));
+      const dash = Math.max(4, pipeW * 0.9);
+      ctx.setLineDash([dash, dash]);
+      ctx.lineDashOffset = -(t * 90) % (dash * 2);   // flow toward +Y
+      ctx.beginPath();
+      ctx.moveTo(0, -halfLen); ctx.lineTo(0, halfLen);
+      ctx.stroke();
+      ctx.restore();
+    }
+    // Valve body (bonnet) at the center.
+    ctx.fillStyle = 'rgba(38,50,56,0.95)';
+    const bodyR = Math.max(5, VALVE_DEFAULTS.bodyMm * 0.5 * view.scale);
+    ctx.beginPath();
+    ctx.arc(0, 0, bodyR, 0, 2 * Math.PI);
+    ctx.fill();
+    // Hand wheel — rotates a quarter-turn from closed (0) to open (1).
+    ctx.globalAlpha = unbound ? 0.6 : 1;
+    ctx.save();
+    ctx.rotate(open * Math.PI / 2);
+    ctx.lineWidth = Math.max(1.5, wheelR * 0.16);
+    ctx.strokeStyle = flowing ? '#29b6f6' : (open > 0 ? '#4fc3f7' : '#ef5350');
+    ctx.beginPath();
+    ctx.arc(0, 0, wheelR, 0, 2 * Math.PI);
+    ctx.stroke();
+    // Spokes.
+    ctx.beginPath();
+    for (let s = 0; s < 4; s++) {
+      const a = s * Math.PI / 2;
+      ctx.moveTo(0, 0);
+      ctx.lineTo(Math.cos(a) * wheelR, Math.sin(a) * wheelR);
+    }
+    ctx.stroke();
+    ctx.restore();
+    ctx.globalAlpha = 1;
+    // Selection ring.
+    if (selected) {
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = '#fff';
+      ctx.beginPath();
+      ctx.arc(0, 0, wheelR + 4, 0, 2 * Math.PI);
+      ctx.stroke();
+    }
+    ctx.restore();
+    // Label below (screen space, unrotated).
+    const label = v.label?.trim() || 'Valve';
+    const badge = st ? (flowing ? (trans ? (st.state) : 'open') : 'closed') : (unbound ? 'unbound' : '—');
+    const txt = `${label} · ${badge}`;
+    ctx.font = `${10 * dpr}px sans-serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+    const tw = ctx.measureText(txt).width + 8 * dpr;
+    const by = c.y + wheelR + halfLen * 0.15 + 6 * dpr;
+    ctx.fillStyle = 'rgba(0,0,0,0.7)';
+    ctx.fillRect(c.x - tw / 2, by, tw, 13 * dpr);
+    ctx.fillStyle = flowing ? '#4fc3f7' : (st ? '#cfd8dc' : '#90a4ae');
+    ctx.fillText(txt, c.x, by + 1 * dpr);
+    drawBatteryBadge(ctx, p, v.entity_id, c.x + wheelR, c.y - wheelR);
+  }
+}
+
+// Smart plug / outlet fixtures (Phase 2b): a wall outlet plate with two socket
+// slots + a plugged-in cord hint. ON = green energized glow (scaled by the
+// optional power draw) + a W readout chip when a powerEntity is bound. Unbound
+// reads dimmed. Rides the switches layer.
+function drawPlugs(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
+  const dpr = window.devicePixelRatio || 1;
+  const f = p.floor();
+  for (const pl of f.plugs ?? []) {
+    const c = mmToPx(view, pl.x, pl.y);
+    const st = p.effectiveState(pl);
+    const on = st?.state === 'on' || st?.state === 'playing';
+    const unbound = !pl.entity_id;
+    const selected = p.activePlugId === pl.id;
+    const rot = plugRotation(pl) * Math.PI / 180;
+    const powerW = pl.powerEntity && p.hass?.states
+      ? parseFloat(p.hass.states[pl.powerEntity]?.state ?? '') : NaN;
+    const glow = on ? (isFinite(powerW) && powerW > 5 ? powerGlowScale(powerW) : 1) : 0;
+    const half = Math.max(7, PLUG_DEFAULTS.size * 0.5 * view.scale);
+    ctx.save();
+    ctx.translate(c.x, c.y);
+    ctx.rotate(rot);
+    // Energized halo behind the plate.
+    if (glow > 0) {
+      ctx.save();
+      ctx.shadowColor = '#4caf50';
+      ctx.shadowBlur = 12 * glow;
+      ctx.fillStyle = hexToRgba('#4caf50', 0.18 * glow);
+      ctx.beginPath();
+      ctx.arc(0, 0, half * 1.5, 0, 2 * Math.PI);
+      ctx.fill();
+      ctx.restore();
+    }
+    // Plate.
+    ctx.beginPath();
+    ctx.roundRect(-half, -half, half * 2, half * 2, half * 0.3);
+    ctx.fillStyle = 'rgba(236,239,241,0.95)';
+    ctx.fill();
+    ctx.lineWidth = selected ? 2.5 : 1.4;
+    ctx.strokeStyle = selected ? '#fff' : (on ? '#4caf50' : hexToRgba('#607d8b', 0.9));
+    ctx.stroke();
+    // Two socket slots.
+    ctx.globalAlpha = unbound ? 0.6 : 1;
+    ctx.fillStyle = on ? '#2e7d32' : '#546e7a';
+    for (const sx of [-0.32, 0.32]) {
+      ctx.fillRect(sx * half - half * 0.06, -half * 0.34, half * 0.12, half * 0.42);
+    }
+    // Ground pin.
+    ctx.beginPath();
+    ctx.arc(0, half * 0.42, half * 0.11, 0, 2 * Math.PI);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    // LED dot (top-right).
+    ctx.beginPath();
+    ctx.arc(half * 0.66, -half * 0.66, Math.max(1.5, half * 0.14), 0, 2 * Math.PI);
+    ctx.fillStyle = on ? '#69f0ae' : 'rgba(120,144,156,0.5)';
+    ctx.fill();
+    ctx.restore();
+    // Label + optional W chip below (screen space, unrotated).
+    const label = pl.label?.trim() || 'Plug';
+    let txt = `${label} · ${st ? (on ? 'on' : 'off') : (unbound ? 'unbound' : '—')}`;
+    if (isFinite(powerW) && on) txt += ` · ${Math.round(powerW)}W`;
+    ctx.font = `${10 * dpr}px sans-serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+    const tw = ctx.measureText(txt).width + 8 * dpr;
+    const by = c.y + half + 5 * dpr;
+    ctx.fillStyle = 'rgba(0,0,0,0.7)';
+    ctx.fillRect(c.x - tw / 2, by, tw, 13 * dpr);
+    ctx.fillStyle = on ? '#69f0ae' : (st ? '#cfd8dc' : '#90a4ae');
+    ctx.fillText(txt, c.x, by + 1 * dpr);
+    drawBatteryBadge(ctx, p, pl.entity_id, c.x + half * 0.9, c.y - half * 0.9);
+  }
+}
+
 // Camera alert snapshot card (#10 extension): a screen-fixed ~220×140 px thumb
 // of the camera's entity_picture with an alert-red border, anchored beside the
 // camera marker and clamped on-canvas. The image is cache-busted every ~3 s
@@ -2352,6 +2525,22 @@ function drawFurniture(ctx: CanvasRenderingContext2D, p: Planner, view: View,
       ctx.shadowBlur = 6 * dpr * glowScale;
       ctx.beginPath();
       ctx.arc(-halfW + r + 2, halfH - r - 2, r, 0, 2 * Math.PI);
+      ctx.fill();
+      ctx.restore();
+    }
+    // "Job done" badge (event-focused thought bubbles): a distinct BLUE pulsing
+    // LED at the front-RIGHT corner while an appliance is within its finished
+    // window (green already means "running", so a separate color/corner reads as
+    // "done, not running"). Reuses the RAF-driven pulse — no new per-frame cost.
+    if (isAppliance && p.applianceJustFinished(piece)) {
+      const pulse = 0.5 + 0.5 * (0.5 + 0.5 * Math.sin(now * 4));
+      const r = Math.max(2.5, 4 * dpr);
+      ctx.save();
+      ctx.fillStyle = `rgba(41,182,246,${pulse.toFixed(3)})`;
+      ctx.shadowColor = 'rgba(41,182,246,0.9)';
+      ctx.shadowBlur = 7 * dpr;
+      ctx.beginPath();
+      ctx.arc(halfW - r - 2, halfH - r - 2, r, 0, 2 * Math.PI);
       ctx.fill();
       ctx.restore();
     }

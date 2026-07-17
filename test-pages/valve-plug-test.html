@@ -1,0 +1,254 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>VALVEPLUG …</title>
+<style>html,body{margin:0;background:#111;color:#cfd8dc;font:12px monospace}#c{width:1280px;height:880px}#log{padding:8px;white-space:pre-wrap}</style>
+<div id="c"></div>
+<div id="log"></div>
+<!-- Water valve + smart plug fixtures (Phase 2b). Three seams:
+       (1) pure state/geometry helpers (geometry.mod.js — 2D + 3D read these):
+             npx esbuild src/geometry.ts --bundle --format=esm --outfile=<H>/geometry.mod.js
+       (2) 3D build (wheel rotation ∝ openness, flow segment only while open,
+           layer gating) via the built three-renderer chunk.
+       (3) toggleValve / toggleItem control logic via the REAL Planner
+           (planner.mod.js, same fake-HaApi/fake-avatar-store build as config-test):
+             T=$(mktemp -d); cp -r src/* "$T"/; cp test-pages/fake-avatar-store.ts "$T"/avatar-store.ts
+             npx esbuild "$T"/planner.ts --bundle --format=esm --outfile=<H>/planner.mod.js
+     Asserts machine-checkable in document.title. -->
+<script type="module">
+  const V = '?v=' + Date.now();
+  const geom = await import('./geometry.mod.js' + V);
+  const mod  = await import('./assets/three-renderer.js' + V);
+  const { Planner } = await import('./planner.mod.js' + V);
+
+  const results = [];
+  const assert = (name, cond, detail = '') => results.push({ name, ok: !!cond, detail: String(detail) });
+  const near = (a, b, t = 1e-6) => Math.abs(a - b) <= t;
+  const { valveOpenness, valveIsOpen, valveFlowing, valveTransitional, snapPlugToWall } = geom;
+
+  // ── (1) pure valveOpenness / valveIsOpen / flowing / transitional matrix ──
+  assert('valve open → 1',            valveOpenness({ state: 'open' }) === 1);
+  assert('valve closed → 0',          valveOpenness({ state: 'closed' }) === 0);
+  assert('valve open pos40 → 0.4',    near(valveOpenness({ state: 'open', attributes: { current_position: 40 } }), 0.4));
+  assert('valve opening nopos → 0.5', valveOpenness({ state: 'opening' }) === 0.5);
+  assert('valve closing pos25 → .25', near(valveOpenness({ state: 'closing', attributes: { current_position: 25 } }), 0.25));
+  assert('switch on → 1',             valveOpenness({ state: 'on' }) === 1);
+  assert('switch off → 0',            valveOpenness({ state: 'off' }) === 0);
+  assert('binary on → 1',             valveOpenness({ state: 'on', attributes: {} }) === 1);
+  assert('localState on → 1',         valveOpenness({ state: 'on', attributes: {} }) === 1);   // synthetic unbound
+  assert('null → 0',                  valveOpenness(null) === 0);
+  assert('clamp over 150 → 1',        valveOpenness({ state: 'open', attributes: { current_position: 150 } }) === 1);
+  assert('valveIsOpen open → true',   valveIsOpen({ state: 'open' }) === true);
+  assert('valveIsOpen closed → false',valveIsOpen({ state: 'closed' }) === false);
+  assert('valveIsOpen opening → true',valveIsOpen({ state: 'opening' }) === true);
+  assert('valveIsOpen pos>0 → true',  valveIsOpen({ state: 'closing', attributes: { current_position: 30 } }) === true);
+  assert('valveFlowing open → true',  valveFlowing({ state: 'open' }) === true);
+  assert('valveFlowing closed → false', valveFlowing({ state: 'closed' }) === false);
+  assert('valveTransitional opening', valveTransitional({ state: 'opening' }) === true);
+  assert('valveTransitional open no', valveTransitional({ state: 'open' }) === false);
+
+  // ── (1b) snapPlugToWall flush offset (WALL_HALF 50 + plateDepth 35/2 = 67.5) ──
+  {
+    const walls = [{ points: [{ x: 0, y: 2000 }, { x: 4000, y: 2000 }] }];
+    const pl = { x: 2000, y: 2100, rotation: 0 };
+    const snapped = snapPlugToWall(pl, walls);
+    assert('plug snaps to a wall', snapped === true);
+    assert('plug flush offset 67.5 from wall', near(pl.y, 2067.5, 0.6), `y=${pl.y}`);
+    assert('plug rotation 0 on horizontal wall', near(((pl.rotation % 360) + 360) % 360, 0, 0.01), `rot=${pl.rotation}`);
+    // No wall in range → no snap.
+    const far = { x: 2000, y: 5000, rotation: 12 };
+    assert('plug no wall in range → no snap', snapPlugToWall(far, walls) === false && far.rotation === 12);
+  }
+
+  // ── (2) renderer: wheel rotation, flow segment, layer gating ─────────────
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+  const scene3d = { preset: 'day', floorColor: '#8a7860', floorTex: 'none', wallColor: '#cfd2d6' };
+  const mkFloor = (valves, plugs) => ({
+    id: 'f1', name: 'T', w: 8000, d: 6000,
+    walls: [{ id: 'w1', points: [{ x: 0, y: 3000 }, { x: 8000, y: 3000 }] }],
+    furniture: [], lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [], windows: [], bg: null, model3d: null, look3d: null, rooms: [],
+    valves, plugs,
+  });
+  const findByPart = (grp, part) => {
+    let hit = null;
+    grp.traverse(o => { if (o.userData && o.userData.part === part) hit = o; });
+    return hit;
+  };
+  const groupFor = (grp, id) => grp.children.find(g => {
+    let h = false; g.traverse(o => { if (o.userData && o.userData.fixtureId === id) h = true; }); return h;
+  });
+
+  const valveOpen   = { id: 'vOpen', x: 2000, y: 2000, rotation: 0, entity_id: 'valve.main' };
+  const valveClosed = { id: 'vClosed', x: 4000, y: 2000, rotation: 0, entity_id: 'valve.side' };
+  const vst = {
+    'valve.main': { state: 'open',  attributes: {}, entity_id: 'valve.main' },
+    'valve.side': { state: 'closed', attributes: {}, entity_id: 'valve.side' },
+  };
+  r.updateFloor(mkFloor([valveOpen, valveClosed], []), scene3d);
+  r.updateValves([valveOpen, valveClosed], id => vst[id] || null);
+  const gOpen = groupFor(r._valveGroup, 'vOpen');
+  const gClosed = groupFor(r._valveGroup, 'vClosed');
+  assert('valve builds a 3D group (open)', !!gOpen);
+  assert('valve builds a 3D group (closed)', !!gClosed);
+  const wheelOpen = gOpen && findByPart(gOpen, 'wheel');
+  const wheelClosed = gClosed && findByPart(gClosed, 'wheel');
+  assert('valve wheel present', !!wheelOpen && !!wheelClosed);
+  assert('wheel rotation differs open vs closed',
+    wheelOpen && wheelClosed && Math.abs(wheelOpen.rotation.z - wheelClosed.rotation.z) > 0.5,
+    `open=${wheelOpen && wheelOpen.rotation.z.toFixed(3)} closed=${wheelClosed && wheelClosed.rotation.z.toFixed(3)}`);
+  const flowOpen = gOpen && findByPart(gOpen, 'flow');
+  const flowClosed = gClosed && findByPart(gClosed, 'flow');
+  assert('flow segment present ONLY while open', !!flowOpen && !flowClosed);
+  assert('valve mesh click-tagged kind=valve',
+    !!(gOpen && (() => { let t = false; gOpen.traverse(o => { if (o.userData && o.userData.kind === 'valve') t = true; }); return t; })()));
+
+  // Valve flow pulse animates (opacity breathes across frames).
+  const realNow = performance.now.bind(performance);
+  let clock = 0; performance.now = () => clock;
+  clock = 0; r._advanceValves(); const op0 = flowOpen.material.opacity;
+  clock = 200; r._advanceValves(); const op1 = flowOpen.material.opacity;
+  assert('valve flow pulse opacity changes across frames', Math.abs(op0 - op1) > 1e-4, `o0=${op0.toFixed(3)} o1=${op1.toFixed(3)}`);
+  performance.now = realNow;
+
+  // Plugs: on (with power) vs off; LED emissive higher when energized.
+  const plugOn  = { id: 'pOn', x: 2000, y: 3000, rotation: 0, entity_id: 'switch.lamp', powerEntity: 'sensor.lamp_w' };
+  const plugOff = { id: 'pOff', x: 4000, y: 3000, rotation: 0, entity_id: 'switch.fan' };
+  const pst = {
+    'switch.lamp': { state: 'on',  attributes: {}, entity_id: 'switch.lamp' },
+    'switch.fan':  { state: 'off', attributes: {}, entity_id: 'switch.fan' },
+    'sensor.lamp_w': { state: '800', attributes: { unit_of_measurement: 'W' }, entity_id: 'sensor.lamp_w' },
+  };
+  r.updatePlugs([plugOn, plugOff], id => pst[id] || null);
+  const gpOn = groupFor(r._plugGroup, 'pOn');
+  const gpOff = groupFor(r._plugGroup, 'pOff');
+  assert('plug builds a 3D group (on)', !!gpOn);
+  assert('plug builds a 3D group (off)', !!gpOff);
+  // Effective emission = intensity only where the emissive COLOR is non-black
+  // (_mat leaves emissiveIntensity at its default 1 even on black-emissive meshes).
+  const ledEmis = (grp) => {
+    let e = 0;
+    grp.traverse(o => {
+      if (o.isMesh && o.material && o.material.emissive && o.material.emissive.getHex() !== 0) {
+        e = Math.max(e, o.material.emissiveIntensity);
+      }
+    });
+    return e;
+  };
+  assert('plug ON energized (emissive > 0), OFF dark',
+    gpOn && gpOff && ledEmis(gpOn) > 0 && ledEmis(gpOff) === 0, `on=${gpOn && ledEmis(gpOn)} off=${gpOff && ledEmis(gpOff)}`);
+  assert('plug mesh click-tagged kind=plug',
+    !!(gpOn && (() => { let t = false; gpOn.traverse(o => { if (o.userData && o.userData.kind === 'plug') t = true; }); return t; })()));
+
+  // Layer gating: valves ride sensors, plugs ride switches.
+  r.setLayerVisibility({ sensors: false });
+  assert('valve group hidden when sensors layer off', r._valveGroup.visible === false);
+  assert('plug group visible when only sensors off', r._plugGroup.visible === true);
+  r.setLayerVisibility({ switches: false });
+  assert('plug group hidden when switches layer off', r._plugGroup.visible === false);
+  assert('valve group visible when only switches off', r._valveGroup.visible === true);
+  r.setLayerVisibility({});
+
+  // ── (3) control logic via the real Planner ───────────────────────────────
+  const svc = [];
+  class FakeHa {
+    constructor() { this.states = {}; this._s = []; this._c = []; }
+    connect() { for (const c of this._c) c('connected'); for (const s of this._s) s(this.states, undefined); }
+    onState(f) { this._s.push(f); } onConn(f) { this._c.push(f); }
+    callService(domain, service, data) { svc.push({ domain, service, data }); return Promise.resolve(); }
+    async getHistory() { return {}; } async getWeatherForecasts() { return null; }
+    async getDevices() { return []; } async getEntityRegistry() { return []; }
+    async updateEntityRegistry() { return true; }
+    async getUserData() { return null; } async setUserData() { return true; }
+    async refreshStates() {}
+  }
+  localStorage.removeItem('diorama:store:v1'); localStorage.removeItem('diorama:configs');
+  const p = new Planner();
+  const stub = new FakeHa();
+  stub.states = {
+    'valve.closed': { state: 'closed', attributes: {}, entity_id: 'valve.closed' },
+    'valve.open':   { state: 'open',   attributes: {}, entity_id: 'valve.open' },
+  };
+  p.connectWith(stub);
+  const sleep = ms => new Promise(res => setTimeout(res, ms));
+  for (let i = 0; i < 300 && !p.floor(); i++) await sleep(4);
+
+  const mkValve = (o) => ({ id: 'x', x: 1000, y: 1000, rotation: 0, entity_id: null, ...o });
+  const mkPlug  = (o) => ({ id: 'y', x: 1000, y: 1000, rotation: 0, entity_id: null, ...o });
+
+  // Bound valve.*, currently CLOSED → open_valve (NEVER a blind toggle).
+  svc.length = 0; p.uiMode = 'edit';
+  p.toggleValve(mkValve({ entity_id: 'valve.closed' }));
+  assert('bound valve closed → open_valve',
+    svc.length === 1 && svc[0].domain === 'valve' && svc[0].service === 'open_valve', JSON.stringify(svc[0] || null));
+
+  // Bound valve.*, currently OPEN → close_valve.
+  svc.length = 0;
+  p.toggleValve(mkValve({ entity_id: 'valve.open' }));
+  assert('bound valve open → close_valve',
+    svc.length === 1 && svc[0].domain === 'valve' && svc[0].service === 'close_valve', JSON.stringify(svc[0] || null));
+
+  // Bound switch.* (irrigation zone) → switch.toggle.
+  svc.length = 0;
+  p.toggleValve(mkValve({ entity_id: 'switch.zone_3' }));
+  assert('bound switch.* valve → switch.toggle',
+    svc.length === 1 && svc[0].domain === 'switch' && svc[0].service === 'toggle', JSON.stringify(svc[0] || null));
+
+  // Bound binary_sensor → display-only, no service call.
+  svc.length = 0;
+  p.toggleValve(mkValve({ entity_id: 'binary_sensor.zone' }));
+  assert('bound binary_sensor valve is display-only (no call)', svc.length === 0, `calls=${svc.length}`);
+
+  // allowControl=false → refuses.
+  svc.length = 0;
+  p.toggleValve(mkValve({ entity_id: 'valve.closed', allowControl: false }));
+  assert('valve allowControl=false refuses (no call)', svc.length === 0, `calls=${svc.length}`);
+
+  // Unbound valve → flip localState.
+  const uv = mkValve({ entity_id: null, localState: 'off' });
+  svc.length = 0;
+  p.toggleValve(uv);
+  assert('unbound valve flips localState off→on', uv.localState === 'on', uv.localState);
+  p.toggleValve(uv);
+  assert('unbound valve flips localState on→off', uv.localState === 'off', uv.localState);
+  assert('unbound valve never hits callService', svc.length === 0, `calls=${svc.length}`);
+
+  // View mode refuses; kiosk fires.
+  p.uiMode = 'view'; svc.length = 0;
+  const vv = mkValve({ entity_id: null, localState: 'off' });
+  p.toggleValve(mkValve({ entity_id: 'valve.closed' }));
+  p.toggleValve(vv);
+  assert('view mode: bound valve refuses (no call)', svc.length === 0, `calls=${svc.length}`);
+  assert('view mode: unbound valve refuses (localState unchanged)', vv.localState === 'off', vv.localState);
+
+  p.uiMode = 'kiosk'; svc.length = 0;
+  p.toggleValve(mkValve({ entity_id: 'valve.closed' }));
+  assert('kiosk mode: bound valve fires open_valve',
+    svc.length === 1 && svc[0].service === 'open_valve', JSON.stringify(svc[0] || null));
+
+  // Plug toggle mirrors a switch (toggleItem): bound switch.* → switch.toggle.
+  p.uiMode = 'edit'; svc.length = 0;
+  p.toggleItem(mkPlug({ entity_id: 'switch.lamp' }));
+  assert('bound plug → switch.toggle',
+    svc.length === 1 && svc[0].domain === 'switch' && svc[0].service === 'toggle', JSON.stringify(svc[0] || null));
+
+  // Unbound plug → flip localState.
+  const up = mkPlug({ entity_id: null, localState: 'off' });
+  svc.length = 0;
+  p.toggleItem(up);
+  assert('unbound plug flips localState off→on', up.localState === 'on', up.localState);
+  assert('unbound plug never hits callService', svc.length === 0, `calls=${svc.length}`);
+
+  // Bound light.* plug → light.toggle (domain-aware toggleEntity).
+  svc.length = 0;
+  p.toggleItem(mkPlug({ entity_id: 'light.desk' }));
+  assert('bound light.* plug → light.toggle',
+    svc.length === 1 && svc[0].domain === 'light' && svc[0].service === 'toggle', JSON.stringify(svc[0] || null));
+
+  // ── render ────────────────────────────────────────────────────────────────
+  const pass = results.filter(x => x.ok).length;
+  const total = results.length;
+  const fails = results.filter(x => !x.ok).map(x => x.name);
+  document.getElementById('log').textContent = results.map(t => `${t.ok ? 'PASS' : 'FAIL'} ${t.name} — ${t.detail}`).join('\n');
+  document.title = fails.length === 0 ? `VALVEPLUG PASS ${pass}/${total}` : `VALVEPLUG FAIL ${pass}/${total} [${fails.join(',')}]`;
+</script>

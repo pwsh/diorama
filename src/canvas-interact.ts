@@ -1,4 +1,4 @@
-import { snap, snapVertex15, distMM, worldToLocal, localToWorld, FURNITURE_KINDS, furnitureCorners, furnitureLocalToWorld, furnitureWorldToLocal, resolveFurnitureDef, resolveFurnitureWallCollision, resolveSeatTableCollision, seatBelongsToTable, snapStepLightToSurface, snapFireplaceToWall, snapFloodlightToWall, snapSwitchToWall, snapAlarmToWall, snapThermostatToWall, snapInfoCardToWall, snapActionButtonToWall, isBinKind, nearestAlign, envScale, ENV_SCALE_MIN, ENV_SCALE_MAX, GRID_MM, floorContentBbox, resolveFloorEdgeDrag } from './geometry.js';
+import { snap, snapVertex15, distMM, worldToLocal, localToWorld, FURNITURE_KINDS, furnitureCorners, furnitureLocalToWorld, furnitureWorldToLocal, resolveFurnitureDef, resolveFurnitureWallCollision, resolveSeatTableCollision, seatBelongsToTable, snapStepLightToSurface, snapFireplaceToWall, snapFloodlightToWall, snapSwitchToWall, snapAlarmToWall, snapThermostatToWall, snapPlugToWall, snapInfoCardToWall, snapActionButtonToWall, isBinKind, nearestAlign, envScale, ENV_SCALE_MIN, ENV_SCALE_MAX, GRID_MM, floorContentBbox, resolveFloorEdgeDrag } from './geometry.js';
 import { newId } from './storage.js';
 import {
   pxToMm, type View,
@@ -10,7 +10,7 @@ import {
   hitBgBody, hitBgCorner, bgEditable,
   hitMotionSensor, hitMotionRotateHandle, hitEnvSensor, hitEnvResizeHandle,
   hitBleProxy, hitAlarmPanel, hitThermostat, hitSafetySensor, hitRobot,
-  hitCamera, hitCameraRotateHandle, hitProjector, hitInfoCard, hitActionButton, hitPresenceZone, hitPresenceZoneVertex,
+  hitCamera, hitCameraRotateHandle, hitProjector, hitValve, hitPlug, hitInfoCard, hitActionButton, hitPresenceZone, hitPresenceZoneVertex,
   hitGroundArea, hitGroundAreaVertex,
   hitVoidArea, hitVoidAreaVertex,
   hitDoor, hitDoorEnd, hitDoorLock, hitWindow, hitWindowEnd, hitFloorEdge,
@@ -608,6 +608,18 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
     p.alignCandidates = buildAlignCandidates(p, p.drag);
     canvas.style.cursor = 'grabbing'; e.preventDefault(); p.emitConfig(); return;
   }
+  const valH = hitValve(p, view, mm);
+  if (valH) {
+    if (p.activeValveId !== valH.id) p.activeValveId = valH.id;
+    p.drag = { kind: 'valve', id: valH.id, startMm: mm, start: { x: valH.x, y: valH.y } };
+    canvas.style.cursor = 'grabbing'; e.preventDefault(); p.emitConfig(); return;
+  }
+  const plugH = hitPlug(p, view, mm);
+  if (plugH) {
+    if (p.activePlugId !== plugH.id) p.activePlugId = plugH.id;
+    p.drag = { kind: 'plug', id: plugH.id, startMm: mm, start: { x: plugH.x, y: plugH.y } };
+    canvas.style.cursor = 'grabbing'; e.preventDefault(); p.emitConfig(); return;
+  }
   // Presence zone body — select it (shows vertex handles); no whole-zone drag in
   // v1 (reshape via vertex handles or Redraw). Only when the zones layer is on.
   if (zonesInteractive(p)) {
@@ -809,6 +821,22 @@ export function onCanvasMouseMove(p: Planner, canvas: HTMLCanvasElement, view: V
         if (pr && !pr.locked) {
           pr.x = Math.max(0, Math.min(f.w, drag.start.x + mm.x - drag.startMm.x));
           pr.y = Math.max(0, Math.min(f.d, drag.start.y + mm.y - drag.startMm.y));
+        }
+        break;
+      }
+      case 'valve': {
+        const vv = (f.valves ?? []).find(x => x.id === drag.id);
+        if (vv && !vv.locked) {
+          vv.x = Math.max(0, Math.min(f.w, drag.start.x + mm.x - drag.startMm.x));
+          vv.y = Math.max(0, Math.min(f.d, drag.start.y + mm.y - drag.startMm.y));
+        }
+        break;
+      }
+      case 'plug': {
+        const pg = (f.plugs ?? []).find(x => x.id === drag.id);
+        if (pg && !pg.locked) {
+          pg.x = Math.max(0, Math.min(f.w, drag.start.x + mm.x - drag.startMm.x));
+          pg.y = Math.max(0, Math.min(f.d, drag.start.y + mm.y - drag.startMm.y));
         }
         break;
       }
@@ -1107,6 +1135,8 @@ export function onCanvasMouseMove(p: Planner, canvas: HTMLCanvasElement, view: V
       (safeHit && (safeHit.kind === 'siren' || !safeHit.entity_id)) ||  // sirens (bound too) + unbound detectors are clickable
       hitRobot(p, view, mm) ||             // robots are always click-toggleable
       hitProjector(p, view, mm) ||         // projectors toggle on/off in kiosk
+      hitValve(p, view, mm) ||             // valves open/close in kiosk
+      hitPlug(p, view, mm) ||              // plugs toggle in kiosk
       hitDoor(p, view, mm) || hitWindow(p, view, mm);
     canvas.style.cursor = overDevice ? 'pointer' : 'default';
     return;
@@ -1128,6 +1158,8 @@ export function onCanvasMouseMove(p: Planner, canvas: HTMLCanvasElement, view: V
     else if (hitCameraRotateHandle(p, view, mm)) canvas.style.cursor = 'grab';
     else if (hitCamera(p, view, mm)) canvas.style.cursor = 'grab';
     else if (hitProjector(p, view, mm)) canvas.style.cursor = 'grab';
+    else if (hitValve(p, view, mm)) canvas.style.cursor = 'grab';
+    else if (hitPlug(p, view, mm)) canvas.style.cursor = 'grab';
     else if (zonesInteractive(p) && hitPresenceZoneVertex(p, view, mm)) canvas.style.cursor = 'grab';
     else if (groundInteractive(p) && hitGroundAreaVertex(p, view, mm)) canvas.style.cursor = 'grab';
     else if (groundInteractive(p) && hitVoidAreaVertex(p, view, mm)) canvas.style.cursor = 'grab';
@@ -1286,6 +1318,37 @@ export function onCanvasMouseUp(p: Planner, canvas: HTMLCanvasElement): void {
         p.toggleItem(pr);
       } else {
         pr.x = snap(pr.x, 10); pr.y = snap(pr.y, 10);
+        p.save();
+      }
+    }
+  } else if (drag.kind === 'valve') {
+    const vv = (f.valves ?? []).find(x => x.id === drag.id);
+    if (vv) {
+      // Click-vs-drag: a tiny move is a click → open/close (valve.* open_valve/
+      // close_valve by state, switch.toggle, or unbound localState flip). A real
+      // move relocates the floor pipe (free placement — no wall snap).
+      const moved = Math.hypot(vv.x - drag.start.x, vv.y - drag.start.y);
+      if (moved < 30) {
+        vv.x = drag.start.x; vv.y = drag.start.y;
+        p.toggleValve(vv);
+      } else {
+        vv.x = snap(vv.x, 10); vv.y = snap(vv.y, 10);
+        p.save();
+      }
+    }
+  } else if (drag.kind === 'plug') {
+    const pg = (f.plugs ?? []).find(x => x.id === drag.id);
+    if (pg) {
+      // Click-vs-drag: a tiny move is a click → toggle (bound entity or unbound
+      // localState). A real move snaps the plate flush to the nearest wall (like
+      // a switch, no ganging).
+      const moved = Math.hypot(pg.x - drag.start.x, pg.y - drag.start.y);
+      if (moved < 30) {
+        pg.x = drag.start.x; pg.y = drag.start.y;
+        if (pg.allowControl !== false) p.toggleItem(pg);
+      } else {
+        pg.x = snap(pg.x, 10); pg.y = snap(pg.y, 10);
+        snapPlugToWall(pg, f.walls);
         p.save();
       }
     }
@@ -1489,6 +1552,12 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
     // Projector → toggle projecting (bound entity / unbound localState).
     const proj2 = hitProjector(p, view, mm);
     if (proj2) { p.toggleItem(proj2); return; }
+    // Water valve → open/close (toggleValve gates allowControl + domain dispatch).
+    const val2 = hitValve(p, view, mm);
+    if (val2) { p.toggleValve(val2); return; }
+    // Smart plug → toggle the outlet (like a switch), gated by allowControl.
+    const plug2 = hitPlug(p, view, mm);
+    if (plug2) { if (plug2.allowControl !== false) p.toggleItem(plug2); return; }
     // Door lock padlock → toggle the lock (bound service / unbound session flag).
     const dLock2 = hitDoorLock(p, view, mm);
     if (dLock2) { p.toggleDoorLock(dLock2.door); return; }
@@ -1756,6 +1825,41 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
     p.emitConfig();
     return;
   }
+  if (p.tool === 'valve') {
+    if (!f.valves) f.valves = [];
+    const id = newId('vl');
+    // Free placement — the click point is the valve on a floor pipe run.
+    f.valves.push({
+      id,
+      x: snap(Math.max(0, Math.min(f.w, mm.x)), 10),
+      y: snap(Math.max(0, Math.min(f.d, mm.y)), 10),
+      rotation: 0, entity_id: null, allowControl: true,
+      label: `Valve ${f.valves.length + 1}`,
+    });
+    p.activeValveId = id;
+    p.save();
+    p.setTool('select');
+    p.emitConfig();
+    return;
+  }
+  if (p.tool === 'plug') {
+    if (!f.plugs) f.plugs = [];
+    const id = newId('pg');
+    const pg = {
+      id,
+      x: snap(Math.max(0, Math.min(f.w, mm.x)), 10),
+      y: snap(Math.max(0, Math.min(f.d, mm.y)), 10),
+      entity_id: null, allowControl: true,
+      label: `Plug ${f.plugs.length + 1}`,
+    };
+    snapPlugToWall(pg, f.walls);   // flush to a wall on drop, like a switch
+    f.plugs.push(pg);
+    p.activePlugId = id;
+    p.save();
+    p.setTool('select');
+    p.emitConfig();
+    return;
+  }
   if (p.tool === 'pzone') {
     // Polygon draw latch (mirrors the wall tool): each click appends a world-mm
     // vertex; double-click finishes (≥3 pts). No angle snap — presence zones are
@@ -1938,6 +2042,20 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
       if (projHit.locked) return;
       f.projectors = (f.projectors ?? []).filter(x => x.id !== projHit.id);
       if (p.activeProjectorId === projHit.id) p.activeProjectorId = null;
+      p.save(); p.emitConfig(); return;
+    }
+    const valHit = hitValve(p, view, mm);
+    if (valHit) {
+      if (valHit.locked) return;
+      f.valves = (f.valves ?? []).filter(x => x.id !== valHit.id);
+      if (p.activeValveId === valHit.id) p.activeValveId = null;
+      p.save(); p.emitConfig(); return;
+    }
+    const plugHit = hitPlug(p, view, mm);
+    if (plugHit) {
+      if (plugHit.locked) return;
+      f.plugs = (f.plugs ?? []).filter(x => x.id !== plugHit.id);
+      if (p.activePlugId === plugHit.id) p.activePlugId = null;
       p.save(); p.emitConfig(); return;
     }
     if (zonesInteractive(p)) {

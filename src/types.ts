@@ -122,6 +122,16 @@ export interface Furniture {
                               // false → occupants lie side by side, no blanket lump.
   tempEntity?: string | null; // stove/oven (also fridge): sensor.* temperature reading. Shown as a
                               // small N° chip (2D) + camera-facing sprite (3D). Display only.
+  jobStateEntity?: string | null; // appliance "job done" event source (event-focused thought bubbles):
+                              // a sensor/binary_sensor to watch (Home Connect operation_state, a
+                              // `running` binary_sensor, or a *_program_finished event sensor). When
+                              // absent, job-capable kinds (dishwasher/washer/dryer) auto-watch their own
+                              // entity_id. A running→terminal transition after a >=5 min run fires a
+                              // Planner.householdEvent. Item-level optional; no repairFloor change.
+  jobDoneValue?: string;      // state value that means "done" for jobStateEntity (default 'finished' when
+                              // jobStateEntity is bound; ignored in the auto entity_id mode, where any
+                              // non-running terminal counts). e.g. 'finished' (Home Connect), 'off'
+                              // (running binary_sensor), 'confirmed' (program_finished event sensor).
   doorOpen?: boolean;         // stove/oven only: persistent oven-door open flag, toggled by clicking
                               // the piece (2D/3D). ORed with the avatar-proximity / localState door open.
   stairLinkId?: string;       // stairs-family only: an opaque id shared by EXACTLY TWO stairs-family
@@ -294,6 +304,48 @@ export interface ThermostatFixture {
   localTemp?: number;        // unbound synthetic single setpoint (°C); inert once bound
   label?: string;
   locked?: boolean;          // canvas move/rotate/delete disabled (click still works)
+}
+
+// Water valve fixture (Phase 2b). A pipe-run body with a valve wheel/handle,
+// placed freely on the floor (pipe run) with a rotation. Bindable to a valve.*
+// entity (open/opening/closed/closing + optional current_position), a switch.*
+// entity (irrigation-zone pattern: on = open), OR a binary_sensor.* (display
+// only). State resolves through valveOpenness(st) (geometry.ts, mirrors
+// doorOpenFraction). Clicking toggles: valve domain → open_valve/close_valve
+// (picked by current state, never a blind toggle); switch → switch.toggle;
+// binary_sensor → display-only; unbound → flip localState. Gated by
+// allowControl (default on) + uiMode (view refuses, kiosk allowed). Rides the
+// sensors layer. Per-floor (Floor.valves); repairFloor + defaultFloor backfill [].
+export interface ValveFixture {
+  id: string;
+  x: number; y: number;
+  rotation?: number;         // deg screen-CW; pipe-run direction; 0 = pipe along +Y world
+  entity_id: string | null;  // valve.* | switch.* | binary_sensor.*
+  allowControl?: boolean;    // permit open/close from the panel (default ON); false = display-only
+  localState?: string;       // unbound local control ('on'=open / 'off'=closed); inert once bound
+  label?: string;
+  locked?: boolean;          // canvas move/rotate/delete disabled (click-to-toggle still works)
+}
+
+// Smart plug / outlet fixture (Phase 2b). A wall outlet plate with a plugged-in
+// cord hint. Wall-snaps flush like a switch (no ganging) at outlet height
+// (default 300 mm). Bindable to a switch.* / light.* entity (the plugged-in
+// load); optional powerEntity (sensor.* W) scales the energized glow + shows a
+// W readout chip. Toggle semantics mirror a switch exactly (bound → toggleEntity;
+// unbound → flip localState), gated by allowControl (default on) + uiMode. Rides
+// the switches layer. Per-floor (Floor.plugs); repairFloor + defaultFloor
+// backfill [].
+export interface PlugFixture {
+  id: string;
+  x: number; y: number;
+  rotation?: number;         // deg, wall-plate convention (0 = +Y world), like switches
+  height?: number;           // mm above floor; default 300 (outlet height)
+  entity_id: string | null;  // switch.* | light.* (the outlet load)
+  powerEntity?: string | null; // sensor.* (device_class power, W) — energized glow + W chip; VISUAL only
+  allowControl?: boolean;    // permit toggle from the panel (default ON); false = display-only
+  localState?: string;       // unbound local control ('on'/'off'); inert once bound
+  label?: string;
+  locked?: boolean;          // canvas move/delete disabled (click-to-toggle still works)
 }
 
 // Smoke / CO safety detector fixture. Ceiling-mounted (no wall snap; free
@@ -752,6 +804,8 @@ export interface Floor {
   presenceZones?: PresenceZone[];  // FP2-style occupancy zones; repairFloor backfills []
   cameras?: CameraFixture[];  // camera fixtures (FOV frustum + snapshot); repairFloor backfills []
   projectors?: ProjectorFixture[];  // home-theater projector fixtures; repairFloor backfills []
+  valves?: ValveFixture[];  // water valve fixtures (open/close from the panel); repairFloor backfills []
+  plugs?: PlugFixture[];  // smart plug / outlet fixtures; repairFloor backfills []
   groundAreas?: GroundArea[];  // yard/ground covering polygons; repairFloor backfills []
   voidAreas?: VoidArea[];  // floor voids / openings (holes cut from the slab); repairFloor backfills []
   infoCards?: InfoCard[];  // generic entity-value / clock plaques; repairFloor backfills []

@@ -9,7 +9,7 @@ import type {
   Sensor, Zone, ObjectHalo, BgImage, MotionSensor, EnvSensor, EnvKind, Light, SwitchFixture, LightIconKind,
   Furniture, FurnitureKind, Door, Window as WindowType, WindowKind, Layers2D, Floor, Room,
   ObjectRecipe, RecipePrimitive, RecipeShape, ActivityKind, AvatarKind,
-  BleProxy, AlarmPanel, ThermostatFixture, SafetySensor, RobotFixture, CameraFixture, ProjectorFixture, PresenceZone, GroundArea, GroundKind, VoidArea, DioramaPerson, Roamer, GeoLandmark,
+  BleProxy, AlarmPanel, ThermostatFixture, SafetySensor, RobotFixture, CameraFixture, ProjectorFixture, ValveFixture, PlugFixture, PresenceZone, GroundArea, GroundKind, VoidArea, DioramaPerson, Roamer, GeoLandmark,
 } from '../types.js';
 import type { BermudaDevice } from '../planner.js';
 
@@ -25,6 +25,7 @@ import {
   parseVacuumPosition, solveVacuumDockOffset,
   presenceZoneColor, cameraFov, cameraRange, cameraHeight, CAMERA_DEFAULTS,
   projectorHeight, projectorThrow, projectorBeamColor, PROJECTOR_DEFAULTS,
+  valveOpenness, valveFlowing, plugHeight,
   GROUND_KINDS, groundAreaColor,
   FURNITURE_KINDS, furnitureKind, resolveFurnitureDef, WINDOW_DEFAULTS,
   ENV_KINDS, ENV_DEFAULTS, ENV_SCALE_MIN, ENV_SCALE_MAX,
@@ -100,6 +101,8 @@ const TOOLS: { id: Tool; label: string }[] = [
   { id: 'robot', label: '🤖 Robot' },
   { id: 'camera', label: '📷 Camera' },
   { id: 'projector', label: '📽 Projector' },
+  { id: 'valve', label: '🚰 Valve' },
+  { id: 'plug', label: '🔌 Plug' },
   { id: 'pzone', label: '▱ Presence zone' },
   { id: 'ground', label: '▨ Ground area' },
   { id: 'void', label: '🕳 Floor void' },
@@ -381,6 +384,8 @@ export class Sidebar extends LitElement {
         ${this._robotsSection()}
         ${this._camerasSection()}
         ${this._projectorsSection()}
+        ${this._valvesSection()}
+        ${this._plugsSection()}
         ${this._presenceZonesSection()}
         ${this._groundSection()}
         ${this._voidSection()}
@@ -506,6 +511,8 @@ export class Sidebar extends LitElement {
       case 'robot': return 'Click to place a robot dock. Set kind (vacuum / mower) + bind a vacuum.* or lawn_mower.* entity; mowers can bind a GPS tracker.';
       case 'camera': return 'Click to drop a camera. Drag the orange dot to aim it; bind a camera.* entity for the FOV tint + snapshot.';
       case 'projector': return 'Click to drop a ceiling projector. Pick a target screen (or set rotation) + bind a media_player/switch/light for the beam; click it to toggle projecting.';
+      case 'valve': return 'Click to drop a water valve on a floor pipe. Bind a valve.* (open/close) or switch.* (irrigation zone) entity; clicking it opens/closes it. Water flows while open.';
+      case 'plug': return 'Click to drop a smart plug / outlet (snaps to a wall). Bind a switch.*/light.* load + an optional power sensor; clicking it toggles the outlet.';
       case 'pzone': return 'Click to add polygon vertices; double-click (or Enter) to finish (≥3 pts). Bind a binary_sensor (FP2 zone / occupancy) — the zone glows when occupied. ESC cancels.';
       case 'ground': return 'Click to add polygon vertices; double-click (or Enter) to finish (3–20 pts). Paints a ground covering (grass/rock/water/…) under the plan. ESC cancels.';
       case 'void': return 'Click to add polygon vertices; double-click (or Enter) to finish (3–12 pts). Cuts a hole in the floor (stairwell / atrium) — avatars route around it unless a stair bridges it. ESC cancels.';
@@ -2254,6 +2261,205 @@ export class Sidebar extends LitElement {
     }));
   }
 
+  // ── Water valves section (Phase 2b) ──────────────────────────────────
+  private _valvesSection() {
+    const list = this.planner.floor().valves ?? [];
+    if (list.length === 0) return nothing;
+    return this._section('valves', 'Valves', () =>
+      this._groupedList('valves', list, v => this._valveItem(v)));
+  }
+
+  private _valveItem(v: ValveFixture) {
+    const p = this.planner;
+    const sel = p.activeValveId === v.id;
+    const st = p.effectiveState(v);
+    const flowing = valveFlowing(st);
+    const pct = Math.round(valveOpenness(st) * 100);
+    const badge = st ? (flowing ? `open ${pct}%` : 'closed') : (v.entity_id ? 'n/a' : '—');
+    const col = flowing ? '#4fc3f7' : (st ? '#90a4ae' : '#607d8b');
+    return html`
+      <div style="border-bottom:1px solid var(--border)">
+        <div class="sensor-item ${sel ? 'sel' : ''}" @click=${() => p.setActiveValve(v.id)}>
+          <div class="dot" style="background:${col}"></div>
+          <div class="nm">${v.label?.trim() || 'Valve'}${this._batteryText(v.entity_id)}</div>
+          <div class="badge" style="color:${col}">${badge}</div>
+        </div>
+        ${sel ? this._valveEditor(v) : nothing}
+      </div>
+    `;
+  }
+
+  private _valveEditor(v: ValveFixture) {
+    const p = this.planner;
+    const upd = (mut: () => void) => { mut(); p.save(); p.emitConfig(); };
+    return html`
+      <div style="background:rgba(0,0,0,0.25);border-radius:4px;padding:6px;margin:4px 0">
+        <div class="row"><label>Label</label>
+          <input type="text" .value=${v.label ?? ''} placeholder="Valve"
+                 @input=${(e: Event) => upd(() => { v.label = (e.target as HTMLInputElement).value; })}>
+        </div>
+        ${this._lockRow(v)}
+        <div class="row"><label>Rotation (°)</label>
+          <input type="number" .value=${String(Math.round(v.rotation ?? 0))}
+                 @input=${(e: Event) => upd(() => { v.rotation = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
+        </div>
+        <div class="row"><label title="Permit open/close from the panel. Off = view-only status.">Allow open/close</label>
+          <span class="mini-toggle">
+            <input type="checkbox" .checked=${v.allowControl !== false}
+                   @change=${(e: Event) => upd(() => { v.allowControl = (e.target as HTMLInputElement).checked; })}>
+            <span></span>
+          </span>
+        </div>
+        <div class="row"><label>HA entity</label>
+          <span style="font-size:11px;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+            ${v.entity_id || '— unbound —'}
+          </span>
+        </div>
+        <div style="display:flex;gap:4px;margin-top:4px">
+          <button class="btn" style="flex:1;font-size:11px" @click=${() => this._pickValveEntity(v)}>
+            ${v.entity_id ? 'Rebind' : 'Bind'}…
+          </button>
+          ${v.entity_id ? html`
+            <button class="btn" style="font-size:11px"
+                    @click=${() => upd(() => { v.entity_id = null; })}>Unbind</button>
+          ` : nothing}
+        </div>
+        <div style="font-size:10px;color:var(--text-dim);margin-top:4px;line-height:1.3">
+          ${v.entity_id
+            ? 'Bind a valve.* (open/close) or switch.* (irrigation zone). Clicking the valve opens/closes it; water flows while open.'
+            : 'Unbound: clicking the valve flips a local demo open/closed state.'}
+        </div>
+        <button class="btn danger" style="width:100%;margin-top:6px" @click=${() => {
+          const f = p.floor();
+          f.valves = (f.valves ?? []).filter(x => x.id !== v.id);
+          p.activeValveId = null;
+          p.save(); p.emitConfig();
+        }}>Delete</button>
+      </div>
+    `;
+  }
+
+  private _pickValveEntity(v: ValveFixture): void {
+    this.dispatchEvent(new CustomEvent('open-entity-picker', {
+      bubbles: true, composed: true,
+      detail: {
+        domain: ['valve', 'switch', 'binary_sensor'],
+        onPick: (id: string) => { v.entity_id = id; this.planner.save(); this.planner.emitConfig(); },
+      },
+    }));
+  }
+
+  // ── Smart plugs section (Phase 2b) ────────────────────────────────────
+  private _plugsSection() {
+    const list = this.planner.floor().plugs ?? [];
+    if (list.length === 0) return nothing;
+    return this._section('plugs', 'Smart plugs', () =>
+      this._groupedList('plugs', list, pl => this._plugItem(pl)));
+  }
+
+  private _plugItem(pl: PlugFixture) {
+    const p = this.planner;
+    const sel = p.activePlugId === pl.id;
+    const st = p.effectiveState(pl);
+    const on = st?.state === 'on' || st?.state === 'playing';
+    const powerW = pl.powerEntity && p.hass?.states
+      ? parseFloat(p.hass.states[pl.powerEntity]?.state ?? '') : NaN;
+    const badge = st ? (on ? (isFinite(powerW) ? `${Math.round(powerW)}W` : 'on') : 'off') : (pl.entity_id ? 'n/a' : '—');
+    const col = on ? '#69f0ae' : (st ? '#90a4ae' : '#607d8b');
+    return html`
+      <div style="border-bottom:1px solid var(--border)">
+        <div class="sensor-item ${sel ? 'sel' : ''}" @click=${() => p.setActivePlug(pl.id)}>
+          <div class="dot" style="background:${col}"></div>
+          <div class="nm">${pl.label?.trim() || 'Plug'}${this._batteryText(pl.entity_id)}</div>
+          <div class="badge" style="color:${col}">${badge}</div>
+        </div>
+        ${sel ? this._plugEditor(pl) : nothing}
+      </div>
+    `;
+  }
+
+  private _plugEditor(pl: PlugFixture) {
+    const p = this.planner;
+    const upd = (mut: () => void) => { mut(); p.save(); p.emitConfig(); };
+    return html`
+      <div style="background:rgba(0,0,0,0.25);border-radius:4px;padding:6px;margin:4px 0">
+        <div class="row"><label>Label</label>
+          <input type="text" .value=${pl.label ?? ''} placeholder="Plug"
+                 @input=${(e: Event) => upd(() => { pl.label = (e.target as HTMLInputElement).value; })}>
+        </div>
+        ${this._lockRow(pl)}
+        <div class="row"><label>Height (mm)</label>
+          <input type="number" min="0" .value=${String(Math.round(plugHeight(pl)))}
+                 @input=${(e: Event) => upd(() => {
+                   const val = parseFloat((e.target as HTMLInputElement).value);
+                   pl.height = isFinite(val) ? Math.max(0, val) : undefined;
+                 })}>
+        </div>
+        <div class="row"><label title="Permit toggle from the panel. Off = view-only status.">Allow toggle</label>
+          <span class="mini-toggle">
+            <input type="checkbox" .checked=${pl.allowControl !== false}
+                   @change=${(e: Event) => upd(() => { pl.allowControl = (e.target as HTMLInputElement).checked; })}>
+            <span></span>
+          </span>
+        </div>
+        <div class="row"><label>HA entity</label>
+          <span style="font-size:11px;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+            ${pl.entity_id || '— unbound —'}
+          </span>
+        </div>
+        <div style="display:flex;gap:4px;margin-top:4px">
+          <button class="btn" style="flex:1;font-size:11px" @click=${() => this._pickPlugEntity(pl)}>
+            ${pl.entity_id ? 'Rebind' : 'Bind'}…
+          </button>
+          ${pl.entity_id ? html`
+            <button class="btn" style="font-size:11px"
+                    @click=${() => upd(() => { pl.entity_id = null; })}>Unbind</button>
+          ` : nothing}
+        </div>
+        <div class="row" style="margin-top:4px"><label>Power sensor</label>
+          <span style="font-size:11px;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+            ${pl.powerEntity || '— none —'}
+          </span>
+        </div>
+        <div style="display:flex;gap:4px;margin-top:2px">
+          <button class="btn" style="flex:1;font-size:11px" @click=${() => this._pickPlugPower(pl)}>
+            ${pl.powerEntity ? 'Rebind' : 'Bind'} power…
+          </button>
+          ${pl.powerEntity ? html`
+            <button class="btn" style="font-size:11px"
+                    @click=${() => upd(() => { pl.powerEntity = null; })}>Clear</button>
+          ` : nothing}
+        </div>
+        <button class="btn danger" style="width:100%;margin-top:6px" @click=${() => {
+          const f = p.floor();
+          f.plugs = (f.plugs ?? []).filter(x => x.id !== pl.id);
+          p.activePlugId = null;
+          p.save(); p.emitConfig();
+        }}>Delete</button>
+      </div>
+    `;
+  }
+
+  private _pickPlugEntity(pl: PlugFixture): void {
+    this.dispatchEvent(new CustomEvent('open-entity-picker', {
+      bubbles: true, composed: true,
+      detail: {
+        domain: ['switch', 'light'],
+        onPick: (id: string) => { pl.entity_id = id; this.planner.save(); this.planner.emitConfig(); },
+      },
+    }));
+  }
+
+  private _pickPlugPower(pl: PlugFixture): void {
+    this.dispatchEvent(new CustomEvent('open-entity-picker', {
+      bubbles: true, composed: true,
+      detail: {
+        domain: 'sensor',
+        onPick: (id: string) => { pl.powerEntity = id; this.planner.save(); this.planner.emitConfig(); },
+      },
+    }));
+  }
+
   // ── Presence zones section (FP2-style occupancy polygons) ─────────────
   private _presenceZonesSection() {
     const p = this.planner;
@@ -3456,6 +3662,8 @@ export class Sidebar extends LitElement {
         ${furnitureCat(resolveFurnitureDef(piece, p.store.customObjects)) === 'appliance'
           ? this._powerBindRow(piece, upd) : nothing}
         ${curKind === 'stove' || curKind === 'fridge' ? this._tempBindRow(piece, upd) : nothing}
+        ${curKind === 'dishwasher' || curKind === 'washer' || curKind === 'dryer' ||
+          curKind === 'stove' || curKind === 'microwave' ? this._jobStateRow(piece, upd) : nothing}
         ${curKind === 'car' || curKind === 'ev_charger' ? this._evChargerRows(piece, upd) : nothing}
         ${curKind === 'mailbox' ? this._mailboxRows(piece, upd) : nothing}
         ${curKind === 'stove' ? html`
@@ -3765,6 +3973,57 @@ export class Sidebar extends LitElement {
         domain: 'sensor',
         onPick: (id: string) => {
           piece.tempEntity = id;
+          this.planner.save();
+          this.planner.emitConfig();
+        },
+      },
+    }));
+  }
+
+  // Appliance "job done" event source (event-focused thought bubbles). Optional:
+  // a sensor/binary_sensor to watch (Home Connect operation_state, a `running`
+  // binary_sensor, or a *_program_finished event sensor). Unbound → the appliance
+  // auto-watches its own entity_id (dishwasher/washer/dryer). A finish fires the
+  // event-tier bubble + a blue "done" badge. The "Done value" input defaults to
+  // 'finished' when a job sensor is bound.
+  private _jobStateRow(piece: Furniture, upd: (mut: () => void) => void) {
+    const p = this.planner;
+    const st = piece.jobStateEntity && p.hass?.states ? p.hass.states[piece.jobStateEntity] : null;
+    return html`
+      <div class="row"><label title="sensor/binary_sensor watched for a 'finished' transition (Home Connect operation_state, a running binary_sensor, or a program_finished event sensor). Unbound → auto-watch the appliance's own on/off entity.">Job sensor</label>
+        <span style="font-size:11px;color:var(--text-dim);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+          ${piece.jobStateEntity ? `${piece.jobStateEntity}${st ? ` · ${st.state}` : ''}` : '— auto (on/off) —'}
+        </span>
+      </div>
+      <div style="display:flex;gap:4px;margin-top:4px">
+        <button class="btn" style="flex:1;font-size:11px" @click=${() => this._pickJobStateEntity(piece)}>
+          ${piece.jobStateEntity ? 'Rebind' : 'Bind'} sensor…
+        </button>
+        ${piece.jobStateEntity ? html`
+          <button class="btn" style="font-size:11px"
+                  @click=${() => upd(() => { piece.jobStateEntity = null; })}>Unbind</button>
+        ` : nothing}
+      </div>
+      ${piece.jobStateEntity ? html`
+        <div class="row"><label title="State value that means 'done'. Home Connect: 'finished'; running binary_sensor: 'off'; program_finished event sensor: 'confirmed'.">Done value</label>
+          <input type="text" placeholder="finished" .value=${piece.jobDoneValue ?? ''}
+                 style="flex:1;font-size:11px"
+                 @change=${(e: Event) => upd(() => {
+                   const v = (e.target as HTMLInputElement).value.trim();
+                   piece.jobDoneValue = v || undefined;
+                 })}>
+        </div>
+      ` : nothing}
+    `;
+  }
+
+  private _pickJobStateEntity(piece: Furniture): void {
+    this.dispatchEvent(new CustomEvent('open-entity-picker', {
+      bubbles: true, composed: true,
+      detail: {
+        domain: ['sensor', 'binary_sensor'],
+        onPick: (id: string) => {
+          piece.jobStateEntity = id;
           this.planner.save();
           this.planner.emitConfig();
         },

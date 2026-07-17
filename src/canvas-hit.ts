@@ -3,7 +3,7 @@ import { switchSize, distMM, pointToSeg, transformVerts, centroid, localToWorld,
          furnitureCorners, furnitureLocalToWorld, doorEndpoint,
          doorOpenDeltaDeg, windowEndpoints, pointInPolygon } from './geometry.js';
 import type { Planner } from './planner.js';
-import type { Vec2, Wall, Sensor, Furniture, BgImage, MotionSensor, EnvSensor, BleProxy, AlarmPanel, ThermostatFixture, SafetySensor, RobotFixture, CameraFixture, ProjectorFixture, PresenceZone, InfoCard, ActionButton, Door, Window as WindowType, Floor } from './types.js';
+import type { Vec2, Wall, Sensor, Furniture, BgImage, MotionSensor, EnvSensor, BleProxy, AlarmPanel, ThermostatFixture, SafetySensor, RobotFixture, CameraFixture, ProjectorFixture, ValveFixture, PlugFixture, PresenceZone, InfoCard, ActionButton, Door, Window as WindowType, Floor } from './types.js';
 import type { FloorEdge } from './geometry.js';
 import { envChipHalfPx, infoCardHalfPx, actionButtonHalfPx, type View } from './canvas-render.js';
 
@@ -298,6 +298,26 @@ export function hitThermostat(p: Planner, view: View, mm: Vec2): ThermostatFixtu
   const f = p.floor();
   const h = hitPx(view) * 1.4;
   const list = f.thermostats ?? [];
+  for (let i = list.length - 1; i >= 0; i--) {
+    if (distMM(list[i], mm) < h) return list[i];
+  }
+  return null;
+}
+
+export function hitValve(p: Planner, view: View, mm: Vec2): ValveFixture | null {
+  const f = p.floor();
+  const h = hitPx(view) * 1.8;
+  const list = f.valves ?? [];
+  for (let i = list.length - 1; i >= 0; i--) {
+    if (distMM(list[i], mm) < h) return list[i];
+  }
+  return null;
+}
+
+export function hitPlug(p: Planner, view: View, mm: Vec2): PlugFixture | null {
+  const f = p.floor();
+  const h = hitPx(view) * 1.4;
+  const list = f.plugs ?? [];
   for (let i = list.length - 1; i >= 0; i--) {
     if (distMM(list[i], mm) < h) return list[i];
   }

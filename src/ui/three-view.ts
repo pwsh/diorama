@@ -6,7 +6,7 @@ import { customElement } from './define.js';
 // startup path never downloads it.
 import type { ThreeDRenderer, ZoneWorld, HaloWorld, TargetWorld, ActivityContext,
   GpsPinWorld, GpsLandmarkWorld, GeoEventWorld, WeatherFxState } from '../three-renderer.js';
-import { localToWorld, transformVerts, pointInPolygon, sensorColor, hexToInt, motionColor, lightIconKind, furnitureKind, resolveFurnitureDef, furnitureCat, isBinKind, isSpeakerKind, isVehicleKind, isStairsKind, alarmStateColor, doorSpanCenter } from '../geometry.js';
+import { localToWorld, transformVerts, pointInPolygon, sensorColor, hexToInt, motionColor, lightIconKind, furnitureKind, resolveFurnitureDef, furnitureCat, isBinKind, isSpeakerKind, isVehicleKind, isStairsKind, alarmStateColor, valveOpenness, doorSpanCenter } from '../geometry.js';
 import { compass8 } from '../geo.js';
 import { resolveScenePreset, resolveTimeBucket } from '../time-of-day.js';
 import { conditionIntensity, weatherEffectEnabled, worstAlertSeverity } from '../weather.js';
@@ -227,6 +227,19 @@ export class ThreeView extends LitElement {
       if (kind === 'projector') {
         const pr = p.floor().projectors?.find(x => x.id === fixtureId);
         if (pr) p.toggleItem(pr);
+        return;
+      }
+      // Water valve → open/close (toggleValve gates allowControl + domain dispatch;
+      // valve.* picks open_valve/close_valve by state, never a blind toggle).
+      if (kind === 'valve') {
+        const vv = p.floor().valves?.find(x => x.id === fixtureId);
+        if (vv) p.toggleValve(vv);
+        return;
+      }
+      // Smart plug → toggle the outlet (like a switch), gated by allowControl.
+      if (kind === 'plug') {
+        const pg = p.floor().plugs?.find(x => x.id === fixtureId);
+        if (pg && pg.allowControl !== false) p.toggleItem(pg);
         return;
       }
       // Door lock deadbolt → toggle lock.lock/unlock (bound) or lockLocalState
@@ -569,6 +582,8 @@ export class ThreeView extends LitElement {
   private _keyNowPlaying = '';
   private _keyCameras = '';
   private _keyProjectors = '';
+  private _keyValves = '';
+  private _keyPlugs = '';
   private _keyCamAlerts = '';
   private _keyPzones = '';
   private _keyGround = '';
@@ -599,7 +614,7 @@ export class ThreeView extends LitElement {
         r.clearTransientGroups();
         this._keyFloor = this._keyDoors = this._keySensors = '';
         this._keyMotion = this._keyEnv = this._keyInfo = this._keyActions = this._keyBle = this._keyAlarm = this._keyThermo = this._keySafety = '';
-        this._keyCameras = this._keyProjectors = this._keyCamAlerts = this._keyPzones = this._keyNowPlaying = '';
+        this._keyCameras = this._keyProjectors = this._keyValves = this._keyPlugs = this._keyCamAlerts = this._keyPzones = this._keyNowPlaying = '';
         this._keyGround = '';
         this._keyLights = this._keyZones = this._keyHalos = '';
         this._keyGhost = this._keyGps = this._keyWeather = '';
@@ -686,7 +701,11 @@ export class ThreeView extends LitElement {
           const fl = fu.mailCount.flagEntity ? stOf(fu.mailCount.flagEntity) : '';
           mail = `${c}:${fl}`;
         }
-        return `${fu.id}:${on}:${door}:${pw}:${tp}:${fu.doorOpen ? 1 : 0}:${bias}:${ev}:${mail}`;
+        // "Job done" badge (event-focused thought bubbles): the appliance's
+        // finished-window flag drives a blue emissive badge built inside
+        // updateFloor, so fold it in — no new dirty key (research §D).
+        const jd = p.applianceJustFinished(fu) ? 1 : 0;
+        return `${fu.id}:${on}:${door}:${pw}:${tp}:${fu.doorOpen ? 1 : 0}:${bias}:${ev}:${mail}:${jd}`;
       }).filter(Boolean).join(',');
       // Room occupancy glow (#1): fold each occupancy-bound room's on/off into
       // _keyFloor so the tinted floor patch rebuilds on an occupancy flip.
@@ -711,7 +730,8 @@ export class ThreeView extends LitElement {
         // customObjects edits bump configRev (via emitConfig) → keyFloor flips
         // → the placed recipe instance rebuilds as its own live preview.
         r.updateFloor(f, scMerged, layers, p.store.customObjects,
-                      id => states[id] || null, selCustomId || null);
+                      id => states[id] || null, selCustomId || null,
+                      fuId => p.applianceJustFinished({ id: fuId }));
       }
 
       // Glass-house ghost floors: every OTHER story as a translucent shell.
@@ -937,6 +957,36 @@ export class ThreeView extends LitElement {
       if (keyProjectors !== this._keyProjectors) {
         this._keyProjectors = keyProjectors;
         r.updateProjectors(projList, f.furniture, id => states[id] || null);
+      }
+
+      // Water valves (Phase 2b): structural + resolved openness. Bucket the
+      // position to 5% so a mid-travel valve doesn't thrash the rebuild (the flow
+      // pulse animates per-frame via _advanceValves — only open/close transitions
+      // rebuild). Rides the sensors layer.
+      const valveList = f.valves ?? [];
+      const keyValves = `${p.configRev}|` + valveList.map(v => {
+        const st = p.effectiveState(v);
+        return `${v.id}:${Math.round(v.x)}:${Math.round(v.y)}:${Math.round(v.rotation ?? 0)}:` +
+          `${st?.state ?? '-'}:${Math.round(valveOpenness(st) * 20)}`;
+      }).join(',');
+      if (keyValves !== this._keyValves) {
+        this._keyValves = keyValves;
+        r.updateValves(valveList, id => states[id] || null);
+      }
+
+      // Smart plugs (Phase 2b): structural + on/off + a 50 W-bucketed power
+      // reading (powerEntity stays LIVE-path; the key folds a bucketed value read
+      // each tick, like Furniture.powerEntity). Rides the switches layer.
+      const plugList = f.plugs ?? [];
+      const keyPlugs = `${p.configRev}|` + plugList.map(pl => {
+        const st = p.effectiveState(pl);
+        const pw = pl.powerEntity ? parseFloat(states[pl.powerEntity]?.state ?? '') : NaN;
+        return `${pl.id}:${Math.round(pl.x)}:${Math.round(pl.y)}:${Math.round(pl.rotation ?? 0)}:` +
+          `${Math.round(pl.height ?? 0)}:${st?.state ?? '-'}:${isFinite(pw) ? Math.round(pw / 50) : '-'}`;
+      }).join(',');
+      if (keyPlugs !== this._keyPlugs) {
+        this._keyPlugs = keyPlugs;
+        r.updatePlugs(plugList, id => states[id] || null);
       }
 
       // Camera alert cards (#10 extension): snapshot sprites above ALERTING
@@ -1340,7 +1390,20 @@ export class ThreeView extends LitElement {
         const c = doorSpanCenter(dd);
         recentTriggers.push({ kind: 'doorbell', x: c.x, y: c.y, ageS });
       }
-      const ctx: ActivityContext = { entityOn, roomNames, timeBucket: resolveTimeBucket(states), weather, recentTriggers, doorSensorOpen, fireplaceOn };
+      // Household events (Phase 2a) → the top-priority event bubble tier. Weather
+      // events (furnitureId null) are house-wide (x/y null); appliance events
+      // resolve the fixture's world pos on the CURRENT floor (skip cross-floor).
+      // `at` is Date.now() ms; prune >45 s (the renderer applies its own TTL).
+      const eventTriggers: { kind: string; x: number | null; y: number | null; ageS: number }[] = [];
+      for (const ev of p.householdEvents) {
+        const ageS = (Date.now() - ev.at) / 1000;
+        if (ageS >= 45) continue;
+        if (ev.furnitureId == null) { eventTriggers.push({ kind: ev.kind, x: null, y: null, ageS }); continue; }
+        const fu = f.furniture.find(x => x.id === ev.furnitureId);
+        if (!fu) continue;   // anchored to a fixture not on this floor
+        eventTriggers.push({ kind: ev.kind, x: fu.x, y: fu.y, ageS });
+      }
+      const ctx: ActivityContext = { entityOn, roomNames, timeBucket: resolveTimeBucket(states), weather, recentTriggers, eventTriggers, doorSensorOpen, fireplaceOn };
       // Targets every frame — persistent rigs mutate in place (no rebuild).
       r.updateTargets(targets, ctx);
   }

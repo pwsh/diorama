@@ -5,12 +5,12 @@ import { loadStore, saveStore, newId, repairFloor, defaultStore,
 import { slugToName, normMac, localToWorld, segCrossesSolidWall, mowerSweepWaypoints,
          ROBOT_DEFAULTS, robotLedColor, parseVacuumPosition, vacuumRawToWorld,
          vacuumRawHeadingRad, isStairsKind, logicLightState, actionButtonKind,
-         normalizeLockState, type LockGlyphState } from './geometry.js';
+         furnitureKind, normalizeLockState, valveIsOpen, type LockGlyphState } from './geometry.js';
 import { stepFusion, newFusionState, DEFAULT_FUSION_CFG,
          type FusionState, type FusionCand } from './fusion.js';
 import { fitGeoTransform, latLonToPlan, clampToBoundary, planBearingDeg, compass8, medianLatLon,
          type GeoTransform, type GeoPair, type LatLonSample } from './geo.js';
-import type { GeoConfig, GeoLandmark, DioramaPerson, RobotFixture, ActionButton, Light } from './types.js';
+import type { GeoConfig, GeoLandmark, DioramaPerson, RobotFixture, ActionButton, Light, ValveFixture } from './types.js';
 
 // ── Bermuda BLE discovery (runtime-only) ──────────────────────────────────
 // One per-scanner distance sensor for a tracked device. `disabled` reflects
@@ -40,7 +40,7 @@ export interface BermudaDiscovery {
 import type {
   Store, Floor, Sensor, ZonesLive, ObjectHalo, LerpSlot,
   HassState, ConnStatus, DiscoveredDevice, Vec2, AvatarKind, WeatherConfig, CameraFixture,
-  ConfigIndex, ConfigMeta, ThermostatFixture, SafetySensor,
+  ConfigIndex, ConfigMeta, ThermostatFixture, SafetySensor, Furniture,
 } from './types.js';
 
 // Full export envelope (Batch B). `store` is the WHOLE Store serialized (no
@@ -62,6 +62,7 @@ import { solvePosition, type ProxyObs } from './trilateration.js';
 import {
   fetchOpenMeteo, fetchOpenMeteoForecast, geocodeZip, resolveWeatherEntity, deriveFromSensors,
   toCelsius, toKmh, toMmPerH, forecastRainSoon, parseWeatherAlerts,
+  conditionIntensity, alertSeverityRank, worstAlertSeverity,
   type WeatherNow, type HaCondition, type WeatherAlert,
 } from './weather.js';
 import { isDay } from './time-of-day.js';
@@ -186,6 +187,8 @@ export type Drag =
   | { kind: 'camera'; id: string; startMm: Vec2; start: Vec2 }
   | { kind: 'cameraRotate'; id: string }
   | { kind: 'projector'; id: string; startMm: Vec2; start: Vec2 }
+  | { kind: 'valve'; id: string; startMm: Vec2; start: Vec2 }
+  | { kind: 'plug'; id: string; startMm: Vec2; start: Vec2 }
   | { kind: 'info'; id: string; startMm: Vec2; start: Vec2 }
   | { kind: 'action'; id: string; startMm: Vec2; start: Vec2 }
   | { kind: 'pzoneVert'; id: string; idx: number; startMm: Vec2; startPts: Vec2[] }
@@ -216,7 +219,7 @@ export interface EditZone {
   mousePos: Vec2 | null;
 }
 
-export type Tool = 'select' | 'wall' | 'sensor' | 'motion' | 'env' | 'infocard' | 'action' | 'bleproxy' | 'alarm' | 'thermostat' | 'safety' | 'robot' | 'camera' | 'projector' | 'pzone' | 'ground' | 'void' | 'furniture' | 'light' | 'switch' | 'door' | 'window' | 'delete';
+export type Tool = 'select' | 'wall' | 'sensor' | 'motion' | 'env' | 'infocard' | 'action' | 'bleproxy' | 'alarm' | 'thermostat' | 'safety' | 'robot' | 'camera' | 'projector' | 'valve' | 'plug' | 'pzone' | 'ground' | 'void' | 'furniture' | 'light' | 'switch' | 'door' | 'window' | 'delete';
 
 // Live robot state (runtime-only). `x/y/heading/phase/activity/led` are the
 // DISPLAY fields both canvases read; the rest are the movement controller's
@@ -268,6 +271,24 @@ export interface GeoCalibResult {
   ok: boolean;
   message: string;
   count: number;          // usable samples the median was taken over
+}
+
+// Appliance "running" state vocabulary (event-focused thought bubbles). Covers
+// the appliance's own entity (on/playing), Home Connect operation_state (`run`),
+// and generic running binary_sensors (`on`). PAUSE keeps a run alive (Home
+// Connect run→pause→run); any OTHER non-running state ends the run.
+const APPLIANCE_RUNNING_STATES = new Set(['on', 'playing', 'run', 'running', 'active']);
+const APPLIANCE_PAUSE_STATES = new Set(['pause', 'paused']);
+
+// Map an appliance furniture piece → the household-event bubble-pool key (see
+// BUBBLE_POOL_EVENT in three-renderer). Generic fallback keeps unknown kinds working.
+function applianceEventKind(fu: { kind?: import('./types.js').FurnitureKind }): string {
+  switch (furnitureKind(fu)) {
+    case 'dishwasher': return 'dishwasher_done';
+    case 'washer': case 'dryer': return 'laundry_done';
+    case 'stove': case 'microwave': return 'oven_done';
+    default: return 'appliance_done';
+  }
 }
 
 // Single-source-of-truth Planner. Lit components subscribe via addEventListener.
@@ -345,6 +366,12 @@ export class Planner extends EventTarget {
 
   // Active projector fixture (sidebar selection / canvas highlight)
   activeProjectorId: string | null = null;
+
+  // Active water valve fixture (sidebar selection / canvas highlight)
+  activeValveId: string | null = null;
+
+  // Active smart plug fixture (sidebar selection / canvas highlight)
+  activePlugId: string | null = null;
 
   // Active info card fixture (sidebar selection / canvas highlight)
   activeInfoId: string | null = null;
@@ -523,6 +550,21 @@ export class Planner extends EventTarget {
   // while the sensor is on OR within CAMERA_ALERT_LINGER_MS of the last on-time,
   // so the FOV-wedge pulse + snapshot card stay up briefly after the sensor clears.
   private _camAlertLastOn: Record<string, number> = {};
+
+  // Household events (event-focused thought bubbles — Phase 2a). Pushed on the
+  // LIVE path when a real "moment" happens: a bound appliance finishes a >=5 min
+  // run (furnitureId anchored), or rain / severe weather / a weather alert
+  // arrives (furnitureId null = house-wide). `at` is Date.now() ms. Read by
+  // three-view (mapped into ActivityContext.eventTriggers → the top-priority
+  // bubble tier) + the appliance "done" badge. Pruned > EVENT_WINDOW_MS, capped
+  // at 8. Runtime-only — an event mutates NO persisted state (like doorbellRings).
+  householdEvents: { furnitureId: string | null; kind: string; at: number }[] = [];
+  private _jobStatePrev: Record<string, string> = {};   // fuId → last-seen watched state (seeds silently)
+  private _jobRunStart: Record<string, number> = {};    // fuId → ms the watched entity entered a running state
+  private _prevWeatherCondition: string | undefined;    // last weatherNow.condition (seeds silently)
+  private _prevAlertRank = 0;                            // worst active weatherAlerts severity rank (0 = none)
+  private static readonly EVENT_WINDOW_MS = 45000;       // household-event retention (TTL for the bubble tier)
+  private static readonly APPLIANCE_RUN_MIN_MS = 5 * 60 * 1000;  // min run before a stop counts as "finished"
 
   setUiMode(m: 'edit' | 'kiosk' | 'view'): void {
     this.uiMode = m;
@@ -879,6 +921,7 @@ export class Planner extends EventTarget {
     this._syncOccupancy(states);
     this._detectDoorbells(states);
     this._detectCameraAlerts(states);
+    this._detectApplianceEvents(states);
 
     // BLE trilateration (live path only): record fresh per-scanner distances and
     // re-solve on new samples. A full refresh (changedId undefined) re-reads
@@ -918,6 +961,10 @@ export class Planner extends EventTarget {
     if (changedId === undefined || (alertId != null && changedId === alertId)) {
       this._recomputeWeatherAlerts(states);
     }
+    // Weather "moment" detection (rain/severe/alert onset → house-wide event
+    // bubbles). Idempotent: no-op when nothing transitioned. Runs after both
+    // recomputes above so it sees the fresh condition + alert list.
+    this._detectWeatherEvents();
     // One-time weather setup on the first full state load (starts the Open-Meteo
     // poll if that source is configured in the local cache). _loadFromHa may
     // replace the config afterward and re-runs _reconfigureWeather itself.
@@ -1096,6 +1143,8 @@ export class Planner extends EventTarget {
       this.activeRobotId = null;
       this.activeCameraId = null;
       this.activeProjectorId = null;
+      this.activeValveId = null;
+      this.activePlugId = null;
       this.activeInfoId = null;
       this.activeActionId = null;
       this.activePZoneId = null;
@@ -1337,6 +1386,7 @@ export class Planner extends EventTarget {
     // badges (and the 3D dirty keys, which also fold these) refresh on change.
     const f2 = this.floor();
     if (f2.furniture.some(fu => fu.doorEntity === id || fu.tempEntity === id ||
+      fu.jobStateEntity === id ||
       fu.evCharger?.statusEntity === id || fu.evCharger?.powerEntity === id ||
       fu.mailCount?.countEntity === id || fu.mailCount?.flagEntity === id)) return true;
     if (f2.doors.some(d => d.lockEntity === id)) return true;
@@ -1370,6 +1420,14 @@ export class Planner extends EventTarget {
     // into _keyFloor via the appliance hash. Scoped to current-floor bound ids.
     if ((f2.projectors ?? []).some(pr => pr.entity_id === id)) return true;
     if ((f2.furniture ?? []).some(fu => fu.biasLight?.entityId === id)) return true;
+    // Water valves (valve.*/switch.*/binary_sensor) + smart plugs (switch.*/
+    // light.*): the bound on/off entity is config-path so the 3D _keyValves /
+    // _keyPlugs dirty keys + sidebar badges rebuild when it flips. A plug's
+    // powerEntity is deliberately LEFT LIVE-path (chatty W; the 3D key folds a
+    // bucketed reading recomputed each tick, like Furniture.powerEntity). Scoped
+    // to the current floor's bound ids.
+    if ((f2.valves ?? []).some(v => v.entity_id === id)) return true;
+    if ((f2.plugs ?? []).some(pl => pl.entity_id === id)) return true;
     // GPS source entities (a person.* or device_tracker.* bound to a Store.people
     // entry) are config-path so the sidebar GPS status line + 3D pins refresh on
     // a new fix. Bounded to the specific bound ids (GPS pushes are minutes apart,
@@ -1460,6 +1518,96 @@ export class Planner extends EventTarget {
       if (!cam.alertEntity) continue;
       if (states[cam.alertEntity]?.state === 'on') this._camAlertLastOn[cam.id] = now;
     }
+  }
+
+  // Appliance "job finished" detection (LIVE path; mirrors _detectDoorbells).
+  // Fires a household event when a bound appliance leaves a RUNNING state for a
+  // terminal state after having run >= APPLIANCE_RUN_MIN_MS — a brief on/off blip
+  // never fires. Watches Furniture.jobStateEntity when bound (Home Connect
+  // operation_state, a `running` binary_sensor, or a *_program_finished event
+  // sensor), else the appliance's own entity_id for job-capable kinds
+  // (dishwasher/washer/dryer). Done value = jobDoneValue, defaulting to 'finished'
+  // when jobStateEntity is bound / any non-running terminal in the auto mode.
+  private _detectApplianceEvents(states: Record<string, HassState>): void {
+    const now = Date.now();
+    for (const fu of this.floor().furniture) {
+      const eid = fu.jobStateEntity ?? this._autoJobEntity(fu);
+      if (!eid) continue;
+      const cur = states[eid]?.state;
+      if (cur == null || cur === 'unavailable' || cur === 'unknown') continue;
+      const prev = this._jobStatePrev[fu.id];
+      this._jobStatePrev[fu.id] = cur;
+      const running = APPLIANCE_RUNNING_STATES.has(cur);
+      if (running && this._jobRunStart[fu.id] == null) this._jobRunStart[fu.id] = now;
+      if (prev === undefined || prev === cur) continue;          // seed / no change
+      const wasRunning = APPLIANCE_RUNNING_STATES.has(prev);
+      if (!wasRunning || running) continue;                       // only the running → non-running edge
+      if (APPLIANCE_PAUSE_STATES.has(cur)) continue;              // pause keeps the run alive (don't clear)
+      // A real terminal (finished / off / cancelled). Fire only when it matches
+      // the done value (defaulted for jobStateEntity mode; any terminal in auto).
+      const doneVal = fu.jobDoneValue ?? (fu.jobStateEntity ? 'finished' : null);
+      const started = this._jobRunStart[fu.id];
+      delete this._jobRunStart[fu.id];                            // run over (finished or cancelled)
+      if (doneVal != null && cur !== doneVal) continue;           // stopped, but not the "done" state
+      if (started == null || now - started < Planner.APPLIANCE_RUN_MIN_MS) continue;  // too short to be a cycle
+      this.householdEvents.push({ furnitureId: fu.id, kind: applianceEventKind(fu), at: now });
+    }
+    this._pruneEvents(now);
+  }
+
+  // The entity a job-capable appliance auto-watches when no jobStateEntity is
+  // bound — its own on/off binding. Restricted to dishwasher/washer/dryer so a
+  // TV / media piece turning off never reads as "a job finished".
+  private _autoJobEntity(fu: Furniture): string | null {
+    if (!fu.entity_id) return null;
+    const k = furnitureKind(fu);
+    return (k === 'dishwasher' || k === 'washer' || k === 'dryer') ? fu.entity_id : null;
+  }
+
+  // Weather "moment" detection (LIVE path). Diffs weatherNow.condition + the worst
+  // active alert severity against the seeded prev values and fires a house-wide
+  // (furnitureId null) household event on a real transition. Idempotent — safe to
+  // call from every weather recompute site (entity/sensors in _onStates,
+  // Open-Meteo poll); prev == cur is a no-op. Never persists.
+  private _detectWeatherEvents(): void {
+    const now = Date.now();
+    const wn = this.weatherNow;
+    if (wn) {
+      const prev = this._prevWeatherCondition;
+      this._prevWeatherCondition = wn.condition;
+      if (prev !== undefined && prev !== wn.condition) {
+        const PRECIP = new Set(['rainy', 'pouring', 'snowy', 'snowy-rainy', 'lightning-rainy', 'hail']);
+        if (!PRECIP.has(prev) && PRECIP.has(wn.condition))
+          this.householdEvents.push({ furnitureId: null, kind: 'rain_start', at: now });
+        else if (conditionIntensity(prev) < 0.6 && conditionIntensity(wn.condition) >= 0.6)
+          this.householdEvents.push({ furnitureId: null, kind: 'severe_weather', at: now });
+      }
+    }
+    // Weather alert appearing / escalating (empty→non-empty or worst-severity up).
+    const rank = this.weatherAlerts.length
+      ? alertSeverityRank(worstAlertSeverity(this.weatherAlerts) ?? 'advisory') : 0;
+    if (rank > this._prevAlertRank) this.householdEvents.push({ furnitureId: null, kind: 'severe_alert', at: now });
+    this._prevAlertRank = rank;
+    this._pruneEvents(now);
+  }
+
+  // Prune household events past the retention window, then cap at 8 (drop oldest).
+  private _pruneEvents(now: number): void {
+    if (!this.householdEvents.length) return;
+    this.householdEvents = this.householdEvents.filter(e => now - e.at < Planner.EVENT_WINDOW_MS);
+    if (this.householdEvents.length > 8)
+      this.householdEvents.splice(0, this.householdEvents.length - 8);
+  }
+
+  // Whether an appliance is showing a "done" badge right now — within the event
+  // retention window of its most recent finished event. Read live by both
+  // canvases (2D LED pulse + 3D emissive badge). Cheap no-op with no events.
+  applianceJustFinished(fu: { id: string }): boolean {
+    if (!this.householdEvents.length) return false;
+    const now = Date.now();
+    for (const e of this.householdEvents)
+      if (e.furnitureId === fu.id && now - e.at < Planner.EVENT_WINDOW_MS) return true;
+    return false;
   }
 
   // Whether a camera is currently alerting — its alertEntity is 'on', or within
@@ -1853,6 +2001,49 @@ export class Planner extends EventTarget {
 
   setActiveProjector(id: string | null): void {
     this.activeProjectorId = (this.activeProjectorId === id) ? null : id;
+    this.emitConfig();
+  }
+
+  setActiveValve(id: string | null): void {
+    this.activeValveId = (this.activeValveId === id) ? null : id;
+    this.emitConfig();
+  }
+
+  setActivePlug(id: string | null): void {
+    this.activePlugId = (this.activePlugId === id) ? null : id;
+    this.emitConfig();
+  }
+
+  // ── Water valve open/close ──────────────────────────────────────────────
+  // Click routing for a valve fixture. Gated by allowControl (default on) +
+  // uiMode (view refuses; kiosk allowed — the flip is session-only because
+  // save() no-ops outside edit). Dispatch by the bound entity's DOMAIN:
+  //   valve.*         → NEVER a blind toggle — pick open_valve / close_valve by
+  //                     the current resolved state (valveIsOpen).
+  //   switch.*        → switch.toggle (irrigation-zone pattern).
+  //   binary_sensor.* → display-only, no-op.
+  //   unbound         → flip localState ('on'↔'off') + save + emitConfig.
+  toggleValve(v: ValveFixture): void {
+    if (this.uiMode === 'view') return;
+    if (v.allowControl === false) return;
+    if (v.entity_id) {
+      const dom = v.entity_id.split('.')[0];
+      if (dom === 'valve') {
+        const openNow = valveIsOpen(this.effectiveState(v));
+        try {
+          this.hass?.callService('valve', openNow ? 'close_valve' : 'open_valve',
+            { entity_id: v.entity_id });
+        } catch { /* fire-and-forget */ }
+        return;
+      }
+      if (dom === 'switch') { this.toggleEntity(v.entity_id); return; }
+      // binary_sensor (or any read-only domain) → display-only.
+      return;
+    }
+    // Unbound → local demo control.
+    const on = v.localState === 'on';
+    v.localState = on ? 'off' : 'on';
+    this.save();        // no-op outside edit → kiosk flips are session-only
     this.emitConfig();
   }
 
@@ -3270,6 +3461,9 @@ export class Planner extends EventTarget {
     } finally {
       this._weatherFetching = false;
     }
+    // Fire any rain/severe onset from the freshly-polled condition (house-wide
+    // event bubbles). Idempotent — no-op when the condition didn't transition.
+    this._detectWeatherEvents();
   }
 
   // ── View ────────────────────────────────────────────────────────────────
@@ -3482,6 +3676,8 @@ export class Planner extends EventTarget {
     for (const it of f.robots ?? []) { it.x += dx; it.y += dy; }
     for (const it of f.cameras ?? []) { it.x += dx; it.y += dy; }
     for (const it of f.projectors ?? []) { it.x += dx; it.y += dy; }
+    for (const it of f.valves ?? []) { it.x += dx; it.y += dy; }
+    for (const it of f.plugs ?? []) { it.x += dx; it.y += dy; }
     for (const it of f.infoCards ?? []) { it.x += dx; it.y += dy; }
     for (const it of f.actionButtons ?? []) { it.x += dx; it.y += dy; }
     for (const z of f.presenceZones ?? []) z.points = z.points.map(p => ({ x: p.x + dx, y: p.y + dy }));
@@ -3511,6 +3707,8 @@ export class Planner extends EventTarget {
     this.activeRobotId = null;
     this.activeCameraId = null;
     this.activeProjectorId = null;
+    this.activeValveId = null;
+    this.activePlugId = null;
     this.activeInfoId = null;
     this.activeActionId = null;
     this.activePZoneId = null;

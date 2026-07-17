@@ -1027,6 +1027,85 @@ export function snapThermostatToWall(
   return true;
 }
 
+// ── Water valve fixture (Phase 2b) ─────────────────────────────────────────
+// Floor pipe-run body + valve wheel. Free placement with a rotation (pipe-run
+// direction). No wall snap.
+export const VALVE_DEFAULTS = {
+  pipeLenMm: 640,      // total pipe run length (2D + 3D)
+  pipeRadiusMm: 55,    // pipe radius
+  wheelRadiusMm: 150,  // hand-wheel radius
+  bodyMm: 170,         // valve body (bonnet) half-extent
+};
+// Resolved openness 0..1 for a valve fixture. Takes the already-RESOLVED state
+// (Planner.effectiveState / itemState fold localState first), mirroring
+// doorOpenFraction conventions:
+//   valve   open → current_position/100 (else 1); closed → position/100 (else 0);
+//           opening/closing → position/100 (else 0.5)
+//   switch  on → 1; off → 0
+//   binary_sensor  on → 1; off/unknown/unavailable → 0
+export function valveOpenness(
+  st: { state: string; attributes?: Record<string, unknown> } | null | undefined,
+): number {
+  if (!st) return 0;
+  const rawPos = st.attributes ? st.attributes['current_position'] : undefined;
+  const pos = typeof rawPos === 'number' && isFinite(rawPos)
+    ? Math.max(0, Math.min(1, rawPos / 100)) : null;
+  switch (st.state) {
+    case 'on':      return 1;
+    case 'open':    return pos != null ? pos : 1;
+    case 'closed':  return pos != null ? pos : 0;
+    case 'opening':
+    case 'closing': return pos != null ? pos : 0.5;
+    default:        return 0;   // off / unknown / unavailable → closed
+  }
+}
+// "Open enough to be commanded closed" — drives the click open/close pick + the
+// water-flow animation. open/opening/on OR any position > 0 reads as open.
+export function valveIsOpen(
+  st: { state: string; attributes?: Record<string, unknown> } | null | undefined,
+): boolean {
+  if (!st) return false;
+  if (st.state === 'open' || st.state === 'opening' || st.state === 'on') return true;
+  return valveOpenness(st) > 0.001;
+}
+// Water flows (spray/pulse animation) whenever openness > a small threshold.
+export function valveFlowing(
+  st: { state: string; attributes?: Record<string, unknown> } | null | undefined,
+): boolean {
+  return valveOpenness(st) > 0.02;
+}
+// Valve is mid-travel (pulse cue) — opening/closing.
+export function valveTransitional(
+  st: { state: string } | null | undefined,
+): boolean {
+  return st?.state === 'opening' || st?.state === 'closing';
+}
+export function valveRotation(v: { rotation?: number }): number { return v.rotation ?? 0; }
+
+// ── Smart plug / outlet fixture (Phase 2b) ─────────────────────────────────
+// Wall outlet plate. Wall-snaps flush like a switch (plate BACK on the wall
+// face, socket into the room), NO ganging. Default outlet height 300 mm.
+export const PLUG_DEFAULTS = { height: 300, size: 160 };
+export const PLUG_PLATE_DEPTH_MM = 35;   // three-renderer outlet BoxGeometry Z
+export function plugHeight(pl: { height?: number }): number { return pl.height ?? PLUG_DEFAULTS.height; }
+export function plugRotation(pl: { rotation?: number }): number { return pl.rotation ?? 0; }
+// Plate BACK flush on the wall face, socket into the room, NO ganging. Center =
+// axis + normal·(wallT/2 + plateDepth/2). Rotation = atan2(nx, ny) (plate front
+// = local +Z; 0 = +Y world), the switch convention. Mutates x/y/rotation.
+export function snapPlugToWall(
+  pl: { x: number; y: number; rotation?: number },
+  walls: { points: Vec2[]; kind?: WallKind }[],
+  maxMm = 500,
+): boolean {
+  const hit = snapToWallEdge(walls, pl.x, pl.y, maxMm);
+  if (!hit) return false;
+  const off = WALL_HALF_MM + PLUG_PLATE_DEPTH_MM / 2;
+  pl.x = Math.round(hit.x + hit.nx * off);
+  pl.y = Math.round(hit.y + hit.ny * off);
+  pl.rotation = Math.atan2(hit.nx, hit.ny) * 180 / Math.PI;
+  return true;
+}
+
 // ── Smoke / CO safety detectors (Feature: safety sensors) ──────────────────
 // Ceiling-mounted disc; the 3D puck hangs just below ceiling height. No wall
 // snap (free placement like a motion sensor).

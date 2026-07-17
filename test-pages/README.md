@@ -42,6 +42,7 @@ the screenshot fires before first render.
 | phase4-test.html | all solo activities engage, shower `priv=1.00` |
 | phase5-test.html | `?scene=a` eat/work/tv seated; `?scene=b` bed covers hide rigs |
 | phase6-test.html | `PHASE6 PASS` — committed bubble is drawn FROM the expected weighted POOL per scene/tb (kitchen-night/morning, seated-evening, bed), or suppressed (`-`) when an activity engages |
+| event-bubble-test.html | `EVENTBUBBLE PASS n/n` — event-focused bubbles (Phase 2a). Drives BOTH the real `Planner` (bundled `planner.mod.js`, faked `Date.now`) — appliance ≥5 min run→finished fires once / short run + fast blip do NOT fire / pause keeps the run alive / rain-start fires once / cloudy→lightning = severe / alert empty→warning = severe_alert — AND the renderer event tier (`three-renderer.mod.js`, faked `performance.now`) — event beats seated-evening, expires after `EVENT_TTL_S`=40 s, per-rig stagger (idleOffset) means two rigs don't adopt the same frame, far appliance event is distance-gated. Bundle both via esbuild like config-test/rooms-test (see the page's build comment) |
 | avatar-bubble.html | `BUBBLE PASS` — walk: committed chatter glyphs ∈ the kind's `AVATAR_BUBBLES` pool; wash: an engaged activity suppresses the bubble |
 | fidget-test.html | `FIDGET PASS` — wave-on-spawn fires + ≥3 distinct idle one-shots, all from the known 8-fidget set (`?test=stretch\|phone\|wave` freeze a pose) |
 | ai-test.html | AI avatar wanders in-region, engages, presence-off slow fade |

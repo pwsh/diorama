@@ -22,13 +22,15 @@ import {
   parseNowPlaying, isMediaPlayerId, type NowPlaying,
   presenceZoneColor, cameraFov, cameraRange, cameraHeight, cameraStateColor,
   projectorHeight, projectorThrow, projectorBeamColor, projectorProjecting, projectorAim, screenCenterHeight, biasLightColor, PROJECTOR_DEFAULTS,
+  VALVE_DEFAULTS, valveOpenness, valveFlowing, valveTransitional,
+  PLUG_DEFAULTS, PLUG_PLATE_DEPTH_MM, plugHeight,
   GROUND_KINDS,
   ENV_KINDS, envKindOf, envColor, envValueText, envHeight, envScale,
   infoCardText, infoCardRule, infoCardScale, infoCardMount, infoCardHeight,
   infoCardW, infoCardH,
   logicLightState, actionButtonHeight, actionButtonSize, actionButtonColor, ACTION_BUTTON_DEFAULTS,
 } from './geometry.js';
-import type { Door, Window as WindowType, EnvSensor, BleProxy, AlarmPanel, ThermostatFixture, SafetySensor, RobotFixture, CameraFixture, ProjectorFixture, PresenceZone, InfoCard, ActionButton, ObjectRecipe, ActivityKind } from './types.js';
+import type { Door, Window as WindowType, EnvSensor, BleProxy, AlarmPanel, ThermostatFixture, SafetySensor, RobotFixture, CameraFixture, ProjectorFixture, ValveFixture, PlugFixture, PresenceZone, InfoCard, ActionButton, ObjectRecipe, ActivityKind } from './types.js';
 
 // The subset of Planner.RobotState the renderer reads (structural — keeps the
 // renderer decoupled from the planner). Positions are plan-frame world mm.
@@ -246,6 +248,14 @@ export interface ActivityContext {
   // "someone just flipped this near me" bubble tier. three-view maintains the
   // rolling list (prev-on map + 45 s / 8-entry cap).
   recentTriggers?: { kind: 'light_on' | 'light_off' | 'fireplace' | 'tv' | 'doorbell' | 'action_button'; x: number; y: number; ageS: number }[];
+  // OPTIONAL — house-wide "events" (Phase 2a) that hijack a rig's bubble at TOP
+  // priority for a short window: an appliance finishing a run (x/y = fixture pos,
+  // still distance-gated), or rain/severe-weather/alert onset (x/y null =
+  // house-wide, no distance gate). `ageS` since the event fired; three-view maps
+  // Planner.householdEvents into this list. Absent → no event tier (stale-chunk
+  // safe). Adoption is staggered per rig (via idleOffset) so figures don't all
+  // snap to the same glyph in the same frame.
+  eventTriggers?: { kind: string; x: number | null; y: number | null; ageS: number }[];
   // OPTIONAL — appliance door-sensor states: furnitureId → the bound door
   // binary_sensor (Furniture.doorEntity) is 'on' (open). Drives the per-frame
   // appliance-door blend for BOUND fridges (case a). Absent → treated as closed.
@@ -609,6 +619,32 @@ const BUBBLE_POOL_TRIGGER: Record<string, string[]> = {
   action_button: ['✨', '💡', '🎬', '👍'],
 };
 
+// Event tier pools (Phase 2a — a real "moment" the rig reacts to, above the
+// recent-trigger tier). Keyed by the household-event kind Planner emits; repeats
+// bias the odds, same shape as BUBBLE_POOL_TRIGGER.
+const BUBBLE_POOL_EVENT: Record<string, string[]> = {
+  dishwasher_done: ['🍽️', '✅', '✨'],
+  laundry_done:    ['🧺', '✅', '👕'],
+  oven_done:       ['🍞', '😋', '✅'],
+  appliance_done:  ['✅', '🎉'],
+  rain_start:      ['🌧️', '☔'],
+  severe_weather:  ['⛈️', '⚡', '😰'],
+  severe_alert:    ['🚨', '⚠️'],
+  lightning_strike:['⚡', '😳'],
+};
+
+// Per-rig adoption stagger: a rig delays reacting to an event by up to
+// EVENT_STAGGER_S seconds, keyed off its stable idleOffset (0..2π), so figures
+// don't all pop the same glyph on the same frame. Deterministic (no Math.random).
+const EVENT_STAGGER_S = 4;
+// Household events expire from the bubble tier after this many seconds ("this
+// matters, then it's over"). Kept <= Planner.EVENT_WINDOW_MS so the planner's
+// list always outlives the tier gate.
+const EVENT_TTL_S = 40;
+// Appliance events stay distance-gated (only rigs plausibly "in earshot" react),
+// but wider than the 3.5 m recent-trigger radius. House-wide weather events skip it.
+const EVENT_APPLIANCE_R = 6000;
+
 // General idle-chatter pool (mixed into the personality roll so a walking /
 // standing rig isn't limited to its 2-glyph kind flavor).
 const BUBBLE_POOL_GENERAL = ['🍔', '☕', '📺', '📖', '🎵', '💻', '🎮', '💼', '✈️', '🛋️', '😴', '💰', '👀', '🐾', '🌱', '🎨', '🛒', '🎉', '🍳', '🎲', '🎸', '🏋️'];
@@ -801,6 +837,8 @@ export class ThreeDRenderer {
   private _robotRigGroup = new THREE.Group();    // moving robot bodies (per-frame, persistent)
   private _cameraGroup = new THREE.Group();      // camera fixtures + FOV frustum (build-time, _keyCameras)
   private _projGroup = new THREE.Group();        // projector fixtures + light-frustum beam (build-time, _keyProjectors)
+  private _valveGroup = new THREE.Group();        // water valve fixtures (build-time, _keyValves; flow pulse per-frame)
+  private _plugGroup = new THREE.Group();          // smart plug / outlet fixtures (build-time, _keyPlugs)
   // Camera alert snapshot cards (#10 extension): camera-facing sprites above an
   // ALERTING camera. Own _keyCamAlerts dirty key (refresh bucket while live);
   // CanvasTextures → pair _disposeSpriteMaps with _clearGroup. Rides sensors layer.
@@ -922,8 +960,8 @@ export class ThreeDRenderer {
   private _lastAnimT = 0;   // performance.now()/1000 of the previous _animate frame
   private _ZONE_H = 305;  // 1 ft — low outlines that don't wall off the room
   private _OBJ_H = 900;
-  private _onFixtureClick: ((info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'thermostat' | 'safety' | 'robot' | 'lock' | 'appliance' | 'action' | 'projector'; entity_id: string | null; fixtureId: string }) => void) | null = null;
-  private _onFixtureDblClick: ((info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'thermostat' | 'safety' | 'robot' | 'lock' | 'appliance' | 'action' | 'projector'; entity_id: string | null; fixtureId: string }) => void) | null = null;
+  private _onFixtureClick: ((info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'thermostat' | 'safety' | 'robot' | 'lock' | 'appliance' | 'action' | 'projector' | 'valve' | 'plug'; entity_id: string | null; fixtureId: string }) => void) | null = null;
+  private _onFixtureDblClick: ((info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'thermostat' | 'safety' | 'robot' | 'lock' | 'appliance' | 'action' | 'projector' | 'valve' | 'plug'; entity_id: string | null; fixtureId: string }) => void) | null = null;
   private _raycaster = new THREE.Raycaster();
   // Per-target humanoid rigs, persisted across frames so we can carry
   // walk-cycle phase + smoothed body facing.
@@ -971,6 +1009,10 @@ export class ThreeDRenderer {
   // LED). Registered in _buildFurniture (only when charging), cleared each
   // updateFloor, animated per frame in _advanceEvPulses (fireplace-flicker idiom).
   private _evPulses: { mat: THREE.MeshToonMaterial; base: number; phase: number }[] = [];
+  // Water-flow segments on OPEN valves that pulse per-frame (translucent blue).
+  // Registered in updateValves (only for flowing valves), cleared each rebuild,
+  // animated per frame in _advanceValves (zero-alloc, the _evPulses idiom).
+  private _valveFlows: { mat: THREE.MeshToonMaterial; base: number; phase: number; trans: boolean }[] = [];
   // TVs grouped by the room they sit in — the watch_tv seated activity checks
   // whether a bound TV in the seated person's room is on. Rebuilt in updateFloor.
   private _tvsByRoom: Record<string, { furnitureId: string; hasEntity: boolean }[]> = {};
@@ -1153,7 +1195,7 @@ export class ThreeDRenderer {
                     this._sensorGroup, this._motionGroup, this._envGroup, this._infoGroup,
                     this._actionGroup,
                     this._bleGroup, this._alarmGroup, this._thermoGroup, this._safetyGroup,
-                    this._robotGroup, this._robotRigGroup, this._cameraGroup, this._projGroup, this._camAlertGroup, this._pzoneGroup,
+                    this._robotGroup, this._robotRigGroup, this._cameraGroup, this._projGroup, this._valveGroup, this._plugGroup, this._camAlertGroup, this._pzoneGroup,
                     this._groundGroup,
                     this._lightGroup, this._switchGroup, this._targetGroup, this._ghostGroup,
                     this._transitGroup,
@@ -1232,15 +1274,15 @@ export class ThreeDRenderer {
     this._animate();
   }
 
-  onFixtureClick(fn: (info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'thermostat' | 'safety' | 'robot' | 'lock' | 'appliance' | 'action' | 'projector'; entity_id: string | null; fixtureId: string }) => void): void {
+  onFixtureClick(fn: (info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'thermostat' | 'safety' | 'robot' | 'lock' | 'appliance' | 'action' | 'projector' | 'valve' | 'plug'; entity_id: string | null; fixtureId: string }) => void): void {
     this._onFixtureClick = fn;
   }
-  onFixtureDblClick(fn: (info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'thermostat' | 'safety' | 'robot' | 'lock' | 'appliance' | 'action' | 'projector'; entity_id: string | null; fixtureId: string }) => void): void {
+  onFixtureDblClick(fn: (info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'thermostat' | 'safety' | 'robot' | 'lock' | 'appliance' | 'action' | 'projector' | 'valve' | 'plug'; entity_id: string | null; fixtureId: string }) => void): void {
     this._onFixtureDblClick = fn;
   }
 
   private _raycastFixture(clientX: number, clientY: number):
-      { kind: 'light' | 'switch' | 'media' | 'alarm' | 'thermostat' | 'safety' | 'robot' | 'lock' | 'appliance' | 'action' | 'projector'; entity_id: string | null; fixtureId: string } | null {
+      { kind: 'light' | 'switch' | 'media' | 'alarm' | 'thermostat' | 'safety' | 'robot' | 'lock' | 'appliance' | 'action' | 'projector' | 'valve' | 'plug'; entity_id: string | null; fixtureId: string } | null {
     if (!this._renderer || !this._camera) return null;
     const rect = this._renderer.domElement.getBoundingClientRect();
     const ndc = new THREE.Vector2(
@@ -1272,6 +1314,10 @@ export class ThreeDRenderer {
     if (this._robotRigGroup.visible) roots.push(this._robotRigGroup);
     // Projectors are clickable → toggle projecting (bound entity / localState).
     if (this._projGroup.visible) roots.push(this._projGroup);
+    // Water valves are clickable → open/close; ride the sensors layer.
+    if (this._valveGroup.visible) roots.push(this._valveGroup);
+    // Smart plugs are clickable → toggle; ride the switches layer.
+    if (this._plugGroup.visible) roots.push(this._plugGroup);
     for (const g of this._mediaClickables) roots.push(g);
     // Door lock deadbolts (userData.kind='lock') ride the always-visible door
     // group; the door panel itself carries no clickable tag, so only the bolt hits.
@@ -1283,7 +1329,7 @@ export class ThreeDRenderer {
       let obj: THREE.Object3D | null = h.object;
       while (obj) {
         const ud = obj.userData;
-        if (ud && (ud.kind === 'light' || ud.kind === 'switch' || ud.kind === 'media' || ud.kind === 'alarm' || ud.kind === 'thermostat' || ud.kind === 'safety' || ud.kind === 'robot' || ud.kind === 'lock' || ud.kind === 'appliance' || ud.kind === 'action' || ud.kind === 'projector')) {
+        if (ud && (ud.kind === 'light' || ud.kind === 'switch' || ud.kind === 'media' || ud.kind === 'alarm' || ud.kind === 'thermostat' || ud.kind === 'safety' || ud.kind === 'robot' || ud.kind === 'lock' || ud.kind === 'appliance' || ud.kind === 'action' || ud.kind === 'projector' || ud.kind === 'valve' || ud.kind === 'plug')) {
           return { kind: ud.kind, entity_id: ud.entity_id ?? null, fixtureId: String(ud.fixtureId) };
         }
         obj = obj.parent;
@@ -1738,7 +1784,7 @@ export class ThreeDRenderer {
     for (const g of [
       this._floorGroup, this._doorGroup, this._modelGroup, this._zoneGroup, this._haloGroup,
       this._sensorGroup, this._motionGroup, this._infoGroup, this._actionGroup, this._bleGroup, this._alarmGroup, this._thermoGroup,
-      this._safetyGroup, this._robotGroup, this._robotRigGroup, this._cameraGroup, this._projGroup, this._camAlertGroup, this._pzoneGroup,
+      this._safetyGroup, this._robotGroup, this._robotRigGroup, this._cameraGroup, this._projGroup, this._valveGroup, this._plugGroup, this._camAlertGroup, this._pzoneGroup,
       this._groundGroup,
       this._lightGroup, this._switchGroup, this._targetGroup, this._ghostGroup,
       this._pulseGroup, this._nowPlayingGroup,
@@ -1748,6 +1794,9 @@ export class ThreeDRenderer {
     }
     this._infoRigs = [];
     this._actionRigs = [];
+    // Valve flow pulses live in _valveGroup (just cleared) — drop the tracking
+    // list so _advanceValves can't touch freed materials before the next rebuild.
+    this._valveFlows = [];
     // Vent airflow clouds live in _thermoGroup (just cleared) — drop the tracking
     // list so _advanceVents can't iterate freed geometry before the next rebuild.
     this._ventClouds = [];
@@ -2226,6 +2275,9 @@ export class ThreeDRenderer {
     this._cameraGroup.visible = v.sensors !== false;
     // Projector fixtures + light beam ride the sensors layer too.
     this._projGroup.visible = v.sensors !== false;
+    // Water valves ride the sensors layer; smart plugs ride the switches layer.
+    this._valveGroup.visible = v.sensors !== false;
+    this._plugGroup.visible = v.switches !== false;
     this._camAlertGroup.visible = v.sensors !== false;   // alert cards ride the sensors layer
     this._motionGroup.visible = v.motion !== false;
     this._envGroup.visible = v.env !== false;
@@ -2261,7 +2313,8 @@ export class ThreeDRenderer {
 
   updateFloor(f: Floor, scene3d?: Scene3D, layers?: import('./types.js').Layers2D,
               customObjects?: ObjectRecipe[], stateProvider?: StateProvider,
-              selectedFurnitureId?: string | null): void {
+              selectedFurnitureId?: string | null,
+              jobDoneProvider?: (fuId: string) => boolean): void {
     if (!this._scene) return;
     this._fw = f.w; this._fd = f.d; this._floorId = f.id;
     // Foreground wall cutaway: default ON, opt out with wallCutaway === false.
@@ -2655,9 +2708,13 @@ export class ThreeDRenderer {
         if (mc?.flagEntity && stateProvider) mailLidOpen = stateProvider(mc.flagEntity)?.state === 'on';
       }
       const doorSink: { pivot: THREE.Object3D; axis: 'x' | 'y'; openAngle: number }[] = [];
+      // "Job done" badge flag (event-focused thought bubbles): from the caller's
+      // finished-window provider (Planner.applianceJustFinished). Folded into the
+      // appliance hash in three-view so this rebuilds when it flips.
+      const jobDone = isAppliance && !!jobDoneProvider && jobDoneProvider(fu.id);
       const grp = this._buildFurniture(fu, f.furniture, customObjects,
                                        { applianceOn, ledScale, doorSink, tempLabel, binFull, speakerPlaying, biasOn, biasColor,
-                                         vehicleGhost, evCharging, evColor, mailFlagUp, mailLidOpen, mailCountLabel });
+                                         vehicleGhost, evCharging, evColor, mailFlagUp, mailLidOpen, mailCountLabel, jobDone });
       this._shadowFlags(grp);
       // Custom-recipe front-arrow indicator: custom objects draw only as a
       // labeled rect in 2D and had no 3D front cue, so when a recipe piece is
@@ -4243,7 +4300,8 @@ export class ThreeDRenderer {
                                    tempLabel?: string; binFull?: boolean; speakerPlaying?: boolean;
                                    biasOn?: boolean; biasColor?: number;
                                    vehicleGhost?: boolean; evCharging?: boolean; evColor?: number;
-                                   mailFlagUp?: boolean; mailLidOpen?: boolean; mailCountLabel?: string }): THREE.Group {
+                                   mailFlagUp?: boolean; mailLidOpen?: boolean; mailCountLabel?: string;
+                                   jobDone?: boolean }): THREE.Group {
     const recipe = fu.customKindId ? customObjects?.find(o => o.id === fu.customKindId) : undefined;
     const def = recipe ?? furnitureDef(fu);
     const W = fu.w, D = fu.h, HT = def.ht;
@@ -5382,6 +5440,22 @@ export class ThreeDRenderer {
       led.userData.outlineSkip = true;   // no dark inverted-hull shell on a glowing dot
       grp.add(led);
     }
+    // "Job done" badge (event-focused thought bubbles): a distinct BLUE emissive
+    // dot on the front-LEFT while the appliance is within its finished window —
+    // green means "running", blue means "done" (echoes real end-of-cycle panel
+    // lights). Folded into three-view's appliance hash (no new dirty key), so it
+    // appears on the finish event and clears when the window expires.
+    if (opts?.jobDone && furnitureCat(def) === 'appliance') {
+      const badge = new THREE.Mesh(
+        new THREE.BoxGeometry(34, 34, 12),
+        this._mat({ color: 0x81d4fa, emissive: 0x0288d1, emissiveIntensity: 1.0 }));
+      const badgeY = kind === 'wall_tv' ? 1350 + 260
+                   : kind === 'tv' ? HT * 0.8
+                   : Math.min(HT * 0.88, HT - 55);
+      badge.position.set(-W * 0.36, badgeY, -D / 2 - 8);
+      badge.userData.outlineSkip = true;
+      grp.add(badge);
+    }
 
     // Temperature reading (stove/oven/fridge): a small camera-facing text sprite
     // above the piece. Reuses the env-sensor sprite idiom; its CanvasTexture is
@@ -5868,6 +5942,151 @@ export class ThreeDRenderer {
       patch.rotation.x = -Math.PI / 2;
       patch.position.y = occupied ? 10 : 8;
       this._pzoneGroup.add(patch);
+    }
+  }
+
+  // Water valves (Phase 2b): a floor pipe run (two cylinders along local +Z =
+  // world +Y at rotation 0) with a valve body + a hand-wheel torus whose Y
+  // rotation encodes openness (a quarter-turn from closed 0 → open 1). While
+  // OPEN a translucent blue flow segment is laid over the pipe and its material
+  // enrolled in _valveFlows for a per-frame pulse (zero-alloc, _evPulses idiom).
+  // Meshes carry userData.kind === 'valve' → a raycast click opens/closes it.
+  // Rebuilt under _keyValves. Rides the sensors layer.
+  updateValves(valves: ValveFixture[], stateProvider: StateProvider): void {
+    if (!this._scene) return;
+    this._clearGroup(this._valveGroup);
+    this._valveFlows = [];   // materials just disposed by _clearGroup
+    const R = VALVE_DEFAULTS.pipeRadiusMm;
+    const halfLen = VALVE_DEFAULTS.pipeLenMm / 2;
+    const gap = VALVE_DEFAULTS.bodyMm * 0.6;   // clearance for the valve body
+    for (const v of valves) {
+      const st = itemState(v, stateProvider);
+      const open = valveOpenness(st);
+      const flowing = valveFlowing(st);
+      const trans = valveTransitional(st);
+      const ud = { kind: 'valve' as const, entity_id: v.entity_id ?? null, fixtureId: v.id };
+      const grp = new THREE.Group();
+      const P = this._w(v.x, v.y, R);
+      grp.position.set(P.x, P.y, P.z);
+      grp.rotation.y = -((v.rotation || 0) * Math.PI / 180);
+      const pipeMat = this._mat({ color: 0x90a4ae, metalness: 0.4, roughness: 0.5 });
+      // Two pipe halves running along local +Z, leaving a gap for the body.
+      for (const sgn of [-1, 1]) {
+        const segLen = halfLen - gap;
+        const pipe = new THREE.Mesh(new THREE.CylinderGeometry(R, R, segLen, 16), pipeMat);
+        pipe.rotation.x = Math.PI / 2;   // Y-cylinder → along Z
+        pipe.position.set(0, 0, sgn * (gap + segLen / 2));
+        pipe.userData = ud;
+        grp.add(pipe);
+      }
+      // Valve body (bonnet).
+      const body = new THREE.Mesh(
+        new THREE.BoxGeometry(VALVE_DEFAULTS.bodyMm, VALVE_DEFAULTS.bodyMm * 1.1, VALVE_DEFAULTS.bodyMm),
+        this._mat({ color: 0x37474f, metalness: 0.3, roughness: 0.6 }));
+      body.position.set(0, VALVE_DEFAULTS.bodyMm * 0.2, 0);
+      body.userData = ud;
+      grp.add(body);
+      // Hand-wheel torus on top; Y rotation encodes openness (quarter turn).
+      const wheel = new THREE.Mesh(
+        new THREE.TorusGeometry(VALVE_DEFAULTS.wheelRadiusMm, R * 0.5, 8, 20),
+        this._mat({
+          color: flowing ? 0x29b6f6 : (open > 0 ? 0x4fc3f7 : 0xef5350),
+          emissive: flowing ? 0x0288d1 : 0x000000, emissiveIntensity: flowing ? 0.4 : 0,
+          metalness: 0.2, roughness: 0.6,
+        }));
+      wheel.rotation.x = Math.PI / 2;   // torus lies flat (hand-wheel on top of the stem)
+      wheel.rotation.z = open * Math.PI / 2;   // openness → wheel spin (observable)
+      wheel.position.set(0, VALVE_DEFAULTS.bodyMm * 0.7 + VALVE_DEFAULTS.wheelRadiusMm * 0.2, 0);
+      wheel.userData = { ...ud, part: 'wheel' };
+      grp.add(wheel);
+      // Flow segment (only while open): a translucent blue tube over the pipe.
+      if (flowing) {
+        const flowMat = this._mat({
+          color: 0x29b6f6, emissive: 0x29b6f6, emissiveIntensity: 0.5,
+        });
+        flowMat.transparent = true;
+        flowMat.opacity = 0.55;
+        const flow = new THREE.Mesh(
+          new THREE.CylinderGeometry(R * 0.7, R * 0.7, VALVE_DEFAULTS.pipeLenMm, 12), flowMat);
+        flow.rotation.x = Math.PI / 2;
+        flow.userData = { ...ud, part: 'flow', outlineSkip: true };
+        grp.add(flow);
+        this._valveFlows.push({ mat: flowMat, base: 0.55, phase: (v.x + v.y) % 6.28, trans });
+      }
+      this._valveGroup.add(grp);
+    }
+  }
+
+  // Per-frame pulse on OPEN valve flow segments (opacity breathe; opening/closing
+  // pulses faster). Zero allocation; the list is rebuilt each updateValves (only
+  // flowing valves are enrolled → closed valves never pulse). The _evPulses idiom.
+  private _advanceValves(): void {
+    if (!this._valveFlows.length) return;
+    const t = performance.now() / 1000;
+    for (const fl of this._valveFlows) {
+      const rate = fl.trans ? 6 : 2.6;
+      const k = 0.5 + 0.5 * Math.sin(t * rate + fl.phase);
+      fl.mat.opacity = fl.base * (0.55 + 0.45 * k);
+    }
+  }
+
+  // Smart plugs (Phase 2b): a wall outlet plate at `height` (default 300 mm) with
+  // two socket slots + a small cord hint below. ON → green emissive plate/LED
+  // (intensity scaled by the optional powerEntity draw via powerGlowScale). Front
+  // = local +Z, the switch rotation convention (wall-snapped flush). Meshes carry
+  // userData.kind === 'plug' → a raycast click toggles the outlet. Rebuilt under
+  // _keyPlugs. Rides the switches layer.
+  updatePlugs(plugs: PlugFixture[], stateProvider: StateProvider): void {
+    if (!this._scene) return;
+    this._clearGroup(this._plugGroup);
+    for (const pl of plugs) {
+      const st = itemState(pl, stateProvider);
+      const on = st?.state === 'on' || st?.state === 'playing';
+      const powerW = pl.powerEntity ? parseFloat(stateProvider(pl.powerEntity)?.state ?? '') : NaN;
+      const glow = on ? (isFinite(powerW) && powerW > 5 ? powerGlowScale(powerW) : 1) : 0;
+      const ud = { kind: 'plug' as const, entity_id: pl.entity_id ?? null, fixtureId: pl.id };
+      const grp = new THREE.Group();
+      const P = this._w(pl.x, pl.y, plugHeight(pl));
+      grp.position.set(P.x, P.y, P.z);
+      grp.rotation.y = -((pl.rotation || 0) * Math.PI / 180);
+      const S = PLUG_DEFAULTS.size;
+      const plateD = PLUG_PLATE_DEPTH_MM;
+      // Plate body (back flush on the wall; snap offset = wallT/2 + plateD/2).
+      const body = new THREE.Mesh(
+        new THREE.BoxGeometry(S * 0.8, S, plateD),
+        this._mat({
+          color: on ? 0x2e7d32 : 0xeceff1,
+          emissive: on ? 0x2e7d32 : 0x000000, emissiveIntensity: on ? 0.35 * glow : 0,
+          metalness: 0.1, roughness: 0.7,
+        }));
+      body.userData = ud;
+      grp.add(body);
+      // Two socket slots (proud of the plate — coincident-face gotcha).
+      const slotMat = this._mat({ color: on ? 0x1b5e20 : 0x546e7a });
+      for (const sx of [-1, 1]) {
+        const slot = new THREE.Mesh(new THREE.BoxGeometry(S * 0.09, S * 0.34, 6), slotMat);
+        slot.position.set(sx * S * 0.22, S * 0.06, plateD / 2 + 3);
+        slot.userData = { ...ud, outlineSkip: true };
+        grp.add(slot);
+      }
+      // LED dot (top corner), green while energized.
+      const led = new THREE.Mesh(
+        new THREE.SphereGeometry(S * 0.09, 10, 8),
+        this._mat({
+          color: on ? 0x69f0ae : 0x607d8b,
+          emissive: on ? 0x69f0ae : 0x000000, emissiveIntensity: on ? 0.9 * glow : 0,
+        }));
+      led.position.set(S * 0.28, S * 0.34, plateD / 2 + 2);
+      led.userData = { ...ud, outlineSkip: true };
+      grp.add(led);
+      // Cord hint dangling below the plate (only meaningful visually while on).
+      const cord = new THREE.Mesh(
+        new THREE.CylinderGeometry(S * 0.05, S * 0.05, S * 0.5, 8),
+        this._mat({ color: on ? 0x2e7d32 : 0x455a64 }));
+      cord.position.set(0, -S * 0.6, plateD / 2 + 6);
+      cord.userData = { ...ud, outlineSkip: true };
+      grp.add(cord);
+      this._plugGroup.add(grp);
     }
   }
 
@@ -9803,6 +10022,7 @@ export class ThreeDRenderer {
     // (only playing speakers are enrolled → idle speakers never pulse).
     this._advanceSpeakerPulses();
     this._advanceEvPulses();
+    this._advanceValves();
   }
 
   // Per-frame emissive breathe on playing speaker drivers. Amplitude/rate keyed
@@ -9900,6 +10120,29 @@ export class ThreeDRenderer {
                              ctx?: ActivityContext, t?: TargetWorld): string | null {
     if (h.activity != null || h.privacy > 0.3) { h.ctxBubbleTier = null; return null; }
     if (bedHidden) { h.ctxBubbleTier = null; return null; }
+    // EVENT tier (TOP priority): a real "moment" takes focus over every ambient /
+    // trigger tier while active. House-wide (x/y null → weather) events fire for
+    // every rig; appliance events stay distance-gated. Adoption is STAGGERED per
+    // rig (idleOffset → 0..EVENT_STAGGER_S) so figures don't all snap at once, and
+    // events expire after EVENT_TTL_S ("urgent, then gone"). _pickCtxBubble holds
+    // the rolled glyph stable so the 2.5 s commit hysteresis still applies.
+    const evs = ctx?.eventTriggers;
+    if (evs && evs.length) {
+      const stagger = (h.idleOffset / (Math.PI * 2)) * EVENT_STAGGER_S;   // 0..EVENT_STAGGER_S, stable per rig
+      let best: { kind: string; ageS: number } | null = null;
+      for (const e of evs) {
+        if (e.ageS < stagger || e.ageS >= EVENT_TTL_S) continue;          // not yet adopted / expired
+        if (e.x != null && t) {                                           // appliance-anchored: keep a radius
+          const dx = e.x - t.x, dy = (e.y ?? 0) - t.y;
+          if (dx * dx + dy * dy > EVENT_APPLIANCE_R * EVENT_APPLIANCE_R) continue;
+        }
+        if (!best || e.ageS < best.ageS) best = { kind: e.kind, ageS: e.ageS };  // freshest wins
+      }
+      if (best) {
+        const pool = BUBBLE_POOL_EVENT[best.kind] ?? BUBBLE_POOL_EVENT.appliance_done;
+        return this._pickCtxBubble(h, 'event_' + best.kind, pool);
+      }
+    }
     // Recent-trigger tier: nearest fixture toggled in the last 45 s within
     // 3.5 m of the rig's RAW world position (t.x/t.y — anti-feedback: never the
     // eased visual pose). Trigger x/y are world mm, same frame as t.
@@ -11687,7 +11930,7 @@ export class ThreeDRenderer {
       this._floorGroup, this._doorGroup, this._modelGroup, this._zoneGroup, this._haloGroup,
       this._sensorGroup, this._motionGroup, this._envGroup, this._infoGroup, this._actionGroup, this._bleGroup,
       this._alarmGroup, this._thermoGroup, this._safetyGroup, this._robotGroup, this._robotRigGroup,
-      this._cameraGroup, this._projGroup, this._camAlertGroup, this._pzoneGroup, this._groundGroup,
+      this._cameraGroup, this._projGroup, this._valveGroup, this._plugGroup, this._camAlertGroup, this._pzoneGroup, this._groundGroup,
       this._lightGroup, this._switchGroup, this._targetGroup, this._gpsGroup, this._weatherGroup,
       this._pulseGroup, this._nowPlayingGroup,
     ]) {

@@ -88,6 +88,26 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Phase 2 of the staged plan** (2026-07-17; 2 parallel Opus agents):
+  **Event-focused thought bubbles** — a TOP-priority bubble tier fed by
+  `Planner.householdEvents`: appliance-finished (pause-safe ≥5 min run
+  state machine on `Furniture.jobStateEntity` or a job-capable
+  appliance's own entity; kinds dishwasher/laundry/oven/appliance_done +
+  a blue 2D/3D "done" badge on the piece), rain_start (dry→precip once),
+  severe_weather (conditionIntensity crossing ≥0.6), severe_alert
+  (weatherAlerts appearing/worsening); per-rig adoption staggered 0–4 s
+  via idleOffset, TTL 40 s, supersedes the recent-trigger tier —
+  EVENTBUBBLE 13/13, existing bubble pages green. **Water valves**
+  (`Floor.valves`, tool 🚰, sensors layer): pipe+wheel fixture,
+  `valveOpenness` state matrix (valve domain w/ position, switch,
+  binary_sensor display-only, localState), open = animated flow dashes
+  (2D) + pulsing blue flow segment (3D, `_valveFlows` zero-alloc);
+  `toggleValve` picks `open_valve`/`close_valve` BY STATE (never blind
+  toggle), allowControl per device. **Smart plugs** (`Floor.plugs`, tool
+  🔌, switches layer): outlet plate wall-snapped at 300 mm, switch
+  toggle semantics, optional LIVE `powerEntity` (glow + W chip) —
+  VALVEPLUG 53/53.
+
 - **Phase 1 of the staged plan** (2026-07-17; 2 parallel Opus agents):
   **Sirens** as a `SafetyKind 'siren'` (blue ceiling beacon: spinning
   twin-lobe light-bar sweep + square-wave strobe + expanding rings, the

@@ -1,0 +1,264 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>EVENTBUBBLE …</title>
+<style>
+  html,body{margin:0;background:#0d1116;color:#cfd8dc;font:13px/1.5 sans-serif;padding:12px}
+  h1{font-size:15px;margin:0 0 8px}
+  #summary{font-size:14px;font-weight:bold;margin:8px 0;padding:8px 10px;border-radius:5px}
+  .okbg{background:#12331f;color:#69f0ae}.badbg{background:#3a1414;color:#ff8a80}
+  .row{display:flex;justify-content:space-between;gap:10px;padding:1px 0;border-bottom:1px solid #1c2530}
+  .pass{color:#69f0ae}.fail{color:#ff5252}.name{color:#90caf9}.extra{color:#ffd54f;font-size:11px}
+  #c{position:fixed;left:-4000px;width:900px;height:640px}
+</style>
+<h1>Event-focused thought bubbles — planner detectors + renderer event tier</h1>
+<div id="summary">Running…</div>
+<div id="rows"></div>
+<div id="c"></div>
+
+<!-- Build the two isolated esbuild bundles (avoids the vite/tsc pipeline; neither
+     module imports canvas-render, so this builds even mid-refactor of siblings):
+       H=<harness>
+       T=$(mktemp -d); cp -r src/* "$T"/; cp test-pages/fake-avatar-store.ts "$T"/avatar-store.ts
+       npx esbuild "$T"/planner.ts        --bundle --format=esm --outfile="$H"/planner.mod.js
+       npx esbuild src/three-renderer.ts  --bundle --format=esm --outfile="$H"/three-renderer.mod.js
+     then serve the harness dir + this page. -->
+<script type="module">
+  const V = '?v=' + Date.now();
+  const { Planner } = await import('./planner.mod.js' + V);
+  const RMOD = await import('./three-renderer.mod.js' + V);
+
+  const results = [];
+  const ok = (name, cond, extra = '') => results.push({ name, pass: !!cond, extra: String(extra) });
+
+  // ── Event bubble pools — mirror three-renderer.ts BUBBLE_POOL_EVENT ─────────
+  const POOL_EVENT = {
+    dishwasher_done: ['🍽️','✅','✨'],
+    laundry_done:    ['🧺','✅','👕'],
+    oven_done:       ['🍞','😋','✅'],
+    appliance_done:  ['✅','🎉'],
+    rain_start:      ['🌧️','☔'],
+    severe_weather:  ['⛈️','⚡','😰'],
+    severe_alert:    ['🚨','⚠️'],
+  };
+  const POOL_SEATED_EVE = ['📖','📱','🎵','📺','🍪','💤','💭','🎧','📻','🍷','🎮'];
+  const inAnyEventPool = g => Object.values(POOL_EVENT).some(p => p.includes(g));
+
+  // ══ PART A — Planner detectors (faked Date.now) ════════════════════════════
+  let CLK = 1_700_000_000_000;
+  const realNowDate = Date.now;
+  Date.now = () => CLK;
+
+  const mkPlanner = furniture => {
+    const p = new Planner();
+    p.uiMode = 'view';                       // never persist during the test
+    p.store.floors[0].furniture = furniture;
+    return p;
+  };
+  const st = obj => {
+    const s = {};
+    for (const [k, v] of Object.entries(obj)) s[k] = { state: v, attributes: {} };
+    return s;
+  };
+  // Feed one state snapshot through the appliance detector.
+  const appl = (p, obj) => p._detectApplianceEvents(st(obj));
+  const evOf = (p, fid) => p.householdEvents.filter(e => e.furnitureId === fid);
+
+  // A1 — jobStateEntity: run(6 min)→finished fires exactly one dishwasher_done.
+  {
+    const p = mkPlanner([{ id: 'dw', x: 1000, y: 1000, w: 600, h: 600, kind: 'dishwasher',
+                           jobStateEntity: 'sensor.dw_op' }]);
+    appl(p, { 'sensor.dw_op': 'ready' });     // seed
+    appl(p, { 'sensor.dw_op': 'run' });       // running — runStart
+    CLK += 6 * 60 * 1000;                      // 6 min later
+    appl(p, { 'sensor.dw_op': 'finished' });  // finish
+    const n1 = evOf(p, 'dw').length;
+    appl(p, { 'sensor.dw_op': 'finished' });  // no change → no refire
+    const n2 = evOf(p, 'dw').length;
+    ok('A1 dishwasher ≥5min run→finished fires once',
+       n1 === 1 && n2 === 1 && evOf(p, 'dw')[0].kind === 'dishwasher_done',
+       `n1=${n1} n2=${n2} kind=${evOf(p,'dw')[0]?.kind}`);
+  }
+
+  // A2 — a SHORT (2 min) run then finished does NOT fire.
+  {
+    const p = mkPlanner([{ id: 'dw2', x: 1, y: 1, w: 600, h: 600, kind: 'dishwasher',
+                           jobStateEntity: 'sensor.dw2_op' }]);
+    appl(p, { 'sensor.dw2_op': 'ready' });
+    appl(p, { 'sensor.dw2_op': 'run' });
+    CLK += 2 * 60 * 1000;                       // only 2 min
+    appl(p, { 'sensor.dw2_op': 'finished' });
+    ok('A2 short (<5min) run does NOT fire', evOf(p, 'dw2').length === 0,
+       `n=${evOf(p,'dw2').length}`);
+  }
+
+  // A3 — auto mode (no jobStateEntity): washer entity_id on(6min)→off fires laundry_done.
+  {
+    const p = mkPlanner([{ id: 'wash', x: 1, y: 1, w: 600, h: 850, kind: 'washer',
+                           entity_id: 'switch.wash' }]);
+    appl(p, { 'switch.wash': 'off' });
+    appl(p, { 'switch.wash': 'on' });
+    CLK += 6 * 60 * 1000;
+    appl(p, { 'switch.wash': 'off' });
+    const e = evOf(p, 'wash');
+    ok('A3 auto on/off ≥5min fires laundry_done',
+       e.length === 1 && e[0].kind === 'laundry_done', `n=${e.length} kind=${e[0]?.kind}`);
+  }
+
+  // A4 — pause does NOT reset the run: run→pause→run→finished (7 min total) fires.
+  {
+    const p = mkPlanner([{ id: 'dw4', x: 1, y: 1, w: 600, h: 600, kind: 'dishwasher',
+                           jobStateEntity: 'sensor.dw4_op' }]);
+    appl(p, { 'sensor.dw4_op': 'ready' });
+    appl(p, { 'sensor.dw4_op': 'run' });        // runStart = T0
+    CLK += 60 * 1000;  appl(p, { 'sensor.dw4_op': 'pause' });  // keeps run alive
+    CLK += 60 * 1000;  appl(p, { 'sensor.dw4_op': 'run' });    // resume (no reset)
+    CLK += 5 * 60 * 1000; appl(p, { 'sensor.dw4_op': 'finished' });
+    ok('A4 pause keeps the run alive (7 min total fires)', evOf(p, 'dw4').length === 1,
+       `n=${evOf(p,'dw4').length}`);
+  }
+
+  // A5 — an unbound / non-running blip: an appliance that only ever toggles fast
+  // (on→off after 10 s) must not fire (guards against every washer blip bubbling).
+  {
+    const p = mkPlanner([{ id: 'dry', x: 1, y: 1, w: 600, h: 850, kind: 'dryer',
+                           entity_id: 'switch.dry' }]);
+    appl(p, { 'switch.dry': 'off' });
+    appl(p, { 'switch.dry': 'on' });
+    CLK += 10 * 1000;                            // 10 s only
+    appl(p, { 'switch.dry': 'off' });
+    ok('A5 fast on/off blip does NOT fire', evOf(p, 'dry').length === 0,
+       `n=${evOf(p,'dry').length}`);
+  }
+
+  // A6 — rain start fires once (no refire while it keeps raining).
+  {
+    const p = mkPlanner([]);
+    p.weatherNow = { condition: 'sunny', tempC: 20, windKmh: 0, windBearing: null, isDay: true, stale: false };
+    p._detectWeatherEvents();                    // seed
+    p.weatherNow.condition = 'rainy';
+    p._detectWeatherEvents();                    // fire rain_start
+    const n1 = p.householdEvents.filter(e => e.kind === 'rain_start').length;
+    p._detectWeatherEvents();                    // still rainy → no refire
+    p.weatherNow.condition = 'pouring';          // rainy→pouring is precip→precip, no NEW rain_start
+    p._detectWeatherEvents();
+    const n2 = p.householdEvents.filter(e => e.kind === 'rain_start').length;
+    ok('A6 rain start fires once (no refire while wet)', n1 === 1 && n2 === 1, `n1=${n1} n2=${n2}`);
+  }
+
+  // A7 — severe weather: cloudy→lightning (intensity crosses 0.6) fires severe_weather.
+  {
+    const p = mkPlanner([]);
+    p.weatherNow = { condition: 'cloudy', tempC: 15, windKmh: 5, windBearing: null, isDay: true, stale: false };
+    p._detectWeatherEvents();                    // seed
+    p.weatherNow.condition = 'lightning';
+    p._detectWeatherEvents();
+    const e = p.householdEvents.filter(x => x.kind === 'severe_weather');
+    ok('A7 cloudy→lightning fires severe_weather', e.length === 1, `n=${e.length}`);
+  }
+
+  // A8 — weather alert appearing (empty→warning) fires severe_alert; stable = no refire.
+  {
+    const p = mkPlanner([]);
+    p.weatherNow = { condition: 'cloudy', tempC: 15, windKmh: 5, windBearing: null, isDay: true, stale: false };
+    p.weatherAlerts = [];
+    p._detectWeatherEvents();                    // seed condition + alert rank 0
+    p.weatherAlerts = [{ event: 'Severe Thunderstorm Warning', severity: 'warning' }];
+    p._detectWeatherEvents();                    // rank 0→up → severe_alert
+    const n1 = p.householdEvents.filter(e => e.kind === 'severe_alert').length;
+    p._detectWeatherEvents();                    // same alert set → no refire
+    const n2 = p.householdEvents.filter(e => e.kind === 'severe_alert').length;
+    ok('A8 alert empty→warning fires severe_alert once', n1 === 1 && n2 === 1, `n1=${n1} n2=${n2}`);
+  }
+
+  Date.now = realNowDate;
+
+  // ══ PART B — Renderer event tier (faked performance.now) ═══════════════════
+  const r = new RMOD.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+  // Den with a sofa → a seated rig in the evening normally shows seated_eve.
+  const denLoop = { id: 'wd', points: [
+    { x: 200, y: 200 }, { x: 6800, y: 200 }, { x: 6800, y: 6800 }, { x: 200, y: 6800 }, { x: 200, y: 200 } ] };
+  const floor = {
+    id: 'f1', name: 'Test', w: 7000, d: 7000, walls: [denLoop],
+    rooms: [{ id: 'rd', name: 'Den', anchor: { x: 3500, y: 3500 } }],
+    furniture: [{ id: 'sofa1', x: 3500, y: 4000, w: 2400, h: 900, kind: 'sofa', rotation: 0 }],
+    lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [], windows: [], bg: null, model3d: null, look3d: null,
+  };
+  const roomNames = { rd: 'Den' };
+  r.updateFloor(floor, { preset: 'night', floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6' });
+  r.applyViewPreset('iso');
+
+  const realPerfNow = performance.now.bind(performance);
+  let fakeNow = realPerfNow();
+  performance.now = () => fakeNow;
+  const step = (targets, ctx, n) => { for (let i = 0; i < n; i++) { fakeNow += 16.7; r.updateTargets(targets, ctx); } };
+  const baseCtx = (events) => ({ entityOn: {}, roomNames, timeBucket: 'night', eventTriggers: events });
+
+  // Rig seated on the sofa (a second spot keeps a single occupant unambiguous).
+  const parked = [{ key: 'sitter', x: 3500, y: 4000, color: 0x4fc3f7 }];
+
+  // Phase 1 — settle into a seated_eve bubble (baseline, NO event).
+  step(parked, baseCtx(undefined), 480);
+  const h1 = r._humanoids['sitter'];
+  const seatedBase = h1 && POOL_SEATED_EVE.includes(h1.bubbleKind);
+  ok('B1a baseline: seated rig shows a seated-evening bubble',
+     seatedBase, `sit=${h1?.sit.toFixed(2)} bub=${h1?.bubbleKind || '-'}`);
+
+  // Phase 2 — a house-wide rain_start event (ageS past the ≤4 s stagger, within
+  // TTL) must HIJACK the bubble away from seated_eve → an event-pool glyph.
+  step(parked, baseCtx([{ kind: 'rain_start', x: null, y: null, ageS: 6 }]), 240);
+  const h2 = r._humanoids['sitter'];
+  ok('B1b event tier takes priority over seated-evening',
+     h2 && POOL_EVENT.rain_start.includes(h2.bubbleKind),
+     `bub=${h2?.bubbleKind || '-'} want=${h2?.bubbleWant || '-'}`);
+
+  // Phase 3 — the SAME event past its TTL (ageS ≥ EVENT_TTL_S=40) must expire and
+  // fall back to the seated_eve tier.
+  step(parked, baseCtx([{ kind: 'rain_start', x: null, y: null, ageS: 45 }]), 240);
+  const h3 = r._humanoids['sitter'];
+  ok('B2 event expires after TTL (falls back to seated-evening)',
+     h3 && POOL_SEATED_EVE.includes(h3.bubbleKind) && !inAnyEventPool(h3.bubbleKind),
+     `bub=${h3?.bubbleKind || '-'}`);
+
+  // Phase 4 — STAGGER: two rigs with different idleOffset must not adopt the same
+  // event in the same frame. idleOffset 0 → stagger 0 s; idleOffset π → stagger 2 s.
+  // Feed the event at ageS=1 s: rig A (stagger 0) adopts, rig B (stagger 2) does NOT.
+  const two = [
+    { key: 'A', x: 2900, y: 4000, color: 0x81c784 },
+    { key: 'B', x: 4100, y: 4000, color: 0xffb74d },
+  ];
+  step(two, baseCtx(undefined), 480);                 // settle both seated
+  r._humanoids['A'].idleOffset = 0;                   // stagger 0 s
+  r._humanoids['B'].idleOffset = Math.PI;             // stagger 2 s
+  // One resolve frame at ageS=1 (between the two staggers).
+  step(two, baseCtx([{ kind: 'rain_start', x: null, y: null, ageS: 1 }]), 1);
+  const wantA = r._humanoids['A'].bubbleWant, wantB = r._humanoids['B'].bubbleWant;
+  const aAdopted = POOL_EVENT.rain_start.includes(wantA);
+  const bAdopted = POOL_EVENT.rain_start.includes(wantB);
+  ok('B3 stagger: earlier rig adopts, later rig has not yet (differ in the same frame)',
+     aAdopted && !bAdopted, `wantA=${wantA || '-'} wantB=${wantB || '-'}`);
+
+  // Phase 5 — a FIXTURE-anchored appliance event is distance-gated: a rig far from
+  // the fixture (>6 m) ignores it; the seated baseline holds.
+  const farRig = [{ key: 'far', x: 3500, y: 4000, color: 0x9575cd }];
+  step(farRig, baseCtx(undefined), 480);
+  step(farRig, baseCtx([{ kind: 'dishwasher_done', x: 3500, y: 20000, ageS: 6 }]), 240);
+  const hf = r._humanoids['far'];
+  ok('B4 far appliance event is distance-gated (no hijack)',
+     hf && !inAnyEventPool(hf.bubbleKind), `bub=${hf?.bubbleKind || '-'}`);
+
+  performance.now = realPerfNow;
+
+  // ── Report ──────────────────────────────────────────────────────────────
+  const passN = results.filter(r => r.pass).length, total = results.length;
+  const allPass = passN === total;
+  document.title = `EVENTBUBBLE ${allPass ? 'PASS' : 'FAIL'} ${passN}/${total}`;
+  const sum = document.getElementById('summary');
+  sum.textContent = document.title;
+  sum.className = allPass ? 'okbg' : 'badbg';
+  document.getElementById('rows').innerHTML = results.map(r =>
+    `<div class="row"><span class="name">${r.pass ? '✓' : '✗'} ${r.name}</span>` +
+    `<span class="${r.pass ? 'pass' : 'fail'}">${r.pass ? 'PASS' : 'FAIL'} <span class="extra">${r.extra}</span></span></div>`).join('');
+  window.__DUMP = document.title;
+</script>
