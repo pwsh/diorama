@@ -1,6 +1,6 @@
 # Project status & pick-up guide
 
-Last updated: 2026-07-16, at **v0.16.0**. This is the single document to
+Last updated: 2026-07-16, at **v0.17.0**. This is the single document to
 read (alongside `CLAUDE.md`) to resume work with full context.
 
 ## Where things stand
@@ -10,7 +10,7 @@ Diorama is feature-complete through TWO arcs — the Sims-2000 arc
 (`docs/DESIGN-world.md`, 8 phases: BLE identity/trilateration/fusion, pet
 rigs, GPS geo-calibration + pins, weather core + 3D effects) — plus the
 post-arc batches listed below. Everything is merged to `main`, pushed to
-**both remotes**, released through **v0.16.0**, and deployed to the live HA
+**both remotes**, released through **v0.17.0**, and deployed to the live HA
 instance.
 
 ### Remotes, releases, deploy
@@ -76,7 +76,15 @@ instance.
   — registry with save/save-as/rename/import-adds/delete + last-active
   restore; self-contained export envelope incl. user avatar packs;
   offline standalone mode — LocalApi over localStorage, auth-screen
-  offline path, index.html runs fully outside Home Assistant).
+  offline path, index.html runs fully outside Home Assistant)
+  → v0.17.0 picture day (docs-gallery pipeline: scripted per-model GIF
+  documentation site, 592 GIFs across 14 pages + avatar sections per
+  pack, hosted at pwsh.github.io/diorama via gh-pages; two visual QA
+  rounds: neck-fastened cape primitive, humanoid posture flattening, size
+  clamps + two animal reduction passes, dryer door/rocking chair/swingset/
+  bin-lid fixes, princess hair, capture facings + speeds; DC Batman pack
+  + LEGO Batman — 58 packs / 482 avatars; plumbob defaults to the source
+  identity color for sensor attribution).
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
