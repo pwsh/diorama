@@ -23,7 +23,7 @@ import {
   actionButtonKind, actionButtonColor, actionButtonIcon, actionButtonHeight, snapActionButtonToWall, actionLastFired,
   robotGlyph, robotColor, robotLedColor,
   parseVacuumPosition, solveVacuumDockOffset,
-  presenceZoneColor, cameraFov, cameraRange, cameraHeight, CAMERA_DEFAULTS,
+  presenceZoneColor, cameraFov, cameraRange, cameraHeight, CAMERA_DEFAULTS, cameraColor, slugifyFrigateName,
   projectorHeight, projectorThrow, projectorBeamColor, PROJECTOR_DEFAULTS,
   valveOpenness, valveFlowing, plugHeight,
   GROUND_KINDS, groundAreaColor,
@@ -35,6 +35,7 @@ import {
   furnitureCat, type FurnitureCat, isBinKind, isVehicleKind, isStairsKind,
   closedWallLoops, loopContaining, resolveRoomForPointFuzzy, roomLabel,
 } from '../geometry.js';
+import { solveHomography, homographyResidualsMm } from '../homography.js';
 import { CLOCK_PRESETS, DATE_PRESETS, type ValueRule, type RuleOp } from '../value-rules.js';
 import type { Vec2, InfoCard, InfoCardMount, InfoCardDisplayMode, ActionButton, ActionKind } from '../types.js';
 
@@ -1919,6 +1920,20 @@ export class Sidebar extends LitElement {
       </div>`;
     return html`
       <div style="border-top:1px solid var(--border);margin-top:6px;padding-top:6px">
+        <div style="font-size:10px;color:var(--text-dim);margin-bottom:3px">Valetudo room map</div>
+        <div class="row"><label>Topic id</label>
+          <input type="text" .value=${r.valetudoId ?? ''} placeholder="e.g. rockrobo"
+                 @input=${(e: Event) => upd(() => { r.valetudoId = (e.target as HTMLInputElement).value.trim() || undefined; })}>
+        </div>
+        <div style="font-size:10px;color:var(--text-dim);margin-top:3px;line-height:1.35">
+          The identifier segment in <code>${(p.store.mqttBridge?.valetudoNs || 'valetudo')}/&lt;id&gt;/…</code>.
+          Needs the MQTT bridge on (Settings ▸ Integrations). Draws the vacuum's SLAM room
+          segmentation under the <b>Vacuum room map</b> layer (default off) — reuses the map
+          calibration below (scale / offset / rotation / flip); calibrate once with
+          <b>Set dock as reference</b>. Tap a room on the plan to send it to clean.
+        </div>
+      </div>
+      <div style="border-top:1px solid var(--border);margin-top:6px;padding-top:6px">
         <div style="font-size:10px;color:var(--text-dim);margin-bottom:3px">Live position (Roborock map)</div>
         <div class="row"><label>Position entity</label>
           <span style="font-size:11px;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r.posEntity || '— none —'}</span>
@@ -2112,6 +2127,7 @@ export class Sidebar extends LitElement {
             </div>
           `;
         })()}
+        ${this._cameraFrigateBlock(c, typeof pic === 'string' ? pic : null)}
         <button class="btn danger" style="width:100%;margin-top:6px" @click=${() => {
           const f = p.floor();
           f.cameras = (f.cameras ?? []).filter(x => x.id !== c.id);
@@ -2122,6 +2138,108 @@ export class Sidebar extends LitElement {
     `;
   }
   private _camSnapCb = 0;
+
+  // ── Frigate ground-truth targets: name mapping + ground calibration ─────────
+  private _cameraFrigateBlock(c: CameraFixture, pic: string | null) {
+    const p = this.planner;
+    const upd = (mut: () => void) => { mut(); p.save(); p.emitConfig(); };
+    const calib = c.camCalib;
+    const pts = calib?.points ?? [];
+    // Live fit readout.
+    let fit: { ok: boolean; msg: string } = { ok: false, msg: 'need ≥4 points' };
+    if (pts.length >= 4) {
+      const h = solveHomography(pts);
+      if (!h) fit = { ok: false, msg: 'degenerate (collinear points)' };
+      else {
+        const res = homographyResidualsMm(h, pts);
+        const max = res.reduce((m, r) => Math.max(m, r), 0);
+        fit = { ok: true, msg: `solved · max residual ${isFinite(max) ? Math.round(max) : '∞'} mm` };
+      }
+    } else if (pts.length > 0) {
+      fit = { ok: false, msg: `need ≥4 points (${pts.length})` };
+    }
+    const arming = p.placingCamCalibId === c.id;
+    const defName = slugifyFrigateName(c.label || '');
+    return html`
+      <div style="background:rgba(30,60,80,0.25);border-radius:4px;padding:6px;margin-top:8px">
+        <div style="font-size:11px;color:var(--text-dim);font-weight:600;margin-bottom:4px">Frigate ground truth</div>
+        <div class="row"><label title="The Frigate camera name in frigate/events (after.camera).">Frigate name</label>
+          <input type="text" .value=${c.frigateName ?? ''} placeholder=${defName || 'camera name'}
+                 @input=${(e: Event) => upd(() => { c.frigateName = (e.target as HTMLInputElement).value || undefined; })}>
+        </div>
+        <div class="row"><label>Dot color</label>
+          <input type="color" .value=${cameraColor(c, (p.floor().cameras ?? []).indexOf(c))}
+                 @input=${(e: Event) => upd(() => { c.color = (e.target as HTMLInputElement).value; })}>
+        </div>
+        <div style="font-size:10px;color:var(--text-dim);margin:6px 0 3px">
+          Ground calibration — click a point on the snapshot, then the matching spot on the plan (≥4 pairs).
+        </div>
+        <div style="font-size:10px;color:#ffb74d;margin-bottom:4px">
+          Frigate reports boxes at the DETECT resolution, often lower than the stream.
+        </div>
+        <div class="row"><label>Detect W</label>
+          <input type="number" min="1" .value=${calib?.detectW ? String(calib.detectW) : ''} placeholder="auto"
+                 @input=${(e: Event) => upd(() => { this._ensureCalib(c).detectW = parseFloat((e.target as HTMLInputElement).value) || undefined; })}>
+        </div>
+        <div class="row"><label>Detect H</label>
+          <input type="number" min="1" .value=${calib?.detectH ? String(calib.detectH) : ''} placeholder="auto"
+                 @input=${(e: Event) => upd(() => { this._ensureCalib(c).detectH = parseFloat((e.target as HTMLInputElement).value) || undefined; })}>
+        </div>
+        ${pic ? html`
+          <div style="margin-top:6px;position:relative">
+            <img src=${p.haBaseUrl + pic + (pic.includes('?') ? '&' : '?') + '_cb=' + this._camSnapCb}
+                 style="width:100%;border-radius:4px;display:block;background:#000;cursor:crosshair"
+                 @load=${(e: Event) => {
+                   // Default the detect resolution to the snapshot's natural size.
+                   const img = e.target as HTMLImageElement;
+                   if (!c.camCalib?.detectW && img.naturalWidth) {
+                     this._ensureCalib(c).detectW = img.naturalWidth;
+                     this._ensureCalib(c).detectH = img.naturalHeight;
+                     p.save(); this.requestUpdate();
+                   }
+                 }}
+                 @click=${(e: MouseEvent) => this._onCalibSnapshotClick(c, e)}
+                 @error=${(e: Event) => { (e.target as HTMLImageElement).style.display = 'none'; }}>
+            ${arming ? html`<div style="position:absolute;inset:0;border:2px solid #4fc3f7;border-radius:4px;pointer-events:none"></div>` : nothing}
+          </div>
+        ` : html`<div style="font-size:10px;color:var(--text-dim);margin-top:4px">Bind a camera.* entity for a snapshot to calibrate against.</div>`}
+        ${arming ? html`<div style="font-size:10px;color:#4fc3f7;margin-top:4px">Now click the matching point on the floor plan…</div>` : nothing}
+        <div style="margin-top:6px">
+          ${pts.map((pp, i) => html`
+            <div class="row" style="font-size:10px;padding:1px 0">
+              <span>${i + 1}. px(${Math.round(pp.u)},${Math.round(pp.v)}) → mm(${pp.x},${pp.y})</span>
+              <button class="btn" style="font-size:10px;padding:0 6px"
+                      @click=${() => upd(() => { pts.splice(i, 1); p.ensureFrigateSub(); })}>✕</button>
+            </div>
+          `)}
+        </div>
+        <div style="font-size:10px;color:${fit.ok ? '#69f0ae' : 'var(--text-dim)'};margin-top:4px">${fit.msg}</div>
+      </div>
+    `;
+  }
+
+  private _ensureCalib(c: CameraFixture) {
+    if (!c.camCalib) c.camCalib = { points: [] };
+    return c.camCalib;
+  }
+
+  // Snapshot click: record u/v scaled from the displayed image into DETECT-
+  // resolution pixels, then arm a plan click (geo-landmark latch idiom) to
+  // capture the matching floor point.
+  private _onCalibSnapshotClick(c: CameraFixture, e: MouseEvent): void {
+    const img = e.currentTarget as HTMLImageElement;
+    const rect = img.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    const fx = (e.clientX - rect.left) / rect.width;
+    const fy = (e.clientY - rect.top) / rect.height;
+    const dw = c.camCalib?.detectW || img.naturalWidth || rect.width;
+    const dh = c.camCalib?.detectH || img.naturalHeight || rect.height;
+    const p = this.planner;
+    p.pendingCamCalibUV = { u: Math.round(fx * dw), v: Math.round(fy * dh) };
+    p.placingCamCalibId = c.id;
+    p.maybeCloseSidebarForPlacement();
+    p.emitConfig();
+  }
 
   private _pickCameraEntity(c: CameraFixture): void {
     this.dispatchEvent(new CustomEvent('open-entity-picker', {
@@ -4938,7 +5056,7 @@ export class Sidebar extends LitElement {
   private _layers2dSection() {
     const p = this.planner;
     const L = p.store.layers2d ?? {};
-    const isOn = (k: keyof Layers2D) => k === 'activity' ? L.activity === true : L[k] !== false;
+    const isOn = (k: keyof Layers2D) => (k === 'activity' || k === 'vacuumMap') ? L[k] === true : L[k] !== false;
     const setLayers = (nl: Layers2D | undefined) => {
       p.store.layers2d = nl; p.save(); p.emitConfig();
     };
@@ -4957,6 +5075,7 @@ export class Sidebar extends LitElement {
       { key: 'info', label: 'Info cards' },
       { key: 'zones', label: 'Zones & halos' },
       { key: 'ground', label: 'Ground / yard' },
+      { key: 'vacuumMap', label: 'Vacuum room map' },
       { key: 'grid', label: '3D grid' },
       { key: 'targets', label: 'Avatars' },
       { key: 'geo', label: 'Geo landmarks' },

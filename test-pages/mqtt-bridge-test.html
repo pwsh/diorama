@@ -1,0 +1,227 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>MQTTBRIDGE …</title>
+  <style>
+    body { margin:0; background:#0d1116; color:#cfd8dc; font:13px/1.4 sans-serif; padding:14px; }
+    h1 { font-size:15px; margin:0 0 10px; }
+    .grid { display:flex; flex-wrap:wrap; gap:10px; }
+    .card { background:#141b22; border:1px solid #26323d; border-radius:6px; padding:8px 10px; width:360px; }
+    .card h2 { font-size:12px; margin:0 0 6px; color:#90caf9; }
+    .row { display:flex; justify-content:space-between; font-size:11px; gap:8px; }
+    .pass { color:#69f0ae; } .fail { color:#ff5252; }
+    #summary { font-size:14px; font-weight:bold; margin:10px 0; padding:8px 10px; border-radius:5px; }
+    .okbg { background:#12331f; color:#69f0ae; } .badbg { background:#3a1414; color:#ff8a80; }
+    code { color:#ffd54f; font-size:10px; word-break:break-all; }
+  </style>
+</head>
+<body>
+  <h1>MQTT bridge — relay (fake HaApi, unauthorized surfacing) · direct (fake WebSocket, reconnect/resubscribe)</h1>
+  <div id="summary">Running…</div>
+  <div class="grid" id="grid"></div>
+
+  <!-- Bundle the bridge (esbuild inlines its dynamic import('./mqtt-ws.js')):
+         npx esbuild src/mqtt-bridge.ts --bundle --format=esm --outfile=<harness>/mqtt-bridge.mod.js
+       plus the pure codec for the fake WebSocket to speak the wire protocol:
+         npx esbuild src/mqtt-ws.ts --format=esm --outfile=<harness>/mqtt-ws.mod.js -->
+  <script type="module">
+    import { startBridge } from './mqtt-bridge.mod.js';
+    import { encodePublish, decodePackets, matchTopicFilter } from './mqtt-ws.mod.js';
+
+    const tests = [];
+    const ok = (name, cond, detail = '') => tests.push({ name, ok: !!cond, detail });
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+    // ── Fake HaApi (Path A / relay) ─────────────────────────────────────────
+    class FakeApi {
+      constructor({ unauthorized = false } = {}) {
+        this.unauthorized = unauthorized;
+        this.subs = [];        // { filter, cb, active }
+        this.published = [];    // { topic, payload, retain }
+      }
+      async subscribeMqtt(filter, cb) {
+        if (this.unauthorized) throw new Error('Unauthorized');
+        const entry = { filter, cb, active: true };
+        this.subs.push(entry);
+        return () => { entry.active = false; };
+      }
+      async publishMqtt(topic, payload, retain) { this.published.push({ topic, payload, retain }); }
+      // Test helper: HA delivers a broker message to every matching subscription.
+      emit(topic, payload) {
+        for (const s of this.subs) if (s.active && matchTopicFilter(s.filter, topic)) s.cb({ topic, payload });
+      }
+    }
+
+    // ── Fake WebSocket (Path B / direct) ────────────────────────────────────
+    // Speaks the real wire protocol via the codec: replies CONNACK to CONNECT and
+    // SUBACK to SUBSCRIBE; records what the client sent; can push server PUBLISHes.
+    class FakeWS {
+      constructor(url, protocol) {
+        this.url = url; this.protocol = protocol;
+        this.sent = []; this.readyState = 0; this.subscribeCount = 0;
+        this.onopen = this.onmessage = this.onerror = this.onclose = null;
+        FakeWS.instances.push(this);
+        setTimeout(() => { this.readyState = 1; this.onopen && this.onopen(); }, 0);
+      }
+      set binaryType(_v) { /* ignore */ }
+      send(bytes) {
+        this.sent.push(bytes);
+        const first = bytes[0] >> 4;
+        if (first === 1) {            // CONNECT → CONNACK accepted
+          this._deliver(Uint8Array.from([0x20, 0x02, 0x00, 0x00]));
+        } else if (first === 8) {     // SUBSCRIBE → SUBACK
+          this.subscribeCount++;
+          const id = (bytes[2] << 8) | bytes[3];
+          this._deliver(Uint8Array.from([0x90, 0x03, (id >> 8) & 0xff, id & 0xff, 0x00]));
+        }
+        // PUBLISH (3) / PINGREQ (12) / DISCONNECT (14) from client: just recorded.
+      }
+      _deliver(u8) { this.onmessage && this.onmessage({ data: u8 }); }
+      serverPublish(topic, payload) { this._deliver(encodePublish(topic, payload)); }
+      close() { this.readyState = 3; this.onclose && this.onclose(); }
+      // How many PUBLISH frames the client sent us.
+      publishFrames() {
+        return this.sent.filter(b => (b[0] >> 4) === 3).map(b => decodePackets(b).packets[0]);
+      }
+    }
+    FakeWS.instances = [];
+
+    async function run() {
+      // ── RELAY PATH ────────────────────────────────────────────────────────
+      {
+        const api = new FakeApi();
+        let lastStatus = null;
+        const bridge = startBridge({ mode: 'ha-relay' }, api, { onStatus: s => lastStatus = s });
+        await sleep(15);
+        ok('relay: status up after probe', lastStatus === 'up' && bridge.status === 'up', `status=${lastStatus}`);
+
+        let got = null;
+        bridge.subscribe('frigate/events', m => got = m);
+        await sleep(10);
+        api.emit('frigate/events', '{"type":"new"}');
+        ok('relay: message delivered {topic,payloadString}',
+          got && got.topic === 'frigate/events' && got.payloadString === '{"type":"new"}', JSON.stringify(got));
+
+        // A non-matching topic must not reach the callback.
+        got = null;
+        api.emit('valetudo/robot1/MapData/map-data', 'x');
+        ok('relay: non-matching topic not delivered', got === null, JSON.stringify(got));
+
+        bridge.publish('valetudo/robot1/MapSegmentationCapability/clean/set', '{"segment_ids":[16]}', false);
+        await sleep(5);
+        ok('relay: publish forwarded to api.publishMqtt',
+          api.published.length === 1 && api.published[0].topic.endsWith('/clean/set'), JSON.stringify(api.published[0]));
+
+        // stop() releases subscriptions + goes idle.
+        const activeBefore = api.subs.filter(s => s.active).length;
+        bridge.stop();
+        const activeAfter = api.subs.filter(s => s.active).length;
+        ok('relay: stop → idle + unsubscribed', bridge.status === 'idle' && activeAfter < activeBefore,
+          `before=${activeBefore} after=${activeAfter} status=${bridge.status}`);
+      }
+
+      // ── RELAY UNAUTHORIZED ──────────────────────────────────────────────────
+      {
+        const api = new FakeApi({ unauthorized: true });
+        let lastStatus = null;
+        const bridge = startBridge({ mode: 'ha-relay' }, api, { onStatus: s => lastStatus = s });
+        await sleep(15);
+        ok('relay: admin-gate → status unauthorized',
+          lastStatus === 'unauthorized' && bridge.status === 'unauthorized', `status=${lastStatus}`);
+        bridge.stop();
+      }
+
+      // ── DIRECT PATH ─────────────────────────────────────────────────────────
+      {
+        FakeWS.instances.length = 0;
+        const statuses = [];
+        const bridge = startBridge(
+          { mode: 'direct', brokerHost: 'broker.local', brokerPort: 9001,
+            WebSocketCtor: FakeWS, backoffBaseMs: 20, backoffMaxMs: 80 },
+          new FakeApi(),   // unused in direct mode
+          { onStatus: s => statuses.push(s) },
+        );
+
+        // Subscribe BEFORE the socket is up → queued, replayed on CONNACK.
+        let got = null;
+        bridge.subscribe('frigate/events', m => got = m);
+        await sleep(60);   // import + open + CONNACK + resubscribe
+
+        const ws1 = FakeWS.instances[0];
+        ok('direct: connected → status up', bridge.status === 'up' && statuses.includes('up'), `statuses=${statuses}`);
+        ok('direct: URL built ws://host:port/', ws1 && ws1.url === 'ws://broker.local:9001/', ws1 && ws1.url);
+        ok('direct: mqtt subprotocol requested', ws1 && ws1.protocol === 'mqtt', ws1 && ws1.protocol);
+        ok('direct: queued filter resubscribed on up', ws1 && ws1.subscribeCount >= 1, `count=${ws1 && ws1.subscribeCount}`);
+
+        ws1.serverPublish('frigate/events', 'boxdata');
+        ok('direct: server PUBLISH dispatched via matchTopicFilter',
+          got && got.topic === 'frigate/events' && got.payloadString === 'boxdata', JSON.stringify(got));
+
+        // A topic the filter doesn't match is dropped.
+        got = null;
+        ws1.serverPublish('other/topic', 'nope');
+        ok('direct: unmatched topic dropped', got === null, JSON.stringify(got));
+
+        // Client publish → a PUBLISH frame reaches the socket.
+        bridge.publish('valetudo/r1/x/set', 'go', false);
+        const pubs = ws1.publishFrames();
+        ok('direct: publish emits a PUBLISH frame',
+          pubs.length === 1 && pubs[0].topic === 'valetudo/r1/x/set' && new TextDecoder().decode(pubs[0].payload) === 'go',
+          JSON.stringify(pubs[0] && { t: pubs[0].topic }));
+
+        // ── reconnect + backoff + resubscribe ──
+        got = null;
+        ws1.close();                       // simulate a broker drop
+        await sleep(10);
+        ok('direct: drop → status error', bridge.status === 'error', `status=${bridge.status}`);
+        await sleep(60);                   // backoffBaseMs=20 → reconnect
+        const ws2 = FakeWS.instances[1];
+        ok('direct: reconnected on a NEW socket', !!ws2 && ws2 !== ws1 && bridge.status === 'up',
+          `instances=${FakeWS.instances.length} status=${bridge.status}`);
+        ok('direct: resubscribed on reconnect', ws2 && ws2.subscribeCount >= 1, `count=${ws2 && ws2.subscribeCount}`);
+
+        ws2.serverPublish('frigate/events', 'after-reconnect');
+        ok('direct: message on reconnected socket reaches cb',
+          got && got.payloadString === 'after-reconnect', JSON.stringify(got));
+
+        // ── stop() halts reconnect ──
+        bridge.stop();
+        const nBefore = FakeWS.instances.length;
+        await sleep(80);
+        ok('direct: stop → idle, no further reconnect',
+          bridge.status === 'idle' && FakeWS.instances.length === nBefore,
+          `status=${bridge.status} n=${FakeWS.instances.length}/${nBefore}`);
+      }
+
+      render();
+    }
+
+    function render() {
+      const pass = tests.filter(t => t.ok).length;
+      const total = tests.length;
+      document.title = `MQTTBRIDGE ${pass === total ? 'PASS' : 'FAIL'} ${pass}/${total}`;
+      const sum = document.getElementById('summary');
+      sum.textContent = `MQTTBRIDGE ${pass === total ? 'PASS' : 'FAIL'} ${pass}/${total}`;
+      sum.className = pass === total ? 'okbg' : 'badbg';
+      const grid = document.getElementById('grid');
+      const card = document.createElement('div'); card.className = 'card';
+      card.innerHTML = '<h2>cases</h2>';
+      for (const t of tests) {
+        const r = document.createElement('div'); r.className = 'row';
+        r.innerHTML = `<span class="${t.ok ? 'pass' : 'fail'}">${t.ok ? '✓' : '✗'} ${t.name}</span>`;
+        if (!t.ok) r.innerHTML += `<code>${t.detail}</code>`;
+        card.appendChild(r);
+      }
+      grid.appendChild(card);
+    }
+
+    run().catch(e => {
+      document.title = 'MQTTBRIDGE FAIL threw';
+      const sum = document.getElementById('summary');
+      sum.textContent = 'threw: ' + (e && e.message);
+      sum.className = 'badbg';
+    });
+  </script>
+</body>
+</html>

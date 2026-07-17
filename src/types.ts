@@ -400,6 +400,12 @@ export interface RobotFixture {
   posOffsetY?: number;
   posFlipY?: boolean;            // mirror the map Y axis
   posRotDeg?: number;            // map→plan rotation (0/90/180/270 typical, default 0)
+  // Valetudo room-map overlay (Phase 5, batch M-C): the topic identifier segment
+  // (`<valetudoNs>/<valetudoId>/…`). When set + the MQTT bridge is up, Diorama
+  // subscribes to this robot's MapData/StatusStateAttribute and draws its SLAM
+  // room segmentation as an overlay, REUSING the pos* calibration fields above to
+  // map map pixels → plan mm (calibrate once via "Set dock as reference").
+  valetudoId?: string;
   label?: string;
   localState?: string;           // unbound manual pause: 'paused' (else demo runs autonomously). Inert once bound.
   locked?: boolean;              // canvas move/delete disabled (click-to-toggle still works)
@@ -779,6 +785,24 @@ export interface CameraFixture {
   label?: string;
   hidden?: boolean;
   locked?: boolean;     // canvas move/rotate/delete disabled
+  // ── Frigate ground-truth targets (Phase 5, MQTT bridge) ──────────────────
+  frigateName?: string;   // the Frigate `after.camera` name this fixture maps to;
+                          // default = slugified label. Unmatched cameras are ignored.
+  color?: string;         // per-camera tint (hex) for cam-derived target dots;
+                          // default from a palette by fixture index (like sensors).
+  camCalib?: CameraCalibration;  // image↔floor ground-plane homography calibration
+}
+
+// Per-camera ground-plane calibration for projecting Frigate detection boxes to
+// floor mm. `points` are ≥4 image↔floor correspondences (u,v in DETECT-resolution
+// pixels ↔ x,y in floor mm) from which a planar homography is SOLVED at runtime
+// (never stored — re-solvable after adding/removing a point). detectW/detectH is
+// the camera's detect-stream resolution, used by the calibration UI to scale
+// displayed-image clicks to detect pixels (Frigate reports boxes at detect res).
+export interface CameraCalibration {
+  detectW?: number;
+  detectH?: number;
+  points: { u: number; v: number; x: number; y: number }[];
 }
 
 export interface Floor {
@@ -897,6 +921,21 @@ export interface GeoConfig {
                                // absent = ON. Runtime-derived pins (Planner.geoEventPins).
 }
 
+// ── MQTT bridge (Phase 5) ────────────────────────────────────────────────
+// Direct-MQTT bridge config (Frigate ground-truth targets + Valetudo maps).
+// `mode` is the enabled bit + transport choice — safe to SYNC. Broker
+// user/password are secrets and live in localStorage ONLY
+// (diorama:mqtt:user / diorama:mqtt:pass), never here. frigateTopic / valetudoNs
+// are the topic prefixes the (later) consumers subscribe under.
+export interface MqttBridgeConfig {
+  mode?: 'off' | 'ha-relay' | 'direct';
+  brokerHost?: string;
+  brokerPort?: number;         // direct mode; default 9001 (mosquitto websockets listener)
+  useTls?: boolean;            // direct mode; wss:// (required when the panel is served over HTTPS)
+  frigateTopic?: string;       // default 'frigate'
+  valetudoNs?: string;         // default 'valetudo'
+}
+
 export interface Store {
   v: number;
   floors: Floor[];
@@ -917,6 +956,8 @@ export interface Store {
   bleShowUnknown?: boolean;          // show BLE devices not mapped to a person (absent = true); consumed in B2
   weather?: WeatherConfig;           // weather source + chip config (Feature W)
   geo?: GeoConfig;                   // landmarks + lat/lon↔plan calibration (Feature G)
+  mqttBridge?: MqttBridgeConfig;     // direct-MQTT bridge (Phase 5) — secrets stay in localStorage
+
   avatarPacks?: Record<string, AvatarPackConfig>;   // per-pack loaded/active/members (avatar packs)
   notes?: string;                    // free-text description of this configuration; shown in Settings ▸ Data; rides export/import
 }
@@ -961,6 +1002,7 @@ export interface Layers2D {
   battery?: boolean;    // low-battery warning badges on bound fixtures (2D); default on
   grid?: boolean;       // 3D ground grid helper; default on (3D-only — no 2D plan grid exists)
   ground?: boolean;     // ground / yard covering polygons (2D fill + 3D patches); default on
+  vacuumMap?: boolean;  // Valetudo robot room-map overlay (2D fill + 3D patches); default OFF (diagnostic)
 }
 
 export interface Layer2DPreset {

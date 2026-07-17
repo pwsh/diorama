@@ -115,6 +115,15 @@ export interface HaApi {
   // Update an entity-registry entry (e.g. { disabled_by: null } to enable a
   // disabled entity). Resolves true on success.
   updateEntityRegistry(entityId: string, changes: Record<string, unknown>): Promise<boolean>;
+  // ── MQTT bridge (Phase 5, Path A) ──
+  // Subscribe to a broker topic (wildcards allowed) via HA's own `mqtt/subscribe`
+  // WS command. HA pushes `{topic, payload, qos, retain}` events; the callback
+  // receives the topic + payload string. Resolves to an unsubscribe handle.
+  // REJECTS (never swallows) so the caller can surface an admin-gate Unauthorized
+  // error as a distinct status. Admin-only on HA's side.
+  subscribeMqtt(topic: string, cb: (m: { topic: string; payload: string }) => void): Promise<() => void>;
+  // Publish to a broker topic via the `mqtt.publish` service (not admin-gated).
+  publishMqtt(topic: string, payload: string, retain?: boolean): Promise<void>;
   getUserData<T = unknown>(key: string): Promise<T | null>;
   setUserData(key: string, value: unknown): Promise<boolean>;
   refreshStates(): Promise<void>;
@@ -130,6 +139,10 @@ export class HassClient implements HaApi {
   private _ws: WebSocket | null = null;
   private _id = 1;
   private _pending = new Map<number, Pending>();
+  // Generic subscription callbacks keyed by the subscribe command's message id
+  // (mqtt/subscribe rides this). HA delivers ongoing `{type:'event', id, event}`
+  // messages for the subscription's lifetime.
+  private _subscriptions = new Map<number, (event: unknown) => void>();
   private _stateListeners: StateListener[] = [];
   private _connListeners: ConnListener[] = [];
   private _reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -226,6 +239,46 @@ export class HassClient implements HaApi {
     return res.success;
   }
 
+  // ── MQTT bridge (Phase 5, Path A) ──
+  subscribeMqtt(
+    topic: string, cb: (m: { topic: string; payload: string }) => void,
+  ): Promise<() => void> {
+    const id = this._id++;
+    return new Promise<() => void>((resolve, reject) => {
+      // Ongoing event handler for this subscription's lifetime.
+      this._subscriptions.set(id, ev => {
+        const e = (ev ?? {}) as { topic?: unknown; payload?: unknown };
+        try { cb({ topic: String(e.topic ?? ''), payload: e.payload == null ? '' : String(e.payload) }); }
+        catch { /* consumer threw — never break the socket loop */ }
+      });
+      // First `result` confirms the subscribe (or rejects — admin gate lands here).
+      this._pending.set(id, m => {
+        const raw = m as { success?: boolean; error?: { code?: string; message?: string } };
+        if (raw.success) {
+          resolve(() => this._unsubscribeId(id));
+        } else {
+          this._subscriptions.delete(id);
+          const err = raw.error;
+          reject(new Error(err?.message || err?.code || 'mqtt/subscribe failed'));
+        }
+      });
+      this._sendRaw({ id, type: 'mqtt/subscribe', topic });
+    });
+  }
+
+  async publishMqtt(topic: string, payload: string, retain = false): Promise<void> {
+    await this._send({
+      type: 'call_service', domain: 'mqtt', service: 'publish',
+      service_data: { topic, payload, qos: 0, retain },
+    });
+  }
+
+  private _unsubscribeId(id: number): void {
+    this._subscriptions.delete(id);
+    // Generic cancel — HA's websocket_api unsubscribes any subscription by id.
+    this._sendRaw({ id: this._id++, type: 'unsubscribe_events', subscription: id });
+  }
+
   // Per-user JSON storage backed by HA's `frontend.user_data.<userid>` table.
   // Same plumbing HA's own UI uses for sidebar order, themes, etc. Survives
   // browser data clear, syncs across devices, included in HA backups.
@@ -258,7 +311,10 @@ export class HassClient implements HaApi {
         if (cb) { this._pending.delete(msg.id ?? -1); cb(msg as any); }
         break;
       }
-      case 'event':
+      case 'event': {
+        // Generic subscription events (mqtt/subscribe) route by message id first.
+        const sub = msg.id != null ? this._subscriptions.get(msg.id) : undefined;
+        if (sub) { sub((msg as { event?: unknown }).event); break; }
         if (msg.event?.event_type === 'state_changed') {
           const { entity_id, new_state } = msg.event.data;
           if (new_state) this.states[entity_id] = new_state;
@@ -266,6 +322,7 @@ export class HassClient implements HaApi {
           this._emitState(entity_id);
         }
         break;
+      }
     }
   }
 

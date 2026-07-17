@@ -10,7 +10,7 @@ import {
   actionButtonSize, actionButtonColor, actionButtonIcon,
   safetyColor, safetyGlyph, safetyIsFloor, SAFETY_DEFAULTS,
   robotGlyph, robotColor, ROBOT_DEFAULTS,
-  presenceZoneColor, cameraFov, cameraRange, cameraStateColor,
+  presenceZoneColor, cameraFov, cameraRange, cameraStateColor, cameraColor,
   projectorProjecting, projectorAim, projectorBeamColor, projectorThrow, screenCenterHeight, biasLightColor,
   VALVE_DEFAULTS, valveOpenness, valveFlowing, valveTransitional, valveRotation,
   PLUG_DEFAULTS, plugRotation,
@@ -26,6 +26,7 @@ import {
   parseNowPlaying, isMediaPlayerId,
 } from './geometry.js';
 import { compass8 } from './geo.js';
+import { vacMapAffine, vacSegColor, type ParsedVacMap, type VacSegment } from './valetudo-map.js';
 import type { Planner } from './planner.js';
 import type { Vec2, LightIconKind, Furniture, ObjectRecipe, RecipePrimitive, HassState } from './types.js';
 
@@ -240,6 +241,9 @@ export function drawAll(ctx: CanvasRenderingContext2D, p: Planner, view: View,
   // Floor voids / openings — dark hatched holes, drawn right after ground
   // (rides the same `ground` layer gate).
   if (on(L.ground)) drawVoidAreas(ctx, p, view);
+  // Valetudo robot room-map overlay — diagnostic paint, DEFAULT OFF (absent = off,
+  // unlike most layers). Drawn as floor paint, under walls / furniture.
+  if (L.vacuumMap === true) drawVacuumMaps(ctx, p, view);
   if (on(L.walls)) drawWalls(ctx, p, view);
   if (on(L.labels)) drawRooms(ctx, p, view);
   drawDoors(ctx, p, view);
@@ -272,6 +276,7 @@ export function drawAll(ctx: CanvasRenderingContext2D, p: Planner, view: View,
   drawBgEditOverlay(ctx, p, view, bgImg);
   if (on(L.targets)) drawTargets(ctx, p, view);
   if (on(L.targets)) drawBlePeople(ctx, p, view);
+  if (on(L.targets)) drawCamTargets(ctx, p, view);
   // Geo landmark pins + GPS device pins + geo_location event pins (all ride the
   // `geo` layer).
   if (on(L.geo)) { drawGeoLandmarks(ctx, p, view); drawGpsPins(ctx, p, view); drawGeoEventPins(ctx, p, view); }
@@ -1336,6 +1341,25 @@ function drawCameras(ctx: CanvasRenderingContext2D, p: Planner, view: View): voi
       ctx.beginPath(); ctx.arc(rhx, rhy, 5 * dpr, 0, 2 * Math.PI);
       ctx.fill(); ctx.stroke();
     }
+    // Ground-calibration markers (Phase 5): numbered ⌖ crosshairs at each
+    // calibrated floor point, shown only while this camera is selected so the
+    // user can see where each snapshot pixel maps on the plan.
+    if (selected && cam.camCalib?.points?.length) {
+      const tint = cameraColor(cam, (f.cameras ?? []).indexOf(cam));
+      cam.camCalib.points.forEach((pp, i) => {
+        const q = mmToPx(view, pp.x, pp.y);
+        const rr = 7 * dpr;
+        ctx.strokeStyle = tint; ctx.lineWidth = 1.5 * dpr;
+        ctx.beginPath(); ctx.arc(q.x, q.y, rr, 0, 2 * Math.PI); ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(q.x - rr - 3 * dpr, q.y); ctx.lineTo(q.x + rr + 3 * dpr, q.y);
+        ctx.moveTo(q.x, q.y - rr - 3 * dpr); ctx.lineTo(q.x, q.y + rr + 3 * dpr);
+        ctx.stroke();
+        ctx.fillStyle = tint; ctx.font = `bold ${9 * dpr}px sans-serif`;
+        ctx.textAlign = 'left'; ctx.textBaseline = 'bottom';
+        ctx.fillText(String(i + 1), q.x + rr + 4 * dpr, q.y - rr);
+      });
+    }
   }
 }
 
@@ -1634,6 +1658,76 @@ function drawCameraAlertCard(
 // dashed selection outline; drawn early (under everything) as pure paint. In
 // edit mode the active area shows orange vertex handles + the in-progress
 // draw preview (mirrors the presence-zone latch).
+// ── Valetudo room-map overlay ─────────────────────────────────────────────
+// Per-segment tinted raster canvas cache. Keyed `<robotId>:<rev>:<segId>` so a
+// republished map (new rev) rebuilds; the tint is glow-INDEPENDENT (glow rides
+// draw-time alpha, never a re-tint). Evicted per robot when its rev advances.
+const _vacTintCache = new Map<string, HTMLCanvasElement>();
+
+function _vacSegTint(robotId: string, rev: number, seg: VacSegment, segIdx: number): HTMLCanvasElement {
+  const key = `${robotId}:${rev}:${seg.id}`;
+  const hit = _vacTintCache.get(key);
+  if (hit) return hit;
+  // Drop stale-rev entries for this robot+segment to bound the cache.
+  const stalePrefix = `${robotId}:`;
+  for (const k of _vacTintCache.keys()) {
+    if (k.startsWith(stalePrefix) && k.endsWith(`:${seg.id}`) && k !== key) _vacTintCache.delete(k);
+  }
+  const w = Math.max(1, seg.bbox.maxX - seg.bbox.minX + 1);
+  const h = Math.max(1, seg.bbox.maxY - seg.bbox.minY + 1);
+  const cv = document.createElement('canvas');
+  cv.width = w; cv.height = h;
+  const cx = cv.getContext('2d');
+  if (cx) {
+    cx.fillStyle = vacSegColor(segIdx);
+    for (const run of seg.runs) cx.fillRect(run.x - seg.bbox.minX, run.y - seg.bbox.minY, run.count, 1);
+  }
+  _vacTintCache.set(key, cv);
+  return cv;
+}
+
+function drawVacuumMaps(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
+  const dpr = window.devicePixelRatio || 1;
+  const f = p.floor();
+  const robots = f.robots ?? [];
+  // Slow glow pulse (RAF-driven — never re-tints, just modulates alpha).
+  const pulse = 0.5 + 0.5 * Math.sin(performance.now() / 500);
+  for (const ro of robots) {
+    if (ro.kind !== 'vacuum' || !ro.valetudoId) continue;
+    const map: ParsedVacMap | undefined = p.vacuumMaps[ro.id];
+    if (!map) continue;
+    const rev = p.vacuumMapRev[ro.id] ?? 0;
+    const glow = p.vacuumGlowSegments(ro.id);   // Set of glowing seg ids, or null
+    const aff = vacMapAffine(map.pixelSize, ro);
+    map.segments.forEach((seg, i) => {
+      const tint = _vacSegTint(ro.id, rev, seg, i);
+      // Pixel(i,j)→screen affine (composes the pixel→world affine with the view).
+      const s = view.scale;
+      const a = s * aff.A, b = -s * aff.B, c = s * aff.C, d = -s * aff.D;
+      const e = view.ox + s * (aff.A * seg.bbox.minX + aff.C * seg.bbox.minY + aff.E);
+      const fY = view.oy - s * (aff.B * seg.bbox.minX + aff.D * seg.bbox.minY + aff.F);
+      const glowing = glow?.has(seg.id) ?? false;
+      ctx.save();
+      ctx.globalAlpha = glowing ? 0.35 + 0.4 * pulse : 0.34;
+      ctx.imageSmoothingEnabled = false;
+      ctx.setTransform(a, b, c, d, e, fY);
+      ctx.drawImage(tint, 0, 0);
+      ctx.restore();
+      // Name label at the world centroid (normal screen space).
+      const cw = { x: aff.A * seg.centroidPx.x + aff.C * seg.centroidPx.y + aff.E,
+                   y: aff.B * seg.centroidPx.x + aff.D * seg.centroidPx.y + aff.F };
+      const cp = mmToPx(view, cw.x, cw.y);
+      const label = seg.name?.trim() || `Room ${seg.id}`;
+      ctx.font = `${11 * dpr}px sans-serif`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillStyle = hexToRgba('#000000', 0.55);
+      ctx.fillText(label, cp.x + dpr, cp.y + dpr);
+      ctx.fillStyle = hexToRgba('#ffffff', 0.92);
+      ctx.fillText(label, cp.x, cp.y);
+    });
+  }
+}
+
 function drawGroundAreas(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
   const dpr = window.devicePixelRatio || 1;
   const f = p.floor();
@@ -3902,6 +3996,39 @@ function drawBlePeople(ctx: CanvasRenderingContext2D, p: Planner, view: View): v
     // Name label only for identified people, when the layer is on (decision #4).
     if (bp.personId != null && nameLabelsOn)
       drawNameLabel(ctx, dpr, pt.x, chipBottom, bp.name, bp.color);
+    ctx.restore();
+  }
+}
+
+// Frigate ground-truth camera targets (Phase 5): a camera-tinted dot with a
+// small 📷 badge, distinguishing it from mmWave/BLE dots. Only targets whose
+// owning camera is on the active floor draw here; gated by the `targets` layer.
+// Fused people are drawn as identified radar/cam dots via drawTargets — but cam
+// keys are radar-pool candidates in fusion, so a fused cam target adopts the
+// person color + name label here (person label carried by p.fusions[key]).
+function drawCamTargets(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
+  const dpr = window.devicePixelRatio || 1;
+  const f = p.floor();
+  const nameLabelsOn = (p.store.layers2d?.nameLabels) !== false;
+  for (const ct of p.camPeople) {
+    if (ct.floorId !== f.id) continue;
+    const fusion = p.fusions[ct.key];
+    const color = fusion ? fusion.color : ct.color;
+    const pt = mmToPx(view, ct.x, ct.y);
+    ctx.save();
+    // Dot.
+    ctx.beginPath(); ctx.arc(pt.x, pt.y, 6 * dpr, 0, 2 * Math.PI);
+    ctx.fillStyle = color; ctx.fill();
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5 * dpr; ctx.stroke();
+    // 📷 badge above-right of the dot.
+    ctx.font = `${9 * dpr}px sans-serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('📷', pt.x + 9 * dpr, pt.y - 8 * dpr);
+    if (fusion) {
+      const chipBottom = drawInitialsChip(ctx, dpr, pt.x, pt.y, fusion.name, fusion.color);
+      if (fusion.personId != null && nameLabelsOn)
+        drawNameLabel(ctx, dpr, pt.x, chipBottom, fusion.name, fusion.color);
+    }
     ctx.restore();
   }
 }

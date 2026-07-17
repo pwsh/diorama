@@ -5,7 +5,9 @@ import { loadStore, saveStore, newId, repairFloor, defaultStore,
 import { slugToName, normMac, localToWorld, segCrossesSolidWall, mowerSweepWaypoints,
          ROBOT_DEFAULTS, robotLedColor, parseVacuumPosition, vacuumRawToWorld,
          vacuumRawHeadingRad, isStairsKind, logicLightState, actionButtonKind,
-         furnitureKind, normalizeLockState, valveIsOpen, type LockGlyphState } from './geometry.js';
+         furnitureKind, normalizeLockState, valveIsOpen, cameraColor, slugifyFrigateName,
+         type LockGlyphState } from './geometry.js';
+import { solveHomography, applyHomography } from './homography.js';
 import { stepFusion, newFusionState, DEFAULT_FUSION_CFG,
          type FusionState, type FusionCand } from './fusion.js';
 import { fitGeoTransform, latLonToPlan, clampToBoundary, planBearingDeg, compass8, medianLatLon,
@@ -40,7 +42,7 @@ export interface BermudaDiscovery {
 import type {
   Store, Floor, Sensor, ZonesLive, ObjectHalo, LerpSlot,
   HassState, ConnStatus, DiscoveredDevice, Vec2, AvatarKind, WeatherConfig, CameraFixture,
-  ConfigIndex, ConfigMeta, ThermostatFixture, SafetySensor, Furniture,
+  ConfigIndex, ConfigMeta, ThermostatFixture, SafetySensor, Furniture, MqttBridgeConfig,
 } from './types.js';
 
 // Full export envelope (Batch B). `store` is the WHOLE Store serialized (no
@@ -59,6 +61,11 @@ export interface DioramaEnvelope {
 // alertEntity flips back off. See Planner.cameraAlerting.
 const CAMERA_ALERT_LINGER_MS = 6000;
 import { solvePosition, type ProxyObs } from './trilateration.js';
+// Type-only — the bridge VALUE is dynamic-import()ed in _reconfigureMqtt so
+// mqtt-bridge.ts (and, in turn, mqtt-ws.ts) stay OUT of the startup chunk.
+import type { BridgeStatus, BridgeHandle } from './mqtt-bridge.js';
+// Valetudo map parsing is pure (no three.js) — a plain static import is fine.
+import { decodeMapDataPayload, cleanSegmentPayload, type ParsedVacMap } from './valetudo-map.js';
 import {
   fetchOpenMeteo, fetchOpenMeteoForecast, geocodeZip, resolveWeatherEntity, deriveFromSensors,
   toCelsius, toKmh, toMmPerH, forecastRainSoon, parseWeatherAlerts,
@@ -90,6 +97,32 @@ export interface BlePerson {
   confidenceMm: number;        // uncertainty radius (2D confidence circle)
   updatedAt: number;           // ms epoch of the last successful solve
   stale: boolean;              // no fresh samples within the staleness window
+}
+
+// ── Frigate ground-truth camera target (runtime-only) ─────────────────────
+// One tracked object from a Frigate detection box, projected through the owning
+// camera's ground-plane homography to floor mm. Not persisted — maintained live
+// from the MQTT `frigate/events` stream. Feeds a per-key lerp slot (`cam_<...>`)
+// so 2D dots and 3D rigs read one smoothed source, exactly like BLE people.
+// The `before`/`after` object inside a Frigate `frigate/events` payload — only
+// the fields the projection needs are typed (the payload carries many more).
+interface FrigateObj {
+  id?: string;
+  camera?: string;
+  label?: string;
+  false_positive?: boolean;
+  box?: number[];         // [x1,y1,x2,y2] pixels at the camera's DETECT resolution
+}
+
+export interface CamTarget {
+  key: string;            // synthetic target key: `cam_<cameraId>_<label>_<slot>`
+  cameraId: string;
+  label: string;          // frigate object label: person / dog / cat / car
+  color: string;          // owning camera tint (hex)
+  x: number; y: number;   // projected (lerped) floor position, world mm
+  floorId: string;        // floor the owning camera lives on
+  eventId: string | null; // frigate event id currently occupying the slot
+  updatedAt: number;      // ms epoch of the last update
 }
 
 // One committed identity fusion for rendering (Feature B, phase B3). A live
@@ -476,6 +509,17 @@ export class Planner extends EventTarget {
   // stale (dimmed + age caption). GPS pushes are minutes apart, so 15 min.
   private static readonly GPS_STALE_MS = 15 * 60 * 1000;
 
+  // ── Valetudo room-map overlay (Phase 5, batch M-C; runtime-only) ──────────
+  // Latest parsed map per robot id, a monotonic revision counter (dirty key +
+  // 3D texture disposal), the last StatusStateAttribute value/flag, and the
+  // segment ids Diorama itself last commanded to clean (glow source when the
+  // status can't say which room). Never persisted; keyed by RobotFixture.id.
+  vacuumMaps: Record<string, ParsedVacMap> = {};
+  vacuumMapRev: Record<string, number> = {};
+  vacuumStatus: Record<string, { value?: string; flag?: string }> = {};
+  lastCommandedSegments: Record<string, string[]> = {};
+  private _vacSubNs: string | null = null;   // valetudoNs the wildcard subs were registered against
+
   // ── Weather (runtime-only; recomputed from the configured source) ─────────
   // Normalized current weather. Chip + (later) 3D effects read this. Local
   // sources (entity/sensors) recompute from state_changed; Open-Meteo polls.
@@ -487,6 +531,27 @@ export class Planner extends EventTarget {
   weatherAlerts: WeatherAlert[] = [];
   private _weatherTimer: ReturnType<typeof setInterval> | null = null;
   private _weatherInited = false;
+  // ── MQTT bridge (Phase 5) ──────────────────────────────────────────────────
+  // The active bridge handle (null when mode off / offline / not yet started),
+  // its last-reported status, a one-time init guard (mirrors _weatherInited), and
+  // the subscription registry consumers (Batches B/C) register through
+  // mqttSubscribe — queued until the bridge is up and REPLAYED on every restart.
+  private _mqttBridge: BridgeHandle | null = null;
+  private _mqttStatus: BridgeStatus = 'idle';
+  private _mqttInited = false;
+  private _mqttSubs: Array<{ filter: string; cb: (m: { topic: string; payloadString: string }) => void }> = [];
+
+  // ── Frigate ground-truth targets (Phase 5) ─────────────────────────────────
+  // Live tracked objects from `frigate/events`, keyed `cam_<cameraId>_<label>_<slot>`.
+  // Read (lerped + pruned) via the camPeople getter. Never persisted.
+  camTargets: Record<string, CamTarget> = {};
+  private _frigateSubscribed = false;                 // one-time subscription guard
+  private _camHgCache: Record<string, { key: string; h: number[] | null }> = {};  // cameraId → solved homography (memoized on calib hash)
+  private static readonly CAM_LABELS = ['person', 'dog', 'cat', 'car'];
+  private static readonly CAM_SLOTS = 3;              // max tracked objects per camera/label
+  private static readonly CAM_MATCH_MM = 2500;        // nearest-position successor match radius
+  private static readonly CAM_RETIRE_MS = 8000;       // release a slot after this long without an update
+
   private _weatherGeocoding = false;
   private _weatherFetching = false;
   private _weatherOkAt = 0;     // ms epoch of the last successful Open-Meteo fetch
@@ -573,6 +638,7 @@ export class Planner extends EventTarget {
       this.drag = null; this.editZone = null; this.drawingWall = null;
       this.drawingPresenceZone = null; this.drawingGroundArea = null; this.drawingVoidArea = null;
       this.tool = 'select'; this.placingRoomId = null; this.placingLandmarkId = null;
+      this.placingCamCalibId = null; this.pendingCamCalibUV = null;
       this.alignGuides = []; this.alignCandidates = [];
       // A disabled floor is hidden from the kiosk/view picker — don't strand the
       // view on one. Jump to the first enabled floor (if any exists).
@@ -607,6 +673,14 @@ export class Planner extends EventTarget {
 
   // Active geo-calibration session (runtime only; see GeoCalibSession).
   geoCalib: GeoCalibSession | null = null;
+
+  // Camera ground-calibration latch (Phase 5, same pattern as placingLandmarkId):
+  // the sidebar clicks a pixel on the camera snapshot (staging `pendingCamCalibUV`
+  // in detect-resolution coords) which arms this with the camera id; the NEXT 2D
+  // canvas click records the matching floor (x,y) and pushes the {u,v,x,y} pair
+  // onto that camera's camCalib.points. Runtime + edit-only, never persisted.
+  placingCamCalibId: string | null = null;
+  pendingCamCalibUV: { u: number; v: number } | null = null;
 
   // Sidebar visibility. Persisted locally (not in HA store — it's a
   // per-device preference). Defaults open on wide screens, closed on phones.
@@ -972,6 +1046,13 @@ export class Planner extends EventTarget {
       this._weatherInited = true;
       this._reconfigureWeather();
     }
+    // One-time MQTT bridge start from the local-cache config on first full load
+    // (mirrors _weatherInited). _applyLoadedStore re-runs it once HA's
+    // authoritative config lands; both are idempotent.
+    if (!this._mqttInited && changedId === undefined) {
+      this._mqttInited = true;
+      void this._reconfigureMqtt();
+    }
 
     this.emitLive();
 
@@ -1125,6 +1206,7 @@ export class Planner extends EventTarget {
         bleShowUnknown: remote.bleShowUnknown ?? undefined,
         weather:        remote.weather        ?? undefined,
         geo:            remote.geo            ?? undefined,
+        mqttBridge:     remote.mqttBridge     ?? undefined,
         avatarPacks:    remote.avatarPacks    ?? undefined,
         notes:          remote.notes          ?? undefined,
       };
@@ -1170,6 +1252,9 @@ export class Planner extends EventTarget {
     // Re-apply the weather source now that the authoritative config loaded
     // (restarts / stops the Open-Meteo poll, recomputes local sources).
     this._reconfigureWeather();
+    // (Re)start the MQTT bridge to match the authoritative config.
+    this._mqttInited = true;
+    void this._reconfigureMqtt();
     this.emitConfig();
   }
 
@@ -1905,6 +1990,7 @@ export class Planner extends EventTarget {
     if (t !== 'void') this.drawingVoidArea = null;
     this.placingRoomId = null;  // picking any tool cancels a pending room placement
     this.placingLandmarkId = null;
+    this.placingCamCalibId = null; this.pendingCamCalibUV = null;
     this.emitConfig();
   }
 
@@ -3167,6 +3253,14 @@ export class Planner extends EventTarget {
         }
       }
     }
+    // Frigate ground-truth camera targets join the SAME candidate pool as radar
+    // (Phase 5) — a person walking from the yard (camera-only) through the door
+    // (BLE) carries one identity. Cars never fuse (not a person). Already floor-
+    // scoped + lerped by camPeople.
+    for (const ct of this.camPeople) {
+      if (ct.label === 'car') continue;
+      radar.push({ key: ct.key, x: ct.x, y: ct.y, floorId: ct.floorId });
+    }
 
     // Candidate proximities: every (person, target) pair on a shared floor. N is
     // tiny (a few people × ≤3 targets/sensor). All pairs are supplied — even
@@ -3357,6 +3451,320 @@ export class Planner extends EventTarget {
       this.weatherNow.rainSoon = this._fcRainSoon; changed = true;
     }
     return changed;
+  }
+
+  // ── MQTT bridge (Phase 5) ──────────────────────────────────────────────────
+  // Live status the Settings ▸ Integrations pill reads. 'idle' when off/absent.
+  get mqttStatus(): BridgeStatus { return this._mqttStatus; }
+
+  // Edit the bridge config, persist, and (re)start the transport. Mirrors
+  // setWeather. Secrets are NOT touched here — they live in localStorage.
+  setMqttBridge(mut: (m: MqttBridgeConfig) => void): void {
+    if (!this.store.mqttBridge) this.store.mqttBridge = { mode: 'off' };
+    mut(this.store.mqttBridge);
+    this.save();
+    void this._reconfigureMqtt();
+    this.emitConfig();
+  }
+
+  // Restart the bridge without a config change (Settings "Test connection").
+  restartMqtt(): void { void this._reconfigureMqtt(); }
+
+  // Register a topic-filter subscription. Consumers (Batches B/C) call this; it
+  // QUEUES until the bridge is up and is replayed on every restart. Cheap no-op
+  // storage when the bridge is off — the consumer never has to know the mode.
+  mqttSubscribe(filter: string, cb: (m: { topic: string; payloadString: string }) => void): void {
+    this._mqttSubs.push({ filter, cb });
+    if (this._mqttBridge) this._mqttBridge.subscribe(filter, cb);
+  }
+
+  // Publish a payload on a topic through the active bridge. Fire-and-forget +
+  // no-op when the bridge is down (write side of tap-to-clean etc.).
+  mqttPublish(topic: string, payload: string, retain = false): void {
+    if (this._mqttBridge) this._mqttBridge.publish(topic, payload, retain);
+  }
+
+  // (Re)start or stop the bridge to match the current config + connection.
+  // Inert when mode off/absent or offline. Dynamic-imports mqtt-bridge.js so the
+  // transport stays out of the startup chunk. Idempotent (stop then start).
+  private async _reconfigureMqtt(): Promise<void> {
+    if (this._mqttBridge) { try { this._mqttBridge.stop(); } catch { /* ignore */ } this._mqttBridge = null; }
+    this._mqttStatus = 'idle';
+    const cfg = this.store.mqttBridge;
+    const mode = cfg?.mode ?? 'off';
+    if (mode === 'off' || this.isOffline || !this.hass) { this.emitConfig(); return; }
+    try {
+      const { startBridge } = await import('./mqtt-bridge.js');
+      // The config may have changed (or the bridge been torn down) during the
+      // async import — re-check before wiring anything up.
+      if ((this.store.mqttBridge?.mode ?? 'off') !== mode || this.isOffline || !this.hass) {
+        this.emitConfig(); return;
+      }
+      const bridge = startBridge(
+        { mode, brokerHost: cfg!.brokerHost, brokerPort: cfg!.brokerPort, useTls: cfg!.useTls },
+        this.hass,
+        { onStatus: (s) => { this._mqttStatus = s; this.emitConfig(); } },
+      );
+      this._mqttBridge = bridge;
+      // Replay every registered subscription onto the fresh bridge.
+      for (const s of this._mqttSubs) bridge.subscribe(s.filter, s.cb);
+      this.ensureFrigateSub();
+      this.ensureVacuumSubs();
+    } catch (err) {
+      console.warn('mqtt bridge failed to start:', err);
+      this._mqttStatus = 'error';
+      this.emitConfig();
+    }
+  }
+
+  // ── Valetudo room-map overlay (Phase 5, batch M-C) ──────────────────────────
+  // Register the wildcard subscriptions for Valetudo map + status once the bridge
+  // is up. We subscribe by NAMESPACE with `+` wildcards (not per robot id) so
+  // adding a robot / editing its valetudoId needs no re-subscribe (the M-A queue
+  // never unsubscribes) — inbound topics are matched to a RobotFixture at message
+  // time. Re-runs only register a fresh set when the namespace itself changes.
+  ensureVacuumSubs(): void {
+    const cfg = this.store.mqttBridge;
+    if (!cfg || (cfg.mode ?? 'off') === 'off') return;
+    const ns = (cfg.valetudoNs || 'valetudo').replace(/\/+$/, '');
+    if (this._vacSubNs === ns) return;   // already registered for this namespace
+    this._vacSubNs = ns;
+    this.mqttSubscribe(`${ns}/+/MapData/map-data`, m => { void this._onVacMapData(m.topic, m.payloadString); });
+    this.mqttSubscribe(`${ns}/+/StatusStateAttribute/value`, m => this._onVacStatus(m.topic, 'value', m.payloadString));
+    this.mqttSubscribe(`${ns}/+/StatusStateAttribute/flag`, m => this._onVacStatus(m.topic, 'flag', m.payloadString));
+  }
+
+  // Resolve a `<ns>/<id>/…` topic's identifier segment → the RobotFixture (across
+  // ALL floors) whose valetudoId matches. Null when no robot claims it.
+  private _robotForVacTopic(topic: string): RobotFixture | null {
+    const parts = topic.split('/');
+    if (parts.length < 3) return null;
+    const id = parts[1];
+    for (const f of this.store.floors) {
+      const ro = (f.robots ?? []).find(r => r.kind === 'vacuum' && r.valetudoId && r.valetudoId === id);
+      if (ro) return ro;
+    }
+    return null;
+  }
+
+  // MapData/map-data → decode (async) + store per robot, bump the revision (dirty
+  // key + 3D texture disposal), repaint. Guarded end-to-end.
+  private async _onVacMapData(topic: string, payload: string): Promise<void> {
+    try {
+      const ro = this._robotForVacTopic(topic);
+      if (!ro) return;
+      const parsed = await decodeMapDataPayload(payload);
+      if (!parsed) return;
+      const prev = this.vacuumMaps[ro.id];
+      // Skip a no-op republish (same nonce) so the revision doesn't churn.
+      if (prev && prev.nonce === parsed.nonce) return;
+      this.vacuumMaps[ro.id] = parsed;
+      this.vacuumMapRev[ro.id] = (this.vacuumMapRev[ro.id] ?? 0) + 1;
+      this.emitConfig();
+    } catch { /* never throw out of a bridge callback */ }
+  }
+
+  // StatusStateAttribute value/flag → cache; repaint only on a real change (the
+  // 2D glow reads live from RAF, but 3D needs the dirty key to re-fold).
+  private _onVacStatus(topic: string, field: 'value' | 'flag', payload: string): void {
+    try {
+      const ro = this._robotForVacTopic(topic);
+      if (!ro) return;
+      const v = payload.trim();
+      const cur = this.vacuumStatus[ro.id] ?? (this.vacuumStatus[ro.id] = {});
+      if (cur[field] === v) return;
+      cur[field] = v;
+      this.emitConfig();
+    } catch { /* ignore */ }
+  }
+
+  // The segment ids that should GLOW for a robot right now: when the robot is
+  // cleaning a segment job, the ids Diorama itself last commanded (if any); when
+  // cleaning with no known target, ALL segments (soft glow); else none.
+  vacuumGlowSegments(robotId: string): Set<string> | null {
+    const st = this.vacuumStatus[robotId];
+    if (!st || st.value !== 'cleaning') return null;
+    if (st.flag === 'segment') {
+      const cmd = this.lastCommandedSegments[robotId];
+      if (cmd && cmd.length) return new Set(cmd);
+    }
+    // cleaning (zone/spot/mapping/started-elsewhere) → glow everything softly.
+    const map = this.vacuumMaps[robotId];
+    return map ? new Set(map.segments.map(s => s.id)) : new Set();
+  }
+
+  // Tap-to-clean: publish `MapSegmentationCapability/clean/set` for one segment on
+  // a robot and record it so the glow tracks. Edit + kiosk (view refuses upstream).
+  cleanVacuumSegment(robot: RobotFixture, segId: string): void {
+    if (this.uiMode === 'view' || !robot.valetudoId) return;
+    const ns = (this.store.mqttBridge?.valetudoNs || 'valetudo').replace(/\/+$/, '');
+    const topic = `${ns}/${robot.valetudoId}/MapSegmentationCapability/clean/set`;
+    this.mqttPublish(topic, cleanSegmentPayload(segId));
+    this.lastCommandedSegments[robot.id] = [segId];
+    this.emitConfig();
+  }
+
+  // ── Frigate ground-truth targets (Phase 5) ─────────────────────────────────
+  // Subscribe to `<frigateTopic>/events` ONCE, the first time the bridge is
+  // configured AND some enabled floor has a camera with a solvable ground
+  // homography. Idempotent (guarded by _frigateSubscribed); the subscription
+  // queues in mqttSubscribe until the bridge is up and is replayed on restart.
+  // Called from _reconfigureMqtt (bridge start), the full-state load, and the
+  // sidebar after a calibration edit — cheap no-op once subscribed.
+  ensureFrigateSub(): void {
+    if (this._frigateSubscribed) return;
+    if ((this.store.mqttBridge?.mode ?? 'off') === 'off' || this.isOffline) return;
+    // Any enabled-floor camera with ≥4 calibration points that actually solve?
+    let ready = false;
+    for (const fl of this.store.floors) {
+      if (fl.disabled) continue;
+      for (const cam of fl.cameras ?? []) if (this._camHomography(cam)) { ready = true; break; }
+      if (ready) break;
+    }
+    if (!ready) return;
+    const topic = (this.store.mqttBridge?.frigateTopic || 'frigate') + '/events';
+    this._frigateSubscribed = true;
+    this.mqttSubscribe(topic, m => this._onFrigateEvent(m.payloadString));
+  }
+
+  // Memoized ground-plane homography for a camera. Re-solves only when the
+  // calibration points change (hashed). null when uncalibrated / degenerate.
+  private _camHomography(cam: CameraFixture): number[] | null {
+    const pts = cam.camCalib?.points;
+    if (!pts || pts.length < 4) return null;
+    const key = JSON.stringify(pts);
+    const cached = this._camHgCache[cam.id];
+    if (cached && cached.key === key) return cached.h;
+    const h = solveHomography(pts);
+    this._camHgCache[cam.id] = { key, h };
+    return h;
+  }
+
+  // Handle one `frigate/events` payload. LIVE-path semantics: mutate camTargets +
+  // feed lerp slots, NEVER emitConfig per detection (~radar cadence). All parsing
+  // is try/caught so a malformed message can't break the stream.
+  private _onFrigateEvent(payloadString: string): void {
+    let msg: { type?: string; before?: FrigateObj; after?: FrigateObj } | null = null;
+    try { msg = JSON.parse(payloadString); } catch { return; }
+    if (!msg || typeof msg !== 'object') return;
+    const type = msg.type;
+    const obj = msg.after ?? msg.before;
+    if (!obj || typeof obj !== 'object') return;
+    if (obj.false_positive === true) return;
+    const label = obj.label;
+    if (!label || !Planner.CAM_LABELS.includes(label)) return;
+    const camName = obj.camera;
+    if (!camName || typeof camName !== 'string') return;
+
+    // Match the Frigate camera name to a fixture on an enabled floor (frigateName
+    // override, else slugified label). Unmatched cameras are ignored (never guessed).
+    let cam: CameraFixture | null = null, floorId = '';
+    for (const fl of this.store.floors) {
+      if (fl.disabled) continue;
+      for (const c of fl.cameras ?? []) {
+        const fn = (c.frigateName && c.frigateName.trim()) || slugifyFrigateName(c.label || '');
+        if (fn && fn === camName) { cam = c; floorId = fl.id; break; }
+      }
+      if (cam) break;
+    }
+    if (!cam) return;
+    const h = this._camHomography(cam);
+    if (!h) return;
+
+    const eventId = typeof obj.id === 'string' ? obj.id : null;
+    const prefix = `cam_${cam.id}_${label}`;
+
+    // `end` releases the slot holding this event id (existing despawn fade).
+    if (type === 'end') { if (eventId) this._releaseCamSlot(prefix, eventId); return; }
+    if (type !== 'new' && type !== 'update') return;
+
+    const box = obj.box;
+    if (!Array.isArray(box) || box.length < 4 || !box.every(n => typeof n === 'number' && isFinite(n))) return;
+    // Bottom-center of the box = the subject's foot-contact point on the ground
+    // plane (coords are at the camera's DETECT resolution — same frame the
+    // homography was calibrated against).
+    const u = (box[0] + box[2]) / 2, v = box[3];
+    const proj = applyHomography(h, u, v);
+    if (!proj) return;
+
+    // ── Slot assignment (max CAM_SLOTS per camera/label) ────────────────────
+    const now = Date.now();
+    const idxFor = (): number | null => {
+      // 1) exact event-id match — keep the same slot for this tracked object.
+      // 2) nearest existing slot within CAM_MATCH_MM — successor match across the
+      //    event-id churn of Frigate's new/update/end lifecycle.
+      // 3) first free slot.
+      // 4) full + no near match → drop (leave existing tracks intact).
+      let free = -1, nearest = -1, nearestD = Planner.CAM_MATCH_MM;
+      for (let i = 0; i < Planner.CAM_SLOTS; i++) {
+        const t = this.camTargets[`${prefix}_${i}`];
+        if (!t) { if (free < 0) free = i; continue; }
+        if (eventId && t.eventId === eventId) return i;
+        const d = Math.hypot(t.x - proj.x, t.y - proj.y);
+        if (d < nearestD) { nearestD = d; nearest = i; }
+      }
+      if (nearest >= 0) return nearest;
+      if (free >= 0) return free;
+      return null;
+    };
+    const slot = idxFor();
+    if (slot === null) return;
+
+    const key = `${prefix}_${slot}`;
+    const idx = this._cameraIndex(cam.id);
+    this.camTargets[key] = {
+      key, cameraId: cam.id, label, color: cameraColor(cam, idx),
+      x: proj.x, y: proj.y, floorId, eventId, updatedAt: now,
+    };
+    // Feed the per-key lerp slot (snap on first activation), mirroring BLE.
+    let sl = this.lerpBy[key]?.[0];
+    if (!sl) { sl = { cx: proj.x, cy: proj.y, tx: proj.x, ty: proj.y, vx: 0, vy: 0, active: true }; this.lerpBy[key] = [sl]; }
+    else if (!sl.active) { sl.cx = proj.x; sl.cy = proj.y; sl.vx = 0; sl.vy = 0; sl.active = true; }
+    sl.tx = proj.x; sl.ty = proj.y; sl.active = true;
+  }
+
+  // Release the cam slot (for a camera/label prefix) currently holding eventId.
+  private _releaseCamSlot(prefix: string, eventId: string): void {
+    for (let i = 0; i < Planner.CAM_SLOTS; i++) {
+      const key = `${prefix}_${i}`;
+      const t = this.camTargets[key];
+      if (t && t.eventId === eventId) {
+        delete this.camTargets[key];
+        delete this.lerpBy[key];
+        return;
+      }
+    }
+  }
+
+  // Flat index of a camera across all floors (stable per camera id) — the palette
+  // index behind cameraColor so different cameras tint differently by default.
+  private _cameraIndex(cameraId: string): number {
+    let idx = 0;
+    for (const fl of this.store.floors) for (const c of fl.cameras ?? []) {
+      if (c.id === cameraId) return idx;
+      idx++;
+    }
+    return 0;
+  }
+
+  // Runtime cam targets for rendering (2D dots + 3D rigs). Retires slots
+  // unheard-from past CAM_RETIRE_MS (drops the lerp slot too — the renderer then
+  // fades the rig), and returns the LERPED position so 2D and 3D agree. Cheap
+  // (a handful of tracks) — safe to call each frame.
+  get camPeople(): CamTarget[] {
+    const now = Date.now();
+    const out: CamTarget[] = [];
+    for (const key of Object.keys(this.camTargets)) {
+      const t = this.camTargets[key];
+      if (now - t.updatedAt > Planner.CAM_RETIRE_MS) {
+        delete this.camTargets[key];
+        delete this.lerpBy[key];
+        continue;
+      }
+      const sl = this.lerpBy[key]?.[0];
+      out.push({ ...t, x: sl ? sl.cx : t.x, y: sl ? sl.cy : t.y });
+    }
+    return out;
   }
 
   // Recompute the normalized active alert list from the bound alert entity.

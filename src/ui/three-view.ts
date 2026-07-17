@@ -5,7 +5,7 @@ import { customElement } from './define.js';
 // all of three.js, ~600 kB) is loaded lazily in firstUpdated so the 2D-only
 // startup path never downloads it.
 import type { ThreeDRenderer, ZoneWorld, HaloWorld, TargetWorld, ActivityContext,
-  GpsPinWorld, GpsLandmarkWorld, GeoEventWorld, WeatherFxState } from '../three-renderer.js';
+  GpsPinWorld, GpsLandmarkWorld, GeoEventWorld, WeatherFxState, VacMapEntry } from '../three-renderer.js';
 import { localToWorld, transformVerts, pointInPolygon, sensorColor, hexToInt, motionColor, lightIconKind, furnitureKind, resolveFurnitureDef, furnitureCat, isBinKind, isSpeakerKind, isVehicleKind, isStairsKind, alarmStateColor, valveOpenness, doorSpanCenter } from '../geometry.js';
 import { compass8 } from '../geo.js';
 import { resolveScenePreset, resolveTimeBucket } from '../time-of-day.js';
@@ -266,6 +266,19 @@ export class ThreeView extends LitElement {
         : kind === 'switch' ? f.switches.find(x => x.id === fixtureId)
         : f.furniture.find(x => x.id === fixtureId);
       if (item) p.toggleItem(item);
+    });
+    // Valetudo room-map overlay: tap a segment → confirm + publish clean/set.
+    // Edit + kiosk; view refuses inside cleanVacuumSegment.
+    this._renderer.onVacSegClick(({ robotId, segId }) => {
+      const p = this.planner;
+      if (p.uiMode === 'view') return;
+      const ro = p.floor().robots?.find(x => x.id === robotId);
+      if (!ro) return;
+      const map = p.vacuumMaps[robotId];
+      const seg = map?.segments.find(s => s.id === segId);
+      const name = seg?.name?.trim() || `Room ${segId}`;
+      if (typeof confirm === 'function' && !confirm(`Clean ${name}?`)) return;
+      p.cleanVacuumSegment(ro, segId);
     });
     this._renderer.onFixtureDblClick(({ kind, entity_id, fixtureId }) => {
       const p = this.planner;
@@ -598,6 +611,7 @@ export class ThreeView extends LitElement {
   private _keyCamAlerts = '';
   private _keyPzones = '';
   private _keyGround = '';
+  private _keyVacMap = '';
   private _keyLights = '';
   private _keyZones = '';
   private _keyHalos = '';
@@ -627,6 +641,7 @@ export class ThreeView extends LitElement {
         this._keyMotion = this._keyEnv = this._keyInfo = this._keyActions = this._keyBle = this._keyAlarm = this._keyThermo = this._keySafety = '';
         this._keyCameras = this._keyProjectors = this._keyValves = this._keyPlugs = this._keyCamAlerts = this._keyPzones = this._keyNowPlaying = '';
         this._keyGround = '';
+        this._keyVacMap = '';
         this._keyLights = this._keyZones = this._keyHalos = '';
         this._keyGhost = this._keyGps = this._keyWeather = '';
         this._trigPrevOn.clear();
@@ -1039,6 +1054,30 @@ export class ThreeView extends LitElement {
         r.updateGroundAreas(groundList);
       }
 
+      // Valetudo room-map overlay (batch M-C): per-robot SLAM segmentation patches.
+      // Rides its OWN `vacuumMap` layer (default OFF). Rebuild on map revision /
+      // glow / calibration / layer flip. When the layer is off, feed nothing so
+      // the group stays empty (also hidden via setLayerVisibility above).
+      const vacOn = layers.vacuumMap === true;
+      const vacRobots = vacOn ? (f.robots ?? []).filter(ro => ro.kind === 'vacuum' && ro.valetudoId && p.vacuumMaps[ro.id]) : [];
+      const keyVacMap = `${p.configRev}|${vacOn}|` + vacRobots.map(ro => {
+        const glow = p.vacuumGlowSegments(ro.id);
+        return `${ro.id}:${p.vacuumMapRev[ro.id] ?? 0}:${ro.posScale ?? 1},${ro.posOffsetX ?? 0},${ro.posOffsetY ?? 0},${ro.posRotDeg ?? 0},${ro.posFlipY ? 1 : 0}:${glow ? [...glow].sort().join('.') : '-'}`;
+      }).join('|');
+      if (keyVacMap !== this._keyVacMap) {
+        this._keyVacMap = keyVacMap;
+        const entries: VacMapEntry[] = vacRobots.map(ro => {
+          const map = p.vacuumMaps[ro.id];
+          const glow = p.vacuumGlowSegments(ro.id);
+          return {
+            robotId: ro.id, pixelSize: map.pixelSize, segments: map.segments,
+            cal: { posScale: ro.posScale, posOffsetX: ro.posOffsetX, posOffsetY: ro.posOffsetY, posFlipY: ro.posFlipY, posRotDeg: ro.posRotDeg },
+            glow: glow ? [...glow] : null,
+          };
+        });
+        r.updateVacuumMaps(entries);
+      }
+
       // GPS device pins + 3D landmark pins (both ride the geo layer). Coarse
       // dirty key: positions rounded to 500 mm + zone + stale, so the sprites
       // rebuild on real movement but not every frame. When the layer is off the
@@ -1307,6 +1346,25 @@ export class ThreeView extends LitElement {
           leaveVia: sp,
           person: bp.personId != null ? { name: bp.name, color: bp.color,
             avatarKind: bp.avatarKind, isPet: bp.isPet, identified: true } : undefined,
+        });
+      }
+      // Frigate ground-truth camera targets (Phase 5): synthetic goal-walk
+      // targets from projected detection boxes, on the CURRENT floor. person →
+      // humanoid, dog/cat → the matching quadruped default; car → NO rig (2D dot
+      // only). Driven by the renderer's goal controller (cam flag → goal mode,
+      // like BLE). A fused cam target (BLE identity adopted via _fuseIdentities)
+      // takes the person's avatar/color + a name label.
+      for (const ct of p.camPeople) {
+        if (ct.floorId !== f.id) continue;
+        if (ct.label === 'car') continue;   // cars render as 2D dots only
+        const fusion = p.fusions[ct.key];
+        targets.push({
+          key: ct.key, x: ct.x, y: ct.y, color: hexToInt(ct.color), cam: true,
+          avatar: ct.label === 'dog' ? 'dog' : ct.label === 'cat' ? 'cat' : 'random',
+          plumbobColor: fusion ? hexToInt(fusion.color) : undefined,
+          person: fusion ? { name: fusion.name, color: fusion.color,
+            avatarKind: fusion.avatarKind, isPet: fusion.isPet,
+            identified: fusion.personId != null } : undefined,
         });
       }
       // Zones / halos rebuild only when shape or occupancy changes — not on

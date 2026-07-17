@@ -74,6 +74,7 @@ interface RobotRig {
 }
 import { wallCutsForSegment, WINDOW_DEFAULTS, closedWallLoops, wallKind, WALL_KINDS, furnitureLocalToWorld, furnitureWorldToLocal, pointInPolygon as pip, centroid, loopContaining, resolveRoomForPoint, roomLabel, intersectLoopWithRect, polygonArea } from './geometry.js';
 import { visibilityToFogDensity, moonPhaseFraction } from './weather.js';
+import { vacMapAffine, vacPixelToWorld, vacSegColor, type VacCal, type VacSegment } from './valetudo-map.js';
 import {
   resolveDef, resolveAvatar, avatarFromPool,
   registerPack, unregisterPack, setAvatarPacksConfig,
@@ -109,6 +110,15 @@ export interface GpsLandmarkWorld { x: number; y: number; name: string; }
 // geo_location event pin (roadmap #9). Pre-shaped by three-view (label + color
 // resolved) so the renderer stays geo-math-free. x/y are the clamped render pos.
 export interface GeoEventWorld { x: number; y: number; label: string; color: string; }
+// Valetudo room-map overlay input (one per linked robot). three-view shapes this
+// from Planner.vacuumMaps + the robot's pos* calibration + the glow set.
+export interface VacMapEntry {
+  robotId: string;
+  pixelSize: number;
+  cal: VacCal;                 // the owning RobotFixture's posScale/posOffset*/posFlipY/posRotDeg
+  segments: VacSegment[];
+  glow: string[] | null;       // segment ids currently glowing (cleaning), or null
+}
 
 // Outdoor weather effects (Feature W, phase W2). Pre-shaped by three-view from
 // planner.weatherNow so the renderer stays free of weather-source logic.
@@ -212,6 +222,14 @@ export interface TargetWorld {
   // solve; the controller A*-walks the rig there at human speed and idles when
   // close. No random wander, no room confinement (real movement). See _advanceAi.
   ble?: boolean;
+  // Optional (additive): this is a Frigate ground-truth camera target (Phase 5).
+  // Behaves exactly like `ble` — GOAL mode: x/y is the projected detection
+  // position, the controller walks the rig there at human speed and idles when
+  // close. No wander, no room confinement (a real detection is ground truth). A
+  // distinct flag (not `ble`) so despawn/label plumbing can tell them apart. A
+  // stale renderer chunk ignores it → the rig simply won't animate (no ai/ble/cam
+  // gate), which is safe.
+  cam?: boolean;
   // Optional (additive): this is a roaming AI avatar (Batch A). It is also `ai`
   // (wander mode), but `roam` makes the controller SKIP home-loop confinement
   // (roam the whole nav region) and use an interior-activity goal bias in
@@ -893,6 +911,12 @@ export class ThreeDRenderer {
   private _camAlertGroup = new THREE.Group();
   private _pzoneGroup = new THREE.Group();       // FP2-style presence-zone patches (build-time, _keyPzones)
   private _groundGroup = new THREE.Group();       // ground / yard covering patches (build-time, _keyGround)
+  private _vacMapGroup = new THREE.Group();        // Valetudo room-map overlay patches (build-time, _keyVacMap)
+  // CanvasTextures built for the vac-map overlay — NOT freed by _clearGroup (same
+  // as sprite maps); disposed explicitly in _clearVacMap (dispose-count probe below).
+  private _vacTexList: THREE.Texture[] = [];
+  vacMapTexDisposals = 0;                           // test probe: cumulative vac-map texture disposals
+  private _vacGlowMats: THREE.Material[] = [];       // materials for glowing segments (per-frame opacity pulse)
   private _robotRigs: Record<string, RobotRig> = {};  // keyed by robot id
   private _lightGroup = new THREE.Group();
   private _switchGroup = new THREE.Group();   // switch fixtures (own layer, split from lights)
@@ -1045,6 +1069,9 @@ export class ThreeDRenderer {
   private _OBJ_H = 900;
   private _onFixtureClick: ((info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'thermostat' | 'safety' | 'robot' | 'lock' | 'appliance' | 'action' | 'projector' | 'valve' | 'plug'; entity_id: string | null; fixtureId: string }) => void) | null = null;
   private _onFixtureDblClick: ((info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'thermostat' | 'safety' | 'robot' | 'lock' | 'appliance' | 'action' | 'projector' | 'valve' | 'plug'; entity_id: string | null; fixtureId: string }) => void) | null = null;
+  // Valetudo tap-to-clean: separate callback (kept OUT of the fixture-click union)
+  // so the vac-map raycast stays a low-priority overlay concern.
+  private _onVacSegClick: ((info: { robotId: string; segId: string }) => void) | null = null;
   private _raycaster = new THREE.Raycaster();
   // Per-target humanoid rigs, persisted across frames so we can carry
   // walk-cycle phase + smoothed body facing.
@@ -1279,7 +1306,7 @@ export class ThreeDRenderer {
                     this._actionGroup,
                     this._bleGroup, this._alarmGroup, this._thermoGroup, this._safetyGroup,
                     this._robotGroup, this._robotRigGroup, this._cameraGroup, this._projGroup, this._valveGroup, this._plugGroup, this._camAlertGroup, this._pzoneGroup,
-                    this._groundGroup,
+                    this._groundGroup, this._vacMapGroup,
                     this._lightGroup, this._switchGroup, this._targetGroup, this._ghostGroup,
                     this._transitGroup,
                     this._gpsGroup, this._weatherGroup, this._skyGroup, this._pulseGroup, this._nowPlayingGroup);
@@ -1343,7 +1370,13 @@ export class ThreeDRenderer {
       const dx = Math.abs(e.clientX - downX), dy = Math.abs(e.clientY - downY);
       if (dt > 500 || dx > 5 || dy > 5) return;
       const hit = this._raycastFixture(e.clientX, e.clientY);
-      if (!hit) { lastTapT = 0; return; }
+      if (!hit) {
+        // Low-priority: only when no fixture was under the cursor, try the
+        // Valetudo room-map overlay (tap-to-clean).
+        const seg = this._raycastVacSeg(e.clientX, e.clientY);
+        if (seg) this._onVacSegClick?.(seg);
+        lastTapT = 0; return;
+      }
       const now = e.timeStamp;
       if (now - lastTapT < 350) {
         this._onFixtureDblClick?.(hit);
@@ -1875,6 +1908,9 @@ export class ThreeDRenderer {
       this._disposeSpriteMaps(g);
       this._clearGroup(g);
     }
+    // Vac-map overlay carries explicit CanvasTextures + a glow-material list —
+    // tear it down through its dedicated clearer (disposes textures + resets lists).
+    this._clearVacMap();
     this._infoRigs = [];
     this._actionRigs = [];
     // Valve flow pulses live in _valveGroup (just cleared) — drop the tracking
@@ -2253,6 +2289,136 @@ export class ThreeDRenderer {
     }
   }
 
+  // ── Valetudo room-map overlay ───────────────────────────────────────────
+  // One translucent textured quad per room segment at y≈6 (above the floor slab,
+  // below furniture blob shadows at y=8). The tint (segment color raster) is
+  // baked into a CanvasTexture; glowing segments get their opacity pulsed per
+  // frame in _advanceVacMap. Rebuilt under _keyVacMap (map-revision-driven) in
+  // three-view. Rides the `vacuumMap` layer (default OFF). Reuses each owning
+  // robot's pos* calibration to map map-pixels → plan mm — identical to the 2D
+  // overlay's affine, so both views line up.
+  updateVacuumMaps(entries: VacMapEntry[]): void {
+    if (!this._scene) return;
+    this._clearVacMap();
+    const VAC_Y = 6;
+    for (const ent of entries) {
+      const aff = vacMapAffine(ent.pixelSize, ent.cal);
+      const glow = ent.glow ? new Set(ent.glow) : null;
+      ent.segments.forEach((seg, i) => {
+        const tex = this._vacSegTexture(seg, i);
+        this._vacTexList.push(tex);
+        const glowing = glow?.has(seg.id) ?? false;
+        const mat = this._mat({
+          color: 0xffffff, map: tex, side: THREE.DoubleSide,
+          transparent: true, opacity: glowing ? 0.6 : 0.35, depthWrite: false,
+          roughness: 1, metalness: 0,
+        });
+        if (glowing) this._vacGlowMats.push(mat);
+        // Quad covering map-pixels [minX..maxX+1] × [minY..maxY+1] in world.
+        const b = seg.bbox;
+        const w00 = vacPixelToWorld(b.minX,     b.minY,     aff);
+        const w10 = vacPixelToWorld(b.maxX + 1, b.minY,     aff);
+        const w11 = vacPixelToWorld(b.maxX + 1, b.maxY + 1, aff);
+        const w01 = vacPixelToWorld(b.minX,     b.maxY + 1, aff);
+        const p00 = this._w(w00.x, w00.y, VAC_Y);
+        const p10 = this._w(w10.x, w10.y, VAC_Y);
+        const p11 = this._w(w11.x, w11.y, VAC_Y);
+        const p01 = this._w(w01.x, w01.y, VAC_Y);
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.Float32BufferAttribute([
+          p00.x, VAC_Y, p00.z,  p10.x, VAC_Y, p10.z,  p11.x, VAC_Y, p11.z,
+          p00.x, VAC_Y, p00.z,  p11.x, VAC_Y, p11.z,  p01.x, VAC_Y, p01.z,
+        ], 3));
+        geo.setAttribute('uv', new THREE.Float32BufferAttribute([
+          0, 0,  1, 0,  1, 1,
+          0, 0,  1, 1,  0, 1,
+        ], 2));
+        geo.setAttribute('normal', new THREE.Float32BufferAttribute([
+          0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0,
+        ], 3));
+        const patch = new THREE.Mesh(geo, mat);
+        patch.userData.outlineSkip = true;
+        patch.userData.kind = 'vacseg';
+        patch.userData.fixtureId = ent.robotId;
+        patch.userData.segId = seg.id;
+        this._vacMapGroup.add(patch);
+        // Name sprite at the world centroid (camera-facing). Freed by _clearVacMap
+        // via _disposeSpriteMaps.
+        const cw = vacPixelToWorld(seg.centroidPx.x, seg.centroidPx.y, aff);
+        const cp = this._w(cw.x, cw.y, 220);
+        const spr = this._makeTextSprite(seg.name?.trim() || `Room ${seg.id}`, vacSegColor(i), 0.8);
+        spr.position.set(cp.x, 220, cp.z);
+        spr.userData.outlineSkip = true;
+        this._vacMapGroup.add(spr);
+      });
+    }
+  }
+
+  // Build a tinted CanvasTexture for one segment (bbox raster, segment color).
+  private _vacSegTexture(seg: VacSegment, segIdx: number): THREE.CanvasTexture {
+    const w = Math.max(1, seg.bbox.maxX - seg.bbox.minX + 1);
+    const h = Math.max(1, seg.bbox.maxY - seg.bbox.minY + 1);
+    const cv = document.createElement('canvas');
+    cv.width = w; cv.height = h;
+    const cx = cv.getContext('2d');
+    if (cx) {
+      cx.fillStyle = vacSegColor(segIdx);
+      for (const run of seg.runs) cx.fillRect(run.x - seg.bbox.minX, run.y - seg.bbox.minY, run.count, 1);
+    }
+    const tex = new THREE.CanvasTexture(cv);
+    tex.flipY = false;                       // UVs authored top-left origin (matches the raster)
+    tex.magFilter = THREE.NearestFilter;     // crisp room cells, no blur
+    tex.minFilter = THREE.NearestFilter;
+    tex.generateMipmaps = false;
+    return tex;
+  }
+
+  // Per-frame glow pulse for cleaning segments (called from _animate). Cheap: only
+  // touches the tracked glow-material list; no rebuild.
+  private _advanceVacMap(nowS: number): void {
+    if (!this._vacGlowMats.length) return;
+    const pulse = 0.5 + 0.5 * Math.sin(nowS * 2);
+    const op = 0.3 + 0.4 * pulse;
+    for (const m of this._vacGlowMats) (m as THREE.Material & { opacity: number }).opacity = op;
+  }
+
+  // Tear down the vac-map overlay: sprite maps + geometry/materials via the usual
+  // helpers, PLUS the explicit CanvasTextures (_clearGroup doesn't free those —
+  // same rule as sprite maps). Increments the dispose-count probe.
+  private _clearVacMap(): void {
+    this._disposeSpriteMaps(this._vacMapGroup);
+    this._clearGroup(this._vacMapGroup);
+    for (const t of this._vacTexList) { t.dispose(); this.vacMapTexDisposals++; }
+    this._vacTexList = [];
+    this._vacGlowMats = [];
+  }
+
+  // Raycast the vac-map overlay ONLY (tap-to-clean). Low-priority: three-view
+  // calls this after _raycastFixture misses. Returns the robot + segment id.
+  private _raycastVacSeg(clientX: number, clientY: number): { robotId: string; segId: string } | null {
+    if (!this._renderer || !this._camera || !this._vacMapGroup.visible) return null;
+    const rect = this._renderer.domElement.getBoundingClientRect();
+    const ndc = new THREE.Vector2(
+      ((clientX - rect.left) / rect.width) * 2 - 1,
+      -((clientY - rect.top) / rect.height) * 2 + 1,
+    );
+    this._raycaster.setFromCamera(ndc, this._camera);
+    const hits = this._raycaster.intersectObjects(this._vacMapGroup.children, true);
+    for (const h of hits) {
+      let obj: THREE.Object3D | null = h.object;
+      while (obj) {
+        if (obj.userData && obj.userData.kind === 'vacseg') {
+          return { robotId: String(obj.userData.fixtureId), segId: String(obj.userData.segId) };
+        }
+        obj = obj.parent;
+      }
+    }
+    return null;
+  }
+  onVacSegClick(fn: (info: { robotId: string; segId: string }) => void): void {
+    this._onVacSegClick = fn;
+  }
+
   // ── Imported 3D model (Sweet Home 3D OBJ) ───────────────────────────────
   // Loads parsed OBJ/MTL text into the model group. Caller gates on
   // model3d.rev / transform changes. SH3D exports cm with Y-up and plan-Y
@@ -2379,6 +2545,8 @@ export class ThreeDRenderer {
     // grid helper also rides `grid` but its visibility is owned by updateFloor
     // (folds in the bg-image suppression); see _keyFloor + line ~1962.
     this._groundGroup.visible = v.ground !== false;
+    // Valetudo room-map overlay rides its OWN layer, DEFAULT OFF (diagnostic).
+    this._vacMapGroup.visible = v.vacuumMap === true;
     if (this._grid) this._grid.visible = (v.grid !== false) && !this._bgVisibleNow;
     this._targetGroup.visible = v.targets !== false;
     // Now-playing cards ride the furniture/appliance layers (a media piece can be
@@ -8809,7 +8977,7 @@ export class ThreeDRenderer {
   // synthetic target's x/y in place. Everything downstream then treats it as a
   // radar target. See AiState. `dt` is the shared frame dt.
   private _advanceAi(t: TargetWorld, dt: number): void {
-    const goalMode = !!t.ble;
+    const goalMode = !!t.ble || !!t.cam;   // cam (Frigate) rigs are goal-driven like BLE
     const roam = !!t.roam;
     let ai = this._aiState[t.key];
     if (!ai) {
@@ -9113,7 +9281,7 @@ export class ThreeDRenderer {
     // three-view, so mutating is safe). Must run before the bed pre-pass and the
     // main loop so both see the avatar's real position.
     for (const t of targets)
-      if ((t.ai || t.ble) && !(t.leaveVia && this._leftAt[t.key])) this._advanceAi(t, frameDt);
+      if ((t.ai || t.ble || t.cam) && !(t.leaveVia && this._leftAt[t.key])) this._advanceAi(t, frameDt);
 
     // Pre-pass: per-bed occupancy from RAW footprint containment, for the
     // lay-in-bed gate. Lying capacity = max(1, floor(bedWidth / 700)) side-by-
@@ -12655,6 +12823,7 @@ export class ThreeDRenderer {
       this._disposeSpriteMaps(g);
       this._clearGroup(g);
     }
+    this._clearVacMap();   // vac-map overlay: explicit CanvasTexture disposal
     this.clearTransitPuppet();
     this._nowPlaying = {};
     this._weatherClouds = []; this._weatherFogPlanes = []; this._weatherFlash = null;
@@ -12852,6 +13021,8 @@ export class ThreeDRenderer {
     this._advanceWeather(frameDt, nowS);
     // Thermostat vent airflow particles — buffer mutation only (zero allocation).
     this._advanceVents(frameDt);
+    // Valetudo cleaning-segment glow pulse — opacity-only on the tracked list.
+    this._advanceVacMap(nowS);
     // Glass-house transit puppet — scripted cross-STORY_H walk (Tier 2 stretch).
     this._advanceTransitPuppet(frameDt);
     // Info-card plaques — clock repaint on the minute + flash pulse (no rebuild).

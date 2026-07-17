@@ -9,7 +9,7 @@ import { OFFLINE_FLAG_KEY } from '../ha-local.js';
 import type { AvatarDef, AvatarPackDef } from '../avatars.js';
 import { AVATAR_PACK_MANIFEST } from '../avatar-packs/manifest.js';
 import type { Planner } from '../planner.js';
-import type { Floor, HassState, WeatherConfig, WeatherEffectKey, ScenePreset, FloorTexKind } from '../types.js';
+import type { Floor, HassState, WeatherConfig, WeatherEffectKey, ScenePreset, FloorTexKind, MqttBridgeConfig } from '../types.js';
 
 // ── Floor settings modal ─────────────────────────────────────────────────
 @customElement('diorama-floor-modal')
@@ -976,7 +976,94 @@ export class SettingsDrawer extends LitElement {
                @change=${(e: Event) => this._setBermudaEnabled((e.target as HTMLInputElement).checked)}>
         <span style="flex:1">Bermuda BLE tracking</span>
       </label>
+      ${this._mqttBlock()}
     `;
+  }
+
+  // ── MQTT bridge block (Phase 5) ─────────────────────────────────────────
+  private _mqttBlock() {
+    const p = this.planner;
+    const cfg = p.store.mqttBridge ?? {};
+    const mode = cfg.mode ?? 'off';
+    const status = p.mqttStatus;
+    const STATUS_COLOR: Record<string, string> = {
+      idle: 'var(--text-dim)', connecting: '#fdd835', up: '#69f0ae',
+      error: '#ff5252', unauthorized: '#fb8c00',
+    };
+    const STATUS_LABEL: Record<string, string> = {
+      idle: 'Idle', connecting: 'Connecting…', up: 'Connected',
+      error: 'Error', unauthorized: 'Unauthorized (admin required)',
+    };
+    const modeRow = (val: 'off' | 'ha-relay' | 'direct', label: string, hint: string) => html`
+      <label style="display:flex;gap:8px;align-items:flex-start;cursor:pointer;font-size:12px;color:var(--text);margin:4px 0">
+        <input type="radio" name="mqttmode" .checked=${mode === val}
+               @change=${() => this._setMqttMode(val)}>
+        <span style="flex:1"><span>${label}</span>
+          <span style="display:block;color:var(--text-dim);font-size:10px">${hint}</span></span>
+      </label>`;
+    const field = (label: string, value: string, ph: string, type: string,
+                   on: (v: string) => void) => html`
+      <label style="font-size:10px;color:var(--text-dim);display:block;margin:6px 0 2px">${label}</label>
+      <input type=${type} placeholder=${ph} .value=${value}
+             @change=${(e: Event) => on((e.target as HTMLInputElement).value)}
+             style="width:100%;padding:5px 7px;border-radius:4px;border:1px solid var(--border);
+                    background:#111;color:var(--text);font-size:12px;box-sizing:border-box">`;
+    return html`
+      <div style="border-top:1px solid var(--border);margin-top:12px;padding-top:12px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px">
+          <strong style="font-size:12px;color:var(--text)">MQTT bridge</strong>
+          <span style="font-size:10px;padding:2px 7px;border-radius:9px;
+                       background:${STATUS_COLOR[status]}22;color:${STATUS_COLOR[status]}">
+            ${STATUS_LABEL[status] ?? status}</span>
+        </div>
+        <div style="font-size:10px;color:var(--text-dim);margin-bottom:6px">
+          Reads spatial MQTT topics (Frigate boxes, Valetudo maps) not exposed over
+          Home Assistant's normal API.
+        </div>
+        ${modeRow('off', 'Off', 'No MQTT bridge.')}
+        ${modeRow('ha-relay', 'Via Home Assistant (admin)',
+          'Rides HA\'s own connection — no extra credentials. Requires an ADMIN Home Assistant user.')}
+        ${modeRow('direct', 'Direct to broker',
+          'Connect straight to the MQTT broker over WebSocket. Use when the panel user is not an HA admin.')}
+        ${status === 'unauthorized' ? html`
+          <div style="font-size:10px;color:#fb8c00;margin:4px 0;line-height:1.4">
+            Home Assistant refused <code>mqtt/subscribe</code> — that command needs an
+            admin user. Switch to <em>Direct to broker</em> instead.
+          </div>` : nothing}
+        ${mode === 'direct' ? html`
+          <div style="margin-top:6px;padding:8px;border:1px solid var(--border);border-radius:5px">
+            ${field('Broker host', cfg.brokerHost ?? '', 'homeassistant.local', 'text',
+              v => this._setMqttField(m => { m.brokerHost = v.trim() || undefined; }))}
+            <div style="display:flex;gap:8px;align-items:end">
+              <div style="flex:1">
+                ${field('WebSocket port', String(cfg.brokerPort ?? 9001), '9001', 'number',
+                  v => this._setMqttField(m => { const n = parseInt(v, 10); m.brokerPort = isFinite(n) ? n : undefined; }))}
+              </div>
+              <label style="display:flex;gap:5px;align-items:center;font-size:11px;color:var(--text);padding-bottom:6px">
+                <input type="checkbox" .checked=${cfg.useTls === true}
+                       @change=${(e: Event) => this._setMqttField(m => { m.useTls = (e.target as HTMLInputElement).checked || undefined; })}>
+                TLS (wss)
+              </label>
+            </div>
+            ${field('Username', this._mqttCred('user'), '(optional)', 'text',
+              v => this._setMqttCred('user', v))}
+            ${field('Password', this._mqttCred('pass'), '(optional)', 'password',
+              v => this._setMqttCred('pass', v))}
+            <div style="font-size:10px;color:var(--text-dim);margin-top:4px">
+              🔒 Username &amp; password are stored on this device only (never synced to
+              Home Assistant).
+            </div>
+          </div>` : nothing}
+        ${mode !== 'off' ? html`
+          <div style="margin-top:6px">
+            ${field('Frigate topic prefix', cfg.frigateTopic ?? 'frigate', 'frigate', 'text',
+              v => this._setMqttField(m => { m.frigateTopic = v.trim() || undefined; }))}
+            ${field('Valetudo namespace', cfg.valetudoNs ?? 'valetudo', 'valetudo', 'text',
+              v => this._setMqttField(m => { m.valetudoNs = v.trim() || undefined; }))}
+            <button class="btn-primary" style="margin-top:8px"
+                    @click=${() => this.planner.restartMqtt()}>Test connection</button>
+          </div>` : nothing}
+      </div>`;
   }
 
   // ── Display tab (moved from sidebar "3D Scene" — global parts only) ──────
@@ -1687,6 +1774,31 @@ export class SettingsDrawer extends LitElement {
     this.planner.store.bermudaEnabled = on ? undefined : false;
     this.planner.save();
     this.planner.emitConfig();
+    this.requestUpdate();
+  }
+
+  // ── MQTT bridge settings helpers (Phase 5) ──────────────────────────────
+  private _setMqttMode(mode: 'off' | 'ha-relay' | 'direct'): void {
+    this.planner.setMqttBridge(m => { m.mode = mode; });
+    this.requestUpdate();
+  }
+  private _setMqttField(mut: (m: MqttBridgeConfig) => void): void {
+    this.planner.setMqttBridge(mut);
+    this.requestUpdate();
+  }
+  // Broker credentials are device-local secrets — localStorage ONLY, never the
+  // synced Store. Guarded like the connection token helpers.
+  private _mqttCred(which: 'user' | 'pass'): string {
+    try { return localStorage.getItem('diorama:mqtt:' + which) || ''; }
+    catch { return ''; }
+  }
+  private _setMqttCred(which: 'user' | 'pass', value: string): void {
+    try {
+      if (value) localStorage.setItem('diorama:mqtt:' + which, value);
+      else localStorage.removeItem('diorama:mqtt:' + which);
+    } catch { /* private mode */ }
+    // Re-run the bridge so new creds take effect (direct mode).
+    this.planner.restartMqtt();
     this.requestUpdate();
   }
 }

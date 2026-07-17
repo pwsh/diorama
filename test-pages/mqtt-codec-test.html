@@ -1,0 +1,216 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>MQTTCODEC …</title>
+  <style>
+    body { margin:0; background:#0d1116; color:#cfd8dc; font:13px/1.4 sans-serif; padding:14px; }
+    h1 { font-size:15px; margin:0 0 10px; }
+    .grid { display:flex; flex-wrap:wrap; gap:10px; }
+    .card { background:#141b22; border:1px solid #26323d; border-radius:6px; padding:8px 10px; width:340px; }
+    .card h2 { font-size:12px; margin:0 0 6px; color:#90caf9; }
+    .row { display:flex; justify-content:space-between; font-size:11px; gap:8px; }
+    .pass { color:#69f0ae; } .fail { color:#ff5252; }
+    #summary { font-size:14px; font-weight:bold; margin:10px 0; padding:8px 10px; border-radius:5px; }
+    .okbg { background:#12331f; color:#69f0ae; } .badbg { background:#3a1414; color:#ff8a80; }
+    code { color:#ffd54f; font-size:10px; word-break:break-all; }
+  </style>
+</head>
+<body>
+  <h1>MQTT codec — encode goldens · decode roundtrips · incremental · malformed · topic match</h1>
+  <div id="summary">Running…</div>
+  <div class="grid" id="grid"></div>
+
+  <!-- mqtt-ws.ts has ZERO imports, so transpile it directly (no --bundle),
+       matching the trilateration.html flow:
+         npx esbuild src/mqtt-ws.ts --format=esm --outfile=<harness>/mqtt-ws.mod.js -->
+  <script type="module">
+    import {
+      encodeConnect, encodeSubscribe, encodePublish, encodePingReq, encodeDisconnect,
+      encodeRemainingLength, decodePackets, matchTopicFilter,
+    } from './mqtt-ws.mod.js';
+
+    const tests = [];
+    const ok = (name, cond, detail = '') => tests.push({ name, ok: !!cond, detail });
+    const hex = (u8) => Array.from(u8).map(b => b.toString(16).padStart(2, '0')).join('');
+    const eqHex = (name, got, want) => ok(name, hex(got) === want, `got ${hex(got)} want ${want}`);
+    const concat = (...arrs) => {
+      const total = arrs.reduce((n, a) => n + a.length, 0);
+      const out = new Uint8Array(total); let o = 0;
+      for (const a of arrs) { out.set(a, o); o += a.length; }
+      return out;
+    };
+    const td = new TextDecoder();
+
+    // ── (1) encode golden bytes ────────────────────────────────────────────
+    eqHex('CONNECT no creds (clientId=diorama, ka=60)',
+      encodeConnect({ clientId: 'diorama' }),
+      '101300044d5154540402003c000764696f72616d61');
+    eqHex('CONNECT with creds (c/u/p, ka=60)',
+      encodeConnect({ clientId: 'c', username: 'u', password: 'p' }),
+      '101300044d51545404c2003c000163000175000170');
+    eqHex('SUBSCRIBE id=1 frigate/events',
+      encodeSubscribe(1, ['frigate/events']),
+      '82130001000e667269676174652f6576656e747300');
+    eqHex('PUBLISH a/b binary payload [00 ff 10]',
+      encodePublish('a/b', Uint8Array.from([0x00, 0xff, 0x10])),
+      '30080003612f6200ff10');
+    eqHex('PINGREQ', encodePingReq(), 'c000');
+    eqHex('DISCONNECT', encodeDisconnect(), 'e000');
+    eqHex('PUBLISH retain flag set',
+      encodePublish('x', 'y', true), '310400017879');
+
+    // ── (2) remaining-length multi-byte boundaries (§2.2.3) ─────────────────
+    eqHex('remLen 127 → 7f', Uint8Array.from(encodeRemainingLength(127)), '7f');
+    eqHex('remLen 128 → 8001', Uint8Array.from(encodeRemainingLength(128)), '8001');
+    eqHex('remLen 16383 → ff7f', Uint8Array.from(encodeRemainingLength(16383)), 'ff7f');
+    eqHex('remLen 16384 → 808001', Uint8Array.from(encodeRemainingLength(16384)), '808001');
+    // A real publish whose payload forces a 2-byte remaining length (topic 'x'
+    // = 3 header bytes + payload → total 128 needs payload 125).
+    {
+      const payload = new Uint8Array(200).fill(0x41);
+      const pkt = encodePublish('x', payload);
+      // header byte 0x31? no retain → 0x30; remLen = 2(topic len)+1(topic)+200 = 203 → [0xcb,0x01]
+      ok('PUBLISH remLen 203 → cb 01', pkt[1] === 0xcb && pkt[2] === 0x01,
+        `bytes[1..2]=${pkt[1].toString(16)},${pkt[2].toString(16)}`);
+      const { packets, rest } = decodePackets(pkt);
+      ok('PUBLISH 200-byte payload roundtrips', packets.length === 1
+        && packets[0].type === 'publish' && packets[0].payload.length === 200 && rest.length === 0,
+        JSON.stringify({ n: packets.length, len: packets[0]?.payload?.length }));
+    }
+
+    // ── (3) decode roundtrips ───────────────────────────────────────────────
+    {
+      const { packets } = decodePackets(encodePublish('a/b', Uint8Array.from([0, 255, 16])));
+      const p = packets[0];
+      ok('PUBLISH decode topic + binary payload',
+        p.type === 'publish' && p.topic === 'a/b' && p.qos === 0 && !p.retain
+        && p.payload.length === 3 && p.payload[0] === 0 && p.payload[1] === 255 && p.payload[2] === 16,
+        JSON.stringify(p && { topic: p.topic, payload: Array.from(p.payload) }));
+    }
+    {
+      // UTF-8 topic (ä = 2 bytes) roundtrips through the length prefix.
+      const { packets } = decodePackets(encodePublish('café/t', 'hi'));
+      ok('PUBLISH UTF-8 topic roundtrips', packets[0]?.topic === 'café/t', packets[0]?.topic);
+    }
+    {
+      const { packets } = decodePackets(Uint8Array.from([0x20, 0x02, 0x00, 0x00]));
+      ok('CONNACK accepted', packets[0]?.type === 'connack'
+        && packets[0].returnCode === 0 && packets[0].sessionPresent === false, JSON.stringify(packets[0]));
+    }
+    {
+      const { packets } = decodePackets(Uint8Array.from([0x20, 0x02, 0x01, 0x05]));
+      ok('CONNACK refused (rc=5, sessionPresent)', packets[0]?.type === 'connack'
+        && packets[0].returnCode === 5 && packets[0].sessionPresent === true, JSON.stringify(packets[0]));
+    }
+    {
+      const { packets } = decodePackets(Uint8Array.from([0x90, 0x03, 0x00, 0x01, 0x00]));
+      ok('SUBACK packetId + return codes', packets[0]?.type === 'suback'
+        && packets[0].packetId === 1 && packets[0].returnCodes.length === 1 && packets[0].returnCodes[0] === 0,
+        JSON.stringify(packets[0]));
+    }
+    {
+      const { packets } = decodePackets(encodePingReq().length ? Uint8Array.from([0xd0, 0x00]) : new Uint8Array());
+      ok('PINGRESP decode', packets[0]?.type === 'pingresp', JSON.stringify(packets[0]));
+    }
+    {
+      // PUBACK (type 4) is unhandled → gracefully skipped as 'other'.
+      const { packets } = decodePackets(Uint8Array.from([0x40, 0x02, 0x00, 0x01]));
+      ok('unknown packet → other (graceful skip)', packets[0]?.type === 'other' && packets[0].packetType === 4,
+        JSON.stringify(packets[0]));
+    }
+
+    // ── (4) incremental decode across chunk boundaries ──────────────────────
+    {
+      const full = encodePublish('sensor/x', 'hello');
+      const a = full.slice(0, 4), b = full.slice(4);
+      const r1 = decodePackets(a);
+      const r2 = decodePackets(concat(r1.rest, b));
+      ok('split mid-body: first chunk yields no packet', r1.packets.length === 0 && r1.rest.length === 4, `rest=${r1.rest.length}`);
+      ok('split mid-body: reassembled publish', r2.packets[0]?.type === 'publish'
+        && r2.packets[0].topic === 'sensor/x' && td.decode(r2.packets[0].payload) === 'hello',
+        JSON.stringify(r2.packets[0] && { t: r2.packets[0].topic }));
+    }
+    {
+      // Split INSIDE the multi-byte remaining-length varint (payload 200 → 2-byte remLen).
+      const full = encodePublish('x', new Uint8Array(200).fill(0x42));
+      const a = full.slice(0, 2), b = full.slice(2);   // firstByte + first varint byte only
+      const r1 = decodePackets(a);
+      const r2 = decodePackets(concat(r1.rest, b));
+      ok('split mid-varint: first chunk no packet', r1.packets.length === 0, `n=${r1.packets.length}`);
+      ok('split mid-varint: reassembled', r2.packets[0]?.type === 'publish' && r2.packets[0].payload.length === 200,
+        `len=${r2.packets[0]?.payload?.length}`);
+    }
+    {
+      // Two whole packets + a trailing partial in one buffer.
+      const p1 = encodePublish('t1', 'a'), p2 = encodePublish('t2', 'b');
+      const p3 = encodePublish('t3', 'ccc');
+      const buf = concat(p1, p2, p3.slice(0, 3));
+      const r = decodePackets(buf);
+      ok('two complete + one partial', r.packets.length === 2
+        && r.packets[0].topic === 't1' && r.packets[1].topic === 't2' && r.rest.length === 3,
+        `n=${r.packets.length} rest=${r.rest.length}`);
+    }
+
+    // ── (5) malformed frames tolerated (never throw) ────────────────────────
+    {
+      // 5 continuation bytes in the remaining-length varint = protocol violation.
+      const bad = Uint8Array.from([0x30, 0x80, 0x80, 0x80, 0x80, 0x80]);
+      let threw = false, res;
+      try { res = decodePackets(bad); } catch { threw = true; }
+      ok('over-long remaining length → error packet, no throw',
+        !threw && res.packets.length === 1 && res.packets[0].type === 'error', JSON.stringify(res?.packets[0]));
+    }
+    {
+      // Publish claiming a topic longer than its body → per-packet error, then the
+      // stream continues (a following pingresp still decodes).
+      const badPub = Uint8Array.from([0x30, 0x02, 0x00, 0x10]);   // remLen 2, topicLen 16 > body
+      const ping = Uint8Array.from([0xd0, 0x00]);
+      const r = decodePackets(concat(badPub, ping));
+      ok('bad-body publish → error THEN graceful continue',
+        r.packets.length === 2 && r.packets[0].type === 'error' && r.packets[1].type === 'pingresp',
+        JSON.stringify(r.packets.map(p => p.type)));
+    }
+
+    // ── (6) matchTopicFilter matrix (§4.7) ──────────────────────────────────
+    const mm = (name, filter, topic, want) => ok(`match ${name}`, matchTopicFilter(filter, topic) === want,
+      `${filter} vs ${topic} → ${matchTopicFilter(filter, topic)} want ${want}`);
+    mm('exact', 'frigate/events', 'frigate/events', true);
+    mm('# multi', 'frigate/#', 'frigate/events/x', true);
+    mm('# matches parent', 'frigate/#', 'frigate', true);
+    mm('+ single', 'frigate/+/snapshot', 'frigate/front/snapshot', true);
+    mm('+ rejects 2 levels', 'frigate/+/snapshot', 'frigate/front/rear/snapshot', false);
+    mm('# root all', '#', 'a/b/c', true);
+    mm('# root excludes $', '#', '$SYS/broker', false);
+    mm('+ root excludes $', '+/b', '$SYS/b', false);
+    mm('explicit $ ok', '$SYS/#', '$SYS/broker/uptime', true);
+    mm('+ one level', '+', 'a', true);
+    mm('+ not two', '+', 'a/b', false);
+    mm('mid +', 'a/+/c', 'a/b/c', true);
+    mm('mid + mismatch tail', 'a/+/c', 'a/b/d', false);
+    mm('trailing # parent', 'sport/tennis/#', 'sport/tennis', true);
+    mm('trailing # child', 'sport/tennis/#', 'sport/tennis/player1', true);
+    mm('shorter filter no #', 'a/b', 'a/b/c', false);
+    mm('misplaced # invalid', 'a/#/b', 'a/x/b', false);
+    mm('valetudo map', 'valetudo/+/MapData/map-data', 'valetudo/robot1/MapData/map-data', true);
+
+    // ── render ───────────────────────────────────────────────────────────────
+    const pass = tests.filter(t => t.ok).length;
+    const total = tests.length;
+    document.title = `MQTTCODEC ${pass === total ? 'PASS' : 'FAIL'} ${pass}/${total}`;
+    const sum = document.getElementById('summary');
+    sum.textContent = `MQTTCODEC ${pass === total ? 'PASS' : 'FAIL'} ${pass}/${total}`;
+    sum.className = pass === total ? 'okbg' : 'badbg';
+    const grid = document.getElementById('grid');
+    const card = document.createElement('div'); card.className = 'card';
+    card.innerHTML = '<h2>cases</h2>';
+    for (const t of tests) {
+      const r = document.createElement('div'); r.className = 'row';
+      r.innerHTML = `<span class="${t.ok ? 'pass' : 'fail'}">${t.ok ? '✓' : '✗'} ${t.name}</span>`;
+      if (!t.ok) r.innerHTML += `<code>${t.detail}</code>`;
+      card.appendChild(r);
+    }
+    grid.appendChild(card);
+  </script>
+</body>
+</html>

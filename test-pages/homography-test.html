@@ -1,0 +1,168 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>HOMOGRAPHY …</title>
+  <style>
+    body { margin:0; background:#0d1116; color:#cfd8dc; font:13px/1.4 sans-serif; padding:14px; }
+    h1 { font-size:15px; margin:0 0 10px; }
+    .grid { display:flex; flex-wrap:wrap; gap:10px; }
+    .card { background:#141b22; border:1px solid #26323d; border-radius:6px; padding:8px 10px; width:340px; }
+    .row { display:flex; justify-content:space-between; font-size:11px; gap:8px; }
+    .pass { color:#69f0ae; } .fail { color:#ff5252; }
+    #summary { font-size:14px; font-weight:bold; margin:10px 0; padding:8px 10px; border-radius:5px; }
+    .okbg { background:#12331f; color:#69f0ae; } .badbg { background:#3a1414; color:#ff8a80; }
+    code { color:#ffd54f; }
+  </style>
+</head>
+<body>
+  <h1>Homography — DLT solve · projection · residuals · degeneracy</h1>
+  <div id="summary">Running…</div>
+  <div class="grid" id="grid"></div>
+
+  <!-- homography.ts is a pure, dependency-free module (like geo.ts). Transpile
+       it next to this html before serving:
+         npx esbuild src/homography.ts --format=esm \
+           --outfile=<harness>/homography.mod.js
+       (no --bundle; matches geo-test.html's flow; no live HA). -->
+  <script type="module">
+    import { solveHomography, applyHomography, homographyResidualsMm } from './homography.mod.js';
+
+    const tests = [];
+    const ok = (name, cond, detail) => tests.push({ name, ok: !!cond, detail });
+    const near = (name, got, want, tol, extra = '') =>
+      tests.push({ name, ok: Math.abs(got - want) <= tol, detail: `got ${got?.toFixed?.(4) ?? got} ≈ ${want} ±${tol} ${extra}` });
+
+    function mulberry32(a) {
+      return function () {
+        a |= 0; a = (a + 0x6D2B79F5) | 0;
+        let t = Math.imul(a ^ (a >>> 15), 1 | a);
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      };
+    }
+    function gauss(rng) {
+      let u = 0, v = 0;
+      while (u === 0) u = rng();
+      while (v === 0) v = rng();
+      return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+    }
+
+    // A known ground-plane homography (image pixel → floor mm), h33 = 1.
+    const H = [1.2, 0.10, 50, 0.05, 1.1, -30, 0.0003, -0.0002, 1];
+    const project = (h, u, v) => {
+      const w = h[6] * u + h[7] * v + h[8];
+      return { x: (h[0] * u + h[1] * v + h[2]) / w, y: (h[3] * u + h[4] * v + h[5]) / w };
+    };
+    // Non-collinear image points at a ~1280×720 detect resolution.
+    const imgPts = [
+      { u: 100, v: 100 }, { u: 1180, v: 120 }, { u: 1150, v: 600 }, { u: 120, v: 650 },
+      { u: 640, v: 360 }, { u: 300, v: 500 },
+    ];
+    const pairsFrom = (h, list) => list.map(pt => { const q = project(h, pt.u, pt.v); return { u: pt.u, v: pt.v, x: q.x, y: q.y }; });
+
+    // ── 1. Exact 4-point round-trip ──────────────────────────────────────────
+    (() => {
+      const pairs = pairsFrom(H, imgPts.slice(0, 4));
+      const h = solveHomography(pairs);
+      ok('4pt: solves (non-null)', !!h, h ? 'ok' : 'null');
+      if (h) {
+        // Compare projections at the calibration points (exact).
+        const res = homographyResidualsMm(h, pairs);
+        const max = Math.max(...res);
+        ok('4pt: residuals ≈ 0', max < 1e-6, `max ${max.toExponential(2)} mm`);
+        // Compare against a FRESH image point projected by both matrices.
+        const a = project(H, 800, 300), b = applyHomography(h, 800, 300);
+        ok('4pt: reproduces H off-node', Math.hypot(a.x - b.x, a.y - b.y) < 1e-6,
+           `Δ ${Math.hypot(a.x - b.x, a.y - b.y).toExponential(2)} mm`);
+        // Matrix entries match (h33 fixed to 1 removes the scale freedom).
+        let mErr = 0; for (let i = 0; i < 9; i++) mErr = Math.max(mErr, Math.abs(h[i] - H[i]));
+        ok('4pt: matrix entries match', mErr < 1e-7, `max |Δh| ${mErr.toExponential(2)}`);
+      }
+    })();
+
+    // ── 2. Over-determined 6-point with noise → small residuals ──────────────
+    (() => {
+      const rng = mulberry32(4242);
+      const clean = pairsFrom(H, imgPts);
+      const noisy = clean.map(p => ({ u: p.u, v: p.v, x: p.x + gauss(rng) * 30, y: p.y + gauss(rng) * 30 }));
+      const h = solveHomography(noisy);
+      ok('6pt noisy: solves', !!h, h ? 'ok' : 'null');
+      if (h) {
+        const res = homographyResidualsMm(h, noisy);
+        const max = Math.max(...res);
+        ok('6pt noisy: residuals small (<120 mm)', max < 120, `max ${max.toFixed(1)} mm`);
+        // The recovered transform is close to truth on a fresh point.
+        const a = project(H, 700, 450), b = applyHomography(h, 700, 450);
+        ok('6pt noisy: close to truth (<80 mm)', Math.hypot(a.x - b.x, a.y - b.y) < 80,
+           `Δ ${Math.hypot(a.x - b.x, a.y - b.y).toFixed(1)} mm`);
+      }
+    })();
+
+    // ── 3. Degenerate: collinear image points → null ─────────────────────────
+    (() => {
+      const collinear = [
+        { u: 0, v: 0 }, { u: 100, v: 100 }, { u: 200, v: 200 }, { u: 300, v: 300 },
+      ].map(pt => ({ u: pt.u, v: pt.v, x: pt.u * 2, y: pt.v * 2 }));
+      ok('collinear 4pt → null', solveHomography(collinear) === null, `${solveHomography(collinear)}`);
+      // Fewer than 4 points → null.
+      ok('3pt → null', solveHomography(pairsFrom(H, imgPts.slice(0, 3))) === null, 'null');
+      ok('empty → null', solveHomography([]) === null, 'null');
+    })();
+
+    // ── 4. apply: denominator ~0 → null ──────────────────────────────────────
+    (() => {
+      // Pick h so that h31·u + h32·v + 1 = 0 at a chosen (u,v).
+      // With h31 = 0.001, h32 = 0, denom = 0 at u = -1000.
+      const h = [1, 0, 0, 0, 1, 0, 0.001, 0, 1];
+      ok('apply denom≈0 → null', applyHomography(h, -1000, 0) === null, `${applyHomography(h, -1000, 0)}`);
+      ok('apply denom ok → point', !!applyHomography(h, 0, 0), 'ok');
+    })();
+
+    // ── 5. Detect-scale invariance ───────────────────────────────────────────
+    // A homography absorbs any uniform scaling of the image coordinates. If the
+    // detect resolution is (say) halved, calibrating with the scaled pixels and
+    // querying at the same scale must reproduce the SAME floor position.
+    (() => {
+      const k = 0.5;
+      const clean = pairsFrom(H, imgPts.slice(0, 4));
+      const scaled = clean.map(p => ({ u: p.u * k, v: p.v * k, x: p.x, y: p.y }));
+      const h = solveHomography(scaled);
+      ok('scaled: solves', !!h, h ? 'ok' : 'null');
+      if (h) {
+        // Query a fresh image point at BOTH scales; floor result must agree.
+        const truth = project(H, 900, 400);
+        const q = applyHomography(h, 900 * k, 400 * k);
+        ok('scaled: reproduces floor pos', Math.hypot(q.x - truth.x, q.y - truth.y) < 1e-6,
+           `Δ ${Math.hypot(q.x - truth.x, q.y - truth.y).toExponential(2)} mm`);
+      }
+    })();
+
+    // ── 6. Non-finite input rejected ─────────────────────────────────────────
+    (() => {
+      const bad = pairsFrom(H, imgPts.slice(0, 4)).map((p, i) => i === 0 ? { ...p, u: NaN } : p);
+      ok('NaN input → null', solveHomography(bad) === null, 'null');
+    })();
+
+    // ── run + render ─────────────────────────────────────────────────────────
+    const grid = document.getElementById('grid');
+    let pass = 0; const fails = [];
+    for (const t of tests) {
+      if (t.ok) pass++; else fails.push(t.name);
+      const card = document.createElement('div');
+      card.className = 'card';
+      card.innerHTML = `<div class="row">
+        <span>${t.ok ? '<span class=pass>PASS</span>' : '<span class=fail>FAIL</span>'} ${t.name}</span>
+        <span>${t.detail ?? ''}</span></div>`;
+      grid.appendChild(card);
+    }
+    const total = tests.length;
+    const allPass = pass === total;
+    const title = allPass ? `HOMOGRAPHY PASS ${pass}/${total}` : `HOMOGRAPHY FAIL ${pass}/${total} [${fails.join(',')}]`;
+    document.title = title;
+    const sum = document.getElementById('summary');
+    sum.textContent = title;
+    sum.className = allPass ? 'okbg' : 'badbg';
+  </script>
+</body>
+</html>

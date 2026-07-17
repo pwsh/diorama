@@ -101,6 +101,42 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Phase 5 — direct-MQTT bridge: Frigate ground truth + Valetudo maps**
+  (`docs/DESIGN-mqtt-bridge.md`, 2026-07-17; user-continued after the
+  hard pause; 3 Opus batches M-A → M-B ∥ M-C). **Bridge core**:
+  `src/mqtt-ws.ts` — hand-rolled pure MQTT 3.1.1 codec (QoS 0, golden-
+  byte tested incl. multi-byte remaining-length boundaries + chunk-split
+  incremental decode) + browser client; `src/mqtt-bridge.ts` transport
+  abstraction — Path A rides HA's `mqtt/subscribe` WS command +
+  `mqtt.publish` service in BOTH HaApi clients (admin gate surfaces as
+  status 'unauthorized' with a hint), Path B = direct
+  MQTT-over-WebSocket (lazy chunk, backoff 2→30 s, resubscribe; creds in
+  localStorage `diorama:mqtt:*` ONLY — never the synced store);
+  `Store.mqttBridge` config + Settings ▸ Integrations block with live
+  status pill + Test button; `Planner.mqttSubscribe` queues until up —
+  MQTTCODEC 45/45, MQTTBRIDGE 18/18. **Frigate** (`src/homography.ts`
+  pure DLT — exact 4-pt Gaussian, N>4 normal equations, degenerate→null
+  — HOMOGRAPHY 15/15): `CameraFixture.camCalib` snapshot-click ↔
+  plan-click calibration UI (detect-resolution guard + residual
+  readout), `frigateName`/`color`; `frigate/events` consumption —
+  slot-keyed `cam_<cam>_<label>_<slot>` targets (≤3/camera/label,
+  nearest-successor handoff, end/8 s release), bbox bottom-center
+  projected to floor mm, `cam_` lerp slots + GOAL-mode rigs
+  (person→humanoid, dog/cat→quad, car→2D dot only), camera-tinted dots
+  + 📷 badge, and cam targets JOIN `_fuseIdentities` (outdoor→indoor
+  identity continuity) — FRIGATE 30/30. **Valetudo**
+  (`src/valetudo-map.ts`): MapData parse (JSON-first then
+  DecompressionStream deflate/gzip/deflate-raw; compressedPixels
+  [xStart,y,count] runs per Hypfer MapLayer.js), segment rasters
+  transformed through the robot's EXISTING dock calibration
+  (`vacMapAffine` proven byte-identical to `vacuumRawToWorld`),
+  per-segment tinted patches + name labels 2D/3D under the NEW
+  `vacuumMap` layer (default OFF), cleaning glow (commanded-segment
+  history, else all-segment), tap-to-clean →
+  `MapSegmentationCapability/clean/set` `{segment_ids,[…]}` with
+  confirm; `RobotFixture.valetudoId` — VALETUDO 32/32. Regressions:
+  fusion 11/11, config 51/51, offline 27/27.
+
 - **Phase 4 of the staged plan — avatar rig gaps** (2026-07-17; 2
   parallel Opus agents; HARD GATE held: all 602 content-test builds
   byte-compatible, defaults unchanged). **Static schema** (avatars.ts +

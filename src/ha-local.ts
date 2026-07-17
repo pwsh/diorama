@@ -67,6 +67,10 @@ export class LocalApi implements HaApi {
     return false;
   }
 
+  // ── MQTT bridge (Phase 5) — inert offline (no broker, no relay) ──
+  async subscribeMqtt(): Promise<() => void> { return () => {}; }
+  async publishMqtt(): Promise<void> { /* no-op */ }
+
   // ── user_data over localStorage ───────────────────────────────────────────
   // null on absence (matching HassClient). A tombstone write (Batch B's
   // deleteConfig sets a body to `{}`) is stored verbatim and reads back as `{}`

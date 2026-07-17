@@ -229,10 +229,14 @@ Work proceeds in order; each stage ships (commit + push both + deploy).
   deterministic pattern generator, sessile mode, animate channels
   sway/flap/orbit/spin, hop/knuckle gaits, ear swivel). Still parked:
   fabric prints/decals/text, pose-aware/two-handed props, costume swaps.
-- **HARD PAUSE — manual continuation required before Phase 5.**
-- **Phase 5** (NOT STARTED without explicit user go-ahead): Frigate raw
-  boxes + Valetudo room maps — direct-MQTT bridge + per-camera homography
-  (`research/frigate-mqtt-bridge.md`).
+- ✅ **Phase 5** — SHIPPED 2026-07-17 (user-continued;
+  `docs/DESIGN-mqtt-bridge.md`): direct-MQTT bridge (HA-relay
+  `mqtt/subscribe` path + hand-rolled MQTT-3.1.1-over-WebSocket direct
+  path, secrets in localStorage only), Frigate ground-truth camera
+  targets (pure DLT homography + snapshot-click calibration + slot-keyed
+  GOAL-mode targets + identity fusion), Valetudo room-map overlay
+  (deflate parse, dock-calibration transform, vacuumMap layer,
+  cleaning glow, tap-to-clean publish).
 
 ## Backlog — captured 2026-07-15 (placeholders, NOT yet scoped)
 

@@ -12,6 +12,7 @@ import {
   hitBleProxy, hitAlarmPanel, hitThermostat, hitSafetySensor, hitRobot,
   hitCamera, hitCameraRotateHandle, hitProjector, hitValve, hitPlug, hitInfoCard, hitActionButton, hitPresenceZone, hitPresenceZoneVertex,
   hitGroundArea, hitGroundAreaVertex,
+  hitVacuumSegment,
   hitVoidArea, hitVoidAreaVertex,
   hitDoor, hitDoorEnd, hitDoorLock, hitWindow, hitWindowEnd, hitFloorEdge,
 } from './canvas-hit.js';
@@ -367,11 +368,25 @@ function openThermostatModal(canvas: HTMLCanvasElement, id: string): void {
   }));
 }
 
+// Tap-to-clean a Valetudo room segment. Low-priority (callers run it AFTER all
+// fixture hits). Only active when the vacuumMap overlay layer is on. Returns true
+// when the click landed on a segment (handled — even if the user declined the
+// confirm), so the caller stops. View mode is refused inside cleanVacuumSegment.
+function tryVacuumSegmentClean(p: Planner, mm: Vec2): boolean {
+  if (p.store.layers2d?.vacuumMap !== true) return false;
+  const hit = hitVacuumSegment(p, mm);
+  if (!hit) return false;
+  if (typeof confirm === 'function' && !confirm(`Clean ${hit.name}?`)) return true;
+  p.cleanVacuumSegment(hit.robot, hit.segId);
+  return true;
+}
+
 export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: View, e: MouseEvent): void {
   if (p.uiMode !== 'edit') return;  // kiosk/view: no drags, no selections
   if (p.editZone) return;
   if (p.placingRoomId) return;  // room-placement latch: let the click set the anchor
   if (p.placingLandmarkId) return;  // geo-landmark latch: let the click place the pin
+  if (p.placingCamCalibId) return;  // camera-calib latch: let the click record the floor point
   const mm = pxToMm(canvas, view, e);
   if (p.tool !== 'select') return;
 
@@ -1572,6 +1587,8 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
     }
     // Bins → toggle full/empty (session-only in kiosk; save() no-ops).
     if (fu2 && isBinKind(fu2.item.kind)) { p.toggleItem(fu2.item); return; }
+    // Valetudo room segment → tap-to-clean (lowest priority, after all fixtures).
+    if (tryVacuumSegmentClean(p, mm)) return;
     return;
   }
 
@@ -1609,6 +1626,31 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
     p.emitConfig();
     return;
   }
+
+  // Camera ground-calibration latch (Phase 5): the sidebar staged a pixel (u,v)
+  // by clicking the snapshot; this click records the matching floor (x,y) and
+  // pushes the {u,v,x,y} correspondence onto the camera's camCalib.points.
+  if (p.placingCamCalibId && p.pendingCamCalibUV) {
+    const cam = (f.cameras ?? []).find(c => c.id === p.placingCamCalibId);
+    if (cam) {
+      if (!cam.camCalib) cam.camCalib = { points: [] };
+      cam.camCalib.points.push({
+        u: p.pendingCamCalibUV.u, v: p.pendingCamCalibUV.v,
+        x: Math.round(mm.x), y: Math.round(mm.y),
+      });
+      p.save();
+      p.ensureFrigateSub();
+    }
+    p.placingCamCalibId = null; p.pendingCamCalibUV = null;
+    p.emitConfig();
+    return;
+  }
+
+  // Valetudo room segment → tap-to-clean (edit + select). Low priority: draggable
+  // fixtures start a drag on mousedown, so their click is swallowed by
+  // dragJustEnded and never reaches here — the segment tap only fires on a click
+  // that hit no draggable item. Only active when the vacuumMap overlay is on.
+  if (p.tool === 'select' && tryVacuumSegmentClean(p, mm)) return;
 
   if (p.editZone) {
     const sa = p.activeSensor(); if (!sa) return;

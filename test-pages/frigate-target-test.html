@@ -1,0 +1,221 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>FRIGATE …</title>
+<style>
+  html,body{margin:0;background:#0d1116;color:#cfd8dc;font:13px/1.5 sans-serif;padding:12px}
+  h1{font-size:15px;margin:0 0 8px}
+  #summary{font-size:14px;font-weight:bold;margin:8px 0;padding:8px 10px;border-radius:5px}
+  .okbg{background:#12331f;color:#69f0ae}.badbg{background:#3a1414;color:#ff8a80}
+  .row{display:flex;justify-content:space-between;gap:10px;padding:1px 0;border-bottom:1px solid #1c2530}
+  .pass{color:#69f0ae}.fail{color:#ff5252}.name{color:#90caf9}.extra{color:#ffd54f;font-size:11px}
+</style>
+<h1>Frigate ground-truth targets — projection · slot lifecycle · fusion pool</h1>
+<div id="summary">Running…</div>
+<div id="rows"></div>
+
+<!-- Drive the REAL Planner (bundled) with an in-page fake HaApi that also
+     implements subscribeMqtt/publishMqtt (the ha-relay bridge path). Build like
+     config-test/event-bubble (esbuild inlines the mqtt-bridge dynamic import):
+       H=<harness>
+       T=$(mktemp -d); cp -r src/* "$T"/; cp test-pages/fake-avatar-store.ts "$T"/avatar-store.ts
+       npx esbuild "$T"/planner.ts --bundle --format=esm --outfile="$H"/planner.mod.js
+     then serve the harness dir + this page. -->
+<script type="module">
+  const { Planner } = await import('./planner.mod.js?v=' + Date.now());
+
+  const results = [];
+  const ok = (name, cond, extra = '') => results.push({ name, pass: !!cond, extra: String(extra) });
+  const near = (name, got, want, tol) => ok(name, Math.abs(got - want) <= tol, `got ${got?.toFixed?.(1) ?? got} ≈ ${want} ±${tol}`);
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const clone = x => JSON.parse(JSON.stringify(x));
+  async function waitFor(cond, tries = 800) { for (let i = 0; i < tries; i++) { if (cond()) return true; await sleep(4); } return !!cond(); }
+
+  // Fake clock so the 8 s slot-retire is deterministic.
+  let NOW = 1_700_000_000_000;
+  Date.now = () => NOW;
+
+  // ── Fake HaApi with an MQTT relay surface ──────────────────────────────────
+  class FakeHa {
+    constructor(seed) {
+      this.map = new Map();
+      for (const [k, v] of Object.entries(seed || {})) this.map.set(k, clone(v));
+      this.states = {};
+      this._stateCbs = []; this._connCbs = [];
+      this.mqttSubs = [];   // { topic, cb }
+      this.published = [];
+    }
+    connect() { for (const cb of this._connCbs) cb('connected'); for (const cb of this._stateCbs) cb(this.states, undefined); }
+    onState(fn) { this._stateCbs.push(fn); }
+    onConn(fn) { this._connCbs.push(fn); }
+    callService() { return Promise.resolve(); }
+    async getHistory() { return {}; }
+    async getWeatherForecasts() { return null; }
+    async getDevices() { return []; }
+    async getEntityRegistry() { return []; }
+    async updateEntityRegistry() { return true; }
+    async getUserData(key) { return this.map.has(key) ? clone(this.map.get(key)) : null; }
+    async setUserData(key, value) { this.map.set(key, clone(value)); return true; }
+    async refreshStates() {}
+    async subscribeMqtt(topic, cb) { const e = { topic, cb }; this.mqttSubs.push(e); return () => { this.mqttSubs = this.mqttSubs.filter(x => x !== e); }; }
+    async publishMqtt(topic, payload, retain) { this.published.push({ topic, payload, retain }); }
+    // Deliver a payload to every relay callback whose topic matches (HA matches
+    // server-side; here the filter equals the topic — exact match is enough).
+    inject(topic, obj) {
+      const payload = JSON.stringify(obj);
+      for (const s of this.mqttSubs) if (s.topic === topic) s.cb({ topic, payload });
+    }
+  }
+
+  // Calibrated camera: 1280×720 detect frame → an 8000×6000 mm floor via a pure
+  // affine (corners map to floor corners). Box bottom-center (u,v) → (u·6.25, v·8.333).
+  const CALIB = {
+    detectW: 1280, detectH: 720,
+    points: [
+      { u: 0, v: 0, x: 0, y: 0 },
+      { u: 1280, v: 0, x: 8000, y: 0 },
+      { u: 1280, v: 720, x: 8000, y: 6000 },
+      { u: 0, v: 720, x: 0, y: 6000 },
+    ],
+  };
+  const SX = 8000 / 1280, SY = 6000 / 720;
+  const projU = u => u * SX, projV = v => v * SY;
+
+  function makeStore() {
+    return {
+      v: 2, currentFloorId: 'f1', activeSensorId: null,
+      coverage: true, imperial: false, showDetails: false, useRawTargets: false,
+      mqttBridge: { mode: 'ha-relay', frigateTopic: 'frigate' },
+      floors: [{
+        id: 'f1', name: 'Yard', w: 8000, d: 6000,
+        walls: [], furniture: [], lights: [], switches: [], sensors: [], motionSensors: [],
+        roamers: [], envSensors: [], doors: [], windows: [], bg: null, rooms: [], bleProxies: [],
+        alarmPanels: [], safetySensors: [], robots: [], presenceZones: [], groundAreas: [], voidAreas: [],
+        cameras: [{ id: 'cam1', x: 4000, y: 3000, entity_id: 'camera.yard', frigateName: 'yardcam', camCalib: CALIB }],
+      }],
+    };
+  }
+
+  async function makePlanner() {
+    localStorage.removeItem('diorama:store:v1');
+    localStorage.removeItem('diorama:configs');
+    const stub = new FakeHa({ diorama: makeStore() });
+    const p = new Planner();
+    p.connectWith(stub);
+    await waitFor(() => p.store?.floors?.[0]?.cameras?.[0]?.camCalib);
+    // Wait for the ha-relay bridge to import + subscribe frigate/events.
+    await waitFor(() => stub.mqttSubs.some(s => s.topic === 'frigate/events'));
+    return { p, stub };
+  }
+  const evt = (type, id, box, extra = {}) => ({ type, before: null, after: { id, camera: 'yardcam', label: 'person', box, false_positive: false, ...extra } });
+  const camT = (p, slot) => p.camTargets[`cam_cam1_person_${slot}`];
+
+  try {
+    // ── bridge came up + subscribed ──────────────────────────────────────────
+    {
+      const { p, stub } = await makePlanner();
+      ok('bridge subscribed frigate/events', stub.mqttSubs.some(s => s.topic === 'frigate/events'), '');
+      ok('mqtt status up', p.mqttStatus === 'up', p.mqttStatus);
+    }
+
+    // ── main lifecycle: spawn / update / second person / handoff / end / timeout
+    {
+      const { p, stub } = await makePlanner();
+
+      // spawn on `new` — slot 0, projected to floor mm.
+      stub.inject('frigate/events', evt('new', 'evA', [600, 300, 680, 500]));  // u=640 v=500
+      const a0 = camT(p, 0);
+      ok('spawn: slot 0 created', !!a0, a0 ? a0.key : 'none');
+      near('spawn: projected x', a0.x, projU(640), 2);
+      near('spawn: projected y', a0.y, projV(500), 2);
+      ok('spawn: eventId evA', a0.eventId === 'evA', a0.eventId);
+      ok('spawn: camPeople sees it', p.camPeople.some(t => t.key === a0.key), '');
+      ok('spawn: label person', a0.label === 'person', a0.label);
+
+      // update moves the SAME slot (event-id match).
+      stub.inject('frigate/events', evt('update', 'evA', [620, 320, 700, 520]));  // u=660 v=520
+      const a1 = camT(p, 0);
+      ok('update: still slot 0', !!a1 && a1.eventId === 'evA', a1?.eventId);
+      near('update: moved x', a1.x, projU(660), 2);
+      ok('update: no slot 1 yet', !camT(p, 1), 'ok');
+
+      // second person → slot 1 (far from person A).
+      stub.inject('frigate/events', { type: 'new', before: null, after: { id: 'evB', camera: 'yardcam', label: 'person', box: [100, 100, 180, 300], false_positive: false } });  // u=140 v=300
+      const b1 = camT(p, 1);
+      ok('second person: slot 1', !!b1 && b1.eventId === 'evB', b1?.eventId);
+      near('second: projected x', b1.x, projU(140), 2);
+      ok('second: two live tracks', p.camPeople.filter(t => t.label === 'person').length === 2, `${p.camPeople.length}`);
+
+      // both move → nearest-matching keeps identities (each in its own slot).
+      stub.inject('frigate/events', evt('update', 'evA', [630, 330, 710, 530]));  // near A
+      stub.inject('frigate/events', evt('update', 'evB', [110, 110, 190, 310]));  // near B
+      ok('both move: A still slot 0', camT(p, 0)?.eventId === 'evA', camT(p, 0)?.eventId);
+      ok('both move: B still slot 1', camT(p, 1)?.eventId === 'evB', camT(p, 1)?.eventId);
+
+      // end releases A's slot; B survives.
+      stub.inject('frigate/events', { type: 'end', before: { id: 'evA', camera: 'yardcam', label: 'person' }, after: { id: 'evA', camera: 'yardcam', label: 'person', end_time: 1 } });
+      ok('end: slot 0 released', !camT(p, 0), 'released');
+      ok('end: slot 1 (B) survives', !!camT(p, 1), 'alive');
+      ok('end: lerp slot dropped', !p.lerpBy['cam_cam1_person_0'], 'dropped');
+
+      // 8 s of silence → B retires via camPeople prune.
+      NOW += 8001;
+      const survivors = p.camPeople;
+      ok('timeout: B pruned by camPeople', !survivors.some(t => t.key === 'cam_cam1_person_1'), `${survivors.length}`);
+      ok('timeout: camTargets cleared', !camT(p, 1), 'cleared');
+    }
+
+    // ── successor matching across event-id churn (no free slot needed) ────────
+    {
+      const { p, stub } = await makePlanner();
+      stub.inject('frigate/events', evt('new', 'evX', [600, 300, 680, 500]));   // slot0, u=640 v=500
+      ok('successor: slot0 evX', camT(p, 0)?.eventId === 'evX', camT(p, 0)?.eventId);
+      // A NEW event id near the last position (<2500 mm) reuses the SAME slot
+      // instead of opening slot 1 (Frigate churns event ids for one object).
+      stub.inject('frigate/events', evt('new', 'evY', [610, 310, 690, 510]));   // u=650 v=510 → ~ (4062,4250)
+      ok('successor: slot0 → evY', camT(p, 0)?.eventId === 'evY', camT(p, 0)?.eventId);
+      ok('successor: no slot 1 opened', !camT(p, 1), 'ok');
+    }
+
+    // ── skips: false_positive, unmatched camera, non-allowlist label ──────────
+    {
+      const { p, stub } = await makePlanner();
+      stub.inject('frigate/events', evt('new', 'fp', [600, 300, 680, 500], { false_positive: true }));
+      ok('skip: false_positive ignored', !camT(p, 0), 'ignored');
+      stub.inject('frigate/events', { type: 'new', before: null, after: { id: 'oc', camera: 'othercam', label: 'person', box: [600, 300, 680, 500], false_positive: false } });
+      ok('skip: unmatched camera ignored', p.camPeople.length === 0, `${p.camPeople.length}`);
+      stub.inject('frigate/events', { type: 'new', before: null, after: { id: 'bd', camera: 'yardcam', label: 'bird', box: [600, 300, 680, 500], false_positive: false } });
+      ok('skip: non-allowlist label ignored', p.camPeople.length === 0, `${p.camPeople.length}`);
+      // malformed JSON never throws.
+      let threw = false;
+      try { for (const s of stub.mqttSubs) if (s.topic === 'frigate/events') s.cb({ topic: 'frigate/events', payload: '{not json' }); } catch { threw = true; }
+      ok('skip: malformed payload tolerated', !threw && p.camPeople.length === 0, threw ? 'threw' : 'ok');
+    }
+
+    // ── car label → cam target exists (2D dot) but a distinct label ───────────
+    {
+      const { p, stub } = await makePlanner();
+      stub.inject('frigate/events', { type: 'new', before: null, after: { id: 'carA', camera: 'yardcam', label: 'car', box: [500, 200, 900, 600], false_positive: false } });
+      const car = p.camTargets['cam_cam1_car_0'];
+      ok('car: cam target created', !!car && car.label === 'car', car ? car.label : 'none');
+      ok('car: in camPeople', p.camPeople.some(t => t.label === 'car'), '');
+    }
+  } catch (e) {
+    ok('EXCEPTION', false, (e && e.stack) || String(e));
+  }
+
+  // ── render ─────────────────────────────────────────────────────────────────
+  const rows = document.getElementById('rows');
+  let pass = 0; const fails = [];
+  for (const r of results) {
+    if (r.pass) pass++; else fails.push(r.name);
+    const d = document.createElement('div');
+    d.className = 'row';
+    d.innerHTML = `<span><span class="${r.pass ? 'pass' : 'fail'}">${r.pass ? 'PASS' : 'FAIL'}</span> <span class="name">${r.name}</span></span><span class="extra">${r.extra}</span>`;
+    rows.appendChild(d);
+  }
+  const total = results.length, allPass = pass === total;
+  const title = allPass ? `FRIGATE PASS ${pass}/${total}` : `FRIGATE FAIL ${pass}/${total} [${fails.join(',')}]`;
+  document.title = title;
+  const sum = document.getElementById('summary');
+  sum.textContent = title; sum.className = allPass ? 'okbg' : 'badbg';
+</script>

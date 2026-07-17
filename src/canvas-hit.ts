@@ -6,9 +6,33 @@ import type { Planner } from './planner.js';
 import type { Vec2, Wall, Sensor, Furniture, BgImage, MotionSensor, EnvSensor, BleProxy, AlarmPanel, ThermostatFixture, SafetySensor, RobotFixture, CameraFixture, ProjectorFixture, ValveFixture, PlugFixture, PresenceZone, InfoCard, ActionButton, Door, Window as WindowType, Floor } from './types.js';
 import type { FloorEdge } from './geometry.js';
 import { envChipHalfPx, infoCardHalfPx, actionButtonHalfPx, type View } from './canvas-render.js';
+import { vacMapAffine, vacWorldToPixel, vacSegHasPixel } from './valetudo-map.js';
 
 export function hitPx(view: View): number {
   return Math.max(60, 12 / Math.max(view.scale, 1e-9));
+}
+
+// Tap-to-clean hit: which Valetudo room segment (if any) sits under the world
+// point. Low-priority — callers run it AFTER every fixture hit (like ground
+// areas). Only vacuum robots with a valetudoId + a parsed map are considered.
+export function hitVacuumSegment(p: Planner, mm: Vec2):
+    { robot: RobotFixture; segId: string; name: string } | null {
+  const f = p.floor();
+  for (const ro of f.robots ?? []) {
+    if (ro.kind !== 'vacuum' || !ro.valetudoId) continue;
+    const map = p.vacuumMaps[ro.id];
+    if (!map) continue;
+    const aff = vacMapAffine(map.pixelSize, ro);
+    const px = vacWorldToPixel(mm.x, mm.y, aff);
+    if (!px) continue;
+    const ix = Math.floor(px.x), iy = Math.floor(px.y);
+    for (const seg of map.segments) {
+      if (vacSegHasPixel(seg, ix, iy)) {
+        return { robot: ro, segId: seg.id, name: seg.name?.trim() || `Room ${seg.id}` };
+      }
+    }
+  }
+  return null;
 }
 
 // Nearest floor boundary edge within ~10 px (screen) of the cursor, or null.

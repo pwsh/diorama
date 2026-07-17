@@ -1160,6 +1160,19 @@ export function cameraRange(c: { range?: number }): number {
 export function cameraHeight(c: { height?: number }): number {
   return c.height ?? CAMERA_DEFAULTS.height;
 }
+// Camera tint for Frigate-derived target dots (Phase 5). Explicit override wins;
+// otherwise a stable pick from the shared sensor palette by fixture index, so
+// targets from different cameras are visually distinguishable without config.
+export function cameraColor(c: { color?: string }, idx: number): string {
+  return c.color ?? SENSOR_PALETTE[idx % SENSOR_PALETTE.length];
+}
+// Slugify a camera label into a default Frigate camera name (lowercase, spaces/
+// punctuation → underscores) — the fallback when CameraFixture.frigateName is
+// unset. Matches Frigate's own camera-name conventions loosely; users override
+// the exact string in the sidebar when it doesn't match.
+export function slugifyFrigateName(label: string): string {
+  return (label || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+}
 // Wedge tint by camera entity state: recording = red hint; streaming/idle = the
 // neutral camera cyan. Shared 2D + 3D.
 export function cameraStateColor(state: string | null | undefined): string {

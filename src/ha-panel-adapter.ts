@@ -22,6 +22,10 @@ interface HassLike {
       cb: (ev: { data: { entity_id: string; new_state: HassState | null } }) => void,
       eventType: string,
     ): Promise<() => void>;
+    // Generic subscription (home-assistant-js-websocket) — used for mqtt/subscribe.
+    subscribeMessage<T = unknown>(
+      cb: (ev: T) => void, msg: Record<string, unknown>,
+    ): Promise<() => void>;
   };
 }
 
@@ -135,6 +139,27 @@ export class HassPanelAdapter implements HaApi {
       });
       return true;
     } catch { return false; }
+  }
+
+  // ── MQTT bridge (Phase 5, Path A) ──
+  // Deliberately NOT try/catch-swallowed: a rejection (e.g. the admin gate's
+  // Unauthorized) must propagate so the bridge can surface status 'unauthorized'.
+  async subscribeMqtt(
+    topic: string, cb: (m: { topic: string; payload: string }) => void,
+  ): Promise<() => void> {
+    if (!this._conn) throw new Error('not connected');
+    return this._conn.subscribeMessage<{ topic?: unknown; payload?: unknown }>(ev => {
+      try { cb({ topic: String(ev?.topic ?? ''), payload: ev?.payload == null ? '' : String(ev.payload) }); }
+      catch { /* consumer threw */ }
+    }, { type: 'mqtt/subscribe', topic });
+  }
+
+  async publishMqtt(topic: string, payload: string, retain = false): Promise<void> {
+    if (!this._conn) return;
+    await this._conn.sendMessagePromise({
+      type: 'call_service', domain: 'mqtt', service: 'publish',
+      service_data: { topic, payload, qos: 0, retain },
+    });
   }
 
   async getUserData<T = unknown>(key: string): Promise<T | null> {

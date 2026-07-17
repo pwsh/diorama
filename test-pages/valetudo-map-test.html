@@ -1,0 +1,151 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>valetudo</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<!-- Bundle the pure parse module + geometry as standalone transpiles (like
+     rooms-test / covers-test). Generate them next to this html:
+       npx esbuild src/valetudo-map.ts --bundle --format=esm \
+         --outfile=<harness>/valetudo-map.mod.js
+       npx esbuild src/geometry.ts --bundle --format=esm \
+         --outfile=<harness>/geometry.mod.js
+     The renderer assertions import the built ./assets/three-renderer.js. -->
+<script type="module">
+ try {
+  const vac = await import('./valetudo-map.mod.js?v=' + Date.now());
+  const geo = await import('./geometry.mod.js?v=' + Date.now());
+  const mod = await import('./assets/three-renderer.js?v=' + Date.now());
+  const {
+    parseValetudoMap, decodeMapDataPayload, vacMapAffine, vacPixelToWorld,
+    vacWorldToPixel, vacSegHasPixel, cleanSegmentPayload,
+  } = vac;
+  const { vacuumRawToWorld } = geo;
+
+  const results = [];
+  const ok = (name, cond, detail = '') => results.push(`${cond ? 'ok' : 'FAIL'}:${name}${detail ? '(' + detail + ')' : ''}`);
+  const near = (a, b, t = 1e-6) => Math.abs(a - b) <= t;
+
+  // Uncompressed fixture: 2 segments via compressedPixels [xStart,y,count] runs.
+  //  Kitchen (16): (2..4,3) + (2..4,4)  → bbox x2..4 y3..4, centroid (3.5, 4)
+  //  Office  (17): (10..11,10) + (10..11,11) → bbox 10..11 x 10..11, centroid (11,11)
+  const fixture = {
+    pixelSize: 5,
+    size: { x: 100, y: 100 },
+    metaData: { nonce: 'abc123', version: 2 },
+    layers: [
+      { type: 'floor', pixels: [0, 0, 1, 0] },
+      { type: 'segment', metaData: { segmentId: 16, name: 'Kitchen' }, compressedPixels: [2, 3, 3, 2, 4, 3] },
+      { type: 'segment', metaData: { segmentId: 17, name: 'Office' },  compressedPixels: [10, 10, 2, 10, 11, 2] },
+    ],
+  };
+
+  // === 1. Pure parse: counts / names / bbox ===============================
+  const map = parseValetudoMap(fixture);
+  ok('parse_nonnull', !!map);
+  ok('pixelSize', map.pixelSize === 5);
+  ok('nonce', map.nonce === 'abc123');
+  ok('seg_count', map.segments.length === 2, String(map.segments.length));
+  const s16 = map.segments.find(s => s.id === '16');
+  const s17 = map.segments.find(s => s.id === '17');
+  ok('seg16_name', s16 && s16.name === 'Kitchen');
+  ok('seg17_name', s17 && s17.name === 'Office');
+  ok('seg16_bbox', s16 && s16.bbox.minX === 2 && s16.bbox.maxX === 4 && s16.bbox.minY === 3 && s16.bbox.maxY === 4,
+     s16 ? JSON.stringify(s16.bbox) : '-');
+  ok('seg16_count', s16 && s16.pixelCount === 6, s16 && String(s16.pixelCount));
+  ok('seg16_centroid', s16 && near(s16.centroidPx.x, 3.5) && near(s16.centroidPx.y, 4),
+     s16 ? `${s16.centroidPx.x},${s16.centroidPx.y}` : '-');
+  ok('seg17_centroid', s17 && near(s17.centroidPx.x, 11) && near(s17.centroidPx.y, 11),
+     s17 ? `${s17.centroidPx.x},${s17.centroidPx.y}` : '-');
+
+  // === 2. Raster pixels set where the runs say ============================
+  ok('raster_hit_33',  vacSegHasPixel(s16, 3, 3) === true);
+  ok('raster_hit_24',  vacSegHasPixel(s16, 2, 4) === true);
+  ok('raster_miss_53', vacSegHasPixel(s16, 5, 3) === false);   // past the run end
+  ok('raster_miss_35', vacSegHasPixel(s16, 3, 5) === false);   // wrong row
+  ok('raster_s17_hit', vacSegHasPixel(s17, 11, 10) === true);
+  ok('raster_s17_miss', vacSegHasPixel(s17, 12, 10) === false);
+
+  // === 3. Transform through a KNOWN robot calibration ====================
+  // cal: 10 mm/unit, offset (1000,2000), no rot/flip. Kitchen centroid (3.5,4):
+  //   raw = (3.5*5, 4*5) = (17.5, 20) → *10 = (175,200) → +offset = (1175,2200).
+  const cal = { posScale: 10, posOffsetX: 1000, posOffsetY: 2000, posRotDeg: 0, posFlipY: false };
+  const aff = vacMapAffine(map.pixelSize, cal);
+  const c16 = vacPixelToWorld(s16.centroidPx.x, s16.centroidPx.y, aff);
+  ok('centroid_world', near(c16.x, 1175) && near(c16.y, 2200), `${c16.x},${c16.y}`);
+  // Affine must equal vacuumRawToWorld(px*pixelSize) exactly (consistency).
+  const viaVRW = vacuumRawToWorld({ x: s16.centroidPx.x * map.pixelSize, y: s16.centroidPx.y * map.pixelSize }, cal);
+  ok('affine_matches_vrw', near(c16.x, viaVRW.x) && near(c16.y, viaVRW.y));
+  // Round-trip: world → pixel inverse recovers the centroid.
+  const back = vacWorldToPixel(c16.x, c16.y, aff);
+  ok('inverse_roundtrip', near(back.x, s16.centroidPx.x) && near(back.y, s16.centroidPx.y));
+  // A rotated + flipped calibration stays consistent with vacuumRawToWorld.
+  const cal2 = { posScale: 8, posOffsetX: 500, posOffsetY: -300, posRotDeg: 90, posFlipY: true };
+  const aff2 = vacMapAffine(map.pixelSize, cal2);
+  const w2a = vacPixelToWorld(11, 11, aff2);
+  const w2b = vacuumRawToWorld({ x: 11 * map.pixelSize, y: 11 * map.pixelSize }, cal2);
+  ok('affine_matches_vrw_rotflip', near(w2a.x, w2b.x) && near(w2a.y, w2b.y), `${w2a.x},${w2a.y}`);
+
+  // === 4. Async decode of the UNCOMPRESSED payload string =================
+  const decoded = await decodeMapDataPayload(JSON.stringify(fixture));
+  ok('decode_plainjson', decoded && decoded.segments.length === 2);
+  ok('decode_garbage', (await decodeMapDataPayload('not json at all')) === null);
+
+  // === 5. Publish payload shape (recorded via a fake bridge) =============
+  const sent = [];
+  const fakeBridge = { publish: (t, p) => sent.push({ t, p }) };
+  const ns = 'valetudo', vid = 'rockrobo';
+  // Mirror Planner.cleanVacuumSegment's publish.
+  fakeBridge.publish(`${ns}/${vid}/MapSegmentationCapability/clean/set`, cleanSegmentPayload('16'));
+  ok('publish_topic', sent[0] && sent[0].t === 'valetudo/rockrobo/MapSegmentationCapability/clean/set', sent[0] && sent[0].t);
+  const pl = sent[0] && JSON.parse(sent[0].p);
+  ok('publish_segment_ids', pl && Array.isArray(pl.segment_ids) && pl.segment_ids.length === 1 && pl.segment_ids[0] === '16',
+     sent[0] && sent[0].p);
+
+  // === 6. Renderer: layer gating, glow, texture disposal =================
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+  const scene3d = { preset: 'day', floorColor: '#8a7860', floorTex: 'none', wallColor: '#cfd2d6' };
+  const floor = {
+    id: 'f1', name: 'T', w: 12000, d: 8000,
+    walls: [], furniture: [], lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [], windows: [], bg: null, model3d: null, look3d: null, rooms: [], robots: [],
+  };
+  r.updateFloor(floor, scene3d);
+
+  const entry = (glow) => [{
+    robotId: 'ro1', pixelSize: map.pixelSize, cal, segments: map.segments, glow,
+  }];
+
+  // Build with no glow → 2 patches (each has a name sprite too → 4 children), 0 glow mats.
+  r.updateVacuumMaps(entry(null));
+  const patchMeshes = r._vacMapGroup.children.filter(c => c.userData && c.userData.kind === 'vacseg');
+  ok('build_two_patches', patchMeshes.length === 2, String(patchMeshes.length));
+  ok('no_glow_when_null', r._vacGlowMats.length === 0, String(r._vacGlowMats.length));
+  const disp0 = r.vacMapTexDisposals;
+
+  // Layer flag gates the group in both directions.
+  r.setLayerVisibility({ vacuumMap: true });
+  ok('layer_on_visible', r._vacMapGroup.visible === true);
+  r.setLayerVisibility({});                       // absent = OFF (diagnostic default)
+  ok('layer_off_hidden', r._vacMapGroup.visible === false);
+  r.setLayerVisibility({ vacuumMap: false });
+  ok('layer_false_hidden', r._vacMapGroup.visible === false);
+
+  // Rebuild with glow on ONLY the commanded segment → exactly 1 glow material.
+  r.updateVacuumMaps(entry(['16']));
+  ok('glow_only_commanded', r._vacGlowMats.length === 1, String(r._vacGlowMats.length));
+  // Rebuilding disposed the 2 textures from the previous build.
+  ok('tex_disposed_on_rev', r.vacMapTexDisposals === disp0 + 2, `${r.vacMapTexDisposals} vs ${disp0 + 2}`);
+
+  // Glow material opacity animates away from the static 0.35 after a frame advance.
+  const glowMat = r._vacGlowMats[0];
+  r._advanceVacMap(Math.PI / 4);   // sin(2·nowS)=sin(π/2)=1 → opacity 0.7
+  ok('glow_opacity_pulses', glowMat.opacity > 0.5, String(glowMat.opacity));
+
+  const fails = results.filter(x => x.startsWith('FAIL'));
+  document.title = `VALETUDO ${fails.length ? 'FAIL' : 'PASS'} ${results.length - fails.length}/${results.length}` +
+                   (fails.length ? ' :: ' + fails.join(' ') : '');
+ } catch (e) {
+  document.title = 'VALETUDO ERROR :: ' + (e && e.stack ? e.stack.split('\n').slice(0,3).join(' | ') : e);
+ }
+</script>
