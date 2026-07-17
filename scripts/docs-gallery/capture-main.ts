@@ -265,8 +265,12 @@ function capLight(sub: Subject, o: CapOpts): string {
   const onWall = WALL_LIGHT.has(kind);
   const lx = onWall ? 2400 : f.w / 2;
   const ly = onWall ? 600 : f.d / 2;
+  // Fireplace front = local −Z and the sconce dome faces −Z (wall-mount convention);
+  // at rotation 0 both point AWAY from the room-side camera. Rotate those two 180°
+  // so their fronts face the camera (the other 18 kinds already read correctly).
+  const rotation = (kind === 'fireplace' || kind === 'sconce') ? 180 : 0;
   const light = {
-    id: 'l', x: lx, y: ly, entity_id: 'light.demo', iconKind: kind, rotation: 0,
+    id: 'l', x: lx, y: ly, entity_id: 'light.demo', iconKind: kind, rotation,
     label: '', length: 1600,
   };
   f.lights = [light];
@@ -294,6 +298,15 @@ function capLight(sub: Subject, o: CapOpts): string {
   };
   return runCapture(N, gifPx, fps, 40, (i) => {
     R.updateLightsSwitches(f.lights, [], stateOf(lightState(i)));
+    // Fan rotors spin in the renderer's _animate RAF, which does NOT run during
+    // the synchronous capture loop (only render() is called). Advance them here
+    // from the fake clock — same formula as _animate — so ceiling fans visibly
+    // rotate across the GIF while ON. updateLightsSwitches repopulated _fanRotors.
+    const fr = R._fanRotors as { obj: { rotation: { y: number } }; rps: number }[] | undefined;
+    if (fr && fr.length) {
+      const t = performance.now() / 1000;
+      for (const rot of fr) rot.obj.rotation.y = (t * rot.rps * 2 * Math.PI) % (2 * Math.PI);
+    }
   });
 }
 

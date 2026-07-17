@@ -918,7 +918,11 @@ export class ThreeView extends LitElement {
         if (!s.deviceSlug) continue;
         const z = p.zonesBy[s.id]; const o = p.objectsBy[s.id]; const lerp = p.lerpBy[s.id];
         const tColor = hexToInt(sensorColor(s, si));
-        // Per-sensor plumbob color (attribution). Undefined = the default green.
+        // Per-sensor plumbob color (attribution). An EXPLICIT Sensor.plumbobColor
+        // always wins; otherwise leave it undefined so the renderer defaults the
+        // plumbob to the target's identity color (the sensor tint `tColor`, or —
+        // for a fused target below — the fused person's color). This is what lets
+        // avatars be matched to the sensor that saw them without any extra config.
         const sPlumbob = s.plumbobColor ? hexToInt(s.plumbobColor) : undefined;
         // Local occupancy from lerped target positions — see canvas-render
         // for rationale. Same logic mirrored here so 3D and 2D agree.
@@ -982,7 +986,11 @@ export class ThreeView extends LitElement {
             // back-compat (incl. stale-chunk pairings that only read `avatar`).
             targets.push({ key, x: wp.x, y: wp.y, color: tColor, edge,
                            avatar: s.avatarKind, avatars: s.avatarKinds,
-                           plumbobColor: sPlumbob,
+                           // Explicit sensor plumbob wins; else a fused target
+                           // takes the person's color (coherent with its rig +
+                           // name label); else undefined → renderer default =
+                           // tColor (the sensor's identity color).
+                           plumbobColor: sPlumbob ?? (fusion ? hexToInt(fusion.color) : undefined),
                            person: fusion ? { name: fusion.name, color: fusion.color,
                              avatarKind: fusion.avatarKind, isPet: fusion.isPet,
                              identified: fusion.personId != null } : undefined });
@@ -1049,6 +1057,9 @@ export class ThreeView extends LitElement {
             spawnAt = stairPosOnFloor(f, tr.viaLinkId) ?? undefined;
         }
         targets.push({
+          // No plumbobColor: the renderer defaults it to the target's identity
+          // color (here the person color `bp.color`), so a BLE person's plumbob
+          // matches their rig + name label. Coherent with fused radar targets.
           key: bp.key, x: bp.x, y: bp.y, color: hexToInt(bp.color),
           // Pets with no explicit avatar default to the cat quadruped rig;
           // other unknown devices fall through to the stable human pool pick.

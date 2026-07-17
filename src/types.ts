@@ -295,7 +295,8 @@ export interface Sensor {
   locked?: boolean;   // canvas move/rotate/delete disabled
   color?: string;  // hex; tints all targets seen by this sensor in 2D + 3D
   plumbobColor?: string;  // hex; color of the spinning Sims plumbob above targets seen by this
-                          // sensor (per-sensor attribution). Absent = the iconic Sims green (0x2ee56a).
+                          // sensor (per-sensor attribution). Absent = the sensor's identity `color`
+                          // (falling back to the palette tint) so avatars match their source sensor.
   avatarKind?: AvatarKind | 'random';  // LEGACY single-pick (kept for back-compat reads; new UI writes avatarKinds)
   avatarKinds?: AvatarKind[];          // pool of rig variants; each target stably hash-picks one. Empty/absent → adult
   // Last-known-good zone vertices. Persisted so a reload paints zones from
@@ -397,7 +398,8 @@ export interface MotionSensor {
                              //     required) — a display/demo presence. Persisted item-level.
   avatarKind?: AvatarKind | 'random';  // LEGACY single-pick (kept for back-compat reads; new UI writes avatarKinds)
   avatarKinds?: AvatarKind[];          // pool of rig variants for the projected AI avatar
-  plumbobColor?: string;     // hex; color of the plumbob above this sensor's AI/demo avatar. Absent = Sims green.
+  plumbobColor?: string;     // hex; color of the plumbob above this sensor's AI/demo avatar. Absent = the
+                             // motion sensor's `color` (default #ba68c8) so the avatar matches its source.
   locked?: boolean;          // canvas move/rotate/delete disabled
 }
 
@@ -413,7 +415,7 @@ export interface Roamer {
   name?: string;
   avatarKind?: AvatarKind | 'random';  // LEGACY single-pick (kept for reads; new UI writes avatarKinds)
   avatarKinds?: AvatarKind[];          // pool of rig variants; each roamer stably hash-picks one
-  plumbobColor?: string;               // hex; absent = the iconic Sims green
+  plumbobColor?: string;               // hex; absent = this roamer's identity `color` (default tint)
   color?: string;                      // hex identity tint; absent = the default AI/target tint
   enabled?: boolean;                   // absent = ON (rendered); false = hidden
 }

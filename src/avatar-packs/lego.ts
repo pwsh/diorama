@@ -17,7 +17,7 @@ const SPACE_ACC: AvatarPrimitive[] = [
 ];
 
 const pack: AvatarPackDef = {
-  id: 'lego', version: 2, label: 'LEGO',
+  id: 'lego', version: 3, label: 'LEGO',
   path: ['Video Games', 'LEGO'], builtin: true, franchise: true,
   // Minifig proportions: cylinder head, box hands, thin limbs, stubby legs,
   // blank yellow head shared by every member.
@@ -93,6 +93,20 @@ const pack: AvatarPackDef = {
     { id: 'lego/smiley-classic', label: 'Classic Smiley Minifig', rig: 'humanoid',
       humanoid: { body: 0xd01012, legColor: 0x1b1b1b, shoe: 0x1b1b1b, eyes: 'dots' },
       personality: { swayMul: 0.6 }, bubbles: ['😀', '⭐', '🧱', '❤️'] },
+    // LEGO Batman — the only minifig here that swaps the blank yellow head for a
+    // full cowl headpiece (headShape:'cylinder' now shipped). Source: dc-batman.md.
+    { id: 'lego/batman', label: 'Caped Minifig (black/grey, cowl)', rig: 'humanoid',
+      humanoid: { headR: 128, headShape: 'cylinder', limbR: 0.72, skin: 0x1c2030, body: 0x161616,
+        legColor: 0x161616, shoe: 0x141414, eyes: 'dots', hands: 'box', steel: false,
+        armL: 1.0, legL: 0.7, footMul: [1.15, 0.55, 1.05] },
+      accessories: [
+        { shape: 'cone', size: [8, 36], anchor: 'crown', pos: [-20, 8, 4], rot: [0.25, 0, 0], color: 0x1c2030 }, // cowl ear
+        { shape: 'cone', size: [8, 36], anchor: 'crown', pos: [20, 8, 4], rot: [0.25, 0, 0], color: 0x1c2030 },
+        { shape: 'cape', size: [90, 130, 100], anchor: 'back', pos: [0, -40, 15], rot: [0.12, 0, 0], color: 0x101010 }, // small stiff minifig cape
+        { shape: 'box', size: [180, 22, 10], anchor: 'hip', pos: [0, 0, -4], color: 0xf2c744 }, // yellow utility belt
+        // approx: no bat-silhouette primitive — yellow oval color-block (see dc-batman Rig gaps #1).
+        { shape: 'sphere', size: [15, 11, 2.5], anchor: 'chest', pos: [0, 20, -8], color: 0xf2c744 }],
+      personality: { bobMul: 0.8, swayMul: 0.45, cadenceMul: 0.95, ampMul: 0.85 }, bubbles: ['🦇', '🧱', '😎', '🌃'] },
   ],
 };
 

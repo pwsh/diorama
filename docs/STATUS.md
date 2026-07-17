@@ -80,6 +80,21 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Gallery QA round 2 + DC Batman + plumbob identity colors**: capes now
+  hang from the neck collar (builder pins the top rim — zero data churn
+  across all 60 capes); fireplace/sconce rotated to face the capture
+  camera; ceiling-fan rotors driven during capture (they only spun in the
+  RAF); animals second reduction pass + quad clamp cap 1.2; humanoid
+  static posture lean REMOVED (no angled standing — quads keep it);
+  princesses got real long hair. NEW `dc-batman` pack (10 members,
+  ['Sci-Fi','DC','Batman']) + `lego/batman` from Sonnet research
+  (docs/avatars/sci-fi/dc-batman.md). Plumbob default is now the SOURCE
+  IDENTITY color (sensor palette / motion / roamer / person color;
+  explicit plumbobColor wins; fused targets stamp person color) —
+  plumbob-color-test 19/19 incl. persistence-across-rebuild proofs.
+  Manifest: 58 packs / 482 members; content 590/590; full regen 592/592
+  GIFs republished to Pages.
+
 - **Gallery QA round** (user visual QA of the published GIFs; 3 agents:
   capture tuning ∥ renderer fixes → 57-pack data sweep): ½-speed rotations,
   wall-facing camera fixes (lighting/switch/alarm/lock), robot + sensor

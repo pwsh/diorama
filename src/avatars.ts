@@ -33,8 +33,12 @@ export interface AvatarPrimitive {
   //   a cone/box: an open-ended cylinder-wall segment (arc ~1.65 rad centered on
   //   the back +Z), top radius narrower than the flared bottom, flattened ~0.5 in
   //   Z so it hugs the shoulders. Double-sided + outline-skipped automatically.
-  //   Hang it from the `back` anchor with a small outward X `rot` so it drapes off
-  //   the shoulders and clears the torso.
+  //   Cape SEMANTICS: the mesh origin is the cape's TOP RIM (hang point). For the
+  //   `back` anchor (all current data) the renderer AUTO-PINS that rim to the
+  //   neck-base collar just behind the torso and IGNORES pos.y — so the cape
+  //   always fastens at the neck and drapes downward, regardless of the authored
+  //   pos.y. pos.x / pos.z still fine-tune lateral / depth placement; a small
+  //   outward X `rot` makes it drape off the shoulders and clear the torso.
   size: number | [number, number] | [number, number, number];
   anchor:
     | 'crown' | 'head' | 'face' | 'chest' | 'back' | 'hip' | 'root'
@@ -85,9 +89,10 @@ export interface HumanoidFields {
 // Quadruped rig spec — parameterizes _buildQuadruped. Defaults reproduce today's
 // dog (beagle, ~505 mm shoulder pivot); the cat overrides sk + ears/tail/snout.
 export interface QuadrupedFields {
-  // 1.0 = beagle 520 mm shoulder. CLAMPED at build to [0.2, 1.35] — the low floor
+  // 1.0 = beagle 520 mm shoulder. CLAMPED at build to [0.2, 1.2] — the low floor
   // (0.2) keeps the extremely small pets (hamster / guinea pig) tiny, while the
-  // upper cap keeps large animals from exaggerating. Cat resolves to 0.58.
+  // upper cap (lowered 1.35→1.2 in the 2nd animal-size pass) keeps large animals
+  // from exaggerating. Cat resolves to 0.58.
   sk?: number;
   bodyLen?: number; bodyW?: number; bodyH?: number;   // mm at sk=1 (defaults 640/200/240)
   legLen?: number;                  // upper+lower leg length mult (default 1)

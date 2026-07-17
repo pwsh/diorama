@@ -713,13 +713,13 @@ export class Sidebar extends LitElement {
                   title="Reset to default"
                   @click=${() => upd(() => { m.color = MOTION_DEFAULTS.color; })}>↺</button>
         </div>
-        <div class="row" title="Color of the spinning plumbob above this sensor's AI / demo avatar — per-sensor attribution. Default = the iconic Sims green.">
+        <div class="row" title="Color of the spinning plumbob above this sensor's AI / demo avatar — per-sensor attribution. Default = this sensor's color, so the avatar matches its source.">
           <label>Plumbob</label>
-          <input type="color" .value=${m.plumbobColor || '#2ee56a'}
+          <input type="color" .value=${m.plumbobColor || m.color || '#ba68c8'}
                  style="width:36px;height:24px;padding:0;border:1px solid var(--border);background:#111"
                  @input=${(e: Event) => upd(() => { m.plumbobColor = (e.target as HTMLInputElement).value; })}>
           <button class="btn" style="font-size:10px;padding:2px 6px;margin-left:4px"
-                  title="Reset to the default Sims green"
+                  title="Reset to default (this sensor's color)"
                   @click=${() => upd(() => { m.plumbobColor = undefined; })}>✕</button>
         </div>
         <div class="row"><label>Intensity</label>
@@ -2168,13 +2168,13 @@ export class Sidebar extends LitElement {
           <input type="text" .value=${rm.name ?? ''}
                  @input=${(e: Event) => upd(() => { rm.name = (e.target as HTMLInputElement).value; })}>
         </div>
-        <div class="row" title="Color of the spinning plumbob above this roamer. Default = the iconic Sims green.">
+        <div class="row" title="Color of the spinning plumbob above this roamer. Default = this roamer's color.">
           <label>Plumbob</label>
-          <input type="color" .value=${rm.plumbobColor || '#2ee56a'}
+          <input type="color" .value=${rm.plumbobColor || rm.color || '#ba68c8'}
                  style="width:36px;height:24px;padding:0;border:1px solid var(--border);background:#111"
                  @input=${(e: Event) => upd(() => { rm.plumbobColor = (e.target as HTMLInputElement).value; })}>
           <button class="btn" style="font-size:10px;padding:2px 6px;margin-left:4px"
-                  title="Reset to the default Sims green"
+                  title="Reset to default (this roamer's color)"
                   @click=${() => upd(() => { rm.plumbobColor = undefined; })}>✕</button>
         </div>
         <div class="row" title="Identity tint for this roamer's rig. Default = the standard avatar tint.">
@@ -3558,13 +3558,13 @@ export class Sidebar extends LitElement {
                   title="Reset to palette default — tints this sensor's T1/T2/T3 dots"
                   @click=${() => { s.color = undefined; p.save(); p.emitConfig(); }}>↺</button>
         </div>
-        <div class="row" title="Color of the spinning plumbob above avatars seen by this sensor — so you can tell which sensor detected them. Default = the iconic Sims green.">
+        <div class="row" title="Color of the spinning plumbob above avatars seen by this sensor — so you can tell which sensor detected them. Default = this sensor's color.">
           <label>Plumbob</label>
-          <input type="color" .value=${s.plumbobColor || '#2ee56a'}
+          <input type="color" .value=${s.plumbobColor || sensorColor(s, sIdx)}
                  style="width:36px;height:24px;padding:0;border:1px solid var(--border);background:#111"
                  @input=${(e: Event) => { s.plumbobColor = (e.target as HTMLInputElement).value; p.save(); p.emitConfig(); }}>
           <button class="btn" style="font-size:10px;padding:2px 6px"
-                  title="Reset to the default Sims green"
+                  title="Reset to default (this sensor's color)"
                   @click=${() => { s.plumbobColor = undefined; p.save(); p.emitConfig(); }}>✕</button>
         </div>
         ${this._avatarGrid(s, (mut: () => void) => { mut(); p.save(); p.emitConfig(); })}

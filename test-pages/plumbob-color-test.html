@@ -32,13 +32,22 @@
   const DT = 16.7;
   const ctx = { entityOn: {}, roomNames: {}, timeBucket: 'day' };
 
-  // Rig A: default (no plumbobColor) → green. Rig B: red override.
+  // DEFAULT = the target's IDENTITY color (t.color), NOT a hardcoded green, so
+  // avatars visually match the sensor / motion / roamer / person they came from.
+  // Rig A: radar-tint identity color, no plumbobColor → plumbob = its color.
+  // Rig B: explicit red override → red (explicit always wins over the default).
   // Rig C: cat (quadruped) with a blue override.
+  // Rig M: a distinct "motion/roamer" identity color, no override → its color.
+  // Rig P: a BLE-style person rig (color = person color, no override) → person color.
   const RED = 0xff5555, BLUE = 0x3366ff, GREEN = 0x2ee56a;
+  const ACOL = 0xffb74d, MCOL = 0xba68c8, PCOL = 0x26c6da;
   const targets = [
-    { key: 'a', x: 2000, y: 3000, color: 0xffb74d },
-    { key: 'b', x: 4000, y: 3000, color: 0xffb74d, plumbobColor: RED },
-    { key: 'c', x: 6000, y: 3000, color: 0xffb74d, plumbobColor: BLUE, avatar: 'cat' },
+    { key: 'a', x: 2000, y: 3000, color: ACOL },
+    { key: 'b', x: 4000, y: 3000, color: ACOL, plumbobColor: RED },
+    { key: 'c', x: 6000, y: 3000, color: ACOL, plumbobColor: BLUE, avatar: 'cat' },
+    { key: 'm', x: 2000, y: 1500, color: MCOL, ai: true },
+    { key: 'p', x: 4000, y: 1500, color: PCOL, ble: true,
+      person: { name: 'Sam', color: '#26c6da', identified: true } },
   ];
   for (let i = 0; i < 90; i++) { fakeNow += DT; r.updateTargets(targets, ctx); }
 
@@ -48,13 +57,16 @@
     const m = h.plumbob.material;
     return { hex: m.color.getHex(), emis: m.emissive ? m.emissive.getHex() : null, quad: !!h.quad, stored: h.plumbobColor };
   };
-  const A = colOf('a'), B = colOf('b'), C = colOf('c');
+  const A = colOf('a'), B = colOf('b'), C = colOf('c'), M = colOf('m'), P = colOf('p');
 
   const tests = [];
   const ok = (n, c, d) => tests.push({ n, ok: !!c, d });
-  ok('rig A default plumbob = green 0x2ee56a', A && A.hex === GREEN, A && '0x' + A.hex.toString(16));
-  ok('rig A stored plumbobColor = green', A && A.stored === GREEN, A && A.stored);
-  ok('rig B plumbob = supplied red 0xff5555', B && B.hex === RED, B && '0x' + B.hex.toString(16));
+  // Default → identity color (radar/sensor).
+  ok('rig A unset plumbob defaults to its sensor color', A && A.hex === ACOL, A && '0x' + A.hex.toString(16));
+  ok('rig A stored plumbobColor = sensor color', A && A.stored === ACOL, A && A.stored);
+  ok('rig A default is NOT the old hardcoded green', A && A.hex !== GREEN, A && '0x' + A.hex.toString(16));
+  // Explicit override wins over the identity-color default.
+  ok('rig B plumbob = supplied red 0xff5555 (explicit wins)', B && B.hex === RED, B && '0x' + B.hex.toString(16));
   // emissive is a darkened copy of the color (red-dominant, red channel below
   // the full-color's 255). sRGB encoding keeps it > raw 0.66×255, that's fine.
   const eR = B ? (B.emis>>16)&255 : 0, eG = B ? (B.emis>>8)&255 : 0, eB = B ? B.emis&255 : 0;
@@ -62,6 +74,10 @@
      B && '0x' + (B.emis??0).toString(16));
   ok('rig C is quadruped (cat)', C && C.quad === true, C && C.quad);
   ok('rig C plumbob = supplied blue 0x3366ff', C && C.hex === BLUE, C && '0x' + C.hex.toString(16));
+  // AI/demo/roamer default → the motion/roamer identity color (same mechanism).
+  ok('rig M (AI/roamer) unset plumbob defaults to its color', M && M.hex === MCOL, M && '0x' + M.hex.toString(16));
+  // BLE/person default → the person color (identity color of the BLE target).
+  ok('rig P (BLE person) unset plumbob defaults to the person color', P && P.hex === PCOL, P && '0x' + P.hex.toString(16));
 
   // Recolor in place: change B's plumbobColor to green → material updates, no rebuild.
   const bGroupBefore = r._humanoids['b'].group;
@@ -70,6 +86,33 @@
   const B2 = colOf('b');
   ok('rig B recolors in place to green', B2 && B2.hex === GREEN, B2 && '0x' + B2.hex.toString(16));
   ok('rig B NOT rebuilt (same group object)', r._humanoids['b'].group === bGroupBefore);
+
+  // A SET color survives a FORCED REBUILD (the reported bug). Change B's avatar
+  // kind so the kind-mismatch path disposes + rebuilds the rig; the per-frame
+  // in-place recolor must re-apply the set color the SAME frame (h.plumbobColor
+  // starts undefined on the fresh rig, so the compare fires). Restore B's red
+  // override first so we assert a non-default color persists.
+  targets[1].plumbobColor = RED;
+  fakeNow += DT; r.updateTargets(targets, ctx);
+  const bGroupPreRebuild = r._humanoids['b'].group;
+  targets[1].avatar = 'robot';
+  fakeNow += DT; r.updateTargets(targets, ctx);
+  const B3 = colOf('b');
+  ok('rig B WAS rebuilt on kind change (new group object)', r._humanoids['b'].group !== bGroupPreRebuild);
+  ok('rig B keeps its set red after the rebuild', B3 && B3.hex === RED, B3 && '0x' + B3.hex.toString(16));
+
+  // A SET color also survives a full despawn → respawn of the same key. The
+  // slow (no-edge) despawn fade runs ~10 s before the rig is disposed, so drop B
+  // from the target list for ~12 s of synthesized frames to force real disposal.
+  let gone = false;
+  for (let i = 0; i < 760; i++) {
+    fakeNow += DT; r.updateTargets(targets.filter(t => t.key !== 'b'), ctx);
+    if (!r._humanoids['b']) { gone = true; break; }
+  }
+  for (let i = 0; i < 40; i++) { fakeNow += DT; r.updateTargets(targets, ctx); }
+  const B4 = colOf('b');
+  ok('rig B fully despawned (disposed) then respawned', gone && !!B4);
+  ok('rig B keeps its set red across respawn', B4 && B4.hex === RED, B4 && '0x' + B4.hex.toString(16));
 
   // ── 3D builder smoke: camera + presence-zone groups build without throwing ─
   // (three-view calls these; here we drive them directly.)

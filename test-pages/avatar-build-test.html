@@ -184,13 +184,13 @@
   ok('hover: hip floats ~300 off floor', hovRig && Math.abs((hovRig.group.position.y + hovRig.hipY) - 300) < 60,
     hovRig ? (hovRig.group.position.y + hovRig.hipY).toFixed(0) : '-');
 
-  // Posture: after a frame a still stoop rig has root pitch ≈ -posture.pitch.
-  // (posturePitch is stored 0.3 but NEGATED at the rotation.x write so a POSITIVE
-  // posture.pitch is a FORWARD stoop — negative root rotation.x is body-forward.)
+  // Posture: humanoids NO LONGER apply a static posture lean (QA: a standing
+  // figure must never be permanently angled). posturePitch stays stored on the
+  // rig for compat + quadruped use, but a STILL humanoid's root pitch stays ≈ 0.
   for (let i = 0; i < 10; i++) step([{ key: 'st', x: 4000, y: 3000, color: TINT, avatar: 'ct/stoop' }]);
   const stoop = r._humanoids['st'];
-  ok('posture: posturePitch stored', stoop && Math.abs(stoop.posturePitch - 0.3) < 1e-6);
-  ok('posture: root pitch ≈ -0.3 (forward stoop)', stoop && Math.abs(stoop.group.rotation.x + 0.3) < 0.06,
+  ok('posture: posturePitch still stored (inert on humanoids)', stoop && Math.abs(stoop.posturePitch - 0.3) < 1e-6);
+  ok('posture: still humanoid root pitch ≈ 0 (no static lean)', stoop && Math.abs(stoop.group.rotation.x) < 0.02,
     stoop ? stoop.group.rotation.x.toFixed(3) : '-');
 
   // ── Legacy quadruped proportions (via base-domestic-animals) ───────────────
@@ -285,8 +285,20 @@
   ok('cape: double-sided + outline-safe + flattened',
     cape && cape.material.side === 2 && cape.userData.outlineSkip === true
     && Math.abs(cape.scale.z - 0.5) < 0.01);
+  // Attach point: the mesh ORIGIN is the cape's top rim (geometry translated so
+  // its top edge is at local y=0), and a back-anchored cape is pinned to the
+  // neck-base collar (≈ neckY = torsoY + TORSO_H/2) IGNORING pos.y. So the mesh
+  // sits high (near the collar) and its geometry hangs DOWN (all vertices y≤0).
+  let capeTopY0 = 1, capeBotY = 0;
+  if (cape) { const bb = cape.geometry.boundingBox; capeTopY0 = bb.max.y; capeBotY = bb.min.y; }
+  ok('cape: geometry origin at top rim (hangs down)', cape && Math.abs(capeTopY0) < 1 && capeBotY < -100,
+    cape ? `top=${capeTopY0.toFixed(0)} bot=${capeBotY.toFixed(0)}` : '-');
+  // caped rig: hipY 870, TORSO_H 600 → neckY = 870 + 300 + 300 = 1470. Cape rim
+  // pinned there (well above the hip), NOT dragged down by any pos.y.
+  ok('cape: rim pinned to the neck collar (~1470, above hip)', cape && cape.position.y > 1300 && cape.position.y < 1600,
+    cape ? cape.position.y.toFixed(0) : '-');
 
-  // ── sk clamps: humanoid [0.45,1.2], quad [0.2,1.35] (fix #8) ────────────────
+  // ── sk clamps: humanoid [0.45,1.2], quad [0.2,1.2] (2nd animal-size pass) ────
   mod.ThreeDRenderer.registerAvatarPack({
     id: 'cl', version: 1, label: 'Clamp', path: ['CL'], builtin: true,
     avatars: [
@@ -301,7 +313,7 @@
   ok('sk clamp: humanoid capped 1.2 (hipY≈1044)', near(tall.hipY, 1044, 3), `hipY=${tall.hipY.toFixed(0)}`);
   ok('sk clamp: humanoid floor 0.45 (hipY≈392)', near(tiny.hipY, 391.5, 3), `hipY=${tiny.hipY.toFixed(0)}`);
   const qbig = r._buildQuadruped(0x808080, 'cl/big'), qwee = r._buildQuadruped(0x808080, 'cl/wee');
-  ok('sk clamp: quad capped 1.35 (hipY≈682)', near(qbig.hipY, 681.75, 3), `hipY=${qbig.hipY.toFixed(0)}`);
+  ok('sk clamp: quad capped 1.2 (hipY≈606)', near(qbig.hipY, 606, 3), `hipY=${qbig.hipY.toFixed(0)}`);
   ok('sk clamp: quad floor 0.2 (hipY≈101)', near(qwee.hipY, 101, 3), `hipY=${qwee.hipY.toFixed(0)}`);
 
   // ── Furniture builder fixes (dryer door / bin lid / rockers / swingset) ─────

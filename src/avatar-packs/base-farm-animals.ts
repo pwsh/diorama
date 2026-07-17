@@ -10,12 +10,12 @@
 import type { AvatarPackDef } from '../avatars.js';
 
 const pack: AvatarPackDef = {
-  id: 'base-farm-animals', version: 2, label: 'Farm Animals',
+  id: 'base-farm-animals', version: 3, label: 'Farm Animals',
   path: ['Base', 'Farm Animals'], builtin: true,
   avatars: [
     // Cow — Holstein black-and-white patches, short horns, udder hint.
     { id: 'cow', label: '🐄 Cow (Holstein)', rig: 'quadruped', pet: true,
-      quadruped: { sk: 1.35, bodyLen: 864, bodyW: 260, bodyH: 252, legLen: 0.85, neckLen: 90, headR: 130, ears: 'round', tail: 'down', tailLen: 1.0, tailTipColor: 0x2b2320, snout: 1.0, coat: 0xf3efe6, belly: 0xf3efe6, earColor: 0xf3efe6, snoutColor: 0x2b2320 },
+      quadruped: { sk: 1.15, bodyLen: 864, bodyW: 260, bodyH: 252, legLen: 0.85, neckLen: 90, headR: 130, ears: 'round', tail: 'down', tailLen: 1.0, tailTipColor: 0x2b2320, snout: 1.0, coat: 0xf3efe6, belly: 0xf3efe6, earColor: 0xf3efe6, snoutColor: 0x2b2320 },
       accessories: [
         { shape: 'cone', size: [20, 90], anchor: 'qhead', pos: [-40, 60, 0], rot: [0, 0, 0.3], color: 0xe8ddc8 }, // horn L
         { shape: 'cone', size: [20, 90], anchor: 'qhead', pos: [40, 60, 0], rot: [0, 0, -0.3], color: 0xe8ddc8 }, // horn R
@@ -28,7 +28,7 @@ const pack: AvatarPackDef = {
 
     // Pig — pink barrel body, flat disc snout, curly tail, nostril dots.
     { id: 'pig', label: '🐷 Pig', rig: 'quadruped', pet: true,
-      quadruped: { sk: 1.0, bodyLen: 736, bodyW: 280, bodyH: 276, legLen: 0.65, neckLen: 15, headR: 120, ears: 'round', tail: 'curl', tailLen: 0.5, snout: 0.9, coat: 0xf0b8bc, belly: 0xf5cdd0, earColor: 0xecabb0, snoutColor: 0xe89aa0 },
+      quadruped: { sk: 0.85, bodyLen: 736, bodyW: 280, bodyH: 276, legLen: 0.65, neckLen: 15, headR: 120, ears: 'round', tail: 'curl', tailLen: 0.5, snout: 0.9, coat: 0xf0b8bc, belly: 0xf5cdd0, earColor: 0xecabb0, snoutColor: 0xe89aa0 },
       accessories: [
         { shape: 'sphere', size: 12, anchor: 'qhead', pos: [-14, -26, -96], color: 0x3a2a2a }, // nostril L
         { shape: 'sphere', size: 12, anchor: 'qhead', pos: [14, -26, -96], color: 0x3a2a2a }, // nostril R
@@ -37,7 +37,7 @@ const pack: AvatarPackDef = {
 
     // Horse — bay, long neck + legs, near-black mane, dark points (pawColor approx).
     { id: 'horse', label: '🐴 Horse (bay)', rig: 'quadruped', pet: true,
-      quadruped: { sk: 1.35, bodyLen: 800, bodyW: 170, bodyH: 228, legLen: 1.4, neckLen: 220, headR: 118, ears: 'pointy', tail: 'down', tailLen: 1.7, tailTipColor: 0x1c130e, snout: 1.3, coat: 0x8a5a34, belly: 0x8a5a34, earColor: 0x8a5a34, snoutColor: 0x2a1c14, pawColor: 0x241812 },
+      quadruped: { sk: 1.15, bodyLen: 800, bodyW: 170, bodyH: 228, legLen: 1.4, neckLen: 220, headR: 118, ears: 'pointy', tail: 'down', tailLen: 1.7, tailTipColor: 0x1c130e, snout: 1.3, coat: 0x8a5a34, belly: 0x8a5a34, earColor: 0x8a5a34, snoutColor: 0x2a1c14, pawColor: 0x241812 },
       accessories: [
         { shape: 'box', size: [20, 130, 10], anchor: 'qneck', pos: [0, 60, -40], rot: [-0.5, 0, 0], color: 0x1c130e }, // mane
         { shape: 'box', size: [20, 130, 10], anchor: 'qneck', pos: [0, 20, -70], rot: [-0.5, 0, 0], color: 0x1c130e }, // mane
@@ -48,7 +48,7 @@ const pack: AvatarPackDef = {
 
     // Sheep — oversized cream wool body, black face/legs (face via colors, legs via pawColor).
     { id: 'sheep', label: '🐑 Sheep', rig: 'quadruped', pet: true,
-      quadruped: { sk: 1.05, bodyLen: 640, bodyW: 270, bodyH: 372, legLen: 0.55, neckLen: 30, headR: 95, ears: 'round', tail: 'down', tailLen: 0.3, snout: 0.75, coat: 0xf2ece0, belly: 0xf2ece0, earColor: 0x1c1c1c, snoutColor: 0x1c1c1c, pawColor: 0x1c1c1c },
+      quadruped: { sk: 0.85, bodyLen: 640, bodyW: 270, bodyH: 372, legLen: 0.55, neckLen: 30, headR: 95, ears: 'round', tail: 'down', tailLen: 0.3, snout: 0.75, coat: 0xf2ece0, belly: 0xf2ece0, earColor: 0x1c1c1c, snoutColor: 0x1c1c1c, pawColor: 0x1c1c1c },
       accessories: [
         { shape: 'sphere', size: 90, anchor: 'qback', pos: [-70, 20, -80], color: 0xf2ece0 }, // wool tuft
         { shape: 'sphere', size: 90, anchor: 'qback', pos: [70, 20, 90], color: 0xf2ece0 }, // wool tuft
@@ -58,7 +58,7 @@ const pack: AvatarPackDef = {
 
     // Goat — tan/fawn, backward-arching horns + chin beard (the goat-vs-sheep read).
     { id: 'goat', label: '🐐 Goat', rig: 'quadruped', pet: true,
-      quadruped: { sk: 0.95, bodyLen: 672, bodyW: 180, bodyH: 216, legLen: 1.1, neckLen: 110, headR: 105, ears: 'round', tail: 'down', tailLen: 0.3, snout: 0.85, coat: 0xc2a06a, belly: 0xe8d9bd, earColor: 0xc2a06a, snoutColor: 0x2b2320 },
+      quadruped: { sk: 0.85, bodyLen: 672, bodyW: 180, bodyH: 216, legLen: 1.1, neckLen: 110, headR: 105, ears: 'round', tail: 'down', tailLen: 0.3, snout: 0.85, coat: 0xc2a06a, belly: 0xe8d9bd, earColor: 0xc2a06a, snoutColor: 0x2b2320 },
       accessories: [
         { shape: 'cone', size: [16, 140], anchor: 'qhead', pos: [-28, 60, 10], rot: [-0.9, 0, 0], color: 0x2b2320 }, // horn L
         { shape: 'cone', size: [16, 140], anchor: 'qhead', pos: [28, 60, 10], rot: [-0.9, 0, 0], color: 0x2b2320 }, // horn R
@@ -68,7 +68,7 @@ const pack: AvatarPackDef = {
 
     // Donkey — gray-dun, long ears (the signature), dorsal cross, upright roached mane.
     { id: 'donkey', label: '🫏 Donkey', rig: 'quadruped', pet: true,
-      quadruped: { sk: 1.25, bodyLen: 704, bodyW: 160, bodyH: 216, legLen: 1.15, neckLen: 150, headR: 120, ears: 'long', tail: 'tuft', tailLen: 0.9, tailTipColor: 0x2a2118, snout: 1.15, coat: 0xa39784, belly: 0xd8cdb8, earColor: 0xa39784, snoutColor: 0x362e24 },
+      quadruped: { sk: 1.05, bodyLen: 704, bodyW: 160, bodyH: 216, legLen: 1.15, neckLen: 150, headR: 120, ears: 'long', tail: 'tuft', tailLen: 0.9, tailTipColor: 0x2a2118, snout: 1.15, coat: 0xa39784, belly: 0xd8cdb8, earColor: 0xa39784, snoutColor: 0x362e24 },
       accessories: [
         { shape: 'box', size: [30, 20, 700], anchor: 'qback', pos: [0, 12, 0], color: 0x2a2118 }, // dorsal stripe
         { shape: 'box', size: [200, 20, 30], anchor: 'qback', pos: [0, 14, -150], color: 0x2a2118 }, // shoulder cross

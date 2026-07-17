@@ -6,7 +6,7 @@
 import type { AvatarPackDef } from '../avatars.js';
 
 const pack: AvatarPackDef = {
-  id: 'he-man', version: 2, label: 'He-Man',
+  id: 'he-man', version: 3, label: 'He-Man',
   path: ['Cartoons', 'He-Man'], builtin: true, franchise: true,
   avatars: [
     // He-Man — bronzed barbarian, blond bob, crossed harness w/ red gem, back sword.
@@ -76,7 +76,7 @@ const pack: AvatarPackDef = {
     // Battle Cat — green tiger MOUNT (huge sk 1.9), red saddle + headguard.
     // approx: canonical tiger stripes added as thin dark qback boxes (no coat-pattern field).
     { id: 'he-man/battle-cat', label: 'Battle Tiger (green & red saddle)', rig: 'quadruped', pet: true,
-      quadruped: { sk: 1.15, bodyLen: 900, bodyW: 260, bodyH: 300, legLen: 1.1, headR: 140, neckLen: 0,
+      quadruped: { sk: 1.05, bodyLen: 900, bodyW: 260, bodyH: 300, legLen: 1.1, headR: 140, neckLen: 0,
         ears: 'round', tail: 'up', tailLen: 1.2, snout: 0.7, coat: 0x4a7a3a, belly: 0x8ac06a,
         earColor: 0x2f5a28, snoutColor: 0xd8d4b0 },
       accessories: [

@@ -171,7 +171,9 @@ export interface TargetWorld {
   };
   // Optional (additive): plumbob color (int) for this target's owning sensor —
   // per-sensor attribution so avatars are distinguishable by which sensor saw
-  // them. Undefined → the default Sims green. A stale renderer chunk ignores it.
+  // them. Undefined → this target's IDENTITY color (`color`): the sensor tint
+  // for radar, the motion/roamer color for AI/demo/roam, the person color for
+  // BLE. A stale renderer chunk ignores it (falls back to the built-in green).
   plumbobColor?: number;
   // Optional (additive, Tier 2 stair portals): ARRIVING handoff. When a NEW rig
   // is created for this key, seed it here (a linked stair on THIS floor) instead
@@ -623,10 +625,13 @@ const BUBBLE_W = 620, BUBBLE_H = 580;
 // worldToLocal repin + fade/dispose lifecycle untouched.
 const BUBBLE_TAIL_CENTER: [number, number] = [20 / 160, 1 - 128 / 150];
 const BUBBLE_ABOVE_PLUMBOB = 460;   // tail tip this far above the plumbob (over head center)
-// The iconic Sims plumbob green — the default when a sensor sets no plumbobColor.
-// Both the humanoid and quadruped builders create the plumbob in this color; a
-// per-target override (TargetWorld.plumbobColor) recolors the per-rig material
-// in place (updateTargets), so no shared resource is touched.
+// The iconic Sims plumbob green — the color the humanoid and quadruped builders
+// stamp the plumbob at BUILD time, and updateTargets' last-ditch fallback for a
+// target with no identity color. In normal operation the per-rig material is
+// recolored in place (updateTargets) to `t.plumbobColor ?? t.color` — an
+// explicit per-sensor override, else the target's identity color — so avatars
+// visually match the sensor / motion / roamer / person they originated from. No
+// shared resource is touched (the plumbob material is per-rig).
 const PLUMBOB_GREEN = 0x2ee56a;
 // Name label (phase B3) rides the same per-rig plumbob anchor, a bit lower than
 // the bubble so both coexist over the head (the bubble is offset sideways).
@@ -7293,8 +7298,16 @@ export class ThreeDRenderer {
       // Per-sensor plumbob color (additive): recolor THIS rig's own plumbob
       // material in place when it differs (no rebuild). The plumbob material is
       // already per-rig (built via _mat, disposed with the rig) — never a shared
-      // resource — so this is safe. Undefined spec → the default green.
-      const wantPlumbob = t.plumbobColor ?? PLUMBOB_GREEN;
+      // resource — so this is safe. The compare re-applies the wanted color after
+      // EVERY rebuild/respawn/re-roll/fade-reacquire (h.plumbobColor starts
+      // undefined on a fresh rig, so the guard always fires the first frame the
+      // rig is seen), which is what makes a SET color persist through kind swaps.
+      // DEFAULT (no explicit t.plumbobColor): the target's IDENTITY color
+      // (t.color) — the sensor's tint for radar, the motion/roamer color for
+      // AI/demo/roam, the person color for BLE — so every avatar's plumbob
+      // matches the source it originated from. PLUMBOB_GREEN is only a defensive
+      // fallback for a (never-in-practice) color-less target.
+      const wantPlumbob = t.plumbobColor ?? t.color ?? PLUMBOB_GREEN;
       if (h.plumbobColor !== wantPlumbob) {
         h.plumbobColor = wantPlumbob;
         const pm = (h.plumbob as THREE.Mesh).material as THREE.MeshToonMaterial | undefined;
@@ -8019,10 +8032,12 @@ export class ThreeDRenderer {
       if (h.rightKnee) h.rightKnee.rotation.x = rKnee;
       h.leftShoulder.rotation.x = lSh; h.rightShoulder.rotation.x = rSh;
       h.leftElbow.rotation.x = lEl; h.rightElbow.rotation.x = rEl;
-      // Static posture bias (elder stoop) folded into the speed-proportional lean.
-      // posturePitch is NEGATED: positive posture.pitch = FORWARD stoop, and
-      // negative root rotation.x is the body-forward lean (see wLeanX above).
-      h.group.rotation.x = leanX - h.posturePitch;
+      // Humanoids no longer apply a STATIC posture lean — a standing figure must
+      // never be permanently angled (QA: elders / corrupted creatures read as
+      // toppling). `posturePitch` stays typed for compat + quadruped use; any
+      // character stoop now comes from fidgets / idle sway only. leanX remains the
+      // dynamic speed-proportional forward lean while walking.
+      h.group.rotation.x = leanX;
       h.group.rotation.y = h.facing + yawFidget;
       h.group.rotation.z = rollZ;
       }  // end humanoid (non-quad) pose branch
@@ -9291,12 +9306,18 @@ export class ThreeDRenderer {
           // centered on the back +Z), top radius narrower than the flared bottom,
           // flattened ~0.5 in Z so it hugs the shoulders rather than bulging out.
           // size = [shoulderWidth, length, flareBottomWidth]; double-sided +
-          // outline-skipped (handled below). Hang from the `back` anchor with a
-          // small outward X `rot` so it drapes off the shoulders and clears the
-          // torso (the data author supplies pos/rot).
-          const rTop = arr[0] * sk * 0.5, rBot = arr[2] * sk * 0.5, hCape = arr[1] * sk;
+          // outline-skipped (handled below). The geometry is TRANSLATED so the
+          // mesh ORIGIN sits at the cape's TOP RIM (its hang point) — the position
+          // pass then pins that rim to the neck-base collar for `back`-anchored
+          // capes (see below), so every authored cape fastens at the neck.
+          // The top radius is clamped INSIDE the shoulders (≤ shoulderX·0.9) so the
+          // rim reads as gathered at the collar rather than splaying off the arms.
+          const shoulderCap = (ctx.shoulderX ?? arr[0] * sk * 0.5) * 0.9;
+          const rTop = Math.min(arr[0] * sk * 0.5, shoulderCap);
+          const rBot = arr[2] * sk * 0.5, hCape = arr[1] * sk;
           const thetaLen = 1.65, thetaStart = -thetaLen / 2;   // arc centered on +Z (back)
           geo = new THREE.CylinderGeometry(rTop, rBot, hCape, 12, 4, true, thetaStart, thetaLen);
+          geo.translate(0, -hCape / 2, 0);   // origin → top rim (hang point)
           scale[2] = 0.5;   // flatten front-to-back
           break;
         }
@@ -9319,7 +9340,18 @@ export class ThreeDRenderer {
       mesh.scale.set(scale[0], scale[1], scale[2]);
       const a = anchorOf(prim.anchor);
       const [ox, oy, oz] = prim.pos ?? [0, 0, 0];
-      mesh.position.set(a.x + ox * sk, a.y + oy * sk, a.z + oz * sk);
+      if (prim.shape === 'cape' && prim.anchor === 'back') {
+        // Cape hang point = its TOP RIM (geometry translated above so the origin
+        // is the rim). Pin the rim to the neck-base collar just behind the torso,
+        // IGNORING the per-primitive pos.y (whose old large-negative values pushed
+        // the whole cape down and off the neck). pos.x / pos.z still fine-tune the
+        // lateral / depth placement. The cape then drapes DOWNWARD from the collar.
+        const collarY = ctx.neckY ?? ctx.shoulderY ?? a.y;
+        mesh.position.set(a.x + ox * sk, collarY, a.z + oz * sk);
+        void oy;
+      } else {
+        mesh.position.set(a.x + ox * sk, a.y + oy * sk, a.z + oz * sk);
+      }
       if (prim.rot) mesh.rotation.set(prim.rot[0], prim.rot[1], prim.rot[2]);
       // Capes are always outline-safe (a thin curved sheet — an inverted-hull shell
       // z-fights and reads wrong on an open surface).
@@ -9343,9 +9375,10 @@ export class ThreeDRenderer {
     const kind = def.id;
     const qf = def.quadruped ?? {};
     const qpers = def.personality ?? {};
-    // Global height gate (quads): clamp to [0.2, 1.35] — the low floor keeps the
-    // tiny pets (hamster/guinea pig) small; the cap tames oversized animals.
-    const sk = Math.max(0.2, Math.min(1.35, qf.sk ?? 1));   // 1.0 = dog; cat = 0.58
+    // Global height gate (quads): clamp to [0.2, 1.2] — the low floor keeps the
+    // tiny pets (hamster/guinea pig) small; the cap (lowered 1.35→1.2 in the
+    // second animal-size pass) tames oversized livestock/megafauna.
+    const sk = Math.max(0.2, Math.min(1.2, qf.sk ?? 1));   // 1.0 = dog; cat = 0.58
     const legLen = qf.legLen ?? 1;
     const neckLen = (qf.neckLen ?? 0) * sk;      // >0 inserts an angled neck
     const snoutM = qf.snout ?? 1;                // snout length mult (0 = flat face)
