@@ -10,6 +10,7 @@
 // exported cleanly so W2 / test pages can import them.
 
 import type { HassState, WeatherConfig, WeatherEffectKey } from './types.js';
+import type { ForecastRecord } from './ha-client.js';
 import { isDay } from './time-of-day.js';
 
 type States = Record<string, HassState> | null | undefined;
@@ -448,6 +449,394 @@ export const CONDITION_LABEL: Record<HaCondition, string> = {
 export function tempText(tempC: number, imperial: boolean): string {
   if (imperial) return `${Math.round(tempC * 9 / 5 + 32)}°F`;
   return `${Math.round(tempC)}°C`;
+}
+
+// km/h → display string, respecting the store's imperial flag (mph).
+export function windText(windKmh: number, imperial: boolean): string {
+  if (imperial) return `${Math.round(windKmh * 0.621371)} mph`;
+  return `${Math.round(windKmh)} km/h`;
+}
+
+// ── DC-C: chip anchor / content / forecast display helpers ──────────────────
+// The weather chip is a screen-space overlay mounted once over the shared
+// canvas area (both 2D + 3D). Its corner, extra content rows, and forecast
+// strip are all config-driven. These helpers are PURE so the chip and the test
+// page share one source of truth.
+
+export type ChipAnchor = 'tl' | 'tm' | 'tr' | 'bl' | 'bm' | 'br';
+
+// Resolve the chip container's absolute-position CSS. `anchor` picks a corner
+// (default 'br' = bottom-right, the legacy spot); TOP anchors are pushed down
+// by `barOffsetPx` so they clear the 3D view-controls bar (which sits at
+// top:8px and is ~30 px tall → default 44 px clearance). `custom` px offsets
+// win over the pure anchor: they replace the 8px/barOffset edge distances,
+// measured from the anchor's own edges (x from the left/right edge the anchor
+// uses, y from top/bottom). Center anchors lose their translateX centering
+// under a custom offset (the user positioned it explicitly). Returns a CSS
+// string of position declarations only.
+export function chipAnchorStyle(
+  anchor: ChipAnchor | undefined,
+  custom: { x: number; y: number } | undefined,
+  barOffsetPx = 44,
+): string {
+  const a: ChipAnchor = anchor ?? 'br';
+  const isTop = a[0] === 't';
+  const h = a[1];   // 'l' | 'm' | 'r'
+  const parts: string[] = [];
+  const vEdge = isTop ? 'top' : 'bottom';
+  const vy = custom ? custom.y : (isTop ? barOffsetPx : 8);
+  parts.push(`${vEdge}:${vy}px`);
+  if (h === 'm' && !custom) {
+    parts.push('left:50%');
+    parts.push('transform:translateX(-50%)');
+  } else {
+    const hEdge = h === 'r' ? 'right' : 'left';
+    const hx = custom ? custom.x : 8;
+    parts.push(`${hEdge}:${hx}px`);
+  }
+  return parts.join(';');
+}
+
+// Resolved chip content flags (defaults folded in). apparent/humidity/wind are
+// opt-in extra rows (default OFF → the chip stays glyph+temp+label like today);
+// hourly/daily are forecast-entry counts (0/absent = that strip hidden),
+// clamped to 0..12 / 0..7.
+export interface ChipContent {
+  apparent: boolean;
+  humidity: boolean;
+  wind: boolean;
+  hourly: number;
+  daily: number;
+}
+function clampCount(n: unknown, lo: number, hi: number): number {
+  const v = Math.floor(Number(n));
+  if (!isFinite(v)) return lo;
+  return Math.max(lo, Math.min(hi, v));
+}
+export function resolveChipContent(cfg?: WeatherConfig['chipContent']): ChipContent {
+  return {
+    apparent: cfg?.apparent === true,
+    humidity: cfg?.humidity === true,
+    wind: cfg?.wind === true,
+    hourly: clampCount(cfg?.hourly, 0, 12),
+    daily: clampCount(cfg?.daily, 0, 7),
+  };
+}
+
+// ── DC-C: wide Open-Meteo forecast (hourly + daily strips) ──────────────────
+// The current-conditions fetch (fetchOpenMeteo) only pulls the minimum needed
+// for forecastCondition/rainSoon. The chip's forecast strips need a WIDER
+// query. Parse is factored out (pure, fixture-testable); the fetch is the same
+// isolated try/catch/null-on-failure shape as fetchOpenMeteo.
+
+// Shape of the raw Open-Meteo forecast JSON we read (all fields optional).
+interface OpenMeteoForecastJson {
+  hourly?: Record<string, unknown>;
+  daily?: Record<string, unknown>;
+}
+
+export function parseOpenMeteoForecast(
+  j: OpenMeteoForecastJson,
+): { hourly: ForecastRecord[]; daily: ForecastRecord[] } {
+  const arr = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
+  const num = (v: unknown): number | undefined => {
+    const n = Number(v);
+    return isFinite(n) ? n : undefined;
+  };
+  // Hourly: time / temperature_2m / precipitation_probability / weather_code / is_day.
+  const hTime = arr(j.hourly?.time);
+  const hTemp = arr(j.hourly?.temperature_2m);
+  const hProb = arr(j.hourly?.precipitation_probability);
+  const hCode = arr(j.hourly?.weather_code);
+  const hDay = arr(j.hourly?.is_day);
+  const hourly: ForecastRecord[] = hTime.map((t, i) => {
+    const code = num(hCode[i]);
+    const day = hDay.length ? (hDay[i] === 1 || hDay[i] === true) : true;
+    return {
+      datetime: String(t),
+      condition: code == null ? undefined : wmoToCondition(code, day),
+      temperature: num(hTemp[i]),
+      precipitation_probability: hProb.length ? (num(hProb[i]) ?? null) : undefined,
+    };
+  });
+  // Daily: time / weather_code / temperature_2m_max (high) / _min (low) /
+  // precipitation_probability_max. Framed as day so a rainy day reads 'rainy'.
+  const dTime = arr(j.daily?.time);
+  const dCode = arr(j.daily?.weather_code);
+  const dMax = arr(j.daily?.temperature_2m_max);
+  const dMin = arr(j.daily?.temperature_2m_min);
+  const dProb = arr(j.daily?.precipitation_probability_max);
+  const daily: ForecastRecord[] = dTime.map((t, i) => {
+    const code = num(dCode[i]);
+    return {
+      datetime: String(t),
+      condition: code == null ? undefined : wmoToCondition(code, true),
+      temperature: num(dMax[i]),
+      templow: num(dMin[i]),
+      precipitation_probability: dProb.length ? (num(dProb[i]) ?? null) : undefined,
+    };
+  });
+  return { hourly, daily };
+}
+
+// GET the wide forecast (24 h hourly + 7 d daily). Null on ANY failure so the
+// caller holds its last value, exactly like fetchOpenMeteo.
+export async function fetchOpenMeteoForecast(
+  lat: number, lon: number,
+): Promise<{ hourly: ForecastRecord[]; daily: ForecastRecord[] } | null> {
+  const url = 'https://api.open-meteo.com/v1/forecast'
+    + `?latitude=${encodeURIComponent(lat)}&longitude=${encodeURIComponent(lon)}`
+    + '&hourly=temperature_2m,precipitation_probability,weather_code,is_day'
+    + '&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max'
+    + '&forecast_hours=24&forecast_days=7'
+    + '&wind_speed_unit=kmh&temperature_unit=celsius&timezone=auto';
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const j = await res.json() as OpenMeteoForecastJson;
+    return parseOpenMeteoForecast(j);
+  } catch {
+    return null;
+  }
+}
+
+// ── DC-D: weather ALERTS normalizer (pure) ──────────────────────────────────
+// Alerts are a DIFFERENT animal from the forecast condition: discrete,
+// severity-ranked, time-bounded *events* ("Tornado Warning until 4 PM") rather
+// than a continuous ambient condition. There is NO single canonical HA alert
+// entity — every regional integration is a different entity shape. We normalize
+// on ingestion (like resolveWeatherEntity does for forecast sources) into a
+// small 3-level ladder (advisory < watch < warning — the NWS product tier that
+// users recognize from TV weather graphics). parseWeatherAlerts auto-detects the
+// major shapes defensively; anything unparseable is skipped, an absent /
+// unavailable entity yields []. All pure, no network — every source is already
+// an HA entity read.
+
+export interface WeatherAlert {
+  event: string;                                  // "Tornado Warning" / "Flood Watch" / free text
+  severity: 'advisory' | 'watch' | 'warning';
+  headline?: string;
+  expires?: string;                               // ISO (best-effort, source-dependent)
+}
+
+const ALERT_SEV_RANK: Record<WeatherAlert['severity'], number> = {
+  advisory: 0, watch: 1, warning: 2,
+};
+// Ordering helper: higher = more urgent.
+export function alertSeverityRank(s: WeatherAlert['severity']): number {
+  return ALERT_SEV_RANK[s] ?? 0;
+}
+// The single most-urgent severity across a set (null when empty). Used by the
+// chip badge, the settings preview, and the 3D beacon.
+export function worstAlertSeverity(alerts: WeatherAlert[]): WeatherAlert['severity'] | null {
+  let best: WeatherAlert['severity'] | null = null;
+  for (const a of alerts) {
+    if (best == null || alertSeverityRank(a.severity) > alertSeverityRank(best)) best = a.severity;
+  }
+  return best;
+}
+// Severity → badge / beacon color. MeteoAlarm's official yellow→orange→red ramp
+// (§3 of the research doc), which every source's ladder collapses onto.
+export const ALERT_SEVERITY_COLOR: Record<WeatherAlert['severity'], string> = {
+  advisory: '#f5c400',   // yellow
+  watch: '#ff8c00',      // orange
+  warning: '#e6291a',    // red
+};
+
+// ── small string coercion helpers (local) ──
+function alStr(v: unknown): string { return v == null ? '' : String(v).trim(); }
+function alStrOpt(v: unknown): string | undefined { const s = alStr(v); return s || undefined; }
+function alInt(v: unknown): number | null { const n = parseInt(String(v), 10); return isFinite(n) ? n : null; }
+
+// Product-tier words in free text (event name / severity string) — the
+// AUTHORITATIVE signal for the 3-level scale, since it literally IS the NWS
+// Warning>Watch>Advisory product ladder. Returns null when no tier word appears.
+function tierFromText(text: unknown): WeatherAlert['severity'] | null {
+  const s = alStr(text).toLowerCase();
+  if (!s) return null;
+  if (s.includes('warning') || s.includes('emergency')) return 'warning';
+  if (s.includes('watch')) return 'watch';
+  if (s.includes('advisory') || s.includes('statement')) return 'advisory';
+  return null;
+}
+// A source's explicit severity FIELD → 3-level, covering: CAP severity
+// (Extreme/Severe/Moderate/Minor), color words (Environment Canada
+// alert_colour_level "red", MeteoAlarm awareness_level color token), and numeric
+// levels (MeteoAlarm awareness_level 2/3/4, DWD warning_N_level 1–4). null when
+// the field carries no usable signal.
+function severityFromField(raw: unknown): WeatherAlert['severity'] | null {
+  const s = alStr(raw).toLowerCase();
+  if (!s) return null;
+  if (s === 'extreme' || s === 'severe') return 'warning';
+  if (s === 'moderate') return 'watch';
+  if (s === 'minor') return 'advisory';
+  if (s.includes('red')) return 'warning';
+  if (s.includes('orange')) return 'watch';
+  if (s.includes('yellow')) return 'advisory';
+  const lvl = alInt(s);
+  if (lvl != null) {
+    if (lvl >= 4) return 'warning';
+    if (lvl === 3) return 'watch';
+    if (lvl <= 2) return 'advisory';
+  }
+  return tierFromText(s);
+}
+// Combine: event-name tier word wins (it IS the product tier), else the explicit
+// severity field, else 'advisory' (the documented unknown fallback).
+function resolveAlertSeverity(rawSev: unknown, event: unknown): WeatherAlert['severity'] {
+  return tierFromText(event) ?? severityFromField(rawSev) ?? 'advisory';
+}
+// DWD's own 4-tier ladder (1 Wetterwarnung, 2 markant, 3 Unwetter, 4 extrem).
+function dwdLevelSeverity(level: number): WeatherAlert['severity'] {
+  if (level >= 3) return 'warning';
+  if (level === 2) return 'watch';
+  return 'advisory';
+}
+// Drop non-Actual test/exercise/cancel entries where CAP status/messageType is
+// present; pass through unfiltered where the field is absent (MeteoAlarm/DWD/EC
+// don't expose it at the flat-sensor level). Research §7.
+function isTestAlert(o: Record<string, unknown>): boolean {
+  const status = alStr(o.status ?? o.Status).toLowerCase();
+  if (status && status !== 'actual') return true;
+  const mt = alStr(o.messageType ?? o.message_type ?? o.MessageType).toLowerCase();
+  if (mt === 'cancel' || mt === 'ack' || mt === 'error') return true;
+  return false;
+}
+
+// One CAP-ish dict OR a plain title string → a WeatherAlert (null when empty /
+// filtered). Covers the NWS custom-integration `alerts` array items, Environment
+// Canada `{title, alert_colour_level, expiry_time}` items, and cap_alerts dicts.
+function parseAlertItem(item: unknown): WeatherAlert | null {
+  if (item == null) return null;
+  if (typeof item === 'string') {
+    const event = item.trim();
+    return event ? { event, severity: tierFromText(event) ?? 'advisory' } : null;
+  }
+  if (typeof item !== 'object') return null;
+  const o = item as Record<string, unknown>;
+  if (isTestAlert(o)) return null;
+  const event = alStr(o.event ?? o.Event ?? o.title ?? o.Title ?? o.headline ?? o.Headline ?? o.name);
+  if (!event) return null;
+  const sevRaw = o.severity ?? o.Severity ?? o.alert_colour_level ?? o.awareness_level ?? o.level;
+  return {
+    event,
+    severity: resolveAlertSeverity(sevRaw, event),
+    headline: alStrOpt(o.headline ?? o.Headline ?? o.description ?? o.Description),
+    expires: alStrOpt(o.expires ?? o.Expires ?? o.ends ?? o.expiry_time ?? o.end),
+  };
+}
+function parseAlertArray(arr: unknown[]): WeatherAlert[] {
+  const out: WeatherAlert[] = [];
+  for (const it of arr) { const a = parseAlertItem(it); if (a) out.push(a); }
+  return out;
+}
+// DWD: walk warning_1_* … warning_N_* across the sensor's attributes.
+function parseDwdAlerts(attrs: Record<string, unknown>): WeatherAlert[] {
+  const out: WeatherAlert[] = [];
+  const count = alInt(attrs.warning_count);
+  const max = count && count > 0 ? count : 20;   // probe when count is absent
+  for (let i = 1; i <= max; i++) {
+    const name = alStr(attrs[`warning_${i}_name`] ?? attrs[`warning_${i}_event`] ?? attrs[`warning_${i}_headline`]);
+    const lvlRaw = attrs[`warning_${i}_level`];
+    if (!name && lvlRaw == null) { if (count && count > 0) continue; else break; }
+    const level = alInt(lvlRaw);
+    const event = name || (level != null ? `Level ${level} warning` : 'Weather warning');
+    out.push({
+      event,
+      severity: level != null ? dwdLevelSeverity(level) : (tierFromText(event) ?? 'advisory'),
+      headline: alStrOpt(attrs[`warning_${i}_headline`]),
+      expires: alStrOpt(attrs[`warning_${i}_end`]),
+    });
+  }
+  return out;
+}
+// MeteoAlarm binary_sensor: one active alert carried in the attributes.
+function parseMeteoAlarmAlerts(stateStr: string, attrs: Record<string, unknown>): WeatherAlert[] {
+  // awareness_type is a "code name" pair ("3 Thunderstorm") — strip the code.
+  const rawEvent = alStr(attrs.event ?? attrs.awareness_type ?? attrs.headline)
+    || (stateStr && stateStr.toLowerCase() !== 'on' ? stateStr : '');
+  const event = rawEvent.replace(/^\s*\d+\s*[;:]?\s*/, '').trim() || 'Weather alert';
+  return [{
+    event,
+    severity: resolveAlertSeverity(attrs.awareness_level ?? attrs.severity, event),
+    headline: alStrOpt(attrs.headline),
+    expires: alStrOpt(attrs.expires ?? attrs.expiration ?? attrs.expiry_time),
+  }];
+}
+// NWS legacy shape: pipe-joined parallel strings (event | event, severity |
+// severity, …) zipped by index.
+function parsePipeJoinedAlerts(attrs: Record<string, unknown>): WeatherAlert[] {
+  const split = (v: unknown): string[] => alStr(v).split('|').map(s => s.trim());
+  const events = split(attrs.event ?? attrs.title ?? attrs.Event ?? attrs.Title);
+  const heads = split(attrs.headline ?? attrs.display_desc ?? attrs.Headline);
+  const sevs = split(attrs.severity ?? attrs.Severity);
+  const exps = split(attrs.expires ?? attrs.ends ?? attrs.Expires);
+  const out: WeatherAlert[] = [];
+  for (let i = 0; i < events.length; i++) {
+    const event = events[i];
+    if (!event) continue;
+    out.push({
+      event,
+      severity: resolveAlertSeverity(sevs[i], event),
+      headline: heads[i] || undefined,
+      expires: exps[i] || undefined,
+    });
+  }
+  return out;
+}
+
+// Parse ANY supported alert entity into a normalized WeatherAlert[]. Shapes are
+// tried in order; the first that yields ≥1 alert wins. Defensive throughout:
+// absent / unavailable / unknown entity → []; anything unrecognizable → [].
+//   • NWS Alerts (finity69x2): count state + `alerts` array attribute; also the
+//     legacy pipe-joined `event`/`severity`/… strings.
+//   • MeteoAlarm: binary_sensor + `awareness_level`/`awareness_type` (or an
+//     `alerts` array in newer builds).
+//   • DWD Weather Warnings: `warning_count` + indexed `warning_N_*` attributes.
+//   • Environment Canada: `alerts` array of titles / `{title, alert_colour_level,
+//     expiry_time}` dicts.
+//   • Generic fallback: any `event`/`headline`/`severity` attributes → one alert.
+export function parseWeatherAlerts(state: HassState | null | undefined): WeatherAlert[] {
+  if (!state) return [];
+  const st = alStr(state.state).toLowerCase();
+  if (st === 'unavailable' || st === 'unknown') return [];
+  const attrs = (state.attributes ?? {}) as Record<string, unknown>;
+
+  // 1. Explicit `alerts` array (NWS custom, Environment Canada, cap_alerts, some MeteoAlarm).
+  if (Array.isArray(attrs.alerts)) {
+    const out = parseAlertArray(attrs.alerts as unknown[]);
+    if (out.length) return out;
+  }
+  // 2. DWD indexed warning_N_* (two-sensor split — each sensor parsed independently).
+  if ('warning_count' in attrs || 'warning_1_level' in attrs || 'warning_1_name' in attrs
+      || 'warning_1_event' in attrs || 'warning_1_headline' in attrs) {
+    const out = parseDwdAlerts(attrs);
+    if (out.length) return out;
+  }
+  // 3. MeteoAlarm awareness pair (single active alert on the binary_sensor). An
+  //    'off'/'' binary_sensor is inactive.
+  if ('awareness_level' in attrs || 'awareness_type' in attrs) {
+    if (st === 'off' || st === '') return [];
+    const out = parseMeteoAlarmAlerts(alStr(state.state), attrs);
+    if (out.length) return out;
+  }
+  // 4. NWS legacy pipe-joined parallel strings.
+  if (typeof attrs.event === 'string' && (attrs.event as string).includes('|')) {
+    const out = parsePipeJoinedAlerts(attrs);
+    if (out.length) return out;
+  }
+  // 5. Generic single-alert fallback (an unlisted / future integration still
+  //    shows something). Inactive binary sensors ('off') carry no event.
+  if (st !== 'off' && (attrs.event != null || attrs.headline != null || attrs.severity != null)) {
+    const a = parseAlertItem({
+      event: attrs.event ?? attrs.headline, severity: attrs.severity,
+      headline: attrs.headline, description: attrs.description,
+      expires: attrs.expires ?? attrs.ends ?? attrs.expiry_time,
+      status: attrs.status, messageType: attrs.messageType,
+    });
+    return a ? [a] : [];
+  }
+  return [];
 }
 
 // ── W2: 3D-effect intensity (0..1) per condition ────────────────────────────

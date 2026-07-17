@@ -19,6 +19,7 @@ import {
   motionColor, motionIntensity, sensorColor, lightIconKind, MOTION_DEFAULTS,
   BLE_PROXY_DEFAULTS, bleProxyHeight,
   alarmHeight, alarmStateColor, safetyColor,
+  actionButtonKind, actionButtonColor, actionButtonIcon, actionButtonHeight, snapActionButtonToWall,
   robotGlyph, robotColor, robotLedColor,
   parseVacuumPosition, solveVacuumDockOffset,
   presenceZoneColor, cameraFov, cameraRange, cameraHeight, CAMERA_DEFAULTS,
@@ -26,10 +27,13 @@ import {
   FURNITURE_KINDS, furnitureKind, resolveFurnitureDef, WINDOW_DEFAULTS,
   ENV_KINDS, ENV_DEFAULTS, ENV_SCALE_MIN, ENV_SCALE_MAX,
   envKindOf, envColor, envValueText, envHeight, envScale,
+  INFO_CARD_MOUNT_DEFAULTS, INFO_CARD_SCALE_MIN, INFO_CARD_SCALE_MAX,
+  infoCardText, infoCardMount, infoCardHeight, infoCardW, infoCardH, infoCardScale,
   furnitureCat, type FurnitureCat, isBinKind, isStairsKind,
   closedWallLoops, loopContaining, resolveRoomForPointFuzzy, roomLabel,
 } from '../geometry.js';
-import type { Vec2 } from '../types.js';
+import { CLOCK_PRESETS, DATE_PRESETS, type ValueRule, type RuleOp } from '../value-rules.js';
+import type { Vec2, InfoCard, InfoCardMount, InfoCardDisplayMode, ActionButton, ActionKind } from '../types.js';
 
 // Compact relative-age label for a GPS fix timestamp (ms epoch).
 function gpsAgeText(ts: number): string {
@@ -85,6 +89,8 @@ const TOOLS: { id: Tool; label: string }[] = [
   { id: 'sensor', label: 'mmWave' },
   { id: 'motion', label: 'Motion' },
   { id: 'env', label: 'Env' },
+  { id: 'infocard', label: '🔢 Info' },
+  { id: 'action', label: '🔘 Action' },
   { id: 'bleproxy', label: 'BLE' },
   { id: 'alarm', label: '🚨 Alarm' },
   { id: 'safety', label: '⚠️ Smoke/CO' },
@@ -362,6 +368,8 @@ export class Sidebar extends LitElement {
 
         ${this._motionSensorsSection()}
         ${this._envSensorsSection()}
+        ${this._infoCardsSection()}
+        ${this._actionButtonsSection()}
         ${this._bleProxiesSection()}
         ${this._alarmPanelsSection()}
         ${this._safetySensorsSection()}
@@ -483,6 +491,8 @@ export class Sidebar extends LitElement {
       case 'sensor': return 'Click the canvas to drop a mmWave positional sensor.';
       case 'motion': return 'Click to drop a binary motion sensor (PIR).';
       case 'env': return 'Click to drop an environmental sensor (temp, humidity, CO₂, …).';
+      case 'infocard': return 'Click to drop an info card. Bind ANY entity to show its value, or switch to clock/date mode. Add value→color rules in the editor.';
+      case 'action': return 'Click to drop an action button. Pick what it fires (script / scene / button / automation / toggle / custom service) in the editor. Clicking it fires the action.';
       case 'bleproxy': return 'Click to drop a BLE scanner (Bluetooth proxy) puck. Bind it to the physical proxy device.';
       case 'alarm': return 'Click to drop an alarm keypad. Bind to an alarm_control_panel entity.';
       case 'safety': return 'Click to drop a ceiling smoke/CO detector. Set kind + bind a binary_sensor (smoke / carbon_monoxide).';
@@ -913,6 +923,383 @@ export class Sidebar extends LitElement {
         domain: 'sensor',
         onPick: (id: string) => {
           en.entity_id = id;
+          this.planner.save();
+          this.planner.emitConfig();
+        },
+      },
+    }));
+  }
+
+  // ── Info cards section ────────────────────────────────────────────────
+  private _infoCardsSection() {
+    const p = this.planner;
+    const f = p.floor();
+    const list = f.infoCards ?? [];
+    return this._section('info', 'Info Cards', () => html`
+        ${list.length === 0
+          ? html`<div style="color:var(--text-dim);font-size:11px;padding:4px 0">
+              None yet — pick the Info tool and click the floor. Bind ANY entity to
+              show its live value, or switch to clock/date mode (no entity needed).
+            </div>`
+          : this._groupedList('info', list, ic => this._infoCardItem(ic))}
+    `);
+  }
+
+  private _infoCardItem(ic: InfoCard) {
+    const p = this.planner;
+    const sel = p.activeInfoId === ic.id;
+    const mode = ic.displayMode ?? 'entity';
+    const st = ic.entity_id && p.hass?.states ? p.hass.states[ic.entity_id] : null;
+    const text = infoCardText(ic, st ?? null, { now: new Date(), imperial: p.store.imperial });
+    const bound = mode !== 'entity' || !!ic.entity_id;
+    return html`
+      <div style="border-bottom:1px solid var(--border)">
+        <div class="sensor-item ${sel ? 'sel' : ''}" @click=${() => p.setActiveInfo(ic.id)}>
+          <div class="dot" style="background:#7fd4ff"></div>
+          <div class="nm">${ic.label || 'Info'}${this._batteryText(ic.entity_id)}</div>
+          ${bound
+            ? html`<div class="badge bound" style="color:#7fd4ff">${text}</div>`
+            : html`
+                <button class="btn" style="font-size:10px;padding:2px 6px"
+                        title="Bind to any Home Assistant entity"
+                        @click=${(e: Event) => { e.stopPropagation(); this._pickInfoEntity(ic); }}>
+                  🔗 Bind
+                </button>`}
+        </div>
+        ${sel ? this._infoCardEditor(ic) : nothing}
+      </div>
+    `;
+  }
+
+  // Shared value-rule row editor (batch DC-B): the SAME markup drives InfoCard
+  // value→color rules AND logical-light state→on/color/flash rules — one rule
+  // syntax (src/value-rules.ts `ValueRule`), never duplicated. In-place mutation
+  // of each rule object + a `setRules` replacer for add/remove.
+  private _ruleRows(rules: ValueRule[], setRules: (next: ValueRule[]) => void) {
+    const p = this.planner;
+    const upd = (mut: () => void) => { mut(); p.save(); p.emitConfig(); };
+    const OPS: { v: RuleOp; label: string }[] = [
+      { v: 'lt', label: '<' }, { v: 'lte', label: '≤' }, { v: 'gt', label: '>' },
+      { v: 'gte', label: '≥' }, { v: 'eq', label: '=' }, { v: 'neq', label: '≠' },
+      { v: 'between', label: 'between' }, { v: 'contains', label: 'contains' }, { v: 'regex', label: 'regex' },
+    ];
+    return html`
+      ${rules.map((r, i) => html`
+        <div style="display:flex;gap:3px;align-items:center;margin-bottom:3px">
+          <select style="font-size:10px" @change=${(e: Event) => upd(() => { r.op = (e.target as HTMLSelectElement).value as RuleOp; })}>
+            ${OPS.map(o => html`<option value=${o.v} ?selected=${r.op === o.v}>${o.label}</option>`)}
+          </select>
+          <input style="width:52px;font-size:10px" .value=${String(r.value)}
+                 @input=${(e: Event) => upd(() => {
+                   const v = (e.target as HTMLInputElement).value;
+                   const n = parseFloat(v); r.value = isNaN(n) ? v : n; })}>
+          ${r.op === 'between' ? html`<input style="width:44px;font-size:10px" placeholder="max" .value=${r.value2 ?? ''}
+                 @input=${(e: Event) => upd(() => { r.value2 = parseFloat((e.target as HTMLInputElement).value) || 0; })}>` : nothing}
+          <input type="color" style="width:26px;padding:0" .value=${r.color ?? '#ff5252'}
+                 @input=${(e: Event) => upd(() => { r.color = (e.target as HTMLInputElement).value; })}>
+          <label style="font-size:9px;color:var(--text-dim);display:flex;align-items:center;gap:2px" title="Flash / pulse">
+            <input type="checkbox" .checked=${!!r.flash} @change=${(e: Event) => upd(() => { r.flash = (e.target as HTMLInputElement).checked; })}>⚡</label>
+          <button class="btn" style="font-size:10px;padding:1px 4px" @click=${() => upd(() => setRules(rules.filter((_, j) => j !== i)))}>✕</button>
+        </div>`)}
+      <button class="btn" style="width:100%;font-size:10px;margin-top:2px" @click=${() => upd(() =>
+        setRules([...rules, { op: 'gte', value: 0, color: '#ff5252' } as ValueRule]))}>+ Add rule</button>
+    `;
+  }
+
+  private _infoCardEditor(ic: InfoCard) {
+    const p = this.planner;
+    const st = ic.entity_id && p.hass?.states ? p.hass.states[ic.entity_id] : null;
+    const upd = (mut: () => void) => { mut(); p.save(); p.emitConfig(); };
+    const mode = ic.displayMode ?? 'entity';
+    const fmt = () => (ic.format ??= {});
+    const rules = ic.rules ?? [];
+    const mappingText = Object.entries(ic.format?.mapping ?? {}).map(([k, v]) => `${k}=${v}`).join('\n');
+    return html`
+      <div style="background:rgba(0,0,0,0.25);border-radius:4px;padding:6px;margin:4px 0">
+        <div class="row"><label>Label</label>
+          <input type="text" .value=${ic.label ?? ''}
+                 @input=${(e: Event) => upd(() => { ic.label = (e.target as HTMLInputElement).value; })}>
+        </div>
+        <div class="row"><label>Mode</label>
+          <select @change=${(e: Event) => upd(() => {
+                    ic.displayMode = (e.target as HTMLSelectElement).value as InfoCardDisplayMode; })}>
+            ${(['entity', 'clock', 'date', 'clock_date'] as InfoCardDisplayMode[]).map(m => html`
+              <option value=${m} ?selected=${mode === m}>${m}</option>`)}
+          </select>
+        </div>
+        <div class="row"><label>Mount</label>
+          <select @change=${(e: Event) => upd(() => {
+                    ic.mount = (e.target as HTMLSelectElement).value as InfoCardMount; })}>
+            ${(['wall', 'surface', 'floor'] as InfoCardMount[]).map(m => html`
+              <option value=${m} ?selected=${infoCardMount(ic) === m}>${m}</option>`)}
+          </select>
+        </div>
+        <div class="row"><label>X (mm)</label>
+          <input type="number" .value=${String(Math.round(ic.x))}
+                 @input=${(e: Event) => upd(() => { ic.x = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
+        </div>
+        <div class="row"><label>Y (mm)</label>
+          <input type="number" .value=${String(Math.round(ic.y))}
+                 @input=${(e: Event) => upd(() => { ic.y = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
+        </div>
+        <div class="row"><label>Height (mm)</label>
+          <input type="number" min="0" .value=${String(Math.round(infoCardHeight(ic)))}
+                 @input=${(e: Event) => upd(() => {
+                   const v = parseFloat((e.target as HTMLInputElement).value);
+                   ic.height = isFinite(v) ? Math.max(0, v) : undefined;
+                 })}>
+        </div>
+        <label class="row" style="padding:0"><span style="flex:1;font-size:11px;color:var(--text-dim)">Face camera (billboard)</span>
+          <span class="mini-toggle">
+            <input type="checkbox" .checked=${ic.billboard !== false}
+                   @change=${(e: Event) => upd(() => { ic.billboard = (e.target as HTMLInputElement).checked; })}>
+            <span></span></span>
+        </label>
+        <div class="row"><label>Size</label>
+          <input type="range" min=${INFO_CARD_SCALE_MIN} max=${INFO_CARD_SCALE_MAX} step="0.1"
+                 .value=${String(infoCardScale(ic))} style="flex:1"
+                 @input=${(e: Event) => upd(() => { ic.fontScale = parseFloat((e.target as HTMLInputElement).value) || 1; })}>
+          <span style="font-size:10px;color:var(--text-dim);margin-left:4px;min-width:28px;text-align:right">
+            ${infoCardScale(ic).toFixed(1)}×</span>
+        </div>
+
+        ${mode === 'entity' ? html`
+          <div style="border-top:1px solid var(--border);margin:6px 0 4px;padding-top:4px;font-size:10px;color:var(--text-dim)">Entity + format</div>
+          <div class="row"><label>HA entity</label>
+            <span style="font-size:11px;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+              ${ic.entity_id || '— unbound —'}
+            </span>
+          </div>
+          ${st ? html`<div class="row"><label>Reading</label>
+            <span style="font-size:11px;color:var(--text)">${infoCardText(ic, st, { now: new Date(), imperial: p.store.imperial })}</span></div>` : nothing}
+          <div style="display:flex;gap:4px;margin:2px 0 4px">
+            <button class="btn" style="flex:1;font-size:11px" @click=${() => this._pickInfoEntity(ic)}>
+              ${ic.entity_id ? 'Rebind' : 'Bind'}…</button>
+            ${ic.entity_id ? html`<button class="btn" style="font-size:11px"
+                    @click=${() => upd(() => { ic.entity_id = null; })}>Unbind</button>` : nothing}
+          </div>
+          <div class="row"><label>Decimals</label>
+            <input type="number" min="0" max="6" placeholder="auto" .value=${ic.format?.decimals ?? ''}
+                   @input=${(e: Event) => upd(() => {
+                     const v = (e.target as HTMLInputElement).value;
+                     fmt().decimals = v === '' ? undefined : Math.max(0, Math.min(6, parseInt(v, 10) || 0)); })}>
+          </div>
+          <div class="row"><label>Unit override</label>
+            <input type="text" placeholder="(use entity unit)" .value=${ic.format?.unit ?? ''}
+                   @input=${(e: Event) => upd(() => {
+                     const v = (e.target as HTMLInputElement).value;
+                     fmt().unit = v === '' ? undefined : v; })}>
+          </div>
+          <label class="row" style="padding:0"><span style="flex:1;font-size:11px;color:var(--text-dim)">Show unit</span>
+            <span class="mini-toggle"><input type="checkbox" .checked=${ic.format?.showUnit !== false}
+                   @change=${(e: Event) => upd(() => { fmt().showUnit = (e.target as HTMLInputElement).checked; })}><span></span></span>
+          </label>
+          <div class="row"><label>Prefix</label>
+            <input type="text" .value=${ic.format?.prefix ?? ''}
+                   @input=${(e: Event) => upd(() => { fmt().prefix = (e.target as HTMLInputElement).value || undefined; })}>
+          </div>
+          <div class="row"><label>Suffix</label>
+            <input type="text" .value=${ic.format?.suffix ?? ''}
+                   @input=${(e: Event) => upd(() => { fmt().suffix = (e.target as HTMLInputElement).value || undefined; })}>
+          </div>
+          <label class="row" style="padding:0"><span style="flex:1;font-size:11px;color:var(--text-dim)">Relative time (timestamps)</span>
+            <span class="mini-toggle"><input type="checkbox" .checked=${!!ic.format?.relativeTime}
+                   @change=${(e: Event) => upd(() => { fmt().relativeTime = (e.target as HTMLInputElement).checked; })}><span></span></span>
+          </label>
+          <div style="font-size:10px;color:var(--text-dim);margin-top:4px">State mapping (one <code>raw=display</code> per line)</div>
+          <textarea rows="2" style="width:100%;font-size:11px;box-sizing:border-box"
+                    .value=${mappingText}
+                    @input=${(e: Event) => upd(() => {
+                      const lines = (e.target as HTMLTextAreaElement).value.split('\n');
+                      const map: Record<string, string> = {};
+                      for (const ln of lines) { const i = ln.indexOf('='); if (i > 0) map[ln.slice(0, i).trim()] = ln.slice(i + 1).trim(); }
+                      fmt().mapping = Object.keys(map).length ? map : undefined; })}></textarea>
+
+          <div style="border-top:1px solid var(--border);margin:6px 0 4px;padding-top:4px;font-size:10px;color:var(--text-dim)">Value → color rules (first match wins)</div>
+          ${this._ruleRows(rules, next => { ic.rules = next; })}
+        ` : html`
+          <div class="row"><label>Time format</label>
+            <select @change=${(e: Event) => upd(() => { ic.clockFormat = (e.target as HTMLSelectElement).value; })}>
+              ${Object.keys(CLOCK_PRESETS).map(k => html`<option value=${k} ?selected=${(ic.clockFormat ?? '12h') === k}>${k}</option>`)}
+            </select>
+          </div>
+          <div class="row"><label>Date format</label>
+            <select @change=${(e: Event) => upd(() => { ic.dateFormat = (e.target as HTMLSelectElement).value; })}>
+              ${Object.keys(DATE_PRESETS).map(k => html`<option value=${k} ?selected=${(ic.dateFormat ?? 'medium') === k}>${k}</option>`)}
+            </select>
+          </div>
+          <div class="row"><label>Time zone</label>
+            <input type="text" placeholder="(host local, e.g. America/New_York)" .value=${ic.timeZone ?? ''}
+                   @input=${(e: Event) => upd(() => { ic.timeZone = (e.target as HTMLInputElement).value || undefined; })}>
+          </div>
+        `}
+
+        ${this._lockRow(ic)}
+        <button class="btn danger" style="width:100%;margin-top:6px" @click=${() => {
+          const f = p.floor();
+          f.infoCards = (f.infoCards ?? []).filter(x => x.id !== ic.id);
+          p.activeInfoId = null;
+          p.save(); p.emitConfig();
+        }}>Delete</button>
+      </div>
+    `;
+  }
+
+  private _pickInfoEntity(ic: InfoCard): void {
+    this.dispatchEvent(new CustomEvent('open-entity-picker', {
+      bubbles: true, composed: true,
+      detail: {
+        domain: null,   // any entity — the whole point of an info card
+        onPick: (id: string) => {
+          ic.entity_id = id;
+          if (!ic.displayMode) ic.displayMode = 'entity';
+          this.planner.save();
+          this.planner.emitConfig();
+        },
+      },
+    }));
+  }
+
+  // ── Action buttons section (batch DC-B) ───────────────────────────────
+  private _actionButtonsSection() {
+    const p = this.planner;
+    const f = p.floor();
+    const list = f.actionButtons ?? [];
+    return this._section('actions', 'Action Buttons', () => html`
+        ${list.length === 0
+          ? html`<div style="color:var(--text-dim);font-size:11px;padding:4px 0">
+              None yet — pick the Action tool and click the floor. Fire a script,
+              scene, button, automation, entity toggle, or any custom service.
+            </div>`
+          : this._groupedList('actions', list, b => this._actionButtonItem(b))}
+    `);
+  }
+
+  private _actionButtonItem(b: ActionButton) {
+    const p = this.planner;
+    const sel = p.activeActionId === b.id;
+    const kind = actionButtonKind(b);
+    const target = kind === 'custom' ? `${b.domain ?? '?'}.${b.service ?? '?'}` : (b.entity_id || '— unbound —');
+    return html`
+      <div style="border-bottom:1px solid var(--border)">
+        <div class="sensor-item ${sel ? 'sel' : ''}" @click=${() => p.setActiveAction(b.id)}>
+          <div class="dot" style="background:${actionButtonColor(b)}">${actionButtonIcon(b)}</div>
+          <div class="nm">${b.label || 'Action'}</div>
+          <button class="btn" style="font-size:10px;padding:2px 6px" title="Fire this action now"
+                  @click=${(e: Event) => { e.stopPropagation(); p.fireAction(b, true); }}>Test</button>
+        </div>
+        ${sel ? this._actionButtonEditor(b, target) : nothing}
+      </div>
+    `;
+  }
+
+  private _actionButtonEditor(b: ActionButton, target: string) {
+    const p = this.planner;
+    const upd = (mut: () => void) => { mut(); p.save(); p.emitConfig(); };
+    const kind = actionButtonKind(b);
+    const KINDS: { v: ActionKind; label: string }[] = [
+      { v: 'toggle', label: 'Toggle entity' }, { v: 'script', label: 'Run script' },
+      { v: 'scene', label: 'Activate scene' }, { v: 'button_press', label: 'Press button' },
+      { v: 'automation_trigger', label: 'Trigger automation' }, { v: 'custom', label: 'Custom service (advanced)' },
+    ];
+    // Domain filter for the entity picker per kind.
+    const pickDomain: string | string[] | null =
+      kind === 'script' ? 'script'
+      : kind === 'scene' ? 'scene'
+      : kind === 'automation_trigger' ? 'automation'
+      : kind === 'button_press' ? ['button', 'input_button']
+      : null;   // toggle: any entity
+    const dataStr = b.serviceData ?? '';
+    let dataErr = '';
+    if (dataStr.trim()) { try { const o = JSON.parse(dataStr); if (!o || typeof o !== 'object' || Array.isArray(o)) dataErr = 'must be a JSON object'; } catch (e) { dataErr = String((e as Error).message || 'invalid JSON'); } }
+    return html`
+      <div style="background:rgba(0,0,0,0.25);border-radius:4px;padding:6px;margin:4px 0">
+        <div class="row"><label>Label</label>
+          <input type="text" .value=${b.label ?? ''}
+                 @input=${(e: Event) => upd(() => { b.label = (e.target as HTMLInputElement).value; })}>
+        </div>
+        <div class="row"><label>Action</label>
+          <select @change=${(e: Event) => upd(() => { b.actionKind = (e.target as HTMLSelectElement).value as ActionKind; })}>
+            ${KINDS.map(k => html`<option value=${k.v} ?selected=${kind === k.v}>${k.label}</option>`)}
+          </select>
+        </div>
+        ${kind === 'custom' ? html`
+          <div style="font-size:10px;color:#ffb74d;margin:2px 0 4px">⚠ Calls ANY Home Assistant service — only type what you trust.</div>
+          <div class="row"><label>Domain</label>
+            <input type="text" placeholder="e.g. light" .value=${b.domain ?? ''}
+                   @input=${(e: Event) => upd(() => { b.domain = (e.target as HTMLInputElement).value || undefined; })}>
+          </div>
+          <div class="row"><label>Service</label>
+            <input type="text" placeholder="e.g. turn_on" .value=${b.service ?? ''}
+                   @input=${(e: Event) => upd(() => { b.service = (e.target as HTMLInputElement).value || undefined; })}>
+          </div>
+          <div class="row"><label>Target entity</label>
+            <span style="font-size:11px;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${b.entity_id || '(optional)'}</span>
+            <button class="btn" style="font-size:10px" @click=${() => this._pickActionEntity(b, null)}>Pick</button>
+          </div>
+        ` : html`
+          <div class="row"><label>Target</label>
+            <span style="font-size:11px;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${target}</span>
+          </div>
+          <div style="display:flex;gap:4px;margin:2px 0 4px">
+            <button class="btn" style="flex:1;font-size:11px" @click=${() => this._pickActionEntity(b, pickDomain)}>
+              ${b.entity_id ? 'Rebind' : 'Bind'}…</button>
+            ${b.entity_id ? html`<button class="btn" style="font-size:11px"
+                    @click=${() => upd(() => { b.entity_id = null; })}>Unbind</button>` : nothing}
+          </div>
+        `}
+        <div style="font-size:10px;color:var(--text-dim);margin-top:4px">Service data (JSON — custom data / scene transition / script variables)</div>
+        <textarea rows="2" style="width:100%;font-size:11px;box-sizing:border-box;${dataErr ? 'border-color:#ef5350' : ''}"
+                  placeholder=${'{ }'} .value=${dataStr}
+                  @input=${(e: Event) => upd(() => { b.serviceData = (e.target as HTMLTextAreaElement).value || undefined; })}></textarea>
+        ${dataErr ? html`<div style="font-size:10px;color:#ef5350">${dataErr}</div>` : nothing}
+        <div class="row"><label>Glyph</label>
+          <input type="text" maxlength="3" placeholder=${actionButtonIcon(b)} .value=${b.icon ?? ''}
+                 @input=${(e: Event) => upd(() => { b.icon = (e.target as HTMLInputElement).value || undefined; })}>
+        </div>
+        <div class="row"><label>Cap color</label>
+          <input type="color" .value=${actionButtonColor(b)}
+                 @input=${(e: Event) => upd(() => { b.color = (e.target as HTMLInputElement).value; })}>
+        </div>
+        <label class="row" style="padding:0"><span style="flex:1;font-size:11px;color:var(--text-dim)">Wall mount (snap to wall)</span>
+          <span class="mini-toggle"><input type="checkbox" .checked=${b.wallMount !== false}
+                 @change=${(e: Event) => upd(() => { b.wallMount = (e.target as HTMLInputElement).checked; if (b.wallMount) snapActionButtonToWall(b, p.floor().walls); })}><span></span></span>
+        </label>
+        <label class="row" style="padding:0"><span style="flex:1;font-size:11px;color:var(--text-dim)">Confirm before firing</span>
+          <span class="mini-toggle"><input type="checkbox" .checked=${!!b.confirm}
+                 @change=${(e: Event) => upd(() => { b.confirm = (e.target as HTMLInputElement).checked; })}><span></span></span>
+        </label>
+        <div class="row"><label>X (mm)</label>
+          <input type="number" .value=${String(Math.round(b.x))}
+                 @input=${(e: Event) => upd(() => { b.x = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
+        </div>
+        <div class="row"><label>Y (mm)</label>
+          <input type="number" .value=${String(Math.round(b.y))}
+                 @input=${(e: Event) => upd(() => { b.y = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
+        </div>
+        <div class="row"><label>Height (mm)</label>
+          <input type="number" min="0" .value=${String(Math.round(actionButtonHeight(b)))}
+                 @input=${(e: Event) => upd(() => { const v = parseFloat((e.target as HTMLInputElement).value); b.height = isFinite(v) ? Math.max(0, v) : undefined; })}>
+        </div>
+        <button class="btn" style="width:100%;margin-top:4px" @click=${() => p.fireAction(b, true)}>▶ Test fire</button>
+        ${this._lockRow(b)}
+        <button class="btn danger" style="width:100%;margin-top:6px" @click=${() => {
+          const f = p.floor();
+          f.actionButtons = (f.actionButtons ?? []).filter(x => x.id !== b.id);
+          p.activeActionId = null;
+          p.save(); p.emitConfig();
+        }}>Delete</button>
+      </div>
+    `;
+  }
+
+  private _pickActionEntity(b: ActionButton, domain: string | string[] | null): void {
+    this.dispatchEvent(new CustomEvent('open-entity-picker', {
+      bubbles: true, composed: true,
+      detail: {
+        domain,
+        onPick: (id: string) => {
+          b.entity_id = id;
           this.planner.save();
           this.planner.emitConfig();
         },
@@ -3328,6 +3715,56 @@ export class Sidebar extends LitElement {
     `;
   }
 
+  // Logical-state light binding (batch DC-B): the light's ON/color/flash derives
+  // from a rule over ANY entity (shared value-rules engine). When configured it
+  // overrides the light.* binding and the light becomes read-only (clicking it
+  // no-ops — it's computed). Reuses the shared _ruleRows editor.
+  private _lightLogicBlock(l: Light) {
+    const p = this.planner;
+    const upd = (mut: () => void) => { mut(); p.save(); p.emitConfig(); };
+    const logic = l.logic;
+    const preview = logic ? p.effectiveState(l) : null;
+    return html`
+      <div style="border-top:1px solid var(--border);margin:8px 0 4px;padding-top:6px">
+        <div style="display:flex;align-items:center;gap:6px;font-size:10px;color:var(--text-dim)">
+          <span style="flex:1">Logic binding — derive ON/color/flash from an entity's state</span>
+          ${logic ? html`<button class="btn" style="font-size:10px;padding:1px 5px"
+                  @click=${() => upd(() => { l.logic = undefined; })}>Clear</button>` : nothing}
+        </div>
+        ${!logic ? html`
+          <button class="btn" style="width:100%;font-size:11px;margin-top:4px" @click=${() =>
+            this.dispatchEvent(new CustomEvent('open-entity-picker', {
+              bubbles: true, composed: true,
+              detail: { domain: null, onPick: (id: string) => upd(() => {
+                l.logic = { entityId: id, rules: [{ op: 'eq', value: 'on', color: '#ffd54f' } as ValueRule] };
+              }) },
+            }))}>+ Add logic (pick source entity)</button>
+        ` : html`
+          <div class="row"><label>Source</label>
+            <span style="font-size:11px;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${logic.entityId}</span>
+            <button class="btn" style="font-size:10px" @click=${() =>
+              this.dispatchEvent(new CustomEvent('open-entity-picker', {
+                bubbles: true, composed: true,
+                detail: { domain: null, onPick: (id: string) => upd(() => { logic.entityId = id; }) },
+              }))}>Rebind</button>
+          </div>
+          <div style="font-size:10px;color:var(--text-dim);margin:4px 0 2px">State → color rules (first match = ON in that color; ⚡ = flash)</div>
+          ${this._ruleRows(logic.rules, next => { logic.rules = next; })}
+          <div class="row"><label>Off color</label>
+            <input type="color" .value=${logic.offColor ?? '#222222'}
+                   @change=${(e: Event) => upd(() => { logic.offColor = (e.target as HTMLInputElement).value; })}>
+            ${logic.offColor ? html`<button class="btn" style="font-size:10px;margin-left:4px"
+                    @click=${() => upd(() => { logic.offColor = undefined; })}>none</button>` : nothing}
+          </div>
+          <div style="font-size:10px;color:var(--text-dim);margin-top:2px">
+            Now: <b style="color:${preview?.state === 'on' ? '#8f8' : '#888'}">${preview?.state ?? 'off'}</b>
+            ${preview?.attributes && (preview.attributes as Record<string, unknown>)._flash ? '⚡' : ''}
+          </div>
+        `}
+      </div>
+    `;
+  }
+
   private _toggleExpanded(id: string): void {
     if (this._fxExpanded.has(id)) this._fxExpanded.delete(id);
     else                          this._fxExpanded.add(id);
@@ -3431,6 +3868,7 @@ export class Sidebar extends LitElement {
             Type sets the 3D body shape (and forces fireplace warm + flicker).
             Height = ceiling distance. Radius = pool of light on floor.
           </div>
+          ${this._lightLogicBlock(l)}
         </div>
       `;
     } else {
@@ -3876,6 +4314,7 @@ export class Sidebar extends LitElement {
       { key: 'sensors', label: 'mmWave sensors' },
       { key: 'motion', label: 'Motion sensors' },
       { key: 'env', label: 'Env sensors' },
+      { key: 'info', label: 'Info cards' },
       { key: 'zones', label: 'Zones & halos' },
       { key: 'ground', label: 'Ground / yard' },
       { key: 'grid', label: '3D grid' },

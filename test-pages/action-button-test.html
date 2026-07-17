@@ -1,0 +1,185 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>ACTIONBTN …</title>
+<style>
+  body { margin:0; background:#0d1116; color:#cfd8dc; font:13px/1.5 sans-serif; padding:14px; }
+  h1 { font-size:15px; margin:0 0 10px; }
+  #summary { font-size:14px; font-weight:bold; margin:10px 0; padding:8px 10px; border-radius:5px; }
+  .okbg { background:#12331f; color:#69f0ae; } .badbg { background:#3a1414; color:#ff8a80; }
+  .row { display:flex; justify-content:space-between; gap:10px; padding:2px 0; border-bottom:1px solid #1c2530; }
+  .pass { color:#69f0ae; } .fail { color:#ff5252; }
+  .name { color:#90caf9; } .extra { color:#ffd54f; font-size:11px; }
+</style>
+<h1>Action buttons — fixture builds · dispatch routing table · unbound pulse · view refusal · confirm · layer gate</h1>
+<div id="summary">Running…</div>
+<div id="rows"></div>
+<canvas id="cv" width="400" height="300" style="display:none"></canvas>
+
+<!-- Drive the REAL Planner + geometry + canvas-render (bundled; none import three).
+     Build (swap avatar-store for the in-memory fake so IndexedDB doesn't hang
+     the headless --virtual-time-budget harness):
+       T=$(mktemp -d); cp -r src/* "$T"/
+       cp test-pages/fake-avatar-store.ts "$T"/avatar-store.ts
+       cp test-pages/dc-b-entry.ts "$T"/dc-b-entry.ts
+       npx esbuild "$T"/dc-b-entry.ts --bundle --format=esm --outfile=<harness>/dc-b.mod.js -->
+<script type="module">
+  const V = '?v=' + Date.now();
+  const mod = await import('./dc-b.mod.js' + V);
+  const { Planner, drawAll, actionButtonHalfPx,
+          actionButtonKind, actionButtonSize, actionButtonIcon, snapActionButtonToWall, ACTION_ICON } = mod;
+
+  const results = [];
+  const ok = (name, cond, extra = '') => results.push({ name, pass: !!cond, extra: String(extra) });
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  async function waitFor(cond, tries = 600) { for (let i = 0; i < tries; i++) { if (cond()) return true; await sleep(4); } return !!cond(); }
+  const clone = x => JSON.parse(JSON.stringify(x));
+
+  // ── Fake HaApi that RECORDS every callService ────────────────────────────
+  class FakeHa {
+    constructor() { this.map = new Map(); this.states = {}; this._s = []; this._c = []; this.calls = []; }
+    connect() { for (const cb of this._c) cb('connected'); for (const cb of this._s) cb(this.states, undefined); }
+    onState(fn) { this._s.push(fn); } onConn(fn) { this._c.push(fn); }
+    callService(domain, service, data) { this.calls.push({ domain, service, data: data || {} }); return Promise.resolve(); }
+    async getHistory() { return {}; } async getWeatherForecasts() { return null; }
+    async getDevices() { return []; } async getEntityRegistry() { return []; } async updateEntityRegistry() { return true; }
+    async getUserData(k) { return this.map.has(k) ? clone(this.map.get(k)) : null; }
+    async setUserData(k, v) { this.map.set(k, clone(v)); return true; } async refreshStates() {}
+  }
+
+  async function freshPlanner() {
+    localStorage.removeItem('diorama:store:v1'); localStorage.removeItem('diorama:configs');
+    const stub = new FakeHa();
+    const p = new Planner();
+    p.connectWith(stub);
+    await waitFor(() => p.configIndex !== null);
+    return { p, stub };
+  }
+  const btn = (o) => ({ id: 'b1', x: 1000, y: 1000, ...o });
+  const lastCall = stub => stub.calls[stub.calls.length - 1];
+
+  try {
+    // ── (1) Fixture builds / geometry defaults ──────────────────────────────
+    ok('kind default = toggle', actionButtonKind({}) === 'toggle', actionButtonKind({}));
+    ok('size clamp lo', actionButtonSize({ size: 10 }) === 80, actionButtonSize({ size: 10 }));
+    ok('size clamp hi', actionButtonSize({ size: 9999 }) === 600, actionButtonSize({ size: 9999 }));
+    ok('size default', actionButtonSize({}) === 220, actionButtonSize({}));
+    ok('icon per kind (scene)', actionButtonIcon({ actionKind: 'scene' }) === ACTION_ICON.scene, actionButtonIcon({ actionKind: 'scene' }));
+    ok('icon override wins', actionButtonIcon({ actionKind: 'scene', icon: '🎯' }) === '🎯', '');
+    // Wall snap: a button near a wall lands flush; a free button never snaps.
+    {
+      const walls = [{ points: [{ x: 0, y: 500 }, { x: 3000, y: 500 }] }];
+      const b = { x: 1000, y: 540, wallMount: true };
+      const snapped = snapActionButtonToWall(b, walls);
+      ok('wall snap: snapped', snapped === true, snapped);
+      ok('wall snap: flush offset', Math.abs(b.y - 565) < 2, `y=${b.y}`);   // 500 + (50+15) = 565
+      const bf = { x: 1000, y: 540, wallMount: false };
+      ok('free mount: no snap', snapActionButtonToWall(bf, walls) === false, '');
+    }
+
+    // ── (2) Dispatch routing table (research §2.1) ──────────────────────────
+    const { p, stub } = await freshPlanner();
+    p.uiMode = 'edit';
+
+    p.fireAction(btn({ actionKind: 'script', entity_id: 'script.goodnight' }));
+    let c = lastCall(stub);
+    ok('script → script.turn_on', c.domain === 'script' && c.service === 'turn_on' && c.data.entity_id === 'script.goodnight', JSON.stringify(c));
+
+    p.fireAction(btn({ actionKind: 'scene', entity_id: 'scene.movie', serviceData: '{"transition":2}' }));
+    c = lastCall(stub);
+    ok('scene → scene.turn_on + data', c.domain === 'scene' && c.service === 'turn_on' && c.data.entity_id === 'scene.movie' && c.data.transition === 2, JSON.stringify(c));
+
+    p.fireAction(btn({ actionKind: 'button_press', entity_id: 'input_button.doorbell' }));
+    c = lastCall(stub);
+    ok('input_button → press (domain from id)', c.domain === 'input_button' && c.service === 'press' && c.data.entity_id === 'input_button.doorbell', JSON.stringify(c));
+
+    p.fireAction(btn({ actionKind: 'button_press', entity_id: 'button.restart' }));
+    c = lastCall(stub);
+    ok('button → press', c.domain === 'button' && c.service === 'press', JSON.stringify(c));
+
+    p.fireAction(btn({ actionKind: 'automation_trigger', entity_id: 'automation.morning' }));
+    c = lastCall(stub);
+    ok('automation → trigger', c.domain === 'automation' && c.service === 'trigger' && c.data.entity_id === 'automation.morning', JSON.stringify(c));
+
+    p.fireAction(btn({ actionKind: 'toggle', entity_id: 'light.lamp' }));
+    c = lastCall(stub);
+    ok('toggle → <domain>.toggle', c.domain === 'light' && c.service === 'toggle' && c.data.entity_id === 'light.lamp', JSON.stringify(c));
+
+    p.fireAction(btn({ actionKind: 'custom', domain: 'notify', service: 'mobile_app_x', serviceData: '{"message":"hi"}' }));
+    c = lastCall(stub);
+    ok('custom → domain.service + data', c.domain === 'notify' && c.service === 'mobile_app_x' && c.data.message === 'hi', JSON.stringify(c));
+
+    // Missing target → no call fired.
+    const before = stub.calls.length;
+    p.fireAction(btn({ actionKind: 'scene', entity_id: null }));
+    ok('scene w/o entity → no call', stub.calls.length === before, `+${stub.calls.length - before}`);
+    p.fireAction(btn({ actionKind: 'custom', domain: '', service: '' }));
+    ok('custom w/o domain/service → no call', stub.calls.length === before, '');
+
+    // ── (3) Unbound localState pulse ────────────────────────────────────────
+    const ub = btn({ id: 'ub', actionKind: 'toggle', entity_id: null });
+    const fxBefore = p.actionPressFx.length;
+    p.fireAction(ub);
+    ok('unbound: no service call', stub.calls.length === before, '');
+    ok('unbound: localState pulse "on"', ub.localState === 'on', ub.localState);
+    ok('press fx recorded', p.actionPressFx.length > fxBefore && p.actionPressFx.some(r => r.id === 'ub'), `n=${p.actionPressFx.length}`);
+
+    // ── (4) View-mode refusal ───────────────────────────────────────────────
+    p.uiMode = 'view';
+    const vBefore = stub.calls.length, vFx = p.actionPressFx.length;
+    p.fireAction(btn({ actionKind: 'script', entity_id: 'script.x' }));
+    ok('view: no service call', stub.calls.length === vBefore, `+${stub.calls.length - vBefore}`);
+    ok('view: no press fx', p.actionPressFx.length === vFx, '');
+    p.uiMode = 'kiosk';
+    const kBefore = stub.calls.length;
+    p.fireAction(btn({ actionKind: 'script', entity_id: 'script.k' }));
+    ok('kiosk: FIRES', stub.calls.length === kBefore + 1, '');
+
+    // ── (5) Confirm gating ──────────────────────────────────────────────────
+    p.uiMode = 'edit';
+    const origConfirm = window.confirm;
+    window.confirm = () => false;   // user cancels
+    const cBefore = stub.calls.length;
+    p.fireAction(btn({ actionKind: 'script', entity_id: 'script.c', confirm: true }));
+    ok('confirm cancelled → no call', stub.calls.length === cBefore, '');
+    window.confirm = () => true;    // user accepts
+    p.fireAction(btn({ actionKind: 'script', entity_id: 'script.c', confirm: true }));
+    ok('confirm accepted → fires', stub.calls.length === cBefore + 1, '');
+    // Test-fire (skipConfirm) bypasses the prompt entirely.
+    window.confirm = () => false;
+    p.fireAction(btn({ actionKind: 'script', entity_id: 'script.t', confirm: true }), true);
+    ok('skipConfirm bypasses prompt', stub.calls.length === cBefore + 2, '');
+    window.confirm = origConfirm;
+
+    // ── (6) Config-path routing (_isSlowEntity) ─────────────────────────────
+    p.floor().actionButtons = [btn({ actionKind: 'script', entity_id: 'script.goodnight' })];
+    ok('bound action id is config-path', p._isSlowEntity('script.goodnight') === true, '');
+    ok('unrelated id is NOT config-path', p._isSlowEntity('sensor.random_thing') === false, '');
+
+    // ── (7) 2D layer gate (rides switches) ──────────────────────────────────
+    {
+      p.floor().actionButtons = [btn({ id: 'lg', actionKind: 'toggle', entity_id: 'light.x' })];
+      const cv = document.getElementById('cv');
+      const ctx = cv.getContext('2d');
+      const view = { ox: 0, oy: 0, scale: 0.05 };
+      p.store.layers2d = { switches: true };
+      actionButtonHalfPx.clear();
+      drawAll(ctx, p, view, null);
+      ok('switches ON → drawn (hit map populated)', actionButtonHalfPx.has('lg'), `has=${actionButtonHalfPx.has('lg')}`);
+      p.store.layers2d = { switches: false };
+      actionButtonHalfPx.clear();
+      drawAll(ctx, p, view, null);
+      ok('switches OFF → not drawn', !actionButtonHalfPx.has('lg'), `has=${actionButtonHalfPx.has('lg')}`);
+    }
+  } catch (e) {
+    ok('EXCEPTION', false, (e && e.stack) || String(e));
+  }
+
+  // ── Report ────────────────────────────────────────────────────────────────
+  const pass = results.filter(r => r.pass).length, total = results.length;
+  document.title = `ACTIONBTN ${pass === total ? 'PASS' : 'FAIL'} ${pass}/${total}`;
+  const sum = document.getElementById('summary');
+  sum.className = pass === total ? 'okbg' : 'badbg';
+  sum.textContent = `${pass === total ? 'PASS' : 'FAIL'} — ${pass}/${total}`;
+  document.getElementById('rows').innerHTML = results.map(r =>
+    `<div class="row"><span><span class="${r.pass ? 'pass' : 'fail'}">${r.pass ? '✓' : '✗'}</span> <span class="name">${r.name}</span></span><span class="extra">${r.extra}</span></div>`).join('');
+</script>

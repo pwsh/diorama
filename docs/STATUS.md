@@ -88,6 +88,34 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Display & Controls arc** (`docs/DESIGN-display-controls.md`,
+  2026-07-17; 4 Opus batches A/C parallel → B/D): the shared pure rule
+  engine `src/value-rules.ts` (`ValueRule`/`evalRules` first-match-wins +
+  `formatEntityValue` precision/unit/prefix/suffix/mapping/relative-time
+  + clock/date formatting — VALUERULES 65/65); **InfoCard** fixture
+  (`Floor.infoCards`, tool 🔢, own `info` layer, bind ANY entity or
+  clock/date mode, billboard sprite or wall-flat plane, value→color/
+  flash rules, per-frame clock repaint + flash with no rebuilds under
+  `_keyInfo` — INFOCARD 26/26); **ActionButton** fixture
+  (`Floor.actionButtons`, tool 🔘, rides the switches layer, dispatch
+  table script/scene/button/input_button/automation/toggle/custom via
+  `Planner.fireAction` with confirm gating + unbound localState pulse;
+  kiosk fires, view refuses — ACTIONBTN 31/31); **logical-state lights**
+  (`Light.logic {entityId, rules, offColor}` resolved planner-side
+  through the SAME rule engine; flash reuses the fireplace force-frame
+  idiom; click no-ops — LOGICLIGHT 22/22; shared sidebar `_ruleRows`
+  editor between InfoCard + lights); **weather chip upgrades**
+  (`chipAnchor` 6-way + `chipCustom` px + `chipContent` apparent/
+  humidity/wind + hourly/daily forecast strips; Planner runtime
+  `forecastDaily/Hourly` cache normalized to °C from entity + Open-Meteo
+  sources; pure `chipAnchorStyle` — WEATHER 121/121 at C); **weather
+  alerts v1** (`parseWeatherAlerts` normalizing NWS array + legacy
+  pipe-joined, MeteoAlarm awareness, DWD indexed, EnvCanada, generic CAP
+  → 3-level severity; `WeatherConfig.alerts {entityId, beacon}`; chip
+  severity badge + expandable panel; severity-scaled sky-pulse beacon in
+  the weather pipeline under `_keyWeather` — WEATHER 164/164, WFX alert
+  7/7). All suites re-verified green at HEAD post-merge.
+
 - **Deferral-clearing batch** (2026-07-17; 4 Opus agents in two waves +
   a live Open-Meteo smoke test): table-drag carries tucked chairs
   (`seatBelongsToTable`, 450 mm capture, release-time re-tuck; locked

@@ -1,4 +1,4 @@
-import { snap, snapVertex15, distMM, worldToLocal, localToWorld, FURNITURE_KINDS, furnitureCorners, furnitureLocalToWorld, furnitureWorldToLocal, resolveFurnitureDef, resolveFurnitureWallCollision, resolveSeatTableCollision, seatBelongsToTable, snapStepLightToSurface, snapFireplaceToWall, snapFloodlightToWall, snapSwitchToWall, snapAlarmToWall, isBinKind, nearestAlign, envScale, ENV_SCALE_MIN, ENV_SCALE_MAX, GRID_MM, floorContentBbox, resolveFloorEdgeDrag } from './geometry.js';
+import { snap, snapVertex15, distMM, worldToLocal, localToWorld, FURNITURE_KINDS, furnitureCorners, furnitureLocalToWorld, furnitureWorldToLocal, resolveFurnitureDef, resolveFurnitureWallCollision, resolveSeatTableCollision, seatBelongsToTable, snapStepLightToSurface, snapFireplaceToWall, snapFloodlightToWall, snapSwitchToWall, snapAlarmToWall, snapInfoCardToWall, snapActionButtonToWall, isBinKind, nearestAlign, envScale, ENV_SCALE_MIN, ENV_SCALE_MAX, GRID_MM, floorContentBbox, resolveFloorEdgeDrag } from './geometry.js';
 import { newId } from './storage.js';
 import {
   pxToMm, type View,
@@ -10,7 +10,7 @@ import {
   hitBgBody, hitBgCorner, bgEditable,
   hitMotionSensor, hitMotionRotateHandle, hitEnvSensor, hitEnvResizeHandle,
   hitBleProxy, hitAlarmPanel, hitSafetySensor, hitRobot,
-  hitCamera, hitCameraRotateHandle, hitPresenceZone, hitPresenceZoneVertex,
+  hitCamera, hitCameraRotateHandle, hitInfoCard, hitActionButton, hitPresenceZone, hitPresenceZoneVertex,
   hitGroundArea, hitGroundAreaVertex,
   hitVoidArea, hitVoidAreaVertex,
   hitDoor, hitDoorEnd, hitDoorLock, hitWindow, hitWindowEnd, hitFloorEdge,
@@ -50,6 +50,8 @@ function buildAlignCandidates(p: Planner, drag: Drag): { x: number; y: number }[
     case 'safety': for (const o of (f.safetySensors ?? [])) if (o.id !== drag.id) add(o); break;
     case 'robot': for (const o of (f.robots ?? [])) if (o.id !== drag.id) add(o); break;
     case 'camera': for (const o of (f.cameras ?? [])) if (o.id !== drag.id) add(o); break;
+    case 'info': for (const o of (f.infoCards ?? [])) if (o.id !== drag.id) add(o); break;
+    case 'action': for (const o of (f.actionButtons ?? [])) if (o.id !== drag.id) add(o); break;
   }
   return out;
 }
@@ -69,6 +71,8 @@ function draggedMoveItem(f: ReturnType<Planner['floor']>, drag: Drag)
     case 'safety': it = (f.safetySensors ?? []).find(x => x.id === drag.id); break;
     case 'robot': it = (f.robots ?? []).find(x => x.id === drag.id); break;
     case 'camera': it = (f.cameras ?? []).find(x => x.id === drag.id); break;
+    case 'info': it = (f.infoCards ?? []).find(x => x.id === drag.id); break;
+    case 'action': it = (f.actionButtons ?? []).find(x => x.id === drag.id); break;
   }
   return it && !it.locked ? it : null;
 }
@@ -525,6 +529,20 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
     p.alignCandidates = buildAlignCandidates(p, p.drag);
     canvas.style.cursor = 'grabbing'; e.preventDefault(); p.emitConfig(); return;
   }
+  const ich = hitInfoCard(p, view, mm);
+  if (ich) {
+    if (p.activeInfoId !== ich.id) p.activeInfoId = ich.id;
+    p.drag = { kind: 'info', id: ich.id, startMm: mm, start: { x: ich.x, y: ich.y } };
+    p.alignCandidates = buildAlignCandidates(p, p.drag);
+    canvas.style.cursor = 'grabbing'; e.preventDefault(); p.emitConfig(); return;
+  }
+  const abh = hitActionButton(p, view, mm);
+  if (abh) {
+    if (p.activeActionId !== abh.id) p.activeActionId = abh.id;
+    p.drag = { kind: 'action', id: abh.id, startMm: mm, start: { x: abh.x, y: abh.y } };
+    p.alignCandidates = buildAlignCandidates(p, p.drag);
+    canvas.style.cursor = 'grabbing'; e.preventDefault(); p.emitConfig(); return;
+  }
   const mh = hitMotionSensor(p, view, mm);
   if (mh) {
     if (p.activeMotionId !== mh.id) p.activeMotionId = mh.id;
@@ -686,6 +704,22 @@ export function onCanvasMouseMove(p: Planner, canvas: HTMLCanvasElement, view: V
         if (en && !en.locked) {
           en.x = Math.max(0, Math.min(f.w, drag.start.x + mm.x - drag.startMm.x));
           en.y = Math.max(0, Math.min(f.d, drag.start.y + mm.y - drag.startMm.y));
+        }
+        break;
+      }
+      case 'info': {
+        const ic = (f.infoCards ?? []).find(x => x.id === drag.id);
+        if (ic && !ic.locked) {
+          ic.x = Math.max(0, Math.min(f.w, drag.start.x + mm.x - drag.startMm.x));
+          ic.y = Math.max(0, Math.min(f.d, drag.start.y + mm.y - drag.startMm.y));
+        }
+        break;
+      }
+      case 'action': {
+        const ab = (f.actionButtons ?? []).find(x => x.id === drag.id);
+        if (ab && !ab.locked) {
+          ab.x = Math.max(0, Math.min(f.w, drag.start.x + mm.x - drag.startMm.x));
+          ab.y = Math.max(0, Math.min(f.d, drag.start.y + mm.y - drag.startMm.y));
         }
         break;
       }
@@ -1028,6 +1062,7 @@ export function onCanvasMouseMove(p: Planner, canvas: HTMLCanvasElement, view: V
     const safeHit = hitSafetySensor(p, view, mm);
     const overDevice =
       hitFixture(p, mm, Math.max(250, hitPx(view) * 3)) ||
+      hitActionButton(p, view, mm) ||      // action buttons fire in kiosk
       hitAlarmPanel(p, view, mm) ||
       (safeHit && !safeHit.entity_id) ||   // only unbound detectors are clickable
       hitRobot(p, view, mm) ||             // robots are always click-toggleable
@@ -1041,6 +1076,8 @@ export function onCanvasMouseMove(p: Planner, canvas: HTMLCanvasElement, view: V
     else if (hitMotionRotateHandle(p, view, mm)) canvas.style.cursor = 'grab';
     else if (hitEnvResizeHandle(p, view, mm)) canvas.style.cursor = 'ew-resize';
     else if (hitEnvSensor(p, view, mm)) canvas.style.cursor = 'grab';
+    else if (hitInfoCard(p, view, mm)) canvas.style.cursor = 'grab';
+    else if (hitActionButton(p, view, mm)) canvas.style.cursor = 'grab';
     else if (hitMotionSensor(p, view, mm)) canvas.style.cursor = 'grab';
     else if (hitBleProxy(p, view, mm)) canvas.style.cursor = 'grab';
     else if (hitAlarmPanel(p, view, mm)) canvas.style.cursor = 'grab';
@@ -1096,6 +1133,13 @@ export function onCanvasMouseUp(p: Planner, canvas: HTMLCanvasElement): void {
     const en = f.envSensors.find(x => x.id === drag.id);
     if (en) { en.x = snap(en.x, 10); en.y = snap(en.y, 10); }
     p.save();
+  } else if (drag.kind === 'info') {
+    const ic = (f.infoCards ?? []).find(x => x.id === drag.id);
+    if (ic) {
+      ic.x = snap(ic.x, 10); ic.y = snap(ic.y, 10);
+      snapInfoCardToWall(ic, f.walls);   // wall mount → flush on release (no-op for surface/floor)
+    }
+    p.save();
   } else if (drag.kind === 'ble') {
     const bp = (f.bleProxies ?? []).find(x => x.id === drag.id);
     if (bp) { bp.x = snap(bp.x, 10); bp.y = snap(bp.y, 10); }
@@ -1112,6 +1156,22 @@ export function onCanvasMouseUp(p: Planner, canvas: HTMLCanvasElement): void {
       } else {
         ap.x = snap(ap.x, 10); ap.y = snap(ap.y, 10);
         snapAlarmToWall(ap, f.walls);
+        p.save();
+      }
+    }
+  } else if (drag.kind === 'action') {
+    const ab = (f.actionButtons ?? []).find(x => x.id === drag.id);
+    if (ab) {
+      // Click-vs-drag: a tiny movement FIRES the action (control fixtures fire in
+      // edit + kiosk, like alarm/lock); a real move snaps flush to the nearest
+      // wall when wallMount (like a switch, no ganging), free otherwise.
+      const moved = Math.hypot(ab.x - drag.start.x, ab.y - drag.start.y);
+      if (moved < 30) {
+        ab.x = drag.start.x; ab.y = drag.start.y;
+        p.fireAction(ab);
+      } else {
+        ab.x = snap(ab.x, 10); ab.y = snap(ab.y, 10);
+        snapActionButtonToWall(ab, f.walls);
         p.save();
       }
     }
@@ -1333,6 +1393,9 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
       if (it) p.toggleItem(it);
       return;
     }
+    // Action button → fire the configured HA service (kiosk fires; view refuses).
+    const abHit2 = hitActionButton(p, view, mm);
+    if (abHit2) { p.fireAction(abHit2); return; }
     // Alarm keypad → open the control/status modal (device interaction, not edit).
     const aHit2 = hitAlarmPanel(p, view, mm);
     if (aHit2) { openAlarmModal(canvas, aHit2.id); return; }
@@ -1452,6 +1515,40 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
       label: `Env ${f.envSensors.length + 1}`, entity_id: null,
     });
     p.activeEnvId = id;
+    p.save();
+    p.setTool('select');
+    p.emitConfig();
+    return;
+  }
+  if (p.tool === 'infocard') {
+    const id = newId('ic');
+    const ic = {
+      id,
+      x: snap(Math.max(0, Math.min(f.w, mm.x)), 10),
+      y: snap(Math.max(0, Math.min(f.d, mm.y)), 10),
+      mount: 'wall' as const, displayMode: 'entity' as const, entity_id: null,
+      label: `Info ${(f.infoCards ?? []).length + 1}`,
+    };
+    snapInfoCardToWall(ic, f.walls);   // flush to a wall on drop (default wall mount)
+    (f.infoCards ??= []).push(ic);
+    p.activeInfoId = id;
+    p.save();
+    p.setTool('select');
+    p.emitConfig();
+    return;
+  }
+  if (p.tool === 'action') {
+    const id = newId('act');
+    const ab = {
+      id,
+      x: snap(Math.max(0, Math.min(f.w, mm.x)), 10),
+      y: snap(Math.max(0, Math.min(f.d, mm.y)), 10),
+      wallMount: true, actionKind: 'toggle' as const, entity_id: null,
+      label: `Action ${(f.actionButtons ?? []).length + 1}`,
+    };
+    snapActionButtonToWall(ab, f.walls);   // flush to a wall on drop (default wall mount)
+    (f.actionButtons ??= []).push(ab);
+    p.activeActionId = id;
     p.save();
     p.setTool('select');
     p.emitConfig();
@@ -1647,6 +1744,20 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
     p.save(); p.setTool('select'); p.emitConfig(); return;
   }
   if (p.tool === 'delete') {
+    const ichit = hitInfoCard(p, view, mm);
+    if (ichit) {
+      if (ichit.locked) return;
+      f.infoCards = (f.infoCards ?? []).filter(x => x.id !== ichit.id);
+      if (p.activeInfoId === ichit.id) p.activeInfoId = null;
+      p.save(); p.emitConfig(); return;
+    }
+    const abhit = hitActionButton(p, view, mm);
+    if (abhit) {
+      if (abhit.locked) return;
+      f.actionButtons = (f.actionButtons ?? []).filter(x => x.id !== abhit.id);
+      if (p.activeActionId === abhit.id) p.activeActionId = null;
+      p.save(); p.emitConfig(); return;
+    }
     const ehit = hitEnvSensor(p, view, mm);
     if (ehit) {
       if (ehit.locked) return;

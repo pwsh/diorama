@@ -20,13 +20,42 @@ import {
   presenceZoneColor, cameraFov, cameraRange, cameraHeight, cameraStateColor,
   GROUND_KINDS,
   ENV_KINDS, envKindOf, envColor, envValueText, envHeight, envScale,
+  infoCardText, infoCardRule, infoCardScale, infoCardMount, infoCardHeight,
+  infoCardW, infoCardH,
+  logicLightState, actionButtonHeight, actionButtonSize, actionButtonColor, ACTION_BUTTON_DEFAULTS,
 } from './geometry.js';
-import type { Door, Window as WindowType, EnvSensor, BleProxy, AlarmPanel, SafetySensor, RobotFixture, CameraFixture, PresenceZone, ObjectRecipe, ActivityKind } from './types.js';
+import type { Door, Window as WindowType, EnvSensor, BleProxy, AlarmPanel, SafetySensor, RobotFixture, CameraFixture, PresenceZone, InfoCard, ActionButton, ObjectRecipe, ActivityKind } from './types.js';
 
 // The subset of Planner.RobotState the renderer reads (structural — keeps the
 // renderer decoupled from the planner). Positions are plan-frame world mm.
 export interface RobotRenderState {
   x: number; y: number; heading: number; phase: number; activity: string; led: string;
+}
+
+// Persistent info-card rig: the plaque's text object (billboard Sprite or
+// fixed-orientation Mesh) + its backing canvas/texture, mutated in place by the
+// per-frame pass for clock repaints + flash pulses (no rebuild).
+interface InfoCardRig {
+  card: InfoCard;
+  obj: THREE.Sprite | THREE.Mesh;   // the text carrier (billboard Sprite | fixed Mesh)
+  tex: THREE.CanvasTexture;
+  cv: HTMLCanvasElement;
+  lastText: string;
+  lastColor: string;
+  flash: boolean;                   // a matched rule flagged flash → pulse per frame
+  clock: boolean;                   // clock/date mode → repaint on text change per frame
+  imperial: boolean;
+}
+
+// Persistent action-button rig (batch DC-B). Built under _keyActions; the cap
+// mesh is animated per-frame (depress + emissive pulse) by advanceActionButtons
+// from a press-timestamp map WITHOUT a rebuild.
+interface ActionRig {
+  id: string;
+  cap: THREE.Mesh;                  // the physical button cap (depresses on press)
+  capMat: THREE.MeshToonMaterial;   // for the emissive pulse
+  capBaseZ: number;                 // rest local-Z of the cap (press axis is local +Z)
+  baseEmissive: number;             // rest emissive intensity (running-glow or dim baseline)
 }
 
 // Persistent moving-robot rig (like a humanoid: built once, mutated per frame).
@@ -104,6 +133,12 @@ export interface WeatherFxState {
   rainSoon?: boolean;
   sunAzimuthDeg?: number | null;
   sunElevationDeg?: number | null;
+  // DC-D weather-alert beacon: the worst active alert's severity, or absent/
+  // undefined when no alert is active OR the beacon is gated off (three-view
+  // folds the weatherFx layer + effects3d master + the alerts.beacon toggle).
+  // Drives a slow colored sky-pulse light (updateWeather + _advanceWeather). A
+  // stale renderer chunk ignores this field entirely (no beacon).
+  alertSeverity?: 'advisory' | 'watch' | 'warning';
 }
 
 // One precipitation / dust point cloud (W2). `pos` aliases the geometry's
@@ -508,8 +543,15 @@ type StateProvider = (id: string) => HassState | null;
 // unbound but with a localState → a synthetic envelope; else null. Keeping the
 // resolution renderer-side (rather than teaching every builder about localState)
 // means only the per-item read changes.
-function itemState(item: { entity_id?: string | null; localState?: string },
+function itemState(item: { entity_id?: string | null; localState?: string; logic?: { entityId?: string; rules?: unknown[]; offColor?: string } },
                    stateOf: StateProvider): HassState | null {
+  // Logical-state light (batch DC-B): derive a synthetic on/color/flash from a
+  // rule over ANY entity — same resolver Planner.effectiveState uses, so 2D + 3D
+  // agree. Takes precedence over entity_id/localState (a logic light is derived).
+  if (item.logic?.entityId) {
+    const raw = stateOf(item.logic.entityId)?.state ?? null;
+    return logicLightState(item.logic as { rules?: import('./value-rules.js').ValueRule[]; offColor?: string }, raw) as HassState;
+  }
   if (item.entity_id) return stateOf(item.entity_id);
   if (item.localState) return { state: item.localState, attributes: {}, entity_id: '' } as HassState;
   return null;
@@ -715,6 +757,20 @@ export class ThreeDRenderer {
   private _sensorGroup = new THREE.Group();
   private _motionGroup = new THREE.Group();
   private _envGroup = new THREE.Group();
+  // Info-card plaques (Display & Controls arc). Rebuilt under _keyInfo; each
+  // rig carries its persistent text sprite/plane + canvas so the per-frame pass
+  // (_advanceInfoCards) can repaint clock cards on the minute and pulse flashing
+  // rules WITHOUT a rebuild. Own `info` layer. CanvasTextures freed via
+  // _disposeSpriteMaps (sprite branch) + textPlane sweep (plane branch).
+  private _infoGroup = new THREE.Group();
+  private _infoRigs: InfoCardRig[] = [];
+  // Action buttons (batch DC-B). Rebuilt under _keyActions; the cap depress +
+  // emissive pulse animate per-frame (advanceActionButtons) from a press-time
+  // map, no rebuild. Rides the `switches` layer (it IS a control). Clickable
+  // (userData.kind='action') → Planner.fireAction.
+  private _actionGroup = new THREE.Group();
+  private _actionRigs: ActionRig[] = [];
+  private _actionPressAt: Record<string, number> = {};   // fixture id → last press (performance.now() ms)
   private _bleGroup = new THREE.Group();
   private _alarmGroup = new THREE.Group();
   private _safetyGroup = new THREE.Group();
@@ -803,6 +859,23 @@ export class ThreeDRenderer {
   private _stormDark = false;    // precipForecast sky darkening currently wanted
   private _stormDarkAmt = 0;     // eased 0..1 darkening amount
   private _stormBaseBg: THREE.Color | null = null;   // preset tint captured when darkening began
+  // DC-D weather-alert ambient beacon: a low colored PointLight above floor
+  // center, slowly sine-pulsed by severity (a faint edge-of-vision wash, NOT a
+  // strobe; NO geometry). Built lazily, disposed only in destroy() (shared-
+  // resource rule — lives on _scene, outside _weatherGroup, so _clearWeather
+  // never removes it). Severity + color set in updateWeather under _keyWeather;
+  // intensity pulsed per frame in _advanceWeather (eased in/out — no pop).
+  private _alertPulseLight: THREE.PointLight | null = null;
+  private _alertPulseSeverity: 'advisory' | 'watch' | 'warning' | null = null;
+  private _alertPulseCfg: { color: number; peak: number; period: number } | null = null;
+  private _alertPulseAmt = 0;     // eased 0..1 presence
+  private _alertPulsePhase = 0;   // seconds accumulator for the sine
+  private static readonly ALERT_BEACON: Record<'advisory' | 'watch' | 'warning',
+    { color: number; peak: number; period: number }> = {
+    advisory: { color: 0xf5c400, peak: 0.9, period: 4.5 },   // yellow, gentle
+    watch:    { color: 0xff8c00, peak: 1.6, period: 3.2 },   // orange
+    warning:  { color: 0xe6291a, peak: 2.6, period: 2.3 },   // red, most urgent
+  };
   private _bgTexCache: { dataUrl: string; tex: THREE.Texture } | null = null;
   private _rafId: number | null = null;
   private _fw = 8000;
@@ -828,8 +901,8 @@ export class ThreeDRenderer {
   private _lastAnimT = 0;   // performance.now()/1000 of the previous _animate frame
   private _ZONE_H = 305;  // 1 ft — low outlines that don't wall off the room
   private _OBJ_H = 900;
-  private _onFixtureClick: ((info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'safety' | 'robot' | 'lock' | 'appliance'; entity_id: string | null; fixtureId: string }) => void) | null = null;
-  private _onFixtureDblClick: ((info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'safety' | 'robot' | 'lock' | 'appliance'; entity_id: string | null; fixtureId: string }) => void) | null = null;
+  private _onFixtureClick: ((info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'safety' | 'robot' | 'lock' | 'appliance' | 'action'; entity_id: string | null; fixtureId: string }) => void) | null = null;
+  private _onFixtureDblClick: ((info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'safety' | 'robot' | 'lock' | 'appliance' | 'action'; entity_id: string | null; fixtureId: string }) => void) | null = null;
   private _raycaster = new THREE.Raycaster();
   // Per-target humanoid rigs, persisted across frames so we can carry
   // walk-cycle phase + smoothed body facing.
@@ -1047,7 +1120,8 @@ export class ThreeDRenderer {
     this._scene.add(this._grid);
     this._scene.add(this._floorGroup, this._doorGroup, this._modelGroup,
                     this._zoneGroup, this._haloGroup,
-                    this._sensorGroup, this._motionGroup, this._envGroup,
+                    this._sensorGroup, this._motionGroup, this._envGroup, this._infoGroup,
+                    this._actionGroup,
                     this._bleGroup, this._alarmGroup, this._safetyGroup,
                     this._robotGroup, this._robotRigGroup, this._cameraGroup, this._camAlertGroup, this._pzoneGroup,
                     this._groundGroup,
@@ -1128,15 +1202,15 @@ export class ThreeDRenderer {
     this._animate();
   }
 
-  onFixtureClick(fn: (info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'safety' | 'robot' | 'lock' | 'appliance'; entity_id: string | null; fixtureId: string }) => void): void {
+  onFixtureClick(fn: (info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'safety' | 'robot' | 'lock' | 'appliance' | 'action'; entity_id: string | null; fixtureId: string }) => void): void {
     this._onFixtureClick = fn;
   }
-  onFixtureDblClick(fn: (info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'safety' | 'robot' | 'lock' | 'appliance'; entity_id: string | null; fixtureId: string }) => void): void {
+  onFixtureDblClick(fn: (info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'safety' | 'robot' | 'lock' | 'appliance' | 'action'; entity_id: string | null; fixtureId: string }) => void): void {
     this._onFixtureDblClick = fn;
   }
 
   private _raycastFixture(clientX: number, clientY: number):
-      { kind: 'light' | 'switch' | 'media' | 'alarm' | 'safety' | 'robot' | 'lock' | 'appliance'; entity_id: string | null; fixtureId: string } | null {
+      { kind: 'light' | 'switch' | 'media' | 'alarm' | 'safety' | 'robot' | 'lock' | 'appliance' | 'action'; entity_id: string | null; fixtureId: string } | null {
     if (!this._renderer || !this._camera) return null;
     const rect = this._renderer.domElement.getBoundingClientRect();
     const ndc = new THREE.Vector2(
@@ -1155,6 +1229,8 @@ export class ThreeDRenderer {
     if (this._lightGroup.visible) roots.push(this._lightGroup);
     // Switches ride their own layer; layer-hidden switches aren't click targets.
     if (this._switchGroup.visible) roots.push(this._switchGroup);
+    // Action buttons (userData.kind='action') → Planner.fireAction; ride switches.
+    if (this._actionGroup.visible) roots.push(this._actionGroup);
     // Alarm keypads are clickable (open the control modal); ride the sensors layer.
     if (this._alarmGroup.visible) roots.push(this._alarmGroup);
     // Smoke / CO detectors are clickable (unbound → manual test trigger).
@@ -1173,7 +1249,7 @@ export class ThreeDRenderer {
       let obj: THREE.Object3D | null = h.object;
       while (obj) {
         const ud = obj.userData;
-        if (ud && (ud.kind === 'light' || ud.kind === 'switch' || ud.kind === 'media' || ud.kind === 'alarm' || ud.kind === 'safety' || ud.kind === 'robot' || ud.kind === 'lock' || ud.kind === 'appliance')) {
+        if (ud && (ud.kind === 'light' || ud.kind === 'switch' || ud.kind === 'media' || ud.kind === 'alarm' || ud.kind === 'safety' || ud.kind === 'robot' || ud.kind === 'lock' || ud.kind === 'appliance' || ud.kind === 'action')) {
           return { kind: ud.kind, entity_id: ud.entity_id ?? null, fixtureId: String(ud.fixtureId) };
         }
         obj = obj.parent;
@@ -1627,7 +1703,7 @@ export class ThreeDRenderer {
   clearTransientGroups(): void {
     for (const g of [
       this._floorGroup, this._doorGroup, this._modelGroup, this._zoneGroup, this._haloGroup,
-      this._sensorGroup, this._motionGroup, this._bleGroup, this._alarmGroup,
+      this._sensorGroup, this._motionGroup, this._infoGroup, this._actionGroup, this._bleGroup, this._alarmGroup,
       this._safetyGroup, this._robotGroup, this._robotRigGroup, this._cameraGroup, this._camAlertGroup, this._pzoneGroup,
       this._groundGroup,
       this._lightGroup, this._switchGroup, this._targetGroup, this._ghostGroup,
@@ -1636,6 +1712,8 @@ export class ThreeDRenderer {
       this._disposeSpriteMaps(g);
       this._clearGroup(g);
     }
+    this._infoRigs = [];
+    this._actionRigs = [];
     this._nowPlaying = {};
     this._pulseActive = false;
     // Robot rigs live in _robotRigGroup (just cleared); drop their bookkeeping so
@@ -2092,6 +2170,8 @@ export class ThreeDRenderer {
   setLayerVisibility(v: import('./types.js').Layers2D): void {
     this._lightGroup.visible = v.lights !== false;
     this._switchGroup.visible = v.switches !== false;
+    // Action buttons ride the switches layer (they ARE a control).
+    this._actionGroup.visible = v.switches !== false;
     this._sensorGroup.visible = v.sensors !== false;
     // BLE proxy pucks + alarm keypads ride the sensors layer (like mmWave).
     this._bleGroup.visible = v.sensors !== false;
@@ -2106,6 +2186,8 @@ export class ThreeDRenderer {
     this._camAlertGroup.visible = v.sensors !== false;   // alert cards ride the sensors layer
     this._motionGroup.visible = v.motion !== false;
     this._envGroup.visible = v.env !== false;
+    // Info-card plaques ride their own `info` layer (default on).
+    this._infoGroup.visible = v.info !== false;
     const z = v.zones !== false;
     this._zoneGroup.visible = z;
     this._haloGroup.visible = z;
@@ -5773,6 +5855,223 @@ export class ThreeDRenderer {
     }
   }
 
+  // Info-card plaques (Display & Controls arc). Rebuilt only under the _keyInfo
+  // dirty key (bound value / color / clock-minute buckets). Each card = a toon
+  // bezel box + a text carrier (camera-facing Sprite when billboard, else a
+  // fixed-orientation PlaneGeometry Mesh oriented to the card rotation). The
+  // per-rig CanvasTexture is freed by _disposeSpriteMaps (sprite branch or the
+  // userData.textPlane sweep). Clock repaints + flash pulses happen per-frame in
+  // _advanceInfoCards (no rebuild). `opts.now` drives clock text.
+  updateInfoCards(cards: InfoCard[], stateProvider: StateProvider,
+                  layers?: import('./types.js').Layers2D,
+                  opts?: { now?: Date; imperial?: boolean }): void {
+    if (!this._scene) return;
+    this._disposeSpriteMaps(this._infoGroup);
+    this._clearGroup(this._infoGroup);
+    this._infoRigs = [];
+    if (layers && layers.info === false) return;   // layer off → nothing built
+    const now = opts?.now ?? new Date();
+    const imperial = !!opts?.imperial;
+    for (const ic of cards) {
+      if (ic.hidden) continue;
+      const mode = ic.displayMode ?? 'entity';
+      const st = mode === 'entity' && ic.entity_id ? stateProvider(ic.entity_id) : null;
+      const text = infoCardText(ic, st, { now, imperial });
+      const hit = infoCardRule(ic, st);
+      const colorHex = hit.color ?? '#7fd4ff';
+      const label = hit.label ?? text;
+      const dim = mode === 'entity' && !ic.entity_id;
+      const sc = infoCardScale(ic);
+      const billboard = ic.billboard !== false;
+      const w = infoCardW(ic), h = infoCardH(ic);
+      const rotY = -(ic.rotation ?? 0) * Math.PI / 180;   // world 0=+Y CW → scene Y
+      const pos = this._w(ic.x, ic.y, infoCardHeight(ic));
+
+      // Bezel plaque body (dark screen material; outline shell for wall/floor).
+      const bezel = new THREE.Mesh(
+        new THREE.BoxGeometry(w, h, 20),
+        this._mat({ color: 0x22262a, emissive: 0x0a0d10, emissiveIntensity: 0.4 }));
+      bezel.rotation.y = rotY;
+      bezel.position.set(pos.x, pos.y, pos.z);
+      this._infoGroup.add(bezel);
+      if (infoCardMount(ic) !== 'surface') this._addOutlines(bezel, 3, 40);
+
+      // Text carrier.
+      const cv = document.createElement('canvas');
+      cv.width = 512; cv.height = 140;
+      this._paintInfoCanvas(cv, dim ? 'unbound' : (label || '—'), colorHex, dim);
+      const tex = new THREE.CanvasTexture(cv);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      let obj: THREE.Sprite | THREE.Mesh;
+      if (billboard) {
+        const H = 170 * sc;
+        const sp = new THREE.Sprite(new THREE.SpriteMaterial({
+          map: tex, transparent: true, depthWrite: false,
+        }));
+        sp.scale.set(H * (cv.width / cv.height), H, 1);
+        sp.position.set(pos.x, pos.y, pos.z);
+        obj = sp;
+      } else {
+        const pw = w * 0.9, ph = pw * (cv.height / cv.width);
+        const m = new THREE.Mesh(
+          new THREE.PlaneGeometry(pw, ph),
+          new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false }));
+        m.userData.textPlane = true;
+        m.userData.outlineSkip = true;
+        m.rotation.y = rotY;
+        // proud of the bezel front face (local +Z after rotY → scene (sin,0,cos))
+        const nx = Math.sin(rotY), nz = Math.cos(rotY);
+        m.position.set(pos.x + nx * 11, pos.y, pos.z + nz * 11);
+        obj = m;
+      }
+      this._infoGroup.add(obj);
+      this._infoRigs.push({
+        card: ic, obj, tex, cv, lastText: dim ? 'unbound' : (label || '—'),
+        lastColor: colorHex, flash: !!hit.flash, clock: mode !== 'entity', imperial,
+      });
+    }
+  }
+
+  // Paint an info-card text canvas (bezel + auto-fit value text). Reused by the
+  // per-frame clock/flash pass — same canvas is repainted in place (tex marked
+  // needsUpdate), never reallocated, so no texture churn.
+  private _paintInfoCanvas(cv: HTMLCanvasElement, text: string, colorHex: string, dim: boolean): void {
+    const ctx = cv.getContext('2d')!;
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    ctx.beginPath();
+    if (typeof (ctx as { roundRect?: unknown }).roundRect === 'function') {
+      ctx.roundRect(6, 6, cv.width - 12, cv.height - 12, 18);
+    } else {
+      ctx.rect(6, 6, cv.width - 12, cv.height - 12);
+    }
+    ctx.fillStyle = 'rgba(10,14,20,0.9)'; ctx.fill();
+    ctx.lineWidth = 5; ctx.strokeStyle = colorHex; ctx.stroke();
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    let fs = 74;
+    const maxW = cv.width - 44;
+    ctx.font = `700 ${fs}px system-ui, sans-serif`;
+    const tw = ctx.measureText(text || '—').width;
+    if (tw > maxW) { fs = Math.max(18, Math.floor(fs * maxW / tw)); ctx.font = `700 ${fs}px system-ui, sans-serif`; }
+    ctx.fillStyle = dim ? 'rgba(245,247,250,0.42)' : colorHex;
+    ctx.fillText(text || '—', cv.width / 2, cv.height / 2 + 3);
+  }
+
+  // Per-frame info-card pass (called from _animate): repaint clock/date cards
+  // when their formatted text flips (minute/second boundary) and pulse the
+  // opacity of any card whose matched rule flagged `flash`. No rebuild, zero
+  // allocation beyond the (occasional) clock repaint.
+  private _advanceInfoCards(now: Date): void {
+    if (!this._infoRigs.length) return;
+    const pulse = 0.45 + 0.55 * Math.abs(Math.sin(performance.now() / 260));
+    for (const rig of this._infoRigs) {
+      if (rig.clock) {
+        const text = infoCardText(rig.card, null, { now, imperial: rig.imperial });
+        if (text !== rig.lastText) {
+          rig.lastText = text;
+          this._paintInfoCanvas(rig.cv, text, rig.lastColor, false);
+          rig.tex.needsUpdate = true;
+        }
+      }
+      if (rig.flash) {
+        const mat = rig.obj.material as THREE.Material & { opacity: number };
+        mat.opacity = pulse;
+      }
+    }
+  }
+
+  // Action buttons (batch DC-B). A small plate + a raised colored button CAP that
+  // depresses on press. Wall-mount = flush plate (cap faces the room, +Z after
+  // rotY, like the switch/alarm plate); free/table = plate tilted face-up on a
+  // short pedestal + a blob shadow. Rebuilt under _keyActions in three-view;
+  // running-script glow folds into that key. The cap depress + emissive pulse
+  // animate per-frame (advanceActionButtons) from _actionPressAt — no rebuild.
+  updateActionButtons(buttons: ActionButton[], stateProvider: StateProvider): void {
+    if (!this._scene) return;
+    this._clearGroup(this._actionGroup);
+    this._actionRigs = [];
+    for (const b of buttons) {
+      if (b.hidden) continue;
+      const st = itemState(b, stateProvider);
+      const running = !!b.entity_id && b.entity_id.startsWith('script.') && st?.state === 'on';
+      const colInt = hexToInt(actionButtonColor(b));
+      const wall = b.wallMount !== false;
+      const size = actionButtonSize(b);
+      const plateW = size, plateH = size, plateD = ACTION_BUTTON_DEFAULTS.plateDepth;
+      const ud = { kind: 'action' as const, entity_id: b.entity_id ?? null, fixtureId: b.id };
+      const grp = new THREE.Group();
+      const pos = this._w(b.x, b.y, actionButtonHeight(b));
+      grp.position.set(pos.x, pos.y, pos.z);
+      if (wall) {
+        grp.rotation.y = -((b.rotation || 0) * Math.PI / 180);
+      } else {
+        // Table/floor puck: plate faces UP (+Z local → +Y world) on a pedestal.
+        grp.rotation.x = -Math.PI / 2;
+        const ped = new THREE.Mesh(
+          new THREE.CylinderGeometry(size * 0.18, size * 0.22, size * 0.5, 16),
+          this._mat({ color: 0x33383f, metalness: 0.2, roughness: 0.6 }));
+        ped.rotation.x = Math.PI / 2;   // stand it up under the tilted plate
+        ped.position.z = size * 0.25;
+        ped.userData = ud;
+        grp.add(ped);
+      }
+      // Plate body
+      const plate = new THREE.Mesh(
+        new THREE.BoxGeometry(plateW, plateH, plateD),
+        this._mat({ color: 0x16191f, metalness: 0.2, roughness: 0.6 }));
+      plate.userData = ud;
+      grp.add(plate);
+      this._addOutlines(plate, 3, 40);
+      // Button cap (raised cylinder proud of the +Z face)
+      const capH = size * 0.28;
+      const capBaseZ = plateD / 2 + capH / 2;
+      const capMat = this._mat({
+        color: colInt, emissive: colInt,
+        emissiveIntensity: running ? 0.9 : 0.35,
+      }) as THREE.MeshToonMaterial;
+      const cap = new THREE.Mesh(new THREE.CylinderGeometry(size * 0.3, size * 0.3, capH, 20), capMat);
+      cap.rotation.x = Math.PI / 2;   // cylinder axis → local Z
+      cap.position.z = capBaseZ;
+      cap.userData = { ...ud, outlineSkip: true };
+      grp.add(cap);
+      if (!wall) grp.add(this._blobShadow(size * 0.5, size * 0.5));
+      this._actionGroup.add(grp);
+      this._actionRigs.push({ id: b.id, cap, capMat, capBaseZ, baseEmissive: running ? 0.9 : 0.35 });
+    }
+  }
+
+  // Stamp a press so advanceActionButtons animates the cap depress + flash.
+  pressActionButton(id: string): void { this._actionPressAt[id] = performance.now(); }
+
+  // Per-frame action-button pass (called from _animate): ease each recently-pressed
+  // cap DOWN ~5 mm + brighten its emissive over ~300 ms, then back. Reads the
+  // press-time map three-view syncs from Planner.actionPressFx. Zero allocation.
+  private _advanceActionButtons(): void {
+    if (!this._actionRigs.length) return;
+    const now = performance.now();
+    for (const rig of this._actionRigs) {
+      const at = this._actionPressAt[rig.id] ?? -Infinity;
+      const age = now - at;
+      if (age >= 0 && age < 300) {
+        const k = 1 - age / 300;                 // 1 → 0 over the press window
+        rig.cap.position.z = rig.capBaseZ - 5 * k;
+        rig.capMat.emissiveIntensity = rig.baseEmissive + 0.8 * k;
+      } else {
+        if (rig.cap.position.z !== rig.capBaseZ) rig.cap.position.z = rig.capBaseZ;
+        if (rig.capMat.emissiveIntensity !== rig.baseEmissive) rig.capMat.emissiveIntensity = rig.baseEmissive;
+      }
+    }
+  }
+
+  // Sync the renderer's press-time map from Planner.actionPressFx (called each
+  // frame by three-view). Stamps any press newer than what we have so ALL fire
+  // paths (2D canvas, sidebar Test, 3D click) drive the 3D depress uniformly.
+  syncActionPresses(fx: { id: string; at: number }[]): void {
+    for (const r of fx) {
+      const cur = this._actionPressAt[r.id] ?? -Infinity;
+      if (r.at > cur) this._actionPressAt[r.id] = r.at;
+    }
+  }
+
   // GPS device pins + 3D landmark pins (Feature G, phase G2). Camera-facing
   // text sprites in _gpsGroup: a landmark sits near the ground (📍 name); a GPS
   // pin floats at ~1800 mm at its render position (yard true pos / boundary edge
@@ -5847,7 +6146,14 @@ export class ThreeDRenderer {
   private _disposeSpriteMaps(g: THREE.Group): void {
     g.traverse(o => {
       const s = o as THREE.Sprite;
-      if (s.isSprite) s.material.map?.dispose();
+      if (s.isSprite) { s.material.map?.dispose(); return; }
+      // Fixed-orientation info-card text lives on a plain Mesh (userData.textPlane)
+      // whose CanvasTexture map _clearGroup disposes as a material — but its map
+      // must be freed too. Sweep it here (the isSprite guard would skip it).
+      if ((o as THREE.Mesh).userData?.textPlane) {
+        const m = (o as THREE.Mesh).material as THREE.MeshBasicMaterial;
+        m?.map?.dispose();
+      }
     });
   }
 
@@ -5948,6 +6254,27 @@ export class ThreeDRenderer {
     } else {
       this._weatherSunTarget = null;
     }
+
+    // ── DC-D alert beacon (alertSeverity) — target eased in _advanceWeather ──
+    this._setAlertBeacon(fx.alertSeverity ?? null);
+  }
+
+  // Set the alert beacon's target severity + color. The light is built lazily on
+  // first need and kept for the renderer's life (disposed only in destroy()).
+  // A null severity leaves the object in place; _advanceWeather eases it dark.
+  private _setAlertBeacon(sev: 'advisory' | 'watch' | 'warning' | null): void {
+    this._alertPulseSeverity = sev;
+    if (!sev || !this._scene) return;
+    const cfg = ThreeDRenderer.ALERT_BEACON[sev];
+    this._alertPulseCfg = cfg;
+    if (!this._alertPulseLight) {
+      // distance 0 = no falloff; positioned high over floor center for an even wash.
+      const l = new THREE.PointLight(cfg.color, 0, 0);
+      l.position.set(0, 5200, 0);
+      this._scene.add(l);
+      this._alertPulseLight = l;
+    }
+    this._alertPulseLight.color.setHex(cfg.color);
   }
 
   private _clearWeather(): void {
@@ -6273,6 +6600,23 @@ export class ThreeDRenderer {
       }
     }
 
+    // DC-D alert beacon: ease presence toward 1 while a severity is active (else
+    // 0), and modulate a slow sine. Runs regardless of _weatherGroup visibility
+    // (the light lives on _scene) so a layer toggle eases it out cleanly rather
+    // than popping. Zero allocation.
+    if (this._alertPulseLight) {
+      const want = this._alertPulseSeverity ? 1 : 0;
+      this._alertPulseAmt += (want - this._alertPulseAmt) * Math.min(1, dt / 1.5);
+      const cfg = this._alertPulseCfg;
+      if (cfg && this._alertPulseAmt > 0.001) {
+        this._alertPulsePhase += dt;
+        const sine = 0.35 + 0.65 * (0.5 + 0.5 * Math.sin(this._alertPulsePhase * 2 * Math.PI / cfg.period));
+        this._alertPulseLight.intensity = cfg.peak * this._alertPulseAmt * sine;
+      } else {
+        this._alertPulseLight.intensity = 0;
+      }
+    }
+
     if (!this._weatherGroup.visible) return;
 
     // Scrolling ground-fog planes.
@@ -6388,6 +6732,12 @@ export class ThreeDRenderer {
         const f1 = 0.7 + Math.random() * 0.3;
         r = 1.0 * f1; g = 0.45 * f1; b = 0.15 * f1;
         flickerMul = 0.85 + Math.random() * 0.30;
+      }
+      // Logic-light flash (batch DC-B): a matched rule flagged flash → pulse the
+      // emissive + pool per-frame (three-view forces the rebuild while flashing,
+      // the fireplace idiom). _dim (offColor idle) rides brightness already.
+      if (isOn && (attrs as Record<string, unknown>)._flash) {
+        flickerMul *= 0.35 + 0.65 * Math.abs(Math.sin(performance.now() / 220));
       }
       const color = new THREE.Color(r, g, b);
       const ud = { kind: 'light', entity_id: l.entity_id, fixtureId: l.id };
@@ -10614,7 +10964,7 @@ export class ThreeDRenderer {
     // GC isn't dumped a giant orphaned graph all at once on view-switch.
     for (const g of [
       this._floorGroup, this._doorGroup, this._modelGroup, this._zoneGroup, this._haloGroup,
-      this._sensorGroup, this._motionGroup, this._envGroup, this._bleGroup,
+      this._sensorGroup, this._motionGroup, this._envGroup, this._infoGroup, this._actionGroup, this._bleGroup,
       this._alarmGroup, this._safetyGroup, this._robotGroup, this._robotRigGroup,
       this._cameraGroup, this._camAlertGroup, this._pzoneGroup, this._groundGroup,
       this._lightGroup, this._switchGroup, this._targetGroup, this._gpsGroup, this._weatherGroup,
@@ -10655,6 +11005,8 @@ export class ThreeDRenderer {
     this._fogPlaneTex?.dispose(); this._fogPlaneTex = null;
     this._cloudShadowTex?.dispose(); this._cloudShadowTex = null;
     this._puddleTex?.dispose(); this._puddleTex = null;
+    // DC-D alert beacon light (shared resource — disposed only here).
+    if (this._alertPulseLight) { this._alertPulseLight.dispose(); this._alertPulseLight = null; }
     this._outlineMaterial?.dispose(); this._outlineMaterial = null;
     this._frontArrowMat?.dispose(); this._frontArrowMat = null;
     this._disposePrivMosaic();
@@ -10812,6 +11164,10 @@ export class ThreeDRenderer {
     this._advanceWeather(frameDt, nowS);
     // Glass-house transit puppet — scripted cross-STORY_H walk (Tier 2 stretch).
     this._advanceTransitPuppet(frameDt);
+    // Info-card plaques — clock repaint on the minute + flash pulse (no rebuild).
+    this._advanceInfoCards(new Date());
+    // Action buttons — cap depress + emissive pulse from the press-time map.
+    this._advanceActionButtons();
     if (this._renderer && this._scene && this._camera) {
       this._renderer.render(this._scene, this._camera);
     }

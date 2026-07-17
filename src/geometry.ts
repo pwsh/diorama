@@ -1,7 +1,10 @@
 // Pure geometry helpers — no DOM, no state.
 
 import type { Vec2, Sensor, BgImage, LightIconKind, FurnitureKind, EnvKind, WallKind,
-  ActivityKind, ObjectRecipe, Furniture, Room, Floor, SafetyKind, GroundKind } from './types.js';
+  ActivityKind, ObjectRecipe, Furniture, Room, Floor, SafetyKind, GroundKind,
+  InfoCard, InfoCardMount, ActionKind } from './types.js';
+import { formatEntityValue, formatClock, evalRules, ruleMatches,
+  type HassStateLike, type ClockMode, type ValueRule } from './value-rules.js';
 
 export const MM_PER_IN = 25.4;
 export const IN_PER_FT = 12;
@@ -1206,6 +1209,149 @@ export function envValueText(st: { state: string; attributes: Record<string, unk
   if (isNaN(v)) return st.state;
   const num = Math.abs(v) >= 100 ? Math.round(v).toString() : (Math.round(v * 10) / 10).toString();
   return unit ? `${num} ${unit}` : num;
+}
+
+// ── Info card fixture (Display & Controls arc) ────────────────────────────
+// Default plaque size + text-center height per mount. Mirrors FURNITURE_KINDS
+// defaults; the sidebar lets the user override w/h/height per instance.
+export const INFO_CARD_SCALE_MIN = 0.4, INFO_CARD_SCALE_MAX = 4;
+export interface InfoCardMountDef { w: number; h: number; height: number; }
+export const INFO_CARD_MOUNT_DEFAULTS: Record<InfoCardMount, InfoCardMountDef> = {
+  wall:    { w: 200, h: 120, height: 1450 },   // flush wall plaque (~thermostat height)
+  surface: { w: 150, h: 100, height: 40 },     // sits on a desk/counter, tilted back
+  floor:   { w: 250, h: 150, height: 1000 },   // pedestal / A-frame sign
+};
+export function infoCardMount(ic: { mount?: InfoCardMount }): InfoCardMount { return ic.mount ?? 'wall'; }
+export function infoCardW(ic: InfoCard): number { return ic.w ?? INFO_CARD_MOUNT_DEFAULTS[infoCardMount(ic)].w; }
+export function infoCardH(ic: InfoCard): number { return ic.h ?? INFO_CARD_MOUNT_DEFAULTS[infoCardMount(ic)].h; }
+export function infoCardHeight(ic: InfoCard): number { return ic.height ?? INFO_CARD_MOUNT_DEFAULTS[infoCardMount(ic)].height; }
+export function infoCardScale(ic: InfoCard): number {
+  const s = ic.fontScale ?? 1;
+  return Math.max(INFO_CARD_SCALE_MIN, Math.min(INFO_CARD_SCALE_MAX, s));
+}
+
+// Resolved display TEXT for an info card. Clock/date modes bypass the entity
+// entirely (formatClock, driven by the caller-supplied `now`); entity mode runs
+// the generic value formatter. Pure — `now`/`imperial` come from the caller.
+export function infoCardText(
+  ic: InfoCard, st: HassStateLike | null,
+  opts?: { now?: Date; imperial?: boolean },
+): string {
+  const mode = ic.displayMode ?? 'entity';
+  if (mode !== 'entity') {
+    return formatClock(mode as ClockMode, opts?.now ?? new Date(0),
+      { clockFormat: ic.clockFormat, dateFormat: ic.dateFormat, timeZone: ic.timeZone });
+  }
+  if (!ic.entity_id) return '—';
+  return formatEntityValue(st, ic.format, { imperial: opts?.imperial, now: opts?.now });
+}
+
+// Resolved rule result (color/flash/label) for an info card's current raw
+// state. Clock/date modes never carry rules. Returns {} when nothing matches.
+export function infoCardRule(ic: InfoCard, st: HassStateLike | null) {
+  if ((ic.displayMode ?? 'entity') !== 'entity') return {};
+  return evalRules(ic.rules, st?.state ?? '');
+}
+
+// Info cards with mount 'wall' lock flush to the nearest wall like a switch /
+// floodlight (no ganging — stacking two readouts on one spot isn't a real use
+// case, mirroring the alarm-panel precedent). The plaque back sits on the wall
+// face; center = axis + normal·(wallT/2 + plaqueDepth/2). Plaque depth ~20 mm.
+// Rotation follows the plate convention (front = local +Z ⇒ rotation atan2(nx,
+// ny), 0 = +Y world). No-op for non-wall mounts or when no wall is in range.
+export const INFO_CARD_PLATE_DEPTH_MM = 20;
+export function snapInfoCardToWall(
+  ic: { x: number; y: number; rotation?: number; mount?: InfoCardMount },
+  walls: { points: Vec2[]; kind?: WallKind }[],
+  maxMm = 500,
+): boolean {
+  if ((ic.mount ?? 'wall') !== 'wall') return false;
+  const hit = snapToWallEdge(walls, ic.x, ic.y, maxMm);
+  if (!hit) return false;
+  const off = WALL_HALF_MM + INFO_CARD_PLATE_DEPTH_MM / 2;   // 60
+  ic.x = Math.round(hit.x + hit.nx * off);
+  ic.y = Math.round(hit.y + hit.ny * off);
+  ic.rotation = Math.atan2(hit.nx, hit.ny) * 180 / Math.PI;
+  return true;
+}
+
+// ── Generic action / trigger button (batch DC-B) ──────────────────────────
+// Wall-plate / table / floor button that fires a configurable HA service. Wall
+// mount snaps flush like a switch (no ganging — a single-purpose button, so the
+// alarm-panel precedent applies); free mount is a table/floor puck. Rides the
+// `switches` layer.
+export const ACTION_BUTTON_DEFAULTS = { height: 1200, size: 220, color: '#4fa8ff', plateDepth: 30 };
+export function actionButtonHeight(b: { height?: number }): number { return b.height ?? ACTION_BUTTON_DEFAULTS.height; }
+export function actionButtonSize(b: { size?: number }): number {
+  return Math.max(80, Math.min(600, b.size ?? ACTION_BUTTON_DEFAULTS.size));
+}
+export function actionButtonColor(b: { color?: string }): string { return b.color || ACTION_BUTTON_DEFAULTS.color; }
+export function actionButtonKind(b: { actionKind?: ActionKind }): ActionKind { return b.actionKind ?? 'toggle'; }
+// Default on-plate glyph per action kind (overridable via ActionButton.icon).
+export const ACTION_ICON: Record<ActionKind, string> = {
+  button_press: '🔔', scene: '🎬', script: '▶️',
+  automation_trigger: '⚡', toggle: '🔀', custom: '🛠️',
+};
+export function actionButtonIcon(b: { actionKind?: ActionKind; icon?: string }): string {
+  return b.icon || ACTION_ICON[actionButtonKind(b)];
+}
+// Wall-mounted action buttons snap flush to the nearest wall like a switch /
+// alarm panel — plate BACK on the wall face, cap facing the room, NO ganging.
+// Center = axis + normal·(wallT/2 + plateDepth/2). Rotation follows the plate
+// convention (front = local +Z ⇒ rotation atan2(nx, ny), 0 = +Y world). No-op
+// for free-placement buttons or when no wall is in range.
+export function snapActionButtonToWall(
+  b: { x: number; y: number; rotation?: number; wallMount?: boolean },
+  walls: { points: Vec2[]; kind?: WallKind }[],
+  maxMm = 500,
+): boolean {
+  if (b.wallMount === false) return false;
+  const hit = snapToWallEdge(walls, b.x, b.y, maxMm);
+  if (!hit) return false;
+  const off = WALL_HALF_MM + ACTION_BUTTON_DEFAULTS.plateDepth / 2;   // 65
+  b.x = Math.round(hit.x + hit.nx * off);
+  b.y = Math.round(hit.y + hit.ny * off);
+  b.rotation = Math.atan2(hit.nx, hit.ny) * 180 / Math.PI;
+  return true;
+}
+
+// ── Logical-state light resolution (batch DC-B) ───────────────────────────
+// A Light.logic derives ON / color / flash from ANY entity's raw state through
+// the SHARED value-rules engine (ruleMatches, first-match-wins). Pure — the
+// caller supplies the raw state string. resolveLightLogic returns the abstract
+// decision (test-paged); logicLightState packages it as a synthetic HA state
+// envelope so it flows through the EXISTING light render paths unchanged
+// (Planner.effectiveState + the renderer's itemState both route through here).
+export interface LightLogicResolved { on: boolean; color?: string; flash?: boolean; }
+export function resolveLightLogic(logic: { rules?: ValueRule[]; offColor?: string }, raw: string | null): LightLogicResolved {
+  const rules = logic.rules ?? [];
+  const r = raw ?? '';
+  for (const rule of rules) {
+    if (ruleMatches(rule, r)) return { on: true, color: rule.color, flash: rule.flash };
+  }
+  return { on: false, color: logic.offColor };
+}
+// Synthetic HA state envelope for a logic light. Matched rule → 'on' with the
+// rule color as rgb_color (+ `_flash` marker when the rule flashes). No match +
+// offColor → 'on' but DIM (brightness 40) in offColor so it reads as an idle
+// indicator. No match + no offColor → 'off' (fully dark). The `_flash` / `_dim`
+// attributes are Diorama-private markers the light renderers honor.
+export function logicLightState(logic: { rules?: ValueRule[]; offColor?: string }, raw: string | null): HassStateLike {
+  const res = resolveLightLogic(logic, raw);
+  const attrs: Record<string, unknown> = {};
+  const setRgb = (hex?: string) => { if (hex) { const c = hexToRgb(hex); if (c) attrs.rgb_color = [c.r, c.g, c.b]; } };
+  if (res.on) {
+    setRgb(res.color);
+    if (res.flash) attrs._flash = true;
+    return { state: 'on', attributes: attrs };
+  }
+  if (res.color) {   // offColor dim indicator
+    setRgb(res.color);
+    attrs.brightness = 40;
+    attrs._dim = true;
+    return { state: 'on', attributes: attrs };
+  }
+  return { state: 'off', attributes: attrs };
 }
 
 // Furniture kind defaults: footprint (mm) + 3D height (mm) + tint.

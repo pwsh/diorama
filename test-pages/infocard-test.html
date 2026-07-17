@@ -1,0 +1,123 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>infocard test</title>
+<style>html,body{margin:0;background:#111;color:#ccc;font:12px sans-serif}#c{width:1000px;height:640px}#log{padding:8px;white-space:pre-wrap}</style>
+<div id="c"></div>
+<div id="log"></div>
+<script type="module">
+  // InfoCard fixture renderer smoke test (Display & Controls arc, DC-A):
+  //   • an entity card builds a bezel + text carrier; sprite text = formatted state
+  //   • a value→color rule tints the text; a flash rule pulses opacity across frames
+  //   • billboard:true → THREE.Sprite; billboard:false → fixed-orientation Mesh (textPlane)
+  //   • clock-mode card repaints when the formatted minute flips (per-frame pass)
+  //   • the `info` layer flag hides the group + drops from the render (empty build)
+  //   • the three-view _keyInfo formula flips on state + layer flag (pure mirror)
+  const mod = await import('./assets/three-renderer.js');
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+
+  const results = [];
+  const assert = (name, cond, detail = '') => results.push(`${cond ? 'PASS' : 'FAIL'} ${name}${detail && !cond ? ' (' + detail + ')' : ''}`);
+
+  const floor = {
+    id: 'f1', name: 'F', w: 6000, d: 5000,
+    walls: [], furniture: [], lights: [], switches: [], sensors: [],
+    motionSensors: [], envSensors: [], infoCards: [], doors: [], windows: [],
+    bg: null, model3d: null, look3d: null, rooms: [],
+  };
+  r.updateFloor(floor, { preset: 'day' });
+
+  const sp = (states) => (id) => states[id] || null;
+  const grpN = () => r._infoGroup.children.length;
+  const rig = (id) => r._infoRigs.find(x => x.card.id === id);
+
+  // ── entity card: builds bezel + text; text = formatted state ─────────────
+  const tempCard = {
+    id: 'ic1', x: 2000, y: 2000, mount: 'wall', displayMode: 'entity',
+    entity_id: 'sensor.temp', billboard: true,
+  };
+  let states = { 'sensor.temp': { state: '21.42', attributes: { unit_of_measurement: '°C' }, entity_id: 'sensor.temp' } };
+  r.updateInfoCards([tempCard], sp(states), undefined, { now: new Date(2026, 0, 5, 15, 4) });
+  assert('entity card builds bezel + text (2 group children)', grpN() === 2, `n=${grpN()}`);
+  assert('one info rig tracked', r._infoRigs.length === 1);
+  assert('rig text = formatted state (21.4 °C)', rig('ic1')?.lastText === '21.4 °C', rig('ic1')?.lastText);
+  assert('billboard:true → THREE.Sprite', rig('ic1')?.obj.isSprite === true);
+  assert('sprite canvas painted (width 512)', rig('ic1')?.cv.width === 512);
+
+  // ── value→color rule tints the text ──────────────────────────────────────
+  const ruledCard = {
+    id: 'ic2', x: 3000, y: 2000, mount: 'wall', displayMode: 'entity', entity_id: 'sensor.cpu',
+    billboard: true, rules: [{ op: 'gte', value: 85, color: '#ff5252', flash: true }, { op: 'gte', value: 0, color: '#69f0ae' }],
+  };
+  states = { 'sensor.cpu': { state: '90', attributes: { unit_of_measurement: '%' }, entity_id: 'sensor.cpu' } };
+  r.updateInfoCards([ruledCard], sp(states), undefined, { now: new Date() });
+  assert('rule color applies (90 ≥ 85 → red)', rig('ic2')?.lastColor === '#ff5252', rig('ic2')?.lastColor);
+  assert('rule flash flagged', rig('ic2')?.flash === true);
+  states = { 'sensor.cpu': { state: '20', attributes: { unit_of_measurement: '%' }, entity_id: 'sensor.cpu' } };
+  r.updateInfoCards([ruledCard], sp(states), undefined, { now: new Date() });
+  assert('rule color applies (20 → green, no flash)', rig('ic2')?.lastColor === '#69f0ae' && rig('ic2')?.flash === false);
+
+  // ── flash pulses opacity across frames ───────────────────────────────────
+  states = { 'sensor.cpu': { state: '95', attributes: {}, entity_id: 'sensor.cpu' } };
+  r.updateInfoCards([ruledCard], sp(states), undefined, { now: new Date() });
+  r._advanceInfoCards(new Date());
+  const o1 = rig('ic2').obj.material.opacity;
+  // Let virtual time advance ~80 ms so the pulse phase moves (period ≈ 1633 ms).
+  await new Promise(res => setTimeout(res, 80));
+  r._advanceInfoCards(new Date());
+  const o2 = rig('ic2').obj.material.opacity;
+  assert('flash pulses opacity across frames (o1 ≠ o2, both in [0.45,1])',
+         o1 !== o2 && o1 >= 0.44 && o1 <= 1 && o2 >= 0.44 && o2 <= 1, `o1=${o1.toFixed(3)} o2=${o2.toFixed(3)}`);
+  // a non-flash rig stays fully opaque
+  r.updateInfoCards([tempCard], sp({ 'sensor.temp': { state: '21', attributes: {}, entity_id: 'sensor.temp' } }), undefined, { now: new Date() });
+  r._advanceInfoCards(new Date());
+  assert('non-flash rig stays opaque (opacity 1)', rig('ic1').obj.material.opacity === 1, String(rig('ic1').obj.material.opacity));
+
+  // ── billboard vs fixed plane ─────────────────────────────────────────────
+  const planeCard = { id: 'ic3', x: 1000, y: 1000, mount: 'wall', displayMode: 'entity', entity_id: 'sensor.temp', billboard: false, rotation: 90 };
+  r.updateInfoCards([planeCard], sp({ 'sensor.temp': { state: '19', attributes: {}, entity_id: 'sensor.temp' } }), undefined, { now: new Date() });
+  assert('billboard:false → NOT a sprite', !rig('ic3').obj.isSprite);
+  assert('fixed plane tagged userData.textPlane', rig('ic3').obj.userData.textPlane === true);
+  assert('fixed plane oriented by rotation (rotation.y ≠ 0)', Math.abs(rig('ic3').obj.rotation.y) > 0.01);
+
+  // ── clock mode: repaints when the minute flips ───────────────────────────
+  const clockCard = { id: 'ic4', x: 2500, y: 3000, mount: 'wall', displayMode: 'clock', entity_id: null, clockFormat: '24h', billboard: true };
+  r.updateInfoCards([clockCard], sp({}), undefined, { now: new Date(2026, 0, 5, 15, 4, 0) });
+  const before = rig('ic4').lastText;
+  const ver0 = rig('ic4').tex.version;
+  assert('clock card built with 24h text', before === '15:04', before);
+  assert('clock rig flagged clock=true', rig('ic4').clock === true);
+  r._advanceInfoCards(new Date(2026, 0, 5, 15, 4, 30));   // same minute → no repaint
+  assert('same minute → no repaint', rig('ic4').lastText === '15:04');
+  assert('same minute → texture version unchanged', rig('ic4').tex.version === ver0);
+  r._advanceInfoCards(new Date(2026, 0, 5, 15, 5, 0));    // next minute → repaint
+  assert('minute flip → repaint (15:05)', rig('ic4').lastText === '15:05', rig('ic4').lastText);
+  assert('texture re-uploaded on repaint (version bumped)', rig('ic4').tex.version > ver0, `v0=${ver0} v=${rig('ic4').tex.version}`);
+
+  // ── layer flag hides + drops from render ─────────────────────────────────
+  r.updateInfoCards([tempCard, clockCard], sp({ 'sensor.temp': { state: '21', attributes: {}, entity_id: 'sensor.temp' } }), { info: false }, { now: new Date() });
+  assert('layer info:false → nothing built', grpN() === 0 && r._infoRigs.length === 0, `n=${grpN()}`);
+  r.setLayerVisibility({ info: false });
+  assert('setLayerVisibility(info:false) hides group', r._infoGroup.visible === false);
+  r.setLayerVisibility({ info: true });
+  assert('setLayerVisibility(info:true) shows group', r._infoGroup.visible === true);
+
+  // ── hidden card is skipped ───────────────────────────────────────────────
+  r.updateInfoCards([{ ...tempCard, hidden: true }], sp({ 'sensor.temp': { state: '21', attributes: {}, entity_id: 'sensor.temp' } }), undefined, { now: new Date() });
+  assert('hidden card skipped', grpN() === 0);
+
+  // ── three-view _keyInfo formula (pure mirror) flips on state + layer ──────
+  const keyOf = (state, layerOn = true) => {
+    const stOf = (id) => id ? state : '-';
+    return `1|${layerOn}|ic1:${stOf('sensor.temp')}`;
+  };
+  assert('_keyInfo flips on state change', keyOf('21') !== keyOf('22'));
+  assert('_keyInfo flips on layer toggle', keyOf('21', true) !== keyOf('21', false));
+  assert('_keyInfo stable when unchanged', keyOf('21') === keyOf('21'));
+
+  const pass = results.filter(x => x.startsWith('PASS')).length;
+  const fail = results.filter(x => x.startsWith('FAIL')).length;
+  document.getElementById('log').textContent = results.join('\n');
+  document.title = `INFOCARD ${fail === 0 ? 'PASS' : 'FAIL'} ${pass}/${pass + fail}` +
+    (fail ? ' | ' + results.filter(x => x.startsWith('FAIL')).join(' · ') : '');
+</script>

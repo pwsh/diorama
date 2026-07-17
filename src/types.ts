@@ -3,6 +3,9 @@
 // Type-only import (erased at compile time — no runtime cycle with geometry.ts,
 // which imports the value-side FURNITURE_KINDS from here-adjacent types).
 import type { FurnitureKindDef } from './geometry.js';
+// Shared value-display rule engine + format config (Display & Controls arc).
+// Type-only — value-rules.ts is pure and imports nothing back.
+import type { ValueRule, InfoCardFormat } from './value-rules.js';
 
 export interface Vec2 { x: number; y: number; }
 
@@ -139,11 +142,25 @@ export type LightIconKind =
   | 'step'            // small louvered step light embedded low in a wall
   | 'flood';          // wall/eave-mount floodlight: twin angled heads, wide floor pool
 
+// Logical-state light binding (Display & Controls arc, batch DC-B). A light
+// whose ON / color / flash derives from ANY entity's state through the shared
+// value-rules engine instead of a light.* binding — "if sensor.oven_temp > 200
+// show amber; > 300 flash red; else off". When set it takes precedence over
+// entity_id/localState in Planner.effectiveState (the whole point is derived
+// state). First-match-wins: the matched rule's `color` → ON in that color,
+// `flash` → the light pulses; no match → OFF (or a dim `offColor` indicator).
+export interface LightLogic {
+  entityId: string;      // ANY entity whose raw state drives this light
+  rules: ValueRule[];    // shared engine (src/value-rules.ts); first-match-wins
+  offColor?: string;     // no rule matched → dim indicator in this color (absent = fully off)
+}
+
 export interface Light {
   id: string;
   x: number; y: number;
   entity_id: string | null;
   label?: string;
+  logic?: LightLogic;  // derive ON/color/flash from a rule over ANY entity (overrides entity_id when set)
   // Visual properties (panel rendering only — not HA state).
   height?: number;     // mm above floor; default 2500 (ceiling)
   radius?: number;     // mm; pool of light shown on floor; default 900
@@ -441,6 +458,74 @@ export interface EnvSensor {
   locked?: boolean; // canvas move/resize/delete disabled
 }
 
+// Info card fixture (Display & Controls arc, batch DC-A). A placeable plaque
+// that shows the live state + unit of ANY bound HA entity (no domain filter) as
+// crisp text — 2D chip + 3D sprite/plane — with optional value→color rules
+// (shared `evalRules` engine, src/value-rules.ts) and an entity-free clock/date
+// mode. Generalizes EnvSensor (which is hard-wired to sensor.* + a fixed kind
+// table). Per-floor (Floor.infoCards); repairFloor + defaultFloor backfill [].
+export type InfoCardMount = 'wall' | 'surface' | 'floor';
+export type InfoCardDisplayMode = 'entity' | 'clock' | 'date' | 'clock_date';
+
+export interface InfoCard {
+  id: string;
+  x: number; y: number;
+  rotation?: number;             // deg screen-CW; orients the wall/floor flat plane (billboard:false)
+  mount?: InfoCardMount;         // default 'wall'; drives default size + wall auto-snap
+  w?: number; h?: number;        // plaque footprint mm; default from `mount`
+  height?: number;               // mm above floor for the 3D text center; default per-mount
+  displayMode?: InfoCardDisplayMode;  // default 'entity'; clock/date/clock_date need no entity
+  entity_id: string | null;      // bound entity (any domain); null for clock/date modes
+  label?: string;                // user override of friendly_name (shown as a caption when selected)
+  format?: InfoCardFormat;       // precision / unit override / prefix / suffix / mapping / relative-time
+  rules?: ValueRule[];           // value→color/flash (first-match-wins; shared engine)
+  billboard?: boolean;           // default true = camera-facing sprite; false = fixed plane at `rotation`
+  fontScale?: number;            // 0.4..4, default 1 (mirrors EnvSensor.scale)
+  clockFormat?: string;          // CLOCK_PRESETS key (clock / clock_date); default '12h'
+  dateFormat?: string;           // DATE_PRESETS key (date / clock_date); default 'medium'
+  timeZone?: string;             // IANA tz override for clock/date modes (else host-local)
+  locked?: boolean;              // canvas move/delete disabled
+  hidden?: boolean;              // per-card hide (plus the whole `info` layer toggle)
+  mountOnId?: string | null;     // surface-mount host bookkeeping (mirrors Furniture.mountOnId)
+}
+
+// Generic action / trigger button (Display & Controls arc, batch DC-B). A
+// wall-plate / table / floor "any-action" button that dispatches a configurable
+// HA service call (script run, scene activation, button/input_button press,
+// automation trigger, entity toggle, or an arbitrary domain.service escape
+// hatch) with a tactile press animation. Not an entity type to BIND — a
+// dispatcher UI: pick one HA action once, the physical button in the scene
+// becomes a spatial way to fire it. Per-floor (Floor.actionButtons); repairFloor
+// + defaultFloor backfill []. Rides the `switches` layer (it IS a control).
+export type ActionKind =
+  | 'button_press'      // button.press or input_button.press (domain from entity_id)
+  | 'scene'             // scene.turn_on
+  | 'script'            // script.turn_on (+ optional variables)
+  | 'automation_trigger'// automation.trigger
+  | 'toggle'            // domain-aware toggle (Planner.toggleEntity) — any toggleable entity
+  | 'custom';           // arbitrary domain/service/data — the escape hatch
+
+export interface ActionButton {
+  id: string;
+  x: number; y: number;
+  rotation?: number;        // deg, wall-plate convention (0 = +Y world); only meaningful when wallMount
+  height?: number;          // mm above floor; default 1200 (wall) — see ACTION_BUTTON_DEFAULTS
+  wallMount?: boolean;      // true = snap-to-wall like a switch (default true); false = free placement (table/floor puck)
+  size?: number;            // plate/puck extent mm; default 220
+  actionKind?: ActionKind;  // default 'toggle'
+  entity_id?: string | null;   // target for button_press / scene / script / automation_trigger / toggle
+  domain?: string;          // 'custom' mode only
+  service?: string;         // 'custom' mode only
+  serviceData?: string;     // JSON string (edited in sidebar, validated); custom data / scene transition / script variables
+  label?: string;
+  icon?: string;            // optional glyph override (emoji); default derived from actionKind
+  color?: string;           // button-cap accent color; default '#4fa8ff'
+  confirm?: boolean;        // require a browser confirm() before firing (destructive-leaning actions)
+  localState?: string;      // unbound pulse state ('on' on press) so the button animates standalone
+  locked?: boolean;         // canvas move/rotate/delete disabled; click-to-fire still works
+  hidden?: boolean;         // per-button hide (plus the whole `switches` layer toggle)
+}
+
 export interface Zone {
   name: string;
   vertices: Vec2[];   // sensor-local mm
@@ -584,6 +669,8 @@ export interface Floor {
   cameras?: CameraFixture[];  // camera fixtures (FOV frustum + snapshot); repairFloor backfills []
   groundAreas?: GroundArea[];  // yard/ground covering polygons; repairFloor backfills []
   voidAreas?: VoidArea[];  // floor voids / openings (holes cut from the slab); repairFloor backfills []
+  infoCards?: InfoCard[];  // generic entity-value / clock plaques; repairFloor backfills []
+  actionButtons?: ActionButton[];  // generic action / trigger buttons; repairFloor backfills []
   boundsLocked?: boolean;   // lock canvas-layout/floor-size editing (hides the edge handles)
   disabled?: boolean;       // hidden from the kiosk/view floor picker + glass-house stack + BLE
                             // floor solve; still editable in the sidebar — lets multiple test
@@ -608,6 +695,28 @@ export interface WeatherConfig {
   // a LIGHTING behavior (orients the sun light), NOT an effect-group member, so
   // it is gated only on its own key — never on effects3d.
   effects?: Partial<Record<WeatherEffectKey, boolean>>;
+  // ── DC-C: chip position + content + forecast display (all optional/additive) ──
+  // Anchor corner for the chip overlay (default 'br' = bottom-right, the legacy
+  // spot). chipCustom, when set, wins: px offsets from the anchor's edges.
+  chipAnchor?: 'tl' | 'tm' | 'tr' | 'bl' | 'bm' | 'br';
+  chipCustom?: { x: number; y: number };
+  // Extra content rows + forecast strip. hourly/daily = how many forecast
+  // entries to show (0/absent = that strip hidden). apparent/humidity/wind add
+  // optional rows (absent = off; chip stays glyph+temp+label like before).
+  chipContent?: {
+    apparent?: boolean;
+    humidity?: boolean;
+    wind?: boolean;
+    hourly?: number;
+    daily?: number;
+  };
+  // ── DC-D: weather alerts (additive). Independent of the weather SOURCE above —
+  // a user-picked alert entity (NWS Alerts / MeteoAlarm / DWD / Environment
+  // Canada sensor|binary_sensor), parsed defensively into WeatherAlert[]
+  // (weather.ts parseWeatherAlerts). `beacon` = the 3D ambient severity-scaled
+  // sky pulse (default ON when an alert entity is bound). The chip badge + panel
+  // are always shown when alerts exist.
+  alerts?: { entityId?: string; beacon?: boolean };
 }
 
 // One toggleable 3D weather visualization (W3). See weatherEffectEnabled.
@@ -697,6 +806,7 @@ export interface Layers2D {
   sensors?: boolean;    // mmWave bodies + coverage wedges
   motion?: boolean;     // motion sensor bodies + cones
   env?: boolean;
+  info?: boolean;       // info-card plaques (2D chip + 3D sprite/plane); default on
   zones?: boolean;      // LD2450 zone polys + halos
   targets?: boolean;    // live target dots
   activity?: boolean;   // default OFF: glow pools for lights that are ON + active motion

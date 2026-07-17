@@ -1,6 +1,6 @@
 # DESIGN — Display & Controls arc (InfoCard, generic controls, weather display+alerts)
 
-*Authored 2026-07-17 (Fable). Status: in build.*
+*Authored 2026-07-17 (Fable). Status: **shipped**.*
 
 Builds the cluster the user picked as the next arc, straight from the four
 build-ready research docs (each carries the authoritative §4 design + §5

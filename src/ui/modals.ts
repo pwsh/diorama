@@ -3,7 +3,7 @@ import { property, state } from 'lit/decorators.js';
 import { customElement } from './define.js';
 import { finishZoneEdit, cancelZoneEdit } from '../canvas-interact.js';
 import { alarmStateColor } from '../geometry.js';
-import { CONDITION_GLYPH, CONDITION_LABEL, tempText, weatherEffectEnabled } from '../weather.js';
+import { CONDITION_GLYPH, CONDITION_LABEL, tempText, weatherEffectEnabled, worstAlertSeverity } from '../weather.js';
 import { listPacks, getPack, packEffectiveState, resolveDef } from '../avatars.js';
 import { OFFLINE_FLAG_KEY } from '../ha-local.js';
 import type { AvatarDef, AvatarPackDef } from '../avatars.js';
@@ -910,6 +910,123 @@ export class SettingsDrawer extends LitElement {
       </div>`;
   }
 
+  // DC-C: chip position + content + forecast display controls.
+  private _weatherAppearance(
+    w: WeatherConfig | undefined,
+    set: (mut: (x: WeatherConfig) => void) => void,
+  ) {
+    type Anchor = 'tl' | 'tm' | 'tr' | 'bl' | 'bm' | 'br';
+    const cur: Anchor = w?.chipAnchor ?? 'br';
+    const hasCustom = !!w?.chipCustom;
+    const cell = (code: Anchor, glyph: string) => html`
+      <button title=${'Anchor ' + code}
+              style="padding:4px 0;font-size:13px;border-radius:3px;cursor:pointer;
+                     background:${cur === code && !hasCustom ? 'var(--accent)' : '#1c2733'};
+                     border:1px solid #33465a;color:var(--text)"
+              @click=${() => set(x => { x.chipAnchor = code; x.chipCustom = undefined; })}>${glyph}</button>`;
+    const contentCheck = (label: string, key: 'apparent' | 'humidity' | 'wind') => html`
+      <label class="row" style="padding:1px 0"><span style="flex:1;font-size:11px">${label}</span>
+        <input type="checkbox" .checked=${w?.chipContent?.[key] === true}
+               @change=${(e: Event) => set(x => {
+                 (x.chipContent ??= {})[key] = (e.target as HTMLInputElement).checked;
+               })}></label>`;
+    const countInput = (label: string, key: 'hourly' | 'daily', max: number) => html`
+      <label class="row" style="padding:1px 0"><span style="flex:1;font-size:11px">${label}</span>
+        <input type="number" min="0" max=${max} style="width:56px"
+               .value=${String(w?.chipContent?.[key] ?? 0)}
+               @change=${(e: Event) => {
+                 const raw = Math.floor(Number((e.target as HTMLInputElement).value));
+                 const v = Math.max(0, Math.min(max, isFinite(raw) ? raw : 0));
+                 set(x => { (x.chipContent ??= {})[key] = v; });
+               }}></label>`;
+    return html`
+      <h4 style="font-size:11px;margin:12px 0 4px;color:var(--text-dim)">Chip appearance</h4>
+      <div style="font-size:11px;margin-bottom:2px">Anchor</div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:3px;margin-bottom:6px">
+        ${cell('tl', '↖')}${cell('tm', '↑')}${cell('tr', '↗')}
+        ${cell('bl', '↙')}${cell('bm', '↓')}${cell('br', '↘')}
+      </div>
+      <div class="row" style="gap:6px;margin-bottom:2px">
+        <span style="font-size:11px">Custom offset (px)</span>
+        <span style="color:var(--text-dim);font-size:11px">x</span>
+        <input type="number" style="width:56px" .value=${String(w?.chipCustom?.x ?? '')}
+               @change=${(e: Event) => {
+                 const v = Math.round(Number((e.target as HTMLInputElement).value));
+                 set(x => { x.chipCustom = { x: isFinite(v) ? v : 0, y: x.chipCustom?.y ?? 0 }; });
+               }}>
+        <span style="color:var(--text-dim);font-size:11px">y</span>
+        <input type="number" style="width:56px" .value=${String(w?.chipCustom?.y ?? '')}
+               @change=${(e: Event) => {
+                 const v = Math.round(Number((e.target as HTMLInputElement).value));
+                 set(x => { x.chipCustom = { x: x.chipCustom?.x ?? 0, y: isFinite(v) ? v : 0 }; });
+               }}>
+        ${hasCustom ? html`<button class="btn" style="font-size:10px;padding:2px 6px"
+               @click=${() => set(x => { x.chipCustom = undefined; })}>Clear</button>` : nothing}
+      </div>
+      <div style="font-size:10px;color:var(--text-dim);line-height:1.3;margin:0 0 6px">
+        Custom offset overrides the anchor (px from the anchor's edges).
+      </div>
+      <div style="font-size:11px;margin-bottom:2px">Content</div>
+      ${contentCheck('Feels-like', 'apparent')}
+      ${contentCheck('Humidity', 'humidity')}
+      ${contentCheck('Wind', 'wind')}
+      ${countInput('Hourly forecast entries', 'hourly', 12)}
+      ${countInput('Daily forecast entries', 'daily', 7)}
+      <div style="font-size:10px;color:var(--text-dim);line-height:1.3;margin:2px 0 6px">
+        Forecast strips need the entity or Open-Meteo source (the local-sensors
+        source has no forecast). 0 = hidden.
+      </div>
+    `;
+  }
+
+  // DC-D: weather alerts config block (entity bind + beacon toggle + live
+  // preview of what parseWeatherAlerts currently extracts).
+  private _weatherAlertsBlock(
+    w: WeatherConfig | undefined,
+    set: (mut: (x: WeatherConfig) => void) => void,
+  ) {
+    const p = this.planner;
+    const cur = w?.alerts?.entityId;
+    const alerts = p.weatherAlerts ?? [];
+    const worst = worstAlertSeverity(alerts);
+    const preview = !cur
+      ? 'No alert entity bound.'
+      : (alerts.length
+          ? `${alerts.length} alert${alerts.length > 1 ? 's' : ''} · worst: ${worst}`
+          : 'none parsed');
+    return html`
+      <h3 style="font-size:12px;margin:10px 0 4px">Alerts</h3>
+      <div class="row"><label>Alert entity</label>
+        <span style="font-size:11px;color:var(--text);flex:1;overflow:hidden;
+                     text-overflow:ellipsis;white-space:nowrap">${cur || '—'}</span>
+        <button class="btn" style="font-size:10px;padding:2px 6px" @click=${() => {
+          this.dispatchEvent(new CustomEvent('open-entity-picker', {
+            bubbles: true, composed: true,
+            detail: {
+              domain: ['sensor', 'binary_sensor'],
+              onPick: (id: string) => set(x => { (x.alerts ??= {}).entityId = id; }),
+            },
+          }));
+        }}>🔗</button>
+        ${cur ? html`<button class="btn" style="font-size:10px;padding:2px 6px;margin-left:4px"
+                             title="Clear the alert entity"
+                             @click=${() => set(x => { (x.alerts ??= {}).entityId = undefined; })}>✕</button>` : nothing}
+      </div>
+      <label class="row"><span style="flex:1">3D beacon</span>
+        <input type="checkbox" .checked=${w?.alerts?.beacon !== false}
+               @change=${(e: Event) => set(x => { (x.alerts ??= {}).beacon = (e.target as HTMLInputElement).checked; })}>
+      </label>
+      <div style="font-size:10px;color:var(--text-dim);line-height:1.3;margin:2px 0 4px">
+        Severity-tinted badge on the weather chip (⚠, click for detail) + a slow
+        3D sky pulse (amber advisory / orange watch / red warning). Auto-detects
+        NWS Alerts, MeteoAlarm, DWD, and Environment Canada entities.
+      </div>
+      <div style="font-size:11px;padding:5px 8px;background:rgba(0,0,0,0.25);border-radius:4px">
+        ${preview}
+      </div>
+    `;
+  }
+
   private _weatherTab() {
     const p = this.planner;
     const w = p.store.weather;
@@ -1014,6 +1131,10 @@ export class SettingsDrawer extends LitElement {
         preset under overcast weather. The "Weather FX" entry in 2D Layers
         also gates the effects.
       </div>
+
+      ${this._weatherAppearance(w, set)}
+
+      ${this._weatherAlertsBlock(w, set)}
 
       <div style="font-size:11px;padding:6px 8px;background:rgba(0,0,0,0.25);border-radius:4px;line-height:1.4">
         ${preview}

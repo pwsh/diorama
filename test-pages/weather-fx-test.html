@@ -137,6 +137,36 @@
     // Puddles linger after rain stops (fade > 0 keeps them built).
     r.updateWeather(fx({ condition:'sunny', effects:allOn, isDay:true }));
     ok('puddles linger after rain', r._weatherPuddles.length >= 4, `puddles=${r._weatherPuddles.length}`);
+
+  } else if (scene === 'alert') {
+    // DC-D alert beacon: a severity sets up a colored pulse light whose intensity
+    // varies across advanced frames; no severity → the beacon eases dark.
+    r.updateWeather(fx({ condition: 'sunny', isDay: true, alertSeverity: 'warning' }));
+    ok('beacon light built', !!r._alertPulseLight, `light=${!!r._alertPulseLight}`);
+    ok('beacon color red', r._alertPulseLight && r._alertPulseLight.color.getHex() === 0xe6291a,
+       `hex=${r._alertPulseLight?.color.getHex().toString(16)}`);
+    // Sample intensity across full pulse periods → must vary (pulsing, not static).
+    let lo = Infinity, hi = -Infinity, sawOn = false;
+    for (let i = 0; i < 300; i++) {
+      step(1, 1 / 30);
+      const inten = r._alertPulseLight.intensity;
+      if (inten < lo) lo = inten;
+      if (inten > hi) hi = inten;
+      if (inten > 0.5) sawOn = true;
+    }
+    ok('beacon pulses (varies)', hi - lo > 0.3, `lo=${lo.toFixed(2)} hi=${hi.toFixed(2)}`);
+    ok('beacon reaches urgent peak', sawOn && hi > 1.0, `hi=${hi.toFixed(2)}`);
+    // Advisory is gentler (lower peak) + amber.
+    r.updateWeather(fx({ condition: 'sunny', isDay: true, alertSeverity: 'advisory' }));
+    let advHi = 0;
+    for (let i = 0; i < 300; i++) { step(1, 1 / 30); advHi = Math.max(advHi, r._alertPulseLight.intensity); }
+    ok('advisory dimmer than warning', advHi < hi, `adv=${advHi.toFixed(2)} warn=${hi.toFixed(2)}`);
+    ok('advisory color amber', r._alertPulseLight.color.getHex() === 0xf5c400,
+       `hex=${r._alertPulseLight.color.getHex().toString(16)}`);
+    // No severity → beacon eases dark (~1.5 s τ; give it ~8 s to fully decay).
+    r.updateWeather(fx({ condition: 'sunny', isDay: true }));
+    for (let i = 0; i < 240; i++) step(1, 1 / 30);
+    ok('beacon dark when cleared', r._alertPulseLight.intensity < 0.02, `i=${r._alertPulseLight.intensity.toFixed(4)}`);
   }
 
   // ── report ──────────────────────────────────────────────────────────────

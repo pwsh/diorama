@@ -1,0 +1,130 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>LOGICLIGHT …</title>
+<style>
+  body { margin:0; background:#0d1116; color:#cfd8dc; font:13px/1.5 sans-serif; padding:14px; }
+  h1 { font-size:15px; margin:0 0 10px; }
+  #summary { font-size:14px; font-weight:bold; margin:10px 0; padding:8px 10px; border-radius:5px; }
+  .okbg { background:#12331f; color:#69f0ae; } .badbg { background:#3a1414; color:#ff8a80; }
+  .row { display:flex; justify-content:space-between; gap:10px; padding:2px 0; border-bottom:1px solid #1c2530; }
+  .pass { color:#69f0ae; } .fail { color:#ff5252; }
+  .name { color:#90caf9; } .extra { color:#ffd54f; font-size:11px; }
+</style>
+<h1>Logical-state lights — rule→on/color/flash · first-match-wins · no-match-off · offColor dim · config-path · click no-op</h1>
+<div id="summary">Running…</div>
+<div id="rows"></div>
+
+<!-- REAL geometry resolver + Planner (bundled; no three). Same build as
+     action-button-test.html (dc-b.mod.js). -->
+<script type="module">
+  const V = '?v=' + Date.now();
+  const mod = await import('./dc-b.mod.js' + V);
+  const { Planner, resolveLightLogic, logicLightState } = mod;
+
+  const results = [];
+  const ok = (name, cond, extra = '') => results.push({ name, pass: !!cond, extra: String(extra) });
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  async function waitFor(cond, tries = 600) { for (let i = 0; i < tries; i++) { if (cond()) return true; await sleep(4); } return !!cond(); }
+  const clone = x => JSON.parse(JSON.stringify(x));
+
+  class FakeHa {
+    constructor() { this.map = new Map(); this.states = {}; this._s = []; this._c = []; this.calls = []; }
+    connect() { for (const cb of this._c) cb('connected'); for (const cb of this._s) cb(this.states, undefined); }
+    onState(fn) { this._s.push(fn); } onConn(fn) { this._c.push(fn); }
+    callService(domain, service, data) { this.calls.push({ domain, service, data: data || {} }); return Promise.resolve(); }
+    async getHistory() { return {}; } async getWeatherForecasts() { return null; }
+    async getDevices() { return []; } async getEntityRegistry() { return []; } async updateEntityRegistry() { return true; }
+    async getUserData(k) { return this.map.has(k) ? clone(this.map.get(k)) : null; }
+    async setUserData(k, v) { this.map.set(k, clone(v)); return true; } async refreshStates() {}
+  }
+
+  try {
+    // Oven-temp thermometer: hotter tier FIRST so it wins (first-match-wins).
+    const logic = {
+      rules: [
+        { op: 'gt', value: 300, color: '#ff0000', flash: true },  // > 300 → red flash
+        { op: 'gt', value: 200, color: '#ffaa00' },               // > 200 → amber
+      ],
+      offColor: '#222222',
+    };
+
+    // ── (1) resolveLightLogic — the abstract decision ───────────────────────
+    let r = resolveLightLogic(logic, '350');
+    ok('>300 → on/red/flash', r.on === true && r.color === '#ff0000' && r.flash === true, JSON.stringify(r));
+    r = resolveLightLogic(logic, '250');
+    ok('>200 (not >300) → on/amber/no-flash', r.on === true && r.color === '#ffaa00' && !r.flash, JSON.stringify(r));
+    // First-match-wins: 350 matches BOTH tiers but the red-flash tier is first.
+    ok('first-match-wins (350 → red, not amber)', resolveLightLogic(logic, '350').color === '#ff0000', '');
+    r = resolveLightLogic(logic, '100');
+    ok('no match → off (offColor carried)', r.on === false && r.color === '#222222', JSON.stringify(r));
+    // unavailable / null state → non-numeric → no numeric rule matches → off.
+    ok('unavailable → off', resolveLightLogic(logic, 'unavailable').on === false, '');
+    ok('null → off', resolveLightLogic(logic, null).on === false, '');
+    // A binary on/off logic (string eq).
+    const bin = { rules: [{ op: 'eq', value: 'on', color: '#00ff00' }] };
+    ok('eq on → green', resolveLightLogic(bin, 'on').color === '#00ff00' && resolveLightLogic(bin, 'on').on, '');
+    ok('eq on: off state → no match', resolveLightLogic(bin, 'off').on === false, '');
+
+    // ── (2) logicLightState — synthetic HA envelope for the render paths ─────
+    let s = logicLightState(logic, '350');
+    ok('state on', s.state === 'on', s.state);
+    ok('rgb_color from rule', JSON.stringify(s.attributes.rgb_color) === JSON.stringify([255, 0, 0]), JSON.stringify(s.attributes.rgb_color));
+    ok('_flash marker set', s.attributes._flash === true, JSON.stringify(s.attributes));
+    s = logicLightState(logic, '250');
+    ok('amber no _flash', s.state === 'on' && !s.attributes._flash, JSON.stringify(s.attributes));
+    s = logicLightState(logic, '100');
+    ok('no-match + offColor → dim on', s.state === 'on' && s.attributes._dim === true && s.attributes.brightness === 40, JSON.stringify(s.attributes));
+    s = logicLightState({ rules: [{ op: 'gt', value: 5, color: '#fff' }] }, '1');  // no offColor
+    ok('no-match + no offColor → off', s.state === 'off', s.state);
+
+    // ── (3) Planner integration — effectiveState resolves logic ─────────────
+    localStorage.removeItem('diorama:store:v1'); localStorage.removeItem('diorama:configs');
+    const stub = new FakeHa();
+    const p = new Planner();
+    p.connectWith(stub);
+    await waitFor(() => p.configIndex !== null);
+    p.uiMode = 'edit';
+
+    const light = { id: 'L1', x: 100, y: 100, entity_id: null, logic: clone(logic) };
+    p.floor().lights = [light];
+    stub.states['sensor.oven'] = { state: '350', attributes: { unit_of_measurement: '°C' } };
+    light.logic.entityId = 'sensor.oven';
+
+    let es = p.effectiveState(light);
+    ok('effectiveState: on/red/flash', es.state === 'on' && JSON.stringify(es.attributes.rgb_color) === JSON.stringify([255, 0, 0]) && es.attributes._flash === true, JSON.stringify(es.attributes));
+    stub.states['sensor.oven'] = { state: '100', attributes: {} };
+    es = p.effectiveState(light);
+    ok('effectiveState: cool → dim off (offColor)', es.state === 'on' && es.attributes._dim === true, JSON.stringify(es.attributes));
+
+    // Logic wins over a stray bound entity_id.
+    const light2 = { id: 'L2', x: 0, y: 0, entity_id: 'light.real', logic: { entityId: 'sensor.oven', rules: [{ op: 'gt', value: 50, color: '#0f0' }] } };
+    stub.states['light.real'] = { state: 'off', attributes: {} };
+    stub.states['sensor.oven'] = { state: '80', attributes: {} };
+    ok('logic overrides entity_id binding', p.effectiveState(light2).state === 'on', p.effectiveState(light2).state);
+
+    // ── (4) Config-path routing (_isSlowEntity) ─────────────────────────────
+    ok('logic entity is config-path', p._isSlowEntity('sensor.oven') === true, '');
+    ok('unrelated entity NOT config-path', p._isSlowEntity('sensor.unrelated') === false, '');
+
+    // ── (5) Click no-op — a logic light is READ-ONLY (computed) ──────────────
+    const callsBefore = stub.calls.length;
+    p.toggleItem(light);
+    ok('toggleItem(logic light) → no service call', stub.calls.length === callsBefore, '');
+    ok('toggleItem(logic light) → no localState set', light.localState === undefined, String(light.localState));
+    // A normal unbound light DOES flip localState (proves the guard is specific).
+    const plain = { id: 'L3', x: 0, y: 0, entity_id: null };
+    p.floor().lights.push(plain);
+    p.toggleItem(plain);
+    ok('control: plain unbound light flips localState', plain.localState === 'on', String(plain.localState));
+  } catch (e) {
+    ok('EXCEPTION', false, (e && e.stack) || String(e));
+  }
+
+  const pass = results.filter(r => r.pass).length, total = results.length;
+  document.title = `LOGICLIGHT ${pass === total ? 'PASS' : 'FAIL'} ${pass}/${total}`;
+  const sum = document.getElementById('summary');
+  sum.className = pass === total ? 'okbg' : 'badbg';
+  sum.textContent = `${pass === total ? 'PASS' : 'FAIL'} — ${pass}/${total}`;
+  document.getElementById('rows').innerHTML = results.map(r =>
+    `<div class="row"><span><span class="${r.pass ? 'pass' : 'fail'}">${r.pass ? '✓' : '✗'}</span> <span class="name">${r.name}</span></span><span class="extra">${r.extra}</span></div>`).join('');
+</script>

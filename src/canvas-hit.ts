@@ -3,9 +3,9 @@ import { switchSize, distMM, pointToSeg, transformVerts, centroid, localToWorld,
          furnitureCorners, furnitureLocalToWorld, doorEndpoint,
          doorOpenDeltaDeg, windowEndpoints, pointInPolygon } from './geometry.js';
 import type { Planner } from './planner.js';
-import type { Vec2, Wall, Sensor, Furniture, BgImage, MotionSensor, EnvSensor, BleProxy, AlarmPanel, SafetySensor, RobotFixture, CameraFixture, PresenceZone, Door, Window as WindowType, Floor } from './types.js';
+import type { Vec2, Wall, Sensor, Furniture, BgImage, MotionSensor, EnvSensor, BleProxy, AlarmPanel, SafetySensor, RobotFixture, CameraFixture, PresenceZone, InfoCard, ActionButton, Door, Window as WindowType, Floor } from './types.js';
 import type { FloorEdge } from './geometry.js';
-import { envChipHalfPx, type View } from './canvas-render.js';
+import { envChipHalfPx, infoCardHalfPx, actionButtonHalfPx, type View } from './canvas-render.js';
 
 export function hitPx(view: View): number {
   return Math.max(60, 12 / Math.max(view.scale, 1e-9));
@@ -290,6 +290,26 @@ export function hitAlarmPanel(p: Planner, view: View, mm: Vec2): AlarmPanel | nu
   return null;
 }
 
+export function hitActionButton(p: Planner, view: View, mm: Vec2): ActionButton | null {
+  const f = p.floor();
+  const list = f.actionButtons ?? [];
+  const fallback = hitPx(view) * 1.6;
+  for (let i = list.length - 1; i >= 0; i--) {
+    const b = list[i];
+    if (b.hidden) continue;
+    // Square plate test against the half-extent (px) drawn last frame; falls back
+    // to a radius before the first draw.
+    const half = actionButtonHalfPx.get(b.id);
+    if (half != null) {
+      const pad = 4 * (window.devicePixelRatio || 1);
+      const dxPx = Math.abs(mm.x - b.x) * view.scale;
+      const dyPx = Math.abs(mm.y - b.y) * view.scale;
+      if (dxPx < half + pad && dyPx < half + pad) return b;
+    } else if (distMM(b, mm) < fallback) return b;
+  }
+  return null;
+}
+
 export function hitSafetySensor(p: Planner, view: View, mm: Vec2): SafetySensor | null {
   const f = p.floor();
   const h = hitPx(view) * 1.4;
@@ -429,6 +449,26 @@ export function hitEnvSensor(p: Planner, view: View, mm: Vec2): EnvSensor | null
       const dyPx = Math.abs(mm.y - e.y) * view.scale;
       if (dxPx < half.w + pad && dyPx < half.h + pad) return e;
     } else if (distMM(e, mm) < fallback) return e;
+  }
+  return null;
+}
+
+export function hitInfoCard(p: Planner, view: View, mm: Vec2): InfoCard | null {
+  const f = p.floor();
+  const list = f.infoCards ?? [];
+  const fallback = hitPx(view) * 2;
+  for (let i = list.length - 1; i >= 0; i--) {
+    const ic = list[i];
+    if (ic.hidden) continue;
+    // Rect test against the chip drawn last frame (px extents from canvas-render);
+    // falls back to a radius before the first draw.
+    const half = infoCardHalfPx.get(ic.id);
+    if (half) {
+      const pad = 4 * (window.devicePixelRatio || 1);
+      const dxPx = Math.abs(mm.x - ic.x) * view.scale;
+      const dyPx = Math.abs(mm.y - ic.y) * view.scale;
+      if (dxPx < half.w + pad && dyPx < half.h + pad) return ic;
+    } else if (distMM(ic, mm) < fallback) return ic;
   }
   return null;
 }

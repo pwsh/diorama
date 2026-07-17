@@ -1,15 +1,15 @@
-import { HassClient, type HaApi } from './ha-client.js';
+import { HassClient, type HaApi, type ForecastRecord } from './ha-client.js';
 import { SensorDiscovery } from './sensor-discovery.js';
 import { loadStore, saveStore, newId, repairFloor, defaultStore,
          cfgBodyKey, loadConfigsCache, saveConfigsCache } from './storage.js';
 import { slugToName, normMac, localToWorld, segCrossesSolidWall, mowerSweepWaypoints,
          ROBOT_DEFAULTS, robotLedColor, parseVacuumPosition, vacuumRawToWorld,
-         vacuumRawHeadingRad, isStairsKind } from './geometry.js';
+         vacuumRawHeadingRad, isStairsKind, logicLightState, actionButtonKind } from './geometry.js';
 import { stepFusion, newFusionState, DEFAULT_FUSION_CFG,
          type FusionState, type FusionCand } from './fusion.js';
 import { fitGeoTransform, latLonToPlan, clampToBoundary, planBearingDeg, compass8, medianLatLon,
          type GeoTransform, type GeoPair, type LatLonSample } from './geo.js';
-import type { GeoConfig, GeoLandmark, DioramaPerson, RobotFixture } from './types.js';
+import type { GeoConfig, GeoLandmark, DioramaPerson, RobotFixture, ActionButton, Light } from './types.js';
 
 // ── Bermuda BLE discovery (runtime-only) ──────────────────────────────────
 // One per-scanner distance sensor for a tracked device. `disabled` reflects
@@ -59,9 +59,9 @@ export interface DioramaEnvelope {
 const CAMERA_ALERT_LINGER_MS = 6000;
 import { solvePosition, type ProxyObs } from './trilateration.js';
 import {
-  fetchOpenMeteo, geocodeZip, resolveWeatherEntity, deriveFromSensors,
-  toCelsius, toKmh, toMmPerH, forecastRainSoon,
-  type WeatherNow, type HaCondition,
+  fetchOpenMeteo, fetchOpenMeteoForecast, geocodeZip, resolveWeatherEntity, deriveFromSensors,
+  toCelsius, toKmh, toMmPerH, forecastRainSoon, parseWeatherAlerts,
+  type WeatherNow, type HaCondition, type WeatherAlert,
 } from './weather.js';
 import { isDay } from './time-of-day.js';
 import {
@@ -183,6 +183,8 @@ export type Drag =
   | { kind: 'robot'; id: string; startMm: Vec2; start: Vec2 }
   | { kind: 'camera'; id: string; startMm: Vec2; start: Vec2 }
   | { kind: 'cameraRotate'; id: string }
+  | { kind: 'info'; id: string; startMm: Vec2; start: Vec2 }
+  | { kind: 'action'; id: string; startMm: Vec2; start: Vec2 }
   | { kind: 'pzoneVert'; id: string; idx: number; startMm: Vec2; startPts: Vec2[] }
   | { kind: 'groundVert'; id: string; idx: number; startMm: Vec2; startPts: Vec2[] }
   | { kind: 'voidVert'; id: string; idx: number; startMm: Vec2; startPts: Vec2[] }
@@ -211,7 +213,7 @@ export interface EditZone {
   mousePos: Vec2 | null;
 }
 
-export type Tool = 'select' | 'wall' | 'sensor' | 'motion' | 'env' | 'bleproxy' | 'alarm' | 'safety' | 'robot' | 'camera' | 'pzone' | 'ground' | 'void' | 'furniture' | 'light' | 'switch' | 'door' | 'window' | 'delete';
+export type Tool = 'select' | 'wall' | 'sensor' | 'motion' | 'env' | 'infocard' | 'action' | 'bleproxy' | 'alarm' | 'safety' | 'robot' | 'camera' | 'pzone' | 'ground' | 'void' | 'furniture' | 'light' | 'switch' | 'door' | 'window' | 'delete';
 
 // Live robot state (runtime-only). `x/y/heading/phase/activity/led` are the
 // DISPLAY fields both canvases read; the rest are the movement controller's
@@ -335,6 +337,12 @@ export class Planner extends EventTarget {
   // Active camera fixture (sidebar selection / canvas highlight)
   activeCameraId: string | null = null;
 
+  // Active info card fixture (sidebar selection / canvas highlight)
+  activeInfoId: string | null = null;
+
+  // Active action-button fixture (sidebar selection / canvas highlight)
+  activeActionId: string | null = null;
+
   // Active presence zone (sidebar selection / canvas vertex-edit highlight)
   activePZoneId: string | null = null;
 
@@ -436,6 +444,11 @@ export class Planner extends EventTarget {
   // Normalized current weather. Chip + (later) 3D effects read this. Local
   // sources (entity/sensors) recompute from state_changed; Open-Meteo polls.
   weatherNow: WeatherNow | null = null;
+  // DC-D: normalized active weather alerts (runtime, NOT persisted). Recomputed
+  // from the bound alert entity's state on change + full refresh; [] when
+  // unconfigured. The chip badge/panel, the settings preview, and the 3D beacon
+  // read this. Independent of the weather SOURCE — an alert entity is separate.
+  weatherAlerts: WeatherAlert[] = [];
   private _weatherTimer: ReturnType<typeof setInterval> | null = null;
   private _weatherInited = false;
   private _weatherGeocoding = false;
@@ -452,6 +465,13 @@ export class Planner extends EventTarget {
   private static readonly WEATHER_FC_MS = 30 * 60 * 1000;
   private _fcCond: HaCondition | null | undefined;
   private _fcRainSoon: boolean | undefined;
+  // DC-C: full normalized forecast arrays (runtime cache, NOT persisted). The
+  // chip's forecast strip reads these. Entity source fills them from
+  // weather.get_forecasts; Open-Meteo from fetchOpenMeteoForecast; the sensors
+  // source has no forecast (both stay null). Refreshed on the same cadences as
+  // weatherNow and reset on a source switch.
+  forecastDaily: ForecastRecord[] | null = null;
+  forecastHourly: ForecastRecord[] | null = null;
 
   // Active furniture piece (last grabbed/dropped) — drives the 2D front-arrow
   // chevron. Runtime only.
@@ -478,6 +498,13 @@ export class Planner extends EventTarget {
   // reconnecting never fires a phantom ring. `at` is Date.now() ms.
   doorbellRings: { doorId: string; at: number }[] = [];
   private _doorbellPrev: Record<string, string> = {};
+
+  // Action-button press animation transients (batch DC-B). Pushed on every fire
+  // (any UI mode except view) so both 2D (drawActionButtons) and 3D
+  // (advanceActionButtons) show the tactile depress + ring. Runtime-only (like
+  // doorbellRings) — a press mutates NO persisted state. Pruned > 900 ms, capped.
+  // `at` is performance.now() ms so the render passes read one clock.
+  actionPressFx: { id: string; at: number }[] = [];
 
   // Camera alert linger (#10 extension): the last time each current-floor camera's
   // alertEntity was seen 'on' (Date.now() ms). `cameraAlerting(cam)` returns true
@@ -872,6 +899,13 @@ export class Planner extends EventTarget {
         this._recomputeLocalWeather(states);
       }
     }
+    // Weather alerts (independent of the weather source): recompute when the
+    // bound alert entity changes or on a full refresh. Config-path (see
+    // _isSlowEntity) so the chip badge + sidebar preview repaint on change.
+    const alertId = w?.alerts?.entityId;
+    if (changedId === undefined || (alertId != null && changedId === alertId)) {
+      this._recomputeWeatherAlerts(states);
+    }
     // One-time weather setup on the first full state load (starts the Open-Meteo
     // poll if that source is configured in the local cache). _loadFromHa may
     // replace the config afterward and re-runs _reconfigureWeather itself.
@@ -1048,6 +1082,8 @@ export class Planner extends EventTarget {
       this.activeSafetyId = null;
       this.activeRobotId = null;
       this.activeCameraId = null;
+      this.activeInfoId = null;
+      this.activeActionId = null;
       this.activePZoneId = null;
       this.activeGroundAreaId = null;
       this.activeVoidAreaId = null;
@@ -1268,6 +1304,19 @@ export class Planner extends EventTarget {
     // the current floor qualify — a blanket sensor.* rule would emit config
     // for every sensor state change in HA.
     if (this.floor().envSensors.some(e => e.entity_id === id)) return true;
+    // Bound info-card entities (any domain) route through the config channel so
+    // the sidebar reading + the 3D _keyInfo dirty key repaint on change. Scoped
+    // to the current floor's bound ids (a blanket rule would emit for every
+    // state change in HA). Clock/date cards bind nothing and repaint per-tick.
+    if ((this.floor().infoCards ?? []).some(c => c.entity_id === id)) return true;
+    // Action-button bound targets (script/scene/button/automation/toggle entity):
+    // config-path like alarm/lock ids — they change rarely (a bound script's
+    // on/off running-glow only needs config-cadence, not 10 Hz).
+    if ((this.floor().actionButtons ?? []).some(b => b.entity_id === id)) return true;
+    // Logical-state light logic entities: the light's ON/color/flash derives from
+    // this entity through the rule engine. Config-path so the sidebar preview + the
+    // 3D _keyLights dirty key repaint on change (the 2D RAF reads live regardless).
+    if (this.floor().lights.some(l => l.logic?.entityId === id)) return true;
     // Fridge door sensors (Furniture.doorEntity) + door lock entities
     // (Door.lockEntity) + alarm panel entities: bound display-only bindings that
     // aren't number/switch, routed through the config channel so the sidebar
@@ -1303,6 +1352,9 @@ export class Planner extends EventTarget {
     if ((this.store.people ?? []).some(pe => pe.haPersonId === id || pe.gpsTrackerId === id)) return true;
     // Bound weather source entities are config-path too (chip + sidebar preview
     // re-render on change). Only the specific bound ids qualify.
+    // The alert entity (any domain, rare-but-urgent) is config-path as well so
+    // the chip badge + settings preview repaint the moment an alert fires/clears.
+    if (this.store.weather?.alerts?.entityId === id) return true;
     return this._weatherEntityIds().includes(id);
   }
 
@@ -1748,6 +1800,16 @@ export class Planner extends EventTarget {
 
   setActiveCamera(id: string | null): void {
     this.activeCameraId = (this.activeCameraId === id) ? null : id;
+    this.emitConfig();
+  }
+
+  setActiveInfo(id: string | null): void {
+    this.activeInfoId = (this.activeInfoId === id) ? null : id;
+    this.emitConfig();
+  }
+
+  setActiveAction(id: string | null): void {
+    this.activeActionId = (this.activeActionId === id) ? null : id;
     this.emitConfig();
   }
 
@@ -2916,8 +2978,9 @@ export class Planner extends EventTarget {
     // Forecast state is source-specific — drop it so a source switch can't leak
     // the previous entity's forecast onto a new one.
     this._fcCond = undefined; this._fcRainSoon = undefined;
+    this.forecastDaily = null; this.forecastHourly = null;
     const w = this.store.weather;
-    if (!w) { this.weatherNow = null; return; }
+    if (!w) { this.weatherNow = null; this.weatherAlerts = []; return; }
     if (w.source === 'openmeteo') {
       void this._pollOpenMeteo();
       this._weatherTimer = setInterval(() => void this._pollOpenMeteo(), Planner.WEATHER_POLL_MS);
@@ -2930,6 +2993,9 @@ export class Planner extends EventTarget {
       this._weatherFcTimer = setInterval(
         () => void this._refreshEntityForecasts(), Planner.WEATHER_FC_MS);
     }
+    // Alerts (independent of the source) — recompute so a settings-tab entity
+    // change (which routes through setWeather → here) repaints immediately.
+    this._recomputeWeatherAlerts(this.hass?.states ?? {});
   }
 
   // Fetch the bound weather entity's daily + hourly forecast (HA 2024.4+ service
@@ -2939,15 +3005,39 @@ export class Planner extends EventTarget {
     const w = this.store.weather;
     if (!w || w.source !== 'entity' || !w.entityId || !this.hass) return;
     const eid = w.entityId;
+    // Forecast record temps come in the ENTITY's own temperature_unit; normalize
+    // to °C so the chip's tempText (°C in, imperial-aware out) stays correct like
+    // Open-Meteo (which is fetched in °C). Mutates in place — safe, nothing reads
+    // forecast temperature raw.
+    const tUnit = String((this.hass.states[eid]?.attributes as Record<string, unknown>)?.temperature_unit ?? '');
+    const normTemps = (recs: ForecastRecord[] | null): void => {
+      if (!recs || !tUnit) return;
+      for (const r of recs) {
+        if (typeof r.temperature === 'number') r.temperature = toCelsius(r.temperature, tUnit);
+        if (typeof r.templow === 'number') r.templow = toCelsius(r.templow, tUnit);
+      }
+    };
     try {
+      let arraysChanged = false;
       const daily = await this.hass.getWeatherForecasts(eid, 'daily');
-      if (daily && daily.length && typeof daily[0].condition === 'string') {
-        this._fcCond = daily[0].condition as HaCondition;
+      if (daily) {
+        normTemps(daily);
+        this.forecastDaily = daily; arraysChanged = true;
+        if (daily.length && typeof daily[0].condition === 'string') {
+          this._fcCond = daily[0].condition as HaCondition;
+        }
       }
       const hourly = await this.hass.getWeatherForecasts(eid, 'hourly');
       // null → entity exposes no hourly forecast; leave rainSoon undefined.
-      if (hourly) this._fcRainSoon = forecastRainSoon(hourly, Date.now());
-      if (this._applyForecastToNow()) this.emitConfig();
+      if (hourly) {
+        normTemps(hourly);
+        this.forecastHourly = hourly; arraysChanged = true;
+        this._fcRainSoon = forecastRainSoon(hourly, Date.now());
+      }
+      // Repaint when the derived bits change OR the raw arrays refreshed (so the
+      // chip's forecast strip updates on every 30-min poll, not only on a
+      // condition flip).
+      if (this._applyForecastToNow() || arraysChanged) this.emitConfig();
     } catch { /* never throw into the tick/RAF path */ }
   }
 
@@ -2967,6 +3057,14 @@ export class Planner extends EventTarget {
       this.weatherNow.rainSoon = this._fcRainSoon; changed = true;
     }
     return changed;
+  }
+
+  // Recompute the normalized active alert list from the bound alert entity.
+  // Pure read of `states` + weather.ts parser; [] when unconfigured / absent.
+  private _recomputeWeatherAlerts(states: Record<string, HassState>): void {
+    const id = this.store.weather?.alerts?.entityId;
+    if (!id) { if (this.weatherAlerts.length) this.weatherAlerts = []; return; }
+    this.weatherAlerts = parseWeatherAlerts(states[id] ?? null);
   }
 
   // Recompute WeatherNow from a weather.* entity or the local station sensors.
@@ -3052,6 +3150,14 @@ export class Planner extends EventTarget {
         this.weatherNow = { ...this.weatherNow, stale: true };
         this.emitConfig();
       }
+      // DC-C: pull the wide forecast (hourly + daily strips) on the same poll.
+      // Null-on-failure leaves the last arrays in place (never clobbered to null).
+      const fc = await fetchOpenMeteoForecast(lat, lon);
+      if (fc) {
+        this.forecastHourly = fc.hourly.length ? fc.hourly : null;
+        this.forecastDaily = fc.daily.length ? fc.daily : null;
+        this.emitConfig();
+      }
     } finally {
       this._weatherFetching = false;
     }
@@ -3084,7 +3190,15 @@ export class Planner extends EventTarget {
   // locally-set state without any HA entity. Unbound + no localState → null
   // (unconfigured, renders inert). Once an entity is bound the localState is
   // inert (bound wins) but is kept, so unbinding returns to the last local state.
-  effectiveState(item: { entity_id?: string | null; localState?: string }): HassState | null {
+  effectiveState(item: { entity_id?: string | null; localState?: string; logic?: Light['logic'] }): HassState | null {
+    // Logical-state light (batch DC-B): derive a synthetic on/color/flash from a
+    // rule over ANY entity's raw state. Takes precedence over entity_id/localState
+    // (a logic light is derived by definition). Same synthetic-envelope idiom the
+    // renderer's itemState mirrors, so both views resolve identically.
+    if (item.logic?.entityId) {
+      const raw = this.hass?.states?.[item.logic.entityId]?.state ?? null;
+      return logicLightState(item.logic, raw) as HassState;
+    }
     if (item.entity_id) return this.hass?.states?.[item.entity_id] ?? null;
     if (item.localState) return { state: item.localState, attributes: {}, entity_id: '' } as HassState;
     return null;
@@ -3097,8 +3211,12 @@ export class Planner extends EventTarget {
   // hash configRev rebuild) and save() — but save() no-ops outside edit mode, so
   // a kiosk device's local toggles are SESSION-ONLY (never written back to HA or
   // even localStorage). View mode makes no changes at all.
-  toggleItem(item: { entity_id?: string | null; localState?: string }): void {
+  toggleItem(item: { entity_id?: string | null; localState?: string; logic?: Light['logic'] }): void {
     if (this.uiMode === 'view') return;  // visualization only — no control
+    // Logical-state lights are READ-ONLY computed displays — clicking one must not
+    // toggle anything (its state is derived; see effectiveState). No-op here so
+    // every click path (2D, 3D, kiosk) inherits the guard.
+    if (item.logic?.entityId) return;
     if (item.entity_id) { this.toggleEntity(item.entity_id); return; }
     const on = item.localState === 'on' || item.localState === 'playing';
     item.localState = on ? 'off' : 'on';
@@ -3136,6 +3254,76 @@ export class Planner extends EventTarget {
     this.emitConfig();  // configRev → _keyDoors rebuild (unbound state) + sidebar re-render
   }
 
+  // ── Generic action buttons (batch DC-B) ────────────────────────────────
+  // Record a press transient (drives the 2D + 3D tactile animation). Pruned to
+  // a small recent window. Runtime-only — mirrors doorbellRings.
+  private _pushActionPress(id: string): void {
+    const now = performance.now();
+    this.actionPressFx.push({ id, at: now });
+    this.actionPressFx = this.actionPressFx.filter(r => now - r.at < 900);
+    if (this.actionPressFx.length > 12) this.actionPressFx.splice(0, this.actionPressFx.length - 12);
+  }
+
+  // Fire an action button's configured HA service (research §2.1 dispatch table).
+  // Fire-and-forget, try/catch — a bad service_data errors at call time in HA, it
+  // never throws into the RAF/click path. View mode refuses (matches every
+  // interactive fixture); kiosk fires (the whole point of a control kiosk — like
+  // alarm/lock/robot, "no write-back" refers to Diorama's OWN store, not HA
+  // services). `confirm` → a browser confirm() before firing. Unbound / no target
+  // → still animate (flip localState 'on' pulse) so a standalone button reacts.
+  // No save()/emitConfig — pressing mutates no persisted fixture state.
+  fireAction(btn: ActionButton, skipConfirm = false): void {
+    if (this.uiMode === 'view') return;
+    if (btn.confirm && !skipConfirm) {
+      try { if (!confirm(`Fire "${btn.label || 'action'}"?`)) return; } catch { /* no window.confirm → proceed */ }
+    }
+    this._pushActionPress(btn.id);
+    const kind = actionButtonKind(btn);
+    const data = this._parseActionData(btn.serviceData);
+    const svc = (domain: string, service: string, d?: Record<string, unknown>) => {
+      if (!this.hass) return;
+      try { void Promise.resolve(this.hass.callService(domain, service, d ?? {})).catch(() => { /* ignore */ }); }
+      catch { /* ignore */ }
+    };
+    switch (kind) {
+      case 'button_press':
+        if (!btn.entity_id) break;
+        svc(btn.entity_id.split('.')[0], 'press', { entity_id: btn.entity_id });
+        break;
+      case 'scene':
+        if (!btn.entity_id) break;
+        svc('scene', 'turn_on', { entity_id: btn.entity_id, ...data });
+        break;
+      case 'script':
+        if (!btn.entity_id) break;
+        svc('script', 'turn_on', { entity_id: btn.entity_id, ...data });
+        break;
+      case 'automation_trigger':
+        if (!btn.entity_id) break;
+        svc('automation', 'trigger', { entity_id: btn.entity_id, ...data });
+        break;
+      case 'toggle':
+        if (!btn.entity_id) break;
+        this.toggleEntity(btn.entity_id);   // domain-aware toggle + homeassistant.toggle fallback
+        break;
+      case 'custom':
+        if (!btn.domain || !btn.service) break;
+        svc(btn.domain, btn.service, { ...(btn.entity_id ? { entity_id: btn.entity_id } : {}), ...data });
+        break;
+    }
+    // Unbound / no dispatch target → still give a standalone tactile pulse so the
+    // button reads as "pressed" without any HA binding (session-only in kiosk).
+    if (!btn.entity_id && kind !== 'custom') { btn.localState = 'on'; }
+  }
+
+  // Parse an ActionButton.serviceData JSON string into a flat data object.
+  // Returns {} on empty/invalid (the fireAction paths tolerate that).
+  private _parseActionData(raw?: string): Record<string, unknown> {
+    if (!raw || !raw.trim()) return {};
+    try { const o = JSON.parse(raw); return (o && typeof o === 'object' && !Array.isArray(o)) ? o : {}; }
+    catch { return {}; }
+  }
+
   // Whether the bound entity is something the LightConfig modal can handle.
   isLightEntity(entity_id: string | null | undefined): boolean {
     return !!entity_id && entity_id.startsWith('light.');
@@ -3170,6 +3358,8 @@ export class Planner extends EventTarget {
     for (const it of f.safetySensors ?? []) { it.x += dx; it.y += dy; }
     for (const it of f.robots ?? []) { it.x += dx; it.y += dy; }
     for (const it of f.cameras ?? []) { it.x += dx; it.y += dy; }
+    for (const it of f.infoCards ?? []) { it.x += dx; it.y += dy; }
+    for (const it of f.actionButtons ?? []) { it.x += dx; it.y += dy; }
     for (const z of f.presenceZones ?? []) z.points = z.points.map(p => ({ x: p.x + dx, y: p.y + dy }));
     for (const g of f.groundAreas ?? []) g.points = g.points.map(p => ({ x: p.x + dx, y: p.y + dy }));
     for (const vd of f.voidAreas ?? []) vd.points = vd.points.map(p => ({ x: p.x + dx, y: p.y + dy }));
@@ -3195,6 +3385,8 @@ export class Planner extends EventTarget {
     this.activeSafetyId = null;
     this.activeRobotId = null;
     this.activeCameraId = null;
+    this.activeInfoId = null;
+    this.activeActionId = null;
     this.activePZoneId = null;
     this.drawingPresenceZone = null;
     this.activeGroundAreaId = null;

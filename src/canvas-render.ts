@@ -4,6 +4,7 @@ import {
   lightRadius, lightIntensity, lightIconKind, lightRotation, lightLength, switchRotation, switchSize, switchLabelPos,
   motionColor, motionIntensity, sensorColor, BLE_PROXY_DEFAULTS,
   ALARM_DEFAULTS, alarmStateColor,
+  actionButtonSize, actionButtonColor, actionButtonIcon,
   safetyColor, safetyGlyph, safetyIsFloor, SAFETY_DEFAULTS,
   robotGlyph, robotColor, ROBOT_DEFAULTS,
   presenceZoneColor, cameraFov, cameraRange, cameraStateColor,
@@ -13,6 +14,7 @@ import {
   isStairsKind, stairChipArrow,
   doorEndpoint, doorOpenDeltaDeg, doorOpenFraction, doorSpanCenter, windowEndpoints, wallCutsForSegment, wallKind,
   ENV_KINDS, envKindOf, envColor, envValueText, envScale,
+  infoCardText, infoCardRule, infoCardScale, infoCardMount,
   closedWallLoops, loopContaining, roomLabel,
   parseNowPlaying, isMediaPlayerId,
 } from './geometry.js';
@@ -230,8 +232,10 @@ export function drawAll(ctx: CanvasRenderingContext2D, p: Planner, view: View,
   if (on(L.furniture) || on(L.appliances)) drawFurniture(ctx, p, view, on(L.furniture), on(L.appliances));
   if (L.activity === true) drawActivity(ctx, p, view);
   if (on(L.lights) || on(L.switches)) drawFixtures(ctx, p, view, on(L.lights), on(L.switches));
+  if (on(L.switches)) drawActionButtons(ctx, p, view);  // action buttons ride the switches layer (they ARE a control)
   if (on(L.motion)) drawMotionSensors(ctx, p, view);
   if (on(L.env)) drawEnvSensors(ctx, p, view);
+  if (L.info !== false) drawInfoCards(ctx, p, view);
   if (on(L.sensors)) drawSensors(ctx, p, view);
   if (on(L.sensors)) drawBleProxies(ctx, p, view);
   if (on(L.sensors)) drawAlarmPanels(ctx, p, view);
@@ -560,7 +564,9 @@ function drawActivity(ctx: CanvasRenderingContext2D, p: Planner, view: View): vo
     const rgb = Array.isArray(attrs.rgb_color) && (attrs.rgb_color as number[]).length === 3
       ? attrs.rgb_color as number[] : [255, 214, 130];
     const g = ctx.createRadialGradient(c.x, c.y, 0, c.x, c.y, r);
-    const a = 0.34 * Math.min(1, lightIntensity(l));
+    // Logic-light flash (batch DC-B): a matched rule flagged flash → pulse alpha.
+    const flashMul = (attrs as Record<string, unknown>)._flash ? 0.4 + 0.6 * Math.abs(Math.sin(performance.now() / 260)) : 1;
+    const a = 0.34 * Math.min(1, lightIntensity(l)) * flashMul;
     g.addColorStop(0, `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${a})`);
     g.addColorStop(1, `rgba(${rgb[0]},${rgb[1]},${rgb[2]},0)`);
     ctx.fillStyle = g;
@@ -760,6 +766,79 @@ function drawAlarmPanels(ctx: CanvasRenderingContext2D, p: Planner, view: View):
     ctx.fillText(txt, c.x, by + 1 * dpr);
     drawBatteryBadge(ctx, p, a.entity_id, c.x + hw * 0.9, c.y - hh * 0.9);
   }
+}
+
+// Action buttons (batch DC-B): a rounded plate with a raised circular "cap" in
+// the accent color + the action glyph, plus a label below. On press (a recent
+// Planner.actionPressFx entry within ~800 ms) the cap shrinks + brightens for
+// ~300 ms, then an expanding ring pulse fades out — the physical depress read.
+// A running-glow (bound script state 'on') haloes the plate. Rides the switches
+// layer (gated by the caller).
+export const actionButtonHalfPx = new Map<string, number>();
+function drawActionButtons(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
+  const dpr = window.devicePixelRatio || 1;
+  const f = p.floor();
+  const nowMs = performance.now();
+  actionButtonHalfPx.clear();
+  for (const b of f.actionButtons ?? []) {
+    if (b.hidden) continue;
+    const c = mmToPx(view, b.x, b.y);
+    const col = actionButtonColor(b);
+    const selected = p.activeActionId === b.id;
+    const half = Math.max(9, actionButtonSize(b) * 0.5 * view.scale);
+    actionButtonHalfPx.set(b.id, half);
+    // Press animation phase from the most recent press for this button.
+    const press = (p.actionPressFx ?? []).filter(r => r.id === b.id).reduce((a, r) => Math.max(a, r.at), 0);
+    const age = press ? nowMs - press : Infinity;
+    const depress = age < 300 ? (1 - 0.15 * (1 - age / 300)) : 1;   // cap shrinks 15% then eases back
+    // Running glow: a bound script that's currently on.
+    const running = actionButtonIsRunning(p, b);
+    if (running || age < 800) {
+      const glowR = half * (age < 800 ? 1.4 + 1.2 * Math.min(1, age / 800) : 1.6);
+      const gAlpha = age < 800 ? 0.4 * (1 - age / 800) : 0.18;
+      const g = ctx.createRadialGradient(c.x, c.y, half * 0.6, c.x, c.y, glowR);
+      g.addColorStop(0, hexToRgba(col, gAlpha));
+      g.addColorStop(1, hexToRgba(col, 0));
+      ctx.fillStyle = g;
+      ctx.beginPath(); ctx.arc(c.x, c.y, glowR, 0, 2 * Math.PI); ctx.fill();
+    }
+    // Plate
+    ctx.beginPath();
+    ctx.roundRect(c.x - half, c.y - half, half * 2, half * 2, half * 0.32);
+    ctx.fillStyle = 'rgba(22,26,32,0.92)';
+    ctx.fill();
+    ctx.lineWidth = selected ? 2.5 : 1.4;
+    ctx.strokeStyle = selected ? '#fff' : hexToRgba(col, 0.9);
+    ctx.stroke();
+    // Button cap (circle in the accent color, shrinks on press)
+    const capR = half * 0.62 * depress;
+    ctx.beginPath(); ctx.arc(c.x, c.y, capR, 0, 2 * Math.PI);
+    ctx.fillStyle = age < 300 ? lighten(col, 0.35) : col;
+    ctx.fill();
+    // Glyph on the cap
+    ctx.font = `${Math.max(9, half * 0.95)}px sans-serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(actionButtonIcon(b), c.x, c.y + 1 * dpr);
+    // Label below
+    const label = b.label?.trim();
+    if (label) {
+      ctx.font = `${10 * dpr}px sans-serif`;
+      ctx.textBaseline = 'top';
+      const tw = ctx.measureText(label).width + 8 * dpr;
+      const by = c.y + half + 4 * dpr;
+      ctx.fillStyle = 'rgba(0,0,0,0.7)';
+      ctx.fillRect(c.x - tw / 2, by, tw, 13 * dpr);
+      ctx.fillStyle = hexToRgba(col, 1);
+      ctx.fillText(label, c.x, by + 1 * dpr);
+    }
+    drawBatteryBadge(ctx, p, b.entity_id, c.x + half * 0.9, c.y - half * 0.9);
+  }
+  ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+}
+
+// Bound script that's currently running → steady plate glow.
+function actionButtonIsRunning(p: Planner, b: { entity_id?: string | null }): boolean {
+  return !!b.entity_id && b.entity_id.startsWith('script.') && p.effectiveState(b)?.state === 'on';
 }
 
 // 2D detector disc radius (mm world). Small — these are ceiling pucks.
@@ -1432,6 +1511,75 @@ function drawEnvSensors(ctx: CanvasRenderingContext2D, p: Planner, view: View): 
     }
     drawBatteryBadge(ctx, p, e.entity_id, c.x + w / 2, c.y - h / 2);
   }
+}
+
+// Px half-extents of each info-card chip drawn last frame (for hit-testing).
+export const infoCardHalfPx = new Map<string, { w: number; h: number }>();
+
+function drawInfoCards(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
+  const dpr = window.devicePixelRatio || 1;
+  const f = p.floor();
+  const states = p.hass?.states;
+  const now = new Date();
+  infoCardHalfPx.clear();
+  for (const ic of f.infoCards ?? []) {
+    if (ic.hidden) continue;
+    const c = mmToPx(view, ic.x, ic.y);
+    const st = ic.entity_id && states ? states[ic.entity_id] : null;
+    const text = infoCardText(ic, st ?? null, { now, imperial: p.store.imperial });
+    const hit = infoCardRule(ic, st ?? null);
+    const unbound = (ic.displayMode ?? 'entity') === 'entity' && !ic.entity_id;
+    const unavail = !!st && (st.state === 'unavailable' || st.state === 'unknown');
+    const selected = p.activeInfoId === ic.id;
+    const sc = infoCardScale(ic);
+    const color = hit.color ?? '#7fd4ff';
+    // Flash phase: while a matched rule flags flash, pulse the text alpha.
+    const flashA = hit.flash ? 0.5 + 0.5 * Math.abs(Math.sin(performance.now() / 260)) : 1;
+    const label = hit.label ?? text;
+
+    const font = `600 ${11 * sc * dpr}px system-ui, sans-serif`;
+    ctx.font = font;
+    const valW = ctx.measureText(label || '—').width;
+    const padX = 7 * sc * dpr;
+    const w = padX * 2 + valW;
+    const h = 20 * sc * dpr;
+    infoCardHalfPx.set(ic.id, { w: w / 2, h: h / 2 });
+
+    // Bezel
+    ctx.beginPath();
+    ctx.roundRect(c.x - w / 2, c.y - h / 2, w, h, 5 * sc * dpr);
+    ctx.fillStyle = 'rgba(14,18,26,0.86)';
+    ctx.fill();
+    ctx.lineWidth = selected ? 2 : 1;
+    ctx.strokeStyle = unavail ? '#c62828' : selected ? '#fff' : hexToRgba(color, 0.9);
+    ctx.stroke();
+
+    // Value text
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillStyle = unbound ? 'rgba(255,255,255,0.4)' : hexToRgba(unavail ? '#ef9a9a' : color, flashA);
+    ctx.fillText(unbound ? 'unbound' : (label || '—'), c.x, c.y + 0.5 * dpr);
+
+    // Label caption below when selected
+    if (selected && ic.label) {
+      ctx.font = `${10 * dpr}px sans-serif`;
+      ctx.textBaseline = 'top';
+      const tw = ctx.measureText(ic.label).width + 8 * dpr;
+      ctx.fillStyle = 'rgba(0,0,0,0.7)';
+      ctx.fillRect(c.x - tw / 2, c.y + h / 2 + 3 * dpr, tw, 13 * dpr);
+      ctx.fillStyle = '#fff';
+      ctx.fillText(ic.label, c.x, c.y + h / 2 + 5 * dpr);
+      ctx.textBaseline = 'middle';
+    }
+    // Mount hint tick (wall/surface/floor) — subtle, only when selected.
+    if (selected) {
+      ctx.font = `${8 * dpr}px sans-serif`;
+      ctx.fillStyle = 'rgba(255,255,255,0.35)'; ctx.textBaseline = 'bottom';
+      ctx.fillText(infoCardMount(ic), c.x, c.y - h / 2 - 2 * dpr);
+      ctx.textBaseline = 'middle';
+    }
+    drawBatteryBadge(ctx, p, ic.entity_id, c.x + w / 2, c.y - h / 2);
+  }
+  ctx.textAlign = 'center';
 }
 
 function drawFloor(ctx: CanvasRenderingContext2D, p: Planner, view: View,
@@ -2655,7 +2803,8 @@ function drawFixtures(ctx: CanvasRenderingContext2D, p: Planner, view: View,
     }
     if (isOn) {
       const intensity = lightIntensity(l);
-      const alpha = Math.min(1, (0.25 + 0.45 * (bri / 255)) * intensity);
+      const flashMul = (attrs as Record<string, unknown>)._flash ? 0.4 + 0.6 * Math.abs(Math.sin(performance.now() / 260)) : 1;
+      const alpha = Math.min(1, (0.25 + 0.45 * (bri / 255)) * intensity) * flashMul;
       const glowR = lightRadius(l) * view.scale;  // user-controlled pool of light
       const grd = ctx.createRadialGradient(pt.x, pt.y, 0, pt.x, pt.y, glowR);
       grd.addColorStop(0, `rgba(${r},${g},${b},${alpha.toFixed(3)})`);

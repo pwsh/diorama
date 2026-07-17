@@ -9,7 +9,7 @@ import type { ThreeDRenderer, ZoneWorld, HaloWorld, TargetWorld, ActivityContext
 import { localToWorld, transformVerts, pointInPolygon, sensorColor, hexToInt, motionColor, lightIconKind, furnitureKind, resolveFurnitureDef, furnitureCat, isBinKind, isStairsKind, alarmStateColor, doorSpanCenter } from '../geometry.js';
 import { compass8 } from '../geo.js';
 import { resolveScenePreset, resolveTimeBucket } from '../time-of-day.js';
-import { conditionIntensity, weatherEffectEnabled } from '../weather.js';
+import { conditionIntensity, weatherEffectEnabled, worstAlertSeverity } from '../weather.js';
 import { loadModel } from '../model-store.js';
 import { newId } from '../storage.js';
 import type { Planner } from '../planner.js';
@@ -188,6 +188,13 @@ export class ThreeView extends LitElement {
         this.dispatchEvent(new CustomEvent('open-alarm', {
           bubbles: true, composed: true, detail: { id: fixtureId },
         }));
+        return;
+      }
+      // Action button → fire its configured HA service (kiosk fires; view refuses
+      // inside fireAction). Also stamps the 3D cap-press animation.
+      if (kind === 'action') {
+        const b = p.floor().actionButtons?.find(x => x.id === fixtureId);
+        if (b) { p.fireAction(b); this._renderer?.pressActionButton(b.id); }
         return;
       }
       // Smoke / CO detector → unbound: manual test trigger (flip localState);
@@ -420,6 +427,15 @@ export class ThreeView extends LitElement {
       sunPosition: !!wnow && weatherEffectEnabled(w, 'sunPosition'),
     };
 
+    // DC-D alert beacon severity: gated by the weatherFx LAYER + effects3d MASTER
+    // + the alerts.beacon toggle — but NOT on a live weather source (an active
+    // alert must show even under "Clear"). Undefined when off / no alert.
+    const beaconGate = layers.weatherFx !== false && w?.effects3d !== false
+      && w?.alerts?.beacon !== false;
+    const alertSeverity = beaconGate
+      ? (worstAlertSeverity(p.weatherAlerts ?? []) ?? undefined)
+      : undefined;
+
     // Fitted geo θ recovers plan-north from calibration (else θ = 0 = plan-north).
     const fit = p.geoFit();
     const theta = fit && fit.transform.quality !== 'none' ? fit.transform.thetaRad : 0;
@@ -428,7 +444,7 @@ export class ThreeView extends LitElement {
     if (!wnow) {
       return {
         condition: 'sunny', intensity01: 0, windKmh: 0, windBearingPlanRad: null,
-        isDay: true, effects,
+        isDay: true, effects, alertSeverity,
       };
     }
 
@@ -473,6 +489,7 @@ export class ThreeView extends LitElement {
       rainSoon: wnow.rainSoon,
       sunAzimuthDeg,
       sunElevationDeg,
+      alertSeverity,
     };
   }
 
@@ -521,6 +538,8 @@ export class ThreeView extends LitElement {
   private _keySensors = '';
   private _keyMotion = '';
   private _keyEnv = '';
+  private _keyInfo = '';
+  private _keyActions = '';
   private _keyBle = '';
   private _keyAlarm = '';
   private _keySafety = '';
@@ -556,7 +575,7 @@ export class ThreeView extends LitElement {
         this._lastFloorId = f.id;
         r.clearTransientGroups();
         this._keyFloor = this._keyDoors = this._keySensors = '';
-        this._keyMotion = this._keyEnv = this._keyBle = this._keyAlarm = this._keySafety = '';
+        this._keyMotion = this._keyEnv = this._keyInfo = this._keyActions = this._keyBle = this._keyAlarm = this._keySafety = '';
         this._keyCameras = this._keyCamAlerts = this._keyPzones = this._keyNowPlaying = '';
         this._keyGround = '';
         this._keyLights = this._keyZones = this._keyHalos = '';
@@ -734,6 +753,35 @@ export class ThreeView extends LitElement {
         r.updateEnvSensors(f.envSensors, id => states[id] || null);
       }
 
+      // Info cards: structural + bound entity reading + color/layer. Clock/date
+      // cards carry a static `clk` token (their text repaints per-frame inside
+      // the renderer, no rebuild); entity cards fold their live state string.
+      const keyInfo = `${p.configRev}|${p.store.layers2d?.info !== false}|` +
+        (f.infoCards ?? []).map(ic =>
+          (ic.displayMode ?? 'entity') !== 'entity'
+            ? `${ic.id}:clk`
+            : `${ic.id}:${stOf(ic.entity_id)}`).join(',');
+      if (keyInfo !== this._keyInfo) {
+        this._keyInfo = keyInfo;
+        r.updateInfoCards(f.infoCards ?? [], id => states[id] || null,
+                          p.store.layers2d, { now: new Date(), imperial: p.store.imperial });
+      }
+
+      // Action buttons: structural + bound-script running state (a running script
+      // holds a steady glow). The press animation is renderer-side (per-frame from
+      // the synced press-time map), so it needs NO key. Rides the switches layer.
+      const keyActions = `${p.configRev}|${p.store.layers2d?.switches !== false}|` +
+        (f.actionButtons ?? []).map(b =>
+          `${b.id}:${Math.round(b.x)}:${Math.round(b.y)}:${Math.round(b.rotation ?? 0)}:${b.wallMount === false ? 'f' : 'w'}:` +
+          `${b.actionKind ?? 'toggle'}:${b.color ?? ''}:${b.hidden ? 'h' : ''}:` +
+          `${b.entity_id?.startsWith('script.') ? (stOf(b.entity_id)) : ''}`).join(',');
+      if (keyActions !== this._keyActions) {
+        this._keyActions = keyActions;
+        r.updateActionButtons(f.actionButtons ?? [], id => states[id] || null);
+      }
+      // Per-frame: keep the 3D cap-press animation fed from ALL fire paths.
+      r.syncActionPresses(p.actionPressFx);
+
       // BLE proxies: purely structural (no bound live state) — key on config
       // rev + the fixture list so a placement / hide / delete rebuilds it.
       const keyBle = `${p.configRev}|` +
@@ -893,7 +941,8 @@ export class ThreeView extends LitElement {
         `${fx.sunElevationDeg == null ? 'n' : (fx.sunElevationDeg > 0 ? 'u' : 'd')}:` +
         `${fx.rainSoon ? 'r' : '-'}:${effKey}`;
       const keyWeather = `${p.configRev}|${f.id}|${fx.condition}|` +
-        `${Math.round(fx.intensity01 * 4)}|${windBucket}|${w3Bucket}`;
+        `${Math.round(fx.intensity01 * 4)}|${windBucket}|${w3Bucket}|` +
+        `${fx.alertSeverity ?? '-'}`;   // DC-D: rebuild the beacon on a severity change
       if (keyWeather !== this._keyWeather) {
         this._keyWeather = keyWeather;
         r.updateWeather(fx);
@@ -901,12 +950,19 @@ export class ThreeView extends LitElement {
 
       // Lights + switches: structural + state/brightness/color per entity.
       // Fireplace lights flicker via Math.random() inside the builder, so an
-      // active fireplace forces a rebuild every frame (cheap: few lights).
+      // active fireplace forces a rebuild every frame (cheap: few lights). A
+      // logical-state light flagged `flash` (via its rule) pulses the SAME way,
+      // so it also forces the per-frame rebuild.
+      const lightFlashing = (l: typeof f.lights[number]) =>
+        !!(p.effectiveState(l)?.attributes as Record<string, unknown> | undefined)?._flash;
       const hasLiveFireplace = f.lights.some(l =>
-        (l.iconKind === 'fireplace') && p.effectiveState(l)?.state === 'on');
+        ((l.iconKind === 'fireplace') && p.effectiveState(l)?.state === 'on') || lightFlashing(l));
       const keyLights = hasLiveFireplace ? `${Math.random()}` :
         `${p.configRev}|` + f.lights.map(l => {
-          const st = l.entity_id ? states[l.entity_id] : null;
+          // effectiveState folds logic (derived on/color/flash from ANY entity),
+          // localState, and the bound entity into one envelope — so a logic light
+          // rebuilds when its SOURCE entity's resolved color/state changes.
+          const st = p.effectiveState(l);
           const a = (st?.attributes ?? {}) as Record<string, unknown>;
           // Fan spin speed lives on the fan entity's percentage attribute —
           // part of the key so rotor speed updates on change.

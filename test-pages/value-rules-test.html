@@ -1,0 +1,150 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>VALUERULES …</title>
+  <style>
+    body { margin:0; background:#0d1116; color:#cfd8dc; font:13px/1.4 sans-serif; padding:14px; }
+    h1 { font-size:15px; margin:0 0 10px; }
+    .grid { display:flex; flex-wrap:wrap; gap:8px; }
+    .card { background:#141b22; border:1px solid #26323d; border-radius:6px; padding:6px 9px; width:360px; }
+    .pass { color:#69f0ae; } .fail { color:#ff5252; }
+    #summary { font-size:14px; font-weight:bold; margin:10px 0; padding:8px 10px; border-radius:5px; }
+    .okbg { background:#12331f; color:#69f0ae; } .badbg { background:#3a1414; color:#ff8a80; }
+    code { color:#ffd54f; }
+  </style>
+</head>
+<body>
+  <h1>value-rules.ts — rule engine + formatting (pure)</h1>
+  <div id="summary">Running…</div>
+  <div class="grid" id="grid"></div>
+
+  <!-- Pure, dependency-free module. Transpile standalone into the harness dir:
+         npx esbuild src/value-rules.ts --format=esm --outfile=<harness>/value-rules.mod.js -->
+  <script type="module">
+    import {
+      evalRules, ruleMatches, formatEntityValue, formatClock, formatDateTokens,
+      relTimeText, titleCase, CLOCK_PRESETS, DATE_PRESETS,
+    } from './value-rules.mod.js';
+
+    const results = [];
+    const add = (name, ok, detail = '') => results.push({ name, ok, detail });
+    const eq = (name, got, want) => add(name, JSON.stringify(got) === JSON.stringify(want), `got=${JSON.stringify(got)} want=${JSON.stringify(want)}`);
+
+    // ── ruleMatches: every op ────────────────────────────────────────────────
+    add('lt matches',   ruleMatches({ op: 'lt', value: 10 }, '5') === true);
+    add('lt no-match',  ruleMatches({ op: 'lt', value: 10 }, '15') === false);
+    add('lte boundary', ruleMatches({ op: 'lte', value: 10 }, '10') === true);
+    add('gt matches',   ruleMatches({ op: 'gt', value: 10 }, '11') === true);
+    add('gte boundary', ruleMatches({ op: 'gte', value: 10 }, '10') === true);
+    add('eq numeric',   ruleMatches({ op: 'eq', value: 10 }, '10.0') === true);
+    add('eq string',    ruleMatches({ op: 'eq', value: 'open' }, 'open') === true);
+    add('eq string no', ruleMatches({ op: 'eq', value: 'open' }, 'closed') === false);
+    add('neq string',   ruleMatches({ op: 'neq', value: 'open' }, 'closed') === true);
+    add('neq equal→no', ruleMatches({ op: 'neq', value: 'open' }, 'open') === false);
+    add('between in',   ruleMatches({ op: 'between', value: 10, value2: 20 }, '15') === true);
+    add('between out',  ruleMatches({ op: 'between', value: 10, value2: 20 }, '25') === false);
+    add('between reversed bounds', ruleMatches({ op: 'between', value: 20, value2: 10 }, '15') === true);
+    add('between missing value2 → no', ruleMatches({ op: 'between', value: 10 }, '15') === false);
+    add('contains ci',  ruleMatches({ op: 'contains', value: 'ERR' }, 'sensor_error') === true);
+    add('regex match',  ruleMatches({ op: 'regex', value: '^arm' }, 'armed_away') === true);
+    add('regex invalid → no throw', ruleMatches({ op: 'regex', value: '([' }, 'x') === false);
+
+    // ── NaN coercion: numeric op vs non-numeric raw → no match ────────────────
+    add('numeric op on non-numeric raw → no match', ruleMatches({ op: 'gt', value: 10 }, 'open') === false);
+    add('numeric op with NaN value → no match', ruleMatches({ op: 'gt', value: 'abc' }, '50') === false);
+
+    // ── evalRules: first-match-wins ──────────────────────────────────────────
+    const rules = [
+      { op: 'gte', value: 85, color: '#red', flash: true },
+      { op: 'gte', value: 45, color: '#yellow' },
+      { op: 'gte', value: 0, color: '#green' },
+    ];
+    eq('first-match-wins: 90 → red+flash', evalRules(rules, '90'), { color: '#red', flash: true });
+    eq('first-match-wins: 50 → yellow', evalRules(rules, '50'), { color: '#yellow' });
+    eq('first-match-wins: 10 → green', evalRules(rules, '10'), { color: '#green' });
+    eq('no match (all gaps) → {}', evalRules([{ op: 'gt', value: 100, color: '#x' }], '5'), {});
+    eq('empty rules → {}', evalRules(undefined, '5'), {});
+    eq('label carried through', evalRules([{ op: 'eq', value: 'on', label: 'ACTIVE' }], 'on'), { label: 'ACTIVE' });
+
+    // ── formatEntityValue: numeric heuristic + unit ──────────────────────────
+    const S = (state, attrs = {}, entity_id = 'sensor.x') => ({ state, attributes: attrs, entity_id });
+    eq('numeric <100 → 1 decimal + unit', formatEntityValue(S('21.42', { unit_of_measurement: '°C' })), '21.4 °C');
+    eq('numeric ≥100 → rounded int', formatEntityValue(S('612.7', { unit_of_measurement: 'ppm' })), '613 ppm');
+    eq('decimals override', formatEntityValue(S('21.42', { unit_of_measurement: '°C' }), { decimals: 2 }), '21.42 °C');
+    eq('unit override', formatEntityValue(S('50', { unit_of_measurement: 'W' }), { unit: 'watts' }), '50 watts');
+    eq('showUnit false hides unit', formatEntityValue(S('50', { unit_of_measurement: 'W' }), { showUnit: false }), '50');
+    eq('prefix + suffix', formatEntityValue(S('4.2', {}), { prefix: '$', suffix: ' left' }), '$4.2 left');
+    eq('unavailable → —', formatEntityValue(S('unavailable')), '—');
+    eq('null state → —', formatEntityValue(null), '—');
+
+    // imperial conversion (°C → °F) only when unit is °C
+    eq('imperial °C→°F', formatEntityValue(S('20', { unit_of_measurement: '°C' }), {}, { imperial: true }), '68 °F');
+    eq('imperial ignores non-°C unit', formatEntityValue(S('20', { unit_of_measurement: '%' }), {}, { imperial: true }), '20 %');
+
+    // ── mapping + enum title-casing + binary_sensor labels ───────────────────
+    eq('mapping wins', formatEntityValue(S('on', {}, 'switch.x'), { mapping: { on: 'Open', off: 'Shut' } }), 'Open');
+    eq('enum string → Title Case', formatEntityValue(S('returning', {}, 'vacuum.v')), 'Returning');
+    eq('snake enum → Title Case', formatEntityValue(S('armed_away', {}, 'alarm_control_panel.a')), 'Armed Away');
+    eq('binary_sensor door on → Open',
+       formatEntityValue({ state: 'on', attributes: { device_class: 'door' }, entity_id: 'binary_sensor.d' }), 'Open');
+    eq('binary_sensor door off → Closed',
+       formatEntityValue({ state: 'off', attributes: { device_class: 'door' }, entity_id: 'binary_sensor.d' }), 'Closed');
+    eq('binary_sensor unknown device_class → On',
+       formatEntityValue({ state: 'on', attributes: {}, entity_id: 'binary_sensor.d' }), 'On');
+    eq('mapping overrides binary label',
+       formatEntityValue({ state: 'on', attributes: { device_class: 'door' }, entity_id: 'binary_sensor.d' }, { mapping: { on: 'AJAR' } }), 'AJAR');
+
+    // ── relative-time ────────────────────────────────────────────────────────
+    add('relTimeText seconds', relTimeText(12000) === '12s ago');
+    add('relTimeText minutes', relTimeText(5 * 60000) === '5 min ago');
+    add('relTimeText hours', relTimeText(3 * 3600000) === '3 h ago');
+    const now = new Date('2026-07-17T12:05:00Z');
+    const iso = new Date('2026-07-17T12:00:00Z').toISOString();
+    eq('relativeTime mode', formatEntityValue({ state: iso, attributes: {}, entity_id: 'sensor.t' }, { relativeTime: true }, { now }), '5 min ago');
+
+    add('titleCase', titleCase('carbon_monoxide-detected') === 'Carbon Monoxide Detected');
+
+    // ── clock / date tokens (deterministic — LOCAL getters on a fixed Date) ───
+    // Construct via component args so getHours()/getDate() mirror them regardless of host TZ.
+    const D = new Date(2026, 0, 5, 15, 4, 9);   // 2026-01-05 15:04:09 local, a Monday
+    eq('HH:mm', formatDateTokens(D, 'HH:mm'), '15:04');
+    eq('HH:mm:ss', formatDateTokens(D, 'HH:mm:ss'), '15:04:09');
+    eq('12h h:mm A', formatDateTokens(D, 'h:mm A'), '3:04 PM');
+    eq('YYYY-MM-DD', formatDateTokens(D, 'YYYY-MM-DD'), '2026-01-05');
+    eq('M/D/YYYY', formatDateTokens(D, 'M/D/YYYY'), '1/5/2026');
+    eq('MMM D, YYYY', formatDateTokens(D, 'MMM D, YYYY'), 'Jan 5, 2026');
+    eq('dddd', formatDateTokens(D, 'dddd'), 'Monday');
+    eq('ddd', formatDateTokens(D, 'ddd'), 'Mon');
+    eq('MMMM', formatDateTokens(D, 'MMMM'), 'January');
+    eq('midnight 12h → 12:00 AM', formatDateTokens(new Date(2026, 0, 5, 0, 0, 0), 'h:mm A'), '12:00 AM');
+    eq('noon 12h → 12:00 PM', formatDateTokens(new Date(2026, 0, 5, 12, 0, 0), 'h:mm A'), '12:00 PM');
+
+    // presets via formatClock
+    eq('formatClock clock default 12h', formatClock('clock', D), '3:04 PM');
+    eq('formatClock clock 24h preset', formatClock('clock', D, { clockFormat: '24h' }), '15:04');
+    eq('formatClock date default medium', formatClock('date', D), 'Jan 5, 2026');
+    eq('formatClock date iso preset', formatClock('date', D, { dateFormat: 'iso' }), '2026-01-05');
+    eq('formatClock clock_date', formatClock('clock_date', D, { dateFormat: 'iso', clockFormat: '24h' }), '2026-01-05  15:04');
+    add('CLOCK_PRESETS has 12h/24h', !!CLOCK_PRESETS['12h'] && !!CLOCK_PRESETS['24h']);
+    add('DATE_PRESETS has medium/iso', !!DATE_PRESETS.medium && !!DATE_PRESETS.iso);
+
+    // ── render ───────────────────────────────────────────────────────────────
+    const grid = document.getElementById('grid');
+    for (const r of results) {
+      const el = document.createElement('div');
+      el.className = 'card';
+      el.innerHTML = `<span class="${r.ok ? 'pass' : 'fail'}">${r.ok ? 'PASS' : 'FAIL'}</span> ${r.name}` +
+        (r.ok ? '' : `<br><code>${r.detail}</code>`);
+      grid.appendChild(el);
+    }
+    const pass = results.filter(x => x.ok).length;
+    const fail = results.length - pass;
+    const sum = document.getElementById('summary');
+    sum.textContent = `VALUERULES ${fail === 0 ? 'PASS' : 'FAIL'} ${pass}/${results.length}`;
+    sum.className = fail === 0 ? 'okbg' : 'badbg';
+    document.title = `VALUERULES ${fail === 0 ? 'PASS' : 'FAIL'} ${pass}/${results.length}` +
+      (fail ? ' | ' + results.filter(x => !x.ok).map(x => x.name).join(' · ') : '');
+  </script>
+</body>
+</html>
