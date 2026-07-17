@@ -88,6 +88,25 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Phase 1 of the staged plan** (2026-07-17; 2 parallel Opus agents):
+  **Sirens** as a `SafetyKind 'siren'` (blue ceiling beacon: spinning
+  twin-lobe light-bar sweep + square-wave strobe + expanding rings, the
+  force-rebuild-while-alarming idiom; `Planner.triggerSiren` — bound
+  siren./switch. toggles, binary_sensor display-only, unbound demo;
+  section retitled "Safety & sirens") — SIREN 21/21. **UV index**:
+  Open-Meteo `current=` now requests `uv_index` (verified live),
+  pure `parseOpenMeteoCurrent` + `uvBand` WHO banding, `chipContent.uv`
+  chip row + settings checkbox — WEATHER 181/181. **Garage vehicle**:
+  `car` kind (new `vehicle` cat) bound to a presence binary_sensor —
+  empty bay renders the car ghosted (0.15 + dashed 2D outline, no blob
+  shadow). **EV charging**: `ev_charger` kind + `Furniture.evCharger
+  {statusEntity, powerEntity}` — defensive common-shape status map
+  (charging/full/error/idle), pulsing port glow via `_evPulses`,
+  car-side charge bolt + SoC%/kW when the charger is bound or within
+  1500 mm. **Mailbox**: `mailbox` kind + `mailCount {countEntity,
+  flagEntity}` — count badge sprite + raised flag when >0, lid tilts on
+  the flag sensor — VEHICLEMAIL 25/25. Theater/idle regressions green.
+
 - **Home theater fill-in** (Stage 0 of the 2026-07-17 staged plan;
   `research/home-theater-diorama.md`; 2 parallel Opus agents):
   **ProjectorFixture** (`Floor.projectors`, camera-fixture recipe, tool

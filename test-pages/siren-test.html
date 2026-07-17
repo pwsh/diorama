@@ -1,0 +1,161 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>SIREN …</title>
+<style>html,body{margin:0;background:#111;color:#cfd8dc;font:12px monospace}#c{width:1280px;height:880px}#log{padding:8px;white-space:pre-wrap}</style>
+<div id="c"></div>
+<div id="log"></div>
+<!-- Siren beacon (SafetySensor kind 'siren') smoke test. Three seams:
+       (1) shared color/glyph plumbing (geometry.mod.js — 2D + 3D read these)
+           npx esbuild src/geometry.ts --bundle --format=esm --outfile=<H>/geometry.mod.js
+       (2) 3D build + spinning light-bar sweep + strobe (built three-renderer chunk)
+       (3) triggerSiren control logic via the REAL Planner (planner.mod.js, same
+           fake-HaApi/fake-avatar-store build as config-test):
+             T=$(mktemp -d); cp -r src/* "$T"/; cp test-pages/fake-avatar-store.ts "$T"/avatar-store.ts
+             npx esbuild "$T"/planner.ts --bundle --format=esm --outfile=<H>/planner.mod.js
+     Asserts machine-checkable in document.title. -->
+<script type="module">
+  const V = '?v=' + Date.now();
+  const geom = await import('./geometry.mod.js' + V);
+  const mod  = await import('./assets/three-renderer.js' + V);
+  const { Planner } = await import('./planner.mod.js' + V);
+
+  const results = [];
+  const assert = (name, cond, detail = '') => results.push({ name, ok: !!cond, detail: String(detail) });
+  const meshCount = (o) => { let n = 0; o.traverse(x => { if (x.isMesh) n++; }); return n; };
+
+  // ── (1) shared color / glyph / classification plumbing ────────────────────
+  assert('siren color is emergency blue', geom.safetyColor('siren') === '#2979ff', geom.safetyColor('siren'));
+  assert('siren glyph is 📢', geom.safetyGlyph('siren') === '📢', geom.safetyGlyph('siren'));
+  assert('siren is NOT floor (ceiling)', geom.safetyIsFloor('siren') === false);
+  assert('siren classified as siren', geom.safetyIsSiren('siren') === true);
+  assert('smoke NOT classified as siren', geom.safetyIsSiren('smoke') === false);
+  assert('siren defaults present', typeof geom.SAFETY_DEFAULTS.sirenSweepRevPerS === 'number'
+      && typeof geom.SAFETY_DEFAULTS.sirenStrobeHz === 'number');
+
+  // ── (2) 3D build + sweep rotation + strobe ────────────────────────────────
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+
+  const findGroupWithFixture = (grp, id) => grp.children.find(g => {
+    let hit = false; g.traverse(o => { if (o.userData && o.userData.fixtureId === id) hit = true; }); return hit;
+  });
+  const beaconOf = (grp) => grp && grp.children.find(o => o.type === 'Group');
+  const realNow = performance.now.bind(performance);
+  let clock = 0;
+  performance.now = () => clock;
+
+  const sirenBound = { id: 'sir1', x: 2000, y: 2000, kind: 'siren', entity_id: 'siren.horn' };
+  const sirenIdle  = { id: 'sir2', x: 4000, y: 2000, kind: 'siren', entity_id: 'siren.horn2' };
+  const stAlarm = {
+    'siren.horn':  { state: 'on',  attributes: {}, entity_id: 'siren.horn' },
+    'siren.horn2': { state: 'off', attributes: {}, entity_id: 'siren.horn2' },
+  };
+  const sp = id => stAlarm[id] || null;
+
+  // Frame at t=0 (alarming siren1 + idle siren2).
+  clock = 0;
+  r.updateSafetySensors([sirenBound, sirenIdle], sp);
+  const g1 = findGroupWithFixture(r._safetyGroup, 'sir1');
+  const g2 = findGroupWithFixture(r._safetyGroup, 'sir2');
+  assert('siren builds a 3D group (alarming)', !!g1);
+  assert('siren builds a 3D group (idle)', !!g2);
+  const plate1 = g1 && g1.children.find(o => o.isMesh && o.userData && o.userData.kind === 'safety');
+  assert('siren plate is click-tagged kind=safety', !!plate1);
+  const b1a = beaconOf(g1);
+  assert('siren has a spinning beacon group', !!b1a);
+  const rot0 = b1a ? b1a.rotation.y : null;
+  const alarmMeshes = g1 ? meshCount(g1) : 0;
+  const idleMeshes  = g2 ? meshCount(g2) : 0;
+  assert('alarming siren has more meshes than idle (rings + beams)', alarmMeshes > idleMeshes,
+    `alarm=${alarmMeshes} idle=${idleMeshes}`);
+
+  // Advance the clock a quarter revolution and rebuild — the sweep must rotate.
+  clock = (1 / geom.SAFETY_DEFAULTS.sirenSweepRevPerS) * 0.25 * 1000;  // ms → 90° of sweep
+  r.updateSafetySensors([sirenBound, sirenIdle], sp);
+  const g1b = findGroupWithFixture(r._safetyGroup, 'sir1');
+  const b1b = beaconOf(g1b);
+  const rot1 = b1b ? b1b.rotation.y : null;
+  assert('sweep rotation advances across frames', rot0 !== null && rot1 !== null && Math.abs(rot1 - rot0) > 0.5,
+    `rot0=${(rot0||0).toFixed(3)} rot1=${(rot1||0).toFixed(3)}`);
+
+  // Strobe: the lens emissive intensity square-waves. Sample two phases where
+  // sin() has opposite sign → the lobe material emissiveIntensity differs.
+  const lobeEmis = (grp) => { const b = beaconOf(grp); const m = b && b.children.find(o => o.isMesh);
+    return m ? m.material.emissiveIntensity : null; };
+  clock = 0;   // sin(0)=0 → not > 0 → dim phase
+  r.updateSafetySensors([sirenBound], sp);
+  const emisDim = lobeEmis(findGroupWithFixture(r._safetyGroup, 'sir1'));
+  clock = (0.25 / geom.SAFETY_DEFAULTS.sirenStrobeHz) * 1000;  // quarter strobe period → peak, sin>0
+  r.updateSafetySensors([sirenBound], sp);
+  const emisBright = lobeEmis(findGroupWithFixture(r._safetyGroup, 'sir1'));
+  assert('strobe: lens emissive differs bright vs dim phase', emisDim !== null && emisBright !== null && emisBright > emisDim,
+    `dim=${emisDim} bright=${emisBright}`);
+
+  performance.now = realNow;
+
+  // ── (3) triggerSiren control logic (real Planner) ─────────────────────────
+  const svc = [];
+  class FakeHa {
+    constructor() { this.states = {}; this._s = []; this._c = []; }
+    connect() { for (const c of this._c) c('connected'); for (const s of this._s) s(this.states, undefined); }
+    onState(f) { this._s.push(f); } onConn(f) { this._c.push(f); }
+    callService(domain, service, data) { svc.push({ domain, service, data }); return Promise.resolve(); }
+    async getHistory() { return {}; } async getWeatherForecasts() { return null; }
+    async getDevices() { return []; } async getEntityRegistry() { return []; }
+    async updateEntityRegistry() { return true; }
+    async getUserData() { return null; } async setUserData() { return true; }
+    async refreshStates() {}
+  }
+  localStorage.removeItem('diorama:store:v1'); localStorage.removeItem('diorama:configs');
+  const p = new Planner();
+  const stub = new FakeHa();
+  p.connectWith(stub);
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  for (let i = 0; i < 300 && !p.floor(); i++) await sleep(4);
+
+  const mkSiren = (o) => ({ id: 'x', x: 1000, y: 1000, kind: 'siren', entity_id: null, ...o });
+
+  // Bound siren.* → siren.toggle
+  svc.length = 0; p.uiMode = 'edit';
+  p.triggerSiren(mkSiren({ entity_id: 'siren.horn' }));
+  assert('bound siren.* dispatches siren.toggle',
+    svc.length === 1 && svc[0].domain === 'siren' && svc[0].service === 'toggle',
+    JSON.stringify(svc[0] || null));
+
+  // Bound switch.* (relay siren) → switch.toggle
+  svc.length = 0;
+  p.triggerSiren(mkSiren({ entity_id: 'switch.siren_relay' }));
+  assert('bound switch.* dispatches switch.toggle',
+    svc.length === 1 && svc[0].domain === 'switch' && svc[0].service === 'toggle',
+    JSON.stringify(svc[0] || null));
+
+  // Bound binary_sensor → display-only, no service call
+  svc.length = 0;
+  p.triggerSiren(mkSiren({ entity_id: 'binary_sensor.siren_state' }));
+  assert('bound binary_sensor is display-only (no service call)', svc.length === 0, `calls=${svc.length}`);
+
+  // Unbound → flip localState (demo/Test)
+  const un = mkSiren({ entity_id: null, localState: 'off' });
+  svc.length = 0;
+  p.triggerSiren(un);
+  assert('unbound Test flips localState off→on', un.localState === 'on', un.localState);
+  p.triggerSiren(un);
+  assert('unbound Test flips localState on→off', un.localState === 'off', un.localState);
+  assert('unbound never hits callService', svc.length === 0, `calls=${svc.length}`);
+
+  // View mode refuses everything
+  p.uiMode = 'view';
+  const vb = mkSiren({ entity_id: 'siren.horn' });
+  const vu = mkSiren({ entity_id: null, localState: 'off' });
+  svc.length = 0;
+  p.triggerSiren(vb); p.triggerSiren(vu);
+  assert('view mode: bound siren refuses (no service call)', svc.length === 0, `calls=${svc.length}`);
+  assert('view mode: unbound siren refuses (localState unchanged)', vu.localState === 'off', vu.localState);
+
+  // ── render ────────────────────────────────────────────────────────────────
+  const pass = results.filter(x => x.ok).length;
+  const total = results.length;
+  const fails = results.filter(x => !x.ok).map(x => x.name);
+  document.getElementById('log').textContent = results.map(t => `${t.ok ? 'PASS' : 'FAIL'} ${t.name} — ${t.detail}`).join('\n');
+  document.title = fails.length === 0 ? `SIREN PASS ${pass}/${total}` : `SIREN FAIL ${pass}/${total} [${fails.join(',')}]`;
+</script>

@@ -1104,7 +1104,7 @@ export function onCanvasMouseMove(p: Planner, canvas: HTMLCanvasElement, view: V
       hitActionButton(p, view, mm) ||      // action buttons fire in kiosk
       hitAlarmPanel(p, view, mm) ||
       hitThermostat(p, view, mm) ||        // thermostats open the control modal
-      (safeHit && !safeHit.entity_id) ||   // only unbound detectors are clickable
+      (safeHit && (safeHit.kind === 'siren' || !safeHit.entity_id)) ||  // sirens (bound too) + unbound detectors are clickable
       hitRobot(p, view, mm) ||             // robots are always click-toggleable
       hitProjector(p, view, mm) ||         // projectors toggle on/off in kiosk
       hitDoor(p, view, mm) || hitWindow(p, view, mm);
@@ -1475,9 +1475,14 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
     // Thermostat → open the climate control modal.
     const tHit2 = hitThermostat(p, view, mm);
     if (tHit2) { openThermostatModal(canvas, tHit2.id); return; }
-    // Smoke / CO detector → unbound: manual test trigger; bound: display-only.
+    // Siren → toggle (bound siren.*/switch.* or unbound localState). Smoke/CO/
+    // gas/leak detector → unbound: manual test trigger; bound: display-only.
     const safe2 = hitSafetySensor(p, view, mm);
-    if (safe2) { if (!safe2.entity_id) p.toggleItem(safe2); return; }
+    if (safe2) {
+      if (safe2.kind === 'siren') p.triggerSiren(safe2);
+      else if (!safe2.entity_id) p.toggleItem(safe2);
+      return;
+    }
     // Robot → run/dock (bound) or demo toggle (unbound).
     const robo2 = hitRobot(p, view, mm);
     if (robo2) { p.toggleRobot(robo2); return; }

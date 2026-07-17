@@ -33,6 +33,7 @@
       weatherEffectEnabled, visibilityToFogDensity, forecastRainSoon,
       chipAnchorStyle, resolveChipContent, parseOpenMeteoForecast, windText,
       parseWeatherAlerts, alertSeverityRank, worstAlertSeverity,
+      uvBand, parseOpenMeteoCurrent,
     } from './weather.mod.js';
 
     const tests = [];
@@ -193,17 +194,43 @@
     eq('custom wins over tl',      chipAnchorStyle('tl', { x: 12, y: 60 }, 44),    'top:60px;left:12px');
     eq('custom drops centering',   chipAnchorStyle('bm', { x: 5, y: 5 }),          'bottom:5px;left:5px');
 
-    // ── DC-C: chipContent defaults resolution ──────────────────────────────
+    // ── DC-C: chipContent defaults resolution (uv flag folded in) ───────────
     deepEq('content undefined defaults', resolveChipContent(undefined),
-           { apparent: false, humidity: false, wind: false, hourly: 0, daily: 0 });
+           { apparent: false, humidity: false, wind: false, uv: false, hourly: 0, daily: 0 });
     deepEq('content flags on', resolveChipContent({ apparent: true, humidity: true, wind: true }),
-           { apparent: true, humidity: true, wind: true, hourly: 0, daily: 0 });
+           { apparent: true, humidity: true, wind: true, uv: false, hourly: 0, daily: 0 });
+    deepEq('content uv flag on', resolveChipContent({ uv: true }),
+           { apparent: false, humidity: false, wind: false, uv: true, hourly: 0, daily: 0 });
     deepEq('content counts clamped high', resolveChipContent({ hourly: 20, daily: 12 }),
-           { apparent: false, humidity: false, wind: false, hourly: 12, daily: 7 });
+           { apparent: false, humidity: false, wind: false, uv: false, hourly: 12, daily: 7 });
     deepEq('content counts clamped low', resolveChipContent({ hourly: -3, daily: -1 }),
-           { apparent: false, humidity: false, wind: false, hourly: 0, daily: 0 });
+           { apparent: false, humidity: false, wind: false, uv: false, hourly: 0, daily: 0 });
     deepEq('content counts floored', resolveChipContent({ hourly: 5.9, daily: 3.2 }),
-           { apparent: false, humidity: false, wind: false, hourly: 5, daily: 3 });
+           { apparent: false, humidity: false, wind: false, uv: false, hourly: 5, daily: 3 });
+
+    // ── UV index: WHO band matrix + Open-Meteo/entity uv parse ──────────────
+    const uvL = (v) => uvBand(v).label;
+    eq('uv 0 → low',        uvL(0),  'low');
+    eq('uv 2 → low',        uvL(2),  'low');
+    eq('uv 3 → moderate',   uvL(3),  'moderate');
+    eq('uv 5 → moderate',   uvL(5),  'moderate');
+    eq('uv 6 → high',       uvL(6),  'high');
+    eq('uv 7 → high',       uvL(7),  'high');
+    eq('uv 8 → very high',  uvL(8),  'very high');
+    eq('uv 10 → very high', uvL(10), 'very high');
+    eq('uv 11 → extreme',   uvL(11), 'extreme');
+    eq('uv 15 → extreme',   uvL(15), 'extreme');
+    eq('uv band has color', /^#[0-9a-f]{6}$/i.test(uvBand(7).color), true);
+    // Open-Meteo `current` parse populates uvIndex (unitless float).
+    near('openmeteo uv parse', parseOpenMeteoCurrent({
+      temperature_2m: 20, weather_code: 0, wind_speed_10m: 10, wind_direction_10m: 180,
+      is_day: 1, uv_index: 8.6, cloud_cover: 40 }).uvIndex, 8.6, 1e-6);
+    eq('openmeteo uv absent → null',
+       parseOpenMeteoCurrent({ is_day: 1, weather_code: 0 }).uvIndex, null);
+    eq('openmeteo sunny day', parseOpenMeteoCurrent({ weather_code: 0, is_day: 1 }).condition, 'sunny');
+    // Entity source reads attributes.uv_index (Met.no & similar; null elsewhere).
+    eq('entity uv_index parse', resolveWeatherEntity('sunny', { uv_index: 7 }, {}).uvIndex, 7);
+    eq('entity uv absent → null', resolveWeatherEntity('sunny', {}, {}).uvIndex, null);
 
     // ── DC-C: wind text ────────────────────────────────────────────────────
     eq('windText metric', windText(12.4, false), '12 km/h');

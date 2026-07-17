@@ -3,7 +3,7 @@ import { property } from 'lit/decorators.js';
 import { customElement } from './define.js';
 import {
   CONDITION_GLYPH, CONDITION_LABEL, tempText, windText,
-  chipAnchorStyle, resolveChipContent,
+  chipAnchorStyle, resolveChipContent, uvBand,
   worstAlertSeverity, ALERT_SEVERITY_COLOR,
 } from '../weather.js';
 import type { HaCondition, WeatherAlert } from '../weather.js';
@@ -160,11 +160,17 @@ export class WeatherChip extends LitElement {
                    cursor:pointer;pointer-events:auto;flex:0 0 auto">⚠ ${alerts.length}</span>`
       : nothing;
 
-    // Extra current-condition rows (opt-in).
-    const extra: string[] = [];
+    // Extra current-condition rows (opt-in). Plain strings render as-is; the UV
+    // row is a color-banded fragment (WHO risk color), so extra holds either.
+    const extra: (string | ReturnType<typeof html>)[] = [];
     if (content.apparent && now.apparentC != null) extra.push(`feels ${tempText(now.apparentC, imperial)}`);
     if (content.humidity && now.humidity != null) extra.push(`💧 ${Math.round(now.humidity)}%`);
     if (content.wind && now.windKmh != null) extra.push(`💨 ${windText(now.windKmh, imperial)}`);
+    if (content.uv && now.uvIndex != null) {
+      const uv = Math.round(now.uvIndex);
+      const b = uvBand(uv);
+      extra.push(html`<span style="color:${b.color}">☀️ UV ${uv} · ${b.label}</span>`);
+    }
 
     const hourly = content.hourly > 0 ? (p.forecastHourly ?? []).slice(0, content.hourly) : [];
     const daily = content.daily > 0 ? (p.forecastDaily ?? []).slice(0, content.daily) : [];
@@ -217,7 +223,7 @@ export class WeatherChip extends LitElement {
         ${alertsPanel}
         ${extra.length ? html`
           <div style="display:flex;flex-wrap:wrap;gap:2px 10px;font-size:11px;color:#b0bec5">
-            ${extra.map(s => html`<span>${s}</span>`)}
+            ${extra.map(s => typeof s === 'string' ? html`<span>${s}</span>` : s)}
           </div>` : nothing}
         ${hourly.length ? html`
           <div style="display:flex;gap:8px;overflow:hidden;max-width:340px;

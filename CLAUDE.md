@@ -361,6 +361,50 @@ per-minute rebuild). Wall-mount cards flush-snap on drop/move-release via `snapI
 ### Action buttons (Display & Controls arc, batch DC-B)
 `ActionButton` (`Floor.actionButtons`, repairFloor + defaultFloor backfill `[]`) — a generic "any-action" button (wall plate / table / floor puck) that DISPATCHES a configurable HA service; NOT an entity to bind but a dispatcher UI. Canvas-fixture recipe: tool `action` (🔘), `drawActionButtons` (2D rounded plate + accent-colored circular cap + glyph + label; press flash = cap shrink 15 % ≤300 ms then expanding ring pulse ≤800 ms, read from `Planner.actionPressFx`; steady glow while a bound `script.*` is `on`), `hitActionButton` (square half-extent from `actionButtonHalfPx`, drawn last frame), drag kind `action`, sidebar `_section('actions', …)` (action-kind dropdown, per-kind target picker, custom domain/service + JSON service-data with inline validation, glyph/color, wallMount + confirm toggles, Test button, lock), 3D `_actionGroup` + `updateActionButtons` under `_keyActions` (three-view; configRev + fixture list + bound-script running state) with raycast `userData.kind='action'`, **rides the `switches` layer** (2D `drawAll` gate + 3D `setLayerVisibility`). Wall-snap `snapActionButtonToWall` (geometry.ts) — flush like a switch/alarm (offset 65 mm), **no ganging**; `wallMount:false` = free table/floor puck (3D pedestal + blob shadow, plate faces up). **Dispatch** `Planner.fireAction(btn, skipConfirm?)` (research §2.1 table): `button_press`→`<button|input_button>.press`, `scene`→`scene.turn_on`, `script`→`script.turn_on`, `automation_trigger`→`automation.trigger`, `toggle`→`toggleEntity` (domain-aware + `homeassistant.toggle` fallback), `custom`→chosen `domain.service` with optional entity target + parsed `serviceData` JSON. Fire-and-forget try/catch; **view refuses, kiosk fires** (like alarm/lock/robot — "no write-back" is Diorama's own store); `confirm` → browser `confirm()` (edit+kiosk; the sidebar Test button + `skipConfirm` bypass it); unbound non-custom → flip `localState 'on'` for a standalone pulse. No `save()`/`emitConfig()` on fire (nothing persisted mutates); `actionPressFx` is runtime-only (pruned >900 ms) — 2D reads it directly, 3D `advanceActionButtons` eases the cap depress + emissive pulse per-frame from a renderer press-time map three-view syncs (`syncActionPresses` each tick; `pressActionButton` on 3D click). Bound target ids are config-path in `_isSlowEntity` (scoped to the current floor). **Double-fire cooldown**: `fireAction` has a per-button ~500 ms cooldown (`_actionCooldownAt`, `performance.now()`) armed only once committed to fire (a cancelled confirm never arms it) — the 700 ms synthetic-click de-dupe only covers the 2D canvas layer, so the 3D-raycast + sidebar-Test + 2D-click paths could otherwise each dispatch the same press (asserted in `action-button-test.html`). **Last-fired affordance**: the sidebar action row shows a dim "fired N ago" line from `actionLastFired(st)` (geometry.ts, pure) — scene/button/input_button state IS the last-activation timestamp; script/automation carry `attributes.last_triggered`; relative-time via `relTimeText`; re-renders on the config channel (ids already config-path). **Recent-trigger bubble tier**: a press feeds the thought-bubble trigger tier as kind `action_button` (`BUBBLE_POOL_TRIGGER.action_button` = ✨💡🎬👍) — three-view's `_recentTrigs` scan reads `Planner.actionPressFx`, de-dupes on the press timestamp (`_actionTrigAt`, cleared on floor switch), and pushes one 45 s entry per press at the button's world x/y so nearby avatars react. Test page `action-button-test.html` (`ACTIONBTN PASS 32/32`).
 
+### Vehicle, EV charging & mailbox (phase 1b)
+Three state-driven `FurnitureKind`s riding the existing furniture pipeline
+(types → `FURNITURE_KINDS` → `drawFurniturePrimitiveLocal` → `_buildFurniture`
+→ appliance-state hash), all item-level bindings (no `repairFloor`), all bound
+ids config-path in `_isSlowEntity` (the dedicated fields; the car's presence
+`entity_id` stays live-path like other furniture — the hash reads it each tick).
+The **`vehicle` cat** (new; `furnitureCat` optgroup "Vehicle / garage") groups
+`car` + `ev_charger`; `mailbox` rides the **`outdoor`** cat.
+- **Garage-bay vehicle** (`car`, ~1850×4800×1450): `isVehicleKind`. Binds a
+  binary_sensor **presence** via the generic `entity_id` (picker domain
+  `binary_sensor`). Bound + state ≠ `'on'` → renders **GHOSTED** (3D:
+  translucent 0.15 — transparent materials auto-skip outline shells + the blob
+  shadow is suppressed; 2D: dim dashed outline + "away" caption). Bound-on OR
+  **unbound** → solid (unbound cars are plain furniture, never ghosted). 3D:
+  body + cabin + dark glass band + 4 wheels + emissive head/tail light hints.
+  Cars are NOT raycast-clickable (tagged with `fixtureId` only, no `userData.kind`).
+- **EV charging status** (`Furniture.evCharger?: {statusEntity?; powerEntity?}`
+  on `car` + the small `ev_charger` post fixture ~350×250×1200): status resolved
+  by the pure **`evStatusOf(state)`** (geometry.ts) mapping ANY vendor's state
+  STRING defensively (design around the common shape, never one vendor's ids —
+  see `docs/research/ev-charger.md`): `charging` (green pulse) / `full` (steady
+  green) / `error` (red) / `idle` (dim slate) via `EV_STATUS_COLORS`/`evStatusColor`.
+  The `ev_charger` fixture shows a state-colored port LED + hanging cable hint.
+  `carChargeState(car, furniture, stateOf)` (shared 2D+3D, geometry.ts) resolves
+  whether a car should show a charge indicator: its OWN `evCharger` binding
+  charging OR any charger piece within `EV_CAR_RANGE_MM` (1500) charging → a 2D
+  bolt (+SoC % from a battery attr via `evChargePercent`, or kW) + a 3D emissive
+  green **port glow** on the car. Charging ports (car + charger LED) register in
+  `_evPulses`, pulsed per frame by `_advanceEvPulses` (fireplace-flicker idiom;
+  reset each `updateFloor` like `_speakerPulses`).
+- **Mail/packages badge** (`Furniture.mailCount?: {countEntity?; flagEntity?}` on
+  `mailbox` ~250×350×1100 post box): `countEntity` (Mail-and-Packages numeric
+  sensor) > 0 → floating count badge (2D chip + 3D `_makeTextSprite`, freed by
+  the `_floorGroup` `_disposeSpriteMaps` pairing) + the flag raised; `flagEntity`
+  (binary_sensor lid) `'on'` tilts the lid open (build-time). Zero/unbound =
+  plain closed mailbox, flag down, no badge.
+- **Hash + keys**: three-view's appliance-state hash predicate widened to
+  `isVehicleKind || ev_charger || mailbox || evCharger || mailCount`; it folds
+  the car presence (`on`), ev status+power bucket, and mail count+lid states so
+  `_keyFloor` rebuilds the whole floor on any change (which also refreshes an
+  adjacent car's indicator when a charger's status flips). Sidebar: car gets the
+  generic bind row (binary_sensor); car+ev_charger get `_evChargerRows`; mailbox
+  gets `_mailboxRows`. Test page `vehicle-mail-test.html` (`VEHICLEMAIL PASS 25/25`).
+
 ### Yard arc: ground coverings, outdoor objects, grid layer (batch K)
 - **Ground areas** (`Floor.groundAreas`, repairFloor backfill; `GroundKind` grass/rock/concrete/blacktop/mulch/sand/water): polygon paint on the ground plane. Draw latch `drawingGroundArea` (PARALLEL field mirroring `drawingPresenceZone` — the codebase convention is parallel latch fields, not a shared-kind refactor), `ground` tool, `groundVert` vertex drag, low-priority hit-testing (after ALL item hits — paint never swallows fixture clicks). 3D: `updateGroundAreas` — one ShapeGeometry patch per area at **y=4** with procedural `_groundTexture(kind)` toon textures (`_groundTexCache`, disposed only in destroy; `_texCache` disposal was also added there); water = opacity 0.85. Blob shadows (transparent, y=8) always paint over patches. 2D: flat kind-colored fills right after the floor. Own layer key `ground` (absent = on); NON-nav (paint only). Note: like presence zones, a big area captures select-mode left-clicks — hide the layer to click through.
 - **Ground grid**: the 3D backdrop is a single `THREE.GridHelper` on `_scene`, previously visible iff no bg image. Now `(layers.grid !== false) && !bgVisible` — gated in updateFloor (cached `_bgVisibleNow`) AND reapplied per tick in setLayerVisibility; `layers.grid` in `_keyFloor`; sidebar layer "3D grid". There is NO 2D plan grid (nothing to gate).
@@ -750,7 +794,7 @@ Government/agency weather WARNINGS (tornado warning, flood watch, heat advisory�
 - Three.js scene rebuilds MUST go through `_clearGroup` (disposes geometry + materials); raw `g.remove(child)` leaks WebGL buffers and eventually freezes the tab on view switch.
 - Adding HA-side props to a fixture (e.g. light radius) → also update the 2D / 3D renderers to actually use the field, not just the type.
 - Adding a new `LightIconKind`: extend `LIGHT_GLYPH` in `canvas-render.ts`, the `switch (kind)` block in `three-renderer.ts.updateLightsSwitches` (build the body + decide whether to keep the floor disc), and `LIGHT_KINDS` in `sidebar.ts` (UI selector).
-- Adding a new `FurnitureKind`: extend `FURNITURE_KINDS` in `geometry.ts`, the `switch (kind)` block in `canvas-render.ts.drawFurniturePrimitive`, and the `switch (kind)` block in `three-renderer.ts._buildFurniture`. The sidebar dropdown enumerates `Object.keys(FURNITURE_KINDS)` so it's automatic.
+- Adding a new `FurnitureKind`: extend `FURNITURE_KINDS` in `geometry.ts`, the `switch (kind)` block in `canvas-render.ts.drawFurniturePrimitive`, and the `switch (kind)` block in `three-renderer.ts._buildFurniture`. The sidebar dropdown enumerates `Object.keys(FURNITURE_KINDS)` so it's automatic — EXCEPT a **new `cat`** (e.g. `vehicle`) also needs a `FurnitureCat` union member + a `_kindOptions` optgroup entry in `sidebar.ts` (else its kinds silently don't surface), and if its bound state drives the 3D build it must be added to the three-view appliance-state-hash predicate (alongside `cat==='appliance' || isBinKind || isSpeakerKind || isVehicleKind || …`) or `_keyFloor` won't rebuild on a state change. Item-level binding fields on `Furniture` need no `repairFloor`; new bound ids that should refresh the sidebar go into `Planner._isSlowEntity` (config-path).
 - Adding a canvas fixture (mirror the **motion-sensor / BLE-proxy** flow): types → geometry defaults → `canvas-render` draw + `drawAll` gating → `canvas-hit` hit test → `canvas-interact` (mousedown/move/up drag case + place-tool + delete-tool + cursor) → sidebar section + `TOOLS` entry + tool hint → three-renderer group (declared, added to `scene.add`, `clearTransientGroups`, `destroy`, `setLayerVisibility`) + `update*` builder → three-view dirty key. BLE proxies ride the existing `sensors` layer instead of owning one.
 - `HaApi` additions must land in **both** `HassClient` and `HassPanelAdapter` (panel adapter goes through `hass.connection.sendMessagePromise`). Extend the shared return types in `ha-client.ts` (`HaDevice` / `HaEntityReg`) additively.
 - When changing the rotation convention or the body-forward axis of the humanoid, **also** flip the limb-rotation signs and the body `atan2` argument signs together — they're coupled.

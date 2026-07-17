@@ -1119,7 +1119,7 @@ export class SettingsDrawer extends LitElement {
                      background:${cur === code && !hasCustom ? 'var(--accent)' : '#1c2733'};
                      border:1px solid #33465a;color:var(--text)"
               @click=${() => set(x => { x.chipAnchor = code; x.chipCustom = undefined; })}>${glyph}</button>`;
-    const contentCheck = (label: string, key: 'apparent' | 'humidity' | 'wind') => html`
+    const contentCheck = (label: string, key: 'apparent' | 'humidity' | 'wind' | 'uv') => html`
       <label class="row" style="padding:1px 0"><span style="flex:1;font-size:11px">${label}</span>
         <input type="checkbox" .checked=${w?.chipContent?.[key] === true}
                @change=${(e: Event) => set(x => {
@@ -1165,6 +1165,7 @@ export class SettingsDrawer extends LitElement {
       ${contentCheck('Feels-like', 'apparent')}
       ${contentCheck('Humidity', 'humidity')}
       ${contentCheck('Wind', 'wind')}
+      ${contentCheck('UV index', 'uv')}
       ${countInput('Hourly forecast entries', 'hourly', 12)}
       ${countInput('Daily forecast entries', 'daily', 7)}
       <div style="font-size:10px;color:var(--text-dim);line-height:1.3;margin:2px 0 6px">

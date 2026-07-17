@@ -11,6 +11,7 @@ import {
   switchHeight, switchRotation, switchSize,
   motionColor, motionIntensity, hexToInt, bleProxyHeight, BLE_PROXY_DEFAULTS,
   furnitureDef, resolveFurnitureDef, furnitureColor, furnitureCat, isBinKind, binStateIsFull, isSpeakerKind, isRiserKind, doorOpenDeltaDeg,
+  isVehicleKind, evStatusOf, evStatusColor, carChargeState,
   doorOpenFraction, GARAGE_DOOR_H,
   alarmHeight, alarmStateColor, ALARM_DEFAULTS, ALARM_PLATE_DEPTH_MM,
   thermostatHeight, THERMO_DEFAULTS, THERMO_PLATE_DEPTH_MM, hvacModeColor, hvacAirflow, HVAC_VENT_COLORS,
@@ -966,6 +967,10 @@ export class ThreeDRenderer {
   // Registered in _buildFurniture (only when playing → no glow when idle),
   // cleared each updateFloor, animated per frame in _advanceSpeakerPulses.
   private _speakerPulses: { mat: THREE.MeshToonMaterial; base: number; deep: boolean; phase: number }[] = [];
+  // EV charge port glow materials that pulse while charging (car port + charger
+  // LED). Registered in _buildFurniture (only when charging), cleared each
+  // updateFloor, animated per frame in _advanceEvPulses (fireplace-flicker idiom).
+  private _evPulses: { mat: THREE.MeshToonMaterial; base: number; phase: number }[] = [];
   // TVs grouped by the room they sit in — the watch_tv seated activity checks
   // whether a bound TV in the seated person's room is on. Rebuilt in updateFloor.
   private _tvsByRoom: Record<string, { furnitureId: string; hasEntity: boolean }[]> = {};
@@ -1757,6 +1762,7 @@ export class ThreeDRenderer {
     this._applianceDoors = [];
     this._applianceDoorBlend = {};
     this._speakerPulses = [];
+    this._evPulses = [];
     // Weather effects reset on floor switch (spawn box is fitted to the floor
     // bbox; three-view re-runs updateWeather next tick). _clearWeather resets the
     // tracking lists so _advanceWeather can't iterate freed buffers.
@@ -2573,6 +2579,7 @@ export class ThreeDRenderer {
     // opening without a pop.
     this._applianceDoors = [];
     this._speakerPulses = [];
+    this._evPulses = [];
     this._tvsByRoom = {};
     this._beds = [];
     this._roomZones = [];
@@ -2620,9 +2627,37 @@ export class ThreeDRenderer {
         else biasOn = stateOn;   // AUTO: glow while the TV plays/on
         biasColor = hexToInt(biasLightColor(bl));
       }
+      // Garage-bay vehicle: a BOUND car whose presence sensor isn't 'on' builds
+      // GHOSTED (empty bay). Unbound cars are always solid. A car adjacent to a
+      // charging charger (or its own bound charger) shows a charge indicator.
+      const vehicleGhost = isVehicleKind(fu.kind) && fu.entity_id != null && st0?.state !== 'on';
+      let evCharging = false;
+      if (fu.kind === 'car' && stateProvider) {
+        evCharging = carChargeState(fu, f.furniture, id => stateProvider(id)) != null;
+      }
+      // EV charger fixture: its port LED color follows the resolved status.
+      let evColor: number | undefined;
+      if (fu.kind === 'ev_charger') {
+        const ss = fu.evCharger?.statusEntity && stateProvider ? stateProvider(fu.evCharger.statusEntity) : null;
+        const status = evStatusOf(ss?.state);
+        evColor = hexToInt(evStatusColor(status));
+        if (status === 'charging') evCharging = true;   // pulse the port glow
+      }
+      // Mailbox: count > 0 raises the flag + floats a badge; a bound lid sensor
+      // 'on' tilts the lid open.
+      let mailFlagUp = false, mailLidOpen = false; let mailCountLabel: string | undefined;
+      if (fu.kind === 'mailbox') {
+        const mc = fu.mailCount;
+        if (mc?.countEntity && stateProvider) {
+          const cnt = parseInt(stateProvider(mc.countEntity)?.state ?? '', 10);
+          if (isFinite(cnt) && cnt > 0) { mailFlagUp = true; mailCountLabel = cnt > 99 ? '99+' : String(cnt); }
+        }
+        if (mc?.flagEntity && stateProvider) mailLidOpen = stateProvider(mc.flagEntity)?.state === 'on';
+      }
       const doorSink: { pivot: THREE.Object3D; axis: 'x' | 'y'; openAngle: number }[] = [];
       const grp = this._buildFurniture(fu, f.furniture, customObjects,
-                                       { applianceOn, ledScale, doorSink, tempLabel, binFull, speakerPlaying, biasOn, biasColor });
+                                       { applianceOn, ledScale, doorSink, tempLabel, binFull, speakerPlaying, biasOn, biasColor,
+                                         vehicleGhost, evCharging, evColor, mailFlagUp, mailLidOpen, mailCountLabel });
       this._shadowFlags(grp);
       // Custom-recipe front-arrow indicator: custom objects draw only as a
       // labeled rect in 2D and had no 3D front cue, so when a recipe piece is
@@ -2673,6 +2708,11 @@ export class ThreeDRenderer {
       if (isBinKind(fu.kind)) {
         grp.userData = { ...grp.userData, kind: 'media', entity_id: fu.entity_id ?? null, fixtureId: fu.id };
         this._mediaClickables.push(grp);
+      }
+      // Vehicles / EV chargers / mailboxes: tag the group with its fixtureId
+      // (no `kind` → NOT raycast-clickable) so state-driven builds are locatable.
+      if (isVehicleKind(fu.kind) || fu.kind === 'ev_charger' || fu.kind === 'mailbox') {
+        grp.userData = { ...grp.userData, fixtureId: fu.id };
       }
       // Riser platform: a flat walkable deck. Registered as terrain (flat top =
       // elevation + ht, resolved in _groundYAt like a landing) so rigs climb onto
@@ -4201,7 +4241,9 @@ export class ThreeDRenderer {
                           opts?: { applianceOn?: boolean; ledScale?: number;
                                    doorSink?: { pivot: THREE.Object3D; axis: 'x' | 'y'; openAngle: number }[];
                                    tempLabel?: string; binFull?: boolean; speakerPlaying?: boolean;
-                                   biasOn?: boolean; biasColor?: number }): THREE.Group {
+                                   biasOn?: boolean; biasColor?: number;
+                                   vehicleGhost?: boolean; evCharging?: boolean; evColor?: number;
+                                   mailFlagUp?: boolean; mailLidOpen?: boolean; mailCountLabel?: string }): THREE.Group {
     const recipe = fu.customKindId ? customObjects?.find(o => o.id === fu.customKindId) : undefined;
     const def = recipe ?? furnitureDef(fu);
     const W = fu.w, D = fu.h, HT = def.ht;
@@ -5177,6 +5219,129 @@ export class ThreeDRenderer {
         addBox(W, Math.min(40, HT * 0.5), 24, lip, 0, HT - 20, -D / 2 - 10);   // front step edge
         break;
       }
+      // ── mailbox ───────────────────────────────────────────────────────────
+      case 'mailbox': {
+        // Post-mounted box: a thin post + a box body with a rounded (half-cyl)
+        // top + a hinged front lid + a red side flag. Front (door) = local -Z.
+        const boxH = HT * 0.28, boxTopY = HT - boxH / 2;
+        const postMat = this._mat({ color: 0x5d4037, roughness: 0.9 });
+        addBox(W * 0.34, HT - boxH, D * 0.34, postMat, 0, (HT - boxH) / 2, 0);
+        const boxMat = this._mat({ color: tint, roughness: 0.6, metalness: 0.2, side: THREE.DoubleSide });
+        addBox(W, boxH, D * 0.92, boxMat, 0, boxTopY, 0);
+        // Rounded top: a half-cylinder lying along the depth (Z) axis.
+        const arch = new THREE.Mesh(new THREE.CylinderGeometry(W / 2, W / 2, D * 0.92, 16, 1, false, 0, Math.PI), boxMat);
+        arch.rotation.z = Math.PI / 2; arch.rotation.y = Math.PI / 2;
+        arch.position.set(0, boxTopY + boxH / 2, 0);
+        grp.add(arch);
+        // Hinged front lid (a thin panel on the -Z face, hinged at its bottom);
+        // tilts open ~55° when the lid sensor is on.
+        const lidHinge = new THREE.Group();
+        lidHinge.position.set(0, boxTopY - boxH / 2, -D * 0.46);
+        const lid = new THREE.Mesh(new THREE.BoxGeometry(W * 0.86, boxH * 0.86, 16),
+          this._mat({ color: new THREE.Color(tint).multiplyScalar(0.82).getHex(), roughness: 0.6 }));
+        lid.position.set(0, boxH * 0.43, 0);
+        lidHinge.add(lid);
+        if (opts?.mailLidOpen) lidHinge.rotation.x = -55 * Math.PI / 180;
+        grp.add(lidHinge);
+        // Red flag on the +X side, raised when mail is waiting (else lowered).
+        const flagArm = new THREE.Group();
+        flagArm.position.set(W / 2 + 6, boxTopY, 0);
+        const flagMat = this._mat({ color: opts?.mailFlagUp ? 0xe53935 : 0x9e9e9e, roughness: 0.7 });
+        const post = new THREE.Mesh(new THREE.CylinderGeometry(10, 10, boxH * 1.1, 8), flagMat);
+        post.position.y = boxH * 0.4; flagArm.add(post);
+        const flag = new THREE.Mesh(new THREE.BoxGeometry(12, boxH * 0.5, D * 0.36), flagMat);
+        flag.position.set(0, boxH * 0.7, -D * 0.12); flagArm.add(flag);
+        if (!opts?.mailFlagUp) flagArm.rotation.x = Math.PI * 0.42;   // lowered
+        grp.add(flagArm);
+        // Count badge sprite above the box (only when > 0). Freed by the
+        // _floorGroup's _disposeSpriteMaps pairing (with temp/room-label sprites).
+        if (opts?.mailCountLabel) {
+          const sp = this._makeTextSprite('✉ ' + opts.mailCountLabel, '#e53935', 0.85);
+          sp.position.set(0, HT + 300, -D / 2 - 30);
+          grp.add(sp);
+        }
+        break;
+      }
+      // ── vehicle / garage ─────────────────────────────────────────────────
+      case 'car': {
+        // Stylized sedan: lower body + narrower cabin + 4 wheels + light hints.
+        // GHOSTED (empty bay) → translucent 0.15 (outline shells auto-skip
+        // transparent materials, so no dark hull wraps a ghost car).
+        const ghost = !!opts?.vehicleGhost;
+        const gp = (p: Record<string, unknown>) => this._mat(ghost
+          ? { ...p, transparent: true, opacity: 0.15, depthWrite: false } : p);
+        const bodyMat = gp({ color: tint, roughness: 0.45, metalness: 0.35, side: THREE.DoubleSide });
+        const clr = 150;                              // ground clearance
+        const bodyH = HT * 0.44;
+        addBox(W * 0.96, bodyH, D * 0.97, bodyMat, 0, clr + bodyH / 2, 0);
+        // Cabin (greenhouse): narrower, set slightly toward the front.
+        const cabinH = HT - clr - bodyH;
+        addBox(W * 0.82, cabinH, D * 0.5, bodyMat, 0, clr + bodyH + cabinH / 2, D * 0.02);
+        // Dark glass band around the cabin.
+        const glassMat = gp({ color: 0x141c24, roughness: 0.1, metalness: 0.4,
+          transparent: true, opacity: ghost ? 0.12 : 0.6, depthWrite: false, side: THREE.DoubleSide });
+        addBox(W * 0.84, cabinH * 0.62, D * 0.52, glassMat, 0, clr + bodyH + cabinH * 0.52, D * 0.02);
+        // Four wheels (cylinders, axis along X).
+        const wheelMat = gp({ color: 0x14161a, roughness: 0.85, metalness: 0.1 });
+        const rw = 330;
+        for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
+          const wheel = new THREE.Mesh(new THREE.CylinderGeometry(rw, rw, 180, 16), wheelMat);
+          wheel.rotation.z = Math.PI / 2;
+          wheel.position.set(sx * (W / 2 - 90), rw, sz * D * 0.3);
+          grp.add(wheel);
+        }
+        // Light hints: white front (local -Z), red rear (+Z).
+        if (!ghost) {
+          const head = this._mat({ color: 0xfff4c2, emissive: 0xfff2b0, emissiveIntensity: 0.55 });
+          const tail = this._mat({ color: 0x8a1a1a, emissive: 0xd32f2f, emissiveIntensity: 0.5 });
+          for (const sx of [-1, 1]) {
+            const h = new THREE.Mesh(new THREE.BoxGeometry(150, 90, 22), head);
+            h.position.set(sx * W * 0.3, clr + bodyH * 0.55, -D / 2 - 4); h.userData.outlineSkip = true; grp.add(h);
+            const t = new THREE.Mesh(new THREE.BoxGeometry(150, 90, 22), tail);
+            t.position.set(sx * W * 0.3, clr + bodyH * 0.55, D / 2 + 4); t.userData.outlineSkip = true; grp.add(t);
+          }
+          // EV charge indicator: a small pulsing green port glow on the +X side
+          // when a charger (bound or adjacent) is charging (per-frame via _evPulses).
+          if (opts?.evCharging) {
+            const portMat = this._mat({ color: 0x00e676, emissive: 0x00e676, emissiveIntensity: 0.9 });
+            const port = new THREE.Mesh(new THREE.CylinderGeometry(55, 55, 30, 16), portMat);
+            port.rotation.z = Math.PI / 2;
+            port.position.set(W / 2 + 6, clr + bodyH * 0.6, -D * 0.2);
+            port.userData.outlineSkip = true;
+            grp.add(port);
+            this._evPulses.push({ mat: portMat, base: 0.9, phase: (fu.x + fu.y) % 6.28 });
+          }
+        }
+        break;
+      }
+      case 'ev_charger': {
+        // Wall-post EVSE: a slim post + a head unit + a state-colored port LED +
+        // a hanging cable hint. Front (face) = local -Z.
+        const bodyMat = this._mat({ color: tint, roughness: 0.5, metalness: 0.3 });
+        addBox(W * 0.55, HT, D * 0.62, bodyMat, 0, HT / 2, 0);           // post
+        const headH = HT * 0.34, headY = HT - headH / 2;
+        addBox(W, headH, D, bodyMat, 0, headY, 0);                        // head unit
+        // Port LED on the front (-Z) of the head unit, colored by status; pulses
+        // (via _evPulses) while charging, steady otherwise.
+        const ledCol = opts?.evColor ?? hexToInt(evStatusColor('idle'));
+        const ledMat = this._mat({ color: ledCol, emissive: ledCol, emissiveIntensity: 0.9 });
+        const led = new THREE.Mesh(new THREE.CylinderGeometry(W * 0.24, W * 0.24, 20, 18), ledMat);
+        led.rotation.x = Math.PI / 2;
+        led.position.set(0, headY, -D / 2 - 6);
+        led.userData.outlineSkip = true;
+        grp.add(led);
+        if (opts?.evCharging) this._evPulses.push({ mat: ledMat, base: 0.9, phase: (fu.x + fu.y) % 6.28 });
+        // Hanging cable hint: a thin dark cylinder down the front-left + a small
+        // connector head at its end.
+        const cableMat = this._mat({ color: 0x1a1c20, roughness: 0.9 });
+        const cable = new THREE.Mesh(new THREE.CylinderGeometry(16, 16, HT * 0.42, 8), cableMat);
+        cable.position.set(-W * 0.28, HT * 0.5, -D / 2 - 8);
+        grp.add(cable);
+        const plug = new THREE.Mesh(new THREE.BoxGeometry(70, 90, 40), cableMat);
+        plug.position.set(-W * 0.28, HT * 0.28, -D / 2 - 8);
+        grp.add(plug);
+        break;
+      }
       default:
         addBox(W, HT, D, wood, 0, HT / 2, 0);
     }
@@ -5236,6 +5401,7 @@ export class ThreeDRenderer {
       kind !== 'stairs' && kind !== 'stairs_half' && kind !== 'stair_landing' &&
       kind !== 'wall_tv' &&   // hangs on a wall, never touches the floor
       kind !== 'riser_platform' &&   // a floor-like deck; a huge blob reads wrong
+      !opts?.vehicleGhost &&   // an empty bay shouldn't cast a solid shadow
       Math.abs(fu.elevation ?? 0) < 100;
     if (onFloor) {
       const blob = this._blobShadow(W / 2 * 1.12 + 60, D / 2 * 1.12 + 60);
@@ -5976,6 +6142,71 @@ export class ThreeDRenderer {
           grp.add(puddle);
         } else {
           delete this._leakAlarmStart[s.id];
+        }
+        this._safetyGroup.add(grp);
+        continue;
+      }
+
+      // ── Siren: ceiling alert beacon with a rotating light-bar + strobe ──
+      // A white plate + a spinning emissive twin-lobe beacon (rotates around Y
+      // at sirenSweepRevPerS) + a hard on/off strobe on the emissive intensity +
+      // expanding rings while sounding. The whole group rebuilds every frame
+      // while any siren/detector alarms (three-view forces _keySafety), so the
+      // rotation/strobe advance from the absolute clock, fireplace-flicker style.
+      if (kind === 'siren') {
+        const grp = new THREE.Group();
+        const p = this._w(s.x, s.y, ceiling - 60);
+        grp.position.set(p.x, p.y, p.z);
+        // Housing plate.
+        const plate = new THREE.Mesh(
+          new THREE.CylinderGeometry(discR, discR, 40, 24),
+          this._mat({ color: alarming ? col : 0xeceff1, roughness: 0.6, metalness: 0.05,
+                      emissive: alarming ? col : 0x000000, emissiveIntensity: alarming ? 0.35 : 0 }));
+        plate.userData = ud;
+        grp.add(plate);
+        // Hard strobe: emissive lens intensity square-waves while sounding.
+        const strobe = alarming
+          && Math.sin(nowS * SAFETY_DEFAULTS.sirenStrobeHz * 2 * Math.PI) > 0;
+        // Spinning twin-lobe beacon beneath the plate (the rotating light-bar).
+        const beacon = new THREE.Group();
+        beacon.position.set(0, -34, 0);
+        beacon.rotation.y = nowS * SAFETY_DEFAULTS.sirenSweepRevPerS * Math.PI * 2;
+        const lobeMat = this._mat({ color: col, emissive: col,
+          emissiveIntensity: alarming ? (strobe ? 1.6 : 0.5) : 0.25,
+          transparent: true, opacity: alarming ? 0.95 : 0.8 });
+        for (const sign of [1, -1]) {
+          const lobe = new THREE.Mesh(new THREE.BoxGeometry(discR * 1.7, 34, discR * 0.5), lobeMat);
+          lobe.position.set(sign * discR * 0.5, 0, 0);
+          lobe.userData = { ...ud, outlineSkip: true };
+          beacon.add(lobe);
+        }
+        grp.add(beacon);
+        if (alarming) {
+          // Twin emissive beam wedges sweeping with the beacon.
+          for (const sign of [1, -1]) {
+            const beam = new THREE.Mesh(
+              new THREE.ConeGeometry(discR * 0.9, discR * 4, 4, 1, true),
+              this._mat({ color: col, emissive: col, emissiveIntensity: 0.7,
+                          transparent: true, opacity: 0.16, side: THREE.DoubleSide }));
+            // Cone axis points +Y by default; lay it flat pointing outward along X.
+            beam.rotation.z = sign > 0 ? -Math.PI / 2 : Math.PI / 2;
+            beam.position.set(sign * discR * 2.1, -34, 0);
+            beam.userData = { outlineSkip: true };
+            beacon.add(beam);
+          }
+          // Expanding rings dropping beneath (reuse the beacon idiom).
+          for (let k = 0; k < 3; k++) {
+            const ph = (nowS * 1.4 + k / 3) % 1;
+            const rr = discR * (1 + ph * 4);
+            const ring = new THREE.Mesh(
+              new THREE.RingGeometry(rr * 0.86, rr, 28),
+              this._mat({ color: col, emissive: col, emissiveIntensity: 0.8,
+                          transparent: true, opacity: 0.5 * (1 - ph), side: THREE.DoubleSide }));
+            ring.rotation.x = -Math.PI / 2;
+            ring.position.set(0, -70 - ph * 520, 0);
+            ring.userData = { outlineSkip: true };
+            grp.add(ring);
+          }
         }
         this._safetyGroup.add(grp);
         continue;
@@ -9571,6 +9802,7 @@ export class ThreeDRenderer {
     // slower + deeper. Zero allocation; the list is rebuilt each updateFloor
     // (only playing speakers are enrolled → idle speakers never pulse).
     this._advanceSpeakerPulses();
+    this._advanceEvPulses();
   }
 
   // Per-frame emissive breathe on playing speaker drivers. Amplitude/rate keyed
@@ -9584,6 +9816,17 @@ export class ThreeDRenderer {
       const amp = sp.deep ? 0.55 : 0.4;            // relative swing
       const k = 0.5 + 0.5 * Math.sin(t * om + sp.phase);
       sp.mat.emissiveIntensity = sp.base * (1 - amp + amp * k);
+    }
+  }
+
+  // Per-frame emissive pulse on EV charge ports (car port + charger LED) while
+  // charging — a steady ~2 Hz breathe, same absolute-clock idiom as the speakers.
+  private _advanceEvPulses(): void {
+    if (!this._evPulses.length) return;
+    const t = performance.now() / 1000;
+    for (const sp of this._evPulses) {
+      const k = 0.5 + 0.5 * Math.sin(t * 4.2 + sp.phase);
+      sp.mat.emissiveIntensity = sp.base * (0.45 + 0.55 * k);
     }
   }
 

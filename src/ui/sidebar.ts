@@ -31,7 +31,7 @@ import {
   envKindOf, envColor, envValueText, envHeight, envScale,
   INFO_CARD_MOUNT_DEFAULTS, INFO_CARD_SCALE_MIN, INFO_CARD_SCALE_MAX,
   infoCardText, infoCardMount, infoCardHeight, infoCardW, infoCardH, infoCardScale,
-  furnitureCat, type FurnitureCat, isBinKind, isStairsKind,
+  furnitureCat, type FurnitureCat, isBinKind, isVehicleKind, isStairsKind,
   closedWallLoops, loopContaining, resolveRoomForPointFuzzy, roomLabel,
 } from '../geometry.js';
 import { CLOCK_PRESETS, DATE_PRESETS, type ValueRule, type RuleOp } from '../value-rules.js';
@@ -96,7 +96,7 @@ const TOOLS: { id: Tool; label: string }[] = [
   { id: 'bleproxy', label: 'BLE' },
   { id: 'alarm', label: '🚨 Alarm' },
   { id: 'thermostat', label: '🌡 Thermostat' },
-  { id: 'safety', label: '⚠️ Smoke/CO' },
+  { id: 'safety', label: '⚠️ Safety/Siren' },
   { id: 'robot', label: '🤖 Robot' },
   { id: 'camera', label: '📷 Camera' },
   { id: 'projector', label: '📽 Projector' },
@@ -502,7 +502,7 @@ export class Sidebar extends LitElement {
       case 'bleproxy': return 'Click to drop a BLE scanner (Bluetooth proxy) puck. Bind it to the physical proxy device.';
       case 'alarm': return 'Click to drop an alarm keypad. Bind to an alarm_control_panel entity.';
       case 'thermostat': return 'Click to drop a thermostat. Bind to a climate entity to control HVAC.';
-      case 'safety': return 'Click to drop a ceiling smoke/CO detector. Set kind + bind a binary_sensor (smoke / carbon_monoxide).';
+      case 'safety': return 'Click to drop a ceiling safety detector or siren beacon. Set kind (smoke / CO / gas / leak / siren) + bind an entity.';
       case 'robot': return 'Click to place a robot dock. Set kind (vacuum / mower) + bind a vacuum.* or lawn_mower.* entity; mowers can bind a GPS tracker.';
       case 'camera': return 'Click to drop a camera. Drag the orange dot to aim it; bind a camera.* entity for the FOV tint + snapshot.';
       case 'projector': return 'Click to drop a ceiling projector. Pick a target screen (or set rotation) + bind a media_player/switch/light for the beam; click it to toggle projecting.';
@@ -630,6 +630,7 @@ export class Sidebar extends LitElement {
       { cat: 'bathroom', label: 'Bathroom' },
       { cat: 'outdoor', label: 'Outdoor' },
       { cat: 'theater', label: 'Home theater' },
+      { cat: 'vehicle', label: 'Vehicle / garage' },
     ];
     const kinds = Object.keys(FURNITURE_KINDS) as FurnitureKind[];
     const custom = this.planner.store.customObjects ?? [];
@@ -1651,7 +1652,7 @@ export class Sidebar extends LitElement {
   private _safetySensorsSection() {
     const list = this.planner.floor().safetySensors ?? [];
     if (list.length === 0) return nothing;
-    return this._section('safety', 'Safety sensors', () =>
+    return this._section('safety', 'Safety & sirens', () =>
       this._groupedList('safety', list, s => this._safetyItem(s)));
   }
 
@@ -1662,9 +1663,11 @@ export class Sidebar extends LitElement {
     const col = safetyColor(kind);
     const st = p.effectiveState(s);
     const alarming = st?.state === 'on';
-    const dfl = kind === 'co' ? 'CO' : kind === 'gas' ? 'Gas' : kind === 'leak' ? 'Leak' : 'Smoke';
-    const badge = alarming ? (kind === 'leak' ? 'LEAK' : 'ALARM')
-                           : (st ? (kind === 'leak' ? 'dry' : 'ok') : (s.entity_id ? '—' : 'unbound'));
+    const dfl = kind === 'co' ? 'CO' : kind === 'gas' ? 'Gas' : kind === 'leak' ? 'Leak'
+              : kind === 'siren' ? 'Siren' : 'Smoke';
+    const badge = alarming ? (kind === 'leak' ? 'LEAK' : kind === 'siren' ? 'SOUNDING' : 'ALARM')
+                           : (st ? (kind === 'leak' ? 'dry' : kind === 'siren' ? 'idle' : 'ok')
+                                 : (s.entity_id ? '—' : 'unbound'));
     return html`
       <div style="border-bottom:1px solid var(--border)">
         <div class="sensor-item ${sel ? 'sel' : ''}" @click=${() => p.setActiveSafety(s.id)}>
@@ -1681,6 +1684,7 @@ export class Sidebar extends LitElement {
     const p = this.planner;
     const upd = (mut: () => void) => { mut(); p.save(); p.emitConfig(); };
     const bound = !!s.entity_id;
+    const sounding = p.effectiveState(s)?.state === 'on';
     return html`
       <div style="background:rgba(0,0,0,0.25);border-radius:4px;padding:6px;margin:4px 0">
         <div class="row"><label>Kind</label>
@@ -1690,6 +1694,7 @@ export class Sidebar extends LitElement {
             <option value="co">CO (carbon monoxide)</option>
             <option value="gas">Gas</option>
             <option value="leak">Leak (floor / water)</option>
+            <option value="siren">Siren / alert beacon</option>
           </select>
         </div>
         <div class="row"><label>Label</label>
@@ -1718,15 +1723,23 @@ export class Sidebar extends LitElement {
             <button class="btn" style="font-size:11px"
                     @click=${() => upd(() => { s.entity_id = null; })}>Unbind</button>
           ` : nothing}
-          <button class="btn" style="font-size:11px"
-                  ?disabled=${bound}
-                  title=${bound ? 'bound to HA — state comes from the entity' : 'Toggle the local alarm state'}
-                  @click=${() => { if (!bound) p.toggleItem(s); }}>Test</button>
+          ${s.kind === 'siren'
+            ? html`<button class="btn" style="font-size:11px"
+                    title="Toggle the siren (bound siren.*/switch.* or a local demo state)"
+                    @click=${() => p.triggerSiren(s)}>${sounding ? 'Silence' : 'Sound'}</button>`
+            : html`<button class="btn" style="font-size:11px"
+                    ?disabled=${bound}
+                    title=${bound ? 'bound to HA — state comes from the entity' : 'Toggle the local alarm state'}
+                    @click=${() => { if (!bound) p.toggleItem(s); }}>Test</button>`}
         </div>
         <div style="font-size:10px;color:var(--text-dim);margin-top:4px;line-height:1.3">
-          ${bound
-            ? 'Bound: alarm state follows the binary_sensor (on = alarming).'
-            : 'Unbound: Test (or clicking the detector) toggles a local alarm state.'}
+          ${s.kind === 'siren'
+            ? (bound
+                ? 'Bound: state follows the entity. A siren.*/switch.* can be toggled (Sound/Silence + clicking the beacon); a binary_sensor is display-only.'
+                : 'Unbound: Sound/Silence (or clicking the beacon) toggles a local demo state.')
+            : (bound
+                ? 'Bound: alarm state follows the binary_sensor (on = alarming).'
+                : 'Unbound: Test (or clicking the detector) toggles a local alarm state.')}
         </div>
         <button class="btn danger" style="width:100%;margin-top:6px" @click=${() => {
           const f = p.floor();
@@ -1739,10 +1752,13 @@ export class Sidebar extends LitElement {
   }
 
   private _pickSafetyEntity(s: SafetySensor): void {
+    // Sirens bind a controllable siren.* (or a relay switch.*), or a display-only
+    // binary_sensor; detectors bind a binary_sensor.
+    const domain = s.kind === 'siren' ? ['siren', 'switch', 'binary_sensor'] : 'binary_sensor';
     this.dispatchEvent(new CustomEvent('open-entity-picker', {
       bubbles: true, composed: true,
       detail: {
-        domain: 'binary_sensor',
+        domain,
         onPick: (id: string) => {
           s.entity_id = id;
           this.planner.save();
@@ -3440,6 +3456,8 @@ export class Sidebar extends LitElement {
         ${furnitureCat(resolveFurnitureDef(piece, p.store.customObjects)) === 'appliance'
           ? this._powerBindRow(piece, upd) : nothing}
         ${curKind === 'stove' || curKind === 'fridge' ? this._tempBindRow(piece, upd) : nothing}
+        ${curKind === 'car' || curKind === 'ev_charger' ? this._evChargerRows(piece, upd) : nothing}
+        ${curKind === 'mailbox' ? this._mailboxRows(piece, upd) : nothing}
         ${curKind === 'stove' ? html`
           <div class="row"><label title="Persistent oven-door open state (also toggled by clicking the stove in 2D/3D)">Oven door open</label>
             <input type="checkbox" .checked=${!!piece.doorOpen}
@@ -3563,7 +3581,7 @@ export class Sidebar extends LitElement {
   private _furnitureBindRow(piece: Furniture, upd: (mut: () => void) => void) {
     const p = this.planner;
     const def = resolveFurnitureDef(piece, p.store.customObjects);
-    if (!def.activity && furnitureKind(piece) !== 'tv' && !isBinKind(piece.kind)) return nothing;
+    if (!def.activity && furnitureKind(piece) !== 'tv' && !isBinKind(piece.kind) && !isVehicleKind(piece.kind)) return nothing;
     return html`
       <div class="row"><label>HA entity</label>
         <span style="font-size:11px;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
@@ -3754,9 +3772,76 @@ export class Sidebar extends LitElement {
     }));
   }
 
+  // Generic optional-entity bind row (label + current id + Bind/Unbind).
+  private _bindRow(
+    label: string, title: string, cur: string | undefined,
+    live: string, liveColor: string,
+    onBind: () => void, onClear: () => void,
+  ) {
+    return html`
+      <div class="row"><label title=${title}>${label}</label>
+        <span style="font-size:11px;color:${cur ? liveColor : 'var(--text-dim)'};flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+          ${cur ? `${cur}${live ? ` · ${live}` : ''}` : '— unbound —'}
+        </span>
+      </div>
+      <div style="display:flex;gap:4px;margin-top:4px">
+        <button class="btn" style="flex:1;font-size:11px" @click=${onBind}>${cur ? 'Rebind' : 'Bind'}…</button>
+        ${cur ? html`<button class="btn" style="font-size:11px" @click=${onClear}>Unbind</button>` : nothing}
+      </div>`;
+  }
+
+  private _pickEntity(domain: string | string[], set: (id: string) => void): void {
+    this.dispatchEvent(new CustomEvent('open-entity-picker', {
+      bubbles: true, composed: true,
+      detail: { domain, onPick: (id: string) => { set(id); this.planner.save(); this.planner.emitConfig(); } },
+    }));
+  }
+
+  // EV charging status (car + ev_charger). statusEntity (any vendor's state
+  // string — charging/full/error/idle mapped defensively); powerEntity (W).
+  private _evChargerRows(piece: Furniture, upd: (mut: () => void) => void) {
+    const p = this.planner;
+    const ev = piece.evCharger ?? {};
+    const stStatus = ev.statusEntity && p.hass?.states ? p.hass.states[ev.statusEntity] : null;
+    const stPower = ev.powerEntity && p.hass?.states ? p.hass.states[ev.powerEntity] : null;
+    const pw = stPower ? parseFloat(stPower.state) : NaN;
+    const mut = (fn: (o: NonNullable<Furniture['evCharger']>) => void) =>
+      upd(() => { piece.evCharger = { ...(piece.evCharger ?? {}) }; fn(piece.evCharger!); });
+    return html`
+      ${this._bindRow('Charger status', 'sensor/binary_sensor whose state maps to charging/full/error/idle',
+        ev.statusEntity, stStatus?.state ?? '', '#00e676',
+        () => this._pickEntity(['sensor', 'binary_sensor'], id => mut(o => o.statusEntity = id)),
+        () => mut(o => o.statusEntity = undefined))}
+      ${this._bindRow('Charge power', 'sensor.* (W) — feeds the charge indicator', ev.powerEntity,
+        isFinite(pw) ? `${Math.round(pw)} W` : (stPower?.state ?? ''), '#66bb6a',
+        () => this._pickEntity('sensor', id => mut(o => o.powerEntity = id)),
+        () => mut(o => o.powerEntity = undefined))}`;
+  }
+
+  // Mailbox mail/packages bindings. countEntity (numeric sensor) > 0 raises the
+  // flag + shows a badge; flagEntity (binary_sensor lid) 'on' tilts the lid open.
+  private _mailboxRows(piece: Furniture, upd: (mut: () => void) => void) {
+    const p = this.planner;
+    const mc = piece.mailCount ?? {};
+    const stCount = mc.countEntity && p.hass?.states ? p.hass.states[mc.countEntity] : null;
+    const stFlag = mc.flagEntity && p.hass?.states ? p.hass.states[mc.flagEntity] : null;
+    const mut = (fn: (o: NonNullable<Furniture['mailCount']>) => void) =>
+      upd(() => { piece.mailCount = { ...(piece.mailCount ?? {}) }; fn(piece.mailCount!); });
+    return html`
+      ${this._bindRow('Mail count', 'numeric sensor.* (Mail-and-Packages) — > 0 raises the flag + badge',
+        mc.countEntity, stCount?.state ?? '', '#ffb74d',
+        () => this._pickEntity('sensor', id => mut(o => o.countEntity = id)),
+        () => mut(o => o.countEntity = undefined))}
+      ${this._bindRow('Lid sensor', "binary_sensor.* — 'on' tilts the lid open", mc.flagEntity,
+        stFlag?.state === 'on' ? 'OPEN' : (stFlag?.state ?? ''), '#66bb6a',
+        () => this._pickEntity('binary_sensor', id => mut(o => o.flagEntity = id)),
+        () => mut(o => o.flagEntity = undefined))}`;
+  }
+
   private _pickFurnitureEntity(piece: Furniture): void {
     const domain = furnitureKind(piece) === 'tv' ? 'media_player'
       : isBinKind(piece.kind) ? 'binary_sensor'   // bins: 'on'/'full' = full
+      : isVehicleKind(piece.kind) ? 'binary_sensor'   // car: presence 'on' = in bay
       : 'switch';
     this.dispatchEvent(new CustomEvent('open-entity-picker', {
       bubbles: true, composed: true,

@@ -1,0 +1,168 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>vehicle-mail test</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<script type="module">
+  // Phase 1b — garage-bay vehicle presence, EV charging status, mail/packages.
+  //   car    — solid when bound+on / unbound; GHOSTED (transparent 0.15, no blob)
+  //            when bound but presence sensor ≠ 'on'
+  //   ev     — ev_charger port LED color per resolved status (charging/full/error/
+  //            idle); charging registers a per-frame pulse in _evPulses
+  //   chg    — a charging charger within ~1500 mm of a car adds a green port glow
+  //            to the car + pulses; far charger does not
+  //   mail   — mailbox count > 0 raises the flag + floats a badge sprite; lid
+  //            sensor 'on' tilts the lid open; unbound = closed/flag-down/no badge
+  //   dispose— the badge sprite's CanvasTexture is freed on rebuild
+  const mod = await import('./assets/three-renderer.js?v=' + Date.now());
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+
+  const results = [];
+  const assert = (name, cond, detail = '') => results.push(`${cond ? 'PASS' : 'FAIL'} ${name}${detail ? ' (' + detail + ')' : ''}`);
+  const meshCount = (o) => { let n = 0; o.traverse(x => { if (x.isMesh) n++; }); return n; };
+  const findByFixtureId = (grp, id) => {
+    let found = null;
+    grp.traverse(o => { if (!found && o.userData && o.userData.fixtureId === id) found = o; });
+    return found;
+  };
+  const hasGhostMat = (grp) => {
+    let f = false;
+    grp.traverse(o => { if (o.isMesh && o.material && o.material.transparent && Math.abs((o.material.opacity ?? 1) - 0.15) < 0.03) f = true; });
+    return f;
+  };
+  const emissiveMeshes = (grp) => {
+    const out = [];
+    grp.traverse(o => { if (o.isMesh && o.material && o.material.emissive && o.material.emissive.getHex && o.material.emissive.getHex() !== 0 && (o.material.emissiveIntensity ?? 0) > 0) out.push(o); });
+    return out;
+  };
+  const chMax = (hex) => {
+    const rr = (hex >> 16) & 255, gg = (hex >> 8) & 255, bb = hex & 255;
+    if (rr >= gg && rr >= bb) return 'r';
+    if (gg >= rr && gg >= bb) return 'g';
+    return 'b';
+  };
+
+  const baseFloor = (furniture) => ({
+    id: 'f1', name: 'F', w: 8000, d: 6000,
+    walls: [], furniture: furniture || [], lights: [], switches: [],
+    sensors: [], motionSensors: [], envSensors: [], doors: [], windows: [],
+    bg: null, model3d: null, look3d: null, rooms: [],
+  });
+  const build = (furniture, states) => {
+    r.updateFloor(baseFloor(furniture), { preset: 'day' }, undefined, undefined, id => states[id] || null);
+  };
+
+  // ── car: solid vs ghosted ───────────────────────────────────────────────
+  function testCar() {
+    const carOn  = { id: 'car_on',  x: 1000, y: 1000, w: 1850, h: 4800, kind: 'car', entity_id: 'binary_sensor.bay1' };
+    const carOff = { id: 'car_off', x: 4000, y: 1000, w: 1850, h: 4800, kind: 'car', entity_id: 'binary_sensor.bay2' };
+    const carUnb = { id: 'car_unb', x: 6500, y: 1000, w: 1850, h: 4800, kind: 'car', entity_id: null };
+    const states = { 'binary_sensor.bay1': { state: 'on', attributes: {} }, 'binary_sensor.bay2': { state: 'off', attributes: {} } };
+    build([carOn, carOff, carUnb], states);
+    const gOn = findByFixtureId(r._floorGroup, 'car_on');
+    const gOff = findByFixtureId(r._floorGroup, 'car_off');
+    const gUnb = findByFixtureId(r._floorGroup, 'car_unb');
+    assert('car group tagged with fixtureId', !!gOn && !!gOff && !!gUnb);
+    assert('bound+on car is SOLID (no 0.15 ghost material)', gOn && !hasGhostMat(gOn));
+    assert('bound+off car is GHOSTED (0.15 transparent material)', gOff && hasGhostMat(gOff), gOff ? `ghost=${hasGhostMat(gOff)}` : '');
+    assert('unbound car is SOLID', gUnb && !hasGhostMat(gUnb));
+    assert('solid car has emissive light hints; ghost car has none',
+      gOn && emissiveMeshes(gOn).length >= 2 && gOff && emissiveMeshes(gOff).length === 0,
+      `on=${gOn?emissiveMeshes(gOn).length:'-'} off=${gOff?emissiveMeshes(gOff).length:'-'}`);
+    assert('solid car has more meshes than ghost car',
+      gOn && gOff && meshCount(gOn) > meshCount(gOff), `on=${meshCount(gOn)} off=${meshCount(gOff)}`);
+    assert('cars are NOT raycast-clickable (plain furniture)',
+      !r._mediaClickables.includes(gOn) && (gOn && gOn.userData.kind === undefined));
+  }
+
+  // ── ev_charger: status matrix ───────────────────────────────────────────
+  function testEv() {
+    const mk = (id, x, ent) => ({ id, x, y: 3000, w: 350, h: 250, kind: 'ev_charger', evCharger: { statusEntity: ent } });
+    const chargers = [ mk('ev_chg', 500, 'sensor.a'), mk('ev_full', 1500, 'sensor.b'), mk('ev_err', 2500, 'sensor.c'), mk('ev_idle', 3500, 'sensor.d') ];
+    const states = {
+      'sensor.a': { state: 'charging', attributes: {} },
+      'sensor.b': { state: 'complete', attributes: {} },
+      'sensor.c': { state: 'error', attributes: {} },
+      'sensor.d': { state: 'idle', attributes: {} },
+    };
+    build(chargers, states);
+    const led = (id) => { const g = findByFixtureId(r._floorGroup, id); const em = g ? emissiveMeshes(g) : []; return em.length ? em[0].material.emissive.getHex() : null; };
+    const chg = led('ev_chg'), full = led('ev_full'), err = led('ev_err'), idle = led('ev_idle');
+    assert('charging LED is green-dominant', chg != null && chMax(chg) === 'g', chg != null ? '#' + chg.toString(16) : '');
+    assert('full LED is green-dominant (steady)', full != null && chMax(full) === 'g', full != null ? '#' + full.toString(16) : '');
+    assert('error LED is red-dominant', err != null && chMax(err) === 'r', err != null ? '#' + err.toString(16) : '');
+    assert('idle LED is NOT green-dominant (dim slate)', idle != null && chMax(idle) !== 'g', idle != null ? '#' + idle.toString(16) : '');
+    assert('only the charging charger pulses (_evPulses == 1)', r._evPulses.length === 1, `pulses=${r._evPulses.length}`);
+  }
+
+  // ── charging car indicator via adjacency ────────────────────────────────
+  function testChargingCar() {
+    const greenPort = (grp) => emissiveMeshes(grp).some(m => { const h = m.material.emissive.getHex(); const rr = (h >> 16) & 255; return chMax(h) === 'g' && rr < 90; });
+    const car = { id: 'ccar', x: 1000, y: 1000, w: 1850, h: 4800, kind: 'car', entity_id: null };
+    const near = { id: 'nchg', x: 2000, y: 1000, w: 350, h: 250, kind: 'ev_charger', evCharger: { statusEntity: 'sensor.p' } };
+    const states = { 'sensor.p': { state: 'charging', attributes: { battery_level: 62 } } };
+    build([car, near], states);
+    let g = findByFixtureId(r._floorGroup, 'ccar');
+    assert('adjacent charging charger adds a green port glow to the car', g && greenPort(g));
+    assert('car port + charger LED both pulse (_evPulses == 2)', r._evPulses.length === 2, `pulses=${r._evPulses.length}`);
+    // Far charger: no indicator.
+    const far = { id: 'fchg', x: 6000, y: 1000, w: 350, h: 250, kind: 'ev_charger', evCharger: { statusEntity: 'sensor.p' } };
+    build([{ ...car }, far], states);
+    g = findByFixtureId(r._floorGroup, 'ccar');
+    assert('far charger (> 1500 mm) does NOT charge-indicate the car', g && !greenPort(g));
+    assert('only the far charger pulses (_evPulses == 1)', r._evPulses.length === 1, `pulses=${r._evPulses.length}`);
+  }
+
+  // ── mailbox: badge + flag + lid ─────────────────────────────────────────
+  function testMailbox() {
+    const groups = (grp) => grp.children.filter(o => o.type === 'Group');
+    const sprites = (grp) => { const out = []; grp.traverse(o => { if (o.isSprite) out.push(o); }); return out; };
+    const mFull = { id: 'mb_full', x: 1000, y: 1000, w: 250, h: 350, kind: 'mailbox', mailCount: { countEntity: 'sensor.mail', flagEntity: 'binary_sensor.lid' } };
+    const mEmpty = { id: 'mb_empty', x: 3000, y: 1000, w: 250, h: 350, kind: 'mailbox', mailCount: { countEntity: 'sensor.mail2' } };
+    const mUnb = { id: 'mb_unb', x: 5000, y: 1000, w: 250, h: 350, kind: 'mailbox' };
+    const states = {
+      'sensor.mail': { state: '3', attributes: {} }, 'binary_sensor.lid': { state: 'on', attributes: {} },
+      'sensor.mail2': { state: '0', attributes: {} },
+    };
+    build([mFull, mEmpty, mUnb], states);
+    const gFull = findByFixtureId(r._floorGroup, 'mb_full');
+    const gEmpty = findByFixtureId(r._floorGroup, 'mb_empty');
+    const gUnb = findByFixtureId(r._floorGroup, 'mb_unb');
+    // Group children order: [lidHinge, flagArm].
+    const lidF = groups(gFull)[0], flagF = groups(gFull)[1];
+    const flagE = groups(gEmpty)[1], flagU = groups(gUnb)[1];
+    assert('count > 0 floats a badge sprite', sprites(gFull).length >= 1, `sprites=${sprites(gFull).length}`);
+    assert('count 0 shows NO badge sprite', sprites(gEmpty).length === 0, `sprites=${sprites(gEmpty).length}`);
+    assert('unbound mailbox shows NO badge sprite', sprites(gUnb).length === 0);
+    assert('count > 0 raises the flag (flagArm.rotation.x ~ 0)', flagF && Math.abs(flagF.rotation.x) < 0.02, flagF ? `rx=${flagF.rotation.x.toFixed(2)}` : '');
+    assert('count 0 lowers the flag (flagArm.rotation.x > 1)', flagE && flagE.rotation.x > 1, flagE ? `rx=${flagE.rotation.x.toFixed(2)}` : '');
+    assert('unbound lowers the flag', flagU && flagU.rotation.x > 1);
+    assert('lid sensor on tilts the lid open (lidHinge.rotation.x < 0)', lidF && lidF.rotation.x < -0.5, lidF ? `rx=${lidF.rotation.x.toFixed(2)}` : '');
+  }
+
+  // ── dispose probe: badge CanvasTexture freed on rebuild ──────────────────
+  function testDispose() {
+    const mb = { id: 'mb_d', x: 1000, y: 1000, w: 250, h: 350, kind: 'mailbox', mailCount: { countEntity: 'sensor.mail' } };
+    const states = { 'sensor.mail': { state: '5', attributes: {} } };
+    build([mb], states);
+    const g = findByFixtureId(r._floorGroup, 'mb_d');
+    let tex = null;
+    g.traverse(o => { if (o.isSprite && o.material && o.material.map) tex = o.material.map; });
+    assert('badge sprite carries a CanvasTexture', !!tex);
+    let disposed = 0;
+    if (tex) { const orig = tex.dispose.bind(tex); tex.dispose = () => { disposed++; orig(); }; }
+    build([{ ...mb }], states);   // rebuild → _disposeSpriteMaps frees the old badge map
+    assert('badge CanvasTexture disposed on rebuild', disposed >= 1, `disposed=${disposed}`);
+  }
+
+  testCar();
+  testEv();
+  testChargingCar();
+  testMailbox();
+  testDispose();
+
+  const pass = results.filter(x => x.startsWith('PASS')).length;
+  const fail = results.filter(x => x.startsWith('FAIL')).length;
+  document.title = `VEHICLEMAIL ${fail === 0 ? 'PASS' : 'FAIL'} ${pass}/${pass + fail} | ` + results.join(' · ');
+</script>

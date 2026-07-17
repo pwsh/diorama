@@ -15,6 +15,7 @@ import {
   groundAreaColor, groundKindLabel,
   powerGlowScale,
   hexToRgba, lighten, furnitureKind, furnitureCorners, resolveFurnitureDef, isBinKind, binStateIsFull,
+  isVehicleKind, evStatusOf, evStatusColor, evChargePercent, carChargeState,
   isStairsKind, stairChipArrow,
   doorEndpoint, doorOpenDeltaDeg, doorOpenFraction, doorSpanCenter, windowEndpoints, wallCutsForSegment, wallKind,
   ENV_KINDS, envKindOf, envColor, envValueText, envScale,
@@ -981,7 +982,8 @@ function drawSafetySensors(ctx: CanvasRenderingContext2D, p: Planner, view: View
   for (const s of f.safetySensors ?? []) {
     const c = mmToPx(view, s.x, s.y);
     const kind: import('./types.js').SafetyKind =
-      s.kind === 'co' ? 'co' : s.kind === 'gas' ? 'gas' : s.kind === 'leak' ? 'leak' : 'smoke';
+      s.kind === 'co' ? 'co' : s.kind === 'gas' ? 'gas' : s.kind === 'leak' ? 'leak'
+      : s.kind === 'siren' ? 'siren' : 'smoke';
     const col = safetyColor(kind);
     const st = p.effectiveState(s);
     const alarming = st?.state === 'on';
@@ -1027,6 +1029,70 @@ function drawSafetySensors(ctx: CanvasRenderingContext2D, p: Planner, view: View
       ctx.restore();
       const label = s.label?.trim() || 'Leak';
       const badge = alarming ? 'LEAK' : (st ? 'dry' : (s.entity_id ? '—' : 'unbound'));
+      const txt = `${label} · ${badge}`;
+      ctx.font = `${10 * dpr}px sans-serif`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+      const tw = ctx.measureText(txt).width + 8 * dpr;
+      const by = c.y + rPx + 4 * dpr;
+      ctx.fillStyle = 'rgba(0,0,0,0.7)';
+      ctx.fillRect(c.x - tw / 2, by, tw, 13 * dpr);
+      ctx.fillStyle = alarming ? hexToRgba(col, 1) : '#cfd8dc';
+      ctx.fillText(txt, c.x, by + 1 * dpr);
+      drawBatteryBadge(ctx, p, s.entity_id, c.x + rPx * 0.8, c.y - rPx * 0.8);
+      continue;
+    }
+
+    // ── Siren: ceiling alert beacon with a spinning police-style light-bar ──
+    // sweep + expanding rings + a hard on/off strobe on the lens while sounding.
+    if (kind === 'siren') {
+      if (alarming) {
+        // Two opposite rotating beams (light-bar sweep). Each is a thin wedge
+        // fading out radially; angle advances at sirenSweepRevPerS.
+        const ang = t * SAFETY_DEFAULTS.sirenSweepRevPerS * Math.PI * 2;
+        const reach = rPx * 4.2;
+        const half = 0.22;   // half-angle of each beam wedge (rad)
+        ctx.save();
+        for (const base of [ang, ang + Math.PI]) {
+          const grad = ctx.createRadialGradient(c.x, c.y, rPx * 0.5, c.x, c.y, reach);
+          grad.addColorStop(0, hexToRgba(col, 0.55));
+          grad.addColorStop(1, hexToRgba(col, 0));
+          ctx.beginPath();
+          ctx.moveTo(c.x, c.y);
+          ctx.arc(c.x, c.y, reach, base - half, base + half);
+          ctx.closePath();
+          ctx.fillStyle = grad;
+          ctx.fill();
+        }
+        // Expanding rings (reuse the beacon idiom).
+        for (let k = 0; k < 3; k++) {
+          const ph = (t * 1.4 + k / 3) % 1;
+          const rr = rPx * (1 + ph * 3.2);
+          ctx.beginPath();
+          ctx.arc(c.x, c.y, rr, 0, 2 * Math.PI);
+          ctx.lineWidth = Math.max(1.5, 2.5 * dpr) * (1 - ph);
+          ctx.strokeStyle = hexToRgba(col, 0.7 * (1 - ph));
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+      // Body: white plate, colored ring; lens strobes hard on/off while sounding.
+      const strobeOn = alarming && Math.sin(t * SAFETY_DEFAULTS.sirenStrobeHz * 2 * Math.PI) > 0;
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(c.x, c.y, rPx, 0, 2 * Math.PI);
+      ctx.fillStyle = alarming ? hexToRgba(col, 0.9) : 'rgba(236,239,241,0.95)';
+      ctx.fill();
+      ctx.lineWidth = selected ? 2.5 : 1.5;
+      ctx.strokeStyle = selected ? '#fff' : hexToRgba(col, 0.9);
+      ctx.stroke();
+      // Lens dot: bright white on the strobe peak, dim red-ish otherwise.
+      ctx.beginPath();
+      ctx.arc(c.x, c.y, Math.max(1.5, rPx * 0.42), 0, 2 * Math.PI);
+      ctx.fillStyle = strobeOn ? '#ffffff' : (alarming ? hexToRgba(col, 1) : hexToRgba(col, 0.85));
+      ctx.fill();
+      ctx.restore();
+      const label = s.label?.trim() || 'Siren';
+      const badge = alarming ? 'SOUNDING' : (st ? 'idle' : (s.entity_id ? '—' : 'unbound'));
       const txt = `${label} · ${badge}`;
       ctx.font = `${10 * dpr}px sans-serif`;
       ctx.textAlign = 'center'; ctx.textBaseline = 'top';
@@ -2191,6 +2257,10 @@ function drawFurniture(ctx: CanvasRenderingContext2D, p: Planner, view: View,
     if (isAppliance ? !showAppliances : !showFurniture) continue;
     // Curbside bins carry a full/empty visual off their effective state.
     const binFull = isBinKind(piece.kind) && binStateIsFull(p.effectiveState(piece)?.state);
+    // Garage-bay vehicle: a BOUND car whose presence sensor isn't 'on' renders
+    // GHOSTED (empty bay, dim dashed outline). Unbound cars are always solid.
+    const vehicleGhost = isVehicleKind(piece.kind) && !!piece.entity_id &&
+      p.effectiveState(piece)?.state !== 'on';
     const appSt = isAppliance ? p.effectiveState(piece) : null;
     const stateOn = appSt?.state === 'on' || appSt?.state === 'playing';
     // Per-device power glow (#8): a bound power sensor scales the in-use glow/LED;
@@ -2239,7 +2309,19 @@ function drawFurniture(ctx: CanvasRenderingContext2D, p: Planner, view: View,
     // decorations edge (backrest, headboard, pillows). The functional FRONT
     // (cabinet doors/pulls, TV screens, seat openings, faces — local -Z = world
     // -Y) is at canvas-Y +halfH.
-    drawFurniturePrimitiveLocal(ctx, piece, halfW, halfH, customObjects, binFull);
+    // Mailbox: count > 0 raises the flag; a bound lid binary_sensor 'on' tilts
+    // the lid open (build-time per state).
+    let mailFlagUp = false, mailLidOpen = false;
+    if (piece.kind === 'mailbox') {
+      const mc = piece.mailCount;
+      if (mc?.countEntity && p.hass?.states) {
+        const cnt = parseInt(p.hass.states[mc.countEntity]?.state ?? '', 10);
+        mailFlagUp = isFinite(cnt) && cnt > 0;
+      }
+      if (mc?.flagEntity) mailLidOpen = p.effectiveState({ entity_id: mc.flagEntity })?.state === 'on';
+    }
+    drawFurniturePrimitiveLocal(ctx, piece, halfW, halfH, customObjects, binFull,
+                                { ghost: vehicleGhost, mailFlagUp, mailLidOpen });
     // Fridge open-door wedge (amber): a mini door-swing arc at the front-right
     // corner (the 3D hinge is on the +X edge). Front = canvas-Y +halfH.
     if (doorOpen) {
@@ -2323,6 +2405,40 @@ function drawFurniture(ctx: CanvasRenderingContext2D, p: Planner, view: View,
         ctx.fillText(txt, center.x, cy);
       }
     }
+    // EV charge indicator: a bolt (+ SoC % or kW) above a car that is charging —
+    // its own bound charger OR a charging charger piece within ~1500 mm. Drawn
+    // screen-upright like the temp chip.
+    if (piece.kind === 'car' && p.hass?.states) {
+      const chg = carChargeState(piece, f.furniture, id => p.hass!.states[id] ?? null);
+      if (chg) {
+        const label = chg.pct != null ? `⚡${Math.round(chg.pct)}%`
+          : chg.watts != null ? `⚡${(chg.watts / 1000).toFixed(1)}kW` : '⚡';
+        const cy = center.y - Math.max(halfW, halfH) - 8 * dpr;
+        ctx.font = `${11 * dpr}px sans-serif`;
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        const tw = ctx.measureText(label).width + 10 * dpr;
+        const pulse = 0.6 + 0.4 * (0.5 + 0.5 * Math.sin(now * 4));
+        ctx.fillStyle = 'rgba(0,0,0,0.7)';
+        ctx.fillRect(center.x - tw / 2, cy - 8 * dpr, tw, 16 * dpr);
+        ctx.fillStyle = hexToRgba(evStatusColor('charging'), pulse);
+        ctx.fillText(label, center.x, cy);
+      }
+    }
+    // Mailbox count badge: a small chip above the box when the bound count
+    // sensor reads > 0 (Mail-and-Packages style). Zero/unbound = no badge.
+    if (piece.kind === 'mailbox' && piece.mailCount?.countEntity && p.hass?.states) {
+      const cnt = parseInt(p.hass.states[piece.mailCount.countEntity]?.state ?? '', 10);
+      if (isFinite(cnt) && cnt > 0) {
+        const cy = center.y - Math.max(halfW, halfH) - 8 * dpr;
+        const r = 9 * dpr;
+        ctx.fillStyle = '#e53935';
+        ctx.beginPath(); ctx.arc(center.x, cy, r, 0, 2 * Math.PI); ctx.fill();
+        ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.stroke();
+        ctx.fillStyle = '#fff'; ctx.font = `bold ${10 * dpr}px sans-serif`;
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText(String(cnt > 99 ? '99+' : cnt), center.x, cy + 0.5 * dpr);
+      }
+    }
     // Linked-stairs chip (Tier 2): a small ▲/▼ near the top edge showing which
     // way the linked partner leads (partner's story order vs this floor —
     // higher Store.floors index = above). Drawn screen-upright, edit + view.
@@ -2374,6 +2490,7 @@ function drawFurniturePrimitiveLocal(
   halfH: number,
   customObjects?: ObjectRecipe[],
   binFull = false,
+  extra?: { ghost?: boolean; mailFlagUp?: boolean; mailLidOpen?: boolean },
 ): void {
   const kind = furnitureKind(piece);
   const x = -halfW, y = -halfH, w = halfW * 2, h = halfH * 2;
@@ -2956,6 +3073,83 @@ function drawFurniturePrimitiveLocal(
       for (let i = 1; i < nTicks; i++) {
         const sx = x + (w * i) / nTicks;
         ctx.beginPath(); ctx.moveTo(sx, y + h - 2); ctx.lineTo(sx, y + h - 2 - Math.min(8, h * 0.14)); ctx.stroke();
+      }
+      break;
+    }
+    // ── mailbox ──
+    case 'mailbox': {
+      // Post-mounted box (plan view): body rect + a lid line at the front (-Y)
+      // edge + the red flag on the +X side (raised when mail is waiting).
+      const ghost = extra?.ghost;
+      fill(bodyFill('rgba(55,71,79,0.5)', 0.5));
+      stroke('#78909c');
+      // Lid seam near the front (-Y/bottom) edge.
+      ctx.strokeStyle = extra?.mailLidOpen ? '#ffb74d' : '#90a4ae';
+      ctx.lineWidth = extra?.mailLidOpen ? 2.5 : 1.5;
+      ctx.beginPath(); ctx.moveTo(x + 3, y + h * 0.7); ctx.lineTo(x + w - 3, y + h * 0.7); ctx.stroke();
+      // Post dot (center) + the flag on the +X (right) side.
+      const flagX = x + w + 2, flagBaseY = y + h * 0.5;
+      ctx.strokeStyle = '#455a64'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(flagX, flagBaseY); ctx.lineTo(flagX, flagBaseY + (extra?.mailFlagUp ? -halfH * 0.9 : halfH * 0.4)); ctx.stroke();
+      ctx.fillStyle = extra?.mailFlagUp ? '#e53935' : '#9e9e9e';
+      const ftY = flagBaseY + (extra?.mailFlagUp ? -halfH * 0.9 : halfH * 0.4);
+      ctx.fillRect(flagX, ftY, Math.max(6, halfW * 0.5), Math.max(5, halfH * 0.35));
+      if (ghost) { /* mailbox is never ghosted; kept for signature symmetry */ }
+      break;
+    }
+    // ── vehicle / garage ──
+    case 'car': {
+      // Sedan silhouette (plan view): body rect + narrower cabin band + 4 wheel
+      // ticks + light hints. Ghosted (empty bay) → dim dashed outline only.
+      const ghost = extra?.ghost;
+      const baseHex = piece.color ?? '#37516b';
+      if (ghost) {
+        ctx.save();
+        ctx.setLineDash([8, 6]);
+        ctx.strokeStyle = hexToRgba(baseHex, 0.35);
+        ctx.lineWidth = 1.5;
+        ctx.strokeRect(x, y, w, h);
+        ctx.restore();
+        // faint "away" caption
+        ctx.fillStyle = hexToRgba(baseHex, 0.4);
+        ctx.font = `${Math.max(8, Math.min(halfW, halfH) * 0.3)}px sans-serif`;
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText('away', 0, 0);
+        break;
+      }
+      fill(hexToRgba(baseHex, 0.72));
+      stroke(lighten(baseHex, 0.3));
+      // Cabin band (greenhouse) — a lighter inset rect around the middle.
+      ctx.fillStyle = 'rgba(20,28,36,0.65)';
+      ctx.fillRect(x + w * 0.14, y + h * 0.28, w * 0.72, h * 0.32);
+      // Wheel ticks at the four corners (short bars along the sides).
+      ctx.fillStyle = '#15181c';
+      const ww = w * 0.1, wl = h * 0.16;
+      for (const sy of [y + h * 0.16, y + h - h * 0.16 - wl]) {
+        ctx.fillRect(x - 2, sy, ww * 0.6, wl);
+        ctx.fillRect(x + w - ww * 0.6 + 2, sy, ww * 0.6, wl);
+      }
+      // Headlight hints at the front (-Y/bottom) edge.
+      ctx.fillStyle = 'rgba(255,244,194,0.9)';
+      ctx.fillRect(x + w * 0.18 - 4, y + h - 4, 8, 3);
+      ctx.fillRect(x + w * 0.82 - 4, y + h - 4, 8, 3);
+      break;
+    }
+    case 'ev_charger': {
+      // Wall-post EVSE: post rect + head-unit rect + a state-colored LED port on
+      // the front (-Y) edge + a short coiled-cable doodle beside it.
+      fill(bodyFill('rgba(47,50,55,0.6)', 0.6));
+      stroke('#8a9096');
+      // Head unit (brighter band near the top/back).
+      ctx.fillStyle = 'rgba(70,74,80,0.85)';
+      ctx.fillRect(x + 2, y + 2, w - 4, h * 0.42);
+      // LED / port dot on the front-center.
+      ctx.fillStyle = '#00e676';
+      ctx.beginPath(); ctx.arc(0, y + h * 0.62, Math.max(3, Math.min(halfW, halfH) * 0.28), 0, 2 * Math.PI); ctx.fill();
+      // Coiled-cable doodle: two nested arcs off the -X side.
+      ctx.strokeStyle = '#20242a'; ctx.lineWidth = 1.5;
+      for (const rr of [0.5, 0.75]) {
+        ctx.beginPath(); ctx.arc(x - 2, 0, Math.min(halfW, halfH) * rr, -Math.PI * 0.4, Math.PI * 0.4); ctx.stroke();
       }
       break;
     }

@@ -1035,14 +1035,17 @@ export const SAFETY_DEFAULTS = {
   leakFloorMm: 15,        // leak detectors sit ON the floor (small puck)
   leakMaxRadiusMm: 600,   // puddle grows to this radius while alarming
   leakGrowSec: 30,        // seconds to reach full puddle radius
+  sirenSweepRevPerS: 1.3, // siren rotating-beacon sweep speed (revolutions/s)
+  sirenStrobeHz: 2.4,     // siren lens hard on/off strobe (square wave)
 };
 // Beacon / puck color per kind. Shared 2D + 3D: red smoke, amber CO, amber-green
-// gas, blue leak (its puddle).
+// gas, blue leak (its puddle), emergency blue siren (rotating beacon).
 export function safetyColor(kind: SafetyKind): string {
   switch (kind) {
     case 'co': return '#ff9800';
     case 'gas': return '#c0ca33';   // amber-green
     case 'leak': return '#42a5f5';  // water blue
+    case 'siren': return '#2979ff'; // emergency blue
     default: return '#ef5350';      // smoke red
   }
 }
@@ -1051,11 +1054,15 @@ export function safetyGlyph(kind: SafetyKind): string {
     case 'co': return 'CO';
     case 'gas': return 'GAS';
     case 'leak': return '💧';
+    case 'siren': return '📢';
     default: return '';
   }
 }
-// leak sits on the floor; smoke/co/gas hang from the ceiling.
+// leak sits on the floor; smoke/co/gas/siren hang from the ceiling.
 export function safetyIsFloor(kind: SafetyKind): boolean { return kind === 'leak'; }
+// siren is a controllable alert beacon (togglable), distinct from the passive
+// detectors — clicking it toggles the bound entity / flips localState.
+export function safetyIsSiren(kind: SafetyKind): boolean { return kind === 'siren'; }
 
 // ── Presence zones (FP2-style occupancy polygons, roadmap #5) ───────────────
 export const PRESENCE_ZONE_DEFAULTS = { color: '#26c6da', maxVerts: 12 };
@@ -1607,7 +1614,7 @@ export function logicLightState(logic: { rules?: ValueRule[]; offColor?: string 
 
 // Furniture kind defaults: footprint (mm) + 3D height (mm) + tint.
 // `back` flags whether the kind has an implied backrest on the +Y edge.
-export type FurnitureCat = 'furniture' | 'appliance' | 'bathroom' | 'outdoor' | 'theater';
+export type FurnitureCat = 'furniture' | 'appliance' | 'bathroom' | 'outdoor' | 'theater' | 'vehicle';
 
 export interface FurnitureKindDef {
   label: string;
@@ -1712,6 +1719,13 @@ export const FURNITURE_KINDS: Record<FurnitureKind, FurnitureKindDef> = {
   // picnic_table is a `surface` table (eat_at_table host); no `seat` — its centered
   // seat spot would land ON the tabletop. Sit AT it via adjacent lawn_chairs.
   picnic_table:  { label: 'Picnic table',  w: 1800, h: 1500, ht: 750,  back: 'none', color: 0x8a6a44, cat: 'outdoor', surface: true, activity: 'eat_at_table', frontArrow: false },
+  // Post-mounted mail/parcel box. mailCount.countEntity > 0 raises the flag +
+  // floats a count badge; flagEntity 'on' tilts the lid open. Front (door) = -Z.
+  mailbox:       { label: 'Mailbox',       w: 250,  h: 350,  ht: 1100, back: 'none', color: 0x37474f, cat: 'outdoor' },
+  // Vehicle / garage. Car binds a binary_sensor (presence): bound off = ghosted
+  // "away", on = solid, unbound = always solid. ev_charger is a wall-post EVSE.
+  car:           { label: 'Car',           w: 1850, h: 4800, ht: 1450, back: 'none', color: 0x37516b, cat: 'vehicle' },
+  ev_charger:    { label: 'EV charger',     w: 350,  h: 250,  ht: 1200, back: 'none', color: 0x2f3237, cat: 'vehicle' },
 };
 
 // Ground / yard covering kinds (the "yard" arc): a flat display color for the 2D
@@ -1738,6 +1752,73 @@ export function isBinKind(kind: FurnitureKind | undefined): boolean {
 }
 export function binStateIsFull(state: string | null | undefined): boolean {
   return state === 'on' || state === 'full';
+}
+
+// Garage-bay vehicle. A car binds a binary_sensor presence entity via the
+// generic entity_id; bound + not-'on' renders GHOSTED (empty bay), else solid.
+export function isVehicleKind(kind: FurnitureKind | undefined): boolean {
+  return kind === 'car';
+}
+
+// EV charging status — resolved from ANY vendor's status entity by mapping the
+// state STRING defensively (never one vendor's ids; see docs/research/ev-charger.md
+// "common shape"). Charging (green pulse) / full (steady green) / error (red) /
+// idle (dim). A car adjacent to a charging charger shows a charge indicator.
+export type EvStatus = 'charging' | 'full' | 'error' | 'idle';
+export function evStatusOf(state: string | null | undefined): EvStatus {
+  const s = (state ?? '').trim().toLowerCase();
+  if (!s || s === 'unknown' || s === 'unavailable' || s === 'none') return 'idle';
+  if (/error|fault|alarm|problem/.test(s)) return 'error';
+  if (/full|complete|finish|done|ready_charged/.test(s)) return 'full';
+  if (/charg|plugged|connect|occupied|active|busy|on\b|suspended_ev|preparing/.test(s)) return 'charging';
+  return 'idle';
+}
+export const EV_STATUS_COLORS: Record<EvStatus, string> = {
+  charging: '#00e676',   // bright green — pulsing while drawing power
+  full:     '#43a047',   // steady green — complete
+  error:    '#ff5252',   // red — fault
+  idle:     '#78909c',   // dim slate — plugged idle / powered
+};
+export function evStatusColor(st: EvStatus): string { return EV_STATUS_COLORS[st]; }
+// Battery % from a status entity's common attribute names (charger/vehicle SoC),
+// clamped 0..100; null when absent (don't imply a capability that isn't bound).
+export function evChargePercent(st: { attributes?: Record<string, unknown> } | null | undefined): number | null {
+  const a = st?.attributes ?? {};
+  for (const k of ['battery_level', 'battery', 'state_of_charge', 'soc', 'charge']) {
+    const v = parseFloat(String((a as Record<string, unknown>)[k] ?? ''));
+    if (isFinite(v)) return Math.max(0, Math.min(100, v));
+  }
+  return null;
+}
+
+// A car shows a charge indicator when its OWN evCharger binding is charging OR
+// any charger piece (ev_charger kind, or any piece carrying an evCharger binding)
+// within EV_CAR_RANGE_MM of it is charging. Returns the SoC %/watts of the first
+// charging source, else null. Shared by 2D (canvas-render) + 3D (three-view opts).
+export const EV_CAR_RANGE_MM = 1500;
+type EvBind = { statusEntity?: string; powerEntity?: string };
+type EvPiece = { x: number; y: number; kind?: FurnitureKind; evCharger?: EvBind };
+export function carChargeState(
+  car: EvPiece,
+  furniture: EvPiece[],
+  stateOf: (id: string) => { state: string; attributes?: Record<string, unknown> } | null,
+): { pct: number | null; watts: number | null } | null {
+  const sources: EvBind[] = [];
+  if (car.evCharger?.statusEntity) sources.push(car.evCharger);
+  const r2 = EV_CAR_RANGE_MM * EV_CAR_RANGE_MM;
+  for (const fu of furniture) {
+    if (fu === car || !fu.evCharger?.statusEntity) continue;
+    if (fu.kind !== 'ev_charger' && !fu.evCharger) continue;
+    const dx = fu.x - car.x, dy = fu.y - car.y;
+    if (dx * dx + dy * dy <= r2) sources.push(fu.evCharger);
+  }
+  for (const c of sources) {
+    const st = c.statusEntity ? stateOf(c.statusEntity) : null;
+    if (evStatusOf(st?.state) !== 'charging') continue;
+    const w = c.powerEntity ? parseFloat(stateOf(c.powerEntity)?.state ?? '') : NaN;
+    return { pct: evChargePercent(st), watts: isFinite(w) ? w : null };
+  }
+  return null;
 }
 
 // Home-theater speakers (cat 'theater'). Bound to a media_player, a 'playing'

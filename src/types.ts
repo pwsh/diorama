@@ -48,6 +48,10 @@ export type FurnitureKind =
   | 'trash_bin' | 'recycle_bin'   // wheeled curbside bins; entity 'on'/'full' = full
   | 'tree' | 'pine_tree' | 'bush' | 'flower_bed' | 'bird_bath'
   | 'fountain' | 'swingset' | 'lawn_chair' | 'picnic_table'
+  | 'mailbox'       // post-mounted mail/parcel box; mailCount badge + raised flag
+  // vehicle / garage
+  | 'car'           // stylized sedan silhouette; binary_sensor presence → ghost when away
+  | 'ev_charger'    // wall-post EVSE pedestal; evCharger status → LED/port glow
   // fitness
   | 'exercise_equipment'
   // home theater — speakers/sub/center (cat 'theater'), recliners + riser (cat 'furniture')
@@ -131,6 +135,16 @@ export interface Furniture {
     color?: string;           //   hex; default warm white (~6500K). Absent entityId → AUTO: glow while the
   };                          //   TV itself is playing/on. 3D = emissive halo plane behind the panel; 2D = a
                               //   soft halo ring around the footprint. Item-level → no repairFloor change.
+  evCharger?: {               // car / ev_charger kinds: EV charging status bindings (vendor-agnostic —
+    statusEntity?: string;    //   design around the common shape, never one vendor's ids). statusEntity's
+    powerEntity?: string;     //   state string maps defensively (charging/plugged/connected → charging;
+  };                          //   full/completed → steady; error/fault → red; else idle). powerEntity (W)
+                              //   feeds powerGlowScale. A charging charger within ~1500 mm of a car (or the
+                              //   car's own binding) drives the car's charge indicator. Item-level → no repairFloor.
+  mailCount?: {               // mailbox kind: mail/packages bindings. countEntity (numeric sensor, e.g.
+    countEntity?: string;     //   Mail-and-Packages) > 0 → floating count badge + raised flag. flagEntity
+    flagEntity?: string;      //   (binary_sensor mailbox-lid) 'on' → lid tilts open. Both optional; unbound /
+  };                          //   zero = plain closed mailbox, flag down. Item-level → no repairFloor change.
 }
 
 export type LightIconKind =
@@ -290,15 +304,19 @@ export interface ThermostatFixture {
 // halo while alarming (red for smoke, amber for CO). Rides the sensors layer.
 // smoke = red ceiling beacon, co = amber ceiling beacon, gas = amber-green
 // ceiling beacon (device_class gas), leak = FLOOR-mounted moisture detector that
-// spreads a blue puddle decal when alarming (not a beacon).
-export type SafetyKind = 'smoke' | 'co' | 'gas' | 'leak';
+// spreads a blue puddle decal when alarming (not a beacon). siren = ceiling
+// alert BEACON (bound to a controllable siren.*/switch.*, or a display-only
+// binary_sensor) that erupts into a spinning police-style light-bar sweep +
+// expanding rings while 'on' (sounding); clicking a bound siren TOGGLES it
+// (siren.toggle / switch.toggle), unbound flips localState like the Test button.
+export type SafetyKind = 'smoke' | 'co' | 'gas' | 'leak' | 'siren';
 
 export interface SafetySensor {
   id: string;
   x: number; y: number;
-  kind: SafetyKind;           // smoke/co/gas = ceiling beacon; leak = floor puck + puddle
-  entity_id: string | null;   // binary_sensor.*; 'on' = ALARM
-  localState?: string;        // unbound manual trigger: 'on' = alarming; inert once bound
+  kind: SafetyKind;           // smoke/co/gas/siren = ceiling beacon; leak = floor puck + puddle
+  entity_id: string | null;   // detectors: binary_sensor.* ('on'=ALARM); siren: siren.*/switch.*/binary_sensor
+  localState?: string;        // unbound manual trigger: 'on' = alarming/sounding; inert once bound
   label?: string;
   locked?: boolean;
 }
@@ -774,6 +792,7 @@ export interface WeatherConfig {
     apparent?: boolean;
     humidity?: boolean;
     wind?: boolean;
+    uv?: boolean;          // UV index row ("☀️ UV 7 · high", WHO-banded color)
     hourly?: number;
     daily?: number;
   };

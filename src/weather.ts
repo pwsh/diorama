@@ -310,7 +310,7 @@ export async function fetchOpenMeteo(lat: number, lon: number): Promise<WeatherN
   const url = 'https://api.open-meteo.com/v1/forecast'
     + `?latitude=${encodeURIComponent(lat)}&longitude=${encodeURIComponent(lon)}`
     + '&current=temperature_2m,weather_code,wind_speed_10m,wind_direction_10m,is_day'
-    +   ',cloud_cover,relative_humidity_2m,apparent_temperature,wind_gusts_10m,visibility'
+    +   ',cloud_cover,relative_humidity_2m,apparent_temperature,wind_gusts_10m,visibility,uv_index'
     + '&daily=weather_code&forecast_days=2'
     + '&hourly=precipitation_probability,weather_code&forecast_hours=4'
     + '&wind_speed_unit=kmh&temperature_unit=celsius&timezone=auto';
@@ -324,14 +324,10 @@ export async function fetchOpenMeteo(lat: number, lon: number): Promise<WeatherN
     };
     const c = j.current;
     if (!c) return null;
-    const day = c.is_day === 1 || c.is_day === true;
-    const t = Number(c.temperature_2m);
-    const w = Number(c.wind_speed_10m);
-    const wb = Number(c.wind_direction_10m);
     const numOM = (v: unknown): number | null => {
       const n = Number(v); return isFinite(n) ? n : null;
     };
-    const vis = numOM(c.visibility);   // Open-Meteo visibility is in metres
+    const base = parseOpenMeteoCurrent(c);
     // Tomorrow's daily code (index 1; index 0 is today). Forecast is framed as
     // day so a rainy tomorrow reads as 'rainy', not clear-night. Missing daily
     // block → undefined.
@@ -352,25 +348,41 @@ export async function fetchOpenMeteo(lat: number, lon: number): Promise<WeatherN
       }));
       rainSoon = forecastRainSoon(recs, Date.now());
     }
-    return {
-      condition: wmoToCondition(Number(c.weather_code), day),
-      tempC: isFinite(t) ? t : null,
-      windKmh: isFinite(w) ? w : null,
-      windBearing: isFinite(wb) ? wb : null,
-      isDay: day,
-      stale: false,
-      forecastCondition,
-      rainSoon,
-      cloudCoverage: numOM(c.cloud_cover),
-      visibilityKm: vis == null ? null : vis / 1000,
-      uvIndex: null,
-      windGustKmh: numOM(c.wind_gusts_10m),
-      apparentC: numOM(c.apparent_temperature),
-      humidity: numOM(c.relative_humidity_2m),
-    };
+    return { ...base, forecastCondition, rainSoon };
   } catch {
     return null;
   }
+}
+
+// Pure: normalize an Open-Meteo `current` block → the base WeatherNow (condition
+// + temp/wind + the W3 extended attributes incl. uvIndex). Forecast-derived
+// fields (forecastCondition / rainSoon) are overlaid by fetchOpenMeteo after,
+// from the daily/hourly blocks. Exported so the network-free parse is testable
+// (fetchOpenMeteo itself does I/O). Open-Meteo's `uv_index` current variable is
+// a unitless float; visibility is in metres.
+export function parseOpenMeteoCurrent(c: Record<string, unknown>): WeatherNow {
+  const day = c.is_day === 1 || c.is_day === true;
+  const t = Number(c.temperature_2m);
+  const w = Number(c.wind_speed_10m);
+  const wb = Number(c.wind_direction_10m);
+  const numOM = (v: unknown): number | null => {
+    const n = Number(v); return isFinite(n) ? n : null;
+  };
+  const vis = numOM(c.visibility);
+  return {
+    condition: wmoToCondition(Number(c.weather_code), day),
+    tempC: isFinite(t) ? t : null,
+    windKmh: isFinite(w) ? w : null,
+    windBearing: isFinite(wb) ? wb : null,
+    isDay: day,
+    stale: false,
+    cloudCoverage: numOM(c.cloud_cover),
+    visibilityKm: vis == null ? null : vis / 1000,
+    uvIndex: numOM(c.uv_index),
+    windGustKmh: numOM(c.wind_gusts_10m),
+    apparentC: numOM(c.apparent_temperature),
+    humidity: numOM(c.relative_humidity_2m),
+  };
 }
 
 // Geocode a zip / place query → {lat, lon, label}. Numeric zips collide across
@@ -505,8 +517,21 @@ export interface ChipContent {
   apparent: boolean;
   humidity: boolean;
   wind: boolean;
+  uv: boolean;
   hourly: number;
   daily: number;
+}
+
+// WHO UV-index risk band → label + color for the chip readout. Bands (rounded
+// index): low ≤2 green, moderate 3–5 yellow, high 6–7 orange, very high 8–10
+// red, extreme 11+ violet. Pure — the chip color-codes the figure at a glance
+// (mirrors envColor's warn/danger threshold idiom).
+export function uvBand(v: number): { label: string; color: string } {
+  if (v <= 2) return { label: 'low', color: '#7cb342' };
+  if (v <= 5) return { label: 'moderate', color: '#fdd835' };
+  if (v <= 7) return { label: 'high', color: '#fb8c00' };
+  if (v <= 10) return { label: 'very high', color: '#e53935' };
+  return { label: 'extreme', color: '#8e24aa' };
 }
 function clampCount(n: unknown, lo: number, hi: number): number {
   const v = Math.floor(Number(n));
@@ -518,6 +543,7 @@ export function resolveChipContent(cfg?: WeatherConfig['chipContent']): ChipCont
     apparent: cfg?.apparent === true,
     humidity: cfg?.humidity === true,
     wind: cfg?.wind === true,
+    uv: cfg?.uv === true,
     hourly: clampCount(cfg?.hourly, 0, 12),
     daily: clampCount(cfg?.daily, 0, 7),
   };

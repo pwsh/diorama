@@ -214,7 +214,13 @@ Work proceeds in order; each stage ships (commit + push both + deploy).
   status (`research/ev-charger.md`), mail/packages badge
   (`research/peripheral-fixtures.md`).
 - **Phase 2**: event-focused thought bubbles
-  (`research/event-thought-bubbles.md`).
+  (`research/event-thought-bubbles.md`) + **water valves** (bind `valve.*`
+  or the switch-entity irrigation pattern per
+  `research/irrigation-sprinklers.md`; open/close from the panel) +
+  **smart plugs** (outlet fixture bound to `switch.*`, optional power
+  entity) — both with per-device configuration (label, binding,
+  allow-control) and click-to-toggle from the interface (added
+  2026-07-17).
 - **Phase 3**: moon-phase + sun-position background props
   (`research/moon-uv-vehicle.md`), weather as background
   (`research/weather-background-fx.md`).

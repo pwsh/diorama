@@ -40,7 +40,7 @@ export interface BermudaDiscovery {
 import type {
   Store, Floor, Sensor, ZonesLive, ObjectHalo, LerpSlot,
   HassState, ConnStatus, DiscoveredDevice, Vec2, AvatarKind, WeatherConfig, CameraFixture,
-  ConfigIndex, ConfigMeta, ThermostatFixture,
+  ConfigIndex, ConfigMeta, ThermostatFixture, SafetySensor,
 } from './types.js';
 
 // Full export envelope (Batch B). `store` is the WHOLE Store serialized (no
@@ -1336,7 +1336,9 @@ export class Planner extends EventTarget {
     // aren't number/switch, routed through the config channel so the sidebar
     // badges (and the 3D dirty keys, which also fold these) refresh on change.
     const f2 = this.floor();
-    if (f2.furniture.some(fu => fu.doorEntity === id || fu.tempEntity === id)) return true;
+    if (f2.furniture.some(fu => fu.doorEntity === id || fu.tempEntity === id ||
+      fu.evCharger?.statusEntity === id || fu.evCharger?.powerEntity === id ||
+      fu.mailCount?.countEntity === id || fu.mailCount?.flagEntity === id)) return true;
     if (f2.doors.some(d => d.lockEntity === id)) return true;
     if ((f2.alarmPanels ?? []).some(a => a.entity_id === id)) return true;
     // Bound climate/thermostat entities: current_temperature can tick often, but
@@ -1820,6 +1822,23 @@ export class Planner extends EventTarget {
   setActiveSafety(id: string | null): void {
     this.activeSafetyId = (this.activeSafetyId === id) ? null : id;
     this.emitConfig();
+  }
+
+  // Siren fixtures (SafetySensor kind 'siren') are CONTROLLABLE, unlike the
+  // passive smoke/co/gas/leak detectors. Bound siren.*/switch.* → toggle the
+  // entity (siren.toggle / switch.toggle via toggleEntity's domain dispatch); a
+  // bound binary_sensor is display-only (read-only, no-op); unbound → flip
+  // localState (demo/test, like the Test button). Refuses in view mode; kiosk
+  // allowed. Detectors never call this.
+  triggerSiren(s: SafetySensor): void {
+    if (this.uiMode === 'view') return;
+    if (s.entity_id) {
+      const dom = s.entity_id.split('.')[0];
+      if (dom === 'siren' || dom === 'switch') this.toggleEntity(s.entity_id);
+      // binary_sensor bound → display-only (nothing to toggle).
+    } else {
+      this.toggleItem(s);
+    }
   }
 
   setActiveRobot(id: string | null): void {

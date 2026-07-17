@@ -6,7 +6,7 @@ import { customElement } from './define.js';
 // startup path never downloads it.
 import type { ThreeDRenderer, ZoneWorld, HaloWorld, TargetWorld, ActivityContext,
   GpsPinWorld, GpsLandmarkWorld, GeoEventWorld, WeatherFxState } from '../three-renderer.js';
-import { localToWorld, transformVerts, pointInPolygon, sensorColor, hexToInt, motionColor, lightIconKind, furnitureKind, resolveFurnitureDef, furnitureCat, isBinKind, isSpeakerKind, isStairsKind, alarmStateColor, doorSpanCenter } from '../geometry.js';
+import { localToWorld, transformVerts, pointInPolygon, sensorColor, hexToInt, motionColor, lightIconKind, furnitureKind, resolveFurnitureDef, furnitureCat, isBinKind, isSpeakerKind, isVehicleKind, isStairsKind, alarmStateColor, doorSpanCenter } from '../geometry.js';
 import { compass8 } from '../geo.js';
 import { resolveScenePreset, resolveTimeBucket } from '../time-of-day.js';
 import { conditionIntensity, weatherEffectEnabled, worstAlertSeverity } from '../weather.js';
@@ -205,12 +205,15 @@ export class ThreeView extends LitElement {
         if (b) { p.fireAction(b); this._renderer?.pressActionButton(b.id); }
         return;
       }
-      // Smoke / CO detector → unbound: manual test trigger (flip localState);
-      // bound: display-only no-op (a binary_sensor can't be toggled).
+      // Safety fixture. Siren → controllable: toggle the bound siren.*/switch.*
+      // (or flip localState when unbound). Smoke/CO/gas/leak detector → unbound:
+      // manual test trigger (flip localState); bound: display-only no-op.
       if (kind === 'safety') {
-        if (p.uiMode === 'view' || entity_id) return;
         const s = p.floor().safetySensors?.find(x => x.id === fixtureId);
-        if (s) p.toggleItem(s);
+        if (!s) return;
+        if (s.kind === 'siren') { p.triggerSiren(s); return; }
+        if (p.uiMode === 'view' || entity_id) return;
+        p.toggleItem(s);
         return;
       }
       // Robot → run/dock (bound) or demo toggle (unbound). Refuses in view mode.
@@ -636,7 +639,12 @@ export class ThreeView extends LitElement {
         // drives the 3D lid pivot inside updateFloor — fold it in too. Home-theater
         // speakers fold their media_player state so the driver pulse (built inside
         // updateFloor, present only while 'playing') rebuilds on a playback change.
-        if (furnitureCat(def) !== 'appliance' && !isBinKind(fu.kind) && !isSpeakerKind(fu.kind)) return '';
+        // Vehicles (car ghost/solid + EV charge indicator), EV chargers (port LED
+        // status + charging pulse), and mailboxes (count badge + flag/lid) also
+        // carry bound state that drives their 3D build — fold them in too.
+        const hasEvMail = isVehicleKind(fu.kind) || fu.kind === 'ev_charger' ||
+          fu.kind === 'mailbox' || !!fu.evCharger || !!fu.mailCount;
+        if (furnitureCat(def) !== 'appliance' && !isBinKind(fu.kind) && !isSpeakerKind(fu.kind) && !hasEvMail) return '';
         const on = p.effectiveState(fu)?.state ?? '-';
         const door = fu.doorEntity ? stOf(fu.doorEntity) : '';
         // Per-device power glow (#8): bucket the live power reading to 50 W so the
@@ -662,7 +670,23 @@ export class ThreeView extends LitElement {
           const be = fu.biasLight.entityId;
           bias = `${be ? stOf(be) : 'auto'}:${fu.biasLight.color ?? ''}`;
         }
-        return `${fu.id}:${on}:${door}:${pw}:${tp}:${fu.doorOpen ? 1 : 0}:${bias}`;
+        // EV charging (car port / charger LED): status entity state + a 100 W
+        // power bucket. Mailbox: count + lid-sensor state. When ANY charger's
+        // status flips, its hash term changes → the whole floor rebuilds, which
+        // also refreshes an adjacent car's charge indicator.
+        let ev = '';
+        if (fu.evCharger) {
+          const s = fu.evCharger.statusEntity ? stOf(fu.evCharger.statusEntity) : '';
+          const w = fu.evCharger.powerEntity ? parseFloat(states[fu.evCharger.powerEntity]?.state ?? '') : NaN;
+          ev = `${s}:${isFinite(w) ? Math.round(w / 100) : ''}`;
+        }
+        let mail = '';
+        if (fu.mailCount) {
+          const c = fu.mailCount.countEntity ? stOf(fu.mailCount.countEntity) : '';
+          const fl = fu.mailCount.flagEntity ? stOf(fu.mailCount.flagEntity) : '';
+          mail = `${c}:${fl}`;
+        }
+        return `${fu.id}:${on}:${door}:${pw}:${tp}:${fu.doorOpen ? 1 : 0}:${bias}:${ev}:${mail}`;
       }).filter(Boolean).join(',');
       // Room occupancy glow (#1): fold each occupancy-bound room's on/off into
       // _keyFloor so the tinted floor patch rebuilds on an occupancy flip.
