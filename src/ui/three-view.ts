@@ -619,26 +619,36 @@ export class ThreeView extends LitElement {
       const roomOccKey = (f.rooms ?? [])
         .filter(rm => rm.occupancyEntity)
         .map(rm => `${rm.id}:${stOf(rm.occupancyEntity!)}`).join(',');
+      // Selected custom-recipe piece → its id drives the 3D front-arrow decal
+      // built inside updateFloor. Selection (activeFurnitureId) is runtime-only
+      // and does NOT bump configRev, so it must be folded into _keyFloor
+      // explicitly. Scoped to CUSTOM pieces (they lack the 2D front chevron's 3D
+      // equivalent) so selecting an ordinary furniture piece never churns the
+      // floor rebuild.
+      const selFu = f.furniture.find(x => x.id === p.activeFurnitureId);
+      const selCustomId = (selFu && selFu.customKindId) ? selFu.id : '';
       const keyFloor = `${p.configRev}|${effPreset}|` +
         `${layers.furniture !== false}|${layers.appliances !== false}|` +
         `${layers.bg !== false}|${layers.walls !== false}|` +
         `${layers.grid !== false}|` +
-        `${layers.labels !== false}|${applianceKey}|${roomOccKey}`;
+        `${layers.labels !== false}|${applianceKey}|${roomOccKey}|${selCustomId}`;
       if (keyFloor !== this._keyFloor) {
         this._keyFloor = keyFloor;
         // customObjects edits bump configRev (via emitConfig) → keyFloor flips
         // → the placed recipe instance rebuilds as its own live preview.
-        r.updateFloor(f, scMerged, layers, p.store.customObjects, id => states[id] || null);
+        r.updateFloor(f, scMerged, layers, p.store.customObjects,
+                      id => states[id] || null, selCustomId || null);
       }
 
       // Glass-house ghost floors: every OTHER story as a translucent shell.
       // Cheap to rebuild; keyed on the glassHouse flag + active floor id.
-      const keyGhost = `${p.configRev}|${!!scBase.glassHouse}|${f.id}`;
+      const keyGhost = `${p.configRev}|${!!scBase.glassHouse}|${f.id}|` +
+        `${layers.furniture !== false}|${layers.appliances !== false}`;
       if (keyGhost !== this._keyGhost) {
         this._keyGhost = keyGhost;
         r.updateGhostFloors(
           p.store.floors.filter(fl => !fl.disabled || fl.id === f.id),
-          f.id, scMerged, p.store.customObjects);
+          f.id, scMerged, p.store.customObjects, layers);
       }
 
       // Glass-house transit puppet (Tier 2 stretch): when glass-house is on and a
@@ -1141,10 +1151,13 @@ export class ThreeView extends LitElement {
             this._recentTrigs.push({ kind, x, y, at: nowS });
         }
       };
+      // Fireplace LIGHT on-states gate the warm_hands ambient anchor per frame.
+      const fireplaceOn: Record<string, boolean> = {};
       for (const l of f.lights) {
         const st = p.effectiveState(l);
         const on = st?.state === 'on';
         const fire = lightIconKind(l) === 'fireplace';
+        if (fire) fireplaceOn[l.id] = on;
         note('L' + l.id, on, on ? (fire ? 'fireplace' : 'light_on') : 'light_off', l.x, l.y);
       }
       for (const sw of f.switches) {
@@ -1170,7 +1183,7 @@ export class ThreeView extends LitElement {
         const c = doorSpanCenter(dd);
         recentTriggers.push({ kind: 'doorbell', x: c.x, y: c.y, ageS });
       }
-      const ctx: ActivityContext = { entityOn, roomNames, timeBucket: resolveTimeBucket(states), weather, recentTriggers, doorSensorOpen };
+      const ctx: ActivityContext = { entityOn, roomNames, timeBucket: resolveTimeBucket(states), weather, recentTriggers, doorSensorOpen, fireplaceOn };
       // Targets every frame — persistent rigs mutate in place (no rebuild).
       r.updateTargets(targets, ctx);
   }

@@ -211,6 +211,11 @@ export interface ActivityContext {
   // binary_sensor (Furniture.doorEntity) is 'on' (open). Drives the per-frame
   // appliance-door blend for BOUND fridges (case a). Absent → treated as closed.
   doorSensorOpen?: Record<string, boolean>;
+  // OPTIONAL — fireplace LIGHT on-states: lightId → the fireplace light is on
+  // (bound entity or unbound localState). Gates the `warm_hands` ambient anchor
+  // per frame (a lit-fireplace anchor is inert when the fire is out). Absent →
+  // every fireplace anchor treated as OFF (stale-chunk safe — no phantom poses).
+  fireplaceOn?: Record<string, boolean>;
 }
 
 // A transient "flash then decay" event with no persistent state — the generic
@@ -268,9 +273,15 @@ interface ActivityAnchor {
   standOff: number;     // mm from the anchor center along +facing to the stand
                         // point — clears the footprint front face + a person's
                         // width so the rig never renders INSIDE the appliance.
-  kind: ActivityKind;
+                        // Fireplace/window anchors bake the stand offset into the
+                        // anchor position itself, so they use standOff 0.
+  kind: ExtActivityKind;
   roomId: string | null;
   hasEntity: boolean;   // furniture has a bound HA entity (gates entity-driven kinds)
+  // Ambient idle activities only: the LIGHT fixture id whose ON state gates a
+  // `warm_hands` (lit-fireplace) anchor per frame (checked from ctx.fireplaceOn,
+  // NOT baked at build so the anchor deactivates the instant the fire goes out).
+  lightId?: string;
 }
 
 // AI-avatar controller state for a synthetic presence-sensor target. Owns a
@@ -382,12 +393,13 @@ interface Humanoid {
   sitSpotId: string | null;
   // Contextual-activity state (Sims solo activities). Mutually exclusive with
   // sitting: an anchor is only acquired while sit ≈ 0.
-  activity: ActivityKind | null;       // engaged activity (drives poses + privacy)
+  activity: ExtActivityKind | null;    // engaged activity (drives poses + privacy)
   activityAnchor: ActivityAnchor | null;  // retained while easing back out (act > 0.05)
   activityDwell: number;               // reserved; the dwell trigger reuses `dwell`
   act: number;         // eased 0..1 activity-pose blend (mirrors `sit`)
   privacy: number;     // eased 0..1 privacy-blur blend (shower/bathe/toilet)
   blurSprite: THREE.Sprite | null;     // lazy censor sprite shown above ~0.5 privacy
+  privMosaicT: number; // clock (s) of the last render-to-texture mosaic capture (~4 Hz)
   // Thought bubble (Phase 6): a context/time-aware glyph cloud above the head.
   // `bubbleWant` tracks the raw per-frame resolution; `bubbleDwell` accumulates
   // while it stays equal; `bubbleKind` commits (and rebuilds the sprite) only
@@ -518,6 +530,10 @@ const IDLE_FIDGETS = [
 const IDLE_FIDGET_DUR: Record<string, number> = {
   stretch: 2.0, phone: 2.5, yawn: 1.9, scratch_head: 2.3,
   check_watch: 2.2, cross_arms: 3.6, foot_tap: 2.8, glance: 1.7,
+  // `dance` is NOT in the IDLE_FIDGETS random pool — it's picked only when the
+  // rig is idle in a room whose bound TV is ON (see the fidget picker), so it
+  // can never fire in an ordinary room and never conflicts with seated watch_tv.
+  dance: 4.0,
 };
 
 // Context thought-bubble POOLS (Phase 6 refresh + weather/social expansion).
@@ -636,17 +652,27 @@ const PLUMBOB_GREEN = 0x2ee56a;
 // Name label (phase B3) rides the same per-rig plumbob anchor, a bit lower than
 // the bubble so both coexist over the head (the bubble is offset sideways).
 const NAME_ABOVE_PLUMBOB = 318;
+// Renderer-internal "ambient" activity kinds that are NOT authored on furniture
+// defs (so they're not in the shared ActivityKind vocabulary). Their anchors are
+// synthesized in updateFloor from LIGHT fixtures (a lit fireplace) and WINDOWS.
+// Kept local to the renderer — no types.ts / store changes needed. `warm_hands`
+// gate is per-frame from ctx.fireplaceOn (checked in the dwell scan below).
+type IdleActivityKind = 'warm_hands' | 'gaze_window';
+type ExtActivityKind = ActivityKind | IdleActivityKind;
 // Solo activities wired up this phase (Phase 4). watch_tv / eat_at_table /
 // work_at_desk / sleep_shared are seated/contextual and land in Phase 5.
-const PHASE4_ACTIVITIES: ReadonlySet<ActivityKind> = new Set<ActivityKind>([
+// warm_hands / gaze_window (ambient idle activities) ride the same standing
+// dwell/pose machinery so AI/roamer goal rolls pick their anchors for free.
+const PHASE4_ACTIVITIES: ReadonlySet<ExtActivityKind> = new Set<ExtActivityKind>([
   'shower', 'bathe', 'toilet', 'wash_hands', 'load_dishwasher',
   'make_coffee', 'forage_fridge', 'exercise',
   'browse_bookshelf', 'tend_plant',
+  'warm_hands', 'gaze_window',
 ]);
 // Activities whose dwell trigger reads the bound appliance's on/off state:
 // dishwasher loading / coffee brewing only look right while it's actually
 // running. Other kinds don't gate on entity state.
-const ENTITY_GATED_ACTIVITIES: ReadonlySet<ActivityKind> = new Set<ActivityKind>([
+const ENTITY_GATED_ACTIVITIES: ReadonlySet<ExtActivityKind> = new Set<ExtActivityKind>([
   'load_dishwasher', 'make_coffee',
 ]);
 
@@ -1405,6 +1431,89 @@ export class ThreeDRenderer {
     return tex;
   }
 
+  // ── Privacy MOSAIC (render-to-texture censor). A shared low-res render target
+  // into which a single rig's body is rendered in isolation, then displayed on
+  // its blur sprite with NearestFilter so it reads as chunky live pixels (the
+  // upgrade over the static _blurTexture silhouette). ONE target + ONE camera +
+  // ONE tiny scene reused across every privacy rig (never per-rig targets);
+  // each rig re-captures at most ~4 Hz (see updateTargets throttle). Isolation:
+  // the rig group is briefly reparented into `_privScene` (identity transform,
+  // matching _targetGroup, so world coords hold) with the body meshes made
+  // visible and the sprite/plumbob/blob/name hidden, rendered, then reparented
+  // back and visibility restored — all synchronous, before any main render. If
+  // render-target creation ever fails, `_privMosaicOK` latches false and the
+  // static silhouette path is used instead. Disposed only in destroy().
+  private _privRT: THREE.WebGLRenderTarget | null = null;
+  private _privCam: THREE.PerspectiveCamera | null = null;
+  private _privScene: THREE.Scene | null = null;
+  private _privMosaicOK = true;
+  private _privClearTmp = new THREE.Color();
+  private _ensurePrivMosaic(): boolean {
+    if (!this._privMosaicOK) return false;
+    if (this._privRT) return true;
+    try {
+      if (!this._renderer) return false;
+      // 24×32 (w×h) — a coarse portrait grid; NearestFilter keeps it blocky.
+      const rt = new THREE.WebGLRenderTarget(24, 32, {
+        minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter,
+        depthBuffer: true, generateMipmaps: false,
+      });
+      const cam = new THREE.PerspectiveCamera(46, 24 / 32, 10, 8000);
+      const scn = new THREE.Scene();
+      // Toon materials need light to band; the exact rig isn't the point (it's
+      // a censor), so a plain ambient + one directional suffices.
+      scn.add(new THREE.AmbientLight(0xffffff, 0.9));
+      const dir = new THREE.DirectionalLight(0xffffff, 0.8);
+      dir.position.set(1, 2, -1.5);
+      scn.add(dir);
+      this._privRT = rt; this._privCam = cam; this._privScene = scn;
+      return true;
+    } catch {
+      this._privMosaicOK = false;
+      return false;
+    }
+  }
+  // Render rig `h`'s body alone into the shared target. Fully synchronous:
+  // saves + restores render target and clear color; reparents the rig back and
+  // restores per-child visibility before returning.
+  private _capturePrivMosaic(h: Humanoid, sitPose: boolean): void {
+    const r = this._renderer, rt = this._privRT, cam = this._privCam, scn = this._privScene;
+    if (!r || !rt || !cam || !scn) return;
+    const grp = h.group;
+    const origParent = grp.parent;
+    if (!origParent) return;
+    const kids = grp.children;
+    const snap: boolean[] = new Array(kids.length);
+    for (let i = 0; i < kids.length; i++) {
+      const c = kids[i];
+      snap[i] = c.visible;
+      // Show body meshes; hide the aux sprites/plumbob/blob so only the rig body
+      // (never the sprite it will BE displayed on) is captured.
+      const aux = c === h.blurSprite || c === h.blob || c === h.plumbob ||
+                  c === h.nameSprite || c === h.bubble;
+      c.visible = !aux;
+    }
+    const gx = grp.position.x, gy = grp.position.y, gz = grp.position.z;
+    const cy = gy + (sitPose ? 620 : 900);
+    cam.position.set(gx, cy, gz - 2600);   // frame from the world -Z front
+    cam.lookAt(gx, cy, gz);
+    scn.add(grp);   // isolate (reparent preserves local transform)
+    const prevRT = r.getRenderTarget();
+    r.getClearColor(this._privClearTmp);
+    const prevAlpha = r.getClearAlpha();
+    r.setRenderTarget(rt);
+    r.setClearColor(0x000000, 0);          // transparent background
+    r.render(scn, cam);
+    r.setRenderTarget(prevRT);
+    r.setClearColor(this._privClearTmp, prevAlpha);
+    origParent.add(grp);                    // reparent back
+    for (let i = 0; i < kids.length; i++) kids[i].visible = snap[i];
+  }
+  private _disposePrivMosaic(): void {
+    this._privRT?.dispose(); this._privRT = null;
+    this._privCam = null; this._privScene = null;
+  }
+
   // rx/rz are half-extents (mm) of the shadow ellipse in the parent's local
   // frame. The shared texture must never be disposed per-instance —
   // _disposeSubtree only disposes materials, not maps, so this is safe.
@@ -1420,6 +1529,42 @@ export class ThreeDRenderer {
     // No renderOrder tweak: transparent materials draw after the opaque
     // floor anyway; forcing them earlier let the floor paint over them.
     m.userData.outlineSkip = true;
+    return m;
+  }
+
+  // Flat accent chevron laid on the floor just outside a piece's functional
+  // front (local -Z). `depthH` is the piece depth (fu.h) so the arrow clears
+  // the footprint edge. Flat MeshBasic — a documented exemption from the toon
+  // _mat factory (like the TransientPulse rings / blob decals): it is an
+  // unlit ground decal, not a shaded surface. outlineSkip so no inverted-hull
+  // shell wraps it; no blob shadow. Parented to the furniture group so it
+  // rides the piece's position + rotation.
+  private _frontArrowMat: THREE.MeshBasicMaterial | null = null;
+  private _frontArrowDecal(depthH: number): THREE.Mesh {
+    if (!this._frontArrowMat) {
+      this._frontArrowMat = new THREE.MeshBasicMaterial({
+        color: 0x4fc3f7, transparent: true, opacity: 0.9,
+        depthWrite: false, side: THREE.DoubleSide,
+      });
+    }
+    // Chevron in the XY shape plane pointing toward +Y; rotation.x = -π/2 maps
+    // shape +Y → world -Z, so the tip ends up at the piece's local -Z front.
+    const W = 130, L = 200, T = 70;   // half-width, length, thickness of the vee
+    const s = new THREE.Shape();
+    s.moveTo(0, L);              // tip (→ front, -Z)
+    s.lineTo(W, 0);             // right wing
+    s.lineTo(W - T, 0);
+    s.lineTo(0, L - T * 1.4);    // inner notch
+    s.lineTo(-(W - T), 0);
+    s.lineTo(-W, 0);            // left wing
+    s.closePath();
+    const m = new THREE.Mesh(new THREE.ShapeGeometry(s), this._frontArrowMat);
+    m.rotation.x = -Math.PI / 2;
+    // Lay flat, nudged just past the front edge (local -Z) and a hair above the
+    // floor so it doesn't z-fight the slab/rug.
+    m.position.set(0, 6, -(depthH / 2 + 150));
+    m.userData.outlineSkip = true;
+    m.renderOrder = 2;
     return m;
   }
 
@@ -1874,6 +2019,15 @@ export class ThreeDRenderer {
         objLoader.setMaterials(mtl);
       }
       const obj = objLoader.parse(objText);
+      // Toon-convert the imported materials so the Sweet Home 3D shell shades
+      // with the SAME 4-step toon bands as everything else (no PBR/Phong island
+      // in the scene). MTLLoader gives us MeshPhong materials carrying Kd →
+      // color + `d` → opacity; we rebuild each as a `_mat({...})` toon material,
+      // CACHED per source-material uuid so shared MTL entries stay shared, and
+      // dispose the replaced originals. A material with a texture map is left
+      // ALONE (this OBJ path is text-only MTL so maps are never loaded, but the
+      // guard keeps a future textured import legible rather than flat-colored).
+      this._toonConvertModel(obj);
       const s = meta.scale;
       const grp = new THREE.Group();
       obj.scale.set(-s, s, -s);
@@ -1899,6 +2053,37 @@ export class ThreeDRenderer {
     } catch (err) {
       console.error('3D model load failed:', err);
     }
+  }
+
+  // Replace each imported mesh material with a toon `_mat({...})` carrying the
+  // source diffuse color + opacity. Cached per source-material uuid so shared
+  // MTL entries collapse to one shared toon material; originals are disposed
+  // once. Textured materials (`.map` set) are kept as-is (see updateModel3D).
+  private _toonConvertModel(root: THREE.Object3D): void {
+    const cache = new Map<string, THREE.Material>();
+    const disposed = new Set<THREE.Material>();
+    const convert = (orig: THREE.Material): THREE.Material => {
+      const src = orig as THREE.Material & { map?: THREE.Texture | null; color?: THREE.Color };
+      if (!src || src.map) return orig;          // textured or missing → leave alone
+      let conv = cache.get(src.uuid);
+      if (!conv) {
+        conv = this._mat({
+          color: src.color ? src.color.getHex() : 0xcccccc,
+          transparent: !!src.transparent,
+          opacity: src.opacity ?? 1,
+          side: src.side,
+        });
+        cache.set(src.uuid, conv);
+      }
+      if (!disposed.has(orig)) { orig.dispose(); disposed.add(orig); }
+      return conv;
+    };
+    root.traverse(o => {
+      const m = o as THREE.Mesh;
+      if (!m.isMesh || !m.material) return;
+      if (Array.isArray(m.material)) m.material = m.material.map(convert);
+      else m.material = convert(m.material as THREE.Material);
+    });
   }
 
   // Layer visibility (shared with the 2D layer flags): cheap per-tick
@@ -1950,7 +2135,8 @@ export class ThreeDRenderer {
   private _showNameLabels = true;
 
   updateFloor(f: Floor, scene3d?: Scene3D, layers?: import('./types.js').Layers2D,
-              customObjects?: ObjectRecipe[], stateProvider?: StateProvider): void {
+              customObjects?: ObjectRecipe[], stateProvider?: StateProvider,
+              selectedFurnitureId?: string | null): void {
     if (!this._scene) return;
     this._fw = f.w; this._fd = f.d; this._floorId = f.id;
     // Foreground wall cutaway: default ON, opt out with wallCutaway === false.
@@ -2302,6 +2488,16 @@ export class ThreeDRenderer {
       const grp = this._buildFurniture(fu, f.furniture, customObjects,
                                        { applianceOn, ledScale, doorSink, tempLabel, binFull });
       this._shadowFlags(grp);
+      // Custom-recipe front-arrow indicator: custom objects draw only as a
+      // labeled rect in 2D and had no 3D front cue, so when a recipe piece is
+      // SELECTED, drop a flat accent chevron on the floor just outside its
+      // functional front (local -Z, matching the 2D chevron convention). Flat
+      // MeshBasic (a documented _mat exemption, like the TransientPulse rings),
+      // outline-skipped, added AFTER _buildFurniture ran its outlines so no
+      // inverted-hull shell wraps it, and no blob shadow.
+      if (fu.customKindId && selectedFurnitureId && fu.id === selectedFurnitureId) {
+        grp.add(this._frontArrowDecal(fu.h));
+      }
       this._floorGroup.add(grp);
       // Register each door pivot with the fixture-level info the per-frame blend
       // needs, and re-apply the persisted blend so a rebuild doesn't pop the door
@@ -2524,6 +2720,68 @@ export class ThreeDRenderer {
       }
     }
 
+    // ── Ambient idle-activity anchors (not authored on furniture) ──────────
+    // (1) Warm hands at a lit fireplace. Fireplace LIGHT fixtures wall-snap with
+    // their opening (local −Z of the light rotation) facing into the room; the
+    // emitting/opening direction in scene coords is (sin lr, −cos lr) with
+    // lr = lightRotation·rad (matches the point-light front vector). Place the
+    // anchor ~700 mm in front of the OPENING (firebox front is FIREBOX/2 ≈ 225
+    // mm ahead of the light center) and face the rig back toward the fire.
+    // The anchor is built for EVERY fireplace light regardless of on/off — the
+    // ON state is a per-frame gate (ctx.fireplaceOn[lightId]) in updateTargets,
+    // so the anchor deactivates the instant the fire goes out.
+    for (const l of f.lights ?? []) {
+      if (lightIconKind(l) !== 'fireplace') continue;
+      const lr = (l.rotation ?? 0) * Math.PI / 180;
+      const odx = Math.sin(lr), odz = -Math.cos(lr);   // opening dir, scene XZ
+      const fp = this._w(l.x, l.y, 0);
+      const FRONT = 225 + 700;   // firebox half-depth + a standing gap
+      const ax = fp.x + odx * FRONT, az = fp.z + odz * FRONT;
+      // World position of the anchor (for room resolution): invert _w.
+      const aw = this._sceneToWorld(ax, az);
+      this._activityAnchors.push({
+        furnitureId: 'fire_' + l.id, x: ax, z: az, r: 520,
+        // facing = atan2(offsetDir.x, offsetDir.z): the rig stands at the anchor
+        // (standOff 0) and looks back along −offsetDir toward the fire.
+        facing: Math.atan2(odx, odz),
+        standOff: 0, kind: 'warm_hands',
+        roomId: resolveRoomForPoint(rooms, loops, aw.x, aw.y)?.id ?? null,
+        hasEntity: l.entity_id != null || l.localState != null,
+        lightId: l.id,
+      });
+    }
+    // (2) Window gazing. Cap at the 6 LARGEST windows per floor (by pane width)
+    // so the anchor list stays bounded. The interior side is the window normal
+    // whose 600-mm-inset point falls inside a closed wall loop (floor-center
+    // fallback when neither/both). Window world normal for the pane (local ±Z)
+    // is ±(sin wr, cos wr); the matching scene normal is ±(−sin wr, cos wr).
+    const gazeWins = [...(f.windows ?? [])].sort((a, b) => b.w - a.w).slice(0, 6);
+    const GAZE_IN = 600;
+    for (const w of gazeWins) {
+      const wr = (w.rotation ?? 0) * Math.PI / 180;
+      const wnx = Math.sin(wr), wny = Math.cos(wr);    // world normal, +Z side
+      const candP = { x: w.x + wnx * GAZE_IN, y: w.y + wny * GAZE_IN };
+      const candM = { x: w.x - wnx * GAZE_IN, y: w.y - wny * GAZE_IN };
+      const inP = !!loopContaining(loops, candP.x, candP.y);
+      const inM = !!loopContaining(loops, candM.x, candM.y);
+      let sign = 1;
+      if (inP && !inM) sign = 1;
+      else if (inM && !inP) sign = -1;
+      else sign = Math.hypot(candP.x - f.w / 2, candP.y - f.d / 2) <=
+                  Math.hypot(candM.x - f.w / 2, candM.y - f.d / 2) ? 1 : -1;
+      const aw = sign === 1 ? candP : candM;
+      const as = this._w(aw.x, aw.y, 0);
+      // Scene interior normal = (−sin wr, cos wr)·sign = offset dir from window
+      // to anchor. facing = atan2(dir.x, dir.z) → rig faces back at the glass.
+      const dsx = -wnx * sign, dsz = wny * sign;
+      this._activityAnchors.push({
+        furnitureId: 'win_' + w.id, x: as.x, z: as.z, r: 420,
+        facing: Math.atan2(dsx, dsz), standOff: 0, kind: 'gaze_window',
+        roomId: resolveRoomForPoint(rooms, loops, aw.x, aw.y)?.id ?? null,
+        hasEntity: false,
+      });
+    }
+
     // Room-name labels: a dim billboard at the centroid of each room's
     // containing wall loop. The room IS whichever closed loop currently holds
     // its anchor, so labels track wall edits. Skip anchors outside all loops.
@@ -2655,11 +2913,18 @@ export class ThreeDRenderer {
   // or raycast targets. Each ghost floor uses ITS OWN w/d for coordinate
   // mapping but is centered on the scene origin, so all stories line up.
   updateGhostFloors(floors: Floor[], currentId: string, scene3d?: Scene3D,
-                    customObjects?: ObjectRecipe[]): void {
+                    customObjects?: ObjectRecipe[],
+                    layers?: import('./types.js').Layers2D): void {
     if (!this._scene) return;
     this._clearGroup(this._ghostGroup);
     this._cutawayGhostWalls = [];
     if (!scene3d?.glassHouse) return;
+    // Ghost furniture boxes obey the SAME layer gates as the active floor:
+    // appliance-category pieces + bins ride `appliances`, everything else
+    // `furniture`. Slabs + walls keep always-drawing (there is no Walls layer;
+    // walls always draw on the active floor too). Both flags are in _keyGhost.
+    const showFurniture = layers?.furniture !== false;
+    const showAppliances = layers?.appliances !== false;
 
     const STORY_H = 3000;   // 2743 mm wall + slab
     const curIdx = Math.max(0, floors.findIndex(fl => fl.id === currentId));
@@ -2737,6 +3002,9 @@ export class ThreeDRenderer {
       // Furniture — simple footprint boxes (w × def.ht × h), no outlines/blobs.
       for (const fu of gf.furniture ?? []) {
         const def = resolveFurnitureDef(fu, customObjects);
+        // Gate on the same appliance/furniture layer split as the active floor.
+        const isApp = furnitureCat(def) === 'appliance' || isBinKind(fu.kind);
+        if (isApp ? !showAppliances : !showFurniture) continue;
         const mesh = new THREE.Mesh(
           new THREE.BoxGeometry(fu.w, def.ht, fu.h),
           this._mat({ color: def.color, transparent: true, opacity: 0.18,
@@ -7178,6 +7446,8 @@ export class ThreeDRenderer {
     // Stale-chunk defense: a mixed-version module graph could call the old
     // 1-arg signature. Treat a missing context as no live entities.
     const entityOn = ctx?.entityOn ?? EMPTY_ENTITY_ON;
+    // Fireplace LIGHT on-states (lightId → on) gating the warm_hands anchor.
+    const fireplaceOn = ctx?.fireplaceOn ?? EMPTY_ENTITY_ON;
     // RAW world target positions this frame, keyed by target — the bed-covers
     // pass tests footprint containment in world coords.
     const rawPos: Record<string, { x: number; y: number }> = {};
@@ -7434,11 +7704,15 @@ export class ThreeDRenderer {
       // Toilet is handled through the sit system (its seat) with a privacy
       // hook below. Release mirrors the sit hysteresis (hold the anchor while
       // the pose eases back out). All triggers read the RAW position `p`.
+      // A lit-fireplace `warm_hands` anchor is only live while its light is ON
+      // (per-frame, from ctx.fireplaceOn — NOT baked at build, so it deactivates
+      // the instant the fire goes out). Absent map / stale chunk → treated OFF.
       let wantAct = false;
       if (h.activityAnchor) {
         const a = h.activityAnchor;
         const dA = Math.hypot(p.x - a.x, p.z - a.z);
-        wantAct = !(rawSpeedMs > 0.4 || dA > a.r + 250);
+        const fireOff = a.kind === 'warm_hands' && !(a.lightId != null && fireplaceOn[a.lightId] === true);
+        wantAct = !(rawSpeedMs > 0.4 || dA > a.r + 250 || fireOff);
         if (!wantAct) {
           h.dwell = 0;
           if (h.act < 0.05) h.activityAnchor = null;  // fully disengaged → release
@@ -7457,6 +7731,8 @@ export class ThreeDRenderer {
           // Entity-gated kinds only read while the appliance is actually on.
           // No binding → don't gate (users without HA still get the anim).
           if (ENTITY_GATED_ACTIVITIES.has(a.kind) && a.hasEntity && !entityOn[a.furnitureId]) continue;
+          // Dark fireplace → its warm-hands anchor is inert this frame.
+          if (a.kind === 'warm_hands' && !(a.lightId != null && fireplaceOn[a.lightId] === true)) continue;
           bd = dA; best = a;
         }
         if (best) { h.activityAnchor = best; wantAct = true; }
@@ -7817,6 +8093,27 @@ export class ThreeDRenderer {
             pLean = -0.15 + Math.sin(now * Math.PI) * 0.05;
             break;
           }
+          case 'warm_hands': {
+            // Both arms extended forward toward the fire (shoulder forward is
+            // POSITIVE in this rig; SIT_SHOULDER 0.45 / exercise 1.4 bracket it),
+            // elbows softly bent, slight forward lean, a tiny warmth waver so the
+            // hands don't read as frozen mid-air.
+            const wav = Math.sin(now * 1.5 + h.idleOffset) * 0.06;
+            pLSh = pRSh = 1.1 + wav;
+            pLEl = pREl = 0.5 + wav * 0.5;
+            pLean = -0.1;
+            break;
+          }
+          case 'gaze_window': {
+            // Face the glass (anchor.facing turns the body to the wall), stand
+            // still — one hand drifts up toward the pane on a slow cycle while the
+            // other stays relaxed at the side. Low-key, like wash_hands strength.
+            const s = (Math.sin(now * 0.5 + h.idleOffset) + 1) / 2;   // 0..1
+            pRSh = 0.7 + 0.35 * s; pREl = 0.4 + 0.2 * s;   // right hand toward glass
+            pLSh = 0.05; pLEl = 0.2;                        // left arm relaxed
+            pLean = -0.02;
+            break;
+          }
           // shower / bathe: pose is hidden behind the privacy blur — leave the
           // relaxed standing default.
         }
@@ -7900,6 +8197,23 @@ export class ThreeDRenderer {
       const ib = h.idleBlend;
       let yawFidget = 0;
       if (idleStanding) {
+        // Dance eligibility: standing-idle in a room whose bound TV is ON (the
+        // same _tvsByRoom machinery seated watch_tv uses). Reads the RAW target
+        // position `t.x/t.y` (anti-feedback). A per-frame flag so the picker can
+        // roll the `dance` one-shot ONLY here — it's never in the IDLE_FIDGETS
+        // pool, so it can't fire in an ordinary room, and being a FIDGET (not an
+        // activity) it can't fire while seated (idleStanding needs sit < 0.1),
+        // which is exactly the watch_tv disambiguation: dance = standing near a
+        // playing TV, watch_tv = seated in its room.
+        let danceRoom = false;
+        for (const rz of this._roomZones) {
+          if (!pip(t.x, t.y, rz.loop)) continue;
+          const tvs = this._tvsByRoom[rz.roomId];
+          if (tvs) for (const tv of tvs) {
+            if (tv.hasEntity && entityOn[tv.furnitureId]) { danceRoom = true; break; }
+          }
+          break;
+        }
         // Look-around scan sub-behavior: a held ±0.35 rad swing for 0.8 s every
         // 6-10 s, eased in/out. (The ambient 0.4 Hz wobble below is always on.)
         if (h.scanState === 0) {
@@ -7918,7 +8232,11 @@ export class ThreeDRenderer {
         } else {
           h.fidgetNext -= dt;
           if (h.fidgetNext <= 0) {
-            const pick = IDLE_FIDGETS[(Math.random() * IDLE_FIDGETS.length) | 0];
+            // In a TV-on room, ~45% of picks are a dance; otherwise the usual
+            // idle one-shot from the pool.
+            const pick = (danceRoom && Math.random() < 0.45)
+              ? 'dance'
+              : IDLE_FIDGETS[(Math.random() * IDLE_FIDGETS.length) | 0];
             h.fidgetKind = pick; h.fidgetT = 0;
             h.fidgetDur = (IDLE_FIDGET_DUR[pick] ?? 2.2) + Math.random() * 0.5;
             h.fidgetLog.push(pick);
@@ -8007,6 +8325,24 @@ export class ThreeDRenderer {
               const dir = h.idleOffset < Math.PI ? 1 : -1;
               yawFidget += dir * 0.55 * w;
               rollZ += dir * 0.03 * w;
+              break;
+            }
+            case 'dance': {
+              // Bop near a playing TV: arms pump up alternating L/R on the beat,
+              // hip sway + a knee-bend bounce + a little roll — all from existing
+              // channels. ~2.2 Hz. Longer envelope so the moves read as rhythmic.
+              const w = fenv(0.6);
+              const beat = now * 2.2 * 2 * Math.PI;
+              const s = Math.sin(beat);
+              lSh = bl(lSh, 1.3 + 0.9 * Math.max(0, s), w);   // left up on +beat
+              rSh = bl(rSh, 1.3 + 0.9 * Math.max(0, -s), w);  // right alternates
+              lEl = bl(lEl, 0.6, w); rEl = bl(rEl, 0.6, w);
+              const bounce = Math.abs(s);
+              lKnee = bl(lKnee, -0.28 * bounce, w);
+              rKnee = bl(rKnee, -0.28 * bounce, w);
+              lHip += 0.05 * s * w; rHip += 0.05 * s * w;     // hip sway
+              rollZ += 0.07 * s * w;
+              leanX = bl(leanX, -0.03, w);
               break;
             }
           }
@@ -8231,9 +8567,21 @@ export class ThreeDRenderer {
           h.group.add(h.blurSprite);
         }
         const spr = h.blurSprite;
-        const wantTex = this._blurTexture(sitPose);
         const sm = spr.material as THREE.SpriteMaterial;
-        if (sm.map !== wantTex) { sm.map = wantTex; sm.needsUpdate = true; }
+        // Prefer the live render-to-texture MOSAIC: display the shared target's
+        // texture and re-capture this rig at most ~4 Hz. Falls back to the
+        // static silhouette when render-target creation isn't available.
+        if (this._ensurePrivMosaic()) {
+          const rtTex = this._privRT!.texture;
+          if (sm.map !== rtTex) { sm.map = rtTex; sm.needsUpdate = true; }
+          if (now - h.privMosaicT >= 0.25) {
+            this._capturePrivMosaic(h, sitPose);
+            h.privMosaicT = now;
+          }
+        } else {
+          const wantTex = this._blurTexture(sitPose);
+          if (sm.map !== wantTex) { sm.map = wantTex; sm.needsUpdate = true; }
+        }
         const spriteH = sitPose ? 1250 : 1750;
         spr.scale.set(900, spriteH, 1);
         // Ground the sprite bottom on the walking surface (blob height is the
@@ -9615,7 +9963,7 @@ export class ThreeDRenderer {
       amp: 0, scale: 0,
       sit: 0, groundY: 0, dwell: 0, sitSpot: null, sitSpotId: null,
       activity: null, activityAnchor: null, activityDwell: 0,
-      act: 0, privacy: 0, blurSprite: null,
+      act: 0, privacy: 0, blurSprite: null, privMosaicT: 0,
       bubble: null, bubbleKind: null, bubbleWant: null, bubbleDwell: 0,
       ctxBubbleTier: null, ctxBubbleGlyph: null,
       nameSprite: null, nameText: null, nameColor: null,
@@ -10173,7 +10521,7 @@ export class ThreeDRenderer {
       amp: 0, scale: 0,
       sit: 0, groundY: 0, dwell: 0, sitSpot: null, sitSpotId: null,
       activity: null, activityAnchor: null, activityDwell: 0,
-      act: 0, privacy: 0, blurSprite: null,
+      act: 0, privacy: 0, blurSprite: null, privMosaicT: 0,
       bubble: null, bubbleKind: null, bubbleWant: null, bubbleDwell: 0,
       ctxBubbleTier: null, ctxBubbleGlyph: null,
       nameSprite: null, nameText: null, nameColor: null,
@@ -10236,7 +10584,11 @@ export class ThreeDRenderer {
         // textures) must be freed too; the blur silhouette maps are SHARED
         // across all rigs (disposed once in destroy()) so leave those alone.
         const sm = (obj as THREE.Sprite).material as THREE.SpriteMaterial;
-        if (sm.map && sm.map !== this._blurTexStand && sm.map !== this._blurTexSit) {
+        // The blur silhouette maps AND the shared privacy render-target texture
+        // are shared across rigs (disposed once in destroy()); never free them
+        // per-rig. Only per-rig canvas maps (thought bubble / name label) go.
+        if (sm.map && sm.map !== this._blurTexStand && sm.map !== this._blurTexSit &&
+            sm.map !== this._privRT?.texture) {
           sm.map.dispose();
         }
         sm.dispose();
@@ -10304,6 +10656,8 @@ export class ThreeDRenderer {
     this._cloudShadowTex?.dispose(); this._cloudShadowTex = null;
     this._puddleTex?.dispose(); this._puddleTex = null;
     this._outlineMaterial?.dispose(); this._outlineMaterial = null;
+    this._frontArrowMat?.dispose(); this._frontArrowMat = null;
+    this._disposePrivMosaic();
     this._controls?.dispose();
     if (this._renderer) {
       this._renderer.dispose();

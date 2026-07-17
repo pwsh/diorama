@@ -1,0 +1,56 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>model toon test</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<script type="module">
+  const mod = await import('./assets/three-renderer.js?v=' + Date.now());
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+
+  const objText = await (await fetch('./example.home.obj?b=' + Math.random())).text();
+  const mtlText = await (await fetch('./example.home.mtl?b=' + Math.random())).text();
+
+  const floor = {
+    id: 'f1', name: 'Home', w: 12000, d: 10000,
+    walls: [], rooms: [], furniture: [],
+    lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [], windows: [], bg: null, model3d: null, look3d: null,
+  };
+  r.updateFloor(floor, { preset: 'day', floorColor: '#6a6660', floorTex: 'none' });
+
+  const meta = { name: 'home', rev: 1, scale: 10, x: 6000, y: 5000, rotation: 0, opacity: 1, visible: true };
+  r.updateModel3D(meta, objText, mtlText);
+  r.setCameraView([9000, 7000, -9000], [0, 500, 0]);
+  if (r._renderer && r._scene && r._camera) r._renderer.render(r._scene, r._camera);
+
+  // Traverse the imported model group; every mesh material must now be a
+  // MeshToonMaterial (toon-converted), with at least one carrying a non-grey
+  // Kd color (proves the diffuse color was carried over from the MTL).
+  let meshes = 0, toon = 0, phong = 0, withMap = 0, coloredHits = 0;
+  const uuids = new Set();
+  const grp = r._modelGroup;
+  grp.traverse(o => {
+    if (!o.isMesh || !o.material) return;
+    const mats = Array.isArray(o.material) ? o.material : [o.material];
+    for (const m of mats) {
+      meshes++;
+      uuids.add(m.uuid);
+      if (m.type === 'MeshToonMaterial') toon++;
+      else if (m.type === 'MeshPhongMaterial') phong++;
+      if (m.map) withMap++;
+      // A tinted (non-neutral) diffuse proves Kd carried over. wall_1_3 =
+      // (0.82,0.61,0.61) etc. Count materials whose channels differ noticeably.
+      const c = m.color;
+      if (c && Math.max(Math.abs(c.r - c.g), Math.abs(c.g - c.b), Math.abs(c.r - c.b)) > 0.05) coloredHits++;
+    }
+  });
+  // Shared MTL entries collapse to shared toon materials: fewer unique material
+  // uuids than mesh-material references.
+  const shared = uuids.size <= meshes;
+  const pass = meshes > 0 && phong === 0 && toon === meshes && coloredHits > 0 && shared;
+  document.title = `MODEL-TOON ${pass ? 'PASS' : 'FAIL'} ` +
+    `meshes=${meshes} toon=${toon} phong=${phong} maps=${withMap} ` +
+    `colored=${coloredHits} uniqueMats=${uuids.size}`;
+  window.__DUMP = document.title;
+</script>

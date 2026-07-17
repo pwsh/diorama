@@ -1,4 +1,4 @@
-import { snap, snapVertex15, distMM, worldToLocal, localToWorld, FURNITURE_KINDS, furnitureCorners, furnitureLocalToWorld, furnitureWorldToLocal, resolveFurnitureDef, resolveFurnitureWallCollision, resolveSeatTableCollision, snapStepLightToSurface, snapFireplaceToWall, snapFloodlightToWall, snapSwitchToWall, snapAlarmToWall, isBinKind, nearestAlign, envScale, ENV_SCALE_MIN, ENV_SCALE_MAX, GRID_MM, floorContentBbox, resolveFloorEdgeDrag } from './geometry.js';
+import { snap, snapVertex15, distMM, worldToLocal, localToWorld, FURNITURE_KINDS, furnitureCorners, furnitureLocalToWorld, furnitureWorldToLocal, resolveFurnitureDef, resolveFurnitureWallCollision, resolveSeatTableCollision, seatBelongsToTable, snapStepLightToSurface, snapFireplaceToWall, snapFloodlightToWall, snapSwitchToWall, snapAlarmToWall, isBinKind, nearestAlign, envScale, ENV_SCALE_MIN, ENV_SCALE_MAX, GRID_MM, floorContentBbox, resolveFloorEdgeDrag } from './geometry.js';
 import { newId } from './storage.js';
 import {
   pxToMm, type View,
@@ -103,6 +103,32 @@ function snapFurnitureToSurface(f: { furniture: Furniture[] }, piece: Furniture,
     }
   }
   if (piece.mountOnId) { piece.mountOnId = null; piece.elevation = 0; }
+}
+
+// Reverse of `resolveSeatTableCollision`: when a table/desk finishes a MOVE
+// drag, carry the chairs that were tucked to its OLD position along by the same
+// delta so a dining set moves as a unit. Host predicate matches the seat-resolve
+// (a def whose `activity` is 'eat_at_table' | 'work_at_desk' — tables/desks/
+// picnic tables, NOT counters/islands). Chair predicate matches the forward path
+// (seat-bearing def). Locked chairs stay put. Release-time only. `oldPos` is the
+// table's position at drag start; the table's CURRENT x/y is its settled spot.
+function carryTuckedSeatsWithTable(f: { furniture: Furniture[] }, table: Furniture,
+                                   oldPos: { x: number; y: number },
+                                   customObjects?: ObjectRecipe[]): void {
+  const act = resolveFurnitureDef(table, customObjects).activity;
+  if (act !== 'eat_at_table' && act !== 'work_at_desk') return;
+  const dx = table.x - oldPos.x, dy = table.y - oldPos.y;
+  if (dx === 0 && dy === 0) return;
+  for (const chair of f.furniture) {
+    if (chair.id === table.id || chair.locked) continue;
+    if (!resolveFurnitureDef(chair, customObjects).seat) continue;
+    // Was this seat tucked to the table's OLD position?
+    if (!seatBelongsToTable(oldPos.x, oldPos.y, table.rotation, table.w, table.h,
+                            chair.x, chair.y)) continue;
+    chair.x += dx; chair.y += dy;
+    // Re-settle against the table's new position (keeps the tuck clearance clean).
+    resolveSeatTableCollision(chair, f.furniture, customObjects);
+  }
 }
 
 const SENSOR_DEFAULTS = { fov: 120, range: 6000 };
@@ -632,6 +658,12 @@ export function onCanvasMouseMove(p: Planner, canvas: HTMLCanvasElement, view: V
   if (p.drag) {
     const f = p.floor();
     const drag = p.drag;
+    // Live-parent: remember a moved surface host's pre-frame position so its
+    // mounted pieces can follow the EXACT frame delta (computed after the align
+    // snap below, so they stay glued while the host snaps to a guide).
+    const furnHostPrev = drag.kind === 'furnMove'
+      ? (() => { const it = f.furniture[drag.idx]; return it ? { x: it.x, y: it.y } : null; })()
+      : null;
     switch (drag.kind) {
       case 'sensor': {
         const s = f.sensors.find(x => x.id === drag.id);
@@ -973,6 +1005,20 @@ export function onCanvasMouseMove(p: Planner, canvas: HTMLCanvasElement, view: V
       const it = draggedMoveItem(f, drag);
       if (it) applyAlignSnap(p, it, view.scale);
     }
+    // Live-parent: a moved surface host carries its mounted pieces by the exact
+    // frame delta (post align-snap). Locked mounted pieces stay put and keep
+    // their mountOnId (they re-snap on their next drag).
+    if (furnHostPrev && drag.kind === 'furnMove') {
+      const host = f.furniture[drag.idx];
+      if (host && !host.locked && resolveFurnitureDef(host, p.store.customObjects).surface) {
+        const fdx = host.x - furnHostPrev.x, fdy = host.y - furnHostPrev.y;
+        if (fdx !== 0 || fdy !== 0) {
+          for (const m of f.furniture) {
+            if (m.mountOnId === host.id && !m.locked) { m.x += fdx; m.y += fdy; }
+          }
+        }
+      }
+    }
     return;
   }
 
@@ -1192,6 +1238,20 @@ export function onCanvasMouseUp(p: Planner, canvas: HTMLCanvasElement): void {
           resolveFurnitureWallCollision(piece, f.walls);
           // Then keep a tucked seat from sinking into the tabletop it serves.
           resolveSeatTableCollision(piece, f.furniture, p.store.customObjects);
+        }
+        if (drag.kind === 'furnMove') {
+          // Group-move: a moved table/desk carries the chairs tucked to it.
+          carryTuckedSeatsWithTable(f, piece, drag.start, p.store.customObjects);
+          // Live-parent: re-settle a moved surface host's mounted pieces onto
+          // its top (they followed the host live; this re-affirms elevation /
+          // mountOnId). Locked mounted pieces stayed put — skip them.
+          if (resolveFurnitureDef(piece, p.store.customObjects).surface) {
+            for (const m of f.furniture) {
+              if (m.mountOnId === piece.id && !m.locked) {
+                snapFurnitureToSurface(f, m, p.store.customObjects);
+              }
+            }
+          }
         }
       }
     }

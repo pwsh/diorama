@@ -1,0 +1,223 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>idle activity test</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<script type="module">
+  // Deterministic harness for the three ambient idle activities:
+  //   (1) warm hands at a LIT fireplace LIGHT (anchor active only while ON),
+  //   (2) DANCE near a playing TV (a fidget one-shot, gated to TV-on rooms,
+  //       never fires while seated so it can't fight watch_tv),
+  //   (3) WINDOW GAZING (a low-key act-blend facing the wall).
+  // A synthesized performance.now clock keeps every animation state repeatable.
+  const q = new URLSearchParams(location.search);
+  const test = q.get('test') || 'run';
+  const mod = await import('./assets/three-renderer.js?v=' + (q.get('v') || ''));
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+
+  const FW = 8000, FD = 6000;
+  const SCENE3D = { preset: 'day', floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6' };
+  const perim = { id: 'perim', points: [{x:200,y:200},{x:7800,y:200},{x:7800,y:5800},{x:200,y:5800},{x:200,y:200}] };
+  const baseFloor = (over) => Object.assign({
+    id: 'f1', name: 'Room', w: FW, d: FD,
+    walls: [perim], furniture: [], lights: [], switches: [], sensors: [],
+    motionSensors: [], envSensors: [], doors: [], windows: [],
+    bg: null, model3d: null, look3d: null, rooms: [],
+  }, over);
+
+  const realNow = performance.now.bind(performance);
+  let fakeNow = realNow();
+  performance.now = () => fakeNow;
+  const DT = 16.7;
+  const advance = (secs, targets, ctx) => {
+    const frames = Math.round(secs * 1000 / DT);
+    for (let i = 0; i < frames; i++) { fakeNow += DT; r.updateTargets(targets, ctx); }
+  };
+  const s2w = (a) => r._sceneToWorld(a.x, a.z);   // anchor scene → target world
+
+  // ── (1) Fireplace: build the floor, find the warm_hands anchor, park a rig on
+  // it. ON gate → engages + arms raise; OFF gate → nothing.
+  function fireplace() {
+    r.clearTransientGroups();
+    const light = { id: 'fp1', x: 4000, y: 300, entity_id: null, iconKind: 'fireplace', rotation: 180 };
+    r.updateFloor(baseFloor({ lights: [light],
+      rooms: [{ id: 'rm1', name: 'Living Room', anchor: { x: 4000, y: 3000 } }] }), SCENE3D);
+    const a = r._activityAnchors.find(x => x.kind === 'warm_hands');
+    const anchorBuilt = !!a && a.lightId === 'fp1';
+    const w = a ? s2w(a) : { x: 4000, y: 1200 };
+    const KEY = 'fire';
+    const TGT = { key: KEY, x: w.x, y: w.y, color: 0xffb74d };
+
+    // ON: fireplace lit → warm-hands pose engages.
+    advance(5, [TGT], { entityOn: {}, roomNames: {}, timeBucket: 'day', fireplaceOn: { fp1: true } });
+    const h = r._humanoids[KEY];
+    const onEngaged = !!h && h.activity === 'warm_hands' && h.act > 0.5;
+    const armsUp = !!h && h.leftShoulder.rotation.x > 0.8 && h.rightShoulder.rotation.x > 0.8;
+
+    // OFF: put out the fire → the rig eases back out and never re-engages.
+    advance(6, [TGT], { entityOn: {}, roomNames: {}, timeBucket: 'day', fireplaceOn: { fp1: false } });
+    const offReleased = !!h && h.activity == null && h.act < 0.1;
+
+    return { anchorBuilt, onEngaged, armsUp, offReleased,
+      facing: a ? +a.facing.toFixed(3) : null,
+      shL: h ? +h.leftShoulder.rotation.x.toFixed(2) : null,
+      shR: h ? +h.rightShoulder.rotation.x.toFixed(2) : null,
+      actOn: h ? +h.act.toFixed(2) : null };
+  }
+
+  // ── (2) Dance near a playing TV. A bound, ON TV in the rig's room makes the
+  // fidget picker eligible to roll `dance`. Force it by stubbing Math.random→0.
+  function dance() {
+    r.clearTransientGroups();
+    const realRand = Math.random;
+    Math.random = () => 0;   // fidgetNext=8, always < 0.45 → dance when eligible
+    const tv = { id: 'tv1', x: 4000, y: 400, w: 1200, h: 200, kind: 'tv', rotation: 180, entity_id: 'media_player.tv' };
+    r.updateFloor(baseFloor({ furniture: [tv],
+      rooms: [{ id: 'rm1', name: 'Den', anchor: { x: 4000, y: 3000 } }] }), SCENE3D);
+    const KEY = 'dance';
+    // Standing in the middle of the TV room (no seat nearby → stays standing).
+    const TGT = { key: KEY, x: 4000, y: 3000, color: 0x81c784 };
+    const ctx = { entityOn: { tv1: true }, roomNames: { rm1: 'Den' }, timeBucket: 'day' };
+    // Long enough for dwell>2 then the ~8 s fidget timer to fire and hold.
+    let sawDance = false, danceShoulderMax = 0, everSeatedFidget = false;
+    const frames = Math.round(16 * 1000 / DT);
+    for (let i = 0; i < frames; i++) {
+      fakeNow += DT; r.updateTargets([TGT], ctx);
+      const h = r._humanoids[KEY];
+      if (h && h.fidgetKind === 'dance') {
+        sawDance = true;
+        danceShoulderMax = Math.max(danceShoulderMax, h.leftShoulder.rotation.x, h.rightShoulder.rotation.x);
+      }
+    }
+    const h = r._humanoids[KEY];
+    const danceFired = sawDance && h && h.fidgetLog.includes('dance');
+    const danceArms = danceShoulderMax > 1.0;
+    Math.random = realRand;
+    return { danceFired, danceArms, danceShoulderMax: +danceShoulderMax.toFixed(2),
+      fidgetLog: h ? h.fidgetLog.slice(0, 6) : [] };
+  }
+
+  // ── (2b) Never dances while SEATED: same TV-on room, but a sofa the rig sits
+  // on. Seated → idleStanding is false, so no fidget ever picks; watch_tv owns it.
+  function danceSeatedNegative() {
+    r.clearTransientGroups();
+    const realRand = Math.random;
+    Math.random = () => 0;
+    const tv = { id: 'tv2', x: 4000, y: 400, w: 1200, h: 200, kind: 'tv', rotation: 180, entity_id: 'media_player.tv' };
+    const sofa = { id: 'sofa1', x: 4000, y: 3000, w: 1400, h: 900, kind: 'sofa', rotation: 0 };
+    r.updateFloor(baseFloor({ furniture: [tv, sofa],
+      rooms: [{ id: 'rm1', name: 'Den', anchor: { x: 4000, y: 3000 } }] }), SCENE3D);
+    const sp = r._sitSpots[0];
+    const w = sp ? s2w(sp) : { x: 4000, y: 3000 };
+    const KEY = 'seat';
+    const TGT = { key: KEY, x: w.x, y: w.y, color: 0x81c784 };   // raw on the cushion
+    const ctx = { entityOn: { tv2: true }, roomNames: { rm1: 'Den' }, timeBucket: 'day' };
+    let fidgetWhileSeated = false;
+    const frames = Math.round(18 * 1000 / DT);
+    for (let i = 0; i < frames; i++) {
+      fakeNow += DT; r.updateTargets([TGT], ctx);
+      const h = r._humanoids[KEY];
+      if (h && h.sit > 0.6 && h.fidgetKind != null) fidgetWhileSeated = true;
+    }
+    const h = r._humanoids[KEY];
+    Math.random = realRand;
+    const seated = !!h && h.sit > 0.9;
+    const watching = !!h && h.activity === 'watch_tv';
+    const noSeatedFidget = !fidgetWhileSeated && (!h || h.fidgetLog.indexOf('dance') === -1);
+    return { seated, watching, noSeatedFidget, sit: h ? +h.sit.toFixed(2) : null };
+  }
+
+  // ── (3) Window gazing: window on the south wall, gaze anchor 600 mm inside,
+  // facing the glass. Park a rig on the anchor → gaze pose engages, faces the wall.
+  function windowGaze() {
+    r.clearTransientGroups();
+    const win = { id: 'w1', x: 4000, y: 200, w: 1400, rotation: 0, entity_id: null, kind: 'picture' };
+    r.updateFloor(baseFloor({ windows: [win],
+      rooms: [{ id: 'rm1', name: 'Study', anchor: { x: 4000, y: 3000 } }] }), SCENE3D);
+    const a = r._activityAnchors.find(x => x.kind === 'gaze_window');
+    const anchorBuilt = !!a;
+    const w = a ? s2w(a) : { x: 4000, y: 800 };
+    const KEY = 'gaze';
+    const TGT = { key: KEY, x: w.x, y: w.y, color: 0x90caf9 };
+    advance(5, [TGT], { entityOn: {}, roomNames: {}, timeBucket: 'day' });
+    const h = r._humanoids[KEY];
+    const engaged = !!h && h.activity === 'gaze_window' && h.act > 0.5;
+    // Anchor faces the wall (south wall → facing ≈ 0 in scene yaw); the rig eases
+    // its body to anchor.facing.
+    const facesWall = !!h && !!a && Math.abs(h.facing - a.facing) < 0.2;
+    const handUp = !!h && h.rightShoulder.rotation.x > 0.55;
+    return { anchorBuilt, engaged, facesWall, handUp,
+      anchorFacing: a ? +a.facing.toFixed(3) : null,
+      rigFacing: h ? +h.facing.toFixed(3) : null,
+      shR: h ? +h.rightShoulder.rotation.x.toFixed(2) : null,
+      anchorWorld: a ? { x: Math.round(w.x), y: Math.round(w.y) } : null };
+  }
+
+  if (test === 'run') {
+    const f = fireplace();
+    const d = dance();
+    const ds = danceSeatedNegative();
+    const g = windowGaze();
+    const checks = {
+      fire_anchor: f.anchorBuilt,
+      fire_engage: f.onEngaged,
+      fire_arms: f.armsUp,
+      fire_off: f.offReleased,
+      dance_fires: d.danceFired,
+      dance_arms: d.danceArms,
+      dance_seated: ds.seated && ds.watching,
+      dance_never_seated: ds.noSeatedFidget,
+      gaze_anchor: g.anchorBuilt,
+      gaze_engage: g.engaged,
+      gaze_faces_wall: g.facesWall,
+      gaze_hand: g.handUp,
+    };
+    const n = Object.keys(checks).length;
+    const passed = Object.values(checks).filter(Boolean).length;
+    const fails = Object.entries(checks).filter(([, v]) => !v).map(([k]) => k);
+    window.__RESULT__ = { checks, f, d, ds, g };
+    document.title = `IDLEACT ${passed === n ? 'PASS' : 'FAIL'} ${passed}/${n}` +
+      (fails.length ? ` fails=[${fails.join(',')}]` : '') +
+      ` | fire{eng=${f.onEngaged},arms=${f.armsUp}(${f.shL}/${f.shR}),off=${f.offReleased}}` +
+      ` dance{fire=${d.danceFired},arms=${d.danceArms}(${d.danceShoulderMax}),neverSeated=${ds.noSeatedFidget}}` +
+      ` gaze{eng=${g.engaged},wall=${g.facesWall}(${g.rigFacing}/${g.anchorFacing})}`;
+  } else if (test === 'shot_fire') {
+    // Freeze mid warm-hands for a still.
+    r.clearTransientGroups();
+    const light = { id: 'fp1', x: 4000, y: 300, entity_id: null, iconKind: 'fireplace', rotation: 180 };
+    r.updateFloor(baseFloor({ lights: [light], rooms: [{ id: 'rm1', name: 'Living Room', anchor: { x: 4000, y: 3000 } }] }), SCENE3D);
+    const a = r._activityAnchors.find(x => x.kind === 'warm_hands');
+    const w = s2w(a);
+    advance(5, [{ key: 'fire', x: w.x, y: w.y, color: 0xffb74d }], { entityOn: {}, roomNames: {}, timeBucket: 'day', fireplaceOn: { fp1: true } });
+    r.applyViewPreset('iso');
+    document.title = 'SHOT fire';
+  } else if (test === 'shot_dance') {
+    r.clearTransientGroups();
+    Math.random = () => 0;
+    const tv = { id: 'tv1', x: 4000, y: 400, w: 1200, h: 200, kind: 'tv', rotation: 180, entity_id: 'media_player.tv' };
+    r.updateFloor(baseFloor({ furniture: [tv], rooms: [{ id: 'rm1', name: 'Den', anchor: { x: 4000, y: 3000 } }] }), SCENE3D);
+    const KEY = 'dance', TGT = { key: KEY, x: 4000, y: 3000, color: 0x81c784 };
+    const ctx = { entityOn: { tv1: true }, roomNames: { rm1: 'Den' }, timeBucket: 'day' };
+    // Step until a dance is mid-swing (arm up).
+    const frames = Math.round(20 * 1000 / DT);
+    for (let i = 0; i < frames; i++) {
+      fakeNow += DT; r.updateTargets([TGT], ctx);
+      const h = r._humanoids[KEY];
+      if (h && h.fidgetKind === 'dance' && h.fidgetT > 0.8 &&
+          Math.max(h.leftShoulder.rotation.x, h.rightShoulder.rotation.x) > 1.6) break;
+    }
+    r.applyViewPreset('iso');
+    document.title = 'SHOT dance';
+  } else if (test === 'shot_gaze') {
+    r.clearTransientGroups();
+    const win = { id: 'w1', x: 4000, y: 200, w: 1400, rotation: 0, entity_id: null, kind: 'picture' };
+    r.updateFloor(baseFloor({ windows: [win], rooms: [{ id: 'rm1', name: 'Study', anchor: { x: 4000, y: 3000 } }] }), SCENE3D);
+    const a = r._activityAnchors.find(x => x.kind === 'gaze_window');
+    const w = s2w(a);
+    advance(5, [{ key: 'gaze', x: w.x, y: w.y, color: 0x90caf9 }], { entityOn: {}, roomNames: {}, timeBucket: 'day' });
+    r.applyViewPreset('iso');
+    document.title = 'SHOT gaze';
+  }
+  performance.now = realNow;
+</script>

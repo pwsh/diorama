@@ -1514,9 +1514,10 @@ export function resolveFurnitureWallCollision(
 // the center rests on the host edge + 150 mm outward — a seated torso extends
 // ~70 mm forward of the root (TORSO_D 140) with the belly toward the table, so
 // a mere edge-touch still buried the stomach in the slab. Only the DRAGGED seat
-// moves (matches the drag-the-seat UX); dragging a table onto chairs is out of
-// scope — the table has no `seat`, so this no-ops on it, leaving those seats
-// swallowed. Counters / islands are intentionally NOT hosts (only eat/work).
+// moves here (matches the drag-the-seat UX); this no-ops on a table (no `seat`).
+// The REVERSE — dragging a table carries its tucked chairs — is handled by the
+// caller via `seatBelongsToTable` + a delta translate (see canvas-interact).
+// Counters / islands are intentionally NOT hosts (only eat/work).
 // Runs after resolveFurnitureWallCollision at the same two hooks; the caller's
 // `!piece.locked` guard keeps locked seats put. Mutates piece.x/y; returns
 // whether it moved.
@@ -1556,6 +1557,24 @@ export function resolveSeatTableCollision(
   }
   if (movedAny) { piece.x = Math.round(piece.x); piece.y = Math.round(piece.y); }
   return movedAny;
+}
+
+// Reverse of the seat-tuck: does a seat "belong to" a table for group-move?
+// True when the seat CENTER (world) lies within the host's rotation-aware
+// footprint inflated by captureMm — i.e. it's tucked to (or right beside) the
+// table. `resolveSeatTableCollision` parks a tucked seat's center at the host
+// edge + SEAT_TUCK_CLEAR_MM (150), so TABLE_CARRY_MARGIN_MM (450) comfortably
+// captures a tucked chair plus slack without grabbing chairs across the room.
+// The caller measures against the table's OLD position so dragging a dining
+// table carries only the chairs that were actually set at it. Pure.
+export const TABLE_CARRY_MARGIN_MM = 450;
+export function seatBelongsToTable(
+  hostX: number, hostY: number, hostRotation: number | undefined,
+  hostW: number, hostH: number,
+  seatX: number, seatY: number, captureMm = TABLE_CARRY_MARGIN_MM,
+): boolean {
+  const l = furnitureWorldToLocal(hostRotation, seatX - hostX, seatY - hostY);
+  return Math.abs(l.x) <= hostW / 2 + captureMm && Math.abs(l.y) <= hostH / 2 + captureMm;
 }
 
 // Clip a simple polygon `loop` against the convex quad `rect` (Sutherland–

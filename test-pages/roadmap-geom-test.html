@@ -27,6 +27,7 @@
       pointInPolygon, presenceZoneColor, PRESENCE_ZONE_DEFAULTS,
       cameraFov, cameraRange, cameraHeight, cameraStateColor, CAMERA_DEFAULTS,
       hexToInt,
+      resolveSeatTableCollision, seatBelongsToTable, TABLE_CARRY_MARGIN_MM,
     } from './geometry.mod.js';
 
     const tests = [];
@@ -107,6 +108,37 @@
 
     // hexToInt round-trips a camera state color (used for the 3D wedge material).
     ok('hexToInt(#ef5350) = 0xef5350', hexToInt('#ef5350') === 0xef5350, hexToInt('#ef5350').toString(16));
+
+    // ── Seat ↔ table group-move (table-drag carries tucked chairs) ───────────
+    // Forward tuck: a chair dropped ON a desk is pushed to the near edge + 150.
+    const desk = { id:'desk', x:0, y:0, rotation:0, w:1400, h:700, kind:'desk' };
+    const chair = { id:'c', x:0, y:100, rotation:0, w:500, h:500, kind:'chair' };
+    resolveSeatTableCollision(chair, [desk, chair]);
+    ok('seat-tuck: chair pushed to desk edge+150',
+       near(chair.x, 0, 1) && near(chair.y, 350 + 150, 1), `(${chair.x},${chair.y})`);
+    // That tucked chair now "belongs" to the desk for group-move.
+    ok('carry: tucked chair belongs to desk',
+       seatBelongsToTable(desk.x, desk.y, desk.rotation, desk.w, desk.h, chair.x, chair.y) === true);
+    // A chair across the room does NOT get carried.
+    ok('carry: far chair not carried',
+       seatBelongsToTable(0, 0, 0, 1400, 700, 0, 2000) === false);
+    // Capture boundary = half-depth + TABLE_CARRY_MARGIN_MM, inclusive.
+    ok('carry: TABLE_CARRY_MARGIN_MM = 450', TABLE_CARRY_MARGIN_MM === 450);
+    ok('carry: capture boundary inclusive',
+       seatBelongsToTable(0, 0, 0, 1400, 700, 0, 350 + 450) === true);
+    ok('carry: just past boundary excluded',
+       seatBelongsToTable(0, 0, 0, 1400, 700, 0, 350 + 451) === false);
+    // Group move: shift the desk +2000 in x, translate the belonging chair by the
+    // same delta, re-resolve — the chair keeps the SAME relative tuck offset.
+    const dx = 2000, dy = 0;
+    const before = { x: chair.x, y: chair.y };
+    desk.x += dx; desk.y += dy;
+    chair.x += dx; chair.y += dy;
+    resolveSeatTableCollision(chair, [desk, chair]);
+    ok('carry: chair follows desk delta',
+       near(chair.x, before.x + dx, 1) && near(chair.y, before.y + dy, 1), `(${chair.x},${chair.y})`);
+    ok('carry: relative tuck preserved',
+       near(chair.y - desk.y, 350 + 150, 1), (chair.y - desk.y).toFixed(0));
 
     // ── run + report ────────────────────────────────────────────────────────
     const grid = document.getElementById('grid');

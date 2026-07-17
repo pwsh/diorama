@@ -1,0 +1,60 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>ghost layers test</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<script type="module">
+  const mod = await import('./assets/three-renderer.js?v=' + Date.now());
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+  const fu = (kind, x, y, w, h, rot = 0) => ({ id: kind + x + '_' + y, x, y, w, h, kind, rotation: rot });
+
+  const ground = {
+    id: 'g', name: 'Ground', w: 10000, d: 8000,
+    walls: [{ id: 'gw', points: [
+      {x:500,y:500},{x:9500,y:500},{x:9500,y:7500},{x:500,y:7500},{x:500,y:500} ] }],
+    furniture: [ fu('sofa', 6500, 2000, 2000, 900) ],
+    lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [], windows: [], bg: null, model3d: null, look3d: null, rooms: [],
+  };
+  // Upper (ghost) floor: 2 plain furniture + 1 appliance (fridge) + 1 bin.
+  const upper = {
+    id: 'u', name: 'Upper', w: 10000, d: 8000,
+    walls: [{ id: 'uw', points: [
+      {x:2500,y:2000},{x:7500,y:2000},{x:7500,y:6000},{x:2500,y:6000},{x:2500,y:2000} ] }],
+    furniture: [
+      fu('bed', 5000, 4000, 2000, 1500),
+      fu('dresser', 3000, 2400, 1000, 500),
+      fu('fridge', 6800, 2400, 910, 760),        // appliance cat
+      fu('trash_bin', 6800, 5600, 600, 700),     // rides appliances
+    ],
+    lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [], windows: [], bg: null, model3d: null, look3d: null, rooms: [],
+  };
+  const scene3d = { preset: 'day', floorColor: '#8a7860', floorTex: 'wood',
+                    wallColor: '#cfd2d6', glassHouse: true, wallCutaway: false };
+
+  const countMeshes = () => {
+    let n = 0;
+    r._ghostGroup.traverse(o => { if (o.isMesh) n++; });
+    return n;
+  };
+  const build = (layers) => { r.updateGhostFloors([ground, upper], 'g', scene3d, [], layers); return countMeshes(); };
+
+  const all       = build({});                                    // furniture=2, appliances=2
+  const noFurn    = build({ furniture: false });                  // drops bed + dresser
+  const noAppl    = build({ appliances: false });                 // drops fridge + trash_bin
+  const noBoth    = build({ furniture: false, appliances: false });// drops all 4
+  const slabsWalls = noBoth;                                      // only slab + walls remain
+
+  // furniture layer off drops exactly the 2 non-appliance boxes; appliances off
+  // drops the fridge + bin; both off drops all 4. Slabs + walls always draw.
+  const dFurn = all - noFurn;
+  const dAppl = all - noAppl;
+  const dBoth = all - noBoth;
+  const pass = all > slabsWalls && dFurn === 2 && dAppl === 2 && dBoth === 4;
+  document.title = `GHOST-LAYERS ${pass ? 'PASS' : 'FAIL'} ` +
+    `all=${all} noFurn=${noFurn}(-${dFurn}) noAppl=${noAppl}(-${dAppl}) ` +
+    `noBoth=${noBoth}(-${dBoth}) slabWalls=${slabsWalls}`;
+  window.__DUMP = document.title;
+</script>

@@ -1,0 +1,62 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>privacy mosaic test</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<script type="module">
+  const mod = await import('./assets/three-renderer.js?v=' + Date.now());
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+  const fu = (id, kind, x, y, w, h, rot = 0) => ({ id, x, y, w, h, kind, rotation: rot });
+  const floor = {
+    id: 'f1', name: 'Bath', w: 8000, d: 5000,
+    walls: [{ id: 'w1', points: [
+      {x:200,y:200},{x:7800,y:200},{x:7800,y:4800},{x:200,y:4800},{x:200,y:200}] }],
+    rooms: [{ id: 'rm1', name: 'Bathroom', anchor: {x: 4000, y: 2500} }],
+    furniture: [
+      fu('shower1', 'shower', 1400, 1000, 910, 910, 0),
+      fu('toilet1', 'toilet', 6800, 1000, 480, 700, 0),
+    ],
+    lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [], windows: [], bg: null, model3d: null, look3d: null,
+  };
+  r.updateFloor(floor, { preset: 'dusk', floorColor: '#6a6660', floorTex: 'tile', wallColor: '#cfd2d6' });
+  // Frame the shower rig (world 1400,1000 → scene ≈ (2600, y, -1500)) so the
+  // mosaic censor sprite is visible in the still.
+  r.setCameraView([2600, 1500, -4600], [2600, 850, -1500]);
+  const ctx = { entityOn: {}, roomNames: { rm1: 'Bathroom' }, timeBucket: 'day' };
+  const parked = [
+    { key: 'shwr', x: 1400, y: 1000, color: 0x4fc3f7 },
+    { key: 'wc',   x: 6800, y: 1050, color: 0xba68c8 },
+  ];
+
+  // Spy on the mosaic capture to count how often it fires (throttle check).
+  let captures = 0;
+  const origCap = r._capturePrivMosaic.bind(r);
+  r._capturePrivMosaic = (h, sit) => { captures++; origCap(h, sit); };
+
+  const realNow = performance.now.bind(performance);
+  let fakeNow = realNow();
+  performance.now = () => fakeNow;
+  const FRAMES = 480;                         // 480 * 16.7ms ≈ 8.0 s of fake time
+  for (let i = 0; i < FRAMES; i++) { fakeNow += 16.7; r.updateTargets(parked, ctx); }
+  performance.now = realNow;
+
+  const hs = r._humanoids ?? {};
+  const shwr = hs['shwr'];
+  const spr = shwr?.blurSprite;
+  const map = spr?.material?.map;
+  const mosaicOK = r._privMosaicOK && !!r._privRT;
+  const isRT = mosaicOK ? (map === r._privRT.texture && map?.isRenderTargetTexture === true)
+                        : (map === r._blurTexStand || map === r._blurTexSit); // static fallback
+  const priv = shwr ? shwr.privacy : 0;
+  // Throttle: at ~4 Hz over the window each of 2 privacy rigs re-captures far
+  // fewer times than the per-frame count. Privacy engages partway in, so a
+  // generous upper bound (<= 120 = FRAMES/4) proves it isn't per-frame.
+  const throttled = captures > 0 && captures <= FRAMES / 4;
+  const pass = priv > 0.9 && isRT && throttled;
+  document.title = `PRIVACY-MOSAIC ${pass ? 'PASS' : 'FAIL'} ` +
+    `priv=${priv.toFixed(2)} mosaic=${mosaicOK} isRT=${isRT} ` +
+    `captures=${captures}/${FRAMES}`;
+  window.__DUMP = document.title;
+</script>

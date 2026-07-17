@@ -18,7 +18,7 @@ import {
 } from './geometry.js';
 import { compass8 } from './geo.js';
 import type { Planner } from './planner.js';
-import type { Vec2, LightIconKind, Furniture, ObjectRecipe, HassState } from './types.js';
+import type { Vec2, LightIconKind, Furniture, ObjectRecipe, RecipePrimitive, HassState } from './types.js';
 
 // Default per-target color palette (kept for back-compat; actual color now
 // comes from sensorColor(s, idx)).
@@ -2040,13 +2040,64 @@ function drawFurniturePrimitiveLocal(
   // unchanged. Glyphs that hardcode a material (porcelain white, steel) opt out.
   const bodyFill = (fallback: string, alpha: number) =>
     piece.color ? hexToRgba(piece.color, alpha) : fallback;
-  // Custom object recipes draw as a generic rect tinted by the recipe color
-  // (grey when the recipe is missing). The piece label is drawn by the caller.
+  // Custom object recipes: a top-down projection of the recipe's primitives.
+  // Each primitive draws its plan footprint (box → rotated rect; cylinder /
+  // cone / sphere → circle) at its local x/z offset — local +X → canvas +X,
+  // local +Z = world +Y = the BACK edge, which the canvas Y-flip puts at
+  // canvas -Y (the SAME numeric local frame the 3D `_buildFromRecipe` uses).
+  // The piece rotation is already applied by the caller's ctx.rotate; a
+  // primitive's own Y-rotation spins its own footprint in place. Parts paint
+  // bottom-up (by vertical center) so taller / upper parts draw over lower
+  // ones. Falls back to the labeled rect when the recipe carries no primitives.
   if (piece.customKindId) {
     const rec = customObjects?.find(o => o.id === piece.customKindId);
-    const hex = piece.color ?? ('#' + ((rec?.color ?? 0x8a8a8a) & 0xffffff).toString(16).padStart(6, '0'));
-    fill(hexToRgba(hex, 0.5));
-    stroke(hex);
+    const defHex = piece.color ?? ('#' + ((rec?.color ?? 0x8a8a8a) & 0xffffff).toString(16).padStart(6, '0'));
+    const prims = rec?.primitives;
+    if (!prims || prims.length === 0) {
+      fill(hexToRgba(defHex, 0.5));
+      stroke(defHex);
+      return;
+    }
+    // mm → px (uniform scale; recovered from the px half-extents the caller
+    // already derived from view.scale, so `view` needn't be threaded in).
+    const sc = piece.w ? (halfW * 2) / piece.w : (piece.h ? (halfH * 2) / piece.h : 1);
+    // Vertical center used ONLY for paint order: pos.y + half the part height.
+    const vmid = (pr: RecipePrimitive): number => {
+      const [a, b, c] = pr.size;
+      const hh = pr.shape === 'cylinder' ? c / 2
+        : pr.shape === 'sphere' ? a
+        : b / 2;                       // box / cone: height is size[1]
+      return pr.pos[1] + hh;
+    };
+    const order = prims.map((_, i) => i).sort((i, j) => vmid(prims[i]) - vmid(prims[j]));
+    ctx.lineWidth = 1;
+    for (const idx of order) {
+      const pr = prims[idx];
+      const [a, b, c] = pr.size;
+      const cx = pr.pos[0] * sc;
+      const cy = -pr.pos[2] * sc;       // +Z (back) → canvas up
+      const pc = pr.color ?? defHex;    // primitive color, else the piece/recipe tint
+      ctx.fillStyle = hexToRgba(pc, 0.5);
+      ctx.strokeStyle = pc;
+      if (pr.shape === 'box') {
+        const bw = a * sc, bd = c * sc; // footprint = size[0] (X) × size[2] (Z)
+        const theta = pr.rot ? pr.rot[1] * Math.PI / 180 : 0;  // primitive yaw
+        ctx.save();
+        ctx.translate(cx, cy);
+        if (theta) ctx.rotate(theta);
+        ctx.fillRect(-bw / 2, -bd / 2, bw, bd);
+        ctx.strokeRect(-bw / 2, -bd / 2, bw, bd);
+        ctx.restore();
+      } else {
+        // cylinder [rTop,rBot,ht] / cone [r,ht] / sphere [r] → plan circle.
+        const rmm = pr.shape === 'cylinder' ? Math.max(a, b) : a;
+        const rr = Math.max(0.5, rmm * sc);
+        ctx.beginPath();
+        ctx.arc(cx, cy, rr, 0, 2 * Math.PI);
+        ctx.fill();
+        ctx.stroke();
+      }
+    }
     return;
   }
   // "+Y side" (the implied front of the piece) is the TOP edge in canvas px

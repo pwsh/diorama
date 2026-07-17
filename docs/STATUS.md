@@ -88,6 +88,32 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Deferral-clearing batch** (2026-07-17; 4 Opus agents in two waves +
+  a live Open-Meteo smoke test): table-drag carries tucked chairs
+  (`seatBelongsToTable`, 450 mm capture, release-time re-tuck; locked
+  chairs stay); mounted pieces live-parent (per-frame delta follow incl.
+  align-snaps + release re-settle; locked mounted skip; furniture has no
+  rotate-handle so no rotate branch); 2D custom recipes render top-down
+  primitive projections (box→rotated rect, round→ellipse, sorted by
+  vertical center; labeled-rect fallback when primitive-less); 3D front
+  arrow on the SELECTED custom piece (flat chevron decal, selected-id
+  folded into `_keyFloor` scoped to custom pieces); privacy mosaic — a
+  shared 24×32 `WebGLRenderTarget` re-rendered ≤4 Hz per rig shown with
+  NearestFilter (static silhouette = no-RT fallback; disposed in
+  destroy); imported OBJ/MTL toon-conversion (`_toonConvertModel`: Kd→
+  color, d→opacity, per-material cache, textured mats left alone —
+  sample SH3D export: 1466 meshes / 106 mats fully converted); ghost
+  floors gate furniture/appliances layers (flags folded into
+  `_keyGhost`); three new ambient behaviors — warm-hands at a LIT
+  fireplace light (anchors from `iconKind:'fireplace'` fixtures, ON
+  state checked per frame via optional `ctx.fireplaceOn`), `dance`
+  fidget (standing-only, gated on the rig's room having a bound ON TV —
+  can't conflict with seated watch_tv), window gazing (6 largest
+  windows/floor, interior-side anchors). Tests: idle-activity 12/12,
+  privacy-mosaic / model-toon / ghost-layers / custom-arrow pages all
+  PASS, roadmap-geom +8 asserts, regressions (blur/glass/phase4/layers/
+  fidget/ai/mega/seating) green. Open-Meteo zip search live-verified.
+
 - **Unified docs site + demo floorplan library + config notes + equine
   manes** (`docs/DESIGN-docs-site.md`; Fable shell/design + 8 Opus
   batches): the Pages site is now full product documentation — home page,
@@ -858,26 +884,30 @@ splits) shipped ahead of it in July 2026 — see the ledger above.
 
 ## Open threads / known deferrals
 
-- Dragging a **table** onto chairs doesn't push the table (only dragged
-  seats resolve); documented out of scope.
-- Ghost floors (glass house) always show walls regardless of the Walls
-  layer (intentional; user hasn't objected).
-- Custom recipes draw as labeled rects in 2D; 3D front-arrow indicator
-  deferred; mounted items not live-parented (re-snap on next drag).
-- Privacy blur is a shared static censor sprite; throttled render-to-texture
-  mosaic documented as a stretch upgrade.
-- Idle activities ranked "consider next" from research: warming hands at a
-  lit fireplace (needs Light-fixture anchors, new plumbing), dance-near-TV
-  (conflicts with watch_tv, needs disambiguation), window gazing.
-- Imported OBJ/MTL models keep their own materials (not toon-converted).
+**Deferral-clearing batch (2026-07-17)** closed most of this list — see the
+ledger entry. What remains (needs the user's hardware / a live walk):
+
 - iOS 3D load failure unconfirmed — see hardening notes above.
+- Live-HA smoke tests still outstanding for: Bermuda discovery + entity
+  enable against a real instance, and a landmark calibration walk with a
+  phone. (The Open-Meteo zip search WAS live-tested 2026-07-17: real
+  geocode `53703` → Madison WI + full current-conditions fetch — PASS.)
 - Docs refreshed in full 2026-07-12 (GUIDE.md/README.md/info.md rewritten to
   the current feature set; screenshots regenerated via
   `test-pages/docs-shots.html` — 12 new modes; keep the generator's modes in
   sync when features change their look).
-- Live-HA smoke tests still outstanding for: Bermuda discovery + entity
-  enable against a real instance, a landmark calibration walk with a phone,
-  and the Open-Meteo zip search (all code-verified only).
+
+Cleared 2026-07-17 (details in the ledger): table-drag now carries tucked
+chairs; mounted pieces live-parent to their surface host; custom recipes
+draw real top-down primitive projections in 2D + a 3D front arrow when
+selected; privacy blur upgraded to a live 4 Hz render-to-texture mosaic
+(static silhouette kept as the no-RT fallback); imported OBJ/MTL models
+toon-convert; ghost floors gate furniture/appliances on the layer flags
+(the old "Walls layer" premise was wrong — no such layer exists; ghost
+walls always draw exactly like active-floor walls); the three
+"consider next" idle activities shipped (fireplace hand-warming via
+light-fixture anchors, dance-near-TV as a standing-only fidget, window
+gazing).
 
 ## Key architecture pointers
 

@@ -1,0 +1,59 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>custom arrow test</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<script type="module">
+  const mod = await import('./assets/three-renderer.js?v=' + Date.now());
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+
+  const customObjects = [{
+    id: 'co1', label: 'Widget', kind: 'block', w: 600, h: 400, ht: 500, color: '#c08040',
+    primitives: [{ type: 'box', size: [600, 500, 400], pos: [0, 250, 0], color: '#c08040' }],
+  }];
+  const floor = {
+    id: 'f1', name: 'Room', w: 6000, d: 5000,
+    walls: [], rooms: [], customObjects,
+    furniture: [
+      { id: 'p1', x: 3000, y: 2500, w: 600, h: 400, kind: 'block', customKindId: 'co1', rotation: 0 },
+      { id: 'p2', x: 1500, y: 1500, w: 800, h: 500, kind: 'sofa', rotation: 0 },   // ordinary piece
+    ],
+    lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [], windows: [], bg: null, model3d: null, look3d: null,
+  };
+  const sc = { preset: 'day', floorColor: '#6a6660', floorTex: 'none' };
+
+  const countArrows = () => {
+    let n = 0, meta = null;
+    r._floorGroup.traverse(o => {
+      if (o.isMesh && r._frontArrowMat && o.material === r._frontArrowMat) {
+        n++;
+        meta = { flat: o.material.type === 'MeshBasicMaterial', skip: o.userData.outlineSkip === true,
+                 laid: Math.abs(o.rotation.x + Math.PI / 2) < 1e-4, frontZ: o.position.z };
+      }
+    });
+    return { n, meta };
+  };
+
+  // Selected custom piece → one arrow decal at the front (-Z), flat + outline-skipped.
+  r.updateFloor(floor, sc, {}, customObjects, () => null, 'p1');
+  const sel = countArrows();
+  // Nothing selected → no arrow.
+  r.updateFloor(floor, sc, {}, customObjects, () => null, null);
+  const none = countArrows();
+  // Ordinary (non-custom) piece selected → no arrow (scoped to custom recipes).
+  r.updateFloor(floor, sc, {}, customObjects, () => null, 'p2');
+  const ordinary = countArrows();
+
+  r.setCameraView([3000, 3000, -1500], [0, 300, 0]);
+  if (r._renderer) r._renderer.render(r._scene, r._camera);
+
+  const m = sel.meta || {};
+  const pass = sel.n === 1 && none.n === 0 && ordinary.n === 0 &&
+               m.flat && m.skip && m.laid && m.frontZ < -300;
+  document.title = `CUSTOM-ARROW ${pass ? 'PASS' : 'FAIL'} ` +
+    `sel=${sel.n} none=${none.n} ordinary=${ordinary.n} ` +
+    `flat=${m.flat} skip=${m.skip} laid=${m.laid} frontZ=${(m.frontZ ?? 0).toFixed(0)}`;
+  window.__DUMP = document.title;
+</script>
