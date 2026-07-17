@@ -162,6 +162,37 @@ export function forecastRainSoon(
   return false;
 }
 
+// ── Phase 3: moon phase → drawing terminator parameter (pure, testable) ──────
+// HA's core `moon` integration exposes an 8-state phase string (no illumination
+// %, no position). Map it to a signed illuminated fraction in [-1, 1] the moon
+// sprite's canvas texture uses to draw the terminator:
+//   magnitude = illuminated fraction of the disc (0 = new, 0.5 = quarter,
+//               1 = full),
+//   sign      = which limb is lit — positive = lit on the RIGHT (waxing,
+//               Northern-Hemisphere convention), negative = lit on the LEFT
+//               (waning).
+// Unknown / absent state → 1 (full moon): the honest default for an unbound
+// moon prop ("the moon is out"). Changes at most daily, so this is effectively
+// a static lookup.
+export type MoonPhase =
+  | 'new_moon' | 'waxing_crescent' | 'first_quarter' | 'waxing_gibbous'
+  | 'full_moon' | 'waning_gibbous' | 'last_quarter' | 'waning_crescent';
+const MOON_PHASE_FRACTION: Record<string, number> = {
+  new_moon: 0,
+  waxing_crescent: 0.25,
+  first_quarter: 0.5,
+  waxing_gibbous: 0.75,
+  full_moon: 1,
+  waning_gibbous: -0.75,
+  last_quarter: -0.5,
+  waning_crescent: -0.25,
+};
+export function moonPhaseFraction(state: string | null | undefined): number {
+  const s = (state ?? '').toLowerCase().trim();
+  const v = MOON_PHASE_FRACTION[s];
+  return v == null ? 1 : v;
+}
+
 // ── Source: HA weather.* entity ─────────────────────────────────────────────
 // condition = state; temperature/wind normalized from the entity's own unit
 // attributes. sunny ↔ clear-night is re-gated through the shared sun logic so a

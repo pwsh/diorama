@@ -167,6 +167,116 @@
     r.updateWeather(fx({ condition: 'sunny', isDay: true }));
     for (let i = 0; i < 240; i++) step(1, 1 / 30);
     ok('beacon dark when cleared', r._alertPulseLight.intensity < 0.02, `i=${r._alertPulseLight.intensity.toFixed(4)}`);
+
+  } else if (scene === 'sky') {
+    // ── Phase 3: sky backdrop, sun & moon props ──
+    // Independent recompute of _sunTargetFromSky(az, elev, R) so the sun disc
+    // position is verified, not just trusted.
+    const sunVec = (azDeg, elevDeg, R) => {
+      const az = azDeg * Math.PI / 180, el = Math.max(0, Math.min(90, elevDeg)) * Math.PI / 180;
+      const horiz = Math.cos(el) * R, y = Math.sin(el) * R + 600;
+      return { x: -Math.sin(az) * horiz, y, z: Math.cos(az) * horiz };
+    };
+    const centerPx = (tex) => {
+      const cv = tex.image; const g = cv.getContext('2d');
+      return g.getImageData(cv.width >> 1, cv.height >> 1, 1, 1).data;
+    };
+    const rowPx = (tex, fx01) => {
+      const cv = tex.image; const g = cv.getContext('2d');
+      return g.getImageData(Math.round(cv.width * fx01), cv.height >> 1, 1, 1).data;
+    };
+    const lum = (d) => 0.3 * d[0] + 0.59 * d[1] + 0.11 * d[2];
+
+    // DAY: sun disc up + positioned; moon hidden; stars faded out.
+    r.applyScenePreset('day');
+    r.updateWeather(fx({ condition: 'sunny', isDay: true, skyBackdrop: true,
+      sunAzimuthDeg: 120, sunElevationDeg: 35, cloudCoverage: 5 }));
+    ok('sky group built + visible', r._skyGroup.visible && r._skyDome, `vis=${r._skyGroup.visible}`);
+    const want = sunVec(120, 35, 26000);
+    ok('sun target at expected az/elev', !!r._skySunTarget &&
+       Math.hypot(r._skySunTarget.x - want.x, r._skySunTarget.y - want.y, r._skySunTarget.z - want.z) < 1,
+       `got=(${r._skySunTarget.x.toFixed(0)},${r._skySunTarget.y.toFixed(0)},${r._skySunTarget.z.toFixed(0)})`);
+    ok('sun above horizon (+y)', r._skySunTarget.y > 600, `y=${r._skySunTarget.y.toFixed(0)}`);
+    step(240);   // ~4 s ease
+    ok('sun disc visible by day', r._sunSprite.visible && r._sunSprite.material.opacity > 0.5,
+       `op=${r._sunSprite.material.opacity.toFixed(2)}`);
+    ok('moon hidden by day', !r._moonSprite.visible, `mvis=${r._moonSprite.visible}`);
+    ok('stars faded out by day', r._starField.material.opacity < 0.15, `s=${r._starField.material.opacity.toFixed(2)}`);
+    const dayTop = r._skyTopTarget.getHex(), dayBot = r._skyBotTarget.getHex();
+
+    // NIGHT: sun hidden even with elev>0; moon shown; stars faded in.
+    r.applyScenePreset('night');
+    r.updateWeather(fx({ condition: 'clear-night', isDay: false, skyBackdrop: true,
+      sunAzimuthDeg: 120, sunElevationDeg: 20, moonPhase: 'waxing_crescent' }));
+    step(720);   // day→night sun disc fade-out (τ≈2 s) settles below the visibility floor
+    ok('sun hidden at night', !r._sunSprite.visible, `svis=${r._sunSprite.visible} op=${r._sunSprite.material.opacity.toFixed(3)}`);
+    ok('moon shown at night', r._moonSprite.visible && r._moonSprite.material.opacity > 0.5,
+       `op=${r._moonSprite.material.opacity.toFixed(2)}`);
+    ok('stars faded in at night', r._starField.material.opacity > 0.7, `s=${r._starField.material.opacity.toFixed(2)}`);
+    // Moon positioned opposite the sun azimuth (300 vs 120), high in the sky.
+    const moonWant = sunVec(300, Math.min(58, Math.max(22, -20)), 24000);
+    ok('moon opposite sun azimuth', Math.hypot(
+       r._skyMoonTarget.x - moonWant.x, r._skyMoonTarget.z - moonWant.z) < 2,
+       `mt=(${r._skyMoonTarget.x.toFixed(0)},${r._skyMoonTarget.z.toFixed(0)})`);
+    const nightTop = r._skyTopTarget.getHex();
+    ok('night dome differs from day dome', nightTop !== dayTop, `night=${nightTop.toString(16)} day=${dayTop.toString(16)}`);
+
+    // Moon phase texture varies by state: center pixel lit for full, dark for new.
+    const fullC = centerPx(r._moonTexture('full_moon'));
+    const newC  = centerPx(r._moonTexture('new_moon'));
+    ok('full moon center lit', lum(fullC) > 180, `L=${lum(fullC).toFixed(0)}`);
+    ok('new moon center dark', lum(newC) < 90, `L=${lum(newC).toFixed(0)}`);
+    ok('full != new texture', r._moonTexture('full_moon') !== r._moonTexture('new_moon'));
+    // Waxing crescent lit on the RIGHT; waning crescent lit on the LEFT.
+    const waxTex = r._moonTexture('waxing_crescent');
+    const wanTex = r._moonTexture('waning_crescent');
+    ok('waxing crescent lit on right', lum(rowPx(waxTex, 0.82)) > lum(rowPx(waxTex, 0.18)),
+       `R=${lum(rowPx(waxTex,0.82)).toFixed(0)} L=${lum(rowPx(waxTex,0.18)).toFixed(0)}`);
+    ok('waning crescent lit on left', lum(rowPx(wanTex, 0.18)) > lum(rowPx(wanTex, 0.82)),
+       `L=${lum(rowPx(wanTex,0.18)).toFixed(0)} R=${lum(rowPx(wanTex,0.82)).toFixed(0)}`);
+
+    // OVERCAST dome differs from clear (greyed/darkened) at the same preset.
+    r.applyScenePreset('day');
+    r.updateWeather(fx({ condition: 'sunny', isDay: true, skyBackdrop: true, cloudCoverage: 0 }));
+    const clearBot = r._skyBotTarget.getHex();
+    r.updateWeather(fx({ condition: 'cloudy', isDay: true, skyBackdrop: true, cloudCoverage: 95 }));
+    const overBot = r._skyBotTarget.getHex();
+    ok('overcast dome differs from clear', overBot !== clearBot,
+       `over=${overBot.toString(16)} clear=${clearBot.toString(16)}`);
+
+    // Transition EASES: colors mid-transition differ across advanced frames and
+    // haven't snapped to target yet.
+    r.applyScenePreset('night');
+    r.updateWeather(fx({ condition: 'clear-night', isDay: false, skyBackdrop: true }));
+    // Force a big jump: retarget to day mid-flight.
+    r.applyScenePreset('day');
+    r.updateWeather(fx({ condition: 'sunny', isDay: true, skyBackdrop: true, cloudCoverage: 0 }));
+    const c0 = r._skyTopCur.getHex();
+    step(6);   // ~0.1 s
+    const c1 = r._skyTopCur.getHex();
+    step(6);
+    const c2 = r._skyTopCur.getHex();
+    ok('sky color eases (frames differ)', c0 !== c1 && c1 !== c2, `c0=${c0.toString(16)} c1=${c1.toString(16)} c2=${c2.toString(16)}`);
+    ok('not snapped to target early', c1 !== r._skyTopTarget.getHex(), `cur=${c1.toString(16)} tgt=${r._skyTopTarget.getHex().toString(16)}`);
+
+    // rainSoon darkens the UPWIND horizon: uStormAmt eases up + uStormDir set to
+    // the upwind (opposite wind blow-toward) direction.
+    r.updateWeather(fx({ condition: 'cloudy', isDay: true, skyBackdrop: true,
+      windKmh: 20, windBearingPlanRad: 0, rainSoon: true, cloudCoverage: 60 }));
+    step(240);   // let _stormDarkAmt ease in (~2.5 s τ)
+    ok('storm horizon darkening on (uStormAmt>0)', r._skyMat.uniforms.uStormAmt.value > 0.2,
+       `amt=${r._skyMat.uniforms.uStormAmt.value.toFixed(2)}`);
+    // wind toward planRad 0 → scene drift wdx=-cos(0)*v=-v, wdz=0 → upwind=(+1,0).
+    const sd = r._skyMat.uniforms.uStormDir.value;
+    ok('storm dir points upwind (+x)', sd.x > 0.9 && Math.abs(sd.y) < 0.2, `dir=(${sd.x.toFixed(2)},${sd.y.toFixed(2)})`);
+    // Clearing (dry, no rainSoon) → darkening eases back out.
+    r.updateWeather(fx({ condition: 'sunny', isDay: true, skyBackdrop: true }));
+    step(650);
+    ok('storm darkening clears', r._skyMat.uniforms.uStormAmt.value < 0.05, `amt=${r._skyMat.uniforms.uStormAmt.value.toFixed(3)}`);
+
+    // skyBackdrop off → the whole group hides.
+    r.updateWeather(fx({ condition: 'sunny', isDay: true, skyBackdrop: false }));
+    ok('skyBackdrop off hides group', !r._skyGroup.visible, `vis=${r._skyGroup.visible}`);
   }
 
   // ── report ──────────────────────────────────────────────────────────────

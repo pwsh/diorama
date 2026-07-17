@@ -73,7 +73,7 @@ interface RobotRig {
   blob: THREE.Mesh;
 }
 import { wallCutsForSegment, WINDOW_DEFAULTS, closedWallLoops, wallKind, WALL_KINDS, furnitureLocalToWorld, furnitureWorldToLocal, pointInPolygon as pip, centroid, loopContaining, resolveRoomForPoint, roomLabel, intersectLoopWithRect, polygonArea } from './geometry.js';
-import { visibilityToFogDensity } from './weather.js';
+import { visibilityToFogDensity, moonPhaseFraction } from './weather.js';
 import {
   resolveDef, resolveAvatar, avatarFromPool,
   registerPack, unregisterPack, setAvatarPacksConfig,
@@ -87,6 +87,17 @@ const WEATHER_ALL_EFFECTS: Record<WeatherEffectKey, boolean> = {
   precip: true, fog: true, lightning: true, wind: true, clouds: true,
   sunPosition: true, frost: true, puddles: true, precipForecast: true,
 };
+
+// Phase 3 sky-backdrop condition sets. DIM = conditions that grey-out / darken
+// the dome (and dim the sun/moon disc); WET = precip conditions that darken it
+// further. Used by ThreeDRenderer._skyColorsFor / _overcastAmt.
+const WEATHER_DIM_SKY = new Set<string>([
+  'cloudy', 'rainy', 'pouring', 'snowy', 'snowy-rainy', 'hail',
+  'lightning', 'lightning-rainy', 'fog', 'exceptional',
+]);
+const WEATHER_WET_SKY = new Set<string>([
+  'rainy', 'pouring', 'snowy-rainy', 'hail', 'lightning-rainy',
+]);
 
 export interface ZoneWorld { vertices: Vec2[]; color: number; occupied: boolean; }
 export interface HaloWorld { x: number; y: number; radius: number; occupied: boolean; }
@@ -145,6 +156,16 @@ export interface WeatherFxState {
   // Drives a slow colored sky-pulse light (updateWeather + _advanceWeather). A
   // stale renderer chunk ignores this field entirely (no beacon).
   alertSeverity?: 'advisory' | 'watch' | 'warning';
+  // ── Phase 3: sky backdrop / sun & moon props ──
+  // skyBackdrop — three-view's RESOLVED gradient-sky flag (Scene3D.skyBackdrop,
+  //   defaulting ON when a weather source is configured). Gates the whole
+  //   _skyGroup (dome + sun + moon + stars). Absent/false on a stale chunk → no
+  //   sky (graceful degrade to the flat background).
+  // moonPhase   — the bound moon.* entity's raw 8-state string (weather.ts
+  //   moonPhaseFraction maps it to the drawn terminator). Null/undefined →
+  //   default full moon.
+  skyBackdrop?: boolean;
+  moonPhase?: string | null;
 }
 
 // One precipitation / dust point cloud (W2). `pos` aliases the geometry's
@@ -935,6 +956,41 @@ export class ThreeDRenderer {
     watch:    { color: 0xff8c00, peak: 1.6, period: 3.2 },   // orange
     warning:  { color: 0xe6291a, peak: 2.6, period: 2.3 },   // red, most urgent
   };
+  // ── Phase 3: sky backdrop, sun & moon props ──────────────────────────────
+  // A gradient sky DOME (inverted sphere, custom ShaderMaterial — a documented
+  // _mat() exemption like the weather Points/Sprite materials: a toon-shaded sky
+  // makes no sense) plus billboard sun/moon discs + a starfield, all in
+  // _skyGroup. Built ONCE (lazily, _ensureSky) and NOT torn down on floor switch
+  // (the sky isn't floor-relative) — so it is NOT in clearTransientGroups, only
+  // destroy(). Colors/dayness/sun+moon opacity ease per-frame in _advanceWeather
+  // (zero allocation — persistent Color/Vector3/uniform objects mutated in place).
+  private _skyGroup = new THREE.Group();
+  private _skyBuilt = false;
+  private _skyVisible = false;                    // resolved Scene3D.skyBackdrop
+  private _skyDome: THREE.Mesh | null = null;
+  private _skyMat: THREE.ShaderMaterial | null = null;
+  private _sunSprite: THREE.Sprite | null = null;
+  private _moonSprite: THREE.Sprite | null = null;
+  private _starField: THREE.Points | null = null;
+  private _sunGlowTex: THREE.CanvasTexture | null = null;
+  private _starTex: THREE.CanvasTexture | null = null;
+  private _moonTexCache: Record<string, THREE.CanvasTexture> = {};   // phase-state → texture
+  private _skyTopCur = new THREE.Color(0x05060d);
+  private _skyBotCur = new THREE.Color(0x151b2e);
+  private _skyTopTarget = new THREE.Color(0x05060d);
+  private _skyBotTarget = new THREE.Color(0x151b2e);
+  private _skyDayness = 0;                         // eased 0(night)..1(day) — star fade
+  private _skyDaynessTarget = 0;
+  private _skySunTarget = new THREE.Vector3(0, 20000, 0);
+  private _skyMoonTarget = new THREE.Vector3(0, 14000, 0);
+  private _sunWantOpacity = 0; private _sunOpacityCur = 0;
+  private _moonWantOpacity = 0; private _moonOpacityCur = 0;
+  private _skyStormDir = new THREE.Vector2(1, 0); // upwind (scene x,z) for horizon darkening
+  private static readonly SKY_PRESET: Record<ScenePreset, { top: number; bottom: number }> = {
+    day:   { top: 0x4a90d9, bottom: 0xbcd9f2 },
+    dusk:  { top: 0x2b2450, bottom: 0xff9a5a },
+    night: { top: 0x05060d, bottom: 0x151b2e },
+  };
   private _bgTexCache: { dataUrl: string; tex: THREE.Texture } | null = null;
   private _rafId: number | null = null;
   private _fw = 8000;
@@ -1199,7 +1255,7 @@ export class ThreeDRenderer {
                     this._groundGroup,
                     this._lightGroup, this._switchGroup, this._targetGroup, this._ghostGroup,
                     this._transitGroup,
-                    this._gpsGroup, this._weatherGroup, this._pulseGroup, this._nowPlayingGroup);
+                    this._gpsGroup, this._weatherGroup, this._skyGroup, this._pulseGroup, this._nowPlayingGroup);
 
     this._controls = new OrbitControls(this._camera, this._renderer.domElement);
     this._controls.enableDamping = true;
@@ -1991,6 +2047,10 @@ export class ThreeDRenderer {
         this._sun.color.set(0xdfe6ff); this._sun.intensity = 0.45;
         this._sun.position.set(3000, 8000, 3000);
     }
+    // Phase 3: retarget the sky dome colors on a preset flip (auto lighting
+    // modes). Only when the sky is already built — _init calls this before the
+    // sky exists (first updateWeather builds + refreshes it).
+    if (this._skyBuilt) this._refreshSkyTargets();
   }
 
   // Shadow maps are gone (blob decals instead) — kept as a no-op so the many
@@ -7165,6 +7225,50 @@ export class ThreeDRenderer {
 
     // ── DC-D alert beacon (alertSeverity) — target eased in _advanceWeather ──
     this._setAlertBeacon(fx.alertSeverity ?? null);
+
+    // ── Phase 3: sky backdrop, sun & moon props ──
+    this._skyVisible = fx.skyBackdrop === true;
+    this._ensureSky();
+    this._skyGroup.visible = this._skyVisible;
+    // Upwind = opposite the wind drift (matches _buildStormBank); horizon darkens
+    // toward it while a storm brews.
+    {
+      let ux = -wdx, uz = -wdz; const m = Math.hypot(ux, uz);
+      if (m < 1e-3) { ux = -1; uz = 0; } else { ux /= m; uz /= m; }
+      this._skyStormDir.set(ux, uz);
+    }
+    // Moon phase texture (cheap; changes at most daily). Swap the cached map.
+    if (this._moonSprite) {
+      const tex = this._moonTexture(fx.moonPhase ?? 'full_moon');
+      const mm = this._moonSprite.material as THREE.SpriteMaterial;
+      if (mm.map !== tex) { mm.map = tex; mm.needsUpdate = true; }
+    }
+    // Sun / moon positions + opacity targets (eased in _advanceWeather).
+    const elev = fx.sunElevationDeg ?? null;
+    const az = fx.sunAzimuthDeg ?? 0;
+    const overcast = this._overcastAmt(cond, fx.cloudCoverage ?? null);
+    // Sun disc: up + not night + sky on. Ramp in over the first ~6° above the
+    // horizon, dim under overcast, warm-tint near the horizon.
+    let sunOp = 0;
+    if (this._skyVisible && this._preset !== 'night' && elev != null && elev > 0) {
+      sunOp = Math.min(1, elev / 6) * (1 - 0.7 * overcast);
+    }
+    this._sunWantOpacity = sunOp;
+    this._skySunTarget.copy(this._sunTargetFromSky(az, Math.max(2, elev ?? 20), 26000));
+    if (this._sunSprite) {
+      const k = elev == null ? 1 : Math.min(1, Math.max(0, elev / 40));
+      (this._sunSprite.material as THREE.SpriteMaterial).color
+        .copy(new THREE.Color(0xff8a4a)).lerp(new THREE.Color(0xfff6e0), k);
+    }
+    // Moon disc: only at night (opposite the sun azimuth, no real ephemeris —
+    // an honest approximation per the research doc). Fixed pleasant elevation arc.
+    this._moonWantOpacity = (this._skyVisible && this._preset === 'night')
+      ? (1 - 0.6 * overcast) : 0;
+    const moonElev = elev == null ? 35 : Math.min(58, Math.max(22, -elev));
+    this._skyMoonTarget.copy(this._sunTargetFromSky(az + 180, moonElev, 24000));
+
+    // Dome color / dayness targets from the (now-updated) preset + condition.
+    this._refreshSkyTargets();
   }
 
   // Set the alert beacon's target severity + color. The light is built lazily on
@@ -7442,12 +7546,241 @@ export class ThreeDRenderer {
   // elevation into a scene-frame directional-light POSITION at a fixed radius.
   // Compass: 0° = plan +Y (north), 90° = plan +X (east). _w mirrors X, maps plan
   // +Y → scene +Z: sceneX = −planX, sceneZ = +planY.
-  private _sunTargetFromSky(azDeg: number, elevDeg: number): THREE.Vector3 {
-    const R = 12000;
+  private _sunTargetFromSky(azDeg: number, elevDeg: number, R = 12000): THREE.Vector3 {
     const az = azDeg * Math.PI / 180, el = Math.max(0, Math.min(90, elevDeg)) * Math.PI / 180;
     const horiz = Math.cos(el) * R, y = Math.sin(el) * R + 600;
     const planX = Math.sin(az) * horiz, planY = Math.cos(az) * horiz;
     return new THREE.Vector3(-planX, y, planY);
+  }
+
+  // ── Phase 3: sky backdrop, sun & moon props ───────────────────────────────
+  // Build the sky dome + sun/moon discs + starfield ONCE. Cheap; not rebuilt on
+  // floor switch (the sky is not floor-relative). Shared CanvasTextures live for
+  // the renderer's life (disposed only in destroy()).
+  private _ensureSky(): void {
+    if (this._skyBuilt || !this._scene) return;
+    this._skyBuilt = true;
+
+    // Gradient dome — inverted sphere, 2-color vertex-lerp ShaderMaterial (an
+    // explicit exemption from the _mat toon factory; a toon-shaded sky is
+    // nonsense). depthWrite off + renderOrder −10 so it paints behind everything
+    // (the grid + all opaque geometry draw over it; the flat scene.background
+    // stays as a safety fallback under the dome). uStormDir/uStormAmt darken the
+    // upwind horizon band when a storm is brewing (rainSoon).
+    const geo = new THREE.SphereGeometry(30000, 24, 16);
+    const mat = new THREE.ShaderMaterial({
+      side: THREE.BackSide, depthWrite: false, depthTest: true, fog: false,
+      uniforms: {
+        uTop: { value: this._skyTopCur.clone() },
+        uBottom: { value: this._skyBotCur.clone() },
+        uRadius: { value: 30000 },
+        uStormDir: { value: new THREE.Vector2(1, 0) },
+        uStormAmt: { value: 0 },
+      },
+      vertexShader: `
+        varying vec3 vW;
+        void main() {
+          vec4 wp = modelMatrix * vec4(position, 1.0);
+          vW = wp.xyz;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }`,
+      fragmentShader: `
+        uniform vec3 uTop; uniform vec3 uBottom; uniform float uRadius;
+        uniform vec2 uStormDir; uniform float uStormAmt;
+        varying vec3 vW;
+        void main() {
+          float h = clamp(vW.y / (uRadius * 0.9), -0.2, 1.0);
+          float t = smoothstep(-0.05, 0.6, h);
+          vec3 col = mix(uBottom, uTop, t);
+          if (uStormAmt > 0.001) {
+            vec2 d = vW.xz;
+            float L = length(d);
+            if (L > 1e-3) {
+              d /= L;
+              float align = max(0.0, dot(d, uStormDir));
+              float band = 1.0 - smoothstep(0.0, 0.4, h);
+              col *= 1.0 - 0.4 * uStormAmt * align * band;
+            }
+          }
+          gl_FragColor = vec4(col, 1.0);
+        }`,
+    });
+    const dome = new THREE.Mesh(geo, mat);
+    dome.renderOrder = -10;
+    dome.frustumCulled = false;
+    dome.userData.outlineSkip = true;
+    this._skyDome = dome; this._skyMat = mat;
+    this._skyGroup.add(dome);
+
+    // Sun disc — soft warm radial-glow billboard. depthTest on so foreground
+    // geometry (roof / walls) occludes it naturally; dome writes no depth so it
+    // shows in open sky. Positioned + faded per-frame in _advanceWeather.
+    const sun = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: this._sunGlowTexture(), transparent: true, depthWrite: false,
+      depthTest: true, opacity: 0, color: 0xfff2d6, fog: false,
+    }));
+    sun.scale.set(3200, 3200, 1);
+    sun.renderOrder = -8;
+    sun.position.copy(this._skySunTarget);
+    this._sunSprite = sun; this._skyGroup.add(sun);
+
+    // Moon disc — phase texture swapped by state (cached per phase).
+    const moon = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: this._moonTexture('full_moon'), transparent: true, depthWrite: false,
+      depthTest: true, opacity: 0, color: 0xffffff, fog: false,
+    }));
+    moon.scale.set(2400, 2400, 1);
+    moon.renderOrder = -8;
+    moon.position.copy(this._skyMoonTarget);
+    this._moonSprite = moon; this._skyGroup.add(moon);
+
+    // Starfield — static dots on the dome; opacity ramps with (1 − dayness).
+    this._starField = this._buildStarfield();
+    this._skyGroup.add(this._starField);
+  }
+
+  private _sunGlowTexture(): THREE.CanvasTexture {
+    if (this._sunGlowTex) return this._sunGlowTex;
+    const c = document.createElement('canvas'); c.width = c.height = 128;
+    const g = c.getContext('2d')!;
+    const grd = g.createRadialGradient(64, 64, 0, 64, 64, 64);
+    grd.addColorStop(0, 'rgba(255,253,240,1)');
+    grd.addColorStop(0.22, 'rgba(255,247,216,0.96)');
+    grd.addColorStop(0.5, 'rgba(255,232,176,0.5)');
+    grd.addColorStop(1, 'rgba(255,222,150,0)');
+    g.fillStyle = grd; g.fillRect(0, 0, 128, 128);
+    this._sunGlowTex = new THREE.CanvasTexture(c);
+    return this._sunGlowTex;
+  }
+
+  // Per-phase moon disc: bright disc + a dark terminator region drawn from
+  // moonPhaseFraction (magnitude = illuminated fraction, sign = lit limb). An
+  // unlit semicircle + a terminator half-ellipse compose every phase correctly
+  // (new → full, crescent → gibbous, both waxing/waning). Cached per state.
+  private _moonTexture(state: string): THREE.CanvasTexture {
+    const key = (state || 'full_moon').toLowerCase().trim();
+    const cached = this._moonTexCache[key];
+    if (cached) return cached;
+    const S = 128, R = 52, cx = 64, cy = 64;
+    const c = document.createElement('canvas'); c.width = c.height = S;
+    const g = c.getContext('2d')!;
+    // faint outer halo
+    const glow = g.createRadialGradient(cx, cy, R * 0.85, cx, cy, R * 1.3);
+    glow.addColorStop(0, 'rgba(223,230,255,0.26)');
+    glow.addColorStop(1, 'rgba(223,230,255,0)');
+    g.fillStyle = glow; g.beginPath(); g.arc(cx, cy, R * 1.3, 0, Math.PI * 2); g.fill();
+
+    const frac = moonPhaseFraction(key);        // [-1, 1]
+    const illum = Math.abs(frac);
+    const waxing = frac >= 0;                    // lit on the right
+    // full lit disc
+    g.fillStyle = '#dfe6ff'; g.beginPath(); g.arc(cx, cy, R, 0, Math.PI * 2); g.fill();
+    if (illum < 0.999) {
+      g.fillStyle = '#242c42';
+      if (illum <= 0.001) {
+        g.beginPath(); g.arc(cx, cy, R, 0, Math.PI * 2); g.fill();
+      } else {
+        const tx = R * (1 - 2 * illum);          // terminator x-extent (signed)
+        const ex = Math.abs(tx);
+        g.beginPath();
+        if (waxing) {
+          // dark on the LEFT: top → (through left) → bottom
+          g.arc(cx, cy, R, -Math.PI / 2, Math.PI / 2, true);
+        } else {
+          // dark on the RIGHT: top → (through right) → bottom
+          g.arc(cx, cy, R, -Math.PI / 2, Math.PI / 2, false);
+        }
+        // terminator half-ellipse from bottom (π/2) back to top (−π/2). The
+        // ccw flag picks which lobe (right-bulge = through angle 0) so the
+        // ellipse's controlling extent lands at cx + tx (crescent when tx>0,
+        // gibbous when tx<0), mirrored for the waning side.
+        const ccw = waxing ? (tx > 0) : (tx < 0);
+        g.ellipse(cx, cy, ex, R, 0, Math.PI / 2, -Math.PI / 2, ccw);
+        g.closePath();
+        g.fill();
+      }
+    }
+    const tex = new THREE.CanvasTexture(c);
+    this._moonTexCache[key] = tex;
+    return tex;
+  }
+
+  private _starTexture(): THREE.CanvasTexture {
+    if (this._starTex) return this._starTex;
+    const c = document.createElement('canvas'); c.width = c.height = 32;
+    const g = c.getContext('2d')!;
+    const grd = g.createRadialGradient(16, 16, 0, 16, 16, 16);
+    grd.addColorStop(0, 'rgba(255,255,255,1)');
+    grd.addColorStop(0.5, 'rgba(255,255,255,0.5)');
+    grd.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = grd; g.fillRect(0, 0, 32, 32);
+    this._starTex = new THREE.CanvasTexture(c);
+    return this._starTex;
+  }
+
+  private _buildStarfield(): THREE.Points {
+    const hi = Math.min(window.devicePixelRatio || 1, 2) >= 2;
+    const N = hi ? 140 : 220;
+    const R = 28000;
+    const pos = new Float32Array(N * 3);
+    let seed = 0x51ed;
+    const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+    for (let i = 0; i < N; i++) {
+      const y = Math.max(0.06, rnd() * 2 - 1);   // bias to the upper hemisphere
+      const phi = rnd() * Math.PI * 2;
+      const rr = Math.sqrt(Math.max(0, 1 - y * y));
+      pos[i * 3] = Math.cos(phi) * rr * R;
+      pos[i * 3 + 1] = y * R;
+      pos[i * 3 + 2] = Math.sin(phi) * rr * R;
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    const mat = new THREE.PointsMaterial({
+      map: this._starTexture(), size: 340, color: 0xffffff, transparent: true,
+      opacity: 0, depthWrite: false, depthTest: true, sizeAttenuation: true, fog: false,
+    });
+    const pts = new THREE.Points(geo, mat);
+    pts.renderOrder = -9; pts.frustumCulled = false;
+    return pts;
+  }
+
+  // Overcast amount 0..1 from condition + cloud coverage (greys/darkens the
+  // dome, dims the sun/moon disc). Shared by _skyColorsFor + the sun/moon fade.
+  private _overcastAmt(condition: string, cloudCov: number | null): number {
+    let a = 0;
+    if (cloudCov != null && isFinite(cloudCov)) a = Math.max(a, Math.min(0.85, (cloudCov - 20) / 90));
+    if (WEATHER_DIM_SKY.has(condition)) a = Math.max(a, 0.55);
+    return a;
+  }
+
+  // Resolve the dome's two gradient stops from preset + condition. Overcast/precip
+  // grey-out + darken; night uses a darker grey so overcast night stays dim.
+  private _skyColorsFor(preset: ScenePreset, condition: string, cloudCov: number | null):
+      { top: THREE.Color; bottom: THREE.Color } {
+    const base = ThreeDRenderer.SKY_PRESET[preset] ?? ThreeDRenderer.SKY_PRESET.night;
+    const top = new THREE.Color(base.top), bottom = new THREE.Color(base.bottom);
+    const grey = this._overcastAmt(condition, cloudCov);
+    if (grey > 0) {
+      const g = new THREE.Color(preset === 'night' ? 0x2a2f3a : 0x8a94a2);
+      top.lerp(g, grey); bottom.lerp(g, grey);
+    }
+    if (WEATHER_WET_SKY.has(condition)) { top.multiplyScalar(0.72); bottom.multiplyScalar(0.72); }
+    return { top, bottom };
+  }
+
+  // Recompute the dome's target colors + dayness whenever the preset or live
+  // weather changes. Per-frame easing toward these targets lives in
+  // _advanceWeather. Reads this._preset + this._weatherFx (set by updateWeather).
+  private _refreshSkyTargets(): void {
+    this._ensureSky();
+    const preset = this._preset;
+    const fx = this._weatherFx;
+    const cond = fx?.condition ?? (preset === 'night' ? 'clear-night' : 'sunny');
+    const cov = fx?.cloudCoverage ?? null;
+    const { top, bottom } = this._skyColorsFor(preset, cond, cov);
+    this._skyTopTarget.copy(top);
+    this._skyBotTarget.copy(bottom);
+    this._skyDaynessTarget = preset === 'day' ? 1 : preset === 'dusk' ? 0.4 : 0;
   }
 
   private _hashStr(s: string): number {
@@ -7522,6 +7855,41 @@ export class ThreeDRenderer {
         this._alertPulseLight.intensity = cfg.peak * this._alertPulseAmt * sine;
       } else {
         this._alertPulseLight.intensity = 0;
+      }
+    }
+
+    // ── Phase 3: sky backdrop easing (runs regardless of the weatherFx layer —
+    // the sky is lighting-adjacent, gated only on its own skyBackdrop flag).
+    // Zero allocation: persistent Color/Vector3/uniform objects mutated in place.
+    if (this._skyBuilt) {
+      const k = Math.min(1, dt / 2);               // τ ≈ 2 s color / dayness ease
+      this._skyTopCur.lerp(this._skyTopTarget, k);
+      this._skyBotCur.lerp(this._skyBotTarget, k);
+      if (this._skyMat) {
+        (this._skyMat.uniforms.uTop.value as THREE.Color).copy(this._skyTopCur);
+        (this._skyMat.uniforms.uBottom.value as THREE.Color).copy(this._skyBotCur);
+        (this._skyMat.uniforms.uStormDir.value as THREE.Vector2).copy(this._skyStormDir);
+        this._skyMat.uniforms.uStormAmt.value = this._stormDarkAmt;
+      }
+      this._skyDayness += (this._skyDaynessTarget - this._skyDayness) * k;
+      if (this._starField) {
+        (this._starField.material as THREE.PointsMaterial).opacity =
+          this._skyVisible ? Math.max(0, 1 - this._skyDayness) : 0;
+      }
+      this._sunOpacityCur += (this._sunWantOpacity - this._sunOpacityCur) * k;
+      this._moonOpacityCur += (this._moonWantOpacity - this._moonOpacityCur) * k;
+      if (this._sunSprite) {
+        (this._sunSprite.material as THREE.SpriteMaterial).opacity = this._sunOpacityCur;
+        // Snap into place while invisible (avoids a swoop from the last position).
+        if (this._sunOpacityCur < 0.02) this._sunSprite.position.copy(this._skySunTarget);
+        else this._sunSprite.position.lerp(this._skySunTarget, k);
+        this._sunSprite.visible = this._skyVisible && this._sunOpacityCur > 0.01;
+      }
+      if (this._moonSprite) {
+        (this._moonSprite.material as THREE.SpriteMaterial).opacity = this._moonOpacityCur;
+        if (this._moonOpacityCur < 0.02) this._moonSprite.position.copy(this._skyMoonTarget);
+        else this._moonSprite.position.lerp(this._skyMoonTarget, k);
+        this._moonSprite.visible = this._skyVisible && this._moonOpacityCur > 0.01;
       }
     }
 
@@ -11932,7 +12300,7 @@ export class ThreeDRenderer {
       this._alarmGroup, this._thermoGroup, this._safetyGroup, this._robotGroup, this._robotRigGroup,
       this._cameraGroup, this._projGroup, this._valveGroup, this._plugGroup, this._camAlertGroup, this._pzoneGroup, this._groundGroup,
       this._lightGroup, this._switchGroup, this._targetGroup, this._gpsGroup, this._weatherGroup,
-      this._pulseGroup, this._nowPlayingGroup,
+      this._skyGroup, this._pulseGroup, this._nowPlayingGroup,
     ]) {
       this._disposeSpriteMaps(g);
       this._clearGroup(g);
@@ -11969,6 +12337,11 @@ export class ThreeDRenderer {
     this._fogPlaneTex?.dispose(); this._fogPlaneTex = null;
     this._cloudShadowTex?.dispose(); this._cloudShadowTex = null;
     this._puddleTex?.dispose(); this._puddleTex = null;
+    // Phase 3 sky prop textures (shared, built once — freed only here).
+    this._sunGlowTex?.dispose(); this._sunGlowTex = null;
+    this._starTex?.dispose(); this._starTex = null;
+    for (const t of Object.values(this._moonTexCache)) t?.dispose();
+    this._moonTexCache = {};
     this._ventTex?.dispose(); this._ventTex = null;
     // DC-D alert beacon light (shared resource — disposed only here).
     if (this._alertPulseLight) { this._alertPulseLight.dispose(); this._alertPulseLight = null; }

@@ -33,7 +33,7 @@
       weatherEffectEnabled, visibilityToFogDensity, forecastRainSoon,
       chipAnchorStyle, resolveChipContent, parseOpenMeteoForecast, windText,
       parseWeatherAlerts, alertSeverityRank, worstAlertSeverity,
-      uvBand, parseOpenMeteoCurrent,
+      uvBand, parseOpenMeteoCurrent, moonPhaseFraction,
     } from './weather.mod.js';
 
     const tests = [];
@@ -362,6 +362,27 @@
     // Garbage attrs (no recognizable keys) → [].
     eq('garbage attrs → []',     parseWeatherAlerts(stEl('on', { foo: 1, bar: 'baz' })).length, 0);
     eq('empty alerts array → []', parseWeatherAlerts(stEl('0', { alerts: [] })).length, 0);
+
+    // ── Phase 3: moon phase → terminator fraction (8 states + defaults) ──────
+    eq('moon new_moon → 0',           moonPhaseFraction('new_moon'), 0);
+    eq('moon waxing_crescent → 0.25', moonPhaseFraction('waxing_crescent'), 0.25);
+    eq('moon first_quarter → 0.5',    moonPhaseFraction('first_quarter'), 0.5);
+    eq('moon waxing_gibbous → 0.75',  moonPhaseFraction('waxing_gibbous'), 0.75);
+    eq('moon full_moon → 1',          moonPhaseFraction('full_moon'), 1);
+    eq('moon waning_gibbous → -0.75', moonPhaseFraction('waning_gibbous'), -0.75);
+    eq('moon last_quarter → -0.5',    moonPhaseFraction('last_quarter'), -0.5);
+    eq('moon waning_crescent → -0.25', moonPhaseFraction('waning_crescent'), -0.25);
+    // Case / whitespace tolerance + honest default (unknown/absent → full moon).
+    eq('moon Full_Moon (mixed case) → 1', moonPhaseFraction('Full_Moon'), 1);
+    eq('moon "  full_moon  " trimmed → 1', moonPhaseFraction('  full_moon  '), 1);
+    eq('moon unknown → 1 (full default)', moonPhaseFraction('banana'), 1);
+    eq('moon null → 1 (full default)',    moonPhaseFraction(null), 1);
+    eq('moon undefined → 1 (full default)', moonPhaseFraction(undefined), 1);
+    // Sign encodes lit limb (waxing > 0, waning < 0); magnitude = illuminated frac.
+    eq('waxing crescent is positive', moonPhaseFraction('waxing_crescent') > 0, true);
+    eq('waning crescent is negative', moonPhaseFraction('waning_crescent') < 0, true);
+    eq('gibbous brighter than crescent',
+       Math.abs(moonPhaseFraction('waxing_gibbous')) > Math.abs(moonPhaseFraction('waxing_crescent')), true);
 
     // ── run + render ────────────────────────────────────────────────────────
     const grid = document.getElementById('grid');

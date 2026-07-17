@@ -470,6 +470,15 @@ export class ThreeView extends LitElement {
       ? (worstAlertSeverity(p.weatherAlerts ?? []) ?? undefined)
       : undefined;
 
+    // Phase 3: sky backdrop + moon prop. skyBackdrop defaults ON when a weather
+    // source is configured (Scene3D.skyBackdrop overrides). moonPhase = the bound
+    // moon.* entity's raw 8-state string (read opportunistically each tick, like
+    // sun.sun below — no _isSlowEntity entry needed; the RAF re-reads states and
+    // _keyWeather folds the phase so updateWeather rebuilds on a phase change).
+    const sc3 = p.store.scene3d;
+    const skyBackdrop = sc3?.skyBackdrop ?? (w != null);
+    const moonPhase = w?.moonEntity ? (states[w.moonEntity]?.state ?? null) : null;
+
     // Fitted geo θ recovers plan-north from calibration (else θ = 0 = plan-north).
     const fit = p.geoFit();
     const theta = fit && fit.transform.quality !== 'none' ? fit.transform.thetaRad : 0;
@@ -478,7 +487,7 @@ export class ThreeView extends LitElement {
     if (!wnow) {
       return {
         condition: 'sunny', intensity01: 0, windKmh: 0, windBearingPlanRad: null,
-        isDay: true, effects, alertSeverity,
+        isDay: true, effects, alertSeverity, skyBackdrop, moonPhase,
       };
     }
 
@@ -524,6 +533,8 @@ export class ThreeView extends LitElement {
       sunAzimuthDeg,
       sunElevationDeg,
       alertSeverity,
+      skyBackdrop,
+      moonPhase,
     };
   }
 
@@ -1073,10 +1084,14 @@ export class ThreeView extends LitElement {
         v == null ? 'n' : Math.round(v / d);
       const effKey = (Object.keys(fx.effects ?? {}) as Array<keyof NonNullable<typeof fx.effects>>)
         .map(k => (fx.effects![k] ? '1' : '0')).join('');
+      // Phase 3: fold the effective preset (drives dome colors + sun/moon
+      // day/night gating), the moon phase (8 states, ~daily), and the resolved
+      // skyBackdrop flag into the key so the sky rebuilds on those changes.
+      const skyBucket = `${effPreset}:${fx.moonPhase ?? '-'}:${fx.skyBackdrop ? '1' : '0'}`;
       const w3Bucket = `${b(fx.cloudCoverage, 10)}:${b(fx.visibilityKm, 2)}:` +
         `${b(fx.windGustKmh, 10)}:${b(fx.apparentC, 3)}:${b(fx.sunAzimuthDeg, 5)}:` +
         `${fx.sunElevationDeg == null ? 'n' : (fx.sunElevationDeg > 0 ? 'u' : 'd')}:` +
-        `${fx.rainSoon ? 'r' : '-'}:${effKey}`;
+        `${fx.rainSoon ? 'r' : '-'}:${effKey}:${skyBucket}`;
       const keyWeather = `${p.configRev}|${f.id}|${fx.condition}|` +
         `${Math.round(fx.intensity01 * 4)}|${windBucket}|${w3Bucket}|` +
         `${fx.alertSeverity ?? '-'}`;   // DC-D: rebuild the beacon on a severity change

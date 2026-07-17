@@ -88,6 +88,24 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Phase 3 of the staged plan** (2026-07-17; 1 Opus agent — the sky):
+  a living backdrop in `_skyGroup`: **gradient sky dome** (inverted
+  30000-radius BackSide sphere, two-uniform vertex-lerp ShaderMaterial —
+  a documented `_mat` exemption; `depthWrite:false`, renderOrder −10 so
+  grid/scene draw over it) colored from preset + condition + cloud
+  coverage + precip, eased τ≈2 s in `_advanceWeather`, with upwind
+  horizon storm-darkening tied to the existing rainSoon signal;
+  **sun disc** sprite riding the SAME sun.sun azimuth/elevation the W3
+  sun light uses (elev>0 + preset≠night; opacity ramp over the first
+  6°); **moon prop with real phases** — `WeatherConfig.moonEntity`
+  (8-state moon sensor) → per-phase canvas texture via pure
+  `moonPhaseFraction` (both limbs correct), anti-sun azimuth at night
+  (honest approximation, no position data exists), default full moon
+  unbound; **night starfield**. `Scene3D.skyBackdrop` toggle (Display
+  tab) + moon bind row (Weather tab); folded into `_keyWeather`.
+  WEATHER 197/197 (+16 moon matrix), WFX `?c=sky` 23/23, all prior fx
+  scenes + mega/phase6 regressions green.
+
 - **Phase 2 of the staged plan** (2026-07-17; 2 parallel Opus agents):
   **Event-focused thought bubbles** — a TOP-priority bubble tier fed by
   `Planner.householdEvents`: appliance-finished (pause-safe ≥5 min run

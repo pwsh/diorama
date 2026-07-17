@@ -271,6 +271,50 @@ Landmarks (`Store.geo.landmarks`, property-wide/store-level — NOT per-floor) a
 - **New visuals** (in `_weatherGroup` unless noted; zero per-frame allocation; shared `_cloudShadowTex`/`_puddleTex` disposed only in destroy): cloud-shadow decals drifting with wind scaled by `cloudCoverage` (<30% none); fog density continuously from `visibilityToFogDensity(vis)` (condition `fog` is a floor; 2 s ease kept); **true sun position** — `sun.sun` azimuth (mapped through geo θ in three-view like wind) + elevation orient the preset sun light, eased τ≈2 s in `_animate`; gust bursts (gust > wind+15 → scheduled 1.5 s ~2× drift multiplier); frost icicles + rim at `apparentC ≤ −3` (build-time); **rain puddles** — deterministic seeded decals whose per-floor `_puddleFade` SURVIVES `_keyWeather` rebuilds, lingering ~10 min after rain stops; forecast storm-brewing (rainSoon + dry now → upwind horizon cloud bank + eased sky-tint darken). `_keyWeather` gained bucketed terms (cloud%/10, vis/2 km, gust/10, apparent/3°, sun-az/5°, elevation sign, rainSoon, effects bitmask).
 - **Forecast plumbing**: `HaApi.getWeatherForecasts(entityId, 'daily'|'hourly')` in BOTH clients — WS `call_service` `weather.get_forecasts` with `return_response: true`, normalized by the shared `normalizeForecasts` (null on any failure). Planner refreshes entity-source forecasts every 30 min + on reconfigure (`_refreshEntityForecasts` → `forecastCondition` from daily, `rainSoon` from hourly, re-applied over recomputes via `_applyForecastToNow`); the legacy `forecast` attribute read remains only as a pre-2024.4 fallback. **DC-C forecast cache**: `_refreshEntityForecasts` now ALSO retains the full normalized arrays in runtime `Planner.forecastDaily`/`forecastHourly` (`ForecastRecord[] | null`, not persisted; entity temps normalized to °C via the entity's `temperature_unit` so `tempText` stays imperial-correct), `emitConfig`-ing on any array refresh; the Open-Meteo poll fills the same two fields from `weather.ts`'s wider `fetchOpenMeteoForecast` (24 h hourly + 7 d daily, parsed by the pure `parseOpenMeteoForecast`); the sensors source leaves them null; both reset on a source switch. The chip's forecast strip reads them. Test pages: weather-test `WEATHER PASS 164/164`; weather-fx-test gained `?c=w3` (12/12) + `?c=alert` (7/7).
 
+### Sky backdrop, sun & moon props (phase 3)
+The scene's flat `THREE.Color` background gains a living sky, all in a dedicated
+**`_skyGroup`** (added to `scene.add` + `destroy()`, but **NOT** to
+`clearTransientGroups` — the sky isn't floor-relative, so it's built ONCE lazily
+via `_ensureSky()` and left alone across floor switches). Config: `Scene3D.skyBackdrop`
+(Display ▸ "Sky backdrop" checkbox; **default ON when a weather source is configured**,
+resolved in three-view's `_weatherFxState` as `sc3?.skyBackdrop ?? (w != null)` and
+passed as `WeatherFxState.skyBackdrop` — a concrete boolean) gates the whole group;
+`WeatherConfig.moonEntity` (Weather tab bind row, `sensor.*` from HA's core `moon`
+integration) drives the moon phase.
+- **Gradient dome**: an inverted `SphereGeometry(30000)` (`BackSide`) with a custom
+  two-uniform (`uTop`/`uBottom`) vertex-lerp `ShaderMaterial` — a **documented `_mat()`
+  exemption** alongside the weather Points/Sprite materials (a toon-shaded sky is
+  nonsense). `depthWrite:false` + `renderOrder -10` so it paints behind everything (grid
+  + opaque geometry draw over it; the flat `scene.background` survives as a fallback).
+  Colors come from `_skyColorsFor(preset, condition, cloudCoverage)` (`SKY_PRESET` day/dusk/
+  night base + `_overcastAmt` grey-out + `WEATHER_WET_SKY` darken); `_refreshSkyTargets`
+  sets targets, eased per-frame (τ≈2 s) in `_advanceWeather`. `uStormDir`/`uStormAmt`
+  darken the **upwind horizon band** when a storm brews (`uStormAmt = _stormDarkAmt`,
+  the same rainSoon signal that drives `_buildStormBank`; `uStormDir` = upwind).
+- **Sun disc**: a warm radial-glow `THREE.Sprite` positioned via `_sunTargetFromSky(az,
+  elev, R=26000)` (same `sun.sun` az/elev source as the W3 sun-light `sunPosition`
+  effect, larger radius). Visible only when `elevation > 0` AND preset ≠ night AND
+  `skyBackdrop`; opacity ramps in over the first ~6° above the horizon, dims under
+  overcast; tint warm→white by elevation. Eased opacity + position (snaps into place
+  while invisible to avoid a swoop-in).
+- **Moon disc**: a `THREE.Sprite` whose per-phase `CanvasTexture` (cached in `_moonTexCache`)
+  is drawn from `moonPhaseFraction(state)` (pure, in `weather.ts`; state → signed
+  illuminated fraction, magnitude 0=new..1=full, sign +waxing/−waning). Drawn as a lit
+  disc + a dark unlit-semicircle + terminator half-ellipse (correct for all 8 phases,
+  both limbs). Positioned **opposite the sun azimuth** (`az+180`, an honest approximation
+  — HA exposes no real moon position) at a fixed pleasant elevation arc; visible only at
+  the `night` preset. Unbound `moonEntity` → default full moon.
+- **Starfield**: one `THREE.Points` (~140–220 dots, DPR-capped, built once on the dome),
+  opacity ramped by `(1 − dayness)` where dayness eases day=1/dusk=0.4/night=0.
+- **Shared textures** (`_sunGlowTex`, `_starTex`, `_moonTexCache`) are built once and
+  disposed only in `destroy()` (like `_blobTex`/`_gradientMapTex`). Per-frame motion is
+  all in `_advanceWeather` (ABOVE the `_weatherGroup.visible` early-return — the sky is
+  lighting-adjacent, independent of the weatherFx layer), zero allocation.
+- **`_keyWeather`** gained `effPreset:moonPhase:skyBackdrop` (`skyBucket`) so the sky
+  rebuilds on a preset flip / phase change / toggle. Test pages: `weather-fx-test.html?c=sky`
+  (23/23 — sun position recomputed, moon phase pixel-sampled, dome colors differ day/night/
+  overcast, easing verified, upwind storm darkening); `weather-test.html` moon-phase matrix.
+
 ### 3D weather effects (World Outside, Feature W — phase W2)
 Outdoor effects driven by `Planner.weatherNow` (W1). three-view's `_weatherFxState(layers)` shapes a `WeatherFxState` (`condition`, `intensity01`, `windKmh`, `windBearingPlanRad`, `isDay`) — effects are live only when `layers.weatherFx !== false` **and** `weather.effects3d !== false` **and** a live `weatherNow` exists (else a no-effect `sunny` state clears everything). `conditionIntensity(condition)` in `weather.ts` (pure, testable) maps condition → 0..1 (pouring/hail 1.0, lightning-rainy 0.8, windy 0.65, lightning 0.6, rainy/snowy/snowy-rainy 0.55, fog 0.5, clear/cloudy/exceptional 0, unknown 0.4). Wind bearing (meteorological FROM-degrees) → plan frame: three-view maps `bearing+180` (blow-toward) through the geo transform θ (`geoFit().transform.thetaRad` when `quality !== 'none'`, else 0 = plan-north-relative).
 

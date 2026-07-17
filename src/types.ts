@@ -702,6 +702,9 @@ export interface Scene3D {
   cinematicOrbit?: boolean;  // slowly orbit the camera around the active avatars for visual interest
                              // (~0.08 rad/s at the current zoom; follows auto-follow's framing when both on); default off
   plumbobs?: boolean;        // show the spinning Sims plumbob diamonds above targets; default ON (opt-out)
+  skyBackdrop?: boolean;     // phase 3: gradient sky dome + sun/moon/star props replacing the flat
+                             // background. Default ON when a weather source is configured; the 3D
+                             // "Sky backdrop" Display checkbox overrides.
 }
 
 // A named room. No polygon is persisted — the room IS whichever closed wall
@@ -828,6 +831,8 @@ export interface WeatherConfig {
   chip?: boolean;          // default true — corner display, 2D + 3D
   effects3d?: boolean;     // default true — master kill-switch for the 3D effect GROUP
   affectLighting?: boolean;// default true — cloudy/precip dims the day preset
+  moonEntity?: string;     // phase 3: sensor.* from HA's core `moon` integration (8-state phase).
+                           // Drives the 3D moon prop's phase texture; unbound → default full moon.
   // Per-effect toggles (W3). Absent key = the per-key default (see
   // weatherEffectEnabled in weather.ts): ON for precip/fog/lightning/wind/
   // clouds/sunPosition/puddles, OFF for frost/precipForecast. `sunPosition` is

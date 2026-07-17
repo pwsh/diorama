@@ -1065,6 +1065,9 @@ export class SettingsDrawer extends LitElement {
       ${check('Cinematic orbit', !!sc.cinematicOrbit, v => { p.store.scene3d!.cinematicOrbit = v; },
         'Slowly orbit the camera around the avatars for visual interest')}
       ${check('Plumbobs', sc.plumbobs !== false, v => { p.store.scene3d!.plumbobs = v; })}
+      ${check('Sky backdrop', sc.skyBackdrop ?? (p.store.weather != null),
+        v => { p.store.scene3d!.skyBackdrop = v; },
+        'Gradient sky dome + sun / moon / stars behind the scene (default on when weather is configured)')}
       <div style="border-top:1px solid var(--border);margin:10px 0 0;padding-top:8px">
         <div class="row" title="Show all dimensions in feet / inches instead of millimetres">
           <label>Imperial units</label>
@@ -1326,6 +1329,27 @@ export class SettingsDrawer extends LitElement {
         house, matched to the live condition. "Affect lighting" dims the day
         preset under overcast weather. The "Weather FX" entry in 2D Layers
         also gates the effects.
+      </div>
+
+      <h4 style="font-size:11px;margin:8px 0 2px;color:var(--text-dim)">Sky (3D)</h4>
+      <div class="row" style="margin-top:2px"><label>Moon entity</label>
+        <span style="font-size:11px;color:var(--text);flex:1;overflow:hidden;
+                     text-overflow:ellipsis;white-space:nowrap">${w?.moonEntity || '—'}</span>
+        <button class="btn" style="font-size:10px;padding:2px 6px" @click=${() => {
+          this.dispatchEvent(new CustomEvent('open-entity-picker', {
+            bubbles: true, composed: true,
+            detail: { domain: 'sensor', onPick: (id: string) => set(x => { x.moonEntity = id; }) },
+          }));
+        }}>🔗</button>
+        ${w?.moonEntity ? html`<button class="btn" style="font-size:10px;padding:2px 6px;margin-left:4px"
+               title="Clear the moon entity"
+               @click=${() => set(x => { x.moonEntity = undefined; })}>✕</button>` : nothing}
+      </div>
+      <div style="font-size:10px;color:var(--text-dim);line-height:1.3;margin:2px 0 6px">
+        HA's core Moon integration (8-state phase). Shades the night-sky moon prop;
+        unbound → a full moon. Position is illustrative (opposite the sun) — HA
+        exposes no real moon position. The sky dome + sun/moon toggle lives in
+        Display ▸ "Sky backdrop".
       </div>
 
       ${this._weatherAppearance(w, set)}
