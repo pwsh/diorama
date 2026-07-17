@@ -240,19 +240,25 @@ Do not treat any note here as a decided approach.
   <32 °F blue, 68–74 white, 75+ red — via ranges OR a gradient.
 
 ### HVAC controls
-- Wall-mounted HVAC control with a popup control panel + animations: vents
-  blowing red / white / blue depending on mode (heat / fan-only / cool).
+- ✅ **Wall-mounted HVAC control** — SHIPPED July 2026: `ThermostatFixture`
+  (`Floor.thermostats`, alarm-keypad recipe) + `<diorama-thermostat-modal>`
+  (mode/setpoint/fan/preset dispatch) + mode-colored vent airflow particles
+  (heat red / cool blue / fan grey). Per-room heat-map (research §4.5)
+  remains a follow-up.
 
 ### Generic controls
-- **Generic action control**: a wall-mounted / table-sitting / floor-placed
-  button or object that triggers any assigned entity (custom controls).
-- **Generic logical-state light**: a light whose state reflects an entity
-  state OR a logical query — e.g. temp > 200 °F → red, > 300 °F → flash red,
-  otherwise off.
+- ✅ **Generic action control** — SHIPPED July 2026 (Display & Controls
+  arc): `Floor.actionButtons` + `Planner.fireAction` dispatch table +
+  confirm gating + press cooldown + last-fired affordance + avatar bubble
+  reactions.
+- ✅ **Generic logical-state light** — SHIPPED July 2026: `Light.logic`
+  through the shared `value-rules.ts` engine (on/color/flash from any
+  entity).
 
 ### Locks
-- Allow **disabling lock controls** on a door and only DISPLAYING the state
-  (display-only mode).
+- ✅ **Display-only lock mode** — SHIPPED July 2026: `Door.lockControl:
+  'display'` (passive indicator, single planner enforcement point) + full
+  lock-state visual vocabulary (jammed/locking/unlocking/unavailable).
 
 ### Avatar rig gaps (parked 2026-07-16 from the avatar-pack research triage)
 Approximated with conventions in the shipped packs; see

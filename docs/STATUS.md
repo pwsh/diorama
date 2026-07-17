@@ -88,6 +88,32 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **HVAC wall controls + display-only locks + action-button polish**
+  (2026-07-17; 2 parallel Opus agents): **`ThermostatFixture`**
+  (`Floor.thermostats`, alarm-keypad recipe: tool 🌡, wall-snap flush,
+  2D plate with mode band + hvac_action pulse + airflow arcs, 3D plate +
+  slatted vent under `_keyThermo` on the sensors layer) +
+  **`<diorama-thermostat-modal>`** (hvac_modes/fan_modes/preset_modes
+  from the entity's own attrs; setpoint steppers debounced ~400 ms,
+  clamped via `clampSetpoint` min/max/step, heat_cool low/high pair;
+  bound+allowControl → climate.set_* dispatch; view refuses; unbound =
+  session-local demo) + **vent airflow particles** (one ~26-pt
+  `THREE.Points` cloud per ACTIVE vent — heat rises red, cool sinks
+  blue, fan blows grey; zero per-frame allocation, `_advanceVents` from
+  `_animate`, shared `_ventTex`) — THERMO 65/65. **Display-only locks**:
+  `Door.lockControl 'display'` (padlock/deadbolt/badge become passive;
+  `toggleDoorLock` single enforcement point; 2D hit falls through to the
+  door body) + the full lock-state visual vocabulary in one shared
+  geometry resolver (jammed amber ≠ locked red, locking/unlocking
+  transitional dim, unavailable grey) — LOCKOVEN 8→31. **Action-button
+  residuals**: sidebar "fired N ago" via `actionLastFired`
+  (scene/button state timestamp, script/automation last_triggered),
+  `BUBBLE_POOL_TRIGGER.action_button` (nearby avatars react to fired
+  buttons via `actionPressFx` → `_recentTrigs`), and a per-button
+  ~500 ms `fireAction` cooldown (proven necessary: 3D raycast/sidebar
+  paths bypass the 700 ms canvas click de-dupe) — ACTIONBTN 32/32.
+  Per-room temperature heat-map (research §4.5) deliberately deferred.
+
 - **Display & Controls arc** (`docs/DESIGN-display-controls.md`,
   2026-07-17; 4 Opus batches A/C parallel → B/D): the shared pure rule
   engine `src/value-rules.ts` (`ValueRule`/`evalRules` first-match-wins +

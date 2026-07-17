@@ -9,7 +9,7 @@ import type {
   Sensor, Zone, ObjectHalo, BgImage, MotionSensor, EnvSensor, EnvKind, Light, SwitchFixture, LightIconKind,
   Furniture, FurnitureKind, Door, Window as WindowType, WindowKind, Layers2D, Floor, Room,
   ObjectRecipe, RecipePrimitive, RecipeShape, ActivityKind, AvatarKind,
-  BleProxy, AlarmPanel, SafetySensor, RobotFixture, CameraFixture, PresenceZone, GroundArea, GroundKind, VoidArea, DioramaPerson, Roamer, GeoLandmark,
+  BleProxy, AlarmPanel, ThermostatFixture, SafetySensor, RobotFixture, CameraFixture, PresenceZone, GroundArea, GroundKind, VoidArea, DioramaPerson, Roamer, GeoLandmark,
 } from '../types.js';
 import type { BermudaDevice } from '../planner.js';
 
@@ -19,7 +19,8 @@ import {
   motionColor, motionIntensity, sensorColor, lightIconKind, MOTION_DEFAULTS,
   BLE_PROXY_DEFAULTS, bleProxyHeight,
   alarmHeight, alarmStateColor, safetyColor,
-  actionButtonKind, actionButtonColor, actionButtonIcon, actionButtonHeight, snapActionButtonToWall,
+  thermostatHeight, hvacModeColor,
+  actionButtonKind, actionButtonColor, actionButtonIcon, actionButtonHeight, snapActionButtonToWall, actionLastFired,
   robotGlyph, robotColor, robotLedColor,
   parseVacuumPosition, solveVacuumDockOffset,
   presenceZoneColor, cameraFov, cameraRange, cameraHeight, CAMERA_DEFAULTS,
@@ -93,6 +94,7 @@ const TOOLS: { id: Tool; label: string }[] = [
   { id: 'action', label: '🔘 Action' },
   { id: 'bleproxy', label: 'BLE' },
   { id: 'alarm', label: '🚨 Alarm' },
+  { id: 'thermostat', label: '🌡 Thermostat' },
   { id: 'safety', label: '⚠️ Smoke/CO' },
   { id: 'robot', label: '🤖 Robot' },
   { id: 'camera', label: '📷 Camera' },
@@ -372,6 +374,7 @@ export class Sidebar extends LitElement {
         ${this._actionButtonsSection()}
         ${this._bleProxiesSection()}
         ${this._alarmPanelsSection()}
+        ${this._thermostatsSection()}
         ${this._safetySensorsSection()}
         ${this._robotsSection()}
         ${this._camerasSection()}
@@ -495,6 +498,7 @@ export class Sidebar extends LitElement {
       case 'action': return 'Click to drop an action button. Pick what it fires (script / scene / button / automation / toggle / custom service) in the editor. Clicking it fires the action.';
       case 'bleproxy': return 'Click to drop a BLE scanner (Bluetooth proxy) puck. Bind it to the physical proxy device.';
       case 'alarm': return 'Click to drop an alarm keypad. Bind to an alarm_control_panel entity.';
+      case 'thermostat': return 'Click to drop a thermostat. Bind to a climate entity to control HVAC.';
       case 'safety': return 'Click to drop a ceiling smoke/CO detector. Set kind + bind a binary_sensor (smoke / carbon_monoxide).';
       case 'robot': return 'Click to place a robot dock. Set kind (vacuum / mower) + bind a vacuum.* or lawn_mower.* entity; mowers can bind a GPS tracker.';
       case 'camera': return 'Click to drop a camera. Drag the orange dot to aim it; bind a camera.* entity for the FOV tint + snapshot.';
@@ -1180,6 +1184,10 @@ export class Sidebar extends LitElement {
     const sel = p.activeActionId === b.id;
     const kind = actionButtonKind(b);
     const target = kind === 'custom' ? `${b.domain ?? '?'}.${b.service ?? '?'}` : (b.entity_id || '— unbound —');
+    // "fired N ago" from the bound entity's own timestamp (scene/button state IS
+    // the timestamp; script/automation carry attributes.last_triggered).
+    const lastFired = kind === 'custom' ? null
+      : actionLastFired(b.entity_id ? p.hass?.states?.[b.entity_id] : null);
     return html`
       <div style="border-bottom:1px solid var(--border)">
         <div class="sensor-item ${sel ? 'sel' : ''}" @click=${() => p.setActiveAction(b.id)}>
@@ -1188,6 +1196,7 @@ export class Sidebar extends LitElement {
           <button class="btn" style="font-size:10px;padding:2px 6px" title="Fire this action now"
                   @click=${(e: Event) => { e.stopPropagation(); p.fireAction(b, true); }}>Test</button>
         </div>
+        ${lastFired ? html`<div style="font-size:10px;color:var(--text-dim);padding:0 8px 3px 30px">${lastFired}</div>` : nothing}
         ${sel ? this._actionButtonEditor(b, target) : nothing}
       </div>
     `;
@@ -1523,6 +1532,109 @@ export class Sidebar extends LitElement {
         domain: 'alarm_control_panel',
         onPick: (id: string) => {
           a.entity_id = id;
+          this.planner.save();
+          this.planner.emitConfig();
+        },
+      },
+    }));
+  }
+
+  // ── Thermostats section (HVAC wall control) ───────────────────────────
+  private _thermostatsSection() {
+    const list = this.planner.floor().thermostats ?? [];
+    if (list.length === 0) return nothing;
+    return this._section('thermostats', 'Thermostats', () =>
+      this._groupedList('thermostats', list, t => this._thermostatItem(t)));
+  }
+
+  private _thermostatItem(t: ThermostatFixture) {
+    const p = this.planner;
+    const sel = p.activeThermoId === t.id;
+    const st = p.effectiveState(t);
+    const mode = st?.state ?? null;
+    const col = hvacModeColor(mode);
+    const cur = st?.attributes?.current_temperature;
+    const badge = mode ? `${mode.replace('_', ' ')}${cur != null ? ` ${Math.round(Number(cur))}°` : ''}` : (t.entity_id ? 'n/a' : '—');
+    return html`
+      <div style="border-bottom:1px solid var(--border)">
+        <div class="sensor-item ${sel ? 'sel' : ''}" @click=${() => p.setActiveThermo(t.id)}>
+          <div class="dot" style="background:${mode ? col : '#90a4ae'}"></div>
+          <div class="nm">${t.label?.trim() || 'Thermostat'}${this._batteryText(t.entity_id)}</div>
+          <div class="badge" style=${mode ? `color:${col}` : nothing}>${badge}</div>
+        </div>
+        ${sel ? this._thermostatEditor(t) : nothing}
+      </div>
+    `;
+  }
+
+  private _thermostatEditor(t: ThermostatFixture) {
+    const p = this.planner;
+    const upd = (mut: () => void) => { mut(); p.save(); p.emitConfig(); };
+    return html`
+      <div style="background:rgba(0,0,0,0.25);border-radius:4px;padding:6px;margin:4px 0">
+        <div class="row"><label>Label</label>
+          <input type="text" .value=${t.label ?? ''} placeholder="Thermostat"
+                 @input=${(e: Event) => upd(() => { t.label = (e.target as HTMLInputElement).value; })}>
+        </div>
+        ${this._lockRow(t)}
+        <div class="row"><label>X (mm)</label>
+          <input type="number" .value=${String(Math.round(t.x))}
+                 @input=${(e: Event) => upd(() => { t.x = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
+        </div>
+        <div class="row"><label>Y (mm)</label>
+          <input type="number" .value=${String(Math.round(t.y))}
+                 @input=${(e: Event) => upd(() => { t.y = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
+        </div>
+        <div class="row"><label>Height (mm)</label>
+          <input type="number" min="0" .value=${String(Math.round(thermostatHeight(t)))}
+                 @input=${(e: Event) => upd(() => {
+                   const v = parseFloat((e.target as HTMLInputElement).value);
+                   t.height = isFinite(v) ? Math.max(0, v) : undefined;
+                 })}>
+        </div>
+        <div class="row"><label title="Permit mode/setpoint changes from the panel modal. Off = view-only status.">Allow control</label>
+          <span class="mini-toggle">
+            <input type="checkbox" .checked=${t.allowControl !== false}
+                   @change=${(e: Event) => upd(() => { t.allowControl = (e.target as HTMLInputElement).checked; })}>
+            <span></span>
+          </span>
+        </div>
+        <div class="row"><label>HA entity</label>
+          <span style="font-size:11px;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+            ${t.entity_id || '— unbound —'}
+          </span>
+        </div>
+        <div style="display:flex;gap:4px;margin-top:4px">
+          <button class="btn" style="flex:1;font-size:11px" @click=${() => this._pickThermostatEntity(t)}>
+            ${t.entity_id ? 'Rebind' : 'Bind'}…
+          </button>
+          ${t.entity_id ? html`
+            <button class="btn" style="font-size:11px"
+                    @click=${() => upd(() => { t.entity_id = null; })}>Unbind</button>
+          ` : nothing}
+        </div>
+        <div style="font-size:10px;color:var(--text-dim);margin-top:4px;line-height:1.3">
+          ${t.entity_id
+            ? 'Click the thermostat to open the control modal (mode/setpoint needs "Allow control").'
+            : 'Unbound: the modal sets a local demo mode + setpoint (off / heat / cool / fan).'}
+        </div>
+        <button class="btn danger" style="width:100%;margin-top:6px" @click=${() => {
+          const f = p.floor();
+          f.thermostats = (f.thermostats ?? []).filter(x => x.id !== t.id);
+          p.activeThermoId = null;
+          p.save(); p.emitConfig();
+        }}>Delete</button>
+      </div>
+    `;
+  }
+
+  private _pickThermostatEntity(t: ThermostatFixture): void {
+    this.dispatchEvent(new CustomEvent('open-entity-picker', {
+      bubbles: true, composed: true,
+      detail: {
+        domain: 'climate',
+        onPick: (id: string) => {
+          t.entity_id = id;
           this.planner.save();
           this.planner.emitConfig();
         },
@@ -2803,13 +2915,16 @@ export class Sidebar extends LitElement {
          : `${d.lockEntity} · ${raw ?? 'n/a'}`)
       : (d.lockLocalState ? `local · ${d.lockLocalState}` : '— unbound —');
     const color = s === 'locked' ? '#ef9a9a' : s === 'unlocked' ? '#66bb6a' : 'var(--text-dim)';
-    const clickable = bound || !!d.lockLocalState;
+    const hasLock = bound || !!d.lockLocalState;
+    // Display-only locks are passive indicators — the badge never toggles.
+    const displayOnly = d.lockControl === 'display';
+    const clickable = hasLock && !displayOnly;
     return html`
       <div class="row" style="margin-top:6px"><label title="lock.* entity — click the state to toggle">Lock</label>
-        <span role="button" title=${clickable ? 'Click to toggle lock' : ''}
+        <span role="button" title=${clickable ? 'Click to toggle lock' : (displayOnly ? 'Display only — clicks do not lock/unlock' : '')}
               style="font-size:11px;color:${color};flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:${clickable ? 'pointer' : 'default'}"
               @click=${() => { if (clickable) { p.toggleDoorLock(d); this.requestUpdate(); } }}>
-          ${label}
+          ${label}${displayOnly ? ' · display only' : ''}
         </span>
       </div>
       <div style="display:flex;gap:4px;margin-top:4px">
@@ -2826,6 +2941,16 @@ export class Sidebar extends LitElement {
             ${d.lockLocalState ? 'Toggle local' : 'Add local lock'}</button>
         `}
       </div>
+      ${hasLock ? html`
+        <div class="row" style="margin-top:4px">
+          <label title="Display only = the padlock/deadbolt shows live state but never locks/unlocks on tap (a shed padlock, a read-by-policy unit — safe against a stray kiosk tap)">Lock control</label>
+          <select style="flex:1;font-size:11px"
+                  @change=${(e: Event) => upd(() => { d.lockControl = (e.target as HTMLSelectElement).value === 'display' ? 'display' : 'full'; })}>
+            <option value="full" ?selected=${!displayOnly}>Full control</option>
+            <option value="display" ?selected=${displayOnly}>Display only</option>
+          </select>
+        </div>
+      ` : nothing}
     `;
   }
 

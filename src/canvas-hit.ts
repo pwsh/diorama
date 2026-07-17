@@ -3,7 +3,7 @@ import { switchSize, distMM, pointToSeg, transformVerts, centroid, localToWorld,
          furnitureCorners, furnitureLocalToWorld, doorEndpoint,
          doorOpenDeltaDeg, windowEndpoints, pointInPolygon } from './geometry.js';
 import type { Planner } from './planner.js';
-import type { Vec2, Wall, Sensor, Furniture, BgImage, MotionSensor, EnvSensor, BleProxy, AlarmPanel, SafetySensor, RobotFixture, CameraFixture, PresenceZone, InfoCard, ActionButton, Door, Window as WindowType, Floor } from './types.js';
+import type { Vec2, Wall, Sensor, Furniture, BgImage, MotionSensor, EnvSensor, BleProxy, AlarmPanel, ThermostatFixture, SafetySensor, RobotFixture, CameraFixture, PresenceZone, InfoCard, ActionButton, Door, Window as WindowType, Floor } from './types.js';
 import type { FloorEdge } from './geometry.js';
 import { envChipHalfPx, infoCardHalfPx, actionButtonHalfPx, type View } from './canvas-render.js';
 
@@ -210,6 +210,10 @@ export function hitDoorLock(p: Planner, view: View, mm: Vec2): { door: Door; idx
     const d = f.doors[i];
     if ((d.kind ?? 'swing') === 'garage') continue;   // garage doors draw no padlock
     if (!d.lockEntity && !d.lockLocalState) continue;
+    // Display-only locks are passive indicators: drop them from hit-testing so
+    // the padlock loses its click-priority over the door panel (clicks fall
+    // through to open/close) and the hover cursor stays 'grab', not 'pointer'.
+    if (d.lockControl === 'display') continue;
     // Screen +Y is world −Y, so the (-9, -11) px screen offset is (−9, +11) px world.
     const cx = d.x - (9 * dpr) / Math.max(view.scale, 1e-9);
     const cy = d.y + (11 * dpr) / Math.max(view.scale, 1e-9);
@@ -284,6 +288,16 @@ export function hitAlarmPanel(p: Planner, view: View, mm: Vec2): AlarmPanel | nu
   const f = p.floor();
   const h = hitPx(view) * 1.4;
   const list = f.alarmPanels ?? [];
+  for (let i = list.length - 1; i >= 0; i--) {
+    if (distMM(list[i], mm) < h) return list[i];
+  }
+  return null;
+}
+
+export function hitThermostat(p: Planner, view: View, mm: Vec2): ThermostatFixture | null {
+  const f = p.floor();
+  const h = hitPx(view) * 1.4;
+  const list = f.thermostats ?? [];
   for (let i = list.length - 1; i >= 0; i--) {
     if (distMM(list[i], mm) < h) return list[i];
   }

@@ -4,6 +4,9 @@ import {
   lightRadius, lightIntensity, lightIconKind, lightRotation, lightLength, switchRotation, switchSize, switchLabelPos,
   motionColor, motionIntensity, sensorColor, BLE_PROXY_DEFAULTS,
   ALARM_DEFAULTS, alarmStateColor,
+  lockGlyphColor, lockGlyphSecured, lockGlyphTransitional, lockGlyphJammed,
+  THERMO_DEFAULTS, hvacModeColor, hvacActionColor, hvacActionActive, hvacAirflow, HVAC_VENT_COLORS,
+  climateTempUnit, fmtTempNum,
   actionButtonSize, actionButtonColor, actionButtonIcon,
   safetyColor, safetyGlyph, safetyIsFloor, SAFETY_DEFAULTS,
   robotGlyph, robotColor, ROBOT_DEFAULTS,
@@ -125,17 +128,25 @@ function drawPolygonWorld(ctx: CanvasRenderingContext2D, worldVerts: Vec2[],
 // outline + open (shifted) shackle; anything else = grey. `s` is the screen
 // half-size in px (~5). Drawn at (cx, cy). Display only.
 function drawPadlock(ctx: CanvasRenderingContext2D, cx: number, cy: number,
-                     s: number, state: string | null | undefined): void {
-  const locked = state === 'locked';
-  const unlocked = state === 'unlocked';
-  const color = locked ? '#ef5350' : unlocked ? '#66bb6a' : '#90a4ae';
+                     s: number, state: string | null | undefined,
+                     displayOnly = false): void {
+  const color = lockGlyphColor(state);          // shared 2D+3D+sidebar resolution
+  const secured = lockGlyphSecured(state);      // locked / jammed / locking → filled + closed shackle
+  // Display-only locks dim to ~70 % (they don't respond to taps — the "unbound
+  // dims" affordance convention). Transitional states dim further (a "moving"
+  // cue); jammed pulses so a fault doesn't sit silently (cheap — the RAF
+  // redraws every frame).
+  let alpha = displayOnly ? 0.7 : 1;
+  if (lockGlyphTransitional(state)) alpha *= 0.6;
+  if (lockGlyphJammed(state)) { const t = (Math.sin(performance.now() / 300) + 1) / 2; alpha *= 0.55 + 0.45 * t; }
   ctx.save();
+  ctx.globalAlpha = alpha;
   ctx.lineWidth = Math.max(1, s * 0.32);
   ctx.strokeStyle = color;
   // Shackle (arc). Open lock: hinge up on one side so it reads "unlocked".
   const bodyTop = cy - s * 0.1;
   ctx.beginPath();
-  if (unlocked) {
+  if (!secured) {
     ctx.arc(cx + s * 0.55, bodyTop - s * 0.35, s * 0.6, Math.PI * 0.9, Math.PI * 2.05);
   } else {
     ctx.arc(cx, bodyTop - s * 0.35, s * 0.6, Math.PI, Math.PI * 2);
@@ -145,7 +156,7 @@ function drawPadlock(ctx: CanvasRenderingContext2D, cx: number, cy: number,
   const bw = s * 1.5, bh = s * 1.2;
   ctx.beginPath();
   ctx.roundRect(cx - bw / 2, bodyTop, bw, bh, s * 0.2);
-  if (locked) { ctx.fillStyle = color; ctx.fill(); }
+  if (secured) { ctx.fillStyle = color; ctx.fill(); }
   else { ctx.fillStyle = 'rgba(0,0,0,0.55)'; ctx.fill(); ctx.stroke(); }
   ctx.restore();
 }
@@ -239,6 +250,7 @@ export function drawAll(ctx: CanvasRenderingContext2D, p: Planner, view: View,
   if (on(L.sensors)) drawSensors(ctx, p, view);
   if (on(L.sensors)) drawBleProxies(ctx, p, view);
   if (on(L.sensors)) drawAlarmPanels(ctx, p, view);
+  if (on(L.sensors)) drawThermostats(ctx, p, view);
   if (on(L.sensors)) drawSafetySensors(ctx, p, view);
   if (on(L.sensors)) drawRobots(ctx, p, view);
   if (on(L.sensors)) drawCameras(ctx, p, view);
@@ -765,6 +777,111 @@ function drawAlarmPanels(ctx: CanvasRenderingContext2D, p: Planner, view: View):
     ctx.fillStyle = state ? hexToRgba(col, 1) : '#cfd8dc';
     ctx.fillText(txt, c.x, by + 1 * dpr);
     drawBatteryBadge(ctx, p, a.entity_id, c.x + hw * 0.9, c.y - hh * 0.9);
+  }
+}
+
+// HVAC thermostat wall control (Feature: climate). A rounded wall plate with a
+// mode-colored "screen" band showing current→target temp; while the unit is
+// actively heating/cooling/running the fan (hvac_action) the band pulses (RAF
+// redraw — the fireplace-flicker idiom's 2D cousin) and a set of airflow arcs in
+// the vent color animates below the plate. Unbound reads dimmed. Rides the
+// sensors layer (gated by the caller).
+function drawThermostats(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
+  const dpr = window.devicePixelRatio || 1;
+  const f = p.floor();
+  const imperial = p.store.imperial;
+  const t = performance.now() / 1000;
+  for (const th of f.thermostats ?? []) {
+    const c = mmToPx(view, th.x, th.y);
+    const st = p.effectiveState(th);
+    const mode = st?.state ?? null;
+    const action = (st?.attributes?.hvac_action as string | undefined) ?? null;
+    const unbound = !th.entity_id;
+    const selected = p.activeThermoId === th.id;
+    const col = hvacModeColor(mode);
+    const active = hvacActionActive(action);
+    let alpha = 1;
+    if (active) alpha = 0.5 + 0.5 * (0.5 + 0.5 * Math.sin(t * 3));
+    const rot = (th.rotation || 0) * Math.PI / 180;
+    const hw = Math.max(9, THERMO_DEFAULTS.size * 0.34 * view.scale);
+    const hh = Math.max(11, THERMO_DEFAULTS.size * 0.42 * view.scale);
+
+    // Airflow arcs BELOW the plate (screen space, drawn before the plate so the
+    // plate paints over their origin). Direction: heat rises, cool sinks, fan flat.
+    const air = hvacAirflow(mode, action);
+    const airOn = !!air && (active || unbound);   // unbound demo: local mode drives it
+    if (airOn && air) {
+      const vcol = HVAC_VENT_COLORS[air];
+      const dir = air === 'heat' ? -1 : 1;   // heat drifts UP on screen, cool/fan DOWN
+      for (let k = 0; k < 3; k++) {
+        const ph = (t * 0.9 + k * 0.34) % 1;
+        const yy = c.y + hh + dir * (hh * 0.4 + ph * hh * 1.6) * (air === 'fan' ? 0.3 : 1) + (air === 'fan' ? 0 : 0);
+        const xx = air === 'fan' ? c.x + hh + ph * hh * 2.4 : c.x;
+        const aa = (1 - ph) * 0.75 * (active ? alpha : 0.6);
+        ctx.strokeStyle = hexToRgba(vcol, aa);
+        ctx.lineWidth = Math.max(1.2, hw * 0.14);
+        ctx.beginPath();
+        const r = hw * (0.35 + ph * 0.5);
+        if (air === 'fan') ctx.arc(xx, c.y, r, -0.6, 0.6);
+        else ctx.arc(xx, yy, r, dir < 0 ? Math.PI * 0.15 : Math.PI * 1.15, dir < 0 ? Math.PI * 0.85 : Math.PI * 1.85);
+        ctx.stroke();
+      }
+    }
+
+    ctx.save();
+    ctx.translate(c.x, c.y);
+    ctx.rotate(rot);
+    // Plate
+    ctx.beginPath();
+    ctx.roundRect(-hw, -hh, hw * 2, hh * 2, Math.min(hw, hh) * 0.32);
+    ctx.fillStyle = 'rgba(20,24,30,0.92)';
+    ctx.fill();
+    ctx.lineWidth = selected ? 2.5 : 1.5;
+    ctx.strokeStyle = selected ? '#fff' : hexToRgba(col, 0.9);
+    if (active) { ctx.save(); ctx.shadowColor = hexToRgba(hvacActionColor(action), 1); ctx.shadowBlur = 12 * alpha; ctx.stroke(); ctx.restore(); }
+    else ctx.stroke();
+    // Screen band (top): mode color.
+    ctx.globalAlpha = unbound ? alpha * 0.55 : alpha;
+    ctx.beginPath();
+    ctx.roundRect(-hw * 0.78, -hh * 0.82, hw * 1.56, hh * 0.9, Math.min(hw, hh) * 0.16);
+    ctx.fillStyle = mode ? col : 'rgba(120,144,156,0.5)';
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    // Temperature readout on the screen (cur→target).
+    const cur = fmtTempNum(st?.attributes?.current_temperature);
+    let target = fmtTempNum(st?.attributes?.temperature);
+    const low = fmtTempNum(st?.attributes?.target_temp_low);
+    const high = fmtTempNum(st?.attributes?.target_temp_high);
+    if (!target && low && high) target = `${low}–${high}`;
+    if (!target && unbound && th.localTemp != null) {
+      const d = imperial ? th.localTemp * 9 / 5 + 32 : th.localTemp;
+      target = fmtTempNum(d);
+    }
+    if (hh > 14) {
+      const readout = cur && target ? `${cur}→${target}` : (target || cur || (unbound ? 'demo' : '—'));
+      ctx.fillStyle = '#0d1013';
+      ctx.font = `600 ${Math.max(7, hh * 0.42)}px sans-serif`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(readout, 0, -hh * 0.37);
+    }
+    // Dial hint below the screen (cosmetic).
+    ctx.fillStyle = 'rgba(200,210,220,0.4)';
+    ctx.beginPath(); ctx.arc(0, hh * 0.42, Math.max(2, hw * 0.28), 0, 2 * Math.PI); ctx.stroke();
+    ctx.restore();
+    // Label below (screen space, unrotated).
+    const label = th.label?.trim() || 'Thermostat';
+    ctx.font = `${10 * dpr}px sans-serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+    const unit = climateTempUnit(st, imperial);
+    const badge = mode ? `${mode.replace('_', ' ')}${cur ? ` ${cur}${unit}` : ''}` : (unbound ? 'unbound' : '—');
+    const txt = `${label} · ${badge}`;
+    const tw = ctx.measureText(txt).width + 8 * dpr;
+    const by = c.y + hh + 4 * dpr;
+    ctx.fillStyle = 'rgba(0,0,0,0.7)';
+    ctx.fillRect(c.x - tw / 2, by, tw, 13 * dpr);
+    ctx.fillStyle = mode ? hexToRgba(col, 1) : '#cfd8dc';
+    ctx.fillText(txt, c.x, by + 1 * dpr);
+    drawBatteryBadge(ctx, p, th.entity_id, c.x + hw * 0.9, c.y - hh * 0.9);
   }
 }
 
@@ -1852,7 +1969,7 @@ function drawDoors(ctx: CanvasRenderingContext2D, p: Planner, view: View): void 
     // (unbound). State resolves from the bound entity OR the local flag.
     if (d.lockEntity || d.lockLocalState) {
       const lst = p.doorLockState(d);
-      drawPadlock(ctx, hinge.x - 9 * dpr, hinge.y - 11 * dpr, 5 * dpr, lst);
+      drawPadlock(ctx, hinge.x - 9 * dpr, hinge.y - 11 * dpr, 5 * dpr, lst, d.lockControl === 'display');
       // Low-battery badge for the lock (locks are commonly battery-powered).
       if (d.lockEntity) drawBatteryBadge(ctx, p, d.lockEntity, hinge.x + 9 * dpr, hinge.y - 11 * dpr);
     }

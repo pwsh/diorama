@@ -13,6 +13,8 @@ import {
   furnitureDef, resolveFurnitureDef, furnitureColor, furnitureCat, isBinKind, binStateIsFull, doorOpenDeltaDeg,
   doorOpenFraction, GARAGE_DOOR_H,
   alarmHeight, alarmStateColor, ALARM_DEFAULTS, ALARM_PLATE_DEPTH_MM,
+  thermostatHeight, THERMO_DEFAULTS, THERMO_PLATE_DEPTH_MM, hvacModeColor, hvacAirflow, HVAC_VENT_COLORS,
+  lockGlyphColor, lockGlyphTransitional,
   safetyColor, safetyIsFloor, SAFETY_DEFAULTS,
   powerGlowScale,
   robotColor, robotLedColor, ROBOT_DEFAULTS,
@@ -24,7 +26,7 @@ import {
   infoCardW, infoCardH,
   logicLightState, actionButtonHeight, actionButtonSize, actionButtonColor, ACTION_BUTTON_DEFAULTS,
 } from './geometry.js';
-import type { Door, Window as WindowType, EnvSensor, BleProxy, AlarmPanel, SafetySensor, RobotFixture, CameraFixture, PresenceZone, InfoCard, ActionButton, ObjectRecipe, ActivityKind } from './types.js';
+import type { Door, Window as WindowType, EnvSensor, BleProxy, AlarmPanel, ThermostatFixture, SafetySensor, RobotFixture, CameraFixture, PresenceZone, InfoCard, ActionButton, ObjectRecipe, ActivityKind } from './types.js';
 
 // The subset of Planner.RobotState the renderer reads (structural — keeps the
 // renderer decoupled from the planner). Positions are plan-frame world mm.
@@ -241,7 +243,7 @@ export interface ActivityContext {
   // x/y in WORLD mm, ageS since the transition. Drives the top-priority
   // "someone just flipped this near me" bubble tier. three-view maintains the
   // rolling list (prev-on map + 45 s / 8-entry cap).
-  recentTriggers?: { kind: 'light_on' | 'light_off' | 'fireplace' | 'tv' | 'doorbell'; x: number; y: number; ageS: number }[];
+  recentTriggers?: { kind: 'light_on' | 'light_off' | 'fireplace' | 'tv' | 'doorbell' | 'action_button'; x: number; y: number; ageS: number }[];
   // OPTIONAL — appliance door-sensor states: furnitureId → the bound door
   // binary_sensor (Furniture.doorEntity) is 'on' (open). Drives the per-frame
   // appliance-door blend for BOUND fridges (case a). Absent → treated as closed.
@@ -602,6 +604,7 @@ const BUBBLE_POOL_TRIGGER: Record<string, string[]> = {
   fireplace: ['🔥', '🔥', '😎', '🕯️'],
   tv: ['📺', '🍿'],
   doorbell: ['🔔', '🚪', '👀'],
+  action_button: ['✨', '💡', '🎬', '👍'],
 };
 
 // General idle-chatter pool (mixed into the personality roll so a walking /
@@ -773,6 +776,21 @@ export class ThreeDRenderer {
   private _actionPressAt: Record<string, number> = {};   // fixture id → last press (performance.now() ms)
   private _bleGroup = new THREE.Group();
   private _alarmGroup = new THREE.Group();
+  // HVAC thermostat wall units + their vent airflow particle clouds. Plates +
+  // readout sprites rebuild under _keyThermo (three-view); the per-active-vent
+  // THREE.Points clouds live INSIDE _thermoGroup and are advanced per-frame by
+  // _advanceVents (zero allocation — mutate the position buffer in place, like
+  // the weather precip clouds). The shared point texture (_ventTex) is built once
+  // and disposed only in destroy(); _clearGroup frees the cloud geometry+material
+  // but NOT the shared map. Rides the sensors layer.
+  private _thermoGroup = new THREE.Group();
+  private _ventClouds: {
+    kind: 'heat' | 'cool' | 'fan'; points: THREE.Points;
+    pos: Float32Array; vel: Float32Array; life: Float32Array;
+    count: number; ox: number; oy: number; oz: number;   // vent origin (scene coords)
+    dirX: number; dirY: number; dirZ: number; spread: number; speed: number;
+  }[] = [];
+  private _ventTex: THREE.CanvasTexture | null = null;
   private _safetyGroup = new THREE.Group();
   // Leak-detector alarm-onset timestamps (s) so the 3D puddle decal grows over
   // SAFETY_DEFAULTS.leakGrowSec from leak onset. Cleared when it stops alarming.
@@ -901,8 +919,8 @@ export class ThreeDRenderer {
   private _lastAnimT = 0;   // performance.now()/1000 of the previous _animate frame
   private _ZONE_H = 305;  // 1 ft — low outlines that don't wall off the room
   private _OBJ_H = 900;
-  private _onFixtureClick: ((info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'safety' | 'robot' | 'lock' | 'appliance' | 'action'; entity_id: string | null; fixtureId: string }) => void) | null = null;
-  private _onFixtureDblClick: ((info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'safety' | 'robot' | 'lock' | 'appliance' | 'action'; entity_id: string | null; fixtureId: string }) => void) | null = null;
+  private _onFixtureClick: ((info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'thermostat' | 'safety' | 'robot' | 'lock' | 'appliance' | 'action'; entity_id: string | null; fixtureId: string }) => void) | null = null;
+  private _onFixtureDblClick: ((info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'thermostat' | 'safety' | 'robot' | 'lock' | 'appliance' | 'action'; entity_id: string | null; fixtureId: string }) => void) | null = null;
   private _raycaster = new THREE.Raycaster();
   // Per-target humanoid rigs, persisted across frames so we can carry
   // walk-cycle phase + smoothed body facing.
@@ -1122,7 +1140,7 @@ export class ThreeDRenderer {
                     this._zoneGroup, this._haloGroup,
                     this._sensorGroup, this._motionGroup, this._envGroup, this._infoGroup,
                     this._actionGroup,
-                    this._bleGroup, this._alarmGroup, this._safetyGroup,
+                    this._bleGroup, this._alarmGroup, this._thermoGroup, this._safetyGroup,
                     this._robotGroup, this._robotRigGroup, this._cameraGroup, this._camAlertGroup, this._pzoneGroup,
                     this._groundGroup,
                     this._lightGroup, this._switchGroup, this._targetGroup, this._ghostGroup,
@@ -1202,15 +1220,15 @@ export class ThreeDRenderer {
     this._animate();
   }
 
-  onFixtureClick(fn: (info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'safety' | 'robot' | 'lock' | 'appliance' | 'action'; entity_id: string | null; fixtureId: string }) => void): void {
+  onFixtureClick(fn: (info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'thermostat' | 'safety' | 'robot' | 'lock' | 'appliance' | 'action'; entity_id: string | null; fixtureId: string }) => void): void {
     this._onFixtureClick = fn;
   }
-  onFixtureDblClick(fn: (info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'safety' | 'robot' | 'lock' | 'appliance' | 'action'; entity_id: string | null; fixtureId: string }) => void): void {
+  onFixtureDblClick(fn: (info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'thermostat' | 'safety' | 'robot' | 'lock' | 'appliance' | 'action'; entity_id: string | null; fixtureId: string }) => void): void {
     this._onFixtureDblClick = fn;
   }
 
   private _raycastFixture(clientX: number, clientY: number):
-      { kind: 'light' | 'switch' | 'media' | 'alarm' | 'safety' | 'robot' | 'lock' | 'appliance' | 'action'; entity_id: string | null; fixtureId: string } | null {
+      { kind: 'light' | 'switch' | 'media' | 'alarm' | 'thermostat' | 'safety' | 'robot' | 'lock' | 'appliance' | 'action'; entity_id: string | null; fixtureId: string } | null {
     if (!this._renderer || !this._camera) return null;
     const rect = this._renderer.domElement.getBoundingClientRect();
     const ndc = new THREE.Vector2(
@@ -1233,6 +1251,8 @@ export class ThreeDRenderer {
     if (this._actionGroup.visible) roots.push(this._actionGroup);
     // Alarm keypads are clickable (open the control modal); ride the sensors layer.
     if (this._alarmGroup.visible) roots.push(this._alarmGroup);
+    // Thermostats are clickable (open the climate control modal); ride sensors.
+    if (this._thermoGroup.visible) roots.push(this._thermoGroup);
     // Smoke / CO detectors are clickable (unbound → manual test trigger).
     if (this._safetyGroup.visible) roots.push(this._safetyGroup);
     // Robots (docks + moving bodies) are clickable → run/dock.
@@ -1249,7 +1269,7 @@ export class ThreeDRenderer {
       let obj: THREE.Object3D | null = h.object;
       while (obj) {
         const ud = obj.userData;
-        if (ud && (ud.kind === 'light' || ud.kind === 'switch' || ud.kind === 'media' || ud.kind === 'alarm' || ud.kind === 'safety' || ud.kind === 'robot' || ud.kind === 'lock' || ud.kind === 'appliance' || ud.kind === 'action')) {
+        if (ud && (ud.kind === 'light' || ud.kind === 'switch' || ud.kind === 'media' || ud.kind === 'alarm' || ud.kind === 'thermostat' || ud.kind === 'safety' || ud.kind === 'robot' || ud.kind === 'lock' || ud.kind === 'appliance' || ud.kind === 'action')) {
           return { kind: ud.kind, entity_id: ud.entity_id ?? null, fixtureId: String(ud.fixtureId) };
         }
         obj = obj.parent;
@@ -1703,7 +1723,7 @@ export class ThreeDRenderer {
   clearTransientGroups(): void {
     for (const g of [
       this._floorGroup, this._doorGroup, this._modelGroup, this._zoneGroup, this._haloGroup,
-      this._sensorGroup, this._motionGroup, this._infoGroup, this._actionGroup, this._bleGroup, this._alarmGroup,
+      this._sensorGroup, this._motionGroup, this._infoGroup, this._actionGroup, this._bleGroup, this._alarmGroup, this._thermoGroup,
       this._safetyGroup, this._robotGroup, this._robotRigGroup, this._cameraGroup, this._camAlertGroup, this._pzoneGroup,
       this._groundGroup,
       this._lightGroup, this._switchGroup, this._targetGroup, this._ghostGroup,
@@ -1714,6 +1734,9 @@ export class ThreeDRenderer {
     }
     this._infoRigs = [];
     this._actionRigs = [];
+    // Vent airflow clouds live in _thermoGroup (just cleared) — drop the tracking
+    // list so _advanceVents can't iterate freed geometry before the next rebuild.
+    this._ventClouds = [];
     this._nowPlaying = {};
     this._pulseActive = false;
     // Robot rigs live in _robotRigGroup (just cleared); drop their bookkeeping so
@@ -2176,6 +2199,8 @@ export class ThreeDRenderer {
     // BLE proxy pucks + alarm keypads ride the sensors layer (like mmWave).
     this._bleGroup.visible = v.sensors !== false;
     this._alarmGroup.visible = v.sensors !== false;
+    // Thermostat wall units ride the sensors layer too.
+    this._thermoGroup.visible = v.sensors !== false;
     // Smoke / CO detectors ride the sensors layer too.
     this._safetyGroup.visible = v.sensors !== false;
     // Robot docks + moving bodies ride the sensors layer too.
@@ -4091,8 +4116,14 @@ export class ThreeDRenderer {
         ? itemState({ entity_id: d.lockEntity }, stateOf)?.state
         : d.lockLocalState;
       if (d.lockEntity || d.lockLocalState) {
-        const lc = lockSt === 'locked' ? 0xef5350 : lockSt === 'unlocked' ? 0x66bb6a : 0x90a4ae;
-        const boltMat = this._mat({ color: lc, emissive: lc, emissiveIntensity: lockSt ? 0.85 : 0.25 });
+        // Shared color resolution (jammed=amber, transitional=target color, etc).
+        const lc = hexToInt(lockGlyphColor(lockSt));
+        // Transitional (locking/unlocking/opening) reads dimmer; display-only
+        // locks further reduce emissive as a "look-but-don't-touch" cue.
+        let ei = lockSt ? 0.85 : 0.25;
+        if (lockGlyphTransitional(lockSt)) ei = 0.5;
+        if (d.lockControl === 'display') ei *= 0.65;
+        const boltMat = this._mat({ color: lc, emissive: lc, emissiveIntensity: ei });
         for (const zc of [DOOR_T / 2 + 10, -(DOOR_T / 2 + 10)]) {
           const bolt = new THREE.Mesh(new THREE.BoxGeometry(70, 100, 30), boltMat);
           bolt.position.set(-d.w + 100, DOOR_H * 0.5, zc);
@@ -5464,6 +5495,177 @@ export class ThreeDRenderer {
         }
       }
       this._alarmGroup.add(grp);
+    }
+  }
+
+  // HVAC thermostat wall units (Feature: climate): a wall plate at `height` with
+  // an emissive mode-colored screen, a temp readout sprite, and a slatted wall
+  // vent grille below it. While the unit is actively heating/cooling/running the
+  // fan (hvacAirflow resolved from mode + hvac_action) the slats glow in the vent
+  // color AND a THREE.Points airflow cloud drifts out of the vent (heat rises,
+  // cool sinks, fan blows straight out). Meshes carry userData.kind === 'thermostat'
+  // so a raycast click opens the control modal. Rebuilt under _keyThermo; the
+  // vent clouds are advanced per-frame by _advanceVents (zero allocation).
+  private readonly _VENT_LIFE = 1.6;
+  updateThermostats(units: ThermostatFixture[], stateProvider: StateProvider): void {
+    if (!this._scene) return;
+    // Readout sprite CanvasTextures aren't covered by _clearGroup — free them,
+    // then clear (cloud geometry+material freed by _clearGroup; shared _ventTex kept).
+    this._disposeSpriteMaps(this._thermoGroup);
+    this._clearGroup(this._thermoGroup);
+    this._ventClouds = [];
+    for (const t of units) {
+      const st = itemState(t, stateProvider);
+      const mode = st?.state ?? null;
+      const action = (st?.attributes?.hvac_action as string | undefined) ?? null;
+      const modeCol = hexToInt(hvacModeColor(mode));
+      const ud = { kind: 'thermostat' as const, entity_id: t.entity_id ?? null, fixtureId: t.id };
+      const grp = new THREE.Group();
+      grp.userData = { ...ud };
+      const P = this._w(t.x, t.y, thermostatHeight(t));
+      grp.position.set(P.x, P.y, P.z);
+      const yaw = -((t.rotation || 0) * Math.PI / 180);
+      grp.rotation.y = yaw;
+      const plateW = THERMO_DEFAULTS.size * 0.42;
+      const plateH = THERMO_DEFAULTS.size * 0.42;
+      const plateD = THERMO_PLATE_DEPTH_MM;
+      // Plate body (back flush on the wall; snap offset = wallT/2 + plateD/2).
+      const body = new THREE.Mesh(
+        new THREE.BoxGeometry(plateW, plateH, plateD),
+        this._mat({ color: 0x1a1f26, metalness: 0.2, roughness: 0.6 }));
+      body.userData = ud;
+      grp.add(body);
+      // Screen band on the front (+Z), proud of the plate (coincident-face gotcha).
+      const screen = new THREE.Mesh(
+        new THREE.BoxGeometry(plateW * 0.74, plateH * 0.5, 8),
+        this._mat({ color: modeCol, emissive: modeCol, emissiveIntensity: mode ? 0.9 : 0.25 }));
+      screen.position.set(0, plateH * 0.12, plateD / 2 + 4);
+      screen.userData = { ...ud, outlineSkip: true };
+      grp.add(screen);
+      // Slatted wall vent grille below the plate. Front on +Z; slats glow in the
+      // vent color when air is flowing.
+      const air = hvacAirflow(mode, action);
+      const ventW = THERMO_DEFAULTS.size * 0.62, ventH = THERMO_DEFAULTS.size * 0.32, ventD = 30;
+      const ventY = -plateH * 0.5 - ventH * 0.65 - 30;
+      const frame = new THREE.Mesh(
+        new THREE.BoxGeometry(ventW, ventH, ventD),
+        this._mat({ color: 0x2b333c, metalness: 0.2, roughness: 0.7 }));
+      frame.position.set(0, ventY, plateD / 2 - 6);
+      frame.userData = ud;
+      grp.add(frame);
+      const slatCol = air ? hexToInt(HVAC_VENT_COLORS[air]) : 0x455a64;
+      const slatMat = this._mat({ color: slatCol, emissive: air ? slatCol : 0x000000, emissiveIntensity: air ? 0.55 : 0 });
+      for (let s = 0; s < 4; s++) {
+        const slat = new THREE.Mesh(new THREE.BoxGeometry(ventW * 0.86, ventH * 0.13, 6), slatMat);
+        slat.position.set(0, ventY + ventH * 0.28 - s * ventH * 0.19, plateD / 2 + 2);
+        slat.userData = { ...ud, outlineSkip: true };
+        grp.add(slat);
+      }
+      this._thermoGroup.add(grp);
+
+      // Temp readout sprite above the plate (cur→target).
+      const attrs = (st?.attributes ?? {}) as Record<string, unknown>;
+      const num = (v: unknown) => (typeof v === 'number' && isFinite(v) ? Math.round(v).toString() : null);
+      const cur = num(attrs.current_temperature);
+      const tgt = num(attrs.temperature) ?? num(attrs.target_temp_high) ??
+        (t.entity_id == null && t.localTemp != null ? Math.round(t.localTemp).toString() : null);
+      const readout = cur && tgt ? `${cur}°→${tgt}°` : (tgt ? `${tgt}°` : (cur ? `${cur}°` : (mode ?? '—')));
+      const sp = this._makeTextSprite(readout, hvacModeColor(mode), 0.62);
+      sp.position.set(P.x, P.y + plateH * 0.95, P.z);
+      this._thermoGroup.add(sp);
+
+      // Airflow particles (only while actively conditioning).
+      if (air) {
+        const outX = Math.sin(yaw), outZ = Math.cos(yaw);
+        const lz = plateD / 2 + 20;
+        const ox = P.x + outX * lz, oz = P.z + outZ * lz, oy = P.y + ventY;
+        let dirX = outX, dirY = 0, dirZ = outZ;
+        if (air === 'heat') { dirY = 1.1; }
+        else if (air === 'cool') { dirY = -0.9; dirX = outX * 1.1; dirZ = outZ * 1.1; }
+        const dl = Math.hypot(dirX, dirY, dirZ) || 1;
+        this._buildVentCloud(air, ox, oy, oz, dirX / dl, dirY / dl, dirZ / dl);
+      }
+    }
+  }
+
+  // Shared soft round point sprite for the vent airflow (built once, disposed
+  // only in destroy — the PointsMaterial toon-factory exemption, like weather).
+  private _ventTexture(): THREE.CanvasTexture {
+    if (this._ventTex) return this._ventTex;
+    const c = document.createElement('canvas');
+    c.width = 32; c.height = 32;
+    const g = c.getContext('2d')!;
+    const grad = g.createRadialGradient(16, 16, 0, 16, 16, 16);
+    grad.addColorStop(0, 'rgba(255,255,255,0.95)');
+    grad.addColorStop(0.5, 'rgba(255,255,255,0.4)');
+    grad.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = grad;
+    g.fillRect(0, 0, 32, 32);
+    this._ventTex = new THREE.CanvasTexture(c);
+    return this._ventTex;
+  }
+
+  private _seedVentParticle(
+    pos: Float32Array, vel: Float32Array, life: Float32Array, i: number,
+    ox: number, oy: number, oz: number, dirX: number, dirY: number, dirZ: number,
+    speed: number, spread: number, stagger: boolean,
+  ): void {
+    const j = i * 3;
+    pos[j]     = ox + (Math.random() - 0.5) * 130;
+    pos[j + 1] = oy + (Math.random() - 0.5) * 90;
+    pos[j + 2] = oz + (Math.random() - 0.5) * 130;
+    vel[j]     = dirX * speed + (Math.random() - 0.5) * spread;
+    vel[j + 1] = dirY * speed + (Math.random() - 0.5) * spread * 0.6;
+    vel[j + 2] = dirZ * speed + (Math.random() - 0.5) * spread;
+    life[i] = stagger ? Math.random() * this._VENT_LIFE : 0;
+  }
+
+  private _buildVentCloud(
+    kind: 'heat' | 'cool' | 'fan',
+    ox: number, oy: number, oz: number, dirX: number, dirY: number, dirZ: number,
+  ): void {
+    const count = 26;
+    const speed = kind === 'heat' ? 520 : kind === 'cool' ? 640 : 720;
+    const spread = kind === 'fan' ? 260 : 180;
+    const pos = new Float32Array(count * 3);
+    const vel = new Float32Array(count * 3);
+    const life = new Float32Array(count);
+    for (let i = 0; i < count; i++)
+      this._seedVentParticle(pos, vel, life, i, ox, oy, oz, dirX, dirY, dirZ, speed, spread, true);
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    const mat = new THREE.PointsMaterial({
+      map: this._ventTexture(), size: 95, color: hexToInt(HVAC_VENT_COLORS[kind]),
+      transparent: true, opacity: 0.72, depthWrite: false, sizeAttenuation: true,
+    });
+    const points = new THREE.Points(geo, mat);
+    points.frustumCulled = false;
+    points.renderOrder = 3;
+    points.userData = { outlineSkip: true, ventKind: kind };
+    this._thermoGroup.add(points);
+    this._ventClouds.push({ kind, points, pos, vel, life, count, ox, oy, oz, dirX, dirY, dirZ, spread, speed });
+  }
+
+  // Advance vent airflow particles every frame — mutate the position buffer in
+  // place (ZERO allocation after build), recycling each particle at its vent
+  // origin once its life exceeds _VENT_LIFE. Gated on the group's visibility.
+  private _advanceVents(dt: number): void {
+    if (!this._thermoGroup.visible || !this._ventClouds.length) return;
+    for (const cl of this._ventClouds) {
+      const { pos, vel, life, count } = cl;
+      for (let i = 0; i < count; i++) {
+        life[i] += dt;
+        if (life[i] >= this._VENT_LIFE) {
+          this._seedVentParticle(pos, vel, life, i, cl.ox, cl.oy, cl.oz,
+            cl.dirX, cl.dirY, cl.dirZ, cl.speed, cl.spread, false);
+          continue;
+        }
+        const j = i * 3;
+        pos[j]     += vel[j]     * dt;
+        pos[j + 1] += vel[j + 1] * dt;
+        pos[j + 2] += vel[j + 2] * dt;
+      }
+      (cl.points.geometry.getAttribute('position') as THREE.BufferAttribute).needsUpdate = true;
     }
   }
 
@@ -10965,7 +11167,7 @@ export class ThreeDRenderer {
     for (const g of [
       this._floorGroup, this._doorGroup, this._modelGroup, this._zoneGroup, this._haloGroup,
       this._sensorGroup, this._motionGroup, this._envGroup, this._infoGroup, this._actionGroup, this._bleGroup,
-      this._alarmGroup, this._safetyGroup, this._robotGroup, this._robotRigGroup,
+      this._alarmGroup, this._thermoGroup, this._safetyGroup, this._robotGroup, this._robotRigGroup,
       this._cameraGroup, this._camAlertGroup, this._pzoneGroup, this._groundGroup,
       this._lightGroup, this._switchGroup, this._targetGroup, this._gpsGroup, this._weatherGroup,
       this._pulseGroup, this._nowPlayingGroup,
@@ -11005,6 +11207,7 @@ export class ThreeDRenderer {
     this._fogPlaneTex?.dispose(); this._fogPlaneTex = null;
     this._cloudShadowTex?.dispose(); this._cloudShadowTex = null;
     this._puddleTex?.dispose(); this._puddleTex = null;
+    this._ventTex?.dispose(); this._ventTex = null;
     // DC-D alert beacon light (shared resource — disposed only here).
     if (this._alertPulseLight) { this._alertPulseLight.dispose(); this._alertPulseLight = null; }
     this._outlineMaterial?.dispose(); this._outlineMaterial = null;
@@ -11162,6 +11365,8 @@ export class ThreeDRenderer {
     // Outdoor weather effects — buffer mutation only (no per-frame allocation);
     // fog easing runs even when the group is hidden (see _advanceWeather).
     this._advanceWeather(frameDt, nowS);
+    // Thermostat vent airflow particles — buffer mutation only (zero allocation).
+    this._advanceVents(frameDt);
     // Glass-house transit puppet — scripted cross-STORY_H walk (Tier 2 stretch).
     this._advanceTransitPuppet(frameDt);
     // Info-card plaques — clock repaint on the minute + flash pulse (no rebuild).

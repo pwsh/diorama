@@ -2,7 +2,7 @@ import { LitElement, html, nothing } from 'lit';
 import { property, state } from 'lit/decorators.js';
 import { customElement } from './define.js';
 import { finishZoneEdit, cancelZoneEdit } from '../canvas-interact.js';
-import { alarmStateColor } from '../geometry.js';
+import { alarmStateColor, hvacModeColor, climateFeature, CLIMATE_FEATURE, climateTempUnit, fmtTempNum, clampSetpoint } from '../geometry.js';
 import { CONDITION_GLYPH, CONDITION_LABEL, tempText, weatherEffectEnabled, worstAlertSeverity } from '../weather.js';
 import { listPacks, getPack, packEffectiveState, resolveDef } from '../avatars.js';
 import { OFFLINE_FLAG_KEY } from '../ha-local.js';
@@ -652,6 +652,201 @@ export class AlarmModal extends LitElement {
               <button class="btn" style="flex:1" @click=${() => arm('alarm_arm_home', 'armed_home')}>Arm Home</button>
               <button class="btn" style="flex:1" @click=${() => arm('alarm_arm_away', 'armed_away')}>Arm Away</button>
             </div>
+          ` : nothing}
+        </div>
+      </div>
+    `;
+  }
+}
+
+// ── Thermostat / HVAC control modal (Feature: climate) ────────────────────
+// Bound + allowControl → full control surface: HVAC mode buttons (restricted to
+// the entity's own hvac_modes), a single-setpoint OR low/high range stepper
+// (stepped by target_temp_step, clamped to min/max), fan + preset dropdowns gated
+// on supported_features. Bound view-only → readout only. Unbound → local demo
+// (localState mode + localTemp setpoint). Setpoint taps are optimistic + debounced
+// ~400 ms before the service call. View mode never opens it (guarded upstream).
+@customElement('diorama-thermostat-modal')
+export class ThermostatModal extends LitElement {
+  @property({ attribute: false }) planner!: Planner;
+  @state() open = false;
+  @state() private _id = '';
+  // Optimistic pending setpoints (null = show the live value).
+  @state() private _pend: number | null = null;
+  @state() private _pendLo: number | null = null;
+  @state() private _pendHi: number | null = null;
+  private _sendTimer: number | null = null;
+
+  protected override createRenderRoot() { return this; }
+
+  override connectedCallback(): void {
+    super.connectedCallback();
+    this.planner.addEventListener('config', this._tick);
+    this.planner.addEventListener('live', this._tick);
+  }
+  override disconnectedCallback(): void {
+    super.disconnectedCallback();
+    this.planner.removeEventListener('config', this._tick);
+    this.planner.removeEventListener('live', this._tick);
+  }
+  private _tick = () => { if (this.open) this.requestUpdate(); };
+
+  show(id: string): void {
+    this._id = id;
+    this._pend = this._pendLo = this._pendHi = null;
+    if (this._sendTimer) { clearTimeout(this._sendTimer); this._sendTimer = null; }
+    this.open = true;
+  }
+
+  private _thermo() {
+    return (this.planner.floor().thermostats ?? []).find(t => t.id === this._id) ?? null;
+  }
+
+  // Debounced single-setpoint send (optimistic display holds until reopen).
+  private _scheduleTemp(temp: number): void {
+    this._pend = temp;
+    if (this._sendTimer) clearTimeout(this._sendTimer);
+    this._sendTimer = window.setTimeout(() => {
+      this._sendTimer = null;
+      this.planner.setThermostatTemp(this._id, temp);
+    }, 400);
+  }
+  private _scheduleRange(lo: number, hi: number): void {
+    this._pendLo = lo; this._pendHi = hi;
+    if (this._sendTimer) clearTimeout(this._sendTimer);
+    this._sendTimer = window.setTimeout(() => {
+      this._sendTimer = null;
+      this.planner.setThermostatTemp(this._id, 0, lo, hi);
+    }, 400);
+  }
+
+  override render() {
+    if (!this.open) return nothing;
+    const p = this.planner;
+    const t = this._thermo();
+    if (!t) return nothing;
+    const st = p.effectiveState(t);
+    const mode = st?.state ?? null;
+    const attrs = (st?.attributes ?? {}) as Record<string, unknown>;
+    const bound = !!t.entity_id;
+    const demo = !bound;
+    const canControl = demo || (bound && t.allowControl !== false);
+    const col = hvacModeColor(mode);
+    const label = t.label?.trim() || 'Thermostat';
+    const imperial = p.store.imperial;
+    const unit = climateTempUnit(st, imperial);
+
+    const action = (attrs.hvac_action as string | undefined) ?? null;
+    const curTemp = fmtTempNum(attrs.current_temperature);
+    const curHum = fmtTempNum(attrs.current_humidity);
+
+    // Setpoint model (bound reads attrs; demo uses localTemp + defaults).
+    const step = typeof attrs.target_temp_step === 'number' && attrs.target_temp_step > 0
+      ? attrs.target_temp_step : (demo ? 1 : 0.5);
+    const min = typeof attrs.min_temp === 'number' ? attrs.min_temp : (demo ? 7 : -50);
+    const max = typeof attrs.max_temp === 'number' ? attrs.max_temp : (demo ? 35 : 150);
+    const isRange = attrs.target_temp_low != null && attrs.target_temp_high != null;
+
+    const clamp = (v: number) => clampSetpoint(v, min, max, step);
+    const single = this._pend ?? (bound
+      ? (typeof attrs.temperature === 'number' ? attrs.temperature : null)
+      : (t.localTemp ?? 21));
+    const lo = this._pendLo ?? (typeof attrs.target_temp_low === 'number' ? attrs.target_temp_low : null);
+    const hi = this._pendHi ?? (typeof attrs.target_temp_high === 'number' ? attrs.target_temp_high : null);
+
+    // Mode / fan / preset option lists.
+    const hvacModes = Array.isArray(attrs.hvac_modes)
+      ? (attrs.hvac_modes as string[])
+      : (demo ? ['off', 'heat', 'cool', 'fan_only'] : []);
+    const supported = typeof attrs.supported_features === 'number' ? attrs.supported_features : 0;
+    const fanModes = climateFeature(supported, CLIMATE_FEATURE.FAN_MODE) && Array.isArray(attrs.fan_modes)
+      ? (attrs.fan_modes as string[]) : null;
+    const presetModes = climateFeature(supported, CLIMATE_FEATURE.PRESET_MODE) && Array.isArray(attrs.preset_modes)
+      ? (attrs.preset_modes as string[]) : null;
+
+    const stepBtn = (dir: number, cur: number | null, apply: (v: number) => void) => html`
+      <button class="btn" style="width:44px;font-size:18px"
+              @click=${() => apply(clamp((cur ?? 21) + dir * step))}>${dir < 0 ? '−' : '+'}</button>`;
+
+    return html`
+      <div class="modal-ov" @click=${(e: MouseEvent) => { if (e.target === e.currentTarget) this.open = false; }}>
+        <div class="modal">
+          <h3>${label}
+            <button class="close" @click=${() => this.open = false}>✕</button>
+          </h3>
+          <div style="display:flex;flex-direction:column;align-items:center;gap:4px;padding:12px 0;border-bottom:1px solid var(--border)">
+            <div style="font-size:34px;font-weight:700;color:${col};line-height:1">
+              ${curTemp != null ? `${curTemp}${unit}` : (demo ? '—' : 'n/a')}
+            </div>
+            <div style="font-size:13px;color:${col};text-transform:capitalize">
+              ${mode ? mode.replace(/_/g, ' ') : (bound ? 'unavailable' : 'demo')}${action ? ` · ${action}` : ''}
+            </div>
+            ${curHum != null ? html`<div style="font-size:11px;color:var(--text-dim)">humidity ${curHum}%</div>` : nothing}
+            ${demo ? html`<div style="font-size:11px;color:var(--text-dim)">Local demo (not bound to Home Assistant)</div>` : nothing}
+            ${bound && t.allowControl === false ? html`<div style="font-size:11px;color:var(--text-dim)">View only — enable "Allow control"</div>` : nothing}
+          </div>
+
+          ${canControl ? html`
+            <!-- Setpoint stepper(s) -->
+            <div style="padding:12px 0;border-bottom:1px solid var(--border)">
+              ${isRange ? html`
+                <div style="display:flex;gap:14px;justify-content:center">
+                  <div style="display:flex;flex-direction:column;align-items:center;gap:4px">
+                    <span style="font-size:11px;color:var(--text-dim)">Heat to</span>
+                    <div style="display:flex;align-items:center;gap:6px">
+                      ${stepBtn(-1, lo, v => this._scheduleRange(Math.min(v, hi ?? v), hi ?? v))}
+                      <span style="font-size:20px;font-weight:600;min-width:48px;text-align:center">${lo != null ? `${fmtTempNum(lo)}°` : '—'}</span>
+                      ${stepBtn(1, lo, v => this._scheduleRange(Math.min(v, hi ?? v), hi ?? v))}
+                    </div>
+                  </div>
+                  <div style="display:flex;flex-direction:column;align-items:center;gap:4px">
+                    <span style="font-size:11px;color:var(--text-dim)">Cool to</span>
+                    <div style="display:flex;align-items:center;gap:6px">
+                      ${stepBtn(-1, hi, v => this._scheduleRange(lo ?? v, Math.max(v, lo ?? v)))}
+                      <span style="font-size:20px;font-weight:600;min-width:48px;text-align:center">${hi != null ? `${fmtTempNum(hi)}°` : '—'}</span>
+                      ${stepBtn(1, hi, v => this._scheduleRange(lo ?? v, Math.max(v, lo ?? v)))}
+                    </div>
+                  </div>
+                </div>
+              ` : html`
+                <div style="display:flex;align-items:center;justify-content:center;gap:10px">
+                  <span style="font-size:11px;color:var(--text-dim)">Target</span>
+                  ${stepBtn(-1, single, v => this._scheduleTemp(v))}
+                  <span style="font-size:24px;font-weight:600;min-width:60px;text-align:center">${single != null ? `${fmtTempNum(single)}${unit}` : '—'}</span>
+                  ${stepBtn(1, single, v => this._scheduleTemp(v))}
+                </div>
+              `}
+            </div>
+
+            <!-- HVAC mode buttons -->
+            ${hvacModes.length ? html`
+              <div style="display:flex;flex-wrap:wrap;gap:6px;padding:12px 0;border-bottom:1px solid var(--border)">
+                ${hvacModes.map(m => html`
+                  <button class="btn" style="flex:1 0 28%;font-size:12px;text-transform:capitalize;${m === mode ? `outline:2px solid ${hvacModeColor(m)};color:${hvacModeColor(m)}` : ''}"
+                          @click=${() => p.setThermostatMode(this._id, m)}>${m.replace(/_/g, ' ')}</button>
+                `)}
+              </div>
+            ` : nothing}
+
+            <!-- Fan / preset dropdowns -->
+            ${fanModes ? html`
+              <div style="display:flex;gap:10px;align-items:center;padding:8px 0">
+                <label style="font-size:12px;color:var(--text-dim);flex:0 0 80px">Fan</label>
+                <select style="flex:1" .value=${String(attrs.fan_mode ?? '')}
+                        @change=${(e: Event) => p.setThermostatFanMode(this._id, (e.target as HTMLSelectElement).value)}>
+                  ${fanModes.map(m => html`<option value=${m} ?selected=${m === attrs.fan_mode}>${m}</option>`)}
+                </select>
+              </div>
+            ` : nothing}
+            ${presetModes ? html`
+              <div style="display:flex;gap:10px;align-items:center;padding:8px 0">
+                <label style="font-size:12px;color:var(--text-dim);flex:0 0 80px">Preset</label>
+                <select style="flex:1" .value=${String(attrs.preset_mode ?? '')}
+                        @change=${(e: Event) => p.setThermostatPresetMode(this._id, (e.target as HTMLSelectElement).value)}>
+                  ${presetModes.map(m => html`<option value=${m} ?selected=${m === attrs.preset_mode}>${m}</option>`)}
+                </select>
+              </div>
+            ` : nothing}
           ` : nothing}
         </div>
       </div>

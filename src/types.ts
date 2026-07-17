@@ -248,6 +248,27 @@ export interface AlarmPanel {
   locked?: boolean;           // canvas move/rotate/delete disabled (click still works)
 }
 
+// Wall-mounted HVAC / thermostat control fixture, bound to a climate.* entity.
+// Snaps flush to the nearest wall like a switch / alarm panel (no ganging).
+// Clicking opens the thermostat control modal. The 2D plate shows the current +
+// target temperature with a mode-colored band (heat amber/red, cool blue, …);
+// the 3D unit adds a slatted wall vent that emits mode-colored airflow particles
+// while the unit's hvac_action is actively heating / cooling / running the fan.
+// Rides the sensors layer (like the alarm panel). See geometry.ts
+// HVAC_MODE_COLORS / hvacActionColor / climateFeature / snapThermostatToWall.
+export interface ThermostatFixture {
+  id: string;
+  x: number; y: number;
+  rotation?: number;         // deg, wall-plate convention like switches/alarm (0 = +Y world)
+  height?: number;           // mm above floor; default 1500 (adult eye level)
+  entity_id: string | null;  // climate.*
+  allowControl?: boolean;    // permit mode/setpoint changes from the modal (default ON)
+  localState?: string;       // unbound synthetic hvac_mode ('off'|'heat'|'cool'|'fan_only'|…) for demo control
+  localTemp?: number;        // unbound synthetic single setpoint (°C); inert once bound
+  label?: string;
+  locked?: boolean;          // canvas move/rotate/delete disabled (click still works)
+}
+
 // Smoke / CO safety detector fixture. Ceiling-mounted (no wall snap; free
 // placement like a motion sensor). Bound to a binary_sensor.* whose 'on' state
 // means ALARM (device_class smoke / carbon_monoxide). Unbound detectors carry a
@@ -372,6 +393,12 @@ export interface Door {
                                // deadbolt (3D) / padlock (2D) toggles lock.lock ↔ lock.unlock.
   lockLocalState?: 'locked' | 'unlocked'; // local control when UNBOUND (no lockEntity): clicking the
                                // deadbolt/padlock flips this. Inert once lockEntity is bound. Mirrors localState idiom.
+  lockControl?: 'full' | 'display'; // 'full' (default, absent) = clicking the padlock/deadbolt/sidebar
+                               // badge toggles lock.lock↔unlock (or flips lockLocalState). 'display' = the
+                               // glyph/bolt is a PASSIVE state indicator: clicks never fire the lock nor
+                               // flip the local flag (a shed padlock / read-by-policy unit nobody should
+                               // remotely open from a kiosk). Enforced in Planner.toggleDoorLock. Item-level;
+                               // no repairFloor change (arrays pass through unchanged, like lockLocalState).
   doorbellEntity?: string | null; // event.* (device_class doorbell) / binary_sensor.* / button.* — a state-string
                                // CHANGE fires a transient ring pulse (Planner.doorbellRings). Display only, no toggle.
   hinge?: 'right' | 'left';    // which side the hinge sits on. Determines swing direction.
@@ -663,6 +690,7 @@ export interface Floor {
   rooms?: Room[];   // named rooms (anchor → live wall loop); repairFloor backfills []
   bleProxies?: BleProxy[];  // BLE scanner fixtures; repairFloor backfills []
   alarmPanels?: AlarmPanel[];  // alarm keypad fixtures; repairFloor backfills []
+  thermostats?: ThermostatFixture[];  // HVAC wall-control fixtures; repairFloor backfills []
   safetySensors?: SafetySensor[];  // smoke / CO detectors; repairFloor backfills []
   robots?: RobotFixture[];  // robot vacuum / mower fixtures; repairFloor backfills []
   presenceZones?: PresenceZone[];  // FP2-style occupancy zones; repairFloor backfills []

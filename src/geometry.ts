@@ -3,7 +3,7 @@
 import type { Vec2, Sensor, BgImage, LightIconKind, FurnitureKind, EnvKind, WallKind,
   ActivityKind, ObjectRecipe, Furniture, Room, Floor, SafetyKind, GroundKind,
   InfoCard, InfoCardMount, ActionKind } from './types.js';
-import { formatEntityValue, formatClock, evalRules, ruleMatches,
+import { formatEntityValue, formatClock, evalRules, ruleMatches, relTimeText,
   type HassStateLike, type ClockMode, type ValueRule } from './value-rules.js';
 
 export const MM_PER_IN = 25.4;
@@ -802,6 +802,80 @@ export const ALARM_STATE_COLORS: Record<string, string> = {
 export function alarmStateColor(state: string | null | undefined): string {
   return (state && ALARM_STATE_COLORS[state]) || '#90a4ae';
 }
+
+// ── Door-lock state → visual resolution (shared 2D + 3D + sidebar) ─────────
+// HA's lock domain has a fuller vocabulary than the locked/unlocked pair the
+// early code handled: locking/unlocking/opening (transitional), open (a "more
+// unlocked" latch-released state), jammed (a security-relevant FAULT), plus the
+// generic unavailable/unknown. This is the single mapping (mirrors
+// alarmStateColor) consumed by drawPadlock (2D), the 3D deadbolt material, and
+// the sidebar badge — keep the resolution here so all three agree.
+export type LockGlyphState =
+  | 'locked' | 'unlocked' | 'jammed'
+  | 'locking' | 'unlocking' | 'opening' | 'open'
+  | 'unavailable' | undefined;
+
+// Normalize a raw HA lock.* state (or the unbound lockLocalState flag) to the
+// glyph vocabulary. Unknown / null / absent → undefined (grey bucket).
+export function normalizeLockState(s: string | null | undefined): LockGlyphState {
+  switch (s) {
+    case 'locked': case 'unlocked': case 'jammed':
+    case 'locking': case 'unlocking': case 'opening': case 'open':
+      return s;
+    case 'unavailable': return 'unavailable';
+    default: return undefined;
+  }
+}
+
+// jammed = amber ALERT (distinct from locked red); locking/unlocking/opening
+// resolve to their target-state color (the renderer dims it as a transitional
+// cue); open = unlocked-green (latch released); unavailable/unknown/absent =
+// grey. Accepts either a raw HA state or a normalized glyph state.
+const LOCK_GLYPH_COLORS: Record<string, string> = {
+  locked:    '#ef5350',
+  unlocked:  '#66bb6a',
+  open:      '#66bb6a',
+  jammed:    '#ffb300',
+  locking:   '#ef5350',
+  unlocking: '#66bb6a',
+  opening:   '#66bb6a',
+};
+export function lockGlyphColor(state: string | null | undefined): string {
+  const g = normalizeLockState(state);
+  return (g && LOCK_GLYPH_COLORS[g]) || '#90a4ae';
+}
+// Transitional (in-progress) states render at reduced intensity — a "moving" cue.
+export function lockGlyphTransitional(state: string | null | undefined): boolean {
+  const g = normalizeLockState(state);
+  return g === 'locking' || g === 'unlocking' || g === 'opening';
+}
+// A jammed lock is a fault worth calling out (a subtle pulse in 2D).
+export function lockGlyphJammed(state: string | null | undefined): boolean {
+  return normalizeLockState(state) === 'jammed';
+}
+// "Secured" reading (closed-shackle / filled body in 2D): a bolt engaged or
+// trying to engage. Everything else draws as an open shackle outline.
+export function lockGlyphSecured(state: string | null | undefined): boolean {
+  const g = normalizeLockState(state);
+  return g === 'locked' || g === 'jammed' || g === 'locking';
+}
+
+// "fired N ago" caption for an action button's bound entity. scene.* / button.*
+// / input_button.* report the last-activation TIMESTAMP as their state;
+// script.* / automation.* carry it in attributes.last_triggered. Returns null
+// when no usable timestamp is present. `now` defaults to Date.now().
+export function actionLastFired(
+  st: { state?: string; attributes?: Record<string, unknown> } | null | undefined,
+  now: number = Date.now(),
+): string | null {
+  if (!st) return null;
+  const attrTs = st.attributes?.last_triggered;
+  let ms = NaN;
+  if (typeof attrTs === 'string') ms = Date.parse(attrTs);
+  if (isNaN(ms) && typeof st.state === 'string') ms = Date.parse(st.state);
+  if (isNaN(ms)) return null;
+  return `fired ${relTimeText(now - ms)}`;
+}
 // Alarm plates wall-snap flush like a switch (plate BACK on the wall face,
 // screen facing the room), but NEVER gang. Center = axis + normal·(wallT/2 +
 // plateDepth/2) = axis + normal·65. Rotation = atan2(nx, ny) (plate front =
@@ -821,6 +895,137 @@ export function snapAlarmToWall(
   return true;
 }
 export function alarmHeight(a: { height?: number }): number { return a.height ?? ALARM_DEFAULTS.height; }
+
+// ── HVAC / thermostat wall control fixture ─────────────────────────────────
+export const THERMO_DEFAULTS = { height: 1500, size: 340 };
+export const THERMO_PLATE_DEPTH_MM = 26;    // three-renderer plate BoxGeometry Z
+export function thermostatHeight(t: { height?: number }): number { return t.height ?? THERMO_DEFAULTS.height; }
+
+// climate.* HVAC modes (the entity STATE string is the mode) → the plate/screen
+// band color. Shared 2D + 3D (like ALARM_STATE_COLORS). heat amber/red, cool
+// blue, heat_cool magenta (both), auto green, dry teal, fan_only white/grey,
+// off dim.
+export const HVAC_MODE_COLORS: Record<string, string> = {
+  off:       '#78909c',
+  heat:      '#ff7043',
+  cool:      '#42a5f5',
+  heat_cool: '#ab47bc',
+  auto:      '#66bb6a',
+  dry:       '#26a69a',
+  fan_only:  '#b0bec5',
+};
+export function hvacModeColor(mode: string | null | undefined): string {
+  return (mode && HVAC_MODE_COLORS[mode]) || '#90a4ae';
+}
+
+// climate `hvac_action` (the RUNTIME truth) → an accent color. heating/preheating
+// warm, cooling cool-blue, fan white/grey, drying teal, idle/off dim. Drives the
+// 2D pulse + the 3D vent airflow color. Shared 2D + 3D.
+export const HVAC_ACTION_COLORS: Record<string, string> = {
+  heating:     '#ff6d4d',
+  preheating:  '#ff8a65',
+  cooling:     '#4dd0ff',
+  drying:      '#26a69a',
+  fan:         '#e0e0e0',
+  defrosting:  '#90caf9',
+  idle:        '#90a4ae',
+  off:         '#78909c',
+};
+export function hvacActionColor(action: string | null | undefined): string {
+  return (action && HVAC_ACTION_COLORS[action]) || '#90a4ae';
+}
+
+// Resolve the VENT airflow cue from mode + hvac_action. Prefer the runtime
+// action (the physical truth: a unit in mode `heat` with action `idle` blows
+// nothing); fall back to the mode when the integration reports no action (many
+// don't) OR when unbound demo drives only a local mode. Returns the airflow kind
+// (drives particle color/direction) or null = no airflow (no particles).
+export type HvacAirflowKind = 'heat' | 'cool' | 'fan';
+export function hvacAirflow(
+  mode: string | null | undefined, action: string | null | undefined,
+): HvacAirflowKind | null {
+  if (action) {
+    switch (action) {
+      case 'heating': case 'preheating': return 'heat';
+      case 'cooling': return 'cool';
+      case 'fan': return 'fan';
+      default: return null;   // idle / off / drying / defrosting → no airflow
+    }
+  }
+  // No action reported → infer from the mode (bound integrations without
+  // hvac_action + unbound demo local modes).
+  switch (mode) {
+    case 'heat': return 'heat';
+    case 'cool': return 'cool';
+    case 'fan_only': return 'fan';
+    default: return null;   // off / auto / dry / heat_cool are ambiguous w/o action
+  }
+}
+// Airflow particle color per kind (heat red/orange, cool blue, fan white/grey).
+export const HVAC_VENT_COLORS: Record<HvacAirflowKind, string> = {
+  heat: '#ff6d4d', cool: '#4dd0ff', fan: '#e0e0e0',
+};
+
+// HA climate attributes come in the SYSTEM's configured unit (°C/°F). Prefer the
+// entity's own `temperature_unit` attribute; else fall back to the store flag.
+export function climateTempUnit(
+  st: { attributes?: Record<string, unknown> } | null | undefined, imperial: boolean,
+): string {
+  const u = st?.attributes?.temperature_unit;
+  if (typeof u === 'string' && u.trim()) return u;
+  return imperial ? '°F' : '°C';
+}
+// Round a numeric temp attribute for display; non-finite → null.
+export function fmtTempNum(v: unknown): string | null {
+  const n = typeof v === 'number' ? v : parseFloat(String(v));
+  if (!isFinite(n)) return null;
+  return (Math.round(n * 10) / 10).toString();
+}
+// True while the unit is physically running (drives the 2D pulse / vent alpha).
+export function hvacActionActive(action: string | null | undefined): boolean {
+  return action === 'heating' || action === 'cooling' || action === 'preheating'
+      || action === 'fan' || action === 'drying' || action === 'defrosting';
+}
+
+// Snap a setpoint to the nearest `step` and clamp into [min, max] — the shared
+// thermostat-modal stepper math (extracted so it's unit-testable).
+export function clampSetpoint(v: number, min: number, max: number, step: number): number {
+  const s = step > 0 ? step : 0.5;
+  return Math.min(max, Math.max(min, Math.round(v / s) * s));
+}
+
+// climate supported_features bitmask (ClimateEntityFeature IntFlag, core).
+export const CLIMATE_FEATURE = {
+  TARGET_TEMPERATURE: 1,
+  TARGET_TEMPERATURE_RANGE: 2,
+  TARGET_HUMIDITY: 4,
+  FAN_MODE: 8,
+  PRESET_MODE: 16,
+  SWING_MODE: 32,
+  TURN_OFF: 128,
+  TURN_ON: 256,
+} as const;
+export function climateFeature(supported: number | null | undefined, flag: number): boolean {
+  return ((supported || 0) & flag) !== 0;
+}
+
+// Thermostat plates wall-snap flush like a switch / alarm panel — plate BACK on
+// the wall face, screen into the room, NO ganging. Center = axis + normal·(wallT/2
+// + plateDepth/2) = axis + normal·63. Rotation = atan2(nx, ny) (plate front =
+// local +Z; 0 = +Y world). Mutates x/y/rotation; returns whether it snapped.
+export function snapThermostatToWall(
+  th: { x: number; y: number; rotation?: number },
+  walls: { points: Vec2[]; kind?: WallKind }[],
+  maxMm = 500,
+): boolean {
+  const hit = snapToWallEdge(walls, th.x, th.y, maxMm);
+  if (!hit) return false;
+  const off = WALL_HALF_MM + THERMO_PLATE_DEPTH_MM / 2;   // 63
+  th.x = Math.round(hit.x + hit.nx * off);
+  th.y = Math.round(hit.y + hit.ny * off);
+  th.rotation = Math.atan2(hit.nx, hit.ny) * 180 / Math.PI;
+  return true;
+}
 
 // ── Smoke / CO safety detectors (Feature: safety sensors) ──────────────────
 // Ceiling-mounted disc; the 3D puck hangs just below ceiling height. No wall

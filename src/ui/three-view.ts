@@ -190,6 +190,14 @@ export class ThreeView extends LitElement {
         }));
         return;
       }
+      // Thermostat → open the climate control modal (view mode: no interaction).
+      if (kind === 'thermostat') {
+        if (p.uiMode === 'view') return;
+        this.dispatchEvent(new CustomEvent('open-thermostat', {
+          bubbles: true, composed: true, detail: { id: fixtureId },
+        }));
+        return;
+      }
       // Action button → fire its configured HA service (kiosk fires; view refuses
       // inside fireAction). Also stamps the 3D cap-press animation.
       if (kind === 'action') {
@@ -353,7 +361,10 @@ export class ThreeView extends LitElement {
   // last few transitions (world mm + wall-clock). Fed into ActivityContext each
   // tick; pruned to 45 s / 8 entries; cleared on floor switch.
   private _trigPrevOn = new Map<string, boolean>();
-  private _recentTrigs: { kind: 'light_on' | 'light_off' | 'fireplace' | 'tv' | 'doorbell'; x: number; y: number; at: number }[] = [];
+  private _recentTrigs: { kind: 'light_on' | 'light_off' | 'fireplace' | 'tv' | 'doorbell' | 'action_button'; x: number; y: number; at: number }[] = [];
+  // Per-button last press-time seen (de-dupes an actionPressFx entry into ONE
+  // recent-trigger push). Cleared on floor switch with the other trigger state.
+  private _actionTrigAt = new Map<string, number>();
   // ?view3d= / ?cam= template application. Saved views live in the HA store,
   // which loads async — retry each tick until found, then fall back to the
   // default iso framing if the named view never appears.
@@ -542,6 +553,7 @@ export class ThreeView extends LitElement {
   private _keyActions = '';
   private _keyBle = '';
   private _keyAlarm = '';
+  private _keyThermo = '';
   private _keySafety = '';
   private _keyRobots = '';
   private _keyNowPlaying = '';
@@ -575,12 +587,13 @@ export class ThreeView extends LitElement {
         this._lastFloorId = f.id;
         r.clearTransientGroups();
         this._keyFloor = this._keyDoors = this._keySensors = '';
-        this._keyMotion = this._keyEnv = this._keyInfo = this._keyActions = this._keyBle = this._keyAlarm = this._keySafety = '';
+        this._keyMotion = this._keyEnv = this._keyInfo = this._keyActions = this._keyBle = this._keyAlarm = this._keyThermo = this._keySafety = '';
         this._keyCameras = this._keyCamAlerts = this._keyPzones = this._keyNowPlaying = '';
         this._keyGround = '';
         this._keyLights = this._keyZones = this._keyHalos = '';
         this._keyGhost = this._keyGps = this._keyWeather = '';
         this._trigPrevOn.clear();
+        this._actionTrigAt.clear();
         this._recentTrigs.length = 0;
       }
 
@@ -692,7 +705,7 @@ export class ThreeView extends LitElement {
         return typeof pos === 'number' ? `${s.state}:${Math.round(pos / 5)}` : s.state;
       };
       const keyDoors = `${p.configRev}|` +
-        f.doors.map(d => `${openKey(d.entity_id)}:${stOf(d.lockEntity)}`).join(',') + '|' +
+        f.doors.map(d => `${openKey(d.entity_id)}:${stOf(d.lockEntity)}:${d.lockControl === 'display' ? 'd' : 'f'}`).join(',') + '|' +
         f.windows.map(w => `${openKey(w.entity_id)}:${openKey(w.coverEntity)}`).join(',');
       if (keyDoors !== this._keyDoors) {
         this._keyDoors = keyDoors;
@@ -799,6 +812,24 @@ export class ThreeView extends LitElement {
       if (keyAlarm !== this._keyAlarm) {
         this._keyAlarm = keyAlarm;
         r.updateAlarmPanels(f.alarmPanels ?? [], id => states[id] || null);
+      }
+
+      // Thermostats: structural + climate state. mode + hvac_action drive the
+      // plate/vent color; the setpoint + current temp feed the readout — bucket
+      // temps to ~0.5° to avoid float-jitter rebuilds (the vent particles animate
+      // per-frame via _advanceVents, so only mode/action/temp CHANGES rebuild).
+      const b05 = (v: unknown) => { const n = Number(v); return isFinite(n) ? Math.round(n * 2) / 2 : '-'; };
+      const keyThermo = `${p.configRev}|` +
+        (f.thermostats ?? []).map(t => {
+          const st = p.effectiveState(t);
+          const a = (st?.attributes ?? {}) as Record<string, unknown>;
+          return `${t.id}:${Math.round(t.x)}:${Math.round(t.y)}:${Math.round(t.rotation ?? 0)}:` +
+            `${st?.state ?? '-'}:${a.hvac_action ?? '-'}:${b05(a.current_temperature)}:` +
+            `${b05(a.temperature)}:${b05(a.target_temp_low)}:${b05(a.target_temp_high)}:${t.localTemp ?? '-'}`;
+        }).join(',');
+      if (keyThermo !== this._keyThermo) {
+        this._keyThermo = keyThermo;
+        r.updateThermostats(f.thermostats ?? [], id => states[id] || null);
       }
 
       // Smoke / CO detectors: structural + effective state. An ALARMING detector
@@ -1224,6 +1255,20 @@ export class ThreeView extends LitElement {
       for (const fu of f.furniture) {
         if (furnitureKind(fu) !== 'tv') continue;
         note('F' + fu.id, entityOn[fu.id] === true, 'tv', fu.x, fu.y);
+      }
+      // Action-button presses feed the trigger tier (kind 'action_button', pool
+      // ✨💡🎬👍). Sourced from Planner.actionPressFx (performance.now() ms) — a
+      // press's fx entry is short-lived (~900 ms), so de-dup on its timestamp and
+      // push ONE entry into the 45 s recent list per distinct press. Button x/y
+      // are world mm, same frame as the rig raw positions.
+      for (const b of f.actionButtons ?? []) {
+        let at = 0;
+        for (const r of p.actionPressFx) if (r.id === b.id && r.at > at) at = r.at;
+        if (!at) continue;
+        if (at > (this._actionTrigAt.get(b.id) ?? 0)) {
+          this._actionTrigAt.set(b.id, at);
+          this._recentTrigs.push({ kind: 'action_button', x: b.x, y: b.y, at: nowS });
+        }
       }
       // Prune >45 s old, then cap at 8 (drop oldest).
       this._recentTrigs = this._recentTrigs.filter(g => nowS - g.at < 45);

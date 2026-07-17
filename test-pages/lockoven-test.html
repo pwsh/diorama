@@ -3,9 +3,19 @@
 <title>lock+oven</title>
 <style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
 <div id="c"></div>
+<!-- Planner-side lock assertions (display-only gating + full-mode toggle) + the
+     shared lock color-resolution helpers ride a SECOND bundle (no three.js).
+     Build (swap avatar-store for the in-memory fake so IndexedDB doesn't hang
+     the headless harness):
+       T=$(mktemp -d); cp -r src/* "$T"/
+       cp test-pages/fake-avatar-store.ts "$T"/avatar-store.ts
+       cp test-pages/lock-entry.ts "$T"/lock-entry.ts
+       npx esbuild "$T"/lock-entry.ts --bundle --format=esm --outfile=<harness>/lock.mod.js -->
 <script type="module">
  try {
   const mod = await import('./assets/three-renderer.js?v=' + Date.now());
+  const lockMod = await import('./lock.mod.js?v=' + Date.now());
+  const { Planner, lockGlyphColor, lockGlyphTransitional, lockGlyphJammed, lockGlyphSecured, actionLastFired } = lockMod;
   const r = new mod.ThreeDRenderer(document.getElementById('c'));
   await r.load();
   const realNow = performance.now.bind(performance);
@@ -13,6 +23,10 @@
 
   const results = [];
   const assert = (name, cond, detail = '') => results.push(`${cond ? 'PASS' : 'FAIL'} ${name}${detail ? ' (' + detail + ')' : ''}`);
+  const clone = x => JSON.parse(JSON.stringify(x));
+  const sleep = ms => new Promise(res => setTimeout(res, ms));
+  async function waitFor(cond, tries = 400) { for (let i = 0; i < tries; i++) { if (cond()) return true; await sleep(4); } return !!cond(); }
+  const hex = n => '#' + n.toString(16).padStart(6, '0');
 
   // ── 1. Door lock deadbolt: rendered on BOTH panel faces, tagged kind='lock' ──
   {
@@ -58,6 +72,105 @@
     for (let i = 0; i < 100; i++) { fakeNow += 16.7; r.updateTargets([], ctx); }
     const closedRot = r._applianceDoors[0].pivot.rotation.x;
     assert('clearing doorOpen closes the oven door', Math.abs(closedRot) < 0.1, `rot=${closedRot.toFixed(2)}`);
+  }
+
+  // ── 3. Lock state → color matrix (shared helper, 2D+3D+sidebar) ─────────────
+  {
+    assert('color: locked = red',      lockGlyphColor('locked') === '#ef5350');
+    assert('color: unlocked = green',  lockGlyphColor('unlocked') === '#66bb6a');
+    assert('color: jammed = amber (distinct from locked)',
+      lockGlyphColor('jammed') === '#ffb300' && lockGlyphColor('jammed') !== lockGlyphColor('locked'));
+    assert('color: open = unlocked-green', lockGlyphColor('open') === '#66bb6a');
+    assert('color: locking = target red',  lockGlyphColor('locking') === '#ef5350');
+    assert('color: unlocking = target green', lockGlyphColor('unlocking') === '#66bb6a');
+    assert('color: unavailable = grey', lockGlyphColor('unavailable') === '#90a4ae');
+    assert('color: unknown/absent = grey', lockGlyphColor('weird') === '#90a4ae' && lockGlyphColor(undefined) === '#90a4ae');
+    assert('jammed flagged', lockGlyphJammed('jammed') === true && lockGlyphJammed('locked') === false);
+    assert('transitional flagged', lockGlyphTransitional('locking') && lockGlyphTransitional('opening') && !lockGlyphTransitional('locked'));
+    assert('secured: locked/jammed/locking, not unlocked/open',
+      lockGlyphSecured('locked') && lockGlyphSecured('jammed') && lockGlyphSecured('locking') &&
+      !lockGlyphSecured('unlocked') && !lockGlyphSecured('open'));
+  }
+
+  // ── 4. 3D deadbolt reflects the matrix + display-only dims emissive ──────────
+  {
+    const boltsFor = (door, stateOf) => {
+      r.updateDoorsWindows([door], [], stateOf);
+      const bolts = [];
+      r._doorGroup.traverse(o => { if (o.isMesh && o.userData && o.userData.kind === 'lock') bolts.push(o); });
+      return bolts;
+    };
+    // emissive is passed through _mat UNTRANSFORMED (only .color is saturation-pushed).
+    const jam = boltsFor({ id: 'dj', x: 2000, y: 2500, w: 900, rotation: 0, entity_id: null, kind: 'swing', lockEntity: 'lock.j' },
+      id => id === 'lock.j' ? { state: 'jammed', attributes: {} } : null);
+    assert('3D jammed bolt = amber emissive', jam.length === 2 && jam[0].material.emissive.getHex() === 0xffb300,
+      jam.length ? hex(jam[0].material.emissive.getHex()) : 'none');
+    const unavail = boltsFor({ id: 'du', x: 2000, y: 2500, w: 900, rotation: 0, entity_id: null, kind: 'swing', lockEntity: 'lock.u' },
+      id => id === 'lock.u' ? { state: 'unavailable', attributes: {} } : null);
+    assert('3D unavailable bolt = grey emissive', unavail[0].material.emissive.getHex() === 0x90a4ae, hex(unavail[0].material.emissive.getHex()));
+    // locking = transitional → reduced emissiveIntensity (0.5 vs 0.85 for a settled state).
+    const locking = boltsFor({ id: 'dk', x: 2000, y: 2500, w: 900, rotation: 0, entity_id: null, kind: 'swing', lockEntity: 'lock.k' },
+      id => id === 'lock.k' ? { state: 'locking', attributes: {} } : null);
+    const settled = boltsFor({ id: 'ds', x: 2000, y: 2500, w: 900, rotation: 0, entity_id: null, kind: 'swing', lockEntity: 'lock.s' },
+      id => id === 'lock.s' ? { state: 'locked', attributes: {} } : null);
+    assert('3D transitional dims emissiveIntensity', locking[0].material.emissiveIntensity < settled[0].material.emissiveIntensity,
+      `${locking[0].material.emissiveIntensity} < ${settled[0].material.emissiveIntensity}`);
+    // display-only reduces emissiveIntensity vs an identical full-control lock.
+    const disp = boltsFor({ id: 'dd', x: 2000, y: 2500, w: 900, rotation: 0, entity_id: null, kind: 'swing', lockEntity: 'lock.s', lockControl: 'display' },
+      id => id === 'lock.s' ? { state: 'locked', attributes: {} } : null);
+    assert('3D display-only dims emissiveIntensity', disp[0].material.emissiveIntensity < settled[0].material.emissiveIntensity,
+      `${disp[0].material.emissiveIntensity} < ${settled[0].material.emissiveIntensity}`);
+  }
+
+  // ── 5. Planner: display-only refuses toggle; full mode still toggles ─────────
+  {
+    localStorage.removeItem('diorama:store:v1'); localStorage.removeItem('diorama:configs');
+    const stub = {
+      map: new Map(), states: {}, _s: [], _c: [], calls: [],
+      connect() { for (const cb of this._c) cb('connected'); for (const cb of this._s) cb(this.states, undefined); },
+      onState(fn) { this._s.push(fn); }, onConn(fn) { this._c.push(fn); },
+      callService(domain, service, data) { this.calls.push({ domain, service, data: data || {} }); return Promise.resolve(); },
+      async getHistory() { return {}; }, async getWeatherForecasts() { return null; },
+      async getDevices() { return []; }, async getEntityRegistry() { return []; }, async updateEntityRegistry() { return true; },
+      async getUserData(k) { return this.map.has(k) ? clone(this.map.get(k)) : null; },
+      async setUserData(k, v) { this.map.set(k, clone(v)); return true; }, async refreshStates() {},
+    };
+    const pl = new Planner();
+    pl.connectWith(stub);
+    await waitFor(() => pl.configIndex !== null);
+    pl.uiMode = 'edit';
+
+    // Full-control unbound lock → click flips lockLocalState.
+    const full = { lockEntity: null, lockLocalState: 'unlocked' };
+    pl.toggleDoorLock(full);
+    assert('full mode: unbound toggle flips lockLocalState', full.lockLocalState === 'locked', full.lockLocalState);
+
+    // Display-only unbound lock → toggle REFUSED (state unchanged), even in edit.
+    const disp = { lockEntity: null, lockLocalState: 'unlocked', lockControl: 'display' };
+    pl.toggleDoorLock(disp);
+    assert('display mode: unbound toggle REFUSED', disp.lockLocalState === 'unlocked', disp.lockLocalState);
+
+    // Display-only BOUND lock → no lock service call fired.
+    stub.states['lock.front'] = { state: 'locked', attributes: {} };
+    const before = stub.calls.length;
+    pl.toggleDoorLock({ lockEntity: 'lock.front', lockControl: 'display' });
+    assert('display mode: bound toggle fires NO service', stub.calls.length === before, `+${stub.calls.length - before}`);
+    // Full bound lock → fires lock.unlock (locked → unlock).
+    pl.toggleDoorLock({ lockEntity: 'lock.front' });
+    const c = stub.calls[stub.calls.length - 1];
+    assert('full mode: bound locked → lock.unlock', c && c.domain === 'lock' && c.service === 'unlock', JSON.stringify(c));
+
+    // doorLockState surfaces the full vocabulary (bound).
+    stub.states['lock.front'] = { state: 'jammed', attributes: {} };
+    assert('doorLockState surfaces jammed', pl.doorLockState({ lockEntity: 'lock.front' }) === 'jammed');
+
+    // actionLastFired: scene/button use state timestamp; script uses last_triggered.
+    const ts = '2026-07-16T12:00:00Z';
+    assert('actionLastFired: scene state timestamp',
+      actionLastFired({ state: ts, attributes: {} }, Date.parse(ts) + 30000) === 'fired 30s ago');
+    assert('actionLastFired: script last_triggered attr',
+      actionLastFired({ state: 'off', attributes: { last_triggered: ts } }, Date.parse(ts) + 120000) === 'fired 2 min ago');
+    assert('actionLastFired: no timestamp → null', actionLastFired({ state: 'off', attributes: {} }) === null);
   }
 
   performance.now = realNow;

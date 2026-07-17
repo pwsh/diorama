@@ -1,4 +1,4 @@
-import { snap, snapVertex15, distMM, worldToLocal, localToWorld, FURNITURE_KINDS, furnitureCorners, furnitureLocalToWorld, furnitureWorldToLocal, resolveFurnitureDef, resolveFurnitureWallCollision, resolveSeatTableCollision, seatBelongsToTable, snapStepLightToSurface, snapFireplaceToWall, snapFloodlightToWall, snapSwitchToWall, snapAlarmToWall, snapInfoCardToWall, snapActionButtonToWall, isBinKind, nearestAlign, envScale, ENV_SCALE_MIN, ENV_SCALE_MAX, GRID_MM, floorContentBbox, resolveFloorEdgeDrag } from './geometry.js';
+import { snap, snapVertex15, distMM, worldToLocal, localToWorld, FURNITURE_KINDS, furnitureCorners, furnitureLocalToWorld, furnitureWorldToLocal, resolveFurnitureDef, resolveFurnitureWallCollision, resolveSeatTableCollision, seatBelongsToTable, snapStepLightToSurface, snapFireplaceToWall, snapFloodlightToWall, snapSwitchToWall, snapAlarmToWall, snapThermostatToWall, snapInfoCardToWall, snapActionButtonToWall, isBinKind, nearestAlign, envScale, ENV_SCALE_MIN, ENV_SCALE_MAX, GRID_MM, floorContentBbox, resolveFloorEdgeDrag } from './geometry.js';
 import { newId } from './storage.js';
 import {
   pxToMm, type View,
@@ -9,7 +9,7 @@ import {
   hitVertexOrZone, hitObject, hitObjectRadiusHandle,
   hitBgBody, hitBgCorner, bgEditable,
   hitMotionSensor, hitMotionRotateHandle, hitEnvSensor, hitEnvResizeHandle,
-  hitBleProxy, hitAlarmPanel, hitSafetySensor, hitRobot,
+  hitBleProxy, hitAlarmPanel, hitThermostat, hitSafetySensor, hitRobot,
   hitCamera, hitCameraRotateHandle, hitInfoCard, hitActionButton, hitPresenceZone, hitPresenceZoneVertex,
   hitGroundArea, hitGroundAreaVertex,
   hitVoidArea, hitVoidAreaVertex,
@@ -357,6 +357,14 @@ function openAlarmModal(canvas: HTMLCanvasElement, id: string): void {
   }));
 }
 
+// Open the thermostat control modal for a fixture id (bubbles to app.ts). Used
+// from both the edit click-vs-drag path and the kiosk click branch.
+function openThermostatModal(canvas: HTMLCanvasElement, id: string): void {
+  canvas.dispatchEvent(new CustomEvent('open-thermostat', {
+    bubbles: true, composed: true, detail: { id },
+  }));
+}
+
 export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: View, e: MouseEvent): void {
   if (p.uiMode !== 'edit') return;  // kiosk/view: no drags, no selections
   if (p.editZone) return;
@@ -563,6 +571,12 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
     p.drag = { kind: 'alarm', id: ah.id, startMm: mm, start: { x: ah.x, y: ah.y } };
     canvas.style.cursor = 'grabbing'; e.preventDefault(); p.emitConfig(); return;
   }
+  const th = hitThermostat(p, view, mm);
+  if (th) {
+    if (p.activeThermoId !== th.id) p.activeThermoId = th.id;
+    p.drag = { kind: 'thermostat', id: th.id, startMm: mm, start: { x: th.x, y: th.y } };
+    canvas.style.cursor = 'grabbing'; e.preventDefault(); p.emitConfig(); return;
+  }
   const safeH = hitSafetySensor(p, view, mm);
   if (safeH) {
     if (p.activeSafetyId !== safeH.id) p.activeSafetyId = safeH.id;
@@ -744,6 +758,14 @@ export function onCanvasMouseMove(p: Planner, canvas: HTMLCanvasElement, view: V
         if (ap && !ap.locked) {
           ap.x = Math.max(0, Math.min(f.w, drag.start.x + mm.x - drag.startMm.x));
           ap.y = Math.max(0, Math.min(f.d, drag.start.y + mm.y - drag.startMm.y));
+        }
+        break;
+      }
+      case 'thermostat': {
+        const th = (f.thermostats ?? []).find(x => x.id === drag.id);
+        if (th && !th.locked) {
+          th.x = Math.max(0, Math.min(f.w, drag.start.x + mm.x - drag.startMm.x));
+          th.y = Math.max(0, Math.min(f.d, drag.start.y + mm.y - drag.startMm.y));
         }
         break;
       }
@@ -1064,6 +1086,7 @@ export function onCanvasMouseMove(p: Planner, canvas: HTMLCanvasElement, view: V
       hitFixture(p, mm, Math.max(250, hitPx(view) * 3)) ||
       hitActionButton(p, view, mm) ||      // action buttons fire in kiosk
       hitAlarmPanel(p, view, mm) ||
+      hitThermostat(p, view, mm) ||        // thermostats open the control modal
       (safeHit && !safeHit.entity_id) ||   // only unbound detectors are clickable
       hitRobot(p, view, mm) ||             // robots are always click-toggleable
       hitDoor(p, view, mm) || hitWindow(p, view, mm);
@@ -1081,6 +1104,7 @@ export function onCanvasMouseMove(p: Planner, canvas: HTMLCanvasElement, view: V
     else if (hitMotionSensor(p, view, mm)) canvas.style.cursor = 'grab';
     else if (hitBleProxy(p, view, mm)) canvas.style.cursor = 'grab';
     else if (hitAlarmPanel(p, view, mm)) canvas.style.cursor = 'grab';
+    else if (hitThermostat(p, view, mm)) canvas.style.cursor = 'grab';
     else if (hitSafetySensor(p, view, mm)) canvas.style.cursor = 'grab';
     else if (hitRobot(p, view, mm)) canvas.style.cursor = 'grab';
     else if (hitCameraRotateHandle(p, view, mm)) canvas.style.cursor = 'grab';
@@ -1156,6 +1180,21 @@ export function onCanvasMouseUp(p: Planner, canvas: HTMLCanvasElement): void {
       } else {
         ap.x = snap(ap.x, 10); ap.y = snap(ap.y, 10);
         snapAlarmToWall(ap, f.walls);
+        p.save();
+      }
+    }
+  } else if (drag.kind === 'thermostat') {
+    const th = (f.thermostats ?? []).find(x => x.id === drag.id);
+    if (th) {
+      // Click-vs-drag: a tiny movement opens the thermostat modal; a real move
+      // snaps the plate flush to the nearest wall (like a switch, no ganging).
+      const moved = Math.hypot(th.x - drag.start.x, th.y - drag.start.y);
+      if (moved < 30) {
+        th.x = drag.start.x; th.y = drag.start.y;
+        openThermostatModal(canvas, th.id);
+      } else {
+        th.x = snap(th.x, 10); th.y = snap(th.y, 10);
+        snapThermostatToWall(th, f.walls);
         p.save();
       }
     }
@@ -1399,6 +1438,9 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
     // Alarm keypad → open the control/status modal (device interaction, not edit).
     const aHit2 = hitAlarmPanel(p, view, mm);
     if (aHit2) { openAlarmModal(canvas, aHit2.id); return; }
+    // Thermostat → open the climate control modal.
+    const tHit2 = hitThermostat(p, view, mm);
+    if (tHit2) { openThermostatModal(canvas, tHit2.id); return; }
     // Smoke / CO detector → unbound: manual test trigger; bound: display-only.
     const safe2 = hitSafetySensor(p, view, mm);
     if (safe2) { if (!safe2.entity_id) p.toggleItem(safe2); return; }
@@ -1581,6 +1623,23 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
     snapAlarmToWall(ap, f.walls);   // flush to a wall on drop, like a switch
     f.alarmPanels.push(ap);
     p.activeAlarmId = id;
+    p.save();
+    p.setTool('select');
+    p.emitConfig();
+    return;
+  }
+  if (p.tool === 'thermostat') {
+    if (!f.thermostats) f.thermostats = [];
+    const id = newId('th');
+    const th = {
+      id,
+      x: snap(Math.max(0, Math.min(f.w, mm.x)), 10),
+      y: snap(Math.max(0, Math.min(f.d, mm.y)), 10),
+      entity_id: null, allowControl: true, label: `Thermostat ${f.thermostats.length + 1}`,
+    };
+    snapThermostatToWall(th, f.walls);   // flush to a wall on drop, like a switch
+    f.thermostats.push(th);
+    p.activeThermoId = id;
     p.save();
     p.setTool('select');
     p.emitConfig();
@@ -1784,6 +1843,13 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
       if (ahit.locked) return;
       f.alarmPanels = (f.alarmPanels ?? []).filter(x => x.id !== ahit.id);
       if (p.activeAlarmId === ahit.id) p.activeAlarmId = null;
+      p.save(); p.emitConfig(); return;
+    }
+    const thit = hitThermostat(p, view, mm);
+    if (thit) {
+      if (thit.locked) return;
+      f.thermostats = (f.thermostats ?? []).filter(x => x.id !== thit.id);
+      if (p.activeThermoId === thit.id) p.activeThermoId = null;
       p.save(); p.emitConfig(); return;
     }
     const safeHit = hitSafetySensor(p, view, mm);

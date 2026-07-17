@@ -1,0 +1,286 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>THERMO …</title>
+  <style>
+    body { margin:0; background:#0d1116; color:#cfd8dc; font:13px/1.4 sans-serif; padding:14px; }
+    h1 { font-size:15px; margin:0 0 10px; }
+    .grid { display:flex; flex-wrap:wrap; gap:10px; }
+    .card { background:#141b22; border:1px solid #26323d; border-radius:6px; padding:8px 10px; width:420px; }
+    .row { display:flex; justify-content:space-between; font-size:11px; gap:8px; }
+    .pass { color:#69f0ae; } .fail { color:#ff5252; }
+    #summary { font-size:14px; font-weight:bold; margin:10px 0; padding:8px 10px; border-radius:5px; }
+    .okbg { background:#12331f; color:#69f0ae; } .badbg { background:#3a1414; color:#ff8a80; }
+    #c { width:1280px; height:820px; position:absolute; left:-4000px; }
+  </style>
+</head>
+<body>
+  <h1>HVAC thermostat — palette / features / airflow · plate + vent particles · climate dispatch</h1>
+  <div id="summary">Running…</div>
+  <div class="grid" id="grid"></div>
+  <div id="c"></div>
+
+  <!-- Harness build (run BEFORE serving):
+         T=$(mktemp -d); cp -r src/* "$T"/
+         cp test-pages/fake-avatar-store.ts "$T"/avatar-store.ts
+         npx esbuild "$T"/geometry.ts --bundle --format=esm --outfile=<harness>/geometry.mod.js
+         npx esbuild "$T"/planner.ts   --bundle --format=esm --outfile=<harness>/planner.mod.js
+       plus dist/* (built three-renderer chunk). -->
+  <script type="module">
+    const V = '?v=' + Date.now();
+    const G = await import('./geometry.mod.js' + V);
+    const { Planner } = await import('./planner.mod.js' + V);
+    const RM = await import('./assets/three-renderer.js' + V);
+
+    const tests = [];
+    const ok = (name, cond, detail = '') => tests.push({ name, ok: !!cond, detail: String(detail) });
+    const near = (a, b, e = 1) => Math.abs(a - b) <= e;
+
+    // ══ 1. Pure palette / feature / airflow / snap (geometry.ts) ═════════════
+    ok('mode heat = amber/red', G.hvacModeColor('heat') === '#ff7043');
+    ok('mode cool = blue', G.hvacModeColor('cool') === '#42a5f5');
+    ok('mode heat_cool = magenta', G.hvacModeColor('heat_cool') === '#ab47bc');
+    ok('mode fan_only = white/grey', G.hvacModeColor('fan_only') === '#b0bec5');
+    ok('mode auto = green', G.hvacModeColor('auto') === '#66bb6a');
+    ok('mode dry = teal', G.hvacModeColor('dry') === '#26a69a');
+    ok('mode off = dim', G.hvacModeColor('off') === '#78909c');
+    ok('mode unknown → fallback grey', G.hvacModeColor('bogus') === '#90a4ae');
+
+    ok('action heating color', G.hvacActionColor('heating') === '#ff6d4d');
+    ok('action cooling color', G.hvacActionColor('cooling') === '#4dd0ff');
+    ok('action fan color', G.hvacActionColor('fan') === '#e0e0e0');
+    ok('action active heating', G.hvacActionActive('heating') === true);
+    ok('action active idle=false', G.hvacActionActive('idle') === false);
+    ok('action active off=false', G.hvacActionActive('off') === false);
+
+    // Airflow resolution: action wins; mode is the fallback.
+    ok('airflow action heating → heat', G.hvacAirflow('heat', 'heating') === 'heat');
+    ok('airflow action cooling → cool', G.hvacAirflow('cool', 'cooling') === 'cool');
+    ok('airflow action fan → fan', G.hvacAirflow('fan_only', 'fan') === 'fan');
+    ok('airflow mode heat idle → null (satisfied)', G.hvacAirflow('heat', 'idle') === null);
+    ok('airflow no action, mode heat → heat', G.hvacAirflow('heat', null) === 'heat');
+    ok('airflow no action, mode cool → cool', G.hvacAirflow('cool', undefined) === 'cool');
+    ok('airflow no action, mode fan_only → fan', G.hvacAirflow('fan_only', null) === 'fan');
+    ok('airflow off → null', G.hvacAirflow('off', 'off') === null);
+    ok('airflow auto (ambiguous) → null', G.hvacAirflow('auto', null) === null);
+    ok('vent color heat', G.HVAC_VENT_COLORS.heat === '#ff6d4d');
+    ok('vent color cool', G.HVAC_VENT_COLORS.cool === '#4dd0ff');
+    ok('vent color fan', G.HVAC_VENT_COLORS.fan === '#e0e0e0');
+
+    // supported_features bitmask.
+    ok('feature TARGET_TEMPERATURE set', G.climateFeature(1, G.CLIMATE_FEATURE.TARGET_TEMPERATURE) === true);
+    ok('feature FAN_MODE in composite', G.climateFeature(1 | 8 | 16, G.CLIMATE_FEATURE.FAN_MODE) === true);
+    ok('feature PRESET_MODE in composite', G.climateFeature(1 | 8 | 16, G.CLIMATE_FEATURE.PRESET_MODE) === true);
+    ok('feature RANGE not set', G.climateFeature(1, G.CLIMATE_FEATURE.TARGET_TEMPERATURE_RANGE) === false);
+    ok('feature null supported → false', G.climateFeature(null, G.CLIMATE_FEATURE.FAN_MODE) === false);
+
+    // clampSetpoint (modal stepper math).
+    ok('clamp rounds to step 0.5', G.clampSetpoint(21.3, 16, 30, 0.5) === 21.5);
+    ok('clamp above max', G.clampSetpoint(40, 16, 30, 0.5) === 30);
+    ok('clamp below min', G.clampSetpoint(2, 16, 30, 0.5) === 16);
+    ok('clamp step 1 rounds', G.clampSetpoint(21.6, 7, 35, 1) === 22);
+    ok('clamp step<=0 defaults 0.5', G.clampSetpoint(21.2, 7, 35, 0) === 21);
+
+    // snapThermostatToWall: flush offset 63 (WALL_HALF 50 + plateDepth/2 13).
+    {
+      const walls = [{ points: [{ x: 0, y: 2000 }, { x: 6000, y: 2000 }] }];  // horizontal wall at y=2000
+      const th = { x: 3000, y: 1900 };   // 100 mm below the wall (south side)
+      const snapped = G.snapThermostatToWall(th, walls);
+      ok('snap returns true near a wall', snapped === true);
+      ok('snap flush offset 63 from wall axis', near(Math.abs(th.y - 2000), 63, 1), `dy=${Math.abs(th.y - 2000)}`);
+      const far = { x: 3000, y: 900 };   // >500 mm away
+      ok('snap returns false when too far', G.snapThermostatToWall(far, walls) === false);
+    }
+
+    // ══ 2. Renderer: plate build + vent particles ════════════════════════════
+    const r = new RM.ThreeDRenderer(document.getElementById('c'));
+    await r.load();
+    const baseFloor = (thermostats) => ({
+      id: 'f1', name: 'F', w: 8000, d: 6000,
+      walls: [], furniture: [], lights: [], switches: [], sensors: [], motionSensors: [],
+      envSensors: [], doors: [], windows: [], bg: null, model3d: null, look3d: null, rooms: [],
+      alarmPanels: [], thermostats: thermostats || [], safetySensors: [],
+    });
+    const findByFixtureId = (grp, id) => {
+      let found = null;
+      grp.traverse(o => { if (!found && o.userData && o.userData.fixtureId === id && o.type === 'Group') found = o; });
+      return found;
+    };
+    const meshCount = (o) => { let n = 0; o.traverse(x => { if (x.isMesh) n++; }); return n; };
+
+    const climate = (state, extra = {}) => ({ state, attributes: { ...extra } });
+
+    // Build a mix: heating (bound), cooling, fan, idle, off, unbound-demo-heat.
+    const units = [
+      { id: 'th_heat', x: 1000, y: 2000, rotation: 0, entity_id: 'climate.heat' },
+      { id: 'th_cool', x: 2000, y: 2000, rotation: 0, entity_id: 'climate.cool' },
+      { id: 'th_fan',  x: 3000, y: 2000, rotation: 0, entity_id: 'climate.fan' },
+      { id: 'th_idle', x: 4000, y: 2000, rotation: 0, entity_id: 'climate.idle' },
+      { id: 'th_off',  x: 5000, y: 2000, rotation: 0, entity_id: 'climate.off' },
+      { id: 'th_demo', x: 6000, y: 2000, rotation: 0, entity_id: null, localState: 'heat', localTemp: 22 },
+    ];
+    const states = {
+      'climate.heat': climate('heat', { hvac_action: 'heating', current_temperature: 19, temperature: 22 }),
+      'climate.cool': climate('cool', { hvac_action: 'cooling', current_temperature: 26, temperature: 23 }),
+      'climate.fan':  climate('fan_only', { hvac_action: 'fan', current_temperature: 21 }),
+      'climate.idle': climate('heat', { hvac_action: 'idle', current_temperature: 22, temperature: 22 }),
+      'climate.off':  climate('off', {}),
+    };
+    r.updateFloor(baseFloor(units), { preset: 'day' }, undefined, undefined, id => states[id] || null);
+    r.updateThermostats(units, id => states[id] || null);
+
+    ok('plate group built for each thermostat', units.every(u => !!findByFixtureId(r._thermoGroup, u.id)),
+       `groups=${r._thermoGroup.children.length}`);
+    ok('plate has plate+screen+vent meshes', meshCount(findByFixtureId(r._thermoGroup, 'th_heat')) >= 5,
+       `meshes=${meshCount(findByFixtureId(r._thermoGroup, 'th_heat'))}`);
+
+    const cloudsByKind = () => {
+      const m = {};
+      for (const c of r._ventClouds) m[c.kind] = (m[c.kind] || 0) + 1;
+      return m;
+    };
+    ok('heating spawns a heat vent cloud', r._ventClouds.some(c => c.kind === 'heat'));
+    ok('cooling spawns a cool vent cloud', r._ventClouds.some(c => c.kind === 'cool'));
+    ok('fan spawns a fan vent cloud', r._ventClouds.some(c => c.kind === 'fan'));
+    ok('unbound demo (localState heat) spawns a heat cloud', (cloudsByKind().heat || 0) >= 2,
+       `heat=${cloudsByKind().heat}`);
+    // idle + off produce NO particles → exactly 4 clouds (heat×2 [bound+demo], cool, fan).
+    ok('idle + off produce no vent cloud', r._ventClouds.length === 4, `n=${r._ventClouds.length}`);
+
+    // Vent cloud has particles + a shared point sprite texture.
+    const heatCloud = r._ventClouds.find(c => c.kind === 'heat');
+    ok('vent cloud has particles', heatCloud && heatCloud.count > 0, `count=${heatCloud && heatCloud.count}`);
+    ok('vent cloud material has the shared point map',
+       heatCloud && heatCloud.points.material.map && r._ventTex === heatCloud.points.material.map);
+
+    // Particles MOVE across advanced frames + buffer identity is STABLE (zero-alloc).
+    const posRef = heatCloud.pos;
+    const before = Float32Array.from(posRef);          // snapshot copy
+    for (let i = 0; i < 6; i++) r._advanceVents(0.1);   // 0.6 s of motion (< life 1.6 s)
+    let moved = 0;
+    for (let i = 0; i < posRef.length; i++) if (Math.abs(posRef[i] - before[i]) > 1e-3) moved++;
+    ok('vent particles move across frames', moved > 0, `moved=${moved}`);
+    ok('buffer identity stable (zero-alloc)', heatCloud.pos === posRef && r._ventClouds.find(c => c.kind === 'heat').pos === posRef);
+
+    // Switching a unit to idle removes its cloud on rebuild.
+    states['climate.heat'] = climate('heat', { hvac_action: 'idle', current_temperature: 22, temperature: 22 });
+    r.updateThermostats(units, id => states[id] || null);
+    ok('idle after rebuild drops one heat cloud', (cloudsByKind().heat || 0) === 1, `heat=${cloudsByKind().heat}`);
+
+    // Layer gate: hiding the sensors layer hides the thermostat group + stops advance.
+    r.setLayerVisibility({ sensors: false });
+    ok('sensors layer off hides thermostat group', r._thermoGroup.visible === false);
+    r.setLayerVisibility({ sensors: true });
+    ok('sensors layer on shows thermostat group', r._thermoGroup.visible === true);
+
+    // ══ 3. Planner climate dispatch table (fake HaApi) ═══════════════════════
+    class FakeHa {
+      constructor() { this.states = {}; this._s = []; this._c = []; this.calls = []; this.map = new Map(); }
+      connect() { for (const cb of this._c) cb('connected'); for (const cb of this._s) cb(this.states, undefined); }
+      onState(fn) { this._s.push(fn); } onConn(fn) { this._c.push(fn); }
+      callService(domain, service, data) { this.calls.push({ domain, service, data }); return Promise.resolve(); }
+      async getHistory() { return {}; } async getWeatherForecasts() { return null; }
+      async getDevices() { return []; } async getEntityRegistry() { return []; }
+      async updateEntityRegistry() { return true; }
+      async getUserData(k) { return this.map.has(k) ? JSON.parse(JSON.stringify(this.map.get(k))) : null; }
+      async setUserData(k, v) { this.map.set(k, JSON.parse(JSON.stringify(v))); return true; }
+      async refreshStates() {}
+    }
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
+    async function waitFor(cond, tries = 400) { for (let i = 0; i < tries; i++) { if (cond()) return true; await sleep(4); } return !!cond(); }
+    async function mkPlanner() {
+      localStorage.removeItem('diorama:store:v1'); localStorage.removeItem('diorama:configs');
+      const ha = new FakeHa();
+      const p = new Planner();
+      p.connectWith(ha);
+      await waitFor(() => p.configIndex !== null || p.store);
+      // Bound thermostat + one unbound demo unit on the current floor.
+      p.floor().thermostats = [
+        { id: 'tb', x: 1000, y: 1000, entity_id: 'climate.lr', allowControl: true },
+        { id: 'tu', x: 2000, y: 1000, entity_id: null },
+      ];
+      ha.calls.length = 0;
+      return { p, ha };
+    }
+
+    { // set_hvac_mode
+      const { p, ha } = await mkPlanner();
+      p.setThermostatMode('tb', 'cool');
+      const c = ha.calls.find(x => x.service === 'set_hvac_mode');
+      ok('dispatch set_hvac_mode', c && c.domain === 'climate' && c.data.entity_id === 'climate.lr' && c.data.hvac_mode === 'cool');
+    }
+    { // set_temperature single, clamped
+      const { p, ha } = await mkPlanner();
+      p.setThermostatTemp('tb', G.clampSetpoint(21.3, 16, 30, 0.5));
+      const c = ha.calls.find(x => x.service === 'set_temperature');
+      ok('dispatch set_temperature (single, clamped 21.5)', c && c.data.temperature === 21.5 && c.data.entity_id === 'climate.lr',
+         c && JSON.stringify(c.data));
+    }
+    { // set_temperature range
+      const { p, ha } = await mkPlanner();
+      p.setThermostatTemp('tb', 0, 19, 24);
+      const c = ha.calls.find(x => x.service === 'set_temperature');
+      ok('dispatch set_temperature (range low/high)', c && c.data.target_temp_low === 19 && c.data.target_temp_high === 24 && c.data.temperature === undefined);
+    }
+    { // fan + preset
+      const { p, ha } = await mkPlanner();
+      p.setThermostatFanMode('tb', 'high');
+      p.setThermostatPresetMode('tb', 'eco');
+      ok('dispatch set_fan_mode', ha.calls.some(x => x.service === 'set_fan_mode' && x.data.fan_mode === 'high'));
+      ok('dispatch set_preset_mode', ha.calls.some(x => x.service === 'set_preset_mode' && x.data.preset_mode === 'eco'));
+    }
+    { // allowControl false → no service call
+      const { p, ha } = await mkPlanner();
+      p.floor().thermostats[0].allowControl = false;
+      p.setThermostatMode('tb', 'heat');
+      p.setThermostatTemp('tb', 22);
+      ok('allowControl=false blocks service calls', ha.calls.length === 0, `calls=${ha.calls.length}`);
+    }
+    { // unbound → local demo (no service, flips localState/localTemp)
+      const { p, ha } = await mkPlanner();
+      p.setThermostatMode('tu', 'heat');
+      p.setThermostatTemp('tu', 23);
+      const tu = p.floor().thermostats.find(t => t.id === 'tu');
+      ok('unbound flips localState (no service)', tu.localState === 'heat' && ha.calls.length === 0);
+      ok('unbound flips localTemp', tu.localTemp === 23);
+    }
+    { // view mode refuses; kiosk allows
+      const { p, ha } = await mkPlanner();
+      p.uiMode = 'view';
+      p.setThermostatMode('tb', 'cool');
+      p.setThermostatTemp('tb', 22);
+      p.setThermostatFanMode('tb', 'low');
+      ok('view mode refuses all climate calls', ha.calls.length === 0, `calls=${ha.calls.length}`);
+      p.uiMode = 'kiosk';
+      p.setThermostatMode('tb', 'cool');
+      ok('kiosk mode allows climate calls', ha.calls.some(x => x.service === 'set_hvac_mode'));
+    }
+    { // config-path: bound climate id routes through the config channel (_isSlowEntity)
+      const { p } = await mkPlanner();
+      ok('bound climate id is config-path (_isSlowEntity)', p._isSlowEntity('climate.lr') === true);
+      ok('unrelated id is not config-path', p._isSlowEntity('climate.other') === false);
+    }
+
+    // ── run + report ─────────────────────────────────────────────────────────
+    const grid = document.getElementById('grid');
+    let pass = 0; const fails = [];
+    for (const t of tests) {
+      if (t.ok) pass++; else fails.push(t.name);
+      const card = document.createElement('div');
+      card.className = 'card';
+      card.innerHTML = `<div class="row">
+        <span>${t.ok ? '<span class=pass>PASS</span>' : '<span class=fail>FAIL</span>'} ${t.name}</span>
+        <span>${t.detail ?? ''}</span></div>`;
+      grid.appendChild(card);
+    }
+    const total = tests.length;
+    const allPass = pass === total;
+    const title = allPass ? `THERMO PASS ${pass}/${total}` : `THERMO FAIL ${pass}/${total} [${fails.join(',')}]`;
+    document.title = title;
+    const sum = document.getElementById('summary');
+    sum.textContent = title;
+    sum.className = allPass ? 'okbg' : 'badbg';
+  </script>
+</body>
+</html>

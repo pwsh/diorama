@@ -54,7 +54,11 @@
     await waitFor(() => p.configIndex !== null);
     return { p, stub };
   }
-  const btn = (o) => ({ id: 'b1', x: 1000, y: 1000, ...o });
+  // Auto-unique ids so the fireAction double-fire cooldown (~500 ms, keyed by
+  // id) never blocks these rapid-succession dispatch tests. An explicit `id` in
+  // `o` still wins (the 'ub'/'lg' cases + the dedicated cooldown test below).
+  let _bid = 0;
+  const btn = (o) => ({ id: 'b' + (++_bid), x: 1000, y: 1000, ...o });
   const lastCall = stub => stub.calls[stub.calls.length - 1];
 
   try {
@@ -154,6 +158,20 @@
     p.floor().actionButtons = [btn({ actionKind: 'script', entity_id: 'script.goodnight' })];
     ok('bound action id is config-path', p._isSlowEntity('script.goodnight') === true, '');
     ok('unrelated id is NOT config-path', p._isSlowEntity('sensor.random_thing') === false, '');
+
+    // ── (7b) Double-fire cooldown (raycast + click are separate paths) ───────
+    // Two fireAction calls for the SAME button within ~microseconds (< 500 ms)
+    // dispatch exactly ONE service call. The 700 ms synthetic-click de-dupe only
+    // covers the 2D canvas layer, so this planner-side per-button cooldown is
+    // what protects the 3D-raycast + sidebar-Test + 2D-click multi-path case.
+    p.uiMode = 'edit';
+    {
+      const cd = { id: 'cooldown', x: 1, y: 1, actionKind: 'script', entity_id: 'script.cd' };
+      const base = stub.calls.length;
+      p.fireAction(cd);
+      p.fireAction(cd);   // same id, immediate → cooled down
+      ok('double-fire same button → ONE service call', stub.calls.length === base + 1, `+${stub.calls.length - base}`);
+    }
 
     // ── (7) 2D layer gate (rides switches) ──────────────────────────────────
     {

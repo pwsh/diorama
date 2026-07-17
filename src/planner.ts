@@ -4,7 +4,8 @@ import { loadStore, saveStore, newId, repairFloor, defaultStore,
          cfgBodyKey, loadConfigsCache, saveConfigsCache } from './storage.js';
 import { slugToName, normMac, localToWorld, segCrossesSolidWall, mowerSweepWaypoints,
          ROBOT_DEFAULTS, robotLedColor, parseVacuumPosition, vacuumRawToWorld,
-         vacuumRawHeadingRad, isStairsKind, logicLightState, actionButtonKind } from './geometry.js';
+         vacuumRawHeadingRad, isStairsKind, logicLightState, actionButtonKind,
+         normalizeLockState, type LockGlyphState } from './geometry.js';
 import { stepFusion, newFusionState, DEFAULT_FUSION_CFG,
          type FusionState, type FusionCand } from './fusion.js';
 import { fitGeoTransform, latLonToPlan, clampToBoundary, planBearingDeg, compass8, medianLatLon,
@@ -39,7 +40,7 @@ export interface BermudaDiscovery {
 import type {
   Store, Floor, Sensor, ZonesLive, ObjectHalo, LerpSlot,
   HassState, ConnStatus, DiscoveredDevice, Vec2, AvatarKind, WeatherConfig, CameraFixture,
-  ConfigIndex, ConfigMeta,
+  ConfigIndex, ConfigMeta, ThermostatFixture,
 } from './types.js';
 
 // Full export envelope (Batch B). `store` is the WHOLE Store serialized (no
@@ -179,6 +180,7 @@ export type Drag =
   | { kind: 'motionRotate'; id: string }
   | { kind: 'ble'; id: string; startMm: Vec2; start: Vec2 }
   | { kind: 'alarm'; id: string; startMm: Vec2; start: Vec2 }
+  | { kind: 'thermostat'; id: string; startMm: Vec2; start: Vec2 }
   | { kind: 'safety'; id: string; startMm: Vec2; start: Vec2 }
   | { kind: 'robot'; id: string; startMm: Vec2; start: Vec2 }
   | { kind: 'camera'; id: string; startMm: Vec2; start: Vec2 }
@@ -213,7 +215,7 @@ export interface EditZone {
   mousePos: Vec2 | null;
 }
 
-export type Tool = 'select' | 'wall' | 'sensor' | 'motion' | 'env' | 'infocard' | 'action' | 'bleproxy' | 'alarm' | 'safety' | 'robot' | 'camera' | 'pzone' | 'ground' | 'void' | 'furniture' | 'light' | 'switch' | 'door' | 'window' | 'delete';
+export type Tool = 'select' | 'wall' | 'sensor' | 'motion' | 'env' | 'infocard' | 'action' | 'bleproxy' | 'alarm' | 'thermostat' | 'safety' | 'robot' | 'camera' | 'pzone' | 'ground' | 'void' | 'furniture' | 'light' | 'switch' | 'door' | 'window' | 'delete';
 
 // Live robot state (runtime-only). `x/y/heading/phase/activity/led` are the
 // DISPLAY fields both canvases read; the rest are the movement controller's
@@ -327,6 +329,9 @@ export class Planner extends EventTarget {
 
   // Active alarm keypad fixture (sidebar selection / canvas highlight)
   activeAlarmId: string | null = null;
+
+  // Active thermostat fixture (sidebar selection / canvas highlight)
+  activeThermoId: string | null = null;
 
   // Active smoke / CO detector fixture (sidebar selection / canvas highlight)
   activeSafetyId: string | null = null;
@@ -505,6 +510,9 @@ export class Planner extends EventTarget {
   // doorbellRings) — a press mutates NO persisted state. Pruned > 900 ms, capped.
   // `at` is performance.now() ms so the render passes read one clock.
   actionPressFx: { id: string; at: number }[] = [];
+  // Per-button last-fire timestamp (performance.now() ms) for the fireAction
+  // double-fire cooldown. Runtime-only.
+  private _actionCooldownAt: Record<string, number> = {};
 
   // Camera alert linger (#10 extension): the last time each current-floor camera's
   // alertEntity was seen 'on' (Date.now() ms). `cameraAlerting(cam)` returns true
@@ -1079,6 +1087,7 @@ export class Planner extends EventTarget {
       this.activeEnvId = null;
       this.activeBleId = null;
       this.activeAlarmId = null;
+      this.activeThermoId = null;
       this.activeSafetyId = null;
       this.activeRobotId = null;
       this.activeCameraId = null;
@@ -1325,6 +1334,10 @@ export class Planner extends EventTarget {
     if (f2.furniture.some(fu => fu.doorEntity === id || fu.tempEntity === id)) return true;
     if (f2.doors.some(d => d.lockEntity === id)) return true;
     if ((f2.alarmPanels ?? []).some(a => a.entity_id === id)) return true;
+    // Bound climate/thermostat entities: current_temperature can tick often, but
+    // config-cadence is enough for the sidebar reading + the 3D _keyThermo dirty
+    // key (which buckets temps). Scoped to the current floor's bound ids.
+    if ((f2.thermostats ?? []).some(t => t.entity_id === id)) return true;
     // Smoke / CO detector binary_sensors: display-only bindings routed through
     // the config channel so 2D/3D dirty keys + sidebar badges refresh on alarm.
     if ((f2.safetySensors ?? []).some(s => s.entity_id === id)) return true;
@@ -1788,6 +1801,11 @@ export class Planner extends EventTarget {
     this.emitConfig();
   }
 
+  setActiveThermo(id: string | null): void {
+    this.activeThermoId = (this.activeThermoId === id) ? null : id;
+    this.emitConfig();
+  }
+
   setActiveSafety(id: string | null): void {
     this.activeSafetyId = (this.activeSafetyId === id) ? null : id;
     this.emitConfig();
@@ -1902,6 +1920,62 @@ export class Planner extends EventTarget {
     a.localState = state;
     this.save();
     this.emitConfig();
+  }
+
+  // ── Thermostat / climate control ────────────────────────────────────────
+  // These mirror the alarm/local-control idiom. Bound + allowControl → real
+  // climate.* service calls (fire-and-forget, try/catch). Unbound → flip the
+  // demo localState / localTemp + save (no-op outside edit → kiosk flips are
+  // session-only) + emitConfig. View mode refuses everything.
+  private _thermostat(id: string): ThermostatFixture | null {
+    return (this.floor().thermostats ?? []).find(x => x.id === id) ?? null;
+  }
+  setThermostatMode(id: string, mode: string): void {
+    if (this.uiMode === 'view') return;
+    const t = this._thermostat(id);
+    if (!t) return;
+    if (t.entity_id) {
+      if (t.allowControl === false) return;
+      try { this.hass?.callService('climate', 'set_hvac_mode', { entity_id: t.entity_id, hvac_mode: mode }); }
+      catch { /* fire-and-forget */ }
+      return;
+    }
+    t.localState = mode;   // unbound demo
+    this.save();
+    this.emitConfig();
+  }
+  // Single setpoint OR a low/high range (heat_cool). Bound → set_temperature;
+  // unbound → store the single value in localTemp (demo is single-setpoint only).
+  setThermostatTemp(id: string, temp: number, low?: number, high?: number): void {
+    if (this.uiMode === 'view') return;
+    const t = this._thermostat(id);
+    if (!t) return;
+    if (t.entity_id) {
+      if (t.allowControl === false) return;
+      const data: Record<string, unknown> = { entity_id: t.entity_id };
+      if (low != null && high != null) { data.target_temp_low = low; data.target_temp_high = high; }
+      else data.temperature = temp;
+      try { this.hass?.callService('climate', 'set_temperature', data); }
+      catch { /* fire-and-forget */ }
+      return;
+    }
+    t.localTemp = temp;   // unbound demo (single setpoint)
+    this.save();
+    this.emitConfig();
+  }
+  setThermostatFanMode(id: string, mode: string): void {
+    if (this.uiMode === 'view') return;
+    const t = this._thermostat(id);
+    if (!t || !t.entity_id || t.allowControl === false) return;
+    try { this.hass?.callService('climate', 'set_fan_mode', { entity_id: t.entity_id, fan_mode: mode }); }
+    catch { /* fire-and-forget */ }
+  }
+  setThermostatPresetMode(id: string, mode: string): void {
+    if (this.uiMode === 'view') return;
+    const t = this._thermostat(id);
+    if (!t || !t.entity_id || t.allowControl === false) return;
+    try { this.hass?.callService('climate', 'set_preset_mode', { entity_id: t.entity_id, preset_mode: mode }); }
+    catch { /* fire-and-forget */ }
   }
 
   setActivePerson(id: string | null): void {
@@ -3224,21 +3298,23 @@ export class Planner extends EventTarget {
     this.emitConfig();  // bumps configRev → 3D dirty keys rebuild; sidebar re-renders
   }
 
-  // Resolve a door's lock state ('locked' | 'unlocked' | undefined): bound
-  // lock.* entity wins; else the unbound local flag.
-  doorLockState(door: { lockEntity?: string | null; lockLocalState?: 'locked' | 'unlocked' }): 'locked' | 'unlocked' | undefined {
+  // Resolve a door's lock glyph state: bound lock.* entity wins (normalized to
+  // the full HA vocabulary — locked/unlocked/jammed/locking/unlocking/opening/
+  // open/unavailable, else undefined); else the unbound local flag.
+  doorLockState(door: { lockEntity?: string | null; lockLocalState?: 'locked' | 'unlocked' }): LockGlyphState {
     if (door.lockEntity) {
-      const s = this.hass?.states?.[door.lockEntity]?.state;
-      return s === 'locked' ? 'locked' : s === 'unlocked' ? 'unlocked' : undefined;
+      return normalizeLockState(this.hass?.states?.[door.lockEntity]?.state);
     }
     return door.lockLocalState;
   }
 
   // Toggle a door's lock. Bound → lock.lock / lock.unlock (fire-and-forget).
   // Unbound → flip lockLocalState (session-only in kiosk, like toggleItem).
-  // View mode refuses. Currently-locked → unlock; anything else → lock.
-  toggleDoorLock(door: { lockEntity?: string | null; lockLocalState?: 'locked' | 'unlocked' }): void {
-    if (this.uiMode === 'view') return;
+  // View mode refuses. Display-only doors refuse (single enforcement point —
+  // covers the 2D padlock, 3D deadbolt, and sidebar-badge click paths at once,
+  // in EVERY ui mode incl. kiosk/edit). Currently-locked → unlock; else → lock.
+  toggleDoorLock(door: { lockEntity?: string | null; lockLocalState?: 'locked' | 'unlocked'; lockControl?: 'full' | 'display' }): void {
+    if (this.uiMode === 'view' || door.lockControl === 'display') return;
     const locked = this.doorLockState(door) === 'locked';
     if (door.lockEntity) {
       if (!this.hass) return;
@@ -3277,6 +3353,17 @@ export class Planner extends EventTarget {
     if (btn.confirm && !skipConfirm) {
       try { if (!confirm(`Fire "${btn.label || 'action'}"?`)) return; } catch { /* no window.confirm → proceed */ }
     }
+    // Per-button double-fire cooldown (~500 ms). The 700 ms synthetic-click
+    // de-dupe (touch→click gotcha) only covers the 2D canvas click layer; the
+    // 3D raycast, the sidebar Test button, and 2D clicks are SEPARATE paths that
+    // can each dispatch the same button in quick succession. This is the single
+    // choke point that makes one physical press = one service call regardless of
+    // path. Set only once we're committed to firing (a cancelled confirm never
+    // arms it). skipConfirm (Test-fire) still respects it — a rapid double Test
+    // shouldn't double-dispatch either.
+    const t = performance.now();
+    if (t - (this._actionCooldownAt[btn.id] ?? -Infinity) < 500) return;
+    this._actionCooldownAt[btn.id] = t;
     this._pushActionPress(btn.id);
     const kind = actionButtonKind(btn);
     const data = this._parseActionData(btn.serviceData);
@@ -3355,6 +3442,7 @@ export class Planner extends EventTarget {
     for (const it of f.envSensors ?? []) { it.x += dx; it.y += dy; }
     for (const it of f.bleProxies ?? []) { it.x += dx; it.y += dy; }
     for (const it of f.alarmPanels ?? []) { it.x += dx; it.y += dy; }
+    for (const it of f.thermostats ?? []) { it.x += dx; it.y += dy; }
     for (const it of f.safetySensors ?? []) { it.x += dx; it.y += dy; }
     for (const it of f.robots ?? []) { it.x += dx; it.y += dy; }
     for (const it of f.cameras ?? []) { it.x += dx; it.y += dy; }
@@ -3382,6 +3470,7 @@ export class Planner extends EventTarget {
     this.activeEnvId = null;
     this.activeBleId = null;
     this.activeAlarmId = null;
+    this.activeThermoId = null;
     this.activeSafetyId = null;
     this.activeRobotId = null;
     this.activeCameraId = null;
