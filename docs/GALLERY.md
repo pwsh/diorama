@@ -14,13 +14,23 @@ Output lands in `docs-site/` (gitignored — regenerable, host or commit by choi
 
 ```
 docs-site/
-  index.md                      # TOC
-  furniture.md appliances.md bathroom.md outdoor.md   # one page per furnitureCat (enumerated dynamically)
-  lighting.md switches-controls.md sensors.md doors-windows.md robots.md
+  index.md   index.html         # TOC / landing (markdown + HTML both emitted)
+  furniture.* appliances.* bathroom.* outdoor.*   # one page per furnitureCat (.md + .html)
+  lighting.* switches-controls.* sensors.* doors-windows.* robots.*
   avatars/
-    index.md  base.md sci-fi.md pop-culture.md video-games.md cartoons.md   # one page per top-level pack group
+    index.*  base.* sci-fi.* pop-culture.* video-games.* cartoons.*   # one page per top-level pack group
+  assets/site.css               # single shared stylesheet for the HTML site
   media/**/*.gif                # one GIF per model
+  .catalog.json                 # cached catalog (enables `--pages-only`)
 ```
+
+Every run emits **both** a markdown page and a self-contained HTML page for each
+category. The HTML site is a dark, editor-themed static site: a responsive card
+grid (GIF on top, label + id + meta below), a sticky left nav with the avatar
+packs nested (collapses to a toggle menu on narrow screens), lazy-loaded GIFs,
+and per-card anchor ids. It has no external fonts / CDNs / JS frameworks — just
+`assets/site.css` and a few lines of inline vanilla JS for the mobile nav. Open
+`docs-site/index.html` directly, or publish it (below).
 
 Every markdown page carries a `GENERATED — DO NOT EDIT BY HAND` header. Pages are
 regenerated from the live catalog on every run, so a new furniture kind, light
@@ -78,6 +88,7 @@ builders the live panel uses — never a reimplementation:
 | Flag | Effect |
 |---|---|
 | `--no-build` | reuse existing `dist/` (skip `npm run build`) |
+| `--pages-only` | regenerate ONLY the pages (markdown + HTML) from existing media + the cached `.catalog.json` — no build, no browser, no capture. Verifies every referenced GIF exists on disk and exits nonzero on any broken reference. |
 | `--only <sel>` | capture only subjects whose page, packId, type, or id starts with `<sel>` (e.g. `--only lighting`, `--only base`, `--only avatar`) |
 | `--limit <N>` | cap subjects per page at N |
 | `--fps <N>` / `--size <N>` | override GIF frame rate / pixel size |
@@ -97,6 +108,38 @@ Roughly **0.8 s per subject** (software-WebGL headless Chrome). The catalog is
 ~580 subjects, so a full run is on the order of **8–12 minutes** plus a ~1 s build.
 GIFs are typically 150–850 KB (400 px, 24–34 frames). `--smoke` finishes in ~25 s
 including the build. Use `--only` / `--limit` to iterate on one page quickly.
+
+## Publishing to GitHub Pages
+
+```bash
+npm run docs:gallery                                   # (re)generate docs-site/, incl. index.html
+npm run docs:publish                                   # publish to the gh-pages branch
+node scripts/docs-gallery/publish.mjs --dry-run        # build the commit + print the plan; push nothing
+```
+
+`docs:publish` (`scripts/docs-gallery/publish.mjs`) serves the generated HTML site
+from GitHub Pages:
+
+1. Requires `docs-site/index.html` (tells you to run `docs:gallery` / `--pages-only`
+   otherwise).
+2. Writes a `.nojekyll` marker into `docs-site/` so Pages serves every path
+   (including `assets/`) verbatim without a Jekyll build.
+3. Publishes `docs-site/` as a **single-commit orphan `gh-pages` branch**. Because
+   `docs-site/` is gitignored in the main repo, the branch is built in a throwaway
+   temp git repo (copy in → one orphan commit → `git push --force`), so the 163 MB
+   of GIFs **never enter `main`** and no history accumulates. Commit message is
+   `docs-site <version> <date>`.
+4. Pushes to the **`github` remote only** (`git remote get-url github`) — never
+   `origin`. The push is re-runnable: each run force-overwrites the remote branch
+   with a fresh single commit.
+
+`--dry-run` does everything up to the push (builds the local commit, prints the
+remote, branch, commit sha, payload size, and the exact `git push` command) but
+sends nothing to any remote — use it to preview.
+
+After the first publish, enable Pages for the repo (Settings → Pages → Deploy from
+branch → `gh-pages` / root). The site is then served at
+`https://<owner>.github.io/diorama/` (e.g. `https://pwsh.github.io/diorama/`).
 
 ## Notes
 

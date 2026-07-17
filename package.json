@@ -11,7 +11,8 @@
     "typecheck": "tsc --noEmit",
     "deploy": "tsc -b && DIORAMA_DEPLOY=1 vite build",
     "deploy:watch": "DIORAMA_DEPLOY=1 vite build --watch",
-    "docs:gallery": "node scripts/docs-gallery/generate.mjs"
+    "docs:gallery": "node scripts/docs-gallery/generate.mjs",
+    "docs:publish": "node scripts/docs-gallery/publish.mjs"
   },
   "dependencies": {
     "lit": "^3.3.0",
