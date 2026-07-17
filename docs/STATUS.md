@@ -81,7 +81,9 @@ instance.
 ### Shipped since the DESIGN-sims arc (reverse order)
 
 - **Docs-gallery pipeline** (`npm run docs:gallery`, `docs/GALLERY.md`;
-  scripts committed, `docs-site/` output gitignored by design): fully
+  scripts committed, `docs-site/` output gitignored by design; **hosted at
+  https://pwsh.github.io/diorama/** via `npm run docs:publish` → orphan
+  `gh-pages` branch on the github remote only): fully
   scripted documentation generator — headless Chrome + CDP over native
   WebSocket drives `scripts/docs-gallery/capture-main.ts` (real renderer
   chunk + in-page gifenc) to produce per-model animated GIFs and generate
