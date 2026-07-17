@@ -1,6 +1,6 @@
 # Project status & pick-up guide
 
-Last updated: 2026-07-17, at **v0.17.0** (+ docs-site/floorplans batch on main). This is the single document to
+Last updated: 2026-07-17, at **v0.18.0**. This is the single document to
 read (alongside `CLAUDE.md`) to resume work with full context.
 
 ## Where things stand
@@ -10,7 +10,7 @@ Diorama is feature-complete through TWO arcs — the Sims-2000 arc
 (`docs/DESIGN-world.md`, 8 phases: BLE identity/trilateration/fusion, pet
 rigs, GPS geo-calibration + pins, weather core + 3D effects) — plus the
 post-arc batches listed below. Everything is merged to `main`, pushed to
-**both remotes**, released through **v0.17.0**, and deployed to the live HA
+**both remotes**, released through **v0.18.0**, and deployed to the live HA
 instance.
 
 ### Remotes, releases, deploy
@@ -84,7 +84,20 @@ instance.
   clamps + two animal reduction passes, dryer door/rocking chair/swingset/
   bin-lid fixes, princess hair, capture facings + speeds; DC Batman pack
   + LEGO Batman — 58 packs / 482 avatars; plumbob defaults to the source
-  identity color for sensor attribution).
+  identity color for sensor attribution)
+  → v0.18.0 open house (unified docs site: home + 8-page guide + models
+  gallery + floor-plan library of 12 importable demo homes with a
+  scripted screenshot pipeline; per-config notes; deferral list cleared
+  — table-chair group moves, live mount parenting, 2D recipe
+  projections, privacy mosaic, toon-converted OBJ imports, fireplace/
+  dance/window-gaze idle activities; Display & Controls arc — InfoCards,
+  action buttons, logical-state lights, weather forecast strips +
+  alerts; HVAC thermostat fixture w/ vent airflow, display-only locks;
+  home theater — projector + bias light + speakers/recliners/riser;
+  staged phases 1–4 — sirens, UV, garage car + EV charging, mailbox,
+  event thought bubbles, water valves + smart plugs, sky dome w/ sun/
+  moon/stars, avatar rig gaps incl. animate channels + hop/knuckle
+  gaits; equine mane fix).
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
