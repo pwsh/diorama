@@ -88,6 +88,30 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Phase 4 of the staged plan — avatar rig gaps** (2026-07-17; 2
+  parallel Opus agents; HARD GATE held: all 602 content-test builds
+  byte-compatible, defaults unchanged). **Static schema** (avatars.ts +
+  builders): eye styles `compound`/`t_visor`/`sleepy`/`luminous` +
+  `eyeColor` (humanoid AND quad `eyes`/`eyeColor`); 8 new accessory
+  anchors (`wristL/R`, `elbowL/R`, `kneeL/R`, `ankleL/R` — parented to
+  the swinging limb pivots); quad `legColor` (8 segments, feet stay
+  pawColor), `ears:'flap'`, `snoutShape:'broad'`; deterministic
+  `AvatarPattern` generator (stripes/spots/dapples, mulberry32 seeded,
+  capped counts — future packs stop hand-placing stripes);
+  `AvatarDef.sessile` (humanoid = rooted legless, quads keep planted
+  legs; nav/facing skipped) — AVATAR-BUILD 64→99. **Animation
+  channels**: `AvatarPrimitive.animate {sway|flap|orbit|spin}` (base
+  transforms captured once, `_advanceAnimPrims` zero-alloc; flap runs
+  2× while walking via accumulated phase), `HumanoidFields.gait
+  'hop'|'knuckle'` (hop = phase-locked legs + 2.1× squash bob; knuckle
+  = 1.9× arm swing to floor + proportional forward pitch — classic walk
+  formulas verified byte-identical when absent), `QuadrupedFields.
+  earAnimate 'swivel'|'none'` — AVATARANIM 32/32. AUTHORING.md updated
+  with every field. Remaining rig-gap items deliberately NOT built:
+  true fabric prints/decals/text (against the no-texture style),
+  pose-aware hand props / two-handed convention, situational costume
+  swaps (needs a UX decision) — still parked in ROADMAP.
+
 - **Phase 3 of the staged plan** (2026-07-17; 1 Opus agent — the sky):
   a living backdrop in `_skyGroup`: **gradient sky dome** (inverted
   30000-radius BackSide sphere, two-uniform vertex-lerp ShaderMaterial —

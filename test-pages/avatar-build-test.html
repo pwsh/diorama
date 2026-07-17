@@ -22,6 +22,12 @@
   const checks = [];
   const ok = (name, cond, extra = '') => checks.push({ name, pass: !!cond, extra });
   const near = (a, b, tol = 2) => Math.abs(a - b) <= tol;
+  // Per-channel hex compare (HSL round-trip in _simsColor can shift ±1/channel).
+  const chNear = (aHex, bHex, tol = 4) =>
+    Math.abs(((aHex >> 16) & 255) - ((bHex >> 16) & 255)) <= tol &&
+    Math.abs(((aHex >> 8) & 255) - ((bHex >> 8) & 255)) <= tol &&
+    Math.abs((aHex & 255) - (bHex & 255)) <= tol;
+  const simsHex = (c) => r._simsColor(c).getHex();
   const meshes = (root) => { const o = []; root.traverse(m => { if (m.isMesh) o.push(m); }); return o; };
   const nonOutline = (root) => meshes(root).filter(m => !m.userData.outline);
   const shells = (root) => meshes(root).filter(m => m.userData.outline).length;
@@ -375,10 +381,218 @@
       `worstTop=${isFinite(worstTop) ? worstTop.toFixed(1) : '-'}`);
   }
 
+  // ── Phase 4a: new eye styles + eyeColor ────────────────────────────────────
+  mod.ThreeDRenderer.registerAvatarPack({
+    id: 'ey', version: 1, label: 'Eyes', path: ['EY'], builtin: true,
+    avatars: [
+      { id: 'ey/compound', label: 'Cmp', rig: 'humanoid', humanoid: { eyes: 'compound' } },
+      { id: 'ey/tvisor', label: 'TV', rig: 'humanoid', humanoid: { eyes: 't_visor', eyeColor: 0xff3300 } },
+      { id: 'ey/sleepy', label: 'Slp', rig: 'humanoid', humanoid: { eyes: 'sleepy' } },
+      { id: 'ey/lum', label: 'Lum', rig: 'humanoid', humanoid: { eyes: 'luminous', eyeColor: 0x00ffcc } },
+      { id: 'ey/tint', label: 'Tint', rig: 'humanoid', humanoid: { eyes: 'dots', eyeColor: 0xff8800 } },
+    ],
+  });
+  const compound = r._buildHumanoid(TINT, 'ey/compound');
+  const tvisor = r._buildHumanoid(TINT, 'ey/tvisor');
+  const sleepy = r._buildHumanoid(TINT, 'ey/sleepy');
+  const lum = r._buildHumanoid(TINT, 'ey/lum');
+  const tintEye = r._buildHumanoid(TINT, 'ey/tint');
+  // compound: several small facet spheres near the face (outlineSkip), no nose.
+  const compFacets = nonOutline(compound.group).filter(m => m.geometry.type === 'SphereGeometry'
+    && m.userData.outlineSkip && near(m.position.z, -108, 60) && m.position.y > 1600);
+  ok('compound: builds facet cluster (≥6)', compFacets.length >= 6, `n=${compFacets.length}`);
+  // t_visor: a helmet band + dark T bars (2 box bars marked outlineSkip).
+  const tBars = nonOutline(tvisor.group).filter(m => m.geometry.type === 'BoxGeometry'
+    && m.userData.outlineSkip && m.position.y > 1550);
+  ok('t_visor: T slot has 2 bars', tBars.length === 2, `n=${tBars.length}`);
+  ok('t_visor: eyeColor tints the slot glow', tBars.length === 2 && tBars.some(b => b.material.emissive
+    && chNear(b.material.emissive.getHex(), 0xff3300)),
+    tBars.length ? tBars[0].material.emissive.getHex().toString(16) : '-');
+  // sleepy: generic eyes present + 2 skin-tone lid boxes over the upper eye.
+  const lids = nonOutline(sleepy.group).filter(m => m.geometry.type === 'BoxGeometry'
+    && near(m.position.y, 1636 + 126 * 0.2, 8) && Math.abs(m.geometry.parameters.width - 126 * 0.42) < 0.5);
+  ok('sleepy: 2 half-lids', lids.length === 2, `n=${lids.length}`);
+  // luminous: 2 big emissive orbs, outlineSkip, tinted eyeColor.
+  const orbs = nonOutline(lum.group).filter(m => m.geometry.type === 'SphereGeometry'
+    && m.userData.outlineSkip && Math.abs(m.geometry.parameters.radius - 126 * 0.32) < 0.5);
+  ok('luminous: 2 glowing orbs', orbs.length === 2, `n=${orbs.length}`);
+  ok('luminous: eyeColor tints orbs', orbs.length === 2
+    && chNear(orbs[0].material.color.getHex(), simsHex(0x00ffcc)));
+  // eyeColor on generic 'dots': the pupil sphere carries the tint + outlineSkip.
+  const pupils = nonOutline(tintEye.group).filter(m => m.geometry.type === 'SphereGeometry'
+    && Math.abs(m.geometry.parameters.radius - 126 * 0.2 * 0.56) < 0.3 && m.userData.outlineSkip);
+  ok('eyeColor: tinted generic pupils', pupils.length === 2
+    && chNear(pupils[0].material.color.getHex(), simsHex(0xff8800)), `n=${pupils.length}`);
+  // Regression: default 'dots' pupils are NOT outline-skipped (nPlain preserved).
+  const plainPupils = nonOutline(plain.group).filter(m => m.geometry.type === 'SphereGeometry'
+    && Math.abs(m.geometry.parameters.radius - 126 * 0.2 * 0.56) < 0.3);
+  ok('eyeColor: default pupils unchanged (not skipped)', plainPupils.length === 2
+    && plainPupils.every(p => !p.userData.outlineSkip));
+
+  // ── Phase 4a: limb-joint anchors (wrist/elbow/knee/ankle) ──────────────────
+  mod.ThreeDRenderer.registerAvatarPack({
+    id: 'lj', version: 1, label: 'LimbJoints', path: ['LJ'], builtin: true,
+    avatars: [
+      { id: 'lj/limbs', label: 'LJ', rig: 'humanoid', humanoid: {}, accessories: [
+        { shape: 'box', size: [41, 41, 41], anchor: 'wristL', color: 'dark' },
+        { shape: 'box', size: [42, 42, 42], anchor: 'elbowL', color: 'dark' },
+        { shape: 'box', size: [43, 43, 43], anchor: 'kneeL', color: 'dark' },
+        { shape: 'box', size: [44, 44, 44], anchor: 'ankleL', color: 'dark' },
+      ] },
+    ],
+  });
+  const lj = r._buildHumanoid(TINT, 'lj/limbs');
+  lj.group.updateMatrixWorld(true);
+  const accBy = (w) => nonOutline(lj.group).find(m => m.geometry.type === 'BoxGeometry'
+    && Math.abs(m.geometry.parameters.width - w) < 0.01);
+  const wristA = accBy(41), elbowA = accBy(42), kneeA = accBy(43), ankleA = accBy(44);
+  ok('elbowL parents to lower-arm pivot', elbowA && elbowA.parent === lj.leftElbow);
+  ok('kneeL parents to lower-leg pivot', kneeA && kneeA.parent === lj.leftKnee);
+  ok('wristL parents to hand group (child of elbow)', wristA && wristA.parent && wristA.parent.parent === lj.leftElbow);
+  ok('ankleL parents to knee pivot', ankleA && ankleA.parent === lj.leftKnee);
+  // World positions: legs carry no build rotation, so the knee pivot sits at
+  // hipY − LEG_UPPER_LEN = 870 − 430 = 440; the ankle accessory hangs LEG_LOWER_LEN
+  // (380) below it → world y ≈ 60. The elbow accessory rides the (rolled) arm pivot.
+  lj.leftKnee.updateMatrixWorld(true); lj.leftElbow.updateMatrixWorld(true);
+  const kp = lj.leftKnee.matrixWorld.elements, ep = lj.leftElbow.matrixWorld.elements;
+  const wa = ankleA.matrixWorld.elements, we = elbowA.matrixWorld.elements;
+  ok('kneeL pivot world y ≈ 440', near(kp[13], 440, 3), `y=${kp[13].toFixed(0)}`);
+  ok('ankleL world ≈ knee − shin (≈60)', near(wa[13], kp[13] - 380, 6), `accY=${wa[13].toFixed(0)}`);
+  ok('elbowL world ≈ elbow pivot', near(we[13], ep[13], 3) && near(we[12], ep[12], 3));
+
+  // ── Phase 4a: quad legColor / flap ears / broad snout ──────────────────────
+  mod.ThreeDRenderer.registerAvatarPack({
+    id: 'qz', version: 1, label: 'QuadZ', path: ['QZ'], builtin: true,
+    avatars: [
+      { id: 'qz/legcolor', label: 'LC', rig: 'quadruped', pet: true, quadruped: { legColor: 0x224466 } },
+      { id: 'qz/flap', label: 'Fl', rig: 'quadruped', pet: true, quadruped: { ears: 'flap' } },
+      { id: 'qz/broad', label: 'Br', rig: 'quadruped', pet: true, quadruped: { snoutShape: 'broad', snout: 1 } },
+      { id: 'qz/cone', label: 'Cn', rig: 'quadruped', pet: true, quadruped: { snout: 1 } },
+    ],
+  });
+  const legSegs = (rig) => {
+    const out = [];
+    for (const l of rig.quadLegs) {
+      l.hip.children.forEach(c => { if (c.isMesh && c.geometry.type === 'CylinderGeometry') out.push(c); });
+      l.knee.children.forEach(c => { if (c.isMesh && c.geometry.type === 'CylinderGeometry') out.push(c); });
+    }
+    return out;
+  };
+  const lcq = r._buildQuadruped(0x808080, 'qz/legcolor');
+  const segs = legSegs(lcq);
+  ok('legColor: 8 leg segments', segs.length === 8, `n=${segs.length}`);
+  ok('legColor: legs recolored (≠ torso coat)', segs.length === 8
+    && segs.every(s => s.material === segs[0].material) && segs[0].material !== lcq.torso.material);
+  const flap = r._buildQuadruped(0x808080, 'qz/flap');
+  const flapEars = flap.quadEars.map(p => p.children.find(m => m.isMesh && m.geometry.type === 'BoxGeometry')).filter(Boolean);
+  ok('flap ears: 2 giant ear plates', flap.quadEars.length === 2 && flapEars.length === 2
+    && flapEars.every(e => e.geometry.parameters.width > 130), `w=${flapEars[0] ? flapEars[0].geometry.parameters.width.toFixed(0) : '-'}`);
+  const broad = r._buildQuadruped(0x808080, 'qz/broad');
+  const cone = r._buildQuadruped(0x808080, 'qz/cone');
+  const snoutBox = (rig) => { let best = null; rig.quadHead.children.forEach(c => {
+    if (c.isMesh && c.geometry.type === 'BoxGeometry' && (!best || c.geometry.parameters.width > best.geometry.parameters.width)) best = c; }); return best; };
+  const bs = snoutBox(broad), cs = snoutBox(cone);
+  ok('broad snout: wider muzzle box than cone', bs && cs && bs.geometry.parameters.width > cs.geometry.parameters.width * 1.4,
+    bs && cs ? `broad=${bs.geometry.parameters.width.toFixed(0)} cone=${cs.geometry.parameters.width.toFixed(0)}` : '-');
+
+  // ── Phase 4a: quad eye styles (oval + sleepy + eyeColor) ───────────────────
+  mod.ThreeDRenderer.registerAvatarPack({
+    id: 'qe', version: 1, label: 'QuadEyes', path: ['QE'], builtin: true,
+    avatars: [
+      { id: 'qe/oval', label: 'Ov', rig: 'quadruped', pet: true, quadruped: { eyes: 'oval', eyeColor: 0x33ff88 } },
+      { id: 'qe/sleepy', label: 'Sl', rig: 'quadruped', pet: true, quadruped: { eyes: 'sleepy' } },
+    ],
+  });
+  const qoval = r._buildQuadruped(0x808080, 'qe/oval');
+  const ovalEyes = qoval.quadHead.children.filter(m => m.isMesh && m.geometry.type === 'SphereGeometry'
+    && Math.abs(m.scale.y - 1.3) < 0.01);
+  ok('quad oval eyes: 2 scaled + eyeColor', ovalEyes.length === 2
+    && chNear(ovalEyes[0].material.color.getHex(), simsHex(0x33ff88)), `n=${ovalEyes.length}`);
+  const qsleepy = r._buildQuadruped(0x808080, 'qe/sleepy');
+  const qlids = qsleepy.quadHead.children.filter(m => m.isMesh && m.geometry.type === 'BoxGeometry' && m.position.y > 0);
+  ok('quad sleepy: 2 lids', qlids.length === 2, `n=${qlids.length}`);
+
+  // ── Phase 4a: deterministic pattern generator ──────────────────────────────
+  mod.ThreeDRenderer.registerAvatarPack({
+    id: 'pt', version: 1, label: 'Pattern', path: ['PT'], builtin: true,
+    avatars: [
+      { id: 'pt/s1', label: 'S1', rig: 'humanoid', humanoid: { pattern: { kind: 'spots', color: 0x113355, seed: 7, count: 6 } } },
+      { id: 'pt/s2', label: 'S2', rig: 'humanoid', humanoid: { pattern: { kind: 'spots', color: 0x113355, seed: 7, count: 6 } } },
+      { id: 'pt/s3', label: 'S3', rig: 'humanoid', humanoid: { pattern: { kind: 'spots', color: 0x113355, seed: 99, count: 6 } } },
+      { id: 'pt/cap', label: 'Cap', rig: 'humanoid', humanoid: { pattern: { kind: 'spots', color: 0x113355, count: 50 } } },
+      { id: 'pt/str', label: 'St', rig: 'humanoid', humanoid: { pattern: { kind: 'stripes', color: 0x111111, count: 30 } } },
+      { id: 'pt/qspots', label: 'QS', rig: 'quadruped', pet: true, quadruped: { pattern: { kind: 'dapples', color: 0x442200, seed: 3, count: 8 } } },
+    ],
+  });
+  // Pattern discs are flat cylinders (radiusTop === radiusBottom, height ≈ 8·sk).
+  const discs = (rig) => nonOutline(rig.group).filter(m => m.geometry.type === 'CylinderGeometry'
+    && Math.abs(m.geometry.parameters.radiusTop - m.geometry.parameters.radiusBottom) < 0.01
+    && Math.abs(m.geometry.parameters.height - 8) < 0.5);
+  const posKey = (list) => list.map(m => `${m.position.x.toFixed(2)},${m.position.y.toFixed(2)},${m.position.z.toFixed(2)}`).sort().join('|');
+  const s1 = r._buildHumanoid(TINT, 'pt/s1'), s2 = r._buildHumanoid(TINT, 'pt/s2'), s3 = r._buildHumanoid(TINT, 'pt/s3');
+  const d1 = discs(s1), d2 = discs(s2), d3 = discs(s3);
+  ok('pattern: 6 spots built', d1.length === 6, `n=${d1.length}`);
+  ok('pattern: same seed → identical placement', d1.length && posKey(d1) === posKey(d2));
+  ok('pattern: different seed → different placement', d1.length && posKey(d1) !== posKey(d3));
+  const cap = discs(r._buildHumanoid(TINT, 'pt/cap'));
+  ok('pattern: spot count capped ≤ 12', cap.length <= 12 && cap.length > 0, `n=${cap.length}`);
+  // Stripes are vertical boxes on the torso front; count capped at 10.
+  const strBoxes = nonOutline(r._buildHumanoid(TINT, 'pt/str').group).filter(m => m.geometry.type === 'BoxGeometry'
+    && Math.abs(m.geometry.parameters.height - 600 * 0.5 * 1.7) < 1);
+  ok('pattern: stripe count capped ≤ 10', strBoxes.length <= 10 && strBoxes.length > 0, `n=${strBoxes.length}`);
+  const qspots = r._buildQuadruped(0x808080, 'pt/qspots');
+  const qd = qspots.group.children.filter(m => m.isMesh && m.geometry.type === 'CylinderGeometry'
+    && Math.abs(m.geometry.parameters.height - 8) < 0.5);
+  ok('pattern: quad dapples built', qd.length === 8, `n=${qd.length}`);
+
+  // ── Phase 4a: sessile / rooted mode ────────────────────────────────────────
+  mod.ThreeDRenderer.registerAvatarPack({
+    id: 'ss', version: 1, label: 'Sessile', path: ['SS'], builtin: true,
+    avatars: [
+      { id: 'ss/plant', label: 'Pl', rig: 'humanoid', sessile: true, humanoid: {}, accessories: [
+        { shape: 'cylinder', size: [90, 120, 800], anchor: 'root', pos: [0, 400, 0], color: 'tint' },
+      ] },
+      { id: 'ss/coral', label: 'Co', rig: 'quadruped', pet: true, sessile: true, quadruped: {} },
+    ],
+  });
+  const plant = r._buildHumanoid(TINT, 'ss/plant');
+  ok('sessile: legless (null leg joints)', plant.leftHip === null && plant.rightHip === null
+    && plant.leftKnee === null && plant.rightKnee === null);
+  ok('sessile: flag set, hover false', plant.sessile === true && plant.hover === false && plant.hoverY === 0);
+  ok('sessile: no foot meshes', !nonOutline(plant.group).some(m => m.geometry.type === 'BoxGeometry'
+    && Math.abs(m.geometry.parameters.depth - 230) < 0.01));
+  ok('sessile: trunk accessory built', nonOutline(plant.group).some(m => m.geometry.type === 'CylinderGeometry'
+    && Math.abs(m.geometry.parameters.height - 800) < 0.5));
+  const coral = r._buildQuadruped(0x808080, 'ss/coral');
+  ok('sessile: quad flag set', coral.sessile === true);
+  // Frame-advance: sessile rigs must survive updateTargets AND stay grounded/pinned.
+  {
+    fakeNow = realNow(); performance.now = () => fakeNow;
+    let sessileThrew = false;
+    try {
+      for (let i = 0; i < 30; i++) { fakeNow += 16.7;
+        r.updateTargets([
+          { key: 'ssp', x: 2500, y: 2500, color: TINT, avatar: 'ss/plant' },
+          { key: 'ssc', x: 4500, y: 3500, color: 0x808080, avatar: 'ss/coral' },
+        ], ctx); }
+    } catch (e) { sessileThrew = true; window.__sessileErr = e.stack; }
+    performance.now = realNow;
+    const sp = r._humanoids['ssp'], sc = r._humanoids['ssc'];
+    ok('sessile: updateTargets no-throw', !sessileThrew && !!sp && !!sc);
+    // Grounded (root ~ floor, NOT floated like hover), pinned at the raw scene pos.
+    ok('sessile: root grounded (y ≈ 0, not floated)', sp && Math.abs(sp.group.position.y) < 60,
+      sp ? sp.group.position.y.toFixed(0) : '-');
+    const pw = r._w(2500, 2500, 0);
+    ok('sessile: stays at target position (no wander)', sp && Math.abs(sp.group.position.x - pw.x) < 5
+      && Math.abs(sp.group.position.z - pw.z) < 5,
+      sp ? `${(sp.group.position.x - pw.x).toFixed(1)},${(sp.group.position.z - pw.z).toFixed(1)}` : '-');
+  }
+
   // ── Dispose lifecycle ─────────────────────────────────────────────────────
   let threw = false;
   try {
-    for (const rig of [h, cyl, oval, plain, faceless, ghost, limbs, hovDirect, dog, cat, qplain, giraffe, bald, rabbit, paws])
+    for (const rig of [h, cyl, oval, plain, faceless, ghost, limbs, hovDirect, dog, cat, qplain, giraffe, bald, rabbit, paws,
+      compound, tvisor, sleepy, lum, tintEye, lj, lcq, flap, broad, cone, qoval, qsleepy, s1, s2, s3, qspots, plant, coral])
       r._disposeSubtree(rig.group);
   } catch (e) { threw = true; }
   ok('_disposeSubtree no-throw', !threw);

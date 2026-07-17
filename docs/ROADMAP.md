@@ -206,14 +206,14 @@ admin-session UX decision — settle that before building on it.
 
 Work proceeds in order; each stage ships (commit + push both + deploy).
 
-- **Stage 0 — Home theater fill-in** (`research/home-theater-diorama.md`):
+- ✅ **Stage 0 — Home theater fill-in** (SHIPPED 2026-07-17) (`research/home-theater-diorama.md`):
   projector fixture + light cone, speaker/subwoofer/recliner furniture
   kinds, tiered seating, screen bias lighting.
-- **Phase 1**: sirens/beacons (`research/sirens-beacons.md`), UV index,
+- ✅ **Phase 1** (SHIPPED 2026-07-17): sirens/beacons (`research/sirens-beacons.md`), UV index,
   garage-bay vehicle presence (`research/moon-uv-vehicle.md`) + EV charging
   status (`research/ev-charger.md`), mail/packages badge
   (`research/peripheral-fixtures.md`).
-- **Phase 2**: event-focused thought bubbles
+- ✅ **Phase 2** (SHIPPED 2026-07-17): event-focused thought bubbles
   (`research/event-thought-bubbles.md`) + **water valves** (bind `valve.*`
   or the switch-entity irrigation pattern per
   `research/irrigation-sprinklers.md`; open/close from the panel) +
@@ -221,10 +221,14 @@ Work proceeds in order; each stage ships (commit + push both + deploy).
   entity) — both with per-device configuration (label, binding,
   allow-control) and click-to-toggle from the interface (added
   2026-07-17).
-- **Phase 3**: moon-phase + sun-position background props
+- ✅ **Phase 3** (SHIPPED 2026-07-17): moon-phase + sun-position background props
   (`research/moon-uv-vehicle.md`), weather as background
   (`research/weather-background-fx.md`).
-- **Phase 4**: avatar rig gaps (the parked triage list below).
+- ✅ **Phase 4** — SHIPPED 2026-07-17: avatar rig gaps (new eye styles +
+  eyeColor, 8 limb anchors, quad legColor/flap ears/broad snout,
+  deterministic pattern generator, sessile mode, animate channels
+  sway/flap/orbit/spin, hop/knuckle gaits, ear swivel). Still parked:
+  fabric prints/decals/text, pose-aware/two-handed props, costume swaps.
 - **HARD PAUSE — manual continuation required before Phase 5.**
 - **Phase 5** (NOT STARTED without explicit user go-ahead): Frigate raw
   boxes + Valetudo room maps — direct-MQTT bridge + per-camera homography

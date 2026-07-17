@@ -110,6 +110,7 @@ identical at 30 px, merge or drop one.
   bubbles: ['🎈','…'],        // 1–4 plain emoji (canvas sprite pipeline)
   posture: { pitch? },        // static root-pitch bias (stoop/hunch), radians
   pet: true,                  // see semantics above
+  sessile: true,              // rooted/legless (plant/coral) — nav/gait skipped
 }
 ```
 
@@ -118,29 +119,85 @@ identical at 30 px, merge or drop one.
 adult 126), `headShape` `'sphere'|'box'|'cylinder'|'oval'`, `limbR`,
 `skin`/`body` (hex or `'tint'` = identity color), `shoe`, `emI` (0–0.4),
 `hands` `'sphere'|'box'`, `eyes`
-`'dots'|'visor'|'almond'|'redvisor'|'shades'|'slit'|'halfred'|'none'`,
-`steel` (brushed metal), `armL`/`legL`, `footMul [w,h,d]`, `legColor`,
-`earSkip`, `noFace` (skip nose/mouth/brows), `opacity` (0–1, transparent),
-`hover` (mm — legless float + bob), `limbColors {armL?,armR?,legL?,legR?}`.
+`'dots'|'visor'|'almond'|'redvisor'|'shades'|'slit'|'halfred'|'none'|'compound'|'t_visor'|'sleepy'|'luminous'`,
+`eyeColor` (hex — iris tint for `dots`/`sleepy`, glow tint for
+`luminous`/`t_visor`/`visor`/`redvisor`), `steel` (brushed metal),
+`armL`/`legL`, `footMul [w,h,d]`, `legColor`, `earSkip`, `noFace` (skip
+nose/mouth/brows), `opacity` (0–1, transparent), `hover` (mm — legless float
++ bob), `limbColors {armL?,armR?,legL?,legR?}`, `gown` (damp leg swing),
+`pattern` (see below — proud scatter on the torso).
+New eye styles (Phase 4a): **compound** = insect facet cluster (masked, no
+nose/mouth); **t_visor** = Mandalorian helmet band + dark T slot (masked);
+**sleepy** = generic eyes + half-lids; **luminous** = big glowing orbs
+(outline-skipped).
 
 `QuadrupedFields` (defaults = dog, sk 1 = beagle ~520 mm shoulder):
 `sk`, `bodyLen/bodyW/bodyH` (mm at sk 1; defaults 640/200/240), `legLen`,
 `headR`, `headScale`, `neckLen` (>0 inserts a neck — horse/giraffe), `ears`
-`'pointy'|'floppy'|'round'|'long'|'none'`, `tail`
-`'up'|'down'|'curl'|'tuft'|'none'`, `tailLen`, `snout` (0 = flat face),
-`coat` (hex|'tint'), `belly`, `earColor`, `snoutColor`, `pawColor`,
-`tailTipColor`, `opacity`.
+`'pointy'|'floppy'|'round'|'long'|'flap'|'none'` (**flap** = giant elephant
+ear plates), `tail` `'up'|'down'|'curl'|'tuft'|'none'`, `tailLen`, `snout`
+(0 = flat face), `snoutShape` `'cone'` (default) | `'broad'` (wide flat
+muzzle — hippo/moose/cow), `coat` (hex|'tint'), `belly`, `earColor`,
+`snoutColor`, `pawColor`, `tailTipColor`, `legColor` (recolors all 4 legs;
+feet stay pawColor — the dark-"points" look), `eyes` `'dot'` (default) |
+`'oval'` | `'sleepy'`, `eyeColor`, `opacity`, `pattern` (proud scatter on
+the body).
+
+`AvatarPattern` (`humanoid.pattern` / `quadruped.pattern` — Phase 4a):
+`{ kind: 'stripes'|'spots'|'dapples', color: hex, count?, seed? }`.
+DETERMINISTIC proud-primitive scatter (seeded mulberry32 from `seed` ?? the
+avatar-id hash — never `Math.random`, so a seed reproduces exactly). stripes
+= vertical thin boxes alternating flanks; spots = flat discs on back/flanks;
+dapples = smaller discs clustered top-side. `count` is builder-capped
+(stripes ≤10, spots/dapples ≤12) to keep the ~14-primitive budget. This
+SUPERSEDES hand-authored stripe lists for new packs; existing hand-placed
+packs (zebra/cow/tiger) keep their accessories.
+
+`AvatarDef.sessile: true` (Phase 4a): builds the rig LEGLESS but grounded
+(root at floor, no leg joints, no gait) — a plant/coral/totem whose base is a
+trunk/tuft supplied via normal accessories. In-scene it stays pinned at its
+target position (nav/facing/gait skipped; idle sway only). Humanoid OR pet.
 
 `AvatarPrimitive` (accessory):
 `shape` `'box'|'sphere'|'cylinder'|'cone'`; `size` — box `[w,h,d]`, sphere
 `r` or `[rx,ry,rz]` (ellipsoid), cylinder `[rTop,rBot,h]`, cone `[r,h]`
 (2-tuple ok); mm at sk 1. `anchor`:
 `crown|head|face|chest|back|hip|root|handL|handR|shoulderL|shoulderR|neck|tailbone`
-(humanoid) / `qhead|qneck|qback|qrump` (quadruped). `pos [x,y,z]` mm offset
-(body-local, **−Z = front**), `rot [x,y,z]` **radians**, `color` hex |
++ limb joints `wristL|wristR|elbowL|elbowR|kneeL|kneeR|ankleL|ankleR`
+(humanoid) / `qhead|qneck|qback|qrump` (quadruped). Limb-joint anchors parent
+the SWINGING pivot so the accessory rides the walk — wrist = hand-group
+origin, elbow/knee = the lower-limb pivot origin, ankle = shin bottom (the
+knee pivot minus the shin length); all fall back to `root` on a legless
+(hover/sessile) rig, so pos offsets then read from the rig root. `pos [x,y,z]`
+mm offset (body-local, **−Z = front**), `rot [x,y,z]` **radians**, `color` hex |
 `'tint'|'skin'|'body'|'dark'|'accent'`, `emissive`/`emissiveIntensity`/
 `metalness`/`roughness`, `outlineSkip`, `sphereArc
 [phiStart,phiLength,thetaStart,thetaLength]` (hoods/hair/shells).
+
+### Animated appendages & gait (Phase 4b)
+
+- **`AvatarPrimitive.animate {kind, speed?, amp?, phase?}`** — per-frame motion
+  about the primitive's build pose (base captured once; zero per-frame alloc):
+  - `'sway'` — `rotation.x` sinusoid, `amp` rad @ `speed` rad/s. Per-prim
+    `phase` (rad) offsets desync siblings — author an octopus as N sways with
+    staggered phases; antennae/tentacles.
+  - `'flap'` — `rotation.z` |sin| beat, `amp` rad. Mirrored wings: author the
+    LEFT wing `+amp`, RIGHT `−amp`. Flap **doubles speed while the rig walks**
+    (flying feel), slow when idle.
+  - `'orbit'` — position circles the base in the horizontal (x/z) plane, radius
+    `amp` **mm** (×sk), `speed` rad/s — orbiting drones/fairies (pair with
+    `outlineSkip`).
+  - `'spin'` — continuous `rotation.y` @ `speed` rad/s — propellers, halos.
+  - Defaults: `speed` 2; `amp` sway 0.3 / flap 0.6 / orbit 60 (spin ignores it);
+    `phase` 0.
+- **`HumanoidFields.gait 'walk'|'hop'|'knuckle'`** (absent = `'walk'`, byte-
+  identical to today): `'hop'` = both legs swing phase-locked with a doubled
+  bounce + tucked arms (rabbit/frog/penguin); `'knuckle'` = torso pitched
+  forward, short leg steps, arms long-swinging to floor contact (gorilla). Both
+  reshape the WALK pose only — a standing gaited rig reads as a normal idle.
+- **`QuadrupedFields.earAnimate 'flick'|'swivel'|'none'`** (absent = `'flick'` =
+  today's occasional idle flick): `'swivel'` = slow independent per-ear yaw
+  wander; `'none'` holds ears still.
 
 ## Conventions (violations fail review)
 
@@ -158,10 +215,14 @@ adult 126), `headShape` `'sphere'|'box'|'cylinder'|'oval'`, `limbR`,
   surface (toon banding hatches coplanar faces).
 - **Recipes** (parked rig gaps — approximate, and mark `// approx:`):
   diagonal sash = thin rotated box on `chest`; capes = flattened cone/box on
-  `back`; skirts/gowns = cone at `hip`; big flap ears / flippers / broad
-  muzzles = ellipsoid accessories; patterns = a few proud boxes, not
-  scatter; fabric prints = dominant solid color. Full parked list:
-  `docs/ROADMAP.md` § avatar rig gaps.
+  `back`; skirts/gowns = cone at `hip`; flippers = ellipsoid accessories;
+  fabric prints = dominant solid color. **Shipped in Phase 4a (prefer these
+  over the recipe):** giant flap ears → `ears: 'flap'`; broad hippo/moose
+  muzzle → `snoutShape: 'broad'`; stripe/spot/dapple patterns → the
+  `pattern` generator (deterministic scatter — not a hand-authored box list);
+  extra eye styles → the `eyes` enum + `eyeColor`; cuffs/pads on the limbs →
+  the `wrist/elbow/knee/ankle` anchors; plants/totems → `sessile: true`. Full
+  parked list: `docs/ROADMAP.md` § avatar rig gaps.
 - **Scale**: sk floor 0.45; oversized creatures cap ~1.5–1.6× dog scale and
   carry size through proportions (bodyLen/legLen/neckLen), not true scale.
 - **Bubbles**: plain emoji only. **rot is radians** (the furniture

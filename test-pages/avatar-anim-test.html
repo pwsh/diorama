@@ -1,0 +1,287 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>avatar anim test</title>
+<style>html,body{margin:0;background:#111;color:#ddd;font:12px monospace}#c{width:640px;height:480px}</style>
+<div id="c"></div>
+<pre id="out">running…</pre>
+<script type="module">
+ try {
+  // Phase 4b: per-frame animated-appendage channels (sway/flap/orbit/spin),
+  // gait cycles (hop/knuckle), quad ear posing (swivel), and a defaults-unchanged
+  // byte-match guard. Drives updateTargets with a SYNTHESIZED performance.now so
+  // every advance is deterministic. Reads rig state off the private _humanoids +
+  // the AnimPrim structs (rig.animPrims) exactly like avatar-build-test.
+  const mod = await import('./assets/three-renderer.js?v=' + Date.now());
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+  // base-domestic-animals holds cat/dog (quad ear-posing test).
+  const _dom = await import('./assets/base-domestic-animals.js?v=' + Date.now());
+  mod.ThreeDRenderer.registerAvatarPack(_dom.default);
+
+  const checks = [];
+  const ok = (name, cond, extra = '') => checks.push({ name, pass: !!cond, extra });
+  const near = (a, b, tol = 1e-6) => Math.abs(a - b) <= tol;
+  const TINT = 0x33cc88;
+
+  // ── Register a pack with animated accessories + gaits ──────────────────────
+  mod.ThreeDRenderer.registerAvatarPack({
+    id: 'anim', version: 1, label: 'Anim', path: ['ANIM'], builtin: true,
+    avatars: [
+      // Two swaying tentacles on the crown, different phase offsets → independence.
+      { id: 'anim/sway', label: 'Sway', rig: 'humanoid', humanoid: {}, accessories: [
+        { shape: 'cylinder', size: [12, 12, 220], anchor: 'crown', color: 'tint',
+          animate: { kind: 'sway', speed: 3, amp: 0.4 } },
+        { shape: 'cylinder', size: [13, 13, 220], anchor: 'crown', color: 'tint',
+          animate: { kind: 'sway', speed: 3, amp: 0.4, phase: 1.5 } },
+      ] },
+      // Mirrored flapping wings (L +amp / R −amp) on the back.
+      { id: 'anim/flap', label: 'Flap', rig: 'humanoid', humanoid: {}, accessories: [
+        { shape: 'box', size: [400, 12, 200], anchor: 'back', pos: [-220, 200, 0], color: 'tint',
+          animate: { kind: 'flap', speed: 2.5, amp: 0.6 } },
+        { shape: 'box', size: [400, 12, 200], anchor: 'back', pos: [220, 200, 0], color: 'tint',
+          animate: { kind: 'flap', speed: 2.5, amp: -0.6 } },
+      ] },
+      // Orbiting drone above the crown.
+      { id: 'anim/orbit', label: 'Orbit', rig: 'humanoid', humanoid: {}, accessories: [
+        { shape: 'sphere', size: 40, anchor: 'crown', pos: [0, 260, 0], color: 0xff8800, outlineSkip: true,
+          animate: { kind: 'orbit', speed: 2, amp: 80 } },
+      ] },
+      // Spinning halo/propeller above the head.
+      { id: 'anim/spin', label: 'Spin', rig: 'humanoid', humanoid: {}, accessories: [
+        { shape: 'box', size: [300, 8, 40], anchor: 'crown', pos: [0, 300, 0], color: 0xffcc00, outlineSkip: true,
+          animate: { kind: 'spin', speed: 4 } },
+      ] },
+      // Gaits.
+      { id: 'anim/hop', label: 'Hop', rig: 'humanoid', humanoid: { gait: 'hop' } },
+      { id: 'anim/knuckle', label: 'Knuckle', rig: 'humanoid', humanoid: { gait: 'knuckle' } },
+      { id: 'anim/walk', label: 'Walk', rig: 'humanoid', humanoid: {} },
+      // Quad with ear swivel.
+      { id: 'anim/swivelpet', label: 'SwivelPet', rig: 'quadruped', pet: true,
+        quadruped: { ears: 'floppy', tail: 'up', earAnimate: 'swivel' } },
+    ],
+  });
+
+  // Build-time: the animate schema flows onto rig.animPrims with base captured.
+  const swayRig = r._buildHumanoid(TINT, 'anim/sway');
+  ok('sway: 2 animPrims registered', swayRig.animPrims && swayRig.animPrims.length === 2,
+    swayRig.animPrims ? `n=${swayRig.animPrims.length}` : 'none');
+  ok('sway: phase offsets captured (0, 1.5)', swayRig.animPrims
+    && near(swayRig.animPrims[0].t, 0) && near(swayRig.animPrims[1].t, 1.5));
+  ok('walk rig: gait stored', r._buildHumanoid(TINT, 'anim/walk').gait === 'walk');
+  ok('hop rig: gait stored', r._buildHumanoid(TINT, 'anim/hop').gait === 'hop');
+  ok('knuckle rig: gait stored', r._buildHumanoid(TINT, 'anim/knuckle').gait === 'knuckle');
+  ok('adult default gait = walk (no animPrims)', (() => { const a = r._buildHumanoid(TINT, 'adult');
+    return a.gait === 'walk' && a.animPrims === undefined; })());
+
+  // ── Frame harness ──────────────────────────────────────────────────────────
+  const floor = {
+    id: 'f1', name: 'AN', w: 12000, d: 8000,
+    walls: [{ id: 'p', points: [{x:200,y:200},{x:11800,y:200},{x:11800,y:7800},{x:200,y:7800},{x:200,y:200}] }],
+    furniture: [], lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [], windows: [], bg: null, model3d: null, look3d: null,
+    rooms: [{ id: 'rm1', name: 'Den', anchor: { x: 6000, y: 4000 } }],
+  };
+  r.updateFloor(floor, { preset: 'day', floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6' });
+  const realNow = performance.now.bind(performance);
+  let fakeNow = realNow();
+  performance.now = () => fakeNow;
+  const ctx = { entityOn: {}, roomNames: { rm1: 'Den' }, timeBucket: 'day' };
+  const step = (targets) => { fakeNow += 16.7; r.updateTargets(targets, ctx); };
+
+  // ── sway: sinusoidal variation + phase independence ────────────────────────
+  {
+    const key = 'sw';
+    let mn0 = Infinity, mx0 = -Infinity, mn1 = Infinity, mx1 = -Infinity, maxDiff = 0;
+    for (let i = 0; i < 140; i++) {   // > one full 2π/3 s period
+      step([{ key, x: 6000, y: 4000, color: TINT, avatar: 'anim/sway' }]);   // stationary → idle
+      const ap = r._humanoids[key].animPrims;
+      const v0 = ap[0].mesh.rotation.x, v1 = ap[1].mesh.rotation.x;
+      mn0 = Math.min(mn0, v0); mx0 = Math.max(mx0, v0);
+      mn1 = Math.min(mn1, v1); mx1 = Math.max(mx1, v1);
+      maxDiff = Math.max(maxDiff, Math.abs(v0 - v1));
+    }
+    // rotation.x oscillates ±amp about base (base = 0 for these upright cylinders).
+    ok('sway: prim0 swings ±0.4 (peak-to-peak ≈ 0.8)', (mx0 - mn0) > 0.7 && (mx0 - mn0) < 0.9,
+      `p2p=${(mx0 - mn0).toFixed(3)}`);
+    ok('sway: crosses base both directions', mn0 < -0.3 && mx0 > 0.3, `[${mn0.toFixed(2)},${mx0.toFixed(2)}]`);
+    ok('sway: phase-offset prims diverge', maxDiff > 0.3, `maxΔ=${maxDiff.toFixed(3)}`);
+  }
+
+  // ── flap: speed DOUBLES while walking vs idle (equal dt window) ─────────────
+  {
+    const kIdle = 'fi', kWalk = 'fw';
+    let wx = 1500;
+    // Warm up: get the walker clearly moving so it's `walking` in the window.
+    for (let i = 0; i < 24; i++) { wx += 45;
+      r.updateTargets([
+        { key: kIdle, x: 6000, y: 4000, color: TINT, avatar: 'anim/flap' },
+        { key: kWalk, x: wx, y: 2000, color: TINT, avatar: 'anim/flap' },
+      ], ctx); fakeNow += 16.7;
+    }
+    const ai = r._humanoids[kIdle].animPrims[0], aw = r._humanoids[kWalk].animPrims[0];
+    const ti0 = ai.t, tw0 = aw.t;
+    for (let i = 0; i < 40; i++) { wx += 45;
+      r.updateTargets([
+        { key: kIdle, x: 6000, y: 4000, color: TINT, avatar: 'anim/flap' },
+        { key: kWalk, x: wx, y: 2000, color: TINT, avatar: 'anim/flap' },
+      ], ctx); fakeNow += 16.7;
+    }
+    const dIdle = ai.t - ti0, dWalk = aw.t - tw0;
+    ok('flap: idle phase advances', dIdle > 0.1, `dIdle=${dIdle.toFixed(3)}`);
+    ok('flap: walking advances ≈2× idle', Math.abs(dWalk / dIdle - 2) < 0.05,
+      `ratio=${(dWalk / dIdle).toFixed(3)}`);
+    // Mirrored wings: L authored +amp, R −amp → |sin| beat drives opposite z.
+    const rig = r._humanoids[kWalk];
+    ok('flap: mirrored pair (opposite amp signs)',
+      rig.animPrims[0].amp > 0 && rig.animPrims[1].amp < 0);
+  }
+
+  // ── orbit: position circles the base at radius amp·sk ──────────────────────
+  {
+    const key = 'or';
+    const radii = [], xs = [];
+    for (let i = 0; i < 130; i++) {   // > π rad swept (angular speed 2 rad/s) → full x diameter
+      step([{ key, x: 6000, y: 4000, color: TINT, avatar: 'anim/orbit' }]);
+      const ap = r._humanoids[key].animPrims[0];
+      const dx = ap.mesh.position.x - ap.basePosX, dz = ap.mesh.position.z - ap.basePosZ;
+      radii.push(Math.hypot(dx, dz)); xs.push(ap.mesh.position.x);
+      // Y must stay put (horizontal-plane orbit).
+      if (i === 30) ok('orbit: y unchanged (horizontal plane)', near(ap.mesh.position.y, ap.basePosY, 1e-6));
+    }
+    const rMin = Math.min(...radii), rMax = Math.max(...radii);
+    ok('orbit: constant radius ≈ 80 (amp·sk)', rMin > 78 && rMax < 82, `[${rMin.toFixed(1)},${rMax.toFixed(1)}]`);
+    ok('orbit: x sweeps the circle', (Math.max(...xs) - Math.min(...xs)) > 120,
+      `xspan=${(Math.max(...xs) - Math.min(...xs)).toFixed(0)}`);
+  }
+
+  // ── spin: rotation.y advances monotonically ────────────────────────────────
+  {
+    const key = 'sp';
+    let prev = -Infinity, monotonic = true, total = 0;
+    for (let i = 0; i < 30; i++) {
+      step([{ key, x: 6000, y: 4000, color: TINT, avatar: 'anim/spin' }]);
+      const y = r._humanoids[key].animPrims[0].mesh.rotation.y;
+      if (i > 0 && !(y > prev)) monotonic = false;
+      prev = y; total = y;
+    }
+    ok('spin: rotation.y strictly increasing', monotonic, `end=${total.toFixed(2)}`);
+    ok('spin: advanced a meaningful amount', total > 1, `total=${total.toFixed(2)}`);
+  }
+
+  // ── hop gait: legs phase-locked + bob amplitude > walk bob ──────────────────
+  {
+    const kHop = 'hp', kWalk = 'wk';
+    let x = 1500, locked = true, hopYmin = Infinity, hopYmax = -Infinity, wkYmin = Infinity, wkYmax = -Infinity;
+    for (let i = 0; i < 90; i++) { x += 45;
+      r.updateTargets([
+        { key: kHop, x, y: 2500, color: TINT, avatar: 'anim/hop' },
+        { key: kWalk, x, y: 5500, color: TINT, avatar: 'anim/walk' },
+      ], ctx); fakeNow += 16.7;
+      const hp = r._humanoids[kHop], wk = r._humanoids[kWalk];
+      if (i > 30) {   // measure once both are clearly walking
+        if (Math.abs(hp.leftHip.rotation.x - hp.rightHip.rotation.x) > 1e-9) locked = false;
+        hopYmin = Math.min(hopYmin, hp.group.position.y); hopYmax = Math.max(hopYmax, hp.group.position.y);
+        wkYmin = Math.min(wkYmin, wk.group.position.y); wkYmax = Math.max(wkYmax, wk.group.position.y);
+      }
+    }
+    ok('hop: legs phase-locked (L===R hip)', locked);
+    const hopRange = hopYmax - hopYmin, wkRange = wkYmax - wkYmin;
+    ok('hop: bob amplitude > walk bob', hopRange > wkRange * 1.5,
+      `hop=${hopRange.toFixed(1)} walk=${wkRange.toFixed(1)}`);
+    ok('walk (control): legs alternate (L!==R hip)',
+      Math.abs(r._humanoids[kWalk].leftHip.rotation.x - r._humanoids[kWalk].rightHip.rotation.x) > 1e-6);
+  }
+
+  // ── knuckle gait: torso pitched forward + arm amplitude > leg amplitude ─────
+  {
+    const kKn = 'kn', kWk = 'kw';
+    let x = 1500, shMin = Infinity, shMax = -Infinity, hipMin = Infinity, hipMax = -Infinity;
+    let knLeanMin = Infinity, wkLeanMin = Infinity;
+    for (let i = 0; i < 90; i++) { x += 45;
+      r.updateTargets([
+        { key: kKn, x, y: 2500, color: TINT, avatar: 'anim/knuckle' },
+        { key: kWk, x, y: 5500, color: TINT, avatar: 'anim/walk' },
+      ], ctx); fakeNow += 16.7;
+      const kn = r._humanoids[kKn], wk = r._humanoids[kWk];
+      if (i > 65) {   // after the greeting wave (>1 s), clearly walking
+        shMin = Math.min(shMin, kn.leftShoulder.rotation.x); shMax = Math.max(shMax, kn.leftShoulder.rotation.x);
+        hipMin = Math.min(hipMin, kn.leftHip.rotation.x); hipMax = Math.max(hipMax, kn.leftHip.rotation.x);
+        knLeanMin = Math.min(knLeanMin, kn.group.rotation.x);
+        wkLeanMin = Math.min(wkLeanMin, wk.group.rotation.x);
+      }
+    }
+    const shRange = shMax - shMin, hipRange = hipMax - hipMin;
+    ok('knuckle: arm amplitude > leg amplitude', shRange > hipRange * 1.5,
+      `arm=${shRange.toFixed(3)} leg=${hipRange.toFixed(3)}`);
+    ok('knuckle: torso pitched forward (rot.x < -0.3)', knLeanMin < -0.3, `min=${knLeanMin.toFixed(3)}`);
+    ok('knuckle: pitched more than plain walk', knLeanMin < wkLeanMin - 0.2,
+      `kn=${knLeanMin.toFixed(3)} wk=${wkLeanMin.toFixed(3)}`);
+  }
+
+  // ── DEFAULTS UNCHANGED: an adult (gait 'walk') matches the classic walk-cycle
+  //    joint formulas exactly (hard gate — zero change to existing members). ────
+  {
+    const key = 'ad';
+    let x = 1500;
+    for (let i = 0; i < 40; i++) { x += 45; step([{ key, x, y: 4000, color: TINT, avatar: 'adult' }]); }
+    const h = r._humanoids[key];
+    const nowUsed = fakeNow / 1000;   // the `now` the last updateTargets used
+    // Classic formulas (see updateTargets): legSwing=1 (no gown), stand=1 (no sit).
+    const sinP = Math.sin(h.phase);
+    const ampNorm = Math.min(1, h.amp / 0.55);
+    const idle = Math.sin(nowUsed * 1.4 + h.idleOffset) * 0.02 * (1 - ampNorm);
+    const expLHip = sinP * h.amp * 1 + idle;
+    const expRHip = -sinP * h.amp * 1 + idle;
+    const expLKnee = -Math.max(0, sinP) * (0.9 * ampNorm) * 1;
+    const expRKnee = -Math.max(0, -sinP) * (0.9 * ampNorm) * 1;
+    ok('defaults: leftHip == classic formula', near(h.leftHip.rotation.x, expLHip, 1e-9),
+      `got=${h.leftHip.rotation.x.toFixed(6)} exp=${expLHip.toFixed(6)}`);
+    ok('defaults: rightHip == classic formula', near(h.rightHip.rotation.x, expRHip, 1e-9));
+    ok('defaults: leftKnee == classic formula', near(h.leftKnee.rotation.x, expLKnee, 1e-9),
+      `got=${h.leftKnee.rotation.x.toFixed(6)} exp=${expLKnee.toFixed(6)}`);
+    ok('defaults: rightKnee == classic formula', near(h.rightKnee.rotation.x, expRKnee, 1e-9));
+  }
+
+  // ── quad ear swivel: independent per-ear yaw wander ────────────────────────
+  {
+    const key = 'qe';
+    const pet = r._buildQuadruped(0xa1704a, 'anim/swivelpet');
+    ok('quad: earAnim=swivel stored', pet.earAnim === 'swivel');
+    let e0min = Infinity, e0max = -Infinity, maxDiff = 0;
+    // Swivel is deliberately SLOW (0.7 rad/s); sample past a full peak↔trough
+    // sweep (> π rad) once the pet has settled (stillness ≈ 1) after ~frame 80.
+    for (let i = 0; i < 420; i++) {
+      step([{ key, x: 6000, y: 4000, color: 0xa1704a, avatar: 'anim/swivelpet' }]);
+      const ears = r._humanoids[key].quadEars;
+      if (i > 80 && ears && ears.length >= 2) {
+        e0min = Math.min(e0min, ears[0].rotation.y); e0max = Math.max(e0max, ears[0].rotation.y);
+        maxDiff = Math.max(maxDiff, Math.abs(ears[0].rotation.y - ears[1].rotation.y));
+      }
+    }
+    ok('quad ears: swivel yaw wanders', (e0max - e0min) > 0.4, `p2p=${(e0max - e0min).toFixed(3)}`);
+    ok('quad ears: independent per ear', maxDiff > 0.2, `maxΔ=${maxDiff.toFixed(3)}`);
+  }
+  performance.now = realNow;
+
+  // ── Dispose lifecycle (animPrims are rig children → freed by the traverse) ──
+  let threw = false;
+  try {
+    for (const id of ['anim/sway', 'anim/flap', 'anim/orbit', 'anim/spin', 'anim/hop', 'anim/knuckle'])
+      r._disposeSubtree(r._buildHumanoid(TINT, id).group);
+    r._disposeSubtree(r._buildQuadruped(0xa1704a, 'anim/swivelpet').group);
+  } catch (e) { threw = true; window.__disposeErr = e.stack; }
+  ok('_disposeSubtree no-throw (animated rigs)', !threw);
+  let destroyThrew = false;
+  try { r.destroy(); } catch (e) { destroyThrew = true; }
+  ok('destroy() no-throw', !destroyThrew);
+
+  const passN = checks.filter(c => c.pass).length, total = checks.length;
+  const fails = checks.filter(c => !c.pass).map(c => c.name);
+  document.getElementById('out').textContent =
+    checks.map(c => `${c.pass ? 'ok  ' : 'FAIL'} ${c.name} ${c.extra}`).join('\n') +
+    `\n\n${passN}/${total}` + (fails.length ? `  FAILED: ${fails.join(', ')}` : '');
+  document.title = `AVATARANIM ${passN === total ? 'PASS' : 'FAIL'} ${passN}/${total}`;
+ } catch (e) {
+  document.title = 'AVATARANIM ERR: ' + (e && e.stack ? e.stack.split('\n').slice(0,3).join(' | ') : e);
+ }
+</script>

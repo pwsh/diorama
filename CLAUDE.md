@@ -825,6 +825,26 @@ reference; keep it updated when the schema grows.
   belly, earColor, snoutColor, pawColor, tailTipColor`) — cat/dog are now
   data with today's exact proportions; quads read `def.personality` (walk
   multipliers) but still never bubble.
+- **Animated appendages & gait (Phase 4b)**: `AvatarPrimitive.animate {kind:
+  'sway'|'flap'|'orbit'|'spin', speed?, amp?, phase?}` registers a prim for
+  per-frame motion — `_addDeclarativeAccessories` captures its base transform
+  ONCE into `Humanoid.animPrims` (`{mesh,kind,speed,amp,sk,t,baseRot*,basePos*}`;
+  `t` is an ACCUMULATED phase, init = the prim's `phase`), and `_advanceAnimPrims`
+  (called every frame in updateTargets for BOTH rigs, `t += dt·speed`) oscillates
+  it — **zero per-frame alloc, no new resources** (prims are rig-root children →
+  outline/fade/dispose pick them up). `sway` = rotation.x sin (amp rad); `flap` =
+  rotation.z |sin|, mirrored wings author +amp/−amp, speed DOUBLES while
+  `walking`; `orbit` = position circles the base in x/z, radius amp·sk mm; `spin`
+  = continuous rotation.y. Defaults speed 2, amp sway 0.3/flap 0.6/orbit 60,
+  phase 0. `HumanoidFields.gait 'walk'|'hop'|'knuckle'` (stored on `Humanoid.gait`;
+  absent = `'walk'`, a HARD gate leaving the classic walk-pose formulas
+  byte-identical): the gait block reshapes the `w*` walk-pose values ONLY while
+  walking (`hop` = phase-locked legs + `hopBob` 2.1× the shared bob term + tucked
+  arms; `knuckle` = short leg swing + arm swing >leg + `wLeanX −= 0.5·ampNorm`
+  torso pitch); sit/activity/lie blends + idle fidgets compose on top unchanged.
+  `QuadrupedFields.earAnimate 'flick'|'swivel'|'none'` (→ `Humanoid.earAnim`) in
+  `_applyQuadPose`: `swivel` = slow independent per-ear yaw wander. Test page
+  `avatar-anim-test` (`AVATARANIM PASS 32/32`).
 - **Settings drawer** (`<diorama-settings-drawer>`, ~560 px, tabbed:
   Connection | Display | Weather | Avatars | Integrations | Data; non-edit
   modes see Connection only). Display/Weather/Data tabs hold the sections

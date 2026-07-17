@@ -45,6 +45,10 @@ export interface AvatarPrimitive {
     | 'handL' | 'handR'                        // humanoid
     | 'shoulderL' | 'shoulderR'                // torso-mounted (pauldrons — no swing)
     | 'neck' | 'tailbone'                      // torso top / rear hip (+Z)
+    // Limb joints (Phase 4a) — parented to the SWINGING pivot so the accessory
+    // rides the limb animation. wrist = hand-group origin; elbow/knee = the lower
+    // limb pivot; ankle = shin bottom. Fall back to root on a legless/hover rig.
+    | 'wristL' | 'wristR' | 'elbowL' | 'elbowR' | 'kneeL' | 'kneeR' | 'ankleL' | 'ankleR'
     | 'qhead' | 'qneck' | 'qback' | 'qrump';   // quadruped
   pos?: [number, number, number];   // mm offset from anchor (body-local, -Z front)
   rot?: [number, number, number];   // radians
@@ -55,6 +59,36 @@ export interface AvatarPrimitive {
   // Sphere-section support for hoods / hair / shells:
   // [phiStart, phiLength, thetaStart, thetaLength].
   sphereArc?: [number, number, number, number];
+  // ── Phase 4b: per-frame animation channel (animated appendages) ────────────
+  // Registers this primitive for per-frame motion advanced in updateTargets
+  // (see Humanoid.animPrims + _advanceAnimPrims). The base transform is captured
+  // ONCE at build (zero per-frame allocation); the channel oscillates about it.
+  //   sway  — rotation.x sinusoid about the base rot, `amp` rad at `speed` rad/s
+  //           (tentacles/antennae; per-prim `phase` offsets give independence).
+  //   flap  — rotation.z |sin| beat about the base rot; mirrored wings author
+  //           +amp (L) / −amp (R); flap speed DOUBLES while the rig walks (flight).
+  //   orbit — position circles the base position in the horizontal (x/z) plane,
+  //           radius `amp` mm (scaled by sk), angular speed `speed` rad/s (drones).
+  //   spin  — continuous rotation.y about the base at `speed` rad/s (propeller/halo).
+  // Defaults: speed 2 rad/s; amp = sway 0.3 rad / flap 0.6 rad / orbit 60 mm
+  // (spin ignores amp); phase 0.
+  animate?: { kind: 'sway' | 'flap' | 'orbit' | 'spin'; speed?: number; amp?: number; phase?: number };
+}
+
+// Deterministic coat/skin pattern generator (Phase 4a). A handful of PROUD
+// primitives (the zebra/cow idiom) scattered from a seeded PRNG — NEVER
+// Math.random, so a given (seed ?? id-hash) always yields identical placement.
+// Applied to the humanoid torso or the quadruped body. Supersedes hand-authored
+// stripe lists for FUTURE packs; existing hand-placed packs are left untouched.
+//   stripes — vertical thin boxes alternating flanks
+//   spots   — irregular flat discs scattered on back / flanks
+//   dapples — smaller lighter discs clustered on the top side
+// `count` is capped by the builder to stay inside the ≤~14-primitive budget.
+export interface AvatarPattern {
+  kind: 'stripes' | 'spots' | 'dapples';
+  color: number;        // hex — the stripe / spot / dapple color
+  count?: number;       // primitive count (builder-capped; default per kind)
+  seed?: number;        // PRNG seed; absent → hashed from the avatar id
 }
 
 // Humanoid rig spec — mirrors the old SPECS row. Colors accept 'tint' (resolves
@@ -67,7 +101,15 @@ export interface HumanoidFields {
   sk?: number; headR?: number; headShape?: 'sphere' | 'box' | 'cylinder' | 'oval'; limbR?: number;
   skin?: number | 'tint'; body?: number | 'tint'; shoe?: number; emI?: number;
   hands?: 'sphere' | 'box';
-  eyes?: 'dots' | 'visor' | 'almond' | 'redvisor' | 'shades' | 'slit' | 'halfred' | 'none';
+  // Eye style. Phase 4a added compound (insect facets) / t_visor (Mandalorian
+  // vertical+horizontal dark T slot) / sleepy (half-lidded) / luminous (big
+  // glowing orbs, outline-skipped).
+  eyes?: 'dots' | 'visor' | 'almond' | 'redvisor' | 'shades' | 'slit' | 'halfred' | 'none'
+    | 'compound' | 't_visor' | 'sleepy' | 'luminous';
+  // Iris color override (Phase 4a): tints the generic 'dots'/'sleepy' iris, and
+  // the glow of 'luminous' orbs / 't_visor' & 'visor'/'redvisor' slots. Absent →
+  // the per-style default (dark iris, cyan/red visor glow).
+  eyeColor?: number;
   steel?: boolean; armL?: number; legL?: number;
   footMul?: [number, number, number]; legColor?: number;
   earSkip?: boolean;                // replaces the old EAR_SKIP set membership
@@ -84,6 +126,15 @@ export interface HumanoidFields {
   // the gown" bug). Cheaper + cleaner than oversizing the robe geometry. The
   // wise_oracle legacy kind is force-gowned in the renderer regardless of this flag.
   gown?: boolean;
+  // Deterministic proud-primitive pattern scattered on the TORSO (Phase 4a).
+  pattern?: AvatarPattern;
+  // ── Phase 4b: gait cycle. Absent / 'walk' = today's alternating human stride
+  // (existing members are byte-identical). 'hop' = both legs swing phase-locked
+  // in unison with a doubled vertical bounce + tucked arms (rabbit / frog /
+  // penguin-adjacent). 'knuckle' = torso pitched forward, short alternating leg
+  // steps, arms LONG-swinging to floor contact (gorilla knuckle-walk). Both are
+  // GAITS — reshaped only while walking; a standing hopper reads as a normal idle.
+  gait?: 'walk' | 'hop' | 'knuckle';
 }
 
 // Quadruped rig spec — parameterizes _buildQuadruped. Defaults reproduce today's
@@ -98,14 +149,33 @@ export interface QuadrupedFields {
   legLen?: number;                  // upper+lower leg length mult (default 1)
   headR?: number; neckLen?: number; // neckLen>0 inserts an angled neck (giraffe/horse)
   headScale?: [number, number, number];   // head ellipsoid scale (dog = [1,0.95,1.05])
-  ears?: 'pointy' | 'floppy' | 'round' | 'long' | 'none';
+  // Ear style. Phase 4a added 'flap' — giant flat elephant-style ear plates.
+  ears?: 'pointy' | 'floppy' | 'round' | 'long' | 'flap' | 'none';
   tail?: 'up' | 'down' | 'curl' | 'tuft' | 'none'; tailLen?: number;
   snout?: number;                   // snout length mult (0 = flat face)
+  // Snout SHAPE (Phase 4a): 'cone' (default — the tapered dog/cat muzzle box) or
+  // 'broad' (a wide flat muzzle box — hippo / moose / cow).
+  snoutShape?: 'cone' | 'broad';
   coat?: number | 'tint'; belly?: number; earColor?: number; snoutColor?: number;
   // ── Batch C1 rig extensions ────────────────────────────────────────────────
   pawColor?: number;                // overrides the default dark paw tone (0x2a2a2e)
   tailTipColor?: number;            // tail tip segment / tuft material
   opacity?: number;                 // 0..1 → transparent coat (ghostly pets)
+  // ── Phase 4a rig extensions ────────────────────────────────────────────────
+  // Recolors ALL FOUR legs (both upper + lower segments) — the dark-"points"
+  // gap. Feet stay pawColor. Absent → legs inherit the coat, as today.
+  legColor?: number;
+  // Quad eye style (Phase 4a): 'dot' (default — the round dark eye), 'oval'
+  // (vertically-scaled almond) or 'sleepy' (upper lid). `eyeColor` overrides the
+  // default dark iris.
+  eyes?: 'dot' | 'oval' | 'sleepy';
+  eyeColor?: number;
+  // Deterministic proud-primitive pattern scattered on the BODY (Phase 4a).
+  pattern?: AvatarPattern;
+  // ── Phase 4b: ear posing. Absent / 'flick' = today's occasional idle ear
+  // flick (a short synchronized x-pulse). 'swivel' adds a slow INDEPENDENT yaw
+  // wander per ear (rotation.y drifts, desynced per ear). 'none' holds ears still.
+  earAnimate?: 'flick' | 'swivel' | 'none';
 }
 
 export interface AvatarDef {
@@ -123,6 +193,12 @@ export interface AvatarDef {
   // write, since negative root rotation.x is the body-forward lean). Elder /
   // gollum / zombie use small positive values.
   posture?: { pitch?: number };
+  // Sessile / rooted mode (Phase 4a): the rig builds LEGLESS but grounded (root
+  // at the floor, no leg joints, no gait) — a plant / coral / totem whose base is
+  // a trunk/tuft supplied via normal accessories. In updateTargets the rig stays
+  // pinned at its target position (navigation / facing / gait all skipped; idle
+  // sway only). Allowed on humanoid OR pet rigs.
+  sessile?: true;
 }
 
 export interface AvatarPackDef {
