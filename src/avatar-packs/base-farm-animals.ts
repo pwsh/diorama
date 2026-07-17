@@ -39,9 +39,14 @@ const pack: AvatarPackDef = {
     { id: 'horse', label: '🐴 Horse (bay)', rig: 'quadruped', pet: true,
       quadruped: { sk: 1.15, bodyLen: 800, bodyW: 170, bodyH: 228, legLen: 1.4, neckLen: 220, headR: 118, ears: 'pointy', tail: 'down', tailLen: 1.7, tailTipColor: 0x1c130e, snout: 1.3, coat: 0x8a5a34, belly: 0x8a5a34, earColor: 0x8a5a34, snoutColor: 0x2a1c14, pawColor: 0x241812 },
       accessories: [
-        { shape: 'box', size: [20, 130, 10], anchor: 'qneck', pos: [0, 60, -40], rot: [-0.5, 0, 0], color: 0x1c130e }, // mane
-        { shape: 'box', size: [20, 130, 10], anchor: 'qneck', pos: [0, 20, -70], rot: [-0.5, 0, 0], color: 0x1c130e }, // mane
-        { shape: 'box', size: [20, 120, 10], anchor: 'qneck', pos: [0, -20, -100], rot: [-0.5, 0, 0], color: 0x1c130e }, // mane
+        // mane climbs the REAR (+Z) edge of the neck. The neck cylinder hangs from
+        // its top (head base, qneck-local (0, neckLen, 0)) at rot.x −0.5, so its
+        // axis at height y sits at z ≈ 128·(1 − (y+14)/234); strips ride axis + ~48
+        // (neck radius + half depth) so they stand proud of the surface, tilted
+        // parallel to the neck.
+        { shape: 'box', size: [24, 130, 36], anchor: 'qneck', pos: [0, 50, 170], rot: [-0.5, 0, 0], color: 0x1c130e }, // mane low (withers)
+        { shape: 'box', size: [24, 130, 36], anchor: 'qneck', pos: [0, 140, 122], rot: [-0.5, 0, 0], color: 0x1c130e }, // mane mid
+        { shape: 'box', size: [24, 120, 36], anchor: 'qneck', pos: [0, 205, 86], rot: [-0.5, 0, 0], color: 0x1c130e }, // mane high (poll)
         { shape: 'box', size: [20, 110, 10], anchor: 'qhead', pos: [0, 40, 30], color: 0x1c130e }, // forelock
       ],
       personality: { bobMul: 0.9, swayMul: 0.7, cadenceMul: 0.85, ampMul: 1.3 }, bubbles: ['🌾', '🐴', '🍎', '💨'] },
@@ -72,9 +77,11 @@ const pack: AvatarPackDef = {
       accessories: [
         { shape: 'box', size: [30, 20, 700], anchor: 'qback', pos: [0, 12, 0], color: 0x2a2118 }, // dorsal stripe
         { shape: 'box', size: [200, 20, 30], anchor: 'qback', pos: [0, 14, -150], color: 0x2a2118 }, // shoulder cross
-        { shape: 'box', size: [16, 80, 8], anchor: 'qneck', pos: [0, 60, -30], color: 0x2a2118 }, // roached mane
-        { shape: 'box', size: [16, 80, 8], anchor: 'qneck', pos: [0, 20, -60], color: 0x2a2118 }, // roached mane
-        { shape: 'box', size: [16, 76, 8], anchor: 'qneck', pos: [0, -20, -90], color: 0x2a2118 }, // roached mane
+        // roached mane rides the REAR (+Z) edge of the neck (axis leans −0.5 from
+        // its top at (0, neckLen, 0); rear surface ≈ axis + neck radius)
+        { shape: 'box', size: [20, 80, 30], anchor: 'qneck', pos: [0, 30, 141], rot: [-0.5, 0, 0], color: 0x2a2118 }, // roached mane low
+        { shape: 'box', size: [20, 80, 30], anchor: 'qneck', pos: [0, 90, 109], rot: [-0.5, 0, 0], color: 0x2a2118 }, // roached mane mid
+        { shape: 'box', size: [20, 76, 30], anchor: 'qneck', pos: [0, 148, 77], rot: [-0.5, 0, 0], color: 0x2a2118 }, // roached mane high
       ],
       personality: { bobMul: 0.75, swayMul: 0.85, cadenceMul: 0.65, ampMul: 0.8 }, bubbles: ['🌾', '🚫', '😤', '💤'] },
 

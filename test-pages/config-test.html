@@ -268,6 +268,47 @@
       const exported = p.exportPackJson(packId);
       ok('i: registered pack matches def', !!exported && JSON.parse(exported).id === packId, '');
     }
+
+    // ── (j) config notes: persist / switch / export-import / legacy ──────────
+    {
+      // (j1) setNotes persists through saveConfigNow + reload
+      const { p, stub } = await freshPlanner({ [LEGACY]: makeStore('NotesHome') });
+      p.setNotes('Cozy studio · 1 room · sofa + bed');
+      await p.saveConfigNow();
+      ok('j: notes written to cfg body', stub.peek(BODY('default'))?.notes === 'Cozy studio · 1 room · sofa + bed',
+        stub.peek(BODY('default'))?.notes);
+      const p2 = await reloadWith(stub);
+      ok('j: notes survive reload', p2.store.notes === 'Cozy studio · 1 room · sofa + bed', p2.store.notes);
+
+      // (j2) notes survive switchConfig away and back
+      const { p: p3 } = await freshPlanner({ [LEGACY]: makeStore('NHome') });
+      p3.setNotes('Config A notes');
+      await p3.saveConfigNow();
+      const idB = await p3.saveConfigAs('B');   // clones current (carries notes)
+      p3.setNotes('Config B notes');
+      await p3.saveConfigNow();
+      await p3.switchConfig('default');
+      ok('j: notes swap on switch away', p3.store.notes === 'Config A notes', p3.store.notes);
+      await p3.switchConfig(idB);
+      ok('j: notes swap back on switch', p3.store.notes === 'Config B notes', p3.store.notes);
+
+      // (j3) exportConfig carries notes; importConfig restores it
+      const { p: p4 } = await freshPlanner({ [LEGACY]: makeStore('Base') });
+      const store = makeStore('Described', { notes: 'Total 96 m² · Kitchen: fridge, stove' });
+      const imp = await p4.importConfig(JSON.stringify({ diorama: 2, name: 'Described', exportedAt: 'x', store }), 'Described');
+      ok('j: import ok', imp.ok, imp.error ?? '');
+      ok('j: imported notes applied', p4.store.notes === 'Total 96 m² · Kitchen: fridge, stove', p4.store.notes);
+      const env = await p4.exportConfig();
+      ok('j: export envelope carries notes', env.store.notes === 'Total 96 m² · Kitchen: fridge, stove', env.store.notes);
+
+      // (j4) setNotes('') clears back to undefined
+      p4.setNotes('   ');
+      ok('j: blank notes clear to undefined', p4.store.notes === undefined, String(p4.store.notes));
+
+      // (j5) legacy/absent-notes store loads with notes === undefined
+      const { p: p5 } = await freshPlanner({ [LEGACY]: makeStore('Legacy') });
+      ok('j: absent notes loads undefined', p5.store.notes === undefined, String(p5.store.notes));
+    }
   } catch (err) {
     ok('harness threw', false, (err && err.stack) ? err.stack.split('\n').slice(0, 3).join(' | ') : String(err));
   }

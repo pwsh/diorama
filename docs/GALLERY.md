@@ -1,36 +1,56 @@
 # Documentation gallery pipeline
 
-`npm run docs:gallery` regenerates a complete **local** documentation site with a
-per-model animated GIF for every model Diorama can render — furniture,
-appliances, lighting, switches/controls, sensors, doors/windows, robots, and
-every avatar pack member. One command, fully automated, always current.
+`npm run docs:gallery` regenerates the **model gallery** section of the unified
+documentation site — a per-model animated GIF for every model Diorama can
+render: furniture, appliances, lighting, switches/controls, sensors,
+doors/windows, robots, and every avatar pack member. One command, fully
+automated, always current.
+
+The gallery is one **section** of the documentation site (`docs-site/`),
+alongside the home page + user guide (`npm run docs:site`) and the floor-plan
+library (`npm run docs:floorplans`). All three share one topbar and one
+stylesheet via `scripts/docs-site/shell.mjs`, and `npm run docs:publish` pushes
+the whole `docs-site/` tree to GitHub Pages.
 
 ```bash
 npm run docs:gallery            # full run: build + capture every subject + write markdown
 npm run docs:gallery -- --smoke # fast end-to-end proof (curated subset + GIF assertions)
 ```
 
-Output lands in `docs-site/` (gitignored — regenerable, host or commit by choice):
+Gallery output lands under `docs-site/models/` (the whole `docs-site/` tree is
+gitignored — regenerable, host or commit by choice):
 
 ```
 docs-site/
-  index.md   index.html         # TOC / landing (markdown + HTML both emitted)
-  furniture.* appliances.* bathroom.* outdoor.*   # one page per furnitureCat (.md + .html)
-  lighting.* switches-controls.* sensors.* doors-windows.* robots.*
-  avatars/
-    index.*  base.* sci-fi.* pop-culture.* video-games.* cartoons.*   # one page per top-level pack group
-  assets/site.css               # single shared stylesheet for the HTML site
-  media/**/*.gif                # one GIF per model
-  .catalog.json                 # cached catalog (enables `--pages-only`)
+  index.html                    # site home (npm run docs:site)
+  guide/*.html                  # user guide (npm run docs:site)
+  floorplans/**                 # floor-plan library (npm run docs:floorplans)
+  assets/site.css               # single shared stylesheet for the whole site
+  models/                       # ← the model gallery (this pipeline)
+    index.md   index.html       # gallery TOC / landing (markdown + HTML both emitted)
+    furniture.* appliances.* bathroom.* outdoor.*   # one page per furnitureCat (.md + .html)
+    lighting.* switches-controls.* sensors.* doors-windows.* robots.*
+    avatars/
+      index.*  base.* sci-fi.* pop-culture.* video-games.* cartoons.*   # one page per top-level pack group
+    media/**/*.gif              # one GIF per model
+    .catalog.json               # cached catalog (enables `--pages-only`)
 ```
 
+**Relocation note:** the gallery used to emit at the `docs-site/` root. It now
+lives under `docs-site/models/`; on the next run the generator moves any legacy
+root-level `media/` + `.catalog.json` into `models/` and removes the stale
+root-level gallery pages automatically — GIF references are relative, so this is
+a directory move, not a re-capture.
+
 Every run emits **both** a markdown page and a self-contained HTML page for each
-category. The HTML site is a dark, editor-themed static site: a responsive card
-grid (GIF on top, label + id + meta below), a sticky left nav with the avatar
-packs nested (collapses to a toggle menu on narrow screens), lazy-loaded GIFs,
-and per-card anchor ids. It has no external fonts / CDNs / JS frameworks — just
+category. The HTML pages render through the shared site shell
+(`scripts/docs-site/shell.mjs`): the site topbar (Home · Guide · Models · Floor
+plans) plus the gallery's own left nav (category pages with the avatar packs
+nested; collapses to a toggle menu on narrow screens), a responsive card grid
+(GIF on top, label + id + meta below), lazy-loaded GIFs, and per-card anchor
+ids. It has no external fonts / CDNs / JS frameworks — just the shared
 `assets/site.css` and a few lines of inline vanilla JS for the mobile nav. Open
-`docs-site/index.html` directly, or publish it (below).
+`docs-site/models/index.html` directly, or publish the whole site (below).
 
 Every markdown page carries a `GENERATED — DO NOT EDIT BY HAND` header. Pages are
 regenerated from the live catalog on every run, so a new furniture kind, light
@@ -111,24 +131,30 @@ including the build. Use `--only` / `--limit` to iterate on one page quickly.
 
 ## Publishing to GitHub Pages
 
+`docs:publish` pushes the **whole** `docs-site/` tree — the home page, user
+guide, model gallery, and floor-plan library — as one GitHub Pages site.
+Regenerate each section first, then publish:
+
 ```bash
-npm run docs:gallery                                   # (re)generate docs-site/, incl. index.html
-npm run docs:publish                                   # publish to the gh-pages branch
+npm run docs:site                                      # home page + user guide
+npm run docs:gallery                                   # model gallery (docs-site/models/)
+npm run docs:floorplans                                # floor-plan library
+npm run docs:publish                                   # publish the whole docs-site/ tree
 node scripts/docs-gallery/publish.mjs --dry-run        # build the commit + print the plan; push nothing
 ```
 
-`docs:publish` (`scripts/docs-gallery/publish.mjs`) serves the generated HTML site
+`docs:publish` (`scripts/docs-gallery/publish.mjs`) serves the generated site
 from GitHub Pages:
 
-1. Requires `docs-site/index.html` (tells you to run `docs:gallery` / `--pages-only`
-   otherwise).
+1. Requires `docs-site/index.html` — the home page built by `docs:site` (tells
+   you to generate the site otherwise).
 2. Writes a `.nojekyll` marker into `docs-site/` so Pages serves every path
    (including `assets/`) verbatim without a Jekyll build.
 3. Publishes `docs-site/` as a **single-commit orphan `gh-pages` branch**. Because
    `docs-site/` is gitignored in the main repo, the branch is built in a throwaway
-   temp git repo (copy in → one orphan commit → `git push --force`), so the 163 MB
-   of GIFs **never enter `main`** and no history accumulates. Commit message is
-   `docs-site <version> <date>`.
+   temp git repo (copy in → one orphan commit → `git push --force`), so the
+   ~160 MB of GIFs + screenshots **never enter `main`** and no history
+   accumulates. Commit message is `docs-site <version> <date>`.
 4. Pushes to the **`github` remote only** (`git remote get-url github`) — never
    `origin`. The push is re-runnable: each run force-overwrites the remote branch
    with a fresh single commit.

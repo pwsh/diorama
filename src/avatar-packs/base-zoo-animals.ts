@@ -81,9 +81,11 @@ const pack: AvatarPackDef = {
         { shape: 'box', size: [30, 160, 18], anchor: 'qback', pos: [-88, -100, 20], color: 0x141414 }, // stripe (flank L)
         { shape: 'box', size: [30, 160, 18], anchor: 'qback', pos: [88, -100, 20], color: 0x141414 }, // stripe (flank R)
         { shape: 'box', size: [30, 150, 18], anchor: 'qback', pos: [-85, -100, 150], color: 0x141414 }, // stripe (flank L)
-        { shape: 'box', size: [18, 90, 8], anchor: 'qneck', pos: [0, 40, -40], color: 0x141414 }, // mane
-        { shape: 'box', size: [18, 90, 8], anchor: 'qneck', pos: [0, 0, -70], color: 0x141414 }, // mane
-        { shape: 'box', size: [18, 86, 8], anchor: 'qneck', pos: [0, -40, -100], color: 0x141414 }, // mane
+        // upright mane rides the REAR (+Z) edge of the neck (axis leans −0.5 from
+        // its top at (0, neckLen, 0); rear surface ≈ axis + neck radius)
+        { shape: 'box', size: [22, 90, 32], anchor: 'qneck', pos: [0, 40, 173], rot: [-0.5, 0, 0], color: 0x141414 }, // mane low
+        { shape: 'box', size: [22, 90, 32], anchor: 'qneck', pos: [0, 110, 134], rot: [-0.5, 0, 0], color: 0x141414 }, // mane mid
+        { shape: 'box', size: [22, 86, 32], anchor: 'qneck', pos: [0, 172, 100], rot: [-0.5, 0, 0], color: 0x141414 }, // mane high
       ],
       personality: { bobMul: 0.85, swayMul: 0.8, cadenceMul: 0.9, ampMul: 1.15 }, bubbles: ['🦓', '🌾', '👀', '💨'] },
 

@@ -664,6 +664,7 @@ export interface Store {
   weather?: WeatherConfig;           // weather source + chip config (Feature W)
   geo?: GeoConfig;                   // landmarks + lat/lon↔plan calibration (Feature G)
   avatarPacks?: Record<string, AvatarPackConfig>;   // per-pack loaded/active/members (avatar packs)
+  notes?: string;                    // free-text description of this configuration; shown in Settings ▸ Data; rides export/import
 }
 
 // ── Multiple-configuration registry (Batch B) ─────────────────────────────

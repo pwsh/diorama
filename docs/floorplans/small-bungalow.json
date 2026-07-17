@@ -1,0 +1,1140 @@
+{
+  "diorama": 2,
+  "name": "Small 2-Bed Bungalow",
+  "exportedAt": "2026-07-17T00:00:00.000Z",
+  "store": {
+    "v": 2,
+    "floors": [
+      {
+        "id": "small-bungalow-fl1",
+        "name": "Bungalow",
+        "w": 9750,
+        "d": 9500,
+        "walls": [
+          {
+            "id": "small-bungalow-w1",
+            "points": [
+              {
+                "x": 0,
+                "y": 0
+              },
+              {
+                "x": 9750,
+                "y": 0
+              },
+              {
+                "x": 9750,
+                "y": 9500
+              },
+              {
+                "x": 0,
+                "y": 9500
+              },
+              {
+                "x": 0,
+                "y": 0
+              }
+            ]
+          },
+          {
+            "id": "small-bungalow-w2",
+            "points": [
+              {
+                "x": 5700,
+                "y": 0
+              },
+              {
+                "x": 5700,
+                "y": 900
+              }
+            ]
+          },
+          {
+            "id": "small-bungalow-w3",
+            "points": [
+              {
+                "x": 5700,
+                "y": 2400
+              },
+              {
+                "x": 5700,
+                "y": 4300
+              }
+            ]
+          },
+          {
+            "id": "small-bungalow-w4",
+            "points": [
+              {
+                "x": 8100,
+                "y": 2600
+              },
+              {
+                "x": 9750,
+                "y": 2600
+              }
+            ]
+          },
+          {
+            "id": "small-bungalow-w5",
+            "points": [
+              {
+                "x": 8500,
+                "y": 2600
+              },
+              {
+                "x": 8500,
+                "y": 4300
+              }
+            ]
+          },
+          {
+            "id": "small-bungalow-w6",
+            "points": [
+              {
+                "x": 0,
+                "y": 4300
+              },
+              {
+                "x": 3600,
+                "y": 4300
+              }
+            ]
+          },
+          {
+            "id": "small-bungalow-w7",
+            "points": [
+              {
+                "x": 4800,
+                "y": 4300
+              },
+              {
+                "x": 9750,
+                "y": 4300
+              }
+            ]
+          },
+          {
+            "id": "small-bungalow-w8",
+            "points": [
+              {
+                "x": 3600,
+                "y": 4300
+              },
+              {
+                "x": 3600,
+                "y": 9500
+              }
+            ]
+          },
+          {
+            "id": "small-bungalow-w9",
+            "points": [
+              {
+                "x": 4800,
+                "y": 4300
+              },
+              {
+                "x": 4800,
+                "y": 7300
+              }
+            ]
+          },
+          {
+            "id": "small-bungalow-w10",
+            "points": [
+              {
+                "x": 4800,
+                "y": 8500
+              },
+              {
+                "x": 4800,
+                "y": 9500
+              }
+            ]
+          },
+          {
+            "id": "small-bungalow-w11",
+            "points": [
+              {
+                "x": 6900,
+                "y": 4300
+              },
+              {
+                "x": 6900,
+                "y": 9500
+              }
+            ]
+          },
+          {
+            "id": "small-bungalow-w12",
+            "points": [
+              {
+                "x": 4800,
+                "y": 6700
+              },
+              {
+                "x": 6900,
+                "y": 6700
+              }
+            ]
+          },
+          {
+            "id": "small-bungalow-w13",
+            "points": [
+              {
+                "x": 0,
+                "y": 7900
+              },
+              {
+                "x": 3600,
+                "y": 7900
+              }
+            ]
+          },
+          {
+            "id": "small-bungalow-w14",
+            "points": [
+              {
+                "x": 1800,
+                "y": 7900
+              },
+              {
+                "x": 1800,
+                "y": 9500
+              }
+            ]
+          },
+          {
+            "id": "small-bungalow-w15",
+            "points": [
+              {
+                "x": 6900,
+                "y": 7900
+              },
+              {
+                "x": 9750,
+                "y": 7900
+              }
+            ]
+          },
+          {
+            "id": "small-bungalow-w16",
+            "points": [
+              {
+                "x": 8400,
+                "y": 7900
+              },
+              {
+                "x": 8400,
+                "y": 9500
+              }
+            ]
+          }
+        ],
+        "furniture": [
+          {
+            "id": "small-bungalow-fn1",
+            "x": 2600,
+            "y": 3100,
+            "w": 2200,
+            "h": 900,
+            "kind": "sofa",
+            "rotation": 90
+          },
+          {
+            "id": "small-bungalow-fn2",
+            "x": 2600,
+            "y": 1800,
+            "w": 800,
+            "h": 800,
+            "kind": "chair",
+            "rotation": 270,
+            "label": "Armchair"
+          },
+          {
+            "id": "small-bungalow-fn3",
+            "x": 3700,
+            "y": 3100,
+            "w": 1100,
+            "h": 600,
+            "kind": "coffee_table"
+          },
+          {
+            "id": "small-bungalow-fn4",
+            "x": 5500,
+            "y": 3100,
+            "w": 1600,
+            "h": 450,
+            "kind": "tv_stand",
+            "rotation": 90
+          },
+          {
+            "id": "small-bungalow-fn5",
+            "x": 5500,
+            "y": 3150,
+            "w": 1450,
+            "h": 250,
+            "kind": "tv",
+            "rotation": 90,
+            "localState": "off"
+          },
+          {
+            "id": "small-bungalow-fn6",
+            "x": 150,
+            "y": 700,
+            "w": 800,
+            "h": 350,
+            "kind": "bookshelf",
+            "rotation": 90
+          },
+          {
+            "id": "small-bungalow-fn7",
+            "x": 2900,
+            "y": 2600,
+            "w": 2600,
+            "h": 2200,
+            "kind": "rug"
+          },
+          {
+            "id": "small-bungalow-fn8",
+            "x": 5400,
+            "y": 4100,
+            "w": 400,
+            "h": 400,
+            "kind": "plant"
+          },
+          {
+            "id": "small-bungalow-fn9",
+            "x": 7725,
+            "y": 1300,
+            "w": 3850,
+            "h": 2400,
+            "kind": "rug",
+            "label": "Kitchen floor",
+            "color": "#E4DFD3"
+          },
+          {
+            "id": "small-bungalow-fn10",
+            "x": 9450,
+            "y": 1350,
+            "w": 900,
+            "h": 650,
+            "kind": "kitchen_sink"
+          },
+          {
+            "id": "small-bungalow-fn11",
+            "x": 9450,
+            "y": 1900,
+            "w": 610,
+            "h": 620,
+            "kind": "dishwasher"
+          },
+          {
+            "id": "small-bungalow-fn12",
+            "x": 9450,
+            "y": 2350,
+            "w": 910,
+            "h": 760,
+            "kind": "fridge"
+          },
+          {
+            "id": "small-bungalow-fn13",
+            "x": 7000,
+            "y": 300,
+            "w": 760,
+            "h": 660,
+            "kind": "stove",
+            "rotation": 180
+          },
+          {
+            "id": "small-bungalow-fn14",
+            "x": 7000,
+            "y": 320,
+            "w": 520,
+            "h": 390,
+            "kind": "microwave",
+            "rotation": 180,
+            "elevation": 1400
+          },
+          {
+            "id": "small-bungalow-fn15",
+            "x": 9450,
+            "y": 700,
+            "w": 900,
+            "h": 650,
+            "kind": "counter"
+          },
+          {
+            "id": "small-bungalow-fn16",
+            "x": 7800,
+            "y": 300,
+            "w": 900,
+            "h": 400,
+            "kind": "cabinet",
+            "rotation": 180
+          },
+          {
+            "id": "small-bungalow-fn17",
+            "x": 7100,
+            "y": 3450,
+            "w": 2200,
+            "h": 1600,
+            "kind": "rug",
+            "label": "Nook rug",
+            "color": "#7C9473"
+          },
+          {
+            "id": "small-bungalow-fn18",
+            "x": 7100,
+            "y": 3450,
+            "w": 1500,
+            "h": 900,
+            "kind": "table"
+          },
+          {
+            "id": "small-bungalow-fn19",
+            "x": 6500,
+            "y": 3450,
+            "w": 1200,
+            "h": 400,
+            "kind": "bench",
+            "rotation": 90
+          },
+          {
+            "id": "small-bungalow-fn20",
+            "x": 7700,
+            "y": 3450,
+            "w": 500,
+            "h": 500,
+            "kind": "chair",
+            "rotation": 270
+          },
+          {
+            "id": "small-bungalow-fn21",
+            "x": 7100,
+            "y": 2950,
+            "w": 500,
+            "h": 500,
+            "kind": "chair"
+          },
+          {
+            "id": "small-bungalow-fn22",
+            "x": 9125,
+            "y": 3450,
+            "w": 1050,
+            "h": 1500,
+            "kind": "rug",
+            "label": "Mudroom floor",
+            "color": "#A9A6A0"
+          },
+          {
+            "id": "small-bungalow-fn23",
+            "x": 9100,
+            "y": 2900,
+            "w": 690,
+            "h": 700,
+            "kind": "washer"
+          },
+          {
+            "id": "small-bungalow-fn24",
+            "x": 9100,
+            "y": 3550,
+            "w": 690,
+            "h": 700,
+            "kind": "dryer"
+          },
+          {
+            "id": "small-bungalow-fn25",
+            "x": 8700,
+            "y": 3700,
+            "w": 900,
+            "h": 400,
+            "kind": "bench",
+            "rotation": 90
+          },
+          {
+            "id": "small-bungalow-fn26",
+            "x": 1800,
+            "y": 6700,
+            "w": 2000,
+            "h": 1500,
+            "kind": "bed"
+          },
+          {
+            "id": "small-bungalow-fn27",
+            "x": 800,
+            "y": 7500,
+            "w": 500,
+            "h": 400,
+            "kind": "nightstand"
+          },
+          {
+            "id": "small-bungalow-fn28",
+            "x": 2800,
+            "y": 7500,
+            "w": 500,
+            "h": 400,
+            "kind": "nightstand"
+          },
+          {
+            "id": "small-bungalow-fn29",
+            "x": 300,
+            "y": 5300,
+            "w": 1200,
+            "h": 500,
+            "kind": "dresser",
+            "rotation": 90
+          },
+          {
+            "id": "small-bungalow-fn30",
+            "x": 3300,
+            "y": 5000,
+            "w": 800,
+            "h": 800,
+            "kind": "chair",
+            "rotation": 180,
+            "label": "Reading chair"
+          },
+          {
+            "id": "small-bungalow-fn31",
+            "x": 900,
+            "y": 8700,
+            "w": 1200,
+            "h": 600,
+            "kind": "wardrobe"
+          },
+          {
+            "id": "small-bungalow-fn32",
+            "x": 2700,
+            "y": 8700,
+            "w": 800,
+            "h": 350,
+            "kind": "bookshelf",
+            "label": "Linen shelving"
+          },
+          {
+            "id": "small-bungalow-fn33",
+            "x": 5850,
+            "y": 5500,
+            "w": 1900,
+            "h": 2200,
+            "kind": "rug",
+            "label": "Bath floor",
+            "color": "#CFE3DD"
+          },
+          {
+            "id": "small-bungalow-fn34",
+            "x": 5100,
+            "y": 4600,
+            "w": 480,
+            "h": 700,
+            "kind": "toilet"
+          },
+          {
+            "id": "small-bungalow-fn35",
+            "x": 5000,
+            "y": 6400,
+            "w": 560,
+            "h": 470,
+            "kind": "sink",
+            "rotation": 180,
+            "label": "Vanity"
+          },
+          {
+            "id": "small-bungalow-fn36",
+            "x": 6500,
+            "y": 5500,
+            "w": 1520,
+            "h": 760,
+            "kind": "bathtub",
+            "rotation": 90
+          },
+          {
+            "id": "small-bungalow-fn37",
+            "x": 5850,
+            "y": 8100,
+            "w": 1900,
+            "h": 2600,
+            "kind": "rug",
+            "label": "Utility floor",
+            "color": "#B9B7B0"
+          },
+          {
+            "id": "small-bungalow-fn38",
+            "x": 6700,
+            "y": 7000,
+            "w": 800,
+            "h": 350,
+            "kind": "bookshelf",
+            "rotation": 90
+          },
+          {
+            "id": "small-bungalow-fn39",
+            "x": 6700,
+            "y": 9200,
+            "w": 800,
+            "h": 350,
+            "kind": "bookshelf",
+            "rotation": 90
+          },
+          {
+            "id": "small-bungalow-fn40",
+            "x": 4950,
+            "y": 8200,
+            "w": 900,
+            "h": 400,
+            "kind": "cabinet",
+            "rotation": 270
+          },
+          {
+            "id": "small-bungalow-fn41",
+            "x": 8325,
+            "y": 6900,
+            "w": 1400,
+            "h": 1900,
+            "kind": "bed"
+          },
+          {
+            "id": "small-bungalow-fn42",
+            "x": 7100,
+            "y": 6500,
+            "w": 500,
+            "h": 400,
+            "kind": "nightstand"
+          },
+          {
+            "id": "small-bungalow-fn43",
+            "x": 7150,
+            "y": 4600,
+            "w": 1400,
+            "h": 700,
+            "kind": "desk",
+            "rotation": 180
+          },
+          {
+            "id": "small-bungalow-fn44",
+            "x": 9500,
+            "y": 5200,
+            "w": 1200,
+            "h": 500,
+            "kind": "dresser",
+            "rotation": 270
+          },
+          {
+            "id": "small-bungalow-fn45",
+            "x": 7650,
+            "y": 8700,
+            "w": 1200,
+            "h": 600,
+            "kind": "wardrobe"
+          },
+          {
+            "id": "small-bungalow-fn46",
+            "x": 9075,
+            "y": 8700,
+            "w": 800,
+            "h": 350,
+            "kind": "bookshelf",
+            "label": "Storage shelving"
+          },
+          {
+            "id": "small-bungalow-fn47",
+            "x": 4200,
+            "y": 8700,
+            "w": 900,
+            "h": 400,
+            "kind": "bench",
+            "rotation": 90
+          }
+        ],
+        "lights": [
+          {
+            "id": "small-bungalow-lt1",
+            "x": 2850,
+            "y": 2150,
+            "entity_id": null,
+            "iconKind": "bulb",
+            "label": "Living"
+          },
+          {
+            "id": "small-bungalow-lt2",
+            "x": 7725,
+            "y": 1300,
+            "entity_id": null,
+            "iconKind": "bulb",
+            "label": "Kitchen"
+          },
+          {
+            "id": "small-bungalow-lt3",
+            "x": 7100,
+            "y": 3450,
+            "entity_id": null,
+            "iconKind": "pendant",
+            "label": "Dining Nook"
+          },
+          {
+            "id": "small-bungalow-lt4",
+            "x": 9125,
+            "y": 3450,
+            "entity_id": null,
+            "iconKind": "bulb",
+            "label": "Mudroom"
+          },
+          {
+            "id": "small-bungalow-lt5",
+            "x": 1800,
+            "y": 6100,
+            "entity_id": null,
+            "iconKind": "bulb",
+            "label": "Primary Bedroom"
+          },
+          {
+            "id": "small-bungalow-lt6",
+            "x": 4200,
+            "y": 6900,
+            "entity_id": null,
+            "iconKind": "bulb",
+            "label": "Hallway"
+          },
+          {
+            "id": "small-bungalow-lt7",
+            "x": 5850,
+            "y": 5100,
+            "entity_id": null,
+            "iconKind": "sconce",
+            "radius": 500,
+            "label": "Bath vanity"
+          },
+          {
+            "id": "small-bungalow-lt8",
+            "x": 5850,
+            "y": 8100,
+            "entity_id": null,
+            "iconKind": "bulb",
+            "label": "Utility"
+          },
+          {
+            "id": "small-bungalow-lt9",
+            "x": 8325,
+            "y": 6100,
+            "entity_id": null,
+            "iconKind": "bulb",
+            "label": "Bedroom 2"
+          }
+        ],
+        "switches": [
+          {
+            "id": "small-bungalow-sw1",
+            "x": 3300,
+            "y": 150,
+            "entity_id": null,
+            "rotation": 0,
+            "label": "Living"
+          },
+          {
+            "id": "small-bungalow-sw2",
+            "x": 4950,
+            "y": 5100,
+            "entity_id": null,
+            "rotation": 90,
+            "label": "Bath"
+          },
+          {
+            "id": "small-bungalow-sw3",
+            "x": 3500,
+            "y": 6600,
+            "entity_id": null,
+            "rotation": 90,
+            "label": "Primary"
+          },
+          {
+            "id": "small-bungalow-sw4",
+            "x": 6800,
+            "y": 7300,
+            "entity_id": null,
+            "rotation": 90,
+            "label": "Bedroom 2"
+          }
+        ],
+        "sensors": [],
+        "motionSensors": [],
+        "roamers": [
+          {
+            "id": "small-bungalow-ro1",
+            "name": "Marlow",
+            "avatarKinds": [
+              "adult",
+              "elder",
+              "professional"
+            ],
+            "color": "#4db6ac"
+          },
+          {
+            "id": "small-bungalow-ro2",
+            "name": "Biscuit",
+            "avatarKinds": [
+              "dog"
+            ],
+            "color": "#a1887f"
+          }
+        ],
+        "envSensors": [],
+        "look3d": {
+          "floorTex": "wood",
+          "floorColor": "#C89468",
+          "wallColor": "#EFE6D8"
+        },
+        "doors": [
+          {
+            "id": "small-bungalow-dr1",
+            "x": 2450,
+            "y": 0,
+            "w": 900,
+            "rotation": 0,
+            "entity_id": null,
+            "lockEntity": null,
+            "doorbellEntity": null,
+            "label": "Front door"
+          },
+          {
+            "id": "small-bungalow-dr2",
+            "x": 9750,
+            "y": 3050,
+            "w": 900,
+            "rotation": 90,
+            "entity_id": null,
+            "label": "Back door"
+          },
+          {
+            "id": "small-bungalow-dr3",
+            "x": 8500,
+            "y": 3200,
+            "w": 800,
+            "rotation": 90,
+            "entity_id": null,
+            "label": "Mudroom"
+          },
+          {
+            "id": "small-bungalow-dr4",
+            "x": 3600,
+            "y": 6600,
+            "w": 800,
+            "rotation": 90,
+            "entity_id": null,
+            "label": "Primary Bedroom"
+          },
+          {
+            "id": "small-bungalow-dr5",
+            "x": 3600,
+            "y": 8700,
+            "w": 800,
+            "rotation": 90,
+            "entity_id": null,
+            "label": "Linen Closet"
+          },
+          {
+            "id": "small-bungalow-dr6",
+            "x": 1400,
+            "y": 7900,
+            "w": 800,
+            "rotation": 0,
+            "entity_id": null,
+            "label": "Primary Closet"
+          },
+          {
+            "id": "small-bungalow-dr7",
+            "x": 4800,
+            "y": 5000,
+            "w": 800,
+            "rotation": 90,
+            "entity_id": null,
+            "label": "Bathroom"
+          },
+          {
+            "id": "small-bungalow-dr8",
+            "x": 6900,
+            "y": 7300,
+            "w": 800,
+            "rotation": 90,
+            "entity_id": null,
+            "label": "Bedroom 2"
+          },
+          {
+            "id": "small-bungalow-dr9",
+            "x": 7600,
+            "y": 7900,
+            "w": 800,
+            "rotation": 0,
+            "entity_id": null,
+            "label": "BR2 Closet"
+          },
+          {
+            "id": "small-bungalow-dr10",
+            "x": 9100,
+            "y": 7900,
+            "w": 800,
+            "rotation": 0,
+            "entity_id": null,
+            "label": "Storage Closet"
+          }
+        ],
+        "windows": [
+          {
+            "id": "small-bungalow-win1",
+            "x": 1300,
+            "y": 0,
+            "w": 800,
+            "rotation": 0,
+            "entity_id": null,
+            "sill": 600,
+            "height": 1400,
+            "label": "Living"
+          },
+          {
+            "id": "small-bungalow-win2",
+            "x": 4300,
+            "y": 0,
+            "w": 800,
+            "rotation": 0,
+            "entity_id": null,
+            "sill": 600,
+            "height": 1400,
+            "label": "Living"
+          },
+          {
+            "id": "small-bungalow-win3",
+            "x": 0,
+            "y": 2050,
+            "w": 900,
+            "rotation": 90,
+            "entity_id": null,
+            "sill": 750,
+            "height": 1200,
+            "kind": "double_hung",
+            "label": "Living side"
+          },
+          {
+            "id": "small-bungalow-win4",
+            "x": 7000,
+            "y": 0,
+            "w": 800,
+            "rotation": 0,
+            "entity_id": null,
+            "sill": 900,
+            "height": 900,
+            "kind": "double_hung",
+            "label": "Kitchen"
+          },
+          {
+            "id": "small-bungalow-win5",
+            "x": 9750,
+            "y": 1350,
+            "w": 900,
+            "rotation": 90,
+            "entity_id": null,
+            "sill": 900,
+            "height": 900,
+            "kind": "double_hung",
+            "label": "Kitchen sink"
+          },
+          {
+            "id": "small-bungalow-win6",
+            "x": 0,
+            "y": 5300,
+            "w": 800,
+            "rotation": 90,
+            "entity_id": null,
+            "sill": 750,
+            "height": 1200,
+            "kind": "double_hung",
+            "label": "Primary"
+          },
+          {
+            "id": "small-bungalow-win7",
+            "x": 0,
+            "y": 6900,
+            "w": 800,
+            "rotation": 90,
+            "entity_id": null,
+            "sill": 750,
+            "height": 1200,
+            "kind": "double_hung",
+            "label": "Primary"
+          },
+          {
+            "id": "small-bungalow-win8",
+            "x": 9750,
+            "y": 5400,
+            "w": 800,
+            "rotation": 90,
+            "entity_id": null,
+            "sill": 750,
+            "height": 1200,
+            "kind": "double_hung",
+            "label": "Bedroom 2"
+          },
+          {
+            "id": "small-bungalow-win9",
+            "x": 9750,
+            "y": 7000,
+            "w": 800,
+            "rotation": 90,
+            "entity_id": null,
+            "sill": 750,
+            "height": 1200,
+            "kind": "double_hung",
+            "label": "Bedroom 2"
+          },
+          {
+            "id": "small-bungalow-win10",
+            "x": 5600,
+            "y": 9500,
+            "w": 800,
+            "rotation": 0,
+            "entity_id": null,
+            "sill": 1200,
+            "height": 900,
+            "kind": "double_hung",
+            "label": "Utility"
+          }
+        ],
+        "bg": null,
+        "model3d": null,
+        "rooms": [
+          {
+            "id": "small-bungalow-rm1",
+            "name": "Living Room",
+            "anchor": {
+              "x": 2850,
+              "y": 2150
+            }
+          },
+          {
+            "id": "small-bungalow-rm2",
+            "name": "Kitchen",
+            "anchor": {
+              "x": 7725,
+              "y": 1300
+            }
+          },
+          {
+            "id": "small-bungalow-rm3",
+            "name": "Dining Nook",
+            "anchor": {
+              "x": 7100,
+              "y": 3450
+            }
+          },
+          {
+            "id": "small-bungalow-rm4",
+            "name": "Mudroom / Laundry",
+            "anchor": {
+              "x": 9125,
+              "y": 3450
+            }
+          },
+          {
+            "id": "small-bungalow-rm5",
+            "name": "Primary Bedroom",
+            "anchor": {
+              "x": 1800,
+              "y": 6100
+            }
+          },
+          {
+            "id": "small-bungalow-rm6",
+            "name": "Primary Closet",
+            "anchor": {
+              "x": 900,
+              "y": 8700
+            }
+          },
+          {
+            "id": "small-bungalow-rm7",
+            "name": "Linen Closet",
+            "anchor": {
+              "x": 2700,
+              "y": 8700
+            }
+          },
+          {
+            "id": "small-bungalow-rm8",
+            "name": "Hallway",
+            "anchor": {
+              "x": 4200,
+              "y": 6900
+            }
+          },
+          {
+            "id": "small-bungalow-rm9",
+            "name": "Bathroom",
+            "anchor": {
+              "x": 5850,
+              "y": 5500
+            }
+          },
+          {
+            "id": "small-bungalow-rm10",
+            "name": "Utility / Storage",
+            "anchor": {
+              "x": 5850,
+              "y": 8100
+            }
+          },
+          {
+            "id": "small-bungalow-rm11",
+            "name": "Bedroom 2",
+            "anchor": {
+              "x": 8325,
+              "y": 6100
+            }
+          },
+          {
+            "id": "small-bungalow-rm12",
+            "name": "Bedroom 2 Closet",
+            "anchor": {
+              "x": 7650,
+              "y": 8700
+            }
+          },
+          {
+            "id": "small-bungalow-rm13",
+            "name": "Storage Closet",
+            "anchor": {
+              "x": 9075,
+              "y": 8700
+            }
+          }
+        ],
+        "bleProxies": [],
+        "alarmPanels": [],
+        "safetySensors": [],
+        "robots": [],
+        "presenceZones": [],
+        "cameras": [],
+        "groundAreas": [],
+        "voidAreas": []
+      }
+    ],
+    "currentFloorId": "small-bungalow-fl1",
+    "activeSensorId": null,
+    "coverage": true,
+    "imperial": false,
+    "showDetails": false,
+    "useRawTargets": false,
+    "showMotionZones": true,
+    "scene3d": {
+      "preset": "day",
+      "floorTex": "wood",
+      "floorColor": "#C89468",
+      "wallColor": "#EFE6D8",
+      "wallCutaway": true,
+      "plumbobs": true
+    },
+    "customObjects": [],
+    "people": [],
+    "bleShowUnknown": true,
+    "notes": "~997 sq ft (92.6 m²) · 1 floor · 13 rooms\n\nA tidy 1940s \"minimal traditional\" cottage — a modest single-story starter\nhome. A front living room takes the whole street-facing left half; behind it a\ncompact galley kitchen opens (over pass-throughs, no doors) to an interior\nbreakfast nook and a back mudroom/laundry. A single central hallway serves the\nprivate wing: a primary bedroom with its own closet, a full bath, a walk-through\nutility/storage alcove, and a second bedroom, each with reach-in closets. Warm\nhoney-oak floors and cream plaster-look walls throughout; wet rooms get their\ntile/concrete look from oversized floor-colored rug overlays.\n\nLiving Room: sofa facing the TV wall, upholstered armchair by the side window,\n  coffee table, corner bookshelf, large seating rug, a corner plant.\nKitchen: galley run — sink under the east window, dishwasher, fridge, stove with\n  over-range microwave, base counter and cabinets; pale tile-look floor.\nDining Nook: interior 4-seat breakfast table with a window-side bench, sage rug.\nMudroom / Laundry: washer + dryer at the back door, a boot bench, utility-tile floor.\nPrimary Bedroom: queen bed, two nightstands, dresser, a reading chair by the window.\nPrimary Closet: reach-in wardrobe.\nLinen Closet: hall shelving.\nHallway: a small bench near the linen closet.\nBathroom: toilet, vanity sink, tub along the east wall; seafoam tile-look floor.\nUtility / Storage: storage shelving + a cabinet, the walk-through to Bedroom 2.\nBedroom 2: full bed, nightstand, desk by the east windows, dresser.\nBedroom 2 Closet / Storage Closet: reach-in wardrobe + general storage shelving."
+  }
+}

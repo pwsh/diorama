@@ -33,6 +33,21 @@ guides (kiosk platforms, home theater, skinning textures) — start at
 large multilevel) buildable straight into the `Floor`/`Room`/`Wall`/`Furniture`
 model — see `docs/demo-houses/README.md`.
 
+**Docs site & demo floorplans**: the published documentation site
+(https://pwsh.github.io/diorama/ — home + user guide + model-GIF gallery under
+`/models/` + floor-plan library under `/floorplans/`) is generated into the
+gitignored `docs-site/` by `npm run docs:site` (home + guide from
+`scripts/docs-site/guide/*.md`), `docs:gallery` (GIF gallery), and
+`docs:floorplans` (per-plan screenshots — 2D + iso per floor + glass-house —
+captured from the REAL built app in offline mode over CDP, driven through the
+`window.__dioramaPlanner` handle), all sharing `scripts/docs-site/shell.mjs`;
+`docs:publish` force-pushes the tree to the `gh-pages` orphan branch (github
+remote only). See `docs/GALLERY.md`. The 12 importable demo floorplan configs
+in `docs/floorplans/*.json` (committed; export-envelope format) are GENERATED —
+edit the builder modules in `scripts/floorplans/plans/*.mjs` and re-run
+`npm run floorplans:build` (validates against the real `geometry.ts`: closed
+loops, room anchors, opening snap distance, kinds, stair-link pairs).
+
 ## Layout
 
 ```
@@ -419,7 +434,7 @@ Doors and windows **snap onto the nearest wall** on drop and on move-release (`s
 `Floor.model3d` (`Model3D`) holds placement metadata only (name, rev, scale mm/unit, x/y offset, rotation, opacity, visible). The OBJ/MTL **text lives in IndexedDB** (`model-store.ts`, db `diorama-models`) keyed by floor id — multi-MB exports don't fit HA user_data or localStorage. `three-view._syncModel` loads text async when `rev` changes and calls `updateModel3D`. SH3D exports **cm with Y-up**; default scale 10 mm/unit. The renderer scales X and Z by `-scale` (double mirror, determinant positive) to line up with the 2D plan. Re-import per browser; placement syncs via HA.
 
 ### HA = source of truth (storage) — multi-configuration registry
-The store persists via HA's `frontend.user_data` table as a **config registry** (`docs/DESIGN-roamers-config.md` § B): an index at key `diorama-configs` (`{version, activeId, configs:[{id,name,updatedAt}]}`) + one full-Store body per config at `diorama-cfg-<id>`. The legacy single `diorama` key migrates once (→ config 'Default') and is never written again. `localStorage['diorama:store:v1']` stays the ACTIVE body cache (instant paint) + `diorama:configs` mirrors the index; the index's `activeId` is the last-active config restored on next load. Saves debounce 600 ms; `switchConfig`/`saveConfigAs` FLUSH the pending save first (edits land on the old config) and rewrite the active-body cache (no stale bleed). Planner API: `listConfigs`/`switchConfig`/`saveConfigNow`/`saveConfigAs`/`renameConfig`/`deleteConfig` (refuses the last; tombstones the body `{}`)/`exportConfig`/`importConfig` — edit-mode-guarded; UI in Settings ▸ Data ("Configurations": dropdown, Save, Save as…, Rename, Import ADDS a config + switches, Export, Delete w/ confirm, disabled at 1). **Export envelope** `{diorama:2, name, exportedAt, store, userAvatarPacks?}` serializes the WHOLE store (roamers, avatar pools, bound entity ids, people, avatarPacks config, weather/geo/layers/customObjects/views3d) + user-imported avatar-pack bodies from IndexedDB — a fresh-browser import is self-contained; legacy bare-store JSON still imports (wrapped). Test pages `config-test.html` (fake-HaApi Map stub), `offline-test.html`.
+The store persists via HA's `frontend.user_data` table as a **config registry** (`docs/DESIGN-roamers-config.md` § B): an index at key `diorama-configs` (`{version, activeId, configs:[{id,name,updatedAt}]}`) + one full-Store body per config at `diorama-cfg-<id>`. The legacy single `diorama` key migrates once (→ config 'Default') and is never written again. `localStorage['diorama:store:v1']` stays the ACTIVE body cache (instant paint) + `diorama:configs` mirrors the index; the index's `activeId` is the last-active config restored on next load. Saves debounce 600 ms; `switchConfig`/`saveConfigAs` FLUSH the pending save first (edits land on the old config) and rewrite the active-body cache (no stale bleed). Planner API: `listConfigs`/`switchConfig`/`saveConfigNow`/`saveConfigAs`/`renameConfig`/`deleteConfig` (refuses the last; tombstones the body `{}`)/`exportConfig`/`importConfig` — edit-mode-guarded; UI in Settings ▸ Data ("Configurations": dropdown, Save, Save as…, Rename, Import ADDS a config + switches, Export, Delete w/ confirm, disabled at 1). **Export envelope** `{diorama:2, name, exportedAt, store, userAvatarPacks?}` serializes the WHOLE store (roamers, avatar pools, bound entity ids, people, avatarPacks config, weather/geo/layers/customObjects/views3d) + user-imported avatar-pack bodies from IndexedDB — a fresh-browser import is self-contained; legacy bare-store JSON still imports (wrapped). **`Store.notes`** (free text) is a per-configuration description carried in `_loadFromHa`'s explicit field list (absent → undefined; `Planner.setNotes` trims-or-clears), edited via the Settings ▸ Data "Notes" textarea, and rides export/import with the rest of the store. Test pages `config-test.html` (fake-HaApi Map stub), `offline-test.html`.
 
 Connection settings (URL + token) use `diorama:url` / `diorama:token` in localStorage.
 

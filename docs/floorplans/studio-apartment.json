@@ -1,0 +1,599 @@
+{
+  "diorama": 2,
+  "name": "Studio Apartment",
+  "exportedAt": "2026-07-17T00:00:00.000Z",
+  "store": {
+    "v": 2,
+    "floors": [
+      {
+        "id": "studio-apartment-fl1",
+        "name": "Studio",
+        "w": 6600,
+        "d": 6350,
+        "walls": [
+          {
+            "id": "studio-apartment-w1",
+            "points": [
+              {
+                "x": 0,
+                "y": 0
+              },
+              {
+                "x": 6600,
+                "y": 0
+              },
+              {
+                "x": 6600,
+                "y": 6350
+              },
+              {
+                "x": 0,
+                "y": 6350
+              },
+              {
+                "x": 0,
+                "y": 0
+              }
+            ]
+          },
+          {
+            "id": "studio-apartment-w2",
+            "points": [
+              {
+                "x": 900,
+                "y": 0
+              },
+              {
+                "x": 900,
+                "y": 2400
+              }
+            ]
+          },
+          {
+            "id": "studio-apartment-w3",
+            "points": [
+              {
+                "x": 0,
+                "y": 700
+              },
+              {
+                "x": 900,
+                "y": 700
+              }
+            ]
+          },
+          {
+            "id": "studio-apartment-w4",
+            "points": [
+              {
+                "x": 900,
+                "y": 2400
+              },
+              {
+                "x": 2800,
+                "y": 2400
+              }
+            ]
+          },
+          {
+            "id": "studio-apartment-w5",
+            "points": [
+              {
+                "x": 2800,
+                "y": 0
+              },
+              {
+                "x": 2800,
+                "y": 2400
+              }
+            ]
+          },
+          {
+            "id": "studio-apartment-w6",
+            "points": [
+              {
+                "x": 2800,
+                "y": 800
+              },
+              {
+                "x": 3700,
+                "y": 800
+              }
+            ]
+          },
+          {
+            "id": "studio-apartment-w7",
+            "points": [
+              {
+                "x": 3700,
+                "y": 0
+              },
+              {
+                "x": 3700,
+                "y": 800
+              }
+            ]
+          }
+        ],
+        "furniture": [
+          {
+            "id": "studio-apartment-fn1",
+            "x": 2400,
+            "y": 1200,
+            "w": 1520,
+            "h": 760,
+            "kind": "bathtub",
+            "rotation": 270
+          },
+          {
+            "id": "studio-apartment-fn2",
+            "x": 1150,
+            "y": 2050,
+            "w": 480,
+            "h": 700,
+            "kind": "toilet",
+            "rotation": 180
+          },
+          {
+            "id": "studio-apartment-fn3",
+            "x": 1150,
+            "y": 700,
+            "w": 560,
+            "h": 470,
+            "kind": "sink",
+            "rotation": 90,
+            "label": "Vanity"
+          },
+          {
+            "id": "studio-apartment-fn4",
+            "x": 3250,
+            "y": 350,
+            "w": 690,
+            "h": 700,
+            "kind": "washer"
+          },
+          {
+            "id": "studio-apartment-fn5",
+            "x": 3250,
+            "y": 350,
+            "w": 690,
+            "h": 700,
+            "kind": "dryer",
+            "elevation": 990
+          },
+          {
+            "id": "studio-apartment-fn6",
+            "x": 325,
+            "y": 1200,
+            "w": 760,
+            "h": 660,
+            "kind": "stove",
+            "rotation": 90
+          },
+          {
+            "id": "studio-apartment-fn7",
+            "x": 325,
+            "y": 1200,
+            "w": 520,
+            "h": 390,
+            "kind": "microwave",
+            "rotation": 90,
+            "elevation": 1400
+          },
+          {
+            "id": "studio-apartment-fn8",
+            "x": 300,
+            "y": 2000,
+            "w": 610,
+            "h": 620,
+            "kind": "dishwasher",
+            "rotation": 90
+          },
+          {
+            "id": "studio-apartment-fn9",
+            "x": 325,
+            "y": 2450,
+            "w": 900,
+            "h": 650,
+            "kind": "kitchen_sink",
+            "rotation": 90
+          },
+          {
+            "id": "studio-apartment-fn10",
+            "x": 325,
+            "y": 1750,
+            "w": 600,
+            "h": 650,
+            "kind": "counter",
+            "rotation": 90
+          },
+          {
+            "id": "studio-apartment-fn11",
+            "x": 325,
+            "y": 3100,
+            "w": 1200,
+            "h": 650,
+            "kind": "counter",
+            "rotation": 90
+          },
+          {
+            "id": "studio-apartment-fn12",
+            "x": 375,
+            "y": 3900,
+            "w": 910,
+            "h": 760,
+            "kind": "fridge",
+            "rotation": 90
+          },
+          {
+            "id": "studio-apartment-fn13",
+            "x": 1700,
+            "y": 4200,
+            "w": 800,
+            "h": 800,
+            "kind": "table",
+            "label": "Dining"
+          },
+          {
+            "id": "studio-apartment-fn14",
+            "x": 1700,
+            "y": 3900,
+            "w": 500,
+            "h": 500,
+            "kind": "chair"
+          },
+          {
+            "id": "studio-apartment-fn15",
+            "x": 1700,
+            "y": 4500,
+            "w": 500,
+            "h": 500,
+            "kind": "chair",
+            "rotation": 180
+          },
+          {
+            "id": "studio-apartment-fn16",
+            "x": 1850,
+            "y": 5300,
+            "w": 1700,
+            "h": 2100,
+            "kind": "bed",
+            "rotation": 180
+          },
+          {
+            "id": "studio-apartment-fn17",
+            "x": 900,
+            "y": 5300,
+            "w": 500,
+            "h": 400,
+            "kind": "nightstand",
+            "rotation": 180
+          },
+          {
+            "id": "studio-apartment-fn18",
+            "x": 2800,
+            "y": 5300,
+            "w": 500,
+            "h": 400,
+            "kind": "nightstand",
+            "rotation": 180
+          },
+          {
+            "id": "studio-apartment-fn19",
+            "x": 300,
+            "y": 4900,
+            "w": 1200,
+            "h": 550,
+            "kind": "dresser",
+            "rotation": 90
+          },
+          {
+            "id": "studio-apartment-fn20",
+            "x": 300,
+            "y": 5900,
+            "w": 1000,
+            "h": 600,
+            "kind": "wardrobe",
+            "rotation": 90
+          },
+          {
+            "id": "studio-apartment-fn21",
+            "x": 5300,
+            "y": 1600,
+            "w": 2600,
+            "h": 2200,
+            "kind": "rug"
+          },
+          {
+            "id": "studio-apartment-fn22",
+            "x": 5000,
+            "y": 1500,
+            "w": 2000,
+            "h": 850,
+            "kind": "sofa",
+            "rotation": 90
+          },
+          {
+            "id": "studio-apartment-fn23",
+            "x": 5800,
+            "y": 1500,
+            "w": 1100,
+            "h": 600,
+            "kind": "coffee_table"
+          },
+          {
+            "id": "studio-apartment-fn24",
+            "x": 6450,
+            "y": 1500,
+            "w": 1600,
+            "h": 450,
+            "kind": "tv_stand",
+            "rotation": 270
+          },
+          {
+            "id": "studio-apartment-fn25",
+            "x": 6450,
+            "y": 1500,
+            "w": 1450,
+            "h": 250,
+            "kind": "tv",
+            "rotation": 270,
+            "localState": "off"
+          },
+          {
+            "id": "studio-apartment-fn26",
+            "x": 3800,
+            "y": 2200,
+            "w": 800,
+            "h": 350,
+            "kind": "bookshelf",
+            "rotation": 90
+          }
+        ],
+        "lights": [
+          {
+            "id": "studio-apartment-lt1",
+            "x": 450,
+            "y": 2500,
+            "entity_id": null,
+            "iconKind": "round",
+            "label": "Kitchen"
+          },
+          {
+            "id": "studio-apartment-lt2",
+            "x": 1700,
+            "y": 4200,
+            "entity_id": null,
+            "iconKind": "pendant",
+            "label": "Dining"
+          },
+          {
+            "id": "studio-apartment-lt3",
+            "x": 1850,
+            "y": 5600,
+            "entity_id": null,
+            "iconKind": "bulb",
+            "label": "Bedroom"
+          },
+          {
+            "id": "studio-apartment-lt4",
+            "x": 5300,
+            "y": 1800,
+            "entity_id": null,
+            "iconKind": "bulb",
+            "label": "Living"
+          },
+          {
+            "id": "studio-apartment-lt5",
+            "x": 1850,
+            "y": 1200,
+            "entity_id": null,
+            "iconKind": "recessed",
+            "radius": 600,
+            "label": "Bath"
+          },
+          {
+            "id": "studio-apartment-lt6",
+            "x": 4650,
+            "y": 600,
+            "entity_id": null,
+            "iconKind": "bulb",
+            "label": "Entry"
+          },
+          {
+            "id": "studio-apartment-lt7",
+            "x": 4700,
+            "y": 900,
+            "entity_id": null,
+            "iconKind": "lamp",
+            "height": 1500,
+            "label": "Floor lamp"
+          }
+        ],
+        "switches": [
+          {
+            "id": "studio-apartment-sw1",
+            "x": 4600,
+            "y": 200,
+            "entity_id": null,
+            "rotation": 0,
+            "label": "Entry"
+          },
+          {
+            "id": "studio-apartment-sw2",
+            "x": 1600,
+            "y": 2450,
+            "entity_id": null,
+            "rotation": 0,
+            "label": "Bath"
+          }
+        ],
+        "sensors": [],
+        "motionSensors": [],
+        "roamers": [
+          {
+            "id": "studio-apartment-ro1",
+            "name": "Jordan",
+            "avatarKinds": [
+              "adult",
+              "teen",
+              "professional"
+            ],
+            "color": "#4fc3f7"
+          },
+          {
+            "id": "studio-apartment-ro2",
+            "name": "Mochi",
+            "avatarKinds": [
+              "cat"
+            ],
+            "color": "#ffb74d"
+          }
+        ],
+        "envSensors": [],
+        "look3d": {
+          "floorTex": "wood",
+          "floorColor": "#C7A06B",
+          "wallColor": "#F1ECE2"
+        },
+        "doors": [
+          {
+            "id": "studio-apartment-dr1",
+            "x": 4200,
+            "y": 0,
+            "w": 900,
+            "rotation": 0,
+            "entity_id": null,
+            "doorbellEntity": null,
+            "label": "Entry"
+          },
+          {
+            "id": "studio-apartment-dr2",
+            "x": 100,
+            "y": 700,
+            "w": 700,
+            "rotation": 0,
+            "entity_id": null,
+            "label": "Closet"
+          },
+          {
+            "id": "studio-apartment-dr3",
+            "x": 1200,
+            "y": 2400,
+            "w": 850,
+            "rotation": 0,
+            "entity_id": null,
+            "label": "Bathroom"
+          },
+          {
+            "id": "studio-apartment-dr4",
+            "x": 2950,
+            "y": 800,
+            "w": 700,
+            "rotation": 0,
+            "entity_id": null,
+            "label": "Utility"
+          }
+        ],
+        "windows": [
+          {
+            "id": "studio-apartment-win1",
+            "x": 1500,
+            "y": 6350,
+            "w": 1200,
+            "rotation": 0,
+            "entity_id": null,
+            "sill": 900,
+            "height": 1200,
+            "label": "Bedroom"
+          },
+          {
+            "id": "studio-apartment-win2",
+            "x": 4900,
+            "y": 6350,
+            "w": 1200,
+            "rotation": 0,
+            "entity_id": null,
+            "sill": 900,
+            "height": 1200,
+            "label": "Living"
+          },
+          {
+            "id": "studio-apartment-win3",
+            "x": 0,
+            "y": 2800,
+            "w": 1200,
+            "rotation": 90,
+            "entity_id": null,
+            "sill": 900,
+            "height": 1200,
+            "label": "Kitchen"
+          }
+        ],
+        "bg": null,
+        "model3d": null,
+        "rooms": [
+          {
+            "id": "studio-apartment-rm1",
+            "name": "Entry Closet",
+            "anchor": {
+              "x": 450,
+              "y": 350
+            }
+          },
+          {
+            "id": "studio-apartment-rm2",
+            "name": "Bathroom",
+            "anchor": {
+              "x": 1850,
+              "y": 1200
+            }
+          },
+          {
+            "id": "studio-apartment-rm3",
+            "name": "Utility Closet",
+            "anchor": {
+              "x": 3250,
+              "y": 400
+            }
+          },
+          {
+            "id": "studio-apartment-rm4",
+            "name": "Kitchen / Living / Bedroom",
+            "anchor": {
+              "x": 5000,
+              "y": 4000
+            }
+          }
+        ],
+        "bleProxies": [],
+        "alarmPanels": [],
+        "safetySensors": [],
+        "robots": [],
+        "presenceZones": [],
+        "cameras": [],
+        "groundAreas": [],
+        "voidAreas": []
+      }
+    ],
+    "currentFloorId": "studio-apartment-fl1",
+    "activeSensorId": null,
+    "coverage": true,
+    "imperial": false,
+    "showDetails": false,
+    "useRawTargets": false,
+    "showMotionZones": true,
+    "scene3d": {
+      "preset": "day",
+      "floorTex": "wood",
+      "floorColor": "#C7A06B",
+      "wallColor": "#F1ECE2",
+      "wallCutaway": true,
+      "plumbobs": true
+    },
+    "customObjects": [],
+    "people": [],
+    "bleShowUnknown": true,
+    "notes": "~451 sq ft (42 m²) · 1 floor · 4 rooms\n\nA bright open urban studio where one great room does triple duty — a one-wall\ngalley kitchen, a dining nook, a living/TV pocket, and a bedroom nook — wrapped\naround a compact core of full bathroom, entry coat closet, and a stacked\nwasher/dryer utility closet. Warm oak-look floors, soft warm-white walls, light\nfrom north and west exposures.\n\nKitchen / Living / Bedroom (great room):\n  • Galley kitchen: stove, over-range microwave, dishwasher, sink under the west\n    window, two counter runs, and a counter-depth refrigerator.\n  • Dining nook: a small 2-top table with two chairs.\n  • Living pocket: sofa facing a wall-mounted TV on a stand, coffee table, area\n    rug, a floor lamp, and an entry bookshelf.\n  • Bedroom nook: queen bed against the north wall flanked by two nightstands, a\n    dresser and a wardrobe along the west wall.\n  • Lighting: kitchen flush-mount, dining pendant, bedroom + living + entry\n    ceiling lights, and the sofa floor lamp.\nBathroom: bathtub/shower combo, toilet, and a vanity sink; recessed ceiling light.\nEntry Closet: reach-in coat closet at the door.\nUtility Closet: stacked washer + dryer."
+  }
+}

@@ -1,0 +1,1370 @@
+{
+  "diorama": 2,
+  "name": "Bungalow — Cottage + Yard",
+  "exportedAt": "2026-07-17T00:00:00.000Z",
+  "store": {
+    "v": 2,
+    "floors": [
+      {
+        "id": "bungalow-cottage-yard-fl1",
+        "name": "Cottage + Yard",
+        "w": 15750,
+        "d": 15500,
+        "walls": [
+          {
+            "id": "bungalow-cottage-yard-w1",
+            "points": [
+              {
+                "x": 3000,
+                "y": 3000
+              },
+              {
+                "x": 12750,
+                "y": 3000
+              },
+              {
+                "x": 12750,
+                "y": 12500
+              },
+              {
+                "x": 3000,
+                "y": 12500
+              },
+              {
+                "x": 3000,
+                "y": 3000
+              }
+            ]
+          },
+          {
+            "id": "bungalow-cottage-yard-w2",
+            "points": [
+              {
+                "x": 8700,
+                "y": 3000
+              },
+              {
+                "x": 8700,
+                "y": 3900
+              }
+            ]
+          },
+          {
+            "id": "bungalow-cottage-yard-w3",
+            "points": [
+              {
+                "x": 8700,
+                "y": 5400
+              },
+              {
+                "x": 8700,
+                "y": 7300
+              }
+            ]
+          },
+          {
+            "id": "bungalow-cottage-yard-w4",
+            "points": [
+              {
+                "x": 11100,
+                "y": 5600
+              },
+              {
+                "x": 12750,
+                "y": 5600
+              }
+            ]
+          },
+          {
+            "id": "bungalow-cottage-yard-w5",
+            "points": [
+              {
+                "x": 11500,
+                "y": 5600
+              },
+              {
+                "x": 11500,
+                "y": 7300
+              }
+            ]
+          },
+          {
+            "id": "bungalow-cottage-yard-w6",
+            "points": [
+              {
+                "x": 3000,
+                "y": 7300
+              },
+              {
+                "x": 6600,
+                "y": 7300
+              }
+            ]
+          },
+          {
+            "id": "bungalow-cottage-yard-w7",
+            "points": [
+              {
+                "x": 7800,
+                "y": 7300
+              },
+              {
+                "x": 12750,
+                "y": 7300
+              }
+            ]
+          },
+          {
+            "id": "bungalow-cottage-yard-w8",
+            "points": [
+              {
+                "x": 6600,
+                "y": 7300
+              },
+              {
+                "x": 6600,
+                "y": 12500
+              }
+            ]
+          },
+          {
+            "id": "bungalow-cottage-yard-w9",
+            "points": [
+              {
+                "x": 7800,
+                "y": 7300
+              },
+              {
+                "x": 7800,
+                "y": 10300
+              }
+            ]
+          },
+          {
+            "id": "bungalow-cottage-yard-w10",
+            "points": [
+              {
+                "x": 7800,
+                "y": 11500
+              },
+              {
+                "x": 7800,
+                "y": 12500
+              }
+            ]
+          },
+          {
+            "id": "bungalow-cottage-yard-w11",
+            "points": [
+              {
+                "x": 9900,
+                "y": 7300
+              },
+              {
+                "x": 9900,
+                "y": 12500
+              }
+            ]
+          },
+          {
+            "id": "bungalow-cottage-yard-w12",
+            "points": [
+              {
+                "x": 7800,
+                "y": 9700
+              },
+              {
+                "x": 9900,
+                "y": 9700
+              }
+            ]
+          },
+          {
+            "id": "bungalow-cottage-yard-w13",
+            "points": [
+              {
+                "x": 3000,
+                "y": 10900
+              },
+              {
+                "x": 6600,
+                "y": 10900
+              }
+            ]
+          },
+          {
+            "id": "bungalow-cottage-yard-w14",
+            "points": [
+              {
+                "x": 4800,
+                "y": 10900
+              },
+              {
+                "x": 4800,
+                "y": 12500
+              }
+            ]
+          },
+          {
+            "id": "bungalow-cottage-yard-w15",
+            "points": [
+              {
+                "x": 9900,
+                "y": 10900
+              },
+              {
+                "x": 12750,
+                "y": 10900
+              }
+            ]
+          },
+          {
+            "id": "bungalow-cottage-yard-w16",
+            "points": [
+              {
+                "x": 11400,
+                "y": 10900
+              },
+              {
+                "x": 11400,
+                "y": 12500
+              }
+            ]
+          }
+        ],
+        "furniture": [
+          {
+            "id": "bungalow-cottage-yard-fn1",
+            "x": 5600,
+            "y": 6100,
+            "w": 2200,
+            "h": 900,
+            "kind": "sofa",
+            "rotation": 90
+          },
+          {
+            "id": "bungalow-cottage-yard-fn2",
+            "x": 5600,
+            "y": 4800,
+            "w": 800,
+            "h": 800,
+            "kind": "chair",
+            "rotation": 270,
+            "label": "Armchair"
+          },
+          {
+            "id": "bungalow-cottage-yard-fn3",
+            "x": 6700,
+            "y": 6100,
+            "w": 1100,
+            "h": 600,
+            "kind": "coffee_table"
+          },
+          {
+            "id": "bungalow-cottage-yard-fn4",
+            "x": 8500,
+            "y": 6100,
+            "w": 1600,
+            "h": 450,
+            "kind": "tv_stand",
+            "rotation": 90
+          },
+          {
+            "id": "bungalow-cottage-yard-fn5",
+            "x": 8500,
+            "y": 6150,
+            "w": 1450,
+            "h": 250,
+            "kind": "tv",
+            "rotation": 90,
+            "localState": "off"
+          },
+          {
+            "id": "bungalow-cottage-yard-fn6",
+            "x": 3150,
+            "y": 3700,
+            "w": 800,
+            "h": 350,
+            "kind": "bookshelf",
+            "rotation": 90
+          },
+          {
+            "id": "bungalow-cottage-yard-fn7",
+            "x": 5900,
+            "y": 5600,
+            "w": 2600,
+            "h": 2200,
+            "kind": "rug"
+          },
+          {
+            "id": "bungalow-cottage-yard-fn8",
+            "x": 8400,
+            "y": 7100,
+            "w": 400,
+            "h": 400,
+            "kind": "plant"
+          },
+          {
+            "id": "bungalow-cottage-yard-fn9",
+            "x": 10725,
+            "y": 4300,
+            "w": 3850,
+            "h": 2400,
+            "kind": "rug",
+            "label": "Kitchen floor",
+            "color": "#E4DFD3"
+          },
+          {
+            "id": "bungalow-cottage-yard-fn10",
+            "x": 12450,
+            "y": 4350,
+            "w": 900,
+            "h": 650,
+            "kind": "kitchen_sink"
+          },
+          {
+            "id": "bungalow-cottage-yard-fn11",
+            "x": 12450,
+            "y": 4900,
+            "w": 610,
+            "h": 620,
+            "kind": "dishwasher"
+          },
+          {
+            "id": "bungalow-cottage-yard-fn12",
+            "x": 12450,
+            "y": 5350,
+            "w": 910,
+            "h": 760,
+            "kind": "fridge"
+          },
+          {
+            "id": "bungalow-cottage-yard-fn13",
+            "x": 10000,
+            "y": 3300,
+            "w": 760,
+            "h": 660,
+            "kind": "stove",
+            "rotation": 180
+          },
+          {
+            "id": "bungalow-cottage-yard-fn14",
+            "x": 10000,
+            "y": 3320,
+            "w": 520,
+            "h": 390,
+            "kind": "microwave",
+            "rotation": 180,
+            "elevation": 1400
+          },
+          {
+            "id": "bungalow-cottage-yard-fn15",
+            "x": 12450,
+            "y": 3700,
+            "w": 900,
+            "h": 650,
+            "kind": "counter"
+          },
+          {
+            "id": "bungalow-cottage-yard-fn16",
+            "x": 10800,
+            "y": 3300,
+            "w": 900,
+            "h": 400,
+            "kind": "cabinet",
+            "rotation": 180
+          },
+          {
+            "id": "bungalow-cottage-yard-fn17",
+            "x": 10100,
+            "y": 6450,
+            "w": 2200,
+            "h": 1600,
+            "kind": "rug",
+            "label": "Nook rug",
+            "color": "#7C9473"
+          },
+          {
+            "id": "bungalow-cottage-yard-fn18",
+            "x": 10100,
+            "y": 6450,
+            "w": 1500,
+            "h": 900,
+            "kind": "table"
+          },
+          {
+            "id": "bungalow-cottage-yard-fn19",
+            "x": 9500,
+            "y": 6450,
+            "w": 1200,
+            "h": 400,
+            "kind": "bench",
+            "rotation": 90
+          },
+          {
+            "id": "bungalow-cottage-yard-fn20",
+            "x": 10700,
+            "y": 6450,
+            "w": 500,
+            "h": 500,
+            "kind": "chair",
+            "rotation": 270
+          },
+          {
+            "id": "bungalow-cottage-yard-fn21",
+            "x": 10100,
+            "y": 5950,
+            "w": 500,
+            "h": 500,
+            "kind": "chair"
+          },
+          {
+            "id": "bungalow-cottage-yard-fn22",
+            "x": 12125,
+            "y": 6450,
+            "w": 1050,
+            "h": 1500,
+            "kind": "rug",
+            "label": "Mudroom floor",
+            "color": "#A9A6A0"
+          },
+          {
+            "id": "bungalow-cottage-yard-fn23",
+            "x": 12100,
+            "y": 5900,
+            "w": 690,
+            "h": 700,
+            "kind": "washer"
+          },
+          {
+            "id": "bungalow-cottage-yard-fn24",
+            "x": 12100,
+            "y": 6550,
+            "w": 690,
+            "h": 700,
+            "kind": "dryer"
+          },
+          {
+            "id": "bungalow-cottage-yard-fn25",
+            "x": 11700,
+            "y": 6700,
+            "w": 900,
+            "h": 400,
+            "kind": "bench",
+            "rotation": 90
+          },
+          {
+            "id": "bungalow-cottage-yard-fn26",
+            "x": 4800,
+            "y": 9700,
+            "w": 2000,
+            "h": 1500,
+            "kind": "bed"
+          },
+          {
+            "id": "bungalow-cottage-yard-fn27",
+            "x": 3800,
+            "y": 10500,
+            "w": 500,
+            "h": 400,
+            "kind": "nightstand"
+          },
+          {
+            "id": "bungalow-cottage-yard-fn28",
+            "x": 5800,
+            "y": 10500,
+            "w": 500,
+            "h": 400,
+            "kind": "nightstand"
+          },
+          {
+            "id": "bungalow-cottage-yard-fn29",
+            "x": 3300,
+            "y": 8300,
+            "w": 1200,
+            "h": 500,
+            "kind": "dresser",
+            "rotation": 90
+          },
+          {
+            "id": "bungalow-cottage-yard-fn30",
+            "x": 6300,
+            "y": 8000,
+            "w": 800,
+            "h": 800,
+            "kind": "chair",
+            "rotation": 180,
+            "label": "Reading chair"
+          },
+          {
+            "id": "bungalow-cottage-yard-fn31",
+            "x": 3900,
+            "y": 11700,
+            "w": 1200,
+            "h": 600,
+            "kind": "wardrobe"
+          },
+          {
+            "id": "bungalow-cottage-yard-fn32",
+            "x": 5700,
+            "y": 11700,
+            "w": 800,
+            "h": 350,
+            "kind": "bookshelf",
+            "label": "Linen shelving"
+          },
+          {
+            "id": "bungalow-cottage-yard-fn33",
+            "x": 8850,
+            "y": 8500,
+            "w": 1900,
+            "h": 2200,
+            "kind": "rug",
+            "label": "Bath floor",
+            "color": "#CFE3DD"
+          },
+          {
+            "id": "bungalow-cottage-yard-fn34",
+            "x": 8100,
+            "y": 7600,
+            "w": 480,
+            "h": 700,
+            "kind": "toilet"
+          },
+          {
+            "id": "bungalow-cottage-yard-fn35",
+            "x": 8000,
+            "y": 9400,
+            "w": 560,
+            "h": 470,
+            "kind": "sink",
+            "rotation": 180,
+            "label": "Vanity"
+          },
+          {
+            "id": "bungalow-cottage-yard-fn36",
+            "x": 9500,
+            "y": 8500,
+            "w": 1520,
+            "h": 760,
+            "kind": "bathtub",
+            "rotation": 90
+          },
+          {
+            "id": "bungalow-cottage-yard-fn37",
+            "x": 8850,
+            "y": 11100,
+            "w": 1900,
+            "h": 2600,
+            "kind": "rug",
+            "label": "Utility floor",
+            "color": "#B9B7B0"
+          },
+          {
+            "id": "bungalow-cottage-yard-fn38",
+            "x": 9700,
+            "y": 10000,
+            "w": 800,
+            "h": 350,
+            "kind": "bookshelf",
+            "rotation": 90
+          },
+          {
+            "id": "bungalow-cottage-yard-fn39",
+            "x": 9700,
+            "y": 12200,
+            "w": 800,
+            "h": 350,
+            "kind": "bookshelf",
+            "rotation": 90
+          },
+          {
+            "id": "bungalow-cottage-yard-fn40",
+            "x": 7950,
+            "y": 11200,
+            "w": 900,
+            "h": 400,
+            "kind": "cabinet",
+            "rotation": 270
+          },
+          {
+            "id": "bungalow-cottage-yard-fn41",
+            "x": 11325,
+            "y": 9900,
+            "w": 1400,
+            "h": 1900,
+            "kind": "bed"
+          },
+          {
+            "id": "bungalow-cottage-yard-fn42",
+            "x": 10100,
+            "y": 9500,
+            "w": 500,
+            "h": 400,
+            "kind": "nightstand"
+          },
+          {
+            "id": "bungalow-cottage-yard-fn43",
+            "x": 10150,
+            "y": 7600,
+            "w": 1400,
+            "h": 700,
+            "kind": "desk",
+            "rotation": 180
+          },
+          {
+            "id": "bungalow-cottage-yard-fn44",
+            "x": 12500,
+            "y": 8200,
+            "w": 1200,
+            "h": 500,
+            "kind": "dresser",
+            "rotation": 270
+          },
+          {
+            "id": "bungalow-cottage-yard-fn45",
+            "x": 10650,
+            "y": 11700,
+            "w": 1200,
+            "h": 600,
+            "kind": "wardrobe"
+          },
+          {
+            "id": "bungalow-cottage-yard-fn46",
+            "x": 12075,
+            "y": 11700,
+            "w": 800,
+            "h": 350,
+            "kind": "bookshelf",
+            "label": "Storage shelving"
+          },
+          {
+            "id": "bungalow-cottage-yard-fn47",
+            "x": 7200,
+            "y": 11700,
+            "w": 900,
+            "h": 400,
+            "kind": "bench",
+            "rotation": 90
+          },
+          {
+            "id": "bungalow-cottage-yard-fn48",
+            "x": 1500,
+            "y": 1500,
+            "w": 900,
+            "h": 900,
+            "kind": "tree"
+          },
+          {
+            "id": "bungalow-cottage-yard-fn49",
+            "x": 14250,
+            "y": 1500,
+            "w": 900,
+            "h": 900,
+            "kind": "tree"
+          },
+          {
+            "id": "bungalow-cottage-yard-fn50",
+            "x": 13100,
+            "y": 1900,
+            "w": 450,
+            "h": 450,
+            "kind": "bird_bath"
+          },
+          {
+            "id": "bungalow-cottage-yard-fn51",
+            "x": 6950,
+            "y": 2700,
+            "w": 700,
+            "h": 700,
+            "kind": "bush"
+          },
+          {
+            "id": "bungalow-cottage-yard-fn52",
+            "x": 8300,
+            "y": 2700,
+            "w": 700,
+            "h": 700,
+            "kind": "bush"
+          },
+          {
+            "id": "bungalow-cottage-yard-fn53",
+            "x": 7600,
+            "y": 2700,
+            "w": 900,
+            "h": 450,
+            "kind": "flower_bed"
+          },
+          {
+            "id": "bungalow-cottage-yard-fn54",
+            "x": 4200,
+            "y": 2700,
+            "w": 700,
+            "h": 700,
+            "kind": "bush"
+          },
+          {
+            "id": "bungalow-cottage-yard-fn55",
+            "x": 5000,
+            "y": 13800,
+            "w": 700,
+            "h": 1200,
+            "kind": "lawn_chair",
+            "rotation": 180
+          },
+          {
+            "id": "bungalow-cottage-yard-fn56",
+            "x": 6300,
+            "y": 13800,
+            "w": 700,
+            "h": 1200,
+            "kind": "lawn_chair",
+            "rotation": 180
+          },
+          {
+            "id": "bungalow-cottage-yard-fn57",
+            "x": 8100,
+            "y": 13700,
+            "w": 1800,
+            "h": 1500,
+            "kind": "picnic_table"
+          },
+          {
+            "id": "bungalow-cottage-yard-fn58",
+            "x": 13500,
+            "y": 14000,
+            "w": 900,
+            "h": 900,
+            "kind": "tree"
+          },
+          {
+            "id": "bungalow-cottage-yard-fn59",
+            "x": 2000,
+            "y": 13500,
+            "w": 700,
+            "h": 700,
+            "kind": "bush"
+          }
+        ],
+        "lights": [
+          {
+            "id": "bungalow-cottage-yard-lt1",
+            "x": 5850,
+            "y": 5150,
+            "entity_id": null,
+            "iconKind": "bulb",
+            "label": "Living"
+          },
+          {
+            "id": "bungalow-cottage-yard-lt2",
+            "x": 10725,
+            "y": 4300,
+            "entity_id": null,
+            "iconKind": "bulb",
+            "label": "Kitchen"
+          },
+          {
+            "id": "bungalow-cottage-yard-lt3",
+            "x": 10100,
+            "y": 6450,
+            "entity_id": null,
+            "iconKind": "pendant",
+            "label": "Dining Nook"
+          },
+          {
+            "id": "bungalow-cottage-yard-lt4",
+            "x": 12125,
+            "y": 6450,
+            "entity_id": null,
+            "iconKind": "bulb",
+            "label": "Mudroom"
+          },
+          {
+            "id": "bungalow-cottage-yard-lt5",
+            "x": 4800,
+            "y": 9100,
+            "entity_id": null,
+            "iconKind": "bulb",
+            "label": "Primary Bedroom"
+          },
+          {
+            "id": "bungalow-cottage-yard-lt6",
+            "x": 7200,
+            "y": 9900,
+            "entity_id": null,
+            "iconKind": "bulb",
+            "label": "Hallway"
+          },
+          {
+            "id": "bungalow-cottage-yard-lt7",
+            "x": 8850,
+            "y": 8100,
+            "entity_id": null,
+            "iconKind": "sconce",
+            "radius": 500,
+            "label": "Bath vanity"
+          },
+          {
+            "id": "bungalow-cottage-yard-lt8",
+            "x": 8850,
+            "y": 11100,
+            "entity_id": null,
+            "iconKind": "bulb",
+            "label": "Utility"
+          },
+          {
+            "id": "bungalow-cottage-yard-lt9",
+            "x": 11325,
+            "y": 9100,
+            "entity_id": null,
+            "iconKind": "bulb",
+            "label": "Bedroom 2"
+          }
+        ],
+        "switches": [
+          {
+            "id": "bungalow-cottage-yard-sw1",
+            "x": 6300,
+            "y": 3150,
+            "entity_id": null,
+            "rotation": 0,
+            "label": "Living"
+          },
+          {
+            "id": "bungalow-cottage-yard-sw2",
+            "x": 7950,
+            "y": 8100,
+            "entity_id": null,
+            "rotation": 90,
+            "label": "Bath"
+          },
+          {
+            "id": "bungalow-cottage-yard-sw3",
+            "x": 6500,
+            "y": 9600,
+            "entity_id": null,
+            "rotation": 90,
+            "label": "Primary"
+          },
+          {
+            "id": "bungalow-cottage-yard-sw4",
+            "x": 9800,
+            "y": 10300,
+            "entity_id": null,
+            "rotation": 90,
+            "label": "Bedroom 2"
+          }
+        ],
+        "sensors": [],
+        "motionSensors": [],
+        "roamers": [
+          {
+            "id": "bungalow-cottage-yard-ro1",
+            "name": "Rosie",
+            "avatarKinds": [
+              "adult",
+              "athlete"
+            ],
+            "color": "#f06292"
+          },
+          {
+            "id": "bungalow-cottage-yard-ro2",
+            "name": "Pepper",
+            "avatarKinds": [
+              "dog"
+            ],
+            "color": "#8d6e63"
+          }
+        ],
+        "envSensors": [],
+        "look3d": {
+          "floorTex": "wood",
+          "floorColor": "#BE8A55",
+          "wallColor": "#F2E3C9"
+        },
+        "doors": [
+          {
+            "id": "bungalow-cottage-yard-dr1",
+            "x": 5450,
+            "y": 3000,
+            "w": 900,
+            "rotation": 0,
+            "entity_id": null,
+            "lockEntity": null,
+            "doorbellEntity": null,
+            "label": "Front door"
+          },
+          {
+            "id": "bungalow-cottage-yard-dr2",
+            "x": 12750,
+            "y": 6050,
+            "w": 900,
+            "rotation": 90,
+            "entity_id": null,
+            "label": "Back door"
+          },
+          {
+            "id": "bungalow-cottage-yard-dr3",
+            "x": 11500,
+            "y": 6200,
+            "w": 800,
+            "rotation": 90,
+            "entity_id": null,
+            "label": "Mudroom"
+          },
+          {
+            "id": "bungalow-cottage-yard-dr4",
+            "x": 6600,
+            "y": 9600,
+            "w": 800,
+            "rotation": 90,
+            "entity_id": null,
+            "label": "Primary Bedroom"
+          },
+          {
+            "id": "bungalow-cottage-yard-dr5",
+            "x": 6600,
+            "y": 11700,
+            "w": 800,
+            "rotation": 90,
+            "entity_id": null,
+            "label": "Linen Closet"
+          },
+          {
+            "id": "bungalow-cottage-yard-dr6",
+            "x": 4400,
+            "y": 10900,
+            "w": 800,
+            "rotation": 0,
+            "entity_id": null,
+            "label": "Primary Closet"
+          },
+          {
+            "id": "bungalow-cottage-yard-dr7",
+            "x": 7800,
+            "y": 8000,
+            "w": 800,
+            "rotation": 90,
+            "entity_id": null,
+            "label": "Bathroom"
+          },
+          {
+            "id": "bungalow-cottage-yard-dr8",
+            "x": 9900,
+            "y": 10300,
+            "w": 800,
+            "rotation": 90,
+            "entity_id": null,
+            "label": "Bedroom 2"
+          },
+          {
+            "id": "bungalow-cottage-yard-dr9",
+            "x": 10600,
+            "y": 10900,
+            "w": 800,
+            "rotation": 0,
+            "entity_id": null,
+            "label": "BR2 Closet"
+          },
+          {
+            "id": "bungalow-cottage-yard-dr10",
+            "x": 12100,
+            "y": 10900,
+            "w": 800,
+            "rotation": 0,
+            "entity_id": null,
+            "label": "Storage Closet"
+          }
+        ],
+        "windows": [
+          {
+            "id": "bungalow-cottage-yard-win1",
+            "x": 4300,
+            "y": 3000,
+            "w": 800,
+            "rotation": 0,
+            "entity_id": null,
+            "sill": 600,
+            "height": 1400,
+            "label": "Living"
+          },
+          {
+            "id": "bungalow-cottage-yard-win2",
+            "x": 7300,
+            "y": 3000,
+            "w": 800,
+            "rotation": 0,
+            "entity_id": null,
+            "sill": 600,
+            "height": 1400,
+            "label": "Living"
+          },
+          {
+            "id": "bungalow-cottage-yard-win3",
+            "x": 3000,
+            "y": 5050,
+            "w": 900,
+            "rotation": 90,
+            "entity_id": null,
+            "sill": 750,
+            "height": 1200,
+            "kind": "double_hung",
+            "label": "Living side"
+          },
+          {
+            "id": "bungalow-cottage-yard-win4",
+            "x": 10000,
+            "y": 3000,
+            "w": 800,
+            "rotation": 0,
+            "entity_id": null,
+            "sill": 900,
+            "height": 900,
+            "kind": "double_hung",
+            "label": "Kitchen"
+          },
+          {
+            "id": "bungalow-cottage-yard-win5",
+            "x": 12750,
+            "y": 4350,
+            "w": 900,
+            "rotation": 90,
+            "entity_id": null,
+            "sill": 900,
+            "height": 900,
+            "kind": "double_hung",
+            "label": "Kitchen sink"
+          },
+          {
+            "id": "bungalow-cottage-yard-win6",
+            "x": 3000,
+            "y": 8300,
+            "w": 800,
+            "rotation": 90,
+            "entity_id": null,
+            "sill": 750,
+            "height": 1200,
+            "kind": "double_hung",
+            "label": "Primary"
+          },
+          {
+            "id": "bungalow-cottage-yard-win7",
+            "x": 3000,
+            "y": 9900,
+            "w": 800,
+            "rotation": 90,
+            "entity_id": null,
+            "sill": 750,
+            "height": 1200,
+            "kind": "double_hung",
+            "label": "Primary"
+          },
+          {
+            "id": "bungalow-cottage-yard-win8",
+            "x": 12750,
+            "y": 8400,
+            "w": 800,
+            "rotation": 90,
+            "entity_id": null,
+            "sill": 750,
+            "height": 1200,
+            "kind": "double_hung",
+            "label": "Bedroom 2"
+          },
+          {
+            "id": "bungalow-cottage-yard-win9",
+            "x": 12750,
+            "y": 10000,
+            "w": 800,
+            "rotation": 90,
+            "entity_id": null,
+            "sill": 750,
+            "height": 1200,
+            "kind": "double_hung",
+            "label": "Bedroom 2"
+          },
+          {
+            "id": "bungalow-cottage-yard-win10",
+            "x": 8600,
+            "y": 12500,
+            "w": 800,
+            "rotation": 0,
+            "entity_id": null,
+            "sill": 1200,
+            "height": 900,
+            "kind": "double_hung",
+            "label": "Utility"
+          }
+        ],
+        "bg": null,
+        "model3d": null,
+        "rooms": [
+          {
+            "id": "bungalow-cottage-yard-rm1",
+            "name": "Living Room",
+            "anchor": {
+              "x": 5850,
+              "y": 5150
+            }
+          },
+          {
+            "id": "bungalow-cottage-yard-rm2",
+            "name": "Kitchen",
+            "anchor": {
+              "x": 10725,
+              "y": 4300
+            }
+          },
+          {
+            "id": "bungalow-cottage-yard-rm3",
+            "name": "Dining Nook",
+            "anchor": {
+              "x": 10100,
+              "y": 6450
+            }
+          },
+          {
+            "id": "bungalow-cottage-yard-rm4",
+            "name": "Mudroom / Laundry",
+            "anchor": {
+              "x": 12125,
+              "y": 6450
+            }
+          },
+          {
+            "id": "bungalow-cottage-yard-rm5",
+            "name": "Primary Bedroom",
+            "anchor": {
+              "x": 4800,
+              "y": 9100
+            }
+          },
+          {
+            "id": "bungalow-cottage-yard-rm6",
+            "name": "Primary Closet",
+            "anchor": {
+              "x": 3900,
+              "y": 11700
+            }
+          },
+          {
+            "id": "bungalow-cottage-yard-rm7",
+            "name": "Linen Closet",
+            "anchor": {
+              "x": 5700,
+              "y": 11700
+            }
+          },
+          {
+            "id": "bungalow-cottage-yard-rm8",
+            "name": "Hallway",
+            "anchor": {
+              "x": 7200,
+              "y": 9900
+            }
+          },
+          {
+            "id": "bungalow-cottage-yard-rm9",
+            "name": "Bathroom",
+            "anchor": {
+              "x": 8850,
+              "y": 8500
+            }
+          },
+          {
+            "id": "bungalow-cottage-yard-rm10",
+            "name": "Utility / Storage",
+            "anchor": {
+              "x": 8850,
+              "y": 11100
+            }
+          },
+          {
+            "id": "bungalow-cottage-yard-rm11",
+            "name": "Bedroom 2",
+            "anchor": {
+              "x": 11325,
+              "y": 9100
+            }
+          },
+          {
+            "id": "bungalow-cottage-yard-rm12",
+            "name": "Bedroom 2 Closet",
+            "anchor": {
+              "x": 10650,
+              "y": 11700
+            }
+          },
+          {
+            "id": "bungalow-cottage-yard-rm13",
+            "name": "Storage Closet",
+            "anchor": {
+              "x": 12075,
+              "y": 11700
+            }
+          }
+        ],
+        "bleProxies": [],
+        "alarmPanels": [],
+        "safetySensors": [],
+        "robots": [],
+        "presenceZones": [],
+        "cameras": [],
+        "groundAreas": [
+          {
+            "id": "bungalow-cottage-yard-ga1",
+            "kind": "grass",
+            "points": [
+              {
+                "x": 0,
+                "y": 0
+              },
+              {
+                "x": 15750,
+                "y": 0
+              },
+              {
+                "x": 15750,
+                "y": 3000
+              },
+              {
+                "x": 0,
+                "y": 3000
+              }
+            ]
+          },
+          {
+            "id": "bungalow-cottage-yard-ga2",
+            "kind": "grass",
+            "points": [
+              {
+                "x": 0,
+                "y": 12500
+              },
+              {
+                "x": 15750,
+                "y": 12500
+              },
+              {
+                "x": 15750,
+                "y": 15500
+              },
+              {
+                "x": 0,
+                "y": 15500
+              }
+            ]
+          },
+          {
+            "id": "bungalow-cottage-yard-ga3",
+            "kind": "grass",
+            "points": [
+              {
+                "x": 0,
+                "y": 3000
+              },
+              {
+                "x": 3000,
+                "y": 3000
+              },
+              {
+                "x": 3000,
+                "y": 12500
+              },
+              {
+                "x": 0,
+                "y": 12500
+              }
+            ]
+          },
+          {
+            "id": "bungalow-cottage-yard-ga4",
+            "kind": "grass",
+            "points": [
+              {
+                "x": 12750,
+                "y": 3000
+              },
+              {
+                "x": 15750,
+                "y": 3000
+              },
+              {
+                "x": 15750,
+                "y": 12500
+              },
+              {
+                "x": 12750,
+                "y": 12500
+              }
+            ]
+          },
+          {
+            "id": "bungalow-cottage-yard-ga5",
+            "kind": "concrete",
+            "points": [
+              {
+                "x": 5400,
+                "y": 0
+              },
+              {
+                "x": 6400,
+                "y": 0
+              },
+              {
+                "x": 6400,
+                "y": 3000
+              },
+              {
+                "x": 5400,
+                "y": 3000
+              }
+            ]
+          },
+          {
+            "id": "bungalow-cottage-yard-ga6",
+            "kind": "mulch",
+            "points": [
+              {
+                "x": 6600,
+                "y": 2450
+              },
+              {
+                "x": 9500,
+                "y": 2450
+              },
+              {
+                "x": 9500,
+                "y": 3000
+              },
+              {
+                "x": 6600,
+                "y": 3000
+              }
+            ]
+          }
+        ],
+        "voidAreas": []
+      }
+    ],
+    "currentFloorId": "bungalow-cottage-yard-fl1",
+    "activeSensorId": null,
+    "coverage": true,
+    "imperial": false,
+    "showDetails": false,
+    "useRawTargets": false,
+    "showMotionZones": true,
+    "scene3d": {
+      "preset": "day",
+      "floorTex": "wood",
+      "floorColor": "#BE8A55",
+      "wallColor": "#F2E3C9",
+      "wallCutaway": true,
+      "plumbobs": true
+    },
+    "customObjects": [],
+    "people": [],
+    "bleShowUnknown": true,
+    "notes": "~997 sq ft (92.6 m²) interior · 1 floor · 13 rooms + landscaped yard\n\nThe Small 2-Bed Bungalow re-skinned as a cozy cottage and set on its own lot.\nThe house itself is identical — front living room, galley kitchen open to an\ninterior breakfast nook and back mudroom, and a two-bedroom private wing off a\ncentral hallway — but dressed in a warmer palette (deeper honey-oak floors, warm\ncream walls) and surrounded on all four sides by a 3-metre yard. A grass lawn\nwraps the house; a concrete front walk runs from the front door out to the\nstreet; a mulch foundation bed lines the front wall with bushes and a flower bed;\ntrees anchor the corners, a bird bath sits in the front lawn, and the back yard\nhas two lawn chairs and a picnic table for outdoor dining.\n\nInterior (unchanged from the base bungalow):\nLiving Room: sofa + TV wall, armchair, coffee table, bookshelf, seating rug, plant.\nKitchen: galley run (sink, dishwasher, fridge, stove + microwave, counter, cabinets).\nDining Nook: interior 4-seat breakfast table with bench.\nMudroom / Laundry: washer + dryer, boot bench.\nPrimary Bedroom: queen bed, nightstands, dresser, reading chair; own closet.\nBathroom: toilet, vanity, tub. Utility / Storage: shelving + walk-through to Bedroom 2.\nBedroom 2: full bed, nightstand, desk, dresser; reach-in + storage closets.\n\nYard:\n  • Grass lawn wrapping the house on all four sides.\n  • Concrete front walk from the front door to the street.\n  • Mulch foundation bed along the front wall with two bushes and a flower bed;\n    a fourth bush west of the walk.\n  • Two shade trees at the front corners, one at the back; a front-lawn bird bath.\n  • Back-yard picnic table with two lawn chairs for outdoor dining."
+  }
+}

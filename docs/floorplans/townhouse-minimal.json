@@ -1,0 +1,1378 @@
+{
+  "diorama": 2,
+  "name": "Townhouse — Minimalist",
+  "exportedAt": "2026-07-17T00:00:00.000Z",
+  "store": {
+    "v": 2,
+    "floors": [
+      {
+        "id": "townhouse-minimal-fl1",
+        "name": "Ground",
+        "w": 6000,
+        "d": 11000,
+        "walls": [
+          {
+            "id": "townhouse-minimal-w1",
+            "points": [
+              {
+                "x": 0,
+                "y": 0
+              },
+              {
+                "x": 6000,
+                "y": 0
+              },
+              {
+                "x": 6000,
+                "y": 11000
+              },
+              {
+                "x": 0,
+                "y": 11000
+              },
+              {
+                "x": 0,
+                "y": 0
+              }
+            ]
+          },
+          {
+            "id": "townhouse-minimal-w2",
+            "points": [
+              {
+                "x": 3600,
+                "y": 0
+              },
+              {
+                "x": 3600,
+                "y": 6600
+              }
+            ]
+          },
+          {
+            "id": "townhouse-minimal-w3",
+            "points": [
+              {
+                "x": 4500,
+                "y": 1800
+              },
+              {
+                "x": 4500,
+                "y": 6300
+              }
+            ]
+          },
+          {
+            "id": "townhouse-minimal-w4",
+            "points": [
+              {
+                "x": 4500,
+                "y": 1800
+              },
+              {
+                "x": 6000,
+                "y": 1800
+              }
+            ]
+          },
+          {
+            "id": "townhouse-minimal-w5",
+            "points": [
+              {
+                "x": 4500,
+                "y": 3300
+              },
+              {
+                "x": 6000,
+                "y": 3300
+              }
+            ]
+          },
+          {
+            "id": "townhouse-minimal-w6",
+            "points": [
+              {
+                "x": 0,
+                "y": 6600
+              },
+              {
+                "x": 6000,
+                "y": 6600
+              }
+            ]
+          }
+        ],
+        "furniture": [
+          {
+            "id": "townhouse-minimal-fn1",
+            "x": 5250,
+            "y": 4800,
+            "w": 1500,
+            "h": 3000,
+            "kind": "stairs",
+            "stairLinkId": "th-l1l2"
+          },
+          {
+            "id": "townhouse-minimal-fn5",
+            "x": 5850,
+            "y": 900,
+            "w": 1500,
+            "h": 400,
+            "kind": "bench",
+            "rotation": 270
+          },
+          {
+            "id": "townhouse-minimal-fn6",
+            "x": 600,
+            "y": 6100,
+            "w": 900,
+            "h": 400,
+            "kind": "cabinet",
+            "rotation": 180,
+            "label": "Storage"
+          },
+          {
+            "id": "townhouse-minimal-fn7",
+            "x": 1400,
+            "y": 10400,
+            "w": 500,
+            "h": 500,
+            "kind": "chair",
+            "rotation": 180,
+            "label": "Reading chair"
+          },
+          {
+            "id": "townhouse-minimal-fn8",
+            "x": 1400,
+            "y": 9700,
+            "w": 700,
+            "h": 700,
+            "kind": "ottoman"
+          },
+          {
+            "id": "townhouse-minimal-fn9",
+            "x": 300,
+            "y": 10700,
+            "w": 800,
+            "h": 350,
+            "kind": "bookshelf",
+            "rotation": 90
+          },
+          {
+            "id": "townhouse-minimal-fn10",
+            "x": 5500,
+            "y": 10500,
+            "w": 400,
+            "h": 400,
+            "kind": "plant"
+          },
+          {
+            "id": "townhouse-minimal-fn11",
+            "x": 3000,
+            "y": 9500,
+            "w": 2400,
+            "h": 2000,
+            "kind": "rug"
+          }
+        ],
+        "lights": [
+          {
+            "id": "townhouse-minimal-lt1",
+            "x": 1800,
+            "y": 3300,
+            "entity_id": null,
+            "iconKind": "strip",
+            "rotation": 0,
+            "length": 2600,
+            "label": "Garage"
+          },
+          {
+            "id": "townhouse-minimal-lt2",
+            "x": 4800,
+            "y": 900,
+            "entity_id": null,
+            "iconKind": "bulb",
+            "label": "Entry"
+          },
+          {
+            "id": "townhouse-minimal-lt3",
+            "x": 3000,
+            "y": 9000,
+            "entity_id": null,
+            "iconKind": "pendant",
+            "label": "Flex"
+          }
+        ],
+        "switches": [
+          {
+            "id": "townhouse-minimal-sw1",
+            "x": 4400,
+            "y": 300,
+            "entity_id": null,
+            "rotation": 90,
+            "label": "Entry"
+          }
+        ],
+        "sensors": [],
+        "motionSensors": [],
+        "roamers": [],
+        "envSensors": [],
+        "look3d": {
+          "floorTex": "wood",
+          "floorColor": "#e8dcc2",
+          "wallColor": "#F4F1EA"
+        },
+        "doors": [
+          {
+            "id": "townhouse-minimal-dr1",
+            "x": 650,
+            "y": 0,
+            "w": 2400,
+            "rotation": 0,
+            "entity_id": null,
+            "kind": "garage",
+            "label": "Garage"
+          },
+          {
+            "id": "townhouse-minimal-dr2",
+            "x": 4600,
+            "y": 0,
+            "w": 800,
+            "rotation": 0,
+            "entity_id": null,
+            "lockEntity": null,
+            "doorbellEntity": null,
+            "label": "Entry"
+          },
+          {
+            "id": "townhouse-minimal-dr3",
+            "x": 4500,
+            "y": 3100,
+            "w": 800,
+            "rotation": 270,
+            "entity_id": null,
+            "label": "Half Bath"
+          },
+          {
+            "id": "townhouse-minimal-dr4",
+            "x": 3600,
+            "y": 6600,
+            "w": 900,
+            "rotation": 0,
+            "entity_id": null,
+            "label": "Flex archway",
+            "localState": "off"
+          },
+          {
+            "id": "townhouse-minimal-dr5",
+            "x": 2550,
+            "y": 11000,
+            "w": 900,
+            "rotation": 0,
+            "entity_id": null,
+            "label": "Backyard"
+          }
+        ],
+        "windows": [
+          {
+            "id": "townhouse-minimal-win1",
+            "x": 1600,
+            "y": 11000,
+            "w": 1200,
+            "rotation": 0,
+            "entity_id": null,
+            "sill": 900,
+            "height": 1200,
+            "label": "Flex"
+          },
+          {
+            "id": "townhouse-minimal-win2",
+            "x": 4400,
+            "y": 11000,
+            "w": 1200,
+            "rotation": 0,
+            "entity_id": null,
+            "sill": 900,
+            "height": 1200,
+            "label": "Flex"
+          }
+        ],
+        "bg": null,
+        "model3d": null,
+        "rooms": [
+          {
+            "id": "townhouse-minimal-rm1",
+            "name": "Garage",
+            "anchor": {
+              "x": 1800,
+              "y": 3300
+            }
+          },
+          {
+            "id": "townhouse-minimal-rm2",
+            "name": "Entry / Foyer",
+            "anchor": {
+              "x": 5000,
+              "y": 900
+            }
+          },
+          {
+            "id": "townhouse-minimal-rm3",
+            "name": "Half Bath",
+            "anchor": {
+              "x": 5250,
+              "y": 2550
+            }
+          },
+          {
+            "id": "townhouse-minimal-rm4",
+            "name": "Hallway",
+            "anchor": {
+              "x": 4050,
+              "y": 4800
+            }
+          },
+          {
+            "id": "townhouse-minimal-rm5",
+            "name": "Stairwell",
+            "anchor": {
+              "x": 5250,
+              "y": 4800
+            }
+          },
+          {
+            "id": "townhouse-minimal-rm6",
+            "name": "Flex Room / Office",
+            "anchor": {
+              "x": 3000,
+              "y": 8800
+            }
+          }
+        ],
+        "bleProxies": [],
+        "alarmPanels": [],
+        "safetySensors": [],
+        "robots": [],
+        "presenceZones": [],
+        "cameras": [],
+        "groundAreas": [],
+        "voidAreas": []
+      },
+      {
+        "id": "townhouse-minimal-fl2",
+        "name": "Middle",
+        "w": 6000,
+        "d": 11000,
+        "walls": [
+          {
+            "id": "townhouse-minimal-w7",
+            "points": [
+              {
+                "x": 0,
+                "y": 0
+              },
+              {
+                "x": 6000,
+                "y": 0
+              },
+              {
+                "x": 6000,
+                "y": 11000
+              },
+              {
+                "x": 0,
+                "y": 11000
+              },
+              {
+                "x": 0,
+                "y": 0
+              }
+            ]
+          },
+          {
+            "id": "townhouse-minimal-w8",
+            "points": [
+              {
+                "x": 4500,
+                "y": 0
+              },
+              {
+                "x": 4500,
+                "y": 3300
+              }
+            ]
+          },
+          {
+            "id": "townhouse-minimal-w9",
+            "points": [
+              {
+                "x": 4500,
+                "y": 1500
+              },
+              {
+                "x": 6000,
+                "y": 1500
+              }
+            ]
+          },
+          {
+            "id": "townhouse-minimal-w10",
+            "points": [
+              {
+                "x": 4500,
+                "y": 3300
+              },
+              {
+                "x": 6000,
+                "y": 3300
+              }
+            ]
+          },
+          {
+            "id": "townhouse-minimal-w11",
+            "points": [
+              {
+                "x": 4500,
+                "y": 3300
+              },
+              {
+                "x": 4500,
+                "y": 6300
+              }
+            ],
+            "kind": "railing"
+          },
+          {
+            "id": "townhouse-minimal-w12",
+            "points": [
+              {
+                "x": 4500,
+                "y": 6300
+              },
+              {
+                "x": 6000,
+                "y": 6300
+              }
+            ]
+          }
+        ],
+        "furniture": [
+          {
+            "id": "townhouse-minimal-fn2",
+            "x": 5250,
+            "y": 5550,
+            "w": 1500,
+            "h": 1500,
+            "kind": "stairs",
+            "stairLinkId": "th-l1l2"
+          },
+          {
+            "id": "townhouse-minimal-fn3",
+            "x": 5250,
+            "y": 4050,
+            "w": 1500,
+            "h": 1500,
+            "kind": "stairs",
+            "rotation": 180,
+            "stairLinkId": "th-l2l3"
+          },
+          {
+            "id": "townhouse-minimal-fn12",
+            "x": 2200,
+            "y": 700,
+            "w": 2400,
+            "h": 900,
+            "kind": "sofa"
+          },
+          {
+            "id": "townhouse-minimal-fn13",
+            "x": 2200,
+            "y": 1700,
+            "w": 1100,
+            "h": 600,
+            "kind": "coffee_table"
+          },
+          {
+            "id": "townhouse-minimal-fn14",
+            "x": 2400,
+            "y": 1500,
+            "w": 3000,
+            "h": 2200,
+            "kind": "rug"
+          },
+          {
+            "id": "townhouse-minimal-fn15",
+            "x": 4200,
+            "y": 5800,
+            "w": 400,
+            "h": 400,
+            "kind": "plant"
+          },
+          {
+            "id": "townhouse-minimal-fn16",
+            "x": 5750,
+            "y": 750,
+            "w": 480,
+            "h": 700,
+            "kind": "toilet",
+            "rotation": 270
+          },
+          {
+            "id": "townhouse-minimal-fn17",
+            "x": 4650,
+            "y": 750,
+            "w": 560,
+            "h": 470,
+            "kind": "sink",
+            "rotation": 90
+          },
+          {
+            "id": "townhouse-minimal-fn18",
+            "x": 3000,
+            "y": 7300,
+            "w": 1400,
+            "h": 900,
+            "kind": "table",
+            "label": "Dining table"
+          },
+          {
+            "id": "townhouse-minimal-fn19",
+            "x": 2400,
+            "y": 7300,
+            "w": 500,
+            "h": 500,
+            "kind": "chair",
+            "rotation": 270
+          },
+          {
+            "id": "townhouse-minimal-fn20",
+            "x": 3600,
+            "y": 7300,
+            "w": 500,
+            "h": 500,
+            "kind": "chair",
+            "rotation": 90
+          },
+          {
+            "id": "townhouse-minimal-fn21",
+            "x": 3000,
+            "y": 6800,
+            "w": 500,
+            "h": 500,
+            "kind": "chair"
+          },
+          {
+            "id": "townhouse-minimal-fn22",
+            "x": 3000,
+            "y": 7800,
+            "w": 500,
+            "h": 500,
+            "kind": "chair",
+            "rotation": 180
+          },
+          {
+            "id": "townhouse-minimal-fn23",
+            "x": 900,
+            "y": 10700,
+            "w": 760,
+            "h": 660,
+            "kind": "stove",
+            "rotation": 180
+          },
+          {
+            "id": "townhouse-minimal-fn24",
+            "x": 2200,
+            "y": 10700,
+            "w": 900,
+            "h": 650,
+            "kind": "kitchen_sink",
+            "rotation": 180
+          },
+          {
+            "id": "townhouse-minimal-fn25",
+            "x": 1500,
+            "y": 10700,
+            "w": 2400,
+            "h": 600,
+            "kind": "counter",
+            "rotation": 180
+          },
+          {
+            "id": "townhouse-minimal-fn26",
+            "x": 5700,
+            "y": 10300,
+            "w": 910,
+            "h": 760,
+            "kind": "fridge",
+            "rotation": 270
+          }
+        ],
+        "lights": [
+          {
+            "id": "townhouse-minimal-lt4",
+            "x": 2200,
+            "y": 1600,
+            "entity_id": null,
+            "iconKind": "bulb",
+            "label": "Living"
+          },
+          {
+            "id": "townhouse-minimal-lt5",
+            "x": 3000,
+            "y": 7300,
+            "entity_id": null,
+            "iconKind": "pendant",
+            "label": "Dining"
+          },
+          {
+            "id": "townhouse-minimal-lt6",
+            "x": 2000,
+            "y": 9800,
+            "entity_id": null,
+            "iconKind": "round",
+            "label": "Kitchen"
+          }
+        ],
+        "switches": [
+          {
+            "id": "townhouse-minimal-sw2",
+            "x": 4300,
+            "y": 300,
+            "entity_id": null,
+            "rotation": 90,
+            "label": "Living"
+          }
+        ],
+        "sensors": [],
+        "motionSensors": [],
+        "roamers": [
+          {
+            "id": "townhouse-minimal-ro1",
+            "name": "Freya",
+            "avatarKinds": [
+              "adult",
+              "professional"
+            ],
+            "color": "#90a4ae"
+          }
+        ],
+        "envSensors": [],
+        "look3d": {
+          "floorTex": "wood",
+          "floorColor": "#e8dcc2",
+          "wallColor": "#F4F1EA"
+        },
+        "doors": [
+          {
+            "id": "townhouse-minimal-dr6",
+            "x": 4500,
+            "y": 1200,
+            "w": 800,
+            "rotation": 270,
+            "entity_id": null,
+            "label": "Half Bath"
+          },
+          {
+            "id": "townhouse-minimal-dr7",
+            "x": 4900,
+            "y": 3300,
+            "w": 800,
+            "rotation": 0,
+            "entity_id": null,
+            "label": "Stair door"
+          },
+          {
+            "id": "townhouse-minimal-dr8",
+            "x": 4900,
+            "y": 6300,
+            "w": 800,
+            "rotation": 0,
+            "entity_id": null,
+            "label": "Stair exit"
+          },
+          {
+            "id": "townhouse-minimal-dr9",
+            "x": 2250,
+            "y": 11000,
+            "w": 1500,
+            "rotation": 0,
+            "entity_id": null,
+            "label": "Balcony"
+          }
+        ],
+        "windows": [
+          {
+            "id": "townhouse-minimal-win3",
+            "x": 1300,
+            "y": 0,
+            "w": 1200,
+            "rotation": 0,
+            "entity_id": null,
+            "sill": 900,
+            "height": 1200,
+            "label": "Living"
+          },
+          {
+            "id": "townhouse-minimal-win4",
+            "x": 3200,
+            "y": 0,
+            "w": 1200,
+            "rotation": 0,
+            "entity_id": null,
+            "sill": 900,
+            "height": 1200,
+            "label": "Living"
+          },
+          {
+            "id": "townhouse-minimal-win5",
+            "x": 4800,
+            "y": 11000,
+            "w": 1200,
+            "rotation": 0,
+            "entity_id": null,
+            "sill": 900,
+            "height": 1200,
+            "label": "Kitchen"
+          }
+        ],
+        "bg": null,
+        "model3d": null,
+        "rooms": [
+          {
+            "id": "townhouse-minimal-rm7",
+            "name": "Living Room",
+            "anchor": {
+              "x": 2200,
+              "y": 3000
+            }
+          },
+          {
+            "id": "townhouse-minimal-rm8",
+            "name": "Half Bath",
+            "anchor": {
+              "x": 5250,
+              "y": 750
+            }
+          },
+          {
+            "id": "townhouse-minimal-rm9",
+            "name": "Stair Landing",
+            "anchor": {
+              "x": 5250,
+              "y": 2400
+            }
+          },
+          {
+            "id": "townhouse-minimal-rm10",
+            "name": "Stairwell",
+            "anchor": {
+              "x": 5250,
+              "y": 4800
+            }
+          },
+          {
+            "id": "townhouse-minimal-rm11",
+            "name": "Dining Room",
+            "anchor": {
+              "x": 3000,
+              "y": 7300
+            }
+          },
+          {
+            "id": "townhouse-minimal-rm12",
+            "name": "Kitchen",
+            "anchor": {
+              "x": 3000,
+              "y": 9600
+            }
+          }
+        ],
+        "bleProxies": [],
+        "alarmPanels": [],
+        "safetySensors": [],
+        "robots": [],
+        "presenceZones": [],
+        "cameras": [],
+        "groundAreas": [],
+        "voidAreas": []
+      },
+      {
+        "id": "townhouse-minimal-fl3",
+        "name": "Top",
+        "w": 6000,
+        "d": 11000,
+        "walls": [
+          {
+            "id": "townhouse-minimal-w13",
+            "points": [
+              {
+                "x": 0,
+                "y": 0
+              },
+              {
+                "x": 6000,
+                "y": 0
+              },
+              {
+                "x": 6000,
+                "y": 11000
+              },
+              {
+                "x": 0,
+                "y": 11000
+              },
+              {
+                "x": 0,
+                "y": 0
+              }
+            ]
+          },
+          {
+            "id": "townhouse-minimal-w14",
+            "points": [
+              {
+                "x": 3900,
+                "y": 0
+              },
+              {
+                "x": 3900,
+                "y": 3300
+              }
+            ]
+          },
+          {
+            "id": "townhouse-minimal-w15",
+            "points": [
+              {
+                "x": 3900,
+                "y": 1800
+              },
+              {
+                "x": 6000,
+                "y": 1800
+              }
+            ]
+          },
+          {
+            "id": "townhouse-minimal-w16",
+            "points": [
+              {
+                "x": 0,
+                "y": 3300
+              },
+              {
+                "x": 6000,
+                "y": 3300
+              }
+            ]
+          },
+          {
+            "id": "townhouse-minimal-w17",
+            "points": [
+              {
+                "x": 1800,
+                "y": 3300
+              },
+              {
+                "x": 1800,
+                "y": 6300
+              }
+            ]
+          },
+          {
+            "id": "townhouse-minimal-w18",
+            "points": [
+              {
+                "x": 0,
+                "y": 5100
+              },
+              {
+                "x": 1800,
+                "y": 5100
+              }
+            ]
+          },
+          {
+            "id": "townhouse-minimal-w19",
+            "points": [
+              {
+                "x": 4500,
+                "y": 3300
+              },
+              {
+                "x": 4500,
+                "y": 6300
+              }
+            ],
+            "kind": "railing"
+          },
+          {
+            "id": "townhouse-minimal-w20",
+            "points": [
+              {
+                "x": 4500,
+                "y": 6300
+              },
+              {
+                "x": 6000,
+                "y": 6300
+              }
+            ],
+            "kind": "railing"
+          },
+          {
+            "id": "townhouse-minimal-w21",
+            "points": [
+              {
+                "x": 0,
+                "y": 6300
+              },
+              {
+                "x": 6000,
+                "y": 6300
+              }
+            ]
+          },
+          {
+            "id": "townhouse-minimal-w22",
+            "points": [
+              {
+                "x": 4200,
+                "y": 6300
+              },
+              {
+                "x": 4200,
+                "y": 11000
+              }
+            ]
+          },
+          {
+            "id": "townhouse-minimal-w23",
+            "points": [
+              {
+                "x": 4200,
+                "y": 8300
+              },
+              {
+                "x": 6000,
+                "y": 8300
+              }
+            ]
+          }
+        ],
+        "furniture": [
+          {
+            "id": "townhouse-minimal-fn4",
+            "x": 5250,
+            "y": 4800,
+            "w": 1500,
+            "h": 3000,
+            "kind": "stairs",
+            "stairLinkId": "th-l2l3"
+          },
+          {
+            "id": "townhouse-minimal-fn27",
+            "x": 1200,
+            "y": 900,
+            "w": 1400,
+            "h": 2000,
+            "kind": "bed"
+          },
+          {
+            "id": "townhouse-minimal-fn28",
+            "x": 350,
+            "y": 300,
+            "w": 500,
+            "h": 400,
+            "kind": "nightstand"
+          },
+          {
+            "id": "townhouse-minimal-fn29",
+            "x": 1200,
+            "y": 1500,
+            "w": 1800,
+            "h": 1600,
+            "kind": "rug"
+          },
+          {
+            "id": "townhouse-minimal-fn30",
+            "x": 4650,
+            "y": 300,
+            "w": 560,
+            "h": 470,
+            "kind": "sink"
+          },
+          {
+            "id": "townhouse-minimal-fn31",
+            "x": 4100,
+            "y": 1400,
+            "w": 480,
+            "h": 700,
+            "kind": "toilet",
+            "rotation": 90
+          },
+          {
+            "id": "townhouse-minimal-fn32",
+            "x": 300,
+            "y": 3700,
+            "w": 690,
+            "h": 700,
+            "kind": "washer",
+            "rotation": 90
+          },
+          {
+            "id": "townhouse-minimal-fn33",
+            "x": 300,
+            "y": 4700,
+            "w": 690,
+            "h": 700,
+            "kind": "dryer",
+            "rotation": 90
+          },
+          {
+            "id": "townhouse-minimal-fn34",
+            "x": 2100,
+            "y": 10400,
+            "w": 1900,
+            "h": 2100,
+            "kind": "bed",
+            "rotation": 180
+          },
+          {
+            "id": "townhouse-minimal-fn35",
+            "x": 900,
+            "y": 10400,
+            "w": 500,
+            "h": 400,
+            "kind": "nightstand",
+            "rotation": 180
+          },
+          {
+            "id": "townhouse-minimal-fn36",
+            "x": 3300,
+            "y": 10400,
+            "w": 500,
+            "h": 400,
+            "kind": "nightstand",
+            "rotation": 180
+          },
+          {
+            "id": "townhouse-minimal-fn37",
+            "x": 2100,
+            "y": 9800,
+            "w": 2400,
+            "h": 2200,
+            "kind": "rug"
+          },
+          {
+            "id": "townhouse-minimal-fn38",
+            "x": 5000,
+            "y": 7200,
+            "w": 1200,
+            "h": 600,
+            "kind": "wardrobe",
+            "rotation": 270
+          },
+          {
+            "id": "townhouse-minimal-fn39",
+            "x": 4500,
+            "y": 8600,
+            "w": 1200,
+            "h": 550,
+            "kind": "sink_vanity",
+            "rotation": 90
+          },
+          {
+            "id": "townhouse-minimal-fn40",
+            "x": 5550,
+            "y": 10700,
+            "w": 910,
+            "h": 910,
+            "kind": "shower",
+            "rotation": 180
+          }
+        ],
+        "lights": [
+          {
+            "id": "townhouse-minimal-lt7",
+            "x": 1950,
+            "y": 1650,
+            "entity_id": null,
+            "iconKind": "bulb",
+            "label": "Secondary Bedroom"
+          },
+          {
+            "id": "townhouse-minimal-lt8",
+            "x": 2100,
+            "y": 8650,
+            "entity_id": null,
+            "iconKind": "bulb",
+            "label": "Primary"
+          },
+          {
+            "id": "townhouse-minimal-lt9",
+            "x": 4700,
+            "y": 9600,
+            "entity_id": null,
+            "iconKind": "sconce",
+            "radius": 450,
+            "label": "Ensuite"
+          }
+        ],
+        "switches": [
+          {
+            "id": "townhouse-minimal-sw3",
+            "x": 1500,
+            "y": 3500,
+            "entity_id": null,
+            "rotation": 0,
+            "label": "Bedroom"
+          }
+        ],
+        "sensors": [],
+        "motionSensors": [],
+        "roamers": [
+          {
+            "id": "townhouse-minimal-ro2",
+            "name": "Nisse",
+            "avatarKinds": [
+              "cat"
+            ],
+            "color": "#bcaaa4"
+          }
+        ],
+        "envSensors": [],
+        "look3d": {
+          "floorTex": "wood",
+          "floorColor": "#e8dcc2",
+          "wallColor": "#F4F1EA"
+        },
+        "doors": [
+          {
+            "id": "townhouse-minimal-dr10",
+            "x": 1500,
+            "y": 3300,
+            "w": 800,
+            "rotation": 0,
+            "entity_id": null,
+            "label": "Secondary Bedroom"
+          },
+          {
+            "id": "townhouse-minimal-dr11",
+            "x": 4100,
+            "y": 3300,
+            "w": 800,
+            "rotation": 0,
+            "entity_id": null,
+            "label": "Hall passage"
+          },
+          {
+            "id": "townhouse-minimal-dr12",
+            "x": 3900,
+            "y": 1100,
+            "w": 800,
+            "rotation": 270,
+            "entity_id": null,
+            "label": "Hall Bath"
+          },
+          {
+            "id": "townhouse-minimal-dr13",
+            "x": 1800,
+            "y": 4400,
+            "w": 800,
+            "rotation": 270,
+            "entity_id": null,
+            "label": "Laundry"
+          },
+          {
+            "id": "townhouse-minimal-dr14",
+            "x": 1650,
+            "y": 6300,
+            "w": 900,
+            "rotation": 0,
+            "entity_id": null,
+            "label": "Primary Suite"
+          },
+          {
+            "id": "townhouse-minimal-dr15",
+            "x": 4200,
+            "y": 7900,
+            "w": 800,
+            "rotation": 270,
+            "entity_id": null,
+            "label": "Closet"
+          },
+          {
+            "id": "townhouse-minimal-dr16",
+            "x": 4200,
+            "y": 10100,
+            "w": 800,
+            "rotation": 270,
+            "entity_id": null,
+            "label": "Ensuite"
+          }
+        ],
+        "windows": [
+          {
+            "id": "townhouse-minimal-win6",
+            "x": 1950,
+            "y": 0,
+            "w": 1200,
+            "rotation": 0,
+            "entity_id": null,
+            "sill": 900,
+            "height": 1200,
+            "label": "Secondary Bedroom"
+          },
+          {
+            "id": "townhouse-minimal-win7",
+            "x": 5150,
+            "y": 0,
+            "w": 1000,
+            "rotation": 0,
+            "entity_id": null,
+            "sill": 1200,
+            "height": 900,
+            "label": "Hall Bath"
+          },
+          {
+            "id": "townhouse-minimal-win8",
+            "x": 1100,
+            "y": 11000,
+            "w": 1200,
+            "rotation": 0,
+            "entity_id": null,
+            "sill": 900,
+            "height": 1200,
+            "label": "Primary"
+          },
+          {
+            "id": "townhouse-minimal-win9",
+            "x": 3000,
+            "y": 11000,
+            "w": 1200,
+            "rotation": 0,
+            "entity_id": null,
+            "sill": 900,
+            "height": 1200,
+            "label": "Primary"
+          },
+          {
+            "id": "townhouse-minimal-win10",
+            "x": 5200,
+            "y": 11000,
+            "w": 900,
+            "rotation": 0,
+            "entity_id": null,
+            "sill": 1400,
+            "height": 900,
+            "label": "Ensuite"
+          }
+        ],
+        "bg": null,
+        "model3d": null,
+        "rooms": [
+          {
+            "id": "townhouse-minimal-rm13",
+            "name": "Secondary Bedroom",
+            "anchor": {
+              "x": 1950,
+              "y": 1650
+            }
+          },
+          {
+            "id": "townhouse-minimal-rm14",
+            "name": "Hall Bath",
+            "anchor": {
+              "x": 4900,
+              "y": 900
+            }
+          },
+          {
+            "id": "townhouse-minimal-rm15",
+            "name": "Stair Landing",
+            "anchor": {
+              "x": 4900,
+              "y": 2550
+            }
+          },
+          {
+            "id": "townhouse-minimal-rm16",
+            "name": "Laundry Closet",
+            "anchor": {
+              "x": 900,
+              "y": 4200
+            }
+          },
+          {
+            "id": "townhouse-minimal-rm17",
+            "name": "Upstairs Hallway",
+            "anchor": {
+              "x": 3000,
+              "y": 4800
+            }
+          },
+          {
+            "id": "townhouse-minimal-rm18",
+            "name": "Stairwell",
+            "anchor": {
+              "x": 5250,
+              "y": 4800
+            }
+          },
+          {
+            "id": "townhouse-minimal-rm19",
+            "name": "Primary Bedroom",
+            "anchor": {
+              "x": 2100,
+              "y": 8600
+            }
+          },
+          {
+            "id": "townhouse-minimal-rm20",
+            "name": "Primary Walk-in Closet",
+            "anchor": {
+              "x": 5100,
+              "y": 7300
+            }
+          },
+          {
+            "id": "townhouse-minimal-rm21",
+            "name": "Primary Ensuite",
+            "anchor": {
+              "x": 5100,
+              "y": 9600
+            }
+          }
+        ],
+        "bleProxies": [],
+        "alarmPanels": [],
+        "safetySensors": [],
+        "robots": [],
+        "presenceZones": [],
+        "cameras": [],
+        "groundAreas": [],
+        "voidAreas": []
+      }
+    ],
+    "currentFloorId": "townhouse-minimal-fl1",
+    "activeSensorId": null,
+    "coverage": true,
+    "imperial": false,
+    "showDetails": false,
+    "useRawTargets": false,
+    "showMotionZones": true,
+    "scene3d": {
+      "preset": "day",
+      "floorTex": "wood",
+      "floorColor": "#e8dcc2",
+      "wallColor": "#F4F1EA",
+      "wallCutaway": true,
+      "plumbobs": true
+    },
+    "customObjects": [],
+    "people": [],
+    "bleShowUnknown": true,
+    "notes": "~1,875 sq ft (174 m²) heated + 256 sq ft garage · 3 floors · 21 rooms — minimalist edition\n\nThe same narrow three-storey townhouse shell and linked switchback stair core,\nfurnished the Scandinavian way: a deliberately small number of low, light-oak\npieces per level, a pale blond wood floor and crisp warm-white walls on every\nfloor, and a lot of intentional empty space. No clutter, no accent-heavy zones —\njust the essentials, so the rooms read calm and the daylight from the front and\nrear facades carries. One resident and a house cat roam the levels.\n\nGROUND — Garage: single storage cabinet (no car). Entry: shoe bench. Flex Room /\n  Office: a single reading chair + ottoman and a bookshelf in the corner, plant,\n  one rug — the rest left open.\nMIDDLE — Living Room: one low sofa + coffee table on a rug, a corner plant. Half\n  Bath off the landing. Dining Room: a compact four-seat table under a pendant.\n  Kitchen: a pared-back run (stove, sink, one counter, corner fridge) — no island.\nTOP — Secondary Bedroom: bed + single nightstand + rug. Hall Bath: vanity + toilet.\n  Laundry Closet: stacked washer + dryer. Primary Bedroom: bed, two nightstands,\n  rug — nothing else. Primary Walk-in Closet: one wardrobe. Primary Ensuite: a\n  slim vanity + walk-in shower."
+  }
+}

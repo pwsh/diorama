@@ -16,9 +16,21 @@ players and environmental sensors.
 
 ## Documentation
 
+**[Full documentation site → https://pwsh.github.io/diorama/](https://pwsh.github.io/diorama/)**
+— a home page, the **user guide** (getting started, the 2D editor, the 3D view,
+devices & bindings, avatars & people, outdoor/weather/geo, kiosk & display
+modes, configurations & offline), the **model gallery** (an animated preview of
+every furniture kind, fixture, sensor, and avatar Diorama can render), and the
+**floor-plan library** (importable demo homes).
+
 **[User guide with screenshots →](docs/GUIDE.md)** — building walls & rooms,
 furniture & custom objects, lighting, sensors, presence & avatars, GPS &
 weather, 3D cameras, kiosk modes, HA binding, and hotkeys.
+
+The site is generated from repo sources — `npm run docs:site` builds the home
+page + guide, `npm run docs:gallery` regenerates the model gallery, and
+`npm run docs:floorplans` builds the floor-plan library. `npm run docs:publish`
+pushes the whole site to GitHub Pages.
 
 ## Features
 

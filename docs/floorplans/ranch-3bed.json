@@ -1,0 +1,1644 @@
+{
+  "diorama": 2,
+  "name": "Ranch — 3 Bed / 2 Bath",
+  "exportedAt": "2026-07-17T00:00:00.000Z",
+  "store": {
+    "v": 2,
+    "floors": [
+      {
+        "id": "ranch-3bed-fl1",
+        "name": "Main Floor",
+        "w": 22100,
+        "d": 10000,
+        "walls": [
+          {
+            "id": "ranch-3bed-w1",
+            "points": [
+              {
+                "x": 0,
+                "y": 0
+              },
+              {
+                "x": 16000,
+                "y": 0
+              },
+              {
+                "x": 16000,
+                "y": 10000
+              },
+              {
+                "x": 0,
+                "y": 10000
+              },
+              {
+                "x": 0,
+                "y": 0
+              }
+            ]
+          },
+          {
+            "id": "ranch-3bed-w2",
+            "points": [
+              {
+                "x": 16000,
+                "y": 0
+              },
+              {
+                "x": 22100,
+                "y": 0
+              },
+              {
+                "x": 22100,
+                "y": 6100
+              },
+              {
+                "x": 16000,
+                "y": 6100
+              },
+              {
+                "x": 16000,
+                "y": 0
+              }
+            ]
+          },
+          {
+            "id": "ranch-3bed-w3",
+            "points": [
+              {
+                "x": 7900,
+                "y": 1900
+              },
+              {
+                "x": 7900,
+                "y": 10000
+              }
+            ]
+          },
+          {
+            "id": "ranch-3bed-w4",
+            "points": [
+              {
+                "x": 3400,
+                "y": 1900
+              },
+              {
+                "x": 3400,
+                "y": 10000
+              }
+            ]
+          },
+          {
+            "id": "ranch-3bed-w5",
+            "points": [
+              {
+                "x": 4500,
+                "y": 1900
+              },
+              {
+                "x": 4500,
+                "y": 10000
+              }
+            ]
+          },
+          {
+            "id": "ranch-3bed-w6",
+            "points": [
+              {
+                "x": 0,
+                "y": 3800
+              },
+              {
+                "x": 3400,
+                "y": 3800
+              }
+            ]
+          },
+          {
+            "id": "ranch-3bed-w7",
+            "points": [
+              {
+                "x": 0,
+                "y": 8300
+              },
+              {
+                "x": 3400,
+                "y": 8300
+              }
+            ]
+          },
+          {
+            "id": "ranch-3bed-w8",
+            "points": [
+              {
+                "x": 2000,
+                "y": 8300
+              },
+              {
+                "x": 2000,
+                "y": 10000
+              }
+            ]
+          },
+          {
+            "id": "ranch-3bed-w9",
+            "points": [
+              {
+                "x": 3400,
+                "y": 0
+              },
+              {
+                "x": 3400,
+                "y": 1900
+              }
+            ]
+          },
+          {
+            "id": "ranch-3bed-w10",
+            "points": [
+              {
+                "x": 4500,
+                "y": 1900
+              },
+              {
+                "x": 7900,
+                "y": 1900
+              }
+            ]
+          },
+          {
+            "id": "ranch-3bed-w11",
+            "points": [
+              {
+                "x": 4500,
+                "y": 5700
+              },
+              {
+                "x": 7900,
+                "y": 5700
+              }
+            ]
+          },
+          {
+            "id": "ranch-3bed-w12",
+            "points": [
+              {
+                "x": 4500,
+                "y": 8200
+              },
+              {
+                "x": 7900,
+                "y": 8200
+              }
+            ]
+          },
+          {
+            "id": "ranch-3bed-w13",
+            "points": [
+              {
+                "x": 7900,
+                "y": 3800
+              },
+              {
+                "x": 16000,
+                "y": 3800
+              }
+            ]
+          },
+          {
+            "id": "ranch-3bed-w14",
+            "points": [
+              {
+                "x": 14300,
+                "y": 3800
+              },
+              {
+                "x": 14300,
+                "y": 7000
+              }
+            ]
+          },
+          {
+            "id": "ranch-3bed-w15",
+            "points": [
+              {
+                "x": 11300,
+                "y": 7000
+              },
+              {
+                "x": 16000,
+                "y": 7000
+              }
+            ]
+          },
+          {
+            "id": "ranch-3bed-w16",
+            "points": [
+              {
+                "x": 16000,
+                "y": 0
+              },
+              {
+                "x": 16000,
+                "y": 6100
+              }
+            ]
+          }
+        ],
+        "furniture": [
+          {
+            "id": "ranch-3bed-fn1",
+            "x": 11950,
+            "y": 900,
+            "w": 2000,
+            "h": 900,
+            "kind": "sofa",
+            "rotation": 180
+          },
+          {
+            "id": "ranch-3bed-fn2",
+            "x": 9200,
+            "y": 1500,
+            "w": 500,
+            "h": 500,
+            "kind": "chair",
+            "rotation": 90,
+            "label": "Armchair"
+          },
+          {
+            "id": "ranch-3bed-fn3",
+            "x": 14700,
+            "y": 1500,
+            "w": 500,
+            "h": 500,
+            "kind": "chair",
+            "rotation": 270,
+            "label": "Armchair"
+          },
+          {
+            "id": "ranch-3bed-fn4",
+            "x": 11950,
+            "y": 1900,
+            "w": 1100,
+            "h": 600,
+            "kind": "coffee_table"
+          },
+          {
+            "id": "ranch-3bed-fn5",
+            "x": 11950,
+            "y": 3550,
+            "w": 1600,
+            "h": 450,
+            "kind": "tv_stand"
+          },
+          {
+            "id": "ranch-3bed-fn6",
+            "x": 11950,
+            "y": 3550,
+            "w": 1450,
+            "h": 250,
+            "kind": "tv",
+            "localState": "off"
+          },
+          {
+            "id": "ranch-3bed-fn7",
+            "x": 8100,
+            "y": 3200,
+            "w": 800,
+            "h": 350,
+            "kind": "bookshelf",
+            "rotation": 90
+          },
+          {
+            "id": "ranch-3bed-fn8",
+            "x": 11950,
+            "y": 1900,
+            "w": 2400,
+            "h": 1700,
+            "kind": "rug"
+          },
+          {
+            "id": "ranch-3bed-fn9",
+            "x": 15700,
+            "y": 3500,
+            "w": 400,
+            "h": 400,
+            "kind": "plant"
+          },
+          {
+            "id": "ranch-3bed-fn10",
+            "x": 4000,
+            "y": 300,
+            "w": 1500,
+            "h": 400,
+            "kind": "bench",
+            "rotation": 180
+          },
+          {
+            "id": "ranch-3bed-fn11",
+            "x": 5650,
+            "y": 300,
+            "w": 1100,
+            "h": 600,
+            "kind": "coffee_table",
+            "rotation": 180,
+            "label": "Console"
+          },
+          {
+            "id": "ranch-3bed-fn12",
+            "x": 7500,
+            "y": 300,
+            "w": 400,
+            "h": 400,
+            "kind": "plant"
+          },
+          {
+            "id": "ranch-3bed-fn13",
+            "x": 1700,
+            "y": 1050,
+            "w": 1500,
+            "h": 2000,
+            "kind": "bed",
+            "rotation": 180
+          },
+          {
+            "id": "ranch-3bed-fn14",
+            "x": 700,
+            "y": 700,
+            "w": 500,
+            "h": 400,
+            "kind": "nightstand",
+            "rotation": 180
+          },
+          {
+            "id": "ranch-3bed-fn15",
+            "x": 2700,
+            "y": 700,
+            "w": 500,
+            "h": 400,
+            "kind": "nightstand",
+            "rotation": 180
+          },
+          {
+            "id": "ranch-3bed-fn16",
+            "x": 300,
+            "y": 2900,
+            "w": 1200,
+            "h": 500,
+            "kind": "dresser",
+            "rotation": 90
+          },
+          {
+            "id": "ranch-3bed-fn17",
+            "x": 2900,
+            "y": 3400,
+            "w": 800,
+            "h": 350,
+            "kind": "bookshelf",
+            "rotation": 270
+          },
+          {
+            "id": "ranch-3bed-fn18",
+            "x": 1700,
+            "y": 2200,
+            "w": 1800,
+            "h": 1400,
+            "kind": "rug",
+            "color": "#cfc2a8"
+          },
+          {
+            "id": "ranch-3bed-fn19",
+            "x": 6200,
+            "y": 2650,
+            "w": 1350,
+            "h": 1900,
+            "kind": "bed",
+            "rotation": 180
+          },
+          {
+            "id": "ranch-3bed-fn20",
+            "x": 5300,
+            "y": 2200,
+            "w": 500,
+            "h": 400,
+            "kind": "nightstand",
+            "rotation": 180
+          },
+          {
+            "id": "ranch-3bed-fn21",
+            "x": 7700,
+            "y": 4900,
+            "w": 1200,
+            "h": 500,
+            "kind": "dresser",
+            "rotation": 270
+          },
+          {
+            "id": "ranch-3bed-fn22",
+            "x": 5000,
+            "y": 5300,
+            "w": 1400,
+            "h": 700,
+            "kind": "desk"
+          },
+          {
+            "id": "ranch-3bed-fn23",
+            "x": 6200,
+            "y": 3800,
+            "w": 1600,
+            "h": 1300,
+            "kind": "rug",
+            "color": "#cfc2a8"
+          },
+          {
+            "id": "ranch-3bed-fn24",
+            "x": 1700,
+            "y": 4950,
+            "w": 1900,
+            "h": 2100,
+            "kind": "bed",
+            "rotation": 180
+          },
+          {
+            "id": "ranch-3bed-fn25",
+            "x": 600,
+            "y": 4300,
+            "w": 500,
+            "h": 400,
+            "kind": "nightstand",
+            "rotation": 180
+          },
+          {
+            "id": "ranch-3bed-fn26",
+            "x": 2800,
+            "y": 4300,
+            "w": 500,
+            "h": 400,
+            "kind": "nightstand",
+            "rotation": 180
+          },
+          {
+            "id": "ranch-3bed-fn27",
+            "x": 300,
+            "y": 7300,
+            "w": 1200,
+            "h": 500,
+            "kind": "dresser",
+            "rotation": 90
+          },
+          {
+            "id": "ranch-3bed-fn28",
+            "x": 1700,
+            "y": 6100,
+            "w": 1500,
+            "h": 400,
+            "kind": "bench",
+            "rotation": 180
+          },
+          {
+            "id": "ranch-3bed-fn29",
+            "x": 2900,
+            "y": 4200,
+            "w": 1300,
+            "h": 180,
+            "kind": "wall_tv",
+            "rotation": 270
+          },
+          {
+            "id": "ranch-3bed-fn30",
+            "x": 1700,
+            "y": 6000,
+            "w": 2200,
+            "h": 1800,
+            "kind": "rug",
+            "color": "#c9d1c4"
+          },
+          {
+            "id": "ranch-3bed-fn31",
+            "x": 3100,
+            "y": 8100,
+            "w": 400,
+            "h": 400,
+            "kind": "plant"
+          },
+          {
+            "id": "ranch-3bed-fn32",
+            "x": 400,
+            "y": 9700,
+            "w": 480,
+            "h": 700,
+            "kind": "toilet",
+            "rotation": 180
+          },
+          {
+            "id": "ranch-3bed-fn33",
+            "x": 300,
+            "y": 9000,
+            "w": 560,
+            "h": 470,
+            "kind": "sink",
+            "rotation": 90,
+            "label": "Vanity"
+          },
+          {
+            "id": "ranch-3bed-fn34",
+            "x": 1600,
+            "y": 9700,
+            "w": 900,
+            "h": 900,
+            "kind": "shower",
+            "rotation": 180
+          },
+          {
+            "id": "ranch-3bed-fn35",
+            "x": 2100,
+            "y": 9150,
+            "w": 1200,
+            "h": 600,
+            "kind": "wardrobe",
+            "rotation": 90
+          },
+          {
+            "id": "ranch-3bed-fn36",
+            "x": 3300,
+            "y": 9150,
+            "w": 1200,
+            "h": 600,
+            "kind": "wardrobe",
+            "rotation": 270
+          },
+          {
+            "id": "ranch-3bed-fn37",
+            "x": 5000,
+            "y": 6000,
+            "w": 480,
+            "h": 700,
+            "kind": "toilet",
+            "rotation": 90
+          },
+          {
+            "id": "ranch-3bed-fn38",
+            "x": 7500,
+            "y": 6200,
+            "w": 560,
+            "h": 470,
+            "kind": "sink",
+            "rotation": 270,
+            "label": "Vanity"
+          },
+          {
+            "id": "ranch-3bed-fn39",
+            "x": 6200,
+            "y": 7900,
+            "w": 1700,
+            "h": 750,
+            "kind": "bathtub",
+            "rotation": 180
+          },
+          {
+            "id": "ranch-3bed-fn40",
+            "x": 6200,
+            "y": 9700,
+            "w": 1400,
+            "h": 700,
+            "kind": "desk"
+          },
+          {
+            "id": "ranch-3bed-fn41",
+            "x": 6200,
+            "y": 9300,
+            "w": 500,
+            "h": 500,
+            "kind": "chair",
+            "rotation": 180
+          },
+          {
+            "id": "ranch-3bed-fn42",
+            "x": 4700,
+            "y": 8900,
+            "w": 800,
+            "h": 350,
+            "kind": "bookshelf",
+            "rotation": 90
+          },
+          {
+            "id": "ranch-3bed-fn43",
+            "x": 8100,
+            "y": 4200,
+            "w": 1800,
+            "h": 650,
+            "kind": "counter",
+            "rotation": 90
+          },
+          {
+            "id": "ranch-3bed-fn44",
+            "x": 9200,
+            "y": 4000,
+            "w": 1800,
+            "h": 650,
+            "kind": "counter",
+            "rotation": 180
+          },
+          {
+            "id": "ranch-3bed-fn45",
+            "x": 9400,
+            "y": 4000,
+            "w": 760,
+            "h": 660,
+            "kind": "stove",
+            "rotation": 180
+          },
+          {
+            "id": "ranch-3bed-fn46",
+            "x": 8700,
+            "y": 4100,
+            "w": 520,
+            "h": 390,
+            "kind": "microwave",
+            "rotation": 180,
+            "elevation": 1400
+          },
+          {
+            "id": "ranch-3bed-fn47",
+            "x": 8100,
+            "y": 5200,
+            "w": 900,
+            "h": 400,
+            "kind": "cabinet",
+            "rotation": 90
+          },
+          {
+            "id": "ranch-3bed-fn48",
+            "x": 9600,
+            "y": 5600,
+            "w": 2000,
+            "h": 1000,
+            "kind": "island"
+          },
+          {
+            "id": "ranch-3bed-fn49",
+            "x": 9600,
+            "y": 5800,
+            "w": 900,
+            "h": 650,
+            "kind": "kitchen_sink",
+            "rotation": 180
+          },
+          {
+            "id": "ranch-3bed-fn50",
+            "x": 9200,
+            "y": 5800,
+            "w": 610,
+            "h": 620,
+            "kind": "dishwasher",
+            "rotation": 180
+          },
+          {
+            "id": "ranch-3bed-fn51",
+            "x": 8200,
+            "y": 6800,
+            "w": 910,
+            "h": 760,
+            "kind": "fridge",
+            "rotation": 180
+          },
+          {
+            "id": "ranch-3bed-fn52",
+            "x": 12800,
+            "y": 5400,
+            "w": 1500,
+            "h": 900,
+            "kind": "table",
+            "label": "Dining table"
+          },
+          {
+            "id": "ranch-3bed-fn53",
+            "x": 12800,
+            "y": 4700,
+            "w": 500,
+            "h": 500,
+            "kind": "chair"
+          },
+          {
+            "id": "ranch-3bed-fn54",
+            "x": 12800,
+            "y": 6100,
+            "w": 500,
+            "h": 500,
+            "kind": "chair",
+            "rotation": 180
+          },
+          {
+            "id": "ranch-3bed-fn55",
+            "x": 11900,
+            "y": 5100,
+            "w": 500,
+            "h": 500,
+            "kind": "chair",
+            "rotation": 90
+          },
+          {
+            "id": "ranch-3bed-fn56",
+            "x": 11900,
+            "y": 5700,
+            "w": 500,
+            "h": 500,
+            "kind": "chair",
+            "rotation": 90
+          },
+          {
+            "id": "ranch-3bed-fn57",
+            "x": 13700,
+            "y": 5100,
+            "w": 500,
+            "h": 500,
+            "kind": "chair",
+            "rotation": 270
+          },
+          {
+            "id": "ranch-3bed-fn58",
+            "x": 13700,
+            "y": 5700,
+            "w": 500,
+            "h": 500,
+            "kind": "chair",
+            "rotation": 270
+          },
+          {
+            "id": "ranch-3bed-fn59",
+            "x": 14100,
+            "y": 4200,
+            "w": 900,
+            "h": 400,
+            "kind": "cabinet",
+            "rotation": 270,
+            "label": "Buffet"
+          },
+          {
+            "id": "ranch-3bed-fn60",
+            "x": 12800,
+            "y": 5400,
+            "w": 2700,
+            "h": 2100,
+            "kind": "rug"
+          },
+          {
+            "id": "ranch-3bed-fn61",
+            "x": 11500,
+            "y": 6800,
+            "w": 400,
+            "h": 400,
+            "kind": "plant"
+          },
+          {
+            "id": "ranch-3bed-fn62",
+            "x": 14700,
+            "y": 4200,
+            "w": 690,
+            "h": 700,
+            "kind": "washer",
+            "rotation": 180
+          },
+          {
+            "id": "ranch-3bed-fn63",
+            "x": 15600,
+            "y": 4200,
+            "w": 690,
+            "h": 700,
+            "kind": "dryer",
+            "rotation": 180
+          },
+          {
+            "id": "ranch-3bed-fn64",
+            "x": 15150,
+            "y": 6700,
+            "w": 900,
+            "h": 400,
+            "kind": "cabinet"
+          },
+          {
+            "id": "ranch-3bed-fn65",
+            "x": 15150,
+            "y": 5500,
+            "w": 1500,
+            "h": 400,
+            "kind": "bench",
+            "rotation": 90
+          },
+          {
+            "id": "ranch-3bed-fn66",
+            "x": 9500,
+            "y": 9500,
+            "w": 3200,
+            "h": 2000,
+            "kind": "sofa_u",
+            "label": "Sectional"
+          },
+          {
+            "id": "ranch-3bed-fn67",
+            "x": 11000,
+            "y": 7200,
+            "w": 1600,
+            "h": 450,
+            "kind": "tv_stand",
+            "rotation": 180
+          },
+          {
+            "id": "ranch-3bed-fn68",
+            "x": 11000,
+            "y": 7200,
+            "w": 1450,
+            "h": 250,
+            "kind": "tv",
+            "rotation": 180,
+            "localState": "off"
+          },
+          {
+            "id": "ranch-3bed-fn69",
+            "x": 9500,
+            "y": 8600,
+            "w": 1100,
+            "h": 600,
+            "kind": "coffee_table"
+          },
+          {
+            "id": "ranch-3bed-fn70",
+            "x": 10200,
+            "y": 9200,
+            "w": 700,
+            "h": 700,
+            "kind": "ottoman"
+          },
+          {
+            "id": "ranch-3bed-fn71",
+            "x": 8100,
+            "y": 9700,
+            "w": 800,
+            "h": 350,
+            "kind": "bookshelf",
+            "rotation": 90
+          },
+          {
+            "id": "ranch-3bed-fn72",
+            "x": 15200,
+            "y": 9500,
+            "w": 700,
+            "h": 1600,
+            "kind": "exercise_equipment",
+            "rotation": 270
+          },
+          {
+            "id": "ranch-3bed-fn73",
+            "x": 9700,
+            "y": 8800,
+            "w": 3000,
+            "h": 2200,
+            "kind": "rug"
+          },
+          {
+            "id": "ranch-3bed-fn74",
+            "x": 15700,
+            "y": 7300,
+            "w": 400,
+            "h": 400,
+            "kind": "plant"
+          },
+          {
+            "id": "ranch-3bed-fn75",
+            "x": 8100,
+            "y": 7300,
+            "w": 400,
+            "h": 400,
+            "kind": "plant",
+            "rotation": 90
+          },
+          {
+            "id": "ranch-3bed-fn76",
+            "x": 21600,
+            "y": 1000,
+            "w": 900,
+            "h": 400,
+            "kind": "cabinet",
+            "rotation": 270
+          },
+          {
+            "id": "ranch-3bed-fn77",
+            "x": 16400,
+            "y": 3000,
+            "w": 1400,
+            "h": 700,
+            "kind": "desk",
+            "rotation": 90,
+            "label": "Workbench"
+          },
+          {
+            "id": "ranch-3bed-fn78",
+            "x": 21600,
+            "y": 5500,
+            "w": 800,
+            "h": 350,
+            "kind": "bookshelf",
+            "rotation": 270,
+            "label": "Shelving"
+          },
+          {
+            "id": "ranch-3bed-fn79",
+            "x": 17500,
+            "y": -600,
+            "w": 600,
+            "h": 700,
+            "kind": "trash_bin"
+          },
+          {
+            "id": "ranch-3bed-fn80",
+            "x": 18200,
+            "y": -600,
+            "w": 600,
+            "h": 700,
+            "kind": "recycle_bin"
+          },
+          {
+            "id": "ranch-3bed-fn81",
+            "x": 3000,
+            "y": -700,
+            "w": 900,
+            "h": 900,
+            "kind": "tree"
+          },
+          {
+            "id": "ranch-3bed-fn82",
+            "x": 8500,
+            "y": -700,
+            "w": 900,
+            "h": 900,
+            "kind": "tree"
+          },
+          {
+            "id": "ranch-3bed-fn83",
+            "x": 16900,
+            "y": 7800,
+            "w": 700,
+            "h": 1200,
+            "kind": "lawn_chair",
+            "rotation": 270
+          },
+          {
+            "id": "ranch-3bed-fn84",
+            "x": 16900,
+            "y": 9100,
+            "w": 700,
+            "h": 1200,
+            "kind": "lawn_chair",
+            "rotation": 270
+          }
+        ],
+        "lights": [
+          {
+            "id": "ranch-3bed-lt1",
+            "x": 1700,
+            "y": 1900,
+            "entity_id": null,
+            "iconKind": "bulb",
+            "label": "Bedroom 2"
+          },
+          {
+            "id": "ranch-3bed-lt2",
+            "x": 6200,
+            "y": 3800,
+            "entity_id": null,
+            "iconKind": "bulb",
+            "label": "Bedroom 3"
+          },
+          {
+            "id": "ranch-3bed-lt3",
+            "x": 1700,
+            "y": 5900,
+            "entity_id": null,
+            "iconKind": "bulb",
+            "label": "Primary Bedroom"
+          },
+          {
+            "id": "ranch-3bed-lt4",
+            "x": 700,
+            "y": 4300,
+            "entity_id": null,
+            "iconKind": "lamp",
+            "height": 1400,
+            "label": "Primary lamp"
+          },
+          {
+            "id": "ranch-3bed-lt5",
+            "x": 11950,
+            "y": 1900,
+            "entity_id": null,
+            "iconKind": "bulb",
+            "label": "Living Room"
+          },
+          {
+            "id": "ranch-3bed-lt6",
+            "x": 11950,
+            "y": 8500,
+            "entity_id": null,
+            "iconKind": "bulb",
+            "label": "Family Room"
+          },
+          {
+            "id": "ranch-3bed-lt7",
+            "x": 8300,
+            "y": 9500,
+            "entity_id": null,
+            "iconKind": "lamp",
+            "height": 1400,
+            "label": "Family lamp"
+          },
+          {
+            "id": "ranch-3bed-lt8",
+            "x": 9600,
+            "y": 5600,
+            "entity_id": null,
+            "iconKind": "pendant",
+            "label": "Kitchen island"
+          },
+          {
+            "id": "ranch-3bed-lt9",
+            "x": 9600,
+            "y": 4500,
+            "entity_id": null,
+            "iconKind": "round",
+            "label": "Kitchen"
+          },
+          {
+            "id": "ranch-3bed-lt10",
+            "x": 12800,
+            "y": 5400,
+            "entity_id": null,
+            "iconKind": "pendant",
+            "label": "Dining"
+          },
+          {
+            "id": "ranch-3bed-lt11",
+            "x": 5650,
+            "y": 950,
+            "entity_id": null,
+            "iconKind": "bulb",
+            "label": "Foyer"
+          },
+          {
+            "id": "ranch-3bed-lt12",
+            "x": 3950,
+            "y": 6000,
+            "entity_id": null,
+            "iconKind": "bulb",
+            "label": "Corridor"
+          },
+          {
+            "id": "ranch-3bed-lt13",
+            "x": 5000,
+            "y": 7000,
+            "entity_id": null,
+            "iconKind": "sconce",
+            "radius": 500,
+            "label": "Hall Bath"
+          },
+          {
+            "id": "ranch-3bed-lt14",
+            "x": 7000,
+            "y": 7000,
+            "entity_id": null,
+            "iconKind": "sconce",
+            "radius": 500,
+            "label": "Hall Bath"
+          },
+          {
+            "id": "ranch-3bed-lt15",
+            "x": 500,
+            "y": 9200,
+            "entity_id": null,
+            "iconKind": "sconce",
+            "radius": 500,
+            "label": "Primary Bath"
+          },
+          {
+            "id": "ranch-3bed-lt16",
+            "x": 1500,
+            "y": 9200,
+            "entity_id": null,
+            "iconKind": "sconce",
+            "radius": 500,
+            "label": "Primary Bath"
+          },
+          {
+            "id": "ranch-3bed-lt17",
+            "x": 15150,
+            "y": 5400,
+            "entity_id": null,
+            "iconKind": "bulb",
+            "label": "Laundry"
+          },
+          {
+            "id": "ranch-3bed-lt18",
+            "x": 6200,
+            "y": 9100,
+            "entity_id": null,
+            "iconKind": "bulb",
+            "label": "Office"
+          },
+          {
+            "id": "ranch-3bed-lt19",
+            "x": 17500,
+            "y": 3000,
+            "entity_id": null,
+            "iconKind": "strip",
+            "rotation": 0,
+            "length": 3000,
+            "label": "Garage"
+          },
+          {
+            "id": "ranch-3bed-lt20",
+            "x": 20500,
+            "y": 3000,
+            "entity_id": null,
+            "iconKind": "strip",
+            "rotation": 0,
+            "length": 3000,
+            "label": "Garage"
+          }
+        ],
+        "switches": [
+          {
+            "id": "ranch-3bed-sw1",
+            "x": 5900,
+            "y": 150,
+            "entity_id": null,
+            "rotation": 0,
+            "label": "Foyer"
+          },
+          {
+            "id": "ranch-3bed-sw2",
+            "x": 15850,
+            "y": 8400,
+            "entity_id": null,
+            "rotation": 90,
+            "label": "Patio"
+          }
+        ],
+        "sensors": [],
+        "motionSensors": [],
+        "roamers": [
+          {
+            "id": "ranch-3bed-ro1",
+            "name": "Dana",
+            "avatarKinds": [
+              "adult",
+              "professional",
+              "athlete"
+            ],
+            "color": "#4fc3f7"
+          },
+          {
+            "id": "ranch-3bed-ro2",
+            "name": "Riley",
+            "avatarKinds": [
+              "child",
+              "teen"
+            ],
+            "color": "#f06292"
+          },
+          {
+            "id": "ranch-3bed-ro3",
+            "name": "Biscuit",
+            "avatarKinds": [
+              "dog"
+            ],
+            "color": "#a1887f"
+          }
+        ],
+        "envSensors": [],
+        "look3d": {
+          "floorTex": "wood",
+          "floorColor": "#b8875a",
+          "wallColor": "#e8e2d2"
+        },
+        "doors": [
+          {
+            "id": "ranch-3bed-dr1",
+            "x": 5200,
+            "y": 0,
+            "w": 900,
+            "rotation": 0,
+            "entity_id": null,
+            "lockEntity": null,
+            "doorbellEntity": null,
+            "label": "Front"
+          },
+          {
+            "id": "ranch-3bed-dr2",
+            "x": 3400,
+            "y": 900,
+            "w": 900,
+            "rotation": 270,
+            "entity_id": null,
+            "label": "Bedroom 2"
+          },
+          {
+            "id": "ranch-3bed-dr3",
+            "x": 4500,
+            "y": 2600,
+            "w": 900,
+            "rotation": 270,
+            "entity_id": null,
+            "label": "Bedroom 3"
+          },
+          {
+            "id": "ranch-3bed-dr4",
+            "x": 3400,
+            "y": 4200,
+            "w": 900,
+            "rotation": 270,
+            "entity_id": null,
+            "label": "Primary Bedroom"
+          },
+          {
+            "id": "ranch-3bed-dr5",
+            "x": 900,
+            "y": 8300,
+            "w": 700,
+            "rotation": 0,
+            "entity_id": null,
+            "label": "Primary Bath"
+          },
+          {
+            "id": "ranch-3bed-dr6",
+            "x": 2600,
+            "y": 8300,
+            "w": 700,
+            "rotation": 0,
+            "entity_id": null,
+            "label": "Primary WIC"
+          },
+          {
+            "id": "ranch-3bed-dr7",
+            "x": 4500,
+            "y": 6500,
+            "w": 700,
+            "rotation": 270,
+            "entity_id": null,
+            "label": "Hall Bath"
+          },
+          {
+            "id": "ranch-3bed-dr8",
+            "x": 4500,
+            "y": 8700,
+            "w": 900,
+            "rotation": 270,
+            "entity_id": null,
+            "label": "Office"
+          },
+          {
+            "id": "ranch-3bed-dr9",
+            "x": 9200,
+            "y": 3800,
+            "w": 900,
+            "rotation": 0,
+            "entity_id": null,
+            "label": "Living ↔ Kitchen"
+          },
+          {
+            "id": "ranch-3bed-dr10",
+            "x": 14300,
+            "y": 5000,
+            "w": 800,
+            "rotation": 270,
+            "entity_id": null,
+            "label": "Laundry"
+          },
+          {
+            "id": "ranch-3bed-dr11",
+            "x": 12500,
+            "y": 7000,
+            "w": 900,
+            "rotation": 0,
+            "entity_id": null,
+            "label": "Dining ↔ Family"
+          },
+          {
+            "id": "ranch-3bed-dr12",
+            "x": 16000,
+            "y": 4950,
+            "w": 900,
+            "rotation": 270,
+            "entity_id": null,
+            "lockEntity": null,
+            "label": "Garage service"
+          },
+          {
+            "id": "ranch-3bed-dr13",
+            "x": 16700,
+            "y": 0,
+            "w": 2400,
+            "rotation": 0,
+            "entity_id": null,
+            "kind": "garage",
+            "label": "Garage bay 1"
+          },
+          {
+            "id": "ranch-3bed-dr14",
+            "x": 19400,
+            "y": 0,
+            "w": 2400,
+            "rotation": 0,
+            "entity_id": null,
+            "kind": "garage",
+            "label": "Garage bay 2"
+          },
+          {
+            "id": "ranch-3bed-dr15",
+            "x": 18550,
+            "y": 6100,
+            "w": 900,
+            "rotation": 0,
+            "entity_id": null,
+            "label": "Garage man-door"
+          }
+        ],
+        "windows": [
+          {
+            "id": "ranch-3bed-win1",
+            "x": 1500,
+            "y": 0,
+            "w": 1200,
+            "rotation": 0,
+            "entity_id": null,
+            "sill": 800,
+            "height": 1200,
+            "label": "Bedroom 2 front"
+          },
+          {
+            "id": "ranch-3bed-win2",
+            "x": 4600,
+            "y": 0,
+            "w": 800,
+            "rotation": 0,
+            "entity_id": null,
+            "sill": 900,
+            "height": 1400,
+            "label": "Foyer sidelight"
+          },
+          {
+            "id": "ranch-3bed-win3",
+            "x": 12000,
+            "y": 0,
+            "w": 2400,
+            "rotation": 0,
+            "entity_id": null,
+            "sill": 700,
+            "height": 1500,
+            "kind": "picture",
+            "label": "Living picture"
+          },
+          {
+            "id": "ranch-3bed-win4",
+            "x": 1000,
+            "y": 10000,
+            "w": 800,
+            "rotation": 0,
+            "entity_id": null,
+            "sill": 1400,
+            "height": 900,
+            "label": "Primary Bath"
+          },
+          {
+            "id": "ranch-3bed-win5",
+            "x": 6300,
+            "y": 10000,
+            "w": 1200,
+            "rotation": 0,
+            "entity_id": null,
+            "sill": 800,
+            "height": 1200,
+            "label": "Office rear"
+          },
+          {
+            "id": "ranch-3bed-win6",
+            "x": 10100,
+            "y": 10000,
+            "w": 1200,
+            "rotation": 0,
+            "entity_id": null,
+            "sill": 800,
+            "height": 1200,
+            "kind": "double_hung",
+            "label": "Family rear"
+          },
+          {
+            "id": "ranch-3bed-win7",
+            "x": 14100,
+            "y": 10000,
+            "w": 1200,
+            "rotation": 0,
+            "entity_id": null,
+            "sill": 800,
+            "height": 1200,
+            "kind": "double_hung",
+            "label": "Family rear"
+          },
+          {
+            "id": "ranch-3bed-win8",
+            "x": 0,
+            "y": 1800,
+            "w": 1200,
+            "rotation": 90,
+            "entity_id": null,
+            "sill": 800,
+            "height": 1200,
+            "label": "Bedroom 2 side"
+          },
+          {
+            "id": "ranch-3bed-win9",
+            "x": 0,
+            "y": 5800,
+            "w": 1200,
+            "rotation": 90,
+            "entity_id": null,
+            "sill": 800,
+            "height": 1200,
+            "label": "Primary Bedroom side"
+          },
+          {
+            "id": "ranch-3bed-win10",
+            "x": 16000,
+            "y": 8400,
+            "w": 1800,
+            "rotation": 90,
+            "entity_id": null,
+            "sill": 0,
+            "height": 2000,
+            "kind": "sliding",
+            "label": "Family slider"
+          },
+          {
+            "id": "ranch-3bed-win11",
+            "x": 22100,
+            "y": 2900,
+            "w": 800,
+            "rotation": 90,
+            "entity_id": null,
+            "sill": 1200,
+            "height": 900,
+            "label": "Garage utility"
+          }
+        ],
+        "bg": null,
+        "model3d": null,
+        "rooms": [
+          {
+            "id": "ranch-3bed-rm1",
+            "name": "Bedroom 2",
+            "anchor": {
+              "x": 1700,
+              "y": 1900
+            }
+          },
+          {
+            "id": "ranch-3bed-rm2",
+            "name": "Foyer",
+            "anchor": {
+              "x": 5650,
+              "y": 950
+            }
+          },
+          {
+            "id": "ranch-3bed-rm3",
+            "name": "Bedroom 3",
+            "anchor": {
+              "x": 6200,
+              "y": 3800
+            }
+          },
+          {
+            "id": "ranch-3bed-rm4",
+            "name": "Living Room",
+            "anchor": {
+              "x": 11950,
+              "y": 1900
+            }
+          },
+          {
+            "id": "ranch-3bed-rm5",
+            "name": "Hallway",
+            "anchor": {
+              "x": 3950,
+              "y": 6000
+            }
+          },
+          {
+            "id": "ranch-3bed-rm6",
+            "name": "Primary Bedroom",
+            "anchor": {
+              "x": 1700,
+              "y": 5900
+            }
+          },
+          {
+            "id": "ranch-3bed-rm7",
+            "name": "Hall Bath",
+            "anchor": {
+              "x": 6200,
+              "y": 6950
+            }
+          },
+          {
+            "id": "ranch-3bed-rm8",
+            "name": "Kitchen",
+            "anchor": {
+              "x": 9600,
+              "y": 5400
+            }
+          },
+          {
+            "id": "ranch-3bed-rm9",
+            "name": "Dining",
+            "anchor": {
+              "x": 12800,
+              "y": 5400
+            }
+          },
+          {
+            "id": "ranch-3bed-rm10",
+            "name": "Laundry / Mudroom",
+            "anchor": {
+              "x": 15150,
+              "y": 5400
+            }
+          },
+          {
+            "id": "ranch-3bed-rm11",
+            "name": "Primary Bath",
+            "anchor": {
+              "x": 1000,
+              "y": 9150
+            }
+          },
+          {
+            "id": "ranch-3bed-rm12",
+            "name": "Primary Walk-in Closet",
+            "anchor": {
+              "x": 2700,
+              "y": 9150
+            }
+          },
+          {
+            "id": "ranch-3bed-rm13",
+            "name": "Office Nook",
+            "anchor": {
+              "x": 6200,
+              "y": 9100
+            }
+          },
+          {
+            "id": "ranch-3bed-rm14",
+            "name": "Family Room",
+            "anchor": {
+              "x": 11950,
+              "y": 8500
+            }
+          },
+          {
+            "id": "ranch-3bed-rm15",
+            "name": "Garage",
+            "anchor": {
+              "x": 19050,
+              "y": 3050
+            }
+          }
+        ],
+        "bleProxies": [],
+        "alarmPanels": [],
+        "safetySensors": [],
+        "robots": [],
+        "presenceZones": [],
+        "cameras": [],
+        "groundAreas": [],
+        "voidAreas": []
+      }
+    ],
+    "currentFloorId": "ranch-3bed-fl1",
+    "activeSensorId": null,
+    "coverage": true,
+    "imperial": false,
+    "showDetails": false,
+    "useRawTargets": false,
+    "showMotionZones": true,
+    "scene3d": {
+      "preset": "day",
+      "floorTex": "wood",
+      "floorColor": "#b8875a",
+      "wallColor": "#e8e2d2",
+      "wallCutaway": true,
+      "plumbobs": true
+    },
+    "customObjects": [],
+    "people": [],
+    "bleShowUnknown": true,
+    "notes": "~1,723 sq ft (160 m²) heated + 400 sq ft garage · 1 floor · 15 rooms\n\nA classic single-story American ranch: an open kitchen/dining/family great room\ngrafted onto a traditional center-hall bedroom wing, with an attached two-car\ngarage. Warm oak-look floors, greige walls, carpet simulated with area rugs in\nthe bedrooms. The L-shaped footprint leaves an unbuilt side yard behind the\ngarage that renders as bare ground.\n\nLiving Room: sofa, two armchairs, coffee table, TV on a stand, bookshelf, rug, plant.\nFoyer: entry bench, console table, plant.\nBedroom 2: queen bed, two nightstands, dresser, bookshelf, carpet-tone rug.\nBedroom 3: full bed, nightstand, dresser, student desk, rug.\nPrimary Bedroom: king bed, two nightstands, dresser, foot-of-bed bench, wall TV,\n  rug, plant, and a bedside lamp.\nPrimary Bath: toilet, vanity sink, corner shower; sconce pair.\nPrimary Walk-in Closet: two built-in wardrobe runs.\nHall Bath: toilet, vanity sink, tub/shower combo; sconce pair.\nOffice Nook: desk + chair, bookshelf.\nKitchen: two counter runs, stove, over-range microwave, upper cabinet, island with\n  sink + dishwasher, refrigerator; island pendant + general ceiling light.\nDining: six-seat table, buffet cabinet, rug, plant; pendant over the table.\nLaundry / Mudroom: washer, dryer, storage cabinet, mudroom bench.\nFamily Room: U-sectional, TV on a stand, coffee table, ottoman, bookshelf,\n  exercise equipment, rug, plants; ceiling light + sectional lamp.\nGarage: storage cabinet, workbench, bin/bike shelving; two LED strip lights.\nYard: curbside trash + recycle bins, two front-walk trees, backyard lawn chairs."
+  }
+}

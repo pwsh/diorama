@@ -1049,6 +1049,15 @@ export class SettingsDrawer extends LitElement {
                 @click=${this._deleteConfig}>Delete</button>
       </div>
       ${savedAt ? html`<div style="font-size:10px;color:var(--text-dim)">Last saved ${this._agoText(savedAt)}</div>` : nothing}
+      <label style="font-size:11px;color:var(--text-dim);display:block;margin:10px 0 3px">
+        Notes — saved with this configuration, included in export
+      </label>
+      <textarea rows="5" placeholder="Describe this configuration…"
+                .value=${p.store.notes ?? ''}
+                @change=${(e: Event) => p.setNotes((e.target as HTMLTextAreaElement).value)}
+                style="width:100%;box-sizing:border-box;padding:6px 8px;border-radius:4px;
+                       border:1px solid var(--border);background:#111;color:var(--text);
+                       font-size:12px;font-family:inherit;resize:vertical;margin-bottom:8px"></textarea>
       <div style="font-size:10px;color:var(--text-dim);line-height:1.3;margin-top:8px">
         Each configuration is a full, independent floor plan (all floors,
         fixtures, avatars, and settings). Export downloads a self-contained

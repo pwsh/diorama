@@ -1,0 +1,2207 @@
+{
+  "diorama": 2,
+  "name": "Two-Story Colonial",
+  "exportedAt": "2026-07-17T00:00:00.000Z",
+  "store": {
+    "v": 2,
+    "floors": [
+      {
+        "id": "two-story-colonial-fl1",
+        "name": "First Floor",
+        "w": 18300,
+        "d": 9900,
+        "walls": [
+          {
+            "id": "two-story-colonial-w1",
+            "points": [
+              {
+                "x": 0,
+                "y": 0
+              },
+              {
+                "x": 18300,
+                "y": 0
+              },
+              {
+                "x": 18300,
+                "y": 6100
+              },
+              {
+                "x": 12200,
+                "y": 6100
+              },
+              {
+                "x": 12200,
+                "y": 9900
+              },
+              {
+                "x": 0,
+                "y": 9900
+              },
+              {
+                "x": 0,
+                "y": 0
+              }
+            ]
+          },
+          {
+            "id": "two-story-colonial-w2",
+            "points": [
+              {
+                "x": 4650,
+                "y": 0
+              },
+              {
+                "x": 4650,
+                "y": 9900
+              }
+            ]
+          },
+          {
+            "id": "two-story-colonial-w3",
+            "points": [
+              {
+                "x": 7350,
+                "y": 0
+              },
+              {
+                "x": 7350,
+                "y": 9900
+              }
+            ]
+          },
+          {
+            "id": "two-story-colonial-w4",
+            "points": [
+              {
+                "x": 4650,
+                "y": 2400
+              },
+              {
+                "x": 7350,
+                "y": 2400
+              }
+            ]
+          },
+          {
+            "id": "two-story-colonial-w5",
+            "points": [
+              {
+                "x": 4650,
+                "y": 6600
+              },
+              {
+                "x": 7350,
+                "y": 6600
+              }
+            ]
+          },
+          {
+            "id": "two-story-colonial-w6",
+            "points": [
+              {
+                "x": 0,
+                "y": 4300
+              },
+              {
+                "x": 4650,
+                "y": 4300
+              }
+            ]
+          },
+          {
+            "id": "two-story-colonial-w7",
+            "points": [
+              {
+                "x": 7350,
+                "y": 4300
+              },
+              {
+                "x": 12200,
+                "y": 4300
+              }
+            ]
+          },
+          {
+            "id": "two-story-colonial-w8",
+            "points": [
+              {
+                "x": 7350,
+                "y": 5700
+              },
+              {
+                "x": 12200,
+                "y": 5700
+              }
+            ]
+          },
+          {
+            "id": "two-story-colonial-w9",
+            "points": [
+              {
+                "x": 8850,
+                "y": 4300
+              },
+              {
+                "x": 8850,
+                "y": 5700
+              }
+            ]
+          },
+          {
+            "id": "two-story-colonial-w10",
+            "points": [
+              {
+                "x": 12200,
+                "y": 0
+              },
+              {
+                "x": 12200,
+                "y": 6100
+              }
+            ]
+          }
+        ],
+        "furniture": [
+          {
+            "id": "two-story-colonial-fn1",
+            "x": 1600,
+            "y": 1200,
+            "w": 2000,
+            "h": 900,
+            "kind": "sofa",
+            "rotation": 180
+          },
+          {
+            "id": "two-story-colonial-fn2",
+            "x": 3600,
+            "y": 1500,
+            "w": 500,
+            "h": 500,
+            "kind": "chair",
+            "rotation": 225,
+            "label": "Armchair"
+          },
+          {
+            "id": "two-story-colonial-fn3",
+            "x": 2300,
+            "y": 1900,
+            "w": 1100,
+            "h": 600,
+            "kind": "coffee_table"
+          },
+          {
+            "id": "two-story-colonial-fn4",
+            "x": 2325,
+            "y": 3900,
+            "w": 1600,
+            "h": 450,
+            "kind": "tv_stand",
+            "rotation": 180
+          },
+          {
+            "id": "two-story-colonial-fn5",
+            "x": 2325,
+            "y": 3900,
+            "w": 1450,
+            "h": 250,
+            "kind": "tv",
+            "rotation": 180,
+            "localState": "off"
+          },
+          {
+            "id": "two-story-colonial-fn6",
+            "x": 200,
+            "y": 900,
+            "w": 800,
+            "h": 350,
+            "kind": "bookshelf",
+            "rotation": 90
+          },
+          {
+            "id": "two-story-colonial-fn7",
+            "x": 2300,
+            "y": 1900,
+            "w": 2600,
+            "h": 1700,
+            "kind": "rug"
+          },
+          {
+            "id": "two-story-colonial-fn8",
+            "x": 300,
+            "y": 3900,
+            "w": 400,
+            "h": 400,
+            "kind": "plant"
+          },
+          {
+            "id": "two-story-colonial-fn9",
+            "x": 4850,
+            "y": 700,
+            "w": 1500,
+            "h": 400,
+            "kind": "bench",
+            "rotation": 90
+          },
+          {
+            "id": "two-story-colonial-fn10",
+            "x": 6000,
+            "y": 1200,
+            "w": 1200,
+            "h": 2000,
+            "kind": "rug"
+          },
+          {
+            "id": "two-story-colonial-fn11",
+            "x": 7150,
+            "y": 2200,
+            "w": 400,
+            "h": 400,
+            "kind": "plant"
+          },
+          {
+            "id": "two-story-colonial-fn12",
+            "x": 6000,
+            "y": 4500,
+            "w": 1000,
+            "h": 3600,
+            "kind": "stairs",
+            "label": "Stairs to 2F",
+            "stairLinkId": "two-story-colonial-spine-stair"
+          },
+          {
+            "id": "two-story-colonial-fn13",
+            "x": 4850,
+            "y": 6300,
+            "w": 1500,
+            "h": 400,
+            "kind": "bench",
+            "rotation": 90
+          },
+          {
+            "id": "two-story-colonial-fn14",
+            "x": 4850,
+            "y": 9600,
+            "w": 800,
+            "h": 350,
+            "kind": "bookshelf"
+          },
+          {
+            "id": "two-story-colonial-fn15",
+            "x": 6000,
+            "y": 8000,
+            "w": 1200,
+            "h": 2400,
+            "kind": "rug"
+          },
+          {
+            "id": "two-story-colonial-fn16",
+            "x": 9775,
+            "y": 2150,
+            "w": 1800,
+            "h": 1000,
+            "kind": "table",
+            "label": "Dining table"
+          },
+          {
+            "id": "two-story-colonial-fn17",
+            "x": 8950,
+            "y": 1650,
+            "w": 500,
+            "h": 500,
+            "kind": "chair"
+          },
+          {
+            "id": "two-story-colonial-fn18",
+            "x": 9775,
+            "y": 1650,
+            "w": 500,
+            "h": 500,
+            "kind": "chair"
+          },
+          {
+            "id": "two-story-colonial-fn19",
+            "x": 10600,
+            "y": 1650,
+            "w": 500,
+            "h": 500,
+            "kind": "chair"
+          },
+          {
+            "id": "two-story-colonial-fn20",
+            "x": 8950,
+            "y": 2650,
+            "w": 500,
+            "h": 500,
+            "kind": "chair",
+            "rotation": 180
+          },
+          {
+            "id": "two-story-colonial-fn21",
+            "x": 9775,
+            "y": 2650,
+            "w": 500,
+            "h": 500,
+            "kind": "chair",
+            "rotation": 180
+          },
+          {
+            "id": "two-story-colonial-fn22",
+            "x": 10600,
+            "y": 2650,
+            "w": 500,
+            "h": 500,
+            "kind": "chair",
+            "rotation": 180
+          },
+          {
+            "id": "two-story-colonial-fn23",
+            "x": 7550,
+            "y": 1200,
+            "w": 900,
+            "h": 400,
+            "kind": "cabinet",
+            "rotation": 90,
+            "label": "China cabinet"
+          },
+          {
+            "id": "two-story-colonial-fn24",
+            "x": 9775,
+            "y": 2150,
+            "w": 2700,
+            "h": 1900,
+            "kind": "rug"
+          },
+          {
+            "id": "two-story-colonial-fn25",
+            "x": 11950,
+            "y": 3950,
+            "w": 400,
+            "h": 400,
+            "kind": "plant"
+          },
+          {
+            "id": "two-story-colonial-fn26",
+            "x": 7550,
+            "y": 4500,
+            "w": 480,
+            "h": 700,
+            "kind": "toilet",
+            "rotation": 90
+          },
+          {
+            "id": "two-story-colonial-fn27",
+            "x": 8650,
+            "y": 5500,
+            "w": 560,
+            "h": 470,
+            "kind": "sink",
+            "rotation": 180,
+            "label": "Vanity"
+          },
+          {
+            "id": "two-story-colonial-fn28",
+            "x": 11700,
+            "y": 4500,
+            "w": 690,
+            "h": 700,
+            "kind": "washer"
+          },
+          {
+            "id": "two-story-colonial-fn29",
+            "x": 12050,
+            "y": 4500,
+            "w": 690,
+            "h": 700,
+            "kind": "dryer"
+          },
+          {
+            "id": "two-story-colonial-fn30",
+            "x": 9300,
+            "y": 4500,
+            "w": 1500,
+            "h": 400,
+            "kind": "bench"
+          },
+          {
+            "id": "two-story-colonial-fn31",
+            "x": 9300,
+            "y": 5500,
+            "w": 900,
+            "h": 400,
+            "kind": "cabinet",
+            "rotation": 180
+          },
+          {
+            "id": "two-story-colonial-fn32",
+            "x": 1400,
+            "y": 5600,
+            "w": 3200,
+            "h": 2000,
+            "kind": "sofa_u",
+            "label": "Sectional"
+          },
+          {
+            "id": "two-story-colonial-fn33",
+            "x": 2100,
+            "y": 6500,
+            "w": 1100,
+            "h": 600,
+            "kind": "coffee_table"
+          },
+          {
+            "id": "two-story-colonial-fn34",
+            "x": 3900,
+            "y": 5900,
+            "w": 500,
+            "h": 500,
+            "kind": "chair",
+            "rotation": 270,
+            "label": "Armchair"
+          },
+          {
+            "id": "two-story-colonial-fn35",
+            "x": 2325,
+            "y": 8900,
+            "w": 1600,
+            "h": 450,
+            "kind": "tv_stand",
+            "rotation": 180
+          },
+          {
+            "id": "two-story-colonial-fn36",
+            "x": 2325,
+            "y": 8900,
+            "w": 1450,
+            "h": 250,
+            "kind": "tv",
+            "rotation": 180,
+            "localState": "off"
+          },
+          {
+            "id": "two-story-colonial-fn37",
+            "x": 200,
+            "y": 8600,
+            "w": 800,
+            "h": 350,
+            "kind": "bookshelf"
+          },
+          {
+            "id": "two-story-colonial-fn38",
+            "x": 2200,
+            "y": 6600,
+            "w": 3000,
+            "h": 2400,
+            "kind": "rug"
+          },
+          {
+            "id": "two-story-colonial-fn39",
+            "x": 4400,
+            "y": 8900,
+            "w": 400,
+            "h": 400,
+            "kind": "plant"
+          },
+          {
+            "id": "two-story-colonial-fn40",
+            "x": 7550,
+            "y": 6900,
+            "w": 600,
+            "h": 2000,
+            "kind": "counter",
+            "rotation": 90
+          },
+          {
+            "id": "two-story-colonial-fn41",
+            "x": 8700,
+            "y": 5900,
+            "w": 2200,
+            "h": 650,
+            "kind": "counter"
+          },
+          {
+            "id": "two-story-colonial-fn42",
+            "x": 8900,
+            "y": 5900,
+            "w": 760,
+            "h": 660,
+            "kind": "stove"
+          },
+          {
+            "id": "two-story-colonial-fn43",
+            "x": 8400,
+            "y": 6000,
+            "w": 520,
+            "h": 390,
+            "kind": "microwave",
+            "elevation": 1400
+          },
+          {
+            "id": "two-story-colonial-fn44",
+            "x": 9300,
+            "y": 5900,
+            "w": 610,
+            "h": 620,
+            "kind": "dishwasher"
+          },
+          {
+            "id": "two-story-colonial-fn45",
+            "x": 8600,
+            "y": 9700,
+            "w": 900,
+            "h": 650,
+            "kind": "kitchen_sink",
+            "rotation": 180
+          },
+          {
+            "id": "two-story-colonial-fn46",
+            "x": 9000,
+            "y": 7800,
+            "w": 2000,
+            "h": 1000,
+            "kind": "island"
+          },
+          {
+            "id": "two-story-colonial-fn47",
+            "x": 7550,
+            "y": 9300,
+            "w": 910,
+            "h": 760,
+            "kind": "fridge",
+            "rotation": 90
+          },
+          {
+            "id": "two-story-colonial-fn48",
+            "x": 7550,
+            "y": 8200,
+            "w": 900,
+            "h": 400,
+            "kind": "cabinet",
+            "rotation": 90
+          },
+          {
+            "id": "two-story-colonial-fn49",
+            "x": 11100,
+            "y": 8000,
+            "w": 900,
+            "h": 900,
+            "kind": "table",
+            "label": "Breakfast"
+          },
+          {
+            "id": "two-story-colonial-fn50",
+            "x": 10600,
+            "y": 7600,
+            "w": 500,
+            "h": 500,
+            "kind": "chair",
+            "rotation": 90
+          },
+          {
+            "id": "two-story-colonial-fn51",
+            "x": 11600,
+            "y": 7600,
+            "w": 500,
+            "h": 500,
+            "kind": "chair",
+            "rotation": 90
+          },
+          {
+            "id": "two-story-colonial-fn52",
+            "x": 10600,
+            "y": 8400,
+            "w": 500,
+            "h": 500,
+            "kind": "chair",
+            "rotation": 270
+          },
+          {
+            "id": "two-story-colonial-fn53",
+            "x": 11600,
+            "y": 8400,
+            "w": 500,
+            "h": 500,
+            "kind": "chair",
+            "rotation": 270
+          },
+          {
+            "id": "two-story-colonial-fn54",
+            "x": 11900,
+            "y": 6200,
+            "w": 400,
+            "h": 400,
+            "kind": "plant"
+          },
+          {
+            "id": "two-story-colonial-fn55",
+            "x": 17900,
+            "y": 900,
+            "w": 900,
+            "h": 400,
+            "kind": "cabinet",
+            "rotation": 270
+          },
+          {
+            "id": "two-story-colonial-fn56",
+            "x": 12400,
+            "y": 3000,
+            "w": 1400,
+            "h": 700,
+            "kind": "desk",
+            "rotation": 90,
+            "label": "Workbench"
+          },
+          {
+            "id": "two-story-colonial-fn57",
+            "x": 17900,
+            "y": 5300,
+            "w": 800,
+            "h": 350,
+            "kind": "bookshelf",
+            "rotation": 270,
+            "label": "Shelving"
+          },
+          {
+            "id": "two-story-colonial-fn58",
+            "x": 13000,
+            "y": 7000,
+            "w": 600,
+            "h": 700,
+            "kind": "trash_bin"
+          },
+          {
+            "id": "two-story-colonial-fn59",
+            "x": 13700,
+            "y": 7000,
+            "w": 600,
+            "h": 700,
+            "kind": "recycle_bin"
+          },
+          {
+            "id": "two-story-colonial-fn60",
+            "x": 15500,
+            "y": 8500,
+            "w": 900,
+            "h": 900,
+            "kind": "tree"
+          }
+        ],
+        "lights": [
+          {
+            "id": "two-story-colonial-lt1",
+            "x": 2325,
+            "y": 2150,
+            "entity_id": null,
+            "iconKind": "bulb",
+            "label": "Living Room"
+          },
+          {
+            "id": "two-story-colonial-lt2",
+            "x": 9775,
+            "y": 2150,
+            "entity_id": null,
+            "iconKind": "pendant",
+            "label": "Dining"
+          },
+          {
+            "id": "two-story-colonial-lt3",
+            "x": 6000,
+            "y": 1200,
+            "entity_id": null,
+            "iconKind": "bulb",
+            "label": "Foyer"
+          },
+          {
+            "id": "two-story-colonial-lt4",
+            "x": 6000,
+            "y": 4500,
+            "entity_id": null,
+            "iconKind": "bulb",
+            "label": "Stair Hall"
+          },
+          {
+            "id": "two-story-colonial-lt5",
+            "x": 6000,
+            "y": 8250,
+            "entity_id": null,
+            "iconKind": "bulb",
+            "label": "Back Hall"
+          },
+          {
+            "id": "two-story-colonial-lt6",
+            "x": 8100,
+            "y": 5000,
+            "entity_id": null,
+            "iconKind": "sconce",
+            "radius": 500,
+            "label": "Half Bath"
+          },
+          {
+            "id": "two-story-colonial-lt7",
+            "x": 10525,
+            "y": 5000,
+            "entity_id": null,
+            "iconKind": "bulb",
+            "label": "Mudroom"
+          },
+          {
+            "id": "two-story-colonial-lt8",
+            "x": 2325,
+            "y": 7100,
+            "entity_id": null,
+            "iconKind": "bulb",
+            "label": "Family Room"
+          },
+          {
+            "id": "two-story-colonial-lt9",
+            "x": 3600,
+            "y": 6100,
+            "entity_id": null,
+            "iconKind": "lamp",
+            "height": 1400,
+            "label": "Family lamp"
+          },
+          {
+            "id": "two-story-colonial-lt10",
+            "x": 200,
+            "y": 6750,
+            "entity_id": null,
+            "iconKind": "fireplace",
+            "rotation": 90,
+            "label": "Fireplace"
+          },
+          {
+            "id": "two-story-colonial-lt11",
+            "x": 9000,
+            "y": 7800,
+            "entity_id": null,
+            "iconKind": "pendant",
+            "label": "Kitchen island"
+          },
+          {
+            "id": "two-story-colonial-lt12",
+            "x": 8675,
+            "y": 7000,
+            "entity_id": null,
+            "iconKind": "round",
+            "label": "Kitchen"
+          },
+          {
+            "id": "two-story-colonial-lt13",
+            "x": 11100,
+            "y": 8000,
+            "entity_id": null,
+            "iconKind": "pendant",
+            "label": "Breakfast"
+          },
+          {
+            "id": "two-story-colonial-lt14",
+            "x": 17000,
+            "y": 3000,
+            "entity_id": null,
+            "iconKind": "strip",
+            "rotation": 0,
+            "length": 3000,
+            "label": "Garage"
+          },
+          {
+            "id": "two-story-colonial-lt15",
+            "x": 15000,
+            "y": 3000,
+            "entity_id": null,
+            "iconKind": "strip",
+            "rotation": 0,
+            "length": 3000,
+            "label": "Garage"
+          }
+        ],
+        "switches": [
+          {
+            "id": "two-story-colonial-sw1",
+            "x": 5100,
+            "y": 200,
+            "entity_id": null,
+            "rotation": 0,
+            "label": "Foyer"
+          },
+          {
+            "id": "two-story-colonial-sw2",
+            "x": 300,
+            "y": 9200,
+            "entity_id": null,
+            "rotation": 90,
+            "label": "Patio"
+          }
+        ],
+        "sensors": [],
+        "motionSensors": [],
+        "roamers": [
+          {
+            "id": "two-story-colonial-ro1",
+            "name": "Morgan",
+            "avatarKinds": [
+              "adult",
+              "professional"
+            ],
+            "color": "#4fc3f7"
+          },
+          {
+            "id": "two-story-colonial-ro2",
+            "name": "Avery",
+            "avatarKinds": [
+              "child",
+              "teen"
+            ],
+            "color": "#f06292"
+          },
+          {
+            "id": "two-story-colonial-ro3",
+            "name": "Sam",
+            "avatarKinds": [
+              "adult",
+              "elder"
+            ],
+            "color": "#81c784"
+          }
+        ],
+        "envSensors": [],
+        "look3d": {
+          "floorTex": "wood",
+          "floorColor": "#b8875a",
+          "wallColor": "#f3ecd9"
+        },
+        "doors": [
+          {
+            "id": "two-story-colonial-dr1",
+            "x": 5500,
+            "y": 0,
+            "w": 1000,
+            "rotation": 0,
+            "entity_id": null,
+            "lockEntity": null,
+            "doorbellEntity": null,
+            "label": "Front"
+          },
+          {
+            "id": "two-story-colonial-dr2",
+            "x": 4650,
+            "y": 600,
+            "w": 900,
+            "rotation": 270,
+            "entity_id": null,
+            "label": "Living ↔ Foyer"
+          },
+          {
+            "id": "two-story-colonial-dr3",
+            "x": 7350,
+            "y": 600,
+            "w": 900,
+            "rotation": 270,
+            "entity_id": null,
+            "label": "Dining ↔ Foyer"
+          },
+          {
+            "id": "two-story-colonial-dr4",
+            "x": 5550,
+            "y": 2400,
+            "w": 1000,
+            "rotation": 0,
+            "entity_id": null,
+            "label": "Foyer ↔ Stair"
+          },
+          {
+            "id": "two-story-colonial-dr5",
+            "x": 5500,
+            "y": 6600,
+            "w": 1000,
+            "rotation": 0,
+            "entity_id": null,
+            "label": "Stair ↔ Back Hall"
+          },
+          {
+            "id": "two-story-colonial-dr6",
+            "x": 4650,
+            "y": 7500,
+            "w": 1200,
+            "rotation": 270,
+            "entity_id": null,
+            "label": "Family ↔ Hall"
+          },
+          {
+            "id": "two-story-colonial-dr7",
+            "x": 7350,
+            "y": 7000,
+            "w": 1200,
+            "rotation": 270,
+            "entity_id": null,
+            "label": "Kitchen ↔ Hall"
+          },
+          {
+            "id": "two-story-colonial-dr8",
+            "x": 7350,
+            "y": 4700,
+            "w": 700,
+            "rotation": 270,
+            "entity_id": null,
+            "label": "Half Bath"
+          },
+          {
+            "id": "two-story-colonial-dr9",
+            "x": 9000,
+            "y": 5700,
+            "w": 800,
+            "rotation": 0,
+            "entity_id": null,
+            "label": "Mudroom"
+          },
+          {
+            "id": "two-story-colonial-dr10",
+            "x": 12200,
+            "y": 4700,
+            "w": 900,
+            "rotation": 270,
+            "entity_id": null,
+            "lockEntity": null,
+            "label": "Garage service"
+          },
+          {
+            "id": "two-story-colonial-dr11",
+            "x": 12200,
+            "y": 7000,
+            "w": 900,
+            "rotation": 270,
+            "entity_id": null,
+            "label": "Side entrance"
+          },
+          {
+            "id": "two-story-colonial-dr12",
+            "x": 12700,
+            "y": 0,
+            "w": 2400,
+            "rotation": 0,
+            "entity_id": null,
+            "kind": "garage",
+            "label": "Garage bay 1"
+          },
+          {
+            "id": "two-story-colonial-dr13",
+            "x": 15400,
+            "y": 0,
+            "w": 2400,
+            "rotation": 0,
+            "entity_id": null,
+            "kind": "garage",
+            "label": "Garage bay 2"
+          },
+          {
+            "id": "two-story-colonial-dr14",
+            "x": 17500,
+            "y": 6100,
+            "w": 900,
+            "rotation": 0,
+            "entity_id": null,
+            "label": "Garage man-door"
+          }
+        ],
+        "windows": [
+          {
+            "id": "two-story-colonial-win1",
+            "x": 1300,
+            "y": 0,
+            "w": 1200,
+            "rotation": 0,
+            "entity_id": null,
+            "sill": 800,
+            "height": 1300,
+            "kind": "double_hung",
+            "label": "Living front"
+          },
+          {
+            "id": "two-story-colonial-win2",
+            "x": 3300,
+            "y": 0,
+            "w": 1200,
+            "rotation": 0,
+            "entity_id": null,
+            "sill": 800,
+            "height": 1300,
+            "kind": "double_hung",
+            "label": "Living front"
+          },
+          {
+            "id": "two-story-colonial-win3",
+            "x": 8600,
+            "y": 0,
+            "w": 1200,
+            "rotation": 0,
+            "entity_id": null,
+            "sill": 800,
+            "height": 1300,
+            "kind": "double_hung",
+            "label": "Dining front"
+          },
+          {
+            "id": "two-story-colonial-win4",
+            "x": 10950,
+            "y": 0,
+            "w": 1200,
+            "rotation": 0,
+            "entity_id": null,
+            "sill": 800,
+            "height": 1300,
+            "kind": "double_hung",
+            "label": "Dining front"
+          },
+          {
+            "id": "two-story-colonial-win5",
+            "x": 2000,
+            "y": 9900,
+            "w": 1800,
+            "rotation": 0,
+            "entity_id": null,
+            "sill": 0,
+            "height": 2050,
+            "kind": "sliding",
+            "label": "Family slider"
+          },
+          {
+            "id": "two-story-colonial-win6",
+            "x": 4000,
+            "y": 9900,
+            "w": 1200,
+            "rotation": 0,
+            "entity_id": null,
+            "sill": 800,
+            "height": 1300,
+            "kind": "double_hung",
+            "label": "Family rear"
+          },
+          {
+            "id": "two-story-colonial-win7",
+            "x": 0,
+            "y": 6000,
+            "w": 1200,
+            "rotation": 90,
+            "entity_id": null,
+            "sill": 800,
+            "height": 1300,
+            "label": "Family side"
+          },
+          {
+            "id": "two-story-colonial-win8",
+            "x": 0,
+            "y": 8300,
+            "w": 1200,
+            "rotation": 90,
+            "entity_id": null,
+            "sill": 800,
+            "height": 1300,
+            "label": "Family side"
+          },
+          {
+            "id": "two-story-colonial-win9",
+            "x": 8600,
+            "y": 9900,
+            "w": 1200,
+            "rotation": 0,
+            "entity_id": null,
+            "sill": 800,
+            "height": 1300,
+            "kind": "double_hung",
+            "label": "Kitchen"
+          },
+          {
+            "id": "two-story-colonial-win10",
+            "x": 11100,
+            "y": 9900,
+            "w": 1500,
+            "rotation": 0,
+            "entity_id": null,
+            "sill": 700,
+            "height": 1500,
+            "kind": "picture",
+            "label": "Breakfast Nook"
+          },
+          {
+            "id": "two-story-colonial-win11",
+            "x": 12200,
+            "y": 8000,
+            "w": 1200,
+            "rotation": 90,
+            "entity_id": null,
+            "sill": 800,
+            "height": 1300,
+            "kind": "double_hung",
+            "label": "Nook side"
+          },
+          {
+            "id": "two-story-colonial-win12",
+            "x": 18300,
+            "y": 3000,
+            "w": 1200,
+            "rotation": 90,
+            "entity_id": null,
+            "sill": 900,
+            "height": 900,
+            "label": "Garage side"
+          }
+        ],
+        "bg": null,
+        "model3d": null,
+        "rooms": [
+          {
+            "id": "two-story-colonial-rm1",
+            "name": "Living Room",
+            "anchor": {
+              "x": 2325,
+              "y": 2150
+            }
+          },
+          {
+            "id": "two-story-colonial-rm2",
+            "name": "Foyer",
+            "anchor": {
+              "x": 6000,
+              "y": 1200
+            }
+          },
+          {
+            "id": "two-story-colonial-rm3",
+            "name": "Stair Hall",
+            "anchor": {
+              "x": 6000,
+              "y": 4500
+            }
+          },
+          {
+            "id": "two-story-colonial-rm4",
+            "name": "Back Hall",
+            "anchor": {
+              "x": 6000,
+              "y": 8250
+            }
+          },
+          {
+            "id": "two-story-colonial-rm5",
+            "name": "Dining Room",
+            "anchor": {
+              "x": 9775,
+              "y": 2150
+            }
+          },
+          {
+            "id": "two-story-colonial-rm6",
+            "name": "Half Bath",
+            "anchor": {
+              "x": 8100,
+              "y": 5000
+            }
+          },
+          {
+            "id": "two-story-colonial-rm7",
+            "name": "Mudroom / Laundry",
+            "anchor": {
+              "x": 10525,
+              "y": 5000
+            }
+          },
+          {
+            "id": "two-story-colonial-rm8",
+            "name": "Family Room",
+            "anchor": {
+              "x": 2325,
+              "y": 7100
+            }
+          },
+          {
+            "id": "two-story-colonial-rm9",
+            "name": "Kitchen",
+            "anchor": {
+              "x": 8675,
+              "y": 7800
+            }
+          },
+          {
+            "id": "two-story-colonial-rm10",
+            "name": "Breakfast Nook",
+            "anchor": {
+              "x": 11100,
+              "y": 7800
+            }
+          },
+          {
+            "id": "two-story-colonial-rm11",
+            "name": "Garage",
+            "anchor": {
+              "x": 15250,
+              "y": 3050
+            }
+          }
+        ],
+        "bleProxies": [],
+        "alarmPanels": [],
+        "safetySensors": [],
+        "robots": [],
+        "presenceZones": [],
+        "cameras": [],
+        "groundAreas": [],
+        "voidAreas": []
+      },
+      {
+        "id": "two-story-colonial-fl2",
+        "name": "Second Floor",
+        "w": 12200,
+        "d": 9900,
+        "walls": [
+          {
+            "id": "two-story-colonial-w11",
+            "points": [
+              {
+                "x": 0,
+                "y": 0
+              },
+              {
+                "x": 12200,
+                "y": 0
+              },
+              {
+                "x": 12200,
+                "y": 9900
+              },
+              {
+                "x": 0,
+                "y": 9900
+              },
+              {
+                "x": 0,
+                "y": 0
+              }
+            ]
+          },
+          {
+            "id": "two-story-colonial-w12",
+            "points": [
+              {
+                "x": 4650,
+                "y": 0
+              },
+              {
+                "x": 4650,
+                "y": 9900
+              }
+            ]
+          },
+          {
+            "id": "two-story-colonial-w13",
+            "points": [
+              {
+                "x": 7350,
+                "y": 0
+              },
+              {
+                "x": 7350,
+                "y": 9900
+              }
+            ]
+          },
+          {
+            "id": "two-story-colonial-w14",
+            "points": [
+              {
+                "x": 4650,
+                "y": 2400
+              },
+              {
+                "x": 7350,
+                "y": 2400
+              }
+            ]
+          },
+          {
+            "id": "two-story-colonial-w15",
+            "points": [
+              {
+                "x": 4650,
+                "y": 6600
+              },
+              {
+                "x": 7350,
+                "y": 6600
+              }
+            ],
+            "kind": "railing"
+          },
+          {
+            "id": "two-story-colonial-w16",
+            "points": [
+              {
+                "x": 0,
+                "y": 4300
+              },
+              {
+                "x": 4650,
+                "y": 4300
+              }
+            ]
+          },
+          {
+            "id": "two-story-colonial-w17",
+            "points": [
+              {
+                "x": 0,
+                "y": 5700
+              },
+              {
+                "x": 4650,
+                "y": 5700
+              }
+            ]
+          },
+          {
+            "id": "two-story-colonial-w18",
+            "points": [
+              {
+                "x": 2650,
+                "y": 4300
+              },
+              {
+                "x": 2650,
+                "y": 5700
+              }
+            ]
+          },
+          {
+            "id": "two-story-colonial-w19",
+            "points": [
+              {
+                "x": 7350,
+                "y": 4300
+              },
+              {
+                "x": 12200,
+                "y": 4300
+              }
+            ]
+          },
+          {
+            "id": "two-story-colonial-w20",
+            "points": [
+              {
+                "x": 7350,
+                "y": 5700
+              },
+              {
+                "x": 12200,
+                "y": 5700
+              }
+            ]
+          },
+          {
+            "id": "two-story-colonial-w21",
+            "points": [
+              {
+                "x": 9950,
+                "y": 4300
+              },
+              {
+                "x": 9950,
+                "y": 5700
+              }
+            ]
+          }
+        ],
+        "furniture": [
+          {
+            "id": "two-story-colonial-fn61",
+            "x": 1700,
+            "y": 1100,
+            "w": 1500,
+            "h": 2000,
+            "kind": "bed",
+            "rotation": 180
+          },
+          {
+            "id": "two-story-colonial-fn62",
+            "x": 700,
+            "y": 700,
+            "w": 500,
+            "h": 400,
+            "kind": "nightstand",
+            "rotation": 180
+          },
+          {
+            "id": "two-story-colonial-fn63",
+            "x": 2700,
+            "y": 700,
+            "w": 500,
+            "h": 400,
+            "kind": "nightstand",
+            "rotation": 180
+          },
+          {
+            "id": "two-story-colonial-fn64",
+            "x": 300,
+            "y": 3600,
+            "w": 1200,
+            "h": 500,
+            "kind": "dresser",
+            "rotation": 90
+          },
+          {
+            "id": "two-story-colonial-fn65",
+            "x": 3900,
+            "y": 3600,
+            "w": 1400,
+            "h": 700,
+            "kind": "desk",
+            "rotation": 270
+          },
+          {
+            "id": "two-story-colonial-fn66",
+            "x": 1700,
+            "y": 2300,
+            "w": 1800,
+            "h": 1400,
+            "kind": "rug",
+            "color": "#cdb996"
+          },
+          {
+            "id": "two-story-colonial-fn67",
+            "x": 6000,
+            "y": 3000,
+            "w": 1000,
+            "h": 1000,
+            "kind": "stair_landing",
+            "label": "Stair landing",
+            "stairLinkId": "two-story-colonial-spine-stair"
+          },
+          {
+            "id": "two-story-colonial-fn68",
+            "x": 5200,
+            "y": 700,
+            "w": 500,
+            "h": 500,
+            "kind": "chair",
+            "rotation": 90,
+            "label": "Reading chair"
+          },
+          {
+            "id": "two-story-colonial-fn69",
+            "x": 4850,
+            "y": 1800,
+            "w": 800,
+            "h": 350,
+            "kind": "bookshelf",
+            "rotation": 90
+          },
+          {
+            "id": "two-story-colonial-fn70",
+            "x": 6000,
+            "y": 1200,
+            "w": 1200,
+            "h": 2000,
+            "kind": "rug"
+          },
+          {
+            "id": "two-story-colonial-fn71",
+            "x": 4850,
+            "y": 9600,
+            "w": 800,
+            "h": 350,
+            "kind": "bookshelf"
+          },
+          {
+            "id": "two-story-colonial-fn72",
+            "x": 6000,
+            "y": 8000,
+            "w": 1200,
+            "h": 2400,
+            "kind": "rug"
+          },
+          {
+            "id": "two-story-colonial-fn73",
+            "x": 8750,
+            "y": 3100,
+            "w": 1350,
+            "h": 1900,
+            "kind": "bed",
+            "rotation": 180
+          },
+          {
+            "id": "two-story-colonial-fn74",
+            "x": 7750,
+            "y": 3100,
+            "w": 500,
+            "h": 400,
+            "kind": "nightstand",
+            "rotation": 180
+          },
+          {
+            "id": "two-story-colonial-fn75",
+            "x": 11700,
+            "y": 700,
+            "w": 1200,
+            "h": 500,
+            "kind": "dresser"
+          },
+          {
+            "id": "two-story-colonial-fn76",
+            "x": 7750,
+            "y": 700,
+            "w": 1400,
+            "h": 700,
+            "kind": "desk"
+          },
+          {
+            "id": "two-story-colonial-fn77",
+            "x": 8750,
+            "y": 3000,
+            "w": 1600,
+            "h": 1300,
+            "kind": "rug",
+            "color": "#cdb996"
+          },
+          {
+            "id": "two-story-colonial-fn78",
+            "x": 7550,
+            "y": 4500,
+            "w": 480,
+            "h": 700,
+            "kind": "toilet",
+            "rotation": 90
+          },
+          {
+            "id": "two-story-colonial-fn79",
+            "x": 9600,
+            "y": 5500,
+            "w": 560,
+            "h": 470,
+            "kind": "sink",
+            "rotation": 180,
+            "label": "Vanity"
+          },
+          {
+            "id": "two-story-colonial-fn80",
+            "x": 8600,
+            "y": 5500,
+            "w": 1700,
+            "h": 750,
+            "kind": "bathtub",
+            "rotation": 180
+          },
+          {
+            "id": "two-story-colonial-fn81",
+            "x": 11100,
+            "y": 5000,
+            "w": 900,
+            "h": 400,
+            "kind": "cabinet",
+            "label": "Linen"
+          },
+          {
+            "id": "two-story-colonial-fn82",
+            "x": 400,
+            "y": 4500,
+            "w": 480,
+            "h": 700,
+            "kind": "toilet",
+            "rotation": 90
+          },
+          {
+            "id": "two-story-colonial-fn83",
+            "x": 300,
+            "y": 5300,
+            "w": 560,
+            "h": 470,
+            "kind": "sink",
+            "rotation": 90,
+            "label": "Vanity"
+          },
+          {
+            "id": "two-story-colonial-fn84",
+            "x": 1900,
+            "y": 4500,
+            "w": 1600,
+            "h": 750,
+            "kind": "bathtub"
+          },
+          {
+            "id": "two-story-colonial-fn85",
+            "x": 2300,
+            "y": 5400,
+            "w": 800,
+            "h": 800,
+            "kind": "shower",
+            "rotation": 270
+          },
+          {
+            "id": "two-story-colonial-fn86",
+            "x": 2850,
+            "y": 5000,
+            "w": 1200,
+            "h": 600,
+            "kind": "wardrobe",
+            "rotation": 90
+          },
+          {
+            "id": "two-story-colonial-fn87",
+            "x": 4450,
+            "y": 5000,
+            "w": 1200,
+            "h": 600,
+            "kind": "wardrobe",
+            "rotation": 270
+          },
+          {
+            "id": "two-story-colonial-fn88",
+            "x": 3650,
+            "y": 4450,
+            "w": 1200,
+            "h": 500,
+            "kind": "dresser"
+          },
+          {
+            "id": "two-story-colonial-fn89",
+            "x": 2325,
+            "y": 8700,
+            "w": 1900,
+            "h": 2100,
+            "kind": "bed"
+          },
+          {
+            "id": "two-story-colonial-fn90",
+            "x": 1000,
+            "y": 8700,
+            "w": 500,
+            "h": 400,
+            "kind": "nightstand"
+          },
+          {
+            "id": "two-story-colonial-fn91",
+            "x": 3650,
+            "y": 8700,
+            "w": 500,
+            "h": 400,
+            "kind": "nightstand"
+          },
+          {
+            "id": "two-story-colonial-fn92",
+            "x": 300,
+            "y": 6300,
+            "w": 1200,
+            "h": 500,
+            "kind": "dresser",
+            "rotation": 90
+          },
+          {
+            "id": "two-story-colonial-fn93",
+            "x": 4300,
+            "y": 6300,
+            "w": 500,
+            "h": 500,
+            "kind": "chair",
+            "rotation": 270,
+            "label": "Reading chair"
+          },
+          {
+            "id": "two-story-colonial-fn94",
+            "x": 2325,
+            "y": 7200,
+            "w": 700,
+            "h": 700,
+            "kind": "ottoman"
+          },
+          {
+            "id": "two-story-colonial-fn95",
+            "x": 2325,
+            "y": 7800,
+            "w": 2700,
+            "h": 2100,
+            "kind": "rug",
+            "color": "#d7dee2"
+          },
+          {
+            "id": "two-story-colonial-fn96",
+            "x": 8700,
+            "y": 8700,
+            "w": 1500,
+            "h": 2000,
+            "kind": "bed"
+          },
+          {
+            "id": "two-story-colonial-fn97",
+            "x": 7700,
+            "y": 8700,
+            "w": 500,
+            "h": 400,
+            "kind": "nightstand"
+          },
+          {
+            "id": "two-story-colonial-fn98",
+            "x": 9700,
+            "y": 8700,
+            "w": 500,
+            "h": 400,
+            "kind": "nightstand"
+          },
+          {
+            "id": "two-story-colonial-fn99",
+            "x": 11700,
+            "y": 6300,
+            "w": 1200,
+            "h": 500,
+            "kind": "dresser",
+            "rotation": 90
+          },
+          {
+            "id": "two-story-colonial-fn100",
+            "x": 7700,
+            "y": 6300,
+            "w": 1400,
+            "h": 700,
+            "kind": "desk",
+            "rotation": 90
+          },
+          {
+            "id": "two-story-colonial-fn101",
+            "x": 8700,
+            "y": 8000,
+            "w": 1800,
+            "h": 1400,
+            "kind": "rug",
+            "color": "#cdb996"
+          }
+        ],
+        "lights": [
+          {
+            "id": "two-story-colonial-lt16",
+            "x": 2325,
+            "y": 2150,
+            "entity_id": null,
+            "iconKind": "bulb",
+            "label": "Bedroom 2"
+          },
+          {
+            "id": "two-story-colonial-lt17",
+            "x": 6000,
+            "y": 1200,
+            "entity_id": null,
+            "iconKind": "bulb",
+            "label": "Landing"
+          },
+          {
+            "id": "two-story-colonial-lt18",
+            "x": 6000,
+            "y": 4500,
+            "entity_id": null,
+            "iconKind": "pendant",
+            "label": "Stairwell"
+          },
+          {
+            "id": "two-story-colonial-lt19",
+            "x": 6000,
+            "y": 8250,
+            "entity_id": null,
+            "iconKind": "bulb",
+            "label": "Upstairs Hallway"
+          },
+          {
+            "id": "two-story-colonial-lt20",
+            "x": 9775,
+            "y": 2150,
+            "entity_id": null,
+            "iconKind": "bulb",
+            "label": "Bedroom 3"
+          },
+          {
+            "id": "two-story-colonial-lt21",
+            "x": 8650,
+            "y": 5000,
+            "entity_id": null,
+            "iconKind": "sconce",
+            "radius": 500,
+            "label": "Hall Bath"
+          },
+          {
+            "id": "two-story-colonial-lt22",
+            "x": 1325,
+            "y": 5000,
+            "entity_id": null,
+            "iconKind": "sconce",
+            "radius": 500,
+            "label": "Primary Bath"
+          },
+          {
+            "id": "two-story-colonial-lt23",
+            "x": 2325,
+            "y": 7800,
+            "entity_id": null,
+            "iconKind": "bulb",
+            "label": "Primary Bedroom"
+          },
+          {
+            "id": "two-story-colonial-lt24",
+            "x": 1000,
+            "y": 8700,
+            "entity_id": null,
+            "iconKind": "lamp",
+            "height": 1400,
+            "label": "Primary lamp"
+          },
+          {
+            "id": "two-story-colonial-lt25",
+            "x": 9775,
+            "y": 7800,
+            "entity_id": null,
+            "iconKind": "bulb",
+            "label": "Bedroom 4"
+          }
+        ],
+        "switches": [],
+        "sensors": [],
+        "motionSensors": [],
+        "roamers": [],
+        "envSensors": [],
+        "look3d": {
+          "floorTex": "none",
+          "floorColor": "#cdb996",
+          "wallColor": "#f1e9c9"
+        },
+        "doors": [
+          {
+            "id": "two-story-colonial-dr15",
+            "x": 4650,
+            "y": 1500,
+            "w": 900,
+            "rotation": 270,
+            "entity_id": null,
+            "label": "Bedroom 2"
+          },
+          {
+            "id": "two-story-colonial-dr16",
+            "x": 7350,
+            "y": 1500,
+            "w": 900,
+            "rotation": 270,
+            "entity_id": null,
+            "label": "Bedroom 3"
+          },
+          {
+            "id": "two-story-colonial-dr17",
+            "x": 4650,
+            "y": 7800,
+            "w": 900,
+            "rotation": 270,
+            "entity_id": null,
+            "label": "Primary Bedroom"
+          },
+          {
+            "id": "two-story-colonial-dr18",
+            "x": 7350,
+            "y": 7800,
+            "w": 900,
+            "rotation": 270,
+            "entity_id": null,
+            "label": "Bedroom 4"
+          },
+          {
+            "id": "two-story-colonial-dr19",
+            "x": 1000,
+            "y": 5700,
+            "w": 700,
+            "rotation": 0,
+            "entity_id": null,
+            "label": "Primary Bath"
+          },
+          {
+            "id": "two-story-colonial-dr20",
+            "x": 3200,
+            "y": 5700,
+            "w": 700,
+            "rotation": 0,
+            "entity_id": null,
+            "label": "Primary WIC"
+          },
+          {
+            "id": "two-story-colonial-dr21",
+            "x": 7350,
+            "y": 4700,
+            "w": 700,
+            "rotation": 270,
+            "entity_id": null,
+            "label": "Hall Bath"
+          },
+          {
+            "id": "two-story-colonial-dr22",
+            "x": 9950,
+            "y": 4700,
+            "w": 700,
+            "rotation": 270,
+            "entity_id": null,
+            "label": "Linen"
+          },
+          {
+            "id": "two-story-colonial-dr23",
+            "x": 5500,
+            "y": 2400,
+            "w": 1000,
+            "rotation": 0,
+            "entity_id": null,
+            "label": "Landing ↔ Stair"
+          }
+        ],
+        "windows": [
+          {
+            "id": "two-story-colonial-win13",
+            "x": 1300,
+            "y": 0,
+            "w": 1200,
+            "rotation": 0,
+            "entity_id": null,
+            "sill": 800,
+            "height": 1300,
+            "kind": "double_hung",
+            "label": "Bedroom 2 front"
+          },
+          {
+            "id": "two-story-colonial-win14",
+            "x": 3300,
+            "y": 0,
+            "w": 1200,
+            "rotation": 0,
+            "entity_id": null,
+            "sill": 800,
+            "height": 1300,
+            "kind": "double_hung",
+            "label": "Bedroom 2 front"
+          },
+          {
+            "id": "two-story-colonial-win15",
+            "x": 8600,
+            "y": 0,
+            "w": 1200,
+            "rotation": 0,
+            "entity_id": null,
+            "sill": 800,
+            "height": 1300,
+            "kind": "double_hung",
+            "label": "Bedroom 3 front"
+          },
+          {
+            "id": "two-story-colonial-win16",
+            "x": 10950,
+            "y": 0,
+            "w": 1200,
+            "rotation": 0,
+            "entity_id": null,
+            "sill": 800,
+            "height": 1300,
+            "kind": "double_hung",
+            "label": "Bedroom 3 front"
+          },
+          {
+            "id": "two-story-colonial-win17",
+            "x": 1500,
+            "y": 9900,
+            "w": 1200,
+            "rotation": 0,
+            "entity_id": null,
+            "sill": 800,
+            "height": 1300,
+            "kind": "double_hung",
+            "label": "Primary rear"
+          },
+          {
+            "id": "two-story-colonial-win18",
+            "x": 3500,
+            "y": 9900,
+            "w": 1200,
+            "rotation": 0,
+            "entity_id": null,
+            "sill": 800,
+            "height": 1300,
+            "kind": "double_hung",
+            "label": "Primary rear"
+          },
+          {
+            "id": "two-story-colonial-win19",
+            "x": 0,
+            "y": 7500,
+            "w": 1200,
+            "rotation": 90,
+            "entity_id": null,
+            "sill": 800,
+            "height": 1300,
+            "label": "Primary side"
+          },
+          {
+            "id": "two-story-colonial-win20",
+            "x": 0,
+            "y": 5000,
+            "w": 900,
+            "rotation": 90,
+            "entity_id": null,
+            "sill": 1400,
+            "height": 900,
+            "label": "Primary Bath"
+          },
+          {
+            "id": "two-story-colonial-win21",
+            "x": 8600,
+            "y": 9900,
+            "w": 1200,
+            "rotation": 0,
+            "entity_id": null,
+            "sill": 800,
+            "height": 1300,
+            "kind": "double_hung",
+            "label": "Bedroom 4 rear"
+          },
+          {
+            "id": "two-story-colonial-win22",
+            "x": 10950,
+            "y": 9900,
+            "w": 1200,
+            "rotation": 0,
+            "entity_id": null,
+            "sill": 800,
+            "height": 1300,
+            "kind": "double_hung",
+            "label": "Bedroom 4 rear"
+          },
+          {
+            "id": "two-story-colonial-win23",
+            "x": 12200,
+            "y": 7500,
+            "w": 1200,
+            "rotation": 90,
+            "entity_id": null,
+            "sill": 800,
+            "height": 1300,
+            "label": "Bedroom 4 side"
+          }
+        ],
+        "bg": null,
+        "model3d": null,
+        "rooms": [
+          {
+            "id": "two-story-colonial-rm12",
+            "name": "Bedroom 2",
+            "anchor": {
+              "x": 2325,
+              "y": 2150
+            }
+          },
+          {
+            "id": "two-story-colonial-rm13",
+            "name": "Landing / Reading Nook",
+            "anchor": {
+              "x": 6000,
+              "y": 1200
+            }
+          },
+          {
+            "id": "two-story-colonial-rm14",
+            "name": "Stairwell",
+            "anchor": {
+              "x": 6000,
+              "y": 4500
+            }
+          },
+          {
+            "id": "two-story-colonial-rm15",
+            "name": "Upstairs Hallway",
+            "anchor": {
+              "x": 6000,
+              "y": 8250
+            }
+          },
+          {
+            "id": "two-story-colonial-rm16",
+            "name": "Bedroom 3",
+            "anchor": {
+              "x": 9775,
+              "y": 2150
+            }
+          },
+          {
+            "id": "two-story-colonial-rm17",
+            "name": "Hall Bath",
+            "anchor": {
+              "x": 8650,
+              "y": 5000
+            }
+          },
+          {
+            "id": "two-story-colonial-rm18",
+            "name": "Linen / Storage",
+            "anchor": {
+              "x": 11075,
+              "y": 5000
+            }
+          },
+          {
+            "id": "two-story-colonial-rm19",
+            "name": "Primary Bathroom",
+            "anchor": {
+              "x": 1325,
+              "y": 5000
+            }
+          },
+          {
+            "id": "two-story-colonial-rm20",
+            "name": "Primary Walk-in Closet",
+            "anchor": {
+              "x": 3650,
+              "y": 5000
+            }
+          },
+          {
+            "id": "two-story-colonial-rm21",
+            "name": "Primary Bedroom",
+            "anchor": {
+              "x": 2325,
+              "y": 7800
+            }
+          },
+          {
+            "id": "two-story-colonial-rm22",
+            "name": "Bedroom 4",
+            "anchor": {
+              "x": 9775,
+              "y": 7800
+            }
+          }
+        ],
+        "bleProxies": [],
+        "alarmPanels": [],
+        "safetySensors": [],
+        "robots": [],
+        "presenceZones": [],
+        "cameras": [],
+        "groundAreas": [],
+        "voidAreas": []
+      }
+    ],
+    "currentFloorId": "two-story-colonial-fl1",
+    "activeSensorId": null,
+    "coverage": true,
+    "imperial": false,
+    "showDetails": false,
+    "useRawTargets": false,
+    "showMotionZones": true,
+    "scene3d": {
+      "preset": "day",
+      "floorTex": "wood",
+      "floorColor": "#b8875a",
+      "wallColor": "#f3ecd9",
+      "wallCutaway": true,
+      "glassHouse": false,
+      "plumbobs": true
+    },
+    "customObjects": [],
+    "people": [],
+    "bleShowUnknown": true,
+    "notes": "~2,600 sq ft (242 m²) · 2 floors + garage · 22 rooms\n\nA traditional American center-hall Colonial: two full stories over a shared\n12,200 × 9,900 mm house block, with a single-story attached 2-car garage tucked\nto the east on the first floor. A switchback stair rises through the 2,700 mm\ncenter-hall spine — the first-floor flight and the second-floor landing carry a\nmatching stairLinkId so avatars can transit between levels. Warm oak floors and\ncream walls downstairs, carpet-toned bedrooms upstairs (rugs simulate carpet).\nThe L-shaped footprint leaves an unbuilt side yard beside the garage that renders\nas bare ground (bins + a tree dress it up).\n\nFIRST FLOOR\nLiving Room: sofa, angled armchair, coffee table, TV on a stand, bookshelf, rug, plant.\nFoyer: entry bench, runner rug, plant; front door with a foyer switch.\nStair Hall: the switchback stair flight (linked to 2F), a landing bench.\nBack Hall: bookshelf, runner; connects the stair hall to the family room + kitchen.\nDining Room: six-seat table, china cabinet, rug, plant; front-lit by two windows.\nHalf Bath: toilet + pedestal vanity; sconce.\nMudroom / Laundry: washer, dryer, boot bench, cubby cabinet; garage service door.\nFamily Room: U-sectional, coffee table, armchair, TV on a stand, bookshelf, rug,\n  a west-wall fireplace light, and a rear patio slider; ceiling light + a lamp.\nKitchen: two counter runs, stove, over-range microwave, dishwasher, sink under the\n  rear window, a center island, refrigerator, and an upper cabinet; island pendant.\nBreakfast Nook: round table with four chairs, corner plant; pendant + picture window.\nGarage: storage cabinet, workbench, bin shelving; two LED strips; two bay doors.\n\nSECOND FLOOR\nBedroom 2: queen bed, two nightstands, dresser, desk, carpet-tone rug.\nLanding / Reading Nook: the upper stair landing (linked to 1F), a reading chair,\n  bookshelf, and a rug at the top of the stairs.\nStairwell: open guardrail overlook down to the first floor (railing wall, no floor).\nBedroom 3: full bed, nightstand, dresser, study desk, rug.\nHall Bath: toilet, vanity, tub/shower combo; sconce.\nLinen / Storage: built-in linen cabinet off the hall bath.\nPrimary Bedroom: king bed, two nightstands, dresser, reading chair, foot-of-bed\n  ottoman, cool-tone rug; ceiling light + bedside lamp.\nPrimary Bathroom: toilet, vanity, tub, corner shower; sconce.\nPrimary Walk-in Closet: two wardrobe runs + a center dresser.\nBedroom 4: queen bed, two nightstands, dresser, desk, rug."
+  }
+}

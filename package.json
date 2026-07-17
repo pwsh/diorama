@@ -12,6 +12,9 @@
     "deploy": "tsc -b && DIORAMA_DEPLOY=1 vite build",
     "deploy:watch": "DIORAMA_DEPLOY=1 vite build --watch",
     "docs:gallery": "node scripts/docs-gallery/generate.mjs",
+    "docs:site": "node scripts/docs-site/build.mjs",
+    "docs:floorplans": "node scripts/docs-site/floorplans.mjs",
+    "floorplans:build": "node scripts/floorplans/build.mjs",
     "docs:publish": "node scripts/docs-gallery/publish.mjs"
   },
   "dependencies": {

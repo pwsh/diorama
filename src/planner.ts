@@ -1033,6 +1033,7 @@ export class Planner extends EventTarget {
         weather:        remote.weather        ?? undefined,
         geo:            remote.geo            ?? undefined,
         avatarPacks:    remote.avatarPacks    ?? undefined,
+        notes:          remote.notes          ?? undefined,
       };
       // Reflect the authoritative pack config into the registry snapshot so
       // resolveAvatar / activeAvatarIds see it, then re-hydrate loaded packs.
@@ -2268,6 +2269,14 @@ export class Planner extends EventTarget {
 
   setBleShowUnknown(v: boolean): void {
     this.store.bleShowUnknown = v;
+    this.save();
+    this.emitConfig();
+  }
+
+  // Free-text notes describing the active configuration (Settings ▸ Data).
+  // Rides export/import via the store. save() no-ops outside edit mode.
+  setNotes(v: string): void {
+    this.store.notes = v.trim() ? v : undefined;
     this.save();
     this.emitConfig();
   }
