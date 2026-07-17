@@ -3,7 +3,7 @@ import { switchSize, distMM, pointToSeg, transformVerts, centroid, localToWorld,
          furnitureCorners, furnitureLocalToWorld, doorEndpoint,
          doorOpenDeltaDeg, windowEndpoints, pointInPolygon } from './geometry.js';
 import type { Planner } from './planner.js';
-import type { Vec2, Wall, Sensor, Furniture, BgImage, MotionSensor, EnvSensor, BleProxy, AlarmPanel, ThermostatFixture, SafetySensor, RobotFixture, CameraFixture, PresenceZone, InfoCard, ActionButton, Door, Window as WindowType, Floor } from './types.js';
+import type { Vec2, Wall, Sensor, Furniture, BgImage, MotionSensor, EnvSensor, BleProxy, AlarmPanel, ThermostatFixture, SafetySensor, RobotFixture, CameraFixture, ProjectorFixture, PresenceZone, InfoCard, ActionButton, Door, Window as WindowType, Floor } from './types.js';
 import type { FloorEdge } from './geometry.js';
 import { envChipHalfPx, infoCardHalfPx, actionButtonHalfPx, type View } from './canvas-render.js';
 
@@ -372,6 +372,18 @@ export function hitCameraRotateHandle(p: Planner, view: View, mm: Vec2): CameraF
   const hx = c.x + Math.sin(t) * rPx / view.scale;
   const hy = c.y + Math.cos(t) * rPx / view.scale;
   return distMM({ x: hx, y: hy }, mm) < hitPx(view) ? c : null;
+}
+
+// Projector fixture hit (small point fixture, like a BLE proxy / camera body).
+export function hitProjector(p: Planner, view: View, mm: Vec2): ProjectorFixture | null {
+  const f = p.floor();
+  const h = hitPx(view) * 1.4;
+  const list = f.projectors ?? [];
+  for (let i = list.length - 1; i >= 0; i--) {
+    if (list[i].hidden) continue;
+    if (distMM(list[i], mm) < h) return list[i];
+  }
+  return null;
 }
 
 // A presence zone is hit when the point is inside its polygon (respect hidden).

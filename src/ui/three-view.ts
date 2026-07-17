@@ -6,7 +6,7 @@ import { customElement } from './define.js';
 // startup path never downloads it.
 import type { ThreeDRenderer, ZoneWorld, HaloWorld, TargetWorld, ActivityContext,
   GpsPinWorld, GpsLandmarkWorld, GeoEventWorld, WeatherFxState } from '../three-renderer.js';
-import { localToWorld, transformVerts, pointInPolygon, sensorColor, hexToInt, motionColor, lightIconKind, furnitureKind, resolveFurnitureDef, furnitureCat, isBinKind, isStairsKind, alarmStateColor, doorSpanCenter } from '../geometry.js';
+import { localToWorld, transformVerts, pointInPolygon, sensorColor, hexToInt, motionColor, lightIconKind, furnitureKind, resolveFurnitureDef, furnitureCat, isBinKind, isSpeakerKind, isStairsKind, alarmStateColor, doorSpanCenter } from '../geometry.js';
 import { compass8 } from '../geo.js';
 import { resolveScenePreset, resolveTimeBucket } from '../time-of-day.js';
 import { conditionIntensity, weatherEffectEnabled, worstAlertSeverity } from '../weather.js';
@@ -217,6 +217,13 @@ export class ThreeView extends LitElement {
       if (kind === 'robot') {
         const ro = p.floor().robots?.find(x => x.id === fixtureId);
         if (ro) p.toggleRobot(ro);
+        return;
+      }
+      // Projector → toggle projecting (bound entity / unbound localState).
+      // toggleItem refuses in view mode; kiosk flips are session-only.
+      if (kind === 'projector') {
+        const pr = p.floor().projectors?.find(x => x.id === fixtureId);
+        if (pr) p.toggleItem(pr);
         return;
       }
       // Door lock deadbolt → toggle lock.lock/unlock (bound) or lockLocalState
@@ -558,6 +565,7 @@ export class ThreeView extends LitElement {
   private _keyRobots = '';
   private _keyNowPlaying = '';
   private _keyCameras = '';
+  private _keyProjectors = '';
   private _keyCamAlerts = '';
   private _keyPzones = '';
   private _keyGround = '';
@@ -588,7 +596,7 @@ export class ThreeView extends LitElement {
         r.clearTransientGroups();
         this._keyFloor = this._keyDoors = this._keySensors = '';
         this._keyMotion = this._keyEnv = this._keyInfo = this._keyActions = this._keyBle = this._keyAlarm = this._keyThermo = this._keySafety = '';
-        this._keyCameras = this._keyCamAlerts = this._keyPzones = this._keyNowPlaying = '';
+        this._keyCameras = this._keyProjectors = this._keyCamAlerts = this._keyPzones = this._keyNowPlaying = '';
         this._keyGround = '';
         this._keyLights = this._keyZones = this._keyHalos = '';
         this._keyGhost = this._keyGps = this._keyWeather = '';
@@ -625,8 +633,10 @@ export class ThreeView extends LitElement {
       const applianceKey = f.furniture.map(fu => {
         const def = resolveFurnitureDef(fu, p.store.customObjects);
         // Bins (outdoor cat) also carry a bound/local state (full/empty) that
-        // drives the 3D lid pivot inside updateFloor — fold it in too.
-        if (furnitureCat(def) !== 'appliance' && !isBinKind(fu.kind)) return '';
+        // drives the 3D lid pivot inside updateFloor — fold it in too. Home-theater
+        // speakers fold their media_player state so the driver pulse (built inside
+        // updateFloor, present only while 'playing') rebuilds on a playback change.
+        if (furnitureCat(def) !== 'appliance' && !isBinKind(fu.kind) && !isSpeakerKind(fu.kind)) return '';
         const on = p.effectiveState(fu)?.state ?? '-';
         const door = fu.doorEntity ? stOf(fu.doorEntity) : '';
         // Per-device power glow (#8): bucket the live power reading to 50 W so the
@@ -644,7 +654,15 @@ export class ThreeView extends LitElement {
           const t = parseFloat(states[fu.tempEntity]?.state ?? '');
           tp = isFinite(t) ? String(Math.round(t)) : 'x';
         }
-        return `${fu.id}:${on}:${door}:${pw}:${tp}:${fu.doorOpen ? 1 : 0}`;
+        // Screen bias light (home-theater arc): tv/wall_tv glow behind the screen,
+        // built inside updateFloor. Fold the config + bound-entity (or AUTO) on
+        // state so the halo rebuilds on a flip. AUTO mode already tracks `on`.
+        let bias = '';
+        if ((fu.kind === 'tv' || fu.kind === 'wall_tv') && fu.biasLight) {
+          const be = fu.biasLight.entityId;
+          bias = `${be ? stOf(be) : 'auto'}:${fu.biasLight.color ?? ''}`;
+        }
+        return `${fu.id}:${on}:${door}:${pw}:${tp}:${fu.doorOpen ? 1 : 0}:${bias}`;
       }).filter(Boolean).join(',');
       // Room occupancy glow (#1): fold each occupancy-bound room's on/off into
       // _keyFloor so the tinted floor patch rebuilds on an occupancy flip.
@@ -881,6 +899,20 @@ export class ThreeView extends LitElement {
       if (keyCameras !== this._keyCameras) {
         this._keyCameras = keyCameras;
         r.updateCameras(cameraList, id => states[id] || null);
+      }
+
+      // Projector fixtures (home-theater arc): structural + bound on/off state +
+      // the aimed screen's plan geometry (the beam recomputes when the screen
+      // moves/resizes). Rides the sensors layer; rebuild only on a real change.
+      const projList = f.projectors ?? [];
+      const keyProjectors = `${p.configRev}|` + projList.map(pr => {
+        const sc = pr.screenId ? f.furniture.find(x => x.id === pr.screenId) : null;
+        const scGeo = sc ? `${Math.round(sc.x)}:${Math.round(sc.y)}:${sc.kind ?? ''}` : '';
+        return `${pr.id}:${Math.round(pr.x)}:${Math.round(pr.y)}:${Math.round(pr.height ?? 0)}:${Math.round(pr.rotation ?? 0)}:${(pr.throwRatio ?? 0)}:${pr.beamColor ?? ''}:${pr.screenId ?? ''}:${scGeo}:${pr.hidden ? 'h' : ''}:${stOf(pr.entity_id)}:${pr.localState ?? ''}`;
+      }).join(',');
+      if (keyProjectors !== this._keyProjectors) {
+        this._keyProjectors = keyProjectors;
+        r.updateProjectors(projList, f.furniture, id => states[id] || null);
       }
 
       // Camera alert cards (#10 extension): snapshot sprites above ALERTING

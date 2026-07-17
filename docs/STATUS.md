@@ -88,6 +88,29 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Home theater fill-in** (Stage 0 of the 2026-07-17 staged plan;
+  `research/home-theater-diorama.md`; 2 parallel Opus agents):
+  **ProjectorFixture** (`Floor.projectors`, camera-fixture recipe, tool
+  📽, sensors layer, `_keyProjectors`) — ceiling body + lens, bindable
+  (media_player/switch/light; unbound localState click-toggle), optional
+  `screenId` targeting a tv/wall_tv piece: the translucent light-frustum
+  cone aims lens→screen via pure `projectorAim` (heading-based throw
+  fallback, real throw-ratio geometry), screen-glow overlay while
+  projecting, 2D dashed throw wedge. **Screen bias lighting**
+  (`Furniture.biasLight {entityId?, color?}` on tv/wall_tv): emissive
+  halo plane behind the panel (auto mode = while the TV plays; folds
+  into the `_keyFloor` appliance hash), 2D halo ring. **Seven theater
+  FurnitureKinds** (new `theater` cat optgroup for the audio gear):
+  speaker_tower / speaker_bookshelf (mountable) / subwoofer /
+  center_channel (mountable) with per-frame emissive driver pulses
+  while their bound media_player plays (`_speakerPulses` +
+  `_advanceSpeakerPulses`, subwoofer breathes slower/deeper; now-playing
+  cards work kind-agnostically), theater_recliner + recliner_row3
+  (3 shared-arm SitSpots; watch_tv resolves), riser_platform (walkable:
+  nav-exempt like beds/rugs + `_terrain` flat top at 220 mm so rigs
+  stand on it). Tests THEATER 30/30 + THEATERFURN 16/16; idle-activity
+  regression green.
+
 - **HVAC wall controls + display-only locks + action-button polish**
   (2026-07-17; 2 parallel Opus agents): **`ThermostatFixture`**
   (`Floor.thermostats`, alarm-keypad recipe: tool 🌡, wall-snap flush,

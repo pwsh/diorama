@@ -9,7 +9,7 @@ import type {
   Sensor, Zone, ObjectHalo, BgImage, MotionSensor, EnvSensor, EnvKind, Light, SwitchFixture, LightIconKind,
   Furniture, FurnitureKind, Door, Window as WindowType, WindowKind, Layers2D, Floor, Room,
   ObjectRecipe, RecipePrimitive, RecipeShape, ActivityKind, AvatarKind,
-  BleProxy, AlarmPanel, ThermostatFixture, SafetySensor, RobotFixture, CameraFixture, PresenceZone, GroundArea, GroundKind, VoidArea, DioramaPerson, Roamer, GeoLandmark,
+  BleProxy, AlarmPanel, ThermostatFixture, SafetySensor, RobotFixture, CameraFixture, ProjectorFixture, PresenceZone, GroundArea, GroundKind, VoidArea, DioramaPerson, Roamer, GeoLandmark,
 } from '../types.js';
 import type { BermudaDevice } from '../planner.js';
 
@@ -24,6 +24,7 @@ import {
   robotGlyph, robotColor, robotLedColor,
   parseVacuumPosition, solveVacuumDockOffset,
   presenceZoneColor, cameraFov, cameraRange, cameraHeight, CAMERA_DEFAULTS,
+  projectorHeight, projectorThrow, projectorBeamColor, PROJECTOR_DEFAULTS,
   GROUND_KINDS, groundAreaColor,
   FURNITURE_KINDS, furnitureKind, resolveFurnitureDef, WINDOW_DEFAULTS,
   ENV_KINDS, ENV_DEFAULTS, ENV_SCALE_MIN, ENV_SCALE_MAX,
@@ -98,6 +99,7 @@ const TOOLS: { id: Tool; label: string }[] = [
   { id: 'safety', label: '⚠️ Smoke/CO' },
   { id: 'robot', label: '🤖 Robot' },
   { id: 'camera', label: '📷 Camera' },
+  { id: 'projector', label: '📽 Projector' },
   { id: 'pzone', label: '▱ Presence zone' },
   { id: 'ground', label: '▨ Ground area' },
   { id: 'void', label: '🕳 Floor void' },
@@ -378,6 +380,7 @@ export class Sidebar extends LitElement {
         ${this._safetySensorsSection()}
         ${this._robotsSection()}
         ${this._camerasSection()}
+        ${this._projectorsSection()}
         ${this._presenceZonesSection()}
         ${this._groundSection()}
         ${this._voidSection()}
@@ -502,6 +505,7 @@ export class Sidebar extends LitElement {
       case 'safety': return 'Click to drop a ceiling smoke/CO detector. Set kind + bind a binary_sensor (smoke / carbon_monoxide).';
       case 'robot': return 'Click to place a robot dock. Set kind (vacuum / mower) + bind a vacuum.* or lawn_mower.* entity; mowers can bind a GPS tracker.';
       case 'camera': return 'Click to drop a camera. Drag the orange dot to aim it; bind a camera.* entity for the FOV tint + snapshot.';
+      case 'projector': return 'Click to drop a ceiling projector. Pick a target screen (or set rotation) + bind a media_player/switch/light for the beam; click it to toggle projecting.';
       case 'pzone': return 'Click to add polygon vertices; double-click (or Enter) to finish (≥3 pts). Bind a binary_sensor (FP2 zone / occupancy) — the zone glows when occupied. ESC cancels.';
       case 'ground': return 'Click to add polygon vertices; double-click (or Enter) to finish (3–20 pts). Paints a ground covering (grass/rock/water/…) under the plan. ESC cancels.';
       case 'void': return 'Click to add polygon vertices; double-click (or Enter) to finish (3–12 pts). Cuts a hole in the floor (stairwell / atrium) — avatars route around it unless a stair bridges it. ESC cancels.';
@@ -625,6 +629,7 @@ export class Sidebar extends LitElement {
       { cat: 'appliance', label: 'Appliances' },
       { cat: 'bathroom', label: 'Bathroom' },
       { cat: 'outdoor', label: 'Outdoor' },
+      { cat: 'theater', label: 'Home theater' },
     ];
     const kinds = Object.keys(FURNITURE_KINDS) as FurnitureKind[];
     const custom = this.planner.store.customObjects ?? [];
@@ -2123,6 +2128,116 @@ export class Sidebar extends LitElement {
     }));
   }
 
+  // ── Projectors section (home-theater arc) ─────────────────────────────
+  private _projectorsSection() {
+    const list = this.planner.floor().projectors ?? [];
+    if (list.length === 0) return nothing;
+    return this._section('projectors', 'Projectors', () =>
+      this._groupedList('projectors', list, pr => this._projectorItem(pr)));
+  }
+
+  private _projectorItem(pr: ProjectorFixture) {
+    const p = this.planner;
+    const sel = p.activeProjectorId === pr.id;
+    const projecting = (p.effectiveState(pr)?.state === 'on' || p.effectiveState(pr)?.state === 'playing');
+    return html`
+      <div style="border-bottom:1px solid var(--border)">
+        <div class="sensor-item ${sel ? 'sel' : ''}" @click=${() => p.setActiveProjector(pr.id)}>
+          <div class="dot" style="background:${projecting ? projectorBeamColor(pr) : '#5c6bc0'}"></div>
+          <div class="nm">📽 ${pr.label?.trim() || 'Projector'}${this._batteryText(pr.entity_id ?? null)}</div>
+          <div class="badge">${projecting ? 'ON' : (pr.entity_id ? (p.effectiveState(pr)?.state ?? '—') : (pr.localState ? `local: ${pr.localState}` : 'off'))}</div>
+        </div>
+        ${sel ? this._projectorEditor(pr) : nothing}
+      </div>
+    `;
+  }
+
+  private _projectorEditor(pr: ProjectorFixture) {
+    const p = this.planner;
+    const upd = (mut: () => void) => { mut(); p.save(); p.emitConfig(); };
+    // Screens this projector can aim at: wall_tv / tv pieces on the floor.
+    const screens = p.floor().furniture.filter(fu => fu.kind === 'wall_tv' || fu.kind === 'tv');
+    return html`
+      <div style="background:rgba(0,0,0,0.25);border-radius:4px;padding:6px;margin:4px 0">
+        <div class="row"><label>Label</label>
+          <input type="text" .value=${pr.label ?? ''} placeholder="Projector"
+                 @input=${(e: Event) => upd(() => { pr.label = (e.target as HTMLInputElement).value; })}>
+        </div>
+        ${this._lockRow(pr)}
+        <div class="row"><label>X (mm)</label>
+          <input type="number" .value=${String(Math.round(pr.x))}
+                 @input=${(e: Event) => upd(() => { pr.x = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
+        </div>
+        <div class="row"><label>Y (mm)</label>
+          <input type="number" .value=${String(Math.round(pr.y))}
+                 @input=${(e: Event) => upd(() => { pr.y = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
+        </div>
+        <div class="row"><label>Height (mm)</label>
+          <input type="number" .value=${String(projectorHeight(pr))}
+                 @input=${(e: Event) => upd(() => { pr.height = parseFloat((e.target as HTMLInputElement).value) || PROJECTOR_DEFAULTS.height; })}>
+        </div>
+        <div class="row"><label>Target screen</label>
+          <select .value=${pr.screenId ?? ''}
+                  @change=${(e: Event) => upd(() => {
+                    const v = (e.target as HTMLSelectElement).value;
+                    pr.screenId = v || null;
+                  })}>
+            <option value="" ?selected=${!pr.screenId}>— aim by rotation —</option>
+            ${screens.map(s => html`<option value=${s.id} ?selected=${pr.screenId === s.id}>${s.label?.trim() || FURNITURE_KINDS[s.kind ?? 'block'].label}</option>`)}
+          </select>
+        </div>
+        ${!pr.screenId ? html`
+          <div class="row"><label>Aim (°)</label>
+            <input type="number" step="15" .value=${String(Math.round(pr.rotation ?? 0))}
+                   @input=${(e: Event) => upd(() => {
+                     const v = parseFloat((e.target as HTMLInputElement).value) || 0;
+                     pr.rotation = ((Math.round(v) % 360) + 360) % 360;
+                   })}>
+          </div>` : nothing}
+        <div class="row"><label title="Throw ratio D:W — scales the beam spread + heading-only reach">Throw ratio</label>
+          <input type="number" min="0.2" step="0.1" .value=${String(projectorThrow(pr))}
+                 @input=${(e: Event) => upd(() => { pr.throwRatio = parseFloat((e.target as HTMLInputElement).value) || PROJECTOR_DEFAULTS.throwRatio; })}>
+        </div>
+        <div class="row"><label>Beam color</label>
+          <input type="color" .value=${projectorBeamColor(pr)}
+                 style="width:36px;height:24px;padding:0;border:1px solid var(--border);background:#111"
+                 @input=${(e: Event) => upd(() => { pr.beamColor = (e.target as HTMLInputElement).value; })}>
+          <button class="btn" style="font-size:10px;padding:2px 6px;margin-left:4px"
+                  title="Reset to the default beam color"
+                  @click=${() => upd(() => { pr.beamColor = undefined; })}>✕</button>
+        </div>
+        <div class="row"><label>HA entity</label>
+          <span style="font-size:11px;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+            ${pr.entity_id || '— unbound —'}
+          </span>
+        </div>
+        <div style="display:flex;gap:4px;margin-top:4px">
+          <button class="btn" style="flex:1;font-size:11px" @click=${() => this._pickProjectorEntity(pr)}>
+            ${pr.entity_id ? 'Rebind' : 'Bind'}…
+          </button>
+          ${pr.entity_id ? html`
+            <button class="btn" style="font-size:11px"
+                    @click=${() => upd(() => { pr.entity_id = null; })}>Unbind</button>` : nothing}
+          <button class="btn" style="font-size:11px"
+                  @click=${() => upd(() => {
+                    p.floor().projectors = (p.floor().projectors ?? []).filter(x => x.id !== pr.id);
+                    if (p.activeProjectorId === pr.id) p.activeProjectorId = null;
+                  })}>Delete</button>
+        </div>
+      </div>
+    `;
+  }
+
+  private _pickProjectorEntity(pr: ProjectorFixture): void {
+    this.dispatchEvent(new CustomEvent('open-entity-picker', {
+      bubbles: true, composed: true,
+      detail: {
+        domain: ['media_player', 'switch', 'light'],
+        onPick: (id: string) => { pr.entity_id = id; this.planner.save(); this.planner.emitConfig(); },
+      },
+    }));
+  }
+
   // ── Presence zones section (FP2-style occupancy polygons) ─────────────
   private _presenceZonesSection() {
     const p = this.planner;
@@ -3320,6 +3435,7 @@ export class Sidebar extends LitElement {
           </select>
         </div>
         ${this._furnitureBindRow(piece, upd)}
+        ${(curKind === 'tv' || curKind === 'wall_tv') ? this._biasLightRow(piece, upd) : nothing}
         ${curKind === 'fridge' ? this._fridgeDoorBindRow(piece, upd) : nothing}
         ${furnitureCat(resolveFurnitureDef(piece, p.store.customObjects)) === 'appliance'
           ? this._powerBindRow(piece, upd) : nothing}
@@ -3488,6 +3604,61 @@ export class Sidebar extends LitElement {
         ` : nothing}
       </div>
     `;
+  }
+
+  // Screen bias lighting (home-theater arc): a soft accent glow behind a
+  // tv/wall_tv. Optional bound light.*/switch.* (glow while it's on) — else AUTO
+  // (glow while the TV is playing). Enabling adds a biasLight {} object.
+  private _biasLightRow(piece: Furniture, upd: (mut: () => void) => void) {
+    const bl = piece.biasLight;
+    const on = !!bl;
+    return html`
+      <div class="row"><label title="Soft accent glow behind the screen (home-theater bias lighting)">Bias light</label>
+        <input type="checkbox" .checked=${on}
+               @change=${(e: Event) => upd(() => {
+                 piece.biasLight = (e.target as HTMLInputElement).checked ? {} : undefined;
+               })}>
+      </div>
+      ${on ? html`
+        <div class="row"><label>Glow color</label>
+          <input type="color" .value=${bl!.color ?? '#fff1d6'}
+                 style="width:36px;height:24px;padding:0;border:1px solid var(--border);background:#111"
+                 @input=${(e: Event) => upd(() => { piece.biasLight!.color = (e.target as HTMLInputElement).value; })}>
+          <button class="btn" style="font-size:10px;padding:2px 6px;margin-left:4px"
+                  title="Reset to the default warm-white glow"
+                  @click=${() => upd(() => { piece.biasLight!.color = undefined; })}>✕</button>
+        </div>
+        <div class="row"><label title="Bound light.*/switch.*: glow while ON. Unbound: AUTO glow while the TV plays.">Bias entity</label>
+          <span style="font-size:11px;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+            ${bl!.entityId || 'AUTO (while playing)'}
+          </span>
+        </div>
+        <div style="display:flex;gap:4px;margin-top:4px">
+          <button class="btn" style="flex:1;font-size:11px" @click=${() => this._pickBiasEntity(piece)}>
+            ${bl!.entityId ? 'Rebind' : 'Bind'} light…
+          </button>
+          ${bl!.entityId ? html`
+            <button class="btn" style="font-size:11px"
+                    @click=${() => upd(() => { piece.biasLight!.entityId = undefined; })}>Unbind</button>
+          ` : nothing}
+        </div>
+      ` : nothing}
+    `;
+  }
+
+  private _pickBiasEntity(piece: Furniture): void {
+    this.dispatchEvent(new CustomEvent('open-entity-picker', {
+      bubbles: true, composed: true,
+      detail: {
+        domain: ['light', 'switch'],
+        onPick: (id: string) => {
+          if (!piece.biasLight) piece.biasLight = {};
+          piece.biasLight.entityId = id;
+          this.planner.save();
+          this.planner.emitConfig();
+        },
+      },
+    }));
   }
 
   private _pickFridgeDoor(piece: Furniture): void {

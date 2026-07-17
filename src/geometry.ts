@@ -1080,6 +1080,52 @@ export function cameraStateColor(state: string | null | undefined): string {
   return state === 'recording' ? '#ef5350' : '#4dd0e1';
 }
 
+// ── Projector fixtures (home-theater arc) ──────────────────────────────────
+// Ceiling body ≈ Epson HC 2150 scale (§2.2 research). `reachImgW` is the
+// reference 120" 16:9 image width (mm) used to derive a heading-only default
+// throw distance from the throw ratio. Beam color = cool white-blue.
+export const PROJECTOR_DEFAULTS = {
+  height: 2600, throwRatio: 1.5, beamColor: '#dfe8ff',
+  bodyW: 310, bodyH: 122, bodyD: 284, reachImgW: 2657,
+};
+export function projectorHeight(p: { height?: number }): number { return p.height ?? PROJECTOR_DEFAULTS.height; }
+export function projectorThrow(p: { throwRatio?: number }): number {
+  return Math.max(0.2, p.throwRatio ?? PROJECTOR_DEFAULTS.throwRatio);
+}
+export function projectorBeamColor(p: { beamColor?: string }): string { return p.beamColor ?? PROJECTOR_DEFAULTS.beamColor; }
+// THE projecting resolver (shared 2D + 3D): a projector's RESOLVED state string
+// ('on'/'playing' = projecting). Callers pass Planner.effectiveState(proj)?.state.
+export function projectorProjecting(state: string | null | undefined): boolean {
+  return state === 'on' || state === 'playing';
+}
+// Beam aim: the world-plan point (+ its 3D height) the beam points at. When a
+// screen is given, aim at its center; else a heading-based default throw whose
+// distance = throwRatio × the reference image width. Heading 0 = +Y world, CW
+// on screen (plan dir = (sin θ, cos θ)), matching the camera/motion convention.
+// Pure + deterministic (test-driven in theater-test.html).
+export function projectorAim(
+  proj: { x: number; y: number; rotation?: number; throwRatio?: number },
+  screen: { x: number; y: number; cy: number } | null,
+): { x: number; y: number; y3: number } {
+  if (screen) return { x: screen.x, y: screen.y, y3: screen.cy };
+  const t = (proj.rotation ?? 0) * Math.PI / 180;
+  const reach = projectorThrow(proj) * PROJECTOR_DEFAULTS.reachImgW;
+  return { x: proj.x + Math.sin(t) * reach, y: proj.y + Math.cos(t) * reach, y3: 1350 };
+}
+// Screen center height (mm above floor) of the piece the projector aims at.
+// Matches the 3D build: wall_tv screen sits at ~1350; freestanding tv panel
+// centers around 700; anything else falls back to 1350.
+export function screenCenterHeight(kind: string | undefined): number {
+  return kind === 'wall_tv' ? 1350 : kind === 'tv' ? 700 : 1350;
+}
+
+// ── Screen bias lighting (home-theater arc) ────────────────────────────────
+// Warm-white (~6500K look) default glow color behind a tv/wall_tv screen.
+export const BIAS_LIGHT_DEFAULT_COLOR = '#fff1d6';
+export function biasLightColor(b: { color?: string } | undefined): string {
+  return b?.color ?? BIAS_LIGHT_DEFAULT_COLOR;
+}
+
 // ── Robot fixtures (vacuum / mower) ────────────────────────────────────────
 // Dock footprint (mm) + robot body dims + roam speeds. The dock is the parked
 // charging base; the robot body roams away and returns.
@@ -1561,7 +1607,7 @@ export function logicLightState(logic: { rules?: ValueRule[]; offColor?: string 
 
 // Furniture kind defaults: footprint (mm) + 3D height (mm) + tint.
 // `back` flags whether the kind has an implied backrest on the +Y edge.
-export type FurnitureCat = 'furniture' | 'appliance' | 'bathroom' | 'outdoor';
+export type FurnitureCat = 'furniture' | 'appliance' | 'bathroom' | 'outdoor' | 'theater';
 
 export interface FurnitureKindDef {
   label: string;
@@ -1632,6 +1678,24 @@ export const FURNITURE_KINDS: Record<FurnitureKind, FurnitureKindDef> = {
   shower:        { label: 'Shower',        w: 910,  h: 910,  ht: 2000, back: 'none', color: 0xe3e6e8, cat: 'bathroom', activity: 'shower' },
   // Fitness
   exercise_equipment: { label: 'Exercise equipment', w: 700, h: 1600, ht: 1300, back: 'none', color: 0x424242, cat: 'furniture', activity: 'exercise' },
+  // Home theater — speakers/sub/center are a new `theater` cat (own optgroup).
+  // Sizes are illustrative real-world defaults (ELAC DF52 tower, Klipsch R-12SW
+  // sub); every field stays per-fixture editable like all other kinds. Speakers
+  // bound to a media_player show the shipped now-playing card + a driver pulse
+  // while playing. Bookshelf/center are `mountable` (land on a surface host).
+  speaker_tower:     { label: 'Speaker (tower)',     w: 250, h: 350, ht: 1050, back: 'none', color: 0x1a1a1a, cat: 'theater' },
+  speaker_bookshelf: { label: 'Speaker (bookshelf)', w: 200, h: 280, ht: 350,  back: 'none', color: 0x1c1c1c, cat: 'theater', mountable: true },
+  subwoofer:         { label: 'Subwoofer',           w: 400, h: 450, ht: 450,  back: 'none', color: 0x111111, cat: 'theater' },
+  center_channel:    { label: 'Center channel',      w: 450, h: 160, ht: 180,  back: 'none', color: 0x161616, cat: 'theater', mountable: true, frontArrow: false },
+  // Recliners + riser ride the default `furniture` cat (grouped with sofas).
+  // Recliner leaves `activity` undefined so `watch_tv` resolves from the room's
+  // TV via the seated-context SitSpot path (never a standing anchor).
+  theater_recliner:  { label: 'Theater recliner',    w: 950,  h: 1000, ht: 1050, seat: 450, back: 'tall', color: 0x2b2320, cat: 'furniture' },
+  recliner_row3:     { label: 'Recliner row (3)',    w: 2900, h: 1000, ht: 1050, seat: 450, back: 'tall', color: 0x2b2320, cat: 'furniture' },
+  // Walkable tiered-seating deck. Low (220 mm) flat platform — does NOT block
+  // nav (see isRiserKind in three-renderer's _buildNav skip + _groundYAt); place
+  // recliners on top with their `elevation` set to the riser height.
+  riser_platform:    { label: 'Riser platform',      w: 3600, h: 1800, ht: 220,  back: 'none', color: 0x2a2622, cat: 'furniture', frontArrow: false },
   // Outdoor — wheeled curbside bins. Entity 'on'/'full' = FULL (lid propped, overflow
   // hint); unbound → localState click-toggle. Front (lid hinge, wheels at back = +Z).
   trash_bin:     { label: 'Trash bin',     w: 600,  h: 700,  ht: 1100, back: 'none', color: 0x3a3f45, cat: 'outdoor', frontArrow: false },
@@ -1674,6 +1738,19 @@ export function isBinKind(kind: FurnitureKind | undefined): boolean {
 }
 export function binStateIsFull(state: string | null | undefined): boolean {
   return state === 'on' || state === 'full';
+}
+
+// Home-theater speakers (cat 'theater'). Bound to a media_player, a 'playing'
+// state drives the emissive driver pulse — three-view folds their state into the
+// _keyFloor appliance hash exactly like TVs so the pulse rebuilds on a change.
+export function isSpeakerKind(kind: FurnitureKind | undefined): boolean {
+  return kind === 'speaker_tower' || kind === 'speaker_bookshelf' ||
+         kind === 'subwoofer' || kind === 'center_channel';
+}
+// Walkable tiered-seating deck — exempt from nav footprint-blocking (like
+// rugs/beds) and registered as flat terrain so avatars climb onto it.
+export function isRiserKind(kind: FurnitureKind | undefined): boolean {
+  return kind === 'riser_platform';
 }
 
 export function furnitureKind(f: { kind?: FurnitureKind }): FurnitureKind {

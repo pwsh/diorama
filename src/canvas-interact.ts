@@ -10,7 +10,7 @@ import {
   hitBgBody, hitBgCorner, bgEditable,
   hitMotionSensor, hitMotionRotateHandle, hitEnvSensor, hitEnvResizeHandle,
   hitBleProxy, hitAlarmPanel, hitThermostat, hitSafetySensor, hitRobot,
-  hitCamera, hitCameraRotateHandle, hitInfoCard, hitActionButton, hitPresenceZone, hitPresenceZoneVertex,
+  hitCamera, hitCameraRotateHandle, hitProjector, hitInfoCard, hitActionButton, hitPresenceZone, hitPresenceZoneVertex,
   hitGroundArea, hitGroundAreaVertex,
   hitVoidArea, hitVoidAreaVertex,
   hitDoor, hitDoorEnd, hitDoorLock, hitWindow, hitWindowEnd, hitFloorEdge,
@@ -21,7 +21,7 @@ import type { Vec2, Furniture, ObjectRecipe, Light } from './types.js';
 
 // Drag kinds that move a single placeable and therefore get alignment guides
 // (Feature C). Wall vertices / doors / windows / zones are excluded.
-const ALIGN_MOVE_KINDS = new Set(['sensor', 'motion', 'env', 'ble', 'safety', 'robot', 'camera', 'fixture', 'furnMove']);
+const ALIGN_MOVE_KINDS = new Set(['sensor', 'motion', 'env', 'ble', 'safety', 'robot', 'camera', 'projector', 'fixture', 'furnMove']);
 
 // Peer-center candidates for alignment, snapshotted once at drag start. Same
 // category only: lights + switches share one "fixtures" pool; furniture aligns
@@ -50,6 +50,7 @@ function buildAlignCandidates(p: Planner, drag: Drag): { x: number; y: number }[
     case 'safety': for (const o of (f.safetySensors ?? [])) if (o.id !== drag.id) add(o); break;
     case 'robot': for (const o of (f.robots ?? [])) if (o.id !== drag.id) add(o); break;
     case 'camera': for (const o of (f.cameras ?? [])) if (o.id !== drag.id) add(o); break;
+    case 'projector': for (const o of (f.projectors ?? [])) if (o.id !== drag.id) add(o); break;
     case 'info': for (const o of (f.infoCards ?? [])) if (o.id !== drag.id) add(o); break;
     case 'action': for (const o of (f.actionButtons ?? [])) if (o.id !== drag.id) add(o); break;
   }
@@ -71,6 +72,7 @@ function draggedMoveItem(f: ReturnType<Planner['floor']>, drag: Drag)
     case 'safety': it = (f.safetySensors ?? []).find(x => x.id === drag.id); break;
     case 'robot': it = (f.robots ?? []).find(x => x.id === drag.id); break;
     case 'camera': it = (f.cameras ?? []).find(x => x.id === drag.id); break;
+    case 'projector': it = (f.projectors ?? []).find(x => x.id === drag.id); break;
     case 'info': it = (f.infoCards ?? []).find(x => x.id === drag.id); break;
     case 'action': it = (f.actionButtons ?? []).find(x => x.id === drag.id); break;
   }
@@ -599,6 +601,13 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
     p.alignCandidates = buildAlignCandidates(p, p.drag);
     canvas.style.cursor = 'grabbing'; e.preventDefault(); p.emitConfig(); return;
   }
+  const projH = hitProjector(p, view, mm);
+  if (projH) {
+    if (p.activeProjectorId !== projH.id) p.activeProjectorId = projH.id;
+    p.drag = { kind: 'projector', id: projH.id, startMm: mm, start: { x: projH.x, y: projH.y } };
+    p.alignCandidates = buildAlignCandidates(p, p.drag);
+    canvas.style.cursor = 'grabbing'; e.preventDefault(); p.emitConfig(); return;
+  }
   // Presence zone body — select it (shows vertex handles); no whole-zone drag in
   // v1 (reshape via vertex handles or Redraw). Only when the zones layer is on.
   if (zonesInteractive(p)) {
@@ -792,6 +801,14 @@ export function onCanvasMouseMove(p: Planner, canvas: HTMLCanvasElement, view: V
           const ang = Math.atan2(mm.x - cam.x, mm.y - cam.y);
           const deg = Math.round(ang * 180 / Math.PI);
           cam.rotation = ((deg % 360) + 360) % 360;
+        }
+        break;
+      }
+      case 'projector': {
+        const pr = (f.projectors ?? []).find(x => x.id === drag.id);
+        if (pr && !pr.locked) {
+          pr.x = Math.max(0, Math.min(f.w, drag.start.x + mm.x - drag.startMm.x));
+          pr.y = Math.max(0, Math.min(f.d, drag.start.y + mm.y - drag.startMm.y));
         }
         break;
       }
@@ -1089,6 +1106,7 @@ export function onCanvasMouseMove(p: Planner, canvas: HTMLCanvasElement, view: V
       hitThermostat(p, view, mm) ||        // thermostats open the control modal
       (safeHit && !safeHit.entity_id) ||   // only unbound detectors are clickable
       hitRobot(p, view, mm) ||             // robots are always click-toggleable
+      hitProjector(p, view, mm) ||         // projectors toggle on/off in kiosk
       hitDoor(p, view, mm) || hitWindow(p, view, mm);
     canvas.style.cursor = overDevice ? 'pointer' : 'default';
     return;
@@ -1109,6 +1127,7 @@ export function onCanvasMouseMove(p: Planner, canvas: HTMLCanvasElement, view: V
     else if (hitRobot(p, view, mm)) canvas.style.cursor = 'grab';
     else if (hitCameraRotateHandle(p, view, mm)) canvas.style.cursor = 'grab';
     else if (hitCamera(p, view, mm)) canvas.style.cursor = 'grab';
+    else if (hitProjector(p, view, mm)) canvas.style.cursor = 'grab';
     else if (zonesInteractive(p) && hitPresenceZoneVertex(p, view, mm)) canvas.style.cursor = 'grab';
     else if (groundInteractive(p) && hitGroundAreaVertex(p, view, mm)) canvas.style.cursor = 'grab';
     else if (groundInteractive(p) && hitVoidAreaVertex(p, view, mm)) canvas.style.cursor = 'grab';
@@ -1255,6 +1274,21 @@ export function onCanvasMouseUp(p: Planner, canvas: HTMLCanvasElement): void {
     p.save();
   } else if (drag.kind === 'cameraRotate') {
     p.save();
+  } else if (drag.kind === 'projector') {
+    const pr = (f.projectors ?? []).find(x => x.id === drag.id);
+    if (pr) {
+      // Click-vs-drag: a tiny move is a click → toggle projecting (bound entity
+      // or unbound localState). A real move relocates the ceiling mount (free
+      // placement — no wall snap). toggleItem refuses in view mode.
+      const moved = Math.hypot(pr.x - drag.start.x, pr.y - drag.start.y);
+      if (moved < 30) {
+        pr.x = drag.start.x; pr.y = drag.start.y;
+        p.toggleItem(pr);
+      } else {
+        pr.x = snap(pr.x, 10); pr.y = snap(pr.y, 10);
+        p.save();
+      }
+    }
   } else if (drag.kind === 'pzoneVert') {
     const z = (f.presenceZones ?? []).find(x => x.id === drag.id);
     if (z && z.points[drag.idx]) z.points[drag.idx] = { x: snap(z.points[drag.idx].x, 10), y: snap(z.points[drag.idx].y, 10) };
@@ -1447,6 +1481,9 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
     // Robot → run/dock (bound) or demo toggle (unbound).
     const robo2 = hitRobot(p, view, mm);
     if (robo2) { p.toggleRobot(robo2); return; }
+    // Projector → toggle projecting (bound entity / unbound localState).
+    const proj2 = hitProjector(p, view, mm);
+    if (proj2) { p.toggleItem(proj2); return; }
     // Door lock padlock → toggle the lock (bound service / unbound session flag).
     const dLock2 = hitDoorLock(p, view, mm);
     if (dLock2) { p.toggleDoorLock(dLock2.door); return; }
@@ -1697,6 +1734,23 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
     p.emitConfig();
     return;
   }
+  if (p.tool === 'projector') {
+    if (!f.projectors) f.projectors = [];
+    const id = newId('proj');
+    // Free ceiling/shelf placement. Aim it via the sidebar screen picker / rotation.
+    f.projectors.push({
+      id,
+      x: snap(Math.max(0, Math.min(f.w, mm.x)), 10),
+      y: snap(Math.max(0, Math.min(f.d, mm.y)), 10),
+      rotation: 0, entity_id: null,
+      label: `Projector ${f.projectors.length + 1}`,
+    });
+    p.activeProjectorId = id;
+    p.save();
+    p.setTool('select');
+    p.emitConfig();
+    return;
+  }
   if (p.tool === 'pzone') {
     // Polygon draw latch (mirrors the wall tool): each click appends a world-mm
     // vertex; double-click finishes (≥3 pts). No angle snap — presence zones are
@@ -1872,6 +1926,13 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
       if (camHit.locked) return;
       f.cameras = (f.cameras ?? []).filter(x => x.id !== camHit.id);
       if (p.activeCameraId === camHit.id) p.activeCameraId = null;
+      p.save(); p.emitConfig(); return;
+    }
+    const projHit = hitProjector(p, view, mm);
+    if (projHit) {
+      if (projHit.locked) return;
+      f.projectors = (f.projectors ?? []).filter(x => x.id !== projHit.id);
+      if (p.activeProjectorId === projHit.id) p.activeProjectorId = null;
       p.save(); p.emitConfig(); return;
     }
     if (zonesInteractive(p)) {

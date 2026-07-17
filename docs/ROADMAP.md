@@ -202,6 +202,28 @@ admin-session UX decision — settle that before building on it.
 
 ---
 
+## Staged build plan — 2026-07-17 (user-ordered)
+
+Work proceeds in order; each stage ships (commit + push both + deploy).
+
+- **Stage 0 — Home theater fill-in** (`research/home-theater-diorama.md`):
+  projector fixture + light cone, speaker/subwoofer/recliner furniture
+  kinds, tiered seating, screen bias lighting.
+- **Phase 1**: sirens/beacons (`research/sirens-beacons.md`), UV index,
+  garage-bay vehicle presence (`research/moon-uv-vehicle.md`) + EV charging
+  status (`research/ev-charger.md`), mail/packages badge
+  (`research/peripheral-fixtures.md`).
+- **Phase 2**: event-focused thought bubbles
+  (`research/event-thought-bubbles.md`).
+- **Phase 3**: moon-phase + sun-position background props
+  (`research/moon-uv-vehicle.md`), weather as background
+  (`research/weather-background-fx.md`).
+- **Phase 4**: avatar rig gaps (the parked triage list below).
+- **HARD PAUSE — manual continuation required before Phase 5.**
+- **Phase 5** (NOT STARTED without explicit user go-ahead): Frigate raw
+  boxes + Valetudo room maps — direct-MQTT bridge + per-camera homography
+  (`research/frigate-mqtt-bridge.md`).
+
 ## Backlog — captured 2026-07-15 (placeholders, NOT yet scoped)
 
 Raw feature/fix requests parked for later. **No design or research has been

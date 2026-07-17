@@ -185,6 +185,7 @@ export type Drag =
   | { kind: 'robot'; id: string; startMm: Vec2; start: Vec2 }
   | { kind: 'camera'; id: string; startMm: Vec2; start: Vec2 }
   | { kind: 'cameraRotate'; id: string }
+  | { kind: 'projector'; id: string; startMm: Vec2; start: Vec2 }
   | { kind: 'info'; id: string; startMm: Vec2; start: Vec2 }
   | { kind: 'action'; id: string; startMm: Vec2; start: Vec2 }
   | { kind: 'pzoneVert'; id: string; idx: number; startMm: Vec2; startPts: Vec2[] }
@@ -215,7 +216,7 @@ export interface EditZone {
   mousePos: Vec2 | null;
 }
 
-export type Tool = 'select' | 'wall' | 'sensor' | 'motion' | 'env' | 'infocard' | 'action' | 'bleproxy' | 'alarm' | 'thermostat' | 'safety' | 'robot' | 'camera' | 'pzone' | 'ground' | 'void' | 'furniture' | 'light' | 'switch' | 'door' | 'window' | 'delete';
+export type Tool = 'select' | 'wall' | 'sensor' | 'motion' | 'env' | 'infocard' | 'action' | 'bleproxy' | 'alarm' | 'thermostat' | 'safety' | 'robot' | 'camera' | 'projector' | 'pzone' | 'ground' | 'void' | 'furniture' | 'light' | 'switch' | 'door' | 'window' | 'delete';
 
 // Live robot state (runtime-only). `x/y/heading/phase/activity/led` are the
 // DISPLAY fields both canvases read; the rest are the movement controller's
@@ -341,6 +342,9 @@ export class Planner extends EventTarget {
 
   // Active camera fixture (sidebar selection / canvas highlight)
   activeCameraId: string | null = null;
+
+  // Active projector fixture (sidebar selection / canvas highlight)
+  activeProjectorId: string | null = null;
 
   // Active info card fixture (sidebar selection / canvas highlight)
   activeInfoId: string | null = null;
@@ -1091,6 +1095,7 @@ export class Planner extends EventTarget {
       this.activeSafetyId = null;
       this.activeRobotId = null;
       this.activeCameraId = null;
+      this.activeProjectorId = null;
       this.activeInfoId = null;
       this.activeActionId = null;
       this.activePZoneId = null;
@@ -1357,6 +1362,12 @@ export class Planner extends EventTarget {
     // rare; the sidebar wants to refresh the badge + the alert-row status. The
     // 2D/3D canvases read the alert live regardless. Scoped to current-floor ids.
     if ((f2.cameras ?? []).some(c => c.entity_id === id || c.alertEntity === id)) return true;
+    // Projector fixtures: the bound on/off entity (media_player/switch/light) is
+    // config-path so the 3D beam + 2D throw wedge rebuild when it flips. A TV's
+    // bias-light bound entity (Furniture.biasLight.entityId) too — its glow folds
+    // into _keyFloor via the appliance hash. Scoped to current-floor bound ids.
+    if ((f2.projectors ?? []).some(pr => pr.entity_id === id)) return true;
+    if ((f2.furniture ?? []).some(fu => fu.biasLight?.entityId === id)) return true;
     // GPS source entities (a person.* or device_tracker.* bound to a Store.people
     // entry) are config-path so the sidebar GPS status line + 3D pins refresh on
     // a new fix. Bounded to the specific bound ids (GPS pushes are minutes apart,
@@ -1818,6 +1829,11 @@ export class Planner extends EventTarget {
 
   setActiveCamera(id: string | null): void {
     this.activeCameraId = (this.activeCameraId === id) ? null : id;
+    this.emitConfig();
+  }
+
+  setActiveProjector(id: string | null): void {
+    this.activeProjectorId = (this.activeProjectorId === id) ? null : id;
     this.emitConfig();
   }
 
@@ -3446,6 +3462,7 @@ export class Planner extends EventTarget {
     for (const it of f.safetySensors ?? []) { it.x += dx; it.y += dy; }
     for (const it of f.robots ?? []) { it.x += dx; it.y += dy; }
     for (const it of f.cameras ?? []) { it.x += dx; it.y += dy; }
+    for (const it of f.projectors ?? []) { it.x += dx; it.y += dy; }
     for (const it of f.infoCards ?? []) { it.x += dx; it.y += dy; }
     for (const it of f.actionButtons ?? []) { it.x += dx; it.y += dy; }
     for (const z of f.presenceZones ?? []) z.points = z.points.map(p => ({ x: p.x + dx, y: p.y + dy }));
@@ -3474,6 +3491,7 @@ export class Planner extends EventTarget {
     this.activeSafetyId = null;
     this.activeRobotId = null;
     this.activeCameraId = null;
+    this.activeProjectorId = null;
     this.activeInfoId = null;
     this.activeActionId = null;
     this.activePZoneId = null;

@@ -11,6 +11,7 @@ import {
   safetyColor, safetyGlyph, safetyIsFloor, SAFETY_DEFAULTS,
   robotGlyph, robotColor, ROBOT_DEFAULTS,
   presenceZoneColor, cameraFov, cameraRange, cameraStateColor,
+  projectorProjecting, projectorAim, projectorBeamColor, projectorThrow, screenCenterHeight, biasLightColor,
   groundAreaColor, groundKindLabel,
   powerGlowScale,
   hexToRgba, lighten, furnitureKind, furnitureCorners, resolveFurnitureDef, isBinKind, binStateIsFull,
@@ -254,6 +255,7 @@ export function drawAll(ctx: CanvasRenderingContext2D, p: Planner, view: View,
   if (on(L.sensors)) drawSafetySensors(ctx, p, view);
   if (on(L.sensors)) drawRobots(ctx, p, view);
   if (on(L.sensors)) drawCameras(ctx, p, view);
+  if (on(L.sensors)) drawProjectors(ctx, p, view);
   // LD2450 inclusion / filter polygons + object halos draw per the zones
   // layer. The Motion toggle only hides motion-sensor cones (drawMotionSensors
   // gates its own cone block).
@@ -1267,6 +1269,65 @@ function drawCameras(ctx: CanvasRenderingContext2D, p: Planner, view: View): voi
   }
 }
 
+// Projector fixtures (home-theater arc): a small dark lens glyph at the mount
+// point; while PROJECTING (bound entity on/playing, or unbound localState 'on')
+// a translucent dashed throw wedge aims toward the target screen (or along the
+// rotation heading when no screen is bound). Rides the sensors layer.
+function drawProjectors(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
+  const dpr = window.devicePixelRatio || 1;
+  const f = p.floor();
+  for (const pr of f.projectors ?? []) {
+    if (pr.hidden) continue;
+    const c = mmToPx(view, pr.x, pr.y);
+    const projecting = projectorProjecting(p.effectiveState(pr)?.state);
+    const beamCol = projectorBeamColor(pr);
+    const selected = p.activeProjectorId === pr.id;
+    // Throw wedge toward the target screen (else heading-based default reach).
+    if (projecting) {
+      const screen = pr.screenId ? (f.furniture.find(x => x.id === pr.screenId) ?? null) : null;
+      const aim = projectorAim(pr, screen ? { x: screen.x, y: screen.y, cy: 0 } : null);
+      const a = mmToPx(view, aim.x, aim.y);
+      const dx = a.x - c.x, dy = a.y - c.y;
+      const len = Math.hypot(dx, dy) || 1;
+      const nx = dx / len, ny = dy / len;
+      // Perpendicular half-spread at the screen from the throw ratio: the image
+      // width ≈ throwDist / throwRatio (§2.2), so half-spread in px ≈ len / (2·ratio).
+      const half = len / (2 * projectorThrow(pr));
+      const px = -ny * half, py = nx * half;
+      ctx.beginPath();
+      ctx.moveTo(c.x, c.y);
+      ctx.lineTo(a.x + px, a.y + py);
+      ctx.lineTo(a.x - px, a.y - py);
+      ctx.closePath();
+      ctx.fillStyle = hexToRgba(beamCol, 0.12);
+      ctx.fill();
+      ctx.strokeStyle = hexToRgba(beamCol, 0.5);
+      ctx.lineWidth = 1;
+      ctx.setLineDash([5, 4]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    // Body glyph.
+    ctx.fillStyle = projecting ? lighten(beamCol, 0.1) : selected ? '#90caf9' : '#5c6bc0';
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.arc(c.x, c.y, 7 * dpr, 0, 2 * Math.PI);
+    ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#fff'; ctx.font = `${9 * dpr}px sans-serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('📽', c.x, c.y);
+    // Label below.
+    const txt = pr.label?.trim() || 'Projector';
+    ctx.font = `${10 * dpr}px sans-serif`;
+    ctx.textBaseline = 'top';
+    const tw = ctx.measureText(txt).width + 8 * dpr;
+    ctx.fillStyle = 'rgba(0,0,0,0.7)';
+    ctx.fillRect(c.x - tw / 2, c.y + 11 * dpr, tw, 13 * dpr);
+    ctx.fillStyle = projecting ? beamCol : '#fff';
+    ctx.fillText(txt, c.x, c.y + 13 * dpr);
+    drawBatteryBadge(ctx, p, pr.entity_id ?? null, c.x + 8 * dpr, c.y - 8 * dpr);
+  }
+}
+
 // Camera alert snapshot card (#10 extension): a screen-fixed ~220×140 px thumb
 // of the camera's entity_picture with an alert-red border, anchored beside the
 // camera marker and clamped on-canvas. The image is cache-busted every ~3 s
@@ -2155,6 +2216,24 @@ function drawFurniture(ctx: CanvasRenderingContext2D, p: Planner, view: View,
       ctx.fillRect(-halfW, -halfH, halfW * 2, halfH * 2);
       ctx.restore();
     }
+    // Screen bias lighting (home-theater arc): a subtle colored halo ring around
+    // the TV footprint while the bias source is on — bound bias entity 'on', or
+    // (no entityId) AUTO while the TV itself is playing/on.
+    if ((piece.kind === 'tv' || piece.kind === 'wall_tv') && piece.biasLight) {
+      const bl = piece.biasLight;
+      const biasOn = bl.entityId
+        ? p.effectiveState({ entity_id: bl.entityId })?.state === 'on'
+        : stateOn;
+      if (biasOn) {
+        ctx.save();
+        ctx.shadowColor = hexToRgba(biasLightColor(bl), 0.85);
+        ctx.shadowBlur = 20 * dpr;
+        ctx.strokeStyle = hexToRgba(biasLightColor(bl), 0.55);
+        ctx.lineWidth = 3;
+        ctx.strokeRect(-halfW - 3, -halfH - 3, halfW * 2 + 6, halfH * 2 + 6);
+        ctx.restore();
+      }
+    }
     // Local rect: -halfW..+halfW (X), -halfH..+halfH (canvas Y). Canvas-Y top
     // (-halfH) corresponds to world +Y after the canvas Y-flip — the BACK-side
     // decorations edge (backrest, headboard, pillows). The functional FRONT
@@ -2804,6 +2883,80 @@ function drawFurniturePrimitiveLocal(
       ctx.fillStyle = 'rgba(138,106,68,0.7)';
       ctx.fillRect(x, y + 1, w, h * 0.14);
       ctx.fillRect(x, y + h - h * 0.14 - 1, w, h * 0.14);
+      break;
+    }
+    // ── home theater ──
+    case 'speaker_tower':
+    case 'speaker_bookshelf': {
+      // Slim dark cabinet + stacked driver circles down the front (-Y/bottom edge
+      // is the functional front). Tower gets 3 drivers, bookshelf 2.
+      fill(bodyFill('rgba(26,26,26,0.8)', 0.8));
+      stroke('#5a5a5a');
+      const n = kind === 'speaker_tower' ? 3 : 2;
+      ctx.strokeStyle = '#8a8a8a'; ctx.fillStyle = 'rgba(10,10,10,0.9)'; ctx.lineWidth = 1;
+      for (let i = 0; i < n; i++) {
+        const dy = y + h * (0.72 - 0.42 * (i / Math.max(1, n - 1)));
+        const dr = Math.min(halfW, halfH) * (0.5 - 0.11 * i);
+        ctx.beginPath(); ctx.arc(0, dy, Math.max(1.5, dr), 0, 2 * Math.PI); ctx.fill(); ctx.stroke();
+      }
+      break;
+    }
+    case 'subwoofer': {
+      // Squat cube + one large front driver circle.
+      fill(bodyFill('rgba(17,17,17,0.85)', 0.85));
+      stroke('#555');
+      ctx.strokeStyle = '#8a8a8a'; ctx.fillStyle = 'rgba(8,8,8,0.92)'; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(0, y + h * 0.62, Math.min(halfW, halfH) * 0.72, 0, 2 * Math.PI); ctx.fill(); ctx.stroke();
+      break;
+    }
+    case 'center_channel': {
+      // Wide short horizontal cabinet + 2 flanking drivers + a center tweeter dot.
+      fill(bodyFill('rgba(22,22,22,0.82)', 0.82));
+      stroke('#555');
+      ctx.strokeStyle = '#8a8a8a'; ctx.fillStyle = 'rgba(8,8,8,0.92)'; ctx.lineWidth = 1;
+      const cr = Math.min(halfW * 0.5, halfH) * 0.72;
+      for (const dx of [-0.34, 0.34]) {
+        ctx.beginPath(); ctx.arc(dx * w, y + h * 0.6, cr, 0, 2 * Math.PI); ctx.fill(); ctx.stroke();
+      }
+      ctx.beginPath(); ctx.arc(0, y + h * 0.6, cr * 0.45, 0, 2 * Math.PI); ctx.fill(); ctx.stroke();
+      break;
+    }
+    case 'theater_recliner':
+    case 'recliner_row3': {
+      // Sofa-like plush seating: back band on the +Y (top) edge, thick arms on
+      // the outer ends, and per-seat cushion splits (row = 3 seats).
+      fill(bodyFill('rgba(43,35,32,0.7)', 0.7));
+      stroke('#7a6a60');
+      const nSeats = kind === 'recliner_row3' ? 3 : 1;
+      // Back band along the top.
+      ctx.fillStyle = '#1c1714';
+      ctx.fillRect(x, y, w, Math.max(4, h * 0.2));
+      // Thick arms on left/right ends.
+      const armW = Math.max(4, w * (kind === 'recliner_row3' ? 0.045 : 0.15));
+      ctx.fillRect(x, y, armW, h);
+      ctx.fillRect(x + w - armW, y, armW, h);
+      // Inner seat-divider ticks.
+      ctx.strokeStyle = '#4a3f39'; ctx.lineWidth = 1.5;
+      for (let i = 1; i < nSeats; i++) {
+        const sx = x + (w * i) / nSeats;
+        ctx.beginPath(); ctx.moveTo(sx, y + h * 0.22); ctx.lineTo(sx, y + h - 3); ctx.stroke();
+      }
+      break;
+    }
+    case 'riser_platform': {
+      // Walkable tiered deck: dark carpeted fill with a lighter step-edge lip on
+      // the front (-Y/bottom) edge and corner ticks.
+      fill(bodyFill('rgba(42,38,34,0.55)', 0.55));
+      stroke('#6b625c');
+      ctx.strokeStyle = '#8d837b'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(x + 3, y + h - 2); ctx.lineTo(x + w - 3, y + h - 2); ctx.stroke();
+      // Step tick marks along the front lip.
+      ctx.lineWidth = 1;
+      const nTicks = Math.max(4, Math.round(w / (halfW > 0 ? Math.max(30, halfW * 0.5) : 60)));
+      for (let i = 1; i < nTicks; i++) {
+        const sx = x + (w * i) / nTicks;
+        ctx.beginPath(); ctx.moveTo(sx, y + h - 2); ctx.lineTo(sx, y + h - 2 - Math.min(8, h * 0.14)); ctx.stroke();
+      }
       break;
     }
     default:

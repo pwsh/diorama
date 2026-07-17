@@ -49,7 +49,15 @@ export type FurnitureKind =
   | 'tree' | 'pine_tree' | 'bush' | 'flower_bed' | 'bird_bath'
   | 'fountain' | 'swingset' | 'lawn_chair' | 'picnic_table'
   // fitness
-  | 'exercise_equipment';
+  | 'exercise_equipment'
+  // home theater — speakers/sub/center (cat 'theater'), recliners + riser (cat 'furniture')
+  | 'speaker_tower'      // floorstanding tower; bindable media_player → driver pulse
+  | 'speaker_bookshelf'  // compact, mountable onto shelves/consoles
+  | 'subwoofer'          // squat cube, big front driver, slow deep pulse
+  | 'center_channel'     // horizontal, mountable under/over a screen
+  | 'theater_recliner'   // plush single recliner; watch_tv resolves from the room TV
+  | 'recliner_row3'      // three-seat shared-arm recliner row (3 sit spots)
+  | 'riser_platform';    // walkable tiered-seating deck; does NOT block nav
 
 // Contextual activity a piece of furniture anchors (Sims-style character
 // behavior — later phases dwell-trigger these). Set on the kind def (or an
@@ -118,6 +126,11 @@ export interface Furniture {
                               // lower story), transits spawn/despawn at each linked piece's own coords.
                               // Drives cross-floor BLE rig handoff (Planner.floorTransits) + the 2D ▲/▼
                               // chip. A stairLinkId with no partner is inert. Item-level → no repairFloor.
+  biasLight?: {               // tv/wall_tv only (home-theater arc): soft accent glow behind the screen.
+    entityId?: string;        //   bound light.*/switch.* — glow shows while that entity is 'on'.
+    color?: string;           //   hex; default warm white (~6500K). Absent entityId → AUTO: glow while the
+  };                          //   TV itself is playing/on. 3D = emissive halo plane behind the panel; 2D = a
+                              //   soft halo ring around the footprint. Item-level → no repairFloor change.
 }
 
 export type LightIconKind =
@@ -649,6 +662,31 @@ export interface PresenceZone {
   locked?: boolean;            // canvas vertex-drag / delete disabled
 }
 
+// Projector fixture (home-theater arc). Ceiling/shelf-mounted body aimed at a
+// projection screen (a `wall_tv`/`tv` furniture piece). Bindable to a
+// media_player.* / switch.* / light.* entity whose 'on'/'playing' state means
+// PROJECTING; unbound pieces carry a localState for click-toggle (same "local
+// control of unbound interactive objects" pattern as Light/Door). While
+// projecting the 3D build shows a translucent light-frustum cone from the lens
+// to the aim point + a soft glow on the target screen; 2D draws a dashed throw
+// wedge. Free placement (no wall snap); rides the sensors layer. Per-floor
+// (Floor.projectors); repairFloor + defaultFloor backfill []. See geometry.ts
+// PROJECTOR_DEFAULTS / projectorAim / projectorProjecting.
+export interface ProjectorFixture {
+  id: string;
+  x: number; y: number;          // mm, ceiling/shelf mount point in plan
+  height?: number;               // mm above floor; default 2600 (near ceiling)
+  rotation?: number;             // deg screen-CW; aim heading when no screen target (0 = +Y world)
+  entity_id?: string | null;     // media_player.* / switch.* / light.* ('on'/'playing' = projecting)
+  localState?: string;           // local on/off when UNBOUND ('on'/'off'); inert once bound
+  screenId?: string | null;      // Furniture id (wall_tv/tv) the beam aims at; falls back to `rotation`
+  throwRatio?: number;           // default 1.5 (standard throw); scales the beam spread + default reach
+  beamColor?: string;            // hex; default '#dfe8ff' (cool white-blue)
+  label?: string;
+  locked?: boolean;              // canvas move/delete disabled (click-to-toggle still works)
+  hidden?: boolean;              // per-fixture hide (plus the whole sensors layer toggle)
+}
+
 // Camera fixture (roadmap #10). Wall/eave-mounted camera with a translucent FOV
 // frustum wedge (2D + 3D) + a periodically refreshed snapshot thumbnail in the
 // sidebar. Bound to a camera.* entity. Free placement; rotate via the standard
@@ -695,6 +733,7 @@ export interface Floor {
   robots?: RobotFixture[];  // robot vacuum / mower fixtures; repairFloor backfills []
   presenceZones?: PresenceZone[];  // FP2-style occupancy zones; repairFloor backfills []
   cameras?: CameraFixture[];  // camera fixtures (FOV frustum + snapshot); repairFloor backfills []
+  projectors?: ProjectorFixture[];  // home-theater projector fixtures; repairFloor backfills []
   groundAreas?: GroundArea[];  // yard/ground covering polygons; repairFloor backfills []
   voidAreas?: VoidArea[];  // floor voids / openings (holes cut from the slab); repairFloor backfills []
   infoCards?: InfoCard[];  // generic entity-value / clock plaques; repairFloor backfills []

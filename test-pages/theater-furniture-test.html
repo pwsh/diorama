@@ -1,0 +1,139 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>theater furniture test</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<script type="module">
+  // Deterministic checks for the home-theater furniture kinds:
+  //  - each new kind builds a 3D group (children + plausible top height)
+  //  - recliner_row3 registers exactly 3 SitSpots (multi-seat mirror of sofa)
+  //  - riser_platform does NOT block nav (its cell free; a tower's cell blocked)
+  //  - speaker driver emissive pulse present only while the media_player plays
+  //  - a rig seated on a theater_recliner in a TV-on room resolves watch_tv
+  const mod = await import('./assets/three-renderer.js?v=' + Date.now());
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+  const fu = (id, kind, x, y, w, h, rot = 0, extra = {}) => ({ id, x, y, w, h, kind, rotation: rot, ...extra });
+  const SC = { preset: 'day', floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6' };
+
+  const results = [];
+  const ok = (name, cond, extra = '') => results.push(`${cond ? 'ok' : 'FAIL'} ${name}${extra ? ' [' + extra + ']' : ''}`);
+
+  // Local top of a built group (group is at floor y=0): max mesh top over the
+  // non-outline structural meshes. computeBoundingBox is available on the
+  // geometry objects without importing THREE.
+  const groupTop = (grp) => {
+    let top = 0;
+    grp.traverse(o => {
+      if (!o.isMesh || o.userData?.outline || o.userData?.outlineSkip) return;
+      const g = o.geometry; if (!g || !g.computeBoundingBox) return;
+      g.computeBoundingBox();
+      const t = o.position.y + (g.boundingBox?.max.y ?? 0);
+      if (t > top) top = t;
+    });
+    return top;
+  };
+  const hasDriver = (grp) => { let f = false; grp.traverse(o => { if (o.userData?.speakerDriver) f = true; }); return f; };
+  const maxDriverEmissive = (grp) => {
+    let e = 0;
+    grp.traverse(o => { if (o.userData?.speakerDriver && o.material?.emissiveIntensity > e) e = o.material.emissiveIntensity; });
+    return e;
+  };
+
+  // ── (1) Each new kind builds with a plausible top height ──────────────────
+  const KINDS = {
+    speaker_tower:     { w: 250,  h: 350,  ht: 1050 },
+    speaker_bookshelf: { w: 200,  h: 280,  ht: 350 },
+    subwoofer:         { w: 400,  h: 450,  ht: 450 },
+    center_channel:    { w: 450,  h: 160,  ht: 180 },
+    theater_recliner:  { w: 950,  h: 1000, ht: 1050 },
+    recliner_row3:     { w: 2900, h: 1000, ht: 1050 },
+    riser_platform:    { w: 3600, h: 1800, ht: 220 },
+  };
+  for (const [kind, d] of Object.entries(KINDS)) {
+    const piece = fu(kind + '1', kind, 0, 0, d.w, d.h);
+    const grp = r._buildFurniture(piece, [piece], undefined, {});
+    const top = groupTop(grp);
+    const heightOK = top >= d.ht * 0.85 && top <= d.ht * 1.25;
+    ok(`build:${kind}`, grp && grp.children.length >= 2 && heightOK, `children=${grp.children.length} top=${Math.round(top)}/${d.ht}`);
+  }
+
+  // ── (2) recliner_row3 registers 3 SitSpots; theater_recliner registers 1 ──
+  const seatFloor = (pieces) => ({
+    id: 'fs', name: 'Seats', w: 12000, d: 6000,
+    walls: [], rooms: [], furniture: pieces,
+    lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [], windows: [], bg: null, model3d: null, look3d: null,
+  });
+  {
+    const row = fu('row', 'recliner_row3', 6000, 3000, 2900, 1000);
+    const one = fu('one', 'theater_recliner', 1500, 3000, 950, 1000);
+    r.updateFloor(seatFloor([row, one]), SC);
+    const rowSpots = (r._sitSpots || []).filter(s => s.id.startsWith('row:')).length;
+    const oneSpots = (r._sitSpots || []).filter(s => s.id.startsWith('one:')).length;
+    ok('recliner_row3 spots=3', rowSpots === 3, `got ${rowSpots}`);
+    ok('theater_recliner spots=1', oneSpots === 1, `got ${oneSpots}`);
+  }
+
+  // ── (3) riser does NOT block nav; a tower DOES ───────────────────────────
+  {
+    const riser = fu('riser', 'riser_platform', 3000, 3000, 3600, 1800);
+    const tower = fu('tower', 'speaker_tower', 8000, 3000, 250, 350);
+    r.updateFloor(seatFloor([riser, tower]), SC);
+    const nav = r._nav;
+    const cellAt = (wx, wy) => {
+      const cx = Math.floor(wx / nav.cell), cy = Math.floor(wy / nav.cell);
+      return nav.blocked[cy * nav.nx + cx];
+    };
+    const riserFree = cellAt(3000, 3000) === 0;   // inside riser footprint, walkable
+    const towerBlocked = cellAt(8000, 3000) === 1; // inside tower footprint, blocked
+    ok('riser cell free', riserFree, `blocked=${cellAt(3000, 3000)}`);
+    ok('tower cell blocked', towerBlocked, `blocked=${cellAt(8000, 3000)}`);
+  }
+
+  // ── (4) speaker driver pulse present ONLY while playing ──────────────────
+  {
+    const spk = fu('spk', 'speaker_tower', 0, 0, 250, 350, 0, { entity_id: 'media_player.hifi' });
+    r._speakerPulses = [];
+    const playing = r._buildFurniture(spk, [spk], undefined, { speakerPlaying: true });
+    const pulseRegistered = r._speakerPulses.length > 0;
+    const emPlaying = maxDriverEmissive(playing);
+    r._speakerPulses = [];
+    const idle = r._buildFurniture(spk, [spk], undefined, { speakerPlaying: false });
+    const emIdle = maxDriverEmissive(idle);
+    ok('speaker has driver', hasDriver(playing) && hasDriver(idle));
+    ok('pulse present playing', pulseRegistered && emPlaying > 0, `em=${emPlaying.toFixed(2)}`);
+    ok('no pulse when idle', r._speakerPulses.length === 0 && emIdle === 0, `em=${emIdle.toFixed(2)}`);
+  }
+
+  // ── (5) seated on theater_recliner in a TV-on room → watch_tv ────────────
+  {
+    const walls = [{ id: 'w1', points: [
+      { x: 200, y: 200 }, { x: 10800, y: 200 }, { x: 10800, y: 6800 }, { x: 200, y: 6800 }, { x: 200, y: 200 }] }];
+    const rooms = [{ id: 'rm1', name: 'Theater', anchor: { x: 5000, y: 3500 } }];
+    const recliner = fu('rec1', 'theater_recliner', 3000, 4200, 950, 1000, 0);
+    const tv = fu('tv1', 'tv', 3000, 5600, 1450, 250, 0, { entity_id: 'media_player.tv' });
+    const floor = {
+      id: 'f1', name: 'Theater', w: 11000, d: 7000, walls, rooms,
+      furniture: [recliner, tv],
+      lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+      doors: [], windows: [], bg: null, model3d: null, look3d: null,
+    };
+    r.updateFloor(floor, SC);
+    const ctx = { entityOn: { tv1: true }, roomNames: { rm1: 'Theater' }, timeBucket: 'evening' };
+    const parked = [{ key: 'watcher', x: 3000, y: 4200, color: 0x4fc3f7 }];
+    const realNow = performance.now.bind(performance);
+    let fakeNow = realNow();
+    performance.now = () => fakeNow;
+    for (let i = 0; i < 460; i++) { fakeNow += 16.7; r.updateTargets(parked, ctx); }
+    performance.now = realNow;
+    const h = r._humanoids['watcher'];
+    ok('recliner watcher sits', !!h && h.sit > 0.5, h ? `sit=${h.sit.toFixed(2)}` : 'no rig');
+    ok('recliner → watch_tv', !!h && h.activity === 'watch_tv', h ? `act=${h.activity}` : 'no rig');
+  }
+
+  const pass = results.filter(x => x.startsWith('ok')).length;
+  const total = results.length;
+  document.title = `THEATERFURN ${pass === total ? 'PASS' : 'FAIL'} ${pass}/${total} | ` + results.join('  ');
+  window.__DUMP = document.title;
+</script>

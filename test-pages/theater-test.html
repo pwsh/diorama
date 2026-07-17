@@ -1,0 +1,126 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>theater</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<!-- Pure projector/bias helpers import geometry as a standalone transpile (like
+     covers-test's geometry.mod.js). Generate it next to this html:
+       npx esbuild src/geometry.ts --bundle --format=esm \
+         --outfile=<harness>/geometry.mod.js -->
+<script type="module">
+ try {
+  const geo = await import('./geometry.mod.js?v=' + Date.now());
+  const mod = await import('./assets/three-renderer.js?v=' + Date.now());
+  const {
+    projectorProjecting, projectorAim, projectorThrow, projectorHeight,
+    screenCenterHeight, biasLightColor, PROJECTOR_DEFAULTS,
+  } = geo;
+
+  const results = [];
+  const ok = (name, cond, detail = '') => results.push(`${cond ? 'ok' : 'FAIL'}:${name}${detail ? '(' + detail + ')' : ''}`);
+  const near = (a, b, t = 1e-6) => Math.abs(a - b) <= t;
+
+  // === 1. Pure helpers ====================================================
+  ok('proj_on_playing', projectorProjecting('playing') === true);
+  ok('proj_on_on',      projectorProjecting('on') === true);
+  ok('proj_off',        projectorProjecting('off') === false);
+  ok('proj_null',       projectorProjecting(null) === false);
+  ok('throw_default',   near(projectorThrow({}), 1.5));
+  ok('throw_clamp',     near(projectorThrow({ throwRatio: 0.05 }), 0.2));
+  ok('height_default',  projectorHeight({}) === PROJECTOR_DEFAULTS.height);
+  ok('screenY_walltv',  screenCenterHeight('wall_tv') === 1350);
+  ok('screenY_tv',      screenCenterHeight('tv') === 700);
+  ok('bias_default_color', biasLightColor(undefined) === '#fff1d6');
+  ok('bias_custom_color',  biasLightColor({ color: '#ff0000' }) === '#ff0000');
+
+  // Aim: bound screen → the screen center; else a heading throw.
+  { const a = projectorAim({ x: 4000, y: 1000, rotation: 0 }, { x: 4000, y: 5000, cy: 1350 });
+    ok('aim_screen', a.x === 4000 && a.y === 5000 && a.y3 === 1350, `${a.x},${a.y},${a.y3}`); }
+  { const a = projectorAim({ x: 1000, y: 1000, rotation: 0 }, null);   // heading +Y
+    ok('aim_head_north', near(a.x, 1000, 1e-6) && a.y > 1000, `${a.x.toFixed(0)},${a.y.toFixed(0)}`); }
+  { const a = projectorAim({ x: 1000, y: 1000, rotation: 90 }, null);  // heading +X
+    ok('aim_head_east', a.x > 1000 && near(a.y, 1000, 1e-6), `${a.x.toFixed(0)},${a.y.toFixed(0)}`); }
+  { const a = projectorAim({ x: 0, y: 0, rotation: 0, throwRatio: 2 }, null);
+    ok('aim_reach_ratio', near(a.y, 2 * PROJECTOR_DEFAULTS.reachImgW, 1), a.y.toFixed(0)); }
+
+  // === 2. Renderer: projector build + beam ================================
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+  const scene3d = { preset: 'night', floorColor: '#101820', floorTex: 'none', wallColor: '#bbbbbb' };
+  const screen = { id: 'scr1', x: 4000, y: 5000, w: 1300, h: 180, kind: 'wall_tv', entity_id: 'media.tv' };
+  const mkFloor = (projectors, biasLight) => ({
+    id: 'f1', name: 'T', w: 8000, d: 6000,
+    walls: [], furniture: [{ ...screen, biasLight }],
+    lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [], windows: [], bg: null, model3d: null, look3d: null, rooms: [], projectors,
+  });
+  const proj = { id: 'p1', x: 4000, y: 1000, height: 2600, rotation: 0, screenId: 'scr1', entity_id: 'media.proj', throwRatio: 1.5 };
+
+  const beams = () => r._projGroup.children.filter(o => o.userData && o.userData.projectorBeam);
+  const glows = () => r._projGroup.children.filter(o => o.userData && o.userData.projectorGlow);
+  const bodies = () => r._projGroup.children.filter(o => o.userData && o.userData.kind === 'projector');
+  const setProj = (st, p = proj) => {
+    r.updateFloor(mkFloor([p], undefined), scene3d, undefined, undefined, id => st[id] || null);
+    r.updateProjectors([p], [screen], id => st[id] || null);
+  };
+
+  // Projecting: body + exactly one beam cone + one glow quad, cone aimed at screen.
+  setProj({ 'media.proj': { state: 'playing', attributes: {} }, 'media.tv': { state: 'off', attributes: {} } });
+  ok('body_builds', bodies().length === 1, String(bodies().length));
+  ok('beam_present', beams().length === 1, String(beams().length));
+  ok('glow_present', glows().length === 1, String(glows().length));
+  {
+    const cone = beams()[0];
+    const L = r._w(proj.x, proj.y, projectorHeight(proj));
+    const aim = projectorAim(proj, { x: screen.x, y: screen.y, cy: screenCenterHeight('wall_tv') });
+    const T = r._w(aim.x, aim.y, aim.y3);
+    const dx = T.x - L.x, dy = T.y - L.y, dz = T.z - L.z;
+    const len = Math.hypot(dx, dy, dz) || 1;
+    const exp = [dx / len, dy / len, dz / len];
+    const d = cone.userData.dir;
+    const dot = exp[0] * d[0] + exp[1] * d[1] + exp[2] * d[2];
+    ok('cone_aims_screen', dot > 0.999, dot.toFixed(4));
+    // Base radius from the throw ratio: image half-width = dist/(2·ratio).
+    const expR = Math.max(120, len / (2 * projectorThrow(proj)));
+    ok('cone_spread', near(cone.geometry.parameters.radius, expR, 1), cone.geometry.parameters.radius.toFixed(0));
+  }
+
+  // Not projecting: body stays, beam + glow gone.
+  setProj({ 'media.proj': { state: 'off', attributes: {} }, 'media.tv': { state: 'off', attributes: {} } });
+  ok('body_still', bodies().length === 1, String(bodies().length));
+  ok('beam_absent_off', beams().length === 0, String(beams().length));
+  ok('glow_absent_off', glows().length === 0, String(glows().length));
+
+  // Heading-only projector (no screen bound) still beams while on.
+  const projHead = { id: 'p2', x: 2000, y: 1000, rotation: 0, entity_id: null, localState: 'on' };
+  setProj({}, projHead);
+  ok('unbound_localstate_on', beams().length === 1, String(beams().length));
+  // Unbound localState off → no beam (toggle semantics).
+  setProj({}, { ...projHead, localState: 'off' });
+  ok('unbound_localstate_off', beams().length === 0, String(beams().length));
+
+  // === 3. Renderer: screen bias halo ======================================
+  const haloOf = () => { let n = 0; r._floorGroup.traverse(o => { if (o.userData && o.userData.biasHalo) n++; }); return n; };
+  const setBias = (biasLight, st) => {
+    r.updateFloor(mkFloor([], biasLight), scene3d, undefined, undefined, id => st[id] || null);
+  };
+  // AUTO mode (no entityId): halo while the TV plays, absent when off.
+  setBias({}, { 'media.tv': { state: 'playing', attributes: {} } });
+  ok('bias_auto_on', haloOf() === 1, String(haloOf()));
+  setBias({}, { 'media.tv': { state: 'off', attributes: {} } });
+  ok('bias_auto_off', haloOf() === 0, String(haloOf()));
+  // Bound bias entity: halo tracks THAT entity (not the TV).
+  setBias({ entityId: 'light.bias' }, { 'media.tv': { state: 'off', attributes: {} }, 'light.bias': { state: 'on', attributes: {} } });
+  ok('bias_entity_on', haloOf() === 1, String(haloOf()));
+  setBias({ entityId: 'light.bias' }, { 'media.tv': { state: 'playing', attributes: {} }, 'light.bias': { state: 'off', attributes: {} } });
+  ok('bias_entity_off', haloOf() === 0, String(haloOf()));
+  // No biasLight config → never a halo, even while playing.
+  setBias(undefined, { 'media.tv': { state: 'playing', attributes: {} } });
+  ok('bias_none', haloOf() === 0, String(haloOf()));
+
+  const n = results.length, pcount = results.filter(x => x.startsWith('ok')).length;
+  const pass = pcount === n;
+  document.title = `THEATER ${pass ? 'PASS' : 'FAIL'} ${pcount}/${n} ${results.join(' ')}`;
+  r.applyViewPreset('iso');
+ } catch (e) { document.title = 'ERR: ' + (e && e.stack ? e.stack.split('\n').slice(0,3).join(' | ') : e); }
+</script>

@@ -10,7 +10,7 @@ import {
   lightHeight, lightRadius, lightIntensity, lightIconKind, lightRotation, lightLength,
   switchHeight, switchRotation, switchSize,
   motionColor, motionIntensity, hexToInt, bleProxyHeight, BLE_PROXY_DEFAULTS,
-  furnitureDef, resolveFurnitureDef, furnitureColor, furnitureCat, isBinKind, binStateIsFull, doorOpenDeltaDeg,
+  furnitureDef, resolveFurnitureDef, furnitureColor, furnitureCat, isBinKind, binStateIsFull, isSpeakerKind, isRiserKind, doorOpenDeltaDeg,
   doorOpenFraction, GARAGE_DOOR_H,
   alarmHeight, alarmStateColor, ALARM_DEFAULTS, ALARM_PLATE_DEPTH_MM,
   thermostatHeight, THERMO_DEFAULTS, THERMO_PLATE_DEPTH_MM, hvacModeColor, hvacAirflow, HVAC_VENT_COLORS,
@@ -20,13 +20,14 @@ import {
   robotColor, robotLedColor, ROBOT_DEFAULTS,
   parseNowPlaying, isMediaPlayerId, type NowPlaying,
   presenceZoneColor, cameraFov, cameraRange, cameraHeight, cameraStateColor,
+  projectorHeight, projectorThrow, projectorBeamColor, projectorProjecting, projectorAim, screenCenterHeight, biasLightColor, PROJECTOR_DEFAULTS,
   GROUND_KINDS,
   ENV_KINDS, envKindOf, envColor, envValueText, envHeight, envScale,
   infoCardText, infoCardRule, infoCardScale, infoCardMount, infoCardHeight,
   infoCardW, infoCardH,
   logicLightState, actionButtonHeight, actionButtonSize, actionButtonColor, ACTION_BUTTON_DEFAULTS,
 } from './geometry.js';
-import type { Door, Window as WindowType, EnvSensor, BleProxy, AlarmPanel, ThermostatFixture, SafetySensor, RobotFixture, CameraFixture, PresenceZone, InfoCard, ActionButton, ObjectRecipe, ActivityKind } from './types.js';
+import type { Door, Window as WindowType, EnvSensor, BleProxy, AlarmPanel, ThermostatFixture, SafetySensor, RobotFixture, CameraFixture, ProjectorFixture, PresenceZone, InfoCard, ActionButton, ObjectRecipe, ActivityKind } from './types.js';
 
 // The subset of Planner.RobotState the renderer reads (structural — keeps the
 // renderer decoupled from the planner). Positions are plan-frame world mm.
@@ -798,6 +799,7 @@ export class ThreeDRenderer {
   private _robotGroup = new THREE.Group();       // static robot docks (build-time, _keyRobots)
   private _robotRigGroup = new THREE.Group();    // moving robot bodies (per-frame, persistent)
   private _cameraGroup = new THREE.Group();      // camera fixtures + FOV frustum (build-time, _keyCameras)
+  private _projGroup = new THREE.Group();        // projector fixtures + light-frustum beam (build-time, _keyProjectors)
   // Camera alert snapshot cards (#10 extension): camera-facing sprites above an
   // ALERTING camera. Own _keyCamAlerts dirty key (refresh bucket while live);
   // CanvasTextures → pair _disposeSpriteMaps with _clearGroup. Rides sensors layer.
@@ -919,8 +921,8 @@ export class ThreeDRenderer {
   private _lastAnimT = 0;   // performance.now()/1000 of the previous _animate frame
   private _ZONE_H = 305;  // 1 ft — low outlines that don't wall off the room
   private _OBJ_H = 900;
-  private _onFixtureClick: ((info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'thermostat' | 'safety' | 'robot' | 'lock' | 'appliance' | 'action'; entity_id: string | null; fixtureId: string }) => void) | null = null;
-  private _onFixtureDblClick: ((info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'thermostat' | 'safety' | 'robot' | 'lock' | 'appliance' | 'action'; entity_id: string | null; fixtureId: string }) => void) | null = null;
+  private _onFixtureClick: ((info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'thermostat' | 'safety' | 'robot' | 'lock' | 'appliance' | 'action' | 'projector'; entity_id: string | null; fixtureId: string }) => void) | null = null;
+  private _onFixtureDblClick: ((info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'thermostat' | 'safety' | 'robot' | 'lock' | 'appliance' | 'action' | 'projector'; entity_id: string | null; fixtureId: string }) => void) | null = null;
   private _raycaster = new THREE.Raycaster();
   // Per-target humanoid rigs, persisted across frames so we can carry
   // walk-cycle phase + smoothed body facing.
@@ -959,6 +961,11 @@ export class ThreeDRenderer {
     wx: number; wy: number; unbound: boolean; hasDoorSensor: boolean; forceOpen?: boolean;
   }[] = [];
   private _applianceDoorBlend: Record<string, number> = {};
+  // Speaker driver materials that pulse while their bound media_player is
+  // playing (a subtle emissive breathe; subwoofers pulse slower + deeper).
+  // Registered in _buildFurniture (only when playing → no glow when idle),
+  // cleared each updateFloor, animated per frame in _advanceSpeakerPulses.
+  private _speakerPulses: { mat: THREE.MeshToonMaterial; base: number; deep: boolean; phase: number }[] = [];
   // TVs grouped by the room they sit in — the watch_tv seated activity checks
   // whether a bound TV in the seated person's room is on. Rebuilt in updateFloor.
   private _tvsByRoom: Record<string, { furnitureId: string; hasEntity: boolean }[]> = {};
@@ -1141,7 +1148,7 @@ export class ThreeDRenderer {
                     this._sensorGroup, this._motionGroup, this._envGroup, this._infoGroup,
                     this._actionGroup,
                     this._bleGroup, this._alarmGroup, this._thermoGroup, this._safetyGroup,
-                    this._robotGroup, this._robotRigGroup, this._cameraGroup, this._camAlertGroup, this._pzoneGroup,
+                    this._robotGroup, this._robotRigGroup, this._cameraGroup, this._projGroup, this._camAlertGroup, this._pzoneGroup,
                     this._groundGroup,
                     this._lightGroup, this._switchGroup, this._targetGroup, this._ghostGroup,
                     this._transitGroup,
@@ -1220,15 +1227,15 @@ export class ThreeDRenderer {
     this._animate();
   }
 
-  onFixtureClick(fn: (info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'thermostat' | 'safety' | 'robot' | 'lock' | 'appliance' | 'action'; entity_id: string | null; fixtureId: string }) => void): void {
+  onFixtureClick(fn: (info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'thermostat' | 'safety' | 'robot' | 'lock' | 'appliance' | 'action' | 'projector'; entity_id: string | null; fixtureId: string }) => void): void {
     this._onFixtureClick = fn;
   }
-  onFixtureDblClick(fn: (info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'thermostat' | 'safety' | 'robot' | 'lock' | 'appliance' | 'action'; entity_id: string | null; fixtureId: string }) => void): void {
+  onFixtureDblClick(fn: (info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'thermostat' | 'safety' | 'robot' | 'lock' | 'appliance' | 'action' | 'projector'; entity_id: string | null; fixtureId: string }) => void): void {
     this._onFixtureDblClick = fn;
   }
 
   private _raycastFixture(clientX: number, clientY: number):
-      { kind: 'light' | 'switch' | 'media' | 'alarm' | 'thermostat' | 'safety' | 'robot' | 'lock' | 'appliance' | 'action'; entity_id: string | null; fixtureId: string } | null {
+      { kind: 'light' | 'switch' | 'media' | 'alarm' | 'thermostat' | 'safety' | 'robot' | 'lock' | 'appliance' | 'action' | 'projector'; entity_id: string | null; fixtureId: string } | null {
     if (!this._renderer || !this._camera) return null;
     const rect = this._renderer.domElement.getBoundingClientRect();
     const ndc = new THREE.Vector2(
@@ -1258,6 +1265,8 @@ export class ThreeDRenderer {
     // Robots (docks + moving bodies) are clickable → run/dock.
     if (this._robotGroup.visible) roots.push(this._robotGroup);
     if (this._robotRigGroup.visible) roots.push(this._robotRigGroup);
+    // Projectors are clickable → toggle projecting (bound entity / localState).
+    if (this._projGroup.visible) roots.push(this._projGroup);
     for (const g of this._mediaClickables) roots.push(g);
     // Door lock deadbolts (userData.kind='lock') ride the always-visible door
     // group; the door panel itself carries no clickable tag, so only the bolt hits.
@@ -1269,7 +1278,7 @@ export class ThreeDRenderer {
       let obj: THREE.Object3D | null = h.object;
       while (obj) {
         const ud = obj.userData;
-        if (ud && (ud.kind === 'light' || ud.kind === 'switch' || ud.kind === 'media' || ud.kind === 'alarm' || ud.kind === 'thermostat' || ud.kind === 'safety' || ud.kind === 'robot' || ud.kind === 'lock' || ud.kind === 'appliance' || ud.kind === 'action')) {
+        if (ud && (ud.kind === 'light' || ud.kind === 'switch' || ud.kind === 'media' || ud.kind === 'alarm' || ud.kind === 'thermostat' || ud.kind === 'safety' || ud.kind === 'robot' || ud.kind === 'lock' || ud.kind === 'appliance' || ud.kind === 'action' || ud.kind === 'projector')) {
           return { kind: ud.kind, entity_id: ud.entity_id ?? null, fixtureId: String(ud.fixtureId) };
         }
         obj = obj.parent;
@@ -1724,7 +1733,7 @@ export class ThreeDRenderer {
     for (const g of [
       this._floorGroup, this._doorGroup, this._modelGroup, this._zoneGroup, this._haloGroup,
       this._sensorGroup, this._motionGroup, this._infoGroup, this._actionGroup, this._bleGroup, this._alarmGroup, this._thermoGroup,
-      this._safetyGroup, this._robotGroup, this._robotRigGroup, this._cameraGroup, this._camAlertGroup, this._pzoneGroup,
+      this._safetyGroup, this._robotGroup, this._robotRigGroup, this._cameraGroup, this._projGroup, this._camAlertGroup, this._pzoneGroup,
       this._groundGroup,
       this._lightGroup, this._switchGroup, this._targetGroup, this._ghostGroup,
       this._pulseGroup, this._nowPlayingGroup,
@@ -1747,6 +1756,7 @@ export class ThreeDRenderer {
     // rebuilt lazily as updateFloor re-registers doors).
     this._applianceDoors = [];
     this._applianceDoorBlend = {};
+    this._speakerPulses = [];
     // Weather effects reset on floor switch (spawn box is fitted to the floor
     // bbox; three-view re-runs updateWeather next tick). _clearWeather resets the
     // tracking lists so _advanceWeather can't iterate freed buffers.
@@ -1871,8 +1881,8 @@ export class ThreeDRenderer {
       const l = furnitureWorldToLocal(t.rotation, wx - t.x, wy - t.y);
       if (Math.abs(l.x) > t.w / 2 || Math.abs(l.y) > t.h / 2) continue;
       let gy: number;
-      if (t.kind === 'stair_landing') {
-        gy = t.elevation + t.ht;
+      if (t.kind === 'stair_landing' || t.kind === 'riser_platform') {
+        gy = t.elevation + t.ht;   // flat top
       } else {
         const n = Math.max(3, Math.round(t.h / 280));
         const frac = (l.y + t.h / 2) / t.h;  // 0 at the front → 1 at the top
@@ -2208,6 +2218,8 @@ export class ThreeDRenderer {
     this._robotRigGroup.visible = v.sensors !== false;
     // Camera fixtures + FOV frustum ride the sensors layer too.
     this._cameraGroup.visible = v.sensors !== false;
+    // Projector fixtures + light beam ride the sensors layer too.
+    this._projGroup.visible = v.sensors !== false;
     this._camAlertGroup.visible = v.sensors !== false;   // alert cards ride the sensors layer
     this._motionGroup.visible = v.motion !== false;
     this._envGroup.visible = v.env !== false;
@@ -2560,6 +2572,7 @@ export class ThreeDRenderer {
     // (keyed by fixture id) so a _keyFloor rebuild re-applies the current door
     // opening without a pop.
     this._applianceDoors = [];
+    this._speakerPulses = [];
     this._tvsByRoom = {};
     this._beds = [];
     this._roomZones = [];
@@ -2581,6 +2594,11 @@ export class ThreeDRenderer {
       const powerW = powerSt ? parseFloat(powerSt.state) : NaN;
       const applianceOn = stateOn || (fu.entity_id == null && isFinite(powerW) && powerW > 10);
       const ledScale = isFinite(powerW) && powerW > 5 ? powerGlowScale(powerW) : 1;
+      // Home-theater speaker: a bound-or-local PLAYING media_player drives the
+      // emissive driver pulse (idle/off = no glow). State folded into _keyFloor
+      // via three-view's appliance hash so this rebuilds on a playback change.
+      const speakerPlaying = isSpeakerKind(fu.kind) &&
+        (st0?.state === 'playing' || st0?.state === 'buffering');
       // Bound temperature reading (stove/oven/fridge): a rounded chip/sprite.
       let tempLabel: string | undefined;
       if (fu.tempEntity && stateProvider) {
@@ -2591,9 +2609,20 @@ export class ThreeDRenderer {
           tempLabel = `${Math.round(v)}°${/F/i.test(unit) ? 'F' : ''}`;
         }
       }
+      // Screen bias lighting (home-theater arc): a tv/wall_tv with a biasLight
+      // config glows behind the screen — a bound bias entity 'on', or (no
+      // entityId) AUTO while the TV itself is playing/on. Bias entity state folds
+      // into three-view's appliance hash so this rebuilds on a change.
+      let biasOn = false; let biasColor: number | undefined;
+      if ((fu.kind === 'tv' || fu.kind === 'wall_tv') && (fu as Furniture).biasLight) {
+        const bl = (fu as Furniture).biasLight!;
+        if (bl.entityId) biasOn = (stateProvider ? stateProvider(bl.entityId)?.state : null) === 'on';
+        else biasOn = stateOn;   // AUTO: glow while the TV plays/on
+        biasColor = hexToInt(biasLightColor(bl));
+      }
       const doorSink: { pivot: THREE.Object3D; axis: 'x' | 'y'; openAngle: number }[] = [];
       const grp = this._buildFurniture(fu, f.furniture, customObjects,
-                                       { applianceOn, ledScale, doorSink, tempLabel, binFull });
+                                       { applianceOn, ledScale, doorSink, tempLabel, binFull, speakerPlaying, biasOn, biasColor });
       this._shadowFlags(grp);
       // Custom-recipe front-arrow indicator: custom objects draw only as a
       // labeled rect in 2D and had no 3D front cue, so when a recipe piece is
@@ -2644,6 +2673,16 @@ export class ThreeDRenderer {
       if (isBinKind(fu.kind)) {
         grp.userData = { ...grp.userData, kind: 'media', entity_id: fu.entity_id ?? null, fixtureId: fu.id };
         this._mediaClickables.push(grp);
+      }
+      // Riser platform: a flat walkable deck. Registered as terrain (flat top =
+      // elevation + ht, resolved in _groundYAt like a landing) so rigs climb onto
+      // it; the nav rasterizer skips its footprint (isRiserKind) so it never
+      // blocks pathing. Pieces placed ON it carry their own `elevation`.
+      if (isRiserKind(fu.kind)) {
+        this._terrain.push({
+          x: fu.x, y: fu.y, w: fu.w, h: fu.h, rotation: fu.rotation,
+          ht: def.ht, elevation: fu.elevation ?? 0, kind: 'riser_platform',
+        });
       }
       // Stairs and landings are walkable terrain for humanoid targets.
       if (fu.kind === 'stairs' || fu.kind === 'stairs_half' || fu.kind === 'stair_landing') {
@@ -2745,6 +2784,14 @@ export class ThreeDRenderer {
           const n = Math.max(1, Math.floor(W / SEAT_PITCH));
           for (let i = 0; i < n; i++)
             seatLocals.push({ lx: W * ((i + 0.5) / n - 0.5), lz: 0, depth: D });
+        } else if (fu.kind === 'recliner_row3') {
+          // Fixed 3-across row. Distribute within the arm-excluded width so the
+          // cushions clear the shared thick arms (matching the 3D builder's armW).
+          const armW = 120;
+          const usable = Math.max(SEAT_PITCH, W - 2 * armW);
+          const n = 3;
+          for (let i = 0; i < n; i++)
+            seatLocals.push({ lx: usable * ((i + 0.5) / n - 0.5), lz: 0, depth: D });
         } else if (fu.kind === 'sofa_l_left' || fu.kind === 'sofa_l_right' || fu.kind === 'sofa_u') {
           // Sectionals: spots along the main run (X, near the back) PLUS one per
           // return arm — matching the builder's main-seat + return geometry.
@@ -3200,6 +3247,8 @@ export class ThreeDRenderer {
       // the footprint makes nav steer settling occupants back OUT (breaking the
       // lie + shared-covers settle), so leave beds walkable like rugs/stairs.
       if (fu.kind === 'bed') continue;
+      // Riser platforms are a walkable deck (terrain) — never block them.
+      if (isRiserKind(fu.kind)) continue;
       if ((fu.elevation ?? 0) >= 300) continue;
       const halfW = fu.w / 2 + PERSON_R, halfH = fu.h / 2 + PERSON_R;
       // AABB of the inflated footprint (rotation-agnostic: the max extent is
@@ -4151,7 +4200,8 @@ export class ThreeDRenderer {
                           customObjects?: ObjectRecipe[],
                           opts?: { applianceOn?: boolean; ledScale?: number;
                                    doorSink?: { pivot: THREE.Object3D; axis: 'x' | 'y'; openAngle: number }[];
-                                   tempLabel?: string; binFull?: boolean }): THREE.Group {
+                                   tempLabel?: string; binFull?: boolean; speakerPlaying?: boolean;
+                                   biasOn?: boolean; biasColor?: number }): THREE.Group {
     const recipe = fu.customKindId ? customObjects?.find(o => o.id === fu.customKindId) : undefined;
     const def = recipe ?? furnitureDef(fu);
     const W = fu.w, D = fu.h, HT = def.ht;
@@ -5024,8 +5074,131 @@ export class ThreeDRenderer {
         }
         break;
       }
+      // ── home theater ──────────────────────────────────────────────────────
+      case 'speaker_tower':
+      case 'speaker_bookshelf':
+      case 'subwoofer':
+      case 'center_channel': {
+        // Dark cabinet + circular driver cutouts on the front face (local -Z).
+        // A bound-playing media_player lights the drivers (emissive) and enrolls
+        // the shared driver material in the per-frame pulse (subwoofer = deep).
+        const cabinet = this._mat({ color: tint, roughness: 0.55, metalness: 0.12 });
+        addBox(W, HT, D, cabinet, 0, HT / 2, 0);
+        const deep = kind === 'subwoofer';
+        const base = deep ? 0.9 : 0.55;
+        const driverMat = this._mat({
+          color: 0x0a0a0a, roughness: 0.5, metalness: 0.2,
+          emissive: 0xffa040, emissiveIntensity: opts?.speakerPlaying ? base : 0,
+        });
+        if (opts?.speakerPlaying)
+          this._speakerPulses.push({ mat: driverMat, base, deep, phase: (fu.x + fu.y) % 6.28 });
+        // Driver ring: a short cylinder whose circular face points out the front
+        // (-Z). Rotating a Y-axis cylinder by +90° about X aligns its axis to Z.
+        const mkDriver = (r: number, py: number, thick = 22) => {
+          const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, thick, 20), driverMat);
+          m.rotation.x = Math.PI / 2;
+          m.position.set(0, py, -D / 2 - thick / 2 + 6);
+          m.userData.speakerDriver = true;
+          m.userData.outlineSkip = true;   // no dark shell over a glowing cone
+          grp.add(m);
+          return m;
+        };
+        if (kind === 'speaker_tower') {
+          mkDriver(W * 0.38, HT * 0.28);   // woofer
+          mkDriver(W * 0.28, HT * 0.55);   // mid
+          mkDriver(W * 0.16, HT * 0.75);   // tweeter
+        } else if (kind === 'speaker_bookshelf') {
+          mkDriver(W * 0.4, HT * 0.4);     // woofer
+          mkDriver(W * 0.2, HT * 0.72);    // tweeter
+        } else if (kind === 'subwoofer') {
+          mkDriver(W * 0.42, HT * 0.5, 28);
+        } else {                            // center_channel (horizontal): two woofers + a tweeter
+          const drv = driverMat;
+          for (const dx of [-1, 1]) {
+            const m = new THREE.Mesh(new THREE.CylinderGeometry(HT * 0.36, HT * 0.36, 20, 18), drv);
+            m.rotation.x = Math.PI / 2;
+            m.position.set(dx * W * 0.32, HT * 0.5, -D / 2 - 4);
+            m.userData.speakerDriver = true; m.userData.outlineSkip = true;
+            grp.add(m);
+          }
+          const tw = new THREE.Mesh(new THREE.CylinderGeometry(HT * 0.16, HT * 0.16, 20, 16), drv);
+          tw.rotation.x = Math.PI / 2;
+          tw.position.set(0, HT * 0.5, -D / 2 - 4);
+          tw.userData.speakerDriver = true; tw.userData.outlineSkip = true;
+          grp.add(tw);
+        }
+        break;
+      }
+      case 'theater_recliner':
+      case 'recliner_row3': {
+        // Plush recliner(s) on a low plinth: full-width back band (+Z), thick
+        // outer arms + inner dividers, per-seat cushions with a cupholder hint on
+        // each arm. One seat (recliner) or three (row) — the SitSpot distribution
+        // above registers the matching number of seats.
+        const nSeats = kind === 'recliner_row3' ? 3 : 1;
+        const seatH2 = def.seat ?? 450;
+        const seatT = 130, seatY = seatH2 - seatT / 2;
+        const armW = kind === 'recliner_row3' ? 120 : Math.min(160, W * 0.16);
+        const backT = D * 0.22, backH = HT - seatH2;
+        // Plinth beneath the whole piece (dark, narrower than the cushions so no
+        // coplanar side faces vs the arms — the coincident-face gotcha).
+        addBox(W - armW * 2, seatY - seatT / 2, D * 0.9, dark, 0, (seatY - seatT / 2) / 2, 0);
+        // Back band along +Z, full width.
+        addBox(W, backH, backT, cushion, 0, seatH2 + backH / 2, D / 2 - backT / 2);
+        // Per-seat cushions, inset from the back band and slightly proud-front so
+        // faces don't land coplanar.
+        const usableW = W - 2 * armW, seatW = usableW / nSeats;
+        for (let i = 0; i < nSeats; i++) {
+          const cx = -usableW / 2 + seatW * (i + 0.5);
+          addBox(seatW * 0.92, seatT, D * 0.7, cushion, cx, seatY, -D * 0.04);
+        }
+        // Arms: outer pair (full-depth thick) + inner dividers between seats.
+        const armH = HT * 0.62;
+        for (const sx of [-1, 1])
+          addBox(armW, armH, D, cushion, sx * (W / 2 - armW / 2), armH / 2, 0);
+        for (let i = 1; i < nSeats; i++) {
+          const dx = -usableW / 2 + seatW * i;
+          addBox(armW * 0.7, armH * 0.85, D * 0.9, cushion, dx, armH * 0.85 / 2, 0);
+        }
+        // Cupholder hint: a small dark recess on each OUTER arm top.
+        for (const sx of [-1, 1]) {
+          const cup = new THREE.Mesh(new THREE.CylinderGeometry(armW * 0.28, armW * 0.28, 40, 14), dark);
+          cup.position.set(sx * (W / 2 - armW / 2), armH + 20, -D * 0.1);
+          grp.add(cup);
+        }
+        break;
+      }
+      case 'riser_platform': {
+        // Walkable tiered-seating deck: a dark carpeted slab + a lighter step-edge
+        // lip on the front (-Z) face so the height reads. NON-nav (see _buildNav
+        // skip); registered as flat terrain so avatars stand on top at HT.
+        addBox(W, HT, D, this._mat({ color: tint, roughness: 0.95, metalness: 0.0 }), 0, HT / 2, 0);
+        const lip = this._mat({ color: new THREE.Color(tint).multiplyScalar(1.5).getHex(), roughness: 0.9 });
+        addBox(W, Math.min(40, HT * 0.5), 24, lip, 0, HT - 20, -D / 2 - 10);   // front step edge
+        break;
+      }
       default:
         addBox(W, HT, D, wood, 0, HT / 2, 0);
+    }
+
+    // Screen bias lighting (home-theater arc): a soft emissive halo plane BEHIND
+    // the screen (proud toward the wall at +Z, sized larger than the panel) so a
+    // warm glow rings the TV silhouette. Held off the coincident-face plane of
+    // the bezel/panel back (the coincident-face gotcha); outline-skipped — a
+    // translucent glow needs no dark inverted-hull shell.
+    if (opts?.biasOn && (kind === 'tv' || kind === 'wall_tv')) {
+      const col = opts.biasColor ?? 0xfff1d6;
+      const scY = kind === 'wall_tv' ? 1350 : 300 + (HT - 300) / 2;   // screen center height
+      const scH = kind === 'wall_tv' ? 720 : (HT - 300);              // screen height
+      const backZ = kind === 'wall_tv' ? 60 / 2 + 6 : 45 / 2 + 6;     // proud behind the panel (+Z)
+      const halo = new THREE.Mesh(
+        new THREE.PlaneGeometry(W * 1.18, scH * 1.18),
+        this._mat({ color: col, emissive: col, emissiveIntensity: 0.9,
+                    transparent: true, opacity: 0.55, side: THREE.DoubleSide, depthWrite: false }));
+      halo.position.set(0, scY, backZ);
+      halo.userData.outlineSkip = true;
+      halo.userData.biasHalo = true;
+      grp.add(halo);
     }
 
     // Appliance in-use indicator: a small emissive green LED on the front
@@ -5062,6 +5235,7 @@ export class ThreeDRenderer {
     const onFloor = !def.rug &&
       kind !== 'stairs' && kind !== 'stairs_half' && kind !== 'stair_landing' &&
       kind !== 'wall_tv' &&   // hangs on a wall, never touches the floor
+      kind !== 'riser_platform' &&   // a floor-like deck; a huge blob reads wrong
       Math.abs(fu.elevation ?? 0) < 100;
     if (onFloor) {
       const blob = this._blobShadow(W / 2 * 1.12 + 60, D / 2 * 1.12 + 60);
@@ -5336,6 +5510,88 @@ export class ThreeDRenderer {
         o.position.set(fp.x, 14, fp.z);   // few mm up to avoid z-fighting
         this._cameraGroup.add(o);
       }
+    }
+  }
+
+  // Projector fixtures (home-theater arc): a small dark body + emissive lens at
+  // `height`, aimed at a bound screen (or along `rotation` when unset). While
+  // PROJECTING (bound entity on/playing, or unbound localState 'on') a
+  // translucent light-frustum CONE runs from the lens to the aim point + a soft
+  // additive glow quad on the target screen face. Rides the sensors layer;
+  // rebuilt under _keyProjectors in three-view. Beam + glow use flat additive
+  // MeshBasic (the documented weather/fog exemption class — a toon inverted-hull
+  // outline on a translucent beam would look wrong; both carry outlineSkip).
+  // Meshes carry userData.kind === 'projector' so a raycast click toggles.
+  updateProjectors(projectors: ProjectorFixture[], furniture: Furniture[], stateProvider: StateProvider): void {
+    if (!this._scene) return;
+    this._clearGroup(this._projGroup);
+    for (const pr of projectors) {
+      if (pr.hidden) continue;
+      const projecting = projectorProjecting(itemState(pr, stateProvider)?.state);
+      const beamColInt = hexToInt(projectorBeamColor(pr));
+      const heightMm = projectorHeight(pr);
+      // Body pivot aimed by heading (matches camera/sensor convention). Local
+      // -Z (after the _w X-mirror) is the front / aim side, like the camera lens.
+      const grp = new THREE.Group();
+      const bp = this._w(pr.x, pr.y, heightMm);
+      grp.position.set(bp.x, bp.y, bp.z);
+      grp.rotation.y = -((pr.rotation || 0) * Math.PI / 180);
+      grp.userData = { kind: 'projector', entity_id: pr.entity_id ?? null, fixtureId: pr.id };
+      const body = new THREE.Mesh(
+        new THREE.BoxGeometry(PROJECTOR_DEFAULTS.bodyW * 0.55, PROJECTOR_DEFAULTS.bodyH, PROJECTOR_DEFAULTS.bodyD * 0.55),
+        this._mat({ color: 0x2b2f36, metalness: 0.2, roughness: 0.6 }));
+      grp.add(body);
+      const lens = new THREE.Mesh(
+        new THREE.CylinderGeometry(42, 42, 44, 16),
+        this._mat({ color: projecting ? beamColInt : 0x11151b,
+                    emissive: projecting ? beamColInt : 0x000000,
+                    emissiveIntensity: projecting ? 0.8 : 0 }));
+      lens.rotation.x = Math.PI / 2;                      // cylinder axis → local Z
+      lens.position.set(0, 0, -PROJECTOR_DEFAULTS.bodyD * 0.3);  // front (-Z)
+      lens.userData.outlineSkip = true;
+      grp.add(lens);
+      this._addOutlines(grp);
+      this._projGroup.add(grp);
+      if (!projecting) continue;
+
+      // Aim: the bound screen center (world plan + height), else a heading throw.
+      const screen = pr.screenId ? furniture.find(x => x.id === pr.screenId) : null;
+      const aim = projectorAim(pr, screen ? { x: screen.x, y: screen.y, cy: screenCenterHeight(screen.kind) } : null);
+      const L = this._w(pr.x, pr.y, heightMm);            // lens ≈ mount
+      const T = this._w(aim.x, aim.y, aim.y3);            // aim point (screen center)
+      const dir = new THREE.Vector3().subVectors(T, L);
+      const dist = dir.length() || 1;
+      dir.normalize();
+      // Frustum cone: base radius from the throw ratio — image width ≈
+      // dist / throwRatio (§2.2 throw math), so half-width = dist/(2·ratio).
+      const baseR = Math.max(120, dist / (2 * projectorThrow(pr)));
+      const cone = new THREE.Mesh(
+        new THREE.ConeGeometry(baseR, dist, 20, 1, true),
+        new THREE.MeshBasicMaterial({
+          color: beamColInt, transparent: true, opacity: 0.14,
+          side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending }));
+      // ConeGeometry apex sits at +Y/2, base at -Y/2. Align local +Y to (L - T)
+      // so the apex lands at the lens; center at the lens↔screen midpoint.
+      cone.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0),
+        new THREE.Vector3().subVectors(L, T).normalize());
+      cone.position.copy(L).add(T).multiplyScalar(0.5);
+      cone.userData.outlineSkip = true;
+      cone.userData.projectorBeam = true;
+      cone.userData.dir = [dir.x, dir.y, dir.z];          // lens→screen unit vector (test hook)
+      this._projGroup.add(cone);
+
+      // Soft additive glow quad on the target screen face, facing the lens.
+      const glow = new THREE.Mesh(
+        new THREE.PlaneGeometry(baseR * 1.6, baseR * 0.9),
+        new THREE.MeshBasicMaterial({
+          color: beamColInt, transparent: true, opacity: 0.22,
+          side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending }));
+      glow.position.copy(T).addScaledVector(dir, -30);    // 30 mm proud toward the lens
+      glow.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1),
+        new THREE.Vector3().subVectors(L, T).normalize());
+      glow.userData.outlineSkip = true;
+      glow.userData.projectorGlow = true;
+      this._projGroup.add(glow);
     }
   }
 
@@ -9309,6 +9565,26 @@ export class ThreeDRenderer {
     // avatar engaged/dwelling next to an UNBOUND appliance). Runs here so it
     // sees this frame's raw target positions + resolved activity anchors.
     this._advanceApplianceDoors(targets, entityOn, ctx, frameDt);
+
+    // ── Speaker driver pulse: modulate the emissive intensity of each enrolled
+    // (playing) speaker's driver material with a gentle sine. Subwoofers pulse
+    // slower + deeper. Zero allocation; the list is rebuilt each updateFloor
+    // (only playing speakers are enrolled → idle speakers never pulse).
+    this._advanceSpeakerPulses();
+  }
+
+  // Per-frame emissive breathe on playing speaker drivers. Amplitude/rate keyed
+  // per material (subwoofer = slower, deeper). Clock is the absolute renderer
+  // time so the pulse is continuous across frames.
+  private _advanceSpeakerPulses(): void {
+    if (!this._speakerPulses.length) return;
+    const t = performance.now() / 1000;
+    for (const sp of this._speakerPulses) {
+      const om = sp.deep ? 3.4 : 6.5;              // rad/s — sub slower
+      const amp = sp.deep ? 0.55 : 0.4;            // relative swing
+      const k = 0.5 + 0.5 * Math.sin(t * om + sp.phase);
+      sp.mat.emissiveIntensity = sp.base * (1 - amp + amp * k);
+    }
   }
 
   // Per-frame appliance-door blend. Each registered hinge eases a stored 0→1
@@ -11168,7 +11444,7 @@ export class ThreeDRenderer {
       this._floorGroup, this._doorGroup, this._modelGroup, this._zoneGroup, this._haloGroup,
       this._sensorGroup, this._motionGroup, this._envGroup, this._infoGroup, this._actionGroup, this._bleGroup,
       this._alarmGroup, this._thermoGroup, this._safetyGroup, this._robotGroup, this._robotRigGroup,
-      this._cameraGroup, this._camAlertGroup, this._pzoneGroup, this._groundGroup,
+      this._cameraGroup, this._projGroup, this._camAlertGroup, this._pzoneGroup, this._groundGroup,
       this._lightGroup, this._switchGroup, this._targetGroup, this._gpsGroup, this._weatherGroup,
       this._pulseGroup, this._nowPlayingGroup,
     ]) {
