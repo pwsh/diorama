@@ -4,7 +4,7 @@
 import type { AvatarPackDef } from '../avatars.js';
 
 const pack: AvatarPackDef = {
-  id: 'halo', version: 1, label: 'Halo',
+  id: 'halo', version: 2, label: 'Halo',
   path: ['Video Games', 'Halo'], builtin: true, franchise: true,
   avatars: [
     // Master Chief (Spartan-117) — bulky olive Mjolnir armor, gold visor (rig renders cyan).
@@ -42,7 +42,7 @@ const pack: AvatarPackDef = {
         { shape: 'box', size: [100, 30, 40], anchor: 'crown', pos: [0, 0, 0], color: 0xa8763f },
         { shape: 'box', size: [50, 50, 15], anchor: 'chest', pos: [0, 10, -10], color: 0x7a5730 },
         { shape: 'sphere', size: 9, anchor: 'chest', pos: [0, 10, -18], color: 'accent', emissiveIntensity: 0.4 },
-        { shape: 'cone', size: [140, 260], anchor: 'back', pos: [-40, 0, 10], rot: [0, 0, 0.2], color: 0x5a2020 },
+        { shape: 'cape', size: [240, 300, 350], anchor: 'back', pos: [0, -70, 12], rot: [0.12, 0, 0], color: 0x5a2020 },
         { shape: 'cylinder', size: [8, 8, 70], anchor: 'handR', pos: [0, 40, 0], color: 0x161616 },
         { shape: 'cylinder', size: [4, 4, 120], anchor: 'handR', pos: [0, 120, 0], color: 'accent', emissiveIntensity: 0.5 }],
       personality: { bobMul: 0.75, swayMul: 0.65, cadenceMul: 0.95, ampMul: 0.95 },
@@ -77,7 +77,7 @@ const pack: AvatarPackDef = {
       bubbles: ['😱', '🍖', '💥', '🏃'] },
     // Jiralhanae Brute — hulking furred alien, blue-grey armor, spiked pauldrons.
     { id: 'halo/brute-warrior', label: 'Brute warrior (hulking furred alien, blue-grey armor)', rig: 'humanoid',
-      humanoid: { sk: 1.3, headR: 138, headShape: 'sphere', skin: 0x5c4632, body: 0x3a4a5c, legColor: 0x2e3a48, shoe: 0x22282f,
+      humanoid: { sk: 1.2, headR: 138, headShape: 'sphere', skin: 0x5c4632, body: 0x3a4a5c, legColor: 0x2e3a48, shoe: 0x22282f,
         eyes: 'dots', emI: 0.08, steel: true, hands: 'box', limbR: 1.45, armL: 1.1, legL: 0.95 },
       accessories: [
         { shape: 'box', size: [90, 20, 15], anchor: 'face', pos: [0, 30, -14], color: 0x4a3826 },

@@ -8,7 +8,7 @@
 import type { AvatarPackDef } from '../avatars.js';
 
 const pack: AvatarPackDef = {
-  id: 'movies-harry-potter', version: 1, label: 'Harry Potter',
+  id: 'movies-harry-potter', version: 2, label: 'Harry Potter',
   path: ['Pop Culture', 'Movies', 'Harry Potter'], builtin: true, franchise: true,
   // Shared Hogwarts base: black robe, no glow, sphere hands.
   base: { rig: 'humanoid', humanoid: { body: 0x1c1c1e, headShape: 'sphere', hands: 'sphere', steel: false, emI: 0 } },
@@ -23,7 +23,7 @@ const pack: AvatarPackDef = {
         { shape: 'box', size: [6, 20, 4], anchor: 'face', pos: [-30, 40, -6], rot: [0, 0, 0.4], color: 0x7a4a30 }, // scar
         { shape: 'box', size: [24, 90, 8], anchor: 'chest', pos: [0, 10, -10], color: 0x740001 }, // tie
         { shape: 'box', size: [24, 22, 8], anchor: 'chest', pos: [0, 22, -11], color: 0xeeba30 }, // tie gold stripe
-        { shape: 'cone', size: [80, 250], anchor: 'back', pos: [0, -100, 12], color: 0x1c1c1e },
+        { shape: 'cape', size: [140, 288, 200], anchor: 'back', pos: [0, -135, 12], rot: [0.12, 0, 0], color: 0x1c1c1e },
       ],
       personality: { bobMul: 1.0, swayMul: 0.9, cadenceMul: 1.0, ampMul: 0.95 },
       bubbles: ['⚡', '🦉', '📖', '😳'] },
@@ -37,7 +37,7 @@ const pack: AvatarPackDef = {
         { shape: 'box', size: [24, 90, 8], anchor: 'chest', pos: [0, 10, -10], color: 0x740001 },
         { shape: 'box', size: [24, 22, 8], anchor: 'chest', pos: [0, 22, -11], color: 0xeeba30 },
         { shape: 'box', size: [50, 62, 16], anchor: 'handL', pos: [0, -20, 0], color: 0xd8d0b8 }, // book
-        { shape: 'cone', size: [75, 240], anchor: 'back', pos: [0, -100, 12], color: 0x1c1c1e },
+        { shape: 'cape', size: [130, 276, 190], anchor: 'back', pos: [0, -135, 12], rot: [0.12, 0, 0], color: 0x1c1c1e },
       ],
       personality: { bobMul: 0.95, swayMul: 0.85, cadenceMul: 1.15, ampMul: 0.95 },
       bubbles: ['📚', '✋', '🔮', '😤'] },
@@ -52,7 +52,7 @@ const pack: AvatarPackDef = {
         { shape: 'sphere', size: 8, anchor: 'face', pos: [24, -20, -4], color: 0xb5723a }, // freckle R
         { shape: 'box', size: [22, 84, 8], anchor: 'chest', pos: [0, 10, -10], color: 0x740001 },
         { shape: 'box', size: [22, 20, 8], anchor: 'chest', pos: [0, 22, -11], color: 0xeeba30 },
-        { shape: 'cone', size: [80, 240], anchor: 'back', pos: [0, -100, 12], color: 0x1c1c1e },
+        { shape: 'cape', size: [140, 276, 200], anchor: 'back', pos: [0, -135, 12], rot: [0.12, 0, 0], color: 0x1c1c1e },
       ],
       // approx: freckle scatter reduced to two proud cheek dots (no scatter generator).
       personality: { bobMul: 1.1, swayMul: 1.15, cadenceMul: 0.95, ampMul: 1.05 },
@@ -81,7 +81,7 @@ const pack: AvatarPackDef = {
         { shape: 'sphere', size: [80, 50, 86], anchor: 'crown', pos: [0, -6, 6], color: 0x0d0d0d }, // flat hair
         { shape: 'box', size: [16, 140, 20], anchor: 'face', pos: [-60, -60, 10], color: 0x0d0d0d }, // hair curtain L
         { shape: 'box', size: [16, 140, 20], anchor: 'face', pos: [60, -60, 10], color: 0x0d0d0d }, // hair curtain R
-        { shape: 'cone', size: [100, 360], anchor: 'back', pos: [0, -120, 14], color: 0x101010 }, // billowing robe
+        { shape: 'cape', size: [170, 414, 250], anchor: 'back', pos: [0, -160, 14], rot: [0.12, 0, 0], color: 0x101010 }, // billowing robe
         { shape: 'box', size: [16, 180, 10], anchor: 'chest', pos: [0, 10, -10], color: 0x2a2a2a }, // buttoned front
       ],
       // approx: no cloth-flutter channel — the billowing robe is a static oversized back-cone.
@@ -90,12 +90,12 @@ const pack: AvatarPackDef = {
 
     // Rubeus Hagrid — half-giant scale, huge black beard, moleskin coat, pink umbrella.
     { id: 'movies-harry-potter/groundskeeper', label: 'Towering groundskeeper (wild beard, moleskin coat)', rig: 'humanoid',
-      humanoid: { sk: 1.55, headR: 150, limbR: 1.5, skin: 0xc9976e, body: 0x3a2e22, shoe: 0x241a10, eyes: 'dots',
+      humanoid: { sk: 1.2, headR: 150, limbR: 1.5, skin: 0xc9976e, body: 0x3a2e22, shoe: 0x241a10, eyes: 'dots',
         armL: 1.1, legL: 0.9, footMul: [1.4, 1.2, 1.4], legColor: 0x241a10 },
       accessories: [
         { shape: 'sphere', size: [150, 90, 150], anchor: 'crown', pos: [0, -6, 4], color: 0x1c1712 }, // wild hair
         { shape: 'box', size: [130, 170, 60], anchor: 'face', pos: [0, -90, 20], color: 0x1c1712 }, // huge beard
-        { shape: 'cone', size: [110, 340], anchor: 'back', pos: [0, -120, 14], color: 0x2e2418 }, // overcoat
+        { shape: 'cape', size: [190, 391, 275], anchor: 'back', pos: [0, -160, 14], rot: [0.12, 0, 0], color: 0x2e2418 }, // overcoat
         { shape: 'cylinder', size: [10, 10, 300], anchor: 'handR', pos: [0, -140, 0], color: 0xd05a8a }, // pink umbrella
         { shape: 'sphere', size: 22, anchor: 'handR', pos: [0, 20, 0], color: 0xe8a0c0 },
         { shape: 'box', size: [240, 34, 180], anchor: 'hip', pos: [0, 0, 0], color: 0x1c1410 }, // belt
@@ -108,7 +108,7 @@ const pack: AvatarPackDef = {
       humanoid: { sk: 1.05, headR: 122, limbR: 0.65, skin: 0xe8e4e0, body: 0x0d0d0d, shoe: 0x0a0a0a, eyes: 'redvisor',
         armL: 1.1, legL: 1.05, footMul: [0.9, 1, 0.9], legColor: 0x0d0d0d, noFace: true },
       accessories: [
-        { shape: 'cone', size: [100, 380], anchor: 'back', pos: [0, -130, 14], color: 0x0a0a0a }, // floor-length robe
+        { shape: 'cape', size: [170, 437, 250], anchor: 'back', pos: [0, -170, 14], rot: [0.12, 0, 0], color: 0x0a0a0a }, // floor-length robe
         { shape: 'cylinder', size: [9, 9, 280], anchor: 'handR', pos: [0, -110, 0], color: 0x2a2018 }, // wand
         { shape: 'sphere', size: 16, anchor: 'handR', pos: [0, 50, 0], color: 0xe8e4e0 },
         { shape: 'box', size: [120, 40, 16], anchor: 'chest', pos: [0, 40, -8], color: 0x1a1a1a }, // stiff collar
@@ -125,7 +125,7 @@ const pack: AvatarPackDef = {
         { shape: 'sphere', size: [78, 40, 84], anchor: 'crown', pos: [0, -4, 4], color: 0xe8dfa0 }, // slicked platinum hair
         { shape: 'box', size: [24, 90, 8], anchor: 'chest', pos: [0, 10, -10], color: 0x1a472a }, // Slytherin tie
         { shape: 'box', size: [24, 22, 8], anchor: 'chest', pos: [0, 22, -11], color: 0xaaaaaa }, // tie silver stripe
-        { shape: 'cone', size: [75, 240], anchor: 'back', pos: [0, -100, 12], color: 0x1c1c1e },
+        { shape: 'cape', size: [130, 276, 190], anchor: 'back', pos: [0, -135, 12], rot: [0.12, 0, 0], color: 0x1c1c1e },
         { shape: 'cylinder', size: [8, 8, 260], anchor: 'handR', pos: [0, -100, 0], color: 0x4a3826 }, // wand
       ],
       personality: { bobMul: 1.0, swayMul: 1.2, cadenceMul: 0.95, ampMul: 0.9 },

@@ -8,7 +8,7 @@
 import type { AvatarPackDef } from '../avatars.js';
 
 const pack: AvatarPackDef = {
-  id: 'disney-princess', version: 1, label: 'Disney Princess',
+  id: 'disney-princess', version: 2, label: 'Disney Princess',
   path: ['Cartoons', 'Disney Princess'], builtin: true, franchise: true,
   base: {
     rig: 'humanoid',
@@ -21,28 +21,32 @@ const pack: AvatarPackDef = {
     // Elsa (Frozen) — icy powder-blue gown, single platinum over-shoulder braid.
     // approx: sheer cape rendered opaque (no per-primitive opacity field).
     { id: 'disney-princess/ice-queen', label: 'Ice Queen (ice-blue gown)', rig: 'humanoid',
-      humanoid: { skin: 0xf6d9c4, body: 0xbfe6f5, shoe: 0xeaf6fb, legColor: 0xbfe6f5, emI: 0.14 },
+      humanoid: { skin: 0xf6d9c4, body: 0xbfe6f5, shoe: 0xeaf6fb, legColor: 0xbfe6f5, emI: 0.14, gown: true },
       accessories: [
-        { shape: 'cone', size: [320, 790, 0], anchor: 'hip', pos: [0, -380, 0], color: 0xd9f2fb },
-        { shape: 'cone', size: [200, 520, 0], anchor: 'back', pos: [0, -140, 40], rot: [0.18, 0, 0], color: 0xd6f0fb },
-        { shape: 'sphere', size: 22, anchor: 'crown', pos: [70, 20, 30], color: 0xe8e3d3 },
-        { shape: 'sphere', size: 20, anchor: 'crown', pos: [80, -30, 55], color: 0xe8e3d3 },
-        { shape: 'sphere', size: 18, anchor: 'crown', pos: [78, -80, 70], color: 0xe8e3d3 },
-        { shape: 'sphere', size: 15, anchor: 'crown', pos: [72, -125, 78], color: 0xe8e3d3 },
+        { shape: 'cone', size: [320, 940, 0], anchor: 'hip', pos: [0, -320, 0], color: 0xd9f2fb }, // ballgown (waist→floor)
+        { shape: 'cape', size: [240, 560, 380], anchor: 'back', pos: [0, -150, 25], rot: [0.18, 0, 0], color: 0xd6f0fb }, // sheer cape
+        { shape: 'sphere', size: 130, anchor: 'crown', pos: [0, -10, 10], sphereArc: [0, 6.283, 0, 1.7], color: 0xe8e3d3 }, // hair crown
+        { shape: 'sphere', size: 34, anchor: 'crown', pos: [70, 10, 40], color: 0xe8e3d3 }, // braid
+        { shape: 'sphere', size: 30, anchor: 'crown', pos: [85, -80, 70], color: 0xe8e3d3 }, // braid
+        { shape: 'sphere', size: 26, anchor: 'crown', pos: [90, -180, 90], color: 0xe8e3d3 }, // braid
+        { shape: 'sphere', size: 22, anchor: 'crown', pos: [88, -280, 100], color: 0xe8e3d3 }, // braid tail
         { shape: 'box', size: [230, 26, 150], anchor: 'hip', pos: [0, 40, 0], color: 'tint' },
       ],
       personality: { bobMul: 0.65, swayMul: 0.7, cadenceMul: 0.85 }, bubbles: ['❄️', '⛄', '✨', '👑'] },
 
     // Anna (Frozen) — black bodice, navy A-line skirt, teal cape, twin braids.
     { id: 'disney-princess/her-sister', label: 'Her Sister (teal cape, twin braids)', rig: 'humanoid',
-      humanoid: { skin: 0xf7d1b8, body: 0x1a2230, shoe: 0x2b2320, legColor: 0x243247, emI: 0.05 },
+      humanoid: { skin: 0xf7d1b8, body: 0x1a2230, shoe: 0x2b2320, legColor: 0x243247, emI: 0.05, gown: true },
       accessories: [
-        { shape: 'cone', size: [280, 770, 0], anchor: 'hip', pos: [0, -370, 0], color: 0x243247 },
-        { shape: 'cone', size: [250, 470, 0], anchor: 'back', pos: [0, -120, 45], rot: [0.2, 0, 0], color: 0x2f8f7a },
-        { shape: 'sphere', size: 20, anchor: 'crown', pos: [-70, 0, 30], color: 0xd98c4a },
-        { shape: 'sphere', size: 18, anchor: 'crown', pos: [-78, -55, 45], color: 0xd98c4a },
-        { shape: 'sphere', size: 20, anchor: 'crown', pos: [70, 0, 30], color: 0xd98c4a },
-        { shape: 'sphere', size: 18, anchor: 'crown', pos: [78, -55, 45], color: 0xd98c4a },
+        { shape: 'cone', size: [280, 920, 0], anchor: 'hip', pos: [0, -310, 0], color: 0x243247 }, // A-line skirt (waist→floor)
+        { shape: 'cape', size: [260, 520, 400], anchor: 'back', pos: [0, -130, 30], rot: [0.2, 0, 0], color: 0x2f8f7a }, // teal cape
+        { shape: 'sphere', size: 128, anchor: 'crown', pos: [0, -8, 8], sphereArc: [0, 6.283, 0, 1.7], color: 0xd98c4a }, // hair crown
+        { shape: 'sphere', size: 30, anchor: 'crown', pos: [-72, 0, 35], color: 0xd98c4a }, // braid L
+        { shape: 'sphere', size: 26, anchor: 'crown', pos: [-82, -95, 55], color: 0xd98c4a }, // braid L
+        { shape: 'sphere', size: 22, anchor: 'crown', pos: [-84, -190, 70], color: 0xd98c4a }, // braid L
+        { shape: 'sphere', size: 30, anchor: 'crown', pos: [72, 0, 35], color: 0xd98c4a }, // braid R
+        { shape: 'sphere', size: 26, anchor: 'crown', pos: [82, -95, 55], color: 0xd98c4a }, // braid R
+        { shape: 'sphere', size: 22, anchor: 'crown', pos: [84, -190, 70], color: 0xd98c4a }, // braid R
         { shape: 'box', size: [200, 22, 140], anchor: 'chest', pos: [0, 120, 20], color: 'tint' },
       ],
       personality: { bobMul: 1.2, swayMul: 1.15, cadenceMul: 1.1 }, bubbles: ['❤️', '🥕', '⛄', '😄'] },
@@ -50,9 +54,9 @@ const pack: AvatarPackDef = {
     // Ariel (The Little Mermaid) — LAND VARIANT: sea-green skirt carries the
     // canonical tail hue; purple seashell top; vivid red hair volume.
     { id: 'disney-princess/the-mermaid', label: 'The Mermaid (land variant, teal skirt)', rig: 'humanoid',
-      humanoid: { skin: 0xf6cbb0, body: 0x8b3fa0, shoe: 0x1f9a5b, legColor: 0x1f9a5b, emI: 0.10 },
+      humanoid: { skin: 0xf6cbb0, body: 0x8b3fa0, shoe: 0x1f9a5b, legColor: 0x1f9a5b, emI: 0.10, gown: true },
       accessories: [
-        { shape: 'cone', size: [300, 770, 0], anchor: 'hip', pos: [0, -370, 0], color: 0x1f9a5b },
+        { shape: 'cone', size: [300, 920, 0], anchor: 'hip', pos: [0, -310, 0], color: 0x1f9a5b }, // skirt (waist→floor)
         { shape: 'cone', size: [120, 150, 0], anchor: 'hip', pos: [-90, -700, 40], color: 0x1f9a5b },
         { shape: 'cone', size: [120, 150, 0], anchor: 'hip', pos: [90, -700, 40], color: 0x1f9a5b },
         { shape: 'sphere', size: 60, anchor: 'crown', pos: [-40, -60, 30], color: 0xc62828 },
@@ -66,11 +70,11 @@ const pack: AvatarPackDef = {
 
     // Belle (Beauty and the Beast) — voluminous golden-yellow ballgown, brown hair.
     { id: 'disney-princess/beauty', label: 'Beauty (yellow ballgown)', rig: 'humanoid',
-      humanoid: { skin: 0xf0c39a, body: 0xf4c430, shoe: 0xd9a916, legColor: 0xf4c430, emI: 0.12 },
+      humanoid: { skin: 0xf0c39a, body: 0xf4c430, shoe: 0xd9a916, legColor: 0xf4c430, emI: 0.12, gown: true },
       accessories: [
-        { shape: 'cone', size: [360, 810, 0], anchor: 'hip', pos: [0, -390, 0], color: 0xf4c430 },
-        { shape: 'sphere', size: 70, anchor: 'crown', pos: [0, 20, -10], color: 0x5c3a21 },
-        { shape: 'sphere', size: 44, anchor: 'crown', pos: [0, -80, 55], color: 0x5c3a21 },
+        { shape: 'cone', size: [360, 960, 0], anchor: 'hip', pos: [0, -330, 0], color: 0xf4c430 }, // ballgown (waist→floor)
+        { shape: 'sphere', size: 96, anchor: 'crown', pos: [0, -10, 5], sphereArc: [0, 6.283, 0, 1.7], color: 0x5c3a21 }, // hair crown
+        { shape: 'sphere', size: 44, anchor: 'crown', pos: [0, -120, 55], color: 0x5c3a21 }, // hair back length
         { shape: 'box', size: [230, 30, 150], anchor: 'chest', pos: [0, 150, 20], color: 0xd9a916 },
         { shape: 'box', size: [230, 24, 150], anchor: 'hip', pos: [0, 40, 0], color: 'tint' },
       ],
@@ -78,25 +82,26 @@ const pack: AvatarPackDef = {
 
     // Snow White — blue bodice, silver-white skirt, black bob + red bow, red cape.
     { id: 'disney-princess/the-first', label: 'The First (blue bodice, black bob)', rig: 'humanoid',
-      humanoid: { skin: 0xf7dcc0, body: 0x2b5faa, shoe: 0x2b5faa, legColor: 0xe7e9ec, emI: 0.05 },
+      humanoid: { skin: 0xf7dcc0, body: 0x2b5faa, shoe: 0x2b5faa, legColor: 0xe7e9ec, emI: 0.05, gown: true },
       accessories: [
-        { shape: 'cone', size: [290, 740, 0], anchor: 'hip', pos: [0, -360, 0], color: 0xe7e9ec },
+        { shape: 'cone', size: [290, 890, 0], anchor: 'hip', pos: [0, -300, 0], color: 0xe7e9ec }, // skirt (waist→floor)
         { shape: 'box', size: [230, 40, 170], anchor: 'chest', pos: [0, 170, 10], color: 0xf5f5f2 },
         { shape: 'sphere', size: [78, 62, 78], anchor: 'crown', pos: [0, 5, 0], color: 0x161412 },
         { shape: 'cone', size: [26, 40, 0], anchor: 'crown', pos: [-24, 70, -20], rot: [0, 0, -1.2], color: 'tint' },
         { shape: 'cone', size: [26, 40, 0], anchor: 'crown', pos: [24, 70, -20], rot: [0, 0, 1.2], color: 'tint' },
-        { shape: 'cone', size: [180, 360, 0], anchor: 'back', pos: [0, -60, 40], rot: [0.15, 0, 0], color: 0xc62828 },
+        { shape: 'cape', size: [230, 420, 360], anchor: 'back', pos: [0, -90, 25], rot: [0.15, 0, 0], color: 0xc62828 }, // red cape
       ],
       personality: { bobMul: 1.05, swayMul: 0.9, cadenceMul: 1.0 }, bubbles: ['🍎', '🎶', '🐦', '🌼'] },
 
     // Aurora (Sleeping Beauty) — rose-pink petal-overskirt gown, gold-blonde hair.
     { id: 'disney-princess/sleeping', label: 'Sleeping (pink gown)', rig: 'humanoid',
-      humanoid: { skin: 0xf8d5b8, body: 0xf2a8c4, shoe: 0xe888ac, legColor: 0xf2a8c4, emI: 0.06 },
+      humanoid: { skin: 0xf8d5b8, body: 0xf2a8c4, shoe: 0xe888ac, legColor: 0xf2a8c4, emI: 0.06, gown: true },
       accessories: [
-        { shape: 'cone', size: [320, 790, 0], anchor: 'hip', pos: [0, -380, 0], color: 0xf2a8c4 },
-        { shape: 'cone', size: [300, 560, 0], anchor: 'hip', pos: [0, -260, 0], color: 0xd97a9e },
-        { shape: 'sphere', size: 66, anchor: 'crown', pos: [0, 15, -5], color: 0xe8b923 },
-        { shape: 'cylinder', size: [82, 82, 30], anchor: 'crown', pos: [0, 80, 0], color: 0xd4af37 },
+        { shape: 'cone', size: [320, 940, 0], anchor: 'hip', pos: [0, -320, 0], color: 0xf2a8c4 }, // gown (waist→floor)
+        { shape: 'cone', size: [300, 650, 0], anchor: 'hip', pos: [0, -230, 0], color: 0xd97a9e }, // petal overskirt
+        { shape: 'sphere', size: 96, anchor: 'crown', pos: [0, 0, 5], sphereArc: [0, 6.283, 0, 1.7], color: 0xe8b923 }, // hair crown
+        { shape: 'sphere', size: 44, anchor: 'crown', pos: [0, -150, 55], color: 0xe8b923 }, // hair back length
+        { shape: 'cylinder', size: [82, 82, 30], anchor: 'crown', pos: [0, 80, 0], color: 0xd4af37 }, // tiara
         { shape: 'box', size: [220, 20, 140], anchor: 'hip', pos: [0, 40, 0], color: 'tint' },
       ],
       personality: { bobMul: 0.7, swayMul: 0.6, cadenceMul: 0.75 }, bubbles: ['🌹', '💤', '🎂', '✨'] },
@@ -121,9 +126,9 @@ const pack: AvatarPackDef = {
     // Rapunzel (Tangled) — lavender corset, purple skirt, THE floor-length golden braid.
     // approx: braid trimmed to 7 tapering spheres (<=10 primitives) vs the doc's 8-10.
     { id: 'disney-princess/the-tower-girl', label: 'The Tower Girl (very long braid)', rig: 'humanoid',
-      humanoid: { skin: 0xf6cba7, body: 0x9a7ac0, shoe: 0xe8cf5b, legColor: 0x7a4fa0, emI: 0.08 },
+      humanoid: { skin: 0xf6cba7, body: 0x9a7ac0, shoe: 0xe8cf5b, legColor: 0x7a4fa0, emI: 0.08, gown: true },
       accessories: [
-        { shape: 'cone', size: [290, 770, 0], anchor: 'hip', pos: [0, -370, 0], color: 0x7a4fa0 },
+        { shape: 'cone', size: [290, 920, 0], anchor: 'hip', pos: [0, -310, 0], color: 0x7a4fa0 }, // skirt (waist→floor)
         { shape: 'sphere', size: 24, anchor: 'crown', pos: [30, 0, -30], color: 0xf2cf5b },
         { shape: 'sphere', size: 22, anchor: 'crown', pos: [45, -110, -10], color: 0xf2cf5b },
         { shape: 'sphere', size: 20, anchor: 'crown', pos: [50, -230, 20], color: 0xf2cf5b },
@@ -138,9 +143,9 @@ const pack: AvatarPackDef = {
 
     // Tiana (The Princess and the Frog) — sparkling emerald ballgown, lily-pad tiara.
     { id: 'disney-princess/the-frog-princess', label: 'The Frog Princess (emerald ballgown)', rig: 'humanoid',
-      humanoid: { skin: 0x8a5a3c, body: 0x1a7a4c, shoe: 0x156b41, legColor: 0x1a7a4c, emI: 0.16 },
+      humanoid: { skin: 0x8a5a3c, body: 0x1a7a4c, shoe: 0x156b41, legColor: 0x1a7a4c, emI: 0.16, gown: true },
       accessories: [
-        { shape: 'cone', size: [340, 800, 0], anchor: 'hip', pos: [0, -385, 0], color: 0x1a7a4c },
+        { shape: 'cone', size: [340, 950, 0], anchor: 'hip', pos: [0, -325, 0], color: 0x1a7a4c }, // ballgown (waist→floor)
         { shape: 'cone', size: [330, 220, 0], anchor: 'hip', pos: [0, -700, 0], color: 0xf2e2a0 },
         { shape: 'sphere', size: 62, anchor: 'crown', pos: [0, 15, -5], color: 0x1c1a17 },
         { shape: 'sphere', size: 36, anchor: 'crown', pos: [0, -60, -55], color: 0x1c1a17 },

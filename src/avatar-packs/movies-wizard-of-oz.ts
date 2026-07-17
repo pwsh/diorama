@@ -7,7 +7,7 @@
 import type { AvatarPackDef } from '../avatars.js';
 
 const pack: AvatarPackDef = {
-  id: 'movies-wizard-of-oz', version: 1, label: 'The Wizard of Oz',
+  id: 'movies-wizard-of-oz', version: 2, label: 'The Wizard of Oz',
   path: ['Pop Culture', 'Movies', 'The Wizard of Oz'], builtin: true, franchise: true,
   base: { humanoid: { emI: 0, hands: 'sphere', steel: false, headShape: 'sphere' } },
   avatars: [
@@ -89,7 +89,7 @@ const pack: AvatarPackDef = {
       accessories: [
         { shape: 'cone', size: [85, 200], anchor: 'crown', pos: [0, 90, 0], rot: [0.35, 0, 0], color: 0x181818 }, // pointed hat
         { shape: 'cylinder', size: [86, 86, 16], anchor: 'crown', pos: [0, -6, 0], rot: [0.35, 0, 0], color: 0x2a2a2a }, // scarf band
-        { shape: 'cone', size: [90, 280], anchor: 'back', pos: [0, -100, 14], color: 0x202020 }, // caped train
+        { shape: 'cape', size: [150, 322, 225], anchor: 'back', pos: [0, -135, 14], rot: [0.12, 0, 0], color: 0x202020 }, // caped train
         { shape: 'box', size: [100, 16, 10], anchor: 'back', pos: [0, 10, 20], color: 'tint' }, // cape lining (tint)
         { shape: 'cylinder', size: [8, 8, 300], anchor: 'handR', pos: [0, -120, 0], color: 0x4a3320 }, // broomstick
         { shape: 'cone', size: [40, 80], anchor: 'handR', pos: [0, 60, 0], color: 0x7a6030 }, // bristles
@@ -108,7 +108,7 @@ const pack: AvatarPackDef = {
         { shape: 'sphere', size: 10, anchor: 'head', pos: [-30, 50, -20], color: 'tint' }, // tiara gem (tint)
         { shape: 'sphere', size: 10, anchor: 'head', pos: [0, 56, -24], color: 'tint' }, // tiara gem (tint)
         { shape: 'sphere', size: 10, anchor: 'head', pos: [30, 50, -20], color: 'tint' }, // tiara gem (tint)
-        { shape: 'cone', size: [95, 260], anchor: 'back', pos: [0, -100, 14], color: 0xf8d8e8 }, // cape drape
+        { shape: 'cape', size: [160, 300, 240], anchor: 'back', pos: [0, -135, 14], rot: [0.12, 0, 0], color: 0xf8d8e8 }, // cape drape
         { shape: 'cylinder', size: [8, 8, 280], anchor: 'handR', pos: [0, -110, 0], color: 0xe8d8a0 }, // wand
         { shape: 'cone', size: [26, 40], anchor: 'handR', pos: [0, 50, 0], color: 0xfff2b0, emissive: 0xfff2b0, emissiveIntensity: 0.3 }, // star tip
       ],

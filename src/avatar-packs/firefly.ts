@@ -4,7 +4,7 @@
 import type { AvatarPackDef } from '../avatars.js';
 
 const pack: AvatarPackDef = {
-  id: 'firefly', version: 1, label: 'Firefly (Serenity crew)',
+  id: 'firefly', version: 2, label: 'Firefly (Serenity crew)',
   path: ['Sci-Fi', 'Firefly'], builtin: true, franchise: true,
   base: {
     rig: 'humanoid',
@@ -80,11 +80,11 @@ const pack: AvatarPackDef = {
       bubbles: ['🔫', '💰', '😤', '🧶'] },
     // Inara — Companion, red silk gown + gold sash
     { id: 'firefly/companion', label: 'Companion (red silk gown, gold sash)', rig: 'humanoid',
-      humanoid: { sk: 0.95, headR: 120, skin: 0xd9a878, body: 0x8a1f2f, legColor: 0x8a1f2f, shoe: 0x2a1a12, limbR: 0.85, armL: 0.85, legL: 0.85 },
+      humanoid: { sk: 0.95, headR: 120, skin: 0xd9a878, body: 0x8a1f2f, legColor: 0x8a1f2f, shoe: 0x2a1a12, limbR: 0.85, armL: 0.85, legL: 0.85, gown: true },
       accessories: [
         { shape: 'cylinder', size: [95, 95, 70], anchor: 'hip', pos: [0, 0, 0], color: 0xc9a227, emissiveIntensity: 0.1 },
         // approx: floor-length gown train via a wide back cone (no skirt primitive)
-        { shape: 'cone', size: [160, 700, 160], anchor: 'back', pos: [0, -200, 10], color: 0x8a1f2f, emissiveIntensity: 0 },
+        { shape: 'cone', size: [300, 940, 0], anchor: 'hip', pos: [0, -320, 0], color: 0x8a1f2f }, // floor-length gown (waist→floor)
         { shape: 'sphere', size: [118, 60, 118], anchor: 'crown', pos: [0, 0, 0], color: 0x2a1a12, emissiveIntensity: 0 },
         { shape: 'sphere', size: 14, anchor: 'chest', pos: [0, 20, -12], color: 0xd4af37, emissiveIntensity: 0.1 }],
       personality: { bobMul: 0.7, swayMul: 0.5, cadenceMul: 0.85, ampMul: 0.75 },

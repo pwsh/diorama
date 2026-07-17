@@ -7,12 +7,12 @@
 import type { AvatarPackDef } from '../avatars.js';
 
 const pack: AvatarPackDef = {
-  id: 'shrek', version: 1, label: 'Shrek',
+  id: 'shrek', version: 2, label: 'Shrek',
   path: ['Cartoons', 'Shrek'], builtin: true, franchise: true,
   avatars: [
     // Shrek — bald olive-green ogre, big pointed ears, brown vest over poet shirt.
     { id: 'shrek/shrek', label: 'Big ogre (green, brown vest)', rig: 'humanoid',
-      humanoid: { sk: 1.35, headR: 152, headShape: 'sphere', limbR: 1.5, skin: 0x6e9c3f, body: 0xe9dfc4,
+      humanoid: { sk: 1.2, headR: 152, headShape: 'sphere', limbR: 1.5, skin: 0x6e9c3f, body: 0xe9dfc4,
         shoe: 0x5a3d22, legColor: 0x8a7550, emI: 0, hands: 'sphere', eyes: 'dots', steel: false,
         armL: 1.0, legL: 0.95, footMul: [1.3, 0.9, 1.3] },
       accessories: [
@@ -46,7 +46,7 @@ const pack: AvatarPackDef = {
     // Fiona (ogre form) — green ogre skin, auburn bun, dark-green gown, brown corset.
     { id: 'shrek/fiona', label: 'Ogre princess (green, dark gown)', rig: 'humanoid',
       humanoid: { sk: 1.05, headR: 132, headShape: 'sphere', limbR: 1.05, skin: 0x7ab04c, body: 0x1f5c34,
-        shoe: 0x3a2a1a, legColor: 0x1f5c34, emI: 0, hands: 'sphere', eyes: 'almond', steel: false, armL: 0.98, legL: 0.98 },
+        shoe: 0x3a2a1a, legColor: 0x1f5c34, emI: 0, hands: 'sphere', eyes: 'almond', steel: false, armL: 0.98, legL: 0.98, gown: true },
       accessories: [
         { shape: 'sphere', size: [45, 50, 26], anchor: 'head', pos: [-95, 10, 0], rot: [0, 0, -0.3], color: 0x7ab04c }, // ear L
         { shape: 'sphere', size: [45, 50, 26], anchor: 'head', pos: [95, 10, 0], rot: [0, 0, 0.3], color: 0x7ab04c }, // ear R
@@ -73,7 +73,7 @@ const pack: AvatarPackDef = {
         { shape: 'sphere', size: [40, 60, 10], anchor: 'chest', pos: [0, 10, -12], color: 0xf2f0e6 }, // white chest patch
         { shape: 'sphere', size: [110, 60, 110], anchor: 'crown', pos: [0, 10, 0], rot: [0.4, 0, 0], color: 0x2a1a12, sphereArc: [0, 6.283, 0, 1.3] }, // cavalier hat
         { shape: 'cone', size: [8, 80], anchor: 'crown', pos: [30, 40, -20], rot: [-0.3, 0, 0.2], color: 0xe8c430 }, // feather plume
-        { shape: 'cone', size: [90, 220], anchor: 'back', pos: [0, -90, 14], color: 0x161619 }, // cape
+        { shape: 'cape', size: [150, 255, 225], anchor: 'back', pos: [0, -120, 14], rot: [0.12, 0, 0], color: 0x161619 }, // cape
         { shape: 'cylinder', size: [18, 10, 180], anchor: 'tailbone', pos: [0, -40, -40], rot: [0.9, 0, 0], color: 0xd97a2b }, // tail
         { shape: 'cylinder', size: [6, 6, 260], anchor: 'handR', pos: [0, -100, 0], color: 0xb8bcc2 }, // rapier
       ],
@@ -92,7 +92,7 @@ const pack: AvatarPackDef = {
         { shape: 'sphere', size: [130, 80, 130], anchor: 'crown', pos: [0, -6, 0], color: 0xe8c468, sphereArc: [0, 6.283, 0, 1.4] }, // pageboy dome
         { shape: 'box', size: [130, 20, 10], anchor: 'face', pos: [0, 40, -6], color: 0xe8c468 }, // fringe
         { shape: 'box', size: [40, 40, 30], anchor: 'face', pos: [0, -70, -10], color: 0xe8c39a }, // chin
-        { shape: 'cone', size: [110, 260], anchor: 'back', pos: [0, -100, 14], color: 0xb5151a }, // cape
+        { shape: 'cape', size: [190, 300, 280], anchor: 'back', pos: [0, -135, 14], rot: [0.12, 0, 0], color: 0xb5151a }, // cape
         { shape: 'box', size: [100, 16, 10], anchor: 'back', pos: [0, 20, 20], color: 0xf2f2ee }, // cape trim
         { shape: 'box', size: [200, 30, 150], anchor: 'hip', pos: [0, 0, 0], color: 0x141414 }, // belt
         { shape: 'box', size: [34, 28, 10], anchor: 'hip', pos: [0, 0, -78], color: 0xd4af37 }, // buckle
@@ -103,7 +103,7 @@ const pack: AvatarPackDef = {
 
     // Dragon — giant magenta wyrm, pink belly, bat wings, cheek + dorsal spikes.
     { id: 'shrek/dragon', label: 'Guardian wyrm (magenta, bat wings)', rig: 'quadruped', pet: true,
-      quadruped: { sk: 1.5, bodyLen: 1500, bodyW: 420, bodyH: 480, legLen: 0.6, neckLen: 480, headR: 210,
+      quadruped: { sk: 1.35, bodyLen: 1500, bodyW: 420, bodyH: 480, legLen: 0.6, neckLen: 480, headR: 210,
         headScale: [1.3, 1.3, 1.3], snout: 2.2, ears: 'round', tail: 'up', tailLen: 1.4,
         coat: 0x8a2547, belly: 0xe8a0c0, earColor: 0x5c1830, snoutColor: 0x6e1c38, pawColor: 0x3a1020, tailTipColor: 0x4a1020 },
       accessories: [

@@ -8,7 +8,7 @@ import type { AvatarPackDef } from '../avatars.js';
 const FIRE_RED = 0xc41e2a, KARATE_BLACK = 0x1a1410, GOLD = 0xd9b34a, SILVER = 0xc0c0c8, DARK_HAIR = 0x2a2018;
 
 const pack: AvatarPackDef = {
-  id: 'street-fighter', version: 1, label: 'Street Fighter',
+  id: 'street-fighter', version: 2, label: 'Street Fighter',
   path: ['Video Games', 'Street Fighter'], builtin: true, franchise: true,
   base: { rig: 'humanoid', humanoid: { headR: 126, headShape: 'sphere', limbR: 1.0, hands: 'sphere', eyes: 'dots', steel: false, emI: 0, armL: 1.0, legL: 1.0, footMul: [1, 1, 1] } },
   avatars: [
@@ -76,7 +76,7 @@ const pack: AvatarPackDef = {
       personality: { bobMul: 1.3, swayMul: 1.2, cadenceMul: 1.15, ampMul: 1.1 }, bubbles: ['⚡', '🐒', '😝', '💥'] },
     // Zangief — red trunks, mohawk, beard, biggest build
     { id: 'street-fighter/wrestler-red', label: 'Wrestler (red trunks, mohawk)', rig: 'humanoid',
-      humanoid: { sk: 1.4, headR: 140, limbR: 1.4, skin: 0xd9a06a, body: 0xd9a06a, legColor: 0xd9a06a, shoe: FIRE_RED, hands: 'box', armL: 1.3, legL: 0.9, footMul: [1.3, 1.0, 1.3] },
+      humanoid: { sk: 1.2, headR: 140, limbR: 1.4, skin: 0xd9a06a, body: 0xd9a06a, legColor: 0xd9a06a, shoe: FIRE_RED, hands: 'box', armL: 1.3, legL: 0.9, footMul: [1.3, 1.0, 1.3] },
       accessories: [
         { shape: 'box', size: [220, 90, 150], anchor: 'hip', pos: [0, 0, 0], color: FIRE_RED }, // trunks
         { shape: 'box', size: [220, 20, 152], anchor: 'hip', pos: [0, 40, 0], color: GOLD }, // belt trim
@@ -114,7 +114,7 @@ const pack: AvatarPackDef = {
         { shape: 'cylinder', size: [60, 60, 16], anchor: 'shoulderL', pos: [0, 10, 0], rot: [0, 0, 1.57], color: SILVER }, // epaulette
         { shape: 'cylinder', size: [60, 60, 16], anchor: 'shoulderR', pos: [0, 10, 0], rot: [0, 0, 1.57], color: SILVER }, // epaulette
         { shape: 'box', size: [12, 180, 6], anchor: 'chest', pos: [0, 10, -6], color: GOLD }, // gold braid
-        { shape: 'cone', size: [140, 300], anchor: 'back', pos: [0, -20, 15], rot: [Math.PI, 0, 0], color: 0x2a1414 }, // cape
+        { shape: 'cape', size: [240, 345, 350], anchor: 'back', pos: [0, -150, 15], rot: [0.12, 0, 0], color: 0x2a1414 }, // cape
         { shape: 'box', size: [100, 16, 10], anchor: 'face', pos: [0, 30, -6], color: DARK_HAIR }, // heavy brow
       ],
       personality: { bobMul: 0.5, swayMul: 0.45, cadenceMul: 0.6, ampMul: 0.9 }, bubbles: ['👑', '💢', '😈', '⚡'] },

@@ -5,7 +5,7 @@
 import type { AvatarPackDef } from '../avatars.js';
 
 const pack: AvatarPackDef = {
-  id: 'star-wars-ot', version: 2, label: 'Star Wars: Original Trilogy',
+  id: 'star-wars-ot', version: 3, label: 'Star Wars: Original Trilogy',
   path: ['Sci-Fi', 'Star Wars', 'Original Trilogy'], builtin: true, franchise: true,
   avatars: [
     // Luke Skywalker
@@ -41,7 +41,7 @@ const pack: AvatarPackDef = {
       bubbles: ['💰', '🚀', '😏', '🔫'] },
     // Chewbacca
     { id: 'star-wars-ot/chewbacca', label: 'Wookiee co-pilot', rig: 'humanoid',
-      humanoid: { sk: 1.32, headR: 150, skin: 0x8a5a35, body: 0x8a5a35, legColor: 0x8a5a35, shoe: 0x6e4527, eyes: 'dots', emI: 0.05, hands: 'sphere', limbR: 1.25, armL: 1.1, legL: 1.05 },
+      humanoid: { sk: 1.2, headR: 150, skin: 0x8a5a35, body: 0x8a5a35, legColor: 0x8a5a35, shoe: 0x6e4527, eyes: 'dots', emI: 0.05, hands: 'sphere', limbR: 1.25, armL: 1.1, legL: 1.05 },
       accessories: [
         { shape: 'sphere', size: 40, anchor: 'head', pos: [-70, -30, -30], color: 0x6e4527, emissiveIntensity: 0 },
         { shape: 'sphere', size: 40, anchor: 'head', pos: [70, -30, -30], color: 0x6e4527, emissiveIntensity: 0 },
@@ -88,7 +88,7 @@ const pack: AvatarPackDef = {
         { shape: 'box', size: [60, 40, 14], anchor: 'chest', pos: [0, 12, -8], color: 0x3a3a3e, emissiveIntensity: 0 },
         { shape: 'sphere', size: 6, anchor: 'chest', pos: [-16, 12, -16], color: 0xd63a2a, emissiveIntensity: 0.4 },
         { shape: 'sphere', size: 6, anchor: 'chest', pos: [16, 12, -16], color: 0x3fae5f, emissiveIntensity: 0.4 },
-        { shape: 'cone', size: [220, 620, 220], anchor: 'back', pos: [0, -120, 10], color: 0x0a0a0b, emissiveIntensity: 0 }],
+        { shape: 'cape', size: [370, 713, 550], anchor: 'back', pos: [0, -180, 12], rot: [0.12, 0, 0], color: 0x0a0a0b }],
       personality: { bobMul: 0.75, swayMul: 0.5, cadenceMul: 0.8, ampMul: 0.85 },
       bubbles: ['😤', '⚡', '🖤', '🌌'] },
     // Yoda — sk 0.45 floor, big-eared master
@@ -142,7 +142,7 @@ const pack: AvatarPackDef = {
         { shape: 'box', size: [72, 34, 20], anchor: 'face', pos: [0, -26, -6], color: 0xc4c0b4, emissiveIntensity: 0 },
         // brown hood shell raised + tilted back so the front rim clears the brow
         { shape: 'sphere', size: [152, 82, 152], anchor: 'crown', pos: [0, 4, 16], rot: [0.4, 0, 0], color: 0x6b5a44, emissiveIntensity: 0, sphereArc: [0, 6.283, 0, 1.9] },
-        { shape: 'cone', size: [190, 360, 190], anchor: 'back', pos: [0, -60, 10], color: 0x5c4630, emissiveIntensity: 0 },
+        { shape: 'cape', size: [320, 414, 480], anchor: 'back', pos: [0, -110, 12], rot: [0.12, 0, 0], color: 0x5c4630 },
         { shape: 'cylinder', size: [18, 18, 90], anchor: 'handR', pos: [0, 40, 0], color: 0xc7c9cc, emissiveIntensity: 0.05 },
         { shape: 'cylinder', size: [12, 12, 500], anchor: 'handR', pos: [0, 320, 0], color: 0x3fa9f5, emissiveIntensity: 0.6 }],
       personality: { bobMul: 0.8, swayMul: 0.7, cadenceMul: 0.85, ampMul: 0.8 },

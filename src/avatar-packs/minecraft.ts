@@ -7,7 +7,7 @@
 import type { AvatarPackDef } from '../avatars.js';
 
 const pack: AvatarPackDef = {
-  id: 'minecraft', version: 1, label: 'Minecraft',
+  id: 'minecraft', version: 2, label: 'Minecraft',
   path: ['Video Games', 'Minecraft'], builtin: true, franchise: true,
   // Cube heads + blocky hands are the single most Minecraft-defining trait.
   base: { rig: 'humanoid', humanoid: { headShape: 'box', hands: 'box', eyes: 'dots', emI: 0, steel: false, footMul: [1, 1, 1] } },
@@ -57,7 +57,7 @@ const pack: AvatarPackDef = {
       personality: { bobMul: 0.9, swayMul: 0.6, cadenceMul: 1.0, ampMul: 0.8 }, bubbles: ['🏹', '💀', '🦴', '😨'] },
     // Enderman — tall, black, glowing purple eyes
     { id: 'minecraft/void-stalker', label: 'Void Stalker (tall, black, purple eyes)', rig: 'humanoid', pet: true,
-      humanoid: { sk: 1.35, headR: 100, limbR: 0.55, skin: 0x18151a, body: 0x18151a, legColor: 0x18151a, shoe: 0x0d0b0d, eyes: 'none', noFace: true, armL: 1.5, legL: 1.35, footMul: [0.8, 0.9, 0.9] },
+      humanoid: { sk: 1.2, headR: 100, limbR: 0.55, skin: 0x18151a, body: 0x18151a, legColor: 0x18151a, shoe: 0x0d0b0d, eyes: 'none', noFace: true, armL: 1.5, legL: 1.35, footMul: [0.8, 0.9, 0.9] },
       accessories: [
         { shape: 'sphere', size: 18, anchor: 'face', pos: [-30, 6, -6], color: 0x9b30ff, emissive: 0x9b30ff, emissiveIntensity: 0.9, outlineSkip: true }, // eye L
         { shape: 'sphere', size: 18, anchor: 'face', pos: [30, 6, -6], color: 0x9b30ff, emissive: 0x9b30ff, emissiveIntensity: 0.9, outlineSkip: true }, // eye R

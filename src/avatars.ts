@@ -26,9 +26,15 @@ export type LegacyAvatarKind =
 // rig's sk at build); positions/rotations are body-local (-Z = front). Colors
 // resolve against the rig's materials (see three-renderer._addDeclarativeAccessories).
 export interface AvatarPrimitive {
-  shape: 'box' | 'sphere' | 'cylinder' | 'cone';
+  shape: 'box' | 'sphere' | 'cylinder' | 'cone' | 'cape';
   // box: [w,h,d]; sphere: r or [rx,ry,rz]; cyl: [rTop,rBot,h]; cone: [r,h]
   // (2-tuple accepted for cones; a third element is tolerated and ignored).
+  // cape: [shoulderWidth, length, flareBottomWidth] — a draped CURVED sheet, NOT
+  //   a cone/box: an open-ended cylinder-wall segment (arc ~1.65 rad centered on
+  //   the back +Z), top radius narrower than the flared bottom, flattened ~0.5 in
+  //   Z so it hugs the shoulders. Double-sided + outline-skipped automatically.
+  //   Hang it from the `back` anchor with a small outward X `rot` so it drapes off
+  //   the shoulders and clears the torso.
   size: number | [number, number] | [number, number, number];
   anchor:
     | 'crown' | 'head' | 'face' | 'chest' | 'back' | 'hip' | 'root'
@@ -50,6 +56,10 @@ export interface AvatarPrimitive {
 // Humanoid rig spec — mirrors the old SPECS row. Colors accept 'tint' (resolves
 // to the passed-in identity color at build, exactly like the old `skin: color`).
 export interface HumanoidFields {
+  // sk = overall skeleton-length scale. CLAMPED at build to [0.45, 1.2] — small
+  // avatars (child ~0.65) pass, but oversized values are capped so heights stay
+  // subtle (a global belt against pack-data excess). Extremely small PETS use the
+  // quadruped rig, whose sk floor is lower (0.2) — see QuadrupedFields.sk.
   sk?: number; headR?: number; headShape?: 'sphere' | 'box' | 'cylinder' | 'oval'; limbR?: number;
   skin?: number | 'tint'; body?: number | 'tint'; shoe?: number; emI?: number;
   hands?: 'sphere' | 'box';
@@ -65,12 +75,20 @@ export interface HumanoidFields {
   // Per-limb material overrides (cyborg steel-limb pattern generalized). Recolors
   // BOTH segments of that limb (upper + lower) — NOT the hand / shoe.
   limbColors?: { armL?: number; armR?: number; legL?: number; legR?: number };
+  // Floor-length robe/gown hint: DAMPS the leg-swing amplitude (~0.22×) during the
+  // walk cycle so legs don't poke through a draping skirt (the "leg showing through
+  // the gown" bug). Cheaper + cleaner than oversizing the robe geometry. The
+  // wise_oracle legacy kind is force-gowned in the renderer regardless of this flag.
+  gown?: boolean;
 }
 
 // Quadruped rig spec — parameterizes _buildQuadruped. Defaults reproduce today's
 // dog (beagle, ~505 mm shoulder pivot); the cat overrides sk + ears/tail/snout.
 export interface QuadrupedFields {
-  sk?: number;                      // 1.0 = beagle 520 mm shoulder
+  // 1.0 = beagle 520 mm shoulder. CLAMPED at build to [0.2, 1.35] — the low floor
+  // (0.2) keeps the extremely small pets (hamster / guinea pig) tiny, while the
+  // upper cap keeps large animals from exaggerating. Cat resolves to 0.58.
+  sk?: number;
   bodyLen?: number; bodyW?: number; bodyH?: number;   // mm at sk=1 (defaults 640/200/240)
   legLen?: number;                  // upper+lower leg length mult (default 1)
   headR?: number; neckLen?: number; // neckLen>0 inserts an angled neck (giraffe/horse)
@@ -95,7 +113,10 @@ export interface AvatarDef {
   bubbles?: string[];
   pet?: boolean;   // excluded from the bare-'random' human fallback pool
   // Static root-pitch bias (rad) folded into the speed-proportional lean (elder
-  // stoop, hunched creatures) — applies to BOTH rigs (Batch C1).
+  // stoop, hunched creatures) — applies to BOTH rigs (Batch C1). Convention:
+  // POSITIVE pitch = FORWARD stoop (the renderer negates it at the rotation.x
+  // write, since negative root rotation.x is the body-forward lean). Elder /
+  // gollum / zombie use small positive values.
   posture?: { pitch?: number };
 }
 

@@ -14,7 +14,7 @@ function turtleBody(mask: number): AvatarPrimitive[] {
     { shape: 'box', size: [136, 34, 12], anchor: 'face', pos: [0, 34, 32], color: mask },
     { shape: 'box', size: [30, 110, 8], anchor: 'head', pos: [-118, 16, -44], rot: [0, 0.3, 0], color: mask },
     { shape: 'box', size: [30, 110, 8], anchor: 'head', pos: [118, 16, -44], rot: [0, -0.3, 0], color: mask },
-    { shape: 'sphere', size: [300, 240, 220], anchor: 'back', pos: [0, 40, 60], color: 0x2f5233, sphereArc: [0, 6.283, 0, 1.73] },
+    { shape: 'sphere', size: [300, 240, 220], anchor: 'back', pos: [0, 40, 60], rot: [1.5708, 0, 0], color: 0x2f5233, sphereArc: [0, 6.283, 0, 1.73] }, // shell dome — pole faces +Z (flat opening parallel to torso)
     { shape: 'sphere', size: [180, 200, 20], anchor: 'chest', pos: [0, 110, 78], color: 0xd8c9a0 },
     { shape: 'box', size: [240, 46, 160], anchor: 'hip', pos: [0, 6, 0], color: 0x6b4423 },
     { shape: 'box', size: [40, 40, 20], anchor: 'hip', pos: [0, 6, 88], color: mask },
@@ -22,7 +22,7 @@ function turtleBody(mask: number): AvatarPrimitive[] {
 }
 
 const pack: AvatarPackDef = {
-  id: 'tmnt', version: 1, label: 'Teenage Mutant Ninja Turtles',
+  id: 'tmnt', version: 2, label: 'Teenage Mutant Ninja Turtles',
   path: ['Cartoons', 'Teenage Mutant Ninja Turtles'], builtin: true, franchise: true,
   base: {
     rig: 'humanoid',
@@ -97,7 +97,7 @@ const pack: AvatarPackDef = {
 
     // April O'Neil — human reporter ally, bright yellow jumpsuit, auburn bob.
     { id: 'tmnt/reporter', label: 'Reporter (yellow jumpsuit)', rig: 'humanoid',
-      humanoid: { sk: 1, headR: 126, headShape: 'sphere', limbR: 0.95, skin: 0xe8b48c, body: 0xf4c430,
+      humanoid: { sk: 0.95, headR: 126, headShape: 'sphere', limbR: 0.95, skin: 0xe8b48c, body: 0xf4c430,
         shoe: 0xf2f2ee, legColor: 0xf4c430, emI: 0.08, hands: 'sphere', eyes: 'almond', steel: false,
         armL: 1.0, legL: 1.0, footMul: [1, 1, 1] },
       accessories: [
@@ -111,7 +111,7 @@ const pack: AvatarPackDef = {
 
     // Shredder — armored ninja-master nemesis; spiked steel helmet, dark cape.
     { id: 'tmnt/villain', label: 'Villain (spiked mask, cape)', rig: 'humanoid',
-      humanoid: { sk: 1.05, headR: 128, headShape: 'sphere', limbR: 1.1, skin: 0x2a2a2e, body: 0x8e97a0,
+      humanoid: { sk: 1.0, headR: 128, headShape: 'sphere', limbR: 1.1, skin: 0x2a2a2e, body: 0x8e97a0,
         shoe: 0x585d64, legColor: 0x3a1f24, emI: 0.15, hands: 'box', eyes: 'redvisor', steel: true,
         armL: 1.0, legL: 0.95, footMul: [1, 1, 1], earSkip: true },
       accessories: [
@@ -119,7 +119,7 @@ const pack: AvatarPackDef = {
         { shape: 'cone', size: [14, 80, 0], anchor: 'crown', pos: [0, 90, -20], rot: [-0.5, 0, 0], color: 0x51565c },
         { shape: 'cone', size: [14, 70, 0], anchor: 'crown', pos: [-70, 50, 0], rot: [0, 0, -1.0], color: 0x51565c },
         { shape: 'cone', size: [14, 70, 0], anchor: 'crown', pos: [70, 50, 0], rot: [0, 0, 1.0], color: 0x51565c },
-        { shape: 'cone', size: [320, 620, 0], anchor: 'back', pos: [0, -150, 40], rot: [0.14, 0, 0], color: 0x3a1f45 },
+        { shape: 'cape', size: [360, 800, 500], anchor: 'back', pos: [0, -240, 30], rot: [0.14, 0, 0], color: 0x3a1f45 }, // dark cape
         { shape: 'box', size: [120, 100, 18], anchor: 'shoulderL', pos: [0, 20, 0], color: 0x8e97a0 },
         { shape: 'box', size: [120, 100, 18], anchor: 'shoulderR', pos: [0, 20, 0], color: 0x8e97a0 },
         { shape: 'box', size: [40, 200, 20], anchor: 'chest', pos: [0, 110, 82], color: 0x585d64 },

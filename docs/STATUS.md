@@ -80,6 +80,21 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Gallery QA round** (user visual QA of the published GIFs; 3 agents:
+  capture tuning ∥ renderer fixes → 57-pack data sweep): ½-speed rotations,
+  wall-facing camera fixes (lighting/switch/alarm/lock), robot + sensor
+  zoom/pacing, avatar framing derived from plumbob+bubble height; renderer:
+  dryer porthole door animated, rocking chair grounded, swingset A-frame
+  meets the crossbar, bin lids open OUTWARD, new `shape:'cape'` draped-sheet
+  primitive, posture sign fixed (positive = forward stoop), hacker pants,
+  `gown` leg-swing damper (oracle force-gowned), sk clamps (humanoid
+  [0.45,1.2], quad [0.2,1.35]); data sweep: 16 reported fixes (hats,
+  vampire/princess gowns + hair, genie hover 650, farm/zoo/MLP/battle-cat/
+  TMNT/Hulk sizes, zebra flank stripes, TMNT shell rotation, Pandora single
+  tails, Cap shield flat) + 44 cone/box capes converted, 36 packs
+  version-bumped, ids untouched (content 589/589, build 62/62). Full regen
+  581/581 (230 MB, 45-frame captures) republished to Pages.
+
 - **Docs-gallery pipeline** (`npm run docs:gallery`, `docs/GALLERY.md`;
   scripts committed, `docs-site/` output gitignored by design; **hosted at
   https://pwsh.github.io/diorama/** via `npm run docs:publish` → orphan

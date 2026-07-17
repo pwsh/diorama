@@ -17,7 +17,7 @@ const SPACE_ACC: AvatarPrimitive[] = [
 ];
 
 const pack: AvatarPackDef = {
-  id: 'lego', version: 1, label: 'LEGO',
+  id: 'lego', version: 2, label: 'LEGO',
   path: ['Video Games', 'LEGO'], builtin: true, franchise: true,
   // Minifig proportions: cylinder head, box hands, thin limbs, stubby legs,
   // blank yellow head shared by every member.
@@ -61,7 +61,7 @@ const pack: AvatarPackDef = {
         { shape: 'cone', size: [8, 90, 8], anchor: 'crown', pos: [0, 10, 20], rot: [0.5, 0, 0], color: 0x1e4fa0 },
         { shape: 'box', size: [150, 130, 14], anchor: 'chest', pos: [0, 0, 0], color: 0xc0c0c0 },
         { shape: 'sphere', size: [20, 20, 6], anchor: 'chest', pos: [0, 0, -10], color: 0x101010 },
-        { shape: 'cone', size: [90, 260, 90], anchor: 'back', pos: [0, -30, 15], color: 0x1b1b1b },
+        { shape: 'cape', size: [150, 300, 225], anchor: 'back', pos: [0, -90, 15], rot: [0.12, 0, 0], color: 0x1b1b1b },
         { shape: 'box', size: [110, 140, 16], anchor: 'handL', pos: [0, -40, -20], color: 0x1b1b1b },
         { shape: 'box', size: [50, 30, 6], anchor: 'handL', pos: [0, -40, -30], color: 0xc0c0c0 },
       ],

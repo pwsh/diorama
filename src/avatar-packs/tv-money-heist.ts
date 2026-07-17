@@ -16,7 +16,7 @@ const crewKit: AvatarPrimitive[] = [
 ];
 
 const pack: AvatarPackDef = {
-  id: 'tv-money-heist', version: 1, label: 'Money Heist',
+  id: 'tv-money-heist', version: 2, label: 'Money Heist',
   path: ['Pop Culture', 'TV Shows', 'Money Heist'], builtin: true, franchise: true,
   // Shared jumpsuit body — spread under every member; the two civilians and
   // Denver override body/legColor below.
@@ -39,7 +39,7 @@ const pack: AvatarPackDef = {
         { shape: 'box', size: [46, 12, 5], anchor: 'face', pos: [0, -14, -8], color: 0x2b1d14 }, // moustache
         { shape: 'box', size: [70, 20, 6], anchor: 'chest', pos: [0, 122, -6], color: 0xf0ede4 }, // shirt collar
         { shape: 'box', size: [34, 140, 8], anchor: 'chest', pos: [0, 40, -10], color: 0x6d1f24 }, // maroon tie
-        { shape: 'cone', size: [140, 220], anchor: 'back', pos: [0, -50, 30], color: 0x505050 }, // overcoat drape
+        { shape: 'cape', size: [240, 255, 350], anchor: 'back', pos: [0, -90, 30], rot: [0.12, 0, 0], color: 0x505050 }, // overcoat drape
       ],
       personality: { bobMul: 0.75, swayMul: 0.6, cadenceMul: 0.85, ampMul: 0.7 },
       bubbles: ['📋', '🧠', '♟️', '😌'] },

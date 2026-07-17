@@ -8,7 +8,7 @@ const CHOZO = 0xc9a24a, STONE = 0x8a7048, PIRATE = 0x2f6b2f, RIDLEY = 0x9b3fb5;
 const KRAID = 0x4a7a3a, BRAIN = 0xd99bb5, NUCLEI = 0xe6202a;
 
 const pack: AvatarPackDef = {
-  id: 'metroid', version: 1, label: 'Metroid',
+  id: 'metroid', version: 2, label: 'Metroid',
   path: ['Video Games', 'Metroid'], builtin: true, franchise: true,
   avatars: [
     // Samus — Varia power suit
@@ -73,7 +73,7 @@ const pack: AvatarPackDef = {
       personality: { bobMul: 0.1, swayMul: 0.05, cadenceMul: 0.6, ampMul: 0.7 }, bubbles: ['🗿', '⚱️', '✨'] },
     // Ridley — uses tailbone anchor for the bladed tail
     { id: 'metroid/space-dragon-ridley', label: 'Space Dragon (purple, wings, bladed tail)', rig: 'humanoid',
-      humanoid: { sk: 1.6, headR: 140, headShape: 'box', limbR: 1.1, skin: RIDLEY, body: 0x7a2f96, legColor: 0x3a1a45, shoe: 0x3a1a45, eyes: 'slit', emI: 0.35, hands: 'box', armL: 1.2, legL: 1.15, footMul: [1.3, 0.9, 1.5] },
+      humanoid: { sk: 1.2, headR: 140, headShape: 'box', limbR: 1.1, skin: RIDLEY, body: 0x7a2f96, legColor: 0x3a1a45, shoe: 0x3a1a45, eyes: 'slit', emI: 0.35, hands: 'box', armL: 1.2, legL: 1.15, footMul: [1.3, 0.9, 1.5] },
       accessories: [
         { shape: 'cone', size: [20, 90, 20], anchor: 'crown', pos: [-40, 0, 20], rot: [0.4, 0, -0.3], color: 0x5c2570 },
         { shape: 'cone', size: [20, 90, 20], anchor: 'crown', pos: [40, 0, 20], rot: [0.4, 0, 0.3], color: 0x5c2570 },
@@ -86,7 +86,7 @@ const pack: AvatarPackDef = {
       personality: { bobMul: 1.3, swayMul: 1.4, cadenceMul: 0.75, ampMul: 1.3 }, bubbles: ['🔥', '🐉', '💢', '🩸'] },
     // Kraid — oversized belly via a large chest sphere
     { id: 'metroid/reptilian-behemoth-kraid', label: 'Reptilian Behemoth (green, huge belly, small head)', rig: 'humanoid',
-      humanoid: { sk: 1.8, headR: 100, limbR: 1.6, skin: KRAID, body: 0x3d6b30, legColor: 0x2a4a22, shoe: 0x2a4a22, eyes: 'dots', emI: 0.05, hands: 'box', armL: 1.4, legL: 0.8, footMul: [1.6, 1.0, 1.6] },
+      humanoid: { sk: 1.2, headR: 100, limbR: 1.6, skin: KRAID, body: 0x3d6b30, legColor: 0x2a4a22, shoe: 0x2a4a22, eyes: 'dots', emI: 0.05, hands: 'box', armL: 1.4, legL: 0.8, footMul: [1.6, 1.0, 1.6] },
       accessories: [
         { shape: 'sphere', size: [225, 210, 190], anchor: 'chest', pos: [0, -40, -60], color: 0x6a9a52 }, // approx: torso-defining belly (soft rig gap)
         { shape: 'cone', size: [15, 60, 15], anchor: 'handL', pos: [0, -30, 0], rot: [3.1416, 0, 0], color: 0xe8e0c8 },
@@ -99,7 +99,7 @@ const pack: AvatarPackDef = {
       personality: { bobMul: 0.6, swayMul: 0.4, cadenceMul: 0.5, ampMul: 0.6 }, bubbles: ['🦖', '💢', '🌋', '🩸'] },
     // Mother Brain — grounded, limbless (shrunk limbs; no sessile flag)
     { id: 'metroid/mother-brain-jar', label: 'Brain in a Jar (pink mass, glass tank, single eye)', rig: 'humanoid',
-      humanoid: { sk: 1.3, headR: 190, skin: BRAIN, body: 0x2a2a33, legColor: 0x1a1a20, shoe: 0x1a1a20, eyes: 'redvisor', emI: 0.25, steel: true, limbR: 0.3, armL: 0.01, legL: 0.3, footMul: [0.01, 0.01, 0.01] }, // approx: sessile approximated via shrunk limbs; tank rendered opaque pale (no translucency)
+      humanoid: { sk: 1.2, headR: 190, skin: BRAIN, body: 0x2a2a33, legColor: 0x1a1a20, shoe: 0x1a1a20, eyes: 'redvisor', emI: 0.25, steel: true, limbR: 0.3, armL: 0.01, legL: 0.3, footMul: [0.01, 0.01, 0.01] }, // approx: sessile approximated via shrunk limbs; tank rendered opaque pale (no translucency)
       accessories: [
         { shape: 'sphere', size: 210, anchor: 'crown', pos: [0, -120, 0], color: 0xbfe8f0, emissive: 0xbfe8f0, emissiveIntensity: 0.1 },
         { shape: 'cylinder', size: [10, 10, 280], anchor: 'hip', pos: [-60, -100, 30], color: 0x6a6a72 },

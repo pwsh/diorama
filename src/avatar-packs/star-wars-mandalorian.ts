@@ -12,7 +12,7 @@ const pauldrons = (col: number, size: [number, number, number] = [70, 55, 50]): 
 const TVISOR: AvatarPrimitive = { shape: 'box', size: [12, 64, 8], anchor: 'face', pos: [0, -4, -10], color: 0x1a1a1a, emissiveIntensity: 0 };
 
 const pack: AvatarPackDef = {
-  id: 'star-wars-mandalorian', version: 2, label: 'Star Wars: The Mandalorian',
+  id: 'star-wars-mandalorian', version: 3, label: 'Star Wars: The Mandalorian',
   path: ['Sci-Fi', 'Star Wars', 'The Mandalorian'], builtin: true, franchise: true,
   base: {
     rig: 'humanoid',
@@ -29,7 +29,7 @@ const pack: AvatarPackDef = {
       accessories: [
         { shape: 'cylinder', size: [15, 15, 30], anchor: 'crown', pos: [40, 20, 0], rot: [0.3, 0, 0], color: 0x8a8a8a, emissiveIntensity: 0 },
         ...pauldrons(0xc7c9cc),
-        { shape: 'cone', size: [190, 520, 190], anchor: 'back', pos: [0, -80, 10], color: 0x3b3b3d, emissiveIntensity: 0 },
+        { shape: 'cape', size: [320, 600, 480], anchor: 'back', pos: [0, -140, 12], rot: [0.12, 0, 0], color: 0x3b3b3d },
         { shape: 'box', size: [160, 40, 20], anchor: 'hip', pos: [0, 0, -6], color: 0x2a2622, emissiveIntensity: 0 },
         { shape: 'box', size: [30, 60, 25], anchor: 'hip', pos: [70, -10, -6], color: 0x1c1a17, emissiveIntensity: 0 },
         { shape: 'cylinder', size: [17, 17, 6], anchor: 'chest', pos: [0, 20, -12], rot: [1.57, 0, 0], color: 0x8a8a8a, emissiveIntensity: 0 },
@@ -122,7 +122,7 @@ const pack: AvatarPackDef = {
         { shape: 'box', size: [150, 60, 20], anchor: 'neck', pos: [0, 10, -8], color: 0x0e0e10, emissiveIntensity: 0 },
         // rank insignia — the pack's one 'tint' accent so sensor color coding survives
         { shape: 'box', size: [40, 14, 6], anchor: 'chest', pos: [-50, 90, -10], color: 'tint', emissiveIntensity: 0 },
-        { shape: 'cone', size: [200, 560, 200], anchor: 'back', pos: [0, -120, 12], color: 0x101012, emissiveIntensity: 0 }],
+        { shape: 'cape', size: [340, 644, 500], anchor: 'back', pos: [0, -180, 12], rot: [0.12, 0, 0], color: 0x101012 }],
       personality: { bobMul: 0.7, swayMul: 0.5, cadenceMul: 0.85, ampMul: 0.85 },
       bubbles: ['🖤', '😠', '⚡', '📡'] },
   ],

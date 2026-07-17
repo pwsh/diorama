@@ -6,12 +6,14 @@ const CHARCOAL = 0x2c2e34, NEARBLACK = 0x161619, PALE = 0xe7c6a4;
 const GOLD = 0xcaa53a, ROBE = 0x7b718f;
 
 const pack: AvatarPackDef = {
-  id: 'base-careers', version: 1, label: 'Careers', path: ['Base', 'Careers'], builtin: true,
+  id: 'base-careers', version: 2, label: 'Careers', path: ['Base', 'Careers'], builtin: true,
   avatars: [
     { id: 'professional', label: 'Professional', rig: 'humanoid', legacyAccessories: 'professional',
       humanoid: { body: CHARCOAL, shoe: 0x141416, emI: 0.20 }, bubbles: ['📊', '☕'] },
     { id: 'hacker', label: 'Hacker', rig: 'humanoid', legacyAccessories: 'hacker',
-      humanoid: { skin: PALE, body: NEARBLACK, shoe: 0x141416, emI: 0.15, earSkip: true }, bubbles: ['💻', '🔓'] },
+      // legColor = dark trousers matching the near-black hoodie (was pale skin — no
+      // pants); shoe 0x141416 stays distinct.
+      humanoid: { skin: PALE, body: NEARBLACK, shoe: 0x141416, emI: 0.15, earSkip: true, legColor: CHARCOAL }, bubbles: ['💻', '🔓'] },
     { id: 'tech_expert', label: 'Tech expert', rig: 'humanoid', legacyAccessories: 'tech_expert',
       humanoid: { body: NEARBLACK, shoe: 0x33363c, emI: 0.20, earSkip: true }, bubbles: ['💡', '🔌'] },
     { id: 'farmer', label: 'Farmer', rig: 'humanoid', legacyAccessories: 'farmer',
@@ -62,9 +64,9 @@ const pack: AvatarPackDef = {
     { id: 'police-officer', label: 'Police officer (navy)', rig: 'humanoid',
       humanoid: { body: 0x1c2b46, shoe: 0x141416, emI: 0.18 },
       accessories: [
-        { shape: 'cylinder', size: [108, 108, 70], anchor: 'head', pos: [0, 40, 0], color: 0x161e30 }, // flat cap crown
-        { shape: 'cylinder', size: [148, 148, 14], anchor: 'head', pos: [0, 10, 0], color: 0x161e30 }, // brim
-        { shape: 'box', size: [22, 22, 8], anchor: 'face', pos: [0, 55, -6], color: 0xd9c34a }, // cap badge
+        { shape: 'cylinder', size: [108, 108, 70], anchor: 'crown', pos: [0, 20, 0], rot: [-0.1, 0, 0], color: 0x161e30 }, // flat cap crown (sits atop dome)
+        { shape: 'cylinder', size: [148, 148, 14], anchor: 'crown', pos: [0, -8, -30], rot: [-0.1, 0, 0], color: 0x161e30 }, // peaked brim
+        { shape: 'box', size: [22, 22, 8], anchor: 'face', pos: [0, 96, -6], color: 0xd9c34a }, // cap badge
         { shape: 'box', size: [30, 30, 8], anchor: 'chest', pos: [-56, 118, -12], rot: [0, 0, 0.78], color: 0xd9c34a }, // chest badge
         { shape: 'box', size: [262, 70, 158], anchor: 'hip', pos: [0, 0, 0], color: 0x0e0e10 }, // duty belt
         { shape: 'box', size: [40, 52, 30], anchor: 'hip', pos: [92, -12, -70], color: 0x0e0e10 }, // pouch
@@ -124,9 +126,9 @@ const pack: AvatarPackDef = {
     { id: 'pilot', label: 'Pilot (navy & wings)', rig: 'humanoid',
       humanoid: { body: 0x14203a, shoe: 0x0e0e10, emI: 0.2 },
       accessories: [
-        { shape: 'cylinder', size: [108, 108, 82], anchor: 'head', pos: [0, 44, 0], color: 0x14203a }, // cap crown
-        { shape: 'cylinder', size: [148, 148, 14], anchor: 'head', pos: [0, 8, -40], color: 0x0e0e10 }, // brim
-        { shape: 'sphere', size: 22, anchor: 'face', pos: [0, 58, -6], color: 0xd9c34a }, // cap badge
+        { shape: 'cylinder', size: [108, 108, 82], anchor: 'crown', pos: [0, 30, 0], rot: [-0.1, 0, 0], color: 0x14203a }, // cap crown (sits atop dome)
+        { shape: 'cylinder', size: [148, 148, 14], anchor: 'crown', pos: [0, -10, -40], rot: [-0.1, 0, 0], color: 0x0e0e10 }, // brim
+        { shape: 'sphere', size: 22, anchor: 'face', pos: [0, 100, -6], color: 0xd9c34a }, // cap badge
         { shape: 'box', size: [120, 24, 12], anchor: 'chest', pos: [0, 118, -8], color: 0xd9c34a }, // wings bar
         { shape: 'box', size: [24, 120, 10], anchor: 'chest', pos: [0, 30, -10], color: 0x0e0e10 }, // tie
       ],

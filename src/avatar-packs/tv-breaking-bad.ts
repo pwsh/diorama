@@ -6,7 +6,7 @@
 import type { AvatarPackDef } from '../avatars.js';
 
 const pack: AvatarPackDef = {
-  id: 'tv-breaking-bad', version: 1, label: 'Breaking Bad',
+  id: 'tv-breaking-bad', version: 2, label: 'Breaking Bad',
   path: ['Pop Culture', 'TV Shows', 'Breaking Bad'], builtin: true, franchise: true,
   avatars: [
     // Walter White / "Heisenberg" — bald, goatee, shades, black pork-pie hat.
@@ -94,7 +94,7 @@ const pack: AvatarPackDef = {
         { shape: 'box', size: [26, 160, 8], anchor: 'chest', pos: [0, 40, -8], color: 0x1c1c1c }, // black tie
       ],
       personality: { bobMul: 0.7, swayMul: 0.5, cadenceMul: 0.9, ampMul: 0.6 },
-      posture: { pitch: -0.03 },
+      posture: { pitch: 0.03 },
       bubbles: ['🍗', '📋', '😐', '💵'] },
 
     // Marie Schrader — head-to-toe purple, big wavy hair, handbag.

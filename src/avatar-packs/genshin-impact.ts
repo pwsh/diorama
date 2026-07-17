@@ -8,7 +8,7 @@ import type { AvatarPackDef } from '../avatars.js';
 const GOLD = 0xd4af37;
 
 const pack: AvatarPackDef = {
-  id: 'genshin-impact', version: 1, label: 'Genshin Impact',
+  id: 'genshin-impact', version: 2, label: 'Genshin Impact',
   path: ['Video Games', 'Genshin Impact'], builtin: true, franchise: true,
   base: { rig: 'humanoid', humanoid: { headR: 124, headShape: 'sphere', limbR: 1.0, hands: 'sphere', eyes: 'almond', steel: false, emI: 0, armL: 1.0, legL: 1.0, footMul: [1, 1, 1] } },
   avatars: [
@@ -19,7 +19,7 @@ const pack: AvatarPackDef = {
         { shape: 'sphere', size: [65, 45, 65], anchor: 'crown', pos: [0, -10, 0], color: 0xf7f5ef }, // hair mass
         { shape: 'cylinder', size: [45, 45, 10], anchor: 'crown', pos: [0, 42, 0], color: 0xd9a66c }, // approx: halo ring → flat disc (no torus)
         { shape: 'cone', size: [9, 18], anchor: 'head', pos: [50, 40, -10], color: 0x2a2a3a }, // hair star
-        { shape: 'box', size: [110, 140, 15], anchor: 'back', pos: [0, -10, 10], color: 0x1c2540 }, // celestial cape
+        { shape: 'cape', size: [140, 180, 220], anchor: 'back', pos: [0, -70, 12], rot: [0.12, 0, 0], color: 0x1c2540 }, // celestial cape
         { shape: 'sphere', size: 6, anchor: 'back', pos: [-30, 20, 12], color: 0xd9a66c }, // constellation dot
         { shape: 'sphere', size: 6, anchor: 'back', pos: [30, -10, 12], color: 0xd9a66c }, // constellation dot
         { shape: 'box', size: [30, 30, 6], anchor: 'chest', pos: [0, 20, -6], color: 0x2a2a3a }, // emblem
@@ -31,7 +31,7 @@ const pack: AvatarPackDef = {
       accessories: [
         { shape: 'box', size: [120, 80, 110], anchor: 'crown', pos: [0, -10, 0], color: 0xf0d878 }, // hair
         { shape: 'cylinder', size: [30, 30, 260], anchor: 'back', pos: [0, 20, 10], rot: [0.3, 0, 0], color: 0xf0d878 }, // hair tail
-        { shape: 'box', size: [150, 280, 15], anchor: 'back', pos: [0, -20, 12], color: 0xdbe9f2 }, // cape
+        { shape: 'cape', size: [200, 340, 300], anchor: 'back', pos: [0, -90, 14], rot: [0.12, 0, 0], color: 0xdbe9f2 }, // cape
         { shape: 'box', size: [150, 10, 4], anchor: 'back', pos: [0, -150, 14], color: GOLD }, // cape hem trim
         { shape: 'box', size: [24, 24, 10], anchor: 'chest', pos: [0, 30, -8], color: GOLD, emissive: 0x8fd0e0, emissiveIntensity: 0.3 }, // vision pendant
         { shape: 'box', size: [90, 30, 20], anchor: 'neck', pos: [0, -6, -8], color: 0xf5f2ea }, // scarf
@@ -76,7 +76,7 @@ const pack: AvatarPackDef = {
         { shape: 'cylinder', size: [12, 12, 90], anchor: 'head', pos: [60, -20, 10], rot: [0, 0, 0.2], color: 0x161a2e }, // braid R
         { shape: 'sphere', size: 12, anchor: 'head', pos: [-65, -70, 10], color: 0x66d9c9 }, // approx: aqua ombré tip (2-piece, no gradient)
         { shape: 'sphere', size: 12, anchor: 'head', pos: [65, -70, 10], color: 0x66d9c9 }, // approx: aqua ombré tip
-        { shape: 'box', size: [140, 280, 15], anchor: 'back', pos: [0, -20, 12], color: 0x2f8f4e }, // cape
+        { shape: 'cape', size: [190, 340, 280], anchor: 'back', pos: [0, -90, 14], rot: [0.12, 0, 0], color: 0x2f8f4e }, // cape
         { shape: 'box', size: [40, 50, 10], anchor: 'back', pos: [0, 90, 14], color: 0x1e4fa0 }, // bow accent
         { shape: 'box', size: [170, 10, 4], anchor: 'chest', pos: [0, 20, -6], color: GOLD }, // embroidery trim
       ],

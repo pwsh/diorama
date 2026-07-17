@@ -6,7 +6,7 @@
 import type { AvatarPackDef } from '../avatars.js';
 
 const pack: AvatarPackDef = {
-  id: 'tv-game-of-thrones', version: 1, label: 'Game of Thrones',
+  id: 'tv-game-of-thrones', version: 2, label: 'Game of Thrones',
   path: ['Pop Culture', 'TV Shows', 'Game of Thrones'], builtin: true, franchise: true,
   avatars: [
     // Jon Snow — black Night's Watch furs, fur collar, Longclaw across the back.
@@ -17,7 +17,7 @@ const pack: AvatarPackDef = {
       accessories: [
         { shape: 'box', size: [64, 30, 64], anchor: 'crown', pos: [0, -6, 4], color: 0x241a10 }, // curly hair cap
         { shape: 'box', size: [50, 18, 6], anchor: 'face', pos: [0, -24, -8], color: 0x2a2018 }, // stubble
-        { shape: 'cone', size: [180, 260], anchor: 'back', pos: [0, -80, 30], color: 0x141414 }, // fur cloak
+        { shape: 'cape', size: [300, 300, 450], anchor: 'back', pos: [0, -120, 30], rot: [0.12, 0, 0], color: 0x141414 }, // fur cloak
         { shape: 'box', size: [120, 22, 20], anchor: 'back', pos: [0, 90, 34], color: 0x4a4038 }, // grey fur collar
         { shape: 'box', size: [14, 420, 10], anchor: 'back', pos: [40, -20, 40], rot: [0, 0, 0.5], color: 0xb0b0ac }, // Longclaw
         { shape: 'sphere', size: 18, anchor: 'back', pos: [130, 130, 40], color: 0xcfd0c8 }, // wolf pommel
@@ -37,7 +37,7 @@ const pack: AvatarPackDef = {
         { shape: 'box', size: [36, 150, 26], anchor: 'head', pos: [-56, -60, 6], color: 0xe8e4d0 }, // long hair L
         { shape: 'box', size: [36, 150, 26], anchor: 'head', pos: [56, -60, 6], color: 0xe8e4d0 }, // long hair R
         { shape: 'sphere', size: 20, anchor: 'chest', pos: [0, 118, -8], color: 0x3a4a6a, emissiveIntensity: 0.1 }, // dragon pendant
-        { shape: 'cone', size: [160, 220], anchor: 'back', pos: [0, -60, 26], color: 0xd8dce0 }, // pale cape
+        { shape: 'cape', size: [270, 255, 400], anchor: 'back', pos: [0, -95, 26], rot: [0.12, 0, 0], color: 0xd8dce0 }, // pale cape
       ],
       personality: { bobMul: 0.85, swayMul: 0.75, cadenceMul: 0.9, ampMul: 0.85 },
       bubbles: ['🐉', '🔥', '👑', '😤'] },
@@ -68,7 +68,7 @@ const pack: AvatarPackDef = {
         { shape: 'box', size: [46, 10, 16], anchor: 'crown', pos: [28, 0, 28], rot: [0.3, 0, 0], color: 0xd4af5a }, // braid ridge R
         { shape: 'sphere', size: 24, anchor: 'chest', pos: [0, 116, -8], color: 0xc9a227 }, // lion brooch
         { shape: 'box', size: [200, 20, 8], anchor: 'hip', pos: [0, 6, -6], color: 0xc9a227 }, // filigree belt
-        { shape: 'cone', size: [170, 240], anchor: 'back', pos: [0, -60, 26], color: 0x5a0f16 }, // crimson train
+        { shape: 'cape', size: [290, 275, 425], anchor: 'back', pos: [0, -95, 26], rot: [0.12, 0, 0], color: 0x5a0f16 }, // crimson train
       ],
       personality: { bobMul: 0.8, swayMul: 0.6, cadenceMul: 0.85, ampMul: 0.8 },
       bubbles: ['🦁', '👑', '🍷', '😈'] },
@@ -111,7 +111,7 @@ const pack: AvatarPackDef = {
         limbColors: { armR: 0xe6c84a } }, // approx: gilded prosthetic — recolor the R arm (no hand-only field)
       accessories: [
         { shape: 'box', size: [64, 20, 64], anchor: 'crown', pos: [0, -6, 2], color: 0xd4af5a }, // golden wavy hair
-        { shape: 'cone', size: [170, 250], anchor: 'back', pos: [0, -70, 30], color: 0x8a1420 }, // crimson cloak
+        { shape: 'cape', size: [290, 290, 425], anchor: 'back', pos: [0, -105, 30], rot: [0.12, 0, 0], color: 0x8a1420 }, // crimson cloak
         { shape: 'sphere', size: 26, anchor: 'chest', pos: [0, 110, -8], color: 0xf0e6c0 }, // lion breastplate emblem
         { shape: 'sphere', size: 34, anchor: 'handR', pos: [0, -4, 0], color: 0xe6c84a, emissiveIntensity: 0.15 }, // golden hand glint
       ],
@@ -126,7 +126,7 @@ const pack: AvatarPackDef = {
       accessories: [
         { shape: 'box', size: [62, 24, 62], anchor: 'crown', pos: [0, -6, 2], color: 0x2e241a }, // greying hair
         { shape: 'box', size: [46, 30, 8], anchor: 'face', pos: [0, -30, -8], color: 0x342a1e }, // beard
-        { shape: 'cone', size: [190, 270], anchor: 'back', pos: [0, -80, 32], color: 0x18140f }, // heavy black cloak
+        { shape: 'cape', size: [320, 310, 475], anchor: 'back', pos: [0, -115, 32], rot: [0.12, 0, 0], color: 0x18140f }, // heavy black cloak
         { shape: 'box', size: [130, 24, 22], anchor: 'back', pos: [0, 92, 36], color: 0xc8c4b8 }, // pale fur trim
         { shape: 'sphere', size: 22, anchor: 'chest', pos: [0, 116, -8], color: 0xb8bcc0 }, // direwolf brooch
         { shape: 'box', size: [18, 480, 12], anchor: 'back', pos: [40, -40, 40], rot: [0, 0, 0.5], color: 0xacaca8 }, // greatsword Ice

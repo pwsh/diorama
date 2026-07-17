@@ -51,7 +51,9 @@
     const empR = lidRot('bin_te');
     const fulR = lidRot('bin_tf');
     assert('empty trash lid is closed (rot.x ~ 0)', empR !== null && Math.abs(empR) < 0.02, `rot=${empR}`);
-    assert('full trash lid is propped open (rot.x ~ -0.26)', fulR !== null && fulR < -0.2, `rot=${fulR}`);
+    // Lid opens OUTWARD/UP now (positive rotation.x lifts the front edge away from
+    // the body); the old negative sign folded the lid DOWN into the bin.
+    assert('full trash lid is propped open outward (rot.x ~ +0.70)', fulR !== null && fulR > 0.2, `rot=${fulR}`);
     assert('full bin adds overflow mesh vs empty',
       meshCount(findByFixtureId(r._floorGroup, 'bin_tf')) > meshCount(findByFixtureId(r._floorGroup, 'bin_te')),
       `full=${meshCount(findByFixtureId(r._floorGroup,'bin_tf'))} empty=${meshCount(findByFixtureId(r._floorGroup,'bin_te'))}`);

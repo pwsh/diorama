@@ -320,7 +320,8 @@ interface Humanoid {
   persBob: number; persSway: number; persCadence: number; persAmp: number;
   // ── Batch C1 rig extensions ──
   // Static root-pitch bias (rad) folded into the speed-proportional lean at the
-  // final rotation.x write (def.posture.pitch; both rigs).
+  // final rotation.x write (def.posture.pitch; both rigs). NEGATED at the write so
+  // POSITIVE posture.pitch = FORWARD stoop (negative root rotation.x is forward).
   posturePitch: number;
   // Hover rigs (ghosts / floating droids): BOTH legs omitted, the root floated so
   // the hip pivot sits `hoverY` mm off the floor + a gentle constant idle bob.
@@ -328,6 +329,10 @@ interface Humanoid {
   // NULL and every updateTargets access to them is guarded.
   hover: boolean;
   hoverY: number;
+  // Floor-length robe/gown: damps the leg-swing amplitude in updateTargets so legs
+  // don't clip through the fabric during the walk cycle (def.humanoid.gown, or the
+  // force-gowned wise_oracle legacy kind). Never set on quads.
+  gown: boolean;
   // Personality thought-bubble chatter: `chatterNext` counts down to the next
   // firing (25–60 s, idleOffset-seeded); while `chatterT` > 0 the resolver's
   // lowest tier returns `chatterGlyph` (held ~7.5 s so the 2.5 s hysteresis
@@ -3877,10 +3882,20 @@ export class ThreeDRenderer {
         addBox(W, backH, backT, cushion, 0, (def.seat ?? 450) + backH / 2, D / 2 - backT / 2);
         // Legs (or rockers).
         if (kind === 'rocking_chair') {
-          // Curved rocker: 2 thin curved boxes along X.
-          const rockY = 30, rockH = 60;
-          addBox(W * 0.85, rockH, 40, dark, 0, rockY, -D / 2 + 30);
-          addBox(W * 0.85, rockH, 40, dark, 0, rockY, D / 2 - 30);
+          // Rockers run front-to-back (Z) on the left & right sides, resting on
+          // the floor (lowest point ≈ y=0); short legs connect the seat down to
+          // the runners so the chair doesn't float above them.
+          const rockH = 60, rockY = rockH / 2;                 // bottom at y≈0
+          const runnerX = W / 2 - 25, runnerLen = D * 0.95;
+          addBox(50, rockH, runnerLen, dark, -runnerX, rockY, 0);
+          addBox(50, rockH, runnerLen, dark,  runnerX, rockY, 0);
+          const legH = (seatY - seatT / 2) - rockH;            // runner top → seat bottom
+          if (legH > 0) {
+            const legT = 45, zo = D / 2 - 45;
+            for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]] as const) {
+              addBox(legT, legH, legT, dark, sx * runnerX, rockH + legH / 2, sz * zo);
+            }
+          }
         } else {
           const legT = 50, legH = (def.seat ?? 450) - seatT;
           const xo = W / 2 - legT / 2, zo = D / 2 - legT / 2;
@@ -4217,9 +4232,15 @@ export class ThreeDRenderer {
         const ropeM = this._mat({ color: 0x4a4a4a, roughness: 0.9 });
         const seatM = this._mat({ color: 0x2e6da4, roughness: 0.8 });
         const legH = HT, halfW = W / 2, halfD = D / 2;
+        // A-frame legs: each foot sits at (±(halfW-60), 0, ±(halfD-80)); its TOP
+        // meets the crossbar end at (±(halfW-60), legH, 0). Lean the leg IN toward
+        // z=0 (previously it splayed the tops AWAY, so they never met the bar).
+        const footZ = halfD - 80;
+        const legLen = Math.hypot(legH, footZ) * 1.02;
         for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
-          const leg = addCyl(35, 45, legH * 1.02, frame, sx * (halfW - 60), legH / 2, sz * (halfD - 80), 8);
-          leg.rotation.x = sz * 0.18;
+          const zc = sz * footZ;
+          const leg = addCyl(35, 45, legLen, frame, sx * (halfW - 60), legH / 2, zc / 2, 8);
+          leg.rotation.x = Math.atan2(-zc, legH);   // top → z≈0 (crossbar), foot splayed out
         }
         addCyl(45, 45, W - 120, frame, 0, legH, 0, 10).rotation.z = Math.PI / 2;
         for (const sx of [-0.28, 0.28]) {
@@ -4353,13 +4374,25 @@ export class ThreeDRenderer {
       }
       case 'dryer': {
         addBox(W, HT, D, porcelain, 0, HT / 2, 0);
-        // Static porthole door (no animation — dryer opens rarely; not a
-        // liveliness target per spec).
-        const door = new THREE.Mesh(new THREE.CylinderGeometry(W * 0.3, W * 0.3, 24, 24), screen);
-        door.rotation.x = Math.PI / 2;
-        door.position.set(0, HT * 0.45, -D / 2 - 10);
-        grp.add(door);
         addBox(W * 0.9, HT * 0.1, 8, screen, 0, HT * 0.92, -D / 2 - 3);  // controls
+        // Side-hinged round porthole door (~100° swing) — like the washer. Built
+        // CLOSED + registered in _applianceDoors so the per-frame blend swings it
+        // (unbound liveliness: avatar proximity / localState / bound-on).
+        {
+          const doorMat = this._mat({ color: 0x2a2f36, metalness: 0.3, roughness: 0.4 });
+          const hinge = new THREE.Group();
+          hinge.position.set(-W * 0.3, HT * 0.45, -D / 2 - 12);   // hinge left of the porthole
+          const disc = new THREE.Mesh(new THREE.CylinderGeometry(W * 0.28, W * 0.28, 24, 24), doorMat);
+          disc.rotation.x = Math.PI / 2;
+          disc.position.set(W * 0.28, 0, 0);                       // porthole centered on the front
+          hinge.add(disc);
+          const win = new THREE.Mesh(new THREE.CylinderGeometry(W * 0.2, W * 0.2, 10, 20), glass);
+          win.rotation.x = Math.PI / 2;
+          win.position.set(W * 0.28, 0, -8);
+          hinge.add(win);
+          grp.add(hinge);
+          opts?.doorSink?.push({ pivot: hinge, axis: 'y', openAngle: Math.PI * 0.55 });
+        }
         break;
       }
       case 'microwave': {
@@ -4581,9 +4614,12 @@ export class ThreeDRenderer {
         const dome = new THREE.Mesh(new THREE.BoxGeometry(W * 0.6, 40, D * 0.5), lidMat);
         dome.position.set(0, 80, -(D / 2 - 20));
         lidHinge.add(dome);
-        // FULL: prop the lid open ~15° (about the back hinge, X axis) + overflow.
+        // FULL: tilt the lid OPEN — the free (front, -Z) edge lifts UP and back
+        // about the rear hinge (POSITIVE rotation.x raises the front edge away
+        // from the body; the old negative sign folded it DOWN into the bin) + an
+        // overflow lump pokes out.
         if (opts?.binFull) {
-          lidHinge.rotation.x = -15 * Math.PI / 180;
+          lidHinge.rotation.x = 40 * Math.PI / 180;
           const overflow = new THREE.Mesh(
             new THREE.SphereGeometry(Math.min(W, D) * 0.26, 10, 8),
             this._mat({ color: 0x6d5a3f, roughness: 0.95 }));
@@ -7690,9 +7726,12 @@ export class ThreeDRenderer {
       };
 
       // Walk pose values for each joint (rad), before any sit / activity blend.
-      const wLHip = sinP * amp + idle, wRHip = -sinP * amp + idle;
-      const wLKnee = -Math.max(0, sinP) * (0.9 * ampNorm);
-      const wRKnee = -Math.max(0, -sinP) * (0.9 * ampNorm);
+      // Gowned rigs damp the leg SWING (not the idle offset) so the legs stay under
+      // a floor-length robe instead of poking through it during the stride.
+      const legSwing = h.gown ? 0.22 : 1;
+      const wLHip = sinP * amp * legSwing + idle, wRHip = -sinP * amp * legSwing + idle;
+      const wLKnee = -Math.max(0, sinP) * (0.9 * ampNorm) * legSwing;
+      const wRKnee = -Math.max(0, -sinP) * (0.9 * ampNorm) * legSwing;
       const wLSh = -sinP * amp * 0.8 - idle, wRSh = sinP * amp * 0.8 - idle;
       const wLEl = 0.25 + Math.max(0, -sinP) * 0.5 * ampNorm;
       const wREl = 0.25 + Math.max(0, sinP) * 0.5 * ampNorm;
@@ -7981,7 +8020,9 @@ export class ThreeDRenderer {
       h.leftShoulder.rotation.x = lSh; h.rightShoulder.rotation.x = rSh;
       h.leftElbow.rotation.x = lEl; h.rightElbow.rotation.x = rEl;
       // Static posture bias (elder stoop) folded into the speed-proportional lean.
-      h.group.rotation.x = leanX + h.posturePitch;
+      // posturePitch is NEGATED: positive posture.pitch = FORWARD stoop, and
+      // negative root rotation.x is the body-forward lean (see wLeanX above).
+      h.group.rotation.x = leanX - h.posturePitch;
       h.group.rotation.y = h.facing + yawFidget;
       h.group.rotation.z = rollZ;
       }  // end humanoid (non-quad) pose branch
@@ -9096,8 +9137,11 @@ export class ThreeDRenderer {
       // Ankle-length robe skirt (shares the torso material — a static shell
       // around the still-working leg joints; Sims-style it may intersect
       // seats while sitting), white beard block, tint amulet at the chest.
+      // Widened + deepened so the (gown-damped) legs stay hidden through the
+      // walk cycle — the rig is force-gowned in _buildHumanoid, so the residual
+      // swing is small and this cover is generous enough for it.
       const skirtH = hipY - 20 * sk;
-      const skirt = box(TORSO_W * 1.18, skirtH, TORSO_D * 1.35, c.bodyMat);
+      const skirt = box(TORSO_W * 1.45, skirtH, TORSO_D * 2.0, c.bodyMat);
       skirt.position.set(0, hipY + 40 * sk - skirtH / 2, 0);
       root.add(skirt);
       const beard = box(HEAD_R * 0.62, HEAD_R * 0.85, HEAD_R * 0.28,
@@ -9177,6 +9221,25 @@ export class ThreeDRenderer {
       });
     };
 
+    // A cape is a thin curved OPEN sheet — the shared single-sided named materials
+    // (tint/body/dark…) would cull its back faces. Resolve the requested color to a
+    // concrete int and build a fresh DOUBLE-sided material for it.
+    const capeMat = (prim: AvatarPrimitive): THREE.Material => {
+      const col = prim.color;
+      let colorInt: number;
+      if (col === 'tint' || col === 'accent') colorInt = ctx.color;
+      else if (typeof col === 'number') colorInt = col;
+      else {
+        const m = (col === 'body' ? ctx.bodyMat : col === 'skin' ? ctx.skin : ctx.dark) as
+          THREE.MeshToonMaterial;
+        colorInt = m.color ? m.color.getHex() : ctx.color;
+      }
+      return this._mat({
+        color: colorInt, side: THREE.DoubleSide,
+        metalness: prim.metalness ?? 0.0, roughness: prim.roughness ?? 0.75,
+      });
+    };
+
     // Anchor → { parent, base position }. handL/handR parent the hand groups so
     // the accessory swings; everything else parents `root`.
     const anchorOf = (a: AvatarPrimitive['anchor']):
@@ -9223,6 +9286,20 @@ export class ThreeDRenderer {
         case 'cone':
           geo = new THREE.ConeGeometry(arr[0] * sk, arr[1] * sk, 16);
           break;
+        case 'cape': {
+          // Draped curved sheet: an open-ended cylinder-WALL segment (arc ~1.65 rad
+          // centered on the back +Z), top radius narrower than the flared bottom,
+          // flattened ~0.5 in Z so it hugs the shoulders rather than bulging out.
+          // size = [shoulderWidth, length, flareBottomWidth]; double-sided +
+          // outline-skipped (handled below). Hang from the `back` anchor with a
+          // small outward X `rot` so it drapes off the shoulders and clears the
+          // torso (the data author supplies pos/rot).
+          const rTop = arr[0] * sk * 0.5, rBot = arr[2] * sk * 0.5, hCape = arr[1] * sk;
+          const thetaLen = 1.65, thetaStart = -thetaLen / 2;   // arc centered on +Z (back)
+          geo = new THREE.CylinderGeometry(rTop, rBot, hCape, 12, 4, true, thetaStart, thetaLen);
+          scale[2] = 0.5;   // flatten front-to-back
+          break;
+        }
         case 'sphere':
         default: {
           const r = (Array.isArray(size) ? size[0] : size) * sk;
@@ -9238,13 +9315,15 @@ export class ThreeDRenderer {
           break;
         }
       }
-      const mesh = new THREE.Mesh(geo, matFor(prim));
+      const mesh = new THREE.Mesh(geo, prim.shape === 'cape' ? capeMat(prim) : matFor(prim));
       mesh.scale.set(scale[0], scale[1], scale[2]);
       const a = anchorOf(prim.anchor);
       const [ox, oy, oz] = prim.pos ?? [0, 0, 0];
       mesh.position.set(a.x + ox * sk, a.y + oy * sk, a.z + oz * sk);
       if (prim.rot) mesh.rotation.set(prim.rot[0], prim.rot[1], prim.rot[2]);
-      if (prim.outlineSkip) mesh.userData.outlineSkip = true;
+      // Capes are always outline-safe (a thin curved sheet — an inverted-hull shell
+      // z-fights and reads wrong on an open surface).
+      if (prim.outlineSkip || prim.shape === 'cape') mesh.userData.outlineSkip = true;
       a.parent.add(mesh);
     }
   }
@@ -9264,7 +9343,9 @@ export class ThreeDRenderer {
     const kind = def.id;
     const qf = def.quadruped ?? {};
     const qpers = def.personality ?? {};
-    const sk = qf.sk ?? 1;                       // 1.0 = dog; cat = 0.58
+    // Global height gate (quads): clamp to [0.2, 1.35] — the low floor keeps the
+    // tiny pets (hamster/guinea pig) small; the cap tames oversized animals.
+    const sk = Math.max(0.2, Math.min(1.35, qf.sk ?? 1));   // 1.0 = dog; cat = 0.58
     const legLen = qf.legLen ?? 1;
     const neckLen = (qf.neckLen ?? 0) * sk;      // >0 inserts an angled neck
     const snoutM = qf.snout ?? 1;                // snout length mult (0 = flat face)
@@ -9486,7 +9567,7 @@ export class ThreeDRenderer {
       // parked, and all bubble/blur/activity paths are gated on !h.quad upstream).
       persBob: qpers.bobMul ?? 1, persSway: qpers.swayMul ?? 1,
       persCadence: qpers.cadenceMul ?? 1, persAmp: qpers.ampMul ?? 1,
-      posturePitch: def.posture?.pitch ?? 0, hover: false, hoverY: 0,
+      posturePitch: def.posture?.pitch ?? 0, hover: false, hoverY: 0, gown: false,
       chatterNext: 9e9, chatterT: 0, chatterGlyph: null,   // pets never chatter
       torso,
       plumbob,
@@ -9564,7 +9645,10 @@ export class ThreeDRenderer {
     const bodyPitch = haunch * 0.34 - curl * 0.04;
     const stillness = 1 - Math.min(1, speedMs / 0.4);
     const idleRoll = Math.sin(now * 0.6 + h.idleOffset) * 0.03 * stillness * (1 - settle);
-    h.group.rotation.x = bodyPitch + h.posturePitch;
+    // posturePitch negated so POSITIVE posture.pitch = FORWARD stoop (nose down),
+    // matching the humanoid convention — positive root rotation.x pitches the
+    // nose UP (a backward tilt).
+    h.group.rotation.x = bodyPitch - h.posturePitch;
     h.group.rotation.y = h.facing;
     h.group.rotation.z = idleRoll;
     // Head bob/nod while trotting, gentle look-around while idle; curl tucks the
@@ -9632,9 +9716,15 @@ export class ThreeDRenderer {
       hover: hf.hover,
       limbColors: hf.limbColors ?? {},
     };
-    const sk = spec.sk;
+    // Global height gate: clamp the skeleton scale so heights stay subtle. Small
+    // avatars (child ~0.65) pass; oversized pack values are capped. (Extremely
+    // small PETS use the quadruped rig with a lower 0.2 floor.)
+    const sk = Math.max(0.45, Math.min(1.2, spec.sk));
     const noFace = spec.noFace;
     const hover = spec.hover !== undefined;   // legless floating rig
+    // Floor-length robe: damp the leg swing so legs don't poke through. The legacy
+    // wise_oracle robe (imperative below) is force-gowned regardless of the flag.
+    const gown = (hf.gown ?? false) || kind === 'wise_oracle';
     const armL = spec.armL ?? 1, legL = spec.legL ?? 1;
     const [fmW, fmH, fmD] = spec.footMul ?? [1, 1, 1];
     const pers = def.personality ?? {};
@@ -10033,7 +10123,7 @@ export class ThreeDRenderer {
       persBob: pers.bobMul ?? 1, persSway: pers.swayMul ?? 1,
       persCadence: pers.cadenceMul ?? 1, persAmp: pers.ampMul ?? 1,
       posturePitch: def.posture?.pitch ?? 0,
-      hover, hoverY: spec.hover ?? 0,
+      hover, hoverY: spec.hover ?? 0, gown,
       chatterNext: 25 + idleOffset / (Math.PI * 2) * 35, chatterT: 0, chatterGlyph: null,
       torso,
       plumbob,

@@ -12,12 +12,12 @@
 import type { AvatarPackDef } from '../avatars.js';
 
 const pack: AvatarPackDef = {
-  id: 'base-zoo-animals', version: 1, label: 'Zoo Animals',
+  id: 'base-zoo-animals', version: 2, label: 'Zoo Animals',
   path: ['Base', 'Zoo Animals'], builtin: true,
   avatars: [
     // Lion — tawny body, shaggy dark mane ruff (the headline read), dark tail tuft.
     { id: 'lion', label: '🦁 Lion (maned)', rig: 'quadruped', pet: true,
-      quadruped: { sk: 1.55, bodyLen: 896, bodyW: 260, bodyH: 264, legLen: 0.95, neckLen: 90, headR: 180, ears: 'round', tail: 'down', tailLen: 1.5, tailTipColor: 0x3a2a1c, snout: 1.3, coat: 0xc9963e, belly: 0xe8d9b0, earColor: 0xc9963e, snoutColor: 0x6b4a2e },
+      quadruped: { sk: 1.2, bodyLen: 896, bodyW: 260, bodyH: 264, legLen: 0.95, neckLen: 90, headR: 180, ears: 'round', tail: 'down', tailLen: 1.5, tailTipColor: 0x3a2a1c, snout: 1.3, coat: 0xc9963e, belly: 0xe8d9b0, earColor: 0xc9963e, snoutColor: 0x6b4a2e },
       accessories: [
         { shape: 'sphere', size: 100, anchor: 'qhead', pos: [0, 20, 90], color: 0x6b4224 }, // mane back
         { shape: 'sphere', size: 95, anchor: 'qhead', pos: [-110, 0, 30], color: 0x6b4224 }, // mane L
@@ -30,7 +30,7 @@ const pack: AvatarPackDef = {
 
     // Tiger — bright orange, black vertical stripes (proud boxes), pale ear spots.
     { id: 'tiger', label: '🐯 Tiger (striped)', rig: 'quadruped', pet: true,
-      quadruped: { sk: 1.5, bodyLen: 960, bodyW: 240, bodyH: 252, legLen: 0.95, neckLen: 60, headR: 165, ears: 'round', tail: 'down', tailLen: 1.7, snout: 1.25, coat: 0xe8791e, belly: 0xf5efe0, earColor: 0xe8791e, snoutColor: 0xf5efe0 },
+      quadruped: { sk: 1.2, bodyLen: 960, bodyW: 240, bodyH: 252, legLen: 0.95, neckLen: 60, headR: 165, ears: 'round', tail: 'down', tailLen: 1.7, snout: 1.25, coat: 0xe8791e, belly: 0xf5efe0, earColor: 0xe8791e, snoutColor: 0xf5efe0 },
       accessories: [
         { shape: 'box', size: [16, 130, 12], anchor: 'qback', pos: [-90, 6, -140], color: 0x151515 }, // stripe
         { shape: 'box', size: [16, 130, 12], anchor: 'qback', pos: [90, 6, -140], color: 0x151515 }, // stripe
@@ -45,7 +45,7 @@ const pack: AvatarPackDef = {
 
     // Elephant — slate-grey, huge fan ears, stacked-cylinder trunk (approx), ivory tusks.
     { id: 'elephant', label: '🐘 Elephant', rig: 'quadruped', pet: true,
-      quadruped: { sk: 1.6, bodyLen: 1088, bodyW: 360, bodyH: 456, legLen: 1.3, neckLen: 0, headR: 220, ears: 'none', tail: 'down', tailLen: 1.0, tailTipColor: 0x3a3a36, snout: 0, coat: 0x8a8a86, belly: 0x8a8a86, snoutColor: 0x8a8a86 },
+      quadruped: { sk: 1.35, bodyLen: 1088, bodyW: 360, bodyH: 456, legLen: 1.3, neckLen: 0, headR: 220, ears: 'none', tail: 'down', tailLen: 1.0, tailTipColor: 0x3a3a36, snout: 0, coat: 0x8a8a86, belly: 0x8a8a86, snoutColor: 0x8a8a86 },
       accessories: [
         { shape: 'box', size: [220, 260, 20], anchor: 'qhead', pos: [-150, 20, 20], rot: [0, 0.4, 0], color: 0x8a8a86 }, // ear L
         { shape: 'box', size: [220, 260, 20], anchor: 'qhead', pos: [150, 20, 20], rot: [0, -0.4, 0], color: 0x8a8a86 }, // ear R
@@ -59,7 +59,7 @@ const pack: AvatarPackDef = {
 
     // Giraffe — extreme neck + legs, ossicones, reticulated chestnut patches.
     { id: 'giraffe', label: '🦒 Giraffe', rig: 'quadruped', pet: true,
-      quadruped: { sk: 1.5, bodyLen: 832, bodyW: 150, bodyH: 276, legLen: 2.6, neckLen: 850, headR: 150, ears: 'round', tail: 'down', tailLen: 1.4, tailTipColor: 0x2b2320, snout: 1.1, coat: 0xe8c9a0, belly: 0xf2e6cf, earColor: 0xe8c9a0, snoutColor: 0x2b2320 },
+      quadruped: { sk: 1.3, bodyLen: 832, bodyW: 150, bodyH: 276, legLen: 2.6, neckLen: 850, headR: 150, ears: 'round', tail: 'down', tailLen: 1.4, tailTipColor: 0x2b2320, snout: 1.1, coat: 0xe8c9a0, belly: 0xf2e6cf, earColor: 0xe8c9a0, snoutColor: 0x2b2320 },
       accessories: [
         { shape: 'cylinder', size: [16, 16, 110], anchor: 'qhead', pos: [-26, 60, 0], color: 0xc9a878 }, // ossicone L
         { shape: 'sphere', size: 24, anchor: 'qhead', pos: [-26, 120, 0], color: 0xc9a878 }, // ossicone tip L
@@ -74,13 +74,13 @@ const pack: AvatarPackDef = {
 
     // Zebra — cream body, black stripes (proud boxes), upright dark mane.
     { id: 'zebra', label: '🦓 Zebra', rig: 'quadruped', pet: true,
-      quadruped: { sk: 1.5, bodyLen: 736, bodyW: 170, bodyH: 240, legLen: 1.25, neckLen: 180, headR: 160, ears: 'pointy', tail: 'down', tailLen: 1.2, tailTipColor: 0x1c1c1c, snout: 1.2, coat: 0xf2eee4, belly: 0xf2eee4, earColor: 0xf2eee4, snoutColor: 0x1c1c1c },
+      quadruped: { sk: 1.1, bodyLen: 736, bodyW: 170, bodyH: 240, legLen: 1.25, neckLen: 180, headR: 160, ears: 'pointy', tail: 'down', tailLen: 1.2, tailTipColor: 0x1c1c1c, snout: 1.2, coat: 0xf2eee4, belly: 0xf2eee4, earColor: 0xf2eee4, snoutColor: 0x1c1c1c },
       accessories: [
-        { shape: 'box', size: [16, 140, 12], anchor: 'qback', pos: [-90, 6, -110], color: 0x141414 }, // stripe
-        { shape: 'box', size: [16, 140, 12], anchor: 'qback', pos: [90, 6, -110], color: 0x141414 }, // stripe
-        { shape: 'box', size: [16, 150, 12], anchor: 'qback', pos: [-100, 6, 20], color: 0x141414 }, // stripe
-        { shape: 'box', size: [16, 150, 12], anchor: 'qback', pos: [100, 6, 20], color: 0x141414 }, // stripe
-        { shape: 'box', size: [16, 140, 12], anchor: 'qback', pos: [-90, 6, 150], color: 0x141414 }, // stripe
+        { shape: 'box', size: [30, 150, 18], anchor: 'qback', pos: [-85, -100, -110], color: 0x141414 }, // stripe (flank L)
+        { shape: 'box', size: [30, 150, 18], anchor: 'qback', pos: [85, -100, -110], color: 0x141414 }, // stripe (flank R)
+        { shape: 'box', size: [30, 160, 18], anchor: 'qback', pos: [-88, -100, 20], color: 0x141414 }, // stripe (flank L)
+        { shape: 'box', size: [30, 160, 18], anchor: 'qback', pos: [88, -100, 20], color: 0x141414 }, // stripe (flank R)
+        { shape: 'box', size: [30, 150, 18], anchor: 'qback', pos: [-85, -100, 150], color: 0x141414 }, // stripe (flank L)
         { shape: 'box', size: [18, 90, 8], anchor: 'qneck', pos: [0, 40, -40], color: 0x141414 }, // mane
         { shape: 'box', size: [18, 90, 8], anchor: 'qneck', pos: [0, 0, -70], color: 0x141414 }, // mane
         { shape: 'box', size: [18, 86, 8], anchor: 'qneck', pos: [0, -40, -100], color: 0x141414 }, // mane
@@ -89,7 +89,7 @@ const pack: AvatarPackDef = {
 
     // Bear — grizzled brown, bulky low body, small round ears, shoulder hump.
     { id: 'bear', label: '🐻 Bear (grizzly)', rig: 'quadruped', pet: true,
-      quadruped: { sk: 1.55, bodyLen: 768, bodyW: 270, bodyH: 300, legLen: 0.85, neckLen: 50, headR: 175, ears: 'round', tail: 'down', tailLen: 0.3, snout: 1.15, coat: 0x7a5a3c, belly: 0x7a5a3c, earColor: 0x7a5a3c, snoutColor: 0x3a2c1e },
+      quadruped: { sk: 1.15, bodyLen: 768, bodyW: 270, bodyH: 300, legLen: 0.85, neckLen: 50, headR: 175, ears: 'round', tail: 'down', tailLen: 0.3, snout: 1.15, coat: 0x7a5a3c, belly: 0x7a5a3c, earColor: 0x7a5a3c, snoutColor: 0x3a2c1e },
       accessories: [
         { shape: 'sphere', size: [200, 120, 200], anchor: 'qback', pos: [0, 60, -150], color: 0x7a5a3c }, // shoulder hump
       ],
@@ -97,7 +97,7 @@ const pack: AvatarPackDef = {
 
     // Panda — white body, black ears/eye-goggles/muzzle/vest patches.
     { id: 'panda', label: '🐼 Panda', rig: 'quadruped', pet: true,
-      quadruped: { sk: 1.4, bodyLen: 640, bodyW: 260, bodyH: 288, legLen: 0.7, neckLen: 50, headR: 175, ears: 'round', tail: 'down', tailLen: 0.3, snout: 1.0, coat: 0xf5f3ec, belly: 0xf5f3ec, earColor: 0x161616, snoutColor: 0xf5f3ec },
+      quadruped: { sk: 1.1, bodyLen: 640, bodyW: 260, bodyH: 288, legLen: 0.7, neckLen: 50, headR: 175, ears: 'round', tail: 'down', tailLen: 0.3, snout: 1.0, coat: 0xf5f3ec, belly: 0xf5f3ec, earColor: 0x161616, snoutColor: 0xf5f3ec },
       accessories: [
         { shape: 'sphere', size: [45, 55, 20], anchor: 'qhead', pos: [-60, 25, -150], color: 0x161616 }, // eye patch L
         { shape: 'sphere', size: [45, 55, 20], anchor: 'qhead', pos: [60, 25, -150], color: 0x161616 }, // eye patch R
@@ -109,7 +109,7 @@ const pack: AvatarPackDef = {
 
     // Hippo — huge low barrel on stumpy legs, broad muzzle (snout + wide headScale + box).
     { id: 'hippo', label: '🦛 Hippo', rig: 'quadruped', pet: true,
-      quadruped: { sk: 1.6, bodyLen: 1152, bodyW: 400, bodyH: 360, legLen: 0.55, neckLen: 0, headR: 220, headScale: [1.3, 0.9, 1.0], ears: 'round', tail: 'down', tailLen: 0.3, snout: 1.6, coat: 0x6e6a6a, belly: 0x8a7070, earColor: 0x6e6a6a, snoutColor: 0x6e6a6a },
+      quadruped: { sk: 1.35, bodyLen: 1152, bodyW: 400, bodyH: 360, legLen: 0.55, neckLen: 0, headR: 220, headScale: [1.3, 0.9, 1.0], ears: 'round', tail: 'down', tailLen: 0.3, snout: 1.6, coat: 0x6e6a6a, belly: 0x8a7070, earColor: 0x6e6a6a, snoutColor: 0x6e6a6a },
       accessories: [
         { shape: 'box', size: [200, 90, 120], anchor: 'qhead', pos: [0, -30, -110], color: 0x6e6a6a }, // broad muzzle
         { shape: 'sphere', size: 20, anchor: 'qhead', pos: [-55, 30, -60], color: 0x9a6a6a }, // pink accent L
@@ -130,7 +130,7 @@ const pack: AvatarPackDef = {
 
     // Gorilla — biped silverback, extreme limb bulk + arm reach, silver saddle, crest.
     { id: 'gorilla', label: '🦍 Gorilla (silverback)', rig: 'humanoid', pet: true,
-      humanoid: { sk: 1.25, headR: 150, limbR: 1.6, skin: 0x141210, body: 0x141210, shoe: 0x0a0a0a, emI: 0.10, hands: 'box', armL: 1.5, legL: 0.85, earSkip: true },
+      humanoid: { sk: 1.15, headR: 150, limbR: 1.6, skin: 0x141210, body: 0x141210, shoe: 0x0a0a0a, emI: 0.10, hands: 'box', armL: 1.5, legL: 0.85, earSkip: true },
       accessories: [
         { shape: 'box', size: [220, 300, 16], anchor: 'back', pos: [0, 0, 8], color: 0xb9b9bd }, // silver saddle
         { shape: 'box', size: [16, 40, 120], anchor: 'crown', pos: [0, 10, 0], color: 0x141210 }, // sagittal crest

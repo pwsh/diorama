@@ -4,7 +4,7 @@
 import type { AvatarPackDef } from '../avatars.js';
 
 const pack: AvatarPackDef = {
-  id: 'overwatch', version: 1, label: 'Overwatch',
+  id: 'overwatch', version: 2, label: 'Overwatch',
   path: ['Video Games', 'Overwatch'], builtin: true, franchise: true,
   avatars: [
     // Tracer / Lena Oxton — brown bomber jacket, orange boots, chronal-accelerator glow.
@@ -38,7 +38,7 @@ const pack: AvatarPackDef = {
       bubbles: ['🎮', '💗', '🐰', '💥'] },
     // Reinhardt Wilhelm — towering silver plate armor, red crest, rocket-hammer.
     { id: 'overwatch/crusader-knight', label: 'Crusader knight (silver plate armor, red crest)', rig: 'humanoid',
-      humanoid: { sk: 1.35, headR: 134, headShape: 'sphere', skin: 0xc7c9cc, body: 0xc7c9cc, legColor: 0xa8abb0, shoe: 0x6b6b6c,
+      humanoid: { sk: 1.2, headR: 134, headShape: 'sphere', skin: 0xc7c9cc, body: 0xc7c9cc, legColor: 0xa8abb0, shoe: 0x6b6b6c,
         eyes: 'visor', emI: 0.15, steel: true, hands: 'box', limbR: 1.35, armL: 1.1, legL: 1.0, footMul: [1.25, 1.15, 1.25] },
       accessories: [
         { shape: 'box', size: [16, 60, 150], anchor: 'crown', pos: [0, 20, 0], color: 0x8a1f1f },
@@ -95,7 +95,7 @@ const pack: AvatarPackDef = {
       bubbles: ['😇', '💛', '🩹', '🕊️'] },
     // Roadhog / Mako Rutledge — shirtless brute, pig-snout gas mask, hook & chain.
     { id: 'overwatch/junker-brute', label: 'Junker brute (gas mask, hook & chain)', rig: 'humanoid',
-      humanoid: { sk: 1.5, headR: 128, headShape: 'box', skin: 0xb0895f, body: 0xb0895f, legColor: 0x6b6b62, shoe: 0x3a2f24,
+      humanoid: { sk: 1.2, headR: 128, headShape: 'box', skin: 0xb0895f, body: 0xb0895f, legColor: 0x6b6b62, shoe: 0x3a2f24,
         eyes: 'slit', emI: 0, hands: 'box', limbR: 1.5, armL: 1.05, legL: 0.9, footMul: [1.2, 1.1, 1.2] },
       posture: { pitch: 0.08 },
       accessories: [
@@ -114,7 +114,7 @@ const pack: AvatarPackDef = {
       bubbles: ['🐷', '⛓️', '💀', '😤'] },
     // Winston — genius gorilla, round glasses, white lab-vest, Tesla Cannon.
     { id: 'overwatch/genius-primate', label: 'Genius primate (dark fur, lab vest, glasses)', rig: 'humanoid',
-      humanoid: { sk: 1.3, headR: 132, headShape: 'sphere', skin: 0x2b2b2e, body: 0x2b2b2e, legColor: 0x2b2b2e, shoe: 0x2b2b2e,
+      humanoid: { sk: 1.2, headR: 132, headShape: 'sphere', skin: 0x2b2b2e, body: 0x2b2b2e, legColor: 0x2b2b2e, shoe: 0x2b2b2e,
         eyes: 'dots', emI: 0, hands: 'sphere', limbR: 1.45, armL: 1.4, legL: 0.8, footMul: [1.3, 1.0, 1.3] },
       posture: { pitch: 0.15 },
       accessories: [

@@ -6,7 +6,7 @@
 import type { AvatarPackDef } from '../avatars.js';
 
 const pack: AvatarPackDef = {
-  id: 'he-man', version: 1, label: 'He-Man',
+  id: 'he-man', version: 2, label: 'He-Man',
   path: ['Cartoons', 'He-Man'], builtin: true, franchise: true,
   avatars: [
     // He-Man — bronzed barbarian, blond bob, crossed harness w/ red gem, back sword.
@@ -35,7 +35,7 @@ const pack: AvatarPackDef = {
         { shape: 'sphere', size: [166, 172, 166], anchor: 'crown', pos: [0, 24, 44], rot: [-0.4, 0, 0], color: 0x4a2f7a, sphereArc: [0, 6.283, 0, 1.5] },
         { shape: 'box', size: [180, 12, 16], anchor: 'chest', pos: [0, 130, 78], color: 0xe8e2d0 },
         { shape: 'box', size: [150, 12, 16], anchor: 'chest', pos: [0, 96, 78], color: 0xe8e2d0 },
-        { shape: 'cone', size: [190, 520, 0], anchor: 'back', pos: [0, -130, 40], rot: [0.16, 0, 0], color: 0x3a2265 },
+        { shape: 'cape', size: [280, 620, 420], anchor: 'back', pos: [0, -160, 30], rot: [0.16, 0, 0], color: 0x3a2265 }, // hooded cape
         { shape: 'box', size: [220, 200, 70], anchor: 'hip', pos: [0, -10, 0], color: 0x3a2265 },
         { shape: 'cylinder', size: [16, 16, 420], anchor: 'handR', pos: [0, 60, 0], color: 0x4a3826 },
         { shape: 'cone', size: [40, 70, 0], anchor: 'handR', pos: [0, 300, 0], color: 0xe8e2d0 },
@@ -76,7 +76,7 @@ const pack: AvatarPackDef = {
     // Battle Cat — green tiger MOUNT (huge sk 1.9), red saddle + headguard.
     // approx: canonical tiger stripes added as thin dark qback boxes (no coat-pattern field).
     { id: 'he-man/battle-cat', label: 'Battle Tiger (green & red saddle)', rig: 'quadruped', pet: true,
-      quadruped: { sk: 1.9, bodyLen: 900, bodyW: 260, bodyH: 300, legLen: 1.1, headR: 140, neckLen: 0,
+      quadruped: { sk: 1.15, bodyLen: 900, bodyW: 260, bodyH: 300, legLen: 1.1, headR: 140, neckLen: 0,
         ears: 'round', tail: 'up', tailLen: 1.2, snout: 0.7, coat: 0x4a7a3a, belly: 0x8ac06a,
         earColor: 0x2f5a28, snoutColor: 0xd8d4b0 },
       accessories: [
@@ -114,7 +114,7 @@ const pack: AvatarPackDef = {
         { shape: 'cone', size: [96, 280, 0], anchor: 'crown', pos: [0, 130, -30], rot: [-0.45, 0, 0], color: 0x16305e },
         { shape: 'sphere', size: [120, 60, 70], anchor: 'crown', pos: [0, 10, 40], color: 0xe8e4da, sphereArc: [0, 6.283, 0, 1.6] },
         { shape: 'box', size: [40, 40, 20], anchor: 'chest', pos: [0, 150, 78], color: 0xd4c92a },
-        { shape: 'cone', size: [170, 340, 0], anchor: 'back', pos: [0, -60, 40], rot: [0.15, 0, 0], color: 0x1c2e5c },
+        { shape: 'cape', size: [260, 460, 380], anchor: 'back', pos: [0, -110, 30], rot: [0.15, 0, 0], color: 0x1c2e5c }, // robe cape
         { shape: 'box', size: [180, 18, 120], anchor: 'hip', pos: [0, 30, 0], color: 0xc9a227 },
         { shape: 'cylinder', size: [10, 10, 260], anchor: 'handR', pos: [0, 40, 0], color: 0x2a2a2e },
         { shape: 'sphere', size: 26, anchor: 'handR', pos: [0, 175, 0], color: 0xffe066, emissive: 0xffe066, emissiveIntensity: 0.4 },

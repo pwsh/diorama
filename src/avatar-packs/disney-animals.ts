@@ -10,7 +10,7 @@
 import type { AvatarPackDef } from '../avatars.js';
 
 const pack: AvatarPackDef = {
-  id: 'disney-animals', version: 1, label: 'Disney Animals',
+  id: 'disney-animals', version: 2, label: 'Disney Animals',
   path: ['Cartoons', 'Disney Animals'], builtin: true, franchise: true,
   avatars: [
     // The flagship mascot mouse — black body, red shorts, giant round black ears.
@@ -131,7 +131,7 @@ const pack: AvatarPackDef = {
     // Flying elephant calf — soft grey, oversized ears bigger than the body, trunk, blue eyes.
     // approx: 'round' ears enum is a placeholder; the huge ear read is carried by qhead accessories.
     { id: 'disney-animals/flying-elephant-calf', label: 'Elephant Calf (oversized ears)', rig: 'quadruped', pet: true,
-      quadruped: { sk: 1.6, bodyLen: 704, bodyW: 260, bodyH: 288, legLen: 0.9, headR: 320, neckLen: 0,
+      quadruped: { sk: 1.35, bodyLen: 704, bodyW: 260, bodyH: 288, legLen: 0.9, headR: 320, neckLen: 0,
         ears: 'round', tail: 'tuft', tailLen: 0.55, snout: 0, coat: 0x9ea0a0, belly: 0xb8bab8,
         earColor: 0x9ea0a0, snoutColor: 0x9ea0a0 },
       accessories: [

@@ -12,7 +12,7 @@
 import type { AvatarPackDef } from '../avatars.js';
 
 const pack: AvatarPackDef = {
-  id: 'avatar-pandora', version: 1, label: 'Avatar (Pandora)',
+  id: 'avatar-pandora', version: 2, label: 'Avatar (Pandora)',
   path: ['Sci-Fi', 'Avatar'], builtin: true, franchise: true,
   // Shared Na'vi body spec — spread under every member, then the 3 RDA humans
   // override it back to human values. (Accessories are NOT in base — see header.)
@@ -37,8 +37,7 @@ const pack: AvatarPackDef = {
       accessories: [
         { shape: 'cone', size: [10, 36], anchor: 'head', pos: [-84, 20, 14], rot: [0, 0, -0.5], color: 0x2a8fa3 }, // pointed ear L
         { shape: 'cone', size: [10, 36], anchor: 'head', pos: [84, 20, 14], rot: [0, 0, 0.5], color: 0x2a8fa3 }, // pointed ear R
-        { shape: 'cylinder', size: [15, 12, 260], anchor: 'tailbone', pos: [0, -110, 60], rot: [0.5, 0, 0], color: 0x2a8fa3 }, // tail seg 1
-        { shape: 'cylinder', size: [11, 8, 220], anchor: 'tailbone', pos: [0, -300, 150], rot: [0.85, 0, 0], color: 0x2a8fa3 }, // tail seg 2
+        { shape: 'cylinder', size: [16, 5, 430], anchor: 'tailbone', pos: [0, -195, 180], rot: [-0.29, 0, 0], color: 0x2a8fa3 }, // single tapered tail (down-back from tailbone)
         { shape: 'cylinder', size: [11, 7, 320], anchor: 'crown', pos: [0, -60, 60], rot: [0.5, 0, 0], color: 0x14100c }, // queue (neural braid)
         { shape: 'box', size: [30, 40, 4], anchor: 'chest', pos: [0, 30, -10], color: 0x9a9a92 }, // dog-tag pendant (his one tell)
         { shape: 'cylinder', size: [10, 10, 900], anchor: 'handR', pos: [0, -20, 0], color: 0x5a3a20 }, // bow (straight approx)
@@ -57,8 +56,7 @@ const pack: AvatarPackDef = {
       accessories: [
         { shape: 'cone', size: [9, 32], anchor: 'head', pos: [-82, 20, 14], rot: [0, 0, -0.5], color: 0x2a8fa3 }, // pointed ear L
         { shape: 'cone', size: [9, 32], anchor: 'head', pos: [82, 20, 14], rot: [0, 0, 0.5], color: 0x2a8fa3 }, // pointed ear R
-        { shape: 'cylinder', size: [13, 11, 250], anchor: 'tailbone', pos: [0, -110, 58], rot: [0.5, 0, 0], color: 0x2a8fa3 }, // tail seg 1
-        { shape: 'cylinder', size: [11, 8, 210], anchor: 'tailbone', pos: [0, -290, 145], rot: [0.85, 0, 0], color: 0x2a8fa3 }, // tail seg 2
+        { shape: 'cylinder', size: [15, 5, 420], anchor: 'tailbone', pos: [0, -190, 175], rot: [-0.29, 0, 0], color: 0x2a8fa3 }, // single tapered tail (down-back from tailbone)
         { shape: 'cylinder', size: [10, 6, 300], anchor: 'crown', pos: [0, -55, 58], rot: [0.5, 0, 0], color: 0x14100c }, // queue
         { shape: 'cone', size: [10, 60], anchor: 'crown', pos: [0, -200, 155], rot: [0.9, 0, 0], color: 0xb2542a }, // feather accent at queue tip
         { shape: 'box', size: [140, 10, 8], anchor: 'chest', pos: [0, 120, -12], color: 0xe8dcc4 }, // beaded choker band
@@ -83,8 +81,7 @@ const pack: AvatarPackDef = {
       accessories: [
         { shape: 'cone', size: [10, 34], anchor: 'head', pos: [-83, 20, 14], rot: [0, 0, -0.5], color: 0x2a8fa3 }, // pointed ear L
         { shape: 'cone', size: [10, 34], anchor: 'head', pos: [83, 20, 14], rot: [0, 0, 0.5], color: 0x2a8fa3 }, // pointed ear R
-        { shape: 'cylinder', size: [14, 11, 250], anchor: 'tailbone', pos: [0, -110, 58], rot: [0.5, 0, 0], color: 0x2a8fa3 }, // tail seg 1
-        { shape: 'cylinder', size: [11, 8, 210], anchor: 'tailbone', pos: [0, -290, 145], rot: [0.85, 0, 0], color: 0x2a8fa3 }, // tail seg 2
+        { shape: 'cylinder', size: [15, 5, 420], anchor: 'tailbone', pos: [0, -190, 175], rot: [-0.29, 0, 0], color: 0x2a8fa3 }, // single tapered tail (down-back from tailbone)
         { shape: 'cylinder', size: [10, 6, 280], anchor: 'crown', pos: [0, -55, 58], rot: [0.5, 0, 0], color: 0x14100c }, // queue (plain)
         { shape: 'box', size: [140, 30, 140], anchor: 'crown', pos: [0, 24, -6], rot: [0.45, 0, 0], color: 0xe8dcc4 }, // headdress band (raised+tilted back)
         { shape: 'cone', size: [20, 160], anchor: 'crown', pos: [0, 120, 10], rot: [0.25, 0, 0], color: 0xb2542a }, // upright feather plume
@@ -98,15 +95,14 @@ const pack: AvatarPackDef = {
     { id: 'avatar-pandora/navi-warrior-scout',
       label: 'Na\'vi warrior-scout (quiver strap, spear, warpaint)',
       rig: 'humanoid',
-      humanoid: { sk: 1.25, headR: 128, headShape: 'oval', limbR: 0.95,
+      humanoid: { sk: 1.2, headR: 128, headShape: 'oval', limbR: 0.95,
         skin: 0x2a8fa3, body: 0x2a8fa3, legColor: 0x2a8fa3, shoe: 0x2a8fa3,
         hands: 'sphere', eyes: 'almond', emI: 0.03, earSkip: true,
         armL: 1.1, legL: 1.1, footMul: [0.92, 0.9, 1.15] },
       accessories: [
         { shape: 'cone', size: [11, 38], anchor: 'head', pos: [-86, 20, 14], rot: [0, 0, -0.5], color: 0x2a8fa3 }, // pointed ear L
         { shape: 'cone', size: [11, 38], anchor: 'head', pos: [86, 20, 14], rot: [0, 0, 0.5], color: 0x2a8fa3 }, // pointed ear R
-        { shape: 'cylinder', size: [16, 12, 270], anchor: 'tailbone', pos: [0, -115, 62], rot: [0.5, 0, 0], color: 0x2a8fa3 }, // tail seg 1
-        { shape: 'cylinder', size: [12, 9, 230], anchor: 'tailbone', pos: [0, -310, 155], rot: [0.85, 0, 0], color: 0x2a8fa3 }, // tail seg 2
+        { shape: 'cylinder', size: [17, 6, 450], anchor: 'tailbone', pos: [0, -205, 185], rot: [-0.29, 0, 0], color: 0x2a8fa3 }, // single tapered tail (down-back from tailbone)
         { shape: 'cylinder', size: [11, 7, 300], anchor: 'crown', pos: [0, -58, 60], rot: [0.5, 0, 0], color: 0x14100c }, // queue (plain warrior braid)
         { shape: 'box', size: [14, 300, 8], anchor: 'chest', pos: [0, 20, -10], rot: [0, 0, 0.5], color: 0x3a281c }, // diagonal quiver strap
         { shape: 'cylinder', size: [5, 5, 120], anchor: 'shoulderR', pos: [10, 60, 20], color: 0x5a3a20 }, // arrow-shaft nub over shoulder

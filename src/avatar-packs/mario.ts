@@ -14,7 +14,7 @@ const bib = (col: number): AvatarPrimitive[] => [
 ];
 
 const pack: AvatarPackDef = {
-  id: 'mario', version: 2, label: 'Mario',
+  id: 'mario', version: 3, label: 'Mario',
   path: ['Video Games', 'Mario'], builtin: true, franchise: true,
   avatars: [
     // Mario
@@ -77,7 +77,7 @@ const pack: AvatarPackDef = {
       personality: { bobMul: 1.2, cadenceMul: 1.15, ampMul: 1.05 }, bubbles: ['🥚', '🍎', '👅', '😋'] },
     // Bowser — spiked shell
     { id: 'mario/koopa-king', label: 'Koopa King (spiked shell, horns)', rig: 'humanoid',
-      humanoid: { sk: 1.35, headR: 150, limbR: 1.3, skin: 0xc7b02e, body: 0xf0e2b0, legColor: 0xc7b02e, shoe: 0x3a2e1c, eyes: 'halfred', emI: 0.1, hands: 'box', armL: 1.2, legL: 0.95, footMul: [1.3, 1.0, 1.3] }, // approx: tail omitted, spikes/wristbands reduced
+      humanoid: { sk: 1.2, headR: 150, limbR: 1.3, skin: 0xc7b02e, body: 0xf0e2b0, legColor: 0xc7b02e, shoe: 0x3a2e1c, eyes: 'halfred', emI: 0.1, hands: 'box', armL: 1.2, legL: 0.95, footMul: [1.3, 1.0, 1.3] }, // approx: tail omitted, spikes/wristbands reduced
       accessories: [
         { shape: 'sphere', size: [140, 120, 140], anchor: 'back', pos: [0, 10, 20], color: 0x2f7a2e },
         { shape: 'cone', size: [30, 60, 30], anchor: 'back', pos: [0, 120, 30], color: 0xf5f2ea },

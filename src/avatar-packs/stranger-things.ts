@@ -8,7 +8,7 @@
 import type { AvatarPackDef } from '../avatars.js';
 
 const pack: AvatarPackDef = {
-  id: 'stranger-things', version: 1, label: 'Stranger Things',
+  id: 'stranger-things', version: 2, label: 'Stranger Things',
   path: ['Sci-Fi', 'Stranger Things'], builtin: true, franchise: true,
   // Shared human base spec — spread under every member, then overridden.
   base: {
@@ -146,7 +146,7 @@ const pack: AvatarPackDef = {
     // The Demogorgon — petal-flap head, elongated limbs, clawed. pet:true.
     { id: 'stranger-things/flower-faced-hunter', label: 'Faceless hunter (petal-jawed head, elongated limbs)',
       rig: 'humanoid', pet: true,
-      humanoid: { sk: 1.3, headR: 110, skin: 0xc9baa0, body: 0xc9baa0, legColor: 0xb8ab8e,
+      humanoid: { sk: 1.2, headR: 110, skin: 0xc9baa0, body: 0xc9baa0, legColor: 0xb8ab8e,
         shoe: 0x1a1a1a, emI: 0.04, eyes: 'none', noFace: true, limbR: 0.68,
         armL: 1.3, legL: 1.35, footMul: [0.8, 1.3, 1.1] },
       posture: { pitch: 0.35 },

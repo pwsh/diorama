@@ -6,7 +6,7 @@ import type { AvatarPackDef } from '../avatars.js';
 const WHITE = 0xf2f0ea, GOLD = 0xc9a227, CHROME = 0xb8b8b8;
 
 const pack: AvatarPackDef = {
-  id: 'power-rangers-mighty-morphin', version: 1, label: 'Power Rangers: Mighty Morphin',
+  id: 'power-rangers-mighty-morphin', version: 2, label: 'Power Rangers: Mighty Morphin',
   path: ['Sci-Fi', 'Power Rangers', 'Mighty Morphin'], builtin: true, franchise: true,
   // Ideal shared base: one suited body — the six Ranger suits are near-identical
   // geometry, distinguished almost entirely by helmet/suit color per member.
@@ -112,7 +112,7 @@ const pack: AvatarPackDef = {
       bubbles: ['😨', '📡', '🔧', '🤖'] },
     // Rita Repulsa — space witch, black/gold gown + horned headdress + wand.
     { id: 'power-rangers-mighty-morphin/rita-repulsa', label: 'Space witch (black/gold gown, horns)', rig: 'humanoid',
-      humanoid: { skin: 0xb8ae9c, body: 0x1c1a1e, legColor: 0x1c1a1e, shoe: 0x1c1a17, eyes: 'shades', hands: 'sphere', limbR: 0.9 },
+      humanoid: { skin: 0xb8ae9c, body: 0x1c1a1e, legColor: 0x1c1a1e, shoe: 0x1c1a17, eyes: 'shades', hands: 'sphere', limbR: 0.9, gown: true },
       accessories: [
         { shape: 'cone', size: [150, 700], anchor: 'hip', pos: [0, -80, 0], color: 0x1c1a1e },
         { shape: 'cone', size: [12, 160], anchor: 'crown', pos: [-30, 10, -10], rot: [-0.3, 0, 0.4], color: 0x9a9a92 },

@@ -6,7 +6,7 @@ import type { AvatarPackDef } from '../avatars.js';
 const GOLD = 0xc9a227, GLOW = 0xbfe8ff;
 
 const pack: AvatarPackDef = {
-  id: 'marvel-avengers', version: 1, label: 'Marvel: The Avengers',
+  id: 'marvel-avengers', version: 2, label: 'Marvel: The Avengers',
   path: ['Sci-Fi', 'Marvel', 'The Avengers'], builtin: true, franchise: true,
   base: {
     rig: 'humanoid',
@@ -35,9 +35,9 @@ const pack: AvatarPackDef = {
         { shape: 'cone', size: [17, 16], anchor: 'crown', pos: [38, 10, 12], rot: [-0.4, 0, 0], color: 0xf0ece0 },
         { shape: 'box', size: [150, 30, 15], anchor: 'hip', pos: [0, 0, -6], color: 0x8a1f1f },
         // approx: no star/shield primitive — three stacked concentric discs read as a bullseye
-        { shape: 'cylinder', size: [170, 170, 20], anchor: 'back', pos: [0, -20, 14], color: 0x8a1f1f },
-        { shape: 'cylinder', size: [130, 130, 24], anchor: 'back', pos: [0, -20, 18], color: 0xf0ece0 },
-        { shape: 'cylinder', size: [70, 70, 28], anchor: 'back', pos: [0, -20, 22], color: 0x2a4d8f }],
+        { shape: 'cylinder', size: [170, 170, 20], anchor: 'back', pos: [0, -20, 20], rot: [1.5708, 0, 0], color: 0x8a1f1f }, // shield lies FLAT on the back
+        { shape: 'cylinder', size: [130, 130, 24], anchor: 'back', pos: [0, -20, 24], rot: [1.5708, 0, 0], color: 0xf0ece0 },
+        { shape: 'cylinder', size: [70, 70, 28], anchor: 'back', pos: [0, -20, 28], rot: [1.5708, 0, 0], color: 0x2a4d8f }],
       personality: { bobMul: 1.0, swayMul: 0.7, cadenceMul: 1.05, ampMul: 1.0 },
       bubbles: ['🛡️', '💪', '⭐', '🫡'] },
     // Thor Odinson — armor, blonde hair, red cape, Mjolnir.
@@ -50,14 +50,14 @@ const pack: AvatarPackDef = {
         { shape: 'box', size: [38, 190, 28], anchor: 'head', pos: [100, -40, 10], color: 0xd8b878 },
         { shape: 'cylinder', size: [17, 17, 10], anchor: 'chest', pos: [-30, 10, -12], color: 0x8a8a86 },
         { shape: 'cylinder', size: [17, 17, 10], anchor: 'chest', pos: [30, 10, -12], color: 0x8a8a86 },
-        { shape: 'cone', size: [190, 540], anchor: 'back', pos: [0, -120, 12], color: 0x8b1a1a },
+        { shape: 'cape', size: [300, 700, 480], anchor: 'back', pos: [0, -220, 20], rot: [0.12, 0, 0], color: 0x8b1a1a }, // red cape
         { shape: 'cylinder', size: [8, 8, 95], anchor: 'handR', pos: [0, 40, 0], color: 0x3a2a1e },
         { shape: 'box', size: [70, 50, 60], anchor: 'handR', pos: [0, 100, 0], color: 0x6e6b66 }],
       personality: { bobMul: 1.1, swayMul: 0.6, cadenceMul: 0.9, ampMul: 1.1 },
       bubbles: ['⚡', '🔨', '😄', '🍺'] },
     // Hulk / Bruce Banner — green giant, torn purple shorts.
     { id: 'marvel-avengers/gamma-giant', label: 'Gamma giant (green, purple shorts)', rig: 'humanoid',
-      humanoid: { sk: 1.42, headR: 132, skin: 0x5a9c3a, body: 0x5a9c3a, legColor: 0x5a9c3a, shoe: 0x5a9c3a,
+      humanoid: { sk: 1.2, headR: 132, skin: 0x5a9c3a, body: 0x5a9c3a, legColor: 0x5a9c3a, shoe: 0x5a9c3a,
         eyes: 'almond', limbR: 1.55, armL: 1.3, legL: 0.9, footMul: [1.3, 1.1, 1.3] },
       posture: { pitch: 0.12 },
       accessories: [
@@ -121,7 +121,7 @@ const pack: AvatarPackDef = {
         { shape: 'box', size: [30, 20, 10], anchor: 'head', pos: [100, 10, -10], color: 0x9a9086 },
         { shape: 'box', size: [90, 10, 8], anchor: 'neck', pos: [0, -4, -8], color: GOLD },
         { shape: 'cylinder', size: [16, 16, 14], anchor: 'chest', pos: [0, -10, -12], color: GOLD, emissiveIntensity: 0.4 },
-        { shape: 'cone', size: [180, 480], anchor: 'back', pos: [0, -100, 12], color: 0x9c2b2b }],
+        { shape: 'cape', size: [300, 720, 460], anchor: 'back', pos: [0, -230, 20], rot: [0.12, 0, 0], color: 0x9c2b2b }], // crimson cloak
       personality: { bobMul: 0.75, swayMul: 0.5, cadenceMul: 0.85, ampMul: 0.8 },
       bubbles: ['✨', '🔮', '📖', '🌀'] },
     // Loki — green/gold leathers, dark cape, horned helm.
@@ -135,7 +135,7 @@ const pack: AvatarPackDef = {
         { shape: 'box', size: [66, 50, 46], anchor: 'shoulderL', color: 0x1c1c1c },
         { shape: 'box', size: [66, 50, 46], anchor: 'shoulderR', color: 0x1c1c1c },
         { shape: 'box', size: [140, 10, 8], anchor: 'chest', pos: [0, 40, -10], color: GOLD },
-        { shape: 'cone', size: [170, 500], anchor: 'back', pos: [0, -110, 12], color: 0x14401f }],
+        { shape: 'cape', size: [290, 700, 450], anchor: 'back', pos: [0, -220, 20], rot: [0.12, 0, 0], color: 0x14401f }], // dark cape
       personality: { bobMul: 0.9, swayMul: 0.75, cadenceMul: 0.95, ampMul: 0.85 },
       bubbles: ['😏', '🐍', '👑', '✨'] },
   ],

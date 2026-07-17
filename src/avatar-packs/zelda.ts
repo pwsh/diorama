@@ -8,7 +8,7 @@ const GERUDO = 0x7a4a2a, VILLAIN = 0x181818, LEAF = 0x4c8c3c;
 const WHITE = 0xf5f2ea, ROCK = 0xa0623a, ZORA = 0x2f7da0, RED = 0xc23030;
 
 const pack: AvatarPackDef = {
-  id: 'zelda', version: 1, label: 'The Legend of Zelda',
+  id: 'zelda', version: 2, label: 'The Legend of Zelda',
   path: ['Video Games', 'The Legend of Zelda'], builtin: true, franchise: true,
   avatars: [
     // Link
@@ -43,7 +43,7 @@ const pack: AvatarPackDef = {
       personality: { bobMul: 0.6, swayMul: 0.5, cadenceMul: 0.85, ampMul: 0.7 }, bubbles: ['✨', '👑', '📜', '🙏'] },
     // Ganondorf
     { id: 'zelda/demon-king', label: 'Demon King (dark bronze, red hair, tusks)', rig: 'humanoid',
-      humanoid: { sk: 1.3, headR: 148, limbR: 1.25, skin: GERUDO, body: VILLAIN, legColor: VILLAIN, shoe: VILLAIN, eyes: 'halfred', emI: 0.15, steel: true, hands: 'box', armL: 1.15, legL: 1.05 },
+      humanoid: { sk: 1.2, headR: 148, limbR: 1.25, skin: GERUDO, body: VILLAIN, legColor: VILLAIN, shoe: VILLAIN, eyes: 'halfred', emI: 0.15, steel: true, hands: 'box', armL: 1.15, legL: 1.05 },
       accessories: [
         { shape: 'cone', size: [12, 65, 12], anchor: 'head', pos: [-105, 15, 5], rot: [0, 0, -0.6], color: GERUDO },
         { shape: 'cone', size: [12, 65, 12], anchor: 'head', pos: [105, 15, 5], rot: [0, 0, 0.6], color: GERUDO },
@@ -53,7 +53,7 @@ const pack: AvatarPackDef = {
         { shape: 'box', size: [85, 65, 60], anchor: 'shoulderL', color: VILLAIN },
         { shape: 'box', size: [85, 65, 60], anchor: 'shoulderR', color: VILLAIN },
         { shape: 'sphere', size: [25, 25, 8], anchor: 'chest', pos: [0, 0, 0], color: GOLD },
-        { shape: 'cone', size: [210, 560, 210], anchor: 'back', pos: [0, -120, 30], color: 0x5c1010 },
+        { shape: 'cape', size: [360, 644, 530], anchor: 'back', pos: [0, -180, 30], rot: [0.12, 0, 0], color: 0x5c1010 },
       ],
       personality: { bobMul: 0.5, swayMul: 0.3, cadenceMul: 0.6, ampMul: 0.9 }, bubbles: ['😈', '🔥', '🐗', '⚡'] },
     // Korok — full leaf mask, no rig face (noFace + eyes:none)
@@ -81,7 +81,7 @@ const pack: AvatarPackDef = {
       personality: { bobMul: 1.4, swayMul: 1.3, cadenceMul: 1.3, ampMul: 0.6 }, bubbles: ['🐔', '😠', '❗'] },
     // Goron
     { id: 'zelda/goron-brawler', label: 'Goron (rock-brown, boulder body)', rig: 'humanoid',
-      humanoid: { sk: 1.25, headR: 145, limbR: 1.35, skin: ROCK, body: ROCK, legColor: 0x8f5530, shoe: 0x6e4020, eyes: 'dots', armL: 1.15, legL: 0.85, footMul: [1.2, 1.0, 1.1] },
+      humanoid: { sk: 1.2, headR: 145, limbR: 1.35, skin: ROCK, body: ROCK, legColor: 0x8f5530, shoe: 0x6e4020, eyes: 'dots', armL: 1.15, legL: 0.85, footMul: [1.2, 1.0, 1.1] },
       accessories: [
         { shape: 'sphere', size: 55, anchor: 'back', pos: [0, 60, 10], color: GERUDO },
         { shape: 'sphere', size: 48, anchor: 'back', pos: [-55, 20, 12], color: GERUDO },

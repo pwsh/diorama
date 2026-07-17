@@ -201,8 +201,10 @@ function runCapture(
 type Subject = { type: string; id: string; meta: any };
 
 // Turntable-spin static piece (furniture / decor / bathroom / outdoor).
+// Half angular velocity per QA feedback: 45 frames @ 9 fps ≈ 5 s for a full 360°
+// (was 30 @ 12 ≈ 2.5 s). Frame count only 1.5× so GIF bytes stay bounded.
 function capFurniture(sub: Subject, o: CapOpts): string {
-  const gifPx = o.size ?? 400, N = o.frames ?? 30, fps = o.fps ?? 12;
+  const gifPx = o.size ?? 400, N = o.frames ?? 45, fps = o.fps ?? 9;
   const { w, h, ht } = sub.meta;
   const f = baseFloor(6000, 6000);
   f.furniture = [{ id: 'it', x: f.w / 2, y: f.d / 2, w, h, kind: sub.id, rotation: 0 }];
@@ -271,7 +273,10 @@ function capLight(sub: Subject, o: CapOpts): string {
   const isFire = kind === 'fireplace';
   R.updateFloor(f, isFire ? NIGHT : DUSK, undefined, undefined, nullState);
   const target: [number, number, number] = [0, 1200, 0];
-  orbitCam(target, 6800, 22, Math.PI * 0.86);
+  // Camera on the ROOM side (+z / -x): the back wall (scene z ≈ -1900) and side
+  // wall (scene x ≈ +2100) sit BEHIND the fixture, not between it and the camera
+  // (was Math.PI * 0.86, which put the camera inside the wall corner). +π = 180°.
+  orbitCam(target, 6800, 22, Math.PI * 1.86);
   const lightState = (i: number): Record<string, unknown> => {
     const t = i / N;
     if (t < 0.12 || t > 0.94) return { 'light.demo': { state: 'off', attributes: {} } };
@@ -300,7 +305,10 @@ function capSwitch(_sub: Subject, o: CapOpts): string {
   f.switches = [{ id: 'sw', x: 2500, y: 600, entity_id: 'switch.demo', rotation: 0, label: '' }];
   f.lights = [{ id: 'l', x: 2500, y: 2600, entity_id: 'switch.demo', iconKind: 'bulb', label: '' }];
   R.updateFloor(f, DUSK, undefined, undefined, nullState);
-  orbitCam([0, 1400, 0], 6200, 20, Math.PI * 0.9);
+  // Camera on the ROOM side (+z) so the switch plate FACES it (plate front = +Y
+  // world = scene +z) with the wall (scene z ≈ -1900) BEHIND (was Math.PI * 0.9,
+  // behind the wall). +π = 180°.
+  orbitCam([0, 1400, 0], 6200, 20, Math.PI * 1.9);
   return runCapture(N, gifPx, fps, 60, (i) => {
     const on = Math.floor(i / (N / 4)) % 2 === 0;
     const st = { 'switch.demo': { state: on ? 'on' : 'off', attributes: { brightness: 230 } } };
@@ -315,7 +323,9 @@ function capAlarm(_sub: Subject, o: CapOpts): string {
   f.walls = [{ id: 'wb', points: [{ x: 400, y: 600 }, { x: 4600, y: 600 }] }];
   f.alarmPanels = [{ id: 'ap', x: 2500, y: 600, entity_id: 'alarm_control_panel.demo', rotation: 0, label: '' }];
   R.updateFloor(f, DUSK, undefined, undefined, nullState);
-  orbitCam([0, 1300, 0], 4200, 12, Math.PI * 0.92);
+  // Camera on the ROOM side (+z) so the keypad FACES it (front = scene +z) with
+  // the wall (scene z ≈ -1900) BEHIND (was Math.PI * 0.92). +π = 180°.
+  orbitCam([0, 1300, 0], 4200, 12, Math.PI * 1.92);
   const seq = ['disarmed', 'arming', 'armed_away', 'triggered'];
   return runCapture(N, gifPx, fps, 60, (i) => {
     const s = seq[Math.min(seq.length - 1, Math.floor(i / (N / seq.length)))];
@@ -330,7 +340,9 @@ function capDoorLock(_sub: Subject, o: CapOpts): string {
   f.walls = [{ id: 'wb', points: [{ x: 400, y: 2000 }, { x: 4600, y: 2000 }] }];
   f.doors = [{ id: 'd', x: 2100, y: 2000, w: 900, rotation: 0, entity_id: null, lockEntity: 'lock.demo' }];
   R.updateFloor(f, DAY, undefined, undefined, nullState);
-  orbitCam([0, 1000, 0], 4600, 16, Math.PI * 0.78);
+  // Camera on the ROOM side so the near door face (with its deadbolt/lock) faces
+  // the camera and isn't occluded by the wall/panel (was Math.PI * 0.78). +π = 180°.
+  orbitCam([0, 1000, 0], 4600, 16, Math.PI * 1.78);
   return runCapture(N, gifPx, fps, 60, (i) => {
     const locked = Math.floor(i / (N / 3)) !== 1;
     const st = { 'lock.demo': { state: locked ? 'locked' : 'unlocked', attributes: {} } };
@@ -341,43 +353,48 @@ function capDoorLock(_sub: Subject, o: CapOpts): string {
 // mmWave sensor: body + coverage wedge, a target walking through coverage.
 function capMmwave(_sub: Subject, o: CapOpts): string {
   const gifPx = o.size ?? 400, N = o.frames ?? 30, fps = o.fps ?? 12;
-  const f = baseFloor(8000, 6000);
-  f.sensors = [{ id: 's', x: 4000, y: 400, heading: 0, fov: 120, range: 5200, label: 'K', deviceSlug: null, color: '#4fc3f7' }];
+  // Smaller floor + tighter scenario → iso frames the sensor closer (zoomed in).
+  const f = baseFloor(5600, 4200);
+  f.sensors = [{ id: 's', x: 2800, y: 300, heading: 0, fov: 120, range: 3400, label: 'K', deviceSlug: null, color: '#4fc3f7' }];
   R.updateFloor(f, DAY, undefined, undefined, nullState);
   R.updateSensors(f.sensors, () => ({ height: 2000, tilt: 18 }), true);
   R.applyViewPreset('iso');
   const tick = (i: number, n: number) => {
-    const x = 2600 + 2800 * (i / n);
-    R.updateTargets([{ key: 't', x, y: 3200, color: 0x4fc3f7 }]);
+    const x = 1400 + 2800 * (i / n);
+    R.updateTargets([{ key: 't', x, y: 2200, color: 0x4fc3f7 }]);
   };
-  return runCapture(N, gifPx, fps, 33, tick, 20, () => R.updateTargets([{ key: 't', x: 2600, y: 3000, color: 0x4fc3f7 }]));
+  return runCapture(N, gifPx, fps, 33, tick, 20, () => R.updateTargets([{ key: 't', x: 1400, y: 2000, color: 0x4fc3f7 }]));
 }
 
 // Motion sensor: cone + on/off pulse + an AI-projected avatar wandering.
 function capMotion(_sub: Subject, o: CapOpts): string {
   const gifPx = o.size ?? 400, N = o.frames ?? 30, fps = o.fps ?? 12;
-  const f = baseFloor(7000, 6000);
-  f.motionSensors = [{ id: 'm', x: 3500, y: 400, heading: 0, fov: 100, range: 4200, label: '', entity_id: 'binary_sensor.motion', color: '#ba68c8', intensity: 1.3 }];
+  // Smaller floor → iso frames the sensor closer (zoomed in).
+  const f = baseFloor(5000, 4200);
+  f.motionSensors = [{ id: 'm', x: 2500, y: 300, heading: 0, fov: 100, range: 3000, label: '', entity_id: 'binary_sensor.motion', color: '#ba68c8', intensity: 1.3 }];
   R.updateFloor(f, DAY, undefined, undefined, nullState);
   R.applyViewPreset('iso');
   const tick = (i: number, n: number) => {
     const on = Math.floor(i / (n / 4)) % 2 === 0;
     R.updateMotionSensors(f.motionSensors, stateOf({ 'binary_sensor.motion': { state: on ? 'on' : 'off', attributes: {} } }), false);
-    const x = 3000 + 900 * Math.sin(i / n * Math.PI * 2);
-    R.updateTargets([{ key: 't', x, y: 3000 + 400 * Math.cos(i / n * Math.PI * 2), color: 0xba68c8 }]);
+    const x = 2500 + 700 * Math.sin(i / n * Math.PI * 2);
+    R.updateTargets([{ key: 't', x, y: 2100 + 400 * Math.cos(i / n * Math.PI * 2), color: 0xba68c8 }]);
   };
-  return runCapture(N, gifPx, fps, 33, tick, 20, () => R.updateTargets([{ key: 't', x: 3000, y: 3000, color: 0xba68c8 }]));
+  return runCapture(N, gifPx, fps, 33, tick, 20, () => R.updateTargets([{ key: 't', x: 2500, y: 2100, color: 0xba68c8 }]));
 }
 
 // Env sensor: chip value + color band cycle (ok → warn → danger where defined).
 function capEnv(sub: Subject, o: CapOpts): string {
-  const gifPx = o.size ?? 400, N = o.frames ?? 28, fps = o.fps ?? 10;
+  // QA feedback: slower text + zoomed in. Value ramp at half rate (40 frames @
+  // 8 fps ≈ 5 s, was 28 @ 10 ≈ 2.8 s) so the readout is legible; tighter orbit
+  // (radius 4200 → 3200) enlarges the chip text.
+  const gifPx = o.size ?? 400, N = o.frames ?? 40, fps = o.fps ?? 8;
   const kind = sub.id as keyof typeof ENV_KINDS;
   const def = ENV_KINDS[kind];
   const f = baseFloor(5000, 5000);
   f.envSensors = [{ id: 'e', x: f.w / 2, y: f.d / 2, entity_id: 'sensor.env', label: '', scale: 2.0, kind }];
   R.updateFloor(f, DUSK, undefined, undefined, nullState);
-  orbitCam([0, 1500, 0], 4200, 14, Math.PI * 0.9);
+  orbitCam([0, 1500, 0], 3200, 14, Math.PI * 0.9);
   // Value ramp: cross warn/danger when defined, else a plain sweep.
   const lo = 0, hi = def.danger != null ? def.danger * 1.25 : (def.warn != null ? def.warn * 1.5 : 100);
   const unit = kind === 'temperature' ? '°C' : kind === 'co2' ? 'ppm' : '';
@@ -392,10 +409,12 @@ function capSafety(sub: Subject, o: CapOpts): string {
   const gifPx = o.size ?? 400, N = o.frames ?? 34, fps = o.fps ?? 12;
   const kind = sub.id;
   const isLeak = kind === 'leak';
-  const f = baseFloor(5000, 5000);
+  // Smaller floor → iso frames the ceiling detector closer; tighter leak orbit
+  // (3600 → 3000) enlarges the puddle (zoomed in).
+  const f = baseFloor(3800, 3800);
   f.safetySensors = [{ id: 'sf', x: f.w / 2, y: f.d / 2, kind, entity_id: 'binary_sensor.safety', label: '' }];
   R.updateFloor(f, DAY, undefined, undefined, nullState);
-  if (isLeak) orbitCam([0, 300, 0], 3600, 22, Math.PI * 0.85);
+  if (isLeak) orbitCam([0, 300, 0], 3000, 22, Math.PI * 0.85);
   else R.applyViewPreset('iso');
   return runCapture(N, gifPx, fps, 40, (i) => {
     const alarm = i > N * 0.18;
@@ -406,19 +425,21 @@ function capSafety(sub: Subject, o: CapOpts): string {
 // BLE proxy antenna + an identified person rig moving nearby.
 function capBleProxy(_sub: Subject, o: CapOpts): string {
   const gifPx = o.size ?? 400, N = o.frames ?? 30, fps = o.fps ?? 12;
-  const f = baseFloor(7000, 6000);
+  // Smaller floor → iso frames the proxy + person closer (zoomed in).
+  const f = baseFloor(5000, 4200);
   R.updateFloor(f, DAY, undefined, undefined, nullState);
-  R.updateBleProxies([{ id: 'b', name: 'Proxy', x: 1200, y: 1200, height: 2400 }]);
+  R.updateBleProxies([{ id: 'b', name: 'Proxy', x: 900, y: 900, height: 2400 }]);
   R.applyViewPreset('iso');
-  const tgt = (x: number) => ([{ key: 'p', x, y: 3200, color: 0x26c6da, ble: true, person: { name: 'Alex', color: '#26c6da', avatarKind: 'adult', identified: true } }]);
-  return runCapture(N, gifPx, fps, 33, (i, n) => R.updateTargets(tgt(2400 + 2200 * (i / n))), 20, () => R.updateTargets(tgt(3000)));
+  const tgt = (x: number) => ([{ key: 'p', x, y: 2100, color: 0x26c6da, ble: true, person: { name: 'Alex', color: '#26c6da', avatarKind: 'adult', identified: true } }]);
+  return runCapture(N, gifPx, fps, 33, (i, n) => R.updateTargets(tgt(1400 + 2200 * (i / n))), 20, () => R.updateTargets(tgt(2500)));
 }
 
 // Camera fixture FOV wedge + recording tint.
 function capCamera(_sub: Subject, o: CapOpts): string {
   const gifPx = o.size ?? 400, N = o.frames ?? 26, fps = o.fps ?? 10;
-  const f = baseFloor(7000, 6000);
-  f.cameras = [{ id: 'c', x: 800, y: 800, rotation: 45, fov: 90, range: 5200, height: 2200, entity_id: 'camera.demo' }];
+  // Smaller floor → iso frames the camera fixture + FOV wedge closer (zoomed in).
+  const f = baseFloor(5000, 4200);
+  f.cameras = [{ id: 'c', x: 600, y: 600, rotation: 45, fov: 90, range: 3400, height: 2200, entity_id: 'camera.demo' }];
   R.updateFloor(f, DAY, undefined, undefined, nullState);
   R.applyViewPreset('iso');
   return runCapture(N, gifPx, fps, 60, (i) => {
@@ -467,10 +488,14 @@ function capOpening(sub: Subject, o: CapOpts): string {
 
 // Robot vacuum/mower: dock + rig roaming loop, LED cycling through states.
 function capRobot(sub: Subject, o: CapOpts): string {
-  const gifPx = o.size ?? 400, N = o.frames ?? 32, fps = o.fps ?? 12;
+  // QA feedback: go slower + zoom in. Smaller floor (4000 mm) → iso frames the
+  // rig ~1.5× closer; more frames @ lower fps (44 @ 9 ≈ 4.9 s, was 32 @ 12 ≈
+  // 2.7 s) + reduced roam amplitude → ~half the on-screen roam speed. Loop kept
+  // centered on the floor so iso frames it symmetrically.
+  const gifPx = o.size ?? 400, N = o.frames ?? 44, fps = o.fps ?? 9;
   const kind = sub.id as 'vacuum' | 'mower';
-  const f = baseFloor(6000, 6000);
-  const dock = { id: 'r', x: 1000, y: 1000, kind, entity_id: null };
+  const f = baseFloor(4000, 4000);
+  const dock = { id: 'r', x: 1400, y: 1400, kind, entity_id: null };
   f.robots = [dock];
   R.updateFloor(f, DAY, undefined, undefined, nullState);
   R.updateRobotDocks(f.robots);
@@ -479,10 +504,10 @@ function capRobot(sub: Subject, o: CapOpts): string {
   return runCapture(N, gifPx, fps, 40, (i) => {
     const p = i / N;
     const act = acts[Math.min(acts.length - 1, Math.floor(p * acts.length))];
-    // Roam a loop out from the dock and back.
+    // Roam a (smaller, centered) loop out from the dock and back.
     const ang = p * Math.PI * 2;
-    const x = 1000 + (act === 'docked' ? 0 : 1800) * (0.5 - 0.5 * Math.cos(ang));
-    const y = 1000 + (act === 'docked' ? 0 : 1500) * Math.sin(ang) * 0.6 + (act === 'docked' ? 0 : 900);
+    const x = 1400 + (act === 'docked' ? 0 : 1200) * (0.5 - 0.5 * Math.cos(ang));
+    const y = 1400 + (act === 'docked' ? 0 : 1000) * Math.sin(ang) * 0.6 + (act === 'docked' ? 0 : 600);
     const st = { r: { x, y, heading: ang, phase: i * 0.4, activity: act, led: robotLedColor(act) } };
     R.updateRobotRigs(f.robots, st);
   });
@@ -491,7 +516,9 @@ function capRobot(sub: Subject, o: CapOpts): string {
 // Avatar: idle rig with a gentle weight-shift oscillation, camera 360° orbit, and
 // the member's own personality bubble forced visible (reuses _syncBubble).
 function capAvatar(sub: Subject, o: CapOpts): string {
-  const gifPx = o.size ?? 320, N = o.frames ?? 30, fps = o.fps ?? 12;
+  // QA feedback: rotate slower (half angular velocity: 45 frames @ 9 fps ≈ 5 s,
+  // was 30 @ 12) + pull back so the thought bubble is fully in frame.
+  const gifPx = o.size ?? 320, N = o.frames ?? 45, fps = o.fps ?? 9;
   const id = sub.id;
   const def = MOD.ThreeDRenderer.resolveAvatarDef(id);
   const isQuad = def.rig === 'quadruped';
@@ -506,12 +533,31 @@ function capAvatar(sub: Subject, o: CapOpts): string {
     const h = R._humanoids?.[key];
     if (h && bubble) { h.bubbleKind = bubble; R._syncBubble(h, 0.1); }
   };
-  const target: [number, number, number] = [0, isQuad ? 500 : 950, 0];
-  const radius = isQuad ? 2200 : 2600;
+  // Frame from the ACTUAL rig (no per-kind hardcode): the bubble anchors at the
+  // live plumbob height + BUBBLE_ABOVE_PLUMBOB (460 mm) with the cloud extending
+  // ~520 mm higher. Center the camera on the mid-height and pull the radius back
+  // so the full 0→bubbleTop span fits the 50° vertical FOV (+ margin). Read the
+  // plumbob per-frame so the pull-back tracks tall (astronaut) vs short (teddy)
+  // rigs. Quadrupeds keep the tight framing — pets never show a bubble.
+  const BUBBLE_ABOVE = 460, BUBBLE_CLOUD = 520;
+  const orbit = (i: number, n: number): void => {
+    let target: [number, number, number], radius: number, elevDeg: number;
+    if (isQuad) {
+      target = [0, 500, 0]; radius = 2200; elevDeg = 14;
+    } else {
+      const h = R._humanoids?.[key];
+      const plumbobY = (h && h.plumbob) ? h.plumbob.position.y : 2000;
+      const contentTop = plumbobY + BUBBLE_ABOVE + BUBBLE_CLOUD;
+      target = [0, contentTop * 0.5, 0];
+      radius = contentTop * 1.35;
+      elevDeg = 10;
+    }
+    orbitCam(target, radius, elevDeg, (i / n) * Math.PI * 2);
+  };
   // Warm (24 steps) so the rig builds + bubble pops in + hover rigs settle.
   return runCapture(N, gifPx, fps, 55, (i, n) => {
     step(i + 24);
-    orbitCam(target, radius, isQuad ? 14 : 11, (i / n) * Math.PI * 2);
+    orbit(i, n);
   }, 24, (i) => step(i));
 }
 

@@ -8,12 +8,12 @@
 import type { AvatarPackDef } from '../avatars.js';
 
 const pack: AvatarPackDef = {
-  id: 'my-little-pony', version: 1, label: 'My Little Pony',
+  id: 'my-little-pony', version: 2, label: 'My Little Pony',
   path: ['Cartoons', 'My Little Pony'], builtin: true, franchise: true,
   base: {
     rig: 'quadruped',
     quadruped: {
-      sk: 1.35, bodyLen: 620, bodyW: 230, bodyH: 260, legLen: 0.9,
+      sk: 0.8, bodyLen: 620, bodyW: 230, bodyH: 260, legLen: 0.9,
       headR: 150, neckLen: 50, headScale: [1.08, 1.0, 1.05],
       ears: 'pointy', tail: 'none', snout: 0.3, snoutColor: 0xf0d8c8,
     },

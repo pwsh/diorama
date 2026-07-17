@@ -184,11 +184,13 @@
   ok('hover: hip floats ~300 off floor', hovRig && Math.abs((hovRig.group.position.y + hovRig.hipY) - 300) < 60,
     hovRig ? (hovRig.group.position.y + hovRig.hipY).toFixed(0) : '-');
 
-  // Posture: after a frame a still stoop rig has root pitch ≈ posture.pitch.
+  // Posture: after a frame a still stoop rig has root pitch ≈ -posture.pitch.
+  // (posturePitch is stored 0.3 but NEGATED at the rotation.x write so a POSITIVE
+  // posture.pitch is a FORWARD stoop — negative root rotation.x is body-forward.)
   for (let i = 0; i < 10; i++) step([{ key: 'st', x: 4000, y: 3000, color: TINT, avatar: 'ct/stoop' }]);
   const stoop = r._humanoids['st'];
   ok('posture: posturePitch stored', stoop && Math.abs(stoop.posturePitch - 0.3) < 1e-6);
-  ok('posture: root pitch ≈ 0.3', stoop && Math.abs(stoop.group.rotation.x - 0.3) < 0.06,
+  ok('posture: root pitch ≈ -0.3 (forward stoop)', stoop && Math.abs(stoop.group.rotation.x + 0.3) < 0.06,
     stoop ? stoop.group.rotation.x.toFixed(3) : '-');
 
   // ── Legacy quadruped proportions (via base-domestic-animals) ───────────────
@@ -256,6 +258,110 @@
   ok('quad personality alters phase advance', pf && ps && pf.phase > ps.phase + 0.2,
     pf && ps ? `fast=${pf.phase.toFixed(2)} slow=${ps.phase.toFixed(2)}` : '-');
   performance.now = realNow;
+
+  // ── Cape accessory: curved draped sheet (fix #5) ───────────────────────────
+  mod.ThreeDRenderer.registerAvatarPack({
+    id: 'cp', version: 1, label: 'Cape', path: ['CP'], builtin: true,
+    avatars: [
+      { id: 'cp/hero', label: 'Caped', rig: 'humanoid', humanoid: {}, accessories: [
+        { shape: 'cape', size: [260, 700, 420], anchor: 'back', color: 'tint', rot: [0.15, 0, 0] },
+      ] },
+    ],
+  });
+  const caped = r._buildHumanoid(TINT, 'cp/hero');
+  const cape = nonOutline(caped.group).find(m => m.geometry.type === 'CylinderGeometry'
+    && m.geometry.parameters.thetaLength && Math.abs(m.geometry.parameters.thetaLength - 1.65) < 0.01);
+  ok('cape: builds a cylinder-segment mesh', !!cape);
+  ok('cape: open-ended + top<bottom radius', cape && cape.geometry.parameters.openEnded === true
+    && cape.geometry.parameters.radiusTop < cape.geometry.parameters.radiusBottom,
+    cape ? `rTop=${cape.geometry.parameters.radiusTop} rBot=${cape.geometry.parameters.radiusBottom}` : '-');
+  // Curvature: the arc spreads vertices across BOTH X and Z (a flat box/sheet would
+  // have ~0 z-spread). Flattened in Z at the mesh (scale.z≈0.5).
+  let capeXext = 0, capeZext = 0;
+  if (cape) { cape.geometry.computeBoundingBox(); const bb = cape.geometry.boundingBox;
+    capeXext = bb.max.x - bb.min.x; capeZext = bb.max.z - bb.min.z; }
+  ok('cape: curved (x & z vertex spread)', capeXext > 100 && capeZext > 20,
+    `xext=${capeXext.toFixed(0)} zext=${capeZext.toFixed(0)}`);
+  ok('cape: double-sided + outline-safe + flattened',
+    cape && cape.material.side === 2 && cape.userData.outlineSkip === true
+    && Math.abs(cape.scale.z - 0.5) < 0.01);
+
+  // ── sk clamps: humanoid [0.45,1.2], quad [0.2,1.35] (fix #8) ────────────────
+  mod.ThreeDRenderer.registerAvatarPack({
+    id: 'cl', version: 1, label: 'Clamp', path: ['CL'], builtin: true,
+    avatars: [
+      { id: 'cl/tall', label: 'Tall', rig: 'humanoid', humanoid: { sk: 3 } },
+      { id: 'cl/tiny', label: 'Tiny', rig: 'humanoid', humanoid: { sk: 0.1 } },
+      { id: 'cl/big', label: 'Big', rig: 'quadruped', pet: true, quadruped: { sk: 3 } },
+      { id: 'cl/wee', label: 'Wee', rig: 'quadruped', pet: true, quadruped: { sk: 0.05 } },
+    ],
+  });
+  // hipY = 870·sk (humanoid) / 505·sk (quad, dog reference).
+  const tall = r._buildHumanoid(TINT, 'cl/tall'), tiny = r._buildHumanoid(TINT, 'cl/tiny');
+  ok('sk clamp: humanoid capped 1.2 (hipY≈1044)', near(tall.hipY, 1044, 3), `hipY=${tall.hipY.toFixed(0)}`);
+  ok('sk clamp: humanoid floor 0.45 (hipY≈392)', near(tiny.hipY, 391.5, 3), `hipY=${tiny.hipY.toFixed(0)}`);
+  const qbig = r._buildQuadruped(0x808080, 'cl/big'), qwee = r._buildQuadruped(0x808080, 'cl/wee');
+  ok('sk clamp: quad capped 1.35 (hipY≈682)', near(qbig.hipY, 681.75, 3), `hipY=${qbig.hipY.toFixed(0)}`);
+  ok('sk clamp: quad floor 0.2 (hipY≈101)', near(qwee.hipY, 101, 3), `hipY=${qwee.hipY.toFixed(0)}`);
+
+  // ── Furniture builder fixes (dryer door / bin lid / rockers / swingset) ─────
+  const fuF = (id, kind, w, h) => ({ id, kind, x: 3000, y: 3000, w, h, rotation: 0, entity_id: null });
+  const boxes = (g) => { const o = []; g.traverse(m => { if (m.isMesh && !m.userData.outline
+    && m.geometry.type === 'BoxGeometry') o.push(m); }); return o; };
+
+  // #1 dryer: a porthole door hinge is registered in doorSink (was static/none).
+  {
+    const doorSink = [];
+    r._buildFurniture(fuF('dry', 'dryer', 700, 700), [], undefined, { doorSink });
+    ok('dryer: door registered in doorSink', doorSink.length === 1
+      && doorSink[0].axis === 'y' && Math.abs(doorSink[0].openAngle) > 1,
+      doorSink.length ? `axis=${doorSink[0].axis} ang=${doorSink[0].openAngle.toFixed(2)}` : 'none');
+  }
+
+  // #4 bin lid: FULL tilts the lid OPEN (positive rotation.x, front edge up/away);
+  //     empty stays closed (rotation.x === 0).
+  {
+    const full = r._buildFurniture(fuF('binf', 'trash_bin', 600, 700), [], undefined, { binFull: true });
+    const empty = r._buildFurniture(fuF('bine', 'trash_bin', 600, 700), [], undefined, { binFull: false });
+    const lidOf = (g) => g.children.find(o => o.type === 'Group');
+    const lf = lidOf(full), le = lidOf(empty);
+    ok('bin lid: opens outward when full (rot.x > 0)', lf && lf.rotation.x > 0.1,
+      lf ? `rot.x=${lf.rotation.x.toFixed(2)}` : 'no hinge');
+    ok('bin lid: closed when empty (rot.x = 0)', le && Math.abs(le.rotation.x) < 1e-6);
+  }
+
+  // #2 rocking chair: rockers reach the floor (min box-y ≈ 0) AND legs bridge the
+  //     seat down to the runners (was a floating seat over disconnected rockers).
+  {
+    const rc = r._buildFurniture(fuF('rc', 'rocking_chair', 600, 700));
+    const bx = boxes(rc);
+    let minY = Infinity;
+    for (const m of bx) minY = Math.min(minY, m.position.y - m.geometry.parameters.height / 2);
+    ok('rocking chair: min-y ≈ 0 (grounded)', minY > -2 && minY < 12, `minY=${minY.toFixed(1)}`);
+    ok('rocking chair: legs bridge seat→runners', bx.length >= 7, `boxes=${bx.length}`);
+  }
+
+  // #3 swingset: each A-frame leg TOP meets a crossbar END (was splayed away).
+  {
+    const sw = r._buildFurniture(fuF('sw', 'swingset', 2800, 1600));
+    const cyls = [];
+    sw.traverse(m => { if (m.isMesh && !m.userData.outline && m.geometry.type === 'CylinderGeometry') cyls.push(m); });
+    const legs = cyls.filter(m => Math.abs(m.geometry.parameters.radiusTop - 35) < 1);
+    const bar = cyls.find(m => Math.abs(m.rotation.z - Math.PI / 2) < 0.01);
+    let barY = 0, halfBar = 0;
+    if (bar) { barY = bar.position.y; halfBar = bar.geometry.parameters.height / 2; }
+    const ends = [{ x: -halfBar, y: barY, z: 0 }, { x: halfBar, y: barY, z: 0 }];
+    // Each leg's TOP (local +Y after its rotation.x lean) vs the nearest crossbar
+    // end; the worst over all 4 legs must be small (tops converge on the bar).
+    const worstTop = legs.length ? Math.max(...legs.map(lg => {
+      const hh = lg.geometry.parameters.height / 2, th = lg.rotation.x;
+      const top = { x: lg.position.x, y: lg.position.y + hh * Math.cos(th), z: lg.position.z + hh * Math.sin(th) };
+      return Math.min(...ends.map(e => Math.hypot(top.x - e.x, top.y - e.y, top.z - e.z)));
+    })) : Infinity;
+    ok('swingset: 4 legs + a crossbar', legs.length === 4 && !!bar);
+    ok('swingset: leg tops meet crossbar ends (ε<70)', legs.length === 4 && worstTop < 70,
+      `worstTop=${isFinite(worstTop) ? worstTop.toFixed(1) : '-'}`);
+  }
 
   // ── Dispose lifecycle ─────────────────────────────────────────────────────
   let threw = false;
