@@ -1408,6 +1408,31 @@ export class Planner extends EventTarget {
     return id;
   }
 
+  // Create a new config from a Sweet Home 3D structural import. Mirrors
+  // newConfig() but seeds the body with the CONVERTED floors instead of a fresh
+  // default's single empty floor: defaultStore() for every top-level Store
+  // field at its first-boot default, then replace floors (each passed through
+  // repairFloor so every backfilled array is present). See src/sh3d.ts.
+  async importSh3dConfig(name: string, floors: Floor[]): Promise<{ ok: boolean; id?: string; error?: string }> {
+    if (this.uiMode !== 'edit') return { ok: false, error: 'Editing disabled.' };
+    if (!this.configIndex) return { ok: false, error: 'Configs not loaded yet.' };
+    if (!floors.length) return { ok: false, error: 'Nothing to import (no floors).' };
+    // Flush the current config's pending save onto the OLD body before switching.
+    if (this._haSaveTimer) { clearTimeout(this._haSaveTimer); this._haSaveTimer = null; await this._flushSave(); }
+    const id = this._newConfigId(name);
+    const fresh = defaultStore();
+    fresh.floors = floors.map(f => repairFloor(f));
+    fresh.currentFloorId = fresh.floors[0].id;
+    await this._writeBody(id, fresh);
+    this.configIndex.configs.push({ id, name: name || 'Imported', updatedAt: Date.now() });
+    this.configIndex.activeId = id;
+    this.activeConfigId = id;
+    saveConfigsCache(this.configIndex);
+    await this.hass?.setUserData(Planner.INDEX_KEY, this.configIndex);
+    this._applyLoadedStore(fresh);
+    return { ok: true, id };
+  }
+
   async renameConfig(id: string, name: string): Promise<void> {
     if (this.uiMode !== 'edit' || !this.configIndex) return;
     const meta = this.configIndex.configs.find(c => c.id === id);

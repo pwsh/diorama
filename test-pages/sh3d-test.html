@@ -1,0 +1,277 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>SH3D …</title>
+  <style>
+    body { margin:0; background:#0d1116; color:#cfd8dc; font:13px/1.4 sans-serif; padding:14px; }
+    h1 { font-size:15px; margin:0 0 10px; }
+    .grid { display:flex; flex-wrap:wrap; gap:10px; }
+    .card { background:#141b22; border:1px solid #26323d; border-radius:6px; padding:8px 10px; width:360px; }
+    .row { display:flex; justify-content:space-between; font-size:11px; gap:8px; }
+    .pass { color:#69f0ae; } .fail { color:#ff5252; }
+    #summary { font-size:14px; font-weight:bold; margin:10px 0; padding:8px 10px; border-radius:5px; }
+    .okbg { background:#12331f; color:#69f0ae; } .badbg { background:#3a1414; color:#ff8a80; }
+    code { color:#ffd54f; }
+  </style>
+</head>
+<body>
+  <h1>Sweet Home 3D structural import — ZIP reader · Home.xml conversion · validation</h1>
+  <div id="summary">Running…</div>
+  <div class="grid" id="grid"></div>
+
+  <!-- sh3d.ts imports the PURE geometry.ts; it is NOT a live code-split chunk in
+       this harness, so bundle a standalone transpile NEXT TO this html before
+       serving (matches rooms-test.html / geometry.mod.js):
+         npx esbuild src/sh3d.ts --bundle --format=esm \
+           --outfile=<harness>/sh3d.mod.js
+       (headless; no live HA — uses browser DecompressionStream/DOMParser). -->
+  <script type="module">
+    import { readZipEntries, readSh3dHomeXml, convertSh3dHome } from './sh3d.mod.js';
+
+    const tests = [];
+    const ok = (name, cond, detail = '') => tests.push({ name, ok: !!cond, detail });
+    const eq = (name, got, want) => tests.push({ name, ok: got === want, detail: `got ${got} want ${want}` });
+
+    const enc = new TextEncoder();
+    const dec = new TextDecoder();
+
+    // ── Minimal ZIP writer (fixture builder) ────────────────────────────────
+    async function deflateRaw(data) {
+      const cs = new CompressionStream('deflate-raw');
+      const stream = new Blob([data]).stream().pipeThrough(cs);
+      return new Uint8Array(await new Response(stream).arrayBuffer());
+    }
+    function u16(v) { return [v & 0xff, (v >> 8) & 0xff]; }
+    function u32(v) { return [v & 0xff, (v >> 8) & 0xff, (v >> 16) & 0xff, (v >>> 24) & 0xff]; }
+    // entries: [{ name, data:Uint8Array, method:0|8 }]
+    async function makeZip(entries) {
+      const locals = [];
+      const central = [];
+      let offset = 0;
+      for (const e of entries) {
+        const name = enc.encode(e.name);
+        const comp = e.method === 8 ? await deflateRaw(e.data) : e.data;
+        const lh = [
+          ...u32(0x04034b50), ...u16(20), ...u16(0), ...u16(e.method),
+          ...u16(0), ...u16(0), ...u32(0), ...u32(comp.length), ...u32(e.data.length),
+          ...u16(name.length), ...u16(0),
+        ];
+        const localBytes = new Uint8Array(lh.length + name.length + comp.length);
+        localBytes.set(lh, 0);
+        localBytes.set(name, lh.length);
+        localBytes.set(comp, lh.length + name.length);
+        locals.push(localBytes);
+        const ch = [
+          ...u32(0x02014b50), ...u16(20), ...u16(20), ...u16(0), ...u16(e.method),
+          ...u16(0), ...u16(0), ...u32(0), ...u32(comp.length), ...u32(e.data.length),
+          ...u16(name.length), ...u16(0), ...u16(0), ...u16(0), ...u16(0), ...u32(0),
+          ...u32(offset),
+        ];
+        const centralBytes = new Uint8Array(ch.length + name.length);
+        centralBytes.set(ch, 0);
+        centralBytes.set(name, ch.length);
+        central.push(centralBytes);
+        offset += localBytes.length;
+      }
+      const cdStart = offset;
+      const cdSize = central.reduce((s, c) => s + c.length, 0);
+      const eocd = new Uint8Array([
+        ...u32(0x06054b50), ...u16(0), ...u16(0),
+        ...u16(entries.length), ...u16(entries.length),
+        ...u32(cdSize), ...u32(cdStart), ...u16(0),
+      ]);
+      const total = cdStart + cdSize + eocd.length;
+      const out = new Uint8Array(total);
+      let p = 0;
+      for (const l of locals) { out.set(l, p); p += l.length; }
+      for (const c of central) { out.set(c, p); p += c.length; }
+      out.set(eocd, p);
+      return out;
+    }
+
+    // ── (a) ZIP reader roundtrip: stored + deflate-raw ──────────────────────
+    async function testZip() {
+      const storedText = 'HELLO STORED ENTRY — méthode 0';
+      const deflText = 'x'.repeat(400) + ' deflate roundtrip ' + 'y'.repeat(400);
+      const zip = await makeZip([
+        { name: 'stored.txt', data: enc.encode(storedText), method: 0 },
+        { name: 'sub/deflated.txt', data: enc.encode(deflText), method: 8 },
+      ]);
+      const map = await readZipEntries(zip);
+      eq('zip: entry count', map.size, 2);
+      ok('zip: stored roundtrip', map.has('stored.txt') && dec.decode(map.get('stored.txt')) === storedText);
+      ok('zip: deflate roundtrip', map.has('sub/deflated.txt') && dec.decode(map.get('sub/deflated.txt')) === deflText);
+    }
+
+    // ── Fixture Home.xml (2 levels; 10 + 4 walls; 2 enclosed rooms + 1 open;
+    //    2 doors + 1 window; 2 mappable + 1 unmappable furniture) ────────────
+    // cm coordinates, plan y-DOWN. Global bbox cm: x 0..600, y 0..600.
+    // Transform: tx = xCm*10 + 500 ; ty = 6500 − yCm*10.
+    const XML = `<?xml version="1.0"?>
+<home name="Test Home" wallHeight="250">
+  <level id="L0" name="Ground" elevation="0" floorThickness="12" height="250"/>
+  <level id="L1" name="Upstairs" elevation="280" floorThickness="12" height="250"/>
+  <!-- Ground: Room A box (300x200) -->
+  <wall level="L0" id="wa1" xStart="0" yStart="0" xEnd="300" yEnd="0"/>
+  <wall level="L0" id="wa2" xStart="300" yStart="0" xEnd="300" yEnd="200"/>
+  <wall level="L0" id="wa3" xStart="300" yStart="200" xEnd="0" yEnd="200"/>
+  <wall level="L0" id="wa4" xStart="0" yStart="200" xEnd="0" yEnd="0"/>
+  <!-- Ground: Room B box (200x200) -->
+  <wall level="L0" id="wb1" xStart="400" yStart="0" xEnd="600" yEnd="0"/>
+  <wall level="L0" id="wb2" xStart="600" yStart="0" xEnd="600" yEnd="200"/>
+  <wall level="L0" id="wb3" xStart="600" yStart="200" xEnd="400" yEnd="200"/>
+  <wall level="L0" id="wb4" xStart="400" yStart="200" xEnd="400" yEnd="0"/>
+  <!-- Ground: two partial walls around the open patio (NOT a loop) -->
+  <wall level="L0" id="wp1" xStart="0" yStart="400" xEnd="300" yEnd="400"/>
+  <wall level="L0" id="wp2" xStart="0" yStart="400" xEnd="0" yEnd="600"/>
+  <!-- Rooms -->
+  <room level="L0" name="Living"><point x="0" y="0"/><point x="300" y="0"/><point x="300" y="200"/><point x="0" y="200"/></room>
+  <room level="L0" name="Kitchen"><point x="400" y="0"/><point x="600" y="0"/><point x="600" y="200"/><point x="400" y="200"/></room>
+  <room level="L0" name="Patio"><point x="0" y="400"/><point x="300" y="400"/><point x="300" y="600"/><point x="0" y="600"/></room>
+  <!-- Door on Room A top wall (150,0), Door on Room A right wall (300,100), Window on Room B top wall (500,0) -->
+  <doorOrWindow level="L0" name="Front Door" catalogId="eTeks#door" x="150" y="0" angle="0" width="90" depth="10" height="200" elevation="0"/>
+  <doorOrWindow level="L0" name="Side Door" catalogId="eTeks#door" x="300" y="100" angle="90" width="80" depth="10" height="200" elevation="0"/>
+  <doorOrWindow level="L0" name="Window" catalogId="eTeks#window" x="500" y="0" angle="0" width="100" depth="10" height="120" elevation="90"/>
+  <!-- Furniture: 2 mappable + 1 unmappable -->
+  <pieceOfFurniture level="L0" name="Double Bed" catalogId="eTeks#bed" x="150" y="100" angle="0" width="160" depth="200" height="50"/>
+  <pieceOfFurniture level="L0" name="Sofa" catalogId="eTeks#sofa" x="500" y="100" angle="0" width="200" depth="90" height="85"/>
+  <pieceOfFurniture level="L0" name="Mysterious Gadget" catalogId="eTeks#42" x="250" y="500" angle="0" width="40" depth="40" height="40"/>
+  <!-- Upstairs: 4 walls, SAME coords as Room A → registration check -->
+  <wall level="L1" id="wu1" xStart="0" yStart="0" xEnd="300" yEnd="0"/>
+  <wall level="L1" id="wu2" xStart="300" yStart="0" xEnd="300" yEnd="200"/>
+  <wall level="L1" id="wu3" xStart="300" yStart="200" xEnd="0" yEnd="200"/>
+  <wall level="L1" id="wu4" xStart="0" yStart="200" xEnd="0" yEnd="0"/>
+</home>`;
+
+    // doorSpanCenter mirror (geometry.ts): center = hinge + (cos t, −sin t)·w/2.
+    function spanCenter(d) {
+      const t = (d.rotation || 0) * Math.PI / 180;
+      return { x: d.x + Math.cos(t) * d.w / 2, y: d.y - Math.sin(t) * d.w / 2 };
+    }
+
+    async function testConvert() {
+      const doc = new DOMParser().parseFromString(XML, 'application/xml');
+      ok('xml parses (no parsererror)', !doc.querySelector('parsererror'));
+      const res = convertSh3dHome(doc, { importFurniture: true });
+
+      eq('name from <home>', res.name, 'Test Home');
+      eq('levels → floors', res.floors.length, 2);
+      eq('floors sorted lowest-first', res.floors[0].name, 'Ground');
+      eq('floor 2 name', res.floors[1].name, 'Upstairs');
+
+      const g = res.floors[0], up = res.floors[1];
+      eq('ground walls', g.walls.length, 10);
+      eq('upstairs walls', up.walls.length, 4);
+      eq('rooms', g.rooms.length, 3);
+      eq('doors', g.doors.length, 2);
+      eq('windows', g.windows.length, 1);
+      eq('furniture mapped', g.furniture.length, 2);
+      eq('counts.furnitureSkipped', res.counts.furnitureSkipped, 1);
+      eq('counts totals openings', res.counts.openings, 3);
+
+      // Same w/d on every floor (shared transform). bbox 6000×6000 + 2·500 margin.
+      eq('floor w', g.w, 7000);
+      eq('floor d', g.d, 7000);
+      eq('floors share w', up.w, g.w);
+      eq('floors share d', up.d, g.d);
+
+      // Wall coordinate: Room A wall1 (0,0)->(300,0): tx0=500 ty0=6500, tx300=3500.
+      const wa1 = g.walls[0];
+      eq('wall p0.x (tx 0)', wa1.points[0].x, 500);
+      eq('wall p0.y (ty 0, flipped)', wa1.points[0].y, 6500);
+      eq('wall p1.x (tx 300)', wa1.points[1].x, 3500);
+      eq('wall p1.y', wa1.points[1].y, 6500);
+
+      // Registration: upstairs first wall == ground first wall (shared transform).
+      const wu1 = up.walls[0];
+      ok('registration: upstairs wall == ground wall',
+        wu1.points[0].x === wa1.points[0].x && wu1.points[0].y === wa1.points[0].y &&
+        wu1.points[1].x === wa1.points[1].x && wu1.points[1].y === wa1.points[1].y);
+
+      // Room anchor: Living centroid → (2000, 5500), inside its loop.
+      const living = g.rooms.find(r => r.name === 'Living');
+      eq('Living anchor.x', living.anchor.x, 2000);
+      eq('Living anchor.y', living.anchor.y, 5500);
+
+      // Window: center (500,0)→(5500,6500); sill from elevation 90cm=900; height 120cm=1200.
+      const win = g.windows[0];
+      eq('window x', win.x, 5500);
+      eq('window y', win.y, 6500);
+      eq('window w', win.w, 1000);
+      eq('window sill', win.sill, 900);
+      eq('window height', win.height, 1200);
+
+      // Door center→hinge round-trip: every door's doorSpanCenter must land back
+      // ON the wall it snapped to. Side Door on the vertical wall x=3500.
+      const side = g.doors.find(d => Math.abs(spanCenter(d).x - 3500) < 2 && Math.abs(spanCenter(d).y - 5500) < 2);
+      ok('side door snapped center recovers (3500,5500)', !!side, side ? JSON.stringify(spanCenter(side)) : 'not found');
+      // hinge is offset w/2 from the center along the wall (so hinge != center).
+      ok('door hinge offset from center', side && (side.x !== 3500 || side.y !== 5500));
+
+      // Furniture mapping table + real footprint.
+      const bed = g.furniture.find(f => f.kind === 'bed');
+      const sofa = g.furniture.find(f => f.kind === 'sofa');
+      ok('bed mapped', !!bed);
+      ok('sofa mapped', !!sofa);
+      ok('gadget NOT mapped (skipped)', !g.furniture.some(f => /gadget/i.test(f.label || '')));
+      if (bed) { eq('bed footprint w', bed.w, 1600); eq('bed footprint h', bed.h, 2000); }
+      if (bed) { eq('bed x (tx 150)', bed.x, 2000); eq('bed y (ty 100)', bed.y, 5500); }
+
+      // (c) Validation: the open Patio room produces a "not enclosed" warning;
+      // Living / Kitchen do NOT.
+      ok('warning: patio not enclosed',
+        res.warnings.some(w => /not enclosed/i.test(w) && /patio/i.test(w)), res.warnings.join(' | '));
+      ok('no false "not enclosed" for Living/Kitchen',
+        !res.warnings.some(w => /not enclosed/i.test(w) && /(living|kitchen)/i.test(w)));
+
+      // Furniture toggle OFF → no furniture, none skipped-counted for placement.
+      const noFurn = convertSh3dHome(doc, { importFurniture: false });
+      eq('importFurniture:false → 0 furniture', noFurn.floors[0].furniture.length, 0);
+    }
+
+    // ── (d) Old format (no Home.xml) + real zip w/ Home.xml through reader ───
+    async function testReader() {
+      const good = await makeZip([{ name: 'Home.xml', data: enc.encode(XML), method: 8 }]);
+      const r1 = await readSh3dHomeXml(good);
+      ok('reader: Home.xml found', r1.ok && !!r1.xml && r1.xml.includes('<home'));
+
+      const old = await makeZip([{ name: 'Home.dat', data: enc.encode('legacy-serialized'), method: 0 }]);
+      const r2 = await readSh3dHomeXml(old);
+      ok('reader: no Home.xml → not ok', !r2.ok);
+      ok('reader: clear "re-save" error', r2.error && /re-save/i.test(r2.error), r2.error || '');
+
+      const junk = new Uint8Array([1, 2, 3, 4, 5]);
+      const r3 = await readSh3dHomeXml(junk);
+      ok('reader: non-zip → clear error', !r3.ok && !!r3.error, r3.error || '');
+    }
+
+    (async () => {
+      try {
+        await testZip();
+        await testConvert();
+        await testReader();
+      } catch (err) {
+        ok('harness ran without throwing', false, String(err && err.stack || err));
+      }
+      const pass = tests.filter(t => t.ok).length;
+      const total = tests.length;
+      const allPass = pass === total;
+      document.title = `SH3D ${allPass ? 'PASS' : 'FAIL'} ${pass}/${total}`;
+      const sum = document.getElementById('summary');
+      sum.textContent = document.title;
+      sum.className = allPass ? 'okbg' : 'badbg';
+      const grid = document.getElementById('grid');
+      const card = document.createElement('div');
+      card.className = 'card';
+      for (const t of tests) {
+        const row = document.createElement('div');
+        row.className = 'row';
+        row.innerHTML = `<span class="${t.ok ? 'pass' : 'fail'}">${t.ok ? '✓' : '✗'} ${t.name}</span><span style="color:#5b6b7a">${t.detail || ''}</span>`;
+        card.appendChild(row);
+      }
+      grid.appendChild(card);
+    })();
+  </script>
+</body>
+</html>

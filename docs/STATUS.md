@@ -101,6 +101,22 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Sweet Home 3D structural import** (2026-07-18): `src/sh3d.ts` —
+  zero-dep ZIP reader (stored + deflate via native DecompressionStream;
+  clear errors on ZIP64/encryption/pre-5.3 Java-serialized saves) +
+  `Home.xml` → Diorama conversion: levels → stacked floors (lowest
+  first, ONE shared cm→mm Y-flip transform so levels register), walls →
+  2-point Wall runs, room polygons → named Room anchors (centroid,
+  interior fallback), doorOrWindow → Door/Window snapped to the nearest
+  wall (center→hinge round-trip verified), best-effort furniture via an
+  ordered keyword table (unmatched SKIPPED, never mystery blocks;
+  checkbox default ON). Imports as a NEW configuration via
+  `Planner.importSh3dConfig` after a summary confirm, warnings
+  dismissible (open-plan rooms flagged, imported anyway). Buttons in
+  Settings ▸ Data + the 3D Model sidebar section (distinguished from
+  the visual OBJ import, which is untouched). Lazy chunk. SH3D 48/48;
+  CONFIG 60/60.
+
 - **"New…" configuration** (2026-07-18): Settings ▸ Data ▸
   Configurations gained a New… button — `Planner.newConfig(name)`
   flushes the current config's pending save onto the OLD body, then

@@ -5937,6 +5937,14 @@ export class Sidebar extends LitElement {
     const m = f.model3d;
     const upd = (mut: () => void) => { mut(); p.save(); p.emitConfig(); };
     return this._section('model3d', '3D Model (Sweet Home 3D)', () => html`
+        <button class="btn" style="width:100%;margin-bottom:4px" @click=${this._importSh3dStructural}>
+          Import .sh3d (structural)…
+        </button>
+        <div style="font-size:10px;color:var(--text-dim);line-height:1.3;margin-bottom:6px">
+          Reads a native <code>.sh3d</code> and builds real floors / walls /
+          rooms / doors as a NEW configuration. The button below instead imports
+          a visual OBJ mesh onto THIS floor (decorative shell, no editable walls).
+        </div>
         <button class="btn" style="width:100%;margin-bottom:4px" @click=${this._importObj}>
           Import OBJ (+ MTL)…
         </button>
@@ -6000,6 +6008,37 @@ export class Sidebar extends LitElement {
         ` : nothing}
     `);
   }
+
+  private _importSh3dStructural = () => {
+    const inp = document.createElement('input');
+    inp.type = 'file'; inp.accept = '.sh3d,application/octet-stream';
+    inp.onchange = async () => {
+      const file = inp.files?.[0]; if (!file) return;
+      try {
+        const { analyzeSh3dFile } = await import('../sh3d.js');
+        const res = await analyzeSh3dFile(file, { importFurniture: true });
+        if (!res.ok || !res.floors || !res.counts) {
+          alert('Import failed: ' + (res.error ?? 'unknown error'));
+          return;
+        }
+        const c = res.counts;
+        const summary =
+          `${file.name}: ${c.levels} level${c.levels === 1 ? '' : 's'}, ${c.walls} walls, ` +
+          `${c.rooms} rooms, ${c.openings} doors/windows, ${c.furniture} furniture ` +
+          `(${c.furnitureSkipped} skipped)\n\nCreate as a new configuration?`;
+        if (!confirm(summary)) return;
+        const name = res.name || file.name.replace(/\.sh3d$/i, '') || 'Imported home';
+        const out = await this.planner.importSh3dConfig(name, res.floors);
+        if (!out.ok) { alert('Import failed: ' + (out.error ?? 'unknown error')); return; }
+        if (res.warnings && res.warnings.length) {
+          alert(`Imported with ${res.warnings.length} warning(s):\n\n` + res.warnings.join('\n'));
+        }
+      } catch (err) {
+        alert('Import failed: ' + (err as Error).message);
+      }
+    };
+    inp.click();
+  };
 
   private _importObj = () => {
     const inp = document.createElement('input');

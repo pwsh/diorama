@@ -865,6 +865,10 @@ export class SettingsDrawer extends LitElement {
   @state() private _url = '';
   @state() private _token = '';
   @state() private _packErr = '';
+  // Sweet Home 3D structural import (Data tab).
+  @state() private _sh3dImportFurniture = true;
+  @state() private _sh3dWarnings: string[] = [];
+  @state() private _sh3dBusy = false;
   // Which pack rows have their member list expanded (runtime-only).
   private _packExpanded = new Set<string>();
 
@@ -1625,6 +1629,37 @@ export class SettingsDrawer extends LitElement {
                 @click=${this._deleteConfig}>Delete</button>
       </div>
       ${savedAt ? html`<div style="font-size:10px;color:var(--text-dim)">Last saved ${this._agoText(savedAt)}</div>` : nothing}
+
+      <h3 style="font-size:12px;margin:14px 0 6px">Import Sweet Home 3D (.sh3d)</h3>
+      <button class="btn" style="width:100%;margin-bottom:6px" ?disabled=${this._sh3dBusy}
+              @click=${this._importSh3d}>${this._sh3dBusy ? 'Reading…' : 'Import .sh3d…'}</button>
+      <label class="row" style="padding:0;margin-bottom:6px">
+        <span style="color:var(--text-dim);font-size:11px;flex:1">Also import furniture (best-effort)</span>
+        <span class="mini-toggle">
+          <input type="checkbox" .checked=${this._sh3dImportFurniture}
+                 @change=${(e: Event) => { this._sh3dImportFurniture = (e.target as HTMLInputElement).checked; }}>
+          <span></span>
+        </span>
+      </label>
+      <div style="font-size:10px;color:var(--text-dim);line-height:1.3;margin-bottom:6px">
+        Reads the native <code>.sh3d</code> file and builds real floors, walls,
+        rooms, and doors/windows as a NEW configuration. This is the STRUCTURAL
+        import — different from the visual OBJ model (3D Model sidebar section),
+        which drops a decorative mesh onto the current floor.
+      </div>
+      ${this._sh3dWarnings.length ? html`
+        <div style="border:1px solid #7a5a1a;background:#211a0d;border-radius:5px;padding:6px 8px;margin-bottom:8px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+            <strong style="font-size:11px;color:#ffca7a">Import warnings (${this._sh3dWarnings.length})</strong>
+            <button class="btn" style="padding:1px 8px;font-size:11px"
+                    @click=${() => { this._sh3dWarnings = []; }}>Dismiss</button>
+          </div>
+          <ul style="margin:0;padding-left:16px;font-size:10px;color:var(--text-dim);line-height:1.4;max-height:160px;overflow:auto">
+            ${this._sh3dWarnings.map(w => html`<li>${w}</li>`)}
+          </ul>
+        </div>
+      ` : nothing}
+
       <label style="font-size:11px;color:var(--text-dim);display:block;margin:10px 0 3px">
         Notes — saved with this configuration, included in export
       </label>
@@ -1697,6 +1732,39 @@ export class SettingsDrawer extends LitElement {
     };
     inp.click();
   };
+  private _importSh3d = () => {
+    const inp = document.createElement('input');
+    inp.type = 'file'; inp.accept = '.sh3d,application/octet-stream';
+    inp.onchange = async () => {
+      const file = inp.files?.[0]; if (!file) return;
+      this._sh3dBusy = true;
+      try {
+        const { analyzeSh3dFile } = await import('../sh3d.js');
+        const res = await analyzeSh3dFile(file, { importFurniture: this._sh3dImportFurniture });
+        if (!res.ok || !res.floors || !res.counts) {
+          alert('Import failed: ' + (res.error ?? 'unknown error'));
+          return;
+        }
+        const c = res.counts;
+        const summary =
+          `${file.name}: ${c.levels} level${c.levels === 1 ? '' : 's'}, ${c.walls} walls, ` +
+          `${c.rooms} rooms, ${c.openings} doors/windows` +
+          (this._sh3dImportFurniture ? `, ${c.furniture} furniture (${c.furnitureSkipped} skipped)` : '') +
+          `\n\nCreate as a new configuration?`;
+        if (!confirm(summary)) return;
+        const name = res.name || file.name.replace(/\.sh3d$/i, '') || 'Imported home';
+        const out = await this.planner.importSh3dConfig(name, res.floors);
+        if (!out.ok) { alert('Import failed: ' + (out.error ?? 'unknown error')); return; }
+        this._sh3dWarnings = res.warnings ?? [];
+      } catch (err) {
+        alert('Import failed: ' + (err as Error).message);
+      } finally {
+        this._sh3dBusy = false;
+      }
+    };
+    inp.click();
+  };
+
   private _agoText(ts: number): string {
     const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
     if (s < 60) return s <= 2 ? 'just now' : `${s}s ago`;
