@@ -101,6 +101,13 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **"New…" configuration** (2026-07-18): Settings ▸ Data ▸
+  Configurations gained a New… button — `Planner.newConfig(name)`
+  flushes the current config's pending save onto the OLD body, then
+  creates a fresh `defaultStore()` body (the first-boot constructor —
+  no hand-rolled field list) under a new id and switches to it.
+  CONFIG 51→60, OFFLINE 27/27.
+
 - **Alert center + wall calendar + TV surfaces** (2026-07-17; 2 parallel
   Opus agents; both former "research only" backlog items actioned).
   **Alert center** (`src/alerts.ts` pure normalization +

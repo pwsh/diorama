@@ -309,6 +309,49 @@
       const { p: p5 } = await freshPlanner({ [LEGACY]: makeStore('Legacy') });
       ok('j: absent notes loads undefined', p5.store.notes === undefined, String(p5.store.notes));
     }
+
+    // ── (k) newConfig: fresh default store + switch, no bleed, flush old ──────
+    {
+      const { p, stub } = await freshPlanner({ [LEGACY]: makeStore('OrigHome') });
+      // Give the current config two floors + notes so a bleed would be obvious.
+      p.store.floors.push({
+        id: 'f2', name: 'Basement', w: 5000, d: 4000,
+        walls: [], furniture: [], lights: [], switches: [], sensors: [], motionSensors: [],
+        roamers: [], envSensors: [], doors: [], windows: [], bg: null, rooms: [], bleProxies: [],
+        alarmPanels: [], safetySensors: [], robots: [], presenceZones: [], cameras: [],
+        groundAreas: [], voidAreas: [],
+      });
+      p.setNotes('Original config notes');
+      // A pending (debounced, unflushed) edit made JUST before New — must land
+      // on the OLD body, not the new one.
+      p.store.floors[0].name = 'PendingEdit';
+      p.save();   // schedules _haSaveTimer (600ms), does NOT flush
+
+      const before = p.listConfigs().length;
+      const idNew = await p.newConfig('Blank');
+      ok('k: index gains a config', p.listConfigs().length === before + 1, `n=${p.listConfigs().length}`);
+      ok('k: switched to new id', p.activeConfigId === idNew && idNew !== 'default' &&
+        stub.peek(INDEX)?.activeId === idNew, idNew);
+      ok('k: new store is a fresh default (1 floor named Floor 1)',
+        p.store.floors.length === 1 && p.store.floors[0].name === 'Floor 1',
+        `${p.store.floors.length}/${p.store.floors[0].name}`);
+      ok('k: no bleed of old floors/notes', p.store.notes === undefined &&
+        !p.store.floors.some(f => f.name === 'Basement' || f.name === 'PendingEdit'),
+        String(p.store.notes));
+      ok('k: new body written fresh to HA', stub.peek(BODY(idNew))?.floors?.length === 1 &&
+        stub.peek(BODY(idNew))?.floors?.[0]?.name === 'Floor 1',
+        stub.peek(BODY(idNew))?.floors?.[0]?.name);
+      ok('k: pending edit flushed onto OLD body', stub.peek(BODY('default'))?.floors?.[0]?.name === 'PendingEdit',
+        stub.peek(BODY('default'))?.floors?.[0]?.name);
+      ok('k: active-body cache holds the fresh store',
+        JSON.parse(localStorage.getItem('diorama:store:v1')).floors[0].name === 'Floor 1' &&
+        JSON.parse(localStorage.getItem('diorama:store:v1')).floors.length === 1, '');
+      // Delete still refuses at 1 config after deleting back down.
+      await p.deleteConfig(idNew);
+      ok('k: back to 1 config after delete', p.listConfigs().length === 1, `n=${p.listConfigs().length}`);
+      await p.deleteConfig(p.activeConfigId);
+      ok('k: delete refuses the last config', p.listConfigs().length === 1, `n=${p.listConfigs().length}`);
+    }
   } catch (err) {
     ok('harness threw', false, (err && err.stack) ? err.stack.split('\n').slice(0, 3).join(' | ') : String(err));
   }

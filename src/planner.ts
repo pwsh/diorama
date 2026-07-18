@@ -1387,6 +1387,27 @@ export class Planner extends EventTarget {
     return id;
   }
 
+  // Start a brand-new config from a FRESH default store + switch to it. Same
+  // semantics as saveConfigAs except the new body is defaultStore() (all
+  // top-level Store fields at their first-boot defaults) instead of a clone of
+  // the current store — so it never bleeds the old config's floors/notes.
+  async newConfig(name: string): Promise<string> {
+    if (this.uiMode !== 'edit' || !this.configIndex) return '';
+    // Persist the current config first so its pending edits land on the OLD
+    // body (the debounce keys off activeConfigId, so flush before switching).
+    if (this._haSaveTimer) { clearTimeout(this._haSaveTimer); this._haSaveTimer = null; await this._flushSave(); }
+    const id = this._newConfigId(name);
+    const fresh = defaultStore();
+    await this._writeBody(id, fresh);
+    this.configIndex.configs.push({ id, name: name || 'Untitled', updatedAt: Date.now() });
+    this.configIndex.activeId = id;
+    this.activeConfigId = id;
+    saveConfigsCache(this.configIndex);
+    await this.hass?.setUserData(Planner.INDEX_KEY, this.configIndex);
+    this._applyLoadedStore(fresh);
+    return id;
+  }
+
   async renameConfig(id: string, name: string): Promise<void> {
     if (this.uiMode !== 'edit' || !this.configIndex) return;
     const meta = this.configIndex.configs.find(c => c.id === id);

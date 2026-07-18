@@ -1614,6 +1614,7 @@ export class SettingsDrawer extends LitElement {
       <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px">
         <button class="btn" style="flex:1;min-width:80px" @click=${this._saveConfig}>Save</button>
         <button class="btn" style="flex:1;min-width:80px" @click=${this._saveAsConfig}>Save as…</button>
+        <button class="btn" style="flex:1;min-width:80px" @click=${this._newConfig}>New…</button>
         <button class="btn" style="flex:1;min-width:80px" @click=${this._renameConfig}>Rename</button>
       </div>
       <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px">
@@ -1651,6 +1652,11 @@ export class SettingsDrawer extends LitElement {
     const name = prompt('New configuration name:', '');
     if (name == null) return;
     void this.planner.saveConfigAs(name.trim() || 'Untitled');
+  };
+  private _newConfig = () => {
+    const name = prompt('New configuration name:', 'Untitled');
+    if (name == null) return;
+    void this.planner.newConfig(name.trim() || 'Untitled');
   };
   private _renameConfig = () => {
     const p = this.planner;
