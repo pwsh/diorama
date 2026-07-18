@@ -1,6 +1,6 @@
 # Project status & pick-up guide
 
-Last updated: 2026-07-18, at **v0.19.0**. This is the single document to
+Last updated: 2026-07-18, at **v0.20.0**. This is the single document to
 read (alongside `CLAUDE.md`) to resume work with full context.
 
 ## Where things stand
@@ -10,7 +10,7 @@ Diorama is feature-complete through TWO arcs — the Sims-2000 arc
 (`docs/DESIGN-world.md`, 8 phases: BLE identity/trilateration/fusion, pet
 rigs, GPS geo-calibration + pins, weather core + 3D effects) — plus the
 post-arc batches listed below. Everything is merged to `main`, pushed to
-**both remotes**, released through **v0.19.0**, and deployed to the live HA
+**both remotes**, released through **v0.20.0**, and deployed to the live HA
 instance.
 
 ### Remotes, releases, deploy
@@ -105,7 +105,11 @@ instance.
   decals/prints/text + two-handed props; fan spin/direction refinements;
   plant droop; background text (skywriting/banner/grass); "New…" fresh
   configuration; Sweet Home 3D structural import — auto floors/walls/
-  rooms/openings from .sh3d).
+  rooms/openings from .sh3d)
+  → v0.20.0 a mind of their own (undo/redo history + Delete-key
+  selection deletion incl. polygon vertices; avatars interact with
+  unbound devices — session-only flips with cooldowns + time-of-day
+  sense — and contemplate bound-device status in thought bubbles).
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
