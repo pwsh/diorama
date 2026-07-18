@@ -7827,7 +7827,9 @@ export class ThreeDRenderer {
       }));
       const H = Math.max(2200, diag * 0.22);      // legible regardless of floor size
       spr.scale.set(H * (cv.width / cv.height), H, 1);
-      spr.position.set(0, Math.max(9000, diag * 0.9), -diag * 0.35);
+      // Same altitude as the banner tow-plane (6 m) — high enough to clear the
+      // roofline, low enough to sit in frame at normal orbit distances.
+      spr.position.set(0, 6000, -diag * 0.35);
       spr.renderOrder = -6;                        // in front of the sky dome (−10)
       spr.userData.outlineSkip = true;
       this._bgSkyBaseX = spr.position.x;
@@ -8467,7 +8469,9 @@ export class ThreeDRenderer {
     // nonsense). depthWrite off + renderOrder −10 so it paints behind everything
     // (the grid + all opaque geometry draw over it; the flat scene.background
     // stays as a safety fallback under the dome). uStormDir/uStormAmt darken the
-    // upwind horizon band when a storm is brewing (rainSoon).
+    // upwind horizon band when a storm is brewing (rainSoon). The dome +
+    // starfield are recentered on the camera every frame in _advanceWeather —
+    // the camera must never exit the shell (see the comment there).
     const geo = new THREE.SphereGeometry(30000, 24, 16);
     const mat = new THREE.ShaderMaterial({
       side: THREE.BackSide, depthWrite: false, depthTest: true, fog: false,
@@ -8475,6 +8479,7 @@ export class ThreeDRenderer {
         uTop: { value: this._skyTopCur.clone() },
         uBottom: { value: this._skyBotCur.clone() },
         uRadius: { value: 30000 },
+        uCenter: { value: new THREE.Vector2(0, 0) },
         uStormDir: { value: new THREE.Vector2(1, 0) },
         uStormAmt: { value: 0 },
       },
@@ -8487,14 +8492,14 @@ export class ThreeDRenderer {
         }`,
       fragmentShader: `
         uniform vec3 uTop; uniform vec3 uBottom; uniform float uRadius;
-        uniform vec2 uStormDir; uniform float uStormAmt;
+        uniform vec2 uCenter; uniform vec2 uStormDir; uniform float uStormAmt;
         varying vec3 vW;
         void main() {
           float h = clamp(vW.y / (uRadius * 0.9), -0.2, 1.0);
           float t = smoothstep(-0.05, 0.6, h);
           vec3 col = mix(uBottom, uTop, t);
           if (uStormAmt > 0.001) {
-            vec2 d = vW.xz;
+            vec2 d = vW.xz - uCenter;
             float L = length(d);
             if (L > 1e-3) {
               d /= L;
@@ -8766,9 +8771,22 @@ export class ThreeDRenderer {
       const k = Math.min(1, dt / 2);               // τ ≈ 2 s color / dayness ease
       this._skyTopCur.lerp(this._skyTopTarget, k);
       this._skyBotCur.lerp(this._skyBotTarget, k);
+      // Recenter the dome + starfield on the CAMERA every frame so the camera
+      // can never zoom out past the dome radius (maxDistance 45 m > r 30 m) and
+      // see the shell from outside as an opaque globe over the scene. The
+      // gradient reads absolute world y so the horizon stays ground-anchored;
+      // the storm band re-centers through uCenter.
+      if (this._camera) {
+        if (this._skyDome) this._skyDome.position.copy(this._camera.position);
+        if (this._starField) this._starField.position.copy(this._camera.position);
+      }
       if (this._skyMat) {
         (this._skyMat.uniforms.uTop.value as THREE.Color).copy(this._skyTopCur);
         (this._skyMat.uniforms.uBottom.value as THREE.Color).copy(this._skyBotCur);
+        if (this._camera) {
+          (this._skyMat.uniforms.uCenter.value as THREE.Vector2)
+            .set(this._camera.position.x, this._camera.position.z);
+        }
         (this._skyMat.uniforms.uStormDir.value as THREE.Vector2).copy(this._skyStormDir);
         this._skyMat.uniforms.uStormAmt.value = this._stormDarkAmt;
       }
