@@ -68,6 +68,10 @@ export const AVATAR_PACK_MANIFEST: PackManifestRow[] = [
     franchise: true, load: () => import('./transformers.js') },
   { id: 'firefly', label: 'Firefly (Serenity crew)', path: ['Sci-Fi', 'Firefly'], count: 9,
     franchise: true, load: () => import('./firefly.js') },
+  { id: 'fallout-tv', label: 'Fallout (TV Series)', path: ['Sci-Fi', 'Fallout'], count: 11,
+    franchise: true, load: () => import('./fallout-tv.js') },
+  { id: 'wall-e', label: 'WALL-E', path: ['Sci-Fi', 'WALL-E'], count: 7,
+    franchise: true, load: () => import('./wall-e.js') },
   { id: 'tv-big-bang-theory', label: 'The Big Bang Theory', path: ['Pop Culture', 'TV Shows', 'The Big Bang Theory'], count: 7,
     franchise: true, load: () => import('./tv-big-bang-theory.js') },
   { id: 'tv-breaking-bad', label: 'Breaking Bad', path: ['Pop Culture', 'TV Shows', 'Breaking Bad'], count: 8,
@@ -142,4 +146,6 @@ export const AVATAR_PACK_MANIFEST: PackManifestRow[] = [
     franchise: true, load: () => import('./shrek.js') },
   { id: 'toy-story', label: 'Toy Story', path: ['Cartoons', 'Toy Story'], count: 8,
     franchise: true, load: () => import('./toy-story.js') },
+  { id: 'sesame-street', label: 'Sesame Street', path: ['Cartoons', 'Sesame Street'], count: 11,
+    franchise: true, load: () => import('./sesame-street.js') },
 ];

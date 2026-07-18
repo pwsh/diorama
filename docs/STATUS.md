@@ -118,6 +118,20 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Three franchise avatar packs: Fallout TV, Sesame Street, WALL-E**
+  (2026-07-18; Sonnet research → `docs/avatars/sci-fi/fallout-tv.md` /
+  `cartoons/sesame-street.md` / `sci-fi/wall-e.md`, Opus build). 29 new
+  members across `fallout-tv` (11 — incl. quad pet Dogmeat, hover
+  Mr. Handy, T-60 knight), `sesame-street` (11 — incl. sessile
+  Oscar-in-can, quad Snuffleupagus), `wall-e` (7 — true-hover EVE,
+  sessile AUTO, hover-approx WALL-E/M-O/BURN-E). First shipped uses of
+  `sessile: true`. All lazy chunks, default unloaded.
+  `avatar-content-test` 602→**637/637**; pack 43/43, build 117/117,
+  costume 47/47 intact. Earlier same day: topbar 🏠 HA-menu button moved
+  to the far left (`dc70e40`). Terrain research + pinned design landed
+  (`docs/research/terrain-enhancements.md`, `docs/DESIGN-terrain.md` —
+  batches T1–T4 queued).
+
 - **Avatar costume swaps + docs-site guide refresh** (2026-07-18; 2
   parallel Opus agents; design `docs/DESIGN-costumes.md`). **Costumes**:
   overlay look variants (`resolveLook`, `AvatarDef.variants`,

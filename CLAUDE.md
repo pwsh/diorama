@@ -970,7 +970,7 @@ The state machine lives in `three-renderer.ts` (`updateTargets`) fed by an `Acti
 ### Avatar packs & settings drawer (see `docs/DESIGN-avatars.md`)
 Avatars are organized into **packs** that load/unload and activate/deactivate at
 runtime (Settings ▸ Avatars). Reference research for every pack lives in
-`docs/avatars/**` (56 regeneration-ready group/franchise docs). **Authoring a
+`docs/avatars/**` (59 regeneration-ready group/franchise docs). **Authoring a
 new pack** (schema, categorization taxonomy + placement tiebreaks, member
 template, conventions, checklist): `docs/avatars/AUTHORING.md` — the canonical
 reference; keep it updated when the schema grows.
@@ -986,7 +986,7 @@ reference; keep it updated when the schema grows.
   irremovable default). The other 23 legacy kinds live in the 9 `base-*` packs
   (builtin, default loaded+active → out-of-the-box parity with the pre-split
   app: same 24 avatars, same 22-humanoid random pool). **Franchise packs**
-  (`franchise: true`, 23 packs) default UNLOADED — opt-in novelty.
+  (`franchise: true`, 26 packs incl. fallout-tv/sesame-street/wall-e) default UNLOADED — opt-in novelty.
 - **Random/stranger fallback pool** = active humanoid non-pet members of
   builtin NON-franchise packs (franchise members never surprise an
   unidentified person); degrades to `['adult']`. Sensor/motion `avatarKinds`
