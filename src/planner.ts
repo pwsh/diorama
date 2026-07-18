@@ -8,6 +8,7 @@ import { slugToName, normMac, localToWorld, segCrossesSolidWall, mowerSweepWaypo
          vacuumRawHeadingRad, isStairsKind, logicLightState, actionButtonKind,
          furnitureKind, normalizeLockState, valveIsOpen, cameraColor, slugifyFrigateName,
          closedWallLoops, envKindOf, tempToCelsius, aggregateRoomTemps,
+         bufferPolyline, PATH_DEFAULT_WIDTH, poolHeaterState, poolPumpOn,
          type LockGlyphState, type RoomTemp, type TempSample } from './geometry.js';
 import { solveHomography, applyHomography } from './homography.js';
 import { stepFusion, newFusionState, DEFAULT_FUSION_CFG,
@@ -48,7 +49,7 @@ import type {
   Store, Floor, Sensor, ZonesLive, ObjectHalo, LerpSlot,
   HassState, ConnStatus, DiscoveredDevice, Vec2, AvatarKind, WeatherConfig, CameraFixture,
   ConfigIndex, ConfigMeta, ThermostatFixture, SafetySensor, AlertBeacon, Furniture, MqttBridgeConfig,
-  AlertsConfig,
+  AlertsConfig, GroundArea, Pool,
 } from './types.js';
 
 // Full export envelope (Batch B). `store` is the WHOLE Store serialized (no
@@ -235,6 +236,8 @@ export type Drag =
   | { kind: 'action'; id: string; startMm: Vec2; start: Vec2 }
   | { kind: 'pzoneVert'; id: string; idx: number; startMm: Vec2; startPts: Vec2[] }
   | { kind: 'groundVert'; id: string; idx: number; startMm: Vec2; startPts: Vec2[] }
+  | { kind: 'pathVert'; id: string; idx: number; startMm: Vec2; startPts: Vec2[] }
+  | { kind: 'poolVert'; id: string; idx: number; startMm: Vec2; startPts: Vec2[] }
   | { kind: 'voidVert'; id: string; idx: number; startMm: Vec2; startPts: Vec2[] }
   | { kind: 'env'; id: string; startMm: Vec2; start: Vec2 }
   | { kind: 'envResize'; id: string; startDist: number; startScale: number }
@@ -261,7 +264,7 @@ export interface EditZone {
   mousePos: Vec2 | null;
 }
 
-export type Tool = 'select' | 'wall' | 'sensor' | 'motion' | 'env' | 'infocard' | 'action' | 'bleproxy' | 'alarm' | 'calendar' | 'thermostat' | 'safety' | 'alertbeacon' | 'robot' | 'camera' | 'projector' | 'valve' | 'sprinkler' | 'plug' | 'pzone' | 'ground' | 'void' | 'furniture' | 'light' | 'switch' | 'door' | 'window' | 'delete';
+export type Tool = 'select' | 'wall' | 'sensor' | 'motion' | 'env' | 'infocard' | 'action' | 'bleproxy' | 'alarm' | 'calendar' | 'thermostat' | 'safety' | 'alertbeacon' | 'robot' | 'camera' | 'projector' | 'valve' | 'sprinkler' | 'plug' | 'pzone' | 'ground' | 'path' | 'pool' | 'void' | 'furniture' | 'light' | 'switch' | 'door' | 'window' | 'delete';
 
 // Live robot state (runtime-only). `x/y/heading/phase/activity/led` are the
 // DISPLAY fields both canvases read; the rest are the movement controller's
@@ -443,6 +446,17 @@ export class Planner extends EventTarget {
   activeGroundAreaId: string | null = null;
   drawingGroundArea: { points: Vec2[]; id?: string } | null = null;
 
+  // Path / driveway ribbon (T4). Records CENTERLINE clicks (not polygon verts);
+  // finishPath() calls bufferPolyline once → a plain path-backed GroundArea.
+  // Parallel latch field per the codebase convention. `id`/`width` set when
+  // re-drawing an existing path-backed area.
+  drawingPath: { points: Vec2[]; id?: string; width?: number } | null = null;
+
+  // Pool / spa water body (T4). Mirrors the ground-area polygon flow exactly
+  // (parallel field, same latch idiom). `id` set when re-drawing an existing pool.
+  activePoolId: string | null = null;
+  drawingPoolArea: { points: Vec2[]; id?: string; kind?: 'pool' | 'spa' } | null = null;
+
   // Floor void / opening area (Tier-1 floor voids). Mirrors the presence-zone
   // polygon flow exactly (parallel field, same latch idiom).
   activeVoidAreaId: string | null = null;
@@ -463,7 +477,7 @@ export class Planner extends EventTarget {
   // mousedown in canvas-interact; cleared on any other selection / tool change /
   // store load. Delete targets this vertex (highest priority) — see
   // deleteSelection(). `kind` picks the collection; `index` is the point index.
-  selectedVertex: { kind: 'pzone' | 'ground' | 'void' | 'wall'; itemId: string; index: number } | null = null;
+  selectedVertex: { kind: 'pzone' | 'ground' | 'void' | 'wall' | 'path' | 'pool'; itemId: string; index: number } | null = null;
 
   // ── Undo / redo (runtime only, never persisted) ─────────────────────────
   // Snapshot history of serialized Store JSON. Every store mutation funnels
@@ -698,6 +712,7 @@ export class Planner extends EventTarget {
       // Leave no edit affordances dangling.
       this.drag = null; this.editZone = null; this.drawingWall = null;
       this.drawingPresenceZone = null; this.drawingGroundArea = null; this.drawingVoidArea = null;
+      this.drawingPath = null; this.drawingPoolArea = null;
       this.tool = 'select'; this.placingRoomId = null; this.placingLandmarkId = null;
       this.placingCamCalibId = null; this.pendingCamCalibUV = null;
       this.alignGuides = []; this.alignCandidates = [];
@@ -954,11 +969,13 @@ export class Planner extends EventTarget {
     this.activeValveId = null; this.activePlugId = null; this.activeInfoId = null;
     this.activeSprinklerId = null;
     this.activeActionId = null; this.activePZoneId = null; this.activeGroundAreaId = null;
+    this.activePoolId = null;
     this.activeVoidAreaId = null; this.activeFurnitureId = null; this.activePersonId = null;
     this.selectedVertex = null;
     this.drag = null; this.editZone = null;
     this.drawingWall = null; this.drawingPresenceZone = null;
     this.drawingGroundArea = null; this.drawingVoidArea = null;
+    this.drawingPath = null; this.drawingPoolArea = null;
   }
 
   // ── Delete the current selection ────────────────────────────────────────────
@@ -1049,6 +1066,9 @@ export class Planner extends EventTarget {
       E(this.activeGroundAreaId, f.groundAreas,
         id => { f.groundAreas = (f.groundAreas ?? []).filter(x => x.id !== id); },
         () => { this.activeGroundAreaId = null; }),
+      E(this.activePoolId, f.pools,
+        id => { f.pools = (f.pools ?? []).filter(x => x.id !== id); },
+        () => { this.activePoolId = null; }),
       E(this.activeVoidAreaId, f.voidAreas,
         id => { f.voidAreas = (f.voidAreas ?? []).filter(x => x.id !== id); },
         () => { this.activeVoidAreaId = null; }),
@@ -1087,8 +1107,25 @@ export class Planner extends EventTarget {
       this.save(); this.emitConfig();
       return true;
     }
+    // Path-backed ground area: the handle is a CENTERLINE point — drop it (min 2)
+    // and regenerate the derived polygon.
+    if (sv.kind === 'path') {
+      const g = (f.groundAreas ?? []).find(x => x.id === sv.itemId);
+      if (!g || !g.path) { this.selectedVertex = null; return false; }
+      if (g.locked) { console.info('Diorama: shape is locked — vertex not deleted.'); return false; }
+      if (g.path.centerline.length <= 2) {
+        console.info('Diorama: a path needs at least 2 centerline points — vertex not deleted.');
+        return false;
+      }
+      g.path.centerline.splice(sv.index, 1);
+      this.regenGroundAreaPath(g);
+      this.selectedVertex = null;
+      this.save(); this.emitConfig();
+      return true;
+    }
     const arr = sv.kind === 'pzone' ? f.presenceZones
               : sv.kind === 'ground' ? f.groundAreas
+              : sv.kind === 'pool' ? f.pools
               : f.voidAreas;
     const poly = arr?.find(x => x.id === sv.itemId);
     if (!poly) { this.selectedVertex = null; return false; }
@@ -1536,6 +1573,7 @@ export class Planner extends EventTarget {
       this.activeActionId = null;
       this.activePZoneId = null;
       this.activeGroundAreaId = null;
+      this.activePoolId = null;
       this.activeVoidAreaId = null;
       this.robotStates = {};
       this.activePersonId = null;
@@ -1548,6 +1586,8 @@ export class Planner extends EventTarget {
       this.drawingPresenceZone = null;
       this.drawingGroundArea = null;
       this.drawingVoidArea = null;
+      this.drawingPath = null;
+      this.drawingPoolArea = null;
       this.showDetails = this.store.showDetails === true;
       this.useRawTargets = this.store.useRawTargets === true;
       // Mirror to localStorage as the ACTIVE config body cache.
@@ -1929,6 +1969,13 @@ export class Planner extends EventTarget {
     // to the current floor's bound ids.
     if ((f2.valves ?? []).some(v => v.entity_id === id)) return true;
     if ((f2.plugs ?? []).some(pl => pl.entity_id === id)) return true;
+    // Pools (T4): all bound heater/pump/light/chemistry sensor ids are config-path
+    // (per pool-spa.md §4.6) so the water glow, 2D chip, and 3D _keyPool dirty key
+    // repaint promptly on a state change. Scoped to the current floor's bound ids.
+    if ((f2.pools ?? []).some(pl =>
+      pl.heaterEntity === id || pl.pumpEntity === id ||
+      (pl.lightEntities ?? []).includes(id) ||
+      pl.waterTempEntity === id || pl.phEntity === id || pl.orpEntity === id || pl.saltEntity === id)) return true;
     // GPS source entities (a person.* or device_tracker.* bound to a Store.people
     // entry) are config-path so the sidebar GPS status line + 3D pins refresh on
     // a new fix. Bounded to the specific bound ids (GPS pushes are minutes apart,
@@ -2429,6 +2476,8 @@ export class Planner extends EventTarget {
     if (t !== 'wall') this.drawingWall = null;
     if (t !== 'pzone') this.drawingPresenceZone = null;
     if (t !== 'ground') this.drawingGroundArea = null;
+    if (t !== 'path') this.drawingPath = null;
+    if (t !== 'pool') this.drawingPoolArea = null;
     if (t !== 'void') this.drawingVoidArea = null;
     this.placingRoomId = null;  // picking any tool cancels a pending room placement
     this.placingLandmarkId = null;
@@ -2783,6 +2832,113 @@ export class Planner extends EventTarget {
     }
     this.save();
     this.emitConfig();
+  }
+
+  // ── Path / driveway ribbon (T4) ─────────────────────────────────────────
+  // Regenerate a path-backed GroundArea's derived `points` from its centerline +
+  // width via bufferPolyline. Called after every centerline / width edit — the
+  // stored polygon is a CACHE, not authoritative. No-op if `path` is absent or
+  // degenerate (leaves the last valid polygon in place).
+  regenGroundAreaPath(g: GroundArea): void {
+    if (!g.path || g.path.centerline.length < 2) return;
+    const pts = bufferPolyline(g.path.centerline, g.path.width);
+    if (pts.length >= 3) g.points = pts;
+  }
+
+  // Commit the in-progress path centerline (≥2 pts) → a path-backed GroundArea
+  // (kind defaults to concrete, user-editable). Replaces an existing path-backed
+  // area's centerline/points when re-drawing (drawingPath.id set).
+  finishPath(): void {
+    const d = this.drawingPath;
+    this.drawingPath = null;
+    if (!d || d.points.length < 2) { this.emitConfig(); return; }
+    const f = this.floor();
+    if (!f.groundAreas) f.groundAreas = [];
+    const width = d.width ?? PATH_DEFAULT_WIDTH;
+    const centerline = d.points.map(p => ({ x: Math.round(p.x), y: Math.round(p.y) }));
+    const pts = bufferPolyline(centerline, width);
+    if (pts.length < 3) { this.emitConfig(); return; }
+    if (d.id) {
+      const g = f.groundAreas.find(x => x.id === d.id);
+      if (g) { g.path = { centerline, width }; g.points = pts; this.activeGroundAreaId = g.id; }
+    } else {
+      const id = newId('ga');
+      f.groundAreas.push({ id, name: `Path ${f.groundAreas.length + 1}`, points: pts, kind: 'concrete', path: { centerline, width } });
+      this.activeGroundAreaId = id;
+    }
+    this.save();
+    this.emitConfig();
+  }
+
+  // "Detach shape" — drop the path metadata, keeping the current polygon. Converts
+  // a path-backed area into a plain editable GroundArea (pinned decision 3).
+  detachGroundAreaPath(g: GroundArea): void {
+    if (!g.path) return;
+    delete g.path;
+    this.save();
+    this.emitConfig();
+  }
+
+  // ── Pool / spa (T4) ─────────────────────────────────────────────────────
+  setActivePool(id: string | null): void {
+    this.activePoolId = (this.activePoolId === id) ? null : id;
+    this.emitConfig();
+  }
+
+  // Commit the in-progress pool polygon (≥3 pts). Mirrors finishGroundArea.
+  finishPoolArea(): void {
+    const d = this.drawingPoolArea;
+    this.drawingPoolArea = null;
+    if (!d || d.points.length < 3) { this.emitConfig(); return; }
+    const f = this.floor();
+    if (!f.pools) f.pools = [];
+    const pts = d.points.slice(0, 20).map(p => ({ x: Math.round(p.x), y: Math.round(p.y) }));
+    const kind = d.kind ?? 'pool';
+    if (d.id) {
+      const pl = f.pools.find(x => x.id === d.id);
+      if (pl) pl.points = pts;
+    } else {
+      const id = newId('pool');
+      f.pools.push({ id, name: kind === 'spa' ? `Spa ${f.pools.length + 1}` : `Pool ${f.pools.length + 1}`, kind, points: pts });
+      this.activePoolId = id;
+    }
+    this.save();
+    this.emitConfig();
+  }
+
+  // Resolved HA state for a pool sub-binding (heater/pump), folding the localState
+  // MAP first (a Pool has several independently-toggleable sub-things, so the flat
+  // effectiveState path doesn't apply). Bound → hass.states; unbound → synthetic
+  // {state: localState.<sub>}; else null.
+  private _poolSubState(entity: string | undefined, local: string | undefined): HassState | null {
+    if (entity) return this.hass?.states?.[entity] ?? null;
+    if (local) return { state: local, attributes: {} } as HassState;
+    return null;
+  }
+  poolHeaterStateOf(pl: Pool): import('./geometry.js').PoolHeaterState {
+    return poolHeaterState(this._poolSubState(pl.heaterEntity, pl.localState?.heater));
+  }
+  poolPumpOnOf(pl: Pool): boolean {
+    return poolPumpOn(this._poolSubState(pl.pumpEntity, pl.localState?.pump));
+  }
+
+  // Click routing for a pool sub-control. Gated by uiMode (view refuses; kiosk
+  // fires session-only since save() no-ops outside edit). Bound → domain-aware
+  // toggleEntity (climate/water_heater/switch); unbound → flip the localState
+  // sub-field ('on'↔'off') + save + emitConfig.
+  togglePoolHeater(pl: Pool): void {
+    if (this.uiMode === 'view') return;
+    if (pl.heaterEntity) { this.toggleEntity(pl.heaterEntity); return; }
+    if (!pl.localState) pl.localState = {};
+    pl.localState.heater = pl.localState.heater === 'on' ? 'off' : 'on';
+    this.save(); this.emitConfig();
+  }
+  togglePoolPump(pl: Pool): void {
+    if (this.uiMode === 'view') return;
+    if (pl.pumpEntity) { this.toggleEntity(pl.pumpEntity); return; }
+    if (!pl.localState) pl.localState = {};
+    pl.localState.pump = pl.localState.pump === 'on' ? 'off' : 'on';
+    this.save(); this.emitConfig();
   }
 
   setActiveVoidArea(id: string | null): void {
@@ -4790,7 +4946,11 @@ export class Planner extends EventTarget {
     for (const it of f.infoCards ?? []) { it.x += dx; it.y += dy; }
     for (const it of f.actionButtons ?? []) { it.x += dx; it.y += dy; }
     for (const z of f.presenceZones ?? []) z.points = z.points.map(p => ({ x: p.x + dx, y: p.y + dy }));
-    for (const g of f.groundAreas ?? []) g.points = g.points.map(p => ({ x: p.x + dx, y: p.y + dy }));
+    for (const g of f.groundAreas ?? []) {
+      g.points = g.points.map(p => ({ x: p.x + dx, y: p.y + dy }));
+      if (g.path) g.path.centerline = g.path.centerline.map(p => ({ x: p.x + dx, y: p.y + dy }));
+    }
+    for (const pl of f.pools ?? []) pl.points = pl.points.map(p => ({ x: p.x + dx, y: p.y + dy }));
     for (const vd of f.voidAreas ?? []) vd.points = vd.points.map(p => ({ x: p.x + dx, y: p.y + dy }));
     for (const it of f.doors ?? []) { it.x += dx; it.y += dy; }
     for (const it of f.windows ?? []) { it.x += dx; it.y += dy; }
@@ -4826,6 +4986,9 @@ export class Planner extends EventTarget {
     this.drawingPresenceZone = null;
     this.activeGroundAreaId = null;
     this.drawingGroundArea = null;
+    this.activePoolId = null;
+    this.drawingPath = null;
+    this.drawingPoolArea = null;
     this.activeVoidAreaId = null;
     this.drawingVoidArea = null;
     this.robotStates = {};   // positions are per-floor; recomputed on the new floor

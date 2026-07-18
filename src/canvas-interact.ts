@@ -11,7 +11,8 @@ import {
   hitMotionSensor, hitMotionRotateHandle, hitEnvSensor, hitEnvResizeHandle,
   hitBleProxy, hitAlarmPanel, hitCalendarPanel, hitThermostat, hitSafetySensor, hitAlertBeacon, hitRobot,
   hitCamera, hitCameraRotateHandle, hitProjector, hitValve, hitSprinklerZone, hitPlug, hitInfoCard, hitActionButton, hitPresenceZone, hitPresenceZoneVertex,
-  hitGroundArea, hitGroundAreaVertex,
+  hitGroundArea, hitGroundAreaVertex, hitPathVertex,
+  hitPool, hitPoolVertex,
   hitVacuumSegment,
   hitVoidArea, hitVoidAreaVertex,
   hitDoor, hitDoorEnd, hitDoorLock, hitWindow, hitWindowEnd, hitFloorEdge,
@@ -470,6 +471,27 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
       canvas.style.cursor = 'grabbing'; e.preventDefault(); return;
     }
   }
+  // Path centerline handles (active path-backed ground area) — drag to reshape,
+  // regenerating the derived polygon on release (pinned decision 3).
+  if (groundInteractive(p)) {
+    const pv = hitPathVertex(p, view, mm);
+    if (pv && pv.area.path) {
+      p.drag = { kind: 'pathVert', id: pv.area.id, idx: pv.idx,
+                 startMm: mm, startPts: pv.area.path.centerline.map(pt => ({ ...pt })) };
+      p.selectedVertex = { kind: 'path', itemId: pv.area.id, index: pv.idx };
+      canvas.style.cursor = 'grabbing'; e.preventDefault(); return;
+    }
+  }
+  // Pool vertex handles (active pool, ground layer visible) — drag to reshape.
+  if (groundInteractive(p)) {
+    const pv = hitPoolVertex(p, view, mm);
+    if (pv) {
+      p.drag = { kind: 'poolVert', id: pv.pool.id, idx: pv.idx,
+                 startMm: mm, startPts: pv.pool.points.map(pt => ({ ...pt })) };
+      p.selectedVertex = { kind: 'pool', itemId: pv.pool.id, index: pv.idx };
+      canvas.style.cursor = 'grabbing'; e.preventDefault(); return;
+    }
+  }
   // Void-area vertex handles (active void, ground layer visible) — drag to
   // reshape. Mirrors the ground-area vertex path.
   if (groundInteractive(p)) {
@@ -709,13 +731,28 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
     p.drag = { kind: 'bgMove', startMm: mm, start: { x: bgBody.x, y: bgBody.y } };
     canvas.style.cursor = 'grabbing'; e.preventDefault(); return;
   }
+  // Pool body — select it (shows vertex handles). Checked BEFORE ground so a
+  // pool drawn over a grass area selects the pool (pools draw on top of ground).
+  // Clears any stale ground/void selection so Delete targets the pool. Only when
+  // the ground layer is on. No whole-area drag in v1.
+  if (groundInteractive(p)) {
+    const plH = hitPool(p, view, mm);
+    if (plH) {
+      if (p.activePoolId !== plH.id) { p.activePoolId = plH.id; }
+      p.activeGroundAreaId = null; p.activeVoidAreaId = null;
+      p.emitConfig();
+      e.preventDefault(); return;
+    }
+  }
   // Ground-area body — select it (shows vertex handles); low priority (after
   // every item hit) so ground paint never swallows a click meant for something
   // resting on it. Only when the ground layer is on. No whole-area drag in v1.
   if (groundInteractive(p)) {
     const gH = hitGroundArea(p, view, mm);
     if (gH) {
-      if (p.activeGroundAreaId !== gH.id) { p.activeGroundAreaId = gH.id; p.emitConfig(); }
+      if (p.activeGroundAreaId !== gH.id) { p.activeGroundAreaId = gH.id; }
+      p.activePoolId = null; p.activeVoidAreaId = null;
+      p.emitConfig();
       e.preventDefault(); return;
     }
   }
@@ -725,7 +762,9 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
   if (groundInteractive(p)) {
     const vH = hitVoidArea(p, view, mm);
     if (vH) {
-      if (p.activeVoidAreaId !== vH.id) { p.activeVoidAreaId = vH.id; p.emitConfig(); }
+      if (p.activeVoidAreaId !== vH.id) { p.activeVoidAreaId = vH.id; }
+      p.activeGroundAreaId = null; p.activePoolId = null;
+      p.emitConfig();
       e.preventDefault(); return;
     }
   }
@@ -943,6 +982,21 @@ export function onCanvasMouseMove(p: Planner, canvas: HTMLCanvasElement, view: V
         const g = (f.groundAreas ?? []).find(x => x.id === drag.id);
         if (g && !g.locked && g.points[drag.idx]) {
           g.points[drag.idx] = { x: snap(mm.x, 10), y: snap(mm.y, 10) };
+        }
+        break;
+      }
+      case 'pathVert': {
+        const g = (f.groundAreas ?? []).find(x => x.id === drag.id);
+        if (g && !g.locked && g.path && g.path.centerline[drag.idx]) {
+          g.path.centerline[drag.idx] = { x: snap(mm.x, 10), y: snap(mm.y, 10) };
+          p.regenGroundAreaPath(g);   // live-preview the ribbon while dragging
+        }
+        break;
+      }
+      case 'poolVert': {
+        const pl = (f.pools ?? []).find(x => x.id === drag.id);
+        if (pl && !pl.locked && pl.points[drag.idx]) {
+          pl.points[drag.idx] = { x: snap(mm.x, 10), y: snap(mm.y, 10) };
         }
         break;
       }
@@ -1259,6 +1313,8 @@ export function onCanvasMouseMove(p: Planner, canvas: HTMLCanvasElement, view: V
     else if (hitPlug(p, view, mm)) canvas.style.cursor = 'grab';
     else if (zonesInteractive(p) && hitPresenceZoneVertex(p, view, mm)) canvas.style.cursor = 'grab';
     else if (groundInteractive(p) && hitGroundAreaVertex(p, view, mm)) canvas.style.cursor = 'grab';
+    else if (groundInteractive(p) && hitPathVertex(p, view, mm)) canvas.style.cursor = 'grab';
+    else if (groundInteractive(p) && hitPoolVertex(p, view, mm)) canvas.style.cursor = 'grab';
     else if (groundInteractive(p) && hitVoidAreaVertex(p, view, mm)) canvas.style.cursor = 'grab';
     else if (hitSensorRotateHandle(p, view, mm)) canvas.style.cursor = 'grab';
     else if (zonesInteractive(p) && hitObjectRadiusHandle(p, view, mm)) canvas.style.cursor = 'ew-resize';
@@ -1501,6 +1557,17 @@ export function onCanvasMouseUp(p: Planner, canvas: HTMLCanvasElement): void {
   } else if (drag.kind === 'groundVert') {
     const g = (f.groundAreas ?? []).find(x => x.id === drag.id);
     if (g && g.points[drag.idx]) g.points[drag.idx] = { x: snap(g.points[drag.idx].x, 10), y: snap(g.points[drag.idx].y, 10) };
+    p.save();
+  } else if (drag.kind === 'pathVert') {
+    const g = (f.groundAreas ?? []).find(x => x.id === drag.id);
+    if (g && g.path && g.path.centerline[drag.idx]) {
+      g.path.centerline[drag.idx] = { x: snap(g.path.centerline[drag.idx].x, 10), y: snap(g.path.centerline[drag.idx].y, 10) };
+      p.regenGroundAreaPath(g);   // final ribbon regen on release
+    }
+    p.save();
+  } else if (drag.kind === 'poolVert') {
+    const pl = (f.pools ?? []).find(x => x.id === drag.id);
+    if (pl && pl.points[drag.idx]) pl.points[drag.idx] = { x: snap(pl.points[drag.idx].x, 10), y: snap(pl.points[drag.idx].y, 10) };
     p.save();
   } else if (drag.kind === 'voidVert') {
     const vd = (f.voidAreas ?? []).find(x => x.id === drag.id);
@@ -2107,6 +2174,25 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
     p.emitConfig();
     return;
   }
+  if (p.tool === 'path') {
+    // Path/driveway CENTERLINE draw latch (T4): each click appends a centerline
+    // point; double-click / Enter finishes (≥2 pts). finishPath() then buffers it
+    // into a plain path-backed GroundArea polygon.
+    const v = { x: snap(mm.x, 10), y: snap(mm.y, 10) };
+    if (!p.drawingPath) p.drawingPath = { points: [v] };
+    else if (p.drawingPath.points.length < 40) p.drawingPath.points.push(v);
+    p.emitConfig();
+    return;
+  }
+  if (p.tool === 'pool') {
+    // Pool/spa polygon draw latch (mirrors the ground tool): each click appends a
+    // world-mm vertex; double-click / Enter finishes (≥3 pts, capped at 20).
+    const v = { x: snap(mm.x, 10), y: snap(mm.y, 10) };
+    if (!p.drawingPoolArea) p.drawingPoolArea = { points: [v] };
+    else if (p.drawingPoolArea.points.length < 20) p.drawingPoolArea.points.push(v);
+    p.emitConfig();
+    return;
+  }
   if (p.tool === 'void') {
     // Void-area polygon draw latch (mirrors the ground tool): each click appends
     // a world-mm vertex; double-click / Enter finishes (≥3 pts, capped at 12).
@@ -2365,8 +2451,17 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
       f.walls = f.walls.filter(x => x.id !== wh.id);
       p.save(); p.emitConfig(); return;
     }
-    // Ground areas — lowest delete priority (paint under everything).
+    // Pools / ground / voids — lowest delete priority (paint under everything).
+    // Pool BEFORE ground so a pool drawn over a grass area deletes the pool first
+    // (matches the select-hit order).
     if (groundInteractive(p)) {
+      const plHit = hitPool(p, view, mm);
+      if (plHit) {
+        if (plHit.locked) return;
+        f.pools = (f.pools ?? []).filter(x => x.id !== plHit.id);
+        if (p.activePoolId === plHit.id) p.activePoolId = null;
+        p.save(); p.emitConfig(); return;
+      }
       const gHit = hitGroundArea(p, view, mm);
       if (gHit) {
         if (gHit.locked) return;
@@ -2447,6 +2542,18 @@ export function onCanvasDblClick(p: Planner, canvas: HTMLCanvasElement, view: Vi
   if (p.tool === 'ground' && p.drawingGroundArea) {
     if (p.drawingGroundArea.points.length >= 3) p.finishGroundArea();
     else { p.drawingGroundArea = null; p.emitConfig(); }
+    p.setTool('select');
+    return;
+  }
+  if (p.tool === 'path' && p.drawingPath) {
+    if (p.drawingPath.points.length >= 2) p.finishPath();
+    else { p.drawingPath = null; p.emitConfig(); }
+    p.setTool('select');
+    return;
+  }
+  if (p.tool === 'pool' && p.drawingPoolArea) {
+    if (p.drawingPoolArea.points.length >= 3) p.finishPoolArea();
+    else { p.drawingPoolArea = null; p.emitConfig(); }
     p.setTool('select');
     return;
   }

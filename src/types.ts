@@ -512,6 +512,14 @@ export interface GroundArea {
                                // skirt ring drops to groundAreaSkirtBase(). Nest
                                // polygons by hand for a multi-tier hill/berm; a
                                // negative value previews a sunken basin.
+  path?: {                     // T4 path/driveway ribbon authoring convenience:
+    centerline: Vec2[];        // when present, `points` is DERIVED (regenerated
+    width: number;             // from bufferPolyline(centerline, width) on every
+  };                           // centerline/width edit) — the stored polygon is a
+                               // CACHE, not authoritative. Rendering/hit/3D are
+                               // 100% the ordinary GroundArea pipeline; only the
+                               // editing UI differs (centerline handles, "Detach
+                               // shape" clears `path` → plain editable polygon).
   locked?: boolean;            // canvas vertex-drag / delete disabled
   hidden?: boolean;            // per-area hide (plus the whole ground layer toggle)
 }
@@ -539,6 +547,39 @@ export interface SprinklerZone {
   zoneNumber?: number;           // optional user label ("Zone 3") shown on the chip
   localState?: string;           // unbound local control ('on'/'off'); inert once bound
   locked?: boolean;              // canvas move/delete disabled (click-to-toggle stays live)
+}
+
+// Pool / spa (T4, see docs/research/pool-spa.md) — a first-class spatial water
+// body drawn as a polygon (parallel-latch idiom: drawingPoolArea) with a SUNKEN
+// (or raised, for a spa) 3D basin: a water surface at −depthMm plus a vertical
+// skirt ring from grade down to it (generalizes T1's terrace-skirt builder),
+// a coping rim, per-frame shimmer (T3 water-texture clone drift), and a warm
+// heater glow / pump ripple driven by bound HA entities. NAV BLOCKS the basin
+// footprint (avatars path around water). Bindings are all domain-flexible +
+// optional (§7 vendor fragmentation): heater climate.*|water_heater.*, pump
+// switch.*, 0..n underwater light.*, plus display-only chemistry sensors.
+// Config-path in _isSlowEntity. Rides the `ground` layer. Per-floor
+// (Floor.pools); repairFloor + defaultFloor backfill [].
+export interface Pool {
+  id: string;
+  name?: string;
+  kind: 'pool' | 'spa';               // spa = smaller (visual defaults differ)
+  points: Vec2[];                     // 3..20 world-mm polygon
+  depthMm?: number;                   // basin depth below grade; default 1200 pool / 900 spa
+  raisedMm?: number;                  // spa raised above grade (0 = in-ground); default 0
+  waterColor?: string;                // toon aqua; default POOL_WATER_COLOR
+  heaterEntity?: string;              // climate.* | water_heater.*
+  pumpEntity?: string;                // switch.*
+  lightEntities?: string[];           // light.* (0..n underwater lights)
+  waterTempEntity?: string;           // sensor.* (chip)
+  phEntity?: string;                  // sensor.*
+  orpEntity?: string;                 // sensor.*
+  saltEntity?: string;                // sensor.*
+  // A Pool has SEVERAL independently-toggleable sub-things (heater, pump) so it
+  // uses a localState MAP rather than the single-fixture flat localState field.
+  localState?: { heater?: string; pump?: string };
+  locked?: boolean;
+  hidden?: boolean;
 }
 
 // A floor void / opening — a user-drawn "no floor here" polygon (stairwell
@@ -926,6 +967,7 @@ export interface Floor {
   valves?: ValveFixture[];  // water valve fixtures (open/close from the panel); repairFloor backfills []
   plugs?: PlugFixture[];  // smart plug / outlet fixtures; repairFloor backfills []
   groundAreas?: GroundArea[];  // yard/ground covering polygons; repairFloor backfills []
+  pools?: Pool[];  // pool / spa water bodies (sunken basin + bound equipment); repairFloor backfills []
   sprinklerZones?: SprinklerZone[];  // irrigation heads (spray arc while entity on); repairFloor backfills []
   yardFill?: GroundKind;       // opt-in: auto-paint this ground kind over the floor
                                // rect MINUS every closed wall loop (y=2 underlay).

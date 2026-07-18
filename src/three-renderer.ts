@@ -35,7 +35,7 @@ import {
   logicLightState, actionButtonHeight, actionButtonSize, actionButtonColor, ACTION_BUTTON_DEFAULTS,
 } from './geometry.js';
 import { ALERT_BEACON_DEFAULTS, alertBeaconState, alertBeaconColor, alertBeaconAlarming, isAlertDomain } from './alerts.js';
-import type { Door, Window as WindowType, EnvSensor, BleProxy, AlarmPanel, CalendarPanel, ThermostatFixture, SafetySensor, AlertBeacon, RobotFixture, CameraFixture, ProjectorFixture, ValveFixture, SprinklerZone, PlugFixture, PresenceZone, InfoCard, ActionButton, ObjectRecipe, ActivityKind } from './types.js';
+import type { Door, Window as WindowType, EnvSensor, BleProxy, AlarmPanel, CalendarPanel, ThermostatFixture, SafetySensor, AlertBeacon, RobotFixture, CameraFixture, ProjectorFixture, ValveFixture, SprinklerZone, PlugFixture, PresenceZone, InfoCard, ActionButton, ObjectRecipe, ActivityKind, Pool } from './types.js';
 
 // The subset of Planner.RobotState the renderer reads (structural — keeps the
 // renderer decoupled from the planner). Positions are plan-frame world mm.
@@ -77,7 +77,7 @@ interface RobotRig {
   spin: THREE.Object3D;             // sub-part that spins while working
   blob: THREE.Mesh;
 }
-import { wallCutsForSegment, WINDOW_DEFAULTS, closedWallLoops, wallKind, WALL_KINDS, furnitureLocalToWorld, furnitureWorldToLocal, pointInPolygon as pip, centroid, loopContaining, resolveRoomForPoint, roomLabel, intersectLoopWithRect, polygonArea, heatmapColor, groundAreaSkirtBase, type RoomTemp } from './geometry.js';
+import { wallCutsForSegment, WINDOW_DEFAULTS, closedWallLoops, wallKind, WALL_KINDS, furnitureLocalToWorld, furnitureWorldToLocal, pointInPolygon as pip, centroid, loopContaining, resolveRoomForPoint, roomLabel, intersectLoopWithRect, polygonArea, heatmapColor, groundAreaSkirtBase, poolWaterColor, poolDepthMm, poolRaisedMm, poolHeaterState, poolPumpOn, poolLightOn, poolRimY, poolBasinFloorY, poolWaterSurfaceY, POOL_COPING_COLOR, POOL_HEAT_GLOW, type RoomTemp } from './geometry.js';
 import { visibilityToFogDensity, moonPhaseFraction, type WeatherNow } from './weather.js';
 import {
   paintCalendarCanvas, paintNewsTickerCanvas, paintWeatherCardCanvas,
@@ -1016,6 +1016,7 @@ export class ThreeDRenderer {
   private _camAlertGroup = new THREE.Group();
   private _pzoneGroup = new THREE.Group();       // FP2-style presence-zone patches (build-time, _keyPzones)
   private _groundGroup = new THREE.Group();       // ground / yard covering patches (build-time, _keyGround)
+  private _poolGroup = new THREE.Group();          // pool/spa basins + water surfaces (build-time, _keyPool)
   private _sprinklerGroup = new THREE.Group();     // irrigation heads + spray clouds (build-time, _keySprinklers)
   private _heatmapGroup = new THREE.Group();       // per-room temperature heat-map patches (build-time, _keyHeatmap)
   private _vacMapGroup = new THREE.Group();        // Valetudo room-map overlay patches (build-time, _keyVacMap)
@@ -1491,7 +1492,7 @@ export class ThreeDRenderer {
                     this._actionGroup,
                     this._bleGroup, this._alarmGroup, this._calendarGroup, this._thermoGroup, this._safetyGroup, this._alertGroup,
                     this._robotGroup, this._robotRigGroup, this._cameraGroup, this._projGroup, this._valveGroup, this._plugGroup, this._camAlertGroup, this._pzoneGroup,
-                    this._groundGroup, this._sprinklerGroup, this._vacMapGroup, this._heatmapGroup,
+                    this._groundGroup, this._poolGroup, this._sprinklerGroup, this._vacMapGroup, this._heatmapGroup,
                     this._lightGroup, this._switchGroup, this._targetGroup, this._ghostGroup,
                     this._transitGroup,
                     this._gpsGroup, this._weatherGroup, this._skyGroup, this._bgTextGroup, this._pulseGroup, this._nowPlayingGroup);
@@ -2112,13 +2113,17 @@ export class ThreeDRenderer {
       this._floorGroup, this._doorGroup, this._modelGroup, this._zoneGroup, this._haloGroup,
       this._sensorGroup, this._motionGroup, this._infoGroup, this._actionGroup, this._bleGroup, this._alarmGroup, this._calendarGroup, this._thermoGroup,
       this._safetyGroup, this._alertGroup, this._robotGroup, this._robotRigGroup, this._cameraGroup, this._projGroup, this._valveGroup, this._plugGroup, this._camAlertGroup, this._pzoneGroup,
-      this._groundGroup, this._sprinklerGroup, this._heatmapGroup,
+      this._groundGroup, this._poolGroup, this._sprinklerGroup, this._heatmapGroup,
       this._lightGroup, this._switchGroup, this._targetGroup, this._ghostGroup,
       this._pulseGroup, this._nowPlayingGroup, this._bgTextGroup,
     ]) {
       this._disposeSpriteMaps(g);
       this._clearGroup(g);
     }
+    // Pool water clones live under _poolGroup (just cleared) — dispose them +
+    // drop the list so _advancePoolWater can't drift freed textures before the
+    // next updatePools (same idiom as _disposeWaterPatchTextures for ground).
+    this._disposePoolWaterTextures();
     // Background text is cheap + floor-tied — drop its tracking refs so
     // _advanceBgText can't touch freed geometry before the next updateBgText.
     this._bgSkySprite = null; this._bgBannerAsm = null;
@@ -2447,6 +2452,35 @@ export class ThreeDRenderer {
     if (!this._waterPatchTextures.length) return;
     for (const t of this._waterPatchTextures) {
       let o = t.offset.y + dt * this._WATER_DRIFT;
+      if (o > 1) o -= 1;
+      t.offset.y = o;
+    }
+  }
+
+  // Pool water surface shimmer (T4): reuses the T3 water-texture clone idiom, but
+  // a SEPARATE tracking list from _waterPatchTextures because pools rebuild under
+  // their own _keyPool — reusing the ground list would let updateGroundAreas free
+  // a pool's clone out from under _poolGroup. Disposed in updatePools rebuild +
+  // clearTransientGroups + destroy. Drifted each frame (zero alloc).
+  private _poolWaterTextures: THREE.Texture[] = [];
+  private _disposePoolWaterTextures(): void {
+    for (const t of this._poolWaterTextures) t.dispose();
+    this._poolWaterTextures = [];
+  }
+  private _poolWaterTexClone(): THREE.Texture {
+    const shared = this._groundTexture('water');
+    const c = shared.clone();
+    c.needsUpdate = true;
+    c.wrapS = c.wrapT = THREE.RepeatWrapping;
+    c.colorSpace = THREE.SRGBColorSpace;
+    c.repeat.set(1 / 800, 1 / 800);
+    this._poolWaterTextures.push(c);
+    return c;
+  }
+  private _advancePoolWater(dt: number): void {
+    if (!this._poolWaterTextures.length) return;
+    for (const t of this._poolWaterTextures) {
+      let o = t.offset.y + dt * (this._WATER_DRIFT * 0.7);   // calmer than open water
       if (o > 1) o -= 1;
       t.offset.y = o;
     }
@@ -2880,6 +2914,157 @@ export class ThreeDRenderer {
     }
   }
 
+  // Pool / spa basins (T4, docs/research/pool-spa.md). Per pool: a dark basin
+  // FLOOR plane at poolBasinFloorY, a VERTICAL skirt ring (pool-tile walls) from
+  // the rim down to that floor (generalizes T1's terrace-skirt quad-strip — the
+  // §7 open question "does the recess technique generalize to an arbitrary
+  // polygon" is answered YES here), a shimmering WATER SURFACE plane just below
+  // the rim (T3 water-texture clone drift), a flat COPING ring at the rim, an
+  // optional warm HEATER glow (emissive on the water while heating/idle), and a
+  // toon-blue underwater LIGHT disc when a bound light is on. NAV blocks the
+  // basin footprint in _buildNav so avatars path around it. Rebuilt under
+  // _keyPool in three-view; rides the `ground` layer.
+  updatePools(pools: Pool[], stateProvider: StateProvider): void {
+    if (!this._scene) return;
+    this._clearGroup(this._poolGroup);
+    this._disposePoolWaterTextures();   // free the previous rebuild's surface clones
+    for (const pl of pools ?? []) {
+      if (pl.hidden || pl.points.length < 3) continue;
+      const water = hexToInt(poolWaterColor(pl));
+      const rimY = poolRimY(pl);
+      const floorY = poolBasinFloorY(pl);
+      const surfY = poolWaterSurfaceY(pl);
+      // Resolve the heater/pump/light sub-states (bound entity, else localState).
+      const sub = (entity: string | undefined, local: string | undefined) =>
+        entity ? stateProvider(entity) : (local ? ({ state: local, attributes: {} } as HassState) : null);
+      const hs = poolHeaterState(sub(pl.heaterEntity, pl.localState?.heater));
+      const anyLightOn = (pl.lightEntities ?? []).some(id => poolLightOn(stateProvider(id)));
+
+      // Shape helper: polygon → ShapeGeometry in the ground-patch coord mapping
+      // (rotation.x=-π/2 maps a shape vertex (sx,sy) → world (sx,0,-sy); feed
+      // (w.x, -w.z)). Returns the Shape.
+      const mkShape = (): THREE.Shape => {
+        const shape = new THREE.Shape();
+        for (let i = 0; i < pl.points.length; i++) {
+          const w = this._w(pl.points[i].x, pl.points[i].y, 0);
+          if (i === 0) shape.moveTo(w.x, -w.z); else shape.lineTo(w.x, -w.z);
+        }
+        shape.closePath();
+        return shape;
+      };
+
+      // Basin floor (dark plane at the bottom).
+      const floorMesh = new THREE.Mesh(new THREE.ShapeGeometry(mkShape()), this._mat({
+        color: 0x24333a, roughness: 0.95, metalness: 0, side: THREE.DoubleSide,
+      }));
+      floorMesh.rotation.x = -Math.PI / 2;
+      floorMesh.position.y = floorY + 2;
+      floorMesh.receiveShadow = true;
+      floorMesh.userData.outlineSkip = true;
+      floorMesh.userData.poolFloor = true;
+      this._poolGroup.add(floorMesh);
+
+      // Vertical skirt walls (rim → basin floor) — the terrace-skirt quad strip
+      // with zero outset (a straight basin cut). Pool-tile toon color.
+      {
+        const n = pl.points.length;
+        const pos: number[] = [], uv: number[] = [];
+        let along = 0;
+        for (let i = 0; i < n; i++) {
+          const p1 = pl.points[i], p2 = pl.points[(i + 1) % n];
+          const edgeLen = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+          const T1 = this._w(p1.x, p1.y, rimY), T2 = this._w(p2.x, p2.y, rimY);
+          const B1 = this._w(p1.x, p1.y, floorY), B2 = this._w(p2.x, p2.y, floorY);
+          const u0 = along / 800, u1 = (along + edgeLen) / 800;
+          const vT = rimY / 800, vB = floorY / 800;
+          pos.push(T1.x, T1.y, T1.z, T2.x, T2.y, T2.z, B2.x, B2.y, B2.z);
+          pos.push(T1.x, T1.y, T1.z, B2.x, B2.y, B2.z, B1.x, B1.y, B1.z);
+          uv.push(u0, vT, u1, vT, u1, vB);
+          uv.push(u0, vT, u1, vB, u0, vB);
+          along += edgeLen;
+        }
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+        geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+        geo.computeVertexNormals();
+        const skirt = new THREE.Mesh(geo, this._mat({
+          color: 0xcfe7ef, roughness: 0.9, metalness: 0, side: THREE.DoubleSide,
+        }));
+        skirt.receiveShadow = true;
+        skirt.userData.outlineSkip = true;
+        skirt.userData.poolWall = true;
+        this._poolGroup.add(skirt);
+      }
+
+      // Coping ring — a flat lip at the rim, outset radially from the centroid.
+      {
+        const ctr = centroid(pl.points);
+        const COPING_W = 450;
+        const n = pl.points.length;
+        const pos: number[] = [];
+        for (let i = 0; i < n; i++) {
+          const p1 = pl.points[i], p2 = pl.points[(i + 1) % n];
+          const out = (p: Vec2): Vec2 => {
+            const dx = p.x - ctr.x, dy = p.y - ctr.y, len = Math.hypot(dx, dy) || 1;
+            return { x: p.x + (dx / len) * COPING_W, y: p.y + (dy / len) * COPING_W };
+          };
+          const o1 = out(p1), o2 = out(p2);
+          const y = rimY + 20;
+          const I1 = this._w(p1.x, p1.y, y), I2 = this._w(p2.x, p2.y, y);
+          const O1 = this._w(o1.x, o1.y, y), O2 = this._w(o2.x, o2.y, y);
+          pos.push(I1.x, I1.y, I1.z, I2.x, I2.y, I2.z, O2.x, O2.y, O2.z);
+          pos.push(I1.x, I1.y, I1.z, O2.x, O2.y, O2.z, O1.x, O1.y, O1.z);
+        }
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+        geo.computeVertexNormals();
+        const coping = new THREE.Mesh(geo, this._mat({
+          color: hexToInt(POOL_COPING_COLOR), roughness: 0.95, metalness: 0, side: THREE.DoubleSide,
+        }));
+        coping.receiveShadow = true;
+        coping.userData.outlineSkip = true;
+        coping.userData.poolCoping = true;
+        this._poolGroup.add(coping);
+      }
+
+      // Water surface — a shimmering translucent plane just below the rim. Heater
+      // glow tints its emissive channel (heating full / idle dim / off none).
+      {
+        const tex = this._poolWaterTexClone();
+        const heatEmis = hs === 'heating' ? 0.55 : hs === 'idle' ? 0.22 : 0;
+        const surf = new THREE.Mesh(new THREE.ShapeGeometry(mkShape()), this._mat({
+          color: water, map: tex, side: THREE.DoubleSide,
+          roughness: 0.3, metalness: 0, transparent: true, opacity: 0.82,
+          emissive: heatEmis > 0 ? hexToInt(POOL_HEAT_GLOW) : 0x000000,
+          emissiveIntensity: heatEmis,
+        }));
+        surf.rotation.x = -Math.PI / 2;
+        surf.position.y = surfY;
+        surf.receiveShadow = true;
+        surf.userData.outlineSkip = true;
+        surf.userData.poolWater = true;
+        surf.userData.poolId = pl.id;
+        this._poolGroup.add(surf);
+      }
+
+      // Underwater light — a toon-blue emissive disc mid-basin when any bound
+      // light is on (ScreenLogic-brand lights are on/off only; fixed glow).
+      if (anyLightOn) {
+        const ctr = centroid(pl.points);
+        const c = this._w(ctr.x, ctr.y, surfY - 300);
+        const disc = new THREE.Mesh(new THREE.CircleGeometry(220, 20), this._mat({
+          color: 0x9fe6ff, emissive: 0x6fd0ff, emissiveIntensity: 0.9,
+          transparent: true, opacity: 0.85, side: THREE.DoubleSide,
+        }));
+        disc.position.copy(c);
+        disc.rotation.x = -Math.PI / 2;
+        disc.userData.outlineSkip = true;
+        disc.userData.poolLight = true;
+        this._poolGroup.add(disc);
+      }
+    }
+  }
+
   // Per-room temperature heat-map patches (derived visual layer, opt-in). One
   // flat translucent ShapeGeometry patch per sensor-bearing room loop at y≈5
   // (above the floor slab, below furniture blob shadows at y=8), tinted by
@@ -3185,6 +3370,7 @@ export class ThreeDRenderer {
     // grid helper also rides `grid` but its visibility is owned by updateFloor
     // (folds in the bg-image suppression); see _keyFloor + line ~1962.
     this._groundGroup.visible = v.ground !== false;
+    this._poolGroup.visible = v.ground !== false;         // pools ride the ground layer
     this._sprinklerGroup.visible = v.ground !== false;   // sprinklers ride the ground layer
     // Valetudo room-map overlay rides its OWN layer, DEFAULT OFF (diagnostic).
     this._vacMapGroup.visible = v.vacuumMap === true;
@@ -4490,6 +4676,28 @@ export class ThreeDRenderer {
           if (!pip(wx, wy, vp)) continue;
           if (onStairTerrain(wx, wy)) continue;  // flight bridges the void
           blocked[cy * nx + cx] = 1;
+        }
+      }
+    }
+
+    // Pools (T4): block every cell whose center is inside a pool polygon — avatars
+    // path AROUND water (the pool basin is a hazard, like furniture). The rim IS
+    // the boundary (no inflation). Regions + all snap logic inherit automatically.
+    const poolNavPolys: Vec2[][] = (f.pools ?? [])
+      .filter(pl => !pl.hidden && pl.points.length >= 3)
+      .map(pl => pl.points);
+    for (const pp of poolNavPolys) {
+      let minx = Infinity, miny = Infinity, maxx = -Infinity, maxy = -Infinity;
+      for (const pt of pp) {
+        if (pt.x < minx) minx = pt.x; if (pt.y < miny) miny = pt.y;
+        if (pt.x > maxx) maxx = pt.x; if (pt.y > maxy) maxy = pt.y;
+      }
+      const c0x = clampX(Math.floor(minx / cell)), c1x = clampX(Math.floor(maxx / cell));
+      const c0y = clampY(Math.floor(miny / cell)), c1y = clampY(Math.floor(maxy / cell));
+      for (let cy = c0y; cy <= c1y; cy++) {
+        for (let cx = c0x; cx <= c1x; cx++) {
+          const wx = (cx + 0.5) * cell, wy = (cy + 0.5) * cell;
+          if (pip(wx, wy, pp)) blocked[cy * nx + cx] = 1;
         }
       }
     }
@@ -14666,7 +14874,7 @@ export class ThreeDRenderer {
       this._floorGroup, this._doorGroup, this._modelGroup, this._zoneGroup, this._haloGroup,
       this._sensorGroup, this._motionGroup, this._envGroup, this._infoGroup, this._actionGroup, this._bleGroup,
       this._alarmGroup, this._calendarGroup, this._thermoGroup, this._safetyGroup, this._alertGroup, this._robotGroup, this._robotRigGroup,
-      this._cameraGroup, this._projGroup, this._valveGroup, this._plugGroup, this._camAlertGroup, this._pzoneGroup, this._groundGroup, this._heatmapGroup,
+      this._cameraGroup, this._projGroup, this._valveGroup, this._plugGroup, this._camAlertGroup, this._pzoneGroup, this._groundGroup, this._poolGroup, this._heatmapGroup,
       this._lightGroup, this._switchGroup, this._targetGroup, this._gpsGroup, this._weatherGroup,
       this._skyGroup, this._bgTextGroup, this._pulseGroup, this._nowPlayingGroup,
     ]) {
@@ -14699,6 +14907,7 @@ export class ThreeDRenderer {
     for (const t of Object.values(this._groundTexCache)) t?.dispose();
     this._groundTexCache = {};
     this._disposeWaterPatchTextures();   // per-patch water shimmer clones
+    this._disposePoolWaterTextures();    // per-pool water surface shimmer clones
     this._fenceMeshTex?.dispose(); this._fenceMeshTex = null;
     this._hedgeTex?.dispose(); this._hedgeTex = null;
     this._blurTexStand?.dispose(); this._blurTexStand = null;
@@ -14870,6 +15079,9 @@ export class ThreeDRenderer {
     this._advanceWeather(frameDt, nowS);
     // Water shimmer — drift each water ground-patch texture offset (zero alloc).
     this._advanceGroundWater(frameDt);
+    // Pool water shimmer — drift each pool surface texture clone (zero alloc,
+    // early-returns when no pools exist on the floor).
+    this._advancePoolWater(frameDt);
     // Fountain spray — ballistic droplet recycle (zero alloc after build).
     this._advanceFountains(frameDt);
     // Sprinkler spray — droplet recycle while any zone runs (zero alloc).

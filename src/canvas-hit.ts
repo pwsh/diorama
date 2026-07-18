@@ -507,9 +507,50 @@ export function hitGroundAreaVertex(p: Planner, view: View, mm: Vec2): { area: i
   const id = p.activeGroundAreaId; if (!id) return null;
   const g = (p.floor().groundAreas ?? []).find(x => x.id === id);
   if (!g || g.locked || g.hidden) return null;
+  if (g.path) return null;   // path-backed: centerline handles (hitPathVertex) replace raw verts
   const h = hitPx(view);
   for (let i = 0; i < g.points.length; i++) {
     if (distMM(g.points[i], mm) < h) return { area: g, idx: i };
+  }
+  return null;
+}
+
+// A draggable CENTERLINE handle of the ACTIVE path-backed ground area (T4). When
+// a ground area has a `path`, its raw polygon vertices are NOT draggable (pinned
+// decision 3) — the centerline handles replace them.
+export function hitPathVertex(p: Planner, view: View, mm: Vec2): { area: import('./types.js').GroundArea; idx: number } | null {
+  const id = p.activeGroundAreaId; if (!id) return null;
+  const g = (p.floor().groundAreas ?? []).find(x => x.id === id);
+  if (!g || g.locked || g.hidden || !g.path) return null;
+  const h = hitPx(view);
+  for (let i = 0; i < g.path.centerline.length; i++) {
+    if (distMM(g.path.centerline[i], mm) < h) return { area: g, idx: i };
+  }
+  return null;
+}
+
+// A pool is hit when the point is inside its polygon (respect hidden). Mirrors
+// hitGroundArea. Low priority — called after all item hits (paint never swallows
+// fixture clicks).
+export function hitPool(p: Planner, view: View, mm: Vec2): import('./types.js').Pool | null {
+  void view;
+  const list = p.floor().pools ?? [];
+  for (let i = list.length - 1; i >= 0; i--) {
+    const pl = list[i];
+    if (pl.hidden) continue;
+    if (pl.points.length >= 3 && pointInPolygon(mm.x, mm.y, pl.points)) return pl;
+  }
+  return null;
+}
+
+// A draggable vertex handle of the ACTIVE pool. Mirrors hitGroundAreaVertex.
+export function hitPoolVertex(p: Planner, view: View, mm: Vec2): { pool: import('./types.js').Pool; idx: number } | null {
+  const id = p.activePoolId; if (!id) return null;
+  const pl = (p.floor().pools ?? []).find(x => x.id === id);
+  if (!pl || pl.locked || pl.hidden) return null;
+  const h = hitPx(view);
+  for (let i = 0; i < pl.points.length; i++) {
+    if (distMM(pl.points[i], mm) < h) return { pool: pl, idx: i };
   }
   return null;
 }

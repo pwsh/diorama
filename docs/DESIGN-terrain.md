@@ -1,6 +1,9 @@
 # DESIGN — Terrain enhancements (batches T1–T4)
 
-*Authored 2026-07-18 (Fable). Status: building.*
+*Authored 2026-07-18 (Fable). Status: **shipped** (all four batches, 2026-07-18).*
+*T4 pool trims (deferred, per the agent's report + CLAUDE.md): equipment-pad
+FurnitureKinds, spa bubble/steam particles, 3D pump-ripple modulation,
+per-light colored discs. Water surface pinned at rim − 100 mm.*
 *Authoritative research: `docs/research/terrain-enhancements.md` (ranked
 scope, §3 per-feature designs, §6 build order) — this doc RATIFIES that
 plan and pins the open questions. Cross-referenced docs

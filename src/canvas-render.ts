@@ -16,6 +16,7 @@ import {
   SPRINKLER_DEFAULTS, sprinklerRunning, sprinklerHeadKind, sprinklerArcDeg, sprinklerRadius, sprinklerRotation,
   PLUG_DEFAULTS, plugRotation,
   groundAreaColor, groundKindLabel,
+  poolWaterColor, POOL_COPING_COLOR,
   powerGlowScale,
   hexToRgba, lighten, furnitureKind, furnitureCorners, resolveFurnitureDef, isBinKind, binStateIsFull,
   isDroopPlant, plantThirsty, PLANT_MOISTURE_DEFAULT_THRESHOLD,
@@ -244,6 +245,9 @@ export function drawAll(ctx: CanvasRenderingContext2D, p: Planner, view: View,
   // Ground / yard covering areas — painted right after the floor, under walls /
   // furniture / everything structural.
   if (on(L.ground)) drawGroundAreas(ctx, p, view);
+  // Pools / spas — water bodies painted right after ground (rides the same
+  // `ground` layer gate; the "wet" sibling of ground paint), under structure.
+  if (on(L.ground)) drawPools(ctx, p, view);
   // Floor voids / openings — dark hatched holes, drawn right after ground
   // (rides the same `ground` layer gate).
   if (on(L.ground)) drawVoidAreas(ctx, p, view);
@@ -1989,6 +1993,129 @@ function drawVacuumMaps(ctx: CanvasRenderingContext2D, p: Planner, view: View): 
   }
 }
 
+// Pools / spas (T4) — water-body polygon fill + a lighter coping ring, a warm
+// heater-glow wash while heating, an animated pump ripple, and (when selected) a
+// water-quality chip. Rides the `ground` layer; drawn in the low-priority ground
+// slot so it never swallows fixture clicks. Mirrors drawGroundAreas' selection
+// handles + drawingPoolArea preview.
+function drawPools(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
+  const dpr = window.devicePixelRatio || 1;
+  const f = p.floor();
+  const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+  for (const pl of f.pools ?? []) {
+    if (pl.hidden || pl.points.length < 3) continue;
+    const active = p.activePoolId === pl.id;
+    const water = poolWaterColor(pl);
+    const pts = pl.points.map(v => mmToPx(view, v.x, v.y));
+    // Water fill.
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+    ctx.closePath();
+    ctx.fillStyle = hexToRgba(water, 0.7);
+    ctx.fill();
+    // Pump-on ripple: moving light highlight bands clipped to the water.
+    if (p.poolPumpOnOf(pl)) {
+      ctx.save();
+      ctx.clip();
+      let minx = Infinity, miny = Infinity, maxx = -Infinity, maxy = -Infinity;
+      for (const pt of pts) { if (pt.x < minx) minx = pt.x; if (pt.x > maxx) maxx = pt.x; if (pt.y < miny) miny = pt.y; if (pt.y > maxy) maxy = pt.y; }
+      const off = (now / 40) % 60;
+      ctx.strokeStyle = hexToRgba('#ffffff', 0.18);
+      ctx.lineWidth = 2 * dpr;
+      for (let y = miny - 60 + off; y < maxy; y += 30) {
+        ctx.beginPath(); ctx.moveTo(minx, y); ctx.lineTo(maxx, y - 8 * dpr); ctx.stroke();
+      }
+      ctx.restore();
+    }
+    // Heater glow: warm amber wash pulsing while actively heating (dim when idle).
+    const hs = p.poolHeaterStateOf(pl);
+    if (hs !== 'off') {
+      const base = hs === 'heating' ? 0.22 : 0.1;
+      const a = base + (hs === 'heating' ? 0.12 * (0.5 + 0.5 * Math.sin(now / 500)) : 0);
+      ctx.fillStyle = hexToRgba('#ff8a4c', a);
+      ctx.fill();
+    }
+    // Coping rim (inset lighter ring).
+    if (pts.length >= 3) {
+      let cx = 0, cy = 0; for (const pt of pts) { cx += pt.x; cy += pt.y; } cx /= pts.length; cy /= pts.length;
+      const inset = 4 * dpr;
+      ctx.beginPath();
+      for (let i = 0; i < pts.length; i++) {
+        const dx = pts[i].x - cx, dy = pts[i].y - cy, len = Math.hypot(dx, dy) || 1;
+        const ix = pts[i].x - (dx / len) * inset, iy = pts[i].y - (dy / len) * inset;
+        if (i === 0) ctx.moveTo(ix, iy); else ctx.lineTo(ix, iy);
+      }
+      ctx.closePath();
+      ctx.strokeStyle = hexToRgba(POOL_COPING_COLOR, 0.85);
+      ctx.lineWidth = 2 * dpr;
+      ctx.stroke();
+    }
+    // Outer edge stroke.
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+    ctx.closePath();
+    ctx.strokeStyle = hexToRgba(water, active ? 0.95 : 0.6);
+    ctx.lineWidth = active ? 2 : 1;
+    ctx.stroke();
+    ctx.restore();
+    // Name label at centroid.
+    const ctr = centroid(pl.points);
+    const cp = mmToPx(view, ctr.x, ctr.y);
+    ctx.fillStyle = hexToRgba('#ffffff', 0.9);
+    ctx.font = `${11 * dpr}px sans-serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(pl.name?.trim() || (pl.kind === 'spa' ? 'Spa' : 'Pool'), cp.x, cp.y);
+    // Water-quality chip (temp · pH · ORP · salt) from whichever sensors bound.
+    const st = (id?: string) => id ? (p.hass?.states?.[id] ?? null) : null;
+    const parts: string[] = [];
+    const tSt = st(pl.waterTempEntity);
+    if (tSt) parts.push(`${tSt.state}${(tSt.attributes?.['unit_of_measurement'] as string) ?? '°'}`);
+    const phSt = st(pl.phEntity); if (phSt) parts.push(`pH ${phSt.state}`);
+    const orpSt = st(pl.orpEntity); if (orpSt) parts.push(`${orpSt.state} ORP`);
+    const saltSt = st(pl.saltEntity); if (saltSt) parts.push(`${saltSt.state} ppm`);
+    if (parts.length) {
+      const chip = parts.join(' · ');
+      ctx.font = `${10 * dpr}px sans-serif`;
+      const w = ctx.measureText(chip).width + 10 * dpr;
+      const chy = cp.y + 15 * dpr;
+      ctx.fillStyle = hexToRgba('#0a1418', active ? 0.85 : 0.55);
+      ctx.fillRect(cp.x - w / 2, chy - 8 * dpr, w, 16 * dpr);
+      ctx.fillStyle = hexToRgba('#bfe9f5', active ? 0.95 : 0.7);
+      ctx.fillText(chip, cp.x, chy);
+    }
+    // Vertex handles on the active (unlocked) pool.
+    if (active && !pl.locked) {
+      for (const pt of pts) {
+        ctx.beginPath(); ctx.arc(pt.x, pt.y, 5 * dpr, 0, 2 * Math.PI);
+        ctx.fillStyle = '#ffb74d'; ctx.strokeStyle = '#fff'; ctx.lineWidth = 1;
+        ctx.fill(); ctx.stroke();
+      }
+    }
+  }
+  // In-progress draw preview (drawingPoolArea) — mirrors the ground latch.
+  const dp = p.drawingPoolArea;
+  if (dp?.points.length) {
+    const col = poolWaterColor({});
+    ctx.save();
+    ctx.strokeStyle = col; ctx.lineWidth = 2; ctx.setLineDash([5, 4]);
+    ctx.beginPath();
+    const a = mmToPx(view, dp.points[0].x, dp.points[0].y);
+    ctx.moveTo(a.x, a.y);
+    for (let i = 1; i < dp.points.length; i++) { const pt = mmToPx(view, dp.points[i].x, dp.points[i].y); ctx.lineTo(pt.x, pt.y); }
+    if (p.cursor) { const c2 = mmToPx(view, p.cursor.x, p.cursor.y); ctx.lineTo(c2.x, c2.y); }
+    ctx.stroke(); ctx.setLineDash([]);
+    for (const v of dp.points) {
+      const pt = mmToPx(view, v.x, v.y);
+      ctx.beginPath(); ctx.arc(pt.x, pt.y, 4 * dpr, 0, 2 * Math.PI);
+      ctx.fillStyle = col; ctx.fill();
+    }
+    ctx.restore();
+  }
+}
+
 function drawGroundAreas(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
   const dpr = window.devicePixelRatio || 1;
   const f = p.floor();
@@ -2061,14 +2188,53 @@ function drawGroundAreas(ctx: CanvasRenderingContext2D, p: Planner, view: View):
       ctx.font = `bold ${11 * dpr}px sans-serif`;
       ctx.fillText(`${elev > 0 ? '+' : '−'}${Math.abs(elev)} mm`, cp.x, cp.y + 14 * dpr);
     }
-    // Vertex handles on the active (unlocked) area.
+    // Vertex handles on the active (unlocked) area. A PATH-backed area shows its
+    // CENTERLINE handles (+ the polyline) instead of the derived polygon vertices
+    // (pinned decision 3 — the generated verts are not draggable).
     if (active && !g.locked) {
-      for (const pt of pts) {
-        ctx.beginPath(); ctx.arc(pt.x, pt.y, 5 * dpr, 0, 2 * Math.PI);
-        ctx.fillStyle = '#ffb74d'; ctx.strokeStyle = '#fff'; ctx.lineWidth = 1;
-        ctx.fill(); ctx.stroke();
+      if (g.path && g.path.centerline.length) {
+        const cl = g.path.centerline.map(v => mmToPx(view, v.x, v.y));
+        ctx.save();
+        ctx.strokeStyle = 'rgba(255,183,77,0.85)'; ctx.lineWidth = 1.5 * dpr; ctx.setLineDash([4, 3]);
+        ctx.beginPath(); ctx.moveTo(cl[0].x, cl[0].y);
+        for (let i = 1; i < cl.length; i++) ctx.lineTo(cl[i].x, cl[i].y);
+        ctx.stroke(); ctx.setLineDash([]);
+        for (const pt of cl) {
+          ctx.beginPath(); ctx.arc(pt.x, pt.y, 5 * dpr, 0, 2 * Math.PI);
+          ctx.fillStyle = '#ffb74d'; ctx.strokeStyle = '#fff'; ctx.lineWidth = 1;
+          ctx.fill(); ctx.stroke();
+        }
+        ctx.restore();
+      } else {
+        for (const pt of pts) {
+          ctx.beginPath(); ctx.arc(pt.x, pt.y, 5 * dpr, 0, 2 * Math.PI);
+          ctx.fillStyle = '#ffb74d'; ctx.strokeStyle = '#fff'; ctx.lineWidth = 1;
+          ctx.fill(); ctx.stroke();
+        }
       }
     }
+  }
+  // In-progress path centerline preview (drawingPath) — records centerline clicks;
+  // the ribbon is only realized on finish via bufferPolyline.
+  const dpath = p.drawingPath;
+  if (dpath?.points.length) {
+    ctx.save();
+    ctx.strokeStyle = '#b8b8bc'; ctx.lineWidth = 2; ctx.setLineDash([6, 4]);
+    ctx.beginPath();
+    const a0 = mmToPx(view, dpath.points[0].x, dpath.points[0].y);
+    ctx.moveTo(a0.x, a0.y);
+    for (let i = 1; i < dpath.points.length; i++) {
+      const pt = mmToPx(view, dpath.points[i].x, dpath.points[i].y);
+      ctx.lineTo(pt.x, pt.y);
+    }
+    if (p.cursor) { const c2 = mmToPx(view, p.cursor.x, p.cursor.y); ctx.lineTo(c2.x, c2.y); }
+    ctx.stroke(); ctx.setLineDash([]);
+    for (const v of dpath.points) {
+      const pt = mmToPx(view, v.x, v.y);
+      ctx.beginPath(); ctx.arc(pt.x, pt.y, 4 * dpr, 0, 2 * Math.PI);
+      ctx.fillStyle = '#b8b8bc'; ctx.fill();
+    }
+    ctx.restore();
   }
   // In-progress draw preview (drawingGroundArea) — mirrors the pzone latch.
   const dg = p.drawingGroundArea;

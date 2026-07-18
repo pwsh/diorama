@@ -118,6 +118,19 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Terrain T4: path ribbons + pool & spa** (2026-07-18; 1 Opus agent —
+  completes the terrain program, `docs/DESIGN-terrain.md` now fully
+  shipped). Pure `bufferPolyline` mitered-ribbon authoring
+  (`GroundArea.path` centerline+width, points = derived cache;
+  centerline-only handles, Detach converts to plain polygon); `Pool`
+  per-floor fixture per `docs/research/pool-spa.md` — sunken basin via
+  the T1 skirt generalization, shimmer water (dedicated clone list),
+  heater/pump/light bindings (heater drives the water glow; pump = 2D
+  ripple), nav-blocking, `_keyPool`. Trims documented in CLAUDE.md T4
+  section (equipment-pad kinds, spa bubbles, per-light discs).
+  `PATHPOOL PASS 50/50`; regressions terrain 21/21, yardlife 36/36,
+  fence-gate 32/32, void 10/10.
+
 - **Terrain T3: yard life — water shimmer, fountain spray, sprinkler
   zones, rock cluster** (2026-07-18; 1 Opus agent). Water-kind ground
   patches drift a per-patch texture-offset CLONE (shared cache never

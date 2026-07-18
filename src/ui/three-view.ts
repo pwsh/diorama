@@ -9,6 +9,7 @@ import type { ThreeDRenderer, ZoneWorld, HaloWorld, TargetWorld, ActivityContext
 import { localToWorld, transformVerts, pointInPolygon, sensorColor, hexToInt, motionColor, lightIconKind, furnitureKind, resolveFurnitureDef, furnitureCat, isBinKind, isSpeakerKind, isVehicleKind, isStairsKind, alarmStateColor, valveOpenness, sprinklerRunning, sprinklerHeadKind, sprinklerArcDeg, sprinklerRadius, sprinklerRotation, doorSpanCenter, isDroopPlant, plantThirsty, PLANT_MOISTURE_DEFAULT_THRESHOLD } from '../geometry.js';
 import { compass8 } from '../geo.js';
 import { parseNowPlaying, isMediaPlayerId } from '../geometry.js';
+import { poolWaterColor } from '../geometry.js';
 import { resolveScreenContent } from '../surfaces.js';
 import { resolveScenePreset, resolveTimeBucket } from '../time-of-day.js';
 import { conditionIntensity, weatherEffectEnabled, worstAlertSeverity } from '../weather.js';
@@ -643,6 +644,7 @@ export class ThreeView extends LitElement {
   private _keyCamAlerts = '';
   private _keyPzones = '';
   private _keyGround = '';
+  private _keyPool = '';
   private _keySprinklers = '';
   private _keyHeatmap = '';
   private _keyVacMap = '';
@@ -675,7 +677,7 @@ export class ThreeView extends LitElement {
         this._keyFloor = this._keyDoors = this._keySensors = '';
         this._keyMotion = this._keyEnv = this._keyInfo = this._keyActions = this._keyBle = this._keyAlarm = this._keyCalendar = this._keyThermo = this._keySafety = this._keyAlert = '';
         this._keyCameras = this._keyProjectors = this._keyValves = this._keyPlugs = this._keyCamAlerts = this._keyPzones = this._keyNowPlaying = '';
-        this._keyGround = this._keySprinklers = '';
+        this._keyGround = this._keyPool = this._keySprinklers = '';
         this._keyHeatmap = '';
         this._keyVacMap = '';
         this._keyLights = this._keyZones = this._keyHalos = '';
@@ -1161,6 +1163,24 @@ export class ThreeView extends LitElement {
       if (keyGround !== this._keyGround) {
         this._keyGround = keyGround;
         r.updateGroundAreas(groundList, f.yardFill, f.w, f.d, f.walls ?? []);
+      }
+
+      // Pools / spas (T4): structural geometry + a bound-entity state hash (heater
+      // state, pump on/off, per-light on-bitmask, water temp) so the basin glow /
+      // underwater light rebuild on a state change. Bound ids are config-path in
+      // _isSlowEntity. Rides the `ground` layer; the per-frame shimmer drift is
+      // NOT keyed (_advancePoolWater mutates the surface texture offset directly).
+      const poolList = f.pools ?? [];
+      const keyPool = `${p.configRev}|` + poolList.map(pl => {
+        const hs = p.poolHeaterStateOf(pl);
+        const pump = p.poolPumpOnOf(pl) ? 1 : 0;
+        const litBits = (pl.lightEntities ?? []).map(id => states[id]?.state === 'on' ? 1 : 0).join('');
+        const wt = pl.waterTempEntity ? (states[pl.waterTempEntity]?.state ?? '') : '';
+        return `${pl.id}:${pl.kind}:${pl.hidden ? 'h' : ''}:${hs}:${pump}:${litBits}:${wt}:${pl.depthMm ?? 0}:${pl.raisedMm ?? 0}:${poolWaterColor(pl)}:${pl.points.map(v => `${v.x | 0},${v.y | 0}`).join(';')}`;
+      }).join('|');
+      if (keyPool !== this._keyPool) {
+        this._keyPool = keyPool;
+        r.updatePools(poolList, id => states[id] || null);
       }
 
       // Sprinkler zones (T3): head geometry (position / kind / arc / radius /

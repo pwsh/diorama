@@ -97,13 +97,13 @@ codebase so this doc stays honest as items land.
 - **Cars**: Tesla Fleet (core; 50 writes/day cap) is the stable target;
   BMW connected_drive is REMOVED (API blocked 2025-09) — cautionary tale;
   Ford is HACS-only.
-- **Irrigation**: zones are `switch` entities in practice (Rachio,
-  Rain Bird; nobody has migrated to the `valve` domain yet) — yard
-  sprinkler-arc animation gated on a bound switch is easy once a yard
-  concept exists (M/3).
-- **Pool**: heater support must branch on climate-entity presence
-  (ScreenLogic/iAquaLink have one; OmniLogic doesn't). Needs a pool
-  furniture/terrain concept first (L/3).
+- ✅ **Irrigation** — SHIPPED 2026-07-18 (terrain T3): `SprinklerZone`
+  fixture per `research/irrigation-sprinklers.md` (switch/valve-bound
+  spray/rotor/drip animation, terrace-aware heads).
+- ✅ **Pool** — SHIPPED 2026-07-18 (terrain T4): `Floor.pools` per
+  `research/pool-spa.md` (sunken basin via the terrace-skirt builder,
+  shimmer water, heater/pump/light bindings). Deferred: equipment-pad
+  furniture kinds, spa bubble particles (CLAUDE.md T4 section).
 - **Plants**: legacy `plant.*` domain is orphaned; modern pattern is a
   device with moisture/light/battery sensors (FYTA). A thirsty-plant
   droop on the existing plant furniture kind is charming (M/3).
@@ -134,8 +134,9 @@ codebase so this doc stays honest as items land.
 3. **Device-siblings resolution** — resolve related entities (battery,
    power, door) from the HA device registry instead of one-binding-per-
    datum; enables battery badges + richer appliance cards with less UI.
-4. **Yard/terrain concept** — mower, irrigation, gates, pool, and
-   geo_location pins all want a modeled outdoors beyond the slab void.
+4. ✅ **Yard/terrain concept** — SHIPPED 2026-07-18 as the terrain
+   program T1–T4 (`docs/DESIGN-terrain.md`): terraced elevation, yard
+   fill, fences/gates, sprinklers, water life, paths, pool.
 
 ## Top 12 picks (wow ÷ effort, Diorama-fit weighted)
 

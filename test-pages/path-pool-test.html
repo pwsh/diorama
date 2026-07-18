@@ -1,0 +1,289 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>PATHPOOL …</title>
+<style>html,body{margin:0;background:#111;color:#cfd8dc;font:12px monospace}#c{width:1280px;height:880px}#log{padding:8px;white-space:pre-wrap}</style>
+<div id="c"></div>
+<div id="log"></div>
+<!-- Batch T4 "Authoring polish + pool": path/driveway ribbon + pool/spa basin.
+     Three seams (same recipe as yardlife-test):
+       (1) pure helpers (geometry.mod.js): bufferPolyline / pool level helpers.
+             npx esbuild src/geometry.ts --bundle --format=esm --outfile=<H>/geometry.mod.js
+       (2) real Planner (planner.mod.js — fake-HaApi/fake-avatar-store build):
+             T=$(mktemp -d); cp -r src/* "$T"/; cp test-pages/fake-avatar-store.ts "$T"/avatar-store.ts
+             npx esbuild "$T"/planner.ts --bundle --format=esm --outfile=<H>/planner.mod.js
+       (3) 3D build/advance via the built three-renderer chunk (./assets/three-renderer.js).
+     Asserts machine-checkable in document.title. -->
+<script type="module">
+ try {
+  const V = '?v=' + Date.now();
+  const geom = await import('./geometry.mod.js' + V);
+  const { Planner } = await import('./planner.mod.js' + V);
+  const mod = await import('./assets/three-renderer.js' + V);
+
+  const results = [];
+  const assert = (name, cond, detail = '') => results.push({ name, ok: !!cond, detail: String(detail) });
+  const near = (a, b, t = 1) => Math.abs(a - b) <= t;
+  const {
+    bufferPolyline, PATH_MIN_WIDTH, PATH_DEFAULT_WIDTH,
+    poolDepthMm, poolRaisedMm, poolBasinFloorY, poolWaterSurfaceY, poolRimY,
+    poolHeaterState, poolPumpOn, poolLightOn, POOL_WATERLINE_DROP,
+  } = geom;
+
+  // ══ BUFFERPOLYLINE (pure) ═══════════════════════════════════════════════
+  {
+    // B1: straight 2-pt centerline → a 4-vertex rectangle, width across == width.
+    const straight = bufferPolyline([{ x: 0, y: 0 }, { x: 1000, y: 0 }], 400);
+    const ys = straight.map(p => p.y);
+    const span = Math.max(...ys) - Math.min(...ys);
+    assert('B1 straight → 4 verts, width across == width', straight.length === 4 && near(span, 400), `${straight.length}/${span}`);
+
+    // B2: L-bend → 2N verts + the interior miter reaches FARTHER than half-width.
+    const L = bufferPolyline([{ x: 0, y: 0 }, { x: 1000, y: 0 }, { x: 1000, y: 1000 }], 400);
+    assert('B2 L-bend → 2N verts', L.length === 6, L.length);
+    // The miter offset points at the corner (1000,0) reach FARTHER than the
+    // half-width (200): √2·200 ≈ 283. At least one output vertex lands in (200,400).
+    const hasMiter = L.some(p => { const d = Math.hypot(p.x - 1000, p.y - 0); return d > 200 && d < 400; });
+    assert('B2b interior miter > half-width', hasMiter, L.map(p => Math.hypot(p.x - 1000, p.y).toFixed(0)).join(','));
+
+    // B3: N-point curve → exactly 2N output verts (left forward + right back).
+    const curve = bufferPolyline([{ x: 0, y: 0 }, { x: 500, y: 200 }, { x: 1000, y: 0 }, { x: 1500, y: 300 }, { x: 2000, y: 0 }], 300);
+    assert('B3 5-pt curve → 10 verts', curve.length === 10, curve.length);
+
+    // B4: degenerate (<2 points) → [].
+    assert('B4 <2 points → []', bufferPolyline([{ x: 5, y: 5 }], 400).length === 0 && bufferPolyline([], 400).length === 0);
+
+    // B5: width clamp — a tiny width is clamped to PATH_MIN_WIDTH.
+    const thin = bufferPolyline([{ x: 0, y: 0 }, { x: 1000, y: 0 }], 10);
+    const tspan = Math.max(...thin.map(p => p.y)) - Math.min(...thin.map(p => p.y));
+    assert('B5 width clamp to PATH_MIN_WIDTH', near(tspan, PATH_MIN_WIDTH), `${tspan} (min ${PATH_MIN_WIDTH})`);
+
+    // B6: PATH_DEFAULT_WIDTH sane.
+    assert('B6 PATH_DEFAULT_WIDTH ≥ min', PATH_DEFAULT_WIDTH >= PATH_MIN_WIDTH, PATH_DEFAULT_WIDTH);
+  }
+
+  // ══ POOL LEVEL HELPERS (pure) ═══════════════════════════════════════════
+  {
+    const pool = { kind: 'pool', points: [] };
+    assert('P0 pool depth default 1200', poolDepthMm(pool) === 1200, poolDepthMm(pool));
+    assert('P0b spa depth default 900', poolDepthMm({ kind: 'spa', points: [] }) === 900);
+    assert('P0c basin floor == -depth (in-ground)', poolBasinFloorY(pool) === -1200, poolBasinFloorY(pool));
+    assert('P0d water surface just below rim', poolWaterSurfaceY(pool) === -POOL_WATERLINE_DROP, poolWaterSurfaceY(pool));
+    const spa = { kind: 'spa', points: [], raisedMm: 300, depthMm: 600 };
+    assert('P0e raised spa rim = raisedMm', poolRimY(spa) === 300);
+    assert('P0f raised spa basin floor = raised - depth', poolBasinFloorY(spa) === -300, poolBasinFloorY(spa));
+    // Heater / pump / light state resolvers.
+    assert('P0g heater heating', poolHeaterState({ state: 'heat', attributes: { hvac_action: 'heating' } }) === 'heating');
+    assert('P0h heater idle', poolHeaterState({ state: 'heat', attributes: { hvac_action: 'idle' } }) === 'idle');
+    assert('P0i heater off', poolHeaterState({ state: 'off', attributes: {} }) === 'off');
+    assert('P0j pump on', poolPumpOn({ state: 'on' }) === true && poolPumpOn({ state: 'off' }) === false);
+    assert('P0k light on', poolLightOn({ state: 'on' }) === true && poolLightOn(null) === false);
+  }
+
+  // ══ 3D RENDERER — basin geometry, shimmer, glow, nav, layer ═════════════
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+  const scene3d = { preset: 'day', floorColor: '#8a7860', floorTex: 'none', wallColor: '#cfd2d6' };
+  const mkFloor = (over = {}) => ({
+    id: 'f1', name: 'R', w: 12000, d: 8000, walls: [], furniture: [],
+    lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [], windows: [], bg: null, model3d: null, look3d: null, rooms: [],
+    groundAreas: [], pools: [], sprinklerZones: [], voidAreas: [], ...over,
+  });
+  const poolPts = [{ x: 3000, y: 2000 }, { x: 7000, y: 2000 }, { x: 7000, y: 5000 }, { x: 3000, y: 5000 }];
+  const findFlags = () => {
+    const f = { floor: 0, wall: 0, water: null, coping: 0, light: 0 };
+    r._poolGroup.traverse(o => {
+      if (!o.isMesh) return;
+      if (o.userData.poolFloor) f.floor++;
+      if (o.userData.poolWall) f.wall++;
+      if (o.userData.poolWater) f.water = o;
+      if (o.userData.poolCoping) f.coping++;
+      if (o.userData.poolLight) f.light++;
+    });
+    return f;
+  };
+
+  {
+    const pool = { id: 'pl1', kind: 'pool', points: poolPts, depthMm: 1400 };
+    r.updatePools([pool], () => null);
+    const f = findFlags();
+    // R1: basin floor plane present, at ≈ -depth.
+    assert('R1 basin floor plane present', f.floor === 1, f.floor);
+    assert('R1b basin floor at ~ -depth', f.floor === 1 && near(findFloorY(r), -1400, 5), findFloorY(r));
+    // R2: skirt walls present.
+    assert('R2 basin walls present', f.wall === 1, f.wall);
+    // R3: coping ring present.
+    assert('R3 coping ring present', f.coping === 1, f.coping);
+    // R4: water surface just below rim (grade), at -POOL_WATERLINE_DROP.
+    assert('R4 water surface present at waterline', f.water && near(f.water.position.y, -POOL_WATERLINE_DROP, 2), f.water && f.water.position.y);
+    // R5: one shimmer clone tracked, not the shared cache entry.
+    const shared = r._groundTexture('water');
+    assert('R5 pool water clone tracked (distinct from shared cache)',
+      r._poolWaterTextures.length === 1 && r._poolWaterTextures[0] !== shared, r._poolWaterTextures.length);
+    // R6: advance drifts the clone offset (zero alloc).
+    const before = r._poolWaterTextures[0].offset.y;
+    for (let i = 0; i < 20; i++) r._advancePoolWater(0.05);
+    assert('R6 pool water shimmer drifts', r._poolWaterTextures[0].offset.y > before, `${before.toFixed(4)}→${r._poolWaterTextures[0].offset.y.toFixed(4)}`);
+    // R7: no light bound / on → no underwater disc.
+    assert('R7 no light disc when unbound', f.light === 0, f.light);
+  }
+
+  // R8/R9: heater glow — bound heater 'heating' → water emissive > 0; 'off' → 0.
+  {
+    const st = { 'climate.pool': { state: 'heat', attributes: { hvac_action: 'heating' } } };
+    r.updatePools([{ id: 'pl1', kind: 'pool', points: poolPts, heaterEntity: 'climate.pool' }], id => st[id] || null);
+    const w = findFlags().water;
+    assert('R8 heater heating → water emissiveIntensity > 0', w && w.material.emissiveIntensity > 0, w && w.material.emissiveIntensity);
+    r.updatePools([{ id: 'pl1', kind: 'pool', points: poolPts, heaterEntity: 'climate.pool' }], () => ({ state: 'off', attributes: {} }));
+    const w2 = findFlags().water;
+    assert('R9 heater off → water emissiveIntensity 0', w2 && w2.material.emissiveIntensity === 0, w2 && w2.material.emissiveIntensity);
+  }
+
+  // R10: underwater light disc appears when a bound light is on.
+  {
+    const st = { 'light.pool': { state: 'on', attributes: {} } };
+    r.updatePools([{ id: 'pl1', kind: 'pool', points: poolPts, lightEntities: ['light.pool'] }], id => st[id] || null);
+    assert('R10 light on → underwater disc present', findFlags().light === 1, findFlags().light);
+    r.updatePools([{ id: 'pl1', kind: 'pool', points: poolPts, lightEntities: ['light.pool'] }], () => ({ state: 'off', attributes: {} }));
+    assert('R10b light off → no disc', findFlags().light === 0, findFlags().light);
+  }
+
+  // R11: layer gating — pools ride the `ground` layer.
+  {
+    r.updatePools([{ id: 'pl1', kind: 'pool', points: poolPts }], () => null);
+    r.setLayerVisibility({ ground: false });
+    const off = r._poolGroup.visible;
+    r.setLayerVisibility({ ground: true });
+    const on = r._poolGroup.visible;
+    assert('R11 pools ride ground layer (hide/show)', off === false && on === true, `${off}/${on}`);
+  }
+
+  // R12: nav BLOCKS the pool footprint (avatars path around water).
+  {
+    r.updateFloor(mkFloor({ pools: [{ id: 'pl1', kind: 'pool', points: poolPts }] }), scene3d);
+    const n = r._nav;
+    const cellBlocked = (wx, wy) => {
+      const cx = Math.max(0, Math.min(n.nx - 1, Math.floor(wx / n.cell)));
+      const cy = Math.max(0, Math.min(n.ny - 1, Math.floor(wy / n.cell)));
+      return n.blocked[cy * n.nx + cx];
+    };
+    assert('R12 pool center blocked in nav', !!cellBlocked(5000, 3500), cellBlocked(5000, 3500));
+    assert('R12b outside-pool cell walkable', !cellBlocked(1000, 1000), cellBlocked(1000, 1000));
+    // Control: no pool → same cell walkable.
+    r.updateFloor(mkFloor({ pools: [] }), scene3d);
+    const n2 = r._nav;
+    const cb2 = (wx, wy) => {
+      const cx = Math.max(0, Math.min(n2.nx - 1, Math.floor(wx / n2.cell)));
+      const cy = Math.max(0, Math.min(n2.ny - 1, Math.floor(wy / n2.cell)));
+      return n2.blocked[cy * n2.nx + cx];
+    };
+    assert('R12c no pool → center walkable', !cb2(5000, 3500), cb2(5000, 3500));
+  }
+
+  // ══ PLANNER — path finish/regen/detach, pool CRUD, backfill, slow-path ══
+  {
+    class FakeHa {
+      constructor() { this.states = {}; this._s = []; this._c = []; }
+      connect() { for (const c of this._c) c('connected'); for (const s of this._s) s(this.states, undefined); }
+      onState(f) { this._s.push(f); } onConn(f) { this._c.push(f); }
+      callService() { return Promise.resolve(); }
+      async getHistory() { return {}; } async getWeatherForecasts() { return null; }
+      async getDevices() { return []; } async getEntityRegistry() { return []; }
+      async updateEntityRegistry() { return true; }
+      async getUserData() { return null; } async setUserData() { return true; }
+      async refreshStates() {}
+    }
+    localStorage.removeItem('diorama:store:v1'); localStorage.removeItem('diorama:configs');
+    const p = new Planner();
+    p.connectWith(new FakeHa());
+    const sleep = ms => new Promise(res => setTimeout(res, ms));
+    for (let i = 0; i < 300 && !p.floor(); i++) await sleep(4);
+    p.uiMode = 'edit';
+
+    // C1: repairFloor backfills pools [].
+    assert('C1 repairFloor backfills pools []', Array.isArray(p.floor().pools), typeof p.floor().pools);
+
+    // C2: finishPath creates a path-backed ground area with derived points.
+    p.drawingPath = { points: [{ x: 0, y: 0 }, { x: 2000, y: 0 }, { x: 2000, y: 2000 }], width: 600 };
+    p.finishPath();
+    const ga = (p.floor().groundAreas ?? []).find(g => g.path);
+    assert('C2 finishPath → path-backed area', !!ga && ga.kind === 'concrete' && ga.path.centerline.length === 3, ga && ga.kind);
+    assert('C2b derived polygon populated', !!ga && ga.points.length >= 3, ga && ga.points.length);
+
+    // C3: width edit regenerates points (wider ribbon → larger bbox).
+    const bboxW = (g) => { const xs = g.points.map(v => v.x); return Math.max(...xs) - Math.min(...xs); };
+    const w0 = bboxW(ga);
+    ga.path.width = 1200;
+    p.regenGroundAreaPath(ga);
+    assert('C3 width edit regenerates wider polygon', bboxW(ga) > w0, `${w0}→${bboxW(ga)}`);
+
+    // C4: centerline edit regenerates points.
+    const before = JSON.stringify(ga.points);
+    ga.path.centerline[2] = { x: 3500, y: 3500 };
+    p.regenGroundAreaPath(ga);
+    assert('C4 centerline edit regenerates polygon', JSON.stringify(ga.points) !== before);
+
+    // C5: detach keeps points + clears path.
+    const kept = JSON.stringify(ga.points);
+    p.detachGroundAreaPath(ga);
+    assert('C5 detach clears path, keeps points', ga.path === undefined && JSON.stringify(ga.points) === kept, `${ga.path}`);
+
+    // C6: finishPoolArea creates a pool.
+    p.drawingPoolArea = { points: [{ x: 1000, y: 1000 }, { x: 3000, y: 1000 }, { x: 3000, y: 3000 }, { x: 1000, y: 3000 }], kind: 'pool' };
+    p.finishPoolArea();
+    const pool = (p.floor().pools ?? [])[0];
+    assert('C6 finishPoolArea creates pool', !!pool && pool.kind === 'pool' && pool.points.length === 4, pool && pool.kind);
+
+    // C7: pool heater/pump bound ids are config-path (_isSlowEntity).
+    pool.heaterEntity = 'climate.pool_heater';
+    pool.pumpEntity = 'switch.pool_pump';
+    pool.phEntity = 'sensor.pool_ph';
+    assert('C7 heater id config-path', p._isSlowEntity('climate.pool_heater') === true);
+    assert('C7b pump id config-path', p._isSlowEntity('switch.pool_pump') === true);
+    assert('C7c ph sensor id config-path', p._isSlowEntity('sensor.pool_ph') === true);
+    assert('C7d unrelated id not config-path', p._isSlowEntity('sensor.random_thing') === false);
+
+    // C8: unbound localState toggles (session-only demo).
+    const p2 = pool;
+    p2.heaterEntity = undefined; p2.pumpEntity = undefined;
+    p.togglePoolHeater(p2);
+    assert('C8 unbound heater toggles localState', p2.localState?.heater === 'on', p2.localState?.heater);
+    assert('C8b heaterState resolves heating from localState', p.poolHeaterStateOf(p2) === 'heating', p.poolHeaterStateOf(p2));
+    p.togglePoolPump(p2);
+    assert('C8c unbound pump toggles localState', p2.localState?.pump === 'on' && p.poolPumpOnOf(p2) === true);
+
+    // C9: deleteSelection removes the selected pool. (Selecting a pool on the
+    // canvas clears the ground/void selection; mirror that here.)
+    p.activePoolId = pool.id;
+    p.activeGroundAreaId = null; p.activeVoidAreaId = null;
+    const removed = p.deleteSelection();
+    const gone = !(p.floor().pools ?? []).some(x => x.id === pool.id);
+    assert('C9 deleteSelection removes pool', removed === true && gone, `${removed}/${gone}`);
+
+    // C10: translateFloorContent shifts pool points + path centerlines.
+    p.drawingPoolArea = { points: [{ x: 500, y: 500 }, { x: 1500, y: 500 }, { x: 1500, y: 1500 }], kind: 'pool' };
+    p.finishPoolArea();
+    const pl2 = (p.floor().pools ?? [])[0];
+    const px0 = pl2.points[0].x;
+    p.translateFloorContent(200, 300);
+    assert('C10 translateFloorContent shifts pool', pl2.points[0].x === px0 + 200, `${px0}→${pl2.points[0].x}`);
+  }
+
+  const pass = results.filter(r => r.ok).length;
+  const total = results.length;
+  document.title = `PATHPOOL ${pass === total ? 'PASS' : 'FAIL'} ${pass}/${total}`;
+  document.getElementById('log').textContent =
+    results.map(r => `${r.ok ? 'ok  ' : 'FAIL'} ${r.name}${r.ok ? '' : '  → ' + r.detail}`).join('\n') +
+    `\n\n${pass}/${total}`;
+
+  // helper hoisted below (needs r in scope)
+  function findFloorY(rr) {
+    let y = NaN;
+    rr._poolGroup.traverse(o => { if (o.isMesh && o.userData.poolFloor) y = o.position.y - 2; });
+    return y;
+  }
+ } catch (e) {
+  document.title = 'PATHPOOL FAIL (threw)';
+  document.getElementById('log').textContent = 'THREW: ' + (e && e.stack || e);
+ }
+</script>

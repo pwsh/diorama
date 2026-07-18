@@ -9,7 +9,7 @@ import type {
   Sensor, Zone, ObjectHalo, BgImage, MotionSensor, EnvSensor, EnvKind, Light, SwitchFixture, LightIconKind,
   Furniture, FurnitureKind, Door, Window as WindowType, WindowKind, Layers2D, Floor, Room,
   ObjectRecipe, RecipePrimitive, RecipeShape, ActivityKind, AvatarKind,
-  BleProxy, AlarmPanel, CalendarPanel, ThermostatFixture, SafetySensor, AlertBeacon, RobotFixture, CameraFixture, ProjectorFixture, ValveFixture, SprinklerZone, SprinklerHeadKind, PlugFixture, PresenceZone, GroundArea, GroundKind, VoidArea, DioramaPerson, Roamer, GeoLandmark,
+  BleProxy, AlarmPanel, CalendarPanel, ThermostatFixture, SafetySensor, AlertBeacon, RobotFixture, CameraFixture, ProjectorFixture, ValveFixture, SprinklerZone, SprinklerHeadKind, PlugFixture, PresenceZone, GroundArea, GroundKind, Pool, VoidArea, DioramaPerson, Roamer, GeoLandmark,
 } from '../types.js';
 import type { BermudaDevice } from '../planner.js';
 import { alertBeaconState, alertBeaconColor, isAlertDomain } from '../alerts.js';
@@ -29,6 +29,7 @@ import {
   valveOpenness, valveFlowing, plugHeight,
   sprinklerRunning, sprinklerHeadKind, sprinklerArcDeg, sprinklerRadius, sprinklerRotation,
   GROUND_KINDS, groundAreaColor,
+  poolWaterColor, poolDepthMm, poolRaisedMm,
   FURNITURE_KINDS, furnitureKind, resolveFurnitureDef, WINDOW_DEFAULTS,
   isDroopPlant, PLANT_MOISTURE_DEFAULT_THRESHOLD,
   ENV_KINDS, ENV_DEFAULTS, ENV_SCALE_MIN, ENV_SCALE_MAX,
@@ -112,6 +113,8 @@ const TOOLS: { id: Tool; label: string }[] = [
   { id: 'plug', label: '🔌 Plug' },
   { id: 'pzone', label: '▱ Presence zone' },
   { id: 'ground', label: '▨ Ground area' },
+  { id: 'path', label: '〰 Path / drive' },
+  { id: 'pool', label: '🏊 Pool / spa' },
   { id: 'void', label: '🕳 Floor void' },
   { id: 'furniture', label: 'Furn' },
   { id: 'light', label: 'Light' },
@@ -402,6 +405,7 @@ export class Sidebar extends LitElement {
         ${this._plugsSection()}
         ${this._presenceZonesSection()}
         ${this._groundSection()}
+        ${this._poolsSection()}
         ${this._voidSection()}
         ${this._peopleSection()}
         ${this._roamersSection()}
@@ -532,6 +536,8 @@ export class Sidebar extends LitElement {
       case 'plug': return 'Click to drop a smart plug / outlet (snaps to a wall). Bind a switch.*/light.* load + an optional power sensor; clicking it toggles the outlet.';
       case 'pzone': return 'Click to add polygon vertices; double-click (or Enter) to finish (≥3 pts). Bind a binary_sensor (FP2 zone / occupancy) — the zone glows when occupied. ESC cancels.';
       case 'ground': return 'Click to add polygon vertices; double-click (or Enter) to finish (3–20 pts). Paints a ground covering (grass/rock/water/…) under the plan. ESC cancels.';
+      case 'path': return 'Click to add centerline points; double-click (or Enter) to finish (2+ pts). Builds a constant-width path/driveway ribbon (kind defaults to concrete). Edit the width + drag the centerline handles afterward; "Detach shape" converts it to a plain polygon. ESC cancels.';
+      case 'pool': return 'Click to add polygon vertices; double-click (or Enter) to finish (3–20 pts). Drops a pool/spa water body — a sunken basin with bindable heater/pump/light/chemistry. Avatars path around it. ESC cancels.';
       case 'void': return 'Click to add polygon vertices; double-click (or Enter) to finish (3–12 pts). Cuts a hole in the floor (stairwell / atrium) — avatars route around it unless a stair bridges it. ESC cancels.';
       case 'furniture': return 'Click to drop a 600 × 600 mm piece.';
       case 'light': return 'Click to drop a light. Bind via the active panel.';
@@ -2999,6 +3005,7 @@ export class Sidebar extends LitElement {
     const p = this.planner;
     const list = p.floor().groundAreas ?? [];
     const drawing = !!p.drawingGroundArea;
+    const drawingPath = !!p.drawingPath;
     return this._section('ground', 'Ground / Yard', () => html`
       ${drawing ? html`
         <div style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text-dim);padding:4px 0">
@@ -3006,10 +3013,17 @@ export class Sidebar extends LitElement {
           <button class="btn" style="font-size:10px;padding:2px 6px"
                   @click=${() => { p.drawingGroundArea = null; p.emitConfig(); }}>Cancel</button>
         </div>` : nothing}
+      ${drawingPath ? html`
+        <div style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text-dim);padding:4px 0">
+          <span style="flex:1">〰 Click centerline points; double-click / Enter to finish (${p.drawingPath!.points.length} pts).</span>
+          <button class="btn" style="font-size:10px;padding:2px 6px"
+                  @click=${() => { p.drawingPath = null; p.emitConfig(); }}>Cancel</button>
+        </div>` : nothing}
       ${list.map(g => this._groundItem(g))}
-      <button class="btn" style="width:100%;margin-top:6px" @click=${() => { p.setTool('ground'); p.maybeCloseSidebarForPlacement(); }}>
-        + Add area
-      </button>
+      <div style="display:flex;gap:4px;margin-top:6px">
+        <button class="btn" style="flex:1" @click=${() => { p.setTool('ground'); p.maybeCloseSidebarForPlacement(); }}>+ Add area</button>
+        <button class="btn" style="flex:1" @click=${() => { p.setTool('path'); p.maybeCloseSidebarForPlacement(); }}>+ Add path</button>
+      </div>
     `);
   }
 
@@ -3059,12 +3073,34 @@ export class Sidebar extends LitElement {
                   @click=${() => upd(() => { g.hidden = !g.hidden; })}>${g.hidden ? '🙈 Hidden' : '👁 Shown'}</button>
         </div>
         ${this._lockRow(g)}
-        <div style="font-size:10px;color:var(--text-dim);margin:2px 0">${g.points.length} vertices · drag the orange handles to reshape (Select mode)</div>
-        <div style="display:flex;gap:4px;margin-top:4px">
-          <button class="btn" style="flex:1;font-size:11px"
-                  title="Re-draw the polygon on the plan (replaces the points)"
-                  @click=${() => { p.drawingGroundArea = { points: [], id: g.id }; p.setTool('ground'); p.maybeCloseSidebarForPlacement(); p.emitConfig(); }}>Redraw</button>
-        </div>
+        ${g.path ? html`
+          <div class="row" title="Ribbon width — the generated polygon is regenerated (bufferPolyline) on every change.">
+            <label>Path width</label>
+            <input type="number" step="50" min="100" .value=${String(g.path.width)}
+                   style="flex:1"
+                   @input=${(e: Event) => upd(() => {
+                     const v = Math.max(100, Math.round(Number((e.target as HTMLInputElement).value) || 100));
+                     if (g.path) { g.path.width = v; p.regenGroundAreaPath(g); }
+                   })}>
+            <span style="color:var(--text-dim);font-size:11px">mm</span>
+          </div>
+          <div style="font-size:10px;color:var(--text-dim);margin:2px 0">${g.path.centerline.length} centerline points · drag the orange handles to reshape (Select mode)</div>
+          <div style="display:flex;gap:4px;margin-top:4px">
+            <button class="btn" style="flex:1;font-size:11px"
+                    title="Re-draw the centerline on the plan (replaces the path)"
+                    @click=${() => { p.drawingPath = { points: [], id: g.id, width: g.path?.width }; p.setTool('path'); p.maybeCloseSidebarForPlacement(); p.emitConfig(); }}>Redraw path</button>
+            <button class="btn" style="flex:1;font-size:11px"
+                    title="Drop the path metadata, keeping the current polygon as a plain editable shape."
+                    @click=${() => p.detachGroundAreaPath(g)}>Detach shape</button>
+          </div>
+        ` : html`
+          <div style="font-size:10px;color:var(--text-dim);margin:2px 0">${g.points.length} vertices · drag the orange handles to reshape (Select mode)</div>
+          <div style="display:flex;gap:4px;margin-top:4px">
+            <button class="btn" style="flex:1;font-size:11px"
+                    title="Re-draw the polygon on the plan (replaces the points)"
+                    @click=${() => { p.drawingGroundArea = { points: [], id: g.id }; p.setTool('ground'); p.maybeCloseSidebarForPlacement(); p.emitConfig(); }}>Redraw</button>
+          </div>
+        `}
         <button class="btn danger" style="width:100%;margin-top:6px" @click=${() => {
           const f = p.floor();
           f.groundAreas = (f.groundAreas ?? []).filter(x => x.id !== g.id);
@@ -3073,6 +3109,144 @@ export class Sidebar extends LitElement {
         }}>Delete area</button>
       </div>
     `;
+  }
+
+  // ── Pool & Spa section (T4) ───────────────────────────────────────────
+  private _poolsSection() {
+    const p = this.planner;
+    const list = p.floor().pools ?? [];
+    const drawing = !!p.drawingPoolArea;
+    return this._section('pools', 'Pool & Spa', () => html`
+      ${drawing ? html`
+        <div style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text-dim);padding:4px 0">
+          <span style="flex:1">🏊 Click to add vertices; double-click / Enter to finish (${p.drawingPoolArea!.points.length} pts).</span>
+          <button class="btn" style="font-size:10px;padding:2px 6px"
+                  @click=${() => { p.drawingPoolArea = null; p.emitConfig(); }}>Cancel</button>
+        </div>` : nothing}
+      ${list.map(pl => this._poolItem(pl))}
+      <div style="display:flex;gap:4px;margin-top:6px">
+        <button class="btn" style="flex:1" @click=${() => { p.drawingPoolArea = { points: [], kind: 'pool' }; p.setTool('pool'); p.maybeCloseSidebarForPlacement(); }}>+ Pool</button>
+        <button class="btn" style="flex:1" @click=${() => { p.drawingPoolArea = { points: [], kind: 'spa' }; p.setTool('pool'); p.maybeCloseSidebarForPlacement(); }}>+ Spa</button>
+      </div>
+    `);
+  }
+
+  private _poolItem(pl: Pool) {
+    const p = this.planner;
+    const sel = p.activePoolId === pl.id;
+    const hs = p.poolHeaterStateOf(pl);
+    const badge = hs === 'heating' ? '🔥 heating' : hs === 'idle' ? 'idle' : (p.poolPumpOnOf(pl) ? '💧 pump' : (pl.kind === 'spa' ? 'spa' : 'pool'));
+    return html`
+      <div style="border-bottom:1px solid var(--border)">
+        <div class="sensor-item ${sel ? 'sel' : ''}" @click=${() => p.setActivePool(pl.id)}>
+          <div class="dot" style="background:${poolWaterColor(pl)}"></div>
+          <div class="nm">${pl.kind === 'spa' ? '♨' : '🏊'} ${pl.name?.trim() || (pl.kind === 'spa' ? 'Spa' : 'Pool')}</div>
+          <div class="badge">${badge}</div>
+        </div>
+        ${sel ? this._poolEditor(pl) : nothing}
+      </div>
+    `;
+  }
+
+  private _poolBindRow(pl: Pool, label: string, field: 'heaterEntity' | 'pumpEntity' | 'waterTempEntity' | 'phEntity' | 'orpEntity' | 'saltEntity', domains: string[]) {
+    const p = this.planner;
+    const cur = pl[field];
+    return html`
+      <div class="row"><label>${label}</label>
+        <span style="font-size:11px;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${cur || '— unbound —'}</span>
+        <button class="btn" style="font-size:11px" @click=${() => this._pickPoolEntity(pl, field, domains)}>🔗</button>
+        ${cur ? html`<button class="btn" style="font-size:11px" @click=${() => { pl[field] = undefined; p.save(); p.emitConfig(); }}>✕</button>` : nothing}
+      </div>
+    `;
+  }
+
+  private _poolEditor(pl: Pool) {
+    const p = this.planner;
+    const upd = (mut: () => void) => { mut(); p.save(); p.emitConfig(); };
+    const lights = pl.lightEntities ?? [];
+    return html`
+      <div style="background:rgba(0,0,0,0.25);border-radius:4px;padding:6px;margin:4px 0">
+        <div class="row"><label>Kind</label>
+          <select @change=${(e: Event) => upd(() => { pl.kind = (e.target as HTMLSelectElement).value as 'pool' | 'spa'; })}>
+            <option value="pool" ?selected=${pl.kind === 'pool'}>Pool</option>
+            <option value="spa" ?selected=${pl.kind === 'spa'}>Spa</option>
+          </select>
+        </div>
+        <div class="row"><label>Name</label>
+          <input type="text" .value=${pl.name ?? ''} placeholder=${pl.kind === 'spa' ? 'Spa' : 'Pool'}
+                 @input=${(e: Event) => upd(() => { pl.name = (e.target as HTMLInputElement).value; })}>
+        </div>
+        <div class="row"><label>Water color</label>
+          <input type="color" .value=${poolWaterColor(pl)}
+                 @input=${(e: Event) => upd(() => { pl.waterColor = (e.target as HTMLInputElement).value; })}>
+        </div>
+        <div class="row" title="Basin depth below grade."><label>Depth</label>
+          <input type="number" step="100" min="300" .value=${String(poolDepthMm(pl))} style="flex:1"
+                 @input=${(e: Event) => upd(() => { pl.depthMm = Math.max(300, Math.round(Number((e.target as HTMLInputElement).value) || 1200)); })}>
+          <span style="color:var(--text-dim);font-size:11px">mm</span>
+        </div>
+        ${pl.kind === 'spa' ? html`
+          <div class="row" title="Spa height above grade (0 = in-ground)."><label>Raised</label>
+            <input type="number" step="50" min="0" .value=${String(poolRaisedMm(pl))} style="flex:1"
+                   @input=${(e: Event) => upd(() => { pl.raisedMm = Math.max(0, Math.round(Number((e.target as HTMLInputElement).value) || 0)); })}>
+            <span style="color:var(--text-dim);font-size:11px">mm</span>
+          </div>` : nothing}
+        <div style="font-weight:600;font-size:11px;margin:6px 0 2px;color:var(--text-dim)">Equipment</div>
+        ${this._poolBindRow(pl, 'Heater', 'heaterEntity', ['climate', 'water_heater'])}
+        ${this._poolBindRow(pl, 'Pump', 'pumpEntity', ['switch'])}
+        <div class="row"><label>Lights</label>
+          <span style="font-size:11px;color:var(--text);flex:1">${lights.length ? `${lights.length} bound` : '— none —'}</span>
+          <button class="btn" style="font-size:11px" @click=${() => this._pickPoolLight(pl)}>+ Add</button>
+          ${lights.length ? html`<button class="btn" style="font-size:11px" @click=${() => upd(() => { pl.lightEntities = []; })}>Clear</button>` : nothing}
+        </div>
+        <div style="font-weight:600;font-size:11px;margin:6px 0 2px;color:var(--text-dim)">Chemistry (display)</div>
+        ${this._poolBindRow(pl, 'Water temp', 'waterTempEntity', ['sensor'])}
+        ${this._poolBindRow(pl, 'pH', 'phEntity', ['sensor'])}
+        ${this._poolBindRow(pl, 'ORP', 'orpEntity', ['sensor'])}
+        ${this._poolBindRow(pl, 'Salt', 'saltEntity', ['sensor'])}
+        ${(!pl.heaterEntity || !pl.pumpEntity) ? html`
+          <div style="display:flex;gap:4px;margin-top:6px">
+            ${!pl.heaterEntity ? html`<button class="btn" style="flex:1;font-size:11px" @click=${() => p.togglePoolHeater(pl)}>${pl.localState?.heater === 'on' ? '🔥 Heater on' : 'Heater off'}</button>` : nothing}
+            ${!pl.pumpEntity ? html`<button class="btn" style="flex:1;font-size:11px" @click=${() => p.togglePoolPump(pl)}>${pl.localState?.pump === 'on' ? '💧 Pump on' : 'Pump off'}</button>` : nothing}
+          </div>
+          <div style="font-size:10px;color:var(--text-dim);margin-top:2px">Unbound demo toggles (session-only in kiosk).</div>
+        ` : nothing}
+        ${this._lockRow(pl)}
+        <div class="row"><label>Hidden</label>
+          <button class="btn" style="font-size:11px;flex:1"
+                  @click=${() => upd(() => { pl.hidden = !pl.hidden; })}>${pl.hidden ? '🙈 Hidden' : '👁 Shown'}</button>
+        </div>
+        <div style="display:flex;gap:4px;margin-top:4px">
+          <button class="btn" style="flex:1;font-size:11px"
+                  title="Re-draw the pool polygon on the plan (replaces the points)"
+                  @click=${() => { p.drawingPoolArea = { points: [], id: pl.id, kind: pl.kind }; p.setTool('pool'); p.maybeCloseSidebarForPlacement(); p.emitConfig(); }}>Redraw</button>
+        </div>
+        <button class="btn danger" style="width:100%;margin-top:6px" @click=${() => {
+          const f = p.floor();
+          f.pools = (f.pools ?? []).filter(x => x.id !== pl.id);
+          p.activePoolId = null;
+          p.save(); p.emitConfig();
+        }}>Delete ${pl.kind === 'spa' ? 'spa' : 'pool'}</button>
+      </div>
+    `;
+  }
+
+  private _pickPoolEntity(pl: Pool, field: 'heaterEntity' | 'pumpEntity' | 'waterTempEntity' | 'phEntity' | 'orpEntity' | 'saltEntity', domains: string[]): void {
+    this.dispatchEvent(new CustomEvent('open-entity-picker', {
+      bubbles: true, composed: true,
+      detail: { domain: domains, onPick: (id: string) => { pl[field] = id; this.planner.save(); this.planner.emitConfig(); } },
+    }));
+  }
+
+  private _pickPoolLight(pl: Pool): void {
+    this.dispatchEvent(new CustomEvent('open-entity-picker', {
+      bubbles: true, composed: true,
+      detail: { domain: 'light', onPick: (id: string) => {
+        if (!pl.lightEntities) pl.lightEntities = [];
+        if (!pl.lightEntities.includes(id)) pl.lightEntities.push(id);
+        this.planner.save(); this.planner.emitConfig();
+      } },
+    }));
   }
 
   // ── Floor voids section (holes cut from the slab) ─────────────────────

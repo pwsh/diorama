@@ -377,12 +377,16 @@ export class Canvas2D extends LitElement {
       if (p.drawingWall) { p.drawingWall = null; p.emitConfig(); return; }
       if (p.drawingPresenceZone) { p.drawingPresenceZone = null; p.emitConfig(); return; }
       if (p.drawingGroundArea) { p.drawingGroundArea = null; p.emitConfig(); return; }
+      if (p.drawingPath) { p.drawingPath = null; p.emitConfig(); return; }
+      if (p.drawingPoolArea) { p.drawingPoolArea = null; p.emitConfig(); return; }
       if (p.drawingVoidArea) { p.drawingVoidArea = null; p.emitConfig(); return; }
       if (p.store.activeSensorId) { p.store.activeSensorId = null; p.save(); p.emitConfig(); }
     }
     if (e.key === 'Enter' && p.editZone) { finishZoneEdit(p); return; }
     if (e.key === 'Enter' && p.drawingPresenceZone) { p.finishPresenceZone(); return; }
     if (e.key === 'Enter' && p.drawingGroundArea) { p.finishGroundArea(); return; }
+    if (e.key === 'Enter' && p.drawingPath) { p.finishPath(); return; }
+    if (e.key === 'Enter' && p.drawingPoolArea) { p.finishPoolArea(); return; }
     if (e.key === 'Enter' && p.drawingVoidArea) { p.finishVoidArea(); return; }
     if (e.key === '0' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); p.resetView(); return; }
     if (this.planner.uiMode !== 'edit') return;  // kiosk/view: no edit keys

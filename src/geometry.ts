@@ -2,7 +2,7 @@
 
 import type { Vec2, Sensor, BgImage, LightIconKind, FurnitureKind, EnvKind, WallKind,
   ActivityKind, ObjectRecipe, Furniture, Room, Floor, SafetyKind, GroundKind, GroundArea,
-  InfoCard, InfoCardMount, ActionKind, SprinklerHeadKind } from './types.js';
+  InfoCard, InfoCardMount, ActionKind, SprinklerHeadKind, Pool } from './types.js';
 import { formatEntityValue, formatClock, evalRules, ruleMatches, relTimeText,
   type HassStateLike, type ClockMode, type ValueRule } from './value-rules.js';
 
@@ -2023,6 +2023,101 @@ export function groundAreaSkirtBase(area: GroundArea, all: GroundArea[]): number
     if (oe <= ae && oe > base && pointInPolygon(rep.x, rep.y, other.points)) base = oe;
   }
   return base;
+}
+
+// ── Path / driveway ribbon (T4, research §3.6) ─────────────────────────────
+// Pure mitered-offset ribbon: offset each centerline segment left/right by
+// width/2 along its perpendicular, join adjacent segments at the miter point,
+// cap the two ends FLAT. Returns a closed polygon (left side forward, right
+// side backward) suitable to store as a plain GroundArea.points — the whole
+// rendering / hit-test / 3D pipeline then treats it as an ordinary polygon.
+// Degenerate (<2 points) → []. Width is clamped to PATH_MIN_WIDTH. Sharp
+// interior angles clamp the miter to PATH_MITER_LIMIT so a near-reversal can't
+// blow the offset to infinity (concave self-intersection on the inside of a
+// tight bend is an accepted v1 artifact, same class as the terrace-skirt one).
+export const PATH_MIN_WIDTH = 100;
+export const PATH_DEFAULT_WIDTH = 1000;
+const PATH_MITER_LIMIT = 4;
+export function bufferPolyline(centerline: Vec2[], width: number): Vec2[] {
+  if (!centerline || centerline.length < 2) return [];
+  const n = centerline.length;
+  const halfW = Math.max(PATH_MIN_WIDTH, width) / 2;
+  // Unit direction of segment i (points[i] → points[i+1]).
+  const segDir = (i: number): Vec2 => {
+    const a = centerline[i], b = centerline[i + 1];
+    const dx = b.x - a.x, dy = b.y - a.y, len = Math.hypot(dx, dy) || 1;
+    return { x: dx / len, y: dy / len };
+  };
+  const left: Vec2[] = [], right: Vec2[] = [];
+  for (let i = 0; i < n; i++) {
+    let mx: number, my: number, scale = 1;
+    if (i === 0) {
+      const d = segDir(0); mx = -d.y; my = d.x;                 // start cap: seg-0 left normal
+    } else if (i === n - 1) {
+      const d = segDir(n - 2); mx = -d.y; my = d.x;             // end cap: last-seg left normal
+    } else {
+      const d0 = segDir(i - 1), d1 = segDir(i);
+      const n0x = -d0.y, n0y = d0.x, n1x = -d1.y, n1y = d1.x;   // adjacent-edge left normals
+      const sx = n0x + n1x, sy = n0y + n1y, slen = Math.hypot(sx, sy);
+      if (slen < 1e-6) { mx = n0x; my = n0y; }                  // 180° reversal — use one normal
+      else {
+        mx = sx / slen; my = sy / slen;
+        const cos = mx * n0x + my * n0y;                        // cos(half-angle)
+        scale = cos > 1e-3 ? Math.min(PATH_MITER_LIMIT, 1 / cos) : PATH_MITER_LIMIT;
+      }
+    }
+    const off = halfW * scale;
+    left.push({ x: centerline[i].x + mx * off, y: centerline[i].y + my * off });
+    right.push({ x: centerline[i].x - mx * off, y: centerline[i].y - my * off });
+  }
+  const out: Vec2[] = [];
+  for (let i = 0; i < n; i++) out.push({ x: Math.round(left[i].x), y: Math.round(left[i].y) });
+  for (let i = n - 1; i >= 0; i--) out.push({ x: Math.round(right[i].x), y: Math.round(right[i].y) });
+  return out;
+}
+
+// ── Pool / spa (T4, docs/research/pool-spa.md) ─────────────────────────────
+export const POOL_WATER_COLOR = '#1ca3c6';   // toon aqua (§3 plaster blue)
+export const POOL_COPING_COLOR = '#cbc6b6';   // buff/travertine rim
+export const POOL_HEAT_GLOW = '#ff8a4c';      // warm heater wash
+export const POOL_DEFAULTS = { depthPool: 1200, depthSpa: 900, minWater: 300 };
+export type PoolHeaterState = 'off' | 'idle' | 'heating';
+export function poolWaterColor(pl: { waterColor?: string }): string { return pl.waterColor ?? POOL_WATER_COLOR; }
+export function poolDepthMm(pl: { kind: 'pool' | 'spa'; depthMm?: number }): number {
+  return Math.max(POOL_DEFAULTS.minWater, pl.depthMm ?? (pl.kind === 'spa' ? POOL_DEFAULTS.depthSpa : POOL_DEFAULTS.depthPool));
+}
+export function poolRaisedMm(pl: { raisedMm?: number }): number { return Math.max(0, pl.raisedMm ?? 0); }
+export const POOL_WATERLINE_DROP = 100;   // mm the waterline sits below the rim
+// The rim is grade (0) for in-ground, or raisedMm for a raised spa. The basin
+// FLOOR is that rim minus the depth; the WATER SURFACE sits just below the rim.
+export function poolRimY(pl: { raisedMm?: number }): number { return poolRaisedMm(pl); }
+export function poolBasinFloorY(pl: { kind: 'pool' | 'spa'; depthMm?: number; raisedMm?: number }): number {
+  return poolRaisedMm(pl) - poolDepthMm(pl);
+}
+export function poolWaterSurfaceY(pl: { raisedMm?: number }): number {
+  return poolRaisedMm(pl) - POOL_WATERLINE_DROP;
+}
+// Three-state heater resolution from the RESOLVED state (effectiveState folds the
+// localState map first). climate/water_heater 'off' → off; hvac_action 'heating'
+// → heating; hvac_action 'idle' (iAquaLink ENABLED) → armed-but-not-firing dim
+// glow; any other non-off state → heating (best-effort for integrations with no
+// hvac_action). Mirrors the doc's §4.3 three-state glow.
+export function poolHeaterState(
+  st: { state: string; attributes?: Record<string, unknown> } | null | undefined,
+): PoolHeaterState {
+  if (!st) return 'off';
+  const s = (st.state || '').toLowerCase();
+  const action = st.attributes ? String(st.attributes['hvac_action'] ?? '').toLowerCase() : '';
+  if (action === 'heating') return 'heating';
+  if (action === 'idle') return 'idle';
+  if (s === 'off' || s === 'unavailable' || s === 'unknown' || s === '') return 'off';
+  return 'heating';
+}
+export function poolPumpOn(st: { state: string } | null | undefined): boolean {
+  return !!st && (st.state === 'on' || st.state === 'open' || st.state === 'opening' || st.state === 'playing');
+}
+export function poolLightOn(st: { state: string } | null | undefined): boolean {
+  return !!st && st.state === 'on';
 }
 
 export function furnitureCat(def: FurnitureKindDef): FurnitureCat { return def.cat ?? 'furniture'; }
