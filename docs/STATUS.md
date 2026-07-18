@@ -118,6 +118,26 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Sinks v2 + shared avatar props + iconic-prop audit pass**
+  (2026-07-18; 3 Opus agents — sink overhaul solo, then audit-fix ∥
+  props-system with surgical shared-file discipline; research
+  `docs/research/shared-props.md` + `avatar-prop-audit.md`). **Sinks**:
+  five kinds (sink/sink_vanity/pedestal_sink/kitchen_sink/utility_sink),
+  visible recessed bowls + faucets, stream + fill/drain water
+  (entity/localState/wash-hands-proximity triggers; fill blend survives
+  rebuilds). `SINK PASS 48/48`. **Props**: 13-prop shared library with
+  hands/hover/quad eligibility, chore goal-sessions, seated snacking,
+  rain umbrella on ALL rigs (pinned delta — costume-like passive
+  garment), quad fetch-toy carry, authored-hand-prop swap-out,
+  `Store.avatarProps` gate. `PROPS PASS 63/63`. **Audit**: top-20 iconic
+  props implemented (wands, cookie, rifles, whip, Genshin weapons,
+  bowcaster, T-60 minigun…) + systemic animate pass — 62 capes sway,
+  15 wings flap, antennae/tentacles/drones/amulet animate; cap-guarded
+  trims where needed. Full green set at merged HEAD: content 637/637,
+  build 117/117, anim 32/32, interact 26/26, costume 47/47, terrain
+  21/21, yardlife 36/36. CLAUDE.md franchise-pack count corrected
+  (52, was long-stale at 23).
+
 - **Terrain T4: path ribbons + pool & spa** (2026-07-18; 1 Opus agent —
   completes the terrain program, `docs/DESIGN-terrain.md` now fully
   shipped). Pure `bufferPolyline` mitered-ribbon authoring

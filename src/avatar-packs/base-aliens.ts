@@ -5,7 +5,7 @@ import type { AvatarPackDef } from '../avatars.js';
 const GREEN = 0x86d46a;
 
 const pack: AvatarPackDef = {
-  id: 'base-aliens', version: 1, label: 'Aliens', path: ['Base', 'Aliens'], builtin: true,
+  id: 'base-aliens', version: 2, label: 'Aliens', path: ['Base', 'Aliens'], builtin: true,
   avatars: [
     { id: 'alien', label: 'Alien', rig: 'humanoid', legacyAccessories: 'alien',
       humanoid: { headR: 158, limbR: 0.8, skin: GREEN, body: GREEN, emI: 0.35, eyes: 'almond', earSkip: true },
@@ -22,8 +22,8 @@ const pack: AvatarPackDef = {
     { id: 'martian', label: 'Martian (antennae)', rig: 'humanoid',
       humanoid: { headR: 148, limbR: 0.85, skin: 0xc74a2e, body: 0xc74a2e, shoe: 0x241512, emI: 0.20, eyes: 'almond', earSkip: true },
       accessories: [
-        { shape: 'cylinder', size: [7, 7, 190], anchor: 'crown', pos: [-30, 70, 0], rot: [0, 0, 0.35], color: 0xc74a2e }, // antenna L
-        { shape: 'cylinder', size: [7, 7, 190], anchor: 'crown', pos: [30, 70, 0], rot: [0, 0, -0.35], color: 0xc74a2e }, // antenna R
+        { shape: 'cylinder', size: [7, 7, 190], anchor: 'crown', pos: [-30, 70, 0], rot: [0, 0, 0.35], color: 0xc74a2e, animate: { kind: 'sway', speed: 1.1, amp: 0.22, phase: 0 } }, // antenna L
+        { shape: 'cylinder', size: [7, 7, 190], anchor: 'crown', pos: [30, 70, 0], rot: [0, 0, -0.35], color: 0xc74a2e, animate: { kind: 'sway', speed: 1.1, amp: 0.22, phase: 1.6 } }, // antenna R
         { shape: 'sphere', size: 13, anchor: 'crown', pos: [-58, 155, 0], color: 0xff6a2e, emissive: 0xff6a2e, emissiveIntensity: 0.9, outlineSkip: true }, // tip L
         { shape: 'sphere', size: 13, anchor: 'crown', pos: [58, 155, 0], color: 0xff6a2e, emissive: 0xff6a2e, emissiveIntensity: 0.9, outlineSkip: true }, // tip R
       ],
@@ -34,11 +34,11 @@ const pack: AvatarPackDef = {
     { id: 'tentacle-head', label: 'Tentacle-head', rig: 'humanoid',
       humanoid: { headR: 150, limbR: 0.85, skin: 0x6a8a7a, body: 0x6a8a7a, shoe: 0x1c231f, emI: 0.15, eyes: 'dots', noFace: true, earSkip: true },
       accessories: [
-        { shape: 'cone', size: [13, 100], anchor: 'face', pos: [0, -50, -12], rot: [3.0, 0, 0], color: 0x4d6a5c }, // tentacle center
-        { shape: 'cone', size: [12, 92], anchor: 'face', pos: [-36, -46, -6], rot: [2.9, 0, 0.4], color: 0x4d6a5c }, // tentacle L
-        { shape: 'cone', size: [12, 92], anchor: 'face', pos: [36, -46, -6], rot: [2.9, 0, -0.4], color: 0x4d6a5c }, // tentacle R
-        { shape: 'cone', size: [10, 78], anchor: 'face', pos: [-18, -58, -18], rot: [3.05, 0, 0.2], color: 0x4d6a5c }, // tentacle inner L
-        { shape: 'cone', size: [10, 78], anchor: 'face', pos: [18, -58, -18], rot: [3.05, 0, -0.2], color: 0x4d6a5c }, // tentacle inner R
+        { shape: 'cone', size: [13, 100], anchor: 'face', pos: [0, -50, -12], rot: [3.0, 0, 0], color: 0x4d6a5c, animate: { kind: 'sway', speed: 0.9, amp: 0.3, phase: 0 } }, // tentacle center
+        { shape: 'cone', size: [12, 92], anchor: 'face', pos: [-36, -46, -6], rot: [2.9, 0, 0.4], color: 0x4d6a5c, animate: { kind: 'sway', speed: 0.9, amp: 0.3, phase: 1.2 } }, // tentacle L
+        { shape: 'cone', size: [12, 92], anchor: 'face', pos: [36, -46, -6], rot: [2.9, 0, -0.4], color: 0x4d6a5c, animate: { kind: 'sway', speed: 0.9, amp: 0.3, phase: 2.4 } }, // tentacle R
+        { shape: 'cone', size: [10, 78], anchor: 'face', pos: [-18, -58, -18], rot: [3.05, 0, 0.2], color: 0x4d6a5c, animate: { kind: 'sway', speed: 0.9, amp: 0.3, phase: 3.6 } }, // tentacle inner L
+        { shape: 'cone', size: [10, 78], anchor: 'face', pos: [18, -58, -18], rot: [3.05, 0, -0.2], color: 0x4d6a5c, animate: { kind: 'sway', speed: 0.9, amp: 0.3, phase: 4.8 } }, // tentacle inner R
       ],
       personality: { bobMul: 0.9, swayMul: 1.3, cadenceMul: 0.8, ampMul: 0.9 }, bubbles: ['🐙', '🌌', '👁️', '🫧'] },
 

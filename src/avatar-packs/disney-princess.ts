@@ -8,7 +8,7 @@
 import type { AvatarPackDef } from '../avatars.js';
 
 const pack: AvatarPackDef = {
-  id: 'disney-princess', version: 3, label: 'Disney Princess',
+  id: 'disney-princess', version: 4, label: 'Disney Princess',
   path: ['Cartoons', 'Disney Princess'], builtin: true, franchise: true,
   base: {
     rig: 'humanoid',
@@ -24,7 +24,7 @@ const pack: AvatarPackDef = {
       humanoid: { skin: 0xf6d9c4, body: 0xbfe6f5, shoe: 0xeaf6fb, legColor: 0xbfe6f5, emI: 0.14, gown: true },
       accessories: [
         { shape: 'cone', size: [320, 940, 0], anchor: 'hip', pos: [0, -320, 0], color: 0xd9f2fb }, // ballgown (waist→floor)
-        { shape: 'cape', size: [240, 560, 380], anchor: 'back', pos: [0, -150, 25], rot: [0.18, 0, 0], color: 0xd6f0fb }, // sheer cape
+        { shape: 'cape', size: [240, 560, 380], anchor: 'back', pos: [0, -150, 25], rot: [0.18, 0, 0], color: 0xd6f0fb, animate: { kind: 'sway', speed: 0.6, amp: 0.15 } }, // sheer cape
         { shape: 'sphere', size: [140, 128, 118], anchor: 'crown', pos: [0, -18, 12], sphereArc: [0, 6.283, 0, 1.85], color: 0xe8e3d3 }, // hair crown cap
         { shape: 'sphere', size: [112, 168, 82], anchor: 'crown', pos: [-14, -230, 70], color: 0xe8e3d3 }, // long back mass (upper)
         { shape: 'sphere', size: [100, 172, 78], anchor: 'crown', pos: [-16, -410, 84], color: 0xe8e3d3 }, // long back mass (mid)
@@ -42,7 +42,7 @@ const pack: AvatarPackDef = {
       humanoid: { skin: 0xf7d1b8, body: 0x1a2230, shoe: 0x2b2320, legColor: 0x243247, emI: 0.05, gown: true },
       accessories: [
         { shape: 'cone', size: [280, 920, 0], anchor: 'hip', pos: [0, -310, 0], color: 0x243247 }, // A-line skirt (waist→floor)
-        { shape: 'cape', size: [260, 520, 400], anchor: 'back', pos: [0, -130, 30], rot: [0.2, 0, 0], color: 0x2f8f7a }, // teal cape
+        { shape: 'cape', size: [260, 520, 400], anchor: 'back', pos: [0, -130, 30], rot: [0.2, 0, 0], color: 0x2f8f7a, animate: { kind: 'sway', speed: 0.6, amp: 0.15 } }, // teal cape
         { shape: 'sphere', size: [138, 126, 116], anchor: 'crown', pos: [0, -14, 10], sphereArc: [0, 6.283, 0, 1.85], color: 0xd98c4a }, // hair crown cap
         { shape: 'sphere', size: [108, 150, 80], anchor: 'crown', pos: [0, -220, 72], color: 0xd98c4a }, // back mass (upper)
         { shape: 'sphere', size: [92, 150, 74], anchor: 'crown', pos: [0, -380, 86], color: 0xd98c4a }, // back mass (mid-back)
@@ -99,7 +99,7 @@ const pack: AvatarPackDef = {
         { shape: 'sphere', size: [120, 70, 96], anchor: 'crown', pos: [0, -120, 30], color: 0x161412 }, // bob underside (curls in at the jaw)
         { shape: 'cone', size: [26, 40, 0], anchor: 'crown', pos: [-24, 70, -20], rot: [0, 0, -1.2], color: 'tint' },
         { shape: 'cone', size: [26, 40, 0], anchor: 'crown', pos: [24, 70, -20], rot: [0, 0, 1.2], color: 'tint' },
-        { shape: 'cape', size: [230, 420, 360], anchor: 'back', pos: [0, -90, 25], rot: [0.15, 0, 0], color: 0xc62828 }, // red cape
+        { shape: 'cape', size: [230, 420, 360], anchor: 'back', pos: [0, -90, 25], rot: [0.15, 0, 0], color: 0xc62828, animate: { kind: 'sway', speed: 0.6, amp: 0.15 } }, // red cape
       ],
       personality: { bobMul: 1.05, swayMul: 0.9, cadenceMul: 1.0 }, bubbles: ['🍎', '🎶', '🐦', '🌼'] },
 

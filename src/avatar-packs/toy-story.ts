@@ -7,7 +7,7 @@
 import type { AvatarPackDef } from '../avatars.js';
 
 const pack: AvatarPackDef = {
-  id: 'toy-story', version: 1, label: 'Toy Story',
+  id: 'toy-story', version: 2, label: 'Toy Story',
   path: ['Cartoons', 'Toy Story'], builtin: true, franchise: true,
   avatars: [
     // Woody — pull-string cowboy doll, golden plaid shirt, brown vest + hat, badge.
@@ -34,14 +34,15 @@ const pack: AvatarPackDef = {
         shoe: 0x3fae49, legColor: 0xf2f2ee, emI: 0.12, hands: 'box', eyes: 'dots', steel: false },
       accessories: [
         { shape: 'sphere', size: [145, 120, 145], anchor: 'crown', pos: [0, 20, 0], rot: [0.4, 0, 0], color: 0x6b3fa0, sphereArc: [0, 6.283, 0, 1.6] }, // purple hood
-        { shape: 'box', size: [120, 160, 14], anchor: 'back', pos: [-80, 0, 10], rot: [0, 0.3, 0], color: 0xf2f2ee }, // wing L
-        { shape: 'box', size: [120, 160, 14], anchor: 'back', pos: [80, 0, 10], rot: [0, -0.3, 0], color: 0xf2f2ee }, // wing R
+        { shape: 'box', size: [120, 160, 14], anchor: 'back', pos: [-80, 0, 10], rot: [0, 0.3, 0], color: 0xf2f2ee, animate: { kind: 'flap', speed: 1.2, amp: 0.3 } }, // wing L
+        { shape: 'box', size: [120, 160, 14], anchor: 'back', pos: [80, 0, 10], rot: [0, -0.3, 0], color: 0xf2f2ee, animate: { kind: 'flap', speed: 1.2, amp: -0.3 } }, // wing R (mirrored amp)
         { shape: 'box', size: [30, 40, 10], anchor: 'back', pos: [-140, 60, 10], color: 0x3fae49, emissive: 0x3fae49, emissiveIntensity: 0.2 }, // green tip L
         { shape: 'box', size: [30, 40, 10], anchor: 'back', pos: [140, 60, 10], color: 0x3fae49, emissive: 0x3fae49, emissiveIntensity: 0.2 }, // green tip R
         { shape: 'box', size: [80, 70, 10], anchor: 'chest', pos: [0, -10, -12], color: 0x3fae49 }, // control panel
         { shape: 'sphere', size: 8, anchor: 'chest', pos: [0, -10, -18], color: 0xc0392b }, // panel button
         { shape: 'box', size: [36, 30, 36], anchor: 'shoulderL', pos: [0, 20, 0], color: 0x3fae49 }, // shoulder pad L
         { shape: 'box', size: [36, 30, 36], anchor: 'shoulderR', pos: [0, 20, 0], color: 0x3fae49 }, // shoulder pad R
+        { shape: 'cone', size: [9, 24], anchor: 'handR', pos: [0, -34, -18], color: 0xd8302a, emissive: 0xd8302a, emissiveIntensity: 0.3 }, // wrist laser
       ],
       personality: { bobMul: 0.9, swayMul: 0.8, cadenceMul: 0.95, ampMul: 0.95 },
       bubbles: ['🚀', '⭐', '🛸', '✨'] },

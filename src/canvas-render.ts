@@ -18,7 +18,7 @@ import {
   groundAreaColor, groundKindLabel,
   poolWaterColor, POOL_COPING_COLOR,
   powerGlowScale,
-  hexToRgba, lighten, furnitureKind, furnitureCorners, resolveFurnitureDef, isBinKind, binStateIsFull,
+  hexToRgba, lighten, furnitureKind, furnitureCorners, resolveFurnitureDef, isBinKind, isSinkKind, binStateIsFull,
   isDroopPlant, plantThirsty, PLANT_MOISTURE_DEFAULT_THRESHOLD,
   isVehicleKind, evStatusOf, evStatusColor, evChargePercent, carChargeState,
   isStairsKind, stairChipArrow,
@@ -36,6 +36,12 @@ import { ALERT_BEACON_DEFAULTS, alertBeaconState, alertBeaconColor, alertBeaconA
 import { vacMapAffine, vacSegColor, type ParsedVacMap, type VacSegment } from './valetudo-map.js';
 import type { Planner } from './planner.js';
 import type { Vec2, LightIconKind, Furniture, ObjectRecipe, RecipePrimitive, HassState } from './types.js';
+
+// Per-sink 2D fill level (0..1), eased toward 1 while the sink runs and 0 when
+// off (mirrors the 3D _sinkFill blend, but 2D has no renderer state — track it
+// here off the RAF `now` clock). Keyed by fixture id; a subtle blue basin tint
+// scales with it. Purely cosmetic accumulator, not persisted.
+const _sink2dFill = new Map<string, { v: number; t: number }>();
 
 // Default per-target color palette (kept for back-compat; actual color now
 // comes from sensorColor(s, idx)).
@@ -3103,6 +3109,45 @@ function drawFurniture(ctx: CanvasRenderingContext2D, p: Planner, view: View,
     }
     drawFurniturePrimitiveLocal(ctx, piece, halfW, halfH, customObjects, binFull,
                                 { ghost: vehicleGhost, mailFlagUp, mailLidOpen });
+    // Sink running water: a blue basin tint ∝ an eased fill level + animated flow
+    // ticks at the faucet while the sink runs (bound entity / unbound localState
+    // on). Fill eases here on the RAF `now` clock (2D has no renderer state), so
+    // it rises ~8 s and drains ~6 s just like the 3D water. Basin center ≈ y 0,
+    // faucet at the back (top, -halfH). The 3D avatar-triggered run isn't visible
+    // to 2D — the entity/local run-state is.
+    if (isSinkKind(piece.kind)) {
+      const running = (() => { const s = p.effectiveState(piece)?.state; return s === 'on' || s === 'playing'; })();
+      const rec = _sink2dFill.get(piece.id) ?? { v: 0, t: now };
+      const dt = Math.max(0, Math.min(0.1, now - rec.t));
+      rec.v += ((running ? 1 : 0) - rec.v) * (1 - Math.exp(-dt / (running ? 2.7 : 2.0)));
+      rec.t = now;
+      _sink2dFill.set(piece.id, rec);
+      if (rec.v > 0.02) {
+        ctx.save();
+        ctx.fillStyle = `rgba(74,168,216,${(0.14 + 0.42 * rec.v).toFixed(3)})`;
+        ctx.beginPath();
+        ctx.ellipse(0, halfH * 0.05, halfW * 0.42, halfH * 0.42, 0, 0, 2 * Math.PI);
+        ctx.fill();
+        ctx.restore();
+      }
+      if (running) {
+        ctx.save();
+        ctx.strokeStyle = 'rgba(130,208,238,0.9)';
+        ctx.lineWidth = Math.max(1.5, 2 * dpr);
+        const span = halfH * 0.55;                 // faucet (top) → bowl (center)
+        const y0 = -halfH * 0.42;
+        const ph = (now * 2.2) % 1;                // downward-marching dashes
+        for (let i = 0; i < 3; i++) {
+          const f = (ph + i / 3) % 1;
+          const ty = y0 + f * span;
+          ctx.beginPath();
+          ctx.moveTo(0, ty);
+          ctx.lineTo(0, ty + Math.min(span * 0.22, 6 * dpr));
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+    }
     // Fridge open-door wedge (amber): a mini door-swing arc at the front-right
     // corner (the 3D hinge is on the +X edge). Front = canvas-Y +halfH.
     if (doorOpen) {
@@ -3333,7 +3378,9 @@ function drawFurniture(ctx: CanvasRenderingContext2D, p: Planner, view: View,
 // `halfH` are half extents in canvas px. Canvas-Y top (-halfH) is the
 // piece's BACK — backrests, headboards, and pillows live there; the functional
 // front (doors/seats/screens/faces, local -Z) is at canvas-Y +halfH.
-function drawFurniturePrimitiveLocal(
+// Exported for the deterministic test harness (a pure per-kind primitive draw —
+// no Planner / DOM state beyond the passed ctx). Not used elsewhere in the app.
+export function drawFurniturePrimitiveLocal(
   ctx: CanvasRenderingContext2D,
   piece: Furniture,
   halfW: number,
@@ -3673,12 +3720,42 @@ function drawFurniturePrimitiveLocal(
       ctx.fill(); ctx.stroke();
       break;
     }
-    case 'sink':
-      fill('rgba(245,245,240,0.6)');
-      stroke('#b0bec5');
-      ctx.strokeStyle = '#78909c'; ctx.lineWidth = 1;
-      ctx.beginPath(); ctx.ellipse(0, 0, halfW * 0.6, halfH * 0.6, 0, 0, 2 * Math.PI); ctx.stroke();
+    case 'sink': {
+      // Compact vanity: counter rect + recessed bowl ellipse (darker inset) +
+      // faucet dot at the back (+Z = TOP edge in canvas).
+      fill(bodyFill('rgba(215,204,200,0.6)', 0.6));
+      stroke('#a1887f');
+      ctx.fillStyle = 'rgba(207,210,207,0.9)';
+      ctx.strokeStyle = '#90a4ae'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.ellipse(0, h * 0.04, halfW * 0.5, halfH * 0.5, 0, 0, 2 * Math.PI); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#78909c';
+      ctx.beginPath(); ctx.arc(0, y + h * 0.14, 3, 0, 2 * Math.PI); ctx.fill();
       break;
+    }
+    case 'pedestal_sink': {
+      // Round porcelain basin + recessed bowl + faucet dot at the back.
+      fill('rgba(245,245,240,0.4)');
+      ctx.fillStyle = 'rgba(245,245,240,0.85)';
+      ctx.strokeStyle = '#b0bec5'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.ellipse(0, 0, halfW * 0.7, halfH * 0.7, 0, 0, 2 * Math.PI); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = 'rgba(207,210,207,0.9)'; ctx.strokeStyle = '#90a4ae';
+      ctx.beginPath(); ctx.ellipse(0, h * 0.04, halfW * 0.48, halfH * 0.48, 0, 0, 2 * Math.PI); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#78909c';
+      ctx.beginPath(); ctx.arc(0, y + h * 0.16, 3, 0, 2 * Math.PI); ctx.fill();
+      break;
+    }
+    case 'utility_sink': {
+      // Deep rectangular tub + recessed inner well + faucet dot at the back.
+      fill(bodyFill('rgba(154,162,168,0.6)', 0.6));
+      stroke('#78848c');
+      ctx.fillStyle = 'rgba(207,210,207,0.9)';
+      ctx.strokeStyle = '#607d8b'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.roundRect(x + w * 0.12, y + h * 0.14, w * 0.76, h * 0.72, Math.min(w, h) * 0.08);
+      ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#546e7a';
+      ctx.beginPath(); ctx.arc(0, y + h * 0.16, 3.5, 0, 2 * Math.PI); ctx.fill();
+      break;
+    }
     case 'sink_vanity': {
       // Painted cabinet rect (door split) + inset basin oval + faucet dot at
       // the back (+Z = TOP edge in canvas).

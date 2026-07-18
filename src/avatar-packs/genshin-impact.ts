@@ -8,7 +8,7 @@ import type { AvatarPackDef } from '../avatars.js';
 const GOLD = 0xd4af37;
 
 const pack: AvatarPackDef = {
-  id: 'genshin-impact', version: 2, label: 'Genshin Impact',
+  id: 'genshin-impact', version: 3, label: 'Genshin Impact',
   path: ['Video Games', 'Genshin Impact'], builtin: true, franchise: true,
   base: { rig: 'humanoid', humanoid: { headR: 124, headShape: 'sphere', limbR: 1.0, hands: 'sphere', eyes: 'almond', steel: false, emI: 0, armL: 1.0, legL: 1.0, footMul: [1, 1, 1] } },
   avatars: [
@@ -19,7 +19,7 @@ const pack: AvatarPackDef = {
         { shape: 'sphere', size: [65, 45, 65], anchor: 'crown', pos: [0, -10, 0], color: 0xf7f5ef }, // hair mass
         { shape: 'cylinder', size: [45, 45, 10], anchor: 'crown', pos: [0, 42, 0], color: 0xd9a66c }, // approx: halo ring → flat disc (no torus)
         { shape: 'cone', size: [9, 18], anchor: 'head', pos: [50, 40, -10], color: 0x2a2a3a }, // hair star
-        { shape: 'cape', size: [140, 180, 220], anchor: 'back', pos: [0, -70, 12], rot: [0.12, 0, 0], color: 0x1c2540 }, // celestial cape
+        { shape: 'cape', size: [140, 180, 220], anchor: 'back', pos: [0, -70, 12], rot: [0.12, 0, 0], color: 0x1c2540, animate: { kind: 'sway', speed: 0.6, amp: 0.15 } }, // celestial cape
         { shape: 'sphere', size: 6, anchor: 'back', pos: [-30, 20, 12], color: 0xd9a66c }, // constellation dot
         { shape: 'sphere', size: 6, anchor: 'back', pos: [30, -10, 12], color: 0xd9a66c }, // constellation dot
         { shape: 'box', size: [30, 30, 6], anchor: 'chest', pos: [0, 20, -6], color: 0x2a2a3a }, // emblem
@@ -31,7 +31,7 @@ const pack: AvatarPackDef = {
       accessories: [
         { shape: 'box', size: [120, 80, 110], anchor: 'crown', pos: [0, -10, 0], color: 0xf0d878 }, // hair
         { shape: 'cylinder', size: [30, 30, 260], anchor: 'back', pos: [0, 20, 10], rot: [0.3, 0, 0], color: 0xf0d878 }, // hair tail
-        { shape: 'cape', size: [200, 340, 300], anchor: 'back', pos: [0, -90, 14], rot: [0.12, 0, 0], color: 0xdbe9f2 }, // cape
+        { shape: 'cape', size: [200, 340, 300], anchor: 'back', pos: [0, -90, 14], rot: [0.12, 0, 0], color: 0xdbe9f2, animate: { kind: 'sway', speed: 0.6, amp: 0.15 } }, // cape
         { shape: 'box', size: [150, 10, 4], anchor: 'back', pos: [0, -150, 14], color: GOLD }, // cape hem trim
         { shape: 'box', size: [24, 24, 10], anchor: 'chest', pos: [0, 30, -8], color: GOLD, emissive: 0x8fd0e0, emissiveIntensity: 0.3 }, // vision pendant
         { shape: 'box', size: [90, 30, 20], anchor: 'neck', pos: [0, -6, -8], color: 0xf5f2ea }, // scarf
@@ -49,6 +49,8 @@ const pack: AvatarPackDef = {
         { shape: 'box', size: [18, 18, 8], anchor: 'chest', pos: [0, 70, -8], color: 0xc23030 }, // red gem
         { shape: 'box', size: [180, 8, 4], anchor: 'chest', pos: [0, 60, -6], color: GOLD }, // lapel trim
         { shape: 'box', size: [140, 320, 15], anchor: 'back', pos: [0, -60, 10], color: 0x181818 }, // coattails
+        { shape: 'box', size: [60, 540, 18], anchor: 'back', pos: [-30, -20, 34], rot: [0, 0, 0.22], color: 0xb8b8bc }, // claymore blade (back-slung)
+        { shape: 'box', size: [140, 26, 26], anchor: 'back', pos: [30, 200, 34], rot: [0, 0, 0.22], color: 0x3a2a1a }, // claymore crossguard
       ],
       personality: { bobMul: 0.55, swayMul: 0.4, cadenceMul: 0.75, ampMul: 0.9 }, bubbles: ['🍷', '🔥', '⚔️', '🌙'] },
     // Klee — child, red coat, newsboy cap
@@ -71,14 +73,15 @@ const pack: AvatarPackDef = {
       humanoid: { sk: 0.92, headR: 118, limbR: 0.85, skin: 0xecc4a0, body: 0xf5f2ea, legColor: 0x2f8f4e, shoe: 0xf5f2ea, armL: 0.9, legL: 1.0 },
       accessories: [
         { shape: 'cylinder', size: [75, 75, 40], anchor: 'crown', pos: [0, 20, 0], rot: [0.3, 0, 0], color: 0x2f8f4e }, // beret
-        { shape: 'sphere', size: 12, anchor: 'crown', pos: [55, 25, -20], color: 0xf5f2ea }, // flower
+        // (beret flower trimmed to free a slot for the back-slung bow — 10-prim cap)
         { shape: 'cylinder', size: [12, 12, 90], anchor: 'head', pos: [-60, -20, 10], rot: [0, 0, -0.2], color: 0x161a2e }, // braid L
         { shape: 'cylinder', size: [12, 12, 90], anchor: 'head', pos: [60, -20, 10], rot: [0, 0, 0.2], color: 0x161a2e }, // braid R
         { shape: 'sphere', size: 12, anchor: 'head', pos: [-65, -70, 10], color: 0x66d9c9 }, // approx: aqua ombré tip (2-piece, no gradient)
         { shape: 'sphere', size: 12, anchor: 'head', pos: [65, -70, 10], color: 0x66d9c9 }, // approx: aqua ombré tip
-        { shape: 'cape', size: [190, 340, 280], anchor: 'back', pos: [0, -90, 14], rot: [0.12, 0, 0], color: 0x2f8f4e }, // cape
-        { shape: 'box', size: [40, 50, 10], anchor: 'back', pos: [0, 90, 14], color: 0x1e4fa0 }, // bow accent
+        { shape: 'cape', size: [190, 340, 280], anchor: 'back', pos: [0, -90, 14], rot: [0.12, 0, 0], color: 0x2f8f4e, animate: { kind: 'sway', speed: 0.6, amp: 0.15 } }, // cape
+        { shape: 'box', size: [40, 50, 10], anchor: 'back', pos: [0, 90, 14], color: 0x1e4fa0 }, // bow-tie accent
         { shape: 'box', size: [170, 10, 4], anchor: 'chest', pos: [0, 20, -6], color: GOLD }, // embroidery trim
+        { shape: 'cylinder', size: [8, 8, 320], anchor: 'back', pos: [-46, 0, 26], rot: [0.3, 0, 0.12], color: 0x2a6f4e }, // back-slung bow
       ],
       personality: { bobMul: 0.85, swayMul: 1.0, cadenceMul: 0.95, ampMul: 0.85 }, bubbles: ['🎵', '🍃', '🍷', '🎶'] },
     // Zhongli — dark coat, amber waistcoat, gold-silver trim
@@ -92,6 +95,8 @@ const pack: AvatarPackDef = {
         { shape: 'box', size: [18, 18, 8], anchor: 'chest', pos: [0, 70, -8], color: 0xd9902a }, // amber gem
         { shape: 'box', size: [150, 360, 18], anchor: 'back', pos: [0, -60, 10], color: 0x3b2a1e }, // tailcoat
         { shape: 'box', size: [12, 300, 4], anchor: 'back', pos: [0, -60, 20], color: GOLD }, // center trim
+        { shape: 'cylinder', size: [10, 10, 560], anchor: 'back', pos: [-40, 0, 30], rot: [0.18, 0, 0.14], color: 0x3a2a1a }, // polearm haft (back-slung)
+        { shape: 'cone', size: [18, 80], anchor: 'back', pos: [-90, 250, 40], rot: [0.18, 0, 0.14], color: 0xd8b23a }, // spear tip
       ],
       personality: { bobMul: 0.4, swayMul: 0.25, cadenceMul: 0.65, ampMul: 0.75 }, bubbles: ['⚱️', '📜', '🍵', '💰'] },
     // Raiden Shogun — violet kimono, braided hair, pauldron
@@ -106,6 +111,8 @@ const pack: AvatarPackDef = {
         { shape: 'box', size: [70, 55, 50], anchor: 'shoulderL', pos: [0, 10, 0], color: 0x161616 }, // pauldron
         { shape: 'box', size: [20, 20, 6], anchor: 'shoulderL', pos: [0, 20, -6], color: 0x6a4d9c, emissive: 0x6a4d9c, emissiveIntensity: 0.2 }, // electro symbol
         { shape: 'box', size: [40, 20, 8], anchor: 'chest', pos: [0, 90, -6], color: 0xa02030 }, // neck ribbon
+        { shape: 'cylinder', size: [9, 9, 540], anchor: 'handR', pos: [0, -80, 0], color: 0x3a1c2a }, // naginata haft
+        { shape: 'cone', size: [16, 100], anchor: 'handR', pos: [0, 230, 0], color: 0xdadde2 }, // naginata blade
       ],
       personality: { bobMul: 0.35, swayMul: 0.2, cadenceMul: 0.6, ampMul: 0.7 }, bubbles: ['⚡', '🗡️', '♾️', '🍡'] },
     // Ganyu — blue hair, black-red horns, bell
@@ -113,7 +120,7 @@ const pack: AvatarPackDef = {
       humanoid: { sk: 0.95, headR: 116, limbR: 0.85, skin: 0xecc8a8, body: 0x151515, legColor: 0x151515, shoe: 0x8a8a8a, armL: 0.9, legL: 1.0 },
       accessories: [
         { shape: 'box', size: [112, 76, 108], anchor: 'crown', pos: [0, -10, 0], color: 0x4a90c4 }, // hair
-        { shape: 'box', size: [40, 60, 40], anchor: 'crown', pos: [0, -40, 20], rot: [0.5, 0, 0], color: 0x2a5a80 }, // approx: darker ombré tips
+        // (darker-ombré-tip box trimmed to free a slot for the back-slung bow — 10-prim cap)
         { shape: 'cone', size: [22, 90], anchor: 'crown', pos: [-40, 20, 10], rot: [0.6, 0, -0.2], color: 0x2a1010 }, // horn L
         { shape: 'cone', size: [22, 90], anchor: 'crown', pos: [40, 20, 10], rot: [0.6, 0, 0.2], color: 0x2a1010 }, // horn R
         { shape: 'sphere', size: 10, anchor: 'crown', pos: [-40, 90, 20], color: 0xb02020 }, // horn tip marking
@@ -122,6 +129,8 @@ const pack: AvatarPackDef = {
         { shape: 'cone', size: [20, 30], anchor: 'chest', pos: [0, 50, -8], color: 0x2f6fa0 }, // blue triangle trim
         { shape: 'sphere', size: 12, anchor: 'neck', pos: [0, -10, -10], color: GOLD }, // bell
         { shape: 'box', size: [90, 120, 12], anchor: 'back', pos: [0, -40, 10], color: 0xf5f2ea }, // tailcoat tail
+        // approx: quiver omitted (10-prim cap) — the back-slung bow alone carries the archer read.
+        { shape: 'cylinder', size: [8, 8, 300], anchor: 'back', pos: [-42, 0, 24], rot: [0.3, 0, 0.12], color: 0x2a5a80 }, // back-slung bow
       ],
       personality: { bobMul: 0.6, swayMul: 0.4, cadenceMul: 0.8, ampMul: 0.65 }, bubbles: ['❄️', '🏹', '📋', '🔔'] },
   ],

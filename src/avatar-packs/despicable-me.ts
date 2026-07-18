@@ -25,7 +25,7 @@ const minion = {
 };
 
 const pack: AvatarPackDef = {
-  id: 'despicable-me', version: 2, label: 'Despicable Me',
+  id: 'despicable-me', version: 3, label: 'Despicable Me',
   path: ['Cartoons', 'Despicable Me'], builtin: true, franchise: true,
   avatars: [
     // Gru — tall lanky bald protagonist, pointed nose, grey scarf, black turtleneck.
@@ -178,7 +178,7 @@ const pack: AvatarPackDef = {
         { shape: 'box', size: [40, 10, 10], anchor: 'face', pos: [-24, -30, -8], rot: [0, 0, 0.4], color: 0x1a1410 }, // mustache L
         { shape: 'box', size: [40, 10, 10], anchor: 'face', pos: [24, -30, -8], rot: [0, 0, -0.4], color: 0x1a1410 }, // mustache R
         { shape: 'sphere', size: [130, 70, 130], anchor: 'crown', pos: [0, -6, 0], color: 0x1a1410 }, // slicked hair
-        { shape: 'cape', size: [340, 370, 500], anchor: 'back', pos: [0, -160, 20], rot: [0.12, 0, 0], color: 0x8a1620 }, // cape
+        { shape: 'cape', size: [340, 370, 500], anchor: 'back', pos: [0, -160, 20], rot: [0.12, 0, 0], color: 0x8a1620, animate: { kind: 'sway', speed: 0.6, amp: 0.15 } }, // cape
         { shape: 'cylinder', size: [20, 20, 6], anchor: 'chest', pos: [0, -10, -12], color: 0xd4af37 }, // medallion
         { shape: 'box', size: [220, 40, 180], anchor: 'hip', pos: [0, 0, 0], color: 0x141210 }, // belt
         { shape: 'box', size: [40, 34, 10], anchor: 'hip', pos: [0, 0, -92], color: 0xb8bcc0 }, // buckle

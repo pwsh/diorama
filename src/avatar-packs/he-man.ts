@@ -6,7 +6,7 @@
 import type { AvatarPackDef } from '../avatars.js';
 
 const pack: AvatarPackDef = {
-  id: 'he-man', version: 3, label: 'He-Man',
+  id: 'he-man', version: 4, label: 'He-Man',
   path: ['Cartoons', 'He-Man'], builtin: true, franchise: true,
   avatars: [
     // He-Man — bronzed barbarian, blond bob, crossed harness w/ red gem, back sword.
@@ -35,7 +35,7 @@ const pack: AvatarPackDef = {
         { shape: 'sphere', size: [166, 172, 166], anchor: 'crown', pos: [0, 24, 44], rot: [-0.4, 0, 0], color: 0x4a2f7a, sphereArc: [0, 6.283, 0, 1.5] },
         { shape: 'box', size: [180, 12, 16], anchor: 'chest', pos: [0, 130, 78], color: 0xe8e2d0 },
         { shape: 'box', size: [150, 12, 16], anchor: 'chest', pos: [0, 96, 78], color: 0xe8e2d0 },
-        { shape: 'cape', size: [280, 620, 420], anchor: 'back', pos: [0, -160, 30], rot: [0.16, 0, 0], color: 0x3a2265 }, // hooded cape
+        { shape: 'cape', size: [280, 620, 420], anchor: 'back', pos: [0, -160, 30], rot: [0.16, 0, 0], color: 0x3a2265, animate: { kind: 'sway', speed: 0.6, amp: 0.15 } }, // hooded cape
         { shape: 'box', size: [220, 200, 70], anchor: 'hip', pos: [0, -10, 0], color: 0x3a2265 },
         { shape: 'cylinder', size: [16, 16, 420], anchor: 'handR', pos: [0, 60, 0], color: 0x4a3826 },
         { shape: 'cone', size: [40, 70, 0], anchor: 'handR', pos: [0, 300, 0], color: 0xe8e2d0 },
@@ -65,8 +65,8 @@ const pack: AvatarPackDef = {
       accessories: [
         { shape: 'sphere', size: [120, 120, 120], anchor: 'crown', pos: [0, 40, 0], rot: [-0.4, 0, 0], color: 0xe8e4da, sphereArc: [0, 6.283, 0, 1.4] },
         { shape: 'cone', size: [30, 90, 0], anchor: 'crown', pos: [0, 70, -80], rot: [-1.4, 0, 0], color: 0x2f6fae },
-        { shape: 'box', size: [40, 340, 200], anchor: 'back', pos: [-150, 20, 20], rot: [0.1, -0.4, 0.4], color: 0xe0791e },
-        { shape: 'box', size: [40, 340, 200], anchor: 'back', pos: [150, 20, 20], rot: [0.1, 0.4, -0.4], color: 0x2f6fae },
+        { shape: 'box', size: [40, 340, 200], anchor: 'back', pos: [-150, 20, 20], rot: [0.1, -0.4, 0.4], color: 0xe0791e, animate: { kind: 'flap', speed: 1.3, amp: 0.32 } }, // wing L
+        { shape: 'box', size: [40, 340, 200], anchor: 'back', pos: [150, 20, 20], rot: [0.1, 0.4, -0.4], color: 0x2f6fae, animate: { kind: 'flap', speed: 1.3, amp: -0.32 } }, // wing R (mirrored amp)
         { shape: 'box', size: [22, 130, 14], anchor: 'chest', pos: [-45, 120, 80], rot: [0, 0, 0.4], color: 0xe0791e },
         { shape: 'box', size: [22, 130, 14], anchor: 'chest', pos: [45, 120, 80], rot: [0, 0, -0.4], color: 0x2f6fae },
         { shape: 'box', size: [200, 20, 130], anchor: 'hip', pos: [0, 30, 0], color: 0xc9a227 },
@@ -114,7 +114,7 @@ const pack: AvatarPackDef = {
         { shape: 'cone', size: [96, 280, 0], anchor: 'crown', pos: [0, 130, -30], rot: [-0.45, 0, 0], color: 0x16305e },
         { shape: 'sphere', size: [120, 60, 70], anchor: 'crown', pos: [0, 10, 40], color: 0xe8e4da, sphereArc: [0, 6.283, 0, 1.6] },
         { shape: 'box', size: [40, 40, 20], anchor: 'chest', pos: [0, 150, 78], color: 0xd4c92a },
-        { shape: 'cape', size: [260, 460, 380], anchor: 'back', pos: [0, -110, 30], rot: [0.15, 0, 0], color: 0x1c2e5c }, // robe cape
+        { shape: 'cape', size: [260, 460, 380], anchor: 'back', pos: [0, -110, 30], rot: [0.15, 0, 0], color: 0x1c2e5c, animate: { kind: 'sway', speed: 0.6, amp: 0.15 } }, // robe cape
         { shape: 'box', size: [180, 18, 120], anchor: 'hip', pos: [0, 30, 0], color: 0xc9a227 },
         { shape: 'cylinder', size: [10, 10, 260], anchor: 'handR', pos: [0, 40, 0], color: 0x2a2a2e },
         { shape: 'sphere', size: 26, anchor: 'handR', pos: [0, 175, 0], color: 0xffe066, emissive: 0xffe066, emissiveIntensity: 0.4 },

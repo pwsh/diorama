@@ -1651,6 +1651,7 @@ export class Planner extends EventTarget {
       notes:          remote.notes          ?? undefined,
       avatarInteractions: remote.avatarInteractions ?? undefined,
       avatarCostumes: remote.avatarCostumes ?? undefined,
+      avatarProps: remote.avatarProps ?? undefined,
       bgText:         remote.bgText         ?? undefined,
       heatmap:        remote.heatmap        ?? undefined,
     };

@@ -5,7 +5,7 @@
 import type { AvatarPackDef } from '../avatars.js';
 
 const pack: AvatarPackDef = {
-  id: 'star-wars-ot', version: 3, label: 'Star Wars: Original Trilogy',
+  id: 'star-wars-ot', version: 4, label: 'Star Wars: Original Trilogy',
   path: ['Sci-Fi', 'Star Wars', 'Original Trilogy'], builtin: true, franchise: true,
   avatars: [
     // Luke Skywalker
@@ -51,7 +51,8 @@ const pack: AvatarPackDef = {
         // approx: diagonal bandolier via one rotated chest box + pouch nubs
         { shape: 'box', size: [280, 50, 18], anchor: 'chest', pos: [0, 10, -12], rot: [0, 0, -0.5], color: 0x3a281c, emissiveIntensity: 0 },
         { shape: 'cylinder', size: [16, 16, 22], anchor: 'chest', pos: [-40, 40, -18], rot: [1.57, 0, -0.5], color: 0x2a1c12, emissiveIntensity: 0 },
-        { shape: 'cylinder', size: [16, 16, 22], anchor: 'chest', pos: [40, -30, -18], rot: [1.57, 0, -0.5], color: 0x2a1c12, emissiveIntensity: 0 }],
+        { shape: 'cylinder', size: [16, 16, 22], anchor: 'chest', pos: [40, -30, -18], rot: [1.57, 0, -0.5], color: 0x2a1c12, emissiveIntensity: 0 },
+        { shape: 'box', size: [30, 50, 220], anchor: 'handR', pos: [0, -90, -40], color: 0x5a4a3a }], // bowcaster
       personality: { bobMul: 0.95, swayMul: 1.1, cadenceMul: 0.85, ampMul: 1.15 },
       bubbles: ['🔧', '🏹', '😤', '🏆'] },
     // C-3PO — gold protocol droid + silver right leg via limbColors
@@ -88,7 +89,7 @@ const pack: AvatarPackDef = {
         { shape: 'box', size: [60, 40, 14], anchor: 'chest', pos: [0, 12, -8], color: 0x3a3a3e, emissiveIntensity: 0 },
         { shape: 'sphere', size: 6, anchor: 'chest', pos: [-16, 12, -16], color: 0xd63a2a, emissiveIntensity: 0.4 },
         { shape: 'sphere', size: 6, anchor: 'chest', pos: [16, 12, -16], color: 0x3fae5f, emissiveIntensity: 0.4 },
-        { shape: 'cape', size: [370, 713, 550], anchor: 'back', pos: [0, -180, 12], rot: [0.12, 0, 0], color: 0x0a0a0b }],
+        { shape: 'cape', size: [370, 713, 550], anchor: 'back', pos: [0, -180, 12], rot: [0.12, 0, 0], color: 0x0a0a0b, animate: { kind: 'sway', speed: 0.6, amp: 0.15 } }],
       personality: { bobMul: 0.75, swayMul: 0.5, cadenceMul: 0.8, ampMul: 0.85 },
       bubbles: ['😤', '⚡', '🖤', '🌌'] },
     // Yoda — sk 0.45 floor, big-eared master
@@ -142,7 +143,7 @@ const pack: AvatarPackDef = {
         { shape: 'box', size: [72, 34, 20], anchor: 'face', pos: [0, -26, -6], color: 0xc4c0b4, emissiveIntensity: 0 },
         // brown hood shell raised + tilted back so the front rim clears the brow
         { shape: 'sphere', size: [152, 82, 152], anchor: 'crown', pos: [0, 4, 16], rot: [0.4, 0, 0], color: 0x6b5a44, emissiveIntensity: 0, sphereArc: [0, 6.283, 0, 1.9] },
-        { shape: 'cape', size: [320, 414, 480], anchor: 'back', pos: [0, -110, 12], rot: [0.12, 0, 0], color: 0x5c4630 },
+        { shape: 'cape', size: [320, 414, 480], anchor: 'back', pos: [0, -110, 12], rot: [0.12, 0, 0], color: 0x5c4630, animate: { kind: 'sway', speed: 0.6, amp: 0.15 } },
         { shape: 'cylinder', size: [18, 18, 90], anchor: 'handR', pos: [0, 40, 0], color: 0xc7c9cc, emissiveIntensity: 0.05 },
         { shape: 'cylinder', size: [12, 12, 500], anchor: 'handR', pos: [0, 320, 0], color: 0x3fa9f5, emissiveIntensity: 0.6 }],
       personality: { bobMul: 0.8, swayMul: 0.7, cadenceMul: 0.85, ampMul: 0.8 },

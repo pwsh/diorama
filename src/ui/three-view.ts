@@ -6,7 +6,7 @@ import { customElement } from './define.js';
 // startup path never downloads it.
 import type { ThreeDRenderer, ZoneWorld, HaloWorld, TargetWorld, ActivityContext,
   InteractiveItem, GpsPinWorld, GpsLandmarkWorld, GeoEventWorld, WeatherFxState, VacMapEntry } from '../three-renderer.js';
-import { localToWorld, transformVerts, pointInPolygon, sensorColor, hexToInt, motionColor, lightIconKind, furnitureKind, resolveFurnitureDef, furnitureCat, isBinKind, isSpeakerKind, isVehicleKind, isStairsKind, alarmStateColor, valveOpenness, sprinklerRunning, sprinklerHeadKind, sprinklerArcDeg, sprinklerRadius, sprinklerRotation, doorSpanCenter, isDroopPlant, plantThirsty, PLANT_MOISTURE_DEFAULT_THRESHOLD } from '../geometry.js';
+import { localToWorld, transformVerts, pointInPolygon, sensorColor, hexToInt, motionColor, lightIconKind, furnitureKind, resolveFurnitureDef, furnitureCat, isBinKind, isSpeakerKind, isSinkKind, isVehicleKind, isStairsKind, alarmStateColor, valveOpenness, sprinklerRunning, sprinklerHeadKind, sprinklerArcDeg, sprinklerRadius, sprinklerRotation, doorSpanCenter, isDroopPlant, plantThirsty, PLANT_MOISTURE_DEFAULT_THRESHOLD } from '../geometry.js';
 import { compass8 } from '../geo.js';
 import { parseNowPlaying, isMediaPlayerId } from '../geometry.js';
 import { poolWaterColor } from '../geometry.js';
@@ -329,6 +329,20 @@ export class ThreeView extends LitElement {
               bubbles: true, composed: true,
               detail: {
                 domain: 'binary_sensor',
+                onPick: (id: string) => { fu0.entity_id = id; p.save(); p.emitConfig(); },
+              },
+            }));
+          }
+          return;
+        }
+        // Sinks reuse the 'media' click tag (single click runs/stops the water).
+        // Dblclick binds a switch/binary_sensor (faucet on-state), not media.
+        if (fu0 && isSinkKind(fu0.kind)) {
+          if (p.uiMode === 'edit' && !entity_id) {
+            this.dispatchEvent(new CustomEvent('open-entity-picker', {
+              bubbles: true, composed: true,
+              detail: {
+                domain: ['switch', 'binary_sensor'],
                 onPick: (id: string) => { fu0.entity_id = id; p.save(); p.emitConfig(); },
               },
             }));
@@ -728,7 +742,7 @@ export class ThreeView extends LitElement {
         // itself is per-frame). Unbound plants with no demo toggle never qualify.
         const isPlant = isDroopPlant(fu, p.store.customObjects) &&
           (!!fu.moistureEntity || fu.plantDemoThirsty !== undefined);
-        if (furnitureCat(def) !== 'appliance' && !isBinKind(fu.kind) && !isSpeakerKind(fu.kind) && !hasEvMail && !isPlant) return '';
+        if (furnitureCat(def) !== 'appliance' && !isBinKind(fu.kind) && !isSpeakerKind(fu.kind) && !isSinkKind(fu.kind) && !hasEvMail && !isPlant) return '';
         const on = p.effectiveState(fu)?.state ?? '-';
         const door = fu.doorEntity ? stOf(fu.doorEntity) : '';
         // Per-device power glow (#8): bucket the live power reading to 50 W so the
@@ -1693,7 +1707,8 @@ export class ThreeView extends LitElement {
       }
       const ctx: ActivityContext = { entityOn, roomNames, timeBucket: resolveTimeBucket(states), weather, recentTriggers, eventTriggers, doorSensorOpen, fireplaceOn,
         interactive, avatarInteract: p.store.avatarInteractions !== false,
-        costumes: p.store.avatarCostumes !== false };
+        costumes: p.store.avatarCostumes !== false,
+        props: p.store.avatarProps !== false };
       // Targets every frame — persistent rigs mutate in place (no rebuild).
       r.updateTargets(targets, ctx);
   }

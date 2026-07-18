@@ -6,7 +6,7 @@
 import type { AvatarPackDef } from '../avatars.js';
 
 const pack: AvatarPackDef = {
-  id: 'sesame-street', version: 1, label: 'Sesame Street',
+  id: 'sesame-street', version: 2, label: 'Sesame Street',
   path: ['Cartoons', 'Sesame Street'], builtin: true, franchise: true,
   avatars: [
     // Big Bird — tall golden-yellow bird, long orange stilt legs, cone beak.
@@ -46,6 +46,10 @@ const pack: AvatarPackDef = {
         { shape: 'cone', size: [26, 60], anchor: 'head', pos: [70, 55, 10], rot: [0, 0, 0.6], color: 0x4a86e0 }, // shaggy fur tuft
         { shape: 'cone', size: [24, 55], anchor: 'head', pos: [0, 90, 30], rot: [-0.3, 0, 0], color: 0x2f6fd1 }, // shaggy fur tuft
         { shape: 'cone', size: [22, 50], anchor: 'head', pos: [-30, 80, -30], rot: [0.3, 0, -0.2], color: 0x4a86e0 }, // shaggy fur tuft
+        { shape: 'cylinder', size: [46, 46, 16], anchor: 'handR', pos: [0, -30, -10], color: 0x8a5a2e }, // cookie body
+        { shape: 'sphere', size: 7, anchor: 'handR', pos: [-14, -22, -20], color: 0x2a1810 }, // choc chip
+        { shape: 'sphere', size: 7, anchor: 'handR', pos: [10, -34, -14], color: 0x2a1810 }, // choc chip
+        { shape: 'sphere', size: 6, anchor: 'handR', pos: [2, -20, -4], color: 0x2a1810 }, // choc chip
       ],
       personality: { bobMul: 1.3, swayMul: 1.2, cadenceMul: 1.1, ampMul: 1.2 },
       bubbles: ['🍪', '😋', '🤪', '🎉'] },
@@ -101,7 +105,7 @@ const pack: AvatarPackDef = {
         legColor: 0x3f9ad1, shoe: 0x3f9ad1, eyes: 'dots', emI: 0.02, hands: 'sphere', armL: 1.05 },
       accessories: [
         { shape: 'sphere', size: 34, anchor: 'face', pos: [0, -8, -18], color: 0x6ab8e0 }, // soft round nose
-        { shape: 'cone', size: [140, 220], anchor: 'back', pos: [0, -40, 14], rot: [0.15, 0, 0], color: 0xc0392b }, // small red Super-Grover cape (flattened cone)
+        { shape: 'cone', size: [140, 220], anchor: 'back', pos: [0, -40, 14], rot: [0.15, 0, 0], color: 0xc0392b, animate: { kind: 'flap', speed: 1.2, amp: 0.3 } }, // small red Super-Grover cape (flattened cone) — heroic flutter
       ],
       personality: { bobMul: 1.2, swayMul: 1.3, cadenceMul: 1.05, ampMul: 1.0 },
       bubbles: ['🦸', '😅', '🐾', '💙'] },
@@ -116,7 +120,7 @@ const pack: AvatarPackDef = {
         { shape: 'cylinder', size: [26, 26, 6], anchor: 'face', pos: [30, 6, -14], rot: [1.57, 0, 0], color: 0xc7ccd1 }, // monocle
         { shape: 'box', size: [70, 150, 12], anchor: 'chest', pos: [0, 0, -12], color: 0xf0ece0 }, // white dress-shirt front
         { shape: 'box', size: [40, 24, 10], anchor: 'chest', pos: [0, 70, -16], color: 0x0a0a0c }, // black bow tie
-        { shape: 'cape', size: [340, 560, 460], anchor: 'back', pos: [0, -110, 12], rot: [0.12, 0, 0], color: 0x4a1e6b }, // flowing purple cape (cape technique)
+        { shape: 'cape', size: [340, 560, 460], anchor: 'back', pos: [0, -110, 12], rot: [0.12, 0, 0], color: 0x4a1e6b, animate: { kind: 'sway', speed: 0.6, amp: 0.15 } }, // flowing purple cape (cape technique)
         { shape: 'cone', size: [16, 40], anchor: 'head', pos: [-116, 30, 0], rot: [0, 0, 0.5], color: 0x8a4fae }, // pointed ear tip L
         { shape: 'cone', size: [16, 40], anchor: 'head', pos: [116, 30, 0], rot: [0, 0, -0.5], color: 0x8a4fae }, // pointed ear tip R
       ],

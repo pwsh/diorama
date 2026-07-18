@@ -44,7 +44,7 @@ export type FurnitureKind =
   | 'kitchen_sink'  // stainless double basin embedded in a counter
   | 'coffee_maker' | 'toaster'
   // bathroom
-  | 'toilet' | 'sink' | 'sink_vanity' | 'bathtub' | 'shower'
+  | 'toilet' | 'sink' | 'sink_vanity' | 'pedestal_sink' | 'utility_sink' | 'bathtub' | 'shower'
   // outdoor
   | 'trash_bin' | 'recycle_bin'   // wheeled curbside bins; entity 'on'/'full' = full
   | 'tree' | 'pine_tree' | 'bush' | 'flower_bed' | 'bird_bath'
@@ -1115,6 +1115,7 @@ export interface Store {
   notes?: string;                    // free-text description of this configuration; shown in Settings ▸ Data; rides export/import
   avatarInteractions?: boolean;      // synthetic avatars (ai/roam) walk up to UNBOUND interactive devices and flip them (session-only); absent/true = on, false = off
   avatarCostumes?: boolean;          // situational costume/outfit swaps on avatar rigs (sleep/exercise/cooking); absent/true = on, false = off
+  avatarProps?: boolean;             // shared prop library — avatars pick up & use household objects (vacuum/broom/umbrella/snacks/…); absent/true = on, false = off
   bgText?: BgTextConfig;             // playful background text (skywriting / banner plane / grass writing)
   heatmap?: HeatmapConfig;           // per-room temperature heat-map comfort band (derived visual layer)
 }

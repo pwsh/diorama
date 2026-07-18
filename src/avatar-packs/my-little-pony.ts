@@ -8,7 +8,7 @@
 import type { AvatarPackDef } from '../avatars.js';
 
 const pack: AvatarPackDef = {
-  id: 'my-little-pony', version: 2, label: 'My Little Pony',
+  id: 'my-little-pony', version: 3, label: 'My Little Pony',
   path: ['Cartoons', 'My Little Pony'], builtin: true, franchise: true,
   base: {
     rig: 'quadruped',
@@ -41,8 +41,8 @@ const pack: AvatarPackDef = {
       rig: 'quadruped', pet: true,
       quadruped: { coat: 0x9bdbf5, earColor: 0x9bdbf5, snoutColor: 0xcaeefb },
       accessories: [
-        { shape: 'sphere', size: [150, 40, 230], anchor: 'qback', pos: [-140, 40, -180], rot: [0.15, -0.35, 0.5], color: 0x9bdbf5 },
-        { shape: 'sphere', size: [150, 40, 230], anchor: 'qback', pos: [140, 40, -180], rot: [0.15, 0.35, -0.5], color: 0x9bdbf5 },
+        { shape: 'sphere', size: [150, 40, 230], anchor: 'qback', pos: [-140, 40, -180], rot: [0.15, -0.35, 0.5], color: 0x9bdbf5, animate: { kind: 'flap', speed: 1.4, amp: 0.3 } }, // wing L
+        { shape: 'sphere', size: [150, 40, 230], anchor: 'qback', pos: [140, 40, -180], rot: [0.15, 0.35, -0.5], color: 0x9bdbf5, animate: { kind: 'flap', speed: 1.4, amp: -0.3 } }, // wing R (mirrored amp)
         { shape: 'box', size: [26, 90, 40], anchor: 'qneck', pos: [0, 60, 0], rot: [0.2, 0, 0], color: 0xec4141 },
         { shape: 'box', size: [24, 85, 38], anchor: 'qneck', pos: [-4, 55, 35], rot: [0.35, 0, 0], color: 0xf2932e },
         { shape: 'box', size: [22, 80, 36], anchor: 'qneck', pos: [-6, 48, 65], rot: [0.5, 0, 0], color: 0xf5df4a },
@@ -108,8 +108,8 @@ const pack: AvatarPackDef = {
       rig: 'quadruped', pet: true,
       quadruped: { coat: 0xfaf5ab, earColor: 0xfaf5ab, snoutColor: 0xfdfae0 },
       accessories: [
-        { shape: 'sphere', size: [110, 30, 170], anchor: 'qback', pos: [-110, 20, -140], rot: [0.05, -0.2, 0.25], color: 0xfaf5ab },
-        { shape: 'sphere', size: [110, 30, 170], anchor: 'qback', pos: [110, 20, -140], rot: [0.05, 0.2, -0.25], color: 0xfaf5ab },
+        { shape: 'sphere', size: [110, 30, 170], anchor: 'qback', pos: [-110, 20, -140], rot: [0.05, -0.2, 0.25], color: 0xfaf5ab, animate: { kind: 'flap', speed: 1.1, amp: 0.22 } }, // wing L
+        { shape: 'sphere', size: [110, 30, 170], anchor: 'qback', pos: [110, 20, -140], rot: [0.05, 0.2, -0.25], color: 0xfaf5ab, animate: { kind: 'flap', speed: 1.1, amp: -0.22 } }, // wing R (mirrored amp)
         { shape: 'box', size: [26, 160, 45], anchor: 'qneck', pos: [-8, 20, 20], color: 0xf3b5cf },
         { shape: 'box', size: [22, 150, 40], anchor: 'qneck', pos: [-24, 5, 55], color: 0xf3b5cf },
         { shape: 'box', size: [30, 40, 20], anchor: 'qhead', pos: [10, 60, -70], rot: [0.1, 0, 0.15], color: 0xf3b5cf },

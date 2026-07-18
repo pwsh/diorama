@@ -1,0 +1,194 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>sink test</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<script type="module">
+  // Sink overhaul — every sink kind (sink / pedestal_sink / sink_vanity /
+  // kitchen_sink / utility_sink) builds a RECESSED basin bowl + faucet, RUNS
+  // (translucent stream + rising fill) off its effectiveState (bound entity /
+  // unbound localState → ctx.entityOn) OR an anchored wash_hands rig, and DRAINS
+  // when off. The fill blend is keyed by fixture id and SURVIVES _keyFloor
+  // rebuilds. Sinks are click-tagged like appliances (userData.kind='media').
+  //   3D assertions: built renderer chunk (r._floorGroup / r._sinks / _sinkFill).
+  //   pure assertions: geometry.mod.js (isSinkKind + FURNITURE_KINDS defaults).
+  //   2D assertions:   canvas-render.mod.js drawFurniturePrimitiveLocal no-throw.
+  const mod = await import('./assets/three-renderer.js?v=' + Date.now());
+  const geo = await import('./geometry.mod.js?v=' + Date.now());
+  const cr  = await import('./canvas-render.mod.js?v=' + Date.now());
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+
+  const results = [];
+  const assert = (name, cond, detail = '') => results.push(`${cond ? 'PASS' : 'FAIL'} ${name}${detail ? ' (' + detail + ')' : ''}`);
+  const findByFixtureId = (grp, id) => {
+    let found = null;
+    grp.traverse(o => { if (!found && o.userData && o.userData.fixtureId === id) found = o; });
+    return found;
+  };
+  const SINK_KINDS = ['sink', 'pedestal_sink', 'sink_vanity', 'kitchen_sink', 'utility_sink'];
+
+  const baseFloor = (furniture) => ({
+    id: 'f1', name: 'F', w: 9000, d: 7000,
+    walls: [], furniture: furniture || [], lights: [], switches: [],
+    sensors: [], motionSensors: [], envSensors: [], doors: [], windows: [],
+    bg: null, model3d: null, look3d: null, rooms: [],
+  });
+  const build = (furniture, states) => {
+    r.updateFloor(baseFloor(furniture), { preset: 'day' }, undefined, undefined, id => (states && states[id]) || null);
+  };
+
+  // Deterministic advance: override performance.now so updateTargets' frameDt is
+  // exactly `stepS` per call. Returns a stepper that drives N frames.
+  let _clock = 1000;
+  const realNow = performance.now.bind(performance);
+  performance.now = () => _clock;
+  const advance = (frames, stepS, ctx) => {
+    for (let i = 0; i < frames; i++) { _clock += stepS * 1000; r.updateTargets([], ctx); }
+  };
+
+  // ── pure: isSinkKind + FURNITURE_KINDS defaults ──────────────────────────
+  function testPure() {
+    assert('isSinkKind true for all five sink kinds', SINK_KINDS.every(k => geo.isSinkKind(k)),
+      SINK_KINDS.filter(k => !geo.isSinkKind(k)).join(',') || 'ok');
+    assert('isSinkKind false for non-sinks', !geo.isSinkKind('table') && !geo.isSinkKind('fridge') && !geo.isSinkKind('toilet'));
+    const K = geo.FURNITURE_KINDS;
+    assert('new kinds present in FURNITURE_KINDS', !!K.pedestal_sink && !!K.utility_sink);
+    assert('every sink kind has a wash_hands activity',
+      SINK_KINDS.every(k => K[k] && K[k].activity === 'wash_hands'),
+      SINK_KINDS.filter(k => K[k]?.activity !== 'wash_hands').join(',') || 'ok');
+    assert('every sink kind has sane footprint/height defaults',
+      SINK_KINDS.every(k => K[k] && K[k].w >= 400 && K[k].h >= 400 && K[k].ht >= 800),
+      SINK_KINDS.map(k => `${k}:${K[k]?.w}x${K[k]?.h}x${K[k]?.ht}`).join(' '));
+    assert('pedestal_sink ~500x450x850', K.pedestal_sink.w === 500 && K.pedestal_sink.h === 450 && K.pedestal_sink.ht === 850);
+    assert('utility_sink ~600x500x900', K.utility_sink.w === 600 && K.utility_sink.h === 500 && K.utility_sink.ht === 900);
+    assert('kitchen_sink stays cat=appliance (NOT mountable)',
+      K.kitchen_sink.cat === 'appliance' && !K.kitchen_sink.mountable,
+      `cat=${K.kitchen_sink.cat} mountable=${!!K.kitchen_sink.mountable}`);
+  }
+
+  // ── 3D: bowl recess + faucet on every kind ───────────────────────────────
+  function testBuildEachKind() {
+    const K = geo.FURNITURE_KINDS;
+    const furn = SINK_KINDS.map((k, i) => ({
+      id: 'sk_' + k, x: 1000 + i * 1400, y: 1500, w: K[k].w, h: K[k].h, kind: k,
+    }));
+    build(furn, {});
+    for (const k of SINK_KINDS) {
+      const g = findByFixtureId(r._floorGroup, 'sk_' + k);
+      const ht = K[k].ht;
+      // The water rig's emptyY == the recessed bowl-floor level (+6). A basin
+      // floor well BELOW the rim (ht) is proof of a real recess; also confirm a
+      // PHYSICAL mesh sits at that recessed level (the bowl floor / inner wall).
+      const rig = r._sinks.find(s => s.fuId === 'sk_' + k);
+      const emptyY = rig ? rig.emptyY : null;
+      let bowlMeshAtFloor = false, faucetAbove = false;
+      g && g.traverse(o => {
+        if (!o.isMesh || !o.position) return;
+        if (emptyY != null && o.position.y < ht - 60 && Math.abs(o.position.y - emptyY) < 30) bowlMeshAtFloor = true;
+        if (o.position.y > ht + 40) faucetAbove = true;   // faucet body/spout above the rim
+      });
+      assert(`${k}: recessed bowl floor well below the rim`, emptyY != null && emptyY < ht - 60,
+        emptyY != null ? `emptyY=${emptyY.toFixed(0)} rim=${ht}` : 'none');
+      assert(`${k}: a physical bowl mesh sits at the recessed floor level`, bowlMeshAtFloor);
+      assert(`${k}: has a faucet above the rim`, faucetAbove);
+      // Clickable like an appliance (userData.kind='media', in _mediaClickables).
+      assert(`${k}: click-tagged 'media' + registered clickable`,
+        g && g.userData.kind === 'media' && r._mediaClickables.includes(g));
+      // Registered a sink water rig.
+      assert(`${k}: registered in _sinks`, r._sinks.some(s => s.fuId === 'sk_' + k),
+        `count=${r._sinks.filter(s => s.fuId === 'sk_' + k).length}`);
+    }
+    // kitchen_sink's DOUBLE basin registers two water rigs.
+    assert('kitchen_sink registers TWO water rigs (double basin)',
+      r._sinks.filter(s => s.fuId === 'sk_kitchen_sink').length === 2,
+      `count=${r._sinks.filter(s => s.fuId === 'sk_kitchen_sink').length}`);
+  }
+
+  // ── 3D: run/stop water via entityOn (bound/local on) ─────────────────────
+  function testRunStop() {
+    const fu = { id: 'runsink', x: 1200, y: 1500, w: 760, h: 550, kind: 'sink_vanity', entity_id: 'switch.faucet' };
+    build([fu], { 'switch.faucet': { state: 'on', attributes: {} } });
+    const rig0 = r._sinks.find(s => s.fuId === 'runsink');
+    assert('sink starts empty + stream hidden before advance', rig0 && !rig0.stream.visible && (r._sinkFill['runsink'] ?? 0) < 0.02);
+    // RUN: entityOn true for ~5 s → fill rises, stream shows.
+    advance(50, 0.1, { entityOn: { runsink: true } });
+    const fillRun = r._sinkFill['runsink'];
+    const rig = r._sinks.find(s => s.fuId === 'runsink');
+    assert('running shows the stream mesh', rig && rig.stream.visible);
+    assert('running raises the fill level (> 0.5 after ~5 s)', fillRun > 0.5, `fill=${fillRun.toFixed(3)}`);
+    assert('running fill plane is visible + risen above empty',
+      rig && rig.fill.visible && rig.fill.position.y > rig.emptyY + 10,
+      rig ? `y=${rig.fill.position.y.toFixed(0)} emptyY=${rig.emptyY.toFixed(0)}` : '');
+    assert('fill stays below the rim (fullY cap)', rig && rig.fill.position.y <= rig.fullY + 6,
+      rig ? `y=${rig.fill.position.y.toFixed(0)} fullY=${rig.fullY.toFixed(0)}` : '');
+    // STOP: entityOn false → drains, stream hides.
+    advance(80, 0.1, { entityOn: {} });
+    const fillOff = r._sinkFill['runsink'];
+    const rig2 = r._sinks.find(s => s.fuId === 'runsink');
+    assert('turning off hides the stream', rig2 && !rig2.stream.visible);
+    assert('turning off DRAINS the fill toward empty (< 0.1)', fillOff < 0.1, `fill=${fillOff.toFixed(3)}`);
+    assert('drain monotonic (fillOff < fillRun)', fillOff < fillRun, `${fillOff.toFixed(3)} < ${fillRun.toFixed(3)}`);
+  }
+
+  // ── 3D: fill blend SURVIVES a _keyFloor rebuild ──────────────────────────
+  function testBlendSurvivesRebuild() {
+    const fu = { id: 'persink', x: 1200, y: 3200, w: 560, h: 470, kind: 'sink', entity_id: 'switch.p' };
+    build([fu], { 'switch.p': { state: 'on', attributes: {} } });
+    advance(40, 0.1, { entityOn: { persink: true } });
+    const before = r._sinkFill['persink'];
+    assert('fill accumulated before rebuild', before > 0.4, `fill=${before.toFixed(3)}`);
+    // Rebuild the floor (new furniture object = fresh meshes, same id).
+    build([{ ...fu }], { 'switch.p': { state: 'on', attributes: {} } });
+    const after = r._sinkFill['persink'];
+    assert('fill blend persists across rebuild (_sinkFill kept)', Math.abs(after - before) < 1e-6, `after=${after.toFixed(3)}`);
+    const rig = r._sinks.find(s => s.fuId === 'persink');
+    // Registration re-applies the persisted level → the fresh fill plane is not empty.
+    assert('rebuilt fill plane re-applied to the persisted level (not popped empty)',
+      rig && rig.fill.visible && rig.fill.position.y > rig.emptyY + 5,
+      rig ? `y=${rig.fill.position.y.toFixed(0)} emptyY=${rig.emptyY.toFixed(0)}` : '');
+  }
+
+  // ── 3D: unbound sink runs off localState (effectiveState via three-view is
+  // entityOn; here we assert the click-tag path resolves an unbound piece) ──
+  function testUnbound() {
+    const fu = { id: 'unbsink', x: 5000, y: 3200, w: 600, h: 500, kind: 'utility_sink' };
+    build([fu], {});
+    const g = findByFixtureId(r._floorGroup, 'unbsink');
+    assert('unbound sink is still click-tagged (entity_id null)',
+      g && g.userData.kind === 'media' && g.userData.entity_id === null);
+    // Drive it running by localState → entityOn (three-view resolves localState
+    // into ctx.entityOn; here we simulate that map directly).
+    advance(40, 0.1, { entityOn: { unbsink: true } });
+    assert('unbound sink runs when its entityOn (localState) is set', (r._sinkFill['unbsink'] ?? 0) > 0.4,
+      `fill=${(r._sinkFill['unbsink'] ?? 0).toFixed(3)}`);
+  }
+
+  // ── 2D: drawFurniturePrimitiveLocal cases don't throw ────────────────────
+  function test2D() {
+    const canvas = document.createElement('canvas');
+    canvas.width = 128; canvas.height = 128;
+    const ctx = canvas.getContext('2d');
+    let threw = '';
+    for (const k of SINK_KINDS) {
+      try {
+        ctx.save(); ctx.translate(64, 64);
+        cr.drawFurniturePrimitiveLocal(ctx, { id: 't', kind: k, w: 700, h: 500, x: 0, y: 0 }, 40, 30, undefined, false, {});
+        ctx.restore();
+      } catch (e) { threw += `${k}:${e && e.message} `; }
+    }
+    assert('all sink 2D primitive cases draw without throwing', threw === '', threw);
+  }
+
+  testPure();
+  testBuildEachKind();
+  testRunStop();
+  testBlendSurvivesRebuild();
+  testUnbound();
+  test2D();
+
+  performance.now = realNow;
+  const pass = results.filter(x => x.startsWith('PASS')).length;
+  const fail = results.filter(x => x.startsWith('FAIL')).length;
+  document.title = `SINK ${fail === 0 ? 'PASS' : 'FAIL'} ${pass}/${pass + fail} | ` + results.join(' · ');
+</script>

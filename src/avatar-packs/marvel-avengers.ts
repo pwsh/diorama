@@ -6,7 +6,7 @@ import type { AvatarPackDef } from '../avatars.js';
 const GOLD = 0xc9a227, GLOW = 0xbfe8ff;
 
 const pack: AvatarPackDef = {
-  id: 'marvel-avengers', version: 2, label: 'Marvel: The Avengers',
+  id: 'marvel-avengers', version: 3, label: 'Marvel: The Avengers',
   path: ['Sci-Fi', 'Marvel', 'The Avengers'], builtin: true, franchise: true,
   base: {
     rig: 'humanoid',
@@ -50,7 +50,7 @@ const pack: AvatarPackDef = {
         { shape: 'box', size: [38, 190, 28], anchor: 'head', pos: [100, -40, 10], color: 0xd8b878 },
         { shape: 'cylinder', size: [17, 17, 10], anchor: 'chest', pos: [-30, 10, -12], color: 0x8a8a86 },
         { shape: 'cylinder', size: [17, 17, 10], anchor: 'chest', pos: [30, 10, -12], color: 0x8a8a86 },
-        { shape: 'cape', size: [300, 700, 480], anchor: 'back', pos: [0, -220, 20], rot: [0.12, 0, 0], color: 0x8b1a1a }, // red cape
+        { shape: 'cape', size: [300, 700, 480], anchor: 'back', pos: [0, -220, 20], rot: [0.12, 0, 0], color: 0x8b1a1a, animate: { kind: 'sway', speed: 0.6, amp: 0.15 } }, // red cape
         { shape: 'cylinder', size: [8, 8, 95], anchor: 'handR', pos: [0, 40, 0], color: 0x3a2a1e },
         { shape: 'box', size: [70, 50, 60], anchor: 'handR', pos: [0, 100, 0], color: 0x6e6b66 }],
       personality: { bobMul: 1.1, swayMul: 0.6, cadenceMul: 0.9, ampMul: 1.1 },
@@ -120,8 +120,8 @@ const pack: AvatarPackDef = {
         { shape: 'box', size: [30, 20, 10], anchor: 'head', pos: [-100, 10, -10], color: 0x9a9086 },
         { shape: 'box', size: [30, 20, 10], anchor: 'head', pos: [100, 10, -10], color: 0x9a9086 },
         { shape: 'box', size: [90, 10, 8], anchor: 'neck', pos: [0, -4, -8], color: GOLD },
-        { shape: 'cylinder', size: [16, 16, 14], anchor: 'chest', pos: [0, -10, -12], color: GOLD, emissiveIntensity: 0.4 },
-        { shape: 'cape', size: [300, 720, 460], anchor: 'back', pos: [0, -230, 20], rot: [0.12, 0, 0], color: 0x9c2b2b }], // crimson cloak
+        { shape: 'cylinder', size: [16, 16, 14], anchor: 'chest', pos: [0, -10, -12], color: GOLD, emissiveIntensity: 0.4, animate: { kind: 'spin', speed: 1.2 } }, // Eye-of-Agamotto-style amulet
+        { shape: 'cape', size: [300, 720, 460], anchor: 'back', pos: [0, -230, 20], rot: [0.12, 0, 0], color: 0x9c2b2b, animate: { kind: 'sway', speed: 0.6, amp: 0.15 } }], // crimson cloak (Cloak of Levitation)
       personality: { bobMul: 0.75, swayMul: 0.5, cadenceMul: 0.85, ampMul: 0.8 },
       bubbles: ['✨', '🔮', '📖', '🌀'] },
     // Loki — green/gold leathers, dark cape, horned helm.
@@ -135,7 +135,9 @@ const pack: AvatarPackDef = {
         { shape: 'box', size: [66, 50, 46], anchor: 'shoulderL', color: 0x1c1c1c },
         { shape: 'box', size: [66, 50, 46], anchor: 'shoulderR', color: 0x1c1c1c },
         { shape: 'box', size: [140, 10, 8], anchor: 'chest', pos: [0, 40, -10], color: GOLD },
-        { shape: 'cape', size: [290, 700, 450], anchor: 'back', pos: [0, -220, 20], rot: [0.12, 0, 0], color: 0x14401f }], // dark cape
+        { shape: 'cape', size: [290, 700, 450], anchor: 'back', pos: [0, -220, 20], rot: [0.12, 0, 0], color: 0x14401f, animate: { kind: 'sway', speed: 0.6, amp: 0.15 } }, // dark cape
+        { shape: 'cylinder', size: [10, 10, 420], anchor: 'handR', pos: [0, 120, 0], color: 0x3a3a3c }, // scepter haft
+        { shape: 'sphere', size: 20, anchor: 'handR', pos: [0, 300, 0], color: 0x2f9fd0, emissive: 0x2f9fd0, emissiveIntensity: 0.5, outlineSkip: true }], // scepter gem
       personality: { bobMul: 0.9, swayMul: 0.75, cadenceMul: 0.95, ampMul: 0.85 },
       bubbles: ['😏', '🐍', '👑', '✨'] },
   ],

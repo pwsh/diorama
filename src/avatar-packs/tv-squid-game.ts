@@ -7,7 +7,7 @@
 import type { AvatarPackDef } from '../avatars.js';
 
 const pack: AvatarPackDef = {
-  id: 'tv-squid-game', version: 2, label: 'Squid Game',
+  id: 'tv-squid-game', version: 3, label: 'Squid Game',
   path: ['Pop Culture', 'TV Shows', 'Squid Game'], builtin: true, franchise: true,
   // Shared tracksuit body — spread under every member; the two non-players
   // override body/legColor/shoe/eyes/noFace/hands below.
@@ -38,7 +38,7 @@ const pack: AvatarPackDef = {
         { shape: 'box', size: [132, 150, 40], anchor: 'face', pos: [0, 10, -20], color: 0x161616 }, // faceted mask plate
         { shape: 'box', size: [40, 50, 10], anchor: 'face', pos: [-44, 6, -38], rot: [0, 0.3, 0], color: 0x1e1e1e }, // facet L (proud)
         { shape: 'box', size: [40, 50, 10], anchor: 'face', pos: [44, 6, -38], rot: [0, -0.3, 0], color: 0x1e1e1e }, // facet R (proud)
-        { shape: 'cape', size: [400, 600, 560], anchor: 'back', pos: [0, -210, 30], rot: [0.12, 0, 0], color: 0x0d0d0d }, // long coat
+        { shape: 'cape', size: [400, 600, 560], anchor: 'back', pos: [0, -210, 30], rot: [0.12, 0, 0], color: 0x0d0d0d, animate: { kind: 'sway', speed: 0.6, amp: 0.15 } }, // long coat
         { shape: 'box', size: [34, 34, 40], anchor: 'handL', pos: [0, 0, 0], color: 0x141414 }, // glove L
         { shape: 'box', size: [34, 34, 40], anchor: 'handR', pos: [0, 0, 0], color: 0x141414 }, // glove R
       ],

@@ -1,0 +1,361 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>props test</title>
+<style>html,body{margin:0;background:#111;color:#ddd;font:12px monospace}#c{width:640px;height:480px}</style>
+<div id="c"></div>
+<pre id="out">running…</pre>
+<script type="module">
+ try {
+  // Shared-prop library harness (docs/research/shared-props.md). Drives the REAL
+  // renderer with a synthesized performance.now + a stubbable Math.random so every
+  // prop trigger class is deterministic. Verifies: catalog integrity, tier/
+  // eligibility, the synthetic-only guard (chore/snack/carry NEVER on radar rigs),
+  // the pinned umbrella delta (Class 3 applies to ALL rigs incl. radar), Class 2
+  // idle/seated + popcorn TV gate, Class 1 candidate gating (_pickPropChore),
+  // Class 4 quad mouth-carry, prop-swap hide/restore, per-session build + dispose
+  // (no leaked textures / shared-material guard), hover-rig support, zero-alloc
+  // advance. Title carries `PROPS PASS n/n`.
+  const mod = await import('./assets/three-renderer.js?v=' + Date.now());
+  const { ThreeDRenderer, PROP_DEFS, propEligible, propTierOf } = mod;
+  const _dom = await import('./assets/base-domestic-animals.js?v=' + Date.now());
+  ThreeDRenderer.registerAvatarPack(_dom.default);
+
+  const r = new ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+  const TINT = 0x33cc88;
+
+  // Test avatar defs: a hand accessory (hide/restore), hover, noProps, sessile.
+  ThreeDRenderer.registerAvatarPack({
+    id: 'proptest', version: 1, label: 'PropTest', path: ['PROPTEST'], builtin: true,
+    avatars: [
+      { id: 'proptest/handacc', label: 'HandAcc', rig: 'humanoid', humanoid: {},
+        accessories: [{ shape: 'sphere', size: 40, anchor: 'handR', color: 0xff0000 }] },
+      { id: 'proptest/hover', label: 'Hover', rig: 'humanoid', humanoid: { hover: 800 } },
+      { id: 'proptest/noprops', label: 'NoProps', rig: 'humanoid', humanoid: {}, noProps: true },
+      { id: 'proptest/plant', label: 'Plant', rig: 'humanoid', humanoid: {}, sessile: true },
+    ],
+  });
+
+  const results = [];
+  const check = (name, cond, extra = '') => results.push({ name, pass: !!cond, extra });
+
+  // Deterministic clock.
+  const realNow = performance.now.bind(performance);
+  let fakeNow = 1000;
+  performance.now = () => fakeNow;
+
+  // ── Renderer frame-state helper (bypasses updateTargets for unit-style tests) ─
+  const LOOP = [{ x: 1000, y: 1000 }, { x: 4000, y: 1000 }, { x: 4000, y: 5000 }, { x: 1000, y: 5000 }];
+  const INDOOR = { x: 2500, y: 3000 };
+  const OUTDOOR = { x: 6000, y: 3000 };
+  const setFrame = (o = {}) => {
+    r._avatarPropsOn = o.propsOn ?? true;
+    r._propWeatherCondition = o.weather ?? null;
+    r._wallLoops = o.loops ?? [LOOP];
+    r._entityOnFrame = o.entityOn ?? {};
+    r._roomZones = o.roomZones ?? [];
+    r._tvsByRoom = o.tvsByRoom ?? {};
+    r._interactBucket = o.bucket ?? 'day';
+    r._plants = o.plants ?? [];
+    r._activityAnchors = o.anchors ?? [];
+  };
+  const radar = (over = {}) => Object.assign({ key: 't', x: INDOOR.x, y: INDOOR.y, ai: false, roam: false }, over);
+  const synth = (over = {}) => Object.assign({ key: 't', x: INDOOR.x, y: INDOOR.y, ai: true, roam: false }, over);
+  // Idle-standing humanoid.
+  const idleRig = (id = 'adult') => { const h = r._buildHumanoid(TINT, id); h.dwell = 3; h.sit = 0; h.act = 0; h.lie = 0; h.privacy = 0; return h; };
+  const seatedRig = (id = 'adult') => { const h = idleRig(id); h.sit = 0.95; return h; };
+  // Run one prop-trigger tick with a forced Math.random.
+  const withRng = (v, fn) => { const o = Math.random; Math.random = () => v; try { return fn(); } finally { Math.random = o; } };
+
+  // ── 1. Catalog integrity ────────────────────────────────────────────────────
+  const ALL = Object.keys(PROP_DEFS);
+  check('catalog: 13 props', ALL.length === 13, `n=${ALL.length}`);
+  check('catalog: every users valid', ALL.every(k => PROP_DEFS[k].users === 'hands' || PROP_DEFS[k].users === 'quad'));
+  check('catalog: every primitives non-empty', ALL.every(k => Array.isArray(PROP_DEFS[k].primitives) && PROP_DEFS[k].primitives.length > 0));
+  check('catalog: every poseHold is a fn', ALL.every(k => typeof PROP_DEFS[k].poseHold === 'function'));
+  check('catalog: exactly one quad prop (fetch_toy)', ALL.filter(k => PROP_DEFS[k].users === 'quad').join() === 'fetch_toy');
+
+  // ── 2. Tier + eligibility ─────────────────────────────────────────────────────
+  {
+    const hands = idleRig('adult');
+    const quad = r._buildQuadruped(TINT, 'cat');
+    const hover = idleRig('proptest/hover');
+    const noprops = idleRig('proptest/noprops');
+    const plant = r._buildHumanoid(TINT, 'proptest/plant');
+    check('tier: adult = hands', propTierOf(hands) === 'hands');
+    check('tier: cat = quad', propTierOf(quad) === 'quad');
+    check('tier: hover = hands', propTierOf(hover) === 'hands');
+    check('tier: noProps = none', propTierOf(noprops) === 'none');
+    check('tier: sessile = none', propTierOf(plant) === 'none');
+    check('elig: hands rig accepts vacuum', propEligible(hands, PROP_DEFS.vacuum_cleaner) === true);
+    check('elig: hands rig rejects fetch_toy', propEligible(hands, PROP_DEFS.fetch_toy) === false);
+    check('elig: quad rig rejects vacuum', propEligible(quad, PROP_DEFS.vacuum_cleaner) === false);
+    check('elig: quad rig accepts fetch_toy', propEligible(quad, PROP_DEFS.fetch_toy) === true);
+    check('elig: sessile refuses everything', ALL.every(k => propEligible(plant, PROP_DEFS[k]) === false));
+    check('elig: noProps refuses everything', ALL.every(k => propEligible(noprops, PROP_DEFS[k]) === false));
+    check('elig: hover accepts vacuum (hands present)', propEligible(hover, PROP_DEFS.vacuum_cleaner) === true);
+  }
+
+  // ── 3. Synthetic-only guard — chore/snack/carry NEVER on a radar rig ─────────
+  {
+    setFrame({ weather: null });   // no umbrella in play
+    const h = idleRig('adult');
+    withRng(0, () => r._updatePropTriggers(h, radar(), 0.1, 0));
+    check('guard: radar rig never gets an idle prop', h.propKind == null, `propKind=${h.propKind}`);
+    // Same conditions on a SYNTHETIC rig DO equip (index-0 candidate = plate_of_food).
+    const h2 = idleRig('adult');
+    withRng(0, () => r._updatePropTriggers(h2, synth(), 0.1, 0));
+    check('guard: synthetic idle rig equips (Class 2)', h2.propKind === 'plate_of_food', `propKind=${h2.propKind}`);
+    r._endPropSession(h2);
+  }
+
+  // ── 4. Class 3 umbrella (pinned delta: ALL rigs) ─────────────────────────────
+  {
+    // Radar rig OUTDOORS in rain → umbrella (the delta).
+    setFrame({ weather: 'rainy' });
+    const hOut = idleRig('adult');
+    r._updatePropTriggers(hOut, radar({ x: OUTDOOR.x, y: OUTDOOR.y }), 0.1, 0);
+    check('umbrella: radar outdoors+rain equips', hOut.propKind === 'umbrella', `propKind=${hOut.propKind}`);
+    check('umbrella: session is class 3', hOut.propCls === 3);
+    check('umbrella: no timeout (Infinity dur)', hOut.propDur === Infinity);
+    // Persists across many frames while the condition holds (no sessionDurS timeout).
+    let held = true;
+    for (let i = 0; i < 200; i++) { r._updatePropTriggers(hOut, radar({ x: OUTDOOR.x, y: OUTDOOR.y }), 0.1, 0); if (hOut.propKind !== 'umbrella') held = false; }
+    check('umbrella: persists while condition holds', held);
+    // Step INDOORS → unequips promptly.
+    r._updatePropTriggers(hOut, radar({ x: INDOOR.x, y: INDOOR.y }), 0.1, 0);
+    check('umbrella: unequips when stepping indoors', hOut.propKind == null, `propKind=${hOut.propKind}`);
+
+    // Radar rig INDOORS in rain → never.
+    const hIn = idleRig('adult');
+    r._updatePropTriggers(hIn, radar({ x: INDOOR.x, y: INDOOR.y }), 0.1, 0);
+    check('umbrella: indoors+rain never equips', hIn.propKind == null, `propKind=${hIn.propKind}`);
+
+    // Radar rig OUTDOORS but DRY → never.
+    setFrame({ weather: 'sunny' });
+    const hDry = idleRig('adult');
+    r._updatePropTriggers(hDry, radar({ x: OUTDOOR.x, y: OUTDOOR.y }), 0.1, 0);
+    check('umbrella: outdoors+dry never equips', hDry.propKind == null, `propKind=${hDry.propKind}`);
+
+    // Condition clearing mid-session unequips.
+    setFrame({ weather: 'pouring' });
+    const hClr = idleRig('adult');
+    r._updatePropTriggers(hClr, radar({ x: OUTDOOR.x, y: OUTDOOR.y }), 0.1, 0);
+    const wasUp = hClr.propKind === 'umbrella';
+    setFrame({ weather: 'cloudy' });
+    r._updatePropTriggers(hClr, radar({ x: OUTDOOR.x, y: OUTDOOR.y }), 0.1, 0);
+    check('umbrella: condition clearing unequips', wasUp && hClr.propKind == null);
+  }
+
+  // ── 5. Class 2 idle-standing vs idle-seated + popcorn TV gate ────────────────
+  {
+    setFrame({ weather: null });
+    // idleSeated only true when sit>0.9 — a seated rig equips a leisure prop.
+    const hSeat = seatedRig('adult');
+    withRng(0, () => r._updatePropTriggers(hSeat, synth(), 0.1, 0));
+    check('class2: seated rig equips a prop', hSeat.propKind != null, `propKind=${hSeat.propKind}`);
+    r._endPropSession(hSeat);
+
+    // popcorn: cool the other leisure props → only popcorn eligible; requires a
+    // seated rig in a room whose bound TV is ON.
+    const coolLeisure = (now) => { for (const id of ['plate_of_food', 'ice_cream_cone', 'drink_cup', 'book']) r._propTypeCooldownAt[id] = now; };
+    const now = fakeNow / 1000;
+    // TV OFF → popcorn filtered → nothing equips.
+    setFrame({ weather: null, roomZones: [{ roomId: 'rm', loop: LOOP }], tvsByRoom: { rm: [{ furnitureId: 'tv', hasEntity: true }] }, entityOn: {} });
+    r._propTypeCooldownAt = {}; coolLeisure(now);
+    const hNoTv = seatedRig('adult');
+    withRng(0, () => r._updatePropTriggers(hNoTv, synth(), 0.1, 0));
+    check('popcorn: no TV-on → not a candidate', hNoTv.propKind == null, `propKind=${hNoTv.propKind}`);
+    // TV ON → popcorn equips.
+    setFrame({ weather: null, roomZones: [{ roomId: 'rm', loop: LOOP }], tvsByRoom: { rm: [{ furnitureId: 'tv', hasEntity: true }] }, entityOn: { tv: true } });
+    r._propTypeCooldownAt = {}; coolLeisure(now);
+    const hTv = seatedRig('adult');
+    withRng(0, () => r._updatePropTriggers(hTv, synth(), 0.1, 0));
+    check('popcorn: seated + TV-on → equips popcorn', hTv.propKind === 'popcorn_bucket', `propKind=${hTv.propKind}`);
+    r._endPropSession(hTv);
+    r._propTypeCooldownAt = {};
+  }
+
+  // ── 6. Class 1 candidate gating (_pickPropChore) ─────────────────────────────
+  {
+    setFrame({ weather: null });
+    // Cool everything except watering_can, then flip on a thirsty plant.
+    const coolExcept = (keep) => { r._propTypeCooldownAt = {}; for (const id of ['vacuum_cleaner', 'broom', 'dish_towel', 'window_squeegee', 'snow_shovel', 'watering_can']) if (id !== keep) r._propTypeCooldownAt[id] = 1e12; };
+    r.setInteractRng(() => 0);
+    const ai = { anchorX: INDOOR.x, anchorY: INDOOR.y, roam: false, nextPropAt: 0 };
+    coolExcept('watering_can');
+    r._plants = [];
+    check('class1: watering_can not offered with 0 thirsty plants', r._pickPropChore(ai) == null);
+    const PX = { x: 2200, y: 2800 };   // plan position of the thirsty plant
+    const sc = r._w(PX.x, PX.y, 0);    // scene coords the pivot lives at
+    r._plants = [{ thirsty: true, pivot: { getWorldPosition: (v) => { v.x = sc.x; v.y = sc.y; v.z = sc.z; return v; } } }];
+    const choreW = r._pickPropChore(ai);
+    check('class1: watering_can offered once a plant is thirsty', choreW && choreW.propKind === 'watering_can', `chore=${JSON.stringify(choreW)}`);
+    check('class1: watering_can targets the plant position', choreW && Math.hypot(choreW.gx - PX.x, choreW.gy - PX.y) < 200,
+      choreW ? `d=${Math.hypot(choreW.gx - PX.x, choreW.gy - PX.y).toFixed(0)}` : 'null');
+
+    // snow_shovel: only offered under a snowy-family condition, targeting outdoors.
+    coolExcept('snow_shovel'); r._plants = [];
+    const aiOut = { anchorX: OUTDOOR.x, anchorY: OUTDOOR.y, roam: false, nextPropAt: 0 };
+    r._propWeatherCondition = 'sunny';
+    check('class1: snow_shovel not offered when not snowy', r._pickPropChore(aiOut) == null);
+    r._propWeatherCondition = 'snowy';
+    const choreS = withRng(0, () => r._pickPropChore(aiOut));   // _aiRandomCell nav-null uses Math.random
+    check('class1: snow_shovel offered when snowy + outdoors', choreS && choreS.propKind === 'snow_shovel', `chore=${JSON.stringify(choreS)}`);
+    r._propTypeCooldownAt = {}; r._plants = [];
+  }
+
+  // ── 7. Class 4 quad mouth-carry (fetch_toy) ──────────────────────────────────
+  {
+    setFrame({ weather: null });
+    r._propTypeCooldownAt = {};
+    const cat = r._buildQuadruped(TINT, 'cat');
+    cat.dwell = 3; cat.sit = 0; cat.lie = 0;
+    withRng(0, () => r._updatePropTriggers(cat, synth(), 0.1, 0));
+    check('quad: cat equips fetch_toy', cat.propKind === 'fetch_toy', `propKind=${cat.propKind}`);
+    check('quad: fetch_toy mesh parented under qhead', cat.propMeshes && cat.propMeshes.length > 0 && cat.propMeshes[0].parent === cat.quadHead);
+    r._endPropSession(cat);
+    // A non-quad rig with the master toggle on never receives fetch_toy.
+    r._propTypeCooldownAt = {};
+    const person = idleRig('adult');
+    let gotFetch = false;
+    for (let i = 0; i < 50; i++) { withRng(0, () => r._updatePropTriggers(person, synth(), 0.1, 0)); if (person.propKind === 'fetch_toy') gotFetch = true; if (person.propKind) r._endPropSession(person); }
+    check('quad: non-quad rig never gets fetch_toy', !gotFetch);
+  }
+
+  // ── 8. Prop-swap hide/restore of an authored hand accessory ──────────────────
+  {
+    const h = r._buildHumanoid(TINT, 'proptest/handacc');
+    check('swap: authored handR accessory captured', h.handAccessories && h.handAccessories.length === 1 && h.handAccessories[0].hand === 'R');
+    const authored = h.handAccessories[0].mesh;
+    r._startPropSession(h, 'vacuum_cleaner', null, null, 10);   // handR grip
+    check('swap: authored accessory hidden during session', authored.visible === false && h.propHiddenAccessories.length === 1);
+    r._endPropSession(h);
+    check('swap: authored accessory restored after session', authored.visible === true && h.propHiddenAccessories.length === 0);
+  }
+
+  // ── 9. Build + dispose (no leaked geometry/material; shared-material guard) ───
+  {
+    const h = idleRig('adult');
+    r._startPropSession(h, 'umbrella', null, null, Infinity);   // shaft = hex, canopy = 'tint'
+    check('dispose: umbrella built 2 meshes', h.propMeshes.length === 2, `n=${h.propMeshes.length}`);
+    const shaft = h.propMeshes.find(m => m.userData.propOwnMaterial === true);
+    const canopy = h.propMeshes.find(m => m.userData.propOwnMaterial === false);
+    check('dispose: hex shaft owns its material', !!shaft);
+    check('dispose: tint canopy shares (not owned)', !!canopy);
+    let geomDisposed = 0, shaftMatDisposed = false, canopyMatDisposed = false;
+    for (const m of h.propMeshes) { const g = m.geometry; const og = g.dispose.bind(g); g.dispose = () => { geomDisposed++; og(); }; }
+    const shMat = shaft.material, cnMat = canopy.material;
+    const oSh = shMat.dispose.bind(shMat); shMat.dispose = () => { shaftMatDisposed = true; oSh(); };
+    const oCn = cnMat.dispose.bind(cnMat); cnMat.dispose = () => { canopyMatDisposed = true; oCn(); };
+    r._endPropSession(h);
+    check('dispose: all prop geometry disposed', geomDisposed === 2, `n=${geomDisposed}`);
+    check('dispose: owned (hex) material disposed', shaftMatDisposed === true);
+    check('dispose: shared (tint) material NOT disposed', canopyMatDisposed === false);
+    check('dispose: propMeshes cleared', h.propMeshes.length === 0 && h.propKind == null);
+  }
+
+  // ── 10. Dispose-on-teardown (rig despawn mid-session) leaves nothing ─────────
+  {
+    const h = idleRig('adult');
+    r._humanoids['dispkey'] = h;
+    r._startPropSession(h, 'broom', null, null, 10);
+    let geomDisposed = 0;
+    for (const m of h.propMeshes) { const g = m.geometry; const og = g.dispose.bind(g); g.dispose = () => { geomDisposed++; og(); }; }
+    const n = h.propMeshes.length;
+    r._disposeHumanoid(h);   // despawn mid-session
+    check('teardown: _disposeHumanoid frees prop geometry', geomDisposed === n && n > 0, `n=${n} disp=${geomDisposed}`);
+    check('teardown: session state reset', h.propKind == null && h.propMeshes.length === 0);
+    delete r._humanoids['dispkey'];
+  }
+
+  // ── 11. Interrupts force-release a session ───────────────────────────────────
+  {
+    setFrame({ weather: null });
+    const mk = () => { const h = idleRig('adult'); r._startPropSession(h, 'book', null, null, 100); return h; };
+    const hAct = mk(); hAct.act = 0.2; r._updatePropTriggers(hAct, synth(), 0.1, 0);
+    check('interrupt: activity releases prop', hAct.propKind == null);
+    const hPriv = mk(); hPriv.privacy = 0.4; r._updatePropTriggers(hPriv, synth(), 0.1, 0);
+    check('interrupt: privacy releases prop', hPriv.propKind == null);
+    const hLie = mk(); hLie.lie = 0.6; r._updatePropTriggers(hLie, synth(), 0.1, 0);
+    check('interrupt: lying releases prop', hLie.propKind == null);
+  }
+
+  // ── 12. Master toggle ────────────────────────────────────────────────────────
+  {
+    setFrame({ weather: 'rainy', propsOn: false });
+    const h = idleRig('adult');
+    r._updatePropTriggers(h, synth({ x: OUTDOOR.x, y: OUTDOOR.y }), 0.1, 0);
+    check('toggle: props off → nothing equips', h.propKind == null);
+    // An active session is force-ended when the master goes off.
+    setFrame({ weather: null, propsOn: true });
+    const h2 = idleRig('adult'); r._startPropSession(h2, 'book', null, null, 100);
+    r._avatarPropsOn = false;
+    r._updatePropTriggers(h2, synth(), 0.1, 0);
+    check('toggle: props off mid-session force-ends it', h2.propKind == null);
+  }
+
+  // ── 13. Hover rig successfully holds a prop ──────────────────────────────────
+  {
+    const h = idleRig('proptest/hover');
+    check('hover: legs omitted', h.leftHip == null && h.rightHip == null);
+    r._startPropSession(h, 'vacuum_cleaner', null, null, 10);
+    check('hover: equips a hands-tier prop (hand groups present)', h.propKind === 'vacuum_cleaner' && h.propMeshes.length > 0);
+    r._endPropSession(h);
+  }
+
+  // ── 14. Zero-alloc advance (buffer/mesh identity stable) ─────────────────────
+  {
+    const h = idleRig('adult');
+    r._startPropSession(h, 'broom', null, null, 10);   // twoHanded
+    check('advance: broom registered a two-hand prop', h.propTwoHand && h.propTwoHand.length === 1);
+    const meshRef = h.propTwoHand[0].mesh;
+    r._advanceTwoHandProps(h.propTwoHand);
+    r._advanceTwoHandProps(h.propTwoHand);
+    check('advance: two-hand prop mesh identity stable', h.propTwoHand[0].mesh === meshRef);
+    // propAnimPrims advance is a no-op with an empty list (no throw / no alloc).
+    let threw = false; try { r._advanceAnimPrims(h.propAnimPrims, 0.1, false); r._advanceAnimPrims(undefined, 0.1, false); } catch (e) { threw = true; }
+    check('advance: empty/undefined animPrims list is safe', !threw);
+    r._endPropSession(h);
+  }
+
+  // ── 15. Integration: updateTargets drives a prop + mutual exclusion ──────────
+  {
+    performance.now = realNow;   // restore for a real driven scene
+    const FW = 8000, FD = 6000;
+    const floor = {
+      id: 'f1', name: 'Room', w: FW, d: FD,
+      walls: [{ id: 'perim', points: [{ x: 1000, y: 1000 }, { x: 4000, y: 1000 }, { x: 4000, y: 5000 }, { x: 1000, y: 5000 }, { x: 1000, y: 1000 }] }],
+      furniture: [], lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+      doors: [], windows: [], bg: null, model3d: null, look3d: null, rooms: [],
+    };
+    r.updateFloor(floor, { preset: 'day', floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6' });
+    let fk = realNow(); performance.now = () => fk;
+    const ctx = { entityOn: {}, roomNames: {}, timeBucket: 'day', props: true,
+      weather: { condition: 'rainy', tempC: 8, forecastCondition: null } };
+    // A radar person standing outdoors (outside the wall loop) in the rain.
+    const key = 'radar_1';
+    const t = { key, x: 6000, y: 3000, color: 0x4fc3f7, ai: false, roam: false };
+    for (let i = 0; i < 300; i++) { fk += 16.7; r.updateTargets([t], ctx); }
+    const hd = r._humanoids[key];
+    check('integration: radar rig outdoors+rain gets umbrella via updateTargets', hd && hd.propKind === 'umbrella', `propKind=${hd && hd.propKind}`);
+    check('integration: fidget suppressed while prop active', hd && hd.fidgetKind == null, `fidget=${hd && hd.fidgetKind}`);
+    // Master gate off through ctx clears the session.
+    for (let i = 0; i < 5; i++) { fk += 16.7; r.updateTargets([t], { ...ctx, props: false }); }
+    check('integration: ctx.props=false ends the session', r._humanoids[key] && r._humanoids[key].propKind == null);
+  }
+
+  performance.now = realNow;
+  const passed = results.filter(x => x.pass).length;
+  const total = results.length;
+  const fails = results.filter(x => !x.pass).map(x => `${x.name} [${x.extra}]`);
+  window.__RESULT__ = { passed, total, results };
+  document.getElementById('out').textContent =
+    `PROPS ${passed === total ? 'PASS' : 'FAIL'} ${passed}/${total}` + (fails.length ? '\n\nFAILS:\n' + fails.join('\n') : '');
+  document.title = `PROPS ${passed === total ? 'PASS' : 'FAIL'} ${passed}/${total}` +
+    (fails.length ? ` | FAILS: ${fails.join(' ; ')}` : '');
+ } catch (e) {
+  document.getElementById('out').textContent = 'ERROR: ' + (e && e.stack || e);
+  document.title = 'PROPS ERROR ' + (e && e.message || e);
+ }
+</script>

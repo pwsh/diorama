@@ -6,7 +6,7 @@ import type { AvatarPackDef } from '../avatars.js';
 const WHITE = 0xf2f0ea, GOLD = 0xc9a227, CHROME = 0xb8b8b8;
 
 const pack: AvatarPackDef = {
-  id: 'power-rangers-mighty-morphin', version: 2, label: 'Power Rangers: Mighty Morphin',
+  id: 'power-rangers-mighty-morphin', version: 3, label: 'Power Rangers: Mighty Morphin',
   path: ['Sci-Fi', 'Power Rangers', 'Mighty Morphin'], builtin: true, franchise: true,
   // Ideal shared base: one suited body — the six Ranger suits are near-identical
   // geometry, distinguished almost entirely by helmet/suit color per member.
@@ -134,8 +134,8 @@ const pack: AvatarPackDef = {
         { shape: 'box', size: [70, 60, 50], anchor: 'shoulderL', color: GOLD },
         { shape: 'box', size: [70, 60, 50], anchor: 'shoulderR', color: GOLD },
         // approx: folded wings — flattened cones aren't possible, so swept boxes on the back
-        { shape: 'box', size: [24, 320, 200], anchor: 'back', pos: [-80, -20, 20], rot: [0, -0.3, 0.2], color: 0x8a7328 },
-        { shape: 'box', size: [24, 320, 200], anchor: 'back', pos: [80, -20, 20], rot: [0, 0.3, -0.2], color: 0x8a7328 },
+        { shape: 'box', size: [24, 320, 200], anchor: 'back', pos: [-80, -20, 20], rot: [0, -0.3, 0.2], color: 0x8a7328, animate: { kind: 'flap', speed: 1.3, amp: 0.3 } }, // wing L
+        { shape: 'box', size: [24, 320, 200], anchor: 'back', pos: [80, -20, 20], rot: [0, 0.3, -0.2], color: 0x8a7328, animate: { kind: 'flap', speed: 1.3, amp: -0.3 } }, // wing R (mirrored amp)
         { shape: 'cylinder', size: [8, 24, 160], anchor: 'tailbone', pos: [0, 0, 20], rot: [-0.6, 0, 0], color: GOLD },
         { shape: 'cone', size: [10, 24], anchor: 'tailbone', pos: [0, 130, 70], color: 0x3a2a1e },
         { shape: 'box', size: [16, 300, 16], anchor: 'handR', pos: [0, 140, 0], color: 0xd8d8d8 }],

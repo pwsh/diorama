@@ -5,7 +5,7 @@ import type { AvatarPackDef } from '../avatars.js';
 const WHITE = 0xf2f2f2;
 
 const pack: AvatarPackDef = {
-  id: 'base-scifi', version: 1, label: 'Sci-Fi', path: ['Base', 'Sci-Fi'], builtin: true,
+  id: 'base-scifi', version: 2, label: 'Sci-Fi', path: ['Base', 'Sci-Fi'], builtin: true,
   avatars: [
     { id: 'astronaut', label: 'Astronaut', rig: 'humanoid', legacyAccessories: 'astronaut',
       humanoid: { headR: 118, limbR: 1.1, skin: WHITE, body: WHITE, shoe: WHITE, emI: 0.15, earSkip: true },
@@ -24,6 +24,7 @@ const pack: AvatarPackDef = {
         { shape: 'box', size: [216, 420, 98], anchor: 'back', pos: [0, 0, 30], color: 0x4a4e57 }, // power unit
         { shape: 'box', size: [80, 40, 20], anchor: 'face', pos: [0, -42, -4], color: 0x2a2c30 }, // chin guard
         { shape: 'box', size: [252, 40, 150], anchor: 'hip', pos: [0, 0, 0], color: 0x33363c }, // utility belt
+        { shape: 'box', size: [26, 28, 320], anchor: 'handR', pos: [0, 10, -90], color: 0x2a2c30 }, // service rifle
       ],
       personality: { bobMul: 0.8, swayMul: 0.6, cadenceMul: 0.85, ampMul: 1.1 }, bubbles: ['🛡️', '💥', '🎯', '📡'] },
 

@@ -12,7 +12,7 @@ const saber = (anchor: 'handL' | 'handR', blade: number, hilt = HILT): AvatarPri
 ];
 
 const pack: AvatarPackDef = {
-  id: 'star-wars-prequels', version: 2, label: 'Star Wars: Prequel Trilogy',
+  id: 'star-wars-prequels', version: 3, label: 'Star Wars: Prequel Trilogy',
   path: ['Sci-Fi', 'Star Wars', 'Prequel Trilogy'], builtin: true, franchise: true,
   avatars: [
     // Anakin Skywalker (Knight years) — near-black robes, blond hair, blue blade.
@@ -30,7 +30,7 @@ const pack: AvatarPackDef = {
       accessories: [
         { shape: 'sphere', size: [124, 40, 124], anchor: 'crown', pos: [0, -6, 4], rot: [0.3, 0, 0], color: 0x7a4a2e },
         { shape: 'box', size: [70, 30, 20], anchor: 'face', pos: [0, -28, -6], color: 0x6b3f28 },
-        { shape: 'cape', size: [300, 345, 450], anchor: 'back', pos: [0, -110, 12], rot: [0.12, 0, 0], color: 0x5c4630 },
+        { shape: 'cape', size: [300, 345, 450], anchor: 'back', pos: [0, -110, 12], rot: [0.12, 0, 0], color: 0x5c4630, animate: { kind: 'sway', speed: 0.6, amp: 0.15 } },
         ...saber('handR', 0x3fa9f5)],
       personality: { bobMul: 0.95, swayMul: 0.8, cadenceMul: 1.0, ampMul: 0.9 },
       bubbles: ['🧘', '⚔️', '😑', '🍵'] },
@@ -53,7 +53,7 @@ const pack: AvatarPackDef = {
       humanoid: { sk: 1.04, headR: 128, headShape: 'sphere', skin: 'tint', body: 0xd6c7a1, legColor: 0x6b5a44, shoe: 0x4a3c2c, eyes: 'dots', emI: 0.13, hands: 'sphere', limbR: 1.05 },
       accessories: [
         { shape: 'sphere', size: [140, 50, 140], anchor: 'crown', pos: [0, -6, 0], color: 0x8a8478 },
-        { shape: 'cape', size: [340, 391, 500], anchor: 'back', pos: [0, -100, 10], rot: [0.12, 0, 0], color: 0x9a978c },
+        { shape: 'cape', size: [340, 391, 500], anchor: 'back', pos: [0, -100, 10], rot: [0.12, 0, 0], color: 0x9a978c, animate: { kind: 'sway', speed: 0.6, amp: 0.15 } },
         ...saber('handR', 0x3fff6e)],
       personality: { bobMul: 1.0, swayMul: 0.9, cadenceMul: 0.9, ampMul: 0.95 },
       bubbles: ['🌌', '🧘', '🌱', '⚔️'] },
@@ -86,7 +86,7 @@ const pack: AvatarPackDef = {
       accessories: [
         { shape: 'sphere', size: [124, 40, 124], anchor: 'crown', pos: [0, -6, 2], color: 0xc7c5bd },
         { shape: 'cone', size: [12, 40], anchor: 'face', pos: [0, -34, -10], rot: [Math.PI, 0, 0], color: 0xc7c5bd },
-        { shape: 'cape', size: [340, 713, 500], anchor: 'back', pos: [0, -180, 12], rot: [0.12, 0, 0], color: 0x4a2c22 },
+        { shape: 'cape', size: [340, 713, 500], anchor: 'back', pos: [0, -180, 12], rot: [0.12, 0, 0], color: 0x4a2c22, animate: { kind: 'sway', speed: 0.6, amp: 0.15 } },
         // approx: no curved primitive — the signature curved hilt is a straight cylinder held at a tilt
         { shape: 'cylinder', size: [18, 18, 90], anchor: 'handR', pos: [0, 40, 0], rot: [0, 0, 0.3], color: 0xb9bcc2, emissiveIntensity: 0.05 },
         { shape: 'cylinder', size: [12, 12, 500], anchor: 'handR', pos: [0, 320, 0], rot: [0, 0, 0.3], color: 0xff3b30, emissiveIntensity: 0.6 }],
@@ -98,7 +98,7 @@ const pack: AvatarPackDef = {
       humanoid: { sk: 1.15, headR: 108, headShape: 'oval', skin: 0xd8d5c8, body: 0x9a9890, legColor: 0x7a786e, shoe: 0x4a4840, eyes: 'visor', emI: 0.2, hands: 'box', steel: true, limbR: 0.85, armL: 1.15, legL: 1.05 },
       posture: { pitch: 0.12 },
       accessories: [
-        { shape: 'cape', size: [320, 598, 480], anchor: 'back', pos: [0, -160, 12], rot: [0.12, 0, 0], color: 0x111112 },
+        { shape: 'cape', size: [320, 598, 480], anchor: 'back', pos: [0, -160, 12], rot: [0.12, 0, 0], color: 0x111112, animate: { kind: 'sway', speed: 0.6, amp: 0.15 } },
         { shape: 'box', size: [140, 40, 14], anchor: 'chest', pos: [0, 0, -10], color: 0x6e6c62 },
         { shape: 'box', size: [40, 140, 40], anchor: 'shoulderL', pos: [10, -40, 0], rot: [0, 0, 0.3], color: 0x7a786e },
         { shape: 'box', size: [40, 140, 40], anchor: 'shoulderR', pos: [-10, -40, 0], rot: [0, 0, -0.3], color: 0x7a786e },

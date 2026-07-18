@@ -1229,6 +1229,11 @@ export class SettingsDrawer extends LitElement {
           <input type="checkbox" .checked=${p.store.avatarCostumes !== false}
                  @change=${(e: Event) => { p.store.avatarCostumes = (e.target as HTMLInputElement).checked; p.save(); p.emitConfig(); this.requestUpdate(); }}>
         </div>
+        <div class="row" title="Synthetic avatars (roamers + presence/demo AI) occasionally pick up and use a household object — vacuuming, sweeping, sipping a drink, reading a book — for a short session, then put it back. An umbrella also appears over ANY avatar (real or synthetic) standing outdoors in the rain.">
+          <label>Avatars use props</label>
+          <input type="checkbox" .checked=${p.store.avatarProps !== false}
+                 @change=${(e: Event) => { p.store.avatarProps = (e.target as HTMLInputElement).checked; p.save(); p.emitConfig(); this.requestUpdate(); }}>
+        </div>
         <div style="font-size:10px;color:var(--text-dim);line-height:1.3;margin:4px 0 0">
           Per-floor flooring / wall overrides live in the sidebar Floors section.
         </div>

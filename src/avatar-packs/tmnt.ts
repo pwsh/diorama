@@ -22,7 +22,7 @@ function turtleBody(mask: number): AvatarPrimitive[] {
 }
 
 const pack: AvatarPackDef = {
-  id: 'tmnt', version: 2, label: 'Teenage Mutant Ninja Turtles',
+  id: 'tmnt', version: 3, label: 'Teenage Mutant Ninja Turtles',
   path: ['Cartoons', 'Teenage Mutant Ninja Turtles'], builtin: true, franchise: true,
   base: {
     rig: 'humanoid',
@@ -119,7 +119,7 @@ const pack: AvatarPackDef = {
         { shape: 'cone', size: [14, 80, 0], anchor: 'crown', pos: [0, 90, -20], rot: [-0.5, 0, 0], color: 0x51565c },
         { shape: 'cone', size: [14, 70, 0], anchor: 'crown', pos: [-70, 50, 0], rot: [0, 0, -1.0], color: 0x51565c },
         { shape: 'cone', size: [14, 70, 0], anchor: 'crown', pos: [70, 50, 0], rot: [0, 0, 1.0], color: 0x51565c },
-        { shape: 'cape', size: [360, 800, 500], anchor: 'back', pos: [0, -240, 30], rot: [0.14, 0, 0], color: 0x3a1f45 }, // dark cape
+        { shape: 'cape', size: [360, 800, 500], anchor: 'back', pos: [0, -240, 30], rot: [0.14, 0, 0], color: 0x3a1f45, animate: { kind: 'sway', speed: 0.6, amp: 0.15 } }, // dark cape
         { shape: 'box', size: [120, 100, 18], anchor: 'shoulderL', pos: [0, 20, 0], color: 0x8e97a0 },
         { shape: 'box', size: [120, 100, 18], anchor: 'shoulderR', pos: [0, 20, 0], color: 0x8e97a0 },
         { shape: 'box', size: [40, 200, 20], anchor: 'chest', pos: [0, 110, 82], color: 0x585d64 },

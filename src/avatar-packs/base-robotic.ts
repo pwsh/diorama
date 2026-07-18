@@ -5,7 +5,7 @@ import type { AvatarPackDef } from '../avatars.js';
 const GREY = 0x9aa3ad, MATTE = 0x1a1a1e;
 
 const pack: AvatarPackDef = {
-  id: 'base-robotic', version: 1, label: 'Robotic', path: ['Base', 'Robotic'], builtin: true,
+  id: 'base-robotic', version: 2, label: 'Robotic', path: ['Base', 'Robotic'], builtin: true,
   avatars: [
     { id: 'robot', label: 'Robot', rig: 'humanoid', legacyAccessories: 'robot',
       humanoid: { headR: 128, headShape: 'box', skin: GREY, body: GREY, shoe: 0x33363c, emI: 0.10, hands: 'box', eyes: 'visor', steel: true, earSkip: true },
@@ -45,8 +45,8 @@ const pack: AvatarPackDef = {
       humanoid: { sk: 1.05, headR: 118, headShape: 'box', limbR: 1.2, skin: 0x4a4f57, body: 0x3a3e44, shoe: 0x22242a, emI: 0.20, hands: 'box', eyes: 'redvisor', steel: true, earSkip: true },
       accessories: [
         { shape: 'box', size: [280, 120, 20], anchor: 'back', pos: [0, 60, 20], color: 0x50545c }, // docking rack
-        { shape: 'sphere', size: 34, anchor: 'back', pos: [-90, 180, 30], color: 'tint', emissive: 0x40e0ff, emissiveIntensity: 0.3, outlineSkip: true }, // drone L
-        { shape: 'sphere', size: 34, anchor: 'back', pos: [90, 180, 30], color: 'tint', emissive: 0x40e0ff, emissiveIntensity: 0.3, outlineSkip: true }, // drone R
+        { shape: 'sphere', size: 34, anchor: 'back', pos: [-90, 180, 30], color: 'tint', emissive: 0x40e0ff, emissiveIntensity: 0.3, outlineSkip: true, animate: { kind: 'orbit', speed: 0.8, amp: 70 } }, // drone L
+        { shape: 'sphere', size: 34, anchor: 'back', pos: [90, 180, 30], color: 'tint', emissive: 0x40e0ff, emissiveIntensity: 0.3, outlineSkip: true, animate: { kind: 'orbit', speed: -0.8, amp: 70 } }, // drone R (counter-rotating = patrolling)
         { shape: 'box', size: [200, 20, 10], anchor: 'chest', pos: [0, 30, -6], color: 'tint', emissiveIntensity: 0.3, outlineSkip: true }, // status strip
         { shape: 'cone', size: [40, 60], anchor: 'crown', pos: [0, 10, 0], color: 0x2a2a2e }, // scanner dome
       ],

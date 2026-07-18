@@ -10,7 +10,7 @@ import {
   lightHeight, lightRadius, lightIntensity, lightIconKind, lightRotation, lightLength,
   switchHeight, switchRotation, switchSize,
   motionColor, motionIntensity, hexToInt, bleProxyHeight, BLE_PROXY_DEFAULTS,
-  furnitureDef, resolveFurnitureDef, furnitureColor, furnitureCat, isBinKind, binStateIsFull, isSpeakerKind, isRiserKind, doorOpenDeltaDeg,
+  furnitureDef, resolveFurnitureDef, furnitureColor, furnitureCat, isBinKind, binStateIsFull, isSpeakerKind, isSinkKind, isRiserKind, doorOpenDeltaDeg,
   plantThirsty, PLANT_MOISTURE_DEFAULT_THRESHOLD,
   isVehicleKind, evStatusOf, evStatusColor, carChargeState,
   doorOpenFraction, GARAGE_DOOR_H,
@@ -101,6 +101,8 @@ const _thpDir = new THREE.Vector3();
 const _thpParentQ = new THREE.Quaternion();
 const _thpQuat = new THREE.Quaternion();
 const _THP_UP = new THREE.Vector3(0, 1, 0);
+// Shared-props: scratch vector for a plant pivot's world position (zero-alloc).
+const _propScratch = new THREE.Vector3();
 
 // All effect-group members ON — the fallback when a stale caller sends a
 // WeatherFxState without the W3 `effects` map (preserves legacy W2 behavior).
@@ -345,6 +347,10 @@ export interface ActivityContext {
   // that ignores this still runs the default-on behavior). When === false the
   // look-swap trigger resolves to null for every rig (no outfit changes).
   costumes?: boolean;
+  // OPTIONAL — master gate for the shared-prop library (Store.avatarProps).
+  // Absent = ON (stale-chunk safe). When === false no rig ever equips a prop
+  // (all four trigger classes go inert; an active prop session is force-ended).
+  props?: boolean;
 }
 
 // An interactive device the avatar-interaction system knows about. `id` is
@@ -468,6 +474,15 @@ interface AiState {
   interactT?: number;
   interactFired?: boolean;
   nextInteractAt?: number;
+  // Shared-props Class-1 chore goal (mirrors interactId/X/Y). `propKind` is set by
+  // _aiPickGoal's class-1 branch and consumed on arrival (starts the session);
+  // `propX/Y` is the target for the arrival facing. `nextPropAt` is the per-rig
+  // cooldown clock (performance.now()/1000). `propLegs` counts the remaining
+  // short repick legs of an in-progress chore session's wander.
+  propKind?: string;
+  propX?: number; propY?: number;
+  nextPropAt?: number;
+  propLegs?: number;
 }
 
 // Phase 4b: a declarative accessory registered for per-frame animation. Base
@@ -482,6 +497,47 @@ interface AnimPrim {
   t: number;           // accumulated phase (init = per-prim phase offset)
   baseRotX: number; baseRotY: number; baseRotZ: number;
   basePosX: number; basePosY: number; basePosZ: number;
+}
+
+// Build context for a declarative primitive (shared by the initial-rig
+// accessory build AND a runtime prop-equip via _buildPrimitiveMesh). Carries the
+// LIVE anchor groups + shared material refs + per-rig metrics.
+interface PropBuildCtx {
+  root: THREE.Group;   // the rig root group (anchor fallback + non-hand anchors)
+  color: number; sk: number;
+  tint: THREE.Material; skin: THREE.Material; bodyMat: THREE.Material; dark: THREE.Material;
+  HEAD_R?: number; headY?: number; torsoY?: number; hipY?: number; TORSO_D?: number;
+  shoulderY?: number; shoulderX?: number; neckY?: number;
+  handL?: THREE.Group; handR?: THREE.Group;
+  elbowL?: THREE.Group; elbowR?: THREE.Group; kneeL?: THREE.Group; kneeR?: THREE.Group;
+  legLowerLen?: number;
+  quadHead?: THREE.Group;
+  qBodyY?: number; qBodyH?: number; qFrontZ?: number; qRearZ?: number; qHeadR?: number;
+}
+
+// ── Shared-prop library (avatars pick up & use household objects) ────────────
+// Trigger class (§3 of docs/research/shared-props.md): 1 = goal-driven chore,
+// 2 = idle ambient consumption, 3 = condition-driven passive equip (umbrella),
+// 4 = quad mouth-carry. 0 = no active session.
+type PropCls = 0 | 1 | 2 | 3 | 4;
+type PropUsers = 'hands' | 'quad';   // 'any' reserved (cross-species v2), unused
+type PropTier = 'hands' | 'quad' | 'none';
+// A per-frame pose override written AFTER the normal walk/sit/activity pose,
+// BEFORE the (skipped) idle-fidget block. Shoulder/elbow are ABSOLUTE holds for
+// the grip arm(s); leanX/rollZ are ADDITIVE root deltas.
+interface PropPoseDelta {
+  lSh?: number; rSh?: number; lEl?: number; rEl?: number;   // absolute holds
+  leanX?: number; rollZ?: number; yaw?: number;              // additive
+}
+interface PropDef {
+  id: string;
+  users: PropUsers;
+  category: 'chore' | 'weather' | 'leisure' | 'carry';
+  cls: 1 | 2 | 3 | 4;
+  allowSeated?: boolean;             // may fire from the idleSeated gate
+  primitives: AvatarPrimitive[];     // reuses the accessory schema verbatim
+  sessionDurS: [number, number];     // [min, max) session length; cls 3 ignores it
+  poseHold: (h: Humanoid, t: number, propPhase: number, walking: boolean) => PropPoseDelta;
 }
 
 interface Humanoid {
@@ -703,6 +759,35 @@ interface Humanoid {
   reachT: number;
   reachDur: number;
   reachFacing: number;
+  // ── Shared-prop library ─────────────────────────────────────────────────────
+  // `noProps` (captured from def.noProps) opts the rig out of props entirely.
+  // `handAccessories` remembers hand-anchored AUTHORED accessories so a prop
+  // session can hide the one on the grip hand and restore it after.
+  // `propBuildCtx` is the live anchor/material context _equipProp builds against.
+  noProps?: boolean;
+  handAccessories?: { mesh: THREE.Object3D; hand: 'L' | 'R' }[];
+  propBuildCtx?: PropBuildCtx;
+  // Active prop session (all additive/optional — defaulted lazily so both rig
+  // builders need no new literal fields). `propKind` = active PropDef id (null =
+  // none). `propCls` = its trigger class. `propMeshes` are built at equip, torn
+  // down at release. `propT`/`propDur` = elapsed / total (Infinity for cls 3).
+  // `propPhase` = free-running animation accumulator (independent of gait phase).
+  // `propHiddenAccessories` = authored hand items hidden for this session.
+  // `propAnimPrims`/`propTwoHand` = prop-owned parallel registration lists (the
+  // rig's own animPrims/twoHandProps stay build-once/immutable). `lastPropKind`
+  // avoids repeating the same prop back-to-back.
+  propKind?: string | null;
+  propCls?: PropCls;
+  propMeshes?: THREE.Object3D[];
+  propT?: number;
+  propDur?: number;
+  propPhase?: number;
+  propGoalX?: number | null;
+  propGoalY?: number | null;
+  propHiddenAccessories?: THREE.Object3D[];
+  propAnimPrims?: AnimPrim[];
+  propTwoHand?: { mesh: THREE.Object3D; otherHand: THREE.Object3D }[];
+  lastPropKind?: string | null;
 }
 
 type StateProvider = (id: string) => HassState | null;
@@ -747,6 +832,157 @@ const IDLE_FIDGET_DUR: Record<string, number> = {
   // can never fire in an ordinary room and never conflicts with seated watch_tv.
   dance: 4.0,
 };
+
+// ── Shared-prop library catalog (docs/research/shared-props.md §4) ───────────
+// 13 v1 props. Each `primitives` is a plain AvatarPrimitive[] (the SAME schema
+// pack authors write for costume accessories), built at RUNTIME against a live
+// rig via _buildPrimitiveMesh. `poseHold` composes an override on the grip arm's
+// shoulder/elbow channels (absolute) + additive root lean/roll/yaw — same
+// vocabulary the idle fidgets use, no new joints. `propPhase` (arg `pp`, seconds)
+// is a free-running accumulator; frequencies are in Hz.
+const RAIN_FAMILY = new Set(['rainy', 'pouring', 'lightning-rainy', 'hail', 'snowy-rainy']);
+const SNOW_FAMILY = new Set(['snowy', 'snowy-rainy']);
+// Deterministic periodic "beat" 0→1→0 lasting `up` s out of every `period` s.
+const _beat = (pp: number, period: number, up: number): number => {
+  const ph = pp % period;
+  return ph < up ? Math.sin((ph / up) * Math.PI) : 0;
+};
+// drink_cup morning variant (warm mug + handle) — swapped in at equip time.
+const DRINK_MUG_PRIMS: AvatarPrimitive[] = [
+  { shape: 'cylinder', size: [58, 55, 120], anchor: 'handR', pos: [0, -50, 0], color: 0x8a5a3a },
+  { shape: 'box', size: [22, 70, 20], anchor: 'handR', pos: [72, -50, 0], color: 0x8a5a3a },
+];
+// fetch_toy skins (random pick at pickup).
+const FETCH_SKINS: Record<string, AvatarPrimitive[]> = {
+  ball: [{ shape: 'sphere', size: 62, anchor: 'qhead', pos: [0, -18, -95], color: 0xe04a4a }],
+  bone: [
+    { shape: 'cylinder', size: [14, 14, 120], anchor: 'qhead', pos: [0, -18, -95], rot: [0, 0, Math.PI / 2], color: 0xf0e8d0 },
+    { shape: 'sphere', size: 26, anchor: 'qhead', pos: [-55, -18, -95], color: 0xf0e8d0 },
+    { shape: 'sphere', size: 26, anchor: 'qhead', pos: [55, -18, -95], color: 0xf0e8d0 },
+  ],
+  stick: [{ shape: 'cylinder', size: [12, 12, 220], anchor: 'qhead', pos: [0, -18, -95], rot: [0, 0, Math.PI / 2], color: 0x8a5a2b }],
+};
+
+export const PROP_DEFS: Record<string, PropDef> = {
+  vacuum_cleaner: {
+    id: 'vacuum_cleaner', users: 'hands', category: 'chore', cls: 1, sessionDurS: [14, 26],
+    primitives: [
+      { shape: 'cylinder', size: [18, 18, 900], anchor: 'handR', pos: [0, -430, 60], color: 0x30363f },
+      { shape: 'box', size: [300, 250, 400], anchor: 'handR', pos: [0, -940, 240], color: 0x9aa4b0 },
+      { shape: 'cylinder', size: [70, 70, 40], anchor: 'handR', pos: [-150, -1090, 240], rot: [0, 0, Math.PI / 2], color: 0x2a2f36 },
+      { shape: 'cylinder', size: [70, 70, 40], anchor: 'handR', pos: [150, -1090, 240], rot: [0, 0, Math.PI / 2], color: 0x2a2f36 },
+      { shape: 'cone', size: [110, 150], anchor: 'handR', pos: [0, -1070, 470], rot: [Math.PI / 2, 0, 0], color: 0x555b64 },
+    ],
+    poseHold: (_h, _t, pp) => ({ rSh: 0.9, rEl: 0.9 + Math.sin(pp * 2 * Math.PI * 1.5) * 0.15, leanX: 0.05 }),
+  },
+  broom: {
+    id: 'broom', users: 'hands', category: 'chore', cls: 1, sessionDurS: [12, 22],
+    primitives: [
+      { shape: 'cylinder', size: [16, 16, 1100], anchor: 'handR', pos: [0, 0, 0], color: 0x8a5a2b, twoHanded: true },
+      { shape: 'box', size: [230, 130, 40], anchor: 'handR', pos: [0, -560, 0], color: 0xd9b45a },
+    ],
+    poseHold: (_h, _t, pp) => ({ lSh: 0.6, rSh: 0.6, lEl: 0.9, rEl: 0.9, yaw: Math.sin(pp * 2 * Math.PI * 0.8) * 0.3, rollZ: Math.sin(pp * 2 * Math.PI * 0.8) * 0.06 }),
+  },
+  dish_towel: {
+    id: 'dish_towel', users: 'hands', category: 'chore', cls: 1, sessionDurS: [8, 16],
+    primitives: [{ shape: 'box', size: [180, 20, 220], anchor: 'handR', pos: [0, -70, 0], color: 0xdfe6ec }],
+    poseHold: (_h, _t, pp) => ({ rSh: 0.9, rEl: 1.3 + Math.sin(pp * 2 * Math.PI * 1.8) * 0.25, leanX: -0.08 }),
+  },
+  window_squeegee: {
+    id: 'window_squeegee', users: 'hands', category: 'chore', cls: 1, sessionDurS: [10, 18],
+    primitives: [
+      { shape: 'cylinder', size: [12, 12, 180], anchor: 'handR', pos: [0, -90, 0], color: 0x444b55 },
+      { shape: 'box', size: [250, 15, 80], anchor: 'handR', pos: [0, -190, 0], color: 0x5a7fd0 },
+      { shape: 'cylinder', size: [45, 45, 140], anchor: 'handL', pos: [0, -70, 0], color: 0x33a884 },
+      { shape: 'box', size: [40, 60, 30], anchor: 'handL', pos: [0, -20, -40], color: 0x246a52 },
+    ],
+    poseHold: (_h, _t, pp) => ({ rSh: 1.1 + Math.sin(pp * 2 * Math.PI * 0.4) * 0.5, rEl: 0.9, lSh: 0.7, lEl: 1.3 + _beat(pp, 2, 0.3) * 0.6 }),
+  },
+  watering_can: {
+    id: 'watering_can', users: 'hands', category: 'chore', cls: 1, sessionDurS: [8, 14],
+    primitives: [
+      { shape: 'cylinder', size: [120, 140, 180], anchor: 'handR', pos: [0, -130, 0], color: 0x4a8fbf },
+      { shape: 'cone', size: [35, 220], anchor: 'handR', pos: [190, -120, 0], rot: [0, 0, -1.0], color: 0x3a7aa8 },
+      { shape: 'box', size: [30, 130, 40], anchor: 'handR', pos: [-120, -70, 0], color: 0x3a7aa8 },
+    ],
+    poseHold: (_h, _t, pp) => ({ rSh: 1.3, rEl: 1.0 + _beat(pp, 2, 0.4) * 0.3 }),
+  },
+  snow_shovel: {
+    id: 'snow_shovel', users: 'hands', category: 'chore', cls: 1, sessionDurS: [12, 22],
+    primitives: [
+      { shape: 'cylinder', size: [18, 18, 1200], anchor: 'handR', pos: [0, 0, 0], color: 0x8a5a2b, twoHanded: true },
+      { shape: 'box', size: [320, 40, 260], anchor: 'handR', pos: [0, -620, 0], color: 0xcfd6dd },
+    ],
+    poseHold: (_h, _t, pp) => {
+      const s = (Math.sin(pp * 2 * Math.PI * 0.5) + 1) / 2;   // 0..1 scoop-and-toss
+      return { rSh: 0.3 + s * 1.3, rEl: 0.9 - s * 0.4, lSh: 0.3 + s * 1.3, lEl: 0.9, leanX: (1 - s) * 0.2 };
+    },
+  },
+  umbrella: {
+    id: 'umbrella', users: 'hands', category: 'weather', cls: 3, sessionDurS: [0, 0],
+    primitives: [
+      { shape: 'cylinder', size: [14, 14, 720], anchor: 'handR', pos: [0, 200, 0], color: 0x333333 },
+      { shape: 'cone', size: [540, 300], anchor: 'handR', pos: [0, 720, 0], color: 'tint' },
+    ],
+    poseHold: () => ({ rSh: 2.0, rEl: 0.4 }),
+  },
+  plate_of_food: {
+    id: 'plate_of_food', users: 'hands', category: 'leisure', cls: 2, allowSeated: true, sessionDurS: [12, 24],
+    primitives: [
+      { shape: 'cylinder', size: [110, 110, 16], anchor: 'handL', pos: [0, -40, 0], color: 0xf0f0f2 },
+      { shape: 'sphere', size: 34, anchor: 'handL', pos: [32, -12, 0], color: 0xd08a3a },
+      { shape: 'sphere', size: 28, anchor: 'handL', pos: [-28, -14, 24], color: 0x6ab04a },
+    ],
+    poseHold: (_h, _t, pp) => { const b = _beat(pp, 4, 0.8); return { lSh: 0.7, lEl: 1.6, rSh: 0.3 + b * 1.4, rEl: 0.3 + b * 1.7 }; },
+  },
+  ice_cream_cone: {
+    id: 'ice_cream_cone', users: 'hands', category: 'leisure', cls: 2, allowSeated: true, sessionDurS: [8, 16],
+    primitives: [
+      { shape: 'cone', size: [45, 150], anchor: 'handR', pos: [0, -70, 0], rot: [Math.PI, 0, 0], color: 0xd9a45a },
+      { shape: 'sphere', size: 56, anchor: 'handR', pos: [0, 10, 0], color: 0xf7d1e0 },
+    ],
+    poseHold: (_h, _t, pp) => { const b = _beat(pp, 2.5, 0.5); return { rSh: 0.6 + b * 1.0, rEl: 1.0 + b * 0.8 }; },
+  },
+  drink_cup: {
+    id: 'drink_cup', users: 'hands', category: 'leisure', cls: 2, allowSeated: true, sessionDurS: [10, 20],
+    primitives: [{ shape: 'cylinder', size: [55, 50, 130], anchor: 'handR', pos: [0, -55, 0], color: 0xcfe4f0 }],
+    poseHold: (_h, _t, pp) => { const b = _beat(pp, 6, 0.7); return { rSh: 0.4 + b * 1.2, rEl: 0.9 + b * 0.9 }; },
+  },
+  popcorn_bucket: {
+    id: 'popcorn_bucket', users: 'hands', category: 'leisure', cls: 2, allowSeated: true, sessionDurS: [12, 24],
+    primitives: [
+      { shape: 'cylinder', size: [95, 70, 150], anchor: 'handL', pos: [0, -70, 0], color: 0xd23a3a },
+      { shape: 'sphere', size: 74, anchor: 'handL', pos: [0, 15, 0], sphereArc: [0, Math.PI * 2, 0, Math.PI / 2], color: 0xf4e2a0 },
+    ],
+    poseHold: (_h, _t, pp) => { const b = _beat(pp, 2, 0.5); return { lSh: 0.7, lEl: 1.5, rSh: 0.4 + b * 1.0, rEl: 0.5 + b * 1.3 }; },
+  },
+  book: {
+    id: 'book', users: 'hands', category: 'leisure', cls: 2, allowSeated: true, sessionDurS: [14, 28],
+    primitives: [{ shape: 'box', size: [180, 240, 20], anchor: 'handL', pos: [0, -60, -40], rot: [0.5, 0, 0], color: 0x3a5aa0 }],
+    poseHold: (_h, _t, pp) => ({ lSh: 0.95, rSh: 0.95, lEl: 1.75, rEl: 1.8 - _beat(pp, 5, 0.4) * 0.5, leanX: 0.1 }),
+  },
+  fetch_toy: {
+    id: 'fetch_toy', users: 'quad', category: 'carry', cls: 4, sessionDurS: [16, 34],
+    primitives: FETCH_SKINS.ball,
+    poseHold: () => ({}),   // quads carry in the mouth (qhead) — head-bob boost in _applyQuadPose
+  },
+};
+
+// The rig's prop TIER, derived from already-built Humanoid fields (§1).
+export function propTierOf(h: Humanoid): PropTier {
+  if (h.sessile) return 'none';
+  if (h.noProps === true) return 'none';
+  if (h.quad) return 'quad';
+  return 'hands';
+}
+// The ONE eligibility gate every trigger site calls (rig CAPABILITY only — the
+// synthetic-only rule is a separate check on the TARGET, `t.ai || t.roam`).
+export function propEligible(h: Humanoid, propDef: PropDef): boolean {
+  if (h.sessile) return false;
+  if (h.noProps === true) return false;
+  if (propDef.users === 'quad') return h.quad === true;
+  return !h.quad;   // 'hands' — every non-quad, non-sessile rig (incl. hover)
+}
 
 // Context thought-bubble POOLS (Phase 6 refresh + weather/social expansion).
 // The contextual tiers used to map each context to ONE fixed glyph — a seated
@@ -1230,6 +1466,16 @@ export class ThreeDRenderer {
   // test harness injects a deterministic generator via setInteractRng. Defaults
   // to Math.random in the app.
   private _interactRng: () => number = Math.random;
+  // ── Shared-prop library (this frame's master gate + per-prop-TYPE cooldown).
+  // `_avatarPropsOn` is set from ctx.props each updateTargets (default on).
+  // `_propTypeCooldownAt` (propId → performance.now()/1000) keeps the same prop
+  // from reappearing back-to-back across the floor (mirrors _itemInteractAt).
+  private _avatarPropsOn = false;
+  private _propTypeCooldownAt: Record<string, number> = {};
+  // This frame's weather condition + entityOn map (captured from ctx) — read by
+  // the prop trigger classes (umbrella weather gate; popcorn TV-on room gate).
+  private _propWeatherCondition: string | null = null;
+  private _entityOnFrame: Record<string, boolean> = EMPTY_ENTITY_ON;
   private _raycaster = new THREE.Raycaster();
   // Per-target humanoid rigs, persisted across frames so we can carry
   // walk-cycle phase + smoothed body facing.
@@ -1285,6 +1531,23 @@ export class ThreeDRenderer {
     dirX: number; dirZ: number; baseY: number; healthy: THREE.Color; thirsty: boolean;
   }[] = [];
   private _plantBlend: Record<string, number> = {};
+  // Sink water rigs. Every sink kind builds a recessed basin with a faucet, a
+  // translucent fill plane, and a stream mesh. A sink RUNS off its effectiveState
+  // (bound entity / unbound localState → entityOn[fuId]) OR while a rig is engaged
+  // in a wash_hands activity anchored to it (anchor / proximity dwell — the
+  // appliance-door idiom, raw positions only, anti-feedback). While running the
+  // stream shows + the fill plane eases UP (fillY between emptyY→fullY) toward a
+  // max just below the rim (~8 s) and DRAINS (~6 s) when off, with a subtle bob
+  // ripple. The fill blend is keyed by fixture id so it SURVIVES _keyFloor
+  // rebuilds (the _plantBlend / appliance-door idiom). Advanced per-frame in
+  // _advanceSinks (zero alloc after build); the list is reset in updateFloor +
+  // clearTransientGroups so the advance never touches freed geometry.
+  private _sinks: {
+    fuId: string; wx: number; wy: number;
+    fill: THREE.Mesh; stream: THREE.Object3D;
+    emptyY: number; fullY: number;
+  }[] = [];
+  private _sinkFill: Record<string, number> = {};
   // Speaker driver materials that pulse while their bound media_player is
   // playing (a subtle emissive breathe; subwoofers pulse slower + deeper).
   // Registered in _buildFurniture (only when playing → no glow when idle),
@@ -2151,6 +2414,10 @@ export class ThreeDRenderer {
     // rebuilt lazily as updateFloor re-registers doors).
     this._applianceDoors = [];
     this._applianceDoorBlend = {};
+    // Sink water rigs + their fill blend reset on floor switch (the meshes were
+    // just disposed with _floorGroup; a different floor = different fixtures).
+    this._sinks = [];
+    this._sinkFill = {};
     this._speakerPulses = [];
     this._evPulses = [];
     // Weather effects reset on floor switch (spawn box is fitted to the floor
@@ -3800,6 +4067,9 @@ export class ThreeDRenderer {
     // Plant droop pivots are rebuilt here; _plantBlend persists (keyed by fixture
     // id) so a _keyFloor rebuild re-applies the current droop without a pop.
     this._plants = [];
+    // Sink water rigs are rebuilt here; _sinkFill persists (keyed by fixture id)
+    // so a _keyFloor rebuild re-applies the current fill level without a pop.
+    this._sinks = [];
     this._speakerPulses = [];
     this._evPulses = [];
     // Fountain spray clouds are rebuilt with the furniture under _floorGroup;
@@ -3882,12 +4152,14 @@ export class ThreeDRenderer {
       const doorSink: { pivot: THREE.Object3D; axis: 'x' | 'y'; openAngle: number }[] = [];
       const plantSink: { pivot: THREE.Object3D; mat: THREE.MeshToonMaterial;
                          dirX: number; dirZ: number; baseY: number; healthy: number }[] = [];
+      const sinkSink: { fill: THREE.Mesh; stream: THREE.Object3D;
+                        emptyY: number; fullY: number }[] = [];
       // "Job done" badge flag (event-focused thought bubbles): from the caller's
       // finished-window provider (Planner.applianceJustFinished). Folded into the
       // appliance hash in three-view so this rebuilds when it flips.
       const jobDone = isAppliance && !!jobDoneProvider && jobDoneProvider(fu.id);
       const grp = this._buildFurniture(fu, f.furniture, customObjects,
-                                       { applianceOn, ledScale, doorSink, plantSink, tempLabel, binFull, speakerPlaying, biasOn, biasColor,
+                                       { applianceOn, ledScale, doorSink, plantSink, sinkSink, tempLabel, binFull, speakerPlaying, biasOn, biasColor,
                                          vehicleGhost, evCharging, evColor, mailFlagUp, mailLidOpen, mailCountLabel, jobDone });
       this._shadowFlags(grp);
       // Custom-recipe front-arrow indicator: custom objects draw only as a
@@ -3941,6 +4213,30 @@ export class ThreeDRenderer {
             baseY: ps.baseY, healthy: new THREE.Color(ps.healthy), thirsty,
           });
         }
+      }
+      // Register sink water rigs (recessed basin + faucet + fill/stream). The
+      // fill blend is keyed by fixture id and persists across _keyFloor rebuilds
+      // (the plant/appliance-door idiom): re-apply the current level so a rebuild
+      // doesn't pop the water empty. _advanceSinks eases the level + toggles the
+      // stream per frame from the fixture's run state (see updateTargets).
+      if (sinkSink.length) {
+        const fillNow = this._sinkFill[fu.id] ?? 0;
+        for (const sk of sinkSink) {
+          sk.fill.position.y = sk.emptyY + (sk.fullY - sk.emptyY) * fillNow;
+          sk.fill.visible = fillNow > 0.02;
+          this._sinks.push({
+            fuId: fu.id, wx: fu.x, wy: fu.y,
+            fill: sk.fill, stream: sk.stream, emptyY: sk.emptyY, fullY: sk.fullY,
+          });
+        }
+      }
+      // Sinks are click-toggle like appliances/TVs: reuse the 'media' click path
+      // (click → toggleEntity when bound, else flip localState = run/stop the
+      // water; the sink-specific bind dblclick is guarded in three-view). Tagged
+      // regardless of binding so an unbound sink can be turned on locally.
+      if (isSinkKind(fu.kind)) {
+        grp.userData = { ...grp.userData, kind: 'media', entity_id: fu.entity_id ?? null, fixtureId: fu.id };
+        this._mediaClickables.push(grp);
       }
       // Stoves/ovens are clickable (userData.kind='appliance') so a raycast click
       // toggles the oven door. Tagged regardless of binding, like TVs.
@@ -5565,6 +5861,8 @@ export class ThreeDRenderer {
                                    doorSink?: { pivot: THREE.Object3D; axis: 'x' | 'y'; openAngle: number }[];
                                    plantSink?: { pivot: THREE.Object3D; mat: THREE.MeshToonMaterial;
                                                  dirX: number; dirZ: number; baseY: number; healthy: number }[];
+                                   sinkSink?: { fill: THREE.Mesh; stream: THREE.Object3D;
+                                                emptyY: number; fullY: number }[];
                                    tempLabel?: string; binFull?: boolean; speakerPlaying?: boolean;
                                    biasOn?: boolean; biasColor?: number;
                                    vehicleGhost?: boolean; evCharging?: boolean; evColor?: number;
@@ -5630,6 +5928,89 @@ export class ThreeDRenderer {
       m.position.set(px, py, pz);
       grp.add(m);
       return m;
+    };
+    // Sink water rig: given a basin interior (local center cx/cz, half-extents
+    // hw/hd), its bowl floor Y, the rim/counter top Y, and the faucet spout tip
+    // (sx/sz/spoutTipY), add (1) a translucent fill plane parked at the empty
+    // level (a flat toon-translucent box, transparent so it auto-skips the
+    // inverted-hull outline shells — like the bathtub water / valve flow) and
+    // (2) a thin translucent stream from the spout down into the basin, hidden
+    // by default. Both are registered via opts.sinkSink; updateFloor stamps the
+    // fixture id + world pos, re-applies the persisted fill, and _advanceSinks
+    // eases the level / toggles the stream per frame. Zero coincident faces: the
+    // fill sits proud of the darker bowl floor, the stream is inset in the basin.
+    const addSinkWater = (cx: number, cz: number, hw: number, hd: number,
+                          bowlFloorY: number, rimTopY: number,
+                          sx: number, sz: number, spoutTipY: number) => {
+      const emptyY = bowlFloorY + 6;
+      const fullY = rimTopY - 22;              // a hair below the rim
+      const waterMat = this._mat({
+        color: 0x4aa8d8, roughness: 0.12, metalness: 0.05,
+        transparent: true, opacity: 0.62, depthWrite: false,
+      });
+      const fill = new THREE.Mesh(new THREE.BoxGeometry(hw * 2, 8, hd * 2), waterMat);
+      fill.position.set(cx, emptyY, cz);
+      fill.visible = false;                    // shown once fill > ~0 (advance)
+      fill.userData = { outlineSkip: true };
+      grp.add(fill);
+      const streamMat = this._mat({
+        color: 0x7fd0ee, roughness: 0.1, metalness: 0.05,
+        transparent: true, opacity: 0.5, depthWrite: false,
+      });
+      const stream = new THREE.Mesh(
+        new THREE.CylinderGeometry(9, 7, Math.max(20, spoutTipY - bowlFloorY), 8),
+        streamMat);
+      stream.position.set(sx, (spoutTipY + bowlFloorY) / 2, sz);
+      stream.visible = false;
+      stream.userData = { outlineSkip: true };
+      grp.add(stream);
+      opts?.sinkSink?.push({ fill, stream, emptyY, fullY });
+    };
+    // Recessed OVAL basin bowl (bathroom sinks): an open-ended (top + bottom
+    // open) cylindrical inner wall dropping from the rim down to a darker bowl
+    // floor disc, so the cavity reads as a real recess from the dimetric camera.
+    // DoubleSide so the far inner wall is visible looking down. `zScale` ovals
+    // it. Returns the bowl floor Y (for the water fill). Inset a hair below the
+    // rim (the rim lip overhangs) — no coincident face with the rim slab.
+    // Bowl materials are created lazily (only when a sink actually builds one) so
+    // ordinary furniture never mints two throwaway materials per rebuild.
+    let _bowlWall: THREE.Material | null = null, _bowlFloorMat: THREE.Material | null = null;
+    const bowlWallMat = () => (_bowlWall ??= this._mat({ color: 0xe9e9e3, roughness: 0.2, metalness: 0.0, side: THREE.DoubleSide }));
+    const bowlFloorMatFn = () => (_bowlFloorMat ??= this._mat({ color: 0xcfd2cf, roughness: 0.35, metalness: 0.0 }));
+    const addOvalBowl = (cx: number, cz: number, rTop: number, rBot: number,
+                         rimTopY: number, depth: number, zScale = 1) => {
+      const bowlWall = bowlWallMat(), bowlFloorMat = bowlFloorMatFn();
+      const floorY = rimTopY - depth;
+      const wall = new THREE.Mesh(
+        new THREE.CylinderGeometry(rTop, rBot, depth, 22, 1, true), bowlWall);
+      wall.position.set(cx, rimTopY - depth / 2, cz);
+      wall.scale.z = zScale;
+      wall.userData = { outlineSkip: true };
+      grp.add(wall);
+      const floor = new THREE.Mesh(new THREE.CylinderGeometry(rBot, rBot * 0.9, 10, 22), bowlFloorMat);
+      floor.position.set(cx, floorY + 5, cz);
+      floor.scale.z = zScale;
+      grp.add(floor);
+      // Drain nub, proud of the bowl floor (coincident-face gotcha).
+      addCyl(rBot * 0.16, rBot * 0.16, 8, dark, cx, floorY + 12, cz, 12);
+      return floorY;
+    };
+    // Recessed RECTANGULAR basin well (kitchen / utility): a darker floor plate
+    // + four inner walls dropping from the rim, inset 6 mm inside the opening so
+    // the rim reads as an overhanging lip (no coincident face with the rim slab).
+    const addRectBasin = (cx: number, cz: number, hw: number, hd: number,
+                          rimTopY: number, depth: number) => {
+      const bowlWall = bowlWallMat(), bowlFloorMat = bowlFloorMatFn();
+      const floorY = rimTopY - depth;
+      const t = 22;                                   // inner-wall thickness
+      const iw = hw - 6, id = hd - 6;                 // inset from the opening
+      addBox(iw * 2, 10, id * 2, bowlFloorMat, cx, floorY + 5, cz);        // bowl floor
+      addBox(iw * 2, depth, t, bowlWall, cx, rimTopY - depth / 2, cz + id - t / 2);  // back wall
+      addBox(iw * 2, depth, t, bowlWall, cx, rimTopY - depth / 2, cz - id + t / 2);  // front wall
+      addBox(t, depth, id * 2, bowlWall, cx + iw - t / 2, rimTopY - depth / 2, cz);  // right wall
+      addBox(t, depth, id * 2, bowlWall, cx - iw + t / 2, rimTopY - depth / 2, cz);  // left wall
+      addCyl(30, 30, 8, dark, cx, floorY + 12, cz, 12);                    // drain
+      return floorY;
     };
 
     // A well face is left OPEN when another sunken stair-family piece
@@ -6331,13 +6712,63 @@ export class ThreeDRenderer {
         break;
       }
       case 'sink': {
-        addCyl(70, 90, HT - 120, porcelain, 0, (HT - 120) / 2, 0, 12);   // pedestal
-        addCyl(W * 0.48, W * 0.34, 130, porcelain, 0, HT - 65, 0, 18);   // basin
+        // Compact vanity: cabinet base + overhanging counter with a raised rim
+        // framing a RECESSED oval bowl + a faucet with running water/fill.
+        const carcassTop = HT - 40;
+        addBox(W, carcassTop, D, wood, 0, carcassTop / 2, 0);            // cabinet body
+        const sPanel = this._mat({ color: tint, roughness: 0.55, metalness: 0.05 });
+        const sPull = this._mat({ color: 0x3a444d, metalness: 0.8, roughness: 0.35 });
+        const sdw = W - 40, sdh = carcassTop - 90;
+        addBox(sdw, sdh, 16, sPanel, 0, 45 + sdh / 2, -D / 2 - 8);       // single door front (-Z)
+        addBox(20, 120, 18, sPull, W * 0.28, 45 + sdh * 0.55, -D / 2 - 26);
+        const stone = this._mat({ color: 0xeceff1, roughness: 0.2, metalness: 0.05 });
+        const openW = W * 0.55, openD = D * 0.5, zc = -D * 0.03;
+        const rimH = 40, rimY = carcassTop + rimH / 2;
+        const zBack = zc + openD / 2, zFront = zc - openD / 2;
+        addBox(W + 40, rimH, (D / 2 + 20) - zBack, stone, 0, rimY, (zBack + D / 2 + 20) / 2);   // back band
+        addBox(W + 40, rimH, zFront - (-D / 2 - 20), stone, 0, rimY, (zFront + (-D / 2 - 20)) / 2); // front band
+        addBox((W + 40) / 2 - openW / 2, rimH, openD, stone, -(openW / 2 + ((W + 40) / 2 - openW / 2) / 2), rimY, zc);
+        addBox((W + 40) / 2 - openW / 2, rimH, openD, stone,  (openW / 2 + ((W + 40) / 2 - openW / 2) / 2), rimY, zc);
+        const rTop = openW * 0.42, zSc = (openD * 0.9) / (rTop * 2);
+        const bowlFloorY = addOvalBowl(0, zc, rTop, rTop * 0.72, HT, 130, zSc);
+        // Faucet: vertical body at the back + a spout arm reaching over the bowl.
+        const vSteel = this._mat({ color: 0xb8c0c6, metalness: 0.8, roughness: 0.28 });
+        addCyl(15, 17, 180, vSteel, 0, HT + 90, zBack + 25, 10);
+        const spout = addCyl(11, 11, 120, vSteel, 0, HT + 165, zc + 25, 10);
+        spout.rotation.x = Math.PI / 2.3;
+        addSinkWater(0, zc, rTop * 0.62, rTop * 0.62 * zSc, bowlFloorY, HT, 0, zc, HT + 130);
+        break;
+      }
+      case 'pedestal_sink': {
+        // Slim porcelain pedestal column widening to a flared basin top with a
+        // clearly recessed oval bowl + a wall-style faucet at the back.
+        const colTop = HT - 190;
+        addCyl(80, 130, colTop, porcelain, 0, colTop / 2, 0, 14);        // tapered pedestal column
+        addCyl(115, 90, 30, porcelain, 0, 15, 0, 14);                    // splayed foot
+        // Flared basin body under the rim (wider than the column).
+        const basinTop = HT, basinBot = colTop;
+        addCyl(W * 0.5, 130, basinTop - basinBot, porcelain, 0, (basinTop + basinBot) / 2, 0, 18);
+        const rimH = 34;
+        // Thin porcelain rim ring around the bowl opening (4 bands, hole in the middle).
+        const stone = this._mat({ color: 0xf3f3ee, roughness: 0.18, metalness: 0.0 });
+        const openW = W * 0.62, openD = D * 0.6, zc = -D * 0.02, rimY = HT - rimH / 2;
+        const zBack = zc + openD / 2, zFront = zc - openD / 2;
+        addBox(W, rimH, (D / 2) - zBack, stone, 0, rimY, (zBack + D / 2) / 2);
+        addBox(W, rimH, zFront + D / 2, stone, 0, rimY, (zFront - D / 2) / 2);
+        addBox(W / 2 - openW / 2, rimH, openD, stone, -(openW / 2 + (W / 2 - openW / 2) / 2), rimY, zc);
+        addBox(W / 2 - openW / 2, rimH, openD, stone,  (openW / 2 + (W / 2 - openW / 2) / 2), rimY, zc);
+        const rTop = openW * 0.44, zSc = (openD * 0.9) / (rTop * 2);
+        const bowlFloorY = addOvalBowl(0, zc, rTop, rTop * 0.7, HT, 120, zSc);
+        const vSteel = this._mat({ color: 0xc2c9ce, metalness: 0.8, roughness: 0.28 });
+        addCyl(14, 15, 150, vSteel, 0, HT + 75, zBack + 18, 10);
+        const spout = addCyl(10, 10, 110, vSteel, 0, HT + 140, zc + 20, 10);
+        spout.rotation.x = Math.PI / 2.3;
+        addSinkWater(0, zc, rTop * 0.6, rTop * 0.6 * zSc, bowlFloorY, HT, 0, zc, HT + 110);
         break;
       }
       case 'sink_vanity': {
         // Cabinet base (casework idiom) + overhanging stone counter with a
-        // raised rim framing a recessed basin bowl + a steel faucet at the back.
+        // raised rim framing a RECESSED basin bowl + a faucet with running water.
         const carcassTop = HT - 40;
         addBox(W, carcassTop, D, wood, 0, carcassTop / 2, 0);            // cabinet body
         // Double door split on the front (-Z).
@@ -6360,26 +6791,25 @@ export class ThreeDRenderer {
         addBox(W + 40, rimH, zFront - (-D / 2 - 20), stone, 0, rimY, (zFront + (-D / 2 - 20)) / 2); // front band
         addBox((W + 40) / 2 - openW / 2, rimH, openD, stone, -(openW / 2 + ((W + 40) / 2 - openW / 2) / 2), rimY, zc); // left filler
         addBox((W + 40) / 2 - openW / 2, rimH, openD, stone,  (openW / 2 + ((W + 40) / 2 - openW / 2) / 2), rimY, zc); // right filler
-        // Recessed bowl: rim top 15 mm below the counter surface.
-        addCyl(openW * 0.42, openW * 0.30, 150, porcelain, 0, HT - 15 - 75, zc, 20);
-        addCyl(openW * 0.30, openW * 0.30, 12, dark, 0, HT - 15 - 148, zc, 16);  // drain
-        // Faucet at the back edge: vertical body + horizontal spout. The shared
-        // `steel` mat is tinted by the piece color, so use explicit steel grey.
+        // Recessed oval bowl (open cavity, drops 150 mm below the counter).
+        const rTop = openW * 0.44, zSc = (openD * 0.9) / (rTop * 2);
+        const bowlFloorY = addOvalBowl(0, zc, rTop, rTop * 0.68, HT, 150, zSc);
+        // Faucet at the back edge: vertical body + a spout arm over the bowl. The
+        // shared `steel` mat is tinted by the piece color, so use explicit grey.
         const vSteel = this._mat({ color: 0xb8c0c6, metalness: 0.8, roughness: 0.28 });
         const faucetZ = zBack + 30;
         addCyl(16, 18, 200, vSteel, 0, HT + 100, faucetZ, 10);
-        const spout = addCyl(12, 12, 130, vSteel, 0, HT + 185, faucetZ - 60, 10);
-        spout.rotation.x = Math.PI / 2;
+        const spout = addCyl(12, 12, 140, vSteel, 0, HT + 185, zc + 20, 10);
+        spout.rotation.x = Math.PI / 2.3;
+        addSinkWater(0, zc, rTop * 0.62, rTop * 0.62 * zSc, bowlFloorY, HT, 0, zc, HT + 150);
         break;
       }
       case 'kitchen_sink': {
-        // Counter-matching cabinet base + stone slab (reusing the counter
-        // idiom) with a stainless double basin recessed into it and a tall
-        // arched faucet at the back center.
+        // Counter-matching cabinet base + stone slab (reusing the counter idiom)
+        // with a stainless double basin RECESSED into it (two open wells) and a
+        // tall arched faucet at the back center + running water in each bowl.
         addBox(W, HT - 30, D, wood, 0, (HT - 30) / 2, 0);               // cabinet base
         const ksTop = this._mat({ color: 0xcfd8dc, roughness: 0.25, metalness: 0.05 });
-        // The shared `steel` mat is tinted by the piece color (brown here), so
-        // use an explicit stainless grey for the basin + faucet.
         const stainless = this._mat({ color: 0xb8c0c6, metalness: 0.8, roughness: 0.28 });
         // Counter slab as a raised rim tiled around the sink opening.
         const sinkW = W * 0.72, sinkD = D * 0.6, zc = -D * 0.03;
@@ -6390,25 +6820,54 @@ export class ThreeDRenderer {
         const sideW = (W * 1.02) / 2 - sinkW / 2;
         addBox(sideW, rimH, sinkD, ksTop, -(sinkW / 2 + sideW / 2), rimY, zc);   // left filler
         addBox(sideW, rimH, sinkD, ksTop,  (sinkW / 2 + sideW / 2), rimY, zc);   // right filler
-        // Stainless double basin, mirroring the vanity bowl trick: two SOLID
-        // stainless pans whose tops sit ~20 mm below the counter (so they read
-        // recessed) split by a center divider that rises to the rim. Solid tops
-        // sit just above the cabinet carcass (rimBot) so no wood shows through
-        // — hollow wells buried in the solid cabinet showed the wood floor.
-        const div = 60, panTop = HT - 20;                 // 880 mm, 20 below the 900 rim
-        addBox(div, rimH + 10, sinkD, stainless, 0, HT - (rimH + 10) / 2, zc);  // center divider, flush at rim
+        // Center divider (stainless) rising to the rim between the two wells.
+        const div = 60, depth = 200;
+        addBox(div, rimH + 10, sinkD, stainless, 0, HT - (rimH + 10) / 2, zc);
         const panW = sinkW / 2 - div / 2;
         const panCx = div / 2 + panW / 2;
+        // Two recessed rectangular wells (open cavities) + running water in each.
         for (const sx of [-1, 1]) {
-          // solid pan: top at panTop (above the cabinet carcass so stainless
-          // shows), base sunk into the cabinet.
-          addBox(panW, panTop - (rimBot - 50), sinkD, stainless, sx * panCx, (panTop + (rimBot - 50)) / 2, zc);
+          const bx = sx * panCx;
+          const bowlFloorY = addRectBasin(bx, zc, panW / 2, sinkD / 2, HT, depth);
+          addSinkWater(bx, zc, panW / 2 - 24, sinkD / 2 - 24, bowlFloorY, HT,
+                       bx, zc, HT + 60);
         }
-        // Tall arched faucet at the back center (stainless).
+        // Tall arched gooseneck faucet at the back center (stainless).
         const kfZ = zBack + 30;
         addCyl(18, 20, 260, stainless, 0, HT + 130, kfZ, 10);
         const kspout = addCyl(14, 14, 200, stainless, 0, HT + 250, kfZ - 90, 10);
         kspout.rotation.x = Math.PI / 2.2;   // gooseneck: slight forward-down arch
+        break;
+      }
+      case 'utility_sink': {
+        // Deep single tub on four legs — utilitarian grey. The tub is a RECESSED
+        // rectangular well (extra-deep) with an above-rim faucet + running water.
+        const legH = HT - 380, legT = 60;
+        const tub = this._mat({ color: tint, roughness: 0.55, metalness: 0.1 });
+        const xo = W / 2 - legT / 2 - 20, zo = D / 2 - legT / 2 - 20;
+        for (const [lx, lz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]] as const) {
+          addBox(legT, legH, legT, this._mat({ color: 0x6b7176, metalness: 0.6, roughness: 0.4 }),
+                 lx * xo, legH / 2, lz * zo);
+        }
+        // Tub body: a solid block from leg top to the rim; the well is cut into
+        // its top as a recessed rectangular basin.
+        const tubBot = legH, tubTop = HT;
+        addBox(W, tubTop - tubBot, D, tub, 0, (tubTop + tubBot) / 2, 0);
+        // Rim band around the opening (thin lip on top of the tub block).
+        const rimH = 30, rimY = tubTop - rimH / 2, wallT = W * 0.09;
+        const openW = W - wallT * 2, openD = D - wallT * 2;
+        addBox(W, rimH, (D - openD) / 2, tub, 0, rimY, (openD / 2 + D / 2) / 2);
+        addBox(W, rimH, (D - openD) / 2, tub, 0, rimY, -(openD / 2 + D / 2) / 2);
+        addBox((W - openW) / 2, rimH, openD, tub, (openW / 2 + W / 2) / 2, rimY, 0);
+        addBox((W - openW) / 2, rimH, openD, tub, -(openW / 2 + W / 2) / 2, rimY, 0);
+        const depth = HT - tubBot - 40;                  // extra-deep basin
+        const bowlFloorY = addRectBasin(0, 0, openW / 2, openD / 2, HT, depth);
+        const uSteel = this._mat({ color: 0x9aa2a8, metalness: 0.7, roughness: 0.35 });
+        const uZ = openD / 2 - 20;
+        addCyl(16, 18, 210, uSteel, 0, HT + 95, uZ, 10);
+        const uspout = addCyl(12, 12, 130, uSteel, 0, HT + 185, uZ - 70, 10);
+        uspout.rotation.x = Math.PI / 2.3;
+        addSinkWater(0, 0, openW / 2 - 28, openD / 2 - 28, bowlFloorY, HT, 0, 0, HT + 130);
         break;
       }
       case 'bathtub': {
@@ -10608,6 +11067,20 @@ export class ThreeDRenderer {
         } else if (ai.interactId !== undefined) {
           // Arrived at an unbound device: hold, face it, reach, and toggle once.
           ai.state = 'idle'; ai.interactT = 0; ai.interactFired = false;
+        } else if (ai.propKind !== undefined) {
+          // Arrived at a Class-1 chore target: start the prop session once (if the
+          // rig is eligible), then wander normally with the prop held — the pose
+          // override reads as "using the object"; the session ends on its timer.
+          const h = this._humanoids[t.key];
+          const def = PROP_DEFS[ai.propKind];
+          if (h && def && !h.propKind && propEligible(h, def)) {
+            const nowS = performance.now() / 1000;
+            const dur = def.sessionDurS[0] + Math.random() * (def.sessionDurS[1] - def.sessionDurS[0]);
+            this._startPropSession(h, ai.propKind, ai.propX ?? null, ai.propY ?? null, dur, this._interactBucket);
+            if (h.propKind) { this._propTypeCooldownAt[ai.propKind] = nowS; ai.nextPropAt = nowS + 60; }
+          }
+          ai.propKind = undefined; ai.propX = undefined; ai.propY = undefined;
+          ai.state = 'idle'; ai.timer = 3 + Math.random() * 4;
         } else {
           ai.state = 'idle'; ai.timer = 4 + Math.random() * 11;   // dwell 4..15 s
         }
@@ -10744,6 +11217,7 @@ export class ThreeDRenderer {
     let gx: number | null = null, gy = 0;
     ai.descendGoal = false;
     ai.interactId = undefined; ai.interactX = undefined; ai.interactY = undefined;
+    ai.propKind = undefined; ai.propX = undefined; ai.propY = undefined;
     // "Go downstairs": if a sunken flight's deepest tread is reachable in this
     // region, occasionally target it (~1 in 6 rolls — the goal picker is a
     // wander path, so Math.random matches its existing pattern). On arrival the
@@ -10794,6 +11268,17 @@ export class ThreeDRenderer {
         }
       }
     }
+    // Shared-props Class 1 chore (~1/10 of rolls): walk to a per-prop chore target
+    // (thirsty plant / kitchen sink / window / open room / snowy yard) and start a
+    // prop session on arrival. Gated on the master flag + per-rig cooldown inside
+    // _pickPropChore. Eligibility is validated at arrival (needs the humanoid).
+    if (gx === null && this._avatarPropsOn && this._interactRng() < 1 / 10) {
+      const chore = this._pickPropChore(ai);
+      if (chore) {
+        gx = chore.gx; gy = chore.gy;
+        ai.propKind = chore.propKind; ai.propX = chore.gx; ai.propY = chore.gy;
+      }
+    }
     // Activity / sit anchor pick. Roamers weight it ~50% (vs 25% for confined
     // avatars). `loop` null for roamers ⇒ any in-region anchor qualifies.
     const roll = roam ? Math.random() : -1;
@@ -10841,6 +11326,58 @@ export class ThreeDRenderer {
     ai.path = wp.length ? wp : [{ x: gw.x, y: gw.y }];
     const last = ai.path[ai.path.length - 1];
     ai.goalX = last.x; ai.goalY = last.y;
+  }
+
+  // ── Shared-props Class 1: pick a chore prop + its walk target (world mm). ────
+  // Per-prop context bias (§3): watering_can → a THIRSTY plant only; dish_towel →
+  // a kitchen-sink (wash_hands) anchor; window_squeegee → a window (gaze_window)
+  // anchor's interior approach point; snow_shovel → an OUTDOOR cell (snowy-family
+  // only); vacuum/broom → any interior cell in the rig's region + home loop. All
+  // randomness uses the seedable _interactRng so the test harness is deterministic.
+  // Returns null when nothing is offerable. Eligibility is checked at arrival.
+  private _pickPropChore(ai: AiState): { propKind: string; gx: number; gy: number } | null {
+    if (!this._avatarPropsOn) return null;
+    const now = performance.now() / 1000;
+    if (now < (ai.nextPropAt ?? 0)) return null;
+    const region = this._regionOfWorld(ai.anchorX, ai.anchorY);
+    const loop = ai.roam ? null : this._aiHomeLoop(ai.anchorX, ai.anchorY);
+    const cond = this._propWeatherCondition;
+    // Thirsty plants → world position (via the pivot's scene world pos).
+    const thirstyPlants: { x: number; y: number }[] = [];
+    for (const pl of this._plants) {
+      if (!pl.thirsty) continue;
+      pl.pivot.getWorldPosition(_propScratch);
+      thirstyPlants.push(this._sceneToWorld(_propScratch.x, _propScratch.z));
+    }
+    const anchorWorld = (kind: string): { x: number; y: number }[] =>
+      this._activityAnchors.filter(a => a.kind === kind).map(a => this._sceneToWorld(a.x, a.z));
+    const washSpots = anchorWorld('wash_hands');
+    const windowSpots = anchorWorld('gaze_window');
+    const cands: string[] = [];
+    for (const id of ['vacuum_cleaner', 'broom', 'dish_towel', 'window_squeegee', 'watering_can', 'snow_shovel']) {
+      if (now - (this._propTypeCooldownAt[id] ?? -1e9) < 90) continue;   // per-type cooldown
+      if (id === 'watering_can' && !thirstyPlants.length) continue;      // no fallback to a healthy plant
+      if (id === 'dish_towel' && !washSpots.length) continue;
+      if (id === 'window_squeegee' && !windowSpots.length) continue;
+      if (id === 'snow_shovel' && !(cond && SNOW_FAMILY.has(cond))) continue;
+      cands.push(id);
+    }
+    if (!cands.length) return null;
+    const id = cands[(this._interactRng() * cands.length) | 0];
+    const pickFrom = (arr: { x: number; y: number }[]) => arr.length ? arr[(this._interactRng() * arr.length) | 0] : null;
+    let gx: number | null = null, gy = 0;
+    if (id === 'watering_can') { const p = pickFrom(thirstyPlants); if (p) { gx = p.x; gy = p.y; } }
+    else if (id === 'dish_towel') { const p = pickFrom(washSpots); if (p) { gx = p.x; gy = p.y; } }
+    else if (id === 'window_squeegee') { const p = pickFrom(windowSpots); if (p) { gx = p.x; gy = p.y; } }
+    else if (id === 'snow_shovel') {
+      const c = this._aiRandomCell(ai.anchorX, ai.anchorY, region, null);
+      if (c && this._outdoors(c.x, c.y)) { gx = c.x; gy = c.y; }
+    } else {   // vacuum / broom — any interior free cell in the region + home loop
+      const c = this._aiRandomCell(ai.anchorX, ai.anchorY, region, loop);
+      if (c) { gx = c.x; gy = c.y; }
+    }
+    if (gx === null) return null;
+    return { propKind: id, gx, gy };
   }
 
   // A random free cell within `R` mm of the anchor whose region matches.
@@ -10901,6 +11438,9 @@ export class ThreeDRenderer {
     // Avatar device-interaction inputs for this frame (stale-chunk safe).
     this._interactiveItems = ctx?.interactive ?? [];
     this._avatarInteractOn = ctx?.avatarInteract === true;
+    this._avatarPropsOn = ctx?.props !== false;   // absent/true = on (stale-chunk safe)
+    this._propWeatherCondition = ctx?.weather?.condition ?? null;
+    this._entityOnFrame = entityOn;
     this._interactBucket = ctx?.timeBucket ?? 'day';
     // RAW world target positions this frame, keyed by target — the bed-covers
     // pass tests footprint containment in world coords.
@@ -11440,6 +11980,11 @@ export class ThreeDRenderer {
         if (needSeat > seatYeff) seatYeff = needSeat;
       }
 
+      // Shared-prop library: advance / start / end a prop session for this rig
+      // (all four trigger classes). Runs for BOTH rig kinds (Class 4 is quad).
+      this._updatePropTriggers(h, t, dt, rawSpeedMs);
+      const propActive = h.propKind != null;
+
       if (h.quad) {
         // ── Quadruped pets: dedicated trot / sit / curl pose branch. Reuses the
         // walk-cycle phase/amp resolved above and the position / plumbob / blob
@@ -11722,7 +12267,7 @@ export class ThreeDRenderer {
       h.idleBlend += ((idleStanding ? 1 : 0) - h.idleBlend) * Math.min(1, dt * 3);
       const ib = h.idleBlend;
       let yawFidget = 0;
-      if (idleStanding) {
+      if (idleStanding && !propActive) {
         // Dance eligibility: standing-idle in a room whose bound TV is ON (the
         // same _tvsByRoom machinery seated watch_tv uses). Reads the RAW target
         // position `t.x/t.y` (anti-feedback). A per-frame flag so the picker can
@@ -11772,7 +12317,7 @@ export class ThreeDRenderer {
         h.fidgetKind = null;  // interrupted (started moving / sat down)
       }
 
-      if (ib > 0.001) {
+      if (ib > 0.001 && !propActive) {
         // Ambient #1 look-around: 0.4 Hz yaw wobble ±0.15 rad + the held scan.
         yawFidget = Math.sin(now * 0.4 * 2 * Math.PI + h.idleOffset) * 0.15;
         if (h.scanState === 1) yawFidget += h.scanDir * 0.35 * Math.sin(Math.PI * h.scanT / 0.8);
@@ -11876,7 +12421,7 @@ export class ThreeDRenderer {
       }
       // Greeting wave on acquire: one-shot ~1 s over the rig's spawn window.
       // Fires regardless of idle (a greeting on arrival), not gated on idleBlend.
-      if (h.waveT < 1.0) {
+      if (h.waveT < 1.0 && !propActive) {
         if (h.waveT === 0) h.fidgetLog.push('wave');
         h.waveT += dt;
         const t = h.waveT;
@@ -11890,13 +12435,32 @@ export class ThreeDRenderer {
       // device the AI controller walked the rig up to (a brief "flip the switch"
       // gesture). Independent of the idle-fidget gate; advanced here (the single
       // increment site). A trapezoid envelope ramps it in/out over ~0.3 s.
-      if (h.reachT >= 0) {
+      if (h.reachT >= 0 && !propActive) {
         h.reachT += dt;
         const D = h.reachDur, tt = h.reachT;
         const env = tt < 0.3 ? tt / 0.3 : (tt > D - 0.3 ? Math.max(0, (D - tt) / 0.3) : 1);
         rSh = rSh * (1 - env) + 1.75 * env;   // arm swings up-forward
         rEl = rEl * (1 - env) + 0.35 * env;   // nearly straight, hand toward the device
         if (h.reachT >= D) h.reachT = -1;     // done → inactive
+      }
+
+      // ── Shared-prop pose override: a held/animated hand pose replaces the swing
+      // for the grip arm (same pipeline slot as the table-eating IK / reach
+      // one-shot). Mutually exclusive with the idle-fidget block (gated above), so
+      // a rig checking its phone and eating an ice cream at once never happens.
+      // Shoulder/elbow are absolute; leanX/rollZ/yaw are additive.
+      if (propActive) {
+        const pd = PROP_DEFS[h.propKind!];
+        if (pd) {
+          const d = pd.poseHold(h, h.propT ?? 0, h.propPhase ?? 0, walking);
+          if (d.lSh !== undefined) lSh = d.lSh;
+          if (d.rSh !== undefined) rSh = d.rSh;
+          if (d.lEl !== undefined) lEl = d.lEl;
+          if (d.rEl !== undefined) rEl = d.rEl;
+          if (d.leanX !== undefined) leanX += d.leanX;
+          if (d.rollZ !== undefined) rollZ += d.rollZ;
+          if (d.yaw !== undefined) yawFidget += d.yaw;
+        }
       }
 
       // Leg joints are null on hover rigs (legless ghosts) — guard the writes;
@@ -11919,10 +12483,14 @@ export class ThreeDRenderer {
 
       // Phase 4b: advance animated appendages (sway/flap/orbit/spin) for BOTH rig
       // kinds — the prims are rig-root children, so they inherit scale/visibility.
-      if (h.animPrims) this._advanceAnimPrims(h, dt, walking);
+      // Prop-owned animate prims ride a PARALLEL list (same advance, second array).
+      this._advanceAnimPrims(h.animPrims, dt, walking);
+      this._advanceAnimPrims(h.propAnimPrims, dt, walking);
       // Two-handed hand props re-aim between the hands each frame (after the pose
-      // rotations above are written, so hand world positions are current).
-      if (h.twoHandProps) this._advanceTwoHandProps(h);
+      // rotations above are written, so hand world positions are current). Prop
+      // two-handed tools (broom / snow shovel) ride the parallel prop list.
+      this._advanceTwoHandProps(h.twoHandProps);
+      this._advanceTwoHandProps(h.propTwoHand);
 
       // Breathing — subtle torso rise/fall, always on.
       h.torso.scale.y = 1 + Math.sin(now * 1.8 + h.idleOffset) * 0.012;
@@ -12304,6 +12872,12 @@ export class ThreeDRenderer {
     // sees this frame's raw target positions + resolved activity anchors.
     this._advanceApplianceDoors(targets, entityOn, ctx, frameDt);
 
+    // ── Sink water: run state = bound entity/localState on (entityOn) OR a rig
+    // engaged/dwelling in a wash_hands activity at the sink (raw positions, the
+    // appliance-door idiom). While running the stream shows + the fill eases up;
+    // off drains. Sees this frame's raw target positions + resolved anchors.
+    this._advanceSinks(targets, entityOn, frameDt);
+
     // ── Plant droop: ease each thirsty plant's foliage toward a wilted pose
     // (leaf clumps / flower stems tip outward+down + desaturate). Thirsty is
     // resolved at build time (folded into _keyFloor); this just eases the blend.
@@ -12412,6 +12986,47 @@ export class ThreeDRenderer {
       s.rps += (rot.rps - s.rps) * alpha;
       s.angle = (s.angle + s.rps * TWO_PI * dt) % TWO_PI;
       rot.obj.rotation.y = s.angle;
+    }
+  }
+
+  // Per-frame sink water. A sink RUNS when its effectiveState is on (bound
+  // entity / unbound localState → entityOn[fuId]) OR a rig is engaged in a
+  // wash_hands activity anchored to it (h.activityAnchor.furnitureId, h.act) OR
+  // a rig dwells (>1.2 s, RAW pos) within ~1100 mm — the appliance-door idiom,
+  // anti-feedback (raw positions never the eased visual pose). Running shows the
+  // stream + eases the fill blend UP (τ ≈ 2.7 s → ~8 s to fill) toward fullY;
+  // off DRAINS (τ ≈ 2 s → ~6 s) with the stream hidden. A subtle bob ripples the
+  // surface while running. Blend keyed by fixture id (survives _keyFloor). Zero
+  // allocation after build (position/visibility mutation only).
+  private _advanceSinks(targets: TargetWorld[], entityOn: Record<string, boolean>, dt: number): void {
+    if (!this._sinks.length) return;
+    // Sinks a rig is actively engaged with (standing wash_hands anchor).
+    const anchoredFu = new Set<string>();
+    for (const key in this._humanoids) {
+      const h = this._humanoids[key];
+      if (h.activityAnchor && h.act > 0.1) anchoredFu.add(h.activityAnchor.furnitureId);
+    }
+    const PROX2 = 1100 * 1100;
+    const nowS = performance.now() / 1000;
+    for (const sk of this._sinks) {
+      let running = entityOn[sk.fuId] === true || anchoredFu.has(sk.fuId);
+      if (!running) {
+        for (const t of targets) {
+          const dx = t.x - sk.wx, dy = t.y - sk.wy;
+          if (dx * dx + dy * dy > PROX2) continue;
+          const h = this._humanoids[t.key];
+          if (h && !h.quad && h.dwell > 1.2) { running = true; break; }
+        }
+      }
+      const cur = this._sinkFill[sk.fuId] ?? 0;
+      const tau = running ? 2.7 : 2.0;                 // ~8 s fill, ~6 s drain
+      const alpha = 1 - Math.exp(-dt / tau);
+      const next = cur + ((running ? 1 : 0) - cur) * alpha;
+      this._sinkFill[sk.fuId] = next;
+      const ripple = running ? Math.sin(nowS * 6 + sk.wx * 0.01) * 2 : 0;
+      sk.fill.position.y = sk.emptyY + (sk.fullY - sk.emptyY) * next + ripple;
+      sk.fill.visible = next > 0.02;
+      sk.stream.visible = running;
     }
   }
 
@@ -13229,26 +13844,34 @@ export class ThreeDRenderer {
   // privacy-blur / fade systems pick them up automatically (outline minDim
   // auto-skips small parts; `outlineSkip` opts a part out). Materials via _mat().
   private _addDeclarativeAccessories(
-    def: AvatarDef, root: THREE.Group,
-    ctx: {
-      color: number; sk: number;
-      tint: THREE.Material; skin: THREE.Material; bodyMat: THREE.Material; dark: THREE.Material;
-      // humanoid metrics
-      HEAD_R?: number; headY?: number; torsoY?: number; hipY?: number; TORSO_D?: number;
-      shoulderY?: number; shoulderX?: number; neckY?: number;
-      handL?: THREE.Group; handR?: THREE.Group;
-      // Limb-joint pivots (Phase 4a) — accessories parented here ride the swing.
-      elbowL?: THREE.Group; elbowR?: THREE.Group; kneeL?: THREE.Group; kneeR?: THREE.Group;
-      legLowerLen?: number;   // shin length (mm) for the ankle offset off the knee
-      // quadruped metrics
-      quadHead?: THREE.Group;
-      qBodyY?: number; qBodyH?: number; qFrontZ?: number; qRearZ?: number; qHeadR?: number;
-    },
+    def: AvatarDef, ctx: PropBuildCtx,
     animOut?: AnimPrim[],   // Phase 4b: animated prims pushed here (base captured)
     twoHandOut?: { mesh: THREE.Object3D; otherHand: THREE.Object3D }[],  // two-handed props
+    // Shared-props: hand-anchored meshes collected here at initial rig build so a
+    // prop session can hide the rig's own authored hand item while a prop is held.
+    handAccOut?: { mesh: THREE.Object3D; hand: 'L' | 'R' }[],
   ): void {
     const prims = def.accessories;
     if (!prims || !prims.length) return;
+    for (const prim of prims)
+      this._buildPrimitiveMesh(prim, ctx, animOut, twoHandOut, handAccOut);
+  }
+
+  // ── Build ONE declarative primitive against a rig's live anchor groups ───────
+  // Extracted from _addDeclarativeAccessories (shared-props feature) so BOTH the
+  // initial rig build AND a runtime prop-equip (_equipProp) share the exact same
+  // anchor / material / geometry / animate / twoHanded code path. Behavior for the
+  // initial-build caller is byte-identical to the old inline loop. Returns the
+  // built mesh (already parented to its anchor); pushes any animate/twoHanded/
+  // hand-accessory registrations into the optional out-arrays.
+  private _buildPrimitiveMesh(
+    prim: AvatarPrimitive,
+    ctx: PropBuildCtx,
+    animOut?: AnimPrim[],
+    twoHandOut?: { mesh: THREE.Object3D; otherHand: THREE.Object3D }[],
+    handAccOut?: { mesh: THREE.Object3D; hand: 'L' | 'R' }[],
+  ): THREE.Mesh {
+    const root = ctx.root;
     const sk = ctx.sk;
     const HEAD_R = ctx.HEAD_R ?? 0, headY = ctx.headY ?? 0, torsoY = ctx.torsoY ?? 0;
     const hipY = ctx.hipY ?? 0, TORSO_D = ctx.TORSO_D ?? 0;
@@ -13328,7 +13951,7 @@ export class ThreeDRenderer {
       }
     };
 
-    for (const prim of prims) {
+    {
       const size = prim.size;
       // Normalize to a 3-tuple: scalars broadcast; a 2-tuple (documented cone
       // [r,h] form) pads its last element (only cones use 2-tuples; the third
@@ -13425,6 +14048,11 @@ export class ThreeDRenderer {
         const otherHand = prim.anchor === 'handL' ? ctx.handR : ctx.handL;
         if (otherHand) twoHandOut.push({ mesh, otherHand });
       }
+      // Shared-props: remember a hand-anchored authored accessory so a prop
+      // session can hide it while a prop occupies that hand (restored on release).
+      if (handAccOut && (prim.anchor === 'handL' || prim.anchor === 'wristL')) handAccOut.push({ mesh, hand: 'L' });
+      else if (handAccOut && (prim.anchor === 'handR' || prim.anchor === 'wristR')) handAccOut.push({ mesh, hand: 'R' });
+      return mesh;
     }
   }
 
@@ -13502,8 +14130,7 @@ export class ThreeDRenderer {
   // Called every frame from updateTargets for BOTH rig kinds. Phase is
   // ACCUMULATED per prim (`t += dt·speed`) so it never pops when the flap speed
   // doubles on walk transitions; zero per-frame allocation (mutates in place).
-  private _advanceAnimPrims(h: Humanoid, dt: number, walking: boolean): void {
-    const prims = h.animPrims;
+  private _advanceAnimPrims(prims: AnimPrim[] | undefined, dt: number, walking: boolean): void {
     if (!prims) return;
     for (const ap of prims) {
       // Flap beats twice as fast while the rig walks (flying feel); other
@@ -13540,8 +14167,7 @@ export class ThreeDRenderer {
   // activity poses (the arm poses move both hands; the prop tracks). Position is
   // left at the anchor hand (the prim's grip point); only the orientation
   // changes. Zero allocation: module-scope scratch vectors + quaternions.
-  private _advanceTwoHandProps(h: Humanoid): void {
-    const props = h.twoHandProps;
+  private _advanceTwoHandProps(props: { mesh: THREE.Object3D; otherHand: THREE.Object3D }[] | undefined): void {
     if (!props) return;
     for (const tp of props) {
       const anchorHand = tp.mesh.parent;
@@ -13561,6 +14187,205 @@ export class ThreeDRenderer {
       _thpQuat.setFromUnitVectors(_THP_UP, _thpDir);
       tp.mesh.quaternion.copy(_thpQuat);
     }
+  }
+
+  // ── Shared-prop sessions (build / hide-authored / dispose) ───────────────────
+  // Equip a prop onto a live rig: build its primitive meshes against the rig's
+  // stored anchor context, hide any authored accessory on the grip hand(s), and
+  // arm the session. `timeBucket` picks the drink_cup morning-mug variant. No
+  // scene-object pool / claim system — each rig builds its OWN meshes.
+  private _startPropSession(
+    h: Humanoid, propKind: string, goalX: number | null, goalY: number | null,
+    dur: number, timeBucket?: import('./time-of-day.js').TimeBucket,
+  ): void {
+    const def = PROP_DEFS[propKind];
+    const bctx = h.propBuildCtx;
+    if (!def || !bctx || h.propKind) return;   // unknown / no ctx / already holding
+    // Resolve the primitive set (per-prop build-time variants).
+    let prims = def.primitives;
+    if (propKind === 'drink_cup' && timeBucket === 'morning') prims = DRINK_MUG_PRIMS;
+    if (propKind === 'fetch_toy') {
+      const keys = Object.keys(FETCH_SKINS);
+      prims = FETCH_SKINS[keys[(Math.random() * keys.length) | 0]];
+    }
+    const meshes: THREE.Object3D[] = [];
+    const animPrims: AnimPrim[] = [];
+    const twoHand: { mesh: THREE.Object3D; otherHand: THREE.Object3D }[] = [];
+    const grips = new Set<'L' | 'R'>();
+    for (const prim of prims) {
+      const mesh = this._buildPrimitiveMesh(prim, bctx, animPrims, twoHand);
+      // A literal-hex prop mesh OWNS its material (must be disposed at release); a
+      // 'tint'/'skin'/'body'/'dark'/'accent' mesh SHARES the rig material — never dispose.
+      mesh.userData.propOwnMaterial = typeof prim.color === 'number';
+      mesh.userData.outlineSkip = mesh.userData.outlineSkip ?? true;   // props skip inverted-hull shells
+      meshes.push(mesh);
+      if (prim.anchor === 'handL' || prim.anchor === 'wristL') grips.add('L');
+      else if (prim.anchor === 'handR' || prim.anchor === 'wristR') grips.add('R');
+    }
+    // Hide authored accessories on the grip hand(s) for the session.
+    const hidden: THREE.Object3D[] = [];
+    for (const ha of h.handAccessories ?? []) {
+      if (grips.has(ha.hand)) { ha.mesh.visible = false; hidden.push(ha.mesh); }
+    }
+    h.propKind = propKind;
+    h.propCls = def.cls;
+    h.propMeshes = meshes;
+    h.propAnimPrims = animPrims;
+    h.propTwoHand = twoHand;
+    h.propHiddenAccessories = hidden;
+    h.propT = 0;
+    h.propPhase = 0;
+    h.propDur = dur;
+    h.propGoalX = goalX;
+    h.propGoalY = goalY;
+    h.lastPropKind = propKind;
+  }
+
+  // Release the active prop session: dispose owned meshes, restore hidden
+  // accessories, reset session fields. Mirrors _disposeHumanoid's guarded idiom.
+  private _endPropSession(h: Humanoid): void {
+    for (const m of h.propMeshes ?? []) {
+      m.parent?.remove(m);
+      const mesh = m as THREE.Mesh;
+      mesh.geometry?.dispose();
+      if (m.userData.propOwnMaterial) {
+        const mm = mesh.material as THREE.Material | THREE.Material[] | undefined;
+        if (Array.isArray(mm)) mm.forEach(x => x.dispose()); else mm?.dispose();
+      }
+    }
+    for (const m of h.propHiddenAccessories ?? []) m.visible = true;
+    h.propMeshes = [];
+    h.propAnimPrims = [];
+    h.propTwoHand = [];
+    h.propHiddenAccessories = [];
+    h.propKind = null;
+    h.propCls = 0;
+    h.propT = 0;
+    h.propDur = 0;
+    h.propGoalX = null;
+    h.propGoalY = null;
+  }
+
+  // Outdoors = outside every closed wall loop (inverse of the roomer interior
+  // containment). With no loops we can't tell → treat as indoors (no phantom
+  // umbrellas on a wall-less test floor).
+  private _outdoors(wx: number, wy: number): boolean {
+    if (!this._wallLoops.length) return false;
+    return !this._wallLoops.some(lp => pip(wx, wy, lp));
+  }
+
+  // Does the rig's current room have a BOUND TV that is ON? Reuses the danceRoom /
+  // watch_tv machinery (raw target position → room loop → _tvsByRoom + entityOn).
+  private _roomHasOnTv(wx: number, wy: number): boolean {
+    for (const rz of this._roomZones) {
+      if (!pip(wx, wy, rz.loop)) continue;
+      const tvs = this._tvsByRoom[rz.roomId];
+      if (tvs) for (const tv of tvs) if (tv.hasEntity && this._entityOnFrame[tv.furnitureId]) return true;
+      return false;
+    }
+    return false;
+  }
+
+  // Class 3 umbrella (a STATE, not a task) — wanted when an eligible rig is
+  // outdoors while a rain-family condition holds. Applies to ALL rigs (real +
+  // synthetic) per the pinned orchestrator delta: it's a passive weather garment,
+  // like a costume swap, not a fabricated action. Eligibility still gates it.
+  private _wantUmbrella(h: Humanoid, t: TargetWorld): boolean {
+    if (!propEligible(h, PROP_DEFS.umbrella)) return false;
+    const cond = this._propWeatherCondition;
+    if (!cond || !RAIN_FAMILY.has(cond)) return false;
+    return this._outdoors(t.x, t.y);
+  }
+
+  // ── Shared-prop trigger driver (per rig, per frame) ─────────────────────────
+  // Advances an active session (interrupt / timeout / condition), then — if free
+  // — evaluates the start conditions for Classes 2/3/4. Class 1 (goal-driven
+  // chores) starts from _aiPickGoal + the arrival branch instead. `t.x/t.y` is the
+  // RAW target position (anti-feedback), like every other trigger in updateTargets.
+  private _updatePropTriggers(h: Humanoid, t: TargetWorld, dt: number, rawSpeedMs: number): void {
+    const propsOn = this._avatarPropsOn;
+    const synthetic = !!(t.ai || t.roam);
+
+    // ── Advance / release an active session ──
+    if (h.propKind) {
+      h.propT = (h.propT ?? 0) + dt;
+      h.propPhase = (h.propPhase ?? 0) + dt;
+      const cls = h.propCls ?? 0;
+      // Interrupts shared by all classes: feature off, or an activity / privacy /
+      // lie blend engaging (same interrupt idiom as the idle-fidget block).
+      const interrupted = !propsOn || h.act > 0.1 || h.privacy > 0.3 || h.lie > 0.5;
+      if (cls === 3) {
+        if (interrupted || !this._wantUmbrella(h, t)) this._endPropSession(h);
+        return;
+      }
+      // Class 2/4 (ambient, fires-in-place) also interrupt if the rig walks off;
+      // Class 1 (chore) is expected to walk its short repick legs, so no walk-off.
+      const walkedOff = (cls === 2 || cls === 4) && rawSpeedMs > 0.5;
+      if (interrupted || walkedOff || h.propT >= (h.propDur ?? 0)) this._endPropSession(h);
+      return;
+    }
+
+    if (!propsOn) return;
+
+    // ── Class 3 umbrella — ALL rigs (real + synthetic). Passive weather equip. ──
+    if (this._wantUmbrella(h, t)) { this._startPropSession(h, 'umbrella', null, null, Infinity); return; }
+
+    // Every remaining class is SYNTHETIC-only (ai / roam) — the avatar-device-
+    // interaction precedent ("real people mirror reality, not fiction").
+    if (!synthetic) return;
+
+    const ai = this._aiState[t.key];
+    const now = performance.now() / 1000;
+    if (ai && now < (ai.nextPropAt ?? 0)) return;   // per-rig cooldown
+
+    const rawIdle = rawSpeedMs < 0.15 && h.dwell > 2;
+    const idleStanding = rawIdle && h.sit < 0.1 && h.act < 0.1 && h.lie < 0.1;
+    const idleSeated = h.sit > 0.9 && h.act < 0.1 && h.lie < 0.1 && rawSpeedMs < 0.15 && h.dwell > 2;
+
+    // ── Class 4 quad carry (fetch_toy) — idle-driven, no location. ──
+    if (h.quad) {
+      const quadIdle = h.sit < 0.1 && h.lie < 0.1 && h.dwell > 1;
+      if (quadIdle && propEligible(h, PROP_DEFS.fetch_toy)
+          && now - (this._propTypeCooldownAt.fetch_toy ?? -1e9) > 90
+          && Math.random() < dt / 55) {
+        this._beginAmbientProp(h, 'fetch_toy', ai, now);
+      }
+      return;
+    }
+
+    // ── Class 2 idle ambient props — mutually exclusive with the fidget block. ──
+    if (!(idleStanding || idleSeated)) return;
+    // A low per-frame roll (mean ~45 s) picks a session; frame-rate independent.
+    if (Math.random() > dt / 45) return;
+    const evening = this._interactBucket === 'evening' || this._interactBucket === 'night' || this._interactBucket === 'late_night';
+    const cands: string[] = [];
+    for (const id of ['plate_of_food', 'ice_cream_cone', 'drink_cup', 'popcorn_bucket', 'book']) {
+      const def = PROP_DEFS[id];
+      if (!propEligible(h, def)) continue;
+      if (now - (this._propTypeCooldownAt[id] ?? -1e9) < 90) continue;   // per-type cooldown
+      if (id === h.lastPropKind) continue;                               // no immediate repeat
+      if (id === 'popcorn_bucket') {
+        // Hard-gated: only seated in a room whose bound TV is ON.
+        if (!(idleSeated && this._roomHasOnTv(t.x, t.y))) continue;
+      }
+      // plate / ice_cream / drink / book: any idle (standing OR seated) qualifies.
+      cands.push(id);
+      if (id === 'book' && evening) cands.push('book');   // weighted up in the evening
+    }
+    if (!cands.length) return;
+    this._beginAmbientProp(h, cands[(Math.random() * cands.length) | 0], ai, now);
+  }
+
+  // Start a Class 2/4 ambient prop session (random duration) + arm cooldowns.
+  private _beginAmbientProp(h: Humanoid, id: string, ai: AiState | undefined, now: number): void {
+    const def = PROP_DEFS[id];
+    if (!def) return;
+    const [lo, hi] = def.sessionDurS;
+    const dur = lo + Math.random() * (hi - lo);
+    this._startPropSession(h, id, null, null, dur, this._interactBucket);
+    if (!h.propKind) return;   // build failed (no ctx) — don't arm cooldowns
+    this._propTypeCooldownAt[id] = now;
+    if (ai) ai.nextPropAt = now + 45;   // per-rig cooldown
   }
 
   // ── Torso decal planes (rig-gap batch) ──────────────────────────────────────
@@ -13916,10 +14741,14 @@ export class ThreeDRenderer {
     // Declarative accessories (horns, mane, wings, saddle — pack species). Added
     // BEFORE the outline pass so they get cartoon shells too.
     const animPrims: AnimPrim[] = [];
-    this._addDeclarativeAccessories(def, root, {
+    // Prop-equip build context (shared-props): quads carry props in the mouth
+    // (qhead anchor) — keep the live head group + metrics for a fetch-toy session.
+    const propBuildCtx: PropBuildCtx = {
+      root,
       color, sk, tint: bodyMat, skin: bodyMat, bodyMat, dark,
       quadHead: headG, qBodyY: bodyY, qBodyH: BODY_H, qFrontZ: frontZ, qRearZ: rearZ, qHeadR: HEAD_R,
-    }, animPrims);
+    };
+    this._addDeclarativeAccessories(def, propBuildCtx, animPrims);
 
     // Deterministic body pattern (Phase 4a): proud stripes / spots / dapples on
     // the horizontal torso box.
@@ -13959,6 +14788,7 @@ export class ThreeDRenderer {
       quadHead: headG,
       quadEars: ears,
       animPrims: animPrims.length ? animPrims : undefined,
+      propBuildCtx, noProps: def.noProps === true,
       gait: 'walk',
       earAnim: qf.earAnimate ?? 'flick',
       look: null, lookWant: null, lookHoldT: 0,   // quads never swap looks
@@ -14056,9 +14886,12 @@ export class ThreeDRenderer {
     // Head bob/nod while trotting, gentle look-around while idle; curl tucks the
     // nose down.
     if (h.quadHead) {
-      const nod = walking
+      // Shared-props Class 4: a mouth-carried fetch toy boosts the head-bob
+      // amplitude ("proud carrying") — reuses this channel, no new joint.
+      const carry = h.propKind ? 1.9 : 1;
+      const nod = (walking
         ? Math.sin(h.phase * 2) * 0.05 * ampNorm
-        : Math.sin(now * 1.2 + h.idleOffset) * 0.03 * stillness;
+        : Math.sin(now * 1.2 + h.idleOffset) * 0.03 * stillness) * carry;
       h.quadHead.rotation.x = nod + curl * 0.7 + haunch * 0.05;
       h.quadHead.rotation.y = Math.sin(now * 0.5 + h.idleOffset) * 0.08 * stillness * (1 - settle);
     }
@@ -14573,13 +15406,19 @@ export class ThreeDRenderer {
     }
     const animPrims: AnimPrim[] = [];
     const twoHandProps: { mesh: THREE.Object3D; otherHand: THREE.Object3D }[] = [];
-    this._addDeclarativeAccessories(def, root, {
+    const handAccessories: { mesh: THREE.Object3D; hand: 'L' | 'R' }[] = [];
+    // Prop-equip build context (shared-props): the LIVE anchor groups + material
+    // refs + metrics, kept on the rig so a runtime prop session can build meshes
+    // against the same anchors the initial accessories used.
+    const propBuildCtx: PropBuildCtx = {
+      root,
       color, sk, tint: accent, skin, bodyMat, dark,
       HEAD_R, headY, torsoY, hipY, TORSO_D, handL, handR,
       elbowL: leftArm.elbow, elbowR: rightArm.elbow,
       kneeL: leftLeg?.knee, kneeR: rightLeg?.knee, legLowerLen: LEG_LOWER_LEN,
       shoulderY, shoulderX: TORSO_W / 2 + ARM_UPPER_R * 0.7, neckY: torsoY + TORSO_H / 2,
-    }, animPrims, twoHandProps);
+    };
+    this._addDeclarativeAccessories(def, propBuildCtx, animPrims, twoHandProps, handAccessories);
 
     // Deterministic torso pattern (Phase 4a): proud stripes / spots / dapples.
     if (spec.pattern) {
@@ -14636,6 +15475,8 @@ export class ThreeDRenderer {
       hover, hoverY: spec.hover ?? 0, sessile, gown,
       animPrims: animPrims.length ? animPrims : undefined,
       twoHandProps: twoHandProps.length ? twoHandProps : undefined,
+      handAccessories: handAccessories.length ? handAccessories : undefined,
+      propBuildCtx, noProps: def.noProps === true,
       gait: def.humanoid?.gait ?? 'walk',
       earAnim: 'flick',
       look, lookWant: look, lookHoldT: 0,
@@ -14818,6 +15659,10 @@ export class ThreeDRenderer {
   }
 
   private _disposeHumanoid(h: Humanoid): void {
+    // Shared-props leak guard: a rig despawning mid-session must free its prop
+    // meshes / owned materials first (the traverse below would dispose geometry
+    // but not restore hidden accessories or reset session state on a re-use).
+    if (h.propKind) this._endPropSession(h);
     h.group.traverse(obj => {
       if ((obj as THREE.Mesh).isMesh) {
         const m = obj as THREE.Mesh;

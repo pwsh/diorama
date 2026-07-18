@@ -1076,6 +1076,47 @@ Rigs are persistent across frames (no rebuild churn). Cleaned up when a target d
 
 **Quadruped rigs (pets)**: avatar kinds `cat` / `dog` build a **separate** rig via `_buildQuadruped` (horizontal torso, 4 two-segment legs, head with ears + snout, 2-segment tail; cat ≈ 58% of the dog, dog ≈ beagle ~520 mm shoulder height). Body-forward is local **−Z** like humanoids, so the shared facing/nav/carrot/spring, scale/despawn-fade, blob shadow, outline-shell, and plumbob (scaled ~0.7×) machinery is reused unchanged. A `quad` flag on the `Humanoid` (the 4 leg pivots alias the humanoid joint fields to satisfy the interface) switches the per-frame pose to `_applyQuadPose`: a **trot** (diagonal leg pairs antiphase, stride-matched amp off `h.vx/vz`) + tail sway + head bob + idle ear-flick; **sit** (haunches down, front legs straight) and **curl/lie** (all legs tucked) blends driven by the SAME `h.sit` / `h.lie` triggers as humanoids — soft lounge SitSpots (`SitSpot.soft`: sofa/chaise/ottoman/bed) route the sit blend into the curl pose so a pet curls up rather than sitting upright. Pets NEVER trigger privacy blur, standing activity anchors, or thought bubbles (all gated on `!h.quad`). `cat`/`dog` (and every `pet: true` pack member) are valid selectable avatar ids but kept OUT of the random-human fallback pool (see "Avatar packs"). A `DioramaPerson` with `isPet` and no explicit `avatarKind` renders as `cat` (three-view BLE-target default). Test page `test-pages/pet-test.html`.
 
+### Sinks v2 (basins, running water, fill/drain)
+Five sink kinds (`isSinkKind`, geometry.ts): `sink` (compact vanity),
+`sink_vanity` (wide), `pedestal_sink`, `kitchen_sink` (double-bowl, stays
+`cat:'appliance'`, `surface:true`, NOT mountable — it builds its own cabinet),
+`utility_sink` (deep tub). All: open recessed bowl (floor well below rim,
+coincident-face-safe), faucet + spout, and WATER — a stream mesh + a fill plane
+that eases up (~8 s) while RUNNING and drains (~6 s) when off. Running =
+`effectiveState` on (bound switch/binary_sensor OR unbound `localState` —
+sinks are click-tagged `'media'` so clicking toggles; dblclick binds) OR a rig
+engaged in `wash_hands` at the sink (appliance-door proximity idiom, raw
+positions). Registered in `_sinks` (rebuilt per `updateFloor`); the per-fixture
+fill blend `_sinkFill` survives `_keyFloor` rebuilds (plant-droop idiom);
+`_advanceSinks` per frame, zero-alloc; kitchen_sink registers two water rigs.
+Run-state folds into three-view's appliance hash via `isSinkKind`. 2D: blue
+basin tint ∝ fill + flow ticks (entity/localState only — the wash-hands run is
+3D-side). Test `sink-test.html` (48/48).
+
+### Shared avatar props (chores, snacks, umbrella, fetch)
+Research `docs/research/shared-props.md` (+ one pinned delta below).
+`PROP_DEFS` (three-renderer): 13 props — vacuum_cleaner, broom, dish_towel,
+window_squeegee, watering_can, snow_shovel, umbrella, plate_of_food,
+ice_cream_cone, drink_cup, popcorn_bucket, book, fetch_toy. Eligibility
+`propEligible`: tier `'hands'` (every non-sessile non-quad humanoid INCLUDING
+`hover` rigs) / `'quad'` (fetch_toy only, mouth-carried at `qhead`) / none
+(sessile, `AvatarDef.noProps`). Four trigger classes: (1) chore GOAL sessions
+(~1/10 `_aiPickGoal` branch, cooldowns, session persists across wander repicks
+with the held pose), (2) idle ambient snacks/book (new `idleSeated` gate;
+mutually exclusive with fidgets), (3) **umbrella — ALL rigs incl. radar/BLE/cam
+(pinned delta: passive weather garment like costumes; checked BEFORE the
+synthetic gate)** when outdoors + rainy, (4) quad carry. Classes 1/2/4 are
+synthetic-only (`ai`/`roam`). Prop-swap: authored HAND accessories (tracked via
+`handAccessories`, declarative pipeline only — legacy imperative hand props are
+a known v1 gap) hide during a session, restore after; per-session meshes build
+via the extracted `_buildPrimitiveMesh` (shared with `_addDeclarativeAccessories`)
+and dispose sparkle-style (hex materials owned; `'tint'`/shared never disposed).
+Gate: `Store.avatarProps` (absent = ON, in `_loadFromHa`; Settings ▸ Display
+"Avatars use props") → `ActivityContext.props`. Pose overrides compose via the
+fidget-envelope idiom (`PropPoseDelta` incl. yaw); `_advanceAnimPrims`/
+`_advanceTwoHandProps` take array params now (prop prims ride the same
+machinery). Test `props-test.html` (63/63).
+
 ### Rooms
 `Floor.rooms: Room[]` (`{id, name, anchor}`, persisted via `repairFloor`/`defaultFloor` backfill of `[]`). The anchor is a world-mm point; `resolveRoomForPoint(rooms, loops, x, y)` (geometry.ts) maps it to whichever **live closed wall loop** (`closedWallLoops`) contains it, so room identity survives wall edits. `resolveRoomForPointFuzzy(rooms, loops, x, y, probeMm = 250)` is the boundary-tolerant variant: it tries the exact point, then probes a ring of offsets (order: +y, -y, +x, -x, then the four diagonals) and returns the first room hit — needed because doors, windows, and flush wall-mounted fixtures (switches, fireplaces) sit exactly ON a wall line, which `pointInPolygon` excludes, so an exact resolve would drop them into "No room". The sidebar `_groupByRoom` bucketing uses the **fuzzy** resolver for all item kinds; a boundary item touching two rooms goes to whichever probe lands first (deterministic, acceptable). Created via the sidebar "Rooms" section: **+ Add room** then `placingRoomId` arms a click-to-anchor on the 2D canvas — the room is created **unnamed** (no prompt); `roomLabel(rm)` (geometry.ts) supplies an italic/dimmer "Unnamed room" placeholder until the sidebar input names it, and an anchor outside every loop draws an amber "not enclosed by walls" marker at the anchor in 2D. Labels render centered per loop in 2D and as a `THREE.Sprite` in 3D, both gated by the `labels` layer. Room names feed the activity + bubble systems — a name containing the substring **`kitchen`** (case-insensitive) gates the snack/coffee bubbles, and the seated-person's room scopes TV watching.
 
@@ -1124,7 +1165,7 @@ reference; keep it updated when the schema grows.
   irremovable default). The other 23 legacy kinds live in the 9 `base-*` packs
   (builtin, default loaded+active → out-of-the-box parity with the pre-split
   app: same 24 avatars, same 22-humanoid random pool). **Franchise packs**
-  (`franchise: true`, 26 packs incl. fallout-tv/sesame-street/wall-e) default UNLOADED — opt-in novelty.
+  (`franchise: true`, 52 packs incl. fallout-tv/sesame-street/wall-e) default UNLOADED — opt-in novelty.
 - **Random/stranger fallback pool** = active humanoid non-pet members of
   builtin NON-franchise packs (franchise members never surprise an
   unidentified person); degrades to `['adult']`. Sensor/motion `avatarKinds`

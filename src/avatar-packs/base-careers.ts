@@ -6,7 +6,7 @@ const CHARCOAL = 0x2c2e34, NEARBLACK = 0x161619, PALE = 0xe7c6a4;
 const GOLD = 0xcaa53a, ROBE = 0x7b718f;
 
 const pack: AvatarPackDef = {
-  id: 'base-careers', version: 3, label: 'Careers', path: ['Base', 'Careers'], builtin: true,
+  id: 'base-careers', version: 4, label: 'Careers', path: ['Base', 'Careers'], builtin: true,
   avatars: [
     { id: 'professional', label: 'Professional', rig: 'humanoid', legacyAccessories: 'professional',
       humanoid: { body: CHARCOAL, shoe: 0x141416, emI: 0.20 }, bubbles: ['📊', '☕'] },
@@ -22,7 +22,14 @@ const pack: AvatarPackDef = {
       humanoid: { shoe: 0x5a3d28, emI: 0.22, decals: [{ kind: 'print', print: 'check', color: 0x8a3b2e, anchor: 'chest' }] },
       bubbles: ['🌽', '🚜'] },
     { id: 'cowboy', label: 'Cowboy', rig: 'humanoid', legacyAccessories: 'cowboy',
-      humanoid: { shoe: 0x5a3d28, emI: 0.22 }, bubbles: ['🤠', '🐴'] },
+      humanoid: { shoe: 0x5a3d28, emI: 0.22 },
+      // Coiled lasso at the hip (mirrors the Catwoman-whip idiom — a flat cylinder
+      // reads as a coil without needing a curved primitive). Composes with the
+      // imperative cowboy build (hat/bandana/vest).
+      accessories: [
+        { shape: 'cylinder', size: [55, 55, 14], anchor: 'hip', pos: [80, -10, 0], rot: [1.5708, 0, 0], color: 0x9c7a45 }, // coiled lasso
+      ],
+      bubbles: ['🤠', '🐴'] },
     { id: 'athlete', label: 'Athlete', rig: 'humanoid', legacyAccessories: 'athlete',
       // Decals: a jersey number '7' on the BACK + a team emblem star on the CHEST
       // (crisp canvas decal planes — text + glyph — riding proud of the jersey).
@@ -40,7 +47,14 @@ const pack: AvatarPackDef = {
       humanoid: { sk: 1.05, headR: 124, limbR: 0.9, shoe: 0xf2f2f2, earSkip: true },
       personality: { swayMul: 1.35, ampMul: 1.1 }, bubbles: ['📸', '💅'] },
     { id: 'magician', label: 'Magician', rig: 'humanoid', legacyAccessories: 'magician',
-      humanoid: { body: NEARBLACK, shoe: 0x0a0a0c, emI: 0.20 }, bubbles: ['🎩', '✨', '🐇'] },
+      humanoid: { body: NEARBLACK, shoe: 0x0a0a0c, emI: 0.20 },
+      // Wand — black with a white tip; composes with the imperative magician build
+      // (top hat + bowtie).
+      accessories: [
+        { shape: 'cylinder', size: [6, 6, 240], anchor: 'handR', pos: [0, -110, 0], color: 0x141414 },
+        { shape: 'sphere', size: 11, anchor: 'handR', pos: [0, 10, 0], color: 0xf2f2f0 }, // white tip
+      ],
+      bubbles: ['🎩', '✨', '🐇'] },
     { id: 'wise_oracle', label: 'Wise oracle', rig: 'humanoid', legacyAccessories: 'wise_oracle',
       humanoid: { skin: PALE, body: ROBE, shoe: 0x3a3542, emI: 0.15, earSkip: true },
       // Two-handed staff: a long wooden pole gripped by BOTH hands — registered on
@@ -101,6 +115,8 @@ const pack: AvatarPackDef = {
         { shape: 'sphere', size: [126, 96, 126], anchor: 'crown', pos: [0, 90, 0], color: 0xf5f5f2 }, // poof
         { shape: 'box', size: [168, 360, 20], anchor: 'chest', pos: [0, -110, -8], color: 0xe8e6e0 }, // apron
         { shape: 'box', size: [70, 26, 90], anchor: 'neck', pos: [0, -6, -8], color: 'tint' }, // neckerchief
+        { shape: 'cylinder', size: [6, 6, 130], anchor: 'handR', pos: [0, -55, 0], color: 0xd8d8d0 }, // whisk handle
+        { shape: 'sphere', size: [24, 36, 24], anchor: 'handR', pos: [0, 5, 0], color: 0xc8c8c8 }, // wire-loop approx
       ],
       bubbles: ['🍳', '🔪', '🥘'] },
 
@@ -139,6 +155,7 @@ const pack: AvatarPackDef = {
         { shape: 'box', size: [252, 500, 18], anchor: 'back', pos: [0, 0, 8], color: 0xf07a1e }, // vest back
         { shape: 'box', size: [252, 60, 150], anchor: 'hip', pos: [0, 0, 0], color: 0x3a2a20 }, // tool belt
         { shape: 'box', size: [26, 90, 26], anchor: 'hip', pos: [96, -20, -66], color: 0x1a1a1e }, // hammer handle
+        { shape: 'box', size: [62, 26, 26], anchor: 'hip', pos: [96, 28, -66], color: 0x3a3a3e }, // hammer head
       ],
       personality: { bobMul: 1.1 }, bubbles: ['🔨', '🚧', '⚠️'] },
 

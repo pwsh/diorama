@@ -8,7 +8,7 @@ const GERUDO = 0x7a4a2a, VILLAIN = 0x181818, LEAF = 0x4c8c3c;
 const WHITE = 0xf5f2ea, ROCK = 0xa0623a, ZORA = 0x2f7da0, RED = 0xc23030;
 
 const pack: AvatarPackDef = {
-  id: 'zelda', version: 2, label: 'The Legend of Zelda',
+  id: 'zelda', version: 3, label: 'The Legend of Zelda',
   path: ['Video Games', 'The Legend of Zelda'], builtin: true, franchise: true,
   avatars: [
     // Link
@@ -50,10 +50,11 @@ const pack: AvatarPackDef = {
         { shape: 'cone', size: [80, 140, 80], anchor: 'crown', pos: [0, 20, 30], rot: [0.4, 0, 0], color: 0xb33d1e },
         { shape: 'cone', size: [8, 45, 8], anchor: 'face', pos: [-25, -35, -10], rot: [-0.5, 0, 0], color: 0xe8dfc8 },
         { shape: 'cone', size: [8, 45, 8], anchor: 'face', pos: [25, -35, -10], rot: [-0.5, 0, 0], color: 0xe8dfc8 },
-        { shape: 'box', size: [85, 65, 60], anchor: 'shoulderL', color: VILLAIN },
-        { shape: 'box', size: [85, 65, 60], anchor: 'shoulderR', color: VILLAIN },
+        { shape: 'box', size: [320, 64, 66], anchor: 'neck', pos: [0, 6, 0], color: VILLAIN }, // merged shoulder yoke (was two pauldrons — frees a slot for the sword)
         { shape: 'sphere', size: [25, 25, 8], anchor: 'chest', pos: [0, 0, 0], color: GOLD },
-        { shape: 'cape', size: [360, 644, 530], anchor: 'back', pos: [0, -180, 30], rot: [0.12, 0, 0], color: 0x5c1010 },
+        { shape: 'cape', size: [360, 644, 530], anchor: 'back', pos: [0, -180, 30], rot: [0.12, 0, 0], color: 0x5c1010, animate: { kind: 'sway', speed: 0.6, amp: 0.15 } },
+        { shape: 'cylinder', size: [16, 16, 60], anchor: 'handR', pos: [0, 40, 0], color: 0x8a6a2e }, // sword hilt
+        { shape: 'cylinder', size: [10, 10, 480], anchor: 'handR', pos: [0, 340, 0], color: 0xb0b0ac }, // blade
       ],
       personality: { bobMul: 0.5, swayMul: 0.3, cadenceMul: 0.6, ampMul: 0.9 }, bubbles: ['😈', '🔥', '🐗', '⚡'] },
     // Korok — full leaf mask, no rig face (noFace + eyes:none)

@@ -13,7 +13,7 @@ const vaultDecal = (n: string): AvatarDecal[] =>
   [{ kind: 'text', text: n, anchor: 'back', color: GOLD, bg: VAULT_BLUE }];
 
 const pack: AvatarPackDef = {
-  id: 'fallout-tv', version: 1, label: 'Fallout (TV Series)',
+  id: 'fallout-tv', version: 2, label: 'Fallout (TV Series)',
   path: ['Sci-Fi', 'Fallout'], builtin: true, franchise: true,
   avatars: [
     // Lucy MacLean — Vault 33 protagonist, blonde twin braids.
@@ -73,11 +73,11 @@ const pack: AvatarPackDef = {
         { shape: 'box', size: [70, 60, 14], anchor: 'chest', pos: [0, 10, -8], color: 0x8a6a3a }, // brass chestplate control panel
         { shape: 'sphere', size: 8, anchor: 'chest', pos: [0, 20, -16], color: 0xf0a830, emissive: 0xf0a830, emissiveIntensity: 0.5 }, // amber status light
         { shape: 'box', size: [90, 120, 60], anchor: 'back', pos: [0, 30, 14], color: 0x2a2c30 }, // servo backpack
-        { shape: 'cylinder', size: [14, 14, 44], anchor: 'back', pos: [-40, 90, 20], color: 0x2a2c30 }, // vent L
-        { shape: 'cylinder', size: [14, 14, 44], anchor: 'back', pos: [40, 90, 20], color: 0x2a2c30 }, // vent R
+        { shape: 'box', size: [110, 30, 44], anchor: 'back', pos: [0, 90, 20], color: 0x2a2c30 }, // vent bank (merged L+R to free a slot for the minigun — at 10-prim cap)
         { shape: 'sphere', size: [72, 52, 72], anchor: 'shoulderL', pos: [0, 20, 0], color: 0x4a4d52 }, // pauldron L
         { shape: 'sphere', size: [72, 52, 72], anchor: 'shoulderR', pos: [0, 20, 0], color: 0x4a4d52 }, // pauldron R
         { shape: 'cone', size: [180, 140], anchor: 'hip', pos: [0, -70, 0], color: 0x33363b }, // armored plating skirt
+        { shape: 'cylinder', size: [22, 22, 320], anchor: 'handR', pos: [0, -140, -60], color: 0x2f3236 }, // minigun/laser rifle barrel
       ],
       personality: { bobMul: 0.65, swayMul: 0.4, cadenceMul: 0.7, ampMul: 1.1 },
       bubbles: ['🛡️', '⚡', '🤖', '💪'] },

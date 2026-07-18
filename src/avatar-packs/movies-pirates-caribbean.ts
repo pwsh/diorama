@@ -7,7 +7,7 @@
 import type { AvatarPackDef } from '../avatars.js';
 
 const pack: AvatarPackDef = {
-  id: 'movies-pirates-caribbean', version: 2, label: 'Pirates of the Caribbean',
+  id: 'movies-pirates-caribbean', version: 3, label: 'Pirates of the Caribbean',
   path: ['Pop Culture', 'Movies', 'Pirates of the Caribbean'], builtin: true, franchise: true,
   base: { rig: 'humanoid', humanoid: { emI: 0, hands: 'sphere', headShape: 'sphere', steel: false, eyes: 'almond', footMul: [1, 1, 1] } },
   avatars: [
@@ -52,7 +52,7 @@ const pack: AvatarPackDef = {
         { shape: 'cylinder', size: [16, 16, 6], anchor: 'chest', pos: [0, 0, -12], color: 0x3f6b5a }, // jade necklace
         { shape: 'box', size: [180, 40, 150], anchor: 'hip', pos: [0, 0, 0], color: 0x3a342c }, // cincher
         { shape: 'box', size: [40, 30, 10], anchor: 'hip', pos: [0, 0, -80], color: 0xa8842e }, // brass detail
-        { shape: 'cape', size: [140, 276, 200], anchor: 'back', pos: [0, -135, 12], rot: [0.12, 0, 0], color: 0x2a2420 }, // coat drape
+        { shape: 'cape', size: [140, 276, 200], anchor: 'back', pos: [0, -135, 12], rot: [0.12, 0, 0], color: 0x2a2420, animate: { kind: 'sway', speed: 0.6, amp: 0.15 } }, // coat drape
         { shape: 'box', size: [16, 260, 10], anchor: 'handR', pos: [0, -100, 0], color: 0x8a8a86 }, // cutlass
       ],
       personality: { bobMul: 0.95, swayMul: 0.85, cadenceMul: 1.05, ampMul: 1.0 },
@@ -87,7 +87,7 @@ const pack: AvatarPackDef = {
         { shape: 'cylinder', size: [10, 6, 90], anchor: 'face', pos: [30, -70, 20], rot: [0.4, 0, 0.2], color: 0x4a3a52 }, // tentacle
         { shape: 'box', size: [50, 70, 44], anchor: 'handR', pos: [0, -10, 0], color: 0x8a9098, metalness: 0.6 }, // crab claw
         { shape: 'box', size: [30, 150, 10], anchor: 'hip', pos: [0, 0, -8], rot: [0, 0, 0.5], color: 0x5c1c1c }, // dark red sash
-        { shape: 'cape', size: [150, 300, 225], anchor: 'back', pos: [0, -135, 14], rot: [0.12, 0, 0], color: 0x3a4650 }, // coat-tail
+        { shape: 'cape', size: [150, 300, 225], anchor: 'back', pos: [0, -135, 14], rot: [0.12, 0, 0], color: 0x3a4650, animate: { kind: 'sway', speed: 0.6, amp: 0.15 } }, // coat-tail
       ],
       // approx: writhing tentacle beard = fan of straight cylinders; crab claw = fused box (no pincer shape).
       personality: { bobMul: 0.8, swayMul: 1.1, cadenceMul: 0.75, ampMul: 0.85 },
@@ -103,7 +103,7 @@ const pack: AvatarPackDef = {
         { shape: 'sphere', size: 12, anchor: 'chest', pos: [30, 0, -12], color: 0xa8842e }, // bone bead
         { shape: 'box', size: [180, 18, 150], anchor: 'hip', pos: [0, 0, 0], color: 0x8a6a3a }, // cord belt
         { shape: 'cone', size: [8, 40], anchor: 'hip', pos: [0, -30, -70], rot: [3.14, 0, 0], color: 0x8a6a3a }, // tassel
-        { shape: 'cape', size: [145, 288, 215], anchor: 'back', pos: [0, -135, 12], rot: [0.12, 0, 0], color: 0x4a3c2c }, // overcoat drape
+        { shape: 'cape', size: [145, 288, 215], anchor: 'back', pos: [0, -135, 12], rot: [0.12, 0, 0], color: 0x4a3c2c, animate: { kind: 'sway', speed: 0.6, amp: 0.15 } }, // overcoat drape
         { shape: 'cylinder', size: [8, 8, 4], anchor: 'face', pos: [0, -60, -8], color: 0xc9a83a }, // gold tooth glint
       ],
       personality: { bobMul: 0.85, swayMul: 1.0, cadenceMul: 0.8, ampMul: 0.8 },

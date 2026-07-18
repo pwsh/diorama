@@ -36,7 +36,7 @@ import {
   envKindOf, envColor, envValueText, envHeight, envScale,
   INFO_CARD_MOUNT_DEFAULTS, INFO_CARD_SCALE_MIN, INFO_CARD_SCALE_MAX,
   infoCardText, infoCardMount, infoCardHeight, infoCardW, infoCardH, infoCardScale,
-  furnitureCat, type FurnitureCat, isBinKind, isVehicleKind, isStairsKind,
+  furnitureCat, type FurnitureCat, isBinKind, isSinkKind, isVehicleKind, isStairsKind,
   closedWallLoops, loopContaining, resolveRoomForPointFuzzy, roomLabel,
 } from '../geometry.js';
 import { solveHomography, homographyResidualsMm } from '../homography.js';
@@ -4837,6 +4837,7 @@ export class Sidebar extends LitElement {
     const domain = furnitureKind(piece) === 'tv' ? 'media_player'
       : isBinKind(piece.kind) ? 'binary_sensor'   // bins: 'on'/'full' = full
       : isVehicleKind(piece.kind) ? 'binary_sensor'   // car: presence 'on' = in bay
+      : isSinkKind(piece.kind) ? ['switch', 'binary_sensor']   // sink: faucet on-state
       : 'switch';
     this.dispatchEvent(new CustomEvent('open-entity-picker', {
       bubbles: true, composed: true,

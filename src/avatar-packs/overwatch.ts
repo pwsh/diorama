@@ -4,7 +4,7 @@
 import type { AvatarPackDef } from '../avatars.js';
 
 const pack: AvatarPackDef = {
-  id: 'overwatch', version: 2, label: 'Overwatch',
+  id: 'overwatch', version: 3, label: 'Overwatch',
   path: ['Video Games', 'Overwatch'], builtin: true, franchise: true,
   avatars: [
     // Tracer / Lena Oxton — brown bomber jacket, orange boots, chronal-accelerator glow.
@@ -86,8 +86,8 @@ const pack: AvatarPackDef = {
         { shape: 'box', size: [130, 50, 130], anchor: 'crown', pos: [0, 0, 0], color: 0xf0c93d },
         // approx: no ring/torus primitive — the halo is a glowing flattened disc
         { shape: 'cylinder', size: [40, 40, 8], anchor: 'crown', pos: [0, 60, 0], color: 0xffd700, emissiveIntensity: 0.5 },
-        { shape: 'box', size: [30, 300, 180], anchor: 'back', pos: [-90, 0, 10], rot: [0, -0.3, 0.2], color: 0xf5f0e6 },
-        { shape: 'box', size: [30, 300, 180], anchor: 'back', pos: [90, 0, 10], rot: [0, 0.3, -0.2], color: 0xf5f0e6 },
+        { shape: 'box', size: [30, 300, 180], anchor: 'back', pos: [-90, 0, 10], rot: [0, -0.3, 0.2], color: 0xf5f0e6, animate: { kind: 'flap', speed: 1.4, amp: 0.35 } }, // wing L
+        { shape: 'box', size: [30, 300, 180], anchor: 'back', pos: [90, 0, 10], rot: [0, 0.3, -0.2], color: 0xf5f0e6, animate: { kind: 'flap', speed: 1.4, amp: -0.35 } }, // wing R (mirrored amp)
         { shape: 'box', size: [120, 10, 8], anchor: 'chest', pos: [0, 40, -10], color: 0xd4af37 },
         { shape: 'cylinder', size: [8, 8, 300], anchor: 'handR', pos: [0, 120, 0], color: 0xd4af37 },
         { shape: 'sphere', size: 14, anchor: 'handR', pos: [0, 270, 0], color: 0xffe066, emissiveIntensity: 0.5 }],

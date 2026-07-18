@@ -6,7 +6,7 @@ const MATTE = 0x1a1a1e, PLUSH = 0x8b5e3c, MOUSE = 0x9e9e9e;
 const DOG_C = 0xa1704a, DUCKW = 0xf2f0e6;
 
 const pack: AvatarPackDef = {
-  id: 'base-pop-culture', version: 2, label: 'Pop Culture', path: ['Base', 'Pop Culture'], builtin: true,
+  id: 'base-pop-culture', version: 3, label: 'Pop Culture', path: ['Base', 'Pop Culture'], builtin: true,
   avatars: [
     { id: 'teddy_bear', label: 'Teddy bear', rig: 'humanoid', legacyAccessories: 'teddy_bear',
       humanoid: { sk: 0.9, headR: 140, limbR: 1.3, skin: PLUSH, body: PLUSH, shoe: PLUSH, emI: 0.20, armL: 0.8, legL: 0.8, earSkip: true },
@@ -42,8 +42,8 @@ const pack: AvatarPackDef = {
     { id: 'vampire', label: 'Vampire (cape)', rig: 'humanoid',
       humanoid: { skin: 0xe7d8ce, body: 0x14141a, shoe: 0x0a0a0c, emI: 0.18, gown: true },
       accessories: [
-        { shape: 'cape', size: [380, 1380, 640], anchor: 'back', pos: [0, -470, 10], rot: [0.12, 0, 0], color: 0x0d0d10 }, // cape outer (draped sheet)
-        { shape: 'cape', size: [300, 1300, 520], anchor: 'back', pos: [0, -470, -6], rot: [0.12, 0, 0], color: 0x8a1220 }, // red lining sliver
+        { shape: 'cape', size: [380, 1380, 640], anchor: 'back', pos: [0, -470, 10], rot: [0.12, 0, 0], color: 0x0d0d10, animate: { kind: 'sway', speed: 0.6, amp: 0.15 } }, // cape outer (draped sheet)
+        { shape: 'cape', size: [300, 1300, 520], anchor: 'back', pos: [0, -470, -6], rot: [0.12, 0, 0], color: 0x8a1220, animate: { kind: 'sway', speed: 0.6, amp: 0.15 } }, // red lining sliver
         { shape: 'cone', size: [28, 40], anchor: 'crown', pos: [0, -40, -120], rot: [3.14, 0, 0], color: 0x101013 }, // widow's peak
         { shape: 'cone', size: [8, 22], anchor: 'face', pos: [-20, -60, -10], rot: [3.14, 0, 0], color: 0xf2f2f2 }, // fang L
         { shape: 'cone', size: [8, 22], anchor: 'face', pos: [20, -60, -10], rot: [3.14, 0, 0], color: 0xf2f2f2 }, // fang R
@@ -68,7 +68,7 @@ const pack: AvatarPackDef = {
       accessories: [
         { shape: 'cylinder', size: [170, 170, 14], anchor: 'crown', pos: [0, -6, 0], color: 0x2a1e3e }, // hat brim
         { shape: 'cone', size: [63, 214], anchor: 'crown', pos: [0, 110, 0], rot: [0, 0, 0.12], color: 0x2a1e3e }, // pointed crown
-        { shape: 'cape', size: [340, 1000, 520], anchor: 'back', pos: [0, -420, -10], rot: [0.1, 0, 0], color: 0x3a2a52 }, // robe cape (draped sheet)
+        { shape: 'cape', size: [340, 1000, 520], anchor: 'back', pos: [0, -420, -10], rot: [0.1, 0, 0], color: 0x3a2a52, animate: { kind: 'sway', speed: 0.6, amp: 0.15 } }, // robe cape (draped sheet)
         { shape: 'box', size: [252, 22, 152], anchor: 'hip', pos: [0, 0, 0], color: 'tint' }, // cord belt
         { shape: 'cylinder', size: [16, 16, 520], anchor: 'handR', pos: [0, -100, 0], color: 0x3a2a1a }, // staff
         { shape: 'sphere', size: 40, anchor: 'handR', pos: [0, 160, 0], color: 'tint', emissiveIntensity: 0.5, outlineSkip: true }, // orb
@@ -79,7 +79,7 @@ const pack: AvatarPackDef = {
     { id: 'superhero', label: 'Superhero (cape + emblem)', rig: 'humanoid',
       humanoid: { shoe: 0x1a1a1f, emI: 0.30 },
       accessories: [
-        { shape: 'cape', size: [360, 1200, 620], anchor: 'back', pos: [0, -360, 10], rot: [0.15, 0, 0], color: 'tint' }, // cape (draped sheet)
+        { shape: 'cape', size: [360, 1200, 620], anchor: 'back', pos: [0, -360, 10], rot: [0.15, 0, 0], color: 'tint', animate: { kind: 'sway', speed: 0.6, amp: 0.15 } }, // cape (draped sheet)
         { shape: 'box', size: [77, 77, 12], anchor: 'chest', pos: [0, 40, -8], rot: [0, 0, 0.785], color: 0xcaa53a }, // emblem
         { shape: 'box', size: [245, 40, 143], anchor: 'hip', pos: [0, 0, 0], color: 0xcaa53a }, // belt
         { shape: 'box', size: [113, 28, 10], anchor: 'face', pos: [0, 10, -6], color: 0x141414 }, // domino mask
@@ -155,6 +155,8 @@ const pack: AvatarPackDef = {
         { shape: 'box', size: [260, 96, 154], anchor: 'hip', pos: [0, 80, 0], color: 0x9a1f1f }, // sash
         { shape: 'cylinder', size: [50, 50, 30], anchor: 'handL', pos: [0, 0, 0], color: 0xcaa53a, emissiveIntensity: 0.3 }, // cuff L
         { shape: 'cylinder', size: [50, 50, 30], anchor: 'handR', pos: [0, 0, 0], color: 0xcaa53a, emissiveIntensity: 0.3 }, // cuff R
+        { shape: 'sphere', size: [46, 30, 50], anchor: 'handL', pos: [0, -30, -20], color: 0xd9b23a, metalness: 0.6, roughness: 0.3 }, // magic lamp body
+        { shape: 'cone', size: [14, 46], anchor: 'handL', pos: [-30, -30, -50], rot: [0, 0, 1.2], color: 0xd9b23a }, // lamp spout
       ],
       personality: { bobMul: 0.5, swayMul: 1.3 }, bubbles: ['🧞', '💫', '🪔', '✨'] },
   ],

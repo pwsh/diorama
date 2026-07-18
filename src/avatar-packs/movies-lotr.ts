@@ -6,7 +6,7 @@
 import type { AvatarPackDef } from '../avatars.js';
 
 const pack: AvatarPackDef = {
-  id: 'movies-lotr', version: 3, label: 'The Lord of the Rings',
+  id: 'movies-lotr', version: 4, label: 'The Lord of the Rings',
   path: ['Pop Culture', 'Movies', 'The Lord of the Rings'], builtin: true, franchise: true,
   // Shared un-magical earthbound base: no emissive, sphere hands.
   base: { humanoid: { emI: 0, hands: 'sphere' } },
@@ -18,7 +18,7 @@ const pack: AvatarPackDef = {
       accessories: [
         { shape: 'sphere', size: [70, 44, 70], anchor: 'crown', pos: [0, -8, 4], color: 0x4a3324 },
         { shape: 'cylinder', size: [18, 18, 6], anchor: 'neck', pos: [0, 4, -14], rot: [1.57, 0, 0], color: 0xd8d8c0 },
-        { shape: 'cape', size: [150, 345, 225], anchor: 'back', pos: [0, -160, 14], rot: [0.12, 0, 0], color: 0x4f6b47 },
+        { shape: 'cape', size: [150, 345, 225], anchor: 'back', pos: [0, -160, 14], rot: [0.12, 0, 0], color: 0x4f6b47, animate: { kind: 'sway', speed: 0.6, amp: 0.15 } },
         { shape: 'box', size: [180, 20, 150], anchor: 'hip', pos: [0, 0, 0], color: 0x3a2818 },
       ],
       personality: { bobMul: 1.0, swayMul: 1.1, cadenceMul: 1.15, ampMul: 0.85 },
@@ -32,7 +32,7 @@ const pack: AvatarPackDef = {
         eyes: 'dots', limbR: 1.0, armL: 0.95, legL: 0.85, footMul: [1.3, 0.6, 1.25], legColor: 0x5c4a2e },
       accessories: [
         { shape: 'sphere', size: [70, 44, 70], anchor: 'crown', pos: [0, -8, 4], color: 0xc8a35a },
-        { shape: 'cape', size: [150, 345, 225], anchor: 'back', pos: [0, -160, 14], rot: [0.12, 0, 0], color: 0x8f8f84 },
+        { shape: 'cape', size: [150, 345, 225], anchor: 'back', pos: [0, -160, 14], rot: [0.12, 0, 0], color: 0x8f8f84, animate: { kind: 'sway', speed: 0.6, amp: 0.15 } },
         { shape: 'cylinder', size: [30, 30, 90], anchor: 'back', pos: [0, -60, 30], rot: [1.57, 0, 0], color: 0x6b4a2e },
         { shape: 'cylinder', size: [16, 16, 6], anchor: 'neck', pos: [0, 4, -14], rot: [1.57, 0, 0], color: 0x6b8f4e },
         { shape: 'cylinder', size: [22, 22, 40], anchor: 'handR', pos: [0, -22, 0], color: 0x6b6b68 },
@@ -49,7 +49,7 @@ const pack: AvatarPackDef = {
         { shape: 'cone', size: [80, 180, 80], anchor: 'crown', pos: [0, 70, 6], rot: [0.3, 0, 0], color: 0x6e6e6c },
         { shape: 'box', size: [70, 210, 40], anchor: 'face', pos: [0, -130, 12], color: 0xd8d8d0 },
         { shape: 'box', size: [180, 18, 155], anchor: 'hip', pos: [0, 0, 0], color: 0x5a4a30 },
-        { shape: 'cape', size: [160, 368, 240], anchor: 'back', pos: [0, -155, 14], rot: [0.12, 0, 0], color: 0x5c5c5a },
+        { shape: 'cape', size: [160, 368, 240], anchor: 'back', pos: [0, -155, 14], rot: [0.12, 0, 0], color: 0x5c5c5a, animate: { kind: 'sway', speed: 0.6, amp: 0.15 } },
         { shape: 'cylinder', size: [10, 10, 620], anchor: 'handR', pos: [0, -180, 0], color: 0x4a3826 },
         { shape: 'sphere', size: 26, anchor: 'handR', pos: [0, 130, 0], color: 0xcfd8e0, emissive: 0xcfd8e0, emissiveIntensity: 0.15 },
       ],
@@ -64,7 +64,7 @@ const pack: AvatarPackDef = {
       accessories: [
         { shape: 'sphere', size: [64, 40, 64], anchor: 'crown', pos: [0, -8, 6], color: 0x2b2018 },
         { shape: 'box', size: [70, 30, 8], anchor: 'face', pos: [0, -34, -4], color: 0x2b2018 },
-        { shape: 'cape', size: [160, 368, 240], anchor: 'back', pos: [0, -155, 14], rot: [0.12, 0, 0], color: 0x4a4f3e },
+        { shape: 'cape', size: [160, 368, 240], anchor: 'back', pos: [0, -155, 14], rot: [0.12, 0, 0], color: 0x4a4f3e, animate: { kind: 'sway', speed: 0.6, amp: 0.15 } },
         { shape: 'box', size: [200, 24, 165], anchor: 'hip', pos: [0, 0, 0], color: 0x5c4a30 },
         { shape: 'box', size: [24, 24, 460], anchor: 'handR', pos: [0, -120, 0], color: 0xb0b0ac },
       ],
@@ -130,7 +130,7 @@ const pack: AvatarPackDef = {
         { shape: 'cylinder', size: [34, 34, 6], anchor: 'chest', pos: [0, 20, -10], rot: [1.57, 0, 0], color: 0xd8d8d0 },
         { shape: 'cylinder', size: [14, 14, 150], anchor: 'chest', pos: [0, -20, -12], rot: [0, 0, 0.7], color: 0xe8dcc0 },
         { shape: 'cylinder', size: [16, 16, 20], anchor: 'chest', pos: [40, -44, -12], rot: [0, 0, 0.7], color: 0xb08a3a },
-        { shape: 'cape', size: [160, 368, 240], anchor: 'back', pos: [0, -155, 14], rot: [0.12, 0, 0], color: 0x3a3530 },
+        { shape: 'cape', size: [160, 368, 240], anchor: 'back', pos: [0, -155, 14], rot: [0.12, 0, 0], color: 0x3a3530, animate: { kind: 'sway', speed: 0.6, amp: 0.15 } },
         { shape: 'box', size: [200, 24, 165], anchor: 'hip', pos: [0, 0, 0], color: 0x4a3626 },
         { shape: 'box', size: [70, 70, 30], anchor: 'handR', pos: [0, -20, 0], color: 0x6a6058 },
       ],
@@ -145,7 +145,7 @@ const pack: AvatarPackDef = {
       accessories: [
         { shape: 'sphere', size: [70, 44, 70], anchor: 'crown', pos: [0, -8, 4], color: 0x4a3320 },
         { shape: 'cylinder', size: [18, 18, 6], anchor: 'neck', pos: [0, 4, -14], rot: [1.57, 0, 0], color: 0xc8ccd0 },
-        { shape: 'cape', size: [150, 345, 225], anchor: 'back', pos: [0, -160, 14], rot: [0.12, 0, 0], color: 0x5c6b7a },
+        { shape: 'cape', size: [150, 345, 225], anchor: 'back', pos: [0, -160, 14], rot: [0.12, 0, 0], color: 0x5c6b7a, animate: { kind: 'sway', speed: 0.6, amp: 0.15 } },
         { shape: 'box', size: [180, 20, 150], anchor: 'hip', pos: [0, 0, 0], color: 0x3a2818 },
       ],
       personality: { bobMul: 1.05, swayMul: 1.15, cadenceMul: 1.1, ampMul: 0.9 },
@@ -159,7 +159,7 @@ const pack: AvatarPackDef = {
       accessories: [
         { shape: 'sphere', size: [70, 44, 70], anchor: 'crown', pos: [0, -8, 4], color: 0xc8a35a },
         { shape: 'cylinder', size: [18, 18, 6], anchor: 'neck', pos: [0, 4, -14], rot: [1.57, 0, 0], color: 0xc8ccd0 },
-        { shape: 'cape', size: [150, 345, 225], anchor: 'back', pos: [0, -160, 14], rot: [0.12, 0, 0], color: 0xbfa77e },
+        { shape: 'cape', size: [150, 345, 225], anchor: 'back', pos: [0, -160, 14], rot: [0.12, 0, 0], color: 0xbfa77e, animate: { kind: 'sway', speed: 0.6, amp: 0.15 } },
         { shape: 'box', size: [180, 20, 150], anchor: 'hip', pos: [0, 0, 0], color: 0x3a2818 },
       ],
       personality: { bobMul: 1.1, swayMul: 1.2, cadenceMul: 1.15, ampMul: 0.9 },

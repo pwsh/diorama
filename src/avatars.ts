@@ -263,6 +263,12 @@ export interface AvatarDef {
   // that wants its own pajamas/apron). Absent → universal looks apply only when
   // `universalLookEligible`. See resolveLook / UNIVERSAL_LOOKS.
   variants?: AvatarVariant[];
+  // Shared-prop escape hatch (shared-props feature): when true this avatar NEVER
+  // picks up a prop (vacuum / umbrella / snack / …), regardless of tier. Nothing
+  // in v1 sets it — a knight vacuuming or a robot butler mopping is the point; it
+  // exists so a FUTURE pack author (a tiny fairy, a swarm creature) can opt out
+  // without inventing a bigger rule. Captured onto the built Humanoid.
+  noProps?: true;
   // Sessile / rooted mode (Phase 4a): the rig builds LEGLESS but grounded (root
   // at the floor, no leg joints, no gait) — a plant / coral / totem whose base is
   // a trunk/tuft supplied via normal accessories. In updateTargets the rig stays

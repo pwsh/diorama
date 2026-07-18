@@ -4,7 +4,7 @@
 import type { AvatarPackDef } from '../avatars.js';
 
 const pack: AvatarPackDef = {
-  id: 'halo', version: 2, label: 'Halo',
+  id: 'halo', version: 3, label: 'Halo',
   path: ['Video Games', 'Halo'], builtin: true, franchise: true,
   avatars: [
     // Master Chief (Spartan-117) — bulky olive Mjolnir armor, gold visor (rig renders cyan).
@@ -18,7 +18,9 @@ const pack: AvatarPackDef = {
         { shape: 'box', size: [150, 100, 130], anchor: 'chest', pos: [90, 40, 0], color: 0x46614a },
         { shape: 'box', size: [130, 160, 90], anchor: 'back', pos: [0, 0, 20], color: 0x3f5940 },
         { shape: 'box', size: [60, 50, 30], anchor: 'hip', pos: [70, -10, -8], color: 0x2e3f30 },
-        { shape: 'box', size: [40, 20, 8], anchor: 'chest', pos: [0, 0, -12], color: 'accent', emissiveIntensity: 0.4 }],
+        { shape: 'box', size: [40, 20, 8], anchor: 'chest', pos: [0, 0, -12], color: 'accent', emissiveIntensity: 0.4 },
+        { shape: 'box', size: [24, 26, 300], anchor: 'handR', pos: [0, 10, -80], color: 0x2a2c2e }, // MA5 assault rifle
+        { shape: 'box', size: [16, 16, 40], anchor: 'handR', pos: [0, -30, -30], color: 0x1a1a1a }], // magazine
       personality: { bobMul: 0.8, swayMul: 0.5, cadenceMul: 0.9, ampMul: 1.05 },
       bubbles: ['🎯', '🛡️', '⭐', '💪'] },
     // Cortana — translucent hovering blue AI hologram; body IS the identity tint.
@@ -42,7 +44,7 @@ const pack: AvatarPackDef = {
         { shape: 'box', size: [100, 30, 40], anchor: 'crown', pos: [0, 0, 0], color: 0xa8763f },
         { shape: 'box', size: [50, 50, 15], anchor: 'chest', pos: [0, 10, -10], color: 0x7a5730 },
         { shape: 'sphere', size: 9, anchor: 'chest', pos: [0, 10, -18], color: 'accent', emissiveIntensity: 0.4 },
-        { shape: 'cape', size: [240, 300, 350], anchor: 'back', pos: [0, -70, 12], rot: [0.12, 0, 0], color: 0x5a2020 },
+        { shape: 'cape', size: [240, 300, 350], anchor: 'back', pos: [0, -70, 12], rot: [0.12, 0, 0], color: 0x5a2020, animate: { kind: 'sway', speed: 0.6, amp: 0.15 } },
         { shape: 'cylinder', size: [8, 8, 70], anchor: 'handR', pos: [0, 40, 0], color: 0x161616 },
         { shape: 'cylinder', size: [4, 4, 120], anchor: 'handR', pos: [0, 120, 0], color: 'accent', emissiveIntensity: 0.5 }],
       personality: { bobMul: 0.75, swayMul: 0.65, cadenceMul: 0.95, ampMul: 0.95 },
@@ -58,7 +60,8 @@ const pack: AvatarPackDef = {
         { shape: 'cylinder', size: [7, 7, 3], anchor: 'chest', pos: [6, 0, -14], color: 'accent' },
         { shape: 'box', size: [40, 70, 25], anchor: 'hip', pos: [70, -10, -8], color: 0x2a2622 },
         { shape: 'box', size: [30, 180, 10], anchor: 'back', pos: [-40, 0, 10], rot: [0, 0, 0.4], color: 0x4a4930 },
-        { shape: 'box', size: [30, 180, 10], anchor: 'back', pos: [40, 0, 10], rot: [0, 0, -0.4], color: 0x4a4930 }],
+        { shape: 'box', size: [30, 180, 10], anchor: 'back', pos: [40, 0, 10], rot: [0, 0, -0.4], color: 0x4a4930 },
+        { shape: 'box', size: [22, 24, 250], anchor: 'handR', pos: [0, 10, -70], color: 0x2a2c2e }], // battle rifle
       personality: { bobMul: 1.0, swayMul: 1.1, cadenceMul: 0.95, ampMul: 1.0 },
       bubbles: ['🚬', '🎖️', '💪', '😤'] },
     // Unggoy Grunt (Minor) — short hunched alien, orange harness, methane mask + tank.
@@ -87,7 +90,9 @@ const pack: AvatarPackDef = {
         { shape: 'cone', size: [10, 40], anchor: 'chest', pos: [-110, 100, 0], rot: [0, 0, 0.4], color: 0x1c2228 },
         { shape: 'cone', size: [10, 40], anchor: 'chest', pos: [110, 100, 0], rot: [0, 0, -0.4], color: 0x1c2228 },
         { shape: 'cone', size: [200, 260], anchor: 'back', pos: [0, -40, 12], color: 0x5c4632 },
-        { shape: 'sphere', size: 10, anchor: 'chest', pos: [0, 0, -14], color: 'accent' }],
+        { shape: 'sphere', size: 10, anchor: 'chest', pos: [0, 0, -14], color: 'accent' },
+        { shape: 'cylinder', size: [10, 10, 340], anchor: 'handR', pos: [0, -80, 0], color: 0x3a3f46 }, // gravity hammer haft
+        { shape: 'box', size: [60, 120, 90], anchor: 'handR', pos: [0, 100, 0], color: 0x2e3a48 }], // hammer head
       personality: { bobMul: 0.6, swayMul: 0.9, cadenceMul: 0.7, ampMul: 1.3 },
       bubbles: ['💢', '🦍', '🔨', '😡'] },
     // ODST — sleek matte-black drop-trooper armor, blue-silver visor.
@@ -99,7 +104,8 @@ const pack: AvatarPackDef = {
         { shape: 'box', size: [24, 24, 10], anchor: 'chest', pos: [0, 0, -12], color: 'accent', emissiveIntensity: 0.4 },
         { shape: 'box', size: [30, 160, 10], anchor: 'back', pos: [-35, 0, 10], rot: [0, 0, 0.4], color: 0x3a3a3e },
         { shape: 'box', size: [30, 160, 10], anchor: 'back', pos: [35, 0, 10], rot: [0, 0, -0.4], color: 0x3a3a3e },
-        { shape: 'box', size: [50, 50, 25], anchor: 'hip', pos: [70, -10, -8], color: 0x1a1a1d }],
+        { shape: 'box', size: [50, 50, 25], anchor: 'hip', pos: [70, -10, -8], color: 0x1a1a1d },
+        { shape: 'box', size: [20, 22, 190], anchor: 'handR', pos: [0, 10, -60], color: 0x1a1a1d }], // SMG
       personality: { bobMul: 0.85, swayMul: 0.55, cadenceMul: 1.0, ampMul: 0.95 },
       bubbles: ['🪂', '🔫', '🌃', '🎯'] },
   ],

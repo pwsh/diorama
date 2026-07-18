@@ -7,7 +7,7 @@ import type { AvatarPackDef } from '../avatars.js';
 const YELLOW = 0xf2c744, GOLD = 0xc9a227;
 
 const pack: AvatarPackDef = {
-  id: 'dc-batman', version: 1, label: 'DC: Batman',
+  id: 'dc-batman', version: 2, label: 'DC: Batman',
   path: ['Sci-Fi', 'DC', 'Batman'], builtin: true, franchise: true,
   base: {
     rig: 'humanoid',
@@ -27,7 +27,7 @@ const pack: AvatarPackDef = {
       accessories: [
         { shape: 'cone', size: [12, 80], anchor: 'crown', pos: [-32, 30, 4], rot: [0.25, 0, 0], color: 0x1c2030 },
         { shape: 'cone', size: [12, 80], anchor: 'crown', pos: [32, 30, 4], rot: [0.25, 0, 0], color: 0x1c2030 },
-        { shape: 'cape', size: [420, 620, 520], anchor: 'back', pos: [0, -220, 20], rot: [0.12, 0, 0], color: 0x1a2035 }, // midnight-blue cape
+        { shape: 'cape', size: [420, 620, 520], anchor: 'back', pos: [0, -220, 20], rot: [0.12, 0, 0], color: 0x1a2035, animate: { kind: 'sway', speed: 0.6, amp: 0.15 } }, // midnight-blue cape
         // approx: no bat-silhouette primitive — a yellow oval color-block carries the emblem read (doc Rig gaps #1).
         { shape: 'sphere', size: [45, 35, 3], anchor: 'chest', pos: [0, 20, -8], color: YELLOW },
         { shape: 'box', size: [190, 140, 20], anchor: 'hip', pos: [0, 0, 0], color: 0x1c1e24 }, // black trunks over grey tights
@@ -46,7 +46,7 @@ const pack: AvatarPackDef = {
       accessories: [
         { shape: 'box', size: [110, 42, 110], anchor: 'crown', pos: [0, 0, 0], color: 0x241f1c }, // short dark hair
         { shape: 'box', size: [90, 24, 10], anchor: 'face', pos: [0, 15, -4], color: 0x141414 }, // black domino mask
-        { shape: 'cape', size: [300, 380, 340], anchor: 'back', pos: [0, -120, 20], rot: [0.12, 0, 0], color: 0xf4c430 }, // short yellow cape
+        { shape: 'cape', size: [300, 380, 340], anchor: 'back', pos: [0, -120, 20], rot: [0.12, 0, 0], color: 0xf4c430, animate: { kind: 'sway', speed: 0.6, amp: 0.15 } }, // short yellow cape
         // approx: no letter primitive — a small black disc stands in for the "R" emblem (doc Rig gaps #1).
         { shape: 'sphere', size: [20, 20, 2.5], anchor: 'chest', pos: [0, 20, -8], color: 0x141414 },
         { shape: 'box', size: [170, 26, 12], anchor: 'hip', pos: [0, 0, -4], color: 'tint' }], // belt = tint slot (cape carries yellow)
@@ -63,7 +63,7 @@ const pack: AvatarPackDef = {
         { shape: 'cone', size: [11, 72], anchor: 'crown', pos: [30, 28, 4], rot: [0.25, 0, 0], color: 0x431f66 },
         { shape: 'box', size: [34, 140, 26], anchor: 'head', pos: [-95, -40, 15], color: 0x8b2e1f }, // trailing red hair
         { shape: 'box', size: [34, 140, 26], anchor: 'head', pos: [95, -40, 15], color: 0x8b2e1f },
-        { shape: 'cape', size: [380, 560, 460], anchor: 'back', pos: [0, -190, 20], rot: [0.12, 0, 0], color: 0x431f66 }, // purple cape
+        { shape: 'cape', size: [380, 560, 460], anchor: 'back', pos: [0, -190, 20], rot: [0.12, 0, 0], color: 0x431f66, animate: { kind: 'sway', speed: 0.6, amp: 0.15 } }, // purple cape
         { shape: 'sphere', size: [40, 31, 3], anchor: 'chest', pos: [0, 20, -8], color: YELLOW }, // bat-oval emblem approx
         { shape: 'box', size: [170, 34, 14], anchor: 'hip', pos: [0, 0, -4], color: 'tint' }], // belt = tint slot
       personality: { bobMul: 0.9, swayMul: 0.6, cadenceMul: 1.05, ampMul: 0.9 },
@@ -137,6 +137,7 @@ const pack: AvatarPackDef = {
         { shape: 'sphere', size: [20, 20, 7], anchor: 'face', pos: [-26, 8, -8], color: 0x9fd8f0, emissiveIntensity: 0.15 },
         { shape: 'sphere', size: [20, 20, 7], anchor: 'face', pos: [26, 8, -8], color: 0x9fd8f0, emissiveIntensity: 0.15 },
         { shape: 'box', size: [130, 14, 10], anchor: 'crown', pos: [0, 0, 20], color: 0x181818 }, // goggle strap
+        { shape: 'cylinder', size: [60, 60, 16], anchor: 'hip', pos: [80, -14, -30], rot: [1.5708, 0, 0], color: 0x161616 }, // coiled whip
         { shape: 'box', size: [170, 24, 14], anchor: 'hip', pos: [0, 0, -4], color: 'tint' }], // gold belt = tint slot
       personality: { bobMul: 0.75, swayMul: 0.9, cadenceMul: 1.1, ampMul: 0.85 },
       bubbles: ['🐈‍⬛', '💎', '🥷', '😼'] },
