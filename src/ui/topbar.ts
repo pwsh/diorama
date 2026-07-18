@@ -59,6 +59,9 @@ export class Topbar extends LitElement {
     return html`
       <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;padding:0 12px;height:48px;
                   background:var(--surface2);border-bottom:1px solid var(--border)">
+        <button class="btn-sm" title="Open Home Assistant menu"
+                style="font-size:14px;padding:4px 8px"
+                @click=${this._openHaMenu}>🏠</button>
         ${p.uiMode === 'edit' ? html`
           <button class="btn-sm ${p.sidebarOpen ? 'active' : ''}"
                   title=${p.sidebarOpen ? 'Hide side panel' : 'Show side panel'}
@@ -75,9 +78,6 @@ export class Topbar extends LitElement {
                   ?disabled=${!p.canRedo}
                   @click=${() => { p.redo(); }}>↷</button>
         ` : nothing}
-        <button class="btn-sm" title="Open Home Assistant menu"
-                style="font-size:14px;padding:4px 8px"
-                @click=${this._openHaMenu}>🏠</button>
         <button class="btn-sm"
                 title=${p.view === '2d' ? 'Switch to 3D view' : 'Switch to 2D view'}
                 @click=${() => p.setView(p.view === '2d' ? '3d' : '2d')}>
