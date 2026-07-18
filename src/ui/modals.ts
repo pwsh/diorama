@@ -9,7 +9,7 @@ import { OFFLINE_FLAG_KEY } from '../ha-local.js';
 import type { AvatarDef, AvatarPackDef } from '../avatars.js';
 import { AVATAR_PACK_MANIFEST } from '../avatar-packs/manifest.js';
 import type { Planner } from '../planner.js';
-import type { Floor, HassState, WeatherConfig, WeatherEffectKey, ScenePreset, FloorTexKind, MqttBridgeConfig, BgTextConfig, BgTextMode } from '../types.js';
+import type { Floor, HassState, WeatherConfig, WeatherEffectKey, ScenePreset, FloorTexKind, MqttBridgeConfig, BgTextConfig, BgTextMode, HeatmapConfig } from '../types.js';
 
 // ── Floor settings modal ─────────────────────────────────────────────────
 @customElement('diorama-floor-modal')
@@ -1166,7 +1166,49 @@ export class SettingsDrawer extends LitElement {
           Per-floor flooring / wall overrides live in the sidebar Floors section.
         </div>
       </div>
+      ${this._heatmapBlock()}
     `;
+  }
+
+  // ── Per-room temperature heat-map comfort band ──────────────────────────
+  // Shades each room by the mean of its temperature EnvSensors (+ an in-room
+  // thermostat's current_temperature). Stored in °C regardless of the display
+  // unit; inputs convert for °F when imperial. Enable via Layers ▸ "Temperature
+  // heat-map".
+  private _heatmapBlock() {
+    const p = this.planner;
+    const hm = p.store.heatmap ?? {};
+    const imp = !!p.store.imperial;
+    const loC = hm.comfortLo ?? 20, hiC = hm.comfortHi ?? 24;
+    const toDisp = (c: number) => imp ? Math.round((c * 9 / 5 + 32) * 10) / 10 : c;
+    const fromDisp = (v: number) => imp ? (v - 32) * 5 / 9 : v;
+    const set = (mut: (x: HeatmapConfig) => void) => {
+      const x = (p.store.heatmap ??= {});
+      mut(x); p.save(); p.emitConfig(); this.requestUpdate();
+    };
+    const unit = imp ? '°F' : '°C';
+    const num = (val: number, on: (n: number) => void) => html`
+      <input type="number" step="0.5" .value=${String(toDisp(val))}
+             style="width:60px;text-align:right"
+             @change=${(e: Event) => {
+               const n = parseFloat((e.target as HTMLInputElement).value);
+               if (isFinite(n)) on(fromDisp(n));
+             }}>`;
+    return html`
+      <div style="border-top:1px solid var(--border);margin:10px 0 0;padding-top:8px">
+        <div class="row"><label title="Rooms within this band read as comfortable; below → cool/cold blue, above → warm/hot red">
+          Heat-map comfort band</label></div>
+        <div class="row" style="gap:8px">
+          <label style="flex:0 0 auto">Low (${unit})</label>
+          ${num(loC, n => set(x => { x.comfortLo = n; }))}
+          <label style="flex:0 0 auto">High (${unit})</label>
+          ${num(hiC, n => set(x => { x.comfortHi = n; }))}
+        </div>
+        <div style="font-size:10px;color:var(--text-dim);line-height:1.3;margin:4px 0 0">
+          Per-room temperature heat-map (from placed temperature sensors). Turn it
+          on in the sidebar Layers ▸ "Temperature heat-map".
+        </div>
+      </div>`;
   }
 
   // ── Background text (playful skywriting / banner plane / grass writing) ──

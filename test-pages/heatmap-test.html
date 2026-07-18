@@ -1,0 +1,181 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>HEATMAP …</title>
+  <style>
+    body { margin:0; background:#0d1116; color:#cfd8dc; font:13px/1.4 sans-serif; padding:14px; }
+    h1 { font-size:15px; margin:0 0 10px; }
+    .grid { display:flex; flex-wrap:wrap; gap:10px; }
+    .card { background:#141b22; border:1px solid #26323d; border-radius:6px; padding:8px 10px; width:420px; }
+    .row { display:flex; justify-content:space-between; font-size:11px; gap:8px; }
+    .pass { color:#69f0ae; } .fail { color:#ff5252; }
+    #summary { font-size:14px; font-weight:bold; margin:10px 0; padding:8px 10px; border-radius:5px; }
+    .okbg { background:#12331f; color:#69f0ae; } .badbg { background:#3a1414; color:#ff8a80; }
+    #c { width:1280px; height:820px; position:absolute; left:-4000px; }
+  </style>
+</head>
+<body>
+  <h1>Per-room temperature heat-map — aggregation · color ramp · imperial · 3D patches · key stability</h1>
+  <div id="summary">Running…</div>
+  <div class="grid" id="grid"></div>
+  <div id="c"></div>
+
+  <!-- Harness build (run BEFORE serving), next to this html:
+         npx esbuild src/geometry.ts --bundle --format=esm --outfile=<harness>/geometry.mod.js
+       plus dist/* (the built three-renderer chunk). -->
+  <script type="module">
+    const V = '?v=' + Date.now();
+    const G = await import('./geometry.mod.js' + V);
+    const RM = await import('./assets/three-renderer.js' + V);
+
+    const tests = [];
+    const ok = (name, cond, detail = '') => tests.push({ name, ok: !!cond, detail: String(detail) });
+    const near = (a, b, e = 0.001) => Math.abs(a - b) <= e;
+
+    // ── Scene: a 12000 x 6000 floor split into THREE column rooms by two
+    // vertical dividers at x=4000 and x=8000. Left + Mid carry temperature
+    // sensors; Right carries NONE (so it must render no patch).
+    const FW = 12000, FD = 6000;
+    const walls = [
+      { id: 'top_l', points: [{ x: 0, y: 0 }, { x: 4000, y: 0 }] },
+      { id: 'top_m', points: [{ x: 4000, y: 0 }, { x: 8000, y: 0 }] },
+      { id: 'top_r', points: [{ x: 8000, y: 0 }, { x: 12000, y: 0 }] },
+      { id: 'right', points: [{ x: 12000, y: 0 }, { x: 12000, y: 6000 }] },
+      { id: 'bot_r', points: [{ x: 12000, y: 6000 }, { x: 8000, y: 6000 }] },
+      { id: 'bot_m', points: [{ x: 8000, y: 6000 }, { x: 4000, y: 6000 }] },
+      { id: 'bot_l', points: [{ x: 4000, y: 6000 }, { x: 0, y: 6000 }] },
+      { id: 'left',  points: [{ x: 0, y: 6000 }, { x: 0, y: 0 }] },
+      { id: 'div1',  points: [{ x: 4000, y: 0 }, { x: 4000, y: 6000 }] },
+      { id: 'div2',  points: [{ x: 8000, y: 0 }, { x: 8000, y: 6000 }] },
+    ];
+    const roomL = { id: 'rl', name: 'Left',  anchor: { x: 2000, y: 3000 } };
+    const roomM = { id: 'rm', name: 'Mid',   anchor: { x: 6000, y: 3000 } };
+    const roomR = { id: 'rr', name: 'Right', anchor: { x: 10000, y: 3000 } };
+    const rooms = [roomL, roomM, roomR];
+    const loops = G.closedWallLoops(walls);
+    ok('3 closed loops detected', loops.length === 3, `loops=${loops.length}`);
+
+    // ══ 1. Aggregation (pure geometry.aggregateRoomTemps) ════════════════════
+    // Left: two sensors 18 + 24 → mean 21 (comfort). Mid: one boundary sensor
+    // sitting exactly ON the x=4000 divider → fuzzy-resolves to Mid (probe +x),
+    // value 30 (hot). Right: no samples → omitted.
+    const samples = [
+      { x: 1500, y: 3000, tempC: 18 },   // Left
+      { x: 2500, y: 3000, tempC: 24 },   // Left
+      { x: 4000, y: 3000, tempC: 30 },   // ON the div1 wall (boundary)
+    ];
+    // Boundary sensor resolves via the fuzzy resolver to Mid (not Left).
+    ok('boundary sensor → Mid (fuzzy)',
+       G.resolveRoomForPointFuzzy(rooms, loops, 4000, 3000)?.id === 'rm',
+       `→ ${G.resolveRoomForPointFuzzy(rooms, loops, 4000, 3000)?.name}`);
+
+    const agg = G.aggregateRoomTemps(rooms, loops, samples);
+    const byId = Object.fromEntries(agg.map(rt => [rt.roomId, rt]));
+    ok('only sensor-bearing rooms aggregated (2)', agg.length === 2, `n=${agg.length}`);
+    ok('Left mean = 21 (18+24)/2', byId.rl && near(byId.rl.tempC, 21), byId.rl && byId.rl.tempC);
+    ok('Mid = 30 (boundary sample)', byId.rm && near(byId.rm.tempC, 30), byId.rm && byId.rm.tempC);
+    ok('Right room omitted (no reading)', !byId.rr);
+    ok('aggregated room carries a loop + centroid', byId.rl && byId.rl.loop.length >= 3 && isFinite(byId.rl.cx) && isFinite(byId.rl.cy));
+
+    // ── unit normalization (°F sensor folds into °C) ──
+    ok('tempToCelsius °F → C', near(G.tempToCelsius(68, '°F'), 20));
+    ok('tempToCelsius °C passthrough', near(G.tempToCelsius(21, '°C'), 21));
+    ok('tempToCelsius blank unit = C', near(G.tempToCelsius(21, ''), 21));
+
+    // ══ 2. Color ramp matrix (heatmapColor, band 20–24, spread 3) ════════════
+    const band = (t) => G.heatmapColor(t, 20, 24).band;
+    const col  = (t) => G.heatmapColor(t, 20, 24).color;
+    ok('cold: 15 → cold',    band(15) === 'cold');
+    ok('cool: 18 → cool',    band(18) === 'cool');
+    ok('comfort: 22 → comfort', band(22) === 'comfort');
+    ok('warm: 25 → warm',    band(25) === 'warm');
+    ok('hot: 30 → hot',      band(30) === 'hot');
+    // Band edges.
+    ok('edge lo (20) → comfort', band(20) === 'comfort');
+    ok('edge hi (24) → comfort', band(24) === 'comfort');
+    ok('edge lo-spread (17) → cool', band(17) === 'cool');
+    ok('just below (16.99) → cold', band(16.99) === 'cold');
+    ok('edge hi+spread (27) → warm', band(27) === 'warm');
+    ok('just above (27.01) → hot', band(27.01) === 'hot');
+    ok('non-finite → comfort', band(NaN) === 'comfort');
+    // Colors reuse the shared palette.
+    ok('cool color = vent cool blue', col(18) === '#4dd0ff' && G.HVAC_VENT_COLORS.cool === '#4dd0ff');
+    ok('warm color = amber', col(25) === '#ffb74d');
+    ok('hot color = red', col(30) === '#ef5350');
+    ok('cold color deep blue', col(15) === '#1e5fd0');
+    ok('comfort color soft green', col(22) === '#7ec87e');
+
+    // ══ 3. Imperial label formatting ═════════════════════════════════════════
+    // 2D label = round(imperial ? c*9/5+32 : c). Mirror the canvas-render math.
+    const labelC = (c) => `${Math.round(c)}°C`;
+    const labelF = (c) => `${Math.round(c * 9 / 5 + 32)}°F`;
+    ok('metric label 21 → 21°C', labelC(21) === '21°C');
+    ok('imperial label 21 → 70°F', labelF(21) === '70°F', labelF(21));
+    ok('imperial label 20 → 68°F', labelF(20) === '68°F');
+    ok('imperial label 24 → 75°F', labelF(24) === '75°F', labelF(24));
+
+    // ══ 4. Renderer: 3D patches only for sensor-bearing rooms + layer gate ═══
+    const r = new RM.ThreeDRenderer(document.getElementById('c'));
+    await r.load();
+    const floor = {
+      id: 'f1', name: 'F', w: FW, d: FD, walls,
+      furniture: [], lights: [], switches: [], sensors: [], motionSensors: [],
+      envSensors: [], doors: [], windows: [], bg: null, model3d: null, look3d: null,
+      rooms,
+    };
+    r.updateFloor(floor, { preset: 'day' }, undefined, undefined, () => null);
+    r.updateRoomHeatmap(agg, 20, 24);
+    ok('3D: one patch per sensor-bearing room (2)', r._heatmapGroup.children.length === 2,
+       `children=${r._heatmapGroup.children.length}`);
+    const patches = r._heatmapGroup.children;
+    ok('3D: patches are meshes at y≈5', patches.every(m => m.isMesh && Math.abs(m.position.y - 5) < 0.01));
+    ok('3D: patch geometry is a ShapeGeometry', patches.every(m => m.geometry && m.geometry.type === 'ShapeGeometry'));
+
+    // Layer gate: default (absent) OFF, explicit true on, explicit false off.
+    r.setLayerVisibility({});
+    ok('heatmap layer absent → group hidden', r._heatmapGroup.visible === false);
+    r.setLayerVisibility({ heatmap: true });
+    ok('heatmap layer on → group shown', r._heatmapGroup.visible === true);
+    r.setLayerVisibility({ heatmap: false });
+    ok('heatmap layer off → group hidden', r._heatmapGroup.visible === false);
+
+    // Empty feed (Planner returns [] when the layer is off) clears the group.
+    r.updateRoomHeatmap([], 20, 24);
+    ok('empty feed clears patches', r._heatmapGroup.children.length === 0);
+
+    // ══ 5. Bucketed dirty-key stability (three-view _keyHeatmap formula) ══════
+    // key = `${rev}|${lo}|${hi}|` + rooms.map(rt=>`${roomId}:${round(t*2)/2}`)
+    const keyOf = (rms, lo, hi, rev = 0) =>
+      `${rev}|${lo}|${hi}|` + rms.map(rt => `${rt.roomId}:${Math.round(rt.tempC * 2) / 2}`).join(',');
+    const base   = [{ roomId: 'rl', tempC: 21.0 }];
+    const jitter = [{ roomId: 'rl', tempC: 21.2 }];   // +0.2 within the same 0.5 bucket
+    const shift  = [{ roomId: 'rl', tempC: 21.6 }];   // +0.6 crosses into 21.5
+    ok('0.2° change → SAME key (bucketed)', keyOf(base, 20, 24) === keyOf(jitter, 20, 24),
+       `${keyOf(base, 20, 24)} vs ${keyOf(jitter, 20, 24)}`);
+    ok('0.6° change → DIFFERENT key', keyOf(base, 20, 24) !== keyOf(shift, 20, 24),
+       `${keyOf(base, 20, 24)} vs ${keyOf(shift, 20, 24)}`);
+    ok('comfort-band edit → DIFFERENT key', keyOf(base, 20, 24) !== keyOf(base, 19, 24));
+
+    // ── run + report ─────────────────────────────────────────────────────────
+    const grid = document.getElementById('grid');
+    let pass = 0; const fails = [];
+    for (const t of tests) {
+      if (t.ok) pass++; else fails.push(t.name);
+      const card = document.createElement('div');
+      card.className = 'card';
+      card.innerHTML = `<div class="row">
+        <span>${t.ok ? '<span class=pass>PASS</span>' : '<span class=fail>FAIL</span>'} ${t.name}</span>
+        <span>${t.detail ?? ''}</span></div>`;
+      grid.appendChild(card);
+    }
+    const total = tests.length;
+    const allPass = pass === total;
+    const title = allPass ? `HEATMAP PASS ${pass}/${total}` : `HEATMAP FAIL ${pass}/${total} [${fails.join(',')}]`;
+    document.title = title;
+    const sum = document.getElementById('summary');
+    sum.textContent = title;
+    sum.className = allPass ? 'okbg' : 'badbg';
+  </script>
+</body>
+</html>

@@ -987,6 +987,88 @@ export function hvacActionActive(action: string | null | undefined): boolean {
       || action === 'fan' || action === 'drying' || action === 'defrosting';
 }
 
+// ── Per-room temperature heat-map (derived visual layer) ──────────────────
+// A crude toon-flat diverging ramp anchored on a comfort BAND [comfortLo,
+// comfortHi] (°C). Within the band = comfortable (near-neutral, low-key fill);
+// below it steps cool → cold blue, above it steps warm → hot red. Discrete
+// bands (NOT a smooth gradient) to match the Sims-flat aesthetic — research
+// §4.5 calls for "2–3 color bands, not a smooth gradient" (generalized here to a
+// 5-band comfort model so the settings comfort band + tests read cleanly; see
+// the brief delta). Colors reuse the existing palette: cool = the HVAC vent-cool
+// blue, warm = the env `warn` amber, hot = the env `danger` red.
+export const HEATMAP_COMFORT_LO_DEFAULT = 20;   // °C
+export const HEATMAP_COMFORT_HI_DEFAULT = 24;   // °C
+// How far past the band edge before jumping to the EXTREME band (cold / hot).
+export const HEATMAP_BAND_SPREAD = 3;           // °C
+export type HeatmapBand = 'cold' | 'cool' | 'comfort' | 'warm' | 'hot';
+export const HEATMAP_BAND_COLORS: Record<HeatmapBand, string> = {
+  cold:    '#1e5fd0',  // deep blue
+  cool:    '#4dd0ff',  // light blue (= HVAC_VENT_COLORS.cool)
+  comfort: '#7ec87e',  // soft green (rendered at a lower alpha — "comfortable")
+  warm:    '#ffb74d',  // amber (= env warn)
+  hot:     '#ef5350',  // red (= env danger)
+};
+// Classify a Celsius reading into a heat-map band + its flat toon color.
+export function heatmapColor(
+  tempC: number,
+  comfortLo: number = HEATMAP_COMFORT_LO_DEFAULT,
+  comfortHi: number = HEATMAP_COMFORT_HI_DEFAULT,
+  spread: number = HEATMAP_BAND_SPREAD,
+): { band: HeatmapBand; color: string } {
+  let band: HeatmapBand;
+  if (!isFinite(tempC)) band = 'comfort';
+  else if (tempC < comfortLo - spread) band = 'cold';
+  else if (tempC < comfortLo) band = 'cool';
+  else if (tempC <= comfortHi) band = 'comfort';
+  else if (tempC <= comfortHi + spread) band = 'warm';
+  else band = 'hot';
+  return { band, color: HEATMAP_BAND_COLORS[band] };
+}
+
+// Normalize a raw reading + its HA unit string to Celsius. Accepts '°F'/'F'
+// (and 'fahrenheit'); everything else (°C, K-less bare number, blank) passes
+// through as Celsius. Non-finite → NaN.
+export function tempToCelsius(value: number, unit: string | null | undefined): number {
+  if (!isFinite(value)) return NaN;
+  const u = String(unit ?? '').trim().toLowerCase();
+  if (u === '°f' || u === 'f' || u === 'fahrenheit') return (value - 32) * 5 / 9;
+  return value;
+}
+
+// A placed temperature reading (world mm) in Celsius.
+export interface TempSample { x: number; y: number; tempC: number; }
+// A room's aggregated temperature for the heat-map.
+export interface RoomTemp { roomId: string; loop: Vec2[]; cx: number; cy: number; tempC: number; }
+
+// Aggregate temperature samples into per-room means. Each sample is resolved to
+// its room via the boundary-tolerant fuzzy resolver (a puck sitting on a wall
+// line still counts); the mean of all samples landing in a room is that room's
+// reading. Rooms with ZERO samples are omitted (unknown ≠ cold — no shading, no
+// interpolation in v1). Deterministic: rooms come out in `rooms` order.
+export function aggregateRoomTemps(
+  rooms: Room[], loops: Vec2[][], samples: TempSample[],
+): RoomTemp[] {
+  const acc = new Map<string, { sum: number; n: number }>();
+  for (const s of samples) {
+    if (!isFinite(s.tempC)) continue;
+    const rm = resolveRoomForPointFuzzy(rooms, loops, s.x, s.y);
+    if (!rm) continue;
+    const a = acc.get(rm.id) ?? { sum: 0, n: 0 };
+    a.sum += s.tempC; a.n += 1;
+    acc.set(rm.id, a);
+  }
+  const out: RoomTemp[] = [];
+  for (const rm of rooms) {
+    const a = acc.get(rm.id);
+    if (!a || a.n === 0) continue;
+    const loop = loopContaining(loops, rm.anchor.x, rm.anchor.y);
+    if (!loop || loop.length < 3) continue;
+    const c = centroid(loop);
+    out.push({ roomId: rm.id, loop, cx: c.x, cy: c.y, tempC: a.sum / a.n });
+  }
+  return out;
+}
+
 // Snap a setpoint to the nearest `step` and clamp into [min, max] — the shared
 // thermostat-modal stepper math (extracted so it's unit-testable).
 export function clampSetpoint(v: number, min: number, max: number, step: number): number {

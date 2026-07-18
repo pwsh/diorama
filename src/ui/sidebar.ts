@@ -5115,7 +5115,7 @@ export class Sidebar extends LitElement {
   private _layers2dSection() {
     const p = this.planner;
     const L = p.store.layers2d ?? {};
-    const isOn = (k: keyof Layers2D) => (k === 'activity' || k === 'vacuumMap') ? L[k] === true : L[k] !== false;
+    const isOn = (k: keyof Layers2D) => (k === 'activity' || k === 'vacuumMap' || k === 'heatmap') ? L[k] === true : L[k] !== false;
     const setLayers = (nl: Layers2D | undefined) => {
       p.store.layers2d = nl; p.save(); p.emitConfig();
     };
@@ -5135,6 +5135,7 @@ export class Sidebar extends LitElement {
       { key: 'zones', label: 'Zones & halos' },
       { key: 'ground', label: 'Ground / yard' },
       { key: 'vacuumMap', label: 'Vacuum room map' },
+      { key: 'heatmap', label: 'Temperature heat-map' },
       { key: 'grid', label: '3D grid' },
       { key: 'targets', label: 'Avatars' },
       { key: 'geo', label: 'Geo landmarks' },

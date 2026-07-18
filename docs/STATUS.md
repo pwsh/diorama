@@ -101,6 +101,20 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Per-room temperature heat-map** (2026-07-17; 1 Opus agent; the
+  deferred HVAC §4.5 piece): pure `heatmapColor`/`aggregateRoomTemps`
+  in geometry.ts — mean of temperature EnvSensors fuzzy-resolved into
+  each room's wall loop + bound thermostats' `current_temperature`
+  (only when the fixture sits inside a loop — no whole-house bleed);
+  5-band ramp (cold #1e5fd0 / cool #4dd0ff / faint comfort green /
+  warm #ffb74d / hot #ef5350) around a configurable comfort band
+  (`Store.heatmap {comfortLo, comfortHi}`, default 20–24 °C, °F-aware
+  Settings ▸ Display inputs); 2D loop fills + centroid temp labels,
+  3D translucent patches in `_heatmapGroup` under `_keyHeatmap`
+  (0.5°-bucketed); NEW `Layers2D.heatmap` (default OFF); sample-less
+  rooms render nothing (no interpolation). HEATMAP 41/41; ROOMS +
+  THERMO regressions green.
+
 - **Decals & props + fans + plant droop + background text** (2026-07-17;
   3 parallel Opus agents). **Avatar decals** (`HumanoidFields.decals`,
   cap 2; style decision PINNED: canvas-painted decal PLANES ~8 mm proud

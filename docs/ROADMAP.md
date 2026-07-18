@@ -45,7 +45,10 @@ codebase so this doc stays honest as items land.
 - **Cameras**: wall/ceiling fixture with a translucent FOV frustum +
   periodically refreshed `camera.snapshot` thumbnail badge (M/4);
   live HLS/WebRTC in-scene is L — defer.
-- **Climate / per-room temperature shading**: do NOT assume one `climate`
+- ✅ **Climate / per-room temperature shading** (SHIPPED 2026-07-17 —
+  `Layers2D.heatmap` riding placed temperature EnvSensors + in-room
+  thermostats; hvac_action vent cues shipped with the thermostat
+  fixture): do NOT assume one `climate`
   entity = one room (whole-house is the majority case). Per-room heat-map
   shading should ride placed temperature EnvSensors (works for everyone,
   incl. ecobee remote SmartSensors which are plain sensors); a bound

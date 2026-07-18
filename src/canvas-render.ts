@@ -24,6 +24,7 @@ import {
   ENV_KINDS, envKindOf, envColor, envValueText, envScale,
   infoCardText, infoCardRule, infoCardScale, infoCardMount,
   closedWallLoops, loopContaining, roomLabel,
+  heatmapColor, HEATMAP_COMFORT_LO_DEFAULT, HEATMAP_COMFORT_HI_DEFAULT,
   parseNowPlaying, isMediaPlayerId,
 } from './geometry.js';
 import { compass8 } from './geo.js';
@@ -245,6 +246,10 @@ export function drawAll(ctx: CanvasRenderingContext2D, p: Planner, view: View,
   // Valetudo robot room-map overlay — diagnostic paint, DEFAULT OFF (absent = off,
   // unlike most layers). Drawn as floor paint, under walls / furniture.
   if (L.vacuumMap === true) drawVacuumMaps(ctx, p, view);
+  // Per-room temperature heat-map — DEFAULT OFF (opt-in analysis view). Room
+  // wall-loop fills + a temp label, drawn as floor paint after ground / before
+  // structural. The RAF reads live states so it tracks temperature changes.
+  if (L.heatmap === true) drawHeatmap(ctx, p, view);
   if (on(L.walls)) drawWalls(ctx, p, view);
   if (on(L.labels)) drawRooms(ctx, p, view);
   drawDoors(ctx, p, view);
@@ -609,6 +614,55 @@ function drawActivity(ctx: CanvasRenderingContext2D, p: Planner, view: View): vo
     g.addColorStop(1, hexToRgba(hex, 0));
     ctx.fillStyle = g;
     ctx.beginPath(); ctx.arc(c.x, c.y, r, 0, 2 * Math.PI); ctx.fill();
+  }
+}
+
+// Per-room temperature heat-map (derived visual layer, opt-in). Fills each
+// sensor-bearing room's wall-loop polygon with a low-alpha warm/cool wash from
+// heatmapColor(mean, comfortLo, comfortHi) and prints the aggregated temperature
+// near the room centroid. Rooms with no temperature reading render NOTHING (no
+// interpolation — honest). Reads Planner.roomHeatmap() (live states).
+function drawHeatmap(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
+  const rooms = p.roomHeatmap();
+  if (!rooms.length) return;
+  const dpr = window.devicePixelRatio || 1;
+  const hm = p.store.heatmap ?? {};
+  const lo = hm.comfortLo ?? HEATMAP_COMFORT_LO_DEFAULT;
+  const hi = hm.comfortHi ?? HEATMAP_COMFORT_HI_DEFAULT;
+  const imperial = p.store.imperial;
+  for (const rt of rooms) {
+    const { band, color } = heatmapColor(rt.tempC, lo, hi);
+    // Comfort band reads as "fine" — keep its fill faint; extremes get a
+    // stronger wash so out-of-band rooms stand out.
+    const alpha = band === 'comfort' ? 0.10 : 0.22;
+    ctx.save();
+    ctx.beginPath();
+    const p0 = mmToPx(view, rt.loop[0].x, rt.loop[0].y);
+    ctx.moveTo(p0.x, p0.y);
+    for (let i = 1; i < rt.loop.length; i++) {
+      const pi = mmToPx(view, rt.loop[i].x, rt.loop[i].y);
+      ctx.lineTo(pi.x, pi.y);
+    }
+    ctx.closePath();
+    ctx.fillStyle = hexToRgba(color, alpha);
+    ctx.fill();
+    ctx.restore();
+    // Temperature label near the room centroid (slightly above the room label,
+    // which centers there too — labels ride their own layer, so offset up).
+    const disp = imperial ? rt.tempC * 9 / 5 + 32 : rt.tempC;
+    const txt = `${Math.round(disp)}°${imperial ? 'F' : 'C'}`;
+    const c = mmToPx(view, rt.cx, rt.cy);
+    ctx.save();
+    ctx.font = `bold ${12 * dpr}px sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const w = ctx.measureText(txt).width;
+    ctx.fillStyle = 'rgba(10,14,20,0.55)';
+    const padX = 5 * dpr, padY = 3 * dpr, yOff = -16 * dpr;
+    ctx.fillRect(c.x - w / 2 - padX, c.y + yOff - 8 * dpr - padY, w + padX * 2, 16 * dpr + padY * 2);
+    ctx.fillStyle = color;
+    ctx.fillText(txt, c.x, c.y + yOff);
+    ctx.restore();
   }
 }
 

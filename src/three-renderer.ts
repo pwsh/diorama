@@ -73,7 +73,7 @@ interface RobotRig {
   spin: THREE.Object3D;             // sub-part that spins while working
   blob: THREE.Mesh;
 }
-import { wallCutsForSegment, WINDOW_DEFAULTS, closedWallLoops, wallKind, WALL_KINDS, furnitureLocalToWorld, furnitureWorldToLocal, pointInPolygon as pip, centroid, loopContaining, resolveRoomForPoint, roomLabel, intersectLoopWithRect, polygonArea } from './geometry.js';
+import { wallCutsForSegment, WINDOW_DEFAULTS, closedWallLoops, wallKind, WALL_KINDS, furnitureLocalToWorld, furnitureWorldToLocal, pointInPolygon as pip, centroid, loopContaining, resolveRoomForPoint, roomLabel, intersectLoopWithRect, polygonArea, heatmapColor, type RoomTemp } from './geometry.js';
 import { visibilityToFogDensity, moonPhaseFraction } from './weather.js';
 import { vacMapAffine, vacPixelToWorld, vacSegColor, type VacCal, type VacSegment } from './valetudo-map.js';
 import {
@@ -940,6 +940,7 @@ export class ThreeDRenderer {
   private _camAlertGroup = new THREE.Group();
   private _pzoneGroup = new THREE.Group();       // FP2-style presence-zone patches (build-time, _keyPzones)
   private _groundGroup = new THREE.Group();       // ground / yard covering patches (build-time, _keyGround)
+  private _heatmapGroup = new THREE.Group();       // per-room temperature heat-map patches (build-time, _keyHeatmap)
   private _vacMapGroup = new THREE.Group();        // Valetudo room-map overlay patches (build-time, _keyVacMap)
   // CanvasTextures built for the vac-map overlay — NOT freed by _clearGroup (same
   // as sprite maps); disposed explicitly in _clearVacMap (dispose-count probe below).
@@ -1383,7 +1384,7 @@ export class ThreeDRenderer {
                     this._actionGroup,
                     this._bleGroup, this._alarmGroup, this._thermoGroup, this._safetyGroup,
                     this._robotGroup, this._robotRigGroup, this._cameraGroup, this._projGroup, this._valveGroup, this._plugGroup, this._camAlertGroup, this._pzoneGroup,
-                    this._groundGroup, this._vacMapGroup,
+                    this._groundGroup, this._vacMapGroup, this._heatmapGroup,
                     this._lightGroup, this._switchGroup, this._targetGroup, this._ghostGroup,
                     this._transitGroup,
                     this._gpsGroup, this._weatherGroup, this._skyGroup, this._bgTextGroup, this._pulseGroup, this._nowPlayingGroup);
@@ -1978,7 +1979,7 @@ export class ThreeDRenderer {
       this._floorGroup, this._doorGroup, this._modelGroup, this._zoneGroup, this._haloGroup,
       this._sensorGroup, this._motionGroup, this._infoGroup, this._actionGroup, this._bleGroup, this._alarmGroup, this._thermoGroup,
       this._safetyGroup, this._robotGroup, this._robotRigGroup, this._cameraGroup, this._projGroup, this._valveGroup, this._plugGroup, this._camAlertGroup, this._pzoneGroup,
-      this._groundGroup,
+      this._groundGroup, this._heatmapGroup,
       this._lightGroup, this._switchGroup, this._targetGroup, this._ghostGroup,
       this._pulseGroup, this._nowPlayingGroup, this._bgTextGroup,
     ]) {
@@ -2378,6 +2379,41 @@ export class ThreeDRenderer {
     }
   }
 
+  // Per-room temperature heat-map patches (derived visual layer, opt-in). One
+  // flat translucent ShapeGeometry patch per sensor-bearing room loop at y≈5
+  // (above the floor slab, below furniture blob shadows at y=8), tinted by
+  // heatmapColor(mean, comfortLo, comfortHi) — mirrors the occupancy / ground
+  // patch idiom. Rooms with no reading get NO patch (honest, no interpolation).
+  // Rebuilt under _keyHeatmap in three-view; rides the `heatmap` layer (default
+  // OFF). Points are world-mm, mapped via _w like the ground patches.
+  updateRoomHeatmap(rooms: RoomTemp[], comfortLo: number, comfortHi: number): void {
+    if (!this._scene) return;
+    this._clearGroup(this._heatmapGroup);
+    for (const rt of rooms) {
+      if (rt.loop.length < 3) continue;
+      const { band, color } = heatmapColor(rt.tempC, comfortLo, comfortHi);
+      const shape = new THREE.Shape();
+      for (let i = 0; i < rt.loop.length; i++) {
+        const w = this._w(rt.loop[i].x, rt.loop[i].y, 0);
+        if (i === 0) shape.moveTo(w.x, -w.z); else shape.lineTo(w.x, -w.z);
+      }
+      shape.closePath();
+      const ci = hexToInt(color);
+      // Comfort band reads as "fine" — keep it faint; extremes wash stronger.
+      const isComfort = band === 'comfort';
+      const mat = this._mat({
+        color: ci, side: THREE.DoubleSide, roughness: 0.95, metalness: 0,
+        transparent: true, opacity: isComfort ? 0.13 : 0.25,
+        emissive: ci, emissiveIntensity: isComfort ? 0.10 : 0.22,
+      });
+      const patch = new THREE.Mesh(new THREE.ShapeGeometry(shape), mat);
+      patch.rotation.x = -Math.PI / 2;
+      patch.position.y = 5;
+      patch.userData.outlineSkip = true;
+      this._heatmapGroup.add(patch);
+    }
+  }
+
   // ── Valetudo room-map overlay ───────────────────────────────────────────
   // One translucent textured quad per room segment at y≈6 (above the floor slab,
   // below furniture blob shadows at y=8). The tint (segment color raster) is
@@ -2636,6 +2672,8 @@ export class ThreeDRenderer {
     this._groundGroup.visible = v.ground !== false;
     // Valetudo room-map overlay rides its OWN layer, DEFAULT OFF (diagnostic).
     this._vacMapGroup.visible = v.vacuumMap === true;
+    // Per-room temperature heat-map rides its OWN layer, DEFAULT OFF (opt-in).
+    this._heatmapGroup.visible = v.heatmap === true;
     if (this._grid) this._grid.visible = (v.grid !== false) && !this._bgVisibleNow;
     this._targetGroup.visible = v.targets !== false;
     // Now-playing cards ride the furniture/appliance layers (a media piece can be
@@ -13422,7 +13460,7 @@ export class ThreeDRenderer {
       this._floorGroup, this._doorGroup, this._modelGroup, this._zoneGroup, this._haloGroup,
       this._sensorGroup, this._motionGroup, this._envGroup, this._infoGroup, this._actionGroup, this._bleGroup,
       this._alarmGroup, this._thermoGroup, this._safetyGroup, this._robotGroup, this._robotRigGroup,
-      this._cameraGroup, this._projGroup, this._valveGroup, this._plugGroup, this._camAlertGroup, this._pzoneGroup, this._groundGroup,
+      this._cameraGroup, this._projGroup, this._valveGroup, this._plugGroup, this._camAlertGroup, this._pzoneGroup, this._groundGroup, this._heatmapGroup,
       this._lightGroup, this._switchGroup, this._targetGroup, this._gpsGroup, this._weatherGroup,
       this._skyGroup, this._bgTextGroup, this._pulseGroup, this._nowPlayingGroup,
     ]) {

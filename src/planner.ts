@@ -6,7 +6,8 @@ import { slugToName, normMac, localToWorld, segCrossesSolidWall, mowerSweepWaypo
          ROBOT_DEFAULTS, robotLedColor, parseVacuumPosition, vacuumRawToWorld,
          vacuumRawHeadingRad, isStairsKind, logicLightState, actionButtonKind,
          furnitureKind, normalizeLockState, valveIsOpen, cameraColor, slugifyFrigateName,
-         type LockGlyphState } from './geometry.js';
+         closedWallLoops, envKindOf, tempToCelsius, aggregateRoomTemps,
+         type LockGlyphState, type RoomTemp, type TempSample } from './geometry.js';
 import { solveHomography, applyHomography } from './homography.js';
 import { stepFusion, newFusionState, DEFAULT_FUSION_CFG,
          type FusionState, type FusionCand } from './fusion.js';
@@ -1211,6 +1212,7 @@ export class Planner extends EventTarget {
         avatarPacks:    remote.avatarPacks    ?? undefined,
         notes:          remote.notes          ?? undefined,
         bgText:         remote.bgText         ?? undefined,
+        heatmap:        remote.heatmap        ?? undefined,
       };
       // Reflect the authoritative pack config into the registry snapshot so
       // resolveAvatar / activeAvatarIds see it, then re-hydrate loaded packs.
@@ -2441,6 +2443,48 @@ export class Planner extends EventTarget {
     const lastUpdated = isFinite(lu) ? lu : 0;
     const stale = lastUpdated > 0 && (Date.now() - lastUpdated) > Planner.GPS_STALE_MS;
     return { entityId: eid, found: true, lat, lon, accuracyM, lastUpdated, stale };
+  }
+
+  // Per-room temperature heat-map data (Store.heatmap comfort band): the mean of
+  // the temperature EnvSensors — plus each bound thermostat's current_temperature
+  // when the fixture sits inside a room's wall loop — that resolve into each
+  // room. Reads LIVE states; cheap + safe to call per frame (the 2D RAF draws
+  // from it and the 3D dirty key hashes it). Returns [] when the heatmap layer is
+  // off, there are no rooms, or no closed wall loops exist. Aggregation is the
+  // pure geometry.aggregateRoomTemps; this getter only gathers samples from live
+  // state (research §4.5: EnvSensor-driven, a thermostat counts only as one more
+  // in-room sample — never a whole-house bleed).
+  roomHeatmap(): RoomTemp[] {
+    if ((this.store.layers2d?.heatmap ?? false) !== true) return [];
+    const f = this.floor();
+    const rooms = f.rooms ?? [];
+    if (!rooms.length) return [];
+    const loops = closedWallLoops(f.walls ?? []);
+    if (!loops.length) return [];
+    const states = this.hass?.states;
+    const samples: TempSample[] = [];
+    for (const e of f.envSensors ?? []) {
+      if (!e.entity_id) continue;
+      const st = states?.[e.entity_id];
+      if (!st) continue;
+      if (envKindOf(e, st) !== 'temperature') continue;
+      const v = parseFloat(st.state);
+      if (!isFinite(v)) continue;
+      const c = tempToCelsius(v, st.attributes?.unit_of_measurement as string | undefined);
+      if (isFinite(c)) samples.push({ x: e.x, y: e.y, tempC: c });
+    }
+    for (const t of f.thermostats ?? []) {
+      if (!t.entity_id) continue;
+      const st = states?.[t.entity_id];
+      const ct = st?.attributes?.current_temperature;
+      const v = typeof ct === 'number' ? ct : parseFloat(String(ct));
+      if (!isFinite(v)) continue;
+      const unit = (st!.attributes?.temperature_unit as string | undefined)
+        ?? (st!.attributes?.unit_of_measurement as string | undefined);
+      const c = tempToCelsius(v, unit);
+      if (isFinite(c)) samples.push({ x: t.x, y: t.y, tempC: c });
+    }
+    return aggregateRoomTemps(rooms, loops, samples);
   }
 
   get gpsPins(): GpsPin[] {

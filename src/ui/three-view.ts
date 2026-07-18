@@ -611,6 +611,7 @@ export class ThreeView extends LitElement {
   private _keyCamAlerts = '';
   private _keyPzones = '';
   private _keyGround = '';
+  private _keyHeatmap = '';
   private _keyVacMap = '';
   private _keyLights = '';
   private _keyZones = '';
@@ -642,6 +643,7 @@ export class ThreeView extends LitElement {
         this._keyMotion = this._keyEnv = this._keyInfo = this._keyActions = this._keyBle = this._keyAlarm = this._keyThermo = this._keySafety = '';
         this._keyCameras = this._keyProjectors = this._keyValves = this._keyPlugs = this._keyCamAlerts = this._keyPzones = this._keyNowPlaying = '';
         this._keyGround = '';
+        this._keyHeatmap = '';
         this._keyVacMap = '';
         this._keyLights = this._keyZones = this._keyHalos = '';
         this._keyGhost = this._keyGps = this._keyWeather = this._keyBgText = '';
@@ -1066,6 +1068,22 @@ export class ThreeView extends LitElement {
       if (keyGround !== this._keyGround) {
         this._keyGround = keyGround;
         r.updateGroundAreas(groundList);
+      }
+
+      // Per-room temperature heat-map (derived visual layer, opt-in). Rides its
+      // OWN `heatmap` layer (default OFF). p.roomHeatmap() returns [] when the
+      // layer is off, so the key collapses and the group stays empty (also hidden
+      // via setLayerVisibility). Bucket temps to 0.5° so float jitter doesn't
+      // rebuild the patches; the comfort band is in the key so a band edit
+      // recolors. configRev covers room/wall/sensor edits.
+      const hmRooms = p.roomHeatmap();
+      const hmCfg = p.store.heatmap ?? {};
+      const hmLo = hmCfg.comfortLo ?? 20, hmHi = hmCfg.comfortHi ?? 24;
+      const keyHeatmap = `${p.configRev}|${hmLo}|${hmHi}|` +
+        hmRooms.map(rt => `${rt.roomId}:${Math.round(rt.tempC * 2) / 2}`).join(',');
+      if (keyHeatmap !== this._keyHeatmap) {
+        this._keyHeatmap = keyHeatmap;
+        r.updateRoomHeatmap(hmRooms, hmLo, hmHi);
       }
 
       // Valetudo room-map overlay (batch M-C): per-robot SLAM segmentation patches.

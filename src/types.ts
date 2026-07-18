@@ -969,6 +969,20 @@ export interface Store {
   avatarPacks?: Record<string, AvatarPackConfig>;   // per-pack loaded/active/members (avatar packs)
   notes?: string;                    // free-text description of this configuration; shown in Settings ▸ Data; rides export/import
   bgText?: BgTextConfig;             // playful background text (skywriting / banner plane / grass writing)
+  heatmap?: HeatmapConfig;           // per-room temperature heat-map comfort band (derived visual layer)
+}
+
+// Per-room temperature heat-map config (derived visual layer — no new binding).
+// Rooms are shaded by the mean of the temperature EnvSensors (+ a bound
+// thermostat's current_temperature when placed inside the room's wall loop)
+// that resolve into their wall loop. `comfortLo`/`comfortHi` (°C, stored in °C
+// regardless of the imperial display flag) define the neutral comfort band;
+// below/above it the fill shifts cool-blue / warm-red (see heatmapColor in
+// geometry.ts). Store-level (property-wide), NOT per-floor. In
+// Planner._loadFromHa's explicit field list.
+export interface HeatmapConfig {
+  comfortLo?: number;   // °C; default 20 (below → cool/cold)
+  comfortHi?: number;   // °C; default 24 (above → warm/hot)
 }
 
 // ── Playful background text ───────────────────────────────────────────────
@@ -1025,6 +1039,7 @@ export interface Layers2D {
   grid?: boolean;       // 3D ground grid helper; default on (3D-only — no 2D plan grid exists)
   ground?: boolean;     // ground / yard covering polygons (2D fill + 3D patches); default on
   vacuumMap?: boolean;  // Valetudo robot room-map overlay (2D fill + 3D patches); default OFF (diagnostic)
+  heatmap?: boolean;    // per-room temperature heat-map (2D fill + label, 3D patches); default OFF (opt-in analysis view)
 }
 
 export interface Layer2DPreset {
