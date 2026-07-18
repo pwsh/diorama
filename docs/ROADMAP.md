@@ -230,8 +230,9 @@ Work proceeds in order; each stage ships (commit + push both + deploy).
 - ✅ **Phase 4** — SHIPPED 2026-07-17: avatar rig gaps (new eye styles +
   eyeColor, 8 limb anchors, quad legColor/flap ears/broad snout,
   deterministic pattern generator, sessile mode, animate channels
-  sway/flap/orbit/spin, hop/knuckle gaits, ear swivel). Still parked:
-  fabric prints/decals/text, pose-aware/two-handed props, costume swaps.
+  sway/flap/orbit/spin, hop/knuckle gaits, ear swivel). The follow-ups
+  (fabric prints/decals/text, pose-aware/two-handed props 2026-07-17;
+  costume swaps 2026-07-18) all shipped — see the backlog section.
 - ✅ **Phase 5** — SHIPPED 2026-07-17 (user-continued;
   `docs/DESIGN-mqtt-bridge.md`): direct-MQTT bridge (HA-relay
   `mqtt/subscribe` path + hand-rolled MQTT-3.1.1-over-WebSocket direct
@@ -315,8 +316,12 @@ Approximated with conventions in the shipped packs; see
   giant-flap ear enum, broad-muzzle snout shape, pattern/scatter generator
   for stripes/spots/dapples.
 - ✅ Sessile/rooted mode (phase 4) + pose-aware hand props / two-handed
-  prop convention (`AvatarPrimitive.twoHanded`, 2026-07-17). Still
-  parked: situational costume swaps (alt-looks per member — UX decision).
+  prop convention (`AvatarPrimitive.twoHanded`, 2026-07-17).
+- ✅ **Situational costume swaps** — SHIPPED 2026-07-18
+  (`docs/DESIGN-costumes.md`): overlay look variants (`resolveLook` +
+  `AvatarDef.variants` + universal sleep/exercise/cooking looks),
+  auto-triggered with hysteresis, sparkle on swap, global + per-person
+  gates. The rig-gap list is now fully cleared.
 
 ### Research items (do not action)
 - ✅ **Log events & alerting** — SHIPPED 2026-07-17 (alert center bell/

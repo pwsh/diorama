@@ -1,0 +1,269 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>costume test</title>
+<style>html,body{margin:0;background:#111;color:#ddd;font:12px monospace}#c{width:640px;height:480px}</style>
+<div id="c"></div>
+<pre id="out">running…</pre>
+<script type="module">
+ try {
+  // Avatar costume-swap feature. Two halves:
+  //   PURE matrix  — resolveLook / UNIVERSAL_LOOKS / universalLookEligible bundled
+  //                  from avatars.ts (avatars.mod.js).
+  //   RENDER harness — the built three-renderer chunk drives updateTargets with a
+  //                  synthesized performance.now + manual pose state so the trigger
+  //                  table + hysteresis + rebuild + sparkle are DETERMINISTIC.
+  const av = await import('./avatars.mod.js?v=' + Date.now());
+  const mod = await import('./assets/three-renderer.js?v=' + Date.now());
+
+  const checks = [];
+  const ok = (name, cond, extra = '') => checks.push({ name, pass: !!cond, extra });
+  const chNear = (aHex, bHex, tol = 5) =>
+    Math.abs(((aHex >> 16) & 255) - ((bHex >> 16) & 255)) <= tol &&
+    Math.abs(((aHex >> 8) & 255) - ((bHex >> 8) & 255)) <= tol &&
+    Math.abs((aHex & 255) - (bHex & 255)) <= tol;
+
+  // ── PURE: resolveLook / eligibility ────────────────────────────────────────
+  const { resolveLook, universalLookEligible, UNIVERSAL_LOOKS, resolveDef } = av;
+
+  const adult = resolveDef('adult');
+  ok('null look → same object', resolveLook(adult, null) === adult);
+  ok('unsupported look id → same object', resolveLook(adult, 'bogus') === adult);
+
+  const robotDef = { id: 'x/robot', label: 'R', rig: 'humanoid', humanoid: { skin: 0x8899aa } };
+  const catDef   = { id: 'x/cat', label: 'C', rig: 'quadruped', pet: true, quadruped: {} };
+  const hoverDef = { id: 'x/hover', label: 'H', rig: 'humanoid', humanoid: { hover: 300 } };
+  const dukDef   = { id: 'x/duck', label: 'D', rig: 'humanoid', humanoid: { legColor: 0xffcc00 } };
+  const tintDef  = { id: 'x/tint', label: 'T', rig: 'humanoid', humanoid: { skin: 'tint' } };
+  ok('eligible: adult yes', universalLookEligible(adult) === true);
+  ok('eligible: robot (numeric skin) no', universalLookEligible(robotDef) === false);
+  ok('eligible: cat (pet/quad) no', universalLookEligible(catDef) === false);
+  ok('eligible: hover no', universalLookEligible(hoverDef) === false);
+  ok('eligible: explicit legColor no', universalLookEligible(dukDef) === false);
+  ok("eligible: skin 'tint' yes", universalLookEligible(tintDef) === true);
+
+  // Universal sleep on an eligible adult.
+  const sleepDef = resolveLook(adult, 'sleep');
+  ok('sleep: returns a NEW def (no mutation)', sleepDef !== adult);
+  ok('sleep: base def unchanged', (adult.humanoid?.legColor ?? undefined) === undefined
+    && (adult.accessories ?? []).length === 0);
+  ok('sleep: legColor set (0x9aa4de)', sleepDef.humanoid.legColor === 0x9aa4de);
+  ok('sleep: nightcap cone appended', (sleepDef.accessories ?? []).some(p => p.shape === 'cone'));
+  ok('sleep: base decals REPLACED by pajama print', sleepDef.humanoid.decals
+    && sleepDef.humanoid.decals.length === 1 && sleepDef.humanoid.decals[0].print === 'dots');
+
+  const exDef = resolveLook(adult, 'exercise');
+  ok('exercise: charcoal legColor', exDef.humanoid.legColor === 0x3a3a40);
+  ok('exercise: headband cylinder addPrim', (exDef.accessories ?? []).some(p => p.shape === 'cylinder'));
+  ok('exercise: base decals KEPT (none for adult)', exDef.humanoid.decals === undefined);
+
+  const cookDef = resolveLook(adult, 'cooking');
+  ok('cooking: apron stripes decal', cookDef.humanoid.decals
+    && cookDef.humanoid.decals[0].print === 'stripes');
+  ok('cooking: no legColor (keeps trousers)', cookDef.humanoid.legColor === undefined);
+
+  // Member variant wins over the universal.
+  const varDef = { id: 'x/hero', label: 'V', rig: 'humanoid', humanoid: {},
+    variants: [{ id: 'sleep', overlay: { legColor: 0x010203 } }] };
+  ok('member variant WINS over universal', resolveLook(varDef, 'sleep').humanoid.legColor === 0x010203);
+
+  // addPrims append + prims replace + decals cap.
+  const baseAcc = { id: 'x/acc', label: 'AA', rig: 'humanoid', humanoid: {},
+    accessories: [{ shape: 'box', size: [10, 10, 10], anchor: 'crown', color: 'tint' }],
+    variants: [
+      { id: 'sleep', overlay: { addPrims: [{ shape: 'sphere', size: 20, anchor: 'head', color: 'dark' }] } },
+      { id: 'exercise', overlay: { prims: [{ shape: 'cone', size: [5, 5], anchor: 'crown', color: 'dark' }] } },
+    ] };
+  const addRes = resolveLook(baseAcc, 'sleep');
+  ok('addPrims: appended after base', addRes.accessories.length === 2
+    && addRes.accessories[0].shape === 'box' && addRes.accessories[1].shape === 'sphere');
+  const repRes = resolveLook(baseAcc, 'exercise');
+  ok('prims: REPLACE base accessories', repRes.accessories.length === 1 && repRes.accessories[0].shape === 'cone');
+
+  const capDef = { id: 'x/cap', label: 'CAP', rig: 'humanoid', humanoid: { decals: [{ kind: 'text', text: 'Z' }] },
+    variants: [{ id: 'sleep', overlay: { decals: [
+      { kind: 'text', text: 'A' }, { kind: 'text', text: 'B' }, { kind: 'text', text: 'C' }] } }] };
+  ok('decals: capped at 2', resolveLook(capDef, 'sleep').humanoid.decals.length === 2);
+
+  // ── RENDER harness ─────────────────────────────────────────────────────────
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+  const simsHex = (c) => r._simsColor(c).getHex();
+  const meshes = (root) => { const o = []; root.traverse(m => { if (m.isMesh) o.push(m); }); return o; };
+  const coneCount = (rig) => meshes(rig.group).filter(m => m.geometry.type === 'ConeGeometry' && !m.userData.outline).length;
+  const decalPlanes = (rig) => meshes(rig.group).filter(m => m.geometry.type === 'PlaneGeometry' && m.userData.decal).length;
+  const thighColor = (rig) => {
+    let c = null;
+    if (rig.leftHip) rig.leftHip.children.forEach(m => {
+      if (!c && m.isMesh && m.geometry.type === 'CylinderGeometry' && !m.userData.outline) c = m.material.color.getHex();
+    });
+    return c;
+  };
+  const TINT = 0x33cc88;
+
+  // A synthetic pool pack of 2 eligible humanoids (for the pool-keeps-kind test).
+  mod.ThreeDRenderer.registerAvatarPack({
+    id: 'cos', version: 1, label: 'Cos', path: ['COS'], builtin: true,
+    avatars: [
+      { id: 'cos/a', label: 'A', rig: 'humanoid', humanoid: {} },
+      { id: 'cos/b', label: 'B', rig: 'humanoid', humanoid: {} },
+    ],
+  });
+
+  const floor = {
+    id: 'f1', name: 'CO', w: 12000, d: 8000,
+    walls: [{ id: 'p', points: [{x:200,y:200},{x:11800,y:200},{x:11800,y:7800},{x:200,y:7800},{x:200,y:200}] }],
+    furniture: [], lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [], windows: [], bg: null, model3d: null, look3d: null,
+    rooms: [{ id: 'rm1', name: 'Den', anchor: { x: 6000, y: 4000 } }],
+  };
+  r.updateFloor(floor, { preset: 'day', floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6' });
+  const realNow = performance.now.bind(performance);
+  let fakeNow = realNow();
+  performance.now = () => fakeNow;
+  const ctxNight = { entityOn: {}, roomNames: { rm1: 'Den' }, timeBucket: 'night' };
+  // Force the shared sparkle texture into existence + watch it for a per-rig free.
+  let sparkMapDisposed = false;
+  r._sparkleTexture().addEventListener('dispose', () => { sparkMapDisposed = true; });
+
+  // Drive `frames` ticks; `pose(h)` runs BEFORE each tick (so _resolveLookWant
+  // sees it) once the rig exists. `avatar` / `avatars` / `noCostumes` shape the
+  // target; `ctx` overrides ctxNight.
+  const drive = (key, frames, pose, opts = {}) => {
+    const ctx = opts.ctx || ctxNight;
+    for (let i = 0; i < frames; i++) {
+      const h = r._humanoids[key];
+      if (h && pose) pose(h);
+      fakeNow += 16.7;
+      r.updateTargets([{ key, x: 6000, y: 4000, color: TINT,
+        avatar: opts.avatar, avatars: opts.avatars, noCostumes: opts.noCostumes }], ctx);
+    }
+  };
+
+  // ── sleep: commit after ~2 s, not before; pose continuity across the swap ───
+  {
+    const key = 'sl';
+    drive(key, 1, null, { avatar: 'adult' });          // spawn
+    // Just under the 2 s commit hold: still base.
+    drive(key, 60, h => { h.lie = 1; }, { avatar: 'adult' });   // ~1 s
+    ok('sleep: no commit before the hold (~1 s)', r._humanoids[key].look === null,
+      `look=${r._humanoids[key].look}`);
+    // Past 2 s: committed to sleep.
+    drive(key, 90, h => { h.lie = 1; }, { avatar: 'adult' });   // ~2.5 s total
+    const h = r._humanoids[key];
+    ok('sleep: committed after ~2 s', h.look === 'sleep', `look=${h.look}`);
+    ok('sleep: pose continuity — lie stays > 0.5 across swap', h.lie > 0.5, `lie=${h.lie.toFixed(2)}`);
+    ok('sleep: scale carried (no respawn-grow)', h.scale > 0.8, `scale=${h.scale.toFixed(2)}`);
+    ok('sleep: initialized carried (no nav re-snap)', h.initialized === true);
+    // Look content: nightcap cone + pajama legColor, vs a base adult.
+    const baseAdult = r._buildHumanoid(TINT, 'adult');
+    ok('sleep: nightcap cone present (base adult has none)', coneCount(h) > coneCount(baseAdult),
+      `${coneCount(h)} vs ${coneCount(baseAdult)}`);
+    ok('sleep: pajama leg color (≈ 0x9aa4de, differs from base)',
+      thighColor(h) != null && chNear(thighColor(h), simsHex(0x9aa4de))
+      && thighColor(h) !== thighColor(baseAdult),
+      `leg=${thighColor(h)?.toString(16)}`);
+    r._disposeHumanoid(baseAdult);
+  }
+
+  // ── sparkle: appears on the swap, gone after ~1 s, shared map alive ─────────
+  {
+    const key = 'sp';
+    drive(key, 1, null, { avatar: 'adult' });
+    drive(key, 150, h => { h.lie = 1; }, { avatar: 'adult' });  // commit sleep → sparkle
+    ok('sparkle: spawned on swap', r._sparkles.length >= 1, `n=${r._sparkles.length}`);
+    // Advance ~1.3 s of empty frames → the ~0.6 s sparkle expires + disposes.
+    for (let i = 0; i < 80; i++) { fakeNow += 16.7; r.updateTargets([{ key, x: 6000, y: 4000, color: TINT, avatar: 'adult' }], ctxNight); }
+    ok('sparkle: gone after ~1 s', r._sparkles.length === 0, `n=${r._sparkles.length}`);
+    ok('sparkle: shared map NOT freed per-rig', sparkMapDisposed === false);
+    ok('sparkle: shared _sparkleTex still alive', r._sparkleTex !== null);
+  }
+
+  // ── exercise anchor → headband ─────────────────────────────────────────────
+  {
+    const key = 'ex';
+    drive(key, 1, null, { avatar: 'adult' });
+    drive(key, 150, h => { h.act = 1; h.activity = 'exercise'; }, { avatar: 'adult' });
+    const h = r._humanoids[key];
+    ok('exercise: committed', h.look === 'exercise', `look=${h.look}`);
+    // Headband = a cylinder ring radius ≈ 136 at head height (unique vs limbs).
+    const band = meshes(h.group).find(m => m.geometry.type === 'CylinderGeometry' && !m.userData.outline
+      && Math.abs(m.geometry.parameters.radiusTop - 136) < 1);
+    ok('exercise: headband cylinder present', !!band);
+  }
+
+  // ── cooking activity → apron decal ─────────────────────────────────────────
+  {
+    const key = 'ck';
+    drive(key, 1, null, { avatar: 'adult' });
+    drive(key, 150, h => { h.act = 1; h.activity = 'forage_fridge'; }, { avatar: 'adult' });
+    const h = r._humanoids[key];
+    ok('cooking: committed', h.look === 'cooking', `look=${h.look}`);
+    ok('cooking: apron decal plane present', decalPlanes(h) >= 1, `n=${decalPlanes(h)}`);
+  }
+
+  // ── revert: after the trigger clears for ~3 s the look reverts to base ──────
+  {
+    const key = 'rv';
+    drive(key, 1, null, { avatar: 'adult' });
+    drive(key, 150, h => { h.lie = 1; }, { avatar: 'adult' });   // commit sleep
+    ok('revert: sleep committed first', r._humanoids[key].look === 'sleep');
+    // Stop the trigger (lie decays to 0) and drive > 3 s.
+    drive(key, 240, h => { h.lie = 0; }, { avatar: 'adult' });
+    ok('revert: reverts to base after clear+3 s', r._humanoids[key].look === null,
+      `look=${r._humanoids[key].look}`);
+  }
+
+  // ── global gate OFF → never commits ────────────────────────────────────────
+  {
+    const key = 'gg';
+    const ctxOff = { ...ctxNight, costumes: false };
+    drive(key, 1, null, { avatar: 'adult', ctx: ctxOff });
+    drive(key, 200, h => { h.lie = 1; }, { avatar: 'adult', ctx: ctxOff });
+    ok('global gate off: no commit', r._humanoids[key].look === null, `look=${r._humanoids[key].look}`);
+  }
+
+  // ── per-person noCostumes → never commits ──────────────────────────────────
+  {
+    const key = 'pp';
+    drive(key, 1, null, { avatar: 'adult', noCostumes: true });
+    drive(key, 200, h => { h.lie = 1; }, { avatar: 'adult', noCostumes: true });
+    ok('per-person noCostumes: no commit', r._humanoids[key].look === null, `look=${r._humanoids[key].look}`);
+  }
+
+  // ── pool rig keeps its rolled kind across a look change ─────────────────────
+  {
+    const key = 'pool_costume_stable';
+    drive(key, 1, null, { avatars: ['cos/a', 'cos/b'] });
+    const rolled = r._humanoids[key].avatarKind;
+    ok('pool: rolled a concrete kind', rolled === 'cos/a' || rolled === 'cos/b', rolled);
+    drive(key, 150, h => { h.lie = 1; }, { avatars: ['cos/a', 'cos/b'] });
+    const h = r._humanoids[key];
+    ok('pool: kept rolled kind across look swap', h.avatarKind === rolled, `${rolled}→${h.avatarKind}`);
+    ok('pool: still committed the sleep look', h.look === 'sleep', `look=${h.look}`);
+  }
+
+  performance.now = realNow;
+
+  // ── dispose / destroy lifecycle ────────────────────────────────────────────
+  let threw = false;
+  try {
+    const s = r._buildHumanoid(TINT, 'adult', 'sleep');
+    r._spawnSparkle(s);
+    r._disposeHumanoid(s);          // must NOT free the shared sparkle map
+  } catch (e) { threw = true; window.__err = e.stack; }
+  ok('dispose: costumed rig + live sparkle no-throw', !threw);
+  ok('dispose: shared sparkle map survived per-rig dispose', sparkMapDisposed === false);
+  let destroyThrew = false;
+  try { r.destroy(); } catch (e) { destroyThrew = true; }
+  ok('destroy() no-throw', !destroyThrew);
+
+  const passN = checks.filter(c => c.pass).length, total = checks.length;
+  const fails = checks.filter(c => !c.pass).map(c => c.name);
+  document.getElementById('out').textContent =
+    checks.map(c => `${c.pass ? 'ok  ' : 'FAIL'} ${c.name} ${c.extra}`).join('\n') +
+    `\n\n${passN}/${total}` + (fails.length ? `  FAILED: ${fails.join(', ')}` : '');
+  document.title = `COSTUME ${passN === total ? 'PASS' : 'FAIL'} ${passN}/${total}`;
+ } catch (e) {
+  document.title = 'COSTUME ERR: ' + (e && e.stack ? e.stack.split('\n').slice(0,3).join(' | ') : e);
+ }
+</script>

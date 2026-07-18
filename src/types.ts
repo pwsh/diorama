@@ -266,6 +266,7 @@ export interface DioramaPerson {
   color?: string;              // chip / label / target tint
   avatarKind?: AvatarKind;     // custom avatar from the 22-model list (else fallback pool)
   isPet?: boolean;             // pets are BLE tags (iBeacon on collar) — quadruped rig in a later phase
+  allowCostumes?: boolean;     // situational outfit swaps for this person's rig; absent/true = on, false = off
   haPersonId?: string;         // person.* entity (GPS identity; survives phone swaps)
   bermudaDeviceId?: string;    // HA device id of the Bermuda tracked BLE device
   gpsTrackerId?: string;       // explicit device_tracker.* override (else via person entity)
@@ -1035,6 +1036,7 @@ export interface Store {
   avatarPacks?: Record<string, AvatarPackConfig>;   // per-pack loaded/active/members (avatar packs)
   notes?: string;                    // free-text description of this configuration; shown in Settings ▸ Data; rides export/import
   avatarInteractions?: boolean;      // synthetic avatars (ai/roam) walk up to UNBOUND interactive devices and flip them (session-only); absent/true = on, false = off
+  avatarCostumes?: boolean;          // situational costume/outfit swaps on avatar rigs (sleep/exercise/cooking); absent/true = on, false = off
   bgText?: BgTextConfig;             // playful background text (skywriting / banner plane / grass writing)
   heatmap?: HeatmapConfig;           // per-room temperature heat-map comfort band (derived visual layer)
 }

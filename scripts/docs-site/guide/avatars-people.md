@@ -25,12 +25,48 @@ through doorways** rather than sliding through walls.
   hide under a breathing blanket.
 - **Thought bubbles** — time- and place-aware bubbles float up: coffee and
   breakfast in a kitchen in the morning, snacks at night, reading or a phone in
-  the evening, plus reactions to a light or fireplace or TV that just switched.
+  the evening, plus reactions to a light, fireplace, TV, or action button that
+  just switched.
+- **Event bubbles** — a real house-wide moment briefly takes over the bubble:
+  the dishwasher or laundry finishing, the oven done, rain starting, or a severe
+  weather warning. A finished appliance also shows a blue "done" badge.
 - **Idle fidgets** — standing figures look around, shift their weight, and run
   little one-shots (stretch, check a watch, yawn, tap a foot), and wave when
   they spawn.
 
 Pets never trigger privacy blur, standing activities, or thought bubbles.
+
+### Costume swaps
+
+Figures change into a fitting outfit for what they're doing, with a brief
+sparkle as they switch:
+
+- **Pajamas** (and a nightcap) when they lie down in bed at night.
+- **Workout gear** at exercise equipment.
+- **An apron** while doing kitchen work (coffee, fridge, dishwasher).
+
+Swaps are automatic and keep the figure's identity — same person, same color,
+just a different look. A daytime nap keeps day clothes. Turn the whole feature
+off with **"Avatars change outfits"** in Settings ▸ Display, or per person with
+the **"Allow outfit changes"** checkbox in the People editor. (Costume kinds
+like robots and mascots, and pets, keep their own look.)
+
+### Avatars using your devices
+
+Synthetic figures — AI avatars, demo avatars, and roamers — will wander over to
+**unbound** interactive objects (a light, switch, or appliance with no entity
+bound) and flip them, reaching out with a little animation. It's display theater
+with a sense of time: they turn lights on in the evening and off during the day.
+
+- These flips are **session-only** — they never write back to Home Assistant or
+  dirty your saved plan, and they respect cooldowns so figures don't fidget with
+  the same device constantly.
+- Figures never touch **bound** devices (those mirror reality). Instead, a figure
+  standing near a bound device may show a **status bubble** — the device's
+  current state as a glyph (a lit bulb, a running TV) — thinking about it rather
+  than touching it.
+- Radar, BLE, and camera figures (real people) never do this. Turn it off with
+  **"Avatars use unbound devices"** in Settings ▸ Display.
 
 ### Avatar packs
 
@@ -60,6 +96,23 @@ deactivating a pack silently drops its members from every pool.
   people never re-roll.
 - An unidentified stranger draws from the random pool of active, non-franchise
   humanoids — franchise characters never surprise you on an unknown person.
+
+### How figures look and move
+
+Avatars are built from a small kit of features, so packs can express a lot of
+character:
+
+- **Prints & decals** — crisp text (a jersey number or name), an emoji glyph,
+  or a repeating print on the chest or back.
+- **Props & accessories** — hats, wings, tails, staffs, and more, some of them
+  animated (a cape that flaps as the figure walks, a spinning halo).
+- **Gaits** — most figures walk, but a pack can give a character a **hop** or a
+  **knuckle-walk** instead.
+- **Pets** are their own four-legged rigs (see below), with breeds expressed
+  through ears, tails, coats, and colors.
+
+You don't configure these directly — they come from the avatar pack — but
+they're what makes the cast recognizable.
 
 ### Roaming avatars
 

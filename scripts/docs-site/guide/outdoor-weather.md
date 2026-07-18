@@ -19,11 +19,35 @@ after a while.
 
 ### The weather chip
 
-A small **weather chip** sits in the bottom-right corner over both the 2D and 3D
-views, showing the current glyph and temperature plus your place or entity name.
-It respects your imperial/metric setting, dims when the reading is stale, and
-hides when no source is set. In edit mode, clicking it jumps to the Weather
-settings.
+A small **weather chip** sits over both the 2D and 3D views, showing the current
+glyph and temperature plus your place or entity name. It respects your
+imperial/metric setting, dims when the reading is stale, and hides when no
+source is set. In edit mode, clicking it jumps to the Weather settings.
+
+In the Weather settings' **Chip appearance** block you can:
+
+- **Reposition** it to any of six anchors (the corners plus top-and
+  bottom-center), or nudge it with custom pixel offsets.
+- **Add content rows** — feels-like temperature, humidity, and wind.
+- **Show forecast strips** — a horizontal hourly strip and a vertical daily
+  list (with a hi/lo per day), reading from your source's forecast. Set how many
+  entries each shows.
+
+With any of these on, the compact pill grows into a small panel.
+
+### Weather alerts
+
+Diorama can surface government/agency weather **warnings** (tornado warning,
+flood watch, heat advisory, and the like) — distinct from the everyday
+condition. In the Weather settings' **Alerts** block, pick a Home Assistant
+alert entity (Diorama understands the common NWS, Environment Canada, DWD, and
+MeteoAlarm shapes and sorts them into advisory / watch / warning).
+
+- The weather chip grows a severity-tinted **⚠ badge**; clicking it opens a
+  panel listing each alert with its event, headline, and expiry.
+- A subtle **3D beacon** — a low colored light that gently pulses over the floor
+  (faster and brighter for a warning, slower for an advisory) — washes the scene
+  when an alert is active. Toggle it with the beacon checkbox.
 
 ### 3D weather effects
 
@@ -47,6 +71,33 @@ When effects are on, current conditions play out in the 3D scene:
 You can toggle each effect individually under the 3D effects controls, and there
 is a master effects switch. Overcast, rainy, foggy, and stormy weather also
 gently **dims** a daytime scene toward dusk (you can turn that off).
+
+### Sky backdrop
+
+Turn on the **Sky backdrop** (Display settings — on by default when a weather
+source is set) to replace the flat background with a living sky:
+
+- A **gradient sky dome** colored by the time of day, condition, and cloud
+  cover, darkening its upwind horizon when a storm is brewing.
+- A **sun disc** that follows your `sun.sun` entity's real position, and a
+  night **starfield**.
+- A **moon** with correct phases — bind a moon-phase `sensor.` (from Home
+  Assistant's core Moon integration) in the Weather settings and the drawn moon
+  matches tonight's phase; unbound, it shows a full moon.
+
+### Background text
+
+For a playful touch, write a short message into the world itself with
+**Settings ▸ Display ▸ Background text**. Pick a mode and either type a static
+message or bind an entity to display its live value:
+
+- **Skywriting** — glowing cloud letters drifting high in the sky with the wind.
+- **Banner plane** — a little toy plane towing a readable banner on a slow
+  orbit.
+- **Grass writing** — mowed-in lettering on the widest open patch of yard.
+
+Skywriting and the banner hide during heavy storms (they'd read wrong in a
+downpour); grass writing always shows.
 
 ### Geo landmarks & calibration
 

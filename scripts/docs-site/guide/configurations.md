@@ -19,6 +19,7 @@ Configurations are managed in **Settings ▸ Data ▸ Configurations**:
 | **Dropdown** | Switch the active configuration. The whole plan swaps instantly. |
 | **Save** | Save the active configuration now. |
 | **Save as…** | Duplicate the current plan into a new named configuration and switch to it. |
+| **New…** | Start a brand-new, empty configuration and switch to it. |
 | **Rename** | Rename the active configuration. |
 | **Import** | Add a configuration from an exported file and switch to it. Importing never overwrites your current plan — it adds a new one. |
 | **Export** | Download the active configuration as a portable file. |
@@ -57,6 +58,29 @@ with nothing else to install.
 Exports are portable across browsers and machines, and are the way to move a
 plan when you are running offline (where there is no Home Assistant to sync
 through).
+
+## Import from Sweet Home 3D
+
+If you've already drawn your home in **Sweet Home 3D**, you can import its
+native `.sh3d` file as a real, editable Diorama plan — not just a reference
+model. Diorama reads the file and builds actual **floors, walls, rooms, doors,
+windows, and furniture** you can then edit like anything you drew by hand.
+
+- Use **Import Sweet Home 3D (.sh3d)** in **Settings ▸ Data** (or the 3D Model
+  sidebar section). Levels become stacked floors that line up, walls become wall
+  runs, room polygons become named rooms, and doors/windows snap onto their
+  walls.
+- Furniture is matched best-effort by name to Diorama's kinds (toggle it off if
+  you'd rather not); pieces it can't recognize are skipped rather than dropped in
+  as mystery blocks.
+- The import arrives as a **new configuration** after a summary confirmation, so
+  it never disturbs your current plan. Any open-plan rooms that aren't fully
+  enclosed by walls are flagged but still imported.
+
+This is different from the visual OBJ/MTL model import (covered in
+[The 3D view](3d-view.html)), which drops a non-editable model *under* your plan
+as a tracing reference. Use the `.sh3d` import when you want editable geometry;
+use the OBJ import when you just want a visual backdrop.
 
 ## Offline standalone mode
 

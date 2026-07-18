@@ -108,6 +108,34 @@ export interface AvatarDecal {
   anchor?: 'chest' | 'back';
 }
 
+// ── Costume looks (situational outfit swaps) ───────────────────────────────
+// A rig keeps ONE identity (kind + color) but can wear an alternate LOOK resolved
+// at build time. Looks are OVERLAYS spread over the base AvatarDef — never sibling
+// pack members (no pool pollution, no identity break). Three built-in keys, all
+// AUTO-triggered by renderer-internal pose/time state (see three-renderer
+// updateTargets): sleep / exercise / cooking. The schema tolerates unknown look
+// ids (ignored → base). See docs/DESIGN-costumes.md.
+export type LookKey = 'sleep' | 'exercise' | 'cooking';
+
+// The whitelisted overlay: the resolver spreads EXACTLY these keys over the base
+// humanoid fields + accessories. Colors are numeric hex | 'tint' to match the rest
+// of the avatar schema (HumanoidFields.skin/legColor/limbColors are numbers — the
+// whole color convention is numeric hex; a lone string-typed color field here
+// would be the only one in the schema and could not feed HumanoidFields without a
+// conversion, so we keep it numeric).
+export interface AvatarLookOverlay {
+  skin?: number | 'tint';
+  legColor?: number;
+  limbColors?: { armL?: number; armR?: number; legL?: number; legR?: number };
+  decals?: AvatarDecal[];        // REPLACES base decals (cap 2 still applies)
+  prims?: AvatarPrimitive[];     // REPLACES base accessories
+  addPrims?: AvatarPrimitive[];  // APPENDED after base (or after `prims`)
+}
+
+// A member-authored variant for one look key: WINS over the universal look for
+// that key on this def (costume-identity kinds can dress their own way).
+export interface AvatarVariant { id: string; overlay: AvatarLookOverlay }
+
 // Deterministic coat/skin pattern generator (Phase 4a). A handful of PROUD
 // primitives (the zebra/cow idiom) scattered from a seeded PRNG — NEVER
 // Math.random, so a given (seed ?? id-hash) always yields identical placement.
@@ -230,6 +258,11 @@ export interface AvatarDef {
   // write, since negative root rotation.x is the body-forward lean). Elder /
   // gollum / zombie use small positive values.
   posture?: { pitch?: number };
+  // Costume-look variants (situational outfit swaps): a member-authored overlay
+  // per look key WINS over the universal look for that key (a costume-identity kind
+  // that wants its own pajamas/apron). Absent → universal looks apply only when
+  // `universalLookEligible`. See resolveLook / UNIVERSAL_LOOKS.
+  variants?: AvatarVariant[];
   // Sessile / rooted mode (Phase 4a): the rig builds LEGLESS but grounded (root
   // at the floor, no leg joints, no gait) — a plant / coral / totem whose base is
   // a trunk/tuft supplied via normal accessories. In updateTargets the rig stays
@@ -487,6 +520,77 @@ export function avatarFromPool(
   // pool has ≥2 members (a lone ['adult'] floor resolves deterministically).
   if (want !== 'random' && isActiveId(want)) return false;
   return fallbackPool().length >= 2;
+}
+
+// ── Costume looks: universal overlays + resolution ──────────────────────────
+// The three built-in universal looks. Exact colors pinned here (the design left
+// them "pinned at implementation"). Applied ONLY to an eligible def
+// (universalLookEligible) when no member variant claims the key.
+export const UNIVERSAL_LOOKS: Record<LookKey, AvatarLookOverlay> = {
+  // Pajamas: soft lavender-blue legs + a dim dotted print; a deep-blue nightcap
+  // (cone) topped with a white pompom. Base decals replaced by the pajama print.
+  sleep: {
+    legColor: 0x9aa4de,
+    decals: [{ kind: 'print', print: 'dots', color: 0x6b73b8, bg: 0xc9cef0, anchor: 'chest' }],
+    addPrims: [
+      // Nightcap: cone tip-up, raised + tilted back so the front rim clears the
+      // brow (the crown-clearance convention).
+      { shape: 'cone', size: [118, 250], anchor: 'crown', pos: [0, 40, -10], rot: [0.42, 0, 0], color: 0x2f3a7a },
+      { shape: 'sphere', size: 46, anchor: 'crown', pos: [0, 235, -150], color: 0xf4f4f6 },
+    ],
+  },
+  // Workout: a tint headband ring + charcoal shorts. Base decals kept.
+  exercise: {
+    legColor: 0x3a3a40,
+    addPrims: [
+      { shape: 'cylinder', size: [136, 136, 58], anchor: 'head', pos: [0, 44, 0], color: 'accent' },
+    ],
+  },
+  // Apron: a warm off-white striped panel across the chest (reads as an apron).
+  // Base decals replaced.
+  cooking: {
+    decals: [{ kind: 'print', print: 'stripes', color: 0xcbb487, bg: 0xf3e9d2, anchor: 'chest', scale: 1.1 }],
+  },
+};
+
+// Whether a def may take the UNIVERSAL looks (member variants always may). The
+// trousers predicate + humanoid checks: tint skin (skin null/undefined or 'tint'
+// — a costume identity like robot/alien uses a numeric skin), no explicit
+// legColor (costume legs like the duck), not a pet/quad, no hover (legless float).
+export function universalLookEligible(def: AvatarDef): boolean {
+  if (def.rig !== 'humanoid' || def.pet) return false;
+  const hf = def.humanoid ?? {};
+  if (hf.legColor != null) return false;
+  if (hf.skin != null && hf.skin !== 'tint') return false;
+  if (hf.hover != null) return false;
+  return true;
+}
+
+// Resolve a def under a look. `null`/unsupported/ineligible → the SAME base def
+// unchanged (no clone). A member-authored variant for the key WINS over the
+// universal look; else the universal applies only when eligible. Pure +
+// deterministic, never throws.
+export function resolveLook(def: AvatarDef, look: LookKey | null): AvatarDef {
+  if (!look) return def;
+  const variant = def.variants?.find(v => v.id === look);
+  const overlay = variant
+    ? variant.overlay
+    : (universalLookEligible(def) ? UNIVERSAL_LOOKS[look] : undefined);
+  if (!overlay) return def;   // unknown look id or ineligible for a universal
+  const hf = def.humanoid ?? {};
+  const humanoid: HumanoidFields = { ...hf };
+  if (overlay.skin !== undefined) humanoid.skin = overlay.skin;
+  if (overlay.legColor !== undefined) humanoid.legColor = overlay.legColor;
+  if (overlay.limbColors !== undefined)
+    humanoid.limbColors = { ...(hf.limbColors ?? {}), ...overlay.limbColors };
+  // decals REPLACE base decals; cap 2 (the build-time slice does too, but capping
+  // here keeps the pure result honest).
+  if (overlay.decals !== undefined) humanoid.decals = overlay.decals.slice(0, 2);
+  let accessories = def.accessories;
+  if (overlay.prims !== undefined) accessories = overlay.prims;
+  if (overlay.addPrims && overlay.addPrims.length)
+    accessories = [...(accessories ?? []), ...overlay.addPrims];
+  return { ...def, humanoid, accessories };
 }
 
 // Register the core pack immediately so a standalone renderer chunk (no planner

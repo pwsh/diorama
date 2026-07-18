@@ -226,6 +226,42 @@ mm offset (body-local, **−Z = front**), `rot [x,y,z]` **radians**, `color` hex
   today's occasional idle flick): `'swivel'` = slow independent per-ear yaw
   wander; `'none'` holds ears still.
 
+### Variants (costume swaps)
+
+A rig keeps ONE identity (kind + color) but can wear an alternate **look** resolved
+at build time — pajamas when sleeping at night, a headband + shorts while
+exercising, an apron while working in the kitchen. Looks are **overlays** spread
+over the base `AvatarDef` — never sibling pack members (no pool pollution, no
+identity break). All swaps are AUTO-triggered by renderer-internal pose/time state
+(no manual selection); the schema tolerates unknown look ids (ignored). See
+`docs/DESIGN-costumes.md`.
+
+- **Look keys** (`LookKey`): `sleep` (lying in a bed at evening/night/late_night),
+  `exercise` (engaged `exercise` activity), `cooking` (engaged
+  `load_dishwasher` / `make_coffee` / `forage_fridge`). A committed look holds
+  with hysteresis (~2 s to engage, ~3 s clear to revert) and fires a brief
+  sparkle on each swap.
+- **Universal looks** (`UNIVERSAL_LOOKS` in `src/avatars.ts`): built-in overlays
+  applied to any **eligible** def with no member variant for that key — pajamas
+  (lavender legs + dotted print + nightcap), workout (tint headband + charcoal
+  shorts), apron (striped chest panel).
+- **Eligibility** (`universalLookEligible`): the trousers predicate + humanoid
+  checks — **tint skin** (`humanoid.skin` null/undefined or `'tint'`; a numeric
+  costume skin like robot/alien is out), **no explicit `legColor`** (costume legs
+  like the duck are out), **not a pet/quad**, **no `hover`**. Costume-identity
+  kinds and pets never take a universal look, but a pack MAY still dress them via
+  an explicit `variants` entry.
+- **Member variants win**: author `AvatarDef.variants?: AvatarVariant[]`
+  (`{ id: LookKey, overlay: AvatarLookOverlay }`). A variant whose `id` matches the
+  look key **overrides** the universal look for that def (a costume kind can wear
+  its own pajamas/apron). The overlay is a WHITELIST — the resolver spreads exactly:
+  `skin` (`number | 'tint'`), `legColor` (`number`), `limbColors`, `decals`
+  (**REPLACE** base decals, cap 2), `prims` (**REPLACE** base accessories),
+  `addPrims` (**APPEND** after base/prims). Colors are numeric hex (the whole
+  avatar schema is numeric — decals use `number | 'tint' | 'dark'` too). Absent
+  fields keep the base value. `resolveLook(def, null | unknown)` → the base def
+  unchanged (same object).
+
 ## Conventions (violations fail review)
 
 - **Ids**: pack `id` = filename = kebab; member ids `<packId>/<member>`.

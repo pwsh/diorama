@@ -37,6 +37,7 @@ const GUIDE = [
   { slug: 'editor', title: 'The 2D editor', md: 'editor.md' },
   { slug: '3d-view', title: 'The 3D view', md: '3d-view.md' },
   { slug: 'devices', title: 'Devices & bindings', md: 'devices.md' },
+  { slug: 'info-displays', title: 'Info displays & alerts', md: 'info-displays.md' },
   { slug: 'avatars-people', title: 'Avatars & people', md: 'avatars-people.md' },
   { slug: 'outdoor-weather', title: 'Outdoor, weather & geo', md: 'outdoor-weather.md' },
   { slug: 'kiosk-modes', title: 'Kiosk & display modes', md: 'kiosk-modes.md' },

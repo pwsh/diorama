@@ -146,14 +146,34 @@ rotated, resized, or deleted on the canvas, but you can still edit it from the
 sidebar and still click it to toggle its device. Walls also have a bulk
 lock / unlock button in the tools area.
 
+### Undo, redo & delete
+
+Editing is fully undoable.
+
+- **Undo / redo** — use the ↶ / ↷ buttons in the topbar, or press
+  **Ctrl/Cmd + Z** to undo and **Ctrl/Cmd + Shift + Z** (or **Ctrl/Cmd + Y**) to
+  redo. A whole drag counts as a single step. History is per-session and isn't
+  saved with the plan.
+- **Delete** — press **Delete** or **Backspace** to remove the current
+  selection: a selected item, or a single **polygon vertex** (of a presence
+  zone, ground area, void, or wall) when one is selected. Deleting a wall vertex
+  removes the whole wall if only two points remain; a polygon refuses to drop
+  below three points. Locked items won't delete.
+
+Undo, redo, and delete are edit-mode features, and the hotkeys stay out of your
+way while you're typing in a text field.
+
 ### Layers & presets
 
 The **2D Layers** section turns groups of things on and off — background,
-furniture, appliances, labels, lights, switches, sensors, motion, env, zones,
-avatars, geo, battery badges, and more. Walls, doors, and windows always draw.
+furniture, appliances, labels, lights, switches, sensors, motion, env, info
+cards, zones, avatars, name labels, geo, battery badges, and more. Walls, doors,
+and windows always draw.
 
 - The **activity** layer (off by default) adds warm glow pools where lights are
   on or motion is firing.
+- A few layers ship **off** by default — the **temperature heat-map** and the
+  **vacuum room map** — so turn them on when you want them.
 - Save your own layer combinations as presets. A built-in **Simple floorplan**
   preset shows just avatars and activity glow for a clean kiosk look.
 

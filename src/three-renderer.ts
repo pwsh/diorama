@@ -85,10 +85,10 @@ import {
 import type { ForecastRecord } from './ha-client.js';
 import { vacMapAffine, vacPixelToWorld, vacSegColor, type VacCal, type VacSegment } from './valetudo-map.js';
 import {
-  resolveDef, resolveAvatar, avatarFromPool,
+  resolveDef, resolveAvatar, avatarFromPool, resolveLook,
   registerPack, unregisterPack, setAvatarPacksConfig,
   type AvatarDef, type AvatarPrimitive, type LegacyAvatarKind, type AvatarPackDef,
-  type AvatarPacksConfig, type AvatarPattern, type AvatarDecal,
+  type AvatarPacksConfig, type AvatarPattern, type AvatarDecal, type LookKey,
 } from './avatars.js';
 
 // Reused scratch objects for per-frame two-handed-prop orientation (zero
@@ -274,6 +274,11 @@ export interface TargetWorld {
   // for radar, the motion/roamer color for AI/demo/roam, the person color for
   // BLE. A stale renderer chunk ignores it (falls back to the built-in green).
   plumbobColor?: number;
+  // Optional (additive): this identified target's person opted OUT of situational
+  // costume swaps (DioramaPerson.allowCostumes === false). Suppresses the look
+  // swap for THIS rig regardless of the global gate. Absent → costumes allowed
+  // (subject to the global ctx.costumes flag). A stale renderer chunk ignores it.
+  noCostumes?: boolean;
   // Optional (additive, Tier 2 stair portals): ARRIVING handoff. When a NEW rig
   // is created for this key, seed it here (a linked stair on THIS floor) instead
   // of at x/y, so it fades in at the stair and its goal controller walks it to
@@ -334,6 +339,11 @@ export interface ActivityContext {
   // When falsey the AI controller never targets an unbound device (status bubbles
   // for bound devices are unaffected). Absent → treated as off.
   avatarInteract?: boolean;
+  // OPTIONAL — master gate for situational costume swaps (Store.avatarCostumes).
+  // Absent = ON (stale-chunk safe — a fresh app.js paired with an older renderer
+  // that ignores this still runs the default-on behavior). When === false the
+  // look-swap trigger resolves to null for every rig (no outfit changes).
+  costumes?: boolean;
 }
 
 // An interactive device the avatar-interaction system knows about. `id` is
@@ -554,6 +564,16 @@ interface Humanoid {
   gait: 'walk' | 'hop' | 'knuckle';
   // Quadruped ear posing mode (def.quadruped.earAnimate; 'flick' = today's).
   earAnim: 'flick' | 'swivel' | 'none';
+  // ── Costume looks (situational outfit swaps; humanoids only, quads never swap).
+  // `look` is the COMMITTED look the rig is currently built with (null = base).
+  // `lookWant` + `lookHoldT` drive the hysteresis: a candidate look must hold
+  // ~2 s before it commits, and a committed look holds ~3 s after its trigger
+  // clears before reverting to base. A commit rebuilds the rig through the same
+  // path as a fused kind swap (pose state carried over) + fires a sparkle. See
+  // _resolveLookWant / _advanceLook.
+  look: LookKey | null;
+  lookWant: LookKey | null;
+  lookHoldT: number;
   phase: number;       // walk-cycle radians
   facing: number;      // body yaw derived from smoothed velocity
   amp: number;         // eased limb-swing amplitude (rad) — smooths gait starts/stops
@@ -1211,6 +1231,10 @@ export class ThreeDRenderer {
   // Per-target humanoid rigs, persisted across frames so we can carry
   // walk-cycle phase + smoothed body facing.
   private _humanoids: Record<string, Humanoid> = {};
+  // Active costume-swap sparkle sprites (rare, transient). Each is parented to a
+  // rig group; advanced in _advanceSparkles (scale-out + fade over ~0.6 s) then
+  // removed + material-disposed. Reset on clearTransientGroups.
+  private _sparkles: { sprite: THREE.Sprite; t: number }[] = [];
   // AI-avatar controllers, keyed by target key (`ai_<motionSensorId>`). Persist
   // independently of the rig so a brief presence dropout resumes the same wander
   // when it re-acquires; dropped when the rig finally despawns or the floor
@@ -1697,6 +1721,29 @@ export class ThreeDRenderer {
     this._blobTex = new THREE.CanvasTexture(c);
     return this._blobTex;
   }
+
+  // Costume-swap sparkle: one shared soft warm-white radial glow (built once,
+  // disposed only in destroy() — the blob-tex idiom). The per-swap sprite that
+  // wraps it is allocated on the event, parented to the rig group, and
+  // self-disposed at end of life; the shared MAP is never freed per-rig
+  // (_disposeHumanoid's sprite traverse guards against it, like the blur maps).
+  // SpriteMaterial is a documented flat-material exemption (like the thought
+  // bubbles) — a toon-shaded twinkle is nonsense.
+  private _sparkleTex: THREE.CanvasTexture | null = null;
+  private _sparkleTexture(): THREE.CanvasTexture {
+    if (this._sparkleTex) return this._sparkleTex;
+    const c = document.createElement('canvas');
+    c.width = 64; c.height = 64;
+    const g = c.getContext('2d')!;
+    const grad = g.createRadialGradient(32, 32, 1, 32, 32, 30);
+    grad.addColorStop(0, 'rgba(255,252,235,0.95)');
+    grad.addColorStop(0.35, 'rgba(255,236,170,0.55)');
+    grad.addColorStop(1, 'rgba(255,236,170,0)');
+    g.fillStyle = grad;
+    g.fillRect(0, 0, 64, 64);
+    this._sparkleTex = new THREE.CanvasTexture(c);
+    return this._sparkleTex;
+  }
   // ── Weather particle textures (W2) ──────────────────────────────────────
   // Shared PointsMaterial maps — built once, disposed only in destroy() (like
   // the gradient / blob textures). PointsMaterial + SpriteMaterial are the
@@ -2110,6 +2157,9 @@ export class ThreeDRenderer {
       this._disposeHumanoid(this._humanoids[key]);
     }
     this._humanoids = {};
+    // Sparkle sprites live on the rigs just disposed above; drop the tracking list
+    // (their materials went with the rig subtrees).
+    this._sparkles = [];
     this._aiState = {};
     this._leftAt = {};
     // Glass-house transit puppet is per-transit theater — kill it on floor switch.
@@ -10066,6 +10116,8 @@ export class ThreeDRenderer {
     // already consumed by the walk integrator).
     const frameDt = this._lastTargetsNow ? Math.min(0.1, now - this._lastTargetsNow) : 0.016;
     this._lastTargetsNow = now;
+    // Costume-swap sparkles (rig-parented, transient): scale-out + fade + dispose.
+    this._advanceSparkles(frameDt);
     const seen = new Set<string>();
     // Tier 2: prune the "already left via stairs" guard so a re-arrival later
     // (same BLE key) can build a rig again.
@@ -10165,22 +10217,48 @@ export class ThreeDRenderer {
         else if (t.person.isPet) { stableKind = 'cat'; fromPool = false; }
         wantColor = hexToInt(t.person.color);
       }
-      // Rebuild on tint change, or a genuine identity (non-pool) kind change.
-      // Pool rigs keep their rolled look on recolor (forcedKind carries it over).
+      // ── Costume look (situational outfit swap). Humanoids only; quads never
+      // swap. Resolve the wanted look from the rig's CURRENT (last-frame) pose
+      // state, gated globally (ctx.costumes) + per-person (t.noCostumes), run the
+      // 2 s-commit / 3 s-clear hysteresis, and note whether the committed look
+      // flipped this frame (→ rebuild + sparkle). Uses frameDt (available before
+      // the per-humanoid dt below); the 1-frame lag vs this frame's blends is
+      // invisible and the hysteresis dominates.
+      let lookChanged = false;
+      if (h && !h.quad) {
+        const costumesOn = ctx?.costumes !== false && !t.noCostumes;
+        const wantLook = costumesOn ? this._resolveLookWant(h, ctx) : null;
+        lookChanged = this._advanceLook(h, wantLook, frameDt);
+      }
+      const buildLook: LookKey | null = h ? h.look : null;
+      // Rebuild on tint change, a genuine identity (non-pool) kind change, OR a
+      // committed look change. Pool rigs keep their rolled look on ANY rebuild
+      // (forcedKind carries the concrete kind over so a recolor/costume swap never
+      // re-rolls or fights the pool pick).
       let forcedKind: AvatarKind | null = null;
-      if (h && h.color !== wantColor && fromPool) forcedKind = h.avatarKind;
-      if (h && (h.color !== wantColor || (!fromPool && h.avatarKind !== stableKind))) {
-        this._targetGroup.remove(h.group);
-        this._disposeHumanoid(h);
-        delete this._humanoids[t.key];
-        h = undefined as unknown as Humanoid;
+      if (h && (h.color !== wantColor || lookChanged) && fromPool) forcedKind = h.avatarKind;
+      if (h && (h.color !== wantColor || (!fromPool && h.avatarKind !== stableKind) || lookChanged)) {
+        // The look swap rides this SAME rebuild path as a fused kind swap, but the
+        // fresh build resets pose/nav to defaults — so snapshot + restore them
+        // (a seated sleeper must not pop standing / respawn-grow / re-path).
+        const prev = h;
+        this._targetGroup.remove(prev.group);
+        const kind = forcedKind ?? (fromPool ? prev.avatarKind : stableKind);
+        h = resolveDef(kind).rig === 'quadruped'
+          ? this._buildQuadruped(wantColor, kind)
+          : this._buildHumanoid(wantColor, kind, buildLook);
+        this._carryLookState(prev, h);
+        this._disposeHumanoid(prev);
+        this._humanoids[t.key] = h;
+        this._targetGroup.add(h.group);
+        if (lookChanged) this._spawnSparkle(h);   // twinkle on the outfit change
       }
       if (!h) {
         // Fresh spawn: re-roll a pool/random look with Math.random (respawns look
-        // different); keep a carried-over look on recolor; else the stable pick.
-        const kind = forcedKind ?? (fromPool
+        // different); else the stable pick. New rigs start in the base look.
+        const kind = fromPool
           ? resolveAvatar(t.avatar, t.avatars, t.key, Math.random)
-          : stableKind);
+          : stableKind;
         h = resolveDef(kind).rig === 'quadruped'
           ? this._buildQuadruped(wantColor, kind)
           : this._buildHumanoid(wantColor, kind);
@@ -13113,6 +13191,7 @@ export class ThreeDRenderer {
       animPrims: animPrims.length ? animPrims : undefined,
       gait: 'walk',
       earAnim: qf.earAnimate ?? 'flick',
+      look: null, lookWant: null, lookHoldT: 0,   // quads never swap looks
       hipY: backHeight, shoulderY: bodyY, headTopReach: headG.position.y,
       armUpper: LEG_UPPER_LEN, armLower: LEG_LOWER_LEN, legM,
       // Quadrupeds now read def.personality walk multipliers exactly like
@@ -13241,7 +13320,7 @@ export class ThreeDRenderer {
     }
   }
 
-  private _buildHumanoid(color: number, id: string = 'adult'): Humanoid {
+  private _buildHumanoid(color: number, id: string = 'adult', look: LookKey | null = null): Humanoid {
     // ── Resolve the avatar def → a concrete Spec. `sk` scales the whole skeleton
     // length; `headR` is an ABSOLUTE head radius (so the child stays big-headed
     // relative to its small body); `limbR` thins/thickens the limbs. `skin` /
@@ -13249,7 +13328,12 @@ export class ThreeDRenderer {
     // sensor tint). `headShape`/`hands`/`eyes` pick the silhouette details;
     // `steel` swaps a brushed-metal look on the skin material. Fields absent from
     // the def fall back to adult values — so a bare `{}` humanoid IS the adult.
-    const def = resolveDef(id);
+    // Costume look overlay (situational outfit): spread the look over the resolved
+    // def BEFORE reading fields, so the whole build (skin/legColor/limbColors/decals
+    // + declarative accessories) reflects the outfit. `look` null → base def (same
+    // object). `def.id` is preserved by resolveLook, so `kind` / legacy branches
+    // stay correct.
+    const def = resolveLook(resolveDef(id), look);
     const kind = def.id;   // concrete resolved id (used for legacy steel/ear/accessory branches)
     const hf = def.humanoid ?? {};
     // 'tint' → the passed-in identity color, exactly like the old `skin: color`
@@ -13784,6 +13868,7 @@ export class ThreeDRenderer {
       twoHandProps: twoHandProps.length ? twoHandProps : undefined,
       gait: def.humanoid?.gait ?? 'walk',
       earAnim: 'flick',
+      look, lookWant: look, lookHoldT: 0,
       chatterNext: 25 + idleOffset / (Math.PI * 2) * 35, chatterT: 0, chatterGlyph: null,
       torso,
       plumbob,
@@ -13847,6 +13932,121 @@ export class ThreeDRenderer {
     });
   }
 
+  // ── Costume looks ──────────────────────────────────────────────────────────
+  // Resolve the wanted look for a rig from its CURRENT (last-frame) pose state +
+  // the time bucket. Reads the RAW-driven pose blends (h.lie/h.act/h.activity) —
+  // a 1-frame lag vs this frame's blends is invisible and the 2 s hysteresis
+  // dominates. Humanoids only (quads never swap). See DESIGN-costumes.md table.
+  private _resolveLookWant(h: Humanoid, ctx?: ActivityContext): LookKey | null {
+    const tb = ctx?.timeBucket ?? 'day';
+    // Sleep: lying in bed at night (day naps keep day clothes — the time gate).
+    if (h.lie > 0.5 && (tb === 'evening' || tb === 'night' || tb === 'late_night')) return 'sleep';
+    // Engaged standing activities (mutually exclusive with lying).
+    if (h.act > 0.5) {
+      if (h.activity === 'exercise') return 'exercise';
+      if (h.activity === 'load_dishwasher' || h.activity === 'make_coffee' || h.activity === 'forage_fridge')
+        return 'cooking';
+    }
+    return null;
+  }
+
+  // Advance the look hysteresis and return TRUE when the committed look changed
+  // (→ the caller rebuilds the rig with the new look + fires a sparkle). A non-null
+  // want must hold ~2 s continuously before it commits; a committed look holds
+  // ~3 s after its trigger clears before reverting to base. A switch between two
+  // non-null looks routes through base (clear-hold, then a fresh 2 s commit).
+  private static readonly LOOK_COMMIT_S = 2.0;
+  private static readonly LOOK_CLEAR_S = 3.0;
+  private _advanceLook(h: Humanoid, want: LookKey | null, dt: number): boolean {
+    const committed = h.look;
+    if (want === committed) {   // condition matches the current state — nothing pending
+      h.lookWant = want; h.lookHoldT = 0;
+      return false;
+    }
+    // `want` differs from the committed look: track how long it has held.
+    if (want === h.lookWant) h.lookHoldT += dt;
+    else { h.lookWant = want; h.lookHoldT = 0; }
+    if (committed == null) {
+      // Currently base: a non-null want engages after the commit hold.
+      if (want != null && h.lookHoldT >= ThreeDRenderer.LOOK_COMMIT_S) {
+        h.look = want; h.lookHoldT = 0;
+        return true;
+      }
+    } else if (h.lookHoldT >= ThreeDRenderer.LOOK_CLEAR_S) {
+      // Currently wearing a look; its trigger has been clear long enough → revert
+      // to base (a pending non-null want then re-commits from base on its own).
+      h.look = null; h.lookHoldT = 0;
+      return true;
+    }
+    return false;
+  }
+
+  // Carry the mutable pose / nav / blend / claim state from a disposed rig onto a
+  // freshly-built replacement so a costume (or kind/color) rebuild is seamless — a
+  // seated sleeper must not pop standing, respawn-grow, or re-path. The new rig's
+  // MESHES are fresh; only the STATE continues. Bubble / name sprites intentionally
+  // re-derive (they were per-rig, disposed with `prev`); the plumbob recolor block
+  // in updateTargets re-runs because the fresh rig's plumbobColor starts undefined.
+  private _carryLookState(prev: Humanoid, h: Humanoid): void {
+    h.initialized = prev.initialized; h.lastUpdate = prev.lastUpdate;
+    h.scale = prev.scale; h.facing = prev.facing; h.phase = prev.phase; h.amp = prev.amp;
+    h.vx = prev.vx; h.vz = prev.vz; h.lastX = prev.lastX; h.lastZ = prev.lastZ;
+    h.navX = prev.navX; h.navZ = prev.navZ;
+    h.carrotX = prev.carrotX; h.carrotZ = prev.carrotZ; h.nvx = prev.nvx; h.nvz = prev.nvz;
+    h.rawVx = prev.rawVx; h.rawVz = prev.rawVz; h.rawLastX = prev.rawLastX; h.rawLastZ = prev.rawLastZ;
+    h.path = prev.path; h.pathRev = prev.pathRev; h.goalCell = prev.goalCell;
+    h.stuckT = prev.stuckT; h.respawnPhase = prev.respawnPhase;
+    h.groundY = prev.groundY; h.dwell = prev.dwell; h.idleOffset = prev.idleOffset;
+    h.sit = prev.sit; h.act = prev.act; h.lie = prev.lie; h.privacy = prev.privacy;
+    h.sitSpot = prev.sitSpot; h.sitSpotId = prev.sitSpotId;
+    h.activity = prev.activity; h.activityAnchor = prev.activityAnchor; h.activityDwell = prev.activityDwell;
+    h.lieBedId = prev.lieBedId;
+    h.look = prev.look; h.lookWant = prev.lookWant; h.lookHoldT = prev.lookHoldT;
+    h.lastEdge = prev.lastEdge; h.lastRawSpeed = prev.lastRawSpeed;
+    h.fadeAlpha = prev.fadeAlpha; h.despawnMode = prev.despawnMode;
+    // Re-apply a mid-fade opacity to the fresh meshes so the rig doesn't flash back
+    // to full opacity for a frame while fading out.
+    if (h.despawnMode === 'slow' && h.fadeAlpha < 0.999) this._fadeRig(h, h.fadeAlpha);
+  }
+
+  // Fire a brief sparkle at torso height on a costume swap (both directions). The
+  // sprite wraps the SHARED _sparkleTex (never freed per-rig) and is parented to
+  // the rig group so it rides the rig; advanced + disposed in _advanceSparkles.
+  private _spawnSparkle(h: Humanoid): void {
+    const mat = new THREE.SpriteMaterial({
+      map: this._sparkleTexture(), color: 0xffffff, transparent: true, opacity: 0.95,
+      depthWrite: false, blending: THREE.AdditiveBlending,
+    });
+    const spr = new THREE.Sprite(mat);
+    spr.scale.set(240, 240, 1);
+    spr.position.set(0, h.shoulderY, 0);   // torso/shoulder height, rig-local
+    spr.userData.outlineSkip = true;
+    h.group.add(spr);
+    this._sparkles.push({ sprite: spr, t: 0 });
+  }
+
+  // Per-frame: scale the sparkles out + fade them, disposing at end of life. The
+  // shared map is never freed here (only the per-sprite material). Zero alloc.
+  private static readonly SPARKLE_LIFE_S = 0.6;
+  private _advanceSparkles(dt: number): void {
+    if (!this._sparkles.length) return;
+    const life = ThreeDRenderer.SPARKLE_LIFE_S;
+    for (let i = this._sparkles.length - 1; i >= 0; i--) {
+      const s = this._sparkles[i];
+      s.t += dt;
+      const u = s.t / life;
+      if (u >= 1) {
+        s.sprite.parent?.remove(s.sprite);
+        (s.sprite.material as THREE.SpriteMaterial).dispose();   // shared map guarded
+        this._sparkles.splice(i, 1);
+        continue;
+      }
+      const sc = 200 + u * 360;   // grow out
+      s.sprite.scale.set(sc, sc, 1);
+      (s.sprite.material as THREE.SpriteMaterial).opacity = 0.95 * (1 - u);
+    }
+  }
+
   private _disposeHumanoid(h: Humanoid): void {
     h.group.traverse(obj => {
       if ((obj as THREE.Mesh).isMesh) {
@@ -13873,9 +14073,10 @@ export class ThreeDRenderer {
         const sm = (obj as THREE.Sprite).material as THREE.SpriteMaterial;
         // The blur silhouette maps AND the shared privacy render-target texture
         // are shared across rigs (disposed once in destroy()); never free them
-        // per-rig. Only per-rig canvas maps (thought bubble / name label) go.
+        // per-rig. The costume-swap sparkle map (_sparkleTex) is shared too. Only
+        // per-rig canvas maps (thought bubble / name label) go.
         if (sm.map && sm.map !== this._blurTexStand && sm.map !== this._blurTexSit &&
-            sm.map !== this._privRT?.texture) {
+            sm.map !== this._privRT?.texture && sm.map !== this._sparkleTex) {
           sm.map.dispose();
         }
         sm.dispose();
@@ -13929,6 +14130,7 @@ export class ThreeDRenderer {
     // _blobShadow / _addOutlines).
     this._gradientMapTex?.dispose(); this._gradientMapTex = null;
     this._blobTex?.dispose(); this._blobTex = null;
+    this._sparkleTex?.dispose(); this._sparkleTex = null;
     // Shared floor + ground procedural textures (built once, cached).
     for (const t of Object.values(this._texCache)) t?.dispose();
     this._texCache = {};

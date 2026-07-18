@@ -1,6 +1,6 @@
 # Project status & pick-up guide
 
-Last updated: 2026-07-18, at **v0.20.0**. This is the single document to
+Last updated: 2026-07-18, at **v0.21.0**. This is the single document to
 read (alongside `CLAUDE.md`) to resume work with full context.
 
 ## Where things stand
@@ -110,8 +110,31 @@ instance.
   selection deletion incl. polygon vertices; avatars interact with
   unbound devices — session-only flips with cooldowns + time-of-day
   sense — and contemplate bound-device status in thought bubbles).
+  → v0.21.0 dressed for the occasion (avatar costume swaps — overlay
+  look variants auto-triggered by sleep/exercise/kitchen-work with a
+  sparkle; sky fixes — skywriting at plane altitude, dome recenters on
+  camera so zoom-out never shows the globe; docs-site guide refreshed
+  current through v0.21).
 
 ### Shipped since the DESIGN-sims arc (reverse order)
+
+- **Avatar costume swaps + docs-site guide refresh** (2026-07-18; 2
+  parallel Opus agents; design `docs/DESIGN-costumes.md`). **Costumes**:
+  overlay look variants (`resolveLook`, `AvatarDef.variants`,
+  `UNIVERSAL_LOOKS` sleep/exercise/cooking, trousers-predicate
+  eligibility), auto triggers w/ 2 s commit / 3 s clear hysteresis, swap
+  rides the existing kind-rebuild path with `_carryLookState` pose
+  continuity (fused kind swaps now keep pose too), sparkle one-shot,
+  `Store.avatarCostumes` + `DioramaPerson.allowCostumes` gates.
+  `COSTUME PASS 47/47`; regressions avatar-anim 32/32, avatar-build
+  117/117, avatar-content 602/602, pet, bgtext 29/29. This cleared the
+  LAST parked avatar rig gap. **Guide**: all 9 pages current through
+  v0.21 (new `info-displays.md`; devices/outdoor-weather/avatars/editor/
+  configurations/3d-view/getting-started refreshed). Earlier same day:
+  skywriting lowered to the banner plane's 6 m altitude; the sky dome +
+  starfield recenter on the camera per frame (uCenter uniform for the
+  storm band) so zooming out past 30 m can no longer show the dome shell
+  as an opaque globe (`45b1bd0`).
 
 - **Undo/redo + Delete key + avatar device interactions** (2026-07-18;
   2 parallel Opus agents). **Undo/redo**: snapshot history hooked at

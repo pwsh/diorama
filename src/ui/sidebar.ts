@@ -3137,6 +3137,14 @@ export class Sidebar extends LitElement {
             <span></span>
           </span>
         </div>
+        <div class="row" title="Let this person's rig change into a situational outfit (pajamas / workout / apron). Turn off to keep them in their normal look. Requires the global 'Avatars change outfits' setting.">
+          <label>Allow outfit changes</label>
+          <span class="mini-toggle">
+            <input type="checkbox" .checked=${pe.allowCostumes !== false}
+                   @change=${(e: Event) => upd(x => { x.allowCostumes = (e.target as HTMLInputElement).checked; })}>
+            <span></span>
+          </span>
+        </div>
         <div class="row"><label>Person entity</label>
           <span style="font-size:11px;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
             ${pe.haPersonId || '—'}

@@ -1224,6 +1224,11 @@ export class SettingsDrawer extends LitElement {
           <input type="checkbox" .checked=${p.store.avatarInteractions !== false}
                  @change=${(e: Event) => { p.store.avatarInteractions = (e.target as HTMLInputElement).checked; p.save(); p.emitConfig(); this.requestUpdate(); }}>
         </div>
+        <div class="row" title="Avatar rigs change into a situational outfit — pajamas when sleeping at night, a headband + shorts while exercising, an apron while working in the kitchen — with a brief sparkle on the swap. Per-person opt-out lives in the People section.">
+          <label>Avatars change outfits</label>
+          <input type="checkbox" .checked=${p.store.avatarCostumes !== false}
+                 @change=${(e: Event) => { p.store.avatarCostumes = (e.target as HTMLInputElement).checked; p.save(); p.emitConfig(); this.requestUpdate(); }}>
+        </div>
         <div style="font-size:10px;color:var(--text-dim);line-height:1.3;margin:4px 0 0">
           Per-floor flooring / wall overrides live in the sidebar Floors section.
         </div>

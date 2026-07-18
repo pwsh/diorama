@@ -1300,6 +1300,13 @@ export class ThreeView extends LitElement {
       const zones: ZoneWorld[] = [];
       const halos: HaloWorld[] = [];
       const targets: TargetWorld[] = [];
+      // Per-person costume opt-out: an identified rig whose DioramaPerson set
+      // allowCostumes === false suppresses the look swap (regardless of the global
+      // gate). Resolved from the fused/BLE personId. undefined (not false) so the
+      // stamped TargetWorld field stays absent when costumes are allowed.
+      const noCostumesFor = (personId?: string | null): true | undefined =>
+        personId != null && (p.store.people ?? []).some(pe => pe.id === personId && pe.allowCostumes === false)
+          ? true : undefined;
       for (let si = 0; si < f.sensors.length; si++) {
         const s = f.sensors[si];
         if (!s.deviceSlug) continue;
@@ -1378,6 +1385,7 @@ export class ThreeView extends LitElement {
                            // name label); else undefined → renderer default =
                            // tColor (the sensor's identity color).
                            plumbobColor: sPlumbob ?? (fusion ? hexToInt(fusion.color) : undefined),
+                           noCostumes: noCostumesFor(fusion?.personId),
                            person: fusion ? { name: fusion.name, color: fusion.color,
                              avatarKind: fusion.avatarKind, isPet: fusion.isPet,
                              identified: fusion.personId != null } : undefined });
@@ -1452,6 +1460,7 @@ export class ThreeView extends LitElement {
           // other unknown devices fall through to the stable human pool pick.
           ble: true, avatar: bp.avatarKind ?? (bp.isPet ? 'cat' : 'random'),
           spawnAt,
+          noCostumes: noCostumesFor(bp.personId),
           // Identified BLE people (personId set) get a name label; unknown
           // devices do not (decision #4 — labels only when confident).
           person: bp.personId != null ? { name: bp.name, color: bp.color,
@@ -1474,6 +1483,7 @@ export class ThreeView extends LitElement {
           key: bp.key, x: sp.x, y: sp.y, color: hexToInt(bp.color),
           ble: true, avatar: bp.avatarKind ?? (bp.isPet ? 'cat' : 'random'),
           leaveVia: sp,
+          noCostumes: noCostumesFor(bp.personId),
           person: bp.personId != null ? { name: bp.name, color: bp.color,
             avatarKind: bp.avatarKind, isPet: bp.isPet, identified: true } : undefined,
         });
@@ -1492,6 +1502,7 @@ export class ThreeView extends LitElement {
           key: ct.key, x: ct.x, y: ct.y, color: hexToInt(ct.color), cam: true,
           avatar: ct.label === 'dog' ? 'dog' : ct.label === 'cat' ? 'cat' : 'random',
           plumbobColor: fusion ? hexToInt(fusion.color) : undefined,
+          noCostumes: noCostumesFor(fusion?.personId),
           person: fusion ? { name: fusion.name, color: fusion.color,
             avatarKind: fusion.avatarKind, isPet: fusion.isPet,
             identified: fusion.personId != null } : undefined,
@@ -1631,7 +1642,8 @@ export class ThreeView extends LitElement {
           bound: fu.entity_id != null, on: entityOn[fu.id] === true });
       }
       const ctx: ActivityContext = { entityOn, roomNames, timeBucket: resolveTimeBucket(states), weather, recentTriggers, eventTriggers, doorSensorOpen, fireplaceOn,
-        interactive, avatarInteract: p.store.avatarInteractions !== false };
+        interactive, avatarInteract: p.store.avatarInteractions !== false,
+        costumes: p.store.avatarCostumes !== false };
       // Targets every frame — persistent rigs mutate in place (no rebuild).
       r.updateTargets(targets, ctx);
   }

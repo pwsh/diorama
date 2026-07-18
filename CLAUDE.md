@@ -1063,6 +1063,31 @@ reference; keep it updated when the schema grows.
   hand props (no flag) stay rigidly parented in the single hand group. Test page
   `avatar-build-test` covers decal builds + canvas readback + chest/back proud
   offset + cap 2 + per-rig map disposal + two-handed aim + one-handed sit-attach.
+- **Costume swaps (look variants)**: a rig keeps ONE identity (kind + color)
+  but can wear an alternate **look** — an OVERLAY spread over the base def at
+  build time, never a sibling member. `resolveLook(def, look)` (avatars.ts,
+  pure): member-authored `AvatarDef.variants` (matching `id`) WINS, else the
+  universal look applies only when `universalLookEligible` (the trousers
+  predicate: tint skin + no explicit legColor + not pet/quad + no `hover` —
+  costume-identity kinds like robot never take universals). Overlay keys are
+  whitelisted (`skin`/`legColor`/`limbColors` numeric hex; `decals`/`prims`
+  REPLACE, `addPrims` APPEND). Three auto-triggered `LookKey`s (v1, no manual
+  selection): `sleep` (lie > 0.5 + evening/night/late_night — day naps keep
+  day clothes; pajama legColor + dot-print decal + nightcap), `exercise`
+  (engaged `exercise` activity; headband + charcoal shorts), `cooking`
+  (engaged load_dishwasher/make_coffee/forage_fridge; stripe-print apron
+  decal). Renderer: `Humanoid.look/lookWant/lookHoldT`, `_resolveLookWant` +
+  `_advanceLook` (2 s commit / 3 s clear hysteresis), swap rides the EXISTING
+  kind-rebuild path with `_carryLookState` preserving sit/lie/act/nav/claims
+  (runs on every rebuild — fused kind swaps also keep pose now) and the
+  `forcedKind` pool carry-over; a committed swap fires a sparkle one-shot
+  (shared `_sparkleTex` disposed only in `destroy()`; per-swap rig-parented
+  sprite self-disposes ~0.6 s). Gates: `Store.avatarCostumes` (absent = ON,
+  in `_loadFromHa`'s list; Settings ▸ Display "Avatars change outfits") +
+  `DioramaPerson.allowCostumes` (item-level; People editor) → three-view
+  builds `ActivityContext.costumes` + stamps `TargetWorld.noCostumes` on
+  identified targets (fused/BLE/cam) — all optional/stale-chunk-safe. Quads/
+  pets never swap. Test page `costume-test.html` (`COSTUME PASS 47/47`).
 - **Settings drawer** (`<diorama-settings-drawer>`, ~560 px, tabbed:
   Connection | Display | Weather | Avatars | Integrations | Data; non-edit
   modes see Connection only). Display/Weather/Data tabs hold the sections

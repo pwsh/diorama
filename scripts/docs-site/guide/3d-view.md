@@ -81,7 +81,14 @@ as a reference model that sits under your plan. Diorama stores only the
 placement (scale, position, rotation, opacity, visibility) synced through Home
 Assistant; the model geometry lives in your browser, so re-import it once per
 browser. Sweet Home 3D exports in centimeters with the default scale set for
-you; adjust scale, offset, and rotation to line it up with your 2D plan.
+you; adjust scale, offset, and rotation to line it up with your 2D plan. The
+imported materials are re-shaded into the Sims toon style so the model blends in
+rather than looking photorealistic against the cartoon scene.
+
+This visual model is a non-editable backdrop. If you'd rather turn a Sweet
+Home 3D file into **editable** floors, walls, rooms, and furniture, use the
+structural `.sh3d` importer instead — see
+[Configurations, notes & offline](configurations.html).
 
 ### Ghost floors
 

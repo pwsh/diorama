@@ -84,6 +84,10 @@ plus adjustable height, floor-pool radius, and intensity:
 Double-clicking a light bound to a `light.` entity opens the **light config**
 modal for color, brightness, and color temperature.
 
+A light can also be driven by **logical state** instead of a `light.` binding —
+its on/off, color, and flash come from any entity's value through a rule
+editor. See [Logical-state lights](info-displays.html) for how to set that up.
+
 ### Switches
 
 Switches place with the Switch tool and snap flush to the nearest wall on drop
@@ -91,6 +95,20 @@ or move. Set the mounting height and rotation. When you drop a switch near
 others already on the same wall segment, it **gangs** with them — aligning to
 their offset and rotation and taking the next free slot along the wall, like a
 real multi-gang plate.
+
+### Water valves & smart plugs
+
+- **Water valve (🚰)** — a floor pipe run with a hand-wheel, placed freely with
+  a rotation. Bind a `valve.` entity (open/closed with optional position), a
+  `switch.` (the irrigation-zone pattern), or a `binary_sensor` (display-only).
+  When open, blue flow dashes animate along the pipe in 2D and a pulsing flow
+  segment shows in 3D; the wheel turns with the openness. Clicking picks the
+  right open/close service for the current state (never a blind toggle). Turn
+  "Allow open/close" off to make it display-only.
+- **Smart plug (🔌)** — a wall outlet plate that snaps flush to a wall, bound to
+  a `switch.` or `light.` (the outlet load). It energizes green when on; bind an
+  optional power sensor to scale the glow and show a wattage chip. Clicking
+  toggles it like a switch.
 
 ### Appliances
 
@@ -106,11 +124,51 @@ playing shows a pulsing green indicator and a soft glow.
 - **Power glow** — bind a power sensor to make the in-use glow scale with the
   wattage; an unbound appliance drawing more than a few watts reads as in-use.
 
+### Vehicles, EV charging & mailbox
+
+Three state-driven furniture kinds bring the driveway to life:
+
+- **Garage car** — a car piece bound to a presence `binary_sensor`. When the
+  bay is empty the car renders **ghosted** (translucent, dashed in 2D); present
+  or unbound, it's solid. Bind EV charging status to it (or a nearby charger)
+  to show a charge bolt with the state of charge.
+- **EV charger** — a charging post with a state-colored port LED (charging,
+  full, error, idle) resolved defensively from whatever your charger reports.
+  Cars within range of a charging post show a green port glow.
+- **Mailbox** — a curbside box. Bind a package-count sensor to float a count
+  badge and raise the flag when mail arrives, and a lid `binary_sensor` to tilt
+  the lid open.
+
 ### Media & now-playing
 
 Any furniture bound to a `media_player.` entity shows a now-playing card above
 it while it's playing (title, artist, and album art when available) plus a
-`♪` line in 2D. Paused players dim.
+`♪` line in 2D. Paused players dim. A TV can also show a **news ticker** or a
+**weather card** on its screen — see [TV screen surfaces](info-displays.html).
+
+### Home theater
+
+The furniture catalog has a **theater** category for a proper setup:
+
+- **Speakers** — tower, bookshelf, subwoofer, and center-channel cabinets. Bind
+  one to a `media_player.` and its drivers pulse while it plays (the subwoofer
+  breathes slower and deeper).
+- **Recliners** — a single **theater recliner** and a **three-seat recliner
+  row**, all real seats figures use; a seated figure watches a TV that's on in
+  the room.
+- **Riser platform** — a low carpeted deck figures can actually walk up onto.
+  Place recliners on top for stadium seating.
+
+### Projector & screen bias lighting
+
+- **Projector (📽)** — the Projector tool places a ceiling or shelf projector.
+  Bind a `media_player.`, `switch.`, or `light.` and pick a **screen** (a TV or
+  wall-TV in the room) or aim it by rotation. While projecting, it casts a
+  translucent light cone toward the screen with a soft glow on the surface, and
+  a dashed throw wedge in 2D. Set the throw ratio and beam color.
+- **Screen bias lighting** — check **Bias light** on a TV or wall-TV to add a
+  soft halo behind the panel. Leave it on auto (glows while the TV plays) or
+  bind a light/switch to drive it, and pick the halo color.
 
 ### Covers: garage doors & blinds
 
@@ -126,9 +184,11 @@ draws 40% open.
 ### Door locks & doorbells
 
 - **Locks** — bind a `lock.` entity to a door to show a padlock glyph (red
-  locked, green unlocked) in 2D and a deadbolt in 3D. Deadbolt boxes on the door
-  faces are clickable to lock/unlock a bound lock, or flip a local state on an
-  unbound door.
+  locked, green unlocked, amber when jammed) in 2D and a deadbolt in 3D.
+  Deadbolt boxes on the door faces are clickable to lock/unlock a bound lock, or
+  flip a local state on an unbound door. Set **Lock control** to *display* to
+  make the padlock a passive indicator you can't click — a look-but-don't-touch
+  status readout.
 - **Doorbells** — bind an event, `binary_sensor`, button, or `input_button`
   entity to a door. A press pulses expanding rings and a 🔔 in both views, and
   can trigger a thought bubble for nearby figures.
@@ -141,12 +201,47 @@ state (amber while arming or pending, red when triggered). Clicking the panel
 opens a keypad modal: with "Allow arm/disarm" checked it offers Disarm, Arm
 Home, and Arm Away (with an optional code); otherwise it's read-only status.
 
+### Thermostats (HVAC)
+
+The **Thermostat (🌡)** tool places a wall plate bound to a `climate.` entity.
+It snaps flush to a wall and shows a mode-colored screen band with the current
+and target temperature; while the system is actively heating or cooling it
+pulses and draws airflow arcs. In 3D a slatted vent below the plate glows and
+puffs particles in the vent color — heat rises red, cool sinks blue, fan blows
+straight out.
+
+Clicking the plate opens a **thermostat modal**: current and target temperature
+with +/− steppers (a single setpoint or a heat/cool range), HVAC-mode buttons,
+and fan / preset dropdowns — all limited to what your entity actually supports.
+Setpoint changes are optimistic and debounced before the service call. Turn off
+**Allow control** for a read-only display; an unbound thermostat runs as a local
+demo.
+
 ### Cameras & alerts
 
 The Camera tool places a camera fixture with a translucent field-of-view wedge,
 tinted red while recording. The sidebar row shows a live snapshot with a refresh
 button. Bind an **alert** binary_sensor to pop a snapshot card beside the camera
 (in both views and every mode) with a pulsing FOV wedge when the alert fires.
+
+#### Frigate ground-truth targets
+
+If you run **Frigate**, a camera can turn its detection boxes into real figures
+walking your floor plan — perfect for yard, driveway, and porch areas no radar
+or Bluetooth covers. This rides the **MQTT bridge** described at the bottom of
+this page.
+
+1. Set the camera's **Frigate name** to match Frigate's camera name.
+2. **Calibrate** the view: click a spot on the camera snapshot, then click the
+   matching spot on your plan, four or more times. Diorama solves the
+   perspective mapping and shows a fit-quality readout. (Click points against
+   the detection resolution Frigate reports, noted in the editor.)
+
+Detected people become humanoid figures (dogs and cats become pets; cars draw
+as a dot), tinted with the camera's color, and they can **fuse** with a BLE
+identity so someone walking from the yard into the house keeps one name.
+
+### Robots: vacuum & mower
 
 ### Robots: vacuum & mower
 
@@ -163,13 +258,48 @@ Clicking a robot starts or returns it (for a bound robot) or flips its
 run/return state (unbound). LED colors show its state: green while working,
 blue returning, amber docked, red on error.
 
-### Smoke / CO, gas & leak detectors
+#### Valetudo room map & tap-to-clean
+
+A vacuum running **Valetudo** can draw its own SLAM room segmentation as a
+translucent, per-room overlay on your floor — a quick "does my plan match
+reality" check. Set the vacuum's **Valetudo topic id** in its editor, and reuse
+the same "Set dock as reference" calibration the live-position feature uses to
+line the map up. The room being cleaned glows, and **tapping a room sends the
+vacuum there** (with a confirm). Turn it on with the **Vacuum room map** layer
+(off by default). This rides the MQTT bridge below.
+
+### The MQTT bridge
+
+A couple of genuinely spatial data streams — **Frigate** detection boxes and
+**Valetudo** room maps — aren't available over Home Assistant's normal
+WebSocket API, so Diorama can read them over MQTT. Set this up once in
+**Settings ▸ Integrations ▸ MQTT bridge**:
+
+- **HA relay** — the simplest path. Diorama rides Home Assistant's own MQTT
+  connection, so there are no extra credentials. It requires an **admin** Home
+  Assistant user; if yours isn't admin, the status pill says so and suggests
+  direct mode.
+- **Direct broker** — connect straight to your MQTT broker. This needs the
+  broker's **WebSocket listener** enabled (the Mosquitto add-on doesn't turn it
+  on by default), uses `wss://` when the panel is served over HTTPS, and takes a
+  host, port, and optional username / password. Those broker credentials are
+  stored **only in this browser** (local storage), never synced to Home
+  Assistant.
+
+A live status pill and a **Test connection** button confirm the bridge is up.
+Once it is, calibrated Frigate cameras and Valetudo vacuums start working.
+
+### Smoke / CO, gas, leak & siren detectors
 
 The Safety tool places ceiling detectors — **smoke** (red) or **CO** (amber) —
 bound to a `binary_sensor` ('on' = alarm). An alarming detector pulses expanding
-rings. Related safety kinds include **gas** (a ceiling beacon) and **leak** (a
-floor puck whose alarm grows a spreading blue puddle). Unbound detectors have a
-Test button to trigger the alarm manually.
+rings. Related safety kinds include **gas** (a ceiling beacon), **leak** (a
+floor puck whose alarm grows a spreading blue puddle), and a **siren** (a blue
+beacon with a spinning light-bar sweep and strobe, bound to a `siren.` or
+`switch.`). Unbound detectors have a Test button to trigger the alarm manually.
+
+For house-wide notifications and Repairs issues, and for a placeable
+acknowledge-able **alert beacon**, see [Info displays & alerts](info-displays.html).
 
 ### Battery badges
 

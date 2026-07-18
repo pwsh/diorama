@@ -127,10 +127,13 @@ Broader options live in the **Settings** drawer:
 
 - **Connection** — your Home Assistant link, or exit offline mode.
 - **Display** — 3D scene appearance (lighting preset, floor and wall colors,
-  textures), camera and view options.
-- **Weather** — weather source and 3D weather effects.
+  textures), sky backdrop and background text, the temperature comfort band, and
+  avatar behavior toggles (outfit changes, using unbound devices).
+- **Weather** — weather source, chip appearance, weather alerts, and 3D weather
+  effects.
 - **Avatars** — load, activate, and import avatar packs.
-- **Integrations** — toggles such as Bermuda BLE positioning.
+- **Integrations** — Bermuda BLE positioning, the MQTT bridge (for Frigate and
+  Valetudo), and the Alert Center.
 - **Data** — named configurations (save, rename, import, export), the notes
   field for the active configuration, and other data tools.
 
