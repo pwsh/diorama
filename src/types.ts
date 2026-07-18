@@ -49,6 +49,7 @@ export type FurnitureKind =
   | 'trash_bin' | 'recycle_bin'   // wheeled curbside bins; entity 'on'/'full' = full
   | 'tree' | 'pine_tree' | 'bush' | 'flower_bed' | 'bird_bath'
   | 'fountain' | 'swingset' | 'lawn_chair' | 'picnic_table'
+  | 'rock_cluster'  // decorative boulder cluster (2–4 overlapping grey shapes); blocks nav
   | 'mailbox'       // post-mounted mail/parcel box; mailCount badge + raised flag
   // vehicle / garage
   | 'car'           // stylized sedan silhouette; binary_sensor presence → ghost when away
@@ -515,6 +516,31 @@ export interface GroundArea {
   hidden?: boolean;            // per-area hide (plus the whole ground layer toggle)
 }
 
+// Irrigation / sprinkler zone (T3). A small ground-embedded head placed freely
+// on the lawn (no wall snap — mirrors the safety-sensor / BLE-proxy "detector"
+// model), bound to a switch.* ('on') / valve.* ('open'/'opening'/position>0) /
+// binary_sensor.* (read-only) entity. Draws a spray arc/wedge (2D) + a THREE.
+// Points spray plume (3D) ONLY while its bound entity is RUNNING (state via
+// sprinklerRunning(); unbound → localState demo through effectiveState). Arc /
+// radius / rotation are pure user-set visual props (HA exposes no nozzle data).
+// Rides the `ground` layer (yard-embedded fixtures). Per-floor
+// (Floor.sprinklerZones); repairFloor + defaultFloor backfill [].
+export type SprinklerHeadKind = 'spray' | 'rotor' | 'drip';
+
+export interface SprinklerZone {
+  id: string;
+  x: number; y: number;          // head position, world mm (sits inside a GroundArea)
+  entity_id: string | null;      // switch.* | valve.* | binary_sensor.*
+  headKind?: SprinklerHeadKind;  // default 'spray'
+  arcDeg?: number;               // spray arc width, degrees; default 180 (half-circle)
+  rotation?: number;             // deg, screen-CW, arc center direction; default 0 (+Y world)
+  radius?: number;               // spray throw, world mm; default 3000 (≈10 ft)
+  label?: string;
+  zoneNumber?: number;           // optional user label ("Zone 3") shown on the chip
+  localState?: string;           // unbound local control ('on'/'off'); inert once bound
+  locked?: boolean;              // canvas move/delete disabled (click-to-toggle stays live)
+}
+
 // A floor void / opening — a user-drawn "no floor here" polygon (stairwell
 // well, double-height atrium, mezzanine cutout). 3D: the polygon is subtracted
 // from the floor patches as a HOLE (same earcut path as stairwell wells), with
@@ -900,6 +926,7 @@ export interface Floor {
   valves?: ValveFixture[];  // water valve fixtures (open/close from the panel); repairFloor backfills []
   plugs?: PlugFixture[];  // smart plug / outlet fixtures; repairFloor backfills []
   groundAreas?: GroundArea[];  // yard/ground covering polygons; repairFloor backfills []
+  sprinklerZones?: SprinklerZone[];  // irrigation heads (spray arc while entity on); repairFloor backfills []
   yardFill?: GroundKind;       // opt-in: auto-paint this ground kind over the floor
                                // rect MINUS every closed wall loop (y=2 underlay).
                                // Undefined = off (today's void-yard behavior).

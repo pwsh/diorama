@@ -13,6 +13,7 @@ import {
   presenceZoneColor, cameraFov, cameraRange, cameraStateColor, cameraColor,
   projectorProjecting, projectorAim, projectorBeamColor, projectorThrow, screenCenterHeight, biasLightColor,
   VALVE_DEFAULTS, valveOpenness, valveFlowing, valveTransitional, valveRotation,
+  SPRINKLER_DEFAULTS, sprinklerRunning, sprinklerHeadKind, sprinklerArcDeg, sprinklerRadius, sprinklerRotation,
   PLUG_DEFAULTS, plugRotation,
   groundAreaColor, groundKindLabel,
   powerGlowScale,
@@ -275,6 +276,7 @@ export function drawAll(ctx: CanvasRenderingContext2D, p: Planner, view: View,
   if (on(L.sensors)) drawCameras(ctx, p, view);
   if (on(L.sensors)) drawProjectors(ctx, p, view);
   if (on(L.sensors)) drawValves(ctx, p, view);       // water valves ride the sensors layer
+  if (on(L.ground)) drawSprinklerZones(ctx, p, view); // irrigation heads ride the ground layer
   if (on(L.switches)) drawPlugs(ctx, p, view);        // smart plugs ride the switches layer
   // LD2450 inclusion / filter polygons + object halos draw per the zones
   // layer. The Motion toggle only hides motion-sensor cones (drawMotionSensors
@@ -1694,6 +1696,86 @@ function drawValves(ctx: CanvasRenderingContext2D, p: Planner, view: View): void
     ctx.fillStyle = flowing ? '#4fc3f7' : (st ? '#cfd8dc' : '#90a4ae');
     ctx.fillText(txt, c.x, by + 1 * dpr);
     drawBatteryBadge(ctx, p, v.entity_id, c.x + wheelR, c.y - wheelR);
+  }
+}
+
+// Irrigation / sprinkler zones (T3): a small flush head disc (grey at rest,
+// blue running) + — while the bound entity is RUNNING — a translucent spray
+// wedge (arc `arcDeg` centered on `rotation`, radius `radius`) with a fast
+// pulse (spray) or a sweeping bright sub-arc (rotor). Drip heads show no wedge.
+// Head hit-test is a point-in-circle; the wedge is non-interactive (clicking
+// toggles the head, not the water). Rides the `ground` layer.
+function drawSprinklerZones(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
+  const dpr = window.devicePixelRatio || 1;
+  const f = p.floor();
+  const t = performance.now() / 1000;
+  for (const z of f.sprinklerZones ?? []) {
+    const c = mmToPx(view, z.x, z.y);
+    const st = p.effectiveState(z);
+    const running = sprinklerRunning(st);
+    const unbound = !z.entity_id;
+    const selected = p.activeSprinklerId === z.id;
+    const kind = sprinklerHeadKind(z);
+    const arc = sprinklerArcDeg(z) * Math.PI / 180;
+    const rot = sprinklerRotation(z) * Math.PI / 180;
+    const R = sprinklerRadius(z) * view.scale;
+    ctx.save();
+    ctx.translate(c.x, c.y);
+    // Spray wedge while running (drip = no wedge). Center on world +Y (screen up
+    // = canvas -π/2), rotated by rot.
+    if (running && kind !== 'drip') {
+      const base = -Math.PI / 2 + rot;
+      const a0 = base - arc / 2, a1 = base + arc / 2;
+      const pulse = 0.20 + 0.12 * (0.5 + 0.5 * Math.sin(t * 6));
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.arc(0, 0, R, a0, a1);
+      ctx.closePath();
+      ctx.fillStyle = hexToRgba('#4fc3f7', pulse);
+      ctx.fill();
+      ctx.strokeStyle = hexToRgba('#29b6f6', 0.5);
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      // Rotor head: a bright narrow sub-arc sweeping across the envelope ~3 s.
+      if (kind === 'rotor') {
+        const sweep = 0.5 + 0.5 * Math.sin(t * (2 * Math.PI / 3));   // 0..1
+        const w = Math.min(arc, 0.35);
+        const sc = a0 + w / 2 + sweep * Math.max(0, arc - w);
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.arc(0, 0, R, sc - w / 2, sc + w / 2);
+        ctx.closePath();
+        ctx.fillStyle = hexToRgba('#b3e5fc', 0.34);
+        ctx.fill();
+      }
+    }
+    // Head disc (flush, small).
+    const hr = Math.max(3, SPRINKLER_DEFAULTS.headRadiusMm * view.scale);
+    ctx.globalAlpha = unbound ? 0.7 : 1;
+    ctx.fillStyle = running ? '#4fc3f7' : '#6b7075';
+    ctx.beginPath(); ctx.arc(0, 0, hr, 0, 2 * Math.PI); ctx.fill();
+    ctx.strokeStyle = running ? '#29b6f6' : '#4a4e52';
+    ctx.lineWidth = 1; ctx.stroke();
+    ctx.globalAlpha = 1;
+    if (selected) {
+      ctx.strokeStyle = '#fff'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(0, 0, hr + 4, 0, 2 * Math.PI); ctx.stroke();
+    }
+    ctx.restore();
+    // Optional label (zone number / name) below the head.
+    const labelTxt = z.zoneNumber != null ? `Zone ${z.zoneNumber}` : (z.label?.trim() || '');
+    if (selected || labelTxt) {
+      const txt = labelTxt || 'Sprinkler';
+      ctx.font = `${9 * dpr}px sans-serif`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+      const tw = ctx.measureText(txt).width + 8 * dpr;
+      const by = c.y + hr + 5 * dpr;
+      ctx.fillStyle = 'rgba(0,0,0,0.65)';
+      ctx.fillRect(c.x - tw / 2, by, tw, 12 * dpr);
+      ctx.fillStyle = running ? '#4fc3f7' : '#90a4ae';
+      ctx.fillText(txt, c.x, by + 1 * dpr);
+    }
+    drawBatteryBadge(ctx, p, z.entity_id, c.x + hr, c.y - hr);
   }
 }
 
@@ -3567,6 +3649,26 @@ function drawFurniturePrimitiveLocal(
       ctx.strokeStyle = '#8a9096'; ctx.lineWidth = 1; ctx.stroke();
       ctx.fillStyle = 'rgba(61,123,184,0.75)';
       ctx.beginPath(); ctx.arc(0, 0, r * (kind === 'fountain' ? 0.5 : 0.65), 0, 2 * Math.PI); ctx.fill();
+      break;
+    }
+    case 'rock_cluster': {
+      // A few overlapping grey boulder blobs (deterministic offsets so the RAF
+      // redraw doesn't flicker). Larger stones in back, smaller in front.
+      const base = piece.color ?? '#8b8f93';
+      const blobs: [number, number, number, string][] = [
+        [-0.22, -0.10, 0.42, '#7c8085'],
+        [0.20, 0.08, 0.46, base],
+        [-0.05, 0.24, 0.30, '#9aa0a5'],
+        [0.30, -0.22, 0.24, '#83878c'],
+      ];
+      for (const [ox, oy, rr, col] of blobs) {
+        ctx.fillStyle = piece.color ? hexToRgba(piece.color, 0.85) : col;
+        ctx.beginPath();
+        ctx.ellipse(ox * w, oy * h, rr * halfW, rr * halfH, 0, 0, 2 * Math.PI);
+        ctx.fill();
+      }
+      ctx.strokeStyle = '#5f6469'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.ellipse(0.20 * w, 0.08 * h, 0.46 * halfW, 0.46 * halfH, 0, 0, 2 * Math.PI); ctx.stroke();
       break;
     }
     case 'swingset': {

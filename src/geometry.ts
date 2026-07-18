@@ -2,7 +2,7 @@
 
 import type { Vec2, Sensor, BgImage, LightIconKind, FurnitureKind, EnvKind, WallKind,
   ActivityKind, ObjectRecipe, Furniture, Room, Floor, SafetyKind, GroundKind, GroundArea,
-  InfoCard, InfoCardMount, ActionKind } from './types.js';
+  InfoCard, InfoCardMount, ActionKind, SprinklerHeadKind } from './types.js';
 import { formatEntityValue, formatClock, evalRules, ruleMatches, relTimeText,
   type HassStateLike, type ClockMode, type ValueRule } from './value-rules.js';
 
@@ -1193,6 +1193,43 @@ export function valveTransitional(
 }
 export function valveRotation(v: { rotation?: number }): number { return v.rotation ?? 0; }
 
+// ── Irrigation / sprinkler zone (T3) ───────────────────────────────────────
+// A ground-embedded head + a user-configured spray arc (arc/radius/rotation are
+// pure visual props — HA exposes no nozzle geometry). Bound to a switch/valve/
+// binary_sensor entity; the spray animates ONLY while the entity is RUNNING.
+export const SPRINKLER_DEFAULTS = {
+  headKind: 'spray' as SprinklerHeadKind,
+  arcDeg: 180,        // half-circle
+  radius: 3000,       // ≈10 ft throw
+  rotation: 0,        // arc center faces +Y world
+  headRadiusMm: 90,   // 2D head disc / 3D nub radius
+  hitRadiusMm: 240,   // 2D point-in-circle hit test (small, free placement)
+};
+export function sprinklerHeadKind(z: { headKind?: SprinklerHeadKind }): SprinklerHeadKind {
+  return z.headKind ?? SPRINKLER_DEFAULTS.headKind;
+}
+export function sprinklerArcDeg(z: { arcDeg?: number }): number {
+  const a = z.arcDeg ?? SPRINKLER_DEFAULTS.arcDeg;
+  return Math.max(10, Math.min(360, a));
+}
+export function sprinklerRadius(z: { radius?: number }): number {
+  return Math.max(300, z.radius ?? SPRINKLER_DEFAULTS.radius);
+}
+export function sprinklerRotation(z: { rotation?: number }): number { return z.rotation ?? 0; }
+// Is the zone actively watering? Takes the already-RESOLVED state (effectiveState
+// / itemState fold localState first), mirroring valveIsOpen / doorOpenFraction:
+//   switch        on → running
+//   valve         open / opening → running (or current_position > 0)
+//   binary_sensor on → running (read-only)
+export function sprinklerRunning(
+  st: { state: string; attributes?: Record<string, unknown> } | null | undefined,
+): boolean {
+  if (!st) return false;
+  if (st.state === 'on' || st.state === 'open' || st.state === 'opening') return true;
+  const pos = st.attributes ? st.attributes['current_position'] : undefined;
+  return typeof pos === 'number' && isFinite(pos) && pos > 0;
+}
+
 // ── Smart plug / outlet fixture (Phase 2b) ─────────────────────────────────
 // Wall outlet plate. Wall-snaps flush like a switch (plate BACK on the wall
 // face, socket into the room), NO ganging. Default outlet height 300 mm.
@@ -1922,6 +1959,9 @@ export const FURNITURE_KINDS: Record<FurnitureKind, FurnitureKindDef> = {
   // picnic_table is a `surface` table (eat_at_table host); no `seat` — its centered
   // seat spot would land ON the tabletop. Sit AT it via adjacent lawn_chairs.
   picnic_table:  { label: 'Picnic table',  w: 1800, h: 1500, ht: 750,  back: 'none', color: 0x8a6a44, cat: 'outdoor', surface: true, activity: 'eat_at_table', frontArrow: false },
+  // Decorative boulder cluster — ordinary nav-blocking outdoor piece (no binding,
+  // no activity, no special nav exemption). 2–4 overlapping grey shapes.
+  rock_cluster:  { label: 'Rock cluster',  w: 800,  h: 600,  ht: 500,  back: 'none', color: 0x8b8f93, cat: 'outdoor', frontArrow: false },
   // Post-mounted mail/parcel box. mailCount.countEntity > 0 raises the flag +
   // floats a count badge; flagEntity 'on' tilts the lid open. Front (door) = -Z.
   mailbox:       { label: 'Mailbox',       w: 250,  h: 350,  ht: 1100, back: 'none', color: 0x37474f, cat: 'outdoor' },

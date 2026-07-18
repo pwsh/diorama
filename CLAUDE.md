@@ -731,6 +731,49 @@ Design `docs/DESIGN-terrain.md`; research `docs/research/terrain-enhancements.md
   override via the Doors Kind dropdown (now swing/garage/gate).
 - Test pages `terrain-test.html` (21/21), `fence-gate-test.html` (32/32).
 
+### Yard life (batch T3): water shimmer, fountain spray, sprinklers, rock_cluster
+Design `docs/DESIGN-terrain.md` (T3 bullet); research `docs/research/terrain-enhancements.md`
+§3.4a/§3.4b/§3.5/§3.7 + `docs/research/irrigation-sprinklers.md` (authoritative sprinkler design).
+- **Water shimmer**: each `water`-kind GroundArea patch/skirt/yardFill gets a cheap
+  build-time CLONE of the shared `_groundTexture('water')` (shares the source canvas,
+  own `offset`/`repeat`) tracked in `_waterPatchTextures`; `_advanceGroundWater(dt)`
+  (from `_animate`, early-returns when none) drifts each clone's `offset.y` per frame
+  (zero alloc). Clones are NOT freed by `_clearGroup` (it disposes materials, not maps —
+  the shared cache must survive) so they're disposed explicitly at the top of every
+  `updateGroundAreas` rebuild + in `clearTransientGroups`/`destroy` (`_disposeWaterPatchTextures`).
+  A patch + its skirt share one clone (ripple in unison).
+- **Fountain spray**: the `fountain` FurnitureKind builds a ~40-pt `THREE.Points` plume
+  (PointsMaterial — the documented `_mat()` exemption; reuses `_rainTexture()`) arcing up
+  from the spout + recycling at basin height, registered in `_fountains` (reset in
+  `updateFloor` + `clearTransientGroups`); `_advanceFountains(dt)` integrates ballistic
+  motion + gravity in place (zero alloc, `BufferAttribute`-by-reference idiom like weather
+  precip). Always-on v1 (no binding). Points are `outlineSkip`, not counted by `isMesh`.
+- **Sprinkler zones** (`SprinklerZone`, `Floor.sprinklerZones`, repairFloor/defaultFloor
+  backfill `[]`): canvas-fixture recipe mirroring the valve/safety-sensor flow — tool
+  `sprinkler` (🚿, free placement, no wall snap), `drawSprinklerZones` (head disc + spray
+  wedge while running: spray = pulse, rotor = sweeping sub-arc, drip = no wedge; 2D rides
+  the **`ground`** layer), `hitSprinklerZone` (point-in-circle on the head; wedge non-
+  interactive), drag kind `sprinkler` (click-vs-drag → `toggleItem`), delete-tool branch,
+  cursor, kiosk click, sidebar `_section('sprinklers', …)` (bind `['switch','valve',
+  'binary_sensor']`, head kind, arc/throw/heading, zone #, lock, delete). State via the
+  pure `sprinklerRunning(st)` (geometry.ts, mirrors valveIsOpen; switch on / valve
+  open+opening / position>0 / binary on). 3D `_sprinklerGroup` (rides the `ground` layer)
+  + `updateSprinklerZones(zones, stateProvider)` builds a head nub (Y via **`_groundYAt`**
+  so a head on a terrace sprays from terrace height — the T3 delta) + a per-RUNNING-zone
+  `THREE.Points` fan (SCENE-coord velocities; rotor jets bias toward a `Math.sin` sweep);
+  `_advanceSprinklers(dt)` recycles droplets in place (guarded on "any cloud exists" =
+  "any zone running"). Dirty key `_keySprinklers` (three-view) = configRev + keyGround +
+  per-zone geometry + a bucketed running boolean (spray animation is per-frame, NOT keyed).
+  Raycast `userData.kind='sprinkler'` → `toggleItem`. Zone entity ids are **LIVE-path**
+  (NOT added to `_isSlowEntity`) so the spray starts/stops promptly; toggle uses the
+  domain-sniffing `toggleEntity` (switch.toggle/valve.toggle), NOT the valve's
+  open_valve/close_valve state pick.
+- **`rock_cluster`** FurnitureKind (~800×600×500, `outdoor` cat): 4 overlapping low-poly
+  grey icosahedron boulders (3D) / overlapping ellipse blobs (2D), deterministic offsets
+  (no `Math.random` — survives `_keyFloor` rebuilds), ordinary nav-blocking (no exemption),
+  no binding, no activity.
+- Test page `yardlife-test.html` (`YARDLIFE PASS 36/36`).
+
 ### Bins, floodlight, camera alerts (batch J)
 - **Trash/recycle bins**: FurnitureKinds `trash_bin`/`recycle_bin` under the NEW `outdoor` cat (600×700×1100 wheeled curbside; recycle = blue + emblem panel). Bound entity 'on'/'full' = FULL → lid props −15° + overflow lump (3D) / fill-dot (2D); unbound click-toggles localState. Bins are click-tagged `kind:'media'` (its click path is plain toggleItem — `'appliance'` would flip doorOpen; the media dblclick is guarded to bind `binary_sensor` for bins). The `_keyFloor` appliance hash filter is `cat==='appliance' || isBinKind(kind)` — bins fold their state in.
 - **Floodlight**: `LightIconKind 'flood'` — mount plate + twin angled emissive heads, pool disc ×1.4 + elliptical (no cone hint; toon pool carries it); wall-snaps flush on drop/release via `snapFloodlightToWall` (offset 70 = WALL_HALF 50 + plate 20, front local −Z, no ganging); glyph 🔆.

@@ -9,7 +9,7 @@ import type {
   Sensor, Zone, ObjectHalo, BgImage, MotionSensor, EnvSensor, EnvKind, Light, SwitchFixture, LightIconKind,
   Furniture, FurnitureKind, Door, Window as WindowType, WindowKind, Layers2D, Floor, Room,
   ObjectRecipe, RecipePrimitive, RecipeShape, ActivityKind, AvatarKind,
-  BleProxy, AlarmPanel, CalendarPanel, ThermostatFixture, SafetySensor, AlertBeacon, RobotFixture, CameraFixture, ProjectorFixture, ValveFixture, PlugFixture, PresenceZone, GroundArea, GroundKind, VoidArea, DioramaPerson, Roamer, GeoLandmark,
+  BleProxy, AlarmPanel, CalendarPanel, ThermostatFixture, SafetySensor, AlertBeacon, RobotFixture, CameraFixture, ProjectorFixture, ValveFixture, SprinklerZone, SprinklerHeadKind, PlugFixture, PresenceZone, GroundArea, GroundKind, VoidArea, DioramaPerson, Roamer, GeoLandmark,
 } from '../types.js';
 import type { BermudaDevice } from '../planner.js';
 import { alertBeaconState, alertBeaconColor, isAlertDomain } from '../alerts.js';
@@ -27,6 +27,7 @@ import {
   presenceZoneColor, cameraFov, cameraRange, cameraHeight, CAMERA_DEFAULTS, cameraColor, slugifyFrigateName,
   projectorHeight, projectorThrow, projectorBeamColor, PROJECTOR_DEFAULTS,
   valveOpenness, valveFlowing, plugHeight,
+  sprinklerRunning, sprinklerHeadKind, sprinklerArcDeg, sprinklerRadius, sprinklerRotation,
   GROUND_KINDS, groundAreaColor,
   FURNITURE_KINDS, furnitureKind, resolveFurnitureDef, WINDOW_DEFAULTS,
   isDroopPlant, PLANT_MOISTURE_DEFAULT_THRESHOLD,
@@ -107,6 +108,7 @@ const TOOLS: { id: Tool; label: string }[] = [
   { id: 'camera', label: '📷 Camera' },
   { id: 'projector', label: '📽 Projector' },
   { id: 'valve', label: '🚰 Valve' },
+  { id: 'sprinkler', label: '🚿 Sprinkler' },
   { id: 'plug', label: '🔌 Plug' },
   { id: 'pzone', label: '▱ Presence zone' },
   { id: 'ground', label: '▨ Ground area' },
@@ -396,6 +398,7 @@ export class Sidebar extends LitElement {
         ${this._camerasSection()}
         ${this._projectorsSection()}
         ${this._valvesSection()}
+        ${this._sprinklersSection()}
         ${this._plugsSection()}
         ${this._presenceZonesSection()}
         ${this._groundSection()}
@@ -525,6 +528,7 @@ export class Sidebar extends LitElement {
       case 'camera': return 'Click to drop a camera. Drag the orange dot to aim it; bind a camera.* entity for the FOV tint + snapshot.';
       case 'projector': return 'Click to drop a ceiling projector. Pick a target screen (or set rotation) + bind a media_player/switch/light for the beam; click it to toggle projecting.';
       case 'valve': return 'Click to drop a water valve on a floor pipe. Bind a valve.* (open/close) or switch.* (irrigation zone) entity; clicking it opens/closes it. Water flows while open.';
+      case 'sprinkler': return 'Click to drop an irrigation sprinkler head on the lawn. Bind a switch.*/valve.* zone entity; it sprays a fan/arc while that entity is on. Set the arc, throw, and heading in the sidebar.';
       case 'plug': return 'Click to drop a smart plug / outlet (snaps to a wall). Bind a switch.*/light.* load + an optional power sensor; clicking it toggles the outlet.';
       case 'pzone': return 'Click to add polygon vertices; double-click (or Enter) to finish (≥3 pts). Bind a binary_sensor (FP2 zone / occupancy) — the zone glows when occupied. ESC cancels.';
       case 'ground': return 'Click to add polygon vertices; double-click (or Enter) to finish (3–20 pts). Paints a ground covering (grass/rock/water/…) under the plan. ESC cancels.';
@@ -2668,6 +2672,109 @@ export class Sidebar extends LitElement {
       detail: {
         domain: ['valve', 'switch', 'binary_sensor'],
         onPick: (id: string) => { v.entity_id = id; this.planner.save(); this.planner.emitConfig(); },
+      },
+    }));
+  }
+
+  // ── Sprinkler zones section (T3) ──────────────────────────────────────
+  private _sprinklersSection() {
+    const list = this.planner.floor().sprinklerZones ?? [];
+    if (list.length === 0) return nothing;
+    return this._section('sprinklers', 'Sprinklers', () =>
+      this._groupedList('sprinklers', list, z => this._sprinklerItem(z)));
+  }
+
+  private _sprinklerItem(z: SprinklerZone) {
+    const p = this.planner;
+    const sel = p.activeSprinklerId === z.id;
+    const st = p.effectiveState(z);
+    const running = sprinklerRunning(st);
+    const badge = running ? 'running' : (st ? 'off' : (z.entity_id ? 'n/a' : '—'));
+    const col = running ? '#4fc3f7' : (st ? '#90a4ae' : '#607d8b');
+    const nm = z.label?.trim() || (z.zoneNumber != null ? `Zone ${z.zoneNumber}` : 'Sprinkler');
+    return html`
+      <div style="border-bottom:1px solid var(--border)">
+        <div class="sensor-item ${sel ? 'sel' : ''}" @click=${() => p.setActiveSprinkler(z.id)}>
+          <div class="dot" style="background:${col}"></div>
+          <div class="nm">${nm}${this._batteryText(z.entity_id)}</div>
+          <div class="badge" style="color:${col}">${badge}</div>
+        </div>
+        ${sel ? this._sprinklerEditor(z) : nothing}
+      </div>
+    `;
+  }
+
+  private _sprinklerEditor(z: SprinklerZone) {
+    const p = this.planner;
+    const upd = (mut: () => void) => { mut(); p.save(); p.emitConfig(); };
+    const kinds: SprinklerHeadKind[] = ['spray', 'rotor', 'drip'];
+    return html`
+      <div style="background:rgba(0,0,0,0.25);border-radius:4px;padding:6px;margin:4px 0">
+        <div class="row"><label>Label</label>
+          <input type="text" .value=${z.label ?? ''} placeholder="Sprinkler"
+                 @input=${(e: Event) => upd(() => { z.label = (e.target as HTMLInputElement).value; })}>
+        </div>
+        <div class="row"><label>Zone #</label>
+          <input type="number" .value=${z.zoneNumber != null ? String(z.zoneNumber) : ''} placeholder="—"
+                 @input=${(e: Event) => upd(() => {
+                   const v = parseInt((e.target as HTMLInputElement).value, 10);
+                   z.zoneNumber = isFinite(v) ? v : undefined;
+                 })}>
+        </div>
+        <div class="row"><label>Head kind</label>
+          <select .value=${sprinklerHeadKind(z)}
+                  @change=${(e: Event) => upd(() => { z.headKind = (e.target as HTMLSelectElement).value as SprinklerHeadKind; })}>
+            ${kinds.map(k => html`<option value=${k} ?selected=${sprinklerHeadKind(z) === k}>${k}</option>`)}
+          </select>
+        </div>
+        <div class="row"><label>Arc (°)</label>
+          <input type="number" min="10" max="360" step="10" .value=${String(sprinklerArcDeg(z))}
+                 @input=${(e: Event) => upd(() => { z.arcDeg = parseFloat((e.target as HTMLInputElement).value) || 180; })}>
+        </div>
+        <div class="row"><label>Throw (mm)</label>
+          <input type="number" min="300" step="100" .value=${String(sprinklerRadius(z))}
+                 @input=${(e: Event) => upd(() => { z.radius = parseFloat((e.target as HTMLInputElement).value) || 3000; })}>
+        </div>
+        <div class="row"><label>Heading (°)</label>
+          <input type="number" .value=${String(Math.round(sprinklerRotation(z)))}
+                 @input=${(e: Event) => upd(() => { z.rotation = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
+        </div>
+        ${this._lockRow(z)}
+        <div class="row"><label>HA entity</label>
+          <span style="font-size:11px;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+            ${z.entity_id || '— unbound —'}
+          </span>
+        </div>
+        <div style="display:flex;gap:4px;margin-top:4px">
+          <button class="btn" style="flex:1;font-size:11px" @click=${() => this._pickSprinklerEntity(z)}>
+            ${z.entity_id ? 'Rebind' : 'Bind'}…
+          </button>
+          ${z.entity_id ? html`
+            <button class="btn" style="font-size:11px"
+                    @click=${() => upd(() => { z.entity_id = null; })}>Unbind</button>
+          ` : nothing}
+        </div>
+        <div style="font-size:10px;color:var(--text-dim);margin-top:4px;line-height:1.3">
+          ${z.entity_id
+            ? 'Bind a switch.* / valve.* zone. The head sprays while that entity is on; clicking toggles it. Arc/throw/heading are visual only (HA has no nozzle data).'
+            : 'Unbound: clicking the head flips a local demo on/off state to preview the spray.'}
+        </div>
+        <button class="btn danger" style="width:100%;margin-top:6px" @click=${() => {
+          const f = p.floor();
+          f.sprinklerZones = (f.sprinklerZones ?? []).filter(x => x.id !== z.id);
+          p.activeSprinklerId = null;
+          p.save(); p.emitConfig();
+        }}>Delete</button>
+      </div>
+    `;
+  }
+
+  private _pickSprinklerEntity(z: SprinklerZone): void {
+    this.dispatchEvent(new CustomEvent('open-entity-picker', {
+      bubbles: true, composed: true,
+      detail: {
+        domain: ['switch', 'valve', 'binary_sensor'],
+        onPick: (id: string) => { z.entity_id = id; this.planner.save(); this.planner.emitConfig(); },
       },
     }));
   }

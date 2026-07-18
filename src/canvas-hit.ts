@@ -1,9 +1,9 @@
 import { switchSize, distMM, pointToSeg, transformVerts, centroid, localToWorld,
          bgLocalToWorld, bgWorldToLocal, furnitureWorldToLocal,
          furnitureCorners, furnitureLocalToWorld, doorEndpoint,
-         doorOpenDeltaDeg, windowEndpoints, pointInPolygon } from './geometry.js';
+         doorOpenDeltaDeg, windowEndpoints, pointInPolygon, SPRINKLER_DEFAULTS } from './geometry.js';
 import type { Planner } from './planner.js';
-import type { Vec2, Wall, Sensor, Furniture, BgImage, MotionSensor, EnvSensor, BleProxy, AlarmPanel, CalendarPanel, ThermostatFixture, SafetySensor, AlertBeacon, RobotFixture, CameraFixture, ProjectorFixture, ValveFixture, PlugFixture, PresenceZone, InfoCard, ActionButton, Door, Window as WindowType, Floor } from './types.js';
+import type { Vec2, Wall, Sensor, Furniture, BgImage, MotionSensor, EnvSensor, BleProxy, AlarmPanel, CalendarPanel, ThermostatFixture, SafetySensor, AlertBeacon, RobotFixture, CameraFixture, ProjectorFixture, ValveFixture, PlugFixture, SprinklerZone, PresenceZone, InfoCard, ActionButton, Door, Window as WindowType, Floor } from './types.js';
 import type { FloorEdge } from './geometry.js';
 import { envChipHalfPx, infoCardHalfPx, actionButtonHalfPx, type View } from './canvas-render.js';
 import { vacMapAffine, vacWorldToPixel, vacSegHasPixel } from './valetudo-map.js';
@@ -342,6 +342,19 @@ export function hitValve(p: Planner, view: View, mm: Vec2): ValveFixture | null 
   const f = p.floor();
   const h = hitPx(view) * 1.8;
   const list = f.valves ?? [];
+  for (let i = list.length - 1; i >= 0; i--) {
+    if (distMM(list[i], mm) < h) return list[i];
+  }
+  return null;
+}
+
+// Sprinkler head — point-in-circle on the head position (small radius, free
+// placement). The running spray wedge is NOT clickable (clicking toggles the
+// head, not the water). A fixed-mm floor keeps a tiny head clickable when zoomed out.
+export function hitSprinklerZone(p: Planner, view: View, mm: Vec2): SprinklerZone | null {
+  const f = p.floor();
+  const h = Math.max(hitPx(view) * 1.2, SPRINKLER_DEFAULTS.hitRadiusMm);
+  const list = f.sprinklerZones ?? [];
   for (let i = list.length - 1; i >= 0; i--) {
     if (distMM(list[i], mm) < h) return list[i];
   }

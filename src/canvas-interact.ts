@@ -10,7 +10,7 @@ import {
   hitBgBody, hitBgCorner, bgEditable,
   hitMotionSensor, hitMotionRotateHandle, hitEnvSensor, hitEnvResizeHandle,
   hitBleProxy, hitAlarmPanel, hitCalendarPanel, hitThermostat, hitSafetySensor, hitAlertBeacon, hitRobot,
-  hitCamera, hitCameraRotateHandle, hitProjector, hitValve, hitPlug, hitInfoCard, hitActionButton, hitPresenceZone, hitPresenceZoneVertex,
+  hitCamera, hitCameraRotateHandle, hitProjector, hitValve, hitSprinklerZone, hitPlug, hitInfoCard, hitActionButton, hitPresenceZone, hitPresenceZoneVertex,
   hitGroundArea, hitGroundAreaVertex,
   hitVacuumSegment,
   hitVoidArea, hitVoidAreaVertex,
@@ -682,6 +682,12 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
     p.drag = { kind: 'plug', id: plugH.id, startMm: mm, start: { x: plugH.x, y: plugH.y } };
     canvas.style.cursor = 'grabbing'; e.preventDefault(); p.emitConfig(); return;
   }
+  const sprH = hitSprinklerZone(p, view, mm);
+  if (sprH) {
+    if (p.activeSprinklerId !== sprH.id) p.activeSprinklerId = sprH.id;
+    p.drag = { kind: 'sprinkler', id: sprH.id, startMm: mm, start: { x: sprH.x, y: sprH.y } };
+    canvas.style.cursor = 'grabbing'; e.preventDefault(); p.emitConfig(); return;
+  }
   // Presence zone body — select it (shows vertex handles); no whole-zone drag in
   // v1 (reshape via vertex handles or Redraw). Only when the zones layer is on.
   if (zonesInteractive(p)) {
@@ -915,6 +921,14 @@ export function onCanvasMouseMove(p: Planner, canvas: HTMLCanvasElement, view: V
         if (pg && !pg.locked) {
           pg.x = Math.max(0, Math.min(f.w, drag.start.x + mm.x - drag.startMm.x));
           pg.y = Math.max(0, Math.min(f.d, drag.start.y + mm.y - drag.startMm.y));
+        }
+        break;
+      }
+      case 'sprinkler': {
+        const sz = (f.sprinklerZones ?? []).find(x => x.id === drag.id);
+        if (sz && !sz.locked) {
+          sz.x = Math.max(0, Math.min(f.w, drag.start.x + mm.x - drag.startMm.x));
+          sz.y = Math.max(0, Math.min(f.d, drag.start.y + mm.y - drag.startMm.y));
         }
         break;
       }
@@ -1215,6 +1229,7 @@ export function onCanvasMouseMove(p: Planner, canvas: HTMLCanvasElement, view: V
       hitRobot(p, view, mm) ||             // robots are always click-toggleable
       hitProjector(p, view, mm) ||         // projectors toggle on/off in kiosk
       hitValve(p, view, mm) ||             // valves open/close in kiosk
+      hitSprinklerZone(p, view, mm) ||     // sprinkler heads toggle in kiosk
       hitPlug(p, view, mm) ||              // plugs toggle in kiosk
       hitDoor(p, view, mm) || hitWindow(p, view, mm);
     canvas.style.cursor = overDevice ? 'pointer' : 'default';
@@ -1240,6 +1255,7 @@ export function onCanvasMouseMove(p: Planner, canvas: HTMLCanvasElement, view: V
     else if (hitCamera(p, view, mm)) canvas.style.cursor = 'grab';
     else if (hitProjector(p, view, mm)) canvas.style.cursor = 'grab';
     else if (hitValve(p, view, mm)) canvas.style.cursor = 'grab';
+    else if (hitSprinklerZone(p, view, mm)) canvas.style.cursor = 'grab';
     else if (hitPlug(p, view, mm)) canvas.style.cursor = 'grab';
     else if (zonesInteractive(p) && hitPresenceZoneVertex(p, view, mm)) canvas.style.cursor = 'grab';
     else if (groundInteractive(p) && hitGroundAreaVertex(p, view, mm)) canvas.style.cursor = 'grab';
@@ -1463,6 +1479,21 @@ export function onCanvasMouseUp(p: Planner, canvas: HTMLCanvasElement): void {
         p.save();
       }
     }
+  } else if (drag.kind === 'sprinkler') {
+    const sz = (f.sprinklerZones ?? []).find(x => x.id === drag.id);
+    if (sz) {
+      // Click-vs-drag: a tiny move is a click → toggle the head (bound entity via
+      // toggleItem/toggleEntity, or unbound localState flip). A real move relocates
+      // the head (free placement — no wall snap).
+      const moved = Math.hypot(sz.x - drag.start.x, sz.y - drag.start.y);
+      if (moved < 30) {
+        sz.x = drag.start.x; sz.y = drag.start.y;
+        p.toggleItem(sz);
+      } else {
+        sz.x = snap(sz.x, 10); sz.y = snap(sz.y, 10);
+        p.save();
+      }
+    }
   } else if (drag.kind === 'pzoneVert') {
     const z = (f.presenceZones ?? []).find(x => x.id === drag.id);
     if (z && z.points[drag.idx]) z.points[drag.idx] = { x: snap(z.points[drag.idx].x, 10), y: snap(z.points[drag.idx].y, 10) };
@@ -1671,6 +1702,9 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
     // Water valve → open/close (toggleValve gates allowControl + domain dispatch).
     const val2 = hitValve(p, view, mm);
     if (val2) { p.toggleValve(val2); return; }
+    // Sprinkler head → toggle (bound switch/valve via toggleEntity, or unbound flip).
+    const spr2 = hitSprinklerZone(p, view, mm);
+    if (spr2) { p.toggleItem(spr2); return; }
     // Smart plug → toggle the outlet (like a switch), gated by allowControl.
     const plug2 = hitPlug(p, view, mm);
     if (plug2) { if (plug2.allowControl !== false) p.toggleItem(plug2); return; }
@@ -2019,6 +2053,23 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
     p.emitConfig();
     return;
   }
+  if (p.tool === 'sprinkler') {
+    if (!f.sprinklerZones) f.sprinklerZones = [];
+    const id = newId('spr');
+    // Free placement — the click point is the head (sits inside a lawn area).
+    f.sprinklerZones.push({
+      id,
+      x: snap(Math.max(0, Math.min(f.w, mm.x)), 10),
+      y: snap(Math.max(0, Math.min(f.d, mm.y)), 10),
+      entity_id: null,
+      zoneNumber: f.sprinklerZones.length + 1,
+    });
+    p.activeSprinklerId = id;
+    p.save();
+    p.setTool('select');
+    p.emitConfig();
+    return;
+  }
   if (p.tool === 'plug') {
     if (!f.plugs) f.plugs = [];
     const id = newId('pg');
@@ -2251,6 +2302,13 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
       if (plugHit.locked) return;
       f.plugs = (f.plugs ?? []).filter(x => x.id !== plugHit.id);
       if (p.activePlugId === plugHit.id) p.activePlugId = null;
+      p.save(); p.emitConfig(); return;
+    }
+    const sprDel = hitSprinklerZone(p, view, mm);
+    if (sprDel) {
+      if (sprDel.locked) return;
+      f.sprinklerZones = (f.sprinklerZones ?? []).filter(x => x.id !== sprDel.id);
+      if (p.activeSprinklerId === sprDel.id) p.activeSprinklerId = null;
       p.save(); p.emitConfig(); return;
     }
     if (zonesInteractive(p)) {

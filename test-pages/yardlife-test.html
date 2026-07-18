@@ -1,0 +1,251 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>YARDLIFE …</title>
+<style>html,body{margin:0;background:#111;color:#cfd8dc;font:12px monospace}#c{width:1280px;height:880px}#log{padding:8px;white-space:pre-wrap}</style>
+<div id="c"></div>
+<div id="log"></div>
+<!-- Batch T3 "Yard life": water shimmer, fountain particles, sprinkler zones,
+     rock_cluster. Two seams:
+       (1) pure helpers (geometry.mod.js): sprinklerRunning / defaults / FURNITURE_KINDS.
+             npx esbuild src/geometry.ts --bundle --format=esm --outfile=<H>/geometry.mod.js
+       (2) real Planner (planner.mod.js — same fake-HaApi/fake-avatar-store build as
+           config-test) for repairFloor backfill, _isSlowEntity live-path, deleteSelection:
+             T=$(mktemp -d); cp -r src/* "$T"/; cp test-pages/fake-avatar-store.ts "$T"/avatar-store.ts
+             npx esbuild "$T"/planner.ts --bundle --format=esm --outfile=<H>/planner.mod.js
+       (3) 3D build/advance via the built three-renderer chunk.
+     Asserts machine-checkable in document.title. -->
+<script type="module">
+ try {
+  const V = '?v=' + Date.now();
+  const geom = await import('./geometry.mod.js' + V);
+  const { Planner } = await import('./planner.mod.js' + V);
+  const mod = await import('./assets/three-renderer.js' + V);
+
+  const results = [];
+  const assert = (name, cond, detail = '') => results.push({ name, ok: !!cond, detail: String(detail) });
+  const near = (a, b, t = 1) => Math.abs(a - b) <= t;
+  const {
+    sprinklerRunning, sprinklerHeadKind, sprinklerArcDeg, sprinklerRadius, sprinklerRotation,
+    SPRINKLER_DEFAULTS, FURNITURE_KINDS,
+  } = geom;
+
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+  const fu = (id, kind, x, y, w, h, rot = 0, extra = {}) => ({ id, x, y, w, h, kind, rotation: rot, ...extra });
+  const scene3d = { preset: 'day', floorColor: '#8a7860', floorTex: 'none', wallColor: '#cfd2d6' };
+  const mkFloor = (over = {}) => ({
+    id: 'f1', name: 'R', w: 12000, d: 8000, walls: [], furniture: [],
+    lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [], windows: [], bg: null, model3d: null, look3d: null, rooms: [],
+    groundAreas: [], sprinklerZones: [], ...over,
+  });
+  const countBodies = (grp) => {
+    let n = 0;
+    grp.traverse(o => { if (o.isMesh && !o.userData.outline) n++; });
+    return n - 1; // one auto blob shadow
+  };
+  const findPoints = (grp) => { let pts = null; grp.traverse(o => { if (o.isPoints) pts = o; }); return pts; };
+
+  // ══ WATER SHIMMER ══════════════════════════════════════════════════════
+  {
+    const areas = [
+      { id: 'grass', kind: 'grass', points: [{ x: 500, y: 500 }, { x: 3000, y: 500 }, { x: 3000, y: 3000 }, { x: 500, y: 3000 }] },
+      { id: 'w1', kind: 'water', points: [{ x: 4000, y: 500 }, { x: 7000, y: 500 }, { x: 7000, y: 3000 }, { x: 4000, y: 3000 }] },
+      { id: 'w2', kind: 'water', points: [{ x: 8000, y: 500 }, { x: 11000, y: 500 }, { x: 11000, y: 3000 }, { x: 8000, y: 3000 }] },
+    ];
+    r.updateGroundAreas(areas);
+    // W1: two water patches → two tracked clones (grass does NOT clone).
+    assert('W1 two water clones tracked', r._waterPatchTextures.length === 2, r._waterPatchTextures.length);
+    // W2: clones are distinct instances AND neither is the shared cache entry.
+    const shared = r._groundTexture('water');
+    const [t0, t1] = r._waterPatchTextures;
+    assert('W2 clones distinct + not shared cache',
+      t0 !== t1 && t0 !== shared && t1 !== shared, `${t0 !== t1}/${t0 !== shared}/${t1 !== shared}`);
+    // W2b: independent offset objects (so drifts don't collide).
+    assert('W2b independent offset vectors', t0.offset !== t1.offset);
+    // W3: advance drifts offset.y forward (zero alloc — offset mutation only).
+    const before = t0.offset.y;
+    for (let i = 0; i < 20; i++) r._advanceGroundWater(0.05);
+    assert('W3 offset.y advances', t0.offset.y > before, `${before.toFixed(4)}→${t0.offset.y.toFixed(4)}`);
+    // W3b: both clones drift (each has its own offset).
+    assert('W3b both clones drift', t1.offset.y > 0, t1.offset.y.toFixed(4));
+    // W5: rebuild with ONE water area disposes the old clones + shrinks the list.
+    const old = [...r._waterPatchTextures];
+    const disposed = new Set();
+    for (const t of old) { const o = t.dispose.bind(t); t.dispose = () => { disposed.add(t); o(); }; }
+    r.updateGroundAreas([areas[0], areas[1]]);   // grass + ONE water
+    const shrunk = r._waterPatchTextures.length === 1;
+    const noOldRefs = old.every(t => !r._waterPatchTextures.includes(t));
+    const allDisposed = old.every(t => disposed.has(t));
+    assert('W5 rebuild disposes old clones + shrinks', shrunk && noOldRefs && allDisposed,
+      `len=${r._waterPatchTextures.length} disposed=${disposed.size}/${old.length}`);
+    // W6: an all-grass rebuild tracks zero water clones.
+    r.updateGroundAreas([areas[0]]);
+    assert('W6 no water → zero clones', r._waterPatchTextures.length === 0, r._waterPatchTextures.length);
+  }
+
+  // ══ FOUNTAIN PARTICLES ═════════════════════════════════════════════════
+  {
+    r.clearTransientGroups();
+    // Build via updateFloor (production path) so _fountains registers.
+    r.updateFloor(mkFloor({ furniture: [fu('ft', 'fountain', 4000, 4000, 1200, 1200)] }), scene3d);
+    const bodies = countBodies(r._buildFurniture(fu('ftx', 'fountain', 0, 0, 1200, 1200)));
+    // (the direct build above also pushed one entry; count the updateFloor one below)
+    assert('F0 fountain still 6 solid bodies', bodies === 6, bodies);
+    const grp = r._floorGroup;
+    const pts = findPoints(grp);
+    assert('F1 fountain spray Points exists (40)', !!pts && pts.geometry.getAttribute('position').count === 40,
+      pts ? pts.geometry.getAttribute('position').count : 'none');
+    // F2/F3: advance mutates positions in place — SAME buffer identity (zero alloc).
+    const entry = r._fountains.find(e => e.points === pts) || r._fountains[0];
+    const arrBefore = entry.pos;
+    const attrArrBefore = entry.points.geometry.getAttribute('position').array;
+    const snap = arrBefore.slice(0, 30);
+    for (let i = 0; i < 6; i++) r._advanceFountains(0.05);
+    const attrArrAfter = entry.points.geometry.getAttribute('position').array;
+    let changed = false;
+    for (let i = 0; i < 30; i++) if (Math.abs(snap[i] - arrBefore[i]) > 1e-6) { changed = true; break; }
+    assert('F2 advance mutates spray positions', changed);
+    assert('F3 zero-alloc (same buffer identity)', attrArrBefore === attrArrAfter && entry.pos === arrBefore);
+    // F5: list resets on floor switch.
+    r.clearTransientGroups();
+    assert('F5 _fountains reset on floor switch', r._fountains.length === 0, r._fountains.length);
+  }
+
+  // ══ SPRINKLER — pure helpers ═══════════════════════════════════════════
+  assert('S1 running switch on',      sprinklerRunning({ state: 'on' }) === true);
+  assert('S1 running valve open',     sprinklerRunning({ state: 'open' }) === true);
+  assert('S1 running valve opening',  sprinklerRunning({ state: 'opening' }) === true);
+  assert('S1 running position > 0',   sprinklerRunning({ state: 'closed', attributes: { current_position: 40 } }) === true);
+  assert('S1 not running off',        sprinklerRunning({ state: 'off' }) === false);
+  assert('S1 not running closed',     sprinklerRunning({ state: 'closed' }) === false);
+  assert('S1 not running null',       sprinklerRunning(null) === false);
+  assert('S2 default arc 180',        sprinklerArcDeg({}) === 180);
+  assert('S2 default radius 3000',    sprinklerRadius({}) === 3000);
+  assert('S2 default head spray',     sprinklerHeadKind({}) === 'spray');
+  assert('S2 arc clamps',             sprinklerArcDeg({ arcDeg: 999 }) === 360 && sprinklerArcDeg({ arcDeg: 1 }) === 10);
+
+  // ══ SPRINKLER — 3D build/advance/gating ════════════════════════════════
+  const stOff = () => null;
+  {
+    // S3: bound OFF → nub only, no spray cloud.
+    const zOff = { id: 'z1', x: 3000, y: 3000, entity_id: 'switch.zone1' };
+    r.updateFloor(mkFloor(), scene3d);
+    r.updateSprinklerZones([zOff], id => (id === 'switch.zone1' ? { state: 'off', attributes: {} } : null));
+    const nubOnly = r._sprinklerGroup.children.some(o => o.userData.kind === 'sprinkler');
+    assert('S3 off → nub built, no spray', nubOnly && r._sprinklerClouds.length === 0, r._sprinklerClouds.length);
+    // S4: bound ON → spray cloud built (Points child).
+    r.updateSprinklerZones([zOff], id => (id === 'switch.zone1' ? { state: 'on', attributes: {} } : null));
+    const hasPts = !!findPoints(r._sprinklerGroup);
+    assert('S4 on → spray cloud built', r._sprinklerClouds.length === 1 && hasPts, r._sprinklerClouds.length);
+    // S5: drip ON → nub but NO spray plume.
+    const zDrip = { id: 'zd', x: 3000, y: 3000, entity_id: 'switch.zd', headKind: 'drip' };
+    r.updateSprinklerZones([zDrip], id => ({ state: 'on', attributes: {} }));
+    assert('S5 drip on → no spray plume', r._sprinklerClouds.length === 0 && !findPoints(r._sprinklerGroup), r._sprinklerClouds.length);
+    // S7: advance mutates spray positions with zero allocation (same buffer).
+    r.updateSprinklerZones([zOff], id => ({ state: 'on', attributes: {} }));
+    const cl = r._sprinklerClouds[0];
+    const before = cl.points.geometry.getAttribute('position').array;
+    const s = before.slice(0, 30);
+    for (let i = 0; i < 6; i++) r._advanceSprinklers(0.05);
+    const after = cl.points.geometry.getAttribute('position').array;
+    let moved = false;
+    for (let i = 0; i < 30; i++) if (Math.abs(s[i] - before[i]) > 1e-6) { moved = true; break; }
+    assert('S7 spray advances + zero-alloc', moved && before === after && cl.pos === before);
+    // S8: 3D layer gating — sprinklers ride the `ground` layer.
+    r.setLayerVisibility({ ground: false });
+    const off = r._sprinklerGroup.visible === false;
+    r.setLayerVisibility({ ground: true });
+    const on = r._sprinklerGroup.visible === true;
+    assert('S8 3D layer gating (ground)', off && on, `${off}/${on}`);
+  }
+
+  // S6: head Y resolves via _groundYAt — terrace vs grade.
+  {
+    const terrace = { id: 'tr', kind: 'grass', elevationMm: 500,
+      points: [{ x: 2000, y: 2000 }, { x: 5000, y: 2000 }, { x: 5000, y: 5000 }, { x: 2000, y: 5000 }] };
+    r.updateFloor(mkFloor({ groundAreas: [terrace] }), scene3d);   // registers _terrain
+    const zTer = { id: 'zt', x: 3500, y: 3500, entity_id: null };  // inside the terrace
+    const zGrd = { id: 'zg', x: 9000, y: 6500, entity_id: null };  // at grade
+    r.updateSprinklerZones([zTer, zGrd], stOff);
+    const nubs = r._sprinklerGroup.children.filter(o => o.userData.kind === 'sprinkler');
+    const nTer = nubs.find(o => o.userData.fixtureId === 'zt');
+    const nGrd = nubs.find(o => o.userData.fixtureId === 'zg');
+    // nub.y = groundY + nubH/2; spray nub (spray kind) nubH=35 → grade y ≈ 17.5.
+    const terHigher = nTer.position.y - nGrd.position.y;
+    assert('S6 terrace head raised ~500mm', near(terHigher, 500, 6) && near(nGrd.position.y, 17.5, 1),
+      `terY=${nTer.position.y.toFixed(1)} grdY=${nGrd.position.y.toFixed(1)} Δ=${terHigher.toFixed(1)}`);
+  }
+
+  // ══ ROCK CLUSTER ═══════════════════════════════════════════════════════
+  {
+    // R1: kind exists, outdoor cat.
+    const def = FURNITURE_KINDS.rock_cluster;
+    assert('R1 rock_cluster def outdoor', !!def && def.cat === 'outdoor', def && def.cat);
+    // R2: 3D build → 4 boulder meshes (+ blob shadow).
+    const bodies = countBodies(r._buildFurniture(fu('rk', 'rock_cluster', 0, 0, 800, 600)));
+    assert('R2 rock builds 4 bodies (3D)', bodies === 4, bodies);
+    // R3: blocks nav — footprint cell blocked, far cell free.
+    r.updateFloor(mkFloor({ furniture: [fu('rk2', 'rock_cluster', 2000, 2000, 800, 600)] }), scene3d);
+    const nav = r._nav;
+    const idx = (wx, wy) => Math.floor(wy / nav.cell) * nav.nx + Math.floor(wx / nav.cell);
+    const rockBlocked = nav.blocked[idx(2000, 2000)] === 1;
+    const farFree = nav.blocked[idx(9000, 6000)] === 0;
+    assert('R3 rock blocks nav (footprint blocked, far free)', rockBlocked && farFree, `${rockBlocked}/${farFree}`);
+  }
+
+  // ══ PLANNER — backfill / live-path / delete / translate ═══════════════
+  {
+    class FakeHa {
+      constructor() { this.states = {}; this._s = []; this._c = []; }
+      connect() { for (const c of this._c) c('connected'); for (const s of this._s) s(this.states, undefined); }
+      onState(f) { this._s.push(f); } onConn(f) { this._c.push(f); }
+      callService() { return Promise.resolve(); }
+      async getHistory() { return {}; } async getWeatherForecasts() { return null; }
+      async getDevices() { return []; } async getEntityRegistry() { return []; }
+      async updateEntityRegistry() { return true; }
+      async getUserData() { return null; } async setUserData() { return true; }
+      async refreshStates() {}
+    }
+    localStorage.removeItem('diorama:store:v1'); localStorage.removeItem('diorama:configs');
+    const p = new Planner();
+    p.connectWith(new FakeHa());
+    const sleep = ms => new Promise(res => setTimeout(res, ms));
+    for (let i = 0; i < 300 && !p.floor(); i++) await sleep(4);
+    p.uiMode = 'edit';
+    // C1: repairFloor / defaultFloor backfills sprinklerZones [].
+    assert('C1 repairFloor backfills sprinklerZones []', Array.isArray(p.floor().sprinklerZones), typeof p.floor().sprinklerZones);
+    // Seed two zones.
+    p.floor().sprinklerZones = [
+      { id: 'sz1', x: 1000, y: 1000, entity_id: 'valve.zone_a' },
+      { id: 'sz2', x: 2000, y: 2000, entity_id: 'binary_sensor.zone_b' },
+    ];
+    // C2: sprinkler entity is LIVE-path (not config) — no sprinkler config-path rule.
+    const slowValve = p._isSlowEntity('valve.zone_a');
+    const slowBinary = p._isSlowEntity('binary_sensor.zone_b');
+    assert('C2 sprinkler entity live-path (not config)', slowValve === false && slowBinary === false,
+      `valve=${slowValve} binary=${slowBinary}`);
+    // C3: deleteSelection removes the selected sprinkler.
+    p.activeSprinklerId = 'sz1';
+    const removed = p.deleteSelection();
+    const gone = !(p.floor().sprinklerZones || []).some(z => z.id === 'sz1');
+    assert('C3 deleteSelection removes sprinkler', removed === true && gone, `${removed}/${gone}`);
+    // C4: translateFloorContent moves sprinkler positions.
+    const sz2 = p.floor().sprinklerZones.find(z => z.id === 'sz2');
+    const bx = sz2.x, by = sz2.y;
+    p.translateFloorContent(300, -200);
+    assert('C4 translateFloorContent moves sprinkler', sz2.x === bx + 300 && sz2.y === by - 200,
+      `${sz2.x},${sz2.y}`);
+  }
+
+  const pass = results.filter(x => x.ok).length;
+  const total = results.length;
+  const ok = pass === total;
+  const line = results.map(x => `${x.ok ? 'PASS' : 'FAIL'} ${x.name}${x.ok ? '' : ' :: ' + x.detail}`).join('\n');
+  document.getElementById('log').textContent = line;
+  document.title = `YARDLIFE ${ok ? 'PASS' : 'FAIL'} ${pass}/${total}`;
+ } catch (e) {
+  document.title = 'YARDLIFE ERR: ' + (e && e.stack ? e.stack.split('\n').slice(0, 4).join(' | ') : e);
+  document.getElementById('log').textContent = e && e.stack ? e.stack : String(e);
+ }
+</script>

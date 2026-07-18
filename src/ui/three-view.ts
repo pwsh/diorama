@@ -6,7 +6,7 @@ import { customElement } from './define.js';
 // startup path never downloads it.
 import type { ThreeDRenderer, ZoneWorld, HaloWorld, TargetWorld, ActivityContext,
   InteractiveItem, GpsPinWorld, GpsLandmarkWorld, GeoEventWorld, WeatherFxState, VacMapEntry } from '../three-renderer.js';
-import { localToWorld, transformVerts, pointInPolygon, sensorColor, hexToInt, motionColor, lightIconKind, furnitureKind, resolveFurnitureDef, furnitureCat, isBinKind, isSpeakerKind, isVehicleKind, isStairsKind, alarmStateColor, valveOpenness, doorSpanCenter, isDroopPlant, plantThirsty, PLANT_MOISTURE_DEFAULT_THRESHOLD } from '../geometry.js';
+import { localToWorld, transformVerts, pointInPolygon, sensorColor, hexToInt, motionColor, lightIconKind, furnitureKind, resolveFurnitureDef, furnitureCat, isBinKind, isSpeakerKind, isVehicleKind, isStairsKind, alarmStateColor, valveOpenness, sprinklerRunning, sprinklerHeadKind, sprinklerArcDeg, sprinklerRadius, sprinklerRotation, doorSpanCenter, isDroopPlant, plantThirsty, PLANT_MOISTURE_DEFAULT_THRESHOLD } from '../geometry.js';
 import { compass8 } from '../geo.js';
 import { parseNowPlaying, isMediaPlayerId } from '../geometry.js';
 import { resolveScreenContent } from '../surfaces.js';
@@ -249,6 +249,12 @@ export class ThreeView extends LitElement {
       if (kind === 'plug') {
         const pg = p.floor().plugs?.find(x => x.id === fixtureId);
         if (pg && pg.allowControl !== false) p.toggleItem(pg);
+        return;
+      }
+      // Sprinkler head → toggle (bound switch/valve via toggleEntity, or unbound flip).
+      if (kind === 'sprinkler') {
+        const sz = p.floor().sprinklerZones?.find(x => x.id === fixtureId);
+        if (sz) p.toggleItem(sz);
         return;
       }
       // Door lock deadbolt → toggle lock.lock/unlock (bound) or lockLocalState
@@ -637,6 +643,7 @@ export class ThreeView extends LitElement {
   private _keyCamAlerts = '';
   private _keyPzones = '';
   private _keyGround = '';
+  private _keySprinklers = '';
   private _keyHeatmap = '';
   private _keyVacMap = '';
   private _keyLights = '';
@@ -668,7 +675,7 @@ export class ThreeView extends LitElement {
         this._keyFloor = this._keyDoors = this._keySensors = '';
         this._keyMotion = this._keyEnv = this._keyInfo = this._keyActions = this._keyBle = this._keyAlarm = this._keyCalendar = this._keyThermo = this._keySafety = this._keyAlert = '';
         this._keyCameras = this._keyProjectors = this._keyValves = this._keyPlugs = this._keyCamAlerts = this._keyPzones = this._keyNowPlaying = '';
-        this._keyGround = '';
+        this._keyGround = this._keySprinklers = '';
         this._keyHeatmap = '';
         this._keyVacMap = '';
         this._keyLights = this._keyZones = this._keyHalos = '';
@@ -1154,6 +1161,24 @@ export class ThreeView extends LitElement {
       if (keyGround !== this._keyGround) {
         this._keyGround = keyGround;
         r.updateGroundAreas(groundList, f.yardFill, f.w, f.d, f.walls ?? []);
+      }
+
+      // Sprinkler zones (T3): head geometry (position / kind / arc / radius /
+      // rotation) + a bucketed RUNNING boolean. The spray plume animates per-frame
+      // via _advanceSprinklers (NOT in the key — only on/off transitions rebuild).
+      // Zone entity ids are LIVE-path in _isSlowEntity (a running sprinkler is a
+      // transient fast state), so the running term flips the key promptly here.
+      // Rides the `ground` layer. Also re-folds the ground/terrain hash so a head
+      // on a terrace re-grounds when the terrace elevation changes.
+      const sprList = f.sprinklerZones ?? [];
+      const keySprinklers = `${p.configRev}|${keyGround}|` + sprList.map(z => {
+        const running = sprinklerRunning(p.effectiveState(z));
+        return `${z.id}:${Math.round(z.x)}:${Math.round(z.y)}:${sprinklerHeadKind(z)}:` +
+          `${sprinklerArcDeg(z)}:${sprinklerRadius(z)}:${Math.round(sprinklerRotation(z))}:${running ? 1 : 0}`;
+      }).join('|');
+      if (keySprinklers !== this._keySprinklers) {
+        this._keySprinklers = keySprinklers;
+        r.updateSprinklerZones(sprList, id => states[id] || null);
       }
 
       // Per-room temperature heat-map (derived visual layer, opt-in). Rides its

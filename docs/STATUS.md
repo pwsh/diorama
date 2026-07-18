@@ -118,6 +118,18 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Terrain T3: yard life — water shimmer, fountain spray, sprinkler
+  zones, rock cluster** (2026-07-18; 1 Opus agent). Water-kind ground
+  patches drift a per-patch texture-offset CLONE (shared cache never
+  mutated; clones disposed on rebuild/clear/destroy); fountain kind
+  gains a 40-pt ballistic `THREE.Points` plume (zero-alloc advance);
+  full `SprinklerZone` fixture per `irrigation-sprinklers.md` (spray
+  pulse/rotor sweep/drip while the bound switch/valve is on — LIVE-path
+  ids per that doc, heads terrace-aware via `_groundYAt`); `rock_cluster`
+  outdoor FurnitureKind (icosahedra, nav-blocking). `YARDLIFE PASS
+  36/36`; regressions terrain 21/21, yard 4/4, robot 48/48.
+  CLAUDE.md T3 section by the agent.
+
 - **Terrain T1+T2: terraced elevation, yard fill, fences & gates**
   (2026-07-18; 2 parallel Opus agents on shared files, surgical-edit
   discipline; design `docs/DESIGN-terrain.md`). **T1**:

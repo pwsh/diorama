@@ -26,6 +26,7 @@ import {
   presenceZoneColor, cameraFov, cameraRange, cameraHeight, cameraStateColor,
   projectorHeight, projectorThrow, projectorBeamColor, projectorProjecting, projectorAim, screenCenterHeight, biasLightColor, PROJECTOR_DEFAULTS,
   VALVE_DEFAULTS, valveOpenness, valveFlowing, valveTransitional,
+  SPRINKLER_DEFAULTS, sprinklerRunning, sprinklerHeadKind, sprinklerArcDeg, sprinklerRadius, sprinklerRotation,
   PLUG_DEFAULTS, PLUG_PLATE_DEPTH_MM, plugHeight,
   GROUND_KINDS,
   ENV_KINDS, envKindOf, envColor, envValueText, envHeight, envScale,
@@ -34,7 +35,7 @@ import {
   logicLightState, actionButtonHeight, actionButtonSize, actionButtonColor, ACTION_BUTTON_DEFAULTS,
 } from './geometry.js';
 import { ALERT_BEACON_DEFAULTS, alertBeaconState, alertBeaconColor, alertBeaconAlarming, isAlertDomain } from './alerts.js';
-import type { Door, Window as WindowType, EnvSensor, BleProxy, AlarmPanel, CalendarPanel, ThermostatFixture, SafetySensor, AlertBeacon, RobotFixture, CameraFixture, ProjectorFixture, ValveFixture, PlugFixture, PresenceZone, InfoCard, ActionButton, ObjectRecipe, ActivityKind } from './types.js';
+import type { Door, Window as WindowType, EnvSensor, BleProxy, AlarmPanel, CalendarPanel, ThermostatFixture, SafetySensor, AlertBeacon, RobotFixture, CameraFixture, ProjectorFixture, ValveFixture, SprinklerZone, PlugFixture, PresenceZone, InfoCard, ActionButton, ObjectRecipe, ActivityKind } from './types.js';
 
 // The subset of Planner.RobotState the renderer reads (structural — keeps the
 // renderer decoupled from the planner). Positions are plan-frame world mm.
@@ -1015,6 +1016,7 @@ export class ThreeDRenderer {
   private _camAlertGroup = new THREE.Group();
   private _pzoneGroup = new THREE.Group();       // FP2-style presence-zone patches (build-time, _keyPzones)
   private _groundGroup = new THREE.Group();       // ground / yard covering patches (build-time, _keyGround)
+  private _sprinklerGroup = new THREE.Group();     // irrigation heads + spray clouds (build-time, _keySprinklers)
   private _heatmapGroup = new THREE.Group();       // per-room temperature heat-map patches (build-time, _keyHeatmap)
   private _vacMapGroup = new THREE.Group();        // Valetudo room-map overlay patches (build-time, _keyVacMap)
   // CanvasTextures built for the vac-map overlay — NOT freed by _clearGroup (same
@@ -1205,8 +1207,8 @@ export class ThreeDRenderer {
   private _lastAnimT = 0;   // performance.now()/1000 of the previous _animate frame
   private _ZONE_H = 305;  // 1 ft — low outlines that don't wall off the room
   private _OBJ_H = 900;
-  private _onFixtureClick: ((info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'thermostat' | 'safety' | 'alert' | 'robot' | 'lock' | 'appliance' | 'action' | 'projector' | 'valve' | 'plug'; entity_id: string | null; fixtureId: string }) => void) | null = null;
-  private _onFixtureDblClick: ((info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'thermostat' | 'safety' | 'alert' | 'robot' | 'lock' | 'appliance' | 'action' | 'projector' | 'valve' | 'plug'; entity_id: string | null; fixtureId: string }) => void) | null = null;
+  private _onFixtureClick: ((info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'thermostat' | 'safety' | 'alert' | 'robot' | 'lock' | 'appliance' | 'action' | 'projector' | 'valve' | 'plug' | 'sprinkler'; entity_id: string | null; fixtureId: string }) => void) | null = null;
+  private _onFixtureDblClick: ((info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'thermostat' | 'safety' | 'alert' | 'robot' | 'lock' | 'appliance' | 'action' | 'projector' | 'valve' | 'plug' | 'sprinkler'; entity_id: string | null; fixtureId: string }) => void) | null = null;
   // Valetudo tap-to-clean: separate callback (kept OUT of the fixture-click union)
   // so the vac-map raycast stays a low-priority overlay concern.
   private _onVacSegClick: ((info: { robotId: string; segId: string }) => void) | null = null;
@@ -1489,7 +1491,7 @@ export class ThreeDRenderer {
                     this._actionGroup,
                     this._bleGroup, this._alarmGroup, this._calendarGroup, this._thermoGroup, this._safetyGroup, this._alertGroup,
                     this._robotGroup, this._robotRigGroup, this._cameraGroup, this._projGroup, this._valveGroup, this._plugGroup, this._camAlertGroup, this._pzoneGroup,
-                    this._groundGroup, this._vacMapGroup, this._heatmapGroup,
+                    this._groundGroup, this._sprinklerGroup, this._vacMapGroup, this._heatmapGroup,
                     this._lightGroup, this._switchGroup, this._targetGroup, this._ghostGroup,
                     this._transitGroup,
                     this._gpsGroup, this._weatherGroup, this._skyGroup, this._bgTextGroup, this._pulseGroup, this._nowPlayingGroup);
@@ -1573,15 +1575,15 @@ export class ThreeDRenderer {
     this._animate();
   }
 
-  onFixtureClick(fn: (info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'thermostat' | 'safety' | 'alert' | 'robot' | 'lock' | 'appliance' | 'action' | 'projector' | 'valve' | 'plug'; entity_id: string | null; fixtureId: string }) => void): void {
+  onFixtureClick(fn: (info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'thermostat' | 'safety' | 'alert' | 'robot' | 'lock' | 'appliance' | 'action' | 'projector' | 'valve' | 'plug' | 'sprinkler'; entity_id: string | null; fixtureId: string }) => void): void {
     this._onFixtureClick = fn;
   }
-  onFixtureDblClick(fn: (info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'thermostat' | 'safety' | 'alert' | 'robot' | 'lock' | 'appliance' | 'action' | 'projector' | 'valve' | 'plug'; entity_id: string | null; fixtureId: string }) => void): void {
+  onFixtureDblClick(fn: (info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'thermostat' | 'safety' | 'alert' | 'robot' | 'lock' | 'appliance' | 'action' | 'projector' | 'valve' | 'plug' | 'sprinkler'; entity_id: string | null; fixtureId: string }) => void): void {
     this._onFixtureDblClick = fn;
   }
 
   private _raycastFixture(clientX: number, clientY: number):
-      { kind: 'light' | 'switch' | 'media' | 'alarm' | 'thermostat' | 'safety' | 'alert' | 'robot' | 'lock' | 'appliance' | 'action' | 'projector' | 'valve' | 'plug'; entity_id: string | null; fixtureId: string } | null {
+      { kind: 'light' | 'switch' | 'media' | 'alarm' | 'thermostat' | 'safety' | 'alert' | 'robot' | 'lock' | 'appliance' | 'action' | 'projector' | 'valve' | 'plug' | 'sprinkler'; entity_id: string | null; fixtureId: string } | null {
     if (!this._renderer || !this._camera) return null;
     const rect = this._renderer.domElement.getBoundingClientRect();
     const ndc = new THREE.Vector2(
@@ -1618,6 +1620,8 @@ export class ThreeDRenderer {
     if (this._valveGroup.visible) roots.push(this._valveGroup);
     // Smart plugs are clickable → toggle; ride the switches layer.
     if (this._plugGroup.visible) roots.push(this._plugGroup);
+    // Sprinkler heads are clickable → toggle; ride the ground layer.
+    if (this._sprinklerGroup.visible) roots.push(this._sprinklerGroup);
     for (const g of this._mediaClickables) roots.push(g);
     // Door lock deadbolts (userData.kind='lock') ride the always-visible door
     // group; the door panel itself carries no clickable tag, so only the bolt hits.
@@ -1629,7 +1633,7 @@ export class ThreeDRenderer {
       let obj: THREE.Object3D | null = h.object;
       while (obj) {
         const ud = obj.userData;
-        if (ud && (ud.kind === 'light' || ud.kind === 'switch' || ud.kind === 'media' || ud.kind === 'alarm' || ud.kind === 'thermostat' || ud.kind === 'safety' || ud.kind === 'alert' || ud.kind === 'robot' || ud.kind === 'lock' || ud.kind === 'appliance' || ud.kind === 'action' || ud.kind === 'projector' || ud.kind === 'valve' || ud.kind === 'plug')) {
+        if (ud && (ud.kind === 'light' || ud.kind === 'switch' || ud.kind === 'media' || ud.kind === 'alarm' || ud.kind === 'thermostat' || ud.kind === 'safety' || ud.kind === 'alert' || ud.kind === 'robot' || ud.kind === 'lock' || ud.kind === 'appliance' || ud.kind === 'action' || ud.kind === 'projector' || ud.kind === 'valve' || ud.kind === 'plug' || ud.kind === 'sprinkler')) {
           return { kind: ud.kind, entity_id: ud.entity_id ?? null, fixtureId: String(ud.fixtureId) };
         }
         obj = obj.parent;
@@ -2108,7 +2112,7 @@ export class ThreeDRenderer {
       this._floorGroup, this._doorGroup, this._modelGroup, this._zoneGroup, this._haloGroup,
       this._sensorGroup, this._motionGroup, this._infoGroup, this._actionGroup, this._bleGroup, this._alarmGroup, this._calendarGroup, this._thermoGroup,
       this._safetyGroup, this._alertGroup, this._robotGroup, this._robotRigGroup, this._cameraGroup, this._projGroup, this._valveGroup, this._plugGroup, this._camAlertGroup, this._pzoneGroup,
-      this._groundGroup, this._heatmapGroup,
+      this._groundGroup, this._sprinklerGroup, this._heatmapGroup,
       this._lightGroup, this._switchGroup, this._targetGroup, this._ghostGroup,
       this._pulseGroup, this._nowPlayingGroup, this._bgTextGroup,
     ]) {
@@ -2181,6 +2185,16 @@ export class ThreeDRenderer {
     this._plants = [];
     this._plantBlend = {};
     this._terrain = [];
+    // Water shimmer clones live under _groundGroup (just cleared) — dispose them
+    // + drop the list so _advanceGroundWater can't drift freed textures before
+    // the next updateGroundAreas.
+    this._disposeWaterPatchTextures();
+    // Fountain spray clouds live under _floorGroup (just cleared) — drop the
+    // tracking list so _advanceFountains can't iterate freed geometry.
+    this._fountains = [];
+    // Sprinkler spray clouds live under _sprinklerGroup (just cleared) — drop the
+    // tracking list so _advanceSprinklers can't iterate freed geometry.
+    this._sprinklerClouds = [];
     // updateFloor rebuilds this every call, but null it on floor switch so a
     // stale grid can't briefly route targets against the previous floor.
     this._nav = null;
@@ -2404,6 +2418,202 @@ export class ThreeDRenderer {
   // Procedural ground / yard covering textures (the "yard" arc). Same cache
   // pattern + lifecycle as _floorTexture — built once, disposed only in
   // destroy(). Each kind is its own cache key so its `.repeat` is independent.
+  // Water shimmer (T3): the shared `_groundTexture('water')` is a single cached
+  // texture — mutating its offset would drift EVERY water mesh in lockstep and
+  // fight the ground-tex cache. So each water patch/skirt/yardFill gets a cheap
+  // build-time CLONE (shares the source canvas image, own offset/repeat) tracked
+  // here; `_advanceGroundWater` drifts each clone's offset.y per frame (zero
+  // alloc). Clones are NOT freed by `_clearGroup` (it disposes materials, not
+  // maps — the shared cache must survive) so they are disposed explicitly on
+  // every rebuild + on floor switch. The shared cache entry itself is never
+  // disposed here (only in destroy()).
+  private _waterPatchTextures: THREE.Texture[] = [];
+  private _WATER_DRIFT = 0.035;   // uv/s — gentle vertical ripple drift
+  private _disposeWaterPatchTextures(): void {
+    for (const t of this._waterPatchTextures) t.dispose();
+    this._waterPatchTextures = [];
+  }
+  private _waterTexClone(): THREE.Texture {
+    const shared = this._groundTexture('water');
+    const c = shared.clone();
+    c.needsUpdate = true;
+    c.wrapS = c.wrapT = THREE.RepeatWrapping;
+    c.colorSpace = THREE.SRGBColorSpace;
+    c.repeat.set(1 / 800, 1 / 800);
+    this._waterPatchTextures.push(c);
+    return c;
+  }
+  private _advanceGroundWater(dt: number): void {
+    if (!this._waterPatchTextures.length) return;
+    for (const t of this._waterPatchTextures) {
+      let o = t.offset.y + dt * this._WATER_DRIFT;
+      if (o > 1) o -= 1;
+      t.offset.y = o;
+    }
+  }
+
+  // Fountain spray (T3): each `fountain` piece carries a small THREE.Points plume
+  // arcing up from its spout and falling back into the basin — always-on v1 (no
+  // binding). PointsMaterial is the documented _mat() toon exemption (billboarded
+  // droplets, like the weather precip clouds); the shared rain droplet texture is
+  // reused. Position buffers mutated in place by _advanceFountains — zero alloc
+  // after build. The Points live under _floorGroup (rebuilt under _keyFloor); the
+  // tracking list is reset in updateFloor + clearTransientGroups so the advance
+  // never iterates freed geometry.
+  private _fountains: {
+    points: THREE.Points; pos: Float32Array; vel: Float32Array; count: number;
+    originY: number; basinY: number; spread: number;
+  }[] = [];
+  private _FOUNTAIN_G = 4200;   // mm/s² downward (tuned for a ~0.5–1 m plume)
+  private _seedFountainDrop(f: { pos: Float32Array; vel: Float32Array;
+                                 originY: number; spread: number }, i: number): void {
+    const j = i * 3;
+    f.pos[j]     = (Math.random() - 0.5) * f.spread * 0.35;
+    f.pos[j + 1] = f.originY + Math.random() * 40;
+    f.pos[j + 2] = (Math.random() - 0.5) * f.spread * 0.35;
+    const ang = Math.random() * Math.PI * 2;
+    const rad = Math.random() * f.spread * 1.6;   // outward speed → fans out
+    const up = 1900 + Math.random() * 1500;
+    f.vel[j]     = Math.cos(ang) * rad;
+    f.vel[j + 1] = up;
+    f.vel[j + 2] = Math.sin(ang) * rad;
+  }
+  private _advanceFountains(dt: number): void {
+    if (!this._fountains.length) return;
+    for (const f of this._fountains) {
+      for (let i = 0; i < f.count; i++) {
+        const j = i * 3;
+        f.vel[j + 1] -= this._FOUNTAIN_G * dt;
+        f.pos[j]     += f.vel[j]     * dt;
+        f.pos[j + 1] += f.vel[j + 1] * dt;
+        f.pos[j + 2] += f.vel[j + 2] * dt;
+        if (f.pos[j + 1] <= f.basinY) this._seedFountainDrop(f, i);
+      }
+      (f.points.geometry.getAttribute('position') as THREE.BufferAttribute).needsUpdate = true;
+    }
+  }
+
+  // Sprinkler spray (T3): a per-RUNNING-zone THREE.Points ballistic fan (reuses
+  // the weather precip idiom — PointsMaterial + shared rain droplet texture +
+  // zero-alloc position-buffer recycle). Droplets launch within the head's arc
+  // toward `radius`, arc up under gravity, and recycle when they fall back to the
+  // head height. Rotor heads bias new droplets toward a sweeping jet angle. Built
+  // ONLY for running zones (drip = no plume) in updateSprinklerZones; advanced by
+  // _advanceSprinklers (guarded on "any cloud exists" = "any zone running").
+  // Positions/velocities are SCENE coords (world +X → scene −X, world +Y → +Z).
+  private _sprinklerClouds: {
+    points: THREE.Points; pos: Float32Array; vel: Float32Array; count: number;
+    hx: number; hy: number; hz: number;   // head scene origin (spray root)
+    arc: number; rot: number; radius: number; rotor: boolean;
+    sweepT: number; sweepW: number;
+  }[] = [];
+  private _SPRINKLER_G = 5200;   // mm/s² downward
+  private _seedSprinklerDrop(cl: (typeof this._sprinklerClouds)[number], i: number, sweepBias: number): void {
+    const half = cl.arc / 2;
+    const a = cl.rotor
+      ? cl.rot + sweepBias + (Math.random() - 0.5) * 0.22   // narrow rotor jet
+      : cl.rot + (Math.random() * 2 - 1) * half;            // full fan
+    const reach = cl.radius * (0.35 + Math.random() * 0.65);
+    const T = 0.55 + (reach / cl.radius) * 0.6;             // 0.55..1.15 s flight
+    const vh = reach / T;
+    const vy = 0.5 * this._SPRINKLER_G * T;                 // returns to head height at T
+    const j = i * 3;
+    // world horizontal dir (sin a, cos a) → scene (−sin a, ·, cos a).
+    cl.vel[j]     = -Math.sin(a) * vh;
+    cl.vel[j + 1] = vy;
+    cl.vel[j + 2] =  Math.cos(a) * vh;
+    cl.pos[j]     = cl.hx + (Math.random() - 0.5) * 40;
+    cl.pos[j + 1] = cl.hy + Math.random() * 30;
+    cl.pos[j + 2] = cl.hz + (Math.random() - 0.5) * 40;
+  }
+  private _advanceSprinklers(dt: number): void {
+    if (!this._sprinklerGroup.visible || !this._sprinklerClouds.length) return;
+    const G = this._SPRINKLER_G;
+    for (const cl of this._sprinklerClouds) {
+      let sweepBias = 0;
+      if (cl.rotor) {
+        cl.sweepT += dt;
+        sweepBias = Math.sin(cl.sweepT * cl.sweepW) * Math.max(0, cl.arc / 2 - 0.15);
+      }
+      for (let i = 0; i < cl.count; i++) {
+        const j = i * 3;
+        cl.vel[j + 1] -= G * dt;
+        cl.pos[j]     += cl.vel[j]     * dt;
+        cl.pos[j + 1] += cl.vel[j + 1] * dt;
+        cl.pos[j + 2] += cl.vel[j + 2] * dt;
+        if (cl.pos[j + 1] <= cl.hy) this._seedSprinklerDrop(cl, i, sweepBias);
+      }
+      (cl.points.geometry.getAttribute('position') as THREE.BufferAttribute).needsUpdate = true;
+    }
+  }
+
+  // Build sprinkler head nubs + (for RUNNING, non-drip zones) the spray fan.
+  // Head Y resolves via _groundYAt so a head on a raised terrace sprays from that
+  // terrace height (T3 delta over irrigation-sprinklers.md). Rebuilt under
+  // _keySprinklers in three-view; rides the `ground` layer. Raycast: each nub
+  // carries userData.kind='sprinkler' for the toggle click path.
+  updateSprinklerZones(zones: SprinklerZone[], stateProvider: StateProvider): void {
+    if (!this._scene) return;
+    this._clearGroup(this._sprinklerGroup);
+    this._sprinklerClouds = [];
+    for (const z of zones) {
+      const head = this._w(z.x, z.y, 0);
+      const groundY = this._groundYAt(z.x, z.y);   // terrace-aware head height
+      const kind = sprinklerHeadKind(z);
+      const running = sprinklerRunning(itemState(z, stateProvider));
+      const nubH = kind === 'rotor' ? 60 : 35;
+      const nub = new THREE.Mesh(
+        new THREE.CylinderGeometry(SPRINKLER_DEFAULTS.headRadiusMm * 0.7, SPRINKLER_DEFAULTS.headRadiusMm, nubH, 10),
+        this._mat({
+          color: running ? 0x4fc3f7 : 0x50565b,
+          emissive: running ? 0x1b76a8 : 0x000000,
+          emissiveIntensity: running ? 0.5 : 0, roughness: 0.7,
+        }));
+      nub.position.set(head.x, groundY + nubH / 2, head.z);
+      nub.userData.outlineSkip = true;
+      nub.userData.kind = 'sprinkler';
+      nub.userData.fixtureId = z.id;
+      nub.userData.entity_id = z.entity_id ?? null;
+      this._sprinklerGroup.add(nub);
+      if (!running || kind === 'drip') continue;   // drip zones show no spray plume
+      const count = 70;
+      const pos = new Float32Array(count * 3);
+      const vel = new Float32Array(count * 3);
+      const cloud = {
+        points: null as unknown as THREE.Points, pos, vel, count,
+        hx: head.x, hy: groundY + nubH, hz: head.z,
+        arc: sprinklerArcDeg(z) * Math.PI / 180,
+        rot: sprinklerRotation(z) * Math.PI / 180,
+        radius: sprinklerRadius(z),
+        rotor: kind === 'rotor',
+        sweepT: Math.random() * 10, sweepW: 2.1,
+      };
+      for (let i = 0; i < count; i++) {
+        this._seedSprinklerDrop(cloud, i, 0);
+        // Pre-advance a random flight slice so the fan is already full at t0.
+        const t = Math.random() * 0.9;
+        const j = i * 3;
+        cloud.vel[j + 1] -= this._SPRINKLER_G * t;
+        cloud.pos[j]     += cloud.vel[j]     * t;
+        cloud.pos[j + 1]  = Math.max(cloud.hy, cloud.pos[j + 1] + cloud.vel[j + 1] * t);
+        cloud.pos[j + 2] += cloud.vel[j + 2] * t;
+      }
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+      const mat = new THREE.PointsMaterial({
+        map: this._rainTexture(), size: 45, color: 0xcfeeff,
+        transparent: true, opacity: 0.8, depthWrite: false, sizeAttenuation: true,
+      });
+      const pts = new THREE.Points(geo, mat);
+      pts.userData.outlineSkip = true;
+      pts.frustumCulled = false;
+      pts.renderOrder = 3;
+      this._sprinklerGroup.add(pts);
+      cloud.points = pts;
+      this._sprinklerClouds.push(cloud);
+    }
+  }
+
   private _groundTexCache: Partial<Record<GroundKind, THREE.Texture>> = {};
   private _groundTexture(kind: GroundKind): THREE.Texture {
     const cached = this._groundTexCache[kind];
@@ -2542,13 +2752,17 @@ export class ThreeDRenderer {
   updateGroundAreas(areas: GroundArea[], yardFill?: GroundKind, fw?: number, fd?: number, walls?: Wall[]): void {
     if (!this._scene) return;
     this._clearGroup(this._groundGroup);
+    // Free the previous rebuild's per-patch water clones (the shared cache entry
+    // is untouched; only these throwaway clones are ours to dispose).
+    this._disposeWaterPatchTextures();
 
     // Yard fill: one underlay patch = floor rect minus closed wall loops (holes).
     if (yardFill && fw && fd) {
       const loops = closedWallLoops(walls ?? []);
       const yf = GROUND_KINDS[yardFill] ?? GROUND_KINDS.grass;
-      const ytex = this._groundTexture(yardFill);
-      ytex.repeat.set(1 / 800, 1 / 800);
+      const yfIsWater0 = yardFill === 'water';
+      const ytex = yfIsWater0 ? this._waterTexClone() : this._groundTexture(yardFill);
+      if (!yfIsWater0) ytex.repeat.set(1 / 800, 1 / 800);
       const yShape = new THREE.Shape();
       // Floor-rect outer contour in shape coords (sx = fw/2 − wx, sy = fd/2 − wy),
       // matching the slab's scenePathFor mapping so the wall-loop holes register.
@@ -2584,9 +2798,11 @@ export class ThreeDRenderer {
     for (const a of areas) {
       if (a.hidden || a.points.length < 3) continue;
       const kd = GROUND_KINDS[a.kind] ?? GROUND_KINDS.grass;
-      const tex = this._groundTexture(a.kind);
-      tex.repeat.set(1 / 800, 1 / 800);   // raw-mm ShapeGeometry UVs → one tile / 800 mm
       const isWater = a.kind === 'water';
+      // Water gets a per-patch clone (shimmer drift); the shared skirt below
+      // reuses this same clone so the patch + its skirt ripple in unison.
+      const tex = isWater ? this._waterTexClone() : this._groundTexture(a.kind);
+      if (!isWater) tex.repeat.set(1 / 800, 1 / 800);   // raw-mm ShapeGeometry UVs → one tile / 800 mm
       const elev = a.elevationMm ?? 0;
       const topY = elev + 4;
       // rotation.x = -π/2 maps a shape vertex (sx, sy) → world (sx, 0, -sy);
@@ -2969,6 +3185,7 @@ export class ThreeDRenderer {
     // grid helper also rides `grid` but its visibility is owned by updateFloor
     // (folds in the bg-image suppression); see _keyFloor + line ~1962.
     this._groundGroup.visible = v.ground !== false;
+    this._sprinklerGroup.visible = v.ground !== false;   // sprinklers ride the ground layer
     // Valetudo room-map overlay rides its OWN layer, DEFAULT OFF (diagnostic).
     this._vacMapGroup.visible = v.vacuumMap === true;
     // Per-room temperature heat-map rides its OWN layer, DEFAULT OFF (opt-in).
@@ -3399,6 +3616,9 @@ export class ThreeDRenderer {
     this._plants = [];
     this._speakerPulses = [];
     this._evPulses = [];
+    // Fountain spray clouds are rebuilt with the furniture under _floorGroup;
+    // drop the tracking list so _advanceFountains never iterates freed geometry.
+    this._fountains = [];
     this._tvsByRoom = {};
     this._beds = [];
     this._roomZones = [];
@@ -5624,6 +5844,64 @@ export class ThreeDRenderer {
         w2.position.set(0, HT * 0.77, 0); w2.userData.outlineSkip = true; grp.add(w2);
         const col = new THREE.Mesh(new THREE.CylinderGeometry(W * 0.03, W * 0.05, HT * 0.28, 10), water);
         col.position.set(0, HT * 0.86, 0); col.userData.outlineSkip = true; grp.add(col);
+        // Always-on water spray plume — a THREE.Points cloud arcing up from the
+        // top spout (y≈HT) and recycling at the lower basin (y≈HT*0.2). Reuses
+        // the weather rain droplet texture; advanced zero-alloc in _advanceFountains.
+        const sprayCount = 40;
+        const spos = new Float32Array(sprayCount * 3);
+        const svel = new Float32Array(sprayCount * 3);
+        const fEntry = {
+          points: null as unknown as THREE.Points, pos: spos, vel: svel,
+          count: sprayCount, originY: HT * 1.0, basinY: HT * 0.2, spread: W * 0.16,
+        };
+        for (let i = 0; i < sprayCount; i++) {
+          this._seedFountainDrop(fEntry, i);
+          // Pre-advance each droplet by a random slice of flight so the plume is
+          // already full at t0 (staggered, not a synchronized launch).
+          const t = Math.random() * 0.85;
+          const j = i * 3;
+          svel[j + 1] -= this._FOUNTAIN_G * t;
+          spos[j]     += svel[j]     * t;
+          spos[j + 1]  = Math.max(fEntry.basinY, spos[j + 1] + svel[j + 1] * t);
+          spos[j + 2] += svel[j + 2] * t;
+        }
+        const sgeo = new THREE.BufferGeometry();
+        sgeo.setAttribute('position', new THREE.BufferAttribute(spos, 3));
+        const smat = new THREE.PointsMaterial({
+          map: this._rainTexture(), size: 55, color: 0xcfe6ff,
+          transparent: true, opacity: 0.85, depthWrite: false, sizeAttenuation: true,
+        });
+        const spts = new THREE.Points(sgeo, smat);
+        spts.userData.outlineSkip = true;
+        spts.frustumCulled = false;
+        spts.renderOrder = 3;
+        grp.add(spts);
+        fEntry.points = spts;
+        this._fountains.push(fEntry);
+        break;
+      }
+      case 'rock_cluster': {
+        // 4 overlapping low-poly grey boulders (deterministic offsets so a
+        // _keyFloor rebuild doesn't re-roll their shapes). Ordinary nav-blocking
+        // outdoor piece — no binding, no activity, standard blob shadow + outlines.
+        const tones = [0x8b8f93, 0x76797d, 0x9aa0a5, 0x82868b];
+        const minD = Math.min(W, D);
+        const specs: [number, number, number, number, number][] = [
+          // [ox(frac W), oz(frac D), radius(frac minD), yScale, toneIdx]
+          [-0.18, -0.10, 0.42, 0.72, 0],
+          [ 0.16,  0.08, 0.50, 0.85, 1],
+          [-0.02,  0.22, 0.30, 0.62, 2],
+          [ 0.28, -0.20, 0.24, 0.58, 3],
+        ];
+        for (const [ox, oz, rf, ys, ti] of specs) {
+          const r = minD * rf * 0.5;
+          const rock = new THREE.Mesh(new THREE.IcosahedronGeometry(r, 0),
+            this._mat({ color: tones[ti], roughness: 0.95, metalness: 0.02 }));
+          rock.scale.set(1, ys, 0.9);
+          rock.position.set(ox * W, r * ys * 0.72, oz * D);
+          rock.rotation.set(ox * 2.0, oz * 3.0, 0.3);
+          grp.add(rock);
+        }
         break;
       }
       case 'swingset': {
@@ -14420,6 +14698,7 @@ export class ThreeDRenderer {
     this._texCache = {};
     for (const t of Object.values(this._groundTexCache)) t?.dispose();
     this._groundTexCache = {};
+    this._disposeWaterPatchTextures();   // per-patch water shimmer clones
     this._fenceMeshTex?.dispose(); this._fenceMeshTex = null;
     this._hedgeTex?.dispose(); this._hedgeTex = null;
     this._blurTexStand?.dispose(); this._blurTexStand = null;
@@ -14589,6 +14868,12 @@ export class ThreeDRenderer {
     // Outdoor weather effects — buffer mutation only (no per-frame allocation);
     // fog easing runs even when the group is hidden (see _advanceWeather).
     this._advanceWeather(frameDt, nowS);
+    // Water shimmer — drift each water ground-patch texture offset (zero alloc).
+    this._advanceGroundWater(frameDt);
+    // Fountain spray — ballistic droplet recycle (zero alloc after build).
+    this._advanceFountains(frameDt);
+    // Sprinkler spray — droplet recycle while any zone runs (zero alloc).
+    this._advanceSprinklers(frameDt);
     // Playful background text — sky drift / twinkle, banner orbit, prop spin.
     // Zero allocation after build (transform + opacity mutation only).
     this._advanceBgText(frameDt, nowS);

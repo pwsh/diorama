@@ -229,6 +229,7 @@ export type Drag =
   | { kind: 'cameraRotate'; id: string }
   | { kind: 'projector'; id: string; startMm: Vec2; start: Vec2 }
   | { kind: 'valve'; id: string; startMm: Vec2; start: Vec2 }
+  | { kind: 'sprinkler'; id: string; startMm: Vec2; start: Vec2 }
   | { kind: 'plug'; id: string; startMm: Vec2; start: Vec2 }
   | { kind: 'info'; id: string; startMm: Vec2; start: Vec2 }
   | { kind: 'action'; id: string; startMm: Vec2; start: Vec2 }
@@ -260,7 +261,7 @@ export interface EditZone {
   mousePos: Vec2 | null;
 }
 
-export type Tool = 'select' | 'wall' | 'sensor' | 'motion' | 'env' | 'infocard' | 'action' | 'bleproxy' | 'alarm' | 'calendar' | 'thermostat' | 'safety' | 'alertbeacon' | 'robot' | 'camera' | 'projector' | 'valve' | 'plug' | 'pzone' | 'ground' | 'void' | 'furniture' | 'light' | 'switch' | 'door' | 'window' | 'delete';
+export type Tool = 'select' | 'wall' | 'sensor' | 'motion' | 'env' | 'infocard' | 'action' | 'bleproxy' | 'alarm' | 'calendar' | 'thermostat' | 'safety' | 'alertbeacon' | 'robot' | 'camera' | 'projector' | 'valve' | 'sprinkler' | 'plug' | 'pzone' | 'ground' | 'void' | 'furniture' | 'light' | 'switch' | 'door' | 'window' | 'delete';
 
 // Live robot state (runtime-only). `x/y/heading/phase/activity/led` are the
 // DISPLAY fields both canvases read; the rest are the movement controller's
@@ -416,6 +417,9 @@ export class Planner extends EventTarget {
 
   // Active water valve fixture (sidebar selection / canvas highlight)
   activeValveId: string | null = null;
+
+  // Active sprinkler zone (sidebar selection / canvas highlight)
+  activeSprinklerId: string | null = null;
 
   // Active smart plug fixture (sidebar selection / canvas highlight)
   activePlugId: string | null = null;
@@ -948,6 +952,7 @@ export class Planner extends EventTarget {
     this.activeThermoId = null; this.activeSafetyId = null; this.activeAlertBeaconId = null;
     this.activeRobotId = null; this.activeCameraId = null; this.activeProjectorId = null;
     this.activeValveId = null; this.activePlugId = null; this.activeInfoId = null;
+    this.activeSprinklerId = null;
     this.activeActionId = null; this.activePZoneId = null; this.activeGroundAreaId = null;
     this.activeVoidAreaId = null; this.activeFurnitureId = null; this.activePersonId = null;
     this.selectedVertex = null;
@@ -1038,6 +1043,9 @@ export class Planner extends EventTarget {
       E(this.activePZoneId, f.presenceZones,
         id => { f.presenceZones = (f.presenceZones ?? []).filter(x => x.id !== id); },
         () => { this.activePZoneId = null; }),
+      E(this.activeSprinklerId, f.sprinklerZones,
+        id => { f.sprinklerZones = (f.sprinklerZones ?? []).filter(x => x.id !== id); },
+        () => { this.activeSprinklerId = null; }),
       E(this.activeGroundAreaId, f.groundAreas,
         id => { f.groundAreas = (f.groundAreas ?? []).filter(x => x.id !== id); },
         () => { this.activeGroundAreaId = null; }),
@@ -2673,6 +2681,11 @@ export class Planner extends EventTarget {
 
   setActivePlug(id: string | null): void {
     this.activePlugId = (this.activePlugId === id) ? null : id;
+    this.emitConfig();
+  }
+
+  setActiveSprinkler(id: string | null): void {
+    this.activeSprinklerId = (this.activeSprinklerId === id) ? null : id;
     this.emitConfig();
   }
 
@@ -4772,6 +4785,7 @@ export class Planner extends EventTarget {
     for (const it of f.cameras ?? []) { it.x += dx; it.y += dy; }
     for (const it of f.projectors ?? []) { it.x += dx; it.y += dy; }
     for (const it of f.valves ?? []) { it.x += dx; it.y += dy; }
+    for (const it of f.sprinklerZones ?? []) { it.x += dx; it.y += dy; }
     for (const it of f.plugs ?? []) { it.x += dx; it.y += dy; }
     for (const it of f.infoCards ?? []) { it.x += dx; it.y += dy; }
     for (const it of f.actionButtons ?? []) { it.x += dx; it.y += dy; }
@@ -4804,6 +4818,7 @@ export class Planner extends EventTarget {
     this.activeCameraId = null;
     this.activeProjectorId = null;
     this.activeValveId = null;
+    this.activeSprinklerId = null;
     this.activePlugId = null;
     this.activeInfoId = null;
     this.activeActionId = null;
