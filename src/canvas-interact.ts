@@ -391,6 +391,9 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
   if (p.placingCamCalibId) return;  // camera-calib latch: let the click record the floor point
   const mm = pxToMm(canvas, view, e);
   if (p.tool !== 'select') return;
+  // A fresh select-tool press resets the selected-vertex latch; a vertex hit
+  // below re-sets it. Delete keys off this (deleteSelection prioritizes it).
+  p.selectedVertex = null;
 
   // Bg corner — top priority for unlocked bg
   const bgc = hitBgCorner(p, view, mm);
@@ -427,6 +430,7 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
     if (pzv) {
       p.drag = { kind: 'pzoneVert', id: pzv.zone.id, idx: pzv.idx,
                  startMm: mm, startPts: pzv.zone.points.map(pt => ({ ...pt })) };
+      p.selectedVertex = { kind: 'pzone', itemId: pzv.zone.id, index: pzv.idx };
       canvas.style.cursor = 'grabbing'; e.preventDefault(); return;
     }
   }
@@ -437,6 +441,7 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
     if (gv) {
       p.drag = { kind: 'groundVert', id: gv.area.id, idx: gv.idx,
                  startMm: mm, startPts: gv.area.points.map(pt => ({ ...pt })) };
+      p.selectedVertex = { kind: 'ground', itemId: gv.area.id, index: gv.idx };
       canvas.style.cursor = 'grabbing'; e.preventDefault(); return;
     }
   }
@@ -447,6 +452,7 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
     if (vv) {
       p.drag = { kind: 'voidVert', id: vv.area.id, idx: vv.idx,
                  startMm: mm, startPts: vv.area.points.map(pt => ({ ...pt })) };
+      p.selectedVertex = { kind: 'void', itemId: vv.area.id, index: vv.idx };
       canvas.style.cursor = 'grabbing'; e.preventDefault(); return;
     }
   }
@@ -477,6 +483,7 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
   if (wv) {
     p.drag = { kind: 'wallv', wallId: wv.wall.id, idx: wv.idx,
                startMm: mm, startPts: wv.wall.points.map(pt => ({ ...pt })) };
+    p.selectedVertex = { kind: 'wall', itemId: wv.wall.id, index: wv.idx };
     canvas.style.cursor = 'grabbing'; e.preventDefault(); return;
   }
   const fc = hitFurnitureCorner(p, view, mm);

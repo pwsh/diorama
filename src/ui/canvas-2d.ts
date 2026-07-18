@@ -1,6 +1,7 @@
 import { LitElement, html } from 'lit';
 import { property, query } from 'lit/decorators.js';
 import { customElement } from './define.js';
+import { isEditableTarget } from '../dom-utils.js';
 import { computeView, drawAll, pxToMm, type View } from '../canvas-render.js';
 import {
   onCanvasMouseDown, onCanvasMouseMove, onCanvasMouseUp,
@@ -368,9 +369,7 @@ export class Canvas2D extends LitElement {
     // only covered INPUT — typing 'm' while a <select> had focus (e.g.
     // jumping to "Microwave" in the kind dropdown) silently switched to the
     // Motion tool, so the user's next canvas click planted a motion sensor.
-    const t = e.target as HTMLElement | null;
-    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' ||
-              t.tagName === 'SELECT' || t.isContentEditable)) return;
+    if (isEditableTarget(e.target)) return;
     if (e.code === 'Space') { this._spaceHeld = true; this._canvas.style.cursor = 'grab'; return; }
     const p = this.planner;
     if (e.key === 'Escape') {
@@ -387,6 +386,16 @@ export class Canvas2D extends LitElement {
     if (e.key === 'Enter' && p.drawingVoidArea) { p.finishVoidArea(); return; }
     if (e.key === '0' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); p.resetView(); return; }
     if (this.planner.uiMode !== 'edit') return;  // kiosk/view: no edit keys
+    // Undo / redo. Ctrl/Cmd+Z = undo, Ctrl/Cmd+Shift+Z or Ctrl/Cmd+Y = redo.
+    // The form-control guard above already blocks these while typing in inputs.
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) {
+      e.preventDefault();
+      if (e.shiftKey) p.redo(); else p.undo();
+      return;
+    }
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || e.key === 'Y')) {
+      e.preventDefault(); p.redo(); return;
+    }
     // Arrow keys nudge the ACTIVE furniture piece by 25 mm (100 with Shift) in
     // world mm. This is the manual escape hatch to fine-position a piece (e.g.
     // away from a wall), so it deliberately does NOT run the drag-time
@@ -409,19 +418,10 @@ export class Canvas2D extends LitElement {
       }
     }
     if (e.key === 'Delete' || e.key === 'Backspace') {
-      const f = p.floor();
-      if (p.activeMotionId) {
-        f.motionSensors = f.motionSensors.filter(x => x.id !== p.activeMotionId);
-        p.activeMotionId = null;
-        p.save(); p.emitConfig();
-        return;
-      }
-      const sa = p.activeSensor();
-      if (sa) {
-        f.sensors = f.sensors.filter(x => x.id !== sa.id);
-        p.store.activeSensorId = null;
-        p.save(); p.emitConfig();
-      }
+      // Delete the highest-priority current selection (vertex → furniture →
+      // sensor → fixtures → zones/areas). Respects locked items. Only swallow
+      // the keystroke when something was actually removed.
+      if (p.deleteSelection()) { e.preventDefault(); return; }
     }
     const tk: Record<string, import('../planner.js').Tool> = {
       '1': 'select', '2': 'wall', '3': 'sensor', '4': 'motion',

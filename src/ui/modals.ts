@@ -1219,6 +1219,11 @@ export class SettingsDrawer extends LitElement {
           <input type="checkbox" .checked=${!!p.store.imperial}
                  @change=${(e: Event) => { p.store.imperial = (e.target as HTMLInputElement).checked; p.save(); p.emitConfig(); this.requestUpdate(); }}>
         </div>
+        <div class="row" title="Synthetic avatars (roamers + presence/demo AI) occasionally walk up to UNBOUND lights, switches and appliances and toggle them (session-only — never written to HA). Bound devices are only ever contemplated, never touched.">
+          <label>Avatars use unbound devices</label>
+          <input type="checkbox" .checked=${p.store.avatarInteractions !== false}
+                 @change=${(e: Event) => { p.store.avatarInteractions = (e.target as HTMLInputElement).checked; p.save(); p.emitConfig(); this.requestUpdate(); }}>
+        </div>
         <div style="font-size:10px;color:var(--text-dim);line-height:1.3;margin:4px 0 0">
           Per-floor flooring / wall overrides live in the sidebar Floors section.
         </div>

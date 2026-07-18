@@ -1034,6 +1034,7 @@ export interface Store {
 
   avatarPacks?: Record<string, AvatarPackConfig>;   // per-pack loaded/active/members (avatar packs)
   notes?: string;                    // free-text description of this configuration; shown in Settings ▸ Data; rides export/import
+  avatarInteractions?: boolean;      // synthetic avatars (ai/roam) walk up to UNBOUND interactive devices and flip them (session-only); absent/true = on, false = off
   bgText?: BgTextConfig;             // playful background text (skywriting / banner plane / grass writing)
   heatmap?: HeatmapConfig;           // per-room temperature heat-map comfort band (derived visual layer)
 }

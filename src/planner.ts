@@ -455,6 +455,26 @@ export class Planner extends EventTarget {
   // Active person (sidebar People list expansion). Runtime only.
   activePersonId: string | null = null;
 
+  // Currently-selected polygon / wall vertex (runtime only). Set on a vertex
+  // mousedown in canvas-interact; cleared on any other selection / tool change /
+  // store load. Delete targets this vertex (highest priority) — see
+  // deleteSelection(). `kind` picks the collection; `index` is the point index.
+  selectedVertex: { kind: 'pzone' | 'ground' | 'void' | 'wall'; itemId: string; index: number } | null = null;
+
+  // ── Undo / redo (runtime only, never persisted) ─────────────────────────
+  // Snapshot history of serialized Store JSON. Every store mutation funnels
+  // through save() (the single choke point); _pushUndoSnapshot there records the
+  // PREVIOUS serialization when it differs from the current one, so a whole drag
+  // (which save()s only on release) is one undo step. Stacks clear on every
+  // config load/switch/import (they all funnel through _applyLoadedStore).
+  private _undoStack: string[] = [];
+  private _redoStack: string[] = [];
+  private _lastSnapshotJson: string | null = null;
+  private static readonly UNDO_CAP = 50;
+  private static readonly UNDO_BYTES_CAP = 8 * 1024 * 1024;
+  get canUndo(): boolean { return this.uiMode === 'edit' && this._undoStack.length > 0; }
+  get canRedo(): boolean { return this.uiMode === 'edit' && this._redoStack.length > 0; }
+
   // Bermuda discovery result (runtime-only; scanned on demand via scanBermuda).
   bermuda: BermudaDiscovery | null = null;
 
@@ -793,6 +813,9 @@ export class Planner extends EventTarget {
     // not write its runtime view tweaks (or anything else) back to HA or
     // even its own localStorage cache.
     if (this.uiMode !== 'edit') return;
+    // Undo history: record the pre-mutation baseline before persisting. Cheap
+    // no-op when nothing changed since the last snapshot (identical serialize).
+    this._pushUndoSnapshot();
     // Local cache (diorama:store:v1) is the ACTIVE config body — written
     // immediately so it survives reload / paints instantly next load.
     saveStore(this.store);
@@ -827,6 +850,249 @@ export class Planner extends EventTarget {
     } catch (err) {
       console.warn('HA storage save failed (kept local cache):', err);
     }
+  }
+
+  // ── Undo / redo ───────────────────────────────────────────────────────────
+  // Push the last-known baseline onto the undo stack when the store changed.
+  // Called from save() (edit-mode only). Coalesces identical serializations so
+  // repeated save()s within one mutation, or unchanged saves, don't stack.
+  private _pushUndoSnapshot(): void {
+    const cur = JSON.stringify(this.store);
+    if (this._lastSnapshotJson === null) { this._lastSnapshotJson = cur; return; }
+    if (cur === this._lastSnapshotJson) return;   // no net change
+    this._undoStack.push(this._lastSnapshotJson);
+    this._redoStack = [];                          // a fresh edit invalidates redo
+    this._lastSnapshotJson = cur;
+    this._trimUndoStacks();
+  }
+
+  // Enforce the entry cap (50) and total-byte cap (~8 MB) — drop oldest first.
+  private _trimUndoStacks(): void {
+    for (const stack of [this._undoStack, this._redoStack]) {
+      while (stack.length > Planner.UNDO_CAP) stack.shift();
+      let bytes = 0;
+      for (const s of stack) bytes += s.length;
+      while (stack.length > 1 && bytes > Planner.UNDO_BYTES_CAP) bytes -= stack.shift()!.length;
+    }
+  }
+
+  // Reset the whole history to a clean baseline of the CURRENT store. Called on
+  // every config load/switch/import (via _applyLoadedStore) + initial load.
+  private _resetUndoHistory(): void {
+    this._undoStack = [];
+    this._redoStack = [];
+    this._lastSnapshotJson = JSON.stringify(this.store);
+  }
+
+  // Undo the last store mutation. Edit-mode only; no-op with an empty stack.
+  undo(): boolean {
+    if (this.uiMode !== 'edit' || !this._undoStack.length) return false;
+    const cur = JSON.stringify(this.store);
+    const prev = this._undoStack.pop()!;
+    this._redoStack.push(cur);
+    this._trimUndoStacks();
+    this._applyHistorySnapshot(prev);
+    return true;
+  }
+
+  // Redo the last undone mutation. Edit-mode only; no-op with an empty stack.
+  redo(): boolean {
+    if (this.uiMode !== 'edit' || !this._redoStack.length) return false;
+    const cur = JSON.stringify(this.store);
+    const next = this._redoStack.pop()!;
+    this._undoStack.push(cur);
+    this._trimUndoStacks();
+    this._applyHistorySnapshot(next);
+    return true;
+  }
+
+  // Apply a history snapshot through the SAME normalization loads use (field
+  // list + repairFloor via _normalizeStore) but PRESERVE the current view
+  // context (floor if still present, tool, pan/zoom) — only transient
+  // drag/edit state and selections are cleared. Persists to HA (debounced) but
+  // never pushes a new undo snapshot (baseline is set to the applied store).
+  private _applyHistorySnapshot(json: string): void {
+    let remote: Store;
+    try { remote = JSON.parse(json) as Store; } catch { return; }
+    this._suppressHaSave = true;
+    try {
+      this.store = this._normalizeStore(remote, this.store.currentFloorId);
+      setAvatarPacksConfig(this.store.avatarPacks);
+      void this._hydrateAvatarPacks();
+      this._clearTransientSelection();
+      this.showDetails = this.store.showDetails === true;
+      this.useRawTargets = this.store.useRawTargets === true;
+      saveStore(this.store);
+      this._lastSnapshotJson = JSON.stringify(this.store);
+    } finally {
+      this._suppressHaSave = false;
+    }
+    this._reconfigureWeather();
+    this._calendarInited = true;
+    this._startCalendarPoll();
+    this._mqttInited = true;
+    void this._reconfigureMqtt();
+    if (this._alertInited) this._reconfigureAlertCenter();
+    // Persist the restored store to HA (debounced). save() sees the baseline
+    // == current, so it won't record a fresh undo snapshot for the undo itself.
+    this.save();
+    this.emitConfig();
+  }
+
+  // Clear per-item selections + transient drag/edit/drawing state (used by undo/
+  // redo apply). Does NOT touch view (tool/pan/zoom) — undo preserves those.
+  private _clearTransientSelection(): void {
+    this.store.activeSensorId = null;
+    this.activeMotionId = null; this.activeRoamerId = null; this.activeEnvId = null;
+    this.activeBleId = null; this.activeAlarmId = null; this.activeCalendarId = null;
+    this.activeThermoId = null; this.activeSafetyId = null; this.activeAlertBeaconId = null;
+    this.activeRobotId = null; this.activeCameraId = null; this.activeProjectorId = null;
+    this.activeValveId = null; this.activePlugId = null; this.activeInfoId = null;
+    this.activeActionId = null; this.activePZoneId = null; this.activeGroundAreaId = null;
+    this.activeVoidAreaId = null; this.activeFurnitureId = null; this.activePersonId = null;
+    this.selectedVertex = null;
+    this.drag = null; this.editZone = null;
+    this.drawingWall = null; this.drawingPresenceZone = null;
+    this.drawingGroundArea = null; this.drawingVoidArea = null;
+  }
+
+  // ── Delete the current selection ────────────────────────────────────────────
+  // Removes the highest-priority current selection — the same result the delete
+  // TOOL produces for that item, but driven off the active-selection ids instead
+  // of a cursor hit. Priority: selected vertex → furniture → mmWave sensor →
+  // fixtures (motion/env/ble/alarm/calendar/thermostat/safety/alert/robot/camera/
+  // projector/valve/plug/info/action) → presence zone → ground area → void area.
+  // Locked items refuse (no crash). Edit-mode only. Returns true if it removed
+  // something. Deletion persists via save(), which records an undo snapshot.
+  deleteSelection(): boolean {
+    if (this.uiMode !== 'edit') return false;
+    const f = this.floor();
+    // Highest priority: a selected polygon / wall vertex.
+    if (this.selectedVertex) return this._deleteSelectedVertex(f);
+
+    type Entry = {
+      id: string | null;
+      arr: Array<{ id: string; locked?: boolean }> | undefined;
+      remove: (id: string) => void;
+      clear: () => void;
+    };
+    const E = (
+      id: string | null,
+      arr: Array<{ id: string; locked?: boolean }> | undefined,
+      remove: (id: string) => void,
+      clear: () => void,
+    ): Entry => ({ id, arr, remove, clear });
+
+    const entries: Entry[] = [
+      E(this.activeFurnitureId, f.furniture,
+        id => { f.furniture = f.furniture.filter(x => x.id !== id); },
+        () => { this.activeFurnitureId = null; }),
+      E(this.store.activeSensorId, f.sensors,
+        id => { f.sensors = f.sensors.filter(x => x.id !== id); },
+        () => { this.store.activeSensorId = null; }),
+      E(this.activeMotionId, f.motionSensors,
+        id => { f.motionSensors = f.motionSensors.filter(x => x.id !== id); },
+        () => { this.activeMotionId = null; }),
+      E(this.activeEnvId, f.envSensors,
+        id => { f.envSensors = f.envSensors.filter(x => x.id !== id); },
+        () => { this.activeEnvId = null; }),
+      E(this.activeBleId, f.bleProxies,
+        id => { f.bleProxies = (f.bleProxies ?? []).filter(x => x.id !== id); },
+        () => { this.activeBleId = null; }),
+      E(this.activeAlarmId, f.alarmPanels,
+        id => { f.alarmPanels = (f.alarmPanels ?? []).filter(x => x.id !== id); },
+        () => { this.activeAlarmId = null; }),
+      E(this.activeCalendarId, f.calendarPanels,
+        id => { f.calendarPanels = (f.calendarPanels ?? []).filter(x => x.id !== id); },
+        () => { this.activeCalendarId = null; }),
+      E(this.activeThermoId, f.thermostats,
+        id => { f.thermostats = (f.thermostats ?? []).filter(x => x.id !== id); },
+        () => { this.activeThermoId = null; }),
+      E(this.activeSafetyId, f.safetySensors,
+        id => { f.safetySensors = (f.safetySensors ?? []).filter(x => x.id !== id); },
+        () => { this.activeSafetyId = null; }),
+      E(this.activeAlertBeaconId, f.alertBeacons,
+        id => { f.alertBeacons = (f.alertBeacons ?? []).filter(x => x.id !== id); },
+        () => { this.activeAlertBeaconId = null; }),
+      E(this.activeRobotId, f.robots,
+        id => { f.robots = (f.robots ?? []).filter(x => x.id !== id); delete this.robotStates[id]; },
+        () => { this.activeRobotId = null; }),
+      E(this.activeCameraId, f.cameras,
+        id => { f.cameras = (f.cameras ?? []).filter(x => x.id !== id); },
+        () => { this.activeCameraId = null; }),
+      E(this.activeProjectorId, f.projectors,
+        id => { f.projectors = (f.projectors ?? []).filter(x => x.id !== id); },
+        () => { this.activeProjectorId = null; }),
+      E(this.activeValveId, f.valves,
+        id => { f.valves = (f.valves ?? []).filter(x => x.id !== id); },
+        () => { this.activeValveId = null; }),
+      E(this.activePlugId, f.plugs,
+        id => { f.plugs = (f.plugs ?? []).filter(x => x.id !== id); },
+        () => { this.activePlugId = null; }),
+      E(this.activeInfoId, f.infoCards,
+        id => { f.infoCards = (f.infoCards ?? []).filter(x => x.id !== id); },
+        () => { this.activeInfoId = null; }),
+      E(this.activeActionId, f.actionButtons,
+        id => { f.actionButtons = (f.actionButtons ?? []).filter(x => x.id !== id); },
+        () => { this.activeActionId = null; }),
+      E(this.activePZoneId, f.presenceZones,
+        id => { f.presenceZones = (f.presenceZones ?? []).filter(x => x.id !== id); },
+        () => { this.activePZoneId = null; }),
+      E(this.activeGroundAreaId, f.groundAreas,
+        id => { f.groundAreas = (f.groundAreas ?? []).filter(x => x.id !== id); },
+        () => { this.activeGroundAreaId = null; }),
+      E(this.activeVoidAreaId, f.voidAreas,
+        id => { f.voidAreas = (f.voidAreas ?? []).filter(x => x.id !== id); },
+        () => { this.activeVoidAreaId = null; }),
+    ];
+
+    for (const ent of entries) {
+      if (!ent.id) continue;
+      const item = ent.arr?.find(x => x.id === ent.id);
+      if (!item) { ent.clear(); continue; }   // stale selection — clear + keep scanning
+      if (item.locked) {                       // locked: refuse, don't fall through
+        console.info('Diorama: selected item is locked — not deleted.');
+        return false;
+      }
+      ent.remove(ent.id);
+      ent.clear();
+      this.save();
+      this.emitConfig();
+      return true;
+    }
+    return false;
+  }
+
+  // Delete the currently-selected vertex. Polygons (presence/ground/void) keep
+  // ≥3 points — a delete that would drop below refuses. A wall vertex uses the
+  // delete-tool rule: a 2-point wall is removed whole, longer polylines lose the
+  // vertex. Locked owners refuse. Clears the vertex selection either way.
+  private _deleteSelectedVertex(f: Floor): boolean {
+    const sv = this.selectedVertex!;
+    if (sv.kind === 'wall') {
+      const wall = f.walls.find(w => w.id === sv.itemId);
+      if (!wall) { this.selectedVertex = null; return false; }
+      if (wall.locked) { console.info('Diorama: wall is locked — vertex not deleted.'); return false; }
+      wall.points.splice(sv.index, 1);
+      if (wall.points.length < 2) f.walls = f.walls.filter(x => x.id !== wall.id);
+      this.selectedVertex = null;
+      this.save(); this.emitConfig();
+      return true;
+    }
+    const arr = sv.kind === 'pzone' ? f.presenceZones
+              : sv.kind === 'ground' ? f.groundAreas
+              : f.voidAreas;
+    const poly = arr?.find(x => x.id === sv.itemId);
+    if (!poly) { this.selectedVertex = null; return false; }
+    if (poly.locked) { console.info('Diorama: shape is locked — vertex not deleted.'); return false; }
+    if (poly.points.length <= 3) {
+      console.info('Diorama: a polygon needs at least 3 points — vertex not deleted.');
+      return false;   // refuse (keep the vertex selected so the user sees no change)
+    }
+    poly.points.splice(sv.index, 1);
+    this.selectedVertex = null;
+    this.save(); this.emitConfig();
+    return true;
   }
 
   // ── Eventing ────────────────────────────────────────────────────────────
@@ -1237,37 +1503,8 @@ export class Planner extends EventTarget {
   private _applyLoadedStore(remote: Store): void {
     this._suppressHaSave = true;
     try {
-      const floors = remote.floors.map(f => repairFloor(f));
-      this.store = {
-        v: 2,
-        floors,
-        currentFloorId: remote.currentFloorId && floors.some(f => f.id === remote.currentFloorId)
-          ? remote.currentFloorId : floors[0].id,
-        activeSensorId: null,
-        coverage:      remote.coverage      ?? true,
-        imperial:      remote.imperial      ?? false,
-        showDetails:   remote.showDetails   ?? false,
-        useRawTargets: remote.useRawTargets ?? false,
-        showMotionZones: remote.showMotionZones ?? true,
-        // Pass-through settings objects. scene3d was silently DROPPED
-        // here for a while (3D appearance reset on every load) — keep
-        // every new top-level Store field in this list.
-        scene3d:        remote.scene3d        ?? undefined,
-        views3d:        remote.views3d        ?? undefined,
-        layers2d:       remote.layers2d       ?? undefined,
-        layerPresets2d: remote.layerPresets2d ?? undefined,
-        customObjects:  remote.customObjects  ?? undefined,
-        people:         remote.people         ?? undefined,
-        bermudaEnabled: remote.bermudaEnabled ?? undefined,
-        bleShowUnknown: remote.bleShowUnknown ?? undefined,
-        weather:        remote.weather        ?? undefined,
-        geo:            remote.geo            ?? undefined,
-        mqttBridge:     remote.mqttBridge     ?? undefined,
-        avatarPacks:    remote.avatarPacks    ?? undefined,
-        notes:          remote.notes          ?? undefined,
-        bgText:         remote.bgText         ?? undefined,
-        heatmap:        remote.heatmap        ?? undefined,
-      };
+      // Prefer the loaded store's own current floor (a fresh load / switch).
+      this.store = this._normalizeStore(remote, remote.currentFloorId ?? null);
       // Reflect the authoritative pack config into the registry snapshot so
       // resolveAvatar / activeAvatarIds see it, then re-hydrate loaded packs.
       setAvatarPacksConfig(this.store.avatarPacks);
@@ -1294,6 +1531,7 @@ export class Planner extends EventTarget {
       this.activeVoidAreaId = null;
       this.robotStates = {};
       this.activePersonId = null;
+      this.selectedVertex = null;
       this.viewCenter = null;
       this.zoom = 1;
       this.drag = null;
@@ -1321,7 +1559,52 @@ export class Planner extends EventTarget {
     // (Re)start the Alert Center collectors to match the authoritative config
     // (honors the enabled toggle; only starts once a connection exists).
     if (this._alertInited) this._reconfigureAlertCenter();
+    // A fresh config load / switch / import invalidates undo history (and this
+    // is the single funnel for initial load + every registry op — so the stacks
+    // clear in ONE place). Baseline is the just-loaded store.
+    this._resetUndoHistory();
     this.emitConfig();
+  }
+
+  // Normalize a loaded / imported / restored Store through the explicit field
+  // list (the _loadFromHa gotcha: any new top-level Store field MUST be added
+  // here) + repairFloor on each floor. `preferFloorId` keeps that floor current
+  // when it still exists (undo preserves the view; a load passes the loaded
+  // store's own current floor). Pure — sets nothing on `this`.
+  private _normalizeStore(remote: Store, preferFloorId: string | null): Store {
+    const floors = remote.floors.map(f => repairFloor(f));
+    const currentFloorId = preferFloorId && floors.some(f => f.id === preferFloorId)
+      ? preferFloorId : floors[0].id;
+    return {
+      v: 2,
+      floors,
+      currentFloorId,
+      activeSensorId: null,
+      coverage:      remote.coverage      ?? true,
+      imperial:      remote.imperial      ?? false,
+      showDetails:   remote.showDetails   ?? false,
+      useRawTargets: remote.useRawTargets ?? false,
+      showMotionZones: remote.showMotionZones ?? true,
+      // Pass-through settings objects. scene3d was silently DROPPED here for a
+      // while (3D appearance reset on every load) — keep every new top-level
+      // Store field in this list.
+      scene3d:        remote.scene3d        ?? undefined,
+      views3d:        remote.views3d        ?? undefined,
+      layers2d:       remote.layers2d       ?? undefined,
+      layerPresets2d: remote.layerPresets2d ?? undefined,
+      customObjects:  remote.customObjects  ?? undefined,
+      people:         remote.people         ?? undefined,
+      bermudaEnabled: remote.bermudaEnabled ?? undefined,
+      bleShowUnknown: remote.bleShowUnknown ?? undefined,
+      weather:        remote.weather        ?? undefined,
+      geo:            remote.geo            ?? undefined,
+      mqttBridge:     remote.mqttBridge     ?? undefined,
+      avatarPacks:    remote.avatarPacks    ?? undefined,
+      notes:          remote.notes          ?? undefined,
+      avatarInteractions: remote.avatarInteractions ?? undefined,
+      bgText:         remote.bgText         ?? undefined,
+      heatmap:        remote.heatmap        ?? undefined,
+    };
   }
 
   // ── Configuration registry API (Batch B) ─────────────────────────────────
@@ -2141,6 +2424,7 @@ export class Planner extends EventTarget {
     this.placingRoomId = null;  // picking any tool cancels a pending room placement
     this.placingLandmarkId = null;
     this.placingCamCalibId = null; this.pendingCamCalibUV = null;
+    this.selectedVertex = null;  // switching tools drops the vertex-delete latch
     this.emitConfig();
   }
 
@@ -4312,6 +4596,27 @@ export class Planner extends EventTarget {
     item.localState = on ? 'off' : 'on';
     this.save();        // no-op outside edit → kiosk local toggles are session-only
     this.emitConfig();  // bumps configRev → 3D dirty keys rebuild; sidebar re-renders
+  }
+
+  // Session-only actuation by a SYNTHETIC avatar (an `ai` presence/demo rig or a
+  // `roam` roamer) that walked up to an UNBOUND interactive device and "used" it.
+  // Flips localState IN MEMORY (same on↔off semantics as toggleItem's unbound
+  // branch; 'playing' counts as on) + emitConfig so the 2D/3D scene reacts, but
+  // deliberately NEVER save(): avatar antics must not dirty the store, sync to
+  // HA, or push an undo snapshot (undo/redo snapshots on real edits + save(),
+  // never on emitConfig). Two HARD rules: (1) refuses BOUND items — a device
+  // wired to an entity mirrors reality, so avatars only THINK about it (see the
+  // status-contemplation bubble tier); (2) refuses computed logic lights
+  // (read-only displays). Gated off entirely when avatarInteractions === false.
+  // Runs in every UI mode (kiosk/view display avatars too) — it's harmless
+  // because it never persists.
+  avatarToggleItem(item: { entity_id?: string | null; localState?: string; logic?: Light['logic'] }): void {
+    if (this.store.avatarInteractions === false) return;   // feature disabled in settings
+    if (item.entity_id) return;                            // bound → avatars never actuate a real device
+    if (item.logic?.entityId) return;                      // computed display → read-only
+    const on = item.localState === 'on' || item.localState === 'playing';
+    item.localState = on ? 'off' : 'on';
+    this.emitConfig();  // configRev → dirty-key rebuild + sidebar re-render. NO save() — antics never persist.
   }
 
   // Resolve a door's lock glyph state: bound lock.* entity wins (normalized to

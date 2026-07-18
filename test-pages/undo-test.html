@@ -1,0 +1,295 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>UNDO …</title>
+<style>
+  body { margin:0; background:#0d1116; color:#cfd8dc; font:13px/1.5 sans-serif; padding:14px; }
+  h1 { font-size:15px; margin:0 0 10px; }
+  #summary { font-size:14px; font-weight:bold; margin:10px 0; padding:8px 10px; border-radius:5px; }
+  .okbg { background:#12331f; color:#69f0ae; } .badbg { background:#3a1414; color:#ff8a80; }
+  .row { display:flex; justify-content:space-between; gap:10px; padding:2px 0; border-bottom:1px solid #1c2530; }
+  .pass { color:#69f0ae; } .fail { color:#ff5252; }
+  .name { color:#90caf9; } .extra { color:#ffd54f; font-size:11px; }
+</style>
+<h1>Undo / redo &amp; delete-selection — real Planner + fake HaApi</h1>
+<div id="summary">Running…</div>
+<div id="rows"></div>
+
+<!-- Drives the REAL Planner (bundled) with an in-page fake HaApi over a Map
+     (same seam as config-test.html). Build the two bundled modules (esbuild
+     inlines the avatar-pack dynamic imports; swap avatar-store for the
+     in-memory fake so IndexedDB isn't needed under headless virtual time):
+       T=$(mktemp -d); cp -r src/* "$T"/
+       cp test-pages/fake-avatar-store.ts "$T"/avatar-store.ts
+       npx esbuild "$T"/planner.ts    --bundle --format=esm --outfile=<harness>/planner.mod.js
+       npx esbuild "$T"/dom-utils.ts  --bundle --format=esm --outfile=<harness>/dom-utils.mod.js
+-->
+<script type="module">
+  const V = '?v=' + Date.now();
+  const { Planner } = await import('./planner.mod.js' + V);
+  const { isEditableTarget } = await import('./dom-utils.mod.js' + V);
+
+  const results = [];
+  const ok = (name, cond, extra = '') => results.push({ name, pass: !!cond, extra: String(extra) });
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  async function waitFor(cond, tries = 600) {
+    for (let i = 0; i < tries; i++) { if (cond()) return true; await sleep(4); }
+    return !!cond();
+  }
+  const clone = x => JSON.parse(JSON.stringify(x));
+
+  // ── Fake HaApi over a Map (the LocalApi seam) ──────────────────────────────
+  class FakeHa {
+    constructor(seed) {
+      this.map = new Map();
+      for (const [k, v] of Object.entries(seed || {})) this.map.set(k, clone(v));
+      this.states = {};
+      this._stateCbs = []; this._connCbs = [];
+    }
+    connect() {
+      for (const cb of this._connCbs) cb('connected');
+      for (const cb of this._stateCbs) cb(this.states, undefined);
+    }
+    onState(fn) { this._stateCbs.push(fn); }
+    onConn(fn) { this._connCbs.push(fn); }
+    callService() { return Promise.resolve(); }
+    async getHistory() { return {}; }
+    async getWeatherForecasts() { return null; }
+    async getDevices() { return []; }
+    async getEntityRegistry() { return []; }
+    async updateEntityRegistry() { return true; }
+    async getUserData(key) { return this.map.has(key) ? clone(this.map.get(key)) : null; }
+    async setUserData(key, value) { this.map.set(key, clone(value)); return true; }
+    async refreshStates() {}
+  }
+
+  function floor(id, name, extra = {}) {
+    return {
+      id, name, w: 8000, d: 6000,
+      walls: [], furniture: [], lights: [], switches: [], sensors: [], motionSensors: [],
+      roamers: [], envSensors: [], doors: [], windows: [], bg: null, rooms: [], bleProxies: [],
+      alarmPanels: [], safetySensors: [], robots: [], presenceZones: [], cameras: [],
+      groundAreas: [], voidAreas: [], ...extra,
+    };
+  }
+  function makeStore(floors, extra = {}) {
+    return {
+      v: 2, floors, currentFloorId: floors[0].id, activeSensorId: null,
+      coverage: true, imperial: false, showDetails: false, useRawTargets: false, ...extra,
+    };
+  }
+
+  const LEGACY = 'diorama';
+  async function freshPlanner(store) {
+    localStorage.removeItem('diorama:store:v1');
+    localStorage.removeItem('diorama:configs');
+    const stub = new FakeHa({ [LEGACY]: store });
+    const p = new Planner();
+    p.connectWith(stub);
+    await waitFor(() => p.configIndex !== null && p.store.floors[0].name === store.floors[0].name);
+    return { p, stub };
+  }
+
+  try {
+    // ── (a) undo restores prior store; redo reapplies ────────────────────────
+    {
+      const { p } = await freshPlanner(makeStore([floor('f1', 'Home')]));
+      ok('a: no undo at fresh load', !p.canUndo && !p.canRedo, `${p.canUndo}/${p.canRedo}`);
+      p.store.floors[0].name = 'Edited1'; p.save();
+      ok('a: canUndo after edit', p.canUndo && !p.canRedo, `${p.canUndo}/${p.canRedo}`);
+      const u = p.undo();
+      ok('a: undo returns true', u === true, String(u));
+      ok('a: undo restored name', p.store.floors[0].name === 'Home', p.store.floors[0].name);
+      ok('a: canRedo after undo', p.canRedo && !p.canUndo, `${p.canUndo}/${p.canRedo}`);
+      const r = p.redo();
+      ok('a: redo returns true', r === true, String(r));
+      ok('a: redo reapplied name', p.store.floors[0].name === 'Edited1', p.store.floors[0].name);
+      ok('a: undo empty no-op', (p.undo(), p.undo()) === false || p.store.floors[0].name === 'Home', p.store.floors[0].name);
+    }
+
+    // ── (b) a fresh edit clears the redo stack ───────────────────────────────
+    {
+      const { p } = await freshPlanner(makeStore([floor('f1', 'Home')]));
+      p.store.floors[0].name = 'A'; p.save();
+      p.undo();
+      ok('b: redo available after undo', p.canRedo, String(p.canRedo));
+      p.store.floors[0].name = 'B'; p.save();   // new edit invalidates redo
+      ok('b: new edit clears redo', !p.canRedo, String(p.canRedo));
+    }
+
+    // ── (c) cap eviction (>50 entries) ───────────────────────────────────────
+    {
+      const { p } = await freshPlanner(makeStore([floor('f1', 'Home')]));
+      for (let i = 0; i < 60; i++) { p.store.floors[0].name = 'E' + i; p.save(); }
+      ok('c: undo stack capped at 50', p._undoStack.length === 50, `len=${p._undoStack.length}`);
+      // Undoing 50 times drains the stack (older 10 evicted); still consistent.
+      let n = 0; while (p.undo()) n++;
+      ok('c: drained exactly 50 undos', n === 50, `n=${n}`);
+      ok('c: no undo left', !p.canUndo, String(p.canUndo));
+    }
+
+    // ── (d) stacks clear on newConfig / switchConfig ─────────────────────────
+    {
+      const { p } = await freshPlanner(makeStore([floor('f1', 'Home')]));
+      p.store.floors[0].name = 'X'; p.save();
+      ok('d: has undo before newConfig', p.canUndo, '');
+      await p.newConfig('Blank');
+      ok('d: newConfig clears undo/redo', !p.canUndo && !p.canRedo && p._undoStack.length === 0, '');
+
+      const { p: p2 } = await freshPlanner(makeStore([floor('f1', 'Home')]));
+      p2.store.floors[0].name = 'Y'; p2.save();
+      const idB = await p2.saveConfigAs('B');
+      p2.store.floors[0].name = 'Z'; p2.save();
+      ok('d: has undo before switch', p2.canUndo, '');
+      await p2.switchConfig('default');
+      ok('d: switchConfig clears undo/redo', !p2.canUndo && !p2.canRedo, `${p2.canUndo}/${p2.canRedo}`);
+    }
+
+    // ── (e) undo after delete restores the item ──────────────────────────────
+    {
+      const { p } = await freshPlanner(makeStore([floor('f1', 'Home')]));
+      p.floor().motionSensors.push({ id: 'm1', x: 100, y: 100, color: '#ba68c8' });
+      p.activeMotionId = 'm1';
+      p.save();  // baseline now includes m1
+      const del = p.deleteSelection();
+      ok('e: deleteSelection removed motion', del === true && p.floor().motionSensors.length === 0, '');
+      const u = p.undo();
+      ok('e: undo restored the item', u === true &&
+        p.floor().motionSensors.length === 1 && p.floor().motionSensors[0].id === 'm1', '');
+    }
+
+    // ── (f) current-floor preservation when valid ────────────────────────────
+    {
+      const { p } = await freshPlanner(makeStore([floor('f1', 'Home'), floor('f2', 'Up')]));
+      p.store.floors[0].name = 'HomeEdited'; p.save();   // both floors present in snapshot
+      p.store.currentFloorId = 'f2';                     // user now viewing f2 (no save)
+      p.undo();
+      ok('f: preserves current floor f2', p.store.currentFloorId === 'f2', p.store.currentFloorId);
+      ok('f: undo still restored content', p.store.floors[0].name === 'Home', p.store.floors[0].name);
+    }
+
+    // ── (g) current-floor fallback when the floor was deleted ────────────────
+    {
+      const { p } = await freshPlanner(makeStore([floor('f1', 'Home')]));
+      p.store.floors.push(floor('f2', 'Up'));
+      p.store.currentFloorId = 'f2';
+      p.save();                              // snapshot BEFORE = single floor f1
+      // current view is f2; undoing removes f2, so the current floor is gone.
+      p.store.currentFloorId = 'f2';
+      p.undo();
+      ok('g: fell back to first floor', p.store.currentFloorId === 'f1', p.store.currentFloorId);
+      ok('g: floor really removed', p.store.floors.length === 1, `n=${p.store.floors.length}`);
+    }
+
+    // ── (h) deleteSelection removes representative selected types ────────────
+    {
+      const { p } = await freshPlanner(makeStore([floor('f1', 'Home')]));
+      const f = p.floor();
+      f.furniture.push({ id: 'fu1', x: 1, y: 1, w: 500, h: 500, kind: 'sofa', rotation: 0, entity_id: null });
+      f.sensors.push({ id: 's1', x: 2, y: 2, heading: 0, fov: 120, range: 6000 });
+      f.envSensors.push({ id: 'e1', x: 3, y: 3, entity_id: null, kind: 'temperature' });
+      f.presenceZones.push({ id: 'pz1', points: [{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }, { x: 0, y: 100 }], entity_id: null });
+
+      p.activeFurnitureId = 'fu1';
+      ok('h: furniture deleted', p.deleteSelection() && p.floor().furniture.length === 0, '');
+      p.store.activeSensorId = 's1';
+      ok('h: sensor deleted', p.deleteSelection() && p.floor().sensors.length === 0, '');
+      p.activeEnvId = 'e1';
+      ok('h: env deleted', p.deleteSelection() && p.floor().envSensors.length === 0, '');
+      // presence-zone whole delete (no vertex selected)
+      p.activePZoneId = 'pz1';
+      ok('h: presence zone deleted', p.deleteSelection() && p.floor().presenceZones.length === 0, '');
+      ok('h: nothing selected → no-op', p.deleteSelection() === false, '');
+    }
+
+    // ── (i) vertex delete: 4-vert removes one; 3-vert ≥3 guard refuses ───────
+    {
+      const { p } = await freshPlanner(makeStore([floor('f1', 'Home')]));
+      const f = p.floor();
+      f.presenceZones.push({ id: 'quad', entity_id: null,
+        points: [{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }, { x: 0, y: 100 }] });
+      f.presenceZones.push({ id: 'tri', entity_id: null,
+        points: [{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 50, y: 100 }] });
+
+      p.activePZoneId = 'quad';
+      p.selectedVertex = { kind: 'pzone', itemId: 'quad', index: 1 };
+      const r1 = p.deleteSelection();
+      const quad = p.floor().presenceZones.find(z => z.id === 'quad');
+      ok('i: vertex removed from 4-gon', r1 === true && quad.points.length === 3, `len=${quad.points.length}`);
+      ok('i: vertex latch cleared', p.selectedVertex === null, '');
+
+      p.activePZoneId = 'tri';
+      p.selectedVertex = { kind: 'pzone', itemId: 'tri', index: 0 };
+      const r2 = p.deleteSelection();
+      const tri = p.floor().presenceZones.find(z => z.id === 'tri');
+      ok('i: ≥3 guard refuses (returns false)', r2 === false, String(r2));
+      ok('i: triangle points intact', tri.points.length === 3, `len=${tri.points.length}`);
+    }
+
+    // ── (j) wall vertex: 2-pt wall deletes whole; 3-pt drops one ─────────────
+    {
+      const { p } = await freshPlanner(makeStore([floor('f1', 'Home')]));
+      const f = p.floor();
+      f.walls.push({ id: 'w2', points: [{ x: 0, y: 0 }, { x: 1000, y: 0 }] });
+      f.walls.push({ id: 'w3', points: [{ x: 0, y: 0 }, { x: 1000, y: 0 }, { x: 1000, y: 1000 }] });
+
+      p.selectedVertex = { kind: 'wall', itemId: 'w3', index: 1 };
+      p.deleteSelection();
+      const w3 = p.floor().walls.find(w => w.id === 'w3');
+      ok('j: 3-pt wall lost a vertex', w3 && w3.points.length === 2, `len=${w3 ? w3.points.length : 'gone'}`);
+
+      p.selectedVertex = { kind: 'wall', itemId: 'w2', index: 0 };
+      p.deleteSelection();
+      ok('j: 2-pt wall removed whole', !p.floor().walls.some(w => w.id === 'w2'), '');
+    }
+
+    // ── (k) locked item refuses ──────────────────────────────────────────────
+    {
+      const { p } = await freshPlanner(makeStore([floor('f1', 'Home')]));
+      p.floor().furniture.push({ id: 'lk', x: 1, y: 1, w: 500, h: 500, kind: 'sofa', rotation: 0, entity_id: null, locked: true });
+      p.activeFurnitureId = 'lk';
+      const r = p.deleteSelection();
+      ok('k: locked refuses (false)', r === false, String(r));
+      ok('k: locked item still present', p.floor().furniture.length === 1, '');
+    }
+
+    // ── (l) Delete-in-input guard (isEditableTarget) ─────────────────────────
+    {
+      const inp = document.createElement('input');
+      const ta = document.createElement('textarea');
+      const sel = document.createElement('select');
+      const ce = document.createElement('div'); ce.contentEditable = 'true';
+      const div = document.createElement('div');
+      ok('l: input is editable', isEditableTarget(inp), '');
+      ok('l: textarea is editable', isEditableTarget(ta), '');
+      ok('l: select is editable', isEditableTarget(sel), '');
+      ok('l: contenteditable is editable', isEditableTarget(ce), '');
+      ok('l: plain div not editable', !isEditableTarget(div), '');
+      ok('l: null not editable', !isEditableTarget(null), '');
+
+      // Faithful to the handler: guard skips deleteSelection when target editable.
+      const { p } = await freshPlanner(makeStore([floor('f1', 'Home')]));
+      p.floor().furniture.push({ id: 'g1', x: 1, y: 1, w: 500, h: 500, kind: 'sofa', rotation: 0, entity_id: null });
+      p.activeFurnitureId = 'g1';
+      const onDelete = (target) => { if (isEditableTarget(target)) return false; return p.deleteSelection(); };
+      ok('l: no deletion while input focused', onDelete(inp) === false && p.floor().furniture.length === 1, '');
+      ok('l: deletion proceeds otherwise', onDelete(div) === true && p.floor().furniture.length === 0, '');
+    }
+  } catch (err) {
+    ok('harness threw', false, (err && err.stack) ? err.stack.split('\n').slice(0, 3).join(' | ') : String(err));
+  }
+
+  // ── Report ────────────────────────────────────────────────────────────────
+  const pass = results.filter(r => r.pass).length;
+  const total = results.length;
+  const fails = results.filter(r => !r.pass).map(r => r.name + (r.extra ? ` {${r.extra}}` : ''));
+  document.getElementById('rows').innerHTML = results.map(r =>
+    `<div class="row"><span class="name">${r.name}</span>` +
+    `<span class="${r.pass ? 'pass' : 'fail'}">${r.pass ? 'PASS' : 'FAIL'}${r.extra ? ` <span class="extra">${r.extra}</span>` : ''}</span></div>`
+  ).join('');
+  const sum = document.getElementById('summary');
+  sum.textContent = `UNDO ${pass === total ? 'PASS' : 'FAIL'} ${pass}/${total}`;
+  sum.className = pass === total ? 'okbg' : 'badbg';
+  window.__RESULT__ = { pass, total, results };
+  document.title = `UNDO ${pass === total ? 'PASS' : 'FAIL'} ${pass}/${total}` +
+    (fails.length ? ` | FAILS: ${fails.join('; ')}` : '');
+</script>

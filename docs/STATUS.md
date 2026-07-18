@@ -109,6 +109,34 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Undo/redo + Delete key + avatar device interactions** (2026-07-18;
+  2 parallel Opus agents). **Undo/redo**: snapshot history hooked at
+  the `save()` choke point (`_pushUndoSnapshot`, differs-from-baseline;
+  drags save on release so one drag = one step — verified), caps 50
+  entries/8 MB per stack, restore through the shared `_normalizeStore`
+  (extracted from `_applyLoadedStore` so the field list lives once)
+  preserving floor/tool/pan/zoom; stacks clear in `_applyLoadedStore`
+  (every config transition); topbar ↶/↷ + Ctrl/Cmd+Z / Shift+Z / Y
+  behind the new pure `isEditableTarget` input guard (`dom-utils.ts`).
+  **Delete key**: `Planner.deleteSelection()` — priority selected
+  VERTEX (new persistent `selectedVertex` set on pzone/ground/void/wall
+  vertex drag-start; polygons refuse <3 points; 2-pt wall vertex →
+  whole wall) → furniture → every active-id fixture type; locked top
+  selection refuses without fall-through. UNDO 44/44. **Avatar device
+  interactions**: synthetic rigs ONLY (`ai`/`roam` — never radar/BLE/
+  cam) take ~1/8 goals to UNBOUND interactive items (home-loop
+  confinement respected), reach one-shot on arrival then
+  `Planner.avatarToggleItem` — SESSION-ONLY (in-memory localState +
+  emitConfig, NEVER save() — no store dirtying, no undo pollution;
+  hard-refuses bound + logic lights); per-item 90 s + per-rig 45 s
+  cooldowns; time-of-day flavor (night → lights ON, day → OFF); flips
+  feed entityOn/recentTriggers organically (appliance doors, activity
+  gates, trigger bubbles). BOUND devices: a status-contemplation bubble
+  tier (💡/🌙/📺/⚡/🔌 + appliance glyphs) — think, never touch.
+  `Store.avatarInteractions` gate (Settings ▸ Display, default ON).
+  AVINTERACT 26/26; ai/roamer/event-bubble/fidget/config regressions
+  green.
+
 - **Sweet Home 3D structural import** (2026-07-18): `src/sh3d.ts` —
   zero-dep ZIP reader (stored + deflate via native DecompressionStream;
   clear errors on ZIP64/encryption/pre-5.3 Java-serialized saves) +

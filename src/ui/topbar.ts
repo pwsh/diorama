@@ -65,6 +65,16 @@ export class Topbar extends LitElement {
                   style="font-size:14px;padding:4px 8px"
                   @click=${() => p.toggleSidebar()}>☰</button>
         ` : nothing}
+        ${p.uiMode === 'edit' ? html`
+          <button class="btn-sm" title="Undo (Ctrl+Z)"
+                  style="font-size:14px;padding:4px 8px"
+                  ?disabled=${!p.canUndo}
+                  @click=${() => { p.undo(); }}>↶</button>
+          <button class="btn-sm" title="Redo (Ctrl+Shift+Z)"
+                  style="font-size:14px;padding:4px 8px"
+                  ?disabled=${!p.canRedo}
+                  @click=${() => { p.redo(); }}>↷</button>
+        ` : nothing}
         <button class="btn-sm" title="Open Home Assistant menu"
                 style="font-size:14px;padding:4px 8px"
                 @click=${this._openHaMenu}>🏠</button>

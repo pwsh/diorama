@@ -323,6 +323,32 @@ export interface ActivityContext {
   // per frame (a lit-fireplace anchor is inert when the fire is out). Absent →
   // every fireplace anchor treated as OFF (stale-chunk safe — no phantom poses).
   fireplaceOn?: Record<string, boolean>;
+  // OPTIONAL — interactive devices on the current floor (lights incl. fireplaces,
+  // switches, media/appliance furniture) that synthetic avatars can either USE
+  // (unbound → the AI controller walks up + toggles via the onAvatarInteract
+  // callback) or CONTEMPLATE (bound → the status-bubble tier reads its on/off).
+  // three-view builds it each tick; absent → no avatar interactions / no status
+  // bubbles (stale-chunk safe).
+  interactive?: InteractiveItem[];
+  // OPTIONAL — master gate for avatar device INTERACTION (Store.avatarInteractions).
+  // When falsey the AI controller never targets an unbound device (status bubbles
+  // for bound devices are unaffected). Absent → treated as off.
+  avatarInteract?: boolean;
+}
+
+// An interactive device the avatar-interaction system knows about. `id` is
+// namespaced by fixture family (`L`<lightId> / `S`<switchId> / `F`<furnitureId>)
+// so the three-view callback can resolve it back to the right array. `bound`
+// items are contemplated (status bubble) but NEVER actuated; `unbound` items are
+// the ones a synthetic rig walks up to and toggles. `on` is the resolved
+// on/playing state (drives the status glyph + the time-of-day light preference).
+export interface InteractiveItem {
+  id: string;          // namespaced fixture id (L/S/F prefix)
+  x: number; y: number; // world mm (the fixture's plan position)
+  ctrl: 'light' | 'switch' | 'media';  // control family (actuation + glyph semantics)
+  fkind?: string;      // furniture kind (media/appliance) OR 'fireplace' for a fireplace light
+  bound: boolean;      // has a bound HA entity → contemplate only, never actuate
+  on: boolean;         // resolved effectiveState is on/playing
 }
 
 // A transient "flash then decay" event with no persistent state — the generic
@@ -420,6 +446,17 @@ interface AiState {
   descendGoal?: boolean;
   descendDwell?: number;
   descendFade?: boolean;
+  // Device interaction (wander/roam rigs only). `interactId` marks the current
+  // goal as an UNBOUND interactive device (namespaced fixture id); `interactX/Y`
+  // is that device's world pos (for the arrival facing). On arrival the rig holds
+  // `interactT` seconds, plays a reach one-shot, and fires the toggle callback
+  // ONCE (`interactFired`). `nextInteractAt` is the per-rig 45 s cooldown clock
+  // (performance.now()/1000 before which no new interaction goal is picked).
+  interactId?: string;
+  interactX?: number; interactY?: number;
+  interactT?: number;
+  interactFired?: boolean;
+  nextInteractAt?: number;
 }
 
 // Phase 4b: a declarative accessory registered for per-frame animation. Base
@@ -637,6 +674,14 @@ interface Humanoid {
   scanDir: number;
   waveT: number;         // greeting-wave elapsed (>= 1 = done)
   fidgetLog: string[];
+  // Device-interaction reach one-shot: a brief arm-raise toward an unbound
+  // device the AI controller walked the rig up to. `reachT` counts elapsed
+  // seconds while >= 0 (−1 = inactive); `reachFacing` is the yaw to turn toward
+  // the device during the reach. Started by _advanceAi, advanced + applied in the
+  // updateTargets pose loop, independent of the idle-fidget gate.
+  reachT: number;
+  reachDur: number;
+  reachFacing: number;
 }
 
 type StateProvider = (id: string) => HassState | null;
@@ -1145,6 +1190,23 @@ export class ThreeDRenderer {
   // Valetudo tap-to-clean: separate callback (kept OUT of the fixture-click union)
   // so the vac-map raycast stays a low-priority overlay concern.
   private _onVacSegClick: ((info: { robotId: string; segId: string }) => void) | null = null;
+  // Avatar device interaction: fired when a synthetic rig finishes its reach at
+  // an UNBOUND interactive device. three-view wires this to planner.avatarToggleItem
+  // (mirrors the onFixtureClick → toggleItem flow; the renderer never imports the
+  // planner). The argument is the namespaced fixture id (L/S/F prefix).
+  private _onAvatarInteract: ((id: string) => void) | null = null;
+  // Interactive-device list + gate for this frame (set from ctx in updateTargets).
+  private _interactiveItems: InteractiveItem[] = [];
+  private _avatarInteractOn = false;
+  // Coarse time bucket for this frame (drives the light-fixing preference).
+  private _interactBucket: import('./time-of-day.js').TimeBucket = 'day';
+  // Per-item actuation cooldown clock: namespaced id → performance.now()/1000 of
+  // the last avatar toggle. A device can't be re-used for 90 s (no strobing).
+  private _itemInteractAt: Record<string, number> = {};
+  // Seedable RNG for the avatar-interaction picker (goal roll, item choice) — the
+  // test harness injects a deterministic generator via setInteractRng. Defaults
+  // to Math.random in the app.
+  private _interactRng: () => number = Math.random;
   private _raycaster = new THREE.Raycaster();
   // Per-target humanoid rigs, persisted across frames so we can carry
   // walk-cycle phase + smoothed body facing.
@@ -2563,6 +2625,16 @@ export class ThreeDRenderer {
   }
   onVacSegClick(fn: (info: { robotId: string; segId: string }) => void): void {
     this._onVacSegClick = fn;
+  }
+
+  // Wire the avatar-interaction actuation callback (three-view → planner).
+  onAvatarInteract(fn: (id: string) => void): void {
+    this._onAvatarInteract = fn;
+  }
+
+  // Inject a deterministic RNG for the avatar-interaction picker (tests only).
+  setInteractRng(fn: () => number): void {
+    this._interactRng = fn;
   }
 
   // ── Imported 3D model (Sweet Home 3D OBJ) ───────────────────────────────
@@ -9695,11 +9767,46 @@ export class ThreeDRenderer {
         if (ai.descendGoal) {
           // Arrived at the bottom of a sunken flight: hold a beat before fading.
           ai.state = 'idle'; ai.descendDwell = 1.5;
+        } else if (ai.interactId !== undefined) {
+          // Arrived at an unbound device: hold, face it, reach, and toggle once.
+          ai.state = 'idle'; ai.interactT = 0; ai.interactFired = false;
         } else {
           ai.state = 'idle'; ai.timer = 4 + Math.random() * 11;   // dwell 4..15 s
         }
       }
     } else {
+      // Device-interaction dwell: the rig arrived at an unbound device and holds
+      // ~1.3 s while it turns to face it, plays a reach one-shot, and fires the
+      // toggle callback ONCE at the reach's peak. Bypasses the normal idle/goal
+      // repick until the interaction completes.
+      if (ai.interactId !== undefined && ai.interactT !== undefined) {
+        const h = this._humanoids[t.key];
+        if (ai.interactT === 0 && h && !h.quad) {
+          // Kick off the reach one-shot + turn toward the device (scene frame:
+          // _w mirrors X, so scene-x = fw/2 − wx, scene-z = wy − fd/2).
+          h.reachT = 0; h.reachDur = 1.2;
+          const sx = this._fw / 2 - (ai.interactX ?? ai.x);
+          const sz = (ai.interactY ?? ai.y) - this._fd / 2;
+          h.reachFacing = Math.atan2(-(sx - h.navX), -(sz - h.navZ));
+        }
+        ai.interactT += dt;
+        // Fire at ~0.6 s in (reach peak) — pets never actuate (h.quad).
+        if (!ai.interactFired && ai.interactT >= 0.6) {
+          ai.interactFired = true;
+          if (h && !h.quad) {
+            const now = performance.now() / 1000;
+            this._itemInteractAt[ai.interactId] = now;   // per-item 90 s cooldown
+            ai.nextInteractAt = now + 45;                 // per-rig 45 s cooldown
+            if (this._onAvatarInteract) this._onAvatarInteract(ai.interactId);
+          }
+        }
+        if (ai.interactT >= 1.3) {
+          ai.interactId = undefined; ai.interactT = undefined; ai.interactFired = false;
+          ai.state = 'idle'; ai.timer = 3 + Math.random() * 4;
+        }
+        t.x = ai.x; t.y = ai.y;
+        return;
+      }
       // Descend hold: sit at the deepest tread for ~1.5 s, then flag the rig to
       // fast-fade + dispose (the main loop does the shrink; the normal spawn
       // path then re-seeds the avatar at its sensor). Bypasses the usual
@@ -9798,6 +9905,7 @@ export class ThreeDRenderer {
     const loop = roam ? null : this._aiHomeLoop(ai.anchorX, ai.anchorY);
     let gx: number | null = null, gy = 0;
     ai.descendGoal = false;
+    ai.interactId = undefined; ai.interactX = undefined; ai.interactY = undefined;
     // "Go downstairs": if a sunken flight's deepest tread is reachable in this
     // region, occasionally target it (~1 in 6 rolls — the goal picker is a
     // wander path, so Math.random matches its existing pattern). On arrival the
@@ -9808,6 +9916,44 @@ export class ThreeDRenderer {
       if (flights.length && Math.random() < 1 / 6) {
         const fl = flights[(Math.random() * flights.length) | 0];
         gx = fl.x; gy = fl.y; ai.descendGoal = true;
+      }
+    }
+    // Device interaction (~1/8 of rolls): walk up to a random UNBOUND interactive
+    // device and toggle it. Gated on the master flag + the per-rig 45 s cooldown;
+    // each candidate must be off its own 90 s cooldown, in the rig's region, and
+    // inside its home loop (confined ai rigs; roamers unrestricted). For a LIGHT
+    // only the ones in the "wrong" state for the hour qualify, so toggling FIXES
+    // the lighting (lights want ON in the evening/night, OFF by day); switches /
+    // appliances / TVs toggle either way. The seedable interaction RNG keeps
+    // tests deterministic.
+    if (gx === null && this._avatarInteractOn && this._interactiveItems.length) {
+      const now = performance.now() / 1000;
+      if (now >= (ai.nextInteractAt ?? 0) && this._interactRng() < 1 / 8) {
+        const wantOn = this._interactBucket === 'evening'
+          || this._interactBucket === 'night' || this._interactBucket === 'late_night';
+        // Fuzzy loop test: wall-flush fixtures (switches/fireplaces) sit ON the
+        // loop boundary, which pointInPolygon excludes — probe a small ring.
+        const inLoop = (x: number, y: number): boolean => {
+          if (!loop) return true;
+          if (pip(x, y, loop)) return true;
+          for (const [dx, dy] of [[300, 0], [-300, 0], [0, 300], [0, -300]])
+            if (pip(x + dx, y + dy, loop)) return true;
+          return false;
+        };
+        const cands = this._interactiveItems.filter(it => {
+          if (it.bound) return false;                                   // never actuate bound devices
+          if (now - (this._itemInteractAt[it.id] ?? -1e9) < 90) return false;  // per-item cooldown
+          if (Math.hypot(it.x - ai.anchorX, it.y - ai.anchorY) > 8000) return false;
+          if (this._regionOfWorld(it.x, it.y) !== region) return false; // reachable region
+          if (!inLoop(it.x, it.y)) return false;                        // home-room confinement
+          if (it.ctrl === 'light' && it.on === wantOn) return false;    // light already matches the hour
+          return true;
+        });
+        if (cands.length) {
+          const it = cands[(this._interactRng() * cands.length) | 0];
+          gx = it.x; gy = it.y;
+          ai.interactId = it.id; ai.interactX = it.x; ai.interactY = it.y;
+        }
       }
     }
     // Activity / sit anchor pick. Roamers weight it ~50% (vs 25% for confined
@@ -9912,6 +10058,10 @@ export class ThreeDRenderer {
     const entityOn = ctx?.entityOn ?? EMPTY_ENTITY_ON;
     // Fireplace LIGHT on-states (lightId → on) gating the warm_hands anchor.
     const fireplaceOn = ctx?.fireplaceOn ?? EMPTY_ENTITY_ON;
+    // Avatar device-interaction inputs for this frame (stale-chunk safe).
+    this._interactiveItems = ctx?.interactive ?? [];
+    this._avatarInteractOn = ctx?.avatarInteract === true;
+    this._interactBucket = ctx?.timeBucket ?? 'day';
     // RAW world target positions this frame, keyed by target — the bed-covers
     // pass tests footprint containment in world coords.
     const rawPos: Record<string, { x: number; y: number }> = {};
@@ -10349,6 +10499,11 @@ export class ThreeDRenderer {
       } else if (spot && sit > 0.3) {
         // Turn to the seat's facing while settling.
         let d = spot.facing - h.facing;
+        d -= Math.round(d / (2 * Math.PI)) * 2 * Math.PI;
+        h.facing += d * Math.min(1, dt * 6);
+      } else if (h.reachT >= 0) {
+        // Turn to face the device being reached for during a device interaction.
+        let d = h.reachFacing - h.facing;
         d -= Math.round(d / (2 * Math.PI)) * 2 * Math.PI;
         h.facing += d * Math.min(1, dt * 6);
       } else if (speedMms > 50) {
@@ -10863,6 +11018,19 @@ export class ThreeDRenderer {
         const osc = 0.6 + 0.3 * Math.sin(t * 3 * 2 * Math.PI);   // 0.3↔0.9 at 3 Hz ×3
         rSh = rSh * (1 - env) + 2.2 * env;
         rEl = rEl * (1 - env) + osc * env;
+      }
+
+      // Device-interaction reach one-shot: raise the right arm forward toward the
+      // device the AI controller walked the rig up to (a brief "flip the switch"
+      // gesture). Independent of the idle-fidget gate; advanced here (the single
+      // increment site). A trapezoid envelope ramps it in/out over ~0.3 s.
+      if (h.reachT >= 0) {
+        h.reachT += dt;
+        const D = h.reachDur, tt = h.reachT;
+        const env = tt < 0.3 ? tt / 0.3 : (tt > D - 0.3 ? Math.max(0, (D - tt) / 0.3) : 1);
+        rSh = rSh * (1 - env) + 1.75 * env;   // arm swings up-forward
+        rEl = rEl * (1 - env) + 0.35 * env;   // nearly straight, hand toward the device
+        if (h.reachT >= D) h.reachT = -1;     // done → inactive
       }
 
       // Leg joints are null on hover rigs (legless ghosts) — guard the writes;
@@ -11468,12 +11636,48 @@ export class ThreeDRenderer {
       return this._pickCtxBubble(h, 'seated_eve', BUBBLE_POOL_SEATED_EVE);
     if (inBedAlone && h.dwell > 2)
       return this._pickCtxBubble(h, 'bed', BUBBLE_POOL_BED);
+    // Bound-device status contemplation (SYNTHETIC ai/roam rigs only): a rig
+    // standing idle within ~1.8 m of a BOUND interactive device occasionally
+    // thinks about that device's CURRENT state — light on 💡 / off 🌙, TV
+    // playing 📺, an appliance's in-use glyph (🍽/👕/…), generic ⚡ / 🔌. This
+    // reads state and NEVER actuates (avatars only "use" UNBOUND devices). It's
+    // gated to a chatter window (h.chatterT > 0) so it stays as sparse as the
+    // idle-chatter cadence and doesn't drown the other tiers. It sits BELOW the
+    // recent-trigger + ctx tiers and ABOVE the personality chatter fallback.
+    if (t && (t.ai || t.roam) && standingIdle && h.chatterT > 0 && this._interactiveItems.length) {
+      let best: InteractiveItem | null = null, bestD2 = 1800 * 1800;
+      for (const it of this._interactiveItems) {
+        if (!it.bound) continue;
+        const dx = it.x - t.x, dy = it.y - t.y;
+        const d2 = dx * dx + dy * dy;
+        if (d2 <= bestD2) { bestD2 = d2; best = it; }
+      }
+      if (best) { h.ctxBubbleTier = 'status'; return this._deviceStatusGlyph(best); }
+    }
     h.ctxBubbleTier = null;
     // Personality chatter (LOWEST priority): per-kind flavor glyph, fired
     // periodically by the timer in updateTargets. Unlike the context tiers
     // above, this one is allowed while walking around.
     if (h.chatterT > 0 && h.chatterGlyph) return h.chatterGlyph;
     return null;
+  }
+
+  // Glyph for a bound interactive device's CURRENT status (contemplation tier).
+  private _deviceStatusGlyph(it: InteractiveItem): string {
+    if (it.ctrl === 'light') {
+      if (it.fkind === 'fireplace') return it.on ? '🔥' : '🌙';
+      return it.on ? '💡' : '🌙';
+    }
+    if (it.ctrl === 'media') {
+      const k = it.fkind ?? '';
+      if (k === 'tv') return it.on ? '📺' : '🔌';
+      if (k === 'dishwasher' || k === 'microwave') return it.on ? '🍽' : '🔌';
+      if (k === 'washer' || k === 'dryer') return it.on ? '👕' : '🔌';
+      if (k === 'stove' || k === 'oven') return it.on ? '🍳' : '🔌';
+      if (k === 'fridge') return '🧊';
+      return it.on ? '⚡' : '🔌';
+    }
+    return it.on ? '⚡' : '🔌';   // switch
   }
 
   // Return the rig's held pool pick for `tier`, rolling a fresh one (uniform
@@ -12930,7 +13134,7 @@ export class ThreeDRenderer {
       idleBlend: 0, fidgetKind: null, fidgetT: 0, fidgetDur: 0,
       fidgetNext: 8 + Math.random() * 12,
       scanState: 0, scanT: 0, scanNext: 4 + Math.random() * 4, scanDir: 1,
-      waveT: 0, fidgetLog: [],
+      waveT: 0, fidgetLog: [], reachT: -1, reachDur: 0, reachFacing: 0,
     };
   }
 
@@ -13595,7 +13799,7 @@ export class ThreeDRenderer {
       idleBlend: 0, fidgetKind: null, fidgetT: 0, fidgetDur: 0,
       fidgetNext: 8 + Math.random() * 12,
       scanState: 0, scanT: 0, scanNext: 4 + Math.random() * 4, scanDir: 1,
-      waveT: 0, fidgetLog: [],
+      waveT: 0, fidgetLog: [], reachT: -1, reachDur: 0, reachFacing: 0,
     };
   }
 

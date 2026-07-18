@@ -1,0 +1,281 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>avatar interact test</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<!-- Part 2 (Planner actuation semantics) needs the planner esbuild bundle, same
+     idiom as event-bubble-test.html:
+       T=$(mktemp -d); cp -r src/* "$T"/
+       npx esbuild "$T"/planner.ts --bundle --format=esm --outfile="$H"/planner.mod.js
+     (Part 1 only needs the built dist/ renderer chunk.) -->
+<script type="module">
+  // Avatar device-interaction harness (feature: synthetic ai/roam rigs walk up to
+  // UNBOUND interactive devices and toggle them session-only; BOUND devices are
+  // only contemplated via a status bubble tier). Part 1 drives the renderer
+  // directly with a synthesized performance.now clock + a SEEDABLE interaction
+  // RNG so the goal picker, cooldowns, and the time-of-day light preference are
+  // all deterministic. Part 2 drives the real Planner to verify avatarToggleItem
+  // (session-only flip, bound refusal, gate, and that the flip lands in
+  // effectiveState — the source three-view's ctx.entityOn/recentTriggers read).
+  // Title carries `AVINTERACT PASS n/n`.
+  const mod = await import('./assets/three-renderer.js?v=' + Date.now());
+  const { Planner } = await import('./planner.mod.js?v=' + Date.now());
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+
+  const FW = 8000, FD = 6000;
+  // One simple square room (single nav region), no stairs (so the descend roll
+  // can never pre-empt the interaction branch), no seats near the devices.
+  const floor = {
+    id: 'f1', name: 'Room', w: FW, d: FD,
+    walls: [{ id: 'perim', points: [{x:200,y:200},{x:7800,y:200},{x:7800,y:5800},{x:200,y:5800},{x:200,y:200}] }],
+    furniture: [],
+    lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [], windows: [], bg: null, model3d: null, look3d: null, rooms: [],
+  };
+  r.updateFloor(floor, { preset: 'day', floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6' });
+  r.applyViewPreset('top');
+
+  const realNow = performance.now.bind(performance);
+  let fakeNow = realNow();
+  performance.now = () => fakeNow;
+  const DT = 16.7;
+
+  // Deterministic RNG (mulberry32) for the interaction picker.
+  const mulberry32 = (a) => () => {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+
+  // Interactive-item list builder (mirrors three-view). Devices sit near the
+  // room center so an AI sensor at (2500,3000) shares their region + home loop.
+  const LIGHT_OFF = { id: 'La', x: 2600, y: 3000, ctrl: 'light', bound: false, on: false };
+  const LIGHT_ON  = { id: 'Lb', x: 5200, y: 3000, ctrl: 'light', bound: false, on: true };
+  // A switch is "either-way" eligible (no time-of-day preference) — used to
+  // isolate selection / firing / cooldown behavior from the light-fixing logic.
+  const SWITCH = { id: 'Sa', x: 2600, y: 3000, ctrl: 'switch', bound: false, on: false };
+  const clone = (o, over = {}) => Object.assign({}, o, over);
+
+  const AIKEY = 'ai_m1';
+  const aiTarget = (over = {}) => Object.assign({ key: AIKEY, x: 2500, y: 3000, color: 0x4fc3f7, ai: true }, over);
+  const mkCtx = (interactive, over = {}) => Object.assign(
+    { entityOn: {}, roomNames: {}, timeBucket: 'day', interactive, avatarInteract: true }, over);
+
+  const step = (targets, ctx) => { fakeNow += DT; r.updateTargets(targets, ctx); };
+
+  const results = [];
+  const check = (name, cond, extra = '') => results.push({ name, pass: !!cond, extra });
+
+  // Seed an AI rig + its _aiState (one step primes the pre-pass + ctx values).
+  const seedAi = (ctx) => { step([aiTarget()], ctx); return r._aiState[AIKEY]; };
+
+  // ── Test A: an interaction goal CAN be selected (unbound item) ────────────
+  {
+    r.setInteractRng(() => 0);   // always roll interaction + pick candidate 0
+    const ctx = mkCtx([clone(SWITCH)]);
+    const ai = seedAi(ctx);
+    ai.nextInteractAt = 0;
+    r._aiPickGoal(ai);
+    check('A selects unbound item', ai.interactId === 'Sa', `interactId=${ai.interactId}`);
+  }
+
+  // ── Test B: arrival + dwell fires the callback EXACTLY once ───────────────
+  let firedIds = [];
+  {
+    firedIds = [];
+    r.onAvatarInteract((id) => firedIds.push(id));
+    r.setInteractRng(() => 0);
+    r._itemInteractAt = {};                      // clear per-item cooldowns
+    const ctx = mkCtx([clone(SWITCH)]);
+    const ai = seedAi(ctx);
+    ai.nextInteractAt = 0;
+    // Force the next idle-timer expiry to pick a goal (interaction).
+    ai.state = 'idle'; ai.timer = 0;
+    let maxReach = -1;
+    for (let i = 0; i < Math.round(20 * 1000 / DT); i++) {
+      step([aiTarget()], ctx);
+      const h = r._humanoids[AIKEY];
+      if (h && h.reachT > maxReach) maxReach = h.reachT;
+    }
+    check('B fires exactly once', firedIds.length === 1, `fires=${JSON.stringify(firedIds)}`);
+    check('B fired on the device', firedIds[0] === 'Sa', `id=${firedIds[0]}`);
+    check('B played a reach one-shot', maxReach >= 0, `maxReach=${maxReach.toFixed(2)}`);
+    check('B stamped per-item cooldown', typeof r._itemInteractAt['Sa'] === 'number');
+    check('B stamped per-rig cooldown', typeof ai.nextInteractAt === 'number' && ai.nextInteractAt > 0);
+  }
+
+  // ── Test C: cooldowns block a refire (per-rig 45 s, per-item 90 s) ────────
+  {
+    r.setInteractRng(() => 0);
+    // Continue from Test B state: 'Sa' is on a fresh 90 s cooldown and the rig
+    // just fired (nextInteractAt set). A pick RIGHT NOW must select nothing.
+    const ctx = mkCtx([clone(SWITCH)]);
+    step([aiTarget()], ctx);
+    const ai = r._aiState[AIKEY];
+    r._aiPickGoal(ai);
+    check('C per-rig cooldown blocks', ai.interactId === undefined, `interactId=${ai.interactId}`);
+    // Past the per-rig 45 s but still inside the per-item 90 s → item filtered.
+    fakeNow += 50 * 1000;
+    ai.nextInteractAt = 0;                        // per-rig clear; item still cooling
+    step([aiTarget()], ctx);
+    r._aiPickGoal(ai);
+    check('C per-item cooldown blocks', ai.interactId === undefined, `interactId=${ai.interactId}`);
+    // Past the per-item 90 s → eligible again.
+    fakeNow += 50 * 1000;
+    ai.nextInteractAt = 0;
+    step([aiTarget()], ctx);
+    r._aiPickGoal(ai);
+    check('C eligible after cooldown', ai.interactId === 'Sa', `interactId=${ai.interactId}`);
+  }
+
+  // ── Test D: BOUND items are never targeted ───────────────────────────────
+  {
+    r.setInteractRng(() => 0);
+    r._itemInteractAt = {};
+    const ctx = mkCtx([clone(SWITCH, { bound: true })]);   // only a bound device present
+    const ai = seedAi(ctx);
+    ai.nextInteractAt = 0;
+    r._aiPickGoal(ai);
+    check('D never targets bound', ai.interactId === undefined, `interactId=${ai.interactId}`);
+  }
+
+  // ── Test E: gate OFF → no targeting ──────────────────────────────────────
+  {
+    r.setInteractRng(() => 0);
+    r._itemInteractAt = {};
+    const ctx = mkCtx([clone(SWITCH)], { avatarInteract: false });
+    const ai = seedAi(ctx);
+    ai.nextInteractAt = 0;
+    r._aiPickGoal(ai);
+    check('E gate off → no target', ai.interactId === undefined, `interactId=${ai.interactId}`);
+  }
+
+  // ── Test F: time-of-day flavor — NIGHT prefers turning a light ON ─────────
+  // Two lights (one off, one on). At night only the OFF one is eligible (so a
+  // toggle turns it ON); by day only the ON one (so a toggle turns it OFF).
+  {
+    // Force the 1/8 gate to always pass (return 0) so every roll makes a pick;
+    // the light-preference filter is then the only thing choosing the item.
+    r.setInteractRng(() => 0);
+    const nightCtx = mkCtx([clone(LIGHT_OFF), clone(LIGHT_ON)], { timeBucket: 'night' });
+    const ai = seedAi(nightCtx);
+    let nightOff = 0, nightOn = 0, nightNone = 0;
+    for (let i = 0; i < 200; i++) {
+      r._itemInteractAt = {}; ai.nextInteractAt = 0;
+      step([aiTarget()], nightCtx);              // refresh _interactiveItems / bucket
+      r._aiPickGoal(ai);
+      if (ai.interactId === 'La') nightOff++;
+      else if (ai.interactId === 'Lb') nightOn++;
+      else nightNone++;
+    }
+    // Every night light pick is the OFF light → toggling it turns lights ON;
+    // the already-ON light is NEVER chosen (it already matches the hour).
+    check('F night → only turns a light ON', nightOn === 0 && nightOff > 100,
+      `off=${nightOff} on=${nightOn} none=${nightNone}`);
+
+    const dayCtx = mkCtx([clone(LIGHT_OFF), clone(LIGHT_ON)], { timeBucket: 'day' });
+    let dayOff = 0, dayOn = 0;
+    for (let i = 0; i < 200; i++) {
+      r._itemInteractAt = {}; ai.nextInteractAt = 0;
+      step([aiTarget()], dayCtx);
+      r._aiPickGoal(ai);
+      if (ai.interactId === 'La') dayOff++;
+      else if (ai.interactId === 'Lb') dayOn++;
+    }
+    // Every day light pick is the ON light → toggling it turns lights OFF.
+    check('F day → only turns a light OFF', dayOff === 0 && dayOn > 100,
+      `off=${dayOff} on=${dayOn}`);
+  }
+
+  // ── Test G: status bubble near a BOUND light shows its state glyph ────────
+  {
+    const boundOn  = { id: 'Lz', x: 2500, y: 3000, ctrl: 'light', bound: true, on: true };
+    const boundOff = { id: 'Lz', x: 2500, y: 3000, ctrl: 'light', bound: true, on: false };
+    const ctxOn  = mkCtx([boundOn]);
+    const ctxOff = mkCtx([boundOff]);
+    // Spawn/settle the rig so it exists, then force a standing-idle state.
+    for (let i = 0; i < Math.round(4 * 1000 / DT); i++) step([aiTarget()], ctxOn);
+    const h = r._humanoids[AIKEY];
+    h.chatterT = 5; h.dwell = 3; h.sit = 0;      // standing idle + a chatter window (cadence gate)
+    const t = aiTarget();
+    // The status tier reads the renderer's frame state (this._interactiveItems),
+    // which updateTargets sets from ctx — set it directly for each direct call.
+    r._interactiveItems = ctxOn.interactive;
+    const gOn  = r._resolveBubbleKind(h, 'day', '', false, false, ctxOn, t);
+    r._interactiveItems = ctxOff.interactive;
+    const gOff = r._resolveBubbleKind(h, 'day', '', false, false, ctxOff, t);
+    check('G status bubble (light on) = 💡', gOn === '💡', `glyph=${gOn}`);
+    check('G status bubble (light off) = 🌙', gOff === '🌙', `glyph=${gOff}`);
+    // Off-cadence (no chatter window) → status tier stays quiet.
+    h.chatterT = 0;
+    r._interactiveItems = ctxOn.interactive;
+    const gQuiet = r._resolveBubbleKind(h, 'day', '', false, false, ctxOn, t);
+    check('G status quiet off-cadence', gQuiet !== '💡', `glyph=${gQuiet}`);
+  }
+
+  // ── Test H: a RADAR-origin rig never interacts + never contemplates ───────
+  {
+    firedIds = [];
+    r.onAvatarInteract((id) => firedIds.push(id));
+    r.setInteractRng(() => 0);
+    r._itemInteractAt = {};
+    const RKEY = 'r1';
+    const radarTarget = () => ({ key: RKEY, x: 2600, y: 3000, color: 0xff8888 });  // NO ai/roam flag
+    const ctx = mkCtx([clone(LIGHT_OFF), clone({ id: 'Lz', x: 2500, y: 3000, ctrl: 'light', bound: true, on: true })]);
+    for (let i = 0; i < Math.round(15 * 1000 / DT); i++) step([radarTarget()], ctx);
+    check('H radar rig has no AI state', r._aiState[RKEY] === undefined);
+    check('H radar rig never actuates', firedIds.length === 0, `fires=${JSON.stringify(firedIds)}`);
+    const hr = r._humanoids[RKEY];
+    if (hr) {
+      hr.chatterT = 5; hr.dwell = 3; hr.sit = 0;
+      const g = r._resolveBubbleKind(hr, 'day', '', false, false, ctx, radarTarget());
+      check('H radar rig never contemplates', g !== '💡', `glyph=${g}`);
+    } else {
+      check('H radar rig never contemplates', true, 'no rig');
+    }
+  }
+
+  performance.now = realNow;
+
+  // ══ Part 2 — Planner.avatarToggleItem semantics + effectiveState feedback ══
+  {
+    const p = new Planner();
+    p.uiMode = 'kiosk';                          // avatars display in kiosk; still session-only
+    let saves = 0; p.save = () => { saves++; };  // spy: avatar antics must NEVER persist
+    const f = p.store.floors[0];
+    const unbound = { id: 'lu', x: 1000, y: 1000, kind: 'bulb' };   // no entity_id / localState
+    const bound   = { id: 'lb', x: 2000, y: 1000, kind: 'bulb', entity_id: 'light.real' };
+    f.lights = [unbound, bound];
+
+    // Unbound flip: localState toggles off→on, effectiveState reflects it (this is
+    // exactly what three-view's entityOn / recent-trigger note() read), configRev
+    // bumps, and save() is NEVER called.
+    const rev0 = p.configRev;
+    p.avatarToggleItem(unbound);
+    check('P unbound flip → localState on', unbound.localState === 'on', `ls=${unbound.localState}`);
+    check('P flip lands in effectiveState', p.effectiveState(unbound)?.state === 'on');
+    check('P flip bumped configRev', p.configRev > rev0, `rev ${rev0}→${p.configRev}`);
+    p.avatarToggleItem(unbound);
+    check('P second flip → off', unbound.localState === 'off', `ls=${unbound.localState}`);
+    check('P never persisted (session-only)', saves === 0, `saves=${saves}`);
+
+    // Bound refusal: a device wired to an entity is never actuated.
+    p.avatarToggleItem(bound);
+    check('P bound item untouched', bound.localState === undefined, `ls=${bound.localState}`);
+
+    // Gate off: no flip at all.
+    p.store.avatarInteractions = false;
+    const before = unbound.localState;
+    p.avatarToggleItem(unbound);
+    check('P gate off → no flip', unbound.localState === before, `ls=${unbound.localState}`);
+  }
+
+  const passed = results.filter(x => x.pass).length;
+  const total = results.length;
+  const fails = results.filter(x => !x.pass).map(x => `${x.name} [${x.extra}]`);
+  window.__RESULT__ = { passed, total, results };
+  document.title = `AVINTERACT ${passed === total ? 'PASS' : 'FAIL'} ${passed}/${total}` +
+    (fails.length ? ` | FAILS: ${fails.join(' ; ')}` : '');
+</script>

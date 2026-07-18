@@ -5,7 +5,7 @@ import { customElement } from './define.js';
 // all of three.js, ~600 kB) is loaded lazily in firstUpdated so the 2D-only
 // startup path never downloads it.
 import type { ThreeDRenderer, ZoneWorld, HaloWorld, TargetWorld, ActivityContext,
-  GpsPinWorld, GpsLandmarkWorld, GeoEventWorld, WeatherFxState, VacMapEntry } from '../three-renderer.js';
+  InteractiveItem, GpsPinWorld, GpsLandmarkWorld, GeoEventWorld, WeatherFxState, VacMapEntry } from '../three-renderer.js';
 import { localToWorld, transformVerts, pointInPolygon, sensorColor, hexToInt, motionColor, lightIconKind, furnitureKind, resolveFurnitureDef, furnitureCat, isBinKind, isSpeakerKind, isVehicleKind, isStairsKind, alarmStateColor, valveOpenness, doorSpanCenter, isDroopPlant, plantThirsty, PLANT_MOISTURE_DEFAULT_THRESHOLD } from '../geometry.js';
 import { compass8 } from '../geo.js';
 import { parseNowPlaying, isMediaPlayerId } from '../geometry.js';
@@ -275,6 +275,21 @@ export class ThreeView extends LitElement {
         : kind === 'switch' ? f.switches.find(x => x.id === fixtureId)
         : f.furniture.find(x => x.id === fixtureId);
       if (item) p.toggleItem(item);
+    });
+    // Avatar device interaction: a synthetic rig finished its reach at an UNBOUND
+    // device → flip its localState session-only (never persisted). Resolve the
+    // namespaced id (L/S/F) back to the fixture and route through avatarToggleItem
+    // (which enforces the gate + the bound-item refusal). Mirrors the
+    // onFixtureClick → toggleItem flow so the renderer never imports the planner.
+    this._renderer.onAvatarInteract((id) => {
+      const p = this.planner;
+      const f = p.floor();
+      const prefix = id[0], raw = id.slice(1);
+      const item = prefix === 'L' ? f.lights.find(x => x.id === raw)
+        : prefix === 'S' ? f.switches.find(x => x.id === raw)
+        : prefix === 'F' ? f.furniture.find(x => x.id === raw)
+        : undefined;
+      if (item) p.avatarToggleItem(item);
     });
     // Valetudo room-map overlay: tap a segment → confirm + publish clean/set.
     // Edit + kiosk; view refuses inside cleanVacuumSegment.
@@ -1591,7 +1606,32 @@ export class ThreeView extends LitElement {
         if (!fu) continue;   // anchored to a fixture not on this floor
         eventTriggers.push({ kind: ev.kind, x: fu.x, y: fu.y, ageS });
       }
-      const ctx: ActivityContext = { entityOn, roomNames, timeBucket: resolveTimeBucket(states), weather, recentTriggers, eventTriggers, doorSensorOpen, fireplaceOn };
+      // Interactive-device list for the avatar-interaction system: unbound items
+      // are the ones a synthetic rig may walk up to and toggle (session-only via
+      // avatarToggleItem); bound items feed the status-contemplation bubble tier.
+      // Same set toggleItem covers — lights (incl. fireplaces, minus read-only
+      // logic lights), switches, and appliance-category / TV furniture (media).
+      const interactive: InteractiveItem[] = [];
+      for (const l of f.lights) {
+        if (l.logic?.entityId) continue;   // computed display — read-only, never actuated
+        const st = p.effectiveState(l);
+        interactive.push({ id: 'L' + l.id, x: l.x, y: l.y, ctrl: 'light',
+          fkind: lightIconKind(l) === 'fireplace' ? 'fireplace' : undefined,
+          bound: l.entity_id != null, on: st?.state === 'on' });
+      }
+      for (const sw of f.switches) {
+        const st = p.effectiveState(sw);
+        interactive.push({ id: 'S' + sw.id, x: sw.x, y: sw.y, ctrl: 'switch',
+          bound: sw.entity_id != null, on: st?.state === 'on' });
+      }
+      for (const fu of f.furniture) {
+        const def = resolveFurnitureDef(fu, p.store.customObjects);
+        if (furnitureCat(def) !== 'appliance') continue;   // fridge/stove/dishwasher/washer/dryer/microwave/tv
+        interactive.push({ id: 'F' + fu.id, x: fu.x, y: fu.y, ctrl: 'media', fkind: furnitureKind(fu),
+          bound: fu.entity_id != null, on: entityOn[fu.id] === true });
+      }
+      const ctx: ActivityContext = { entityOn, roomNames, timeBucket: resolveTimeBucket(states), weather, recentTriggers, eventTriggers, doorSensorOpen, fireplaceOn,
+        interactive, avatarInteract: p.store.avatarInteractions !== false };
       // Targets every frame — persistent rigs mutate in place (no rebuild).
       r.updateTargets(targets, ctx);
   }
