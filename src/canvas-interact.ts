@@ -1,4 +1,4 @@
-import { snap, snapVertex15, distMM, worldToLocal, localToWorld, FURNITURE_KINDS, furnitureCorners, furnitureLocalToWorld, furnitureWorldToLocal, resolveFurnitureDef, resolveFurnitureWallCollision, resolveSeatTableCollision, seatBelongsToTable, snapStepLightToSurface, snapFireplaceToWall, snapFloodlightToWall, snapSwitchToWall, snapAlarmToWall, snapThermostatToWall, snapPlugToWall, snapInfoCardToWall, snapActionButtonToWall, isBinKind, nearestAlign, envScale, ENV_SCALE_MIN, ENV_SCALE_MAX, GRID_MM, floorContentBbox, resolveFloorEdgeDrag } from './geometry.js';
+import { snap, snapVertex15, distMM, worldToLocal, localToWorld, FURNITURE_KINDS, furnitureCorners, furnitureLocalToWorld, furnitureWorldToLocal, resolveFurnitureDef, resolveFurnitureWallCollision, resolveSeatTableCollision, seatBelongsToTable, snapStepLightToSurface, snapFireplaceToWall, snapFloodlightToWall, snapSwitchToWall, snapAlarmToWall, snapCalendarToWall, snapThermostatToWall, snapPlugToWall, snapInfoCardToWall, snapActionButtonToWall, isBinKind, nearestAlign, envScale, ENV_SCALE_MIN, ENV_SCALE_MAX, GRID_MM, floorContentBbox, resolveFloorEdgeDrag } from './geometry.js';
 import { newId } from './storage.js';
 import {
   pxToMm, type View,
@@ -9,7 +9,7 @@ import {
   hitVertexOrZone, hitObject, hitObjectRadiusHandle,
   hitBgBody, hitBgCorner, bgEditable,
   hitMotionSensor, hitMotionRotateHandle, hitEnvSensor, hitEnvResizeHandle,
-  hitBleProxy, hitAlarmPanel, hitThermostat, hitSafetySensor, hitRobot,
+  hitBleProxy, hitAlarmPanel, hitCalendarPanel, hitThermostat, hitSafetySensor, hitAlertBeacon, hitRobot,
   hitCamera, hitCameraRotateHandle, hitProjector, hitValve, hitPlug, hitInfoCard, hitActionButton, hitPresenceZone, hitPresenceZoneVertex,
   hitGroundArea, hitGroundAreaVertex,
   hitVacuumSegment,
@@ -22,7 +22,7 @@ import type { Vec2, Furniture, ObjectRecipe, Light } from './types.js';
 
 // Drag kinds that move a single placeable and therefore get alignment guides
 // (Feature C). Wall vertices / doors / windows / zones are excluded.
-const ALIGN_MOVE_KINDS = new Set(['sensor', 'motion', 'env', 'ble', 'safety', 'robot', 'camera', 'projector', 'fixture', 'furnMove']);
+const ALIGN_MOVE_KINDS = new Set(['sensor', 'motion', 'env', 'ble', 'safety', 'alert', 'robot', 'camera', 'projector', 'fixture', 'furnMove']);
 
 // Peer-center candidates for alignment, snapshotted once at drag start. Same
 // category only: lights + switches share one "fixtures" pool; furniture aligns
@@ -49,6 +49,7 @@ function buildAlignCandidates(p: Planner, drag: Drag): { x: number; y: number }[
     case 'env': for (const o of f.envSensors) if (o.id !== drag.id) add(o); break;
     case 'ble': for (const o of (f.bleProxies ?? [])) if (o.id !== drag.id) add(o); break;
     case 'safety': for (const o of (f.safetySensors ?? [])) if (o.id !== drag.id) add(o); break;
+    case 'alert': for (const o of (f.alertBeacons ?? [])) if (o.id !== drag.id) add(o); break;
     case 'robot': for (const o of (f.robots ?? [])) if (o.id !== drag.id) add(o); break;
     case 'camera': for (const o of (f.cameras ?? [])) if (o.id !== drag.id) add(o); break;
     case 'projector': for (const o of (f.projectors ?? [])) if (o.id !== drag.id) add(o); break;
@@ -71,6 +72,7 @@ function draggedMoveItem(f: ReturnType<Planner['floor']>, drag: Drag)
     case 'env': it = f.envSensors.find(x => x.id === drag.id); break;
     case 'ble': it = (f.bleProxies ?? []).find(x => x.id === drag.id); break;
     case 'safety': it = (f.safetySensors ?? []).find(x => x.id === drag.id); break;
+    case 'alert': it = (f.alertBeacons ?? []).find(x => x.id === drag.id); break;
     case 'robot': it = (f.robots ?? []).find(x => x.id === drag.id); break;
     case 'camera': it = (f.cameras ?? []).find(x => x.id === drag.id); break;
     case 'projector': it = (f.projectors ?? []).find(x => x.id === drag.id); break;
@@ -588,6 +590,12 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
     p.drag = { kind: 'alarm', id: ah.id, startMm: mm, start: { x: ah.x, y: ah.y } };
     canvas.style.cursor = 'grabbing'; e.preventDefault(); p.emitConfig(); return;
   }
+  const cph = hitCalendarPanel(p, view, mm);
+  if (cph) {
+    if (p.activeCalendarId !== cph.id) p.activeCalendarId = cph.id;
+    p.drag = { kind: 'calendar', id: cph.id, startMm: mm, start: { x: cph.x, y: cph.y } };
+    canvas.style.cursor = 'grabbing'; e.preventDefault(); p.emitConfig(); return;
+  }
   const th = hitThermostat(p, view, mm);
   if (th) {
     if (p.activeThermoId !== th.id) p.activeThermoId = th.id;
@@ -598,6 +606,13 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
   if (safeH) {
     if (p.activeSafetyId !== safeH.id) p.activeSafetyId = safeH.id;
     p.drag = { kind: 'safety', id: safeH.id, startMm: mm, start: { x: safeH.x, y: safeH.y } };
+    p.alignCandidates = buildAlignCandidates(p, p.drag);
+    canvas.style.cursor = 'grabbing'; e.preventDefault(); p.emitConfig(); return;
+  }
+  const abH = hitAlertBeacon(p, view, mm);
+  if (abH) {
+    if (p.activeAlertBeaconId !== abH.id) p.activeAlertBeaconId = abH.id;
+    p.drag = { kind: 'alert', id: abH.id, startMm: mm, start: { x: abH.x, y: abH.y } };
     p.alignCandidates = buildAlignCandidates(p, p.drag);
     canvas.style.cursor = 'grabbing'; e.preventDefault(); p.emitConfig(); return;
   }
@@ -789,11 +804,27 @@ export function onCanvasMouseMove(p: Planner, canvas: HTMLCanvasElement, view: V
         }
         break;
       }
+      case 'alert': {
+        const ab = (f.alertBeacons ?? []).find(x => x.id === drag.id);
+        if (ab && !ab.locked) {
+          ab.x = Math.max(0, Math.min(f.w, drag.start.x + mm.x - drag.startMm.x));
+          ab.y = Math.max(0, Math.min(f.d, drag.start.y + mm.y - drag.startMm.y));
+        }
+        break;
+      }
       case 'alarm': {
         const ap = (f.alarmPanels ?? []).find(x => x.id === drag.id);
         if (ap && !ap.locked) {
           ap.x = Math.max(0, Math.min(f.w, drag.start.x + mm.x - drag.startMm.x));
           ap.y = Math.max(0, Math.min(f.d, drag.start.y + mm.y - drag.startMm.y));
+        }
+        break;
+      }
+      case 'calendar': {
+        const cp = (f.calendarPanels ?? []).find(x => x.id === drag.id);
+        if (cp && !cp.locked) {
+          cp.x = Math.max(0, Math.min(f.w, drag.start.x + mm.x - drag.startMm.x));
+          cp.y = Math.max(0, Math.min(f.d, drag.start.y + mm.y - drag.startMm.y));
         }
         break;
       }
@@ -1148,6 +1179,7 @@ export function onCanvasMouseMove(p: Planner, canvas: HTMLCanvasElement, view: V
       hitAlarmPanel(p, view, mm) ||
       hitThermostat(p, view, mm) ||        // thermostats open the control modal
       (safeHit && (safeHit.kind === 'siren' || !safeHit.entity_id)) ||  // sirens (bound too) + unbound detectors are clickable
+      hitAlertBeacon(p, view, mm) ||       // alert beacons acknowledge / demo-toggle in kiosk
       hitRobot(p, view, mm) ||             // robots are always click-toggleable
       hitProjector(p, view, mm) ||         // projectors toggle on/off in kiosk
       hitValve(p, view, mm) ||             // valves open/close in kiosk
@@ -1167,8 +1199,10 @@ export function onCanvasMouseMove(p: Planner, canvas: HTMLCanvasElement, view: V
     else if (hitMotionSensor(p, view, mm)) canvas.style.cursor = 'grab';
     else if (hitBleProxy(p, view, mm)) canvas.style.cursor = 'grab';
     else if (hitAlarmPanel(p, view, mm)) canvas.style.cursor = 'grab';
+    else if (hitCalendarPanel(p, view, mm)) canvas.style.cursor = 'grab';
     else if (hitThermostat(p, view, mm)) canvas.style.cursor = 'grab';
     else if (hitSafetySensor(p, view, mm)) canvas.style.cursor = 'grab';
+    else if (hitAlertBeacon(p, view, mm)) canvas.style.cursor = 'grab';
     else if (hitRobot(p, view, mm)) canvas.style.cursor = 'grab';
     else if (hitCameraRotateHandle(p, view, mm)) canvas.style.cursor = 'grab';
     else if (hitCamera(p, view, mm)) canvas.style.cursor = 'grab';
@@ -1249,6 +1283,21 @@ export function onCanvasMouseUp(p: Planner, canvas: HTMLCanvasElement): void {
         p.save();
       }
     }
+  } else if (drag.kind === 'calendar') {
+    const cp = (f.calendarPanels ?? []).find(x => x.id === drag.id);
+    if (cp) {
+      // Click-vs-drag: a tiny movement just selects (read-only fixture — the
+      // sidebar section is the detail view); a real move snaps the plaque flush
+      // to the nearest wall (like a switch/alarm, no ganging).
+      const moved = Math.hypot(cp.x - drag.start.x, cp.y - drag.start.y);
+      if (moved < 30) {
+        cp.x = drag.start.x; cp.y = drag.start.y;
+      } else {
+        cp.x = snap(cp.x, 10); cp.y = snap(cp.y, 10);
+        snapCalendarToWall(cp, f.walls);
+        p.save();
+      }
+    }
   } else if (drag.kind === 'thermostat') {
     const th = (f.thermostats ?? []).find(x => x.id === drag.id);
     if (th) {
@@ -1292,6 +1341,21 @@ export function onCanvasMouseUp(p: Planner, canvas: HTMLCanvasElement): void {
         if (!ss.entity_id) p.toggleItem(ss);
       } else {
         ss.x = snap(ss.x, 10); ss.y = snap(ss.y, 10);
+        p.save();
+      }
+    }
+  } else if (drag.kind === 'alert') {
+    const ab = (f.alertBeacons ?? []).find(x => x.id === drag.id);
+    if (ab) {
+      // Click-vs-drag: a tiny movement is a click → acknowledge (bound alert.*)
+      // or demo-flip (unbound). A real move snaps to grid — ceiling-mounted, NO
+      // wall snap (like the safety detector).
+      const moved = Math.hypot(ab.x - drag.start.x, ab.y - drag.start.y);
+      if (moved < 30) {
+        ab.x = drag.start.x; ab.y = drag.start.y;
+        p.acknowledgeAlertBeacon(ab);
+      } else {
+        ab.x = snap(ab.x, 10); ab.y = snap(ab.y, 10);
         p.save();
       }
     }
@@ -1561,6 +1625,9 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
       else if (!safe2.entity_id) p.toggleItem(safe2);
       return;
     }
+    // Alert beacon → acknowledge (bound alert.*) or demo-flip (unbound).
+    const ab2 = hitAlertBeacon(p, view, mm);
+    if (ab2) { p.acknowledgeAlertBeacon(ab2); return; }
     // Robot → run/dock (bound) or demo toggle (unbound).
     const robo2 = hitRobot(p, view, mm);
     if (robo2) { p.toggleRobot(robo2); return; }
@@ -1781,6 +1848,23 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
     p.emitConfig();
     return;
   }
+  if (p.tool === 'calendar') {
+    if (!f.calendarPanels) f.calendarPanels = [];
+    const id = newId('cal');
+    const cp = {
+      id,
+      x: snap(Math.max(0, Math.min(f.w, mm.x)), 10),
+      y: snap(Math.max(0, Math.min(f.d, mm.y)), 10),
+      calendarIds: [] as string[], label: `Calendar ${f.calendarPanels.length + 1}`,
+    };
+    snapCalendarToWall(cp, f.walls);   // flush to a wall on drop, like a switch
+    f.calendarPanels.push(cp);
+    p.activeCalendarId = id;
+    p.save();
+    p.setTool('select');
+    p.emitConfig();
+    return;
+  }
   if (p.tool === 'thermostat') {
     if (!f.thermostats) f.thermostats = [];
     const id = newId('th');
@@ -1811,6 +1895,23 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
       label: `Detector ${f.safetySensors.length + 1}`,
     });
     p.activeSafetyId = id;
+    p.save();
+    p.setTool('select');
+    p.emitConfig();
+    return;
+  }
+  if (p.tool === 'alertbeacon') {
+    if (!f.alertBeacons) f.alertBeacons = [];
+    const id = newId('ab');
+    // Ceiling-mounted: free placement (no wall snap), like the safety detector.
+    f.alertBeacons.push({
+      id,
+      x: snap(Math.max(0, Math.min(f.w, mm.x)), 10),
+      y: snap(Math.max(0, Math.min(f.d, mm.y)), 10),
+      entity_id: null,
+      label: `Alert ${f.alertBeacons.length + 1}`,
+    });
+    p.activeAlertBeaconId = id;
     p.save();
     p.setTool('select');
     p.emitConfig();
@@ -2050,6 +2151,13 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
       if (p.activeAlarmId === ahit.id) p.activeAlarmId = null;
       p.save(); p.emitConfig(); return;
     }
+    const cphit = hitCalendarPanel(p, view, mm);
+    if (cphit) {
+      if (cphit.locked) return;
+      f.calendarPanels = (f.calendarPanels ?? []).filter(x => x.id !== cphit.id);
+      if (p.activeCalendarId === cphit.id) p.activeCalendarId = null;
+      p.save(); p.emitConfig(); return;
+    }
     const thit = hitThermostat(p, view, mm);
     if (thit) {
       if (thit.locked) return;
@@ -2062,6 +2170,13 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
       if (safeHit.locked) return;
       f.safetySensors = (f.safetySensors ?? []).filter(x => x.id !== safeHit.id);
       if (p.activeSafetyId === safeHit.id) p.activeSafetyId = null;
+      p.save(); p.emitConfig(); return;
+    }
+    const abHit = hitAlertBeacon(p, view, mm);
+    if (abHit) {
+      if (abHit.locked) return;
+      f.alertBeacons = (f.alertBeacons ?? []).filter(x => x.id !== abHit.id);
+      if (p.activeAlertBeaconId === abHit.id) p.activeAlertBeaconId = null;
       p.save(); p.emitConfig(); return;
     }
     const roHit = hitRobot(p, view, mm);

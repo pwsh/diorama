@@ -896,6 +896,31 @@ export function snapAlarmToWall(
 }
 export function alarmHeight(a: { height?: number }): number { return a.height ?? ALARM_DEFAULTS.height; }
 
+// ── Wall calendar plaque ────────────────────────────────────────────────────
+// A picture-height wall plaque (350 × 250 mm face). Wall-snaps flush like the
+// alarm panel (plate BACK on the wall, face into the room, no ganging).
+export const CALENDAR_DEFAULTS = { height: 1600, w: 350, h: 250 };
+export const CALENDAR_PLATE_DEPTH_MM = 40;   // three-renderer plaque BoxGeometry Z
+export function calendarHeight(c: { height?: number }): number { return c.height ?? CALENDAR_DEFAULTS.height; }
+
+// Wall-snap the calendar plaque flush to the nearest wall. Center = axis +
+// normal·(wallT/2 + plateDepth/2). Rotation = atan2(nx, ny) (plate face = local
+// +Z; 0 = +Y world), matching the switch/alarm convention. Mutates x/y/rotation;
+// returns whether it snapped.
+export function snapCalendarToWall(
+  cp: { x: number; y: number; rotation?: number },
+  walls: { points: Vec2[]; kind?: WallKind }[],
+  maxMm = 500,
+): boolean {
+  const hit = snapToWallEdge(walls, cp.x, cp.y, maxMm);
+  if (!hit) return false;
+  const off = WALL_HALF_MM + CALENDAR_PLATE_DEPTH_MM / 2;
+  cp.x = Math.round(hit.x + hit.nx * off);
+  cp.y = Math.round(hit.y + hit.ny * off);
+  cp.rotation = Math.atan2(hit.nx, hit.ny) * 180 / Math.PI;
+  return true;
+}
+
 // ── HVAC / thermostat wall control fixture ─────────────────────────────────
 export const THERMO_DEFAULTS = { height: 1500, size: 340 };
 export const THERMO_PLATE_DEPTH_MM = 26;    // three-renderer plate BoxGeometry Z

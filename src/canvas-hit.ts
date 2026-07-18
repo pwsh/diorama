@@ -3,7 +3,7 @@ import { switchSize, distMM, pointToSeg, transformVerts, centroid, localToWorld,
          furnitureCorners, furnitureLocalToWorld, doorEndpoint,
          doorOpenDeltaDeg, windowEndpoints, pointInPolygon } from './geometry.js';
 import type { Planner } from './planner.js';
-import type { Vec2, Wall, Sensor, Furniture, BgImage, MotionSensor, EnvSensor, BleProxy, AlarmPanel, ThermostatFixture, SafetySensor, RobotFixture, CameraFixture, ProjectorFixture, ValveFixture, PlugFixture, PresenceZone, InfoCard, ActionButton, Door, Window as WindowType, Floor } from './types.js';
+import type { Vec2, Wall, Sensor, Furniture, BgImage, MotionSensor, EnvSensor, BleProxy, AlarmPanel, CalendarPanel, ThermostatFixture, SafetySensor, AlertBeacon, RobotFixture, CameraFixture, ProjectorFixture, ValveFixture, PlugFixture, PresenceZone, InfoCard, ActionButton, Door, Window as WindowType, Floor } from './types.js';
 import type { FloorEdge } from './geometry.js';
 import { envChipHalfPx, infoCardHalfPx, actionButtonHalfPx, type View } from './canvas-render.js';
 import { vacMapAffine, vacWorldToPixel, vacSegHasPixel } from './valetudo-map.js';
@@ -318,6 +318,16 @@ export function hitAlarmPanel(p: Planner, view: View, mm: Vec2): AlarmPanel | nu
   return null;
 }
 
+export function hitCalendarPanel(p: Planner, view: View, mm: Vec2): CalendarPanel | null {
+  const f = p.floor();
+  const h = hitPx(view) * 1.4;
+  const list = f.calendarPanels ?? [];
+  for (let i = list.length - 1; i >= 0; i--) {
+    if (distMM(list[i], mm) < h) return list[i];
+  }
+  return null;
+}
+
 export function hitThermostat(p: Planner, view: View, mm: Vec2): ThermostatFixture | null {
   const f = p.floor();
   const h = hitPx(view) * 1.4;
@@ -373,6 +383,17 @@ export function hitSafetySensor(p: Planner, view: View, mm: Vec2): SafetySensor 
   const h = hitPx(view) * 1.4;
   const list = f.safetySensors ?? [];
   for (let i = list.length - 1; i >= 0; i--) {
+    if (distMM(list[i], mm) < h) return list[i];
+  }
+  return null;
+}
+
+export function hitAlertBeacon(p: Planner, view: View, mm: Vec2): AlertBeacon | null {
+  const f = p.floor();
+  const h = hitPx(view) * 1.4;
+  const list = f.alertBeacons ?? [];
+  for (let i = list.length - 1; i >= 0; i--) {
+    if (list[i].hidden) continue;
     if (distMM(list[i], mm) < h) return list[i];
   }
   return null;

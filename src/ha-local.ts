@@ -8,6 +8,8 @@
 // (three-renderer.js) — it would collapse the lazy 3D code-split.
 
 import type { HaApi, StateListener, ConnListener, HaDevice, HaEntityReg, HistoryPoint, ForecastRecord } from './ha-client.js';
+import type { CalEvent } from './surfaces.js';
+import type { NotificationsUpdate, RepairIssue } from './alerts.js';
 import type { HassState, ConnStatus } from './types.js';
 
 // localStorage namespace for offline user_data. One key per user_data key, so
@@ -60,6 +62,7 @@ export class LocalApi implements HaApi {
 
   async getHistory(): Promise<Record<string, HistoryPoint[]>> { return {}; }
   async getWeatherForecasts(): Promise<ForecastRecord[] | null> { return null; }
+  async getCalendarEvents(): Promise<CalEvent[]> { return []; }
   async getDevices(): Promise<Array<HaDevice>> { return []; }
   async getEntityRegistry(): Promise<Array<HaEntityReg>> { return []; }
   async updateEntityRegistry(entityId: string, changes: Record<string, unknown>): Promise<boolean> {
@@ -94,6 +97,11 @@ export class LocalApi implements HaApi {
   }
 
   async refreshStates(): Promise<void> { /* no HA to re-fetch */ }
+
+  // ── Alert Center — inert offline (no HA to surface notifications/repairs) ──
+  async subscribePersistentNotifications(_cb: (u: NotificationsUpdate) => void): Promise<() => void> { return () => {}; }
+  async listRepairsIssues(): Promise<RepairIssue[]> { return []; }
+  async ignoreRepairsIssue(): Promise<boolean> { return false; }
 
   private _emitState(changedId?: string): void {
     for (const fn of this._stateListeners) fn(this.states, changedId);

@@ -2,6 +2,7 @@ import { LitElement, html, nothing } from 'lit';
 import { property, state } from 'lit/decorators.js';
 import { customElement } from './define.js';
 import { fmtLen } from '../geometry.js';
+import './alert-center.js';
 import type { Planner } from '../planner.js';
 
 @customElement('diorama-topbar')
@@ -109,6 +110,7 @@ export class Topbar extends LitElement {
           <button class="btn-sm" title="Settings" @click=${this._openSettings}>⚙</button>
         ` : nothing}
         <span style="flex:1"></span>
+        <diorama-alert-center .planner=${p}></diorama-alert-center>
         <span class="pill ${connClass}">${connText}</span>
       </div>
     `;

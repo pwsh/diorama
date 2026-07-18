@@ -15,10 +15,12 @@ import {
   isVehicleKind, evStatusOf, evStatusColor, carChargeState,
   doorOpenFraction, GARAGE_DOOR_H,
   alarmHeight, alarmStateColor, ALARM_DEFAULTS, ALARM_PLATE_DEPTH_MM,
+  calendarHeight, CALENDAR_DEFAULTS, CALENDAR_PLATE_DEPTH_MM,
   thermostatHeight, THERMO_DEFAULTS, THERMO_PLATE_DEPTH_MM, hvacModeColor, hvacAirflow, HVAC_VENT_COLORS,
   lockGlyphColor, lockGlyphTransitional,
   safetyColor, safetyIsFloor, SAFETY_DEFAULTS,
   powerGlowScale,
+  // NOTE: alert-beacon helpers imported from ./alerts.js just below.
   robotColor, robotLedColor, ROBOT_DEFAULTS,
   parseNowPlaying, isMediaPlayerId, type NowPlaying,
   presenceZoneColor, cameraFov, cameraRange, cameraHeight, cameraStateColor,
@@ -31,7 +33,8 @@ import {
   infoCardW, infoCardH,
   logicLightState, actionButtonHeight, actionButtonSize, actionButtonColor, ACTION_BUTTON_DEFAULTS,
 } from './geometry.js';
-import type { Door, Window as WindowType, EnvSensor, BleProxy, AlarmPanel, ThermostatFixture, SafetySensor, RobotFixture, CameraFixture, ProjectorFixture, ValveFixture, PlugFixture, PresenceZone, InfoCard, ActionButton, ObjectRecipe, ActivityKind } from './types.js';
+import { ALERT_BEACON_DEFAULTS, alertBeaconState, alertBeaconColor, alertBeaconAlarming, isAlertDomain } from './alerts.js';
+import type { Door, Window as WindowType, EnvSensor, BleProxy, AlarmPanel, CalendarPanel, ThermostatFixture, SafetySensor, AlertBeacon, RobotFixture, CameraFixture, ProjectorFixture, ValveFixture, PlugFixture, PresenceZone, InfoCard, ActionButton, ObjectRecipe, ActivityKind } from './types.js';
 
 // The subset of Planner.RobotState the renderer reads (structural — keeps the
 // renderer decoupled from the planner). Positions are plan-frame world mm.
@@ -74,7 +77,12 @@ interface RobotRig {
   blob: THREE.Mesh;
 }
 import { wallCutsForSegment, WINDOW_DEFAULTS, closedWallLoops, wallKind, WALL_KINDS, furnitureLocalToWorld, furnitureWorldToLocal, pointInPolygon as pip, centroid, loopContaining, resolveRoomForPoint, roomLabel, intersectLoopWithRect, polygonArea, heatmapColor, type RoomTemp } from './geometry.js';
-import { visibilityToFogDensity, moonPhaseFraction } from './weather.js';
+import { visibilityToFogDensity, moonPhaseFraction, type WeatherNow } from './weather.js';
+import {
+  paintCalendarCanvas, paintNewsTickerCanvas, paintWeatherCardCanvas,
+  tickerScrollX, tickerHeadlineIndex, type CalEvent,
+} from './surfaces.js';
+import type { ForecastRecord } from './ha-client.js';
 import { vacMapAffine, vacPixelToWorld, vacSegColor, type VacCal, type VacSegment } from './valetudo-map.js';
 import {
   resolveDef, resolveAvatar, avatarFromPool,
@@ -909,6 +917,7 @@ export class ThreeDRenderer {
   private _actionPressAt: Record<string, number> = {};   // fixture id → last press (performance.now() ms)
   private _bleGroup = new THREE.Group();
   private _alarmGroup = new THREE.Group();
+  private _calendarGroup = new THREE.Group();
   // HVAC thermostat wall units + their vent airflow particle clouds. Plates +
   // readout sprites rebuild under _keyThermo (three-view); the per-active-vent
   // THREE.Points clouds live INSIDE _thermoGroup and are advanced per-frame by
@@ -928,6 +937,7 @@ export class ThreeDRenderer {
   // Leak-detector alarm-onset timestamps (s) so the 3D puddle decal grows over
   // SAFETY_DEFAULTS.leakGrowSec from leak onset. Cleared when it stops alarming.
   private _leakAlarmStart: Record<string, number> = {};
+  private _alertGroup = new THREE.Group();       // alert beacon pucks (build-time / per-frame while active, _keyAlert)
   private _robotGroup = new THREE.Group();       // static robot docks (build-time, _keyRobots)
   private _robotRigGroup = new THREE.Group();    // moving robot bodies (per-frame, persistent)
   private _cameraGroup = new THREE.Group();      // camera fixtures + FOV frustum (build-time, _keyCameras)
@@ -964,6 +974,15 @@ export class ThreeDRenderer {
   // _disposeSpriteMaps with _clearGroup. Album art loads async then repaints.
   private _nowPlayingGroup = new THREE.Group();
   private _nowPlaying: Record<string, { sprite: THREE.Sprite; cv: HTMLCanvasElement; tex: THREE.CanvasTexture; picUrl: string }> = {};
+  // TV screen surfaces (news/weather planes) live in _nowPlayingGroup too (same
+  // _keyNowPlaying dirty key). News tickers scroll per-frame via _advanceTvScreens
+  // (own accumulator, NOT a dirty-key input); weather cards are static between
+  // rebuilds. Plane CanvasTextures freed via _disposeSpriteMaps (userData.textPlane).
+  private _tvScreens: Record<string, {
+    mesh: THREE.Mesh; cv: HTMLCanvasElement; tex: THREE.CanvasTexture;
+    content: 'news' | 'weather'; headlines: string[]; w: number; h: number;
+    scrollT: number; lastPaintT: number; lastHeadIdx: number;
+  }> = {};
   private _pulseActive = false;
   // Ghost (glass-house) floors: translucent shells of every OTHER story,
   // stacked at their story heights. Cleared with _clearGroup (no sprites).
@@ -1121,8 +1140,8 @@ export class ThreeDRenderer {
   private _lastAnimT = 0;   // performance.now()/1000 of the previous _animate frame
   private _ZONE_H = 305;  // 1 ft — low outlines that don't wall off the room
   private _OBJ_H = 900;
-  private _onFixtureClick: ((info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'thermostat' | 'safety' | 'robot' | 'lock' | 'appliance' | 'action' | 'projector' | 'valve' | 'plug'; entity_id: string | null; fixtureId: string }) => void) | null = null;
-  private _onFixtureDblClick: ((info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'thermostat' | 'safety' | 'robot' | 'lock' | 'appliance' | 'action' | 'projector' | 'valve' | 'plug'; entity_id: string | null; fixtureId: string }) => void) | null = null;
+  private _onFixtureClick: ((info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'thermostat' | 'safety' | 'alert' | 'robot' | 'lock' | 'appliance' | 'action' | 'projector' | 'valve' | 'plug'; entity_id: string | null; fixtureId: string }) => void) | null = null;
+  private _onFixtureDblClick: ((info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'thermostat' | 'safety' | 'alert' | 'robot' | 'lock' | 'appliance' | 'action' | 'projector' | 'valve' | 'plug'; entity_id: string | null; fixtureId: string }) => void) | null = null;
   // Valetudo tap-to-clean: separate callback (kept OUT of the fixture-click union)
   // so the vac-map raycast stays a low-priority overlay concern.
   private _onVacSegClick: ((info: { robotId: string; segId: string }) => void) | null = null;
@@ -1382,7 +1401,7 @@ export class ThreeDRenderer {
                     this._zoneGroup, this._haloGroup,
                     this._sensorGroup, this._motionGroup, this._envGroup, this._infoGroup,
                     this._actionGroup,
-                    this._bleGroup, this._alarmGroup, this._thermoGroup, this._safetyGroup,
+                    this._bleGroup, this._alarmGroup, this._calendarGroup, this._thermoGroup, this._safetyGroup, this._alertGroup,
                     this._robotGroup, this._robotRigGroup, this._cameraGroup, this._projGroup, this._valveGroup, this._plugGroup, this._camAlertGroup, this._pzoneGroup,
                     this._groundGroup, this._vacMapGroup, this._heatmapGroup,
                     this._lightGroup, this._switchGroup, this._targetGroup, this._ghostGroup,
@@ -1468,15 +1487,15 @@ export class ThreeDRenderer {
     this._animate();
   }
 
-  onFixtureClick(fn: (info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'thermostat' | 'safety' | 'robot' | 'lock' | 'appliance' | 'action' | 'projector' | 'valve' | 'plug'; entity_id: string | null; fixtureId: string }) => void): void {
+  onFixtureClick(fn: (info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'thermostat' | 'safety' | 'alert' | 'robot' | 'lock' | 'appliance' | 'action' | 'projector' | 'valve' | 'plug'; entity_id: string | null; fixtureId: string }) => void): void {
     this._onFixtureClick = fn;
   }
-  onFixtureDblClick(fn: (info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'thermostat' | 'safety' | 'robot' | 'lock' | 'appliance' | 'action' | 'projector' | 'valve' | 'plug'; entity_id: string | null; fixtureId: string }) => void): void {
+  onFixtureDblClick(fn: (info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'thermostat' | 'safety' | 'alert' | 'robot' | 'lock' | 'appliance' | 'action' | 'projector' | 'valve' | 'plug'; entity_id: string | null; fixtureId: string }) => void): void {
     this._onFixtureDblClick = fn;
   }
 
   private _raycastFixture(clientX: number, clientY: number):
-      { kind: 'light' | 'switch' | 'media' | 'alarm' | 'thermostat' | 'safety' | 'robot' | 'lock' | 'appliance' | 'action' | 'projector' | 'valve' | 'plug'; entity_id: string | null; fixtureId: string } | null {
+      { kind: 'light' | 'switch' | 'media' | 'alarm' | 'thermostat' | 'safety' | 'alert' | 'robot' | 'lock' | 'appliance' | 'action' | 'projector' | 'valve' | 'plug'; entity_id: string | null; fixtureId: string } | null {
     if (!this._renderer || !this._camera) return null;
     const rect = this._renderer.domElement.getBoundingClientRect();
     const ndc = new THREE.Vector2(
@@ -1503,6 +1522,7 @@ export class ThreeDRenderer {
     if (this._thermoGroup.visible) roots.push(this._thermoGroup);
     // Smoke / CO detectors are clickable (unbound → manual test trigger).
     if (this._safetyGroup.visible) roots.push(this._safetyGroup);
+    if (this._alertGroup.visible) roots.push(this._alertGroup);
     // Robots (docks + moving bodies) are clickable → run/dock.
     if (this._robotGroup.visible) roots.push(this._robotGroup);
     if (this._robotRigGroup.visible) roots.push(this._robotRigGroup);
@@ -1523,7 +1543,7 @@ export class ThreeDRenderer {
       let obj: THREE.Object3D | null = h.object;
       while (obj) {
         const ud = obj.userData;
-        if (ud && (ud.kind === 'light' || ud.kind === 'switch' || ud.kind === 'media' || ud.kind === 'alarm' || ud.kind === 'thermostat' || ud.kind === 'safety' || ud.kind === 'robot' || ud.kind === 'lock' || ud.kind === 'appliance' || ud.kind === 'action' || ud.kind === 'projector' || ud.kind === 'valve' || ud.kind === 'plug')) {
+        if (ud && (ud.kind === 'light' || ud.kind === 'switch' || ud.kind === 'media' || ud.kind === 'alarm' || ud.kind === 'thermostat' || ud.kind === 'safety' || ud.kind === 'alert' || ud.kind === 'robot' || ud.kind === 'lock' || ud.kind === 'appliance' || ud.kind === 'action' || ud.kind === 'projector' || ud.kind === 'valve' || ud.kind === 'plug')) {
           return { kind: ud.kind, entity_id: ud.entity_id ?? null, fixtureId: String(ud.fixtureId) };
         }
         obj = obj.parent;
@@ -1977,8 +1997,8 @@ export class ThreeDRenderer {
   clearTransientGroups(): void {
     for (const g of [
       this._floorGroup, this._doorGroup, this._modelGroup, this._zoneGroup, this._haloGroup,
-      this._sensorGroup, this._motionGroup, this._infoGroup, this._actionGroup, this._bleGroup, this._alarmGroup, this._thermoGroup,
-      this._safetyGroup, this._robotGroup, this._robotRigGroup, this._cameraGroup, this._projGroup, this._valveGroup, this._plugGroup, this._camAlertGroup, this._pzoneGroup,
+      this._sensorGroup, this._motionGroup, this._infoGroup, this._actionGroup, this._bleGroup, this._alarmGroup, this._calendarGroup, this._thermoGroup,
+      this._safetyGroup, this._alertGroup, this._robotGroup, this._robotRigGroup, this._cameraGroup, this._projGroup, this._valveGroup, this._plugGroup, this._camAlertGroup, this._pzoneGroup,
       this._groundGroup, this._heatmapGroup,
       this._lightGroup, this._switchGroup, this._targetGroup, this._ghostGroup,
       this._pulseGroup, this._nowPlayingGroup, this._bgTextGroup,
@@ -2003,6 +2023,7 @@ export class ThreeDRenderer {
     // list so _advanceVents can't iterate freed geometry before the next rebuild.
     this._ventClouds = [];
     this._nowPlaying = {};
+    this._tvScreens = {};
     this._pulseActive = false;
     // Robot rigs live in _robotRigGroup (just cleared); drop their bookkeeping so
     // updateRobotRigs rebuilds fresh on the next floor.
@@ -2642,10 +2663,14 @@ export class ThreeDRenderer {
     // BLE proxy pucks + alarm keypads ride the sensors layer (like mmWave).
     this._bleGroup.visible = v.sensors !== false;
     this._alarmGroup.visible = v.sensors !== false;
+    // Wall calendar plaques ride the sensors layer too.
+    this._calendarGroup.visible = v.sensors !== false;
     // Thermostat wall units ride the sensors layer too.
     this._thermoGroup.visible = v.sensors !== false;
     // Smoke / CO detectors ride the sensors layer too.
     this._safetyGroup.visible = v.sensors !== false;
+    // Alert beacons ride the sensors layer too.
+    this._alertGroup.visible = v.sensors !== false;
     // Robot docks + moving bodies ride the sensors layer too.
     this._robotGroup.visible = v.sensors !== false;
     this._robotRigGroup.visible = v.sensors !== false;
@@ -6576,6 +6601,45 @@ export class ThreeDRenderer {
     }
   }
 
+  // Wall calendar plaques (Feature: calendar-on-wall): a flat wall-mounted plaque
+  // box at `height` with a camera-facing CanvasTexture sprite (env-sensor / now-
+  // playing idiom) painted with today's date + the next few events. Rebuilt only
+  // under _keyCalendar in three-view (static between event refreshes). Sprite
+  // CanvasTextures are freed via _disposeSpriteMaps (paired with _clearGroup).
+  updateCalendarPanels(panels: CalendarPanel[], eventsById: Record<string, CalEvent[]>): void {
+    if (!this._scene) return;
+    this._disposeSpriteMaps(this._calendarGroup);
+    this._clearGroup(this._calendarGroup);
+    const now = new Date();
+    for (const cp of panels) {
+      const grp = new THREE.Group();
+      const p = this._w(cp.x, cp.y, calendarHeight(cp));
+      grp.position.set(p.x, p.y, p.z);
+      grp.rotation.y = -((cp.rotation || 0) * Math.PI / 180);
+      // Plaque frame body (back flush on the wall; snap offset = wallT/2 + D/2).
+      const plateW = CALENDAR_DEFAULTS.w;
+      const plateH = CALENDAR_DEFAULTS.h;
+      const plateD = CALENDAR_PLATE_DEPTH_MM;
+      const body = new THREE.Mesh(
+        new THREE.BoxGeometry(plateW, plateH, plateD),
+        this._mat({ color: 0x1a2029, metalness: 0.1, roughness: 0.7 }));
+      grp.add(body);
+      // Painted face sprite (proud of the plaque front, room side = local +Z).
+      const cv = document.createElement('canvas');
+      paintCalendarCanvas(cv, eventsById[cp.id] ?? [], { now, maxRows: 3, title: cp.label });
+      const tex = new THREE.CanvasTexture(cv);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      const spr = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false }));
+      // Size the sprite to fill the plaque face, preserving the canvas aspect.
+      const faceH = plateH * 0.86;
+      spr.scale.set(faceH * (cv.width / cv.height), faceH, 1);
+      spr.position.set(0, 0, plateD / 2 + 6);
+      spr.userData.outlineSkip = true;
+      grp.add(spr);
+      this._calendarGroup.add(grp);
+    }
+  }
+
   // HVAC thermostat wall units (Feature: climate): a wall plate at `height` with
   // an emissive mode-colored screen, a temp readout sprite, and a slatted wall
   // vent grille below it. While the unit is actively heating/cooling/running the
@@ -6919,6 +6983,72 @@ export class ThreeDRenderer {
       if (!liveLeak.has(id)) delete this._leakAlarmStart[id];
   }
 
+  // ── Alert beacons (Alert Center, Track B) ──────────────────────────────────
+  // Ceiling puck bound to an alert.*/binary_sensor. ACTIVE (unacknowledged) →
+  // pulsing red glow + expanding rings (three-view forces _keyAlert every frame
+  // while any beacon is active, the fireplace/safety idiom). ACKNOWLEDGED
+  // (alert.* 'off') → steady amber, no rings. Idle → dim. Rides the sensors
+  // layer. Mirrors the smoke/co ceiling-beacon build.
+  updateAlertBeacons(items: AlertBeacon[], stateProvider: StateProvider): void {
+    if (!this._scene) return;
+    this._clearGroup(this._alertGroup);
+    const nowS = performance.now() / 1000;
+    const ceiling = ALERT_BEACON_DEFAULTS.ceilingMm;
+    const discR = ALERT_BEACON_DEFAULTS.discRadiusMm;
+    for (const b of items) {
+      if (b.hidden) continue;
+      const st = itemState(b, stateProvider);
+      const bs = alertBeaconState(st?.state, isAlertDomain(b.entity_id));
+      const active = alertBeaconAlarming(bs);
+      const lit = bs !== 'idle';
+      const col = hexToInt(alertBeaconColor(bs));
+      const ud = { kind: 'alert' as const, entity_id: b.entity_id ?? null, fixtureId: b.id };
+
+      const grp = new THREE.Group();
+      const p = this._w(b.x, b.y, ceiling - 60);
+      grp.position.set(p.x, p.y, p.z);
+      // White detector disc (flat cylinder, axis vertical).
+      const disc = new THREE.Mesh(
+        new THREE.CylinderGeometry(discR, discR, 40, 24),
+        this._mat({ color: lit ? col : 0xeceff1, roughness: 0.6, metalness: 0.05,
+                    emissive: lit ? col : 0x000000, emissiveIntensity: active ? 0.5 : (lit ? 0.3 : 0) }));
+      disc.userData = ud;
+      grp.add(disc);
+      // Status LED on the underside (into the room, -Y).
+      const led = new THREE.Mesh(
+        new THREE.SphereGeometry(discR * 0.22, 12, 10),
+        this._mat({ color: lit ? col : 0x37474f,
+                    emissive: lit ? col : 0x0a0d10,
+                    emissiveIntensity: active ? 1.0 : (lit ? 0.6 : 0.25) }));
+      led.position.set(0, -26, 0);
+      led.userData = { ...ud, outlineSkip: true };
+      grp.add(led);
+      if (active) {
+        const pulse = 0.5 + 0.5 * Math.sin(nowS * 6);
+        const glow = new THREE.Mesh(
+          new THREE.SphereGeometry(discR * (1.05 + 0.25 * pulse), 16, 12),
+          this._mat({ color: col, emissive: col, emissiveIntensity: 0.6 + 0.6 * pulse,
+                      transparent: true, opacity: 0.22 + 0.2 * pulse }));
+        glow.position.set(0, -50, 0);
+        glow.userData = { outlineSkip: true };
+        grp.add(glow);
+        for (let k = 0; k < 3; k++) {
+          const ph = (nowS * 1.4 + k / 3) % 1;
+          const rr = discR * (1 + ph * 4);
+          const ring = new THREE.Mesh(
+            new THREE.RingGeometry(rr * 0.86, rr, 28),
+            this._mat({ color: col, emissive: col, emissiveIntensity: 0.8,
+                        transparent: true, opacity: 0.5 * (1 - ph), side: THREE.DoubleSide }));
+          ring.rotation.x = -Math.PI / 2;
+          ring.position.set(0, -70 - ph * 520, 0);
+          ring.userData = { outlineSkip: true };
+          grp.add(ring);
+        }
+      }
+      this._alertGroup.add(grp);
+    }
+  }
+
   // ── Robots (vacuum / mower) ────────────────────────────────────────────────
   // Docks are static (build-time, rebuilt under three-view's _keyRobots). The
   // moving robot bodies are persistent per-frame rigs (see updateRobotRigs) whose
@@ -7074,11 +7204,30 @@ export class ThreeDRenderer {
   // sprite-dispose gotcha.
   updateNowPlaying(furniture: Furniture[], customObjects: ObjectRecipe[] | undefined,
                    stateProvider: StateProvider, haBaseUrl: string,
-                   layers?: import('./types.js').Layers2D): void {
+                   layers?: import('./types.js').Layers2D,
+                   screenData?: {
+                     screens: Array<{ id: string; content: 'news' | 'weather'; headlines?: string[] }>;
+                     weather: WeatherNow | null; forecast: ForecastRecord[] | null;
+                     imperial: boolean; nowMs: number;
+                   }): void {
     if (!this._scene) return;
     this._disposeSpriteMaps(this._nowPlayingGroup);
     this._clearGroup(this._nowPlayingGroup);
     this._nowPlaying = {};
+    this._tvScreens = {};
+    // TV screen surfaces (news/weather planes) — built alongside the media cards
+    // in the same group / dirty key. Stale renderer chunk without screenData →
+    // only media cards build (legacy behavior).
+    if (screenData?.screens.length) {
+      const byId = new Map(furniture.map(fu => [fu.id, fu]));
+      const nowS = screenData.nowMs / 1000;
+      for (const s of screenData.screens) {
+        const fu = byId.get(s.id);
+        if (!fu) continue;
+        this._buildTvScreen(fu, customObjects, s.content, s.headlines ?? [],
+                            screenData.weather, screenData.forecast, screenData.imperial, nowS);
+      }
+    }
     for (const fu of furniture) {
       if (!isMediaPlayerId(fu.entity_id)) continue;
       const def = resolveFurnitureDef(fu, customObjects);
@@ -7163,6 +7312,78 @@ export class ThreeDRenderer {
     rec.tex.needsUpdate = true;
     const H = 300;
     rec.sprite.scale.set(H * (cv.width / cv.height), H, 1);
+  }
+
+  // Build a flat screen-plane textured with news/weather content over a TV's
+  // front face (local -Z, the functional front). Lives in _nowPlayingGroup (own
+  // _keyNowPlaying dirty key). Flat unlit MeshBasicMaterial is the documented
+  // `_mat` exemption for self-emitting screens (like PointsMaterial/SpriteMaterial
+  // for particles) — a MeshToonMaterial would band the image wrong. News tickers
+  // are scrolled per-frame by _advanceTvScreens; weather cards are static.
+  private _buildTvScreen(
+    fu: Furniture, customObjects: ObjectRecipe[] | undefined,
+    content: 'news' | 'weather', headlines: string[],
+    weather: WeatherNow | null, forecast: ForecastRecord[] | null,
+    imperial: boolean, nowS: number,
+  ): void {
+    const def = resolveFurnitureDef(fu, customObjects);
+    const ht = def.ht;
+    const W = fu.w, D = fu.h;
+    const rotRad = (fu.rotation || 0) * Math.PI / 180;
+    const off = D / 2 + 2;                       // proud of the front face (coincident-face gotcha)
+    // Screen face geometry + content-specific placement.
+    const screenW = W * 0.86;
+    const screenH = content === 'news' ? Math.max(120, ht * 0.18) : ht * 0.52;
+    const localY = content === 'news' ? ht * 0.30 : ht * 0.56;   // ticker rides low, card centered
+    const cv = document.createElement('canvas');
+    if (content === 'news') {
+      const idx = tickerHeadlineIndex(nowS, headlines.length, 10);
+      const line = headlines[idx] ?? 'No headlines';
+      const scrollX = tickerScrollX(nowS, 0, 640, 70);   // textW filled in after first measure below
+      const tw = paintNewsTickerCanvas(cv, line, scrollX, { w: 640, h: 128 });
+      void tw;
+    } else {
+      paintWeatherCardCanvas(cv, weather, forecast, { imperial });
+    }
+    const tex = new THREE.CanvasTexture(cv);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    const mesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(screenW, screenH),
+      new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false, side: THREE.DoubleSide }));
+    mesh.userData.textPlane = true;     // _disposeSpriteMaps frees the CanvasTexture
+    mesh.userData.outlineSkip = true;
+    const base = this._w(fu.x, fu.y, (fu.elevation ?? 0) + localY);
+    mesh.position.set(base.x + off * Math.sin(rotRad), base.y, base.z - off * Math.cos(rotRad));
+    mesh.rotation.y = -rotRad;
+    this._nowPlayingGroup.add(mesh);
+    this._tvScreens[fu.id] = {
+      mesh, cv, tex, content, headlines, w: 640, h: content === 'news' ? 128 : 360,
+      scrollT: nowS, lastPaintT: 0, lastHeadIdx: content === 'news' ? tickerHeadlineIndex(nowS, headlines.length, 10) : 0,
+    };
+  }
+
+  // Per-frame news-ticker scroll (from _animate). Zero allocation: repaints each
+  // ticker's existing CanvasTexture at ~12 Hz with an advanced scroll offset,
+  // rotating headlines every 10 s. Weather cards are static (skipped).
+  private _advanceTvScreens(nowS: number): void {
+    for (const id of Object.keys(this._tvScreens)) {
+      const s = this._tvScreens[id];
+      if (s.content !== 'news' || !s.headlines.length) continue;
+      // Throttle repaint to ~12 Hz (canvas text draw is cheap but not free).
+      if (nowS - s.lastPaintT < 1 / 12) continue;
+      s.lastPaintT = nowS;
+      const idx = tickerHeadlineIndex(nowS, s.headlines.length, 10);
+      const line = s.headlines[idx] ?? '';
+      // Reset the phase when the headline rotates so the new one enters from the right.
+      const phase = idx !== s.lastHeadIdx ? 0 : nowS - s.scrollT;
+      if (idx !== s.lastHeadIdx) { s.lastHeadIdx = idx; s.scrollT = nowS; }
+      const ctx = s.cv.getContext('2d')!;
+      ctx.font = '500 34px system-ui, sans-serif';
+      const tw = ctx.measureText(line).width;
+      const x = tickerScrollX(phase, tw, s.w - 96, 70);
+      paintNewsTickerCanvas(s.cv, line, x, { w: s.w, h: s.h });
+      s.tex.needsUpdate = true;
+    }
   }
 
   // Environmental sensors: a small emissive puck at mount height plus a
@@ -13459,7 +13680,7 @@ export class ThreeDRenderer {
     for (const g of [
       this._floorGroup, this._doorGroup, this._modelGroup, this._zoneGroup, this._haloGroup,
       this._sensorGroup, this._motionGroup, this._envGroup, this._infoGroup, this._actionGroup, this._bleGroup,
-      this._alarmGroup, this._thermoGroup, this._safetyGroup, this._robotGroup, this._robotRigGroup,
+      this._alarmGroup, this._calendarGroup, this._thermoGroup, this._safetyGroup, this._alertGroup, this._robotGroup, this._robotRigGroup,
       this._cameraGroup, this._projGroup, this._valveGroup, this._plugGroup, this._camAlertGroup, this._pzoneGroup, this._groundGroup, this._heatmapGroup,
       this._lightGroup, this._switchGroup, this._targetGroup, this._gpsGroup, this._weatherGroup,
       this._skyGroup, this._bgTextGroup, this._pulseGroup, this._nowPlayingGroup,
@@ -13470,6 +13691,7 @@ export class ThreeDRenderer {
     this._clearVacMap();   // vac-map overlay: explicit CanvasTexture disposal
     this.clearTransitPuppet();
     this._nowPlaying = {};
+    this._tvScreens = {};
     this._weatherClouds = []; this._weatherFogPlanes = []; this._weatherFlash = null;
     this._weatherCloudShadows = []; this._weatherPuddles = []; this._weatherIcicles = [];
     for (const key of Object.keys(this._humanoids)) {
@@ -13668,6 +13890,8 @@ export class ThreeDRenderer {
     this._advanceTransitPuppet(frameDt);
     // Info-card plaques — clock repaint on the minute + flash pulse (no rebuild).
     this._advanceInfoCards(new Date());
+    // TV news-ticker scroll — repaint the ticker CanvasTexture at ~12 Hz.
+    this._advanceTvScreens(nowS);
     // Action buttons — cap depress + emissive pulse from the press-time map.
     this._advanceActionButtons();
     if (this._renderer && this._scene && this._camera) {

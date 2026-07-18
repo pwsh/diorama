@@ -976,7 +976,60 @@ export class SettingsDrawer extends LitElement {
                @change=${(e: Event) => this._setBermudaEnabled((e.target as HTMLInputElement).checked)}>
         <span style="flex:1">Bermuda BLE tracking</span>
       </label>
+      ${this._alertsBlock()}
       ${this._mqttBlock()}
+    `;
+  }
+
+  // ── Alert Center block (Alert Center, Track A) ──────────────────────────
+  private _alertsBlock() {
+    const p = this.planner;
+    const a = p.store.alerts ?? {};
+    const enabled = a.enabled !== false;
+    const set = (mut: (c: import('../types.js').AlertsConfig) => void) => p.setAlertsConfig(mut);
+    return html`
+      <div style="margin-top:14px;border-top:1px solid var(--border);padding-top:12px">
+        <div style="font-size:12px;font-weight:600;margin-bottom:6px">Alert Center</div>
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text)"
+               title="The 🔔 topbar bell surfacing HA persistent notifications + Repairs issues.">
+          <input type="checkbox" .checked=${enabled}
+                 @change=${(e: Event) => set(c => { c.enabled = (e.target as HTMLInputElement).checked ? undefined : false; })}>
+          <span style="flex:1">Enable Alert Center</span>
+        </label>
+        ${enabled ? html`
+          <div style="margin:6px 0 0 8px;display:flex;flex-direction:column;gap:5px">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text)">
+              <input type="checkbox" .checked=${a.showPersistentNotifications !== false}
+                     @change=${(e: Event) => set(c => { c.showPersistentNotifications = (e.target as HTMLInputElement).checked; })}>
+              <span style="flex:1">Persistent notifications</span>
+            </label>
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text)"
+                   title="Requires an admin HA user; silently empty otherwise.">
+              <input type="checkbox" .checked=${a.showRepairs !== false}
+                     @change=${(e: Event) => set(c => { c.showRepairs = (e.target as HTMLInputElement).checked; })}>
+              <span style="flex:1">Repairs issues (admin)</span>
+            </label>
+            <div class="row" style="align-items:center">
+              <label style="font-size:12px;color:var(--text)">Min Repairs severity</label>
+              <select .value=${a.minRepairSeverity ?? 'warning'}
+                      @change=${(e: Event) => set(c => { c.minRepairSeverity = (e.target as HTMLSelectElement).value as import('../types.js').AlertsConfig['minRepairSeverity']; })}>
+                <option value="warning">Warning</option>
+                <option value="error">Error</option>
+                <option value="critical">Critical</option>
+              </select>
+            </div>
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text)"
+                   title="Off by default — Repairs / notification text can be instance-specific; opt in to show the bell on a shared kiosk/view screen.">
+              <input type="checkbox" .checked=${a.showInKiosk === true}
+                     @change=${(e: Event) => set(c => { c.showInKiosk = (e.target as HTMLInputElement).checked || undefined; })}>
+              <span style="flex:1">Show bell in kiosk / view mode</span>
+            </label>
+            <div style="font-size:10px;color:var(--text-dim);line-height:1.3">
+              Place an <strong>Alert Beacon</strong> (🔔 tool) to pin a specific
+              alert.* / binary_sensor to a room in the scene.
+            </div>
+          </div>` : nothing}
+      </div>
     `;
   }
 

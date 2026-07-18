@@ -3,7 +3,7 @@ import {
   pointInPolygon, localToWorld, bgLocalToWorld,
   lightRadius, lightIntensity, lightIconKind, lightRotation, lightLength, switchRotation, switchSize, switchLabelPos,
   motionColor, motionIntensity, sensorColor, BLE_PROXY_DEFAULTS,
-  ALARM_DEFAULTS, alarmStateColor,
+  ALARM_DEFAULTS, alarmStateColor, CALENDAR_DEFAULTS,
   lockGlyphColor, lockGlyphSecured, lockGlyphTransitional, lockGlyphJammed,
   THERMO_DEFAULTS, hvacModeColor, hvacActionColor, hvacActionActive, hvacAirflow, HVAC_VENT_COLORS,
   climateTempUnit, fmtTempNum,
@@ -28,6 +28,9 @@ import {
   parseNowPlaying, isMediaPlayerId,
 } from './geometry.js';
 import { compass8 } from './geo.js';
+import { calendarLines, weatherCardLines, resolveScreenContent, CAL_HEADER_COLOR, type ScreenMode } from './surfaces.js';
+import { CONDITION_GLYPH } from './weather.js';
+import { ALERT_BEACON_DEFAULTS, alertBeaconState, alertBeaconColor, alertBeaconAlarming, isAlertDomain } from './alerts.js';
 import { vacMapAffine, vacSegColor, type ParsedVacMap, type VacSegment } from './valetudo-map.js';
 import type { Planner } from './planner.js';
 import type { Vec2, LightIconKind, Furniture, ObjectRecipe, RecipePrimitive, HassState } from './types.js';
@@ -264,8 +267,10 @@ export function drawAll(ctx: CanvasRenderingContext2D, p: Planner, view: View,
   if (on(L.sensors)) drawSensors(ctx, p, view);
   if (on(L.sensors)) drawBleProxies(ctx, p, view);
   if (on(L.sensors)) drawAlarmPanels(ctx, p, view);
+  if (on(L.sensors)) drawCalendarPanels(ctx, p, view);
   if (on(L.sensors)) drawThermostats(ctx, p, view);
   if (on(L.sensors)) drawSafetySensors(ctx, p, view);
+  if (on(L.sensors)) drawAlertBeacons(ctx, p, view);
   if (on(L.sensors)) drawRobots(ctx, p, view);
   if (on(L.sensors)) drawCameras(ctx, p, view);
   if (on(L.sensors)) drawProjectors(ctx, p, view);
@@ -847,6 +852,56 @@ function drawAlarmPanels(ctx: CanvasRenderingContext2D, p: Planner, view: View):
   }
 }
 
+// Wall calendar plaque (Feature: calendar-on-wall). A compact wall-plate rect
+// with a today-accent header (weekday + date) and the next 1–2 upcoming events
+// (color dot + time + truncated title). Read-only; reads the polled event cache
+// (Planner.calendarEvents), NOT entity state. Rides the sensors layer (gated by
+// the caller).
+function drawCalendarPanels(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
+  const dpr = window.devicePixelRatio || 1;
+  const f = p.floor();
+  const now = new Date();
+  for (const cp of f.calendarPanels ?? []) {
+    const c = mmToPx(view, cp.x, cp.y);
+    const selected = p.activeCalendarId === cp.id;
+    const events = p.calendarEvents[cp.id] ?? [];
+    const model = calendarLines(events, now, { maxRows: 2 });
+    const rot = (cp.rotation || 0) * Math.PI / 180;
+    const hw = Math.max(10, CALENDAR_DEFAULTS.w * 0.5 * 0.5 * view.scale);
+    const hh = Math.max(8, CALENDAR_DEFAULTS.h * 0.5 * 0.6 * view.scale);
+    ctx.save();
+    ctx.translate(c.x, c.y);
+    ctx.rotate(rot);
+    // Plaque body.
+    ctx.beginPath();
+    ctx.roundRect(-hw, -hh, hw * 2, hh * 2, Math.min(hw, hh) * 0.2);
+    ctx.fillStyle = 'rgba(16,20,26,0.92)';
+    ctx.fill();
+    ctx.lineWidth = selected ? 2.5 : 1.5;
+    ctx.strokeStyle = selected ? '#fff' : hexToRgba(CAL_HEADER_COLOR, 0.9);
+    ctx.stroke();
+    // Header band (today accent).
+    ctx.beginPath();
+    ctx.roundRect(-hw * 0.9, -hh * 0.86, hw * 1.8, hh * 0.62, Math.min(hw, hh) * 0.12);
+    ctx.fillStyle = CAL_HEADER_COLOR;
+    ctx.fill();
+    ctx.restore();
+    // Label + header text below (screen space, unrotated).
+    ctx.font = `${9 * dpr}px sans-serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+    const label = cp.label?.trim() || 'Calendar';
+    const line = model.empty ? `${label} · no events`
+      : `${model.header}${model.rows[0] ? ' · ' + model.rows[0].time + ' ' + model.rows[0].title.slice(0, 12) : ''}`;
+    const txt = line.length > 40 ? line.slice(0, 39) + '…' : line;
+    const tw = ctx.measureText(txt).width + 8 * dpr;
+    const by = c.y + hh + 3 * dpr;
+    ctx.fillStyle = 'rgba(0,0,0,0.7)';
+    ctx.fillRect(c.x - tw / 2, by, tw, 13 * dpr);
+    ctx.fillStyle = model.rows[0]?.today ? '#ff8a80' : '#eceff1';
+    ctx.fillText(txt, c.x, by + 1 * dpr);
+  }
+}
+
 // HVAC thermostat wall control (Feature: climate). A rounded wall plate with a
 // mode-colored "screen" band showing current→target temp; while the unit is
 // actively heating/cooling/running the fan (hvac_action) the band pulses (RAF
@@ -1227,6 +1282,75 @@ function drawSafetySensors(ctx: CanvasRenderingContext2D, p: Planner, view: View
     ctx.fillStyle = alarming ? hexToRgba(col, 1) : '#cfd8dc';
     ctx.fillText(txt, c.x, by + 1 * dpr);
     drawBatteryBadge(ctx, p, s.entity_id, c.x + rPx * 0.8, c.y - rPx * 0.8);
+  }
+}
+
+// Alert Beacon fixtures (Alert Center, Track B): ceiling puck that pulses red +
+// erupts into expanding rings while ACTIVE (unacknowledged), steady amber when
+// ACKNOWLEDGED (alert.* 'off'), dim gray when idle. Same performance.now()-based
+// animation as drawSafetySensors. Rides the sensors layer (gated at the call
+// site). State resolves via effectiveState → alertBeaconState (alert.* domain
+// gets the three-state acknowledge semantics; binary_sensor only on/off).
+function drawAlertBeacons(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
+  const dpr = window.devicePixelRatio || 1;
+  const f = p.floor();
+  const t = performance.now() / 1000;
+  for (const b of f.alertBeacons ?? []) {
+    if (b.hidden) continue;
+    const c = mmToPx(view, b.x, b.y);
+    const st = p.effectiveState(b);
+    const bs = alertBeaconState(st?.state, isAlertDomain(b.entity_id));
+    const alarming = alertBeaconAlarming(bs);
+    const col = alertBeaconColor(bs);
+    const selected = p.activeAlertBeaconId === b.id;
+    const rPx = Math.max(9, ALERT_BEACON_DEFAULTS.discRadiusMm * view.scale);
+
+    if (alarming) {
+      const pulse = 0.5 + 0.5 * Math.sin(t * 6);
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(c.x, c.y, rPx * 2.6, 0, 2 * Math.PI);
+      ctx.fillStyle = hexToRgba(col, 0.18 + 0.22 * pulse);
+      ctx.fill();
+      for (let k = 0; k < 3; k++) {
+        const ph = (t * 1.4 + k / 3) % 1;
+        const rr = rPx * (1 + ph * 3.2);
+        ctx.beginPath();
+        ctx.arc(c.x, c.y, rr, 0, 2 * Math.PI);
+        ctx.lineWidth = Math.max(1.5, 2.5 * dpr) * (1 - ph);
+        ctx.strokeStyle = hexToRgba(col, 0.7 * (1 - ph));
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+    // Beacon body: white disc, colored ring, bell glyph.
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(c.x, c.y, rPx, 0, 2 * Math.PI);
+    ctx.fillStyle = alarming ? hexToRgba(col, 0.9) : (bs === 'ack' ? hexToRgba(col, 0.75) : 'rgba(236,239,241,0.95)');
+    ctx.fill();
+    ctx.lineWidth = selected ? 2.5 : 1.5;
+    ctx.strokeStyle = selected ? '#fff' : hexToRgba(col, 0.9);
+    ctx.stroke();
+    ctx.fillStyle = (alarming || bs === 'ack') ? '#fff' : hexToRgba(col, 1);
+    ctx.font = `${Math.max(8, rPx * 1.05)}px sans-serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('🔔', c.x, c.y + 0.5);
+    ctx.restore();
+    // Label below.
+    const label = b.label?.trim() || 'Alert';
+    const badge = bs === 'active' ? 'ALERT' : bs === 'ack' ? 'ack'
+                : (st ? 'idle' : (b.entity_id ? '—' : 'unbound'));
+    const txt = `${label} · ${badge}`;
+    ctx.font = `${10 * dpr}px sans-serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+    const tw = ctx.measureText(txt).width + 8 * dpr;
+    const by = c.y + rPx + 4 * dpr;
+    ctx.fillStyle = 'rgba(0,0,0,0.7)';
+    ctx.fillRect(c.x - tw / 2, by, tw, 13 * dpr);
+    ctx.fillStyle = alarming ? hexToRgba(col, 1) : '#cfd8dc';
+    ctx.fillText(txt, c.x, by + 1 * dpr);
+    drawBatteryBadge(ctx, p, b.entity_id, c.x + rPx * 0.8, c.y - rPx * 0.8);
   }
 }
 
@@ -2709,6 +2833,34 @@ function drawFurniture(ctx: CanvasRenderingContext2D, p: Planner, view: View,
         ctx.fillStyle = 'rgba(0,230,118,0.95)'; ctx.font = '9px sans-serif';
         ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
         ctx.fillText(txt, 0, (piece.label ? 11 : 0));
+      }
+    }
+    // TV screen surfaces (calendar-tv feature): a glanceable 📰/⛅ line under the
+    // label when a tv/wall_tv shows a news/weather screen (no scrolling in 2D).
+    // Now-playing precedence: only when no media is presenting. Reads live state.
+    if ((piece.kind === 'tv' || piece.kind === 'wall_tv') && p.hass?.states) {
+      const mode = (piece.screenMode as ScreenMode | undefined) ?? 'auto';
+      if (mode === 'news' || mode === 'weather') {
+        const media = isMediaPlayerId(piece.entity_id) ? parseNowPlaying(p.hass.states[piece.entity_id!]) : null;
+        const st = p.effectiveState(piece);
+        const s = st?.state;
+        const tvOn = !(s === 'off' || s === 'standby' || s === 'unavailable');
+        const content = resolveScreenContent(mode, !!media, tvOn);
+        let scr = '';
+        if (content === 'news') {
+          const h = p.headlinesFor(piece.newsEntity);
+          scr = `📰 ${h[0] ? h[0].slice(0, 26) : '—'}`;
+        } else if (content === 'weather') {
+          const wn = p.weatherNow;
+          const g = wn ? (CONDITION_GLYPH[wn.condition] ?? '') : '';
+          const tc = wn?.tempC;
+          scr = `${g || '⛅'} ${typeof tc === 'number' ? Math.round(p.store.imperial ? tc * 9 / 5 + 32 : tc) + '°' : '—'}`;
+        }
+        if (scr) {
+          ctx.fillStyle = 'rgba(127,212,255,0.95)'; ctx.font = '9px sans-serif';
+          ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+          ctx.fillText(scr, 0, (piece.label ? 11 : 0) + 11);
+        }
       }
     }
     // Front chevron: subtle orange arrow just past the functional front edge

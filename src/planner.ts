@@ -1,4 +1,5 @@
 import { HassClient, type HaApi, type ForecastRecord } from './ha-client.js';
+import { parseHeadlines, type CalEvent } from './surfaces.js';
 import { SensorDiscovery } from './sensor-discovery.js';
 import { loadStore, saveStore, newId, repairFloor, defaultStore,
          cfgBodyKey, loadConfigsCache, saveConfigsCache } from './storage.js';
@@ -11,6 +12,8 @@ import { slugToName, normMac, localToWorld, segCrossesSolidWall, mowerSweepWaypo
 import { solveHomography, applyHomography } from './homography.js';
 import { stepFusion, newFusionState, DEFAULT_FUSION_CFG,
          type FusionState, type FusionCand } from './fusion.js';
+import { buildAlertFeed, alertCenterEnabled, isAlertDomain,
+         type PanelAlert, type HaNotification, type RepairIssue } from './alerts.js';
 import { fitGeoTransform, latLonToPlan, clampToBoundary, planBearingDeg, compass8, medianLatLon,
          type GeoTransform, type GeoPair, type LatLonSample } from './geo.js';
 import type { GeoConfig, GeoLandmark, DioramaPerson, RobotFixture, ActionButton, Light, ValveFixture, BgTextMode } from './types.js';
@@ -44,7 +47,8 @@ export interface BermudaDiscovery {
 import type {
   Store, Floor, Sensor, ZonesLive, ObjectHalo, LerpSlot,
   HassState, ConnStatus, DiscoveredDevice, Vec2, AvatarKind, WeatherConfig, CameraFixture,
-  ConfigIndex, ConfigMeta, ThermostatFixture, SafetySensor, Furniture, MqttBridgeConfig,
+  ConfigIndex, ConfigMeta, ThermostatFixture, SafetySensor, AlertBeacon, Furniture, MqttBridgeConfig,
+  AlertsConfig,
 } from './types.js';
 
 // Full export envelope (Batch B). `store` is the WHOLE Store serialized (no
@@ -216,8 +220,10 @@ export type Drag =
   | { kind: 'motionRotate'; id: string }
   | { kind: 'ble'; id: string; startMm: Vec2; start: Vec2 }
   | { kind: 'alarm'; id: string; startMm: Vec2; start: Vec2 }
+  | { kind: 'calendar'; id: string; startMm: Vec2; start: Vec2 }
   | { kind: 'thermostat'; id: string; startMm: Vec2; start: Vec2 }
   | { kind: 'safety'; id: string; startMm: Vec2; start: Vec2 }
+  | { kind: 'alert'; id: string; startMm: Vec2; start: Vec2 }
   | { kind: 'robot'; id: string; startMm: Vec2; start: Vec2 }
   | { kind: 'camera'; id: string; startMm: Vec2; start: Vec2 }
   | { kind: 'cameraRotate'; id: string }
@@ -254,7 +260,7 @@ export interface EditZone {
   mousePos: Vec2 | null;
 }
 
-export type Tool = 'select' | 'wall' | 'sensor' | 'motion' | 'env' | 'infocard' | 'action' | 'bleproxy' | 'alarm' | 'thermostat' | 'safety' | 'robot' | 'camera' | 'projector' | 'valve' | 'plug' | 'pzone' | 'ground' | 'void' | 'furniture' | 'light' | 'switch' | 'door' | 'window' | 'delete';
+export type Tool = 'select' | 'wall' | 'sensor' | 'motion' | 'env' | 'infocard' | 'action' | 'bleproxy' | 'alarm' | 'calendar' | 'thermostat' | 'safety' | 'alertbeacon' | 'robot' | 'camera' | 'projector' | 'valve' | 'plug' | 'pzone' | 'ground' | 'void' | 'furniture' | 'light' | 'switch' | 'door' | 'window' | 'delete';
 
 // Live robot state (runtime-only). `x/y/heading/phase/activity/led` are the
 // DISPLAY fields both canvases read; the rest are the movement controller's
@@ -387,11 +393,17 @@ export class Planner extends EventTarget {
   // Active alarm keypad fixture (sidebar selection / canvas highlight)
   activeAlarmId: string | null = null;
 
+  // Active wall-calendar fixture (sidebar selection / canvas highlight)
+  activeCalendarId: string | null = null;
+
   // Active thermostat fixture (sidebar selection / canvas highlight)
   activeThermoId: string | null = null;
 
   // Active smoke / CO detector fixture (sidebar selection / canvas highlight)
   activeSafetyId: string | null = null;
+
+  // Active alert beacon fixture (sidebar selection / canvas highlight)
+  activeAlertBeaconId: string | null = null;
 
   // Active robot fixture (sidebar selection / canvas highlight)
   activeRobotId: string | null = null;
@@ -533,6 +545,29 @@ export class Planner extends EventTarget {
   weatherAlerts: WeatherAlert[] = [];
   private _weatherTimer: ReturnType<typeof setInterval> | null = null;
   private _weatherInited = false;
+
+  // ── Wall calendars (runtime-only; polled via calendar.get_events) ─────────
+  // Upcoming events per CalendarPanel id (chronologically merged across the
+  // panel's bound calendar.* entities). NOT persisted — refreshed by
+  // _refreshCalendars() on connect + a ~10 min timer + when a bound calendar's
+  // entity state flips (see _isSlowEntity). The 2D/3D renderers read this.
+  calendarEvents: Record<string, CalEvent[]> = {};
+  private _calendarTimer: ReturnType<typeof setInterval> | null = null;
+  private _calendarInited = false;
+  private static readonly CALENDAR_POLL_MS = 10 * 60 * 1000;
+  private static readonly CALENDAR_WINDOW_H = 48;   // fetch this many hours ahead
+
+  // ── Alert Center (runtime-only; never persisted) ──────────────────────────
+  // Live persistent notifications (kept current by the WS subscription — a
+  // `current` snapshot then add/update/remove deltas maintained in this map) and
+  // the polled Repairs issue registry. Both feed the derived `alertFeed` getter,
+  // mirroring how weatherNow/blePeople are runtime-only derived state.
+  notifications: HaNotification[] = [];
+  repairIssues: RepairIssue[] = [];
+  private _alertNotifUnsub: (() => void) | null = null;
+  private _alertRepairsTimer: ReturnType<typeof setInterval> | null = null;
+  private _alertInited = false;
+  private static readonly ALERT_REPAIRS_POLL_MS = 3 * 60 * 1000;  // Repairs change rarely; no WS push exists
   // ── MQTT bridge (Phase 5) ──────────────────────────────────────────────────
   // The active bridge handle (null when mode off / offline / not yet started),
   // its last-reported status, a one-time init guard (mirrors _weatherInited), and
@@ -1048,12 +1083,31 @@ export class Planner extends EventTarget {
       this._weatherInited = true;
       this._reconfigureWeather();
     }
+    // One-time wall-calendar poll start on the first full state load. Re-run by
+    // _applyLoadedStore once the authoritative config lands (both idempotent).
+    if (!this._calendarInited && changedId === undefined) {
+      this._calendarInited = true;
+      this._startCalendarPoll();
+    }
+    // A bound calendar entity flipping on↔off is a cheap nudge to re-poll the
+    // full agenda sooner than the timer (a new/ended event just changed state).
+    if (changedId !== undefined && (this.floor().calendarPanels ?? [])
+        .some(c => (c.calendarIds ?? []).includes(changedId))) {
+      void this._refreshCalendars();
+    }
     // One-time MQTT bridge start from the local-cache config on first full load
     // (mirrors _weatherInited). _applyLoadedStore re-runs it once HA's
     // authoritative config lands; both are idempotent.
     if (!this._mqttInited && changedId === undefined) {
       this._mqttInited = true;
       void this._reconfigureMqtt();
+    }
+    // One-time Alert Center start on the first full load (auth is done + states
+    // arrived, so the WS subscribe / Repairs poll won't race auth). Idempotent;
+    // _applyLoadedStore re-runs _reconfigureAlertCenter once HA's config lands.
+    if (!this._alertInited && changedId === undefined) {
+      this._alertInited = true;
+      this._reconfigureAlertCenter();
     }
 
     this.emitLive();
@@ -1224,8 +1278,10 @@ export class Planner extends EventTarget {
       this.activeEnvId = null;
       this.activeBleId = null;
       this.activeAlarmId = null;
+      this.activeCalendarId = null;
       this.activeThermoId = null;
       this.activeSafetyId = null;
+      this.activeAlertBeaconId = null;
       this.activeRobotId = null;
       this.activeCameraId = null;
       this.activeProjectorId = null;
@@ -1256,9 +1312,15 @@ export class Planner extends EventTarget {
     // Re-apply the weather source now that the authoritative config loaded
     // (restarts / stops the Open-Meteo poll, recomputes local sources).
     this._reconfigureWeather();
+    // (Re)start the wall-calendar poll to match the authoritative config.
+    this._calendarInited = true;
+    this._startCalendarPoll();
     // (Re)start the MQTT bridge to match the authoritative config.
     this._mqttInited = true;
     void this._reconfigureMqtt();
+    // (Re)start the Alert Center collectors to match the authoritative config
+    // (honors the enabled toggle; only starts once a connection exists).
+    if (this._alertInited) this._reconfigureAlertCenter();
     this.emitConfig();
   }
 
@@ -1480,6 +1542,14 @@ export class Planner extends EventTarget {
       fu.mailCount?.countEntity === id || fu.mailCount?.flagEntity === id)) return true;
     if (f2.doors.some(d => d.lockEntity === id)) return true;
     if ((f2.alarmPanels ?? []).some(a => a.entity_id === id)) return true;
+    // Wall-calendar bound calendar.* ids: config-path so the sidebar next-event
+    // line + the 3D _keyCalendar dirty key refresh on an on↔off flip (a cheap
+    // nudge to also re-poll the full agenda sooner — see _refreshCalendars). The
+    // full event list is a separate poll, not read from state.
+    if ((f2.calendarPanels ?? []).some(c => (c.calendarIds ?? []).includes(id))) return true;
+    // TV "news" screen source entity (sensor.*/event.* headline feed): config-
+    // path so the ticker text + _keyNowPlaying rebuild when new headlines land.
+    if ((f2.furniture ?? []).some(fu => fu.newsEntity === id)) return true;
     // Bound climate/thermostat entities: current_temperature can tick often, but
     // config-cadence is enough for the sidebar reading + the 3D _keyThermo dirty
     // key (which buckets temps). Scoped to the current floor's bound ids.
@@ -1487,6 +1557,10 @@ export class Planner extends EventTarget {
     // Smoke / CO detector binary_sensors: display-only bindings routed through
     // the config channel so 2D/3D dirty keys + sidebar badges refresh on alarm.
     if ((f2.safetySensors ?? []).some(s => s.entity_id === id)) return true;
+    // Alert Beacon bound entities (alert.*/binary_sensor): config-path (alert.*
+    // changes a handful of times a day) so the 2D/3D beacon + sidebar badge
+    // rebuild when it flips active/acknowledged/idle.
+    if ((f2.alertBeacons ?? []).some(b => b.entity_id === id)) return true;
     // Room occupancy sensors (#1): config-path so the sidebar ● indicator + the
     // 3D floor-patch tint (folded into _keyFloor) rebuild on an occupancy flip
     // (infrequent). The 2D activity glow reads live regardless.
@@ -2078,6 +2152,11 @@ export class Planner extends EventTarget {
     this.emitConfig();
   }
 
+  setActiveCalendar(id: string | null): void {
+    this.activeCalendarId = (this.activeCalendarId === id) ? null : id;
+    this.emitConfig();
+  }
+
   setActiveThermo(id: string | null): void {
     this.activeThermoId = (this.activeThermoId === id) ? null : id;
     this.emitConfig();
@@ -2102,6 +2181,142 @@ export class Planner extends EventTarget {
       // binary_sensor bound → display-only (nothing to toggle).
     } else {
       this.toggleItem(s);
+    }
+  }
+
+  // ── Alert Beacon fixture (Alert Center, Track B) ──────────────────────────
+  setActiveAlertBeacon(id: string | null): void {
+    this.activeAlertBeaconId = (this.activeAlertBeaconId === id) ? null : id;
+    this.emitConfig();
+  }
+
+  // Clicking a beacon (2D/3D) or the sidebar Test/Acknowledge button. Bound to an
+  // alert.* → alert.turn_off is the ACKNOWLEDGE action (§2.5) when currently
+  // active; a bound binary_sensor is display-only (nothing to control); unbound →
+  // flip localState (demo). Refuses in view mode; kiosk allowed (safety-relevant,
+  // like the alarm keypad + siren precedents).
+  acknowledgeAlertBeacon(b: AlertBeacon): void {
+    if (this.uiMode === 'view') return;
+    if (b.entity_id) {
+      if (isAlertDomain(b.entity_id)) {
+        // alert.turn_off = acknowledge. Only meaningful while active ('on').
+        if (this.hass && this.effectiveState(b)?.state === 'on') {
+          this.hass.callService('alert', 'turn_off', { entity_id: b.entity_id });
+        }
+      }
+      // binary_sensor / other bound entity → display-only (nothing to control).
+    } else {
+      this.toggleItem(b);   // unbound demo flip
+    }
+  }
+
+  // ── Alert Center (Track A) ────────────────────────────────────────────────
+  // Derived, sorted, filtered feed of everything that needs attention. Runtime-
+  // only getter (mirrors weatherNow / blePeople). Empty when the center is
+  // disabled.
+  get alertFeed(): PanelAlert[] {
+    const cfg = this.store.alerts;
+    if (!alertCenterEnabled(cfg)) return [];
+    return buildAlertFeed(this.notifications, this.repairIssues, cfg);
+  }
+
+  // Mutate the alert config (creating a sensible default the first time), persist,
+  // re-apply the collectors, and repaint (mirrors setWeather).
+  setAlertsConfig(mut: (a: AlertsConfig) => void): void {
+    if (!this.store.alerts) this.store.alerts = {};
+    mut(this.store.alerts);
+    this.save();
+    this._reconfigureAlertCenter();
+    this.emitConfig();
+  }
+
+  // (Re)start or stop the collectors to match the current config. Idempotent.
+  // Only starts once a connection exists (guarded by _alertInited at the call
+  // sites). A disabled center tears the subscription + poll down.
+  private _reconfigureAlertCenter(): void {
+    this._stopAlertCenter();
+    if (!this.hass || !alertCenterEnabled(this.store.alerts)) {
+      this.notifications = []; this.repairIssues = [];
+      return;
+    }
+    this._startAlertCenter();
+  }
+
+  private _stopAlertCenter(): void {
+    if (this._alertNotifUnsub) { try { this._alertNotifUnsub(); } catch { /* ignore */ } this._alertNotifUnsub = null; }
+    if (this._alertRepairsTimer) { clearInterval(this._alertRepairsTimer); this._alertRepairsTimer = null; }
+  }
+
+  private _startAlertCenter(): void {
+    const hass = this.hass;
+    if (!hass) return;
+    // Defensive against a partial HaApi (older test stubs / a stale adapter):
+    // skip cleanly if the Alert Center surface isn't present.
+    if (typeof hass.subscribePersistentNotifications !== 'function') return;
+    // Persistent notifications: live WS subscription (non-admin-safe). Maintain a
+    // dict from the current/added/updated/removed deltas; repaint on each change.
+    const map = new Map<string, HaNotification>();
+    hass.subscribePersistentNotifications(u => {
+      if (u.type === 'current') {
+        map.clear();
+        for (const [id, n] of Object.entries(u.notifications)) map.set(id, this._normNotif(id, n));
+      } else if (u.type === 'removed') {
+        for (const id of Object.keys(u.notifications)) map.delete(id);
+      } else {
+        // added / updated
+        for (const [id, n] of Object.entries(u.notifications)) map.set(id, this._normNotif(id, n));
+      }
+      this.notifications = [...map.values()];
+      this.emitConfig();   // repaints the bell badge + drawer; new alert pulses the bell
+    }).then(unsub => { this._alertNotifUnsub = unsub; })
+      .catch(() => { /* never throws (clients swallow); belt-and-braces */ });
+    // Repairs: no WS push exists — poll on a modest interval (minutes). A non-
+    // admin user's list_issues errors → the client returns [], clearing the list.
+    void this._pollRepairs();
+    this._alertRepairsTimer = setInterval(() => void this._pollRepairs(), Planner.ALERT_REPAIRS_POLL_MS);
+  }
+
+  private _normNotif(id: string, n: Partial<HaNotification>): HaNotification {
+    return {
+      notification_id: id,
+      title: n.title ?? null,
+      message: typeof n.message === 'string' ? n.message : String(n.message ?? ''),
+      created_at: n.created_at,
+    };
+  }
+
+  private async _pollRepairs(): Promise<void> {
+    if (!this.hass || typeof this.hass.listRepairsIssues !== 'function'
+        || this.store.alerts?.showRepairs === false) {
+      if (this.repairIssues.length) { this.repairIssues = []; this.emitConfig(); }
+      return;
+    }
+    const issues = await this.hass.listRepairsIssues();
+    // Cheap change check — avoid churn when nothing changed.
+    const key = issues.map(i => `${i.domain}/${i.issue_id}:${i.severity}:${i.ignored ? 1 : 0}`).join(',');
+    if (key !== this._repairsKey) {
+      this._repairsKey = key;
+      this.repairIssues = issues;
+      this.emitConfig();
+    }
+  }
+  private _repairsKey = '';
+
+  // Dismiss / acknowledge one alert, routed by source. Notifications →
+  // persistent_notification.dismiss; Repairs → repairs/ignore_issue (hides it
+  // from the feed, keeps it in the registry). View mode refuses. The optimistic
+  // local removal keeps the drawer snappy; the next push / poll reconciles.
+  dismissAlert(a: PanelAlert): void {
+    if (this.uiMode === 'view' || !this.hass) return;
+    if (a.source === 'notification' && a.notificationId) {
+      this.hass.callService('persistent_notification', 'dismiss', { notification_id: a.notificationId });
+      this.notifications = this.notifications.filter(n => n.notification_id !== a.notificationId);
+      this.emitConfig();
+    } else if (a.source === 'repair' && a.domain && a.issueId) {
+      void this.hass.ignoreRepairsIssue(a.domain, a.issueId, true);
+      this.repairIssues = this.repairIssues.map(i =>
+        (i.domain === a.domain && i.issue_id === a.issueId) ? { ...i, ignored: true } : i);
+      this.emitConfig();
     }
   }
 
@@ -3436,6 +3651,52 @@ export class Planner extends EventTarget {
     await this._pollOpenMeteo();
   }
 
+  // (Re)start the wall-calendar poll: an immediate fetch + a ~10 min timer.
+  // Idempotent — clears any existing timer first. No-op'd naturally when the
+  // floor has no calendar panels (the fetch loops over an empty set).
+  private _startCalendarPoll(): void {
+    if (this._calendarTimer) { clearInterval(this._calendarTimer); this._calendarTimer = null; }
+    void this._refreshCalendars();
+    this._calendarTimer = setInterval(() => void this._refreshCalendars(), Planner.CALENDAR_POLL_MS);
+  }
+
+  // Poll calendar.get_events for every bound calendar across ALL floors' panels
+  // (a panel on another floor still wants fresh data when you switch to it),
+  // caching the merged event list per panel id in this.calendarEvents. Repaints
+  // (emitConfig) only when a panel's list actually changed. All failures are
+  // swallowed (getCalendarEvents returns []); never throws into the tick path.
+  private async _refreshCalendars(): Promise<void> {
+    if (!this.hass) return;
+    const panels = this.store.floors.flatMap(f => f.calendarPanels ?? []);
+    if (!panels.length) { this.calendarEvents = {}; return; }
+    const now = new Date();
+    const startISO = now.toISOString();
+    const endISO = new Date(now.getTime() + Planner.CALENDAR_WINDOW_H * 3600 * 1000).toISOString();
+    let changed = false;
+    try {
+      for (const cp of panels) {
+        const ids = (cp.calendarIds ?? []).filter(Boolean);
+        if (!ids.length) {
+          if (this.calendarEvents[cp.id]?.length) { delete this.calendarEvents[cp.id]; changed = true; }
+          continue;
+        }
+        const events = await this.hass.getCalendarEvents(ids, startISO, endISO);
+        const prev = this.calendarEvents[cp.id];
+        if (JSON.stringify(prev) !== JSON.stringify(events)) {
+          this.calendarEvents[cp.id] = events; changed = true;
+        }
+      }
+    } catch { /* never throw into the tick/RAF path */ }
+    if (changed) this.emitConfig();
+  }
+
+  // Defensive headline list for a TV's bound news entity (surfaces.parseHeadlines
+  // over the live entity state). [] when unbound / no usable payload.
+  headlinesFor(newsEntity: string | null | undefined): string[] {
+    if (!newsEntity || !this.hass) return [];
+    return parseHeadlines(this.hass.states[newsEntity] ?? null);
+  }
+
   // (Re)apply the current weather source: (re)start or stop the Open-Meteo
   // timer, or recompute a local source from current states. Idempotent.
   private _reconfigureWeather(): void {
@@ -4151,8 +4412,10 @@ export class Planner extends EventTarget {
     for (const it of f.envSensors ?? []) { it.x += dx; it.y += dy; }
     for (const it of f.bleProxies ?? []) { it.x += dx; it.y += dy; }
     for (const it of f.alarmPanels ?? []) { it.x += dx; it.y += dy; }
+    for (const it of f.calendarPanels ?? []) { it.x += dx; it.y += dy; }
     for (const it of f.thermostats ?? []) { it.x += dx; it.y += dy; }
     for (const it of f.safetySensors ?? []) { it.x += dx; it.y += dy; }
+    for (const it of f.alertBeacons ?? []) { it.x += dx; it.y += dy; }
     for (const it of f.robots ?? []) { it.x += dx; it.y += dy; }
     for (const it of f.cameras ?? []) { it.x += dx; it.y += dy; }
     for (const it of f.projectors ?? []) { it.x += dx; it.y += dy; }
@@ -4182,6 +4445,7 @@ export class Planner extends EventTarget {
     this.activeEnvId = null;
     this.activeBleId = null;
     this.activeAlarmId = null;
+    this.activeCalendarId = null;
     this.activeThermoId = null;
     this.activeSafetyId = null;
     this.activeRobotId = null;

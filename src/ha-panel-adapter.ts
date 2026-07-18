@@ -10,7 +10,9 @@
 
 import type { ConnStatus, HassState } from './types.js';
 import type { HaApi, StateListener, ConnListener, HaDevice, HaEntityReg, HistoryPoint, ForecastRecord } from './ha-client.js';
-import { normalizeHistory, normalizeForecasts } from './ha-client.js';
+import { normalizeHistory, normalizeForecasts, normalizeRepairs } from './ha-client.js';
+import { normalizeCalendarEvents, type CalEvent } from './surfaces.js';
+import type { NotificationsUpdate, RepairIssue } from './alerts.js';
 
 // Loose typing for HA frontend's hass object — we only touch a small,
 // long-stable subset (connection.sendMessagePromise / subscribeEvents).
@@ -96,6 +98,19 @@ export class HassPanelAdapter implements HaApi {
     } catch { return null; }
   }
 
+  async getCalendarEvents(entityIds: string[], startISO: string, endISO: string): Promise<CalEvent[]> {
+    if (!this._conn || !entityIds.length) return [];
+    try {
+      const raw = await this._conn.sendMessagePromise({
+        type: 'call_service', domain: 'calendar', service: 'get_events',
+        service_data: { start_date_time: startISO, end_date_time: endISO },
+        target: { entity_id: entityIds },
+        return_response: true,
+      });
+      return normalizeCalendarEvents(raw, entityIds);
+    } catch { return []; }
+  }
+
   async getDevices(): Promise<Array<HaDevice>> {
     if (!this._conn) return [];
     try {
@@ -175,6 +190,39 @@ export class HassPanelAdapter implements HaApi {
     if (!this._conn) return false;
     try {
       await this._conn.sendMessagePromise({ type: 'frontend/set_user_data', key, value });
+      return true;
+    } catch { return false; }
+  }
+
+  // ── Alert Center ──
+  async subscribePersistentNotifications(cb: (u: NotificationsUpdate) => void): Promise<() => void> {
+    if (!this._conn) return () => {};
+    try {
+      return await this._conn.subscribeMessage<{ type?: unknown; notifications?: unknown }>(ev => {
+        try {
+          cb({
+            type: (ev?.type as NotificationsUpdate['type']) ?? 'current',
+            notifications: (ev?.notifications as NotificationsUpdate['notifications']) ?? {},
+          });
+        } catch { /* consumer threw */ }
+      }, { type: 'persistent_notification/subscribe' });
+    } catch { return () => {}; }
+  }
+
+  async listRepairsIssues(): Promise<RepairIssue[]> {
+    if (!this._conn) return [];
+    try {
+      const raw = await this._conn.sendMessagePromise({ type: 'repairs/list_issues' });
+      return normalizeRepairs(raw);
+    } catch { return []; }
+  }
+
+  async ignoreRepairsIssue(domain: string, issueId: string, ignore: boolean): Promise<boolean> {
+    if (!this._conn) return false;
+    try {
+      await this._conn.sendMessagePromise({
+        type: 'repairs/ignore_issue', domain, issue_id: issueId, ignore,
+      });
       return true;
     } catch { return false; }
   }

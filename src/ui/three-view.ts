@@ -8,6 +8,8 @@ import type { ThreeDRenderer, ZoneWorld, HaloWorld, TargetWorld, ActivityContext
   GpsPinWorld, GpsLandmarkWorld, GeoEventWorld, WeatherFxState, VacMapEntry } from '../three-renderer.js';
 import { localToWorld, transformVerts, pointInPolygon, sensorColor, hexToInt, motionColor, lightIconKind, furnitureKind, resolveFurnitureDef, furnitureCat, isBinKind, isSpeakerKind, isVehicleKind, isStairsKind, alarmStateColor, valveOpenness, doorSpanCenter, isDroopPlant, plantThirsty, PLANT_MOISTURE_DEFAULT_THRESHOLD } from '../geometry.js';
 import { compass8 } from '../geo.js';
+import { parseNowPlaying, isMediaPlayerId } from '../geometry.js';
+import { resolveScreenContent } from '../surfaces.js';
 import { resolveScenePreset, resolveTimeBucket } from '../time-of-day.js';
 import { conditionIntensity, weatherEffectEnabled, worstAlertSeverity } from '../weather.js';
 import { loadModel } from '../model-store.js';
@@ -214,6 +216,13 @@ export class ThreeView extends LitElement {
         if (s.kind === 'siren') { p.triggerSiren(s); return; }
         if (p.uiMode === 'view' || entity_id) return;
         p.toggleItem(s);
+        return;
+      }
+      // Alert beacon → acknowledge (bound alert.*) or demo-flip (unbound).
+      // acknowledgeAlertBeacon refuses in view mode; kiosk allowed.
+      if (kind === 'alert') {
+        const ab = p.floor().alertBeacons?.find(x => x.id === fixtureId);
+        if (ab) p.acknowledgeAlertBeacon(ab);
         return;
       }
       // Robot → run/dock (bound) or demo toggle (unbound). Refuses in view mode.
@@ -600,8 +609,10 @@ export class ThreeView extends LitElement {
   private _keyActions = '';
   private _keyBle = '';
   private _keyAlarm = '';
+  private _keyCalendar = '';
   private _keyThermo = '';
   private _keySafety = '';
+  private _keyAlert = '';
   private _keyRobots = '';
   private _keyNowPlaying = '';
   private _keyCameras = '';
@@ -640,7 +651,7 @@ export class ThreeView extends LitElement {
         this._lastFloorId = f.id;
         r.clearTransientGroups();
         this._keyFloor = this._keyDoors = this._keySensors = '';
-        this._keyMotion = this._keyEnv = this._keyInfo = this._keyActions = this._keyBle = this._keyAlarm = this._keyThermo = this._keySafety = '';
+        this._keyMotion = this._keyEnv = this._keyInfo = this._keyActions = this._keyBle = this._keyAlarm = this._keyCalendar = this._keyThermo = this._keySafety = this._keyAlert = '';
         this._keyCameras = this._keyProjectors = this._keyValves = this._keyPlugs = this._keyCamAlerts = this._keyPzones = this._keyNowPlaying = '';
         this._keyGround = '';
         this._keyHeatmap = '';
@@ -918,6 +929,20 @@ export class ThreeView extends LitElement {
         r.updateAlarmPanels(f.alarmPanels ?? [], id => states[id] || null);
       }
 
+      // Wall calendars: structural (placement/rotation/binding) + a coarse event
+      // hash (count + first-event start bucket) so a refreshed agenda rebuilds
+      // the plaque texture. Events come from the Planner poll, not entity state.
+      const calList = f.calendarPanels ?? [];
+      const keyCalendar = `${p.configRev}|` + calList.map(cp => {
+        const evs = p.calendarEvents[cp.id] ?? [];
+        return `${cp.id}:${Math.round(cp.x)}:${Math.round(cp.y)}:${Math.round(cp.rotation ?? 0)}:` +
+          `${(cp.calendarIds ?? []).join('+')}:${evs.length}:${evs[0]?.start ?? '-'}:${evs[0]?.summary ?? '-'}`;
+      }).join(',');
+      if (keyCalendar !== this._keyCalendar) {
+        this._keyCalendar = keyCalendar;
+        r.updateCalendarPanels(calList, p.calendarEvents);
+      }
+
       // Thermostats: structural + climate state. mode + hvac_action drive the
       // plate/vent color; the setpoint + current temp feed the readout — bucket
       // temps to ~0.5° to avoid float-jitter rebuilds (the vent particles animate
@@ -949,6 +974,19 @@ export class ThreeView extends LitElement {
         r.updateSafetySensors(safetyList, id => states[id] || null);
       }
 
+      // Alert beacons: structural + resolved beacon state. An ACTIVE beacon
+      // pulses (rings animate via performance.now() inside the builder), so any
+      // active beacon on the floor forces a per-frame rebuild — the safety idiom.
+      const beaconList = f.alertBeacons ?? [];
+      const hasActiveBeacon = beaconList.some(b => p.effectiveState(b)?.state === 'on');
+      const keyAlert = hasActiveBeacon ? `${Math.random()}` :
+        `${p.configRev}|` + beaconList.map(b =>
+          `${b.id}:${Math.round(b.x)}:${Math.round(b.y)}:${b.hidden ? 'h' : ''}:${p.effectiveState(b)?.state ?? '-'}`).join(',');
+      if (keyAlert !== this._keyAlert) {
+        this._keyAlert = keyAlert;
+        r.updateAlertBeacons(beaconList, id => states[id] || null);
+      }
+
       // Robot DOCKS are static (build-time): key on config rev + the fixture
       // list + kind/binding. The moving robot BODIES are updated every frame from
       // Planner.robotStates just below (persistent rigs — not dirty-keyed).
@@ -966,15 +1004,43 @@ export class ThreeView extends LitElement {
       // Now-playing cards (#11): sprites above media_player-bound furniture that
       // is playing/paused. Own dirty key = configRev + per-media (state|title|
       // picture) hash + the furniture/appliance layer flags (per-piece skipping).
+      // TV screen surfaces (calendar-tv feature): for each tv/wall_tv with a
+      // news/weather screenMode, resolve the content (now-playing precedence:
+      // playing/paused media hides the surface) + gather its headlines. Built in
+      // the SAME now-playing group/key (research doc §4.2). The ticker SCROLL is
+      // per-frame (_advanceTvScreens), NOT keyed — only the headline SET is.
+      const tvWn = p.weatherNow;
+      const tvScreens: Array<{ id: string; content: 'news' | 'weather'; headlines?: string[] }> = [];
+      for (const fu of f.furniture) {
+        if (fu.kind !== 'tv' && fu.kind !== 'wall_tv') continue;
+        const mode = fu.screenMode ?? 'auto';
+        if (mode !== 'news' && mode !== 'weather') continue;
+        const media = isMediaPlayerId(fu.entity_id) ? parseNowPlaying(states[fu.entity_id!]) : null;
+        const est = p.effectiveState(fu);
+        const es = est?.state;
+        const tvOn = !(es === 'off' || es === 'standby' || es === 'unavailable');
+        const content = resolveScreenContent(mode, !!media, tvOn);
+        if (content === 'news') tvScreens.push({ id: fu.id, content, headlines: p.headlinesFor(fu.newsEntity) });
+        else if (content === 'weather') tvScreens.push({ id: fu.id, content });
+      }
+      const screenKey = tvScreens.map(s => s.content === 'news'
+        ? `${s.id}:news:${(s.headlines ?? []).join('¦').slice(0, 120)}`
+        : `${s.id}:weather:${tvWn?.condition ?? '-'}:${typeof tvWn?.tempC === 'number' ? Math.round(tvWn.tempC) : '-'}:${p.forecastDaily?.length ?? 0}:${p.forecastDaily?.[0]?.temperature ?? '-'}`).join('|');
+
+      // Now-playing cards (#11): sprites above media_player-bound furniture that
+      // is playing/paused. Own dirty key = configRev + per-media (state|title|
+      // picture) hash + the furniture/appliance layer flags (per-piece skipping)
+      // + the TV screen-surface hash above.
       const keyNP = `${p.configRev}|${layers.furniture !== false ? 1 : 0}${layers.appliances !== false ? 1 : 0}|` +
         f.furniture.filter(fu => fu.entity_id?.startsWith('media_player.')).map(fu => {
           const s = states[fu.entity_id!];
           const a = s?.attributes as Record<string, unknown> | undefined;
           return `${fu.id}:${s?.state ?? '-'}:${(a?.media_title as string) ?? ''}:${(a?.entity_picture as string) ?? ''}`;
-        }).join('|');
+        }).join('|') + '||' + screenKey;
       if (keyNP !== this._keyNowPlaying) {
         this._keyNowPlaying = keyNP;
-        r.updateNowPlaying(f.furniture, p.store.customObjects, id => states[id] || null, p.haBaseUrl, layers);
+        r.updateNowPlaying(f.furniture, p.store.customObjects, id => states[id] || null, p.haBaseUrl, layers,
+          { screens: tvScreens, weather: tvWn, forecast: p.forecastDaily, imperial: p.store.imperial === true, nowMs: performance.now() });
       }
 
       // Camera fixtures (#10): structural + entity state (recording tint). Rides

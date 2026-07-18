@@ -101,6 +101,31 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Alert center + wall calendar + TV surfaces** (2026-07-17; 2 parallel
+  Opus agents; both former "research only" backlog items actioned).
+  **Alert center** (`src/alerts.ts` pure normalization +
+  `<diorama-alert-center>` topbar bell/badge/drawer): live
+  `persistent_notification/subscribe` + Repairs `repairs/list_issues`
+  3-min poll (admin-degrades silently) → one `PanelAlert` shape;
+  dismiss (`persistent_notification.dismiss`) + ignore-issue +
+  `alert.turn_off` acknowledge; severity floor + per-source toggles in
+  Settings (opt-out; bell edit-only unless `showInKiosk` — sensitive-
+  data guard); placeable **alert beacon** bound to an alert./
+  binary_sensor entity via effectiveState (three-state alert-domain
+  quirk handled) — ALERTCENTER 67/67; system_log/logbook + toast tray
+  deferred per §4.3. **Wall calendar** (`Floor.calendarPanels`,
+  alarm-panel recipe): binds calendar.* entities (repeated single-pick
+  rows), events via NEW `HaApi.getCalendarEvents` (calendar.get_events
+  w/ return_response, BOTH clients, LocalApi []), 10-min poll cached in
+  `Planner.calendarEvents`, repaint-on-change agenda face + today
+  highlight; never reads entity state for events. **TV surfaces**
+  (`Furniture.screenContent 'news'|'weather'` + news-entity bind):
+  screen plane over the TV face (flat unlit — documented exemption) —
+  scrolling RSS-headline ticker (zero-alloc offset advance) or a mini
+  weather card off `weatherNow`/forecast cache; now-playing ALWAYS wins
+  (folded into `_keyNowPlaying`); 2D 📰/🌤 glyph — CALTV 69/69,
+  NOWPLAYING 15/15, CONFIG/OFFLINE green.
+
 - **Per-room temperature heat-map** (2026-07-17; 1 Opus agent; the
   deferred HVAC §4.5 piece): pure `heatmapColor`/`aggregateRoomTemps`
   in geometry.ts — mean of temperature EnvSensors fuzzy-resolved into

@@ -163,6 +163,15 @@ export interface Furniture {
     countEntity?: string;     //   Mail-and-Packages) > 0 → floating count badge + raised flag. flagEntity
     flagEntity?: string;      //   (binary_sensor mailbox-lid) 'on' → lid tilts open. Both optional; unbound /
   };                          //   zero = plain closed mailbox, flag down. Item-level → no repairFloor change.
+  screenMode?: 'off' | 'now_playing' | 'news' | 'weather' | 'auto';  // tv/wall_tv only: what the screen
+                              //   FACE shows when no media_player is presenting media (research doc §4.2).
+                              //   'auto' (default when absent) = now-playing while a bound media_player plays,
+                              //   else blank. 'news'/'weather' render a scrolling headline ticker / mini
+                              //   weather card onto the screen plane while the TV is on + not playing media.
+                              //   Item-level → no repairFloor change.
+  newsEntity?: string | null; // tv/wall_tv 'news' screenMode: any sensor.*/event.* whose attributes carry a
+                              //   headline-shaped payload (feedparser list / event.* single / template). Parsed
+                              //   defensively by surfaces.parseHeadlines. Config-path in _isSlowEntity.
 }
 
 export type LightIconKind =
@@ -293,6 +302,24 @@ export interface AlarmPanel {
   locked?: boolean;           // canvas move/rotate/delete disabled (click still works)
 }
 
+// Wall-mounted calendar plaque (Feature: calendar-on-wall). A read-only wall-plate
+// fixture bound to one or more calendar.* entities; shows today's date + the next
+// few upcoming events as a compact plaque (2D chip + 3D wall box with a sprite
+// texture). Snaps flush to the nearest wall like a switch / alarm panel (no
+// ganging). Events are fetched by a Planner poll of calendar.get_events (NOT the
+// state stream — the entity state only carries the single next event) and cached
+// in Planner.calendarEvents. Rides the sensors layer (like alarm/BLE). See
+// geometry.ts CALENDAR_DEFAULTS / snapCalendarToWall, surfaces.ts paintCalendarCanvas.
+export interface CalendarPanel {
+  id: string;
+  x: number; y: number;
+  rotation?: number;          // deg, wall-plate convention like switches/alarm (0 = +Y world)
+  height?: number;            // mm above floor for the plaque center; default 1600 (picture height)
+  calendarIds: string[];      // one or more calendar.* entities (chronological merge)
+  label?: string;
+  locked?: boolean;           // canvas move/rotate/delete disabled (click selects)
+}
+
 // Wall-mounted HVAC / thermostat control fixture, bound to a climate.* entity.
 // Snaps flush to the nearest wall like a switch / alarm panel (no ganging).
 // Clicking opens the thermostat control modal. The 2D plate shows the current +
@@ -379,6 +406,28 @@ export interface SafetySensor {
   localState?: string;        // unbound manual trigger: 'on' = alarming/sounding; inert once bound
   label?: string;
   locked?: boolean;
+}
+
+// Alert Beacon fixture (Alert Center, Track B). A ceiling-mounted alert puck —
+// a near-clone of the SafetySensor recipe (same silhouette / scale / free
+// placement, no wall snap) — bound to an alert.* (ideal: three-state
+// idle/on/off acknowledge semantics) or ANY binary-ish entity standing in for
+// "problem here" (binary_sensor device_class problem, etc.). Not domain-locked
+// (mirrors SafetySensor's looseness). While ACTIVE (unacknowledged) it pulses
+// red + erupts into expanding rings; acknowledged (alert.* 'off') = steady
+// amber; idle = dim gray. Clicking a bound beacon calls alert.turn_off
+// (acknowledge) in edit/kiosk; unbound → flips localState for demoing. Rides the
+// `sensors` layer. Per-floor (Floor.alertBeacons); repairFloor + defaultFloor
+// backfill []. See src/alerts.ts (alertBeaconState / ALERT_STATE_COLORS).
+export interface AlertBeacon {
+  id: string;
+  x: number; y: number;
+  height?: number;            // mm above floor; default 2743 (ceiling, like SafetySensor)
+  entity_id: string | null;   // alert.* / binary_sensor.* ('on' = active/alarming)
+  localState?: string;        // unbound demo trigger: 'on' = active; inert once bound
+  label?: string;
+  locked?: boolean;           // canvas move/delete disabled (click-to-ack still works)
+  hidden?: boolean;           // per-fixture hide (plus the whole sensors layer toggle)
 }
 
 // Robot fixture (Feature: robot vacuum / lawn mower). The (x,y) is the DOCK /
@@ -833,9 +882,11 @@ export interface Floor {
   rooms?: Room[];   // named rooms (anchor → live wall loop); repairFloor backfills []
   bleProxies?: BleProxy[];  // BLE scanner fixtures; repairFloor backfills []
   alarmPanels?: AlarmPanel[];  // alarm keypad fixtures; repairFloor backfills []
+  calendarPanels?: CalendarPanel[];  // wall calendar plaques; repairFloor backfills []
   thermostats?: ThermostatFixture[];  // HVAC wall-control fixtures; repairFloor backfills []
   safetySensors?: SafetySensor[];  // smoke / CO detectors; repairFloor backfills []
   robots?: RobotFixture[];  // robot vacuum / mower fixtures; repairFloor backfills []
+  alertBeacons?: AlertBeacon[];  // Alert Center placeable beacons; repairFloor backfills []
   presenceZones?: PresenceZone[];  // FP2-style occupancy zones; repairFloor backfills []
   cameras?: CameraFixture[];  // camera fixtures (FOV frustum + snapshot); repairFloor backfills []
   projectors?: ProjectorFixture[];  // home-theater projector fixtures; repairFloor backfills []
@@ -944,6 +995,20 @@ export interface MqttBridgeConfig {
   valetudoNs?: string;         // default 'valetudo'
 }
 
+// Alert Center config (Alert Center feature, Track A). Top-level, optional. The
+// collectors (persistent_notification subscription + Repairs poll) run whenever
+// connected unless `enabled === false`. Per-source toggles + a severity floor
+// for Repairs. Must be added to Planner._loadFromHa's explicit field list (the
+// standard gotcha) or it resets on load. See src/alerts.ts.
+export interface AlertsConfig {
+  enabled?: boolean;                 // master; absent = on (opt-out)
+  showPersistentNotifications?: boolean;  // default true
+  showRepairs?: boolean;             // default true (silently no-ops if the HA user isn't admin)
+  minRepairSeverity?: 'warning' | 'error' | 'critical';  // default 'warning'
+  showInKiosk?: boolean;             // default false — Repairs/notification text can be
+                                     // instance-specific; opt-in to expose the bell on kiosk/view
+}
+
 export interface Store {
   v: number;
   floors: Floor[];
@@ -963,6 +1028,7 @@ export interface Store {
   bermudaEnabled?: boolean;          // Bermuda BLE tracking on/off (absent or true = enabled; false = neither displayed nor used)
   bleShowUnknown?: boolean;          // show BLE devices not mapped to a person (absent = true); consumed in B2
   weather?: WeatherConfig;           // weather source + chip config (Feature W)
+  alerts?: AlertsConfig;             // Alert Center (persistent notifications + Repairs surfacing)
   geo?: GeoConfig;                   // landmarks + lat/lon↔plan calibration (Feature G)
   mqttBridge?: MqttBridgeConfig;     // direct-MQTT bridge (Phase 5) — secrets stay in localStorage
 

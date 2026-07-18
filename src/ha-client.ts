@@ -1,4 +1,6 @@
 import type { ConnStatus, HassState } from './types.js';
+import type { NotificationsUpdate, RepairIssue } from './alerts.js';
+import { normalizeCalendarEvents, type CalEvent } from './surfaces.js';
 
 type StateListener = (states: Record<string, HassState>, changedId?: string) => void;
 type ConnListener = (status: ConnStatus) => void;
@@ -97,6 +99,30 @@ export function normalizeForecasts(raw: unknown, entityId: string): ForecastReco
   return fc as ForecastRecord[];
 }
 
+// Normalize a repairs/list_issues result into RepairIssue[]. `dismissed_version`
+// present ⇒ the user ignored it (surfaced as `ignored`). Tolerant of the raw
+// row shape (HA doesn't formally version this endpoint). Shared by both clients.
+export function normalizeRepairs(raw: unknown): RepairIssue[] {
+  const issues = (raw as { issues?: unknown } | null)?.issues;
+  if (!Array.isArray(issues)) return [];
+  return issues.map(i => {
+    const r = i as Record<string, unknown>;
+    return {
+      issue_id: String(r.issue_id ?? ''),
+      domain: String(r.domain ?? ''),
+      severity: String(r.severity ?? 'warning'),
+      translation_key: typeof r.translation_key === 'string' ? r.translation_key : undefined,
+      translation_placeholders: (r.translation_placeholders as Record<string, unknown>) ?? undefined,
+      is_fixable: r.is_fixable === true,
+      issue_domain: typeof r.issue_domain === 'string' ? r.issue_domain : null,
+      created: typeof r.created === 'string' ? r.created : undefined,
+      breaks_in_ha_version: typeof r.breaks_in_ha_version === 'string' ? r.breaks_in_ha_version : null,
+      learn_more_url: typeof r.learn_more_url === 'string' ? r.learn_more_url : null,
+      ignored: r.dismissed_version != null || r.ignored === true,
+    };
+  });
+}
+
 export interface HaApi {
   states: Record<string, HassState>;
   connect(): void;
@@ -110,6 +136,12 @@ export interface HaApi {
   // `forecast` state attribute was removed in HA 2024.4). Returns the forecast
   // records for the requested type, or null on any failure / no data.
   getWeatherForecasts(entityId: string, type: 'daily' | 'hourly'): Promise<ForecastRecord[] | null>;
+  // Fetch upcoming events for one or more calendar.* entities via the
+  // `calendar.get_events` action (return_response) over [startISO, endISO].
+  // Returns a flat, chronologically merged CalEvent[] (empty on any failure /
+  // no events). Calendars don't push their full agenda over state_changed, so
+  // this is a poll path (Planner._refreshCalendars), like weather forecasts.
+  getCalendarEvents(entityIds: string[], startISO: string, endISO: string): Promise<CalEvent[]>;
   getDevices(): Promise<Array<HaDevice>>;
   getEntityRegistry(): Promise<Array<HaEntityReg>>;
   // Update an entity-registry entry (e.g. { disabled_by: null } to enable a
@@ -127,6 +159,19 @@ export interface HaApi {
   getUserData<T = unknown>(key: string): Promise<T | null>;
   setUserData(key: string, value: unknown): Promise<boolean>;
   refreshStates(): Promise<void>;
+  // ── Alert Center ──
+  // Live-subscribe to persistent notifications (WS persistent_notification/
+  // subscribe — non-admin-safe, pushes a `current` snapshot then add/update/
+  // remove deltas). Resolves to an unsubscribe handle. NEVER throws — offline /
+  // unsupported resolves to a no-op unsubscribe.
+  subscribePersistentNotifications(cb: (u: NotificationsUpdate) => void): Promise<() => void>;
+  // Poll the Repairs issue registry (WS repairs/list_issues — ADMIN-only; a
+  // non-admin user errors). Catches and returns [] so a non-admin viewer just
+  // sees no repairs instead of a broken panel.
+  listRepairsIssues(): Promise<RepairIssue[]>;
+  // Ignore / un-ignore a Repairs issue (WS repairs/ignore_issue). Resolves true
+  // on success; false on any error (incl. non-admin).
+  ignoreRepairsIssue(domain: string, issueId: string, ignore: boolean): Promise<boolean>;
 }
 
 export type { StateListener, ConnListener };
@@ -199,6 +244,20 @@ export class HassClient implements HaApi {
       if (!res.success) return null;
       return normalizeForecasts(res.result, entityId);
     } catch { return null; }
+  }
+
+  async getCalendarEvents(entityIds: string[], startISO: string, endISO: string): Promise<CalEvent[]> {
+    if (!entityIds.length) return [];
+    try {
+      const res = await this._send({
+        type: 'call_service', domain: 'calendar', service: 'get_events',
+        service_data: { start_date_time: startISO, end_date_time: endISO },
+        target: { entity_id: entityIds },
+        return_response: true,
+      });
+      if (!res.success) return [];
+      return normalizeCalendarEvents(res.result, entityIds);
+    } catch { return []; }
   }
 
   // HA registry helpers — used by the entity picker so users can search by
@@ -353,6 +412,46 @@ export class HassClient implements HaApi {
   // full-state event so subscribers can resync.
   async refreshStates(): Promise<void> {
     await this._getStates();
+  }
+
+  // ── Alert Center ──
+  subscribePersistentNotifications(cb: (u: NotificationsUpdate) => void): Promise<() => void> {
+    const id = this._id++;
+    return new Promise<() => void>(resolve => {
+      this._subscriptions.set(id, ev => {
+        const e = (ev ?? {}) as { type?: unknown; notifications?: unknown };
+        try {
+          cb({
+            type: (e.type as NotificationsUpdate['type']) ?? 'current',
+            notifications: (e.notifications as NotificationsUpdate['notifications']) ?? {},
+          });
+        } catch { /* consumer threw — never break the socket loop */ }
+      });
+      this._pending.set(id, m => {
+        // Non-admin-safe command — a failure (unsupported HA) just resolves to a
+        // no-op unsubscribe so the caller never has to try/catch.
+        if (!(m as { success?: boolean }).success) this._subscriptions.delete(id);
+        resolve(() => this._unsubscribeId(id));
+      });
+      this._sendRaw({ id, type: 'persistent_notification/subscribe' });
+    });
+  }
+
+  async listRepairsIssues(): Promise<RepairIssue[]> {
+    try {
+      const res = await this._send({ type: 'repairs/list_issues' });
+      if (!res.success) return [];
+      return normalizeRepairs(res.result);
+    } catch { return []; }
+  }
+
+  async ignoreRepairsIssue(domain: string, issueId: string, ignore: boolean): Promise<boolean> {
+    try {
+      const res = await this._send({
+        type: 'repairs/ignore_issue', domain, issue_id: issueId, ignore,
+      });
+      return res.success;
+    } catch { return false; }
   }
 
   private _subscribeEvents(): void {

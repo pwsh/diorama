@@ -436,6 +436,67 @@ per-minute rebuild). Wall-mount cards flush-snap on drop/move-release via `snapI
 ### Alarm keypad fixture
 `AlarmPanel` (`Floor.alarmPanels`, repairFloor backfills `[]`) — a wall-plate fixture bound to `alarm_control_panel.*`, built via the standard canvas-fixture recipe: tool `alarm` (🚨), `drawAlarmPanels` (2D state-colored screen band; arming/pending amber pulse, triggered red pulse; unbound dims), `hitAlarmPanel`, drag kind `alarm`, sidebar `_section('alarm', …)` (bind, "Allow arm/disarm" checkbox, label, lock), 3D `_alarmGroup` + `updateAlarmPanels` under `_keyAlarm` (configRev + alarm entity states), visibility riding the **sensors** layer (like BLE proxies). Wall-snap: `snapAlarmToWall` (geometry.ts) — flush like a switch (offset `WALL_HALF + 15` = 65 mm, rotation `atan2(nx, ny)`), **no ganging**. State colors live in `ALARM_STATE_COLORS`/`alarmStateColor` (geometry.ts, shared 2D+3D; covers armed_night/vacation/custom_bypass too). Clicking (2D click-vs-drag + kiosk branch, 3D raycast `userData.kind='alarm'`) opens `<diorama-alarm-modal>`: bound+`allowControl` → Disarm/Arm Home/Arm Away call `alarm_control_panel.alarm_disarm|alarm_arm_home|alarm_arm_away` (fire-and-forget, optional `code`); bound view-only → read-only status; unbound → the buttons flip `localState` (demo; save() no-ops outside edit so kiosk flips are session-only). View mode never opens it.
 
+### Wall calendar & TV surfaces (research `docs/research/calendar-tv-surfaces.md`)
+Two related "information surface" features. Pure rendering/parsing logic lives in
+**`src/surfaces.ts`** (DOM-canvas only, NO three.js / Planner — shared by the
+renderer, 2D canvas, AND the `calendar-tv-test.html` harness; imports `weather.ts`
+for `CONDITION_GLYPH`, ha-client TYPE-only for `ForecastRecord`).
+
+- **Wall calendar fixture** (`CalendarPanel`, `Floor.calendarPanels`, repairFloor +
+  defaultFloor backfill `[]`) — a read-only wall plaque bound to one or more
+  `calendar.*` entities, built via the standard canvas-fixture recipe: tool
+  `calendar` (📅), `drawCalendarPanels` (2D plaque + today-accent header +
+  next-event line), `hitCalendarPanel`, drag kind `calendar`, sidebar
+  `_section('calendar', 'Wall Calendar', …)` (multi-bind via **repeated single-pick
+  rows** — domain `calendar`; label, lock, height, live event preview), 3D
+  `_calendarGroup` + `updateCalendarPanels(panels, eventsById)` (flat plaque box +
+  a camera-facing `CanvasTexture` sprite painted by `surfaces.paintCalendarCanvas`)
+  under `_keyCalendar` (configRev + per-panel `calendarIds` + event count +
+  first-event start/summary), visibility riding the **sensors** layer. Wall-snap:
+  `snapCalendarToWall` (geometry.ts) — flush like a switch/alarm (offset
+  `WALL_HALF + CALENDAR_PLATE_DEPTH/2`, `atan2(nx, ny)`, no ganging). Click just
+  selects (read-only — the sidebar section is the detail view; no modal).
+  **Fetch mechanism (NOT `state_changed`)**: calendars don't push their full
+  agenda — the entity state only carries the single next event. `HaApi.getCalendarEvents(entityIds, startISO, endISO)`
+  (in BOTH clients + LocalApi inert `[]`) calls the `calendar.get_events` action
+  (`return_response: true`) and normalizes via `surfaces.normalizeCalendarEvents`
+  (flat chronologically-merged `CalEvent[]`, tolerates `{date}`/`{dateTime}`
+  wrappers + `message` fallback). `Planner._refreshCalendars()` polls every bound
+  calendar across ALL floors' panels, caching per-panel in `Planner.calendarEvents`
+  (runtime-only, never persisted), repainting (`emitConfig`) only when a list
+  changes. **Cadence**: `_startCalendarPoll()` (immediate + `CALENDAR_POLL_MS` =
+  10 min timer) on connect + `_applyLoadedStore`; a bound calendar's `on`↔`off`
+  state flip (visible over `state_changed`) is a cheap nudge to re-poll sooner —
+  bound calendar ids are **config-path** in `_isSlowEntity`.
+- **TV screen surfaces** (news ticker / weather card) — a **content mode on
+  existing bound-TV furniture**, not a new fixture. `Furniture.screenMode?`
+  (`'off'|'now_playing'|'news'|'weather'|'auto'`, item-level — no repairFloor) +
+  `Furniture.newsEntity?` (any `sensor.*`/`event.*`; config-path in `_isSlowEntity`).
+  **Precedence** (`surfaces.resolveScreenContent(mode, hasMedia, tvOn)`): a bound
+  media_player presenting media (playing OR paused → `parseNowPlaying` non-null)
+  ALWAYS wins (now-playing card hides the surface); else if the TV is on
+  (`effectiveState` not off/standby/unavailable), `news`/`weather` render; else
+  nothing. three-view resolves this per tv/wall_tv and folds a screen hash into
+  `_keyNowPlaying` (NOT a parallel key — research doc §4.2), passing `screenData`
+  to `updateNowPlaying`. **Renderer**: screen surfaces are flat **planes** (not
+  sprites) oriented to the TV's front face (local −Z), proud ~2 mm (coincident-face
+  gotcha), textured with a `CanvasTexture` via a **flat unlit `MeshBasicMaterial`
+  — a documented `_mat()` exemption** (same as `PointsMaterial`/`SpriteMaterial`;
+  a toon material would band a self-emitting screen wrong). They live in
+  `_nowPlayingGroup` (tracked in `_tvScreens`, tagged `userData.textPlane` so
+  `_disposeSpriteMaps` frees the map). **News ticker** scroll is per-frame in
+  `_advanceTvScreens` (repaints the CanvasTexture at ~12 Hz with an advanced
+  `surfaces.tickerScrollX` offset, rotating headlines every 10 s via
+  `tickerHeadlineIndex`) — a cosmetic accumulator, NOT a dirty-key input;
+  `surfaces.parseHeadlines` reads headline-shaped attributes defensively
+  (feedparser list / event.* single / template — missing attrs tolerated).
+  **Weather-on-TV** paints `surfaces.paintWeatherCardCanvas` from
+  `Planner.weatherNow` + `Planner.forecastDaily` (repaint on data change only).
+  **2D**: a glanceable `📰`/`⛅` line under the TV footprint (mirrors the `♪`
+  now-playing line). Sidebar: TV furniture editor "Screen" subsection (mode
+  dropdown + news-entity bind; weather needs no binding — global source). Test:
+  `calendar-tv-test.html` (`CALTV PASS n/n`).
+
 ### Per-room temperature heat-map (derived visual layer)
 A DERIVED analysis layer — no new binding (research `docs/research/climate-hvac-controls.md` §4.5). For each room on the current floor it gathers temperature readings from placed `EnvSensor`s whose kind resolves to `temperature` (via `envKindOf`) AND whose position fuzzy-resolves into that room's wall loop, PLUS each bound `ThermostatFixture`'s `current_temperature` **only when the fixture sits inside a room's wall loop** (physical placement = implicit consent; never a whole-house bleed — §7). Readings normalize to °C via `tempToCelsius(value, unit)`; the mean is the room's temperature; rooms with ZERO samples render **nothing** (unknown ≠ cold — no interpolation, honest). Pure core in geometry.ts: `aggregateRoomTemps(rooms, loops, samples)` → `RoomTemp[]` (`{roomId, loop, cx, cy, tempC}`, in `rooms` order, only sensor-bearing rooms) and `heatmapColor(tempC, comfortLo, comfortHi)` → `{band, color}` — a crude toon-flat 5-band diverging ramp (`cold #1e5fd0` / `cool #4dd0ff` = vent-cool / `comfort #7ec87e` faint / `warm #ffb74d` = env warn / `hot #ef5350` = env danger), `HEATMAP_BAND_SPREAD` = 3 °C past each comfort-band edge before the extreme. `Planner.roomHeatmap()` (runtime getter, gated on the layer — returns `[]` when off) reads live states + calls the pure aggregate; both the 2D RAF and the 3D key consume it. Comfort band lives in `Store.heatmap` (`{comfortLo?=20, comfortHi?=24}` in °C; in `_loadFromHa`'s field list; edited in Settings ▸ Display, °F-converted when `store.imperial`). **Layer** `Layers2D.heatmap` (DEFAULT OFF, like `activity`/`vacuumMap` — sidebar "Temperature heat-map"): 2D `drawHeatmap` fills each room's wall-loop at low alpha + a temp label near the centroid (after ground / before walls; RAF tracks live temps); 3D `_heatmapGroup` + `updateRoomHeatmap(rooms, comfortLo, comfortHi)` builds flat translucent `ShapeGeometry` patches at y≈5 (occupancy/ground-patch idiom), under the `_keyHeatmap` dirty key (`configRev + comfortLo/Hi + per-room 0.5°-bucketed temp` — jitter under 0.5° doesn't rebuild), visibility via `setLayerVisibility` (`v.heatmap === true`). Temperature EnvSensor + thermostat ids are **already** config-path in `_isSlowEntity` (no change).
 
@@ -548,6 +609,84 @@ The **`vehicle` cat** (new; `furnitureCat` optgroup "Vehicle / garage") groups
   adjacent car's indicator when a charger's status flips). Sidebar: car gets the
   generic bind row (binary_sensor); car+ev_charger get `_evChargerRows`; mailbox
   gets `_mailboxRows`. Test page `vehicle-mail-test.html` (`VEHICLEMAIL PASS 25/25`).
+
+### Alert center & beacons (Alert Center feature — see `docs/research/log-events-alerting.md`)
+Surfaces HA's "needs a human's attention" streams (persistent notifications +
+the Repairs issue registry) into the panel. Pure normalization lives in
+**`src/alerts.ts`** (three.js-FREE, deterministic, testable — same shape as
+weather.ts/geo.ts): the `PanelAlert {id, source, severity, title, message?,
+createdAt, dismissible, domain?/issueId?/notificationId?/learnMoreUrl?}` shape,
+`buildAlertFeed(notifications, repairs, cfg)` (per-source toggles, Repairs
+severity floor, sorted most-severe-then-newest), the severity ladder
+(`info<warning<error<critical`, `severityRank`/`SEVERITY_COLOR`),
+`classifyNotificationSeverity` (heuristic — persistent_notification has NO
+severity, inferred from title/message substrings, APPROXIMATE by design),
+`repairSeverity`, `worstSeverity`/`unreadCount`, `alertCenterEnabled`/
+`alertBellVisible`, plus the placeable beacon's state resolution
+(`alertBeaconState`/`ALERT_STATE_COLORS`/`alertBeaconAlarming`/`isAlertDomain`).
+
+- **HaApi additions** (all three clients + LocalApi inert): `subscribePersistentNotifications(cb)`
+  (WS `persistent_notification/subscribe` — non-admin-safe, pushes a `current`
+  snapshot then add/update/remove deltas keyed by id; resolves to an unsubscribe
+  handle, never throws), `listRepairsIssues()` (WS `repairs/list_issues` —
+  **admin-only**; catch → `[]` so a non-admin kiosk degrades to no repairs),
+  `ignoreRepairsIssue(domain, issueId, ignore)` (WS `repairs/ignore_issue`).
+  `normalizeRepairs` (shared in ha-client.ts) maps `dismissed_version` →
+  `ignored`. Notification dismiss rides the existing `callService`
+  (`persistent_notification.dismiss`) — no new HaApi method. Repairs have **no
+  push** — polled on `Planner.ALERT_REPAIRS_POLL_MS` (3 min), same idiom as the
+  Open-Meteo poll.
+- **Store.alerts** (`AlertsConfig`, optional/opt-out, in `_loadFromHa`'s explicit
+  field list): `enabled?` (absent = on), `showPersistentNotifications?`/
+  `showRepairs?` (default true), `minRepairSeverity?` (default 'warning'),
+  `showInKiosk?` (default false — §7: Repairs/notification text can be
+  instance-specific, so the bell is edit-only unless opted into kiosk/view).
+- **Planner** (runtime-only, mirrors weatherNow/blePeople): `notifications`
+  (kept live by the subscription — a Map maintained from the deltas, `emitConfig`
+  on each change → the bell pulses), `repairIssues` (polled), the derived
+  `alertFeed` getter, `setAlertsConfig(mut)`, `dismissAlert(a)` (routes by source;
+  view mode refuses; optimistic local removal), `acknowledgeAlertBeacon(b)`
+  (bound alert.* → `alert.turn_off` = ACKNOWLEDGE when active; bound
+  binary_sensor = display-only; unbound → `toggleItem` demo flip). Collectors
+  start one-time on the first full state load (auth done, states arrived — same
+  hook as `_weatherInited`) via `_reconfigureAlertCenter`; re-run on
+  `_applyLoadedStore` + `setAlertsConfig`; `_stopAlertCenter` tears the
+  subscription + poll down when disabled.
+- **Global Alert Center UI** (`<diorama-alert-center>`, light-DOM, self-contained
+  like the weather chip): a topbar 🔔 bell + severity/unread badge that opens a
+  screen-space dropdown of severity-tinted alert rows (relative time, per-source
+  Dismiss/Ignore, "view in Repairs →" deep-link). A new unread alert PULSES the
+  bell (CSS keyframe injected once). "Seen" ids are client-local
+  (`localStorage['diorama:alerts:seen']`, never HA). Visibility via
+  `alertBellVisible` (edit always; kiosk/view only with `showInKiosk`; hidden
+  offline). Mounted in `topbar.ts` next to the conn pill. Settings ▸ Integrations
+  gains an "Alert Center" block (per-source toggles + severity floor +
+  showInKiosk). **Deferred (noted, not built): the separate bottom-right toast
+  tray and the recent-trigger thought-bubble tie-in** (§4.1) — the bell+badge+
+  drawer is the authoritative core; the bubble hook touches three-view._tickOnce
+  (owned by a concurrent surface).
+- **Alert Beacon fixture** (`AlertBeacon`, `Floor.alertBeacons`, repairFloor +
+  defaultFloor backfill `[]`) — a near-clone of the Safety Sensor recipe (ceiling
+  puck, free placement, no wall snap; rides the `sensors` layer). Tool
+  `alertbeacon` (🔔), drag/userData kind `alert`. Bind an `alert.*` (ideal —
+  three-state acknowledge) or ANY binary_sensor (§4.2, NOT domain-locked). 2D
+  `drawAlertBeacons` + `hitAlertBeacon`; 3D `_alertGroup` + `updateAlertBeacons`
+  (disc + LED + expanding rings while ACTIVE) under three-view's `_keyAlert`
+  (configRev + per-beacon resolved state, **forced every frame while any beacon
+  is active** — the safety/fireplace idiom). State via
+  `effectiveState → alertBeaconState`: alert.* `on`→active (pulsing red), `off`→
+  ack (steady amber), else idle (dim); binary_sensor only on(active)/off(idle).
+  Clicking (2D click-vs-drag + kiosk + 3D raycast `userData.kind==='alert'`) →
+  `acknowledgeAlertBeacon`. **Delta vs the task brief**: the doc (§4.2) binds an
+  ENTITY (like the Safety Sensor), not a global-feed pattern-matching rule — the
+  beacon is entity-bound, so "rule matching" reduces to entity-state resolution.
+- **Explicitly NOT built** (§4.3): no beacon for system_log (no room association)
+  or logbook (a query, not a live alert); those stay out of the scene.
+- Test page `test-pages/alert-center-test.html` (`ALERTCENTER PASS 67/67`) —
+  bundles the pure `alerts.ts` (feed/severity/floor/badge/beacon-state matrices)
+  + the REAL Planner over an in-page fake HaApi (collector subscription snapshot/
+  add/remove deltas, repairs poll, dismiss round-trips, view-mode refusal, beacon
+  acknowledge routing). Build: two `esbuild --bundle` bundles like config-test.
 
 ### Yard arc: ground coverings, outdoor objects, grid layer (batch K)
 - **Ground areas** (`Floor.groundAreas`, repairFloor backfill; `GroundKind` grass/rock/concrete/blacktop/mulch/sand/water): polygon paint on the ground plane. Draw latch `drawingGroundArea` (PARALLEL field mirroring `drawingPresenceZone` — the codebase convention is parallel latch fields, not a shared-kind refactor), `ground` tool, `groundVert` vertex drag, low-priority hit-testing (after ALL item hits — paint never swallows fixture clicks). 3D: `updateGroundAreas` — one ShapeGeometry patch per area at **y=4** with procedural `_groundTexture(kind)` toon textures (`_groundTexCache`, disposed only in destroy; `_texCache` disposal was also added there); water = opacity 0.85. Blob shadows (transparent, y=8) always paint over patches. 2D: flat kind-colored fills right after the floor. Own layer key `ground` (absent = on); NON-nav (paint only). Note: like presence zones, a big area captures select-mode left-clicks — hide the layer to click through.

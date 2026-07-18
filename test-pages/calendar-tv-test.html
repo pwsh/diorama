@@ -1,0 +1,226 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>CALTV …</title>
+  <style>
+    html,body{margin:0;background:#0d1116;color:#cfd8dc;font:13px/1.4 sans-serif;padding:14px}
+    h1{font-size:15px;margin:0 0 10px}
+    #summary{font-size:14px;font-weight:bold;margin:10px 0;padding:8px 10px;border-radius:5px}
+    .okbg{background:#12331f;color:#69f0ae}.badbg{background:#3a1414;color:#ff8a80}
+    .row{font-size:11px;padding:1px 0}
+    .pass{color:#69f0ae}.fail{color:#ff5252}
+    #c{position:absolute;left:-4000px;top:0;width:1000px;height:700px}
+  </style>
+</head>
+<body>
+  <h1>Calendar-on-wall + TV screen surfaces</h1>
+  <div id="summary">Running…</div>
+  <div id="grid"></div>
+  <div id="c"></div>
+
+  <!-- Bundle the pure surfaces module (imports weather.ts → time-of-day.ts):
+         npx esbuild src/surfaces.ts --bundle --format=esm \
+           --outfile=<harness>/surfaces.mod.js
+       (matches weather.mod.js / trilateration.html). The renderer section
+       imports the built dist chunk directly. -->
+  <script type="module">
+    import {
+      normalizeCalendarEvents, calendarLines, calTimeLabel, isSameDay,
+      paintCalendarCanvas, CAL_HEADER_COLOR, CAL_TODAY_COLOR,
+      parseHeadlines, tickerScrollX, tickerHeadlineIndex, paintNewsTickerCanvas,
+      weatherCardLines, paintWeatherCardCanvas, resolveScreenContent,
+    } from './surfaces.mod.js';
+
+    const tests = [];
+    const ok = (name, cond, detail = '') => tests.push({ name, ok: !!cond, detail });
+    const eq = (name, got, want) => tests.push({ name, ok: got === want, detail: `got ${JSON.stringify(got)} want ${JSON.stringify(want)}` });
+    const deepEq = (name, got, want) => tests.push({ name, ok: JSON.stringify(got) === JSON.stringify(want), detail: `got ${JSON.stringify(got)}` });
+
+    const hex = (r, g, b) => '#' + [r, g, b].map(v => v.toString(16).padStart(2, '0')).join('');
+    const px = (cv, x, y) => { const d = cv.getContext('2d').getImageData(x, y, 1, 1).data; return { r: d[0], g: d[1], b: d[2], a: d[3] }; };
+    const near = (a, b, tol = 24) => Math.abs(a - b) <= tol;
+    const hexTo = h => ({ r: parseInt(h.slice(1, 3), 16), g: parseInt(h.slice(3, 5), 16), b: parseInt(h.slice(5, 7), 16) });
+    const colorNear = (p, h, tol = 30) => { const c = hexTo(h); return near(p.r, c.r, tol) && near(p.g, c.g, tol) && near(p.b, c.b, tol); };
+
+    // ── 1. calendar.get_events normalization ───────────────────────────────
+    const rawResp = { response: {
+      'calendar.work': { events: [
+        { start: '2026-07-20T09:00:00', end: '2026-07-20T10:00:00', summary: 'Standup', location: 'Zoom' },
+        { start: '2026-07-22', end: '2026-07-23', summary: 'PTO' },   // all-day
+      ] },
+      'calendar.school': { events: [
+        { start: { dateTime: '2026-07-20T15:00:00' }, summary: 'Pickup' },   // wrapped shape
+        { start: '2026-07-19T08:00:00', message: 'Bus' },                    // message fallback + earlier
+      ] },
+    } };
+    const norm = normalizeCalendarEvents(rawResp, ['calendar.work', 'calendar.school']);
+    eq('normalize merges both calendars (4 events)', norm.length, 4);
+    eq('normalize sorts chronologically (earliest first)', norm[0].summary, 'Bus');
+    eq('normalize flags all-day', norm.find(e => e.summary === 'PTO').allDay, true);
+    eq('normalize timed event not all-day', norm[0].allDay, false);
+    eq('normalize reads wrapped {dateTime}', norm.find(e => e.summary === 'Pickup').start, '2026-07-20T15:00:00');
+    eq('normalize carries calendarId', norm[0].calendarId, 'calendar.school');
+    deepEq('normalize empty envelope → []', normalizeCalendarEvents(null, ['calendar.x']), []);
+    deepEq('normalize missing entity → []', normalizeCalendarEvents({ response: {} }, ['calendar.x']), []);
+    ok('normalize tolerates malformed event (no start)', normalizeCalendarEvents({ response: { 'calendar.x': { events: [{ summary: 'no start' }, { start: '2026-01-01', summary: 'ok' }] } } }, ['calendar.x']).length === 1);
+
+    // ── 2. calendar agenda model + today highlight ─────────────────────────
+    const now = new Date('2026-07-20T12:00:00');
+    const todayEv = { summary: 'Lunch', start: '2026-07-20T13:00:00', allDay: false, calendarId: 'calendar.work' };
+    const futureEv = { summary: 'Trip', start: '2026-07-25T08:00:00', allDay: false, calendarId: 'calendar.work' };
+    const lines = calendarLines([todayEv, futureEv], now, { maxRows: 3 });
+    ok('calendarLines header shows today (Mon Jul 20)', lines.header.includes('Jul') && lines.header.includes('20'), lines.header);
+    eq('calendarLines row 0 flagged today', lines.rows[0].today, true);
+    eq('calendarLines row 1 not today', lines.rows[1].today, false);
+    eq('calTimeLabel timed today → HH:mm', calTimeLabel(todayEv, now), '13:00');
+    eq('calTimeLabel all-day → All day', calTimeLabel({ ...todayEv, allDay: true }, now), 'All day');
+    eq('isSameDay true for today', isSameDay('2026-07-20T23:00:00', now), true);
+    eq('isSameDay false for other day', isSameDay('2026-07-21T00:00:00', now), false);
+    ok('calendarLines empty flag', calendarLines([], now).empty === true);
+
+    // ── 2b. calendar canvas paint — header highlight + today marker pixels ──
+    const calCv = document.createElement('canvas');
+    paintCalendarCanvas(calCv, [todayEv, futureEv], { now, maxRows: 3, title: 'Fridge' });
+    ok('calendar canvas sized', calCv.width > 100 && calCv.height > 100, `${calCv.width}x${calCv.height}`);
+    // Header band center should be the amber today-accent.
+    ok('calendar header painted in today-accent color', colorNear(px(calCv, calCv.width / 2, 30), CAL_HEADER_COLOR), JSON.stringify(px(calCv, calCv.width / 2, 30)));
+    // A today event → a CAL_TODAY_COLOR marker bar near the first row's left edge.
+    const rowY = 62 + 46 / 2;   // headH + rowH/2 (matches surfaces layout)
+    ok('today event draws a today-color marker', colorNear(px(calCv, 11, rowY), CAL_TODAY_COLOR), JSON.stringify(px(calCv, 11, rowY)));
+    // Only-future events → NO today marker at that pixel (background/dark).
+    const calCv2 = document.createElement('canvas');
+    paintCalendarCanvas(calCv2, [futureEv], { now, maxRows: 3 });
+    ok('future-only event draws NO today marker', !colorNear(px(calCv2, 11, rowY), CAL_TODAY_COLOR), JSON.stringify(px(calCv2, 11, rowY)));
+    // "Repaint on change": empty → placeholder canvas differs from populated.
+    const calCvE = document.createElement('canvas');
+    paintCalendarCanvas(calCvE, [], { now });
+    ok('empty calendar paints a placeholder (different bitmap)', calCvE.toDataURL() !== calCv.toDataURL());
+
+    // ── 3. news headline parse matrix (defensive) ──────────────────────────
+    deepEq('feedparser entries list', parseHeadlines({ state: '3', attributes: { entries: [{ title: 'A' }, { title: 'B' }] } }), ['A', 'B']);
+    deepEq('array of strings', parseHeadlines({ attributes: { headlines: ['x', 'y'] } }), ['x', 'y']);
+    deepEq('single title attr', parseHeadlines({ attributes: { title: 'Solo' } }), ['Solo']);
+    deepEq('headline attr', parseHeadlines({ attributes: { headline: 'H' } }), ['H']);
+    deepEq('summary fallback', parseHeadlines({ attributes: { summary: 'S' } }), ['S']);
+    deepEq('missing all → []', parseHeadlines({ attributes: {} }), []);
+    deepEq('null state → []', parseHeadlines(null), []);
+    deepEq('numeric state not a headline', parseHeadlines({ state: '42', attributes: {} }), []);
+    deepEq('unknown state ignored', parseHeadlines({ state: 'unknown', attributes: {} }), []);
+    deepEq('meaningful state string last-resort', parseHeadlines({ state: 'Breaking news today', attributes: {} }), ['Breaking news today']);
+    deepEq('dedupes repeated titles', parseHeadlines({ attributes: { items: [{ title: 'A' }, { title: 'A' }, { title: 'B' }] } }), ['A', 'B']);
+
+    // ── 4. news ticker scroll (pure) + paint moves across frames ────────────
+    const s0 = tickerScrollX(0, 300, 640, 70);
+    const s1 = tickerScrollX(1, 300, 640, 70);
+    ok('ticker starts at strip right edge', s0 === 640, `s0=${s0}`);
+    ok('ticker scrolls left over time', s1 < s0, `s1=${s1} < s0=${s0}`);
+    ok('ticker wraps within [-textW, stripW]', tickerScrollX(1000, 300, 640, 70) <= 640);
+    eq('headline index rotates every 10 s', tickerHeadlineIndex(0, 3, 10), 0);
+    eq('headline index at 11 s → 1', tickerHeadlineIndex(11, 3, 10), 1);
+    eq('headline index wraps', tickerHeadlineIndex(31, 3, 10), 0);
+    eq('headline index 0 when no headlines', tickerHeadlineIndex(5, 0, 10), 0);
+    // Paint at two offsets → the scrolling text lands on different pixels.
+    const nCvA = document.createElement('canvas'), nCvB = document.createElement('canvas');
+    paintNewsTickerCanvas(nCvA, 'Some breaking headline here', 400, { w: 640, h: 72 });
+    paintNewsTickerCanvas(nCvB, 'Some breaking headline here', 150, { w: 640, h: 72 });
+    ok('news ticker paints a strip', nCvA.width === 640 && nCvA.height === 72);
+    ok('news ticker text moved between offsets', nCvA.toDataURL() !== nCvB.toDataURL());
+    ok('news ticker returns measured text width', paintNewsTickerCanvas(document.createElement('canvas'), 'abc', 0) > 0);
+
+    // ── 5. weather-on-TV card (from forecast cache) ────────────────────────
+    const wn = { condition: 'rainy', tempC: 18, windKmh: 10, windBearing: 0, isDay: true, stale: false, label: 'Portland' };
+    const fc = [
+      { datetime: '2026-07-21T00:00:00', condition: 'sunny', temperature: 26, templow: 14 },
+      { datetime: '2026-07-22T00:00:00', condition: 'cloudy', temperature: 22, templow: 13 },
+      { datetime: '2026-07-23T00:00:00', condition: 'pouring', temperature: 19, templow: 12 },
+    ];
+    const wm = weatherCardLines(wn, fc, false, 3);
+    ok('weather card current glyph present', wm.glyph.length > 0, wm.glyph);
+    eq('weather card temp (°C)', wm.temp, '18°');
+    eq('weather card imperial temp (°F)', weatherCardLines(wn, fc, true, 3).temp, '64°');
+    eq('weather card label', wm.label, 'Portland');
+    eq('weather card forecast entries', wm.forecast.length, 3);
+    ok('weather card forecast hi/lo populated', wm.forecast[0].hi === '26°' && wm.forecast[0].lo === '14°');
+    ok('weather card tolerates null now', weatherCardLines(null, null).glyph === '❓');
+    const wCv = document.createElement('canvas');
+    paintWeatherCardCanvas(wCv, wn, fc, { imperial: false });
+    ok('weather card canvas painted', wCv.width > 100 && wCv.height > 100);
+    const wCv2 = document.createElement('canvas');
+    paintWeatherCardCanvas(wCv2, { ...wn, tempC: 30 }, fc);
+    ok('weather card repaints on temp change (different bitmap)', wCv.toDataURL() !== wCv2.toDataURL());
+
+    // ── 6. now-playing precedence ──────────────────────────────────────────
+    eq('playing media hides the surface (now_playing wins)', resolveScreenContent('news', true, true), 'now_playing');
+    eq('paused media also wins (hasMedia)', resolveScreenContent('weather', true, true), 'now_playing');
+    eq('news mode + on + no media → news', resolveScreenContent('news', false, true), 'news');
+    eq('weather mode + on + no media → weather', resolveScreenContent('weather', false, true), 'weather');
+    eq('tv off → off', resolveScreenContent('news', false, false), 'off');
+    eq('auto + no media → off (nothing extra)', resolveScreenContent('auto', false, true), 'off');
+    eq('undefined mode → off', resolveScreenContent(undefined, false, true), 'off');
+
+    // ── 7. renderer chunk: calendar panels + TV screens build + dispose ─────
+    let rendererOk = true, rendererDetail = '';
+    try {
+      const mod = await import('./assets/three-renderer.js?v=' + Date.now());
+      const r = new mod.ThreeDRenderer(document.getElementById('c'));
+      await r.load();
+      const cal = { id: 'cal1', x: 2000, y: 100, rotation: 0, calendarIds: ['calendar.work'] };
+      const tvNews = { id: 'tvn', x: 3000, y: 2500, w: 1200, h: 120, kind: 'wall_tv', rotation: 0, entity_id: null, screenMode: 'news' };
+      const tvWx = { id: 'tvw', x: 1000, y: 2500, w: 1200, h: 120, kind: 'tv', rotation: 90, entity_id: null, screenMode: 'weather' };
+      const floor = {
+        id: 'f1', name: 'F', w: 6000, d: 5000, walls: [], furniture: [tvNews, tvWx],
+        lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+        doors: [], windows: [], bg: null, model3d: null, look3d: null, rooms: [], calendarPanels: [cal],
+      };
+      r.updateFloor(floor, { preset: 'day' });
+
+      // Calendar panel builds a group (box + face sprite).
+      const eventsById = { cal1: norm };
+      r.updateCalendarPanels([cal], eventsById);
+      ok('calendar panel builds a 3D group', r._calendarGroup.children.length === 1, `n=${r._calendarGroup.children.length}`);
+      // Rebuild → no leak (still one group).
+      r.updateCalendarPanels([cal], eventsById);
+      ok('calendar rebuild does not leak groups', r._calendarGroup.children.length === 1, `n=${r._calendarGroup.children.length}`);
+      // Removing the panel disposes cleanly.
+      r.updateCalendarPanels([], {});
+      ok('calendar panels removed → group cleared', r._calendarGroup.children.length === 0);
+      r.updateCalendarPanels([cal], eventsById);
+
+      // TV screens build planes in _nowPlayingGroup via screenData.
+      const screenData = {
+        screens: [{ id: 'tvn', content: 'news', headlines: ['Alpha headline', 'Beta headline'] }, { id: 'tvw', content: 'weather' }],
+        weather: wn, forecast: fc, imperial: false, nowMs: 0,
+      };
+      r.updateNowPlaying(floor.furniture, undefined, id => null, '', undefined, screenData);
+      ok('two TV screen planes build', r._nowPlayingGroup.children.length === 2, `n=${r._nowPlayingGroup.children.length}`);
+      ok('tv screen records tracked', !!r._tvScreens['tvn'] && !!r._tvScreens['tvw']);
+      ok('news screen carries headlines', r._tvScreens['tvn'].headlines.length === 2);
+      const newsTex = r._tvScreens['tvn'].tex;
+      // Ticker scroll: advance and confirm the news canvas repaints (bitmap changes).
+      const before = r._tvScreens['tvn'].cv.toDataURL();
+      r._advanceTvScreens(0.2);
+      const after = r._tvScreens['tvn'].cv.toDataURL();
+      ok('news ticker repaints on frame advance', before !== after);
+      // Rebuild with empty screens → planes disposed, records cleared (no leak).
+      r.updateNowPlaying(floor.furniture, undefined, id => null, '', undefined, { screens: [], weather: null, forecast: null, imperial: false, nowMs: 0 });
+      ok('empty screens → tv screen planes cleared', r._nowPlayingGroup.children.length === 0 && Object.keys(r._tvScreens).length === 0);
+      // No screenData (legacy call) → still no screen planes (stale-chunk safe).
+      r.updateNowPlaying(floor.furniture, undefined, id => null, '');
+      ok('legacy updateNowPlaying (no screenData) builds no screens', Object.keys(r._tvScreens).length === 0);
+    } catch (e) {
+      rendererOk = false; rendererDetail = String(e && e.message || e);
+    }
+    ok('renderer section ran without error', rendererOk, rendererDetail);
+
+    // ── render ─────────────────────────────────────────────────────────────
+    const pass = tests.filter(t => t.ok).length, total = tests.length;
+    document.title = `CALTV ${pass === total ? 'PASS' : 'FAIL'} ${pass}/${total}`;
+    const sum = document.getElementById('summary');
+    sum.textContent = `CALTV ${pass === total ? 'PASS' : 'FAIL'} ${pass}/${total}`;
+    sum.className = pass === total ? 'okbg' : 'badbg';
+    document.getElementById('grid').innerHTML = tests.map(t =>
+      `<div class="row ${t.ok ? 'pass' : 'fail'}">${t.ok ? '[PASS]' : '[FAIL]'} ${t.name}${t.ok ? '' : ' — ' + t.detail}</div>`).join('');
+  </script>
+</body>
+</html>

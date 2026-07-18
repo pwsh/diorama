@@ -319,14 +319,14 @@ Approximated with conventions in the shipped packs; see
   parked: situational costume swaps (alt-looks per member — UX decision).
 
 ### Research items (do not action)
-- **Log events & alerting**: research surfacing/displaying alerts from a log
-  event stream.
+- ✅ **Log events & alerting** — SHIPPED 2026-07-17 (alert center bell/
+  drawer: persistent_notification + Repairs; placeable alert beacons).
 - **Background text messages (fun)**: research writing text into the
   backdrop — embedded in the sky, written on the grass, a plane towing a
   banner, or skywriting — to present messages playfully.
 - **Weather as background animation**: research rendering current weather as
   the background animation, with weather-coming-soon shown approaching from
   the distance.
-- **Calendar / news surfaces**: research showing calendar events as a
-  calendar on the wall (or elsewhere); a "news of the day" scroller on the
-  TV; weather playing on the TV.
+- ✅ **Calendar / news surfaces** — SHIPPED 2026-07-17 (wall calendar
+  fixture bound to calendar.*; TV news ticker + weather-on-TV screen
+  surfaces with now-playing precedence).

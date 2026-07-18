@@ -9,16 +9,17 @@ import type {
   Sensor, Zone, ObjectHalo, BgImage, MotionSensor, EnvSensor, EnvKind, Light, SwitchFixture, LightIconKind,
   Furniture, FurnitureKind, Door, Window as WindowType, WindowKind, Layers2D, Floor, Room,
   ObjectRecipe, RecipePrimitive, RecipeShape, ActivityKind, AvatarKind,
-  BleProxy, AlarmPanel, ThermostatFixture, SafetySensor, RobotFixture, CameraFixture, ProjectorFixture, ValveFixture, PlugFixture, PresenceZone, GroundArea, GroundKind, VoidArea, DioramaPerson, Roamer, GeoLandmark,
+  BleProxy, AlarmPanel, CalendarPanel, ThermostatFixture, SafetySensor, AlertBeacon, RobotFixture, CameraFixture, ProjectorFixture, ValveFixture, PlugFixture, PresenceZone, GroundArea, GroundKind, VoidArea, DioramaPerson, Roamer, GeoLandmark,
 } from '../types.js';
 import type { BermudaDevice } from '../planner.js';
+import { alertBeaconState, alertBeaconColor, isAlertDomain } from '../alerts.js';
 
 import { listActivePacks } from '../avatars.js';
 import {
   fmtLen,
   motionColor, motionIntensity, sensorColor, lightIconKind, MOTION_DEFAULTS,
   BLE_PROXY_DEFAULTS, bleProxyHeight,
-  alarmHeight, alarmStateColor, safetyColor,
+  alarmHeight, alarmStateColor, calendarHeight, safetyColor,
   thermostatHeight, hvacModeColor,
   actionButtonKind, actionButtonColor, actionButtonIcon, actionButtonHeight, snapActionButtonToWall, actionLastFired,
   robotGlyph, robotColor, robotLedColor,
@@ -98,8 +99,10 @@ const TOOLS: { id: Tool; label: string }[] = [
   { id: 'action', label: '🔘 Action' },
   { id: 'bleproxy', label: 'BLE' },
   { id: 'alarm', label: '🚨 Alarm' },
+  { id: 'calendar', label: '📅 Calendar' },
   { id: 'thermostat', label: '🌡 Thermostat' },
   { id: 'safety', label: '⚠️ Safety/Siren' },
+  { id: 'alertbeacon', label: '🔔 Alert beacon' },
   { id: 'robot', label: '🤖 Robot' },
   { id: 'camera', label: '📷 Camera' },
   { id: 'projector', label: '📽 Projector' },
@@ -381,8 +384,10 @@ export class Sidebar extends LitElement {
         ${this._actionButtonsSection()}
         ${this._bleProxiesSection()}
         ${this._alarmPanelsSection()}
+        ${this._calendarPanelsSection()}
         ${this._thermostatsSection()}
         ${this._safetySensorsSection()}
+        ${this._alertBeaconsSection()}
         ${this._robotsSection()}
         ${this._camerasSection()}
         ${this._projectorsSection()}
@@ -508,8 +513,10 @@ export class Sidebar extends LitElement {
       case 'action': return 'Click to drop an action button. Pick what it fires (script / scene / button / automation / toggle / custom service) in the editor. Clicking it fires the action.';
       case 'bleproxy': return 'Click to drop a BLE scanner (Bluetooth proxy) puck. Bind it to the physical proxy device.';
       case 'alarm': return 'Click to drop an alarm keypad. Bind to an alarm_control_panel entity.';
+      case 'calendar': return 'Click to drop a wall calendar (snaps to a wall). Bind one or more calendar.* entities to show upcoming events.';
       case 'thermostat': return 'Click to drop a thermostat. Bind to a climate entity to control HVAC.';
       case 'safety': return 'Click to drop a ceiling safety detector or siren beacon. Set kind (smoke / CO / gas / leak / siren) + bind an entity.';
+      case 'alertbeacon': return 'Click to drop a ceiling Alert Beacon. Bind an alert.* (or any binary_sensor) — it pulses red while active, steady amber when acknowledged.';
       case 'robot': return 'Click to place a robot dock. Set kind (vacuum / mower) + bind a vacuum.* or lawn_mower.* entity; mowers can bind a GPS tracker.';
       case 'camera': return 'Click to drop a camera. Drag the orange dot to aim it; bind a camera.* entity for the FOV tint + snapshot.';
       case 'projector': return 'Click to drop a ceiling projector. Pick a target screen (or set rotation) + bind a media_player/switch/light for the beam; click it to toggle projecting.';
@@ -1554,6 +1561,95 @@ export class Sidebar extends LitElement {
     }));
   }
 
+  // ── Wall calendar section (calendar-on-wall) ───────────────────────────
+  private _calendarPanelsSection() {
+    const list = this.planner.floor().calendarPanels ?? [];
+    if (list.length === 0) return nothing;
+    return this._section('calendar', 'Wall Calendar', () =>
+      this._groupedList('calendar', list, c => this._calendarItem(c)));
+  }
+
+  private _calendarItem(c: CalendarPanel) {
+    const p = this.planner;
+    const sel = p.activeCalendarId === c.id;
+    const n = (p.calendarEvents[c.id] ?? []).length;
+    const bound = (c.calendarIds ?? []).length;
+    return html`
+      <div style="border-bottom:1px solid var(--border)">
+        <div class="sensor-item ${sel ? 'sel' : ''}" @click=${() => p.setActiveCalendar(c.id)}>
+          <div class="dot" style="background:${bound ? '#f4b73e' : '#90a4ae'}"></div>
+          <div class="nm">${c.label?.trim() || 'Calendar'}</div>
+          <div class="badge">${bound ? `${n} evt` : 'unbound'}</div>
+        </div>
+        ${sel ? this._calendarEditor(c) : nothing}
+      </div>
+    `;
+  }
+
+  private _calendarEditor(c: CalendarPanel) {
+    const p = this.planner;
+    const upd = (mut: () => void) => { mut(); p.save(); p.emitConfig(); };
+    const events = (p.calendarEvents[c.id] ?? []).slice(0, 4);
+    return html`
+      <div style="background:rgba(0,0,0,0.25);border-radius:4px;padding:6px;margin:4px 0">
+        <div class="row"><label>Label</label>
+          <input type="text" .value=${c.label ?? ''} placeholder="Calendar"
+                 @input=${(e: Event) => upd(() => { c.label = (e.target as HTMLInputElement).value; })}>
+        </div>
+        ${this._lockRow(c)}
+        <div class="row"><label>Height (mm)</label>
+          <input type="number" min="0" .value=${String(Math.round(calendarHeight(c)))}
+                 @input=${(e: Event) => upd(() => {
+                   const v = parseFloat((e.target as HTMLInputElement).value);
+                   c.height = isFinite(v) ? Math.max(0, v) : undefined;
+                 })}>
+        </div>
+        <div style="font-size:11px;color:var(--text-dim);margin:6px 0 2px">Calendars</div>
+        ${(c.calendarIds ?? []).length === 0
+          ? html`<div style="font-size:10px;color:var(--text-dim);margin-bottom:4px">— none bound —</div>`
+          : (c.calendarIds ?? []).map(id => html`
+            <div class="row" style="align-items:center">
+              <span style="font-size:11px;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${id}</span>
+              <button class="btn" style="font-size:11px" @click=${() => upd(() => {
+                c.calendarIds = (c.calendarIds ?? []).filter(x => x !== id);
+              })}>✕</button>
+            </div>`)}
+        <button class="btn" style="width:100%;font-size:11px;margin-top:4px" @click=${() => this._pickCalendarEntity(c)}>
+          + Add calendar…
+        </button>
+        ${events.length ? html`
+          <div style="font-size:11px;color:var(--text-dim);margin:6px 0 2px">Next events</div>
+          ${events.map(ev => html`
+            <div style="font-size:10px;color:var(--text);line-height:1.4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+              ${ev.allDay ? 'All day' : new Date(ev.start).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })} · ${ev.summary}
+            </div>`)}
+        ` : ((c.calendarIds ?? []).length ? html`
+          <div style="font-size:10px;color:var(--text-dim);margin-top:4px">No upcoming events (or still loading…).</div>` : nothing)}
+        <button class="btn danger" style="width:100%;margin-top:6px" @click=${() => {
+          const f = p.floor();
+          f.calendarPanels = (f.calendarPanels ?? []).filter(x => x.id !== c.id);
+          p.activeCalendarId = null;
+          p.save(); p.emitConfig();
+        }}>Delete</button>
+      </div>
+    `;
+  }
+
+  private _pickCalendarEntity(c: CalendarPanel): void {
+    this.dispatchEvent(new CustomEvent('open-entity-picker', {
+      bubbles: true, composed: true,
+      detail: {
+        domain: 'calendar',
+        onPick: (id: string) => {
+          if (!c.calendarIds) c.calendarIds = [];
+          if (!c.calendarIds.includes(id)) c.calendarIds.push(id);
+          this.planner.save();
+          this.planner.emitConfig();
+        },
+      },
+    }));
+  }
+
   // ── Thermostats section (HVAC wall control) ───────────────────────────
   private _thermostatsSection() {
     const list = this.planner.floor().thermostats ?? [];
@@ -1770,6 +1866,110 @@ export class Sidebar extends LitElement {
         domain,
         onPick: (id: string) => {
           s.entity_id = id;
+          this.planner.save();
+          this.planner.emitConfig();
+        },
+      },
+    }));
+  }
+
+  // ── Alert Beacons section (Alert Center, Track B) ──────────────────────
+  private _alertBeaconsSection() {
+    const list = this.planner.floor().alertBeacons ?? [];
+    if (list.length === 0) return nothing;
+    return this._section('alertbeacons', 'Alert Beacons', () =>
+      this._groupedList('alertbeacons', list, b => this._alertBeaconItem(b)));
+  }
+
+  private _alertBeaconItem(b: AlertBeacon) {
+    const p = this.planner;
+    const sel = p.activeAlertBeaconId === b.id;
+    const st = p.effectiveState(b);
+    const bs = alertBeaconState(st?.state, isAlertDomain(b.entity_id));
+    const col = alertBeaconColor(bs);
+    const badge = bs === 'active' ? 'ALERT' : bs === 'ack' ? 'ack'
+                : (st ? 'idle' : (b.entity_id ? '—' : 'unbound'));
+    return html`
+      <div style="border-bottom:1px solid var(--border)">
+        <div class="sensor-item ${sel ? 'sel' : ''}" @click=${() => p.setActiveAlertBeacon(b.id)}>
+          <div class="dot" style="background:${bs === 'idle' ? '#90a4ae' : col}"></div>
+          <div class="nm">${b.label?.trim() || 'Alert'}${this._batteryText(b.entity_id)}</div>
+          <div class="badge" style=${bs === 'active' ? `color:${col};font-weight:700` : nothing}>${badge}</div>
+        </div>
+        ${sel ? this._alertBeaconEditor(b) : nothing}
+      </div>
+    `;
+  }
+
+  private _alertBeaconEditor(b: AlertBeacon) {
+    const p = this.planner;
+    const upd = (mut: () => void) => { mut(); p.save(); p.emitConfig(); };
+    const bound = !!b.entity_id;
+    const active = p.effectiveState(b)?.state === 'on';
+    const isAlert = isAlertDomain(b.entity_id);
+    return html`
+      <div style="background:rgba(0,0,0,0.25);border-radius:4px;padding:6px;margin:4px 0">
+        <div class="row"><label>Label</label>
+          <input type="text" .value=${b.label ?? ''} placeholder="Alert"
+                 @input=${(e: Event) => upd(() => { b.label = (e.target as HTMLInputElement).value; })}>
+        </div>
+        ${this._lockRow(b)}
+        <div class="row"><label>X (mm)</label>
+          <input type="number" .value=${String(Math.round(b.x))}
+                 @input=${(e: Event) => upd(() => { b.x = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
+        </div>
+        <div class="row"><label>Y (mm)</label>
+          <input type="number" .value=${String(Math.round(b.y))}
+                 @input=${(e: Event) => upd(() => { b.y = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
+        </div>
+        <div class="row"><label>HA entity</label>
+          <span style="font-size:11px;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+            ${b.entity_id || '— unbound —'}
+          </span>
+        </div>
+        <div style="display:flex;gap:4px;margin-top:4px">
+          <button class="btn" style="flex:1;font-size:11px" @click=${() => this._pickAlertBeaconEntity(b)}>
+            ${b.entity_id ? 'Rebind' : 'Bind'}…
+          </button>
+          ${b.entity_id ? html`
+            <button class="btn" style="font-size:11px"
+                    @click=${() => upd(() => { b.entity_id = null; })}>Unbind</button>
+          ` : nothing}
+          ${bound
+            ? html`<button class="btn" style="font-size:11px"
+                    ?disabled=${!(isAlert && active)}
+                    title=${isAlert ? 'alert.turn_off (acknowledge) — only while active' : 'binary_sensor is display-only'}
+                    @click=${() => p.acknowledgeAlertBeacon(b)}>Acknowledge</button>`
+            : html`<button class="btn" style="font-size:11px"
+                    title="Toggle the local alert state (demo)"
+                    @click=${() => p.toggleItem(b)}>Test</button>`}
+        </div>
+        <div style="font-size:10px;color:var(--text-dim);margin-top:4px;line-height:1.3">
+          ${bound
+            ? (isAlert
+                ? 'Bound alert.*: on = active (pulsing red), off = acknowledged (steady amber). Click to acknowledge (alert.turn_off).'
+                : 'Bound binary_sensor: on = active (pulsing red). Display-only (no acknowledge).')
+            : 'Unbound: Test (or clicking the beacon) toggles a local demo state.'}
+        </div>
+        <button class="btn danger" style="width:100%;margin-top:6px" @click=${() => {
+          const f = p.floor();
+          f.alertBeacons = (f.alertBeacons ?? []).filter(x => x.id !== b.id);
+          p.activeAlertBeaconId = null;
+          p.save(); p.emitConfig();
+        }}>Delete</button>
+      </div>
+    `;
+  }
+
+  private _pickAlertBeaconEntity(b: AlertBeacon): void {
+    this.dispatchEvent(new CustomEvent('open-entity-picker', {
+      bubbles: true, composed: true,
+      detail: {
+        // alert.* is ideal (three-state acknowledge); binary_sensor is the common
+        // stand-in. Not domain-locked — mirrors the Safety Sensor's looseness.
+        domain: ['alert', 'binary_sensor'],
+        onPick: (id: string) => {
+          b.entity_id = id;
           this.planner.save();
           this.planner.emitConfig();
         },
@@ -3776,6 +3976,7 @@ export class Sidebar extends LitElement {
           </select>
         </div>
         ${this._furnitureBindRow(piece, upd)}
+        ${(curKind === 'tv' || curKind === 'wall_tv') ? this._screenContentRow(piece, upd) : nothing}
         ${(curKind === 'tv' || curKind === 'wall_tv') ? this._biasLightRow(piece, upd) : nothing}
         ${curKind === 'fridge' ? this._fridgeDoorBindRow(piece, upd) : nothing}
         ${furnitureCat(resolveFurnitureDef(piece, p.store.customObjects)) === 'appliance'
@@ -3990,6 +4191,60 @@ export class Sidebar extends LitElement {
         </div>
       ` : nothing}
     `;
+  }
+
+  // TV "Screen" subsection (calendar-tv feature): the screen-content mode +, for
+  // 'news', a news-source entity bind. Weather mode needs no binding (global
+  // weather source). Now-playing still takes precedence while media is playing.
+  private _screenContentRow(piece: Furniture, upd: (mut: () => void) => void) {
+    const mode = piece.screenMode ?? 'auto';
+    return html`
+      <div class="row"><label title="What the screen shows when no media is playing">Screen</label>
+        <select .value=${mode}
+                @change=${(e: Event) => upd(() => {
+                  const v = (e.target as HTMLSelectElement).value as Furniture['screenMode'];
+                  piece.screenMode = v === 'auto' ? undefined : v;
+                })}>
+          <option value="auto" ?selected=${mode === 'auto'}>Auto (now-playing only)</option>
+          <option value="news" ?selected=${mode === 'news'}>News ticker</option>
+          <option value="weather" ?selected=${mode === 'weather'}>Weather</option>
+          <option value="off" ?selected=${mode === 'off'}>Off</option>
+        </select>
+      </div>
+      ${mode === 'news' ? html`
+        <div class="row"><label title="Any sensor.*/event.* whose attributes carry headlines (feedparser/template)">News entity</label>
+          <span style="font-size:11px;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+            ${piece.newsEntity || '— unbound —'}
+          </span>
+        </div>
+        <div style="display:flex;gap:4px;margin-top:4px">
+          <button class="btn" style="flex:1;font-size:11px" @click=${() => this._pickNewsEntity(piece)}>
+            ${piece.newsEntity ? 'Rebind' : 'Bind'} news…
+          </button>
+          ${piece.newsEntity ? html`
+            <button class="btn" style="font-size:11px"
+                    @click=${() => upd(() => { piece.newsEntity = null; })}>Unbind</button>
+          ` : nothing}
+        </div>
+      ` : nothing}
+      ${mode === 'weather' ? html`
+        <div style="font-size:10px;color:var(--text-dim);margin-top:4px">Uses the global weather source (Settings ▸ Weather).</div>
+      ` : nothing}
+    `;
+  }
+
+  private _pickNewsEntity(piece: Furniture): void {
+    this.dispatchEvent(new CustomEvent('open-entity-picker', {
+      bubbles: true, composed: true,
+      detail: {
+        domain: ['sensor', 'event'],
+        onPick: (id: string) => {
+          piece.newsEntity = id;
+          this.planner.save();
+          this.planner.emitConfig();
+        },
+      },
+    }));
   }
 
   private _pickBiasEntity(piece: Furniture): void {

@@ -1,0 +1,293 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>ALERTCENTER …</title>
+  <style>
+    body { margin:0; background:#0d1116; color:#cfd8dc; font:13px/1.5 sans-serif; padding:14px; }
+    h1 { font-size:15px; margin:0 0 10px; }
+    h2 { font-size:12px; color:#90caf9; margin:14px 0 4px; }
+    #summary { font-size:14px; font-weight:bold; margin:10px 0; padding:8px 10px; border-radius:5px; }
+    .okbg { background:#12331f; color:#69f0ae; } .badbg { background:#3a1414; color:#ff8a80; }
+    .row { display:flex; justify-content:space-between; gap:10px; padding:2px 0; border-bottom:1px solid #1c2530; }
+    .pass { color:#69f0ae; } .fail { color:#ff5252; }
+    .name { color:#cfd8dc; } .extra { color:#ffd54f; font-size:11px; }
+  </style>
+</head>
+<body>
+  <h1>Alert Center — feed · severity matrix · floor filter · badge · beacon · dismiss round-trip · view-mode</h1>
+  <div id="summary">Running…</div>
+  <div id="rows"></div>
+
+  <!-- Two bundles, no live HA (mirrors config-test + weather-test):
+         # pure alerts module (zero deps):
+         npx esbuild src/alerts.ts --bundle --format=esm --outfile=<harness>/alerts.mod.js
+         # the REAL Planner over an in-page fake HaApi (IndexedDB doesn't run under
+         # the headless virtual-time harness → swap the avatar store for the stub):
+         T=$(mktemp -d); cp -r src/* "$T"/
+         cp test-pages/fake-avatar-store.ts "$T"/avatar-store.ts
+         npx esbuild "$T"/planner.ts --bundle --format=esm --outfile=<harness>/planner.mod.js
+  -->
+  <script type="module">
+    import {
+      classifyNotificationSeverity, repairSeverity, buildAlertFeed,
+      worstSeverity, unreadCount, alertCenterEnabled, alertBellVisible,
+      severityRank, alertBeaconState, alertBeaconAlarming, alertBeaconColor, isAlertDomain,
+    } from './alerts.mod.js';
+
+    const results = [];
+    const ok = (name, cond, extra = '') => results.push({ name, pass: !!cond, extra: String(extra) });
+    const eq = (name, got, want) => ok(name, got === want, `got ${JSON.stringify(got)} want ${JSON.stringify(want)}`);
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
+    async function waitFor(cond, tries = 600) {
+      for (let i = 0; i < tries; i++) { if (cond()) return true; await sleep(4); }
+      return !!cond();
+    }
+    const section = n => results.push({ section: n });
+
+    // ── Notification severity heuristic (§7 approximate mapping) ──────────────
+    section('Notification severity heuristic');
+    eq('plain info',            classifyNotificationSeverity('Welcome', 'All good'), 'info');
+    eq('"warning" → warning',   classifyNotificationSeverity('Warning', 'battery low'), 'warning');
+    eq('"update available" → warning', classifyNotificationSeverity(null, 'Update available for X'), 'warning');
+    eq('"failed" → error',      classifyNotificationSeverity('Backup failed', ''), 'error');
+    eq('"unavailable" → error', classifyNotificationSeverity(null, 'device unavailable'), 'error');
+    eq('"critical" → critical', classifyNotificationSeverity('CRITICAL: disk', ''), 'critical');
+    eq('"emergency" → critical', classifyNotificationSeverity(null, 'Emergency shutdown'), 'critical');
+
+    // ── Repairs severity mapping ──────────────────────────────────────────────
+    section('Repairs severity mapping');
+    eq('critical→critical', repairSeverity('critical'), 'critical');
+    eq('error→error',       repairSeverity('error'), 'error');
+    eq('warning→warning',   repairSeverity('warning'), 'warning');
+    eq('unknown→warning',   repairSeverity('bogus'), 'warning');
+    eq('null→warning',      repairSeverity(null), 'warning');
+
+    // ── buildAlertFeed: merge + sort + normalize ──────────────────────────────
+    section('buildAlertFeed');
+    const notifs = [
+      { notification_id: 'n1', title: 'Info note', message: 'hello', created_at: '2026-07-16T10:00:00Z' },
+      { notification_id: 'n2', title: 'Backup failed', message: 'oops', created_at: '2026-07-16T12:00:00Z' },
+    ];
+    const repairs = [
+      { issue_id: 'i1', domain: 'zha', severity: 'critical', created: '2026-07-16T09:00:00Z', is_fixable: false, learn_more_url: 'http://x' },
+      { issue_id: 'i2', domain: 'hue', severity: 'warning', created: '2026-07-16T11:00:00Z' },
+      { issue_id: 'i3', domain: 'ping', severity: 'error', created: '2026-07-16T08:00:00Z', ignored: true },
+    ];
+    const feed = buildAlertFeed(notifs, repairs, {});
+    eq('ignored repair dropped', feed.some(a => a.issueId === 'i3'), false);
+    eq('feed length (2 notif + 2 repair)', feed.length, 4);
+    eq('most-severe first = critical repair', feed[0].id, 'repair:zha/i1');
+    eq('critical repair carries learnMoreUrl', feed[0].learnMoreUrl, 'http://x');
+    eq('2nd = error notification (backup failed)', feed[1].id, 'notif:n2');
+    ok('notification normalized id prefix', feed.some(a => a.id === 'notif:n1'));
+    ok('notification is dismissible', feed.find(a => a.id === 'notif:n1').dismissible === true);
+    ok('repair is dismissible (ignore)', feed.find(a => a.id === 'repair:hue/i2').dismissible === true);
+
+    // ── Severity floor (minRepairSeverity) applies to repairs only ────────────
+    section('Severity floor + source toggles');
+    const floorErr = buildAlertFeed(notifs, repairs, { minRepairSeverity: 'error' });
+    eq('warning repair filtered at floor=error', floorErr.some(a => a.id === 'repair:hue/i2'), false);
+    eq('critical repair kept at floor=error', floorErr.some(a => a.id === 'repair:zha/i1'), true);
+    eq('notifications unaffected by repair floor', floorErr.filter(a => a.source === 'notification').length, 2);
+    const noNotif = buildAlertFeed(notifs, repairs, { showPersistentNotifications: false });
+    eq('showPersistentNotifications=false hides notifs', noNotif.every(a => a.source !== 'notification'), true);
+    const noRepair = buildAlertFeed(notifs, repairs, { showRepairs: false });
+    eq('showRepairs=false hides repairs', noRepair.every(a => a.source !== 'repair'), true);
+
+    // ── Badge: worst severity + unread count ──────────────────────────────────
+    section('Badge / unread');
+    eq('worstSeverity = critical', worstSeverity(feed), 'critical');
+    eq('worstSeverity([]) = null', worstSeverity([]), null);
+    eq('unread all when seen empty', unreadCount(feed, new Set()), 4);
+    eq('unread minus seen', unreadCount(feed, new Set(['repair:zha/i1', 'notif:n1'])), 2);
+    eq('unread 0 when all seen', unreadCount(feed, new Set(feed.map(a => a.id))), 0);
+    ok('severityRank ordering', severityRank('critical') > severityRank('error') &&
+       severityRank('error') > severityRank('warning') && severityRank('warning') > severityRank('info'));
+
+    // ── enabled + bell visibility (view-mode behavior) ────────────────────────
+    section('Enabled + bell visibility');
+    eq('enabled default (undefined)', alertCenterEnabled(undefined), true);
+    eq('enabled false disables', alertCenterEnabled({ enabled: false }), false);
+    eq('bell visible in edit', alertBellVisible({}, 'edit'), true);
+    eq('bell hidden in kiosk by default', alertBellVisible({}, 'kiosk'), false);
+    eq('bell shown in kiosk when opted in', alertBellVisible({ showInKiosk: true }, 'kiosk'), true);
+    eq('bell shown in view when opted in', alertBellVisible({ showInKiosk: true }, 'view'), true);
+    eq('bell hidden when center disabled', alertBellVisible({ enabled: false, showInKiosk: true }, 'edit'), false);
+
+    // ── Beacon state resolution + pulse gating (three-state alert quirk) ──────
+    section('Alert Beacon state + pulse');
+    eq('isAlertDomain alert.x', isAlertDomain('alert.sump'), true);
+    eq('isAlertDomain binary_sensor', isAlertDomain('binary_sensor.leak'), false);
+    eq('isAlertDomain null', isAlertDomain(null), false);
+    eq('alert.* on → active', alertBeaconState('on', true), 'active');
+    eq('alert.* off → ack (acknowledged, still active)', alertBeaconState('off', true), 'ack');
+    eq('alert.* unknown → idle', alertBeaconState('idle', true), 'idle');
+    eq('binary_sensor on → active', alertBeaconState('on', false), 'active');
+    eq('binary_sensor off → idle (NOT ack)', alertBeaconState('off', false), 'idle');
+    eq('null → idle', alertBeaconState(null, true), 'idle');
+    eq('pulse ON only when active', alertBeaconAlarming(alertBeaconState('on', true)), true);
+    eq('pulse OFF when acknowledged', alertBeaconAlarming(alertBeaconState('off', true)), false);
+    eq('pulse OFF when idle', alertBeaconAlarming(alertBeaconState('off', false)), false);
+    ok('active color differs from ack color',
+       alertBeaconColor('active') !== alertBeaconColor('ack'));
+
+    // ── Real Planner + fake HaApi: collectors, dismiss round-trip, beacon ack ──
+    section('Planner collectors / dismiss / acknowledge (fake HaApi)');
+    try {
+      const V = '?v=' + Date.now();
+      const { Planner } = await import('./planner.mod.js' + V);
+
+      class FakeHa {
+        constructor() {
+          this.states = {};
+          this._stateCbs = []; this._connCbs = [];
+          this._notifCb = null;
+          this.repairs = [];
+          this.calls = [];        // recorded callService invocations
+          this.ignored = [];      // recorded ignoreRepairsIssue invocations
+        }
+        connect() {
+          for (const cb of this._connCbs) cb('connected');
+          for (const cb of this._stateCbs) cb(this.states, undefined);   // full load
+        }
+        onState(fn) { this._stateCbs.push(fn); }
+        onConn(fn) { this._connCbs.push(fn); }
+        callService(domain, service, data) { this.calls.push({ domain, service, data }); return Promise.resolve(); }
+        async getHistory() { return {}; }
+        async getWeatherForecasts() { return null; }
+        async getCalendarEvents() { return []; }
+        async getDevices() { return []; }
+        async getEntityRegistry() { return []; }
+        async updateEntityRegistry() { return true; }
+        async subscribeMqtt() { return () => {}; }
+        async publishMqtt() {}
+        async getUserData() { return null; }
+        async setUserData() { return true; }
+        async refreshStates() {}
+        // ── Alert Center HaApi surface ──
+        async subscribePersistentNotifications(cb) { this._notifCb = cb; return () => { this._notifCb = null; }; }
+        async listRepairsIssues() { return this.repairs.map(r => ({ ...r })); }
+        async ignoreRepairsIssue(domain, issueId, ignore) { this.ignored.push({ domain, issueId, ignore }); return true; }
+        // drivers
+        pushNotifs(u) { if (this._notifCb) this._notifCb(u); }
+        emitState(id) { for (const cb of this._stateCbs) cb(this.states, id); }
+      }
+
+      const ha = new FakeHa();
+      ha.repairs = [{ issue_id: 'r1', domain: 'zwave', severity: 'error', created: '2026-07-16T09:00:00Z' }];
+      const p = new Planner();
+      p.connectWith(ha);
+      // Let the one-time alert-center init + first repairs poll run.
+      await waitFor(() => p._alertInited === true || p.repairIssues.length > 0, 400);
+      await sleep(20);
+
+      // Subscription snapshot → notifications populate.
+      ha.pushNotifs({ type: 'current', notifications: {
+        na: { notification_id: 'na', title: 'Backup failed', message: 'disk', created_at: '2026-07-16T12:00:00Z' },
+      }});
+      await waitFor(() => p.notifications.length === 1);
+      ok('subscription snapshot populates notifications', p.notifications.length === 1, `len=${p.notifications.length}`);
+      await waitFor(() => p.repairIssues.length === 1);
+      ok('repairs poll populates repairIssues', p.repairIssues.length === 1, `len=${p.repairIssues.length}`);
+
+      const feed1 = p.alertFeed;
+      ok('alertFeed merges notif + repair', feed1.length === 2, `len=${feed1.length}`);
+
+      // Added delta.
+      ha.pushNotifs({ type: 'added', notifications: {
+        nb: { notification_id: 'nb', title: 'Info', message: 'hi', created_at: '2026-07-16T13:00:00Z' },
+      }});
+      await waitFor(() => p.notifications.length === 2);
+      ok('added delta appends notification', p.notifications.length === 2, `len=${p.notifications.length}`);
+
+      // Removed delta.
+      ha.pushNotifs({ type: 'removed', notifications: { nb: {} } });
+      await waitFor(() => p.notifications.length === 1);
+      ok('removed delta drops notification', p.notifications.length === 1, `len=${p.notifications.length}`);
+
+      // Dismiss round-trip (notification) → persistent_notification.dismiss service call.
+      const notifAlert = p.alertFeed.find(a => a.source === 'notification');
+      p.dismissAlert(notifAlert);
+      const dismissCall = ha.calls.find(c => c.domain === 'persistent_notification' && c.service === 'dismiss');
+      ok('dismiss notification calls persistent_notification.dismiss', !!dismissCall,
+         dismissCall ? JSON.stringify(dismissCall.data) : 'no call');
+      ok('dismissed notification removed optimistically', p.notifications.length === 0);
+
+      // Dismiss round-trip (repair) → ignoreRepairsIssue.
+      const repairAlert = p.alertFeed.find(a => a.source === 'repair');
+      p.dismissAlert(repairAlert);
+      ok('dismiss repair calls ignoreRepairsIssue', ha.ignored.some(i => i.domain === 'zwave' && i.issueId === 'r1' && i.ignore === true));
+      await sleep(4);
+      ok('ignored repair leaves the feed', !p.alertFeed.some(a => a.id === 'repair:zwave/r1'));
+
+      // View-mode: dismiss refuses (no new service call).
+      ha.pushNotifs({ type: 'current', notifications: {
+        nc: { notification_id: 'nc', title: 'Note', message: 'x' },
+      }});
+      await waitFor(() => p.notifications.length === 1);
+      const before = ha.calls.length;
+      p.uiMode = 'view';
+      p.dismissAlert(p.alertFeed.find(a => a.source === 'notification'));
+      ok('view mode refuses dismiss (no service call)', ha.calls.length === before);
+      p.uiMode = 'edit';
+
+      // enabled=false clears the collectors + empties the feed.
+      p.setAlertsConfig(c => { c.enabled = false; });
+      await sleep(4);
+      ok('disabling clears alertFeed', p.alertFeed.length === 0);
+      ok('disabling tears down the notification subscription', ha._notifCb === null);
+
+      // ── Beacon acknowledge routing (alert.turn_off) ──
+      p.setAlertsConfig(c => { c.enabled = undefined; });   // re-enable (unrelated)
+      const f = p.floor();
+      f.alertBeacons = [{ id: 'ab1', x: 1000, y: 1000, entity_id: 'alert.sump', label: 'Sump' }];
+      ha.states['alert.sump'] = { state: 'on', attributes: {}, entity_id: 'alert.sump' };
+      const before2 = ha.calls.length;
+      p.acknowledgeAlertBeacon(f.alertBeacons[0]);
+      const ackCall = ha.calls.find(c => c.domain === 'alert' && c.service === 'turn_off');
+      ok('acknowledge active alert.* calls alert.turn_off', !!ackCall);
+
+      // Bound binary_sensor beacon → display-only (no service call).
+      f.alertBeacons = [{ id: 'ab2', x: 1000, y: 1000, entity_id: 'binary_sensor.leak', label: 'Leak' }];
+      ha.states['binary_sensor.leak'] = { state: 'on', attributes: {}, entity_id: 'binary_sensor.leak' };
+      const before3 = ha.calls.length;
+      p.acknowledgeAlertBeacon(f.alertBeacons[0]);
+      ok('binary_sensor beacon is display-only (no service call)', ha.calls.length === before3);
+
+      // View mode refuses acknowledge.
+      f.alertBeacons = [{ id: 'ab3', x: 0, y: 0, entity_id: 'alert.sump' }];
+      p.uiMode = 'view';
+      const before4 = ha.calls.length;
+      p.acknowledgeAlertBeacon(f.alertBeacons[0]);
+      ok('view mode refuses beacon acknowledge', ha.calls.length === before4);
+      p.uiMode = 'edit';
+
+      // Unbound beacon → demo localState flip.
+      f.alertBeacons = [{ id: 'ab4', x: 0, y: 0, entity_id: null }];
+      p.acknowledgeAlertBeacon(f.alertBeacons[0]);
+      ok('unbound beacon flips localState (demo)', f.alertBeacons[0].localState === 'on');
+    } catch (err) {
+      ok('Planner section ran without throwing', false, String(err && err.stack || err));
+    }
+
+    // ── Render ────────────────────────────────────────────────────────────────
+    const rows = document.getElementById('rows');
+    let pass = 0, total = 0;
+    for (const r of results) {
+      if (r.section) {
+        const h = document.createElement('h2'); h.textContent = r.section; rows.appendChild(h); continue;
+      }
+      total++; if (r.pass) pass++;
+      const div = document.createElement('div'); div.className = 'row';
+      div.innerHTML = `<span class="name">${r.pass ? '✓' : '✗'} ${r.name}</span>` +
+        `<span class="${r.pass ? 'pass' : 'extra'}">${r.pass ? 'PASS' : r.extra}</span>`;
+      rows.appendChild(div);
+    }
+    const s = document.getElementById('summary');
+    s.textContent = `ALERTCENTER ${pass === total ? 'PASS' : 'FAIL'} ${pass}/${total}`;
+    s.className = pass === total ? 'okbg' : 'badbg';
+    document.title = `ALERTCENTER ${pass}/${total}`;
+  </script>
+</body>
+</html>
