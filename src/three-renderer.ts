@@ -3,7 +3,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
 import { MTLLoader } from 'three/examples/jsm/loaders/MTLLoader.js';
 import type {
-  Floor, Sensor, Light, SwitchFixture, MotionSensor, Vec2, HassState,
+  Floor, Sensor, Light, SwitchFixture, MotionSensor, Vec2, HassState, Wall,
   Scene3D, ScenePreset, FloorTexKind, GroundKind, GroundArea, Model3D, Furniture, AvatarKind, WeatherEffectKey, BgTextMode,
 } from './types.js';
 import {
@@ -76,7 +76,7 @@ interface RobotRig {
   spin: THREE.Object3D;             // sub-part that spins while working
   blob: THREE.Mesh;
 }
-import { wallCutsForSegment, WINDOW_DEFAULTS, closedWallLoops, wallKind, WALL_KINDS, furnitureLocalToWorld, furnitureWorldToLocal, pointInPolygon as pip, centroid, loopContaining, resolveRoomForPoint, roomLabel, intersectLoopWithRect, polygonArea, heatmapColor, type RoomTemp } from './geometry.js';
+import { wallCutsForSegment, WINDOW_DEFAULTS, closedWallLoops, wallKind, WALL_KINDS, furnitureLocalToWorld, furnitureWorldToLocal, pointInPolygon as pip, centroid, loopContaining, resolveRoomForPoint, roomLabel, intersectLoopWithRect, polygonArea, heatmapColor, groundAreaSkirtBase, type RoomTemp } from './geometry.js';
 import { visibilityToFogDensity, moonPhaseFraction, type WeatherNow } from './weather.js';
 import {
   paintCalendarCanvas, paintNewsTickerCanvas, paintWeatherCardCanvas,
@@ -1342,7 +1342,7 @@ export class ThreeDRenderer {
   // Walkable terrain (stairs + landings): humanoids stand on the computed
   // surface height instead of the floor plane.
   private _terrain: { x: number; y: number; w: number; h: number; rotation?: number;
-                      ht: number; elevation: number; kind: string }[] = [];
+                      ht: number; elevation: number; kind: string; poly?: Vec2[] }[] = [];
   // Navigation grid (world coords, mm), rebuilt by every updateFloor. cell =
   // 150 mm. `blocked` marks cells whose center is inside a furniture footprint
   // (inflated by PERSON_R) or a solid wall run (door/window openings stay
@@ -2277,8 +2277,12 @@ export class ThreeDRenderer {
     for (const t of this._terrain) {
       const l = furnitureWorldToLocal(t.rotation, wx - t.x, wy - t.y);
       if (Math.abs(l.x) > t.w / 2 || Math.abs(l.y) > t.h / 2) continue;
+      // Terraces store an arbitrary world polygon (the bbox above is a cheap
+      // pre-filter); require the point actually inside the polygon so a concave
+      // notch / non-rectangular tier reads its true footprint, not its bbox.
+      if (t.poly && !pip(wx, wy, t.poly)) continue;
       let gy: number;
-      if (t.kind === 'stair_landing' || t.kind === 'riser_platform') {
+      if (t.kind === 'stair_landing' || t.kind === 'riser_platform' || t.kind === 'terrace') {
         gy = t.elevation + t.ht;   // flat top
       } else {
         const n = Math.max(3, Math.round(t.h / 280));
@@ -2476,20 +2480,115 @@ export class ThreeDRenderer {
     return tex;
   }
 
-  // Ground / yard covering patches (the "yard" arc). One textured ShapeGeometry
-  // patch per area at y≈4 — above the floor slab (y=0), BELOW furniture blob
-  // shadows (y=8, transparent) so shadows still paint on top. Rebuilt under
-  // _keyGround in three-view. Points are world-mm; mapped via _w like the floor
-  // loop patches. Rides the `ground` layer. Never blocks nav (pure paint).
-  updateGroundAreas(areas: GroundArea[]): void {
+  // Chain-link diamond-mesh texture: light-grey crossing diagonals on a
+  // transparent background, drawn on a semi-transparent DoubleSide flat
+  // MeshBasicMaterial plane per fence segment (a documented _mat() exemption —
+  // a wire-mesh graphic, not a lit surface; pinned decision 4). Built once,
+  // disposed only in destroy().
+  private _fenceMeshTex: THREE.Texture | null = null;
+  private _fenceMeshTexture(): THREE.Texture {
+    if (this._fenceMeshTex) return this._fenceMeshTex;
+    const c = document.createElement('canvas');
+    c.width = 64; c.height = 64;
+    const g = c.getContext('2d')!;
+    g.clearRect(0, 0, 64, 64);
+    g.strokeStyle = 'rgba(200,205,210,0.85)';
+    g.lineWidth = 2.2;
+    // Two families of parallel diagonals form the diamond weave; drawn with
+    // wrap-around offsets so the RepeatWrapping tiles seamlessly.
+    for (let o = -64; o <= 64; o += 16) {
+      g.beginPath(); g.moveTo(o, 0); g.lineTo(o + 64, 64); g.stroke();
+      g.beginPath(); g.moveTo(o + 64, 0); g.lineTo(o, 64); g.stroke();
+    }
+    const tex = new THREE.CanvasTexture(c);
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.colorSpace = THREE.SRGBColorSpace;
+    this._fenceMeshTex = tex;
+    return tex;
+  }
+
+  // Hedge speckle texture: a trimmed-shrub dark-green foliage speckle, cached
+  // like the ground textures, disposed only in destroy().
+  private _hedgeTex: THREE.Texture | null = null;
+  private _hedgeTexture(): THREE.Texture {
+    if (this._hedgeTex) return this._hedgeTex;
+    const c = document.createElement('canvas');
+    c.width = 256; c.height = 256;
+    const g = c.getContext('2d')!;
+    g.fillStyle = '#2f5424'; g.fillRect(0, 0, 256, 256);
+    const cols = ['#3a6a2c', '#28481f', '#43792f', '#345c26'];
+    for (let i = 0; i < 1400; i++) {
+      g.fillStyle = cols[(Math.random() * cols.length) | 0];
+      const rr = 2 * (0.5 + Math.random());
+      g.beginPath(); g.arc(Math.random() * 256, Math.random() * 256, rr, 0, 2 * Math.PI); g.fill();
+    }
+    const tex = new THREE.CanvasTexture(c);
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.colorSpace = THREE.SRGBColorSpace;
+    this._hedgeTex = tex;
+    return tex;
+  }
+
+  // Ground / yard covering patches (the "yard" arc + T1 terrain). One textured
+  // ShapeGeometry patch per area — a flat top at y = elevationMm + 4 (grade = 4,
+  // above the floor slab at y=0, BELOW furniture blob shadows at y=8 so shadows
+  // still paint on top) PLUS, when elevationMm ≠ 0, a skirt ring dropping to the
+  // resolved base (groundAreaSkirtBase — a nested tier stops at the tier beneath
+  // it, not always grade). Optionally an opt-in yard-fill underlay at y=2 (the
+  // floor rect minus every closed wall loop, same earcut hole-punch the slab
+  // uses). Rebuilt under _keyGround in three-view. Rides the `ground` layer.
+  // Terrace TOPS are registered into _terrain in updateFloor (which owns that
+  // array) so nav height survives _keyFloor rebuilds — this call is visuals only.
+  updateGroundAreas(areas: GroundArea[], yardFill?: GroundKind, fw?: number, fd?: number, walls?: Wall[]): void {
     if (!this._scene) return;
     this._clearGroup(this._groundGroup);
+
+    // Yard fill: one underlay patch = floor rect minus closed wall loops (holes).
+    if (yardFill && fw && fd) {
+      const loops = closedWallLoops(walls ?? []);
+      const yf = GROUND_KINDS[yardFill] ?? GROUND_KINDS.grass;
+      const ytex = this._groundTexture(yardFill);
+      ytex.repeat.set(1 / 800, 1 / 800);
+      const yShape = new THREE.Shape();
+      // Floor-rect outer contour in shape coords (sx = fw/2 − wx, sy = fd/2 − wy),
+      // matching the slab's scenePathFor mapping so the wall-loop holes register.
+      yShape.moveTo(fw / 2, fd / 2);
+      yShape.lineTo(-fw / 2, fd / 2);
+      yShape.lineTo(-fw / 2, -fd / 2);
+      yShape.lineTo(fw / 2, -fd / 2);
+      yShape.closePath();
+      for (const loop of loops) {
+        if (loop.length < 3) continue;
+        const hole = new THREE.Path();
+        loop.forEach((pt, i) => {
+          const sx = fw / 2 - pt.x, sy = fd / 2 - pt.y;
+          if (i === 0) hole.moveTo(sx, sy); else hole.lineTo(sx, sy);
+        });
+        hole.closePath();
+        yShape.holes.push(hole);
+      }
+      const yfIsWater = yardFill === 'water';
+      const yMesh = new THREE.Mesh(new THREE.ShapeGeometry(yShape), this._mat({
+        color: hexToInt(yf.color), map: ytex, side: THREE.DoubleSide,
+        roughness: 0.95, metalness: 0,
+        ...(yfIsWater ? { transparent: true, opacity: yf.opacity ?? 0.85 } : {}),
+      }));
+      yMesh.rotation.x = -Math.PI / 2;
+      yMesh.position.y = 2;
+      yMesh.receiveShadow = true;
+      yMesh.userData.outlineSkip = true;
+      yMesh.userData.yardFill = true;
+      this._groundGroup.add(yMesh);
+    }
+
     for (const a of areas) {
       if (a.hidden || a.points.length < 3) continue;
       const kd = GROUND_KINDS[a.kind] ?? GROUND_KINDS.grass;
       const tex = this._groundTexture(a.kind);
       tex.repeat.set(1 / 800, 1 / 800);   // raw-mm ShapeGeometry UVs → one tile / 800 mm
       const isWater = a.kind === 'water';
+      const elev = a.elevationMm ?? 0;
+      const topY = elev + 4;
       // rotation.x = -π/2 maps a shape vertex (sx, sy) → world (sx, 0, -sy);
       // feed (w.x, -w.z) so the patch lands at world (w.x, y, w.z).
       const shape = new THREE.Shape();
@@ -2505,10 +2604,63 @@ export class ThreeDRenderer {
       });
       const patch = new THREE.Mesh(new THREE.ShapeGeometry(shape), mat);
       patch.rotation.x = -Math.PI / 2;
-      patch.position.y = 4;
+      patch.position.y = topY;
       patch.receiveShadow = true;
       patch.userData.outlineSkip = true;
+      patch.userData.terraceTop = elev;
       this._groundGroup.add(patch);
+
+      // Skirt ring: only when the tier is raised or sunk. Connect each top edge
+      // down to the resolved base elevation. Angled (grass/mulch/sand) rakes the
+      // base ring outward by |Δh|×1.5 (~34° hillside); vertical (rock/concrete/
+      // blacktop/water) drops straight (retaining wall / basin cut). Concave
+      // polygons can self-intersect on the outward offset — accepted as a minor
+      // v1 artifact (pinned decision 1), no miter clamp.
+      if (elev !== 0) {
+        const base = groundAreaSkirtBase(a, areas);
+        const angled = a.kind === 'grass' || a.kind === 'mulch' || a.kind === 'sand';
+        const outset = angled ? Math.abs(elev - base) * 1.5 : 0;
+        const ctr = centroid(a.points);
+        const pos: number[] = [], uv: number[] = [];
+        const n = a.points.length;
+        let along = 0;
+        for (let i = 0; i < n; i++) {
+          const p1 = a.points[i], p2 = a.points[(i + 1) % n];
+          const edgeLen = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+          // Outward-offset (radial from centroid) base positions.
+          const off = (p: Vec2): Vec2 => {
+            if (outset === 0) return p;
+            const dx = p.x - ctr.x, dy = p.y - ctr.y, len = Math.hypot(dx, dy) || 1;
+            return { x: p.x + (dx / len) * outset, y: p.y + (dy / len) * outset };
+          };
+          const b1 = off(p1), b2 = off(p2);
+          const T1 = this._w(p1.x, p1.y, topY), T2 = this._w(p2.x, p2.y, topY);
+          const B1 = this._w(b1.x, b1.y, base + 4), B2 = this._w(b2.x, b2.y, base + 4);
+          const u0 = along / 800, u1 = (along + edgeLen) / 800;
+          const vT = topY / 800, vB = (base + 4) / 800;
+          // Two triangles: (T1,T2,B2) + (T1,B2,B1). DoubleSide → winding-agnostic.
+          pos.push(T1.x, T1.y, T1.z, T2.x, T2.y, T2.z, B2.x, B2.y, B2.z);
+          pos.push(T1.x, T1.y, T1.z, B2.x, B2.y, B2.z, B1.x, B1.y, B1.z);
+          uv.push(u0, vT, u1, vT, u1, vB);
+          uv.push(u0, vT, u1, vB, u0, vB);
+          along += edgeLen;
+        }
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+        geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+        geo.computeVertexNormals();
+        const skirt = new THREE.Mesh(geo, this._mat({
+          color: hexToInt(kd.color), map: tex, side: THREE.DoubleSide,
+          roughness: 0.95, metalness: 0,
+          ...(isWater ? { transparent: true, opacity: kd.opacity ?? 0.85 } : {}),
+        }));
+        skirt.receiveShadow = true;
+        skirt.userData.outlineSkip = true;
+        skirt.userData.terraceSkirt = true;
+        skirt.userData.skirtBase = base;
+        skirt.userData.skirtAngled = angled;
+        this._groundGroup.add(skirt);
+      }
     }
   }
 
@@ -3093,6 +3245,21 @@ export class ThreeDRenderer {
       if (kind === 'invisible') continue;  // planning boundary only
       const kindH = WALL_KINDS[kind].h;
       const group = new THREE.Group();
+      // Boundary kinds that reuse the SOLID extrusion path (opaque, not the
+      // grey house wall): privacy fence = thin wood-tone run; hedge = fat green
+      // textured run + a trimmed-shrub crown box. Both stay cutaway-enrolled
+      // (they're opaque, like solid walls). Picket / chain-link are see-through
+      // composites handled in their own branch below (no cutaway enrollment).
+      const isHedge = kind === 'hedge';
+      const isPrivacy = kind === 'fence_privacy';
+      const segThick = isHedge ? 450 : isPrivacy ? 60 : wallThick;
+      const segMatFor = isHedge
+        ? () => this._mat({ color: 0x3a6a2c, map: this._hedgeTexture(),
+            transparent: true, opacity: 1, side: THREE.DoubleSide, depthWrite: true })
+        : isPrivacy
+        ? () => this._mat({ color: scene3d?.wallColor ? hexToInt(scene3d.wallColor) : 0x9c7248,
+            transparent: true, opacity: 1, side: THREE.DoubleSide, depthWrite: true })
+        : wallMatFor;
       for (let i = 0; i < wall.points.length - 1; i++) {
         const a = wall.points[i], b = wall.points[i + 1];
         const dx = b.x - a.x, dy = b.y - a.y;
@@ -3121,6 +3288,60 @@ export class ThreeDRenderer {
           for (let k = 1; k < nBal; k++) bar((len * k) / nBal, 28, 100, kindH - 60, 28);
           continue;
         }
+        if (kind === 'fence_picket') {
+          // Picket fence: top + bottom rails + posts (~1800 mm pitch) + flat
+          // narrow pickets (~100 mm pitch), wood tone. See-through composite —
+          // NOT cutaway-enrolled.
+          const woodMat = this._mat({
+            color: scene3d?.wallColor ? hexToInt(scene3d.wallColor) : 0xb98a52,
+          });
+          const bar = (t: number, w2: number, y0: number, y1: number, d2 = 40) => {
+            const m = new THREE.Mesh(new THREE.BoxGeometry(d2, y1 - y0, w2), woodMat);
+            const p = this._w(a.x + ux * t, a.y + uy * t, (y0 + y1) / 2);
+            m.position.set(p.x, p.y, p.z);
+            m.rotation.y = angle;
+            group.add(m);
+          };
+          bar(len / 2, len, kindH - 220, kindH - 140, 30);   // top rail
+          bar(len / 2, len, 200, 280, 30);                    // bottom rail
+          const nPosts = Math.max(1, Math.round(len / 1800));
+          for (let k = 0; k <= nPosts; k++) bar((len * k) / nPosts, 90, 0, kindH, 90);
+          const nPick = Math.max(1, Math.floor(len / 100));
+          for (let k = 0; k < nPick; k++) bar((len * (k + 0.5)) / nPick, 55, 0, kindH - 40, 22);
+          continue;
+        }
+        if (kind === 'fence_chainlink') {
+          // Chain-link: thin posts + a semi-transparent diamond-mesh plane per
+          // segment (flat MeshBasicMaterial, DoubleSide — pinned decision 4).
+          const postMat = this._mat({ color: 0x9aa0a6, metalness: 0.4, roughness: 0.5 });
+          const post = (t: number) => {
+            const m = new THREE.Mesh(new THREE.CylinderGeometry(28, 28, kindH, 8), postMat);
+            const p = this._w(a.x + ux * t, a.y + uy * t, kindH / 2);
+            m.position.set(p.x, p.y, p.z);
+            group.add(m);
+          };
+          const nPosts = Math.max(1, Math.round(len / 2400));
+          for (let k = 0; k <= nPosts; k++) post((len * k) / nPosts);
+          const meshTex = this._fenceMeshTexture();
+          const planeGeo = new THREE.PlaneGeometry(len, kindH);
+          // Scale the plane's own UVs (0..1) so the SHARED texture tiles ~150 mm
+          // diamonds via RepeatWrapping — never touch meshTex.repeat (it's shared
+          // across every chain-link segment and the last write would win).
+          const uv = planeGeo.attributes.uv;
+          for (let k = 0; k < uv.count; k++) uv.setXY(k, uv.getX(k) * len / 150, uv.getY(k) * kindH / 150);
+          uv.needsUpdate = true;
+          const meshMat = new THREE.MeshBasicMaterial({
+            map: meshTex, transparent: true, opacity: 0.55, side: THREE.DoubleSide,
+            depthWrite: false,
+          });
+          const plane = new THREE.Mesh(planeGeo, meshMat);
+          const pc = this._w(a.x + ux * (len / 2), a.y + uy * (len / 2), kindH / 2);
+          plane.position.set(pc.x, pc.y, pc.z);
+          plane.rotation.y = Math.atan2(-uy, -ux);   // face broadside along the run
+          plane.userData.outlineSkip = true;
+          group.add(plane);
+          continue;
+        }
         // Build the solid wall for this segment as ONE extruded prism whose 2D
         // profile (along-wall t × height) has rectangular holes/notches punched
         // for each door/window opening — instead of separate boxes per solid
@@ -3134,15 +3355,28 @@ export class ThreeDRenderer {
         const { openings } = wallCutsForSegment(a, b, f.doors ?? [], f.windows ?? []);
         const angleY = Math.atan2(-uy, -ux);   // shape t-axis → scene along-wall dir
         const basePos = this._w(a.x, a.y, 0);   // shape origin (t=0, y=0) in scene
-        for (const mesh of this._buildSolidWallSegment(openings, len, kindH, wallThick, SILL_TOP, WINDOW_GLASS_H, DOOR_HEAD, wallMatFor)) {
+        for (const mesh of this._buildSolidWallSegment(openings, len, kindH, segThick, SILL_TOP, WINDOW_GLASS_H, DOOR_HEAD, segMatFor)) {
           mesh.position.set(basePos.x, basePos.y, basePos.z);
           mesh.rotation.y = angleY;
           // Cutaway tag: scene-space segment midpoint + horizontal perpendicular
           // (the scene-space wall direction is (-ux, uy) after the X-mirror, so
           // its normal is (-uy, -ux)). Either sign is fine — the fader re-orients.
+          // Privacy fence + hedge are opaque solids → cutaway-enrolled like walls.
           const mp = this._w((a.x + b.x) / 2, (a.y + b.y) / 2, 0);
           this._tagCutawayWall(mesh, mp.x, mp.z, -uy, -ux, this._cutawayWalls);
           group.add(mesh);
+        }
+        if (isHedge) {
+          // Trimmed-shrub crown: a slightly-narrower green box stacked over the
+          // run so the hedge reads as a clipped rounded top rather than a slab.
+          const crown = new THREE.Mesh(
+            new THREE.BoxGeometry(segThick - 90, 260, len),
+            segMatFor());
+          const cp = this._w(a.x + ux * (len / 2), a.y + uy * (len / 2), kindH - 60);
+          crown.position.set(cp.x, cp.y, cp.z);
+          crown.rotation.y = angle;
+          crown.userData.outlineSkip = true;
+          group.add(crown);
         }
       }
       this._shadowFlags(group);
@@ -3610,6 +3844,31 @@ export class ThreeDRenderer {
       const sprite = this._makeRoomLabelSprite(lbl.text, lbl.placeholder);
       sprite.position.set(wp.x, wp.y, wp.z);
       this._floorGroup.add(sprite);
+    }
+
+    // Terraced ground (T1): register each raised/sunk GroundArea's TOP polygon
+    // as walkable flat-top terrain so _groundYAt lifts rigs / blob shadows onto
+    // it (the same mechanism risers/landings use). Registered HERE — updateFloor
+    // owns _terrain and rebuilds it every call — so terrace height survives a
+    // _keyFloor rebuild that doesn't also bump _keyGround. Skipped when the
+    // ground layer is hidden (mirrors furniture: hiding it drops its terrain).
+    // The visual patch/skirt live in updateGroundAreas (_groundGroup). NON-nav:
+    // _buildNav never blocks terraces (like risers), so avatars step on/off.
+    if (layers?.ground !== false) {
+      for (const a of f.groundAreas ?? []) {
+        const elev = a.elevationMm ?? 0;
+        if (a.hidden || elev === 0 || a.points.length < 3) continue;
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        for (const pt of a.points) {
+          if (pt.x < minX) minX = pt.x; if (pt.x > maxX) maxX = pt.x;
+          if (pt.y < minY) minY = pt.y; if (pt.y > maxY) maxY = pt.y;
+        }
+        this._terrain.push({
+          x: (minX + maxX) / 2, y: (minY + maxY) / 2,
+          w: maxX - minX, h: maxY - minY, rotation: 0,
+          ht: 0, elevation: elev, kind: 'terrace', poly: a.points,
+        });
+      }
     }
 
     // Rebuild the humanoid navigation grid from the same walls + furniture.
@@ -4804,12 +5063,32 @@ export class ThreeDRenderer {
       const openR = -(doorOpenDeltaDeg(d) * Math.PI / 180) * frac;
       hinge.rotation.y = rotR + openR;
 
-      const panel = new THREE.Mesh(
-        new THREE.BoxGeometry(d.w, DOOR_H, DOOR_T),
-        mat,
-      );
-      panel.position.set(-d.w / 2, DOOR_H / 2, 0);
-      hinge.add(panel);
+      if ((d.kind ?? 'swing') === 'gate') {
+        // Gate: a picket-styled swinging panel (flat boards, shorter ~1100) on
+        // the SAME hinge/swing math as a swing door — top/bottom rails + vertical
+        // pickets, all in `mat` (green while open). The shared lock/doorbell/
+        // open-fraction machinery below runs unchanged.
+        const GATE_H = 1100, boardT = 30;
+        const rail = (y: number) => {
+          const r = new THREE.Mesh(new THREE.BoxGeometry(d.w, 80, boardT), mat);
+          r.position.set(-d.w / 2, y, 0);
+          hinge.add(r);
+        };
+        rail(GATE_H - 220); rail(200);
+        const nPick = Math.max(2, Math.floor(d.w / 100));
+        for (let k = 0; k < nPick; k++) {
+          const pick = new THREE.Mesh(new THREE.BoxGeometry(55, GATE_H - 40, 22), mat);
+          pick.position.set(-((k + 0.5) / nPick) * d.w, (GATE_H - 40) / 2, 0);
+          hinge.add(pick);
+        }
+      } else {
+        const panel = new THREE.Mesh(
+          new THREE.BoxGeometry(d.w, DOOR_H, DOOR_T),
+          mat,
+        );
+        panel.position.set(-d.w / 2, DOOR_H / 2, 0);
+        hinge.add(panel);
+      }
       // Lock deadbolt: an emissive box near the free edge (opposite the hinge),
       // rendered on BOTH panel faces so the state reads from either side. Red =
       // locked, green = unlocked, grey = unknown/unavailable. State resolves from
@@ -7228,10 +7507,15 @@ export class ThreeDRenderer {
         this._robotRigGroup.add(rig.group);
       }
       // Position + facing (plan heading → scene yaw; body-forward = local −Z).
+      // Re-ground on terrain (T1 terraces / risers / landings) via _groundYAt so
+      // a mower climbing a berm rides its top instead of clipping through — the
+      // same height read avatar rigs + blob shadows make (pinned decision 2). The
+      // blob stays at rig-relative 6 − bob so it lands on the walking surface.
+      const gy = this._groundYAt(st.x, st.y);
       const p = this._w(st.x, st.y, 0);
       const working = st.activity === 'cleaning' || st.activity === 'mowing';
       const bob = working ? Math.abs(Math.sin(st.phase * 4)) * 12 : 0;
-      rig.group.position.set(p.x, bob, p.z);
+      rig.group.position.set(p.x, gy + bob, p.z);
       rig.group.rotation.y = Math.atan2(Math.cos(st.heading), -Math.sin(st.heading));
       // Spin the top part while working (vacuum brush plate / mower disc).
       rig.spin.rotation.y = working ? st.phase * 4 : 0;
@@ -14136,6 +14420,8 @@ export class ThreeDRenderer {
     this._texCache = {};
     for (const t of Object.values(this._groundTexCache)) t?.dispose();
     this._groundTexCache = {};
+    this._fenceMeshTex?.dispose(); this._fenceMeshTex = null;
+    this._hedgeTex?.dispose(); this._hedgeTex = null;
     this._blurTexStand?.dispose(); this._blurTexStand = null;
     this._blurTexSit?.dispose(); this._blurTexSit = null;
     // Shared weather particle / fog-plane maps (W2) — freed once here.

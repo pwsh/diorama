@@ -693,6 +693,44 @@ severity, inferred from title/message substrings, APPROXIMATE by design),
 - **Ground grid**: the 3D backdrop is a single `THREE.GridHelper` on `_scene`, previously visible iff no bg image. Now `(layers.grid !== false) && !bgVisible` — gated in updateFloor (cached `_bgVisibleNow`) AND reapplied per tick in setLayerVisibility; `layers.grid` in `_keyFloor`; sidebar layer "3D grid". There is NO 2D plan grid (nothing to gate).
 - **Outdoor FurnitureKinds** (`outdoor` cat — the optgroup label entry was also missing and is now added, surfacing the bins too): `tree`, `pine_tree`, `bush`, `flower_bed`, `bird_bath`, `fountain` (static translucent water column — no particles v1), `swingset`, `lawn_chair` (`seat: 380` — real SitSpot, avatars sit outdoors), `picnic_table` (plain `surface` + `activity: eat_at_table`, NO seat — a centered SitSpot would land on the tabletop; sit at it via lawn_chairs). Standard blob shadows + outlines. Test page `yard-test.html` (YARD PASS 4/4).
 
+### Terraced terrain & yard fill (batch T1) + fences & gates (batch T2)
+Design `docs/DESIGN-terrain.md`; research `docs/research/terrain-enhancements.md`.
+- **Terraces**: `GroundArea.elevationMm?` (item-level, absent = 0 = flat) — the
+  top patch builds at `elevationMm + 4` plus a per-edge quad-strip **skirt ring**
+  down to `groundAreaSkirtBase(area, all)` (geometry.ts, pure — the elevation of
+  the highest lower area containing the centroid; nested tiers stack correctly).
+  Skirts are ANGLED (base out-flared `|Δh|×1.5`) for grass/mulch/sand, VERTICAL
+  for rock/concrete/blacktop/water; same `_mat()`/`_groundTexture`; `outlineSkip`;
+  concave self-intersection is an accepted v1 artifact. Hills = hand-nested
+  polygons (no auto offsetting). **Nav**: `updateFloor` (which owns `_terrain`)
+  registers each non-zero area top as `_terrain` kind `'terrace'` carrying its
+  real polygon (bbox pre-filter + point-in-polygon), and `_groundYAt`'s flat-top
+  branch includes it — avatars/blob shadows/ROBOT RIGS (now re-grounded via
+  `_groundYAt` in `updateRobotRigs`) ride terrace tops; no slope walking (the
+  stairs/riser precedent). GroundAreas still never block nav. 2D: inset
+  lighter/darker contour ring + selected `±N mm` caption. Sidebar elevation input.
+- **Yard fill**: `Floor.yardFill?: GroundKind` (optional pass-through, no
+  repairFloor) — opt-in underlay patch at y=2 (2D analog) covering the floor rect
+  MINUS closed wall loops (earcut holes), under user paint at y=4; "Yard fill"
+  dropdown in the Floors section. `_keyGround` folds yardFill + floor dims + wall
+  hash + per-area elevationMm.
+- **Fences/hedge**: `WallKind` + `fence_picket` (rails+posts+flat pickets,
+  h 1100) / `fence_privacy` (solid extrusion, h 1800, 60 thick) / `fence_chainlink`
+  (posts + semi-transparent diamond-mesh plane — flat `MeshBasicMaterial`
+  DoubleSide, a documented `_mat()` exemption; plane UVs scale per segment, never
+  `texture.repeat` on the shared `_fenceMeshTexture`) / `hedge` (green solid
+  extrusion + crown box, h 900, 450 thick, `_hedgeTexture` speckle). Shared
+  textures disposed only in `destroy()`. Openings punch through privacy/hedge via
+  the kind-agnostic `wallCutsForSegment`; fences block nav like solid walls
+  (rasterizer only skips `invisible`). Wall-kind picker in sidebar is HAND-LISTED
+  (not enumerated) — new kinds must be added there.
+- **Gates**: `Door.kind: 'gate'` — picket-styled ~1100 swinging panel on the
+  shared swing/lock/doorbell/`doorOpenFraction` machinery (cover.* with
+  device_class `gate` binds like any cover). Doors snapped onto a fence/hedge
+  wall DEFAULT to `'gate'` silently (`nearestWallKind` in canvas-interact);
+  override via the Doors Kind dropdown (now swing/garage/gate).
+- Test pages `terrain-test.html` (21/21), `fence-gate-test.html` (32/32).
+
 ### Bins, floodlight, camera alerts (batch J)
 - **Trash/recycle bins**: FurnitureKinds `trash_bin`/`recycle_bin` under the NEW `outdoor` cat (600×700×1100 wheeled curbside; recycle = blue + emblem panel). Bound entity 'on'/'full' = FULL → lid props −15° + overflow lump (3D) / fill-dot (2D); unbound click-toggles localState. Bins are click-tagged `kind:'media'` (its click path is plain toggleItem — `'appliance'` would flip doorOpen; the media dblclick is guarded to bind `binary_sensor` for bins). The `_keyFloor` appliance hash filter is `cat==='appliance' || isBinKind(kind)` — bins fold their state in.
 - **Floodlight**: `LightIconKind 'flood'` — mount plate + twin angled emissive heads, pool disc ×1.4 + elliptical (no cone hint; toon pool carries it); wall-snaps flush on drop/release via `snapFloodlightToWall` (offset 70 = WALL_HALF 50 + plate 20, front local −Z, no ganging); glyph 🔆.

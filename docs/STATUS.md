@@ -118,6 +118,23 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Terrain T1+T2: terraced elevation, yard fill, fences & gates**
+  (2026-07-18; 2 parallel Opus agents on shared files, surgical-edit
+  discipline; design `docs/DESIGN-terrain.md`). **T1**:
+  `GroundArea.elevationMm` terraces (skirt rings via pure
+  `groundAreaSkirtBase`, angled vs vertical by kind), `_terrain` kind
+  `'terrace'` with real-polygon `_groundYAt` (avatars/blobs/ROBOTS ride
+  terrace tops — the mower rig previously never re-grounded, fixed),
+  `Floor.yardFill` opt-in rect-minus-loops underlay, 2D contours +
+  captions, sidebar inputs. `TERRAIN PASS 21/21`. **T2**: `WallKind`
+  fence_picket/fence_privacy/fence_chainlink/hedge (railing/solid-
+  extrusion precedents; chain-link = flat MeshBasicMaterial diamond
+  plane), `Door.kind 'gate'` on the shared swing/lock/cover machinery,
+  silent gate default on fence snap. `FENCEGATE PASS 32/32`. Regressions
+  yard 4/4, void 10/10, window 15/15, covers 22/22. NOTE: the T2 agent
+  left its test page only in its harness dir — recovered into
+  test-pages/ at integration (watch for this pattern).
+
 - **Three franchise avatar packs: Fallout TV, Sesame Street, WALL-E**
   (2026-07-18; Sonnet research → `docs/avatars/sci-fi/fallout-tv.md` /
   `cartoons/sesame-street.md` / `sci-fi/wall-e.md`, Opus build). 29 new

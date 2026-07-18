@@ -1,7 +1,7 @@
 // Pure geometry helpers — no DOM, no state.
 
 import type { Vec2, Sensor, BgImage, LightIconKind, FurnitureKind, EnvKind, WallKind,
-  ActivityKind, ObjectRecipe, Furniture, Room, Floor, SafetyKind, GroundKind,
+  ActivityKind, ObjectRecipe, Furniture, Room, Floor, SafetyKind, GroundKind, GroundArea,
   InfoCard, InfoCardMount, ActionKind } from './types.js';
 import { formatEntityValue, formatClock, evalRules, ruleMatches, relTimeText,
   type HassStateLike, type ClockMode, type ValueRule } from './value-rules.js';
@@ -203,6 +203,10 @@ export const WALL_KINDS: Record<WallKind, { label: string; h: number }> = {
   half:      { label: 'Half wall',  h: 1372 },  // pony wall, half of full
   railing:   { label: 'Railing',    h: 914 },   // 3 ft banister
   invisible: { label: 'Invisible',  h: 0 },     // planning boundary; closes floor loops
+  fence_picket:    { label: 'Picket fence',     h: 1100 },  // ~43 in
+  fence_privacy:   { label: 'Privacy fence',    h: 1800 },  // solid, ~6 ft
+  fence_chainlink: { label: 'Chain-link fence', h: 1200 },
+  hedge:           { label: 'Hedge',            h: 900 },   // trimmed shrub run
 };
 export function wallKind(w: { kind?: WallKind }): WallKind { return w.kind ?? 'full'; }
 
@@ -427,7 +431,7 @@ export interface WallOpeningCut { t0: number; t1: number; kind: 'door' | 'window
 // counts when its center projects onto the segment within `tol` of the axis.
 export function wallCutsForSegment(
   a: Vec2, b: Vec2,
-  doors: { x: number; y: number; w: number; rotation: number; kind?: 'swing' | 'garage' }[],
+  doors: { x: number; y: number; w: number; rotation: number; kind?: 'swing' | 'garage' | 'gate' }[],
   windows: { x: number; y: number; w: number; sill?: number; height?: number }[],
   tol = 150,
 ): { solids: { t0: number; t1: number }[]; openings: WallOpeningCut[] } {
@@ -1941,6 +1945,45 @@ export const GROUND_KINDS: Record<GroundKind, { label: string; color: string; op
 };
 export function groundKindLabel(k: GroundKind): string { return GROUND_KINDS[k]?.label ?? k; }
 export function groundAreaColor(g: { kind: GroundKind }): string { return GROUND_KINDS[g.kind]?.color ?? '#4c7a34'; }
+
+// Area-weighted polygon centroid — a representative interior point for a simple
+// polygon (used by groundAreaSkirtBase to test which lower tier an area sits
+// on). Falls back to the vertex average when the signed area is ~0 (degenerate).
+export function polygonCentroid(verts: Vec2[]): Vec2 {
+  const n = verts.length;
+  if (n === 0) return { x: 0, y: 0 };
+  let a = 0, cx = 0, cy = 0;
+  for (let i = 0, j = n - 1; i < n; j = i++) {
+    const cross = verts[j].x * verts[i].y - verts[i].x * verts[j].y;
+    a += cross;
+    cx += (verts[j].x + verts[i].x) * cross;
+    cy += (verts[j].y + verts[i].y) * cross;
+  }
+  a *= 0.5;
+  if (Math.abs(a) < 1e-6) return centroid(verts);
+  return { x: cx / (6 * a), y: cy / (6 * a) };
+}
+
+// Terraced-ground skirt base: the elevation the skirt of `area` should drop
+// DOWN to. A small tier nested on a larger, lower tier must stop at that tier's
+// elevation (not always grade 0), else it cuts a visible cliff through the tier
+// beneath. Resolved once per area at build time (never per frame) by testing
+// `area`'s representative interior point against every OTHER area's polygon and
+// taking the highest elevation that is (a) at or below `area`'s own elevation
+// and (b) contains the point. Pure/O(areas²) over a small per-floor array — the
+// same idiom closedWallLoops / mowerSweepWaypoints use. A single sunken area
+// (negative elevation, no lower sibling) returns 0 → its skirt rises to grade.
+export function groundAreaSkirtBase(area: GroundArea, all: GroundArea[]): number {
+  const ae = area.elevationMm ?? 0;
+  const rep = polygonCentroid(area.points);
+  let base = 0;
+  for (const other of all) {
+    if (other.id === area.id || other.hidden || (other.points?.length ?? 0) < 3) continue;
+    const oe = other.elevationMm ?? 0;
+    if (oe <= ae && oe > base && pointInPolygon(rep.x, rep.y, other.points)) base = oe;
+  }
+  return base;
+}
 
 export function furnitureCat(def: FurnitureKindDef): FurnitureCat { return def.cat ?? 'furniture'; }
 

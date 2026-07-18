@@ -317,6 +317,31 @@ export function snapOpeningToWall(
   return true;
 }
 
+// The WallKind (as a string) of the wall an opening at (x,y) would snap onto
+// (nearest within maxDist), or null if none. Used to silently default a new
+// door to a 'gate' when it lands on a fence/hedge run (pinned decision 5).
+export function nearestWallKind(
+  f: WeldWalls,
+  x: number, y: number,
+  maxDist = 500,
+): string | null {
+  let best: { d: number; kind: string } | null = null;
+  for (const w of f.walls) {
+    for (let i = 0; i < w.points.length - 1; i++) {
+      const A = w.points[i], B = w.points[i + 1];
+      const q = closestOnSegment({ x, y }, A, B);
+      const d = distMM({ x, y }, q);
+      if (d < maxDist && (!best || d < best.d)) best = { d, kind: (w as { kind?: string }).kind ?? 'full' };
+    }
+  }
+  return best ? best.kind : null;
+}
+
+// True when a wall kind is a fence/hedge boundary (→ new doors default to gate).
+function isFenceLikeKind(k: string | null): boolean {
+  return k != null && (k.startsWith('fence_') || k === 'hedge');
+}
+
 // Weld `wall`'s endpoints onto other unlocked walls — endpoint-to-endpoint
 // (corner) or endpoint-to-anywhere-along-a-segment (T-junction), corners
 // preferred. translate=true shifts the whole wall by the best
@@ -1558,6 +1583,8 @@ export function onCanvasMouseUp(p: Planner, canvas: HTMLCanvasElement): void {
       } else {
         door.x = snap(door.x, 10); door.y = snap(door.y, 10);
         snapOpeningToWall(f, door);
+        // Silent gate default when a still-kindless door lands on a fence/hedge.
+        if (door.kind == null && isFenceLikeKind(nearestWallKind(f, door.x, door.y))) door.kind = 'gate';
         p.save();
       }
     }
@@ -2096,12 +2123,16 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
     p.save(); p.setTool('select'); p.emitConfig(); return;
   }
   if (p.tool === 'door') {
-    const d = {
+    const d: { id: string; x: number; y: number; w: number; rotation: number;
+               entity_id: null; label: string; kind?: 'swing' | 'garage' | 'gate' } = {
       id: newId('dr'),
       x: snap(mm.x, 10), y: snap(mm.y, 10),
       w: 800, rotation: 0, entity_id: null, label: '',
     };
     snapOpeningToWall(f, d);
+    // A fresh door snapped onto a fence/hedge run defaults to a gate (silent;
+    // one-click override in the Doors Kind dropdown). Pinned decision 5.
+    if (isFenceLikeKind(nearestWallKind(f, d.x, d.y))) d.kind = 'gate';
     f.doors.push(d);
     p.save(); p.setTool('select'); p.emitConfig(); return;
   }

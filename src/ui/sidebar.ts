@@ -336,6 +336,10 @@ export class Sidebar extends LitElement {
                 <option value="half">Half wall</option>
                 <option value="railing">Railing / banister (3 ft)</option>
                 <option value="invisible">Invisible (floor boundary)</option>
+                <option value="fence_picket">Picket fence</option>
+                <option value="fence_privacy">Privacy fence</option>
+                <option value="fence_chainlink">Chain-link fence</option>
+                <option value="hedge">Hedge</option>
               </select>
             </div>
           ` : nothing}
@@ -2933,6 +2937,16 @@ export class Sidebar extends LitElement {
           <input type="text" .value=${g.name ?? ''} placeholder=${GROUND_KINDS[g.kind]?.label ?? 'Area'}
                  @input=${(e: Event) => upd(() => { g.name = (e.target as HTMLInputElement).value; })}>
         </div>
+        <div class="row" title="Raise (+) or sink (−) this area relative to grade. A raised tier gets a sloped/vertical skirt; nest smaller polygons at higher values for a hill/berm. Negative = a sunken basin preview.">
+          <label>Elevation</label>
+          <input type="number" step="50" .value=${String(g.elevationMm ?? 0)}
+                 style="flex:1" placeholder="0"
+                 @input=${(e: Event) => upd(() => {
+                   const v = Math.round(Number((e.target as HTMLInputElement).value) || 0);
+                   if (v === 0) delete g.elevationMm; else g.elevationMm = v;
+                 })}>
+          <span style="color:var(--text-dim);font-size:11px">mm</span>
+        </div>
         <div class="row"><label>Hidden</label>
           <button class="btn" style="font-size:11px;flex:1"
                   @click=${() => upd(() => { g.hidden = !g.hidden; })}>${g.hidden ? '🙈 Hidden' : '👁 Shown'}</button>
@@ -3651,13 +3665,14 @@ export class Sidebar extends LitElement {
         </div>
         <div class="row"><label>Kind</label>
           <select @change=${(e: Event) => upd(() => {
-                    const k = (e.target as HTMLSelectElement).value as 'swing' | 'garage';
+                    const k = (e.target as HTMLSelectElement).value as 'swing' | 'garage' | 'gate';
                     d.kind = k;
                     // Bump a still-default swing width up to a garage-sized opening.
                     if (k === 'garage' && d.w === 800) d.w = 2400;
                   })}>
             <option value="swing" ?selected=${(d.kind ?? 'swing') === 'swing'}>Swing</option>
             <option value="garage" ?selected=${d.kind === 'garage'}>Garage</option>
+            <option value="gate" ?selected=${d.kind === 'gate'}>Gate</option>
           </select>
         </div>
         <div class="row"><label>Width (mm)</label>
@@ -5934,6 +5949,19 @@ export class Sidebar extends LitElement {
                style="width:36px;height:24px;padding:0;border:1px solid var(--border);background:#111"
                @input=${(e: Event) => upd(() => { f.look3d!.wallColor = (e.target as HTMLInputElement).value; })}>
         ${clearBtn(lk.wallColor !== undefined, () => { delete f.look3d!.wallColor; })}
+      </div>
+      <div class="row" title="Auto-paint this ground kind over the whole floor rect minus the walled house footprint — fixes the 'void yard' first impression. None = off.">
+        <label>Yard fill</label>
+        <select style="flex:1"
+                @change=${(e: Event) => {
+                  const v = (e.target as HTMLSelectElement).value;
+                  if (!v) delete f.yardFill; else f.yardFill = v as GroundKind;
+                  p.save(); p.emitConfig();
+                }}>
+          <option value="" ?selected=${!f.yardFill}>None</option>
+          ${(Object.keys(GROUND_KINDS) as GroundKind[]).map(k => html`
+            <option value=${k} ?selected=${f.yardFill === k}>${GROUND_KINDS[k].label}</option>`)}
+        </select>
       </div>
     `;
   }

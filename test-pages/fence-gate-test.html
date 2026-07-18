@@ -1,0 +1,151 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>fence gate test</title>
+<style>html,body{margin:0;background:#111;color:#ccc;font:12px sans-serif}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<!--
+  Batch T2 boundaries: fence WallKinds (picket/privacy/chainlink) + hedge +
+  Door.kind 'gate'. Pure WALL_KINDS via geometry.mod.js (esbuild bundle like
+  covers-test); renderer via the built three-renderer chunk.
+    npx esbuild src/geometry.ts --bundle --format=esm --outfile=<harness>/geometry.mod.js
+-->
+<script type="module">
+ try {
+  const geo = await import('./geometry.mod.js?v=' + Date.now());
+  const mod = await import('./assets/three-renderer.js?v=' + Date.now());
+  const { WALL_KINDS, doorOpenFraction } = geo;
+
+  const results = [];
+  const ok = (name, cond, detail = '') => results.push(`${cond ? 'ok' : 'FAIL'}:${name}${detail ? '(' + detail + ')' : ''}`);
+  const near = (a, b, t = 1e-6) => Math.abs(a - b) <= t;
+
+  // === 1. WALL_KINDS pure entries + heights ================================
+  ok('kind_picket',    !!WALL_KINDS.fence_picket);
+  ok('kind_privacy',   !!WALL_KINDS.fence_privacy);
+  ok('kind_chainlink', !!WALL_KINDS.fence_chainlink);
+  ok('kind_hedge',     !!WALL_KINDS.hedge);
+  ok('h_picket',    WALL_KINDS.fence_picket?.h === 1100, String(WALL_KINDS.fence_picket?.h));
+  ok('h_privacy',   WALL_KINDS.fence_privacy?.h === 1800, String(WALL_KINDS.fence_privacy?.h));
+  ok('h_chainlink', WALL_KINDS.fence_chainlink?.h === 1200, String(WALL_KINDS.fence_chainlink?.h));
+  ok('h_hedge',     WALL_KINDS.hedge?.h === 900, String(WALL_KINDS.hedge?.h));
+
+  // === Renderer setup =====================================================
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+  const scene3d = { preset: 'day', floorColor: '#8a7860', floorTex: 'none', wallColor: '#cfd2d6' };
+  const wallY = 2500;
+  const mkFloor = (walls, doors = []) => ({
+    id: 'f1', name: 'T', w: 12000, d: 5000,
+    walls,
+    furniture: [], lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors, windows: [], bg: null, model3d: null, look3d: null, rooms: [],
+  });
+  const fence = (kind) => [{ id: 'w1', kind, points: [{x:500,y:wallY},{x:11500,y:wallY}] }];
+
+  const boxesIn = (grp) => { const a = []; grp.traverse(o => { if (o.isMesh && o.geometry?.type === 'BoxGeometry') a.push(o); }); return a; };
+  const extrudesIn = (grp) => { const a = []; grp.traverse(o => { if (o.isMesh && o.geometry?.type === 'ExtrudeGeometry') a.push(o); }); return a; };
+  const cylsIn = (grp) => { const a = []; grp.traverse(o => { if (o.isMesh && o.geometry?.type === 'CylinderGeometry') a.push(o); }); return a; };
+
+  // === 2. Picket fence: posts (~1100 tall) + many pickets (~1060) =========
+  r.updateFloor(mkFloor(fence('fence_picket')), scene3d);
+  { const bx = boxesIn(r._floorGroup);
+    const posts = bx.filter(m => near(m.geometry.parameters.height, 1100, 2));
+    const pickets = bx.filter(m => near(m.geometry.parameters.height, 1060, 2));
+    ok('picket_posts', posts.length >= 2, String(posts.length));
+    ok('picket_pickets', pickets.length >= 20, String(pickets.length)); }
+
+  // === 3. Privacy fence: solid extrusion at h=1800 ========================
+  r.updateFloor(mkFloor(fence('fence_privacy')), scene3d);
+  { const ex = extrudesIn(r._floorGroup);
+    ok('privacy_solid', ex.length === 1, String(ex.length));
+    let topY = 0;
+    for (const m of ex) { m.geometry.computeBoundingBox(); topY = Math.max(topY, m.geometry.boundingBox.max.y); }
+    ok('privacy_h1800', near(topY, 1800, 2), topY.toFixed(0)); }
+
+  // === 4. Privacy fence WITH a gate → opening splits the run =============
+  const gateOnPrivacy = { id: 'g1', x: 5550, y: wallY, w: 900, rotation: 0, kind: 'gate', entity_id: null };
+  r.updateFloor(mkFloor(fence('fence_privacy'), [gateOnPrivacy]), scene3d);
+  { const ex = extrudesIn(r._floorGroup);
+    ok('privacy_gate_split', ex.length === 2, String(ex.length));
+    // Neither run covers the gate span center (t ≈ 5500 relative to wall start x=500).
+    let coversGate = false;
+    for (const m of ex) { m.geometry.computeBoundingBox(); const bb = m.geometry.boundingBox;
+      if (bb.min.x <= 5000 - 500 + 1 && bb.max.x >= 6000 - 500 - 1) coversGate = true; }
+    ok('privacy_gate_gap', !coversGate); }
+
+  // === 5. Chain-link: semi-transparent MeshBasicMaterial plane + posts ====
+  r.updateFloor(mkFloor(fence('fence_chainlink')), scene3d);
+  { let plane = null; r._floorGroup.traverse(o => {
+      if (o.isMesh && o.material?.type === 'MeshBasicMaterial' && o.geometry?.type === 'PlaneGeometry' && o.material.map) plane = o; });
+    ok('chainlink_plane', !!plane);
+    ok('chainlink_transparent', !!plane && plane.material.transparent === true && plane.material.opacity < 1, plane ? String(plane.material.opacity) : '-');
+    ok('chainlink_doubleside', !!plane && plane.material.side === 2);  // THREE.DoubleSide === 2
+    ok('chainlink_basic_not_toon', !!plane && plane.material.type === 'MeshBasicMaterial');
+    const posts = cylsIn(r._floorGroup);
+    ok('chainlink_posts', posts.length >= 2, String(posts.length)); }
+
+  // === 6. Hedge: green solid extrusion at h=900 + trimmed crown box =======
+  r.updateFloor(mkFloor(fence('hedge')), scene3d);
+  { const ex = extrudesIn(r._floorGroup);
+    ok('hedge_solid', ex.length === 1, String(ex.length));
+    let topY = 0, green = false;
+    for (const m of ex) { m.geometry.computeBoundingBox(); topY = Math.max(topY, m.geometry.boundingBox.max.y);
+      const c = m.material.color; if (c.g > c.r && c.g > c.b) green = true; }
+    ok('hedge_h900', near(topY, 900, 2), topY.toFixed(0));
+    ok('hedge_green', green);
+    // Crown box: a BoxGeometry near the top (height 260) → trimmed-shrub silhouette.
+    const crown = boxesIn(r._floorGroup).filter(m => near(m.geometry.parameters.height, 260, 2));
+    ok('hedge_crown', crown.length >= 1, String(crown.length)); }
+
+  // === 7. Gate panel + swing driven by doorOpenFraction (fake cover) ======
+  // doorOpenFraction pure sanity for the states we drive the gate with.
+  ok('cov_open',   doorOpenFraction({ state: 'open' }) === 1);
+  ok('cov_closed', doorOpenFraction({ state: 'closed' }) === 0);
+  ok('cov_pos50',  near(doorOpenFraction({ state: 'open', attributes: { current_position: 50 } }), 0.5));
+
+  const gate = { id: 'gt', x: 3000, y: wallY, w: 900, rotation: 0, kind: 'gate', entity_id: 'cover.gate' };
+  const hingeOf = () => r._doorGroup.children[0];
+  const gateBoards = () => { const h = hingeOf(); return h.children.filter(c => c.isMesh && !c.userData.outline && c.geometry?.type === 'BoxGeometry'); };
+  const setGate = (state, pos) => {
+    const st = { 'cover.gate': { state, attributes: pos == null ? {} : { current_position: pos } } };
+    r.updateFloor(mkFloor(fence('fence_picket'), [gate]), scene3d);
+    r.updateDoorsWindows([gate], [], id => st[id] || null);
+  };
+  setGate('closed', 0);
+  { const b = gateBoards();
+    ok('gate_boards', b.length >= 4, String(b.length));
+    // Picket-styled: NO single full-door-height (2000) panel box.
+    const tall = b.filter(m => near(m.geometry.parameters.height, 2000, 5));
+    ok('gate_not_solid_door', tall.length === 0, String(tall.length)); }
+  const rClosed = hingeOf().rotation.y;
+  setGate('open', 100);
+  const rOpen = hingeOf().rotation.y;
+  setGate('open', 50);
+  const rHalf = hingeOf().rotation.y;
+  ok('gate_swings_open', Math.abs(rOpen - rClosed) > 0.2, `closed=${rClosed.toFixed(2)} open=${rOpen.toFixed(2)}`);
+  ok('gate_half_between', Math.abs(rHalf - rClosed) > 0.05 && Math.abs(rHalf - rClosed) < Math.abs(rOpen - rClosed),
+     `half=${rHalf.toFixed(2)}`);
+
+  // === 8. Nav: fence run blocks, gate opening stays walkable =============
+  // Gate hinge x=5550 → span center x=6000 (rotation 0: center = x + w/2).
+  const navGate = { id: 'ng', x: 5550, y: wallY, w: 900, rotation: 0, kind: 'gate', entity_id: null };
+  r.updateFloor(mkFloor(fence('fence_privacy'), [navGate]), scene3d);
+  r.applyViewPreset('top');
+  const nav = r._nav;
+  const cellIdx = (wx, wy) => {
+    const cx = Math.max(0, Math.min(nav.nx - 1, Math.floor(wx / nav.cell)));
+    const cy = Math.max(0, Math.min(nav.ny - 1, Math.floor(wy / nav.cell)));
+    return cy * nav.nx + cx;
+  };
+  const blockedAt = (wx, wy) => nav.blocked[cellIdx(wx, wy)] === 1;
+  ok('nav_fence_blocks', blockedAt(2000, wallY), `cell=${cellIdx(2000, wallY)}`);
+  ok('nav_gate_walkable', !blockedAt(6000, wallY), `cell=${cellIdx(6000, wallY)}`);
+
+  const n = results.length, pcount = results.filter(x => x.startsWith('ok')).length;
+  const pass = pcount === n;
+  document.title = `FENCEGATE ${pass ? 'PASS' : 'FAIL'} ${pcount}/${n} ${results.filter(x=>x.startsWith('FAIL')).join(' ')}`;
+  document.body.insertAdjacentHTML('beforeend',
+    `<pre style="position:fixed;left:8px;top:8px;color:#8f8">${document.title}\n${results.join('\n')}</pre>`);
+  r.applyViewPreset('iso');
+ } catch (e) { document.title = 'ERR: ' + (e && e.stack ? e.stack.split('\n').slice(0,4).join(' | ') : e); }
+</script>

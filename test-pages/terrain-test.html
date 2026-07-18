@@ -1,0 +1,236 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>terrain test</title>
+<style>html,body{margin:0;background:#111;color:#ccc;font:12px sans-serif}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<!--
+  Batch T1 — Terrain foundation.
+
+  Pure matrix (geometry.mod.js): groundAreaSkirtBase over nested tiers, hidden
+  areas skipped, sunken negative, highest-wins, non-containing sibling ignored;
+  polygonCentroid interior point.
+
+  Renderer harness (built three-renderer.js):
+   - terrace TOP patch at y = elevationMm + 4;
+   - skirt mesh exists only when elevation ≠ 0;
+   - angled (grass) skirt out-flares vs vertical (rock) for the same poly/elev;
+   - a nested tier's skirt stops at the lower tier's elevation (skirtBase);
+   - _groundYAt returns the terrace height inside the poly / grade (0) outside;
+   - yard-fill underlay patch exists only when Floor.yardFill is set and is
+     punched with wall-loop holes (no triangle centroid inside the loop);
+   - the `ground` layer flag flips the whole group;
+   - a rebuild with a changed elevation re-lands the top patch (dirty-key proxy);
+   - a robot rig re-grounds on a terrace top via _groundYAt (mower hookup).
+
+  Build the geometry bundle next to this file:
+    npx esbuild src/geometry.ts --bundle --format=esm --outfile=<harness>/geometry.mod.js
+  and serve the built renderer chunk (dist/assets/three-renderer.js) alongside.
+-->
+<script type="module">
+  const G = await import('./geometry.mod.js');
+  const mod = await import('./assets/three-renderer.js');
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+
+  const tests = [];
+  const ok = (name, cond, detail) => tests.push({ name, ok: !!cond, detail });
+
+  // ── Pure: groundAreaSkirtBase / polygonCentroid ─────────────────────────
+  const sq = (cx, cy, half) => [
+    { x: cx - half, y: cy - half }, { x: cx + half, y: cy - half },
+    { x: cx + half, y: cy + half }, { x: cx - half, y: cy + half },
+  ];
+  // 3 concentric tiers about (5000,5000): outer@0, mid@600, inner@1200.
+  const outer = { id: 'o', kind: 'grass', points: sq(5000, 5000, 3000), elevationMm: 0 };
+  const mid   = { id: 'm', kind: 'grass', points: sq(5000, 5000, 2000), elevationMm: 600 };
+  const inner = { id: 'i', kind: 'grass', points: sq(5000, 5000, 1000), elevationMm: 1200 };
+  const tiers = [outer, mid, inner];
+  ok('P1 nested inner@1200 skirtBase = mid 600', G.groundAreaSkirtBase(inner, tiers) === 600,
+     `base=${G.groundAreaSkirtBase(inner, tiers)}`);
+  ok('P2 nested mid@600 skirtBase = grade 0', G.groundAreaSkirtBase(mid, tiers) === 0,
+     `base=${G.groundAreaSkirtBase(mid, tiers)}`);
+  // Hidden mid tier is skipped → inner drops to the still-visible outer (0).
+  const midHidden = { ...mid, hidden: true };
+  ok('P3 hidden lower tier skipped', G.groundAreaSkirtBase(inner, [outer, midHidden, inner]) === 0,
+     `base=${G.groundAreaSkirtBase(inner, [outer, midHidden, inner])}`);
+  // Single sunken area → base 0 (skirt rises to grade).
+  const sunk = { id: 's', kind: 'water', points: sq(5000, 5000, 1500), elevationMm: -500 };
+  ok('P4 sunken negative single → base 0', G.groundAreaSkirtBase(sunk, [sunk]) === 0,
+     `base=${G.groundAreaSkirtBase(sunk, [sunk])}`);
+  // Highest-wins: inner@1500 over two containing lowers 600 & 900 → 900.
+  const low600 = { id: 'l6', kind: 'grass', points: sq(5000, 5000, 2500), elevationMm: 600 };
+  const low900 = { id: 'l9', kind: 'grass', points: sq(5000, 5000, 2000), elevationMm: 900 };
+  const in1500 = { id: 'h', kind: 'grass', points: sq(5000, 5000, 1000), elevationMm: 1500 };
+  ok('P5 highest containing lower wins (900)',
+     G.groundAreaSkirtBase(in1500, [low600, low900, in1500]) === 900,
+     `base=${G.groundAreaSkirtBase(in1500, [low600, low900, in1500])}`);
+  // Non-containing lower sibling is ignored.
+  const far600 = { id: 'f6', kind: 'grass', points: sq(500, 500, 400), elevationMm: 600 };
+  ok('P6 non-containing lower ignored → 0',
+     G.groundAreaSkirtBase(in1500, [far600, in1500]) === 0,
+     `base=${G.groundAreaSkirtBase(in1500, [far600, in1500])}`);
+  // polygonCentroid of a square is its center; inside the polygon.
+  const ctr = G.polygonCentroid(sq(5000, 5000, 1000));
+  ok('P7 polygonCentroid is the interior center',
+     Math.abs(ctr.x - 5000) < 1 && Math.abs(ctr.y - 5000) < 1 && G.pointInPolygon(ctr.x, ctr.y, sq(5000, 5000, 1000)),
+     `ctr=(${ctr.x.toFixed(0)},${ctr.y.toFixed(0)})`);
+
+  // ── Renderer harness ────────────────────────────────────────────────────
+  const FW = 12000, FD = 10000;
+  const scene = { preset: 'day', floorColor: '#8a7860', floorTex: 'none', wallColor: '#cfd2d6' };
+  const mkFloor = (groundAreas = [], extra = {}) => ({
+    id: 'f1', name: 'T', w: FW, d: FD, walls: [], furniture: [],
+    lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [], windows: [], bg: null, model3d: null, look3d: null, rooms: [],
+    groundAreas, ...extra,
+  });
+  const skirtsOf = () => r._groundGroup.children.filter(c => c.userData && c.userData.terraceSkirt);
+  const topsOf = () => r._groundGroup.children.filter(c => c.userData && c.userData.terraceTop !== undefined);
+  const yardOf = () => r._groundGroup.children.filter(c => c.userData && c.userData.yardFill);
+  const bboxSize = (mesh) => {
+    mesh.geometry.computeBoundingBox();
+    const b = mesh.geometry.boundingBox;
+    return { x: b.max.x - b.min.x, y: b.max.y - b.min.y, z: b.max.z - b.min.z };
+  };
+
+  // R1: a raised grass terrace tops out at elev + 4.
+  const raised = { id: 'gt', kind: 'grass', points: sq(4000, 4000, 1000), elevationMm: 600 };
+  r.updateFloor(mkFloor([raised]), scene);
+  r.updateGroundAreas([raised]);
+  {
+    const top = topsOf()[0];
+    ok('R1 terrace top y = elevationMm + 4',
+       !!top && top.position.y === 604 && top.userData.terraceTop === 600,
+       `y=${top?.position.y} terraceTop=${top?.userData.terraceTop}`);
+    ok('R2b raised terrace HAS a skirt', skirtsOf().length === 1, `skirts=${skirtsOf().length}`);
+  }
+
+  // R2: a flat (elev 0) area has NO skirt.
+  const flat = { id: 'gf', kind: 'grass', points: sq(4000, 4000, 1000), elevationMm: 0 };
+  r.updateGroundAreas([flat]);
+  ok('R2 flat area (elev 0) has NO skirt', skirtsOf().length === 0, `skirts=${skirtsOf().length}`);
+
+  // R3: angled (grass) skirt out-flares vs vertical (rock) for same poly/elev.
+  const grassT = { id: 'ga', kind: 'grass', points: sq(4000, 4000, 1000), elevationMm: 600 };
+  r.updateGroundAreas([grassT]);
+  const grassSkirtSize = bboxSize(skirtsOf()[0]);
+  const grassAngled = skirtsOf()[0].userData.skirtAngled;
+  const rockT = { id: 'ra', kind: 'rock', points: sq(4000, 4000, 1000), elevationMm: 600 };
+  r.updateGroundAreas([rockT]);
+  const rockSkirtSize = bboxSize(skirtsOf()[0]);
+  const rockAngled = skirtsOf()[0].userData.skirtAngled;
+  ok('R3 angled grass skirt flares wider than vertical rock skirt',
+     grassAngled === true && rockAngled === false &&
+     grassSkirtSize.x > rockSkirtSize.x + 100 && grassSkirtSize.z > rockSkirtSize.z + 100,
+     `grass=${grassSkirtSize.x.toFixed(0)}x${grassSkirtSize.z.toFixed(0)} rock=${rockSkirtSize.x.toFixed(0)}x${rockSkirtSize.z.toFixed(0)}`);
+
+  // R4: nested tiers' skirts each stop at the lower tier's elevation (a DEEP
+  // 3-tier nest: outer@300, mid@600, inner@1200 → skirt bases 0 / 300 / 600).
+  {
+    const dOuter = { id: 'do', kind: 'grass', points: sq(6000, 5000, 2500), elevationMm: 300 };
+    const dMid   = { id: 'dm', kind: 'grass', points: sq(6000, 5000, 1600), elevationMm: 600 };
+    const dInner = { id: 'di', kind: 'grass', points: sq(6000, 5000, 800),  elevationMm: 1200 };
+    r.updateGroundAreas([dOuter, dMid, dInner]);
+    const bases = skirtsOf().map(s => s.userData.skirtBase).sort((a, b) => a - b);
+    // three skirts; the innermost (1200) sits on 600, the mid (600) on 300, the
+    // outer (300) on grade 0.
+    ok('R4 nested skirts stop at the lower tier elevation',
+       bases.length === 3 && bases[0] === 0 && bases[1] === 300 && bases[2] === 600,
+       `bases=[${bases.join(',')}]`);
+  }
+
+  // R5: _groundYAt returns terrace height inside the poly / grade outside.
+  r.updateFloor(mkFloor([raised]), scene);   // raised: sq(4000,4000,1000)@600
+  const yIn = r._groundYAt(4000, 4000);
+  const yOut = r._groundYAt(8000, 8000);
+  ok('R5 _groundYAt = elevation inside / 0 outside', yIn === 600 && yOut === 0,
+     `in=${yIn} out=${yOut}`);
+
+  // R5b: a sunken terrace reads its (negative) top y and a skirt to grade 0.
+  const sunkT = { id: 'st', kind: 'water', points: sq(4000, 4000, 1000), elevationMm: -500 };
+  r.updateFloor(mkFloor([sunkT]), scene);
+  r.updateGroundAreas([sunkT]);
+  {
+    const top = topsOf()[0], skirt = skirtsOf()[0];
+    ok('R5b sunken top y = -496, skirt base 0, _groundYAt = -500',
+       !!top && top.position.y === -496 && !!skirt && skirt.userData.skirtBase === 0 &&
+       r._groundYAt(4000, 4000) === -500,
+       `topY=${top?.position.y} base=${skirt?.userData.skirtBase} gy=${r._groundYAt(4000, 4000)}`);
+  }
+
+  // R6/R7: yard-fill underlay — exists only when set, punched by wall loops.
+  // A closed rectangular wall loop (house) inside the yard.
+  const loopPts = [
+    { x: 3000, y: 3000 }, { x: 7000, y: 3000 }, { x: 7000, y: 6000 },
+    { x: 3000, y: 6000 }, { x: 3000, y: 3000 },
+  ];
+  const walls = [{ id: 'w', points: loopPts, kind: 'full' }];
+  // no yardFill → no yard-fill mesh.
+  r.updateGroundAreas([], undefined, FW, FD, walls);
+  ok('R6 no yard-fill mesh when Floor.yardFill unset', yardOf().length === 0, `yard=${yardOf().length}`);
+  // yardFill grass → exactly one yard-fill mesh at y=2.
+  r.updateGroundAreas([], 'grass', FW, FD, walls);
+  {
+    const yf = yardOf()[0];
+    ok('R6b yard-fill mesh exists (y=2) when set', yardOf().length === 1 && !!yf && yf.position.y === 2,
+       `yard=${yardOf().length} y=${yf?.position.y}`);
+    // Hole check: no yard-fill triangle centroid inside the wall loop.
+    const loop = loopPts.slice(0, 4);
+    const geo = yf.geometry;
+    const pos = geo.getAttribute('position');
+    const idx = geo.getIndex();
+    const readW = (vi) => ({ x: FW / 2 - pos.getX(vi), y: FD / 2 - pos.getY(vi) });
+    const triN = idx ? idx.count / 3 : pos.count / 3;
+    let inLoop = 0;
+    for (let t = 0; t < triN; t++) {
+      const a = idx ? idx.getX(t * 3) : t * 3, b = idx ? idx.getX(t * 3 + 1) : t * 3 + 1, c = idx ? idx.getX(t * 3 + 2) : t * 3 + 2;
+      const wa = readW(a), wb = readW(b), wc = readW(c);
+      const cx = (wa.x + wb.x + wc.x) / 3, cy = (wa.y + wb.y + wc.y) / 3;
+      if (G.pointInPolygon(cx, cy, loop)) inLoop++;
+    }
+    ok('R7 yard-fill is punched with the wall-loop hole', inLoop === 0, `inLoop=${inLoop}/${triN}`);
+  }
+
+  // R8: `ground` layer flag flips the whole group's visibility.
+  r.setLayerVisibility({ ground: false });
+  const hidden = r._groundGroup.visible === false;
+  r.setLayerVisibility({ ground: true });
+  const shown = r._groundGroup.visible === true;
+  ok('R8 ground layer flag hides / shows the group', hidden && shown, `hidden=${hidden} shown=${shown}`);
+
+  // R9: rebuild after an elevation change re-lands the top patch (dirty-key
+  // proxy — three-view folds elevationMm into _keyGround; here we prove the
+  // rebuild output tracks the field).
+  const a900 = { id: 'gt', kind: 'grass', points: sq(4000, 4000, 1000), elevationMm: 900 };
+  r.updateGroundAreas([a900]);
+  ok('R9 rebuild tracks elevation change (top y 904)', topsOf()[0].position.y === 904,
+     `y=${topsOf()[0].position.y}`);
+
+  // R10: a robot rig re-grounds on a terrace top via _groundYAt (mower hookup).
+  r.updateFloor(mkFloor([raised]), scene);   // raised sq(4000,4000,1000)@600
+  const robot = { id: 'rb1', kind: 'mower', x: 4000, y: 4000, w: 600, h: 400, rotation: 0 };
+  const rstate = { rb1: { x: 4000, y: 4000, heading: 0, phase: 0, activity: 'docked', led: '#43a047' } };
+  r.updateRobotRigs([robot], rstate);
+  {
+    const rig = r._robotRigs['rb1'];
+    // docked → bob 0 → group.y === terrain height (600).
+    ok('R10 robot rig re-grounds on the terrace (y=600)',
+       !!rig && Math.abs(rig.group.position.y - 600) < 1e-6,
+       `y=${rig?.group.position.y}`);
+    // off-terrace → grade 0.
+    r.updateRobotRigs([robot], { rb1: { ...rstate.rb1, x: 9000, y: 9000 } });
+    const rig2 = r._robotRigs['rb1'];
+    ok('R10b robot rig at grade off-terrace (y=0)', Math.abs(rig2.group.position.y - 0) < 1e-6,
+       `y=${rig2.group.position.y}`);
+  }
+
+  let pass = 0; const fails = [];
+  for (const t of tests) { if (t.ok) pass++; else fails.push(t.name); }
+  const total = tests.length, allPass = pass === total;
+  const title = allPass ? `TERRAIN PASS ${pass}/${total}` : `TERRAIN FAIL ${pass}/${total} [${fails.join(',')}]`;
+  document.title = title;
+  window.__RESULT__ = { title };
+  document.body.insertAdjacentHTML('beforeend',
+    `<pre style="position:fixed;left:8px;top:8px;color:#8f8">${title}\n` +
+    tests.map(t => `${t.ok ? 'PASS' : 'FAIL'} ${t.name} — ${t.detail ?? ''}`).join('\n') + `</pre>`);
+</script>

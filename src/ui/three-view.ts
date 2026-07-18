@@ -1141,14 +1141,19 @@ export class ThreeView extends LitElement {
         r.updatePresenceZones(pzoneList, id => states[id] || null);
       }
 
-      // Ground / yard covering areas (the "yard" arc): structural only (no bound
-      // state). Rides the `ground` layer. Rebuild on shape / kind / hidden edits.
+      // Ground / yard covering areas (the "yard" arc + T1 terrain): structural
+      // only (no bound state). Rides the `ground` layer. Rebuild on shape / kind /
+      // hidden / elevation edits, on the yard-fill kind, and on wall edits (the
+      // yard-fill patch is the floor rect minus wall loops — configRev covers a
+      // wall/size edit; the wall hash is folded for belt-and-braces).
       const groundList = f.groundAreas ?? [];
-      const keyGround = `${p.configRev}|` + groundList.map(g =>
-        `${g.id}:${g.kind}:${g.hidden ? 'h' : ''}:${g.points.map(v => `${v.x | 0},${v.y | 0}`).join(';')}`).join('|');
+      const wallHash = (f.walls ?? []).map(w =>
+        `${w.kind ?? ''}:${w.points.map(v => `${v.x | 0},${v.y | 0}`).join(',')}`).join(';');
+      const keyGround = `${p.configRev}|${f.yardFill ?? ''}|${f.w | 0}x${f.d | 0}|${wallHash}|` + groundList.map(g =>
+        `${g.id}:${g.kind}:${g.elevationMm ?? 0}:${g.hidden ? 'h' : ''}:${g.points.map(v => `${v.x | 0},${v.y | 0}`).join(';')}`).join('|');
       if (keyGround !== this._keyGround) {
         this._keyGround = keyGround;
-        r.updateGroundAreas(groundList);
+        r.updateGroundAreas(groundList, f.yardFill, f.w, f.d, f.walls ?? []);
       }
 
       // Per-room temperature heat-map (derived visual layer, opt-in). Rides its

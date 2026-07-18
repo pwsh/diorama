@@ -9,7 +9,8 @@ import type { ValueRule, InfoCardFormat } from './value-rules.js';
 
 export interface Vec2 { x: number; y: number; }
 
-export type WallKind = 'full' | 'half' | 'railing' | 'invisible';
+export type WallKind = 'full' | 'half' | 'railing' | 'invisible'
+                     | 'fence_picket' | 'fence_privacy' | 'fence_chainlink' | 'hedge';
 
 export interface Wall {
   id: string;
@@ -505,6 +506,11 @@ export interface GroundArea {
   name?: string;
   points: Vec2[];              // world-mm polygon (3..20 verts)
   kind: GroundKind;
+  elevationMm?: number;        // +raise / −sink relative to grade (0); default 0.
+                               // Terraced: the flat top sits at this height, a
+                               // skirt ring drops to groundAreaSkirtBase(). Nest
+                               // polygons by hand for a multi-tier hill/berm; a
+                               // negative value previews a sunken basin.
   locked?: boolean;            // canvas vertex-drag / delete disabled
   hidden?: boolean;            // per-area hide (plus the whole ground layer toggle)
 }
@@ -524,14 +530,14 @@ export interface VoidArea {
   hidden?: boolean;            // per-void hide (plus the whole ground layer toggle)
 }
 
-export type DoorKind = 'swing' | 'garage';
+export type DoorKind = 'swing' | 'garage' | 'gate';
 
 export interface Door {
   id: string;
   x: number; y: number;        // hinge point in world mm
   w: number;                   // panel length in mm (default 800; garage typically 2400+)
   rotation: number;            // panel direction (closed) in degrees, screen-CW; 0 = panel along +X world
-  kind?: DoorKind;             // 'swing' (default, hinged panel) | 'garage' (segmented overhead door)
+  kind?: DoorKind;             // 'swing' (default, hinged panel) | 'garage' (segmented overhead door) | 'gate' (picket-styled swinging panel on a fence/hedge)
   entity_id: string | null;    // binary_sensor ("on" = open) OR cover.* ('open'/'closed', current_position for partial)
   label?: string;
   localState?: string;         // local control when UNBOUND ('on'=open/'off'); inert once bound. See Planner.effectiveState.
@@ -894,6 +900,9 @@ export interface Floor {
   valves?: ValveFixture[];  // water valve fixtures (open/close from the panel); repairFloor backfills []
   plugs?: PlugFixture[];  // smart plug / outlet fixtures; repairFloor backfills []
   groundAreas?: GroundArea[];  // yard/ground covering polygons; repairFloor backfills []
+  yardFill?: GroundKind;       // opt-in: auto-paint this ground kind over the floor
+                               // rect MINUS every closed wall loop (y=2 underlay).
+                               // Undefined = off (today's void-yard behavior).
   voidAreas?: VoidArea[];  // floor voids / openings (holes cut from the slab); repairFloor backfills []
   infoCards?: InfoCard[];  // generic entity-value / clock plaques; repairFloor backfills []
   actionButtons?: ActionButton[];  // generic action / trigger buttons; repairFloor backfills []

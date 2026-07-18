@@ -1910,6 +1910,29 @@ function drawVacuumMaps(ctx: CanvasRenderingContext2D, p: Planner, view: View): 
 function drawGroundAreas(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
   const dpr = window.devicePixelRatio || 1;
   const f = p.floor();
+  // Yard fill (opt-in): a flat low-priority underlay of the floor rect MINUS
+  // every closed wall loop (even-odd), drawn after the floor slab / before the
+  // ground areas so painted patches + structure sit on top. Gated by the caller
+  // on the `ground` layer (mirrors the 3D y=2 underlay patch).
+  if (f.yardFill) {
+    const col = groundAreaColor({ kind: f.yardFill });
+    const loops = closedWallLoops(f.walls ?? []);
+    ctx.save();
+    ctx.beginPath();
+    const c0 = mmToPx(view, 0, 0), c1 = mmToPx(view, f.w, 0);
+    const c2 = mmToPx(view, f.w, f.d), c3 = mmToPx(view, 0, f.d);
+    ctx.moveTo(c0.x, c0.y); ctx.lineTo(c1.x, c1.y); ctx.lineTo(c2.x, c2.y); ctx.lineTo(c3.x, c3.y); ctx.closePath();
+    for (const loop of loops) {
+      if (loop.length < 3) continue;
+      const a0 = mmToPx(view, loop[0].x, loop[0].y);
+      ctx.moveTo(a0.x, a0.y);
+      for (let i = 1; i < loop.length; i++) { const pt = mmToPx(view, loop[i].x, loop[i].y); ctx.lineTo(pt.x, pt.y); }
+      ctx.closePath();
+    }
+    ctx.fillStyle = hexToRgba(col, f.yardFill === 'water' ? 0.35 : 0.45);
+    ctx.fill('evenodd');
+    ctx.restore();
+  }
   for (const g of f.groundAreas ?? []) {
     if (g.hidden || g.points.length < 3) continue;
     const col = groundAreaColor(g);
@@ -1924,6 +1947,25 @@ function drawGroundAreas(ctx: CanvasRenderingContext2D, p: Planner, view: View):
     ctx.strokeStyle = hexToRgba(col, active ? 0.95 : 0.6);
     ctx.lineWidth = active ? 2 : 1;
     ctx.stroke();
+    // Terrace contour: an inset ring, lighter for a raised tier / darker for a
+    // sunk one — a cheap "this reads as elevation" cue (mirrors the 3D skirt).
+    const elev = g.elevationMm ?? 0;
+    if (elev !== 0 && pts.length >= 3) {
+      let cx = 0, cy = 0;
+      for (const pt of pts) { cx += pt.x; cy += pt.y; }
+      cx /= pts.length; cy /= pts.length;
+      const inset = 4 * dpr;
+      ctx.beginPath();
+      for (let i = 0; i < pts.length; i++) {
+        const dx = pts[i].x - cx, dy = pts[i].y - cy, len = Math.hypot(dx, dy) || 1;
+        const ix = pts[i].x - (dx / len) * inset, iy = pts[i].y - (dy / len) * inset;
+        if (i === 0) ctx.moveTo(ix, iy); else ctx.lineTo(ix, iy);
+      }
+      ctx.closePath();
+      ctx.strokeStyle = elev > 0 ? 'rgba(255,255,255,0.5)' : 'rgba(0,0,0,0.45)';
+      ctx.lineWidth = 1.5 * dpr;
+      ctx.stroke();
+    }
     // Kind label at the centroid.
     const ctr = centroid(g.points);
     const cp = mmToPx(view, ctr.x, ctr.y);
@@ -1931,6 +1973,12 @@ function drawGroundAreas(ctx: CanvasRenderingContext2D, p: Planner, view: View):
     ctx.font = `${11 * dpr}px sans-serif`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillText(g.name?.trim() || groundKindLabel(g.kind), cp.x, cp.y);
+    // Elevation caption on the selected non-zero tier (existing chip idiom).
+    if (active && elev !== 0) {
+      ctx.fillStyle = hexToRgba(elev > 0 ? '#ffe0a0' : '#a0c4ff', 0.95);
+      ctx.font = `bold ${11 * dpr}px sans-serif`;
+      ctx.fillText(`${elev > 0 ? '+' : '−'}${Math.abs(elev)} mm`, cp.x, cp.y + 14 * dpr);
+    }
     // Vertex handles on the active (unlocked) area.
     if (active && !g.locked) {
       for (const pt of pts) {
@@ -2383,7 +2431,12 @@ function drawWalls(ctx: CanvasRenderingContext2D, p: Planner, view: View): void 
     else if (kind === 'railing') { ctx.strokeStyle = '#a4b6c9'; ctx.lineWidth = Math.max(3, wallW * 0.3); }
     else if (kind === 'invisible') {
       ctx.strokeStyle = 'rgba(160,175,192,0.4)'; ctx.lineWidth = 2; ctx.setLineDash([8, 8]);
-    } else { ctx.strokeStyle = '#bfc9d6'; ctx.lineWidth = wallW; }
+    }
+    else if (kind === 'fence_picket') { ctx.strokeStyle = '#b98a52'; ctx.lineWidth = Math.max(3, wallW * 0.35); }
+    else if (kind === 'fence_privacy') { ctx.strokeStyle = '#9c7248'; ctx.lineWidth = wallW; }
+    else if (kind === 'fence_chainlink') { ctx.strokeStyle = '#9aa0a6'; ctx.lineWidth = Math.max(2, wallW * 0.25); }
+    else if (kind === 'hedge') { ctx.strokeStyle = '#3a6a2c'; ctx.lineWidth = wallW * 1.1; }
+    else { ctx.strokeStyle = '#bfc9d6'; ctx.lineWidth = wallW; }
     // Doors / windows sitting on a segment cut visible breaks into it —
     // stroke only the solid sub-intervals.
     for (let i = 0; i < w.points.length - 1; i++) {
@@ -2408,6 +2461,40 @@ function drawWalls(ctx: CanvasRenderingContext2D, p: Planner, view: View): void 
           ctx.lineTo(c1.x + ny * tickHalf, c1.y + nx * tickHalf);
           ctx.stroke();
         }
+      }
+      // Picket fence: dense pale tick marks (denser than railing) → the "slats".
+      if (kind === 'fence_picket') {
+        const tickHalf = Math.max(2, wallW * 0.3);
+        const nx = -uy, ny = ux;
+        ctx.lineWidth = Math.max(1, wallW * 0.15);
+        for (let t = 100; t < L; t += 160) {
+          const c1 = mmToPx(view, A.x + ux * t, A.y + uy * t);
+          ctx.beginPath();
+          ctx.moveTo(c1.x - ny * tickHalf, c1.y - nx * tickHalf);
+          ctx.lineTo(c1.x + ny * tickHalf, c1.y + nx * tickHalf);
+          ctx.stroke();
+        }
+        ctx.lineWidth = Math.max(3, wallW * 0.35);
+      }
+      // Chain-link: a fine cross-hatch (small X marks) → wire mesh.
+      if (kind === 'fence_chainlink') {
+        const pA = mmToPx(view, A.x, A.y), pB = mmToPx(view, B.x, B.y);
+        const pdx = pB.x - pA.x, pdy = pB.y - pA.y, pl = Math.hypot(pdx, pdy) || 1;
+        const sux = pdx / pl, suy = pdy / pl;     // along-wall (pixels)
+        const snx = -suy, sny = sux;              // perpendicular (pixels)
+        const h = Math.max(2, wallW * 0.35);
+        ctx.lineWidth = 1;
+        // Sample every 180 mm; draw an X (two crossed short diagonals).
+        for (let t = 90; t < L; t += 180) {
+          const c1 = mmToPx(view, A.x + ux * t, A.y + uy * t);
+          const d1x = (sux + snx) * h * 0.5, d1y = (suy + sny) * h * 0.5;
+          const d2x = (sux - snx) * h * 0.5, d2y = (suy - sny) * h * 0.5;
+          ctx.beginPath();
+          ctx.moveTo(c1.x - d1x, c1.y - d1y); ctx.lineTo(c1.x + d1x, c1.y + d1y);
+          ctx.moveTo(c1.x - d2x, c1.y - d2y); ctx.lineTo(c1.x + d2x, c1.y + d2y);
+          ctx.stroke();
+        }
+        ctx.lineWidth = Math.max(2, wallW * 0.25);
       }
     }
     ctx.setLineDash([]);
