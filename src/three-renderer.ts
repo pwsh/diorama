@@ -4,13 +4,14 @@ import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
 import { MTLLoader } from 'three/examples/jsm/loaders/MTLLoader.js';
 import type {
   Floor, Sensor, Light, SwitchFixture, MotionSensor, Vec2, HassState,
-  Scene3D, ScenePreset, FloorTexKind, GroundKind, GroundArea, Model3D, Furniture, AvatarKind, WeatherEffectKey,
+  Scene3D, ScenePreset, FloorTexKind, GroundKind, GroundArea, Model3D, Furniture, AvatarKind, WeatherEffectKey, BgTextMode,
 } from './types.js';
 import {
   lightHeight, lightRadius, lightIntensity, lightIconKind, lightRotation, lightLength,
   switchHeight, switchRotation, switchSize,
   motionColor, motionIntensity, hexToInt, bleProxyHeight, BLE_PROXY_DEFAULTS,
   furnitureDef, resolveFurnitureDef, furnitureColor, furnitureCat, isBinKind, binStateIsFull, isSpeakerKind, isRiserKind, doorOpenDeltaDeg,
+  plantThirsty, PLANT_MOISTURE_DEFAULT_THRESHOLD,
   isVehicleKind, evStatusOf, evStatusColor, carChargeState,
   doorOpenFraction, GARAGE_DOOR_H,
   alarmHeight, alarmStateColor, ALARM_DEFAULTS, ALARM_PLATE_DEPTH_MM,
@@ -79,8 +80,18 @@ import {
   resolveDef, resolveAvatar, avatarFromPool,
   registerPack, unregisterPack, setAvatarPacksConfig,
   type AvatarDef, type AvatarPrimitive, type LegacyAvatarKind, type AvatarPackDef,
-  type AvatarPacksConfig, type AvatarPattern,
+  type AvatarPacksConfig, type AvatarPattern, type AvatarDecal,
 } from './avatars.js';
+
+// Reused scratch objects for per-frame two-handed-prop orientation (zero
+// allocation in the updateTargets loop — the two-handed convention re-aims a
+// long hand prop toward the other hand every frame; see _advanceTwoHandProps).
+const _thpAnchor = new THREE.Vector3();
+const _thpOther = new THREE.Vector3();
+const _thpDir = new THREE.Vector3();
+const _thpParentQ = new THREE.Quaternion();
+const _thpQuat = new THREE.Quaternion();
+const _THP_UP = new THREE.Vector3(0, 1, 0);
 
 // All effect-group members ON — the fallback when a stale caller sends a
 // WeatherFxState without the W3 `effects` map (preserves legacy W2 behavior).
@@ -489,6 +500,11 @@ interface Humanoid {
   // Declarative accessories registered for per-frame sway/flap/orbit/spin
   // (captured at build; advanced in _advanceAnimPrims). Undefined = none.
   animPrims?: AnimPrim[];
+  // Two-handed hand props (staff / spear / broom): each mesh is parented to its
+  // anchor hand group and, every frame in _advanceTwoHandProps, re-oriented so
+  // its local +Y aims from the anchor hand toward `otherHand` (both hands grip
+  // it — tracks any pose). Undefined = none. Zero per-frame allocation.
+  twoHandProps?: { mesh: THREE.Object3D; otherHand: THREE.Object3D }[];
   // Humanoid gait cycle (def.humanoid.gait; 'walk' = today's alternating stride).
   gait: 'walk' | 'hop' | 'knuckle';
   // Quadruped ear posing mode (def.quadruped.earAnimate; 'flick' = today's).
@@ -798,6 +814,19 @@ const BUBBLE_ABOVE_PLUMBOB = 460;   // tail tip this far above the plumbob (over
 // visually match the sensor / motion / roamer / person they originated from. No
 // shared resource is touched (the plumbob material is per-rig).
 const PLUMBOB_GREEN = 0x2ee56a;
+// Fan blade top speed at 100% (rev/s). Real fans run ~140–220 RPM (2.3–3.7 rev/s);
+// the old code capped at 1 rev/s which read as sluggish. Pure stylization — real
+// RPM is never knowable (HA only exposes an abstract 0–100 percentage).
+const MAX_FAN_RPS = 2.5;
+// Fan spin easing time-constant (s): a speed change / reverse / spin-down ramps
+// over ~this long rather than snapping (the valve/EV-pulse eased idiom).
+const FAN_SPIN_TAU = 0.5;
+// Plant-droop tuning (soil-moisture "thirsty" foliage sag). Blend eased per frame,
+// keyed by fixture id so it survives _keyFloor rebuilds (appliance-door idiom).
+const PLANT_DROOP_ANGLE = 0.35;      // rad — foliage tip when fully thirsty (~20°)
+const PLANT_DROOP_TAU = 2.2;         // s — slow wilt-in / perk-up (recovery is gradual)
+const PLANT_WILT_COLOR = 0x8a7233;   // olive-brown foliage target at full droop
+const _plantWiltColor = new THREE.Color(PLANT_WILT_COLOR);  // shared (zero per-frame alloc)
 // Name label (phase B3) rides the same per-rig plumbob anchor, a bit lower than
 // the bubble so both coexist over the head (the bubble is offset sideways).
 const NAME_ABOVE_PLUMBOB = 318;
@@ -1037,6 +1066,30 @@ export class ThreeDRenderer {
   private _sunWantOpacity = 0; private _sunOpacityCur = 0;
   private _moonWantOpacity = 0; private _moonOpacityCur = 0;
   private _skyStormDir = new THREE.Vector2(1, 0); // upwind (scene x,z) for horizon darkening
+
+  // ── Playful background text (skywriting / banner plane / grass writing) ────
+  // A short decorative message written INTO the world. Lives in its own group
+  // NEXT TO _skyGroup; rebuilt only under three-view's _keyBgText (text + mode +
+  // storm-hide + floor), per-frame motion in _advanceBgText (zero alloc). The
+  // per-text CanvasTexture is disposed on rebuild (sprite/textPlane dispose
+  // pairing via _disposeSpriteMaps + _clearGroup), so it is in
+  // clearTransientGroups + destroy (unlike the sky, this is cheap + floor-tied).
+  private _bgTextGroup = new THREE.Group();
+  private _bgTextMode: BgTextMode = 'off';
+  private _bgSkySprite: THREE.Sprite | null = null;  // skywriting cloud-letter billboard
+  private _bgSkyBaseX = 0;                            // scene-x center (drifts around it)
+  private _bgSkyPhase = 0;                            // twinkle/drift accumulator (s)
+  private _bgBannerAsm: THREE.Group | null = null;    // plane + prop + trailing banner
+  private _bgBannerText: THREE.Mesh | null = null;    // banner text plane (broadside)
+  private _bgBannerProp: THREE.Object3D | null = null;// spinning prop disc
+  private _bgBannerAngle = 0;                         // orbit angle (rad)
+  private _bgBannerRadius = 0;                        // orbit radius (scene mm)
+  private _bgBannerAlt = 6000;                        // orbit altitude (scene mm)
+  private _bgWindRad = 0;                             // wind blow-toward (plan/scene rad); drives sky drift
+  private _bgWindKmh = 0;
+  // Grass decal world-frame placement (mm) — exposed for the test harness so it
+  // can assert the decal lands OUTSIDE every wall loop + inside the floor rect.
+  private _bgGrassInfo: { cx: number; cy: number; w: number; h: number } | null = null;
   private static readonly SKY_PRESET: Record<ScenePreset, { top: number; bottom: number }> = {
     day:   { top: 0x4a90d9, bottom: 0xbcd9f2 },
     dusk:  { top: 0x2b2450, bottom: 0xff9a5a },
@@ -1110,6 +1163,19 @@ export class ThreeDRenderer {
     wx: number; wy: number; unbound: boolean; hasDoorSensor: boolean; forceOpen?: boolean;
   }[] = [];
   private _applianceDoorBlend: Record<string, number> = {};
+  // Plant foliage pivots for the soil-moisture droop animation. Each thirsty plant
+  // (moisture below threshold, or the unbound demo toggle) eases a per-fixture-id
+  // blend toward 1, tipping each leaf clump / flower stem outward+down along its
+  // radial direction + desaturating the shared leaf material toward wilt-brown.
+  // `thirsty` is resolved at BUILD time (folded into _keyFloor's appliance hash so
+  // a threshold crossing rebuilds); the ease itself is per-frame (appliance-door
+  // idiom). `mat` is the per-piece leaf/stem material (mutated in place, never
+  // shared across plants); `baseY` is the pivot's rest height (sag subtracts).
+  private _plants: {
+    fuId: string; pivot: THREE.Object3D; mat: THREE.MeshToonMaterial;
+    dirX: number; dirZ: number; baseY: number; healthy: THREE.Color; thirsty: boolean;
+  }[] = [];
+  private _plantBlend: Record<string, number> = {};
   // Speaker driver materials that pulse while their bound media_player is
   // playing (a subtle emissive breathe; subwoofers pulse slower + deeper).
   // Registered in _buildFurniture (only when playing → no glow when idle),
@@ -1153,9 +1219,20 @@ export class ThreeDRenderer {
     { hiddenKeys: new Set(), soloKeys: new Set() };
   // Wall-clock of the last updateTargets call — the bed pass derives its own dt.
   private _lastTargetsNow = 0;
-  // Fan rotor groups spun in the render loop. rps ≤ 1 (100% = 1 rev/s).
-  // Angle derives from the absolute clock, so rebuilds don't jump phase.
-  private _fanRotors: { obj: THREE.Object3D; rps: number }[] = [];
+  // Fan rotor groups spun in the render loop. `rps` is the SIGNED NOMINAL/target
+  // speed (rev/s), seeded at build time from the fan entity's `percentage`
+  // attribute (0–100 → 0–MAX_FAN_RPS) and negated when `direction === 'reverse'`;
+  // an off fan seeds 0. `_advanceFanSpin` eases each fan's LIVE velocity toward
+  // this nominal and integrates the angle — so speed changes ramp, a reverse
+  // glides through zero, and turning off spins DOWN instead of hard-stopping.
+  // (The field is named `rps` — not `targetRps` — because the docs-gallery capture
+  // reads `rot.rps` and drives its own absolute-clock spin for the GIF.)
+  private _fanRotors: { obj: THREE.Object3D; id: string; rps: number }[] = [];
+  // Persistent per-fixture-id spin state (velocity + accumulated angle), keyed by
+  // the Light fixture id so it SURVIVES _keyLights rebuilds (which recreate the
+  // rotor group): a rebuild re-seeds targetRps but the live rps/angle carry over,
+  // giving continuous phase + a smooth spin-down/reverse across rebuilds.
+  private _fanSpin: Record<string, { rps: number; angle: number }> = {};
   // Walkable terrain (stairs + landings): humanoids stand on the computed
   // surface height instead of the floor plane.
   private _terrain: { x: number; y: number; w: number; h: number; rotation?: number;
@@ -1309,7 +1386,7 @@ export class ThreeDRenderer {
                     this._groundGroup, this._vacMapGroup,
                     this._lightGroup, this._switchGroup, this._targetGroup, this._ghostGroup,
                     this._transitGroup,
-                    this._gpsGroup, this._weatherGroup, this._skyGroup, this._pulseGroup, this._nowPlayingGroup);
+                    this._gpsGroup, this._weatherGroup, this._skyGroup, this._bgTextGroup, this._pulseGroup, this._nowPlayingGroup);
 
     this._controls = new OrbitControls(this._camera, this._renderer.domElement);
     this._controls.enableDamping = true;
@@ -1903,11 +1980,16 @@ export class ThreeDRenderer {
       this._safetyGroup, this._robotGroup, this._robotRigGroup, this._cameraGroup, this._projGroup, this._valveGroup, this._plugGroup, this._camAlertGroup, this._pzoneGroup,
       this._groundGroup,
       this._lightGroup, this._switchGroup, this._targetGroup, this._ghostGroup,
-      this._pulseGroup, this._nowPlayingGroup,
+      this._pulseGroup, this._nowPlayingGroup, this._bgTextGroup,
     ]) {
       this._disposeSpriteMaps(g);
       this._clearGroup(g);
     }
+    // Background text is cheap + floor-tied — drop its tracking refs so
+    // _advanceBgText can't touch freed geometry before the next updateBgText.
+    this._bgSkySprite = null; this._bgBannerAsm = null;
+    this._bgBannerText = null; this._bgBannerProp = null;
+    this._bgGrassInfo = null; this._bgTextMode = 'off';
     // Vac-map overlay carries explicit CanvasTextures + a glow-material list —
     // tear it down through its dedicated clearer (disposes textures + resets lists).
     this._clearVacMap();
@@ -1957,6 +2039,13 @@ export class ThreeDRenderer {
     this._wallLoops = [];
     this._disposeBedCovers();
     this._fanRotors = [];
+    // Fan spin velocity/phase is per-floor (fixtures differ) — drop it on switch so
+    // a new floor's fans start from rest rather than inheriting a stale rotation.
+    this._fanSpin = {};
+    // Plant droop rigs + their eased blend reset on floor switch (pivots were just
+    // disposed with _floorGroup; the blend map is rebuilt as updateFloor re-registers).
+    this._plants = [];
+    this._plantBlend = {};
     this._terrain = [];
     // updateFloor rebuilds this every call, but null it on floor switch so a
     // stale grid can't briefly route targets against the previous floor.
@@ -2886,6 +2975,9 @@ export class ThreeDRenderer {
     // (keyed by fixture id) so a _keyFloor rebuild re-applies the current door
     // opening without a pop.
     this._applianceDoors = [];
+    // Plant droop pivots are rebuilt here; _plantBlend persists (keyed by fixture
+    // id) so a _keyFloor rebuild re-applies the current droop without a pop.
+    this._plants = [];
     this._speakerPulses = [];
     this._evPulses = [];
     this._tvsByRoom = {};
@@ -2963,12 +3055,14 @@ export class ThreeDRenderer {
         if (mc?.flagEntity && stateProvider) mailLidOpen = stateProvider(mc.flagEntity)?.state === 'on';
       }
       const doorSink: { pivot: THREE.Object3D; axis: 'x' | 'y'; openAngle: number }[] = [];
+      const plantSink: { pivot: THREE.Object3D; mat: THREE.MeshToonMaterial;
+                         dirX: number; dirZ: number; baseY: number; healthy: number }[] = [];
       // "Job done" badge flag (event-focused thought bubbles): from the caller's
       // finished-window provider (Planner.applianceJustFinished). Folded into the
       // appliance hash in three-view so this rebuilds when it flips.
       const jobDone = isAppliance && !!jobDoneProvider && jobDoneProvider(fu.id);
       const grp = this._buildFurniture(fu, f.furniture, customObjects,
-                                       { applianceOn, ledScale, doorSink, tempLabel, binFull, speakerPlaying, biasOn, biasColor,
+                                       { applianceOn, ledScale, doorSink, plantSink, tempLabel, binFull, speakerPlaying, biasOn, biasColor,
                                          vehicleGhost, evCharging, evColor, mailFlagUp, mailLidOpen, mailCountLabel, jobDone });
       this._shadowFlags(grp);
       // Custom-recipe front-arrow indicator: custom objects draw only as a
@@ -2995,6 +3089,31 @@ export class ThreeDRenderer {
           this._applianceDoors.push({
             fuId: fu.id, pivot: dp.pivot, axis: dp.axis, openAngle: dp.openAngle,
             wx: fu.x, wy: fu.y, unbound, hasDoorSensor, forceOpen: fu.doorOpen === true,
+          });
+        }
+      }
+      // Register plant foliage pivots for the soil-moisture droop. Thirsty is
+      // resolved HERE (folded into _keyFloor's appliance hash so a threshold cross
+      // rebuilds); the ease is per-frame. Re-apply the persisted blend so a rebuild
+      // doesn't pop the droop. Bound reading below threshold OR (unbound) the demo
+      // toggle → thirsty.
+      if (plantSink.length) {
+        let thirsty = false;
+        if (fu.moistureEntity && stateProvider) {
+          const rd = parseFloat(stateProvider(fu.moistureEntity)?.state ?? '');
+          const thr = fu.moistureThreshold ?? PLANT_MOISTURE_DEFAULT_THRESHOLD;
+          thirsty = isFinite(rd) ? plantThirsty(rd, thr) : fu.plantDemoThirsty === true;
+        } else {
+          thirsty = fu.plantDemoThirsty === true;
+        }
+        const blend = this._plantBlend[fu.id] ?? 0;
+        for (const ps of plantSink) {
+          ps.pivot.rotation.x = -ps.dirZ * PLANT_DROOP_ANGLE * blend;
+          ps.pivot.rotation.z = ps.dirX * PLANT_DROOP_ANGLE * blend;
+          ps.pivot.position.y = ps.baseY - 40 * blend;
+          this._plants.push({
+            fuId: fu.id, pivot: ps.pivot, mat: ps.mat, dirX: ps.dirX, dirZ: ps.dirZ,
+            baseY: ps.baseY, healthy: new THREE.Color(ps.healthy), thirsty,
           });
         }
       }
@@ -4552,6 +4671,8 @@ export class ThreeDRenderer {
                           customObjects?: ObjectRecipe[],
                           opts?: { applianceOn?: boolean; ledScale?: number;
                                    doorSink?: { pivot: THREE.Object3D; axis: 'x' | 'y'; openAngle: number }[];
+                                   plantSink?: { pivot: THREE.Object3D; mat: THREE.MeshToonMaterial;
+                                                 dirX: number; dirZ: number; baseY: number; healthy: number }[];
                                    tempLabel?: string; binFull?: boolean; speakerPlaying?: boolean;
                                    biasOn?: boolean; biasColor?: number;
                                    vehicleGhost?: boolean; evCharging?: boolean; evColor?: number;
@@ -4927,12 +5048,25 @@ export class ThreeDRenderer {
       case 'plant': {
         const potH = HT * 0.28;
         addCyl(W * 0.32, W * 0.24, potH, this._mat({ color: 0x8d5524, roughness: 0.8 }), 0, potH / 2, 0, 12);
-        const s1 = new THREE.Mesh(new THREE.SphereGeometry(W * 0.42, 10, 8), leaf);
-        s1.position.set(0, HT * 0.7, 0); grp.add(s1);
-        const s2 = new THREE.Mesh(new THREE.SphereGeometry(W * 0.3, 10, 8), leaf);
-        s2.position.set(W * 0.2, HT * 0.5, -W * 0.12); grp.add(s2);
-        const s3 = new THREE.Mesh(new THREE.SphereGeometry(W * 0.26, 10, 8), leaf);
-        s3.position.set(-W * 0.2, HT * 0.55, W * 0.1); grp.add(s3);
+        // Each leaf clump hangs off a pivot anchored at the pot rim so the droop
+        // animation can tip it outward+down (see _advancePlantDroop). The sphere is
+        // offset up from the pivot; the pivot's radial direction (from pot center)
+        // sets the droop axis. plantSink feeds the caller's _plants registration.
+        const clumps = [
+          { r: W * 0.42, x: 0,       y: HT * 0.7,  z: 0 },
+          { r: W * 0.3,  x: W * 0.2,  y: HT * 0.5,  z: -W * 0.12 },
+          { r: W * 0.26, x: -W * 0.2, y: HT * 0.55, z: W * 0.1 },
+        ];
+        for (const c of clumps) {
+          const pivot = new THREE.Group();
+          pivot.position.set(c.x, potH, c.z);
+          const s = new THREE.Mesh(new THREE.SphereGeometry(c.r, 10, 8), leaf);
+          s.position.set(0, c.y - potH, 0);
+          pivot.add(s);
+          grp.add(pivot);
+          const len = Math.hypot(c.x, c.z) || 1;
+          opts?.plantSink?.push({ pivot, mat: leaf, dirX: c.x / len, dirZ: c.z / len, baseY: potH, healthy: 0x4c8c2b });
+        }
         break;
       }
       // ── outdoor / yard objects ──
@@ -4986,11 +5120,21 @@ export class ThreeDRenderer {
           const fx = (Math.random() - 0.5) * W * 0.8;
           const fz = (Math.random() - 0.5) * D * 0.7;
           const fh = Math.max(60, HT - soilH);
-          addCyl(8, 8, fh, stem, fx, soilH + fh / 2, fz, 6);
+          // Stem + flower on a pivot anchored at soil level so the droop bends the
+          // whole stalk outward+down (see _advancePlantDroop) rather than sliding it.
+          const pivot = new THREE.Group();
+          pivot.position.set(fx, soilH, fz);
+          const stemMesh = new THREE.Mesh(new THREE.CylinderGeometry(8, 8, fh, 6), stem);
+          stemMesh.position.set(0, fh / 2, 0);
+          pivot.add(stemMesh);
           const flower = new THREE.Mesh(
             new THREE.SphereGeometry(Math.min(W, D) * 0.08, 8, 6),
             this._mat({ color: petals[i % petals.length], roughness: 0.8 }));
-          flower.position.set(fx, soilH + fh, fz); grp.add(flower);
+          flower.position.set(0, fh, 0);
+          pivot.add(flower);
+          grp.add(pivot);
+          const len = Math.hypot(fx, fz) || 1;
+          opts?.plantSink?.push({ pivot, mat: stem, dirX: fx / len, dirZ: fz / len, baseY: soilH, healthy: 0x2f6d2a });
         }
         break;
       }
@@ -7320,6 +7464,237 @@ export class ThreeDRenderer {
     });
   }
 
+  // ── Playful background text (skywriting / banner plane / grass writing) ────
+  // Rebuilt only under three-view's _keyBgText (text + mode + storm-hide +
+  // floor). All three styles live in _bgTextGroup; per-frame motion is
+  // _advanceBgText (zero allocation). sky/banner are HIDDEN during storm
+  // conditions (pouring/lightning) — they read wrong in a downpour; grass (a
+  // ground decal) stays. Renders in every UI mode (a display prop).
+  updateBgText(text: string | null, mode: BgTextMode,
+               storm: boolean, windRad = 0, windKmh = 0): void {
+    this._disposeSpriteMaps(this._bgTextGroup);
+    this._clearGroup(this._bgTextGroup);
+    this._bgSkySprite = null; this._bgBannerAsm = null;
+    this._bgBannerText = null; this._bgBannerProp = null; this._bgGrassInfo = null;
+    this._bgTextMode = mode;
+    this._bgWindRad = isFinite(windRad) ? windRad : 0;
+    this._bgWindKmh = isFinite(windKmh) ? windKmh : 0;
+    if (mode === 'off' || !text) return;
+    if (storm && (mode === 'sky' || mode === 'banner')) return;  // hide in a downpour
+    const fw = this._fw, fd = this._fd;
+    const diag = Math.hypot(fw, fd);
+
+    if (mode === 'sky') {
+      // One additive-blended camera-facing billboard high in the sky — a
+      // documented flat-material exemption from the _mat toon factory (the glow
+      // is baked canvas shadowBlur, consistent with NoToneMapping).
+      const tex = this._makeBgTextTexture(text, 'sky');
+      const cv = tex.image as HTMLCanvasElement;
+      const spr = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: tex, transparent: true, depthWrite: false, depthTest: true,
+        opacity: 0.9, blending: THREE.AdditiveBlending, fog: false,
+      }));
+      const H = Math.max(2200, diag * 0.22);      // legible regardless of floor size
+      spr.scale.set(H * (cv.width / cv.height), H, 1);
+      spr.position.set(0, Math.max(9000, diag * 0.9), -diag * 0.35);
+      spr.renderOrder = -6;                        // in front of the sky dome (−10)
+      spr.userData.outlineSkip = true;
+      this._bgSkyBaseX = spr.position.x;
+      this._bgSkyPhase = 0;
+      this._bgSkySprite = spr;
+      this._bgTextGroup.add(spr);
+      return;
+    }
+
+    if (mode === 'banner') {
+      // Toy tow-plane (fuselage + wing + tail + spinning prop) towing a wide
+      // trailing text banner. Nose points local −Z (the flight/tangent axis);
+      // the banner's face normal is local +X so it stays broadside-readable.
+      const asm = new THREE.Group();
+      const bodyMat = this._mat({ color: 0xdad7cf });
+      const accent = this._mat({ color: 0xc94f3d });
+      const fuse = new THREE.Mesh(new THREE.BoxGeometry(180, 180, 900), bodyMat);
+      asm.add(fuse);
+      const wing = new THREE.Mesh(new THREE.BoxGeometry(1300, 60, 260), accent);
+      wing.position.set(0, 40, -40); asm.add(wing);
+      const tail = new THREE.Mesh(new THREE.BoxGeometry(520, 50, 150), accent);
+      tail.position.set(0, 60, 420); asm.add(tail);
+      const fin = new THREE.Mesh(new THREE.BoxGeometry(50, 260, 160), bodyMat);
+      fin.position.set(0, 150, 420); asm.add(fin);
+      const prop = new THREE.Mesh(new THREE.CylinderGeometry(360, 360, 24, 16),
+        this._mat({ color: 0x33363b }));
+      prop.rotation.x = Math.PI / 2;              // disc across the flight axis
+      prop.position.set(0, 40, -480);
+      prop.userData.outlineSkip = true;
+      asm.add(prop);
+      this._bgBannerProp = prop;
+
+      const tex = this._makeBgTextTexture(text, 'banner');
+      const cv = tex.image as HTMLCanvasElement;
+      const aspect = cv.width / cv.height;
+      const bh = 1400;
+      const banner = new THREE.Mesh(
+        new THREE.PlaneGeometry(bh * aspect, bh),
+        new THREE.MeshBasicMaterial({ map: tex, side: THREE.DoubleSide, fog: false }));
+      banner.rotation.y = Math.PI / 2;            // normal → local ±X (broadside)
+      banner.position.set(0, 40, 1200 + (bh * aspect) / 2);  // trail behind the tail
+      banner.userData.textPlane = true;           // _disposeSpriteMaps frees its map
+      banner.userData.outlineSkip = true;
+      this._bgBannerText = banner;
+      asm.add(banner);
+
+      this._bgBannerRadius = Math.max(6000, diag * 0.75);
+      this._bgBannerAlt = 6000;                    // ~6 m up, above the roofline
+      this._bgBannerAngle = 0;
+      this._bgBannerAsm = asm;
+      this._bgTextGroup.add(asm);
+      return;
+    }
+
+    // grass — flat text decal on the ground OUTSIDE the wall loops.
+    const gtex = this._makeBgTextTexture(text, 'grass');
+    const gcv = gtex.image as HTMLCanvasElement;
+    const place = this._bgGrassPlacement(gcv.width / gcv.height);
+    this._bgGrassInfo = { cx: place.cx, cy: place.cy, w: place.w, h: place.h };
+    const mesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(place.w, place.h),
+      new THREE.MeshBasicMaterial({ map: gtex, fog: false, depthWrite: false }));
+    mesh.rotation.x = -Math.PI / 2;               // lay flat, text facing up
+    mesh.position.copy(this._w(place.cx, place.cy, 6));  // y≈6 (over ground patches y=4)
+    mesh.renderOrder = 1;
+    mesh.userData.textPlane = true;
+    mesh.userData.outlineSkip = true;
+    this._bgTextGroup.add(mesh);
+  }
+
+  // Bake a message into a CanvasTexture styled per mode. DETERMINISTIC (no
+  // Math.random — sky per-letter wobble is hash-based) so a given text always
+  // paints identically. Freed on rebuild via _disposeSpriteMaps + _clearGroup.
+  private _makeBgTextTexture(text: string, mode: BgTextMode): THREE.CanvasTexture {
+    const cv = document.createElement('canvas');
+    const g = cv.getContext('2d')!;
+    const txt = (text || '').slice(0, 40) || ' ';
+
+    if (mode === 'sky') {
+      const font = '800 96px system-ui, "Segoe UI", sans-serif';
+      g.font = font;
+      const tw = Math.ceil(g.measureText(txt).width);
+      const pad = 90;                             // room for the glow bleed
+      cv.width = tw + pad * 2; cv.height = 240;
+      g.font = font; g.textAlign = 'left'; g.textBaseline = 'middle';
+      g.globalCompositeOperation = 'lighter';     // additive puffy-cloud glow
+      let x = pad;
+      for (const ch of txt) {
+        const w = g.measureText(ch).width;
+        const wob = Math.sin((ch.charCodeAt(0) + x) * 0.017) * 12;   // baked per-letter
+        const cy = cv.height / 2 + wob;
+        for (const [blur, alpha] of [[42, 0.32], [22, 0.5], [8, 0.9]] as const) {
+          g.shadowColor = 'rgba(255,255,255,0.95)'; g.shadowBlur = blur;
+          g.fillStyle = `rgba(250,252,255,${alpha})`;
+          g.fillText(ch, x, cy);
+        }
+        x += w;
+      }
+    } else if (mode === 'banner') {
+      const font = '800 120px system-ui, "Segoe UI", sans-serif';
+      g.font = font;
+      const tw = Math.ceil(g.measureText(txt).width);
+      const h = 200, pad = 70;
+      cv.width = Math.max(tw + pad * 2, h * 4);    // keep the strip wide (≥4:1)
+      cv.height = h;
+      g.font = font;
+      g.fillStyle = '#c0281f'; g.fillRect(0, 0, cv.width, cv.height);   // red mesh banner
+      g.fillStyle = '#f5c400';                     // top/bottom trim stripes
+      g.fillRect(0, 0, cv.width, 12); g.fillRect(0, cv.height - 12, cv.width, 12);
+      g.fillStyle = '#fff7e6'; g.textAlign = 'center'; g.textBaseline = 'middle';
+      g.fillText(txt, cv.width / 2, cv.height / 2 + 4);
+    } else {
+      // grass — mowed-into-the-lawn relief: grass-green base + lighter/darker strokes.
+      const font = '800 130px system-ui, "Segoe UI", sans-serif';
+      g.font = font;
+      const tw = Math.ceil(g.measureText(txt).width);
+      const pad = 70;
+      cv.width = tw + pad * 2; cv.height = 240;
+      g.font = font; g.textAlign = 'center'; g.textBaseline = 'middle';
+      g.fillStyle = '#4f7a34'; g.fillRect(0, 0, cv.width, cv.height);    // base grass
+      g.lineWidth = 10; g.strokeStyle = '#7bab52';                       // mow highlight
+      g.strokeText(txt, cv.width / 2 + 4, cv.height / 2 + 6);
+      g.fillStyle = '#31521d';                                           // darker cut
+      g.fillText(txt, cv.width / 2, cv.height / 2 + 2);
+    }
+    const tex = new THREE.CanvasTexture(cv);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    return tex;
+  }
+
+  // Pick the largest open yard strip AROUND the house footprint (wall-loop bbox)
+  // and fit an aspect-locked text rect inside it. The returned center is always
+  // OUTSIDE the footprint bbox (hence outside every wall loop) and inside the
+  // floor rect — the invariant the test harness asserts. Falls back to a fixed
+  // region when there are no wall loops.
+  private _bgGrassPlacement(aspect: number): { cx: number; cy: number; w: number; h: number } {
+    const fw = this._fw, fd = this._fd;
+    let minX = fw, minY = fd, maxX = 0, maxY = 0, any = false;
+    for (const loop of this._wallLoops) for (const p of loop) {
+      any = true;
+      minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+      minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+    }
+    if (!any) { minX = fw * 0.3; maxX = fw * 0.7; minY = fd * 0.3; maxY = fd * 0.7; }
+    // Four margin strips (clipped to the floor rect); depth = the dimension
+    // perpendicular to the house edge. Widest depth wins.
+    const strips = [
+      { x0: minX, x1: maxX, y0: 0,    y1: minY, depth: minY },        // front (small y)
+      { x0: minX, x1: maxX, y0: maxY, y1: fd,   depth: fd - maxY },   // back
+      { x0: 0,    x1: minX, y0: minY, y1: maxY, depth: minX },        // left
+      { x0: maxX, x1: fw,   y0: minY, y1: maxY, depth: fw - maxX },   // right
+    ].sort((a, b) => b.depth - a.depth);
+    const s = strips[0];
+    const availW = Math.max(1, s.x1 - s.x0), availH = Math.max(1, s.y1 - s.y0);
+    let w = availW * 0.9, h = w / aspect;
+    if (h > availH * 0.85) { h = availH * 0.85; w = h * aspect; }
+    w = Math.min(w, availW * 0.95); h = Math.min(h, availH * 0.95);
+    return {
+      cx: (s.x0 + s.x1) / 2, cy: (s.y0 + s.y1) / 2,
+      w: Math.max(300, w), h: Math.max(150, h),
+    };
+  }
+
+  // Per-frame background-text motion (from _animate, alongside _advanceWeather).
+  // Zero allocation after build — transform + opacity mutation only.
+  private _advanceBgText(dt: number, nowS: number): void {
+    if (this._bgTextMode === 'off') return;
+
+    if (this._bgSkySprite) {
+      // Bounded horizontal drift with the wind + a slow opacity twinkle.
+      this._bgSkyPhase += dt;
+      const amp = Math.max(1500, this._fw * 0.3);
+      const speed = 40 + this._bgWindKmh * 6;                 // mm/s, wind-scaled
+      const dir = Math.cos(this._bgWindRad) >= 0 ? 1 : -1;
+      this._bgSkySprite.position.x = this._bgSkyBaseX +
+        Math.sin(this._bgSkyPhase * speed / amp) * amp * dir;
+      (this._bgSkySprite.material as THREE.SpriteMaterial).opacity =
+        0.72 + 0.2 * (0.5 + 0.5 * Math.sin(this._bgSkyPhase * 1.3));
+      return;
+    }
+
+    if (this._bgBannerAsm) {
+      // Slow horizontal orbit around the floor center at a fixed altitude; the
+      // assembly yaws so its nose (local −Z) tracks the tangent, keeping the
+      // trailing banner (normal = local +X) broadside-readable.
+      const R = this._bgBannerRadius;
+      this._bgBannerAngle = (this._bgBannerAngle + 0.12 * dt) % (Math.PI * 2);
+      const a = this._bgBannerAngle;
+      this._bgBannerAsm.position.set(
+        Math.cos(a) * R, this._bgBannerAlt + Math.sin(nowS * 0.6) * 120, Math.sin(a) * R);
+      const tx = -Math.sin(a), tz = Math.cos(a);               // circle tangent
+      this._bgBannerAsm.rotation.y = Math.atan2(tx, tz) + Math.PI;  // nose (−Z) → tangent
+      if (this._bgBannerProp) this._bgBannerProp.rotation.z = (nowS * 22) % (Math.PI * 2);
+      return;
+    }
+    // grass: static flat decal — no per-frame motion.
+  }
+
   // ── Outdoor weather effects (Feature W, phase W2) ─────────────────────────
   // Rebuilt under three-view's _keyWeather dirty key (condition + intensity
   // bucket + layer flags + configRev). Per-frame motion happens in
@@ -8457,16 +8832,25 @@ export class ThreeDRenderer {
               rotor.add(arm);
             }
             g.add(rotor);
-            // Spin speed: the fan entity's percentage (0–100 → 0–1 rev/s).
-            // Falls back to the primary entity; a plain on/off fan runs full.
+            // Spin speed: the fan entity's `percentage` attribute drives the blade
+            // rate (0–100 → 0–MAX_FAN_RPS). No percentage attr → a plain on/off fan
+            // runs at the legacy fixed 1 rev/s. `direction === 'reverse'` negates the
+            // sign; an off fan targets 0. The per-frame loop eases the LIVE rps toward
+            // this signed target (spin-up ramp / reverse glides through zero / off
+            // spins down) — so we ALWAYS register, even when off, and re-seed the
+            // persistent per-id velocity/angle so a rebuild never pops the phase.
             const spinSt = l.fanEntity ? stateProvider(l.fanEntity) : st;
             const spinOn = spinSt?.state === 'on';
             const sAttrs = (spinSt?.attributes ?? {}) as Record<string, unknown>;
-            const pct = typeof sAttrs.percentage === 'number'
-              ? sAttrs.percentage as number : (spinOn ? 100 : 0);
-            if (spinOn && pct > 0) {
-              this._fanRotors.push({ obj: rotor, rps: Math.min(1, Math.max(0, pct / 100)) });
-            }
+            const hasPct = typeof sAttrs.percentage === 'number';
+            const pct = hasPct ? (sAttrs.percentage as number) : (spinOn ? 100 : 0);
+            const mag = spinOn ? (hasPct ? Math.max(0, Math.min(100, pct)) / 100 * MAX_FAN_RPS : 1) : 0;
+            const nominalRps = sAttrs.direction === 'reverse' ? -mag : mag;
+            this._fanRotors.push({ obj: rotor, id: l.id, rps: nominalRps });
+            // Re-apply the carried-over angle immediately so a rebuild doesn't reset
+            // the visible blade phase to 0 for a frame.
+            const seed = this._fanSpin[l.id];
+            if (seed) rotor.rotation.y = seed.angle;
             if (kind === 'fan_light') {
               const globe = new THREE.Mesh(new THREE.SphereGeometry(140, 16, 12), bodyMat);
               globe.position.y = -170;
@@ -10243,6 +10627,9 @@ export class ThreeDRenderer {
       // Phase 4b: advance animated appendages (sway/flap/orbit/spin) for BOTH rig
       // kinds — the prims are rig-root children, so they inherit scale/visibility.
       if (h.animPrims) this._advanceAnimPrims(h, dt, walking);
+      // Two-handed hand props re-aim between the hands each frame (after the pose
+      // rotations above are written, so hand world positions are current).
+      if (h.twoHandProps) this._advanceTwoHandProps(h);
 
       // Breathing — subtle torso rise/fall, always on.
       h.torso.scale.y = 1 + Math.sin(now * 1.8 + h.idleOffset) * 0.012;
@@ -10624,6 +11011,11 @@ export class ThreeDRenderer {
     // sees this frame's raw target positions + resolved activity anchors.
     this._advanceApplianceDoors(targets, entityOn, ctx, frameDt);
 
+    // ── Plant droop: ease each thirsty plant's foliage toward a wilted pose
+    // (leaf clumps / flower stems tip outward+down + desaturate). Thirsty is
+    // resolved at build time (folded into _keyFloor); this just eases the blend.
+    this._advancePlantDroop(frameDt);
+
     // ── Speaker driver pulse: modulate the emissive intensity of each enrolled
     // (playing) speaker's driver material with a gentle sine. Subwoofers pulse
     // slower + deeper. Zero allocation; the list is rebuilt each updateFloor
@@ -10704,6 +11096,44 @@ export class ThreeDRenderer {
       const next = cur + ((openTarget ? 1 : 0) - cur) * alpha;
       this._applianceDoorBlend[d.fuId] = next;
       d.pivot.rotation[d.axis] = d.openAngle * next;
+    }
+  }
+
+  // Per-frame plant droop. Each registered foliage pivot eases a per-fixture-id
+  // blend (τ = PLANT_DROOP_TAU) toward 1 when its plant is thirsty (resolved at
+  // build time, folded into _keyFloor). The blend tips the clump/stem outward+down
+  // along its radial direction, sags it slightly, and desaturates the (per-piece)
+  // leaf/stem material toward wilt-brown — all mutated in place, no rebuild. Blend
+  // state is keyed by fixture id in _plantBlend so it survives _keyFloor rebuilds.
+  // Per-frame fan blade spin. Ease each fan's LIVE velocity toward its signed
+  // target (rev/s) and INTEGRATE the angle. Integrating (vs deriving from the
+  // absolute clock) is what lets a speed change ramp, a reverse glide through
+  // zero, and an off fan spin DOWN smoothly. State lives in _fanSpin keyed by
+  // fixture id so it carries across _keyLights rebuilds (continuous phase).
+  private _advanceFanSpin(dt: number): void {
+    if (!this._fanRotors.length) return;
+    const alpha = 1 - Math.exp(-dt / FAN_SPIN_TAU);   // eased approach
+    const TWO_PI = 2 * Math.PI;
+    for (const rot of this._fanRotors) {
+      const s = this._fanSpin[rot.id] ?? (this._fanSpin[rot.id] = { rps: 0, angle: 0 });
+      s.rps += (rot.rps - s.rps) * alpha;
+      s.angle = (s.angle + s.rps * TWO_PI * dt) % TWO_PI;
+      rot.obj.rotation.y = s.angle;
+    }
+  }
+
+  private _advancePlantDroop(dt: number): void {
+    if (!this._plants.length) return;
+    const alpha = 1 - Math.exp(-dt / PLANT_DROOP_TAU);
+    const wilt = _plantWiltColor;
+    for (const pl of this._plants) {
+      const cur = this._plantBlend[pl.fuId] ?? 0;
+      const next = cur + ((pl.thirsty ? 1 : 0) - cur) * alpha;
+      this._plantBlend[pl.fuId] = next;
+      pl.pivot.rotation.x = -pl.dirZ * PLANT_DROOP_ANGLE * next;
+      pl.pivot.rotation.z = pl.dirX * PLANT_DROOP_ANGLE * next;
+      pl.pivot.position.y = pl.baseY - 40 * next;
+      pl.mat.color.lerpColors(pl.healthy, wilt, next);
     }
   }
 
@@ -11486,6 +11916,7 @@ export class ThreeDRenderer {
       qBodyY?: number; qBodyH?: number; qFrontZ?: number; qRearZ?: number; qHeadR?: number;
     },
     animOut?: AnimPrim[],   // Phase 4b: animated prims pushed here (base captured)
+    twoHandOut?: { mesh: THREE.Object3D; otherHand: THREE.Object3D }[],  // two-handed props
   ): void {
     const prims = def.accessories;
     if (!prims || !prims.length) return;
@@ -11656,6 +12087,15 @@ export class ThreeDRenderer {
           basePosX: mesh.position.x, basePosY: mesh.position.y, basePosZ: mesh.position.z,
         });
       }
+      // Two-handed prop convention: only meaningful on a hand-anchored prim with
+      // BOTH hand groups present. Register the mesh + the OPPOSITE hand group so
+      // _advanceTwoHandProps can aim the prop's long axis between the two hands
+      // each frame. A missing opposite hand (legless/hover has hands; here it's
+      // only absent if the ctx omitted it) simply skips registration.
+      if (prim.twoHanded && twoHandOut && (prim.anchor === 'handL' || prim.anchor === 'handR')) {
+        const otherHand = prim.anchor === 'handL' ? ctx.handR : ctx.handL;
+        if (otherHand) twoHandOut.push({ mesh, otherHand });
+      }
     }
   }
 
@@ -11760,6 +12200,153 @@ export class ThreeDRenderer {
         case 'spin':
           m.rotation.y = ap.baseRotY + ap.t;   // continuous, monotonic
           break;
+      }
+    }
+  }
+
+  // ── Two-handed hand props (rig-gap batch) ───────────────────────────────────
+  // Re-aim each registered prop so its LONG axis (local +Y) points from the
+  // anchor hand (= mesh.parent) toward the OTHER hand, every frame — so a staff /
+  // spear / broom stays gripped by BOTH hands through walking / sitting /
+  // activity poses (the arm poses move both hands; the prop tracks). Position is
+  // left at the anchor hand (the prim's grip point); only the orientation
+  // changes. Zero allocation: module-scope scratch vectors + quaternions.
+  private _advanceTwoHandProps(h: Humanoid): void {
+    const props = h.twoHandProps;
+    if (!props) return;
+    for (const tp of props) {
+      const anchorHand = tp.mesh.parent;
+      if (!anchorHand) continue;
+      // World positions of both hands (getWorldPosition updates ancestor world
+      // matrices from the just-written pose rotations — valid mid-frame).
+      anchorHand.getWorldPosition(_thpAnchor);
+      tp.otherHand.getWorldPosition(_thpOther);
+      _thpDir.subVectors(_thpOther, _thpAnchor);
+      if (_thpDir.lengthSq() < 1e-6) continue;   // hands coincident — leave as-is
+      _thpDir.normalize();
+      // Express the world direction in the anchor-hand's LOCAL frame (rotate by
+      // the inverse of the parent's world quaternion), then map local +Y onto it.
+      anchorHand.getWorldQuaternion(_thpParentQ);
+      _thpParentQ.invert();
+      _thpDir.applyQuaternion(_thpParentQ).normalize();
+      _thpQuat.setFromUnitVectors(_THP_UP, _thpDir);
+      tp.mesh.quaternion.copy(_thpQuat);
+    }
+  }
+
+  // ── Torso decal planes (rig-gap batch) ──────────────────────────────────────
+  // A crisp canvas-painted quad riding ~8 mm proud of the torso chest (−Z front)
+  // or back (+Z) face — the sanctioned alternative to texturing the flat-toon
+  // body mesh. Painted ONCE at build (per-rig CanvasTexture, freed in
+  // _disposeHumanoid). Material is a flat unlit MeshBasicMaterial — the documented
+  // exemption from the _mat() toon factory (same family as the blob / front-arrow
+  // / pulse decals): the 4-step toon gradient bands muddy fine text/print, so a
+  // flat map keeps the mark legible at camera distance. outlineSkip (a thin sheet
+  // — an inverted-hull shell would z-fight and darken the art). Rig fade / privacy
+  // blur pick it up automatically (parented under the rig root; fade traverses
+  // all materials).
+  private _addDecals(
+    root: THREE.Group, decals: AvatarDecal[],
+    ctx: { color: number; tint: number; torsoW: number; torsoH: number; torsoD: number; torsoY: number; sk: number },
+  ): void {
+    const PROUD = 8 * ctx.sk;
+    for (const d of decals) {
+      const scale = d.scale ?? 1;
+      const w = ctx.torsoW * 0.82 * scale;
+      const hgt = w * 0.7;
+      // Resolve the mark color to a concrete int.
+      const markInt = d.color === 'tint' ? ctx.tint
+        : d.color === 'dark' ? 0x202024
+          : (typeof d.color === 'number' ? d.color : 0xf4f4f6);
+      const tex = this._decalTexture(d, markInt);
+      const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false });
+      const mesh = new THREE.Mesh(new THREE.PlaneGeometry(w, hgt), mat);
+      mesh.userData.outlineSkip = true;
+      mesh.userData.decal = true;   // marks the per-rig map for disposal
+      const back = d.anchor === 'back';
+      // Chest = −Z front face (plane's default +Z normal faces −Z, so rotate π);
+      // back = +Z face (default +Z normal already faces +Z outward).
+      mesh.position.set(0, ctx.torsoY, back ? ctx.torsoD / 2 + PROUD : -(ctx.torsoD / 2 + PROUD));
+      if (!back) mesh.rotation.y = Math.PI;
+      root.add(mesh);
+    }
+  }
+
+  // Paint a decal's CanvasTexture ONCE. Deterministic (no Math.random) so the art
+  // is stable across rebuilds. The canvas is exposed on the texture.image for the
+  // build-test pixel readback.
+  private _decalTexture(d: AvatarDecal, markInt: number): THREE.CanvasTexture {
+    const W = 256, H = 180;
+    const c = document.createElement('canvas');
+    c.width = W; c.height = H;
+    const g = c.getContext('2d')!;
+    const hex = (n: number) => '#' + (n & 0xffffff).toString(16).padStart(6, '0');
+    const mark = hex(markInt);
+    if (d.bg !== undefined) { g.fillStyle = hex(d.bg); g.fillRect(0, 0, W, H); }
+    g.fillStyle = mark;
+    g.strokeStyle = mark;
+    if (d.kind === 'text' || d.kind === 'glyph') {
+      const s = (d.kind === 'text' ? (d.text ?? '') : (d.glyph ?? '')).toString();
+      const txt = d.kind === 'text' ? s.toUpperCase() : s;
+      g.textAlign = 'center';
+      g.textBaseline = 'middle';
+      // Emoji-capable stack; jersey-bold for text. Fit the font so the mark fills
+      // the plane without overflowing (shrink until it measures inside 90% width).
+      let fs = d.kind === 'glyph' ? 150 : 140;
+      const family = '"Noto Color Emoji","Segoe UI Emoji","Apple Color Emoji",Arial,sans-serif';
+      const setFont = () => { g.font = `${d.kind === 'text' ? '900 ' : ''}${fs}px ${family}`; };
+      setFont();
+      while (fs > 12 && g.measureText(txt).width > W * 0.9) { fs -= 6; setFont(); }
+      g.fillText(txt, W / 2, H / 2 + 4);
+    } else {
+      // print: a small deterministic tiled pattern (no Math.random).
+      this._paintPrint(g, W, H, d.print ?? 'dots', mark);
+    }
+    const tex = new THREE.CanvasTexture(c);
+    tex.needsUpdate = true;
+    return tex;
+  }
+
+  // Deterministic print patterns painted onto the decal canvas (dots / stripes /
+  // check / heart-scatter). No Math.random — a fixed grid so the art is stable.
+  private _paintPrint(g: CanvasRenderingContext2D, W: number, H: number, kind: string, mark: string): void {
+    g.fillStyle = mark;
+    g.strokeStyle = mark;
+    if (kind === 'stripes') {
+      const bw = 24;
+      for (let x = -H; x < W; x += bw * 2) {
+        g.beginPath();
+        g.moveTo(x, 0); g.lineTo(x + H, H); g.lineTo(x + H + bw, H); g.lineTo(x + bw, 0);
+        g.closePath(); g.fill();
+      }
+    } else if (kind === 'check') {
+      const n = 6, cw = W / n, ch = H / n;
+      for (let iy = 0; iy < n; iy++) for (let ix = 0; ix < n; ix++) {
+        if ((ix + iy) % 2 === 0) g.fillRect(ix * cw, iy * ch, cw + 0.5, ch + 0.5);
+      }
+    } else if (kind === 'heart-scatter') {
+      const heart = (cx: number, cy: number, s: number) => {
+        g.beginPath();
+        g.moveTo(cx, cy + s * 0.3);
+        g.bezierCurveTo(cx, cy, cx - s, cy - s * 0.1, cx - s, cy + s * 0.35);
+        g.bezierCurveTo(cx - s, cy + s * 0.75, cx, cy + s, cx, cy + s * 1.15);
+        g.bezierCurveTo(cx, cy + s, cx + s, cy + s * 0.75, cx + s, cy + s * 0.35);
+        g.bezierCurveTo(cx + s, cy - s * 0.1, cx, cy, cx, cy + s * 0.3);
+        g.closePath(); g.fill();
+      };
+      const cols = 4, rows = 3, s = 16;
+      for (let iy = 0; iy < rows; iy++) for (let ix = 0; ix < cols; ix++) {
+        const off = iy % 2 ? W / cols / 2 : 0;
+        heart((ix + 0.5) * (W / cols) + off - (iy % 2 ? 0 : 0), (iy + 0.5) * (H / rows), s);
+      }
+    } else {
+      // dots (default)
+      const cols = 6, rows = 4, r = 12;
+      for (let iy = 0; iy < rows; iy++) for (let ix = 0; ix < cols; ix++) {
+        const off = iy % 2 ? W / cols / 2 : 0;
+        g.beginPath();
+        g.arc((ix + 0.5) * (W / cols) + off, (iy + 0.5) * (H / rows), r, 0, Math.PI * 2);
+        g.fill();
       }
     }
   }
@@ -12650,19 +13237,29 @@ export class ThreeDRenderer {
       });
     }
     const animPrims: AnimPrim[] = [];
+    const twoHandProps: { mesh: THREE.Object3D; otherHand: THREE.Object3D }[] = [];
     this._addDeclarativeAccessories(def, root, {
       color, sk, tint: accent, skin, bodyMat, dark,
       HEAD_R, headY, torsoY, hipY, TORSO_D, handL, handR,
       elbowL: leftArm.elbow, elbowR: rightArm.elbow,
       kneeL: leftLeg?.knee, kneeR: rightLeg?.knee, legLowerLen: LEG_LOWER_LEN,
       shoulderY, shoulderX: TORSO_W / 2 + ARM_UPPER_R * 0.7, neckY: torsoY + TORSO_H / 2,
-    }, animPrims);
+    }, animPrims, twoHandProps);
 
     // Deterministic torso pattern (Phase 4a): proud stripes / spots / dapples.
     if (spec.pattern) {
       this._addPattern(root, spec.pattern, id, {
         cx: 0, cy: torsoY, cz: 0,
         hw: TORSO_W / 2, hh: TORSO_H / 2, hd: TORSO_D / 2, sk, quad: false,
+      });
+    }
+
+    // Torso decal planes (rig-gap batch): crisp canvas-painted text/glyph/print
+    // quads riding proud of the chest / back face — the sanctioned way to put
+    // prints & text on a rig WITHOUT texturing the flat-toon body. Cap 2.
+    if (hf.decals && hf.decals.length) {
+      this._addDecals(root, hf.decals.slice(0, 2), {
+        color, tint: color, torsoW: TORSO_W, torsoH: TORSO_H, torsoD: TORSO_D, torsoY, sk,
       });
     }
 
@@ -12703,6 +13300,7 @@ export class ThreeDRenderer {
       posturePitch: def.posture?.pitch ?? 0,
       hover, hoverY: spec.hover ?? 0, sessile, gown,
       animPrims: animPrims.length ? animPrims : undefined,
+      twoHandProps: twoHandProps.length ? twoHandProps : undefined,
       gait: def.humanoid?.gait ?? 'walk',
       earAnim: 'flick',
       chatterNext: 25 + idleOffset / (Math.PI * 2) * 35, chatterT: 0, chatterGlyph: null,
@@ -12776,6 +13374,14 @@ export class ThreeDRenderer {
         // Outline shells share this rig's per-rig clone (h.outlineMat); it's
         // disposed once below, so skip it here (dispose is idempotent anyway).
         const mm0 = m.material as THREE.Material;
+        // Torso decal planes carry a PER-RIG CanvasTexture map (painted once at
+        // build) — free it here (the mesh branch only disposed the material, not
+        // its map). Guarded by userData.decal so we never touch a shared map (the
+        // blob shadow's material references the shared _blobTex — untouched).
+        if (m.userData.decal) {
+          const dm = mm0 as THREE.MeshBasicMaterial;
+          if (dm.map) dm.map.dispose();
+        }
         if (mm0 === h.outlineMat) { /* shared per-rig clone; freed below */ }
         else if (Array.isArray(m.material)) m.material.forEach(mm => mm.dispose());
         else mm0.dispose();
@@ -12818,7 +13424,7 @@ export class ThreeDRenderer {
       this._alarmGroup, this._thermoGroup, this._safetyGroup, this._robotGroup, this._robotRigGroup,
       this._cameraGroup, this._projGroup, this._valveGroup, this._plugGroup, this._camAlertGroup, this._pzoneGroup, this._groundGroup,
       this._lightGroup, this._switchGroup, this._targetGroup, this._gpsGroup, this._weatherGroup,
-      this._skyGroup, this._pulseGroup, this._nowPlayingGroup,
+      this._skyGroup, this._bgTextGroup, this._pulseGroup, this._nowPlayingGroup,
     ]) {
       this._disposeSpriteMaps(g);
       this._clearGroup(g);
@@ -13008,17 +13614,14 @@ export class ThreeDRenderer {
     if (this._controls) this._controls.update();
     // Foreground wall cutaway — cheap per-frame dot products over tagged walls.
     this._updateWallCutaway();
-    // Spin fan rotors — angle from the absolute clock so scene rebuilds
-    // (which recreate rotor groups) never jump the blade phase.
-    if (this._fanRotors.length) {
-      const t = performance.now() / 1000;
-      for (const rot of this._fanRotors) {
-        rot.obj.rotation.y = (t * rot.rps * 2 * Math.PI) % (2 * Math.PI);
-      }
-    }
+    // Spin fan rotors (own method so it's driveable deterministically in tests).
+    this._advanceFanSpin(frameDt);
     // Outdoor weather effects — buffer mutation only (no per-frame allocation);
     // fog easing runs even when the group is hidden (see _advanceWeather).
     this._advanceWeather(frameDt, nowS);
+    // Playful background text — sky drift / twinkle, banner orbit, prop spin.
+    // Zero allocation after build (transform + opacity mutation only).
+    this._advanceBgText(frameDt, nowS);
     // Thermostat vent airflow particles — buffer mutation only (zero allocation).
     this._advanceVents(frameDt);
     // Valetudo cleaning-segment glow pulse — opacity-only on the tracked list.

@@ -28,6 +28,7 @@ import {
   valveOpenness, valveFlowing, plugHeight,
   GROUND_KINDS, groundAreaColor,
   FURNITURE_KINDS, furnitureKind, resolveFurnitureDef, WINDOW_DEFAULTS,
+  isDroopPlant, PLANT_MOISTURE_DEFAULT_THRESHOLD,
   ENV_KINDS, ENV_DEFAULTS, ENV_SCALE_MIN, ENV_SCALE_MAX,
   envKindOf, envColor, envValueText, envHeight, envScale,
   INFO_CARD_MOUNT_DEFAULTS, INFO_CARD_SCALE_MIN, INFO_CARD_SCALE_MAX,
@@ -3780,6 +3781,7 @@ export class Sidebar extends LitElement {
         ${furnitureCat(resolveFurnitureDef(piece, p.store.customObjects)) === 'appliance'
           ? this._powerBindRow(piece, upd) : nothing}
         ${curKind === 'stove' || curKind === 'fridge' ? this._tempBindRow(piece, upd) : nothing}
+        ${isDroopPlant(piece, p.store.customObjects) ? this._moistureBindRow(piece, upd) : nothing}
         ${curKind === 'dishwasher' || curKind === 'washer' || curKind === 'dryer' ||
           curKind === 'stove' || curKind === 'microwave' ? this._jobStateRow(piece, upd) : nothing}
         ${curKind === 'car' || curKind === 'ev_charger' ? this._evChargerRows(piece, upd) : nothing}
@@ -4091,6 +4093,63 @@ export class Sidebar extends LitElement {
         domain: 'sensor',
         onPick: (id: string) => {
           piece.tempEntity = id;
+          this.planner.save();
+          this.planner.emitConfig();
+        },
+      },
+    }));
+  }
+
+  // Soil-moisture bind row for plant/flower_bed (and tend_plant custom recipes):
+  // a sensor.* (device_class 'moisture', or a mislabeled 'humidity' probe) whose
+  // % drives the thirsty droop. Display/animation-only. A threshold input (% below
+  // which the plant droops; default 20) + an unbound "Test thirsty" demo toggle.
+  // Battery badge auto-resolves off the sibling sensor for free (no extra bind).
+  private _moistureBindRow(piece: Furniture, upd: (mut: () => void) => void) {
+    const p = this.planner;
+    const st = piece.moistureEntity && p.hass?.states ? p.hass.states[piece.moistureEntity] : null;
+    const v = st ? parseFloat(st.state) : NaN;
+    const thr = piece.moistureThreshold ?? PLANT_MOISTURE_DEFAULT_THRESHOLD;
+    const thirsty = isFinite(v) && v < thr;
+    return html`
+      <div class="row"><label title="sensor.* soil moisture (device_class 'moisture', or a mislabeled 'humidity' soil probe) — % below the threshold droops the plant. Display only. A sibling battery sensor auto-surfaces a 🔋 badge.">Moisture</label>
+        <span style="font-size:11px;color:${isFinite(v) ? (thirsty ? '#ffca28' : '#7cb342') : 'var(--text-dim)'};flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+          ${piece.moistureEntity ? `${piece.moistureEntity}${isFinite(v) ? ` · ${Math.round(v)}%${thirsty ? ' 💧' : ''}` : ''}` : '— unbound —'}
+        </span>
+      </div>
+      <div style="display:flex;gap:4px;margin-top:4px">
+        <button class="btn" style="flex:1;font-size:11px" @click=${() => this._pickMoistureEntity(piece)}>
+          ${piece.moistureEntity ? 'Rebind' : 'Bind'} moisture…
+        </button>
+        ${piece.moistureEntity ? html`
+          <button class="btn" style="font-size:11px"
+                  @click=${() => upd(() => { piece.moistureEntity = null; })}>Unbind</button>
+        ` : nothing}
+      </div>
+      <div class="row"><label title="% below which the plant is 'thirsty' (droops). Default 20, matching HA's plant integration. Species vary widely.">Thirsty below</label>
+        <input type="number" min="0" max="100" step="1" .value=${String(thr)}
+               style="width:64px;font-size:11px"
+               @change=${(e: Event) => upd(() => {
+                 const n = parseFloat((e.target as HTMLInputElement).value);
+                 piece.moistureThreshold = isFinite(n) ? Math.max(0, Math.min(100, n)) : undefined;
+               })}><span style="font-size:11px;color:var(--text-dim)">%</span>
+      </div>
+      ${!piece.moistureEntity ? html`
+        <button class="btn" style="width:100%;font-size:11px;margin-top:4px"
+                @click=${() => upd(() => { piece.plantDemoThirsty = !piece.plantDemoThirsty; })}>
+          ${piece.plantDemoThirsty ? '💧 Thirsty (demo) — tap to reset' : 'Test thirsty (demo)'}
+        </button>
+      ` : nothing}
+    `;
+  }
+
+  private _pickMoistureEntity(piece: Furniture): void {
+    this.dispatchEvent(new CustomEvent('open-entity-picker', {
+      bubbles: true, composed: true,
+      detail: {
+        domain: 'sensor',
+        onPick: (id: string) => {
+          piece.moistureEntity = id;
           this.planner.save();
           this.planner.emitConfig();
         },

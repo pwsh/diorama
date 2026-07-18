@@ -1,0 +1,176 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>BGTEXT …</title>
+<style>
+  html,body{margin:0;background:#0b0f14;color:#cfd8dc;font:13px/1.4 sans-serif}
+  #c{width:1000px;height:640px}
+  #log{position:fixed;right:8px;top:8px;width:380px;max-height:96vh;overflow:auto;
+       background:#111820;border:1px solid #263340;border-radius:6px;padding:8px 10px;font-size:11px}
+  .pass{color:#69f0ae}.fail{color:#ff5252}.hd{font-weight:bold;margin:2px 0 6px}
+</style>
+<div id="c"></div>
+<div id="log"></div>
+<!--
+  Renderer-harness test for the playful background-text feature (skywriting /
+  banner plane / grass writing). Drives ThreeDRenderer.updateBgText then steps
+  _advanceBgText with a synthesized clock so orbit/drift are deterministic. The
+  pure formatEntityValue path is tested via a bundled module:
+
+    npx esbuild src/value-rules.ts --bundle --format=esm \
+      --outfile=<harness>/value-rules.mod.js
+
+  Everything is synchronous after updateBgText, so reads reflect only manual steps.
+-->
+<script type="module">
+  const mod = await import('./assets/three-renderer.js?v=' + Date.now());
+  const { formatEntityValue } = await import('./value-rules.mod.js?v=' + Date.now());
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+
+  // Floor 12000×8000 with a house loop leaving a clear yard margin (left/right
+  // 3000 mm — the widest) so grass placement has an unambiguous outside-loop spot.
+  const floor = {
+    id: 'f1', name: 'T', w: 12000, d: 8000,
+    walls: [{ id: 'w', points: [
+      { x: 3000, y: 2000 }, { x: 9000, y: 2000 }, { x: 9000, y: 6500 },
+      { x: 3000, y: 6500 }, { x: 3000, y: 2000 } ] }],
+    furniture: [], lights: [], switches: [], sensors: [], motionSensors: [],
+    envSensors: [], doors: [], windows: [], bg: null, model3d: null, look3d: null,
+  };
+  r.updateFloor(floor, { preset: 'day', floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6' });
+  r.applyViewPreset('iso');
+
+  const tests = [];
+  const ok = (name, cond, detail) => tests.push({ name, ok: !!cond, detail: detail ?? '' });
+
+  // Synthesized per-frame advance (like weather-fx-test).
+  let clk = 1000;
+  const step = (n, dt = 1 / 60) => { for (let i = 0; i < n; i++) { clk += dt; r._advanceBgText(dt, clk); } };
+
+  // Standalone ray-cast point-in-polygon (avoids a geometry.ts bundle dep).
+  const pip = (poly, x, y) => {
+    let inside = false;
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+      const a = poly[i], b = poly[j];
+      if (((a.y > y) !== (b.y > y)) &&
+          (x < (b.x - a.x) * (y - a.y) / (b.y - a.y) + a.x)) inside = !inside;
+    }
+    return inside;
+  };
+  // Any bright / non-transparent pixel in the texture canvas (proof it painted).
+  const painted = (tex) => {
+    const cv = tex.image, g = cv.getContext('2d');
+    const d = g.getImageData(0, 0, cv.width, cv.height).data;
+    let lit = 0;
+    for (let i = 0; i < d.length; i += 4) if (d[i + 3] > 40 && (d[i] + d[i + 1] + d[i + 2]) > 60) lit++;
+    return lit;
+  };
+
+  // ── SKY: builds a painted billboard; text change repaints + disposes old tex ──
+  r.updateBgText('HELLO SKY', 'sky', false, 0.3, 15);
+  ok('sky sprite built', !!r._bgSkySprite && r._bgTextGroup.children.length === 1,
+     `children=${r._bgTextGroup.children.length}`);
+  const skyTex = r._bgSkySprite && r._bgSkySprite.material.map;
+  ok('sky texture painted (readback)', skyTex && painted(skyTex) > 200, `lit=${skyTex ? painted(skyTex) : 0}`);
+  // Sky drifts + twinkles across advanced frames (bounded, zero-alloc).
+  const sx0 = r._bgSkySprite.position.x, so0 = r._bgSkySprite.material.opacity;
+  step(120);
+  ok('sky drifts across frames', Math.abs(r._bgSkySprite.position.x - sx0) > 1,
+     `dx=${(r._bgSkySprite.position.x - sx0).toFixed(1)}`);
+  ok('sky twinkles (opacity varies)', Math.abs(r._bgSkySprite.material.opacity - so0) > 1e-3);
+  // Text change → new texture; old one disposed.
+  let disposed = false;
+  const oldDispose = skyTex.dispose.bind(skyTex);
+  skyTex.dispose = () => { disposed = true; oldDispose(); };
+  r.updateBgText('GOODBYE SKY', 'sky', false, 0.3, 15);
+  ok('old sky texture disposed on text change', disposed);
+  ok('sky rebuilt with new texture', r._bgSkySprite && r._bgSkySprite.material.map !== skyTex);
+
+  // ── STORM hides sky + banner (but not grass) ──
+  r.updateBgText('STORMY', 'sky', true, 0, 0);
+  ok('storm hides sky (empty group)', r._bgTextGroup.children.length === 0 && !r._bgSkySprite);
+  r.updateBgText('STORMY', 'banner', true, 0, 0);
+  ok('storm hides banner (empty group)', r._bgTextGroup.children.length === 0 && !r._bgBannerAsm);
+  r.updateBgText('STORMY YARD', 'grass', true, 0, 0);
+  ok('storm keeps grass (ground decal)', r._bgGrassInfo != null && r._bgTextGroup.children.length === 1);
+
+  // ── BANNER: painted trailing banner; orbits + stays broadside ──
+  r.updateBgText('FLY BANNER', 'banner', false, 0, 10);
+  ok('banner assembly built', !!r._bgBannerAsm && !!r._bgBannerText && !!r._bgBannerProp);
+  const banTex = r._bgBannerText.material.map;
+  ok('banner texture painted (readback)', banTex && painted(banTex) > 500, `lit=${banTex ? painted(banTex) : 0}`);
+  const bp0 = r._bgBannerAsm.position.clone();
+  const pr0 = r._bgBannerProp.rotation.z;
+  step(120);
+  const bp1 = r._bgBannerAsm.position.clone();
+  ok('banner orbits (position moves)', bp0.distanceTo(bp1) > 200, `d=${bp0.distanceTo(bp1).toFixed(0)}`);
+  ok('banner circles floor center (radial dist ~R)', (() => {
+    const rad = Math.hypot(bp1.x, bp1.z);
+    return Math.abs(rad - r._bgBannerRadius) < 50;
+  })(), `r=${Math.hypot(bp1.x, bp1.z).toFixed(0)} R=${r._bgBannerRadius.toFixed(0)}`);
+  ok('prop spins', Math.abs(r._bgBannerProp.rotation.z - pr0) > 1e-3);
+  // Banner faces broadside: its face normal (local +X) is roughly HORIZONTAL in
+  // world space (small Y component) — reads from the side, not up/down.
+  r._bgTextGroup.updateMatrixWorld(true);
+  const e = r._bgBannerText.matrixWorld.elements;   // columns are world axes of local x/y/z
+  const nY = e[1];                                   // world-Y of local +X (banner normal)
+  ok('banner broadside (horizontal normal)', Math.abs(nY) < 0.35, `nY=${nY.toFixed(3)}`);
+
+  // ── GRASS: painted decal OUTSIDE every wall loop, INSIDE the floor rect ──
+  r.updateBgText('BACKYARD', 'grass', false, 0, 0);
+  ok('grass decal built + placed', r._bgGrassInfo != null && r._bgTextGroup.children.length === 1,
+     `info=${!!r._bgGrassInfo}`);
+  const gi = r._bgGrassInfo;
+  ok('grass inside floor rect', gi.cx >= 0 && gi.cx <= floor.w && gi.cy >= 0 && gi.cy <= floor.d,
+     `c=(${gi.cx.toFixed(0)},${gi.cy.toFixed(0)})`);
+  const loops = r._wallLoops;
+  ok('at least one wall loop traced', loops.length >= 1, `loops=${loops.length}`);
+  ok('grass center OUTSIDE every wall loop', loops.every(L => !pip(L, gi.cx, gi.cy)));
+  // Whole decal footprint corners also outside the loops + inside the floor.
+  const corners = [
+    { x: gi.cx - gi.w / 2, y: gi.cy - gi.h / 2 }, { x: gi.cx + gi.w / 2, y: gi.cy - gi.h / 2 },
+    { x: gi.cx - gi.w / 2, y: gi.cy + gi.h / 2 }, { x: gi.cx + gi.w / 2, y: gi.cy + gi.h / 2 },
+  ];
+  ok('grass footprint corners outside all loops',
+     corners.every(c => loops.every(L => !pip(L, c.x, c.y))));
+  ok('grass footprint corners inside floor rect',
+     corners.every(c => c.x >= 0 && c.x <= floor.w && c.y >= 0 && c.y <= floor.d));
+  const grassMesh = r._bgTextGroup.children[0];
+  ok('grass texture painted (readback)', grassMesh.material.map && painted(grassMesh.material.map) > 1000,
+     `lit=${grassMesh.material.map ? painted(grassMesh.material.map) : 0}`);
+
+  // ── OFF: nothing renders ──
+  r.updateBgText('IGNORED', 'off', false, 0, 0);
+  ok('mode off → empty group', r._bgTextGroup.children.length === 0 &&
+     !r._bgSkySprite && !r._bgBannerAsm && !r._bgGrassInfo);
+  // Null text also builds nothing.
+  r.updateBgText(null, 'sky', false, 0, 0);
+  ok('null text → empty group', r._bgTextGroup.children.length === 0);
+
+  // ── ENTITY-SOURCED text formats via formatEntityValue (pure path) ──
+  const fmt = (st, f) => formatEntityValue(st, f, { imperial: false, now: new Date() });
+  ok('entity numeric + unit formats', fmt(
+    { state: '21.37', attributes: { unit_of_measurement: '°C' }, entity_id: 'sensor.t' },
+    { decimals: 1 }) === '21.4 °C', `got=${fmt({ state: '21.37', attributes: { unit_of_measurement: '°C' }, entity_id: 'sensor.t' }, { decimals: 1 })}`);
+  ok('entity prefix/suffix formats', fmt(
+    { state: '3', attributes: {}, entity_id: 'sensor.n' },
+    { prefix: '🍕 ', suffix: ' pizzas' }) === '🍕 3 pizzas');
+  ok('entity mapping formats', fmt(
+    { state: 'home', attributes: {}, entity_id: 'person.a' },
+    { mapping: { home: 'Home!' } }) === 'Home!');
+  ok('unavailable entity → em dash', fmt(
+    { state: 'unavailable', attributes: {}, entity_id: 'sensor.x' }, {}) === '—');
+  // A formatted entity string bakes into the sky texture just like static text.
+  r.updateBgText(fmt({ state: 'Welcome home', attributes: {}, entity_id: 'input_text.msg' }, {}), 'sky', false, 0, 0);
+  ok('entity-derived sky text builds', !!r._bgSkySprite && painted(r._bgSkySprite.material.map) > 200);
+
+  // ── report ──────────────────────────────────────────────────────────────
+  const pass = tests.filter(t => t.ok).length, total = tests.length;
+  const allPass = pass === total;
+  const fails = tests.filter(t => !t.ok).map(t => t.name);
+  const title = allPass ? `BGTEXT PASS ${pass}/${total}` : `BGTEXT FAIL ${pass}/${total} [${fails.join(', ')}]`;
+  document.title = title;
+  document.getElementById('log').innerHTML =
+    `<div class="hd ${allPass ? 'pass' : 'fail'}">${title}</div>` +
+    tests.map(t => `<div><span class="${t.ok ? 'pass' : 'fail'}">${t.ok ? 'PASS' : 'FAIL'}</span> ${t.name} <span style="color:#78909c">${t.detail}</span></div>`).join('');
+</script>

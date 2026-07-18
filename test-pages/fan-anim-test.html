@@ -13,9 +13,11 @@
   r.updateFloor(floor, { preset:'day', floorColor:'#b9a88c', floorTex:'none' });
   r.updateLightsSwitches(floor.lights, [], stOf);
   r.setCameraView([2200, 2600, -2600], [3000, 2300, -100]);
-  // Sample rotor angle over time to prove motion
+  // Sample rotor angle across the eased-integration spin. Drive _advanceFanSpin
+  // synchronously (the render loop integrates the same way, but virtual-time
+  // headless fires too few rAF frames to accumulate) to prove the blade moves.
   const rot0 = r._fanRotors.length ? r._fanRotors[0].obj.rotation.y : -1;
-  await new Promise(res => setTimeout(res, 800));
+  for (let i = 0; i < 20; i++) r._advanceFanSpin(0.1);
   const rot1 = r._fanRotors.length ? r._fanRotors[0].obj.rotation.y : -1;
   document.title = `rotors=${r._fanRotors.length} a0=${rot0.toFixed(3)} a1=${rot1.toFixed(3)} moved=${Math.abs(rot1-rot0)>0.05}`;
 </script>

@@ -9,7 +9,7 @@ import { OFFLINE_FLAG_KEY } from '../ha-local.js';
 import type { AvatarDef, AvatarPackDef } from '../avatars.js';
 import { AVATAR_PACK_MANIFEST } from '../avatar-packs/manifest.js';
 import type { Planner } from '../planner.js';
-import type { Floor, HassState, WeatherConfig, WeatherEffectKey, ScenePreset, FloorTexKind, MqttBridgeConfig } from '../types.js';
+import type { Floor, HassState, WeatherConfig, WeatherEffectKey, ScenePreset, FloorTexKind, MqttBridgeConfig, BgTextConfig, BgTextMode } from '../types.js';
 
 // ── Floor settings modal ─────────────────────────────────────────────────
 @customElement('diorama-floor-modal')
@@ -1155,6 +1155,7 @@ export class SettingsDrawer extends LitElement {
       ${check('Sky backdrop', sc.skyBackdrop ?? (p.store.weather != null),
         v => { p.store.scene3d!.skyBackdrop = v; },
         'Gradient sky dome + sun / moon / stars behind the scene (default on when weather is configured)')}
+      ${this._bgTextBlock()}
       <div style="border-top:1px solid var(--border);margin:10px 0 0;padding-top:8px">
         <div class="row" title="Show all dimensions in feet / inches instead of millimetres">
           <label>Imperial units</label>
@@ -1166,6 +1167,57 @@ export class SettingsDrawer extends LitElement {
         </div>
       </div>
     `;
+  }
+
+  // ── Background text (playful skywriting / banner plane / grass writing) ──
+  private _bgTextBlock() {
+    const p = this.planner;
+    const bt = p.store.bgText ?? {};
+    const mode: BgTextMode = bt.mode ?? 'off';
+    const upd = (mut: (x: BgTextConfig) => void) => {
+      const x = (p.store.bgText ??= {});
+      mut(x); p.save(); p.emitConfig(); this.requestUpdate();
+    };
+    const modes: Array<[BgTextMode, string]> = [
+      ['off', 'Off'], ['sky', 'Skywriting (sky)'],
+      ['banner', 'Banner plane'], ['grass', 'Grass writing'],
+    ];
+    return html`
+      <div style="border-top:1px solid var(--border);margin:10px 0 0;padding-top:8px">
+        <div class="row"><label title="A short playful message written into the 3D world">Background text</label>
+          <select .value=${mode}
+                  @change=${(e: Event) => upd(x => { x.mode = (e.target as HTMLSelectElement).value as BgTextMode; })}>
+            ${modes.map(([v, l]) => html`<option value=${v} ?selected=${mode === v}>${l}</option>`)}
+          </select>
+        </div>
+        ${mode !== 'off' ? html`
+          <div class="row"><label>Message</label>
+            <input type="text" placeholder="e.g. Welcome home!" maxlength="40"
+                   .value=${bt.text ?? ''} ?disabled=${!!bt.entityId}
+                   style="flex:1;min-width:0"
+                   @change=${(e: Event) => upd(x => { x.text = (e.target as HTMLInputElement).value; })}>
+          </div>
+          <div class="row" style="margin-top:2px"><label>Entity</label>
+            <span style="font-size:11px;color:var(--text);flex:1;overflow:hidden;
+                         text-overflow:ellipsis;white-space:nowrap">${bt.entityId || '—'}</span>
+            <button class="btn" style="font-size:10px;padding:2px 6px" @click=${() => {
+              this.dispatchEvent(new CustomEvent('open-entity-picker', {
+                bubbles: true, composed: true,
+                detail: { onPick: (id: string) => upd(x => { x.entityId = id; }) },
+              }));
+            }}>🔗</button>
+            ${bt.entityId ? html`<button class="btn" style="font-size:10px;padding:2px 6px;margin-left:4px"
+                   title="Clear the bound entity (use the static message)"
+                   @click=${() => upd(x => { x.entityId = undefined; })}>✕</button>` : nothing}
+          </div>
+          <div style="font-size:10px;color:var(--text-dim);line-height:1.3;margin:2px 0 0">
+            ${bt.entityId
+              ? html`Bound: the entity's state replaces the static message
+                     ${p.bgTextResolved() ? html`— currently "<span style="color:var(--text)">${p.bgTextResolved()}</span>"` : nothing}.`
+              : 'Bind an entity (e.g. an input_text helper) to show its live value instead. Skywriting / banner hide during storms.'}
+          </div>
+        ` : nothing}
+      </div>`;
   }
 
   // ── Weather tab (moved from sidebar "Weather") ──────────────────────────

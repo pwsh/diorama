@@ -174,6 +174,33 @@ mm offset (body-local, **−Z = front**), `rot [x,y,z]` **radians**, `color` hex
 `metalness`/`roughness`, `outlineSkip`, `sphereArc
 [phiStart,phiLength,thetaStart,thetaLength]` (hoods/hair/shells).
 
+### Torso decals & two-handed props (rig-gap batch)
+
+- **`HumanoidFields.decals?: AvatarDecal[]`** (cap **2**) — crisp canvas-painted
+  DECAL PLANES riding ~8 mm proud of the torso `chest` (−Z front) / `back` (+Z)
+  face. **This is the sanctioned way to put prints, text, or a big glyph on a
+  rig — never a texture map on the flat-toon BODY mesh** (the house no-body-
+  texture style is deliberate; decal planes are their own family, like the
+  blob / pulse / front-arrow decals). Shape:
+  `{ kind: 'text'|'glyph'|'print', text?, glyph?, print?: 'dots'|'stripes'|'check'|'heart-scatter', color?: hex|'tint'|'dark', bg?: hex, scale?, anchor?: 'chest'|'back' }`.
+  `text` paints uppercase-jersey (jersey number `'7'`, a word); `glyph` = one big
+  emoji/char; `print` = a deterministic tiled pattern (no `Math.random`). Material
+  is a flat **`MeshBasicMaterial`** (documented `_mat()`-toon exemption — toon
+  banding muddies fine art); `outlineSkip`; the per-rig CanvasTexture is freed in
+  `_disposeHumanoid`. Use for jersey numbers/team emblems, plaid/print shirts
+  (`check`), polka dots, etc.
+- **`AvatarPrimitive.twoHanded?: true`** — valid only on a `handL`/`handR`-
+  anchored prim (a long prop: staff / spear / broom / bat / pole). At build it
+  registers into `h.twoHandProps`; every frame the renderer re-orients it so its
+  LONG axis (local **+Y**) aims from the anchor hand toward the OTHER hand (both
+  hands grip it), tracking any pose (standing / walking / seated / activity). The
+  prim POSITION stays at the anchor hand — author a **single centered**
+  `CylinderGeometry` whose origin is the grip (it passes through the anchor hand,
+  half reaching toward the other). A second offset prim does NOT ride the staff
+  (its position is in the hand-local frame, un-rotated) — model the whole prop as
+  one twoHanded cylinder. Plain one-handed hand props (no flag) stay rigidly
+  gripped in the one hand group as before.
+
 ### Animated appendages & gait (Phase 4b)
 
 - **`AvatarPrimitive.animate {kind, speed?, amp?, phase?}`** — per-frame motion
@@ -204,7 +231,9 @@ mm offset (body-local, **−Z = front**), `rot [x,y,z]` **radians**, `color` hex
 - **Ids**: pack `id` = filename = kebab; member ids `<packId>/<member>`.
 - **IP safety**: stylized geometric homage ONLY — color + silhouette. Labels
   descriptive-generic; character/franchise names live in `//` comments and
-  research docs. No logos, no text/decals, no likeness attempts.
+  research docs. No franchise LOGOS or likeness attempts. Generic decals are OK
+  now (`decals` — a jersey number, a plain star/emblem glyph, a plaid `check`
+  print) as long as they carry no trademarked mark/wordmark.
 - **Tint rule**: give every member a tint (`'tint'`/`'accent'`) surface
   somewhere (trim/sash/stripe) when it doesn't fight the costume — per-sensor
   color coding should survive. Costume-critical colors win.
@@ -215,8 +244,11 @@ mm offset (body-local, **−Z = front**), `rot [x,y,z]` **radians**, `color` hex
   surface (toon banding hatches coplanar faces).
 - **Recipes** (parked rig gaps — approximate, and mark `// approx:`):
   diagonal sash = thin rotated box on `chest`; capes = flattened cone/box on
-  `back`; skirts/gowns = cone at `hip`; flippers = ellipsoid accessories;
-  fabric prints = dominant solid color. **Shipped in Phase 4a (prefer these
+  `back`; skirts/gowns = cone at `hip`; flippers = ellipsoid accessories.
+  **Fabric prints / text / jersey numbers now ship** → `decals` (crisp canvas
+  DECAL PLANES; never a body texture map); **two-handed staffs/brooms** →
+  `AvatarPrimitive.twoHanded` (see the decals & two-handed section above).
+  **Shipped in Phase 4a (prefer these
   over the recipe):** giant flap ears → `ears: 'flap'`; broad hippo/moose
   muzzle → `snoutShape: 'broad'`; stripe/spot/dapple patterns → the
   `pattern` generator (deterministic scatter — not a hand-authored box list);

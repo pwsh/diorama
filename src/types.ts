@@ -122,6 +122,14 @@ export interface Furniture {
                               // false → occupants lie side by side, no blanket lump.
   tempEntity?: string | null; // stove/oven (also fridge): sensor.* temperature reading. Shown as a
                               // small N° chip (2D) + camera-facing sprite (3D). Display only.
+  moistureEntity?: string | null; // plant/flower_bed (or any tend_plant custom recipe): sensor.* soil
+                              // moisture (device_class 'moisture', or a mislabeled 'humidity' probe), %.
+                              // Below moistureThreshold → THIRSTY: 3D foliage droops + desaturates, 2D
+                              // shows a 💧 chip. Display/animation-only — never feeds effectiveState.
+  moistureThreshold?: number; // % below which the plant is "thirsty" (default 20, matching HA's plant
+                              // integration min_moisture default). Per-fixture (species vary widely).
+  plantDemoThirsty?: boolean; // UNBOUND plants only: manual "Test thirsty" toggle so the droop animation
+                              // can be demoed without a real sensor (mirrors SafetySensor's Test button).
   jobStateEntity?: string | null; // appliance "job done" event source (event-focused thought bubbles):
                               // a sensor/binary_sensor to watch (Home Connect operation_state, a
                               // `running` binary_sensor, or a *_program_finished event sensor). When
@@ -960,6 +968,20 @@ export interface Store {
 
   avatarPacks?: Record<string, AvatarPackConfig>;   // per-pack loaded/active/members (avatar packs)
   notes?: string;                    // free-text description of this configuration; shown in Settings ▸ Data; rides export/import
+  bgText?: BgTextConfig;             // playful background text (skywriting / banner plane / grass writing)
+}
+
+// ── Playful background text ───────────────────────────────────────────────
+// A short decorative message written INTO the 3D world (not a UI toast). The
+// displayed string is the bound entity's formatted state (formatEntityValue)
+// when `entityId` is set, else the static `text` (capped ~40 chars). Store-level
+// (property-wide, like Store.weather); MUST be in Planner._loadFromHa's field list.
+export type BgTextMode = 'off' | 'sky' | 'banner' | 'grass';
+export interface BgTextConfig {
+  mode?: BgTextMode;             // off (default) / sky (skywriting) / banner (tow plane) / grass (lawn decal)
+  text?: string;                 // static message (used when no entity is bound)
+  entityId?: string;            // optional bound entity — its formatted state replaces `text`
+  format?: InfoCardFormat;       // formatting for the bound entity's value (precision / unit / mapping / …)
 }
 
 // ── Multiple-configuration registry (Batch B) ─────────────────────────────

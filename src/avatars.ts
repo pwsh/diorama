@@ -73,6 +73,39 @@ export interface AvatarPrimitive {
   // Defaults: speed 2 rad/s; amp = sway 0.3 rad / flap 0.6 rad / orbit 60 mm
   // (spin ignores amp); phase 0.
   animate?: { kind: 'sway' | 'flap' | 'orbit' | 'spin'; speed?: number; amp?: number; phase?: number };
+  // ── Two-handed prop convention (rig-gap batch) ─────────────────────────────
+  // Valid ONLY on a `handL` / `handR`-anchored primitive (a long prop — staff /
+  // spear / broom / bat / pole). At build the prim is registered into
+  // h.twoHandProps; every frame the renderer re-orients it so its LONG axis
+  // (local +Y) aims from the anchor hand toward the OTHER hand (both hands grip
+  // it) — tracking any pose (standing / walking / seated / activity), with zero
+  // per-frame allocation (reused module-scope temp vectors + quaternion). The
+  // prim POSITION stays at the anchor hand; author the geometry so its origin is
+  // the grip point (a centered CylinderGeometry passes through the anchor hand,
+  // half reaching toward the other hand). One-handed hand props (no flag) stay
+  // rigidly gripped in the single hand group as before.
+  twoHanded?: true;
+}
+
+// ── Torso decal (rig-gap batch — crisp canvas-painted DECAL PLANE, NOT a body
+// texture map). House style keeps BODY meshes flat-toon and untextured; prints /
+// text / glyphs ship as a thin plane riding ~8 mm proud of the torso face with a
+// CanvasTexture painted ONCE at build. Cap 2 per rig (HumanoidFields.decals).
+//   'text'  — a short string (jersey number, word), painted uppercase-jersey.
+//   'glyph' — one big emoji / char.
+//   'print' — a small procedurally-tiled pattern (deterministic, no Math.random).
+// `color` resolves against the rig (number hex | 'tint' | 'dark'); `bg` fills a
+// badge background behind the mark; `scale` multiplies the plane size; `anchor`
+// picks the torso face (chest = local −Z front, back = +Z).
+export interface AvatarDecal {
+  kind: 'text' | 'glyph' | 'print';
+  text?: string;
+  glyph?: string;
+  print?: 'dots' | 'stripes' | 'check' | 'heart-scatter';
+  color?: number | 'tint' | 'dark';
+  bg?: number;
+  scale?: number;
+  anchor?: 'chest' | 'back';
 }
 
 // Deterministic coat/skin pattern generator (Phase 4a). A handful of PROUD
@@ -128,6 +161,10 @@ export interface HumanoidFields {
   gown?: boolean;
   // Deterministic proud-primitive pattern scattered on the TORSO (Phase 4a).
   pattern?: AvatarPattern;
+  // Torso decal planes (rig-gap batch): up to 2 crisp canvas-painted quads
+  // (text / glyph / print) riding proud of the chest / back face — the sanctioned
+  // way to put prints & text on a rig WITHOUT texturing the flat-toon body mesh.
+  decals?: AvatarDecal[];
   // ── Phase 4b: gait cycle. Absent / 'walk' = today's alternating human stride
   // (existing members are byte-identical). 'hop' = both legs swing phase-locked
   // in unison with a doubled vertical bounce + tucked arms (rabbit / frog /

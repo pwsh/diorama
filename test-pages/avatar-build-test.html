@@ -588,11 +588,137 @@
       sp ? `${(sp.group.position.x - pw.x).toFixed(1)},${(sp.group.position.z - pw.z).toFixed(1)}` : '-');
   }
 
+  // ── Rig-gap batch: torso decals (text / glyph / print) ─────────────────────
+  mod.ThreeDRenderer.registerAvatarPack({
+    id: 'dc', version: 1, label: 'Decal', path: ['DC'], builtin: true,
+    avatars: [
+      { id: 'dc/text', label: 'Txt', rig: 'humanoid', humanoid: { decals: [
+        { kind: 'text', text: '7', color: 0xf4f4f6, anchor: 'back' } ] } },
+      { id: 'dc/glyph', label: 'Gly', rig: 'humanoid', humanoid: { decals: [
+        { kind: 'glyph', glyph: '★', color: 0x113355, anchor: 'chest', scale: 0.6 } ] } },
+      { id: 'dc/print', label: 'Prn', rig: 'humanoid', humanoid: { decals: [
+        { kind: 'print', print: 'dots', color: 0x446688, anchor: 'chest' } ] } },
+      { id: 'dc/cap', label: 'Cap', rig: 'humanoid', humanoid: { decals: [
+        { kind: 'text', text: 'A', anchor: 'chest' },
+        { kind: 'text', text: 'B', anchor: 'back' },
+        { kind: 'glyph', glyph: '♦', anchor: 'chest' } ] } },
+    ],
+  });
+  const decalPlanes = (rig) => meshes(rig.group).filter(m => m.geometry.type === 'PlaneGeometry' && m.userData.decal);
+  // torsoD adult = 140 → half 70; proud = 8·sk (sk=1) → |z| ≈ 78. torsoY = 1170.
+  const dText = r._buildHumanoid(TINT, 'dc/text');
+  const dtPlanes = decalPlanes(dText);
+  ok('decal text: 1 plane built', dtPlanes.length === 1, `n=${dtPlanes.length}`);
+  ok('decal text: back face z≈+78, torsoY', dtPlanes[0] && near(dtPlanes[0].position.z, 78, 2)
+    && near(dtPlanes[0].position.y, 1170, 2), dtPlanes[0] ? `${dtPlanes[0].position.y.toFixed(0)},${dtPlanes[0].position.z.toFixed(0)}` : '-');
+  ok('decal text: outlineSkip + no rot (back face)', dtPlanes[0] && dtPlanes[0].userData.outlineSkip === true
+    && Math.abs(dtPlanes[0].rotation.y) < 1e-6);
+  ok('decal text: MeshBasic + CanvasTexture map', dtPlanes[0] && dtPlanes[0].material.type === 'MeshBasicMaterial'
+    && !!dtPlanes[0].material.map && dtPlanes[0].material.transparent === true);
+  // Pixel readback: the canvas the CanvasTexture wraps has painted (non-blank) pixels.
+  const paintedPixels = (mesh) => {
+    const cv = mesh.material.map.image;
+    const gg = cv.getContext('2d');
+    const px = gg.getImageData(0, 0, cv.width, cv.height).data;
+    let lit = 0; for (let i = 3; i < px.length; i += 4) if (px[i] > 0) lit++;
+    return lit;
+  };
+  ok('decal text: canvas actually painted', dtPlanes[0] && paintedPixels(dtPlanes[0]) > 50, dtPlanes[0] ? `lit=${paintedPixels(dtPlanes[0])}` : '-');
+
+  const dGlyph = r._buildHumanoid(TINT, 'dc/glyph');
+  const dgPlanes = decalPlanes(dGlyph);
+  ok('decal glyph: chest face z≈-78 + rot.y≈π', dgPlanes[0] && near(dgPlanes[0].position.z, -78, 2)
+    && Math.abs(Math.abs(dgPlanes[0].rotation.y) - Math.PI) < 1e-6,
+    dgPlanes[0] ? `z=${dgPlanes[0].position.z.toFixed(0)} ry=${dgPlanes[0].rotation.y.toFixed(2)}` : '-');
+  ok('decal glyph: scale shrinks plane (< text plane width)', dgPlanes[0] && dtPlanes[0]
+    && dgPlanes[0].geometry.parameters.width < dtPlanes[0].geometry.parameters.width);
+  ok('decal glyph: canvas painted', dgPlanes[0] && paintedPixels(dgPlanes[0]) > 50);
+
+  const dPrint = r._buildHumanoid(TINT, 'dc/print');
+  const dpPlanes = decalPlanes(dPrint);
+  ok('decal print: plane + painted pattern', dpPlanes.length === 1 && paintedPixels(dpPlanes[0]) > 200,
+    dpPlanes[0] ? `lit=${paintedPixels(dpPlanes[0])}` : '-');
+
+  const dCap = r._buildHumanoid(TINT, 'dc/cap');
+  ok('decal cap: ≥3 requested → exactly 2 built', decalPlanes(dCap).length === 2, `n=${decalPlanes(dCap).length}`);
+
+  // Per-rig decal map freed on dispose (probe the 'dispose' event).
+  const dDisp = r._buildHumanoid(TINT, 'dc/text');
+  const dmap = decalPlanes(dDisp)[0].material.map;
+  let mapDisposed = false;
+  dmap.addEventListener('dispose', () => { mapDisposed = true; });
+  r._disposeHumanoid(dDisp);
+  ok('decal: per-rig map disposed on rig dispose', mapDisposed);
+
+  // ── Rig-gap batch: two-handed hand props ───────────────────────────────────
+  mod.ThreeDRenderer.registerAvatarPack({
+    id: 'th', version: 1, label: 'TwoHand', path: ['TH'], builtin: true,
+    avatars: [
+      { id: 'th/staff', label: 'Staff', rig: 'humanoid', humanoid: {}, accessories: [
+        { shape: 'cylinder', size: [16, 16, 1200], anchor: 'handR', color: 0x333333, twoHanded: true } ] },
+      // Plain one-handed prop (no flag) — must stay gripped through a sit blend.
+      { id: 'th/onehand', label: 'One', rig: 'humanoid', humanoid: {}, accessories: [
+        { shape: 'box', size: [40, 220, 40], anchor: 'handR', color: 0x333333 } ] },
+    ],
+  });
+  const staffRig = r._buildHumanoid(TINT, 'th/staff');
+  ok('twoHanded: registered in twoHandProps', staffRig.twoHandProps && staffRig.twoHandProps.length === 1);
+  const staffMesh = staffRig.twoHandProps && staffRig.twoHandProps[0].mesh;
+  ok('twoHanded: mesh parented to a hand group (child of elbow)', staffMesh
+    && staffMesh.parent && staffMesh.parent.parent === staffRig.rightElbow);
+  ok('twoHanded: otherHand is the L hand group (child of L elbow)', staffRig.twoHandProps
+    && staffRig.twoHandProps[0].otherHand.parent === staffRig.leftElbow);
+
+  // Drive a frame so arm poses apply, then verify the staff's long axis (+Y) aims
+  // from the anchor hand toward the other hand within tolerance.
+  fakeNow = realNow(); performance.now = () => fakeNow;
+  for (let i = 0; i < 12; i++) { fakeNow += 16.7;
+    r.updateTargets([{ key: 'staff', x: 2000 + i * 25, y: 2500, color: TINT, avatar: 'th/staff' }], ctx); }
+  const sr = r._humanoids['staff'];
+  sr.group.updateMatrixWorld(true);
+  const sm = sr.twoHandProps[0].mesh;
+  const wpos = (o) => { const e = o.matrixWorld.elements; return [e[12], e[13], e[14]]; };
+  const norm3 = (v) => { const L = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0]/L, v[1]/L, v[2]/L]; };
+  const aW = wpos(sm.parent), oW = wpos(sr.twoHandProps[0].otherHand);
+  const wantDir = norm3([oW[0]-aW[0], oW[1]-aW[1], oW[2]-aW[2]]);
+  // Local +Y axis in world = 2nd column of matrixWorld (elements 4,5,6), normalized.
+  const smE = sm.matrixWorld.elements;
+  const staffAxis = norm3([smE[4], smE[5], smE[6]]);
+  const dot = Math.abs(staffAxis[0]*wantDir[0] + staffAxis[1]*wantDir[1] + staffAxis[2]*wantDir[2]);
+  ok('twoHanded: staff aims between the hands (dot≈1)', dot > 0.98, `dot=${dot.toFixed(3)}`);
+  performance.now = realNow;
+
+  // One-handed prop stays attached through a SIT blend. Add a chair, seat a rig
+  // on it, and confirm the prop keeps its hand-group parent (no detach / double
+  // transform — one-handed props are never in twoHandProps).
+  const chairFloor = { ...floor, furniture: [
+    { id: 'ch1', kind: 'chair', x: 6000, y: 4000, w: 500, h: 500, rotation: 0, entity_id: null },
+  ] };
+  r.updateFloor(chairFloor, { preset: 'day', floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6' });
+  fakeNow = realNow(); performance.now = () => fakeNow;
+  let sitThrew = false;
+  try {
+    for (let i = 0; i < 160; i++) { fakeNow += 16.7;
+      r.updateTargets([{ key: 'oneh', x: 6000, y: 4000, color: TINT, avatar: 'th/onehand' }], ctx); }
+  } catch (e) { sitThrew = true; window.__sitErr = e.stack; }
+  performance.now = realNow;
+  const oh = r._humanoids['oneh'];
+  const ohProp = oh && meshes(oh.group).find(m => m.geometry.type === 'BoxGeometry'
+    && Math.abs(m.geometry.parameters.height - 220) < 0.01);
+  ok('one-hand prop: sit blend engaged (no throw)', !sitThrew && oh && oh.sit > 0.5, oh ? `sit=${oh.sit.toFixed(2)}` : '-');
+  ok('one-hand prop: still gripped in the hand group after sit', ohProp
+    && ohProp.parent && ohProp.parent.parent === oh.rightElbow);
+  oh && oh.group.updateMatrixWorld(true);
+  const ohE = ohProp && ohProp.matrixWorld.elements;
+  ok('one-hand prop: finite world position (not detached/NaN)', ohE
+    && Number.isFinite(ohE[12]) && Number.isFinite(ohE[13]) && Number.isFinite(ohE[14]));
+
   // ── Dispose lifecycle ─────────────────────────────────────────────────────
   let threw = false;
   try {
     for (const rig of [h, cyl, oval, plain, faceless, ghost, limbs, hovDirect, dog, cat, qplain, giraffe, bald, rabbit, paws,
-      compound, tvisor, sleepy, lum, tintEye, lj, lcq, flap, broad, cone, qoval, qsleepy, s1, s2, s3, qspots, plant, coral])
+      compound, tvisor, sleepy, lum, tintEye, lj, lcq, flap, broad, cone, qoval, qsleepy, s1, s2, s3, qspots, plant, coral,
+      dText, dGlyph, dPrint, dCap, staffRig])
       r._disposeSubtree(rig.group);
   } catch (e) { threw = true; }
   ok('_disposeSubtree no-throw', !threw);

@@ -17,6 +17,7 @@ import {
   groundAreaColor, groundKindLabel,
   powerGlowScale,
   hexToRgba, lighten, furnitureKind, furnitureCorners, resolveFurnitureDef, isBinKind, binStateIsFull,
+  isDroopPlant, plantThirsty, PLANT_MOISTURE_DEFAULT_THRESHOLD,
   isVehicleKind, evStatusOf, evStatusColor, evChargePercent, carChargeState,
   isStairsKind, stairChipArrow,
   doorEndpoint, doorOpenDeltaDeg, doorOpenFraction, doorSpanCenter, windowEndpoints, wallCutsForSegment, wallKind,
@@ -2686,6 +2687,31 @@ function drawFurniture(ctx: CanvasRenderingContext2D, p: Planner, view: View,
         ctx.fillRect(center.x - tw / 2, cy - 7 * dpr, tw, 14 * dpr);
         ctx.fillStyle = '#ff8a65';
         ctx.fillText(txt, center.x, cy);
+      }
+    }
+    // Plant thirsty chip (soil moisture): a small 💧 chip near the pot when the
+    // bound moisture reading is below threshold (self-gating like the battery
+    // badge — drawn only when thirsty). Unbound plants show it only via the demo
+    // toggle. Screen-upright like the temp chip.
+    if (isDroopPlant(piece, customObjects)) {
+      let thirsty = false, pctTxt = '';
+      if (piece.moistureEntity && p.hass?.states) {
+        const rd = parseFloat(p.hass.states[piece.moistureEntity]?.state ?? '');
+        const thr = piece.moistureThreshold ?? PLANT_MOISTURE_DEFAULT_THRESHOLD;
+        if (plantThirsty(rd, thr)) { thirsty = true; pctTxt = `${Math.round(rd)}%`; }
+      } else if (!piece.moistureEntity && piece.plantDemoThirsty) {
+        thirsty = true;
+      }
+      if (thirsty) {
+        const label = pctTxt ? `💧${pctTxt}` : '💧';
+        const cy = center.y - Math.max(halfW, halfH) - 8 * dpr;
+        ctx.font = `${11 * dpr}px sans-serif`;
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        const tw = ctx.measureText(label).width + 10 * dpr;
+        ctx.fillStyle = 'rgba(0,0,0,0.65)';
+        ctx.fillRect(center.x - tw / 2, cy - 8 * dpr, tw, 16 * dpr);
+        ctx.fillStyle = '#ffca28';
+        ctx.fillText(label, center.x, cy);
       }
     }
     // EV charge indicator: a bolt (+ SoC % or kW) above a car that is charging —

@@ -1,0 +1,139 @@
+<!doctype html>
+<meta charset="utf-8"><title>fanplant</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<script type="module">
+  // Deterministic harness for fan-spin refinements + plant-droop.
+  // We drive the renderer's advance methods synchronously (no awaits between
+  // driving + reading) so the rAF loop never interleaves — fully deterministic.
+  const mod = await import('./assets/three-renderer.js?v=' + Date.now());
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+
+  const results = [];
+  const ok = (name, cond, extra = '') => results.push({ name, pass: !!cond, extra });
+  const near = (a, b, tol) => Math.abs(a - b) <= tol;
+  const scene3d = { preset: 'day', floorColor: '#b9a88c', floorTex: 'none' };
+  const floorBase = {
+    id: 'f1', name: 'T', w: 6000, d: 5000, walls: [], furniture: [],
+    switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [], windows: [], bg: null, model3d: null,
+  };
+  const drive = (fn, n, dt = 0.1) => { for (let i = 0; i < n; i++) fn(dt); };
+
+  // ── FANS ────────────────────────────────────────────────────────────────
+  const fanLights = [
+    { id: 'LA', x: 1000, y: 1000, fanEntity: 'fan.a', iconKind: 'fan', label: '' },
+    { id: 'LB', x: 2000, y: 1000, fanEntity: 'fan.b', iconKind: 'fan', label: '' },
+    { id: 'LC', x: 3000, y: 1000, fanEntity: 'fan.c', iconKind: 'fan', label: '' },
+    { id: 'LD', x: 4000, y: 1000, fanEntity: 'fan.d', iconKind: 'fan', label: '' },
+  ];
+  let fanStates = {
+    'fan.a': { state: 'on', attributes: { percentage: 100 } },
+    'fan.b': { state: 'on', attributes: { percentage: 25 } },
+    'fan.c': { state: 'on', attributes: { percentage: 100, direction: 'reverse' } },
+    'fan.d': { state: 'on', attributes: { percentage: 100 } },
+  };
+  const fanProv = (id) => fanStates[id] ?? null;
+
+  r._fanSpin = {};
+  r.updateLightsSwitches(fanLights, [], fanProv);
+  drive((dt) => r._advanceFanSpin(dt), 100);   // settle (10 s virtual)
+
+  const rpsA = r._fanSpin['LA'].rps;
+  const rpsB = r._fanSpin['LB'].rps;
+  const rpsC = r._fanSpin['LC'].rps;
+  const rpsD_on = r._fanSpin['LD'].rps;
+
+  // (1) 100% settles near MAX_FAN_RPS (2.5), 25% near a quarter of it.
+  ok('fan_100_speed', near(rpsA, 2.5, 0.15), `rpsA=${rpsA.toFixed(3)}`);
+  ok('fan_25_speed', near(rpsB, 0.625, 0.08), `rpsB=${rpsB.toFixed(3)}`);
+  // (2) rate scales with percentage: 100% ≈ 4× 25%.
+  ok('fan_rate_scales', near(rpsA / rpsB, 4, 0.6), `ratio=${(rpsA / rpsB).toFixed(2)}`);
+  // (3) direction 'reverse' flips the sign (magnitude unchanged).
+  ok('fan_reverse_sign', rpsC < 0 && near(Math.abs(rpsC), 2.5, 0.15), `rpsC=${rpsC.toFixed(3)}`);
+
+  // (4) off → decelerate smoothly, NOT a hard stop. Turning the fan off re-seeds
+  // targetRps=0 but leaves the LIVE rps intact, so it eases DOWN. Read immediately
+  // after the (synchronous) rebuild: rps is still high (no instant stop); the rotor
+  // entry's target is now 0; a few steps later rps has dropped but is still > 0.
+  fanStates = { ...fanStates, 'fan.d': { state: 'off', attributes: {} } };
+  r.updateLightsSwitches(fanLights, [], fanProv);
+  const rpsD_off0 = r._fanSpin['LD'].rps;
+  const targetD = r._fanRotors.find(x => x.id === 'LD').rps;
+  ok('fan_off_not_instant', rpsD_off0 > 1.5 && targetD === 0,
+     `rpsD_off0=${rpsD_off0.toFixed(3)} target=${targetD}`);
+  drive((dt) => r._advanceFanSpin(dt), 3);      // 0.3 s of spin-down
+  const rpsD_off1 = r._fanSpin['LD'].rps;
+  ok('fan_off_eases_down', rpsD_off1 > 0 && rpsD_off1 < rpsD_off0,
+     `rpsD_off1=${rpsD_off1.toFixed(3)} < ${rpsD_off0.toFixed(3)}`);
+  drive((dt) => r._advanceFanSpin(dt), 60);      // long tail
+  ok('fan_off_reaches_zero', r._fanSpin['LD'].rps < 0.05,
+     `rpsD_final=${r._fanSpin['LD'].rps.toFixed(4)}`);
+
+  // ── PLANTS ──────────────────────────────────────────────────────────────
+  const plantFloor = (moisture) => ({
+    ...floorBase,
+    lights: [],
+    furniture: [
+      { id: 'P1', kind: 'plant', x: 1500, y: 3000, w: 400, h: 400, rotation: 0, label: '',
+        moistureEntity: 'sensor.m1', moistureThreshold: 20 },
+      { id: 'P2', kind: 'plant', x: 2500, y: 3000, w: 400, h: 400, rotation: 0, label: '' }, // unbound
+      { id: 'P3', kind: 'plant', x: 3500, y: 3000, w: 400, h: 400, rotation: 0, label: '',
+        moistureEntity: 'sensor.m3', moistureThreshold: 20 },
+      { id: 'FB', kind: 'flower_bed', x: 4500, y: 3000, w: 900, h: 450, rotation: 0, label: '',
+        moistureEntity: 'sensor.m1', moistureThreshold: 20 },
+    ],
+    rooms: [], voidAreas: [], groundAreas: [], presenceZones: [],
+  });
+  const plantProv = (id) => ({
+    'sensor.m1': { state: '10', attributes: {} },   // thirsty (< 20)
+    'sensor.m3': { state: '55', attributes: {} },   // healthy (>= 20)
+  }[id] ?? null);
+
+  const maxRot = (fuId) => {
+    let m = 0;
+    for (const pl of r._plants) if (pl.fuId === fuId)
+      m = Math.max(m, Math.abs(pl.pivot.rotation.x), Math.abs(pl.pivot.rotation.z));
+    return m;
+  };
+  const thirstyOf = (fuId) => (r._plants.find(pl => pl.fuId === fuId) || {}).thirsty;
+
+  r._plantBlend = {};
+  r.updateFloor(plantFloor(10), scene3d, undefined, undefined, plantProv);
+
+  // Thirsty flags resolved at build (these gate the 2D 💧 chip via the same
+  // plantThirsty predicate): P1/FB thirsty, P3 healthy, P2 unbound → not thirsty.
+  ok('plant_thirsty_flag', thirstyOf('P1') === true && thirstyOf('FB') === true,
+     `P1=${thirstyOf('P1')} FB=${thirstyOf('FB')}`);
+  ok('plant_healthy_no_chip', thirstyOf('P3') === false, `P3=${thirstyOf('P3')}`);
+  ok('unbound_plant_unaffected_flag', thirstyOf('P2') === false, `P2=${thirstyOf('P2')}`);
+
+  drive((dt) => r._advancePlantDroop(dt), 40);    // 4 s wilt-in
+  const rotP1 = maxRot('P1');
+  const rotFB = maxRot('FB');
+  const rotP2 = maxRot('P2');
+  const rotP3 = maxRot('P3');
+  // (5) thirsty foliage droops past ~0.2 rad; healthy + unbound stay ~upright.
+  ok('plant_droops', rotP1 > 0.2, `rotP1=${rotP1.toFixed(3)}`);
+  ok('flowerbed_droops', rotFB > 0.2, `rotFB=${rotFB.toFixed(3)}`);
+  ok('unbound_plant_upright', rotP2 < 0.02, `rotP2=${rotP2.toFixed(3)}`);
+  ok('healthy_plant_upright', rotP3 < 0.02, `rotP3=${rotP3.toFixed(3)}`);
+
+  // (6) recovery: moisture back above threshold → foliage perks upright. Rebuild
+  // (re-registers _plants thirsty=false, blend persists) then ease down.
+  const recoverProv = (id) => ({ 'sensor.m1': { state: '55', attributes: {} },
+                                 'sensor.m3': { state: '55', attributes: {} } }[id] ?? null);
+  r.updateFloor(plantFloor(55), scene3d, undefined, undefined, recoverProv);
+  ok('plant_recovers_flag', thirstyOf('P1') === false, `P1=${thirstyOf('P1')}`);
+  drive((dt) => r._advancePlantDroop(dt), 80);    // 8 s perk-up
+  const rotP1r = maxRot('P1');
+  ok('plant_recovers', rotP1r < 0.1, `rotP1r=${rotP1r.toFixed(3)}`);
+
+  // ── report ────────────────────────────────────────────────────────────────
+  const passed = results.filter(x => x.pass).length;
+  const total = results.length;
+  const fails = results.filter(x => !x.pass).map(x => `${x.name}(${x.extra})`).join(' ');
+  document.title = `FANPLANT ${passed === total ? 'PASS' : 'FAIL'} ${passed}/${total}` +
+    (fails ? ` — ${fails}` : '');
+</script>

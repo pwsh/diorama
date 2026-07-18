@@ -1944,6 +1944,25 @@ export function resolveFurnitureDef(f: Furniture, customObjects?: ObjectRecipe[]
   return furnitureDef(f);
 }
 
+// ── Plant health (soil-moisture droop) ────────────────────────────────────────
+// Default "thirsty" threshold, matching HA's core plant integration min_moisture.
+export const PLANT_MOISTURE_DEFAULT_THRESHOLD = 20;
+
+// Which furniture pieces support the moisture-bind / droop feature: the indoor
+// `plant` kind, the outdoor `flower_bed`, and any custom recipe that opts in via
+// `activity: 'tend_plant'`. (bush/tree/pine_tree deliberately excluded in v1 —
+// garden soil is usually a zone/irrigation-level reading, not per-plant.)
+export function isDroopPlant(f: Furniture, customObjects?: ObjectRecipe[]): boolean {
+  if (f.kind === 'plant' || f.kind === 'flower_bed') return true;
+  return resolveFurnitureDef(f, customObjects).activity === 'tend_plant';
+}
+
+// Is the plant thirsty right now? A finite reading below its threshold, OR (only
+// when nothing is bound) the manual demo toggle. Pure — shared by 2D/3D/key.
+export function plantThirsty(reading: number, threshold: number): boolean {
+  return isFinite(reading) && reading < threshold;
+}
+
 // Convert a world delta (dx, dy) into the piece-local frame, where rotation
 // is screen-CW degrees. local +Y stays the "front" (backrest / headboard side).
 export function furnitureWorldToLocal(rotationDeg: number | undefined, dx: number, dy: number): Vec2 {

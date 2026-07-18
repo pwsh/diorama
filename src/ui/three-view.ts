@@ -6,7 +6,7 @@ import { customElement } from './define.js';
 // startup path never downloads it.
 import type { ThreeDRenderer, ZoneWorld, HaloWorld, TargetWorld, ActivityContext,
   GpsPinWorld, GpsLandmarkWorld, GeoEventWorld, WeatherFxState, VacMapEntry } from '../three-renderer.js';
-import { localToWorld, transformVerts, pointInPolygon, sensorColor, hexToInt, motionColor, lightIconKind, furnitureKind, resolveFurnitureDef, furnitureCat, isBinKind, isSpeakerKind, isVehicleKind, isStairsKind, alarmStateColor, valveOpenness, doorSpanCenter } from '../geometry.js';
+import { localToWorld, transformVerts, pointInPolygon, sensorColor, hexToInt, motionColor, lightIconKind, furnitureKind, resolveFurnitureDef, furnitureCat, isBinKind, isSpeakerKind, isVehicleKind, isStairsKind, alarmStateColor, valveOpenness, doorSpanCenter, isDroopPlant, plantThirsty, PLANT_MOISTURE_DEFAULT_THRESHOLD } from '../geometry.js';
 import { compass8 } from '../geo.js';
 import { resolveScenePreset, resolveTimeBucket } from '../time-of-day.js';
 import { conditionIntensity, weatherEffectEnabled, worstAlertSeverity } from '../weather.js';
@@ -618,6 +618,7 @@ export class ThreeView extends LitElement {
   private _keyGhost = '';
   private _keyGps = '';
   private _keyWeather = '';
+  private _keyBgText = '';
   // Tier 2 glass-house transit puppets already triggered (`${personId}:${at}`) so
   // one transit spawns at most one puppet. Runtime-only; grows negligibly.
   private _spawnedPuppets = new Set<string>();
@@ -643,7 +644,7 @@ export class ThreeView extends LitElement {
         this._keyGround = '';
         this._keyVacMap = '';
         this._keyLights = this._keyZones = this._keyHalos = '';
-        this._keyGhost = this._keyGps = this._keyWeather = '';
+        this._keyGhost = this._keyGps = this._keyWeather = this._keyBgText = '';
         this._trigPrevOn.clear();
         this._actionTrigAt.clear();
         this._recentTrigs.length = 0;
@@ -685,7 +686,12 @@ export class ThreeView extends LitElement {
         // carry bound state that drives their 3D build — fold them in too.
         const hasEvMail = isVehicleKind(fu.kind) || fu.kind === 'ev_charger' ||
           fu.kind === 'mailbox' || !!fu.evCharger || !!fu.mailCount;
-        if (furnitureCat(def) !== 'appliance' && !isBinKind(fu.kind) && !isSpeakerKind(fu.kind) && !hasEvMail) return '';
+        // Plant droop (#soil moisture): a bound (or demo-toggled) plant folds its
+        // thirsty flip so the 3D foliage rebuild re-seeds the droop target (the ease
+        // itself is per-frame). Unbound plants with no demo toggle never qualify.
+        const isPlant = isDroopPlant(fu, p.store.customObjects) &&
+          (!!fu.moistureEntity || fu.plantDemoThirsty !== undefined);
+        if (furnitureCat(def) !== 'appliance' && !isBinKind(fu.kind) && !isSpeakerKind(fu.kind) && !hasEvMail && !isPlant) return '';
         const on = p.effectiveState(fu)?.state ?? '-';
         const door = fu.doorEntity ? stOf(fu.doorEntity) : '';
         // Per-device power glow (#8): bucket the live power reading to 50 W so the
@@ -731,7 +737,15 @@ export class ThreeView extends LitElement {
         // finished-window flag drives a blue emissive badge built inside
         // updateFloor, so fold it in — no new dirty key (research §D).
         const jd = p.applianceJustFinished(fu) ? 1 : 0;
-        return `${fu.id}:${on}:${door}:${pw}:${tp}:${fu.doorOpen ? 1 : 0}:${bias}:${ev}:${mail}:${jd}`;
+        // Plant thirsty flag ('t' thirsty / 'h' healthy / 'x' no reading, or the
+        // unbound demo toggle) — a boolean so it only flips on a threshold crossing.
+        let moist = '';
+        if (isPlant) {
+          const rd = fu.moistureEntity ? parseFloat(states[fu.moistureEntity]?.state ?? '') : NaN;
+          const thr = fu.moistureThreshold ?? PLANT_MOISTURE_DEFAULT_THRESHOLD;
+          moist = isFinite(rd) ? (plantThirsty(rd, thr) ? 't' : 'h') : (fu.plantDemoThirsty ? 't' : 'h');
+        }
+        return `${fu.id}:${on}:${door}:${pw}:${tp}:${fu.doorOpen ? 1 : 0}:${bias}:${ev}:${mail}:${jd}:${moist}`;
       }).filter(Boolean).join(',');
       // Room occupancy glow (#1): fold each occupancy-bound room's on/off into
       // _keyFloor so the tinted floor patch rebuilds on an occupancy flip.
@@ -1139,6 +1153,22 @@ export class ThreeView extends LitElement {
         r.updateWeather(fx);
       }
 
+      // Playful background text (skywriting / banner / grass). The displayed
+      // string is the bound entity's formatted state (config-path, so a change
+      // repaints) else the static text; rebuilt only when text/mode/storm/floor
+      // change. sky + banner hide under pouring/lightning (they read wrong in a
+      // downpour); grass (a ground decal) always shows. Per-frame motion runs in
+      // the renderer's _advanceBgText.
+      const bgMode = p.bgTextMode();
+      const bgText = bgMode === 'off' ? null : p.bgTextResolved();
+      const bgStorm = fx.condition === 'pouring' || fx.condition === 'lightning'
+        || fx.condition === 'lightning-rainy';
+      const keyBgText = `${p.configRev}|${f.id}|${bgMode}|${bgText ?? ''}|${bgStorm ? 's' : '-'}`;
+      if (keyBgText !== this._keyBgText) {
+        this._keyBgText = keyBgText;
+        r.updateBgText(bgText, bgMode, bgStorm, fx.windBearingPlanRad ?? 0, fx.windKmh);
+      }
+
       // Lights + switches: structural + state/brightness/color per entity.
       // Fireplace lights flicker via Math.random() inside the builder, so an
       // active fireplace forces a rebuild every frame (cheap: few lights). A
@@ -1155,12 +1185,13 @@ export class ThreeView extends LitElement {
           // rebuilds when its SOURCE entity's resolved color/state changes.
           const st = p.effectiveState(l);
           const a = (st?.attributes ?? {}) as Record<string, unknown>;
-          // Fan spin speed lives on the fan entity's percentage attribute —
-          // part of the key so rotor speed updates on change.
+          // Fan spin speed (percentage) + reverse (direction) live on the fan
+          // entity — part of the key so a rebuild re-seeds the rotor's SIGNED
+          // nominal rps on change (the per-frame ease itself is not dirty-keyed).
           const fanSt = l.fanEntity ? states[l.fanEntity] : null;
           const fanA = (fanSt?.attributes ?? {}) as Record<string, unknown>;
           return `${st?.state ?? '-'}~${a.brightness ?? ''}~${a.rgb_color ?? ''}~${a.color_temp_kelvin ?? ''}` +
-                 `~${a.percentage ?? ''}~${fanSt?.state ?? ''}:${fanA.percentage ?? ''}`;
+                 `~${a.percentage ?? ''}~${a.direction ?? ''}~${fanSt?.state ?? ''}:${fanA.percentage ?? ''}:${fanA.direction ?? ''}`;
         }).join(',') + '|' + f.switches.map(s => stOf(s.entity_id)).join(',');
       if (keyLights !== this._keyLights) {
         this._keyLights = keyLights;

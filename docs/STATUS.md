@@ -101,6 +101,36 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Decals & props + fans + plant droop + background text** (2026-07-17;
+  3 parallel Opus agents). **Avatar decals** (`HumanoidFields.decals`,
+  cap 2; style decision PINNED: canvas-painted decal PLANES ~8 mm proud
+  of the torso chest/back — text (jersey style) / glyph (emoji) / print
+  (dots/stripes/check/heart-scatter, deterministic) — flat
+  MeshBasicMaterial (documented exemption: toon banding muddies fine
+  text), per-rig maps freed in `_disposeHumanoid`; NEVER body texture
+  maps). **Two-handed props** (`AvatarPrimitive.twoHanded` on hand
+  anchors): `_advanceTwoHandProps` re-aims the prop between both hands
+  per frame (zero-alloc scratch); one centered prim only (offset prims
+  can't ride — authoring rule in AUTHORING.md). base-careers v3:
+  athlete '7' + ★, farmer flannel, movie_star 🎬, oracle two-hand staff
+  — AVATAR-BUILD 99→117, content 602/602. **Fan refinements**: signed
+  nominal rps from `percentage`/`direction` seeded at build (keyLights
+  folds direction), NEW `_advanceFanSpin` integrates a per-fixture
+  eased velocity (`_fanSpin` survives rebuilds → continuous phase;
+  reverse glides through zero; off spins down smoothly); `rot.rps` name
+  kept for the docs-gallery capture seam. **Plant droop**
+  (`Furniture.moistureEntity`/`moistureThreshold` on plant kinds +
+  `plantDemoThirsty` test toggle): leaf/stem pivot groups ease outward
+  +down 0.35 rad + wilt-brown color lerp (τ 2.2 s, survives rebuilds),
+  2D 💧 chip; thirsty folded into the appliance hash — FANPLANT 16/16.
+  **Background text** (`Store.bgText {mode sky|banner|grass, text,
+  entityId, format}`): skywriting cloud-letter billboard (wind drift),
+  toon banner plane on a high orbit (broadside-readable), grass text
+  auto-placed in the widest yard margin; entity state via
+  formatEntityValue; sky/banner hidden in storms; own `_keyBgText` —
+  BGTEXT 29/29, WFX sky regression 23/23. ROADMAP Tier-1 stale markers
+  also corrected (all five rows shipped).
+
 - **Phase 5 — direct-MQTT bridge: Frigate ground truth + Valetudo maps**
   (`docs/DESIGN-mqtt-bridge.md`, 2026-07-17; user-continued after the
   hard pause; 3 Opus batches M-A → M-B ∥ M-C). **Bridge core**:

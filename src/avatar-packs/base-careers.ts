@@ -6,7 +6,7 @@ const CHARCOAL = 0x2c2e34, NEARBLACK = 0x161619, PALE = 0xe7c6a4;
 const GOLD = 0xcaa53a, ROBE = 0x7b718f;
 
 const pack: AvatarPackDef = {
-  id: 'base-careers', version: 2, label: 'Careers', path: ['Base', 'Careers'], builtin: true,
+  id: 'base-careers', version: 3, label: 'Careers', path: ['Base', 'Careers'], builtin: true,
   avatars: [
     { id: 'professional', label: 'Professional', rig: 'humanoid', legacyAccessories: 'professional',
       humanoid: { body: CHARCOAL, shoe: 0x141416, emI: 0.20 }, bubbles: ['📊', '☕'] },
@@ -17,13 +17,25 @@ const pack: AvatarPackDef = {
     { id: 'tech_expert', label: 'Tech expert', rig: 'humanoid', legacyAccessories: 'tech_expert',
       humanoid: { body: NEARBLACK, shoe: 0x33363c, emI: 0.20, earSkip: true }, bubbles: ['💡', '🔌'] },
     { id: 'farmer', label: 'Farmer', rig: 'humanoid', legacyAccessories: 'farmer',
-      humanoid: { shoe: 0x5a3d28, emI: 0.22 }, bubbles: ['🌽', '🚜'] },
+      // Decal: a plaid CHECK print on the chest reads as the flannel shirt without
+      // texturing the toon body (crisp canvas decal plane, house style).
+      humanoid: { shoe: 0x5a3d28, emI: 0.22, decals: [{ kind: 'print', print: 'check', color: 0x8a3b2e, anchor: 'chest' }] },
+      bubbles: ['🌽', '🚜'] },
     { id: 'cowboy', label: 'Cowboy', rig: 'humanoid', legacyAccessories: 'cowboy',
       humanoid: { shoe: 0x5a3d28, emI: 0.22 }, bubbles: ['🤠', '🐴'] },
     { id: 'athlete', label: 'Athlete', rig: 'humanoid', legacyAccessories: 'athlete',
-      humanoid: { shoe: 0xf2f2f2 }, bubbles: ['🏆', '💪'] },
+      // Decals: a jersey number '7' on the BACK + a team emblem star on the CHEST
+      // (crisp canvas decal planes — text + glyph — riding proud of the jersey).
+      humanoid: { shoe: 0xf2f2f2, decals: [
+        { kind: 'text', text: '7', color: 0xf4f4f6, anchor: 'back' },
+        { kind: 'glyph', glyph: '★', color: 0xf4f4f6, anchor: 'chest', scale: 0.6 },
+      ] },
+      bubbles: ['🏆', '💪'] },
     { id: 'movie_star', label: 'Movie star', rig: 'humanoid', legacyAccessories: 'movie_star',
-      humanoid: { body: GOLD, shoe: 0x0a0a0c, emI: 0.20, eyes: 'shades' }, bubbles: ['🎬', '🌟'] },
+      // Decal: a film-clapper glyph on the chest (canon: the star's craft).
+      humanoid: { body: GOLD, shoe: 0x0a0a0c, emI: 0.20, eyes: 'shades',
+        decals: [{ kind: 'glyph', glyph: '🎬', anchor: 'chest', scale: 0.7 }] },
+      bubbles: ['🎬', '🌟'] },
     { id: 'supermodel', label: 'Supermodel', rig: 'humanoid', legacyAccessories: 'supermodel',
       humanoid: { sk: 1.05, headR: 124, limbR: 0.9, shoe: 0xf2f2f2, earSkip: true },
       personality: { swayMul: 1.35, ampMul: 1.1 }, bubbles: ['📸', '💅'] },
@@ -31,6 +43,14 @@ const pack: AvatarPackDef = {
       humanoid: { body: NEARBLACK, shoe: 0x0a0a0c, emI: 0.20 }, bubbles: ['🎩', '✨', '🐇'] },
     { id: 'wise_oracle', label: 'Wise oracle', rig: 'humanoid', legacyAccessories: 'wise_oracle',
       humanoid: { skin: PALE, body: ROBE, shoe: 0x3a3542, emI: 0.15, earSkip: true },
+      // Two-handed staff: a long wooden pole gripped by BOTH hands — registered on
+      // handR and re-aimed toward handL every frame, so it tracks walking / sitting.
+      // (A two-handed prop keeps its POSITION at the anchor hand; only orientation
+      // is driven, so a single centered cylinder passing through the grip is the
+      // right authoring — a second offset prim would not ride the staff end.)
+      accessories: [
+        { shape: 'cylinder', size: [17, 21, 1320], anchor: 'handR', color: 0x6b4a2b, twoHanded: true },
+      ],
       personality: { cadenceMul: 0.8, swayMul: 0.6 }, bubbles: ['🔮', '📜'] },
 
     // ── New occupations (Batch C2). Adult proportions; occupation reads through

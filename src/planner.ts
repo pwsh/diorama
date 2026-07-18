@@ -12,7 +12,8 @@ import { stepFusion, newFusionState, DEFAULT_FUSION_CFG,
          type FusionState, type FusionCand } from './fusion.js';
 import { fitGeoTransform, latLonToPlan, clampToBoundary, planBearingDeg, compass8, medianLatLon,
          type GeoTransform, type GeoPair, type LatLonSample } from './geo.js';
-import type { GeoConfig, GeoLandmark, DioramaPerson, RobotFixture, ActionButton, Light, ValveFixture } from './types.js';
+import type { GeoConfig, GeoLandmark, DioramaPerson, RobotFixture, ActionButton, Light, ValveFixture, BgTextMode } from './types.js';
+import { formatEntityValue } from './value-rules.js';
 
 // ── Bermuda BLE discovery (runtime-only) ──────────────────────────────────
 // One per-scanner distance sensor for a tracked device. `disabled` reflects
@@ -1209,6 +1210,7 @@ export class Planner extends EventTarget {
         mqttBridge:     remote.mqttBridge     ?? undefined,
         avatarPacks:    remote.avatarPacks    ?? undefined,
         notes:          remote.notes          ?? undefined,
+        bgText:         remote.bgText         ?? undefined,
       };
       // Reflect the authoritative pack config into the registry snapshot so
       // resolveAvatar / activeAvatarIds see it, then re-hydrate loaded packs.
@@ -1471,7 +1473,7 @@ export class Planner extends EventTarget {
     // badges (and the 3D dirty keys, which also fold these) refresh on change.
     const f2 = this.floor();
     if (f2.furniture.some(fu => fu.doorEntity === id || fu.tempEntity === id ||
-      fu.jobStateEntity === id ||
+      fu.jobStateEntity === id || fu.moistureEntity === id ||
       fu.evCharger?.statusEntity === id || fu.evCharger?.powerEntity === id ||
       fu.mailCount?.countEntity === id || fu.mailCount?.flagEntity === id)) return true;
     if (f2.doors.some(d => d.lockEntity === id)) return true;
@@ -1524,8 +1526,34 @@ export class Planner extends EventTarget {
     // The alert entity (any domain, rare-but-urgent) is config-path as well so
     // the chip badge + settings preview repaint the moment an alert fires/clears.
     if (this.store.weather?.alerts?.entityId === id) return true;
+    // Background-text bound entity (store-level): config-path so the 3D
+    // _keyBgText dirty key + settings preview repaint when the message changes.
+    if (this.store.bgText?.entityId === id) return true;
     return this._weatherEntityIds().includes(id);
   }
+
+  // Resolved playful-background-text string: the bound entity's FORMATTED state
+  // (formatEntityValue) when an entity is bound, else the static `text`. Capped
+  // at ~40 chars (banner/skywriting want short text). Returns null when the mode
+  // is off / unconfigured / the message is empty. Read by three-view (3D) + the
+  // settings preview.
+  bgTextResolved(): string | null {
+    const bt = this.store.bgText;
+    if (!bt || (bt.mode ?? 'off') === 'off') return null;
+    let s: string | null = null;
+    if (bt.entityId) {
+      const st = this.hass?.states?.[bt.entityId] ?? null;
+      const v = formatEntityValue(st, bt.format, { imperial: this.store.imperial, now: new Date() });
+      s = v === '—' ? null : v;   // no reading yet → fall through to nothing
+    } else {
+      s = (bt.text ?? '').trim() || null;
+    }
+    if (s == null) return null;
+    return s.length > 40 ? s.slice(0, 40) : s;
+  }
+
+  // The active background-text mode (off when unconfigured).
+  bgTextMode(): BgTextMode { return this.store.bgText?.mode ?? 'off'; }
 
   // Entity ids the current (local) weather source depends on. Empty for the
   // Open-Meteo source (no HA entity) or when unconfigured.

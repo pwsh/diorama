@@ -17,11 +17,11 @@ codebase so this doc stays honest as items land.
 | Item | What HA gives | Visualization | Effort | Wow |
 |---|---|---|---|---|
 | ✅ Robot mower GPS | `device_tracker` lat/lon + `direction` heading (Mammotion `<name>_gps`, Husqvarna; `gps_accuracy` is hard-coded 0 — never draw rings) | **SHIPPED** — `RobotFixture` mower GPS mode via geo calibration | — | — |
-| Roborock live position | Core integration's map/camera entity carries a live `vacuum_position` x/y/angle attribute (device units) + `get_vacuum_current_position` action; room polygons are image-only | Real moving vacuum dot replacing the simulated roam when present; needs a per-device unit→mm calibration step (two reference points) | M | 4 |
-| `geo_location` events | Building-block platform; every entity carries real `latitude`/`longitude` + `source` (USGS/GeoNet quakes, NSW/Queensland fires, GDACS) | Severity-scaled pins through the existing `latLonToPlan` path (same pipeline as GPS pins/landmarks); "recent quakes near home" ring overlay | M | 4 |
-| Frigate zone occupancy | Official integration exposes per-camera/zone/object `binary_sensor` occupancy (person/car/dog) — booleans, no coordinates, but the ZONE is user-defined in Frigate | Feed straight into the existing per-room activity glow — a room lights up when Frigate sees a person there. Cheapest high-wow item found | S | 5 |
-| Aqara FP2 zone presence | One `binary_sensor` per user-defined zone (up to ~30 per room, via HomeKit Controller); zone SHAPES not exposed | User draws a zone polygon in Diorama (mmWave zone-editor idiom) and binds it to the FP2 zone sensor — per-region presence truth without radar | M | 5 |
-| Frigate raw boxes / Valetudo maps | Pixel bounding boxes + `current_zones` live only on Frigate's own MQTT (`frigate/events`); Valetudo's room polygons/path live in a PNG `zTXt` chunk | Requires a **direct-MQTT bridge** (new integration pattern — Diorama currently speaks only HA WS) + per-camera homography. Highest ceiling, highest cost | L | 5 |
+| ✅ Roborock live position (SHIPPED batch H) | Core integration's map/camera entity carries a live `vacuum_position` x/y/angle attribute (device units) + `get_vacuum_current_position` action; room polygons are image-only | Real moving vacuum dot replacing the simulated roam when present; needs a per-device unit→mm calibration step (two reference points) | M | 4 |
+| ✅ `geo_location` events (SHIPPED batch G) | Building-block platform; every entity carries real `latitude`/`longitude` + `source` (USGS/GeoNet quakes, NSW/Queensland fires, GDACS) | Severity-scaled pins through the existing `latLonToPlan` path (same pipeline as GPS pins/landmarks); "recent quakes near home" ring overlay | M | 4 |
+| ✅ Frigate zone occupancy (SHIPPED — `Room.occupancyEntity`) | Official integration exposes per-camera/zone/object `binary_sensor` occupancy (person/car/dog) — booleans, no coordinates, but the ZONE is user-defined in Frigate | Feed straight into the existing per-room activity glow — a room lights up when Frigate sees a person there. Cheapest high-wow item found | S | 5 |
+| ✅ Aqara FP2 zone presence (SHIPPED — `Floor.presenceZones`) | One `binary_sensor` per user-defined zone (up to ~30 per room, via HomeKit Controller); zone SHAPES not exposed | User draws a zone polygon in Diorama (mmWave zone-editor idiom) and binds it to the FP2 zone sensor — per-region presence truth without radar | M | 5 |
+| ✅ Frigate raw boxes / Valetudo maps (SHIPPED Phase 5 — MQTT bridge) | Pixel bounding boxes + `current_zones` live only on Frigate's own MQTT (`frigate/events`); Valetudo's room polygons/path live in a PNG `zTXt` chunk | Requires a **direct-MQTT bridge** (new integration pattern — Diorama currently speaks only HA WS) + per-camera homography. Highest ceiling, highest cost | L | 5 |
 
 ## Tier 2 — strong spatial fits on existing machinery
 
@@ -299,8 +299,9 @@ Do not treat any note here as a decided approach.
 ### Avatar rig gaps (parked 2026-07-16 from the avatar-pack research triage)
 Approximated with conventions in the shipped packs; see
 `docs/DESIGN-avatars.md` § "Rig-gap triage" and per-pack `// approx:` notes:
-- Fabric patterns / prints / decals / text (deliberately against the
-  no-texture house style — revisit only with a style decision).
+- ✅ Fabric prints / decals / text — SHIPPED 2026-07-17 (style decision:
+  canvas-painted DECAL PLANES proud of the torso — text/glyph/print —
+  never body texture maps; `HumanoidFields.decals`).
 - Animated appendages: tail sway, wing flap, ear posing; hop / knuckle-walk
   gait cycles; per-tentacle idle channels; independent secondary props
   (orbiting drones).
@@ -310,8 +311,9 @@ Approximated with conventions in the shipped packs; see
 - Quad `legColor` (dark "points" legs — feet-only `pawColor` shipped),
   giant-flap ear enum, broad-muzzle snout shape, pattern/scatter generator
   for stripes/spots/dapples.
-- Sessile/rooted mode; pose-aware hand props; two-handed prop convention;
-  situational costume swaps (alt-looks per member).
+- ✅ Sessile/rooted mode (phase 4) + pose-aware hand props / two-handed
+  prop convention (`AvatarPrimitive.twoHanded`, 2026-07-17). Still
+  parked: situational costume swaps (alt-looks per member — UX decision).
 
 ### Research items (do not action)
 - **Log events & alerting**: research surfacing/displaying alerts from a log

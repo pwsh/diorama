@@ -315,6 +315,45 @@ integration) drives the moon phase.
   (23/23 — sun position recomputed, moon phase pixel-sampled, dome colors differ day/night/
   overcast, easing verified, upwind storm darkening); `weather-test.html` moon-phase matrix.
 
+### Playful background text (skywriting / banner plane / grass writing)
+`Store.bgText` (`BgTextConfig`: `mode?: 'off'|'sky'|'banner'|'grass'`, `text?`, `entityId?`,
+`format?: InfoCardFormat`) — a short decorative message written INTO the 3D world. Store-level
+(property-wide, like `Store.weather`); **added to `Planner._loadFromHa`'s explicit field list**
+(else it silently resets). The displayed string is `Planner.bgTextResolved()` — the bound
+entity's FORMATTED state (`formatEntityValue(states[entityId], format, …)`) when `entityId` is
+set, else the static `text`, capped **40 chars** (null when off/empty). The bound id is
+**config-path** in `_isSlowEntity` so a message change repaints. `Planner.bgTextMode()` returns
+the active mode.
+
+- **Renderer** `_bgTextGroup` (added to `scene.add`/`clearTransientGroups`/`destroy` — cheap +
+  floor-tied, UNLIKE `_skyGroup` which is not) + `updateBgText(text, mode, storm, windRad,
+  windKmh)`: rebuilt only under three-view's **`_keyBgText`** (`configRev|floorId|mode|text|
+  storm`). Per-frame motion is `_advanceBgText(dt, nowS)` from `_animate` (alongside
+  `_advanceWeather`) — **zero allocation after build** (transform + opacity only). The per-text
+  `CanvasTexture` (`_makeBgTextTexture`, DETERMINISTIC — sky wobble is hash-based, no
+  `Math.random`) is freed on rebuild via the `_disposeSpriteMaps` + `_clearGroup` pairing (sky
+  sprite via the `isSprite` branch; banner/grass meshes tagged `userData.textPlane`).
+- **`sky`** (skywriting): one additive-blended `THREE.Sprite` billboard high in the sky
+  (`opacity 0.9`, `AdditiveBlending`, glow baked as canvas `shadowBlur` — a flat-material
+  exemption from `_mat`, consistent with `NoToneMapping`); `_advanceBgText` drifts it
+  horizontally with the wind (bounded oscillation) + a slow opacity twinkle.
+- **`banner`**: a toy `_mat()` toon tow-plane (fuselage + wing + tail + spinning prop) towing a
+  wide double-sided text `PlaneGeometry` banner (normal = local +X so it's broadside-readable);
+  `_advanceBgText` flies it on a slow horizontal orbit (`radius ≈ floor-diag·0.75`, alt ~6000 mm,
+  ω 0.12 rad/s) yawing the assembly so its nose (local −Z) tracks the tangent, + prop spin.
+- **`grass`**: a flat text decal on the ground at **y≈6** (between ground patches y=4 + blob
+  shadows y=8). `_bgGrassPlacement` picks the WIDEST of the four margin strips around the
+  wall-loop bbox and fits an aspect-locked rect inside it — the center is always OUTSIDE the
+  footprint bbox (hence outside every wall loop) and inside the floor rect (`_bgGrassInfo`
+  exposes it for the test). Mowed-relief canvas: grass-green base + lighter/darker strokes.
+- **Weather interplay**: sky + banner HIDE during `pouring`/`lightning`/`lightning-rainy` (they
+  read wrong in a downpour — three-view passes `storm`); grass (a ground decal) always shows.
+- **UI**: Settings ▸ Display "Background text" block — mode select, static message input (capped
+  40, disabled when an entity is bound), entity bind 🔗 / clear ✕, live-resolved hint. Renders in
+  **all UI modes** (a display prop; no Layers2D entry — `mode` is the gate). Test:
+  `test-pages/bgtext-test.html` (`BGTEXT PASS 29/29`; needs `value-rules.mod.js` via
+  `esbuild --bundle` like rooms-test's geometry.mod.js).
+
 ### 3D weather effects (World Outside, Feature W — phase W2)
 Outdoor effects driven by `Planner.weatherNow` (W1). three-view's `_weatherFxState(layers)` shapes a `WeatherFxState` (`condition`, `intensity01`, `windKmh`, `windBearingPlanRad`, `isDay`) — effects are live only when `layers.weatherFx !== false` **and** `weather.effects3d !== false` **and** a live `weatherNow` exists (else a no-effect `sunny` state clears everything). `conditionIntensity(condition)` in `weather.ts` (pure, testable) maps condition → 0..1 (pouring/hail 1.0, lightning-rainy 0.8, windy 0.65, lightning 0.6, rainy/snowy/snowy-rainy 0.55, fog 0.5, clear/cloudy/exceptional 0, unknown 0.4). Wind bearing (meteorological FROM-degrees) → plan frame: three-view maps `bearing+180` (blow-toward) through the geo transform θ (`geoFit().transform.thetaRad` when `quality !== 'none'`, else 0 = plan-north-relative).
 
@@ -348,7 +387,8 @@ Every `.section` renders through `Sidebar._section(slug, title, bodyThunk, opts?
 - **Appliance in-use**: appliance-category furniture (`cat: 'appliance'`) with an ON/playing `effectiveState` shows a pulsing green LED + soft glow in 2D (`drawFurniture`, time-based alpha — the RAF redraws every frame) and an emissive green indicator in 3D (`_buildFurniture`, build-time). Because furniture builds under `_keyFloor` and `configRev` alone doesn't see state changes, three-view folds a **compact appliance-state hash** (each appliance's effective state + fridge door state) into `_keyFloor` and passes a `stateProvider` as `updateFloor`'s 5th param — a bound TV/washer now rebuilds in 3D on state change.
 - **Fridge door** (`Furniture.doorEntity`, item-level; UI only on fridge kinds): binary_sensor 'on' = open → 3D door panel swung ~70° about its hinge edge (build-time, panel held proud — coincident-face gotcha), 2D amber swing wedge. Sidebar fridge editor has a "Door sensor" bind row.
 - **Door lock** (`Door.lockEntity`, item-level, **display-only** — no toggle): lock.* state → 2D padlock glyph near the hinge (red locked / green-outline unlocked / grey unknown) + 3D emissive deadbolt box near the free edge. Folded into `_keyDoors` (which already hashed door/window open states).
-- All three binding ids are config-path in `_isSlowEntity` (scoped to the current floor's bound ids, never blanket domain rules).
+- **Plant droop** (`Furniture.moistureEntity` + optional `moistureThreshold` default 20 %, item-level; UI + effect only on `isDroopPlant` pieces = `plant`/`flower_bed`/any `tend_plant` custom recipe): a bound soil-moisture `sensor.*` (device_class `moisture`, or a mislabeled `humidity` probe) reading below threshold → **THIRSTY**. **3D** foliage droops: `plant` leaf clumps and `flower_bed` stems each build on a **pivot group** (leaf/stem offset up from the pivot; radial direction from piece center) collected via `_buildFurniture`'s `plantSink` and registered in `_plants` with a build-time `thirsty` flag. Per-frame `_advancePlantDroop(dt)` (called from `updateTargets` beside `_advanceApplianceDoors`) eases a per-fixture-id blend (`_plantBlend`, τ = `PLANT_DROOP_TAU` = 2.2 s — slow wilt-in/perk-up, appliance-door idiom, **survives `_keyFloor` rebuilds**) tipping each pivot outward+down `PLANT_DROOP_ANGLE` (0.35 rad) + sagging ~40 mm + lerping the (per-piece) leaf/stem material toward `PLANT_WILT_COLOR` in place (no rebuild). `thirsty` is folded into three-view's `_keyFloor` **appliance-state hash** (`'t'`/`'h'`/`'x'` — a boolean, only flips on a threshold crossing) so a state flip rebuilds; the ease itself is per-frame. **2D**: a small 💧 chip near the pot when thirsty (self-gating like a battery badge — `drawFurniture`, screen-space, `plantThirsty` gate). Unbound plants show the effect only via the `plantDemoThirsty` "Test thirsty" sidebar toggle. `moistureEntity` is display/animation-only (never feeds `effectiveState`/activities) + config-path in `_isSlowEntity`. A sibling battery sensor auto-surfaces a 🔋 badge for free. Sidebar `_moistureBindRow` (bind + threshold input + demo toggle) on plant kinds.
+- All the above binding ids are config-path in `_isSlowEntity` (scoped to the current floor's bound ids, never blanket domain rules).
 
 ### Info cards (Display & Controls arc — batch DC-A)
 `InfoCard` (`Floor.infoCards`, repairFloor + defaultFloor backfill `[]`) — a generic
@@ -683,6 +723,7 @@ While DRAGGING a single placeable in edit mode (lights/switches as one "fixtures
   - `strip` — long thin LED bar.
   - `fireplace` — open-front firebox (`W2`=1000 × `H2`=1000 × `D2`=450 mm) with a mantel + animated flames. Forces warm orange-red regardless of HA color, plus per-frame `Math.random()` flicker on emissive intensity, point-light intensity, and floor-pool opacity. Cheap because the renderer rebuilds every tick. The **mantel's back is aligned FLUSH with the firebox back plane (`+D2/2`), never proud of it** (its extra depth overhangs the FRONT toward the opening) so a wall-snapped fireplace doesn't poke the shelf through the wall. The 2D hearth footprint (`drawFireplace2D`, canvas-render.ts) is 1000 × 450 mm to match `W2`×`D2` and the flush-snap assumption. **Wall lock**: `snapFireplaceToWall` (geometry.ts) runs on DROP + MOVE-RELEASE — the 450 mm-deep firebox (`D2`, `FIREBOX_DEPTH_MM`) snaps flush to the nearest wall within 500 mm (`snapToWallEdge`), its BACK on the wall face and its opening (local −Z) into the room: center = wall axis + normal·(wallT/2 + D2/2) = axis + normal·**275** (wallT = 100), rotation = `atan2(−nx, −ny)` (light front-axis convention). Skips invisible walls; locked walls are valid targets. No wall in range → free placement.
   - `lamp` — floor lamp: pole + base disc + cone shade + bulb. `lightHeight` ≈ pole height.
+  - `fan` / `fan_light` — ceiling fan (downrod + motor hub + 4-blade rotor; `fan_light` adds a center globe), bound via `Light.fanEntity` (falls back to the light's own `entity_id`). **Blade spin ∝ the fan entity's `percentage` attribute** (0–100 → 0–`MAX_FAN_RPS` = 2.5 rev/s; no `percentage` attr → the legacy fixed 1 rev/s; off → 0). `direction === 'reverse'` **negates the sign**. Speed is seeded at BUILD time as the SIGNED nominal `rps` on each `_fanRotors` entry (three-view's `keyLights` folds `fanSt.state` + `percentage` + `direction` so a change reseeds it); the per-frame `_advanceFanSpin(dt)` (called from `_animate`) EASES each fan's live velocity toward that nominal (`_fanSpin[fixtureId]`, τ = `FAN_SPIN_TAU` = 0.5 s) and INTEGRATES the angle — so a speed change ramps, a reverse glides through zero, and turning off spins DOWN smoothly instead of hard-stopping. `_fanSpin` is keyed by fixture id so it survives `keyLights` rebuilds (continuous phase); reset on floor switch. `percentage_step`/preset modes are NOT surfaced (out of scope). 2D shows only the static glyph (`❋`/`✺`). NB: the `_fanRotors` entry field is named `rps` (not `targetRps`) because the docs-gallery capture reads `rot.rps` for its own absolute-clock spin — keep that name.
 - **Switch**: `switchHeight(s)` (default 1200), `switchRotation(s)` (deg, 0 = +Y world, default 0). Box mesh rotated to match. **Wall lock + ganging** (`snapSwitchToWall`, geometry.ts, on DROP + MOVE-RELEASE): the 40 mm-deep plate snaps flush to the nearest wall within 500 mm — center = axis + normal·(wallT/2 + 40/2) = axis + normal·**70**, rotation = `atan2(nx, ny)` (plate front = local +Z; 0 = +Y world, vertical wall → 90). Then it **gangs** with other switches already on the same segment (rotation ±5°, perpendicular offset ±50 mm, within 2.5 gang pitches along the wall): the new plate aligns onto that gang's offset + rotation at the nearest FREE along-wall slot on the drop side (`gangSlot`), walking outward past occupied slots. `gangPitch = max(sizeA, sizeB) + 75` (defaults 320+75 = 395).
 - **Sensor**: pose from HA's `number.<slug>_sensor_height` + `number.<slug>_mount_angle`. Heading rotates the body around Y; tilt rotates a child group around local X; nub indicator on the front face. `store.coverage` (topbar "Cov" toggle, same flag as 2D) adds a flat floor wedge (unlit translucent fill + `LineLoop` rim) from `s.fov`/`s.range`/`s.heading` — the flag is part of `_keySensors`. Targets seen by this sensor are tinted by `Sensor.color` (default from `SENSOR_PALETTE[idx]`); see "Per-sensor target color" below.
 - **Motion sensor**: `MotionSensor.color` (hex, default `#ba68c8`) and `MotionSensor.intensity` (0..2, default 1). Color drives both 2D fill/stroke and 3D body emissive + cone material color. Intensity scales 2D fill alpha + glow blur, and 3D emissive intensity + opacity.
@@ -845,6 +886,31 @@ reference; keep it updated when the schema grows.
   `QuadrupedFields.earAnimate 'flick'|'swivel'|'none'` (→ `Humanoid.earAnim`) in
   `_applyQuadPose`: `swivel` = slow independent per-ear yaw wander. Test page
   `avatar-anim-test` (`AVATARANIM PASS 32/32`).
+- **Torso decals & two-handed props (rig-gap batch)**: **STYLE RULE — prints /
+  text / glyphs ship as crisp canvas-painted DECAL PLANES, NEVER a texture map
+  on the flat-toon BODY mesh** (the no-body-texture house style is deliberate;
+  decal planes are their own family like the blob / pulse / front-arrow decals).
+  `HumanoidFields.decals?: AvatarDecal[]` (cap **2**; `{kind:'text'|'glyph'|
+  'print', text?, glyph?, print?:'dots'|'stripes'|'check'|'heart-scatter', color?:
+  hex|'tint'|'dark', bg?, scale?, anchor?:'chest'|'back'}`): `_addDecals` builds a
+  thin `PlaneGeometry` quad ~8 mm proud of the torso chest (−Z, `rotation.y=π`) /
+  back (+Z) face, with a per-rig `CanvasTexture` painted ONCE (`_decalTexture` →
+  jersey-uppercase text / one big emoji glyph / deterministic tiled `print` via
+  `_paintPrint`, no `Math.random`). Material = flat **`MeshBasicMaterial`** (a
+  documented `_mat()`-toon exemption — the 4-step toon gradient muddies fine art);
+  `userData.outlineSkip` + `userData.decal` (the latter flags the per-rig map for
+  disposal). `_disposeHumanoid`'s MESH branch now frees `material.map` when
+  `userData.decal` (guarded so the shared `_blobTex` on the blob shadow is never
+  touched). `AvatarPrimitive.twoHanded?: true` (valid only on a `handL`/`handR`
+  prim): registered into `Humanoid.twoHandProps` (`{mesh, otherHand}`);
+  `_advanceTwoHandProps` (every frame in updateTargets, after `_advanceAnimPrims`;
+  reused module-scope `_thp*` scratch vectors/quaternions — zero alloc) re-aims
+  the prop's local **+Y** from the anchor hand toward the other hand so a staff /
+  broom stays two-hand-gripped through walk/sit/activity poses. Position stays at
+  the anchor hand — author ONE centered cylinder (origin = grip). Plain one-handed
+  hand props (no flag) stay rigidly parented in the single hand group. Test page
+  `avatar-build-test` covers decal builds + canvas readback + chest/back proud
+  offset + cap 2 + per-rig map disposal + two-handed aim + one-handed sit-attach.
 - **Settings drawer** (`<diorama-settings-drawer>`, ~560 px, tabbed:
   Connection | Display | Weather | Avatars | Integrations | Data; non-edit
   modes see Connection only). Display/Weather/Data tabs hold the sections
