@@ -125,6 +125,19 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Visual placement toolbar** (2026-07-19; 1 Opus agent; design
+  `docs/DESIGN-toolbar.md` — shipped with deltas noted there). Bottom
+  dock in edit mode: 11 category tabs → item cards with REAL 3D
+  thumbnails (one hidden ThreeDRenderer via the shared lazy chunk —
+  bundle split verified 0 three refs in app.js; glyph tiles for
+  sensor/control fixtures + fallback; version+recipe-hash cache) →
+  variant chips for door/window/wall/ground kinds (four new
+  runtime-only pending kinds arm real drops, defaults unchanged).
+  Pure model/arming in `tool-arm.ts` sharing the sidebar's mutations;
+  dock is a layout sibling so the chip/reset button clear it free;
+  collapse persists device-local. `TOOLBAR PASS 41/41`; undo 44/44,
+  config 60/60 intact.
+
 - **Polish wave 2: window glass + curtains; ground lights + flagpole**
   (2026-07-19; 2 parallel Opus agents). **Windows**: grey translucent
   glass (0.16 closed / 0.08 open / 0.42 behind a closed curtain);

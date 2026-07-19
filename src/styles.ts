@@ -174,6 +174,60 @@ diorama-canvas-2d, diorama-three-view { display: block; width: 100%; height: 100
   background: #4dd0e1; vertical-align: middle;
   animation: diorama-calib-pulse 1.1s ease-in-out infinite;
 }
+
+/* ── Visual placement toolbar (bottom dock) ─────────────────────────────── */
+diorama-toolbar { display: block; flex: 0 0 auto; }
+.tb-dock {
+  background: var(--surface2); border-top: 1px solid var(--border);
+  display: flex; flex-direction: column; gap: 4px; padding: 5px 6px 6px;
+  user-select: none;
+}
+.tb-dock.tb-collapsed { padding: 3px 6px; flex-direction: row; justify-content: center; }
+.tb-row { display: flex; align-items: center; gap: 4px; overflow-x: auto; overflow-y: hidden; }
+.tb-row::-webkit-scrollbar { height: 6px; }
+.tb-row::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+.tb-tabs { padding-bottom: 1px; }
+.tb-tab {
+  flex: 0 0 auto; display: inline-flex; align-items: center; gap: 4px;
+  padding: 4px 9px; border-radius: 6px; border: 1px solid var(--border);
+  background: transparent; color: var(--text-dim); font-size: 11px; cursor: pointer;
+  white-space: nowrap;
+}
+.tb-tab:hover { border-color: var(--accent); color: var(--text); }
+.tb-tab.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.tb-tab-glyph { font-size: 13px; }
+.tb-handle {
+  flex: 0 0 auto; padding: 3px 9px; border-radius: 6px; border: 1px solid var(--border);
+  background: transparent; color: var(--text-dim); font-size: 12px; cursor: pointer;
+}
+.tb-handle:hover { border-color: var(--accent); color: var(--text); }
+.tb-cards { gap: 6px; padding: 2px 0 3px; min-height: 92px; }
+.tb-card {
+  flex: 0 0 auto; width: 72px; display: flex; flex-direction: column; align-items: center;
+  gap: 2px; padding: 3px; border-radius: 8px; border: 1px solid var(--border);
+  background: #141c26; color: var(--text-dim); cursor: pointer;
+}
+.tb-card:hover { border-color: var(--accent); color: var(--text); }
+.tb-card.armed { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent) inset; color: #fff; }
+.tb-thumb { width: 64px; height: 64px; border-radius: 6px; object-fit: cover; display: block; }
+.tb-label {
+  font-size: 9.5px; line-height: 1.1; text-align: center; width: 100%;
+  max-height: 22px; overflow: hidden; word-break: break-word;
+}
+.tb-variants { display: flex; align-items: center; gap: 4px; overflow-x: auto; padding-bottom: 1px; }
+.tb-variants-label { flex: 0 0 auto; color: var(--text-dim); font-size: 10px; }
+.tb-chip {
+  flex: 0 0 auto; padding: 2px 8px; border-radius: 10px; border: 1px solid var(--border);
+  background: transparent; color: var(--text-dim); font-size: 10px; cursor: pointer; white-space: nowrap;
+}
+.tb-chip:hover { border-color: var(--accent); color: var(--text); }
+.tb-chip.armed { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+@media (max-width: 900px) {
+  .tb-cards { min-height: 82px; }
+  .tb-card { width: 64px; }
+  .tb-thumb { width: 56px; height: 56px; }
+}
 `;
 
 // Inject the shared CSS. `target` defaults to document.head (iframe mode).

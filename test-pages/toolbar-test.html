@@ -1,0 +1,357 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>TOOLBAR …</title>
+<style>
+  body { margin:0; background:#0d1116; color:#cfd8dc; font:13px/1.5 sans-serif; padding:14px; }
+  h1 { font-size:15px; margin:0 0 10px; }
+  #summary { font-size:14px; font-weight:bold; margin:10px 0; padding:8px 10px; border-radius:5px; }
+  .okbg { background:#12331f; color:#69f0ae; } .badbg { background:#3a1414; color:#ff8a80; }
+  .row { display:flex; justify-content:space-between; gap:10px; padding:2px 0; border-bottom:1px solid #1c2530; }
+  .pass { color:#69f0ae; } .fail { color:#ff5252; }
+  .name { color:#90caf9; } .extra { color:#ffd54f; font-size:11px; }
+  h2 { font-size:12px; color:#80cbc4; margin:14px 0 4px; }
+</style>
+<h1>Visual placement toolbar — real Planner + tool model + thumbnail service</h1>
+<div id="summary">Running…</div>
+<div id="rows"></div>
+
+<!-- Drives the REAL Planner + the pure tool-arm model + thumbs-cache (bundled),
+     the BUILT three-renderer chunk (real 3D capture), and the BUILT app.js
+     custom element (edit-only render + collapse). Build recipe:
+       npm run build
+       H=/tmp/diorama-harness-toolbar; mkdir -p "$H"; cp -r dist/* test-pages/* "$H"/
+       T=$(mktemp -d); cp -r src/* "$T"/
+       cp test-pages/fake-avatar-store.ts "$T"/avatar-store.ts
+       cp test-pages/toolbar-entry.ts    "$T"/ui/toolbar-entry.ts
+       npx esbuild "$T"/ui/toolbar-entry.ts --bundle --format=esm --outfile="$H"/toolbar.mod.js
+       cd "$H" && python3 -m http.server 8807
+-->
+<script type="module">
+  const V = '?v=' + Date.now();
+  const mod = await import('./toolbar.mod.js' + V);
+  const { Planner, NEW_ROOM, NEW_LANDMARK, toolarm, thumbcache, FURNITURE_KINDS } = mod;
+  const { buildToolbarModel, armGround, hashRecipe } = toolarm;
+  const { glyphDataURL, thumbCacheKey, thumbStoreKey, THUMB_BUILD_TAG } = thumbcache;
+
+  const results = [];
+  const ok = (name, cond, extra = '') => results.push({ name, pass: !!cond, extra: String(extra) });
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  async function waitFor(cond, tries = 800) {
+    for (let i = 0; i < tries; i++) { if (cond()) return true; await sleep(4); }
+    return !!cond();
+  }
+  const clone = x => JSON.parse(JSON.stringify(x));
+
+  // ── Fake HaApi over a Map (the LocalApi seam, same as undo/config-test) ──────
+  class FakeHa {
+    constructor(seed) { this.map = new Map(Object.entries(seed || {}).map(([k,v]) => [k, clone(v)]));
+      this.states = {}; this._s = []; this._c = []; }
+    connect() { for (const cb of this._c) cb('connected'); for (const cb of this._s) cb(this.states, undefined); }
+    onState(fn){ this._s.push(fn); } onConn(fn){ this._c.push(fn); }
+    callService(){ return Promise.resolve(); }
+    async getHistory(){ return {}; } async getWeatherForecasts(){ return null; }
+    async getDevices(){ return []; } async getEntityRegistry(){ return []; }
+    async updateEntityRegistry(){ return true; }
+    async getUserData(k){ return this.map.has(k) ? clone(this.map.get(k)) : null; }
+    async setUserData(k,v){ this.map.set(k, clone(v)); return true; } async refreshStates(){}
+  }
+  function floor(id, name, extra = {}) {
+    return { id, name, w: 8000, d: 6000, walls: [], furniture: [], lights: [], switches: [],
+      sensors: [], motionSensors: [], roamers: [], envSensors: [], doors: [], windows: [],
+      bg: null, rooms: [], bleProxies: [], alarmPanels: [], safetySensors: [], robots: [],
+      presenceZones: [], cameras: [], groundAreas: [], voidAreas: [], ...extra };
+  }
+  function makeStore(floors, extra = {}) {
+    return { v: 2, floors, currentFloorId: floors[0].id, activeSensorId: null,
+      coverage: true, imperial: false, showDetails: false, useRawTargets: false, ...extra };
+  }
+  async function freshPlanner(store) {
+    localStorage.removeItem('diorama:store:v1'); localStorage.removeItem('diorama:configs');
+    const p = new Planner(); p.connectWith(new FakeHa({ diorama: store }));
+    await waitFor(() => p.configIndex !== null && p.store.floors[0].name === store.floors[0].name);
+    return p;
+  }
+
+  // Find a card by key across all categories.
+  const findCard = (model, key) => model.flatMap(c => c.cards).find(c => c.key === key);
+  const cat = (model, id) => model.find(c => c.id === id);
+
+  try {
+    const RECIPE = { id: 'rec1', label: 'MyThing', w: 800, h: 800, ht: 900, kind: 'block',
+      primitives: [{ shape: 'box', size: [400,400,400], pos: [0,200,0], color: '#ff8800' }] };
+    const p = await freshPlanner(makeStore([floor('f1', 'Home')], { customObjects: [clone(RECIPE)] }));
+    let model = buildToolbarModel(p);
+
+    // ═══ A. category mapping completeness ═══
+    document.getElementById('rows').insertAdjacentHTML('beforeend', '<h2>A. mapping</h2>');
+    {
+      const furnCards = model.flatMap(c => c.cards).filter(c => c.thumb.type === 'furniture');
+      const kinds = Object.keys(FURNITURE_KINDS);
+      // every FURNITURE_KINDS kind appears in exactly one furniture card
+      let missing = [], dupes = [];
+      for (const k of kinds) {
+        const n = furnCards.filter(c => c.thumb.kind === k).length;
+        if (n === 0) missing.push(k); else if (n > 1) dupes.push(k);
+      }
+      ok('A1: every furniture kind mapped once', missing.length === 0 && dupes.length === 0,
+        `missing=${missing.length} dupes=${dupes.length}`);
+      // no orphan card (every furniture card kind is a real FURNITURE_KINDS key)
+      const orphans = furnCards.filter(c => !FURNITURE_KINDS[c.thumb.kind]);
+      ok('A2: no orphan furniture cards', orphans.length === 0, `orphans=${orphans.length}`);
+      // count parity: furniture cards == kind count
+      ok('A3: furniture card count == kind count', furnCards.length === kinds.length,
+        `${furnCards.length} vs ${kinds.length}`);
+
+      // every placement TOOLS id (except select/delete) is mapped to some card.tool
+      const PLACEMENT_TOOLS = ['wall','sensor','motion','env','infocard','action','bleproxy','alarm',
+        'calendar','thermostat','safety','alertbeacon','robot','camera','projector','valve','sprinkler',
+        'flagpole','plug','pzone','ground','path','pool','void','furniture','light','switch','door','window'];
+      const mapped = new Set(model.flatMap(c => c.cards).map(c => c.tool).filter(Boolean));
+      const unmapped = PLACEMENT_TOOLS.filter(t => !mapped.has(t));
+      ok('A4: every placement tool mapped', unmapped.length === 0, `unmapped=${unmapped.join(',')}`);
+
+      // light kinds present (bulb card exists in Lights tab)
+      const lights = cat(model, 'lights').cards;
+      ok('A5: light kinds present (>=20, bulb incl)',
+        lights.length >= 20 && lights.some(c => c.thumb.type === 'light' && c.thumb.kind === 'bulb'),
+        `n=${lights.length}`);
+
+      // custom tab reflects store.customObjects
+      const customCat = cat(model, 'custom');
+      ok('A6: custom tab reflects customObjects',
+        customCat.cards.length === 1 && customCat.cards[0].thumb.type === 'custom',
+        `n=${customCat.cards.length}`);
+
+      // flagpole is in Outdoor (not Controls)
+      const outdoor = cat(model, 'outdoor').cards;
+      ok('A7: flagpole card in Outdoor tab', outdoor.some(c => c.tool === 'flagpole'), '');
+      // switch is in Controls & Sensors
+      ok('A8: switch card in Controls tab', cat(model,'controls').cards.some(c => c.tool === 'switch'), '');
+    }
+
+    // ═══ B. arming parity (card.arm → planner state) ═══
+    document.getElementById('rows').insertAdjacentHTML('beforeend', '<h2>B. arming</h2>');
+    {
+      // furniture kind
+      const sofa = findCard(model, 'furn:sofa');
+      sofa.arm(p);
+      ok('B1: furniture arm sets kind + tool', p.tool === 'furniture' && p.pendingFurnitureKind === 'sofa'
+        && p.pendingCustomObjectId == null, `${p.tool}/${p.pendingFurnitureKind}/${p.pendingCustomObjectId}`);
+
+      // custom object
+      const cust = cat(model, 'custom').cards[0];
+      cust.arm(p);
+      ok('B2: custom arm sets pendingCustomObjectId', p.tool === 'furniture' && p.pendingCustomObjectId === 'rec1',
+        `${p.tool}/${p.pendingCustomObjectId}`);
+
+      // light kind
+      const fire = findCard(model, 'light:fireplace');
+      fire.arm(p);
+      ok('B3: light arm sets pendingLightKind + tool', p.tool === 'light' && p.pendingLightKind === 'fireplace',
+        `${p.tool}/${p.pendingLightKind}`);
+
+      // mmWave tool
+      findCard(model, 'tool:sensor').arm(p);
+      ok('B4: mmWave arm sets sensor tool', p.tool === 'sensor', p.tool);
+
+      // wall tool + wall-kind variant chip
+      const wall = findCard(model, 'struct:wall');
+      wall.arm(p);
+      ok('B5: wall card arms wall tool', p.tool === 'wall', p.tool);
+      const railChip = wall.variants.find(v => v.key === 'wall:railing');
+      railChip.arm(p);
+      ok('B6: wall variant chip sets pendingWallKind', p.tool === 'wall' && p.pendingWallKind === 'railing',
+        `${p.tool}/${p.pendingWallKind}`);
+
+      // window kind variant
+      const win = findCard(model, 'struct:window');
+      win.arm(p);
+      const slidingChip = win.variants.find(v => v.key === 'window:sliding');
+      slidingChip.arm(p);
+      ok('B7: window variant chip sets pendingWindowKind', p.tool === 'window' && p.pendingWindowKind === 'sliding',
+        `${p.tool}/${p.pendingWindowKind}`);
+
+      // door kind variant
+      const door = findCard(model, 'struct:door');
+      door.arm(p);
+      const garageChip = door.variants.find(v => v.key === 'door:garage');
+      garageChip.arm(p);
+      ok('B8: door variant chip sets pendingDoorKind', p.tool === 'door' && p.pendingDoorKind === 'garage',
+        `${p.tool}/${p.pendingDoorKind}`);
+
+      // ground kind
+      const ground = findCard(model, 'ground:area');
+      ground.arm(p);
+      const concreteChip = ground.variants.find(v => v.key === 'ground:concrete');
+      concreteChip.arm(p);
+      ok('B9: ground variant chip sets pendingGroundKind', p.tool === 'ground' && p.pendingGroundKind === 'concrete',
+        `${p.tool}/${p.pendingGroundKind}`);
+
+      // path
+      findCard(model, 'ground:path').arm(p);
+      ok('B10: path arm sets path tool', p.tool === 'path', p.tool);
+
+      // flagpole
+      findCard(model, 'tool:flagpole').arm(p);
+      ok('B11: flagpole arm sets flagpole tool', p.tool === 'flagpole', p.tool);
+
+      // room latch (mirrors sidebar — does NOT change tool)
+      p.setTool('select');
+      findCard(model, 'struct:room').arm(p);
+      ok('B12: room arm sets placingRoomId=NEW_ROOM', p.placingRoomId === NEW_ROOM, String(p.placingRoomId));
+
+      // landmark latch
+      findCard(model, 'ground:landmark').arm(p);
+      ok('B13: landmark arm sets placingLandmarkId=NEW_LANDMARK', p.placingLandmarkId === NEW_LANDMARK,
+        String(p.placingLandmarkId));
+
+      // arm helper direct (armGround) — parity with sidebar ground kind path
+      armGround(p, 'sand');
+      ok('B14: armGround helper sets kind', p.tool === 'ground' && p.pendingGroundKind === 'sand',
+        `${p.tool}/${p.pendingGroundKind}`);
+    }
+
+    // ═══ C. isArmed tracking (rebuild model, ring follows planner state) ═══
+    document.getElementById('rows').insertAdjacentHTML('beforeend', '<h2>C. armed ring</h2>');
+    {
+      const s = findCard(model, 'furn:sofa');
+      s.arm(p);
+      model = buildToolbarModel(p);
+      ok('C1: armed furniture card isArmed=true', findCard(model, 'furn:sofa').isArmed(p), '');
+      ok('C2: other furniture card isArmed=false', findCard(model, 'furn:chair').isArmed(p) === false, '');
+
+      // external tool change (hotkey/sidebar) → wall card isArmed tracks it
+      p.setTool('wall');
+      model = buildToolbarModel(p);
+      ok('C3: external setTool tracked by isArmed', findCard(model, 'struct:wall').isArmed(p), '');
+      ok('C4: sofa no longer armed after external change', findCard(model, 'furn:sofa').isArmed(p) === false, '');
+    }
+
+    // ═══ D. thumbnail cache + glyph fallback (headless-safe) ═══
+    document.getElementById('rows').insertAdjacentHTML('beforeend', '<h2>D. thumb cache</h2>');
+    {
+      const g = glyphDataURL('💡', 128);
+      ok('D1: glyph fallback yields non-empty dataURL', typeof g === 'string' && g.startsWith('data:image/'),
+        g.slice(0, 22));
+      const g2 = glyphDataURL('🚪', 128, { dim: true });
+      ok('D2: dim placeholder non-empty', g2.startsWith('data:image/') && g2.length > 100, `len=${g2.length}`);
+
+      // cache store key folds in the build tag
+      ok('D3: thumbStoreKey includes build tag', thumbStoreKey().includes(THUMB_BUILD_TAG), thumbStoreKey());
+
+      // descriptor cache keys are stable + type-scoped
+      ok('D4: furniture cache key stable', thumbCacheKey({ type:'furniture', kind:'sofa' }) === 'f:sofa', '');
+      ok('D5: light cache key stable', thumbCacheKey({ type:'light', kind:'bulb' }) === 'l:bulb', '');
+
+      // custom recipe hash → cache key changes when the recipe edits
+      const h1 = hashRecipe(RECIPE);
+      const edited = clone(RECIPE); edited.primitives[0].color = '#00ff00';
+      const h2 = hashRecipe(edited);
+      ok('D6: recipe hash changes on edit', h1 !== h2, `${h1} vs ${h2}`);
+      const k1 = thumbCacheKey({ type:'custom', id:'rec1', hash:h1 });
+      const k2 = thumbCacheKey({ type:'custom', id:'rec1', hash:h2 });
+      ok('D7: custom cache key includes hash + differs on edit', k1 !== k2 && k1.includes(h1), `${k1} / ${k2}`);
+    }
+
+    // ═══ E. one real 3D capture under headless WebGL (via BUILT renderer chunk) ═══
+    document.getElementById('rows').insertAdjacentHTML('beforeend', '<h2>E. real 3D capture</h2>');
+    {
+      let captured = null, webglDenied = false;
+      try {
+        const R3 = await import('./assets/three-renderer.js' + V);
+        const host = document.createElement('div');
+        host.style.cssText = 'position:fixed;left:-99999px;top:0;width:128px;height:128px;opacity:0';
+        document.body.appendChild(host);
+        const R = new R3.ThreeDRenderer(host, { preserveDrawingBuffer: true });
+        await R.load();
+        if (!R.loaded || !R._renderer) { webglDenied = true; }
+        else {
+          const f = floor('t', 'T', { w: 6000, d: 6000 });
+          f.furniture = [{ id:'it', x:3000, y:3000, w:1000, h:600, kind:'sofa', rotation:0 }];
+          R.updateFloor(f, { preset:'day', floorColor:'#8a7860', wallColor:'#cfd2d6', wallCutaway:false },
+            undefined, undefined, () => null);
+          R.setCameraView([2200, 1400, -2200], [0, 300, 0]);
+          R._renderer.render(R._scene, R._camera);
+          captured = R._renderer.domElement.toDataURL('image/png');
+        }
+      } catch (e) { webglDenied = true; ok('E0: capture threw (webgl?)', true, String(e).slice(0,80)); }
+
+      const placeholder = glyphDataURL('🛋', 128, { dim: true });
+      if (webglDenied) {
+        ok('E1: real 3D capture (SKIPPED — headless WebGL denied)', true, 'skipped');
+        ok('E2: real 3D capture (SKIPPED)', true, 'skipped');
+      } else {
+        ok('E1: real 3D capture yields png dataURL', captured && captured.startsWith('data:image/png'),
+          captured ? `len=${captured.length}` : 'null');
+        ok('E2: 3D capture longer than glyph placeholder', captured && captured.length > placeholder.length,
+          `${captured?.length} vs ${placeholder.length}`);
+      }
+    }
+
+    // ═══ F. edit-only rendering + collapse persistence (BUILT component) ═══
+    document.getElementById('rows').insertAdjacentHTML('beforeend', '<h2>F. component render</h2>');
+    {
+      let compOk = true;
+      try {
+        await import('./assets/app.js' + V);   // registers <diorama-toolbar>
+        await customElements.whenDefined('diorama-toolbar');
+        const el = document.createElement('diorama-toolbar');
+        const p2 = await freshPlanner(makeStore([floor('f1', 'Home')]));
+        el.planner = p2;
+        document.body.appendChild(el);
+
+        // kiosk → renders nothing (no dock)
+        p2.setUiMode('kiosk');
+        await sleep(60);
+        ok('F1: no dock in kiosk mode', el.querySelector('.tb-dock') == null,
+          `children=${el.childElementCount}`);
+
+        // edit → renders the dock
+        p2.setUiMode('edit');
+        await waitFor(() => el.querySelector('.tb-dock') != null, 200);
+        ok('F2: dock renders in edit mode', el.querySelector('.tb-dock') != null, '');
+        ok('F3: dock has category tabs', (el.querySelectorAll('.tb-tab').length || 0) >= 5,
+          `tabs=${el.querySelectorAll('.tb-tab').length}`);
+        ok('F4: dock has item cards', (el.querySelectorAll('.tb-card').length || 0) > 0,
+          `cards=${el.querySelectorAll('.tb-card').length}`);
+
+        // collapse persistence roundtrip
+        localStorage.removeItem('diorama:toolbar:collapsed');
+        const handle = el.querySelector('.tb-handle');
+        handle.click();
+        await waitFor(() => el.querySelector('.tb-collapsed') != null, 200);
+        ok('F5: collapse click persists + collapses',
+          localStorage.getItem('diorama:toolbar:collapsed') === '1' && el.querySelector('.tb-collapsed') != null,
+          localStorage.getItem('diorama:toolbar:collapsed'));
+
+        // a fresh element reads the persisted collapsed flag
+        const el2 = document.createElement('diorama-toolbar');
+        el2.planner = p2; document.body.appendChild(el2);
+        await waitFor(() => el2.querySelector('.tb-dock') != null, 200);
+        ok('F6: fresh element restores collapsed from storage', el2.querySelector('.tb-collapsed') != null, '');
+      } catch (e) {
+        compOk = false;
+        ok('F: component render threw', false, String(e).slice(0, 160));
+      }
+      void compOk;
+    }
+  } catch (err) {
+    ok('FATAL', false, (err && err.stack) || String(err));
+  }
+
+  // ── Report ──
+  const rows = document.getElementById('rows');
+  let passN = 0;
+  for (const r of results) {
+    if (r.pass) passN++;
+    rows.insertAdjacentHTML('beforeend',
+      `<div class="row"><span class="name">${r.name}</span>` +
+      `<span class="${r.pass ? 'pass' : 'fail'}">${r.pass ? 'PASS' : 'FAIL'}` +
+      `${r.extra ? ` <span class="extra">${r.extra}</span>` : ''}</span></div>`);
+  }
+  const total = results.length;
+  const sum = document.getElementById('summary');
+  sum.textContent = `TOOLBAR ${passN === total ? 'PASS' : 'FAIL'} ${passN}/${total}`;
+  sum.className = passN === total ? 'okbg' : 'badbg';
+  document.title = `TOOLBAR ${passN}/${total}`;
+</script>

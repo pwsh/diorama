@@ -334,7 +334,10 @@ export class Sidebar extends LitElement {
                       @click=${() => p.setTool(t.id)}>${t.label}</button>
             `)}
           </div>
-          <div style="color:var(--text-dim);font-size:10px;margin-top:6px;line-height:1.4">
+          <div style="color:var(--text-dim);font-size:10px;margin-top:6px;line-height:1.4;font-style:italic">
+            Tip: the visual picker in the bottom toolbar shows live previews of every item.
+          </div>
+          <div style="color:var(--text-dim);font-size:10px;margin-top:4px;line-height:1.4">
             ${this._toolHint(p.tool)}
           </div>
           ${p.tool === 'wall' ? html`

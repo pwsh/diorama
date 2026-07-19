@@ -394,6 +394,28 @@ Outdoor effects driven by `Planner.weatherNow` (W1). three-view's `_weatherFxSta
 ### Floor boundary editing (drag the canvas edges)
 The floor rect (`0..w × 0..d` mm) is editable by dragging its four boundary edges (EDIT + Select only). Hover within ~10 px (screen) of an edge — after all item hits fail, before the pan fallback — shows a resize cursor (`hitFloorEdge` in canvas-hit.ts); mid-edge square handles always draw so the affordance is discoverable (`drawFloorEditHandles` in canvas-render.ts). Mousedown starts a `floorEdge` `Drag` (`{edge, startClient, startScale, startW, startD, startBbox, applied}`). Input is measured in **frozen start-of-drag screen space** (`startClient`/`startScale`), NOT live world coords, because resizing rescales the fit-to-canvas view and live coords would feed back. Grid-snapped to `GRID_MM`. `resolveFloorEdgeDrag` (geometry.ts, pure) resolves new `w/d` + a content translation `tx/ty`: `right`/`top` edges only resize; `left`/`bottom` edges resize AND translate all content so the plan stays glued to the opposite edge. Minimum size 2000 mm; shrinking clamps against the content bbox (`floorContentBbox` — wall points + item centers) + 100 mm margin so nothing strands. `Planner.translateFloorContent(dx,dy)` moves every placeable + wall points + room anchors + `bg.x/y` + `model3d.x/y`; it's a **frame change, so LOCKED items translate too**. Geo landmarks (`Store.geo.landmarks`, world-frame, shared across floors) translate ONLY when `store.floors.length === 1` — a multi-floor origin edit must not silently shift the shared geo frame. Release rounds `w/d` to grid + `save()` + `emitConfig()` (configRev → `_keyFloor` → 3D/nav rebuild); `viewCenter` is untouched.
 
+### Visual placement toolbar (bottom dock)
+`<diorama-toolbar>` (`src/ui/toolbar.ts`; design `docs/DESIGN-toolbar.md`) —
+edit-mode-only bottom dock, a flex-column LAYOUT SIBLING below the canvas (the
+canvas shrinks; the weather chip + 2D reset button clear it for free).
+Category tabs (11: furniture cats via `furnitureCat` + Lights + Controls &
+Sensors + Structure + Ground + Custom) → scrollable ~72 px item cards →
+variant CHIP row (door/window/wall/ground kinds). Model + arming live in the
+pure `src/ui/tool-arm.ts` (`buildToolbarModel(planner)`; arm fns call the SAME
+planner mutations as the sidebar — never fork semantics). Cards show REAL 3D
+thumbnails from `src/ui/thumbs.ts`: ONE hidden 128×128 `ThreeDRenderer` via
+the SAME dynamic-import specifier as three-view (never a static import — the
+chunk-split check greps `dist/assets/app.js` for `MeshToonMaterial` = 0),
+rAF-batched captures for furniture/lights/custom, authored glyph tiles for
+sensor/control fixtures + all fallbacks (`src/ui/thumbs-cache.ts`; cache key =
+`__DIORAMA_VERSION__` build tag + per-descriptor key + recipe hash for custom
+objects; localStorage-persisted). Collapse persists in
+`localStorage['diorama:toolbar:collapsed']`. Variant arming uses four
+RUNTIME-ONLY planner fields (`pendingLightKind`/`pendingWindowKind`/
+`pendingDoorKind`/`pendingGroundKind` — defaults reproduce classic drops;
+never persisted, invisible to undo/config). Armed card ring tracks external
+tool changes via the config channel. Test `toolbar-test.html` (41/41).
+
 ### Collapsible sidebar sections
 Every `.section` renders through `Sidebar._section(slug, title, bodyThunk, opts?)` (light-DOM wrapper: clickable `<h3 class="collapsible-header">` + `▸`/rotated arrow; the body thunk is only invoked while expanded). Collapsed keys persist **device-local** in `localStorage['diorama:sidebar:collapsed']` (JSON array, try/catch-guarded — NOT the HA store); absent from the set = expanded (default). Section keys are the stable per-section slugs (`floors`, `tools`, `sensors`, `motion`, `env`, `ble`, `alarm`, `thermostats`, `people`, `doors`, `windows`, `furniture`, `custom`, `rooms`, `voids`, `roamers`, `fixtures`, `layers`, `geo`, `model3d`, `bg`) — NOT the display title (which can change). The former `scene3d` / `weather` / `data` sidebar sections MOVED into the tabbed settings drawer (Display / Weather / Data tabs — see "Settings drawer & avatar packs"); the per-floor `look3d` overrides moved into the Floors section. Stale slugs in a persisted collapsed set are harmless. Room-grouped lists (`_groupedList(sectionSlug, …)`) get per-room-group collapse rows keyed `<sectionSlug>/<roomId>` (the "— No room —" bucket = `/none`). **mmWave detail editors are inline**: the selected sensor's per-sensor config editor (`_activeSensorSection()`) and its HA-data block (`_haSections()` — zones / objects / targets / sensor config) render as plain bordered **sub-blocks** directly beneath the selected sensor's row *inside* the `sensors` section (matching how the Motion section edits inline via `_motionItem`), NOT as separate `_section`s. There are no longer `active-sensor`/`ha-sensor` section slugs (stale keys in a persisted collapsed set are harmless).
 

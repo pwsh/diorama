@@ -741,6 +741,15 @@ export class Planner extends EventTarget {
   // Which wall kind the next drawn wall gets. Runtime only.
   pendingWallKind: import('./types.js').WallKind = 'full';
 
+  // Which fixture-kind the next drop of a variant-bearing tool creates. All
+  // runtime-only (never persisted) and default to today's drop kind, so the
+  // classic sidebar tools keep their exact behavior while the visual toolbar
+  // can pre-select a variant (mirrors pendingFurnitureKind / pendingWallKind).
+  pendingLightKind: import('./types.js').LightIconKind = 'bulb';
+  pendingWindowKind: import('./types.js').WindowKind = 'single';
+  pendingDoorKind: 'swing' | 'garage' | 'gate' = 'swing';
+  pendingGroundKind: import('./types.js').GroundKind = 'grass';
+
   // Room placement latch: when set, the next 2D canvas click sets a room's
   // anchor. Holds the room id being re-placed, or NEW_ROOM to create a fresh
   // room at the click point. Runtime + edit-only, never persisted.
@@ -2892,7 +2901,7 @@ export class Planner extends EventTarget {
       if (g) g.points = pts;
     } else {
       const id = newId('ga');
-      f.groundAreas.push({ id, name: `Area ${f.groundAreas.length + 1}`, points: pts, kind: 'grass' });
+      f.groundAreas.push({ id, name: `Area ${f.groundAreas.length + 1}`, points: pts, kind: this.pendingGroundKind });
       this.activeGroundAreaId = id;
     }
     this.save();

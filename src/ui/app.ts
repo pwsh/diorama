@@ -11,6 +11,7 @@ import './sidebar.js';
 import './canvas-2d.js';
 import './three-view.js';
 import './weather-chip.js';
+import './toolbar.js';
 import './modals.js';
 import type { AuthScreen } from './auth-screen.js';
 import type { FloorModal, EntityPicker, LightConfig, MediaConfig, AlarmModal, ThermostatModal, SettingsDrawer } from './modals.js';
@@ -239,25 +240,33 @@ export class App extends LitElement {
             <div class="sidebar-backdrop" @click=${() => p.toggleSidebar()}></div>
             <diorama-sidebar .planner=${p}></diorama-sidebar>
           ` : nothing}
-          <div style="flex:1;position:relative;overflow:hidden;background:var(--bg)">
-            <!-- Absolute inset so the canvas gets a real height to size
-                 against (height:100% of an auto-height div feeds back into
-                 the canvas backing-store resize and paints half-black). -->
-            <div style="position:absolute;inset:0;${p.view === '2d' ? '' : 'display:none'}">
-              <diorama-canvas-2d .planner=${p}></diorama-canvas-2d>
+          <!-- Canvas column: the canvas fills the top, the visual toolbar docks
+               below it (edit mode only). Because the toolbar is a LAYOUT sibling
+               (not an overlay), the canvas shrinks to make room — so the weather
+               chip + 2D reset-view button (absolute inside the canvas) clear the
+               dock for free, no barOffset / gap hack needed. -->
+          <div style="flex:1;display:flex;flex-direction:column;min-width:0;overflow:hidden">
+            <div style="flex:1;position:relative;overflow:hidden;background:var(--bg)">
+              <!-- Absolute inset so the canvas gets a real height to size
+                   against (height:100% of an auto-height div feeds back into
+                   the canvas backing-store resize and paints half-black). -->
+              <div style="position:absolute;inset:0;${p.view === '2d' ? '' : 'display:none'}">
+                <diorama-canvas-2d .planner=${p}></diorama-canvas-2d>
+              </div>
+              ${p.view === '3d' ? html`<diorama-three-view .planner=${p}></diorama-three-view>` : nothing}
+              <!-- Weather chip overlays the shared canvas area so it shows in
+                   both 2D and 3D without a duplicate mount / duplicate interval. -->
+              <diorama-weather-chip .planner=${p}></diorama-weather-chip>
+              <diorama-zone-edit-bar .planner=${p}></diorama-zone-edit-bar>
+              <div style="position:absolute;bottom:10px;right:10px;color:var(--text-dim);font-size:11px;
+                          padding:2px 6px;pointer-events:none;
+                          text-shadow:0 0 4px rgba(0,0,0,0.85),0 0 2px rgba(0,0,0,0.85)">
+                ${f.name} — ${f.sensors.length} sensor${f.sensors.length === 1 ? '' : 's'},
+                ${f.walls.length} wall${f.walls.length === 1 ? '' : 's'},
+                ${fmtLen(f.w, p.store.imperial)} × ${fmtLen(f.d, p.store.imperial)}
+              </div>
             </div>
-            ${p.view === '3d' ? html`<diorama-three-view .planner=${p}></diorama-three-view>` : nothing}
-            <!-- Weather chip overlays the shared canvas area so it shows in
-                 both 2D and 3D without a duplicate mount / duplicate interval. -->
-            <diorama-weather-chip .planner=${p}></diorama-weather-chip>
-            <diorama-zone-edit-bar .planner=${p}></diorama-zone-edit-bar>
-            <div style="position:absolute;bottom:10px;right:10px;color:var(--text-dim);font-size:11px;
-                        padding:2px 6px;pointer-events:none;
-                        text-shadow:0 0 4px rgba(0,0,0,0.85),0 0 2px rgba(0,0,0,0.85)">
-              ${f.name} — ${f.sensors.length} sensor${f.sensors.length === 1 ? '' : 's'},
-              ${f.walls.length} wall${f.walls.length === 1 ? '' : 's'},
-              ${fmtLen(f.w, p.store.imperial)} × ${fmtLen(f.d, p.store.imperial)}
-            </div>
+            <diorama-toolbar .planner=${p}></diorama-toolbar>
           </div>
         </div>
         <diorama-floor-modal .planner=${p}></diorama-floor-modal>

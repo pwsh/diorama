@@ -19,7 +19,7 @@ import {
 } from './canvas-hit.js';
 import type { Planner, Drag } from './planner.js';
 import { NEW_ROOM, NEW_LANDMARK } from './planner.js';
-import type { Vec2, Furniture, ObjectRecipe, Light } from './types.js';
+import type { Vec2, Furniture, ObjectRecipe, Light, WindowKind } from './types.js';
 
 // Drag kinds that move a single placeable and therefore get alignment guides
 // (Feature C). Wall vertices / doors / windows / zones are excluded.
@@ -2290,6 +2290,9 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
   }
   if (p.tool === 'light') {
     const lt: Light = { id: newId('lt'), x: snap(mm.x, 10), y: snap(mm.y, 10), entity_id: null, label: '' };
+    // Visual toolbar can pre-pick a light icon kind; default 'bulb' = the
+    // classic drop (the snap helpers below only bite for step/fireplace/etc).
+    if (p.pendingLightKind && p.pendingLightKind !== 'bulb') lt.iconKind = p.pendingLightKind;
     // Both no-op unless the fixture is a step light / fireplace (freshly dropped
     // lights default to 'bulb', so these bite once the kind is set + the piece
     // is dragged; kept here so a directly-typed kind snaps on drop too).
@@ -2312,19 +2315,28 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
       x: snap(mm.x, 10), y: snap(mm.y, 10),
       w: 800, rotation: 0, entity_id: null, label: '',
     };
+    // Visual toolbar can pre-pick a door kind (swing/garage/gate); default
+    // 'swing' keeps the classic drop (incl. the fence→gate auto below).
+    if (p.pendingDoorKind && p.pendingDoorKind !== 'swing') {
+      d.kind = p.pendingDoorKind;
+      if (p.pendingDoorKind === 'garage') d.w = 2400;   // garage default span
+    }
     snapOpeningToWall(f, d);
     // A fresh door snapped onto a fence/hedge run defaults to a gate (silent;
     // one-click override in the Doors Kind dropdown). Pinned decision 5.
-    if (isFenceLikeKind(nearestWallKind(f, d.x, d.y))) d.kind = 'gate';
+    if (!d.kind && isFenceLikeKind(nearestWallKind(f, d.x, d.y))) d.kind = 'gate';
     f.doors.push(d);
     p.save(); p.setTool('select'); p.emitConfig(); return;
   }
   if (p.tool === 'window') {
-    const wn = {
+    const wn: { id: string; x: number; y: number; w: number; rotation: number;
+                entity_id: null; label: string; kind?: WindowKind } = {
       id: newId('wn'),
       x: snap(mm.x, 10), y: snap(mm.y, 10),
       w: 1000, rotation: 0, entity_id: null, label: '',
     };
+    // Visual toolbar can pre-pick a window kind; default 'single' = classic.
+    if (p.pendingWindowKind && p.pendingWindowKind !== 'single') wn.kind = p.pendingWindowKind;
     snapOpeningToWall(f, wn);
     f.windows.push(wn);
     p.save(); p.setTool('select'); p.emitConfig(); return;

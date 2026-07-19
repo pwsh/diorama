@@ -1,6 +1,13 @@
 # DESIGN — Visual placement toolbar (bottom dock)
 
-*Authored 2026-07-19 (Fable). Status: building.*
+*Authored 2026-07-19 (Fable). Status: **shipped** (2026-07-19).*
+*Implementation deltas: the dock is a flex-column layout SIBLING below the
+canvas (canvas shrinks — chip/reset-button clearance for free, no offset
+hacks); buildTag = compiled `__DIORAMA_VERSION__`; sensor/control fixture
+cards use authored glyph tiles (not 3D captures) — bespoke per-fixture
+scaffolding deferred, service structured to add later; four runtime-only
+pending kinds (`pendingLightKind/WindowKind/DoorKind/GroundKind`) added so
+variant chips arm real drops.*
 
 User brief: replace the text-list tools menu with a visual selection system —
 a bottom toolbar (familiar from other design programs) where the user picks a
