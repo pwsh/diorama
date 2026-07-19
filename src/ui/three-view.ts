@@ -9,6 +9,7 @@ import type { ThreeDRenderer, ZoneWorld, HaloWorld, TargetWorld, ActivityContext
 import { localToWorld, transformVerts, pointInPolygon, sensorColor, hexToInt, motionColor, lightIconKind, furnitureKind, resolveFurnitureDef, furnitureCat, isBinKind, isSpeakerKind, isSinkKind, isVehicleKind, isClimateApplianceKind, isBladedFanKind, isStairsKind, alarmStateColor, valveOpenness, sprinklerRunning, sprinklerHeadKind, sprinklerArcDeg, sprinklerRadius, sprinklerRotation, doorSpanCenter, isDroopPlant, plantThirsty, PLANT_MOISTURE_DEFAULT_THRESHOLD } from '../geometry.js';
 import { compass8 } from '../geo.js';
 import { parseNowPlaying, isMediaPlayerId } from '../geometry.js';
+import { robotProgress } from '../geometry.js';
 import { poolWaterColor } from '../geometry.js';
 import { resolveScreenContent } from '../surfaces.js';
 import { resolveScenePreset, resolveTimeBucket } from '../time-of-day.js';
@@ -335,9 +336,10 @@ export class ThreeView extends LitElement {
           }
           return;
         }
-        // Sinks reuse the 'media' click tag (single click runs/stops the water).
-        // Dblclick binds a switch/binary_sensor (faucet on-state), not media.
-        if (fu0 && isSinkKind(fu0.kind)) {
+        // Sinks + bathtubs reuse the 'media' click tag (single click runs/stops
+        // the water). Dblclick binds a switch/binary_sensor (in-use state), not
+        // media.
+        if (fu0 && (isSinkKind(fu0.kind) || fu0.kind === 'bathtub')) {
           if (p.uiMode === 'edit' && !entity_id) {
             this.dispatchEvent(new CustomEvent('open-entity-picker', {
               bubbles: true, composed: true,
@@ -758,7 +760,7 @@ export class ThreeView extends LitElement {
         // itself is per-frame). Unbound plants with no demo toggle never qualify.
         const isPlant = isDroopPlant(fu, p.store.customObjects) &&
           (!!fu.moistureEntity || fu.plantDemoThirsty !== undefined);
-        if (furnitureCat(def) !== 'appliance' && !isBinKind(fu.kind) && !isSpeakerKind(fu.kind) && !isSinkKind(fu.kind) && !hasEvMail && !isPlant && !isClimateApplianceKind(fu.kind)) return '';
+        if (furnitureCat(def) !== 'appliance' && !isBinKind(fu.kind) && !isSpeakerKind(fu.kind) && !isSinkKind(fu.kind) && fu.kind !== 'bathtub' && !hasEvMail && !isPlant && !isClimateApplianceKind(fu.kind)) return '';
         const on = p.effectiveState(fu)?.state ?? '-';
         const door = fu.doorEntity ? stOf(fu.doorEntity) : '';
         // Per-device power glow (#8): bucket the live power reading to 50 W so the
@@ -1066,8 +1068,12 @@ export class ThreeView extends LitElement {
         r.updateRobotDocks(robotList);
       }
       // Per-frame: position/animate the moving robot bodies from the planner's
-      // controller state (the single source of truth shared with 2D).
-      r.updateRobotRigs(robotList, p.robotStates);
+      // controller state (the single source of truth shared with 2D). Task
+      // progress is read live here (entity field wins; else a bound vacuum's own
+      // attributes) and folded into the body progress strip/ring (no rebuild).
+      const robotProgressMap: Record<string, number | null> = {};
+      for (const ro of robotList) robotProgressMap[ro.id] = robotProgress(ro, id => states[id] || null);
+      r.updateRobotRigs(robotList, p.robotStates, robotProgressMap);
 
       // Now-playing cards (#11): sprites above media_player-bound furniture that
       // is playing/paused. Own dirty key = configRev + per-media (state|title|

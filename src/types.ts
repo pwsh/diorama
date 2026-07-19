@@ -474,6 +474,12 @@ export interface RobotFixture {
   posOffsetY?: number;
   posFlipY?: boolean;            // mirror the map Y axis
   posRotDeg?: number;            // map→plan rotation (0/90/180/270 typical, default 0)
+  // Task-progress source (both kinds): a `sensor.*` whose state is a 0..100
+  // percent (cleaning / mowing progress). Drives the body progress strip/ring in
+  // 2D + 3D. Entity field WINS; absent → best-effort read of the bound vacuum/
+  // mower entity's own attributes (cleaned_area_percent / progress / …). Neither
+  // → strip hidden. Config-path in Planner._isSlowEntity (scoped to this floor).
+  progressEntity?: string | null;
   // Valetudo room-map overlay (Phase 5, batch M-C): the topic identifier segment
   // (`<valetudoNs>/<valetudoId>/…`). When set + the MQTT bridge is up, Diorama
   // subscribes to this robot's MapData/StatusStateAttribute and draws its SLAM

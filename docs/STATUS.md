@@ -125,6 +125,30 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Polish wave 1: aircraft fixes, robot redesign, furniture behaviors**
+  (2026-07-19; 3 parallel Opus agents). **Aircraft**: chopper tow wire
+  now spans real endpoints in the rigid chopper frame (sway-invariant);
+  plane propeller rebuilt as hub+blades spinning about the fuselage axis
+  (the old disc precessed on compound Euler angles); BOTH banners are
+  paired FrontSide planes (train-flank technique, shared-map dedupe in
+  `_disposeSpriteMaps`) so text reads correctly from either side.
+  bgtext-multi 29→41/41. **Robots**: mower is a modern tank-style body
+  (chamfered wedge, lugged drive wheels, side skirts, hump beacon in the
+  robotLedColor palette, antenna); NEW `RobotFixture.progressEntity`
+  (config-path) or bound-entity percent attributes drive a 10-segment
+  rear strip (mower) / a 12-segment ring wrapped around the vacuum puck
+  + a 2D progress arc; pure `robotProgress` in geometry. robot-test
+  48→71/71. **Furniture**: mailbox flag semantics reworked (flagEntity
+  'on' = outgoing waiting → flag straight up; otherwise pole horizontal,
+  flag hanging down; count>0 = badge only, lid stays closed) with eased
+  blends; bird-bath water; swingset seats 450×250 @350 mm registering 2
+  SitSpots with occupied-pendulum pivots the seated rig rides
+  (`_swingOffset`, anti-feedback intact); dark interior cavities behind
+  all appliance doors; speaker cone/cabinet contrast + dust caps;
+  bathtub void + bindable fill/drain (sink idiom, slower); toilet open
+  lid + bowl water. FURNPOLISH 28/28; vehicle-mail updated 25→26/26.
+  Merged-HEAD regressions: sink 48/48, terrain 21/21.
+
 - **Climate appliances + multi background-text (train & chopper)**
   (2026-07-18; 2 parallel Opus agents, surgical shared-file discipline).
   **Climate**: 11 FurnitureKinds (window/mini-split/portable AC with

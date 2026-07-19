@@ -9,7 +9,7 @@ import {
   climateTempUnit, fmtTempNum,
   actionButtonSize, actionButtonColor, actionButtonIcon,
   safetyColor, safetyGlyph, safetyIsFloor, SAFETY_DEFAULTS,
-  robotGlyph, robotColor, ROBOT_DEFAULTS,
+  robotGlyph, robotColor, robotProgress, ROBOT_DEFAULTS,
   presenceZoneColor, cameraFov, cameraRange, cameraStateColor, cameraColor,
   projectorProjecting, projectorAim, projectorBeamColor, projectorThrow, screenCenterHeight, biasLightColor,
   VALVE_DEFAULTS, valveOpenness, valveFlowing, valveTransitional, valveRotation,
@@ -1436,6 +1436,22 @@ function drawRobots(ctx: CanvasRenderingContext2D, p: Planner, view: View): void
     ctx.arc(bc.x, bc.y - bodyR - 3 * dpr, Math.max(2, 2.5 * dpr), 0, 2 * Math.PI);
     ctx.fillStyle = hexToRgba(led, ledA);
     ctx.fill();
+    // Task-progress arc around the body when a source is known (both kinds): a
+    // dim track + a bright green sweep filling clockwise from the top.
+    const prog = robotProgress(r, id => p.hass?.states?.[id] ?? null);
+    if (prog != null) {
+      const pr = bodyR + Math.max(2.5, 3 * dpr);
+      const start = -Math.PI / 2;
+      ctx.lineWidth = Math.max(2, 3 * dpr);
+      ctx.beginPath();
+      ctx.arc(bc.x, bc.y, pr, 0, 2 * Math.PI);
+      ctx.strokeStyle = 'rgba(255,255,255,0.14)';
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(bc.x, bc.y, pr, start, start + 2 * Math.PI * (Math.max(0, Math.min(100, prog)) / 100));
+      ctx.strokeStyle = '#43a047';
+      ctx.stroke();
+    }
     ctx.restore();
 
     // Label: glyph + activity.

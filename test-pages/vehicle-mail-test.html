@@ -114,31 +114,43 @@
     assert('only the far charger pulses (_evPulses == 1)', r._evPulses.length === 1, `pulses=${r._evPulses.length}`);
   }
 
-  // ── mailbox: badge + flag + lid ─────────────────────────────────────────
+  // ── mailbox: badge + flag + lid (furniture-polish reconciliation) ─────────
+  // New semantics: flagEntity 'on' = outgoing-mail WAITING → flag STRAIGHT UP
+  // (rotation.x ~ 0); otherwise the flag rests DOWN (pole horizontal → rotation.x
+  // ~ π/2). count > 0 shows only the BADGE and never raises the flag. The lid is
+  // built CLOSED always. The blend is seeded to its target on first build so a
+  // fresh scene renders the correct pose without advancing.
   function testMailbox() {
     const groups = (grp) => grp.children.filter(o => o.type === 'Group');
     const sprites = (grp) => { const out = []; grp.traverse(o => { if (o.isSprite) out.push(o); }); return out; };
-    const mFull = { id: 'mb_full', x: 1000, y: 1000, w: 250, h: 350, kind: 'mailbox', mailCount: { countEntity: 'sensor.mail', flagEntity: 'binary_sensor.lid' } };
-    const mEmpty = { id: 'mb_empty', x: 3000, y: 1000, w: 250, h: 350, kind: 'mailbox', mailCount: { countEntity: 'sensor.mail2' } };
-    const mUnb = { id: 'mb_unb', x: 5000, y: 1000, w: 250, h: 350, kind: 'mailbox' };
+    // mUp:    flagEntity 'on' + count 3 → flag UP + badge.
+    // mCount: count 3, NO flagEntity   → flag DOWN + badge (count alone ≠ flag up).
+    // mEmpty: count 0                  → flag DOWN, no badge.
+    // mUnb:   unbound                  → flag DOWN, no badge.
+    const mUp    = { id: 'mb_up',    x: 1000, y: 1000, w: 250, h: 350, kind: 'mailbox', mailCount: { countEntity: 'sensor.mail', flagEntity: 'binary_sensor.flag' } };
+    const mCount = { id: 'mb_count', x: 3000, y: 1000, w: 250, h: 350, kind: 'mailbox', mailCount: { countEntity: 'sensor.mail' } };
+    const mEmpty = { id: 'mb_empty', x: 5000, y: 1000, w: 250, h: 350, kind: 'mailbox', mailCount: { countEntity: 'sensor.mail2' } };
+    const mUnb   = { id: 'mb_unb',   x: 7000, y: 1000, w: 250, h: 350, kind: 'mailbox' };
     const states = {
-      'sensor.mail': { state: '3', attributes: {} }, 'binary_sensor.lid': { state: 'on', attributes: {} },
+      'sensor.mail': { state: '3', attributes: {} }, 'binary_sensor.flag': { state: 'on', attributes: {} },
       'sensor.mail2': { state: '0', attributes: {} },
     };
-    build([mFull, mEmpty, mUnb], states);
-    const gFull = findByFixtureId(r._floorGroup, 'mb_full');
+    build([mUp, mCount, mEmpty, mUnb], states);
+    const gUp = findByFixtureId(r._floorGroup, 'mb_up');
+    const gCount = findByFixtureId(r._floorGroup, 'mb_count');
     const gEmpty = findByFixtureId(r._floorGroup, 'mb_empty');
     const gUnb = findByFixtureId(r._floorGroup, 'mb_unb');
     // Group children order: [lidHinge, flagArm].
-    const lidF = groups(gFull)[0], flagF = groups(gFull)[1];
-    const flagE = groups(gEmpty)[1], flagU = groups(gUnb)[1];
-    assert('count > 0 floats a badge sprite', sprites(gFull).length >= 1, `sprites=${sprites(gFull).length}`);
+    const lidUp = groups(gUp)[0], flagUp = groups(gUp)[1];
+    const flagCount = groups(gCount)[1], flagE = groups(gEmpty)[1], flagU = groups(gUnb)[1];
+    assert('count > 0 floats a badge sprite', sprites(gUp).length >= 1 && sprites(gCount).length >= 1, `up=${sprites(gUp).length} count=${sprites(gCount).length}`);
     assert('count 0 shows NO badge sprite', sprites(gEmpty).length === 0, `sprites=${sprites(gEmpty).length}`);
     assert('unbound mailbox shows NO badge sprite', sprites(gUnb).length === 0);
-    assert('count > 0 raises the flag (flagArm.rotation.x ~ 0)', flagF && Math.abs(flagF.rotation.x) < 0.02, flagF ? `rx=${flagF.rotation.x.toFixed(2)}` : '');
-    assert('count 0 lowers the flag (flagArm.rotation.x > 1)', flagE && flagE.rotation.x > 1, flagE ? `rx=${flagE.rotation.x.toFixed(2)}` : '');
-    assert('unbound lowers the flag', flagU && flagU.rotation.x > 1);
-    assert('lid sensor on tilts the lid open (lidHinge.rotation.x < 0)', lidF && lidF.rotation.x < -0.5, lidF ? `rx=${lidF.rotation.x.toFixed(2)}` : '');
+    assert('flag sensor on raises the flag STRAIGHT UP (rotation.x ~ 0)', flagUp && Math.abs(flagUp.rotation.x) < 0.02, flagUp ? `rx=${flagUp.rotation.x.toFixed(2)}` : '');
+    assert('count > 0 alone does NOT raise the flag (rests DOWN, rotation.x ~ π/2)', flagCount && flagCount.rotation.x > 1.4, flagCount ? `rx=${flagCount.rotation.x.toFixed(2)}` : '');
+    assert('no flag signal rests the flag DOWN (pole horizontal, rotation.x > 1.4)', flagE && flagE.rotation.x > 1.4, flagE ? `rx=${flagE.rotation.x.toFixed(2)}` : '');
+    assert('unbound rests the flag DOWN', flagU && flagU.rotation.x > 1.4);
+    assert('lid stays CLOSED (lidHinge.rotation.x ~ 0)', lidUp && Math.abs(lidUp.rotation.x) < 0.02, lidUp ? `rx=${lidUp.rotation.x.toFixed(2)}` : '');
   }
 
   // ── dispose probe: badge CanvasTexture freed on rebuild ──────────────────

@@ -1,0 +1,237 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>furniture-polish test</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<script type="module">
+ try {
+  // Furniture-polish batch — seven behaviors:
+  //  1 mailbox flag: DOWN by default / count>0 (pole horizontal, rotation.x~π/2),
+  //    UP on flagEntity 'on' (rotation.x~0); eased blend survives rebuild.
+  //  2 bird_bath: translucent blue water disc just below the rim.
+  //  3 swingset: 2 SitSpots, low wide seats (~450×250 @ ~350), occupied seat
+  //    pivot oscillates while unoccupied stays ~still, seated rig rides the swing.
+  //  4 appliance interiors: fridge/dishwasher/stove/microwave/washer show a dark
+  //    cavity mesh behind the door plane.
+  //  5 speaker cones: cone material luma differs strongly from the cabinet.
+  //  6 bathtub: recessed cavity + fill rises on entityOn / drains / survives rebuild.
+  //  7 toilet: blue water disc low in the bowl + lid built open.
+  const mod = await import('./assets/three-renderer.js?v=' + Date.now());
+  const geo = await import('./geometry.mod.js?v=' + Date.now());
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+
+  const results = [];
+  const assert = (name, cond, detail = '') => results.push(`${cond ? 'PASS' : 'FAIL'} ${name}${detail ? ' (' + detail + ')' : ''}`);
+  const findByFixtureId = (grp, id) => { let f = null; grp.traverse(o => { if (!f && o.userData && o.userData.fixtureId === id) f = o; }); return f; };
+  const findByFlag = (grp, key) => { let f = null; grp.traverse(o => { if (!f && o.userData && o.userData[key]) f = o; }); return f; };
+  const groupsOf = (grp) => grp.children.filter(o => o.type === 'Group');
+  const spritesOf = (grp) => { const out = []; grp.traverse(o => { if (o.isSprite) out.push(o); }); return out; };
+  const luma = (hex) => { const r0 = (hex >> 16) & 255, g0 = (hex >> 8) & 255, b0 = hex & 255; return 0.299 * r0 + 0.587 * g0 + 0.114 * b0; };
+
+  const baseFloor = (furniture) => ({
+    id: 'f1', name: 'F', w: 12000, d: 9000,
+    walls: [], furniture: furniture || [], lights: [], switches: [],
+    sensors: [], motionSensors: [], envSensors: [], doors: [], windows: [],
+    bg: null, model3d: null, look3d: null, rooms: [],
+  });
+  const build = (furniture, states) => {
+    r.updateFloor(baseFloor(furniture), { preset: 'day' }, undefined, undefined, id => (states && states[id]) || null);
+  };
+
+  // Deterministic clock for updateTargets.
+  let _clock = 1000;
+  const realNow = performance.now.bind(performance);
+  performance.now = () => _clock;
+  const advance = (frames, stepS, targets, ctx) => {
+    for (let i = 0; i < frames; i++) { _clock += stepS * 1000; r.updateTargets((targets || []).map(t => ({ ...t })), ctx); }
+  };
+
+  // ── 1. Mailbox flag ───────────────────────────────────────────────────────
+  function testMailbox() {
+    const mUp    = { id: 'm_up',    x: 1000, y: 1000, w: 250, h: 350, kind: 'mailbox', mailCount: { countEntity: 'sensor.c', flagEntity: 'binary_sensor.f' } };
+    const mCount = { id: 'm_count', x: 3000, y: 1000, w: 250, h: 350, kind: 'mailbox', mailCount: { countEntity: 'sensor.c' } };
+    const mDown  = { id: 'm_down',  x: 5000, y: 1000, w: 250, h: 350, kind: 'mailbox' };
+    const states = { 'sensor.c': { state: '3', attributes: {} }, 'binary_sensor.f': { state: 'on', attributes: {} } };
+    build([mUp, mCount, mDown], states);
+    const flagUp = groupsOf(findByFixtureId(r._floorGroup, 'm_up'))[1];
+    const flagCount = groupsOf(findByFixtureId(r._floorGroup, 'm_count'))[1];
+    const flagDown = groupsOf(findByFixtureId(r._floorGroup, 'm_down'))[1];
+    const lidUp = groupsOf(findByFixtureId(r._floorGroup, 'm_up'))[0];
+    assert('mailbox: flagEntity on → flag UP (rotation.x ~ 0)', flagUp && Math.abs(flagUp.rotation.x) < 0.02, flagUp ? `rx=${flagUp.rotation.x.toFixed(2)}` : 'no arm');
+    assert('mailbox: count>0 alone keeps flag DOWN (rotation.x ~ π/2) + shows badge',
+      flagCount && flagCount.rotation.x > 1.4 && spritesOf(findByFixtureId(r._floorGroup, 'm_count')).length >= 1,
+      flagCount ? `rx=${flagCount.rotation.x.toFixed(2)}` : '');
+    assert('mailbox: default flag DOWN (pole horizontal)', flagDown && flagDown.rotation.x > 1.4, flagDown ? `rx=${flagDown.rotation.x.toFixed(2)}` : '');
+    assert('mailbox: lid stays CLOSED (rotation.x ~ 0)', lidUp && Math.abs(lidUp.rotation.x) < 0.02, lidUp ? `rx=${lidUp.rotation.x.toFixed(2)}` : '');
+
+    // Eased transition + survives rebuild: build DOWN (seeds blend 0), then rebuild
+    // with flag ON (blend NOT reseeded) → rx eases from π/2 toward 0.
+    const mb = { id: 'm_e', x: 1000, y: 3000, w: 250, h: 350, kind: 'mailbox', mailCount: { flagEntity: 'binary_sensor.f' } };
+    build([mb], { 'binary_sensor.f': { state: 'off', attributes: {} } });
+    const rx0 = groupsOf(findByFixtureId(r._floorGroup, 'm_e'))[1].rotation.x;
+    build([{ ...mb }], { 'binary_sensor.f': { state: 'on', attributes: {} } });   // rebuild, flag now on
+    const rxMid = groupsOf(findByFixtureId(r._floorGroup, 'm_e'))[1].rotation.x;   // persisted blend → still ~down
+    advance(120, 0.033, []);                                                       // ~4 s ease
+    const rxAfter = groupsOf(findByFixtureId(r._floorGroup, 'm_e'))[1].rotation.x;
+    assert('mailbox: flag blend eases up on transition (survives rebuild)',
+      rx0 > 1.4 && rxMid > 1.4 && rxAfter < rx0 - 0.3,
+      `down=${rx0.toFixed(2)} afterRebuild=${rxMid.toFixed(2)} eased=${rxAfter.toFixed(2)}`);
+  }
+
+  // ── 2. Bird bath water ─────────────────────────────────────────────────────
+  function testBirdBath() {
+    const g = r._buildFurniture({ id: 'bb', x: 0, y: 0, w: 450, h: 450, kind: 'bird_bath', rotation: 0 });
+    const disc = findByFlag(g, 'birdBathWater');
+    const HT = geo.FURNITURE_KINDS.bird_bath.ht;
+    const rimTop = HT * 0.75 + HT * 0.12;
+    const m = disc && disc.material;
+    assert('bird_bath: has a translucent blue water disc',
+      !!disc && !!m && m.transparent === true && m.color.b > m.color.r,
+      m ? `opacity=${(m.opacity ?? 1).toFixed(2)} b=${m.color.b.toFixed(2)}>r=${m.color.r.toFixed(2)}` : 'no disc');
+    assert('bird_bath: water disc sits just below the rim', !!disc && disc.position.y < rimTop && disc.position.y > rimTop - HT * 0.1,
+      disc ? `y=${disc.position.y.toFixed(0)} rim=${rimTop.toFixed(0)}` : '');
+  }
+
+  // ── 3. Swingset ────────────────────────────────────────────────────────────
+  function testSwing() {
+    r.clearTransientGroups();
+    build([{ id: 'sw', x: 4000, y: 3000, w: 2800, h: 1600, kind: 'swingset', rotation: 0 }]);
+    const spots = r._sitSpots.filter(s => s.id.startsWith('sw:'));
+    assert('swingset: registers 2 SitSpots', spots.length === 2, `n=${spots.length}`);
+    // Seat slab size from the swing pivot (its box child is the seat slab).
+    const swEntry = r._swings.find(s => s.spotId === 'sw:0');
+    const seat = swEntry.pivot.children.find(c => c.isMesh && c.geometry.type === 'BoxGeometry');
+    assert('swingset: seat slab is ~450×250', !!seat && Math.abs(seat.geometry.parameters.width - 450) < 1 && Math.abs(seat.geometry.parameters.depth - 250) < 1,
+      seat ? `${seat.geometry.parameters.width}x${seat.geometry.parameters.depth}` : 'none');
+    // Seat rests at ~350 mm (pivot at legH=2200, seat child at y=-ropeLen).
+    const seatRest = 2200 - swEntry.ropeLen;
+    assert('swingset: seat rests low (~350 mm)', Math.abs(seatRest - 350) < 5, `seatY=${seatRest}`);
+
+    // Occupy seat 0: place a target at its world position; drive to sit.
+    const sp0 = r._sitSpots.find(s => s.id === 'sw:0');
+    const wx = r._fw / 2 - sp0.x, wy = sp0.z + r._fd / 2;
+    const tgt = [{ key: 'S0', x: wx, y: wy, color: 0x4fc3f7 }];
+    advance(560, 0.0167, tgt);
+    const h = r._humanoids['S0'];
+    const satOk = h && h.sit > 0.6 && h.sitSpotId === 'sw:0';
+    assert('swingset: dwelling rig sits on a swing seat', satOk, h ? `sit=${h.sit.toFixed(2)} spot=${h.sitSpotId}` : 'no rig');
+
+    // Sample occupied pivot angle + seated rig z over a swing period (~2.5 s).
+    const occPivot = r._swings.find(s => s.spotId === 'sw:0').pivot;
+    const emptyPivot = r._swings.find(s => s.spotId === 'sw:1').pivot;
+    let oMin = 9, oMax = -9, eMin = 9, eMax = -9, zMin = 1e9, zMax = -1e9;
+    for (let i = 0; i < 170; i++) {
+      advance(1, 0.0167, tgt);
+      oMin = Math.min(oMin, occPivot.rotation.x); oMax = Math.max(oMax, occPivot.rotation.x);
+      eMin = Math.min(eMin, emptyPivot.rotation.x); eMax = Math.max(eMax, emptyPivot.rotation.x);
+      const z = r._humanoids['S0'].group.position.z; zMin = Math.min(zMin, z); zMax = Math.max(zMax, z);
+    }
+    assert('swingset: OCCUPIED seat pivot oscillates (±~15°)', (oMax - oMin) > 0.15, `range=${(oMax - oMin).toFixed(3)}`);
+    assert('swingset: UNOCCUPIED seat stays ~still', (eMax - eMin) < 0.08, `range=${(eMax - eMin).toFixed(3)}`);
+    assert('swingset: seated rig rides the swing (z tracks pivot)', (zMax - zMin) > 8, `dz=${(zMax - zMin).toFixed(1)}mm`);
+  }
+
+  // ── 4. Appliance interiors ─────────────────────────────────────────────────
+  function testAppliances() {
+    const kinds = [
+      ['fridge', 910, 760], ['dishwasher', 610, 620], ['stove', 760, 660],
+      ['microwave', 500, 320], ['washer', 680, 720],
+    ];
+    for (const [k, w, h] of kinds) {
+      const g = r._buildFurniture({ id: 'ap_' + k, x: 0, y: 0, w, h, kind: k, rotation: 0 });
+      const cav = findByFlag(g, 'applianceCavity');
+      const D = h;   // furniture depth = h param; front face at -D/2
+      // Cavity must exist and sit BEHIND the door plane (front of body, ~ -D/2).
+      const behind = cav && cav.position.z > -D / 2;
+      assert(`${k}: has a dark interior cavity behind the door plane`, !!cav && behind,
+        cav ? `z=${cav.position.z.toFixed(0)} front=${(-D / 2).toFixed(0)}` : 'no cavity');
+    }
+  }
+
+  // ── 5. Speaker cone contrast ────────────────────────────────────────────────
+  function testSpeakers() {
+    const K = geo.FURNITURE_KINDS;
+    const kinds = ['speaker_tower', 'speaker_bookshelf', 'subwoofer', 'center_channel'];
+    let allContrast = true, detail = [];
+    for (const k of kinds) {
+      const g = r._buildFurniture({ id: 's_' + k, x: 0, y: 0, w: K[k].w, h: K[k].h, kind: k, rotation: 0 });
+      // Cabinet = the large box; cone = a speakerDriver mesh.
+      let cabinet = null, cone = null;
+      g.traverse(o => {
+        if (o.isMesh && !o.userData.outline) {
+          if (o.userData.speakerDriver && !cone) cone = o;
+          else if (o.geometry.type === 'BoxGeometry' && !cabinet) cabinet = o;
+        }
+      });
+      const ok = cabinet && cone && Math.abs(luma(cone.material.color.getHex()) - luma(cabinet.material.color.getHex())) > 50;
+      if (!ok) allContrast = false;
+      detail.push(`${k}:${cone && cabinet ? (luma(cone.material.color.getHex()) - luma(cabinet.material.color.getHex())).toFixed(0) : 'x'}`);
+    }
+    assert('speakers: cone luma differs strongly from cabinet (all 4 kinds)', allContrast, detail.join(' '));
+    // Dust cap present (a distinct dark dot).
+    const g = r._buildFurniture({ id: 's_dc', x: 0, y: 0, w: K.speaker_tower.w, h: K.speaker_tower.h, kind: 'speaker_tower' });
+    let caps = 0, cones = 0;
+    g.traverse(o => { if (o.isMesh && o.userData.speakerDriver) cones++; });
+    // A cap is a small dark cylinder that is NOT a speakerDriver but IS outlineSkip near the front.
+    g.traverse(o => { if (o.isMesh && !o.userData.speakerDriver && o.userData.outlineSkip && o.geometry.type === 'CylinderGeometry' && luma(o.material.color.getHex()) < 40) caps++; });
+    assert('speaker_tower: has dust-cap dots (one per driver)', caps >= cones && cones === 3, `caps=${caps} cones=${cones}`);
+  }
+
+  // ── 6. Bathtub ──────────────────────────────────────────────────────────────
+  function testBathtub() {
+    r.clearTransientGroups();
+    const tub = { id: 'tub', x: 2000, y: 2000, w: 1520, h: 760, kind: 'bathtub', rotation: 0, entity_id: 'switch.tap' };
+    build([tub], { 'switch.tap': { state: 'off', attributes: {} } });
+    const g = findByFixtureId(r._floorGroup, 'tub');
+    assert('bathtub: has a recessed cavity floor', !!findByFlag(g, 'bathtubCavity'));
+    const fill0 = r._bathtubFill['tub'] ?? 0;
+    // Fill: entityOn true → rises.
+    advance(200, 0.05, [], { entityOn: { tub: true } });   // ~10 s
+    const fillUp = r._bathtubFill['tub'];
+    assert('bathtub: fill RISES while in use', fillUp > 0.5, `fill=${fillUp.toFixed(3)}`);
+    const tubEntry = r._bathtubs.find(t => t.fuId === 'tub');
+    assert('bathtub: water plane visible + risen above empty', tubEntry.fill.visible && tubEntry.fill.position.y > tubEntry.emptyY + 20,
+      `y=${tubEntry.fill.position.y.toFixed(0)} emptyY=${tubEntry.emptyY.toFixed(0)}`);
+    // Drain: entityOn false → falls.
+    advance(240, 0.05, [], { entityOn: {} });   // ~12 s
+    const fillDown = r._bathtubFill['tub'];
+    assert('bathtub: DRAINS when off', fillDown < 0.15 && fillDown < fillUp, `fill=${fillDown.toFixed(3)}`);
+    // Blend survives rebuild: refill then rebuild, level re-applied (not popped).
+    advance(200, 0.05, [], { entityOn: { tub: true } });
+    const before = r._bathtubFill['tub'];
+    build([{ ...tub }], { 'switch.tap': { state: 'on', attributes: {} } });
+    const g2 = findByFixtureId(r._floorGroup, 'tub');
+    const t2 = r._bathtubs.find(t => t.fuId === 'tub');
+    assert('bathtub: fill blend survives _keyFloor rebuild (not popped empty)',
+      Math.abs((r._bathtubFill['tub'] ?? 0) - before) < 0.001 && t2.fill.position.y > t2.emptyY + 20,
+      `before=${before.toFixed(3)} y=${t2.fill.position.y.toFixed(0)}`);
+  }
+
+  // ── 7. Toilet ────────────────────────────────────────────────────────────────
+  function testToilet() {
+    const g = r._buildFurniture({ id: 'wc', x: 0, y: 0, w: 480, h: 700, kind: 'toilet', rotation: 0 });
+    const water = findByFlag(g, 'toiletWater');
+    const lid = findByFlag(g, 'toiletLid');
+    const m = water && water.material;
+    assert('toilet: blue water disc low in the bowl', !!water && m && m.transparent === true && m.color.b > m.color.r && water.position.y < 300,
+      water ? `y=${water.position.y.toFixed(0)} b>${m.color.r.toFixed(2)}` : 'no water');
+    // Lid built OPEN = upright (rotated ~90° about X) and raised above the seat.
+    assert('toilet: lid is built OPEN (upright, raised)', !!lid && Math.abs(Math.abs(lid.rotation.x) - Math.PI / 2) < 0.1 && lid.position.y > 500,
+      lid ? `rx=${lid.rotation.x.toFixed(2)} y=${lid.position.y.toFixed(0)}` : 'no lid');
+  }
+
+  testMailbox();
+  testBirdBath();
+  testSwing();
+  testAppliances();
+  testSpeakers();
+  testBathtub();
+  testToilet();
+
+  performance.now = realNow;
+  const pass = results.filter(x => x.startsWith('PASS')).length;
+  const fail = results.filter(x => x.startsWith('FAIL')).length;
+  document.title = `FURNPOLISH ${fail === 0 ? 'PASS' : 'FAIL'} ${pass}/${pass + fail} | ` + results.join(' · ');
+ } catch (e) { document.title = 'ERR: ' + (e && e.stack ? e.stack.split('\n').slice(0, 4).join(' | ') : e); }
+</script>

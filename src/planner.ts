@@ -1982,7 +1982,8 @@ export class Planner extends EventTarget {
     // through the config channel so the sidebar state badge + GPS status refresh
     // on change. Scoped to the current floor's bound ids only.
     if ((f2.robots ?? []).some(r =>
-      r.entity_id === id || r.trackerEntity === id || r.latEntity === id || r.lonEntity === id)) return true;
+      r.entity_id === id || r.trackerEntity === id || r.latEntity === id || r.lonEntity === id ||
+      r.progressEntity === id)) return true;
     // Presence-zone occupancy sensors (#5): config-path so 2D/3D dirty keys +
     // sidebar badge refresh on an occupancy flip. The 2D RAF reads the glow live.
     if ((f2.presenceZones ?? []).some(z => z.entity_id === id)) return true;

@@ -22,7 +22,7 @@ import {
   alarmHeight, alarmStateColor, calendarHeight, safetyColor,
   thermostatHeight, hvacModeColor,
   actionButtonKind, actionButtonColor, actionButtonIcon, actionButtonHeight, snapActionButtonToWall, actionLastFired,
-  robotGlyph, robotColor, robotLedColor,
+  robotGlyph, robotColor, robotLedColor, robotProgress,
   parseVacuumPosition, solveVacuumDockOffset,
   presenceZoneColor, cameraFov, cameraRange, cameraHeight, CAMERA_DEFAULTS, cameraColor, slugifyFrigateName,
   projectorHeight, projectorThrow, projectorBeamColor, PROJECTOR_DEFAULTS,
@@ -2072,6 +2072,7 @@ export class Sidebar extends LitElement {
                   @click=${() => p.toggleRobot(r)}>${act === 'cleaning' || act === 'mowing' ? 'Dock' : 'Run'}</button>
         </div>
         ${kind === 'mower' ? this._robotGpsRows(r) : this._robotVacuumPosRows(r)}
+        ${this._robotProgressRow(r)}
         <div style="font-size:10px;color:var(--text-dim);margin-top:4px;line-height:1.3">
           ${bound
             ? 'Bound: state follows the entity. Click the robot to run/dock.'
@@ -2199,6 +2200,44 @@ export class Sidebar extends LitElement {
       detail: {
         domain: ['camera', 'image', 'sensor'],
         onPick: (id: string) => { r.posEntity = id; this.planner.save(); this.planner.emitConfig(); },
+      },
+    }));
+  }
+
+  // Task-progress source (both kinds): a sensor.* whose 0..100 state drives the
+  // body progress strip/ring. Entity field wins; else a bound vacuum's own
+  // attributes. A live % preview refreshes on the config channel.
+  private _robotProgressRow(r: RobotFixture) {
+    const p = this.planner;
+    const upd = (mut: () => void) => { mut(); p.save(); p.emitConfig(); };
+    const pct = robotProgress(r, id => p.hass?.states?.[id] ?? null);
+    return html`
+      <div style="border-top:1px solid var(--border);margin-top:6px;padding-top:6px">
+        <div style="font-size:10px;color:var(--text-dim);margin-bottom:3px">
+          Progress ${pct != null ? html`· <b style="color:#69f0ae">${Math.round(pct)}%</b>` : nothing}
+        </div>
+        <div class="row"><label>Sensor</label>
+          <span style="font-size:11px;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r.progressEntity || '— none —'}</span>
+        </div>
+        <div style="display:flex;gap:4px">
+          <button class="btn" style="flex:1;font-size:11px"
+                  @click=${() => this._pickRobotProgress(r)}>${r.progressEntity ? 'Rebind' : 'Bind'} %…</button>
+          ${r.progressEntity ? html`<button class="btn" style="font-size:11px"
+                  @click=${() => upd(() => { r.progressEntity = null; })}>×</button>` : nothing}
+        </div>
+        <div style="font-size:10px;color:var(--text-dim);margin-top:3px;line-height:1.3">
+          0–100% cleaning / mowing progress. Absent → best-effort from the bound
+          robot's own attributes (e.g. <code>cleaned_area_percent</code>).
+        </div>
+      </div>`;
+  }
+
+  private _pickRobotProgress(r: RobotFixture): void {
+    this.dispatchEvent(new CustomEvent('open-entity-picker', {
+      bubbles: true, composed: true,
+      detail: {
+        domain: 'sensor',
+        onPick: (id: string) => { r.progressEntity = id; this.planner.save(); this.planner.emitConfig(); },
       },
     }));
   }
@@ -4848,6 +4887,7 @@ export class Sidebar extends LitElement {
       : isBinKind(piece.kind) ? 'binary_sensor'   // bins: 'on'/'full' = full
       : isVehicleKind(piece.kind) ? 'binary_sensor'   // car: presence 'on' = in bay
       : isSinkKind(piece.kind) ? ['switch', 'binary_sensor']   // sink: faucet on-state
+      : piece.kind === 'bathtub' ? ['switch', 'binary_sensor']   // bathtub: in-use state
       : isClimateApplianceKind(piece.kind)   // AC/fans: climate/fan/switch; heaters: climate/switch
         ? (climateHeater ? ['climate', 'switch'] : ['climate', 'fan', 'switch'])
       : 'switch';

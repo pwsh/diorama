@@ -66,6 +66,23 @@
     return out;
   };
   const ent = (mode, text, extra) => ({ id: 'e_' + Math.random().toString(36).slice(2, 7), mode, text, ...(extra || {}) });
+  const THREE_FrontSide = 0;    // THREE.FrontSide (avoid a three import, like THREE_DoubleSide)
+  // Make a fresh Vector3 by cloning any existing one (no `three` import in this page).
+  const vec = (proto, x, y, z) => proto.clone().set(x, y, z);
+  const textPlanes = (grp) => grp.children.filter(c => c.userData && c.userData.textPlane);
+  // Decode readability: a plane reads non-mirrored iff its texture's +U (world +X)
+  // points to the RIGHT of a viewer standing in front (right = forward × up, with
+  // forward = −normal). Returns a signed value; > 0 ⇒ left-to-right, not mirrored.
+  const readability = (plane) => {
+    plane.updateMatrixWorld(true);
+    const e = plane.matrixWorld.elements;
+    const Ux = vec(plane.position, e[0], e[1], e[2]).normalize();    // world axis of local +X
+    const N  = vec(plane.position, e[8], e[9], e[10]).normalize();   // world axis of local +Z (normal)
+    const up = vec(plane.position, 0, 1, 0);
+    const forward = N.clone().multiplyScalar(-1);                    // viewer looks toward the front face
+    const right = forward.clone().cross(up);                         // camera right = forward × up
+    return Ux.dot(right);
+  };
 
   // ════════════ MIGRATION (real Planner._normalizeStore, pure) ════════════
   const p = new Planner();
@@ -289,13 +306,101 @@
        Math.sign(crossP) !== 0 && Math.sign(crossC) !== 0 && Math.sign(crossP) !== Math.sign(crossC),
        `plane=${crossP.toFixed(0)} chop=${crossC.toFixed(0)} dir p=${plane.dir} c=${chop.dir}`);
   }
+  // ════════════ BANNER: TWO FRONTSIDE PLANES, NON-MIRRORED (bug 3) ════════════
   {
-    r.updateBgTexts([ent('chopper', 'DOUBLE SIDED')], false, 0, 0);
+    r.updateBgTexts([ent('banner', 'TWO SIDES'), ent('chopper', 'TWO SIDES C')], false, 0, 5);
+    for (const mode of ['banner', 'chopper']) {
+      const rig = r._bgRigs.find(x => x.mode === mode);
+      const planes = textPlanes(rig.banner);
+      const frontBoth = planes.length === 2 && planes.every(p => p.material.side === THREE_FrontSide);
+      const n0 = vec(rig.banner.position, 0, 0, 1).applyQuaternion(planes[0].quaternion);
+      const n1 = vec(rig.banner.position, 0, 0, 1).applyQuaternion(planes[1].quaternion);
+      const opposite = n0.dot(n1) < -0.9;
+      const gap = planes.length === 2 ? Math.abs(planes[0].position.z - planes[1].position.z) : NaN;
+      ok(`${mode} banner: two FrontSide planes, opposite facing, ~2mm apart`,
+         frontBoth && opposite && Math.abs(gap - 2) < 0.6,
+         `n=${planes.length} sides=${planes.map(p => p.material.side)} dot=${n0.dot(n1).toFixed(2)} gap=${gap}`);
+      // Shared texture across both planes (one map, dedup-disposed).
+      ok(`${mode} banner: both planes share ONE texture`,
+         planes.length === 2 && !!planes[0].material.map && planes[0].material.map === planes[1].material.map,
+         `same=${planes.length === 2 && planes[0].material.map === planes[1].material.map}`);
+      // Rasterize + decode: the shared texture is painted, and BOTH faces read
+      // left-to-right (the train-flank un-mirror), unlike the old DoubleSide plane.
+      rig.banner.updateMatrixWorld(true);
+      const map = planes[0].material.map;
+      const r0 = readability(planes[0]), r1 = readability(planes[1]);
+      ok(`${mode} banner: both sides painted + read non-mirrored`,
+         painted(map) > 300 && r0 > 0.5 && r1 > 0.5,
+         `lit=${painted(map)} read=${r0.toFixed(2)}/${r1.toFixed(2)}`);
+    }
+  }
+
+  // ════════════ CHOPPER TOW WIRE connects chopper → banner top (bug 1) ════════════
+  {
+    r.updateBgTexts([ent('chopper', 'BANNER TOW LINE')], false, 0, 5);
     const c = r._bgRigs.find(x => x.mode === 'chopper');
-    const m = c.banner.material;
-    ok('chopper banner double-sided w/ one texture (both faces read)',
-       m.side === THREE_DoubleSide && !!m.map && c.banner.userData.textPlane === true,
-       `side=${m.side} map=${!!m.map}`);
+    const w = c.towWire;
+    ok('chopper builds a tow wire with attach/bannerTop metadata',
+       !!w && Array.isArray(w.userData.attach) && Array.isArray(w.userData.bannerTop),
+       `wire=${!!w}`);
+    const len = w.geometry.parameters.height;
+    w.updateMatrix();
+    // Cylinder ends are local (0, ±len/2, 0); transform into asm space via the wire's local matrix.
+    const endPlus  = vec(w.position, 0,  len / 2, 0).applyMatrix4(w.matrix);
+    const endMinus = vec(w.position, 0, -len / 2, 0).applyMatrix4(w.matrix);
+    const attach    = vec(w.position, ...w.userData.attach);
+    const bannerTop = vec(w.position, ...w.userData.bannerTop);
+    // Whichever end is nearer each target should coincide (wire spans attach→top).
+    const dTop = Math.min(endPlus.distanceTo(bannerTop), endMinus.distanceTo(bannerTop));
+    const dAtt = Math.min(endPlus.distanceTo(attach), endMinus.distanceTo(attach));
+    ok('tow wire endpoints coincide with chopper attach + banner top', dTop < 1 && dAtt < 1,
+       `dTop=${dTop.toFixed(2)} dAtt=${dAtt.toFixed(2)}`);
+    // The declared bannerTop equals the banner Group's REAL top-edge centre.
+    const bh = c.banner.userData.bannerFront.geometry.parameters.height;
+    const realTop = vec(c.banner.position, c.banner.position.x, c.banner.position.y + bh / 2, c.banner.position.z);
+    ok('declared bannerTop == banner Group real top-edge centre', realTop.distanceTo(bannerTop) < 1,
+       `d=${realTop.distanceTo(bannerTop).toFixed(2)}`);
+    // Still connected AFTER advancing frames (banner sways rotation.y about its
+    // origin; the top-edge centre is on that axis, so it is sway-invariant).
+    step(120);
+    w.updateMatrix(); c.banner.updateMatrix();
+    const bh2 = c.banner.userData.bannerFront.geometry.parameters.height;
+    const topAfter  = vec(c.banner.position, 0, bh2 / 2, 0).applyMatrix4(c.banner.matrix);   // asm-space
+    const wireTopA  = vec(w.position, 0,  len / 2, 0).applyMatrix4(w.matrix);
+    const wireTopB  = vec(w.position, 0, -len / 2, 0).applyMatrix4(w.matrix);
+    const dAfter = Math.min(wireTopA.distanceTo(topAfter), wireTopB.distanceTo(topAfter));
+    ok('tow wire stays attached to banner top after advance frames', dAfter < 1,
+       `d=${dAfter.toFixed(2)}`);
+  }
+
+  // ════════════ PLANE PROPELLER spins about the flight axis (bug 2) ════════════
+  {
+    r.updateBgTexts([ent('banner', 'PROP SPIN')], false, 0, 5);
+    const plane = r._bgRigs.find(x => x.mode === 'banner');
+    const prop = plane.prop;
+    // Proper propeller = a subgroup (hub + ≥2 blades), NOT a single disc mesh.
+    ok('plane propeller is a hub+blades subgroup (not a disc)',
+       prop.type === 'Group' && prop.children.length >= 3,
+       `type=${prop.type} children=${prop.children.length}`);
+    const blade = prop.children.find(c => c.geometry && c.geometry.parameters &&
+      c.geometry.parameters.height === 760) || prop.children[1];
+    const bl = blade.geometry.parameters.height;
+    // Sample a blade TIP in prop-parent (asm) space; the prop axis = asm +Z through
+    // prop.position, so radius = hypot(dx,dy) and depth-from-axis = dz.
+    const sample = () => {
+      prop.updateMatrix(); blade.updateMatrix();
+      const tip = vec(prop.position, 0, bl / 2, 0).applyMatrix4(blade.matrix).applyMatrix4(prop.matrix);
+      const dx = tip.x - prop.position.x, dy = tip.y - prop.position.y, dz = tip.z - prop.position.z;
+      return { r: Math.hypot(dx, dy), ang: Math.atan2(dy, dx), dz };
+    };
+    const s0 = sample(); step(20); const s1 = sample(); step(20); const s2 = sample();
+    const rConst = s0.r > 100 && Math.abs(s0.r - s1.r) < 1 && Math.abs(s1.r - s2.r) < 1;
+    const angMoved = Math.abs(s0.ang - s1.ang) > 1e-3 && Math.abs(s1.ang - s2.ang) > 1e-3;
+    ok('propeller blade tip orbits the flight axis at CONSTANT radius (angle advances)',
+       rConst && angMoved, `r=${s0.r.toFixed(1)}/${s1.r.toFixed(1)}/${s2.r.toFixed(1)} dAng=${(s0.ang - s1.ang).toFixed(3)}`);
+    ok('propeller sweeps the plane ⟂ flight axis (no disc wobble off the axis)',
+       Math.abs(s0.dz) < 1 && Math.abs(s1.dz) < 1 && Math.abs(s2.dz) < 1,
+       `dz=${s0.dz.toFixed(2)}/${s1.dz.toFixed(2)}/${s2.dz.toFixed(2)}`);
   }
 
   // ════════════ report ════════════

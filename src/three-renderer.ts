@@ -74,9 +74,11 @@ interface ActionRig {
 interface RobotRig {
   group: THREE.Group;
   kind: 'vacuum' | 'mower';
-  ledMat: THREE.MeshToonMaterial;   // status LED — recolored per frame
+  ledMat: THREE.MeshToonMaterial;   // status LED / beacon — recolored per frame
   spin: THREE.Object3D;             // sub-part that spins while working
   blob: THREE.Mesh;
+  progressGroup: THREE.Group;       // toggled visible on/off by source presence
+  progressMats: THREE.MeshToonMaterial[]; // ordered fill segments (strip L→R / ring CW)
 }
 import { wallCutsForSegment, WINDOW_DEFAULTS, closedWallLoops, wallKind, WALL_KINDS, furnitureLocalToWorld, furnitureWorldToLocal, pointInPolygon as pip, centroid, loopContaining, resolveRoomForPoint, roomLabel, intersectLoopWithRect, polygonArea, heatmapColor, groundAreaSkirtBase, poolWaterColor, poolDepthMm, poolRaisedMm, poolHeaterState, poolPumpOn, poolLightOn, poolRimY, poolBasinFloorY, poolWaterSurfaceY, POOL_COPING_COLOR, POOL_HEAT_GLOW, type RoomTemp } from './geometry.js';
 import { visibilityToFogDensity, moonPhaseFraction, type WeatherNow } from './weather.js';
@@ -525,7 +527,8 @@ interface BgRig {
   asm?: THREE.Group;
   prop?: THREE.Object3D;                    // plane prop OR chopper main rotor
   tailRotor?: THREE.Object3D;               // chopper tail rotor
-  banner?: THREE.Object3D;                  // trailing/hanging text plane
+  towWire?: THREE.Object3D;                 // chopper→banner tow line
+  banner?: THREE.Object3D;                  // trailing/hanging text plane (Group: 2 FrontSide planes)
   angle?: number; radius?: number; alt?: number; dir?: number;
   bobAmp?: number; propRate?: number;
   // grass
@@ -1588,6 +1591,37 @@ export class ThreeDRenderer {
     emptyY: number; fullY: number;
   }[] = [];
   private _sinkFill: Record<string, number> = {};
+  // Bathtub water rigs (furniture-polish batch). A tub RUNS off its
+  // effectiveState (bound switch/binary_sensor / unbound localState → entityOn)
+  // OR while a rig is engaged in a `bathe` activity anchored to it (anchor /
+  // proximity dwell — the sink idiom, raw positions, anti-feedback). Running
+  // eases the fill plane UP (~12 s) toward a level just below the rim; off
+  // DRAINS (~10 s). The fill blend is keyed by fixture id (survives _keyFloor
+  // rebuilds). Advanced per-frame in _advanceBathtubs (zero alloc after build);
+  // reset in updateFloor + clearTransientGroups.
+  private _bathtubs: {
+    fuId: string; wx: number; wy: number; fill: THREE.Mesh; emptyY: number; fullY: number;
+  }[] = [];
+  private _bathtubFill: Record<string, number> = {};
+  // Swing-set seats (furniture-polish batch). Each swingset seat is a pivot
+  // Group hinged at the crossbar; while OCCUPIED (a rig claims the seat's
+  // SitSpot, sit > 0.5) it pendulums ±~15° at ~0.4 Hz, eased in/out by a
+  // per-spot blend (survives rebuilds). `_advanceSwings` rotates each pivot AND
+  // publishes the seat's current scene-space displacement into `_swingOffset`
+  // (keyed by SitSpot id) so the seated rig root can RIDE the swing (read in the
+  // updateTargets seated block). Lists reset in updateFloor + clearTransientGroups.
+  private _swings: {
+    fuId: string; spotId: string; pivot: THREE.Object3D; ropeLen: number;
+    groupYaw: number; phase: number;
+  }[] = [];
+  private _swingBlend: Record<string, number> = {};
+  private _swingOffset: Record<string, { dx: number; dy: number; dz: number }> = {};
+  // Mailbox flag arms (furniture-polish batch). The flag rests DOWN (pole
+  // horizontal, panel hanging) and rises STRAIGHT UP when the outgoing-mail
+  // signal (mailCount.flagEntity 'on') fires. Eased 0→1 (down→up) blend keyed by
+  // fixture id (survives rebuilds), advanced per frame in _advanceMailFlags.
+  private _mailFlags: { fuId: string; arm: THREE.Object3D; up: boolean }[] = [];
+  private _mailFlagBlend: Record<string, number> = {};
   // Speaker driver materials that pulse while their bound media_player is
   // playing (a subtle emissive breathe; subwoofers pulse slower + deeper).
   // Registered in _buildFurniture (only when playing → no glow when idle),
@@ -2488,6 +2522,16 @@ export class ThreeDRenderer {
     // just disposed with _floorGroup; a different floor = different fixtures).
     this._sinks = [];
     this._sinkFill = {};
+    // Bathtub / swing / mailbox-flag rigs + their blend maps reset on floor
+    // switch (a different floor = different fixtures; the geometry was just
+    // disposed with _floorGroup).
+    this._bathtubs = [];
+    this._bathtubFill = {};
+    this._swings = [];
+    this._swingBlend = {};
+    this._swingOffset = {};
+    this._mailFlags = [];
+    this._mailFlagBlend = {};
     this._speakerPulses = [];
     this._evPulses = [];
     // Weather effects reset on floor switch (spawn box is fitted to the floor
@@ -4149,6 +4193,12 @@ export class ThreeDRenderer {
     // Sink water rigs are rebuilt here; _sinkFill persists (keyed by fixture id)
     // so a _keyFloor rebuild re-applies the current fill level without a pop.
     this._sinks = [];
+    // Bathtub water / swing seats / mailbox flags are rebuilt here; their eased
+    // blend maps persist (keyed by fixture id / spot id) so a _keyFloor rebuild
+    // re-applies the current fill / swing / flag state without a pop.
+    this._bathtubs = [];
+    this._swings = [];
+    this._mailFlags = [];
     this._speakerPulses = [];
     this._evPulses = [];
     // Climate/airflow furniture effects rebuilt here; the eased blends
@@ -4245,16 +4295,19 @@ export class ThreeDRenderer {
         evColor = hexToInt(evStatusColor(status));
         if (status === 'charging') evCharging = true;   // pulse the port glow
       }
-      // Mailbox: count > 0 raises the flag + floats a badge; a bound lid sensor
-      // 'on' tilts the lid open.
-      let mailFlagUp = false, mailLidOpen = false; let mailCountLabel: string | undefined;
+      // Mailbox (furniture-polish reconciliation): flagEntity is the
+      // OUTGOING-mail / waiting signal — 'on' raises the flag STRAIGHT UP; else
+      // it rests DOWN (pole horizontal, panel hanging). countEntity > 0 shows
+      // only the count badge (never the flag). The lid stays CLOSED always (its
+      // former driver, flagEntity, now means "flag up").
+      let mailFlagUp = false; let mailCountLabel: string | undefined;
       if (fu.kind === 'mailbox') {
         const mc = fu.mailCount;
         if (mc?.countEntity && stateProvider) {
           const cnt = parseInt(stateProvider(mc.countEntity)?.state ?? '', 10);
-          if (isFinite(cnt) && cnt > 0) { mailFlagUp = true; mailCountLabel = cnt > 99 ? '99+' : String(cnt); }
+          if (isFinite(cnt) && cnt > 0) mailCountLabel = cnt > 99 ? '99+' : String(cnt);
         }
-        if (mc?.flagEntity && stateProvider) mailLidOpen = stateProvider(mc.flagEntity)?.state === 'on';
+        if (mc?.flagEntity && stateProvider) mailFlagUp = stateProvider(mc.flagEntity)?.state === 'on';
       }
       const doorSink: { pivot: THREE.Object3D; axis: 'x' | 'y'; openAngle: number }[] = [];
       const plantSink: { pivot: THREE.Object3D; mat: THREE.MeshToonMaterial;
@@ -4267,7 +4320,7 @@ export class ThreeDRenderer {
       const jobDone = isAppliance && !!jobDoneProvider && jobDoneProvider(fu.id);
       const grp = this._buildFurniture(fu, f.furniture, customObjects,
                                        { applianceOn, ledScale, doorSink, plantSink, sinkSink, tempLabel, binFull, speakerPlaying, biasOn, biasColor,
-                                         vehicleGhost, evCharging, evColor, mailFlagUp, mailLidOpen, mailCountLabel, jobDone,
+                                         vehicleGhost, evCharging, evColor, mailFlagUp, mailCountLabel, jobDone,
                                          climateRunning, climateAir, fanRps, oscillate: (fu as Furniture).oscillate === true });
       this._shadowFlags(grp);
       // Custom-recipe front-arrow indicator: custom objects draw only as a
@@ -4338,11 +4391,12 @@ export class ThreeDRenderer {
           });
         }
       }
-      // Sinks are click-toggle like appliances/TVs: reuse the 'media' click path
-      // (click → toggleEntity when bound, else flip localState = run/stop the
-      // water; the sink-specific bind dblclick is guarded in three-view). Tagged
-      // regardless of binding so an unbound sink can be turned on locally.
-      if (isSinkKind(fu.kind)) {
+      // Sinks (and bathtubs) are click-toggle like appliances/TVs: reuse the
+      // 'media' click path (click → toggleEntity when bound, else flip localState
+      // = run/stop the water; the sink/tub bind dblclick is guarded in
+      // three-view). Tagged regardless of binding so an unbound piece can be
+      // turned on locally.
+      if (isSinkKind(fu.kind) || fu.kind === 'bathtub') {
         grp.userData = { ...grp.userData, kind: 'media', entity_id: fu.entity_id ?? null, fixtureId: fu.id };
         this._mediaClickables.push(grp);
       }
@@ -4491,6 +4545,13 @@ export class ThreeDRenderer {
           const n = Math.max(1, Math.floor(W / SEAT_PITCH));
           for (let i = 0; i < n; i++)
             seatLocals.push({ lx: W * ((i + 0.5) / n - 0.5), lz: 0, depth: D });
+        } else if (fu.kind === 'swingset') {
+          // Two swing seats at ±0.28·W (matching the 3D pivot-group x). Shallow
+          // depth so the approach staging sits just in front of the seat. Spot
+          // ids `${fu.id}:0/1` line up with the _swings entries → _advanceSwings
+          // publishes each seat's pendulum offset into _swingOffset[spot.id].
+          for (const sxf of [-0.28, 0.28])
+            seatLocals.push({ lx: sxf * W, lz: 0, depth: 250 });
         } else if (fu.kind === 'recliner_row3') {
           // Fixed 3-across row. Distribute within the arm-excluded width so the
           // cushions clear the shared thick arms (matching the 3D builder's armW).
@@ -5981,7 +6042,7 @@ export class ThreeDRenderer {
                                    tempLabel?: string; binFull?: boolean; speakerPlaying?: boolean;
                                    biasOn?: boolean; biasColor?: number;
                                    vehicleGhost?: boolean; evCharging?: boolean; evColor?: number;
-                                   mailFlagUp?: boolean; mailLidOpen?: boolean; mailCountLabel?: string;
+                                   mailFlagUp?: boolean; mailCountLabel?: string;
                                    jobDone?: boolean;
                                    climateRunning?: boolean;
                                    climateAir?: import('./geometry.js').HvacAirflowKind;
@@ -6046,6 +6107,53 @@ export class ThreeDRenderer {
       m.position.set(px, py, pz);
       grp.add(m);
       return m;
+    };
+    // Doored-appliance carcass with a RECESSED DARK CAVITY (furniture-polish):
+    // an OPEN-FRONT shell (back + 4 sides in bodyMat, front -Z open) + a very
+    // dark interior block whose front face is recessed ~20 mm behind the opening,
+    // so an open door reveals real interior space (not a solid body face). Build
+    // time, no state. `shelfHints` faint bars read as fridge shelves / oven rack.
+    // Parameterized to a sub-region (cx/cw over x, [y0,y0+bh] over y) so a stove's
+    // oven cavity or a microwave's left cavity leaves the control panel solid.
+    // The dark front is coincident-face safe (recessed; nothing is coplanar).
+    const addCavityBody = (bodyMat: THREE.Material, cx: number, cw: number,
+                           y0: number, bh: number, shelfHints: number) => {
+      const wt = Math.min(45, Math.min(cw, D) * 0.14);
+      const yc = y0 + bh / 2;
+      addBox(cw, bh, wt, bodyMat, cx, yc, D / 2 - wt / 2);             // back wall
+      addBox(wt, bh, D, bodyMat, cx - cw / 2 + wt / 2, yc, 0);         // left wall
+      addBox(wt, bh, D, bodyMat, cx + cw / 2 - wt / 2, yc, 0);         // right wall
+      addBox(cw - 2 * wt, wt, D, bodyMat, cx, y0 + bh - wt / 2, 0);    // top
+      addBox(cw - 2 * wt, wt, D, bodyMat, cx, y0 + wt / 2, 0);         // bottom
+      const cav = this._mat({ color: 0x111417, roughness: 0.95, metalness: 0.0, side: THREE.DoubleSide });
+      const iw = cw - 2 * wt - 14, ih = bh - 2 * wt - 14, idp = Math.max(60, D - wt - 24);
+      const cavZ = D / 2 - wt - idp / 2 - 4;                           // front recessed inside the opening
+      const inner = addBox(iw, ih, idp, cav, cx, yc, cavZ);
+      inner.userData.applianceCavity = true;
+      inner.userData.outlineSkip = true;                              // no dark shell on the dark cavity
+      if (shelfHints > 0) {
+        const shelfMat = this._mat({ color: 0x3a4048, roughness: 0.85, metalness: 0.1 });
+        const frontZ = cavZ - idp / 2 + 12;                           // proud of the dark front
+        for (let s = 1; s <= shelfHints; s++) {
+          const sh = addBox(iw * 0.9, 12, 20, shelfMat, cx, y0 + bh * (s / (shelfHints + 1)), frontZ);
+          sh.userData.outlineSkip = true;
+        }
+      }
+    };
+    // A dark round drum recess for porthole appliances (washer / dryer). Their
+    // front stays a solid panel with a round door; a dark cylinder proud of the
+    // body front behind the porthole reads as the drum, revealed when the door
+    // (also proud, further out) swings aside — "behind the door plane".
+    const addDrumCavity = (cx: number, cy: number, r: number) => {
+      const drum = new THREE.Mesh(new THREE.CylinderGeometry(r, r, 20, 22),
+        this._mat({ color: 0x111417, roughness: 0.95, metalness: 0.0, side: THREE.DoubleSide }));
+      drum.rotation.x = Math.PI / 2;
+      // Front face proud of the solid body front (~5 mm) so it's not occluded,
+      // but well BEHIND the porthole door disc (which sits ~12 mm proud).
+      drum.position.set(cx, cy, -D / 2 - 5 + 10);
+      drum.userData.applianceCavity = true;
+      drum.userData.outlineSkip = true;
+      grp.add(drum);
     };
     // Sink water rig: given a basin interior (local center cx/cz, half-extents
     // hw/hd), its bowl floor Y, the rim/counter top Y, and the faucet spout tip
@@ -6531,12 +6639,14 @@ export class ThreeDRenderer {
       }
       case 'bird_bath': {
         const stone = this._mat({ color: 0xb0b6bb, roughness: 0.85 });
-        const water = this._mat({ color: 0x3d7bb8, roughness: 0.2, transparent: true, opacity: 0.8 });
+        // Water disc uses the shared sink/pool water treatment (translucent blue),
+        // set just below the basin rim (rim top = pedH + HT·0.12; disc at ·0.1).
+        const water = this._mat({ color: 0x4aa8d8, roughness: 0.12, metalness: 0.05, transparent: true, opacity: 0.62, depthWrite: false });
         const pedH = HT * 0.75;
         addCyl(W * 0.14, W * 0.2, pedH, stone, 0, pedH / 2, 0, 12);
         addCyl(W * 0.45, W * 0.3, HT * 0.12, stone, 0, pedH + HT * 0.06, 0, 16);
         const disc = new THREE.Mesh(new THREE.CylinderGeometry(W * 0.4, W * 0.4, 8, 16), water);
-        disc.position.set(0, pedH + HT * 0.1, 0); disc.userData.outlineSkip = true; grp.add(disc);
+        disc.position.set(0, pedH + HT * 0.1, 0); disc.userData.outlineSkip = true; disc.userData.birdBathWater = true; grp.add(disc);
         break;
       }
       case 'fountain': {
@@ -6627,12 +6737,37 @@ export class ThreeDRenderer {
           leg.rotation.x = Math.atan2(-zc, legH);   // top → z≈0 (crossbar), foot splayed out
         }
         addCyl(45, 45, W - 120, frame, 0, legH, 0, 10).rotation.z = Math.PI / 2;
-        for (const sx of [-0.28, 0.28]) {
-          const sxp = sx * W, ropeH = legH * 0.55;
-          addCyl(8, 8, ropeH, ropeM, sxp - 120, legH - ropeH / 2, 0, 6);
-          addCyl(8, 8, ropeH, ropeM, sxp + 120, legH - ropeH / 2, 0, 6);
-          addBox(300, 30, 140, seatM, sxp, legH - ropeH, 0);
-        }
+        // Two swing seats, each a PIVOT GROUP hinged at the crossbar (y=legH) so
+        // it pendulums about X (the crossbar axis). Seats hang low (~350 mm) as
+        // real sittable slabs (~450×250) with two chains; each registers a SitSpot
+        // (added by updateFloor's generic def.seat block via seatLocals) and rides
+        // the pendulum via _advanceSwings. Chains at ±(seatW/2−40); seat slab at
+        // local y = −ropeLen so it rests at the seat height.
+        const seatY = def.seat ?? 350;
+        const ropeLen = legH - seatY;
+        const seatW = 450, seatD = 250, seatT = 40;
+        const swingXs = [-0.28, 0.28];
+        swingXs.forEach((sxf, i) => {
+          const sxp = sxf * W;
+          const pivot = new THREE.Group();
+          pivot.position.set(sxp, legH, 0);
+          for (const cx of [-1, 1]) {
+            const chain = new THREE.Mesh(new THREE.CylinderGeometry(9, 9, ropeLen, 6), ropeM);
+            chain.position.set(cx * (seatW / 2 - 45), -ropeLen / 2, 0);
+            pivot.add(chain);
+          }
+          const seat = new THREE.Mesh(new THREE.BoxGeometry(seatW, seatT, seatD), seatM);
+          seat.position.set(0, -ropeLen, 0);
+          pivot.add(seat);
+          grp.add(pivot);
+          const fid = fu.id ?? `sw_${Math.round(fu.x)}_${Math.round(fu.y)}`;
+          const spotId = `${fid}:${i}`;
+          if (this._swingBlend[spotId] === undefined) this._swingBlend[spotId] = 0;
+          this._swings.push({
+            fuId: fid, spotId, pivot, ropeLen, groupYaw: grp.rotation.y,
+            phase: ((fu.x + fu.y) * 0.001 + i * 1.7) % (2 * Math.PI),
+          });
+        });
         break;
       }
       case 'lawn_chair': {
@@ -6661,7 +6796,9 @@ export class ThreeDRenderer {
       }
       // ── appliances (front = -Z) ──
       case 'fridge': {
-        addBox(W, HT, D, steel, 0, HT / 2, 0);
+        // Open-front carcass with a dark recessed cavity + 2 shelf hints, so the
+        // swinging door reveals interior space (furniture-polish item 4).
+        addCavityBody(steel, 0, W, 0, HT, 2);
         const seam = this._mat({ color: 0x546069, roughness: 0.6 });
         addBox(W * 0.96, 10, 6, seam, 0, HT * 0.65, -D / 2 - 2);           // freezer split
         addBox(24, HT * 0.28, 20, seam, -W * 0.32, HT * 0.42, -D / 2 - 14); // handle
@@ -6687,7 +6824,10 @@ export class ThreeDRenderer {
         break;
       }
       case 'stove': {
-        addBox(W, HT - 40, D, steel, 0, (HT - 40) / 2, 0);
+        // Oven cavity (lower ~62%) with a rack hint + a solid upper block for the
+        // control panel; the fold-down door reveals the dark oven (item 4).
+        addCavityBody(steel, 0, W, 0, HT * 0.62, 1);
+        addBox(W, (HT - 40) - HT * 0.62, D, steel, 0, (HT * 0.62 + (HT - 40)) / 2, 0);
         addBox(W, 40, D, screen, 0, HT - 20, 0);  // dark cooktop
         for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]] as const) {
           addCyl(W * 0.14, W * 0.14, 8, dark, sx * W * 0.22, HT + 4, sz * D * 0.2, 20);
@@ -6713,7 +6853,10 @@ export class ThreeDRenderer {
         break;
       }
       case 'dishwasher': {
-        addBox(W, HT, D, steel, 0, HT / 2, 0);
+        // Cavity for the lower ~86% (the fold-down door reveals the dark tub +
+        // a rack hint) + a solid top band for the control strip (item 4).
+        addCavityBody(steel, 0, W, 0, HT * 0.86, 1);
+        addBox(W, HT - HT * 0.86, D, steel, 0, (HT * 0.86 + HT) / 2, 0);
         const seam = this._mat({ color: 0x546069, roughness: 0.6 });
         addBox(W * 0.94, 10, 6, seam, 0, HT * 0.94, -D / 2 - 2);  // control strip up top
         // Front panel folds DOWN ~80° about its bottom edge. Built closed +
@@ -6737,6 +6880,7 @@ export class ThreeDRenderer {
       case 'washer': {
         addBox(W, HT, D, porcelain, 0, HT / 2, 0);
         addBox(W * 0.9, HT * 0.1, 8, screen, 0, HT * 0.92, -D / 2 - 3);  // controls
+        addDrumCavity(-W * 0.02, HT * 0.45, W * 0.24);   // dark drum behind the porthole (item 4)
         // Side-hinged round porthole door (~100° swing). Built closed +
         // registered for the per-frame open blend.
         {
@@ -6759,6 +6903,7 @@ export class ThreeDRenderer {
       case 'dryer': {
         addBox(W, HT, D, porcelain, 0, HT / 2, 0);
         addBox(W * 0.9, HT * 0.1, 8, screen, 0, HT * 0.92, -D / 2 - 3);  // controls
+        addDrumCavity(-W * 0.02, HT * 0.45, W * 0.24);   // dark drum behind the porthole (item 4)
         // Side-hinged round porthole door (~100° swing) — like the washer. Built
         // CLOSED + registered in _applianceDoors so the per-frame blend swings it
         // (unbound liveliness: avatar proximity / localState / bound-on).
@@ -6780,7 +6925,10 @@ export class ThreeDRenderer {
         break;
       }
       case 'microwave': {
-        addBox(W, HT, D, screen, 0, HT / 2, 0);
+        // Left ~72% is a dark cavity (the side-hinged door reveals it); the right
+        // ~28% stays a solid control panel (item 4).
+        addCavityBody(screen, -W * 0.14, W * 0.72, 0, HT, 1);
+        addBox(W * 0.28, HT, D, screen, W * 0.36, HT / 2, 0);   // control panel
         // Side-hinged door (~90° about the left vertical edge). Built closed +
         // registered for the per-frame open blend; a glass window rides it.
         {
@@ -6821,12 +6969,37 @@ export class ThreeDRenderer {
       }
       // ── bathroom (front = -Z; toilet tank sits at the back +Z) ──
       case 'toilet': {
-        const bowl = new THREE.Mesh(new THREE.CylinderGeometry(W * 0.42, W * 0.3, 380, 18), porcelain);
+        // Open-top bowl with a recessed interior + a small blue water disc low in
+        // the bowl, visible because the LID IS BUILT OPEN (upright against the
+        // tank). No state machinery (furniture-polish item 7). seat = def.seat
+        // (420) so the SitSpot / privacy path is unchanged.
+        const bowlZ = -D * 0.12, bowlTopY = 400;
+        const bowlR = W * 0.42;
+        const bowl = new THREE.Mesh(new THREE.CylinderGeometry(bowlR, W * 0.3, bowlTopY, 18), porcelain);
         bowl.scale.z = 1.25;
-        bowl.position.set(0, 190, -D * 0.12);
+        bowl.position.set(0, bowlTopY / 2, bowlZ);
         grp.add(bowl);
-        addCyl(W * 0.46, W * 0.44, 50, porcelain, 0, 420, -D * 0.12, 18);  // seat
+        // Recessed inner cavity: an open-ended (top+bottom open) inner wall
+        // dropping from the rim to a bowl floor, so the bowl reads hollow.
+        const innerR = bowlR * 0.76, cavDepth = 210;
+        const innerWall = this._mat({ color: 0xeef1ee, roughness: 0.15, metalness: 0.0, side: THREE.DoubleSide });
+        const iw = new THREE.Mesh(new THREE.CylinderGeometry(innerR, innerR * 0.66, cavDepth, 18, 1, true), innerWall);
+        iw.scale.z = 1.25; iw.position.set(0, bowlTopY - cavDepth / 2, bowlZ);
+        iw.userData = { outlineSkip: true }; grp.add(iw);
+        // Blue water disc low in the bowl.
+        const water = this._mat({ color: 0x4aa8d8, roughness: 0.12, metalness: 0.05, transparent: true, opacity: 0.68, depthWrite: false });
+        const wd = new THREE.Mesh(new THREE.CylinderGeometry(innerR * 0.62, innerR * 0.62, 8, 16), water);
+        wd.scale.z = 1.25; wd.position.set(0, bowlTopY - cavDepth + 42, bowlZ);
+        wd.userData = { outlineSkip: true, toiletWater: true }; grp.add(wd);
+        addCyl(W * 0.46, W * 0.44, 40, porcelain, 0, bowlTopY + 20, bowlZ, 18);  // seat ring
         addBox(W * 0.96, 360, D * 0.28, porcelain, 0, HT - 180, D / 2 - D * 0.14);  // tank
+        // UPRIGHT open lid: a rounded panel stood vertical against the tank front,
+        // so the bowl water stays visible from above.
+        const lidMat = this._mat({ color: 0xf5f5f0, roughness: 0.15, metalness: 0.0, side: THREE.DoubleSide });
+        const lid = new THREE.Mesh(new THREE.CylinderGeometry(W * 0.44, W * 0.44, 26, 18), lidMat);
+        lid.scale.z = 1.2; lid.rotation.x = Math.PI / 2;   // stand it vertical
+        lid.position.set(0, bowlTopY + W * 0.44, D / 2 - D * 0.28 - 20);
+        lid.userData = { outlineSkip: true, toiletLid: true }; grp.add(lid);
         break;
       }
       case 'sink': {
@@ -6989,11 +7162,42 @@ export class ThreeDRenderer {
         break;
       }
       case 'bathtub': {
-        addBox(W, HT, D, porcelain, 0, HT / 2, 0);
-        const water = this._mat({
-          color: 0x9bc7cf, roughness: 0.2, metalness: 0.05,
+        // Recessed EMPTY tub cavity (furniture-polish item 6): a solid lower slab
+        // + four rim walls leave an open-top well; a water fill plane parked at
+        // the bottom rises while IN USE (bound switch/binary_sensor / unbound
+        // localState → entityOn, OR a rig in the `bathe` activity — see
+        // _advanceBathtubs). Reuses the sink water treatment; blend keyed by
+        // fixture id (survives rebuilds), eased slower (~12 s fill, ~10 s drain).
+        const wallT = W * 0.06, rimH = 30;
+        const cavTopY = HT - rimH;           // cavity opening just below rim top
+        const cavDepth = HT * 0.62;
+        const floorY = Math.max(60, cavTopY - cavDepth);
+        const openW = W - 2 * wallT, openD = D - 2 * wallT;
+        addBox(W, floorY, D, porcelain, 0, floorY / 2, 0);   // solid lower body
+        const wallY = (cavTopY + floorY) / 2, wallH = cavTopY - floorY;
+        addBox(W, wallH, wallT, porcelain, 0, wallY, D / 2 - wallT / 2);    // +Z wall
+        addBox(W, wallH, wallT, porcelain, 0, wallY, -D / 2 + wallT / 2);   // -Z wall
+        addBox(wallT, wallH, openD, porcelain, W / 2 - wallT / 2, wallY, 0);  // +X wall
+        addBox(wallT, wallH, openD, porcelain, -W / 2 + wallT / 2, wallY, 0); // -X wall
+        const liner = this._mat({ color: 0xdfe6e6, roughness: 0.2, metalness: 0.0, side: THREE.DoubleSide });
+        const cavFloor = addBox(openW, 10, openD, liner, 0, floorY + 5, 0);   // cavity floor
+        cavFloor.userData.bathtubCavity = true;
+        const waterMat = this._mat({
+          color: 0x4aa8d8, roughness: 0.12, metalness: 0.05,
+          transparent: true, opacity: 0.62, depthWrite: false,
         });
-        addBox(W * 0.82, 20, D * 0.72, water, 0, HT - 60, 0);  // inner basin hint
+        const emptyY = floorY + 14, fullY = cavTopY - 24;
+        const fill = new THREE.Mesh(new THREE.BoxGeometry(openW - 24, 8, openD - 24), waterMat);
+        const tubId = fu.id ?? `tub_${Math.round(fu.x)}_${Math.round(fu.y)}`;
+        const curFill = this._bathtubFill[tubId] ?? 0;
+        fill.position.set(0, emptyY + (fullY - emptyY) * curFill, 0);
+        fill.visible = curFill > 0.02;
+        fill.userData = { outlineSkip: true };
+        grp.add(fill);
+        this._bathtubs.push({ fuId: tubId, wx: fu.x, wy: fu.y, fill, emptyY, fullY });
+        // Faucet at one end (+X, front corner).
+        const bSteel = this._mat({ color: 0xb8c0c6, metalness: 0.8, roughness: 0.3 });
+        addCyl(14, 16, 130, bSteel, W / 2 - 70, cavTopY + 60, -D / 2 + wallT + 40, 10);
         break;
       }
       case 'shower': {
@@ -7344,28 +7548,39 @@ export class ThreeDRenderer {
       case 'speaker_bookshelf':
       case 'subwoofer':
       case 'center_channel': {
-        // Dark cabinet + circular driver cutouts on the front face (local -Z).
-        // A bound-playing media_player lights the drivers (emissive) and enrolls
-        // the shared driver material in the per-frame pulse (subwoofer = deep).
-        const cabinet = this._mat({ color: tint, roughness: 0.55, metalness: 0.12 });
+        // Toon-band contrast treatment (furniture-polish item 5): a DARKENED
+        // cabinet (tint × 0.42) with LIGHT METALLIC cone rings + a distinct DARK
+        // dust-cap dot at each driver center, so the drivers read clearly against
+        // the cabinet in the flat toon shading. A bound-playing media_player
+        // lights the cone rings (emissive) + enrolls them in the per-frame pulse.
+        const cabColor = new THREE.Color(tint).multiplyScalar(0.42).getHex();
+        const cabinet = this._mat({ color: cabColor, roughness: 0.6, metalness: 0.15 });
         addBox(W, HT, D, cabinet, 0, HT / 2, 0);
         const deep = kind === 'subwoofer';
         const base = deep ? 0.9 : 0.55;
-        const driverMat = this._mat({
-          color: 0x0a0a0a, roughness: 0.5, metalness: 0.2,
+        const driverMat = this._mat({            // light metallic cone/surround
+          color: 0xb7c0c8, roughness: 0.32, metalness: 0.55,
           emissive: 0xffa040, emissiveIntensity: opts?.speakerPlaying ? base : 0,
         });
+        const dustMat = this._mat({ color: 0x14171b, roughness: 0.5, metalness: 0.3 });  // dark dust cap
         if (opts?.speakerPlaying)
           this._speakerPulses.push({ mat: driverMat, base, deep, phase: (fu.x + fu.y) % 6.28 });
-        // Driver ring: a short cylinder whose circular face points out the front
-        // (-Z). Rotating a Y-axis cylinder by +90° about X aligns its axis to Z.
-        const mkDriver = (r: number, py: number, thick = 22) => {
+        // Driver = a light cone RING (short cylinder facing -Z) + a dark dust-cap
+        // dot proud of its center. Rotating a Y-axis cylinder by +90° about X
+        // aligns its axis to Z.
+        const mkDriver = (r: number, py: number, cx = 0, thick = 22) => {
+          const zc = -D / 2 - thick / 2 + 6;
           const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, thick, 20), driverMat);
           m.rotation.x = Math.PI / 2;
-          m.position.set(0, py, -D / 2 - thick / 2 + 6);
+          m.position.set(cx, py, zc);
           m.userData.speakerDriver = true;
           m.userData.outlineSkip = true;   // no dark shell over a glowing cone
           grp.add(m);
+          const cap = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.34, r * 0.34, thick * 0.7, 14), dustMat);
+          cap.rotation.x = Math.PI / 2;
+          cap.position.set(cx, py, zc - thick * 0.5);   // proud of the cone face
+          cap.userData.outlineSkip = true;
+          grp.add(cap);
           return m;
         };
         if (kind === 'speaker_tower') {
@@ -7376,21 +7591,11 @@ export class ThreeDRenderer {
           mkDriver(W * 0.4, HT * 0.4);     // woofer
           mkDriver(W * 0.2, HT * 0.72);    // tweeter
         } else if (kind === 'subwoofer') {
-          mkDriver(W * 0.42, HT * 0.5, 28);
+          mkDriver(W * 0.42, HT * 0.5, 0, 28);
         } else {                            // center_channel (horizontal): two woofers + a tweeter
-          const drv = driverMat;
-          for (const dx of [-1, 1]) {
-            const m = new THREE.Mesh(new THREE.CylinderGeometry(HT * 0.36, HT * 0.36, 20, 18), drv);
-            m.rotation.x = Math.PI / 2;
-            m.position.set(dx * W * 0.32, HT * 0.5, -D / 2 - 4);
-            m.userData.speakerDriver = true; m.userData.outlineSkip = true;
-            grp.add(m);
-          }
-          const tw = new THREE.Mesh(new THREE.CylinderGeometry(HT * 0.16, HT * 0.16, 20, 16), drv);
-          tw.rotation.x = Math.PI / 2;
-          tw.position.set(0, HT * 0.5, -D / 2 - 4);
-          tw.userData.speakerDriver = true; tw.userData.outlineSkip = true;
-          grp.add(tw);
+          mkDriver(HT * 0.36, HT * 0.5, -W * 0.32, 20);
+          mkDriver(HT * 0.36, HT * 0.5,  W * 0.32, 20);
+          mkDriver(HT * 0.16, HT * 0.5, 0, 20);
         }
         break;
       }
@@ -7456,26 +7661,44 @@ export class ThreeDRenderer {
         arch.rotation.z = Math.PI / 2; arch.rotation.y = Math.PI / 2;
         arch.position.set(0, boxTopY + boxH / 2, 0);
         grp.add(arch);
-        // Hinged front lid (a thin panel on the -Z face, hinged at its bottom);
-        // tilts open ~55° when the lid sensor is on.
+        // Hinged front lid (a thin panel on the -Z face, hinged at its bottom).
+        // The lid stays CLOSED always (furniture-polish reconciliation): its
+        // former driver — the flag sensor — now means "outgoing-mail flag up",
+        // so no second signal opens the lid. Kept as a group (child order
+        // [lidHinge, flagArm]) for the always-closed hinge.
         const lidHinge = new THREE.Group();
         lidHinge.position.set(0, boxTopY - boxH / 2, -D * 0.46);
         const lid = new THREE.Mesh(new THREE.BoxGeometry(W * 0.86, boxH * 0.86, 16),
           this._mat({ color: new THREE.Color(tint).multiplyScalar(0.82).getHex(), roughness: 0.6 }));
         lid.position.set(0, boxH * 0.43, 0);
         lidHinge.add(lid);
-        if (opts?.mailLidOpen) lidHinge.rotation.x = -55 * Math.PI / 180;
         grp.add(lidHinge);
-        // Red flag on the +X side, raised when mail is waiting (else lowered).
+        // Red flag on the +X side. Authored in the WAITING/UP orientation (pole
+        // along +Y, panel extending +Z off the pole top). The arm hinges about X:
+        //   UP   (flagEntity 'on')  → rotation.x = 0        → pole vertical, flag flying.
+        //   DOWN (default / delivered) → rotation.x = π/2   → pole HORIZONTAL, panel
+        //        (local +Z) rotates to world -Y = HANGS DOWN toward the ground.
+        // The eased blend is driven in _advanceMailFlags; here we seed + apply the
+        // persisted value (survives _keyFloor rebuilds — a fresh fixture seeds to
+        // its target so the first render is already correct).
+        const up = opts?.mailFlagUp === true;
         const flagArm = new THREE.Group();
-        flagArm.position.set(W / 2 + 6, boxTopY, 0);
-        const flagMat = this._mat({ color: opts?.mailFlagUp ? 0xe53935 : 0x9e9e9e, roughness: 0.7 });
-        const post = new THREE.Mesh(new THREE.CylinderGeometry(10, 10, boxH * 1.1, 8), flagMat);
-        post.position.y = boxH * 0.4; flagArm.add(post);
-        const flag = new THREE.Mesh(new THREE.BoxGeometry(12, boxH * 0.5, D * 0.36), flagMat);
-        flag.position.set(0, boxH * 0.7, -D * 0.12); flagArm.add(flag);
-        if (!opts?.mailFlagUp) flagArm.rotation.x = Math.PI * 0.42;   // lowered
+        flagArm.position.set(W / 2 + 6, boxTopY - boxH * 0.2, 0);
+        const flagMat = this._mat({ color: up ? 0xe53935 : 0xc62828, roughness: 0.7 });
+        const poleLen = boxH * 1.05;
+        const post = new THREE.Mesh(new THREE.CylinderGeometry(10, 10, poleLen, 8), flagMat);
+        post.position.y = poleLen / 2; flagArm.add(post);
+        // Flag panel: wide in X, thin in Y, extending +Z from near the pole top.
+        // When the pole lays horizontal (DOWN), local +Z → world −Y so it hangs.
+        const flagDrop = boxH * 0.6, flagW = D * 0.34;
+        const flag = new THREE.Mesh(new THREE.BoxGeometry(flagW, 12, flagDrop), flagMat);
+        flag.position.set(0, poleLen - 30, flagDrop / 2 + 6); flagArm.add(flag);
+        const flagId = fu.id ?? `mb_${Math.round(fu.x)}_${Math.round(fu.y)}`;
+        if (this._mailFlagBlend[flagId] === undefined) this._mailFlagBlend[flagId] = up ? 1 : 0;
+        const fblend = this._mailFlagBlend[flagId];
+        flagArm.rotation.x = (Math.PI / 2) * (1 - fblend);   // 0 = up, π/2 = down
         grp.add(flagArm);
+        this._mailFlags.push({ fuId: flagId, arm: flagArm, up });
         // Count badge sprite above the box (only when > 0). Freed by the
         // _floorGroup's _disposeSpriteMaps pairing (with temp/room-label sprites).
         if (opts?.mailCountLabel) {
@@ -8911,7 +9134,8 @@ export class ThreeDRenderer {
   }
 
   // Persistent moving-robot rigs, positioned from Planner.robotStates each frame.
-  updateRobotRigs(robots: RobotFixture[], states: Record<string, RobotRenderState>): void {
+  updateRobotRigs(robots: RobotFixture[], states: Record<string, RobotRenderState>,
+                  progress?: Record<string, number | null>): void {
     if (!this._scene) return;
     const live = new Set<string>();
     for (const r of robots) {
@@ -8950,6 +9174,23 @@ export class ThreeDRenderer {
       rig.ledMat.emissiveIntensity = inten;
       // Re-ground the blob shadow.
       rig.blob.position.y = 6 - bob;
+      // Task-progress strip/ring: live per-frame, no rebuild. null source → hide
+      // the whole assembly; else light the first `lit` segments (L→R / CW).
+      const prog = progress ? progress[r.id] : undefined;
+      if (prog == null || !isFinite(prog)) {
+        rig.progressGroup.visible = false;
+      } else {
+        rig.progressGroup.visible = true;
+        const N = rig.progressMats.length;
+        const lit = Math.round(Math.max(0, Math.min(100, prog)) / 100 * N);
+        for (let i = 0; i < N; i++) {
+          const m = rig.progressMats[i];
+          const on = i < lit;
+          m.color.setHex(on ? 0x43a047 : 0x14321f);
+          m.emissive.setHex(0x43a047);
+          m.emissiveIntensity = on ? 0.95 : 0.0;
+        }
+      }
     }
     // Dispose rigs whose robot vanished.
     for (const id of Object.keys(this._robotRigs)) {
@@ -8963,57 +9204,139 @@ export class ThreeDRenderer {
     const bodyCol = hexToInt(robotColor(kind));
     const ledMat = this._mat({ color: 0x43a047, emissive: 0x43a047, emissiveIntensity: 0.9 });
     const spin = new THREE.Group();
+    // Progress strip/ring lives in its own group (toggled visible by source).
+    const progressGroup = new THREE.Group();
+    const progressMats: THREE.MeshToonMaterial[] = [];
+    // A dim-off segment material starts each fill; recolored per frame.
+    const mkSeg = (w: number, h: number, d: number): THREE.Mesh => {
+      const m = this._mat({ color: 0x14321f, emissive: 0x43a047, emissiveIntensity: 0 });
+      progressMats.push(m);
+      const seg = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m);
+      seg.userData = { ...ud, outlineSkip: true, robotProgressSeg: progressMats.length - 1 };
+      return seg;
+    };
     if (kind === 'vacuum') {
       const R = ROBOT_DEFAULTS.vacuum.bodyR, H = ROBOT_DEFAULTS.vacuum.bodyH;
       const body = new THREE.Mesh(new THREE.CylinderGeometry(R, R, H, 28),
         this._mat({ color: bodyCol, roughness: 0.6 }));
       body.position.y = H / 2; body.userData = ud; grp.add(body);
-      // Colored top ring.
-      const ring = new THREE.Mesh(new THREE.CylinderGeometry(R * 0.98, R * 0.98, 10, 28),
-        ledMat);
-      ring.position.y = H; ring.userData = { ...ud, outlineSkip: true }; grp.add(ring);
-      // Raised bump (sensor tower) on the front (−Z), part of the spin group.
-      const bump = new THREE.Mesh(new THREE.CylinderGeometry(R * 0.28, R * 0.28, 40, 16),
+      // Status mode light: a raised top ring + a small central dome, both driven
+      // by the full robotLedColor palette (recolored per frame via ledMat).
+      const ring = new THREE.Mesh(new THREE.CylinderGeometry(R * 0.98, R * 0.98, 12, 28), ledMat);
+      ring.position.y = H + 2; ring.userData = { ...ud, outlineSkip: true, robotLamp: true }; grp.add(ring);
+      const dome = new THREE.Mesh(new THREE.SphereGeometry(R * 0.34, 16, 10, 0, Math.PI * 2, 0, Math.PI / 2), ledMat);
+      dome.position.y = H + 6; dome.userData = { ...ud, outlineSkip: true, robotLamp: true }; grp.add(dome);
+      // Raised bump (sensor tower / lidar) on the front (−Z), part of the spin group.
+      const bump = new THREE.Mesh(new THREE.CylinderGeometry(R * 0.24, R * 0.26, 44, 16),
         this._mat({ color: 0x263238, roughness: 0.5 }));
-      bump.position.set(0, H + 20, -R * 0.4); bump.userData = ud;
+      bump.position.set(0, H + 22, -R * 0.42); bump.userData = ud;
       spin.add(bump);
       grp.add(spin);
+      // Progress RING: ~12 emissive segments wrapped around the puck side wall,
+      // filling clockwise. Each segment circles the body Y axis at a fixed radius.
+      const N = 12, Rr = R * 1.03, arc = (Math.PI * 2) / N;
+      const segW = arc * Rr * 0.62;
+      for (let i = 0; i < N; i++) {
+        const theta = i * arc;   // 0 = +Z (front-ish), increasing = around the axis
+        const seg = mkSeg(segW, H * 0.5, 10);
+        seg.position.set(Rr * Math.sin(theta), H * 0.5, Rr * Math.cos(theta));
+        seg.rotation.y = theta;
+        progressGroup.add(seg);
+      }
     } else {
+      // Modern "little tank" mower: low chamfered-nose wedge body, chunky rear
+      // drive wheels with tread lugs + smaller front wheels behind side skirts,
+      // a raised rear hump carrying a status beacon + antenna, cutting disc under.
       const W = ROBOT_DEFAULTS.mower.bodyW, D = ROBOT_DEFAULTS.mower.bodyD, H = ROBOT_DEFAULTS.mower.bodyH;
-      const body = new THREE.Mesh(new THREE.BoxGeometry(W, H * 0.7, D),
+      const bodyH = H * 0.42, bodyY = H * 0.30;
+      // Main low body.
+      const body = new THREE.Mesh(new THREE.BoxGeometry(W, bodyH, D * 0.82),
         this._mat({ color: bodyCol, roughness: 0.55 }));
-      body.position.y = H * 0.5; body.userData = ud; grp.add(body);
-      // Dark hood over the front.
-      const hood = new THREE.Mesh(new THREE.BoxGeometry(W * 0.9, H * 0.35, D * 0.5),
+      body.position.set(0, bodyY, D * 0.02); body.userData = ud; grp.add(body);
+      // Chamfered nose (front = −Z): a shorter box sloped down toward the front.
+      const nose = new THREE.Mesh(new THREE.BoxGeometry(W * 0.9, bodyH * 0.78, D * 0.34),
+        this._mat({ color: bodyCol, roughness: 0.55 }));
+      nose.position.set(0, bodyY - 6, -D * 0.42); nose.rotation.x = -0.42; nose.userData = ud; grp.add(nose);
+      // Dark hood cap over the mid/front for the two-tone toon read.
+      const hood = new THREE.Mesh(new THREE.BoxGeometry(W * 0.72, bodyH * 0.5, D * 0.4),
         this._mat({ color: 0x1b2a1b, roughness: 0.5 }));
-      hood.position.set(0, H * 0.8, -D * 0.22); hood.userData = ud; grp.add(hood);
-      // LED strip across the top.
-      const strip = new THREE.Mesh(new THREE.BoxGeometry(W * 0.5, 24, 40), ledMat);
-      strip.position.set(0, H * 0.9, D * 0.28); strip.userData = { ...ud, outlineSkip: true };
-      grp.add(strip);
+      hood.position.set(0, bodyY + bodyH * 0.55, -D * 0.12); hood.userData = ud; grp.add(hood);
+      // Raised rear hump (+Z).
+      const hump = new THREE.Mesh(new THREE.BoxGeometry(W * 0.66, bodyH * 0.7, D * 0.32),
+        this._mat({ color: bodyCol, roughness: 0.5 }));
+      hump.position.set(0, bodyY + bodyH * 0.7, D * 0.3); hump.userData = ud; grp.add(hump);
+      // Status BEACON light bar on the hump (full led palette via ledMat).
+      const beacon = new THREE.Mesh(new THREE.BoxGeometry(W * 0.5, 34, 70), ledMat);
+      beacon.position.set(0, bodyY + bodyH * 1.15, D * 0.3);
+      beacon.userData = { ...ud, outlineSkip: true, robotLamp: true }; grp.add(beacon);
+      // Antenna stub on the rear hump.
+      const ant = new THREE.Mesh(new THREE.CylinderGeometry(9, 12, 150, 8),
+        this._mat({ color: 0x222222, roughness: 0.6 }));
+      ant.position.set(W * 0.24, bodyY + bodyH * 1.4, D * 0.34);
+      ant.userData = { ...ud, outlineSkip: true }; grp.add(ant);
       // Cutting-disc plate underneath (spins while mowing).
-      const disc = new THREE.Mesh(new THREE.CylinderGeometry(D * 0.35, D * 0.35, 20, 20),
+      const disc = new THREE.Mesh(new THREE.CylinderGeometry(D * 0.34, D * 0.34, 20, 20),
         this._mat({ color: 0x9e9e9e, roughness: 0.4 }));
-      disc.position.y = 40; disc.userData = { ...ud, outlineSkip: true };
+      disc.position.y = 34; disc.userData = { ...ud, outlineSkip: true };
       spin.add(disc);
       grp.add(spin);
-      // Wheel hints.
-      for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
-        const wheel = new THREE.Mesh(new THREE.CylinderGeometry(H * 0.28, H * 0.28, 60, 12),
-          this._mat({ color: 0x111111, roughness: 0.7 }));
-        wheel.rotation.z = Math.PI / 2;
-        wheel.position.set(sx * W * 0.42, H * 0.28, sz * D * 0.32);
-        wheel.userData = { ...ud, outlineSkip: true };
-        grp.add(wheel);
+      // Wheels: LARGE rear drive wheels (with tread lugs) + smaller front wheels.
+      const rearR = H * 0.40, frontR = H * 0.26, treadT = 74;
+      const mkWheel = (sx: number, sz: number, wr: number, lugs: number) => {
+        const tire = new THREE.Mesh(new THREE.CylinderGeometry(wr, wr, treadT, 16),
+          this._mat({ color: 0x111111, roughness: 0.8 }));
+        tire.rotation.z = Math.PI / 2;
+        tire.position.set(sx * (W * 0.5 + 6), wr, sz);
+        tire.userData = { ...ud, outlineSkip: true, robotWheel: true };
+        grp.add(tire);
+        // Tread lugs around the rim (only on the chunky drive wheels).
+        for (let k = 0; k < lugs; k++) {
+          const a = (k / lugs) * Math.PI * 2;
+          const lug = new THREE.Mesh(new THREE.BoxGeometry(18, wr * 0.28, treadT + 8),
+            this._mat({ color: 0x050505, roughness: 0.9 }));
+          lug.position.set(sx * (W * 0.5 + 6), wr + Math.sin(a) * wr * 0.9, sz + Math.cos(a) * wr * 0.9);
+          lug.rotation.x = a;
+          lug.userData = { ...ud, outlineSkip: true };
+          grp.add(lug);
+        }
+        // Hub cap.
+        const hub = new THREE.Mesh(new THREE.CylinderGeometry(wr * 0.34, wr * 0.34, treadT + 6, 10),
+          this._mat({ color: 0x555555, roughness: 0.5 }));
+        hub.rotation.z = Math.PI / 2;
+        hub.position.set(sx * (W * 0.5 + 6), wr, sz);
+        hub.userData = { ...ud, outlineSkip: true };
+        grp.add(hub);
+      };
+      for (const sx of [-1, 1]) {
+        mkWheel(sx, D * 0.30, rearR, 8);    // large rear drive wheels + tread lugs
+        mkWheel(sx, -D * 0.30, frontR, 0);  // smaller front wheels
+      }
+      // Side skirts over the wheels (tank register).
+      for (const sx of [-1, 1]) {
+        const skirt = new THREE.Mesh(new THREE.BoxGeometry(20, bodyH * 0.55, D * 0.86),
+          this._mat({ color: 0x2a3a2a, roughness: 0.6 }));
+        skirt.position.set(sx * (W * 0.5 + 2), bodyY + rearR * 0.35, D * 0.02);
+        skirt.userData = { ...ud, outlineSkip: true }; grp.add(skirt);
+      }
+      // Progress STRIP along the rear face (+Z): ~10 segments filling left→right.
+      const N = 10, stripW = W * 0.62, gap = stripW * 0.06;
+      const segW = (stripW - gap * (N - 1)) / N;
+      const z0 = D * 0.5 + 4;
+      for (let i = 0; i < N; i++) {
+        const seg = mkSeg(segW, 26, 12);
+        seg.position.set(-stripW / 2 + segW / 2 + i * (segW + gap), bodyY, z0);
+        progressGroup.add(seg);
       }
     }
     this._addOutlines(grp);
+    // Progress segments are added AFTER outlines (emissive readouts, no shells).
+    grp.add(progressGroup);
     const blob = kind === 'mower'
       ? this._blobShadow(ROBOT_DEFAULTS.mower.bodyW * 0.62, ROBOT_DEFAULTS.mower.bodyD * 0.62)
       : this._blobShadow(ROBOT_DEFAULTS.vacuum.bodyR * 1.3, ROBOT_DEFAULTS.vacuum.bodyR * 1.3);
     blob.position.y = 6;
     grp.add(blob);
-    return { group: grp, kind, ledMat, spin, blob };
+    return { group: grp, kind, ledMat, spin, blob, progressGroup, progressMats };
   }
 
   private _disposeRobotRig(rig: RobotRig): void {
@@ -9536,15 +9859,22 @@ export class ThreeDRenderer {
   // disposal. Guarded on isSprite so mesh materials (floor's cached
   // procedural / bg textures) are never touched.
   private _disposeSpriteMaps(g: THREE.Group): void {
+    // Dedupe: back-to-back banner planes SHARE one map (see _buildBanner). Freeing
+    // a texture twice is otherwise harmless but the shared-map contract must not
+    // rely on that — track seen maps and dispose each exactly once.
+    const seen = new Set<THREE.Texture>();
+    const free = (t?: THREE.Texture | null) => {
+      if (t && !seen.has(t)) { seen.add(t); t.dispose(); }
+    };
     g.traverse(o => {
       const s = o as THREE.Sprite;
-      if (s.isSprite) { s.material.map?.dispose(); return; }
+      if (s.isSprite) { free(s.material.map); return; }
       // Fixed-orientation info-card text lives on a plain Mesh (userData.textPlane)
       // whose CanvasTexture map _clearGroup disposes as a material — but its map
       // must be freed too. Sweep it here (the isSprite guard would skip it).
       if ((o as THREE.Mesh).userData?.textPlane) {
         const m = (o as THREE.Mesh).material as THREE.MeshBasicMaterial;
-        m?.map?.dispose();
+        free(m?.map);
       }
     });
   }
@@ -9593,7 +9923,10 @@ export class ThreeDRenderer {
     const grsRig = this._bgRigs.find(r => r.mode === 'grass');
     this._bgSkySprite = skyRig?.sky ?? null;
     this._bgBannerAsm = banRig?.asm ?? null;
-    this._bgBannerText = (banRig?.banner as THREE.Mesh) ?? null;
+    // banner is now a Group of two planes; expose its readable +normal plane
+    // (a real Mesh with material.map) so the legacy bgtext-test mirror still reads.
+    this._bgBannerText = ((banRig?.banner as THREE.Group | undefined)
+      ?.userData?.bannerFront as THREE.Mesh) ?? null;
     this._bgBannerProp = banRig?.prop ?? null;
     this._bgBannerRadius = banRig?.radius ?? 0;
     this._bgGrassInfo = grsRig?.grass ?? null;
@@ -9641,19 +9974,18 @@ export class ThreeDRenderer {
     const baseR = Math.max(6000, diag * 0.75);
     const factor = 1 + 0.15 * ((i % 3) - 1);            // 0.85 / 1.0 / 1.15
     const angle = i * (Math.PI * 2 / Math.max(1, n));   // spread evenly
-    // Shared trailing banner (broadside: normal = local ±X via rotation.y=π/2).
+    // Shared trailing banner (broadside: base normal = local ±X via the Group's
+    // rotation.y=π/2). Two FrontSide planes back-to-back so the text reads
+    // left-to-right from BOTH flanks (a single DoubleSide plane showed the reverse
+    // face mirrored — the train-flank technique un-mirrors it). bh = banner height.
     const tex = this._makeBgTextTexture(text, 'banner');
     const cv = tex.image as HTMLCanvasElement;
     const aspect = cv.width / cv.height;
     const bh = 1400;
-    const banner = new THREE.Mesh(
-      new THREE.PlaneGeometry(bh * aspect, bh),
-      new THREE.MeshBasicMaterial({ map: tex, side: THREE.DoubleSide, fog: false }));
+    const banner = this._buildBanner(tex, bh, aspect);
     banner.rotation.y = Math.PI / 2;
-    banner.userData.textPlane = true;
-    banner.userData.outlineSkip = true;
 
-    let prop: THREE.Object3D, tailRotor: THREE.Object3D | undefined;
+    let prop: THREE.Object3D, tailRotor: THREE.Object3D | undefined, towWire: THREE.Object3D | undefined;
     let radius: number, alt: number, dir: number, bobAmp: number, propRate: number;
 
     if (kind === 'plane') {
@@ -9666,9 +9998,21 @@ export class ThreeDRenderer {
       tail.position.set(0, 60, 420); asm.add(tail);
       const fin = new THREE.Mesh(new THREE.BoxGeometry(50, 260, 160), bodyMat);
       fin.position.set(0, 150, 420); asm.add(fin);
-      prop = new THREE.Mesh(new THREE.CylinderGeometry(360, 360, 24, 16), this._mat({ color: 0x33363b }));
-      prop.rotation.x = Math.PI / 2; prop.position.set(0, 40, -480);
-      prop.userData.outlineSkip = true; asm.add(prop);
+      // Propeller: a nose hub + two flat blades crossing through it, in a subgroup
+      // that spins about the FLIGHT AXIS (local Z, the fuselage forward axis). The
+      // old build was a thin disc pre-rotated on X and then spun on Z — a compound
+      // that wobbled instead of reading as a spinning prop.
+      const propMat = this._mat({ color: 0x33363b });
+      const propG = new THREE.Group();
+      const hub = new THREE.Mesh(new THREE.ConeGeometry(48, 150, 12), propMat);
+      hub.rotation.x = -Math.PI / 2;                    // apex → −Z (nose forward)
+      hub.userData.outlineSkip = true; propG.add(hub);
+      for (const rot of [0, Math.PI / 2]) {             // two blades crossing in the XY plane
+        const blade = new THREE.Mesh(new THREE.BoxGeometry(80, 760, 12), propMat);
+        blade.rotation.z = rot; blade.userData.outlineSkip = true; propG.add(blade);
+      }
+      propG.position.set(0, 40, -480); propG.userData.outlineSkip = true;
+      prop = propG; asm.add(prop);
       banner.position.set(0, 40, 1200 + (bh * aspect) / 2);   // trail straight behind
       asm.add(banner);
       radius = baseR * factor; alt = 6000 + 800 * i; dir = 1; bobAmp = 120; propRate = 22;
@@ -9707,21 +10051,65 @@ export class ThreeDRenderer {
         blade.rotation.x = rot; (tailRotor as THREE.Group).add(blade);
       }
       tailRotor.position.set(70, 470, 800); tailRotor.userData.outlineSkip = true; asm.add(tailRotor);
-      // Banner hung BELOW-and-behind on a short dark tow line, not straight back.
-      banner.position.set(0, -1900, 1500 + (bh * aspect) / 2);
+      // Banner hung BELOW-and-behind; the tow wire spans the chopper belly to the
+      // banner's TOP-edge centre. Cylinders are Y-axis-aligned by default, so we
+      // position the wire at the segment MIDPOINT and rotate its local +Y onto the
+      // attach→top vector (a bare rotation.x tilt never actually reached either
+      // end). The banner sways via rotation.y about the Group origin, and the
+      // top-edge centre sits ON that Y axis (local x=z=0), so it is sway-invariant
+      // — a wire fixed in the chopper (asm) frame stays connected across frames.
+      const bannerZ = 1500 + (bh * aspect) / 2;
+      banner.position.set(0, -1900, bannerZ);
       asm.add(banner);
-      const towLine = new THREE.Mesh(new THREE.CylinderGeometry(14, 14, 2100, 6), dark);
-      towLine.position.set(0, -900, 700);
-      towLine.rotation.x = Math.atan2(1500, 1800);        // slope down-and-back
-      towLine.userData.outlineSkip = true; asm.add(towLine);
+      const attach = new THREE.Vector3(0, 260, 480);        // belly, just behind the cabin
+      const bannerTop = new THREE.Vector3(0, -1900 + bh / 2, bannerZ);
+      const wireVec = bannerTop.clone().sub(attach);
+      const wireLen = wireVec.length();
+      const towLine = new THREE.Mesh(new THREE.CylinderGeometry(14, 14, wireLen, 6), dark);
+      towLine.position.copy(attach).addScaledVector(wireVec, 0.5);   // midpoint
+      towLine.quaternion.setFromUnitVectors(
+        new THREE.Vector3(0, 1, 0), wireVec.clone().normalize());     // +Y → attach→top
+      towLine.userData.outlineSkip = true;
+      towLine.userData.attach = attach.toArray();
+      towLine.userData.bannerTop = bannerTop.toArray();
+      asm.add(towLine);
+      towWire = towLine;
       radius = baseR * 0.6 * factor; alt = 7500 + 800 * i; dir = -1; bobAmp = 150; propRate = 42;
     }
 
     this._bgTextGroup.add(asm);
     return {
-      mode: kind === 'plane' ? 'banner' : 'chopper', index: i, asm, prop, tailRotor,
+      mode: kind === 'plane' ? 'banner' : 'chopper', index: i, asm, prop, tailRotor, towWire,
       banner, angle, radius, alt, dir, bobAmp, propRate,
     };
+  }
+
+  // A broadside text banner as TWO FrontSide planes back-to-back (~2 mm apart)
+  // sharing ONE material + texture, so it reads left-to-right from BOTH flanks.
+  // The back plane is rotated π about the vertical axis (the train-flank
+  // technique) which un-mirrors the shared texture — a single DoubleSide plane
+  // showed the reverse face mirrored. Returned as a Group; the caller applies the
+  // broadside base rotation (and the chopper sways group.rotation.y). Both planes
+  // carry userData.textPlane (map disposal) and the shared map is dedup-guarded in
+  // _disposeSpriteMaps so it is freed exactly once. userData.bannerFront exposes
+  // the readable +normal plane for the legacy _bgBannerText mirror.
+  private _buildBanner(tex: THREE.CanvasTexture, bh: number, aspect: number): THREE.Group {
+    const grp = new THREE.Group();
+    const geo = new THREE.PlaneGeometry(bh * aspect, bh);
+    const mat = new THREE.MeshBasicMaterial({ map: tex, side: THREE.FrontSide, fog: false });
+    const front = new THREE.Mesh(geo, mat);
+    front.position.z = 1;                       // faces +Z(local) → readable
+    front.userData.textPlane = true; front.userData.outlineSkip = true;
+    front.userData.bannerFace = 'front';
+    const back = new THREE.Mesh(geo, mat);      // SHARES geo + material (one map)
+    back.rotation.y = Math.PI;                  // faces −Z(local), un-mirrored
+    back.position.z = -1;
+    back.userData.textPlane = true; back.userData.outlineSkip = true;
+    back.userData.bannerFace = 'back';
+    grp.add(front); grp.add(back);
+    grp.userData.textPlane = true;              // keep the group flagged (legacy assert)
+    grp.userData.bannerFront = front;
+    return grp;
   }
 
   // Flat lawn text decal OUTSIDE the wall loops. Multiple grass entries take
@@ -13545,6 +13933,13 @@ export class ThreeDRenderer {
           pz2 = az * (1 - u) + sz * u;
         }
         py2 = (h.groundY + bob + floatOff) * stand + (seatYeff - HIP_Y) * sit;
+        // Ride the swing: _advanceSwings publishes the seat's current scene-space
+        // displacement (from the pendulum) keyed by SitSpot id. Scale by `sit` so
+        // a rig mid-approach doesn't jerk; the offset is ~0 when unoccupied (the
+        // swing blend is near 0). One-frame lag (the advance runs after this loop)
+        // — imperceptible for a smooth pendulum.
+        const swo = this._swingOffset[spot.id];
+        if (swo) { px2 += swo.dx * sit; pz2 += swo.dz * sit; py2 += swo.dy * sit; }
       } else {
         px2 = h.navX; pz2 = h.navZ; py2 = h.groundY + bob + floatOff;
       }
@@ -13803,6 +14198,20 @@ export class ThreeDRenderer {
     // off drains. Sees this frame's raw target positions + resolved anchors.
     this._advanceSinks(targets, entityOn, frameDt);
 
+    // ── Bathtub water (furniture-polish): fill rises while IN USE (bound
+    // switch/binary_sensor / unbound localState → entityOn, OR a rig engaged in a
+    // `bathe` activity / dwelling), drains when off. Slower than sinks.
+    this._advanceBathtubs(targets, entityOn, frameDt);
+
+    // ── Swing seats (furniture-polish): pendulum each occupied swing (a rig
+    // claims its SitSpot, sit > 0.5) ±~15° at ~0.4 Hz, eased in/out; publishes
+    // the seat displacement into _swingOffset so the seated rig rides it.
+    this._advanceSwings(frameDt);
+
+    // ── Mailbox flags (furniture-polish): ease each flag arm toward UP (flag
+    // sensor 'on') / DOWN (pole horizontal, panel hanging).
+    this._advanceMailFlags(frameDt);
+
     // ── Plant droop: ease each thirsty plant's foliage toward a wilted pose
     // (leaf clumps / flower stems tip outward+down + desaturate). Thirsty is
     // resolved at build time (folded into _keyFloor); this just eases the blend.
@@ -13952,6 +14361,91 @@ export class ThreeDRenderer {
       sk.fill.position.y = sk.emptyY + (sk.fullY - sk.emptyY) * next + ripple;
       sk.fill.visible = next > 0.02;
       sk.stream.visible = running;
+    }
+  }
+
+  // Per-frame bathtub water. A tub RUNS when its effectiveState is on (bound
+  // switch/binary_sensor / unbound localState → entityOn) OR a rig is engaged in
+  // a `bathe` activity anchored to it OR dwells (>1.5 s, RAW pos) within ~1.2 m
+  // — the sink idiom (anti-feedback, raw positions only). Running eases the fill
+  // UP (τ ≈ 4 s → ~12 s to fill) toward fullY; off DRAINS (τ ≈ 3.3 s → ~10 s).
+  // Blend keyed by fixture id (survives _keyFloor). Zero alloc after build.
+  private _advanceBathtubs(targets: TargetWorld[], entityOn: Record<string, boolean>, dt: number): void {
+    if (!this._bathtubs.length) return;
+    const bathingFu = new Set<string>();
+    for (const key in this._humanoids) {
+      const h = this._humanoids[key];
+      if (h.activityAnchor && h.act > 0.1 && h.activityAnchor.kind === 'bathe')
+        bathingFu.add(h.activityAnchor.furnitureId);
+    }
+    const PROX2 = 1200 * 1200;
+    for (const tub of this._bathtubs) {
+      let running = entityOn[tub.fuId] === true || bathingFu.has(tub.fuId);
+      if (!running) {
+        for (const t of targets) {
+          const dx = t.x - tub.wx, dy = t.y - tub.wy;
+          if (dx * dx + dy * dy > PROX2) continue;
+          const h = this._humanoids[t.key];
+          if (h && !h.quad && h.dwell > 1.5) { running = true; break; }
+        }
+      }
+      const cur = this._bathtubFill[tub.fuId] ?? 0;
+      const tau = running ? 4.0 : 3.3;                 // ~12 s fill, ~10 s drain
+      const alpha = 1 - Math.exp(-dt / tau);
+      const next = cur + ((running ? 1 : 0) - cur) * alpha;
+      this._bathtubFill[tub.fuId] = next;
+      tub.fill.position.y = tub.emptyY + (tub.fullY - tub.emptyY) * next;
+      tub.fill.visible = next > 0.02;
+    }
+  }
+
+  // Per-frame swing pendulum. Each swing seat eases a per-spot blend (τ ≈ 0.4 s)
+  // toward 1 while OCCUPIED (a rig claims its SitSpot, sit > 0.5), and swings the
+  // pivot ±AMP·blend at ~0.4 Hz (a small idle sway persists when empty). The
+  // seat's scene-space displacement from rest — dyLocal = ropeLen(1−cosθ),
+  // dzLocal = −ropeLen·sinθ, rotated by the furniture yaw — is published into
+  // _swingOffset[spotId] so the seated rig root rides it (read next frame in the
+  // updateTargets seated block). Zero alloc after build.
+  private _advanceSwings(dt: number): void {
+    if (!this._swings.length) return;
+    const occ = new Set<string>();
+    for (const key in this._humanoids) {
+      const h = this._humanoids[key];
+      if (h.sitSpotId && !h.quad && h.sit > 0.5) occ.add(h.sitSpotId);
+    }
+    const t = performance.now() / 1000;
+    const OMEGA = 2 * Math.PI * 0.4;   // ~0.4 Hz
+    const AMP = 0.26, IDLE = 0.02;     // ±~15° occupied, ±~1° idle sway
+    const alpha = 1 - Math.exp(-dt / 0.4);
+    for (const sw of this._swings) {
+      const target = occ.has(sw.spotId) ? 1 : 0;
+      const cur = this._swingBlend[sw.spotId] ?? 0;
+      const next = cur + (target - cur) * alpha;
+      this._swingBlend[sw.spotId] = next;
+      const amp = IDLE + (AMP - IDLE) * next;
+      const angle = amp * Math.sin(t * OMEGA + sw.phase);
+      sw.pivot.rotation.x = angle;
+      const dyLocal = sw.ropeLen * (1 - Math.cos(angle));
+      const dzLocal = -sw.ropeLen * Math.sin(angle);
+      const gy = sw.groupYaw;
+      this._swingOffset[sw.spotId] = {
+        dx: dzLocal * Math.sin(gy), dy: dyLocal, dz: dzLocal * Math.cos(gy),
+      };
+    }
+  }
+
+  // Per-frame mailbox flag. Ease each arm's 0→1 blend (τ ≈ 0.25 s) toward UP
+  // (flag sensor 'on') / DOWN, applying rotation.x = (π/2)·(1−blend): blend 1 =
+  // up (pole vertical, flag flying), blend 0 = down (pole horizontal, panel
+  // hanging). Blend keyed by fixture id (survives _keyFloor). Zero alloc.
+  private _advanceMailFlags(dt: number): void {
+    if (!this._mailFlags.length) return;
+    const alpha = 1 - Math.exp(-dt / 0.25);
+    for (const mf of this._mailFlags) {
+      const cur = this._mailFlagBlend[mf.fuId] ?? 0;
+      const next = cur + ((mf.up ? 1 : 0) - cur) * alpha;
+      this._mailFlagBlend[mf.fuId] = next;
+      mf.arm.rotation.x = (Math.PI / 2) * (1 - next);
     }
   }
 

@@ -16,9 +16,12 @@
   </style>
 </head>
 <body>
-  <h1>Robot vacuum / mower — wall-avoidance, dock return, outdoor sweep, GPS projection</h1>
+  <h1>Robot vacuum / mower — wall-avoidance, dock return, outdoor sweep, GPS projection, rig redesign</h1>
   <div id="summary">Running…</div>
   <div class="grid" id="grid"></div>
+  <!-- Renderer canvas (rig geometry + progress) + a hidden 2D canvas (drawAll). -->
+  <div id="rc" style="width:900px;height:600px;position:absolute;left:-9999px;top:0"></div>
+  <canvas id="c2d" width="800" height="600" style="position:absolute;left:-9999px;top:620px"></canvas>
 
   <!-- Pure-logic test: geometry.ts + geo.ts imported as standalone transpiles
        (NOT code-split chunks). Generate them into the harness dir next to this
@@ -30,8 +33,9 @@
   <script type="module">
     import {
       segCrossesSolidWall, mowerSweepWaypoints, segmentsIntersect,
-      pointInPolygon, closedWallLoops, robotLedColor, ROBOT_DEFAULTS,
+      pointInPolygon, closedWallLoops, robotLedColor, robotProgress, ROBOT_DEFAULTS,
       parseVacuumPosition, vacuumRawToWorld, vacuumRawHeadingRad, solveVacuumDockOffset,
+      hexToInt,
     } from './geometry.mod.js';
     import { fitGeoTransform, latLonToPlan, clampToBoundary } from './geo.mod.js';
 
@@ -273,6 +277,109 @@
     ok('LED returning = blue', robotLedColor('returning') === '#2196f3');
     ok('LED error = red', robotLedColor('error') === '#e53935');
     ok('LED docked = amber', robotLedColor('docked') === '#ffca28');
+
+    // ── Progress source resolution (pure robotProgress) ──────────────────────
+    const so = (map) => (id) => map[id] ?? null;
+    ok('progress: entity state parses + clamps',
+       robotProgress({ progressEntity: 'sensor.p' }, so({ 'sensor.p': { state: '42' } })) === 42);
+    ok('progress: entity clamps >100',
+       robotProgress({ progressEntity: 'sensor.p' }, so({ 'sensor.p': { state: '140' } })) === 100);
+    ok('progress: attribute fallback (cleaned_area_percent)',
+       robotProgress({ entity_id: 'vacuum.v' }, so({ 'vacuum.v': { state: 'cleaning', attributes: { cleaned_area_percent: 73 } } })) === 73);
+    ok('progress: entity field WINS over attribute',
+       robotProgress({ progressEntity: 'sensor.p', entity_id: 'vacuum.v' },
+         so({ 'sensor.p': { state: '20' }, 'vacuum.v': { state: 'x', attributes: { progress: 90 } } })) === 20);
+    ok('progress: no source → null',
+       robotProgress({ entity_id: 'vacuum.v' }, so({ 'vacuum.v': { state: 'cleaning', attributes: {} } })) === null);
+    ok('progress: non-numeric entity state → null (no attrs)',
+       robotProgress({ progressEntity: 'sensor.p' }, so({ 'sensor.p': { state: 'unavailable' } })) === null);
+
+    // ── Renderer: rig geometry + progress strip/ring (built chunk) ────────────
+    try {
+      const rmod = await import('./assets/three-renderer.js?v=' + Date.now());
+      const R = new rmod.ThreeDRenderer(document.getElementById('rc'));
+      await R.load();
+      const scene3d = { preset: 'day', floorColor: '#223344', floorTex: 'none', wallColor: '#bbbbbb' };
+      const mkFloor = (robots) => ({
+        id: 'f1', name: 'R', w: 8000, d: 6000, walls: [], furniture: [],
+        lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+        doors: [], windows: [], bg: null, model3d: null, look3d: null, rooms: [], robots,
+      });
+      const mowerFx = { id: 'm1', kind: 'mower', x: 3000, y: 3000, entity_id: 'lawn_mower.m', progressEntity: 'sensor.mow' };
+      const vacFx   = { id: 'v1', kind: 'vacuum', x: 5000, y: 3000, entity_id: 'vacuum.v', progressEntity: 'sensor.vac' };
+      const noSrcFx = { id: 'n1', kind: 'mower', x: 6500, y: 3000, entity_id: null };
+      const stOf = (led) => ({ x: 0, y: 0, heading: 0, phase: 0, activity: 'mowing', led });
+      R.updateFloor(mkFloor([mowerFx, vacFx, noSrcFx]), scene3d);
+
+      const rigM = () => R._robotRigs['m1'];
+      const rigV = () => R._robotRigs['v1'];
+      const rigN = () => R._robotRigs['n1'];
+      const countUD = (rig, flag) => { let n = 0; rig.group.traverse(o => { if (o.userData && o.userData[flag]) n++; }); return n; };
+      const litCount = (rig) => rig.progressMats.filter(m => m.emissiveIntensity > 0.5).length;
+
+      // Build rigs (returning-blue state → lamp color check).
+      R.updateRobotRigs([mowerFx, vacFx, noSrcFx],
+        { m1: { ...stOf('#2196f3'), x: 3000, y: 3000 }, v1: { ...stOf('#2196f3'), x: 5000, y: 3000 }, n1: { ...stOf('#78909c'), x: 6500, y: 3000 } },
+        { m1: 42, v1: 50, n1: null });
+
+      ok('rig: mower + vacuum + no-source rigs built', !!rigM() && !!rigV() && !!rigN());
+      ok('rig: mower has ≥4 wheels', countUD(rigM(), 'robotWheel') >= 4, 'wheels=' + countUD(rigM(), 'robotWheel'));
+      ok('rig: mower status lamp exists', countUD(rigM(), 'robotLamp') >= 1, 'lamps=' + countUD(rigM(), 'robotLamp'));
+      ok('rig: vacuum status lamp exists', countUD(rigV(), 'robotLamp') >= 1, 'lamps=' + countUD(rigV(), 'robotLamp'));
+      ok('rig: mower lamp takes state color (returning=blue)', rigM().ledMat.color.getHex() === 0x2196f3, '0x' + rigM().ledMat.color.getHex().toString(16));
+
+      ok('rig: mower progress strip has 10 segments', rigM().progressMats.length === 10, 'n=' + rigM().progressMats.length);
+      ok('rig: vacuum progress ring has 12 segments', rigV().progressMats.length === 12, 'n=' + rigV().progressMats.length);
+      ok('rig: mower 4-of-10 lit at 42%', rigM().progressGroup.visible && litCount(rigM()) === 4, 'lit=' + litCount(rigM()));
+      ok('rig: vacuum 6-of-12 lit at 50%', rigV().progressGroup.visible && litCount(rigV()) === 6, 'lit=' + litCount(rigV()));
+      ok('rig: no-source robot hides its progress strip', rigN().progressGroup.visible === false);
+
+      // Vacuum ring wraps the puck axis: all segments at a fixed radius, angles span a full circle.
+      {
+        const segs = rigV().progressGroup.children;
+        const radii = segs.map(s => Math.hypot(s.position.x, s.position.z));
+        const rMean = radii.reduce((a, b) => a + b, 0) / radii.length;
+        const constR = radii.every(r => Math.abs(r - rMean) < 1);
+        const angs = segs.map(s => Math.atan2(s.position.x, s.position.z));
+        const span = Math.max(...angs) - Math.min(...angs);
+        ok('rig: vacuum ring circles the puck axis (constant radius)', constR && rMean > 100, 'rMean=' + rMean.toFixed(0));
+        ok('rig: vacuum ring wraps > 5 rad around the axis', span > 5, 'span=' + span.toFixed(2));
+      }
+
+      // Re-drive with a new percentage → segments re-fill without rebuild (same rig object).
+      const rigMref = rigM();
+      R.updateRobotRigs([mowerFx, vacFx, noSrcFx],
+        { m1: { ...stOf('#43a047'), x: 3000, y: 3000 }, v1: { ...stOf('#43a047'), x: 5000, y: 3000 }, n1: { ...stOf('#78909c'), x: 6500, y: 3000 } },
+        { m1: 100, v1: 0, n1: null });
+      ok('rig: progress re-fills in place (no rebuild)', rigM() === rigMref && litCount(rigM()) === 10, 'lit=' + litCount(rigM()));
+      ok('rig: vacuum 0% → no segments lit', litCount(rigV()) === 0, 'lit=' + litCount(rigV()));
+    } catch (e) {
+      ok('renderer rig tests threw', false, String(e && e.message || e));
+    }
+
+    // ── Real Planner: progressEntity is config-path (_isSlowEntity) + 2D no-throw ─
+    try {
+      const { Planner } = await import('./planner.mod.js?v=' + Date.now());
+      const p = new Planner();
+      const f = p.floor();
+      const robot = { id: 'pr1', kind: 'vacuum', x: 1000, y: 1000, entity_id: 'vacuum.v', progressEntity: 'sensor.prog' };
+      f.robots = [robot];
+      ok('planner: progressEntity is config-path', p._isSlowEntity('sensor.prog') === true);
+      ok('planner: unrelated id is NOT config-path', p._isSlowEntity('sensor.random_unbound') === false);
+
+      // 2D drawAll no-throw with a robot + live progress sensor state.
+      const { drawAll, computeView } = await import('./canvas-render.mod.js?v=' + Date.now());
+      p.hass = { states: { 'sensor.prog': { state: '55', attributes: {} }, 'vacuum.v': { state: 'cleaning', attributes: {} } } };
+      p.robotStates = { pr1: { x: 1200, y: 1100, heading: 0.4, phase: 1, activity: 'cleaning', led: '#43a047' } };
+      const cv = document.getElementById('c2d');
+      const ctx = cv.getContext('2d');
+      const view = computeView(cv, f.w, f.d, p.viewCenter, p.zoom);
+      let threw = false;
+      try { drawAll(ctx, p, view, null); } catch (e) { threw = true; ok('drawAll threw', false, String(e && e.message || e)); }
+      ok('2D drawAll with robot + progress does not throw', !threw);
+    } catch (e) {
+      ok('planner/2D tests threw', false, String(e && e.message || e));
+    }
 
     // ── run + report ─────────────────────────────────────────────────────────
     const grid = document.getElementById('grid');

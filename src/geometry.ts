@@ -1398,6 +1398,40 @@ export function robotColor(kind: 'vacuum' | 'mower'): string {
   return kind === 'mower' ? '#66bb6a' : '#455a64';
 }
 
+// Task-progress percent (0..100) for a robot's body progress strip/ring, or null
+// when no source is known. Shared 2D + 3D + tests. `stateOf` returns a minimal HA
+// state envelope (state + attributes). Resolution order (entity field WINS):
+//   1. `progressEntity` — its numeric state, parseFloat + clamp 0..100.
+//   2. best-effort: the bound vacuum/mower entity's own attributes, scanning the
+//      common progress-percent keys (Roborock/Valetudo/generic) in order.
+// Non-numeric / missing everywhere → null (strip hidden).
+export interface RobotStateLike { state?: string; attributes?: Record<string, unknown> | null; }
+const ROBOT_PROGRESS_ATTRS = [
+  'cleaned_area_percent', 'progress', 'cleaning_progress', 'clean_percent',
+  'percent', 'percentage', 'completion',
+];
+export function robotProgress(
+  r: { progressEntity?: string | null; entity_id?: string | null },
+  stateOf: (id: string) => RobotStateLike | null | undefined,
+): number | null {
+  if (r.progressEntity) {
+    const n = parseFloat(String(stateOf(r.progressEntity)?.state));
+    if (isFinite(n)) return Math.max(0, Math.min(100, n));
+  }
+  if (r.entity_id) {
+    const attrs = stateOf(r.entity_id)?.attributes;
+    if (attrs) {
+      for (const k of ROBOT_PROGRESS_ATTRS) {
+        const v = attrs[k];
+        if (v == null) continue;
+        const n = parseFloat(String(v));
+        if (isFinite(n)) return Math.max(0, Math.min(100, n));
+      }
+    }
+  }
+  return null;
+}
+
 // ── Roborock live vacuum position (#6) ─────────────────────────────────────
 // The core Roborock integration's map camera/image entity carries a live
 // `vacuum_position` attribute (x/y/angle in the robot's internal map units).
@@ -1973,7 +2007,7 @@ export const FURNITURE_KINDS: Record<FurnitureKind, FurnitureKindDef> = {
   flower_bed:    { label: 'Flower bed',    w: 900,  h: 450,  ht: 300,  back: 'none', color: 0x6b4a2b, cat: 'outdoor', frontArrow: false },
   bird_bath:     { label: 'Bird bath',     w: 450,  h: 450,  ht: 950,  back: 'none', color: 0xb0b6bb, cat: 'outdoor', frontArrow: false },
   fountain:      { label: 'Fountain',      w: 1200, h: 1200, ht: 1400, back: 'none', color: 0xa8aeb4, cat: 'outdoor', frontArrow: false },
-  swingset:      { label: 'Swing set',     w: 2800, h: 1600, ht: 2200, back: 'none', color: 0x6d7378, cat: 'outdoor', frontArrow: false },
+  swingset:      { label: 'Swing set',     w: 2800, h: 1600, ht: 2200, seat: 350, back: 'none', color: 0x6d7378, cat: 'outdoor', frontArrow: false },
   lawn_chair:    { label: 'Lawn chair',    w: 700,  h: 1200, ht: 900,  seat: 380, back: 'low', color: 0x2e8b8b, cat: 'outdoor' },
   // picnic_table is a `surface` table (eat_at_table host); no `seat` — its centered
   // seat spot would land ON the tabletop. Sit AT it via adjacent lawn_chairs.
