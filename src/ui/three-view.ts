@@ -6,7 +6,7 @@ import { customElement } from './define.js';
 // startup path never downloads it.
 import type { ThreeDRenderer, ZoneWorld, HaloWorld, TargetWorld, ActivityContext,
   InteractiveItem, GpsPinWorld, GpsLandmarkWorld, GeoEventWorld, WeatherFxState, VacMapEntry } from '../three-renderer.js';
-import { localToWorld, transformVerts, pointInPolygon, sensorColor, hexToInt, motionColor, lightIconKind, furnitureKind, resolveFurnitureDef, furnitureCat, isBinKind, isSpeakerKind, isSinkKind, isVehicleKind, isStairsKind, alarmStateColor, valveOpenness, sprinklerRunning, sprinklerHeadKind, sprinklerArcDeg, sprinklerRadius, sprinklerRotation, doorSpanCenter, isDroopPlant, plantThirsty, PLANT_MOISTURE_DEFAULT_THRESHOLD } from '../geometry.js';
+import { localToWorld, transformVerts, pointInPolygon, sensorColor, hexToInt, motionColor, lightIconKind, furnitureKind, resolveFurnitureDef, furnitureCat, isBinKind, isSpeakerKind, isSinkKind, isVehicleKind, isClimateApplianceKind, isBladedFanKind, isStairsKind, alarmStateColor, valveOpenness, sprinklerRunning, sprinklerHeadKind, sprinklerArcDeg, sprinklerRadius, sprinklerRotation, doorSpanCenter, isDroopPlant, plantThirsty, PLANT_MOISTURE_DEFAULT_THRESHOLD } from '../geometry.js';
 import { compass8 } from '../geo.js';
 import { parseNowPlaying, isMediaPlayerId } from '../geometry.js';
 import { poolWaterColor } from '../geometry.js';
@@ -343,6 +343,22 @@ export class ThreeView extends LitElement {
               bubbles: true, composed: true,
               detail: {
                 domain: ['switch', 'binary_sensor'],
+                onPick: (id: string) => { fu0.entity_id = id; p.save(); p.emitConfig(); },
+              },
+            }));
+          }
+          return;
+        }
+        // Climate/airflow appliances reuse the 'media' click tag (single click
+        // toggles). Dblclick binds a climate/fan/switch (AC/fans) or climate/switch
+        // (heaters), NOT a media_player.
+        if (fu0 && isClimateApplianceKind(fu0.kind)) {
+          if (p.uiMode === 'edit' && !entity_id) {
+            const heater = fu0.kind === 'space_heater' || fu0.kind === 'wall_heater' || fu0.kind === 'towel_warmer';
+            this.dispatchEvent(new CustomEvent('open-entity-picker', {
+              bubbles: true, composed: true,
+              detail: {
+                domain: heater ? ['climate', 'switch'] : ['climate', 'fan', 'switch'],
                 onPick: (id: string) => { fu0.entity_id = id; p.save(); p.emitConfig(); },
               },
             }));
@@ -742,7 +758,7 @@ export class ThreeView extends LitElement {
         // itself is per-frame). Unbound plants with no demo toggle never qualify.
         const isPlant = isDroopPlant(fu, p.store.customObjects) &&
           (!!fu.moistureEntity || fu.plantDemoThirsty !== undefined);
-        if (furnitureCat(def) !== 'appliance' && !isBinKind(fu.kind) && !isSpeakerKind(fu.kind) && !isSinkKind(fu.kind) && !hasEvMail && !isPlant) return '';
+        if (furnitureCat(def) !== 'appliance' && !isBinKind(fu.kind) && !isSpeakerKind(fu.kind) && !isSinkKind(fu.kind) && !hasEvMail && !isPlant && !isClimateApplianceKind(fu.kind)) return '';
         const on = p.effectiveState(fu)?.state ?? '-';
         const door = fu.doorEntity ? stOf(fu.doorEntity) : '';
         // Per-device power glow (#8): bucket the live power reading to 50 W so the
@@ -784,6 +800,20 @@ export class ThreeView extends LitElement {
           const fl = fu.mailCount.flagEntity ? stOf(fu.mailCount.flagEntity) : '';
           mail = `${c}:${fl}`;
         }
+        // Climate/airflow appliances (climate batch): the built-in `on` term
+        // (effectiveState.state) already captures the climate MODE / fan on-off,
+        // but the 3D build ALSO reads hvac_action (heating/cooling/idle → running
+        // + vent color) and, for bladed fans, the fan percentage/direction (blade
+        // rps seed). Fold those attributes in so a same-mode action/speed change
+        // still rebuilds the floor (re-seeds the vent/rotor).
+        let clim = '';
+        if (isClimateApplianceKind(fu.kind)) {
+          const cst = p.effectiveState(fu);
+          const ca = (cst?.attributes ?? {}) as Record<string, unknown>;
+          const pct = isBladedFanKind(fu.kind) && typeof ca.percentage === 'number'
+            ? Math.round((ca.percentage as number) / 5) : '';
+          clim = `${ca.hvac_action ?? ''}:${pct}:${ca.direction ?? ''}`;
+        }
         // "Job done" badge (event-focused thought bubbles): the appliance's
         // finished-window flag drives a blue emissive badge built inside
         // updateFloor, so fold it in — no new dirty key (research §D).
@@ -796,7 +826,7 @@ export class ThreeView extends LitElement {
           const thr = fu.moistureThreshold ?? PLANT_MOISTURE_DEFAULT_THRESHOLD;
           moist = isFinite(rd) ? (plantThirsty(rd, thr) ? 't' : 'h') : (fu.plantDemoThirsty ? 't' : 'h');
         }
-        return `${fu.id}:${on}:${door}:${pw}:${tp}:${fu.doorOpen ? 1 : 0}:${bias}:${ev}:${mail}:${jd}:${moist}`;
+        return `${fu.id}:${on}:${door}:${pw}:${tp}:${fu.doorOpen ? 1 : 0}:${bias}:${ev}:${mail}:${jd}:${moist}:${clim}`;
       }).filter(Boolean).join(',');
       // Room occupancy glow (#1): fold each occupancy-bound room's on/off into
       // _keyFloor so the tinted floor patch rebuilds on an occupancy flip.
@@ -1322,14 +1352,14 @@ export class ThreeView extends LitElement {
       // change. sky + banner hide under pouring/lightning (they read wrong in a
       // downpour); grass (a ground decal) always shows. Per-frame motion runs in
       // the renderer's _advanceBgText.
-      const bgMode = p.bgTextMode();
-      const bgText = bgMode === 'off' ? null : p.bgTextResolved();
+      const bgEntries = p.bgTextsResolved();
       const bgStorm = fx.condition === 'pouring' || fx.condition === 'lightning'
         || fx.condition === 'lightning-rainy';
-      const keyBgText = `${p.configRev}|${f.id}|${bgMode}|${bgText ?? ''}|${bgStorm ? 's' : '-'}`;
+      const keyBgText = `${p.configRev}|${f.id}|${bgStorm ? 's' : '-'}|`
+        + bgEntries.map(e => `${e.id}:${e.mode}:${e.text}:${e.maxCars ?? ''}`).join('|');
       if (keyBgText !== this._keyBgText) {
         this._keyBgText = keyBgText;
-        r.updateBgText(bgText, bgMode, bgStorm, fx.windBearingPlanRad ?? 0, fx.windKmh);
+        r.updateBgTexts(bgEntries, bgStorm, fx.windBearingPlanRad ?? 0, fx.windKmh);
       }
 
       // Lights + switches: structural + state/brightness/color per entity.
@@ -1340,7 +1370,7 @@ export class ThreeView extends LitElement {
       const lightFlashing = (l: typeof f.lights[number]) =>
         !!(p.effectiveState(l)?.attributes as Record<string, unknown> | undefined)?._flash;
       const hasLiveFireplace = f.lights.some(l =>
-        ((l.iconKind === 'fireplace') && p.effectiveState(l)?.state === 'on') || lightFlashing(l));
+        ((l.iconKind === 'fireplace' || l.iconKind === 'heatlamp') && p.effectiveState(l)?.state === 'on') || lightFlashing(l));
       const keyLights = hasLiveFireplace ? `${Math.random()}` :
         `${p.configRev}|` + f.lights.map(l => {
           // effectiveState folds logic (derived on/color/flash from ANY entity),

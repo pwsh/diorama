@@ -1917,6 +1917,20 @@ export const FURNITURE_KINDS: Record<FurnitureKind, FurnitureKindDef> = {
   kitchen_sink:  { label: 'Kitchen sink',  w: 800,  h: 550,  ht: 900,  back: 'none', color: 0x8d6e63, cat: 'appliance', surface: true, activity: 'wash_hands' },
   coffee_maker:  { label: 'Coffee maker',  w: 250,  h: 250,  ht: 350,  back: 'none', color: 0x37474f, cat: 'appliance', activity: 'make_coffee', mountable: true },
   toaster:       { label: 'Toaster',       w: 300,  h: 200,  ht: 220,  back: 'none', color: 0xb0bec5, cat: 'appliance', mountable: true },
+  // Climate / airflow appliances. All bindable via the generic entity_id
+  // (climate/fan/switch). Running units vent airflow / spin blades / glow warm.
+  // Wall-hung units carry a default elevation (window AC in a sash, mini-split
+  // head high on the wall, wall heater near the floor). Front (grille/blades) = -Z.
+  window_ac:     { label: 'Window AC',     w: 600,  h: 400,  ht: 250,  back: 'none', color: 0xeceff1, cat: 'appliance', frontArrow: false },
+  mini_split:    { label: 'Mini-split head', w: 800, h: 300, ht: 200,  back: 'none', color: 0xf7f9fa, cat: 'appliance', frontArrow: false },
+  portable_ac:   { label: 'Portable AC',   w: 450,  h: 400,  ht: 750,  back: 'none', color: 0xcfd8dc, cat: 'appliance', frontArrow: false },
+  floor_fan:     { label: 'Floor fan',     w: 450,  h: 450,  ht: 1100, back: 'none', color: 0x9aa2a8, cat: 'appliance' },
+  retro_fan:     { label: 'Retro desk fan', w: 350, h: 300,  ht: 450,  back: 'none', color: 0xb08d57, cat: 'appliance', mountable: true },
+  modern_fan:    { label: 'Modern stand fan', w: 400, h: 380, ht: 950, back: 'none', color: 0xd7dce0, cat: 'appliance' },
+  tower_fan:     { label: 'Tower fan',     w: 300,  h: 300,  ht: 1000, back: 'none', color: 0x54585e, cat: 'appliance', frontArrow: false },
+  bladeless_fan: { label: 'Bladeless fan', w: 350,  h: 250,  ht: 900,  back: 'none', color: 0xcfd8dc, cat: 'appliance', frontArrow: false },
+  space_heater:  { label: 'Space heater',  w: 350,  h: 350,  ht: 600,  back: 'none', color: 0x3a3f45, cat: 'appliance', frontArrow: false },
+  wall_heater:   { label: 'Wall heater',   w: 600,  h: 120,  ht: 800,  back: 'none', color: 0xd7dce0, cat: 'appliance', frontArrow: false },
   // Bathroom
   toilet:        { label: 'Toilet',        w: 480,  h: 700,  ht: 780,  seat: 420, back: 'none', color: 0xf5f5f0, cat: 'bathroom', activity: 'toilet' },
   sink:          { label: 'Sink',          w: 560,  h: 470,  ht: 860,  back: 'none', color: 0xd7ccc8, cat: 'bathroom', activity: 'wash_hands' },
@@ -1925,6 +1939,9 @@ export const FURNITURE_KINDS: Record<FurnitureKind, FurnitureKindDef> = {
   utility_sink:  { label: 'Utility sink',  w: 600,  h: 500,  ht: 900,  back: 'none', color: 0x9aa2a8, cat: 'bathroom', activity: 'wash_hands' },
   bathtub:       { label: 'Bathtub',       w: 1520, h: 760,  ht: 560,  back: 'none', color: 0xf5f5f0, cat: 'bathroom', activity: 'bathe' },
   shower:        { label: 'Shower',        w: 910,  h: 910,  ht: 2000, back: 'none', color: 0xe3e6e8, cat: 'bathroom', activity: 'shower' },
+  // Wall-hung ladder-rack radiator; bars glow warm (eased) while running. Bathroom
+  // cat, so the appliance-state hash predicate is extended for it in three-view.
+  towel_warmer:  { label: 'Towel warmer',  w: 600,  h: 120,  ht: 800,  back: 'none', color: 0xb0bec5, cat: 'bathroom', frontArrow: false },
   // Fitness
   exercise_equipment: { label: 'Exercise equipment', w: 700, h: 1600, ht: 1300, back: 'none', color: 0x424242, cat: 'furniture', activity: 'exercise' },
   // Home theater — speakers/sub/center are a new `theater` cat (own optgroup).
@@ -2128,6 +2145,84 @@ export function furnitureCat(def: FurnitureKindDef): FurnitureCat { return def.c
 // standard entity_id (or unbound localState). 'on' OR 'full' = FULL.
 export function isBinKind(kind: FurnitureKind | undefined): boolean {
   return kind === 'trash_bin' || kind === 'recycle_bin';
+}
+
+// ── Climate / airflow appliances (this batch) ──────────────────────────────
+// Every new furniture kind added by the climate batch. All bindable via the
+// generic entity_id (climate/fan/switch). Used to widen the three-view
+// appliance-state hash (so towel_warmer — a BATHROOM-cat piece — folds its
+// running state into _keyFloor) and to gate the running-glow in 2D.
+export function isClimateApplianceKind(kind: FurnitureKind | undefined): boolean {
+  return kind === 'window_ac' || kind === 'mini_split' || kind === 'portable_ac' ||
+         kind === 'floor_fan' || kind === 'retro_fan' || kind === 'modern_fan' ||
+         kind === 'tower_fan' || kind === 'bladeless_fan' ||
+         kind === 'space_heater' || kind === 'wall_heater' || kind === 'towel_warmer';
+}
+// Bladed floor/desk/stand fans — the kinds with a visible spinning blade rotor
+// AND the optional oscillation sweep (Furniture.oscillate). Tower/bladeless fans
+// have no blades (slot shimmer / air-disc instead) and never oscillate.
+export function isBladedFanKind(kind: FurnitureKind | undefined): boolean {
+  return kind === 'floor_fan' || kind === 'retro_fan' || kind === 'modern_fan';
+}
+// Default base elevation (mm) for a freshly-dropped wall-hung climate piece.
+// window AC sits in a sash, the mini-split head rides high on the wall, the wall
+// heater near the floor, the towel warmer mid-wall. Everything else = 0 (floor).
+export function defaultFurnitureElevation(kind: FurnitureKind | undefined): number {
+  switch (kind) {
+    case 'window_ac':   return 900;
+    case 'mini_split':  return 2100;
+    case 'wall_heater': return 200;
+    case 'towel_warmer': return 800;
+    default: return 0;
+  }
+}
+// Resolve running + airflow for a climate appliance from its RESOLVED state
+// envelope (effectiveState / itemState — localState already folded). A climate.*
+// entity runs only while actively heating/cooling/fanning (hvacAirflow ≠ null);
+// a fan.*/switch.*/localState piece runs on 'on'/'playing'. `airFallback` is the
+// airflow kind for a non-climate (or actionless) run — 'cool' for ACs, 'heat'
+// for heaters. Returns {running, air} — `air` drives particle color/direction.
+export function climateApplianceRun(
+  st: { state?: string; attributes?: Record<string, unknown> } | null | undefined,
+  airFallback: HvacAirflowKind,
+): { running: boolean; air: HvacAirflowKind } {
+  const s = (st?.state ?? '').trim().toLowerCase();
+  if (!s || s === 'off' || s === 'unavailable' || s === 'unknown' ||
+      s === 'none' || s === 'idle' || s === 'standby') return { running: false, air: airFallback };
+  // A climate entity reports an HVAC mode (heat/cool/heat_cool/auto/dry/fan_only);
+  // resolve airflow from mode + hvac_action and treat it as running only when air ≠ null.
+  if (s === 'heat' || s === 'cool' || s === 'heat_cool' || s === 'auto' ||
+      s === 'dry' || s === 'fan_only') {
+    const action = st?.attributes?.hvac_action as string | undefined;
+    const air = hvacAirflow(s, action);
+    return { running: air != null, air: air ?? airFallback };
+  }
+  // fan.* / switch.* / localState — 'on'/'playing' runs at the fallback airflow.
+  return { running: s === 'on' || s === 'playing', air: airFallback };
+}
+
+// Floodlight/exhaust wall-plate depth (three-renderer housing Z). Wall-mount
+// exhaust snaps flush like a floodlight (plate back on the wall face, front into
+// the room), offset = wallT/2 + plateDepth/2 = 70.
+export const EXHAUST_PLATE_DEPTH_MM = 40;
+// Wall-mount exhaust fans lock flush to the nearest wall (the floodlight
+// precedent): the round housing's back sits on the wall face and the grille
+// (local −Z) faces the room. Center = axis + normal·(wallT/2 + plateDepth/2) =
+// axis + normal·70; rotation = atan2(−nx, −ny) (front = local −Z). NO ganging.
+// No-op for non-exhaust_wall lights or when no wall is within maxMm.
+export function snapExhaustToWall(
+  light: { x: number; y: number; rotation?: number; iconKind?: LightIconKind },
+  walls: { points: Vec2[]; kind?: WallKind }[],
+  maxMm = 500,
+): boolean {
+  if ((light.iconKind ?? LIGHT_DEFAULTS.iconKind) !== 'exhaust_wall') return false;
+  const hit = snapToWallEdge(walls, light.x, light.y, maxMm);
+  if (!hit) return false;
+  const off = WALL_HALF_MM + EXHAUST_PLATE_DEPTH_MM / 2;   // 70
+  light.x = Math.round(hit.x + hit.nx * off);
+  light.y = Math.round(hit.y + hit.ny * off);
+  light.rotation = Math.atan2(-hit.nx, -hit.ny) * 180 / Math.PI;
+  return true;
 }
 
 // Sink family — a visible recessed basin + faucet + running water (fill/stream/

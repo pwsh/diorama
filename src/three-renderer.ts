@@ -4,13 +4,14 @@ import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
 import { MTLLoader } from 'three/examples/jsm/loaders/MTLLoader.js';
 import type {
   Floor, Sensor, Light, SwitchFixture, MotionSensor, Vec2, HassState, Wall,
-  Scene3D, ScenePreset, FloorTexKind, GroundKind, GroundArea, Model3D, Furniture, AvatarKind, WeatherEffectKey, BgTextMode,
+  Scene3D, ScenePreset, FloorTexKind, GroundKind, GroundArea, Model3D, Furniture, AvatarKind, WeatherEffectKey, BgTextMode, BgTextEntryMode,
 } from './types.js';
 import {
   lightHeight, lightRadius, lightIntensity, lightIconKind, lightRotation, lightLength,
   switchHeight, switchRotation, switchSize,
   motionColor, motionIntensity, hexToInt, bleProxyHeight, BLE_PROXY_DEFAULTS,
   furnitureDef, resolveFurnitureDef, furnitureColor, furnitureCat, isBinKind, binStateIsFull, isSpeakerKind, isSinkKind, isRiserKind, doorOpenDeltaDeg,
+  isClimateApplianceKind, isBladedFanKind, climateApplianceRun,
   plantThirsty, PLANT_MOISTURE_DEFAULT_THRESHOLD,
   isVehicleKind, evStatusOf, evStatusColor, carChargeState,
   doorOpenFraction, GARAGE_DOOR_H,
@@ -497,6 +498,40 @@ interface AnimPrim {
   t: number;           // accumulated phase (init = per-prim phase offset)
   baseRotX: number; baseRotY: number; baseRotZ: number;
   basePosX: number; basePosY: number; basePosZ: number;
+}
+
+// One background-text instance (skywriting / banner plane / grass / train /
+// chopper). Built by updateBgTexts, advanced by _advanceBgText. A loose union —
+// only the fields for the rig's `mode` are populated (matching the file's
+// established loose-struct style for the old single-rig fields).
+interface BgTrainVehicle { obj: THREE.Group; wheels: THREE.Object3D[]; }
+interface BgTrain {
+  loopScene: { x: number; z: number }[];  // closed polyline in SCENE space (train drives it)
+  loopWorld: { x: number; y: number }[];   // same loop in WORLD/plan mm (test asserts outside floor rect)
+  cum: number[];                            // cumulative arc length at each loop vertex
+  total: number;                            // loop perimeter (mm)
+  vehicles: BgTrainVehicle[];               // [engine, car0…carN]
+  spacing: number;                          // arc-length gap between consecutive vehicles (mm)
+  wheelR: number;                           // wheel radius (mm) → spin rate = speed/wheelR
+  s: number;                                // engine arc position (mm, wraps at total)
+  chunks: string[];                         // per-car message chunks (test hook)
+}
+interface BgRig {
+  mode: BgTextEntryMode;
+  index: number;                            // list index (drives placement stagger + phase desync)
+  // sky
+  sky?: THREE.Sprite; skyBaseX?: number; skyPhase?: number;
+  // aircraft (banner plane + chopper)
+  asm?: THREE.Group;
+  prop?: THREE.Object3D;                    // plane prop OR chopper main rotor
+  tailRotor?: THREE.Object3D;               // chopper tail rotor
+  banner?: THREE.Object3D;                  // trailing/hanging text plane
+  angle?: number; radius?: number; alt?: number; dir?: number;
+  bobAmp?: number; propRate?: number;
+  // grass
+  grass?: { cx: number; cy: number; w: number; h: number };
+  // train
+  train?: BgTrain;
 }
 
 // Build context for a declarative primitive (shared by the initial-rig
@@ -1131,6 +1166,9 @@ const MAX_FAN_RPS = 2.5;
 // Fan spin easing time-constant (s): a speed change / reverse / spin-down ramps
 // over ~this long rather than snapping (the valve/EV-pulse eased idiom).
 const FAN_SPIN_TAU = 0.5;
+// Floor-fan oscillation sweep: ±45° at ~0.15 Hz (a slow left-right head sweep).
+const FLOOR_FAN_OSC_AMP = Math.PI / 4;   // 45° each way
+const FLOOR_FAN_OSC_HZ = 0.15;
 // Plant-droop tuning (soil-moisture "thirsty" foliage sag). Blend eased per frame,
 // keyed by fixture id so it survives _keyFloor rebuilds (appliance-door idiom).
 const PLANT_DROOP_ANGLE = 0.35;      // rad — foliage tip when fully thirsty (~20°)
@@ -1399,18 +1437,20 @@ export class ThreeDRenderer {
   // pairing via _disposeSpriteMaps + _clearGroup), so it is in
   // clearTransientGroups + destroy (unlike the sky, this is cheap + floor-tied).
   private _bgTextGroup = new THREE.Group();
-  private _bgTextMode: BgTextMode = 'off';
-  private _bgSkySprite: THREE.Sprite | null = null;  // skywriting cloud-letter billboard
-  private _bgSkyBaseX = 0;                            // scene-x center (drifts around it)
-  private _bgSkyPhase = 0;                            // twinkle/drift accumulator (s)
-  private _bgBannerAsm: THREE.Group | null = null;    // plane + prop + trailing banner
-  private _bgBannerText: THREE.Mesh | null = null;    // banner text plane (broadside)
-  private _bgBannerProp: THREE.Object3D | null = null;// spinning prop disc
-  private _bgBannerAngle = 0;                         // orbit angle (rad)
-  private _bgBannerRadius = 0;                        // orbit radius (scene mm)
-  private _bgBannerAlt = 6000;                        // orbit altitude (scene mm)
+  // Multi-instance background text: one BgRig per resolved entry, rebuilt
+  // wholesale under three-view's _keyBgText. Per-frame motion loops over _bgRigs
+  // in _advanceBgText (zero allocation). Legacy single-rig mirror fields below
+  // point at the FIRST rig of each style so the original bgtext-test keeps
+  // reading them unchanged.
+  private _bgRigs: BgRig[] = [];
   private _bgWindRad = 0;                             // wind blow-toward (plan/scene rad); drives sky drift
   private _bgWindKmh = 0;
+  // ── Legacy single-rig mirrors (kept for bgtext-test back-compat) ──
+  private _bgSkySprite: THREE.Sprite | null = null;  // first sky rig's billboard
+  private _bgBannerAsm: THREE.Group | null = null;    // first banner rig's plane+banner
+  private _bgBannerText: THREE.Mesh | null = null;    // first banner rig's text plane
+  private _bgBannerProp: THREE.Object3D | null = null;// first banner rig's prop disc
+  private _bgBannerRadius = 0;                        // first banner rig's orbit radius
   // Grass decal world-frame placement (mm) — exposed for the test harness so it
   // can assert the decal lands OUTSIDE every wall loop + inside the floor rect.
   private _bgGrassInfo: { cx: number; cy: number; w: number; h: number } | null = null;
@@ -1561,6 +1601,35 @@ export class ThreeDRenderer {
   // Registered in updateValves (only for flowing valves), cleared each rebuild,
   // animated per frame in _advanceValves (zero-alloc, the _evPulses idiom).
   private _valveFlows: { mat: THREE.MeshToonMaterial; base: number; phase: number; trans: boolean }[] = [];
+  // ── Climate / airflow appliances (climate batch) ─────────────────────────
+  // Bladed FLOOR fan rotors (floor_fan/retro_fan/modern_fan). Same eased signed-
+  // rps machinery as the ceiling-fan _fanRotors, but a SEPARATE list (different
+  // lifecycle — these live in _floorGroup / _keyFloor, not _keyLights) so a
+  // lights rebuild never clears them. `oscillate` sweeps the (optional) `head`
+  // subgroup ±45° while running; the rotor spins about its own local axis.
+  // Reset each updateFloor; velocity/phase persist in _floorFanSpin (survives
+  // _keyFloor rebuilds so a rebuild never pops the blade phase / sweep).
+  private _floorFans: { rotor: THREE.Object3D; head: THREE.Object3D | null;
+                        id: string; rps: number; oscillate: boolean }[] = [];
+  private _floorFanSpin: Record<string, { rps: number; angle: number; osc: number; t: number }> = {};
+  // Furniture airflow particle clouds (AC/heater vents) — the thermostat vent
+  // idiom, but parented into the piece group (local coords) so they ride the
+  // piece rotation. Reset each updateFloor (geometry disposed with _floorGroup);
+  // advanced by _advanceApplianceVents (zero alloc, position-buffer in place).
+  private _applianceVents: { points: THREE.Points; pos: Float32Array; vel: Float32Array;
+                             life: Float32Array; count: number; ox: number; oy: number; oz: number;
+                             dirX: number; dirY: number; dirZ: number; spread: number; speed: number }[] = [];
+  // Emissive/opacity BREATHE materials (space-heater coil, wall-heater grille,
+  // tower-fan slot, bladeless air-disc) — only enrolled while running. Each entry
+  // carries an apply(k) closure (k = 0..1 breathe) built once at rebuild — zero
+  // per-frame alloc. Reset each updateFloor, advanced by _advanceClimateGlows.
+  private _climateGlows: { phase: number; om: number; apply: (k: number) => void }[] = [];
+  // Eased climate blends keyed by fixture id (survive _keyFloor rebuilds): the
+  // mini-split louver opening + the towel-warmer warm-up. Each entry eases the
+  // shared _climateBlends[fuId] toward `running` at its own τ and applies it.
+  private _climateEased: { fuId: string; running: boolean; tauUp: number; tauDown: number;
+                           apply: (blend: number) => void }[] = [];
+  private _climateBlends: Record<string, number> = {};
   // TVs grouped by the room they sit in — the watch_tv seated activity checks
   // whether a bound TV in the seated person's room is on. Rebuilt in updateFloor.
   private _tvsByRoom: Record<string, { furnitureId: string; hasEntity: boolean }[]> = {};
@@ -2388,10 +2457,11 @@ export class ThreeDRenderer {
     // next updatePools (same idiom as _disposeWaterPatchTextures for ground).
     this._disposePoolWaterTextures();
     // Background text is cheap + floor-tied — drop its tracking refs so
-    // _advanceBgText can't touch freed geometry before the next updateBgText.
+    // _advanceBgText can't touch freed geometry before the next updateBgTexts.
+    this._bgRigs = [];
     this._bgSkySprite = null; this._bgBannerAsm = null;
     this._bgBannerText = null; this._bgBannerProp = null;
-    this._bgGrassInfo = null; this._bgTextMode = 'off';
+    this._bgBannerRadius = 0; this._bgGrassInfo = null;
     // Vac-map overlay carries explicit CanvasTextures + a glow-material list —
     // tear it down through its dedicated clearer (disposes textures + resets lists).
     this._clearVacMap();
@@ -2452,6 +2522,15 @@ export class ThreeDRenderer {
     // Fan spin velocity/phase is per-floor (fixtures differ) — drop it on switch so
     // a new floor's fans start from rest rather than inheriting a stale rotation.
     this._fanSpin = {};
+    // Climate/airflow furniture effects: the tracking lists' geometry/materials
+    // went with _floorGroup; drop the lists + the per-floor eased blend state so
+    // the advances never touch freed objects and a new floor starts from rest.
+    this._floorFans = [];
+    this._floorFanSpin = {};
+    this._applianceVents = [];
+    this._climateGlows = [];
+    this._climateEased = [];
+    this._climateBlends = {};
     // Plant droop rigs + their eased blend reset on floor switch (pivots were just
     // disposed with _floorGroup; the blend map is rebuilt as updateFloor re-registers).
     this._plants = [];
@@ -4072,6 +4151,13 @@ export class ThreeDRenderer {
     this._sinks = [];
     this._speakerPulses = [];
     this._evPulses = [];
+    // Climate/airflow furniture effects rebuilt here; the eased blends
+    // (_floorFanSpin / _climateBlends) PERSIST (keyed by fixture id) so a
+    // _keyFloor rebuild never pops the blade phase / louver / warm-glow.
+    this._floorFans = [];
+    this._applianceVents = [];
+    this._climateGlows = [];
+    this._climateEased = [];
     // Fountain spray clouds are rebuilt with the furniture under _floorGroup;
     // drop the tracking list so _advanceFountains never iterates freed geometry.
     this._fountains = [];
@@ -4101,6 +4187,27 @@ export class ThreeDRenderer {
       // via three-view's appliance hash so this rebuilds on a playback change.
       const speakerPlaying = isSpeakerKind(fu.kind) &&
         (st0?.state === 'playing' || st0?.state === 'buffering');
+      // Climate/airflow appliances (climate batch): resolve running + airflow
+      // color (heat/cool/fan via hvacAirflow — a climate.* unit runs only while
+      // actively conditioning; a fan/switch/localState piece runs on 'on'). For
+      // bladed floor fans, seed the signed blade rps from a bound fan.* entity's
+      // percentage/direction (else a fixed nominal). Regardless of cat — so a
+      // BATHROOM-cat towel_warmer resolves its warm-up too.
+      let climateRunning = false;
+      let climateAir: import('./geometry.js').HvacAirflowKind = 'cool';
+      let fanRps = 0;
+      if (isClimateApplianceKind(fu.kind)) {
+        const heater = fu.kind === 'space_heater' || fu.kind === 'wall_heater' || fu.kind === 'towel_warmer';
+        const rr = climateApplianceRun(st0, heater ? 'heat' : 'cool');
+        climateRunning = rr.running;
+        climateAir = rr.air;
+        if (isBladedFanKind(fu.kind) && climateRunning) {
+          const fa = (st0?.attributes ?? {}) as Record<string, unknown>;
+          const mag = typeof fa.percentage === 'number'
+            ? Math.max(0, Math.min(100, fa.percentage as number)) / 100 * MAX_FAN_RPS : 1.2;
+          fanRps = fa.direction === 'reverse' ? -mag : mag;
+        }
+      }
       // Bound temperature reading (stove/oven/fridge): a rounded chip/sprite.
       let tempLabel: string | undefined;
       if (fu.tempEntity && stateProvider) {
@@ -4160,7 +4267,8 @@ export class ThreeDRenderer {
       const jobDone = isAppliance && !!jobDoneProvider && jobDoneProvider(fu.id);
       const grp = this._buildFurniture(fu, f.furniture, customObjects,
                                        { applianceOn, ledScale, doorSink, plantSink, sinkSink, tempLabel, binFull, speakerPlaying, biasOn, biasColor,
-                                         vehicleGhost, evCharging, evColor, mailFlagUp, mailLidOpen, mailCountLabel, jobDone });
+                                         vehicleGhost, evCharging, evColor, mailFlagUp, mailLidOpen, mailCountLabel, jobDone,
+                                         climateRunning, climateAir, fanRps, oscillate: (fu as Furniture).oscillate === true });
       this._shadowFlags(grp);
       // Custom-recipe front-arrow indicator: custom objects draw only as a
       // labeled rect in 2D and had no 3D front cue, so when a recipe piece is
@@ -4265,6 +4373,13 @@ export class ThreeDRenderer {
       // (no `kind` → NOT raycast-clickable) so state-driven builds are locatable.
       if (isVehicleKind(fu.kind) || fu.kind === 'ev_charger' || fu.kind === 'mailbox') {
         grp.userData = { ...grp.userData, fixtureId: fu.id };
+      }
+      // Climate/airflow appliances are click-toggle like appliances (reuse the
+      // 'media' click path → toggleItem: toggleEntity when bound (climate/fan/
+      // switch.toggle), else flip localState). Tagged regardless of binding.
+      if (isClimateApplianceKind(fu.kind)) {
+        grp.userData = { ...grp.userData, kind: 'media', entity_id: fu.entity_id ?? null, fixtureId: fu.id };
+        this._mediaClickables.push(grp);
       }
       // Riser platform: a flat walkable deck. Registered as terrain (flat top =
       // elevation + ht, resolved in _groundYAt like a landing) so rigs climb onto
@@ -5851,7 +5966,7 @@ export class ThreeDRenderer {
   // (the "front" / backrest side for kinds that have one). `rotation` is
   // screen-CW degrees in the 2D plan; in scene space we negate it because
   // _w mirrors world +X.
-  private _buildFurniture(fu: { x: number; y: number; w: number; h: number;
+  private _buildFurniture(fu: { id?: string; x: number; y: number; w: number; h: number;
                                  kind?: import('./types.js').FurnitureKind;
                                  rotation?: number; elevation?: number;
                                  color?: string; customKindId?: string },
@@ -5867,7 +5982,10 @@ export class ThreeDRenderer {
                                    biasOn?: boolean; biasColor?: number;
                                    vehicleGhost?: boolean; evCharging?: boolean; evColor?: number;
                                    mailFlagUp?: boolean; mailLidOpen?: boolean; mailCountLabel?: string;
-                                   jobDone?: boolean }): THREE.Group {
+                                   jobDone?: boolean;
+                                   climateRunning?: boolean;
+                                   climateAir?: import('./geometry.js').HvacAirflowKind;
+                                   fanRps?: number; oscillate?: boolean }): THREE.Group {
     const recipe = fu.customKindId ? customObjects?.find(o => o.id === fu.customKindId) : undefined;
     const def = recipe ?? furnitureDef(fu);
     const W = fu.w, D = fu.h, HT = def.ht;
@@ -6907,6 +7025,245 @@ export class ThreeDRenderer {
         addBox(46, HT * 0.4, 28, dark, W / 2 - 4, HT * 0.42, D * 0.18);  // side lever
         break;
       }
+      // ── Climate / airflow appliances (front = local -Z) ──────────────────
+      case 'window_ac': {
+        // Boxy unit: white body + dark front grille slats + side louvers +
+        // a small drip lip along the bottom front. Running → a cool-air wisp
+        // blowing forward-down from the front-bottom grille.
+        const shell = this._mat({ color: tint, metalness: 0.2, roughness: 0.5 });
+        addBox(W, HT, D, shell, 0, HT / 2, 0);
+        const grille = this._mat({ color: 0x2b2f34, roughness: 0.7 });
+        for (let i = 0; i < 4; i++)                                          // front grille slats
+          addBox(W * 0.82, HT * 0.11, 6, grille, 0, HT * (0.28 + i * 0.16), -D / 2 - 3);
+        for (const sx of [-1, 1])                                            // side louver hints
+          addBox(8, HT * 0.6, D * 0.6, grille, sx * (W / 2 + 2), HT * 0.5, 0);
+        addBox(W * 0.9, 22, 26, shell, 0, 22, -D / 2 - 12);                  // drip lip (proud, bottom-front)
+        if (opts?.climateRunning)
+          this._buildApplianceVent(grp, opts.climateAir ?? 'cool',
+            0, HT * 0.32, -D / 2 - 30, 0, -0.3, -0.95, 20, 0.85);
+        break;
+      }
+      case 'mini_split': {
+        // Sleek wall head: rounded white body + a bottom louver bar that ROTATES
+        // OPEN (~35°) while running (eased, keyed by fixture id) + downward
+        // airflow particles. Front = -Z; the head hangs high (elevation default).
+        const shell = this._mat({ color: tint, metalness: 0.15, roughness: 0.4 });
+        addBox(W, HT, D, shell, 0, HT / 2, 0);
+        addBox(W * 0.98, HT * 0.28, D * 0.5, this._mat({ color: 0xe6ebee, roughness: 0.5 }),
+               0, HT * 0.16, -D / 2 - 8);                                    // lower intake fascia
+        // Louver bar on a hinge at the bottom-front edge, angling DOWN to open.
+        {
+          const louverMat = this._mat({ color: 0xdfe6ea, roughness: 0.5, side: THREE.DoubleSide });
+          const hinge = new THREE.Group();
+          hinge.position.set(0, 4, -D / 2 - 10);
+          const bar = new THREE.Mesh(new THREE.BoxGeometry(W * 0.9, 14, D * 0.55), louverMat);
+          bar.position.set(0, 0, -D * 0.2);
+          hinge.add(bar);
+          grp.add(hinge);
+          const openA = -0.61;   // ~35° down
+          const blend0 = this._climateBlends[fu.id ?? ''] ?? 0;
+          hinge.rotation.x = openA * blend0;
+          this._climateEased.push({ fuId: fu.id ?? '', running: !!opts?.climateRunning,
+            tauUp: 0.3, tauDown: 0.45, apply: b => { hinge.rotation.x = openA * b; } });
+        }
+        if (opts?.climateRunning)
+          this._buildApplianceVent(grp, opts.climateAir ?? 'cool',
+            0, -30, -D / 2 - 24, 0, -0.95, -0.3, 24, 1);
+        break;
+      }
+      case 'portable_ac': {
+        // Freestanding tower on casters + a bent exhaust-hose hint (up the back)
+        // + a top vent. Running → particles rising then drifting off the top vent.
+        const shell = this._mat({ color: tint, metalness: 0.2, roughness: 0.55 });
+        addBox(W, HT - 30, D, shell, 0, (HT - 30) / 2 + 30, 0);
+        for (const [cx, cz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]] as const)  // casters
+          addCyl(24, 24, 30, dark, cx * W * 0.36, 15, cz * D * 0.36, 10);
+        addBox(W * 0.8, 26, D * 0.7, this._mat({ color: 0x2b2f34, roughness: 0.7 }),
+               0, HT + 2, 0);                                                 // top vent grille
+        // Exhaust hose: two angled dark cylinders up the back-left.
+        const hoseMat = this._mat({ color: 0x9aa2a8, roughness: 0.85 });
+        const h1 = addCyl(45, 45, D * 0.7, hoseMat, -W * 0.2, HT * 0.85, D / 2 + 20, 10);
+        h1.rotation.x = Math.PI / 3;
+        addCyl(45, 45, 260, hoseMat, -W * 0.2, HT + 120, D / 2 + 90, 10);
+        if (opts?.climateRunning)
+          this._buildApplianceVent(grp, opts.climateAir ?? 'cool',
+            0, HT + 40, 0, 0, 1, -0.2, 20, 0.7);
+        break;
+      }
+      case 'floor_fan':
+      case 'retro_fan':
+      case 'modern_fan': {
+        // Bladed fan: base + pole + a HEAD subgroup (yaws for oscillation) that
+        // carries a wire cage + a rotor of blades spinning about the head's local
+        // Z (= forward). retro_fan is a squat desk cage; modern_fan a thin ring
+        // shroud + 3 curved blades. The rotor/head are registered in _floorFans.
+        const cageR = kind === 'retro_fan' ? Math.min(W, HT) * 0.42
+                    : kind === 'modern_fan' ? W * 0.44 : W * 0.46;
+        const headY = kind === 'retro_fan' ? HT * 0.55 : HT - cageR - 30;
+        const metal = this._mat({ color: tint, metalness: 0.6, roughness: 0.35 });
+        const cageMat = this._mat({ color: 0x8a9096, metalness: 0.6, roughness: 0.4 });
+        if (kind === 'retro_fan') {
+          addCyl(W * 0.4, W * 0.46, 30, dark, 0, 15, 0, 18);                 // desk base
+          addCyl(24, 24, headY - 30, metal, 0, (headY - 30) / 2 + 15, 0, 10); // short neck
+        } else {
+          addCyl(W * 0.5, W * 0.56, 40, dark, 0, 20, 0, 20);                 // floor base
+          addCyl(28, 28, headY - 40, metal, 0, (headY - 40) / 2 + 20, 0, 12); // pole
+        }
+        const head = new THREE.Group();
+        head.position.set(0, headY, 0);
+        grp.add(head);
+        // Motor hub (behind the blades, +Z).
+        const hub = new THREE.Mesh(new THREE.CylinderGeometry(cageR * 0.24, cageR * 0.24, D * 0.5, 14), metal);
+        hub.rotation.x = Math.PI / 2;
+        hub.position.z = cageR * 0.5;
+        head.add(hub);
+        // Wire cage: front + back rings (torus in the XY plane, axis = Z = front).
+        for (const cz of (kind === 'modern_fan' ? [-cageR * 0.3] : [-cageR * 0.3, cageR * 0.35])) {
+          const ring = new THREE.Mesh(new THREE.TorusGeometry(cageR, kind === 'modern_fan' ? 18 : 10, 8, 28), cageMat);
+          ring.position.z = cz;
+          ring.userData.outlineSkip = true;
+          head.add(ring);
+        }
+        // Rotor: blades about the head's local Z. 4 flat blades (3 curved for modern).
+        const rotor = new THREE.Group();
+        rotor.position.z = -cageR * 0.05;
+        const bladeCount = kind === 'modern_fan' ? 3 : 4;
+        const bladeMat = this._mat({ color: kind === 'retro_fan' ? 0xd8b878 : 0xcfd8dc,
+                                     metalness: 0.3, roughness: 0.5, side: THREE.DoubleSide });
+        const bladeLen = cageR * 0.82;
+        for (let k2 = 0; k2 < bladeCount; k2++) {
+          const arm = new THREE.Group();
+          arm.rotation.z = (k2 * 2 * Math.PI) / bladeCount;
+          const blade = new THREE.Mesh(new THREE.BoxGeometry(bladeLen, cageR * 0.34, 8), bladeMat);
+          blade.position.set(bladeLen / 2 + cageR * 0.12, 0, 0);
+          blade.rotation.x = 0.35;   // blade pitch
+          arm.add(blade);
+          rotor.add(arm);
+        }
+        const seed = this._floorFanSpin[fu.id ?? ''];
+        if (seed) rotor.rotation.z = seed.angle;
+        head.add(rotor);
+        this._floorFans.push({ rotor, head, id: fu.id ?? '',
+                               rps: opts?.fanRps ?? 0, oscillate: !!opts?.oscillate });
+        break;
+      }
+      case 'tower_fan': {
+        // Slim oval tower with a vertical vent slot; NO blades. Running → the slot
+        // shimmers (a thin emissive strip pulsing). Front = -Z.
+        const shell = this._mat({ color: tint, metalness: 0.3, roughness: 0.5 });
+        addBox(W, HT, D, shell, 0, HT / 2, 0);   // slim oval feel from the footprint
+        addBox(W * 0.7, 24, D * 0.7, dark, 0, HT + 2, 0);                    // top cap
+        const slotMat = this._mat({ color: 0x2b2f34, emissive: 0x4dd0ff,
+                                    emissiveIntensity: opts?.climateRunning ? 0.5 : 0.04, roughness: 0.6 });
+        const slot = new THREE.Mesh(new THREE.BoxGeometry(W * 0.34, HT * 0.72, 10), slotMat);
+        slot.position.set(0, HT * 0.52, -D / 2 - 4);
+        slot.userData.outlineSkip = true;
+        grp.add(slot);
+        if (opts?.climateRunning)
+          this._climateGlows.push({ phase: (fu.x + fu.y) % 6.28, om: 5.5,
+            apply: k => { slotMat.emissiveIntensity = 0.22 + 0.5 * k; } });
+        break;
+      }
+      case 'bladeless_fan': {
+        // Dyson-style: a vertical ring on a cylinder base. Running → a faint
+        // translucent air-disc inside the ring pulses (flat-material exemption).
+        const shell = this._mat({ color: tint, metalness: 0.35, roughness: 0.45 });
+        const baseH = HT * 0.5, ringR = W * 0.42;
+        addCyl(W * 0.3, W * 0.34, baseH, shell, 0, baseH / 2, 0, 20);        // oval base
+        const ring = new THREE.Mesh(new THREE.TorusGeometry(ringR, W * 0.09, 10, 30), shell);
+        ring.position.y = baseH + ringR + 20;
+        grp.add(ring);
+        const discMat = new THREE.MeshBasicMaterial({ color: 0xbfe6f5, transparent: true,
+          opacity: opts?.climateRunning ? 0.3 : 0.0, side: THREE.DoubleSide, depthWrite: false });
+        const disc = new THREE.Mesh(new THREE.CircleGeometry(ringR * 0.92, 28), discMat);
+        disc.position.set(0, baseH + ringR + 20, -W * 0.02);
+        disc.userData.outlineSkip = true;
+        grp.add(disc);
+        if (opts?.climateRunning)
+          this._climateGlows.push({ phase: (fu.x + fu.y) % 6.28, om: 4.2,
+            apply: k => { discMat.opacity = 0.12 + 0.28 * k; } });
+        break;
+      }
+      case 'space_heater': {
+        // Squat freestanding unit with a front grille; running → an emissive coil
+        // glow BREATHING in ember orange (ev-pulse idiom). No extra lights.
+        const shell = this._mat({ color: tint, roughness: 0.6, metalness: 0.2 });
+        addBox(W, HT, D, shell, 0, HT / 2, 0);
+        addBox(W * 0.86, HT * 0.6, 20, dark, 0, HT * 0.52, -D / 2 - 2);      // grille recess
+        const coilMat = this._mat({ color: 0x7a1e00, emissive: 0xff5010,
+          emissiveIntensity: opts?.climateRunning ? 0.9 : 0.02, roughness: 0.5 });
+        for (let i = 0; i < 3; i++) {                                        // horizontal coils
+          const coil = new THREE.Mesh(new THREE.CylinderGeometry(10, 10, W * 0.74, 10), coilMat);
+          coil.rotation.z = Math.PI / 2;
+          coil.position.set(0, HT * (0.34 + i * 0.18), -D / 2 - 6);
+          coil.userData.outlineSkip = true;
+          grp.add(coil);
+        }
+        if (opts?.climateRunning)
+          this._climateGlows.push({ phase: (fu.x + fu.y) % 6.28, om: 3.0,
+            apply: k => { coilMat.emissiveIntensity = 0.45 + 0.7 * k; } });
+        break;
+      }
+      case 'wall_heater': {
+        // Wall panel radiator: a slim panel + a bottom-weighted grille glow +
+        // gentle heat-shimmer particles rising (vent idiom, heat color).
+        const shell = this._mat({ color: tint, metalness: 0.2, roughness: 0.5 });
+        addBox(W, HT, D, shell, 0, HT / 2, 0);
+        // Grille bars glow warmer toward the BOTTOM (gradient) — intensity ramps
+        // down with height; the whole set breathes while running.
+        const n = 5;
+        for (let i = 0; i < n; i++) {
+          const frac = 1 - i / (n - 1);                                      // 1 at bottom → 0 at top
+          const m = this._mat({ color: 0x3a1400, emissive: 0xff6a1a,
+            emissiveIntensity: opts?.climateRunning ? 0.25 + 0.65 * frac : 0.02, roughness: 0.5 });
+          const bar = new THREE.Mesh(new THREE.BoxGeometry(W * 0.82, HT * 0.11, 8), m);
+          bar.position.set(0, HT * (0.16 + i * 0.16), -D / 2 - 3);
+          bar.userData.outlineSkip = true;
+          grp.add(bar);
+          if (opts?.climateRunning)
+            this._climateGlows.push({ phase: (fu.x + fu.y + i) % 6.28, om: 2.4,
+              apply: k => { m.emissiveIntensity = (0.15 + 0.5 * frac) * (0.7 + 0.6 * k); } });
+        }
+        if (opts?.climateRunning)
+          this._buildApplianceVent(grp, 'heat', 0, HT + 20, -D / 2 - 20, 0, 1, -0.15, 18, 0.6);
+        break;
+      }
+      case 'towel_warmer': {
+        // Wall ladder-rack radiator: two side rails + horizontal bars + a draped
+        // towel box. Bars glow WARM with a slow eased warm-up/cool-down blend
+        // keyed by fixture id (survives rebuilds). Wall-hung (elevation default).
+        const railMat = this._mat({ color: tint, metalness: 0.7, roughness: 0.3 });
+        for (const sx of [-1, 1])                                            // side rails
+          addBox(26, HT, 26, railMat, sx * (W / 2 - 20), HT / 2, 0);
+        const barMats: THREE.MeshToonMaterial[] = [];
+        const nb = 6;
+        const warm = new THREE.Color(0xff8a3d), cool = new THREE.Color(tint);
+        for (let i = 0; i < nb; i++) {
+          const m = this._mat({ color: tint, emissive: 0xff7a2a, emissiveIntensity: 0.02,
+                                metalness: 0.6, roughness: 0.35 });
+          const bar = new THREE.Mesh(new THREE.CylinderGeometry(16, 16, W * 0.82, 12), m);
+          bar.rotation.z = Math.PI / 2;
+          bar.position.set(0, HT * (0.12 + i * 0.15), -D / 2 - 4);
+          bar.userData.outlineSkip = true;
+          grp.add(bar);
+          barMats.push(m);
+        }
+        // Draped towel box on the front (proud), colored soft cream.
+        addBox(W * 0.5, HT * 0.42, 26, this._mat({ color: 0xece3d6, roughness: 0.9 }),
+               W * 0.12, HT * 0.55, -D / 2 - 18);
+        // Eased warm-up: lerp each bar's emissiveIntensity + color toward warm.
+        const blend0 = this._climateBlends[fu.id ?? ''] ?? 0;
+        const applyWarm = (b: number) => {
+          for (const m of barMats) {
+            m.emissiveIntensity = 0.02 + 0.85 * b;
+            m.color.copy(cool).lerp(warm, 0.6 * b);
+          }
+        };
+        applyWarm(blend0);
+        this._climateEased.push({ fuId: fu.id ?? '', running: !!opts?.climateRunning,
+          tauUp: 1.8, tauDown: 2.6, apply: applyWarm });   // ~4 s warm-up / ~6 s cool-down
+        break;
+      }
       case 'exercise_equipment': {
         // Treadmill: raised running deck + side rails, uprights + console at
         // the front (-Z), matching the appliance front-faces-camera convention.
@@ -7236,7 +7593,7 @@ export class ThreeDRenderer {
     // control area when the appliance is on/playing (build-time on/off — no
     // per-frame animation here; three-view folds appliance state into _keyFloor
     // so this rebuilds on a change). Front face is local -Z.
-    if (opts?.applianceOn && furnitureCat(def) === 'appliance') {
+    if (opts?.applianceOn && furnitureCat(def) === 'appliance' && !isClimateApplianceKind(kind)) {
       const led = new THREE.Mesh(
         new THREE.BoxGeometry(34, 34, 12),
         this._mat({ color: 0x69f0ae, emissive: 0x00c853,
@@ -7246,6 +7603,18 @@ export class ThreeDRenderer {
                  : Math.min(HT * 0.88, HT - 55);
       led.position.set(W * 0.36, ledY, -D / 2 - 8);
       led.userData.outlineSkip = true;   // no dark inverted-hull shell on a glowing dot
+      grp.add(led);
+    }
+    // Climate AC + fan family: a small green run LED on the front while running
+    // (heaters glow warm instead, so they're excluded). Driven by climateRunning
+    // (a climate.* unit in 'cool' never reads state 'on', so the generic gate above
+    // — which excludes all climate kinds — would miss it).
+    if (opts?.climateRunning && isClimateApplianceKind(kind) &&
+        kind !== 'space_heater' && kind !== 'wall_heater' && kind !== 'towel_warmer') {
+      const led = new THREE.Mesh(new THREE.BoxGeometry(26, 26, 10),
+        this._mat({ color: 0x69f0ae, emissive: 0x00c853, emissiveIntensity: 1.0 }));
+      led.position.set(W * 0.32, Math.min(HT * 0.5, HT - 40), -D / 2 - 6);
+      led.userData.outlineSkip = true;
       grp.add(led);
     }
     // "Job done" badge (event-focused thought bubbles): a distinct BLUE emissive
@@ -8132,6 +8501,112 @@ export class ThreeDRenderer {
     points.userData = { outlineSkip: true, ventKind: kind };
     this._thermoGroup.add(points);
     this._ventClouds.push({ kind, points, pos, vel, life, count, ox, oy, oz, dirX, dirY, dirZ, spread, speed });
+  }
+
+  // Furniture airflow vent cloud (AC / heater grilles) — the thermostat vent
+  // idiom, but the Points is parented into the piece GROUP (local coords) so it
+  // rides the piece rotation, and registered in _applianceVents (advanced by
+  // _advanceApplianceVents). `parent` is the furniture group; ox/oy/oz/dir are
+  // LOCAL. Reuses the shared _ventTexture + _seedVentParticle. `count`/`speed`
+  // scale with the airflow kind (heat rises slow, cool sinks, fan blows).
+  private _buildApplianceVent(
+    parent: THREE.Object3D, kind: 'heat' | 'cool' | 'fan',
+    ox: number, oy: number, oz: number, dirX: number, dirY: number, dirZ: number,
+    count = 24, speedMul = 1,
+  ): void {
+    const speed = (kind === 'heat' ? 480 : kind === 'cool' ? 600 : 680) * speedMul;
+    const spread = kind === 'fan' ? 240 : 170;
+    const pos = new Float32Array(count * 3);
+    const vel = new Float32Array(count * 3);
+    const life = new Float32Array(count);
+    for (let i = 0; i < count; i++)
+      this._seedVentParticle(pos, vel, life, i, ox, oy, oz, dirX, dirY, dirZ, speed, spread, true);
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    const mat = new THREE.PointsMaterial({
+      map: this._ventTexture(), size: 80, color: hexToInt(HVAC_VENT_COLORS[kind]),
+      transparent: true, opacity: 0.62, depthWrite: false, sizeAttenuation: true,
+    });
+    const points = new THREE.Points(geo, mat);
+    points.frustumCulled = false;
+    points.renderOrder = 3;
+    points.userData = { outlineSkip: true, ventKind: kind };
+    parent.add(points);
+    this._applianceVents.push({ points, pos, vel, life, count, ox, oy, oz, dirX, dirY, dirZ, spread, speed });
+  }
+
+  // Advance furniture airflow particles (AC/heater vents) — zero-alloc position-
+  // buffer recycle, exactly like _advanceVents but gated on the floor group's
+  // visibility (these live in _floorGroup, not _thermoGroup).
+  private _advanceApplianceVents(dt: number): void {
+    if (!this._floorGroup.visible || !this._applianceVents.length) return;
+    for (const cl of this._applianceVents) {
+      const { pos, vel, life, count } = cl;
+      for (let i = 0; i < count; i++) {
+        life[i] += dt;
+        if (life[i] >= this._VENT_LIFE) {
+          this._seedVentParticle(pos, vel, life, i, cl.ox, cl.oy, cl.oz,
+            cl.dirX, cl.dirY, cl.dirZ, cl.speed, cl.spread, false);
+          continue;
+        }
+        const j = i * 3;
+        pos[j]     += vel[j]     * dt;
+        pos[j + 1] += vel[j + 1] * dt;
+        pos[j + 2] += vel[j + 2] * dt;
+      }
+      (cl.points.geometry.getAttribute('position') as THREE.BufferAttribute).needsUpdate = true;
+    }
+  }
+
+  // Per-frame floor-fan blade spin + head oscillation. Eases each fan's live rps
+  // toward its signed nominal (rev/s) + integrates the blade angle about the
+  // rotor's own local axis (Z = forward), and — while running + oscillate —
+  // sweeps the head ±FLOOR_FAN_OSC_AMP at FLOOR_FAN_OSC_HZ. State persists in
+  // _floorFanSpin (keyed by fixture id) so a _keyFloor rebuild keeps the phase.
+  private _advanceFloorFans(dt: number): void {
+    if (!this._floorFans.length) return;
+    const alpha = 1 - Math.exp(-dt / FAN_SPIN_TAU);
+    const oscAlpha = 1 - Math.exp(-dt / 0.6);
+    const TWO_PI = 2 * Math.PI;
+    for (const fan of this._floorFans) {
+      const s = this._floorFanSpin[fan.id] ??
+        (this._floorFanSpin[fan.id] = { rps: 0, angle: 0, osc: 0, t: 0 });
+      s.rps += (fan.rps - s.rps) * alpha;
+      s.angle = (s.angle + s.rps * TWO_PI * dt) % TWO_PI;
+      // Blades face the FRONT (-Z), so they spin about the rotor's local Z axis.
+      fan.rotor.rotation.z = s.angle;
+      if (fan.head) {
+        const oscTarget = (fan.oscillate && Math.abs(fan.rps) > 0.02) ? 1 : 0;
+        s.osc += (oscTarget - s.osc) * oscAlpha;   // eases in/out with the run state
+        s.t += dt;
+        fan.head.rotation.y = s.osc * FLOOR_FAN_OSC_AMP *
+          Math.sin(s.t * FLOOR_FAN_OSC_HZ * TWO_PI);
+      }
+    }
+  }
+
+  // Per-frame emissive/opacity breathe for climate glow materials (space-heater
+  // coil, wall-heater grille, tower-fan slot, bladeless air-disc). Each entry's
+  // apply(k) closure was built at rebuild — zero per-frame alloc.
+  private _advanceClimateGlows(): void {
+    if (!this._climateGlows.length) return;
+    const t = performance.now() / 1000;
+    for (const g of this._climateGlows) g.apply(0.5 + 0.5 * Math.sin(t * g.om + g.phase));
+  }
+
+  // Per-frame eased climate blend (mini-split louver opening, towel-warmer warm-
+  // up). Each entry eases the shared _climateBlends[fuId] toward `running` at its
+  // own τ (slow warm-up / cool-down) and applies it. Blend persists across
+  // _keyFloor rebuilds so the louver / warm glow never pops.
+  private _advanceClimateEased(dt: number): void {
+    if (!this._climateEased.length) return;
+    for (const e of this._climateEased) {
+      const target = e.running ? 1 : 0;
+      const cur = this._climateBlends[e.fuId] ?? 0;
+      const next = cur + (target - cur) * (1 - Math.exp(-dt / (e.running ? e.tauUp : e.tauDown)));
+      this._climateBlends[e.fuId] = next;
+      e.apply(next);
+    }
   }
 
   // Advance vent airflow particles every frame — mutate the position buffer in
@@ -9074,109 +9549,388 @@ export class ThreeDRenderer {
     });
   }
 
-  // ── Playful background text (skywriting / banner plane / grass writing) ────
-  // Rebuilt only under three-view's _keyBgText (text + mode + storm-hide +
-  // floor). All three styles live in _bgTextGroup; per-frame motion is
-  // _advanceBgText (zero allocation). sky/banner are HIDDEN during storm
-  // conditions (pouring/lightning) — they read wrong in a downpour; grass (a
-  // ground decal) stays. Renders in every UI mode (a display prop).
-  updateBgText(text: string | null, mode: BgTextMode,
-               storm: boolean, windRad = 0, windKmh = 0): void {
+  // ── Playful background text (sky / banner / grass / train / chopper) ───────
+  // Multi-instance: one BgRig per resolved entry (cap 6). Rebuilt wholesale
+  // under three-view's _keyBgText; per-frame motion loops over _bgRigs in
+  // _advanceBgText (zero allocation). sky/banner/chopper (aircraft + skywriting)
+  // are HIDDEN during storm conditions (pouring/lightning) — they read wrong in
+  // a downpour; grass + train are ground-level and stay. Renders in every UI
+  // mode (a display prop). Entries are staggered so instances of the same style
+  // never overlap. Legacy single-rig mirror fields point at the first rig of
+  // each style so the original bgtext-test keeps reading them.
+  updateBgTexts(entries: { id: string; mode: BgTextEntryMode; text: string; maxCars?: number }[],
+                storm: boolean, windRad = 0, windKmh = 0): void {
     this._disposeSpriteMaps(this._bgTextGroup);
     this._clearGroup(this._bgTextGroup);
+    this._bgRigs = [];
     this._bgSkySprite = null; this._bgBannerAsm = null;
-    this._bgBannerText = null; this._bgBannerProp = null; this._bgGrassInfo = null;
-    this._bgTextMode = mode;
+    this._bgBannerText = null; this._bgBannerProp = null;
+    this._bgBannerRadius = 0; this._bgGrassInfo = null;
     this._bgWindRad = isFinite(windRad) ? windRad : 0;
     this._bgWindKmh = isFinite(windKmh) ? windKmh : 0;
-    if (mode === 'off' || !text) return;
-    if (storm && (mode === 'sky' || mode === 'banner')) return;  // hide in a downpour
-    const fw = this._fw, fd = this._fd;
-    const diag = Math.hypot(fw, fd);
-
-    if (mode === 'sky') {
-      // One additive-blended camera-facing billboard high in the sky — a
-      // documented flat-material exemption from the _mat toon factory (the glow
-      // is baked canvas shadowBlur, consistent with NoToneMapping).
-      const tex = this._makeBgTextTexture(text, 'sky');
-      const cv = tex.image as HTMLCanvasElement;
-      const spr = new THREE.Sprite(new THREE.SpriteMaterial({
-        map: tex, transparent: true, depthWrite: false, depthTest: true,
-        opacity: 0.9, blending: THREE.AdditiveBlending, fog: false,
-      }));
-      const H = Math.max(2200, diag * 0.22);      // legible regardless of floor size
-      spr.scale.set(H * (cv.width / cv.height), H, 1);
-      // Same altitude as the banner tow-plane (6 m) — high enough to clear the
-      // roofline, low enough to sit in frame at normal orbit distances.
-      spr.position.set(0, 6000, -diag * 0.35);
-      spr.renderOrder = -6;                        // in front of the sky dome (−10)
-      spr.userData.outlineSkip = true;
-      this._bgSkyBaseX = spr.position.x;
-      this._bgSkyPhase = 0;
-      this._bgSkySprite = spr;
-      this._bgTextGroup.add(spr);
-      return;
+    if (!entries || entries.length === 0) return;
+    const list = entries.slice(0, 6);
+    const n = list.length;
+    const diag = Math.hypot(this._fw, this._fd);
+    let grassSlot = 0;
+    for (let i = 0; i < n; i++) {
+      const e = list[i];
+      const text = (e.text || '').slice(0, 40);
+      if (!text) continue;
+      const isAircraft = e.mode === 'sky' || e.mode === 'banner' || e.mode === 'chopper';
+      if (storm && isAircraft) continue;                 // aircraft/skywriting hide in a downpour
+      let rig: BgRig | null = null;
+      if (e.mode === 'sky')          rig = this._buildBgSky(text, i, n, diag);
+      else if (e.mode === 'banner')  rig = this._buildBgAircraft('plane', text, i, n, diag);
+      else if (e.mode === 'chopper') rig = this._buildBgAircraft('chopper', text, i, n, diag);
+      else if (e.mode === 'grass')   rig = this._buildBgGrass(text, i, grassSlot++);
+      else if (e.mode === 'train')   rig = this._buildBgTrain(text, i, e.maxCars);
+      if (rig) this._bgRigs.push(rig);
     }
+    // Legacy single-rig mirrors (first of each style) for bgtext-test back-compat.
+    const skyRig = this._bgRigs.find(r => r.mode === 'sky');
+    const banRig = this._bgRigs.find(r => r.mode === 'banner');
+    const grsRig = this._bgRigs.find(r => r.mode === 'grass');
+    this._bgSkySprite = skyRig?.sky ?? null;
+    this._bgBannerAsm = banRig?.asm ?? null;
+    this._bgBannerText = (banRig?.banner as THREE.Mesh) ?? null;
+    this._bgBannerProp = banRig?.prop ?? null;
+    this._bgBannerRadius = banRig?.radius ?? 0;
+    this._bgGrassInfo = grsRig?.grass ?? null;
+  }
 
-    if (mode === 'banner') {
-      // Toy tow-plane (fuselage + wing + tail + spinning prop) towing a wide
-      // trailing text banner. Nose points local −Z (the flight/tangent axis);
-      // the banner's face normal is local +X so it stays broadside-readable.
-      const asm = new THREE.Group();
+  // Legacy single-entry signature — forwards to updateBgTexts. Kept so the
+  // original bgtext-test (and any stale-paired caller from before the multi-rig
+  // split) still works; three-view calls updateBgTexts directly.
+  updateBgText(text: string | null, mode: BgTextMode,
+               storm: boolean, windRad = 0, windKmh = 0): void {
+    const entries = (mode === 'off' || !text)
+      ? []
+      : [{ id: '__legacy', mode: mode as BgTextEntryMode, text }];
+    this.updateBgTexts(entries, storm, windRad, windKmh);
+  }
+
+  // Skywriting billboard. Multiple skies stagger in x (≈0.25·diag apart) with
+  // alternating y/z so two skywriters never overlap.
+  private _buildBgSky(text: string, i: number, n: number, diag: number): BgRig {
+    const tex = this._makeBgTextTexture(text, 'sky');
+    const cv = tex.image as HTMLCanvasElement;
+    const spr = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: tex, transparent: true, depthWrite: false, depthTest: true,
+      opacity: 0.9, blending: THREE.AdditiveBlending, fog: false,
+    }));
+    const H = Math.max(2200, diag * 0.22);
+    spr.scale.set(H * (cv.width / cv.height), H, 1);
+    const baseX = (i - (n - 1) / 2) * diag * 0.25;
+    const y = 6000 + (i % 2 === 1 ? -220 : 220);
+    const z = -diag * 0.35 + (i % 2 === 1 ? diag * 0.08 : 0);
+    spr.position.set(baseX, y, z);
+    spr.renderOrder = -6;
+    spr.userData.outlineSkip = true;
+    this._bgTextGroup.add(spr);
+    return { mode: 'sky', index: i, sky: spr, skyBaseX: baseX, skyPhase: i * 1.7 };
+  }
+
+  // Tow-plane (banner) OR news helicopter (chopper) towing a broadside-readable
+  // text banner. Both orbit; instances stagger by radius (±15 %), altitude
+  // (+800 mm each) and starting angle (spread evenly). Choppers orbit the
+  // OPPOSITE direction, higher + tighter, with a bigger hover bob.
+  private _buildBgAircraft(kind: 'plane' | 'chopper', text: string,
+                           i: number, n: number, diag: number): BgRig {
+    const asm = new THREE.Group();
+    const baseR = Math.max(6000, diag * 0.75);
+    const factor = 1 + 0.15 * ((i % 3) - 1);            // 0.85 / 1.0 / 1.15
+    const angle = i * (Math.PI * 2 / Math.max(1, n));   // spread evenly
+    // Shared trailing banner (broadside: normal = local ±X via rotation.y=π/2).
+    const tex = this._makeBgTextTexture(text, 'banner');
+    const cv = tex.image as HTMLCanvasElement;
+    const aspect = cv.width / cv.height;
+    const bh = 1400;
+    const banner = new THREE.Mesh(
+      new THREE.PlaneGeometry(bh * aspect, bh),
+      new THREE.MeshBasicMaterial({ map: tex, side: THREE.DoubleSide, fog: false }));
+    banner.rotation.y = Math.PI / 2;
+    banner.userData.textPlane = true;
+    banner.userData.outlineSkip = true;
+
+    let prop: THREE.Object3D, tailRotor: THREE.Object3D | undefined;
+    let radius: number, alt: number, dir: number, bobAmp: number, propRate: number;
+
+    if (kind === 'plane') {
       const bodyMat = this._mat({ color: 0xdad7cf });
       const accent = this._mat({ color: 0xc94f3d });
-      const fuse = new THREE.Mesh(new THREE.BoxGeometry(180, 180, 900), bodyMat);
-      asm.add(fuse);
+      asm.add(new THREE.Mesh(new THREE.BoxGeometry(180, 180, 900), bodyMat));
       const wing = new THREE.Mesh(new THREE.BoxGeometry(1300, 60, 260), accent);
       wing.position.set(0, 40, -40); asm.add(wing);
       const tail = new THREE.Mesh(new THREE.BoxGeometry(520, 50, 150), accent);
       tail.position.set(0, 60, 420); asm.add(tail);
       const fin = new THREE.Mesh(new THREE.BoxGeometry(50, 260, 160), bodyMat);
       fin.position.set(0, 150, 420); asm.add(fin);
-      const prop = new THREE.Mesh(new THREE.CylinderGeometry(360, 360, 24, 16),
-        this._mat({ color: 0x33363b }));
-      prop.rotation.x = Math.PI / 2;              // disc across the flight axis
-      prop.position.set(0, 40, -480);
-      prop.userData.outlineSkip = true;
-      asm.add(prop);
-      this._bgBannerProp = prop;
-
-      const tex = this._makeBgTextTexture(text, 'banner');
-      const cv = tex.image as HTMLCanvasElement;
-      const aspect = cv.width / cv.height;
-      const bh = 1400;
-      const banner = new THREE.Mesh(
-        new THREE.PlaneGeometry(bh * aspect, bh),
-        new THREE.MeshBasicMaterial({ map: tex, side: THREE.DoubleSide, fog: false }));
-      banner.rotation.y = Math.PI / 2;            // normal → local ±X (broadside)
-      banner.position.set(0, 40, 1200 + (bh * aspect) / 2);  // trail behind the tail
-      banner.userData.textPlane = true;           // _disposeSpriteMaps frees its map
-      banner.userData.outlineSkip = true;
-      this._bgBannerText = banner;
+      prop = new THREE.Mesh(new THREE.CylinderGeometry(360, 360, 24, 16), this._mat({ color: 0x33363b }));
+      prop.rotation.x = Math.PI / 2; prop.position.set(0, 40, -480);
+      prop.userData.outlineSkip = true; asm.add(prop);
+      banner.position.set(0, 40, 1200 + (bh * aspect) / 2);   // trail straight behind
       asm.add(banner);
-
-      this._bgBannerRadius = Math.max(6000, diag * 0.75);
-      this._bgBannerAlt = 6000;                    // ~6 m up, above the roofline
-      this._bgBannerAngle = 0;
-      this._bgBannerAsm = asm;
-      this._bgTextGroup.add(asm);
-      return;
+      radius = baseR * factor; alt = 6000 + 800 * i; dir = 1; bobAmp = 120; propRate = 22;
+    } else {
+      // News helicopter: cabin bubble + tail boom + skids + a NEWS-style stripe.
+      const bodyMat = this._mat({ color: 0x2f6fb0 });     // news blue
+      const dark = this._mat({ color: 0x2a2d31 });
+      const stripeMat = this._mat({ color: 0xe6291a });   // NEWS accent
+      const cabin = new THREE.Mesh(new THREE.SphereGeometry(280, 16, 12), bodyMat);
+      cabin.position.set(0, 320, -260); cabin.scale.set(1, 0.85, 1.15); asm.add(cabin);
+      const boom = new THREE.Mesh(new THREE.BoxGeometry(90, 90, 900), bodyMat);
+      boom.position.set(0, 380, 340); asm.add(boom);
+      const fin = new THREE.Mesh(new THREE.BoxGeometry(40, 220, 130), bodyMat);
+      fin.position.set(0, 470, 760); asm.add(fin);
+      for (const sx of [-1, 1]) {                          // NEWS stripe on both cabin flanks
+        const stripe = new THREE.Mesh(new THREE.BoxGeometry(10, 90, 320), stripeMat);
+        stripe.position.set(sx * 286, 320, -260); asm.add(stripe);
+      }
+      for (const sx of [-1, 1]) {                          // skids
+        const skid = new THREE.Mesh(new THREE.BoxGeometry(50, 30, 720), dark);
+        skid.position.set(sx * 190, 60, -120); asm.add(skid);
+      }
+      // Main rotor: crossed thin blades on a short mast, spun about Y (vertical).
+      prop = new THREE.Group();
+      for (const rot of [0, Math.PI / 2]) {
+        const blade = new THREE.Mesh(new THREE.BoxGeometry(1600, 18, 90), dark);
+        blade.rotation.y = rot; (prop as THREE.Group).add(blade);
+      }
+      prop.position.set(0, 560, -140); prop.userData.outlineSkip = true; asm.add(prop);
+      const mast = new THREE.Mesh(new THREE.CylinderGeometry(24, 24, 200, 8), dark);
+      mast.position.set(0, 460, -140); asm.add(mast);
+      // Tail rotor: crossed blades on the fin, spun about X (perpendicular axis).
+      tailRotor = new THREE.Group();
+      for (const rot of [0, Math.PI / 2]) {
+        const blade = new THREE.Mesh(new THREE.BoxGeometry(18, 360, 40), dark);
+        blade.rotation.x = rot; (tailRotor as THREE.Group).add(blade);
+      }
+      tailRotor.position.set(70, 470, 800); tailRotor.userData.outlineSkip = true; asm.add(tailRotor);
+      // Banner hung BELOW-and-behind on a short dark tow line, not straight back.
+      banner.position.set(0, -1900, 1500 + (bh * aspect) / 2);
+      asm.add(banner);
+      const towLine = new THREE.Mesh(new THREE.CylinderGeometry(14, 14, 2100, 6), dark);
+      towLine.position.set(0, -900, 700);
+      towLine.rotation.x = Math.atan2(1500, 1800);        // slope down-and-back
+      towLine.userData.outlineSkip = true; asm.add(towLine);
+      radius = baseR * 0.6 * factor; alt = 7500 + 800 * i; dir = -1; bobAmp = 150; propRate = 42;
     }
 
-    // grass — flat text decal on the ground OUTSIDE the wall loops.
+    this._bgTextGroup.add(asm);
+    return {
+      mode: kind === 'plane' ? 'banner' : 'chopper', index: i, asm, prop, tailRotor,
+      banner, angle, radius, alt, dir, bobAmp, propRate,
+    };
+  }
+
+  // Flat lawn text decal OUTSIDE the wall loops. Multiple grass entries take
+  // successive margin strips (slot) so they don't stack.
+  private _buildBgGrass(text: string, i: number, slot: number): BgRig {
     const gtex = this._makeBgTextTexture(text, 'grass');
     const gcv = gtex.image as HTMLCanvasElement;
-    const place = this._bgGrassPlacement(gcv.width / gcv.height);
-    this._bgGrassInfo = { cx: place.cx, cy: place.cy, w: place.w, h: place.h };
+    const place = this._bgGrassPlacement(gcv.width / gcv.height, slot);
     const mesh = new THREE.Mesh(
       new THREE.PlaneGeometry(place.w, place.h),
       new THREE.MeshBasicMaterial({ map: gtex, fog: false, depthWrite: false }));
-    mesh.rotation.x = -Math.PI / 2;               // lay flat, text facing up
-    mesh.position.copy(this._w(place.cx, place.cy, 6));  // y≈6 (over ground patches y=4)
+    mesh.rotation.x = -Math.PI / 2;
+    mesh.position.copy(this._w(place.cx, place.cy, 6));
     mesh.renderOrder = 1;
     mesh.userData.textPlane = true;
     mesh.userData.outlineSkip = true;
     this._bgTextGroup.add(mesh);
+    return { mode: 'grass', index: i, grass: { cx: place.cx, cy: place.cy, w: place.w, h: place.h } };
+  }
+
+  // Message train circling the yard at ground level. The consist is engine +
+  // N cars (last car tinted darker); the message is chunked evenly across the
+  // cars (CHARS_PER_CAR = 6, count clamped to maxCars). Each car carries text on
+  // BOTH flanks so it reads left-to-right from either side: the local −X flank
+  // (left of travel) gets chunk[i] (engine→tail order), the local +X flank gets
+  // chunk[N−1−i] (reversed) so a viewer on that side ALSO reads engine→tail.
+  // Glyphs are never mirrored (pure ±90° rotations, FrontSide).
+  private _buildBgTrain(text: string, i: number, maxCars?: number): BgRig {
+    const CHARS_PER_CAR = 6;
+    const mc = Math.min(12, Math.max(2, Math.round(maxCars ?? 8)));
+    const N = Math.min(mc, Math.max(1, Math.ceil(text.length / CHARS_PER_CAR)));
+    const chunkLen = Math.max(1, Math.ceil(text.length / N));
+    const chunks: string[] = [];
+    for (let k = 0; k < N; k++) {
+      chunks.push(text.slice(k * chunkLen, (k + 1) * chunkLen).padEnd(chunkLen, ' '));
+    }
+    const loop = this._buildTrainLoop();
+    const vehicles: BgTrainVehicle[] = [];
+    vehicles.push(this._buildTrainEngine());
+    for (let k = 0; k < N; k++) {
+      // local +X flank ← chunk[N−1−k]; local −X flank ← chunk[k].
+      vehicles.push(this._buildTrainCar(chunks[N - 1 - k], chunks[k], k === N - 1, k));
+    }
+    for (const v of vehicles) this._bgTextGroup.add(v.obj);
+    const train: BgTrain = {
+      loopScene: loop.loopScene, loopWorld: loop.loopWorld, cum: loop.cum, total: loop.total,
+      vehicles, spacing: 820, wheelR: 90, s: 0, chunks,
+    };
+    this._positionTrain(train);       // settle initial poses before the first frame
+    return { mode: 'train', index: i, train };
+  }
+
+  // Steam engine (boiler + cab + chimney + cowcatcher + 4 wheels). Origin at
+  // ground (y=0), nose = local −Z (direction of travel).
+  private _buildTrainEngine(): BgTrainVehicle {
+    const g = new THREE.Group();
+    const body = this._mat({ color: 0x8a2b2b });
+    const dark = this._mat({ color: 0x24272b });
+    const boiler = new THREE.Mesh(new THREE.CylinderGeometry(150, 150, 520, 16), body);
+    boiler.rotation.x = Math.PI / 2; boiler.position.set(0, 240, -120); g.add(boiler);
+    const cab = new THREE.Mesh(new THREE.BoxGeometry(360, 300, 300), body);
+    cab.position.set(0, 300, 230); g.add(cab);
+    const chimney = new THREE.Mesh(new THREE.CylinderGeometry(55, 70, 180, 12), dark);
+    chimney.position.set(0, 430, -300); g.add(chimney);
+    const cow = new THREE.Mesh(new THREE.BoxGeometry(300, 120, 90), dark);
+    cow.position.set(0, 90, -410); g.add(cow);
+    const wheels = this._buildTrainWheels(g, [-260, 60], dark);
+    return { obj: g, wheels };
+  }
+
+  // One message car (box + roof + wheels + two flank text planes). Last car is
+  // tinted darker (caboose-ish). Origin at ground; nose = local −Z.
+  private _buildTrainCar(plusXChunk: string, minusXChunk: string,
+                         isLast: boolean, carIndex: number): BgTrainVehicle {
+    const g = new THREE.Group();
+    const body = this._mat({ color: isLast ? 0x4f3418 : 0x7a5a2a });
+    const dark = this._mat({ color: 0x24272b });
+    const box = new THREE.Mesh(new THREE.BoxGeometry(360, 300, 620), body);
+    box.position.set(0, 300, 0); g.add(box);
+    const roof = new THREE.Mesh(new THREE.BoxGeometry(390, 44, 650), dark);
+    roof.position.set(0, 470, 0); g.add(roof);
+    g.add(this._makeTrainFlankPlane(plusXChunk, 1, carIndex));    // normal +X
+    g.add(this._makeTrainFlankPlane(minusXChunk, -1, carIndex));  // normal −X
+    const wheels = this._buildTrainWheels(g, [-200, 200], dark);
+    return { obj: g, wheels };
+  }
+
+  // Four wheels (per-side pair at each z). Geometry is pre-rotated so the wheel
+  // axis is local X — spinning is a clean wheel.rotation.x increment (rolls in
+  // the −Z travel direction).
+  private _buildTrainWheels(g: THREE.Group, zs: number[], mat: THREE.Material): THREE.Object3D[] {
+    const out: THREE.Object3D[] = [];
+    for (const z of zs) for (const sx of [-1, 1]) {
+      const geo = new THREE.CylinderGeometry(90, 90, 40, 16); geo.rotateZ(Math.PI / 2);
+      const wh = new THREE.Mesh(geo, mat);
+      wh.position.set(sx * 200, 90, z);
+      wh.userData.outlineSkip = true;
+      g.add(wh); out.push(wh);
+    }
+    return out;
+  }
+
+  // One flank text plane. sign=+1 → normal local +X (rotation.y=+π/2);
+  // sign=−1 → normal local −X (rotation.y=−π/2). FrontSide so the far flank's
+  // back never bleeds through. Carries userData.chunk/flank for the test.
+  private _makeTrainFlankPlane(chunk: string, sign: number, carIndex: number): THREE.Mesh {
+    const tex = this._makeTrainChunkTexture(chunk);
+    const cv = tex.image as HTMLCanvasElement;
+    const ph = 300, pw = ph * (cv.width / cv.height);
+    const plane = new THREE.Mesh(new THREE.PlaneGeometry(pw, ph),
+      new THREE.MeshBasicMaterial({ map: tex, side: THREE.FrontSide, fog: false }));
+    plane.rotation.y = sign > 0 ? Math.PI / 2 : -Math.PI / 2;
+    plane.position.set(sign * 182, 320, 0);        // proud of the 180 mm body half-width
+    plane.userData.textPlane = true;
+    plane.userData.outlineSkip = true;
+    plane.userData.flank = sign > 0 ? 'plusX' : 'minusX';
+    plane.userData.chunk = chunk;
+    plane.userData.carIndex = carIndex;
+    return plane;
+  }
+
+  // Paint one car's message chunk — high-contrast cream panel, deterministic.
+  private _makeTrainChunkTexture(chunk: string): THREE.CanvasTexture {
+    const cv = document.createElement('canvas');
+    const g = cv.getContext('2d')!;
+    const txt = chunk || ' ';
+    const font = '800 120px system-ui, "Segoe UI", sans-serif';
+    g.font = font;
+    const tw = Math.ceil(g.measureText(txt).width);
+    const pad = 44;
+    cv.width = Math.max(tw + pad * 2, 220); cv.height = 200;
+    g.font = font;
+    g.fillStyle = '#f5efe0'; g.fillRect(0, 0, cv.width, cv.height);            // cream panel
+    g.fillStyle = '#8a2b2b';                                                    // trim stripes
+    g.fillRect(0, 0, cv.width, 12); g.fillRect(0, cv.height - 12, cv.width, 12);
+    g.fillStyle = '#22303a'; g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillText(txt, cv.width / 2, cv.height / 2 + 4);
+    const tex = new THREE.CanvasTexture(cv);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    return tex;
+  }
+
+  // Build the train's driving loop: a rounded rectangle ~1800 mm OUTSIDE the
+  // floor rect (so it stays in the yard/void, never over the house), corner
+  // radius ~1200. Tiny floors (<3 m) fall back to an ellipse of diag·0.75. Loop
+  // is returned in WORLD/plan mm (loopWorld — the test asserts it lies outside
+  // the floor rect) and SCENE mm (loopScene — the train drives it), with
+  // cumulative arc length for arc-length walking.
+  private _buildTrainLoop(): { loopWorld: { x: number; y: number }[]; loopScene: { x: number; z: number }[]; cum: number[]; total: number } {
+    const fw = this._fw, fd = this._fd;
+    const worldPts: { x: number; y: number }[] = [];
+    if (Math.min(fw, fd) < 3000) {
+      const cx = fw / 2, cy = fd / 2, R = Math.hypot(fw, fd) * 0.75, seg = 64;
+      for (let k = 0; k <= seg; k++) {
+        const a = k / seg * Math.PI * 2;
+        worldPts.push({ x: cx + Math.cos(a) * R, y: cy + Math.sin(a) * R });
+      }
+    } else {
+      const M = 1800, R = 1200, x0 = -M, x1 = fw + M, y0 = -M, y1 = fd + M, arcSeg = 8;
+      const pushArc = (ccx: number, ccy: number, a0: number, a1: number) => {
+        for (let k = 0; k <= arcSeg; k++) {
+          const a = a0 + (a1 - a0) * k / arcSeg;
+          worldPts.push({ x: ccx + Math.cos(a) * R, y: ccy + Math.sin(a) * R });
+        }
+      };
+      worldPts.push({ x: x0 + R, y: y0 });
+      worldPts.push({ x: x1 - R, y: y0 });
+      pushArc(x1 - R, y0 + R, -Math.PI / 2, 0);          // BR corner
+      worldPts.push({ x: x1, y: y1 - R });
+      pushArc(x1 - R, y1 - R, 0, Math.PI / 2);           // TR
+      worldPts.push({ x: x0 + R, y: y1 });
+      pushArc(x0 + R, y1 - R, Math.PI / 2, Math.PI);     // TL
+      worldPts.push({ x: x0, y: y0 + R });
+      pushArc(x0 + R, y0 + R, Math.PI, Math.PI * 1.5);   // BL
+      worldPts.push({ x: x0 + R, y: y0 });               // close
+    }
+    const scenePts = worldPts.map(p => { const w = this._w(p.x, p.y, 0); return { x: w.x, z: w.z }; });
+    const cum: number[] = [0];
+    for (let k = 1; k < scenePts.length; k++) {
+      const dx = scenePts[k].x - scenePts[k - 1].x, dz = scenePts[k].z - scenePts[k - 1].z;
+      cum.push(cum[k - 1] + Math.hypot(dx, dz));
+    }
+    return { loopWorld: worldPts, loopScene: scenePts, cum, total: cum[cum.length - 1] };
+  }
+
+  // Sample the train loop at arc-length s → scene position + unit tangent.
+  private _sampleTrainLoop(t: BgTrain, s: number): { x: number; z: number; tx: number; tz: number } {
+    const total = t.total || 1;
+    const d = ((s % total) + total) % total;
+    const pts = t.loopScene, cum = t.cum;
+    let j = 0;
+    while (j < cum.length - 2 && cum[j + 1] <= d) j++;
+    const segLen = Math.max(1e-6, cum[j + 1] - cum[j]);
+    const f = (d - cum[j]) / segLen;
+    const a = pts[j], b = pts[j + 1];
+    const dx = b.x - a.x, dz = b.z - a.z, L = Math.hypot(dx, dz) || 1;
+    return { x: a.x + dx * f, z: a.z + dz * f, tx: dx / L, tz: dz / L };
+  }
+
+  // Place every vehicle on the loop from the engine arc position `s`, each car a
+  // fixed arc-length `spacing` behind, yawed to its OWN tangent (so the consist
+  // bends around corners). Local −Z = travel → yaw = atan2(−tx, −tz).
+  private _positionTrain(t: BgTrain): void {
+    for (let k = 0; k < t.vehicles.length; k++) {
+      const sp = this._sampleTrainLoop(t, t.s - k * t.spacing);
+      const obj = t.vehicles[k].obj;
+      obj.position.set(sp.x, 0, sp.z);
+      obj.rotation.y = Math.atan2(-sp.tx, -sp.tz);
+    }
   }
 
   // Bake a message into a CanvasTexture styled per mode. DETERMINISTIC (no
@@ -9244,7 +9998,7 @@ export class ThreeDRenderer {
   // OUTSIDE the footprint bbox (hence outside every wall loop) and inside the
   // floor rect — the invariant the test harness asserts. Falls back to a fixed
   // region when there are no wall loops.
-  private _bgGrassPlacement(aspect: number): { cx: number; cy: number; w: number; h: number } {
+  private _bgGrassPlacement(aspect: number, slot = 0): { cx: number; cy: number; w: number; h: number } {
     const fw = this._fw, fd = this._fd;
     let minX = fw, minY = fd, maxX = 0, maxY = 0, any = false;
     for (const loop of this._wallLoops) for (const p of loop) {
@@ -9254,57 +10008,86 @@ export class ThreeDRenderer {
     }
     if (!any) { minX = fw * 0.3; maxX = fw * 0.7; minY = fd * 0.3; maxY = fd * 0.7; }
     // Four margin strips (clipped to the floor rect); depth = the dimension
-    // perpendicular to the house edge. Widest depth wins.
+    // perpendicular to the house edge. Widest depth wins; successive grass
+    // entries (slot) take the next-widest strip so they don't stack, wrapping
+    // with an along-strip offset once every strip is used.
     const strips = [
-      { x0: minX, x1: maxX, y0: 0,    y1: minY, depth: minY },        // front (small y)
-      { x0: minX, x1: maxX, y0: maxY, y1: fd,   depth: fd - maxY },   // back
-      { x0: 0,    x1: minX, y0: minY, y1: maxY, depth: minX },        // left
-      { x0: maxX, x1: fw,   y0: minY, y1: maxY, depth: fw - maxX },   // right
+      { x0: minX, x1: maxX, y0: 0,    y1: minY, depth: minY, horiz: true },        // front (small y)
+      { x0: minX, x1: maxX, y0: maxY, y1: fd,   depth: fd - maxY, horiz: true },   // back
+      { x0: 0,    x1: minX, y0: minY, y1: maxY, depth: minX, horiz: false },       // left
+      { x0: maxX, x1: fw,   y0: minY, y1: maxY, depth: fw - maxX, horiz: false },  // right
     ].sort((a, b) => b.depth - a.depth);
-    const s = strips[0];
+    const s = strips[Math.min(slot, strips.length - 1)];
     const availW = Math.max(1, s.x1 - s.x0), availH = Math.max(1, s.y1 - s.y0);
     let w = availW * 0.9, h = w / aspect;
     if (h > availH * 0.85) { h = availH * 0.85; w = h * aspect; }
     w = Math.min(w, availW * 0.95); h = Math.min(h, availH * 0.95);
-    return {
-      cx: (s.x0 + s.x1) / 2, cy: (s.y0 + s.y1) / 2,
-      w: Math.max(300, w), h: Math.max(150, h),
-    };
+    let cx = (s.x0 + s.x1) / 2, cy = (s.y0 + s.y1) / 2;
+    // Extra entries beyond the 4 strips shift along the strip's long axis so
+    // they still don't overlap (clamped inside the strip).
+    const extra = Math.floor(slot / strips.length);
+    if (extra > 0) {
+      if (s.horiz) cx = Math.min(s.x1 - w / 2, Math.max(s.x0 + w / 2, cx + extra * w * 0.6));
+      else         cy = Math.min(s.y1 - h / 2, Math.max(s.y0 + h / 2, cy + extra * h * 0.6));
+    }
+    return { cx, cy, w: Math.max(300, w), h: Math.max(150, h) };
   }
 
   // Per-frame background-text motion (from _animate, alongside _advanceWeather).
   // Zero allocation after build — transform + opacity mutation only.
   private _advanceBgText(dt: number, nowS: number): void {
-    if (this._bgTextMode === 'off') return;
-
-    if (this._bgSkySprite) {
-      // Bounded horizontal drift with the wind + a slow opacity twinkle.
-      this._bgSkyPhase += dt;
-      const amp = Math.max(1500, this._fw * 0.3);
-      const speed = 40 + this._bgWindKmh * 6;                 // mm/s, wind-scaled
-      const dir = Math.cos(this._bgWindRad) >= 0 ? 1 : -1;
-      this._bgSkySprite.position.x = this._bgSkyBaseX +
-        Math.sin(this._bgSkyPhase * speed / amp) * amp * dir;
-      (this._bgSkySprite.material as THREE.SpriteMaterial).opacity =
-        0.72 + 0.2 * (0.5 + 0.5 * Math.sin(this._bgSkyPhase * 1.3));
-      return;
+    if (this._bgRigs.length === 0) return;
+    for (const rig of this._bgRigs) {
+      if (rig.mode === 'sky') this._advanceBgSky(rig, dt);
+      else if (rig.mode === 'banner' || rig.mode === 'chopper') this._advanceBgAircraft(rig, dt, nowS);
+      else if (rig.mode === 'train') this._advanceBgTrain(rig, dt);
+      // grass: static flat decal — no per-frame motion.
     }
+  }
 
-    if (this._bgBannerAsm) {
-      // Slow horizontal orbit around the floor center at a fixed altitude; the
-      // assembly yaws so its nose (local −Z) tracks the tangent, keeping the
-      // trailing banner (normal = local +X) broadside-readable.
-      const R = this._bgBannerRadius;
-      this._bgBannerAngle = (this._bgBannerAngle + 0.12 * dt) % (Math.PI * 2);
-      const a = this._bgBannerAngle;
-      this._bgBannerAsm.position.set(
-        Math.cos(a) * R, this._bgBannerAlt + Math.sin(nowS * 0.6) * 120, Math.sin(a) * R);
-      const tx = -Math.sin(a), tz = Math.cos(a);               // circle tangent
-      this._bgBannerAsm.rotation.y = Math.atan2(tx, tz) + Math.PI;  // nose (−Z) → tangent
-      if (this._bgBannerProp) this._bgBannerProp.rotation.z = (nowS * 22) % (Math.PI * 2);
-      return;
+  private _advanceBgSky(rig: BgRig, dt: number): void {
+    const spr = rig.sky!;
+    rig.skyPhase = (rig.skyPhase ?? 0) + dt;
+    const ph = rig.skyPhase;
+    const amp = Math.max(1500, this._fw * 0.3);
+    const speed = 40 + this._bgWindKmh * 6;                 // mm/s, wind-scaled
+    const dir = Math.cos(this._bgWindRad) >= 0 ? 1 : -1;
+    spr.position.x = (rig.skyBaseX ?? 0) + Math.sin(ph * speed / amp) * amp * dir;
+    (spr.material as THREE.SpriteMaterial).opacity =
+      0.72 + 0.2 * (0.5 + 0.5 * Math.sin(ph * 1.3));
+  }
+
+  // Banner plane + news chopper: slow orbit; the assembly yaws so its nose
+  // (local −Z) tracks the tangent, keeping the trailing banner broadside. dir
+  // sets rotation sense (chopper orbits OPPOSITE the plane). Prop/rotor spin +
+  // hover bob; the chopper's slung banner sways with a slight lag.
+  private _advanceBgAircraft(rig: BgRig, dt: number, nowS: number): void {
+    const R = rig.radius ?? 6000, dir = rig.dir ?? 1;
+    rig.angle = (((rig.angle ?? 0) + 0.12 * dt * dir) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2);
+    const a = rig.angle;
+    const bob = Math.sin(nowS * 0.6 + rig.index) * (rig.bobAmp ?? 120);
+    rig.asm!.position.set(Math.cos(a) * R, (rig.alt ?? 6000) + bob, Math.sin(a) * R);
+    const tx = -Math.sin(a) * dir, tz = Math.cos(a) * dir;   // tangent (direction of travel)
+    rig.asm!.rotation.y = Math.atan2(tx, tz) + Math.PI;      // nose (−Z) → tangent
+    if (rig.prop) {
+      if (rig.mode === 'chopper') rig.prop.rotation.y = (nowS * (rig.propRate ?? 42)) % (Math.PI * 2);
+      else rig.prop.rotation.z = (nowS * (rig.propRate ?? 22)) % (Math.PI * 2);
     }
-    // grass: static flat decal — no per-frame motion.
+    if (rig.tailRotor) rig.tailRotor.rotation.x = (nowS * (rig.propRate ?? 42) * 1.6) % (Math.PI * 2);
+    if (rig.mode === 'chopper' && rig.banner) {
+      rig.banner.rotation.y = Math.PI / 2 + Math.sin(nowS * 0.8) * 0.12;   // trailing lag sway
+    }
+  }
+
+  // Message train: walk the loop by arc length (~1.1 m/s), reposition + yaw
+  // every vehicle to its own tangent, spin wheels ∝ speed. Zero allocation.
+  private _advanceBgTrain(rig: BgRig, dt: number): void {
+    const t = rig.train!;
+    const speed = 1100;                                       // mm/s
+    t.s = (t.s + speed * dt) % (t.total || 1);
+    this._positionTrain(t);
+    const spin = (speed * dt) / t.wheelR;
+    for (const v of t.vehicles) for (const wh of v.wheels) wh.rotation.x -= spin;
   }
 
   // ── Outdoor weather effects (Feature W, phase W2) ─────────────────────────
@@ -10207,6 +10990,13 @@ export class ThreeDRenderer {
         r = 1.0 * f1; g = 0.45 * f1; b = 0.15 * f1;
         flickerMul = 0.85 + Math.random() * 0.30;
       }
+      // Heat lamp forces a strong warm-RED regardless of HA color + a SLOW cozy
+      // breathe (no flicker) — three-view forces the per-frame rebuild while an
+      // ON heatlamp exists (the fireplace idiom), so the sine reads as breathing.
+      if (kind === 'heatlamp' && isOn) {
+        r = 1.0; g = 0.28; b = 0.12;
+        flickerMul = 0.8 + 0.2 * Math.abs(Math.sin(performance.now() / 900));
+      }
       // Logic-light flash (batch DC-B): a matched rule flagged flash → pulse the
       // emissive + pool per-frame (three-view forces the rebuild while flashing,
       // the fireplace idiom). _dim (offColor idle) rides brightness already.
@@ -10484,6 +11274,137 @@ export class ThreeDRenderer {
               globe.position.y = -170;
               globe.userData = ud;
               g.add(globe);
+            }
+            break;
+          }
+          case 'heatlamp': {
+            // Ceiling bathroom heat lamp: a round housing + 2-3 red bulb domes.
+            // ON forces warm-red (above) so the domes + pool glow red; the housing
+            // is a shallow metal cylinder, domes hang just below. Keeps the floor
+            // disc (a red-tinted heat pool).
+            const housingMat = this._mat({ color: 0x54585e, metalness: 0.6, roughness: 0.4 });
+            const housing = new THREE.Mesh(new THREE.CylinderGeometry(260, 300, 120, 20), housingMat);
+            housing.position.y = -60;
+            housing.userData = ud;
+            g.add(housing);
+            const domeMat = this._mat({
+              color: isOn ? 0xff3b1e : 0x5a1e18,
+              emissive: isOn ? 0xff2a10 : 0x160604,
+              emissiveIntensity: isOn ? 1.1 * intensity * flickerMul : 0.05,
+              metalness: 0.1, roughness: 0.3,
+            });
+            for (const dx of [-140, 140, 0].slice(0, 3)) {
+              const dome = new THREE.Mesh(new THREE.SphereGeometry(105, 16, 12, 0, Math.PI * 2, 0, Math.PI / 2), domeMat);
+              dome.rotation.x = Math.PI;                 // dome opens downward
+              dome.position.set(dx, -130, dx === 0 ? 130 : 0);
+              dome.userData = ud;
+              g.add(dome);
+            }
+            break;
+          }
+          case 'exhaust':
+          case 'exhaust_light': {
+            // Ceiling exhaust grille: a flush square housing + spinning blades
+            // behind grille slats. exhaust_light adds a center light globe lit by
+            // the light entity; blades spin from fanEntity (fallback own entity),
+            // exactly like fan_light. Skips the floor disc (see the pool skip list).
+            const housingMat = this._mat({ color: 0xd8dde1, metalness: 0.3, roughness: 0.5 });
+            const grilleMat = this._mat({ color: 0x9099a0, metalness: 0.4, roughness: 0.6 });
+            const eHousing = new THREE.Mesh(new THREE.BoxGeometry(620, 90, 620), housingMat);  // flush square housing
+            eHousing.position.y = -10;
+            eHousing.userData = ud;
+            g.add(eHousing);
+            // Rotor: 5 short blades in the horizontal plane (spin about Y).
+            const rotor = new THREE.Group();
+            rotor.position.y = -70;
+            const bladeMat = this._mat({ color: 0xb0b8bf, metalness: 0.4, roughness: 0.5, side: THREE.DoubleSide });
+            for (let k2 = 0; k2 < 5; k2++) {
+              const blade = new THREE.Mesh(new THREE.BoxGeometry(250, 8, 90), bladeMat);
+              blade.position.x = 130;
+              blade.rotation.x = 0.3;
+              const arm = new THREE.Group();
+              arm.rotation.y = (k2 * 2 * Math.PI) / 5;
+              arm.add(blade);
+              rotor.add(arm);
+            }
+            g.add(rotor);
+            const spinSt = l.fanEntity ? stateProvider(l.fanEntity) : st;
+            const spinOn = spinSt?.state === 'on';
+            const sAttrs = (spinSt?.attributes ?? {}) as Record<string, unknown>;
+            const hasPct = typeof sAttrs.percentage === 'number';
+            const pct = hasPct ? (sAttrs.percentage as number) : (spinOn ? 100 : 0);
+            const mag = spinOn ? (hasPct ? Math.max(0, Math.min(100, pct)) / 100 * MAX_FAN_RPS : 1) : 0;
+            this._fanRotors.push({ obj: rotor, id: l.id, rps: sAttrs.direction === 'reverse' ? -mag : mag });
+            const seed = this._fanSpin[l.id];
+            if (seed) rotor.rotation.y = seed.angle;
+            // Grille slats below the blades (thin bars).
+            for (let i = -2; i <= 2; i++) {
+              const slat = new THREE.Mesh(new THREE.BoxGeometry(560, 10, 26), grilleMat);
+              slat.position.set(0, -110, i * 120);
+              slat.userData = ud;
+              g.add(slat);
+            }
+            if (kind === 'exhaust_light') {
+              const globe = new THREE.Mesh(new THREE.SphereGeometry(120, 16, 12), bodyMat);
+              globe.position.y = -70;
+              globe.userData = ud;
+              g.add(globe);
+            } else {
+              // Plain exhaust: a tiny status LED so an on fan reads at a glance.
+              const led = new THREE.Mesh(new THREE.BoxGeometry(24, 24, 10),
+                this._mat({ color: spinOn ? 0x69f0ae : 0x333333,
+                            emissive: spinOn ? 0x00c853 : 0x000000, emissiveIntensity: spinOn ? 1 : 0 }));
+              led.position.set(240, -110, 240);
+              led.userData = ud;
+              g.add(led);
+            }
+            break;
+          }
+          case 'exhaust_wall': {
+            // Wall-mount exhaust: a round housing (front = local -Z) + blades
+            // spinning about the FORWARD axis + a louver shutter that props open
+            // while the fan runs. Wall-snaps flush (snapExhaustToWall). No disc.
+            bodyY = l.height ?? 2000;
+            const housingMat = this._mat({ color: 0xd0d5d9, metalness: 0.4, roughness: 0.5 });
+            const ring = new THREE.Mesh(new THREE.CylinderGeometry(230, 230, 120, 24), housingMat);
+            ring.rotation.x = Math.PI / 2;               // axis along Z (faces the room)
+            ring.position.z = 40;                        // body toward the wall (+Z)
+            ring.userData = ud;
+            g.add(ring);
+            // Rotor in a tilt group so the blades face -Z and spin about forward.
+            const tilt = new THREE.Group();
+            tilt.rotation.x = Math.PI / 2;               // rotor local +Y → world -Z (front)
+            tilt.position.z = -30;
+            const rotor = new THREE.Group();
+            const bladeMat = this._mat({ color: 0xb0b8bf, metalness: 0.4, roughness: 0.5, side: THREE.DoubleSide });
+            for (let k2 = 0; k2 < 5; k2++) {
+              const blade = new THREE.Mesh(new THREE.BoxGeometry(180, 8, 70), bladeMat);
+              blade.position.x = 95;
+              blade.rotation.x = 0.32;
+              const arm = new THREE.Group();
+              arm.rotation.y = (k2 * 2 * Math.PI) / 5;
+              arm.add(blade);
+              rotor.add(arm);
+            }
+            tilt.add(rotor);
+            g.add(tilt);
+            const spinSt = l.fanEntity ? stateProvider(l.fanEntity) : st;
+            const spinOn = spinSt?.state === 'on';
+            const sAttrs = (spinSt?.attributes ?? {}) as Record<string, unknown>;
+            const hasPct = typeof sAttrs.percentage === 'number';
+            const pct = hasPct ? (sAttrs.percentage as number) : (spinOn ? 100 : 0);
+            const mag = spinOn ? (hasPct ? Math.max(0, Math.min(100, pct)) / 100 * MAX_FAN_RPS : 1) : 0;
+            this._fanRotors.push({ obj: rotor, id: l.id, rps: sAttrs.direction === 'reverse' ? -mag : mag });
+            const seed = this._fanSpin[l.id];
+            if (seed) rotor.rotation.y = seed.angle;
+            // Louver shutter: 3 slats over the front, tilted OPEN (~40°) while on.
+            const louverMat = this._mat({ color: 0xe6ebee, roughness: 0.5, side: THREE.DoubleSide });
+            for (let i = -1; i <= 1; i++) {
+              const slat = new THREE.Mesh(new THREE.BoxGeometry(360, 90, 10), louverMat);
+              slat.position.set(0, i * 130, -70);
+              slat.rotation.x = spinOn ? 0.7 : 0;        // propped open while running
+              slat.userData = ud;
+              g.add(slat);
             }
             break;
           }
@@ -10849,15 +11770,19 @@ export class ThreeDRenderer {
           this._lightGroup.add(tgt);
           spot.target = tgt;
           this._lightGroup.add(spot);
-        } else {
+        } else if (kind !== 'exhaust' && kind !== 'exhaust_wall') {
+          // Plain extractor fans move air, not light — no point light (exhaust_light
+          // keeps one for its globe; heatlamp keeps one for the warm pool).
           const pl = new THREE.PointLight(color.getHex(), li, dist, 1.5);
           pl.position.set(p.x, p.y - 50, p.z);
           this._lightGroup.add(pl);
         }
-        // Skip floor pool for sconce (wall), plain fan (no light), and
-        // under-cabinet strips (their wash lands on the counter below via
-        // the point light, not the floor).
-        if (kind !== 'sconce' && kind !== 'fan' && kind !== 'under_cabinet' && kind !== 'wall_sconce') {
+        // Skip floor pool for sconce (wall), plain fan (no light), exhaust fans
+        // (ceiling/wall extractors — they move air, not light), and under-cabinet
+        // strips (their wash lands on the counter below via the point light, not
+        // the floor). Heat lamps KEEP the pool (a red-tinted heat pool).
+        if (kind !== 'sconce' && kind !== 'fan' && kind !== 'under_cabinet' && kind !== 'wall_sconce' &&
+            kind !== 'exhaust' && kind !== 'exhaust_wall' && kind !== 'exhaust_light') {
           // Step lights emit from one face only → a HALF-disc pool bulging
           // toward the front, its flat diameter lying along the wall line
           // (centered on the fixture). After rotation.x=-π/2 a CircleGeometry
@@ -15936,6 +16861,12 @@ export class ThreeDRenderer {
     this._advanceBgText(frameDt, nowS);
     // Thermostat vent airflow particles — buffer mutation only (zero allocation).
     this._advanceVents(frameDt);
+    // Climate/airflow furniture: AC/heater vent particles, floor-fan spin +
+    // oscillation, emissive/opacity breathe, and eased louver/warm-up blends.
+    this._advanceApplianceVents(frameDt);
+    this._advanceFloorFans(frameDt);
+    this._advanceClimateGlows();
+    this._advanceClimateEased(frameDt);
     // Valetudo cleaning-segment glow pulse — opacity-only on the tracked list.
     this._advanceVacMap(nowS);
     // Glass-house transit puppet — scripted cross-STORY_H walk (Tier 2 stretch).

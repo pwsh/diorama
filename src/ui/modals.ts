@@ -9,7 +9,7 @@ import { OFFLINE_FLAG_KEY } from '../ha-local.js';
 import type { AvatarDef, AvatarPackDef } from '../avatars.js';
 import { AVATAR_PACK_MANIFEST } from '../avatar-packs/manifest.js';
 import type { Planner } from '../planner.js';
-import type { Floor, HassState, WeatherConfig, WeatherEffectKey, ScenePreset, FloorTexKind, MqttBridgeConfig, BgTextConfig, BgTextMode, HeatmapConfig } from '../types.js';
+import type { Floor, HassState, WeatherConfig, WeatherEffectKey, ScenePreset, FloorTexKind, MqttBridgeConfig, BgTextEntry, BgTextEntryMode, HeatmapConfig } from '../types.js';
 
 // ── Floor settings modal ─────────────────────────────────────────────────
 @customElement('diorama-floor-modal')
@@ -1286,51 +1286,79 @@ export class SettingsDrawer extends LitElement {
   // ── Background text (playful skywriting / banner plane / grass writing) ──
   private _bgTextBlock() {
     const p = this.planner;
-    const bt = p.store.bgText ?? {};
-    const mode: BgTextMode = bt.mode ?? 'off';
-    const upd = (mut: (x: BgTextConfig) => void) => {
-      const x = (p.store.bgText ??= {});
-      mut(x); p.save(); p.emitConfig(); this.requestUpdate();
+    const list: BgTextEntry[] = p.store.bgTexts ?? [];
+    const upd = (mut: () => void) => {
+      p.store.bgTexts ??= [];
+      mut(); p.save(); p.emitConfig(); this.requestUpdate();
     };
-    const modes: Array<[BgTextMode, string]> = [
-      ['off', 'Off'], ['sky', 'Skywriting (sky)'],
-      ['banner', 'Banner plane'], ['grass', 'Grass writing'],
+    const modes: Array<[BgTextEntryMode, string]> = [
+      ['sky', 'Skywriting (sky)'], ['banner', 'Banner plane'],
+      ['grass', 'Grass writing'], ['train', 'Message train'], ['chopper', 'News chopper'],
     ];
-    return html`
-      <div style="border-top:1px solid var(--border);margin:10px 0 0;padding-top:8px">
-        <div class="row"><label title="A short playful message written into the 3D world">Background text</label>
-          <select .value=${mode}
-                  @change=${(e: Event) => upd(x => { x.mode = (e.target as HTMLSelectElement).value as BgTextMode; })}>
-            ${modes.map(([v, l]) => html`<option value=${v} ?selected=${mode === v}>${l}</option>`)}
-          </select>
-        </div>
-        ${mode !== 'off' ? html`
-          <div class="row"><label>Message</label>
+    // Resolved strings (per entry, in list order) for the live preview.
+    const resolved = new Map(p.bgTextsResolved().map(r => [r.id, r.text]));
+    const row = (e: BgTextEntry, idx: number) => {
+      const cur = resolved.get(e.id);
+      return html`
+        <div style="border:1px solid var(--border);border-radius:6px;padding:6px 8px;margin:0 0 6px">
+          <div class="row">
+            <select .value=${e.mode}
+                    @change=${(ev: Event) => upd(() => { e.mode = (ev.target as HTMLSelectElement).value as BgTextEntryMode; })}>
+              ${modes.map(([v, l]) => html`<option value=${v} ?selected=${e.mode === v}>${l}</option>`)}
+            </select>
+            <button class="btn" style="font-size:10px;padding:2px 6px;margin-left:auto"
+                    title="Delete this background text"
+                    @click=${() => upd(() => { p.store.bgTexts!.splice(idx, 1); })}>🗑</button>
+          </div>
+          <div class="row" style="margin-top:4px"><label>Message</label>
             <input type="text" placeholder="e.g. Welcome home!" maxlength="40"
-                   .value=${bt.text ?? ''} ?disabled=${!!bt.entityId}
+                   .value=${e.text ?? ''} ?disabled=${!!e.entityId}
                    style="flex:1;min-width:0"
-                   @change=${(e: Event) => upd(x => { x.text = (e.target as HTMLInputElement).value; })}>
+                   @change=${(ev: Event) => upd(() => { e.text = (ev.target as HTMLInputElement).value; })}>
           </div>
           <div class="row" style="margin-top:2px"><label>Entity</label>
             <span style="font-size:11px;color:var(--text);flex:1;overflow:hidden;
-                         text-overflow:ellipsis;white-space:nowrap">${bt.entityId || '—'}</span>
+                         text-overflow:ellipsis;white-space:nowrap">${e.entityId || '—'}</span>
             <button class="btn" style="font-size:10px;padding:2px 6px" @click=${() => {
               this.dispatchEvent(new CustomEvent('open-entity-picker', {
                 bubbles: true, composed: true,
-                detail: { onPick: (id: string) => upd(x => { x.entityId = id; }) },
+                detail: { onPick: (id: string) => upd(() => { e.entityId = id; }) },
               }));
             }}>🔗</button>
-            ${bt.entityId ? html`<button class="btn" style="font-size:10px;padding:2px 6px;margin-left:4px"
+            ${e.entityId ? html`<button class="btn" style="font-size:10px;padding:2px 6px;margin-left:4px"
                    title="Clear the bound entity (use the static message)"
-                   @click=${() => upd(x => { x.entityId = undefined; })}>✕</button>` : nothing}
+                   @click=${() => upd(() => { e.entityId = undefined; })}>✕</button>` : nothing}
           </div>
-          <div style="font-size:10px;color:var(--text-dim);line-height:1.3;margin:2px 0 0">
-            ${bt.entityId
-              ? html`Bound: the entity's state replaces the static message
-                     ${p.bgTextResolved() ? html`— currently "<span style="color:var(--text)">${p.bgTextResolved()}</span>"` : nothing}.`
-              : 'Bind an entity (e.g. an input_text helper) to show its live value instead. Skywriting / banner hide during storms.'}
+          ${e.mode === 'train' ? html`
+            <div class="row" style="margin-top:2px"><label title="Cap on the number of message cars">Max cars</label>
+              <input type="number" min="2" max="12" step="1" style="width:64px"
+                     .value=${String(e.maxCars ?? 8)}
+                     @change=${(ev: Event) => upd(() => {
+                       const v = Math.round(Number((ev.target as HTMLInputElement).value));
+                       e.maxCars = isFinite(v) ? Math.min(12, Math.max(2, v)) : 8;
+                     })}>
+            </div>` : nothing}
+          <div style="font-size:10px;color:var(--text-dim);line-height:1.3;margin:3px 0 0">
+            ${e.entityId
+              ? html`Bound: the entity's state replaces the static message${cur
+                  ? html` — currently "<span style="color:var(--text)">${cur}</span>"` : nothing}.`
+              : 'Bind an entity (e.g. an input_text helper) to show its live value instead.'}
           </div>
-        ` : nothing}
+        </div>`;
+    };
+    const newId = () => 'bt_' + Math.random().toString(36).slice(2, 9);
+    return html`
+      <div style="border-top:1px solid var(--border);margin:10px 0 0;padding-top:8px">
+        <div class="row"><label title="Short playful messages written into the 3D world"
+                                style="font-weight:600">Background text</label></div>
+        ${list.length ? list.map((e, i) => row(e, i))
+          : html`<div style="font-size:10px;color:var(--text-dim);margin:0 0 6px">
+                   None. Add a skywriter, banner plane, lawn message, message train, or news chopper.</div>`}
+        <button class="btn" style="font-size:11px;padding:3px 8px" ?disabled=${list.length >= 6}
+                @click=${() => upd(() => { p.store.bgTexts!.push({ id: newId(), mode: 'sky' }); })}>
+          + Add${list.length >= 6 ? ' (max 6)' : ''}</button>
+        <div style="font-size:10px;color:var(--text-dim);line-height:1.3;margin:4px 0 0">
+          Up to 6. Skywriting / banner plane / news chopper hide during storms; grass + train stay.</div>
       </div>`;
   }
 

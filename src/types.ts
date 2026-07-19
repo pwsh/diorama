@@ -43,8 +43,15 @@ export type FurnitureKind =
   | 'wall_tv'       // wall-mounted flat TV, no stand
   | 'kitchen_sink'  // stainless double basin embedded in a counter
   | 'coffee_maker' | 'toaster'
+  // climate / airflow appliances (cat 'appliance', except towel_warmer = bathroom).
+  // All bindable via the generic entity_id (climate/fan/switch). Bladed fans
+  // (floor_fan/retro_fan/modern_fan) spin + optionally oscillate; ACs/heaters vent.
+  | 'window_ac' | 'mini_split' | 'portable_ac'
+  | 'floor_fan' | 'retro_fan' | 'modern_fan' | 'tower_fan' | 'bladeless_fan'
+  | 'space_heater' | 'wall_heater'
   // bathroom
   | 'toilet' | 'sink' | 'sink_vanity' | 'pedestal_sink' | 'utility_sink' | 'bathtub' | 'shower'
+  | 'towel_warmer'   // ladder-rack radiator; bars glow warm (eased) while running
   // outdoor
   | 'trash_bin' | 'recycle_bin'   // wheeled curbside bins; entity 'on'/'full' = full
   | 'tree' | 'pine_tree' | 'bush' | 'flower_bed' | 'bird_bath'
@@ -174,6 +181,9 @@ export interface Furniture {
   newsEntity?: string | null; // tv/wall_tv 'news' screenMode: any sensor.*/event.* whose attributes carry a
                               //   headline-shaped payload (feedparser list / event.* single / template). Parsed
                               //   defensively by surfaces.parseHeadlines. Config-path in _isSlowEntity.
+  oscillate?: boolean;        // bladed floor fans (floor_fan/retro_fan/modern_fan) only: while running, the
+                              //   fan HEAD yaws in a slow ±45° sine sweep (blades keep spinning inside the
+                              //   sweeping head). Item-level → no repairFloor change.
 }
 
 export type LightIconKind =
@@ -196,7 +206,11 @@ export type LightIconKind =
   | 'under_cabinet'   // slim LED channel for mounting under cabinets/counters
   | 'wall_sconce'     // wall-mounted up/down cylinder washer
   | 'step'            // small louvered step light embedded low in a wall
-  | 'flood';          // wall/eave-mount floodlight: twin angled heads, wide floor pool
+  | 'flood'           // wall/eave-mount floodlight: twin angled heads, wide floor pool
+  | 'heatlamp'        // ceiling bathroom heat lamp: red bulb domes, forced warm-red glow + pool
+  | 'exhaust'         // ceiling exhaust grille: spinning blades behind slats, no floor disc
+  | 'exhaust_wall'    // wall-mount exhaust: round housing + louver shutter, wall-snaps flush, no disc
+  | 'exhaust_light';  // ceiling exhaust + center light globe (fan_light precedent)
 
 // Logical-state light binding (Display & Controls arc, batch DC-B). A light
 // whose ON / color / flash derives from ANY entity's state through the shared
@@ -1116,7 +1130,8 @@ export interface Store {
   avatarInteractions?: boolean;      // synthetic avatars (ai/roam) walk up to UNBOUND interactive devices and flip them (session-only); absent/true = on, false = off
   avatarCostumes?: boolean;          // situational costume/outfit swaps on avatar rigs (sleep/exercise/cooking); absent/true = on, false = off
   avatarProps?: boolean;             // shared prop library — avatars pick up & use household objects (vacuum/broom/umbrella/snacks/…); absent/true = on, false = off
-  bgText?: BgTextConfig;             // playful background text (skywriting / banner plane / grass writing)
+  bgText?: BgTextConfig;             // LEGACY single background text — migrated once into bgTexts, then ignored (read for migration only)
+  bgTexts?: BgTextEntry[];           // playful background text, up to 6 entries (skywriting / banner / grass / train / chopper)
   heatmap?: HeatmapConfig;           // per-room temperature heat-map comfort band (derived visual layer)
 }
 
@@ -1144,6 +1159,21 @@ export interface BgTextConfig {
   text?: string;                 // static message (used when no entity is bound)
   entityId?: string;            // optional bound entity — its formatted state replaces `text`
   format?: InfoCardFormat;       // formatting for the bound entity's value (precision / unit / mapping / …)
+}
+
+// Multi-instance background text (up to 6 entries). Each entry is one decorative
+// message written into the 3D world in one of five styles. Supersedes the legacy
+// single BgTextConfig above (which is migrated once into a bgTexts entry and then
+// ignored — kept for migration only, never written again). `train`/`chopper` tow
+// a message around/above the yard; `maxCars` is train-only.
+export type BgTextEntryMode = 'sky' | 'banner' | 'grass' | 'train' | 'chopper';
+export interface BgTextEntry {
+  id: string;                    // stable per-entry id (rig key + list identity)
+  mode: BgTextEntryMode;
+  text?: string;                 // static message (used when no entity is bound)
+  entityId?: string;             // optional bound entity — its formatted state replaces `text`
+  format?: InfoCardFormat;       // formatting for the bound entity's value
+  maxCars?: number;              // train-only: cap on message cars (default 8, clamp 2..12)
 }
 
 // ── Multiple-configuration registry (Batch B) ─────────────────────────────

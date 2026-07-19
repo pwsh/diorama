@@ -315,15 +315,34 @@ integration) drives the moon phase.
   (23/23 — sun position recomputed, moon phase pixel-sampled, dome colors differ day/night/
   overcast, easing verified, upwind storm darkening); `weather-test.html` moon-phase matrix.
 
-### Playful background text (skywriting / banner plane / grass writing)
-`Store.bgText` (`BgTextConfig`: `mode?: 'off'|'sky'|'banner'|'grass'`, `text?`, `entityId?`,
-`format?: InfoCardFormat`) — a short decorative message written INTO the 3D world. Store-level
-(property-wide, like `Store.weather`); **added to `Planner._loadFromHa`'s explicit field list**
-(else it silently resets). The displayed string is `Planner.bgTextResolved()` — the bound
-entity's FORMATTED state (`formatEntityValue(states[entityId], format, …)`) when `entityId` is
-set, else the static `text`, capped **40 chars** (null when off/empty). The bound id is
-**config-path** in `_isSlowEntity` so a message change repaints. `Planner.bgTextMode()` returns
-the active mode.
+### Playful background text (skywriting / banner plane / grass / TRAIN / CHOPPER — multi-entry)
+`Store.bgTexts?: BgTextEntry[]` (cap 6) — `{id, mode: 'sky'|'banner'|'grass'|'train'|'chopper',
+text?, entityId?, format?, maxCars?}` — decorative messages written INTO the 3D world.
+Store-level, in `_loadFromHa`'s explicit list. **Legacy `Store.bgText` (single) migrates once**
+in `_normalizeStore` (`_migrateBgTexts`, idempotent; the old field is read for migration only,
+never written). `Planner.bgTextsResolved()` resolves per entry (bound entity's
+`formatEntityValue` state wins over static `text`, capped **40 chars**, empty/off skipped);
+every entry's bound id is **config-path** in `_isSlowEntity`. Renderer `updateBgTexts(entries,
+storm, windRad, windKmh)` builds per-entry rigs keyed by id (legacy `updateBgText` wrapper kept
+for stale-chunk/test pairing); multi-instance stagger: sky sprites offset x/y/z per index,
+aircraft vary radius/altitude/phase, grass takes successive margin strips (exclusion-list
+extension of `_bgGrassPlacement`). Storm hides sky/banner/CHOPPER; grass + TRAIN stay.
+- **`train`**: a toy toon train (engine + N cars, darker last car) circling a rounded-rect loop
+  ~1800 mm OUTSIDE the floor rect (ellipse fallback for tiny floors), arc-length walked at
+  ~1.1 m/s — each car independently posed on the loop so the train bends around corners; wheels
+  spin ∝ speed. `N = clamp(ceil(len/6), 1, maxCars ?? 8)`, `maxCars` clamped 2..12 (sidebar
+  input on train rows). **Both-sides readability**: each car carries FrontSide text planes on
+  local ±X flanks (±90° Y-rotations — glyphs never mirrored); the −X (train-left) flank gets
+  chunks engine→tail (`chunk[i]`), the +X flank gets `chunk[N−1−i]`, so BOTH viewers read
+  left-to-right. Planes tagged `userData.textPlane` (+ test hooks `userData.flank/chunk`).
+  No smoke puffs v1 (chimney geometry present; add a 3-sprite recycler later if wanted).
+- **`chopper`**: toy news helicopter (cabin bubble + tail boom + skids + NEWS stripes) — main
+  rotor spun fast about Y + tail rotor about X per frame; tows the double-sided banner
+  BELOW-and-behind on a tow-line cylinder with trailing sway; orbits OPPOSITE the banner
+  plane's direction, higher (~7500 mm), tighter (radius ·0.6), with ±150 mm hover bob.
+Settings ▸ Display "Background text" is a 6-entry list editor (mode/static/entity/maxCars/
+delete + "+ Add"). Test pages: `bgtext-test.html` (29/29, legacy wrapper) +
+`bgtext-multi-test.html` (`BGTEXTMULTI PASS 29/29`).
 
 - **Renderer** `_bgTextGroup` (added to `scene.add`/`clearTransientGroups`/`destroy` — cheap +
   floor-tied, UNLIKE `_skyGroup` which is not) + `updateBgText(text, mode, storm, windRad,
@@ -1075,6 +1094,36 @@ Root rotation order is **YXZ**: yaw = facing, pitch = forward lean (∝ speed), 
 Rigs are persistent across frames (no rebuild churn). Cleaned up when a target disappears (after the scale-out grace) or via `clearTransientGroups()` on floor switch.
 
 **Quadruped rigs (pets)**: avatar kinds `cat` / `dog` build a **separate** rig via `_buildQuadruped` (horizontal torso, 4 two-segment legs, head with ears + snout, 2-segment tail; cat ≈ 58% of the dog, dog ≈ beagle ~520 mm shoulder height). Body-forward is local **−Z** like humanoids, so the shared facing/nav/carrot/spring, scale/despawn-fade, blob shadow, outline-shell, and plumbob (scaled ~0.7×) machinery is reused unchanged. A `quad` flag on the `Humanoid` (the 4 leg pivots alias the humanoid joint fields to satisfy the interface) switches the per-frame pose to `_applyQuadPose`: a **trot** (diagonal leg pairs antiphase, stride-matched amp off `h.vx/vz`) + tail sway + head bob + idle ear-flick; **sit** (haunches down, front legs straight) and **curl/lie** (all legs tucked) blends driven by the SAME `h.sit` / `h.lie` triggers as humanoids — soft lounge SitSpots (`SitSpot.soft`: sofa/chaise/ottoman/bed) route the sit blend into the curl pose so a pet curls up rather than sitting upright. Pets NEVER trigger privacy blur, standing activity anchors, or thought bubbles (all gated on `!h.quad`). `cat`/`dog` (and every `pet: true` pack member) are valid selectable avatar ids but kept OUT of the random-human fallback pool (see "Avatar packs"). A `DioramaPerson` with `isPet` and no explicit `avatarKind` renders as `cat` (three-view BLE-target default). Test page `test-pages/pet-test.html`.
+
+### Climate & airflow appliances (AC / floor fans / heaters / exhaust)
+Eleven `FurnitureKind`s + four `LightIconKind`s, all state-animated:
+- **AC** (`cat:'appliance'`, bind `['climate','fan','switch']`): `window_ac`
+  (elevation 900, cool-air particle wisp + LED), `mini_split` (elevation 2100,
+  louver bar rotates open ~35° while running — eased blend survives rebuilds —
+  + airflow particles colored by `hvacAirflow` heat/cool), `portable_ac`
+  (caster tower + exhaust-hose hint + top-vent particles).
+- **Floor fans**: `floor_fan` (caged stand), `retro_fan` (brass, `mountable`),
+  `modern_fan` (bladed trio — all three spin via `_floorFans`/`_floorFanSpin`/
+  `_advanceFloorFans`, signed rps from a bound `fan.*` percentage/direction or
+  ~1.2 rev/s fixed; **`Furniture.oscillate?`** (sidebar checkbox on bladed
+  kinds) sweeps the HEAD subgroup ±45° at 0.15 Hz while running); `tower_fan`
+  (bladeless slot shimmer strip); `bladeless_fan` (ring + pulsing translucent
+  air disc). Climate kinds are EXCLUDED from the generic `applianceOn` LED gate
+  — a dedicated LED reads `climateApplianceRun` (a `climate.*` unit in
+  cool/heat never has state 'on').
+- **Heaters** (bind `['climate','switch']`): `space_heater` (breathing ember
+  coil, ev-pulse idiom), `wall_heater` (elevation 200, glow + rising heat
+  shimmer), `towel_warmer` (`cat:'bathroom'` — the appliance-hash predicate is
+  widened for it; bar glow eases up ~4 s / down ~6 s, blend survives rebuilds).
+- **Exhaust light kinds**: `heatlamp` (ceiling red domes, fireplace-style
+  forced warm-red + pool + breathe; in the per-frame force-rebuild set),
+  `exhaust` (ceiling grille, blades spin via `_fanRotors`/`fanEntity`-fallback,
+  no floor disc), `exhaust_wall` (wall-snapped flush via `snapExhaustToWall`,
+  offset 70, louver props open), `exhaust_light` (grille + center globe — light
+  entity lights the globe, fanEntity spins blades; `fan_light` precedent).
+  Glyphs: ♨ ❊ ⊛ ❈. three-view appliance hash gained a `clim` term
+  (hvac_action/percentage/direction). Test `climate-appliance-test.html`
+  (64/64).
 
 ### Sinks v2 (basins, running water, fill/drain)
 Five sink kinds (`isSinkKind`, geometry.ts): `sink` (compact vanity),

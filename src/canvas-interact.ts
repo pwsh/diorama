@@ -1,4 +1,4 @@
-import { snap, snapVertex15, distMM, worldToLocal, localToWorld, FURNITURE_KINDS, furnitureCorners, furnitureLocalToWorld, furnitureWorldToLocal, resolveFurnitureDef, resolveFurnitureWallCollision, resolveSeatTableCollision, seatBelongsToTable, snapStepLightToSurface, snapFireplaceToWall, snapFloodlightToWall, snapSwitchToWall, snapAlarmToWall, snapCalendarToWall, snapThermostatToWall, snapPlugToWall, snapInfoCardToWall, snapActionButtonToWall, isBinKind, isSinkKind, nearestAlign, envScale, ENV_SCALE_MIN, ENV_SCALE_MAX, GRID_MM, floorContentBbox, resolveFloorEdgeDrag } from './geometry.js';
+import { snap, snapVertex15, distMM, worldToLocal, localToWorld, FURNITURE_KINDS, furnitureCorners, furnitureLocalToWorld, furnitureWorldToLocal, resolveFurnitureDef, resolveFurnitureWallCollision, resolveSeatTableCollision, seatBelongsToTable, snapStepLightToSurface, snapFireplaceToWall, snapFloodlightToWall, snapExhaustToWall, snapSwitchToWall, snapAlarmToWall, snapCalendarToWall, snapThermostatToWall, snapPlugToWall, snapInfoCardToWall, snapActionButtonToWall, isBinKind, isSinkKind, defaultFurnitureElevation, nearestAlign, envScale, ENV_SCALE_MIN, ENV_SCALE_MAX, GRID_MM, floorContentBbox, resolveFloorEdgeDrag } from './geometry.js';
 import { newId } from './storage.js';
 import {
   pxToMm, type View,
@@ -1605,8 +1605,9 @@ export function onCanvasMouseUp(p: Planner, canvas: HTMLCanvasElement): void {
         // + gang with neighbours. Each is a no-op unless the fixture qualifies.
         if (drag.fxKind === 'light') {
           if (!snapStepLightToSurface(it as Light, f.walls, f.furniture) &&
-              !snapFireplaceToWall(it as Light, f.walls))
-            snapFloodlightToWall(it as Light, f.walls);
+              !snapFireplaceToWall(it as Light, f.walls) &&
+              !snapFloodlightToWall(it as Light, f.walls))
+            snapExhaustToWall(it as Light, f.walls);
         } else {
           snapSwitchToWall(it, f.switches, f.walls);
         }
@@ -2232,11 +2233,13 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
       : undefined;
     const kind = p.pendingFurnitureKind;
     const def = rec ?? FURNITURE_KINDS[kind];
+    const elev0 = rec ? 0 : defaultFurnitureElevation(kind);
     const piece: Furniture = {
       id: newId('fu'),
       x: snap(mm.x, 10), y: snap(mm.y, 10),
       w: def.w, h: def.h, label: '', kind: rec ? 'block' : kind,
       ...(rec ? { customKindId: rec.id } : {}),
+      ...(elev0 ? { elevation: elev0 } : {}),
     };
     f.furniture.push(piece);
     p.activeFurnitureId = piece.id;
@@ -2253,8 +2256,9 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
     // Both no-op unless the fixture is a step light / fireplace (freshly dropped
     // lights default to 'bulb', so these bite once the kind is set + the piece
     // is dragged; kept here so a directly-typed kind snaps on drop too).
-    if (!snapStepLightToSurface(lt, f.walls, f.furniture) && !snapFireplaceToWall(lt, f.walls))
-      snapFloodlightToWall(lt, f.walls);
+    if (!snapStepLightToSurface(lt, f.walls, f.furniture) && !snapFireplaceToWall(lt, f.walls) &&
+        !snapFloodlightToWall(lt, f.walls))
+      snapExhaustToWall(lt, f.walls);
     f.lights.push(lt);
     p.save(); p.setTool('select'); p.emitConfig(); return;
   }

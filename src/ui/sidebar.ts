@@ -36,7 +36,7 @@ import {
   envKindOf, envColor, envValueText, envHeight, envScale,
   INFO_CARD_MOUNT_DEFAULTS, INFO_CARD_SCALE_MIN, INFO_CARD_SCALE_MAX,
   infoCardText, infoCardMount, infoCardHeight, infoCardW, infoCardH, infoCardScale,
-  furnitureCat, type FurnitureCat, isBinKind, isSinkKind, isVehicleKind, isStairsKind,
+  furnitureCat, type FurnitureCat, isBinKind, isSinkKind, isVehicleKind, isStairsKind, isClimateApplianceKind, isBladedFanKind,
   closedWallLoops, loopContaining, resolveRoomForPointFuzzy, roomLabel,
 } from '../geometry.js';
 import { solveHomography, homographyResidualsMm } from '../homography.js';
@@ -81,6 +81,10 @@ const LIGHT_KINDS: { id: LightIconKind; label: string; glyph: string }[] = [
   { id: 'wall_sconce', label: 'Wall sconce (up/down)', glyph: '◨' },
   { id: 'step',        label: 'Step light',            glyph: '▤' },
   { id: 'flood',       label: 'Floodlight',            glyph: '🔆' },
+  { id: 'heatlamp',      label: 'Heat lamp',           glyph: '♨' },
+  { id: 'exhaust',       label: 'Exhaust (ceiling)',   glyph: '❊' },
+  { id: 'exhaust_wall',  label: 'Exhaust (wall)',      glyph: '⊛' },
+  { id: 'exhaust_light', label: 'Exhaust + light',     glyph: '❈' },
 ];
 
 const WINDOW_KINDS: { id: WindowKind; label: string }[] = [
@@ -4291,6 +4295,11 @@ export class Sidebar extends LitElement {
           curKind === 'stove' || curKind === 'microwave' ? this._jobStateRow(piece, upd) : nothing}
         ${curKind === 'car' || curKind === 'ev_charger' ? this._evChargerRows(piece, upd) : nothing}
         ${curKind === 'mailbox' ? this._mailboxRows(piece, upd) : nothing}
+        ${isBladedFanKind(curKind) ? html`
+          <div class="row"><label title="While running, the fan head yaws in a slow ±45° sweep (blades keep spinning inside the sweeping head)">Oscillate</label>
+            <input type="checkbox" .checked=${piece.oscillate === true}
+                   @change=${(e: Event) => upd(() => { piece.oscillate = (e.target as HTMLInputElement).checked || undefined; })}>
+          </div>` : nothing}
         ${curKind === 'stove' ? html`
           <div class="row"><label title="Persistent oven-door open state (also toggled by clicking the stove in 2D/3D)">Oven door open</label>
             <input type="checkbox" .checked=${!!piece.doorOpen}
@@ -4414,7 +4423,7 @@ export class Sidebar extends LitElement {
   private _furnitureBindRow(piece: Furniture, upd: (mut: () => void) => void) {
     const p = this.planner;
     const def = resolveFurnitureDef(piece, p.store.customObjects);
-    if (!def.activity && furnitureKind(piece) !== 'tv' && !isBinKind(piece.kind) && !isVehicleKind(piece.kind)) return nothing;
+    if (!def.activity && furnitureKind(piece) !== 'tv' && !isBinKind(piece.kind) && !isVehicleKind(piece.kind) && !isClimateApplianceKind(piece.kind)) return nothing;
     return html`
       <div class="row"><label>HA entity</label>
         <span style="font-size:11px;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
@@ -4834,10 +4843,13 @@ export class Sidebar extends LitElement {
   }
 
   private _pickFurnitureEntity(piece: Furniture): void {
+    const climateHeater = piece.kind === 'space_heater' || piece.kind === 'wall_heater' || piece.kind === 'towel_warmer';
     const domain = furnitureKind(piece) === 'tv' ? 'media_player'
       : isBinKind(piece.kind) ? 'binary_sensor'   // bins: 'on'/'full' = full
       : isVehicleKind(piece.kind) ? 'binary_sensor'   // car: presence 'on' = in bay
       : isSinkKind(piece.kind) ? ['switch', 'binary_sensor']   // sink: faucet on-state
+      : isClimateApplianceKind(piece.kind)   // AC/fans: climate/fan/switch; heaters: climate/switch
+        ? (climateHeater ? ['climate', 'switch'] : ['climate', 'fan', 'switch'])
       : 'switch';
     this.dispatchEvent(new CustomEvent('open-entity-picker', {
       bubbles: true, composed: true,
@@ -5188,7 +5200,7 @@ export class Sidebar extends LitElement {
               </button>
             `)}
           </div>
-          ${['fan', 'fan_light'].includes(curKind) ? html`
+          ${['fan', 'fan_light', 'exhaust', 'exhaust_wall', 'exhaust_light'].includes(curKind) ? html`
             <div class="row"><label>Fan entity</label>
               <span style="font-size:10px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
                 ${l.fanEntity || '(uses light entity)'}
@@ -5218,7 +5230,7 @@ export class Sidebar extends LitElement {
                      })}>
             </div>
           ` : nothing}
-          ${['fireplace', 'strip', 'sconce', 'string', 'under_cabinet', 'wall_sconce', 'step', 'flood'].includes(curKind) ? html`
+          ${['fireplace', 'strip', 'sconce', 'string', 'under_cabinet', 'wall_sconce', 'step', 'flood', 'exhaust_wall'].includes(curKind) ? html`
             <div class="row"><label>Rotation (°)</label>
               <input type="number" step="15" .value=${String(Math.round(l.rotation ?? 0))}
                      @input=${(e: Event) => upd(() => {
@@ -5238,7 +5250,7 @@ export class Sidebar extends LitElement {
             </div>
           ` : nothing}
           ${/* Height may go negative (down to −3000) for lights sunk below the floor — e.g. a step light on a sunken stairway shaft. */ ''}
-          ${numRow('Height (mm)', l.height ?? (curKind === 'under_cabinet' ? 1350 : curKind === 'wall_sconce' ? 1700 : curKind === 'step' ? 300 : curKind === 'flood' ? 2400 : 2500), -3000, 6000, 50, v => upd(() => { l.height = v; }))}
+          ${numRow('Height (mm)', l.height ?? (curKind === 'under_cabinet' ? 1350 : curKind === 'wall_sconce' ? 1700 : curKind === 'step' ? 300 : curKind === 'flood' ? 2400 : curKind === 'exhaust_wall' ? 2000 : 2500), -3000, 6000, 50, v => upd(() => { l.height = v; }))}
           ${numRow('Radius (mm)', l.radius ?? 900, 100, 5000, 50, v => upd(() => { l.radius = v; }))}
           ${numRow('Intensity', l.intensity ?? 1, 0, 2, 0.05, v => upd(() => { l.intensity = v; }))}
           <div style="font-size:10px;color:var(--text-dim);margin-top:4px;line-height:1.3">

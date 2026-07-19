@@ -17,7 +17,7 @@ import { buildAlertFeed, alertCenterEnabled, isAlertDomain,
          type PanelAlert, type HaNotification, type RepairIssue } from './alerts.js';
 import { fitGeoTransform, latLonToPlan, clampToBoundary, planBearingDeg, compass8, medianLatLon,
          type GeoTransform, type GeoPair, type LatLonSample } from './geo.js';
-import type { GeoConfig, GeoLandmark, DioramaPerson, RobotFixture, ActionButton, Light, ValveFixture, BgTextMode } from './types.js';
+import type { GeoConfig, GeoLandmark, DioramaPerson, RobotFixture, ActionButton, Light, ValveFixture, BgTextEntry, BgTextEntryMode } from './types.js';
 import { formatEntityValue } from './value-rules.js';
 
 // ── Bermuda BLE discovery (runtime-only) ──────────────────────────────────
@@ -1653,8 +1653,42 @@ export class Planner extends EventTarget {
       avatarCostumes: remote.avatarCostumes ?? undefined,
       avatarProps: remote.avatarProps ?? undefined,
       bgText:         remote.bgText         ?? undefined,
+      bgTexts:        this._migrateBgTexts(remote),
       heatmap:        remote.heatmap        ?? undefined,
     };
+  }
+
+  // Resolve the persisted background-text list, migrating the legacy single
+  // `bgText` config into a one-entry `bgTexts` list ONCE (when bgTexts is absent
+  // and the legacy config has a non-off mode with content). Runs in the same
+  // normalize path as every load/import/undo, so migration is idempotent — once
+  // `bgTexts` exists we use it and the legacy field is never read again. Caps the
+  // list at 6 entries and drops malformed rows.
+  private _migrateBgTexts(remote: Store): BgTextEntry[] | undefined {
+    if (Array.isArray(remote.bgTexts)) {
+      const modes: BgTextEntryMode[] = ['sky', 'banner', 'grass', 'train', 'chopper'];
+      const out = remote.bgTexts
+        .filter(e => e && typeof e.id === 'string' && modes.includes(e.mode))
+        .slice(0, 6)
+        .map(e => ({
+          id: e.id, mode: e.mode,
+          text: e.text, entityId: e.entityId, format: e.format,
+          maxCars: e.maxCars,
+        }));
+      return out.length ? out : undefined;
+    }
+    const bt = remote.bgText;
+    if (bt && (bt.mode ?? 'off') !== 'off') {
+      const hasContent = !!(bt.entityId || (bt.text ?? '').trim());
+      if (hasContent) {
+        return [{
+          id: 'bt_' + Math.random().toString(36).slice(2, 9),
+          mode: bt.mode as BgTextEntryMode,
+          text: bt.text, entityId: bt.entityId, format: bt.format,
+        }];
+      }
+    }
+    return undefined;
   }
 
   // ── Configuration registry API (Batch B) ─────────────────────────────────
@@ -1988,34 +2022,43 @@ export class Planner extends EventTarget {
     // The alert entity (any domain, rare-but-urgent) is config-path as well so
     // the chip badge + settings preview repaint the moment an alert fires/clears.
     if (this.store.weather?.alerts?.entityId === id) return true;
-    // Background-text bound entity (store-level): config-path so the 3D
-    // _keyBgText dirty key + settings preview repaint when the message changes.
-    if (this.store.bgText?.entityId === id) return true;
+    // Background-text bound entities (store-level, multi-entry): config-path so
+    // the 3D _keyBgText dirty key + settings preview repaint when a message
+    // changes. Scoped to the specific bound ids, like today's single one.
+    if ((this.store.bgTexts ?? []).some(e => e.entityId === id)) return true;
     return this._weatherEntityIds().includes(id);
   }
 
-  // Resolved playful-background-text string: the bound entity's FORMATTED state
-  // (formatEntityValue) when an entity is bound, else the static `text`. Capped
-  // at ~40 chars (banner/skywriting want short text). Returns null when the mode
-  // is off / unconfigured / the message is empty. Read by three-view (3D) + the
-  // settings preview.
-  bgTextResolved(): string | null {
-    const bt = this.store.bgText;
-    if (!bt || (bt.mode ?? 'off') === 'off') return null;
+  // Resolve one background-text entry's displayed string: the bound entity's
+  // FORMATTED state (formatEntityValue) when an entity is bound, else the static
+  // `text`. Capped at ~40 chars (banner/skywriting/train want short text).
+  // Returns null when the entry is empty / has no reading yet.
+  private _resolveBgEntryText(e: BgTextEntry): string | null {
     let s: string | null = null;
-    if (bt.entityId) {
-      const st = this.hass?.states?.[bt.entityId] ?? null;
-      const v = formatEntityValue(st, bt.format, { imperial: this.store.imperial, now: new Date() });
-      s = v === '—' ? null : v;   // no reading yet → fall through to nothing
+    if (e.entityId) {
+      const st = this.hass?.states?.[e.entityId] ?? null;
+      const v = formatEntityValue(st, e.format, { imperial: this.store.imperial, now: new Date() });
+      s = v === '—' ? null : v;   // no reading yet → skip
     } else {
-      s = (bt.text ?? '').trim() || null;
+      s = (e.text ?? '').trim() || null;
     }
     if (s == null) return null;
     return s.length > 40 ? s.slice(0, 40) : s;
   }
 
-  // The active background-text mode (off when unconfigured).
-  bgTextMode(): BgTextMode { return this.store.bgText?.mode ?? 'off'; }
+  // Resolved background-text entries for the renderer/settings preview: one row
+  // per configured entry that currently has content (empty/no-reading entries are
+  // skipped). Order follows the stored list. Read by three-view (3D).
+  bgTextsResolved(): { id: string; mode: BgTextEntryMode; text: string; maxCars?: number }[] {
+    const list = this.store.bgTexts ?? [];
+    const out: { id: string; mode: BgTextEntryMode; text: string; maxCars?: number }[] = [];
+    for (const e of list) {
+      const text = this._resolveBgEntryText(e);
+      if (text == null) continue;
+      out.push({ id: e.id, mode: e.mode, text, ...(e.mode === 'train' ? { maxCars: e.maxCars } : {}) });
+    }
+    return out;
+  }
 
   // Entity ids the current (local) weather source depends on. Empty for the
   // Open-Meteo source (no HA entity) or when unconfigured.

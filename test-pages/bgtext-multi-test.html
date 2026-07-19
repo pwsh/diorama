@@ -1,0 +1,314 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>BGTEXTMULTI …</title>
+<style>
+  html,body{margin:0;background:#0b0f14;color:#cfd8dc;font:13px/1.4 sans-serif}
+  #c{width:1000px;height:640px}
+  #log{position:fixed;right:8px;top:8px;width:400px;max-height:96vh;overflow:auto;
+       background:#111820;border:1px solid #263340;border-radius:6px;padding:8px 10px;font-size:11px}
+  .pass{color:#69f0ae}.fail{color:#ff5252}.hd{font-weight:bold;margin:2px 0 6px}
+</style>
+<div id="c"></div>
+<div id="log"></div>
+<!--
+  Multi-instance background text (skywriting / banner plane / grass / message
+  train / news chopper) + legacy→bgTexts migration + per-entry resolution.
+
+  Drives the REAL ThreeDRenderer (built chunk) for the multi-rig build/motion
+  asserts, and a REAL Planner (bundled with a fake avatar-store) for migration +
+  resolution. Build the two extra bundles into the harness:
+
+    npx esbuild src/value-rules.ts --bundle --format=esm \
+      --outfile=<harness>/value-rules.mod.js         (unused here; kept for bgtext-test)
+    T=$(mktemp -d); cp -r src/* "$T"/; cp test-pages/fake-avatar-store.ts "$T"/avatar-store.ts
+    npx esbuild "$T"/planner.ts --bundle --format=esm --outfile=<harness>/planner.mod.js
+
+  Everything is synchronous after updateBgTexts, so reads reflect only manual steps.
+-->
+<script type="module">
+ try {
+  const V = '?v=' + Date.now();
+  const mod = await import('./assets/three-renderer.js' + V);
+  const { Planner } = await import('./planner.mod.js' + V);
+  const THREE_DoubleSide = 2;   // THREE.DoubleSide constant (avoid a three import)
+
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+
+  // Floor 12000×8000 with a house loop leaving clear yard margins.
+  const floor = {
+    id: 'f1', name: 'T', w: 12000, d: 8000,
+    walls: [{ id: 'w', points: [
+      { x: 3000, y: 2000 }, { x: 9000, y: 2000 }, { x: 9000, y: 6500 },
+      { x: 3000, y: 6500 }, { x: 3000, y: 2000 } ] }],
+    furniture: [], lights: [], switches: [], sensors: [], motionSensors: [],
+    envSensors: [], doors: [], windows: [], bg: null, model3d: null, look3d: null,
+  };
+  r.updateFloor(floor, { preset: 'day', floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6' });
+  r.applyViewPreset('iso');
+
+  const tests = [];
+  const ok = (name, cond, detail) => tests.push({ name, ok: !!cond, detail: detail ?? '' });
+
+  let clk = 1000;
+  const step = (n, dt = 1 / 60) => { for (let i = 0; i < n; i++) { clk += dt; r._advanceBgText(dt, clk); } };
+
+  const painted = (tex) => {
+    const cv = tex.image, g = cv.getContext('2d');
+    const d = g.getImageData(0, 0, cv.width, cv.height).data;
+    let lit = 0;
+    for (let i = 0; i < d.length; i += 4) if (d[i + 3] > 40 && (d[i] + d[i + 1] + d[i + 2]) > 60) lit++;
+    return lit;
+  };
+  const flanks = (carObj) => {
+    const out = {};
+    carObj.traverse(o => { if (o.userData && o.userData.flank) out[o.userData.flank] = o; });
+    return out;
+  };
+  const ent = (mode, text, extra) => ({ id: 'e_' + Math.random().toString(36).slice(2, 7), mode, text, ...(extra || {}) });
+
+  // ════════════ MIGRATION (real Planner._normalizeStore, pure) ════════════
+  const p = new Planner();
+  const baseFloor = { id: 'f1', name: 'F', w: 12000, d: 8000 };
+  const mkStore = (extra) => ({ v: 2, floors: [baseFloor], currentFloorId: 'f1', ...extra });
+
+  {
+    const s = p._normalizeStore(mkStore({ bgText: { mode: 'sky', text: 'HELLO' } }), 'f1');
+    ok('legacy bgText(sky) → one bgTexts entry',
+       Array.isArray(s.bgTexts) && s.bgTexts.length === 1 &&
+       s.bgTexts[0].mode === 'sky' && s.bgTexts[0].text === 'HELLO',
+       JSON.stringify(s.bgTexts));
+  }
+  {
+    // bgTexts present + a legacy bgText → the list wins (no double-migrate).
+    const s = p._normalizeStore(mkStore({
+      bgTexts: [{ id: 'a', mode: 'grass', text: 'YARD' }],
+      bgText: { mode: 'sky', text: 'HELLO' },
+    }), 'f1');
+    ok('no double-migrate (existing bgTexts wins)',
+       s.bgTexts.length === 1 && s.bgTexts[0].mode === 'grass' && s.bgTexts[0].text === 'YARD',
+       JSON.stringify(s.bgTexts));
+  }
+  {
+    const off = p._normalizeStore(mkStore({ bgText: { mode: 'off', text: 'X' } }), 'f1');
+    const empty = p._normalizeStore(mkStore({ bgText: { mode: 'sky', text: '   ' } }), 'f1');
+    ok('legacy off / empty → no migration (undefined)',
+       off.bgTexts === undefined && empty.bgTexts === undefined,
+       `off=${off.bgTexts} empty=${empty.bgTexts}`);
+  }
+  {
+    const many = Array.from({ length: 8 }, (_, i) => ({ id: 'e' + i, mode: 'sky', text: 'T' + i }));
+    const s = p._normalizeStore(mkStore({ bgTexts: many }), 'f1');
+    ok('bgTexts migration caps list at 6', s.bgTexts.length === 6, `n=${s.bgTexts.length}`);
+  }
+
+  // ════════════ RESOLUTION (real Planner.bgTextsResolved) ════════════
+  // Use a fully-normalized store (repaired floor) so _isSlowEntity's floor scan
+  // has all the arrays it expects.
+  p.store = { ...p._normalizeStore(mkStore({}), 'f1'), imperial: false, bgTexts: [] };
+  p.hass = { states: { 'sensor.msg': { state: '42', attributes: {}, entity_id: 'sensor.msg' } } };
+  {
+    p.store.bgTexts = [ent('sky', 'STATIC ONE')];
+    const res = p.bgTextsResolved();
+    ok('static text resolves per entry', res.length === 1 && res[0].text === 'STATIC ONE', JSON.stringify(res));
+  }
+  {
+    p.store.bgTexts = [{ id: 'b', mode: 'banner', text: 'ignored static', entityId: 'sensor.msg' }];
+    const res = p.bgTextsResolved();
+    ok('bound entity wins over static text', res.length === 1 && res[0].text === '42', JSON.stringify(res));
+  }
+  {
+    const long = 'X'.repeat(60);
+    p.store.bgTexts = [ent('grass', long)];
+    const res = p.bgTextsResolved();
+    ok('resolved text capped at 40 chars', res[0].text.length === 40, `len=${res[0].text.length}`);
+  }
+  {
+    p.store.bgTexts = [ent('sky', 'KEEP'), ent('banner', '   '), ent('grass', '')];
+    const res = p.bgTextsResolved();
+    ok('empty/blank entries skipped in resolution', res.length === 1 && res[0].text === 'KEEP',
+       `n=${res.length}`);
+  }
+  {
+    p.store.bgTexts = [{ id: 't', mode: 'train', text: 'CHOO CHOO', maxCars: 5 }];
+    const res = p.bgTextsResolved();
+    ok('train maxCars carried through resolution', res[0].maxCars === 5, `maxCars=${res[0].maxCars}`);
+  }
+  {
+    p.store.bgTexts = [{ id: 'b', mode: 'sky', text: 'x', entityId: 'sensor.msg' }];
+    ok('bound bg entity is config-path (_isSlowEntity)',
+       p._isSlowEntity('sensor.msg') === true && p._isSlowEntity('sensor.other') === false,
+       `${p._isSlowEntity('sensor.msg')}/${p._isSlowEntity('sensor.other')}`);
+  }
+
+  // ════════════ MULTI-INSTANCE PLACEMENT (renderer) ════════════
+  {
+    r.updateBgTexts([ent('sky', 'FIRST SKY'), ent('sky', 'SECOND SKY')], false, 0, 10);
+    const s = r._bgRigs.filter(x => x.mode === 'sky');
+    ok('two skywriters build with distinct positions',
+       s.length === 2 && Math.abs(s[0].sky.position.x - s[1].sky.position.x) > 100,
+       `dx=${s.length === 2 ? (s[0].sky.position.x - s[1].sky.position.x).toFixed(0) : 'n/a'}`);
+  }
+  {
+    r.updateBgTexts([ent('banner', 'BANNER A'), ent('banner', 'BANNER B')], false, 0, 10);
+    const b = r._bgRigs.filter(x => x.mode === 'banner');
+    const distinct = b.length === 2 &&
+      (Math.abs(b[0].radius - b[1].radius) > 50 || Math.abs(b[0].alt - b[1].alt) > 50 ||
+       Math.abs(b[0].angle - b[1].angle) > 0.05);
+    ok('two banner planes build with distinct orbits', distinct,
+       b.length === 2 ? `R=${b[0].radius.toFixed(0)}/${b[1].radius.toFixed(0)} alt=${b[0].alt}/${b[1].alt}` : 'n/a');
+  }
+  {
+    r.updateBgTexts([ent('grass', 'YARD ONE'), ent('grass', 'YARD TWO')], false, 0, 0);
+    const g = r._bgRigs.filter(x => x.mode === 'grass');
+    const distinct = g.length === 2 &&
+      (Math.abs(g[0].grass.cx - g[1].grass.cx) > 100 || Math.abs(g[0].grass.cy - g[1].grass.cy) > 100);
+    ok('two grass decals take distinct margin strips', distinct,
+       g.length === 2 ? `c0=(${g[0].grass.cx.toFixed(0)},${g[0].grass.cy.toFixed(0)}) c1=(${g[1].grass.cx.toFixed(0)},${g[1].grass.cy.toFixed(0)})` : 'n/a');
+  }
+  {
+    const eight = Array.from({ length: 8 }, (_, i) => ent('sky', 'SKY ' + i));
+    r.updateBgTexts(eight, false, 0, 0);
+    ok('renderer caps at 6 rigs from 8 entries', r._bgRigs.length === 6, `n=${r._bgRigs.length}`);
+  }
+
+  // ════════════ STORM HIDING ════════════
+  {
+    r.updateBgTexts([
+      ent('sky', 'SKY'), ent('banner', 'BANNER'), ent('chopper', 'CHOP'),
+      ent('grass', 'GRASS'), ent('train', 'TRAIN TIME'),
+    ], true /* storm */, 0, 0);
+    const modes = r._bgRigs.map(x => x.mode).sort();
+    ok('storm hides sky/banner/chopper',
+       !r._bgRigs.some(x => x.mode === 'sky' || x.mode === 'banner' || x.mode === 'chopper'),
+       modes.join(','));
+    ok('storm keeps grass + train (ground-level)',
+       r._bgRigs.some(x => x.mode === 'grass') && r._bgRigs.some(x => x.mode === 'train'),
+       modes.join(','));
+  }
+
+  // ════════════ MESSAGE TRAIN ════════════
+  {
+    r.updateBgTexts([ent('train', 'HELLO WRLD')], false, 0, 0);  // len 10 → ceil(10/6)=2
+    const t = r._bgRigs.find(x => x.mode === 'train').train;
+    ok('train car count (short msg → 1–2 cars)', t.chunks.length >= 1 && t.chunks.length <= 2,
+       `cars=${t.chunks.length}`);
+  }
+  {
+    const msg40 = 'A'.repeat(40);
+    r.updateBgTexts([ent('train', msg40)], false, 0, 0);        // ceil(40/6)=7, default maxCars 8
+    const t = r._bgRigs.find(x => x.mode === 'train').train;
+    ok('train 40-char message → 7 cars (ceil(40/6))', t.chunks.length === 7, `cars=${t.chunks.length}`);
+  }
+  {
+    const msg40 = 'B'.repeat(40);
+    r.updateBgTexts([{ id: 'tc', mode: 'train', text: msg40, maxCars: 2 }], false, 0, 0);
+    const t = r._bgRigs.find(x => x.mode === 'train').train;
+    ok('train maxCars clamps car count (40 chars, maxCars=2 → 2)', t.chunks.length === 2, `cars=${t.chunks.length}`);
+  }
+  {
+    // Both-flank chunk ordering: −X flank car k = chunk[k]; +X flank car k = chunk[N−1−k].
+    r.updateBgTexts([ent('train', 'ABCDEFGHIJKL')], false, 0, 0);  // len 12 → 2 cars
+    const t = r._bgRigs.find(x => x.mode === 'train').train;
+    const N = t.chunks.length;
+    let orderOk = N >= 2, painted2 = true;
+    for (let k = 0; k < N; k++) {
+      const car = t.vehicles[k + 1];   // vehicles[0] is the engine
+      const fl = flanks(car.obj);
+      if (!fl.minusX || !fl.plusX) { orderOk = false; break; }
+      if (fl.minusX.userData.chunk !== t.chunks[k]) orderOk = false;
+      if (fl.plusX.userData.chunk !== t.chunks[N - 1 - k]) orderOk = false;
+      if (painted(fl.minusX.material.map) < 50 || painted(fl.plusX.material.map) < 50) painted2 = false;
+    }
+    ok('train both flanks: −X=chunk[i], +X=chunk[N−1−i]', orderOk, `chunks=${JSON.stringify(t.chunks)}`);
+    ok('train both flank textures painted', painted2);
+  }
+  {
+    // Cars follow the tangent: over a full loop the engine yaw takes many values.
+    r.updateBgTexts([ent('train', 'ROUND TRIP')], false, 0, 0);
+    const rig = r._bgRigs.find(x => x.mode === 'train');
+    const engineObj = rig.train.vehicles[0].obj;
+    const yaws = new Set();
+    const wheel0 = rig.train.vehicles[0].wheels[0];
+    const wRot0 = wheel0.rotation.x;
+    for (let i = 0; i < 1700; i++) { clk += 1 / 30; r._advanceBgText(1 / 30, clk); yaws.add(Math.round(engineObj.rotation.y * 5) / 5); }
+    ok('train cars orient to tangent (engine yaw varies round the loop)', yaws.size >= 3, `distinct yaws=${yaws.size}`);
+    ok('train wheels spin over frames', Math.abs(wheel0.rotation.x - wRot0) > 1e-3,
+       `dRot=${(wheel0.rotation.x - wRot0).toFixed(2)}`);
+  }
+  {
+    r.updateBgTexts([ent('train', 'YARD LOOP')], false, 0, 0);
+    const t = r._bgRigs.find(x => x.mode === 'train').train;
+    const fw = floor.w, fd = floor.d;
+    const outside = t.loopWorld.every(pt => pt.x < 0 || pt.x > fw || pt.y < 0 || pt.y > fd);
+    ok('train loop stays entirely OUTSIDE the floor rect', outside,
+       `pts=${t.loopWorld.length}`);
+  }
+  {
+    // Per-rig CanvasTexture disposal on rebuild (dispose-count probe).
+    r.updateBgTexts([ent('train', 'DISPOSE ME')], false, 0, 0);
+    const t = r._bgRigs.find(x => x.mode === 'train').train;
+    const fl = flanks(t.vehicles[1].obj);
+    const map = fl.minusX.material.map;
+    let disposed = false;
+    const orig = map.dispose.bind(map);
+    map.dispose = () => { disposed = true; orig(); };
+    r.updateBgTexts([ent('sky', 'REPLACED')], false, 0, 0);
+    ok('train flank texture disposed on rebuild', disposed);
+  }
+
+  // ════════════ NEWS CHOPPER ════════════
+  {
+    r.updateBgTexts([ent('chopper', 'BREAKING NEWS')], false, 0, 5);
+    const c = r._bgRigs.find(x => x.mode === 'chopper');
+    ok('chopper builds (main rotor + tail rotor + banner)',
+       !!c && !!c.prop && c.prop.children && c.prop.children.length >= 2 &&
+       !!c.tailRotor && !!c.banner,
+       c ? `rotorBlades=${c.prop.children.length} tail=${!!c.tailRotor} banner=${!!c.banner}` : 'no rig');
+  }
+  {
+    r.updateBgTexts([ent('chopper', 'ROTOR SPIN')], false, 0, 5);
+    const c = r._bgRigs.find(x => x.mode === 'chopper');
+    const y0 = c.prop.rotation.y;
+    step(60);
+    ok('chopper main rotor angle advances', Math.abs(c.prop.rotation.y - y0) > 1e-3,
+       `dY=${(c.prop.rotation.y - y0).toFixed(3)}`);
+  }
+  {
+    // Chopper orbits OPPOSITE the plane: compare signed sweep of the XZ position.
+    r.updateBgTexts([ent('banner', 'PLANE'), ent('chopper', 'CHOP')], false, 0, 5);
+    const plane = r._bgRigs.find(x => x.mode === 'banner');
+    const chop = r._bgRigs.find(x => x.mode === 'chopper');
+    step(2);  // settle
+    const pA = plane.asm.position.clone(), cA = chop.asm.position.clone();
+    step(30);
+    const pB = plane.asm.position.clone(), cB = chop.asm.position.clone();
+    const crossP = pA.x * pB.z - pA.z * pB.x;   // signed rotation sense
+    const crossC = cA.x * cB.z - cA.z * cB.x;
+    ok('chopper orbit direction OPPOSITE the plane (sign)',
+       Math.sign(crossP) !== 0 && Math.sign(crossC) !== 0 && Math.sign(crossP) !== Math.sign(crossC),
+       `plane=${crossP.toFixed(0)} chop=${crossC.toFixed(0)} dir p=${plane.dir} c=${chop.dir}`);
+  }
+  {
+    r.updateBgTexts([ent('chopper', 'DOUBLE SIDED')], false, 0, 0);
+    const c = r._bgRigs.find(x => x.mode === 'chopper');
+    const m = c.banner.material;
+    ok('chopper banner double-sided w/ one texture (both faces read)',
+       m.side === THREE_DoubleSide && !!m.map && c.banner.userData.textPlane === true,
+       `side=${m.side} map=${!!m.map}`);
+  }
+
+  // ════════════ report ════════════
+  const pass = tests.filter(t => t.ok).length, total = tests.length;
+  const allPass = pass === total;
+  const fails = tests.filter(t => !t.ok).map(t => t.name);
+  const title = allPass ? `BGTEXTMULTI PASS ${pass}/${total}` : `BGTEXTMULTI FAIL ${pass}/${total} [${fails.join(', ')}]`;
+  document.title = title;
+  document.getElementById('log').innerHTML =
+    `<div class="hd ${allPass ? 'pass' : 'fail'}">${title}</div>` +
+    tests.map(t => `<div><span class="${t.ok ? 'pass' : 'fail'}">${t.ok ? 'PASS' : 'FAIL'}</span> ${t.name} <span style="color:#78909c">${t.detail}</span></div>`).join('');
+ } catch (e) {
+  document.title = 'BGTEXTMULTI ERR: ' + (e && e.stack ? e.stack.split('\n').slice(0, 3).join(' | ') : e);
+  document.getElementById('log').textContent = e && e.stack ? e.stack : String(e);
+ }
+</script>

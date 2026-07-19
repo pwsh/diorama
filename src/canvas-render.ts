@@ -19,6 +19,7 @@ import {
   poolWaterColor, POOL_COPING_COLOR,
   powerGlowScale,
   hexToRgba, lighten, furnitureKind, furnitureCorners, resolveFurnitureDef, isBinKind, isSinkKind, binStateIsFull,
+  isClimateApplianceKind, climateApplianceRun,
   isDroopPlant, plantThirsty, PLANT_MOISTURE_DEFAULT_THRESHOLD,
   isVehicleKind, evStatusOf, evStatusColor, evChargePercent, carChargeState,
   isStairsKind, stairChipArrow,
@@ -64,6 +65,7 @@ const LIGHT_GLYPH: Record<LightIconKind, string> = {
   bowl: '🥣', tiered: '☰', round: '⭕', recessed: '⊙',
   jar: '🫙', oval: '🥚', fan: '❋', fan_light: '✺', string: '✨', under_cabinet: '▂',
   wall_sconce: '◨', step: '▤', flood: '🔆',
+  heatlamp: '♨', exhaust: '❊', exhaust_wall: '⊛', exhaust_light: '❈',
 };
 
 export interface View {
@@ -3056,7 +3058,14 @@ function drawFurniture(ctx: CanvasRenderingContext2D, p: Planner, view: View,
     const powerW = isAppliance && piece.powerEntity && p.hass?.states
       ? parseFloat(p.hass.states[piece.powerEntity]?.state ?? '') : NaN;
     const powerInUse = !piece.entity_id && isFinite(powerW) && powerW > 10;
-    const applianceOn = stateOn || powerInUse;
+    // Climate/airflow appliances: RUNNING (green glow/LED) resolved from the HVAC
+    // mode/action or an 'on' state — a climate.* unit in 'cool'/'heat' never reads
+    // 'on', so the generic appliance on-check misses it. towel_warmer is bathroom-
+    // cat (isAppliance false) but still shows the run glow (the gate is widened).
+    const climateHeater = piece.kind === 'space_heater' || piece.kind === 'wall_heater' || piece.kind === 'towel_warmer';
+    const climateOn = isClimateApplianceKind(piece.kind) &&
+      climateApplianceRun(p.effectiveState(piece), climateHeater ? 'heat' : 'cool').running;
+    const applianceOn = stateOn || powerInUse || climateOn;
     // Intensity multiplier: scale by power when a reading > 5 W exists, else full.
     const glowScale = isFinite(powerW) && powerW > 5 ? powerGlowScale(powerW) : 1;
     const doorOpen = !!piece.doorEntity &&
@@ -3804,6 +3813,89 @@ export function drawFurniturePrimitiveLocal(
       for (const sx of [-0.22, 0.22]) {
         ctx.beginPath(); ctx.moveTo(x + w * (0.5 + sx) - w * 0.12, y + h * 0.32);
         ctx.lineTo(x + w * (0.5 + sx) + w * 0.12, y + h * 0.32); ctx.stroke();
+      }
+      break;
+    }
+    // ── Climate / airflow appliances (top-down; front = -Y / bottom edge) ──
+    case 'window_ac':
+    case 'mini_split': {
+      // White box + front grille slats + a front louver line.
+      fill(bodyFill('rgba(236,239,241,0.7)', 0.7));
+      stroke('#90a4ae');
+      ctx.strokeStyle = '#607d8b'; ctx.lineWidth = 1;
+      for (let i = 1; i <= 3; i++) {
+        const gy = y + h * (0.35 + i * 0.14);
+        ctx.beginPath(); ctx.moveTo(x + w * 0.12, gy); ctx.lineTo(x + w * 0.88, gy); ctx.stroke();
+      }
+      break;
+    }
+    case 'portable_ac': {
+      // Rounded tower + a top vent band (back/+Y) + a hose stub off the -X side.
+      fill(bodyFill('rgba(207,216,220,0.6)', 0.6));
+      stroke('#90a4ae');
+      ctx.fillStyle = 'rgba(55,71,79,0.7)';
+      ctx.fillRect(x + w * 0.14, y + 2, w * 0.72, h * 0.2);
+      ctx.strokeStyle = '#546e7a'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(x - 2, y + h * 0.3, Math.min(halfW, halfH) * 0.5, -Math.PI * 0.4, Math.PI * 0.4); ctx.stroke();
+      break;
+    }
+    case 'floor_fan':
+    case 'retro_fan':
+    case 'modern_fan': {
+      // Cage circle + 4-spoke blade cross + hub dot.
+      const rr = Math.min(halfW, halfH) * 0.85;
+      ctx.fillStyle = bodyFill('rgba(154,162,168,0.35)', 0.35);
+      ctx.strokeStyle = kind === 'retro_fan' ? '#b08d57' : '#8a9096'; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(0, 0, rr, 0, 2 * Math.PI); ctx.fill(); ctx.stroke();
+      ctx.strokeStyle = '#cfd8dc'; ctx.lineWidth = 2;
+      const nb = kind === 'modern_fan' ? 3 : 4;
+      for (let i = 0; i < nb; i++) {
+        const a = (i * 2 * Math.PI) / nb;
+        ctx.beginPath(); ctx.moveTo(0, 0);
+        ctx.lineTo(Math.cos(a) * rr * 0.85, Math.sin(a) * rr * 0.85); ctx.stroke();
+      }
+      ctx.fillStyle = '#455a64';
+      ctx.beginPath(); ctx.arc(0, 0, Math.max(2, rr * 0.18), 0, 2 * Math.PI); ctx.fill();
+      break;
+    }
+    case 'tower_fan': {
+      // Slim oval body + a vertical vent slot at the front (-Y edge).
+      ctx.fillStyle = bodyFill('rgba(84,88,94,0.6)', 0.6);
+      ctx.strokeStyle = '#78848c'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.ellipse(0, 0, halfW, halfH, 0, 0, 2 * Math.PI); ctx.fill(); ctx.stroke();
+      ctx.strokeStyle = '#4dd0ff'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(0, y + h * 0.2); ctx.lineTo(0, y + h * 0.8); ctx.stroke();
+      break;
+    }
+    case 'bladeless_fan': {
+      // Ring (annulus) on an oval base.
+      ctx.fillStyle = bodyFill('rgba(207,216,220,0.5)', 0.5);
+      ctx.strokeStyle = '#90a4ae'; ctx.lineWidth = 2;
+      const rr = Math.min(halfW, halfH) * 0.9;
+      ctx.beginPath(); ctx.arc(0, -h * 0.05, rr, 0, 2 * Math.PI); ctx.stroke();
+      ctx.beginPath(); ctx.ellipse(0, h * 0.3, halfW * 0.5, halfH * 0.25, 0, 0, 2 * Math.PI); ctx.fill(); ctx.stroke();
+      break;
+    }
+    case 'space_heater': {
+      // Squat body + a warm-toned front grille (front = -Y / bottom).
+      fill(bodyFill('rgba(58,63,69,0.6)', 0.6));
+      stroke('#8a9096');
+      ctx.strokeStyle = '#ff6a1a'; ctx.lineWidth = 1.5;
+      for (let i = 0; i < 3; i++) {
+        const gy = y + h * (0.4 + i * 0.16);
+        ctx.beginPath(); ctx.moveTo(x + w * 0.16, gy); ctx.lineTo(x + w * 0.84, gy); ctx.stroke();
+      }
+      break;
+    }
+    case 'wall_heater':
+    case 'towel_warmer': {
+      // Slim wall panel + horizontal warm bars (front = -Y / bottom).
+      fill(bodyFill(kind === 'towel_warmer' ? 'rgba(176,190,197,0.6)' : 'rgba(215,220,224,0.6)', 0.6));
+      stroke('#90a4ae');
+      ctx.strokeStyle = kind === 'towel_warmer' ? '#c08040' : '#ff6a1a'; ctx.lineWidth = 1.5;
+      for (let i = 0; i < 5; i++) {
+        const bx = x + w * (0.14 + i * 0.18);
+        ctx.beginPath(); ctx.moveTo(bx, y + h * 0.14); ctx.lineTo(bx, y + h * 0.86); ctx.stroke();
       }
       break;
     }

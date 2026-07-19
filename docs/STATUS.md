@@ -118,6 +118,27 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Climate appliances + multi background-text (train & chopper)**
+  (2026-07-18; 2 parallel Opus agents, surgical shared-file discipline).
+  **Climate**: 11 FurnitureKinds (window/mini-split/portable AC with
+  hvacAirflow-colored particles, 5 floor fans — bladed trio spins +
+  `Furniture.oscillate` head sweep, tower shimmer, bladeless air disc —
+  space/wall heaters + towel warmer with warm-up glow blends) + 4
+  LightIconKinds (heatlamp forced-red, exhaust / exhaust_wall
+  wall-snapped / exhaust_light with globe, blades on the fan-rotor
+  machinery). `CLIMATEAPP PASS 64/64`. **BgText multi**:
+  `Store.bgTexts[]` (cap 6, legacy single-field migration), per-entry
+  entity/static resolution, stagger placement, plus two NEW modes —
+  message TRAIN circling outside the floor rect (car count =
+  ceil(len/6) clamped to maxCars 2..12; per-car ±X flank text planes
+  with reversed chunk order on the +X side so BOTH sides read
+  left-to-right; cars bend around corners; wheels spin) and NEWS
+  CHOPPER (spinning main/tail rotors, banner slung below on a tow line,
+  opposite-direction higher orbit + hover bob; storm-hidden like
+  sky/banner while grass+train stay). `BGTEXTMULTI PASS 29/29`, legacy
+  bgtext 29/29 via wrapper. Merged-HEAD green set: sink 48/48, props
+  63/63, WFX sky 23/23.
+
 - **Sinks v2 + shared avatar props + iconic-prop audit pass**
   (2026-07-18; 3 Opus agents — sink overhaul solo, then audit-fix ∥
   props-system with surgical shared-file discipline; research
