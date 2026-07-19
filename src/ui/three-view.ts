@@ -6,7 +6,7 @@ import { customElement } from './define.js';
 // startup path never downloads it.
 import type { ThreeDRenderer, ZoneWorld, HaloWorld, TargetWorld, ActivityContext,
   InteractiveItem, GpsPinWorld, GpsLandmarkWorld, GeoEventWorld, WeatherFxState, VacMapEntry } from '../three-renderer.js';
-import { localToWorld, transformVerts, pointInPolygon, sensorColor, hexToInt, motionColor, lightIconKind, furnitureKind, resolveFurnitureDef, furnitureCat, isBinKind, isSpeakerKind, isSinkKind, isVehicleKind, isClimateApplianceKind, isBladedFanKind, isStairsKind, alarmStateColor, valveOpenness, sprinklerRunning, sprinklerHeadKind, sprinklerArcDeg, sprinklerRadius, sprinklerRotation, doorSpanCenter, isDroopPlant, plantThirsty, PLANT_MOISTURE_DEFAULT_THRESHOLD } from '../geometry.js';
+import { localToWorld, transformVerts, pointInPolygon, sensorColor, hexToInt, motionColor, lightIconKind, furnitureKind, resolveFurnitureDef, furnitureCat, isBinKind, isSpeakerKind, isSinkKind, isVehicleKind, isClimateApplianceKind, isBladedFanKind, isStairsKind, alarmStateColor, valveOpenness, sprinklerRunning, sprinklerHeadKind, sprinklerArcDeg, sprinklerRadius, sprinklerRotation, flagpoleHoistFraction, doorSpanCenter, isDroopPlant, plantThirsty, PLANT_MOISTURE_DEFAULT_THRESHOLD } from '../geometry.js';
 import { compass8 } from '../geo.js';
 import { parseNowPlaying, isMediaPlayerId } from '../geometry.js';
 import { robotProgress } from '../geometry.js';
@@ -678,6 +678,7 @@ export class ThreeView extends LitElement {
   private _keyGround = '';
   private _keyPool = '';
   private _keySprinklers = '';
+  private _keyFlagpoles = '';
   private _keyHeatmap = '';
   private _keyVacMap = '';
   private _keyLights = '';
@@ -709,7 +710,7 @@ export class ThreeView extends LitElement {
         this._keyFloor = this._keyDoors = this._keySensors = '';
         this._keyMotion = this._keyEnv = this._keyInfo = this._keyActions = this._keyBle = this._keyAlarm = this._keyCalendar = this._keyThermo = this._keySafety = this._keyAlert = '';
         this._keyCameras = this._keyProjectors = this._keyValves = this._keyPlugs = this._keyCamAlerts = this._keyPzones = this._keyNowPlaying = '';
-        this._keyGround = this._keyPool = this._keySprinklers = '';
+        this._keyGround = this._keyPool = this._keySprinklers = this._keyFlagpoles = '';
         this._keyHeatmap = '';
         this._keyVacMap = '';
         this._keyLights = this._keyZones = this._keyHalos = '';
@@ -891,7 +892,7 @@ export class ThreeView extends LitElement {
       };
       const keyDoors = `${p.configRev}|` +
         f.doors.map(d => `${openKey(d.entity_id)}:${stOf(d.lockEntity)}:${d.lockControl === 'display' ? 'd' : 'f'}`).join(',') + '|' +
-        f.windows.map(w => `${openKey(w.entity_id)}:${openKey(w.coverEntity)}`).join(',');
+        f.windows.map(w => `${openKey(w.entity_id)}:${openKey(w.coverEntity)}:${openKey(w.curtain?.entityId)}`).join(',');
       if (keyDoors !== this._keyDoors) {
         this._keyDoors = keyDoors;
         r.updateDoorsWindows(f.doors, f.windows, id => states[id] || null);
@@ -1366,6 +1367,23 @@ export class ThreeView extends LitElement {
       if (keyBgText !== this._keyBgText) {
         this._keyBgText = keyBgText;
         r.updateBgTexts(bgEntries, bgStorm, fx.windBearingPlanRad ?? 0, fx.windKmh);
+      }
+
+      // Yard flagpoles (furniture layer). Structural (flag / height / halfMast /
+      // position) + the bucketed hoist fraction (bound entity is config-path);
+      // the wind bucket rides in so a meaningful wind change re-stores the yaw.
+      // Ripple + eased hoist + wind yaw all animate in the renderer's per-frame
+      // _advanceFlagpoles — the key only gates the (re)build.
+      const flagList = f.flagpoles ?? [];
+      const keyFlagpoles = `${p.configRev}|${f.id}|${windBucket}|` + flagList.map(fp => {
+        const frac = flagpoleHoistFraction(fp, fp.entityId ? states[fp.entityId] ?? null : null);
+        return `${fp.id}:${Math.round(fp.x)}:${Math.round(fp.y)}:${fp.flag ?? 'usa'}:` +
+          `${fp.height ?? 6000}:${fp.halfMast ? 1 : 0}:${fp.hidden ? 1 : 0}:${Math.round(frac * 20)}`;
+      }).join(',');
+      if (keyFlagpoles !== this._keyFlagpoles) {
+        this._keyFlagpoles = keyFlagpoles;
+        r.updateFlagpoles(flagList, id => states[id] || null,
+          fx.windBearingPlanRad ?? 0, fx.windKmh);
       }
 
       // Lights + switches: structural + state/brightness/color per entity.

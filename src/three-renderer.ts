@@ -7,7 +7,7 @@ import type {
   Scene3D, ScenePreset, FloorTexKind, GroundKind, GroundArea, Model3D, Furniture, AvatarKind, WeatherEffectKey, BgTextMode, BgTextEntryMode,
 } from './types.js';
 import {
-  lightHeight, lightRadius, lightIntensity, lightIconKind, lightRotation, lightLength,
+  lightHeight, lightRadius, lightIntensity, lightIconKind, lightRotation, lightLength, lightTilt,
   switchHeight, switchRotation, switchSize,
   motionColor, motionIntensity, hexToInt, bleProxyHeight, BLE_PROXY_DEFAULTS,
   furnitureDef, resolveFurnitureDef, furnitureColor, furnitureCat, isBinKind, binStateIsFull, isSpeakerKind, isSinkKind, isRiserKind, doorOpenDeltaDeg,
@@ -28,6 +28,7 @@ import {
   projectorHeight, projectorThrow, projectorBeamColor, projectorProjecting, projectorAim, screenCenterHeight, biasLightColor, PROJECTOR_DEFAULTS,
   VALVE_DEFAULTS, valveOpenness, valveFlowing, valveTransitional,
   SPRINKLER_DEFAULTS, sprinklerRunning, sprinklerHeadKind, sprinklerArcDeg, sprinklerRadius, sprinklerRotation,
+  FLAGPOLE_DEFAULTS, flagpoleHeight, flagpoleHoistFraction,
   PLUG_DEFAULTS, PLUG_PLATE_DEPTH_MM, plugHeight,
   GROUND_KINDS,
   ENV_KINDS, envKindOf, envColor, envValueText, envHeight, envScale,
@@ -36,7 +37,8 @@ import {
   logicLightState, actionButtonHeight, actionButtonSize, actionButtonColor, ACTION_BUTTON_DEFAULTS,
 } from './geometry.js';
 import { ALERT_BEACON_DEFAULTS, alertBeaconState, alertBeaconColor, alertBeaconAlarming, isAlertDomain } from './alerts.js';
-import type { Door, Window as WindowType, EnvSensor, BleProxy, AlarmPanel, CalendarPanel, ThermostatFixture, SafetySensor, AlertBeacon, RobotFixture, CameraFixture, ProjectorFixture, ValveFixture, SprinklerZone, PlugFixture, PresenceZone, InfoCard, ActionButton, ObjectRecipe, ActivityKind, Pool } from './types.js';
+import type { Door, Window as WindowType, WindowCurtainStyle, EnvSensor, BleProxy, AlarmPanel, CalendarPanel, ThermostatFixture, SafetySensor, AlertBeacon, RobotFixture, CameraFixture, ProjectorFixture, ValveFixture, SprinklerZone, FlagpoleFixture, PlugFixture, PresenceZone, InfoCard, ActionButton, ObjectRecipe, ActivityKind, Pool } from './types.js';
+import { flagEntry } from './flags.js';
 
 // The subset of Planner.RobotState the renderer reads (structural — keeps the
 // renderer decoupled from the planner). Positions are plan-frame world mm.
@@ -1295,6 +1297,21 @@ export class ThreeDRenderer {
   private _groundGroup = new THREE.Group();       // ground / yard covering patches (build-time, _keyGround)
   private _poolGroup = new THREE.Group();          // pool/spa basins + water surfaces (build-time, _keyPool)
   private _sprinklerGroup = new THREE.Group();     // irrigation heads + spray clouds (build-time, _keySprinklers)
+  private _flagpoleGroup = new THREE.Group();      // yard flagpoles + waving flags (build-time, _keyFlagpoles); rides `furniture` layer
+  // Persistent per-flagpole rigs (shared flag geometry ripples in place). The
+  // hoist blend + wind yaw ease per-frame (appliance-door idiom) and SURVIVE
+  // _keyFlagpoles rebuilds so a rebuild never pops the flag. Reset on floor switch.
+  private _flagpoleRigs: {
+    id: string; assembly: THREE.Group; geo: THREE.BufferGeometry; base: Float32Array;
+    fw: number; fh: number; height: number; hoistTarget: number; topY: number; botY: number;
+  }[] = [];
+  private _flagHoist: Record<string, number> = {};   // eased hoist fraction 0..1 per pole id
+  private _flagYaw: Record<string, number> = {};      // eased wind yaw (rad) per pole id
+  private _flagWindRad = 0;                            // latest wind direction (plan rad)
+  private _flagWindKmh = 0;                            // latest wind speed (km/h)
+  // Per-flag-id CanvasTextures (shared across poles flying the same flag). Built
+  // once by the flag painter, disposed only in destroy() (the blob-tex idiom).
+  private _flagTexCache: Record<string, THREE.CanvasTexture> = {};
   private _heatmapGroup = new THREE.Group();       // per-room temperature heat-map patches (build-time, _keyHeatmap)
   private _vacMapGroup = new THREE.Group();        // Valetudo room-map overlay patches (build-time, _keyVacMap)
   // CanvasTextures built for the vac-map overlay — NOT freed by _clearGroup (same
@@ -1561,6 +1578,19 @@ export class ThreeDRenderer {
     wx: number; wy: number; unbound: boolean; hasDoorSensor: boolean; forceOpen?: boolean;
   }[] = [];
   private _applianceDoorBlend: Record<string, number> = {};
+  // Window curtain panels (Window.curtain). Each panel gathers (scales toward a
+  // small min) toward its anchored edge as the curtain OPENS (fraction 1). The
+  // openness target is resolved at BUILD time (bound cover/binary/switch state,
+  // or the unbound curtainPos slider — folded into _keyDoors so a change
+  // rebuilds); the ease itself is per-frame in _advanceCurtains. `_curtainBlend`
+  // is keyed by window id so it SURVIVES _doorGroup rebuilds (the appliance-door
+  // idiom). The `_curtains` list holds live mesh refs and is reset each rebuild;
+  // `anchorPos`/`anchorSign` fix the panel edge the fabric gathers to.
+  private _curtains: {
+    winId: string; targetFrac: number;
+    panels: { mesh: THREE.Object3D; axis: 'x' | 'y'; anchorPos: number; anchorSign: number; full: number; min: number }[];
+  }[] = [];
+  private _curtainBlend: Record<string, number> = {};
   // Plant foliage pivots for the soil-moisture droop animation. Each thirsty plant
   // (moisture below threshold, or the unbound demo toggle) eases a per-fixture-id
   // blend toward 1, tipping each leaf clump / flower stem outward+down along its
@@ -1858,7 +1888,7 @@ export class ThreeDRenderer {
                     this._actionGroup,
                     this._bleGroup, this._alarmGroup, this._calendarGroup, this._thermoGroup, this._safetyGroup, this._alertGroup,
                     this._robotGroup, this._robotRigGroup, this._cameraGroup, this._projGroup, this._valveGroup, this._plugGroup, this._camAlertGroup, this._pzoneGroup,
-                    this._groundGroup, this._poolGroup, this._sprinklerGroup, this._vacMapGroup, this._heatmapGroup,
+                    this._groundGroup, this._poolGroup, this._sprinklerGroup, this._flagpoleGroup, this._vacMapGroup, this._heatmapGroup,
                     this._lightGroup, this._switchGroup, this._targetGroup, this._ghostGroup,
                     this._transitGroup,
                     this._gpsGroup, this._weatherGroup, this._skyGroup, this._bgTextGroup, this._pulseGroup, this._nowPlayingGroup);
@@ -2479,13 +2509,16 @@ export class ThreeDRenderer {
       this._floorGroup, this._doorGroup, this._modelGroup, this._zoneGroup, this._haloGroup,
       this._sensorGroup, this._motionGroup, this._infoGroup, this._actionGroup, this._bleGroup, this._alarmGroup, this._calendarGroup, this._thermoGroup,
       this._safetyGroup, this._alertGroup, this._robotGroup, this._robotRigGroup, this._cameraGroup, this._projGroup, this._valveGroup, this._plugGroup, this._camAlertGroup, this._pzoneGroup,
-      this._groundGroup, this._poolGroup, this._sprinklerGroup, this._heatmapGroup,
+      this._groundGroup, this._poolGroup, this._sprinklerGroup, this._flagpoleGroup, this._heatmapGroup,
       this._lightGroup, this._switchGroup, this._targetGroup, this._ghostGroup,
       this._pulseGroup, this._nowPlayingGroup, this._bgTextGroup,
     ]) {
       this._disposeSpriteMaps(g);
       this._clearGroup(g);
     }
+    // Flag rigs live under _flagpoleGroup (just cleared) — drop the tracking list
+    // so _advanceFlagpoles can't ripple freed geometry before the next update.
+    this._flagpoleRigs = [];
     // Pool water clones live under _poolGroup (just cleared) — dispose them +
     // drop the list so _advancePoolWater can't drift freed textures before the
     // next updatePools (same idiom as _disposeWaterPatchTextures for ground).
@@ -2518,6 +2551,10 @@ export class ThreeDRenderer {
     // rebuilt lazily as updateFloor re-registers doors).
     this._applianceDoors = [];
     this._applianceDoorBlend = {};
+    // Window curtains live in _doorGroup (cleared above); drop the tracking list +
+    // the eased blend so a new floor's curtains start from their own target.
+    this._curtains = [];
+    this._curtainBlend = {};
     // Sink water rigs + their fill blend reset on floor switch (the meshes were
     // just disposed with _floorGroup; a different floor = different fixtures).
     this._sinks = [];
@@ -3035,6 +3072,134 @@ export class ThreeDRenderer {
       this._sprinklerGroup.add(pts);
       cloud.points = pts;
       this._sprinklerClouds.push(cloud);
+    }
+  }
+
+  // Build (or fetch) the CanvasTexture for a flag id via the pure flag painter.
+  // Shared across every pole flying the same flag; disposed only in destroy().
+  private _flagTexture(flagId: string): THREE.CanvasTexture {
+    const key = flagId || 'usa';
+    const cached = this._flagTexCache[key];
+    if (cached) return cached;
+    const cv = document.createElement('canvas');
+    cv.width = 240; cv.height = 144;   // 5:3, matches the default flag aspect
+    const g = cv.getContext('2d')!;
+    flagEntry(key).paint(g, cv.width, cv.height);
+    const tex = new THREE.CanvasTexture(cv);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    this._flagTexCache[key] = tex;
+    return tex;
+  }
+
+  // Yard flagpoles: a tapered pole + gold finial + a double-faced cloth flag.
+  // Rebuilt under _keyFlagpoles (three-view); the ripple + hoist + wind yaw all
+  // animate per-frame in _advanceFlagpoles (zero alloc after build). `windRad`
+  // is the plan-frame wind direction, `windKmh` its speed — reachable cheaply
+  // from the same WeatherFxState the bg-text uses (0 / no yaw when unconfigured).
+  updateFlagpoles(flagpoles: FlagpoleFixture[], stateProvider: StateProvider,
+                  windRad: number, windKmh: number): void {
+    if (!this._scene) return;
+    this._clearGroup(this._flagpoleGroup);
+    this._flagpoleRigs = [];
+    this._flagWindRad = windRad;
+    this._flagWindKmh = windKmh;
+    for (const fp of flagpoles) {
+      if (fp.hidden) continue;
+      const H = flagpoleHeight(fp);
+      const sc = H / FLAGPOLE_DEFAULTS.height;
+      const grp = new THREE.Group();
+      const base = this._w(fp.x, fp.y, 0);
+      grp.position.set(base.x, 0, base.z);
+      // Tapered pole = two stacked cylinders (wider lower, slimmer upper).
+      const poleMat = this._mat({ color: 0xd8dce0, metalness: 0.6, roughness: 0.35 });
+      const lowerH = H * 0.55, upperH = H - lowerH;
+      const lower = new THREE.Mesh(new THREE.CylinderGeometry(38 * sc, 55 * sc, lowerH, 12), poleMat);
+      lower.position.y = lowerH / 2;
+      grp.add(lower);
+      const upper = new THREE.Mesh(new THREE.CylinderGeometry(26 * sc, 38 * sc, upperH, 12), poleMat);
+      upper.position.y = lowerH + upperH / 2;
+      grp.add(upper);
+      const finial = new THREE.Mesh(new THREE.SphereGeometry(60 * sc, 14, 12),
+        this._mat({ color: 0xffcf40, metalness: 0.7, roughness: 0.3, emissive: 0x201800, emissiveIntensity: 0.2 }));
+      finial.position.y = H + 30 * sc;
+      grp.add(finial);
+      // Flag cloth: a centered plane, offset so its HOIST edge sits on the pole
+      // and the FLY extends +X. TWO FrontSide planes sharing ONE geometry + one
+      // canvas texture (back rotated π, un-mirrored — the banner technique) so
+      // the design reads correctly from both flanks. Segments 12×6 for a smooth
+      // wave. One shared geometry → one buffer mutation ripples both faces.
+      const fw = FLAGPOLE_DEFAULTS.flagW * sc, fh = FLAGPOLE_DEFAULTS.flagH * sc;
+      const geo = new THREE.PlaneGeometry(fw, fh, 12, 6);
+      geo.translate(fw / 2, 0, 0);   // hoist edge at local x=0, fly at +fw
+      const base32 = new Float32Array((geo.attributes.position as THREE.BufferAttribute).array);
+      const tex = this._flagTexture(fp.flag ?? 'usa');
+      const mat = new THREE.MeshBasicMaterial({ map: tex, side: THREE.FrontSide, fog: false });
+      const front = new THREE.Mesh(geo, mat);
+      front.position.z = 2 * sc; front.userData.outlineSkip = true;
+      const back = new THREE.Mesh(geo, mat);   // SHARES geo + material (one map)
+      back.rotation.y = Math.PI; back.position.z = -2 * sc; back.userData.outlineSkip = true;
+      // Assembly holds both faces; its Y position is the eased hoist. The pivot
+      // sits at the flag's TOP so the cloth hangs below it.
+      const assembly = new THREE.Group();
+      assembly.add(front); assembly.add(back);
+      grp.add(assembly);
+      this._flagpoleGroup.add(grp);
+      // Hoist travel: flag TOP rides between just-below-finial (full) and near
+      // the ground (lowered). assembly.position.y = flag CENTER = top - fh/2.
+      const topFullY = H - 120 * sc - fh / 2;   // full-mast center
+      const topLowY = fh / 2 + 120 * sc;        // lowered center (cloth near ground)
+      const frac = flagpoleHoistFraction(fp, stateProvider(fp.entityId ?? ''));
+      // Snap on FRESH appearance (no glide-up from the ground); eased on change.
+      if (this._flagHoist[fp.id] === undefined) this._flagHoist[fp.id] = frac;
+      if (this._flagYaw[fp.id] === undefined) this._flagYaw[fp.id] = 0;
+      assembly.position.y = topLowY + this._flagHoist[fp.id] * (topFullY - topLowY);
+      this._flagpoleRigs.push({
+        id: fp.id, assembly, geo, base: base32, fw, fh, height: H,
+        hoistTarget: frac, topY: topFullY, botY: topLowY,
+      });
+    }
+  }
+
+  // Per-frame flag animation (from _animate): CPU vertex ripple on the shared
+  // flag geometry (sine travelling away from the pole, amplitude growing toward
+  // the fly), an eased hoist blend (appliance-door idiom), and a slight wind-yaw
+  // of the whole cloth. Zero allocation after build — mutates buffers in place.
+  private _advanceFlagpoles(dt: number, nowS: number): void {
+    if (!this._flagpoleGroup.visible || !this._flagpoleRigs.length) return;
+    const hk = 1 - Math.exp(-dt / 0.35);   // hoist ease τ ≈ 0.35 s
+    const yk = 1 - Math.exp(-dt / 0.6);    // wind-yaw ease τ ≈ 0.6 s
+    // Stronger wind → straighter flag (bigger ripple amplitude + more yaw).
+    const windAmt = Math.max(0, Math.min(1, this._flagWindKmh / 30));
+    for (const rig of this._flagpoleRigs) {
+      // Eased hoist → assembly Y.
+      const h = this._flagHoist[rig.id] ?? rig.hoistTarget;
+      const nh = h + (rig.hoistTarget - h) * hk;
+      this._flagHoist[rig.id] = nh;
+      rig.assembly.position.y = rig.botY + nh * (rig.topY - rig.botY);
+      // Eased wind yaw (only meaningfully non-zero when a wind value is plumbed).
+      const yTarget = this._flagWindKmh > 3 ? this._flagWindRad * 0.35 : 0;
+      const y = this._flagYaw[rig.id] ?? 0;
+      const ny = y + (yTarget - y) * yk;
+      this._flagYaw[rig.id] = ny;
+      rig.assembly.rotation.y = ny;
+      // Ripple: displace Z by a sine travelling from hoist (x=0) to fly (x=fw),
+      // amplitude growing with the hoist fraction of x. Base amplitude + wind.
+      const pos = rig.geo.attributes.position as THREE.BufferAttribute;
+      const arr = pos.array as Float32Array;
+      const amp = rig.fh * (0.14 + 0.18 * windAmt);
+      const k = (2 * Math.PI) / rig.fw * 1.6;   // ~1.6 waves across the fly
+      const omega = 3.2 + 2.5 * windAmt;
+      for (let i = 0; i < pos.count; i++) {
+        const bx = rig.base[i * 3];              // rest x (0..fw)
+        const by = rig.base[i * 3 + 1];          // rest y
+        const fracX = bx / rig.fw;               // 0 at hoist → 1 at fly
+        const z = amp * fracX * Math.sin(k * bx - omega * nowS + by * 0.004);
+        arr[i * 3] = bx;
+        arr[i * 3 + 1] = by;
+        arr[i * 3 + 2] = z;
+      }
+      pos.needsUpdate = true;
+      rig.geo.computeVertexNormals();
     }
   }
 
@@ -3762,6 +3927,7 @@ export class ThreeDRenderer {
     this._groundGroup.visible = v.ground !== false;
     this._poolGroup.visible = v.ground !== false;         // pools ride the ground layer
     this._sprinklerGroup.visible = v.ground !== false;   // sprinklers ride the ground layer
+    this._flagpoleGroup.visible = v.furniture !== false; // flagpoles are yard decor → furniture layer
     // Valetudo room-map overlay rides its OWN layer, DEFAULT OFF (diagnostic).
     this._vacMapGroup.visible = v.vacuumMap === true;
     // Per-room temperature heat-map rides its OWN layer, DEFAULT OFF (opt-in).
@@ -5784,14 +5950,17 @@ export class ThreeDRenderer {
 
   private _buildWindows(windows: WindowType[], stateOf: (id: string) => HassState | null): void {
     const PANE_T = 50;
-    const closedMat = this._mat({
-      color: 0x64b5f6, emissive: 0x1565c0, emissiveIntensity: 0.2,
-      transparent: true, opacity: 0.55, roughness: 0.2, metalness: 0.1,
-      side: THREE.DoubleSide, depthWrite: false,
-    });
-    const openMat = this._mat({
-      color: 0x66bb6a, emissive: 0x1b5e20, emissiveIntensity: 0.3,
-      transparent: true, opacity: 0.45, roughness: 0.3, metalness: 0.1,
+    // Curtain panels live in _doorGroup (rebuilt here) — drop the tracking list so
+    // _advanceCurtains never touches freed geometry. _curtainBlend persists (keyed
+    // by window id, reset only on floor switch) so the eased blend survives rebuilds.
+    this._curtains = [];
+    // Glass is a LIGHT-GREY translucent sheet (not the old blue tint). Opacity
+    // interpolates by the window's OWN open fraction: CLOSED 0.16 → OPEN 0.08
+    // (clearer/brighter when ajar). Built per-window (opacity varies) — _clearGroup
+    // disposes them on the next rebuild. A near-neutral color skips _simsColor's push.
+    const GLASS_COLOR = 0xc9ced4;
+    const glassMat = (opacity: number) => this._mat({
+      color: GLASS_COLOR, transparent: true, opacity,
       side: THREE.DoubleSide, depthWrite: false,
     });
     // Mullions / meeting rails are OPAQUE frame bars, deliberately thicker than
@@ -5804,11 +5973,20 @@ export class ThreeDRenderer {
     for (const w of windows) {
       const st = itemState(w, stateOf);
       const isOpen = st?.state === 'on';
-      const mat = isOpen ? openMat : closedMat;
+      // Window open fraction (0 closed .. 1 open): binary → 0/1; a cover-bound
+      // window interpolates. Drives glass clarity (fresh-air read when ajar).
+      const openFrac = doorOpenFraction(st);
       const kind = w.kind ?? 'single';
       const sill = w.sill ?? WINDOW_DEFAULTS.sill;      // bottom of glass
       const glassH = w.height ?? WINDOW_DEFAULTS.height; // glass height
       const W = w.w;
+      // Glass opacity: 0.16 closed → 0.08 open. A CLOSED interior curtain reads as
+      // blocked daylight — the glass behind it goes near-opaque (the opaque curtain
+      // panel covers it anyway; this is the honest occlusion cue, no light system).
+      const curtainFrac = w.curtain ? this._resolveCurtainFrac(w, stateOf) : 1;
+      let glassOpacity = 0.16 - 0.08 * openFrac;
+      if (w.curtain && curtainFrac < 0.15) glassOpacity = Math.max(glassOpacity, 0.42);
+      const mat = glassMat(glassOpacity);
       const cy = sill + glassH / 2;                     // vertical center of glazing
       // Pane center group at (w.x, w.y); rotation matches wall axis.
       const grp = new THREE.Group();
@@ -5891,8 +6069,108 @@ export class ThreeDRenderer {
           grp.add(barM);
         }
       }
+      // ── Interior curtains (Window.curtain) ────────────────────────────────
+      // Fabric drapes hanging on the INTERIOR face over the glass, proud of both
+      // the pane and any roller shade (coincident-face safe). Openness (1 = OPEN/
+      // gathered, 0 = CLOSED/covering) resolves from the bound cover/binary/switch
+      // entity or the unbound curtainPos slider; panels gather toward their anchored
+      // edge via the eased blend in _advanceCurtains (survives rebuilds).
+      if (w.curtain) {
+        const cur = w.curtain;
+        const style = cur.style;
+        const frac = curtainFrac;
+        const initFrac = this._curtainBlend[w.id] ?? frac;   // start at existing blend → no pop on rebuild
+        const fabric = this._mat({ color: hexToInt(cur.color ?? '#b9a58c'), side: THREE.DoubleSide });
+        const headerY = sill + glassH;
+        const interiorZ = PANE_T * 1.2;      // proud of the glass + shade, room side
+        const CURTAIN_T = 26;
+        const GATHER = 0.14;                 // gathered-stack extent fraction when fully open
+        const panels: { mesh: THREE.Object3D; axis: 'x' | 'y'; anchorPos: number; anchorSign: number; full: number; min: number }[] = [];
+        // Curtain rod / rail just above the header, spanning wider than the glass.
+        const rod = new THREE.Mesh(new THREE.CylinderGeometry(18, 18, W + 160, 10), frameMat);
+        rod.rotation.z = Math.PI / 2;        // lie horizontal along the wall axis (local X)
+        rod.position.set(0, headerY + 70, interiorZ + CURTAIN_T);
+        rod.userData.kind = 'curtainRod';
+        grp.add(rod);
+        // A vertical drape panel: gathers along X toward an anchored outer edge.
+        const makeDrape = (fullW: number, anchorPos: number, anchorSign: number) => {
+          const p = new THREE.Group();
+          p.add(new THREE.Mesh(new THREE.BoxGeometry(fullW, glassH + 100, CURTAIN_T), fabric));
+          // 2–3 vertical fold ridges (children → gather with the panel).
+          for (let i = 0; i < 3; i++) {
+            const rx = (-0.5 + (i + 0.5) / 3) * fullW;
+            const ridge = new THREE.Mesh(new THREE.BoxGeometry(fullW * 0.06, glassH + 100, CURTAIN_T * 0.7), fabric);
+            ridge.position.set(rx, 0, CURTAIN_T * 0.7);
+            p.add(ridge);
+          }
+          p.position.set(0, sill + glassH / 2 + 50, interiorZ + CURTAIN_T);   // y fixed; X set by place()
+          p.userData.kind = 'curtain'; p.userData.curtainStyle = style; p.userData.windowId = w.id;
+          grp.add(p);
+          panels.push({ mesh: p, axis: 'x', anchorPos, anchorSign, full: fullW, min: GATHER });
+        };
+        if (style === 'horizontal') {
+          // Roman shade: one panel that OPENS by rising from the bottom edge up.
+          const p = new THREE.Group();
+          p.add(new THREE.Mesh(new THREE.BoxGeometry(W + 40, glassH, CURTAIN_T), fabric));
+          // 2–3 horizontal fold ridges (children → gather up with the panel as it rises).
+          for (let i = 0; i < 3; i++) {
+            const ry = (-0.5 + (i + 0.5) / 3) * glassH;
+            const ridge = new THREE.Mesh(new THREE.BoxGeometry(W + 60, glassH * 0.055, CURTAIN_T * 1.4), fabric);
+            ridge.position.set(0, ry, CURTAIN_T * 0.5);
+            p.add(ridge);
+          }
+          p.position.set(0, 0, interiorZ + CURTAIN_T);      // x fixed; Y set by place()
+          p.userData.kind = 'curtain'; p.userData.curtainStyle = style; p.userData.windowId = w.id;
+          grp.add(p);
+          panels.push({ mesh: p, axis: 'y', anchorPos: headerY, anchorSign: 1, full: glassH, min: GATHER });
+        } else if (style === 'split') {
+          makeDrape(W / 2, -W / 2, -1);   // left panel gathers to the left edge
+          makeDrape(W / 2,  W / 2,  1);   // right panel gathers to the right edge
+        } else {  // 'vertical' — one drape to a side (default right)
+          if ((cur.side ?? 'right') === 'left') makeDrape(W, -W / 2, -1);
+          else                                  makeDrape(W,  W / 2,  1);
+        }
+        for (const pn of panels) this._placeCurtainPanel(pn, initFrac);
+        this._curtains.push({ winId: w.id, targetFrac: frac, panels });
+      }
       this._shadowFlags(grp);
       this._doorGroup.add(grp);
+    }
+  }
+
+  // Resolve a window's curtain openness: 0 = CLOSED (fabric covering the glass),
+  // 1 = OPEN (gathered/aside). Bound entity → doorOpenFraction (cover.* position
+  // interpolates; binary_sensor/switch 'on' → 1). Unbound → the curtainPos slider.
+  private _resolveCurtainFrac(w: WindowType, stateOf: (id: string) => HassState | null): number {
+    const c = w.curtain;
+    if (!c) return 1;
+    if (c.entityId) return doorOpenFraction(stateOf(c.entityId));
+    return Math.max(0, Math.min(1, (w.curtainPos ?? 0) / 100));
+  }
+
+  // Position + scale one curtain panel for openness `frac`. The panel gathers
+  // (scales toward `min`) toward its anchored edge as it opens; the anchored edge
+  // stays fixed at `anchorPos` (anchorSign +1 = high edge top/right, -1 = low edge left).
+  private _placeCurtainPanel(
+      pn: { mesh: THREE.Object3D; axis: 'x' | 'y'; anchorPos: number; anchorSign: number; full: number; min: number },
+      frac: number): void {
+    const scale = pn.min + (1 - pn.min) * (1 - frac);   // frac 0 → 1 (full cover); frac 1 → min (gathered)
+    const pos = pn.anchorPos - pn.anchorSign * (pn.full * scale) / 2;
+    if (pn.axis === 'y') { pn.mesh.scale.y = scale; pn.mesh.position.y = pos; }
+    else { pn.mesh.scale.x = scale; pn.mesh.position.x = pos; }
+  }
+
+  // Per-frame curtain gather/spread. Each window's blend eases toward its
+  // build-time targetFrac (τ = 0.4 s); the blend is keyed by window id so it
+  // survives _doorGroup rebuilds (the appliance-door idiom). Zero allocation.
+  private _advanceCurtains(dt: number): void {
+    if (!this._curtains.length) return;
+    const alpha = 1 - Math.exp(-dt / 0.4);
+    for (const c of this._curtains) {
+      const cur = this._curtainBlend[c.winId] ?? c.targetFrac;
+      const next = cur + (c.targetFrac - cur) * alpha;
+      this._curtainBlend[c.winId] = next;
+      for (const pn of c.panels) this._placeCurtainPanel(pn, next);
     }
   }
 
@@ -12075,6 +12353,137 @@ export class ThreeDRenderer {
             }
             break;
           }
+          case 'inground': {
+            // Recessed in-ground uplight: a flush trim ring + emissive lens disc
+            // at grade (no body above ground), beaming UP. When ON: a translucent
+            // widening cone (apex at ground, opening upward ~1200 mm) + a small
+            // TIGHT glow ring around the lens (an uplight doesn't pool on the
+            // floor — the standard pool disc is skipped, see the pool-skip list).
+            bodyY = 10;
+            const R = LIGHT_BODY_R * 0.9;
+            const trimMat = this._mat({ color: 0x3a3d42, metalness: 0.5, roughness: 0.5 });
+            const trim = new THREE.Mesh(new THREE.CylinderGeometry(R * 1.3, R * 1.3, 18, 24), trimMat);
+            trim.position.y = -4;
+            trim.userData = ud;
+            g.add(trim);
+            const lens = new THREE.Mesh(new THREE.CylinderGeometry(R, R, 10, 24), bodyMat);
+            lens.position.y = 6;
+            lens.userData = ud;
+            g.add(lens);
+            if (isOn) {
+              // Upward light cone: apex at ground (bottom narrow), opening up.
+              const coneH = Math.max(600, Math.min(1600, lr * 1.3));
+              const cone = new THREE.Mesh(
+                new THREE.CylinderGeometry(R * 3.2, R * 0.6, coneH, 20, 1, true),
+                new THREE.MeshBasicMaterial({
+                  color: color.getHex(), transparent: true,
+                  opacity: Math.min(0.2, 0.1 * intensity * (0.5 + 0.5 * (bri / 255))),
+                  side: THREE.DoubleSide, depthWrite: false,
+                }));
+              cone.position.y = coneH / 2 + 8;
+              cone.userData.outlineSkip = true;
+              g.add(cone);
+              // Tight glow ring around the lens (replaces the floor pool).
+              const ring = new THREE.Mesh(
+                new THREE.RingGeometry(R * 1.1, R * 1.9, 28),
+                new THREE.MeshBasicMaterial({
+                  color: color.getHex(), transparent: true,
+                  opacity: Math.min(0.55, 0.3 * intensity * flickerMul),
+                  side: THREE.DoubleSide, depthWrite: false,
+                }));
+              ring.rotation.x = -Math.PI / 2;
+              ring.position.y = -2;
+              ring.userData.outlineSkip = true;
+              g.add(ring);
+            }
+            break;
+          }
+          case 'ground_spot': {
+            // Ground-mounted aimable spot: a small stake/base + a cylindrical
+            // spot head that AIMS via rotation (azimuth) + tilt (above horizon).
+            // ON = a focused translucent beam cone along the aim + an elongated
+            // ground pool ellipse offset along the azimuth (skips the standard
+            // pool — see the pool-skip list). Front = local -Z (aimed by the
+            // outer body.rotation.y like every directional kind).
+            bodyY = 0;
+            const tiltRad = lightTilt(l) * Math.PI / 180;
+            const bodyMet = this._mat({ color: 0x33363b, metalness: 0.5, roughness: 0.5 });
+            // Stake into the ground + a short riser.
+            const stake = new THREE.Mesh(new THREE.CylinderGeometry(24, 12, 260, 8), bodyMet);
+            stake.position.y = 60;
+            g.add(stake);
+            const knuckle = new THREE.Mesh(new THREE.SphereGeometry(48, 12, 10), bodyMet);
+            knuckle.position.y = 210;
+            g.add(knuckle);
+            // Head group tilted UP by `tilt` about local X → its -Z axis (front)
+            // rises toward +Y. (A -Z child under X-rotation θ → (0, sinθ, -cosθ).)
+            const headGrp = new THREE.Group();
+            headGrp.position.y = 210;
+            headGrp.rotation.x = tiltRad;
+            const headMat = this._mat({ color: 0x2b2e33, metalness: 0.5, roughness: 0.45 });
+            const barrel = new THREE.Mesh(new THREE.CylinderGeometry(75, 85, 230, 18), headMat);
+            barrel.rotation.x = Math.PI / 2;    // lie the barrel along local -Z (front)
+            barrel.position.z = -60;
+            barrel.userData = ud;
+            headGrp.add(barrel);
+            const lensMat = this._mat({
+              color: isOn ? color.getHex() : 0x2a2d31,
+              emissive: isOn ? color.getHex() : 0x0a0a0a,
+              emissiveIntensity: isOn ? 1.4 * intensity : 0.04,
+              metalness: 0.2, roughness: 0.35,
+            });
+            const lens = new THREE.Mesh(new THREE.CylinderGeometry(72, 72, 14, 18), lensMat);
+            lens.rotation.x = Math.PI / 2;
+            lens.position.z = -178;
+            lens.userData = ud;
+            headGrp.add(lens);
+            // World aim direction (for the beam + the test hook). front = (sinφ,
+            // 0, -cosφ); tilt lifts it: (fdx·cosT, sinT, fdz·cosT).
+            const yaw = lightRotation(l) * Math.PI / 180;
+            const fdx = Math.sin(yaw), fdz = -Math.cos(yaw), cT = Math.cos(tiltRad), sT = Math.sin(tiltRad);
+            if (isOn) {
+              // Focused beam cone from the lens along -Z (composes with the head
+              // tilt + body yaw to point along the world aim).
+              const beamLen = Math.max(1800, Math.min(4000, lr * 2.2));
+              const beam = new THREE.Mesh(
+                new THREE.CylinderGeometry(beamLen * 0.16, 70, beamLen, 18, 1, true),
+                new THREE.MeshBasicMaterial({
+                  color: color.getHex(), transparent: true,
+                  opacity: Math.min(0.18, 0.09 * intensity * (0.5 + 0.5 * (bri / 255))),
+                  side: THREE.DoubleSide, depthWrite: false,
+                }));
+              beam.rotation.x = Math.PI / 2;          // cylinder axis local +Y → -Z
+              beam.position.z = -178 - beamLen / 2;
+              beam.userData.outlineSkip = true;
+              beam.userData.dir = [fdx * cT, sT, fdz * cT];   // WORLD aim (test hook)
+              headGrp.add(beam);
+            }
+            g.add(headGrp);
+            if (isOn) {
+              // Ground pool ellipse offset along the azimuth. Throw distance grows
+              // as the tilt LOWERS: throw = lr / tan(tilt) (a low, grazing beam
+              // travels far before it would climb; a steep beam pools close).
+              // Clamped so a near-vertical beam doesn't place the pool at the base.
+              const throwD = Math.max(lr * 0.35, Math.min(lr * 4, lr / Math.tan(tiltRad)));
+              const pool = new THREE.Mesh(
+                new THREE.CircleGeometry(Math.max(300, lr * 0.55), 40),
+                new THREE.MeshBasicMaterial({
+                  color: color.getHex(), transparent: true,
+                  opacity: Math.min(0.4, (0.14 + 0.16 * (bri / 255)) * intensity * flickerMul),
+                  side: THREE.DoubleSide, depthWrite: false,
+                }));
+              pool.rotation.x = -Math.PI / 2;
+              // Local offset along -Z by throwD (composes with body yaw → world
+              // azimuth); elongate along the throw for a raking-beam ellipse.
+              pool.position.set(0, 4 - bodyY, -throwD);
+              pool.scale.set(1, 1.9, 1);              // pre-rotation: y-scale = local +Z (the throw axis)
+              pool.userData.outlineSkip = true;
+              pool.userData.groundPool = true;
+              pool.userData.poolOffset = [fdx * throwD, fdz * throwD];   // WORLD horizontal offset (test hook)
+              g.add(pool);
+            }
+            break;
+          }
           default: {
             // Bulb: short stem + socket from the (implied) ceiling with the
             // globe hanging just below — not a free-floating ball.
@@ -12170,7 +12579,8 @@ export class ThreeDRenderer {
         // strips (their wash lands on the counter below via the point light, not
         // the floor). Heat lamps KEEP the pool (a red-tinted heat pool).
         if (kind !== 'sconce' && kind !== 'fan' && kind !== 'under_cabinet' && kind !== 'wall_sconce' &&
-            kind !== 'exhaust' && kind !== 'exhaust_wall' && kind !== 'exhaust_light') {
+            kind !== 'exhaust' && kind !== 'exhaust_wall' && kind !== 'exhaust_light' &&
+            kind !== 'inground' && kind !== 'ground_spot') {
           // Step lights emit from one face only → a HALF-disc pool bulging
           // toward the front, its flat diameter lying along the wall line
           // (centered on the fixture). After rotation.x=-π/2 a CircleGeometry
@@ -14224,6 +14634,9 @@ export class ThreeDRenderer {
     this._advanceSpeakerPulses();
     this._advanceEvPulses();
     this._advanceValves();
+    // ── Window curtains: ease each panel's gather/spread toward its build-time
+    // openness target. Lives in _doorGroup; the blend survives _keyDoors rebuilds.
+    this._advanceCurtains(frameDt);
   }
 
   // Per-frame emissive breathe on playing speaker drivers. Amplitude/rate keyed
@@ -17138,13 +17551,17 @@ export class ThreeDRenderer {
       this._floorGroup, this._doorGroup, this._modelGroup, this._zoneGroup, this._haloGroup,
       this._sensorGroup, this._motionGroup, this._envGroup, this._infoGroup, this._actionGroup, this._bleGroup,
       this._alarmGroup, this._calendarGroup, this._thermoGroup, this._safetyGroup, this._alertGroup, this._robotGroup, this._robotRigGroup,
-      this._cameraGroup, this._projGroup, this._valveGroup, this._plugGroup, this._camAlertGroup, this._pzoneGroup, this._groundGroup, this._poolGroup, this._heatmapGroup,
+      this._cameraGroup, this._projGroup, this._valveGroup, this._plugGroup, this._camAlertGroup, this._pzoneGroup, this._groundGroup, this._poolGroup, this._sprinklerGroup, this._flagpoleGroup, this._heatmapGroup,
       this._lightGroup, this._switchGroup, this._targetGroup, this._gpsGroup, this._weatherGroup,
       this._skyGroup, this._bgTextGroup, this._pulseGroup, this._nowPlayingGroup,
     ]) {
       this._disposeSpriteMaps(g);
       this._clearGroup(g);
     }
+    this._flagpoleRigs = [];
+    // Per-flag CanvasTextures are shared across poles + rebuilds → disposed once here.
+    for (const t of Object.values(this._flagTexCache)) t.dispose();
+    this._flagTexCache = {};
     this._clearVacMap();   // vac-map overlay: explicit CanvasTexture disposal
     this.clearTransitPuppet();
     this._nowPlaying = {};
@@ -17350,6 +17767,8 @@ export class ThreeDRenderer {
     this._advanceFountains(frameDt);
     // Sprinkler spray — droplet recycle while any zone runs (zero alloc).
     this._advanceSprinklers(frameDt);
+    // Yard flag cloth ripple + eased hoist + wind yaw (zero alloc after build).
+    this._advanceFlagpoles(frameDt, nowS);
     // Playful background text — sky drift / twinkle, banner orbit, prop spin.
     // Zero allocation after build (transform + opacity mutation only).
     this._advanceBgText(frameDt, nowS);

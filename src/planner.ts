@@ -231,6 +231,7 @@ export type Drag =
   | { kind: 'projector'; id: string; startMm: Vec2; start: Vec2 }
   | { kind: 'valve'; id: string; startMm: Vec2; start: Vec2 }
   | { kind: 'sprinkler'; id: string; startMm: Vec2; start: Vec2 }
+  | { kind: 'flagpole'; id: string; startMm: Vec2; start: Vec2 }
   | { kind: 'plug'; id: string; startMm: Vec2; start: Vec2 }
   | { kind: 'info'; id: string; startMm: Vec2; start: Vec2 }
   | { kind: 'action'; id: string; startMm: Vec2; start: Vec2 }
@@ -264,7 +265,7 @@ export interface EditZone {
   mousePos: Vec2 | null;
 }
 
-export type Tool = 'select' | 'wall' | 'sensor' | 'motion' | 'env' | 'infocard' | 'action' | 'bleproxy' | 'alarm' | 'calendar' | 'thermostat' | 'safety' | 'alertbeacon' | 'robot' | 'camera' | 'projector' | 'valve' | 'sprinkler' | 'plug' | 'pzone' | 'ground' | 'path' | 'pool' | 'void' | 'furniture' | 'light' | 'switch' | 'door' | 'window' | 'delete';
+export type Tool = 'select' | 'wall' | 'sensor' | 'motion' | 'env' | 'infocard' | 'action' | 'bleproxy' | 'alarm' | 'calendar' | 'thermostat' | 'safety' | 'alertbeacon' | 'robot' | 'camera' | 'projector' | 'valve' | 'sprinkler' | 'flagpole' | 'plug' | 'pzone' | 'ground' | 'path' | 'pool' | 'void' | 'furniture' | 'light' | 'switch' | 'door' | 'window' | 'delete';
 
 // Live robot state (runtime-only). `x/y/heading/phase/activity/led` are the
 // DISPLAY fields both canvases read; the rest are the movement controller's
@@ -423,6 +424,9 @@ export class Planner extends EventTarget {
 
   // Active sprinkler zone (sidebar selection / canvas highlight)
   activeSprinklerId: string | null = null;
+
+  // Active flagpole fixture (sidebar selection / canvas highlight)
+  activeFlagpoleId: string | null = null;
 
   // Active smart plug fixture (sidebar selection / canvas highlight)
   activePlugId: string | null = null;
@@ -967,7 +971,7 @@ export class Planner extends EventTarget {
     this.activeThermoId = null; this.activeSafetyId = null; this.activeAlertBeaconId = null;
     this.activeRobotId = null; this.activeCameraId = null; this.activeProjectorId = null;
     this.activeValveId = null; this.activePlugId = null; this.activeInfoId = null;
-    this.activeSprinklerId = null;
+    this.activeSprinklerId = null; this.activeFlagpoleId = null;
     this.activeActionId = null; this.activePZoneId = null; this.activeGroundAreaId = null;
     this.activePoolId = null;
     this.activeVoidAreaId = null; this.activeFurnitureId = null; this.activePersonId = null;
@@ -1063,6 +1067,9 @@ export class Planner extends EventTarget {
       E(this.activeSprinklerId, f.sprinklerZones,
         id => { f.sprinklerZones = (f.sprinklerZones ?? []).filter(x => x.id !== id); },
         () => { this.activeSprinklerId = null; }),
+      E(this.activeFlagpoleId, f.flagpoles,
+        id => { f.flagpoles = (f.flagpoles ?? []).filter(x => x.id !== id); },
+        () => { this.activeFlagpoleId = null; }),
       E(this.activeGroundAreaId, f.groundAreas,
         id => { f.groundAreas = (f.groundAreas ?? []).filter(x => x.id !== id); },
         () => { this.activeGroundAreaId = null; }),
@@ -1954,6 +1961,11 @@ export class Planner extends EventTarget {
       fu.evCharger?.statusEntity === id || fu.evCharger?.powerEntity === id ||
       fu.mailCount?.countEntity === id || fu.mailCount?.flagEntity === id)) return true;
     if (f2.doors.some(d => d.lockEntity === id)) return true;
+    // Window curtain bound entities (cover.*/binary_sensor; switch.* already caught
+    // above): config-path so the sidebar openness preview + the 3D _keyDoors dirty
+    // key repaint on change. Scoped to current-floor window ids (Window.coverEntity
+    // deliberately stays LIVE-path; the 2D RAF reads curtains live regardless).
+    if (f2.windows.some(w => w.curtain?.entityId === id)) return true;
     if ((f2.alarmPanels ?? []).some(a => a.entity_id === id)) return true;
     // Wall-calendar bound calendar.* ids: config-path so the sidebar next-event
     // line + the 3D _keyCalendar dirty key refresh on an on↔off flip (a cheap
@@ -2005,6 +2017,9 @@ export class Planner extends EventTarget {
     // to the current floor's bound ids.
     if ((f2.valves ?? []).some(v => v.entity_id === id)) return true;
     if ((f2.plugs ?? []).some(pl => pl.entity_id === id)) return true;
+    // Flagpole hoist source (sensor/number percent or cover position): config-path
+    // so the 3D _keyFlagpoles dirty key + sidebar preview repaint on a change.
+    if ((f2.flagpoles ?? []).some(fp => fp.entityId === id)) return true;
     // Pools (T4): all bound heater/pump/light/chemistry sensor ids are config-path
     // (per pool-spa.md §4.6) so the water glow, 2D chip, and 3D _keyPool dirty key
     // repaint promptly on a state change. Scoped to the current floor's bound ids.
@@ -2780,6 +2795,11 @@ export class Planner extends EventTarget {
 
   setActiveSprinkler(id: string | null): void {
     this.activeSprinklerId = (this.activeSprinklerId === id) ? null : id;
+    this.emitConfig();
+  }
+
+  setActiveFlagpole(id: string | null): void {
+    this.activeFlagpoleId = (this.activeFlagpoleId === id) ? null : id;
     this.emitConfig();
   }
 
@@ -4987,6 +5007,7 @@ export class Planner extends EventTarget {
     for (const it of f.projectors ?? []) { it.x += dx; it.y += dy; }
     for (const it of f.valves ?? []) { it.x += dx; it.y += dy; }
     for (const it of f.sprinklerZones ?? []) { it.x += dx; it.y += dy; }
+    for (const it of f.flagpoles ?? []) { it.x += dx; it.y += dy; }
     for (const it of f.plugs ?? []) { it.x += dx; it.y += dy; }
     for (const it of f.infoCards ?? []) { it.x += dx; it.y += dy; }
     for (const it of f.actionButtons ?? []) { it.x += dx; it.y += dy; }
@@ -5024,6 +5045,7 @@ export class Planner extends EventTarget {
     this.activeProjectorId = null;
     this.activeValveId = null;
     this.activeSprinklerId = null;
+    this.activeFlagpoleId = null;
     this.activePlugId = null;
     this.activeInfoId = null;
     this.activeActionId = null;

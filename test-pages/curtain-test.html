@@ -1,0 +1,247 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>curtain</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<!-- Window glass polish (grey/translucent, open-vs-closed clarity) + interior
+     curtains (roman / drape / split). Renderer assertions read _doorGroup meshes
+     directly; the config-path assertion bundles the REAL Planner over a fake HaApi.
+     Generate the bundles next to this html (like config-test / covers-test):
+       npx esbuild src/geometry.ts --bundle --format=esm --outfile=<harness>/geometry.mod.js
+       npx esbuild src/planner.ts  --bundle --format=esm --outfile=<harness>/planner.mod.js -->
+<script type="module">
+ try {
+  const V = '?v=' + Date.now();
+  const geo = await import('./geometry.mod.js' + V);
+  const mod = await import('./assets/three-renderer.js' + V);
+  const { Planner } = await import('./planner.mod.js' + V);
+
+  const results = [];
+  const ok = (name, cond, detail = '') => results.push(`${cond ? 'ok' : 'FAIL'}:${name}${detail ? '(' + detail + ')' : ''}`);
+  const near = (a, b, t = 1e-3) => Math.abs(a - b) <= t;
+
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+  const scene3d = { preset: 'day', floorColor: '#8a7860', floorTex: 'none', wallColor: '#cfd2d6' };
+  const wallY = 2500;
+  const mkFloor = (windows) => ({
+    id: 'f1', name: 'T', w: 12000, d: 5000,
+    walls: [{ id: 'w1', points: [{ x: 500, y: wallY }, { x: 11500, y: wallY }] }],
+    furniture: [], lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [], windows, bg: null, model3d: null, look3d: null, rooms: [],
+  });
+  const build = (windows, states = {}) => {
+    r.updateFloor(mkFloor(windows), scene3d);
+    r.updateDoorsWindows([], windows, id => states[id] || null);
+  };
+  const isGlass = m => m.material && m.material.transparent === true;
+  const panes = grp => { const o = []; grp.traverse(n => { if (n.isMesh && isGlass(n)) o.push(n); }); return o; };
+  const curtainGroups = grp => {
+    const o = []; grp.traverse(n => { if (n.userData && n.userData.kind === 'curtain') o.push(n); }); return o;
+  };
+  // Panel extent = the full slab geometry dim (child[0]) × the panel's gather scale.
+  // (No THREE dependency; the panel's scale is what _placeCurtainPanel sets.)
+  const panelExtent = (grp, axis, i = 0) => {
+    const p = curtainGroups(grp)[i];
+    const slab = p.children[0];
+    const dim = axis === 'x' ? slab.geometry.parameters.width : slab.geometry.parameters.height;
+    return dim * (axis === 'x' ? p.scale.x : p.scale.y);
+  };
+
+  const KINDS = ['single', 'double_hung', 'casement_pair', 'sliding', 'picture'];
+
+  // === 1. Glass: light-grey, translucent, opacity closed 0.16 → open 0.08 ====
+  {
+    const wClosed = [{ id: 'g1', x: 6000, y: wallY, w: 1400, rotation: 0, entity_id: null, kind: 'single' }];
+    build(wClosed);
+    const gp = panes(r._doorGroup.children[0])[0];
+    ok('glass_closed_opacity', near(gp.material.opacity, 0.16, 1e-6), gp.material.opacity.toFixed(3));
+    const col = gp.material.color;
+    ok('glass_grey_not_blue', (col.b - col.r) < 0.25 && col.r > 0.5,
+      `r=${col.r.toFixed(2)} g=${col.g.toFixed(2)} b=${col.b.toFixed(2)}`);
+    ok('glass_translucent', gp.material.transparent === true && gp.material.opacity < 0.3, '');
+  }
+  {
+    const wOpen = [{ id: 'g2', x: 6000, y: wallY, w: 1400, rotation: 0, entity_id: 'binary_sensor.o', kind: 'single' }];
+    build(wOpen, { 'binary_sensor.o': { state: 'on', attributes: {} } });
+    const gp = panes(r._doorGroup.children[0])[0];
+    ok('glass_open_opacity', near(gp.material.opacity, 0.08, 1e-6), gp.material.opacity.toFixed(3));
+  }
+  // Open glass is CLEARER than closed across ALL five kinds.
+  {
+    const closed = KINDS.map((k, i) => ({ id: 'c' + i, x: 1500 + i * 2000, y: wallY, w: 1200, rotation: 0, entity_id: null, kind: k }));
+    build(closed);
+    const clAll = KINDS.every((k, i) => near(panes(r._doorGroup.children[i])[0].material.opacity, 0.16, 1e-6));
+    ok('glass_closed_all_kinds', clAll, '');
+    const open = KINDS.map((k, i) => ({ id: 'o' + i, x: 1500 + i * 2000, y: wallY, w: 1200, rotation: 0, entity_id: 'binary_sensor.k' + i, kind: k }));
+    const stO = {}; open.forEach(w => stO[w.entity_id] = { state: 'on', attributes: {} });
+    build(open, stO);
+    const opAll = KINDS.every((k, i) => near(panes(r._doorGroup.children[i])[0].material.opacity, 0.08, 1e-6));
+    ok('glass_open_all_kinds', opAll, '');
+  }
+
+  // === 2. Curtain panel builds per style =====================================
+  {
+    build([{ id: 'h1', x: 6000, y: wallY, w: 1600, rotation: 0, entity_id: null, kind: 'single',
+             curtain: { style: 'horizontal' }, curtainPos: 0 }]);
+    ok('roman_one_panel', curtainGroups(r._doorGroup.children[0]).length === 1, '');
+  }
+  {
+    build([{ id: 'v1', x: 6000, y: wallY, w: 1600, rotation: 0, entity_id: null, kind: 'single',
+             curtain: { style: 'vertical', side: 'right' }, curtainPos: 0 }]);
+    ok('drape_one_panel', curtainGroups(r._doorGroup.children[0]).length === 1, '');
+  }
+  {
+    build([{ id: 's1', x: 6000, y: wallY, w: 1600, rotation: 0, entity_id: null, kind: 'single',
+             curtain: { style: 'split' }, curtainPos: 0 }]);
+    ok('split_two_panels', curtainGroups(r._doorGroup.children[0]).length === 2, '');
+  }
+
+  // === 3. Vertical side left vs right mirrored (gather direction) =============
+  {
+    const mk = side => [{ id: 'vs', x: 6000, y: wallY, w: 1600, rotation: 0, entity_id: null, kind: 'single',
+                          curtain: { style: 'vertical', side }, curtainPos: 100 }];  // OPEN → gathered
+    build(mk('right'));
+    const rp = curtainGroups(r._doorGroup.children[0])[0];
+    const rx = rp.position.x;
+    build(mk('left'));
+    const lp = curtainGroups(r._doorGroup.children[0])[0];
+    const lx = lp.position.x;
+    ok('vertical_right_gathers_right', rx > 0, rx.toFixed(0));
+    ok('vertical_left_gathers_left', lx < 0, lx.toFixed(0));
+    ok('vertical_mirrored', near(rx, -lx, 1), `${rx.toFixed(0)}/${lx.toFixed(0)}`);
+  }
+  // Split: panels gather OUTWARD (left panel -x, right panel +x) when open.
+  {
+    build([{ id: 'so', x: 6000, y: wallY, w: 1600, rotation: 0, entity_id: null, kind: 'single',
+             curtain: { style: 'split' }, curtainPos: 100 }]);
+    const ps = curtainGroups(r._doorGroup.children[0]).map(g => g.position.x).sort((a, b) => a - b);
+    ok('split_gathers_outward', ps[0] < 0 && ps[1] > 0, ps.map(x => x.toFixed(0)).join(','));
+  }
+
+  // === 4. Closed covers the glass span; open gathers =========================
+  const W = 1600;
+  {
+    // Vertical closed (curtainPos 0) → panel width ≈ W (covers the glass span).
+    build([{ id: 'vc', x: 6000, y: wallY, w: W, rotation: 0, entity_id: null, kind: 'single',
+             curtain: { style: 'vertical', side: 'right' }, curtainPos: 0 }]);
+    const closedW = panelExtent(r._doorGroup.children[0], 'x');
+    ok('vertical_closed_covers_span', Math.abs(closedW - W) < 80, closedW.toFixed(0));
+    // Vertical open (curtainPos 100) → gathered narrow (<< span).
+    build([{ id: 'vo', x: 6000, y: wallY, w: W, rotation: 0, entity_id: null, kind: 'single',
+             curtain: { style: 'vertical', side: 'right' }, curtainPos: 100 }]);
+    const openW = panelExtent(r._doorGroup.children[0], 'x');
+    ok('vertical_open_gathers', openW < W * 0.35, openW.toFixed(0));
+  }
+  {
+    // Roman closed → panel height ≈ glassH (default 800); open → gathered short at the top.
+    const glassH = 800;
+    build([{ id: 'rc', x: 6000, y: wallY, w: W, rotation: 0, entity_id: null, kind: 'single',
+             curtain: { style: 'horizontal' }, curtainPos: 0 }]);
+    const closedH = panelExtent(r._doorGroup.children[0], 'y');
+    ok('roman_closed_covers_height', Math.abs(closedH - glassH) < 80, closedH.toFixed(0));
+    build([{ id: 'ro', x: 6000, y: wallY, w: W, rotation: 0, entity_id: null, kind: 'single',
+             curtain: { style: 'horizontal' }, curtainPos: 100 }]);
+    const openH = panelExtent(r._doorGroup.children[0], 'y');
+    ok('roman_open_rises', openH < glassH * 0.35, openH.toFixed(0));
+  }
+
+  // === 5. Fraction from a bound cover position interpolates ===================
+  {
+    // cover 'open' at current_position 50 → doorOpenFraction 0.5 → half-gathered.
+    build([{ id: 'ci', x: 6000, y: wallY, w: W, rotation: 0, entity_id: null, kind: 'single',
+             curtain: { style: 'vertical', side: 'right', entityId: 'cover.cur' } }],
+          { 'cover.cur': { state: 'open', attributes: { current_position: 50 } } });
+    const entry = r._curtains.find(c => c.winId === 'ci');
+    ok('cover_frac_interpolates', entry && near(entry.targetFrac, 0.5, 1e-6), entry ? entry.targetFrac.toFixed(2) : 'none');
+    const halfW = panelExtent(r._doorGroup.children[0], 'x');
+    // scale = 0.14 + 0.86*(1-0.5) = 0.57 → width ≈ 0.57·W. Between gathered and full.
+    ok('cover_frac_partial_width', halfW > W * 0.4 && halfW < W * 0.75, halfW.toFixed(0));
+  }
+  // Unbound curtainPos slider drives openness (25% → mostly closed, wide).
+  {
+    build([{ id: 'sl', x: 6000, y: wallY, w: W, rotation: 0, entity_id: null, kind: 'single',
+             curtain: { style: 'vertical', side: 'right' }, curtainPos: 25 }]);
+    const e = r._curtains.find(c => c.winId === 'sl');
+    ok('slider_drives_frac', e && near(e.targetFrac, 0.25, 1e-6), e ? e.targetFrac.toFixed(2) : 'none');
+  }
+
+  // === 6. Eased blend survives a rebuild ====================================
+  {
+    // Build closed (target 0), settle the blend to ~0, then rebuild OPEN (target 1)
+    // and advance ONE small frame — the blend must ease (partial), not snap to 1.
+    build([{ id: 'eb', x: 6000, y: wallY, w: W, rotation: 0, entity_id: null, kind: 'single',
+             curtain: { style: 'vertical', side: 'right' }, curtainPos: 0 }]);
+    for (let i = 0; i < 40; i++) r._advanceCurtains(0.1);
+    ok('blend_settled_closed', near(r._curtainBlend['eb'], 0, 0.02), (r._curtainBlend['eb'] ?? -9).toFixed(3));
+    build([{ id: 'eb', x: 6000, y: wallY, w: W, rotation: 0, entity_id: null, kind: 'single',
+             curtain: { style: 'vertical', side: 'right' }, curtainPos: 100 }]);
+    r._advanceCurtains(0.05);  // one small step
+    const b = r._curtainBlend['eb'];
+    ok('blend_survives_rebuild', b > 0.01 && b < 0.5, (b ?? -9).toFixed(3));
+  }
+
+  // === 7. Curtain entity is config-path in the real Planner ==================
+  {
+    // Minimal FakeHa + Planner: a floor with a curtain-bound window → _isSlowEntity
+    // returns true for that cover id, false for an unrelated one.
+    const clone = v => JSON.parse(JSON.stringify(v));
+    class FakeHa {
+      constructor(seed) { this.map = new Map(Object.entries(seed || {}).map(([k, v]) => [k, clone(v)])); this.states = {}; this._s = []; this._c = []; }
+      connect() { for (const cb of this._c) cb('connected'); for (const cb of this._s) cb(this.states, undefined); }
+      onState(fn) { this._s.push(fn); } onConn(fn) { this._c.push(fn); }
+      callService() { return Promise.resolve(); }
+      async getHistory() { return {}; } async getWeatherForecasts() { return null; }
+      async getDevices() { return []; } async getEntityRegistry() { return []; }
+      async updateEntityRegistry() { return true; }
+      async getUserData(k) { return this.map.has(k) ? clone(this.map.get(k)) : null; }
+      async setUserData(k, v) { this.map.set(k, clone(v)); return true; }
+      async refreshStates() {}
+      async subscribeMqtt() { return () => {}; }
+      async subscribePersistentNotifications() { return () => {}; }
+      async listRepairsIssues() { return []; }
+      async getCalendarEvents() { return []; }
+    }
+    const store = {
+      v: 2,
+      floors: [{
+        id: 'f1', name: 'H', w: 8000, d: 6000,
+        walls: [], furniture: [], lights: [], switches: [], sensors: [], motionSensors: [],
+        roamers: [], envSensors: [], doors: [],
+        windows: [{ id: 'w1', x: 1000, y: 1000, w: 1200, rotation: 0, entity_id: null,
+                    curtain: { style: 'vertical', entityId: 'cover.living_curtain' } }],
+        bg: null, rooms: [], bleProxies: [], alarmPanels: [], safetySensors: [], robots: [],
+        presenceZones: [], cameras: [], groundAreas: [], voidAreas: [],
+      }],
+      currentFloorId: 'f1', activeSensorId: null,
+      coverage: true, imperial: false, showDetails: false, useRawTargets: false,
+    };
+    localStorage.removeItem('diorama:store:v1'); localStorage.removeItem('diorama:configs');
+    const p = new Planner();
+    p.connectWith(new FakeHa({ 'diorama': store }));
+    const waitFor = async (fn, ms = 3000) => { const t0 = Date.now(); while (!fn()) { if (Date.now() - t0 > ms) throw new Error('timeout'); await new Promise(r => setTimeout(r, 10)); } };
+    await waitFor(() => p.store.floors[0].windows.length > 0 && p.store.floors[0].windows[0].curtain);
+    ok('curtain_entity_config_path', p._isSlowEntity('cover.living_curtain') === true, '');
+    ok('unrelated_not_config_path', p._isSlowEntity('cover.some_other') === false, '');
+  }
+
+  // === 8. 2D drawWindows does not throw with curtains ========================
+  {
+    const cnv = document.createElement('canvas'); cnv.width = 400; cnv.height = 300;
+    const ctx = cnv.getContext('2d');
+    let threw = false;
+    try {
+      const cr = geo; // geometry bundle does not export drawAll; just exercise doorOpenFraction path
+      // Exercise the pure openness resolution the 2D tick uses.
+      const f1 = geo.doorOpenFraction({ state: 'open', attributes: { current_position: 30 } });
+      if (!near(f1, 0.3, 1e-6)) threw = true;
+    } catch (e) { threw = true; }
+    ok('curtain_2d_frac_ok', !threw, '');
+  }
+
+  const pass = results.every(x => x.startsWith('ok'));
+  const n = results.length, pc = results.filter(x => x.startsWith('ok')).length;
+  document.title = `CURTAIN ${pass ? 'PASS' : 'FAIL'} ${pc}/${n} ${results.join(' ')}`;
+  r.applyViewPreset('iso');
+ } catch (e) { document.title = 'ERR: ' + (e && e.stack ? e.stack.split('\n').slice(0, 3).join(' | ') : e); }
+</script>

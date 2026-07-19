@@ -14,6 +14,7 @@ import {
   projectorProjecting, projectorAim, projectorBeamColor, projectorThrow, screenCenterHeight, biasLightColor,
   VALVE_DEFAULTS, valveOpenness, valveFlowing, valveTransitional, valveRotation,
   SPRINKLER_DEFAULTS, sprinklerRunning, sprinklerHeadKind, sprinklerArcDeg, sprinklerRadius, sprinklerRotation,
+  FLAGPOLE_DEFAULTS, flagpoleHoistFraction,
   PLUG_DEFAULTS, plugRotation,
   groundAreaColor, groundKindLabel,
   poolWaterColor, POOL_COPING_COLOR,
@@ -34,6 +35,7 @@ import { compass8 } from './geo.js';
 import { calendarLines, weatherCardLines, resolveScreenContent, CAL_HEADER_COLOR, type ScreenMode } from './surfaces.js';
 import { CONDITION_GLYPH } from './weather.js';
 import { ALERT_BEACON_DEFAULTS, alertBeaconState, alertBeaconColor, alertBeaconAlarming, isAlertDomain } from './alerts.js';
+import { flagDominant } from './flags.js';
 import { vacMapAffine, vacSegColor, type ParsedVacMap, type VacSegment } from './valetudo-map.js';
 import type { Planner } from './planner.js';
 import type { Vec2, LightIconKind, Furniture, ObjectRecipe, RecipePrimitive, HassState } from './types.js';
@@ -64,7 +66,7 @@ const LIGHT_GLYPH: Record<LightIconKind, string> = {
   strip: '▬', fireplace: '🔥', lamp: '🪔',
   bowl: '🥣', tiered: '☰', round: '⭕', recessed: '⊙',
   jar: '🫙', oval: '🥚', fan: '❋', fan_light: '✺', string: '✨', under_cabinet: '▂',
-  wall_sconce: '◨', step: '▤', flood: '🔆',
+  wall_sconce: '◨', step: '▤', flood: '🔆', inground: '⤒', ground_spot: '⟰',
   heatlamp: '♨', exhaust: '❊', exhaust_wall: '⊛', exhaust_light: '❈',
 };
 
@@ -289,6 +291,7 @@ export function drawAll(ctx: CanvasRenderingContext2D, p: Planner, view: View,
   if (on(L.sensors)) drawProjectors(ctx, p, view);
   if (on(L.sensors)) drawValves(ctx, p, view);       // water valves ride the sensors layer
   if (on(L.ground)) drawSprinklerZones(ctx, p, view); // irrigation heads ride the ground layer
+  if (on(L.furniture)) drawFlagpoles(ctx, p, view);   // yard flagpoles are decor → furniture layer
   if (on(L.switches)) drawPlugs(ctx, p, view);        // smart plugs ride the switches layer
   // LD2450 inclusion / filter polygons + object halos draw per the zones
   // layer. The Motion toggle only hides motion-sensor cones (drawMotionSensors
@@ -1807,6 +1810,69 @@ function drawSprinklerZones(ctx: CanvasRenderingContext2D, p: Planner, view: Vie
   }
 }
 
+// Yard flagpoles (furniture layer): a small base dot + a short pole line + a
+// tiny waving-flag glyph tinted by the flag's dominant color, hoisted to the
+// resolved fraction (full / half / lowered). A ⯪ half-mast caption when hoisted
+// to ~0.5. The 3D view carries the real waving cloth; 2D is a glanceable marker.
+function drawFlagpoles(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
+  const dpr = window.devicePixelRatio || 1;
+  const t = performance.now() / 1000;
+  const f = p.floor();
+  for (const fp of f.flagpoles ?? []) {
+    if (fp.hidden) continue;
+    const c = mmToPx(view, fp.x, fp.y);
+    const sel = p.activeFlagpoleId === fp.id;
+    const dom = flagDominant(fp.flag);
+    const frac = flagpoleHoistFraction(fp, fp.entityId ? p.hass?.states?.[fp.entityId] ?? null : null);
+    // Pole drawn upward on screen (toward -y). Length scales a little with height.
+    const poleLen = Math.max(24 * dpr, ((fp.height ?? FLAGPOLE_DEFAULTS.height) / 6000) * 46 * dpr);
+    const topY = c.y - poleLen;
+    // Base dot.
+    ctx.fillStyle = '#9aa0a6';
+    ctx.beginPath(); ctx.arc(c.x, c.y, Math.max(3, 4 * dpr), 0, 2 * Math.PI); ctx.fill();
+    // Pole.
+    ctx.strokeStyle = sel ? '#fff' : '#c8ccd0';
+    ctx.lineWidth = Math.max(1.5, 2 * dpr);
+    ctx.beginPath(); ctx.moveTo(c.x, c.y); ctx.lineTo(c.x, topY); ctx.stroke();
+    // Gold finial.
+    ctx.fillStyle = '#ffcf40';
+    ctx.beginPath(); ctx.arc(c.x, topY, Math.max(2, 2.5 * dpr), 0, 2 * Math.PI); ctx.fill();
+    // Flag: a small rect just below the hoist point, waving via a sine on the fly.
+    const fh = 10 * dpr, fwid = 16 * dpr;
+    const hoistY = topY + (1 - frac) * (poleLen - fh - 2 * dpr) + 2 * dpr;
+    ctx.save();
+    ctx.beginPath();
+    const wave = 2 * dpr * Math.sin(t * 4);
+    ctx.moveTo(c.x, hoistY);
+    ctx.lineTo(c.x + fwid, hoistY + wave);
+    ctx.lineTo(c.x + fwid, hoistY + fh + wave);
+    ctx.lineTo(c.x, hoistY + fh);
+    ctx.closePath();
+    ctx.fillStyle = dom;
+    ctx.globalAlpha = 0.92;
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = 'rgba(0,0,0,0.35)'; ctx.lineWidth = Math.max(1, dpr); ctx.stroke();
+    ctx.restore();
+    // Half-mast indicator.
+    if (fp.halfMast || (frac > 0.35 && frac < 0.65)) {
+      ctx.fillStyle = '#ffb74d'; ctx.font = `${8 * dpr}px sans-serif`;
+      ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+      ctx.fillText('½', c.x + fwid + 3 * dpr, hoistY + fh / 2);
+    }
+    if (sel) {
+      ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5;
+      ctx.strokeRect(c.x - 6 * dpr, topY - 4 * dpr, fwid + 14 * dpr, poleLen + 10 * dpr);
+    }
+    const nm = fp.label?.trim();
+    if (nm) {
+      ctx.fillStyle = '#ddd'; ctx.font = `${10 * dpr}px sans-serif`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+      ctx.fillText(nm, c.x, c.y + 6 * dpr);
+    }
+  }
+}
+
 // Smart plug / outlet fixtures (Phase 2b): a wall outlet plate with two socket
 // slots + a plugged-in cord hint. ON = green energized glow (scaled by the
 // optional power draw) + a W readout chip when a powerEntity is bound. Unbound
@@ -3013,6 +3079,25 @@ function drawWindows(ctx: CanvasRenderingContext2D, p: Planner, view: View): voi
         ctx.lineTo(ex + nx * off, ey + ny * off);
         ctx.stroke();
       }
+    }
+    // Interior curtain tick (Window.curtain): a thin line along the interior side
+    // of the span in the fabric color — SOLID when closed (covering), DASHED when
+    // open (gathered aside). Openness from the bound entity or the curtainPos slider.
+    if (w.curtain) {
+      const cn = w.curtain;
+      const frac = cn.entityId
+        ? doorOpenFraction(p.hass?.states?.[cn.entityId] ?? null)
+        : Math.max(0, Math.min(1, (w.curtainPos ?? 0) / 100));
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const len = Math.hypot(dx, dy) || 1;
+      const nx = -dy / len, ny = dx / len;     // perpendicular unit (screen)
+      const off = 8 * dpr;                      // interior side, outside the blind tick
+      ctx.strokeStyle = cn.color ?? '#b9a58c'; ctx.lineWidth = 3;
+      if (frac > 0.5) ctx.setLineDash([6, 5]);  // open (gathered) → dashed
+      ctx.beginPath();
+      ctx.moveTo(a.x + nx * off, a.y + ny * off);
+      ctx.lineTo(b.x + nx * off, b.y + ny * off);
+      ctx.stroke(); ctx.setLineDash([]);
     }
     // End handles (drag to rotate) — hidden when locked
     if (!w.locked) {

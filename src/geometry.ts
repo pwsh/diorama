@@ -492,6 +492,13 @@ export function lightHeight(l: { height?: number }): number   { return l.height 
 export function lightRadius(l: { radius?: number }): number   { return l.radius ?? LIGHT_DEFAULTS.radius; }
 export function lightIntensity(l: { intensity?: number }): number { return l.intensity ?? LIGHT_DEFAULTS.intensity; }
 export function lightRotation(l: { rotation?: number }): number { return l.rotation ?? 0; }
+// Aim tilt above the horizon, degrees (ground_spot only). Default 35°; clamped
+// 5..85 so a beam never sits perfectly flat (grazes the ground forever) nor
+// perfectly vertical (no ground pool to place). Low tilt → long throw.
+export const LIGHT_TILT_DEFAULT = 35;
+export function lightTilt(l: { tilt?: number }): number {
+  return Math.max(5, Math.min(85, l.tilt ?? LIGHT_TILT_DEFAULT));
+}
 export function lightLength(l: { length?: number }): number {
   return Math.max(300, Math.min(15000, l.length ?? 2000));
 }
@@ -1229,6 +1236,44 @@ export function sprinklerRunning(
   const pos = st.attributes ? st.attributes['current_position'] : undefined;
   return typeof pos === 'number' && isFinite(pos) && pos > 0;
 }
+
+// ── Yard flagpole fixture ──────────────────────────────────────────────────
+// A tapered pole + finial + waving flag. Free placement (no wall snap). The
+// hoist FRACTION (1 = full mast, 0.5 = half mast, 0 = fully lowered) resolves
+// from the bound entity, else the halfMast flag, else full. Flag design is the
+// pure flag library (src/flags.ts). All render metrics scale with pole height.
+export const FLAGPOLE_DEFAULTS = {
+  height: 6000,        // pole height mm
+  flagW: 1200,         // flag cloth width (fly) mm at default height
+  flagH: 720,          // flag cloth height (hoist) mm at default height
+  hitRadiusMm: 300,    // 2D point-in-circle hit test on the base
+};
+export function flagpoleHeight(fp: { height?: number }): number {
+  return Math.max(1000, fp.height ?? FLAGPOLE_DEFAULTS.height);
+}
+// Resolve the hoist fraction 0..1 from the RESOLVED HA state (or null). A
+// cover.* uses its position (open→100, closed→0 when no current_position); any
+// other entity (sensor.*/number.*/input_number.*) parses its state as a 0..100
+// percent. Unbound → halfMast ? 0.5 : 1. Never throws / NaN (bad reads → 1).
+export function flagpoleHoistFraction(
+  fp: { entityId?: string; halfMast?: boolean },
+  st: { state: string; attributes?: Record<string, unknown> } | null | undefined,
+): number {
+  if (fp.entityId) {
+    if (!st) return fp.halfMast ? 0.5 : 1;   // bound but no reading yet → fall through
+    if (fp.entityId.startsWith('cover.')) {
+      const pos = st.attributes ? st.attributes['current_position'] : undefined;
+      if (typeof pos === 'number' && isFinite(pos)) return clamp01(pos / 100);
+      if (st.state === 'open') return 1;
+      if (st.state === 'closed') return 0;
+      return 0.5;
+    }
+    const v = parseFloat(st.state);
+    return isFinite(v) ? clamp01(v / 100) : (fp.halfMast ? 0.5 : 1);
+  }
+  return fp.halfMast ? 0.5 : 1;
+}
+function clamp01(v: number): number { return Math.max(0, Math.min(1, v)); }
 
 // ── Smart plug / outlet fixture (Phase 2b) ─────────────────────────────────
 // Wall outlet plate. Wall-snaps flush like a switch (plate BACK on the wall

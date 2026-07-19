@@ -125,6 +125,24 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Polish wave 2: window glass + curtains; ground lights + flagpole**
+  (2026-07-19; 2 parallel Opus agents). **Windows**: grey translucent
+  glass (0.16 closed / 0.08 open / 0.42 behind a closed curtain);
+  per-window curtains (`Window.curtain` roman/drape/split, side pick,
+  cover-entity binding or unbound slider, eased blends, fold-ridge
+  fabric, 2D ticks). `CURTAIN PASS 25/25`; window 15/15 + covers 22/22
+  untouched. **Lights**: `inground` recessed uplight (lens ring + up
+  cone, no floor pool) and `ground_spot` aimable stake spot
+  (`Light.tilt` 5..85 + rotation azimuth, beam cone + thrown pool
+  ellipse). **Flagpole** (`Floor.flagpoles`, full fixture recipe,
+  furniture layer): 16-flag pure library `src/flags.ts` (10 simplified
+  country + jolly_roger/checkered/smiley/pride/ghost/open_sign),
+  two-FrontSide shared-texture non-mirrored flag with zero-alloc cloth
+  ripple + wind yaw from `_weatherFxState`, hoist = entity percent /
+  cover position → fraction (half-mast checkbox fallback, eased),
+  `docs/FLAGS.md` authoring guide. `FLAGPOLE PASS 54/54`; regressions
+  climate 64/64, yardlife 36/36, undo 44/44, furniture-polish 28/28.
+
 - **Polish wave 1: aircraft fixes, robot redesign, furniture behaviors**
   (2026-07-19; 3 parallel Opus agents). **Aircraft**: chopper tow wire
   now spans real endpoints in the rigid chopper frame (sway-invariant);

@@ -7,9 +7,9 @@ import { NEW_ROOM, NEW_LANDMARK } from '../planner.js';
 import { compass8, parseLatLon } from '../geo.js';
 import type {
   Sensor, Zone, ObjectHalo, BgImage, MotionSensor, EnvSensor, EnvKind, Light, SwitchFixture, LightIconKind,
-  Furniture, FurnitureKind, Door, Window as WindowType, WindowKind, Layers2D, Floor, Room,
+  Furniture, FurnitureKind, Door, Window as WindowType, WindowKind, WindowCurtainStyle, Layers2D, Floor, Room,
   ObjectRecipe, RecipePrimitive, RecipeShape, ActivityKind, AvatarKind,
-  BleProxy, AlarmPanel, CalendarPanel, ThermostatFixture, SafetySensor, AlertBeacon, RobotFixture, CameraFixture, ProjectorFixture, ValveFixture, SprinklerZone, SprinklerHeadKind, PlugFixture, PresenceZone, GroundArea, GroundKind, Pool, VoidArea, DioramaPerson, Roamer, GeoLandmark,
+  BleProxy, AlarmPanel, CalendarPanel, ThermostatFixture, SafetySensor, AlertBeacon, RobotFixture, CameraFixture, ProjectorFixture, ValveFixture, SprinklerZone, SprinklerHeadKind, FlagpoleFixture, PlugFixture, PresenceZone, GroundArea, GroundKind, Pool, VoidArea, DioramaPerson, Roamer, GeoLandmark,
 } from '../types.js';
 import type { BermudaDevice } from '../planner.js';
 import { alertBeaconState, alertBeaconColor, isAlertDomain } from '../alerts.js';
@@ -28,6 +28,7 @@ import {
   projectorHeight, projectorThrow, projectorBeamColor, PROJECTOR_DEFAULTS,
   valveOpenness, valveFlowing, plugHeight,
   sprinklerRunning, sprinklerHeadKind, sprinklerArcDeg, sprinklerRadius, sprinklerRotation,
+  flagpoleHoistFraction,
   GROUND_KINDS, groundAreaColor,
   poolWaterColor, poolDepthMm, poolRaisedMm,
   FURNITURE_KINDS, furnitureKind, resolveFurnitureDef, WINDOW_DEFAULTS,
@@ -59,6 +60,7 @@ function gpsZoneGlyph(zone: 'indoor' | 'yard' | 'beyond'): string {
 }
 import { saveModel, deleteModel } from '../model-store.js';
 import { newId } from '../storage.js';
+import { FLAG_PAINTERS } from '../flags.js';
 
 const LIGHT_KINDS: { id: LightIconKind; label: string; glyph: string }[] = [
   { id: 'bulb',      label: 'Bulb',      glyph: '💡' },
@@ -81,6 +83,8 @@ const LIGHT_KINDS: { id: LightIconKind; label: string; glyph: string }[] = [
   { id: 'wall_sconce', label: 'Wall sconce (up/down)', glyph: '◨' },
   { id: 'step',        label: 'Step light',            glyph: '▤' },
   { id: 'flood',       label: 'Floodlight',            glyph: '🔆' },
+  { id: 'inground',    label: 'In-ground uplight',     glyph: '⤒' },
+  { id: 'ground_spot', label: 'Ground spot (aimable)', glyph: '⟰' },
   { id: 'heatlamp',      label: 'Heat lamp',           glyph: '♨' },
   { id: 'exhaust',       label: 'Exhaust (ceiling)',   glyph: '❊' },
   { id: 'exhaust_wall',  label: 'Exhaust (wall)',      glyph: '⊛' },
@@ -114,6 +118,7 @@ const TOOLS: { id: Tool; label: string }[] = [
   { id: 'projector', label: '📽 Projector' },
   { id: 'valve', label: '🚰 Valve' },
   { id: 'sprinkler', label: '🚿 Sprinkler' },
+  { id: 'flagpole', label: '🚩 Flagpole' },
   { id: 'plug', label: '🔌 Plug' },
   { id: 'pzone', label: '▱ Presence zone' },
   { id: 'ground', label: '▨ Ground area' },
@@ -406,6 +411,7 @@ export class Sidebar extends LitElement {
         ${this._projectorsSection()}
         ${this._valvesSection()}
         ${this._sprinklersSection()}
+        ${this._flagpolesSection()}
         ${this._plugsSection()}
         ${this._presenceZonesSection()}
         ${this._groundSection()}
@@ -537,6 +543,7 @@ export class Sidebar extends LitElement {
       case 'projector': return 'Click to drop a ceiling projector. Pick a target screen (or set rotation) + bind a media_player/switch/light for the beam; click it to toggle projecting.';
       case 'valve': return 'Click to drop a water valve on a floor pipe. Bind a valve.* (open/close) or switch.* (irrigation zone) entity; clicking it opens/closes it. Water flows while open.';
       case 'sprinkler': return 'Click to drop an irrigation sprinkler head on the lawn. Bind a switch.*/valve.* zone entity; it sprays a fan/arc while that entity is on. Set the arc, throw, and heading in the sidebar.';
+      case 'flagpole': return 'Click to plant a flagpole in the yard. Pick a flag design, height, and (optionally) bind a percent/cover entity to raise/lower it (half-mast toggle otherwise). The flag waves in 3D.';
       case 'plug': return 'Click to drop a smart plug / outlet (snaps to a wall). Bind a switch.*/light.* load + an optional power sensor; clicking it toggles the outlet.';
       case 'pzone': return 'Click to add polygon vertices; double-click (or Enter) to finish (≥3 pts). Bind a binary_sensor (FP2 zone / occupancy) — the zone glows when occupied. ESC cancels.';
       case 'ground': return 'Click to add polygon vertices; double-click (or Enter) to finish (3–20 pts). Paints a ground covering (grass/rock/water/…) under the plan. ESC cancels.';
@@ -2828,6 +2835,101 @@ export class Sidebar extends LitElement {
     }));
   }
 
+  // ── Flagpoles section ─────────────────────────────────────────────────
+  private _flagpolesSection() {
+    const list = this.planner.floor().flagpoles ?? [];
+    if (list.length === 0) return nothing;
+    return this._section('flagpoles', 'Flagpoles', () =>
+      this._groupedList('flagpoles', list, fp => this._flagpoleItem(fp)));
+  }
+
+  private _flagpoleItem(fp: FlagpoleFixture) {
+    const p = this.planner;
+    const sel = p.activeFlagpoleId === fp.id;
+    const entry = FLAG_PAINTERS[fp.flag ?? 'usa'] ?? FLAG_PAINTERS['usa'];
+    const frac = flagpoleHoistFraction(fp, fp.entityId ? p.hass?.states?.[fp.entityId] ?? null : null);
+    const badge = fp.entityId ? `${Math.round(frac * 100)}%` : (fp.halfMast ? '½ mast' : 'full');
+    const nm = fp.label?.trim() || 'Flagpole';
+    return html`
+      <div style="border-bottom:1px solid var(--border)">
+        <div class="sensor-item ${sel ? 'sel' : ''}" @click=${() => p.setActiveFlagpole(fp.id)}>
+          <div class="dot" style="background:${entry.dominant}"></div>
+          <div class="nm">${nm} · ${entry.label}</div>
+          <div class="badge" style="color:#9ccc65">${badge}</div>
+        </div>
+        ${sel ? this._flagpoleEditor(fp) : nothing}
+      </div>
+    `;
+  }
+
+  private _flagpoleEditor(fp: FlagpoleFixture) {
+    const p = this.planner;
+    const upd = (mut: () => void) => { mut(); p.save(); p.emitConfig(); };
+    return html`
+      <div style="background:rgba(0,0,0,0.25);border-radius:4px;padding:6px;margin:4px 0">
+        <div class="row"><label>Label</label>
+          <input type="text" .value=${fp.label ?? ''} placeholder="Flagpole"
+                 @input=${(e: Event) => upd(() => { fp.label = (e.target as HTMLInputElement).value; })}>
+        </div>
+        <div class="row"><label>Flag</label>
+          <select .value=${fp.flag ?? 'usa'}
+                  @change=${(e: Event) => upd(() => { fp.flag = (e.target as HTMLSelectElement).value; })}>
+            ${Object.entries(FLAG_PAINTERS).map(([id, e]) =>
+              html`<option value=${id} ?selected=${(fp.flag ?? 'usa') === id}>${e.label}</option>`)}
+          </select>
+        </div>
+        <div class="row"><label>Height (mm)</label>
+          <input type="number" min="1000" max="15000" step="500" .value=${String(fp.height ?? 6000)}
+                 @input=${(e: Event) => upd(() => {
+                   const v = parseFloat((e.target as HTMLInputElement).value);
+                   fp.height = isFinite(v) ? Math.max(1000, v) : 6000;
+                 })}>
+        </div>
+        <label class="row" style="cursor:pointer">
+          <input type="checkbox" ?checked=${!!fp.halfMast} ?disabled=${!!fp.entityId}
+                 @change=${(e: Event) => upd(() => { fp.halfMast = (e.target as HTMLInputElement).checked; })}>
+          <span>Half-mast${fp.entityId ? ' (entity overrides)' : ''}</span>
+        </label>
+        ${this._lockRow(fp)}
+        <div class="row"><label>Hoist entity</label>
+          <span style="font-size:11px;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+            ${fp.entityId || '— unbound —'}
+          </span>
+        </div>
+        <div style="display:flex;gap:4px;margin-top:4px">
+          <button class="btn" style="flex:1;font-size:11px" @click=${() => this._pickFlagpoleEntity(fp)}>
+            ${fp.entityId ? 'Rebind' : 'Bind'}…
+          </button>
+          ${fp.entityId ? html`
+            <button class="btn" style="font-size:11px"
+                    @click=${() => upd(() => { fp.entityId = undefined; })}>✕</button>
+          ` : nothing}
+        </div>
+        <div style="font-size:10px;color:var(--text-dim);margin-top:4px;line-height:1.3">
+          Bind a sensor/number percent (0–100) or a cover.* to raise/lower the flag
+          (1 = full mast, 0.5 = half, 0 = down). Otherwise the half-mast checkbox
+          controls it. The flag waves in the 3D view.
+        </div>
+        <button class="btn danger" style="width:100%;margin-top:6px" @click=${() => {
+          const f = p.floor();
+          f.flagpoles = (f.flagpoles ?? []).filter(x => x.id !== fp.id);
+          p.activeFlagpoleId = null;
+          p.save(); p.emitConfig();
+        }}>Delete</button>
+      </div>
+    `;
+  }
+
+  private _pickFlagpoleEntity(fp: FlagpoleFixture): void {
+    this.dispatchEvent(new CustomEvent('open-entity-picker', {
+      bubbles: true, composed: true,
+      detail: {
+        domain: ['sensor', 'number', 'cover', 'input_number'],
+        onPick: (id: string) => { fp.entityId = id; this.planner.save(); this.planner.emitConfig(); },
+      },
+    }));
+  }
+
   // ── Smart plugs section (Phase 2b) ────────────────────────────────────
   private _plugsSection() {
     const list = this.planner.floor().plugs ?? [];
@@ -4229,12 +4331,94 @@ export class Sidebar extends LitElement {
           ` : nothing}
         </div>
         ${this._windowCoverBindRow(w, upd)}
+        ${this._windowCurtainBlock(w, upd)}
         <div style="font-size:10px;color:var(--text-dim);margin-top:6px;line-height:1.3">
           Pane center at (X, Y). Rotation is wall axis (15° snap). Bind to a
           binary_sensor ("on" = open); optional cover.* blind renders a roller shade.
         </div>
       </div>
     `;
+  }
+
+  // Interior curtain sub-block: style (None/Roman/Drape/Split), side (vertical
+  // only), color, entity bind (cover.*/binary_sensor/switch — 1 = OPEN/gathered),
+  // and an unbound openness slider fallback.
+  private _windowCurtainBlock(w: WindowType, upd: (mut: () => void) => void) {
+    const p = this.planner;
+    const c = w.curtain;
+    const style = c?.style ?? 'none';
+    const st = c?.entityId && p.hass?.states ? p.hass.states[c.entityId] : null;
+    const bindLabel = !c?.entityId ? '— unbound —' : `${c.entityId}${st ? ` · ${st.state}` : ''}`;
+    return html`
+      <div style="background:rgba(0,0,0,0.18);border-radius:4px;padding:5px;margin-top:6px">
+        <div class="row"><label title="Interior fabric over the glass">Curtain</label>
+          <select @change=${(e: Event) => upd(() => {
+                    const v = (e.target as HTMLSelectElement).value;
+                    if (v === 'none') { w.curtain = undefined; return; }
+                    w.curtain = { ...(w.curtain ?? {}), style: v as WindowCurtainStyle };
+                  })}>
+            <option value="none" ?selected=${style === 'none'}>None</option>
+            <option value="horizontal" ?selected=${style === 'horizontal'}>Roman (rises)</option>
+            <option value="vertical" ?selected=${style === 'vertical'}>Drape (one side)</option>
+            <option value="split" ?selected=${style === 'split'}>Split (two panels)</option>
+          </select>
+        </div>
+        ${c && c.style === 'vertical' ? html`
+          <div class="row"><label>Side</label>
+            <select @change=${(e: Event) => upd(() => {
+                      w.curtain = { ...c, side: (e.target as HTMLSelectElement).value as 'left' | 'right' };
+                    })}>
+              <option value="right" ?selected=${(c.side ?? 'right') === 'right'}>Right</option>
+              <option value="left" ?selected=${c.side === 'left'}>Left</option>
+            </select>
+          </div>` : nothing}
+        ${c ? html`
+          <div class="row"><label>Color</label>
+            <input type="color" .value=${c.color ?? '#b9a58c'}
+                   @input=${(e: Event) => upd(() => {
+                     w.curtain = { ...c, color: (e.target as HTMLInputElement).value };
+                   })}>
+          </div>
+          <div class="row" style="margin-top:4px"><label title="cover.* / binary_sensor / switch — 'on' = open">Entity</label>
+            <span style="font-size:11px;color:var(--text-dim);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+              ${bindLabel}
+            </span>
+          </div>
+          <div style="display:flex;gap:4px;margin-top:4px">
+            <button class="btn" style="flex:1;font-size:11px" @click=${() => this._pickWindowCurtain(w)}>
+              ${c.entityId ? '🔗 Rebind' : '🔗 Bind'}…
+            </button>
+            ${c.entityId ? html`
+              <button class="btn" style="font-size:11px"
+                      @click=${() => upd(() => { w.curtain = { ...c, entityId: null }; })}>✕</button>` : nothing}
+          </div>
+          ${!c.entityId ? html`
+            <div class="row" style="margin-top:4px"><label title="0 = closed (covering), 100 = open (gathered)">Open %</label>
+              <input type="range" min="0" max="100" step="5" style="flex:1"
+                     .value=${String(Math.round(w.curtainPos ?? 0))}
+                     @input=${(e: Event) => upd(() => {
+                       w.curtainPos = Math.max(0, Math.min(100, parseFloat((e.target as HTMLInputElement).value) || 0));
+                     })}>
+              <span style="font-size:11px;color:var(--text-dim);min-width:32px;text-align:right">${Math.round(w.curtainPos ?? 0)}%</span>
+            </div>` : nothing}
+        ` : nothing}
+      </div>
+    `;
+  }
+
+  // Curtain openness binding (cover.*/binary_sensor/switch). doorOpenFraction →
+  // 1 = OPEN (gathered aside), 0 = CLOSED (covering the glass). Display only.
+  private _pickWindowCurtain(w: WindowType): void {
+    this.dispatchEvent(new CustomEvent('open-entity-picker', {
+      bubbles: true, composed: true,
+      detail: {
+        domain: ['cover', 'binary_sensor', 'switch'],
+        onPick: (id: string) => {
+          w.curtain = { ...(w.curtain ?? { style: 'vertical' }), entityId: id };
+          this.planner.save(); this.planner.emitConfig();
+        },
+      },
+    }));
   }
 
   // ── Furniture section ─────────────────────────────────────────────────
@@ -5270,7 +5454,7 @@ export class Sidebar extends LitElement {
                      })}>
             </div>
           ` : nothing}
-          ${['fireplace', 'strip', 'sconce', 'string', 'under_cabinet', 'wall_sconce', 'step', 'flood', 'exhaust_wall'].includes(curKind) ? html`
+          ${['fireplace', 'strip', 'sconce', 'string', 'under_cabinet', 'wall_sconce', 'step', 'flood', 'exhaust_wall', 'ground_spot'].includes(curKind) ? html`
             <div class="row"><label>Rotation (°)</label>
               <input type="number" step="15" .value=${String(Math.round(l.rotation ?? 0))}
                      @input=${(e: Event) => upd(() => {
@@ -5287,6 +5471,15 @@ export class Sidebar extends LitElement {
                       @click=${() => upd(() => {
                         l.rotation = (((l.rotation ?? 0) + 15) % 360 + 360) % 360;
                       })}>↻</button>
+            </div>
+          ` : nothing}
+          ${curKind === 'ground_spot' ? html`
+            <div class="row"><label>Tilt (° above horizon)</label>
+              <input type="number" min="5" max="85" step="5" .value=${String(Math.round(l.tilt ?? 35))}
+                     @input=${(e: Event) => upd(() => {
+                       const v = parseFloat((e.target as HTMLInputElement).value);
+                       l.tilt = isFinite(v) ? Math.max(5, Math.min(85, v)) : 35;
+                     })}>
             </div>
           ` : nothing}
           ${/* Height may go negative (down to −3000) for lights sunk below the floor — e.g. a step light on a sunken stairway shaft. */ ''}

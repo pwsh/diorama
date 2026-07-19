@@ -207,6 +207,8 @@ export type LightIconKind =
   | 'wall_sconce'     // wall-mounted up/down cylinder washer
   | 'step'            // small louvered step light embedded low in a wall
   | 'flood'           // wall/eave-mount floodlight: twin angled heads, wide floor pool
+  | 'inground'        // recessed in-ground uplight: flush ring + lens, beams UP (no floor pool)
+  | 'ground_spot'     // ground-mounted aimable spot: stake + head, aims via rotation + tilt
   | 'heatlamp'        // ceiling bathroom heat lamp: red bulb domes, forced warm-red glow + pool
   | 'exhaust'         // ceiling exhaust grille: spinning blades behind slats, no floor disc
   | 'exhaust_wall'    // wall-mount exhaust: round housing + louver shutter, wall-snaps flush, no disc
@@ -236,7 +238,8 @@ export interface Light {
   radius?: number;     // mm; pool of light shown on floor; default 900
   intensity?: number;  // 0..2 multiplier on top of HA brightness; default 1
   iconKind?: LightIconKind;
-  rotation?: number;   // degrees, screen-CW; orients directional kinds (fireplace/strip/sconce/string)
+  rotation?: number;   // degrees, screen-CW; orients directional kinds (fireplace/strip/sconce/string/ground_spot azimuth)
+  tilt?: number;       // degrees above horizon (ground_spot only); default 35, range 5..85. Low tilt = long throw.
   length?: number;     // mm, for strip/string kinds; default 2000
   fanEntity?: string | null;  // fan.* entity driving blade spin (fan kinds); falls back to entity_id
   localState?: string; // local control when UNBOUND ('on'/'off'); inert once bound. See Planner.effectiveState.
@@ -649,6 +652,20 @@ export interface Door {
 // Window glazing style. `single` reproduces the legacy one-pane look.
 export type WindowKind = 'single' | 'double_hung' | 'casement_pair' | 'sliding' | 'picture';
 
+// Per-window interior curtain treatment (display-only openness). Distinct from
+// Window.coverEntity (a roller shade that DESCENDS from the header) — curtains
+// hang on the interior face over the glass:
+//   horizontal — a single roman-shade panel that OPENS by rising from the bottom
+//   vertical   — one drape panel drawing to ONE side (`side`, default right)
+//   split      — two drape panels drawing outward from the center
+export type WindowCurtainStyle = 'horizontal' | 'vertical' | 'split';
+export interface WindowCurtain {
+  style: WindowCurtainStyle;
+  side?: 'left' | 'right';      // vertical style only; default 'right'
+  entityId?: string | null;     // cover.* (doorOpenFraction) OR binary_sensor/switch on/off; display-only
+  color?: string;               // hex fabric color; default warm neutral #b9a58c
+}
+
 export interface Window {
   id: string;
   x: number; y: number;        // pane center in world mm
@@ -659,6 +676,8 @@ export interface Window {
   localState?: string;         // local control when UNBOUND ('on'=open/'off'); inert once bound. See Planner.effectiveState.
   coverEntity?: string | null; // cover.* (blind/shade/curtain). doorOpenFraction → coverFraction: 0 = fully CLOSED
                                // (shade DOWN, HA position 0), 1 = fully open (shade UP, HA position 100). Display only.
+  curtain?: WindowCurtain;     // interior curtain treatment (openness: 1 = OPEN/gathered, 0 = CLOSED/covering)
+  curtainPos?: number;         // 0..100 manual curtain openness when curtain.entityId is UNBOUND (100 = OPEN/gathered)
   kind?: WindowKind;           // glazing style; default 'single' (legacy look)
   sill?: number;               // mm above floor to the bottom of the glass; default 900
   height?: number;             // mm of glass height (header derives as sill+height); default 800
@@ -956,6 +975,28 @@ export interface CameraCalibration {
   points: { u: number; v: number; x: number; y: number }[];
 }
 
+// Yard flagpole fixture. A tapered pole + gold finial + a waving cloth flag,
+// placed freely on the plan (yard prop, NO wall snap). The flag design comes
+// from the pure flag library (src/flags.ts FLAG_PAINTERS, textured into a
+// CanvasTexture); the 3D cloth ripples per-frame (vertex displacement, the
+// _animateBedCover idiom) and yaws slightly with the wind when a weather source
+// is configured. Hoist position (full / half / lowered) resolves from a bound
+// entity (sensor/number percent 0..100, or cover.* position) → halfMast flag →
+// full. Display-only (no click-to-toggle). Rides the `furniture` layer (yard
+// decor). Per-floor (Floor.flagpoles); repairFloor + defaultFloor backfill [].
+// See geometry.ts FLAGPOLE_DEFAULTS / flagpoleHoistFraction.
+export interface FlagpoleFixture {
+  id: string;
+  x: number; y: number;         // pole base position, world mm
+  label?: string;
+  flag?: string;                // FLAG_PAINTERS key; default 'usa'
+  height?: number;              // pole height mm; default 6000
+  entityId?: string;            // hoist source: sensor.*/number.* percent 0..100, OR cover.* position
+  halfMast?: boolean;           // fly at half-mast when no entity is bound (else full)
+  locked?: boolean;             // canvas move/delete disabled
+  hidden?: boolean;             // per-fixture hide (plus the whole furniture layer toggle)
+}
+
 export interface Floor {
   id: string;
   name: string;
@@ -995,6 +1036,7 @@ export interface Floor {
   voidAreas?: VoidArea[];  // floor voids / openings (holes cut from the slab); repairFloor backfills []
   infoCards?: InfoCard[];  // generic entity-value / clock plaques; repairFloor backfills []
   actionButtons?: ActionButton[];  // generic action / trigger buttons; repairFloor backfills []
+  flagpoles?: FlagpoleFixture[];  // yard flagpole fixtures (waving flag); repairFloor backfills []
   boundsLocked?: boolean;   // lock canvas-layout/floor-size editing (hides the edge handles)
   disabled?: boolean;       // hidden from the kiosk/view floor picker + glass-house stack + BLE
                             // floor solve; still editable in the sidebar — lets multiple test

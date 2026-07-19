@@ -10,7 +10,7 @@ import {
   hitBgBody, hitBgCorner, bgEditable,
   hitMotionSensor, hitMotionRotateHandle, hitEnvSensor, hitEnvResizeHandle,
   hitBleProxy, hitAlarmPanel, hitCalendarPanel, hitThermostat, hitSafetySensor, hitAlertBeacon, hitRobot,
-  hitCamera, hitCameraRotateHandle, hitProjector, hitValve, hitSprinklerZone, hitPlug, hitInfoCard, hitActionButton, hitPresenceZone, hitPresenceZoneVertex,
+  hitCamera, hitCameraRotateHandle, hitProjector, hitValve, hitSprinklerZone, hitFlagpole, hitPlug, hitInfoCard, hitActionButton, hitPresenceZone, hitPresenceZoneVertex,
   hitGroundArea, hitGroundAreaVertex, hitPathVertex,
   hitPool, hitPoolVertex,
   hitVacuumSegment,
@@ -710,6 +710,12 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
     p.drag = { kind: 'sprinkler', id: sprH.id, startMm: mm, start: { x: sprH.x, y: sprH.y } };
     canvas.style.cursor = 'grabbing'; e.preventDefault(); p.emitConfig(); return;
   }
+  const flagH = hitFlagpole(p, view, mm);
+  if (flagH) {
+    if (p.activeFlagpoleId !== flagH.id) p.activeFlagpoleId = flagH.id;
+    p.drag = { kind: 'flagpole', id: flagH.id, startMm: mm, start: { x: flagH.x, y: flagH.y } };
+    canvas.style.cursor = 'grabbing'; e.preventDefault(); p.emitConfig(); return;
+  }
   // Presence zone body — select it (shows vertex handles); no whole-zone drag in
   // v1 (reshape via vertex handles or Redraw). Only when the zones layer is on.
   if (zonesInteractive(p)) {
@@ -968,6 +974,14 @@ export function onCanvasMouseMove(p: Planner, canvas: HTMLCanvasElement, view: V
         if (sz && !sz.locked) {
           sz.x = Math.max(0, Math.min(f.w, drag.start.x + mm.x - drag.startMm.x));
           sz.y = Math.max(0, Math.min(f.d, drag.start.y + mm.y - drag.startMm.y));
+        }
+        break;
+      }
+      case 'flagpole': {
+        const fpz = (f.flagpoles ?? []).find(x => x.id === drag.id);
+        if (fpz && !fpz.locked) {
+          fpz.x = Math.max(0, Math.min(f.w, drag.start.x + mm.x - drag.startMm.x));
+          fpz.y = Math.max(0, Math.min(f.d, drag.start.y + mm.y - drag.startMm.y));
         }
         break;
       }
@@ -1310,6 +1324,7 @@ export function onCanvasMouseMove(p: Planner, canvas: HTMLCanvasElement, view: V
     else if (hitProjector(p, view, mm)) canvas.style.cursor = 'grab';
     else if (hitValve(p, view, mm)) canvas.style.cursor = 'grab';
     else if (hitSprinklerZone(p, view, mm)) canvas.style.cursor = 'grab';
+    else if (hitFlagpole(p, view, mm)) canvas.style.cursor = 'grab';
     else if (hitPlug(p, view, mm)) canvas.style.cursor = 'grab';
     else if (zonesInteractive(p) && hitPresenceZoneVertex(p, view, mm)) canvas.style.cursor = 'grab';
     else if (groundInteractive(p) && hitGroundAreaVertex(p, view, mm)) canvas.style.cursor = 'grab';
@@ -1550,6 +1565,11 @@ export function onCanvasMouseUp(p: Planner, canvas: HTMLCanvasElement): void {
         p.save();
       }
     }
+  } else if (drag.kind === 'flagpole') {
+    // Display-only fixture (no click-to-toggle): a release just grid-snaps the
+    // base (free placement, no wall snap).
+    const fpz = (f.flagpoles ?? []).find(x => x.id === drag.id);
+    if (fpz) { fpz.x = snap(fpz.x, 10); fpz.y = snap(fpz.y, 10); p.save(); }
   } else if (drag.kind === 'pzoneVert') {
     const z = (f.presenceZones ?? []).find(x => x.id === drag.id);
     if (z && z.points[drag.idx]) z.points[drag.idx] = { x: snap(z.points[drag.idx].x, 10), y: snap(z.points[drag.idx].y, 10) };
@@ -2143,6 +2163,23 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
     p.emitConfig();
     return;
   }
+  if (p.tool === 'flagpole') {
+    if (!f.flagpoles) f.flagpoles = [];
+    const id = newId('flag');
+    // Free placement — the click point is the pole base (a yard prop).
+    f.flagpoles.push({
+      id,
+      x: snap(Math.max(0, Math.min(f.w, mm.x)), 10),
+      y: snap(Math.max(0, Math.min(f.d, mm.y)), 10),
+      flag: 'usa',
+      label: `Flagpole ${f.flagpoles.length + 1}`,
+    });
+    p.activeFlagpoleId = id;
+    p.save();
+    p.setTool('select');
+    p.emitConfig();
+    return;
+  }
   if (p.tool === 'plug') {
     if (!f.plugs) f.plugs = [];
     const id = newId('pg');
@@ -2404,6 +2441,13 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
       if (sprDel.locked) return;
       f.sprinklerZones = (f.sprinklerZones ?? []).filter(x => x.id !== sprDel.id);
       if (p.activeSprinklerId === sprDel.id) p.activeSprinklerId = null;
+      p.save(); p.emitConfig(); return;
+    }
+    const flagDel = hitFlagpole(p, view, mm);
+    if (flagDel) {
+      if (flagDel.locked) return;
+      f.flagpoles = (f.flagpoles ?? []).filter(x => x.id !== flagDel.id);
+      if (p.activeFlagpoleId === flagDel.id) p.activeFlagpoleId = null;
       p.save(); p.emitConfig(); return;
     }
     if (zonesInteractive(p)) {

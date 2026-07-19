@@ -1,9 +1,9 @@
 import { switchSize, distMM, pointToSeg, transformVerts, centroid, localToWorld,
          bgLocalToWorld, bgWorldToLocal, furnitureWorldToLocal,
          furnitureCorners, furnitureLocalToWorld, doorEndpoint,
-         doorOpenDeltaDeg, windowEndpoints, pointInPolygon, SPRINKLER_DEFAULTS } from './geometry.js';
+         doorOpenDeltaDeg, windowEndpoints, pointInPolygon, SPRINKLER_DEFAULTS, FLAGPOLE_DEFAULTS } from './geometry.js';
 import type { Planner } from './planner.js';
-import type { Vec2, Wall, Sensor, Furniture, BgImage, MotionSensor, EnvSensor, BleProxy, AlarmPanel, CalendarPanel, ThermostatFixture, SafetySensor, AlertBeacon, RobotFixture, CameraFixture, ProjectorFixture, ValveFixture, PlugFixture, SprinklerZone, PresenceZone, InfoCard, ActionButton, Door, Window as WindowType, Floor } from './types.js';
+import type { Vec2, Wall, Sensor, Furniture, BgImage, MotionSensor, EnvSensor, BleProxy, AlarmPanel, CalendarPanel, ThermostatFixture, SafetySensor, AlertBeacon, RobotFixture, CameraFixture, ProjectorFixture, ValveFixture, PlugFixture, SprinklerZone, FlagpoleFixture, PresenceZone, InfoCard, ActionButton, Door, Window as WindowType, Floor } from './types.js';
 import type { FloorEdge } from './geometry.js';
 import { envChipHalfPx, infoCardHalfPx, actionButtonHalfPx, type View } from './canvas-render.js';
 import { vacMapAffine, vacWorldToPixel, vacSegHasPixel } from './valetudo-map.js';
@@ -356,6 +356,18 @@ export function hitSprinklerZone(p: Planner, view: View, mm: Vec2): SprinklerZon
   const h = Math.max(hitPx(view) * 1.2, SPRINKLER_DEFAULTS.hitRadiusMm);
   const list = f.sprinklerZones ?? [];
   for (let i = list.length - 1; i >= 0; i--) {
+    if (distMM(list[i], mm) < h) return list[i];
+  }
+  return null;
+}
+
+// Flagpole — point-in-circle on the base (free placement, small hit radius).
+export function hitFlagpole(p: Planner, view: View, mm: Vec2): FlagpoleFixture | null {
+  const f = p.floor();
+  const h = Math.max(hitPx(view) * 1.3, FLAGPOLE_DEFAULTS.hitRadiusMm);
+  const list = f.flagpoles ?? [];
+  for (let i = list.length - 1; i >= 0; i--) {
+    if (list[i].hidden) continue;
     if (distMM(list[i], mm) < h) return list[i];
   }
   return null;
