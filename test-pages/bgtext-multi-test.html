@@ -135,10 +135,37 @@
     ok('bound entity wins over static text', res.length === 1 && res[0].text === '42', JSON.stringify(res));
   }
   {
-    const long = 'X'.repeat(60);
-    p.store.bgTexts = [ent('grass', long)];
+    // Per-mode cap: grass reflows multi-line → 160 chars; other styles → 40.
+    p.store.bgTexts = [ent('grass', 'G'.repeat(60))];
+    ok('grass under 160 chars kept intact', p.bgTextsResolved()[0].text.length === 60,
+       `len=${p.bgTextsResolved()[0].text.length}`);
+    p.store.bgTexts = [ent('grass', 'G'.repeat(200))];
+    ok('grass text capped at 160 chars', p.bgTextsResolved()[0].text.length === 160,
+       `len=${p.bgTextsResolved()[0].text.length}`);
+    p.store.bgTexts = [ent('sky', 'S'.repeat(60))];
+    ok('sky text still capped at 40 chars', p.bgTextsResolved()[0].text.length === 40,
+       `len=${p.bgTextsResolved()[0].text.length}`);
+  }
+  {
+    // Grass "fit to area": grassAreaId → the ground area's bbox inset ~10%.
+    p.floor().groundAreas = [{ id: 'ga1', kind: 'grass',
+      points: [{ x: 1000, y: 1000 }, { x: 5000, y: 1000 }, { x: 5000, y: 3000 }, { x: 1000, y: 3000 }] }];
+    p.store.bgTexts = [{ id: 'g', mode: 'grass', text: 'FIT ME', grassAreaId: 'ga1' }];
     const res = p.bgTextsResolved();
-    ok('resolved text capped at 40 chars', res[0].text.length === 40, `len=${res[0].text.length}`);
+    const ga = res[0].grassArea;
+    ok('grass fit-to-area resolves bbox inset ~10%',
+       !!ga && Math.abs(ga.cx - 3000) < 1 && Math.abs(ga.cy - 2000) < 1 &&
+       Math.abs(ga.w - 3200) < 1 && Math.abs(ga.h - 1600) < 1,
+       ga ? `cx=${ga.cx} cy=${ga.cy} w=${ga.w} h=${ga.h}` : 'no rect');
+    ok('grass carries grassAreaId when resolved', res[0].grassAreaId === 'ga1');
+  }
+  {
+    // Stale grassAreaId (area not on the current floor) → no rect, auto fallback.
+    p.store.bgTexts = [{ id: 'g', mode: 'grass', text: 'STALE', grassAreaId: 'nope' }];
+    const res = p.bgTextsResolved();
+    ok('stale grassAreaId → no grassArea (falls back to auto)',
+       res[0].grassArea === undefined && res[0].grassAreaId === undefined,
+       `area=${res[0].grassArea}`);
   }
   {
     p.store.bgTexts = [ent('sky', 'KEEP'), ent('banner', '   '), ent('grass', '')];
@@ -355,21 +382,23 @@
     const dAtt = Math.min(endPlus.distanceTo(attach), endMinus.distanceTo(attach));
     ok('tow wire endpoints coincide with chopper attach + banner top', dTop < 1 && dAtt < 1,
        `dTop=${dTop.toFixed(2)} dAtt=${dAtt.toFixed(2)}`);
-    // The declared bannerTop equals the banner Group's REAL top-edge centre.
-    const bh = c.banner.userData.bannerFront.geometry.parameters.height;
-    const realTop = vec(c.banner.position, c.banner.position.x, c.banner.position.y + bh / 2, c.banner.position.z);
-    ok('declared bannerTop == banner Group real top-edge centre', realTop.distanceTo(bannerTop) < 1,
-       `d=${realTop.distanceTo(bannerTop).toFixed(2)}`);
-    // Still connected AFTER advancing frames (banner sways rotation.y about its
-    // origin; the top-edge centre is on that axis, so it is sway-invariant).
+    // The declared bannerTop is now the banner Group's LEADING TOP CORNER, which
+    // (children shifted −len/2,−bh/2) is the group ORIGIN → in asm space just the
+    // group position.
+    c.banner.updateMatrix();
+    const cornerStatic = vec(c.banner.position, 0, 0, 0).applyMatrix4(c.banner.matrix);
+    ok('declared bannerTop == banner leading-top corner (group origin)',
+       cornerStatic.distanceTo(bannerTop) < 1, `d=${cornerStatic.distanceTo(bannerTop).toFixed(2)}`);
+    // Still connected AFTER advancing frames: the banner sways rotation.y ABOUT
+    // this corner (the towed pivot), so the corner is sway-INVARIANT and the wire
+    // (fixed in the asm frame) stays attached.
     step(120);
     w.updateMatrix(); c.banner.updateMatrix();
-    const bh2 = c.banner.userData.bannerFront.geometry.parameters.height;
-    const topAfter  = vec(c.banner.position, 0, bh2 / 2, 0).applyMatrix4(c.banner.matrix);   // asm-space
-    const wireTopA  = vec(w.position, 0,  len / 2, 0).applyMatrix4(w.matrix);
-    const wireTopB  = vec(w.position, 0, -len / 2, 0).applyMatrix4(w.matrix);
-    const dAfter = Math.min(wireTopA.distanceTo(topAfter), wireTopB.distanceTo(topAfter));
-    ok('tow wire stays attached to banner top after advance frames', dAfter < 1,
+    const cornerAfter = vec(c.banner.position, 0, 0, 0).applyMatrix4(c.banner.matrix);
+    const wireEndA  = vec(w.position, 0,  len / 2, 0).applyMatrix4(w.matrix);
+    const wireEndB  = vec(w.position, 0, -len / 2, 0).applyMatrix4(w.matrix);
+    const dAfter = Math.min(wireEndA.distanceTo(cornerAfter), wireEndB.distanceTo(cornerAfter));
+    ok('tow wire stays attached to banner leading corner after advance frames', dAfter < 1,
        `d=${dAfter.toFixed(2)}`);
   }
 
@@ -401,6 +430,119 @@
     ok('propeller sweeps the plane ⟂ flight axis (no disc wobble off the axis)',
        Math.abs(s0.dz) < 1 && Math.abs(s1.dz) < 1 && Math.abs(s2.dz) < 1,
        `dz=${s0.dz.toFixed(2)}/${s1.dz.toFixed(2)}/${s2.dz.toFixed(2)}`);
+  }
+
+  // ════════════ TRAIN SCALE (bug 3) ════════════
+  {
+    r.updateBgTexts([ent('train', 'BIG TRAIN NOW')], false, 0, 0);
+    const t = r._bgRigs.find(x => x.mode === 'train').train;
+    ok('train vehicles scaled ×1.8',
+       t.vehicles.every(v => Math.abs(v.obj.scale.x - 1.8) < 1e-6 &&
+                             Math.abs(v.obj.scale.y - 1.8) < 1e-6 &&
+                             Math.abs(v.obj.scale.z - 1.8) < 1e-6),
+       `s=${t.vehicles[0].obj.scale.x}`);
+    ok('train spacing widened to 1480', t.spacing === 1480, `sp=${t.spacing}`);
+    ok('train wheelR = 162 (90×1.8)', t.wheelR === 162, `wr=${t.wheelR}`);
+    // Spin rate uses the scaled wheelR: one advance frame Δrot = −speed·dt/162.
+    const wheel = t.vehicles[0].wheels[0];
+    const r0 = wheel.rotation.x, dt = 1 / 60;
+    clk += dt; r._advanceBgText(dt, clk);
+    const expected = -(1100 * dt) / 162;
+    ok('train wheel spin uses wheelR 162', Math.abs((wheel.rotation.x - r0) - expected) < 1e-6,
+       `d=${(wheel.rotation.x - r0).toFixed(5)} exp=${expected.toFixed(5)}`);
+  }
+
+  // ════════════ ZOOM-OUT ROBUSTNESS (bug 1) ════════════
+  {
+    r.updateBgTexts([ent('sky', 'ZOOM SAFE')], false, 0, 5);
+    const s = r._bgRigs.find(x => x.mode === 'sky');
+    ok('skywriting sprite is not frustum-culled', s.sky.frustumCulled === false,
+       `fc=${s.sky.frustumCulled}`);
+  }
+  ok('camera far plane raised to 150000 (no zoom-out clip)', r._camera.far === 150000,
+     `far=${r._camera.far}`);
+
+  // ════════════ GRASS: multi-line reflow + target area (bug 4) ════════════
+  // Count contiguous horizontal text-ink bands: the grass base is #4f7a34
+  // (r=79); the dark cut #31521d (r=49) marks glyph rows → r < 62 = text ink.
+  const rowBands = (cv) => {
+    const g = cv.getContext('2d');
+    const d = g.getImageData(0, 0, cv.width, cv.height).data;
+    let bands = 0, inBand = false;
+    for (let y = 0; y < cv.height; y++) {
+      let ink = false;
+      for (let x = 0; x < cv.width; x++) {
+        const i = (y * cv.width + x) * 4;
+        if (d[i] < 62 && d[i + 2] < 45) { ink = true; break; }   // darker than grass base
+      }
+      if (ink && !inBand) { bands++; inBand = true; } else if (!ink) inBand = false;
+    }
+    return bands;
+  };
+  {
+    // Long text into a TALL narrow rect → wraps to multiple lines.
+    r.updateBgTexts([{ id: 'ml', mode: 'grass',
+      text: 'THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG',
+      grassArea: { cx: 6000, cy: 4000, w: 2400, h: 4000 } }], false, 0, 0);
+    const cvML = r._bgRigs.find(x => x.mode === 'grass').grassMesh.material.map.image;
+    const bML = rowBands(cvML);
+    // Short text into a WIDE rect → a single line.
+    r.updateBgTexts([{ id: 'sl', mode: 'grass', text: 'HI',
+      grassArea: { cx: 6000, cy: 4000, w: 4000, h: 1200 } }], false, 0, 0);
+    const cvSL = r._bgRigs.find(x => x.mode === 'grass').grassMesh.material.map.image;
+    const bSL = rowBands(cvSL);
+    ok('grass reflows long text into MULTIPLE lines (more than short)', bML >= 2 && bML > bSL,
+       `long=${bML} short=${bSL}`);
+    ok('grass short text stays few lines', bSL >= 1 && bSL <= 2, `short=${bSL}`);
+  }
+  {
+    // Explicit target area → decal placed AT that rect (center + size).
+    const area = { cx: 6000, cy: 4000, w: 2400, h: 1600 };
+    r.updateBgTexts([{ id: 'ga', mode: 'grass', text: 'YARD PATCH', grassArea: area }], false, 0, 0);
+    const rig = r._bgRigs.find(x => x.mode === 'grass');
+    const gr = rig.grass;
+    ok('grass fit-to-area decal placed at the target rect',
+       Math.abs(gr.cx - area.cx) < 1 && Math.abs(gr.cy - area.cy) < 1 &&
+       Math.abs(gr.w - area.w) < 1 && Math.abs(gr.h - area.h) < 1,
+       `c=(${gr.cx},${gr.cy}) wh=${gr.w}x${gr.h}`);
+    ok('grass decal geometry sized to the target rect',
+       Math.abs(rig.grassMesh.geometry.parameters.width - area.w) < 1 &&
+       Math.abs(rig.grassMesh.geometry.parameters.height - area.h) < 1);
+  }
+
+  // ════════════ SKYWRITING TYPOGRAPHY (item 6) ════════════
+  {
+    const inkRatio = (cv) => {
+      const g = cv.getContext('2d');
+      const d = g.getImageData(0, 0, cv.width, cv.height).data;
+      let lit = 0;
+      for (let i = 0; i < d.length; i += 4) if (d[i + 3] > 40) lit++;
+      return lit / (cv.width * cv.height);
+    };
+    const skyCv = r._makeBgTextTexture('MMMMMMMM', 'sky').image;
+    // Old-style reference: bold 800, NO letter spacing, original heavy blurs.
+    const oc = document.createElement('canvas'), og = oc.getContext('2d');
+    const oldFont = '800 96px system-ui, "Segoe UI", sans-serif'; og.font = oldFont;
+    oc.width = Math.ceil(og.measureText('MMMMMMMM').width) + 180; oc.height = 240;
+    og.font = oldFont; og.textAlign = 'left'; og.textBaseline = 'middle';
+    og.globalCompositeOperation = 'lighter';
+    let ox = 90;
+    for (const ch of 'MMMMMMMM') {
+      const cw = og.measureText(ch).width;
+      for (const [blur, alpha] of [[42, 0.32], [22, 0.5], [8, 0.9]]) {
+        og.shadowColor = 'rgba(255,255,255,0.95)'; og.shadowBlur = blur;
+        og.fillStyle = `rgba(250,252,255,${alpha})`; og.fillText(ch, ox, 120);
+      }
+      ox += cw;
+    }
+    ok('skywriting lighter+spaced → less ink bloom than old bold',
+       inkRatio(skyCv) < inkRatio(oc),
+       `new=${inkRatio(skyCv).toFixed(3)} old=${inkRatio(oc).toFixed(3)}`);
+    // Letter spacing widens the canvas beyond the tight (normal-weight) glyph run.
+    og.font = '400 96px system-ui, "Segoe UI", sans-serif';
+    const tightW = Math.ceil(og.measureText('MMMMMMMM').width) + 180;
+    ok('skywriting applies letter spacing (canvas wider than tight run)', skyCv.width > tightW,
+       `sky=${skyCv.width} tight=${tightW}`);
   }
 
   // ════════════ report ════════════

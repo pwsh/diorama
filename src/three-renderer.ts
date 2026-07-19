@@ -535,6 +535,7 @@ interface BgRig {
   bobAmp?: number; propRate?: number;
   // grass
   grass?: { cx: number; cy: number; w: number; h: number };
+  grassMesh?: THREE.Mesh;                    // the decal mesh (test hook + texture read)
   // train
   train?: BgTrain;
 }
@@ -1824,7 +1825,12 @@ export class ThreeDRenderer {
     this._scene.background = new THREE.Color(0x0d0d1a);
     // No fog: previously set to 12000–36000 mm range, which dimmed walls /
     // furniture / lights when the user zoomed out. Background tint is enough.
-    this._camera = new THREE.PerspectiveCamera(50, w / h, 10, 60000);
+    // far plane 150000 (not 60000): fully-zoomed-out, the banner-plane orbit and
+    // the message-train loop sit outside the floor rect and could push their far
+    // arc past ~70000 from the camera — clipping AGAINST the camera-centered sky
+    // dome (always 30000 away) so props vanished "behind the sky". 150000 clears
+    // every background prop at any zoom; near stays 10.
+    this._camera = new THREE.PerspectiveCamera(50, w / h, 10, 150000);
     this._camera.position.set(0, 9000, -6000);
     this._camera.lookAt(0, 0, 0);
     this._renderer = new THREE.WebGLRenderer({
@@ -10166,7 +10172,10 @@ export class ThreeDRenderer {
   // mode (a display prop). Entries are staggered so instances of the same style
   // never overlap. Legacy single-rig mirror fields point at the first rig of
   // each style so the original bgtext-test keeps reading them.
-  updateBgTexts(entries: { id: string; mode: BgTextEntryMode; text: string; maxCars?: number }[],
+  updateBgTexts(entries: {
+                  id: string; mode: BgTextEntryMode; text: string; maxCars?: number;
+                  grassAreaId?: string; grassArea?: { cx: number; cy: number; w: number; h: number };
+                }[],
                 storm: boolean, windRad = 0, windKmh = 0): void {
     this._disposeSpriteMaps(this._bgTextGroup);
     this._clearGroup(this._bgTextGroup);
@@ -10183,7 +10192,10 @@ export class ThreeDRenderer {
     let grassSlot = 0;
     for (let i = 0; i < n; i++) {
       const e = list[i];
-      const text = (e.text || '').slice(0, 40);
+      // Per-mode cap: grass reflows multi-line so it takes 160 chars; every other
+      // style wants short text → 40 (matches Planner.bgTextsResolved).
+      const cap = e.mode === 'grass' ? 160 : 40;
+      const text = (e.text || '').slice(0, cap);
       if (!text) continue;
       const isAircraft = e.mode === 'sky' || e.mode === 'banner' || e.mode === 'chopper';
       if (storm && isAircraft) continue;                 // aircraft/skywriting hide in a downpour
@@ -10191,7 +10203,7 @@ export class ThreeDRenderer {
       if (e.mode === 'sky')          rig = this._buildBgSky(text, i, n, diag);
       else if (e.mode === 'banner')  rig = this._buildBgAircraft('plane', text, i, n, diag);
       else if (e.mode === 'chopper') rig = this._buildBgAircraft('chopper', text, i, n, diag);
-      else if (e.mode === 'grass')   rig = this._buildBgGrass(text, i, grassSlot++);
+      else if (e.mode === 'grass')   rig = this._buildBgGrass(text, i, grassSlot++, e.grassArea);
       else if (e.mode === 'train')   rig = this._buildBgTrain(text, i, e.maxCars);
       if (rig) this._bgRigs.push(rig);
     }
@@ -10237,6 +10249,10 @@ export class ThreeDRenderer {
     const z = -diag * 0.35 + (i % 2 === 1 ? diag * 0.08 : 0);
     spr.position.set(baseX, y, z);
     spr.renderOrder = -6;
+    // A huge-scaled sprite can be frustum-culled by its CENTER even when the quad
+    // still overlaps the view — belt-and-braces with the far-plane bump so the
+    // skywriting never blinks out on zoom-out.
+    spr.frustumCulled = false;
     spr.userData.outlineSkip = true;
     this._bgTextGroup.add(spr);
     return { mode: 'sky', index: i, sky: spr, skyBaseX: baseX, skyPhase: i * 1.7 };
@@ -10329,27 +10345,29 @@ export class ThreeDRenderer {
         blade.rotation.x = rot; (tailRotor as THREE.Group).add(blade);
       }
       tailRotor.position.set(70, 470, 800); tailRotor.userData.outlineSkip = true; asm.add(tailRotor);
-      // Banner hung BELOW-and-behind; the tow wire spans the chopper belly to the
-      // banner's TOP-edge centre. Cylinders are Y-axis-aligned by default, so we
-      // position the wire at the segment MIDPOINT and rotate its local +Y onto the
-      // attach→top vector (a bare rotation.x tilt never actually reached either
-      // end). The banner sways via rotation.y about the Group origin, and the
-      // top-edge centre sits ON that Y axis (local x=z=0), so it is sway-invariant
-      // — a wire fixed in the chopper (asm) frame stays connected across frames.
-      const bannerZ = 1500 + (bh * aspect) / 2;
-      banner.position.set(0, -1900, bannerZ);
+      // Banner hung BELOW-and-behind, towed from its LEADING TOP CORNER. The
+      // banner Group's origin was moved onto that corner (originCorner=true), so
+      // placing the group at the corner's world spot puts the visible banner in
+      // the same place as before (it extends +Z/−y away from the corner). The tow
+      // wire spans the chopper belly to that corner. Cylinders are Y-axis-aligned
+      // by default, so we position the wire at the segment MIDPOINT and rotate its
+      // local +Y onto the attach→corner vector. The sway (rotation.y) now pivots
+      // the banner ABOUT this towed corner — physically correct for a hanging
+      // banner — and the corner sits at the group origin, so it is sway-invariant:
+      // a wire fixed in the chopper (asm) frame stays connected across frames.
+      banner.position.set(0, -1900 + bh / 2, 1500);
       asm.add(banner);
       const attach = new THREE.Vector3(0, 260, 480);        // belly, just behind the cabin
-      const bannerTop = new THREE.Vector3(0, -1900 + bh / 2, bannerZ);
-      const wireVec = bannerTop.clone().sub(attach);
+      const bannerCorner = banner.position.clone();          // leading TOP corner (= group origin)
+      const wireVec = bannerCorner.clone().sub(attach);
       const wireLen = wireVec.length();
       const towLine = new THREE.Mesh(new THREE.CylinderGeometry(14, 14, wireLen, 6), dark);
       towLine.position.copy(attach).addScaledVector(wireVec, 0.5);   // midpoint
       towLine.quaternion.setFromUnitVectors(
-        new THREE.Vector3(0, 1, 0), wireVec.clone().normalize());     // +Y → attach→top
+        new THREE.Vector3(0, 1, 0), wireVec.clone().normalize());     // +Y → attach→corner
       towLine.userData.outlineSkip = true;
       towLine.userData.attach = attach.toArray();
-      towLine.userData.bannerTop = bannerTop.toArray();
+      towLine.userData.bannerTop = bannerCorner.toArray();   // legacy key: now the leading-top corner
       asm.add(towLine);
       towWire = towLine;
       radius = baseR * 0.6 * factor; alt = 7500 + 800 * i; dir = -1; bobAmp = 150; propRate = 42;
@@ -10371,17 +10389,25 @@ export class ThreeDRenderer {
   // carry userData.textPlane (map disposal) and the shared map is dedup-guarded in
   // _disposeSpriteMaps so it is freed exactly once. userData.bannerFront exposes
   // the readable +normal plane for the legacy _bgBannerText mirror.
-  private _buildBanner(tex: THREE.CanvasTexture, bh: number, aspect: number): THREE.Group {
+  // When `originCorner` is set the two planes are shifted by (−len/2, −bh/2) so
+  // the GROUP ORIGIN lands on the banner's local +X/+Y corner — used by the
+  // chopper so the tow wire affixes to (and the sway pivots about) the leading
+  // TOP corner. The plane tow-banner leaves it centered (origin = banner center).
+  private _buildBanner(tex: THREE.CanvasTexture, bh: number, aspect: number,
+                       originCorner = false): THREE.Group {
     const grp = new THREE.Group();
-    const geo = new THREE.PlaneGeometry(bh * aspect, bh);
+    const len = bh * aspect;
+    const geo = new THREE.PlaneGeometry(len, bh);
     const mat = new THREE.MeshBasicMaterial({ map: tex, side: THREE.FrontSide, fog: false });
+    const ox = originCorner ? -len / 2 : 0;     // local +X = leading edge
+    const oy = originCorner ? -bh / 2 : 0;      // local +Y = top edge
     const front = new THREE.Mesh(geo, mat);
-    front.position.z = 1;                       // faces +Z(local) → readable
+    front.position.set(ox, oy, 1);              // faces +Z(local) → readable
     front.userData.textPlane = true; front.userData.outlineSkip = true;
     front.userData.bannerFace = 'front';
     const back = new THREE.Mesh(geo, mat);      // SHARES geo + material (one map)
     back.rotation.y = Math.PI;                  // faces −Z(local), un-mirrored
-    back.position.z = -1;
+    back.position.set(ox, oy, -1);
     back.userData.textPlane = true; back.userData.outlineSkip = true;
     back.userData.bannerFace = 'back';
     grp.add(front); grp.add(back);
@@ -10390,12 +10416,17 @@ export class ThreeDRenderer {
     return grp;
   }
 
-  // Flat lawn text decal OUTSIDE the wall loops. Multiple grass entries take
-  // successive margin strips (slot) so they don't stack.
-  private _buildBgGrass(text: string, i: number, slot: number): BgRig {
-    const gtex = this._makeBgTextTexture(text, 'grass');
-    const gcv = gtex.image as HTMLCanvasElement;
-    const place = this._bgGrassPlacement(gcv.width / gcv.height, slot);
+  // Flat lawn text decal. When `area` is given (the user chose a "fit to area"
+  // GroundArea, already bbox-inset in plan mm) the text reflows multi-line into
+  // that rect — drawn there even if it overlaps the house (the user's call).
+  // Otherwise it auto-places in the widest open yard margin strip (successive
+  // grass entries take the next strip via `slot`) and still reflows multi-line to
+  // the strip's aspect. Either way the text word-wraps to the target aspect and
+  // picks the largest font that fits (min-font floor + ellipsis trim).
+  private _buildBgGrass(text: string, i: number, slot: number,
+                        area?: { cx: number; cy: number; w: number; h: number }): BgRig {
+    const place = area ?? this._bgGrassPlacement(slot);
+    const gtex = this._makeGrassTextTexture(text, place.w / place.h);
     const mesh = new THREE.Mesh(
       new THREE.PlaneGeometry(place.w, place.h),
       new THREE.MeshBasicMaterial({ map: gtex, fog: false, depthWrite: false }));
@@ -10405,7 +10436,80 @@ export class ThreeDRenderer {
     mesh.userData.textPlane = true;
     mesh.userData.outlineSkip = true;
     this._bgTextGroup.add(mesh);
-    return { mode: 'grass', index: i, grass: { cx: place.cx, cy: place.cy, w: place.w, h: place.h } };
+    return {
+      mode: 'grass', index: i, grassMesh: mesh,
+      grass: { cx: place.cx, cy: place.cy, w: place.w, h: place.h },
+    };
+  }
+
+  // Multi-line lawn-relief text baked to a CanvasTexture at the target aspect
+  // (w/h of the decal rect). Word-wraps + picks the LARGEST font whose wrapped
+  // lines all fit the padded rect; below a min-font floor it wraps at the floor
+  // and trims the overflow with an ellipsis. Deterministic (no Math.random). Same
+  // mowed-into-the-lawn palette as the legacy single-line grass painter.
+  private _makeGrassTextTexture(text: string, aspect: number): THREE.CanvasTexture {
+    const cv = document.createElement('canvas');
+    const g = cv.getContext('2d')!;
+    const H = 512;
+    const W = Math.max(160, Math.round(H * Math.max(0.1, aspect)));
+    cv.width = W; cv.height = H;
+    const pad = Math.round(Math.min(W, H) * 0.08);
+    const availW = W - pad * 2, availH = H - pad * 2;
+    const words = (text || ' ').trim().split(/\s+/).filter(Boolean);
+    if (words.length === 0) words.push(' ');
+    const fontOf = (fs: number) => `800 ${fs}px system-ui, "Segoe UI", sans-serif`;
+    // Greedy word wrap at the current font (g.font already set).
+    const wrap = (maxW: number): string[] => {
+      const lines: string[] = [];
+      let cur = '';
+      for (const w of words) {
+        const trial = cur ? cur + ' ' + w : w;
+        if (!cur || g.measureText(trial).width <= maxW) cur = trial;
+        else { lines.push(cur); cur = w; }
+      }
+      if (cur) lines.push(cur);
+      return lines;
+    };
+    const MIN_FONT = 40;
+    let fs = MIN_FONT, lineH = MIN_FONT * 1.12, lines: string[] = [];
+    let fitted = false;
+    for (let f = 240; f >= MIN_FONT; f -= 6) {
+      g.font = fontOf(f);
+      const lh = f * 1.12;
+      const maxLines = Math.max(1, Math.floor(availH / lh));
+      const ls = wrap(availW);
+      if (ls.length <= maxLines && ls.every(l => g.measureText(l).width <= availW)) {
+        fs = f; lineH = lh; lines = ls; fitted = true; break;
+      }
+    }
+    if (!fitted) {
+      fs = MIN_FONT; lineH = fs * 1.12;
+      g.font = fontOf(fs);
+      const maxLines = Math.max(1, Math.floor(availH / lineH));
+      lines = wrap(availW);
+      if (lines.length > maxLines) {
+        lines = lines.slice(0, maxLines);
+        let last = lines[maxLines - 1];
+        while (last.length && g.measureText(last + '…').width > availW) last = last.slice(0, -1);
+        lines[maxLines - 1] = last + '…';
+      }
+    }
+    // Paint: grass base + per-line mow highlight (lighter) over darker cut.
+    g.font = fontOf(fs);
+    g.fillStyle = '#4f7a34'; g.fillRect(0, 0, W, H);
+    g.textAlign = 'center'; g.textBaseline = 'middle';
+    const totalH = lines.length * lineH;
+    let y = (H - totalH) / 2 + lineH / 2;
+    for (const line of lines) {
+      g.lineWidth = 10; g.strokeStyle = '#7bab52';
+      g.strokeText(line, W / 2 + 4, y + 6);
+      g.fillStyle = '#31521d';
+      g.fillText(line, W / 2, y + 2);
+      y += lineH;
+    }
+    const tex = new THREE.CanvasTexture(cv);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    return tex;
   }
 
   // Message train circling the yard at ground level. The consist is engine +
@@ -10431,10 +10535,15 @@ export class ThreeDRenderer {
       // local +X flank ← chunk[N−1−k]; local −X flank ← chunk[k].
       vehicles.push(this._buildTrainCar(chunks[N - 1 - k], chunks[k], k === N - 1, k));
     }
+    // Scale each vehicle ×1.8 so the message reads from a zoomed-out camera. The
+    // vehicle origins sit at ground level, so a uniform scale keeps them on the
+    // ground; spacing (1480) + wheelR (162 = 90·1.8) are the SCALED counterparts
+    // (spacing prevents overlap; wheelR keeps the spin rate = speed/wheelR right).
+    for (const v of vehicles) v.obj.scale.setScalar(1.8);
     for (const v of vehicles) this._bgTextGroup.add(v.obj);
     const train: BgTrain = {
       loopScene: loop.loopScene, loopWorld: loop.loopWorld, cum: loop.cum, total: loop.total,
-      vehicles, spacing: 820, wheelR: 90, s: 0, chunks,
+      vehicles, spacing: 1480, wheelR: 162, s: 0, chunks,
     };
     this._positionTrain(train);       // settle initial poses before the first frame
     return { mode: 'train', index: i, train };
@@ -10608,11 +10717,18 @@ export class ThreeDRenderer {
     const txt = (text || '').slice(0, 40) || ' ';
 
     if (mode === 'sky') {
-      const font = '800 96px system-ui, "Segoe UI", sans-serif';
+      // Skywriting: NORMAL weight (was 800 — the bold strokes ran together) +
+      // ~0.12em letter spacing so the letters breathe, with softened glow so the
+      // thinner strokes don't bloom back into each other. Drawn per-character
+      // with a manual advance (the canvas letterSpacing property is unreliable
+      // across browsers, and per-char is already needed for the wobble).
+      const px = 96;
+      const font = `400 ${px}px system-ui, "Segoe UI", sans-serif`;
+      const spacing = px * 0.12;                  // extra advance between glyphs
       g.font = font;
       const tw = Math.ceil(g.measureText(txt).width);
       const pad = 90;                             // room for the glow bleed
-      cv.width = tw + pad * 2; cv.height = 240;
+      cv.width = tw + Math.ceil(spacing * txt.length) + pad * 2; cv.height = 240;
       g.font = font; g.textAlign = 'left'; g.textBaseline = 'middle';
       g.globalCompositeOperation = 'lighter';     // additive puffy-cloud glow
       let x = pad;
@@ -10620,12 +10736,12 @@ export class ThreeDRenderer {
         const w = g.measureText(ch).width;
         const wob = Math.sin((ch.charCodeAt(0) + x) * 0.017) * 12;   // baked per-letter
         const cy = cv.height / 2 + wob;
-        for (const [blur, alpha] of [[42, 0.32], [22, 0.5], [8, 0.9]] as const) {
+        for (const [blur, alpha] of [[30, 0.26], [16, 0.44], [6, 0.9]] as const) {
           g.shadowColor = 'rgba(255,255,255,0.95)'; g.shadowBlur = blur;
           g.fillStyle = `rgba(250,252,255,${alpha})`;
           g.fillText(ch, x, cy);
         }
-        x += w;
+        x += w + spacing;
       }
     } else if (mode === 'banner') {
       const font = '800 120px system-ui, "Segoe UI", sans-serif';
@@ -10660,11 +10776,12 @@ export class ThreeDRenderer {
   }
 
   // Pick the largest open yard strip AROUND the house footprint (wall-loop bbox)
-  // and fit an aspect-locked text rect inside it. The returned center is always
+  // and return a rect filling ~90 % of it (the grass text reflows multi-line to
+  // this rect's aspect — see _makeGrassTextTexture). The returned center is always
   // OUTSIDE the footprint bbox (hence outside every wall loop) and inside the
   // floor rect — the invariant the test harness asserts. Falls back to a fixed
   // region when there are no wall loops.
-  private _bgGrassPlacement(aspect: number, slot = 0): { cx: number; cy: number; w: number; h: number } {
+  private _bgGrassPlacement(slot = 0): { cx: number; cy: number; w: number; h: number } {
     const fw = this._fw, fd = this._fd;
     let minX = fw, minY = fd, maxX = 0, maxY = 0, any = false;
     for (const loop of this._wallLoops) for (const p of loop) {
@@ -10685,9 +10802,8 @@ export class ThreeDRenderer {
     ].sort((a, b) => b.depth - a.depth);
     const s = strips[Math.min(slot, strips.length - 1)];
     const availW = Math.max(1, s.x1 - s.x0), availH = Math.max(1, s.y1 - s.y0);
-    let w = availW * 0.9, h = w / aspect;
-    if (h > availH * 0.85) { h = availH * 0.85; w = h * aspect; }
-    w = Math.min(w, availW * 0.95); h = Math.min(h, availH * 0.95);
+    // Fill ~90 % of the strip; the text reflows multi-line to this rect's aspect.
+    let w = availW * 0.9, h = availH * 0.9;
     let cx = (s.x0 + s.x1) / 2, cy = (s.y0 + s.y1) / 2;
     // Extra entries beyond the 4 strips shift along the strip's long axis so
     // they still don't overlap (clamped inside the strip).

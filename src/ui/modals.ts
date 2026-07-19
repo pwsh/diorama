@@ -1311,7 +1311,7 @@ export class SettingsDrawer extends LitElement {
                     @click=${() => upd(() => { p.store.bgTexts!.splice(idx, 1); })}>🗑</button>
           </div>
           <div class="row" style="margin-top:4px"><label>Message</label>
-            <input type="text" placeholder="e.g. Welcome home!" maxlength="40"
+            <input type="text" placeholder="e.g. Welcome home!" maxlength=${e.mode === 'grass' ? 160 : 40}
                    .value=${e.text ?? ''} ?disabled=${!!e.entityId}
                    style="flex:1;min-width:0"
                    @change=${(ev: Event) => upd(() => { e.text = (ev.target as HTMLInputElement).value; })}>
@@ -1337,6 +1337,19 @@ export class SettingsDrawer extends LitElement {
                        const v = Math.round(Number((ev.target as HTMLInputElement).value));
                        e.maxCars = isFinite(v) ? Math.min(12, Math.max(2, v)) : 8;
                      })}>
+            </div>` : nothing}
+          ${e.mode === 'grass' ? html`
+            <div class="row" style="margin-top:2px">
+              <label title="Fit the lawn text into a ground area's bounding box (else auto-placed in the widest open yard margin). Ground areas are per-floor — a choice on another floor falls back to auto here.">Fit to area</label>
+              <select style="flex:1;min-width:0"
+                      @change=${(ev: Event) => upd(() => {
+                        const v = (ev.target as HTMLSelectElement).value;
+                        e.grassAreaId = v || undefined;
+                      })}>
+                <option value="" ?selected=${!e.grassAreaId}>Auto (yard margin)</option>
+                ${(p.floor().groundAreas ?? []).map(a => html`
+                  <option value=${a.id} ?selected=${e.grassAreaId === a.id}>${a.name || a.kind} area</option>`)}
+              </select>
             </div>` : nothing}
           <div style="font-size:10px;color:var(--text-dim);line-height:1.3;margin:3px 0 0">
             ${e.entityId

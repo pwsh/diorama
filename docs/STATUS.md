@@ -133,6 +133,21 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **BgText/camera fix batch** (2026-07-19; 1 Opus agent, orchestrator
+  diagnoses pinned). Camera far 60000→150000 — the zoom-out
+  "disappearing behind an invisible barrier" was far-plane clipping of
+  the banner-orbit/train-loop far arcs while the camera-centered sky
+  dome still painted; the skywriting sprite (one depth) popped binary
+  on/off, also `frustumCulled=false` now. Chopper banner re-pivoted to
+  hang from its LEADING TOP CORNER with the tow wire attached there
+  (rigid under sway). Train ×1.8 (spacing 1480, wheelR 162) so car text
+  reads. Grass text is multi-line word-wrapped with fit-to-area
+  (`BgTextEntry.grassAreaId` → current-floor GroundArea bbox inset
+  10 %, soft-fail; per-mode caps grass 160 / others 40; 40 px font
+  floor + ellipsis). Skywriting weight 400 + letter spacing + softer
+  glow. bgtext-multi 41→58/58; bgtext 29/29, WFX sky 23/23, terrain
+  21/21.
+
 - **Visual placement toolbar** (2026-07-19; 1 Opus agent; design
   `docs/DESIGN-toolbar.md` — shipped with deltas noted there). Bottom
   dock in edit mode: 11 category tabs → item cards with REAL 3D

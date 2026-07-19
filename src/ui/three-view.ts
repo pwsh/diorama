@@ -1363,7 +1363,13 @@ export class ThreeView extends LitElement {
       const bgStorm = fx.condition === 'pouring' || fx.condition === 'lightning'
         || fx.condition === 'lightning-rainy';
       const keyBgText = `${p.configRev}|${f.id}|${bgStorm ? 's' : '-'}|`
-        + bgEntries.map(e => `${e.id}:${e.mode}:${e.text}:${e.maxCars ?? ''}`).join('|');
+        + bgEntries.map(e => {
+            const ga = e.grassArea
+              ? `${Math.round(e.grassArea.cx / 100)},${Math.round(e.grassArea.cy / 100)},`
+                + `${Math.round(e.grassArea.w / 100)},${Math.round(e.grassArea.h / 100)}`
+              : '';
+            return `${e.id}:${e.mode}:${e.text}:${e.maxCars ?? ''}:${e.grassAreaId ?? ''}:${ga}`;
+          }).join('|');
       if (keyBgText !== this._keyBgText) {
         this._keyBgText = keyBgText;
         r.updateBgTexts(bgEntries, bgStorm, fx.windBearingPlanRad ?? 0, fx.windKmh);

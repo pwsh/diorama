@@ -1222,6 +1222,10 @@ export interface BgTextEntry {
   entityId?: string;             // optional bound entity — its formatted state replaces `text`
   format?: InfoCardFormat;       // formatting for the bound entity's value
   maxCars?: number;              // train-only: cap on message cars (default 8, clamp 2..12)
+  grassAreaId?: string;          // grass-only: a Floor.groundAreas id to fit the text INTO
+                                 // (bbox inset ~10%). Store-level bgTexts + per-floor ground
+                                 // areas → a stale id (area not on the current floor) fails
+                                 // soft, falling back to auto margin-strip placement.
 }
 
 // ── Multiple-configuration registry (Batch B) ─────────────────────────────

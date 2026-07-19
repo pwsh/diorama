@@ -321,12 +321,23 @@ text?, entityId?, format?, maxCars?}` — decorative messages written INTO the 3
 Store-level, in `_loadFromHa`'s explicit list. **Legacy `Store.bgText` (single) migrates once**
 in `_normalizeStore` (`_migrateBgTexts`, idempotent; the old field is read for migration only,
 never written). `Planner.bgTextsResolved()` resolves per entry (bound entity's
-`formatEntityValue` state wins over static `text`, capped **40 chars**, empty/off skipped);
+`formatEntityValue` state wins over static `text`, capped **PER MODE — grass 160, all other
+modes 40** chars, empty/off skipped; grass entries also resolve `grassAreaId` →
+`_grassAreaRect` = the CURRENT floor's GroundArea bbox inset 10 %, failing soft on a stale id);
 every entry's bound id is **config-path** in `_isSlowEntity`. Renderer `updateBgTexts(entries,
 storm, windRad, windKmh)` builds per-entry rigs keyed by id (legacy `updateBgText` wrapper kept
 for stale-chunk/test pairing); multi-instance stagger: sky sprites offset x/y/z per index,
 aircraft vary radius/altitude/phase, grass takes successive margin strips (exclusion-list
-extension of `_bgGrassPlacement`). Storm hides sky/banner/CHOPPER; grass + TRAIN stay.
+extension of `_bgGrassPlacement`). Storm hides sky/banner/CHOPPER; grass + TRAIN stay. **Grass is MULTI-LINE**
+(`_makeGrassTextTexture`: word-wrap to the target rect's aspect, largest fitting font, 40 px
+floor + ellipsis) — target = the `grassAreaId` area's rect when set (drawn there even over the
+house — user's choice), else the auto margin strip. Skywriting is weight-400 with ~0.12 em
+per-char letter spacing (not bold — pinned typography) and `frustumCulled = false` (a
+one-depth sprite otherwise pops in/out at the far plane). **Camera far = 150000** (was 60000
+— at maxDistance 45000 the banner orbit/train loop far arcs clipped while the camera-centered
+sky dome still painted, reading as "vanishing behind the sky"). Chopper banner hangs from its
+LEADING TOP CORNER (the banner group origin — sway pivots there, wire belly→corner is rigid).
+Train vehicles are ×1.8 scale (spacing 1480, wheelR 162).
 - **`train`**: a toy toon train (engine + N cars, darker last car) circling a rounded-rect loop
   ~1800 mm OUTSIDE the floor rect (ellipse fallback for tiny floors), arc-length walked at
   ~1.1 m/s — each car independently posed on the loop so the train bends around corners; wheels

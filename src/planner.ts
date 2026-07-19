@@ -2056,7 +2056,8 @@ export class Planner extends EventTarget {
 
   // Resolve one background-text entry's displayed string: the bound entity's
   // FORMATTED state (formatEntityValue) when an entity is bound, else the static
-  // `text`. Capped at ~40 chars (banner/skywriting/train want short text).
+  // `text`. Cap is PER-MODE — grass reflows multi-line so it takes 160 chars;
+  // every other style (banner/skywriting/train/chopper) wants short text → 40.
   // Returns null when the entry is empty / has no reading yet.
   private _resolveBgEntryText(e: BgTextEntry): string | null {
     let s: string | null = null;
@@ -2068,19 +2069,54 @@ export class Planner extends EventTarget {
       s = (e.text ?? '').trim() || null;
     }
     if (s == null) return null;
-    return s.length > 40 ? s.slice(0, 40) : s;
+    const cap = e.mode === 'grass' ? 160 : 40;
+    return s.length > cap ? s.slice(0, cap) : s;
+  }
+
+  // Bbox (inset ~10% each side) of one of the current floor's GroundAreas, for a
+  // grass entry's "fit to area" target. Returns null when the id isn't a valid
+  // area ON THE CURRENT FLOOR (bgTexts is store-level; ground areas are per-floor)
+  // — a stale id fails soft and the renderer auto-places.
+  private _grassAreaRect(areaId: string): { cx: number; cy: number; w: number; h: number } | null {
+    const ga = (this.floor().groundAreas ?? []).find(a => a.id === areaId);
+    if (!ga || !Array.isArray(ga.points) || ga.points.length < 3) return null;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const p of ga.points) {
+      minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+      minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+    }
+    const w = maxX - minX, h = maxY - minY;
+    if (!(w > 0) || !(h > 0)) return null;
+    return { cx: (minX + maxX) / 2, cy: (minY + maxY) / 2, w: w * 0.8, h: h * 0.8 };
   }
 
   // Resolved background-text entries for the renderer/settings preview: one row
   // per configured entry that currently has content (empty/no-reading entries are
-  // skipped). Order follows the stored list. Read by three-view (3D).
-  bgTextsResolved(): { id: string; mode: BgTextEntryMode; text: string; maxCars?: number }[] {
+  // skipped). Order follows the stored list. Read by three-view (3D). Grass rows
+  // with a resolvable grassAreaId carry the target rect (world mm) so the renderer
+  // fits the text into that yard patch instead of the auto margin strip.
+  bgTextsResolved(): {
+    id: string; mode: BgTextEntryMode; text: string; maxCars?: number;
+    grassAreaId?: string; grassArea?: { cx: number; cy: number; w: number; h: number };
+  }[] {
     const list = this.store.bgTexts ?? [];
-    const out: { id: string; mode: BgTextEntryMode; text: string; maxCars?: number }[] = [];
+    const out: {
+      id: string; mode: BgTextEntryMode; text: string; maxCars?: number;
+      grassAreaId?: string; grassArea?: { cx: number; cy: number; w: number; h: number };
+    }[] = [];
     for (const e of list) {
       const text = this._resolveBgEntryText(e);
       if (text == null) continue;
-      out.push({ id: e.id, mode: e.mode, text, ...(e.mode === 'train' ? { maxCars: e.maxCars } : {}) });
+      const row: {
+        id: string; mode: BgTextEntryMode; text: string; maxCars?: number;
+        grassAreaId?: string; grassArea?: { cx: number; cy: number; w: number; h: number };
+      } = { id: e.id, mode: e.mode, text };
+      if (e.mode === 'train') row.maxCars = e.maxCars;
+      if (e.mode === 'grass' && e.grassAreaId) {
+        const rect = this._grassAreaRect(e.grassAreaId);
+        if (rect) { row.grassAreaId = e.grassAreaId; row.grassArea = rect; }
+      }
+      out.push(row);
     }
     return out;
   }
