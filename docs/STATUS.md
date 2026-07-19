@@ -1,6 +1,6 @@
 # Project status & pick-up guide
 
-Last updated: 2026-07-18, at **v0.22.0**. This is the single document to
+Last updated: 2026-07-19, at **v0.23.0**. This is the single document to
 read (alongside `CLAUDE.md`) to resume work with full context.
 
 ## Where things stand
@@ -122,6 +122,14 @@ instance.
   + iconic-prop audit (wands→minigun, 62 capes sway); climate
   appliances (AC/floor fans/heaters/exhaust); multi background-text
   with message train + news chopper; HA menu button far-left).
+  → v0.23.0 curb appeal (visual placement toolbar — bottom dock w/ real
+  3D thumbnails + variant chips; grey translucent windows + curtains
+  (roman/drape/split, entity-bound); inground uplight + aimable ground
+  spot; yard flagpole w/ 16-flag library + FLAGS.md; tank-style mower +
+  robot progress lights; swingable swingset, bathtub/toilet water,
+  appliance interiors, speaker contrast, mailbox flag semantics,
+  bird-bath water; aircraft fixes — tow wire, true propeller,
+  both-sides banners).
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
