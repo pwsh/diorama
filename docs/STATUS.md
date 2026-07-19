@@ -1,6 +1,6 @@
 # Project status & pick-up guide
 
-Last updated: 2026-07-18, at **v0.21.0**. This is the single document to
+Last updated: 2026-07-18, at **v0.22.0**. This is the single document to
 read (alongside `CLAUDE.md`) to resume work with full context.
 
 ## Where things stand
@@ -115,6 +115,13 @@ instance.
   sparkle; sky fixes — skywriting at plane altitude, dome recenters on
   camera so zoom-out never shows the globe; docs-site guide refreshed
   current through v0.21).
+  → v0.22.0 creature comforts (terrain program T1–T4 — terraces, yard
+  fill, fences/gates, sprinklers, water life, path ribbons, pool/spa;
+  Fallout/Sesame Street/WALL-E franchise packs; sinks v2 with basins +
+  running water; shared avatar props (13, chores/snacks/umbrella/fetch)
+  + iconic-prop audit (wands→minigun, 62 capes sway); climate
+  appliances (AC/floor fans/heaters/exhaust); multi background-text
+  with message train + news chopper; HA menu button far-left).
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
