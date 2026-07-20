@@ -1,0 +1,138 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>SKYREAL …</title>
+<style>
+  html,body{margin:0;background:#0b0f14;color:#cfd8dc;font:13px/1.4 sans-serif}
+  #c{width:1000px;height:640px}
+  #log{position:fixed;right:8px;top:8px;width:380px;max-height:96vh;overflow:auto;
+       background:#111820;border:1px solid #263340;border-radius:6px;padding:8px 10px;font-size:11px}
+  .pass{color:#69f0ae}.fail{color:#ff5252}.hd{font-weight:bold;margin:2px 0 6px}.d{color:#78909c}
+</style>
+<div id="c"></div>
+<div id="log"></div>
+
+<!-- Renderer-harness test for the astronomically-correct catalog sky. Drives
+     ThreeDRenderer.updateWeather with an observer + injected epoch (setSkyEpochOverride),
+     then steps _advanceWeather with a synthetic clock (like weather-fx-test).
+     Also imports the PURE sky-astro bundle to compute expected above-horizon
+     counts. Build the pure bundle into the harness first:
+       npx esbuild src/sky-astro.ts --bundle --format=esm --outfile=<harness>/sky-astro.mod.js
+-->
+<script type="module">
+  const mod = await import('./assets/three-renderer.js?v=' + Date.now());
+  const { skySnapshot } = await import('./sky-astro.mod.js?v=' + Date.now());
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+
+  const floor = {
+    id: 'f1', name: 'T', w: 10000, d: 8000,
+    walls: [{ id: 'w', points: [{x:200,y:200},{x:9800,y:200},{x:9800,y:7800},{x:200,y:7800},{x:200,y:200}] }],
+    furniture: [], lights: [], switches: [], sensors: [], motionSensors: [],
+    envSensors: [], doors: [], windows: [], bg: null, model3d: null, look3d: null,
+  };
+  r.updateFloor(floor, { preset: 'night', floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6' });
+  r.applyViewPreset('iso');
+
+  const T = [];
+  const ok = (name, cond, detail = '') => T.push({ name, ok: !!cond, detail });
+  const fx = (over) => Object.assign(
+    { condition: 'clear-night', intensity01: 0, windKmh: 0, windBearingPlanRad: null, isDay: false }, over);
+  let clk = 1000;
+  const step = (n, dt = 1 / 60) => { for (let i = 0; i < n; i++) { clk += dt; r._advanceWeather(dt, clk); } };
+
+  const LAT = 45, LON = 0, R2D = 180 / Math.PI;
+  const EPOCH = Date.UTC(2026, 0, 1, 20, 0, 0);       // moon + Jupiter/Saturn up, 76 stars
+  const EPOCH6 = EPOCH + 6 * 3600 * 1000;
+
+  // ── WITH observer → real catalog sky ───────────────────────────────────────
+  r.applyScenePreset('night');
+  r.setSkyEpochOverride(EPOCH);
+  r.updateWeather(fx({ skyBackdrop: true, sunAzimuthDeg: 120, sunElevationDeg: -25,
+    observer: { lat: LAT, lon: LON }, skyRotRad: 0, moonPhase: 'waxing_gibbous' }));
+  step(300);   // ease dayness→0 (stars fade in) + settle visibility
+
+  ok('real mode active', r._skyRealMode === true);
+  ok('catalog star Points built', !!r._realStars);
+  ok('constellation LineSegments built', !!r._constLines);
+  ok('real sky group visible at night', r._realSkyGroup.visible === true, `vis=${r._realSkyGroup.visible}`);
+  ok('decorative starfield hidden in real mode', r._starField.visible === false, `vis=${r._starField.visible}`);
+
+  // Star draw count == snapshot above-horizon count.
+  const snap = skySnapshot(EPOCH, LAT, LON);
+  const drawn = r._realStars.geometry.drawRange.count;
+  ok('star draw count == above-horizon count', drawn === snap.stars.length,
+     `drawn=${drawn} expected=${snap.stars.length}`);
+  ok('stars faded in at night (opacity high)', r._realStars.material.opacity > 0.7,
+     `op=${r._realStars.material.opacity.toFixed(2)}`);
+
+  // Constellation lines drawn (some figures wholly above horizon).
+  const segCount = r._constLines.geometry.drawRange.count;
+  ok('constellation lines drawn (>0)', segCount > 0, `verts=${segCount}`);
+  ok('line count even (segment pairs)', segCount % 2 === 0, `verts=${segCount}`);
+
+  // Planets: 5 sprites, ≥2 visible (Jupiter + Saturn up at this epoch).
+  ok('five planet sprites', r._planetSprites.length === 5);
+  const planetsUp = r._planetSprites.filter((s) => s.visible).length;
+  ok('≥2 planets above horizon', planetsUp >= 2, `up=${planetsUp}`);
+  const expUp = snap.planets.filter((p) => p.altRad >= 0.03).length;
+  ok('visible planet count matches snapshot', planetsUp === expUp, `up=${planetsUp} exp=${expUp}`);
+
+  // Moon uses REAL ephemeris — its azimuth differs from the naive sunAz+180.
+  // Real moon plan-compass az from _moonRealDir (scene = (−planX, y, planY)).
+  const md = r._moonRealDir;
+  const moonPlanAz = ((Math.atan2(-md.x, md.z) * R2D) % 360 + 360) % 360;
+  const decorativeAz = (120 + 180) % 360;             // sunAz + 180
+  let dAz = Math.abs(moonPlanAz - decorativeAz); if (dAz > 180) dAz = 360 - dAz;
+  ok('real moon az ≠ sunAz+180 (real ephemeris)', dAz > 15,
+     `realAz=${moonPlanAz.toFixed(1)}° decorativeAz=${decorativeAz}° Δ=${dAz.toFixed(1)}°`);
+  ok('moon shown (up at night)', r._moonSprite.visible && r._moonSprite.material.opacity > 0.3,
+     `vis=${r._moonSprite.visible} op=${r._moonSprite.material.opacity.toFixed(2)}`);
+
+  // Buffers change across two epochs 6 h apart (sky rotated).
+  const pos0 = Float32Array.from(r._realStars.geometry.getAttribute('position').array.slice(0, 30));
+  r.setSkyEpochOverride(EPOCH6);
+  step(2);
+  const pos1 = r._realStars.geometry.getAttribute('position').array;
+  let moved = 0; for (let i = 0; i < 30; i++) if (Math.abs(pos0[i] - pos1[i]) > 1) moved++;
+  ok('star buffer changes across 6 h epoch', moved > 5, `changed=${moved}/30`);
+
+  // ── WITHOUT observer → decorative sky, no horizon ring ─────────────────────
+  r.setSkyEpochOverride(null);
+  r.updateWeather(fx({ skyBackdrop: true, observer: null }));
+  step(300);
+  ok('decorative mode (no observer)', r._skyRealMode === false);
+  ok('real sky group hidden (no observer)', r._realSkyGroup.visible === false, `vis=${r._realSkyGroup.visible}`);
+  ok('decorative starfield visible', r._starField.visible === true);
+
+  // Horizon-ring check: sample the decorative star elevations from the position
+  // buffer. NO star below ~7° (cap floor), and no dense spike at one latitude
+  // (the old clamp piled ~half the sphere onto ~3.4°).
+  const sp = r._starField.geometry.getAttribute('position').array;
+  const N = sp.length / 3;
+  const R = 28000;
+  let minE = 999, spike = 0;
+  const bins = new Array(9).fill(0);   // 0-10,10-20,...
+  for (let i = 0; i < N; i++) {
+    const y = sp[i * 3 + 1];
+    const e = Math.asin(Math.max(-1, Math.min(1, y / R))) * R2D;
+    minE = Math.min(minE, e);
+    bins[Math.min(8, Math.floor(e / 10))]++;
+  }
+  const lowFrac = (bins[0]) / N;   // 0-10° band
+  ok('no decorative star below ~7° (cap floor)', minE >= 7, `minElev=${minE.toFixed(1)}°`);
+  ok('no horizon ring (0-10° band < 22% of stars)', lowFrac < 0.22, `lowBand=${(lowFrac * 100).toFixed(0)}%`);
+  ok('stars span a wide elevation range', (bins.filter(b => b > 0).length) >= 6, `binsUsed=${bins.filter(b => b > 0).length}`);
+
+  // ── skyBackdrop off hides everything ───────────────────────────────────────
+  r.updateWeather(fx({ skyBackdrop: false, observer: { lat: LAT, lon: LON } }));
+  ok('skyBackdrop off hides sky group', !r._skyGroup.visible, `vis=${r._skyGroup.visible}`);
+
+  // ── report ─────────────────────────────────────────────────────────────────
+  const pass = T.filter((t) => t.ok).length, total = T.length;
+  const allPass = pass === total;
+  const fails = T.filter((t) => !t.ok).map((t) => t.name);
+  const title = allPass ? `SKYREAL PASS ${pass}/${total}` : `SKYREAL FAIL ${pass}/${total} [${fails.join(',')}]`;
+  document.title = title;
+  document.getElementById('log').innerHTML = `<div class="hd ${allPass ? 'pass' : 'fail'}">${title}</div>` +
+    T.map((t) => `<div><span class="${t.ok ? 'pass' : 'fail'}">${t.ok ? 'PASS' : 'FAIL'}</span> ${t.name} <span class="d">${t.detail}</span></div>`).join('');
+</script>

@@ -140,6 +140,19 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Real night sky + horizon-ring cleanup** (2026-07-20; 1 Opus
+  agent). Pure `sky-astro.ts` + `sky-catalog.ts` (145 stars, 19
+  constellations, Schlyter planet/moon ephemerides). Observer from
+  geoFit → weather.lat/lon → null; with a location, night shows the
+  true catalog sky (constellation lines, 5 tinted planets, real moon
+  position — phase still HA), recomputed on a 60 s tick, zero new
+  config. Horizon ring was a clamped-sampling artifact — replaced with
+  area-uniform cap sampling + low-alt fade in both real and decorative
+  modes. (Agent caught a bad cited moon golden — it was the ascending
+  node value; validated via eclipse-node geometry + a 4-dp Mercury
+  golden instead.) sky-astro 36/36, sky-real 22/22, weather-fx sky
+  23/23 + all cases green.
+
 - **Ghost mirror + entity-text truncation fixes** (2026-07-20; 2 Opus
   agents). (a) Ghost loop-slab Z-mirror: ShapeGeometry −π/2 rotation
   needs shape-y NEGATED (`afd/2 − wy`); feeding `asz` directly

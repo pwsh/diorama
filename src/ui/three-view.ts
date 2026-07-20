@@ -561,10 +561,22 @@ export class ThreeView extends LitElement {
     const theta = fit && fit.transform.quality !== 'none' ? fit.transform.thetaRad : 0;
     const c = Math.cos(theta), s = Math.sin(theta);
 
+    // Astronomically-correct sky observer: prefer the calibrated geo origin
+    // (real lat/lon + real plan-north θ), else a bare weather lat/lon (θ = 0 =
+    // plan +Y is north), else null → the renderer keeps the decorative sky.
+    let observer: { lat: number; lon: number } | null = null;
+    if (fit && fit.transform.quality !== 'none'
+        && isFinite(fit.transform.originLat) && isFinite(fit.transform.originLon)) {
+      observer = { lat: fit.transform.originLat, lon: fit.transform.originLon };
+    } else if (w && w.lat != null && w.lon != null && isFinite(w.lat) && isFinite(w.lon)) {
+      observer = { lat: w.lat, lon: w.lon };
+    }
+
     if (!wnow) {
       return {
         condition: 'sunny', intensity01: 0, windKmh: 0, windBearingPlanRad: null,
         isDay: true, effects, alertSeverity, skyBackdrop, moonPhase,
+        observer, skyRotRad: theta,
       };
     }
 
@@ -612,6 +624,8 @@ export class ThreeView extends LitElement {
       alertSeverity,
       skyBackdrop,
       moonPhase,
+      observer,
+      skyRotRad: theta,
     };
   }
 
@@ -1357,7 +1371,13 @@ export class ThreeView extends LitElement {
       // Phase 3: fold the effective preset (drives dome colors + sun/moon
       // day/night gating), the moon phase (8 states, ~daily), and the resolved
       // skyBackdrop flag into the key so the sky rebuilds on those changes.
-      const skyBucket = `${effPreset}:${fx.moonPhase ?? '-'}:${fx.skyBackdrop ? '1' : '0'}`;
+      // Observer presence + coarse lat/lon + plan-north θ fold in so the catalog
+      // sky (re)builds when calibration/location changes; time progression is
+      // handled by the renderer's own 60 s recompute, not this key.
+      const obsBucket = fx.observer
+        ? `${fx.observer.lat.toFixed(1)},${fx.observer.lon.toFixed(1)},${b((fx.skyRotRad ?? 0) * 180 / Math.PI, 2)}`
+        : '-';
+      const skyBucket = `${effPreset}:${fx.moonPhase ?? '-'}:${fx.skyBackdrop ? '1' : '0'}:${obsBucket}`;
       const w3Bucket = `${b(fx.cloudCoverage, 10)}:${b(fx.visibilityKm, 2)}:` +
         `${b(fx.windGustKmh, 10)}:${b(fx.apparentC, 3)}:${b(fx.sunAzimuthDeg, 5)}:` +
         `${fx.sunElevationDeg == null ? 'n' : (fx.sunElevationDeg > 0 ? 'u' : 'd')}:` +

@@ -308,7 +308,30 @@ integration) drives the moon phase.
   — HA exposes no real moon position) at a fixed pleasant elevation arc; visible only at
   the `night` preset. Unbound `moonEntity` → default full moon.
 - **Starfield**: one `THREE.Points` (~140–220 dots, DPR-capped, built once on the dome),
-  opacity ramped by `(1 − dayness)` where dayness eases day=1/dusk=0.4/night=0.
+  opacity ramped by `(1 − dayness)` where dayness eases day=1/dusk=0.4/night=0. **Horizon-ring
+  fix**: the old build sampled `y = max(0.06, rnd·2−1)` — the whole lower hemisphere CLAMPED
+  onto one latitude (alt≈3.4°) = a dense ring. Now `capSampleAltAz` (area-uniform on the
+  ≥8° cap, `asin(mix(sin8°,1,rnd))`) + a per-vertex brightness fade below 15°.
+- **Real night sky (astronomically correct — constellations + planets + moon)**: pure
+  `src/sky-astro.ts` (three-free, geo.ts idiom — every fn takes an explicit epoch ms, never
+  reads the clock) + data-only `src/sky-catalog.ts` (145 J2000 bright stars ≤ mag 3.71, 92
+  constellation line segments, 19 figures — Orion/Dippers/Cassiopeia/Cygnus/Lyra/Aquila/
+  Taurus/Gemini/Leo/Scorpius/Sagittarius/Canis Major/Auriga/Boötes/Pegasus/Andromeda/Crux/
+  Centaurus). `julianDay`/`gmstRad`/`raDecToAltAz` (az CW from N) + Schlyter low-precision
+  ephemerides (Sun, 5 naked-eye planets w/ Jupiter–Saturn mutual perturbations, Moon full
+  perturbation set); `skySnapshot(ms, lat, lon)`. **Observer** resolved three-view-side:
+  `geoFit().originLat/Lon` (calibrated) → `weather.lat/lon` → null; passed as optional
+  `WeatherFxState.observer` (+`skyRotRad` = geo θ; stale-chunk-safe → decorative). With an
+  observer, night swaps the decorative starfield for the catalog sky — one Points (mag
+  buckets), one LineSegments (faint slate, `LineBasicMaterial` flat exemption), 5 tinted
+  planet sprites, and the moon at its REAL `moonAltAz` (was `sunAz+180`; phase still from HA
+  `moonPhase`). Recompute is a 60 s slow tick (`_recomputeRealSky` rewrites buffers in place,
+  `new Date()` read only there; `setSkyEpochOverride` test hook), catalog subgroup
+  camera-recentered, same night/`skyBackdrop` gating + `(1−dayness)` fade, zero per-frame
+  alloc, shared textures disposed only in `destroy()`. No new config. Test pages
+  `sky-astro-test.html` (`SKYASTRO PASS 36/36` — JD/GMST goldens, Polaris alt≈lat, Mercury
+  RA/Dec to 4 dp, eclipse-node geometry, solstice sun dec, cap-sampling histogram) +
+  `sky-real-test.html` (`SKYREAL PASS 22/22`).
 - **Shared textures** (`_sunGlowTex`, `_starTex`, `_moonTexCache`) are built once and
   disposed only in `destroy()` (like `_blobTex`/`_gradientMapTex`). Per-frame motion is
   all in `_advanceWeather` (ABOVE the `_weatherGroup.visible` early-return — the sky is

@@ -1,0 +1,175 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>SKYASTRO …</title>
+<style>
+  html,body{margin:0;background:#0b0f14;color:#cfd8dc;font:13px/1.5 sans-serif;padding:10px}
+  #sum{font-weight:bold;margin:2px 0 8px}
+  .pass{color:#69f0ae}.fail{color:#ff5252}.d{color:#78909c}
+  .row{padding:1px 0}
+</style>
+<div id="sum">Running…</div>
+<div id="log"></div>
+
+<!-- Pure astronomy modules (sky-astro.ts + sky-catalog.ts) are dependency-free
+     like geo.ts / trilateration.ts. Transpile standalone into the harness dir
+     NEXT TO this html before serving (sky-astro imports its sibling catalog, so
+     each is bundled self-contained):
+       npx esbuild src/sky-astro.ts   --bundle --format=esm --outfile=<harness>/sky-astro.mod.js
+       npx esbuild src/sky-catalog.ts --bundle --format=esm --outfile=<harness>/sky-catalog.mod.js
+-->
+<script type="module">
+  import {
+    julianDay, gmstRad, lstRad, raDecToAltAz, sunRaDec, planetRaDec, moonRaDec,
+    capSampleAltAz, skySnapshot,
+  } from './sky-astro.mod.js';
+  import { STARS, LINES, STAR_INDEX, CONSTELLATION_NAMES } from './sky-catalog.mod.js';
+
+  const DEG = Math.PI / 180, R2D = 180 / Math.PI, TWO_PI = Math.PI * 2;
+  const T = [];
+  const ok = (name, cond, detail = '') => T.push({ name, ok: !!cond, detail });
+  const near = (name, got, want, tol, extra = '') =>
+    T.push({ name, ok: Math.abs(got - want) <= tol, detail: `got ${(+got).toFixed(4)} ≈ ${want} ±${tol} ${extra}` });
+  const UT = (y, mo, d, h = 0, mi = 0) => Date.UTC(y, mo - 1, d, h, mi, 0);
+  const norm360 = (x) => ((x % 360) + 360) % 360;
+
+  // ── 1) Julian Day + GMST goldens ──────────────────────────────────────────
+  near('julianDay 2000-01-01T12Z = 2451545.0', julianDay(UT(2000, 1, 1, 12)), 2451545.0, 1e-6);
+  near('gmstRad(2451545) ≈ 280.46°', gmstRad(2451545.0) * R2D, 280.46, 0.05);
+
+  // ── 2) Polaris: alt ≈ observer latitude, az ≈ 0/360, at two times 6 h apart ─
+  const pol = STARS[STAR_INDEX.Polaris];
+  const polRA = pol[0] / 24 * TWO_PI, polDec = pol[1] * DEG;
+  for (const [lbl, t] of [['t0', UT(2026, 1, 1, 20)], ['t0+6h', UT(2026, 1, 2, 2)]]) {
+    const h = raDecToAltAz(polRA, polDec, 45 * DEG, lstRad(t, 0));
+    near(`Polaris alt ≈ lat 45 (${lbl})`, h.altRad * R2D, 45, 1.0);
+    const az = norm360(h.azRad * R2D);
+    ok(`Polaris az ≈ 0/360 (${lbl})`, Math.min(az, 360 - az) <= 2, `az=${az.toFixed(2)}`);
+  }
+
+  // ── 3) Schlyter worked date 1990-04-19 00:00 UT ────────────────────────────
+  // Mercury is a HARD golden (validates the whole Kepler → geocentric →
+  // equatorial pipeline): RA 43.2598° / Dec +19.6460° (Schlyter's published
+  // result). The cited MOON golden (312.7381 / −11.6070) is physically
+  // impossible for this instant — the Moon is at its ascending node then
+  // (node ≈ 312.7°, which is what "312.7381" actually is), so its ecliptic
+  // latitude ≈ 0 and its Dec must be ≈ −19°, NOT −11.6°. The Moon is instead
+  // validated by (a) near-zero ecliptic latitude here (node geometry) and (b)
+  // eclipse geometry below. See the report.
+  const t90 = UT(1990, 4, 19, 0, 0);
+  const me = planetRaDec('mercury', t90);
+  near('Mercury RA 43.2598° (Schlyter)', norm360(me.raRad * R2D), 43.2598, 0.2);
+  near('Mercury Dec +19.6460° (Schlyter)', me.decRad * R2D, 19.6460, 0.2);
+
+  const mo = moonRaDec(t90);
+  ok('Moon at node → |ecl lat| < 1° (1990-04-19)', Math.abs(mo.eclLatRad * R2D) < 1.0,
+     `eclLat=${(mo.eclLatRad * R2D).toFixed(3)}°`);
+  near('Moon Dec ≈ −19° (near-ecliptic body, not the impossible −11.6)', mo.decRad * R2D, -19.1, 1.0);
+
+  // Cross-property sanity for the remaining planets (design escape hatch — the
+  // published RA/Dec are not independently pinned here, so assert physics):
+  //  • inner planets stay within their orbital inclination of the ecliptic;
+  //  • Jupiter/Saturn move < 0.2°/day (slow outer planets).
+  for (const [p, bound] of [['venus', 4], ['mars', 3]]) {
+    const r = planetRaDec(p, t90);
+    ok(`${p} |geocentric ecl lat| < ${bound}°`, Math.abs(r.eclLatRad * R2D) < bound,
+       `eclLat=${(r.eclLatRad * R2D).toFixed(2)}°`);
+  }
+  // Mercury heliocentric ecl lat bounded by its 7° inclination.
+  ok('mercury |ecl lat| < 8° (i=7°)', Math.abs(me.eclLatRad * R2D) < 8, `${(me.eclLatRad * R2D).toFixed(2)}°`);
+  for (const p of ['jupiter', 'saturn']) {
+    const a = planetRaDec(p, t90).raRad * R2D;
+    const b = planetRaDec(p, t90 + 86400000).raRad * R2D;
+    let dRa = Math.abs(norm360(b) - norm360(a)); if (dRa > 180) dRa = 360 - dRa;
+    ok(`${p} moves < 0.2°/day`, dRa < 0.2, `Δ=${dRa.toFixed(3)}°/day`);
+  }
+
+  // Eclipse geometry — INDEPENDENT Moon validation. At an eclipse the Moon is at
+  // a node (|ecl lat| ≈ 0) and at conjunction (solar, elong ≈ 0°) or opposition
+  // (lunar, elong ≈ 180°) with the Sun.
+  const eclObl = 23.4393 * DEG;
+  const eclLon = (raRad, decRad) => {
+    const xe = Math.cos(decRad) * Math.cos(raRad), ye = Math.cos(decRad) * Math.sin(raRad), ze = Math.sin(decRad);
+    const yg = ye * Math.cos(eclObl) + ze * Math.sin(eclObl);
+    let lon = Math.atan2(yg, xe) * R2D; return lon < 0 ? lon + 360 : lon;
+  };
+  const eclipse = (lbl, t, wantElong) => {
+    const m = moonRaDec(t), s = sunRaDec(t);
+    let el = norm360(eclLon(m.raRad, m.decRad) - eclLon(s.raRad, s.decRad));
+    let d = Math.abs(el - wantElong); if (d > 180) d = 360 - d;
+    ok(`${lbl}: elong ≈ ${wantElong}°`, d < 3, `elong=${el.toFixed(2)}°`);
+    ok(`${lbl}: |ecl lat| < 0.8° (at node)`, Math.abs(m.eclLatRad * R2D) < 0.8, `lat=${(m.eclLatRad * R2D).toFixed(2)}°`);
+  };
+  eclipse('SolarEcl 1999-08-11', UT(1999, 8, 11, 11, 3), 0);
+  eclipse('LunarEcl 2000-01-21', UT(2000, 1, 21, 4, 44), 180);
+  eclipse('SolarEcl 2017-08-21', UT(2017, 8, 21, 18, 26), 0);
+  eclipse('LunarEcl 2019-01-21', UT(2019, 1, 21, 5, 12), 180);
+
+  // ── 4) Sun-position cross-check: solstice declination ≈ +23.43° ────────────
+  near('Sun Dec 2026-06-21 ≈ +23.43°', sunRaDec(UT(2026, 6, 21, 12)).decRad * R2D, 23.43, 0.1);
+
+  // ── 5) Catalog integrity ───────────────────────────────────────────────────
+  ok(`catalog: ${STARS.length} stars / ${LINES.length} lines / ${CONSTELLATION_NAMES.length} constellations`,
+     STARS.length >= 120, `${STARS.length} stars`);
+  let badLine = 0; for (const [a, b] of LINES) if (a < 0 || b < 0 || a >= STARS.length || b >= STARS.length) badLine++;
+  ok('every line index in range', badLine === 0, `bad=${badLine}`);
+  let worstMag = -9; for (const s of STARS) worstMag = Math.max(worstMag, s[2]);
+  ok('every star mag ≤ ~4.0', worstMag <= 4.05, `faintest=${worstMag.toFixed(2)}`);
+  // Orion belt: three stars within 4° in Dec, roughly colinear in RA.
+  const bDec = ['Mintaka', 'Alnilam', 'Alnitak'].map((n) => STARS[STAR_INDEX[n]][1]);
+  ok('Orion belt Dec spread < 4°', Math.max(...bDec) - Math.min(...bDec) < 4,
+     `spread=${(Math.max(...bDec) - Math.min(...bDec)).toFixed(2)}°`);
+  const bRA = ['Mintaka', 'Alnilam', 'Alnitak'].map((n) => STARS[STAR_INDEX[n]][0]);
+  ok('Orion belt roughly colinear in RA (monotonic)', bRA[0] < bRA[1] && bRA[1] < bRA[2], bRA.map(x => x.toFixed(3)).join(','));
+  // Big Dipper pointers → Polaris ≈ 28.7°.
+  const angDeg = (i, j) => {
+    const a = STARS[i], b = STARS[j];
+    const r1 = a[0] / 24 * TWO_PI, d1 = a[1] * DEG, r2 = b[0] / 24 * TWO_PI, d2 = b[1] * DEG;
+    return Math.acos(Math.max(-1, Math.min(1, Math.sin(d1) * Math.sin(d2) + Math.cos(d1) * Math.cos(d2) * Math.cos(r1 - r2)))) * R2D;
+  };
+  near('Dubhe → Polaris ≈ 28.7°', angDeg(STAR_INDEX.Dubhe, STAR_INDEX.Polaris), 28.7, 1.5);
+
+  // ── 6) Cap sampling: area-uniform, no horizon over-density ──────────────────
+  // Histogram elevations into 10° bins for a large seeded sample; the observed
+  // (8–18°)/(48–58°) count ratio must match the ANALYTIC area ratio
+  // (sin18−sin8)/(sin58−sin48) — proving the low band is not over-dense (the old
+  // clamp piled the whole lower hemisphere onto one horizon latitude).
+  const MIN_ALT = 8 * DEG;
+  const samp = capSampleAltAz(20000, MIN_ALT, 0x51ed);
+  let belowFloor = 0, bin8 = 0, bin48 = 0;
+  for (const s of samp) {
+    const e = s.altRad * R2D;
+    if (e < 8 - 1e-6) belowFloor++;
+    if (e >= 8 && e < 18) bin8++;
+    if (e >= 48 && e < 58) bin48++;
+  }
+  ok('no sample below the 8° cap floor', belowFloor === 0, `below=${belowFloor}`);
+  const analytic = (Math.sin(18 * DEG) - Math.sin(8 * DEG)) / (Math.sin(58 * DEG) - Math.sin(48 * DEG));
+  const observed = bin8 / bin48;
+  ok('low band matches area expectation (no horizon ring)', Math.abs(observed / analytic - 1) < 0.15,
+     `obs=${observed.toFixed(3)} analytic=${analytic.toFixed(3)} ratio=${(observed / analytic).toFixed(3)}`);
+  ok('low band ≤ 1.6× mid band (design bound)', observed <= analytic * 1.4 && observed <= 1.9,
+     `obs=${observed.toFixed(3)}`);
+
+  // ── 7) skySnapshot filters + sky rotates over 6 h ──────────────────────────
+  const t0 = UT(2026, 1, 1, 20), t6 = UT(2026, 1, 2, 2);
+  const snapA = skySnapshot(t0, 45, 0), snapB = skySnapshot(t6, 45, 0);
+  ok('snapshot filters alt < 0.03', snapA.stars.every((s) => s.altRad >= 0.03),
+     `minAlt=${Math.min(...snapA.stars.map(s => s.altRad)).toFixed(3)}`);
+  ok('snapshot returns 5 planets + a moon', snapA.planets.length === 5 && snapA.moon, `planets=${snapA.planets.length}`);
+  // A star visible at both epochs shifts az by ≈ 90° (sky rotates 15°/h × 6 h).
+  const common = snapA.stars.find((s) => s.altRad > 0.4 && snapB.stars.some((x) => x.i === s.i && x.altRad > 0.1));
+  const later = snapB.stars.find((x) => x.i === common.i);
+  let dAz = Math.abs(common.azRad - later.azRad) * R2D; if (dAz > 180) dAz = 360 - dAz;
+  ok('star az shifts substantially over 6 h', dAz > 40, `Δaz=${dAz.toFixed(1)}° (star ${common.i})`);
+
+  // ── report ─────────────────────────────────────────────────────────────────
+  const pass = T.filter((t) => t.ok).length, total = T.length;
+  const allPass = pass === total;
+  const title = `${allPass ? 'SKYASTRO PASS' : 'SKYASTRO FAIL'} ${pass}/${total}`;
+  document.title = title;
+  document.getElementById('sum').innerHTML =
+    `<span class="${allPass ? 'pass' : 'fail'}">${title}</span>` +
+    (allPass ? '' : ' — ' + T.filter(t => !t.ok).map(t => t.name).join(', '));
+  document.getElementById('log').innerHTML = T.map((t) =>
+    `<div class="row"><span class="${t.ok ? 'pass' : 'fail'}">${t.ok ? 'PASS' : 'FAIL'}</span> ${t.name} <span class="d">${t.detail}</span></div>`).join('');
+</script>

@@ -85,6 +85,8 @@ interface RobotRig {
 }
 import { wallCutsForSegment, WINDOW_DEFAULTS, closedWallLoops, wallKind, WALL_KINDS, furnitureLocalToWorld, furnitureWorldToLocal, pointInPolygon as pip, centroid, loopContaining, resolveRoomForPoint, roomLabel, intersectLoopWithRect, polygonArea, heatmapColor, groundAreaSkirtBase, poolWaterColor, poolDepthMm, poolRaisedMm, poolHeaterState, poolPumpOn, poolLightOn, poolRimY, poolBasinFloorY, poolWaterSurfaceY, POOL_COPING_COLOR, POOL_HEAT_GLOW, type RoomTemp } from './geometry.js';
 import { visibilityToFogDensity, moonPhaseFraction, type WeatherNow } from './weather.js';
+import { skySnapshot, moonAltAz, capSampleAltAz } from './sky-astro.js';
+import { STARS as SKY_STARS, LINES as SKY_LINES } from './sky-catalog.js';
 import {
   paintCalendarCanvas, paintNewsTickerCanvas, paintWeatherCardCanvas,
   tickerScrollX, tickerHeadlineIndex, type CalEvent,
@@ -204,6 +206,17 @@ export interface WeatherFxState {
   //   default full moon.
   skyBackdrop?: boolean;
   moonPhase?: string | null;
+  // Astronomically-correct night sky (constellations + planets). observer =
+  // resolved lat/lon (geoFit originLat/Lon when calibrated, else weather lat/lon,
+  // else null). When present the renderer replaces the decorative random
+  // starfield with the real catalog sky (stars at true alt/az, constellation
+  // figure lines, the five naked-eye planets) and drives the moon disc from a
+  // real ephemeris. skyRotRad = the geo-θ plan rotation (same value the sun
+  // azimuth is mapped through) so true north aligns with the calibrated plan
+  // north; absent/0 = plan +Y is true north. A stale chunk ignores both →
+  // decorative sky, no regression.
+  observer?: { lat: number; lon: number } | null;
+  skyRotRad?: number;
 }
 
 // One precipitation / dust point cloud (W2). `pos` aliases the geometry's
@@ -1459,6 +1472,30 @@ export class ThreeDRenderer {
   private _sunWantOpacity = 0; private _sunOpacityCur = 0;
   private _moonWantOpacity = 0; private _moonOpacityCur = 0;
   private _skyStormDir = new THREE.Vector2(1, 0); // upwind (scene x,z) for horizon darkening
+
+  // ── Astronomically-correct catalog sky (constellations + planets) ──────────
+  // Active only when an observer lat/lon is supplied (updateWeather). The
+  // catalog objects live in _realSkyGroup (child of _skyGroup) which is
+  // recentered on the camera every frame (like _starField) so the stars hold a
+  // fixed DIRECTION as the camera orbits. Buffers are sized ONCE for the full
+  // catalog; the 60 s recompute (or a test-injected epoch) front-packs the
+  // above-horizon subset and rewrites positions/colors in place (zero alloc).
+  private _realSkyGroup = new THREE.Group();
+  private _skyRealMode = false;                    // observer present → catalog sky
+  private _skyObserver: { lat: number; lon: number } | null = null;
+  private _skyRotRad = 0;                          // geo-θ (true north → plan) rotation
+  private _realStars: THREE.Points | null = null;
+  private _constLines: THREE.LineSegments | null = null;
+  private _constLineMat: THREE.LineBasicMaterial | null = null;
+  private _planetSprites: THREE.Sprite[] = [];     // 5 naked-eye planets
+  private _planetLocal: THREE.Vector3[] = [];      // per-planet local (radius) position
+  private _starWorld: Float32Array | null = null;  // per-catalog-index scene pos (for line endpoints)
+  private _skyRecomputeAccum = 0;                  // wall-time since last recompute (s)
+  private _skyEpochOverride: number | null = null; // TEST HOOK — inject the epoch (ms)
+  private _moonRealDir = new THREE.Vector3(0, 14000, 0); // moon scene offset in real mode
+  private _moonRealAlt = 0;                         // moon altitude (rad) in real mode
+  private _skyOvercast = 0;                         // cached overcast amount (moon dim)
+  private _v3a = new THREE.Vector3();               // scratch (real-sky recompute)
 
   // ── Playful background text (skywriting / banner plane / grass writing) ────
   // A short decorative message written INTO the world. Lives in its own group
@@ -11095,6 +11132,19 @@ export class ThreeDRenderer {
     this._skyVisible = fx.skyBackdrop === true;
     this._ensureSky();
     this._skyGroup.visible = this._skyVisible;
+
+    // ── Astronomically-correct catalog sky. An observer lat/lon switches the
+    // decorative starfield off and the real catalog sky (stars/lines/planets +
+    // real moon) on. Recompute immediately on (re)configure; the 60 s cadence
+    // lives in _advanceWeather.
+    this._skyObserver = fx.observer ?? null;
+    this._skyRotRad = fx.skyRotRad ?? 0;
+    this._skyRealMode = !!this._skyObserver;
+    if (this._skyRealMode) {
+      this._ensureRealSky();
+      this._recomputeRealSky(this._skyEpochOverride ?? Date.now());
+      this._skyRecomputeAccum = 0;
+    }
     // Upwind = opposite the wind drift (matches _buildStormBank); horizon darkens
     // toward it while a storm brews.
     {
@@ -11112,6 +11162,7 @@ export class ThreeDRenderer {
     const elev = fx.sunElevationDeg ?? null;
     const az = fx.sunAzimuthDeg ?? 0;
     const overcast = this._overcastAmt(cond, fx.cloudCoverage ?? null);
+    this._skyOvercast = overcast;
     // Sun disc: up + not night + sky on. Ramp in over the first ~6° above the
     // horizon, dim under overcast, warm-tint near the horizon.
     let sunOp = 0;
@@ -11125,12 +11176,20 @@ export class ThreeDRenderer {
       (this._sunSprite.material as THREE.SpriteMaterial).color
         .copy(new THREE.Color(0xff8a4a)).lerp(new THREE.Color(0xfff6e0), k);
     }
-    // Moon disc: only at night (opposite the sun azimuth, no real ephemeris —
-    // an honest approximation per the research doc). Fixed pleasant elevation arc.
-    this._moonWantOpacity = (this._skyVisible && this._preset === 'night')
-      ? (1 - 0.6 * overcast) : 0;
-    const moonElev = elev == null ? 35 : Math.min(58, Math.max(22, -elev));
-    this._skyMoonTarget.copy(this._sunTargetFromSky(az + 180, moonElev, 24000));
+    // Moon disc. REAL MODE (observer): the moon rides its true ephemeris
+    // direction (_moonRealDir, camera-recentered in _advanceWeather) and is
+    // shown only when actually above the horizon at night — the moon is NOT
+    // always up. DECORATIVE MODE: the honest az+180 approximation at a pleasant
+    // fixed elevation arc (unchanged legacy behavior).
+    if (this._skyRealMode) {
+      this._moonWantOpacity = (this._skyVisible && this._preset === 'night' && this._moonRealAlt > 0.01)
+        ? (1 - 0.6 * overcast) : 0;
+    } else {
+      this._moonWantOpacity = (this._skyVisible && this._preset === 'night')
+        ? (1 - 0.6 * overcast) : 0;
+      const moonElev = elev == null ? 35 : Math.min(58, Math.max(22, -elev));
+      this._skyMoonTarget.copy(this._sunTargetFromSky(az + 180, moonElev, 24000));
+    }
 
     // Dome color / dayness targets from the (now-updated) preset + condition.
     this._refreshSkyTargets();
@@ -11586,30 +11645,185 @@ export class ThreeDRenderer {
     return this._starTex;
   }
 
+  // Decorative fallback starfield (no observer). Points are sampled AREA-UNIFORM
+  // on the spherical cap above ~8° (capSampleAltAz), so there is no dense
+  // horizon ring, and each star's per-vertex color is dimmed below ~15° so the
+  // few low stars fade into the horizon glow instead of hard-edging it. Used
+  // only when the real catalog sky is inactive; opacity ramps with (1−dayness).
   private _buildStarfield(): THREE.Points {
     const hi = Math.min(window.devicePixelRatio || 1, 2) >= 2;
     const N = hi ? 140 : 220;
     const R = 28000;
+    const MIN_ALT = 8 * Math.PI / 180, FADE_ALT = 15 * Math.PI / 180;
     const pos = new Float32Array(N * 3);
-    let seed = 0x51ed;
-    const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+    const col = new Float32Array(N * 3);
+    const samples = capSampleAltAz(N, MIN_ALT, 0x51ed);
     for (let i = 0; i < N; i++) {
-      const y = Math.max(0.06, rnd() * 2 - 1);   // bias to the upper hemisphere
-      const phi = rnd() * Math.PI * 2;
-      const rr = Math.sqrt(Math.max(0, 1 - y * y));
-      pos[i * 3] = Math.cos(phi) * rr * R;
-      pos[i * 3 + 1] = y * R;
-      pos[i * 3 + 2] = Math.sin(phi) * rr * R;
+      const { altRad, azRad } = samples[i];
+      const horiz = Math.cos(altRad) * R, y = Math.sin(altRad) * R;
+      // az here is arbitrary decorative placement; scene x/z from az (0 = +z).
+      pos[i * 3] = Math.sin(azRad) * horiz;
+      pos[i * 3 + 1] = y;
+      pos[i * 3 + 2] = Math.cos(azRad) * horiz;
+      // Low-altitude fade baked into vertex color (dim → reads as fade on a dark
+      // sky). Full brightness above FADE_ALT, ramping to ~0.25 at MIN_ALT.
+      const f = 0.25 + 0.75 * Math.min(1, Math.max(0, (altRad - MIN_ALT) / (FADE_ALT - MIN_ALT)));
+      col[i * 3] = col[i * 3 + 1] = col[i * 3 + 2] = f;
     }
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
     const mat = new THREE.PointsMaterial({
-      map: this._starTexture(), size: 340, color: 0xffffff, transparent: true,
+      map: this._starTexture(), size: 340, vertexColors: true, transparent: true,
       opacity: 0, depthWrite: false, depthTest: true, sizeAttenuation: true, fog: false,
     });
     const pts = new THREE.Points(geo, mat);
     pts.renderOrder = -9; pts.frustumCulled = false;
     return pts;
+  }
+
+  // ── Catalog sky (constellations + planets) ────────────────────────────────
+  // Convert a horizontal position (altRad; azRad measured CW from true NORTH)
+  // into a scene-frame position at radius R. True-compass az is rotated through
+  // _skyRotRad (geo θ) into the plan compass, then to scene coords — IDENTICAL
+  // to _sunTargetFromSky's plan mapping, but skipping the atan2 round-trip
+  // (sin(planAz)=dx, cos(planAz)=dy for the rotated unit vector). out is written
+  // in place (zero alloc).
+  private _skyScenePos(altRad: number, azTrueRad: number, R: number, out: THREE.Vector3): THREE.Vector3 {
+    const c = Math.cos(this._skyRotRad), s = Math.sin(this._skyRotRad);
+    const east = Math.sin(azTrueRad), north = Math.cos(azTrueRad);
+    const dx = c * east - s * north, dy = s * east + c * north;   // rotated unit dir (plan frame)
+    const horiz = Math.cos(altRad) * R, y = Math.sin(altRad) * R;
+    // planX = dx·horiz, planY = dy·horiz; scene = (−planX, y, planY).
+    out.set(-dx * horiz, y, dy * horiz);
+    return out;
+  }
+
+  // Build the catalog star Points + constellation LineSegments + planet sprites
+  // ONCE (buffers sized to the full catalog). Cheap; only built when an observer
+  // first appears. Hidden until _recomputeRealSky front-packs the visible set.
+  private _ensureRealSky(): void {
+    if (this._realStars || !this._scene) return;
+    this._skyGroup.add(this._realSkyGroup);
+    this._starWorld = new Float32Array(SKY_STARS.length * 3);
+
+    // Stars — one Points sized to the full catalog; drawRange limits to the
+    // above-horizon count each recompute. vertexColors carry magnitude
+    // brightness × low-alt fade.
+    const sPos = new Float32Array(SKY_STARS.length * 3);
+    const sCol = new Float32Array(SKY_STARS.length * 3);
+    const sGeo = new THREE.BufferGeometry();
+    sGeo.setAttribute('position', new THREE.BufferAttribute(sPos, 3));
+    sGeo.setAttribute('color', new THREE.BufferAttribute(sCol, 3));
+    sGeo.setDrawRange(0, 0);
+    const sMat = new THREE.PointsMaterial({
+      map: this._starTexture(), size: 440, vertexColors: true, transparent: true,
+      opacity: 0, depthWrite: false, depthTest: true, sizeAttenuation: true, fog: false,
+    });
+    const stars = new THREE.Points(sGeo, sMat);
+    stars.renderOrder = -9; stars.frustumCulled = false;
+    this._realStars = stars; this._realSkyGroup.add(stars);
+
+    // Constellation figure lines — one LineSegments sized to 2× the catalog line
+    // count; drawRange limits to the drawn (both-endpoints-up) segments. Faint
+    // slate; flat LineBasicMaterial is a documented _mat() exemption.
+    const lPos = new Float32Array(SKY_LINES.length * 2 * 3);
+    const lGeo = new THREE.BufferGeometry();
+    lGeo.setAttribute('position', new THREE.BufferAttribute(lPos, 3));
+    lGeo.setDrawRange(0, 0);
+    const lMat = new THREE.LineBasicMaterial({
+      color: 0x6f7fa6, transparent: true, opacity: 0, depthWrite: false, depthTest: true, fog: false,
+    });
+    const lines = new THREE.LineSegments(lGeo, lMat);
+    lines.renderOrder = -9; lines.frustumCulled = false;
+    lines.userData.outlineSkip = true;
+    this._constLines = lines; this._constLineMat = lMat; this._realSkyGroup.add(lines);
+
+    // Planet sprites (reuse the star glow texture, per-planet tint).
+    for (let i = 0; i < 5; i++) {
+      const spr = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: this._starTexture(), transparent: true, depthWrite: false,
+        depthTest: true, opacity: 0, color: 0xffffff, fog: false,
+      }));
+      spr.scale.set(900, 900, 1);
+      spr.renderOrder = -8; spr.frustumCulled = false; spr.visible = false;
+      this._planetSprites.push(spr);
+      this._planetLocal.push(new THREE.Vector3());
+      this._realSkyGroup.add(spr);
+    }
+  }
+
+  // TEST HOOK: inject the epoch (Unix ms) used by the real-sky recompute, or
+  // null to resume Date.now(). Triggers an immediate recompute in real mode.
+  setSkyEpochOverride(ms: number | null): void {
+    this._skyEpochOverride = ms;
+    if (this._skyRealMode) this._recomputeRealSky(ms ?? Date.now());
+  }
+
+  // Recompute the whole catalog sky for `epochMs` + the current observer. Front-
+  // packs above-horizon stars into the Points buffer (drawRange), rebuilds the
+  // visible figure lines, positions/hides the planets, and computes the moon's
+  // scene direction + altitude. Zero allocation after the one-time build.
+  private _recomputeRealSky(epochMs: number): void {
+    const obs = this._skyObserver;
+    if (!obs || !this._realStars || !this._constLines || !this._starWorld) return;
+    const snap = skySnapshot(epochMs, obs.lat, obs.lon);
+    const R_STAR = 28000, R_PLANET = 27000, R_MOON = 24000;
+    const FADE_ALT = 15 * Math.PI / 180;
+    const tmp = this._v3a;
+
+    // Stars — magnitude → brightness (mag −1.5 → 1.0, mag 4 → ~0.35) × low-alt
+    // fade. Also record each drawn catalog index's scene position for the lines.
+    const sGeo = this._realStars.geometry;
+    const sPos = sGeo.getAttribute('position') as THREE.BufferAttribute;
+    const sCol = sGeo.getAttribute('color') as THREE.BufferAttribute;
+    const world = this._starWorld;
+    world.fill(NaN);                                 // mark all below-horizon
+    let n = 0;
+    for (const st of snap.stars) {
+      this._skyScenePos(st.altRad, st.azRad, R_STAR, tmp);
+      sPos.setXYZ(n, tmp.x, tmp.y, tmp.z);
+      world[st.i * 3] = tmp.x; world[st.i * 3 + 1] = tmp.y; world[st.i * 3 + 2] = tmp.z;
+      let b = 1.05 - 0.16 * st.mag;                  // magnitude → brightness
+      b = Math.min(1, Math.max(0.35, b));
+      if (st.altRad < FADE_ALT) b *= 0.3 + 0.7 * Math.max(0, st.altRad / FADE_ALT);
+      sCol.setXYZ(n, b, b, b);
+      n++;
+    }
+    sGeo.setDrawRange(0, n);
+    sPos.needsUpdate = true; sCol.needsUpdate = true;
+
+    // Constellation lines — draw a segment only when BOTH endpoints are above
+    // the horizon (present in `visible`), reading their recorded scene positions.
+    const lGeo = this._constLines.geometry;
+    const lPos = lGeo.getAttribute('position') as THREE.BufferAttribute;
+    let seg = 0;
+    for (const [a, b] of SKY_LINES) {
+      if (!snap.visible.has(a) || !snap.visible.has(b)) continue;
+      lPos.setXYZ(seg * 2, world[a * 3], world[a * 3 + 1], world[a * 3 + 2]);
+      lPos.setXYZ(seg * 2 + 1, world[b * 3], world[b * 3 + 1], world[b * 3 + 2]);
+      seg++;
+    }
+    lGeo.setDrawRange(0, seg * 2);
+    lPos.needsUpdate = true;
+
+    // Planets — position + tint above the horizon, hide below.
+    for (let i = 0; i < this._planetSprites.length; i++) {
+      const p = snap.planets[i];
+      const spr = this._planetSprites[i];
+      if (!p || p.altRad < 0.03) { spr.visible = false; continue; }
+      this._skyScenePos(p.altRad, p.azRad, R_PLANET, this._planetLocal[i]);
+      (spr.material as THREE.SpriteMaterial).color.setHex(p.tint);
+      // Brighter planets a touch larger (Venus/Jupiter vs Mercury).
+      const sc = p.mag < -2 ? 1300 : p.mag < 0 ? 1050 : 850;
+      spr.scale.set(sc, sc, 1);
+      spr.visible = true;
+    }
+
+    // Moon — real ephemeris direction + altitude (drives visibility below).
+    const m = moonAltAz(epochMs, obs.lat, obs.lon);
+    this._moonRealAlt = m.altRad;
+    this._skyScenePos(m.altRad, m.azRad, R_MOON, this._moonRealDir);
   }
 
   // Overcast amount 0..1 from condition + cloud coverage (greys/darkens the
@@ -11755,14 +11969,26 @@ export class ThreeDRenderer {
       const k = Math.min(1, dt / 2);               // τ ≈ 2 s color / dayness ease
       this._skyTopCur.lerp(this._skyTopTarget, k);
       this._skyBotCur.lerp(this._skyBotTarget, k);
+      // Real catalog sky: recompute alt/az every 60 s of wall time (stars drift
+      // ~0.25°/min — imperceptible between recomputes). Epoch from the test hook
+      // else the wall clock (read ONLY here, on the slow tick).
+      if (this._skyRealMode) {
+        this._skyRecomputeAccum += dt;
+        if (this._skyRecomputeAccum >= 60) {
+          this._skyRecomputeAccum = 0;
+          this._recomputeRealSky(this._skyEpochOverride ?? Date.now());
+        }
+      }
       // Recenter the dome + starfield on the CAMERA every frame so the camera
       // can never zoom out past the dome radius (maxDistance 45 m > r 30 m) and
       // see the shell from outside as an opaque globe over the scene. The
       // gradient reads absolute world y so the horizon stays ground-anchored;
-      // the storm band re-centers through uCenter.
+      // the storm band re-centers through uCenter. The catalog sub-group +
+      // real-mode moon recenter too so distant objects hold a fixed direction.
       if (this._camera) {
         if (this._skyDome) this._skyDome.position.copy(this._camera.position);
         if (this._starField) this._starField.position.copy(this._camera.position);
+        this._realSkyGroup.position.copy(this._camera.position);
       }
       if (this._skyMat) {
         (this._skyMat.uniforms.uTop.value as THREE.Color).copy(this._skyTopCur);
@@ -11775,9 +12001,24 @@ export class ThreeDRenderer {
         this._skyMat.uniforms.uStormAmt.value = this._stormDarkAmt;
       }
       this._skyDayness += (this._skyDaynessTarget - this._skyDayness) * k;
+      const starRamp = this._skyVisible ? Math.max(0, 1 - this._skyDayness) : 0;
+      // Decorative starfield shows only when the real catalog sky is inactive.
       if (this._starField) {
-        (this._starField.material as THREE.PointsMaterial).opacity =
-          this._skyVisible ? Math.max(0, 1 - this._skyDayness) : 0;
+        this._starField.visible = this._skyVisible && !this._skyRealMode;
+        (this._starField.material as THREE.PointsMaterial).opacity = starRamp;
+      }
+      // Real catalog sky: stars / figure lines / planets share the star ramp,
+      // gated on real mode. Group visibility folds in skyVisible + mode.
+      if (this._realStars) {
+        this._realSkyGroup.visible = this._skyVisible && this._skyRealMode;
+        (this._realStars.material as THREE.PointsMaterial).opacity = starRamp;
+        if (this._constLineMat) this._constLineMat.opacity = starRamp * 0.55;
+        for (const spr of this._planetSprites) {
+          // Planets fade with the stars but stay a touch brighter (min 0.4 while
+          // any sky shows) so a bright planet reads even near twilight.
+          (spr.material as THREE.SpriteMaterial).opacity =
+            this._skyVisible ? Math.max(starRamp, this._skyRealMode ? 0.4 * (1 - this._skyDayness) : 0) : 0;
+        }
       }
       this._sunOpacityCur += (this._sunWantOpacity - this._sunOpacityCur) * k;
       this._moonOpacityCur += (this._moonWantOpacity - this._moonOpacityCur) * k;
@@ -11790,8 +12031,15 @@ export class ThreeDRenderer {
       }
       if (this._moonSprite) {
         (this._moonSprite.material as THREE.SpriteMaterial).opacity = this._moonOpacityCur;
-        if (this._moonOpacityCur < 0.02) this._moonSprite.position.copy(this._skyMoonTarget);
-        else this._moonSprite.position.lerp(this._skyMoonTarget, k);
+        if (this._skyRealMode && this._camera) {
+          // Real ephemeris: pin the moon at its true direction, camera-recentered
+          // (like the catalog group) so it holds among the real stars.
+          this._moonSprite.position.copy(this._camera.position).add(this._moonRealDir);
+        } else if (this._moonOpacityCur < 0.02) {
+          this._moonSprite.position.copy(this._skyMoonTarget);
+        } else {
+          this._moonSprite.position.lerp(this._skyMoonTarget, k);
+        }
         this._moonSprite.visible = this._skyVisible && this._moonOpacityCur > 0.01;
       }
     }
@@ -17862,6 +18110,15 @@ export class ThreeDRenderer {
     this._starTex?.dispose(); this._starTex = null;
     for (const t of Object.values(this._moonTexCache)) t?.dispose();
     this._moonTexCache = {};
+    // Catalog-sky geometry/materials (the star texture above is shared + already
+    // freed; the planet sprites reuse it, so only their SpriteMaterials free here).
+    this._realStars?.geometry.dispose();
+    (this._realStars?.material as THREE.Material | undefined)?.dispose();
+    this._realStars = null;
+    this._constLines?.geometry.dispose();
+    this._constLineMat?.dispose(); this._constLineMat = null; this._constLines = null;
+    for (const spr of this._planetSprites) (spr.material as THREE.Material).dispose();
+    this._planetSprites = []; this._planetLocal = []; this._starWorld = null;
     this._ventTex?.dispose(); this._ventTex = null;
     // DC-D alert beacon light (shared resource — disposed only here).
     if (this._alertPulseLight) { this._alertPulseLight.dispose(); this._alertPulseLight = null; }
