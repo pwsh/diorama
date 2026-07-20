@@ -1,0 +1,344 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>PLANROTATE …</title>
+<style>
+  body { margin:0; background:#0d1116; color:#cfd8dc; font:13px/1.5 sans-serif; padding:14px; }
+  h1 { font-size:15px; margin:0 0 10px; }
+  #summary { font-size:14px; font-weight:bold; margin:10px 0; padding:8px 10px; border-radius:5px; }
+  .okbg { background:#12331f; color:#69f0ae; } .badbg { background:#3a1414; color:#ff8a80; }
+  .row { display:flex; justify-content:space-between; gap:10px; padding:2px 0; border-bottom:1px solid #1c2530; }
+  .pass { color:#69f0ae; } .fail { color:#ff5252; }
+  .name { color:#90caf9; } .extra { color:#ffd54f; font-size:11px; }
+</style>
+<h1>Rotate whole plan — rotPointDeg matrix · quarter-turn image · wall-snap flush · round-trip · vacuum calib · compass invariant · edit-gate/undo</h1>
+<div id="summary">Running…</div>
+<div id="rows"></div>
+
+<!-- Harness build (from the repo root; NEVER reuse stale bundles):
+       H=/tmp/diorama-harness-rotate
+       rm -rf "$H"; mkdir -p "$H"; cp -r dist/* "$H"/
+       cp test-pages/plan-rotate-test.html "$H"/
+       npx esbuild src/geometry.ts --bundle --format=esm --outfile="$H"/geometry.mod.js
+       npx esbuild src/compass.ts  --bundle --format=esm --outfile="$H"/compass.mod.js
+       npx esbuild src/geo.ts      --bundle --format=esm --outfile="$H"/geo.mod.js
+       T=$(mktemp -d); cp -r src/* "$T"/
+       cp test-pages/fake-avatar-store.ts "$T"/avatar-store.ts
+       npx esbuild "$T"/planner.ts --bundle --format=esm --outfile="$H"/planner.mod.js
+     Run headless (serve over http — Chrome blocks dynamic module imports on file://):
+       (cd "$H" && python3 -m http.server 8791 &)
+       google-chrome --headless=new --disable-gpu --use-angle=swiftshader \
+         --virtual-time-budget=30000 --dump-dom \
+         "http://localhost:8791/plan-rotate-test.html" | grep -o "<title>[^<]*"  -->
+<script type="module">
+  const V = '?v=' + Date.now();
+  const { rotPointDeg, vacuumRawToWorld, pointToSeg } = await import('./geometry.mod.js' + V);
+  const { resolveNorth } = await import('./compass.mod.js' + V);
+  const { fitGeoTransform, unprojectMeters } = await import('./geo.mod.js' + V);
+  const { Planner } = await import('./planner.mod.js' + V);
+
+  const results = [];
+  const ok = (name, cond, extra = '') => results.push({ name, pass: !!cond, extra: String(extra) });
+  const near = (a, b, tol = 1e-9) => Math.abs(a - b) <= tol;
+  const nearV = (p, x, y, tol = 1e-6) => near(p.x, x, tol) && near(p.y, y, tol);
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  async function waitFor(cond, tries = 600) {
+    for (let i = 0; i < tries; i++) { if (cond()) return true; await sleep(4); }
+    return !!cond();
+  }
+  const DEG = Math.PI / 180;
+  const shoelace = pts => { let a = 0; for (let i = 0, n = pts.length, j = n - 1; i < n; j = i++) a += pts[j].x * pts[i].y - pts[i].x * pts[j].y; return Math.abs(a) / 2; };
+  // Reference screen-CW rotation (independent re-derivation, y-up frame).
+  const refRot = (x, y, cx, cy, phi) => { const r = phi * DEG, c = Math.cos(r), s = Math.sin(r), dx = x - cx, dy = y - cy; return { x: cx + dx * c + dy * s, y: cy - dx * s + dy * c }; };
+
+  class FakeHa {
+    constructor(seed) { this.map = new Map(); for (const [k, v] of Object.entries(seed || {})) this.map.set(k, JSON.parse(JSON.stringify(v))); this.states = {}; this._stateCbs = []; this._connCbs = []; }
+    connect() { for (const cb of this._connCbs) cb('connected'); for (const cb of this._stateCbs) cb(this.states, undefined); }
+    onState(fn) { this._stateCbs.push(fn); } onConn(fn) { this._connCbs.push(fn); }
+    callService() { return Promise.resolve(); }
+    async getHistory() { return {}; } async getWeatherForecasts() { return null; }
+    async getDevices() { return []; } async getEntityRegistry() { return []; } async updateEntityRegistry() { return true; }
+    async getUserData(key) { return this.map.has(key) ? JSON.parse(JSON.stringify(this.map.get(key))) : null; }
+    async setUserData(key, value) { this.map.set(key, JSON.parse(JSON.stringify(value))); return true; }
+    async refreshStates() {} async subscribeMqtt() { return () => {}; } async publishMqtt() {}
+    peek(key) { return this.map.has(key) ? JSON.parse(JSON.stringify(this.map.get(key))) : null; }
+  }
+  // Build a connected Planner over a seed store. floors = array of floor objects.
+  async function mkPlanner(floors, extra = {}) {
+    localStorage.removeItem('diorama:store:v1'); localStorage.removeItem('diorama:configs');
+    const seed = Object.assign({ v: 2, floors, currentFloorId: floors[0].id, activeSensorId: null,
+      coverage: true, imperial: false, showDetails: false, useRawTargets: false }, extra);
+    const stub = new FakeHa({ diorama: seed });
+    const p = new Planner(); p.connectWith(stub);
+    await waitFor(() => p.configIndex !== null);
+    return p;
+  }
+  const baseFloor = (over = {}) => Object.assign({ id: 'f1', name: 'Home', w: 12000, d: 12000,
+    walls: [], furniture: [], lights: [], switches: [], sensors: [], motionSensors: [],
+    envSensors: [], bleProxies: [], doors: [], windows: [], rooms: [], bg: null }, over);
+
+  try {
+    // ── 1. rotPointDeg matrix: exact quarter turns, arbitrary angles, invariance ──
+    {
+      const c = { x: 5000, y: 4000 };
+      // 90° exact (no float drift): integer coords → integer image. Screen-CW,
+      // so a point RIGHT of centre swings DOWN (right→down→left→up→right).
+      let q = rotPointDeg(7000, 4000, c.x, c.y, 90);          // (+X of centre) → down (−Y)
+      ok('1: 90° maps (+X of centre) → (−Y of centre) exactly', q.x === 5000 && q.y === 2000, `${q.x},${q.y}`);
+      q = rotPointDeg(5000, 6000, c.x, c.y, 90);              // up → +X (screen-CW)
+      ok('1: 90° maps (+Y of centre) → (+X of centre) exactly', q.x === 7000 && q.y === 4000, `${q.x},${q.y}`);
+      q = rotPointDeg(7000, 4000, c.x, c.y, 180);
+      ok('1: 180° exact', q.x === 3000 && q.y === 4000, `${q.x},${q.y}`);
+      q = rotPointDeg(7000, 4000, c.x, c.y, 270);            // (+X of centre) → up (+Y)
+      ok('1: 270° exact', q.x === 5000 && q.y === 6000, `${q.x},${q.y}`);
+      q = rotPointDeg(7123, 4567, c.x, c.y, 360);
+      ok('1: 360° ≡ identity (bit-exact)', q.x === 7123 && q.y === 4567, `${q.x},${q.y}`);
+      q = rotPointDeg(7123, 4567, c.x, c.y, 0);
+      ok('1: 0° identity', q.x === 7123 && q.y === 4567, '');
+      // Screen-CW sign: plan-up point drifts toward +X for φ>0.
+      q = rotPointDeg(5000, 6000, c.x, c.y, 15);
+      ok('1: +15° turns plan-up toward +X (screen-CW)', q.x > 5000 && q.y > 4000 && q.y < 6000, `${q.x.toFixed(1)},${q.y.toFixed(1)}`);
+      // Matches the independent reference for 15° and −15°.
+      const a = rotPointDeg(9000, 3000, c.x, c.y, 15), b = refRot(9000, 3000, c.x, c.y, 15);
+      ok('1: 15° matches reference matrix', nearV(a, b.x, b.y, 1e-9), `${a.x.toFixed(3)} vs ${b.x.toFixed(3)}`);
+      const a2 = rotPointDeg(9000, 3000, c.x, c.y, -15), b2 = refRot(9000, 3000, c.x, c.y, -15);
+      ok('1: −15° matches reference matrix', nearV(a2, b2.x, b2.y, 1e-9), '');
+      // Centre is invariant; distance-to-centre preserved (rigid).
+      q = rotPointDeg(c.x, c.y, c.x, c.y, 37);
+      ok('1: centre is a fixed point', q.x === c.x && q.y === c.y, '');
+      const d0 = Math.hypot(9000 - c.x, 3000 - c.y), d1 = Math.hypot(a.x - c.x, a.y - c.y);
+      ok('1: rotation preserves radius', near(d0, d1, 1e-6), `${d0.toFixed(3)} vs ${d1.toFixed(3)}`);
+    }
+
+    // ── 2. rotateFloorContent(90) on a SQUARE floor → exact quarter-turn image,
+    //       every angle field += 90, lengths + polygon areas preserved ──────────
+    {
+      const F = baseFloor({
+        w: 12000, d: 12000,
+        walls: [{ id: 'w1', points: [{ x: 3000, y: 3000 }, { x: 9000, y: 3000 }], kind: 'full' }],
+        furniture: [{ id: 'fu1', kind: 'sofa', x: 4000, y: 3500, w: 1000, h: 1000, rotation: 30 }],
+        lights: [{ id: 'l1', kind: 'bulb', x: 5000, y: 4000, rotation: 10, tilt: 40 }],
+        switches: [{ id: 's1', x: 6000, y: 4500, rotation: 0 }],
+        motionSensors: [{ id: 'm1', x: 4500, y: 5000, heading: 20, fov: 90, range: 4000 }],
+        doors: [{ id: 'd1', kind: 'swing', x: 7000, y: 3000, rotation: 0, w: 800 }],
+        windows: [{ id: 'wi1', kind: 'single', x: 5000, y: 3000, rotation: 0, w: 900 }],
+        presenceZones: [{ id: 'pz1', points: [{ x: 4000, y: 6000 }, { x: 6000, y: 6000 }, { x: 6000, y: 8000 }, { x: 4000, y: 8000 }] }],
+        groundAreas: [{ id: 'g1', kind: 'concrete', points: [], path: { centerline: [{ x: 3500, y: 4000 }, { x: 5500, y: 4000 }, { x: 5500, y: 6000 }], width: 600 } }],
+        pools: [{ id: 'p1', kind: 'pool', points: [{ x: 7000, y: 6000 }, { x: 9000, y: 6000 }, { x: 9000, y: 8000 }, { x: 7000, y: 8000 }] }],
+        voidAreas: [{ id: 'v1', points: [{ x: 3000, y: 8500 }, { x: 4000, y: 8500 }, { x: 4000, y: 9500 }] }],
+        rooms: [{ id: 'r1', name: 'Den', anchor: { x: 5000, y: 5000 } }],
+        cameras: [{ id: 'c1', x: 8000, y: 8000, rotation: 45, camCalib: { detectW: 640, detectH: 480, points: [{ u: 100, v: 200, x: 4200, y: 3300 }, { u: 300, v: 400, x: 5200, y: 3800 }] } }],
+        infoCards: [{ id: 'ic1', x: 3200, y: 5000, rotation: 90, billboard: false, entityId: 'sensor.x' }],
+        actionButtons: [{ id: 'ab1', x: 8500, y: 3200, rotation: 0, wallMount: true, actionKind: 'toggle' }],
+        flagpoles: [{ id: 'fp1', x: 8800, y: 8800, flag: 'usa' }],
+      });
+      const p = await mkPlanner([F]);
+      const cx = 6000, cy = 6000;
+      const f0 = JSON.parse(JSON.stringify(p.floor()));      // snapshot BEFORE rotation
+      const rot90 = (x, y) => ({ x: cx + (y - cy), y: cy - (x - cx) });   // exact quarter turn image
+      p.rotateFloorContent(90);
+      const f = p.floor();
+      ok('2: floor did not grow (square, centred)', f.w === 12000 && f.d === 12000, `${f.w}×${f.d}`);
+      // Wall vertices at exact images; segment length preserved.
+      const w = f.walls[0]; const e0 = rot90(3000, 3000), e1 = rot90(9000, 3000);
+      ok('2: wall vertices at exact 90° image', nearV(w.points[0], e0.x, e0.y, 1e-9) && nearV(w.points[1], e1.x, e1.y, 1e-9), JSON.stringify(w.points));
+      const len0 = Math.hypot(9000 - 3000, 0), len1 = Math.hypot(w.points[1].x - w.points[0].x, w.points[1].y - w.points[0].y);
+      ok('2: wall length preserved', near(len0, len1, 1e-6), `${len0} vs ${len1}`);
+      const chk = (label, cur, x, y) => ok(`2: ${label} at exact image`, nearV(cur, x, y, 1e-9), `${cur.x},${cur.y} vs ${x},${y}`);
+      let img = rot90(4000, 3500); chk('sofa', f.furniture[0], img.x, img.y);
+      ok('2: furniture rotation += 90 (30→120)', f.furniture[0].rotation === 120, f.furniture[0].rotation);
+      img = rot90(5000, 4000); chk('light', f.lights[0], img.x, img.y);
+      ok('2: light rotation += 90 (10→100)', f.lights[0].rotation === 100, f.lights[0].rotation);
+      ok('2: light tilt (elevation) unchanged', f.lights[0].tilt === 40, f.lights[0].tilt);
+      img = rot90(6000, 4500); chk('switch', f.switches[0], img.x, img.y);
+      ok('2: switch rotation += 90 (0→90)', f.switches[0].rotation === 90, f.switches[0].rotation);
+      img = rot90(4500, 5000); chk('motion', f.motionSensors[0], img.x, img.y);
+      ok('2: motion heading += 90 (20→110)', f.motionSensors[0].heading === 110, f.motionSensors[0].heading);
+      img = rot90(7000, 3000); chk('door', f.doors[0], img.x, img.y);
+      ok('2: door rotation += 90', f.doors[0].rotation === 90, f.doors[0].rotation);
+      img = rot90(5000, 3000); chk('window', f.windows[0], img.x, img.y);
+      ok('2: window rotation += 90', f.windows[0].rotation === 90, f.windows[0].rotation);
+      img = rot90(8000, 8000); chk('camera', f.cameras[0], img.x, img.y);
+      ok('2: camera rotation += 90 (45→135)', f.cameras[0].rotation === 135, f.cameras[0].rotation);
+      // camCalib plan points rotate; u/v untouched.
+      const cp = f.cameras[0].camCalib.points[0], cpi = rot90(4200, 3300);
+      ok('2: camCalib plan pt rotates, u/v fixed', nearV(cp, cpi.x, cpi.y, 1e-9) && cp.u === 100 && cp.v === 200, `${cp.x},${cp.y} u${cp.u}`);
+      img = rot90(3200, 5000); chk('infocard', f.infoCards[0], img.x, img.y);
+      ok('2: infocard rotation += 90 (90→180)', f.infoCards[0].rotation === 180, f.infoCards[0].rotation);
+      img = rot90(8500, 3200); chk('action', f.actionButtons[0], img.x, img.y);
+      img = rot90(8800, 8800); chk('flagpole', f.flagpoles[0], img.x, img.y);
+      img = rot90(5000, 5000); chk('room anchor', f.rooms[0].anchor, img.x, img.y);
+      // Polygon areas preserved (rigid).
+      ok('2: presence-zone area preserved', near(shoelace(f.presenceZones[0].points), shoelace(f0.presenceZones[0].points), 1e-3), '');
+      ok('2: pool area preserved', near(shoelace(f.pools[0].points), shoelace(f0.pools[0].points), 1e-3), '');
+      ok('2: void area preserved', near(shoelace(f.voidAreas[0].points), shoelace(f0.voidAreas[0].points), 1e-3), '');
+      // Ground-area path centerline rotated + regenerated (buffered polygon present).
+      const gc = f.groundAreas[0].path.centerline, gci = rot90(3500, 4000);
+      ok('2: ground path centerline rotated', nearV(gc[0], gci.x, gci.y, 1e-9), `${gc[0].x},${gc[0].y}`);
+      ok('2: ground path re-buffered (points regenerated)', Array.isArray(f.groundAreas[0].points) && f.groundAreas[0].points.length >= 4, `n=${f.groundAreas[0].points.length}`);
+    }
+
+    // ── 3. Wall-snapped switch stays flush (distance to wall segment unchanged) ──
+    {
+      const F = baseFloor({
+        walls: [{ id: 'w1', points: [{ x: 3000, y: 3000 }, { x: 9000, y: 3000 }], kind: 'full' }],
+        // switch on the wall face, normal offset 70mm below the wall line (y=2930)
+        switches: [{ id: 's1', x: 6000, y: 2930, rotation: 180 }],
+      });
+      const p = await mkPlanner([F]);
+      const f = p.floor();
+      const dist = () => pointToSeg(f.switches[0].x, f.switches[0].y, f.walls[0].points[0].x, f.walls[0].points[0].y, f.walls[0].points[1].x, f.walls[0].points[1].y);
+      const before = dist();
+      p.rotateFloorContent(37);
+      const after = dist();
+      ok('3: switch stays flush to wall after rotation', near(before, after, 1e-6), `${before.toFixed(3)} vs ${after.toFixed(3)}`);
+      ok('3: switch rotation bumped by 37', f.switches[0].rotation === (180 + 37) % 360, f.switches[0].rotation);
+    }
+
+    // ── 4. +15° then −15° round-trips positions to ≤0.1mm; rect grows ≤ once ─────
+    {
+      const F = baseFloor({
+        w: 12000, d: 12000,
+        walls: [{ id: 'w1', points: [{ x: 4000, y: 4000 }, { x: 8000, y: 4000 }, { x: 8000, y: 8000 }], kind: 'full' }],
+        furniture: [{ id: 'fu1', kind: 'sofa', x: 5000, y: 5000, w: 1000, h: 1000, rotation: 20 }],
+        motionSensors: [{ id: 'm1', x: 7000, y: 6000, heading: 45, fov: 90, range: 4000 }],
+      });
+      const p = await mkPlanner([F]);
+      const f = p.floor();
+      const before = JSON.parse(JSON.stringify({ w: f.walls[0].points, fu: { x: f.furniture[0].x, y: f.furniture[0].y }, m: { x: f.motionSensors[0].x, y: f.motionSensors[0].y } }));
+      const dim0 = { w: f.w, d: f.d };
+      p.rotateFloorContent(15);
+      const dim1 = { w: f.w, d: f.d };
+      p.rotateFloorContent(-15);
+      const dim2 = { w: f.w, d: f.d };
+      const dmax = Math.max(
+        ...f.walls[0].points.map((pt, i) => Math.hypot(pt.x - before.w[i].x, pt.y - before.w[i].y)),
+        Math.hypot(f.furniture[0].x - before.fu.x, f.furniture[0].y - before.fu.y),
+        Math.hypot(f.motionSensors[0].x - before.m.x, f.motionSensors[0].y - before.m.y));
+      ok('4: +15° then −15° round-trips positions ≤0.1mm', dmax <= 0.1, `max Δ=${dmax.toExponential(2)}mm`);
+      ok('4: no overflow → no growth on this centred plan', dim0.w === dim1.w && dim1.w === dim2.w && dim0.d === dim1.d, `${dim0.w}/${dim1.w}/${dim2.w}`);
+      // A rotation that DOES overflow grows once, and does not shrink on the inverse.
+      const F2 = baseFloor({ w: 6000, d: 6000, walls: [{ id: 'w', points: [{ x: 300, y: 300 }, { x: 5700, y: 5700 }], kind: 'full' }] });
+      const p2 = await mkPlanner([F2]);
+      const g0 = { w: p2.floor().w, d: p2.floor().d };
+      p2.rotateFloorContent(45);                       // long wall now diagonal → taller than d
+      const g1 = { w: p2.floor().w, d: p2.floor().d };
+      p2.rotateFloorContent(-45);
+      const g2 = { w: p2.floor().w, d: p2.floor().d };
+      ok('4: overflow grows the rect', g1.d > g0.d || g1.w > g0.w, `${g0.d}→${g1.d}`);
+      ok('4: inverse rotation never shrinks (grows ≤ once)', g2.w >= g1.w && g2.d >= g1.d, `${g1.d}→${g2.d}`);
+    }
+
+    // ── 5. Vacuum calibration round-trip: projected raw point lands at its image ─
+    {
+      const F = baseFloor({ w: 12000, d: 10000,
+        robots: [{ id: 'rb1', kind: 'vacuum', x: 6000, y: 5000, entity_id: 'vacuum.x',
+          posEntity: 'camera.map', posScale: 1.5, posOffsetX: 4200, posOffsetY: 3600, posRotDeg: 20, posFlipY: true }] });
+      const p = await mkPlanner([F]);
+      const cx = 6000, cy = 5000;
+      const raws = [{ x: 1234, y: -567 }, { x: -800, y: 900 }, { x: 0, y: 0 }];
+      const cal0 = Object.assign({}, F.robots[0]);
+      p.rotateFloorContent(30);
+      const cal1 = p.floor().robots[0];
+      let good = true, worst = 0;
+      for (const raw of raws) {
+        const w0 = vacuumRawToWorld(raw, cal0);
+        const w1 = vacuumRawToWorld(raw, cal1);
+        const exp = rotPointDeg(w0.x, w0.y, cx, cy, 30);
+        const e = Math.hypot(w1.x - exp.x, w1.y - exp.y);
+        worst = Math.max(worst, e); if (e > 1e-6) good = false;
+      }
+      ok('5: vacuum raw→world round-trips under plan rotation', good, `worst Δ=${worst.toExponential(2)}mm`);
+      ok('5: posRotDeg subtracted by φ (CCW convention)', cal1.posRotDeg === (20 - 30 + 360) % 360, cal1.posRotDeg);
+      ok('5: posOffset rotated as a world point', nearV({ x: cal1.posOffsetX, y: cal1.posOffsetY }, rotPointDeg(4200, 3600, cx, cy, 30).x, rotPointDeg(4200, 3600, cx, cy, 30).y, 1e-6), `${cal1.posOffsetX.toFixed(1)},${cal1.posOffsetY.toFixed(1)}`);
+    }
+
+    // ── 6. Compass invariant: resolveNorth output rotates by exactly φ ──────────
+    {
+      // 6a. Manual-bearing path, single floor (both signs).
+      for (const phi of [15, -15, 90]) {
+        const p = await mkPlanner([baseFloor()], { compass: { source: 'manual', manualNorthDeg: 123 } });
+        const n0 = resolveNorth(p.store.compass, null);
+        p.rotateFloorContent(phi);
+        const n1 = resolveNorth(p.store.compass, null);
+        const exp = rotPointDeg(n0.nx, n0.ny, 0, 0, phi);   // rotate the unit vector about origin
+        ok(`6: manual north rotates by φ=${phi}`, nearV({ x: n1.nx, y: n1.ny }, exp.x, exp.y, 1e-9), `(${n1.nx.toFixed(4)},${n1.ny.toFixed(4)}) vs (${exp.x.toFixed(4)},${exp.y.toFixed(4)})`);
+      }
+      // 6b. Landmark-fit path, single floor: 2 calibrated landmarks; rotating the
+      //     plan positions must rotate resolved north by φ.
+      {
+        const lat0 = 45, lon0 = -93, B = 30, th = B * DEG, c = Math.cos(th), s = Math.sin(th), t = { x: 6000, y: 5000 };
+        const mk = (id, em, nm) => { const ll = unprojectMeters(em, nm, lat0, lon0); const gx = em * 1000, gy = nm * 1000; return { id, name: id, x: c * gx - s * gy + t.x, y: s * gx + c * gy + t.y, lat: ll.lat, lon: ll.lon, sampleCount: 8, accuracy: 5 }; };
+        const landmarks = [mk('L0', 0, 0), mk('L1', 40, 25)];
+        const p = await mkPlanner([baseFloor()], { compass: { source: 'auto' }, geo: { landmarks } });
+        const fit0 = p.geoFit();
+        ok('6: landmark fit usable (quality full)', fit0 && fit0.transform.quality === 'full', fit0 && fit0.transform.quality);
+        const n0 = resolveNorth(p.store.compass, fit0);
+        ok('6: landmark north source', n0.source === 'landmarks', n0.source);
+        for (const phi of [15, -15]) {
+          const p2 = await mkPlanner([baseFloor()], { compass: { source: 'auto' }, geo: { landmarks: JSON.parse(JSON.stringify(landmarks)) } });
+          const before = resolveNorth(p2.store.compass, p2.geoFit());
+          p2.rotateFloorContent(phi);
+          const after = resolveNorth(p2.store.compass, p2.geoFit());
+          const exp = rotPointDeg(before.nx, before.ny, 0, 0, phi);
+          ok(`6: landmark-fit north rotates by φ=${phi} (single floor)`, nearV({ x: after.nx, y: after.ny }, exp.x, exp.y, 1e-6), `(${after.nx.toFixed(4)},${after.ny.toFixed(4)}) vs (${exp.x.toFixed(4)},${exp.y.toFixed(4)})`);
+          ok(`6: single-floor landmarks rotated (φ=${phi})`, !nearV(p2.store.geo.landmarks[1], landmarks[1].x, landmarks[1].y, 1), '');
+        }
+      }
+      // 6c. Multi-floor: landmarks untouched, but northDeg + manual bearing bumped.
+      {
+        const landmarks = [{ id: 'L0', name: 'L0', x: 5000, y: 4000, lat: 45, lon: -93, sampleCount: 8 }];
+        const p = await mkPlanner([baseFloor({ id: 'f1' }), baseFloor({ id: 'f2', name: 'Up' })],
+          { compass: { source: 'manual', manualNorthDeg: 80 }, geo: { landmarks: JSON.parse(JSON.stringify(landmarks)), northDeg: 50 } });
+        p.rotateFloorContent(15);
+        ok('6: multi-floor leaves shared geo landmarks untouched', p.store.geo.landmarks[0].x === 5000 && p.store.geo.landmarks[0].y === 4000, JSON.stringify(p.store.geo.landmarks[0]));
+        ok('6: multi-floor bumps geo.northDeg by −φ', p.store.geo.northDeg === (50 - 15 + 360) % 360, p.store.geo.northDeg);
+        ok('6: multi-floor bumps manual bearing by −φ', p.store.compass.manualNorthDeg === (80 - 15 + 360) % 360, p.store.compass.manualNorthDeg);
+        // Manual north still satisfies the invariant on multi-floor.
+        const n0 = resolveNorth({ source: 'manual', manualNorthDeg: 80 }, null);
+        const n1 = resolveNorth(p.store.compass, null);
+        const exp = rotPointDeg(n0.nx, n0.ny, 0, 0, 15);
+        ok('6: multi-floor manual north still rotates by φ', nearV({ x: n1.nx, y: n1.ny }, exp.x, exp.y, 1e-9), '');
+      }
+    }
+
+    // ── 7. Edit-mode gate + single-step undo restores exact prior JSON ──────────
+    {
+      const F = baseFloor({ furniture: [{ id: 'fu1', kind: 'sofa', x: 5000, y: 5000, w: 1000, h: 1000, rotation: 10 }] });
+      // Kiosk mode → no-op.
+      const pk = await mkPlanner([JSON.parse(JSON.stringify(F))]);
+      pk.setUiMode ? pk.setUiMode('kiosk') : (pk.uiMode = 'kiosk');
+      const beforeK = JSON.stringify(pk.floor());
+      pk.rotateFloorContent(15);
+      ok('7: kiosk mode → rotateFloorContent is a no-op', JSON.stringify(pk.floor()) === beforeK, '');
+      // Edit mode → one undo step restores exact prior floor JSON.
+      const p = await mkPlanner([JSON.parse(JSON.stringify(F))]);
+      const before = JSON.stringify(p.floor());
+      const uBefore = p.canUndo;
+      p.rotateFloorContent(15);
+      ok('7: rotation moved content', JSON.stringify(p.floor()) !== before, '');
+      ok('7: rotation is undoable', p.canUndo === true, `wasUndoable=${uBefore}`);
+      const restored = p.undo();
+      ok('7: undo() succeeds', restored === true, '');
+      ok('7: undo restores exact prior floor JSON', JSON.stringify(p.floor()) === before, '');
+      // A second rotation is exactly one further undo step.
+      p.rotateFloorContent(1); p.rotateFloorContent(1);
+      p.undo();
+      const afterOneUndo = p.floor().furniture[0].rotation;
+      ok('7: each click is one undo step (2×1° → undo → 11°)', afterOneUndo === 11, afterOneUndo);
+    }
+  } catch (err) {
+    ok('unhandled error', false, (err && (err.stack || err.message)) || String(err));
+  }
+
+  const passN = results.filter(r => r.pass).length;
+  const failN = results.length - passN;
+  document.getElementById('rows').innerHTML = results.map(r =>
+    `<div class="row"><span class="name">${r.name}</span>` +
+    `<span class="${r.pass ? 'pass' : 'fail'}">${r.pass ? 'PASS' : 'FAIL'}</span>` +
+    `<span class="extra">${r.extra}</span></div>`).join('');
+  const sum = document.getElementById('summary');
+  sum.textContent = `${failN === 0 ? 'PASS' : 'FAIL'} ${passN}/${results.length}`;
+  sum.className = failN === 0 ? 'okbg' : 'badbg';
+  document.title = `PLANROTATE ${failN === 0 ? 'PASS' : 'FAIL'} ${passN}/${results.length}` +
+    (failN ? ' | ' + results.filter(r => !r.pass).map(r => r.name).join(' · ') : '');
+</script>

@@ -9,6 +9,7 @@ import { slugToName, normMac, localToWorld, segCrossesSolidWall, mowerSweepWaypo
          furnitureKind, normalizeLockState, valveIsOpen, cameraColor, slugifyFrigateName,
          closedWallLoops, envKindOf, tempToCelsius, aggregateRoomTemps,
          bufferPolyline, PATH_DEFAULT_WIDTH, poolHeaterState, poolPumpOn,
+         rotPointDeg, floorContentBbox, GRID_MM,
          type LockGlyphState, type RoomTemp, type TempSample } from './geometry.js';
 import { solveHomography, applyHomography } from './homography.js';
 import { stepFusion, newFusionState, DEFAULT_FUSION_CFG,
@@ -5083,6 +5084,129 @@ export class Planner extends EventTarget {
     if (this.store.floors.length === 1 && this.store.geo?.landmarks) {
       for (const lm of this.store.geo.landmarks) { lm.x += dx; lm.y += dy; }
     }
+  }
+
+  // Rotate the ENTIRE current floor's content by `phiDeg` degrees screen-CW
+  // about the floor centre (f.w/2, f.d/2) — a one-shot DATA mutation (exactly
+  // like translateFloorContent, and it MUST mirror that method's item coverage)
+  // so the new orientation is permanent in both 2D and 3D with zero rendering
+  // changes, and each call is ONE undo step (save() snapshots the prior JSON).
+  // This is how "set a new default top" works: pick the increment, click, done.
+  //
+  // Conventions (locked in test-pages/plan-rotate-test.html):
+  //  • Positions rotate through rotPointDeg (screen-CW). Heading/rotation fields
+  //    all use the screen-CW "0 = +Y world" convention, so they get += phiDeg.
+  //  • mmWave Sensor.heading is NOT touched — it lives in HA firmware numbers
+  //    (number.<slug>_mount_angle), which Diorama syncs but does not own; only
+  //    the sensor POSITION rotates. MotionSensor.heading IS Diorama-owned → +=.
+  //  • LOCKED items rotate too (a frame change, like translateFloorContent).
+  //  • Per-sensor zone/object caches are sensor-LOCAL coords → untouched.
+  //  • The vacuum map calibration (world = R(posRotDeg)·S·raw + offset, where
+  //    posRotDeg is a STANDARD CCW rotation) is re-derived so a projected raw
+  //    point lands at its rotated image: posRotDeg −= phiDeg and the offset
+  //    (a world point) rotates through rotPointDeg.
+  //  • Compass/geo north bearings (° CW from true north that plan +Y faces)
+  //    get −= phiDeg so the needle keeps pointing at true north as the content
+  //    turns under it; single-floor geo landmarks also rotate (multi-floor
+  //    leaves the shared world-frame geo alone, per the translateFloorContent
+  //    precedent, bumping only the manual bearing).
+  //  • After rotating, the floor rect only ever GROWS (grid-rounded) to keep the
+  //    rotated bbox inside — never shrinks, so +φ then −φ can't ratchet growth.
+  rotateFloorContent(phiDeg: number): void {
+    if (this.uiMode !== 'edit') return;              // edit-only, like translateFloorContent's callers
+    const phi = ((phiDeg % 360) + 360) % 360;
+    if (phi === 0) return;
+    const f = this.floor();
+    const cx = f.w / 2, cy = f.d / 2;
+    const rot = (it: { x: number; y: number }) => {
+      const p = rotPointDeg(it.x, it.y, cx, cy, phi);
+      it.x = p.x; it.y = p.y;
+    };
+    // Bump a screen-CW heading/rotation field (0 = +Y world) by +phi, normalized.
+    const norm = (d: number) => ((d % 360) + 360) % 360;
+    const bump = (it: { rotation?: number }) => { it.rotation = norm((it.rotation ?? 0) + phi); };
+
+    for (const w of f.walls) w.points = w.points.map(p => rotPointDeg(p.x, p.y, cx, cy, phi));
+    for (const it of f.furniture) { rot(it); bump(it); }
+    for (const it of f.lights) { rot(it); bump(it); }   // Light.tilt (elevation) is unaffected by a yaw
+    for (const it of f.switches) { rot(it); bump(it); }
+    for (const it of f.sensors) rot(it);                // mmWave heading owned by firmware — position only
+    for (const it of f.motionSensors) { rot(it); it.heading = norm((it.heading ?? 0) + phi); }
+    for (const it of f.envSensors ?? []) rot(it);       // env chips carry no heading
+    for (const it of f.bleProxies ?? []) rot(it);       // omnidirectional antenna
+    for (const it of f.alarmPanels ?? []) { rot(it); bump(it); }
+    for (const it of f.calendarPanels ?? []) { rot(it); bump(it); }
+    for (const it of f.thermostats ?? []) { rot(it); bump(it); }
+    for (const it of f.safetySensors ?? []) rot(it);    // ceiling puck, no heading
+    for (const it of f.alertBeacons ?? []) rot(it);     // ceiling puck, no heading
+    for (const it of f.robots ?? []) {
+      rot(it);                                          // dock position
+      // Vacuum map→plan calibration: keep a projected raw point on its rotated
+      // image. offset is a world point → rotate it; posRotDeg is CCW → subtract.
+      if (it.posOffsetX != null || it.posOffsetY != null || it.posRotDeg != null || it.posScale != null) {
+        const off = rotPointDeg(it.posOffsetX ?? 0, it.posOffsetY ?? 0, cx, cy, phi);
+        it.posOffsetX = off.x; it.posOffsetY = off.y;
+        it.posRotDeg = norm((it.posRotDeg ?? 0) - phi);
+      }
+    }
+    for (const it of f.cameras ?? []) {
+      rot(it); bump(it);
+      // Ground-plane homography correspondences: rotate the PLAN side (x,y);
+      // the image-pixel side (u,v) is untouched.
+      if (it.camCalib?.points) for (const pt of it.camCalib.points) { const p = rotPointDeg(pt.x, pt.y, cx, cy, phi); pt.x = p.x; pt.y = p.y; }
+    }
+    for (const it of f.projectors ?? []) { rot(it); bump(it); }
+    for (const it of f.valves ?? []) { rot(it); bump(it); }
+    for (const it of f.sprinklerZones ?? []) { rot(it); bump(it); }
+    for (const it of f.flagpoles ?? []) rot(it);        // symmetric pole, no heading
+    for (const it of f.plugs ?? []) { rot(it); bump(it); }
+    for (const it of f.infoCards ?? []) { rot(it); bump(it); }
+    for (const it of f.actionButtons ?? []) { rot(it); bump(it); }
+    for (const z of f.presenceZones ?? []) z.points = z.points.map(p => rotPointDeg(p.x, p.y, cx, cy, phi));
+    for (const g of f.groundAreas ?? []) {
+      g.points = g.points.map(p => rotPointDeg(p.x, p.y, cx, cy, phi));
+      if (g.path) { g.path.centerline = g.path.centerline.map(p => rotPointDeg(p.x, p.y, cx, cy, phi)); this.regenGroundAreaPath(g); }
+    }
+    for (const pl of f.pools ?? []) pl.points = pl.points.map(p => rotPointDeg(p.x, p.y, cx, cy, phi));
+    for (const vd of f.voidAreas ?? []) vd.points = vd.points.map(p => rotPointDeg(p.x, p.y, cx, cy, phi));
+    for (const it of f.doors ?? []) { rot(it); it.rotation = norm((it.rotation ?? 0) + phi); }
+    for (const it of f.windows ?? []) { rot(it); it.rotation = norm((it.rotation ?? 0) + phi); }
+    for (const rm of f.rooms ?? []) { const p = rotPointDeg(rm.anchor.x, rm.anchor.y, cx, cy, phi); rm.anchor.x = p.x; rm.anchor.y = p.y; }
+    if (f.bg) { rot(f.bg); f.bg.rotation = norm((f.bg.rotation ?? 0) + phi); }
+    if (f.model3d) { rot(f.model3d); f.model3d.rotation = norm((f.model3d.rotation ?? 0) + phi); }
+
+    // North bearings track true north through the turn (−= phi). geo landmarks
+    // are a shared world-frame concept: rotate them only on a single-floor home
+    // (translateFloorContent precedent); multi-floor bumps the bearing only.
+    if (this.store.geo) {
+      if (this.store.geo.northDeg != null) this.store.geo.northDeg = norm(this.store.geo.northDeg - phi);
+      if (this.store.floors.length === 1 && this.store.geo.landmarks) {
+        for (const lm of this.store.geo.landmarks) { const p = rotPointDeg(lm.x, lm.y, cx, cy, phi); lm.x = p.x; lm.y = p.y; }
+      }
+    }
+    if (this.store.compass?.manualNorthDeg != null) {
+      this.store.compass.manualNorthDeg = norm(this.store.compass.manualNorthDeg - phi);
+    }
+
+    // Grow the floor rect (never shrink) so the rotated content stays inside,
+    // translating via the same delta math the floor-edge drag uses. When the
+    // rotation doesn't overflow (the common case for a well-centred plan) this
+    // is a no-op, so +φ then −φ round-trips positions exactly.
+    const bbox = floorContentBbox(f);
+    if (bbox) {
+      const m = GRID_MM;
+      const tx = Math.max(0, m - bbox.minX);
+      const ty = Math.max(0, m - bbox.minY);
+      if (tx > 0 || ty > 0) this.translateFloorContent(tx, ty);
+      const b2 = floorContentBbox(f) ?? bbox;
+      const needW = Math.ceil((b2.maxX + m) / GRID_MM) * GRID_MM;
+      const needD = Math.ceil((b2.maxY + m) / GRID_MM) * GRID_MM;
+      if (needW > f.w) f.w = needW;
+      if (needD > f.d) f.d = needD;
+    }
+
+    this.save();          // one undo step; configRev bump drives every 3D dirty key
+    this.emitConfig();
   }
 
   // ── Floor management ────────────────────────────────────────────────────

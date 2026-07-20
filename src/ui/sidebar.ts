@@ -473,6 +473,24 @@ export class Sidebar extends LitElement {
           <button class="btn" title="Edit floor size / name" @click=${this._openEditFloor}>✎</button>
           <button class="btn danger" title="Delete current floor" @click=${this._delFloor}>🗑</button>
         </div>
+        <div style="margin-top:8px">
+          <div style="color:var(--text-dim);font-size:11px;margin-bottom:3px">Rotate plan (set a new top)</div>
+          <div style="display:flex;gap:4px">
+            <button class="btn btn-sm" style="flex:1" title="Rotate 15° counter-clockwise"
+                    @click=${() => p.rotateFloorContent(-15)}>↺ 15°</button>
+            <button class="btn btn-sm" style="flex:1" title="Rotate 1° counter-clockwise"
+                    @click=${() => p.rotateFloorContent(-1)}>↺ 1°</button>
+            <button class="btn btn-sm" style="flex:1" title="Rotate 1° clockwise"
+                    @click=${() => p.rotateFloorContent(1)}>↻ 1°</button>
+            <button class="btn btn-sm" style="flex:1" title="Rotate 15° clockwise"
+                    @click=${() => p.rotateFloorContent(15)}>↻ 15°</button>
+          </div>
+          <div style="color:var(--text-dim);font-size:10px;line-height:1.35;margin-top:4px">
+            Rotates all content on this floor (one undo step per click). mmWave sensor mount
+            angles live in the firmware — re-check sensor headings after rotating.
+            Multi-floor homes: rotate each floor equally.
+          </div>
+        </div>
         <label class="row" style="padding:0;margin-top:8px"
                title="Show all dimensions in feet / inches instead of millimetres">
           <span style="color:var(--text-dim);font-size:11px;flex:1">Imperial units</span>

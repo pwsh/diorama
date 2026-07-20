@@ -133,6 +133,16 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Plan rotation — set a new default top** (2026-07-19; 1 Opus agent).
+  `Planner.rotateFloorContent(phiDeg)` + pure `rotPointDeg` (exact
+  quarter turns): rotates every placeable/polygon/bg/model about the
+  floor centre, bumps owned angle fields +φ, vacuum cal −φ (CCW),
+  geo/compass north −φ (compass invariant asserted both paths),
+  single-floor landmarks rotate, floor rect grows-only (no ratchet),
+  mmWave headings untouched (firmware). Sidebar Floors row
+  `↺15/↺1/↻1/↻15`; one undo step per click. plan-rotate-test 68/68 +
+  compass regression 54/54.
+
 - **North marker: drop "N", dusk contrast** (2026-07-19; 1 Opus agent).
   Letter removed in both views; the arrow is now two-tone — near-white
   halo/backing under a saturated red glyph (2D halo stroke; 3D 1.25×

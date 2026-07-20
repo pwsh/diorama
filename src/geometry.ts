@@ -102,6 +102,31 @@ export function resolveFloorEdgeDrag(
   return { w, d, tx, ty };
 }
 
+// Rotate a plan point (x, y) about the pivot (cx, cy) by `phiDeg` degrees
+// SCREEN-CLOCKWISE. World +Y is drawn screen-up, so screen-CW is the sense in
+// which the top of the plan swings toward +X as phi grows: the matrix is
+//   [x']   [ cosφ  sinφ] [x−cx]   [cx]
+//   [y'] = [−sinφ  cosφ] [y−cy] + [cy]
+// (i.e. R_std(−φ) — a standard CCW rotation by −φ in the y-up math frame). A
+// point at (cx, cy+r) — plan-up of the pivot — maps to (cx + r·sinφ, cy + r·cosφ)
+// for φ>0, moving toward +X, so what was "up" rotates clockwise on screen.
+// Exact 0/1/−1 factors on the quarter turns keep integer coords drift-free
+// (a 90° round-trip is bit-exact). This is THE plan-rotation primitive;
+// Planner.rotateFloorContent rotates every placeable through it, and the vacuum
+// calibration offset + geo landmarks reuse it (their angle terms subtract φ —
+// see rotateFloorContent).
+export function rotPointDeg(x: number, y: number, cx: number, cy: number, phiDeg: number): Vec2 {
+  const p = ((phiDeg % 360) + 360) % 360;
+  let c: number, s: number;
+  if (p === 0) { c = 1; s = 0; }
+  else if (p === 90) { c = 0; s = 1; }
+  else if (p === 180) { c = -1; s = 0; }
+  else if (p === 270) { c = 0; s = -1; }
+  else { const r = p * Math.PI / 180; c = Math.cos(r); s = Math.sin(r); }
+  const dx = x - cx, dy = y - cy;
+  return { x: cx + dx * c + dy * s, y: cy - dx * s + dy * c };
+}
+
 export function pointToSeg(px: number, py: number, ax: number, ay: number,
                             bx: number, by: number): number {
   const dx = bx - ax, dy = by - ay;
