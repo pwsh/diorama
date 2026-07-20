@@ -1,7 +1,7 @@
 import { LitElement, html, nothing } from 'lit';
 import { property, state } from 'lit/decorators.js';
 import { customElement } from './define.js';
-import { fmtLen } from '../geometry.js';
+import { fmtLen, floorsDisplayOrder } from '../geometry.js';
 import './alert-center.js';
 import type { Planner } from '../planner.js';
 
@@ -90,7 +90,7 @@ export class Topbar extends LitElement {
                          border-radius:5px;padding:5px 8px;font-size:12px"
                   .value=${p.store.currentFloorId}
                   @change=${(e: Event) => p.switchFloor((e.target as HTMLSelectElement).value)}>
-            ${p.enabledFloors().map(f => html`
+            ${floorsDisplayOrder(p.enabledFloors()).map(f => html`
               <option value=${f.id}>
                 ${f.name} — ${fmtLen(f.w, p.store.imperial)} × ${fmtLen(f.d, p.store.imperial)}
               </option>

@@ -39,6 +39,7 @@ import {
   infoCardText, infoCardMount, infoCardHeight, infoCardW, infoCardH, infoCardScale,
   furnitureCat, type FurnitureCat, isBinKind, isSinkKind, isVehicleKind, isStairsKind, isClimateApplianceKind, isBladedFanKind,
   closedWallLoops, loopContaining, resolveRoomForPointFuzzy, roomLabel,
+  floorsDisplayOrder,
 } from '../geometry.js';
 import { solveHomography, homographyResidualsMm } from '../homography.js';
 import { CLOCK_PRESETS, DATE_PRESETS, type ValueRule, type RuleOp } from '../value-rules.js';
@@ -140,6 +141,50 @@ export class Sidebar extends LitElement {
   @property({ attribute: false }) planner!: Planner;
   @state() private _ = 0;
   @state() private _cfgOpen = false;
+
+  // "Move plan" nudge step in structural mm (device-local, NOT the HA store; the
+  // user explicitly wants mm/m regardless of the imperial setting). Default 100 mm.
+  @state() private _moveStep = this._loadMoveStep();
+  private _loadMoveStep(): number {
+    try {
+      const v = Number(localStorage.getItem('diorama:moveStep'));
+      return [10, 100, 500, 1000].includes(v) ? v : 100;
+    } catch { return 100; }
+  }
+  private _setMoveStep(mm: number): void {
+    this._moveStep = mm;
+    try { localStorage.setItem('diorama:moveStep', String(mm)); } catch { /* best-effort */ }
+    this.requestUpdate();
+  }
+  // Nudge every item on the current floor by (dx, dy) world-mm. World +Y is
+  // screen-up, so ↑ passes +dy. translateFloorContent does not persist, so we
+  // save() (→ one undo snapshot) + emitConfig() here — mirrors the rotate buttons.
+  private _nudgePlan(dx: number, dy: number): void {
+    const p = this.planner;
+    p.translateFloorContent(dx, dy);
+    p.save();
+    p.emitConfig();
+  }
+
+  // "Peek" tri-state glyph: a see-no-evil monkey with one eye peeking between its
+  // fingers (no such emoji exists). currentColor-friendly, readable at ~14 px.
+  private _peekGlyph() {
+    return html`<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" style="display:block">
+      <circle cx="3.2" cy="7.5" r="2.1" fill="currentColor"/>
+      <circle cx="12.8" cy="7.5" r="2.1" fill="currentColor"/>
+      <circle cx="8" cy="8" r="5.6" fill="currentColor"/>
+      <circle cx="5.6" cy="7.2" r="1.5" fill="#fff"/>
+      <circle cx="5.6" cy="7.4" r="0.75" fill="#111"/>
+      <path d="M8 3.2 Q13.8 4 13.6 9.5 Q13 13 8 13.2 Z" fill="currentColor"/>
+      <path d="M8 8 Q3 8.4 2.6 11 Q3.5 13 8 13.2 Z" fill="currentColor"/>
+      <g stroke="rgba(0,0,0,0.28)" stroke-width="0.5" fill="none">
+        <path d="M9.6 4.3 Q10.1 8 9.4 12.6"/>
+        <path d="M11 4.7 Q11.5 8 10.9 12.4"/>
+        <path d="M4.5 9.3 Q4.3 11 4.9 12.8"/>
+        <path d="M6.1 8.9 Q6.1 11 6.5 12.9"/>
+      </g>
+    </svg>`;
+  }
 
   // Collapsed sidebar sections + room-groups. DEVICE-LOCAL (not the HA store):
   // a JSON array of stable keys in localStorage. Absent from the set = expanded
@@ -482,8 +527,10 @@ export class Sidebar extends LitElement {
     const floors = p.store.floors;
     return this._section('floors', 'Floors', () => html`
         <div style="display:flex;flex-direction:column;gap:3px;margin-bottom:6px">
-          ${floors.map((f, i) => {
+          ${floorsDisplayOrder(floors).map((f) => {
             const cur = f.id === p.store.currentFloorId;
+            const arrIdx = floors.indexOf(f);
+            const state: 'hide' | 'peek' | 'show' = f.disabled ? 'hide' : f.peek2d ? 'peek' : 'show';
             return html`
               <div style="display:flex;align-items:center;gap:3px;padding:5px 6px;border-radius:5px;
                           cursor:pointer;opacity:${f.disabled ? '0.5' : '1'};
@@ -492,18 +539,21 @@ export class Sidebar extends LitElement {
                    @click=${() => p.switchFloor(f.id)}>
                 <span style="flex:1;min-width:0;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
                   ${f.name} — ${fmtLen(f.w, p.store.imperial)} × ${fmtLen(f.d, p.store.imperial)}${
-                    f.disabled ? html`<span style="color:var(--text-dim)"> (disabled)</span>` : nothing}
+                    state === 'hide' ? html`<span style="color:var(--text-dim)"> (disabled)</span>`
+                      : state === 'peek' ? html`<span style="color:var(--text-dim)"> (peek)</span>` : nothing}
                 </span>
-                <button class="btn btn-sm" title="Move floor up" ?disabled=${i === 0}
-                        @click=${(e: Event) => { e.stopPropagation(); p.moveFloor(f.id, -1); }}>▲</button>
-                <button class="btn btn-sm" title="Move floor down" ?disabled=${i === floors.length - 1}
-                        @click=${(e: Event) => { e.stopPropagation(); p.moveFloor(f.id, 1); }}>▼</button>
+                <button class="btn btn-sm" title="Move up a story" ?disabled=${arrIdx === floors.length - 1}
+                        @click=${(e: Event) => { e.stopPropagation(); p.moveFloor(f.id, 1); }}>▲</button>
+                <button class="btn btn-sm" title="Move down a story" ?disabled=${arrIdx === 0}
+                        @click=${(e: Event) => { e.stopPropagation(); p.moveFloor(f.id, -1); }}>▼</button>
                 <button class="btn btn-sm"
-                        title=${f.disabled
-                          ? 'Enable this floor'
-                          : 'Disable this floor — hidden from the kiosk/view floor picker, glass-house stack, and BLE floor solve; still editable here'}
-                        @click=${(e: Event) => { e.stopPropagation(); p.setFloorDisabled(f.id, !f.disabled); }}>
-                  ${f.disabled ? '🚫' : '👁'}
+                        title=${state === 'show'
+                          ? 'Shown — enabled. Click to Peek (draw this floor’s outline as a reference underlay on other floors)'
+                          : state === 'peek'
+                            ? 'Peek — outline drawn as a 2D reference underlay on other floors. Click to Hide (disable)'
+                            : 'Hidden — disabled (out of kiosk/view picker, glass-house stack, BLE solve). Click to Show'}
+                        @click=${(e: Event) => { e.stopPropagation(); p.cycleFloorVisibility(f.id); }}>
+                  ${state === 'show' ? '👁' : state === 'peek' ? this._peekGlyph() : '🙈'}
                 </button>
               </div>`;
           })}
@@ -529,6 +579,34 @@ export class Sidebar extends LitElement {
             Rotates all content on this floor (one undo step per click). mmWave sensor mount
             angles live in the firmware — re-check sensor headings after rotating.
             Multi-floor homes: rotate each floor equally.
+          </div>
+        </div>
+        <div style="margin-top:8px">
+          <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px">
+            <span style="color:var(--text-dim);font-size:11px;flex:1">Move plan</span>
+            <select title="Nudge distance (structural millimetres/metres — ignores the imperial setting)"
+                    style="background:#111;color:var(--text);border:1px solid var(--border);
+                           border-radius:4px;padding:2px 4px;font-size:11px"
+                    .value=${String(this._moveStep)}
+                    @change=${(e: Event) => this._setMoveStep(Number((e.target as HTMLSelectElement).value))}>
+              <option value="10">10 mm</option>
+              <option value="100">100 mm</option>
+              <option value="500">500 mm</option>
+              <option value="1000">1 m</option>
+            </select>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:4px">
+            <button class="btn btn-sm" title="Move plan up (+Y)"
+                    @click=${() => this._nudgePlan(0, this._moveStep)}>↑</button>
+            <button class="btn btn-sm" title="Move plan down (−Y)"
+                    @click=${() => this._nudgePlan(0, -this._moveStep)}>↓</button>
+            <button class="btn btn-sm" title="Move plan left (−X)"
+                    @click=${() => this._nudgePlan(-this._moveStep, 0)}>←</button>
+            <button class="btn btn-sm" title="Move plan right (+X)"
+                    @click=${() => this._nudgePlan(this._moveStep, 0)}>→</button>
+          </div>
+          <div style="color:var(--text-dim);font-size:10px;line-height:1.35;margin-top:4px">
+            Moves all content on this floor (mm are structural units). One undo step per click.
           </div>
         </div>
         <label class="row" style="padding:0;margin-top:8px"

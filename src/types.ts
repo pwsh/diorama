@@ -1071,6 +1071,9 @@ export interface Floor {
   disabled?: boolean;       // hidden from the kiosk/view floor picker + glass-house stack + BLE
                             // floor solve; still editable in the sidebar — lets multiple test
                             // iterations coexist without cluttering the live views.
+  peek2d?: boolean;         // "peek" tri-state: enabled AND its wall outline draws as a 2D
+                            // reference underlay (onion-skin) when viewing OTHER floors.
+                            // Only meaningful when !disabled (hide wins over peek).
 }
 
 // Weather source + display config (the "World Outside" arc, Feature W). All

@@ -140,6 +140,17 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Floor ordering, move nudges, peek mode** (2026-07-20; 1 Opus
+  agent). Floors list + kiosk select display highest-story-first via
+  pure `floorsDisplayOrder` (canonical array order untouched; ▲ =
+  moveFloor +1). "Move plan" ↑↓←→ nudges (10/100/500 mm/1 m fixed
+  metric step, device-local; one undo step each). Show/peek/hide
+  tri-state (`Floor.peek2d` + existing `disabled`;
+  `cycleFloorVisibility`; authored SVG peeking-monkey glyph): peek =
+  enabled + dashed 2D onion-skin wall underlay of other floors
+  (`drawPeekFloors` + pure `peekFloors`). floors-view-test 32/32;
+  plan-rotate 68/68 + ruler-dims 63/63 regressions green.
+
 - **Backspace-deletes-new-sensor fix** (2026-07-19; 1 Opus agent;
   orchestrator repro pinned the root cause — typing into a
   never-focused name field falls through to body → the Delete hotkey).

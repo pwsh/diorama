@@ -3011,3 +3011,20 @@ export function structureExtents(walls: Wall[]): { minX: number; minY: number; m
   }
   return any ? { minX, minY, maxX, maxY } : null;
 }
+
+// ── Floor list display order & peek underlay (Change 1 + 3) ──────────────────
+// Store.floors array order is CANONICAL (index 0 = lowest story; stair links,
+// BLE floor ranking, ghost stacking all depend on it). The USER-FACING list is
+// shown highest-story-first (elevator-panel intuition), so both the sidebar
+// Floors list and the kiosk/view topbar select render this reversed SHALLOW
+// copy. Never mutates the input array.
+export function floorsDisplayOrder<T>(floors: readonly T[]): T[] {
+  return floors.slice().reverse();
+}
+
+// Floors whose 2D wall outline should draw as a reference underlay while some
+// OTHER floor is the active one: peek2d && !disabled, excluding the current
+// floor. Pure selection helper (consumed by canvas-render's onion-skin pass).
+export function peekFloors(floors: readonly Floor[], currentId: string): Floor[] {
+  return floors.filter(f => f.id !== currentId && f.peek2d && !f.disabled);
+}

@@ -1,0 +1,217 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>FLOORSVIEW …</title>
+<style>
+  body { margin:0; background:#0d1116; color:#cfd8dc; font:13px/1.5 sans-serif; padding:14px; }
+  h1 { font-size:15px; margin:0 0 10px; }
+  #summary { font-size:14px; font-weight:bold; margin:10px 0; padding:8px 10px; border-radius:5px; }
+  .okbg { background:#12331f; color:#69f0ae; } .badbg { background:#3a1414; color:#ff8a80; }
+  .row { display:flex; justify-content:space-between; gap:10px; padding:2px 0; border-bottom:1px solid #1c2530; }
+  .pass { color:#69f0ae; } .fail { color:#ff5252; }
+  .name { color:#90caf9; } .extra { color:#ffd54f; font-size:11px; }
+  h2 { font-size:12px; color:#80cbc4; margin:14px 0 4px; }
+</style>
+<h1>Floor list order + plan nudge + tri-state visibility — pure helpers + real Planner</h1>
+<div id="summary">Running…</div>
+<div id="rows"></div>
+
+<!-- Harness build (from the repo root; NEVER reuse stale bundles):
+       H=/tmp/diorama-harness-floorsview
+       rm -rf "$H"; mkdir -p "$H"; cp -r dist/* "$H"/
+       cp test-pages/floors-view-test.html "$H"/
+       npx esbuild src/geometry.ts --bundle --format=esm --outfile="$H"/geometry.mod.js
+       T=$(mktemp -d); cp -r src/* "$T"/
+       cp test-pages/fake-avatar-store.ts "$T"/avatar-store.ts
+       npx esbuild "$T"/planner.ts --bundle --format=esm --outfile="$H"/planner.mod.js
+     Run headless (serve over http — Chrome blocks dynamic module imports on file://):
+       (cd "$H" && python3 -m http.server 8797 &)
+       google-chrome --headless=new --disable-gpu --use-angle=swiftshader \
+         --virtual-time-budget=30000 --dump-dom \
+         "http://localhost:8797/floors-view-test.html" | grep -o "<title>[^<]*"  -->
+<script type="module">
+  const V = '?v=' + Date.now();
+  const G = await import('./geometry.mod.js' + V);
+  const { floorsDisplayOrder, peekFloors } = G;
+  const { Planner } = await import('./planner.mod.js' + V);
+
+  const results = [];
+  const ok = (name, cond, extra = '') => results.push({ name, pass: !!cond, extra: String(extra) });
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  async function waitFor(cond, tries = 600) {
+    for (let i = 0; i < tries; i++) { if (cond()) return true; await sleep(4); }
+    return !!cond();
+  }
+  const ids = arr => arr.map(f => f.id).join(',');
+
+  // ── Fake HaApi over a Map (LocalApi seam) ──────────────────────────────────
+  class FakeHa {
+    constructor(seed) { this.map = new Map(); for (const [k, v] of Object.entries(seed || {})) this.map.set(k, JSON.parse(JSON.stringify(v))); this.states = {}; this._s = []; this._c = []; }
+    connect() { for (const cb of this._c) cb('connected'); for (const cb of this._s) cb(this.states, undefined); }
+    onState(fn) { this._s.push(fn); } onConn(fn) { this._c.push(fn); }
+    callService() { return Promise.resolve(); }
+    async getHistory() { return {}; } async getWeatherForecasts() { return null; }
+    async getDevices() { return []; } async getEntityRegistry() { return []; } async updateEntityRegistry() { return true; }
+    async getUserData(k) { return this.map.has(k) ? JSON.parse(JSON.stringify(this.map.get(k))) : null; }
+    async setUserData(k, v) { this.map.set(k, JSON.parse(JSON.stringify(v))); return true; }
+    async refreshStates() {} async subscribeMqtt() { return () => {}; } async publishMqtt() {}
+  }
+  const mkFloor = (id, name, over = {}) => Object.assign({
+    id, name, w: 12000, d: 12000,
+    walls: [], furniture: [], lights: [], switches: [], sensors: [], motionSensors: [],
+    envSensors: [], bleProxies: [], doors: [], windows: [], rooms: [], bg: null,
+  }, over);
+  async function mkPlanner(floors, extra = {}) {
+    localStorage.removeItem('diorama:store:v1'); localStorage.removeItem('diorama:configs');
+    const seed = Object.assign({ v: 2, floors, currentFloorId: floors[0].id, activeSensorId: null,
+      coverage: true, imperial: false, showDetails: false, useRawTargets: false }, extra);
+    const p = new Planner(); p.connectWith(new FakeHa({ diorama: seed }));
+    await waitFor(() => p.configIndex !== null);
+    return p;
+  }
+
+  try {
+    // ═══ 1. floorsDisplayOrder — reverse, no mutation ═══
+    document.getElementById('rows').insertAdjacentHTML('beforeend', '<h2>1. floorsDisplayOrder</h2>');
+    {
+      const arr = [{ id: 'A' }, { id: 'B' }, { id: 'C' }];
+      const disp = floorsDisplayOrder(arr);
+      ok('1a reversed (C,B,A)', ids(disp) === 'C,B,A', ids(disp));
+      ok('1b input NOT mutated (A,B,C)', ids(arr) === 'A,B,C', ids(arr));
+      ok('1c returns a fresh array', disp !== arr, '');
+      const one = [{ id: 'X' }];
+      ok('1d single floor trivial', ids(floorsDisplayOrder(one)) === 'X', '');
+      ok('1e empty → empty', floorsDisplayOrder([]).length === 0, '');
+    }
+
+    // ═══ 2. moveFloor + display mapping (▲ on displayed-top-minus-one) ═══
+    document.getElementById('rows').insertAdjacentHTML('beforeend', '<h2>2. moveFloor + display mapping</h2>');
+    {
+      // Array order [A,B,C] (A lowest story). Displayed reversed → [C,B,A].
+      const p = await mkPlanner([mkFloor('A', 'A'), mkFloor('B', 'B'), mkFloor('C', 'C')]);
+      const disp0 = floorsDisplayOrder(p.store.floors);
+      ok('2a initial display order C,B,A', ids(disp0) === 'C,B,A', ids(disp0));
+      // The displayed-top-minus-one row is index 1 in the displayed list = 'B'.
+      const rowFloor = disp0[1];
+      ok('2b that row is B', rowFloor.id === 'B', rowFloor.id);
+      // ▲ = "move up the displayed list" = HIGHER story = moveFloor(id, +1).
+      p.moveFloor(rowFloor.id, +1);
+      ok('2c store.floors now A,C,B (canonical)', ids(p.store.floors) === 'A,C,B', ids(p.store.floors));
+      const disp1 = floorsDisplayOrder(p.store.floors);
+      ok('2d B moved UP in displayed list → B,C,A', ids(disp1) === 'B,C,A', ids(disp1));
+      ok('2e B is now displayed-top', disp1[0].id === 'B', disp1[0].id);
+      // ▼ on B (now displayed-top) = moveFloor(id, -1) → back to A,B,C.
+      p.moveFloor('B', -1);
+      ok('2f ▼ returns store to A,B,C', ids(p.store.floors) === 'A,B,C', ids(p.store.floors));
+    }
+
+    // ═══ 3. Plan nudge = translateFloorContent + save (one undo step) ═══
+    document.getElementById('rows').insertAdjacentHTML('beforeend', '<h2>3. plan nudge (translate + undo)</h2>');
+    {
+      const wall = { id: 'w1', points: [{ x: 1000, y: 2000 }, { x: 3000, y: 2000 }] };
+      const furn = { id: 'fu1', x: 5000, y: 6000, w: 800, h: 800, rotation: 0, kind: 'block' };
+      const p = await mkPlanner([mkFloor('f1', 'Home', { walls: [wall], furniture: [furn] })]);
+      const f0 = p.store.floors[0];
+      const w0 = f0.w, d0 = f0.d;
+      const wy0 = f0.walls[0].points[0].y, fy0 = f0.furniture[0].y;
+      // Mirror the sidebar ↑ button exactly: +Y (screen-up), then save + emitConfig.
+      p.translateFloorContent(0, 100); p.save(); p.emitConfig();
+      const f1 = p.store.floors[0];
+      ok('3a wall point moved +100 world-Y', f1.walls[0].points[0].y === wy0 + 100, f1.walls[0].points[0].y);
+      ok('3b furniture moved +100 world-Y', f1.furniture[0].y === fy0 + 100, f1.furniture[0].y);
+      ok('3c furniture X unchanged', f1.furniture[0].x === 5000, f1.furniture[0].x);
+      ok('3d floor rect NOT changed', f1.w === w0 && f1.d === d0, `${f1.w}x${f1.d}`);
+      ok('3e canUndo after one nudge', p.canUndo === true, p.canUndo);
+      p.undo();
+      const f2 = p.store.floors[0];
+      ok('3f undo restores wall y', f2.walls[0].points[0].y === wy0, f2.walls[0].points[0].y);
+      ok('3g undo restores furniture y', f2.furniture[0].y === fy0, f2.furniture[0].y);
+      // ← button = -X.
+      const fx0 = p.store.floors[0].furniture[0].x;
+      p.translateFloorContent(-100, 0); p.save(); p.emitConfig();
+      ok('3h ← moves -100 world-X', p.store.floors[0].furniture[0].x === fx0 - 100, p.store.floors[0].furniture[0].x);
+    }
+
+    // ═══ 4. Tri-state cycle: show → peek → hide → show ═══
+    document.getElementById('rows').insertAdjacentHTML('beforeend', '<h2>4. cycleFloorVisibility</h2>');
+    {
+      const p = await mkPlanner([mkFloor('a', 'A'), mkFloor('b', 'B')]);
+      const f = () => p.store.floors[0];
+      ok('4a initial show (neither flag)', !f().disabled && !f().peek2d, `d=${f().disabled} p=${f().peek2d}`);
+      p.cycleFloorVisibility('a');   // show → peek
+      ok('4b peek: peek2d set, disabled clear', f().peek2d === true && !f().disabled, `d=${f().disabled} p=${f().peek2d}`);
+      p.cycleFloorVisibility('a');   // peek → hide
+      ok('4c hide: disabled set, peek2d clear', f().disabled === true && !f().peek2d, `d=${f().disabled} p=${f().peek2d}`);
+      p.cycleFloorVisibility('a');   // hide → show
+      ok('4d show: both clear', !f().disabled && !f().peek2d, `d=${f().disabled} p=${f().peek2d}`);
+      // Invariant across a full extra loop: never both set.
+      let bothEver = false;
+      for (let i = 0; i < 6; i++) { p.cycleFloorVisibility('a'); if (f().disabled && f().peek2d) bothEver = true; }
+      ok('4e invariant: never both set', bothEver === false, '');
+    }
+
+    // ═══ 5. enabledFloors — peek in, hidden out ═══
+    document.getElementById('rows').insertAdjacentHTML('beforeend', '<h2>5. enabledFloors</h2>');
+    {
+      const p = await mkPlanner([
+        mkFloor('shown', 'Shown'),
+        mkFloor('peek', 'Peek', { peek2d: true }),
+        mkFloor('hidden', 'Hidden', { disabled: true }),
+      ]);
+      const en = p.enabledFloors();
+      ok('5a includes shown', en.some(f => f.id === 'shown'), '');
+      ok('5b includes peek (enabled)', en.some(f => f.id === 'peek'), '');
+      ok('5c excludes hidden', !en.some(f => f.id === 'hidden'), ids(en));
+    }
+
+    // ═══ 6. peek2d survives save/load through repairFloor/_loadFromHa ═══
+    document.getElementById('rows').insertAdjacentHTML('beforeend', '<h2>6. peek2d round-trip</h2>');
+    {
+      // Seed with peek2d already set — _loadFromHa reconstructs floors through
+      // repairFloor's explicit field list, so if peek2d were missing there it
+      // would silently reset on load (the per-floor-field gotcha).
+      const p = await mkPlanner([mkFloor('r', 'Round', { peek2d: true })]);
+      ok('6a peek2d preserved on load', p.store.floors[0].peek2d === true, `${p.store.floors[0].peek2d}`);
+      // Set it via the API, then reload a SECOND planner off the same persisted map.
+      const ha = new FakeHa({ diorama: { v: 2, floors: [mkFloor('r2', 'R2')], currentFloorId: 'r2' } });
+      const p2 = new Planner(); p2.connectWith(ha);
+      await waitFor(() => p2.configIndex !== null);
+      p2.cycleFloorVisibility('r2');   // → peek, persisted through save()
+      await sleep(700);                // let the 600 ms debounced save flush
+      const p3 = new Planner(); p3.connectWith(ha);
+      await waitFor(() => p3.configIndex !== null);
+      ok('6b peek2d persisted then reloaded', p3.store.floors[0].peek2d === true, `${p3.store.floors[0].peek2d}`);
+    }
+
+    // ═══ 7. peekFloors selection helper ═══
+    document.getElementById('rows').insertAdjacentHTML('beforeend', '<h2>7. peekFloors</h2>');
+    {
+      const floors = [
+        { id: 'cur', peek2d: true },       // current — excluded even though peek
+        { id: 'p1', peek2d: true },         // peek → included
+        { id: 'p2', peek2d: true, disabled: true }, // peek but hidden → excluded
+        { id: 'plain' },                    // no peek → excluded
+      ];
+      const pk = peekFloors(floors, 'cur');
+      ok('7a only p1 (current + hidden + plain excluded)', ids(pk) === 'p1', ids(pk));
+      ok('7b none when current is the only peek', peekFloors([{ id: 'cur', peek2d: true }], 'cur').length === 0, '');
+      ok('7c empty floors → empty', peekFloors([], 'x').length === 0, '');
+    }
+  } catch (err) {
+    ok('unhandled error', false, (err && (err.stack || err.message)) || String(err));
+  }
+
+  const passN = results.filter(r => r.pass).length;
+  const failN = results.length - passN;
+  const rows = document.getElementById('rows');
+  for (const r of results) {
+    rows.insertAdjacentHTML('beforeend',
+      `<div class="row"><span class="name">${r.name}</span>` +
+      `<span class="${r.pass ? 'pass' : 'fail'}">${r.pass ? 'PASS' : 'FAIL'}` +
+      `${r.extra ? ` <span class="extra">${r.extra}</span>` : ''}</span></div>`);
+  }
+  const sum = document.getElementById('summary');
+  sum.textContent = `FLOORSVIEW ${failN === 0 ? 'PASS' : 'FAIL'} ${passN}/${results.length}`;
+  sum.className = failN === 0 ? 'okbg' : 'badbg';
+  document.title = `FLOORSVIEW ${failN === 0 ? 'PASS' : 'FAIL'} ${passN}/${results.length}` +
+    (failN ? ' | ' + results.filter(r => !r.pass).map(r => r.name).join(' · ') : '');
+</script>

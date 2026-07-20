@@ -74,6 +74,7 @@ export function repairFloor(f: Partial<Floor> & { id: string; name: string; w: n
     dimensionMode: f.dimensionMode,
     boundsLocked: f.boundsLocked,
     disabled: f.disabled,
+    peek2d: f.peek2d,
   };
 }
 

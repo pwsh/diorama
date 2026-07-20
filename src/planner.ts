@@ -5474,6 +5474,25 @@ export class Planner extends EventTarget {
     this.emitConfig();
   }
 
+  // Cycle a floor's tri-state visibility: show → peek → hide → show.
+  //  • show : neither flag (enabled, but not drawn when viewing other floors)
+  //  • peek : peek2d=true, disabled cleared (enabled + 2D onion-skin underlay)
+  //  • hide : disabled=true, peek2d cleared (today's fully-disabled behavior)
+  // Invariant: peek2d and disabled are never both set. One undo step.
+  cycleFloorVisibility(id: string): void {
+    const f = this.store.floors.find(x => x.id === id);
+    if (!f) return;
+    if (f.disabled) {                 // hide → show
+      f.disabled = undefined; f.peek2d = undefined;
+    } else if (f.peek2d) {            // peek → hide
+      f.peek2d = undefined; f.disabled = true;
+    } else {                          // show → peek
+      f.peek2d = true; f.disabled = undefined;
+    }
+    this.save();
+    this.emitConfig();
+  }
+
   deleteFloor(id: string): boolean {
     if (this.store.floors.length <= 1) return false;
     this.store.floors = this.store.floors.filter(f => f.id !== id);

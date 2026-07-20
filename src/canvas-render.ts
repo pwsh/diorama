@@ -31,6 +31,7 @@ import {
   heatmapColor, HEATMAP_COMFORT_LO_DEFAULT, HEATMAP_COMFORT_HI_DEFAULT,
   parseNowPlaying, isMediaPlayerId,
   resolveRulerEnds, outerWallSegments, wallDimSide, structureExtents,
+  peekFloors,
 } from './geometry.js';
 import { compass8, fmtDistanceM, fmtAccuracyM } from './geo.js';
 import { resolveNorth, northMarkerPos, markerScaleOf } from './compass.js';
@@ -270,6 +271,10 @@ export function drawAll(ctx: CanvasRenderingContext2D, p: Planner, view: View,
   // wall-loop fills + a temp label, drawn as floor paint after ground / before
   // structural. The RAF reads live states so it tracks temperature changes.
   if (L.heatmap === true) drawHeatmap(ctx, p, view);
+  // Peek floors — onion-skin reference underlay: other floors flagged `peek2d`
+  // (and not disabled) draw their wall outlines as thin ghost strokes, BEFORE
+  // the active floor's walls. A display state (like disabled) — all UI modes.
+  drawPeekFloors(ctx, p, view);
   if (on(L.walls)) drawWalls(ctx, p, view);
   if (on(L.labels)) drawRooms(ctx, p, view);
   drawDoors(ctx, p, view);
@@ -3133,6 +3138,47 @@ function drawWalls(ctx: CanvasRenderingContext2D, p: Planner, view: View): void 
       ctx.beginPath(); ctx.arc(pt.x, pt.y, 3, 0, 2 * Math.PI); ctx.fill();
     }
   }
+}
+
+// Onion-skin reference underlay: every OTHER floor flagged `peek2d && !disabled`
+// draws its wall polylines as thin muted ghost strokes in the SAME world
+// coordinates (stacked stories register when dims match — no transform), plus a
+// dim name tag near the floor's wall bbox. Structure outline only (no doors /
+// windows / furniture in v1). Cheap per-frame loop; the RAF redraws each frame.
+function drawPeekFloors(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
+  const peeks = peekFloors(p.store.floors, p.store.currentFloorId);
+  if (!peeks.length) return;
+  const dpr = window.devicePixelRatio || 1;
+  ctx.save();
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  for (const f of peeks) {
+    ctx.strokeStyle = 'rgba(148,163,184,0.35)';
+    ctx.lineWidth = 1.5 * dpr;
+    ctx.setLineDash([6 * dpr, 4 * dpr]);
+    for (const w of f.walls) {
+      if (w.points.length < 2) continue;
+      ctx.beginPath();
+      const a = mmToPx(view, w.points[0].x, w.points[0].y);
+      ctx.moveTo(a.x, a.y);
+      for (let i = 1; i < w.points.length; i++) {
+        const pt = mmToPx(view, w.points[i].x, w.points[i].y);
+        ctx.lineTo(pt.x, pt.y);
+      }
+      ctx.stroke();
+    }
+    // Dim name tag near the top-left corner of this floor's wall bbox.
+    const ext = structureExtents(f.walls);
+    if (ext) {
+      const tag = mmToPx(view, ext.minX, ext.maxY);   // world +Y is screen-up → maxY is the top
+      ctx.setLineDash([]);
+      ctx.font = `${10 * dpr}px sans-serif`;
+      ctx.textAlign = 'left'; ctx.textBaseline = 'bottom';
+      ctx.fillStyle = 'rgba(148,163,184,0.75)';
+      ctx.fillText(f.name, tag.x + 2 * dpr, tag.y - 2 * dpr);
+    }
+  }
+  ctx.setLineDash([]);
+  ctx.restore();
 }
 
 function drawDoors(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
