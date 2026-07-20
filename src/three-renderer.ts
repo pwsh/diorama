@@ -10134,30 +10134,41 @@ export class ThreeDRenderer {
     // template, scaled to yard size); rotation.x = −π/2 lays it flat with
     // shape +Y → scene −Z, then rotation.y aims −Z along the scene north
     // direction (−nx, +ny in scene xz — the _w mirror): φ = atan2(nx, −ny).
+    // Two-tone halo (matches the 2D marker): a near-white backing chevron ~1.25×
+    // larger UNDER a saturated red chevron, so the icon reads at the dusk/sunset
+    // warm-orange preset as well as day + night.
     const W = 260 * scale, L = 420 * scale, T = 140 * scale;   // half-width, length, vee thickness (mm), user-scaled
-    const s = new THREE.Shape();
-    s.moveTo(0, L);
-    s.lineTo(W, 0);
-    s.lineTo(W - T, 0);
-    s.lineTo(0, L - T * 1.4);
-    s.lineTo(-(W - T), 0);
-    s.lineTo(-W, 0);
-    s.closePath();
-    const mat = new THREE.MeshBasicMaterial({
-      color: 0xef5350, transparent: true, opacity: 0.92,
+    const yaw = Math.atan2(nx, -ny);
+    const chevron = (w: number, l: number, t: number): THREE.Shape => {
+      const s = new THREE.Shape();
+      s.moveTo(0, l);
+      s.lineTo(w, 0);
+      s.lineTo(w - t, 0);
+      s.lineTo(0, l - t * 1.4);
+      s.lineTo(-(w - t), 0);
+      s.lineTo(-w, 0);
+      s.closePath();
+      return s;
+    };
+    const place = (mesh: THREE.Mesh, y: number, order: number) => {
+      mesh.rotation.order = 'YXZ';
+      mesh.rotation.x = -Math.PI / 2;
+      mesh.rotation.y = yaw;
+      mesh.position.set(pos.x, y, pos.z);   // above ground patches (y≈4/6) + blob shadows (y≈8)
+      mesh.renderOrder = order;
+      mesh.userData.outlineSkip = true;
+      this._compassGroup.add(mesh);
+    };
+    const backMat = new THREE.MeshBasicMaterial({
+      color: 0xf5f5f5, transparent: true, opacity: 0.9,
       depthWrite: false, side: THREE.DoubleSide,
     });
-    const arrow = new THREE.Mesh(new THREE.ShapeGeometry(s), mat);
-    arrow.rotation.order = 'YXZ';
-    arrow.rotation.x = -Math.PI / 2;
-    arrow.rotation.y = Math.atan2(nx, -ny);
-    arrow.position.set(pos.x, 10, pos.z);   // above ground patches (y≈4/6) + blob shadows (y≈8)
-    arrow.renderOrder = 2;
-    arrow.userData.outlineSkip = true;
-    this._compassGroup.add(arrow);
-    const sp = this._makeTextSprite('N', '#ef5350', 0.8 * scale);
-    sp.position.set(pos.x, 620, pos.z);
-    this._compassGroup.add(sp);
+    place(new THREE.Mesh(new THREE.ShapeGeometry(chevron(W * 1.25, L * 1.25, T * 1.25)), backMat), 10, 2);
+    const mat = new THREE.MeshBasicMaterial({
+      color: 0xe6291a, transparent: true, opacity: 0.95,
+      depthWrite: false, side: THREE.DoubleSide,
+    });
+    place(new THREE.Mesh(new THREE.ShapeGeometry(chevron(W, L, T)), mat), 11, 3);
   }
 
   // Canvas-rendered text on a Sprite (always faces the camera). ~240 mm tall

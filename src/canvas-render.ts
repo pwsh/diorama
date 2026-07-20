@@ -332,32 +332,40 @@ function drawNorthMarker(ctx: CanvasRenderingContext2D, p: Planner, view: View):
   const r = 9 * dpr * sc;                  // ~18 px circle, screen-fixed
   // On-screen arrow angle: world (nx, ny) → screen (nx, −ny); CW-from-up =
   // atan2(nx, ny) — mk.angleRad already is exactly that.
+  // Two-tone halo design so the icon reads at every scene preset (day grass,
+  // dusk orange, night dark): a saturated red arrow/rim over a slightly larger
+  // near-white backing outline. White-on-warm and red-on-pale both contrast.
+  const RED = '#e6291a';
+  const HALO = 'rgba(245,245,245,0.9)';
   ctx.save();
   ctx.translate(s.x, s.y);
+  ctx.lineJoin = 'round';
   ctx.beginPath();
   ctx.arc(0, 0, r, 0, Math.PI * 2);
-  ctx.fillStyle = 'rgba(10,14,20,0.78)';
+  ctx.fillStyle = 'rgba(10,14,20,0.55)';
   ctx.fill();
-  ctx.lineWidth = 1.5 * dpr;
-  ctx.strokeStyle = '#ef5350';
+  ctx.lineWidth = 3 * dpr * sc;            // near-white halo ring behind…
+  ctx.strokeStyle = HALO;
+  ctx.stroke();
+  ctx.lineWidth = 1.5 * dpr;               // …the red rim on top
+  ctx.strokeStyle = RED;
   ctx.stroke();
   ctx.rotate(mk.angleRad);                 // canvas rotate is CW in screen space
-  ctx.beginPath();                         // arrowhead pointing screen-up pre-rotation
-  ctx.moveTo(0, -r * 0.62);
-  ctx.lineTo(r * 0.42, r * 0.38);
-  ctx.lineTo(0, r * 0.08);
-  ctx.lineTo(-r * 0.42, r * 0.38);
-  ctx.closePath();
-  ctx.fillStyle = '#ef5350';
+  const arrow = () => {                     // arrowhead pointing screen-up pre-rotation
+    ctx.beginPath();
+    ctx.moveTo(0, -r * 0.62);
+    ctx.lineTo(r * 0.42, r * 0.38);
+    ctx.lineTo(0, r * 0.08);
+    ctx.lineTo(-r * 0.42, r * 0.38);
+    ctx.closePath();
+  };
+  arrow();                                  // near-white backing stroke behind the red fill
+  ctx.lineWidth = 3 * dpr * sc;
+  ctx.strokeStyle = HALO;
+  ctx.stroke();
+  arrow();
+  ctx.fillStyle = RED;
   ctx.fill();
-  ctx.restore();
-  // Bold "N" beside the circle (offset perpendicular-ish so it never sits
-  // under the arrow tip).
-  ctx.save();
-  ctx.font = `700 ${11 * dpr * sc}px system-ui, sans-serif`;
-  ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-  ctx.fillStyle = '#ef5350';
-  ctx.fillText('N', s.x + r + 3 * dpr * sc, s.y);
   ctx.restore();
 }
 

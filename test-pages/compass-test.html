@@ -237,39 +237,34 @@
       await r.load();
       const grp = r._compassGroup;
       r.updateNorthMarker(true, 10000, 8000, 0, 1);
-      ok('7: build → 2 children (arrow + sprite)', grp.children.length === 2, `n=${grp.children.length}`);
-      const sprite = grp.children.find(o => o.isSprite);
-      const arrow = grp.children.find(o => o.isMesh);
-      ok('7: one child is a sprite ("N")', !!sprite, '');
-      ok('7: arrow decal is a mesh, outline-skipped', !!arrow && arrow.userData.outlineSkip === true, '');
+      const meshes = () => grp.children.filter(o => o.isMesh);
+      ok('7: build → 2 decal meshes (backing + arrow)',
+        grp.children.length === 2 && meshes().length === 2, `n=${grp.children.length}`);
+      ok('7: no sprite children in the compass group', !grp.children.some(o => o.isSprite), '');
+      ok('7: both decals are outline-skipped meshes',
+        meshes().length === 2 && meshes().every(m => m.userData.outlineSkip === true), '');
       // north (0,1) on 10000×8000 → plan (5000, 8900) → scene (fw/2−x, ·, y−fd/2) = (0, ·, 4900).
+      const arrow = meshes()[0];
       ok('7: arrow at the marker position', !!arrow && near(arrow.position.x, 0) && near(arrow.position.z, 4900),
         arrow && `${arrow.position.x},${arrow.position.z}`);
-      // Sprite map disposal on rebuild (the _disposeSpriteMaps pairing).
-      let disposed = false;
-      sprite.material.map.addEventListener('dispose', () => { disposed = true; });
-      r.updateNorthMarker(true, 10000, 8000, 1, 0);
-      ok('7: rebuild frees the old sprite map', disposed === true, '');
-      const arrow2 = grp.children.find(o => o.isMesh);
+      // Rebuild repositions to the east marker (and must not throw).
+      let threw = false;
+      try { r.updateNorthMarker(true, 10000, 8000, 1, 0); } catch { threw = true; }
+      ok('7: rebuild does not throw', threw === false, '');
+      const arrow2 = meshes()[0];
       ok('7: rebuild → east marker at right edge', !!arrow2 &&
         near(arrow2.position.x, 10000 / 2 - 10900) && near(arrow2.position.z, 0),
         arrow2 && `${arrow2.position.x},${arrow2.position.z}`);
-      // Scale > 1 → measurably larger decal + sprite (default arg = 1, above).
+      // Scale > 1 → measurably larger decals (default arg = 1, above).
       const bboxSize = (m) => { m.geometry.computeBoundingBox(); const b = m.geometry.boundingBox;
         return { w: b.max.x - b.min.x, h: b.max.y - b.min.y }; };
-      const s1 = bboxSize(grp.children.find(o => o.isMesh));
-      const spr1 = grp.children.find(o => o.isSprite).scale.x;
+      const s1 = bboxSize(meshes()[0]);
       r.updateNorthMarker(true, 10000, 8000, 1, 0, 2);
-      const s2 = bboxSize(grp.children.find(o => o.isMesh));
-      const spr2 = grp.children.find(o => o.isSprite).scale.x;
+      const s2 = bboxSize(meshes()[0]);
       ok('7: scale=2 decal ~2× the scale=1 decal', near(s2.w / s1.w, 2, 1e-6) && near(s2.h / s1.h, 2, 1e-6),
         `${s1.w}→${s2.w}, ${s1.h}→${s2.h}`);
-      ok('7: scale=2 "N" sprite ~2× wider', near(spr2 / spr1, 2, 1e-6), `${spr1}→${spr2}`);
-      let disposed2 = false;
-      grp.children.find(o => o.isSprite).material.map.addEventListener('dispose', () => { disposed2 = true; });
       r.updateNorthMarker(false, 10000, 8000, 0, 1);
       ok('7: show=false → group empty', grp.children.length === 0, `n=${grp.children.length}`);
-      ok('7: hide frees the sprite map too', disposed2 === true, '');
       r.destroy();
     }
   } catch (err) {

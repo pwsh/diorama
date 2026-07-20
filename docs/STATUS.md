@@ -133,6 +133,13 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **North marker: drop "N", dusk contrast** (2026-07-19; 1 Opus agent).
+  Letter removed in both views; the arrow is now two-tone — near-white
+  halo/backing under a saturated red glyph (2D halo stroke; 3D 1.25×
+  white backing chevron under the red one, renderOrder 2/3) so it
+  reads against the dusk/sunset palette. compass-test 56→54/54 (sprite
+  assertions replaced with two-decal/no-sprite checks).
+
 - **Compass marker size + floor-stats toggle** (2026-07-19; 1 Opus
   agent). `CompassConfig.markerScale` (0.5–4, `markerScaleOf`) sizes
   the north icon in 2D + 3D (renderer param defaulted for stale-chunk
