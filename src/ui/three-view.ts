@@ -1215,7 +1215,7 @@ export class ThreeView extends LitElement {
         `${g.id}:${g.kind}:${g.elevationMm ?? 0}:${g.hidden ? 'h' : ''}:${g.points.map(v => `${v.x | 0},${v.y | 0}`).join(';')}`).join('|');
       if (keyGround !== this._keyGround) {
         this._keyGround = keyGround;
-        r.updateGroundAreas(groundList, f.yardFill, f.w, f.d, f.walls ?? []);
+        r.updateGroundAreas(groundList, f.yardFill, f.w, f.d, f.walls ?? [], !!scBase.glassHouse);
       }
 
       // Pools / spas (T4): structural geometry + a bound-entity state hash (heater
@@ -1233,7 +1233,7 @@ export class ThreeView extends LitElement {
       }).join('|');
       if (keyPool !== this._keyPool) {
         this._keyPool = keyPool;
-        r.updatePools(poolList, id => states[id] || null);
+        r.updatePools(poolList, id => states[id] || null, !!scBase.glassHouse);
       }
 
       // Sprinkler zones (T3): head geometry (position / kind / arc / radius /

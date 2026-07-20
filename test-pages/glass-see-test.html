@@ -1,0 +1,151 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>glass see test</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<script type="module">
+  // Fix guard for the "glass house can't see lower storeys" bug. Under
+  // glassHouse the opaque dark VOID PLANE, opaque painted GROUND areas, opaque
+  // POOL water, and mis-sorted GHOST slabs each blanketed the stack below.
+  // See CLAUDE.md "Glass house & wall cutaway".
+  const mod = await import('./assets/three-renderer.js?v=' + Date.now());
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+
+  let n = 0, pass = 0; const fails = [];
+  const ok = (name, cond, extra = '') => { n++; if (cond) pass++; else fails.push(`${name} ${extra}`); };
+  const near = (a, b, eps = 0.01) => Math.abs(a - b) <= eps;
+
+  const FW = 8000, FD = 6000;
+  const baseFloor = (extra = {}) => ({
+    id: 'f1', name: 'F', w: FW, d: FD,
+    walls: [], furniture: [], lights: [], switches: [], sensors: [], motionSensors: [],
+    envSensors: [], doors: [], windows: [], bg: null, model3d: null, look3d: null,
+    rooms: [], voidAreas: [], groundAreas: [], pools: [],
+    ...extra,
+  });
+  const scGlass = (on) => ({ preset: 'day', floorColor: '#8a7860', floorTex: 'wood',
+                             wallColor: '#cfd2d6', glassHouse: on, wallCutaway: false });
+  const sq = (cx, cy, half) => [
+    { x: cx - half, y: cy - half }, { x: cx + half, y: cy - half },
+    { x: cx + half, y: cy + half }, { x: cx - half, y: cy + half },
+  ];
+
+  // ── Test 1: void plane translucency under glassHouse. Floor with a DESCENDING
+  //    stairs well (elevation < 0) + a void poly → the dark void plane
+  //    (MeshBasicMaterial PlaneGeometry in _floorGroup) must go see-through. ──
+  const voidPlaneOf = () => {
+    let vp = null;
+    r._floorGroup.traverse(m => {
+      if (m.isMesh && m.material && m.material.isMeshBasicMaterial && m.geometry.type === 'PlaneGeometry') vp = m;
+    });
+    return vp;
+  };
+  {
+    const descStair = { id: 'ds', x: 4000, y: 3000, w: 1200, h: 1600, kind: 'stairs', rotation: 0, elevation: -500 };
+    const voidPoly = { id: 'v1', points: sq(2000, 3000, 700) };
+    const flr = baseFloor({ furniture: [descStair], voidAreas: [voidPoly] });
+
+    r.updateFloor(flr, scGlass(true));
+    const vpOn = voidPlaneOf();
+    ok('T1 void plane exists (glassHouse ON)', !!vpOn);
+    ok('T1 void plane transparent under glassHouse', vpOn && vpOn.material.transparent === true);
+    ok('T1 void plane opacity ~0.18 under glassHouse', vpOn && near(vpOn.material.opacity, 0.18), vpOn ? `${vpOn.material.opacity}` : '');
+    ok('T1 void plane depthWrite false under glassHouse', vpOn && vpOn.material.depthWrite === false, vpOn ? `${vpOn.material.depthWrite}` : '');
+
+    r.updateFloor(flr, scGlass(false));
+    const vpOff = voidPlaneOf();
+    ok('T1 void plane exists (glassHouse OFF)', !!vpOff);
+    ok('T1 void plane OPAQUE off glass (not transparent)', vpOff && vpOff.material.transparent === false, vpOff ? `${vpOff.material.transparent}` : '');
+    ok('T1 void plane opacity 1 off glass', vpOff && near(vpOff.material.opacity, 1), vpOff ? `${vpOff.material.opacity}` : '');
+    ok('T1 void plane depthWrite true off glass', vpOff && vpOff.material.depthWrite === true);
+  }
+
+  // ── Test 2: ground paint (patch + skirt + yardFill) translucent under glass;
+  //    water clamped to min(0.85, 0.45). Off glass → opaque as before. ──
+  const groundMats = () => r._groundGroup.children.filter(c => c.isMesh).map(c => c.material);
+  {
+    const grass = { id: 'g0', kind: 'grass', points: sq(2000, 2000, 800), elevationMm: 0 };
+    const terrace = { id: 't0', kind: 'grass', points: sq(5000, 4000, 900), elevationMm: 600 };  // → skirt
+
+    // ON: non-water patches + terrace skirt + yardFill underlay all translucent.
+    r.updateGroundAreas([grass, terrace], 'grass', FW, FD, [], true);
+    const onMats = groundMats();
+    ok('T2 ground has patch+skirt+yardFill meshes (>=4)', onMats.length >= 4, `${onMats.length}`);
+    ok('T2 ground ON glass: every mesh transparent', onMats.every(m => m.transparent === true));
+    ok('T2 ground ON glass: every mesh opacity 0.45', onMats.every(m => near(m.opacity, 0.45)), onMats.map(m => m.opacity).join(','));
+    ok('T2 ground ON glass: depthWrite stays TRUE (decal sort)', onMats.every(m => m.depthWrite === true));
+
+    // OFF: opaque as before.
+    r.updateGroundAreas([grass, terrace], 'grass', FW, FD, [], false);
+    const offMats = groundMats();
+    ok('T2 ground OFF glass: every mesh opaque (not transparent)', offMats.every(m => m.transparent === false));
+    ok('T2 ground OFF glass: every mesh opacity 1', offMats.every(m => near(m.opacity, 1)));
+
+    // Water ON glass → min(0.85, 0.45) = 0.45, transparent.
+    const waterArea = { id: 'w0', kind: 'water', points: sq(2000, 2000, 800), elevationMm: 0 };
+    r.updateGroundAreas([waterArea], undefined, FW, FD, [], true);
+    const wOn = groundMats();
+    ok('T2 water ON glass: transparent', wOn.every(m => m.transparent === true));
+    ok('T2 water ON glass: opacity clamped to 0.45', wOn.every(m => near(m.opacity, 0.45)), wOn.map(m => m.opacity).join(','));
+
+    // Water OFF glass → its native 0.85 (still translucent, unchanged).
+    r.updateGroundAreas([waterArea], undefined, FW, FD, [], false);
+    const wOff = groundMats();
+    ok('T2 water OFF glass: opacity native 0.85', wOff.every(m => near(m.opacity, 0.85)), wOff.map(m => m.opacity).join(','));
+  }
+
+  // ── Test 3: pool water surface clamped under glassHouse. ──
+  const poolWaterMat = () => {
+    let w = null;
+    r._poolGroup.traverse(o => { if (o.userData && o.userData.poolWater) w = o.material; });
+    return w;
+  };
+  {
+    const pool = { id: 'pl1', kind: 'pool', points: sq(3000, 3000, 1000), depthMm: 1400 };
+    r.updatePools([pool], () => null, true);
+    const wOn = poolWaterMat();
+    ok('T3 pool water surface exists', !!wOn);
+    ok('T3 pool water ON glass: transparent', wOn && wOn.transparent === true);
+    ok('T3 pool water ON glass: opacity <= 0.45', wOn && near(wOn.opacity, 0.45), wOn ? `${wOn.opacity}` : '');
+
+    r.updatePools([pool], () => null, false);
+    const wOff = poolWaterMat();
+    ok('T3 pool water OFF glass: opacity native 0.82', wOff && near(wOff.opacity, 0.82), wOff ? `${wOff.opacity}` : '');
+  }
+
+  // ── Test 4: ghost renderOrder by story delta + depthWrite false. 2 floors
+  //    below the active + 1 above → below meshes renderOrder < 0, above > 0,
+  //    all ghost materials depthWrite false. ──
+  {
+    const mk = (id, wallX) => baseFloor({ id, name: id, walls: [{ id: id + 'w', points: [{ x: wallX, y: 1000 }, { x: wallX, y: 4000 }] }],
+      furniture: [{ id: id + 'f', x: 3000, y: 3000, w: 1500, h: 800, kind: 'sofa', rotation: 0 }] });
+    const b0 = mk('b0', 2000), b1 = mk('b1', 2200), active = mk('act', 2400), a0 = mk('a0', 2600);
+    const floors = [b0, b1, active, a0];   // index 2 = active (curIdx). below: 0,1; above: 3.
+    r.updateFloor(active, scGlass(true));
+    r.updateGhostFloors(floors, 'act', scGlass(true), [], {});
+
+    // Each gGrp.position.y = (i - curIdx) * STORY_H(3000) → recover the delta.
+    const grps = r._ghostGroup.children.filter(g => g.isGroup || g.type === 'Group');
+    ok('T4 three ghost groups (one per non-active floor)', grps.length === 3, `${grps.length}`);
+    let belowOK = 0, aboveOK = 0, dwAllFalse = true, meshTotal = 0;
+    for (const g of grps) {
+      const delta = Math.round(g.position.y / 3000);
+      const gm = []; g.traverse(m => { if (m.isMesh) gm.push(m); });
+      meshTotal += gm.length;
+      for (const m of gm) {
+        if (m.material && m.material.depthWrite !== false) dwAllFalse = false;
+        if (delta < 0 && m.renderOrder < 0) belowOK++;
+        if (delta > 0 && m.renderOrder > 0) aboveOK++;
+      }
+    }
+    ok('T4 ghost meshes exist', meshTotal > 0, `${meshTotal}`);
+    ok('T4 below-story ghost meshes renderOrder < 0', belowOK > 0 && belowOK === grps.filter(g => g.position.y < 0).reduce((a, g) => { let c = 0; g.traverse(m => { if (m.isMesh) c++; }); return a + c; }, 0), `${belowOK}`);
+    ok('T4 above-story ghost meshes renderOrder > 0', aboveOK > 0 && aboveOK === grps.filter(g => g.position.y > 0).reduce((a, g) => { let c = 0; g.traverse(m => { if (m.isMesh) c++; }); return a + c; }, 0), `${aboveOK}`);
+    ok('T4 every ghost material depthWrite false', dwAllFalse === true);
+  }
+
+  document.title = `GLASSSEE ${fails.length === 0 ? 'PASS' : 'FAIL'} ${pass}/${n}`;
+  if (fails.length) console.error('FAILS:\n' + fails.join('\n'));
+  window.__DUMP = document.title + (fails.length ? '\n' + fails.join('\n') : '');
+</script>

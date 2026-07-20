@@ -1378,9 +1378,13 @@ export class ThreeDRenderer {
   private _weatherFogPlanes: THREE.Mesh[] = [];
   private _weatherFlash: THREE.DirectionalLight | null = null;
   private _weatherFx: WeatherFxState | null = null;
-  // Fog easing: FogExp2.density glides toward `fogTarget` over ~2 s (never a
-  // pop). When target 0 is reached the scene fog is nulled cleanly.
+  // Fog easing: `_fogEased` glides toward `_fogTarget` over ~2 s (never a pop)
+  // and is the AUTHORED-density source of truth. When the target is 0 and the
+  // eased value dies the scene fog is nulled cleanly. The value actually written
+  // to FogExp2.density is a zoom-compensated *display* value (see _advanceWeather)
+  // — it must never feed back into `_fogEased`, or zooming would corrupt the ease.
   private _fogTarget = 0;
+  private _fogEased = 0;
   // Lightning scheduler (deterministic-friendly: driven from the same _animate
   // clock; Math.random only picks the next gap, like the fireplace flicker).
   private _flashCountdown = 0;   // seconds until the next strike
@@ -3350,12 +3354,23 @@ export class ThreeDRenderer {
   // uses). Rebuilt under _keyGround in three-view. Rides the `ground` layer.
   // Terrace TOPS are registered into _terrain in updateFloor (which owns that
   // array) so nav height survives _keyFloor rebuilds — this call is visuals only.
-  updateGroundAreas(areas: GroundArea[], yardFill?: GroundKind, fw?: number, fd?: number, walls?: Wall[]): void {
+  updateGroundAreas(areas: GroundArea[], yardFill?: GroundKind, fw?: number, fd?: number, walls?: Wall[], glassHouse?: boolean): void {
     if (!this._scene) return;
     this._clearGroup(this._groundGroup);
     // Free the previous rebuild's per-patch water clones (the shared cache entry
     // is untouched; only these throwaway clones are ours to dispose).
     this._disposeWaterPatchTextures();
+
+    // Glass-house: painted ground / yardFill / terrace skirts must NOT paint
+    // opaque over the storey below. Build them translucent (the active-slab
+    // idiom — opacity 0.45, depthWrite stays ON so blob-shadow / furniture
+    // decals sitting just above still sort correctly). Water is already
+    // translucent → clamp its opacity to ≤0.45 so it thins under glass too.
+    const groundGlass = (isWater: boolean, waterOpacity: number) =>
+      isWater
+        ? { transparent: true, opacity: glassHouse ? Math.min(waterOpacity, 0.45) : waterOpacity,
+            ...(glassHouse ? { depthWrite: true } : {}) }
+        : (glassHouse ? { transparent: true, opacity: 0.45, depthWrite: true } : {});
 
     // Yard fill: one underlay patch = floor rect minus closed wall loops (holes).
     if (yardFill && fw && fd) {
@@ -3386,7 +3401,7 @@ export class ThreeDRenderer {
       const yMesh = new THREE.Mesh(new THREE.ShapeGeometry(yShape), this._mat({
         color: hexToInt(yf.color), map: ytex, side: THREE.DoubleSide,
         roughness: 0.95, metalness: 0,
-        ...(yfIsWater ? { transparent: true, opacity: yf.opacity ?? 0.85 } : {}),
+        ...groundGlass(yfIsWater, yf.opacity ?? 0.85),
       }));
       yMesh.rotation.x = -Math.PI / 2;
       yMesh.position.y = 2;
@@ -3417,7 +3432,7 @@ export class ThreeDRenderer {
       const mat = this._mat({
         color: hexToInt(kd.color), map: tex, side: THREE.DoubleSide,
         roughness: 0.95, metalness: 0,
-        ...(isWater ? { transparent: true, opacity: kd.opacity ?? 0.85 } : {}),
+        ...groundGlass(isWater, kd.opacity ?? 0.85),
       });
       const patch = new THREE.Mesh(new THREE.ShapeGeometry(shape), mat);
       patch.rotation.x = -Math.PI / 2;
@@ -3469,7 +3484,7 @@ export class ThreeDRenderer {
         const skirt = new THREE.Mesh(geo, this._mat({
           color: hexToInt(kd.color), map: tex, side: THREE.DoubleSide,
           roughness: 0.95, metalness: 0,
-          ...(isWater ? { transparent: true, opacity: kd.opacity ?? 0.85 } : {}),
+          ...groundGlass(isWater, kd.opacity ?? 0.85),
         }));
         skirt.receiveShadow = true;
         skirt.userData.outlineSkip = true;
@@ -3491,7 +3506,7 @@ export class ThreeDRenderer {
   // toon-blue underwater LIGHT disc when a bound light is on. NAV blocks the
   // basin footprint in _buildNav so avatars path around it. Rebuilt under
   // _keyPool in three-view; rides the `ground` layer.
-  updatePools(pools: Pool[], stateProvider: StateProvider): void {
+  updatePools(pools: Pool[], stateProvider: StateProvider, glassHouse?: boolean): void {
     if (!this._scene) return;
     this._clearGroup(this._poolGroup);
     this._disposePoolWaterTextures();   // free the previous rebuild's surface clones
@@ -3601,7 +3616,10 @@ export class ThreeDRenderer {
         const heatEmis = hs === 'heating' ? 0.55 : hs === 'idle' ? 0.22 : 0;
         const surf = new THREE.Mesh(new THREE.ShapeGeometry(mkShape()), this._mat({
           color: water, map: tex, side: THREE.DoubleSide,
-          roughness: 0.3, metalness: 0, transparent: true, opacity: 0.82,
+          // Under glassHouse thin the (0.82) surface to ≤0.45 so the storey below
+          // reads through the pool like every other painted ground area.
+          roughness: 0.3, metalness: 0, transparent: true,
+          opacity: glassHouse ? Math.min(0.82, 0.45) : 0.82,
           emissive: heatEmis > 0 ? hexToInt(POOL_HEAT_GLOW) : 0x000000,
           emissiveIntensity: heatEmis,
         }));
@@ -4055,9 +4073,13 @@ export class ThreeDRenderer {
       // pure floor void) so stairwell / void openings show depth instead of the
       // sky behind the scene.
       const deepest = Math.min(0, ...wellCuts.map(fu => fu.elevation ?? 0));
+      // Under glassHouse the void plane must NOT blanket the ghost stack below —
+      // build it translucent + depthWrite off so the storeys beneath read through
+      // (the well/void still reads as a darker pit). Non-glass: opaque dark pit.
       const voidPlane = new THREE.Mesh(
         new THREE.PlaneGeometry(f.w * 1.2, f.d * 1.2),
-        new THREE.MeshBasicMaterial({ color: 0x101216, side: THREE.DoubleSide }));
+        new THREE.MeshBasicMaterial({ color: 0x101216, side: THREE.DoubleSide,
+          ...(glassHouse ? { transparent: true, opacity: 0.18, depthWrite: false } : {}) }));
       voidPlane.rotation.x = -Math.PI / 2;
       voidPlane.position.y = deepest - 120;
       this._floorGroup.add(voidPlane);
@@ -5154,6 +5176,16 @@ export class ThreeDRenderer {
         mesh.rotation.y = -((fu.rotation || 0) * Math.PI / 180);
         gGrp.add(mesh);
       }
+
+      // Pin the transparent-sort order by STORY delta. The world-frame ghost
+      // registration moved slab centers off the scene origin, so three's
+      // distance-based transparent sort can flip with camera angle and let the
+      // opaque-ish active slab depth-reject a ghost behind it. Stories BELOW the
+      // active floor (delta < 0) draw BEFORE it, stories above (delta > 0) after
+      // — deterministic regardless of camera. Ghosts carry no blob shadows, so
+      // the "no negative renderOrder on blob quads" rule doesn't apply here.
+      const storyDelta = i - curIdx;
+      gGrp.traverse(o => { o.renderOrder = storyDelta; });
 
       this._ghostGroup.add(gGrp);
     }
@@ -11628,10 +11660,32 @@ export class ThreeDRenderer {
     if (this._scene) {
       const fog = this._scene.fog as THREE.FogExp2 | null;
       if (fog && (fog as { isFogExp2?: boolean }).isFogExp2) {
-        fog.density += (this._fogTarget - fog.density) * Math.min(1, dt / 2);
+        // Ease the AUTHORED density (source of truth) toward the target over ~2 s.
+        this._fogEased += (this._fogTarget - this._fogEased) * Math.min(1, dt / 2);
         // Below ~1e-5 the exponential fog is visually zero over any house-scale
-        // distance — null it out cleanly rather than asymptote forever.
-        if (this._fogTarget === 0 && fog.density < 1e-5) this._scene.fog = null;
+        // distance — null it out cleanly rather than asymptote forever. Gate the
+        // teardown on the EASED value (never the zoom-scaled applied value below),
+        // so zooming out can't tear the fog down and zooming in pop it back.
+        if (this._fogTarget === 0 && this._fogEased < 1e-5) {
+          this._scene.fog = null;
+          this._fogEased = 0;
+        } else {
+          // Zoom-compensation contract: FogExp2 attenuates by camera distance, so
+          // pulling the camera back would fog the whole plan into a grey wash at
+          // kiosk zoom. Scale the APPLIED density by REF_DIST/camDist so weather
+          // fog reads as constant-strength atmosphere over the model at every zoom
+          // instead of obscuring it. REF_DIST = the sims/fit framing distance
+          // (matches applyViewPreset's max(fw,fd)*1.35), floored at 8000 mm so tiny
+          // floors don't over-fog. minFactor 0.15 keeps a faint atmospheric hint
+          // fully zoomed out (weather stays perceptible); factor is capped at 1 so
+          // zooming IN never intensifies fog past its authored strength.
+          const REF_DIST = Math.max(Math.max(this._fw, this._fd) * 1.35, 8000);
+          const camDist = (this._camera && this._controls)
+            ? this._camera.position.distanceTo(this._controls.target)
+            : REF_DIST;
+          const factor = Math.max(0.15, Math.min(1, REF_DIST / camDist));
+          fog.density = this._fogEased * factor;
+        }
       }
     }
 

@@ -140,6 +140,18 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Glass-house see-through + zoom-independent fog** (2026-07-20;
+  2 parallel Opus agents). (a) The dark stairwell/void plane (opaque
+  1.2×-rect sheet — the user's "opaque sheet") now builds transparent
+  0.18/no-depthWrite under glassHouse; ground paint (yardFill/terrace
+  patches+skirts) 0.45, water/pool min(·,0.45) via a stale-chunk-safe
+  `glassHouse?` param; ghost meshes get story-delta renderOrder.
+  glass-see-test 26/26 + 9-suite regression sweep. (b) Weather FogExp2
+  applied density scales by `clamp(REF/camDist, 0.15, 1)` (REF =
+  framing distance) — zoom-out no longer grey-washes the plan; ease/
+  teardown gate on the eased value. weather-fx fog 6→12, all cases
+  green.
+
 - **Glass-house ghost registration fix** (2026-07-20; 1 Opus agent;
   user-reported via peek/landmark floor alignment). Ghost floors now
   map through the ACTIVE floor's world frame (shared origin) instead

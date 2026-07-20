@@ -66,9 +66,21 @@
     ok('no scene fog', r._scene.fog == null, `fog=${r._scene.fog}`);
 
   } else if (scene === 'fog') {
+    // Zoom-compensation contract (see _advanceWeather): the APPLIED FogExp2.density
+    // is the eased authored density scaled by clamp(REF_DIST/camDist, 0.15, 1), so
+    // pulling the camera back reads as constant-strength atmosphere over the model
+    // rather than a grey wash. REF_DIST matches applyViewPreset's max(fw,fd)*1.35,
+    // floored at 8000 mm. camDist = camera.position.distanceTo(controls.target).
+    const REF_DIST = Math.max(Math.max(r._fw, r._fd) * 1.35, 8000);   // 13500 here
+    // Set camDist directly (bypass setCameraView so OrbitControls' maxDistance
+    // clamp can't cap the extreme-zoom cases); only the distance matters.
+    const setCamDist = (dist) => { r._camera.position.set(0, dist, 0); r._controls.target.set(0, 0, 0); };
+
     r.updateWeather(fx({ condition: 'fog', intensity01: 0.5, isDay: true }));
     ok('scene.fog is FogExp2', !!r._scene.fog && r._scene.fog.isFogExp2, `fog=${r._scene.fog?.constructor?.name}`);
     ok('two ground planes', r._weatherFogPlanes.length === 2, `planes=${r._weatherFogPlanes.length}`);
+    // Ease-in reads at authored strength: camera at REF_DIST ⇒ factor 1.
+    setCamDist(REF_DIST);
     step(30);                                   // ~0.5 s in
     const mid = r._scene.fog.density;
     step(330);                                  // ~6 s total → near target
@@ -77,10 +89,35 @@
     ok('density eases in (mid < late)', mid < late, `mid=${mid.toExponential(2)} late=${late.toExponential(2)}`);
     ok('mid density below target', mid < TARGET * 0.6, `mid=${mid.toExponential(2)}`);
     ok('late density near target', late > TARGET * 0.75, `late=${late.toExponential(2)} tgt=${TARGET}`);
+
+    // ── Zoom compensation ── applied density = _fogEased × factor, evaluated in
+    // the SAME step, so fog.density / _fogEased == the clamp factor exactly.
+    setCamDist(REF_DIST); step(1);
+    const fRef = r._scene.fog.density / r._fogEased;
+    ok('factor ~1 at REF_DIST', Math.abs(fRef - 1) < 0.01, `factor=${fRef.toFixed(4)}`);
+    setCamDist(REF_DIST * 4); step(1);
+    const f4 = r._scene.fog.density / r._fogEased;
+    ok('factor ~0.25 at 4×REF_DIST', Math.abs(f4 - 0.25) < 0.01, `factor=${f4.toFixed(4)}`);
+    setCamDist(REF_DIST * 100); step(1);
+    const f100 = r._scene.fog.density / r._fogEased;
+    ok('factor floored at exactly 0.15 far out', Math.abs(f100 - 0.15) < 1e-6, `factor=${f100.toFixed(6)}`);
+    ok('applied density stays a fraction (no grey wash zoomed out)',
+      r._scene.fog.density < r._fogEased * 0.2,
+      `applied=${r._scene.fog.density.toExponential(2)} eased=${r._fogEased.toExponential(2)}`);
+    // Zooming IN never intensifies past authored strength (factor capped at 1).
+    setCamDist(REF_DIST * 0.1); step(1);
+    const fIn = r._scene.fog.density / r._fogEased;
+    ok('factor capped at 1 zoomed in', Math.abs(fIn - 1) < 1e-6, `factor=${fIn.toFixed(6)}`);
+
     // Leaving fog: sunny → target 0, eases out and nulls scene.fog.
     r.updateWeather(fx({ condition: 'sunny' }));
     step(600);                                  // ~10 s ease-out
     ok('fog cleared on leave', r._scene.fog == null, `fog=${r._scene.fog}`);
+    // Zoom compensation must NEVER revive a torn-down fog: the teardown gates on
+    // the EASED value, not the zoom-scaled applied value — pulling the camera in
+    // close (large factor) after teardown keeps scene.fog null.
+    setCamDist(REF_DIST * 0.2); step(10);
+    ok('zoom-in does not revive torn-down fog', r._scene.fog == null, `fog=${r._scene.fog}`);
 
   } else if (scene === 'lightning') {
     r.updateWeather(fx({ condition: 'lightning', intensity01: 0.6, isDay: false }));
