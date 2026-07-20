@@ -140,6 +140,17 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Glass-house ghost registration fix** (2026-07-20; 1 Opus agent;
+  user-reported via peek/landmark floor alignment). Ghost floors now
+  map through the ACTIVE floor's world frame (shared origin) instead
+  of centering on their own w/d — different-dims floor stacks
+  misregistered by half the dim difference while 2D peek + landmarks
+  (world-frame) said aligned; the transit puppet already used the
+  active frame. Slab still sized per-ghost. ghost-align-test 12/12
+  (new); stair-link 25/25, ghost-layers, glass baseline green; no
+  existing expectations changed (all prior ghost tests used
+  equal-dims floors, where center ≡ origin).
+
 - **Floor ordering, move nudges, peek mode** (2026-07-20; 1 Opus
   agent). Floors list + kiosk select display highest-story-first via
   pure `floorsDisplayOrder` (canonical array order untouched; ▲ =

@@ -5054,16 +5054,28 @@ export class ThreeDRenderer {
     const STORY_H = 3000;   // 2743 mm wall + slab
     const curIdx = Math.max(0, floors.findIndex(fl => fl.id === currentId));
 
+    // Cross-floor REGISTRATION invariant: all floors' plans live in ONE shared
+    // world frame (origin 0,0) — the same frame the 2D peek underlay and the
+    // world-frame geo landmarks overlay stacked floors by. So ghost content must
+    // map through the ACTIVE floor's world→scene frame (identical to `_w`:
+    // sceneX = activeFw/2 − wx, sceneZ = wy − activeFd/2), NOT centered on each
+    // ghost's OWN w/d — center-registration offsets differently-sized stories by
+    // half the dim difference and no content nudge can reconcile it. A ghost's
+    // own w/d only SIZES its slab (below); it never registers the content.
+    // Derived from the current floor in `floors` (guaranteed present) so the fn
+    // is self-contained and call-order-independent; `_fw/_fd` is a defensive
+    // fallback only.
+    const active = floors.find(fl => fl.id === currentId);
+    const afw = active ? active.w : this._fw;
+    const afd = active ? active.d : this._fd;
+    const asx = (wx: number) => afw / 2 - wx;
+    const asz = (wy: number) => wy - afd / 2;
+
     for (let i = 0; i < floors.length; i++) {
       if (floors[i].id === currentId) continue;   // active floor is live
       const gf = floors[i];
       const yOff = (i - curIdx) * STORY_H;
       const gw = gf.w, gd = gf.d;
-      // Ghost-floor world→scene map: same formula as _w but with THIS floor's
-      // dimensions (both stories centered at the origin). Inline — _w reads
-      // this._fw/_fd (the active floor's dims).
-      const gsx = (wx: number) => gw / 2 - wx;
-      const gsz = (wy: number) => wy - gd / 2;
 
       const gGrp = new THREE.Group();
       gGrp.position.y = yOff;
@@ -5082,7 +5094,7 @@ export class ThreeDRenderer {
         for (const loop of loops) {
           const shape = new THREE.Shape();
           loop.forEach((pt, k) => {
-            const sx = gsx(pt.x), sy = gsz(pt.y);
+            const sx = asx(pt.x), sy = asz(pt.y);
             if (k === 0) shape.moveTo(sx, sy); else shape.lineTo(sx, sy);
           });
           shape.closePath();
@@ -5091,8 +5103,12 @@ export class ThreeDRenderer {
           gGrp.add(slab);
         }
       } else {
+        // Slab still SIZED by the ghost's OWN w/d, but POSITIONED so its rect
+        // 0..gw×0..gd sits in the shared world frame: rect center world =
+        // (gw/2, gd/2) → active scene frame.
         const slab = new THREE.Mesh(new THREE.PlaneGeometry(gw, gd), slabMat);
         slab.rotation.x = -Math.PI / 2;
+        slab.position.set(asx(gw / 2), 0, asz(gd / 2));
         gGrp.add(slab);
       }
 
@@ -5117,9 +5133,9 @@ export class ThreeDRenderer {
             this._mat({ color: wallColor ? hexToInt(wallColor) : 0xbbbbbb,
               transparent: true, opacity: 0.10, side: THREE.DoubleSide, depthWrite: false }));
           const mxw = a.x + ux * len / 2, myw = a.y + uy * len / 2;
-          mesh.position.set(gsx(mxw), kindH / 2, gsz(myw));
+          mesh.position.set(asx(mxw), kindH / 2, asz(myw));
           mesh.rotation.y = angle;
-          this._tagCutawayWall(mesh, gsx(mxw), gsz(myw), -uy, -ux, this._cutawayGhostWalls);
+          this._tagCutawayWall(mesh, asx(mxw), asz(myw), -uy, -ux, this._cutawayGhostWalls);
           gGrp.add(mesh);
         }
       }
@@ -5134,7 +5150,7 @@ export class ThreeDRenderer {
           new THREE.BoxGeometry(fu.w, def.ht, fu.h),
           this._mat({ color: def.color, transparent: true, opacity: 0.18,
             side: THREE.DoubleSide, depthWrite: false }));
-        mesh.position.set(gsx(fu.x), def.ht / 2 + (fu.elevation ?? 0), gsz(fu.y));
+        mesh.position.set(asx(fu.x), def.ht / 2 + (fu.elevation ?? 0), asz(fu.y));
         mesh.rotation.y = -((fu.rotation || 0) * Math.PI / 180);
         gGrp.add(mesh);
       }

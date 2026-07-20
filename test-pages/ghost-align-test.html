@@ -1,0 +1,113 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>ghost align test</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<script type="module">
+  // Regression + fix guard for the glass-house ghost REGISTRATION bug: ghost
+  // floors must overlay by SHARED WORLD ORIGIN (mapped through the ACTIVE
+  // floor's frame — the same frame the 2D peek underlay + world geo landmarks
+  // use), NOT centered on each ghost's own w/d. See CLAUDE.md "Glass house &
+  // wall cutaway".
+  const mod = await import('./assets/three-renderer.js?v=' + Date.now());
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+
+  let n = 0, pass = 0; const fails = [];
+  const ok = (name, cond, extra = '') => {
+    n++; if (cond) pass++; else fails.push(`${name} ${extra}`);
+  };
+  const near = (a, b, eps = 1) => Math.abs(a - b) <= eps;
+
+  const wall = (id, pts) => ({ id, points: pts });
+  const fu = (kind, x, y, w, h, rot = 0) => ({ id: kind + '_' + x + '_' + y, x, y, w, h, kind, rotation: rot });
+  const baseFloor = (o) => Object.assign({
+    lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [], windows: [], bg: null, model3d: null, look3d: null, rooms: [],
+  }, o);
+  const sc = { preset: 'day', floorColor: '#8a7860', floorTex: 'wood',
+               wallColor: '#cfd2d6', glassHouse: true, wallCutaway: false };
+
+  // Ghost group mesh classification (each ghost mesh is a child of gGrp whose
+  // only nonzero offset is position.y = story; so mesh.position.x/z == world).
+  const meshes = () => { const out = []; r._ghostGroup.traverse(m => { if (m.isMesh) out.push(m); }); return out; };
+  const wallMesh = () => meshes().find(m => m.geometry.type === 'BoxGeometry' && m.geometry.parameters.height > 2000);
+  const furnMesh = () => meshes().find(m => m.geometry.type === 'BoxGeometry' && m.geometry.parameters.height <= 2000);
+  const slabMesh = () => meshes().find(m => m.geometry.type === 'PlaneGeometry');
+
+  // ── Test 1: SAME dims → ghost wall registers at the same scene X/Z as an
+  //    active-floor wall at the same world point (old behavior already held). ──
+  {
+    const dims = { w: 12000, d: 10000 };
+    const active = baseFloor({ id: 'a', name: 'A', ...dims, walls: [], furniture: [] });
+    // Ghost: one vertical 2-pt wall (no closed loop → full-rect slab), midpoint (2000,3000).
+    const ghost = baseFloor({ id: 'g', name: 'G', ...dims,
+      walls: [wall('gw', [{ x: 2000, y: 1000 }, { x: 2000, y: 5000 }])],
+      furniture: [fu('sofa', 4000, 6000, 2000, 900)] });
+    r.updateFloor(active, sc);                 // sets active _fw/_fd frame
+    r.updateGhostFloors([active, ghost], 'a', sc, [], {});
+    const W = r._w(2000, 3000, 0);             // active-frame scene point of the wall midpoint
+    const wm = wallMesh();
+    ok('T1 same-dims: ghost wall scene X == active-frame X', wm && near(wm.position.x, W.x), wm ? `${wm.position.x} vs ${W.x}` : 'no wall');
+    ok('T1 same-dims: ghost wall scene Z == active-frame Z', wm && near(wm.position.z, W.z), wm ? `${wm.position.z} vs ${W.z}` : 'no wall');
+  }
+
+  // ── Test 2: DIFFERENT dims → ghost content registers through the ACTIVE
+  //    frame (world-origin), slab still SIZED by the ghost's own w/d. ──
+  {
+    const active = baseFloor({ id: 'a', name: 'A', w: 12000, d: 10000, walls: [], furniture: [] });
+    const gw = 8000, gd = 6000;
+    const ghost = baseFloor({ id: 'g', name: 'G', w: gw, d: gd,
+      walls: [wall('gw', [{ x: 2000, y: 1000 }, { x: 2000, y: 3000 }])],  // midpoint (2000,2000)
+      furniture: [fu('sofa', 3000, 4000, 1500, 800)] });
+    r.updateFloor(active, sc);
+    r.updateGhostFloors([active, ghost], 'a', sc, [], {});
+
+    // Ghost wall at world (2000,2000) lands at the ACTIVE-frame scene point —
+    // IDENTICAL to an active-floor wall at the same world point.
+    const Ww = r._w(2000, 2000, 0);
+    const wm = wallMesh();
+    ok('T2 diff-dims: ghost wall scene X == activeFw/2 − 2000', wm && near(wm.position.x, Ww.x) && near(Ww.x, 12000 / 2 - 2000), wm ? `${wm.position.x} vs ${Ww.x}` : 'no wall');
+    ok('T2 diff-dims: ghost wall scene Z == active-frame Z', wm && near(wm.position.z, Ww.z), wm ? `${wm.position.z} vs ${Ww.z}` : 'no wall');
+
+    // Slab center at the ghost rect center (gw/2,gd/2) mapped through the active
+    // frame; slab MESH still sized ghostW × ghostD.
+    const Sc = r._w(gw / 2, gd / 2, 0);
+    const sm = slabMesh();
+    ok('T2 diff-dims: ghost slab center scene X == active-frame(gw/2)', sm && near(sm.position.x, Sc.x) && near(Sc.x, 12000 / 2 - gw / 2), sm ? `${sm.position.x} vs ${Sc.x}` : 'no slab');
+    ok('T2 diff-dims: ghost slab center scene Z == active-frame(gd/2)', sm && near(sm.position.z, Sc.z), sm ? `${sm.position.z} vs ${Sc.z}` : 'no slab');
+    ok('T2 diff-dims: ghost slab still SIZED ghostW', sm && near(sm.geometry.parameters.width, gw), sm ? `${sm.geometry.parameters.width}` : 'no slab');
+    ok('T2 diff-dims: ghost slab still SIZED ghostD', sm && near(sm.geometry.parameters.height, gd), sm ? `${sm.geometry.parameters.height}` : 'no slab');
+
+    // Ghost furniture box at world (3000,4000) registers through the active frame.
+    const Fw = r._w(3000, 4000, 0);
+    const fm = furnMesh();
+    ok('T2 diff-dims: ghost furniture scene X == active-frame X', fm && near(fm.position.x, Fw.x), fm ? `${fm.position.x} vs ${Fw.x}` : 'no furn');
+    ok('T2 diff-dims: ghost furniture scene Z == active-frame Z', fm && near(fm.position.z, Fw.z), fm ? `${fm.position.z} vs ${Fw.z}` : 'no furn');
+  }
+
+  // ── Test 3: nudge — translating the ghost content by +1000 world-X shifts
+  //    its scene X by −1000 (X is mirrored), while the full-rect slab (the
+  //    floor rect, independent of content) stays put. ──
+  {
+    const active = baseFloor({ id: 'a', name: 'A', w: 12000, d: 10000, walls: [], furniture: [] });
+    const gw = 8000, gd = 6000;
+    const mkGhost = (dx) => baseFloor({ id: 'g', name: 'G', w: gw, d: gd,
+      walls: [wall('gw', [{ x: 2000 + dx, y: 1000 }, { x: 2000 + dx, y: 3000 }])],
+      furniture: [fu('sofa', 3000 + dx, 4000, 1500, 800)] });
+    r.updateFloor(active, sc);
+
+    r.updateGhostFloors([active, mkGhost(0)], 'a', sc, [], {});
+    const wx0 = wallMesh().position.x, sx0 = slabMesh().position.x;
+
+    r.updateGhostFloors([active, mkGhost(1000)], 'a', sc, [], {});
+    const wx1 = wallMesh().position.x, sx1 = slabMesh().position.x;
+
+    ok('T3 nudge: +1000 world-X shifts ghost wall scene X by −1000', near(wx1, wx0 - 1000), `${wx1} vs ${wx0 - 1000}`);
+    ok('T3 nudge: full-rect slab (floor rect) stays put', near(sx1, sx0), `${sx1} vs ${sx0}`);
+  }
+
+  document.title = `GHOSTALIGN ${fails.length === 0 ? 'PASS' : 'FAIL'} ${pass}/${n}`;
+  if (fails.length) console.error('FAILS:\n' + fails.join('\n'));
+  window.__DUMP = document.title + (fails.length ? '\n' + fails.join('\n') : '');
+</script>
