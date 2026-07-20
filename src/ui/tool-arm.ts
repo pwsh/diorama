@@ -237,7 +237,8 @@ function structureCards(): ToolCard[] {
   };
   const zone: ToolCard = controlCardLike('struct:pzone', 'Presence zone', '▱', 'pzone');
   const voidC: ToolCard = controlCardLike('struct:void', 'Floor void', '🕳', 'void');
-  return [wall, door, win, room, zone, voidC];
+  const ruler: ToolCard = controlCardLike('struct:ruler', 'Ruler', '📏', 'ruler');
+  return [wall, door, win, room, zone, voidC, ruler];
 }
 
 function controlCardLike(key: string, label: string, glyph: string, tool: Tool): ToolCard {

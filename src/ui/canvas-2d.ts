@@ -380,6 +380,8 @@ export class Canvas2D extends LitElement {
       if (p.drawingPath) { p.drawingPath = null; p.emitConfig(); return; }
       if (p.drawingPoolArea) { p.drawingPoolArea = null; p.emitConfig(); return; }
       if (p.drawingVoidArea) { p.drawingVoidArea = null; p.emitConfig(); return; }
+      if (p.drawingRuler) { p.drawingRuler = null; p.emitConfig(); return; }
+      if (p.pickingDimWalls) { p.setPickingDimWalls(false); return; }
       if (p.store.activeSensorId) { p.store.activeSensorId = null; p.save(); p.emitConfig(); }
     }
     if (e.key === 'Enter' && p.editZone) { finishZoneEdit(p); return; }

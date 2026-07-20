@@ -2,7 +2,8 @@
 
 import type { Vec2, Sensor, BgImage, LightIconKind, FurnitureKind, EnvKind, WallKind,
   ActivityKind, ObjectRecipe, Furniture, Room, Floor, SafetyKind, GroundKind, GroundArea,
-  InfoCard, InfoCardMount, ActionKind, SprinklerHeadKind, Pool } from './types.js';
+  InfoCard, InfoCardMount, ActionKind, SprinklerHeadKind, Pool,
+  Wall, Ruler, RulerEnd } from './types.js';
 import { formatEntityValue, formatClock, evalRules, ruleMatches, relTimeText,
   type HassStateLike, type ClockMode, type ValueRule } from './value-rules.js';
 
@@ -2758,4 +2759,255 @@ export function lighten(hex: string, t: number): string {
   const b = Math.round(c.b + (255 - c.b) * t);
   const hh = (n: number) => n.toString(16).padStart(2, '0');
   return `#${hh(r)}${hh(g)}${hh(b)}`;
+}
+
+// ── Ruler (measure) + wall/structure dimensions (Feature A + B, pure math) ──
+// All 2D. Distances/points are world-mm. WALL_HALF (50) = wallThick(100)/2, so
+// a wall's FACE sits WALL_HALF off its centerline — the "inside/clear" distance
+// between two walls is centerline distance − 100.
+const RULER_WALL_HALF = 50;
+
+export interface ClosestPair { ax: number; ay: number; bx: number; by: number; mm: number; }
+
+// Closest points between two segments (Ericson, ClosestPtSegmentSegment).
+// Returns both closest points + the distance. Handles crossing (mm≈0),
+// parallel, collinear, and point-degenerate (a1==a2 and/or b1==b2) inputs.
+function segSegClosest(a1: Vec2, a2: Vec2, b1: Vec2, b2: Vec2): ClosestPair {
+  const d1x = a2.x - a1.x, d1y = a2.y - a1.y;   // seg A direction
+  const d2x = b2.x - b1.x, d2y = b2.y - b1.y;   // seg B direction
+  const rx = a1.x - b1.x, ry = a1.y - b1.y;
+  const a = d1x * d1x + d1y * d1y;              // |A|²
+  const e = d2x * d2x + d2y * d2y;              // |B|²
+  const f = d2x * rx + d2y * ry;
+  const EPS = 1e-9;
+  const clamp01 = (t: number) => (t < 0 ? 0 : t > 1 ? 1 : t);
+  let s: number, t: number;
+  if (a <= EPS && e <= EPS) { s = 0; t = 0; }          // both points
+  else if (a <= EPS) { s = 0; t = clamp01(f / e); }    // A is a point
+  else {
+    const c = d1x * rx + d1y * ry;
+    if (e <= EPS) { t = 0; s = clamp01(-c / a); }      // B is a point
+    else {
+      const b = d1x * d2x + d1y * d2y;
+      const denom = a * e - b * b;
+      s = denom !== 0 ? clamp01((b * f - c * e) / denom) : 0;
+      t = (b * s + f) / e;
+      if (t < 0) { t = 0; s = clamp01(-c / a); }
+      else if (t > 1) { t = 1; s = clamp01((b - c) / a); }
+    }
+  }
+  const ax = a1.x + d1x * s, ay = a1.y + d1y * s;
+  const bx = b1.x + d2x * t, by = b1.y + d2y * t;
+  return { ax, ay, bx, by, mm: Math.hypot(ax - bx, ay - by) };
+}
+
+// Plain distance between two segments.
+export function segSegDistance(a1: Vec2, a2: Vec2, b1: Vec2, b2: Vec2): number {
+  return segSegClosest(a1, a2, b1, b2).mm;
+}
+
+// Closest pair of points between two polylines (each a list of ≥1 points). A
+// single-point list is treated as a degenerate segment. Iterates every segment
+// pair and keeps the minimum.
+export function polylineClosestPair(ptsA: Vec2[], ptsB: Vec2[]): ClosestPair {
+  const segsOf = (pts: Vec2[]): [Vec2, Vec2][] => {
+    if (pts.length === 0) return [];
+    if (pts.length === 1) return [[pts[0], pts[0]]];
+    const out: [Vec2, Vec2][] = [];
+    for (let i = 0; i < pts.length - 1; i++) out.push([pts[i], pts[i + 1]]);
+    return out;
+  };
+  const A = segsOf(ptsA), B = segsOf(ptsB);
+  let best: ClosestPair = { ax: 0, ay: 0, bx: 0, by: 0, mm: Infinity };
+  for (const [a1, a2] of A)
+    for (const [b1, b2] of B) {
+      const c = segSegClosest(a1, a2, b1, b2);
+      if (c.mm < best.mm) best = c;
+    }
+  if (!isFinite(best.mm)) {
+    // Both empty — degenerate; report a zero-length pair at the origin.
+    const pa = ptsA[0] ?? { x: 0, y: 0 }, pb = ptsB[0] ?? { x: 0, y: 0 };
+    return { ax: pa.x, ay: pa.y, bx: pb.x, by: pb.y, mm: Math.hypot(pa.x - pb.x, pa.y - pb.y) };
+  }
+  return best;
+}
+
+// Pull each end of a closest pair TOWARD the other by its inset (mm), and reduce
+// the reported distance by the two insets (clamped ≥ 0). Used to convert a
+// centerline pair into a FACE-to-FACE pair.
+function pullPair(pair: ClosestPair, insetA: number, insetB: number): ClosestPair {
+  const dx = pair.bx - pair.ax, dy = pair.by - pair.ay;
+  const len = Math.hypot(dx, dy);
+  const ux = len > 1e-9 ? dx / len : 1, uy = len > 1e-9 ? dy / len : 0;
+  return {
+    ax: pair.ax + ux * insetA, ay: pair.ay + uy * insetA,
+    bx: pair.bx - ux * insetB, by: pair.by - uy * insetB,
+    mm: Math.max(0, pair.mm - insetA - insetB),
+  };
+}
+
+// Inside/clear dimension between two walls: closest pair of their centerlines,
+// pulled WALL_HALF toward each other on both sides (→ face-to-face points), with
+// mm = centerline distance − 100, clamped ≥ 0. Overlapping walls → mm 0.
+export function wallClearance(a: { points: Vec2[] }, b: { points: Vec2[] }): ClosestPair {
+  return pullPair(polylineClosestPair(a.points, b.points), RULER_WALL_HALF, RULER_WALL_HALF);
+}
+
+// A furniture piece's world-mm footprint as a CLOSED polyline (5 pts, last ==
+// first) so polyline routines see all four edges.
+function furnitureRectClosed(it: { x: number; y: number; w: number; h: number; rotation?: number }): Vec2[] {
+  const c = furnitureCorners(it).map(k => ({ x: k.x, y: k.y }));
+  return [...c, c[0]];
+}
+
+// Separating-axis overlap test for two convex polygons (rect footprints).
+function polysOverlap(polyA: Vec2[], polyB: Vec2[]): boolean {
+  const axes = (poly: Vec2[]): Vec2[] => {
+    const out: Vec2[] = [];
+    for (let i = 0; i < poly.length; i++) {
+      const a = poly[i], b = poly[(i + 1) % poly.length];
+      const ex = b.x - a.x, ey = b.y - a.y, len = Math.hypot(ex, ey);
+      if (len > 1e-9) out.push({ x: -ey / len, y: ex / len });
+    }
+    return out;
+  };
+  const proj = (poly: Vec2[], ax: Vec2): [number, number] => {
+    let lo = Infinity, hi = -Infinity;
+    for (const p of poly) { const d = p.x * ax.x + p.y * ax.y; if (d < lo) lo = d; if (d > hi) hi = d; }
+    return [lo, hi];
+  };
+  for (const ax of [...axes(polyA), ...axes(polyB)]) {
+    const [aLo, aHi] = proj(polyA, ax), [bLo, bHi] = proj(polyB, ax);
+    if (aHi < bLo || bHi < aLo) return false;   // a separating axis → no overlap
+  }
+  return true;
+}
+
+// Min distance between two rotated-rect furniture footprints (0 when
+// overlapping). Returns the closest pair points for drawing.
+export function furnitureClearance(
+  a: { x: number; y: number; w: number; h: number; rotation?: number },
+  b: { x: number; y: number; w: number; h: number; rotation?: number },
+): ClosestPair {
+  const pa = furnitureRectClosed(a), pb = furnitureRectClosed(b);
+  if (polysOverlap(pa.slice(0, 4), pb.slice(0, 4)))
+    return { ax: a.x, ay: a.y, bx: b.x, by: b.y, mm: 0 };
+  return polylineClosestPair(pa, pb);
+}
+
+// Resolve one ruler end into a measurement shape: a polyline + a face inset
+// (WALL_HALF for walls, 0 for point/furniture). Null when an object end dangles
+// (deleted item).
+function rulerEndShape(end: RulerEnd, f: Floor): { pts: Vec2[]; inset: number } | null {
+  if (end.kind === 'point') return { pts: [{ x: end.x, y: end.y }], inset: 0 };
+  if (end.kind === 'wall') {
+    const w = f.walls.find(x => x.id === end.wallId);
+    return w && w.points.length ? { pts: w.points, inset: RULER_WALL_HALF } : null;
+  }
+  const it = f.furniture.find(x => x.id === end.furnitureId);
+  return it ? { pts: furnitureRectClosed(it), inset: 0 } : null;
+}
+
+// Resolve a ruler's two ends to drawable endpoints + the measured distance.
+// point↔point = plain distance; an object end measures to that object's FACE
+// (wall, offset WALL_HALF) / footprint edge (furniture); object↔object measures
+// the inside clearance (the dedicated clearance fns). A dangling object id → null.
+export function resolveRulerEnds(ruler: Ruler, f: Floor): ClosestPair | null {
+  const { a, b } = ruler;
+  if (a.kind === 'point' && b.kind === 'point')
+    return { ax: a.x, ay: a.y, bx: b.x, by: b.y, mm: Math.hypot(a.x - b.x, a.y - b.y) };
+  if (a.kind === 'wall' && b.kind === 'wall') {
+    const wa = f.walls.find(x => x.id === a.wallId), wb = f.walls.find(x => x.id === b.wallId);
+    return wa && wb ? wallClearance(wa, wb) : null;
+  }
+  if (a.kind === 'furniture' && b.kind === 'furniture') {
+    const ia = f.furniture.find(x => x.id === a.furnitureId), ib = f.furniture.find(x => x.id === b.furnitureId);
+    return ia && ib ? furnitureClearance(ia, ib) : null;
+  }
+  // Mixed (point↔object, wall↔furniture): general closest pair + per-side inset.
+  const sa = rulerEndShape(a, f), sb = rulerEndShape(b, f);
+  if (!sa || !sb) return null;
+  return pullPair(polylineClosestPair(sa.pts, sb.pts), sa.inset, sb.inset);
+}
+
+// Move a ruler's end `b` (ONLY when b is a free point) along the current a→b
+// bearing to the given length (mm). Mutates ruler.b and returns the new point,
+// or null when b is object-anchored / the ruler can't resolve. Degenerate
+// (a==b) bearing → +X.
+export function rulerSetLength(ruler: Ruler, f: Floor, mm: number): Vec2 | null {
+  if (ruler.b.kind !== 'point') return null;
+  const r = resolveRulerEnds(ruler, f);
+  if (!r) return null;
+  const dx = r.bx - r.ax, dy = r.by - r.ay, len = Math.hypot(dx, dy);
+  const ux = len > 1e-9 ? dx / len : 1, uy = len > 1e-9 ? dy / len : 0;
+  const nx = r.ax + ux * mm, ny = r.ay + uy * mm;
+  ruler.b = { kind: 'point', x: nx, y: ny };
+  return { x: nx, y: ny };
+}
+
+// One classified wall SEGMENT (a consecutive point pair on one wall).
+export interface WallSegment { wallId: string; index: number; a: Vec2; b: Vec2; exterior: boolean; }
+
+const DIM_EDGE_TOL = 30;   // mm: a segment midpoint "lies on" a loop edge within this
+// Does (mid) lie on any edge of the closed loop within DIM_EDGE_TOL?
+function midpointOnLoop(mid: Vec2, loop: Vec2[]): boolean {
+  for (let i = 0; i < loop.length; i++) {
+    const a = loop[i], b = loop[(i + 1) % loop.length];
+    if (pointToSeg(mid.x, mid.y, a.x, a.y, b.x, b.y) <= DIM_EDGE_TOL) return true;
+  }
+  return false;
+}
+// Outer loops = closed wall loops not geometrically contained inside another
+// loop. closedWallLoops returns minimal interior faces (disjoint rooms), so in
+// practice every loop is "outer"; the filter is defensive for future nesting.
+function outerLoops(loops: Vec2[][]): Vec2[][] {
+  return loops.filter((L, i) => !loops.some((M, j) =>
+    j !== i && Math.abs(polygonArea(M)) > Math.abs(polygonArea(L)) &&
+    pointInPolygon(centroid(L).x, centroid(L).y, M)));
+}
+
+// Classify every wall segment as exterior or not. A segment borders a room when
+// its midpoint lies on that room loop's path; a segment on exactly ONE loop is
+// exterior (room on one side, outside on the other), on TWO loops it's an
+// interior partition, on ZERO loops (standalone wall) it's NOT exterior.
+export function outerWallSegments(walls: Wall[]): WallSegment[] {
+  const loops = outerLoops(closedWallLoops(walls));
+  const out: WallSegment[] = [];
+  for (const w of walls) {
+    for (let i = 0; i < w.points.length - 1; i++) {
+      const a = w.points[i], b = w.points[i + 1];
+      const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+      let count = 0;
+      for (const L of loops) if (midpointOnLoop(mid, L)) count++;
+      out.push({ wallId: w.id, index: i, a, b, exterior: count === 1 });
+    }
+  }
+  return out;
+}
+
+// Outward unit normal for placing a dimension line beside a segment. For a
+// segment bordering exactly one loop the normal points AWAY from that loop's
+// interior (its centroid); otherwise a consistent +normal side.
+export function wallDimSide(seg: { a: Vec2; b: Vec2 }, loops: Vec2[][]): Vec2 {
+  const dx = seg.b.x - seg.a.x, dy = seg.b.y - seg.a.y, len = Math.hypot(dx, dy) || 1;
+  const nx = -dy / len, ny = dx / len;             // +90° normal
+  const mid = { x: (seg.a.x + seg.b.x) / 2, y: (seg.a.y + seg.b.y) / 2 };
+  const home = loops.find(L => midpointOnLoop(mid, L));
+  if (home) {
+    const c = centroid(home);
+    const toward = nx * (mid.x - c.x) + ny * (mid.y - c.y);   // >0 ⇒ +normal points outward
+    return toward >= 0 ? { x: nx, y: ny } : { x: -nx, y: -ny };
+  }
+  return { x: nx, y: ny };
+}
+
+// Axis-aligned bounding box of every wall point, or null when there are no walls.
+export function structureExtents(walls: Wall[]): { minX: number; minY: number; maxX: number; maxY: number } | null {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity, any = false;
+  for (const w of walls) for (const p of w.points) {
+    any = true;
+    if (p.x < minX) minX = p.x; if (p.y < minY) minY = p.y;
+    if (p.x > maxX) maxX = p.x; if (p.y > maxY) maxY = p.y;
+  }
+  return any ? { minX, minY, maxX, maxY } : null;
 }

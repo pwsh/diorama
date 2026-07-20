@@ -30,8 +30,9 @@ import {
   closedWallLoops, loopContaining, roomLabel,
   heatmapColor, HEATMAP_COMFORT_LO_DEFAULT, HEATMAP_COMFORT_HI_DEFAULT,
   parseNowPlaying, isMediaPlayerId,
+  resolveRulerEnds, outerWallSegments, wallDimSide, structureExtents,
 } from './geometry.js';
-import { compass8 } from './geo.js';
+import { compass8, fmtDistanceM, fmtAccuracyM } from './geo.js';
 import { resolveNorth, northMarkerPos, markerScaleOf } from './compass.js';
 import { calendarLines, weatherCardLines, resolveScreenContent, CAL_HEADER_COLOR, type ScreenMode } from './surfaces.js';
 import { CONDITION_GLYPH } from './weather.js';
@@ -311,6 +312,9 @@ export function drawAll(ctx: CanvasRenderingContext2D, p: Planner, view: View,
   if (on(L.geo)) { drawGeoLandmarks(ctx, p, view); drawGpsPins(ctx, p, view); drawGeoEventPins(ctx, p, view); }
   drawNorthMarker(ctx, p, view);
   drawDoorbellPulses(ctx, p, view);
+  // Dimensions overlay (rulers + wall/structure dimension lines) — drawn LATE so
+  // it sits above everything. Default ON (absent = on).
+  if (on(L.dimensions)) { drawWallDimensions(ctx, p, view); drawRulers(ctx, p, view); }
   drawAlignGuides(ctx, p, view);
   drawFloorEditHandles(ctx, p, view);
 }
@@ -515,10 +519,10 @@ function drawGpsPins(ctx: CanvasRenderingContext2D, p: Planner, view: View): voi
     // Caption lines below the anchor.
     const lines: { txt: string; color: string }[] = [];
     if (beyond) {
-      lines.push({ txt: `${pin.name} · ${Math.round(pin.distanceM)} m ${compass8(pin.bearingDeg)}`, color: '#fff' });
+      lines.push({ txt: `${pin.name} · ${fmtDistanceM(pin.distanceM, p.store.imperial)} ${compass8(pin.bearingDeg)}`, color: '#fff' });
     } else {
       lines.push({ txt: pin.name || 'Person', color: '#fff' });
-      if (indoor) lines.push({ txt: `~±${Math.round(pin.accuracyMm / 1000)} m indoors`, color: '#ffb74d' });
+      if (indoor) lines.push({ txt: `~${fmtAccuracyM(pin.accuracyMm / 1000, p.store.imperial)} indoors`, color: '#ffb74d' });
     }
     if (pin.stale) lines.push({ txt: ageText(pin.lastUpdated), color: 'rgba(255,255,255,0.7)' });
     ctx.font = `${10 * dpr}px sans-serif`;
@@ -574,7 +578,7 @@ function drawGeoLandmarks(ctx: CanvasRenderingContext2D, p: Planner, view: View)
     ctx.textBaseline = 'top';
     const txt = lm.name || 'Landmark';
     const cap = calibrated
-      ? (lm.accuracy != null ? `±${Math.round(lm.accuracy)} m` : 'calibrated')
+      ? (lm.accuracy != null ? fmtAccuracyM(lm.accuracy, p.store.imperial) : 'calibrated')
       : 'uncalibrated';
     ctx.font = `${10 * dpr}px sans-serif`;
     const tw = Math.max(ctx.measureText(txt).width, ctx.measureText(cap).width) + 8 * dpr;
@@ -629,6 +633,197 @@ function drawGeoEventPins(ctx: CanvasRenderingContext2D, p: Planner, view: View)
     ctx.fillRect(at.x - tw / 2, boxY, tw, lines.length * 13 * dpr + 2 * dpr);
     ctx.fillStyle = '#fff'; ctx.fillText(lines[0], at.x, boxY + 2 * dpr);
     ctx.fillStyle = hexToRgba(col, 0.95); ctx.fillText(lines[1], at.x, boxY + 15 * dpr);
+  }
+  ctx.restore();
+}
+
+// ── Rulers (measure tool) + wall/structure dimensions (Feature A + B) ───────
+const RULER_COLOR = '#ffb74d';   // orange, matches the vertex-handle affordance
+
+// A dark distance chip centered at a px point (screen-fixed size), optionally
+// rotated so it reads along a dimension line (upside-down text is flipped).
+function drawDimChip(ctx: CanvasRenderingContext2D, dpr: number, px: number, py: number,
+                     text: string, color: string, angle = 0, big = false): void {
+  const fs = (big ? 12 : 11) * dpr;
+  ctx.save();
+  ctx.translate(px, py);
+  let a = angle;
+  if (a > Math.PI / 2) a -= Math.PI; else if (a < -Math.PI / 2) a += Math.PI;
+  ctx.rotate(a);
+  ctx.font = `${fs}px sans-serif`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  const w = ctx.measureText(text).width + 8 * dpr, h = fs + 6 * dpr;
+  ctx.fillStyle = 'rgba(10,14,20,0.85)';
+  ctx.fillRect(-w / 2, -h / 2, w, h);
+  ctx.strokeStyle = hexToRgba(color, 0.7); ctx.lineWidth = dpr;
+  ctx.strokeRect(-w / 2, -h / 2, w, h);
+  ctx.fillStyle = '#fff';
+  ctx.fillText(text, 0, 0);
+  ctx.restore();
+}
+
+// A small inward-pointing arrowhead at `tip` aimed FROM `from` (both px).
+function drawDimArrow(ctx: CanvasRenderingContext2D, dpr: number,
+                      tip: { x: number; y: number }, from: { x: number; y: number }): void {
+  const dx = tip.x - from.x, dy = tip.y - from.y, len = Math.hypot(dx, dy) || 1;
+  const ux = dx / len, uy = dy / len;               // toward the tip
+  const s = 6 * dpr;
+  const bx = tip.x - ux * s, by = tip.y - uy * s;    // base of the head
+  const nx = -uy, ny = ux;                           // perpendicular
+  ctx.beginPath();
+  ctx.moveTo(tip.x, tip.y);
+  ctx.lineTo(bx + nx * s * 0.5, by + ny * s * 0.5);
+  ctx.lineTo(bx - nx * s * 0.5, by - ny * s * 0.5);
+  ctx.closePath();
+  ctx.fill();
+}
+
+// A full CAD dimension: extension ticks from each wall endpoint out to the dim
+// line, the dim line itself with inward arrowheads, and a rotated length chip.
+function drawDimSegment(ctx: CanvasRenderingContext2D, dpr: number, color: string,
+                        wallA: { x: number; y: number }, wallB: { x: number; y: number },
+                        dimA: { x: number; y: number }, dimB: { x: number; y: number },
+                        label: string, big = false): void {
+  ctx.strokeStyle = hexToRgba(color, 0.85);
+  ctx.fillStyle = hexToRgba(color, 0.85);
+  ctx.lineWidth = Math.max(1, dpr);
+  // Extension ticks.
+  ctx.beginPath();
+  ctx.moveTo(wallA.x, wallA.y); ctx.lineTo(dimA.x, dimA.y);
+  ctx.moveTo(wallB.x, wallB.y); ctx.lineTo(dimB.x, dimB.y);
+  ctx.stroke();
+  // Dim line.
+  ctx.beginPath(); ctx.moveTo(dimA.x, dimA.y); ctx.lineTo(dimB.x, dimB.y); ctx.stroke();
+  drawDimArrow(ctx, dpr, dimA, dimB);
+  drawDimArrow(ctx, dpr, dimB, dimA);
+  const mid = { x: (dimA.x + dimB.x) / 2, y: (dimA.y + dimB.y) / 2 };
+  const angle = Math.atan2(dimB.y - dimA.y, dimB.x - dimA.x);
+  drawDimChip(ctx, dpr, mid.x, mid.y, label, color, angle, big);
+}
+
+// Rulers — dashed measurement lines with end ticks / handles + a distance chip.
+function drawRulers(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
+  const f = p.floor();
+  const list = f.rulers ?? [];
+  const dpr = window.devicePixelRatio || 1;
+  const imperial = p.store.imperial;
+  ctx.save();
+  for (const r of list) {
+    const sel = p.activeRulerId === r.id;
+    const res = resolveRulerEnds(r, f);
+    if (!res) {
+      // Broken (an object end was deleted) — mark the surviving point end.
+      const pt = r.a.kind === 'point' ? r.a : r.b.kind === 'point' ? r.b : null;
+      if (!pt) continue;
+      const c = mmToPx(view, pt.x, pt.y);
+      ctx.setLineDash([4 * dpr, 3 * dpr]);
+      ctx.strokeStyle = '#ef5350'; ctx.lineWidth = 1.5 * dpr;
+      ctx.beginPath(); ctx.arc(c.x, c.y, 6 * dpr, 0, 2 * Math.PI); ctx.stroke();
+      ctx.setLineDash([]);
+      drawDimChip(ctx, dpr, c.x, c.y - 16 * dpr, '?', '#ef5350');
+      continue;
+    }
+    const A = mmToPx(view, res.ax, res.ay), B = mmToPx(view, res.bx, res.by);
+    // Dashed measurement line.
+    ctx.setLineDash([6 * dpr, 4 * dpr]);
+    ctx.strokeStyle = hexToRgba(RULER_COLOR, sel ? 1 : 0.85);
+    ctx.lineWidth = (sel ? 2 : 1.5) * dpr;
+    ctx.beginPath(); ctx.moveTo(A.x, A.y); ctx.lineTo(B.x, B.y); ctx.stroke();
+    ctx.setLineDash([]);
+    // Perpendicular end ticks.
+    const ang = Math.atan2(B.y - A.y, B.x - A.x);
+    const nx = -Math.sin(ang), ny = Math.cos(ang), tk = 7 * dpr;
+    ctx.beginPath();
+    ctx.moveTo(A.x - nx * tk, A.y - ny * tk); ctx.lineTo(A.x + nx * tk, A.y + ny * tk);
+    ctx.moveTo(B.x - nx * tk, B.y - ny * tk); ctx.lineTo(B.x + nx * tk, B.y + ny * tk);
+    ctx.stroke();
+    // End affordances: point ends → draggable square handle; object ends → ring.
+    const endMark = (end: typeof r.a, px: { x: number; y: number }) => {
+      if (end.kind === 'point') {
+        const s = 5 * dpr;
+        ctx.fillStyle = sel ? RULER_COLOR : 'rgba(20,24,30,0.9)';
+        ctx.strokeStyle = RULER_COLOR; ctx.lineWidth = 1.5 * dpr;
+        ctx.beginPath(); ctx.rect(px.x - s, px.y - s, s * 2, s * 2); ctx.fill(); ctx.stroke();
+      } else {
+        ctx.strokeStyle = RULER_COLOR; ctx.lineWidth = 1.5 * dpr;
+        ctx.beginPath(); ctx.arc(px.x, px.y, 5 * dpr, 0, 2 * Math.PI); ctx.stroke();
+        ctx.beginPath(); ctx.arc(px.x, px.y, 1.5 * dpr, 0, 2 * Math.PI);
+        ctx.fillStyle = RULER_COLOR; ctx.fill();
+      }
+    };
+    endMark(r.a, A); endMark(r.b, B);
+    // Distance chip at the midpoint.
+    drawDimChip(ctx, dpr, (A.x + B.x) / 2, (A.y + B.y) / 2, fmtLen(res.mm, imperial), RULER_COLOR, ang);
+  }
+  // Placement preview: from the placed end A to the live cursor.
+  if (p.tool === 'ruler' && p.drawingRuler && p.cursor) {
+    const tmp = { id: '__preview', a: p.drawingRuler.a,
+                  b: { kind: 'point' as const, x: p.cursor.x, y: p.cursor.y } };
+    const res = resolveRulerEnds(tmp, f);
+    if (res) {
+      const A = mmToPx(view, res.ax, res.ay), B = mmToPx(view, res.bx, res.by);
+      ctx.setLineDash([6 * dpr, 4 * dpr]);
+      ctx.strokeStyle = hexToRgba(RULER_COLOR, 0.7); ctx.lineWidth = 1.5 * dpr;
+      ctx.beginPath(); ctx.moveTo(A.x, A.y); ctx.lineTo(B.x, B.y); ctx.stroke();
+      ctx.setLineDash([]);
+      drawDimChip(ctx, dpr, (A.x + B.x) / 2, (A.y + B.y) / 2, fmtLen(res.mm, imperial),
+                  RULER_COLOR, Math.atan2(B.y - A.y, B.x - A.x));
+    }
+  }
+  ctx.restore();
+}
+
+// Wall / structure dimension lines (Feature B) — CAD dims per wall segment per
+// the floor's dimensionMode, plus overall structure extents for all / outside.
+function drawWallDimensions(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
+  const f = p.floor();
+  const mode = f.dimensionMode;
+  if (!mode || mode === 'off') return;
+  const dpr = window.devicePixelRatio || 1;
+  const imperial = p.store.imperial;
+  const loops = closedWallLoops(f.walls);
+  // Select the wall segments to dimension.
+  type Seg = { a: Vec2; b: Vec2 };
+  let segs: Seg[] = [];
+  if (mode === 'all') {
+    for (const w of f.walls)
+      for (let i = 0; i < w.points.length - 1; i++) segs.push({ a: w.points[i], b: w.points[i + 1] });
+  } else if (mode === 'outside') {
+    segs = outerWallSegments(f.walls).filter(s => s.exterior).map(s => ({ a: s.a, b: s.b }));
+  } else { // custom
+    for (const w of f.walls) {
+      if (!w.dimension) continue;
+      for (let i = 0; i < w.points.length - 1; i++) segs.push({ a: w.points[i], b: w.points[i + 1] });
+    }
+  }
+  ctx.save();
+  const OFF = 28 * dpr;
+  for (const seg of segs) {
+    const len = distMM(seg.a, seg.b);
+    if (len < 300) continue;   // skip tiny segments (label soup)
+    const side = wallDimSide(seg, loops);
+    const sn = { x: side.x, y: -side.y };   // world normal → screen (y flip)
+    const A = mmToPx(view, seg.a.x, seg.a.y), B = mmToPx(view, seg.b.x, seg.b.y);
+    const dimA = { x: A.x + sn.x * OFF, y: A.y + sn.y * OFF };
+    const dimB = { x: B.x + sn.x * OFF, y: B.y + sn.y * OFF };
+    drawDimSegment(ctx, dpr, '#90caf9', A, B, dimA, dimB, fmtLen(len, imperial));
+  }
+  // Overall structure extents (all / outside).
+  if (mode === 'all' || mode === 'outside') {
+    const ext = structureExtents(f.walls);
+    if (ext) {
+      const BIG = 48 * dpr;
+      // Total width along the south (world minY) edge, pushed DOWN on screen.
+      const wa = mmToPx(view, ext.minX, ext.minY), wb = mmToPx(view, ext.maxX, ext.minY);
+      drawDimSegment(ctx, dpr, '#a5d6a7', wa, wb,
+        { x: wa.x, y: wa.y + BIG }, { x: wb.x, y: wb.y + BIG },
+        fmtLen(ext.maxX - ext.minX, imperial), true);
+      // Total depth along the west (world minX) edge, pushed LEFT on screen.
+      const da = mmToPx(view, ext.minX, ext.minY), db = mmToPx(view, ext.minX, ext.maxY);
+      drawDimSegment(ctx, dpr, '#a5d6a7', da, db,
+        { x: da.x - BIG, y: da.y }, { x: db.x - BIG, y: db.y },
+        fmtLen(ext.maxY - ext.minY, imperial), true);
+    }
   }
   ctx.restore();
 }

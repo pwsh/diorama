@@ -15,11 +15,12 @@ import {
   hitPool, hitPoolVertex,
   hitVacuumSegment,
   hitVoidArea, hitVoidAreaVertex,
+  hitRulerEnd, hitRulerBody,
   hitDoor, hitDoorEnd, hitDoorLock, hitWindow, hitWindowEnd, hitFloorEdge,
 } from './canvas-hit.js';
 import type { Planner, Drag } from './planner.js';
 import { NEW_ROOM, NEW_LANDMARK } from './planner.js';
-import type { Vec2, Furniture, ObjectRecipe, Light, WindowKind } from './types.js';
+import type { Vec2, Furniture, ObjectRecipe, Light, WindowKind, RulerEnd } from './types.js';
 
 // Drag kinds that move a single placeable and therefore get alignment guides
 // (Feature C). Wall vertices / doors / windows / zones are excluded.
@@ -153,6 +154,20 @@ function zonesInteractive(p: Planner): boolean {
 // is visible — a hidden ground layer must never capture input (same rule as zones).
 function groundInteractive(p: Planner): boolean {
   return p.store.layers2d?.ground !== false;
+}
+// Rulers are only endpoint-drag / body-select interactive while the dimensions
+// layer is visible (absent = on) — a hidden overlay never captures input.
+function dimsInteractive(p: Planner): boolean {
+  return p.store.layers2d?.dimensions !== false;
+}
+// Resolve the ruler END kind for a placement click: a wall body → wall anchor,
+// else a furniture body → furniture anchor, else a grid-snapped free point.
+function rulerEndAt(p: Planner, mm: Vec2): RulerEnd {
+  const wh = hitWall(p, mm);
+  if (wh) return { kind: 'wall', wallId: wh.id };
+  const fh = hitFurniture(p, mm);
+  if (fh) return { kind: 'furniture', furnitureId: fh.item.id };
+  return { kind: 'point', x: snap(mm.x, 10), y: snap(mm.y, 10) };
 }
 const MOTION_DEFAULTS = { fov: 110, range: 5000 };
 
@@ -417,6 +432,14 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
   if (p.placingCamCalibId) return;  // camera-calib latch: let the click record the floor point
   const mm = pxToMm(canvas, view, e);
   if (p.tool !== 'select') return;
+  // Dimension wall-pick latch (Feature B custom mode): a select-mode press on a
+  // wall toggles its custom dimension flag instead of selecting / dragging. Stay
+  // armed for more picks; a press on empty space is a no-op (stays armed).
+  if (p.pickingDimWalls) {
+    const wh = hitWall(p, mm);
+    if (wh) p.toggleWallDimension(wh.id);
+    e.preventDefault(); return;
+  }
   // A fresh select-tool press resets the selected-vertex latch; a vertex hit
   // below re-sets it. Delete keys off this (deleteSelection prioritizes it).
   p.selectedVertex = null;
@@ -500,6 +523,16 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
       p.drag = { kind: 'voidVert', id: vv.area.id, idx: vv.idx,
                  startMm: mm, startPts: vv.area.points.map(pt => ({ ...pt })) };
       p.selectedVertex = { kind: 'void', itemId: vv.area.id, index: vv.idx };
+      canvas.style.cursor = 'grabbing'; e.preventDefault(); return;
+    }
+  }
+  // Ruler endpoint handles (point ends only) — high priority small targets.
+  // Only while the dimensions layer is on.
+  if (dimsInteractive(p)) {
+    const reh = hitRulerEnd(p, view, mm);
+    if (reh) {
+      if (p.activeRulerId !== reh.ruler.id) { p.activeRulerId = reh.ruler.id; p.emitConfig(); }
+      p.drag = { kind: 'rulerEnd', rulerId: reh.ruler.id, end: reh.end };
       canvas.style.cursor = 'grabbing'; e.preventDefault(); return;
     }
   }
@@ -715,6 +748,16 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
     if (p.activeFlagpoleId !== flagH.id) p.activeFlagpoleId = flagH.id;
     p.drag = { kind: 'flagpole', id: flagH.id, startMm: mm, start: { x: flagH.x, y: flagH.y } };
     canvas.style.cursor = 'grabbing'; e.preventDefault(); p.emitConfig(); return;
+  }
+  // Ruler body — select it (no whole-ruler drag; move via endpoint handles).
+  // Low priority (after fixtures/furniture) so a thin line never swallows their
+  // clicks. Only when the dimensions layer is on.
+  if (dimsInteractive(p)) {
+    const rbH = hitRulerBody(p, view, mm);
+    if (rbH) {
+      if (p.activeRulerId !== rbH.id) { p.activeRulerId = rbH.id; p.emitConfig(); }
+      e.preventDefault(); return;
+    }
   }
   // Presence zone body — select it (shows vertex handles); no whole-zone drag in
   // v1 (reshape via vertex handles or Redraw). Only when the zones layer is on.
@@ -1021,6 +1064,14 @@ export function onCanvasMouseMove(p: Planner, canvas: HTMLCanvasElement, view: V
         }
         break;
       }
+      case 'rulerEnd': {
+        const r = (f.rulers ?? []).find(x => x.id === drag.rulerId);
+        const end = r ? r[drag.end] : null;
+        if (r && !r.locked && end && end.kind === 'point') {
+          end.x = snap(mm.x, 10); end.y = snap(mm.y, 10);
+        }
+        break;
+      }
       case 'envResize': {
         const en = f.envSensors.find(x => x.id === drag.id);
         if (en && !en.locked) {
@@ -1306,6 +1357,8 @@ export function onCanvasMouseMove(p: Planner, canvas: HTMLCanvasElement, view: V
   if (p.tool === 'select') {
     const bgc = hitBgCorner(p, view, mm);
     if (bgc) canvas.style.cursor = (bgc.sx * bgc.sy > 0) ? 'nwse-resize' : 'nesw-resize';
+    else if (p.pickingDimWalls) canvas.style.cursor = hitWall(p, mm) ? 'pointer' : 'crosshair';
+    else if (dimsInteractive(p) && hitRulerEnd(p, view, mm)) canvas.style.cursor = 'grab';
     else if (hitMotionRotateHandle(p, view, mm)) canvas.style.cursor = 'grab';
     else if (hitEnvResizeHandle(p, view, mm)) canvas.style.cursor = 'ew-resize';
     else if (hitEnvSensor(p, view, mm)) canvas.style.cursor = 'grab';
@@ -1382,6 +1435,11 @@ export function onCanvasMouseUp(p: Planner, canvas: HTMLCanvasElement): void {
       ic.x = snap(ic.x, 10); ic.y = snap(ic.y, 10);
       snapInfoCardToWall(ic, f.walls);   // wall mount → flush on release (no-op for surface/floor)
     }
+    p.save();
+  } else if (drag.kind === 'rulerEnd') {
+    const r = (f.rulers ?? []).find(x => x.id === drag.rulerId);
+    const end = r ? r[drag.end] : null;
+    if (end && end.kind === 'point') { end.x = snap(end.x, 10); end.y = snap(end.y, 10); }
     p.save();
   } else if (drag.kind === 'ble') {
     const bp = (f.bleProxies ?? []).find(x => x.id === drag.id);
@@ -2245,6 +2303,15 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
     p.emitConfig();
     return;
   }
+  if (p.tool === 'ruler') {
+    // Two-click placement latch. Each click resolves to a wall / furniture
+    // anchor or a free point (rulerEndAt). First click sets end A; second click
+    // sets B + creates the ruler, staying armed for the next ruler.
+    const end = rulerEndAt(p, mm);
+    if (!p.drawingRuler) { p.drawingRuler = { a: end }; p.emitConfig(); }
+    else { p.addRuler(p.drawingRuler.a, end); p.drawingRuler = null; }
+    return;
+  }
   if (p.tool === 'wall') {
     // First vertex: free placement. Subsequent vertices snap to a 15°
     // increment from the previous vertex via snapVertex15 (preserves cursor
@@ -2469,6 +2536,17 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
         f.presenceZones = (f.presenceZones ?? []).filter(x => x.id !== pzHit.id);
         if (p.activePZoneId === pzHit.id) p.activePZoneId = null;
         p.save(); p.emitConfig(); return;
+      }
+    }
+    // Ruler — delete via its endpoint handle or its body (thin overlay, so it
+    // wins early). Only while the dimensions layer is on.
+    if (dimsInteractive(p)) {
+      const reHit = hitRulerEnd(p, view, mm);
+      const rbHit = reHit ? reHit.ruler : hitRulerBody(p, view, mm);
+      if (rbHit) {
+        if (rbHit.locked) return;
+        p.deleteRuler(rbHit.id);
+        return;
       }
     }
     const sh = hitSensor(p, view, mm);

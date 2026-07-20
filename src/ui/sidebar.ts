@@ -4,7 +4,7 @@ import { customElement } from './define.js';
 import { startZoneEdit } from '../canvas-interact.js';
 import type { Planner, Tool } from '../planner.js';
 import { NEW_ROOM, NEW_LANDMARK } from '../planner.js';
-import { compass8, parseLatLon } from '../geo.js';
+import { compass8, parseLatLon, fmtDistanceM, fmtAccuracyM } from '../geo.js';
 import type {
   Sensor, Zone, ObjectHalo, BgImage, MotionSensor, EnvSensor, EnvKind, Light, SwitchFixture, LightIconKind,
   Furniture, FurnitureKind, Door, Window as WindowType, WindowKind, WindowCurtainStyle, Layers2D, Floor, Room,
@@ -42,7 +42,8 @@ import {
 } from '../geometry.js';
 import { solveHomography, homographyResidualsMm } from '../homography.js';
 import { CLOCK_PRESETS, DATE_PRESETS, type ValueRule, type RuleOp } from '../value-rules.js';
-import type { Vec2, InfoCard, InfoCardMount, InfoCardDisplayMode, ActionButton, ActionKind } from '../types.js';
+import type { Vec2, InfoCard, InfoCardMount, InfoCardDisplayMode, ActionButton, ActionKind, Ruler, DimensionMode } from '../types.js';
+import { resolveRulerEnds } from '../geometry.js';
 
 // Compact relative-age label for a GPS fix timestamp (ms epoch).
 function gpsAgeText(ts: number): string {
@@ -125,6 +126,7 @@ const TOOLS: { id: Tool; label: string }[] = [
   { id: 'path', label: '〰 Path / drive' },
   { id: 'pool', label: '🏊 Pool / spa' },
   { id: 'void', label: '🕳 Floor void' },
+  { id: 'ruler', label: '📏 Ruler' },
   { id: 'furniture', label: 'Furn' },
   { id: 'light', label: 'Light' },
   { id: 'switch', label: 'Switch' },
@@ -427,6 +429,8 @@ export class Sidebar extends LitElement {
         ${this._furnitureSection()}
         ${this._customObjectsSection()}
         ${this._roomsSection()}
+        ${this._rulersSection()}
+        ${this._dimensionsSection()}
         ${this._fixturesSection()}
         ${this._layers2dSection()}
         ${this._geoSection()}
@@ -571,6 +575,7 @@ export class Sidebar extends LitElement {
       case 'path': return 'Click to add centerline points; double-click (or Enter) to finish (2+ pts). Builds a constant-width path/driveway ribbon (kind defaults to concrete). Edit the width + drag the centerline handles afterward; "Detach shape" converts it to a plain polygon. ESC cancels.';
       case 'pool': return 'Click to add polygon vertices; double-click (or Enter) to finish (3–20 pts). Drops a pool/spa water body — a sunken basin with bindable heater/pump/light/chemistry. Avatars path around it. ESC cancels.';
       case 'void': return 'Click to add polygon vertices; double-click (or Enter) to finish (3–12 pts). Cuts a hole in the floor (stairwell / atrium) — avatars route around it unless a stair bridges it. ESC cancels.';
+      case 'ruler': return 'Click two points to measure the distance. Click a wall or furniture piece to anchor an end to it — the ruler stays locked to it as it moves. Point ends drag; enter an exact length in the Rulers panel. ESC cancels a half-placed ruler.';
       case 'furniture': return 'Click to drop a 600 × 600 mm piece.';
       case 'light': return 'Click to drop a light. Bind via the active panel.';
       case 'switch': return 'Click to drop a switch. Bind via the active panel.';
@@ -3542,12 +3547,13 @@ export class Sidebar extends LitElement {
     if (!fix) return nothing;
     if (!fix.found) return dim(`GPS: entity not found (${fix.entityId})`);
     if (fix.lat == null || fix.lon == null) return dim(`GPS: no location from ${fix.entityId}`);
-    const accTxt = fix.accuracyM != null ? ` · ±${Math.round(fix.accuracyM)}m` : '';
+    const imperial = this.planner.store.imperial;
+    const accTxt = fix.accuracyM != null ? ` · ${fmtAccuracyM(fix.accuracyM, imperial)}` : '';
     const pin = this.planner.gpsPins.find(g => g.personId === pe.id);
     if (pin) {
       const where = pin.zone === 'indoor'
-        ? `indoors ~±${Math.round(pin.accuracyMm / 1000)} m`
-        : `${Math.round(pin.distanceM)} m ${compass8(pin.bearingDeg)}`;
+        ? `indoors ~${fmtAccuracyM(pin.accuracyMm / 1000, imperial)}`
+        : `${fmtDistanceM(pin.distanceM, imperial)} ${compass8(pin.bearingDeg)}`;
       // Append accuracy only when the "where" text doesn't already carry it (indoor does),
       // and the age (previously stale-only; now always so a fresh fix reads its age too).
       const acc = pin.zone === 'indoor' ? '' : accTxt;
@@ -3903,6 +3909,111 @@ export class Sidebar extends LitElement {
         },
       },
     }));
+  }
+
+  // ── Rulers (measure tool) ─────────────────────────────────────────────
+  private _rulerEndCaption(end: Ruler['a']): string {
+    const p = this.planner;
+    const f = p.floor();
+    if (end.kind === 'point') return 'point';
+    if (end.kind === 'wall') {
+      const idx = f.walls.findIndex(w => w.id === end.wallId);
+      return idx < 0 ? 'wall (deleted)' : `wall ${idx + 1}`;
+    }
+    const it = f.furniture.find(x => x.id === end.furnitureId);
+    return it ? `${it.label || furnitureKind(it)}` : 'furniture (deleted)';
+  }
+
+  private _rulersSection() {
+    const p = this.planner;
+    const f = p.floor();
+    const list = f.rulers ?? [];
+    const drawing = !!p.drawingRuler;
+    return this._section('rulers', 'Rulers', () => html`
+      ${drawing ? html`
+        <div style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text-dim);padding:4px 0">
+          <span style="flex:1">📏 Click a second point (or a wall / furniture piece) to finish.</span>
+          <button class="btn" style="font-size:10px;padding:2px 6px"
+                  @click=${() => { p.drawingRuler = null; p.emitConfig(); }}>Cancel</button>
+        </div>` : nothing}
+      ${list.length === 0 && !drawing
+        ? html`<div style="color:var(--text-dim);font-size:11px;padding:4px 0">
+            No rulers yet — pick the Ruler tool and click two points (or objects) to measure.
+          </div>`
+        : nothing}
+      ${list.map((r, i) => this._rulerItem(r, i))}
+      <button class="btn" style="width:100%;margin-top:6px"
+              @click=${() => { p.setActiveRuler(null); p.drawingRuler = null; p.setTool('ruler'); p.maybeCloseSidebarForPlacement(); }}>
+        + Add ruler
+      </button>
+    `);
+  }
+
+  private _rulerItem(r: Ruler, i: number) {
+    const p = this.planner;
+    const f = p.floor();
+    const sel = p.activeRulerId === r.id;
+    const res = resolveRulerEnds(r, f);
+    const dist = res ? fmtLen(res.mm, p.store.imperial) : '— (broken)';
+    const bIsPoint = r.b.kind === 'point';
+    return html`
+      <div style="border-bottom:1px solid var(--border)">
+        <div class="sensor-item ${sel ? 'sel' : ''}" @click=${() => p.setActiveRuler(r.id)}>
+          <div class="dot" style="background:#ffb74d"></div>
+          <div class="nm">📏 Ruler ${i + 1}</div>
+          <div class="badge">${dist}</div>
+        </div>
+        ${sel ? html`
+          <div style="background:rgba(0,0,0,0.25);border-radius:4px;padding:6px;margin:4px 0">
+            <div style="font-size:10px;color:var(--text-dim);margin-bottom:4px">
+              ${this._rulerEndCaption(r.a)} ↔ ${this._rulerEndCaption(r.b)}
+            </div>
+            ${bIsPoint ? html`
+              <div class="row"><label>Length</label>
+                <input type="number" min="0" step="10" .value=${res ? String(Math.round(res.mm)) : ''}
+                       title="Enter a length in mm — end B moves along the current bearing"
+                       @change=${(e: Event) => {
+                         const v = parseFloat((e.target as HTMLInputElement).value);
+                         if (isFinite(v)) p.setRulerLength(r.id, v);
+                       }}>
+                <span style="font-size:10px;color:var(--text-dim);margin-left:4px">mm</span>
+              </div>`
+              : html`<div style="font-size:10px;color:var(--text-dim);margin:2px 0">End B is anchored to an object — length is not editable.</div>`}
+            ${this._lockRow(r)}
+            <button class="btn danger" style="width:100%;margin-top:6px"
+                    @click=${() => p.deleteRuler(r.id)}>Delete ruler</button>
+          </div>` : nothing}
+      </div>
+    `;
+  }
+
+  // ── Wall / structure dimensions (Feature B) ───────────────────────────
+  private _dimensionsSection() {
+    const p = this.planner;
+    const f = p.floor();
+    const mode: DimensionMode = f.dimensionMode ?? 'off';
+    const customCount = f.walls.filter(w => w.dimension).length;
+    return this._section('dimensions', 'Dimensions', () => html`
+      <div class="row"><label>Show</label>
+        <select .value=${mode} @change=${(e: Event) =>
+                  p.setDimensionMode((e.target as HTMLSelectElement).value as DimensionMode)}>
+          <option value="off">Off</option>
+          <option value="all">All walls</option>
+          <option value="outside">Outside only</option>
+          <option value="custom">Custom selection</option>
+        </select>
+      </div>
+      ${mode === 'custom' ? html`
+        <button class="btn ${p.pickingDimWalls ? 'primary' : ''}" style="width:100%;margin-top:6px"
+                @click=${() => { p.setPickingDimWalls(!p.pickingDimWalls); if (p.pickingDimWalls) p.maybeCloseSidebarForPlacement(); }}>
+          ${p.pickingDimWalls ? '✓ Picking walls — click walls to toggle (ESC to stop)' : 'Pick walls'}
+        </button>
+        <div style="font-size:10px;color:var(--text-dim);margin-top:4px">${customCount} wall${customCount === 1 ? '' : 's'} selected</div>
+      ` : nothing}
+      <div style="font-size:10px;color:var(--text-dim);margin-top:6px">
+        Dimension lines + total structure extents (all / outside) ride the "Dimensions" 2D layer.
+      </div>
+    `);
   }
 
   private _doorsSection() {
@@ -5968,6 +6079,7 @@ export class Sidebar extends LitElement {
       { key: 'weatherFx', label: 'Weather effects (3D)' },
       { key: 'nameLabels', label: 'Name labels' },
       { key: 'battery', label: 'Battery warnings' },
+      { key: 'dimensions', label: 'Dimensions' },
       { key: 'activity', label: 'Activity glow' },
     ];
     // Display order only: alphabetical by label (locale compare). The preset
@@ -6178,7 +6290,7 @@ export class Sidebar extends LitElement {
       ? 'uncalibrated'
       : manual
         ? `manual${dateStr}`
-        : `${lm.accuracy != null ? `±${Math.round(lm.accuracy)} m` : 'calibrated'}`
+        : `${lm.accuracy != null ? fmtAccuracyM(lm.accuracy, p.store.imperial) : 'calibrated'}`
           + ` · ${lm.sampleCount} samples${dateStr}`;
     const cardOpen = this._calibLandmarkId === lm.id;
     const manualOpen = this._manualLandmarkId === lm.id;
@@ -6199,6 +6311,10 @@ export class Sidebar extends LitElement {
         <div style="font-size:10px;color:${calibrated ? 'var(--text-dim)' : '#ffb74d'};padding:0 0 3px 20px">
           ${status}
         </div>
+        ${calibrated ? html`
+          <div style="font-family:monospace;font-size:10px;color:var(--text-dim);padding:0 0 3px 20px">
+            ${lm.lat!.toFixed(6)}, ${lm.lon!.toFixed(6)}
+          </div>` : nothing}
         <div style="padding:0 0 4px 20px;display:flex;gap:4px;flex-wrap:wrap;align-items:center">
           <button class="btn" style="font-size:10px;padding:2px 8px"
                   @click=${() => {
@@ -6417,8 +6533,8 @@ export class Sidebar extends LitElement {
         <div style="font-size:11px;color:var(--text-dim);margin-bottom:3px">GPS pins</div>
         ${pins.map(pin => {
           const where = pin.zone === 'indoor'
-            ? `indoors ~±${Math.round(pin.accuracyMm / 1000)} m`
-            : `${Math.round(pin.distanceM)} m ${compass8(pin.bearingDeg)}`;
+            ? `indoors ~${fmtAccuracyM(pin.accuracyMm / 1000, this.planner.store.imperial)}`
+            : `${fmtDistanceM(pin.distanceM, this.planner.store.imperial)} ${compass8(pin.bearingDeg)}`;
           return html`
             <div style="display:flex;align-items:center;gap:6px;font-size:11px;padding:2px 0">
               <span style="width:8px;height:8px;border-radius:50%;background:${pin.color};flex:none"></span>
@@ -6445,11 +6561,11 @@ export class Sidebar extends LitElement {
           ? '1 landmark + north bearing'
           : `${fit.landmarks.length} landmarks (Procrustes, scale locked at 1)`}</div>
         ${t.quality === 'full' ? html`
-          <div>RMS residual: ${(t.rmsMm / 1000).toFixed(2)} m</div>
+          <div>RMS residual: ${fmtDistanceM(t.rmsMm / 1000, this.planner.store.imperial)}</div>
           <div>Fitted scale: ${t.fittedScale.toFixed(3)}
             ${scaleWarn ? html`<span style="color:#ff8a80"> ⚠ far from 1.0 — a landmark may be bad</span>` : nothing}
           </div>
-          ${worst ? html`<div style="color:var(--text-dim)">Worst: ${worst.name} (±${(worst.res / 1000).toFixed(2)} m)</div>` : nothing}
+          ${worst ? html`<div style="color:var(--text-dim)">Worst: ${worst.name} (${fmtAccuracyM(worst.res / 1000, this.planner.store.imperial)})</div>` : nothing}
         ` : html`<div style="color:var(--text-dim)">Add a second calibrated landmark to solve rotation from data.</div>`}
       </div>
     `;

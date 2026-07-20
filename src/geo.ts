@@ -204,6 +204,40 @@ export function parseLatLon(text: string): { lat: number; lon: number } | null {
   return { lat, lon };
 }
 
+// ── Display formatters (imperial / metric) ─────────────────────────────────
+// Pure string formatters for the GPS/geo DISTANCE + ACCURACY readouts so they
+// honour the global `store.imperial` display setting. Input is always METRES
+// (the geo layer's native distance unit); the caller passes store.imperial.
+// Keep this file import-free — these must transpile standalone (esbuild
+// --format=esm, no bundle) for the geo-test harness.
+const M_PER_MILE = 1609.344;
+const M_PER_FOOT = 0.3048;
+
+// A distance in metres → a human label. The small/large unit boundary is the
+// same underlying distance (<1000 m) in both systems, so imperial reads ft below
+// it and mi above (e.g. 320 m → "1050 ft", 1609.344 m → "1.00 mi"). Metric:
+// "<1000 m" → "N m" (rounded), else "N.N km". Imperial: "<1000 m" → "N ft"
+// (rounded), else "N.NN mi".
+export function fmtDistanceM(meters: number, imperial?: boolean): string {
+  if (!isFinite(meters)) meters = 0;
+  const m = Math.max(0, meters);
+  if (imperial) {
+    if (m < 1000) return `${Math.round(m / M_PER_FOOT)} ft`;
+    return `${(m / M_PER_MILE).toFixed(2)} mi`;
+  }
+  if (m < 1000) return `${Math.round(m)} m`;
+  return `${(m / 1000).toFixed(1)} km`;
+}
+
+// A GPS accuracy radius in metres → "±N m" / "±N ft" (rounded — GPS accuracy is
+// coarse, so no decimals; ft rounds like m).
+export function fmtAccuracyM(meters: number, imperial?: boolean): string {
+  if (!isFinite(meters)) meters = 0;
+  const m = Math.max(0, meters);
+  if (imperial) return `±${Math.round(m / M_PER_FOOT)} ft`;
+  return `±${Math.round(m)} m`;
+}
+
 export interface LatLonSample { lat: number; lon: number; accuracy?: number; }
 export interface MedianLatLon { lat: number; lon: number; count: number; accuracy: number | null; }
 

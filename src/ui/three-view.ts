@@ -7,7 +7,7 @@ import { customElement } from './define.js';
 import type { ThreeDRenderer, ZoneWorld, HaloWorld, TargetWorld, ActivityContext,
   InteractiveItem, GpsPinWorld, GpsLandmarkWorld, GeoEventWorld, WeatherFxState, VacMapEntry } from '../three-renderer.js';
 import { localToWorld, transformVerts, pointInPolygon, sensorColor, hexToInt, motionColor, lightIconKind, furnitureKind, resolveFurnitureDef, furnitureCat, isBinKind, isSpeakerKind, isSinkKind, isVehicleKind, isClimateApplianceKind, isBladedFanKind, isStairsKind, alarmStateColor, valveOpenness, sprinklerRunning, sprinklerHeadKind, sprinklerArcDeg, sprinklerRadius, sprinklerRotation, flagpoleHoistFraction, doorSpanCenter, isDroopPlant, plantThirsty, PLANT_MOISTURE_DEFAULT_THRESHOLD } from '../geometry.js';
-import { compass8 } from '../geo.js';
+import { compass8, fmtDistanceM } from '../geo.js';
 import { resolveNorth, markerScaleOf } from '../compass.js';
 import { parseNowPlaying, isMediaPlayerId } from '../geometry.js';
 import { robotProgress } from '../geometry.js';
@@ -1311,7 +1311,7 @@ export class ThreeView extends LitElement {
         const pinsW: GpsPinWorld[] = gpsPins.map(pn => ({
           x: pn.clampedX, y: pn.clampedY, color: pn.color, stale: pn.stale,
           label: pn.zone === 'beyond'
-            ? `${pn.isPet ? '🐾' : '📍'} ${pn.name} · ${Math.round(pn.distanceM)} m ${compass8(pn.bearingDeg)}`
+            ? `${pn.isPet ? '🐾' : '📍'} ${pn.name} · ${fmtDistanceM(pn.distanceM, p.store.imperial)} ${compass8(pn.bearingDeg)}`
             : `${pn.isPet ? '🐾' : '📍'} ${pn.name}`,
         }));
         const lmW: GpsLandmarkWorld[] = gpsLandmarks.map(l => ({ x: l.x, y: l.y, name: l.name || 'Landmark' }));

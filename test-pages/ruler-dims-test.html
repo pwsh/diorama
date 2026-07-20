@@ -1,0 +1,302 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>RULERDIMS …</title>
+<style>
+  body { margin:0; background:#0d1116; color:#cfd8dc; font:13px/1.5 sans-serif; padding:14px; }
+  h1 { font-size:15px; margin:0 0 10px; }
+  #summary { font-size:14px; font-weight:bold; margin:10px 0; padding:8px 10px; border-radius:5px; }
+  .okbg { background:#12331f; color:#69f0ae; } .badbg { background:#3a1414; color:#ff8a80; }
+  .row { display:flex; justify-content:space-between; gap:10px; padding:2px 0; border-bottom:1px solid #1c2530; }
+  .pass { color:#69f0ae; } .fail { color:#ff5252; }
+  .name { color:#90caf9; } .extra { color:#ffd54f; font-size:11px; }
+  h2 { font-size:12px; color:#80cbc4; margin:14px 0 4px; }
+</style>
+<h1>Ruler (measure) + wall/structure dimensions — pure math + real Planner</h1>
+<div id="summary">Running…</div>
+<div id="rows"></div>
+
+<!-- Harness build (from the repo root; NEVER reuse stale bundles):
+       H=/tmp/diorama-harness-ruler
+       rm -rf "$H"; mkdir -p "$H"; cp -r dist/* "$H"/
+       cp test-pages/ruler-dims-test.html "$H"/
+       npx esbuild src/geometry.ts --bundle --format=esm --outfile="$H"/geometry.mod.js
+       T=$(mktemp -d); cp -r src/* "$T"/
+       cp test-pages/fake-avatar-store.ts "$T"/avatar-store.ts
+       npx esbuild "$T"/planner.ts --bundle --format=esm --outfile="$H"/planner.mod.js
+     Run headless (serve over http — Chrome blocks dynamic module imports on file://):
+       (cd "$H" && python3 -m http.server 8795 &)
+       google-chrome --headless=new --disable-gpu --use-angle=swiftshader \
+         --virtual-time-budget=30000 --dump-dom \
+         "http://localhost:8795/ruler-dims-test.html" | grep -o "<title>[^<]*"  -->
+<script type="module">
+  const V = '?v=' + Date.now();
+  const G = await import('./geometry.mod.js' + V);
+  const { segSegDistance, polylineClosestPair, wallClearance, furnitureClearance,
+          resolveRulerEnds, rulerSetLength, outerWallSegments, wallDimSide,
+          structureExtents, closedWallLoops } = G;
+  const { Planner } = await import('./planner.mod.js' + V);
+
+  const results = [];
+  const ok = (name, cond, extra = '') => results.push({ name, pass: !!cond, extra: String(extra) });
+  const near = (a, b, tol = 1e-6) => Math.abs(a - b) <= tol;
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  async function waitFor(cond, tries = 600) {
+    for (let i = 0; i < tries; i++) { if (cond()) return true; await sleep(4); }
+    return !!cond();
+  }
+  const P = (x, y) => ({ x, y });
+
+  // ── Fake HaApi over a Map (LocalApi seam) ──────────────────────────────────
+  class FakeHa {
+    constructor(seed) { this.map = new Map(); for (const [k, v] of Object.entries(seed || {})) this.map.set(k, JSON.parse(JSON.stringify(v))); this.states = {}; this._s = []; this._c = []; }
+    connect() { for (const cb of this._c) cb('connected'); for (const cb of this._s) cb(this.states, undefined); }
+    onState(fn) { this._s.push(fn); } onConn(fn) { this._c.push(fn); }
+    callService() { return Promise.resolve(); }
+    async getHistory() { return {}; } async getWeatherForecasts() { return null; }
+    async getDevices() { return []; } async getEntityRegistry() { return []; } async updateEntityRegistry() { return true; }
+    async getUserData(k) { return this.map.has(k) ? JSON.parse(JSON.stringify(this.map.get(k))) : null; }
+    async setUserData(k, v) { this.map.set(k, JSON.parse(JSON.stringify(v))); return true; }
+    async refreshStates() {} async subscribeMqtt() { return () => {}; } async publishMqtt() {}
+  }
+  async function mkPlanner(floors, extra = {}) {
+    localStorage.removeItem('diorama:store:v1'); localStorage.removeItem('diorama:configs');
+    const seed = Object.assign({ v: 2, floors, currentFloorId: floors[0].id, activeSensorId: null,
+      coverage: true, imperial: false, showDetails: false, useRawTargets: false }, extra);
+    const p = new Planner(); p.connectWith(new FakeHa({ diorama: seed }));
+    await waitFor(() => p.configIndex !== null);
+    return p;
+  }
+  const baseFloor = (over = {}) => Object.assign({ id: 'f1', name: 'Home', w: 12000, d: 12000,
+    walls: [], furniture: [], lights: [], switches: [], sensors: [], motionSensors: [],
+    envSensors: [], bleProxies: [], doors: [], windows: [], rooms: [], bg: null }, over);
+  const litFloor = (over = {}) => Object.assign({ walls: [], furniture: [] }, over);   // plain object for pure fns
+
+  try {
+    // ═══ 1. segSegDistance + polylineClosestPair matrix ═══
+    document.getElementById('rows').insertAdjacentHTML('beforeend', '<h2>1. closest pair / segSeg</h2>');
+    ok('1a parallel segs → gap', near(segSegDistance(P(0,0),P(100,0),P(0,50),P(100,50)), 50), segSegDistance(P(0,0),P(100,0),P(0,50),P(100,50)));
+    ok('1b crossing segs → 0', near(segSegDistance(P(0,0),P(100,100),P(0,100),P(100,0)), 0), segSegDistance(P(0,0),P(100,100),P(0,100),P(100,0)));
+    ok('1c collinear overlap → 0', near(segSegDistance(P(0,0),P(100,0),P(50,0),P(150,0)), 0), '');
+    ok('1d collinear disjoint → gap', near(segSegDistance(P(0,0),P(100,0),P(200,0),P(300,0)), 100), '');
+    ok('1e point-vs-seg (on line) → 0', near(segSegDistance(P(0,0),P(0,0),P(0,0),P(100,0)), 0), '');
+    ok('1f point-vs-seg (off) → perp dist', near(segSegDistance(P(50,50),P(50,50),P(0,0),P(100,0)), 50), '');
+    {
+      const cp = polylineClosestPair([P(0,0),P(100,0),P(100,100)], [P(300,0),P(300,100)]);
+      ok('1g polylineClosestPair L-shapes → 200', near(cp.mm, 200), cp.mm);
+      ok('1h polylineClosestPair closest ax on A', near(cp.ax, 100), `${cp.ax},${cp.ay}`);
+    }
+
+    // ═══ 2. wallClearance ═══
+    document.getElementById('rows').insertAdjacentHTML('beforeend', '<h2>2. wallClearance</h2>');
+    {
+      const wa = { points: [P(0,0), P(4000,0)] };
+      const wb = { points: [P(0,3000), P(4000,3000)] };
+      const c = wallClearance(wa, wb);
+      ok('2a two parallel walls 3000 apart → 2900 inside', near(c.mm, 2900), c.mm);
+      ok('2b face point A pulled to +50', near(c.ay, 50), c.ay);
+      ok('2c face point B pulled to 2950', near(c.by, 2950), c.by);
+      // Overlapping (within wall thickness) → clamp ≥ 0
+      const c2 = wallClearance({ points: [P(0,0), P(4000,0)] }, { points: [P(0,80), P(4000,80)] });
+      ok('2d walls within thickness → mm 0 (clamped)', c2.mm === 0, c2.mm);
+    }
+
+    // ═══ 3. furnitureClearance ═══
+    document.getElementById('rows').insertAdjacentHTML('beforeend', '<h2>3. furnitureClearance</h2>');
+    {
+      const a = { x: 0, y: 0, w: 100, h: 100, rotation: 0 };
+      const b = { x: 300, y: 0, w: 100, h: 100, rotation: 0 };
+      ok('3a axis rects 200 apart', near(furnitureClearance(a, b).mm, 200), furnitureClearance(a, b).mm);
+      const ov = furnitureClearance({ x: 0, y: 0, w: 100, h: 100, rotation: 0 }, { x: 50, y: 0, w: 100, h: 100, rotation: 0 });
+      ok('3b overlapping rects → 0', ov.mm === 0, ov.mm);
+      const rot = furnitureClearance({ x: 0, y: 0, w: 100, h: 100, rotation: 45 }, { x: 300, y: 0, w: 100, h: 100, rotation: 0 });
+      ok('3c rotated (45°) rect gap ≈ 179.3', near(rot.mm, 179.29, 0.5), rot.mm.toFixed(2));
+    }
+
+    // ═══ 4. resolveRulerEnds — every end-kind combo + broken ═══
+    document.getElementById('rows').insertAdjacentHTML('beforeend', '<h2>4. resolveRulerEnds</h2>');
+    {
+      const f = litFloor({
+        walls: [
+          { id: 'w-bottom', points: [P(0,0), P(4000,0)] },
+          { id: 'w-top', points: [P(0,3000), P(4000,3000)] },
+        ],
+        furniture: [
+          { id: 'fu1', x: 1000, y: 0, w: 200, h: 200, rotation: 0 },
+          { id: 'fu2', x: 1000, y: 1000, w: 200, h: 200, rotation: 0 },
+          { id: 'fu3', x: 2000, y: 0, w: 200, h: 200, rotation: 0 },
+        ],
+      });
+      const R = (a, b) => resolveRulerEnds({ id: 'r', a, b }, f);
+      ok('4a point↔point → plain dist', near(R({ kind:'point', x:0, y:0 }, { kind:'point', x:300, y:400 }).mm, 500), '');
+      const pw = R({ kind:'point', x:0, y:1500 }, { kind:'wall', wallId:'w-top' });
+      ok('4b point↔wall → dist to face (1450)', near(pw.mm, 1450), pw.mm);
+      ok('4b2 point↔wall foot on face (y=2950)', near(pw.by, 2950), pw.by);
+      const pf = R({ kind:'point', x:0, y:0 }, { kind:'furniture', furnitureId:'fu1' });
+      ok('4c point↔furniture → edge dist (900)', near(pf.mm, 900), pf.mm);
+      const ww = R({ kind:'wall', wallId:'w-bottom' }, { kind:'wall', wallId:'w-top' });
+      ok('4d wall↔wall → clearance (2900)', near(ww.mm, 2900), ww.mm);
+      const ff = R({ kind:'furniture', furnitureId:'fu1' }, { kind:'furniture', furnitureId:'fu3' });
+      ok('4e furniture↔furniture → gap (800)', near(ff.mm, 800), ff.mm);
+      const wf = R({ kind:'wall', wallId:'w-bottom' }, { kind:'furniture', furnitureId:'fu2' });
+      ok('4f wall↔furniture → face-to-edge (850)', near(wf.mm, 850), wf.mm);
+      ok('4g dangling wallId → null', R({ kind:'point', x:0, y:0 }, { kind:'wall', wallId:'nope' }) === null, '');
+      ok('4h dangling furnitureId → null', R({ kind:'furniture', furnitureId:'gone' }, { kind:'point', x:0, y:0 }) === null, '');
+    }
+
+    // ═══ 5. rulerSetLength ═══
+    document.getElementById('rows').insertAdjacentHTML('beforeend', '<h2>5. rulerSetLength</h2>');
+    {
+      const f = litFloor({ walls: [{ id: 'w1', points: [P(0,3000), P(4000,3000)] }] });
+      const r = { id: 'r', a: { kind:'point', x:0, y:0 }, b: { kind:'point', x:300, y:0 } };
+      const nb = rulerSetLength(r, f, 1000);
+      ok('5a moves b along a→b bearing to length', nb && near(nb.x, 1000) && near(nb.y, 0), `${nb && nb.x},${nb && nb.y}`);
+      ok('5b mutates ruler.b to the new point', r.b.kind === 'point' && near(r.b.x, 1000), r.b.x);
+      // Refuse when b is object-anchored.
+      const r2 = { id: 'r2', a: { kind:'point', x:0, y:0 }, b: { kind:'wall', wallId:'w1' } };
+      const before = JSON.stringify(r2.b);
+      ok('5c refuses object-anchored b (null)', rulerSetLength(r2, f, 500) === null, '');
+      ok('5d object-anchored b unchanged', JSON.stringify(r2.b) === before, '');
+    }
+
+    // ═══ 6. outerWallSegments ═══
+    document.getElementById('rows').insertAdjacentHTML('beforeend', '<h2>6. outerWallSegments</h2>');
+    {
+      // Rectangle 4000×3000 split by an OFF-CENTER partition at x=1500 + a
+      // far-away standalone wall.
+      const walls = [
+        { id: 'b', points: [P(0,0), P(4000,0)] },
+        { id: 'r', points: [P(4000,0), P(4000,3000)] },
+        { id: 't', points: [P(4000,3000), P(0,3000)] },
+        { id: 'l', points: [P(0,3000), P(0,0)] },
+        { id: 'part', points: [P(1500,0), P(1500,3000)] },
+        { id: 'stand', points: [P(9000,9000), P(10000,9000)] },
+      ];
+      const segs = outerWallSegments(walls);
+      const ext = segs.filter(s => s.exterior);
+      const partExt = segs.filter(s => s.wallId === 'part' && s.exterior).length;
+      const standExt = segs.filter(s => s.wallId === 'stand' && s.exterior).length;
+      ok('6a 4 exterior segments', ext.filter(s => ['b','r','t','l'].includes(s.wallId)).length === 4, ext.length);
+      ok('6b partition NOT exterior', partExt === 0, partExt);
+      ok('6c standalone wall NOT exterior', standExt === 0, standExt);
+    }
+
+    // ═══ 7. wallDimSide points outward ═══
+    document.getElementById('rows').insertAdjacentHTML('beforeend', '<h2>7. wallDimSide</h2>');
+    {
+      const walls = [
+        { id: 'b', points: [P(0,0), P(4000,0)] },
+        { id: 'r', points: [P(4000,0), P(4000,3000)] },
+        { id: 't', points: [P(4000,3000), P(0,3000)] },
+        { id: 'l', points: [P(0,3000), P(0,0)] },
+      ];
+      const loops = closedWallLoops(walls);
+      ok('7pre one closed loop', loops.length === 1, loops.length);
+      const bot = wallDimSide({ a: P(0,0), b: P(4000,0) }, loops);
+      ok('7a bottom side outward (−y)', bot.y < 0, bot.y.toFixed(3));
+      const top = wallDimSide({ a: P(0,3000), b: P(4000,3000) }, loops);
+      ok('7b top side outward (+y)', top.y > 0, top.y.toFixed(3));
+      const left = wallDimSide({ a: P(0,0), b: P(0,3000) }, loops);
+      ok('7c left side outward (−x)', left.x < 0, left.x.toFixed(3));
+      const right = wallDimSide({ a: P(4000,0), b: P(4000,3000) }, loops);
+      ok('7d right side outward (+x)', right.x > 0, right.x.toFixed(3));
+    }
+
+    // ═══ 8. structureExtents ═══
+    document.getElementById('rows').insertAdjacentHTML('beforeend', '<h2>8. structureExtents</h2>');
+    {
+      const ext = structureExtents([{ id: 'a', points: [P(100,200), P(4000,200)] }, { id: 'b', points: [P(4000,200), P(4000,3300)] }]);
+      ok('8a bbox correct', ext && ext.minX===100 && ext.minY===200 && ext.maxX===4000 && ext.maxY===3300, JSON.stringify(ext));
+      ok('8b no walls → null', structureExtents([]) === null, '');
+    }
+
+    // ═══ 9. Planner integration ═══
+    document.getElementById('rows').insertAdjacentHTML('beforeend', '<h2>9. Planner</h2>');
+    {
+      // 9A. load round-trip through repairFloor preserves rulers / dimensionMode / wall.dimension
+      const seededFloor = baseFloor({
+        walls: [{ id: 'w1', points: [P(0,0), P(4000,0)], dimension: true }],
+        rulers: [{ id: 'rl1', a: { kind:'point', x:100, y:100 }, b: { kind:'point', x:400, y:500 } }],
+        dimensionMode: 'custom',
+      });
+      const p0 = await mkPlanner([seededFloor]);
+      const f0 = p0.floor();
+      ok('9A rulers survive load (repairFloor)', (f0.rulers ?? []).length === 1, (f0.rulers ?? []).length);
+      ok('9A dimensionMode survives load', f0.dimensionMode === 'custom', f0.dimensionMode);
+      ok('9A wall.dimension survives load', f0.walls[0].dimension === true, f0.walls[0].dimension);
+
+      // 9B. CRUD + setDimensionMode + toggleWallDimension + setRulerLength
+      const p = await mkPlanner([baseFloor({ walls: [{ id: 'w1', points: [P(0,0), P(4000,0)] }] })]);
+      const id = p.addRuler({ kind:'point', x:0, y:0 }, { kind:'point', x:300, y:0 });
+      ok('9B addRuler creates + activates', id && p.floor().rulers.length === 1 && p.activeRulerId === id, id);
+      p.setRulerLength(id, 1000);
+      ok('9B setRulerLength via Planner moves b', near(p.floor().rulers[0].b.x, 1000), p.floor().rulers[0].b.x);
+      p.setDimensionMode('all');
+      ok('9B setDimensionMode', p.floor().dimensionMode === 'all', p.floor().dimensionMode);
+      p.toggleWallDimension('w1');
+      ok('9B toggleWallDimension', p.floor().walls[0].dimension === true, p.floor().walls[0].dimension);
+
+      // 9C. pickingDimWalls toggle flow (custom mode arms; non-custom disarms)
+      p.setDimensionMode('custom');
+      p.setPickingDimWalls(true);
+      ok('9C picking armed', p.pickingDimWalls === true, '');
+      p.setDimensionMode('all');
+      ok('9C leaving custom disarms picking', p.pickingDimWalls === false, '');
+
+      // 9D. translate carries point ends + leaves object ends alone. Wall well
+      // away from the origin so the frame edit is a clean pure translate.
+      const p2 = await mkPlanner([baseFloor({ walls: [{ id: 'w1', points: [P(2000,5000), P(6000,5000)] }] })]);
+      p2.addRuler({ kind:'point', x:7000, y:4000 }, { kind:'wall', wallId:'w1' });
+      p2.translateFloorContent(100, 200);
+      ok('9D translate carries point end', near(p2.floor().rulers[0].a.x, 7100) && near(p2.floor().rulers[0].a.y, 4200), `${p2.floor().rulers[0].a.x},${p2.floor().rulers[0].a.y}`);
+      ok('9D translate leaves object end alone', p2.floor().rulers[0].b.kind === 'wall', '');
+      // rotate 90° about center (6000,6000) on a walls-free floor (no bbox
+      // re-margin): point (7100,4200) → (4200,4900).
+      const p2b = await mkPlanner([baseFloor()]);
+      p2b.addRuler({ kind:'point', x:7100, y:4200 }, { kind:'point', x:5000, y:5000 });
+      p2b.rotateFloorContent(90);
+      const ra = p2b.floor().rulers[0].a;
+      ok('9D rotate 90° point end exact', ra.x === 4200 && ra.y === 4900, `${ra.x},${ra.y}`);
+
+      // 9E. deleteSelection priority (ruler before furniture) + locked refusal
+      const p3 = await mkPlanner([baseFloor({ furniture: [{ id:'fu', x:1000, y:1000, w:200, h:200, kind:'block' }] })]);
+      const drid = p3.addRuler({ kind:'point', x:0, y:0 }, { kind:'point', x:300, y:0 });
+      p3.activeRulerId = drid; p3.activeFurnitureId = 'fu';
+      const del = p3.deleteSelection();
+      ok('9E deleteSelection removes ruler first', del === true && (p3.floor().rulers ?? []).length === 0 && p3.floor().furniture.length === 1, `${(p3.floor().rulers ?? []).length}/${p3.floor().furniture.length}`);
+      // locked ruler refuses
+      const p4 = await mkPlanner([baseFloor()]);
+      const lrid = p4.addRuler({ kind:'point', x:0, y:0 }, { kind:'point', x:300, y:0 });
+      p4.updateRuler(lrid, r => { r.locked = true; });
+      p4.activeRulerId = lrid;
+      const del2 = p4.deleteSelection();
+      ok('9E locked ruler refuses delete', del2 === false && (p4.floor().rulers ?? []).length === 1, del2);
+
+      // 9F. edit-mode gates (kiosk no-op)
+      const p5 = await mkPlanner([baseFloor({ walls: [{ id:'w1', points:[P(0,0),P(4000,0)] }] })]);
+      p5.setUiMode('kiosk');
+      const kid = p5.addRuler({ kind:'point', x:0, y:0 }, { kind:'point', x:300, y:0 });
+      ok('9F kiosk addRuler no-op', kid === null && (p5.floor().rulers ?? []).length === 0, `${kid}`);
+      p5.setDimensionMode('all');
+      ok('9F kiosk setDimensionMode no-op', p5.floor().dimensionMode == null, p5.floor().dimensionMode);
+      p5.toggleWallDimension('w1');
+      ok('9F kiosk toggleWallDimension no-op', !p5.floor().walls[0].dimension, '');
+    }
+  } catch (err) {
+    ok('unhandled error', false, (err && (err.stack || err.message)) || String(err));
+  }
+
+  const passN = results.filter(r => r.pass).length;
+  const failN = results.length - passN;
+  const rows = document.getElementById('rows');
+  for (const r of results) {
+    rows.insertAdjacentHTML('beforeend',
+      `<div class="row"><span class="name">${r.name}</span>` +
+      `<span class="${r.pass ? 'pass' : 'fail'}">${r.pass ? 'PASS' : 'FAIL'}` +
+      `${r.extra ? ` <span class="extra">${r.extra}</span>` : ''}</span></div>`);
+  }
+  const sum = document.getElementById('summary');
+  sum.textContent = `RULERDIMS ${failN === 0 ? 'PASS' : 'FAIL'} ${passN}/${results.length}`;
+  sum.className = failN === 0 ? 'okbg' : 'badbg';
+  document.title = `RULERDIMS ${failN === 0 ? 'PASS' : 'FAIL'} ${passN}/${results.length}` +
+    (failN ? ' | ' + results.filter(r => !r.pass).map(r => r.name).join(' · ') : '');
+</script>

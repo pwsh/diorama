@@ -9,7 +9,7 @@ import { slugToName, normMac, localToWorld, segCrossesSolidWall, mowerSweepWaypo
          furnitureKind, normalizeLockState, valveIsOpen, cameraColor, slugifyFrigateName,
          closedWallLoops, envKindOf, tempToCelsius, aggregateRoomTemps,
          bufferPolyline, PATH_DEFAULT_WIDTH, poolHeaterState, poolPumpOn,
-         rotPointDeg, floorContentBbox, GRID_MM,
+         rotPointDeg, floorContentBbox, GRID_MM, rulerSetLength,
          type LockGlyphState, type RoomTemp, type TempSample } from './geometry.js';
 import { solveHomography, applyHomography } from './homography.js';
 import { stepFusion, newFusionState, DEFAULT_FUSION_CFG,
@@ -17,6 +17,7 @@ import { stepFusion, newFusionState, DEFAULT_FUSION_CFG,
 import { buildAlertFeed, alertCenterEnabled, isAlertDomain,
          type PanelAlert, type HaNotification, type RepairIssue } from './alerts.js';
 import { fitGeoTransform, latLonToPlan, clampToBoundary, planBearingDeg, compass8, medianLatLon,
+         fmtDistanceM, fmtAccuracyM,
          type GeoTransform, type GeoPair, type LatLonSample } from './geo.js';
 import type { GeoConfig, GeoLandmark, DioramaPerson, RobotFixture, ActionButton, Light, ValveFixture, BgTextEntry, BgTextEntryMode } from './types.js';
 import { formatEntityValue } from './value-rules.js';
@@ -50,7 +51,7 @@ import type {
   Store, Floor, Sensor, ZonesLive, ObjectHalo, LerpSlot,
   HassState, ConnStatus, DiscoveredDevice, Vec2, AvatarKind, WeatherConfig, CameraFixture,
   ConfigIndex, ConfigMeta, ThermostatFixture, SafetySensor, AlertBeacon, Furniture, MqttBridgeConfig,
-  AlertsConfig, GroundArea, Pool, CompassConfig,
+  AlertsConfig, GroundArea, Pool, CompassConfig, Ruler, RulerEnd, DimensionMode,
 } from './types.js';
 
 // Full export envelope (Batch B). `store` is the WHOLE Store serialized (no
@@ -241,6 +242,7 @@ export type Drag =
   | { kind: 'pathVert'; id: string; idx: number; startMm: Vec2; startPts: Vec2[] }
   | { kind: 'poolVert'; id: string; idx: number; startMm: Vec2; startPts: Vec2[] }
   | { kind: 'voidVert'; id: string; idx: number; startMm: Vec2; startPts: Vec2[] }
+  | { kind: 'rulerEnd'; rulerId: string; end: 'a' | 'b' }
   | { kind: 'env'; id: string; startMm: Vec2; start: Vec2 }
   | { kind: 'envResize'; id: string; startDist: number; startScale: number }
   | { kind: 'doorMove'; idx: number; startMm: Vec2; start: Vec2 }
@@ -266,7 +268,7 @@ export interface EditZone {
   mousePos: Vec2 | null;
 }
 
-export type Tool = 'select' | 'wall' | 'sensor' | 'motion' | 'env' | 'infocard' | 'action' | 'bleproxy' | 'alarm' | 'calendar' | 'thermostat' | 'safety' | 'alertbeacon' | 'robot' | 'camera' | 'projector' | 'valve' | 'sprinkler' | 'flagpole' | 'plug' | 'pzone' | 'ground' | 'path' | 'pool' | 'void' | 'furniture' | 'light' | 'switch' | 'door' | 'window' | 'delete';
+export type Tool = 'select' | 'wall' | 'sensor' | 'motion' | 'env' | 'infocard' | 'action' | 'bleproxy' | 'alarm' | 'calendar' | 'thermostat' | 'safety' | 'alertbeacon' | 'robot' | 'camera' | 'projector' | 'valve' | 'sprinkler' | 'flagpole' | 'plug' | 'pzone' | 'ground' | 'path' | 'pool' | 'void' | 'ruler' | 'furniture' | 'light' | 'switch' | 'door' | 'window' | 'delete';
 
 // Live robot state (runtime-only). `x/y/heading/phase/activity/led` are the
 // DISPLAY fields both canvases read; the rest are the movement controller's
@@ -466,6 +468,18 @@ export class Planner extends EventTarget {
   // polygon flow exactly (parallel field, same latch idiom).
   activeVoidAreaId: string | null = null;
   drawingVoidArea: { points: Vec2[]; id?: string } | null = null;
+
+  // Ruler (measure tool). `drawingRuler` is the half-placed latch: the first
+  // click (ruler tool) sets end `a`; the second click sets `b` + creates the
+  // ruler (staying armed for more). Cleared on tool switch / ESC / store load /
+  // uiMode change. `activeRulerId` is the selected ruler (Select mode).
+  activeRulerId: string | null = null;
+  drawingRuler: { a: RulerEnd } | null = null;
+
+  // Dimension-mode wall-pick latch (Feature B `custom` mode). While armed, a
+  // Select-mode press on a wall body TOGGLES Wall.dimension instead of
+  // selecting/dragging. Cleared on tool change / ESC / mode change / store load.
+  pickingDimWalls = false;
 
   // Live robot positions (runtime-only, advanced by stepRobots from the 2D RAF —
   // like stepLerp). BOTH the 2D canvas and the 3D renderer read this, so the
@@ -718,6 +732,7 @@ export class Planner extends EventTarget {
       this.drag = null; this.editZone = null; this.drawingWall = null;
       this.drawingPresenceZone = null; this.drawingGroundArea = null; this.drawingVoidArea = null;
       this.drawingPath = null; this.drawingPoolArea = null;
+      this.drawingRuler = null; this.pickingDimWalls = false;
       this.tool = 'select'; this.placingRoomId = null; this.placingLandmarkId = null;
       this.placingCamCalibId = null; this.pendingCamCalibUV = null;
       this.alignGuides = []; this.alignCandidates = [];
@@ -985,11 +1000,13 @@ export class Planner extends EventTarget {
     this.activeActionId = null; this.activePZoneId = null; this.activeGroundAreaId = null;
     this.activePoolId = null;
     this.activeVoidAreaId = null; this.activeFurnitureId = null; this.activePersonId = null;
+    this.activeRulerId = null;
     this.selectedVertex = null;
     this.drag = null; this.editZone = null;
     this.drawingWall = null; this.drawingPresenceZone = null;
     this.drawingGroundArea = null; this.drawingVoidArea = null;
     this.drawingPath = null; this.drawingPoolArea = null;
+    this.drawingRuler = null; this.pickingDimWalls = false;
   }
 
   // ── Delete the current selection ────────────────────────────────────────────
@@ -1020,6 +1037,11 @@ export class Planner extends EventTarget {
     ): Entry => ({ id, arr, remove, clear });
 
     const entries: Entry[] = [
+      // Ruler wins right after a vertex, before furniture — it's a thin overlay
+      // line, so let a selected ruler delete rather than the item beneath it.
+      E(this.activeRulerId, f.rulers,
+        id => { f.rulers = (f.rulers ?? []).filter(x => x.id !== id); },
+        () => { this.activeRulerId = null; }),
       E(this.activeFurnitureId, f.furniture,
         id => { f.furniture = f.furniture.filter(x => x.id !== id); },
         () => { this.activeFurnitureId = null; }),
@@ -1592,6 +1614,7 @@ export class Planner extends EventTarget {
       this.activeGroundAreaId = null;
       this.activePoolId = null;
       this.activeVoidAreaId = null;
+      this.activeRulerId = null;
       this.robotStates = {};
       this.activePersonId = null;
       this.selectedVertex = null;
@@ -1605,6 +1628,8 @@ export class Planner extends EventTarget {
       this.drawingVoidArea = null;
       this.drawingPath = null;
       this.drawingPoolArea = null;
+      this.drawingRuler = null;
+      this.pickingDimWalls = false;
       this.showDetails = this.store.showDetails === true;
       this.useRawTargets = this.store.useRawTargets === true;
       // Mirror to localStorage as the ACTIVE config body cache.
@@ -2587,6 +2612,8 @@ export class Planner extends EventTarget {
     if (t !== 'path') this.drawingPath = null;
     if (t !== 'pool') this.drawingPoolArea = null;
     if (t !== 'void') this.drawingVoidArea = null;
+    if (t !== 'ruler') this.drawingRuler = null;   // drop the half-placed ruler
+    this.pickingDimWalls = false;  // any tool pick disarms the dimension wall-pick latch
     this.placingRoomId = null;  // picking any tool cancels a pending room placement
     this.placingLandmarkId = null;
     this.placingCamCalibId = null; this.pendingCamCalibUV = null;
@@ -3081,6 +3108,81 @@ export class Planner extends EventTarget {
     this.emitConfig();
   }
 
+  // ── Rulers (measure tool) + wall/structure dimensions ─────────────────────
+  setActiveRuler(id: string | null): void {
+    this.activeRulerId = (this.activeRulerId === id) ? null : id;
+    this.emitConfig();
+  }
+
+  // Create a ruler from two resolved ends (called by the placement latch).
+  addRuler(a: RulerEnd, b: RulerEnd): string | null {
+    if (this.uiMode !== 'edit') return null;
+    const f = this.floor();
+    if (!f.rulers) f.rulers = [];
+    const id = newId('rl');
+    f.rulers.push({ id, a, b });
+    this.activeRulerId = id;
+    this.save();
+    this.emitConfig();
+    return id;
+  }
+
+  updateRuler(id: string, mut: (r: Ruler) => void): void {
+    if (this.uiMode !== 'edit') return;
+    const r = (this.floor().rulers ?? []).find(x => x.id === id);
+    if (!r) return;
+    mut(r);
+    this.save();
+    this.emitConfig();
+  }
+
+  deleteRuler(id: string): void {
+    if (this.uiMode !== 'edit') return;
+    const f = this.floor();
+    f.rulers = (f.rulers ?? []).filter(x => x.id !== id);
+    if (this.activeRulerId === id) this.activeRulerId = null;
+    this.save();
+    this.emitConfig();
+  }
+
+  // Move a ruler's end `b` to the given length (mm) along the current a→b
+  // bearing. No-ops when `b` is object-anchored (rulerSetLength returns null).
+  setRulerLength(id: string, mm: number): void {
+    if (this.uiMode !== 'edit') return;
+    const f = this.floor();
+    const r = (f.rulers ?? []).find(x => x.id === id);
+    if (!r) return;
+    if (!rulerSetLength(r, f, mm)) return;   // object-anchored b: refuse
+    this.save();
+    this.emitConfig();
+  }
+
+  // Set the wall/structure dimension display mode for the current floor.
+  setDimensionMode(mode: DimensionMode): void {
+    if (this.uiMode !== 'edit') return;
+    this.floor().dimensionMode = mode === 'off' ? undefined : mode;
+    // Leaving custom mode disarms the wall-pick latch.
+    if (mode !== 'custom') this.pickingDimWalls = false;
+    this.save();
+    this.emitConfig();
+  }
+
+  // Toggle a wall's custom dimension-selection flag (Feature B `custom` mode).
+  toggleWallDimension(wallId: string): void {
+    if (this.uiMode !== 'edit') return;
+    const w = this.floor().walls.find(x => x.id === wallId);
+    if (!w) return;
+    w.dimension = !w.dimension;
+    this.save();
+    this.emitConfig();
+  }
+
+  // Arm / disarm the custom-dimension wall-pick latch (parallel-latch idiom).
+  setPickingDimWalls(on: boolean): void {
+    this.pickingDimWalls = on;
+    this.emitConfig();
+  }
+
   // Set an unbound alarm keypad's local (demo) state and repaint. Bound panels
   // ignore this (effectiveState prefers the entity). save() no-ops outside edit,
   // so a kiosk demo flip is session-only.
@@ -3420,7 +3522,7 @@ export class Planner extends EventTarget {
         key: id, name, source, category,
         x: plan.x, y: plan.y, clampedX, clampedY, zone, bearingDeg,
         distanceKm, magnitude: mag,
-        label: `${magStr}${Math.round(distanceKm)} km ${compass8(bearingDeg)}`,
+        label: `${magStr}${fmtDistanceM(distanceKm * 1000, this.store.imperial)} ${compass8(bearingDeg)}`,
       });
     }
     out.sort((p, q) => p.distanceKm - q.distanceKm);
@@ -3602,7 +3704,7 @@ export class Planner extends EventTarget {
     });
     return {
       ok: true, count: m.count,
-      message: `Calibrated: ${tally}${m.accuracy != null ? ` · ±${Math.round(m.accuracy)} m` : ''}.`,
+      message: `Calibrated: ${tally}${m.accuracy != null ? ` · ${fmtAccuracyM(m.accuracy, this.store.imperial)}` : ''}.`,
     };
   }
 
@@ -5076,6 +5178,12 @@ export class Planner extends EventTarget {
     }
     for (const pl of f.pools ?? []) pl.points = pl.points.map(p => ({ x: p.x + dx, y: p.y + dy }));
     for (const vd of f.voidAreas ?? []) vd.points = vd.points.map(p => ({ x: p.x + dx, y: p.y + dy }));
+    // Rulers: translate free-point ends only (object-anchored ends track their
+    // item, which just moved by the same delta).
+    for (const rl of f.rulers ?? []) {
+      if (rl.a.kind === 'point') { rl.a.x += dx; rl.a.y += dy; }
+      if (rl.b.kind === 'point') { rl.b.x += dx; rl.b.y += dy; }
+    }
     for (const it of f.doors ?? []) { it.x += dx; it.y += dy; }
     for (const it of f.windows ?? []) { it.x += dx; it.y += dy; }
     for (const rm of f.rooms ?? []) { rm.anchor.x += dx; rm.anchor.y += dy; }
@@ -5169,6 +5277,11 @@ export class Planner extends EventTarget {
     }
     for (const pl of f.pools ?? []) pl.points = pl.points.map(p => rotPointDeg(p.x, p.y, cx, cy, phi));
     for (const vd of f.voidAreas ?? []) vd.points = vd.points.map(p => rotPointDeg(p.x, p.y, cx, cy, phi));
+    // Rulers: rotate free-point ends only (object ends track their item).
+    for (const rl of f.rulers ?? []) {
+      if (rl.a.kind === 'point') { const q = rotPointDeg(rl.a.x, rl.a.y, cx, cy, phi); rl.a.x = q.x; rl.a.y = q.y; }
+      if (rl.b.kind === 'point') { const q = rotPointDeg(rl.b.x, rl.b.y, cx, cy, phi); rl.b.x = q.x; rl.b.y = q.y; }
+    }
     for (const it of f.doors ?? []) { rot(it); it.rotation = norm((it.rotation ?? 0) + phi); }
     for (const it of f.windows ?? []) { rot(it); it.rotation = norm((it.rotation ?? 0) + phi); }
     for (const rm of f.rooms ?? []) { const p = rotPointDeg(rm.anchor.x, rm.anchor.y, cx, cy, phi); rm.anchor.x = p.x; rm.anchor.y = p.y; }
@@ -5239,6 +5352,9 @@ export class Planner extends EventTarget {
     this.drawingPoolArea = null;
     this.activeVoidAreaId = null;
     this.drawingVoidArea = null;
+    this.activeRulerId = null;
+    this.drawingRuler = null;
+    this.pickingDimWalls = false;
     this.robotStates = {};   // positions are per-floor; recomputed on the new floor
     this.activeFurnitureId = null;
     // Reset pan/zoom — viewCenter is in world mm and a different floor has

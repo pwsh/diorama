@@ -133,6 +133,29 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Ruler tool + wall/structure dimensions** (2026-07-19; 1 Opus
+  agent; 2D-only, `dimensions` layer). `Floor.rulers` with point /
+  wall / furniture ends — object ends re-resolve live (locked rulers
+  track moves); wall↔wall = INSIDE clear dimension (`wallClearance`,
+  faces not centerlines); 2-click latch, endpoint drags, sidebar
+  length input (point-b only), translate/rotate carry.
+  `Floor.dimensionMode` off/all/outside/custom (+`Wall.dimension`
+  pick-latch) draws CAD dim lines per segment + structure extents;
+  exterior = midpoint-on-exactly-one-loop. ruler-dims-test 55/55;
+  toolbar-test 41→42; plan-rotate regression 68/68.
+
+- **GPS distances follow imperial setting** (2026-07-19; 1 Opus agent,
+  parallel). Pure `fmtDistanceM`/`fmtAccuracyM` in geo.ts (ft <1000 m,
+  mi above — symmetric with the m/km branch); converted every GPS/geo
+  READOUT (2D+3D pins, event-pin labels planner-side, sidebar status/
+  preview/landmark accuracy/fit RMS, calibration toast); config inputs
+  stay metric. geo-test → 68/68.
+
+- **Landmark rows show coordinates** (2026-07-19; 1 Opus agent).
+  Dimmed monospace `lat, lon` (6 dp) line on every calibrated landmark
+  row — manual AND sampled — beside the existing status caption;
+  manual-entry sentinel semantics untouched.
+
 - **Plan rotation — set a new default top** (2026-07-19; 1 Opus agent).
   `Planner.rotateFloorContent(phiDeg)` + pure `rotPointDeg` (exact
   quarter turns): rotates every placeable/polygon/bg/model about the

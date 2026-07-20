@@ -29,7 +29,7 @@
   <script type="module">
     import {
       projectLatLon, fitGeoTransform, latLonToPlan, planToLatLon, medianLatLon,
-      parseLatLon,
+      parseLatLon, fmtDistanceM, fmtAccuracyM,
     } from './geo.mod.js';
 
     const tests = [];
@@ -205,6 +205,30 @@
       ok('parse lon <-180 → null', parseLatLon('0, -180.5') === null, `${parseLatLon('0, -180.5')}`);
       // Range extremes are inclusive.
       eq('parse range extremes', parseLatLon('-90, 180'), -90, 180);
+    })();
+
+    // ── fmtDistanceM / fmtAccuracyM (imperial/metric display) ────────────────
+    (() => {
+      const eqs = (name, got, want) => ok(name, got === want, `got "${got}" want "${want}"`);
+      // Metric distance.
+      eqs('dist metric 320 → 320 m', fmtDistanceM(320, false), '320 m');
+      eqs('dist metric 999 → 999 m', fmtDistanceM(999, false), '999 m');
+      eqs('dist metric 1500 → 1.5 km', fmtDistanceM(1500, false), '1.5 km');
+      eqs('dist metric 12000 → 12.0 km', fmtDistanceM(12000, false), '12.0 km');
+      eqs('dist metric round 320.4 → 320 m', fmtDistanceM(320.4, false), '320 m');
+      // Imperial distance (1 mi = 1609.344 m, 1 ft = 0.3048 m).
+      eqs('dist imperial 320 m → 1050 ft', fmtDistanceM(320, true), '1050 ft');
+      eqs('dist imperial 100 m → 328 ft', fmtDistanceM(100, true), '328 ft');
+      eqs('dist imperial 1609.344 → 1.00 mi', fmtDistanceM(1609.344, true), '1.00 mi');
+      eqs('dist imperial 5000 m → 3.11 mi', fmtDistanceM(5000, true), '3.11 mi');
+      // Accuracy.
+      eqs('acc metric 25 → ±25 m', fmtAccuracyM(25, false), '±25 m');
+      eqs('acc metric 74.6 → ±75 m', fmtAccuracyM(74.6, false), '±75 m');
+      eqs('acc imperial 30 m → ±98 ft', fmtAccuracyM(30, true), '±98 ft');
+      eqs('acc imperial 3 m → ±10 ft', fmtAccuracyM(3, true), '±10 ft');
+      // Defensive: non-finite / negative → 0.
+      eqs('dist NaN → 0 m', fmtDistanceM(NaN, false), '0 m');
+      eqs('acc negative → ±0 m', fmtAccuracyM(-5, false), '±0 m');
     })();
 
     // ── run + render ─────────────────────────────────────────────────────────

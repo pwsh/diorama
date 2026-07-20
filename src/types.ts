@@ -17,6 +17,7 @@ export interface Wall {
   points: Vec2[];
   kind?: WallKind;   // full (default 9 ft) | half pony wall | 3 ft banister | invisible
   locked?: boolean;  // canvas move/vertex-drag/delete disabled
+  dimension?: boolean; // custom dimension-mode selection flag (Feature B); item-level, no repairFloor
 }
 
 export type FurnitureKind =
@@ -620,6 +621,33 @@ export interface VoidArea {
   hidden?: boolean;            // per-void hide (plus the whole ground layer toggle)
 }
 
+// ── Ruler (measure tool) + wall/structure dimensions (2D-only v1) ──────────
+// A ruler measures the distance between two ENDS. Each end is either a free
+// world-mm point (draggable / length-editable) or an anchor LOCKED to a wall or
+// furniture piece (the measurement tracks the object even as it moves). Point↔
+// point = plain distance; an object end measures to that object's FACE (wall) /
+// footprint edge (furniture); object↔object measures the INSIDE clearance.
+// A dangling wallId/furnitureId (object deleted) resolves to null → the renderer
+// / sidebar show "broken", never throw. Per-floor (Floor.rulers); repairFloor +
+// defaultFloor backfill []. See geometry.ts resolveRulerEnds / rulerSetLength.
+export type RulerEnd =
+  | { kind: 'point'; x: number; y: number }
+  | { kind: 'wall'; wallId: string }
+  | { kind: 'furniture'; furnitureId: string };
+
+export interface Ruler {
+  id: string;
+  a: RulerEnd;
+  b: RulerEnd;
+  locked?: boolean;   // canvas endpoint-drag / delete disabled (sidebar still edits)
+}
+
+// Wall / structure dimension display mode (Feature B). Absent = 'off'.
+//   all      — every wall SEGMENT gets a CAD dimension line + total structure extents
+//   outside  — only exterior wall segments (outerWallSegments) + total extents
+//   custom   — only walls with Wall.dimension === true
+export type DimensionMode = 'off' | 'all' | 'outside' | 'custom';
+
 export type DoorKind = 'swing' | 'garage' | 'gate';
 
 export interface Door {
@@ -1036,6 +1064,8 @@ export interface Floor {
   voidAreas?: VoidArea[];  // floor voids / openings (holes cut from the slab); repairFloor backfills []
   infoCards?: InfoCard[];  // generic entity-value / clock plaques; repairFloor backfills []
   actionButtons?: ActionButton[];  // generic action / trigger buttons; repairFloor backfills []
+  rulers?: Ruler[];        // measure-tool rulers (2D-only); repairFloor + defaultFloor backfill []
+  dimensionMode?: DimensionMode;  // wall/structure dimension display (Feature B); absent = 'off'
   flagpoles?: FlagpoleFixture[];  // yard flagpole fixtures (waving flag); repairFloor backfills []
   boundsLocked?: boolean;   // lock canvas-layout/floor-size editing (hides the edge handles)
   disabled?: boolean;       // hidden from the kiosk/view floor picker + glass-house stack + BLE
@@ -1288,6 +1318,7 @@ export interface Layers2D {
   ground?: boolean;     // ground / yard covering polygons (2D fill + 3D patches); default on
   vacuumMap?: boolean;  // Valetudo robot room-map overlay (2D fill + 3D patches); default OFF (diagnostic)
   heatmap?: boolean;    // per-room temperature heat-map (2D fill + label, 3D patches); default OFF (opt-in analysis view)
+  dimensions?: boolean; // rulers + wall/structure dimension lines (2D); default ON
 }
 
 export interface Layer2DPreset {

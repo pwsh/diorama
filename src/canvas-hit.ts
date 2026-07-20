@@ -1,9 +1,9 @@
 import { switchSize, distMM, pointToSeg, transformVerts, centroid, localToWorld,
          bgLocalToWorld, bgWorldToLocal, furnitureWorldToLocal,
          furnitureCorners, furnitureLocalToWorld, doorEndpoint,
-         doorOpenDeltaDeg, windowEndpoints, pointInPolygon, SPRINKLER_DEFAULTS, FLAGPOLE_DEFAULTS } from './geometry.js';
+         doorOpenDeltaDeg, windowEndpoints, pointInPolygon, resolveRulerEnds, SPRINKLER_DEFAULTS, FLAGPOLE_DEFAULTS } from './geometry.js';
 import type { Planner } from './planner.js';
-import type { Vec2, Wall, Sensor, Furniture, BgImage, MotionSensor, EnvSensor, BleProxy, AlarmPanel, CalendarPanel, ThermostatFixture, SafetySensor, AlertBeacon, RobotFixture, CameraFixture, ProjectorFixture, ValveFixture, PlugFixture, SprinklerZone, FlagpoleFixture, PresenceZone, InfoCard, ActionButton, Door, Window as WindowType, Floor } from './types.js';
+import type { Vec2, Wall, Sensor, Furniture, BgImage, MotionSensor, EnvSensor, BleProxy, AlarmPanel, CalendarPanel, ThermostatFixture, SafetySensor, AlertBeacon, RobotFixture, CameraFixture, ProjectorFixture, ValveFixture, PlugFixture, SprinklerZone, FlagpoleFixture, PresenceZone, InfoCard, ActionButton, Door, Window as WindowType, Floor, Ruler } from './types.js';
 import type { FloorEdge } from './geometry.js';
 import { envChipHalfPx, infoCardHalfPx, actionButtonHalfPx, type View } from './canvas-render.js';
 import { vacMapAffine, vacWorldToPixel, vacSegHasPixel } from './valetudo-map.js';
@@ -588,6 +588,37 @@ export function hitVoidAreaVertex(p: Planner, view: View, mm: Vec2): { area: imp
   const h = hitPx(view);
   for (let i = 0; i < vd.points.length; i++) {
     if (distMM(vd.points[i], mm) < h) return { area: vd, idx: i };
+  }
+  return null;
+}
+
+// A draggable ruler ENDPOINT handle (only POINT ends are draggable; object-
+// anchored ends track their item). Highest ruler priority — small explicit
+// targets. Locked rulers expose no handles.
+export function hitRulerEnd(p: Planner, view: View, mm: Vec2): { ruler: Ruler; end: 'a' | 'b' } | null {
+  const list = p.floor().rulers ?? [];
+  const h = hitPx(view);
+  for (let i = list.length - 1; i >= 0; i--) {
+    const r = list[i];
+    if (r.locked) continue;
+    if (r.b.kind === 'point' && distMM(r.b, mm) < h) return { ruler: r, end: 'b' };
+    if (r.a.kind === 'point' && distMM(r.a, mm) < h) return { ruler: r, end: 'a' };
+  }
+  return null;
+}
+
+// A ruler BODY hit — near the resolved measurement line. Broken rulers (an
+// object end was deleted → null resolve) have no line and aren't body-hittable
+// (select via the endpoint handle / sidebar instead).
+export function hitRulerBody(p: Planner, view: View, mm: Vec2): Ruler | null {
+  const f = p.floor();
+  const list = f.rulers ?? [];
+  const tol = Math.max(150, hitPx(view) * 0.6);
+  for (let i = list.length - 1; i >= 0; i--) {
+    const r = list[i];
+    const res = resolveRulerEnds(r, f);
+    if (!res) continue;
+    if (pointToSeg(mm.x, mm.y, res.ax, res.ay, res.bx, res.by) < tol) return r;
   }
   return null;
 }

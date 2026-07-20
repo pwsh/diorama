@@ -105,7 +105,7 @@
       // every placement TOOLS id (except select/delete) is mapped to some card.tool
       const PLACEMENT_TOOLS = ['wall','sensor','motion','env','infocard','action','bleproxy','alarm',
         'calendar','thermostat','safety','alertbeacon','robot','camera','projector','valve','sprinkler',
-        'flagpole','plug','pzone','ground','path','pool','void','furniture','light','switch','door','window'];
+        'flagpole','plug','pzone','ground','path','pool','void','ruler','furniture','light','switch','door','window'];
       const mapped = new Set(model.flatMap(c => c.cards).map(c => c.tool).filter(Boolean));
       const unmapped = PLACEMENT_TOOLS.filter(t => !mapped.has(t));
       ok('A4: every placement tool mapped', unmapped.length === 0, `unmapped=${unmapped.join(',')}`);
@@ -127,6 +127,8 @@
       ok('A7: flagpole card in Outdoor tab', outdoor.some(c => c.tool === 'flagpole'), '');
       // switch is in Controls & Sensors
       ok('A8: switch card in Controls tab', cat(model,'controls').cards.some(c => c.tool === 'switch'), '');
+      // ruler is in Structure
+      ok('A9: ruler card in Structure tab', cat(model,'structure').cards.some(c => c.tool === 'ruler'), '');
     }
 
     // ═══ B. arming parity (card.arm → planner state) ═══
