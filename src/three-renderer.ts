@@ -37,6 +37,7 @@ import {
   logicLightState, actionButtonHeight, actionButtonSize, actionButtonColor, ACTION_BUTTON_DEFAULTS,
 } from './geometry.js';
 import { ALERT_BEACON_DEFAULTS, alertBeaconState, alertBeaconColor, alertBeaconAlarming, isAlertDomain } from './alerts.js';
+import { northMarkerPos } from './compass.js';
 import type { Door, Window as WindowType, WindowCurtainStyle, EnvSensor, BleProxy, AlarmPanel, CalendarPanel, ThermostatFixture, SafetySensor, AlertBeacon, RobotFixture, CameraFixture, ProjectorFixture, ValveFixture, SprinklerZone, FlagpoleFixture, PlugFixture, PresenceZone, InfoCard, ActionButton, ObjectRecipe, ActivityKind, Pool } from './types.js';
 import { flagEntry } from './flags.js';
 
@@ -1328,6 +1329,11 @@ export class ThreeDRenderer {
   // sprites; rebuilt under _keyGps. Carries CanvasTextures → always pair
   // _disposeSpriteMaps with _clearGroup (see updateGpsPins / destroy).
   private _gpsGroup = new THREE.Group();
+  // In-plan north marker (compass feature): a flat arrow decal just off the
+  // slab edge + an "N" sprite. Rebuilt under three-view's _keyCompass. Sprite
+  // CanvasTexture → pair _disposeSpriteMaps with _clearGroup (the _gpsGroup
+  // gotcha; see updateNorthMarker).
+  private _compassGroup = new THREE.Group();
   // Transient event pulses (doorbell rings). Rebuilt cheaply per tick ONLY while
   // pulses exist; empty + idle = zero cost (see updateDoorbellPulses).
   private _pulseGroup = new THREE.Group();
@@ -1897,7 +1903,7 @@ export class ThreeDRenderer {
                     this._groundGroup, this._poolGroup, this._sprinklerGroup, this._flagpoleGroup, this._vacMapGroup, this._heatmapGroup,
                     this._lightGroup, this._switchGroup, this._targetGroup, this._ghostGroup,
                     this._transitGroup,
-                    this._gpsGroup, this._weatherGroup, this._skyGroup, this._bgTextGroup, this._pulseGroup, this._nowPlayingGroup);
+                    this._gpsGroup, this._compassGroup, this._weatherGroup, this._skyGroup, this._bgTextGroup, this._pulseGroup, this._nowPlayingGroup);
 
     this._controls = new OrbitControls(this._camera, this._renderer.domElement);
     this._controls.enableDamping = true;
@@ -2517,7 +2523,7 @@ export class ThreeDRenderer {
       this._safetyGroup, this._alertGroup, this._robotGroup, this._robotRigGroup, this._cameraGroup, this._projGroup, this._valveGroup, this._plugGroup, this._camAlertGroup, this._pzoneGroup,
       this._groundGroup, this._poolGroup, this._sprinklerGroup, this._flagpoleGroup, this._heatmapGroup,
       this._lightGroup, this._switchGroup, this._targetGroup, this._ghostGroup,
-      this._pulseGroup, this._nowPlayingGroup, this._bgTextGroup,
+      this._pulseGroup, this._nowPlayingGroup, this._bgTextGroup, this._compassGroup,
     ]) {
       this._disposeSpriteMaps(g);
       this._clearGroup(g);
@@ -10105,6 +10111,55 @@ export class ThreeDRenderer {
     }
   }
 
+  // In-plan north marker (compass feature). A flat accent arrow decal lying
+  // just OUTSIDE the slab edge where the ray from the floor centre along true
+  // north (plan nx, ny) exits (northMarkerPos), plus a small "N" camera-facing
+  // sprite above it. Rebuilt only under three-view's _keyCompass (config-driven
+  // north changes only). The decal material is a fresh flat MeshBasicMaterial
+  // per build — the documented _mat() exemption class (ground decal, like the
+  // front-arrow) — and is owned by the group, so _clearGroup disposes it; the
+  // sprite CanvasTexture needs the _disposeSpriteMaps pairing (the _gpsGroup
+  // gotcha). No blob shadow, no outline shell (userData.outlineSkip).
+  updateNorthMarker(show: boolean, fw: number, fd: number, nx: number, ny: number): void {
+    if (!this._scene) return;
+    this._disposeSpriteMaps(this._compassGroup);
+    this._clearGroup(this._compassGroup);
+    if (!show) return;
+    const mk = northMarkerPos(fw, fd, nx, ny);
+    // Map plan→scene from the PASSED fw/fd, never _w (which reads the active
+    // floor's stored dims — the ghost-floor gotcha; callers may build before
+    // updateFloor ran).
+    const pos = { x: fw / 2 - mk.x, z: mk.y - fd / 2 };
+    // Chevron in the XY shape plane pointing toward shape +Y (the front-arrow
+    // template, scaled to yard size); rotation.x = −π/2 lays it flat with
+    // shape +Y → scene −Z, then rotation.y aims −Z along the scene north
+    // direction (−nx, +ny in scene xz — the _w mirror): φ = atan2(nx, −ny).
+    const W = 260, L = 420, T = 140;   // half-width, length, vee thickness (mm)
+    const s = new THREE.Shape();
+    s.moveTo(0, L);
+    s.lineTo(W, 0);
+    s.lineTo(W - T, 0);
+    s.lineTo(0, L - T * 1.4);
+    s.lineTo(-(W - T), 0);
+    s.lineTo(-W, 0);
+    s.closePath();
+    const mat = new THREE.MeshBasicMaterial({
+      color: 0xef5350, transparent: true, opacity: 0.92,
+      depthWrite: false, side: THREE.DoubleSide,
+    });
+    const arrow = new THREE.Mesh(new THREE.ShapeGeometry(s), mat);
+    arrow.rotation.order = 'YXZ';
+    arrow.rotation.x = -Math.PI / 2;
+    arrow.rotation.y = Math.atan2(nx, -ny);
+    arrow.position.set(pos.x, 10, pos.z);   // above ground patches (y≈4/6) + blob shadows (y≈8)
+    arrow.renderOrder = 2;
+    arrow.userData.outlineSkip = true;
+    this._compassGroup.add(arrow);
+    const sp = this._makeTextSprite('N', '#ef5350', 0.8);
+    sp.position.set(pos.x, 620, pos.z);
+    this._compassGroup.add(sp);
+  }
+
   // Canvas-rendered text on a Sprite (always faces the camera). ~240 mm tall
   // in world units at scale 1; width follows the text aspect ratio. The
   // texture resolution is fixed — `scale` only stretches world size, which
@@ -17668,7 +17723,7 @@ export class ThreeDRenderer {
       this._sensorGroup, this._motionGroup, this._envGroup, this._infoGroup, this._actionGroup, this._bleGroup,
       this._alarmGroup, this._calendarGroup, this._thermoGroup, this._safetyGroup, this._alertGroup, this._robotGroup, this._robotRigGroup,
       this._cameraGroup, this._projGroup, this._valveGroup, this._plugGroup, this._camAlertGroup, this._pzoneGroup, this._groundGroup, this._poolGroup, this._sprinklerGroup, this._flagpoleGroup, this._heatmapGroup,
-      this._lightGroup, this._switchGroup, this._targetGroup, this._gpsGroup, this._weatherGroup,
+      this._lightGroup, this._switchGroup, this._targetGroup, this._gpsGroup, this._compassGroup, this._weatherGroup,
       this._skyGroup, this._bgTextGroup, this._pulseGroup, this._nowPlayingGroup,
     ]) {
       this._disposeSpriteMaps(g);

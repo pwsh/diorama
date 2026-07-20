@@ -133,6 +133,17 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **On-screen compass + north marker** (2026-07-19; 1 Opus agent).
+  `Store.compass` (opt-in) + pure `src/compass.ts` (`resolveNorth`
+  auto-from-landmarks / manual `northDeg`-convention fallback,
+  `compassScreenAngle` 2D/3D, `northMarkerPos` rect-exit) +
+  `<diorama-compass>` pseudo-3D rose overlay (chipAnchorStyle anchors,
+  default `tr`; rAF redraw-guarded; rotates with 3D camera azimuth via
+  `lastCam3d`, fixed plan-north in 2D) + optional in-plan north icon
+  (2D arrowhead+N, 3D `_compassGroup` decal+sprite under `_keyCompass`)
+  + Settings ▸ Display "Compass" block. `compass-test.html` 46/46;
+  typecheck/build green; chunk split intact (MeshToonMaterial grep 0).
+
 - **BgText/camera fix batch** (2026-07-19; 1 Opus agent, orchestrator
   diagnoses pinned). Camera far 60000→150000 — the zoom-out
   "disappearing behind an invisible barrier" was far-plane clipping of

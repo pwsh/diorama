@@ -1,0 +1,262 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>COMPASS …</title>
+<style>
+  body { margin:0; background:#0d1116; color:#cfd8dc; font:13px/1.5 sans-serif; padding:14px; }
+  h1 { font-size:15px; margin:0 0 10px; }
+  #summary { font-size:14px; font-weight:bold; margin:10px 0; padding:8px 10px; border-radius:5px; }
+  .okbg { background:#12331f; color:#69f0ae; } .badbg { background:#3a1414; color:#ff8a80; }
+  .row { display:flex; justify-content:space-between; gap:10px; padding:2px 0; border-bottom:1px solid #1c2530; }
+  .pass { color:#69f0ae; } .fail { color:#ff5252; }
+  .name { color:#90caf9; } .extra { color:#ffd54f; font-size:11px; }
+  #c { width:600px; height:400px; }
+</style>
+<h1>On-screen compass — north resolution · screen angle · marker pos · persistence · renderer</h1>
+<div id="summary">Running…</div>
+<div id="rows"></div>
+<div id="c"></div>
+
+<!-- Harness build (from the repo root; NEVER reuse stale bundles):
+       H=/tmp/diorama-harness-compass
+       rm -rf "$H"; mkdir -p "$H"; cp -r dist/* "$H"/
+       cp test-pages/compass-test.html "$H"/
+       npx esbuild src/compass.ts --bundle --format=esm --outfile="$H"/compass.mod.js
+       npx esbuild src/geo.ts     --bundle --format=esm --outfile="$H"/geo.mod.js
+       T=$(mktemp -d); cp -r src/* "$T"/
+       cp test-pages/fake-avatar-store.ts "$T"/avatar-store.ts
+       npx esbuild "$T"/planner.ts --bundle --format=esm --outfile="$H"/planner.mod.js
+     Run headless (serve over http — Chrome blocks dynamic module imports on
+     file:// via CORS):
+       (cd "$H" && python3 -m http.server 8799 &)
+       google-chrome --headless=new --disable-gpu --use-angle=swiftshader \
+         --virtual-time-budget=25000 --dump-dom \
+         "http://localhost:8799/compass-test.html" | grep -o "<title>[^<]*"  -->
+<script type="module">
+  const V = '?v=' + Date.now();
+  const { resolveNorth, compassScreenAngle, camAzimuthOf, northMarkerPos } =
+    await import('./compass.mod.js' + V);
+  const { fitGeoTransform, planBearingDeg, unprojectMeters } = await import('./geo.mod.js' + V);
+  const { Planner } = await import('./planner.mod.js' + V);
+
+  const results = [];
+  const ok = (name, cond, extra = '') => results.push({ name, pass: !!cond, extra: String(extra) });
+  const near = (a, b, tol = 1e-9) => Math.abs(a - b) <= tol;
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  async function waitFor(cond, tries = 600) {
+    for (let i = 0; i < tries; i++) { if (cond()) return true; await sleep(4); }
+    return !!cond();
+  }
+  const DEG = Math.PI / 180;
+
+  try {
+    // ── 1. resolveNorth manual matrix (locked convention: plan +Y faces
+    //       bearing B ⇒ north in plan = (−sin B, cos B)) ─────────────────────
+    {
+      const at = d => resolveNorth({ source: 'manual', manualNorthDeg: d }, null);
+      let n = at(0);
+      ok('1: manual 0° → (0,1)', near(n.nx, 0) && near(n.ny, 1) && n.source === 'manual', `${n.nx},${n.ny}`);
+      n = at(90);
+      ok('1: manual 90° → (−1,0)', near(n.nx, -1) && near(n.ny, 0, 1e-9), `${n.nx},${n.ny}`);
+      n = at(180);
+      ok('1: manual 180° → (0,−1)', near(n.nx, 0, 1e-9) && near(n.ny, -1), `${n.nx},${n.ny}`);
+      n = at(270);
+      ok('1: manual 270° → (1,0)', near(n.nx, 1) && near(n.ny, 0, 1e-9), `${n.nx},${n.ny}`);
+      n = resolveNorth(undefined, null);
+      ok('1: missing cfg → default (0,1)', near(n.nx, 0) && near(n.ny, 1) && n.source === 'default', n.source);
+      n = resolveNorth({ source: 'manual' }, null);
+      ok('1: manual w/o degrees → 0° (0,1)', near(n.nx, 0) && near(n.ny, 1) && n.source === 'manual', '');
+      n = resolveNorth({ manualNorthDeg: 90 }, null);   // auto + no fit → manual fallback
+      ok('1: auto w/o fit falls back to manual', near(n.nx, -1) && n.source === 'manual', n.source);
+      ok('1: manual is a unit vector', near(Math.hypot(at(123.4).nx, at(123.4).ny), 1, 1e-9), '');
+    }
+
+    // ── 2. auto/landmark consistency ─────────────────────────────────────────
+    {
+      // Two synthetic landmarks with a KNOWN rotation B = 30°: plan = R(B)·geo_mm + t.
+      const B = 30, th = B * DEG, c = Math.cos(th), s = Math.sin(th);
+      const lat0 = 45, lon0 = -93, t = { x: 1000, y: 2000 };
+      const mk = (em, nm) => {                       // geo metres → pair
+        const ll = unprojectMeters(em, nm, lat0, lon0);
+        const gx = em * 1000, gy = nm * 1000;
+        return { x: c * gx - s * gy + t.x, y: s * gx + c * gy + t.y, lat: ll.lat, lon: ll.lon };
+      };
+      const pairs = [mk(0, 0), mk(100, 0)];
+      const fit = fitGeoTransform(pairs);
+      ok('2: 2-pair fit quality full', fit.quality === 'full', fit.quality);
+      ok('2: fitted θ ≈ 30°', near(fit.thetaRad / DEG, B, 0.01), fit.thetaRad / DEG);
+      const n = resolveNorth(undefined, { transform: fit });
+      ok('2: auto resolves from landmarks', n.source === 'landmarks', n.source);
+      const brg = planBearingDeg(fit.thetaRad, n.nx, n.ny);
+      const brgErr = Math.min(brg, 360 - brg);
+      ok('2: planBearingDeg(θ, nx, ny) ≈ 0 (<0.5°)', brgErr < 0.5, brg);
+      // Single-landmark northDeg:B fit must agree with manual B.
+      const fit1 = fitGeoTransform([pairs[0]], B);
+      const n1 = resolveNorth(undefined, { transform: fit1 });
+      const nm = resolveNorth({ source: 'manual', manualNorthDeg: B }, null);
+      const angErr = Math.abs(Math.atan2(n1.nx, n1.ny) - Math.atan2(nm.nx, nm.ny)) / DEG;
+      ok('2: single-landmark fit ≡ manual B (<0.5°)', angErr < 0.5, angErr);
+      // quality 'none' fit → never used.
+      const n0 = resolveNorth(undefined, { transform: fitGeoTransform([]) });
+      ok('2: quality none → default', n0.source === 'default', n0.source);
+    }
+
+    // ── 3. compassScreenAngle matrix (locked values) ─────────────────────────
+    {
+      const a2 = (nx, ny) => compassScreenAngle(nx, ny, '2d', 0);
+      ok('3: 2D north (0,1) → 0', near(a2(0, 1), 0), a2(0, 1));
+      ok('3: 2D north (1,0) → +π/2', near(a2(1, 0), Math.PI / 2), a2(1, 0));
+      ok('3: 2D north (0,−1) → π', near(a2(0, -1), Math.PI), a2(0, -1));
+      const a3 = (nx, ny, az) => compassScreenAngle(nx, ny, '3d', az);
+      // Derivation lock (angle3d = α + atan2(nx,ny) + π, normalized):
+      //   front preset (α = π, the 2D orientation) → same as 2D.
+      ok('3: 3D α=π (front) ≡ 2D', near(a3(0, 1, Math.PI), 0, 1e-9), a3(0, 1, Math.PI));
+      ok('3: 3D α=π, north (1,0) → +π/2', near(a3(1, 0, Math.PI), Math.PI / 2, 1e-9), a3(1, 0, Math.PI));
+      //   α = 0 (camera on the plan-north side, looking south) → needle down.
+      ok('3: 3D α=0 → π (north behind)', near(a3(0, 1, 0), Math.PI), a3(0, 1, 0));
+      //   sims pose (scene azimuth 45°): north = down-left, −3π/4.
+      ok('3: 3D α=45° (sims) → −3π/4', near(a3(0, 1, Math.PI / 4), -3 * Math.PI / 4, 1e-9), a3(0, 1, Math.PI / 4));
+      //   the same 45° pose with north = plan +X → −π/4 (down-right).
+      ok('3: 3D α=45°, north (1,0) → −π/4', near(a3(1, 0, Math.PI / 4), -Math.PI / 4, 1e-9), a3(1, 0, Math.PI / 4));
+    }
+
+    // ── 4. northMarkerPos ────────────────────────────────────────────────────
+    {
+      let m = northMarkerPos(10000, 8000, 0, 1);
+      ok('4: north (0,1) exits top at (5000, 8900)', near(m.x, 5000) && near(m.y, 8900), `${m.x},${m.y}`);
+      ok('4: north (0,1) angle 0', near(m.angleRad, 0), m.angleRad);
+      m = northMarkerPos(10000, 8000, 1, 0);
+      ok('4: north (1,0) exits right at (10900, 4000)', near(m.x, 10900) && near(m.y, 4000), `${m.x},${m.y}`);
+      ok('4: north (1,0) angle π/2', near(m.angleRad, Math.PI / 2), m.angleRad);
+      const d = Math.SQRT1_2;
+      m = northMarkerPos(10000, 8000, d, d);
+      // centre (5000,4000): top edge wins (t = 4000/d ≈ 5657 < 5000/d) → exit
+      // (9000, 8000), pushed 900 along the diagonal.
+      ok('4: diagonal exits top-right + margin', near(m.x, 9000 + 900 * d, 1e-6) && near(m.y, 8000 + 900 * d, 1e-6),
+        `${m.x},${m.y}`);
+      ok('4: diagonal angle π/4', near(m.angleRad, Math.PI / 4), m.angleRad);
+      m = northMarkerPos(10000, 8000, 0, -1);
+      ok('4: south exits bottom at (5000, −900)', near(m.x, 5000) && near(m.y, -900), `${m.x},${m.y}`);
+    }
+
+    // ── 5. camAzimuthOf ──────────────────────────────────────────────────────
+    {
+      ok('5: null → 0', camAzimuthOf(null) === 0, '');
+      let a = camAzimuthOf({ pos: [100, 50, 100], target: [0, 0, 0] });
+      ok('5: pose (+x,+z) → π/4', near(a, Math.PI / 4), a);
+      a = camAzimuthOf({ pos: [0, 50, -10], target: [0, 0, 0] });
+      ok('5: pose (−z) → π (front)', near(Math.abs(a), Math.PI), a);
+      a = camAzimuthOf({ pos: [0, 999, 0], target: [0, 0, 0] });
+      ok('5: degenerate overhead → 0', a === 0, a);
+    }
+
+    // ── 6. Planner persistence (real Planner + fake HaApi, config-test idiom) ─
+    {
+      class FakeHa {
+        constructor(seed) {
+          this.map = new Map();
+          for (const [k, v] of Object.entries(seed || {})) this.map.set(k, JSON.parse(JSON.stringify(v)));
+          this.states = {}; this._stateCbs = []; this._connCbs = [];
+        }
+        connect() {
+          for (const cb of this._connCbs) cb('connected');
+          for (const cb of this._stateCbs) cb(this.states, undefined);
+        }
+        onState(fn) { this._stateCbs.push(fn); }
+        onConn(fn) { this._connCbs.push(fn); }
+        callService() { return Promise.resolve(); }
+        async getHistory() { return {}; }
+        async getWeatherForecasts() { return null; }
+        async getDevices() { return []; }
+        async getEntityRegistry() { return []; }
+        async updateEntityRegistry() { return true; }
+        async getUserData(key) { return this.map.has(key) ? JSON.parse(JSON.stringify(this.map.get(key))) : null; }
+        async setUserData(key, value) { this.map.set(key, JSON.parse(JSON.stringify(value))); return true; }
+        async refreshStates() {}
+        peek(key) { return this.map.has(key) ? JSON.parse(JSON.stringify(this.map.get(key))) : null; }
+      }
+      const seedStore = {
+        v: 2,
+        floors: [{ id: 'f1', name: 'Home', w: 8000, d: 6000,
+          walls: [], furniture: [], lights: [], switches: [], sensors: [], motionSensors: [],
+          envSensors: [], doors: [], windows: [], bg: null, rooms: [] }],
+        currentFloorId: 'f1', activeSensorId: null,
+        coverage: true, imperial: false, showDetails: false, useRawTargets: false,
+        compass: { show: true, source: 'manual', manualNorthDeg: 123, anchor: 'bl', showNorthMarker: true },
+      };
+      localStorage.removeItem('diorama:store:v1');
+      localStorage.removeItem('diorama:configs');
+      const stub = new FakeHa({ diorama: seedStore });
+      const p = new Planner();
+      p.connectWith(stub);
+      await waitFor(() => p.configIndex !== null);
+      ok('6: compass survives _loadFromHa', p.store.compass?.manualNorthDeg === 123 &&
+        p.store.compass?.anchor === 'bl' && p.store.compass?.showNorthMarker === true,
+        JSON.stringify(p.store.compass));
+      p.setCompass(cc => { cc.manualNorthDeg = 45; cc.custom = { x: 20, y: 30 }; });
+      ok('6: setCompass mutates', p.store.compass.manualNorthDeg === 45 && p.store.compass.custom.x === 20, '');
+      await p.saveConfigNow();
+      ok('6: setCompass persists to HA body', stub.peek('diorama-cfg-default')?.compass?.manualNorthDeg === 45,
+        JSON.stringify(stub.peek('diorama-cfg-default')?.compass));
+      // Reload through a fresh Planner (same stub) — field survives the round-trip.
+      localStorage.removeItem('diorama:store:v1');
+      localStorage.removeItem('diorama:configs');
+      const p2 = new Planner();
+      p2.connectWith(stub);
+      await waitFor(() => p2.configIndex !== null);
+      ok('6: compass survives reload', p2.store.compass?.manualNorthDeg === 45 &&
+        p2.store.compass?.custom?.y === 30 && p2.store.compass?.show === true,
+        JSON.stringify(p2.store.compass));
+      // setCompass creates the object when absent.
+      const p3 = new Planner();
+      p3.store.compass = undefined;
+      p3.setCompass(cc => { cc.show = true; });
+      ok('6: setCompass creates cfg when absent', p3.store.compass?.show === true, '');
+    }
+
+    // ── 7. Renderer: updateNorthMarker builds / clears / disposes ────────────
+    {
+      const mod = await import('./assets/three-renderer.js');
+      const r = new mod.ThreeDRenderer(document.getElementById('c'));
+      await r.load();
+      const grp = r._compassGroup;
+      r.updateNorthMarker(true, 10000, 8000, 0, 1);
+      ok('7: build → 2 children (arrow + sprite)', grp.children.length === 2, `n=${grp.children.length}`);
+      const sprite = grp.children.find(o => o.isSprite);
+      const arrow = grp.children.find(o => o.isMesh);
+      ok('7: one child is a sprite ("N")', !!sprite, '');
+      ok('7: arrow decal is a mesh, outline-skipped', !!arrow && arrow.userData.outlineSkip === true, '');
+      // north (0,1) on 10000×8000 → plan (5000, 8900) → scene (fw/2−x, ·, y−fd/2) = (0, ·, 4900).
+      ok('7: arrow at the marker position', !!arrow && near(arrow.position.x, 0) && near(arrow.position.z, 4900),
+        arrow && `${arrow.position.x},${arrow.position.z}`);
+      // Sprite map disposal on rebuild (the _disposeSpriteMaps pairing).
+      let disposed = false;
+      sprite.material.map.addEventListener('dispose', () => { disposed = true; });
+      r.updateNorthMarker(true, 10000, 8000, 1, 0);
+      ok('7: rebuild frees the old sprite map', disposed === true, '');
+      const arrow2 = grp.children.find(o => o.isMesh);
+      ok('7: rebuild → east marker at right edge', !!arrow2 &&
+        near(arrow2.position.x, 10000 / 2 - 10900) && near(arrow2.position.z, 0),
+        arrow2 && `${arrow2.position.x},${arrow2.position.z}`);
+      let disposed2 = false;
+      grp.children.find(o => o.isSprite).material.map.addEventListener('dispose', () => { disposed2 = true; });
+      r.updateNorthMarker(false, 10000, 8000, 0, 1);
+      ok('7: show=false → group empty', grp.children.length === 0, `n=${grp.children.length}`);
+      ok('7: hide frees the sprite map too', disposed2 === true, '');
+      r.destroy();
+    }
+  } catch (err) {
+    ok('unhandled error', false, (err && (err.stack || err.message)) || String(err));
+  }
+
+  const passN = results.filter(r => r.pass).length;
+  const failN = results.length - passN;
+  document.getElementById('rows').innerHTML = results.map(r =>
+    `<div class="row"><span class="name">${r.name}</span>` +
+    `<span class="${r.pass ? 'pass' : 'fail'}">${r.pass ? 'PASS' : 'FAIL'}</span>` +
+    `<span class="extra">${r.extra}</span></div>`).join('');
+  const sum = document.getElementById('summary');
+  sum.textContent = `${failN === 0 ? 'PASS' : 'FAIL'} ${passN}/${results.length}`;
+  sum.className = failN === 0 ? 'okbg' : 'badbg';
+  document.title = `COMPASS ${failN === 0 ? 'PASS' : 'FAIL'} ${passN}/${results.length}` +
+    (failN ? ' | ' + results.filter(r => !r.pass).map(r => r.name).join(' · ') : '');
+</script>

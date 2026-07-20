@@ -49,7 +49,7 @@ import type {
   Store, Floor, Sensor, ZonesLive, ObjectHalo, LerpSlot,
   HassState, ConnStatus, DiscoveredDevice, Vec2, AvatarKind, WeatherConfig, CameraFixture,
   ConfigIndex, ConfigMeta, ThermostatFixture, SafetySensor, AlertBeacon, Furniture, MqttBridgeConfig,
-  AlertsConfig, GroundArea, Pool,
+  AlertsConfig, GroundArea, Pool, CompassConfig,
 } from './types.js';
 
 // Full export envelope (Batch B). `store` is the WHOLE Store serialized (no
@@ -1671,6 +1671,7 @@ export class Planner extends EventTarget {
       bgText:         remote.bgText         ?? undefined,
       bgTexts:        this._migrateBgTexts(remote),
       heatmap:        remote.heatmap        ?? undefined,
+      compass:        remote.compass        ?? undefined,
     };
   }
 
@@ -4247,6 +4248,16 @@ export class Planner extends EventTarget {
     mut(this.store.weather);
     this.save();
     this._reconfigureWeather();
+    this.emitConfig();
+  }
+
+  // Mutate the on-screen compass config (creating it on first use), persist and
+  // repaint — the setWeather pattern. No collectors to restart: the compass is
+  // pure display (widget + north marker) reading resolveNorth each frame.
+  setCompass(mut: (c: CompassConfig) => void): void {
+    if (!this.store.compass) this.store.compass = {};
+    mut(this.store.compass);
+    this.save();
     this.emitConfig();
   }
 

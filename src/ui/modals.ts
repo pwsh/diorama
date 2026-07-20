@@ -9,7 +9,8 @@ import { OFFLINE_FLAG_KEY } from '../ha-local.js';
 import type { AvatarDef, AvatarPackDef } from '../avatars.js';
 import { AVATAR_PACK_MANIFEST } from '../avatar-packs/manifest.js';
 import type { Planner } from '../planner.js';
-import type { Floor, HassState, WeatherConfig, WeatherEffectKey, ScenePreset, FloorTexKind, MqttBridgeConfig, BgTextEntry, BgTextEntryMode, HeatmapConfig } from '../types.js';
+import type { Floor, HassState, WeatherConfig, WeatherEffectKey, ScenePreset, FloorTexKind, MqttBridgeConfig, BgTextEntry, BgTextEntryMode, HeatmapConfig, CompassConfig } from '../types.js';
+import { resolveNorth } from '../compass.js';
 
 // ── Floor settings modal ─────────────────────────────────────────────────
 @customElement('diorama-floor-modal')
@@ -1238,8 +1239,95 @@ export class SettingsDrawer extends LitElement {
           Per-floor flooring / wall overrides live in the sidebar Floors section.
         </div>
       </div>
+      ${this._compassBlock()}
       ${this._heatmapBlock()}
     `;
+  }
+
+  // ── On-screen compass + in-plan north icon ───────────────────────────────
+  // Mirrors _weatherAppearance's anchor grid / custom-offset markup so the two
+  // movable overlays configure consistently. All writes via planner.setCompass.
+  private _compassBlock() {
+    const p = this.planner;
+    const c = p.store.compass;
+    const set = (mut: (x: CompassConfig) => void) => { p.setCompass(mut); this.requestUpdate(); };
+    type Anchor = NonNullable<CompassConfig['anchor']>;
+    const cur: Anchor = c?.anchor ?? 'tr';
+    const hasCustom = !!c?.custom;
+    const fit = p.geoFit();
+    const hasFit = fit != null && fit.transform.quality !== 'none';
+    const n = resolveNorth(c, fit);
+    const status = n.source === 'landmarks'
+      ? `north from landmarks (quality ${fit!.transform.quality})`
+      : n.source === 'manual'
+        ? `manual ${((c?.manualNorthDeg ?? 0) % 360 + 360) % 360}°`
+        : 'not set — plan up = north';
+    const cell = (code: Anchor, glyph: string) => html`
+      <button title=${'Anchor ' + code}
+              style="padding:4px 0;font-size:13px;border-radius:3px;cursor:pointer;
+                     background:${cur === code && !hasCustom ? 'var(--accent)' : '#1c2733'};
+                     border:1px solid #33465a;color:var(--text)"
+              @click=${() => set(x => { x.anchor = code; x.custom = undefined; })}>${glyph}</button>`;
+    return html`
+      <div style="border-top:1px solid var(--border);margin:10px 0 0;padding-top:8px">
+        <div class="row"><label>Compass</label></div>
+        <div class="row"><label>Show compass</label>
+          <input type="checkbox" .checked=${c?.show === true}
+                 @change=${(e: Event) => set(x => { x.show = (e.target as HTMLInputElement).checked; })}>
+        </div>
+        <div class="row"><label>North source</label>
+          <select .value=${c?.source ?? 'auto'}
+                  @change=${(e: Event) => set(x => {
+                    x.source = (e.target as HTMLSelectElement).value as 'auto' | 'manual';
+                  })}>
+            <option value="auto">Auto (landmarks)</option>
+            <option value="manual">Manual</option>
+          </select>
+        </div>
+        <div class="row" style="opacity:${(c?.source ?? 'auto') === 'auto' && hasFit ? 0.5 : 1}">
+          <label title="Compass bearing (° CW from true north) that plan-up (+Y) faces — the same convention as the GPS/Geo north setting">
+            Manual bearing (°)</label>
+          <input type="number" min="0" max="359.9" step="0.1" style="width:70px;text-align:right"
+                 .value=${String(c?.manualNorthDeg ?? '')}
+                 @change=${(e: Event) => {
+                   const v = parseFloat((e.target as HTMLInputElement).value);
+                   set(x => { x.manualNorthDeg = isFinite(v) ? ((v % 360) + 360) % 360 : undefined; });
+                 }}>
+        </div>
+        ${(c?.source ?? 'auto') === 'auto' && hasFit ? html`
+          <div style="font-size:10px;color:var(--text-dim);line-height:1.3;margin:0 0 4px">
+            Landmark calibration is active — the manual bearing is only a fallback.
+          </div>` : nothing}
+        <div style="font-size:11px;padding:4px 8px;margin:2px 0 6px;
+                    background:rgba(0,0,0,0.25);border-radius:4px">${status}</div>
+        <div style="font-size:11px;margin-bottom:2px">Anchor</div>
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:3px;margin-bottom:6px">
+          ${cell('tl', '↖')}${cell('tm', '↑')}${cell('tr', '↗')}
+          ${cell('bl', '↙')}${cell('bm', '↓')}${cell('br', '↘')}
+        </div>
+        <div class="row" style="gap:6px;margin-bottom:2px">
+          <span style="font-size:11px">Custom offset (px)</span>
+          <span style="color:var(--text-dim);font-size:11px">x</span>
+          <input type="number" style="width:56px" .value=${String(c?.custom?.x ?? '')}
+                 @change=${(e: Event) => {
+                   const v = Math.round(Number((e.target as HTMLInputElement).value));
+                   set(x => { x.custom = { x: isFinite(v) ? v : 0, y: x.custom?.y ?? 0 }; });
+                 }}>
+          <span style="color:var(--text-dim);font-size:11px">y</span>
+          <input type="number" style="width:56px" .value=${String(c?.custom?.y ?? '')}
+                 @change=${(e: Event) => {
+                   const v = Math.round(Number((e.target as HTMLInputElement).value));
+                   set(x => { x.custom = { x: x.custom?.x ?? 0, y: isFinite(v) ? v : 0 }; });
+                 }}>
+          ${hasCustom ? html`<button class="btn" style="font-size:10px;padding:2px 6px"
+                 @click=${() => set(x => { x.custom = undefined; })}>Clear</button>` : nothing}
+        </div>
+        <div class="row"><label title="A small circled arrow + N just off the floor edge, in both 2D and 3D, where true north exits the plan">
+          Show north icon on plan</label>
+          <input type="checkbox" .checked=${c?.showNorthMarker === true}
+                 @change=${(e: Event) => set(x => { x.showNorthMarker = (e.target as HTMLInputElement).checked; })}>
+        </div>
+      </div>`;
   }
 
   // ── Per-room temperature heat-map comfort band ──────────────────────────

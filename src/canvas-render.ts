@@ -32,6 +32,7 @@ import {
   parseNowPlaying, isMediaPlayerId,
 } from './geometry.js';
 import { compass8 } from './geo.js';
+import { resolveNorth, northMarkerPos } from './compass.js';
 import { calendarLines, weatherCardLines, resolveScreenContent, CAL_HEADER_COLOR, type ScreenMode } from './surfaces.js';
 import { CONDITION_GLYPH } from './weather.js';
 import { ALERT_BEACON_DEFAULTS, alertBeaconState, alertBeaconColor, alertBeaconAlarming, isAlertDomain } from './alerts.js';
@@ -308,9 +309,55 @@ export function drawAll(ctx: CanvasRenderingContext2D, p: Planner, view: View,
   // Geo landmark pins + GPS device pins + geo_location event pins (all ride the
   // `geo` layer).
   if (on(L.geo)) { drawGeoLandmarks(ctx, p, view); drawGpsPins(ctx, p, view); drawGeoEventPins(ctx, p, view); }
+  drawNorthMarker(ctx, p, view);
   drawDoorbellPulses(ctx, p, view);
   drawAlignGuides(ctx, p, view);
   drawFloorEditHandles(ctx, p, view);
+}
+
+// In-plan north icon (compass feature). Gated on Store.compass.showNorthMarker
+// — its own config gate, not a 2D layer (it renders in ALL UI modes, like GPS
+// pins). Sits just OUTSIDE the floor rect where the ray from the floor centre
+// along true north exits (northMarkerPos), drawn screen-fixed (~18 px, the
+// battery-badge idiom): a circled arrowhead pointing along north + a bold "N".
+function drawNorthMarker(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
+  const cfg = p.store.compass;
+  if (!cfg || cfg.showNorthMarker !== true) return;
+  const f = p.floor();
+  const n = resolveNorth(cfg, p.geoFit());
+  const mk = northMarkerPos(f.w, f.d, n.nx, n.ny);
+  const s = mmToPx(view, mk.x, mk.y);
+  const dpr = window.devicePixelRatio || 1;
+  const r = 9 * dpr;                       // ~18 px circle, screen-fixed
+  // On-screen arrow angle: world (nx, ny) → screen (nx, −ny); CW-from-up =
+  // atan2(nx, ny) — mk.angleRad already is exactly that.
+  ctx.save();
+  ctx.translate(s.x, s.y);
+  ctx.beginPath();
+  ctx.arc(0, 0, r, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(10,14,20,0.78)';
+  ctx.fill();
+  ctx.lineWidth = 1.5 * dpr;
+  ctx.strokeStyle = '#ef5350';
+  ctx.stroke();
+  ctx.rotate(mk.angleRad);                 // canvas rotate is CW in screen space
+  ctx.beginPath();                         // arrowhead pointing screen-up pre-rotation
+  ctx.moveTo(0, -r * 0.62);
+  ctx.lineTo(r * 0.42, r * 0.38);
+  ctx.lineTo(0, r * 0.08);
+  ctx.lineTo(-r * 0.42, r * 0.38);
+  ctx.closePath();
+  ctx.fillStyle = '#ef5350';
+  ctx.fill();
+  ctx.restore();
+  // Bold "N" beside the circle (offset perpendicular-ish so it never sits
+  // under the arrow tip).
+  ctx.save();
+  ctx.font = `700 ${11 * dpr}px system-ui, sans-serif`;
+  ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#ef5350';
+  ctx.fillText('N', s.x + r + 3 * dpr, s.y);
+  ctx.restore();
 }
 
 // Floor-boundary edit affordance (Task: drag the canvas edges). In edit + select

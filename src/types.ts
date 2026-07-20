@@ -1181,6 +1181,22 @@ export interface Store {
   bgText?: BgTextConfig;             // LEGACY single background text — migrated once into bgTexts, then ignored (read for migration only)
   bgTexts?: BgTextEntry[];           // playful background text, up to 6 entries (skywriting / banner / grass / train / chopper)
   heatmap?: HeatmapConfig;           // per-room temperature heat-map comfort band (derived visual layer)
+  compass?: CompassConfig;           // on-screen compass overlay + in-plan north marker
+}
+
+// On-screen compass overlay (a movable widget like the weather chip) + the
+// optional in-plan north icon. North resolves from the geo-landmark fit
+// ('auto', the default) or a manual bearing; `manualNorthDeg` uses the SAME
+// convention as GeoConfig.northDeg — the compass bearing (° CW from true
+// north) that plan +Y faces. Store-level; in Planner._loadFromHa's explicit
+// field list. Pure resolution math lives in src/compass.ts.
+export interface CompassConfig {
+  show?: boolean;              // default false (opt-in overlay)
+  source?: 'auto' | 'manual';  // default 'auto' (landmarks when fitted, else manual, else plan-up)
+  manualNorthDeg?: number;     // bearing plan +Y faces (° CW from true north) — geo.northDeg convention
+  anchor?: 'tl' | 'tm' | 'tr' | 'bl' | 'bm' | 'br';  // widget corner (chipAnchorStyle); default 'tr'
+  custom?: { x: number; y: number };  // px offsets from the anchor's edges; wins over `anchor`
+  showNorthMarker?: boolean;   // default false — draw the north icon just off the slab edge (2D + 3D)
 }
 
 // Per-room temperature heat-map config (derived visual layer — no new binding).

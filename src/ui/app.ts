@@ -11,6 +11,7 @@ import './sidebar.js';
 import './canvas-2d.js';
 import './three-view.js';
 import './weather-chip.js';
+import './compass.js';
 import './toolbar.js';
 import './modals.js';
 import type { AuthScreen } from './auth-screen.js';
@@ -257,6 +258,9 @@ export class App extends LitElement {
               <!-- Weather chip overlays the shared canvas area so it shows in
                    both 2D and 3D without a duplicate mount / duplicate interval. -->
               <diorama-weather-chip .planner=${p}></diorama-weather-chip>
+              <!-- Compass overlay: same shared-canvas mount as the chip (one
+                   instance covers 2D + 3D); hidden unless compass.show. -->
+              <diorama-compass .planner=${p}></diorama-compass>
               <diorama-zone-edit-bar .planner=${p}></diorama-zone-edit-bar>
               <div style="position:absolute;bottom:10px;right:10px;color:var(--text-dim);font-size:11px;
                           padding:2px 6px;pointer-events:none;

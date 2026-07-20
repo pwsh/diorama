@@ -8,6 +8,7 @@ import type { ThreeDRenderer, ZoneWorld, HaloWorld, TargetWorld, ActivityContext
   InteractiveItem, GpsPinWorld, GpsLandmarkWorld, GeoEventWorld, WeatherFxState, VacMapEntry } from '../three-renderer.js';
 import { localToWorld, transformVerts, pointInPolygon, sensorColor, hexToInt, motionColor, lightIconKind, furnitureKind, resolveFurnitureDef, furnitureCat, isBinKind, isSpeakerKind, isSinkKind, isVehicleKind, isClimateApplianceKind, isBladedFanKind, isStairsKind, alarmStateColor, valveOpenness, sprinklerRunning, sprinklerHeadKind, sprinklerArcDeg, sprinklerRadius, sprinklerRotation, flagpoleHoistFraction, doorSpanCenter, isDroopPlant, plantThirsty, PLANT_MOISTURE_DEFAULT_THRESHOLD } from '../geometry.js';
 import { compass8 } from '../geo.js';
+import { resolveNorth } from '../compass.js';
 import { parseNowPlaying, isMediaPlayerId } from '../geometry.js';
 import { robotProgress } from '../geometry.js';
 import { poolWaterColor } from '../geometry.js';
@@ -686,6 +687,7 @@ export class ThreeView extends LitElement {
   private _keyHalos = '';
   private _keyGhost = '';
   private _keyGps = '';
+  private _keyCompass = '';
   private _keyWeather = '';
   private _keyBgText = '';
   // Tier 2 glass-house transit puppets already triggered (`${personId}:${at}`) so
@@ -714,7 +716,7 @@ export class ThreeView extends LitElement {
         this._keyHeatmap = '';
         this._keyVacMap = '';
         this._keyLights = this._keyZones = this._keyHalos = '';
-        this._keyGhost = this._keyGps = this._keyWeather = this._keyBgText = '';
+        this._keyGhost = this._keyGps = this._keyCompass = this._keyWeather = this._keyBgText = '';
         this._trigPrevOn.clear();
         this._actionTrigAt.clear();
         this._recentTrigs.length = 0;
@@ -1319,6 +1321,20 @@ export class ThreeView extends LitElement {
           label: `${ev.category === 'fire' ? '🔥' : '⚠️'} ${ev.name} · ${ev.label}`,
         }));
         r.updateGpsPins(pinsW, lmW, evW);
+      }
+
+      // In-plan north marker (compass feature). North changes only via config
+      // edits / landmark recalibration (both bump configRev); the rounded
+      // north-vector bucket is belt-and-braces. Gated on its own config flag
+      // (no 2D layer — renders in all UI modes, like the compass widget).
+      const compassCfg = p.store.compass;
+      const northShow = compassCfg?.showNorthMarker === true;
+      const north = resolveNorth(compassCfg, northShow ? p.geoFit() : null);
+      const keyCompass = `${p.configRev}|${northShow ? 1 : 0}|` +
+        `${Math.round(north.nx * 1000)}:${Math.round(north.ny * 1000)}`;
+      if (keyCompass !== this._keyCompass) {
+        this._keyCompass = keyCompass;
+        r.updateNorthMarker(northShow, f.w, f.d, north.nx, north.ny);
       }
 
       // Outdoor weather effects (W2). The renderer group is rebuilt only when the
