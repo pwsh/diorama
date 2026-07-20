@@ -748,6 +748,12 @@ export class ThreeView extends LitElement {
       // Cinematic slow-orbit flag (renderer advances the azimuth per frame).
       r.setCinematicOrbit(!!p.store.scene3d?.cinematicOrbit);
 
+      // Camera below-horizon + independent H/V FOV. Both setters self-guard
+      // (no-op unless the value changed) so calling them every tick is free —
+      // no dirty key needed; the values change only on a settings edit.
+      r.setBelowHorizon(p.store.scene3d?.belowHorizon === true);
+      r.setFov(p.store.scene3d?.fovV ?? 50, p.store.scene3d?.fovH ?? null);
+
       // Floor / walls / furniture / bg: structural + effective lighting
       // preset (auto modes flip it as the sun/lux sensor moves) + per-floor
       // look overrides + build-time-gated layers.

@@ -148,6 +148,14 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Camera: below-horizon orbit + independent H/V FOV** (2026-07-20;
+  1 Opus agent). `Scene3D.belowHorizon` raises maxPolarAngle to π−0.02;
+  `fovV`/`fovH` decouple horizontal from vertical via effective-aspect
+  override (`aspect = tan(fovH/2)/tan(fovV/2)`, no custom projection
+  matrix; resize routes through the shared apply so custom H FOV
+  survives). Settings ▸ Display "Camera" subsection. camera-test 12/12,
+  sky regression 23/23.
+
 - **Real night sky + horizon-ring cleanup** (2026-07-20; 1 Opus
   agent). Pure `sky-astro.ts` + `sky-catalog.ts` (145 stars, 19
   constellations, Schlyter planet/moon ephemerides). Observer from

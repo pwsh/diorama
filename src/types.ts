@@ -906,6 +906,12 @@ export interface Scene3D {
   cinematicOrbit?: boolean;  // slowly orbit the camera around the active avatars for visual interest
                              // (~0.08 rad/s at the current zoom; follows auto-follow's framing when both on); default off
   plumbobs?: boolean;        // show the spinning Sims plumbob diamonds above targets; default ON (opt-out)
+  belowHorizon?: boolean;    // allow orbiting the camera below the horizon (look up at the floor's underside);
+                             // default false = today's ~88° max polar angle
+  fovV?: number;             // vertical field-of-view in degrees; default 50 (the constructor's value)
+  fovH?: number;             // horizontal field-of-view in degrees; absent = auto (derive from the canvas
+                             // aspect, today's behavior). When set, the frustum is fixed and independent of
+                             // the window shape (a non-matching window letterboxes/stretches — that IS the feature).
   skyBackdrop?: boolean;     // phase 3: gradient sky dome + sun/moon/star props replacing the flat
                              // background. Default ON when a weather source is configured; the 3D
                              // "Sky backdrop" Display checkbox overrides.

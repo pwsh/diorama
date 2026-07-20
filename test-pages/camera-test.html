@@ -1,0 +1,105 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>CAMERA …</title>
+<style>
+  html,body{margin:0;background:#0b0f14;color:#cfd8dc;font:13px/1.4 sans-serif}
+  #c{width:1000px;height:640px}
+  #log{position:fixed;right:8px;top:8px;width:380px;max-height:96vh;overflow:auto;
+       background:#111820;border:1px solid #263340;border-radius:6px;padding:8px 10px;font-size:11px}
+  .pass{color:#69f0ae}.fail{color:#ff5252}.hd{font-weight:bold;margin:2px 0 6px}
+</style>
+<div id="c"></div>
+<div id="log"></div>
+<script type="module">
+  // Renderer-harness camera test: below-horizon polar cap + independent H/V FOV.
+  // Whole body is synchronous after load() so no background _animate RAF can
+  // interleave — every read reflects only manual setter calls.
+  const mod = await import('./assets/three-renderer.js?v=' + Date.now());
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+
+  const floor = {
+    id: 'f1', name: 'T', w: 10000, d: 8000,
+    walls: [{ id: 'w', points: [{x:200,y:200},{x:9800,y:200},{x:9800,y:7800},{x:200,y:7800},{x:200,y:200}] }],
+    furniture: [], lights: [], switches: [], sensors: [], motionSensors: [],
+    envSensors: [], doors: [], windows: [], bg: null, model3d: null, look3d: null,
+  };
+  r.updateFloor(floor, { preset: 'day', floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6' });
+
+  const tests = [];
+  const ok = (name, cond, detail) => tests.push({ name, ok: !!cond, detail: detail ?? '' });
+  const near = (a, b, eps) => Math.abs(a - b) <= eps;
+  const D2R = Math.PI / 180;
+  // Horizontal FOV back-computed from vertical fov + aspect (deg).
+  const hFovOf = (cam) => 2 * Math.atan(cam.aspect * Math.tan(cam.fov / 2 * D2R)) / D2R;
+
+  // 1. below-horizon polar cap
+  r.setBelowHorizon(true);
+  ok('belowHorizon(true) → maxPolar ≈ π−0.02',
+     near(r._controls.maxPolarAngle, Math.PI - 0.02, 1e-6),
+     `mp=${r._controls.maxPolarAngle.toFixed(4)}`);
+  r.setBelowHorizon(false);
+  ok('belowHorizon(false) → maxPolar ≈ π·0.49',
+     near(r._controls.maxPolarAngle, Math.PI * 0.49, 1e-6),
+     `mp=${r._controls.maxPolarAngle.toFixed(4)}`);
+
+  // 2. auto FOV after a resize follows the canvas aspect
+  r.resize(1600, 900);
+  r.setFov(50, null);
+  ok('setFov(50,null) after resize(1600,900) → aspect ≈ 1600/900',
+     near(r._camera.aspect, 1600 / 900, 1e-4) && r._camera.fov === 50,
+     `aspect=${r._camera.aspect.toFixed(4)} fov=${r._camera.fov}`);
+
+  // 3. custom H FOV: setFov(50,90) → aspect = tan(45°)/tan(25°) ≈ 2.1445
+  r.setFov(50, 90);
+  const wantA = Math.tan(45 * D2R) / Math.tan(25 * D2R);
+  ok('setFov(50,90) → aspect ≈ 2.1445',
+     near(r._camera.aspect, wantA, 1e-3) && r._camera.fov === 50,
+     `aspect=${r._camera.aspect.toFixed(4)} want=${wantA.toFixed(4)}`);
+  ok('setFov(50,90) → back-computed hFov ≈ 90°',
+     near(hFovOf(r._camera), 90, 0.5), `hFov=${hFovOf(r._camera).toFixed(3)}`);
+
+  // 4. setFov(60,60) → aspect = tan(30)/tan(30) = 1.0
+  r.setFov(60, 60);
+  ok('setFov(60,60) → aspect ≈ 1.0',
+     near(r._camera.aspect, 1.0, 1e-3) && r._camera.fov === 60,
+     `aspect=${r._camera.aspect.toFixed(5)}`);
+
+  // 5. custom H FOV survives a resize; then auto restores it
+  r.setFov(50, 90);
+  r.resize(800, 1200);
+  ok('custom H FOV survives resize(800,1200) → aspect STILL ≈ 2.1445 (not 800/1200)',
+     near(r._camera.aspect, wantA, 1e-3) && !near(r._camera.aspect, 800 / 1200, 1e-2),
+     `aspect=${r._camera.aspect.toFixed(4)}`);
+  r.setFov(50, null);
+  ok('setFov(50,null) + same canvas → aspect ≈ 800/1200 (auto restored)',
+     near(r._camera.aspect, 800 / 1200, 1e-4),
+     `aspect=${r._camera.aspect.toFixed(4)}`);
+
+  // 6. clamps: fovV ≥ 10, fovH ≤ 150
+  r.setFov(5, 200);
+  const clampedH = 2 * Math.atan(r._camera.aspect * Math.tan(r._camera.fov / 2 * D2R)) / D2R;
+  ok('setFov(5,200) → fov clamped ≥ 10', r._camera.fov >= 10 && r._camera.fov === 10,
+     `fov=${r._camera.fov}`);
+  ok('setFov(5,200) → hFov clamped ≤ 150', near(clampedH, 150, 0.5),
+     `hFov=${clampedH.toFixed(2)}`);
+
+  // 7. applyViewPreset must NOT touch fov/aspect
+  r.setFov(50, 90);
+  const preFov = r._camera.fov, preAspect = r._camera.aspect;
+  r.applyViewPreset('iso');
+  ok('applyViewPreset(iso) does not change fov',
+     r._camera.fov === preFov, `fov=${r._camera.fov} pre=${preFov}`);
+  ok('applyViewPreset(iso) does not change aspect',
+     near(r._camera.aspect, preAspect, 1e-9), `aspect=${r._camera.aspect} pre=${preAspect}`);
+
+  // ── report ────────────────────────────────────────────────────────────────
+  const pass = tests.filter(t => t.ok).length, total = tests.length;
+  const allPass = pass === total;
+  const fails = tests.filter(t => !t.ok).map(t => t.name);
+  const title = allPass ? `CAMERA PASS ${pass}/${total}` : `CAMERA FAIL ${pass}/${total} [${fails.join(',')}]`;
+  document.title = title;
+  const log = document.getElementById('log');
+  log.innerHTML = `<div class="hd ${allPass ? 'pass' : 'fail'}">${title}</div>` +
+    tests.map(t => `<div><span class="${t.ok ? 'pass' : 'fail'}">${t.ok ? 'PASS' : 'FAIL'}</span> ${t.name} <span style="color:#78909c">${t.detail}</span></div>`).join('');
+</script>

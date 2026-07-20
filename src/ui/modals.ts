@@ -1213,6 +1213,32 @@ export class SettingsDrawer extends LitElement {
       ${check('Sky backdrop', sc.skyBackdrop ?? (p.store.weather != null),
         v => { p.store.scene3d!.skyBackdrop = v; },
         'Gradient sky dome + sun / moon / stars behind the scene (default on when weather is configured)')}
+      <div style="border-top:1px solid var(--border);margin:10px 0 0;padding-top:8px">
+        <div style="font-weight:600;font-size:11px;margin-bottom:4px">Camera</div>
+        ${check('Allow orbiting below the horizon', !!sc.belowHorizon,
+          v => { p.store.scene3d!.belowHorizon = v; },
+          'Let the camera drop below the horizon and look up at the floor from underneath')}
+        <div class="row"><label title="Vertical field of view in degrees (default 50)">Vertical FOV</label>
+          <input type="range" min="10" max="120" step="1" style="flex:1"
+                 .value=${String(sc.fovV ?? 50)}
+                 @input=${(e: Event) => upd(() => { p.store.scene3d!.fovV = Number((e.target as HTMLInputElement).value); })}>
+          <span style="width:34px;text-align:right;font-size:10px">${sc.fovV ?? 50}°</span>
+        </div>
+        ${check('Custom horizontal FOV', sc.fovH != null,
+          v => { p.store.scene3d!.fovH = v ? (sc.fovH ?? 70) : undefined; },
+          'Set the horizontal FOV independently of the vertical FOV')}
+        ${sc.fovH != null ? html`
+          <div class="row"><label title="Horizontal field of view in degrees">Horizontal FOV</label>
+            <input type="range" min="10" max="150" step="1" style="flex:1"
+                   .value=${String(sc.fovH ?? 70)}
+                   @input=${(e: Event) => upd(() => { p.store.scene3d!.fovH = Number((e.target as HTMLInputElement).value); })}>
+            <span style="width:34px;text-align:right;font-size:10px">${sc.fovH ?? 70}°</span>
+          </div>
+          <div style="font-size:10px;color:var(--text-dim);line-height:1.3;margin:2px 0 4px">
+            Independent H/V FOV renders a fixed frustum — the view may letterbox if the window shape differs.
+          </div>
+        ` : nothing}
+      </div>
       ${this._bgTextBlock()}
       <div style="border-top:1px solid var(--border);margin:10px 0 0;padding-top:8px">
         <div class="row" title="Show all dimensions in feet / inches instead of millimetres">

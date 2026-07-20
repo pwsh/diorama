@@ -1251,6 +1251,17 @@ export class ThreeDRenderer {
   private _camera: THREE.PerspectiveCamera | null = null;
   private _renderer: THREE.WebGLRenderer | null = null;
   private _controls: OrbitControls | null = null;
+  // Camera FOV / below-horizon state. `_fovH === null` = auto (aspect follows the
+  // canvas). `_lastCanvasW/H` mirror the live canvas size so setFov and resize
+  // agree on the auto aspect. The `_applied*` guards make the per-tick setters
+  // (called from three-view every frame) no-op unless the value actually changed.
+  private _fovV = 50;
+  private _fovH: number | null = null;
+  private _lastCanvasW = 1;
+  private _lastCanvasH = 1;
+  private _appliedBelowHorizon: boolean | null = null;
+  private _appliedFovV: number | null = null;
+  private _appliedFovH: number | null | undefined = undefined;
   private _grid: THREE.GridHelper | null = null;
   private _bgVisibleNow = false;   // last-computed bg-image visibility (grid suppression; set in updateFloor)
   private _floorGroup = new THREE.Group();
@@ -1878,6 +1889,7 @@ export class ThreeDRenderer {
     // dome (always 30000 away) so props vanished "behind the sky". 150000 clears
     // every background prop at any zoom; near stays 10.
     this._camera = new THREE.PerspectiveCamera(50, w / h, 10, 150000);
+    this._lastCanvasW = Math.max(w, 1); this._lastCanvasH = Math.max(h, 1);
     this._camera.position.set(0, 9000, -6000);
     this._camera.lookAt(0, 0, 0);
     this._renderer = new THREE.WebGLRenderer({
@@ -2767,6 +2779,53 @@ export class ThreeDRenderer {
   // target), so the two never fight (auto-follow preserves azimuth, we drive it).
   setCinematicOrbit(on: boolean): void { this._cinematicOrbit = on; }
   setPlumbobs(on: boolean): void { this._plumbobs = on; }
+
+  // Allow orbiting the camera below the horizon (looking up at the floor slab's
+  // underside — the slab is DoubleSide so it stays visible). Off = today's
+  // ~88° cap (Math.PI * 0.49). We leave a hair below π to avoid the OrbitControls
+  // gimbal flip exactly at the pole. Guarded so a per-tick call is free.
+  setBelowHorizon(on: boolean): void {
+    if (on === this._appliedBelowHorizon) return;
+    this._appliedBelowHorizon = on;
+    if (!this._controls) return;
+    this._controls.maxPolarAngle = on ? Math.PI - 0.02 : Math.PI * 0.49;
+  }
+
+  // Independent horizontal / vertical field of view. A PerspectiveCamera carries
+  // only a vertical `.fov`; the horizontal FOV falls out of `.aspect`
+  // (tan(hFov/2) = aspect·tan(vFov/2)). To decouple them WITHOUT a custom
+  // projection matrix we drive the camera's EFFECTIVE aspect from the requested
+  // H/V FOV instead of the canvas aspect:
+  //   fovH == null  → auto: aspect = canvasW / canvasH (today's behavior).
+  //   fovH  != null → aspect = tan(fovH/2) / tan(fovV/2) — the effective aspect
+  //                   that yields the requested horizontal FOV at the given
+  //                   vertical FOV. This INTENTIONALLY fixes the frustum
+  //                   independent of the window shape (a non-matching canvas
+  //                   letterboxes/stretches — that is the feature).
+  // Guarded so calling every tick only touches the camera on an actual change.
+  setFov(fovV: number, fovH: number | null): void {
+    const v = Math.max(10, Math.min(120, fovV));
+    const h = fovH == null ? null : Math.max(10, Math.min(150, fovH));
+    if (v === this._appliedFovV && h === this._appliedFovH) return;
+    this._appliedFovV = v; this._appliedFovH = h;
+    this._fovV = v; this._fovH = h;
+    this._applyCameraFov();
+  }
+
+  // Shared aspect/fov apply — used by setFov and resize so a resize never
+  // clobbers a custom horizontal FOV.
+  private _applyCameraFov(): void {
+    if (!this._camera) return;
+    this._camera.fov = this._fovV;
+    if (this._fovH == null) {
+      this._camera.aspect = this._lastCanvasW / this._lastCanvasH;
+    } else {
+      const rad = Math.PI / 180;
+      this._camera.aspect =
+        Math.tan((this._fovH / 2) * rad) / Math.tan((this._fovV / 2) * rad);
+    }
+    this._camera.updateProjectionMatrix();
+  }
 
   // Surface height (mm) under a world point: the highest stair tread or
   // landing containing it, else the floor (0). Stair treads quantize to the
@@ -18039,8 +18098,11 @@ export class ThreeDRenderer {
 
   resize(w: number, h: number): void {
     if (!this._renderer || !this._camera) return;
-    this._camera.aspect = Math.max(w, 1) / Math.max(h, 1);
-    this._camera.updateProjectionMatrix();
+    this._lastCanvasW = Math.max(w, 1); this._lastCanvasH = Math.max(h, 1);
+    // Re-apply through the shared path: auto (fovH null) tracks the new canvas
+    // aspect; a custom horizontal FOV keeps its fixed frustum (aspect derived
+    // from H/V FOV), so a resize doesn't clobber it.
+    this._applyCameraFov();
     this._renderer.setSize(w, h);
   }
 
