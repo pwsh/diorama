@@ -1,6 +1,6 @@
 # Project status & pick-up guide
 
-Last updated: 2026-07-20, at **v0.25.0**. This is the single document to
+Last updated: 2026-07-20, at **v0.26.0**. This is the single document to
 read (alongside `CLAUDE.md`) to resume work with full context.
 
 ## Where things stand
@@ -145,6 +145,10 @@ instance.
   zoom-independent weather fog; entity text no longer truncated at
   colons/dashes + bgtext format UI; backspace-in-name-field no longer
   deletes the sensor).
+  → v0.26.0 open house (live editable demo on GitHub Pages — the full
+  app runs client-side in offline mode, zero-install, seeded with all
+  12 demo homes; camera below-horizon orbit + independent H/V field of
+  view).
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
