@@ -148,6 +148,16 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **GitHub Pages live demo** (2026-07-20; 1 Opus agent). The full app
+  runs client-side on the docs site (`/demo/`) — real production build,
+  offline mode, zero-click auto-start via `?demo=<slug>`
+  (`shouldStartOffline` honors `?demo`/`?offline=1`), seeds the 12
+  committed floorplans as selectable configs (`src/demo-seed.ts`,
+  idempotent, DOM-free, out of the 3D chunk), visitor edits persist in
+  their own localStorage, "Reset demo" clears them. `docs:demo` build
+  step + nav link + home CTA. demo-boot-test 28/28; verified booting
+  under a gh-pages subpath (13 configs, ranch active).
+
 - **Camera: below-horizon orbit + independent H/V FOV** (2026-07-20;
   1 Opus agent). `Scene3D.belowHorizon` raises maxPolarAngle to π−0.02;
   `fovV`/`fovH` decouple horizontal from vertical via effective-aspect

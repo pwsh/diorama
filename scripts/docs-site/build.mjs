@@ -103,6 +103,7 @@ function buildHome(version, date) {
     `<div class="tile"><span class="tile-title">${htmlEsc(t)}</span><span class="tile-count">${htmlEsc(d)}</span></div>`).join('');
 
   const cta = [
+    ['▶ Try the live demo', 'demo/index.html?demo=ranch-3bed'],
     ['Get started', 'guide/getting-started.html'],
     ['Model gallery', 'models/index.html'],
     ['Floor plans', 'floorplans/index.html'],
@@ -121,6 +122,10 @@ function buildHome(version, date) {
 <h1>Diorama — a graphical dashboard for Home Assistant</h1>
 <p class="tag">Build a virtual copy of your home — walls, rooms, furniture, and devices — and see live Home Assistant state in its actual spatial context. Click anything to control it. The 3D view renders in a 2000-era <em>Sims</em> cartoon style, with the people and pets moving through your home shown as animated figures.</p>
 <div class="cta-row">${cta}</div>
+</section>
+<section class="group"><h2>Try it in your browser</h2>
+<p>The <a href="demo/index.html?demo=ranch-3bed">live demo</a> runs the <strong>full app entirely in your browser</strong> — no Home Assistant, no install, no account. It loads in offline mode preloaded with a dozen sample homes you can switch between and edit freely: move walls, drop furniture and devices, and orbit the Sims-style 3D view. Every change is saved only in <em>your</em> browser's local storage; a <strong>Reset demo</strong> button restores the samples at any time.</p>
+<p><a class="dl-btn" href="demo/index.html?demo=ranch-3bed">▶ Open the live demo</a></p>
 </section>
 <section class="group"><h2>What it does</h2>
 <div class="feature-grid">${tiles}</div>

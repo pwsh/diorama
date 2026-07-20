@@ -3,6 +3,7 @@ import { query, state } from 'lit/decorators.js';
 import { customElement } from './define.js';
 import { Planner } from '../planner.js';
 import { LocalApi, shouldStartOffline } from '../ha-local.js';
+import { seedDemoConfigs, demoSeedHash, DEMO_SEEDED_KEY, type DemoManifestEntry } from '../demo-seed.js';
 import { fmtLen } from '../geometry.js';
 import { injectSharedStyles } from '../styles.js';
 import './auth-screen.js';
@@ -224,7 +225,80 @@ export class App extends LitElement {
     this._planner.connectWith(new LocalApi());
     this._planner.addEventListener('config', () => this.requestUpdate());
     this._connected = true;
+    // Hosted-demo boot (standalone offline entry only, and only when the URL
+    // asks for it via ?demo). Panel mode never reaches here; normal offline
+    // (no ?demo) skips it entirely. Seeds the demo floorplans as configs, opens
+    // the requested one, then applies the ?view/?mode/… templates on top.
+    const params = (() => {
+      try { return new URLSearchParams(window.location.search); } catch { return new URLSearchParams(); }
+    })();
+    if (params.has('demo')) {
+      this._planner.demoMode = true;
+      void this._bootDemo(this._planner, params.get('demo'));
+    }
     this.requestUpdate();
+  }
+
+  private _waitFor(cond: () => boolean, timeoutMs: number): Promise<boolean> {
+    return new Promise(resolve => {
+      const started = performance.now();
+      const tick = () => {
+        if (cond()) return resolve(true);
+        if (performance.now() - started >= timeoutMs) return resolve(false);
+        setTimeout(tick, 20);
+      };
+      tick();
+    });
+  }
+
+  // Seed the committed demo floorplans (fetched from ./floorplans/, relative so
+  // it works under the gh-pages /diorama/demo/ subpath) as offline configs and
+  // switch to ?demo=<slug>. Idempotent per browser via a localStorage marker so
+  // a visitor's own edits survive reloads; a new build with more homes re-seeds
+  // the newcomers. Every fetch is guarded — a failure just leaves the plain
+  // offline app. Runs ONLY from the ?demo standalone path.
+  private async _bootDemo(planner: Planner, slug: string | null): Promise<void> {
+    try {
+      // Wait for the offline config registry to load (LocalApi emits a deferred
+      // connected + snapshot → _loadFromHa → configIndex). Bounded so a stall
+      // never hangs the boot.
+      const ready = await this._waitFor(() => planner.configIndex !== null, 8000);
+      if (ready) {
+        let manifest: DemoManifestEntry[] = [];
+        try {
+          const res = await fetch('./floorplans/index.json', { cache: 'no-cache' });
+          if (res.ok) { const j = await res.json(); if (Array.isArray(j)) manifest = j as DemoManifestEntry[]; }
+        } catch (err) { console.warn('[diorama demo] manifest fetch failed:', err); }
+
+        if (manifest.length) {
+          const want = demoSeedHash(manifest);
+          let marker: string | null = null;
+          try { marker = localStorage.getItem(DEMO_SEEDED_KEY); } catch { /* ignore */ }
+          if (marker !== want) {
+            // Fresh browser or a new build — fetch envelopes + seed missing homes.
+            const envelopes: Record<string, unknown> = {};
+            await Promise.all(manifest.map(async (m) => {
+              try {
+                const r = await fetch(`./floorplans/${m.slug}.json`, { cache: 'no-cache' });
+                if (r.ok) envelopes[m.slug] = await r.json();
+              } catch (err) { console.warn('[diorama demo] envelope fetch failed:', m.slug, err); }
+            }));
+            await seedDemoConfigs(planner, manifest, envelopes, slug);
+            try { localStorage.setItem(DEMO_SEEDED_KEY, want); } catch { /* ignore */ }
+          } else {
+            // Already seeded this build — no envelope fetch, just open the demo.
+            await seedDemoConfigs(planner, manifest, {}, slug);
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('[diorama demo] boot failed:', err);
+    } finally {
+      // ?view / ?mode / ?floor / ?layers / ?cam apply ON TOP of the seeded
+      // config (which set its own floor + reset view on switch).
+      this._applyUrlParams(planner);
+      this.requestUpdate();
+    }
   }
 
   override render() {

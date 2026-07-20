@@ -2,6 +2,7 @@ import { LitElement, html, nothing } from 'lit';
 import { property, state } from 'lit/decorators.js';
 import { customElement } from './define.js';
 import { fmtLen, floorsDisplayOrder } from '../geometry.js';
+import { clearDemoStorage } from '../demo-seed.js';
 import './alert-center.js';
 import type { Planner } from '../planner.js';
 
@@ -120,6 +121,11 @@ export class Topbar extends LitElement {
           <button class="btn-sm" title="Settings" @click=${this._openSettings}>⚙</button>
         ` : nothing}
         <span style="flex:1"></span>
+        ${p.demoMode ? html`
+          <button class="btn-sm"
+                  title="Reset the demo — clear all local edits and re-seed the sample homes in this browser"
+                  @click=${this._resetDemo}>↺ Reset demo</button>
+        ` : nothing}
         <diorama-alert-center .planner=${p}></diorama-alert-center>
         <span class="pill ${connClass}">${connText}</span>
       </div>
@@ -148,5 +154,15 @@ export class Topbar extends LitElement {
 
   private _openSettings = () => {
     this.dispatchEvent(new CustomEvent('open-settings', { bubbles: true, composed: true }));
+  };
+
+  // Wipe the demo's local data (config registry mirror + active-body cache +
+  // every diorama:local:* offline user_data slot + the seeded marker; nothing
+  // else) then reload — the ?demo query survives the reload, so seeding re-runs
+  // fresh. See src/demo-seed.ts for the exact key set.
+  private _resetDemo = () => {
+    if (!confirm('Reset the demo? This clears every change you made in this browser and restores the sample homes.')) return;
+    try { clearDemoStorage(localStorage); } catch { /* ignore */ }
+    location.reload();
   };
 }

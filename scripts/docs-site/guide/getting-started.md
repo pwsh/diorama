@@ -12,6 +12,16 @@ model is generic: any Home Assistant entity can be placed and bound — lights,
 switches, fans, media players, environmental sensors, cameras, locks, covers,
 and more.
 
+## Try it in your browser
+
+Want to see it before installing anything? The [live demo](../demo/index.html?demo=ranch-3bed)
+runs the full app **entirely in your browser** in offline mode — no Home
+Assistant, no install, no account. It comes preloaded with a dozen sample homes
+you can switch between and edit freely. Every change is saved only in your own
+browser's local storage, and a **Reset demo** button restores the samples at any
+time. Bound devices show no live state offline, but everything else — drawing,
+placing, the 3D view — works exactly as it does against a real Home Assistant.
+
 ## Requirements
 
 - **Home Assistant** — any recent version. Diorama talks to HA over its

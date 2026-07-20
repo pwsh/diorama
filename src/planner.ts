@@ -693,6 +693,9 @@ export class Planner extends EventTarget {
   uiMode: 'edit' | 'kiosk' | 'view' = 'edit';
   // ?lock=1 hides the mode switcher (wall tablets).
   uiModeLocked = false;
+  // Runtime-only (never persisted): the standalone offline app was launched as
+  // the hosted demo (URL had ?demo). Gates the topbar "Reset demo" affordance.
+  demoMode = false;
   // Parsed ?floor/?layers/?view3d/?cam template args (applied by app/three-view
   // with fallback to defaults when the named things no longer exist).
   urlTemplate: { floor?: string; layers?: string; view3d?: string; cam?: number[] } = {};

@@ -23,6 +23,10 @@ export const SITE_SECTIONS = [
   { key: 'guide', label: 'Guide', href: 'guide/getting-started.html' },
   { key: 'models', label: 'Models', href: 'models/index.html' },
   { key: 'floorplans', label: 'Floor plans', href: 'floorplans/index.html' },
+  // The live demo page is the full app (staged by scripts/docs-site/demo.mjs),
+  // not a sitePage() emit, so it never carries section==='demo' and simply
+  // never highlights — the relative href + ?demo query resolve fine at any depth.
+  { key: 'demo', label: 'Live demo', href: 'demo/index.html?demo=ranch-3bed' },
 ];
 
 /**

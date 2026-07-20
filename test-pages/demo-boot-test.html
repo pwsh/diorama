@@ -1,0 +1,207 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>DEMOBOOT …</title>
+<style>
+  body { margin:0; background:#0d1116; color:#cfd8dc; font:13px/1.5 sans-serif; padding:14px; }
+  h1 { font-size:15px; margin:0 0 10px; }
+  #summary { font-size:14px; font-weight:bold; margin:10px 0; padding:8px 10px; border-radius:5px; }
+  .okbg { background:#12331f; color:#69f0ae; } .badbg { background:#3a1414; color:#ff8a80; }
+  .row { display:flex; justify-content:space-between; gap:10px; padding:2px 0; border-bottom:1px solid #1c2530; }
+  .pass { color:#69f0ae; } .fail { color:#ff5252; }
+  .name { color:#90caf9; } .extra { color:#ffd54f; font-size:11px; }
+</style>
+<h1>Hosted-demo boot — shouldStartOffline · seed idempotency · switch · reset keys</h1>
+<div id="summary">Running…</div>
+<div id="rows"></div>
+
+<!-- Drives the REAL Planner over the REAL offline LocalApi + the demo-seed
+     helpers (no DOM app shell). Build (avatar-store swapped for the in-memory
+     fake because IndexedDB stalls under the headless virtual-time harness):
+       T=$(mktemp -d); cp -r src/* "$T"/
+       cp test-pages/fake-avatar-store.ts "$T"/avatar-store.ts
+       cp test-pages/demo-boot-entry.ts "$T"/demo-boot-entry.ts
+       npx esbuild "$T"/demo-boot-entry.ts --bundle --format=esm \
+         --outfile=<harness>/demo-boot.mod.js
+     (esbuild inlines the avatar-pack dynamic imports into one module.) -->
+<script type="module">
+  const V = '?v=' + Date.now();
+  const M = await import('./demo-boot.mod.js' + V);
+  const { Planner, LocalApi, shouldStartOffline, seedDemoConfigs, demoSeedHash,
+          demoResetKeys, clearDemoStorage, DEMO_SEEDED_KEY } = M;
+
+  const results = [];
+  const ok = (name, cond, extra = '') => results.push({ name, pass: !!cond, extra: String(extra) });
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  async function waitFor(cond, tries = 800) {
+    for (let i = 0; i < tries; i++) { if (cond()) return true; await sleep(4); }
+    return !!cond();
+  }
+  const clone = x => JSON.parse(JSON.stringify(x));
+
+  // Minimal valid store (mirrors config-test's makeStore).
+  function makeStore(floorName) {
+    return {
+      v: 2,
+      floors: [{
+        id: 'f1', name: floorName, w: 8000, d: 6000,
+        walls: [], furniture: [], lights: [], switches: [], sensors: [], motionSensors: [],
+        roamers: [], envSensors: [], doors: [], windows: [], bg: null, rooms: [], bleProxies: [],
+        alarmPanels: [], safetySensors: [], robots: [], presenceZones: [], cameras: [],
+        groundAreas: [], voidAreas: [],
+      }],
+      currentFloorId: 'f1', activeSensorId: null,
+      coverage: true, imperial: false, showDetails: false, useRawTargets: false,
+    };
+  }
+  const envelope = (name, floor) => ({ diorama: 2, name, exportedAt: 'x', store: makeStore(floor) });
+
+  function clearOfflineLS() {
+    for (const k of Object.keys(localStorage)) {
+      if (k.startsWith('diorama:local:') || k === 'diorama:configs' ||
+          k === 'diorama:store:v1' || k === DEMO_SEEDED_KEY) localStorage.removeItem(k);
+    }
+  }
+  async function freshOfflinePlanner() {
+    clearOfflineLS();
+    const p = new Planner();
+    p.connectWith(new LocalApi());
+    await waitFor(() => p.configIndex !== null);
+    return p;
+  }
+  // Config named `name`?
+  const hasCfg = (p, name) => p.listConfigs().some(c => c.name === name);
+  const nameOfActive = (p) => (p.listConfigs().find(c => c.id === p.activeConfigId) || {}).name;
+  const countManifest = (p, names) => p.listConfigs().filter(c => names.has(c.name)).length;
+
+  // Fake index-keyed Storage for the reset-key test.
+  function makeFakeLS(entries) {
+    const m = new Map(Object.entries(entries));
+    return {
+      get length() { return m.size; },
+      key(i) { return [...m.keys()][i] ?? null; },
+      getItem(k) { return m.has(k) ? m.get(k) : null; },
+      setItem(k, v) { m.set(k, String(v)); },
+      removeItem(k) { m.delete(k); },
+      _keys: () => [...m.keys()],
+    };
+  }
+
+  try {
+    // ── (1) shouldStartOffline: flag OR ?offline=1 OR ?demo= ; else false ──────
+    {
+      const noFlag = { getItem: () => null };
+      const withFlag = { getItem: (k) => (k === 'diorama:offline' ? '1' : null) };
+      ok('1: ?offline=1 → offline', shouldStartOffline(noFlag, '?offline=1') === true);
+      ok('1: ?demo=ranch-3bed → offline', shouldStartOffline(noFlag, '?demo=ranch-3bed') === true);
+      ok('1: ?demo= (empty) → offline', shouldStartOffline(noFlag, '?demo=') === true);
+      ok('1: localStorage flag → offline (unrelated query)', shouldStartOffline(withFlag, '?foo=1') === true);
+      ok('1: no flag + ?foo=1 → NOT offline', shouldStartOffline(noFlag, '?foo=1') === false);
+      ok('1: no flag + empty search → NOT offline', shouldStartOffline(noFlag, '') === false);
+    }
+
+    // ── (2) seed 2 envelopes: both added by name, switch to requested ─────────
+    const names2 = new Set(['Home A', 'Home B']);
+    {
+      const p = await freshOfflinePlanner();
+      ok('2: fresh offline planner in edit mode', p.uiMode === 'edit', p.uiMode);
+      const manifest = [{ slug: 'a', name: 'Home A' }, { slug: 'b', name: 'Home B' }];
+      const envelopes = { a: envelope('Home A', 'AFloor'), b: envelope('Home B', 'BFloor') };
+      const res = await seedDemoConfigs(p, manifest, envelopes, 'b');
+      ok('2: both imported by name', hasCfg(p, 'Home A') && hasCfg(p, 'Home B'),
+        p.listConfigs().map(c => c.name).join(','));
+      ok('2: exactly 2 manifest configs', countManifest(p, names2) === 2, countManifest(p, names2));
+      ok('2: seeded reports both slugs', res.seeded.length === 2 &&
+        res.seeded.includes('a') && res.seeded.includes('b'), JSON.stringify(res.seeded));
+      ok('2: switched to requested (Home B)', nameOfActive(p) === 'Home B', nameOfActive(p));
+      ok('2: active body is Home B floor', p.store.floors[0].name === 'BFloor', p.store.floors[0].name);
+      ok('2: result.activeId matches planner', res.activeId === p.activeConfigId, res.activeId);
+
+      // ── (2b) re-run SAME manifest → NO duplication (still 2, not 4) ─────────
+      const res2 = await seedDemoConfigs(p, manifest, envelopes, 'b');
+      ok('2b: re-seed does not duplicate (still 2)', countManifest(p, names2) === 2, countManifest(p, names2));
+      ok('2b: re-seed imports nothing new', res2.seeded.length === 0, JSON.stringify(res2.seeded));
+
+      // ── (2c) manifest gains a 3rd → only the 3rd is added ──────────────────
+      const manifest3 = [...manifest, { slug: 'c', name: 'Home C' }];
+      const envelopes3 = { ...envelopes, c: envelope('Home C', 'CFloor') };
+      const res3 = await seedDemoConfigs(p, manifest3, envelopes3, 'a');
+      const names3 = new Set(['Home A', 'Home B', 'Home C']);
+      ok('2c: now 3 manifest configs', countManifest(p, names3) === 3, countManifest(p, names3));
+      ok('2c: only the 3rd was imported', res3.seeded.length === 1 && res3.seeded[0] === 'c',
+        JSON.stringify(res3.seeded));
+      ok('2c: switched to requested Home A', nameOfActive(p) === 'Home A' && p.store.floors[0].name === 'AFloor',
+        nameOfActive(p) + '/' + p.store.floors[0].name);
+    }
+
+    // ── (2d) unknown slug + empty envelopes → switch to first, no import ──────
+    {
+      const p = await freshOfflinePlanner();
+      const manifest = [{ slug: 'a', name: 'Home A' }, { slug: 'b', name: 'Home B' }];
+      const envelopes = { a: envelope('Home A', 'AFloor'), b: envelope('Home B', 'BFloor') };
+      await seedDemoConfigs(p, manifest, envelopes, 'a');
+      // Already seeded; empty envelopes → pure switch. Unknown slug → first entry.
+      const res = await seedDemoConfigs(p, manifest, {}, 'nope');
+      ok('2d: empty envelopes import nothing', res.seeded.length === 0, JSON.stringify(res.seeded));
+      ok('2d: unknown slug falls back to first (Home A)', nameOfActive(p) === 'Home A', nameOfActive(p));
+      ok('2d: still 2 manifest configs', countManifest(p, names2) === 2, countManifest(p, names2));
+    }
+
+    // ── (3) demoSeedHash: order-independent, changes with the set ─────────────
+    {
+      const a = demoSeedHash([{ slug: 'a', name: 'Home A' }, { slug: 'b', name: 'Home B' }]);
+      const b = demoSeedHash([{ slug: 'b', name: 'Home B' }, { slug: 'a', name: 'Home A' }]);
+      const c = demoSeedHash([{ slug: 'a', name: 'Home A' }, { slug: 'b', name: 'Home B' },
+                              { slug: 'c', name: 'Home C' }]);
+      ok('3: hash is order-independent', a === b, a + ' vs ' + b);
+      ok('3: hash changes when a home is added', a !== c, a + ' vs ' + c);
+    }
+
+    // ── (4) reset key enumeration: surgical (leaves unrelated keys) ───────────
+    {
+      const fake = makeFakeLS({
+        'diorama:local:diorama-configs': '1',
+        'diorama:local:diorama-cfg-x': '1',
+        'diorama:configs': '1',
+        'diorama:store:v1': '1',
+        [DEMO_SEEDED_KEY]: 'h',
+        'diorama:offline': '1',   // NOT a demo data key — must be left alone
+        'diorama:view': '3d',     // device pref — must be left alone
+        'unrelated:y': '1',
+      });
+      const keys = demoResetKeys(fake);
+      const set = new Set(keys);
+      ok('4: enumerates diorama:local:* keys', set.has('diorama:local:diorama-configs') &&
+        set.has('diorama:local:diorama-cfg-x'), JSON.stringify(keys));
+      ok('4: enumerates registry mirror + cache + marker',
+        set.has('diorama:configs') && set.has('diorama:store:v1') && set.has(DEMO_SEEDED_KEY),
+        JSON.stringify(keys));
+      ok('4: does NOT enumerate unrelated key', !set.has('unrelated:y'), '');
+      ok('4: does NOT enumerate offline flag / view pref',
+        !set.has('diorama:offline') && !set.has('diorama:view'), '');
+      clearDemoStorage(fake);
+      const left = fake._keys().sort();
+      ok('4: clear leaves exactly the non-demo keys',
+        JSON.stringify(left) === JSON.stringify(['diorama:offline', 'diorama:view', 'unrelated:y']),
+        JSON.stringify(left));
+    }
+  } catch (err) {
+    ok('harness threw', false, (err && err.stack) ? err.stack.split('\n').slice(0, 3).join(' | ') : String(err));
+  } finally {
+    clearOfflineLS();
+  }
+
+  // ── Report ────────────────────────────────────────────────────────────────
+  const pass = results.filter(r => r.pass).length;
+  const total = results.length;
+  const fails = results.filter(r => !r.pass).map(r => r.name + (r.extra ? ` {${r.extra}}` : ''));
+  document.getElementById('rows').innerHTML = results.map(r =>
+    `<div class="row"><span class="name">${r.name}</span>` +
+    `<span class="${r.pass ? 'pass' : 'fail'}">${r.pass ? 'PASS' : 'FAIL'}${r.extra ? ` <span class="extra">${r.extra}</span>` : ''}</span></div>`
+  ).join('');
+  const sum = document.getElementById('summary');
+  sum.textContent = `DEMOBOOT ${pass === total ? 'PASS' : 'FAIL'} ${pass}/${total}`;
+  sum.className = pass === total ? 'okbg' : 'badbg';
+  window.__RESULT__ = { pass, total, results };
+  document.title = `DEMOBOOT ${pass === total ? 'PASS' : 'FAIL'} ${pass}/${total}` +
+    (fails.length ? ` | FAILS: ${fails.join('; ')}` : '');
+</script>

@@ -23,12 +23,25 @@ const LOCAL_PREFIX = 'diorama:local:';
 export const OFFLINE_FLAG_KEY = 'diorama:offline';
 
 // Pure startup decision for the STANDALONE entry: start offline iff the flag is
-// set. Guarded so a storage exception (private mode, disabled cookies) never
-// throws during boot. Panel mode never consults this (panel.ts adopts a Planner
-// before the app's startup check runs).
-export function shouldStartOffline(storage?: Pick<Storage, 'getItem'> | null): boolean {
-  try { return (storage ?? localStorage).getItem(OFFLINE_FLAG_KEY) === '1'; }
-  catch { return false; }
+// set OR the URL asks for it (`?offline=1`, or any `?demo=…` — the hosted demo
+// auto-starts offline for a first-time visitor with no flag set). Both inputs
+// are guarded so a storage exception (private mode, disabled cookies) or a bad
+// query never throws during boot. Panel mode never consults this (panel.ts
+// adopts a Planner before the app's startup check runs).
+export function shouldStartOffline(
+  storage?: Pick<Storage, 'getItem'> | null,
+  search?: string,
+): boolean {
+  try {
+    if ((storage ?? localStorage).getItem(OFFLINE_FLAG_KEY) === '1') return true;
+  } catch { /* storage unavailable — fall through to the URL check */ }
+  try {
+    const s = search ?? (typeof window !== 'undefined' ? window.location.search : '');
+    const q = new URLSearchParams(s);
+    if (q.get('offline') === '1') return true;
+    if (q.has('demo')) return true;
+  } catch { /* ignore */ }
+  return false;
 }
 
 export class LocalApi implements HaApi {
