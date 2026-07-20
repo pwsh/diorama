@@ -281,6 +281,37 @@
       p5.toggleWallDimension('w1');
       ok('9F kiosk toggleWallDimension no-op', !p5.floor().walls[0].dimension, '');
     }
+
+    // ═══ 10. selectionHot + newlyPlacedFocus (Backspace-deletes-sensor bug) ═══
+    document.getElementById('rows').insertAdjacentHTML('beforeend', '<h2>10. selectionHot / newlyPlacedFocus</h2>');
+    {
+      const sfloor = () => baseFloor({ sensors: [{ id:'s1', x:1000, y:1000, heading:0, fov:60, range:6000, label:'S', deviceSlug:null }] });
+      // A selection RESTORED from disk is COLD — a stray Backspace must not act on it.
+      const pa = await mkPlanner([sfloor()], { activeSensorId: 's1' });
+      ok('10A persisted activeSensorId loads COLD', pa.selectionHot === false, `hot=${pa.selectionHot} sel=${pa.store.activeSensorId}`);
+      // A genuine selection this session heats it (setActiveSensor marks hot).
+      const pb = await mkPlanner([sfloor()]);
+      pb.setActiveSensor('s1');
+      ok('10B setActiveSensor marks hot', pb.selectionHot === true, pb.selectionHot);
+      // A uiMode change starts a fresh context — cools the selection.
+      pb.setUiMode('kiosk');
+      ok('10C uiMode change cools selection', pb.selectionHot === false, pb.selectionHot);
+      // A fresh config load (funnels through _applyLoadedStore) cools it.
+      const pc = await mkPlanner([sfloor()]);
+      pc.markSelectionHot();
+      ok('10D markSelectionHot heats', pc.selectionHot === true, pc.selectionHot);
+      await pc.newConfig('t1');
+      ok('10E _applyLoadedStore reset cools selection', pc.selectionHot === false, pc.selectionHot);
+      // markNewlyPlaced records the autofocus target AND heats the selection.
+      const pd = await mkPlanner([sfloor()]);
+      pd.markNewlyPlaced('sensor', 's1');
+      ok('10F markNewlyPlaced sets focus target',
+        pd.newlyPlacedFocus != null && pd.newlyPlacedFocus.id === 's1' && pd.newlyPlacedFocus.kind === 'sensor',
+        JSON.stringify(pd.newlyPlacedFocus));
+      ok('10G markNewlyPlaced heats selection', pd.selectionHot === true, pd.selectionHot);
+      await pd.newConfig('t2');
+      ok('10H load clears newlyPlacedFocus', pd.newlyPlacedFocus === null, `${pd.newlyPlacedFocus}`);
+    }
   } catch (err) {
     ok('unhandled error', false, (err && (err.stack || err.message)) || String(err));
   }

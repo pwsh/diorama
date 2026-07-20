@@ -423,10 +423,13 @@ export class Canvas2D extends LitElement {
         return;
       }
     }
-    if (e.key === 'Delete' || e.key === 'Backspace') {
+    if ((e.key === 'Delete' || e.key === 'Backspace') && p.selectionHot) {
       // Delete the highest-priority current selection (vertex → furniture →
       // sensor → fixtures → zones/areas). Respects locked items. Only swallow
-      // the keystroke when something was actually removed.
+      // the keystroke when something was actually removed. Gated on selectionHot
+      // so a persisted-but-untouched selection (activeSensorId survives across
+      // sessions) can't be deleted by a stray keypress at body focus — e.g.
+      // Backspace while typing a just-placed fixture's name before clicking in.
       if (p.deleteSelection()) { e.preventDefault(); return; }
     }
     const tk: Record<string, import('../planner.js').Tool> = {

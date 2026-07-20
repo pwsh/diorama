@@ -208,6 +208,42 @@ export class Sidebar extends LitElement {
     // Start/stop the geo-calibration liveness ticker based on whether an active
     // session's card is currently visible (session running + section expanded).
     this._reconcileCalibLiveTimer();
+    this._maybeFocusNewlyPlaced();
+  }
+
+  // Frames spent waiting for a just-placed fixture's editor to render.
+  private _focusRetries = 0;
+
+  // After a NEW named fixture is placed on the canvas, land the cursor in its
+  // Label input so the user's typed name goes where they expect — instead of at
+  // body focus, where letters switch tools and Backspace deletes the fixture
+  // (the reported bug). The placement set planner.newlyPlacedFocus; the editor's
+  // Label input carries data-label-for=<item id>. The section auto-expands on
+  // the same render pass (_autoExpandActive), so the input is usually present
+  // immediately; we still retry a few frames as a safety net, then give up
+  // silently. Skipped on narrow layouts (the overlay sidebar auto-closes after
+  // placement — focusing a hidden input would pop the keyboard pointlessly).
+  private _maybeFocusNewlyPlaced(): void {
+    const np = this.planner.newlyPlacedFocus;
+    if (!np) { this._focusRetries = 0; return; }
+    if (typeof window !== 'undefined' && window.innerWidth < 900) {
+      this.planner.newlyPlacedFocus = null; this._focusRetries = 0; return;
+    }
+    const input = this.querySelector<HTMLInputElement>(`input[data-label-for="${np.id}"]`);
+    if (input) {
+      this.planner.newlyPlacedFocus = null;
+      this._focusRetries = 0;
+      input.focus();
+      input.select();
+      return;
+    }
+    // Editor not in the DOM yet (section expanding this pass). Retry a few frames.
+    if (this._focusRetries++ < 3) {
+      requestAnimationFrame(() => this.requestUpdate());
+    } else {
+      this._focusRetries = 0;
+      this.planner.newlyPlacedFocus = null;  // give up silently
+    }
   }
   private _tick = () => { this._++; };
 
@@ -760,7 +796,7 @@ export class Sidebar extends LitElement {
     return html`
       <div style="background:rgba(0,0,0,0.25);border-radius:4px;padding:6px;margin:4px 0">
         <div class="row"><label>Label</label>
-          <input type="text" .value=${m.label}
+          <input type="text" data-label-for=${m.id} .value=${m.label}
                  @input=${(e: Event) => upd(() => { m.label = (e.target as HTMLInputElement).value; })}>
         </div>
         <div class="row"><label>X (mm)</label>
@@ -924,7 +960,7 @@ export class Sidebar extends LitElement {
     return html`
       <div style="background:rgba(0,0,0,0.25);border-radius:4px;padding:6px;margin:4px 0">
         <div class="row"><label>Label</label>
-          <input type="text" .value=${en.label ?? ''}
+          <input type="text" data-label-for=${en.id} .value=${en.label ?? ''}
                  @input=${(e: Event) => upd(() => { en.label = (e.target as HTMLInputElement).value; })}>
         </div>
         <div class="row"><label>X (mm)</label>
@@ -1094,7 +1130,7 @@ export class Sidebar extends LitElement {
     return html`
       <div style="background:rgba(0,0,0,0.25);border-radius:4px;padding:6px;margin:4px 0">
         <div class="row"><label>Label</label>
-          <input type="text" .value=${ic.label ?? ''}
+          <input type="text" data-label-for=${ic.id} .value=${ic.label ?? ''}
                  @input=${(e: Event) => upd(() => { ic.label = (e.target as HTMLInputElement).value; })}>
         </div>
         <div class="row"><label>Mode</label>
@@ -1297,7 +1333,7 @@ export class Sidebar extends LitElement {
     return html`
       <div style="background:rgba(0,0,0,0.25);border-radius:4px;padding:6px;margin:4px 0">
         <div class="row"><label>Label</label>
-          <input type="text" .value=${b.label ?? ''}
+          <input type="text" data-label-for=${b.id} .value=${b.label ?? ''}
                  @input=${(e: Event) => upd(() => { b.label = (e.target as HTMLInputElement).value; })}>
         </div>
         <div class="row"><label>Action</label>
@@ -1432,7 +1468,7 @@ export class Sidebar extends LitElement {
     return html`
       <div style="background:rgba(0,0,0,0.25);border-radius:4px;padding:6px;margin:4px 0">
         <div class="row"><label>Name</label>
-          <input type="text" .value=${b.name}
+          <input type="text" data-label-for=${b.id} .value=${b.name}
                  @input=${(e: Event) => upd(() => { b.name = (e.target as HTMLInputElement).value; })}>
         </div>
         <div class="row"><label>X (mm)</label>
@@ -1543,7 +1579,7 @@ export class Sidebar extends LitElement {
     return html`
       <div style="background:rgba(0,0,0,0.25);border-radius:4px;padding:6px;margin:4px 0">
         <div class="row"><label>Label</label>
-          <input type="text" .value=${a.label ?? ''} placeholder="Alarm"
+          <input type="text" data-label-for=${a.id} .value=${a.label ?? ''} placeholder="Alarm"
                  @input=${(e: Event) => upd(() => { a.label = (e.target as HTMLInputElement).value; })}>
         </div>
         ${this._lockRow(a)}
@@ -1644,7 +1680,7 @@ export class Sidebar extends LitElement {
     return html`
       <div style="background:rgba(0,0,0,0.25);border-radius:4px;padding:6px;margin:4px 0">
         <div class="row"><label>Label</label>
-          <input type="text" .value=${c.label ?? ''} placeholder="Calendar"
+          <input type="text" data-label-for=${c.id} .value=${c.label ?? ''} placeholder="Calendar"
                  @input=${(e: Event) => upd(() => { c.label = (e.target as HTMLInputElement).value; })}>
         </div>
         ${this._lockRow(c)}
@@ -1735,7 +1771,7 @@ export class Sidebar extends LitElement {
     return html`
       <div style="background:rgba(0,0,0,0.25);border-radius:4px;padding:6px;margin:4px 0">
         <div class="row"><label>Label</label>
-          <input type="text" .value=${t.label ?? ''} placeholder="Thermostat"
+          <input type="text" data-label-for=${t.id} .value=${t.label ?? ''} placeholder="Thermostat"
                  @input=${(e: Event) => upd(() => { t.label = (e.target as HTMLInputElement).value; })}>
         </div>
         ${this._lockRow(t)}
@@ -1854,7 +1890,7 @@ export class Sidebar extends LitElement {
           </select>
         </div>
         <div class="row"><label>Label</label>
-          <input type="text" .value=${s.label ?? ''} placeholder="Detector"
+          <input type="text" data-label-for=${s.id} .value=${s.label ?? ''} placeholder="Detector"
                  @input=${(e: Event) => upd(() => { s.label = (e.target as HTMLInputElement).value; })}>
         </div>
         ${this._lockRow(s)}
@@ -1961,7 +1997,7 @@ export class Sidebar extends LitElement {
     return html`
       <div style="background:rgba(0,0,0,0.25);border-radius:4px;padding:6px;margin:4px 0">
         <div class="row"><label>Label</label>
-          <input type="text" .value=${b.label ?? ''} placeholder="Alert"
+          <input type="text" data-label-for=${b.id} .value=${b.label ?? ''} placeholder="Alert"
                  @input=${(e: Event) => upd(() => { b.label = (e.target as HTMLInputElement).value; })}>
         </div>
         ${this._lockRow(b)}
@@ -2075,7 +2111,7 @@ export class Sidebar extends LitElement {
           </select>
         </div>
         <div class="row"><label>Label</label>
-          <input type="text" .value=${r.label ?? ''} placeholder="Robot"
+          <input type="text" data-label-for=${r.id} .value=${r.label ?? ''} placeholder="Robot"
                  @input=${(e: Event) => upd(() => { r.label = (e.target as HTMLInputElement).value; })}>
         </div>
         ${this._lockRow(r)}
@@ -2342,7 +2378,7 @@ export class Sidebar extends LitElement {
     return html`
       <div style="background:rgba(0,0,0,0.25);border-radius:4px;padding:6px;margin:4px 0">
         <div class="row"><label>Label</label>
-          <input type="text" .value=${c.label ?? ''} placeholder="Camera"
+          <input type="text" data-label-for=${c.id} .value=${c.label ?? ''} placeholder="Camera"
                  @input=${(e: Event) => upd(() => { c.label = (e.target as HTMLInputElement).value; })}>
         </div>
         ${this._lockRow(c)}
@@ -2592,7 +2628,7 @@ export class Sidebar extends LitElement {
     return html`
       <div style="background:rgba(0,0,0,0.25);border-radius:4px;padding:6px;margin:4px 0">
         <div class="row"><label>Label</label>
-          <input type="text" .value=${pr.label ?? ''} placeholder="Projector"
+          <input type="text" data-label-for=${pr.id} .value=${pr.label ?? ''} placeholder="Projector"
                  @input=${(e: Event) => upd(() => { pr.label = (e.target as HTMLInputElement).value; })}>
         </div>
         ${this._lockRow(pr)}
@@ -2704,7 +2740,7 @@ export class Sidebar extends LitElement {
     return html`
       <div style="background:rgba(0,0,0,0.25);border-radius:4px;padding:6px;margin:4px 0">
         <div class="row"><label>Label</label>
-          <input type="text" .value=${v.label ?? ''} placeholder="Valve"
+          <input type="text" data-label-for=${v.id} .value=${v.label ?? ''} placeholder="Valve"
                  @input=${(e: Event) => upd(() => { v.label = (e.target as HTMLInputElement).value; })}>
         </div>
         ${this._lockRow(v)}
@@ -2793,7 +2829,7 @@ export class Sidebar extends LitElement {
     return html`
       <div style="background:rgba(0,0,0,0.25);border-radius:4px;padding:6px;margin:4px 0">
         <div class="row"><label>Label</label>
-          <input type="text" .value=${z.label ?? ''} placeholder="Sprinkler"
+          <input type="text" data-label-for=${z.id} .value=${z.label ?? ''} placeholder="Sprinkler"
                  @input=${(e: Event) => upd(() => { z.label = (e.target as HTMLInputElement).value; })}>
         </div>
         <div class="row"><label>Zone #</label>
@@ -2894,7 +2930,7 @@ export class Sidebar extends LitElement {
     return html`
       <div style="background:rgba(0,0,0,0.25);border-radius:4px;padding:6px;margin:4px 0">
         <div class="row"><label>Label</label>
-          <input type="text" .value=${fp.label ?? ''} placeholder="Flagpole"
+          <input type="text" data-label-for=${fp.id} .value=${fp.label ?? ''} placeholder="Flagpole"
                  @input=${(e: Event) => upd(() => { fp.label = (e.target as HTMLInputElement).value; })}>
         </div>
         <div class="row"><label>Flag</label>
@@ -2991,7 +3027,7 @@ export class Sidebar extends LitElement {
     return html`
       <div style="background:rgba(0,0,0,0.25);border-radius:4px;padding:6px;margin:4px 0">
         <div class="row"><label>Label</label>
-          <input type="text" .value=${pl.label ?? ''} placeholder="Plug"
+          <input type="text" data-label-for=${pl.id} .value=${pl.label ?? ''} placeholder="Plug"
                  @input=${(e: Event) => upd(() => { pl.label = (e.target as HTMLInputElement).value; })}>
         </div>
         ${this._lockRow(pl)}
@@ -4209,7 +4245,7 @@ export class Sidebar extends LitElement {
     return html`
       <div style="background:rgba(0,0,0,0.25);border-radius:4px;padding:6px;margin:4px 0">
         <div class="row"><label>Label</label>
-          <input type="text" .value=${d.label ?? ''}
+          <input type="text" data-label-for=${d.id} .value=${d.label ?? ''}
                  @input=${(e: Event) => upd(() => { d.label = (e.target as HTMLInputElement).value; })}>
         </div>
         ${this._lockRow(d)}
@@ -4399,7 +4435,7 @@ export class Sidebar extends LitElement {
     return html`
       <div style="background:rgba(0,0,0,0.25);border-radius:4px;padding:6px;margin:4px 0">
         <div class="row"><label>Label</label>
-          <input type="text" .value=${w.label ?? ''}
+          <input type="text" data-label-for=${w.id} .value=${w.label ?? ''}
                  @input=${(e: Event) => upd(() => { w.label = (e.target as HTMLInputElement).value; })}>
         </div>
         ${this._lockRow(w)}
@@ -4604,7 +4640,7 @@ export class Sidebar extends LitElement {
     return html`
       <div style="background:rgba(0,0,0,0.25);border-radius:4px;padding:6px;margin:4px 0">
         <div class="row"><label>Label</label>
-          <input type="text" .value=${piece.label ?? ''}
+          <input type="text" data-label-for=${piece.id} .value=${piece.label ?? ''}
                  placeholder=${FURNITURE_KINDS[curKind].label}
                  @input=${(e: Event) => upd(() => {
                    piece.label = (e.target as HTMLInputElement).value;
@@ -5301,7 +5337,7 @@ export class Sidebar extends LitElement {
     return html`
       <div style="background:rgba(0,0,0,0.25);border-radius:4px;padding:6px;margin:4px 0">
         <div class="row"><label>Label</label>
-          <input type="text" .value=${rec.label}
+          <input type="text" data-label-for=${rec.id} .value=${rec.label}
                  @input=${(e: Event) => upd(() => { rec.label = (e.target as HTMLInputElement).value; })}>
         </div>
         <div class="row"><label>Width (mm)</label>
@@ -5712,7 +5748,7 @@ export class Sidebar extends LitElement {
           Sensor — ${s.label || 'Unnamed'}
         </div>
         <div class="row"><label>Label</label>
-          <input type="text" .value=${s.label} @input=${u('label')}></div>
+          <input type="text" data-label-for=${s.id} .value=${s.label} @input=${u('label')}></div>
         ${this._lockRow(s)}
         <div class="row"><label>X (mm)</label>
           <input type="number" .value=${String(s.x)} @input=${u('x', v => parseFloat(v) || 0)}></div>

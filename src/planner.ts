@@ -672,6 +672,20 @@ export class Planner extends EventTarget {
   // chevron. Runtime only.
   activeFurnitureId: string | null = null;
 
+  // Defense-in-depth for the destructive Delete/Backspace keys. True once ANY
+  // genuine interactive selection happens THIS session (a sidebar/canvas select
+  // or a fresh placement — see markSelectionHot). A selection restored from disk
+  // (activeSensorId persists across sessions) leaves this false, so a stray
+  // keypress at body focus can't delete a selection the user never touched.
+  // Reset on store load + uiMode change. Runtime only, never persisted.
+  selectionHot = false;
+
+  // Set on a NEW named-fixture placement so the sidebar autofocuses that
+  // fixture's Label input once (the reported bug: typing the name at body focus
+  // ran the Backspace hotkey and deleted the just-placed sensor). Cleared by the
+  // sidebar after it focuses, and on store load / uiMode change. Runtime only.
+  newlyPlacedFocus: { kind: string; id: string } | null = null;
+
   // UI mode. Runtime + URL-driven, never persisted.
   //   edit  — full editor (default)
   //   kiosk — views + device interaction only; nothing editable, nothing saved
@@ -727,6 +741,11 @@ export class Planner extends EventTarget {
 
   setUiMode(m: 'edit' | 'kiosk' | 'view'): void {
     this.uiMode = m;
+    // A mode change starts a fresh interaction context — cool any selection so a
+    // stray destructive key can't act on a carry-over selection, and drop a
+    // pending autofocus (the sidebar only renders editors in edit mode).
+    this.selectionHot = false;
+    this.newlyPlacedFocus = null;
     if (m !== 'edit') {
       // Leave no edit affordances dangling.
       this.drag = null; this.editZone = null; this.drawingWall = null;
@@ -1618,6 +1637,10 @@ export class Planner extends EventTarget {
       this.robotStates = {};
       this.activePersonId = null;
       this.selectedVertex = null;
+      // Fresh session: a restored selection is COLD (the user hasn't touched it),
+      // so the destructive keys stay gated until a genuine selection happens.
+      this.selectionHot = false;
+      this.newlyPlacedFocus = null;
       this.viewCenter = null;
       this.zoom = 1;
       this.drag = null;
@@ -2586,7 +2609,20 @@ export class Planner extends EventTarget {
     this.emitConfig();
   }
 
+  // Mark that a genuine interactive selection happened this session (see
+  // selectionHot). Called from every selection path — the setActive setters
+  // (sidebar rows), the canvas selection sites, and fresh placements.
+  markSelectionHot(): void { this.selectionHot = true; }
+
+  // Record a freshly-placed named fixture so the sidebar autofocuses its Label
+  // input, and mark the selection hot (a placement IS an interactive selection).
+  markNewlyPlaced(kind: string, id: string): void {
+    this.newlyPlacedFocus = { kind, id };
+    this.selectionHot = true;
+  }
+
   setActiveSensor(id: string | null): void {
+    this.markSelectionHot();
     this.store.activeSensorId = (this.store.activeSensorId === id) ? null : id;
     // Unbound sensors have no discovery-driven init path — make sure the
     // live-state slots exist the moment one becomes active so hit tests and
@@ -2622,6 +2658,7 @@ export class Planner extends EventTarget {
   }
 
   setActiveMotion(id: string | null): void {
+    this.markSelectionHot();
     this.activeMotionId = (this.activeMotionId === id) ? null : id;
     this.emitConfig();
   }
@@ -2661,31 +2698,37 @@ export class Planner extends EventTarget {
   }
 
   setActiveEnv(id: string | null): void {
+    this.markSelectionHot();
     this.activeEnvId = (this.activeEnvId === id) ? null : id;
     this.emitConfig();
   }
 
   setActiveBle(id: string | null): void {
+    this.markSelectionHot();
     this.activeBleId = (this.activeBleId === id) ? null : id;
     this.emitConfig();
   }
 
   setActiveAlarm(id: string | null): void {
+    this.markSelectionHot();
     this.activeAlarmId = (this.activeAlarmId === id) ? null : id;
     this.emitConfig();
   }
 
   setActiveCalendar(id: string | null): void {
+    this.markSelectionHot();
     this.activeCalendarId = (this.activeCalendarId === id) ? null : id;
     this.emitConfig();
   }
 
   setActiveThermo(id: string | null): void {
+    this.markSelectionHot();
     this.activeThermoId = (this.activeThermoId === id) ? null : id;
     this.emitConfig();
   }
 
   setActiveSafety(id: string | null): void {
+    this.markSelectionHot();
     this.activeSafetyId = (this.activeSafetyId === id) ? null : id;
     this.emitConfig();
   }
@@ -2709,6 +2752,7 @@ export class Planner extends EventTarget {
 
   // ── Alert Beacon fixture (Alert Center, Track B) ──────────────────────────
   setActiveAlertBeacon(id: string | null): void {
+    this.markSelectionHot();
     this.activeAlertBeaconId = (this.activeAlertBeaconId === id) ? null : id;
     this.emitConfig();
   }
@@ -2844,36 +2888,43 @@ export class Planner extends EventTarget {
   }
 
   setActiveRobot(id: string | null): void {
+    this.markSelectionHot();
     this.activeRobotId = (this.activeRobotId === id) ? null : id;
     this.emitConfig();
   }
 
   setActiveCamera(id: string | null): void {
+    this.markSelectionHot();
     this.activeCameraId = (this.activeCameraId === id) ? null : id;
     this.emitConfig();
   }
 
   setActiveProjector(id: string | null): void {
+    this.markSelectionHot();
     this.activeProjectorId = (this.activeProjectorId === id) ? null : id;
     this.emitConfig();
   }
 
   setActiveValve(id: string | null): void {
+    this.markSelectionHot();
     this.activeValveId = (this.activeValveId === id) ? null : id;
     this.emitConfig();
   }
 
   setActivePlug(id: string | null): void {
+    this.markSelectionHot();
     this.activePlugId = (this.activePlugId === id) ? null : id;
     this.emitConfig();
   }
 
   setActiveSprinkler(id: string | null): void {
+    this.markSelectionHot();
     this.activeSprinklerId = (this.activeSprinklerId === id) ? null : id;
     this.emitConfig();
   }
 
   setActiveFlagpole(id: string | null): void {
+    this.markSelectionHot();
     this.activeFlagpoleId = (this.activeFlagpoleId === id) ? null : id;
     this.emitConfig();
   }
@@ -2912,16 +2963,19 @@ export class Planner extends EventTarget {
   }
 
   setActiveInfo(id: string | null): void {
+    this.markSelectionHot();
     this.activeInfoId = (this.activeInfoId === id) ? null : id;
     this.emitConfig();
   }
 
   setActiveAction(id: string | null): void {
+    this.markSelectionHot();
     this.activeActionId = (this.activeActionId === id) ? null : id;
     this.emitConfig();
   }
 
   setActivePZone(id: string | null): void {
+    this.markSelectionHot();
     this.activePZoneId = (this.activePZoneId === id) ? null : id;
     this.emitConfig();
   }
@@ -2948,6 +3002,7 @@ export class Planner extends EventTarget {
   }
 
   setActiveGroundArea(id: string | null): void {
+    this.markSelectionHot();
     this.activeGroundAreaId = (this.activeGroundAreaId === id) ? null : id;
     this.emitConfig();
   }
@@ -3021,6 +3076,7 @@ export class Planner extends EventTarget {
 
   // ── Pool / spa (T4) ─────────────────────────────────────────────────────
   setActivePool(id: string | null): void {
+    this.markSelectionHot();
     this.activePoolId = (this.activePoolId === id) ? null : id;
     this.emitConfig();
   }
@@ -3082,6 +3138,7 @@ export class Planner extends EventTarget {
   }
 
   setActiveVoidArea(id: string | null): void {
+    this.markSelectionHot();
     this.activeVoidAreaId = (this.activeVoidAreaId === id) ? null : id;
     this.emitConfig();
   }
@@ -3110,6 +3167,7 @@ export class Planner extends EventTarget {
 
   // ── Rulers (measure tool) + wall/structure dimensions ─────────────────────
   setActiveRuler(id: string | null): void {
+    this.markSelectionHot();
     this.activeRulerId = (this.activeRulerId === id) ? null : id;
     this.emitConfig();
   }

@@ -1,0 +1,135 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>SENSORFOCUS …</title>
+<style>
+  body { margin:0; background:#0d1116; color:#cfd8dc; font:13px/1.5 sans-serif; padding:14px; }
+  h1 { font-size:15px; margin:0 0 10px; }
+  #summary { font-size:14px; font-weight:bold; margin:10px 0; padding:8px 10px; border-radius:5px; }
+  .okbg { background:#12331f; color:#69f0ae; } .badbg { background:#3a1414; color:#ff8a80; }
+  .row { display:flex; justify-content:space-between; gap:10px; padding:2px 0; border-bottom:1px solid #1c2530; }
+  .pass { color:#69f0ae; } .fail { color:#ff5252; }
+  .name { color:#90caf9; } .extra { color:#ffd54f; font-size:11px; }
+</style>
+<h1>Sidebar autofocus of a newly-placed fixture's Label input</h1>
+<div id="summary">Running…</div>
+<div id="rows"></div>
+<div id="mount"></div>
+
+<!-- Harness build (from repo root; NEVER reuse stale bundles). Needs a WIDE
+     viewport (autofocus is skipped below 900 px):
+       H=/tmp/diorama-harness-sfocus
+       rm -rf "$H"; mkdir -p "$H"; cp -r dist/* "$H"/
+       cp test-pages/sensor-focus-test.html "$H"/
+       T=$(mktemp -d); cp -r src/* "$T"/; cp tsconfig.json "$T"/
+       cp test-pages/fake-avatar-store.ts "$T"/avatar-store.ts
+       printf "export { Planner } from '../planner.js';\nimport './sidebar.js';\n" > "$T"/ui/sfocus-entry.ts
+       npx esbuild "$T"/ui/sfocus-entry.ts --bundle --format=esm --tsconfig="$T"/tsconfig.json \
+         --alias:lit=$PWD/node_modules/lit/index.js \
+         --alias:lit/decorators.js=$PWD/node_modules/lit/decorators.js \
+         --outfile="$H"/sfocus.mod.js
+       (cd "$H" && python3 -m http.server 8796 &)
+       google-chrome --headless=new --disable-gpu --use-angle=swiftshader --window-size=1200,900 \
+         --virtual-time-budget=30000 --dump-dom \
+         "http://localhost:8796/sensor-focus-test.html" | grep -o "<title>[^<]*"  -->
+<script type="module">
+  const V = '?v=' + Date.now();
+  const { Planner } = await import('./sfocus.mod.js' + V);
+
+  const results = [];
+  const ok = (name, cond, extra = '') => results.push({ name, pass: !!cond, extra: String(extra) });
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  async function waitFor(cond, tries = 400) {
+    for (let i = 0; i < tries; i++) { if (cond()) return true; await sleep(8); }
+    return !!cond();
+  }
+  // setTimeout-based frame wait — rAF is unreliable under headless virtual-time.
+  const frames = async n => { for (let i = 0; i < n; i++) await sleep(20); };
+
+  class FakeHa {
+    constructor(seed) { this.map = new Map(); for (const [k, v] of Object.entries(seed || {})) this.map.set(k, JSON.parse(JSON.stringify(v))); this.states = {}; this._s = []; this._c = []; }
+    connect() { for (const cb of this._c) cb('connected'); for (const cb of this._s) cb(this.states, undefined); }
+    onState(fn) { this._s.push(fn); } onConn(fn) { this._c.push(fn); }
+    callService() { return Promise.resolve(); }
+    async getHistory() { return {}; } async getWeatherForecasts() { return null; }
+    async getDevices() { return []; } async getEntityRegistry() { return []; } async updateEntityRegistry() { return true; }
+    async getUserData(k) { return this.map.has(k) ? JSON.parse(JSON.stringify(this.map.get(k))) : null; }
+    async setUserData(k, v) { this.map.set(k, JSON.parse(JSON.stringify(v))); return true; }
+    async refreshStates() {} async subscribeMqtt() { return () => {}; } async publishMqtt() {}
+  }
+  const mkSensor = (id, label) => ({ id, x: 1000, y: 1000, heading: 0, fov: 60, range: 6000, label, deviceSlug: null });
+  const floor = () => ({ id: 'f1', name: 'Home', w: 12000, d: 12000, walls: [], furniture: [],
+    lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [], bleProxies: [],
+    doors: [], windows: [], rooms: [], bg: null });
+  async function mkPlanner() {
+    localStorage.clear();
+    const seed = { v: 2, floors: [floor()], currentFloorId: 'f1', activeSensorId: null,
+      coverage: true, imperial: false, showDetails: false, useRawTargets: false };
+    const p = new Planner(); p.connectWith(new FakeHa({ diorama: seed }));
+    await waitFor(() => p.configIndex !== null);
+    return p;
+  }
+
+  try {
+    ok('viewport wide enough (>=900)', window.innerWidth >= 900, `innerWidth=${window.innerWidth}`);
+
+    // Mount a real <diorama-sidebar> bound to a real Planner.
+    const p = await mkPlanner();
+    const sb = document.createElement('diorama-sidebar');
+    sb.planner = p;
+    document.getElementById('mount').appendChild(sb);
+    await sb.updateComplete;
+    await frames(2);
+
+    // Simulate a fresh placement: create a sensor, select it, arm the autofocus.
+    p.floor().sensors.push(mkSensor('s1', 'Sensor 1'));
+    p.store.activeSensorId = 's1';
+    p.markNewlyPlaced('sensor', 's1');
+    p.emitConfig();                         // → sidebar re-renders (config channel)
+
+    // Give the sidebar a few frames to render the editor + run its autofocus.
+    await waitFor(() => p.newlyPlacedFocus === null, 60);
+    await frames(2);
+
+    const input = sb.querySelector('input[data-label-for="s1"]');
+    ok('A1 Label input rendered (light DOM)', !!input, input ? 'found' : 'missing');
+    ok('A2 newlyPlacedFocus consumed', p.newlyPlacedFocus === null, `${p.newlyPlacedFocus}`);
+    ok('A3 document.activeElement IS the label input', document.activeElement === input,
+       document.activeElement ? (document.activeElement.tagName + '[' + (document.activeElement.getAttribute?.('data-label-for') ?? '') + ']') : 'null');
+    // input.select() → the default name is fully selected, ready to overtype.
+    const selAll = input && input.selectionStart === 0 && input.selectionEnd === (input.value || '').length && (input.value || '').length > 0;
+    ok('A4 default text is selected for overtype', selAll, input ? `${input.selectionStart}-${input.selectionEnd}/${(input.value||'').length}` : 'n/a');
+    ok('A5 placement heated the selection', p.selectionHot === true, p.selectionHot);
+
+    // A plain re-select of an EXISTING sensor must NOT steal focus (no autofocus).
+    p.floor().sensors.push(mkSensor('s2', 'Sensor 2'));
+    p.emitConfig();
+    await frames(2);
+    // Move focus somewhere neutral, then select s2 without arming newlyPlacedFocus.
+    document.body.focus();
+    if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+    p.setActiveSensor('s2');                // sidebar selection path — no newlyPlacedFocus
+    p.emitConfig();
+    await frames(3);
+    const s2input = sb.querySelector('input[data-label-for="s2"]');
+    ok('B1 plain select sets no autofocus target', p.newlyPlacedFocus === null, `${p.newlyPlacedFocus}`);
+    ok('B2 plain select does NOT steal focus', document.activeElement !== s2input,
+       document.activeElement ? (document.activeElement.tagName || '') : 'null');
+    ok('B3 setActiveSensor still heats selection', p.selectionHot === true, p.selectionHot);
+  } catch (err) {
+    ok('unhandled error', false, (err && (err.stack || err.message)) || String(err));
+  }
+
+  const passN = results.filter(r => r.pass).length;
+  const failN = results.length - passN;
+  const rows = document.getElementById('rows');
+  for (const r of results) {
+    rows.insertAdjacentHTML('beforeend',
+      `<div class="row"><span class="name">${r.name}</span>` +
+      `<span class="${r.pass ? 'pass' : 'fail'}">${r.pass ? 'PASS' : 'FAIL'}` +
+      `${r.extra ? ` <span class="extra">${r.extra}</span>` : ''}</span></div>`);
+  }
+  const sum = document.getElementById('summary');
+  sum.textContent = `SENSORFOCUS ${failN === 0 ? 'PASS' : 'FAIL'} ${passN}/${results.length}`;
+  sum.className = failN === 0 ? 'okbg' : 'badbg';
+  document.title = `SENSORFOCUS ${failN === 0 ? 'PASS' : 'FAIL'} ${passN}/${results.length}`;
+</script>

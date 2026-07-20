@@ -140,6 +140,17 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Backspace-deletes-new-sensor fix** (2026-07-19; 1 Opus agent;
+  orchestrator repro pinned the root cause — typing into a
+  never-focused name field falls through to body → the Delete hotkey).
+  Placement autofocus: 18 named-fixture creation sites →
+  `markNewlyPlaced` → sidebar focuses+selects the Label input
+  (`data-label-for`, skipped <900 px). Hot-selection gate:
+  Delete/Backspace hotkey requires a THIS-session interactive
+  selection (`selectionHot`; persisted activeSensorId loads cold).
+  sensor-focus-test 9/9 (real-sidebar bundle w/ tsconfig+lit aliases);
+  ruler-dims 55→63; undo 44/44 + plan-rotate 68/68 regressions green.
+
 - **Ruler tool + wall/structure dimensions** (2026-07-19; 1 Opus
   agent; 2D-only, `dimensions` layer). `Floor.rulers` with point /
   wall / furniture ends — object ends re-resolve live (locked rulers

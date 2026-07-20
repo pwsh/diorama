@@ -479,7 +479,7 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
     if (pzv) {
       p.drag = { kind: 'pzoneVert', id: pzv.zone.id, idx: pzv.idx,
                  startMm: mm, startPts: pzv.zone.points.map(pt => ({ ...pt })) };
-      p.selectedVertex = { kind: 'pzone', itemId: pzv.zone.id, index: pzv.idx };
+      p.selectedVertex = { kind: 'pzone', itemId: pzv.zone.id, index: pzv.idx }; p.markSelectionHot();
       canvas.style.cursor = 'grabbing'; e.preventDefault(); return;
     }
   }
@@ -490,7 +490,7 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
     if (gv) {
       p.drag = { kind: 'groundVert', id: gv.area.id, idx: gv.idx,
                  startMm: mm, startPts: gv.area.points.map(pt => ({ ...pt })) };
-      p.selectedVertex = { kind: 'ground', itemId: gv.area.id, index: gv.idx };
+      p.selectedVertex = { kind: 'ground', itemId: gv.area.id, index: gv.idx }; p.markSelectionHot();
       canvas.style.cursor = 'grabbing'; e.preventDefault(); return;
     }
   }
@@ -501,7 +501,7 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
     if (pv && pv.area.path) {
       p.drag = { kind: 'pathVert', id: pv.area.id, idx: pv.idx,
                  startMm: mm, startPts: pv.area.path.centerline.map(pt => ({ ...pt })) };
-      p.selectedVertex = { kind: 'path', itemId: pv.area.id, index: pv.idx };
+      p.selectedVertex = { kind: 'path', itemId: pv.area.id, index: pv.idx }; p.markSelectionHot();
       canvas.style.cursor = 'grabbing'; e.preventDefault(); return;
     }
   }
@@ -511,7 +511,7 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
     if (pv) {
       p.drag = { kind: 'poolVert', id: pv.pool.id, idx: pv.idx,
                  startMm: mm, startPts: pv.pool.points.map(pt => ({ ...pt })) };
-      p.selectedVertex = { kind: 'pool', itemId: pv.pool.id, index: pv.idx };
+      p.selectedVertex = { kind: 'pool', itemId: pv.pool.id, index: pv.idx }; p.markSelectionHot();
       canvas.style.cursor = 'grabbing'; e.preventDefault(); return;
     }
   }
@@ -522,7 +522,7 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
     if (vv) {
       p.drag = { kind: 'voidVert', id: vv.area.id, idx: vv.idx,
                  startMm: mm, startPts: vv.area.points.map(pt => ({ ...pt })) };
-      p.selectedVertex = { kind: 'void', itemId: vv.area.id, index: vv.idx };
+      p.selectedVertex = { kind: 'void', itemId: vv.area.id, index: vv.idx }; p.markSelectionHot();
       canvas.style.cursor = 'grabbing'; e.preventDefault(); return;
     }
   }
@@ -563,13 +563,13 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
   if (wv) {
     p.drag = { kind: 'wallv', wallId: wv.wall.id, idx: wv.idx,
                startMm: mm, startPts: wv.wall.points.map(pt => ({ ...pt })) };
-    p.selectedVertex = { kind: 'wall', itemId: wv.wall.id, index: wv.idx };
+    p.selectedVertex = { kind: 'wall', itemId: wv.wall.id, index: wv.idx }; p.markSelectionHot();
     canvas.style.cursor = 'grabbing'; e.preventDefault(); return;
   }
   const fc = hitFurnitureCorner(p, view, mm);
   if (fc) {
     p.drag = { kind: 'furnCorner', idx: fc.idx, anchor: fc.anchor };
-    p.activeFurnitureId = p.floor().furniture[fc.idx]?.id ?? null;
+    p.activeFurnitureId = p.floor().furniture[fc.idx]?.id ?? null; p.markSelectionHot();
     canvas.style.cursor = (fc.sx * fc.sy > 0) ? 'nwse-resize' : 'nesw-resize';
     e.preventDefault(); return;
   }
@@ -586,7 +586,7 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
   if (fhi) {
     p.drag = { kind: 'furnMove', idx: fhi.idx, startMm: mm,
                start: { x: fhi.item.x, y: fhi.item.y } };
-    p.activeFurnitureId = fhi.item.id;
+    p.activeFurnitureId = fhi.item.id; p.markSelectionHot();
     p.alignCandidates = buildAlignCandidates(p, p.drag);
     canvas.style.cursor = 'grabbing'; e.preventDefault(); return;
   }
@@ -638,74 +638,74 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
   }
   const eh = hitEnvSensor(p, view, mm);
   if (eh) {
-    if (p.activeEnvId !== eh.id) p.activeEnvId = eh.id;
+    if (p.activeEnvId !== eh.id) p.activeEnvId = eh.id; p.markSelectionHot();
     p.drag = { kind: 'env', id: eh.id, startMm: mm, start: { x: eh.x, y: eh.y } };
     p.alignCandidates = buildAlignCandidates(p, p.drag);
     canvas.style.cursor = 'grabbing'; e.preventDefault(); p.emitConfig(); return;
   }
   const ich = hitInfoCard(p, view, mm);
   if (ich) {
-    if (p.activeInfoId !== ich.id) p.activeInfoId = ich.id;
+    if (p.activeInfoId !== ich.id) p.activeInfoId = ich.id; p.markSelectionHot();
     p.drag = { kind: 'info', id: ich.id, startMm: mm, start: { x: ich.x, y: ich.y } };
     p.alignCandidates = buildAlignCandidates(p, p.drag);
     canvas.style.cursor = 'grabbing'; e.preventDefault(); p.emitConfig(); return;
   }
   const abh = hitActionButton(p, view, mm);
   if (abh) {
-    if (p.activeActionId !== abh.id) p.activeActionId = abh.id;
+    if (p.activeActionId !== abh.id) p.activeActionId = abh.id; p.markSelectionHot();
     p.drag = { kind: 'action', id: abh.id, startMm: mm, start: { x: abh.x, y: abh.y } };
     p.alignCandidates = buildAlignCandidates(p, p.drag);
     canvas.style.cursor = 'grabbing'; e.preventDefault(); p.emitConfig(); return;
   }
   const mh = hitMotionSensor(p, view, mm);
   if (mh) {
-    if (p.activeMotionId !== mh.id) p.activeMotionId = mh.id;
+    if (p.activeMotionId !== mh.id) p.activeMotionId = mh.id; p.markSelectionHot();
     p.drag = { kind: 'motion', id: mh.id, startMm: mm, start: { x: mh.x, y: mh.y } };
     p.alignCandidates = buildAlignCandidates(p, p.drag);
     canvas.style.cursor = 'grabbing'; e.preventDefault(); p.emitConfig(); return;
   }
   const bh = hitBleProxy(p, view, mm);
   if (bh) {
-    if (p.activeBleId !== bh.id) p.activeBleId = bh.id;
+    if (p.activeBleId !== bh.id) p.activeBleId = bh.id; p.markSelectionHot();
     p.drag = { kind: 'ble', id: bh.id, startMm: mm, start: { x: bh.x, y: bh.y } };
     p.alignCandidates = buildAlignCandidates(p, p.drag);
     canvas.style.cursor = 'grabbing'; e.preventDefault(); p.emitConfig(); return;
   }
   const ah = hitAlarmPanel(p, view, mm);
   if (ah) {
-    if (p.activeAlarmId !== ah.id) p.activeAlarmId = ah.id;
+    if (p.activeAlarmId !== ah.id) p.activeAlarmId = ah.id; p.markSelectionHot();
     p.drag = { kind: 'alarm', id: ah.id, startMm: mm, start: { x: ah.x, y: ah.y } };
     canvas.style.cursor = 'grabbing'; e.preventDefault(); p.emitConfig(); return;
   }
   const cph = hitCalendarPanel(p, view, mm);
   if (cph) {
-    if (p.activeCalendarId !== cph.id) p.activeCalendarId = cph.id;
+    if (p.activeCalendarId !== cph.id) p.activeCalendarId = cph.id; p.markSelectionHot();
     p.drag = { kind: 'calendar', id: cph.id, startMm: mm, start: { x: cph.x, y: cph.y } };
     canvas.style.cursor = 'grabbing'; e.preventDefault(); p.emitConfig(); return;
   }
   const th = hitThermostat(p, view, mm);
   if (th) {
-    if (p.activeThermoId !== th.id) p.activeThermoId = th.id;
+    if (p.activeThermoId !== th.id) p.activeThermoId = th.id; p.markSelectionHot();
     p.drag = { kind: 'thermostat', id: th.id, startMm: mm, start: { x: th.x, y: th.y } };
     canvas.style.cursor = 'grabbing'; e.preventDefault(); p.emitConfig(); return;
   }
   const safeH = hitSafetySensor(p, view, mm);
   if (safeH) {
-    if (p.activeSafetyId !== safeH.id) p.activeSafetyId = safeH.id;
+    if (p.activeSafetyId !== safeH.id) p.activeSafetyId = safeH.id; p.markSelectionHot();
     p.drag = { kind: 'safety', id: safeH.id, startMm: mm, start: { x: safeH.x, y: safeH.y } };
     p.alignCandidates = buildAlignCandidates(p, p.drag);
     canvas.style.cursor = 'grabbing'; e.preventDefault(); p.emitConfig(); return;
   }
   const abH = hitAlertBeacon(p, view, mm);
   if (abH) {
-    if (p.activeAlertBeaconId !== abH.id) p.activeAlertBeaconId = abH.id;
+    if (p.activeAlertBeaconId !== abH.id) p.activeAlertBeaconId = abH.id; p.markSelectionHot();
     p.drag = { kind: 'alert', id: abH.id, startMm: mm, start: { x: abH.x, y: abH.y } };
     p.alignCandidates = buildAlignCandidates(p, p.drag);
     canvas.style.cursor = 'grabbing'; e.preventDefault(); p.emitConfig(); return;
   }
   const roboH = hitRobot(p, view, mm);
   if (roboH) {
-    if (p.activeRobotId !== roboH.id) p.activeRobotId = roboH.id;
+    if (p.activeRobotId !== roboH.id) p.activeRobotId = roboH.id; p.markSelectionHot();
     // Drag anchor is the DOCK (roboH.x/y); the live body follows separately.
     p.drag = { kind: 'robot', id: roboH.id, startMm: mm, start: { x: roboH.x, y: roboH.y } };
     p.alignCandidates = buildAlignCandidates(p, p.drag);
@@ -713,39 +713,39 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
   }
   const camH = hitCamera(p, view, mm);
   if (camH) {
-    if (p.activeCameraId !== camH.id) p.activeCameraId = camH.id;
+    if (p.activeCameraId !== camH.id) p.activeCameraId = camH.id; p.markSelectionHot();
     p.drag = { kind: 'camera', id: camH.id, startMm: mm, start: { x: camH.x, y: camH.y } };
     p.alignCandidates = buildAlignCandidates(p, p.drag);
     canvas.style.cursor = 'grabbing'; e.preventDefault(); p.emitConfig(); return;
   }
   const projH = hitProjector(p, view, mm);
   if (projH) {
-    if (p.activeProjectorId !== projH.id) p.activeProjectorId = projH.id;
+    if (p.activeProjectorId !== projH.id) p.activeProjectorId = projH.id; p.markSelectionHot();
     p.drag = { kind: 'projector', id: projH.id, startMm: mm, start: { x: projH.x, y: projH.y } };
     p.alignCandidates = buildAlignCandidates(p, p.drag);
     canvas.style.cursor = 'grabbing'; e.preventDefault(); p.emitConfig(); return;
   }
   const valH = hitValve(p, view, mm);
   if (valH) {
-    if (p.activeValveId !== valH.id) p.activeValveId = valH.id;
+    if (p.activeValveId !== valH.id) p.activeValveId = valH.id; p.markSelectionHot();
     p.drag = { kind: 'valve', id: valH.id, startMm: mm, start: { x: valH.x, y: valH.y } };
     canvas.style.cursor = 'grabbing'; e.preventDefault(); p.emitConfig(); return;
   }
   const plugH = hitPlug(p, view, mm);
   if (plugH) {
-    if (p.activePlugId !== plugH.id) p.activePlugId = plugH.id;
+    if (p.activePlugId !== plugH.id) p.activePlugId = plugH.id; p.markSelectionHot();
     p.drag = { kind: 'plug', id: plugH.id, startMm: mm, start: { x: plugH.x, y: plugH.y } };
     canvas.style.cursor = 'grabbing'; e.preventDefault(); p.emitConfig(); return;
   }
   const sprH = hitSprinklerZone(p, view, mm);
   if (sprH) {
-    if (p.activeSprinklerId !== sprH.id) p.activeSprinklerId = sprH.id;
+    if (p.activeSprinklerId !== sprH.id) p.activeSprinklerId = sprH.id; p.markSelectionHot();
     p.drag = { kind: 'sprinkler', id: sprH.id, startMm: mm, start: { x: sprH.x, y: sprH.y } };
     canvas.style.cursor = 'grabbing'; e.preventDefault(); p.emitConfig(); return;
   }
   const flagH = hitFlagpole(p, view, mm);
   if (flagH) {
-    if (p.activeFlagpoleId !== flagH.id) p.activeFlagpoleId = flagH.id;
+    if (p.activeFlagpoleId !== flagH.id) p.activeFlagpoleId = flagH.id; p.markSelectionHot();
     p.drag = { kind: 'flagpole', id: flagH.id, startMm: mm, start: { x: flagH.x, y: flagH.y } };
     canvas.style.cursor = 'grabbing'; e.preventDefault(); p.emitConfig(); return;
   }
@@ -755,7 +755,7 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
   if (dimsInteractive(p)) {
     const rbH = hitRulerBody(p, view, mm);
     if (rbH) {
-      if (p.activeRulerId !== rbH.id) { p.activeRulerId = rbH.id; p.emitConfig(); }
+      if (p.activeRulerId !== rbH.id) { p.activeRulerId = rbH.id; p.emitConfig(); p.markSelectionHot(); }
       e.preventDefault(); return;
     }
   }
@@ -764,7 +764,7 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
   if (zonesInteractive(p)) {
     const pzH = hitPresenceZone(p, view, mm);
     if (pzH) {
-      if (p.activePZoneId !== pzH.id) { p.activePZoneId = pzH.id; p.emitConfig(); }
+      if (p.activePZoneId !== pzH.id) { p.activePZoneId = pzH.id; p.emitConfig(); p.markSelectionHot(); }
       e.preventDefault(); return;
     }
   }
@@ -787,7 +787,7 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
   if (groundInteractive(p)) {
     const plH = hitPool(p, view, mm);
     if (plH) {
-      if (p.activePoolId !== plH.id) { p.activePoolId = plH.id; }
+      if (p.activePoolId !== plH.id) { p.activePoolId = plH.id; p.markSelectionHot(); }
       p.activeGroundAreaId = null; p.activeVoidAreaId = null;
       p.emitConfig();
       e.preventDefault(); return;
@@ -799,7 +799,7 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
   if (groundInteractive(p)) {
     const gH = hitGroundArea(p, view, mm);
     if (gH) {
-      if (p.activeGroundAreaId !== gH.id) { p.activeGroundAreaId = gH.id; }
+      if (p.activeGroundAreaId !== gH.id) { p.activeGroundAreaId = gH.id; p.markSelectionHot(); }
       p.activePoolId = null; p.activeVoidAreaId = null;
       p.emitConfig();
       e.preventDefault(); return;
@@ -811,7 +811,7 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
   if (groundInteractive(p)) {
     const vH = hitVoidArea(p, view, mm);
     if (vH) {
-      if (p.activeVoidAreaId !== vH.id) { p.activeVoidAreaId = vH.id; }
+      if (p.activeVoidAreaId !== vH.id) { p.activeVoidAreaId = vH.id; p.markSelectionHot(); }
       p.activeGroundAreaId = null; p.activePoolId = null;
       p.emitConfig();
       e.preventDefault(); return;
@@ -1965,7 +1965,7 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
       heading: 0, fov: SENSOR_DEFAULTS.fov, range: SENSOR_DEFAULTS.range,
       label: `Sensor ${f.sensors.length + 1}`, deviceSlug: null,
     });
-    p.store.activeSensorId = id;
+    p.store.activeSensorId = id; p.markNewlyPlaced("sensor", id);
     p.ensureLiveState(id);
     p.save();
     p.setTool('select');
@@ -1981,7 +1981,7 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
       heading: 0, fov: MOTION_DEFAULTS.fov, range: MOTION_DEFAULTS.range,
       label: `Motion ${f.motionSensors.length + 1}`, entity_id: null,
     });
-    p.activeMotionId = id;
+    p.activeMotionId = id; p.markNewlyPlaced("motion", id);
     p.save();
     p.setTool('select');
     p.emitConfig();
@@ -1995,7 +1995,7 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
       y: snap(Math.max(0, Math.min(f.d, mm.y)), 10),
       label: `Env ${f.envSensors.length + 1}`, entity_id: null,
     });
-    p.activeEnvId = id;
+    p.activeEnvId = id; p.markNewlyPlaced("env", id);
     p.save();
     p.setTool('select');
     p.emitConfig();
@@ -2012,7 +2012,7 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
     };
     snapInfoCardToWall(ic, f.walls);   // flush to a wall on drop (default wall mount)
     (f.infoCards ??= []).push(ic);
-    p.activeInfoId = id;
+    p.activeInfoId = id; p.markNewlyPlaced("info", id);
     p.save();
     p.setTool('select');
     p.emitConfig();
@@ -2029,7 +2029,7 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
     };
     snapActionButtonToWall(ab, f.walls);   // flush to a wall on drop (default wall mount)
     (f.actionButtons ??= []).push(ab);
-    p.activeActionId = id;
+    p.activeActionId = id; p.markNewlyPlaced("action", id);
     p.save();
     p.setTool('select');
     p.emitConfig();
@@ -2044,7 +2044,7 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
       y: snap(Math.max(0, Math.min(f.d, mm.y)), 10),
       name: `Proxy ${f.bleProxies.length + 1}`, haDeviceId: null,
     });
-    p.activeBleId = id;
+    p.activeBleId = id; p.markNewlyPlaced("ble", id);
     p.save();
     p.setTool('select');
     p.emitConfig();
@@ -2061,7 +2061,7 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
     };
     snapAlarmToWall(ap, f.walls);   // flush to a wall on drop, like a switch
     f.alarmPanels.push(ap);
-    p.activeAlarmId = id;
+    p.activeAlarmId = id; p.markNewlyPlaced("alarm", id);
     p.save();
     p.setTool('select');
     p.emitConfig();
@@ -2078,7 +2078,7 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
     };
     snapCalendarToWall(cp, f.walls);   // flush to a wall on drop, like a switch
     f.calendarPanels.push(cp);
-    p.activeCalendarId = id;
+    p.activeCalendarId = id; p.markNewlyPlaced("calendar", id);
     p.save();
     p.setTool('select');
     p.emitConfig();
@@ -2095,7 +2095,7 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
     };
     snapThermostatToWall(th, f.walls);   // flush to a wall on drop, like a switch
     f.thermostats.push(th);
-    p.activeThermoId = id;
+    p.activeThermoId = id; p.markNewlyPlaced("thermo", id);
     p.save();
     p.setTool('select');
     p.emitConfig();
@@ -2113,7 +2113,7 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
       kind: 'smoke', entity_id: null,
       label: `Detector ${f.safetySensors.length + 1}`,
     });
-    p.activeSafetyId = id;
+    p.activeSafetyId = id; p.markNewlyPlaced("safety", id);
     p.save();
     p.setTool('select');
     p.emitConfig();
@@ -2130,7 +2130,7 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
       entity_id: null,
       label: `Alert ${f.alertBeacons.length + 1}`,
     });
-    p.activeAlertBeaconId = id;
+    p.activeAlertBeaconId = id; p.markNewlyPlaced("alertbeacon", id);
     p.save();
     p.setTool('select');
     p.emitConfig();
@@ -2147,7 +2147,7 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
       kind: 'vacuum', entity_id: null,
       label: `Robot ${f.robots.length + 1}`,
     });
-    p.activeRobotId = id;
+    p.activeRobotId = id; p.markNewlyPlaced("robot", id);
     p.save();
     p.setTool('select');
     p.emitConfig();
@@ -2164,7 +2164,7 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
       rotation: 0, entity_id: null,
       label: `Camera ${f.cameras.length + 1}`,
     });
-    p.activeCameraId = id;
+    p.activeCameraId = id; p.markNewlyPlaced("camera", id);
     p.save();
     p.setTool('select');
     p.emitConfig();
@@ -2181,7 +2181,7 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
       rotation: 0, entity_id: null,
       label: `Projector ${f.projectors.length + 1}`,
     });
-    p.activeProjectorId = id;
+    p.activeProjectorId = id; p.markNewlyPlaced("projector", id);
     p.save();
     p.setTool('select');
     p.emitConfig();
@@ -2198,7 +2198,7 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
       rotation: 0, entity_id: null, allowControl: true,
       label: `Valve ${f.valves.length + 1}`,
     });
-    p.activeValveId = id;
+    p.activeValveId = id; p.markNewlyPlaced("valve", id);
     p.save();
     p.setTool('select');
     p.emitConfig();
@@ -2215,7 +2215,7 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
       entity_id: null,
       zoneNumber: f.sprinklerZones.length + 1,
     });
-    p.activeSprinklerId = id;
+    p.activeSprinklerId = id; p.markNewlyPlaced("sprinkler", id);
     p.save();
     p.setTool('select');
     p.emitConfig();
@@ -2232,7 +2232,7 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
       flag: 'usa',
       label: `Flagpole ${f.flagpoles.length + 1}`,
     });
-    p.activeFlagpoleId = id;
+    p.activeFlagpoleId = id; p.markNewlyPlaced("flagpole", id);
     p.save();
     p.setTool('select');
     p.emitConfig();
@@ -2250,7 +2250,7 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
     };
     snapPlugToWall(pg, f.walls);   // flush to a wall on drop, like a switch
     f.plugs.push(pg);
-    p.activePlugId = id;
+    p.activePlugId = id; p.markNewlyPlaced("plug", id);
     p.save();
     p.setTool('select');
     p.emitConfig();
@@ -2346,7 +2346,7 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
       ...(elev0 ? { elevation: elev0 } : {}),
     };
     f.furniture.push(piece);
-    p.activeFurnitureId = piece.id;
+    p.activeFurnitureId = piece.id; p.markSelectionHot();
     snapStairEdges(f, piece);
     snapFurnitureToSurface(f, piece, p.store.customObjects);
     if (!piece.locked && !piece.mountOnId) {
