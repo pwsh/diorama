@@ -1,6 +1,6 @@
 # Project status & pick-up guide
 
-Last updated: 2026-07-19, at **v0.23.0**. This is the single document to
+Last updated: 2026-07-19, at **v0.24.0**. This is the single document to
 read (alongside `CLAUDE.md`) to resume work with full context.
 
 ## Where things stand
@@ -130,6 +130,13 @@ instance.
   appliance interiors, speaker contrast, mailbox flag semantics,
   bird-bath water; aircraft fixes — tow wire, true propeller,
   both-sides banners).
+  → v0.24.0 true north (camera far-plane fix — zoom-out disappearances;
+  chopper leading-corner tow, ×1.8 train, multi-line fit-to-area grass
+  text, lighter skywriting; on-screen 3D compass — landmark/manual
+  north, chip-style anchoring, sizable two-tone north icon; floor-stats
+  readout toggle; plan rotation 15°/1° to set a new top; ruler tool w/
+  live object-locked inside dimensions; wall/structure dimension modes;
+  GPS readouts follow imperial; landmark coords visible).
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
