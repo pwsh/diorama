@@ -1,6 +1,6 @@
 # Project status & pick-up guide
 
-Last updated: 2026-07-19, at **v0.24.0**. This is the single document to
+Last updated: 2026-07-20, at **v0.25.0**. This is the single document to
 read (alongside `CLAUDE.md`) to resume work with full context.
 
 ## Where things stand
@@ -137,6 +137,14 @@ instance.
   readout toggle; plan rotation 15°/1° to set a new top; ruler tool w/
   live object-locked inside dimensions; wall/structure dimension modes;
   GPS readouts follow imperial; landmark coords visible).
+  → v0.25.0 night sky (astronomically-correct constellations + planets
+  + real moon position from your location; horizon star-ring cleanup;
+  floor list highest-story-first; move-plan nudges; show/peek/hide
+  floor tri-state w/ 2D onion-skin underlay; glass-house registers
+  ghosts by shared world origin + sees through ground/void/water;
+  zoom-independent weather fog; entity text no longer truncated at
+  colons/dashes + bgtext format UI; backspace-in-name-field no longer
+  deletes the sensor).
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
