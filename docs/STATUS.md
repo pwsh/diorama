@@ -140,6 +140,17 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Ghost mirror + entity-text truncation fixes** (2026-07-20; 2 Opus
+  agents). (a) Ghost loop-slab Z-mirror: ShapeGeometry −π/2 rotation
+  needs shape-y NEGATED (`afd/2 − wy`); feeding `asz` directly
+  mirrored every loop-clipped ghost slab (user saw a mirrored floor
+  outline). Off-center-loop fixture added — ghost-align 16/16. (b)
+  `formatEntityValue` numeric branch strict-gated (whole-state regex;
+  parseFloat prefix-parse truncated "14:35"→14, dates→year, across
+  info cards + bgTexts); Title Case restricted to enum tokens; bgtext
+  format UI (prefix/suffix/unit) added on entity rows. value-rules
+  65→74, bgtext-multi 58→61, infocard 26/26, calendar-tv 69/69.
+
 - **Glass-house see-through + zoom-independent fog** (2026-07-20;
   2 parallel Opus agents). (a) The dark stairwell/void plane (opaque
   1.2×-rect sheet — the user's "opaque sheet") now builds transparent

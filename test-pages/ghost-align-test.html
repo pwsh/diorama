@@ -107,6 +107,51 @@
     ok('T3 nudge: full-rect slab (floor rect) stays put', near(sx1, sx0), `${sx1} vs ${sx0}`);
   }
 
+  // ── Test 4: CLOSED-LOOP ghost slab, loop OFF-CENTER in the world frame —
+  //    catches the Z-mirror bug: ShapeGeometry rotated −π/2 maps shape (sx, sy)
+  //    → scene (sx, 0, −sy), so the shape y must be the NEGATED asz. A mirrored
+  //    slab would land at +3000 instead of −3000 here. ──
+  {
+    const active = baseFloor({ id: 'a', name: 'A', w: 12000, d: 10000, walls: [], furniture: [] });
+    const afw = 12000, afd = 10000;
+    // Ghost: closed rect loop x 1000..4000, y 1000..3000 (off-center both axes).
+    const ghost = baseFloor({ id: 'g', name: 'G', w: 8000, d: 6000,
+      walls: [wall('gw', [
+        { x: 1000, y: 1000 }, { x: 4000, y: 1000 }, { x: 4000, y: 3000 },
+        { x: 1000, y: 3000 }, { x: 1000, y: 1000 } ])],
+      furniture: [] });
+    r.updateFloor(active, sc);
+    r.updateGhostFloors([active, ghost], 'a', sc, [], {});
+
+    const sm = meshes().find(m => m.geometry.type === 'ShapeGeometry');
+    ok('T4 loop-slab: ShapeGeometry slab built', !!sm);
+    if (sm) {
+      // Geometry bbox is in shape-plane coords (x = sx, y = sy); the mesh's
+      // rotation.x = −π/2 maps that to scene (sx, 0, −sy). Story y offset lives
+      // on the parent group and never touches x/z.
+      sm.geometry.computeBoundingBox();
+      const bb = sm.geometry.boundingBox;
+      const cX = (bb.min.x + bb.max.x) / 2 + sm.position.x;
+      const cZlo = -(bb.max.y) + sm.position.z, cZhi = -(bb.min.y) + sm.position.z;
+      const cZ = (cZlo + cZhi) / 2;
+      // Loop world center (2500, 2000) through the ACTIVE frame:
+      const loopCx = 2500, loopCy = 2000;
+      ok('T4 loop-slab: bbox center scene X == afw/2 − loopCx', near(cX, afw / 2 - loopCx), `${cX} vs ${afw / 2 - loopCx}`);
+      ok('T4 loop-slab: bbox center scene Z == loopCy − afd/2 (NOT its negation)',
+         near(cZ, loopCy - afd / 2), `${cZ} vs ${loopCy - afd / 2}`);
+      // The slab's z-extent must sit on the SAME side as the ghost walls
+      // (loop y 1000..3000 → scene z −4000..−2000, all negative). A mirrored
+      // slab would sit entirely at positive z.
+      const wallZs = meshes()
+        .filter(m => m.geometry.type === 'BoxGeometry' && m.geometry.parameters.height > 2000)
+        .map(m => m.position.z);
+      const zMin = Math.min(cZlo, cZhi), zMax = Math.max(cZlo, cZhi);
+      ok('T4 loop-slab: slab z-extent on the same side as the ghost walls',
+         wallZs.length > 0 && wallZs.every(z => z >= zMin - 1 && z <= zMax + 1),
+         `slabZ=[${zMin},${zMax}] wallZ=[${wallZs.join(',')}]`);
+    }
+  }
+
   document.title = `GHOSTALIGN ${fails.length === 0 ? 'PASS' : 'FAIL'} ${pass}/${n}`;
   if (fails.length) console.error('FAILS:\n' + fails.join('\n'));
   window.__DUMP = document.title + (fails.length ? '\n' + fails.join('\n') : '');

@@ -1432,6 +1432,26 @@ export class SettingsDrawer extends LitElement {
                    title="Clear the bound entity (use the static message)"
                    @click=${() => upd(() => { e.entityId = undefined; })}>✕</button>` : nothing}
           </div>
+          ${e.entityId ? html`
+            <div class="row" style="margin-top:2px;gap:4px">
+              <input type="text" placeholder="prefix" title="Text before the value (e.g. $)"
+                     style="width:64px" .value=${e.format?.prefix ?? ''}
+                     @change=${(ev: Event) => upd(() => {
+                       (e.format ??= {}).prefix = (ev.target as HTMLInputElement).value || undefined;
+                     })}>
+              <input type="text" placeholder="suffix" title="Text after the value (e.g. ' left')"
+                     style="width:64px" .value=${e.format?.suffix ?? ''}
+                     @change=${(ev: Event) => upd(() => {
+                       (e.format ??= {}).suffix = (ev.target as HTMLInputElement).value || undefined;
+                     })}>
+              <label style="font-size:10px;color:var(--text-dim);display:flex;align-items:center;gap:3px;margin-left:auto"
+                     title="Append the entity's unit (for numeric values)">
+                <input type="checkbox" .checked=${e.format?.showUnit !== false}
+                       @change=${(ev: Event) => upd(() => {
+                         (e.format ??= {}).showUnit = (ev.target as HTMLInputElement).checked;
+                       })}> unit
+              </label>
+            </div>` : nothing}
           ${e.mode === 'train' ? html`
             <div class="row" style="margin-top:2px"><label title="Cap on the number of message cars">Max cars</label>
               <input type="number" min="2" max="12" step="1" style="width:64px"

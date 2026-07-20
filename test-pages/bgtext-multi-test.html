@@ -135,6 +135,23 @@
     ok('bound entity wins over static text', res.length === 1 && res[0].text === '42', JSON.stringify(res));
   }
   {
+    // Truncation regression: a time/date entity state must resolve VERBATIM
+    // (a parseFloat prefix-parse used to coerce "14:35" → "14", "2026-07-20" → "2026").
+    p.hass.states['sensor.clock'] = { state: '14:35', attributes: {}, entity_id: 'sensor.clock' };
+    p.hass.states['sensor.day'] = { state: '2026-07-20', attributes: {}, entity_id: 'sensor.day' };
+    p.store.bgTexts = [{ id: 'c', mode: 'sky', text: 'x', entityId: 'sensor.clock' }];
+    ok('time entity "14:35" resolves verbatim', p.bgTextsResolved()[0].text === '14:35',
+       JSON.stringify(p.bgTextsResolved()));
+    p.store.bgTexts = [{ id: 'c', mode: 'banner', text: 'x', entityId: 'sensor.day' }];
+    ok('date entity "2026-07-20" resolves verbatim', p.bgTextsResolved()[0].text === '2026-07-20',
+       JSON.stringify(p.bgTextsResolved()));
+    // format prefix/suffix passes through bgTextsResolved.
+    p.store.bgTexts = [{ id: 'c', mode: 'sky', text: 'x', entityId: 'sensor.clock',
+                        format: { prefix: '@ ', suffix: ' hrs' } }];
+    ok('bg format prefix/suffix applied to entity value', p.bgTextsResolved()[0].text === '@ 14:35 hrs',
+       JSON.stringify(p.bgTextsResolved()));
+  }
+  {
     // Per-mode cap: grass reflows multi-line → 160 chars; other styles → 40.
     p.store.bgTexts = [ent('grass', 'G'.repeat(60))];
     ok('grass under 160 chars kept intact', p.bgTextsResolved()[0].text.length === 60,

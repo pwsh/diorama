@@ -105,6 +105,26 @@
 
     add('titleCase', titleCase('carbon_monoxide-detected') === 'Carbon Monoxide Detected');
 
+    // ── strict-numeric gate: digit-prefixed non-numeric states pass verbatim ──
+    // (Regression for the background-text truncation bug: a parseFloat prefix
+    //  parse coerced "14:35" → 14 and "2026-07-20" → 2026.)
+    eq('time "14:35" verbatim', formatEntityValue(S('14:35', {}, 'sensor.time')), '14:35');
+    eq('date "2026-07-20" verbatim', formatEntityValue(S('2026-07-20', {}, 'sensor.date')), '2026-07-20');
+    eq('ISO ts full when no relativeTime',
+       formatEntityValue(S('2026-07-20T14:00:00+00:00', {}, 'sensor.ts')), '2026-07-20T14:00:00+00:00');
+    eq('digit-prefixed text "12 kWh today" verbatim',
+       formatEntityValue(S('12 kWh today', {}, 'sensor.energy')), '12 kWh today');
+    eq('free text "Partly Cloudy 12%" verbatim',
+       formatEntityValue(S('Partly Cloudy 12%', {}, 'sensor.cond')), 'Partly Cloudy 12%');
+    eq('free text "Hello: World" verbatim',
+       formatEntityValue(S('Hello: World', {}, 'sensor.msg')), 'Hello: World');
+    eq('enum "partly_cloudy" still Title Cases',
+       formatEntityValue(S('partly_cloudy', {}, 'weather.w')), 'Partly Cloudy');
+    eq('fully-numeric "21.5" still formats + °F',
+       formatEntityValue(S('21.5', { unit_of_measurement: '°C' }), {}, { imperial: true }), '70.7 °F');
+    eq('time verbatim + prefix/suffix',
+       formatEntityValue(S('14:35', {}, 'sensor.time'), { prefix: '@ ', suffix: ' hrs' }), '@ 14:35 hrs');
+
     // ── clock / date tokens (deterministic — LOCAL getters on a fixed Date) ───
     // Construct via component args so getHours()/getDate() mirror them regardless of host TZ.
     const D = new Date(2026, 0, 5, 15, 4, 9);   // 2026-01-05 15:04:09 local, a Monday

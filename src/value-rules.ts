@@ -161,7 +161,12 @@ export function formatEntityValue(
     if (!isNaN(t) && opts?.now) return wrap(relTimeText(opts.now.getTime() - t));
   }
 
-  const n = parseFloat(raw);
+  // Strict numeric gate: treat the state as a number ONLY when the ENTIRE
+  // trimmed state is numeric. A parseFloat prefix-parse would coerce "14:35"
+  // (time) → 14 or "2026-07-20" (date) → 2026 and silently drop the rest; those
+  // must display verbatim. Fully-numeric detection also keeps the °C→°F
+  // conversion honest (it only fires on real numbers).
+  const n = /^[+-]?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?$/i.test(raw.trim()) ? parseFloat(raw) : NaN;
 
   // 3) binary_sensor short labels (only for on/off, only when not numeric)
   if (isNaN(n) && st.entity_id?.startsWith('binary_sensor.')) {
@@ -171,8 +176,12 @@ export function formatEntityValue(
     if (raw === 'on' || raw === 'off') return wrap(raw === 'on' ? 'On' : 'Off');
   }
 
-  // 4) non-numeric enum string → Title Case
-  if (isNaN(n)) return wrap(titleCase(raw));
+  // 4) non-numeric string. Title-case ONLY enum-ish snake/kebab tokens
+  // (partly_cloudy → Partly Cloudy, armed_away → Armed Away). Times, dates, and
+  // free text ("14:35", "2026-07-20", "Partly Cloudy 12%", "Hello: World") pass
+  // through verbatim — titleCase would otherwise turn a date's dashes into
+  // spaces ("2026-07-20" → "2026 07 20") and mangle it.
+  if (isNaN(n)) return wrap(/^[a-z][a-z0-9_-]*$/.test(raw) ? titleCase(raw) : raw);
 
   // 5) numeric value (+ unit)
   let val = n;

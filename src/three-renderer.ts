@@ -5114,9 +5114,13 @@ export class ThreeDRenderer {
       const loops = closedWallLoops(gf.walls ?? []);
       if (loops.length) {
         for (const loop of loops) {
+          // Plane rotated -π/2 maps shape (sx, sy) → scene (sx, 0, -sy);
+          // world (wx, wy) must land at (afw/2 − wx, 0, wy − afd/2), so the
+          // shape y is the NEGATED asz (= afd/2 − wy) — same convention as the
+          // active floor's loop builder in updateFloor.
           const shape = new THREE.Shape();
           loop.forEach((pt, k) => {
-            const sx = asx(pt.x), sy = asz(pt.y);
+            const sx = asx(pt.x), sy = -asz(pt.y);
             if (k === 0) shape.moveTo(sx, sy); else shape.lineTo(sx, sy);
           });
           shape.closePath();
