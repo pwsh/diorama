@@ -1235,6 +1235,11 @@ export class SettingsDrawer extends LitElement {
           <input type="checkbox" .checked=${p.store.avatarProps !== false}
                  @change=${(e: Event) => { p.store.avatarProps = (e.target as HTMLInputElement).checked; p.save(); p.emitConfig(); this.requestUpdate(); }}>
         </div>
+        <div class="row" title="Show the bottom-right floor info readout (floor name, sensor + wall counts, floor dimensions) over the plan.">
+          <label>Show floor info readout</label>
+          <input type="checkbox" .checked=${p.store.showFloorStats !== false}
+                 @change=${(e: Event) => { p.store.showFloorStats = (e.target as HTMLInputElement).checked; p.save(); p.emitConfig(); this.requestUpdate(); }}>
+        </div>
         <div style="font-size:10px;color:var(--text-dim);line-height:1.3;margin:4px 0 0">
           Per-floor flooring / wall overrides live in the sidebar Floors section.
         </div>
@@ -1326,6 +1331,16 @@ export class SettingsDrawer extends LitElement {
           Show north icon on plan</label>
           <input type="checkbox" .checked=${c?.showNorthMarker === true}
                  @change=${(e: Event) => set(x => { x.showNorthMarker = (e.target as HTMLInputElement).checked; })}>
+        </div>
+        <div class="row" title="North-icon size multiplier (0.5–4×)" style=${c?.showNorthMarker === true ? '' : 'opacity:0.5'}>
+          <label>North icon size</label>
+          <input type="number" min="0.5" max="4" step="0.1" style="width:64px"
+                 ?disabled=${c?.showNorthMarker !== true}
+                 .value=${String(c?.markerScale ?? 1)}
+                 @change=${(e: Event) => {
+                   const v = Number((e.target as HTMLInputElement).value);
+                   set(x => { x.markerScale = isFinite(v) ? Math.max(0.5, Math.min(4, v)) : 1; });
+                 }}>
         </div>
       </div>`;
   }

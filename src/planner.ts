@@ -1668,6 +1668,7 @@ export class Planner extends EventTarget {
       avatarInteractions: remote.avatarInteractions ?? undefined,
       avatarCostumes: remote.avatarCostumes ?? undefined,
       avatarProps: remote.avatarProps ?? undefined,
+      showFloorStats: remote.showFloorStats ?? undefined,
       bgText:         remote.bgText         ?? undefined,
       bgTexts:        this._migrateBgTexts(remote),
       heatmap:        remote.heatmap        ?? undefined,

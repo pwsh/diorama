@@ -8,7 +8,7 @@ import type { ThreeDRenderer, ZoneWorld, HaloWorld, TargetWorld, ActivityContext
   InteractiveItem, GpsPinWorld, GpsLandmarkWorld, GeoEventWorld, WeatherFxState, VacMapEntry } from '../three-renderer.js';
 import { localToWorld, transformVerts, pointInPolygon, sensorColor, hexToInt, motionColor, lightIconKind, furnitureKind, resolveFurnitureDef, furnitureCat, isBinKind, isSpeakerKind, isSinkKind, isVehicleKind, isClimateApplianceKind, isBladedFanKind, isStairsKind, alarmStateColor, valveOpenness, sprinklerRunning, sprinklerHeadKind, sprinklerArcDeg, sprinklerRadius, sprinklerRotation, flagpoleHoistFraction, doorSpanCenter, isDroopPlant, plantThirsty, PLANT_MOISTURE_DEFAULT_THRESHOLD } from '../geometry.js';
 import { compass8 } from '../geo.js';
-import { resolveNorth } from '../compass.js';
+import { resolveNorth, markerScaleOf } from '../compass.js';
 import { parseNowPlaying, isMediaPlayerId } from '../geometry.js';
 import { robotProgress } from '../geometry.js';
 import { poolWaterColor } from '../geometry.js';
@@ -1330,11 +1330,12 @@ export class ThreeView extends LitElement {
       const compassCfg = p.store.compass;
       const northShow = compassCfg?.showNorthMarker === true;
       const north = resolveNorth(compassCfg, northShow ? p.geoFit() : null);
+      const markerScale = markerScaleOf(compassCfg);
       const keyCompass = `${p.configRev}|${northShow ? 1 : 0}|` +
-        `${Math.round(north.nx * 1000)}:${Math.round(north.ny * 1000)}`;
+        `${Math.round(north.nx * 1000)}:${Math.round(north.ny * 1000)}|${markerScale}`;
       if (keyCompass !== this._keyCompass) {
         this._keyCompass = keyCompass;
-        r.updateNorthMarker(northShow, f.w, f.d, north.nx, north.ny);
+        r.updateNorthMarker(northShow, f.w, f.d, north.nx, north.ny, markerScale);
       }
 
       // Outdoor weather effects (W2). The renderer group is rebuilt only when the

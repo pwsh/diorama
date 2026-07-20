@@ -1178,6 +1178,7 @@ export interface Store {
   avatarInteractions?: boolean;      // synthetic avatars (ai/roam) walk up to UNBOUND interactive devices and flip them (session-only); absent/true = on, false = off
   avatarCostumes?: boolean;          // situational costume/outfit swaps on avatar rigs (sleep/exercise/cooking); absent/true = on, false = off
   avatarProps?: boolean;             // shared prop library — avatars pick up & use household objects (vacuum/broom/umbrella/snacks/…); absent/true = on, false = off
+  showFloorStats?: boolean;          // bottom-right floor info readout ("<name> — N sensors, N walls, W×D"); absent/true = on, false = off
   bgText?: BgTextConfig;             // LEGACY single background text — migrated once into bgTexts, then ignored (read for migration only)
   bgTexts?: BgTextEntry[];           // playful background text, up to 6 entries (skywriting / banner / grass / train / chopper)
   heatmap?: HeatmapConfig;           // per-room temperature heat-map comfort band (derived visual layer)
@@ -1197,6 +1198,7 @@ export interface CompassConfig {
   anchor?: 'tl' | 'tm' | 'tr' | 'bl' | 'bm' | 'br';  // widget corner (chipAnchorStyle); default 'tr'
   custom?: { x: number; y: number };  // px offsets from the anchor's edges; wins over `anchor`
   showNorthMarker?: boolean;   // default false — draw the north icon just off the slab edge (2D + 3D)
+  markerScale?: number;        // north-icon size multiplier (default 1, clamped 0.5..4 by markerScaleOf)
 }
 
 // Per-room temperature heat-map config (derived visual layer — no new binding).

@@ -33,7 +33,7 @@
          "http://localhost:8799/compass-test.html" | grep -o "<title>[^<]*"  -->
 <script type="module">
   const V = '?v=' + Date.now();
-  const { resolveNorth, compassScreenAngle, camAzimuthOf, northMarkerPos } =
+  const { resolveNorth, compassScreenAngle, camAzimuthOf, northMarkerPos, markerScaleOf } =
     await import('./compass.mod.js' + V);
   const { fitGeoTransform, planBearingDeg, unprojectMeters } = await import('./geo.mod.js' + V);
   const { Planner } = await import('./planner.mod.js' + V);
@@ -149,6 +149,15 @@
       ok('5: degenerate overhead → 0', a === 0, a);
     }
 
+    // ── 5b. markerScaleOf clamp matrix (envScale idiom) ──────────────────────
+    {
+      ok('5b: absent → 1', markerScaleOf(undefined) === 1, markerScaleOf(undefined));
+      ok('5b: no markerScale → 1', markerScaleOf({}) === 1, markerScaleOf({}));
+      ok('5b: 0.1 clamps to 0.5', markerScaleOf({ markerScale: 0.1 }) === 0.5, markerScaleOf({ markerScale: 0.1 }));
+      ok('5b: 9 clamps to 4', markerScaleOf({ markerScale: 9 }) === 4, markerScaleOf({ markerScale: 9 }));
+      ok('5b: 2 passes through', markerScaleOf({ markerScale: 2 }) === 2, markerScaleOf({ markerScale: 2 }));
+    }
+
     // ── 6. Planner persistence (real Planner + fake HaApi, config-test idiom) ─
     {
       class FakeHa {
@@ -181,7 +190,8 @@
           envSensors: [], doors: [], windows: [], bg: null, rooms: [] }],
         currentFloorId: 'f1', activeSensorId: null,
         coverage: true, imperial: false, showDetails: false, useRawTargets: false,
-        compass: { show: true, source: 'manual', manualNorthDeg: 123, anchor: 'bl', showNorthMarker: true },
+        compass: { show: true, source: 'manual', manualNorthDeg: 123, anchor: 'bl', showNorthMarker: true, markerScale: 2.5 },
+        showFloorStats: false,
       };
       localStorage.removeItem('diorama:store:v1');
       localStorage.removeItem('diorama:configs');
@@ -192,6 +202,8 @@
       ok('6: compass survives _loadFromHa', p.store.compass?.manualNorthDeg === 123 &&
         p.store.compass?.anchor === 'bl' && p.store.compass?.showNorthMarker === true,
         JSON.stringify(p.store.compass));
+      ok('6: markerScale survives _loadFromHa', p.store.compass?.markerScale === 2.5, p.store.compass?.markerScale);
+      ok('6: showFloorStats:false survives _loadFromHa', p.store.showFloorStats === false, String(p.store.showFloorStats));
       p.setCompass(cc => { cc.manualNorthDeg = 45; cc.custom = { x: 20, y: 30 }; });
       ok('6: setCompass mutates', p.store.compass.manualNorthDeg === 45 && p.store.compass.custom.x === 20, '');
       await p.saveConfigNow();
@@ -206,6 +218,7 @@
       ok('6: compass survives reload', p2.store.compass?.manualNorthDeg === 45 &&
         p2.store.compass?.custom?.y === 30 && p2.store.compass?.show === true,
         JSON.stringify(p2.store.compass));
+      ok('6: showFloorStats:false survives reload', p2.store.showFloorStats === false, String(p2.store.showFloorStats));
       // setCompass creates the object when absent.
       const p3 = new Planner();
       p3.store.compass = undefined;
@@ -213,7 +226,11 @@
       ok('6: setCompass creates cfg when absent', p3.store.compass?.show === true, '');
     }
 
-    // ── 7. Renderer: updateNorthMarker builds / clears / disposes ────────────
+    // ── 7. Renderer: updateNorthMarker builds / clears / disposes / scales ───
+    // NOTE: the _keyCompass scale-change dirty-key fold lives in three-view
+    // (folds `|${markerScale}` into the key so a size edit rebuilds); it needs a
+    // live three-view + Lit render loop, so it is NOT asserted here — the
+    // renderer scale behavior below is the observable half.
     {
       const mod = await import('./assets/three-renderer.js');
       const r = new mod.ThreeDRenderer(document.getElementById('c'));
@@ -237,6 +254,17 @@
       ok('7: rebuild → east marker at right edge', !!arrow2 &&
         near(arrow2.position.x, 10000 / 2 - 10900) && near(arrow2.position.z, 0),
         arrow2 && `${arrow2.position.x},${arrow2.position.z}`);
+      // Scale > 1 → measurably larger decal + sprite (default arg = 1, above).
+      const bboxSize = (m) => { m.geometry.computeBoundingBox(); const b = m.geometry.boundingBox;
+        return { w: b.max.x - b.min.x, h: b.max.y - b.min.y }; };
+      const s1 = bboxSize(grp.children.find(o => o.isMesh));
+      const spr1 = grp.children.find(o => o.isSprite).scale.x;
+      r.updateNorthMarker(true, 10000, 8000, 1, 0, 2);
+      const s2 = bboxSize(grp.children.find(o => o.isMesh));
+      const spr2 = grp.children.find(o => o.isSprite).scale.x;
+      ok('7: scale=2 decal ~2× the scale=1 decal', near(s2.w / s1.w, 2, 1e-6) && near(s2.h / s1.h, 2, 1e-6),
+        `${s1.w}→${s2.w}, ${s1.h}→${s2.h}`);
+      ok('7: scale=2 "N" sprite ~2× wider', near(spr2 / spr1, 2, 1e-6), `${spr1}→${spr2}`);
       let disposed2 = false;
       grp.children.find(o => o.isSprite).material.map.addEventListener('dispose', () => { disposed2 = true; });
       r.updateNorthMarker(false, 10000, 8000, 0, 1);

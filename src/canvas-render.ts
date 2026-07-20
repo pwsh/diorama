@@ -32,7 +32,7 @@ import {
   parseNowPlaying, isMediaPlayerId,
 } from './geometry.js';
 import { compass8 } from './geo.js';
-import { resolveNorth, northMarkerPos } from './compass.js';
+import { resolveNorth, northMarkerPos, markerScaleOf } from './compass.js';
 import { calendarLines, weatherCardLines, resolveScreenContent, CAL_HEADER_COLOR, type ScreenMode } from './surfaces.js';
 import { CONDITION_GLYPH } from './weather.js';
 import { ALERT_BEACON_DEFAULTS, alertBeaconState, alertBeaconColor, alertBeaconAlarming, isAlertDomain } from './alerts.js';
@@ -328,7 +328,8 @@ function drawNorthMarker(ctx: CanvasRenderingContext2D, p: Planner, view: View):
   const mk = northMarkerPos(f.w, f.d, n.nx, n.ny);
   const s = mmToPx(view, mk.x, mk.y);
   const dpr = window.devicePixelRatio || 1;
-  const r = 9 * dpr;                       // ~18 px circle, screen-fixed
+  const sc = markerScaleOf(cfg);           // user size multiplier (0.5..4)
+  const r = 9 * dpr * sc;                  // ~18 px circle, screen-fixed
   // On-screen arrow angle: world (nx, ny) → screen (nx, −ny); CW-from-up =
   // atan2(nx, ny) — mk.angleRad already is exactly that.
   ctx.save();
@@ -353,10 +354,10 @@ function drawNorthMarker(ctx: CanvasRenderingContext2D, p: Planner, view: View):
   // Bold "N" beside the circle (offset perpendicular-ish so it never sits
   // under the arrow tip).
   ctx.save();
-  ctx.font = `700 ${11 * dpr}px system-ui, sans-serif`;
+  ctx.font = `700 ${11 * dpr * sc}px system-ui, sans-serif`;
   ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
   ctx.fillStyle = '#ef5350';
-  ctx.fillText('N', s.x + r + 3 * dpr, s.y);
+  ctx.fillText('N', s.x + r + 3 * dpr * sc, s.y);
   ctx.restore();
 }
 

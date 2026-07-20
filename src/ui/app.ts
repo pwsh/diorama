@@ -262,13 +262,13 @@ export class App extends LitElement {
                    instance covers 2D + 3D); hidden unless compass.show. -->
               <diorama-compass .planner=${p}></diorama-compass>
               <diorama-zone-edit-bar .planner=${p}></diorama-zone-edit-bar>
-              <div style="position:absolute;bottom:10px;right:10px;color:var(--text-dim);font-size:11px;
+              ${p.store.showFloorStats !== false ? html`<div style="position:absolute;bottom:10px;right:10px;color:var(--text-dim);font-size:11px;
                           padding:2px 6px;pointer-events:none;
                           text-shadow:0 0 4px rgba(0,0,0,0.85),0 0 2px rgba(0,0,0,0.85)">
                 ${f.name} — ${f.sensors.length} sensor${f.sensors.length === 1 ? '' : 's'},
                 ${f.walls.length} wall${f.walls.length === 1 ? '' : 's'},
                 ${fmtLen(f.w, p.store.imperial)} × ${fmtLen(f.d, p.store.imperial)}
-              </div>
+              </div>` : nothing}
             </div>
             <diorama-toolbar .planner=${p}></diorama-toolbar>
           </div>

@@ -133,6 +133,13 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Compass marker size + floor-stats toggle** (2026-07-19; 1 Opus
+  agent). `CompassConfig.markerScale` (0.5–4, `markerScaleOf`) sizes
+  the north icon in 2D + 3D (renderer param defaulted for stale-chunk
+  safety; folded into `_keyCompass`); `Store.showFloorStats` (absent =
+  on) gates the bottom-right floor readout with a Settings ▸ Display
+  checkbox. compass-test 46→56/56.
+
 - **On-screen compass + north marker** (2026-07-19; 1 Opus agent).
   `Store.compass` (opt-in) + pure `src/compass.ts` (`resolveNorth`
   auto-from-landmarks / manual `northDeg`-convention fallback,

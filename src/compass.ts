@@ -47,6 +47,13 @@ export function resolveNorth(
   return { nx: 0, ny: 1, source: 'default' };
 }
 
+// North-icon size multiplier — mirrors geometry.ts's envScale clamp idiom.
+// Default 1, clamped to a sane 0.5..4 range (2D px metrics + 3D decal/sprite).
+export function markerScaleOf(cfg: CompassConfig | undefined): number {
+  const s = cfg?.markerScale ?? 1;
+  return Math.max(0.5, Math.min(4, s));
+}
+
 // Camera azimuth (rad) in the SCENE frame: α = atan2(camX − tgtX, camZ − tgtZ).
 // α = 0 → camera sits at scene +Z of its target (looking toward −Z);
 // α = π → camera at scene −Z (the 'front' preset, which matches the 2D plan

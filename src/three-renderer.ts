@@ -10120,7 +10120,7 @@ export class ThreeDRenderer {
   // front-arrow) — and is owned by the group, so _clearGroup disposes it; the
   // sprite CanvasTexture needs the _disposeSpriteMaps pairing (the _gpsGroup
   // gotcha). No blob shadow, no outline shell (userData.outlineSkip).
-  updateNorthMarker(show: boolean, fw: number, fd: number, nx: number, ny: number): void {
+  updateNorthMarker(show: boolean, fw: number, fd: number, nx: number, ny: number, scale = 1): void {
     if (!this._scene) return;
     this._disposeSpriteMaps(this._compassGroup);
     this._clearGroup(this._compassGroup);
@@ -10134,7 +10134,7 @@ export class ThreeDRenderer {
     // template, scaled to yard size); rotation.x = −π/2 lays it flat with
     // shape +Y → scene −Z, then rotation.y aims −Z along the scene north
     // direction (−nx, +ny in scene xz — the _w mirror): φ = atan2(nx, −ny).
-    const W = 260, L = 420, T = 140;   // half-width, length, vee thickness (mm)
+    const W = 260 * scale, L = 420 * scale, T = 140 * scale;   // half-width, length, vee thickness (mm), user-scaled
     const s = new THREE.Shape();
     s.moveTo(0, L);
     s.lineTo(W, 0);
@@ -10155,7 +10155,7 @@ export class ThreeDRenderer {
     arrow.renderOrder = 2;
     arrow.userData.outlineSkip = true;
     this._compassGroup.add(arrow);
-    const sp = this._makeTextSprite('N', '#ef5350', 0.8);
+    const sp = this._makeTextSprite('N', '#ef5350', 0.8 * scale);
     sp.position.set(pos.x, 620, pos.z);
     this._compassGroup.add(sp);
   }
