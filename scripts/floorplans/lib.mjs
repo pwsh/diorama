@@ -24,6 +24,8 @@
 // `setGeom()` has been called (build.mjs does this before importing plans). A
 // tiny fallback (600×600) keeps the helpers usable if geom is absent.
 
+import { rectCorners, convexPenetration, solidWallRuns, wallCollidable, WALL_HALF } from './physical.mjs';
+
 let GEOM = null;
 /** Inject the bundled src/geometry.ts namespace (FURNITURE_KINDS, …). */
 export function setGeom(g) { GEOM = g; }
@@ -31,6 +33,118 @@ export function setGeom(g) { GEOM = g; }
 function kindDef(kind) {
   const map = GEOM?.FURNITURE_KINDS;
   return (map && map[kind]) || { w: 600, h: 600 };
+}
+
+// ── Build-time settle pass ──────────────────────────────────────────────────
+// The APP auto-settles fixtures on drop (snapFireplaceToWall, snapSwitchToWall,
+// snapFurnitureToSurface, resolveSeatTableCollision). `floor()` runs the same
+// idea at build time for the two MECHANICAL alignment classes so plan authors
+// can write round "against the north wall" coordinates and still get physically
+// clean geometry:
+//
+//   1. seat facing  — a chair/stool captured by a table/desk is rotated so its
+//      functional front (local −Y in plan, i.e. −Z in 3D) points across the
+//      host's nearest edge, and tucked to that edge + SEAT_TUCK_CLEAR when it
+//      was sitting ON the tabletop.
+//   2. wall push-out — a nav-blocking piece whose footprint bites into a solid
+//      wall run is nudged straight out along that wall's normal.
+//
+// Both are deterministic and idempotent (re-running build() is byte-stable).
+// Layout DECISIONS (doorway clearance, room connectivity) are NOT auto-fixed —
+// those belong in the plan source and the validator fails loudly on them.
+// Pass `settle: false` on a floor spec to opt out.
+
+const SEAT_TUCK_CLEAR = 150;   // matches geometry.ts resolveSeatTableCollision
+const SEAT_LAP_TOL = 200;      // a tucked chair laps its table ~100 mm by design
+
+function settleSeats(spec) {
+  const { FURNITURE_KINDS, furnitureWorldToLocal, seatBelongsToTable, TABLE_CARRY_MARGIN_MM } = GEOM;
+  const items = spec.furniture ?? [];
+  const isHost = (fu) => {
+    const a = FURNITURE_KINDS[fu.kind ?? 'block']?.activity;
+    return a === 'eat_at_table' || a === 'work_at_desk';
+  };
+  for (const seat of items) {
+    if (!FURNITURE_KINDS[seat.kind ?? 'block']?.seat) continue;
+    let host = null, hostD = Infinity;
+    for (const h of items) {
+      if (h === seat || !isHost(h)) continue;
+      if (!seatBelongsToTable(h.x, h.y, h.rotation, h.w, h.h, seat.x, seat.y, TABLE_CARRY_MARGIN_MM)) continue;
+      const d = Math.hypot(h.x - seat.x, h.y - seat.y);
+      if (d < hostD) { hostD = d; host = h; }
+    }
+    if (!host) continue;
+    // Which host edge is this seat parked at? Compare normalized local offsets
+    // so a chair at the short end faces along the table, not diagonally at it.
+    const l = furnitureWorldToLocal(host.rotation, seat.x - host.x, seat.y - host.y);
+    const hx = host.w / 2, hy = host.h / 2;
+    const useX = Math.abs(l.x) / hx >= Math.abs(l.y) / hy;
+    // Host-local unit vector pointing from the seat toward the table.
+    const lfx = useX ? -Math.sign(l.x || 1) : 0;
+    const lfy = useX ? 0 : -Math.sign(l.y || 1);
+    // Host-local → world (inverse of furnitureWorldToLocal).
+    const hr = (host.rotation ?? 0) * Math.PI / 180;
+    const c = Math.cos(hr), s = Math.sin(hr);
+    const fx = lfx * c + lfy * s, fy = -lfx * s + lfy * c;
+    // front = (−sin r, −cos r) ⇒ r = atan2(−fx, −fy)
+    const rot = (Math.round(Math.atan2(-fx, -fy) * 180 / Math.PI) + 360) % 360;
+    if (rot) seat.rotation = rot; else delete seat.rotation;
+
+    // Tuck out if the chair is sitting ON the tabletop.
+    const lap = convexPenetration(
+      rectCorners(seat.x, seat.y, seat.w, seat.h, seat.rotation),
+      rectCorners(host.x, host.y, host.w, host.h, host.rotation));
+    if (lap > SEAT_LAP_TOL) {
+      const nlx = useX ? Math.sign(l.x || 1) * (hx + SEAT_TUCK_CLEAR) : l.x;
+      const nly = useX ? l.y : Math.sign(l.y || 1) * (hy + SEAT_TUCK_CLEAR);
+      seat.x = Math.round(host.x + nlx * c + nly * s);
+      seat.y = Math.round(host.y - nlx * s + nly * c);
+    }
+  }
+}
+
+function settleWalls(spec) {
+  const f = { walls: spec.walls ?? [], doors: spec.doors ?? [], windows: spec.windows ?? [] };
+  const runs = solidWallRuns(f, GEOM);
+  const items = spec.furniture ?? [];
+  for (let pass = 0; pass < 3; pass++) {
+    let moved = false;
+    for (const fu of items) {
+      if (!wallCollidable(fu, GEOM)) continue;
+      let bestPush = 0, bestNx = 0, bestNy = 0;
+      const poly = rectCorners(fu.x, fu.y, fu.w, fu.h, fu.rotation);
+      for (const r of runs) {
+        const dx = r.b.x - r.a.x, dy = r.b.y - r.a.y;
+        const len = Math.hypot(dx, dy) || 1;
+        const ux = dx / len, uy = dy / len;
+        const nx = -uy, ny = ux;
+        const mx = (r.a.x + r.b.x) / 2, my = (r.a.y + r.b.y) / 2;
+        const wallPoly = [
+          { x: r.a.x - nx * WALL_HALF, y: r.a.y - ny * WALL_HALF },
+          { x: r.b.x - nx * WALL_HALF, y: r.b.y - ny * WALL_HALF },
+          { x: r.b.x + nx * WALL_HALF, y: r.b.y + ny * WALL_HALF },
+          { x: r.a.x + nx * WALL_HALF, y: r.a.y + ny * WALL_HALF },
+        ];
+        if (convexPenetration(poly, wallPoly) <= 0) continue;
+        // Overlap depth measured along the wall NORMAL (not SAT's min axis) so
+        // a long counter parallel to a wall is pushed off it, never along it.
+        let lo = Infinity, hi = -Infinity;
+        for (const p of poly) {
+          const d = (p.x - mx) * nx + (p.y - my) * ny;
+          if (d < lo) lo = d; if (d > hi) hi = d;
+        }
+        const side = ((fu.x - mx) * nx + (fu.y - my) * ny) >= 0 ? 1 : -1;
+        const push = side > 0 ? WALL_HALF - lo : hi + WALL_HALF;
+        if (push > bestPush) { bestPush = push; bestNx = nx * side; bestNy = ny * side; }
+      }
+      if (bestPush > 0.5) {
+        fu.x = Math.round(fu.x + bestNx * (bestPush + 2));
+        fu.y = Math.round(fu.y + bestNy * (bestPush + 2));
+        moved = true;
+      }
+    }
+    if (!moved) break;
+  }
 }
 
 /**
@@ -182,6 +296,9 @@ export function floorplan(planId) {
    */
   const floor = (spec) => {
     const fid = id('fl');
+    // Walls first (so seats measure against a host's FINAL position), then
+    // seats, then walls again in case a tuck pushed a chair into a wall.
+    if (GEOM && spec.settle !== false) { settleWalls(spec); settleSeats(spec); settleWalls(spec); }
     return {
       id: fid, name: spec.name ?? `Floor ${counts.fl}`,
       w: spec.w, d: spec.d,

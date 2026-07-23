@@ -3,6 +3,10 @@
 // invariants against each plan JSON. Exit is decided by the caller (build.mjs);
 // validatePlan returns a { pass, checks } report.
 import { loadGeom } from './geom.mjs';
+import {
+  doorwayBlockers, wallOverlaps, roomRegions, seatAlignment,
+  DOOR_CLEAR, SEAT_FACE_TOL_DEG, MIN_STANDING_CELLS,
+} from './physical.mjs';
 
 // Perpendicular distance from (px,py) to segment (ax,ay)-(bx,by).
 function segDist(px, py, ax, ay, bx, by) {
@@ -117,6 +121,32 @@ export function validatePlan(env, geom) {
       if (!good) badRoamers.push(r.name || r.id);
     }
     ok(badRoamers.length === 0, `${tag}: roamer avatar pools non-empty strings` + (badRoamers.length ? ` — bad: ${badRoamers.join(', ')}` : ''));
+
+    // 9. Doorway clearance — no nav-blocking piece in a door's span or its
+    //    DOOR_CLEAR-deep approach zone on either side of the wall.
+    const dz = doorwayBlockers(f, geom);
+    ok(dz.length === 0, `${tag}: doorways clear (±${DOOR_CLEAR}mm)` + (dz.length ? ` — blocked: ${dz.join('; ')}` : ''));
+
+    // 10. Furniture must not overlap a solid wall run (openings excised).
+    const wo = wallOverlaps(f, geom);
+    ok(wo.length === 0, `${tag}: no furniture overlaps a wall` + (wo.length ? ` — overlapping: ${wo.join('; ')}` : ''));
+
+    // 11. Nav reachability — every room resolves to ONE connected nav region.
+    //     Reach-in closets / appliance nooks (< MIN_STANDING_CELLS of floor)
+    //     are exempt — nobody walks into them.
+    const rr = roomRegions(f, geom).filter(r => r.cells >= MIN_STANDING_CELLS);
+    const regions = [...new Set(rr.map(r => r.region))];
+    let navMsg = `${tag}: walkable rooms in one nav region (${rr.length} room(s))`;
+    if (regions.length > 1) {
+      const groups = regions.map(rg =>
+        rr.filter(r => r.region === rg).map(r => `${r.name}(${r.cells})`).join('+'));
+      navMsg += ` — ${regions.length} disconnected groups: ${groups.join(' | ')}`;
+    }
+    ok(regions.length <= 1, navMsg);
+
+    // 12. Seats at a table/desk face it (±SEAT_FACE_TOL_DEG) and don't lap it.
+    const sa = seatAlignment(f, geom);
+    ok(sa.length === 0, `${tag}: table seats aligned (±${SEAT_FACE_TOL_DEG}°)` + (sa.length ? ` — bad: ${sa.join('; ')}` : ''));
   }
 
   // 7. Multi-floor: stairs stairLinkId pairs match exactly across floors.

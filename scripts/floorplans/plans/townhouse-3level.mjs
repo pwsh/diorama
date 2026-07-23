@@ -57,8 +57,9 @@ export function buildTownhouseFloors(b) {
     doors: [
       door(650, 0, 0, { w: 2400, kind: 'garage', label: 'Garage' }),
       door(4600, 0, 0, { w: 800, label: 'Entry', lockEntity: null, doorbellEntity: null }),
-      door(4500, 3100, 270, { w: 800, label: 'Half Bath' }),
-      door(3600, 6600, 0, { w: 900, label: 'Flex archway', localState: 'off' }),
+      door(4500, 2300, 270, { w: 800, label: 'Half Bath' }),
+      door(3600, 5300, 270, { w: 800, label: 'Garage service' }),
+      door(3600, 6600, 0, { w: 1200, label: 'Flex archway', localState: 'off' }),
       door(2550, 11000, 0, { w: 900, label: 'Backyard' }),
     ],
     windows: [
@@ -90,10 +91,10 @@ export function buildTownhouseFloors(b) {
       room('Kitchen', 3000, 9600),   // "kitchen" substring gates snack/coffee bubbles
     ],
     doors: [
-      door(4500, 1200, 270, { w: 800, label: 'Half Bath' }),
+      door(4500, 600, 270, { w: 800, label: 'Half Bath' }),
       door(4900, 3300, 0, { w: 800, label: 'Stair door' }),
       door(4900, 6300, 0, { w: 800, label: 'Stair exit' }),
-      door(2250, 11000, 0, { w: 1500, label: 'Balcony' }),
+      door(6000, 6800, 270, { w: 1500, label: 'Balcony' }),
     ],
     windows: [
       win(1300, 0, 0, { w: 1200, sill: 900, height: 1200, label: 'Living' }),
@@ -135,12 +136,13 @@ export function buildTownhouseFloors(b) {
       room('Primary Ensuite', 5100, 9600),
     ],
     doors: [
-      door(1500, 3300, 0, { w: 800, label: 'Secondary Bedroom' }),
-      door(4100, 3300, 0, { w: 800, label: 'Hall passage' }),
-      door(3900, 1100, 270, { w: 800, label: 'Hall Bath' }),
-      door(1800, 4400, 270, { w: 800, label: 'Laundry' }),
+      door(1400, 3300, 0, { w: 900, label: 'Secondary Bedroom' }),
+      door(4600, 3300, 0, { w: 1000, label: 'Stair passage' }),
+      door(4500, 4300, 270, { w: 1000, label: 'Stair exit' }),
+      door(3900, 900, 270, { w: 800, label: 'Hall Bath' }),
+      door(1800, 4200, 270, { w: 800, label: 'Laundry' }),
       door(1650, 6300, 0, { w: 900, label: 'Primary Suite' }),
-      door(4200, 7900, 270, { w: 800, label: 'Closet' }),
+      door(4200, 7300, 270, { w: 800, label: 'Closet' }),
       door(4200, 10100, 270, { w: 800, label: 'Ensuite' }),
     ],
     windows: [
@@ -167,18 +169,18 @@ export function build() {
   const groundFurn = [
     ...g.stairs,
     furn('cabinet', 600, 6100, { rotation: 180, label: 'Storage' }),
-    furn('counter', 3300, 1000, { rotation: 90, w: 1800, h: 600, label: 'Workbench' }),
+    furn('counter', 3300, 2400, { rotation: 90, w: 1800, h: 600, label: 'Workbench' }),
     furn('bench', 5850, 900, { rotation: 270 }),
     furn('rug', 4900, 900, { rotation: 0, w: 1400, h: 1200 }),
     furn('rug', 4050, 4000, { rotation: 0, w: 800, h: 3000, label: 'Runner' }),
     furn('desk', 1200, 10400, { rotation: 180 }),
     furn('chair', 1200, 9900, { rotation: 0 }),
     furn('bookshelf', 300, 10700, { rotation: 90 }),
-    furn('tv_stand', 4500, 6800, { rotation: 0 }),
-    furn('tv', 4500, 6800, { rotation: 0, localState: 'off' }),
-    furn('sofa', 4500, 10600, { rotation: 180 }),
-    furn('coffee_table', 4500, 9000, { rotation: 0 }),
-    furn('rug', 4500, 9500, { rotation: 0, w: 3000, h: 2400 }),
+    furn('tv_stand', 5700, 8800, { rotation: 90 }),
+    furn('tv', 5700, 8800, { rotation: 90, localState: 'off' }),
+    furn('sofa', 3500, 8800, { rotation: 270 }),
+    furn('coffee_table', 4600, 8800, { rotation: 90 }),
+    furn('rug', 4400, 8800, { rotation: 0, w: 2800, h: 2400 }),
   ];
   const groundLights = [
     light(1800, 3300, { iconKind: 'strip', label: 'Garage', rotation: 0, length: 2600 }),
@@ -200,14 +202,14 @@ export function build() {
     furn('coffee_table', 2200, 1600, { rotation: 0 }),
     furn('tv_stand', 300, 2000, { rotation: 90 }),
     furn('tv', 300, 2000, { rotation: 90, localState: 'off' }),
-    furn('chair', 4100, 1600, { rotation: 270, label: 'Armchair' }),
+    furn('chair', 4000, 2200, { rotation: 270, label: 'Armchair' }),
     furn('rug', 2600, 1600, { rotation: 0, w: 3400, h: 2400 }),
     furn('chair', 300, 4800, { rotation: 90, label: 'Reading chair' }),
     furn('ottoman', 900, 4800, { rotation: 90 }),
     furn('plant', 4200, 5800, { rotation: 0 }),
     // Half bath
-    furn('toilet', 5750, 750, { rotation: 270 }),
-    furn('sink', 4650, 750, { rotation: 90 }),
+    furn('toilet', 5600, 1100, { rotation: 270 }),
+    furn('sink', 5250, 350, { rotation: 180 }),
     // Dining
     furn('table', 3000, 7300, { rotation: 0, w: 1800, h: 1000, label: 'Dining table' }),
     furn('chair', 2200, 7300, { rotation: 270 }),
@@ -249,12 +251,12 @@ export function build() {
     furn('bed', 1200, 900, { rotation: 0, w: 1500, h: 2100 }),
     furn('nightstand', 350, 300, { rotation: 0 }),
     furn('nightstand', 2050, 300, { rotation: 0 }),
-    furn('dresser', 3300, 600, { rotation: 270 }),
+    furn('dresser', 2900, 600, { rotation: 270 }),
     furn('rug', 1200, 1400, { rotation: 0, w: 2000, h: 1800 }),
     // Hall bath
-    furn('sink', 4650, 300, { rotation: 0 }),
-    furn('toilet', 4100, 1400, { rotation: 90 }),
-    furn('bathtub', 5700, 900, { rotation: 270, w: 800, h: 1700 }),
+    furn('sink', 4850, 350, { rotation: 180 }),
+    furn('toilet', 4300, 400, { rotation: 180 }),
+    furn('bathtub', 5550, 900, { rotation: 90, w: 1700, h: 800 }),
     // Laundry
     furn('washer', 300, 3700, { rotation: 90 }),
     furn('dryer', 300, 4700, { rotation: 90 }),
@@ -266,16 +268,15 @@ export function build() {
     furn('nightstand', 3300, 10400, { rotation: 180 }),
     furn('dresser', 300, 7200, { rotation: 90, w: 1400, h: 550 }),
     furn('bench', 2100, 9100, { rotation: 180 }),
-    furn('chair', 3700, 7200, { rotation: 270, label: 'Reading chair' }),
+    furn('chair', 3700, 6800, { rotation: 270, label: 'Reading chair' }),
     furn('rug', 2100, 9800, { rotation: 0, w: 2600, h: 2400 }),
     // Primary walk-in closet
-    furn('wardrobe', 4400, 7200, { rotation: 90 }),
-    furn('wardrobe', 5800, 7200, { rotation: 270 }),
+    furn('wardrobe', 5000, 6800, { rotation: 0, w: 1200, h: 600 }),
+    furn('wardrobe', 5600, 7900, { rotation: 270, w: 1200, h: 600 }),
     // Primary ensuite
-    furn('sink_vanity', 4500, 8600, { rotation: 90, w: 1600, h: 550, label: 'Double vanity' }),
-    furn('toilet', 4500, 10600, { rotation: 90 }),
-    furn('bathtub', 5700, 9150, { rotation: 270, w: 800, h: 1700 }),
-    furn('shower', 5550, 10700, { rotation: 180 }),
+    furn('sink_vanity', 5100, 8650, { rotation: 180, w: 1600, h: 550, label: 'Double vanity' }),
+    furn('shower', 5450, 9700, { rotation: 180 }),
+    furn('toilet', 5500, 10600, { rotation: 90 }),
   ];
   const topLights = [
     light(1950, 1650, { iconKind: 'bulb', label: 'Secondary Bedroom' }),
@@ -349,7 +350,7 @@ export function build() {
       '  Hallway: runner. Stairwell: top landing / guarded overlook. Primary Bedroom:',
       '  king bed under the rear windows, two nightstands, dresser, foot-of-bed bench,',
       '  reading chair, rug. Primary Walk-in Closet: two wardrobe runs. Primary Ensuite:',
-      '  double vanity, toilet, tub, and a walk-in shower.',
+      '  double vanity, toilet, and a walk-in shower.',
     ].join('\n'),
   });
 }

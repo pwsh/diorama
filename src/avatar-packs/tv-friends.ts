@@ -16,8 +16,8 @@ const pack: AvatarPackDef = {
         shoe: 0x4a3624, eyes: 'dots', emI: 0, limbR: 0.95, hands: 'sphere' },
       accessories: [
         { shape: 'sphere', size: [62, 16, 62], anchor: 'crown', pos: [0, -6, 4], rot: [0.3, 0, 0], color: 0x2e1c12 },
-        { shape: 'box', size: [26, 14, 6], anchor: 'neck', pos: [-16, 2, -16], rot: [0, 0, 0.5], color: 0xf2ede0 },
-        { shape: 'box', size: [26, 14, 6], anchor: 'neck', pos: [16, 2, -16], rot: [0, 0, -0.5], color: 0xf2ede0 },
+        { shape: 'box', size: [26, 14, 6], anchor: 'neck', pos: [-16, 2, -86], rot: [0, 0, 0.5], color: 0xf2ede0 },
+        { shape: 'box', size: [26, 14, 6], anchor: 'neck', pos: [16, 2, -86], rot: [0, 0, -0.5], color: 0xf2ede0 },
         { shape: 'cylinder', size: [7, 7, 50], anchor: 'handR', pos: [0, -18, 0], rot: [0.3, 0, 0.4], color: 0xe8dfc8 },
       ],
       personality: { bobMul: 1.0, swayMul: 1.15, cadenceMul: 1.0, ampMul: 1.05 },
@@ -58,8 +58,8 @@ const pack: AvatarPackDef = {
         shoe: 0x2a2a2a, eyes: 'dots', emI: 0, limbR: 1.05, armL: 1.0 },
       accessories: [
         { shape: 'sphere', size: [64, 18, 64], anchor: 'crown', pos: [0, -6, 4], rot: [0.25, 0, 0], color: 0x241a10 },
-        { shape: 'box', size: [34, 20, 10], anchor: 'neck', pos: [-20, 6, -14], rot: [0.3, 0, 0.4], color: 0x2a2622 },
-        { shape: 'box', size: [34, 20, 10], anchor: 'neck', pos: [20, 6, -14], rot: [0.3, 0, -0.4], color: 0x2a2622 },
+        { shape: 'box', size: [34, 20, 10], anchor: 'neck', pos: [-20, 6, -84], rot: [0.3, 0, 0.4], color: 0x2a2622 },
+        { shape: 'box', size: [34, 20, 10], anchor: 'neck', pos: [20, 6, -84], rot: [0.3, 0, -0.4], color: 0x2a2622 },
         { shape: 'box', size: [46, 26, 30], anchor: 'handR', pos: [0, -22, 0], color: 0xd8b878 },
       ],
       personality: { bobMul: 1.05, swayMul: 1.15, cadenceMul: 0.92, ampMul: 1.1 },
@@ -89,8 +89,8 @@ const pack: AvatarPackDef = {
         shoe: 0x3a2e22, eyes: 'dots', emI: 0, limbR: 0.9, armL: 0.95 },
       accessories: [
         { shape: 'sphere', size: [61, 14, 61], anchor: 'crown', pos: [0, -6, 2], rot: [0.25, 0, 0], color: 0x2a1c12 },
-        { shape: 'box', size: [30, 24, 6], anchor: 'neck', pos: [-16, -6, -16], rot: [0, 0, 0.5], color: 0xe8e4d8 },
-        { shape: 'box', size: [30, 24, 6], anchor: 'neck', pos: [16, -6, -16], rot: [0, 0, -0.5], color: 0xe8e4d8 },
+        { shape: 'box', size: [30, 24, 6], anchor: 'neck', pos: [-16, -6, -86], rot: [0, 0, 0.5], color: 0xe8e4d8 },
+        { shape: 'box', size: [30, 24, 6], anchor: 'neck', pos: [16, -6, -86], rot: [0, 0, -0.5], color: 0xe8e4d8 },
         { shape: 'box', size: [18, 70, 6], anchor: 'chest', pos: [0, 0, -10], color: 0x6a2a30 },
         { shape: 'cylinder', size: [22, 22, 46], anchor: 'handR', pos: [0, -20, 0], rot: [1.57, 0, 0], color: 0xe8e4d8 },
       ],

@@ -114,7 +114,7 @@ const pack: AvatarPackDef = {
     { id: 'firefly/shepherd', label: 'Shepherd (grey shirt, clerical collar)', rig: 'humanoid',
       humanoid: { skin: 0x6b4a30, body: 0x8a8a86, legColor: 0x1a1a1a, shoe: 0x0d0d0d, limbR: 0.95, legL: 1.0 },
       accessories: [
-        { shape: 'box', size: [60, 16, 10], anchor: 'neck', pos: [0, -10, -10], color: 0xf0f0f0, emissiveIntensity: 0 },
+        { shape: 'box', size: [60, 16, 10], anchor: 'neck', pos: [0, -10, -80], color: 0xf0f0f0, emissiveIntensity: 0 },
         { shape: 'sphere', size: [128, 34, 128], anchor: 'crown', pos: [0, -6, 4], rot: [0.2, 0, 0], color: 0xb8b8b8, emissiveIntensity: 0 }],
       personality: { bobMul: 0.8, swayMul: 0.55, cadenceMul: 0.9, ampMul: 0.8 },
       bubbles: ['🙏', '📖', '☕', '😌'] },

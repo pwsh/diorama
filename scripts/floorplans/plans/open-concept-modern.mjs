@@ -75,6 +75,7 @@ export function buildBaseGeometry(b) {
     door(500, 0, 0, { w: 2400, kind: 'garage', label: 'Garage bay 1' }),
     door(3500, 0, 0, { w: 2400, kind: 'garage', label: 'Garage bay 2' }),
     door(1050, 6400, 0, { w: 900, label: 'Garage → Laundry' }),
+    door(3000, 7300, 270, { w: 800, label: 'Laundry → Pantry' }),
     door(6400, 7300, 270, { w: 900, label: 'Pantry → Kitchen' }),
     // Wing B
     door(9250, 0, 0, { w: 1500, label: 'Main Entry', lockEntity: null, doorbellEntity: null }),
@@ -84,7 +85,7 @@ export function buildBaseGeometry(b) {
     // Wing C
     door(14700, 1950, 270, { w: 900, label: 'Office' }),
     door(14700, 5150, 270, { w: 900, label: 'Bedroom 2' }),
-    door(14700, 7550, 270, { w: 900, label: 'Bath 2' }),
+    door(14700, 7000, 270, { w: 900, label: 'Bath 2' }),
     door(14700, 9950, 270, { w: 900, label: 'Bedroom 3' }),
     door(13750, 11200, 0, { w: 900, label: 'Primary Suite' }),
     door(18700, 12400, 270, { w: 800, label: 'Primary Bath' }),
@@ -116,13 +117,13 @@ export function build() {
 
   const furniture = [
     // Garage
-    furn('bookshelf', 1200, 6100, { rotation: 180, label: 'Storage' }),
+    furn('bookshelf', 2600, 6100, { rotation: 180, label: 'Storage' }),
     furn('bookshelf', 5200, 6100, { rotation: 180, label: 'Storage' }),
     furn('cabinet', 300, 3200, { rotation: 90, label: 'Tool cabinet' }),
     // Laundry
     furn('washer', 900, 8300, { rotation: 180 }),
-    furn('dryer', 2100, 8300, { rotation: 180 }),
-    furn('sink', 1500, 6700, { rotation: 0, label: 'Utility sink' }),
+    furn('dryer', 2000, 8300, { rotation: 180 }),
+    furn('sink', 2600, 6700, { rotation: 0, label: 'Utility sink' }),
     // Walk-in Pantry
     furn('bookshelf', 3700, 6700, { rotation: 90, label: 'Shelving' }),
     furn('bookshelf', 5700, 6700, { rotation: 270, label: 'Shelving' }),
@@ -146,16 +147,16 @@ export function build() {
     furn('chair', 12700, 4400, { rotation: 270 }),
     furn('rug', 11800, 4400, { rotation: 0, w: 2600, h: 2000 }),
     // Living
-    furn('sofa_u', 9500, 9200, { rotation: 90, label: 'Sectional' }),
-    furn('coffee_table', 10600, 9200, { rotation: 0 }),
-    furn('tv_stand', 13200, 8500, { rotation: 270 }),
-    furn('tv', 13200, 8500, { rotation: 270, localState: 'off' }),
+    furn('sofa_u', 9500, 8600, { rotation: 270, label: 'Sectional' }),
+    furn('coffee_table', 10600, 8600, { rotation: 0 }),
+    furn('tv_stand', 13200, 7800, { rotation: 90 }),
+    furn('tv', 13200, 7800, { rotation: 90, localState: 'off' }),
     furn('chair', 7200, 10200, { rotation: 180, label: 'Reading chair' }),
     furn('plant', 7000, 10800, { rotation: 0 }),
-    furn('rug', 9800, 9000, { rotation: 0, w: 3600, h: 2400 }),
+    furn('rug', 9800, 8600, { rotation: 0, w: 3600, h: 2400 }),
     // Hallway
-    furn('coffee_table', 14150, 5500, { rotation: 90, label: 'Console' }),
-    furn('plant', 14150, 900, { rotation: 0 }),
+    furn('coffee_table', 13850, 4000, { rotation: 90, w: 900, h: 300, label: 'Console' }),
+    furn('plant', 13900, 900, { rotation: 0 }),
     // Office / Den
     furn('desk', 19500, 800, { rotation: 180 }),
     furn('chair', 19500, 1300, { rotation: 0 }),
@@ -164,26 +165,26 @@ export function build() {
     furn('bed', 18200, 6000, { rotation: 0, w: 1500, h: 2100 }),
     furn('nightstand', 16900, 6000, { rotation: 0 }),
     furn('nightstand', 19500, 6000, { rotation: 0 }),
-    furn('dresser', 15400, 3300, { rotation: 90 }),
-    furn('wardrobe', 15400, 4600, { rotation: 90, label: 'Reach-in' }),
+    furn('dresser', 16500, 3400, { rotation: 0 }),
+    furn('wardrobe', 15400, 4300, { rotation: 90, label: 'Reach-in' }),
     furn('rug', 18000, 4650, { rotation: 0, w: 2000, h: 1600, color: carpet }),
     // Bath 2 (shared)
     furn('toilet', 15200, 6700, { rotation: 90 }),
-    furn('sink_vanity', 16800, 7700, { rotation: 180, label: 'Double vanity' }),
-    furn('bathtub', 19800, 6900, { rotation: 270, w: 1700, h: 750 }),
+    furn('sink_vanity', 16800, 7500, { rotation: 180, label: 'Double vanity' }),
+    furn('bathtub', 19800, 7500, { rotation: 180, w: 1700, h: 750 }),
     // Bedroom 3
     furn('bed', 18200, 10200, { rotation: 0, w: 1500, h: 2100 }),
     furn('nightstand', 16900, 10200, { rotation: 0 }),
     furn('nightstand', 19500, 10200, { rotation: 0 }),
-    furn('desk', 15400, 8200, { rotation: 90 }),
-    furn('wardrobe', 15400, 10900, { rotation: 90, label: 'Reach-in' }),
+    furn('desk', 15400, 8800, { rotation: 90 }),
+    furn('wardrobe', 16000, 10900, { rotation: 90, label: 'Reach-in' }),
     furn('rug', 18000, 9550, { rotation: 0, w: 2000, h: 1600, color: carpet }),
     // Primary Bedroom
     furn('bed', 16150, 15200, { rotation: 180, w: 2000, h: 2200 }),
     furn('nightstand', 14700, 15200, { rotation: 180 }),
     furn('nightstand', 17600, 15200, { rotation: 180 }),
     furn('dresser', 14100, 12500, { rotation: 90 }),
-    furn('chair', 17900, 12200, { rotation: 270, label: 'Reading chair' }),
+    furn('chair', 17600, 12200, { rotation: 270, label: 'Reading chair' }),
     furn('rug', 16150, 13800, { rotation: 0, w: 3000, h: 2400, color: carpet }),
     // Primary Bath
     furn('sink_vanity', 18950, 11500, { rotation: 180, label: 'Double vanity' }),
@@ -199,8 +200,8 @@ export function build() {
     furn('plant', 6900, 15400, { rotation: 0 }),
     furn('tree', 3000, 12000, { rotation: 0 }),
     furn('tree', 1500, 14500, { rotation: 0 }),
-    furn('trash_bin', 5900, -600, { rotation: 0 }),
-    furn('recycle_bin', 6500, -600, { rotation: 0 }),
+    furn('trash_bin', 6300, -600, { rotation: 0 }),
+    furn('recycle_bin', 7000, -600, { rotation: 0 }),
   ];
 
   const lights = [

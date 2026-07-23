@@ -109,6 +109,8 @@ const _thpDir = new THREE.Vector3();
 const _thpParentQ = new THREE.Quaternion();
 const _thpQuat = new THREE.Quaternion();
 const _THP_UP = new THREE.Vector3(0, 1, 0);
+// Build-time axis for the upright-authoring counter-rotation (PropDef.handPitch).
+const _THP_X = new THREE.Vector3(1, 0, 0);
 // Shared-props: scratch vector for a plant pivot's world position (zero-alloc).
 const _propScratch = new THREE.Vector3();
 
@@ -592,6 +594,19 @@ interface PropDef {
   allowSeated?: boolean;             // may fire from the idleSeated gate
   primitives: AvatarPrimitive[];     // reuses the accessory schema verbatim
   sessionDurS: [number, number];     // [min, max) session length; cls 3 ignores it
+  // UPRIGHT AUTHORING FRAME (prop-geometry fix). The rig has no wrist: a hand
+  // group's world orientation is exactly Rx(shoulder + elbow), so a prim
+  // authored "hanging below the hand" ([0,-h,0]) actually points wherever the
+  // forearm points — at the typical grip pitch (~2 rad) it sticks FORWARD and
+  // the item is upside down. When `handPitch` is set to the pose's nominal
+  // total arm pitch (shoulder+elbow of `poseHold`), _startPropSession
+  // counter-rotates every prim by −handPitch at build, so this prop's
+  // primitives are authored in a WORLD-UPRIGHT frame: +Y = up, −Z = the rig's
+  // front, origin = the grip hand. The prop then tips only by how far the pose
+  // departs from `handPitch` (that residual IS the pour / sip / bite tilt).
+  // Two-handed props (broom / snow shovel) must NOT set it — their handle is
+  // re-aimed between the hands every frame (see `twoHanded` below).
+  handPitch?: number;
   poseHold: (h: Humanoid, t: number, propPhase: number, walking: boolean) => PropPoseDelta;
 }
 
@@ -903,9 +918,10 @@ const _beat = (pp: number, period: number, up: number): number => {
   return ph < up ? Math.sin((ph / up) * Math.PI) : 0;
 };
 // drink_cup morning variant (warm mug + handle) — swapped in at equip time.
+// Authored in drink_cup's UPRIGHT frame (see PropDef.handPitch).
 const DRINK_MUG_PRIMS: AvatarPrimitive[] = [
-  { shape: 'cylinder', size: [58, 55, 120], anchor: 'handR', pos: [0, -50, 0], color: 0x8a5a3a },
-  { shape: 'box', size: [22, 70, 20], anchor: 'handR', pos: [72, -50, 0], color: 0x8a5a3a },
+  { shape: 'cylinder', size: [58, 55, 120], anchor: 'handR', pos: [0, -10, 0], color: 0x8a5a3a },
+  { shape: 'box', size: [22, 70, 20], anchor: 'handR', pos: [72, -10, 0], color: 0x8a5a3a },
 ];
 // fetch_toy skins (random pick at pickup).
 const FETCH_SKINS: Record<string, AvatarPrimitive[]> = {
@@ -920,28 +936,60 @@ const FETCH_SKINS: Record<string, AvatarPrimitive[]> = {
 
 export const PROP_DEFS: Record<string, PropDef> = {
   vacuum_cleaner: {
+    // Upright authoring frame: wand angles down-FORWARD out of the hand, head
+    // rides the floor ~900 mm ahead of the rig, wheels touching (the old build
+    // authored "below the hand" and, at the then-2 rad grip pitch, floated the
+    // whole machine forward at chest height).
     id: 'vacuum_cleaner', users: 'hands', category: 'chore', cls: 1, sessionDurS: [14, 26],
+    handPitch: 0.40,
     primitives: [
-      { shape: 'cylinder', size: [18, 18, 900], anchor: 'handR', pos: [0, -430, 60], color: 0x30363f },
-      { shape: 'box', size: [300, 250, 400], anchor: 'handR', pos: [0, -940, 240], color: 0x9aa4b0 },
-      { shape: 'cylinder', size: [70, 70, 40], anchor: 'handR', pos: [-150, -1090, 240], rot: [0, 0, Math.PI / 2], color: 0x2a2f36 },
-      { shape: 'cylinder', size: [70, 70, 40], anchor: 'handR', pos: [150, -1090, 240], rot: [0, 0, Math.PI / 2], color: 0x2a2f36 },
-      { shape: 'cone', size: [110, 150], anchor: 'handR', pos: [0, -1070, 470], rot: [Math.PI / 2, 0, 0], color: 0x555b64 },
+      { shape: 'cylinder', size: [16, 16, 800], anchor: 'handR', pos: [0, -376, -137], rot: [0.35, 0, 0], color: 0x30363f },
+      { shape: 'box', size: [300, 120, 420], anchor: 'handR', pos: [0, -698, -300], color: 0x9aa4b0 },
+      { shape: 'cylinder', size: [45, 45, 40], anchor: 'handR', pos: [-130, -723, -300], rot: [0, 0, Math.PI / 2], color: 0x2a2f36 },
+      { shape: 'cylinder', size: [45, 45, 40], anchor: 'handR', pos: [130, -723, -300], rot: [0, 0, Math.PI / 2], color: 0x2a2f36 },
+      { shape: 'cone', size: [110, 150], anchor: 'handR', pos: [0, -708, -480], rot: [Math.PI / 2, 0, 0], color: 0x555b64 },
     ],
-    poseHold: (_h, _t, pp) => ({ rSh: 0.9, rEl: 0.9 + Math.sin(pp * 2 * Math.PI * 1.5) * 0.15, leanX: 0.05 }),
+    // Slow push-and-pull ALONG the floor (~0.4 Hz): the shoulder drives the
+    // stroke, the elbow counters so the wand keeps its angle instead of flapping.
+    poseHold: (_h, _t, pp) => {
+      const s = (Math.sin(pp * 2 * Math.PI * 0.4) + 1) / 2;   // 0..1 pull→push
+      return { rSh: 0.15 + s * 0.30, rEl: 0.15 - s * 0.10, leanX: -0.07 - s * 0.04 };
+    },
   },
   broom: {
+    // TWO-HANDED (see PropDef.handPitch / _startPropSession): the shaft is the
+    // handle prim and MUST be authored FIRST; the brush head is a later prim on
+    // the SAME hand anchor, so it is re-parented onto the handle at build and
+    // rides the re-aimed shaft rigidly. +Y runs from the upper (right) grip,
+    // through the lower (left) grip, out to the brush — so the head lands on the
+    // floor ahead-left of the rig.
     id: 'broom', users: 'hands', category: 'chore', cls: 1, sessionDurS: [12, 22],
     primitives: [
-      { shape: 'cylinder', size: [16, 16, 1100], anchor: 'handR', pos: [0, 0, 0], color: 0x8a5a2b, twoHanded: true },
-      { shape: 'box', size: [230, 130, 40], anchor: 'handR', pos: [0, -560, 0], color: 0xd9b45a },
+      { shape: 'cylinder', size: [16, 16, 1640], anchor: 'handR', pos: [0, 735, 0], color: 0x8a5a2b, twoHanded: true },
+      { shape: 'box', size: [270, 110, 170], anchor: 'handR', pos: [0, 1580, 0], color: 0xd9b45a },
     ],
-    poseHold: (_h, _t, pp) => ({ lSh: 0.6, rSh: 0.6, lEl: 0.9, rEl: 0.9, yaw: Math.sin(pp * 2 * Math.PI * 0.8) * 0.3, rollZ: Math.sin(pp * 2 * Math.PI * 0.8) * 0.06 }),
+    // Sweep: the ARMS drive it — the lower (left) grip pushes out and draws back
+    // while the upper (right) grip rocks, arcing the head across the floor. Only
+    // a slight torso turn/roll follows (the old ±0.3 rad yaw span the figure).
+    poseHold: (_h, _t, pp) => {
+      const s = Math.sin(pp * 2 * Math.PI * 0.7);   // −1..1 stroke
+      return {
+        rSh: 0.55 + s * 0.10, rEl: 2.30 - s * 0.15,   // top hand tucked at the chest
+        lSh: 0.60 + s * 0.28, lEl: 0.10 - s * 0.08,   // lower hand pushes out / draws back
+        yaw: s * 0.12, rollZ: -s * 0.05, leanX: -0.12,
+      };
+    },
   },
   dish_towel: {
+    // Wipe a COUNTER: hand low and forward (towel hanging under the palm at
+    // ~counter height), tracing a small circle rather than flapping vertically.
     id: 'dish_towel', users: 'hands', category: 'chore', cls: 1, sessionDurS: [8, 16],
-    primitives: [{ shape: 'box', size: [180, 20, 220], anchor: 'handR', pos: [0, -70, 0], color: 0xdfe6ec }],
-    poseHold: (_h, _t, pp) => ({ rSh: 0.9, rEl: 1.3 + Math.sin(pp * 2 * Math.PI * 1.8) * 0.25, leanX: -0.08 }),
+    handPitch: 1.15,
+    primitives: [{ shape: 'box', size: [180, 20, 220], anchor: 'handR', pos: [0, -60, -40], color: 0xdfe6ec }],
+    poseHold: (_h, _t, pp) => {
+      const w = pp * 2 * Math.PI * 0.9;
+      return { rSh: 0.95 + Math.cos(w) * 0.12, rEl: 0.10 + Math.sin(w) * 0.18, yaw: Math.sin(w) * 0.05, leanX: -0.10 };
+    },
   },
   window_squeegee: {
     id: 'window_squeegee', users: 'hands', category: 'chore', cls: 1, sessionDurS: [10, 18],
@@ -954,67 +1002,100 @@ export const PROP_DEFS: Record<string, PropDef> = {
     poseHold: (_h, _t, pp) => ({ rSh: 1.1 + Math.sin(pp * 2 * Math.PI * 0.4) * 0.5, rEl: 0.9, lSh: 0.7, lEl: 1.3 + _beat(pp, 2, 0.3) * 0.6 }),
   },
   watering_can: {
+    // Carried UPRIGHT at the hip (handPitch = the carry pitch), then TIPPED to
+    // pour: the pour beat raises the arm and rolls the total pitch ~1 rad past
+    // `handPitch`, which tips the can toward its spout (mounted on the +Z side —
+    // the side that swings DOWN as the wrist-less hand pitches back).
     id: 'watering_can', users: 'hands', category: 'chore', cls: 1, sessionDurS: [8, 14],
+    handPitch: 0.30,
     primitives: [
-      { shape: 'cylinder', size: [120, 140, 180], anchor: 'handR', pos: [0, -130, 0], color: 0x4a8fbf },
-      { shape: 'cone', size: [35, 220], anchor: 'handR', pos: [190, -120, 0], rot: [0, 0, -1.0], color: 0x3a7aa8 },
-      { shape: 'box', size: [30, 130, 40], anchor: 'handR', pos: [-120, -70, 0], color: 0x3a7aa8 },
-    ],
-    poseHold: (_h, _t, pp) => ({ rSh: 1.3, rEl: 1.0 + _beat(pp, 2, 0.4) * 0.3 }),
-  },
-  snow_shovel: {
-    id: 'snow_shovel', users: 'hands', category: 'chore', cls: 1, sessionDurS: [12, 22],
-    primitives: [
-      { shape: 'cylinder', size: [18, 18, 1200], anchor: 'handR', pos: [0, 0, 0], color: 0x8a5a2b, twoHanded: true },
-      { shape: 'box', size: [320, 40, 260], anchor: 'handR', pos: [0, -620, 0], color: 0xcfd6dd },
+      { shape: 'cylinder', size: [120, 140, 180], anchor: 'handR', pos: [0, -60, 0], color: 0x4a8fbf },
+      { shape: 'cone', size: [35, 220], anchor: 'handR', pos: [0, -40, 140], rot: [1.20, 0, 0], color: 0x3a7aa8 },
+      { shape: 'box', size: [26, 120, 26], anchor: 'handR', pos: [0, 40, -60], color: 0x3a7aa8 },
     ],
     poseHold: (_h, _t, pp) => {
-      const s = (Math.sin(pp * 2 * Math.PI * 0.5) + 1) / 2;   // 0..1 scoop-and-toss
-      return { rSh: 0.3 + s * 1.3, rEl: 0.9 - s * 0.4, lSh: 0.3 + s * 1.3, lEl: 0.9, leanX: (1 - s) * 0.2 };
+      const b = _beat(pp, 6, 2.4);   // long, slow pour every ~6 s
+      return { rSh: 0.15 + b * 0.55, rEl: 0.15 + b * 0.45, leanX: -0.05 * b };
+    },
+  },
+  snow_shovel: {
+    // TWO-HANDED, same handle convention as the broom (shaft first, blade
+    // re-parented onto it). Scoop at the floor → lift-and-toss.
+    id: 'snow_shovel', users: 'hands', category: 'chore', cls: 1, sessionDurS: [12, 22],
+    primitives: [
+      { shape: 'cylinder', size: [18, 18, 1660], anchor: 'handR', pos: [0, 740, 0], color: 0x8a5a2b, twoHanded: true },
+      { shape: 'box', size: [340, 90, 300], anchor: 'handR', pos: [0, 1590, 0], color: 0xcfd6dd },
+    ],
+    poseHold: (_h, _t, pp) => {
+      const s = (Math.sin(pp * 2 * Math.PI * 0.35) + 1) / 2;   // 0 = scoop at the floor, 1 = toss
+      return {
+        rSh: 0.55 + s * 0.55, rEl: 2.30 - s * 0.50,
+        lSh: 0.60 + s * 0.70, lEl: 0.10 + s * 0.40,
+        leanX: -0.16 * (1 - s), rollZ: -s * 0.06,
+      };
     },
   },
   umbrella: {
+    // Held OVERHEAD: authored upright (handPitch = the raised-arm pitch) with the
+    // shaft tilted back so the canopy sits above and slightly behind the head
+    // instead of out in front of it. Previously the whole umbrella hung BELOW
+    // the raised hand (the wrist-less pitch problem at its worst).
     id: 'umbrella', users: 'hands', category: 'weather', cls: 3, sessionDurS: [0, 0],
+    handPitch: 2.40,
     primitives: [
-      { shape: 'cylinder', size: [14, 14, 720], anchor: 'handR', pos: [0, 200, 0], color: 0x333333 },
-      { shape: 'cone', size: [540, 300], anchor: 'handR', pos: [0, 720, 0], color: 'tint' },
+      { shape: 'cylinder', size: [14, 14, 980], anchor: 'handR', pos: [0, 203, 125], rot: [0.55, 0, 0], color: 0x333333 },
+      { shape: 'cone', size: [540, 300], anchor: 'handR', pos: [0, 620, 380], rot: [0.55, 0, 0], color: 'tint' },
     ],
     poseHold: () => ({ rSh: 2.0, rEl: 0.4 }),
   },
   plate_of_food: {
+    // Plate held LEVEL (upright frame) in the left hand; the right hand lifts
+    // food to the mouth on a slow beat.
     id: 'plate_of_food', users: 'hands', category: 'leisure', cls: 2, allowSeated: true, sessionDurS: [12, 24],
+    handPitch: 2.30,
     primitives: [
-      { shape: 'cylinder', size: [110, 110, 16], anchor: 'handL', pos: [0, -40, 0], color: 0xf0f0f2 },
-      { shape: 'sphere', size: 34, anchor: 'handL', pos: [32, -12, 0], color: 0xd08a3a },
-      { shape: 'sphere', size: 28, anchor: 'handL', pos: [-28, -14, 24], color: 0x6ab04a },
+      { shape: 'cylinder', size: [110, 110, 16], anchor: 'handL', pos: [0, -30, 0], color: 0xf0f0f2 },
+      { shape: 'sphere', size: 34, anchor: 'handL', pos: [32, 0, -10], color: 0xd08a3a },
+      { shape: 'sphere', size: 28, anchor: 'handL', pos: [-28, -4, 24], color: 0x6ab04a },
     ],
-    poseHold: (_h, _t, pp) => { const b = _beat(pp, 4, 0.8); return { lSh: 0.7, lEl: 1.6, rSh: 0.3 + b * 1.4, rEl: 0.3 + b * 1.7 }; },
+    poseHold: (_h, _t, pp) => { const b = _beat(pp, 4, 0.8); return { lSh: 0.7, lEl: 1.6, rSh: 0.4 + b * 1.05, rEl: 0.5 + b * 1.05 }; },
   },
   ice_cream_cone: {
+    // Cone stays upright through the whole lick cycle (upright frame + a SMALL
+    // pitch swing) and the hand comes up to the face on the beat.
     id: 'ice_cream_cone', users: 'hands', category: 'leisure', cls: 2, allowSeated: true, sessionDurS: [8, 16],
+    handPitch: 2.65,
     primitives: [
-      { shape: 'cone', size: [45, 150], anchor: 'handR', pos: [0, -70, 0], rot: [Math.PI, 0, 0], color: 0xd9a45a },
-      { shape: 'sphere', size: 56, anchor: 'handR', pos: [0, 10, 0], color: 0xf7d1e0 },
+      { shape: 'cone', size: [45, 150], anchor: 'handR', pos: [0, -20, 0], rot: [Math.PI, 0, 0], color: 0xd9a45a },
+      { shape: 'sphere', size: 56, anchor: 'handR', pos: [0, 80, 0], color: 0xf7d1e0 },
     ],
-    poseHold: (_h, _t, pp) => { const b = _beat(pp, 2.5, 0.5); return { rSh: 0.6 + b * 1.0, rEl: 1.0 + b * 0.8 }; },
+    poseHold: (_h, _t, pp) => { const b = _beat(pp, 2.5, 0.5); return { rSh: 0.75 + b * 0.55, rEl: 1.55 + b * 0.15 }; },
   },
   drink_cup: {
+    // Carried upright; the sip beat raises the hand to the face AND tips the cup
+    // ~0.6 rad toward the mouth (the residual over `handPitch`).
     id: 'drink_cup', users: 'hands', category: 'leisure', cls: 2, allowSeated: true, sessionDurS: [10, 20],
-    primitives: [{ shape: 'cylinder', size: [55, 50, 130], anchor: 'handR', pos: [0, -55, 0], color: 0xcfe4f0 }],
-    poseHold: (_h, _t, pp) => { const b = _beat(pp, 6, 0.7); return { rSh: 0.4 + b * 1.2, rEl: 0.9 + b * 0.9 }; },
+    handPitch: 2.35,
+    primitives: [{ shape: 'cylinder', size: [55, 50, 130], anchor: 'handR', pos: [0, -10, 0], color: 0xcfe4f0 }],
+    poseHold: (_h, _t, pp) => { const b = _beat(pp, 6, 0.7); return { rSh: 0.75 + b * 0.55, rEl: 1.55 + b * 0.10 }; },
   },
   popcorn_bucket: {
     id: 'popcorn_bucket', users: 'hands', category: 'leisure', cls: 2, allowSeated: true, sessionDurS: [12, 24],
+    handPitch: 2.20,
     primitives: [
-      { shape: 'cylinder', size: [95, 70, 150], anchor: 'handL', pos: [0, -70, 0], color: 0xd23a3a },
-      { shape: 'sphere', size: 74, anchor: 'handL', pos: [0, 15, 0], sphereArc: [0, Math.PI * 2, 0, Math.PI / 2], color: 0xf4e2a0 },
+      { shape: 'cylinder', size: [95, 70, 150], anchor: 'handL', pos: [0, -40, 0], color: 0xd23a3a },
+      { shape: 'sphere', size: 74, anchor: 'handL', pos: [0, 40, 0], sphereArc: [0, Math.PI * 2, 0, Math.PI / 2], color: 0xf4e2a0 },
     ],
     poseHold: (_h, _t, pp) => { const b = _beat(pp, 2, 0.5); return { lSh: 0.7, lEl: 1.5, rSh: 0.4 + b * 1.0, rEl: 0.5 + b * 1.3 }; },
   },
   book: {
+    // Open book held at reading height, pages tilted TOWARD the reader's face
+    // (the old fixed rot faced the covers at the reader); page-turn beat on the
+    // right elbow.
     id: 'book', users: 'hands', category: 'leisure', cls: 2, allowSeated: true, sessionDurS: [14, 28],
-    primitives: [{ shape: 'box', size: [180, 240, 20], anchor: 'handL', pos: [0, -60, -40], rot: [0.5, 0, 0], color: 0x3a5aa0 }],
-    poseHold: (_h, _t, pp) => ({ lSh: 0.95, rSh: 0.95, lEl: 1.75, rEl: 1.8 - _beat(pp, 5, 0.4) * 0.5, leanX: 0.1 }),
+    handPitch: 2.70,
+    primitives: [{ shape: 'box', size: [180, 240, 20], anchor: 'handL', pos: [0, -20, 0], rot: [0.45, 0, 0], color: 0x3a5aa0 }],
+    poseHold: (_h, _t, pp) => ({ lSh: 0.95, rSh: 0.95, lEl: 1.75, rEl: 1.8 - _beat(pp, 5, 0.4) * 0.5, leanX: -0.05 }),
   },
   fetch_toy: {
     id: 'fetch_toy', users: 'quad', category: 'carry', cls: 4, sessionDurS: [16, 34],
@@ -15906,15 +15987,25 @@ export class ThreeDRenderer {
         new THREE.ConeGeometry(TORSO_W * 0.34, TORSO_H * 0.6, 3),
         this._mat({ color: 0xf2f2f0, roughness: 0.6, metalness: 0.0 }),
       );
-      shirt.rotation.x = Math.PI;          // apex down
-      shirt.rotation.y = Math.PI / 4;      // flat face toward the viewer
+      shirt.rotation.x = Math.PI;          // apex down (V-neck: wide at the collar,
+                                           // point at the sternum — NOT a tie shape)
+      // Flat face toward the viewer. A 3-segment cone has vertices every 120°, so
+      // the offset that lands a FACE on body-front (−Z) after the apex-down flip is
+      // π/3, not π/4 — π/4 left the triangle 15° off-front AND lopsided about the
+      // body centreline (world x spanned −79..+58 instead of ±71).
+      shirt.rotation.y = Math.PI / 3;
       shirt.position.set(0, torsoY + TORSO_H * 0.02, frontZ - 8 * sk);
       root.add(shirt);
       const tie = new THREE.Mesh(
         new THREE.BoxGeometry(TORSO_W * 0.1, TORSO_H * 0.44, 14 * sk),
         c.accent,
       );
-      tie.position.set(0, torsoY - TORSO_H * 0.02, frontZ - 16 * sk);
+      // The tie must sit PROUD OF the shirt cone, not inside it: the cone's front
+      // flat face stands its inradius (radius/2 = TORSO_W·0.17) ahead of the cone
+      // origin, so the old `frontZ − 16` buried the whole blade behind the shirt and
+      // only the stub below the apex showed — leaving the wide-at-top / pointed-at-
+      // bottom white triangle as the only tie-shaped read (i.e. an upside-down tie).
+      tie.position.set(0, torsoY - TORSO_H * 0.02, frontZ - 8 * sk - TORSO_W * 0.17 - 14 * sk);
       root.add(tie);
     } else if (kind === 'hacker') {
       // Hoodie cowl: a dark shell capping the back/top of the head. Tilted back
@@ -16112,7 +16203,7 @@ export class ThreeDRenderer {
         this._mat({ color: 0xf2f2f0, roughness: 0.6, metalness: 0.0 }),
       );
       shirt.rotation.x = Math.PI;
-      shirt.rotation.y = Math.PI / 4;
+      shirt.rotation.y = Math.PI / 3;   // face-front + centreline-symmetric (see 'professional')
       shirt.position.set(0, torsoY + TORSO_H * 0.02, frontZ - 8 * sk);
       root.add(shirt);
       const bowtie = box(TORSO_W * 0.3, 45 * sk, 22 * sk, c.accent);
@@ -16322,7 +16413,14 @@ export class ThreeDRenderer {
         // they do NOT swing with the arm.
         case 'shoulderL': return { parent: root, x: -shoulderX, y: shoulderY, z: 0 };
         case 'shoulderR': return { parent: root, x:  shoulderX, y: shoulderY, z: 0 };
-        case 'neck':  return { parent: root, x: 0, y: neckY, z: 0 };          // torso top, below head
+        // Torso top, below the head. NOTE the z baseline: unlike `chest` (which is
+        // already ON the torso front face, −TORSO_D/2), `neck` sits at the torso
+        // CENTRE in z so neck-ENCIRCLING pieces (ruffs, turtleneck rings, shoulder
+        // yokes, chains) can be authored symmetrically about it. A FRONT-facing
+        // neck accessory (bow tie, cravat, collar wedge, brooch) must therefore
+        // carry the extra −TORSO_D/2 (−70 mm at sk 1) in its own pos.z — authoring
+        // it at −8…−18 like a chest tie builds it INSIDE the torso box, invisible.
+        case 'neck':  return { parent: root, x: 0, y: neckY, z: 0 };
         case 'tailbone': return { parent: root, x: 0, y: hipY, z: TORSO_D / 2 };  // rear hip, +Z side
         case 'handL': return { parent: ctx.handL ?? root, x: 0, y: 0, z: 0 };
         case 'handR': return { parent: ctx.handR ?? root, x: 0, y: 0, z: 0 };
@@ -16584,6 +16682,20 @@ export class ThreeDRenderer {
     }
   }
 
+  // ── Two-handed prop ATTACHMENTS (prop-geometry fix) ─────────────────────────
+  // Re-parent a two-handed prop's attachment (the broom's brush, the shovel's
+  // blade) onto its HANDLE mesh, preserving the built transform: the attachment
+  // then rides the handle's per-frame re-aim rigidly instead of staying pinned to
+  // the hand group (which visibly detached the head from the shaft). Called at
+  // BUILD time only, so the local allocation is fine.
+  //   p' = qH⁻¹·(p − pH),  q' = qH⁻¹·q     (handle scale is always 1)
+  private _attachToHandle(handle: THREE.Object3D, mesh: THREE.Object3D): void {
+    const inv = handle.quaternion.clone().invert();
+    mesh.position.sub(handle.position).applyQuaternion(inv);
+    mesh.quaternion.premultiply(inv);
+    handle.add(mesh);
+  }
+
   // ── Shared-prop sessions (build / hide-authored / dispose) ───────────────────
   // Equip a prop onto a live rig: build its primitive meshes against the rig's
   // stored anchor context, hide any authored accessory on the grip hand(s), and
@@ -16607,12 +16719,39 @@ export class ThreeDRenderer {
     const animPrims: AnimPrim[] = [];
     const twoHand: { mesh: THREE.Object3D; otherHand: THREE.Object3D }[] = [];
     const grips = new Set<'L' | 'R'>();
+    // Upright authoring frame (PropDef.handPitch) — counter-rotation applied to
+    // every prim of this prop right after it is built.
+    const pitchQ = def.handPitch
+      ? new THREE.Quaternion().setFromAxisAngle(_THP_X, -def.handPitch) : null;
+    // Two-handed HANDLE (broom / snow shovel): the `twoHanded` prim is the prop's
+    // handle and MUST be authored first; every LATER prim on the same hand anchor
+    // is re-parented onto it (transform-preserving) so the brush / blade rides the
+    // per-frame re-aim in _advanceTwoHandProps instead of staying pinned to the
+    // hand and detaching from the shaft.
+    let handle: THREE.Object3D | null = null;
+    let handleAnchor: AvatarPrimitive['anchor'] | null = null;
     for (const prim of prims) {
+      const animBase = animPrims.length;
       const mesh = this._buildPrimitiveMesh(prim, bctx, animPrims, twoHand);
+      if (pitchQ) {
+        mesh.position.applyQuaternion(pitchQ);
+        mesh.quaternion.premultiply(pitchQ);
+        // Re-capture any animate base transforms taken before this rotation.
+        for (let i = animBase; i < animPrims.length; i++) {
+          const ap = animPrims[i];
+          ap.baseRotX = mesh.rotation.x; ap.baseRotY = mesh.rotation.y; ap.baseRotZ = mesh.rotation.z;
+          ap.basePosX = mesh.position.x; ap.basePosY = mesh.position.y; ap.basePosZ = mesh.position.z;
+        }
+      }
       // A literal-hex prop mesh OWNS its material (must be disposed at release); a
       // 'tint'/'skin'/'body'/'dark'/'accent' mesh SHARES the rig material — never dispose.
       mesh.userData.propOwnMaterial = typeof prim.color === 'number';
       mesh.userData.outlineSkip = mesh.userData.outlineSkip ?? true;   // props skip inverted-hull shells
+      if (prim.twoHanded && (prim.anchor === 'handL' || prim.anchor === 'handR')) {
+        handle = mesh; handleAnchor = prim.anchor;
+      } else if (handle && handleAnchor && prim.anchor === handleAnchor) {
+        this._attachToHandle(handle, mesh);
+      }
       meshes.push(mesh);
       if (prim.anchor === 'handL' || prim.anchor === 'wristL') grips.add('L');
       else if (prim.anchor === 'handR' || prim.anchor === 'wristR') grips.add('R');

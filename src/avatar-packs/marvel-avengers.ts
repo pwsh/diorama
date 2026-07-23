@@ -119,7 +119,7 @@ const pack: AvatarPackDef = {
         { shape: 'box', size: [112, 46, 112], anchor: 'crown', pos: [0, 0, 0], color: 0x241f1c },
         { shape: 'box', size: [30, 20, 10], anchor: 'head', pos: [-100, 10, -10], color: 0x9a9086 },
         { shape: 'box', size: [30, 20, 10], anchor: 'head', pos: [100, 10, -10], color: 0x9a9086 },
-        { shape: 'box', size: [90, 10, 8], anchor: 'neck', pos: [0, -4, -8], color: GOLD },
+        { shape: 'box', size: [90, 10, 8], anchor: 'neck', pos: [0, -4, -78], color: GOLD },
         { shape: 'cylinder', size: [16, 16, 14], anchor: 'chest', pos: [0, -10, -12], color: GOLD, emissiveIntensity: 0.4, animate: { kind: 'spin', speed: 1.2 } }, // Eye-of-Agamotto-style amulet
         { shape: 'cape', size: [300, 720, 460], anchor: 'back', pos: [0, -230, 20], rot: [0.12, 0, 0], color: 0x9c2b2b, animate: { kind: 'sway', speed: 0.6, amp: 0.15 } }], // crimson cloak (Cloak of Levitation)
       personality: { bobMul: 0.75, swayMul: 0.5, cadenceMul: 0.85, ampMul: 0.8 },

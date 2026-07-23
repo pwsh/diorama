@@ -20,7 +20,7 @@ const pack: AvatarPackDef = {
         { shape: 'box', size: [60, 180, 14], anchor: 'chest', pos: [-70, 10, -12], color: 0x6b4423 }, // vest panel L
         { shape: 'box', size: [60, 180, 14], anchor: 'chest', pos: [70, 10, -12], color: 0x6b4423 }, // vest panel R
         { shape: 'box', size: [16, 16, 6], anchor: 'chest', pos: [-50, 40, -14], color: 0xd4af37 }, // sheriff star badge
-        { shape: 'box', size: [70, 30, 14], anchor: 'neck', pos: [0, 0, -10], color: 0xc0392b }, // red bandana
+        { shape: 'box', size: [70, 30, 14], anchor: 'neck', pos: [0, 0, -80], color: 0xc0392b }, // red bandana
         { shape: 'box', size: [230, 26, 160], anchor: 'hip', pos: [0, 0, 0], color: 0x5a3a1e }, // belt
         { shape: 'box', size: [30, 26, 10], anchor: 'hip', pos: [0, 0, -84], color: 0xc7ccd1 }, // buckle
       ],

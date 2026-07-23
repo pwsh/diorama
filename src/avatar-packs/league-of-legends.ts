@@ -56,7 +56,7 @@ const pack: AvatarPackDef = {
         { shape: 'cone', size: [75, 110], anchor: 'crown', pos: [0, 20, 0], rot: [0.4, 0, 0], color: 0x3a7d3a }, // scout hat
         { shape: 'sphere', size: 16, anchor: 'head', pos: [-25, 90, -30], color: 0xd94f4f }, // goggle lens L
         { shape: 'sphere', size: 16, anchor: 'head', pos: [25, 90, -30], color: 0xd94f4f }, // goggle lens R
-        { shape: 'cylinder', size: [45, 45, 40], anchor: 'neck', pos: [0, -10, 0], color: 0xc0392b }, // scarf
+        { shape: 'cylinder', size: [78, 78, 44], anchor: 'neck', pos: [0, -10, 0], color: 0xc0392b }, // scarf
         { shape: 'box', size: [140, 160, 90], anchor: 'back', pos: [0, 0, 20], color: 0x6b4a2f }, // backpack
         { shape: 'box', size: [30, 20, 5], anchor: 'face', pos: [-40, 25, -6], color: 0x7a5c34 }, // eye marking L
         { shape: 'box', size: [30, 20, 5], anchor: 'face', pos: [40, 25, -6], color: 0x7a5c34 }, // eye marking R
@@ -106,7 +106,7 @@ const pack: AvatarPackDef = {
       humanoid: { sk: 0.95, headR: 120, limbR: 0.9, skin: 0xf2ddc9, body: 0x6b4a2f, legColor: 0x3a3f45, shoe: 0x4a3320, eyes: 'almond', emI: 0.05, armL: 1.0, legL: 1.0, footMul: [0.95, 1.0, 0.95] },
       accessories: [
         { shape: 'box', size: [130, 70, 130], anchor: 'crown', pos: [0, 10, 0], rot: [0.4, 0, 0], color: 0xf2d675 }, // tousled hair
-        { shape: 'cylinder', size: [55, 55, 40], anchor: 'neck', pos: [0, -10, 0], color: 0x3a5a8a }, // fur collar
+        { shape: 'cylinder', size: [78, 78, 44], anchor: 'neck', pos: [0, -10, 0], color: 0x3a5a8a }, // fur collar
         { shape: 'box', size: [90, 110, 8], anchor: 'chest', pos: [0, 40, -6], color: 0xf0ece0 }, // white shirt V
         { shape: 'box', size: [30, 30, 6], anchor: 'chest', pos: [0, 40, -10], color: 0x4a3320 }, // brown diamond
         { shape: 'box', size: [120, 130, 140], anchor: 'handL', pos: [0, -10, -20], color: GOLD }, // gauntlet

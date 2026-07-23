@@ -28,7 +28,7 @@ const pack: AvatarPackDef = {
         // asymmetric afro (fuller on one side, notched on the other) hints the hard side-part.
         { shape: 'sphere', size: [72, 36, 72], anchor: 'crown', pos: [-14, -6, 4], rot: [0.3, 0, 0], color: 0x0e0c0a },
         { shape: 'sphere', size: [48, 30, 48], anchor: 'crown', pos: [34, 0, 4], color: 0x0e0c0a },
-        { shape: 'box', size: [70, 20, 6], anchor: 'neck', pos: [0, 4, -16], color: 0xf0ede4 },
+        { shape: 'box', size: [70, 20, 6], anchor: 'neck', pos: [0, 4, -86], color: 0xf0ede4 },
         // approx: checked-shirt + knit-tie print unsupported — solid base + a tapered tie box.
         { shape: 'box', size: [40, 160, 8], anchor: 'chest', pos: [0, -10, -10], color: 0x5a2f24 },
       ],
@@ -77,8 +77,8 @@ const pack: AvatarPackDef = {
         // approx: makeup layer unsupported — thin dark eyeliner boxes framing the eyes.
         { shape: 'box', size: [36, 8, 4], anchor: 'face', pos: [-34, -2, -6], color: 0x0a0a0a, outlineSkip: true },
         { shape: 'box', size: [36, 8, 4], anchor: 'face', pos: [34, -2, -6], color: 0x0a0a0a, outlineSkip: true },
-        { shape: 'cylinder', size: [42, 42, 14], anchor: 'neck', pos: [0, 0, 0], color: 0x0a0a0a },
-        { shape: 'sphere', size: 10, anchor: 'neck', pos: [0, 0, -42], color: 0x9a9a9a },
+        { shape: 'cylinder', size: [78, 78, 18], anchor: 'neck', pos: [0, 0, 0], color: 0x0a0a0a },
+        { shape: 'sphere', size: 10, anchor: 'neck', pos: [0, 0, -78], color: 0x9a9a9a },
       ],
       personality: { bobMul: 0.6, swayMul: 0.4, cadenceMul: 0.7, ampMul: 0.55 },
       bubbles: ['🦇', '🖤', '🕯️', '😱'] },
@@ -92,7 +92,7 @@ const pack: AvatarPackDef = {
         { shape: 'sphere', size: [63, 16, 63], anchor: 'crown', pos: [0, -6, 4], rot: [0.2, 0, 0],
           color: 0x100c08, emissive: 0x100c08, emissiveIntensity: 0.05 },
         { shape: 'box', size: [50, 14, 6], anchor: 'face', pos: [0, -26, -6], color: 0x4a2f1c },
-        { shape: 'box', size: [70, 22, 6], anchor: 'neck', pos: [0, 4, -16], color: 0xf0ede4 },
+        { shape: 'box', size: [70, 22, 6], anchor: 'neck', pos: [0, 4, -86], color: 0xf0ede4 },
         { shape: 'box', size: [36, 150, 8], anchor: 'chest', pos: [0, -6, -10], color: 0xb01c24 },
       ],
       personality: { bobMul: 1.1, swayMul: 1.15, cadenceMul: 1.0, ampMul: 1.1 },
@@ -106,8 +106,8 @@ const pack: AvatarPackDef = {
       accessories: [
         { shape: 'box', size: [110, 90, 100], anchor: 'crown', pos: [0, 10, -20], rot: [0.4, 0, 0],
           color: 0x1c130c, emissive: 0x1c130c, emissiveIntensity: 0.06 },
-        { shape: 'box', size: [60, 36, 8], anchor: 'neck', pos: [-22, -6, -16], rot: [0, 0, 0.5], color: 0xede9e0 },
-        { shape: 'box', size: [60, 36, 8], anchor: 'neck', pos: [22, -6, -16], rot: [0, 0, -0.5], color: 0xede9e0 },
+        { shape: 'box', size: [60, 36, 8], anchor: 'neck', pos: [-22, -6, -86], rot: [0, 0, 0.5], color: 0xede9e0 },
+        { shape: 'box', size: [60, 36, 8], anchor: 'neck', pos: [22, -6, -86], rot: [0, 0, -0.5], color: 0xede9e0 },
         { shape: 'cylinder', size: [26, 26, 6], anchor: 'chest', pos: [0, 26, -10], rot: [1.57, 0, 0],
           color: 0xd4af37, metalness: 0.6, roughness: 0.3 },
         { shape: 'box', size: [80, 54, 20], anchor: 'hip', pos: [0, 6, -30], color: 0xd4af37,

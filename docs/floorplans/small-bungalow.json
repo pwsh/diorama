@@ -1,7 +1,7 @@
 {
   "diorama": 2,
   "name": "Small 2-Bed Bungalow",
-  "exportedAt": "2026-07-17T00:00:00.000Z",
+  "exportedAt": "2026-07-23T00:00:00.000Z",
   "store": {
     "v": 2,
     "floors": [
@@ -262,7 +262,7 @@
           },
           {
             "id": "small-bungalow-fn4",
-            "x": 5500,
+            "x": 5423,
             "y": 3100,
             "w": 1600,
             "h": 450,
@@ -281,7 +281,7 @@
           },
           {
             "id": "small-bungalow-fn6",
-            "x": 150,
+            "x": 227,
             "y": 700,
             "w": 800,
             "h": 350,
@@ -299,7 +299,7 @@
           {
             "id": "small-bungalow-fn8",
             "x": 5400,
-            "y": 4100,
+            "y": 4048,
             "w": 400,
             "h": 400,
             "kind": "plant"
@@ -318,13 +318,13 @@
             "id": "small-bungalow-fn10",
             "x": 9450,
             "y": 1350,
-            "w": 900,
-            "h": 650,
+            "w": 800,
+            "h": 550,
             "kind": "kitchen_sink"
           },
           {
             "id": "small-bungalow-fn11",
-            "x": 9450,
+            "x": 9393,
             "y": 1900,
             "w": 610,
             "h": 620,
@@ -332,8 +332,8 @@
           },
           {
             "id": "small-bungalow-fn12",
-            "x": 9450,
-            "y": 2350,
+            "x": 9243,
+            "y": 2168,
             "w": 910,
             "h": 760,
             "kind": "fridge"
@@ -359,7 +359,7 @@
           },
           {
             "id": "small-bungalow-fn15",
-            "x": 9450,
+            "x": 9248,
             "y": 700,
             "w": 900,
             "h": 650,
@@ -376,7 +376,7 @@
           },
           {
             "id": "small-bungalow-fn17",
-            "x": 7100,
+            "x": 6900,
             "y": 3450,
             "w": 2200,
             "h": 1600,
@@ -386,7 +386,7 @@
           },
           {
             "id": "small-bungalow-fn18",
-            "x": 7100,
+            "x": 6900,
             "y": 3450,
             "w": 1500,
             "h": 900,
@@ -394,29 +394,29 @@
           },
           {
             "id": "small-bungalow-fn19",
-            "x": 6500,
+            "x": 6100,
             "y": 3450,
             "w": 1200,
             "h": 400,
             "kind": "bench",
-            "rotation": 90
-          },
-          {
-            "id": "small-bungalow-fn20",
-            "x": 7700,
-            "y": 3450,
-            "w": 500,
-            "h": 500,
-            "kind": "chair",
             "rotation": 270
           },
           {
-            "id": "small-bungalow-fn21",
-            "x": 7100,
-            "y": 2950,
+            "id": "small-bungalow-fn20",
+            "x": 6900,
+            "y": 3998,
             "w": 500,
             "h": 500,
             "kind": "chair"
+          },
+          {
+            "id": "small-bungalow-fn21",
+            "x": 6900,
+            "y": 2950,
+            "w": 500,
+            "h": 500,
+            "kind": "chair",
+            "rotation": 180
           },
           {
             "id": "small-bungalow-fn22",
@@ -430,25 +430,28 @@
           },
           {
             "id": "small-bungalow-fn23",
-            "x": 9100,
-            "y": 2900,
+            "x": 8950,
+            "y": 3900,
             "w": 690,
             "h": 700,
-            "kind": "washer"
+            "kind": "washer",
+            "rotation": 180
           },
           {
             "id": "small-bungalow-fn24",
-            "x": 9100,
-            "y": 3550,
+            "x": 8950,
+            "y": 3900,
             "w": 690,
             "h": 700,
-            "kind": "dryer"
+            "kind": "dryer",
+            "rotation": 180,
+            "elevation": 990
           },
           {
             "id": "small-bungalow-fn25",
-            "x": 8700,
-            "y": 3700,
-            "w": 900,
+            "x": 9500,
+            "y": 3900,
+            "w": 700,
             "h": 400,
             "kind": "bench",
             "rotation": 90
@@ -463,7 +466,7 @@
           },
           {
             "id": "small-bungalow-fn27",
-            "x": 800,
+            "x": 600,
             "y": 7500,
             "w": 500,
             "h": 400,
@@ -488,7 +491,7 @@
           },
           {
             "id": "small-bungalow-fn30",
-            "x": 3300,
+            "x": 3148,
             "y": 5000,
             "w": 800,
             "h": 800,
@@ -499,14 +502,14 @@
           {
             "id": "small-bungalow-fn31",
             "x": 900,
-            "y": 8700,
+            "y": 8900,
             "w": 1200,
             "h": 600,
             "kind": "wardrobe"
           },
           {
             "id": "small-bungalow-fn32",
-            "x": 2700,
+            "x": 2500,
             "y": 8700,
             "w": 800,
             "h": 350,
@@ -525,25 +528,25 @@
           },
           {
             "id": "small-bungalow-fn34",
-            "x": 5100,
-            "y": 4600,
+            "x": 5300,
+            "y": 6300,
             "w": 480,
             "h": 700,
             "kind": "toilet"
           },
           {
             "id": "small-bungalow-fn35",
-            "x": 5000,
-            "y": 6400,
+            "x": 5100,
+            "y": 5600,
             "w": 560,
             "h": 470,
             "kind": "sink",
-            "rotation": 180,
+            "rotation": 270,
             "label": "Vanity"
           },
           {
             "id": "small-bungalow-fn36",
-            "x": 6500,
+            "x": 6468,
             "y": 5500,
             "w": 1520,
             "h": 760,
@@ -562,8 +565,8 @@
           },
           {
             "id": "small-bungalow-fn38",
-            "x": 6700,
-            "y": 7000,
+            "x": 6673,
+            "y": 8400,
             "w": 800,
             "h": 350,
             "kind": "bookshelf",
@@ -571,8 +574,8 @@
           },
           {
             "id": "small-bungalow-fn39",
-            "x": 6700,
-            "y": 9200,
+            "x": 6673,
+            "y": 9048,
             "w": 800,
             "h": 350,
             "kind": "bookshelf",
@@ -580,7 +583,7 @@
           },
           {
             "id": "small-bungalow-fn40",
-            "x": 4950,
+            "x": 5052,
             "y": 8200,
             "w": 900,
             "h": 400,
@@ -597,16 +600,16 @@
           },
           {
             "id": "small-bungalow-fn42",
-            "x": 7100,
-            "y": 6500,
+            "x": 7400,
+            "y": 6200,
             "w": 500,
             "h": 400,
             "kind": "nightstand"
           },
           {
             "id": "small-bungalow-fn43",
-            "x": 7150,
-            "y": 4600,
+            "x": 7700,
+            "y": 4702,
             "w": 1400,
             "h": 700,
             "kind": "desk",
@@ -614,7 +617,7 @@
           },
           {
             "id": "small-bungalow-fn44",
-            "x": 9500,
+            "x": 9448,
             "y": 5200,
             "w": 1200,
             "h": 500,
@@ -624,7 +627,7 @@
           {
             "id": "small-bungalow-fn45",
             "x": 7650,
-            "y": 8700,
+            "y": 8900,
             "w": 1200,
             "h": 600,
             "kind": "wardrobe"
@@ -640,8 +643,8 @@
           },
           {
             "id": "small-bungalow-fn47",
-            "x": 4200,
-            "y": 8700,
+            "x": 3850,
+            "y": 7200,
             "w": 900,
             "h": 400,
             "kind": "bench",
@@ -800,8 +803,8 @@
           {
             "id": "small-bungalow-dr2",
             "x": 9750,
-            "y": 3050,
-            "w": 900,
+            "y": 3500,
+            "w": 800,
             "rotation": 90,
             "entity_id": null,
             "label": "Back door"
@@ -809,7 +812,7 @@
           {
             "id": "small-bungalow-dr3",
             "x": 8500,
-            "y": 3200,
+            "y": 3500,
             "w": 800,
             "rotation": 90,
             "entity_id": null,
@@ -835,7 +838,7 @@
           },
           {
             "id": "small-bungalow-dr6",
-            "x": 1400,
+            "x": 900,
             "y": 7900,
             "w": 800,
             "rotation": 0,
@@ -845,7 +848,7 @@
           {
             "id": "small-bungalow-dr7",
             "x": 4800,
-            "y": 5000,
+            "y": 5200,
             "w": 800,
             "rotation": 90,
             "entity_id": null,
@@ -862,7 +865,7 @@
           },
           {
             "id": "small-bungalow-dr9",
-            "x": 7600,
+            "x": 7400,
             "y": 7900,
             "w": 800,
             "rotation": 0,
@@ -871,7 +874,7 @@
           },
           {
             "id": "small-bungalow-dr10",
-            "x": 9100,
+            "x": 8800,
             "y": 7900,
             "w": 800,
             "rotation": 0,

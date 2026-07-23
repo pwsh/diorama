@@ -34,7 +34,7 @@ const pack: AvatarPackDef = {
         { shape: 'cape', size: [200, 340, 300], anchor: 'back', pos: [0, -90, 14], rot: [0.12, 0, 0], color: 0xdbe9f2, animate: { kind: 'sway', speed: 0.6, amp: 0.15 } }, // cape
         { shape: 'box', size: [150, 10, 4], anchor: 'back', pos: [0, -150, 14], color: GOLD }, // cape hem trim
         { shape: 'box', size: [24, 24, 10], anchor: 'chest', pos: [0, 30, -8], color: GOLD, emissive: 0x8fd0e0, emissiveIntensity: 0.3 }, // vision pendant
-        { shape: 'box', size: [90, 30, 20], anchor: 'neck', pos: [0, -6, -8], color: 0xf5f2ea }, // scarf
+        { shape: 'box', size: [90, 30, 20], anchor: 'neck', pos: [0, -6, -78], color: 0xf5f2ea }, // scarf
         { shape: 'cylinder', size: [20, 20, 220], anchor: 'hip', pos: [80, -20, 0], rot: [0.2, 0, 0.2], color: 0xd6d6da }, // sheathed sword
         { shape: 'box', size: [60, 12, 12], anchor: 'hip', pos: [80, 80, 0], color: GOLD }, // cross-guard
       ],
@@ -65,7 +65,7 @@ const pack: AvatarPackDef = {
         { shape: 'box', size: [34, 44, 6], anchor: 'chest', pos: [0, 20, -6], color: 0x8a1f1f }, // keyhole trim
         { shape: 'box', size: [90, 110, 50], anchor: 'back', pos: [0, 0, 15], color: 0x6b4a2e }, // backpack
         { shape: 'sphere', size: 24, anchor: 'back', pos: [50, -40, 15], color: 0xd9b98a }, // pom charm
-        { shape: 'cylinder', size: [45, 45, 34], anchor: 'neck', pos: [0, -8, 0], color: 0xf5f2ea }, // scarf
+        { shape: 'cylinder', size: [78, 78, 38], anchor: 'neck', pos: [0, -8, 0], color: 0xf5f2ea }, // scarf
       ],
       personality: { bobMul: 1.3, swayMul: 1.1, cadenceMul: 1.25, ampMul: 0.75 }, bubbles: ['💣', '🌸', '😆', '✨'] },
     // Venti — green cape, feathered beret
@@ -127,7 +127,7 @@ const pack: AvatarPackDef = {
         { shape: 'sphere', size: 10, anchor: 'crown', pos: [40, 90, 20], color: 0xb02020 }, // horn tip marking
         { shape: 'box', size: [180, 180, 15], anchor: 'chest', pos: [0, -10, -6], color: 0xf5f2ea }, // bodice panel
         { shape: 'cone', size: [20, 30], anchor: 'chest', pos: [0, 50, -8], color: 0x2f6fa0 }, // blue triangle trim
-        { shape: 'sphere', size: 12, anchor: 'neck', pos: [0, -10, -10], color: GOLD }, // bell
+        { shape: 'sphere', size: 12, anchor: 'neck', pos: [0, -10, -80], color: GOLD }, // bell
         { shape: 'box', size: [90, 120, 12], anchor: 'back', pos: [0, -40, 10], color: 0xf5f2ea }, // tailcoat tail
         // approx: quiver omitted (10-prim cap) — the back-slung bow alone carries the archer read.
         { shape: 'cylinder', size: [8, 8, 300], anchor: 'back', pos: [-42, 0, 24], rot: [0.3, 0, 0.12], color: 0x2a5a80 }, // back-slung bow

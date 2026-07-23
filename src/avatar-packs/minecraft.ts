@@ -81,7 +81,7 @@ const pack: AvatarPackDef = {
         { shape: 'box', size: [60, 90, 20], anchor: 'head', pos: [95, 8, 8], color: 0xd68f86 }, // ear R
         { shape: 'cone', size: [14, 36], anchor: 'face', pos: [-22, -34, -18], rot: [0, 0, 0.2], color: 0xf0ece0 }, // tusk L
         { shape: 'cone', size: [14, 36], anchor: 'face', pos: [22, -34, -18], rot: [0, 0, -0.2], color: 0xf0ece0 }, // tusk R
-        { shape: 'box', size: [150, 12, 120], anchor: 'neck', pos: [0, -8, 0], color: 0xd9b34a }, // gold chain
+        { shape: 'box', size: [150, 12, 156], anchor: 'neck', pos: [0, -8, 0], color: 0xd9b34a }, // gold chain
         { shape: 'cylinder', size: [16, 16, 6], anchor: 'head', pos: [98, -22, 10], rot: [0, 1.57, 0], color: 0xd9b34a }, // earring
       ],
       personality: { bobMul: 1.1, swayMul: 1.0, cadenceMul: 0.9, ampMul: 1.2 }, bubbles: ['🪙', '💰', '😠', '🔥'] },

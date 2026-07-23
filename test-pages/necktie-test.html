@@ -1,0 +1,470 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>necktie test</title>
+<style>html,body{margin:0;background:#111;color:#ddd;font:12px monospace}#c{width:640px;height:480px}</style>
+<div id="c"></div>
+<pre id="out">running…</pre>
+<script type="module">
+ try {
+  // Necktie orientation regression (bug: "neckties on avatars are upside down").
+  //
+  // Rig conventions asserted here (see three-renderer._buildHumanoid):
+  //   +Y up; body-FRONT is local −Z; the `chest` accessory anchor is the torso
+  //   CENTRE pushed to the torso front face (y = torsoY, z = −TORSO_D/2), and a
+  //   prim's `pos` is [x,y,z] mm at sk=1 added on top of that (scaled by sk).
+  // A necktie therefore reads correctly when its blade hangs BELOW the collar,
+  // sits PROUD of the torso front (all z ≤ the torso front plane), and — if the
+  // blade is tapered — is widest at its LOW end. Knots / tie clips belong on the
+  // UPPER half of the blade.
+  //
+  // Everything is measured from real world-space vertex data (geometry sampled
+  // through matrixWorld), never from the authored numbers, so a bad `rot` or a
+  // flipped cone is caught rather than reasoned about.
+  const V = '?v=' + Date.now();
+  const mod = await import('./assets/three-renderer.js' + V);
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+
+  const PACKS = ['base-humans', 'base-careers', 'tv-the-office', 'tv-breaking-bad',
+    'genshin-impact', 'mario',
+    // Packs carrying FRONT-facing `neck`-anchored accessories (bow ties, cravats,
+    // collar wedges, brooches, scarves) — the anchor sits at the torso CENTRE in z,
+    // so these must author the extra −TORSO_D/2 or they build inside the torso.
+    'dc-batman', 'firefly', 'marvel-avengers', 'movies-lotr', 'movies-wizard-of-oz',
+    'power-rangers-mighty-morphin', 'star-trek-ds9', 'star-wars-mandalorian',
+    'street-fighter', 'toy-story', 'tv-big-bang-theory', 'tv-friends',
+    'tv-i-love-lucy', 'tv-it-crowd',
+    // Packs carrying ENCIRCLING `neck` pieces (ruffs / chokers / turtlenecks /
+    // fur collars / chains) — these must clear the torso footprint, not be moved
+    // forward, or only the sliver above the torso top plane shows.
+    'base-pop-culture', 'despicable-me', 'fallout-tv', 'league-of-legends',
+    'minecraft', 'star-trek-tng', 'zelda'];
+  const packOf = {};
+  for (const p of PACKS) {
+    const m = await import('./assets/' + p + '.js' + V);
+    mod.ThreeDRenderer.registerAvatarPack(m.default);
+    packOf[p] = m.default;
+  }
+
+  const checks = [];
+  const ok = (name, cond, extra = '') => checks.push({ name, pass: !!cond, extra });
+  const TINT = 0x33cc88;
+
+  // ── World-space measurement helpers ────────────────────────────────────────
+  const meshes = (root) => {
+    const o = [];
+    root.updateMatrixWorld(true);
+    root.traverse(m => { if (m.isMesh && !m.userData.outline) o.push(m); });
+    return o;
+  };
+  // Sample every vertex through matrixWorld → bbox + a per-y-band x-extent map so
+  // taper direction can be measured instead of inferred.
+  const probe = (mesh) => {
+    const g = mesh.geometry, pos = g.attributes.position;
+    const e = new mesh.position.constructor();
+    const bb = { minx: 1e9, maxx: -1e9, miny: 1e9, maxy: -1e9, minz: 1e9, maxz: -1e9 };
+    const bands = new Map();
+    for (let i = 0; i < pos.count; i++) {
+      e.set(pos.getX(i), pos.getY(i), pos.getZ(i)).applyMatrix4(mesh.matrixWorld);
+      bb.minx = Math.min(bb.minx, e.x); bb.maxx = Math.max(bb.maxx, e.x);
+      bb.miny = Math.min(bb.miny, e.y); bb.maxy = Math.max(bb.maxy, e.y);
+      bb.minz = Math.min(bb.minz, e.z); bb.maxz = Math.max(bb.maxz, e.z);
+      const k = Math.round(e.y);
+      const b = bands.get(k) ?? { lo: 1e9, hi: -1e9 };
+      b.lo = Math.min(b.lo, e.x); b.hi = Math.max(b.hi, e.x);
+      bands.set(k, b);
+    }
+    const ys = [...bands.keys()].sort((a, b) => a - b);
+    const width = (y) => { const b = bands.get(y); return b.hi - b.lo; };
+    return { ...bb, cy: (bb.miny + bb.maxy) / 2,
+      widthAtLowest: width(ys[0]), widthAtHighest: width(ys[ys.length - 1]) };
+  };
+  const near = (a, b, tol) => Math.abs(a - b) <= tol;
+  // Locate a declarative prim's mesh by its BUILT box dimensions (size × sk).
+  const findBox = (ms, sk, w, h, d) => ms.find(m =>
+    m.geometry.type === 'BoxGeometry'
+    && near(m.geometry.parameters.width, w * sk, 0.02)
+    && near(m.geometry.parameters.height, h * sk, 0.02)
+    && near(m.geometry.parameters.depth, d * sk, 0.02));
+  const findCone = (ms) => ms.find(m => m.geometry.type === 'ConeGeometry');
+
+  // Rig metrics (three-renderer._buildHumanoid): torso is 240×600×140 × sk, so
+  // the torso FRONT plane sits at z = −70·sk.
+  const torsoFrontZ = (sk) => -70 * sk;
+
+  // ── Declarative pack members ──────────────────────────────────────────────
+  // [label, pack, avatar id, tie box (mm @sk1), collar box | null, clip box | null]
+  const CASES = [
+    ['office/michael', 'tv-the-office', 'tv-the-office/regional-manager-michael',
+      [34, 160, 8], [70, 22, 6], null],
+    ['office/jim', 'tv-the-office', 'tv-the-office/salesman-jim',
+      [16, 130, 6], [60, 18, 6], null],
+    ['office/dwight', 'tv-the-office', 'tv-the-office/assistant-regional-manager-dwight',
+      [16, 130, 6], null, null],
+    ['office/andy', 'tv-the-office', 'tv-the-office/sales-rep-andy',
+      [16, 90, 6], [26, 20, 6], [20, 6, 4]],
+    ['office/kevin', 'tv-the-office', 'tv-the-office/accountant-kevin',
+      [40, 170, 8], null, null],
+    ['bb/gus', 'tv-breaking-bad', 'tv-breaking-bad/gus-fring-manager',
+      [26, 160, 8], null, null],
+    ['bb/saul', 'tv-breaking-bad', 'tv-breaking-bad/saul-goodman-suit',
+      [22, 90, 6], [92, 46, 8], null],
+    ['genshin/diluc', 'genshin-impact', 'genshin-impact/crimson-vintner',
+      [30, 140, 8], null, [18, 18, 8]],
+    ['genshin/zhongli', 'genshin-impact', 'genshin-impact/amber-contractor',
+      [26, 130, 8], null, [18, 18, 8]],
+    ['mario/barrel-ape', 'mario', 'mario/barrel-ape', [50, 120, 10], null, null],
+    ['careers/pilot', 'base-careers', 'pilot', [24, 120, 10], [120, 24, 12], null],
+  ];
+
+  for (const [label, pack, id, tieSz, collarSz, clipSz] of CASES) {
+    const def = packOf[pack].avatars.find(a => a.id === id);
+    const sk = (def && def.humanoid && def.humanoid.sk) || 1;
+    const h = r._buildHumanoid(TINT, id);
+    const ms = meshes(h.group);
+
+    const tieM = findBox(ms, sk, tieSz[0], tieSz[1], tieSz[2]);
+    ok(`${label}: tie prim built`, !!tieM);
+    if (!tieM) continue;
+    const tie = probe(tieM);
+
+    // Hangs DOWNWARD, not stacked upward: the blade is taller than it is wide.
+    ok(`${label}: blade is vertical (h > w)`, (tie.maxy - tie.miny) > (tie.maxx - tie.minx),
+      `${(tie.maxy - tie.miny).toFixed(0)}h × ${(tie.maxx - tie.minx).toFixed(0)}w`);
+    // Taper direction. A BoxGeometry blade is untapered BY CONSTRUCTION (top and
+    // bottom cross-sections are the same rectangle), so it cannot read upside down
+    // — assert that rather than measuring a world-space width that degenerates on
+    // a rotated box. A tapered (cone) blade must be WIDEST at its LOW end.
+    if (tieM.geometry.type === 'BoxGeometry') {
+      ok(`${label}: blade untapered box (cannot read upside down)`, true,
+        `${tieM.geometry.parameters.width.toFixed(0)}×${tieM.geometry.parameters.height.toFixed(0)}`);
+    } else {
+      ok(`${label}: tapered blade widest at the BOTTOM`,
+        tie.widthAtLowest > tie.widthAtHighest,
+        `${tie.widthAtLowest.toFixed(1)} lo / ${tie.widthAtHighest.toFixed(1)} hi`);
+    }
+    // On the FRONT of the torso (−Z side of the chest anchor / torso front plane).
+    ok(`${label}: tie on the front (−Z)`, tie.maxz <= torsoFrontZ(sk) + 0.5,
+      `maxz=${tie.maxz.toFixed(0)} front=${torsoFrontZ(sk).toFixed(0)}`);
+
+    if (collarSz) {
+      const colM = findBox(ms, sk, collarSz[0], collarSz[1], collarSz[2]);
+      ok(`${label}: collar prim built`, !!colM);
+      if (colM) {
+        const col = probe(colM);
+        ok(`${label}: tie hangs BELOW the collar`, tie.cy < col.miny && tie.miny < col.miny,
+          `tie cy=${tie.cy.toFixed(0)} collar lo=${col.miny.toFixed(0)}`);
+      }
+    }
+    if (clipSz) {
+      const clM = findBox(ms, sk, clipSz[0], clipSz[1], clipSz[2]);
+      ok(`${label}: knot/clip prim built`, !!clM);
+      if (clM) {
+        const cl = probe(clM);
+        ok(`${label}: knot/clip on the UPPER half of the blade`, cl.cy > tie.cy,
+          `clip=${cl.cy.toFixed(0)} blade ${tie.miny.toFixed(0)}..${tie.maxy.toFixed(0)}`);
+      }
+    }
+    r._disposeSubtree(h.group);
+  }
+
+  // ── Legacy imperative rigs (_addAvatarAccessories) ─────────────────────────
+  // `professional` / `magician` build a 3-segment ConeGeometry shirt V plus (for
+  // the professional) a tint tie box. The cone is flipped apex-DOWN — that is a
+  // V-NECK (wide at the collar, point at the sternum), NOT a tie; the tie is the
+  // separate box and it must sit PROUD OF the cone or the only tie-shaped thing
+  // on screen is the inverted white triangle.
+  for (const kind of ['professional', 'magician']) {
+    const h = r._buildHumanoid(TINT, kind);
+    const ms = meshes(h.group);
+    const coneM = findCone(ms);
+    ok(`${kind}: shirt V cone built`, !!coneM);
+    if (coneM) {
+      const cone = probe(coneM);
+      ok(`${kind}: V-neck apex DOWN (narrowest at the bottom)`,
+        cone.widthAtLowest < cone.widthAtHighest * 0.25,
+        `${cone.widthAtLowest.toFixed(1)} lo / ${cone.widthAtHighest.toFixed(1)} hi`);
+      // rotation.y = π/4 left the triangle lopsided (x −79..+58) AND 15° off-front.
+      ok(`${kind}: V symmetric about the body centreline`,
+        Math.abs(cone.minx + cone.maxx) < 2,
+        `x ${cone.minx.toFixed(0)}..${cone.maxx.toFixed(0)}`);
+      // Its visible face must stand proud of the torso front plane (the rear vertex
+      // of the triangular prism legitimately sinks back inside the torso box).
+      ok(`${kind}: V proud of the torso front (−Z)`, cone.minz < torsoFrontZ(1),
+        `minz=${cone.minz.toFixed(0)} front=${torsoFrontZ(1).toFixed(0)}`);
+
+      if (kind === 'professional') {
+        // TORSO_W·0.1 = 24 wide, TORSO_H·0.44 = 264 tall, 14 deep (sk = 1).
+        const tieM = findBox(ms, 1, 24, 264, 14);
+        ok('professional: tie prim built', !!tieM);
+        if (tieM) {
+          const tie = probe(tieM);
+          ok('professional: blade is vertical (h > w)',
+            (tie.maxy - tie.miny) > (tie.maxx - tie.minx));
+          ok('professional: tie PROUD OF the shirt V (not buried behind it)',
+            tie.maxz < cone.minz,
+            `tie maxz=${tie.maxz.toFixed(0)} cone minz=${cone.minz.toFixed(0)}`);
+          ok('professional: tie on the front (−Z)', tie.maxz <= torsoFrontZ(1) + 0.5,
+            `maxz=${tie.maxz.toFixed(0)}`);
+          ok('professional: tie centred on the body centreline',
+            Math.abs(tie.minx + tie.maxx) < 1);
+        }
+      } else {
+        // Ringmaster/magician bow tie: TORSO_W·0.3 × 45 × 22 at the collar — it must
+        // sit ABOVE the V, not down the blade.
+        const bowM = findBox(ms, 1, 72, 45, 22);
+        ok('magician: bow tie prim built', !!bowM);
+        if (bowM) {
+          const bow = probe(bowM);
+          ok('magician: bow tie is WIDER than tall', (bow.maxx - bow.minx) > (bow.maxy - bow.miny),
+            `${(bow.maxx - bow.minx).toFixed(0)}w × ${(bow.maxy - bow.miny).toFixed(0)}h`);
+          ok('magician: bow tie sits ABOVE the shirt V', bow.miny >= cone.maxy - 1,
+            `bow lo=${bow.miny.toFixed(0)} V hi=${cone.maxy.toFixed(0)}`);
+          ok('magician: bow tie on the front (−Z)', bow.maxz <= torsoFrontZ(1) + 0.5);
+        }
+      }
+    }
+    r._disposeSubtree(h.group);
+  }
+
+  // ── `neck`-anchored FRONT accessories must clear the torso front plane ─────
+  // The `neck` anchor is the torso CENTRE in z (z = 0) — not the torso front like
+  // `chest` — so a bow tie / cravat / collar wedge / brooch authored at pos.z ≈ −8
+  // … −18 builds INSIDE the 140·sk-deep torso box and never renders. Sweep every
+  // loaded pack: any neck-anchored prim whose authored pos.z is negative (i.e. the
+  // author meant "toward the front") must end up entirely on the −Z side of the
+  // torso front plane. Neck-ENCIRCLING pieces (pos.z ≥ 0: ruffs, turtleneck rings,
+  // shoulder yokes, chains) are deliberately centred and are not swept.
+  {
+    const sizeOf = (p) => Array.isArray(p.size)
+      ? [p.size[0], p.size[1], p.size[2] ?? p.size[1]] : [p.size, p.size, p.size];
+    const matchesGeom = (m, prim, sk) => {
+      const s = sizeOf(prim), g = m.geometry, q = g.parameters;
+      if (prim.shape === 'box') return g.type === 'BoxGeometry'
+        && near(q.width, s[0] * sk, 0.02) && near(q.height, s[1] * sk, 0.02);
+      if (prim.shape === 'cylinder') return g.type === 'CylinderGeometry'
+        && near(q.radiusTop, s[0] * sk, 0.02) && near(q.height, s[2] * sk, 0.02);
+      if (prim.shape === 'sphere') return g.type === 'SphereGeometry'
+        && near(q.radius, s[0] * sk, 0.02);
+      if (prim.shape === 'cone') return g.type === 'ConeGeometry';
+      return false;
+    };
+    let swept = 0, worst = null;
+    const offenders = [];
+    for (const pk of PACKS) {
+      for (const def of packOf[pk].avatars) {
+        if (def.rig === 'quadruped') continue;
+        const neckPrims = (def.accessories || []).filter(p => p.anchor === 'neck');
+        // A member whose neck set includes a CENTRED ring (pos.z ≥ 0 — ruff /
+        // choker / turtleneck) has its other neck prims authored relative to THAT
+        // ring, not to the torso; those are the ring family, swept separately.
+        const hasRing = neckPrims.some(p => ((p.pos || [0, 0, 0])[2]) >= 0);
+        const front = hasRing ? [] : (def.accessories || [])
+          .map((p, i) => ({ p, i }))
+          .filter(({ p }) => p.anchor === 'neck' && (p.pos || [0, 0, 0])[2] < 0);
+        if (!front.length) continue;
+        const hf = Object.assign({}, packOf[pk].base && packOf[pk].base.humanoid, def.humanoid);
+        const sk = hf.sk || 1;
+        const h = r._buildHumanoid(TINT, def.id);
+        const ms = meshes(h.group);
+        for (const { p, i } of front) {
+          swept++;
+          const px = (p.pos[0] || 0) * sk, pz = p.pos[2] * sk;
+          const m = ms.find(mm => matchesGeom(mm, p, sk)
+            && near(mm.position.x, px, 0.02) && near(mm.position.z, pz, 0.02));
+          if (!m) { offenders.push(`${def.id}[${i}] MESH NOT FOUND`); continue; }
+          const b = probe(m);
+          // "Does it render": the prim's FRONT-most point must stand proud of the
+          // torso front plane. A deep piece (scarf, neckerchief, bead) legitimately
+          // sinks its back end into the torso — what matters is visible depth.
+          const clear = torsoFrontZ(sk) - b.minz;   // mm of the prim in front of the torso
+          if (!(clear >= 2)) {
+            offenders.push(`${def.id}[${i}] minz=${b.minz.toFixed(0)} vs front=${torsoFrontZ(sk).toFixed(0)}`);
+          }
+          if (worst === null || clear < worst.clear) worst = { id: `${def.id}[${i}]`, clear };
+        }
+        r._disposeSubtree(h.group);
+      }
+    }
+    ok('neck sweep: front accessories found', swept >= 45, `${swept} prims swept`);
+    ok('neck sweep: every front accessory renders proud of the torso front plane',
+      offenders.length === 0, offenders.slice(0, 6).join(' | '));
+    ok('neck sweep: tightest visible depth ≥ 2 mm', worst && worst.clear >= 2,
+      worst ? `${worst.id} +${worst.clear.toFixed(1)} mm` : 'none');
+  }
+
+  // Named spot-checks for the members called out in the bug report, so a future
+  // regression names the character rather than only the aggregate.
+  const NECK_CASES = [
+    ['dc-batman/butler bow tie', 'dc-batman', 'dc-batman/butler', 3],
+    ['dc-batman/penguin bow tie', 'dc-batman', 'dc-batman/penguin', 5],
+    ['dc-batman/riddler bow tie', 'dc-batman', 'dc-batman/riddler', 3],
+    ['dc-batman/clown-prince cravat', 'dc-batman', 'dc-batman/clown-prince', 2],
+    ['it-crowd/moss collar', 'tv-it-crowd', 'tv-it-crowd/helpdesk-boffin', 5],
+    ['it-crowd/denholm collar', 'tv-it-crowd', 'tv-it-crowd/founder-boss', 2],
+    ['friends/chandler collar L', 'tv-friends', 'tv-friends/statistician-chandler', 1],
+    ['friends/chandler collar R', 'tv-friends', 'tv-friends/statistician-chandler', 2],
+    ['friends/ross collar L', 'tv-friends', 'tv-friends/paleontologist-ross', 1],
+    ['lucy/ricky bow tie', 'tv-i-love-lucy', 'tv-i-love-lucy/ricky-bandleader', 1],
+    ['toy-story/woody bandana', 'toy-story', 'toy-story/woody', 5],
+    ['wizard-of-oz/lion bow', 'movies-wizard-of-oz', 'movies-wizard-of-oz/cowardly_lion', 4],
+  ];
+  for (const [label, pk, id, idx] of NECK_CASES) {
+    const def = packOf[pk].avatars.find(a => a.id === id);
+    const prim = def.accessories[idx];
+    ok(`${label}: is a neck-anchored front accessory`,
+      prim.anchor === 'neck' && prim.pos[2] < 0);
+    const hf = Object.assign({}, packOf[pk].base && packOf[pk].base.humanoid, def.humanoid);
+    const sk = hf.sk || 1;
+    const h = r._buildHumanoid(TINT, id);
+    const s = Array.isArray(prim.size) ? prim.size : [prim.size, prim.size, prim.size];
+    const m = meshes(h.group).find(mm =>
+      near(mm.position.x, (prim.pos[0] || 0) * sk, 0.02)
+      && near(mm.position.z, prim.pos[2] * sk, 0.02)
+      && (prim.shape !== 'box' || (mm.geometry.type === 'BoxGeometry'
+        && near(mm.geometry.parameters.width, s[0] * sk, 0.02))));
+    ok(`${label}: prim built`, !!m);
+    if (m) {
+      const b = probe(m);
+      ok(`${label}: in FRONT of the torso (−Z, fully proud)`,
+        b.maxz <= torsoFrontZ(sk) + 0.001,
+        `maxz=${b.maxz.toFixed(0)} front=${torsoFrontZ(sk).toFixed(0)}`);
+    }
+    r._disposeSubtree(h.group);
+  }
+
+  // ── Encircling `neck` pieces must clear the torso footprint ────────────────
+  // The rig has no neck geometry — the torso box runs right up to the collar line
+  // — so a ruff / choker / turtleneck / fur collar / chain authored with a radius
+  // smaller than the torso's half-extents builds INSIDE the box and only the
+  // sliver above the torso top plane shows. Sizing rule: half-extent along z
+  // ≥ TORSO_D/2 (70) + 8 mm margin = 78 authored mm (cylinder radius 78, box
+  // depth 156). Wide shoulder yokes / mantles are exempt: they clear laterally
+  // (half-width > TORSO_W/2) and render that way instead.
+  const torsoHalfW = (sk) => 120 * sk, torsoHalfD = (sk) => 70 * sk;
+  {
+    const sizeOf = (p) => Array.isArray(p.size)
+      ? [p.size[0], p.size[1], p.size[2] ?? p.size[1]] : [p.size, p.size, p.size];
+    const matchGeom = (m, prim, sk) => {
+      const s = sizeOf(prim), g = m.geometry, q = g.parameters;
+      if (prim.shape === 'box') return g.type === 'BoxGeometry'
+        && near(q.width, s[0] * sk, 0.02) && near(q.height, s[1] * sk, 0.02);
+      if (prim.shape === 'cylinder') return g.type === 'CylinderGeometry'
+        && near(q.radiusTop, s[0] * sk, 0.02) && near(q.height, s[2] * sk, 0.02);
+      if (prim.shape === 'sphere') return g.type === 'SphereGeometry'
+        && near(q.radius, s[0] * sk, 0.02);
+      return false;
+    };
+    let swept = 0; const offenders = [], embedded = [];
+    for (const pk of PACKS) {
+      for (const def of packOf[pk].avatars) {
+        if (def.rig === 'quadruped') continue;
+        const rings = (def.accessories || []).map((p, i) => ({ p, i }))
+          .filter(({ p }) => p.anchor === 'neck' && ((p.pos || [0, 0, 0])[2]) === 0);
+        if (!rings.length) continue;
+        const hf = Object.assign({}, packOf[pk].base && packOf[pk].base.humanoid, def.humanoid);
+        const sk = hf.sk || 1;
+        const h = r._buildHumanoid(TINT, def.id);
+        const ms = meshes(h.group);
+        for (const { p, i } of rings) {
+          swept++;
+          const hits = ms.filter(mm => matchGeom(mm, p, sk)
+            && near(mm.position.x, (p.pos[0] || 0) * sk, 0.02) && near(mm.position.z, 0, 0.02));
+          if (hits.length !== 1) { offenders.push(`${def.id}[${i}] matched ${hits.length} meshes`); continue; }
+          const b = probe(hits[0]);
+          const hx = Math.max(-b.minx, b.maxx), hz = Math.max(-b.minz, b.maxz);
+          // Renders either by clearing the torso in z (a true ring) or laterally
+          // (a shoulder yoke / mantle wider than the torso).
+          const ringClear = hz > torsoHalfD(sk) + 2, yokeClear = hx > torsoHalfW(sk) + 2;
+          if (!ringClear && !yokeClear) {
+            embedded.push(`${def.id}[${i}] hz=${hz.toFixed(0)}/${torsoHalfD(sk).toFixed(0)} hx=${hx.toFixed(0)}/${torsoHalfW(sk).toFixed(0)}`);
+          }
+        }
+        r._disposeSubtree(h.group);
+      }
+    }
+    ok('ring sweep: encircling neck pieces found', swept >= 18, `${swept} prims swept`);
+    ok('ring sweep: mesh identification unambiguous', offenders.length === 0,
+      offenders.slice(0, 4).join(' | '));
+    ok('ring sweep: none embedded inside the torso', embedded.length === 0,
+      embedded.slice(0, 6).join(' | '));
+  }
+
+  // Named checks for every ring RESIZED by this fix: its world geometry must reach
+  // past the torso front AND back faces, so it reads as encircling rather than
+  // embedded (a forward move would have made it a bib instead).
+  const RING_CASES = [
+    ['dc-batman/harlequin ruff', 'dc-batman', 'dc-batman/harlequin', 1],
+    ['wizard-of-oz/tin_man collar ring', 'movies-wizard-of-oz', 'movies-wizard-of-oz/tin_man', 1],
+    ['it-crowd/recluse choker', 'tv-it-crowd', 'tv-it-crowd/basement-recluse', 5],
+    ['bbt/howard turtleneck', 'tv-big-bang-theory', 'tv-big-bang-theory/howard-turtleneck', 1],
+    ['lol/yordle scarf', 'league-of-legends', 'league-of-legends/scout-yordle-hat', 3],
+    ['lol/arcane fur collar', 'league-of-legends', 'league-of-legends/arcane-explorer-gauntlet', 1],
+    ['genshin/spark-scout scarf', 'genshin-impact', 'genshin-impact/spark-scout', 8],
+    ['minecraft/raider gold chain', 'minecraft', 'minecraft/tusked-raider', 5],
+  ];
+  for (const [label, pk, id, idx] of RING_CASES) {
+    const def = packOf[pk].avatars.find(a => a.id === id);
+    const prim = def.accessories[idx];
+    const hf = Object.assign({}, packOf[pk].base && packOf[pk].base.humanoid, def.humanoid);
+    const sk = hf.sk || 1;
+    const s = Array.isArray(prim.size) ? prim.size : [prim.size, prim.size, prim.size];
+    const h = r._buildHumanoid(TINT, id);
+    const ms = meshes(h.group);
+    const m = ms.find(mm => near(mm.position.z, 0, 0.02) && near(mm.position.x, 0, 0.02)
+      && (prim.shape === 'cylinder'
+        ? mm.geometry.type === 'CylinderGeometry'
+          && near(mm.geometry.parameters.radiusTop, s[0] * sk, 0.02)
+          && near(mm.geometry.parameters.height, s[2] * sk, 0.02)
+        : mm.geometry.type === 'BoxGeometry'
+          && near(mm.geometry.parameters.width, s[0] * sk, 0.02)
+          && near(mm.geometry.parameters.depth, s[2] * sk, 0.02)));
+    ok(`${label}: ring prim built`, !!m);
+    if (m) {
+      const b = probe(m);
+      ok(`${label}: reaches past the torso FRONT face`, b.minz < -torsoHalfD(sk) - 2,
+        `minz=${b.minz.toFixed(0)} front=${(-torsoHalfD(sk)).toFixed(0)}`);
+      ok(`${label}: reaches past the torso BACK face`, b.maxz > torsoHalfD(sk) + 2,
+        `maxz=${b.maxz.toFixed(0)} back=${torsoHalfD(sk).toFixed(0)}`);
+      ok(`${label}: still centred (encircling, not moved forward)`,
+        Math.abs(b.minz + b.maxz) < 2, `mid=${((b.minz + b.maxz) / 2).toFixed(1)}`);
+    }
+    r._disposeSubtree(h.group);
+  }
+  // The recluse's stud rides the choker's FRONT face — it moved with the ring, so
+  // it must still touch it (not float) and still be proud of the torso.
+  {
+    const def = packOf['tv-it-crowd'].avatars.find(a => a.id === 'tv-it-crowd/basement-recluse');
+    const sk = def.humanoid.sk || 1;
+    const h = r._buildHumanoid(TINT, def.id);
+    const ms = meshes(h.group);
+    const ring = ms.find(mm => mm.geometry.type === 'CylinderGeometry'
+      && near(mm.geometry.parameters.radiusTop, 78 * sk, 0.02));
+    const stud = ms.find(mm => mm.geometry.type === 'SphereGeometry'
+      && near(mm.geometry.parameters.radius, 10 * sk, 0.02) && near(mm.position.x, 0, 0.02));
+    ok('it-crowd/recluse: choker stud built', !!ring && !!stud);
+    if (ring && stud) {
+      const rb = probe(ring), sb = probe(stud);
+      ok('it-crowd/recluse: stud sits ON the choker front face',
+        Math.abs(stud.position.z - rb.minz) < 1,
+        `stud z=${stud.position.z.toFixed(0)} ring front=${rb.minz.toFixed(0)}`);
+      ok('it-crowd/recluse: stud proud of the torso front',
+        sb.minz < -torsoHalfD(sk) - 2, `minz=${sb.minz.toFixed(0)}`);
+    }
+    r._disposeSubtree(h.group);
+  }
+
+  let destroyThrew = false;
+  try { r.destroy(); } catch (e) { destroyThrew = true; }
+  ok('destroy() no-throw', !destroyThrew);
+
+  const passN = checks.filter(c => c.pass).length, total = checks.length;
+  const fails = checks.filter(c => !c.pass).map(c => c.name);
+  document.getElementById('out').textContent =
+    checks.map(c => `${c.pass ? 'ok  ' : 'FAIL'} ${c.name} ${c.extra}`).join('\n') +
+    `\n\n${passN}/${total}` + (fails.length ? `\nFAILED: ${fails.join(', ')}` : '');
+  document.title = `NECKTIE ${passN === total ? 'PASS' : 'FAIL'} ${passN}/${total}`;
+ } catch (e) {
+  document.title = 'NECKTIE ERR: ' + (e && e.stack ? e.stack.split('\n').slice(0, 3).join(' | ') : e);
+ }
+</script>

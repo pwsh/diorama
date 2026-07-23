@@ -243,6 +243,102 @@ Work proceeds in order; each stage ships (commit + push both + deploy).
   (deflate parse, dock-calibration transform, vacuumMap layer,
   cleaning glow, tap-to-clean publish).
 
+## Planned arc — 2026-07-20 (user-ordered, NOT yet started)
+
+Captured from a user planning pass. Ordered by dependency + payoff, not by
+size. Each stage ships independently (commit + push both + deploy) and gets a
+design doc pinned before the first line of code, per the house pattern.
+
+- **P1 — Lovelace card packaging** (S–M/3). Ship Diorama as an *addable
+  dashboard card* alongside the existing `panel_custom` panel + iframe modes,
+  so a user can drop a floor view into any Lovelace view (e.g. a single-room
+  card, a kiosk-framed 3D view) rather than only a full-page panel.
+  Investigate: HA's custom-card contract (`setConfig`, `hass` setter,
+  `getCardSize`, editor + `getStubConfig`), sizing/aspect inside a card grid
+  (Diorama assumes it owns the viewport — the 3D canvas, toolbar dock, and
+  sidebar all need a card-mode layout), which UI chrome to suppress
+  (sidebar/toolbar off; the existing `uiMode` kiosk/view + URL-template
+  machinery is most of the answer), config schema (`floor`, `view`, `layers`,
+  `view3d`/`cam`, `mode`) mapping onto today's URL params, and whether the
+  card and panel can share one bundle entry (a third Vite entry is likely).
+  Card-mode config is HA-side YAML, NOT the Diorama store — keep them
+  separate. **Prereq for nothing else; highest reach-per-effort of this arc.**
+
+- **P2 — Record-a-position pins (reverse landmark placement)** (S/3).
+  Today a geo landmark is placed on the plan and *then* calibrated to a
+  lat/lon. Add the inverse: capture the CURRENT GPS fix (or a manually
+  entered lat/lon) and drop the resulting pin onto the plan at wherever the
+  existing landmark fit projects it — walk the property line, tap "record
+  point" at each corner. Primary use: **boundary identification** (the
+  recorded chain becomes a property outline / yard boundary, feeding
+  `geo.boundaryM`-style clamping and, later, P5's exclusion areas).
+  Reuses `latLonToPlan` + the calibration sampler wholesale; the new parts
+  are a record-point action, a recorded-point list (persisted store-level
+  beside `geo.landmarks`), and rendering the chain as a closed boundary
+  polyline in 2D (+ optionally a low fence-like ribbon in 3D). Pin whether a
+  recorded chain is its own type or reuses `GroundArea`/a polygon.
+
+- **P3 — Docs pages link to the live demo** (S/2). Now that `/demo/` hosts
+  the real app, every model-gallery tile and floor-plan tile should deep-link
+  to *that specific thing* in the live demo — floor plans already can
+  (`demo/index.html?demo=<slug>`, just wire the tile); models need a demo
+  entry point that spawns/frames a single furniture kind or avatar (either a
+  scratch config generated per model, or a new `?model=<kind>` demo param
+  that seeds a one-piece floor). Cheap, and it turns the static gallery into
+  a try-it surface. Touches `scripts/docs-site/*` + a small app-side param.
+
+- **P4 — Flight & satellite tracking** (M–L/4). Aircraft (and satellite
+  passes) overhead, rendered in the existing sky dome. Sources: **local
+  ADS-B** (dump1090/readsb/tar1090 on the LAN, or HA's ADS-B integrations)
+  AND a **cloud fallback** (adsb.lol / OpenSky / airplanes.live — compare
+  licensing + rate limits before picking). Design notes from the user:
+  more plane models, some towing banners; **flight operator / callsign
+  rendered as cel-shaded text on or beside the aircraft**; **max altitude
+  scaled** so high traffic stays in frame instead of vanishing overhead
+  (a compressed altitude curve, not linear); alerting on interesting
+  passes (low overflight, a specific callsign, ISS pass). Fits the
+  existing `sky-astro.ts` (satellite passes are the same ephemeris family
+  — SGP4/TLE is the honest source, note the cost) + the bg-text banner
+  plane machinery (already have a tow-plane + banner rig to reuse). Pin
+  early: refresh cadence + how aircraft positions map through `geo.ts` to
+  the plan frame, and that this must degrade to nothing when no source is
+  configured.
+
+- **P5 — Neighborhood overlay (OpenFreeMap)** (L/5). Render the surrounding
+  neighborhood — 3D building extrusions + road/landuse overlays — sourced
+  from https://openfreemap.org/ (OpenStreetMap data). Positioned by the
+  existing **GPS landmark fit**, with user **fine-tuning of alignment**
+  (nudge/rotate on top of the fit), user-adjustable **vertical scaling** of
+  buildings, and definable **exclusion areas** so the overlay never collides
+  with the user's own house/yard geometry. Enable/disable in settings;
+  because alignment is an authoring activity, the **layer choices +
+  alignment/scaling controls live in the SIDEBAR** (mirroring the
+  Move/Rotate-plan nudge idiom). Must honor OpenStreetMap attribution +
+  OpenFreeMap's usage policy, cache tiles locally (IndexedDB precedent:
+  `model-store.ts`), and degrade gracefully offline (including the GitHub
+  Pages demo). Authoritative research + build-ready design:
+  `docs/research/neighborhood-openfreemap.md`. **Largest item in the arc.**
+  Pinned by that research: **do NOT pull in MapLibre GL JS** (a second full
+  WebGL renderer, ~210–750 kB gzipped, with its own Mercator camera + styling
+  engine that fights the toon `_mat()` look and the two-runtime-dep rule) —
+  instead fetch OpenFreeMap's raw MVT tiles and decode the narrow protobuf
+  surface with a hand-rolled zero-dep codec (the `mqtt-ws.ts` precedent),
+  extrude footprints via `ExtrudeGeometry` + `_mat()` using OSM
+  `render_height`/`render_min_height`, and reuse the SHIPPED `bufferPolyline()`
+  for road ribbons + the ground-area/terrace y-layering conventions. The
+  tile→lat/lon inversion is exact, so positioning rides the existing
+  `latLonToPlan` unchanged. **Honesty constraint**: ~93 % of OSM buildings
+  carry no height/levels tag, so most extrusions are inferred — ship
+  `verticalScale` + `defaultLevelHeightM` as first-class sidebar controls
+  rather than implying survey accuracy. Phases: **N1** pure tile math + MVT
+  decoder + IDB cache (no UI) → **N2** `Store.neighborhood` + Planner
+  fetch/cache wiring → **N3** buildings-only extrusion + OSM attribution
+  (first shippable slice) → **N4** roads/water/exclusions + sidebar alignment
+  & scale UI (the phase that makes it usable) → **N5** Settings enable/source
+  block, landuse, 2D peek outline. Top risks: decoder robustness across real
+  tiles, height honesty, and dense-tile performance on tablet GPUs (needs a
+  building cap/LOD sized empirically, not guessed).
+
 ## Backlog — captured 2026-07-15 (placeholders, NOT yet scoped)
 
 Raw feature/fix requests parked for later. **No design or research has been

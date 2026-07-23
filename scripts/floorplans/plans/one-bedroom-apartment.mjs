@@ -58,11 +58,11 @@ export function build() {
 
   const doors = [
     door(6150, 0, 0, { w: 900, label: 'Main entry', lockEntity: null, doorbellEntity: null }), // D1 south exterior
-    door(7300, 300, 90, { w: 800, label: 'Coat Closet' }),   // D3 wall B
+    door(7300, 1100, 90, { w: 800, label: 'Coat Closet' }),  // D3 wall B
     door(5900, 5850, 90, { w: 900, label: 'Bedroom' }),      // D5 wall E
     door(7000, 4050, 90, { w: 800, label: 'Laundry' }),      // D6 wall G
     door(7000, 5700, 90, { w: 800, label: 'Bathroom' }),     // D7 wall G
-    door(7000, 7400, 90, { w: 700, label: 'Linen' }),        // D8 wall G
+    door(7000, 8000, 90, { w: 700, label: 'Linen' }),        // D8 wall G
     door(4700, 7150, 90, { w: 800, label: 'Bedroom Closet' }), // D9 wall K
   ];
 
@@ -92,7 +92,7 @@ export function build() {
     furn('bookshelf', 200, 4600, { rotation: 180 }),
     furn('plant', 5700, 4700, { rotation: 0 }),
     // Entry / Foyer
-    furn('bench', 6600, 300, { rotation: 0, w: 1000, h: 400 }),
+    furn('bench', 6300, 1150, { rotation: 180, w: 700, h: 400 }),
     furn('rug', 6600, 800, { rotation: 0, w: 1000, h: 1000 }),
     // Kitchen (galley + peninsula)
     furn('counter', 8250, 2000, { rotation: 270, w: 1000, h: 650 }),
@@ -111,9 +111,9 @@ export function build() {
     furn('washer', 7400, 4300, { rotation: 0 }),
     furn('dryer', 7400, 4300, { rotation: 0, elevation: 990 }),
     // Bathroom
-    furn('bathtub', 8200, 6100, { rotation: 270 }),
-    furn('toilet', 7250, 5150, { rotation: 90 }),
-    furn('sink_vanity', 7250, 7050, { rotation: 90, label: 'Vanity' }),
+    furn('bathtub', 8100, 6100, { rotation: 270 }),
+    furn('toilet', 7400, 6900, { rotation: 0 }),
+    furn('sink_vanity', 7350, 6150, { rotation: 270, label: 'Vanity' }),
     // Bedroom
     furn('bed', 2350, 7450, { rotation: 180, w: 2000, h: 1500 }),
     furn('nightstand', 1300, 7450, { rotation: 180 }),
@@ -123,7 +123,7 @@ export function build() {
     furn('chair', 900, 5300, { rotation: 270, label: 'Desk chair' }),
     furn('rug', 2350, 6800, { rotation: 0, w: 2400, h: 2000 }),
     // Bedroom Closet
-    furn('wardrobe', 5300, 7550, { rotation: 0 }),
+    furn('wardrobe', 5300, 7550, { rotation: 0, w: 1000, h: 600 }),
   ];
 
   const lights = [

@@ -1,7 +1,7 @@
 {
   "diorama": 2,
   "name": "One-Bedroom Apartment",
-  "exportedAt": "2026-07-17T00:00:00.000Z",
+  "exportedAt": "2026-07-23T00:00:00.000Z",
   "store": {
     "v": 2,
     "floors": [
@@ -258,32 +258,23 @@
           {
             "id": "one-bedroom-apartment-fn8",
             "x": 4900,
-            "y": 3050,
-            "w": 500,
-            "h": 500,
-            "kind": "chair"
-          },
-          {
-            "id": "one-bedroom-apartment-fn9",
-            "x": 4900,
-            "y": 3950,
+            "y": 2900,
             "w": 500,
             "h": 500,
             "kind": "chair",
             "rotation": 180
           },
           {
-            "id": "one-bedroom-apartment-fn10",
-            "x": 4500,
-            "y": 3500,
+            "id": "one-bedroom-apartment-fn9",
+            "x": 4900,
+            "y": 4100,
             "w": 500,
             "h": 500,
-            "kind": "chair",
-            "rotation": 90
+            "kind": "chair"
           },
           {
-            "id": "one-bedroom-apartment-fn11",
-            "x": 5300,
+            "id": "one-bedroom-apartment-fn10",
+            "x": 4000,
             "y": 3500,
             "w": 500,
             "h": 500,
@@ -291,8 +282,17 @@
             "rotation": 270
           },
           {
+            "id": "one-bedroom-apartment-fn11",
+            "x": 5800,
+            "y": 3500,
+            "w": 500,
+            "h": 500,
+            "kind": "chair",
+            "rotation": 90
+          },
+          {
             "id": "one-bedroom-apartment-fn12",
-            "x": 200,
+            "x": 452,
             "y": 4600,
             "w": 800,
             "h": 350,
@@ -302,18 +302,19 @@
           {
             "id": "one-bedroom-apartment-fn13",
             "x": 5700,
-            "y": 4700,
+            "y": 4648,
             "w": 400,
             "h": 400,
             "kind": "plant"
           },
           {
             "id": "one-bedroom-apartment-fn14",
-            "x": 6600,
-            "y": 300,
-            "w": 1000,
+            "x": 6300,
+            "y": 1150,
+            "w": 700,
             "h": 400,
-            "kind": "bench"
+            "kind": "bench",
+            "rotation": 180
           },
           {
             "id": "one-bedroom-apartment-fn15",
@@ -325,7 +326,7 @@
           },
           {
             "id": "one-bedroom-apartment-fn16",
-            "x": 8250,
+            "x": 8123,
             "y": 2000,
             "w": 1000,
             "h": 650,
@@ -336,14 +337,14 @@
             "id": "one-bedroom-apartment-fn17",
             "x": 8250,
             "y": 2700,
-            "w": 900,
-            "h": 650,
+            "w": 800,
+            "h": 550,
             "kind": "kitchen_sink",
             "rotation": 270
           },
           {
             "id": "one-bedroom-apartment-fn18",
-            "x": 8250,
+            "x": 8123,
             "y": 3350,
             "w": 900,
             "h": 650,
@@ -362,7 +363,7 @@
           {
             "id": "one-bedroom-apartment-fn20",
             "x": 6300,
-            "y": 1550,
+            "y": 1782,
             "w": 760,
             "h": 660,
             "kind": "stove"
@@ -378,8 +379,8 @@
           },
           {
             "id": "one-bedroom-apartment-fn22",
-            "x": 8100,
-            "y": 1650,
+            "x": 7993,
+            "y": 1832,
             "w": 910,
             "h": 760,
             "kind": "fridge"
@@ -410,7 +411,7 @@
             "w": 400,
             "h": 400,
             "kind": "stool",
-            "rotation": 90
+            "rotation": 180
           },
           {
             "id": "one-bedroom-apartment-fn26",
@@ -425,7 +426,7 @@
           {
             "id": "one-bedroom-apartment-fn27",
             "x": 7400,
-            "y": 4300,
+            "y": 4402,
             "w": 690,
             "h": 700,
             "kind": "washer"
@@ -441,7 +442,7 @@
           },
           {
             "id": "one-bedroom-apartment-fn29",
-            "x": 8200,
+            "x": 8068,
             "y": 6100,
             "w": 1520,
             "h": 760,
@@ -450,27 +451,26 @@
           },
           {
             "id": "one-bedroom-apartment-fn30",
-            "x": 7250,
-            "y": 5150,
+            "x": 7400,
+            "y": 6900,
             "w": 480,
             "h": 700,
-            "kind": "toilet",
-            "rotation": 90
+            "kind": "toilet"
           },
           {
             "id": "one-bedroom-apartment-fn31",
-            "x": 7250,
-            "y": 7050,
+            "x": 7350,
+            "y": 6150,
             "w": 760,
             "h": 550,
             "kind": "sink_vanity",
-            "rotation": 90,
+            "rotation": 270,
             "label": "Vanity"
           },
           {
             "id": "one-bedroom-apartment-fn32",
             "x": 2350,
-            "y": 7450,
+            "y": 7398,
             "w": 2000,
             "h": 1500,
             "kind": "bed",
@@ -497,7 +497,7 @@
           {
             "id": "one-bedroom-apartment-fn35",
             "x": 4300,
-            "y": 5300,
+            "y": 5552,
             "w": 1200,
             "h": 500,
             "kind": "dresser",
@@ -506,7 +506,7 @@
           {
             "id": "one-bedroom-apartment-fn36",
             "x": 600,
-            "y": 5300,
+            "y": 5652,
             "w": 1400,
             "h": 700,
             "kind": "desk",
@@ -514,12 +514,12 @@
           },
           {
             "id": "one-bedroom-apartment-fn37",
-            "x": 900,
+            "x": 1100,
             "y": 5300,
             "w": 500,
             "h": 500,
             "kind": "chair",
-            "rotation": 270,
+            "rotation": 90,
             "label": "Desk chair"
           },
           {
@@ -534,7 +534,7 @@
             "id": "one-bedroom-apartment-fn39",
             "x": 5300,
             "y": 7550,
-            "w": 1200,
+            "w": 1000,
             "h": 600,
             "kind": "wardrobe"
           }
@@ -676,7 +676,7 @@
           {
             "id": "one-bedroom-apartment-dr2",
             "x": 7300,
-            "y": 300,
+            "y": 1100,
             "w": 800,
             "rotation": 90,
             "entity_id": null,
@@ -712,7 +712,7 @@
           {
             "id": "one-bedroom-apartment-dr6",
             "x": 7000,
-            "y": 7400,
+            "y": 8000,
             "w": 700,
             "rotation": 90,
             "entity_id": null,

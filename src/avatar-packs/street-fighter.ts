@@ -95,9 +95,9 @@ const pack: AvatarPackDef = {
         { shape: 'box', size: [80, 10, 6], anchor: 'head', pos: [0, 40, -20], color: FIRE_RED }, // scalp stripe
         { shape: 'cylinder', size: [16, 16, 6], anchor: 'head', pos: [-75, -10, 0], rot: [0, 1.57, 0], color: GOLD }, // earring
         { shape: 'cylinder', size: [16, 16, 6], anchor: 'head', pos: [75, -10, 0], rot: [0, 1.57, 0], color: GOLD }, // earring
-        { shape: 'sphere', size: 14, anchor: 'neck', pos: [-30, -10, -10], color: 0xe8e0d0 }, // skull bead
-        { shape: 'sphere', size: 14, anchor: 'neck', pos: [0, -15, -12], color: 0xe8e0d0 }, // skull bead
-        { shape: 'sphere', size: 14, anchor: 'neck', pos: [30, -10, -10], color: 0xe8e0d0 }, // skull bead
+        { shape: 'sphere', size: 14, anchor: 'neck', pos: [-30, -10, -80], color: 0xe8e0d0 }, // skull bead
+        { shape: 'sphere', size: 14, anchor: 'neck', pos: [0, -15, -82], color: 0xe8e0d0 }, // skull bead
+        { shape: 'sphere', size: 14, anchor: 'neck', pos: [30, -10, -80], color: 0xe8e0d0 }, // skull bead
         { shape: 'cylinder', size: [40, 40, 18], anchor: 'handL', pos: [0, 0, 0], color: GOLD }, // bangle
         { shape: 'cylinder', size: [40, 40, 18], anchor: 'handR', pos: [0, 0, 0], color: GOLD }, // bangle
         { shape: 'box', size: [200, 15, 120], anchor: 'hip', pos: [0, 0, 0], color: 0x5a3620 }, // waist rope

@@ -319,6 +319,170 @@
     r._endPropSession(h);
   }
 
+  // ── 15b. Prop geometry: two-handed attachment + real-world plausibility ─────
+  // The rig has NO WRIST — a hand group's world orientation is exactly
+  // Rx(shoulder+elbow) — so a prop's prims only read correctly when they are
+  // authored in the upright frame (PropDef.handPitch) and a two-handed prop's
+  // attachments ride its re-aimed HANDLE (see _attachToHandle). These drive the
+  // real poseHold curves and measure the resulting world geometry.
+  {
+    const V = () => new r._scene.position.constructor();   // THREE.Vector3 (no direct import)
+    const wpos = (o) => o.getWorldPosition(V());
+    const applyPose = (h, def, pp) => {
+      const d = def.poseHold(h, 0, pp, false);
+      if (d.lSh !== undefined) h.leftShoulder.rotation.x = d.lSh;
+      if (d.rSh !== undefined) h.rightShoulder.rotation.x = d.rSh;
+      if (d.lEl !== undefined) h.leftElbow.rotation.x = d.lEl;
+      if (d.rEl !== undefined) h.rightElbow.rotation.x = d.rEl;
+      h.group.rotation.x = d.leanX ?? 0;
+      h.group.rotation.y = d.yaw ?? 0;
+      h.group.rotation.z = d.rollZ ?? 0;
+      h.group.updateWorldMatrix(true, true);
+      r._advanceTwoHandProps(h.propTwoHand);
+      h.group.updateWorldMatrix(true, true);
+    };
+    const PH = [0, 0.25, 0.5, 0.75, 1.0, 1.4, 1.8, 2.2, 2.6, 3.0, 3.6, 4.2, 5.0, 5.8];
+    // Sample a mesh's world position over a prop's phase cycle.
+    const sweep = (id, pick) => {
+      const def = PROP_DEFS[id];
+      const h = idleRig('adult');
+      r._startPropSession(h, id, null, null, 10);
+      const out = [];
+      for (const pp of PH) { applyPose(h, def, pp); out.push(pick(h, wpos)); }
+      const head = h.headTopReach;
+      r._endPropSession(h);
+      return { out, head };
+    };
+
+    // (a) Two-handed props: the head/blade is a rigid CHILD of the handle and
+    //     stays at the handle's far end across poses (pre-fix it stayed pinned to
+    //     the hand while the shaft was re-aimed away from it).
+    for (const id of ['broom', 'snow_shovel']) {
+      const def = PROP_DEFS[id];
+      const h = idleRig('adult');
+      r._startPropSession(h, id, null, null, 10);
+      const handle = h.propTwoHand[0].mesh;
+      const head = h.propMeshes.find(m => m !== handle);
+      check(`${id}: head re-parented onto the handle`, head && head.parent === handle);
+      const shaftLen = PROP_DEFS[id].primitives[0].size[2];
+      const locals = [], gaps = [];
+      for (const pp of [0.0, 1.4]) {
+        applyPose(h, def, pp);
+        locals.push(handle.worldToLocal(wpos(head)));
+        applyPose(h, def, pp);   // worldToLocal mutated nothing, but re-pose for the tip read
+        const tip = handle.localToWorld(V().set(0, shaftLen / 2, 0));
+        gaps.push(tip.distanceTo(wpos(head)));
+      }
+      check(`${id}: head fixed in the handle frame across poses`,
+        locals[0].distanceTo(locals[1]) < 1, `d=${locals[0].distanceTo(locals[1]).toFixed(2)}mm`);
+      check(`${id}: head sits at the handle's far end (both poses)`,
+        gaps.every(g => g < 200), `gaps=${gaps.map(g => g.toFixed(0)).join()}`);
+      r._endPropSession(h);
+    }
+
+    // (b) Broom head sweeps ALONG THE FLOOR in front of the rig.
+    {
+      const { out } = sweep('broom', (h, w) => w(h.propMeshes[1]));
+      const ys = out.map(p => p.y), zs = out.map(p => p.z), xs = out.map(p => p.x);
+      check('broom: head rides floor level', Math.max(...ys) < 350 && Math.min(...ys) > -200,
+        `y=${Math.min(...ys).toFixed(0)}..${Math.max(...ys).toFixed(0)}`);
+      check('broom: head is in FRONT of the rig', Math.max(...zs) < -50, `zmax=${Math.max(...zs).toFixed(0)}`);
+      const travel = (Math.max(...zs) - Math.min(...zs)) + (Math.max(...xs) - Math.min(...xs));
+      check('broom: head arcs across the floor', travel > 150, `travel=${travel.toFixed(0)}mm`);
+    }
+    // (c) Snow shovel scoops at the floor and lifts to toss.
+    {
+      const { out } = sweep('snow_shovel', (h, w) => w(h.propMeshes[1]));
+      const ys = out.map(p => p.y);
+      check('snow_shovel: blade scoops at the floor', Math.min(...ys) < 200, `ymin=${Math.min(...ys).toFixed(0)}`);
+      check('snow_shovel: blade lifts to toss', Math.max(...ys) > 400, `ymax=${Math.max(...ys).toFixed(0)}`);
+    }
+    // (d) Umbrella canopy rides ABOVE the head (not below the raised hand).
+    {
+      const { out, head } = sweep('umbrella', (h, w) => w(h.propMeshes[1]));
+      const c = out[0];
+      check('umbrella: canopy above the head', c.y > head + 400, `y=${c.y.toFixed(0)} headTop=${head}`);
+      check('umbrella: canopy over (not far in front of) the head', Math.abs(c.z) < 450, `z=${c.z.toFixed(0)}`);
+    }
+    // (e) Vacuum head runs along the floor ahead of the rig.
+    {
+      const { out } = sweep('vacuum_cleaner', (h, w) => w(h.propMeshes[1]));
+      const ys = out.map(p => p.y), zs = out.map(p => p.z);
+      check('vacuum: head on the floor', Math.max(...ys) < 250 && Math.min(...ys) > -100,
+        `y=${Math.min(...ys).toFixed(0)}..${Math.max(...ys).toFixed(0)}`);
+      check('vacuum: head ahead of the rig', Math.max(...zs) < -300, `zmax=${Math.max(...zs).toFixed(0)}`);
+      check('vacuum: push/pull stroke along the floor', (Math.max(...zs) - Math.min(...zs)) > 150,
+        `dz=${(Math.max(...zs) - Math.min(...zs)).toFixed(0)}`);
+    }
+    // (f) Eating / drinking props raise the free hand toward the mouth.
+    for (const [id, hand] of [['plate_of_food', 'R'], ['popcorn_bucket', 'R'],
+                              ['ice_cream_cone', 'R'], ['drink_cup', 'R']]) {
+      const { out, head } = sweep(id, (h, w) => w(hand === 'R' ? h.propBuildCtx.handR : h.propBuildCtx.handL));
+      const ys = out.map(p => p.y);
+      check(`${id}: hand rises toward the mouth`, Math.max(...ys) > head - 250,
+        `ymax=${Math.max(...ys).toFixed(0)} head=${head}`);
+      check(`${id}: hand actually cycles (not static)`, (Math.max(...ys) - Math.min(...ys)) > 150,
+        `dy=${(Math.max(...ys) - Math.min(...ys)).toFixed(0)}`);
+    }
+    // (g) Upright authoring frame: a `handPitch` prop is LEVEL at its nominal pose
+    //     (the plate must not tip its food onto the floor).
+    {
+      const def = PROP_DEFS.plate_of_food;
+      const h = idleRig('adult');
+      r._startPropSession(h, 'plate_of_food', null, null, 10);
+      applyPose(h, def, 0);
+      const plate = h.propMeshes[0];
+      const up = plate.localToWorld(V().set(0, 1, 0)).sub(wpos(plate)).normalize();
+      check('plate_of_food: plate held level (upright frame)', up.y > 0.9, `up.y=${up.y.toFixed(2)}`);
+      r._endPropSession(h);
+    }
+    // (h) Book pages face the READER (local +Z back toward the face), at reading height.
+    {
+      const def = PROP_DEFS.book;
+      const h = idleRig('adult');
+      r._startPropSession(h, 'book', null, null, 10);
+      applyPose(h, def, 0);
+      const book = h.propMeshes[0];
+      const face = book.getWorldDirection(V());   // local +Z in world
+      check('book: pages face the reader', face.z > 0.5, `z=${face.z.toFixed(2)}`);
+      const bp = wpos(book);
+      check('book: held at reading height', bp.y > 1200 && bp.y < 1700, `y=${bp.y.toFixed(0)}`);
+      r._endPropSession(h);
+    }
+    // (i) Watering can TIPS to pour: the spout drops below the can body on the beat.
+    {
+      const def = PROP_DEFS.watering_can;
+      const h = idleRig('adult');
+      r._startPropSession(h, 'watering_can', null, null, 10);
+      const can = h.propMeshes[0], spout = h.propMeshes[1];
+      applyPose(h, def, 3.5);   // between beats — carrying
+      const carry = wpos(spout).y - wpos(can).y;
+      applyPose(h, def, 1.2);   // mid-beat — pouring
+      const pour = wpos(spout).y - wpos(can).y;
+      check('watering_can: upright while carried', carry > -20, `d=${carry.toFixed(0)}`);
+      check('watering_can: spout tips DOWN to pour', pour < -60, `d=${pour.toFixed(0)}`);
+      r._endPropSession(h);
+    }
+    // (j) Dish towel wipes a surface: hand traces a loop at counter height.
+    {
+      const { out } = sweep('dish_towel', (h, w) => w(h.propMeshes[0]));
+      const ys = out.map(p => p.y), zs = out.map(p => p.z);
+      check('dish_towel: wipes at counter height', Math.min(...ys) > 700 && Math.max(...ys) < 1250,
+        `y=${Math.min(...ys).toFixed(0)}..${Math.max(...ys).toFixed(0)}`);
+      check('dish_towel: circular wipe (both axes move)',
+        (Math.max(...ys) - Math.min(...ys)) > 60 && (Math.max(...zs) - Math.min(...zs)) > 60,
+        `dy=${(Math.max(...ys) - Math.min(...ys)).toFixed(0)} dz=${(Math.max(...zs) - Math.min(...zs)).toFixed(0)}`);
+    }
+    // (k) Squeegee strokes vertically against an imagined pane in front.
+    {
+      const { out } = sweep('window_squeegee', (h, w) => w(h.propMeshes[1]));
+      const ys = out.map(p => p.y), zs = out.map(p => p.z);
+      check('window_squeegee: vertical stroke', (Math.max(...ys) - Math.min(...ys)) > 300,
+        `dy=${(Math.max(...ys) - Math.min(...ys)).toFixed(0)}`);
+      check('window_squeegee: blade held out at the pane', Math.max(...zs) < -400, `zmax=${Math.max(...zs).toFixed(0)}`);
+    }
+  }
+
   // ── 15. Integration: updateTargets drives a prop + mutual exclusion ──────────
   {
     performance.now = realNow;   // restore for a real driven scene

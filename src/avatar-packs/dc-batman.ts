@@ -78,7 +78,7 @@ const pack: AvatarPackDef = {
         { shape: 'box', size: [120, 28, 120], anchor: 'crown', pos: [0, -8, 22], color: 0x9a968f },
         { shape: 'box', size: [50, 10, 6], anchor: 'face', pos: [0, -8, -6], color: 0x9a968f }, // grey moustache
         { shape: 'box', size: [160, 140, 8], anchor: 'chest', pos: [0, 0, -6], color: 'tint' }, // waistcoat panel = tint slot
-        { shape: 'box', size: [40, 20, 10], anchor: 'neck', pos: [0, 0, -8], color: 0x141414 }], // black bow tie
+        { shape: 'box', size: [40, 20, 10], anchor: 'neck', pos: [0, 0, -78], color: 0x141414 }], // black bow tie
       personality: { bobMul: 0.6, swayMul: 0.3, cadenceMul: 0.75, ampMul: 0.7 },
       bubbles: ['🫖', '🎩', '🧐', '📖'] },
 
@@ -103,7 +103,7 @@ const pack: AvatarPackDef = {
       accessories: [
         { shape: 'box', size: [130, 60, 130], anchor: 'crown', pos: [0, 0, 10], color: 0x2fae52 }, // green swept-back hair
         { shape: 'box', size: [55, 10, 5], anchor: 'face', pos: [0, -14, -6], color: 0xcc1e2e }, // red rictus grin
-        { shape: 'box', size: [40, 24, 10], anchor: 'neck', pos: [0, -4, -8], color: 0xff8c1a }, // orange cravat
+        { shape: 'box', size: [40, 24, 10], anchor: 'neck', pos: [0, -4, -78], color: 0xff8c1a }, // orange cravat
         { shape: 'sphere', size: 10, anchor: 'chest', pos: [-40, 30, -10], color: 'tint' }], // boutonniere = tint slot
       personality: { bobMul: 1.15, swayMul: 1.1, cadenceMul: 1.1, ampMul: 1.2 },
       bubbles: ['🃏', '😂', '💜', '🎪'] },
@@ -117,7 +117,7 @@ const pack: AvatarPackDef = {
       accessories: [
         // diamond chest patch (approx of the print) doubles as the per-sensor 'tint' slot — fits the multicolor jester.
         { shape: 'box', size: [70, 70, 8], anchor: 'chest', pos: [0, 10, -8], rot: [0, 0, 0.785], color: 'tint' },
-        { shape: 'cylinder', size: [70, 70, 30], anchor: 'neck', pos: [0, 0, 0], color: 0xf2f2f2 }, // white ruffled collar approx
+        { shape: 'cylinder', size: [78, 78, 30], anchor: 'neck', pos: [0, 0, 0], color: 0xf2f2f2 }, // white ruffled collar approx
         { shape: 'cone', size: [15, 160], anchor: 'crown', pos: [-30, 20, 0], rot: [0.3, 0, 0.35], color: 0xcc1e2e },
         { shape: 'cone', size: [15, 160], anchor: 'crown', pos: [30, 20, 0], rot: [0.3, 0, -0.35], color: 0x161616 },
         { shape: 'sphere', size: 12, anchor: 'crown', pos: [-58, 150, 22], color: 0xf2f2f2 }, // pompom
@@ -155,7 +155,7 @@ const pack: AvatarPackDef = {
         { shape: 'cylinder', size: [18, 18, 6], anchor: 'face', pos: [26, 8, -9], rot: [1.5708, 0, 0], color: 0xd8ecf5, emissiveIntensity: 0.1 },
         { shape: 'cylinder', size: [20, 20, 4], anchor: 'face', pos: [26, 8, -6], rot: [1.5708, 0, 0], color: 0xc9a227 },
         { shape: 'cylinder', size: [3, 3, 80], anchor: 'face', pos: [26, -40, -6], color: 0xc9a227 }, // monocle chain
-        { shape: 'box', size: [40, 22, 10], anchor: 'neck', pos: [0, 0, -8], color: 0x141414 }, // bow tie
+        { shape: 'box', size: [40, 22, 10], anchor: 'neck', pos: [0, 0, -78], color: 0x141414 }, // bow tie
         { shape: 'cylinder', size: [7, 7, 220], anchor: 'handL', pos: [0, 60, 0], color: 0x141414 }, // umbrella handle
         { shape: 'cone', size: [65, 90], anchor: 'handL', pos: [0, 175, 0], rot: [3.14159, 0, 0], color: 0x141414 }, // closed canopy
         { shape: 'cone', size: [10, 24], anchor: 'handL', pos: [0, 232, 0], color: GOLD }], // ferrule tip
@@ -170,7 +170,7 @@ const pack: AvatarPackDef = {
         { shape: 'sphere', size: [70, 45, 70], anchor: 'crown', pos: [0, 22, 0], color: 0x1f9e4a }, // bowler dome
         { shape: 'box', size: [150, 10, 160], anchor: 'crown', pos: [0, 4, 0], color: 0x1f9e4a }, // brim
         { shape: 'cylinder', size: [72, 72, 18], anchor: 'crown', pos: [0, 12, 0], color: 'tint' }, // hatband = tint slot
-        { shape: 'box', size: [40, 20, 10], anchor: 'neck', pos: [0, 0, -8], color: 0x431f66 }, // purple bow tie
+        { shape: 'box', size: [40, 20, 10], anchor: 'neck', pos: [0, 0, -78], color: 0x431f66 }, // purple bow tie
         // approx: no curved/hooked prop geometry — the question-mark cane is a straight gold rod + ball handle (doc Rig gaps #4).
         { shape: 'cylinder', size: [8, 8, 420], anchor: 'handR', pos: [0, 180, 0], color: GOLD },
         { shape: 'sphere', size: 16, anchor: 'handR', pos: [0, 390, 0], color: 0x161616 }],

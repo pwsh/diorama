@@ -1,7 +1,7 @@
 {
   "diorama": 2,
   "name": "Townhouse — Minimalist",
-  "exportedAt": "2026-07-17T00:00:00.000Z",
+  "exportedAt": "2026-07-23T00:00:00.000Z",
   "store": {
     "v": 2,
     "floors": [
@@ -114,7 +114,7 @@
           },
           {
             "id": "townhouse-minimal-fn5",
-            "x": 5850,
+            "x": 5748,
             "y": 900,
             "w": 1500,
             "h": 400,
@@ -152,7 +152,7 @@
           {
             "id": "townhouse-minimal-fn9",
             "x": 300,
-            "y": 10700,
+            "y": 10548,
             "w": 800,
             "h": 350,
             "kind": "bookshelf",
@@ -247,7 +247,7 @@
           {
             "id": "townhouse-minimal-dr3",
             "x": 4500,
-            "y": 3100,
+            "y": 2300,
             "w": 800,
             "rotation": 270,
             "entity_id": null,
@@ -256,15 +256,24 @@
           {
             "id": "townhouse-minimal-dr4",
             "x": 3600,
+            "y": 5300,
+            "w": 800,
+            "rotation": 270,
+            "entity_id": null,
+            "label": "Garage service"
+          },
+          {
+            "id": "townhouse-minimal-dr5",
+            "x": 3600,
             "y": 6600,
-            "w": 900,
+            "w": 1200,
             "rotation": 0,
             "entity_id": null,
             "label": "Flex archway",
             "localState": "off"
           },
           {
-            "id": "townhouse-minimal-dr5",
+            "id": "townhouse-minimal-dr6",
             "x": 2550,
             "y": 11000,
             "w": 900,
@@ -510,8 +519,8 @@
           },
           {
             "id": "townhouse-minimal-fn16",
-            "x": 5750,
-            "y": 750,
+            "x": 5600,
+            "y": 1100,
             "w": 480,
             "h": 700,
             "kind": "toilet",
@@ -519,12 +528,12 @@
           },
           {
             "id": "townhouse-minimal-fn17",
-            "x": 4650,
-            "y": 750,
+            "x": 5250,
+            "y": 350,
             "w": 560,
             "h": 470,
             "kind": "sink",
-            "rotation": 90
+            "rotation": 180
           },
           {
             "id": "townhouse-minimal-fn18",
@@ -537,7 +546,7 @@
           },
           {
             "id": "townhouse-minimal-fn19",
-            "x": 2400,
+            "x": 2150,
             "y": 7300,
             "w": 500,
             "h": 500,
@@ -546,7 +555,7 @@
           },
           {
             "id": "townhouse-minimal-fn20",
-            "x": 3600,
+            "x": 3850,
             "y": 7300,
             "w": 500,
             "h": 500,
@@ -559,7 +568,8 @@
             "y": 6800,
             "w": 500,
             "h": 500,
-            "kind": "chair"
+            "kind": "chair",
+            "rotation": 180
           },
           {
             "id": "townhouse-minimal-fn22",
@@ -567,13 +577,12 @@
             "y": 7800,
             "w": 500,
             "h": 500,
-            "kind": "chair",
-            "rotation": 180
+            "kind": "chair"
           },
           {
             "id": "townhouse-minimal-fn23",
             "x": 900,
-            "y": 10700,
+            "y": 10618,
             "w": 760,
             "h": 660,
             "kind": "stove",
@@ -582,16 +591,16 @@
           {
             "id": "townhouse-minimal-fn24",
             "x": 2200,
-            "y": 10700,
-            "w": 900,
-            "h": 650,
+            "y": 10673,
+            "w": 800,
+            "h": 550,
             "kind": "kitchen_sink",
             "rotation": 180
           },
           {
             "id": "townhouse-minimal-fn25",
             "x": 1500,
-            "y": 10700,
+            "y": 10648,
             "w": 2400,
             "h": 600,
             "kind": "counter",
@@ -599,7 +608,7 @@
           },
           {
             "id": "townhouse-minimal-fn26",
-            "x": 5700,
+            "x": 5568,
             "y": 10300,
             "w": 910,
             "h": 760,
@@ -664,16 +673,16 @@
         },
         "doors": [
           {
-            "id": "townhouse-minimal-dr6",
+            "id": "townhouse-minimal-dr7",
             "x": 4500,
-            "y": 1200,
+            "y": 600,
             "w": 800,
             "rotation": 270,
             "entity_id": null,
             "label": "Half Bath"
           },
           {
-            "id": "townhouse-minimal-dr7",
+            "id": "townhouse-minimal-dr8",
             "x": 4900,
             "y": 3300,
             "w": 800,
@@ -682,7 +691,7 @@
             "label": "Stair door"
           },
           {
-            "id": "townhouse-minimal-dr8",
+            "id": "townhouse-minimal-dr9",
             "x": 4900,
             "y": 6300,
             "w": 800,
@@ -691,11 +700,11 @@
             "label": "Stair exit"
           },
           {
-            "id": "townhouse-minimal-dr9",
-            "x": 2250,
-            "y": 11000,
+            "id": "townhouse-minimal-dr10",
+            "x": 6000,
+            "y": 6800,
             "w": 1500,
-            "rotation": 0,
+            "rotation": 270,
             "entity_id": null,
             "label": "Balcony"
           }
@@ -973,7 +982,7 @@
           {
             "id": "townhouse-minimal-fn27",
             "x": 1200,
-            "y": 900,
+            "y": 1052,
             "w": 1400,
             "h": 2000,
             "kind": "bed"
@@ -1004,8 +1013,8 @@
           },
           {
             "id": "townhouse-minimal-fn31",
-            "x": 4100,
-            "y": 1400,
+            "x": 5500,
+            "y": 1350,
             "w": 480,
             "h": 700,
             "kind": "toilet",
@@ -1013,7 +1022,7 @@
           },
           {
             "id": "townhouse-minimal-fn32",
-            "x": 300,
+            "x": 402,
             "y": 3700,
             "w": 690,
             "h": 700,
@@ -1022,7 +1031,7 @@
           },
           {
             "id": "townhouse-minimal-fn33",
-            "x": 300,
+            "x": 402,
             "y": 4700,
             "w": 690,
             "h": 700,
@@ -1032,7 +1041,7 @@
           {
             "id": "townhouse-minimal-fn34",
             "x": 2100,
-            "y": 10400,
+            "y": 9898,
             "w": 1900,
             "h": 2100,
             "kind": "bed",
@@ -1066,7 +1075,7 @@
           },
           {
             "id": "townhouse-minimal-fn38",
-            "x": 5000,
+            "x": 5350,
             "y": 7200,
             "w": 1200,
             "h": 600,
@@ -1075,8 +1084,8 @@
           },
           {
             "id": "townhouse-minimal-fn39",
-            "x": 4500,
-            "y": 8600,
+            "x": 4527,
+            "y": 8952,
             "w": 1200,
             "h": 550,
             "kind": "sink_vanity",
@@ -1149,43 +1158,52 @@
         },
         "doors": [
           {
-            "id": "townhouse-minimal-dr10",
-            "x": 1500,
+            "id": "townhouse-minimal-dr11",
+            "x": 1400,
             "y": 3300,
-            "w": 800,
+            "w": 900,
             "rotation": 0,
             "entity_id": null,
             "label": "Secondary Bedroom"
           },
           {
-            "id": "townhouse-minimal-dr11",
-            "x": 4100,
+            "id": "townhouse-minimal-dr12",
+            "x": 4600,
             "y": 3300,
-            "w": 800,
+            "w": 1000,
             "rotation": 0,
             "entity_id": null,
-            "label": "Hall passage"
+            "label": "Stair passage"
           },
           {
-            "id": "townhouse-minimal-dr12",
+            "id": "townhouse-minimal-dr13",
+            "x": 4500,
+            "y": 4300,
+            "w": 1000,
+            "rotation": 270,
+            "entity_id": null,
+            "label": "Stair exit"
+          },
+          {
+            "id": "townhouse-minimal-dr14",
             "x": 3900,
-            "y": 1100,
+            "y": 900,
             "w": 800,
             "rotation": 270,
             "entity_id": null,
             "label": "Hall Bath"
           },
           {
-            "id": "townhouse-minimal-dr13",
+            "id": "townhouse-minimal-dr15",
             "x": 1800,
-            "y": 4400,
+            "y": 4200,
             "w": 800,
             "rotation": 270,
             "entity_id": null,
             "label": "Laundry"
           },
           {
-            "id": "townhouse-minimal-dr14",
+            "id": "townhouse-minimal-dr16",
             "x": 1650,
             "y": 6300,
             "w": 900,
@@ -1194,16 +1212,16 @@
             "label": "Primary Suite"
           },
           {
-            "id": "townhouse-minimal-dr15",
+            "id": "townhouse-minimal-dr17",
             "x": 4200,
-            "y": 7900,
+            "y": 7300,
             "w": 800,
             "rotation": 270,
             "entity_id": null,
             "label": "Closet"
           },
           {
-            "id": "townhouse-minimal-dr16",
+            "id": "townhouse-minimal-dr18",
             "x": 4200,
             "y": 10100,
             "w": 800,

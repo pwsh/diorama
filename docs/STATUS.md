@@ -152,6 +152,39 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Fix batch: accessories, props, floorplans** (2026-07-20; 3 parallel
+  Opus agents; user-reported). Each report started narrow and uncovered a
+  systemic defect:
+  - **Accessories** — the reported "upside-down neckties" were actually the
+    legacy `professional`/`magician` V-neck: a 3-segment cone needs
+    `rotation.y = π/3` (not π/4) to face a flat facet forward, and the tie
+    sat INSIDE the cone's inradius so only the cone read (wide at collar,
+    pointed at sternum = a tie tapering the wrong way). Pack ties are plain
+    boxes and were fine; 2 had a wrong-end clip / transposed dims. The same
+    world-vertex harness then exposed the **`neck` anchor asymmetry**
+    (`chest` = torso FRONT face, `neck` = torso CENTRE): **45 prims across
+    34 members in 17 packs never rendered** — fixed by one uniform
+    `pos.z −= 70` rule — plus 8 neck rings authored smaller than the torso
+    (sized to `TORSO_D/2 + 8`, not moved, to keep the wrap). Rules now in
+    `docs/avatars/AUTHORING.md` + at `anchorOf`. necktie-test 155/155 with
+    a negative control.
+  - **Props** — the broom's detached brush was two-handed props re-aiming
+    ONLY the handle prim while attachments stayed pinned to the hand
+    (~800 mm adrift; snow shovel identical). Root cause of a wider defect:
+    **the rig has no wrist**, so hand-prop orientation is pure
+    `Rx(shoulder+elbow)` — 11 of 13 props were mis-oriented (umbrella
+    canopy BELOW the hand, watering can inverted, book facing away, vacuum
+    at chest height). Fixed structurally: `PropDef.handPitch` upright
+    authoring frame + an `_attachToHandle` handle convention. Broom sweep
+    re-done arm-driven (was yawing the whole avatar). props-test 63→96.
+  - **Floorplans** — added 4 physical checks (doorway clearance, wall
+    overlap, **nav reachability**, seat alignment) + a deterministic settle
+    pass, then fixed all 12 plans: chairs were **universally backwards**
+    (+Y-front authoring vs the renderer's −Z), ~150 pieces sunk in walls,
+    and several spaces were sealed off entirely (garage with no interior
+    door, fully-railed stairwells, a laundry dead end, mudroom+garage cut
+    from the house). floorplans 209→**285/285**, byte-deterministic.
+
 - **GitHub Pages live demo** (2026-07-20; 1 Opus agent). The full app
   runs client-side on the docs site (`/demo/`) — real production build,
   offline mode, zero-click auto-start via `?demo=<slug>`
@@ -1591,6 +1624,14 @@ alarm keypad, smoke/CO, appliance animation, robots, weather W3, layer
 splits) shipped ahead of it in July 2026 — see the ledger above.
 
 ## Open threads / known deferrals
+
+**Next planned arc (2026-07-20)** — five user-ordered items now scoped in
+`docs/ROADMAP.md` ("Planned arc — 2026-07-20"), none started:
+P1 Lovelace card packaging · P2 record-a-position boundary pins ·
+P3 docs tiles deep-link into the live demo · P4 flight & satellite tracking
+(local + cloud ADS-B) · P5 neighborhood overlay from OpenFreeMap (design:
+`docs/research/neighborhood-openfreemap.md`). P5 is the large one and is to
+be phased; P1 has the highest reach-per-effort.
 
 **Deferral-clearing batch (2026-07-17)** closed most of this list — see the
 ledger entry. What remains (needs the user's hardware / a live walk):

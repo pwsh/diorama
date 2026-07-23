@@ -32,8 +32,8 @@ const pack: AvatarPackDef = {
         { shape: 'box', size: [128, 48, 128], anchor: 'crown', pos: [0, -4, 0], color: 0x2a2a2a }, // beanie dome
         { shape: 'box', size: [132, 18, 132], anchor: 'crown', pos: [0, -30, 0], color: 0xb01c24 }, // red fold band
         { shape: 'box', size: [120, 70, 10], anchor: 'chest', pos: [0, -60, -8], color: 0xc99a1e }, // kangaroo pocket
-        { shape: 'cylinder', size: [4, 4, 70], anchor: 'neck', pos: [-20, -30, -14], color: 0xc99a1e }, // drawstring L
-        { shape: 'cylinder', size: [4, 4, 70], anchor: 'neck', pos: [20, -30, -14], color: 0xc99a1e }, // drawstring R
+        { shape: 'cylinder', size: [4, 4, 70], anchor: 'neck', pos: [-20, -30, -84], color: 0xc99a1e }, // drawstring L
+        { shape: 'cylinder', size: [4, 4, 70], anchor: 'neck', pos: [20, -30, -84], color: 0xc99a1e }, // drawstring R
       ],
       personality: { bobMul: 1.05, swayMul: 1.1, cadenceMul: 1.1, ampMul: 1.1 },
       bubbles: ['🧪', '😬', '💨', '🎮'] },
@@ -74,7 +74,10 @@ const pack: AvatarPackDef = {
       accessories: [
         { shape: 'box', size: [120, 26, 120], anchor: 'crown', pos: [0, -8, 2], color: 0x4a3a2a }, // slicked hair
         { shape: 'box', size: [92, 46, 8], anchor: 'chest', pos: [0, 118, -6], color: 0x7a4a9c }, // purple collar wedge
-        { shape: 'box', size: [90, 22, 6], anchor: 'chest', pos: [0, 70, -12], rot: [0, 0, 0.5], color: 0xd9531e }, // loud tie
+        // Loud tie — size was [90,22] (transposed: 90 WIDE × 22 tall), which rendered
+        // as a horizontal slash across the chest rather than a blade hanging from the
+        // collar. Narrow × tall, top tucked under the purple collar wedge (95..141).
+        { shape: 'box', size: [22, 90, 6], anchor: 'chest', pos: [0, 70, -12], rot: [0, 0, 0.5], color: 0xd9531e }, // loud tie (askew)
         { shape: 'sphere', size: 14, anchor: 'handR', pos: [0, -6, 0], color: 0xd4af37 }, // ring
         { shape: 'cylinder', size: [20, 20, 18], anchor: 'handR', pos: [0, 30, 0], color: 0xd4af37 }, // gold cuff
       ],

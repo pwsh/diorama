@@ -80,7 +80,10 @@ const pack: AvatarPackDef = {
         { shape: 'box', size: [26, 20, 6], anchor: 'chest', pos: [-16, 118, -6], rot: [0, 0, 0.4], color: 0xe8e4d8 }, // collar wedge L
         { shape: 'box', size: [26, 20, 6], anchor: 'chest', pos: [16, 118, -6], rot: [0, 0, -0.4], color: 0xe8e4d8 }, // collar wedge R
         { shape: 'box', size: [16, 90, 6], anchor: 'chest', pos: [0, 60, -8], color: 0x2a3a5a }, // striped tie
-        { shape: 'box', size: [20, 6, 4], anchor: 'chest', pos: [0, 24, -10], color: 0xc8c8c8 }, // tie clip
+        // Tie clip: the blade spans y 15..105 (box 90 tall centred at 60), so a clip
+        // at y=24 sat at the very BOTTOM of the blade (reading as an inverted tie).
+        // A clip belongs on the upper-middle of the blade, just below the knot.
+        { shape: 'box', size: [20, 6, 4], anchor: 'chest', pos: [0, 88, -10], color: 0xc8c8c8 }, // tie clip
         { shape: 'box', size: [36, 40, 6], anchor: 'handR', pos: [0, -22, 0], color: 0xf0ead8 }, // a-cappella songbook
       ],
       personality: { bobMul: 1.05, swayMul: 1.1, cadenceMul: 1.05, ampMul: 1.05 },

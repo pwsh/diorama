@@ -170,6 +170,22 @@ origin, elbow/knee = the lower-limb pivot origin, ankle = shin bottom (the
 knee pivot minus the shin length); all fall back to `root` on a legless
 (hover/sessile) rig, so pos offsets then read from the rig root. `pos [x,y,z]`
 mm offset (body-local, **−Z = front**), `rot [x,y,z]` **radians**, `color` hex |
+<!-- keep with the anchor list above -->
+**`chest` vs `neck` — the z baseline differs.** `chest` already sits ON the torso
+FRONT face (z = −TORSO_D/2 = −70 at sk 1), so a chest accessory only needs a few
+mm of extra `pos.z` to clear it (ties author −6..−16). `neck` sits at the torso
+**centre** in z (z = 0, y = torso top) so that neck-ENCIRCLING pieces (ruffs,
+turtleneck rings, shoulder yokes, chains) can be authored symmetrically. A
+FRONT-facing neck accessory (bow tie, cravat, collar wedge, brooch, scarf knot)
+must therefore carry that extra **−70** itself: author `pos.z ≈ −78 … −88`, not
+−8 … −18, or it builds INSIDE the torso box and never renders.
+An ENCIRCLING neck piece (ruff / choker / turtleneck / fur collar / chain) has the
+mirror-image constraint: the rig has no neck geometry — the torso box runs right up
+to the collar line — so the ring must **clear the torso footprint in z**. Author its
+half-extent along z at **≥ 78** (= TORSO_D/2 70 + an 8 mm margin): cylinder
+`size [78, 78, h]`, box `size [w, h, ≥156]`. A smaller radius builds inside the torso
+and only the sliver above the torso top plane shows; exactly 70 is coincident with
+the torso face (the coincident-face gotcha) and hatches.
 `'tint'|'skin'|'body'|'dark'|'accent'`, `emissive`/`emissiveIntensity`/
 `metalness`/`roughness`, `outlineSkip`, `sphereArc
 [phiStart,phiLength,thetaStart,thetaLength]` (hoods/hair/shells).

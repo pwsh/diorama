@@ -41,7 +41,7 @@ const pack: AvatarPackDef = {
         { shape: 'sphere', size: 40, anchor: 'crown', pos: [26, -2, 6], color: 0x3a2416 },
         { shape: 'sphere', size: 40, anchor: 'crown', pos: [0, 6, 26], color: 0x3a2416 },
         ...glasses(0x1c1408),
-        { shape: 'box', size: [104, 30, 10], anchor: 'neck', pos: [0, -8, -16], color: 0x6b6f74 },
+        { shape: 'box', size: [104, 30, 10], anchor: 'neck', pos: [0, -8, -86], color: 0x6b6f74 },
         { shape: 'box', size: [10, 140, 5], anchor: 'chest', pos: [0, -10, -10], color: 0x9a9ea2 },
       ],
       personality: { bobMul: 1.0, swayMul: 0.95, cadenceMul: 1.0, ampMul: 1.05 },
@@ -54,7 +54,7 @@ const pack: AvatarPackDef = {
         shoe: 0x141414, eyes: 'dots', emI: 0, limbR: 0.85 },
       accessories: [
         { shape: 'sphere', size: [72, 23, 72], anchor: 'crown', pos: [0, -10, 4], rot: [0.25, 0, 0], color: 0x14100c },
-        { shape: 'cylinder', size: [46, 46, 20], anchor: 'neck', pos: [0, -4, 0], color: 0xefe8da },
+        { shape: 'cylinder', size: [78, 78, 26], anchor: 'neck', pos: [0, -4, 0], color: 0xefe8da },
         { shape: 'box', size: [90, 60, 22], anchor: 'hip', pos: [0, 6, -30], color: 0xd4af37,
           metalness: 0.6, roughness: 0.3 },
       ],
@@ -68,8 +68,8 @@ const pack: AvatarPackDef = {
         shoe: 0x3a2a1a, eyes: 'dots', emI: 0, limbR: 0.95 },
       accessories: [
         { shape: 'sphere', size: [63, 17, 63], anchor: 'crown', pos: [0, -6, 4], rot: [0.3, 0, 0], color: 0x14100c },
-        { shape: 'box', size: [70, 40, 8], anchor: 'neck', pos: [-34, -6, -18], rot: [0, 0, 0.5], color: 0xf2f0e8 },
-        { shape: 'box', size: [70, 40, 8], anchor: 'neck', pos: [34, -6, -18], rot: [0, 0, -0.5], color: 0xf2f0e8 },
+        { shape: 'box', size: [70, 40, 8], anchor: 'neck', pos: [-34, -6, -88], rot: [0, 0, 0.5], color: 0xf2f0e8 },
+        { shape: 'box', size: [70, 40, 8], anchor: 'neck', pos: [34, -6, -88], rot: [0, 0, -0.5], color: 0xf2f0e8 },
         // approx: argyle knit print unsupported (no fabric patterns) — a couple of
         // rotated diamond accent boxes stand in for the pattern.
         { shape: 'box', size: [30, 30, 6], anchor: 'chest', pos: [0, 20, -10], rot: [0, 0, 0.78], color: 0xc9a227 },

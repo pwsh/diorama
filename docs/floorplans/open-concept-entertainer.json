@@ -1,7 +1,7 @@
 {
   "diorama": 2,
   "name": "Open-Concept Entertainer",
-  "exportedAt": "2026-07-17T00:00:00.000Z",
+  "exportedAt": "2026-07-23T00:00:00.000Z",
   "store": {
     "v": 2,
     "floors": [
@@ -279,7 +279,7 @@
         "furniture": [
           {
             "id": "open-concept-entertainer-fn1",
-            "x": 1200,
+            "x": 2600,
             "y": 6100,
             "w": 800,
             "h": 350,
@@ -289,8 +289,8 @@
           },
           {
             "id": "open-concept-entertainer-fn2",
-            "x": 5900,
-            "y": 6100,
+            "x": 5893,
+            "y": 5968,
             "w": 910,
             "h": 760,
             "kind": "fridge",
@@ -310,7 +310,7 @@
           {
             "id": "open-concept-entertainer-fn4",
             "x": 900,
-            "y": 8300,
+            "y": 8198,
             "w": 690,
             "h": 700,
             "kind": "washer",
@@ -318,8 +318,8 @@
           },
           {
             "id": "open-concept-entertainer-fn5",
-            "x": 2100,
-            "y": 8300,
+            "x": 2000,
+            "y": 8198,
             "w": 690,
             "h": 700,
             "kind": "dryer",
@@ -327,7 +327,7 @@
           },
           {
             "id": "open-concept-entertainer-fn6",
-            "x": 1500,
+            "x": 2600,
             "y": 6700,
             "w": 560,
             "h": 470,
@@ -336,32 +336,30 @@
           },
           {
             "id": "open-concept-entertainer-fn7",
-            "x": 3700,
-            "y": 6700,
+            "x": 6000,
+            "y": 6900,
             "w": 800,
             "h": 350,
             "kind": "bookshelf",
-            "rotation": 90,
+            "rotation": 270,
             "label": "Bar stock"
           },
           {
             "id": "open-concept-entertainer-fn8",
-            "x": 5700,
-            "y": 7500,
+            "x": 4700,
+            "y": 6800,
             "w": 1800,
             "h": 600,
             "kind": "counter",
-            "rotation": 90,
             "label": "Prep counter"
           },
           {
             "id": "open-concept-entertainer-fn9",
-            "x": 5700,
-            "y": 6900,
+            "x": 4700,
+            "y": 6800,
             "w": 250,
             "h": 250,
             "kind": "coffee_maker",
-            "rotation": 90,
             "elevation": 900
           },
           {
@@ -375,7 +373,7 @@
           },
           {
             "id": "open-concept-entertainer-fn11",
-            "x": 8900,
+            "x": 9052,
             "y": 1500,
             "w": 400,
             "h": 400,
@@ -383,8 +381,8 @@
           },
           {
             "id": "open-concept-entertainer-fn12",
-            "x": 6700,
-            "y": 3000,
+            "x": 6777,
+            "y": 3452,
             "w": 3200,
             "h": 650,
             "kind": "counter",
@@ -392,8 +390,8 @@
           },
           {
             "id": "open-concept-entertainer-fn13",
-            "x": 6700,
-            "y": 2100,
+            "x": 6832,
+            "y": 2307,
             "w": 910,
             "h": 760,
             "kind": "fridge",
@@ -401,7 +399,7 @@
           },
           {
             "id": "open-concept-entertainer-fn14",
-            "x": 6700,
+            "x": 6782,
             "y": 4300,
             "w": 760,
             "h": 660,
@@ -421,7 +419,7 @@
           {
             "id": "open-concept-entertainer-fn16",
             "x": 8600,
-            "y": 1950,
+            "y": 2162,
             "w": 610,
             "h": 620,
             "kind": "dishwasher"
@@ -440,8 +438,8 @@
             "id": "open-concept-entertainer-fn18",
             "x": 8200,
             "y": 3800,
-            "w": 900,
-            "h": 650,
+            "w": 800,
+            "h": 550,
             "kind": "kitchen_sink"
           },
           {
@@ -484,7 +482,7 @@
             "w": 400,
             "h": 400,
             "kind": "stool",
-            "rotation": 90
+            "rotation": 270
           },
           {
             "id": "open-concept-entertainer-fn24",
@@ -493,7 +491,7 @@
             "w": 400,
             "h": 400,
             "kind": "stool",
-            "rotation": 270
+            "rotation": 90
           },
           {
             "id": "open-concept-entertainer-fn25",
@@ -501,7 +499,8 @@
             "y": 3600,
             "w": 400,
             "h": 400,
-            "kind": "stool"
+            "kind": "stool",
+            "rotation": 180
           },
           {
             "id": "open-concept-entertainer-fn26",
@@ -509,8 +508,7 @@
             "y": 4800,
             "w": 400,
             "h": 400,
-            "kind": "stool",
-            "rotation": 180
+            "kind": "stool"
           },
           {
             "id": "open-concept-entertainer-fn27",
@@ -523,47 +521,47 @@
           {
             "id": "open-concept-entertainer-fn28",
             "x": 13300,
-            "y": 8500,
+            "y": 7300,
             "w": 1300,
             "h": 180,
             "kind": "wall_tv",
-            "rotation": 270,
+            "rotation": 90,
             "localState": "playing"
           },
           {
             "id": "open-concept-entertainer-fn29",
             "x": 13000,
-            "y": 8500,
+            "y": 7300,
             "w": 2400,
             "h": 450,
             "kind": "tv_stand",
-            "rotation": 270,
+            "rotation": 90,
             "label": "Media console",
             "color": "#2b2f3a"
           },
           {
             "id": "open-concept-entertainer-fn30",
             "x": 9600,
-            "y": 8900,
+            "y": 8600,
             "w": 3200,
             "h": 2000,
             "kind": "sofa_u",
-            "rotation": 90,
+            "rotation": 270,
             "label": "Media sectional",
             "color": "#2b2f3a"
           },
           {
             "id": "open-concept-entertainer-fn31",
             "x": 10800,
-            "y": 8900,
+            "y": 8600,
             "w": 1100,
             "h": 600,
             "kind": "coffee_table"
           },
           {
             "id": "open-concept-entertainer-fn32",
-            "x": 9600,
-            "y": 10600,
+            "x": 11200,
+            "y": 8600,
             "w": 700,
             "h": 700,
             "kind": "ottoman"
@@ -581,7 +579,7 @@
           {
             "id": "open-concept-entertainer-fn34",
             "x": 6900,
-            "y": 10800,
+            "y": 10748,
             "w": 400,
             "h": 400,
             "kind": "plant"
@@ -597,7 +595,7 @@
           {
             "id": "open-concept-entertainer-fn36",
             "x": 10000,
-            "y": 9000,
+            "y": 8600,
             "w": 4000,
             "h": 2800,
             "kind": "rug",
@@ -605,10 +603,10 @@
           },
           {
             "id": "open-concept-entertainer-fn37",
-            "x": 14150,
-            "y": 5500,
-            "w": 1100,
-            "h": 600,
+            "x": 13850,
+            "y": 4000,
+            "w": 900,
+            "h": 300,
             "kind": "coffee_table",
             "rotation": 90,
             "label": "Console"
@@ -634,7 +632,7 @@
           {
             "id": "open-concept-entertainer-fn40",
             "x": 20700,
-            "y": 2600,
+            "y": 2548,
             "w": 800,
             "h": 350,
             "kind": "bookshelf",
@@ -643,7 +641,7 @@
           },
           {
             "id": "open-concept-entertainer-fn41",
-            "x": 15400,
+            "x": 15552,
             "y": 1500,
             "w": 700,
             "h": 1600,
@@ -654,7 +652,7 @@
           {
             "id": "open-concept-entertainer-fn42",
             "x": 18200,
-            "y": 6000,
+            "y": 5198,
             "w": 1500,
             "h": 2100,
             "kind": "bed"
@@ -677,17 +675,16 @@
           },
           {
             "id": "open-concept-entertainer-fn45",
-            "x": 15400,
-            "y": 3300,
+            "x": 16500,
+            "y": 3400,
             "w": 1200,
             "h": 500,
-            "kind": "dresser",
-            "rotation": 90
+            "kind": "dresser"
           },
           {
             "id": "open-concept-entertainer-fn46",
             "x": 15400,
-            "y": 4600,
+            "y": 4300,
             "w": 1200,
             "h": 600,
             "kind": "wardrobe",
@@ -706,7 +703,7 @@
           {
             "id": "open-concept-entertainer-fn48",
             "x": 16800,
-            "y": 7700,
+            "y": 7500,
             "w": 760,
             "h": 550,
             "kind": "sink_vanity",
@@ -716,16 +713,16 @@
           {
             "id": "open-concept-entertainer-fn49",
             "x": 19800,
-            "y": 6900,
+            "y": 7473,
             "w": 1700,
             "h": 750,
             "kind": "bathtub",
-            "rotation": 270
+            "rotation": 180
           },
           {
             "id": "open-concept-entertainer-fn50",
-            "x": 18200,
-            "y": 10200,
+            "x": 17898,
+            "y": 10098,
             "w": 1500,
             "h": 2100,
             "kind": "bed"
@@ -748,17 +745,16 @@
           },
           {
             "id": "open-concept-entertainer-fn53",
-            "x": 15400,
-            "y": 8200,
+            "x": 16500,
+            "y": 8400,
             "w": 1200,
             "h": 500,
-            "kind": "dresser",
-            "rotation": 90
+            "kind": "dresser"
           },
           {
             "id": "open-concept-entertainer-fn54",
-            "x": 15400,
-            "y": 10900,
+            "x": 16000,
+            "y": 10548,
             "w": 1200,
             "h": 600,
             "kind": "wardrobe",
@@ -768,7 +764,7 @@
           {
             "id": "open-concept-entertainer-fn55",
             "x": 16150,
-            "y": 15200,
+            "y": 14848,
             "w": 2000,
             "h": 2200,
             "kind": "bed",
@@ -822,8 +818,8 @@
           },
           {
             "id": "open-concept-entertainer-fn61",
-            "x": 18950,
-            "y": 11500,
+            "x": 19132,
+            "y": 11527,
             "w": 760,
             "h": 550,
             "kind": "sink_vanity",
@@ -832,7 +828,7 @@
           },
           {
             "id": "open-concept-entertainer-fn62",
-            "x": 18950,
+            "x": 19102,
             "y": 13500,
             "w": 480,
             "h": 700,
@@ -850,16 +846,16 @@
           },
           {
             "id": "open-concept-entertainer-fn64",
-            "x": 19000,
-            "y": 14000,
+            "x": 19352,
+            "y": 14152,
             "w": 1200,
             "h": 600,
             "kind": "wardrobe"
           },
           {
             "id": "open-concept-entertainer-fn65",
-            "x": 20700,
-            "y": 15600,
+            "x": 20648,
+            "y": 15348,
             "w": 1200,
             "h": 600,
             "kind": "wardrobe",
@@ -917,7 +913,7 @@
           },
           {
             "id": "open-concept-entertainer-fn72",
-            "x": 5900,
+            "x": 6300,
             "y": -600,
             "w": 600,
             "h": 700,
@@ -925,7 +921,7 @@
           },
           {
             "id": "open-concept-entertainer-fn73",
-            "x": 6500,
+            "x": 7000,
             "y": -600,
             "w": 600,
             "h": 700,
@@ -945,7 +941,7 @@
           {
             "id": "open-concept-entertainer-lt2",
             "x": 13000,
-            "y": 8500,
+            "y": 7300,
             "entity_id": null,
             "iconKind": "under_cabinet",
             "rotation": 0,
@@ -1223,6 +1219,15 @@
           },
           {
             "id": "open-concept-entertainer-dr4",
+            "x": 3000,
+            "y": 7300,
+            "w": 800,
+            "rotation": 270,
+            "entity_id": null,
+            "label": "Laundry → Pantry"
+          },
+          {
+            "id": "open-concept-entertainer-dr5",
             "x": 6400,
             "y": 7300,
             "w": 900,
@@ -1231,7 +1236,7 @@
             "label": "Pantry → Kitchen"
           },
           {
-            "id": "open-concept-entertainer-dr5",
+            "id": "open-concept-entertainer-dr6",
             "x": 9250,
             "y": 0,
             "w": 1500,
@@ -1242,7 +1247,7 @@
             "label": "Main Entry"
           },
           {
-            "id": "open-concept-entertainer-dr6",
+            "id": "open-concept-entertainer-dr7",
             "x": 8500,
             "y": 11000,
             "w": 1500,
@@ -1251,7 +1256,7 @@
             "label": "Patio door L"
           },
           {
-            "id": "open-concept-entertainer-dr7",
+            "id": "open-concept-entertainer-dr8",
             "x": 10000,
             "y": 11000,
             "w": 1500,
@@ -1260,7 +1265,7 @@
             "label": "Patio door R"
           },
           {
-            "id": "open-concept-entertainer-dr8",
+            "id": "open-concept-entertainer-dr9",
             "x": 13600,
             "y": 8950,
             "w": 900,
@@ -1269,7 +1274,7 @@
             "label": "Living → Hall"
           },
           {
-            "id": "open-concept-entertainer-dr9",
+            "id": "open-concept-entertainer-dr10",
             "x": 14700,
             "y": 1950,
             "w": 900,
@@ -1278,7 +1283,7 @@
             "label": "Office"
           },
           {
-            "id": "open-concept-entertainer-dr10",
+            "id": "open-concept-entertainer-dr11",
             "x": 14700,
             "y": 5150,
             "w": 900,
@@ -1287,16 +1292,16 @@
             "label": "Bedroom 2"
           },
           {
-            "id": "open-concept-entertainer-dr11",
+            "id": "open-concept-entertainer-dr12",
             "x": 14700,
-            "y": 7550,
+            "y": 7000,
             "w": 900,
             "rotation": 270,
             "entity_id": null,
             "label": "Bath 2"
           },
           {
-            "id": "open-concept-entertainer-dr12",
+            "id": "open-concept-entertainer-dr13",
             "x": 14700,
             "y": 9950,
             "w": 900,
@@ -1305,7 +1310,7 @@
             "label": "Bedroom 3"
           },
           {
-            "id": "open-concept-entertainer-dr13",
+            "id": "open-concept-entertainer-dr14",
             "x": 13750,
             "y": 11200,
             "w": 900,
@@ -1314,7 +1319,7 @@
             "label": "Primary Suite"
           },
           {
-            "id": "open-concept-entertainer-dr14",
+            "id": "open-concept-entertainer-dr15",
             "x": 18700,
             "y": 12400,
             "w": 800,
@@ -1323,7 +1328,7 @@
             "label": "Primary Bath"
           },
           {
-            "id": "open-concept-entertainer-dr15",
+            "id": "open-concept-entertainer-dr16",
             "x": 18700,
             "y": 15300,
             "w": 800,

@@ -50,7 +50,7 @@ const pack: AvatarPackDef = {
     { id: 'star-wars-mandalorian/tatooine-marshal', label: 'Marshal (worn green/tan armor, red pauldron)', rig: 'humanoid',
       humanoid: { skin: 0x8a5a3c, body: 0xc9a86a, legColor: 0x5c6b3f, shoe: 0x3a2a1e, eyes: 'dots', limbR: 1.0 },
       accessories: [
-        { shape: 'box', size: [150, 20, 10], anchor: 'neck', pos: [0, 0, -8], color: 0x8a2020, emissiveIntensity: 0 },
+        { shape: 'box', size: [150, 20, 10], anchor: 'neck', pos: [0, 0, -78], color: 0x8a2020, emissiveIntensity: 0 },
         // single asymmetric red pauldron on the wearer's left only
         { shape: 'box', size: [75, 60, 55], anchor: 'shoulderL', rot: [0, 0, 0.2], color: 0x8a1f1f, emissiveIntensity: 0 },
         { shape: 'box', size: [60, 40, 10], anchor: 'hip', pos: [60, 0, -6], color: 0x7a1f2b, emissiveIntensity: 0 },
@@ -62,7 +62,7 @@ const pack: AvatarPackDef = {
       humanoid: { sk: 1.12, headR: 130, headShape: 'box', skin: 0x1c1c1e, body: 0x1c1c1e, legColor: 0x1c1c1e, shoe: 0x2a2a2c, eyes: 'redvisor', emI: 0.3, steel: true, limbR: 1.3, armL: 1.05, legL: 1.0, footMul: [1.3, 1.2, 1.3] },
       accessories: [
         ...pauldrons(0x1c1c1e, [90, 75, 70]),
-        { shape: 'box', size: [16, 16, 16], anchor: 'neck', pos: [0, 6, -6], color: 0xb0b0b0, emissiveIntensity: 0.1 },
+        { shape: 'box', size: [16, 16, 16], anchor: 'neck', pos: [0, 6, -76], color: 0xb0b0b0, emissiveIntensity: 0.1 },
         { shape: 'box', size: [16, 16, 16], anchor: 'shoulderL', pos: [10, -50, 0], color: 0xb0b0b0, emissiveIntensity: 0.1 },
         { shape: 'box', size: [16, 16, 16], anchor: 'shoulderR', pos: [-10, -50, 0], color: 0xb0b0b0, emissiveIntensity: 0.1 }],
       personality: { bobMul: 0.5, swayMul: 0.3, cadenceMul: 0.55, ampMul: 0.6 },
@@ -119,7 +119,7 @@ const pack: AvatarPackDef = {
       accessories: [
         { shape: 'sphere', size: [124, 40, 124], anchor: 'crown', pos: [0, -4, 4], rot: [0.25, 0, 0], color: 0xb8b8b0, emissiveIntensity: 0 },
         // stiff high collar on the neck anchor
-        { shape: 'box', size: [150, 60, 20], anchor: 'neck', pos: [0, 10, -8], color: 0x0e0e10, emissiveIntensity: 0 },
+        { shape: 'box', size: [150, 60, 20], anchor: 'neck', pos: [0, 10, -78], color: 0x0e0e10, emissiveIntensity: 0 },
         // rank insignia — the pack's one 'tint' accent so sensor color coding survives
         { shape: 'box', size: [40, 14, 6], anchor: 'chest', pos: [-50, 90, -10], color: 'tint', emissiveIntensity: 0 },
         { shape: 'cape', size: [340, 644, 500], anchor: 'back', pos: [0, -180, 12], rot: [0.12, 0, 0], color: 0x101012, animate: { kind: 'sway', speed: 0.6, amp: 0.15 } }],

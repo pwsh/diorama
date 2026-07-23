@@ -114,7 +114,7 @@ const pack: AvatarPackDef = {
         { shape: 'cylinder', size: [107, 107, 60], anchor: 'crown', pos: [0, 0, 0], color: 0xf5f5f2 }, // toque band
         { shape: 'sphere', size: [126, 96, 126], anchor: 'crown', pos: [0, 90, 0], color: 0xf5f5f2 }, // poof
         { shape: 'box', size: [168, 360, 20], anchor: 'chest', pos: [0, -110, -8], color: 0xe8e6e0 }, // apron
-        { shape: 'box', size: [70, 26, 90], anchor: 'neck', pos: [0, -6, -8], color: 'tint' }, // neckerchief
+        { shape: 'box', size: [70, 26, 90], anchor: 'neck', pos: [0, -6, -78], color: 'tint' }, // neckerchief
         { shape: 'cylinder', size: [6, 6, 130], anchor: 'handR', pos: [0, -55, 0], color: 0xd8d8d0 }, // whisk handle
         { shape: 'sphere', size: [24, 36, 24], anchor: 'handR', pos: [0, 5, 0], color: 0xc8c8c8 }, // wire-loop approx
       ],

@@ -1,7 +1,7 @@
 {
   "diorama": 2,
   "name": "Bungalow — Cottage + Yard",
-  "exportedAt": "2026-07-17T00:00:00.000Z",
+  "exportedAt": "2026-07-23T00:00:00.000Z",
   "store": {
     "v": 2,
     "floors": [
@@ -262,7 +262,7 @@
           },
           {
             "id": "bungalow-cottage-yard-fn4",
-            "x": 8500,
+            "x": 8423,
             "y": 6100,
             "w": 1600,
             "h": 450,
@@ -281,7 +281,7 @@
           },
           {
             "id": "bungalow-cottage-yard-fn6",
-            "x": 3150,
+            "x": 3227,
             "y": 3700,
             "w": 800,
             "h": 350,
@@ -299,7 +299,7 @@
           {
             "id": "bungalow-cottage-yard-fn8",
             "x": 8400,
-            "y": 7100,
+            "y": 7048,
             "w": 400,
             "h": 400,
             "kind": "plant"
@@ -318,13 +318,13 @@
             "id": "bungalow-cottage-yard-fn10",
             "x": 12450,
             "y": 4350,
-            "w": 900,
-            "h": 650,
+            "w": 800,
+            "h": 550,
             "kind": "kitchen_sink"
           },
           {
             "id": "bungalow-cottage-yard-fn11",
-            "x": 12450,
+            "x": 12393,
             "y": 4900,
             "w": 610,
             "h": 620,
@@ -332,8 +332,8 @@
           },
           {
             "id": "bungalow-cottage-yard-fn12",
-            "x": 12450,
-            "y": 5350,
+            "x": 12243,
+            "y": 5168,
             "w": 910,
             "h": 760,
             "kind": "fridge"
@@ -359,7 +359,7 @@
           },
           {
             "id": "bungalow-cottage-yard-fn15",
-            "x": 12450,
+            "x": 12248,
             "y": 3700,
             "w": 900,
             "h": 650,
@@ -376,7 +376,7 @@
           },
           {
             "id": "bungalow-cottage-yard-fn17",
-            "x": 10100,
+            "x": 9900,
             "y": 6450,
             "w": 2200,
             "h": 1600,
@@ -386,7 +386,7 @@
           },
           {
             "id": "bungalow-cottage-yard-fn18",
-            "x": 10100,
+            "x": 9900,
             "y": 6450,
             "w": 1500,
             "h": 900,
@@ -394,29 +394,29 @@
           },
           {
             "id": "bungalow-cottage-yard-fn19",
-            "x": 9500,
+            "x": 9100,
             "y": 6450,
             "w": 1200,
             "h": 400,
             "kind": "bench",
-            "rotation": 90
-          },
-          {
-            "id": "bungalow-cottage-yard-fn20",
-            "x": 10700,
-            "y": 6450,
-            "w": 500,
-            "h": 500,
-            "kind": "chair",
             "rotation": 270
           },
           {
-            "id": "bungalow-cottage-yard-fn21",
-            "x": 10100,
-            "y": 5950,
+            "id": "bungalow-cottage-yard-fn20",
+            "x": 9900,
+            "y": 6998,
             "w": 500,
             "h": 500,
             "kind": "chair"
+          },
+          {
+            "id": "bungalow-cottage-yard-fn21",
+            "x": 9900,
+            "y": 5950,
+            "w": 500,
+            "h": 500,
+            "kind": "chair",
+            "rotation": 180
           },
           {
             "id": "bungalow-cottage-yard-fn22",
@@ -430,25 +430,28 @@
           },
           {
             "id": "bungalow-cottage-yard-fn23",
-            "x": 12100,
-            "y": 5900,
+            "x": 11950,
+            "y": 6900,
             "w": 690,
             "h": 700,
-            "kind": "washer"
+            "kind": "washer",
+            "rotation": 180
           },
           {
             "id": "bungalow-cottage-yard-fn24",
-            "x": 12100,
-            "y": 6550,
+            "x": 11950,
+            "y": 6900,
             "w": 690,
             "h": 700,
-            "kind": "dryer"
+            "kind": "dryer",
+            "rotation": 180,
+            "elevation": 990
           },
           {
             "id": "bungalow-cottage-yard-fn25",
-            "x": 11700,
-            "y": 6700,
-            "w": 900,
+            "x": 12500,
+            "y": 6900,
+            "w": 700,
             "h": 400,
             "kind": "bench",
             "rotation": 90
@@ -463,7 +466,7 @@
           },
           {
             "id": "bungalow-cottage-yard-fn27",
-            "x": 3800,
+            "x": 3600,
             "y": 10500,
             "w": 500,
             "h": 400,
@@ -488,7 +491,7 @@
           },
           {
             "id": "bungalow-cottage-yard-fn30",
-            "x": 6300,
+            "x": 6148,
             "y": 8000,
             "w": 800,
             "h": 800,
@@ -499,14 +502,14 @@
           {
             "id": "bungalow-cottage-yard-fn31",
             "x": 3900,
-            "y": 11700,
+            "y": 11900,
             "w": 1200,
             "h": 600,
             "kind": "wardrobe"
           },
           {
             "id": "bungalow-cottage-yard-fn32",
-            "x": 5700,
+            "x": 5500,
             "y": 11700,
             "w": 800,
             "h": 350,
@@ -525,25 +528,25 @@
           },
           {
             "id": "bungalow-cottage-yard-fn34",
-            "x": 8100,
-            "y": 7600,
+            "x": 8300,
+            "y": 9300,
             "w": 480,
             "h": 700,
             "kind": "toilet"
           },
           {
             "id": "bungalow-cottage-yard-fn35",
-            "x": 8000,
-            "y": 9400,
+            "x": 8100,
+            "y": 8600,
             "w": 560,
             "h": 470,
             "kind": "sink",
-            "rotation": 180,
+            "rotation": 270,
             "label": "Vanity"
           },
           {
             "id": "bungalow-cottage-yard-fn36",
-            "x": 9500,
+            "x": 9468,
             "y": 8500,
             "w": 1520,
             "h": 760,
@@ -562,8 +565,8 @@
           },
           {
             "id": "bungalow-cottage-yard-fn38",
-            "x": 9700,
-            "y": 10000,
+            "x": 9673,
+            "y": 11400,
             "w": 800,
             "h": 350,
             "kind": "bookshelf",
@@ -571,8 +574,8 @@
           },
           {
             "id": "bungalow-cottage-yard-fn39",
-            "x": 9700,
-            "y": 12200,
+            "x": 9673,
+            "y": 12048,
             "w": 800,
             "h": 350,
             "kind": "bookshelf",
@@ -580,7 +583,7 @@
           },
           {
             "id": "bungalow-cottage-yard-fn40",
-            "x": 7950,
+            "x": 8052,
             "y": 11200,
             "w": 900,
             "h": 400,
@@ -597,16 +600,16 @@
           },
           {
             "id": "bungalow-cottage-yard-fn42",
-            "x": 10100,
-            "y": 9500,
+            "x": 10400,
+            "y": 9200,
             "w": 500,
             "h": 400,
             "kind": "nightstand"
           },
           {
             "id": "bungalow-cottage-yard-fn43",
-            "x": 10150,
-            "y": 7600,
+            "x": 10700,
+            "y": 7702,
             "w": 1400,
             "h": 700,
             "kind": "desk",
@@ -614,7 +617,7 @@
           },
           {
             "id": "bungalow-cottage-yard-fn44",
-            "x": 12500,
+            "x": 12448,
             "y": 8200,
             "w": 1200,
             "h": 500,
@@ -624,7 +627,7 @@
           {
             "id": "bungalow-cottage-yard-fn45",
             "x": 10650,
-            "y": 11700,
+            "y": 11900,
             "w": 1200,
             "h": 600,
             "kind": "wardrobe"
@@ -640,8 +643,8 @@
           },
           {
             "id": "bungalow-cottage-yard-fn47",
-            "x": 7200,
-            "y": 11700,
+            "x": 6850,
+            "y": 10200,
             "w": 900,
             "h": 400,
             "kind": "bench",
@@ -674,7 +677,7 @@
           {
             "id": "bungalow-cottage-yard-fn51",
             "x": 6950,
-            "y": 2700,
+            "y": 2598,
             "w": 700,
             "h": 700,
             "kind": "bush"
@@ -682,7 +685,7 @@
           {
             "id": "bungalow-cottage-yard-fn52",
             "x": 8300,
-            "y": 2700,
+            "y": 2598,
             "w": 700,
             "h": 700,
             "kind": "bush"
@@ -698,7 +701,7 @@
           {
             "id": "bungalow-cottage-yard-fn54",
             "x": 4200,
-            "y": 2700,
+            "y": 2598,
             "w": 700,
             "h": 700,
             "kind": "bush"
@@ -897,8 +900,8 @@
           {
             "id": "bungalow-cottage-yard-dr2",
             "x": 12750,
-            "y": 6050,
-            "w": 900,
+            "y": 6500,
+            "w": 800,
             "rotation": 90,
             "entity_id": null,
             "label": "Back door"
@@ -906,7 +909,7 @@
           {
             "id": "bungalow-cottage-yard-dr3",
             "x": 11500,
-            "y": 6200,
+            "y": 6500,
             "w": 800,
             "rotation": 90,
             "entity_id": null,
@@ -932,7 +935,7 @@
           },
           {
             "id": "bungalow-cottage-yard-dr6",
-            "x": 4400,
+            "x": 3900,
             "y": 10900,
             "w": 800,
             "rotation": 0,
@@ -942,7 +945,7 @@
           {
             "id": "bungalow-cottage-yard-dr7",
             "x": 7800,
-            "y": 8000,
+            "y": 8200,
             "w": 800,
             "rotation": 90,
             "entity_id": null,
@@ -959,7 +962,7 @@
           },
           {
             "id": "bungalow-cottage-yard-dr9",
-            "x": 10600,
+            "x": 10400,
             "y": 10900,
             "w": 800,
             "rotation": 0,
@@ -968,7 +971,7 @@
           },
           {
             "id": "bungalow-cottage-yard-dr10",
-            "x": 12100,
+            "x": 11800,
             "y": 10900,
             "w": 800,
             "rotation": 0,

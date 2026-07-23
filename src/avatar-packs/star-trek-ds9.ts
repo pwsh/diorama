@@ -30,7 +30,7 @@ const pack: AvatarPackDef = {
     { id: 'star-trek-ds9/captain-command', label: 'Captain (command red)', rig: 'humanoid',
       humanoid: { skin: 0x6e4a30, body: SUIT },
       accessories: [...collar(CMD),
-        { shape: 'box', size: [120, 16, 12], anchor: 'neck', pos: [0, 0, -8], color: 0x8a8a8f, emissiveIntensity: 0 },
+        { shape: 'box', size: [120, 16, 12], anchor: 'neck', pos: [0, 0, -78], color: 0x8a8a8f, emissiveIntensity: 0 },
         { shape: 'box', size: [40, 25, 15], anchor: 'face', pos: [0, -34, -8], color: 0x1a1a1a, emissiveIntensity: 0 }],
       personality: { bobMul: 1.0, swayMul: 0.9, cadenceMul: 1.0, ampMul: 1.0 },
       bubbles: ['☕', '⚾', '🖖', '📖'] },
@@ -50,7 +50,7 @@ const pack: AvatarPackDef = {
     { id: 'star-trek-ds9/constable-shapeshifter', label: 'Security chief (shapeshifter constable)', rig: 'humanoid',
       humanoid: { headR: 124, skin: 0xc9915a, body: 0x6b4f30, legColor: 0x8a6a45, shoe: 0x3a2a18, emI: 0.05, limbR: 0.95, armL: 0.95, legL: 0.95, earSkip: true },
       accessories: [
-        { shape: 'box', size: [150, 30, 20], anchor: 'neck', pos: [0, 0, -6], color: 0x9c8a5e, emissiveIntensity: 0 },
+        { shape: 'box', size: [150, 30, 20], anchor: 'neck', pos: [0, 0, -76], color: 0x9c8a5e, emissiveIntensity: 0 },
         // sculpted one-piece "molded" hair dome — no side gaps, no strand detail
         { shape: 'sphere', size: [130, 82, 132], anchor: 'crown', pos: [0, -4, 0], rot: [0.15, 0, 0], color: 0x8a6a45, emissiveIntensity: 0 }],
       personality: { bobMul: 0.7, swayMul: 0.5, cadenceMul: 0.85, ampMul: 0.8 },

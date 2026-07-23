@@ -37,7 +37,7 @@ const pack: AvatarPackDef = {
         { shape: 'cone', size: [8, 40], anchor: 'crown', pos: [-40, -6, 10], rot: [0, 0, -0.4], color: 0xd9c07a }, // straw
         { shape: 'cone', size: [8, 40], anchor: 'crown', pos: [0, -10, 20], rot: [0.2, 0, 0], color: 0xd9c07a }, // straw
         { shape: 'cone', size: [8, 40], anchor: 'crown', pos: [40, -6, 10], rot: [0, 0, 0.4], color: 0xd9c07a }, // straw
-        { shape: 'cylinder', size: [6, 4, 60], anchor: 'neck', pos: [0, 10, -10], rot: [1.2, 0, 0], color: 0xe0c878 }, // collar straw
+        { shape: 'cylinder', size: [6, 4, 60], anchor: 'neck', pos: [0, 10, -80], rot: [1.2, 0, 0], color: 0xe0c878 }, // collar straw
         { shape: 'cone', size: [10, 40], anchor: 'handL', pos: [0, -20, 0], color: 0xe0c878 }, // cuff straw
         { shape: 'cone', size: [10, 40], anchor: 'handR', pos: [0, -20, 0], color: 0xe0c878 }, // cuff straw
         { shape: 'box', size: [70, 70, 6], anchor: 'chest', pos: [0, 10, -10], color: 'tint' }, // patchwork patch (tint)
@@ -52,7 +52,7 @@ const pack: AvatarPackDef = {
         hands: 'box', steel: true, armL: 1.0, legL: 1.0, legColor: 0xa8b0b6 },
       accessories: [
         { shape: 'cone', size: [70, 190], anchor: 'crown', pos: [0, 80, 0], rot: [0.3, 0, 0], color: 0xc0c6ca }, // funnel hat
-        { shape: 'cylinder', size: [70, 70, 14], anchor: 'neck', pos: [0, 0, 0], color: 'tint' }, // collar ring (tint)
+        { shape: 'cylinder', size: [78, 78, 16], anchor: 'neck', pos: [0, 0, 0], color: 'tint' }, // collar ring (tint)
         { shape: 'cylinder', size: [26, 26, 8], anchor: 'chest', pos: [0, 10, -12], color: 0xc0392b }, // heart medallion
         { shape: 'cylinder', size: [9, 9, 220], anchor: 'handR', pos: [0, -100, 0], color: 0x5c3c22 }, // axe handle
         { shape: 'box', size: [80, 60, 14], anchor: 'handR', pos: [0, 20, 0], color: 0xd8dce0 }, // axe blade
@@ -72,7 +72,7 @@ const pack: AvatarPackDef = {
         { shape: 'cone', size: [16, 35], anchor: 'crown', pos: [-70, 20, 0], rot: [0, 0, -0.7], color: 0x8a6430 }, // mane spike
         { shape: 'cone', size: [16, 35], anchor: 'crown', pos: [0, 70, -10], rot: [-0.4, 0, 0], color: 0x8a6430 }, // mane spike
         { shape: 'cone', size: [16, 35], anchor: 'crown', pos: [70, 20, 0], rot: [0, 0, 0.7], color: 0x8a6430 }, // mane spike
-        { shape: 'box', size: [40, 30, 10], anchor: 'neck', pos: [0, 0, -10], color: 0xc0392b }, // red bow
+        { shape: 'box', size: [40, 30, 10], anchor: 'neck', pos: [0, 0, -80], color: 0xc0392b }, // red bow
         { shape: 'cone', size: [14, 120], anchor: 'tailbone', pos: [0, -40, -40], rot: [0.9, 0, 0], color: 0xc9974f }, // tail
         { shape: 'sphere', size: 26, anchor: 'tailbone', pos: [0, -150, -120], color: 'tint' }, // tail tuft (tint)
         { shape: 'cone', size: [14, 30], anchor: 'head', pos: [-70, 60, 0], rot: [0, 0, -0.4], color: 0x8a6430 }, // ear
@@ -133,7 +133,7 @@ const pack: AvatarPackDef = {
         armL: 1.0, legL: 0.95, legColor: 0x3a332c },
       accessories: [
         { shape: 'cylinder', size: [95, 95, 150], anchor: 'crown', pos: [0, 90, 0], rot: [0.2, 0, 0], color: 0x1c1a18 }, // top hat
-        { shape: 'box', size: [40, 30, 14], anchor: 'neck', pos: [0, 0, -10], color: 'tint' }, // cravat (tint)
+        { shape: 'box', size: [40, 30, 14], anchor: 'neck', pos: [0, 0, -80], color: 'tint' }, // cravat (tint)
         { shape: 'box', size: [90, 120, 10], anchor: 'chest', pos: [0, -10, -10], color: 0x8a7a5c }, // waistcoat peek
         { shape: 'cylinder', size: [4, 4, 60], anchor: 'chest', pos: [20, -30, -12], rot: [0, 0, 0.4], color: 0xc9a227 }, // watch chain
         { shape: 'box', size: [160, 200, 16], anchor: 'back', pos: [0, -90, 6], color: 0x241e1a }, // coat tails

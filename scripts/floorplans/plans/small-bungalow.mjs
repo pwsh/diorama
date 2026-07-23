@@ -82,15 +82,15 @@ export function bungalowGeometry(b, { dx = 0, dy = 0 } = {}) {
 
   const doors = [
     doorO(2450, 0, 0, { w: 900, label: 'Front door', lockEntity: null, doorbellEntity: null }), // south exterior
-    doorO(9750, 3050, 90, { w: 900, label: 'Back door' }),   // east exterior (mudroom)
-    doorO(8500, 3200, 90, { w: 800, label: 'Mudroom' }),     // P3
+    doorO(9750, 3500, 90, { w: 800, label: 'Back door' }),   // east exterior (mudroom)
+    doorO(8500, 3500, 90, { w: 800, label: 'Mudroom' }),     // P3
     doorO(3600, 6600, 90, { w: 800, label: 'Primary Bedroom' }), // P5
     doorO(3600, 8700, 90, { w: 800, label: 'Linen Closet' }),    // P5
-    doorO(1400, 7900, 0, { w: 800, label: 'Primary Closet' }),   // P9
-    doorO(4800, 5000, 90, { w: 800, label: 'Bathroom' }),        // P6
+    doorO(900, 7900, 0, { w: 800, label: 'Primary Closet' }),    // P9
+    doorO(4800, 5200, 90, { w: 800, label: 'Bathroom' }),        // P6
     doorO(6900, 7300, 90, { w: 800, label: 'Bedroom 2' }),       // P7
-    doorO(7600, 7900, 0, { w: 800, label: 'BR2 Closet' }),       // P11
-    doorO(9100, 7900, 0, { w: 800, label: 'Storage Closet' }),   // P11
+    doorO(7400, 7900, 0, { w: 800, label: 'BR2 Closet' }),       // P11
+    doorO(8800, 7900, 0, { w: 800, label: 'Storage Closet' }),   // P11
   ];
 
   const windows = [
@@ -130,47 +130,47 @@ export function bungalowGeometry(b, { dx = 0, dy = 0 } = {}) {
     fu('counter', 9450, 700, { rotation: 0, w: 900, h: 650 }),
     fu('cabinet', 7800, 300, { rotation: 180 }),
     // Dining Nook
-    fu('rug', 7100, 3450, { rotation: 0, w: 2200, h: 1600, color: NOOK_SAGE, label: 'Nook rug' }),
-    fu('table', 7100, 3450, { rotation: 0 }),
-    fu('bench', 6500, 3450, { rotation: 90, w: 1200, h: 400 }),
-    fu('chair', 7700, 3450, { rotation: 270 }),
-    fu('chair', 7100, 2950, { rotation: 0 }),
+    fu('rug', 6900, 3450, { rotation: 0, w: 2200, h: 1600, color: NOOK_SAGE, label: 'Nook rug' }),
+    fu('table', 6900, 3450, { rotation: 0 }),
+    fu('bench', 6100, 3450, { rotation: 90, w: 1200, h: 400 }),
+    fu('chair', 6900, 4050, { rotation: 180 }),
+    fu('chair', 6900, 2950, { rotation: 0 }),
     // Mudroom / Laundry
     fu('rug', 9125, 3450, { rotation: 0, w: 1050, h: 1500, color: MUD_TILE, label: 'Mudroom floor' }),
-    fu('washer', 9100, 2900, { rotation: 0 }),
-    fu('dryer', 9100, 3550, { rotation: 0 }),
-    fu('bench', 8700, 3700, { rotation: 90, w: 900, h: 400 }),
+    fu('washer', 8950, 3900, { rotation: 180 }),
+    fu('dryer', 8950, 3900, { rotation: 180, elevation: 990 }),
+    fu('bench', 9500, 3900, { rotation: 90, w: 700, h: 400 }),
     // Primary Bedroom
     fu('bed', 1800, 6700, { rotation: 0, w: 2000, h: 1500 }),
-    fu('nightstand', 800, 7500, { rotation: 0 }),
+    fu('nightstand', 600, 7500, { rotation: 0 }),
     fu('nightstand', 2800, 7500, { rotation: 0 }),
     fu('dresser', 300, 5300, { rotation: 90 }),
     fu('chair', 3300, 5000, { rotation: 180, w: 800, h: 800, label: 'Reading chair' }),
     // Primary Closet
-    fu('wardrobe', 900, 8700, { rotation: 0 }),
+    fu('wardrobe', 900, 8900, { rotation: 0 }),
     // Linen Closet
-    fu('bookshelf', 2700, 8700, { rotation: 0, label: 'Linen shelving' }),
+    fu('bookshelf', 2500, 8700, { rotation: 0, label: 'Linen shelving' }),
     // Bathroom (tile-look rug first)
     fu('rug', 5850, 5500, { rotation: 0, w: 1900, h: 2200, color: BATH_TILE, label: 'Bath floor' }),
-    fu('toilet', 5100, 4600, { rotation: 0 }),
-    fu('sink', 5000, 6400, { rotation: 180, label: 'Vanity' }),
+    fu('toilet', 5300, 6300, { rotation: 0 }),
+    fu('sink', 5100, 5600, { rotation: 270, label: 'Vanity' }),
     fu('bathtub', 6500, 5500, { rotation: 90 }),
     // Utility / Storage (concrete-look rug first)
     fu('rug', 5850, 8100, { rotation: 0, w: 1900, h: 2600, color: UTIL_FLOOR, label: 'Utility floor' }),
-    fu('bookshelf', 6700, 7000, { rotation: 90 }),
+    fu('bookshelf', 6700, 8400, { rotation: 90 }),
     fu('bookshelf', 6700, 9200, { rotation: 90 }),
     fu('cabinet', 4950, 8200, { rotation: 270 }),
     // Bedroom 2
     fu('bed', 8325, 6900, { rotation: 0, w: 1400, h: 1900 }),
-    fu('nightstand', 7100, 6500, { rotation: 0 }),
-    fu('desk', 7150, 4600, { rotation: 180 }),
+    fu('nightstand', 7400, 6200, { rotation: 0 }),
+    fu('desk', 7700, 4600, { rotation: 180 }),
     fu('dresser', 9500, 5200, { rotation: 270 }),
     // Bedroom 2 Closet
-    fu('wardrobe', 7650, 8700, { rotation: 0 }),
+    fu('wardrobe', 7650, 8900, { rotation: 0 }),
     // Storage Closet
     fu('bookshelf', 9075, 8700, { rotation: 0, label: 'Storage shelving' }),
     // Hallway
-    fu('bench', 4200, 8700, { rotation: 90, w: 900, h: 400 }),
+    fu('bench', 3850, 7200, { rotation: 90, w: 900, h: 400 }),
   ];
 
   const lights = [

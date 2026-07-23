@@ -67,12 +67,12 @@ export function build() {
     door(4650, 7500, 270, { w: 1200, label: 'Family ↔ Hall' }),     // cased opening
     door(7350, 7000, 270, { w: 1200, label: 'Kitchen ↔ Hall' }),    // cased opening
     door(7350, 4700, 270, { w: 700, label: 'Half Bath' }),
-    door(9000, 5700, 0, { w: 800, label: 'Mudroom' }),
+    door(11000, 5700, 0, { w: 800, label: 'Mudroom' }),
     door(12200, 4700, 270, { w: 900, label: 'Garage service', lockEntity: null }),
     door(12200, 7000, 270, { w: 900, label: 'Side entrance' }),
     door(12700, 0, 0, { w: 2400, kind: 'garage', label: 'Garage bay 1' }),
     door(15400, 0, 0, { w: 2400, kind: 'garage', label: 'Garage bay 2' }),
-    door(17500, 6100, 0, { w: 900, label: 'Garage man-door' }),
+    door(17300, 6100, 0, { w: 900, label: 'Garage man-door' }),
   ];
 
   const windows1 = [
@@ -101,7 +101,7 @@ export function build() {
     furn('rug', 2300, 1900, { rotation: 0, w: 2600, h: 1700 }),
     furn('plant', 300, 3900, { rotation: 0 }),
     // Foyer
-    furn('bench', 4850, 700, { rotation: 90 }),
+    furn('bench', 4900, 1950, { rotation: 90, w: 800, h: 400 }),
     furn('rug', 6000, 1200, { rotation: 0, w: 1200, h: 2000 }),
     furn('plant', 7150, 2200, { rotation: 0 }),
     // Stair Hall — the flight (first half of the linked stair pair)
@@ -118,16 +118,16 @@ export function build() {
     furn('chair', 8950, 2650, { rotation: 180 }),
     furn('chair', 9775, 2650, { rotation: 180 }),
     furn('chair', 10600, 2650, { rotation: 180 }),
-    furn('cabinet', 7550, 1200, { rotation: 90, label: 'China cabinet' }),
+    furn('cabinet', 11900, 1500, { rotation: 270, label: 'China cabinet' }),
     furn('rug', 9775, 2150, { rotation: 0, w: 2700, h: 1900 }),
     furn('plant', 11950, 3950, { rotation: 0 }),
     // Half Bath
-    furn('toilet', 7550, 4500, { rotation: 90 }),
+    furn('toilet', 8400, 4700, { rotation: 90 }),
     furn('sink', 8650, 5500, { rotation: 180, label: 'Vanity' }),
     // Mudroom / Laundry
-    furn('washer', 11700, 4500, { rotation: 0 }),
-    furn('dryer', 12050, 4500, { rotation: 0 }),
-    furn('bench', 9300, 4500, { rotation: 0 }),
+    furn('washer', 10300, 4600, { rotation: 0 }),
+    furn('dryer', 11100, 4600, { rotation: 0 }),
+    furn('bench', 9200, 4600, { rotation: 0, w: 900, h: 400 }),
     furn('cabinet', 9300, 5500, { rotation: 180 }),
     // Family Room
     furn('sofa_u', 1400, 5600, { rotation: 0, label: 'Sectional' }),
@@ -139,29 +139,29 @@ export function build() {
     furn('rug', 2200, 6600, { rotation: 0, w: 3000, h: 2400 }),
     furn('plant', 4400, 8900, { rotation: 0 }),
     // Kitchen (west zone of the open room)
-    furn('counter', 7550, 6900, { rotation: 90, w: 600, h: 2000 }),
-    furn('counter', 8700, 5900, { rotation: 0, w: 2200, h: 650 }),
-    furn('stove', 8900, 5900, { rotation: 0 }),
-    furn('microwave', 8400, 6000, { rotation: 0, elevation: 1400 }),
-    furn('dishwasher', 9300, 5900, { rotation: 0 }),
+    furn('counter', 7650, 6350, { rotation: 90, w: 1000, h: 600 }),
+    furn('counter', 8700, 6150, { rotation: 0, w: 2200, h: 650 }),
+    furn('stove', 8900, 6150, { rotation: 0 }),
+    furn('microwave', 8400, 6250, { rotation: 0, elevation: 1400 }),
+    furn('dishwasher', 9300, 6150, { rotation: 0 }),
     furn('kitchen_sink', 8600, 9700, { rotation: 180 }),
     furn('island', 9000, 7800, { rotation: 0 }),
     furn('fridge', 7550, 9300, { rotation: 90 }),
-    furn('cabinet', 7550, 8200, { rotation: 90 }),
+    furn('cabinet', 9800, 5950, { rotation: 0 }),
     // Breakfast Nook (east zone of the open room)
-    furn('table', 11100, 8000, { rotation: 0, w: 900, h: 900, label: 'Breakfast' }),
-    furn('chair', 10600, 7600, { rotation: 90 }),
-    furn('chair', 11600, 7600, { rotation: 90 }),
-    furn('chair', 10600, 8400, { rotation: 270 }),
-    furn('chair', 11600, 8400, { rotation: 270 }),
-    furn('plant', 11900, 6200, { rotation: 0 }),
+    furn('table', 11000, 9000, { rotation: 0, w: 900, h: 900, label: 'Breakfast' }),
+    furn('chair', 10400, 9000, { rotation: 270 }),
+    furn('chair', 11600, 9000, { rotation: 90 }),
+    furn('chair', 11000, 8400, { rotation: 180 }),
+    furn('chair', 11000, 9600, { rotation: 0 }),
+    furn('plant', 12000, 6700, { rotation: 0 }),
     // Garage
-    furn('cabinet', 17900, 900, { rotation: 270 }),
+    furn('cabinet', 17900, 1600, { rotation: 270 }),
     furn('desk', 12400, 3000, { rotation: 90, label: 'Workbench' }),
-    furn('bookshelf', 17900, 5300, { rotation: 270, label: 'Shelving' }),
+    furn('bookshelf', 17900, 4600, { rotation: 270, label: 'Shelving' }),
     // Side-yard dressing (unbuilt notch beside the garage — bare ground)
-    furn('trash_bin', 13000, 7000, { rotation: 0 }),
-    furn('recycle_bin', 13700, 7000, { rotation: 0 }),
+    furn('trash_bin', 13400, 7000, { rotation: 0 }),
+    furn('recycle_bin', 14100, 7000, { rotation: 0 }),
     furn('tree', 15500, 8500, { rotation: 0 }),
   ];
 
@@ -236,8 +236,9 @@ export function build() {
     door(1000, 5700, 0, { w: 700, label: 'Primary Bath' }),
     door(3200, 5700, 0, { w: 700, label: 'Primary WIC' }),
     door(7350, 4700, 270, { w: 700, label: 'Hall Bath' }),
-    door(9950, 4700, 270, { w: 700, label: 'Linen' }),
+    door(11500, 5700, 0, { w: 700, label: 'Linen' }),
     door(5500, 2400, 0, { w: 1000, label: 'Landing ↔ Stair' }),   // cased opening
+    door(5500, 6600, 0, { w: 1000, label: 'Stair ↔ Hallway' }),   // guard-rail opening
   ];
 
   const windows2 = [
@@ -265,7 +266,7 @@ export function build() {
     // Landing / Reading Nook — the linked stair pair's upper landing
     furn('stair_landing', 6000, 3000, { rotation: 0, stairLinkId: STAIR, label: 'Stair landing' }),
     furn('chair', 5200, 700, { rotation: 90, label: 'Reading chair' }),
-    furn('bookshelf', 4850, 1800, { rotation: 90 }),
+    furn('bookshelf', 6900, 300, { rotation: 180 }),
     furn('rug', 6000, 1200, { rotation: 0, w: 1200, h: 2000 }),
     // Upstairs Hallway
     furn('bookshelf', 4850, 9600, { rotation: 0 }),
@@ -277,20 +278,20 @@ export function build() {
     furn('desk', 7750, 700, { rotation: 0 }),
     furn('rug', 8750, 3000, { rotation: 0, w: 1600, h: 1300, color: carpet }),
     // Hall Bath
-    furn('toilet', 7550, 4500, { rotation: 90 }),
-    furn('sink', 9600, 5500, { rotation: 180, label: 'Vanity' }),
-    furn('bathtub', 8600, 5500, { rotation: 180, w: 1700, h: 750 }),
+    furn('toilet', 9200, 5350, { rotation: 180 }),
+    furn('sink', 8400, 5350, { rotation: 180, label: 'Vanity' }),
+    furn('bathtub', 8800, 4650, { rotation: 0, w: 1600, h: 600 }),
     // Linen / Storage
-    furn('cabinet', 11100, 5000, { rotation: 0, label: 'Linen' }),
+    furn('cabinet', 10600, 5000, { rotation: 0, label: 'Linen' }),
     // Primary Bathroom
-    furn('toilet', 400, 4500, { rotation: 90 }),
-    furn('sink', 300, 5300, { rotation: 90, label: 'Vanity' }),
-    furn('bathtub', 1900, 4500, { rotation: 0, w: 1600, h: 750 }),
-    furn('shower', 2300, 5400, { rotation: 270, w: 800, h: 800 }),
+    furn('toilet', 400, 4700, { rotation: 90 }),
+    furn('sink', 400, 5350, { rotation: 90, label: 'Vanity' }),
+    furn('bathtub', 1750, 4700, { rotation: 0, w: 1600, h: 700 }),
+    furn('shower', 2200, 5300, { rotation: 270, w: 800, h: 800 }),
     // Primary Walk-in Closet
-    furn('wardrobe', 2850, 5000, { rotation: 90 }),
-    furn('wardrobe', 4450, 5000, { rotation: 270 }),
-    furn('dresser', 3650, 4450, { rotation: 0 }),
+    furn('wardrobe', 3300, 4700, { rotation: 0, w: 1200, h: 600 }),
+    furn('wardrobe', 4300, 5100, { rotation: 90, w: 1000, h: 600 }),
+    furn('dresser', 4300, 7200, { rotation: 270 }),
     // Primary Bedroom
     furn('bed', 2325, 8700, { rotation: 0, w: 1900, h: 2100 }),
     furn('nightstand', 1000, 8700, { rotation: 0 }),
@@ -301,9 +302,9 @@ export function build() {
     furn('rug', 2325, 7800, { rotation: 0, w: 2700, h: 2100, color: '#d7dee2' }),
     // Bedroom 4
     furn('bed', 8700, 8700, { rotation: 0, w: 1500, h: 2000 }),
-    furn('nightstand', 7700, 8700, { rotation: 0 }),
+    furn('nightstand', 7700, 9500, { rotation: 0 }),
     furn('nightstand', 9700, 8700, { rotation: 0 }),
-    furn('dresser', 11700, 6300, { rotation: 90 }),
+    furn('dresser', 10000, 6300, { rotation: 90 }),
     furn('desk', 7700, 6300, { rotation: 90 }),
     furn('rug', 8700, 8000, { rotation: 0, w: 1800, h: 1400, color: carpet }),
   ];

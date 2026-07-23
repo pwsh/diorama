@@ -143,6 +143,15 @@ primitives and prerequisites. Building these ONCE unlocks several features:
   recess + bed-cover ripple); heater/pump/light branch on integration.
 - [plant-health-sensors.md](plant-health-sensors.md) — thirsty droop/wilt +
   recovery on plant kinds, driven by a bound moisture sensor (FYTA/Mi Flora).
+- [neighborhood-openfreemap.md](neighborhood-openfreemap.md) — surrounding
+  neighborhood from OpenFreeMap/OSM vector tiles: **rejects MapLibre** (a
+  second WebGL renderer + styling engine fighting the toon look) in favour
+  of a hand-rolled zero-dep MVT decoder (the `mqtt-ws.ts` precedent) →
+  `ExtrudeGeometry` + `_mat()` buildings + `bufferPolyline()` road ribbons,
+  positioned by the existing landmark `latLonToPlan` fit. Honest on the big
+  caveat: **~93 % of OSM buildings carry no height tag**, so `verticalScale`
+  + `defaultLevelHeightM` are first-class controls, not survey data. Phases
+  N1–N5. Roadmap item **P5**.
 - [moon-uv-vehicle.md](moon-uv-vehicle.md) — moon-phase night-sky prop + UV
   parasol/chip (`WeatherNow.uvIndex` exists) + garage-bay car silhouette.
 - [sirens-beacons.md](sirens-beacons.md) — `siren` domain wall beacon;

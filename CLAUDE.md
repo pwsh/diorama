@@ -49,6 +49,22 @@ in `docs/floorplans/*.json` (committed; export-envelope format) are GENERATED �
 edit the builder modules in `scripts/floorplans/plans/*.mjs` and re-run
 `npm run floorplans:build` (validates against the real `geometry.ts`: closed
 loops, room anchors, opening snap distance, kinds, stair-link pairs).
+**Physical-plausibility checks (2026-07-20, `scripts/floorplans/physical.mjs`
++ validate.mjs checks 9–12)**: doorway clearance (no nav-blocking piece in a
+door's span × 2·`DOOR_CLEAR` 600 mm OBB — same block/exempt rules as
+`_buildNav`), furniture-vs-solid-wall overlap (openings excised via the real
+`wallCutsForSegment`; elevated/mountable/wall-plane/stairs exempt), **nav
+reachability** (a faithful `_buildNav` replica — 150 mm grid, `PERSON_R` 170
+inflation, wall capsules, 8-neighbour fill — asserting every room resolves to
+ONE region per floor, tiny closets under `MIN_STANDING_CELLS` exempt), and
+seat alignment (a table-captured chair must aim its −Z front at the tabletop's
+NEAREST point within 35°, not overlap it). `lib.mjs`'s `floor()` also runs a
+deterministic **settle pass** (`settle:false` opts out) mirroring the app's
+on-drop behavior: chairs rotate to face their host edge + tuck, wall-colliding
+pieces nudge out along the normal. That pass fixed ~150 wall-sunk pieces and
+~50 backwards chairs — **the plans had been authored "+Y = front" while the
+renderer's SitSpot normal, 2D chevron and humanoid facing are all local −Z**.
+Build output is byte-deterministic (re-run + diff).
 
 ## Layout
 
@@ -1272,7 +1288,35 @@ Gate: `Store.avatarProps` (absent = ON, in `_loadFromHa`; Settings ▸ Display
 "Avatars use props") → `ActivityContext.props`. Pose overrides compose via the
 fidget-envelope idiom (`PropPoseDelta` incl. yaw); `_advanceAnimPrims`/
 `_advanceTwoHandProps` take array params now (prop prims ride the same
-machinery). Test `props-test.html` (63/63).
+machinery).
+
+**Hand-frame conventions (2026-07-20 fix — load-bearing).** The rig has NO
+WRIST: a hand group's world orientation is exactly `Rx(shoulder + elbow)`, so
+a prim authored "hanging below the hand" (`[0,−h,0]`) actually points wherever
+the FOREARM points. That silently inverted most props (watering can upside
+down, umbrella canopy BELOW the raised hand, plate/bucket inverted, book facing
+away, vacuum floating at chest height). Two mechanisms fix it:
+- **`PropDef.handPitch?`** — the pose's nominal `shoulder + elbow`.
+  `_startPropSession` counter-rotates every prim by `−handPitch`, so prop prims
+  are authored in an UPRIGHT frame (+Y = world up, −Z = rig front) and the
+  residual (pose pitch − handPitch) becomes the natural pour / sip / bite tilt.
+  Animate-base transforms are re-captured AFTER that rotation. Two-handed props
+  deliberately opt out.
+- **Handle convention** (`_attachToHandle`, build-time only): the `twoHanded`
+  prim IS the prop's handle and **must be authored FIRST**; every later prim on
+  the SAME hand anchor is re-parented onto it transform-preservingly
+  (`p' = qH⁻¹(p−pH)`, `q' = qH⁻¹q`) so attachments ride the per-frame re-aim
+  rigidly. Before this the broom's brush / shovel's blade stayed pinned to the
+  HAND while the shaft re-aimed — they detached by ~800 mm.
+  `_advanceTwoHandProps` itself is unchanged (still zero-alloc).
+Broom sweep is arm-driven (upper hand tucked at the chest, lower hand pushing
+out front, brush ON the floor ahead-left, ~220 mm stroke); the torso only
+contributes `yaw ±0.12`/`rollZ ±0.05` (the old ±0.3 yaw spun the whole avatar).
+11 of 13 props were corrected in the same pass (window_squeegee + fetch_toy were
+already right). Test `props-test.html` (`PROPS PASS 96/96` — section 15b drives
+real `poseHold` curves and measures WORLD geometry: head constant in the handle
+frame across poses, brush at floor level, canopy above the head, eating props
+reaching mouth height, plate level, book facing the reader).
 
 ### Rooms
 `Floor.rooms: Room[]` (`{id, name, anchor}`, persisted via `repairFloor`/`defaultFloor` backfill of `[]`). The anchor is a world-mm point; `resolveRoomForPoint(rooms, loops, x, y)` (geometry.ts) maps it to whichever **live closed wall loop** (`closedWallLoops`) contains it, so room identity survives wall edits. `resolveRoomForPointFuzzy(rooms, loops, x, y, probeMm = 250)` is the boundary-tolerant variant: it tries the exact point, then probes a ring of offsets (order: +y, -y, +x, -x, then the four diagonals) and returns the first room hit — needed because doors, windows, and flush wall-mounted fixtures (switches, fireplaces) sit exactly ON a wall line, which `pointInPolygon` excludes, so an exact resolve would drop them into "No room". The sidebar `_groupByRoom` bucketing uses the **fuzzy** resolver for all item kinds; a boundary item touching two rooms goes to whichever probe lands first (deterministic, acceptable). Created via the sidebar "Rooms" section: **+ Add room** then `placingRoomId` arms a click-to-anchor on the 2D canvas — the room is created **unnamed** (no prompt); `roomLabel(rm)` (geometry.ts) supplies an italic/dimmer "Unnamed room" placeholder until the sidebar input names it, and an anchor outside every loop draws an amber "not enclosed by walls" marker at the anchor in 2D. Labels render centered per loop in 2D and as a `THREE.Sprite` in 3D, both gated by the `labels` layer. Room names feed the activity + bubble systems — a name containing the substring **`kitchen`** (case-insensitive) gates the snack/coffee bubbles, and the seated-person's room scopes TV watching.
@@ -1346,6 +1390,26 @@ reference; keep it updated when the schema grows.
   parented to the rig root (outline/fade/privacy pick them up automatically).
   Legacy kinds keep their hand-tuned imperative accessories via
   `legacyAccessories: '<kind>'` → `_addAvatarAccessories`.
+  **ANCHOR ASYMMETRY (2026-07-20 fix — the "invisible accessory" trap)**:
+  `chest` resolves to the torso FRONT face (`z = −TORSO_D/2` = −70 at sk 1) so
+  a chest tie needs only −6…−16 more, but `neck` resolves to the torso CENTRE
+  in z (`z = 0`, y = torso top) so neck-ENCIRCLING pieces can be authored
+  symmetrically. Authoring a FRONT accessory on `neck` with a chest-sized
+  offset builds it INSIDE the 140·sk-deep torso → never renders. 45 prims
+  across 34 members in 17 packs were invisible this way; fixed by one uniform
+  rule — a front accessory on `neck` carries the missing half-depth itself
+  (`pos.z −= 70`). Sibling rule for neck-encircling RINGS: size them, don't
+  move them — half-extent along z ≥ `TORSO_D/2 + 8` (= 78 authored mm) so the
+  band overhangs front AND back (8 rings were authored smaller than the torso
+  and showed only their top edge; a ring exactly tangent at r=70 also hatches
+  — the coincident-face gotcha). Both rules are documented in
+  `docs/avatars/AUTHORING.md` and at the `neck` case in `anchorOf`. Legacy
+  `professional`/`magician` had a related bug: a 3-segment `ConeGeometry`
+  V-neck needs `rotation.y = π/3` (vertices every 120°), NOT π/4, to put a
+  flat face on body-front, and the tie must clear the cone's inradius
+  (`TORSO_W·0.17`) or it renders buried behind the shirt. Test
+  `necktie-test.html` (`NECKTIE PASS 155/155`, world-vertex measurements +
+  a negative control).
 - **Rig extensions** (batch C1): `headShape 'cylinder'|'oval'`; `eyes 'none'`
   + `noFace`; `opacity` (transparent materials — outline shells auto-skip);
   `hover` (mm — legs omitted, root floated, constant bob; every leg-joint

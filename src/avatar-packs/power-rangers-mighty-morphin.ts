@@ -77,7 +77,7 @@ const pack: AvatarPackDef = {
       humanoid: { skin: 0x1e7a38, body: 0x1e7a38 },
       accessories: [
         { shape: 'sphere', size: [75, 85, 13], anchor: 'chest', pos: [0, 10, -16], color: GOLD },
-        { shape: 'box', size: [150, 18, 10], anchor: 'neck', pos: [0, -2, -8], color: GOLD },
+        { shape: 'box', size: [150, 18, 10], anchor: 'neck', pos: [0, -2, -78], color: GOLD },
         { shape: 'cylinder', size: [25, 25, 20], anchor: 'shoulderL', color: GOLD },
         { shape: 'cylinder', size: [25, 25, 20], anchor: 'shoulderR', color: GOLD },
         { shape: 'box', size: [30, 90, 20], anchor: 'hip', pos: [70, -10, -8], color: 0x1a1a1a }],
