@@ -314,7 +314,7 @@ export function drawAll(ctx: CanvasRenderingContext2D, p: Planner, view: View,
   if (on(L.targets)) drawCamTargets(ctx, p, view);
   // Geo landmark pins + GPS device pins + geo_location event pins (all ride the
   // `geo` layer).
-  if (on(L.geo)) { drawGeoLandmarks(ctx, p, view); drawGpsPins(ctx, p, view); drawGeoEventPins(ctx, p, view); }
+  if (on(L.geo)) { drawGeoLandmarks(ctx, p, view); drawRecordedPins(ctx, p, view); drawGpsPins(ctx, p, view); drawGeoEventPins(ctx, p, view); }
   drawNorthMarker(ctx, p, view);
   drawDoorbellPulses(ctx, p, view);
   // Dimensions overlay (rulers + wall/structure dimension lines) — drawn LATE so
@@ -594,6 +594,82 @@ function drawGeoLandmarks(ctx: CanvasRenderingContext2D, p: Planner, view: View)
     ctx.fillStyle = calibrated ? 'rgba(129,212,250,0.85)' : 'rgba(176,190,197,0.75)';
     ctx.font = `${9 * dpr}px sans-serif`;
     ctx.fillText(cap, c.x, c.y + 25 * dpr);
+  }
+  ctx.restore();
+}
+
+// Recorded-position pins (roadmap P2 — the reverse of landmarks): amber diamond
+// markers projected through the geo fit, numbered in chain order, connected by a
+// dashed route polyline (+ closing segment when recordedClosed), each chain
+// segment labelled with its length. Pins whose lat/lon can't project (no fit)
+// are simply skipped — the sidebar explains why. Rides the `geo` layer.
+const RECORDED_COLOR = '#ffab40'; // amber / route
+function drawRecordedPins(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
+  const projected = p.projectedRecordedPins().filter(r => r.ok);
+  if (!projected.length) return;
+  const dpr = window.devicePixelRatio || 1;
+  const closed = p.store.geo?.recordedClosed === true && projected.length >= 3;
+  const pts = projected.map(r => mmToPx(view, r.x, r.y));
+  ctx.save();
+
+  // Dashed chain polyline through the pins in order (+ closing segment).
+  if (pts.length >= 2) {
+    ctx.strokeStyle = 'rgba(255,171,64,0.8)';
+    ctx.lineWidth = 1.6 * dpr;
+    ctx.setLineDash([6 * dpr, 4 * dpr]);
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+    if (closed) ctx.lineTo(pts[0].x, pts[0].y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  // Segment-length labels at each segment midpoint (boundary walking wants distances).
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = `${9 * dpr}px sans-serif`;
+  const segLabel = (aI: number, bI: number) => {
+    const a = projected[aI], b = projected[bI];
+    const A = pts[aI], B = pts[bI];
+    const len = fmtLen(Math.hypot(a.x - b.x, a.y - b.y), p.store.imperial);
+    const mx = (A.x + B.x) / 2, my = (A.y + B.y) / 2;
+    const tw = ctx.measureText(len).width + 6 * dpr;
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.fillRect(mx - tw / 2, my - 7 * dpr, tw, 14 * dpr);
+    ctx.fillStyle = '#ffd8a8';
+    ctx.fillText(len, mx, my);
+  };
+  for (let i = 1; i < pts.length; i++) segLabel(i - 1, i);
+  if (closed) segLabel(pts.length - 1, 0);
+
+  // Diamond markers + index numbers + accuracy caption.
+  for (let i = 0; i < projected.length; i++) {
+    const r = projected[i], c = pts[i];
+    const s = 7 * dpr;
+    ctx.fillStyle = RECORDED_COLOR;
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.4 * dpr;
+    ctx.beginPath();
+    ctx.moveTo(c.x, c.y - s); ctx.lineTo(c.x + s, c.y);
+    ctx.lineTo(c.x, c.y + s); ctx.lineTo(c.x - s, c.y);
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+    // Index number to the right of the pin.
+    ctx.fillStyle = '#3a2200';
+    ctx.font = `bold ${9 * dpr}px sans-serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(String(i + 1), c.x, c.y);
+    // Name + accuracy caption below.
+    const nm = r.name || `Point ${i + 1}`;
+    const cap = r.accuracy != null ? fmtAccuracyM(r.accuracy, p.store.imperial) : 'manual';
+    ctx.textBaseline = 'top';
+    ctx.font = `${9 * dpr}px sans-serif`;
+    const tw = Math.max(ctx.measureText(nm).width, ctx.measureText(cap).width) + 8 * dpr;
+    ctx.fillStyle = 'rgba(0,0,0,0.65)';
+    ctx.fillRect(c.x - tw / 2, c.y + s + 2 * dpr, tw, 22 * dpr);
+    ctx.fillStyle = '#ffd8a8';
+    ctx.fillText(nm, c.x, c.y + s + 3 * dpr);
+    ctx.fillStyle = 'rgba(255,171,64,0.8)';
+    ctx.fillText(cap, c.x, c.y + s + 13 * dpr);
   }
   ctx.restore();
 }

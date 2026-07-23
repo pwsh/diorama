@@ -145,6 +145,41 @@ export function planToLatLon(t: GeoTransform, x: number, y: number): { lat: numb
   return unprojectMeters(px / 1000, py / 1000, t.originLat, t.originLon);
 }
 
+// ── Recorded-position pins (roadmap P2 — the REVERSE of landmark placement) ──
+// A recorded pin stores lat/lon (source of truth); its plan position is DERIVED
+// by re-projecting through the fitted geo transform at READ time, so a later
+// landmark recalibration corrects every recorded pin for free. Pure — the
+// caller passes the fit (or null). `ok:false` when the transform is unusable
+// (no fit / quality 'none'); x/y are 0 in that case (draw nothing, explain in
+// the sidebar). Manual pins carry no accuracy.
+export interface RecordedPinInput { id: string; name?: string; lat: number; lon: number; accuracy?: number; }
+export interface ProjectedRecordedPin {
+  id: string; name?: string; x: number; y: number; accuracy?: number; ok: boolean;
+}
+export function projectRecordedPins(pins: RecordedPinInput[], fit: GeoTransform | null): ProjectedRecordedPin[] {
+  return pins.map(p => {
+    const plan = fit ? latLonToPlan(fit, p.lat, p.lon) : null;
+    return plan
+      ? { id: p.id, name: p.name, x: plan.x, y: plan.y, accuracy: p.accuracy, ok: true }
+      : { id: p.id, name: p.name, x: 0, y: 0, accuracy: p.accuracy, ok: false };
+  });
+}
+
+// Total length (mm) of the recorded chain through the projectable pins, in
+// order; adds the closing segment when `closed` and ≥3 projectable pins exist.
+// Non-projectable (ok:false) pins are skipped. <2 projectable pins → 0.
+export function recordedChainLengthMm(pins: { x: number; y: number; ok: boolean }[], closed?: boolean): number {
+  const pts = pins.filter(p => p.ok);
+  if (pts.length < 2) return 0;
+  let total = 0;
+  for (let i = 1; i < pts.length; i++) total += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+  if (closed && pts.length >= 3) {
+    const a = pts[0], b = pts[pts.length - 1];
+    total += Math.hypot(a.x - b.x, a.y - b.y);
+  }
+  return total;
+}
+
 // ── GPS device-pin geometry (Feature G, phase G2) ─────────────────────────
 // The GPS render boundary is the floor rect (0..fw, 0..fd) inflated by
 // boundaryMm on every side. A pin BEYOND that inflated rect is clamped back

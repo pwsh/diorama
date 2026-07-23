@@ -397,8 +397,11 @@ function writePlanPage(plan, plans, version, date) {
   fs.copyFileSync(plan.file, path.join(OUT, plan.id + '.json'));
 
   let main = `<div class="page-head"><h1>${htmlEsc(plan.name)}</h1></div>`;
+  // Deep-link into the live editable demo (../demo/ from a floorplans/ page),
+  // pre-seeded with this plan as the active config. The plan id IS the demo slug.
+  main += `<a class="demo-btn" href="../demo/index.html?demo=${encodeURIComponent(plan.id)}">▶ Open in live demo</a>`;
   main += `<a class="dl-btn" href="${plan.id}.json" download>Download floorplan JSON</a>`;
-  main += `<p class="intro">Import it in Diorama under <strong>Settings ▸ Data ▸ Configurations ▸ Import</strong>.</p>`;
+  main += `<p class="intro">Explore it live above, or import the JSON in Diorama under <strong>Settings ▸ Data ▸ Configurations ▸ Import</strong>.</p>`;
   if (store.notes) main += `<div class="plan-notes">${htmlEsc(store.notes)}</div>`;
 
   floors.forEach((fl, n) => {

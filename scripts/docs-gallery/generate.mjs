@@ -350,14 +350,26 @@ function galleryPage({ current, title, pageDepth, bodyMain, version, date }) {
     main: bodyMain, version, date,
   });
 }
-function renderCard(su, gifHref) {
+// Types whose `su.id` is a FurnitureKind (furniture/appliance/bin) or a
+// LightIconKind (light) — the kinds ?model=<kind> renders as a single scratch
+// piece. Others (avatars/sensors/doors/robots/…) get no demo link (the app would
+// only fall back to a random home, which reads as broken).
+const MODEL_DEMO_TYPES = new Set(['furniture', 'appliance', 'bin', 'light']);
+
+// `demoPrefix` reaches the site-root demo/ page from this model page (one level
+// up from the gallery prefix, which is relative WITHIN models/).
+function renderCard(su, gifHref, demoPrefix) {
   const id = anchorId(su);
+  const demo = MODEL_DEMO_TYPES.has(su.type)
+    ? `<a class="demo-btn card-demo" href="${htmlEsc(demoPrefix)}?model=${encodeURIComponent(su.id)}">▶ View in demo</a>`
+    : '';
   return `<article class="card" id="${id}">`
     + `<a class="card-img" href="#${id}"><img loading="lazy" src="${htmlEsc(gifHref)}" alt="${htmlEsc(su.label)}" width="240" height="240"></a>`
     + `<div class="card-body">`
     + `<div class="card-label">${htmlEsc(su.label)}</div>`
     + `<code class="card-id">${htmlEsc(su.id)}</code>`
     + (su.notes ? `<div class="card-notes">${htmlEsc(su.notes)}</div>` : '')
+    + demo
     + `</div></article>`;
 }
 
@@ -380,6 +392,8 @@ function writeHtml(subjects, version, date) {
     const subs = byPage.get(page);
     const pageDepth = (page.match(/\//g) || []).length;
     const prefix = '../'.repeat(pageDepth);
+    // Site-root demo/ is one level above the gallery's own models/ subtree.
+    const demoPrefix = '../'.repeat(pageDepth + 1) + 'demo/index.html';
     const groups = [];
     const seen = new Set();
     for (const su of subs) { if (!seen.has(su.group)) { seen.add(su.group); groups.push(su.group); } }
@@ -390,7 +404,7 @@ function writeHtml(subjects, version, date) {
     main += '</div>';
     for (const g of groups) {
       main += `<section class="group"><h2>${htmlEsc(g)}</h2><div class="grid">`;
-      for (const su of subs.filter((s) => s.group === g)) main += renderCard(su, prefix + su.gif);
+      for (const su of subs.filter((s) => s.group === g)) main += renderCard(su, prefix + su.gif, demoPrefix);
       main += '</div></section>';
     }
     const file = path.join(OUT, page + '.html');

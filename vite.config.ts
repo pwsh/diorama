@@ -139,6 +139,12 @@ export default defineConfig({
       input: {
         main: resolve(__dirname, 'index.html'),
         panel: resolve(__dirname, 'src/panel.ts'),
+        // Third entry: the Lovelace custom card → dist/diorama-card.js at the
+        // dist root (stable, unhashed — same reason as diorama-panel.js). It
+        // shares every chunk (incl. the lazy three-renderer) with the other two
+        // entries by module-graph content-addressing, so it never duplicates
+        // three.js and stays out of the 2D startup path.
+        card: resolve(__dirname, 'src/card.ts'),
       },
       output: {
         // Fully stable filenames (no content hashes). HA + browsers cache
@@ -147,7 +153,8 @@ export default defineConfig({
         // after redeploy → "Unable to load custom panel". With stable names
         // a stale entry still resolves to the fresh chunk content.
         entryFileNames: chunk =>
-          chunk.name === 'panel' ? 'diorama-panel.js' : 'assets/main.js',
+          chunk.name === 'panel' ? 'diorama-panel.js' :
+          chunk.name === 'card' ? 'diorama-card.js' : 'assets/main.js',
         chunkFileNames: 'assets/[name].js',
         assetFileNames: 'assets/[name][extname]',
       },

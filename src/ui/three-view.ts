@@ -22,10 +22,17 @@ import type { Planner } from '../planner.js';
 @customElement('diorama-three-view')
 export class ThreeView extends LitElement {
   @property({ attribute: false }) planner!: Planner;
+  // Card-mode knobs (default preserve the panel/app behavior — the app never
+  // sets them). `compact` hides the view-preset button bar (small card widths);
+  // `interactive` false suppresses fixture click/dblclick routing (a 'view'-mode
+  // card sharing the always-kiosk card Planner must not toggle devices).
+  @property({ attribute: false }) compact = false;
+  @property({ attribute: false }) interactive = true;
   @query('#three-area') private _area!: HTMLElement;
   private _renderer: ThreeDRenderer | null = null;
   private _ro: ResizeObserver | null = null;
   private _raf = 0;
+  private _initialized = false;  // renderer set up at least once (reconnect guard)
   private _simsCamOn = false;   // runtime-only Sims-cam azimuth-snap toggle
 
   protected override createRenderRoot() { return this; }
@@ -40,6 +47,7 @@ export class ThreeView extends LitElement {
               @click=${() => this._renderer?.applyViewPreset(k)}>${label}</button>`;
     return html`
       <div id="three-area" style="position:absolute;inset:0"></div>
+      ${this.compact ? nothing : html`
       <div style="position:absolute;top:8px;left:8px;display:flex;gap:4px;align-items:center;
                   background:rgba(10,14,20,0.72);border:1px solid #2a3a4c;border-radius:5px;
                   padding:4px 6px;z-index:5;flex-wrap:wrap">
@@ -98,7 +106,7 @@ export class ThreeView extends LitElement {
                          border-radius:3px;color:#ffd54f;cursor:pointer"
                   @click=${() => this._saveCurrentView()}>💾 Save</button>
         ` : nothing}
-      </div>
+      </div>`}
     `;
   }
 
@@ -164,7 +172,25 @@ export class ThreeView extends LitElement {
     this.requestUpdate();
   }
 
-  override async firstUpdated(): Promise<void> {
+  override firstUpdated(): void {
+    void this._setup();
+  }
+
+  // Card lifecycle: a dashboard may detach + re-attach the SAME element on a
+  // view switch. firstUpdated runs only once, so re-run the renderer setup on
+  // reconnect once it has been torn down. In the app this element is always
+  // recreated fresh on a 2D↔3D switch, so `_initialized` is false at the first
+  // connect and this is a no-op.
+  override connectedCallback(): void {
+    super.connectedCallback();
+    if (this._initialized && !this._renderer) {
+      void this.updateComplete.then(() => {
+        if (this.isConnected && !this._renderer) void this._setup();
+      });
+    }
+  }
+
+  private async _setup(): Promise<void> {
     let mod: typeof import('../three-renderer.js');
     try {
       mod = await import('../three-renderer.js');
@@ -187,6 +213,7 @@ export class ThreeView extends LitElement {
     // domain so a "switch" fixture bound to a light entity does light.toggle).
     this._renderer.onFixtureClick(({ kind, entity_id, fixtureId }) => {
       const p = this.planner;
+      if (!this.interactive) return;   // view-mode card: no device interaction
       // Alarm keypad → open the control/status modal (view mode: no interaction).
       if (kind === 'alarm') {
         if (p.uiMode === 'view') return;
@@ -304,6 +331,7 @@ export class ThreeView extends LitElement {
     // Edit + kiosk; view refuses inside cleanVacuumSegment.
     this._renderer.onVacSegClick(({ robotId, segId }) => {
       const p = this.planner;
+      if (!this.interactive) return;   // view-mode card: no device interaction
       if (p.uiMode === 'view') return;
       const ro = p.floor().robots?.find(x => x.id === robotId);
       if (!ro) return;
@@ -315,6 +343,7 @@ export class ThreeView extends LitElement {
     });
     this._renderer.onFixtureDblClick(({ kind, entity_id, fixtureId }) => {
       const p = this.planner;
+      if (!this.interactive) return;   // view-mode card: no device interaction
       if (p.uiMode === 'view') return;
       const f = p.floor();
 
@@ -444,12 +473,14 @@ export class ThreeView extends LitElement {
         }));
       }
     });
+    this._initialized = true;
     this._startSync();
   }
 
   override disconnectedCallback(): void {
     super.disconnectedCallback();
     if (this._raf) cancelAnimationFrame(this._raf);
+    this._raf = 0;
     this._ro?.disconnect();
     this._renderer?.destroy();
     this._renderer = null;

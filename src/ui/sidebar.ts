@@ -4,7 +4,7 @@ import { customElement } from './define.js';
 import { startZoneEdit } from '../canvas-interact.js';
 import type { Planner, Tool } from '../planner.js';
 import { NEW_ROOM, NEW_LANDMARK } from '../planner.js';
-import { compass8, parseLatLon, fmtDistanceM, fmtAccuracyM } from '../geo.js';
+import { compass8, parseLatLon, fmtDistanceM, fmtAccuracyM, recordedChainLengthMm } from '../geo.js';
 import type {
   Sensor, Zone, ObjectHalo, BgImage, MotionSensor, EnvSensor, EnvKind, Light, SwitchFixture, LightIconKind,
   Furniture, FurnitureKind, Door, Window as WindowType, WindowKind, WindowCurtainStyle, Layers2D, Floor, Room,
@@ -6311,6 +6311,13 @@ export class Sidebar extends LitElement {
   @state() private _calibSlug = '';
   @state() private _calibMsg = '';
   @state() private _calibBusy = false;
+  // Recorded-position pins (P2): capture the current fix / manual lat/lon.
+  @state() private _recordMsg = '';
+  @state() private _recordBusy = false;
+  @state() private _recordLat = '';
+  @state() private _recordLon = '';
+  @state() private _recordErr = '';
+  @state() private _recordGroundKind: GroundKind = 'grass';
   // 1 s liveness ticker: while an active session's card is on screen we force a
   // re-render every second so elapsed time / "last fix ago" stay current even
   // when zero samples arrive. Reconciled in updated(); cleared on disconnect.
@@ -6352,6 +6359,7 @@ export class Sidebar extends LitElement {
         </button>
 
         ${fit ? this._geoFitReadout(fit) : nothing}
+        ${this._recordedSection()}
         ${this._gpsPinsPreview()}
 
         ${calCount === 1 ? html`
@@ -6657,6 +6665,127 @@ export class Sidebar extends LitElement {
                 ${gpsZoneGlyph(pin.zone)} ${where}${pin.stale ? ' · stale' : ''}</span>
             </div>`;
         })}
+      </div>`;
+  }
+
+  // Recorded-position pins (P2 — the reverse of landmarks): capture the current
+  // GPS fix (or type lat/lon) → a pin drops onto the plan where the geo fit
+  // projects it. Primary use: walk the property line, tap "Record point" at each
+  // corner → a boundary chain, convertible into an editable ground-area polygon.
+  private _recordedSection() {
+    const p = this.planner;
+    const pins = p.recordedPins();
+    const projected = p.projectedRecordedPins();
+    const fit = p.geoFit();
+    const projectable = projected.filter(r => r.ok).length;
+    const canProject = !!fit && fit.transform.quality !== 'none';
+    const total = recordedChainLengthMm(projected, p.store.geo?.recordedClosed);
+    // Resolve the tracker + its raw fix (reuse gpsFixFor via a synthetic person).
+    const tid = p.recordTrackerId();
+    const fix = tid ? p.gpsFixFor({ id: '', name: '', gpsTrackerId: tid } as DioramaPerson) : null;
+    const hasFix = !!(fix?.found && fix.lat != null && fix.lon != null);
+    const recordDisabled = this._recordBusy || !tid || !hasFix;
+    const recordReason = !tid ? 'Pick a device_tracker first'
+      : !fix?.found ? `Tracker ${tid} not found`
+      : !hasFix ? `No GPS fix from ${tid} yet`
+      : `Fix ${fix.accuracyM != null ? fmtAccuracyM(fix.accuracyM, p.store.imperial) : ''} · ${gpsAgeText(fix.lastUpdated)}`;
+    // Split a pasted "lat, lon" pair across both fields (Latitude field only).
+    const trySplit = (raw: string): boolean => {
+      const pair = parseLatLon(raw);
+      if (!pair) return false;
+      this._recordLat = pair.lat.toFixed(6); this._recordLon = pair.lon.toFixed(6);
+      this._recordErr = ''; this.requestUpdate(); return true;
+    };
+    const addManual = () => {
+      const lat = Number(this._recordLat.trim()), lon = Number(this._recordLon.trim());
+      const id = (isFinite(lat) && isFinite(lon)) ? p.addManualRecordedPin(lat, lon) : null;
+      if (!id) { this._recordErr = 'Enter a valid lat, lon (−90..90, −180..180).'; this.requestUpdate(); return; }
+      this._recordLat = ''; this._recordLon = ''; this._recordErr = ''; this.requestUpdate();
+    };
+    return html`
+      <div style="margin-top:10px;border-top:1px solid var(--border);padding-top:8px">
+        <div style="font-size:11px;color:var(--text-dim);margin-bottom:5px">Recorded positions (boundary)</div>
+        ${!canProject ? html`
+          <div style="font-size:10px;color:#ffb74d;line-height:1.35;margin-bottom:5px">
+            Calibrate a landmark first — without a fit, recorded pins can't project onto the plan.
+          </div>` : nothing}
+
+        <div class="row" style="margin-top:0">
+          <button class="btn" style="flex:1;font-size:11px" ?disabled=${recordDisabled} title=${recordReason}
+                  @click=${async () => {
+                    this._recordBusy = true; this.requestUpdate();
+                    const res = await p.recordPositionPin();
+                    this._recordBusy = false;
+                    this._recordMsg = res.ok ? (res.warn ?? 'Point recorded.') : (res.error ?? 'Failed.');
+                    this.requestUpdate();
+                  }}>${this._recordBusy ? 'Recording…' : '⏺ Record point'}</button>
+          <button class="btn" style="font-size:10px;padding:2px 6px" title="Pick the device_tracker to record from"
+                  @click=${() => this.dispatchEvent(new CustomEvent('open-entity-picker', {
+                    bubbles: true, composed: true,
+                    detail: { domain: 'device_tracker', onPick: (id: string) => { p.setRecordTracker(id); this.requestUpdate(); } },
+                  }))}>🔗</button>
+        </div>
+        <div style="font-size:10px;color:var(--text-dim);padding:1px 0 4px 2px">${tid ? recordReason : 'No tracker selected'}</div>
+
+        <div class="row" style="margin-top:2px"><label>Manual</label>
+          <input type="number" step="any" placeholder="lat" style="min-width:0" .value=${this._recordLat}
+                 @paste=${(e: ClipboardEvent) => { if (trySplit(e.clipboardData?.getData('text') ?? '')) e.preventDefault(); }}
+                 @input=${(e: Event) => { const v = (e.target as HTMLInputElement).value; if (!trySplit(v)) this._recordLat = v; }}>
+          <input type="number" step="any" placeholder="lon" style="min-width:0" .value=${this._recordLon}
+                 @input=${(e: Event) => { this._recordLon = (e.target as HTMLInputElement).value; }}>
+          <button class="btn" style="font-size:10px;padding:2px 8px" @click=${addManual}>+</button>
+        </div>
+        ${this._recordErr ? html`<div style="font-size:10px;color:#ff8a80;padding:1px 0 3px 2px">${this._recordErr}</div>` : nothing}
+
+        ${pins.map((r, i) => this._recordedItem(r, i, projected[i]))}
+
+        ${pins.length ? html`
+          <label class="row" style="margin-top:6px;cursor:pointer">
+            <input type="checkbox" .checked=${p.store.geo?.recordedClosed === true}
+                   @change=${(e: Event) => p.setRecordedClosed((e.target as HTMLInputElement).checked)}>
+            <span style="font-size:11px">Close chain</span>
+          </label>
+          <div style="font-size:11px;color:var(--text-dim);margin:3px 0">
+            Chain: ${projectable}/${pins.length} projected${total > 0 ? ` · ${fmtLen(total, p.store.imperial)}` : ''}
+          </div>
+          <div class="row" style="margin-top:4px">
+            <select style="flex:1;font-size:11px" .value=${this._recordGroundKind}
+                    @change=${(e: Event) => { this._recordGroundKind = (e.target as HTMLSelectElement).value as GroundKind; }}>
+              ${(Object.keys(GROUND_KINDS) as GroundKind[]).map(k => html`
+                <option value=${k} ?selected=${k === this._recordGroundKind}>${k}</option>`)}
+            </select>
+            <button class="btn" style="font-size:10px;padding:2px 8px" ?disabled=${projectable < 3}
+                    title=${projectable < 3 ? 'Need ≥3 projected points' : 'Create a ground-area polygon from the chain'}
+                    @click=${() => {
+                      if (!confirm('Create a ground-area polygon from the recorded chain on the current floor?')) return;
+                      const res = p.recordedChainToGroundArea(this._recordGroundKind);
+                      this._recordMsg = res.ok ? 'Ground area created.' : (res.error ?? 'Failed.');
+                      this.requestUpdate();
+                    }}>▸ Convert to ground area</button>
+          </div>
+          <button class="btn" style="width:100%;margin-top:4px;font-size:10px"
+                  @click=${() => { if (confirm('Delete all recorded points?')) { p.clearRecordedPins(); this._recordMsg = ''; } }}>Clear all</button>
+        ` : nothing}
+        ${this._recordMsg ? html`
+          <div style="font-size:11px;margin-top:6px;padding:5px 7px;border-radius:4px;background:rgba(0,0,0,0.3);line-height:1.35">${this._recordMsg}</div>` : nothing}
+      </div>`;
+  }
+
+  private _recordedItem(r: import('../types.js').RecordedPin, i: number, proj?: { ok: boolean }) {
+    const p = this.planner;
+    return html`
+      <div style="display:flex;align-items:center;gap:4px;padding:2px 0;border-bottom:1px solid var(--border)">
+        <span style="width:16px;text-align:center;font-size:10px;font-weight:600;color:${proj?.ok ? '#ffab40' : '#90a4ae'}">${i + 1}</span>
+        <input type="text" .value=${r.name ?? ''} placeholder="Point ${i + 1}" style="flex:1;min-width:0;font-size:11px"
+               @input=${(e: Event) => p.updateRecordedPin(r.id, x => { x.name = (e.target as HTMLInputElement).value || undefined; })}>
+        <button class="icon-btn" title="Move earlier" ?disabled=${i === 0}
+                @click=${() => p.moveRecordedPin(r.id, -1)}>↑</button>
+        <button class="icon-btn" title="Move later" ?disabled=${i === p.recordedPins().length - 1}
+                @click=${() => p.moveRecordedPin(r.id, 1)}>↓</button>
+        <button class="icon-btn" title="Delete" @click=${() => p.deleteRecordedPin(r.id)}>✕</button>
+      </div>
+      <div style="font-family:monospace;font-size:10px;color:var(--text-dim);padding:0 0 3px 20px">
+        ${r.lat.toFixed(6)}, ${r.lon.toFixed(6)}${r.accuracy != null ? ` · ${fmtAccuracyM(r.accuracy, p.store.imperial)}` : ' · manual'}${proj && !proj.ok ? ' · (no fit)' : ''}
       </div>`;
   }
 

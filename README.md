@@ -170,6 +170,48 @@ panel_custom:
 authentication — no tokens needed. Draw walls, place devices, and bind
 entities (see the [user guide](docs/GUIDE.md)).
 
+**5. Optional: add the Lovelace card**
+
+Diorama also ships a **dashboard card** — drop a single floor (2D) or a
+kiosk-framed 3D room view onto any Lovelace dashboard, alongside the panel.
+It rides HA's own connection (no token) and is read-only: build/edit the
+plan in the panel, then *show* it in cards.
+
+Register the card module once as a dashboard resource:
+
+- **Settings → Dashboards → ⋮ (top right) → Resources → Add resource**
+- URL: `/hacsfiles/diorama/diorama-card.js`
+- Type: **JavaScript Module**
+
+Then add a card from the picker (search "Diorama") or in YAML:
+
+```yaml
+type: custom:diorama-card
+view: 2d          # 2d (floor plan) | 3d (room view)   — default 2d
+mode: kiosk       # kiosk (tap to control) | view (display only) — default kiosk
+floor: Kitchen    # floor name or id (optional; default = current/first floor)
+layers: simple    # a 2D-layer preset name/id, or "simple" | "full" (optional)
+view3d: Iso       # a saved 3D view name/id (3D only, optional)
+cam: [x,y,z,tx,ty,tz]   # explicit 3D camera pose (3D only, optional)
+compact: false    # hide the overlay chrome; auto-on below ~360px wide
+panelPath: /diorama     # href for the ⤢ "open full panel" link (default /diorama)
+```
+
+| Field | Values | Default | Notes |
+|---|---|---|---|
+| `view` | `2d` \| `3d` | `2d` | 3D lazy-loads the renderer only when a 3D card mounts. |
+| `mode` | `kiosk` \| `view` | `kiosk` | `edit` is rejected — a card never edits/saves the plan. `view` disables tap-to-control. |
+| `floor` | floor name or id | current/first | Shared across cards on a tab (last-applied wins). |
+| `layers` | preset name/id, `simple`, `full` | plan default | Same presets as the panel's 2D Layers. |
+| `view3d` | saved view name/id | iso framing | 3D only. |
+| `cam` | 6 numbers | — | 3D only; explicit pose, wins over `view3d`. |
+| `compact` | `true` \| `false` | auto (<360px) | Hides the view-preset bar / reset button / weather chip / compass. |
+| `panelPath` | url path | `/diorama` | The `url_path` of your `panel_custom` panel. |
+
+Every Diorama card on a tab shares **one** live connection and one Planner —
+add as many as you like (a 2D card beside a 3D card, several rooms) at no
+extra connection cost.
+
 **Updating**: HACS shows updates when new releases are published — update
 from HACS, then hard-refresh the browser (or bump a `?v=` query on
 `module_url` + restart) if the panel looks stale; HA caches panel modules

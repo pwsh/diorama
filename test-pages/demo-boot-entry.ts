@@ -7,4 +7,5 @@ export { Planner } from './planner.js';
 export { LocalApi, shouldStartOffline } from './ha-local.js';
 export {
   seedDemoConfigs, demoSeedHash, demoResetKeys, clearDemoStorage, DEMO_SEEDED_KEY,
+  seedModelViewer, classifyModelKind, MODEL_VIEWER_NAME,
 } from './demo-seed.js';

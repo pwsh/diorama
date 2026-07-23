@@ -30,6 +30,7 @@
     import {
       projectLatLon, fitGeoTransform, latLonToPlan, planToLatLon, medianLatLon,
       parseLatLon, fmtDistanceM, fmtAccuracyM,
+      projectRecordedPins, recordedChainLengthMm,
     } from './geo.mod.js';
 
     const tests = [];
@@ -229,6 +230,53 @@
       // Defensive: non-finite / negative → 0.
       eqs('dist NaN → 0 m', fmtDistanceM(NaN, false), '0 m');
       eqs('acc negative → ±0 m', fmtAccuracyM(-5, false), '±0 m');
+    })();
+
+    // ── projectRecordedPins + recordedChainLengthMm (P2) ─────────────────────
+    (() => {
+      // Known 2-landmark fit: theta 0.3 rad, translation (1000, 2000).
+      const theta = 0.3, t = { x: 1000, y: 2000 };
+      const pairs = synth([{ dlat: 0, dlon: 0 }, { dlat: 0.001, dlon: 0.001 }], theta, t);
+      const fit = fitGeoTransform(pairs);
+      ok('P2 fit is full', fit.quality === 'full');
+
+      // A recorded pin projects to exactly latLonToPlan(fit, …).
+      const rlat = ORIGIN.lat + 0.0005, rlon = ORIGIN.lon + 0.0007;
+      const want = latLonToPlan(fit, rlat, rlon);
+      const proj = projectRecordedPins([{ id: 'a', name: 'A', lat: rlat, lon: rlon, accuracy: 12 }], fit);
+      ok('P2 projected ok:true', proj[0].ok === true);
+      near('P2 projected x', proj[0].x, want.x, 1e-6);
+      near('P2 projected y', proj[0].y, want.y, 1e-6);
+      ok('P2 keeps accuracy/id/name', proj[0].accuracy === 12 && proj[0].id === 'a' && proj[0].name === 'A');
+
+      // Manual pin (no accuracy) → accuracy stays undefined.
+      const man = projectRecordedPins([{ id: 'm', lat: rlat, lon: rlon }], fit);
+      ok('P2 manual pin no accuracy', man[0].accuracy === undefined && man[0].ok === true);
+
+      // No fit (null) → ok:false, x/y 0.
+      const none = projectRecordedPins([{ id: 'x', lat: rlat, lon: rlon }], null);
+      ok('P2 null fit → ok:false, xy 0', none[0].ok === false && none[0].x === 0 && none[0].y === 0);
+
+      // quality 'none' transform → ok:false.
+      const emptyFit = fitGeoTransform([]);
+      const noneT = projectRecordedPins([{ id: 'y', lat: rlat, lon: rlon }], emptyFit);
+      ok('P2 quality-none → ok:false', emptyFit.quality === 'none' && noneT[0].ok === false);
+
+      // Chain length: three pins → hand-summed perimeter (open + closed).
+      const rp = [
+        { id: '1', lat: ORIGIN.lat, lon: ORIGIN.lon },
+        { id: '2', lat: ORIGIN.lat + 0.0003, lon: ORIGIN.lon },
+        { id: '3', lat: ORIGIN.lat, lon: ORIGIN.lon + 0.0004 },
+      ];
+      const pr = projectRecordedPins(rp, fit);
+      const seg = (a, b) => Math.hypot(pr[a].x - pr[b].x, pr[a].y - pr[b].y);
+      const openLen = seg(0, 1) + seg(1, 2);
+      near('P2 chain length open', recordedChainLengthMm(pr, false), openLen, 1e-6);
+      near('P2 chain length closed', recordedChainLengthMm(pr, true), openLen + seg(2, 0), 1e-6);
+      ok('P2 chain <2 → 0', recordedChainLengthMm([pr[0]], false) === 0);
+      // Non-projectable (ok:false) pins are skipped in the length sum.
+      const mixed = [pr[0], { id: 'bad', x: 0, y: 0, ok: false }, pr[1]];
+      near('P2 chain skips non-ok', recordedChainLengthMm(mixed, false), seg(0, 1), 1e-6);
     })();
 
     // ── run + render ─────────────────────────────────────────────────────────

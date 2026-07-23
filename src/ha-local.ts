@@ -23,8 +23,9 @@ const LOCAL_PREFIX = 'diorama:local:';
 export const OFFLINE_FLAG_KEY = 'diorama:offline';
 
 // Pure startup decision for the STANDALONE entry: start offline iff the flag is
-// set OR the URL asks for it (`?offline=1`, or any `?demo=…` — the hosted demo
-// auto-starts offline for a first-time visitor with no flag set). Both inputs
+// set OR the URL asks for it (`?offline=1`, any `?demo=…`, or any `?model=…` —
+// the hosted demo auto-starts offline for a first-time visitor with no flag
+// set; ?model= is the gallery's single-model deep-link). Both inputs
 // are guarded so a storage exception (private mode, disabled cookies) or a bad
 // query never throws during boot. Panel mode never consults this (panel.ts
 // adopts a Planner before the app's startup check runs).
@@ -40,6 +41,7 @@ export function shouldStartOffline(
     const q = new URLSearchParams(s);
     if (q.get('offline') === '1') return true;
     if (q.has('demo')) return true;
+    if (q.has('model')) return true;   // gallery "View in demo" deep-links
   } catch { /* ignore */ }
   return false;
 }

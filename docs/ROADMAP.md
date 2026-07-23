@@ -249,7 +249,10 @@ Captured from a user planning pass. Ordered by dependency + payoff, not by
 size. Each stage ships independently (commit + push both + deploy) and gets a
 design doc pinned before the first line of code, per the house pattern.
 
-- **P1 — Lovelace card packaging** (S–M/3). Ship Diorama as an *addable
+- ✅ **P1 — Lovelace card packaging** — SHIPPED 2026-07-20 (`<diorama-card>`
+  third Vite entry, shared kiosk-locked planner, card-local view/mode, both
+  sizing APIs, hand-rolled editor; research `docs/research/lovelace-card.md`).
+  Original brief: ship Diorama as an *addable
   dashboard card* alongside the existing `panel_custom` panel + iframe modes,
   so a user can drop a floor view into any Lovelace view (e.g. a single-room
   card, a kiosk-framed 3D view) rather than only a full-page panel.
@@ -264,7 +267,10 @@ design doc pinned before the first line of code, per the house pattern.
   Card-mode config is HA-side YAML, NOT the Diorama store — keep them
   separate. **Prereq for nothing else; highest reach-per-effort of this arc.**
 
-- **P2 — Record-a-position pins (reverse landmark placement)** (S/3).
+- ✅ **P2 — Record-a-position pins** — SHIPPED 2026-07-20 (lat/lon-truth
+  pins re-projecting through the fit, tracker capture w/ accuracy warn,
+  chain + segment lengths, convert-to-ground-area; geo-test 80/80 +
+  record-pin-test 53/53). Original brief (S/3):
   Today a geo landmark is placed on the plan and *then* calibrated to a
   lat/lon. Add the inverse: capture the CURRENT GPS fix (or a manually
   entered lat/lon) and drop the resulting pin onto the plan at wherever the
@@ -278,7 +284,9 @@ design doc pinned before the first line of code, per the house pattern.
   polyline in 2D (+ optionally a low fence-like ribbon in 3D). Pin whether a
   recorded chain is its own type or reuses `GroundArea`/a polygon.
 
-- **P3 — Docs pages link to the live demo** (S/2). Now that `/demo/` hosts
+- ✅ **P3 — Docs pages link to the live demo** — SHIPPED 2026-07-20
+  (floorplan-page demo links + gallery `?model=<kind>` Model-viewer boot for
+  demo-renderable types; demo-boot-test 50/50). Original brief (S/2): Now that `/demo/` hosts
   the real app, every model-gallery tile and floor-plan tile should deep-link
   to *that specific thing* in the live demo — floor plans already can
   (`demo/index.html?demo=<slug>`, just wire the tile); models need a demo

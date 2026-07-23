@@ -152,6 +152,25 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Roadmap P1–P3** (2026-07-20; 1 Sonnet research + 3 parallel Opus).
+  **P1 Lovelace card**: `<diorama-card>` third Vite entry
+  (`dist/diorama-card.js`; chunkVersionQuery covered it generically; ONE
+  shared three-renderer chunk) — shared per-tab Planner+adapter forced
+  kiosk (store never writable from dashboards), card-LOCAL view/mode
+  (`interactive` prop on canvas-2d/three-view; mode:'edit' rejected),
+  both sizing APIs, reconnect-safe `_setup()`, hand-rolled editor,
+  README resource docs; card-test 32/32; research
+  `docs/research/lovelace-card.md`. **P2 recorded pins**: lat/lon-truth
+  boundary pins re-projected through the fit at read time, tracker
+  capture w/ accuracy `warn` (never refuses), manual entry, ordered
+  chain + segment lengths + close-loop, convert-to-ground-area (exact
+  coords); geo-test 80/80 + record-pin-test 53/53. **P3 demo deep
+  links**: floorplan pages "Open in live demo"; gallery cards for
+  demo-renderable types "View in demo" via the new `?model=<kind>`
+  Model-viewer boot (upserted single config, 3D sims framing);
+  demo-boot-test 50/50. Toolbar/config/plan-rotate/compass regressions
+  green.
+
 - **Legacy avatar-accessory migration** (2026-07-20; Fable-orchestrated:
   1 Sonnet inventory + 4 Opus agents in 3 waves). ALL 24 legacy members
   (22 kind blocks, 66 meshes + 2 disney reuses = 72 fixture builds)

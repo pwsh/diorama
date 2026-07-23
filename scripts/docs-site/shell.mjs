@@ -277,6 +277,11 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .dl-btn { display: inline-block; margin: 8px 0 4px; padding: 8px 16px; border-radius: 8px;
   background: var(--accent-dim); border: 1px solid var(--accent); color: #fff; font-weight: 600; }
 .dl-btn:hover { background: var(--accent); text-decoration: none; }
+/* "Open / view in live demo" deep-link — green accent, distinct from download. */
+.demo-btn { display: inline-block; margin: 8px 8px 4px 0; padding: 8px 16px; border-radius: 8px;
+  background: #17331f; border: 1px solid #2ec16a; color: #eafff2; font-weight: 600; }
+.demo-btn:hover { background: #2ec16a; color: #04150b; text-decoration: none; }
+.card-demo { align-self: flex-start; margin: 2px 0 0; padding: 4px 11px; font-size: 12.5px; }
 .plan-notes { white-space: pre-wrap; background: var(--panel); border: 1px solid var(--border);
   border-radius: 10px; padding: 14px 16px; color: var(--text); max-width: 88ch; }
 

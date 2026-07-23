@@ -1,0 +1,295 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>RECORDPIN …</title>
+<style>
+  body { margin:0; background:#0d1116; color:#cfd8dc; font:13px/1.45 sans-serif; padding:14px; }
+  h1 { font-size:15px; margin:0 0 8px; } h2 { font-size:12px; margin:12px 0 4px; color:#90caf9; }
+  #summary { font-size:14px; font-weight:bold; margin:8px 0; padding:8px 10px; border-radius:5px; }
+  .okbg { background:#12331f; color:#69f0ae; } .badbg { background:#3a1414; color:#ff8a80; }
+  .row { font-size:11px; padding:1px 0; } .pass { color:#69f0ae; } .fail { color:#ff5252; }
+</style>
+</head>
+<body>
+<h1>Recorded-position pins (P2) — real Planner over a fake HaApi</h1>
+<div id="summary">Running…</div>
+<div id="rows"></div>
+
+<!-- Harness build (from the repo root; NEVER reuse stale bundles):
+       H=/tmp/diorama-harness-record
+       rm -rf "$H"; mkdir -p "$H"; cp -r dist/* "$H"/
+       cp test-pages/record-pin-test.html "$H"/
+       npx esbuild src/geo.ts --format=esm --outfile="$H"/geo.mod.js
+       T=$(mktemp -d); cp -r src/* "$T"/
+       cp test-pages/fake-avatar-store.ts "$T"/avatar-store.ts
+       npx esbuild "$T"/planner.ts --bundle --format=esm --outfile="$H"/planner.mod.js
+     Run headless (serve over http — Chrome blocks dynamic module imports on file://):
+       (cd "$H" && python3 -m http.server 8796 &)
+       google-chrome --headless=new --disable-gpu --use-angle=swiftshader \
+         --virtual-time-budget=30000 --dump-dom \
+         "http://localhost:8796/record-pin-test.html" | grep -o "<title>[^<]*"  -->
+<script type="module">
+  const V = '?v=' + Date.now();
+  const { fitGeoTransform, latLonToPlan } = await import('./geo.mod.js' + V);
+  const { Planner } = await import('./planner.mod.js' + V);
+
+  const results = [];
+  const ok = (name, cond, extra = '') => results.push({ name, pass: !!cond, extra: String(extra) });
+  const near = (a, b, tol = 1e-4) => Math.abs(a - b) <= tol;
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  async function waitFor(cond, tries = 600) {
+    for (let i = 0; i < tries; i++) { if (cond()) return true; await sleep(4); }
+    return !!cond();
+  }
+  const H = t => document.getElementById('rows').insertAdjacentHTML('beforeend', `<h2>${t}</h2>`);
+
+  // ── Fake HaApi over a Map (LocalApi seam), with a states object ────────────
+  class FakeHa {
+    constructor(seed, states) {
+      this.map = new Map();
+      for (const [k, v] of Object.entries(seed || {})) this.map.set(k, JSON.parse(JSON.stringify(v)));
+      this.states = states || {}; this._s = []; this._c = [];
+    }
+    connect() { for (const cb of this._c) cb('connected'); for (const cb of this._s) cb(this.states, undefined); }
+    onState(fn) { this._s.push(fn); } onConn(fn) { this._c.push(fn); }
+    callService() { return Promise.resolve(); }
+    async getHistory() { return {}; } async getWeatherForecasts() { return null; }
+    async getDevices() { return []; } async getEntityRegistry() { return []; } async updateEntityRegistry() { return true; }
+    async getUserData(k) { return this.map.has(k) ? JSON.parse(JSON.stringify(this.map.get(k))) : null; }
+    async setUserData(k, v) { this.map.set(k, JSON.parse(JSON.stringify(v))); return true; }
+    async refreshStates() {} async subscribeMqtt() { return () => {}; } async publishMqtt() {}
+  }
+
+  // Two calibrated landmarks → a full geo fit. Chosen so plan coords are simple.
+  const GEO = () => ({
+    landmarks: [
+      { id: 'lmA', name: 'A', x: 0,    y: 0,    lat: 45,      lon: -93 },
+      { id: 'lmB', name: 'B', x: 3000, y: 1000, lat: 45.0002, lon: -92.9997 },
+    ],
+    accuracyGateM: 30,
+  });
+  // The expected geo→plan transform (same math the Planner runs internally).
+  const FIT = fitGeoTransform(GEO().landmarks.map(l => ({ x: l.x, y: l.y, lat: l.lat, lon: l.lon })));
+
+  const TRACKER = 'device_tracker.phone';
+  const mkStates = (lat, lon, acc) => ({
+    [TRACKER]: {
+      entity_id: TRACKER, state: 'not_home',
+      attributes: { latitude: lat, longitude: lon, gps_accuracy: acc, source_type: 'gps' },
+      last_updated: new Date().toISOString(),
+    },
+  });
+
+  async function mkPlanner({ geo = GEO(), states = mkStates(45.0001, -92.99985, 8), mode = 'edit' } = {}) {
+    localStorage.removeItem('diorama:store:v1'); localStorage.removeItem('diorama:configs');
+    const floor = { id: 'f1', name: 'Home', w: 12000, d: 12000, walls: [], furniture: [],
+      lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [], bleProxies: [],
+      doors: [], windows: [], rooms: [], groundAreas: [], bg: null };
+    const seed = { v: 2, floors: [floor], currentFloorId: 'f1', activeSensorId: null,
+      coverage: true, imperial: false, showDetails: false, useRawTargets: false, geo };
+    const p = new Planner();
+    if (mode !== 'edit') { /* set after connect below */ }
+    p.connectWith(new FakeHa({ diorama: seed }, states));
+    await waitFor(() => p.configIndex !== null);
+    if (mode !== 'edit') p.setUiMode(mode);
+    return p;
+  }
+
+  try {
+    // ═══ 1. geoFit sanity ═══
+    H('1. fit sanity');
+    {
+      const p = await mkPlanner();
+      ok('1A geoFit quality full', p.geoFit()?.transform.quality === 'full', p.geoFit()?.transform.quality);
+    }
+
+    // ═══ 2. recordPositionPin — capture + projection ═══
+    H('2. record current fix');
+    {
+      const p = await mkPlanner({ states: mkStates(45.0001, -92.99985, 8) });
+      const res = await p.recordPositionPin(TRACKER);
+      ok('2A record ok', res.ok === true, JSON.stringify(res));
+      ok('2B no warn (within gate)', res.warn == null, res.warn);
+      ok('2C one pin recorded', p.recordedPins().length === 1);
+      const r = p.recordedPins()[0];
+      ok('2D pin stores lat/lon (source of truth)', r.lat === 45.0001 && r.lon === -92.99985);
+      ok('2E pin stores accuracy', r.accuracy === 8);
+      ok('2F pin has NO plan x/y stored', r.x === undefined && r.y === undefined);
+      ok('2G recordedAt set', typeof r.recordedAt === 'string');
+      ok('2H calibTracker persisted', p.store.geo.calibTracker === TRACKER);
+      // Projection matches latLonToPlan through the fit.
+      const want = latLonToPlan(FIT, r.lat, r.lon);
+      const proj = p.projectedRecordedPins()[0];
+      ok('2I projected ok', proj.ok === true);
+      ok('2J projected x matches fit', near(proj.x, want.x), `${proj.x} ≈ ${want.x}`);
+      ok('2K projected y matches fit', near(proj.y, want.y), `${proj.y} ≈ ${want.y}`);
+    }
+
+    // ═══ 3. accuracy gate → record + WARN ═══
+    H('3. accuracy gate warns, never refuses');
+    {
+      const p = await mkPlanner({ states: mkStates(45.0001, -92.99985, 55) });
+      const res = await p.recordPositionPin(TRACKER);
+      ok('3A record still ok past gate', res.ok === true);
+      ok('3B warn present', typeof res.warn === 'string' && res.warn.length > 0, res.warn);
+      ok('3C pin kept accuracy 55', p.recordedPins()[0].accuracy === 55);
+    }
+
+    // ═══ 4. no fix / no tracker ═══
+    H('4. failure messages');
+    {
+      const p = await mkPlanner({ states: {} });
+      const r1 = await p.recordPositionPin(TRACKER);
+      ok('4A no fix → ok:false + error', r1.ok === false && !!r1.error, r1.error);
+      const r2 = await p.recordPositionPin('');    // no tracker resolvable
+      ok('4B no tracker → ok:false + error', r2.ok === false && !!r2.error, r2.error);
+      ok('4C nothing recorded', p.recordedPins().length === 0);
+    }
+
+    // ═══ 5. manual add + parse validation ═══
+    H('5. manual add');
+    {
+      const p = await mkPlanner();
+      const id = p.addManualRecordedPin(45.0003, -92.9999, 'Corner');
+      ok('5A manual add returns id', typeof id === 'string');
+      const r = p.recordedPins()[0];
+      ok('5B manual pin no accuracy (sentinel)', r.accuracy === undefined);
+      ok('5C manual name kept', r.name === 'Corner');
+      ok('5D bad lat rejected → null', p.addManualRecordedPin(120, 0) === null);
+      ok('5E bad lon rejected → null', p.addManualRecordedPin(0, 999) === null);
+      ok('5F still only 1 pin', p.recordedPins().length === 1);
+    }
+
+    // ═══ 6. reorder (chain ORDER is the boundary) ═══
+    H('6. reorder');
+    {
+      const p = await mkPlanner();
+      const a = p.addManualRecordedPin(45.0001, -93, 'a');
+      const b = p.addManualRecordedPin(45.0002, -93, 'b');
+      const c = p.addManualRecordedPin(45.0003, -93, 'c');
+      ok('6A initial order a,b,c', p.recordedPins().map(r => r.name).join('') === 'abc');
+      p.moveRecordedPin(b, -1);
+      ok('6B move b earlier → b,a,c', p.recordedPins().map(r => r.name).join('') === 'bac');
+      p.moveRecordedPin(b, 1);
+      ok('6C move b later → a,b,c', p.recordedPins().map(r => r.name).join('') === 'abc');
+      p.moveRecordedPin(a, -1); // already first → no-op
+      ok('6D move first up is a no-op', p.recordedPins().map(r => r.name).join('') === 'abc');
+    }
+
+    // ═══ 7. closed flag ═══
+    H('7. closed flag');
+    {
+      const p = await mkPlanner();
+      ok('7A default not closed', p.store.geo.recordedClosed !== true);
+      p.setRecordedClosed(true);
+      ok('7B set closed true', p.store.geo.recordedClosed === true);
+      p.setRecordedClosed(false);
+      ok('7C set closed false → cleared', !p.store.geo.recordedClosed);
+    }
+
+    // ═══ 8. convert to ground area ═══
+    H('8. convert to ground area');
+    {
+      const p = await mkPlanner();
+      const pins = [[45.0001, -93], [45.0002, -92.9998], [45.00005, -92.9997]];
+      const ll = pins.map(([lat, lon]) => { p.addManualRecordedPin(lat, lon); return { lat, lon }; });
+      const before = p.floor().groundAreas.length;
+      const res = p.recordedChainToGroundArea('grass');
+      ok('8A convert ok', res.ok === true, JSON.stringify(res));
+      ok('8B ground area appended', p.floor().groundAreas.length === before + 1);
+      const ga = p.floor().groundAreas.find(g => g.id === res.id);
+      ok('8C kind grass', ga.kind === 'grass');
+      ok('8D 3 polygon points', ga.points.length === 3);
+      // Points equal each pin projected through the fit (EXACT, not grid-rounded).
+      let allMatch = true;
+      for (let i = 0; i < 3; i++) {
+        const w = latLonToPlan(FIT, ll[i].lat, ll[i].lon);
+        if (!near(ga.points[i].x, w.x) || !near(ga.points[i].y, w.y)) allMatch = false;
+      }
+      ok('8E polygon = projected pins', allMatch);
+      ok('8F recorded chain kept after convert', p.recordedPins().length === 3);
+      // Non-integer (exact) coords prove no grid rounding.
+      ok('8G coords not grid-rounded', ga.points.some(pt => pt.x !== Math.round(pt.x / 100) * 100 || pt.y !== Math.round(pt.y / 100) * 100));
+    }
+    {
+      // <3 pins → error, no area.
+      const p = await mkPlanner();
+      p.addManualRecordedPin(45.0001, -93);
+      const before = p.floor().groundAreas.length;
+      const res = p.recordedChainToGroundArea();
+      ok('8H <3 pins → error', res.ok === false && !!res.error, res.error);
+      ok('8I no area created', p.floor().groundAreas.length === before);
+    }
+    {
+      // No calibrated landmark (quality none) → pins can't project → error.
+      const p = await mkPlanner({ geo: { landmarks: [] } });
+      p.addManualRecordedPin(45.0001, -93);
+      p.addManualRecordedPin(45.0002, -93);
+      p.addManualRecordedPin(45.0003, -93);
+      ok('8J unfitted projectedRecordedPins ok:false', p.projectedRecordedPins().every(r => r.ok === false));
+      const res = p.recordedChainToGroundArea();
+      ok('8K convert without fit → error', res.ok === false && !!res.error, res.error);
+    }
+
+    // ═══ 9. edit-gates (kiosk / view no-op) ═══
+    H('9. edit gates');
+    {
+      const p = await mkPlanner({ mode: 'kiosk' });
+      const res = await p.recordPositionPin(TRACKER);
+      ok('9A kiosk record refused', res.ok === false, res.error);
+      ok('9B kiosk nothing recorded', p.recordedPins().length === 0);
+      ok('9C kiosk manual add refused', p.addManualRecordedPin(45, -93) === null && p.recordedPins().length === 0);
+      ok('9D kiosk convert refused', p.recordedChainToGroundArea().ok === false);
+    }
+
+    // ═══ 10. persistence round-trip through _loadFromHa (geo whole-object) ═══
+    H('10. persistence');
+    {
+      const seededGeo = Object.assign(GEO(), {
+        recorded: [
+          { id: 'rp1', name: 'X', lat: 45.0004, lon: -92.9995, accuracy: 6, recordedAt: '2026-07-23T00:00:00Z' },
+          { id: 'rp2', name: 'Y', lat: 45.0005, lon: -92.9994, recordedAt: '2026-07-23T00:01:00Z' },
+        ],
+        recordedClosed: true,
+        calibTracker: TRACKER,
+      });
+      const p = await mkPlanner({ geo: seededGeo });
+      ok('10A recorded pins loaded', p.recordedPins().length === 2);
+      ok('10B recorded lat/lon survive', p.recordedPins()[0].lat === 45.0004 && p.recordedPins()[1].lon === -92.9994);
+      ok('10C recordedClosed survives', p.store.geo.recordedClosed === true);
+      ok('10D calibTracker survives', p.store.geo.calibTracker === TRACKER);
+      ok('10E manual sentinel survives (no accuracy)', p.recordedPins()[1].accuracy === undefined);
+    }
+
+    // ═══ 11. delete / clear ═══
+    H('11. delete / clear');
+    {
+      const p = await mkPlanner();
+      const a = p.addManualRecordedPin(45.0001, -93);
+      const b = p.addManualRecordedPin(45.0002, -93);
+      p.deleteRecordedPin(a);
+      ok('11A delete removes one', p.recordedPins().length === 1 && p.recordedPins()[0].id === b);
+      p.clearRecordedPins();
+      ok('11B clear removes all', p.recordedPins().length === 0);
+    }
+  } catch (e) {
+    ok('harness threw', false, e && (e.stack || e.message || String(e)));
+  }
+
+  // ── render ──
+  const rows = document.getElementById('rows');
+  let passN = 0, failN = 0;
+  for (const r of results) {
+    if (r.pass) passN++; else failN++;
+    rows.insertAdjacentHTML('beforeend',
+      `<div class="row"><span class="${r.pass ? 'pass' : 'fail'}">${r.pass ? 'PASS' : 'FAIL'}</span> ${r.name} <span style="color:#607d8b">${r.extra}</span></div>`);
+  }
+  const sum = document.getElementById('summary');
+  sum.className = failN === 0 ? 'okbg' : 'badbg';
+  sum.textContent = `RECORDPIN ${failN === 0 ? 'PASS' : 'FAIL'} ${passN}/${results.length}`;
+  document.title = `RECORDPIN ${failN === 0 ? 'PASS' : 'FAIL'} ${passN}/${results.length}`
+    + (failN ? ` [${results.filter(r => !r.pass).map(r => r.name).join(', ')}]` : '');
+</script>
+</body>
+</html>

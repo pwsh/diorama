@@ -17,9 +17,9 @@ import { stepFusion, newFusionState, DEFAULT_FUSION_CFG,
 import { buildAlertFeed, alertCenterEnabled, isAlertDomain,
          type PanelAlert, type HaNotification, type RepairIssue } from './alerts.js';
 import { fitGeoTransform, latLonToPlan, clampToBoundary, planBearingDeg, compass8, medianLatLon,
-         fmtDistanceM, fmtAccuracyM,
-         type GeoTransform, type GeoPair, type LatLonSample } from './geo.js';
-import type { GeoConfig, GeoLandmark, DioramaPerson, RobotFixture, ActionButton, Light, ValveFixture, BgTextEntry, BgTextEntryMode } from './types.js';
+         fmtDistanceM, fmtAccuracyM, projectRecordedPins, parseLatLon,
+         type GeoTransform, type GeoPair, type LatLonSample, type ProjectedRecordedPin } from './geo.js';
+import type { GeoConfig, GeoLandmark, RecordedPin, GroundKind, DioramaPerson, RobotFixture, ActionButton, Light, ValveFixture, BgTextEntry, BgTextEntryMode } from './types.js';
 import { formatEntityValue } from './value-rules.js';
 
 // ── Bermuda BLE discovery (runtime-only) ──────────────────────────────────
@@ -3776,6 +3776,142 @@ export class Planner extends EventTarget {
     this._sendHighAccuracy(gc.notifySlug, { command: 'force_off' });
     this.geoCalib = null;
     this.emitConfig();
+  }
+
+  // ── Recorded-position pins (roadmap P2 — the REVERSE of landmark placement) ─
+  // Capture the CURRENT GPS fix (or type lat/lon) → a pin drops onto the plan
+  // wherever the landmark fit projects it. lat/lon are the SOURCE OF TRUTH; the
+  // plan position is DERIVED at read time via projectRecordedPins(geoFit), so a
+  // later landmark recalibration corrects every recorded pin. Primary use:
+  // walk the property line, tap "Record point" at each corner → a boundary
+  // chain, convertible into an editable ground-area polygon.
+  recordedPins(): RecordedPin[] { return this.store.geo?.recorded ?? []; }
+
+  // The recorded pins projected through the current geo fit. `ok:false` when the
+  // transform is unusable (no calibrated landmark). Cheap; safe per frame.
+  projectedRecordedPins(): ProjectedRecordedPin[] {
+    const fit = this.geoFit();
+    return projectRecordedPins(this.recordedPins(), fit?.transform ?? null);
+  }
+
+  // Resolve the device_tracker "Record point" reads from: explicit arg →
+  // persisted geo.calibTracker → the first Person's GPS tracker (the same
+  // default the calibrate card uses).
+  recordTrackerId(explicit?: string): string {
+    return explicit
+      || this.store.geo?.calibTracker
+      || (this.store.people ?? []).map(pe => pe.gpsTrackerId).find(Boolean)
+      || '';
+  }
+
+  // Persist the tracker "Record point" uses (mirrors the calibration selection).
+  setRecordTracker(id: string): void {
+    this.setGeo(g => { g.calibTracker = id || undefined; });
+  }
+
+  // Record the CURRENT fix from the resolved device_tracker as a new pin. Reads
+  // the raw lat/lon/gps_accuracy off the entity (gpsFixFor-style). A fix worse
+  // than the accuracy gate is RECORDED ANYWAY (walking a boundary shouldn't
+  // fight the user) but keeps `accuracy` so the UI can warn — reported via the
+  // `warn` field. Edit-mode only; returns a clear error string otherwise.
+  async recordPositionPin(trackerId?: string): Promise<{ ok: boolean; error?: string; warn?: string; id?: string }> {
+    if (this.uiMode !== 'edit') return { ok: false, error: 'Recording is only available in edit mode.' };
+    const eid = this.recordTrackerId(trackerId);
+    if (!eid) return { ok: false, error: 'No device_tracker selected. Pick one under Record point.' };
+    const st = this.hass?.states?.[eid];
+    if (!st) return { ok: false, error: `Tracker ${eid} not found.` };
+    const a = st.attributes as Record<string, unknown>;
+    const lat = typeof a.latitude === 'number' ? a.latitude : null;
+    const lon = typeof a.longitude === 'number' ? a.longitude : null;
+    if (lat == null || lon == null) return { ok: false, error: `No GPS fix from ${eid} yet.` };
+    const accuracy = typeof a.gps_accuracy === 'number' ? a.gps_accuracy : undefined;
+    const g = this._ensureGeo();
+    if (!g.recorded) g.recorded = [];
+    const id = newId('rp');
+    g.recorded.push({ id, name: `Point ${g.recorded.length + 1}`, lat, lon, accuracy, recordedAt: new Date().toISOString() });
+    g.calibTracker = eid; // remember the selection for next time
+    this.save();
+    this.emitConfig();
+    const gate = this.geoAccuracyGate();
+    const warn = (accuracy != null && accuracy > gate)
+      ? `Recorded, but fix accuracy ${fmtAccuracyM(accuracy, this.store.imperial)} exceeds the ${gate} m gate.`
+      : undefined;
+    return { ok: true, id, warn };
+  }
+
+  // Add a manually-typed pin. lat/lon are validated ({parseLatLon} range rules);
+  // no accuracy (the manual sentinel). Returns the id, or null on bad input.
+  addManualRecordedPin(lat: number, lon: number, name?: string): string | null {
+    if (this.uiMode !== 'edit') return null;
+    const ok = parseLatLon(`${lat}, ${lon}`); // reuse the range validation
+    if (!ok) return null;
+    const g = this._ensureGeo();
+    if (!g.recorded) g.recorded = [];
+    const id = newId('rp');
+    g.recorded.push({ id, name: name || `Point ${g.recorded.length + 1}`, lat: ok.lat, lon: ok.lon, recordedAt: new Date().toISOString() });
+    this.save();
+    this.emitConfig();
+    return id;
+  }
+
+  updateRecordedPin(id: string, mut: (r: RecordedPin) => void): void {
+    const r = this.store.geo?.recorded?.find(x => x.id === id);
+    if (!r) return;
+    mut(r);
+    this.save();
+    this.emitConfig();
+  }
+
+  deleteRecordedPin(id: string): void {
+    if (!this.store.geo?.recorded) return;
+    this.store.geo.recorded = this.store.geo.recorded.filter(r => r.id !== id);
+    this.save();
+    this.emitConfig();
+  }
+
+  // Reorder a recorded pin (chain ORDER is the boundary). dir −1 = earlier, +1 = later.
+  moveRecordedPin(id: string, dir: number): void {
+    const arr = this.store.geo?.recorded;
+    if (!arr) return;
+    const i = arr.findIndex(r => r.id === id);
+    if (i < 0) return;
+    const j = i + (dir < 0 ? -1 : 1);
+    if (j < 0 || j >= arr.length) return;
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+    this.save();
+    this.emitConfig();
+  }
+
+  setRecordedClosed(b: boolean): void {
+    this.setGeo(g => { g.recordedClosed = b || undefined; });
+  }
+
+  clearRecordedPins(): void {
+    if (!this.store.geo?.recorded?.length) return;
+    this.store.geo.recorded = [];
+    this.save();
+    this.emitConfig();
+  }
+
+  // Convert the recorded chain → a GroundArea polygon on the CURRENT floor.
+  // Needs a usable fit (quality ≠ 'none') and ≥3 projectable pins. Coords are
+  // kept EXACT (boundaries aren't grid objects). The recorded chain is left in
+  // place (the user may delete it afterward). Returns a clear error otherwise.
+  recordedChainToGroundArea(kind: GroundKind = 'grass'): { ok: boolean; error?: string; id?: string } {
+    if (this.uiMode !== 'edit') return { ok: false, error: 'Only available in edit mode.' };
+    const projected = this.projectedRecordedPins().filter(p => p.ok);
+    if (projected.length < 3) {
+      return { ok: false, error: 'Need ≥3 recorded points that project (calibrate a landmark first).' };
+    }
+    const pts = projected.slice(0, 20).map(p => ({ x: p.x, y: p.y }));
+    const f = this.floor();
+    if (!f.groundAreas) f.groundAreas = [];
+    const id = newId('ga');
+    f.groundAreas.push({ id, name: `Boundary ${f.groundAreas.length + 1}`, points: pts, kind });
+    this.activeGroundAreaId = id;
+    this.save();
+    this.emitConfig();
+    return { ok: true, id };
   }
 
   setBleShowUnknown(v: boolean): void {

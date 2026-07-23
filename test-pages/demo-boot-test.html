@@ -27,7 +27,8 @@
   const V = '?v=' + Date.now();
   const M = await import('./demo-boot.mod.js' + V);
   const { Planner, LocalApi, shouldStartOffline, seedDemoConfigs, demoSeedHash,
-          demoResetKeys, clearDemoStorage, DEMO_SEEDED_KEY } = M;
+          demoResetKeys, clearDemoStorage, DEMO_SEEDED_KEY,
+          seedModelViewer, classifyModelKind, MODEL_VIEWER_NAME } = M;
 
   const results = [];
   const ok = (name, cond, extra = '') => results.push({ name, pass: !!cond, extra: String(extra) });
@@ -94,6 +95,8 @@
       ok('1: ?offline=1 → offline', shouldStartOffline(noFlag, '?offline=1') === true);
       ok('1: ?demo=ranch-3bed → offline', shouldStartOffline(noFlag, '?demo=ranch-3bed') === true);
       ok('1: ?demo= (empty) → offline', shouldStartOffline(noFlag, '?demo=') === true);
+      ok('1: ?model=sofa → offline', shouldStartOffline(noFlag, '?model=sofa') === true);
+      ok('1: ?model= (empty) → offline', shouldStartOffline(noFlag, '?model=') === true);
       ok('1: localStorage flag → offline (unrelated query)', shouldStartOffline(withFlag, '?foo=1') === true);
       ok('1: no flag + ?foo=1 → NOT offline', shouldStartOffline(noFlag, '?foo=1') === false);
       ok('1: no flag + empty search → NOT offline', shouldStartOffline(noFlag, '') === false);
@@ -183,6 +186,68 @@
       ok('4: clear leaves exactly the non-demo keys',
         JSON.stringify(left) === JSON.stringify(['diorama:offline', 'diorama:view', 'unrelated:y']),
         JSON.stringify(left));
+    }
+    // ── (5) classifyModelKind: furniture vs light vs unknown ──────────────────
+    {
+      ok('5: sofa classifies as furniture', classifyModelKind('sofa').isFurniture === true &&
+        classifyModelKind('sofa').isLight === false);
+      ok('5: fireplace classifies as light', classifyModelKind('fireplace').isLight === true &&
+        classifyModelKind('fireplace').isFurniture === false);
+      ok('5: pendant classifies as light', classifyModelKind('pendant').isLight === true);
+      ok('5: nonsense kind is neither', classifyModelKind('__nope__').isFurniture === false &&
+        classifyModelKind('__nope__').isLight === false);
+    }
+
+    // ── (5b) seedModelViewer: creates "Model viewer" with one centered piece ──
+    {
+      const p = await freshOfflinePlanner();
+      const res = await seedModelViewer(p, 'sofa');
+      ok('5b: result ok + not a light', res.ok === true && res.isLight === false, JSON.stringify(res));
+      ok('5b: "Model viewer" config exists', hasCfg(p, MODEL_VIEWER_NAME), p.listConfigs().map(c => c.name).join(','));
+      ok('5b: switched to Model viewer', nameOfActive(p) === MODEL_VIEWER_NAME, nameOfActive(p));
+      const fl = p.store.floors[0];
+      ok('5b: one furniture piece, no lights', fl.furniture.length === 1 && fl.lights.length === 0,
+        `f=${fl.furniture.length} l=${fl.lights.length}`);
+      ok('5b: piece is a sofa', fl.furniture[0].kind === 'sofa', fl.furniture[0].kind);
+      ok('5b: piece centered on floor', fl.furniture[0].x === fl.w / 2 && fl.furniture[0].y === fl.d / 2,
+        `${fl.furniture[0].x},${fl.furniture[0].y} of ${fl.w}x${fl.d}`);
+      ok('5b: cam is 6 numbers', Array.isArray(res.cam) && res.cam.length === 6 && res.cam.every(n => isFinite(n)),
+        JSON.stringify(res.cam));
+
+      // ── (5c) light kind → a lit light fixture, no furniture ─────────────────
+      const res2 = await seedModelViewer(p, 'fireplace');
+      ok('5c: result flagged as light', res2.ok === true && res2.isLight === true, JSON.stringify(res2));
+      const fl2 = p.store.floors[0];
+      ok('5c: one light, no furniture', fl2.lights.length === 1 && fl2.furniture.length === 0,
+        `f=${fl2.furniture.length} l=${fl2.lights.length}`);
+      ok('5c: light iconKind + localState on', fl2.lights[0].iconKind === 'fireplace' && fl2.lights[0].localState === 'on',
+        `${fl2.lights[0].iconKind}/${fl2.lights[0].localState}`);
+
+      // ── (5d) UPSERT: second ?model= reuses the same config (no spam) ────────
+      const before = p.listConfigs().filter(c => c.name === MODEL_VIEWER_NAME).length;
+      const res3 = await seedModelViewer(p, 'chair');
+      const after = p.listConfigs().filter(c => c.name === MODEL_VIEWER_NAME).length;
+      ok('5d: still exactly one Model viewer config', before === 1 && after === 1, `${before}→${after}`);
+      ok('5d: content replaced to chair', p.store.floors[0].furniture.length === 1 &&
+        p.store.floors[0].furniture[0].kind === 'chair', p.store.floors[0].furniture[0]?.kind);
+
+      // ── (5e) persistence: reload from the registry keeps the Model viewer ───
+      await p.saveConfigNow();
+      const p2 = new Planner();
+      p2.connectWith(new LocalApi());
+      await waitFor(() => p2.configIndex !== null);
+      ok('5e: Model viewer survives a fresh planner load', p2.listConfigs().some(c => c.name === MODEL_VIEWER_NAME),
+        p2.listConfigs().map(c => c.name).join(','));
+    }
+
+    // ── (5f) unknown kind → {ok:false}, no store mutation ─────────────────────
+    {
+      const p = await freshOfflinePlanner();
+      const before = p.store.floors[0].furniture.length;
+      const res = await seedModelViewer(p, '__nope__');
+      ok('5f: unknown kind → ok:false', res.ok === false, JSON.stringify(res));
+      ok('5f: no Model viewer config created', !hasCfg(p, MODEL_VIEWER_NAME), p.listConfigs().map(c => c.name).join(','));
+      ok('5f: store floor untouched', p.store.floors[0].furniture.length === before, before);
     }
   } catch (err) {
     ok('harness threw', false, (err && err.stack) ? err.stack.split('\n').slice(0, 3).join(' | ') : String(err));

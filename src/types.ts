@@ -1148,6 +1148,21 @@ export interface GeoLandmark {
   hidden?: boolean;            // per-landmark hide (plus the whole `geo` layer toggle)
 }
 
+// A recorded-position pin (roadmap P2 — the REVERSE of a landmark): capture the
+// CURRENT GPS fix (or type lat/lon) and a pin drops onto the plan wherever the
+// landmark fit projects it. lat/lon are the SOURCE OF TRUTH — plan x/y is NEVER
+// stored; every read re-projects through Planner.geoFit() so recalibrating the
+// landmarks later automatically corrects every recorded pin. Primary use:
+// walk the property line tapping "Record point" at each corner → a visible
+// boundary chain, convertible into an editable ground-area polygon.
+export interface RecordedPin {
+  id: string; name?: string;
+  lat: number; lon: number;    // SOURCE OF TRUTH — never store plan x/y
+  accuracy?: number;           // m, from the fix; absent for manual entry
+                               // (the landmark manual-sentinel idiom)
+  recordedAt?: string;         // ISO timestamp of the capture
+}
+
 export interface GeoConfig {
   landmarks: GeoLandmark[];
   northDeg?: number;           // compass bearing (deg CW from true north) of plan +Y;
@@ -1158,6 +1173,10 @@ export interface GeoConfig {
                                // gps_accuracy (m); default 30
   showEvents?: boolean;        // show nearby geo_location event pins (earthquakes, fires…);
                                // absent = ON. Runtime-derived pins (Planner.geoEventPins).
+  recorded?: RecordedPin[];    // P2 record-a-position pins (boundary chain)
+  recordedClosed?: boolean;    // draw the recorded chain closed (last→first segment)
+  calibTracker?: string;       // persisted device_tracker.* used by "Record point"
+                               // (mirrors the calibration tracker selection)
 }
 
 // ── MQTT bridge (Phase 5) ────────────────────────────────────────────────

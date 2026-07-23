@@ -1,0 +1,237 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>CARD …</title>
+<style>
+  body { margin:0; background:#0d1116; color:#cfd8dc; font:13px/1.5 sans-serif; padding:14px; }
+  h1 { font-size:15px; margin:0 0 10px; }
+  #summary { font-size:14px; font-weight:bold; margin:10px 0; padding:8px 10px; border-radius:5px; }
+  .okbg { background:#12331f; color:#69f0ae; } .badbg { background:#3a1414; color:#ff8a80; }
+  .row { display:flex; justify-content:space-between; gap:10px; padding:2px 0; border-bottom:1px solid #1c2530; }
+  .pass { color:#69f0ae; } .fail { color:#ff5252; }
+  .name { color:#90caf9; } .extra { color:#ffd54f; font-size:11px; }
+  /* Give mounted cards a real box so canvas ResizeObserver fires. Default hosts
+     are 480px (> the 360px auto-compact threshold); .narrow tests ~300px. */
+  #stage { position:absolute; left:-10000px; top:0; }
+  .cardhost { width:480px; height:300px; }
+  .cardhost.narrow { width:300px; }
+</style>
+<h1>Lovelace card — shared Planner · config surface · sizing · view-mode · lifecycle</h1>
+<div id="summary">Running…</div>
+<div id="rows"></div>
+<div id="stage"></div>
+
+<!-- Drives the REAL <diorama-card> (bundled card.mod.js) with a FAKE hass object
+     (a stub `connection` matching HassPanelAdapter's calls). Build recipe:
+       npm run build
+       H=/tmp/diorama-harness-card; mkdir -p "$H"; cp -r dist/* test-pages/* "$H"/
+       T=$(mktemp -d); cp -r src/* "$T"/
+       cp test-pages/fake-avatar-store.ts "$T"/avatar-store.ts
+       cp test-pages/card-entry.ts        "$T"/card-entry.ts
+       npx esbuild "$T"/card-entry.ts --bundle --format=esm --outfile="$H"/card.mod.js
+       cd "$H" && python3 -m http.server 8842
+     (esbuild inlines the three-renderer dynamic import — only executed if a 3D
+     card mounts; the 2D assertions never touch it.) -->
+<script type="module">
+  const V = '?v=' + Date.now();
+  const { Planner, peekSharedPlanner } = await import('./card.mod.js' + V);
+
+  const results = [];
+  const ok = (name, cond, extra = '') => results.push({ name, pass: !!cond, extra: String(extra) });
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  async function waitFor(cond, tries = 800) {
+    for (let i = 0; i < tries; i++) { if (cond()) return true; await sleep(5); }
+    return !!cond();
+  }
+  const clone = x => JSON.parse(JSON.stringify(x));
+  const stage = document.getElementById('stage');
+
+  // ── Fake hass: states + a connection stub matching HassPanelAdapter ─────────
+  let subscribeEventsCalls = 0;
+  function makeStore(floors) {
+    return {
+      v: 2, currentFloorId: floors[0].id, activeSensorId: null,
+      coverage: true, imperial: false, showDetails: false, useRawTargets: false,
+      floors: floors.map(f => ({
+        w: 8000, d: 6000, walls: [], furniture: [], lights: [], switches: [],
+        sensors: [], motionSensors: [], roamers: [], envSensors: [], doors: [],
+        windows: [], bg: null, rooms: [], bleProxies: [], alarmPanels: [],
+        safetySensors: [], robots: [], presenceZones: [], cameras: [],
+        groundAreas: [], voidAreas: [], ...f,
+      })),
+    };
+  }
+  function makeHass(seed) {
+    const map = new Map(Object.entries(seed || {}).map(([k, v]) => [k, clone(v)]));
+    return {
+      states: {},
+      connection: {
+        async sendMessagePromise(msg) {
+          switch (msg.type) {
+            case 'frontend/get_user_data': return { value: map.has(msg.key) ? clone(map.get(msg.key)) : null };
+            case 'frontend/set_user_data': map.set(msg.key, clone(msg.value)); return {};
+            case 'get_states': return [];
+            case 'config/device_registry/list': return [];
+            case 'config/entity_registry/list': return [];
+            default: return {};
+          }
+        },
+        subscribeEvents(_cb, _type) { subscribeEventsCalls++; return Promise.resolve(() => {}); },
+        subscribeMessage(_cb, _msg) { return Promise.resolve(() => {}); },
+      },
+    };
+  }
+
+  function mkCard(narrow = false) {
+    const host = document.createElement('div');
+    host.className = 'cardhost' + (narrow ? ' narrow' : '');
+    const card = document.createElement('diorama-card');
+    host.appendChild(card);
+    stage.appendChild(host);
+    return card;
+  }
+
+  try {
+    // Reset localStorage config cache so a fresh registry loads from the fake hass.
+    localStorage.removeItem('diorama:store:v1');
+    localStorage.removeItem('diorama:configs');
+
+    const SEED = { 'diorama': makeStore([
+      { id: 'f1', name: 'Ground' }, { id: 'f2', name: 'Upstairs' },
+    ]) };
+
+    // ── (a) setConfig + hass → renders the 2D canvas ──────────────────────────
+    const cardA = mkCard();
+    cardA.setConfig({ view: '2d', mode: 'kiosk' });
+    ok('a: setConfig before hass does not throw + no planner yet', cardA._planner == null, '');
+    cardA.hass = makeHass(SEED);
+    const plA = cardA._planner;
+    ok('a: hass boots a Planner', plA instanceof Planner, '');
+    await waitFor(() => plA.configIndex !== null);
+    ok('a: config registry loaded', plA.configIndex !== null, '');
+    await cardA.updateComplete;
+    await waitFor(() => !!cardA.querySelector('diorama-canvas-2d canvas'));
+    ok('a: renders <diorama-canvas-2d>', !!cardA.querySelector('diorama-canvas-2d'), '');
+    ok('a: canvas element present', !!cardA.querySelector('canvas'), '');
+    ok('a: shared Planner forced kiosk', plA.uiMode === 'kiosk', plA.uiMode);
+
+    // ── (b) two cards share ONE Planner + ONE state_changed subscription ───────
+    const subsBefore = subscribeEventsCalls;
+    const cardB = mkCard();
+    cardB.setConfig({ view: '2d', mode: 'kiosk' });
+    cardB.hass = makeHass(SEED);   // a *different* hass object, same tab
+    ok('b: second card reuses the same Planner (reference)', cardB._planner === plA, '');
+    ok('b: peekSharedPlanner === card Planner', peekSharedPlanner() === plA, '');
+    ok('b: no new state_changed subscription for the 2nd card', subscribeEventsCalls === subsBefore,
+      `calls=${subscribeEventsCalls}`);
+    ok('b: exactly one subscribeEvents overall', subscribeEventsCalls === 1, `calls=${subscribeEventsCalls}`);
+
+    // ── (c) floor config switches floors (retry-on-config) ────────────────────
+    const cardC = mkCard();
+    cardC.setConfig({ view: '2d', mode: 'kiosk', floor: 'Upstairs' });
+    cardC.hass = makeHass(SEED);
+    await waitFor(() => cardC._planner.store.currentFloorId === 'f2', 800);
+    ok('c: floor:"Upstairs" applied (retry-on-config)',
+      cardC._planner.store.currentFloorId === 'f2', cardC._planner.store.currentFloorId);
+    // by id too
+    cardC.setConfig({ view: '2d', mode: 'kiosk', floor: 'f1' });
+    await waitFor(() => cardC._planner.store.currentFloorId === 'f1', 400);
+    ok('c: floor by id applied', cardC._planner.store.currentFloorId === 'f1', cardC._planner.store.currentFloorId);
+
+    // ── (d) mode:'view' wires no click routing (card-local, planner stays kiosk)
+    const cardV = mkCard();
+    cardV.setConfig({ view: '2d', mode: 'view' });
+    cardV.hass = makeHass(SEED);
+    await cardV.updateComplete;
+    await waitFor(() => !!cardV.querySelector('diorama-canvas-2d'));
+    const cv2d = cardV.querySelector('diorama-canvas-2d');
+    ok('d: view card canvas interactive === false', cv2d && cv2d.interactive === false, String(cv2d?.interactive));
+    ok('d: shared Planner uiMode still kiosk (view is card-local)', plA.uiMode === 'kiosk', plA.uiMode);
+    // a kiosk card's canvas stays interactive
+    const ck2d = cardA.querySelector('diorama-canvas-2d');
+    ok('d: kiosk card canvas interactive === true', ck2d && ck2d.interactive === true, String(ck2d?.interactive));
+
+    // ── (e) getCardSize / getGridOptions sane shapes ──────────────────────────
+    ok('e: getCardSize is a positive number', typeof cardA.getCardSize() === 'number' && cardA.getCardSize() > 0,
+      String(cardA.getCardSize()));
+    const g = cardA.getGridOptions();
+    ok('e: getGridOptions rows/min_rows numbers', typeof g.rows === 'number' && typeof g.min_rows === 'number', JSON.stringify(g));
+    ok('e: getGridOptions columns full + min_columns', g.columns === 'full' && g.min_columns >= 1, JSON.stringify(g));
+    const card3d = mkCard();
+    card3d.setConfig({ view: '3d', mode: 'kiosk' });
+    card3d.hass = makeHass(SEED);
+    ok('e: 3D card size > 2D card size', card3d.getCardSize() > cardV.getCardSize(),
+      `${card3d.getCardSize()} vs ${cardV.getCardSize()}`);
+
+    // ── (f) compact hides overlay chrome ──────────────────────────────────────
+    const cardK = mkCard();
+    cardK.setConfig({ view: '2d', mode: 'kiosk', compact: true });
+    cardK.hass = makeHass(SEED);
+    await cardK.updateComplete;
+    await waitFor(() => !!cardK.querySelector('diorama-canvas-2d'));
+    ok('f: compact hides expand link', !cardK.querySelector('.diorama-card-expand'), '');
+    ok('f: compact hides floor chip', !cardK.querySelector('.diorama-card-floorchip'), '');
+    const compactCanvas = cardK.querySelector('diorama-canvas-2d');
+    ok('f: compact passes compact=true to canvas', compactCanvas && compactCanvas.compact === true, String(compactCanvas?.compact));
+    // non-compact card (480px, above the auto-compact threshold) shows chrome
+    ok('f: non-compact card shows expand link', !!cardA.querySelector('.diorama-card-expand'), '');
+    ok('f: non-compact card shows floor chip', !!cardA.querySelector('.diorama-card-floorchip'), '');
+
+    // auto-compact: a ~300px-wide card with no compact config enters compact
+    const cardN = mkCard(true);
+    cardN.setConfig({ view: '2d', mode: 'kiosk' });
+    cardN.hass = makeHass(SEED);
+    await cardN.updateComplete;
+    await waitFor(() => cardN._autoCompact === true, 200);
+    ok('f: ~300px card auto-compacts', cardN._autoCompact === true, `w<360 → ${cardN._autoCompact}`);
+    await cardN.updateComplete;
+    ok('f: auto-compact hides expand link', !cardN.querySelector('.diorama-card-expand'), '');
+
+    // ── (g) setConfig(mode:'edit') throws ─────────────────────────────────────
+    let threw = false;
+    try { mkCard().setConfig({ mode: 'edit' }); } catch { threw = true; }
+    ok('g: setConfig mode:"edit" throws', threw, '');
+    let threwView = false;
+    try { mkCard().setConfig({ view: 'iso' }); } catch { threwView = true; }
+    ok('g: setConfig bad view throws', threwView, '');
+
+    // ── (h) disconnect / reconnect does not throw + re-renders ────────────────
+    const host = cardA.parentElement;
+    let discThrew = false;
+    try {
+      host.removeChild(cardA);              // disconnectedCallback
+      await sleep(20);
+      stage.appendChild(host);              // reconnectedCallback
+      await cardA.updateComplete;
+      await sleep(40);
+    } catch (err) { discThrew = true; ok('h: reconnect stack', false, String(err && err.stack || err)); }
+    ok('h: disconnect/reconnect does not throw', !discThrew, '');
+    ok('h: canvas still present after reconnect', !!cardA.querySelector('diorama-canvas-2d canvas'), '');
+    ok('h: Planner survived reconnect (same instance)', cardA._planner === plA, '');
+
+    // ── (i) 3D card mounts <diorama-three-view> without a synchronous throw ────
+    let threeThrew = false;
+    try {
+      await card3d.updateComplete;
+      await sleep(30);
+    } catch (err) { threeThrew = true; }
+    ok('i: 3D card mounts three-view, no sync throw', !threeThrew && !!card3d.querySelector('diorama-three-view'), '');
+
+  } catch (err) {
+    ok('harness threw', false, (err && err.stack) ? err.stack.split('\n').slice(0, 4).join(' | ') : String(err));
+  }
+
+  // ── Report ──────────────────────────────────────────────────────────────────
+  const pass = results.filter(r => r.pass).length;
+  const total = results.length;
+  const fails = results.filter(r => !r.pass).map(r => r.name + (r.extra ? ` {${r.extra}}` : ''));
+  document.getElementById('rows').innerHTML = results.map(r =>
+    `<div class="row"><span class="name">${r.name}</span>` +
+    `<span class="${r.pass ? 'pass' : 'fail'}">${r.pass ? 'PASS' : 'FAIL'}${r.extra ? ` <span class="extra">${r.extra}</span>` : ''}</span></div>`
+  ).join('');
+  const sum = document.getElementById('summary');
+  sum.textContent = `CARD ${pass === total ? 'PASS' : 'FAIL'} ${pass}/${total}`;
+  sum.className = pass === total ? 'okbg' : 'badbg';
+  window.__RESULT__ = { pass, total, results };
+  document.title = `CARD ${pass === total ? 'PASS' : 'FAIL'} ${pass}/${total}` +
+    (fails.length ? ` | FAILS: ${fails.join('; ')}` : '');
+</script>

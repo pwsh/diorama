@@ -3,7 +3,7 @@ import { query, state } from 'lit/decorators.js';
 import { customElement } from './define.js';
 import { Planner } from '../planner.js';
 import { LocalApi, shouldStartOffline } from '../ha-local.js';
-import { seedDemoConfigs, demoSeedHash, DEMO_SEEDED_KEY, type DemoManifestEntry } from '../demo-seed.js';
+import { seedDemoConfigs, seedModelViewer, demoSeedHash, DEMO_SEEDED_KEY, type DemoManifestEntry } from '../demo-seed.js';
 import { fmtLen } from '../geometry.js';
 import { injectSharedStyles } from '../styles.js';
 import './auth-screen.js';
@@ -232,11 +232,43 @@ export class App extends LitElement {
     const params = (() => {
       try { return new URLSearchParams(window.location.search); } catch { return new URLSearchParams(); }
     })();
-    if (params.has('demo')) {
+    // ?model=<kind> opens a single gallery model in a scratch floor (3D sims
+    // framing); ?demo=<slug> opens a whole demo home. Both are demo mode.
+    if (params.has('model')) {
+      this._planner.demoMode = true;
+      void this._bootModel(this._planner, params.get('model'));
+    } else if (params.has('demo')) {
       this._planner.demoMode = true;
       void this._bootDemo(this._planner, params.get('demo'));
     }
     this.requestUpdate();
+  }
+
+  // Seed/switch the reusable "Model viewer" config holding one instance of the
+  // requested kind, then frame it in 3D with the dimetric "sims" camera. Boots
+  // in 2D first (set synchronously before the first render) so the switch to 3D
+  // mounts <diorama-three-view> FRESH — its _applyUrlTemplate then picks up the
+  // cam we pin on planner.urlTemplate (the one window when cam applies, matching
+  // the docs floor-plan capture flow). Unknown kind → plain ?demo first-home.
+  // Runs ONLY from the ?model standalone path.
+  private async _bootModel(planner: Planner, kind: string | null): Promise<void> {
+    planner.setView('2d');   // synchronous — lands before Lit's first render
+    try {
+      const ready = await this._waitFor(() => planner.configIndex !== null, 8000);
+      if (!ready || !kind) { await this._bootDemo(planner, null); return; }
+      const res = await seedModelViewer(planner, kind);
+      if (!res.ok) { await this._bootDemo(planner, null); return; }
+      // ?mode / ?lock / etc. apply first; then pin the cam + switch to 3D so the
+      // freshly-mounted three-view applies the dimetric pose.
+      this._applyUrlParams(planner);
+      planner.urlTemplate = { ...planner.urlTemplate, cam: res.cam };
+      planner.setView('3d');
+    } catch (err) {
+      console.warn('[diorama demo] model boot failed:', err);
+      try { await this._bootDemo(planner, null); } catch { /* ignore */ }
+    } finally {
+      this.requestUpdate();
+    }
   }
 
   private _waitFor(cond: () => boolean, timeoutMs: number): Promise<boolean> {

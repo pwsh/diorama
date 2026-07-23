@@ -1,4 +1,4 @@
-import { LitElement, html } from 'lit';
+import { LitElement, html, nothing } from 'lit';
 import { property, query } from 'lit/decorators.js';
 import { customElement } from './define.js';
 import { isEditableTarget } from '../dom-utils.js';
@@ -12,6 +12,12 @@ import type { Planner } from '../planner.js';
 @customElement('diorama-canvas-2d')
 export class Canvas2D extends LitElement {
   @property({ attribute: false }) planner!: Planner;
+  // Card-mode knobs (default preserve the panel/app behavior — the app never
+  // sets them). `compact` hides the Reset-view button (small card widths);
+  // `interactive` false suppresses click/tap routing (a 'view'-mode card sharing
+  // the always-kiosk card Planner must not toggle devices).
+  @property({ attribute: false }) compact = false;
+  @property({ attribute: false }) interactive = true;
   @query('#main-canvas') private _canvas!: HTMLCanvasElement;
 
   private _ctx: CanvasRenderingContext2D | null = null;
@@ -35,9 +41,10 @@ export class Canvas2D extends LitElement {
       <canvas id="main-canvas"
               style="display:block;width:100%;height:100%;cursor:crosshair;touch-action:none">
       </canvas>
-      <button class="btn-sm" title="Reset view"
-              style="position:absolute;bottom:10px;left:10px;z-index:5"
-              @click=${this._resetView}>⟳ Reset view</button>
+      ${this.compact ? nothing : html`
+        <button class="btn-sm" title="Reset view"
+                style="position:absolute;bottom:10px;left:10px;z-index:5"
+                @click=${this._resetView}>⟳ Reset view</button>`}
     `;
   }
 
@@ -54,10 +61,29 @@ export class Canvas2D extends LitElement {
     this.planner.addEventListener('config', this._onConfig);
   }
 
+  // Card lifecycle: a dashboard may detach + re-attach the SAME element on a
+  // view switch. firstUpdated runs only once, so restart the RAF (cancelled in
+  // disconnectedCallback) on reconnect once the canvas has been initialized. In
+  // the app this element is never disconnected (it stays mounted under
+  // display:none), so `_ctx` is null at the initial connect and this is a no-op.
+  override connectedCallback(): void {
+    super.connectedCallback();
+    if (this._ctx && !this._raf) {
+      this._ro?.observe(this._canvas);
+      window.addEventListener('mouseup', this._onUp);
+      window.addEventListener('keydown', this._onKey);
+      window.addEventListener('keyup', this._onKeyUp);
+      this.planner.addEventListener('config', this._onConfig);
+      requestAnimationFrame(() => this._resize());
+      this._startRaf();
+    }
+  }
+
   override disconnectedCallback(): void {
     super.disconnectedCallback();
     this._ro?.disconnect();
     if (this._raf) cancelAnimationFrame(this._raf);
+    this._raf = 0;
     window.removeEventListener('mouseup', this._onUp);
     window.removeEventListener('keydown', this._onKey);
     window.removeEventListener('keyup', this._onKeyUp);
@@ -315,6 +341,7 @@ export class Canvas2D extends LitElement {
   // Shared click body: reused by the native listener and the touch tap path.
   // Preserves the Space+left-pan swallow guard (mouse ordering: mouseup→click).
   private _dispatchClick(evt: { clientX: number; clientY: number }): void {
+    if (!this.interactive) return;   // view-mode card: no device interaction
     if (this._panFrom || this._panEnded) { this._panEnded = false; return; }
     try {
       onCanvasClick(this.planner, this._canvas, this._view, evt as MouseEvent);
@@ -322,6 +349,7 @@ export class Canvas2D extends LitElement {
   }
 
   private _dispatchDblClick(evt: { clientX: number; clientY: number }): void {
+    if (!this.interactive) return;   // view-mode card: no device interaction
     try {
       onCanvasDblClick(this.planner, this._canvas, this._view, evt as MouseEvent);
     } catch (err) { console.error('canvas dblclick failed:', err); }
