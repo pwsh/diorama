@@ -1,6 +1,6 @@
 # Project status & pick-up guide
 
-Last updated: 2026-07-20, at **v0.26.0**. This is the single document to
+Last updated: 2026-07-20, at **v0.27.0**. This is the single document to
 read (alongside `CLAUDE.md`) to resume work with full context.
 
 ## Where things stand
@@ -149,6 +149,15 @@ instance.
   app runs client-side in offline mode, zero-install, seeded with all
   12 demo homes; camera below-horizon orbit + independent H/V field of
   view).
+  → v0.27.0 cards on the table (Lovelace card — Diorama addable to any
+  dashboard, shared kiosk-locked planner, per-card view/mode/compact;
+  record-a-position boundary pins w/ convert-to-ground-area; docs tiles
+  deep-link into the live demo incl. the `?model=` Model viewer; legacy
+  avatar migration — all 24 base kinds declarative, imperative path
+  deleted, zero visual drift; fix batch — 45 invisible neck accessories
+  + necktie/cone bugs, 11/13 props re-oriented (no-wrist root cause) +
+  broom/shovel handle attachment, all 12 demo floorplans re-validated
+  for doorway clearance/wall overlap/nav reachability/chair facing).
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
