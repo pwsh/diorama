@@ -43,7 +43,7 @@ import {
 } from '../geometry.js';
 import { solveHomography, homographyResidualsMm } from '../homography.js';
 import { CLOCK_PRESETS, DATE_PRESETS, type ValueRule, type RuleOp } from '../value-rules.js';
-import type { Vec2, InfoCard, InfoCardMount, InfoCardDisplayMode, ActionButton, ActionKind, Ruler, DimensionMode } from '../types.js';
+import type { Vec2, InfoCard, InfoCardMount, InfoCardDisplayMode, ActionButton, ActionKind, Ruler, DimensionMode, NeighborhoodConfig } from '../types.js';
 import { resolveRulerEnds } from '../geometry.js';
 
 // Compact relative-age label for a GPS fix timestamp (ms epoch).
@@ -515,6 +515,7 @@ export class Sidebar extends LitElement {
         ${this._fixturesSection()}
         ${this._layers2dSection()}
         ${this._geoSection()}
+        ${this._neighborhoodSection()}
         ${this._model3dSection()}
         ${this._bgSection()}
       </div>
@@ -6194,6 +6195,7 @@ export class Sidebar extends LitElement {
       { key: 'nameLabels', label: 'Name labels' },
       { key: 'battery', label: 'Battery warnings' },
       { key: 'dimensions', label: 'Dimensions' },
+      { key: 'neighborhood', label: 'Neighborhood' },
       { key: 'activity', label: 'Activity glow' },
     ];
     // Display order only: alphabetical by label (locale compare). The preset
@@ -6399,6 +6401,137 @@ export class Sidebar extends LitElement {
             ${p.geoShowEvents() ? '🌐 Showing (quakes, fires…)' : '— Hidden'}
           </button>
         </div>
+    `);
+  }
+
+  // ── Neighborhood overlay (OpenFreeMap) ────────────────────────────────────
+  private _neighborhoodSection() {
+    const p = this.planner;
+    const cfg = p.store.neighborhood;
+    const enabled = cfg?.enabled === true;
+    const fitQ = p.geoFit()?.transform.quality ?? 'none';
+    const data = p.neighborhoodData;
+    const L = cfg?.layers ?? {};
+    const step = this._moveStep;
+    const setN = (mut: (n: NeighborhoodConfig) => void) => p.setNeighborhood(mut);
+    const nudge = (dx: number, dy: number) => setN(n => { n.align = { ...(n.align ?? {}), dx: (n.align?.dx ?? 0) + dx, dy: (n.align?.dy ?? 0) + dy }; });
+    const spin = (deg: number) => setN(n => { n.align = { ...(n.align ?? {}), rotDeg: (n.align?.rotDeg ?? 0) + deg }; });
+    const layerBox = (label: string, on: boolean, mut: (n: NeighborhoodConfig, v: boolean) => void) => html`
+      <label class="row" style="padding:1px 0;font-size:11px" title=${label}>
+        <input type="checkbox" .checked=${on} @change=${(e: Event) => setN(n => mut(n, (e.target as HTMLInputElement).checked))}>
+        <span style="margin-left:6px">${label}</span>
+      </label>`;
+    const colorRow = (label: string, key: 'colorBuildings' | 'colorRoads' | 'colorWater', dflt: string) => html`
+      <div class="row" style="padding:1px 0">
+        <label style="flex:1;font-size:11px">${label}</label>
+        <input type="color" .value=${cfg?.[key] ?? dflt}
+               @input=${(e: Event) => setN(n => { n[key] = (e.target as HTMLInputElement).value; })}>
+        ${cfg?.[key] ? html`<button class="btn" style="font-size:10px;padding:2px 6px;margin-left:4px" title="Use default"
+                 @click=${() => setN(n => { delete n[key]; })}>↺</button>` : nothing}
+      </div>`;
+    const statusLine = !enabled
+      ? html`<div style="color:var(--text-dim);font-size:11px;padding:2px 0">Off — enable to fetch map data for your address.</div>`
+      : fitQ === 'none'
+        ? html`<div style="color:#ffb74d;font-size:11px;padding:2px 0">Calibrate a GPS landmark above first — the overlay aligns to it.</div>`
+        : data
+          ? html`<div style="color:var(--text-dim);font-size:11px;padding:2px 0">${data.tileCount} tile(s) · ${data.buildings.length} buildings · ${data.roads.length} roads${data.fetchedAt ? ` · fetched ${new Date(data.fetchedAt).toLocaleDateString()}` : ''}</div>`
+          : html`<div style="color:var(--text-dim);font-size:11px;padding:2px 0">Fetching map tiles…</div>`;
+    return this._section('neighborhood', 'Neighborhood', () => html`
+        <label class="row" style="padding:2px 0"
+               title="Fetch OpenFreeMap building/road data around your calibrated address. Opt-in — calls a third-party service.">
+          <input type="checkbox" .checked=${enabled} @change=${(e: Event) => setN(n => { n.enabled = (e.target as HTMLInputElement).checked; })}>
+          <span style="margin-left:6px;font-weight:600">Show neighborhood</span>
+        </label>
+        ${statusLine}
+        ${enabled && fitQ !== 'none' ? html`
+          <div style="margin-top:6px">
+            <div style="color:var(--text-dim);font-size:11px;margin-bottom:2px">Layers</div>
+            ${layerBox('Buildings', L.buildings !== false, (n, v) => { (n.layers ??= {}).buildings = v; })}
+            ${layerBox('Roads', L.roads !== false, (n, v) => { (n.layers ??= {}).roads = v; })}
+            ${layerBox('Water', L.water !== false, (n, v) => { (n.layers ??= {}).water = v; })}
+            ${layerBox('Land use (ambient)', L.landuse === true, (n, v) => { (n.layers ??= {}).landuse = v; })}
+          </div>
+
+          <div class="row" style="margin-top:8px">
+            <label style="flex:1;font-size:11px" title="Multiplies every building height. Most OSM buildings carry no real height data — this is a look-right dial, not a survey.">Building height ×${(cfg?.verticalScale ?? 1).toFixed(1)}</label>
+          </div>
+          <input type="range" min="0.2" max="3" step="0.1" style="width:100%"
+                 .value=${String(cfg?.verticalScale ?? 1)}
+                 @input=${(e: Event) => setN(n => { n.verticalScale = Math.max(0.2, Math.min(3, parseFloat((e.target as HTMLInputElement).value))); })}>
+          <div class="row" style="padding:1px 0">
+            <label style="flex:1;font-size:11px" title="Fallback height per storey when OSM has no height/levels tag (metres).">Default level height (m)</label>
+            <input type="number" min="2" max="5" step="0.5" style="width:64px" .value=${String(cfg?.defaultLevelHeightM ?? 3)}
+                   @change=${(e: Event) => setN(n => { const v = parseFloat((e.target as HTMLInputElement).value); n.defaultLevelHeightM = isFinite(v) ? Math.max(2, Math.min(5, v)) : 3; })}>
+          </div>
+          <div style="color:var(--text-dim);font-size:10px;line-height:1.35;margin-top:2px">
+            Most OSM buildings carry no height data — heights are estimates.
+          </div>
+
+          <div style="margin-top:8px">
+            <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px">
+              <span style="color:var(--text-dim);font-size:11px;flex:1">Align (nudge onto your plan)</span>
+              <select style="background:#111;color:var(--text);border:1px solid var(--border);border-radius:4px;padding:2px 4px;font-size:11px"
+                      .value=${String(step)} @change=${(e: Event) => this._setMoveStep(Number((e.target as HTMLSelectElement).value))}>
+                <option value="100">100 mm</option>
+                <option value="500">500 mm</option>
+                <option value="1000">1 m</option>
+              </select>
+            </div>
+            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:4px">
+              <button class="btn btn-sm" title="Nudge up (+Y)" @click=${() => nudge(0, step)}>↑</button>
+              <button class="btn btn-sm" title="Nudge down (−Y)" @click=${() => nudge(0, -step)}>↓</button>
+              <button class="btn btn-sm" title="Nudge left (−X)" @click=${() => nudge(-step, 0)}>←</button>
+              <button class="btn btn-sm" title="Nudge right (+X)" @click=${() => nudge(step, 0)}>→</button>
+            </div>
+            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:4px;margin-top:4px">
+              <button class="btn btn-sm" title="Rotate 5° CCW" @click=${() => spin(-5)}>↺ 5°</button>
+              <button class="btn btn-sm" title="Rotate 0.5° CCW" @click=${() => spin(-0.5)}>↺ 0.5°</button>
+              <button class="btn btn-sm" title="Rotate 0.5° CW" @click=${() => spin(0.5)}>↻ 0.5°</button>
+              <button class="btn btn-sm" title="Rotate 5° CW" @click=${() => spin(5)}>↻ 5°</button>
+            </div>
+            <button class="btn btn-sm" style="width:100%;margin-top:4px" title="Clear the alignment nudge"
+                    @click=${() => setN(n => { n.align = {}; })}>Reset alignment</button>
+          </div>
+
+          <div class="row" style="margin-top:8px">
+            <label style="flex:1;font-size:11px">Opacity ${(cfg?.opacity ?? 1).toFixed(1)}</label>
+          </div>
+          <input type="range" min="0.3" max="1" step="0.05" style="width:100%"
+                 .value=${String(cfg?.opacity ?? 1)}
+                 @input=${(e: Event) => setN(n => { n.opacity = Math.max(0.3, Math.min(1, parseFloat((e.target as HTMLInputElement).value))); })}>
+          <div style="margin-top:6px">
+            <div style="color:var(--text-dim);font-size:11px;margin-bottom:2px">Colors</div>
+            ${colorRow('Buildings', 'colorBuildings', '#9aa2ab')}
+            ${colorRow('Roads', 'colorRoads', '#4a4e55')}
+            ${colorRow('Water', 'colorWater', '#3d7bb8')}
+          </div>
+
+          <div style="margin-top:8px">
+            <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px">
+              <span style="color:var(--text-dim);font-size:11px;flex:1">Exclusions (${(cfg?.exclusions ?? []).length})</span>
+            </div>
+            ${(cfg?.exclusions ?? []).map((poly, i) => html`
+              <div class="row" style="padding:1px 0;font-size:11px">
+                <span style="flex:1;color:var(--text-dim)">Mask ${i + 1} · ${poly.length} pts</span>
+                <button class="btn" style="font-size:10px;padding:2px 6px" title="Delete this mask"
+                        @click=${() => p.deleteExclusion(i)}>✕</button>
+              </div>`)}
+            ${p.drawingExclusion ? html`
+              <div style="font-size:10px;color:var(--text-dim);padding:2px 0">Click 3+ points on the plan; double-click / Enter to finish, Esc to cancel.</div>` : nothing}
+            <button class="btn btn-sm" style="width:100%;margin-top:4px"
+                    @click=${() => { p.armExclusionDraw(); p.maybeCloseSidebarForPlacement(); }}>+ Add exclusion</button>
+            <div style="color:var(--text-dim);font-size:10px;line-height:1.35;margin-top:2px">
+              Map geometry intersecting a mask is hidden (e.g. over your own house/yard). No vertex editing — delete + redraw.
+            </div>
+          </div>
+
+          <button class="btn btn-sm" style="width:100%;margin-top:8px" title="Clear cached tiles and re-fetch"
+                  @click=${() => { void p.clearNeighborhoodCache(); }}>Refresh tiles</button>
+          ${data?.fetchedAt ? html`<div style="color:var(--text-dim);font-size:10px;padding:2px 0">Cache: fetched ${new Date(data.fetchedAt).toLocaleString()}</div>` : nothing}
+          <div style="color:var(--text-dim);font-size:10px;line-height:1.4;margin-top:6px">
+            Data: OpenFreeMap · © OpenMapTiles · © OpenStreetMap contributors.
+          </div>
+        ` : nothing}
     `);
   }
 

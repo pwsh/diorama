@@ -1,0 +1,212 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>NBHDRENDER …</title>
+<style>
+  html,body{margin:0;background:#0b0f14;color:#cfd8dc;font:13px/1.4 sans-serif}
+  #c{width:1000px;height:640px}
+  #log{position:fixed;right:8px;top:8px;width:400px;max-height:96vh;overflow:auto;
+       background:#111820;border:1px solid #263340;border-radius:6px;padding:8px 10px;font-size:11px}
+  .pass{color:#69f0ae}.fail{color:#ff5252}.hd{font-weight:bold;margin:2px 0 6px}
+</style>
+<div id="c"></div>
+<div id="log"></div>
+<script type="module">
+  // Renderer-harness: neighborhood overlay buildings (Wave 2). Whole body is
+  // synchronous after load()/updateFloor so no _animate RAF interleaves — every
+  // read reflects only the manual updateNeighborhood call. Imports the BUILT
+  // renderer chunk (bundles THREE); the test only reads plain numbers off
+  // geometry.attributes.position + material props (no THREE import needed).
+  //
+  // Run: npm run build; cp -r dist/* test-pages/* into a harness dir; serve over
+  // http; dump <title>. See test-pages/README.md.
+  const mod = await import('./assets/three-renderer.js?v=' + Date.now());
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+
+  // Active floor 10000 × 8000 → the world→scene frame the overlay maps through:
+  //   asx(wx) = afw/2 − wx = 5000 − wx ,  asz(wy) = wy − afd/2 = wy − 4000
+  const AFW = 10000, AFD = 8000;
+  const floor = {
+    id: 'f1', name: 'T', w: AFW, d: AFD,
+    walls: [{ id: 'w', points: [{x:200,y:200},{x:9800,y:200},{x:9800,y:7800},{x:200,y:7800},{x:200,y:200}] }],
+    furniture: [], lights: [], switches: [], sensors: [], motionSensors: [],
+    envSensors: [], doors: [], windows: [], bg: null, model3d: null, look3d: null,
+  };
+  r.updateFloor(floor, { preset: 'day', floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6' });
+
+  const asx = wx => AFW / 2 - wx, asz = wy => wy - AFD / 2;
+
+  const tests = [];
+  const ok = (name, cond, detail) => tests.push({ name, ok: !!cond, detail: detail ?? '' });
+  const near = (a, b, eps) => Math.abs(a - b) <= eps;
+
+  const meshesOf = () => r._neighborhoodGroup.children;
+  // Does the geometry (already rotated −π/2, position.y NOT applied here) carry a
+  // vertex at scene (x, z)? Reads the position BufferAttribute directly.
+  const hasVertexXZ = (geo, x, z, eps = 1) => {
+    const pos = geo.attributes.position;
+    for (let i = 0; i < pos.count; i++)
+      if (near(pos.getX(i), x, eps) && near(pos.getZ(i), z, eps)) return true;
+    return false;
+  };
+  const bboxOf = geo => { geo.computeBoundingBox(); return geo.boundingBox; };
+
+  // ── An OFF-CENTER ASYMMETRIC footprint (the mirror catch) ───────────────────
+  // Right-triangle in world mm — deliberately asymmetric so a front-to-back
+  // mirror (forgetting the shape-y NEGATION) is detectable. Expected scene X/Z
+  // computed by hand:
+  //   p0 (2000,1000) → (asx 3000, asz −3000)
+  //   p1 (3000,1000) → (asx 2000, asz −3000)
+  //   p2 (2000,2500) → (asx 3000, asz −1500)   ← the asymmetric vertex
+  const tri = { points: [{x:2000,y:1000},{x:3000,y:1000},{x:2000,y:2500}], heightMm: 9000, baseMm: 0 };
+  const podium = { points: [{x:6000,y:5000},{x:7000,y:5000},{x:7000,y:6000},{x:6000,y:6000}], heightMm: 6000, baseMm: 2000 };
+
+  // ── 1. basic build count ────────────────────────────────────────────────────
+  r.updateNeighborhood({ buildings: [tri, podium], roads: [], water: [], landuse: [] }, null);
+  ok('2 buildings → 2 meshes built', meshesOf().length === 2, `n=${meshesOf().length}`);
+
+  // ── 2. off-center asymmetric footprint lands at correct scene X/Z ───────────
+  const triMesh = meshesOf()[0];
+  const g = triMesh.geometry;
+  ok('vertex p0 → scene (3000,−3000)', hasVertexXZ(g, asx(2000), asz(1000)), `want(${asx(2000)},${asz(1000)})`);
+  ok('vertex p1 → scene (2000,−3000)', hasVertexXZ(g, asx(3000), asz(1000)), `want(${asx(3000)},${asz(1000)})`);
+  ok('vertex p2 (asymmetric) → scene (3000,−1500)', hasVertexXZ(g, asx(2000), asz(2500)), `want(${asx(2000)},${asz(2500)})`);
+  // Explicit mirror-catch negative: if shape-y weren't negated, p0's z would be
+  // +3000 (= −asz) instead of −3000. Assert NO vertex sits there.
+  ok('NOT front-to-back mirrored (no vertex at z=+3000)', !hasVertexXZ(g, asx(2000), -asz(1000)), `mirror z=${-asz(1000)}`);
+
+  // ── 3. extrusion top y = base + height ──────────────────────────────────────
+  // triMesh: base 0, height 9000 → geometry Y ∈ [0,9000], position.y 0 → top 9000.
+  const gb = bboxOf(g);
+  ok('tri geometry Y spans 0..9000 (depth = height−base)', near(gb.min.y, 0, 1) && near(gb.max.y, 9000, 1), `y[${gb.min.y.toFixed(0)},${gb.max.y.toFixed(0)}]`);
+  ok('tri mesh.position.y = 0 (grade)', triMesh.position.y === 0, `py=${triMesh.position.y}`);
+  ok('tri world top y = 9000', near(triMesh.position.y + gb.max.y, 9000, 1));
+
+  // ── 4. podium building floats at its base ───────────────────────────────────
+  const podMesh = meshesOf()[1];
+  const pg = bboxOf(podMesh.geometry);
+  ok('podium mesh.position.y = 2000 (baseMm)', podMesh.position.y === 2000, `py=${podMesh.position.y}`);
+  ok('podium geometry depth = 4000 (height−base)', near(pg.max.y, 4000, 1), `maxY=${pg.max.y.toFixed(0)}`);
+  ok('podium world span 2000..6000', near(podMesh.position.y + pg.min.y, 2000, 1) && near(podMesh.position.y + pg.max.y, 6000, 1));
+
+  // ── 5. outline-skip + no outline shells ─────────────────────────────────────
+  ok('every neighborhood mesh has userData.outlineSkip', meshesOf().every(m => m.userData.outlineSkip === true));
+  let outlineShells = 0;
+  r._neighborhoodGroup.traverse(o => { if (o.userData && o.userData.outline) outlineShells++; });
+  ok('NO inverted-hull outline shells in the group', outlineShells === 0, `shells=${outlineShells}`);
+
+  // ── 6. ONE shared material across all buildings ─────────────────────────────
+  ok('all buildings SHARE one material instance', meshesOf().every(m => m.material === meshesOf()[0].material));
+
+  // ── 7. opacity < 1 → transparent; color override applied (with _simsColor push)
+  r.updateNeighborhood({ buildings: [tri], roads: [], water: [], landuse: [] }, { opacity: 0.5, colorBuildings: '#ff0000' });
+  const m2 = meshesOf()[0].material;
+  ok('opacity 0.5 → material.opacity 0.5', m2.opacity === 0.5, `op=${m2.opacity}`);
+  ok('opacity 0.5 → material.transparent true', m2.transparent === true);
+  ok('colorBuildings #ff0000 → red-dominant material color', m2.color.r > m2.color.g && m2.color.r > m2.color.b, `rgb(${m2.color.r.toFixed(2)},${m2.color.g.toFixed(2)},${m2.color.b.toFixed(2)})`);
+
+  // ── 8. opacity 1 (default) → not transparent, muted grey default ────────────
+  r.updateNeighborhood({ buildings: [tri], roads: [], water: [], landuse: [] }, null);
+  const m3 = meshesOf()[0].material;
+  ok('no opacity → material.transparent false', m3.transparent === false, `tr=${m3.transparent}`);
+  ok('no colorBuildings → grey-ish default (channels close)', Math.abs(m3.color.r - m3.color.b) < 0.2 && Math.abs(m3.color.r - m3.color.g) < 0.2, `rgb(${m3.color.r.toFixed(2)},${m3.color.g.toFixed(2)},${m3.color.b.toFixed(2)})`);
+
+  // ── 9. rebuild replaces (disposes) — 3 → 1, no throw ────────────────────────
+  let threw = false;
+  try {
+    r.updateNeighborhood({ buildings: [tri, podium, tri], roads: [], water: [], landuse: [] }, null);
+    ok('rebuild with 3 → 3 meshes', meshesOf().length === 3, `n=${meshesOf().length}`);
+    r.updateNeighborhood({ buildings: [tri], roads: [], water: [], landuse: [] }, null);
+  } catch (e) { threw = true; }
+  ok('rebuild 3 → 1 replaces meshes (count 1)', meshesOf().length === 1 && !threw, `n=${meshesOf().length} threw=${threw}`);
+
+  // ── 10. null data / null buildings → empty group ────────────────────────────
+  r.updateNeighborhood(null, null);
+  ok('updateNeighborhood(null) → empty group', meshesOf().length === 0, `n=${meshesOf().length}`);
+  r.updateNeighborhood({ buildings: [], roads: [], water: [], landuse: [] }, null);
+  ok('empty buildings → empty group', meshesOf().length === 0, `n=${meshesOf().length}`);
+
+  // ── 11. layer flip hides / shows via setLayerVisibility ─────────────────────
+  r.updateNeighborhood({ buildings: [tri, podium], roads: [], water: [], landuse: [] }, null);
+  r.setLayerVisibility({ neighborhood: false });
+  ok('setLayerVisibility neighborhood:false → group hidden', r._neighborhoodGroup.visible === false);
+  r.setLayerVisibility({ neighborhood: true });
+  ok('setLayerVisibility neighborhood:true → group visible', r._neighborhoodGroup.visible === true);
+  r.setLayerVisibility({});
+  ok('absent flag → group visible (default on)', r._neighborhoodGroup.visible === true);
+
+  // ── 12. self-intersecting ring skips without throwing; the rest build ───────
+  // A bowtie (figure-8) — earcut wouldn't throw, so the renderer must PRE-reject
+  // it. 2 valid + 1 bowtie → exactly 2 meshes.
+  const bowtie = { points: [{x:2000,y:1000},{x:2500,y:1500},{x:2500,y:1000},{x:2000,y:1500}], heightMm: 5000, baseMm: 0 };
+  let threw2 = false;
+  try { r.updateNeighborhood({ buildings: [tri, bowtie, podium], roads: [], water: [], landuse: [] }, null); }
+  catch (e) { threw2 = true; }
+  ok('self-intersecting ring skipped, rest built (2 meshes, no throw)', meshesOf().length === 2 && !threw2, `n=${meshesOf().length} threw=${threw2}`);
+
+  // ── 13. roads: ribbon patch built at y=3, correct frame mapping ─────────────
+  // A horizontal centerline (2000,1000)→(4000,1000) width 1000 → a ribbon polygon.
+  // Flat patches use mesh.rotation.x = −π/2 + position.y = layer y; the geometry
+  // vertices stay (sx, sy, 0) with sx=asx(wx), sy=−asz(wy).
+  const road = { points: [{x:2000,y:1000},{x:3000,y:1000},{x:4000,y:1000}], widthMm: 1000, cls: 'residential', bridge: false };
+  r.updateNeighborhood({ buildings: [], roads: [road], water: [], landuse: [] }, null);
+  const roadPatches = meshesOf().filter(m => Math.abs(m.rotation.x + Math.PI/2) < 1e-6 && m.position.y === 3);
+  ok('road → one flat patch at y=3', roadPatches.length === 1, `n=${roadPatches.length}`);
+  const rp = roadPatches[0];
+  ok('road patch geometry has >4 vertices (ribbon)', rp.geometry.attributes.position.count > 4, `verts=${rp.geometry.attributes.position.count}`);
+  const rb = bboxOf(rp.geometry);
+  // sx over asx(2000..4000)=1000..3000; sy over −asz(500..1500)=2500..3500.
+  ok('road ribbon frame mapping (sx≈1000..3000)', near(rb.min.x, asx(4000), 5) && near(rb.max.x, asx(2000), 5), `x[${rb.min.x.toFixed(0)},${rb.max.x.toFixed(0)}]`);
+  ok('road ribbon width straddles centerline (sy≈2500..3500)', near(rb.min.y, -asz(1500), 5) && near(rb.max.y, -asz(500), 5), `y[${rb.min.y.toFixed(0)},${rb.max.y.toFixed(0)}]`);
+
+  // ── 14. water: patch at y=2, opacity clamped ≤0.85 ──────────────────────────
+  const waterPoly = { points: [{x:5000,y:4000},{x:6000,y:4000},{x:6000,y:5000},{x:5000,y:5000}], cls: 'lake' };
+  r.updateNeighborhood({ buildings: [], roads: [], water: [waterPoly], landuse: [] }, { opacity: 1 });
+  const waterPatches = meshesOf().filter(m => m.position.y === 2 && Math.abs(m.rotation.x + Math.PI/2) < 1e-6);
+  ok('water → one flat patch at y=2', waterPatches.length === 1, `n=${waterPatches.length}`);
+  ok('water material transparent + opacity ≤0.85', waterPatches[0].material.transparent === true && waterPatches[0].material.opacity <= 0.85 + 1e-6, `op=${waterPatches[0].material.opacity}`);
+
+  // ── 15. landuse: patch at y=1 when present; empty → none ─────────────────────
+  const luPoly = { points: [{x:1000,y:6000},{x:2000,y:6000},{x:2000,y:7000},{x:1000,y:7000}], cls: 'park' };
+  r.updateNeighborhood({ buildings: [], roads: [], water: [], landuse: [luPoly] }, null);
+  const luPatches = meshesOf().filter(m => m.position.y === 1 && Math.abs(m.rotation.x + Math.PI/2) < 1e-6);
+  ok('landuse present → one patch at y=1', luPatches.length === 1, `n=${luPatches.length}`);
+  ok('landuse material low opacity (≤0.35)', luPatches[0].material.opacity <= 0.35 + 1e-6, `op=${luPatches[0].material.opacity}`);
+  r.updateNeighborhood({ buildings: [], roads: [], water: [], landuse: [] }, null);
+  ok('empty landuse → no y=1 patch (respects extraction gate)', meshesOf().filter(m => m.position.y === 1).length === 0);
+
+  // ── 16. color overrides applied per layer ───────────────────────────────────
+  r.updateNeighborhood({ buildings: [], roads: [road], water: [waterPoly], landuse: [] },
+    { colorRoads: '#ff0000', colorWater: '#00ff00' });
+  const rMat = meshesOf().find(m => m.position.y === 3).material;
+  const wMat = meshesOf().find(m => m.position.y === 2).material;
+  ok('colorRoads red-dominant', rMat.color.r > rMat.color.g && rMat.color.r > rMat.color.b, `rgb(${rMat.color.r.toFixed(2)},${rMat.color.g.toFixed(2)},${rMat.color.b.toFixed(2)})`);
+  ok('colorWater green-dominant', wMat.color.g > wMat.color.r && wMat.color.g > wMat.color.b, `rgb(${wMat.color.r.toFixed(2)},${wMat.color.g.toFixed(2)},${wMat.color.b.toFixed(2)})`);
+
+  // ── 17. road cap at 600 (defensive) ─────────────────────────────────────────
+  const manyRoads = [];
+  for (let i = 0; i < 700; i++) manyRoads.push({ points: [{x:100+i,y:100},{x:200+i,y:100}], widthMm: 500, cls: 'service', bridge: false });
+  r.updateNeighborhood({ buildings: [], roads: manyRoads, water: [], landuse: [] }, null);
+  const cappedRoads = meshesOf().filter(m => m.position.y === 3);
+  ok('700 roads → capped at 600 ribbons', cappedRoads.length === 600, `n=${cappedRoads.length}`);
+
+  // ── 18. all flat patches carry outlineSkip ──────────────────────────────────
+  r.updateNeighborhood({ buildings: [tri], roads: [road], water: [waterPoly], landuse: [luPoly] }, null);
+  ok('mixed content: every mesh outlineSkip', meshesOf().every(m => m.userData.outlineSkip === true), `n=${meshesOf().length}`);
+  ok('mixed content: buildings + roads + water + landuse all present',
+     meshesOf().some(m => m.rotation.x === 0) &&           // building (baked extrude, mesh rot 0)
+     meshesOf().some(m => m.position.y === 3) &&
+     meshesOf().some(m => m.position.y === 2) &&
+     meshesOf().some(m => m.position.y === 1), `n=${meshesOf().length}`);
+  r.updateNeighborhood(null, null);
+
+  // ── report ──────────────────────────────────────────────────────────────────
+  const pass = tests.filter(t => t.ok).length, total = tests.length;
+  const allPass = pass === total;
+  const fails = tests.filter(t => !t.ok).map(t => t.name);
+  const title = allPass ? `NBHDRENDER PASS ${pass}/${total}` : `NBHDRENDER FAIL ${pass}/${total} [${fails.join(',')}]`;
+  document.title = title;
+  const log = document.getElementById('log');
+  log.innerHTML = `<div class="hd ${allPass ? 'pass' : 'fail'}">${title}</div>` +
+    tests.map(t => `<div><span class="${t.ok ? 'pass' : 'fail'}">${t.ok ? 'PASS' : 'FAIL'}</span> ${t.name} <span style="color:#78909c">${t.detail}</span></div>`).join('');
+</script>

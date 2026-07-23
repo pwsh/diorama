@@ -731,6 +731,7 @@ export class ThreeView extends LitElement {
   private _keyZones = '';
   private _keyHalos = '';
   private _keyGhost = '';
+  private _keyNeighborhood = '';
   private _keyGps = '';
   private _keyCompass = '';
   private _keyWeather = '';
@@ -761,7 +762,7 @@ export class ThreeView extends LitElement {
         this._keyHeatmap = '';
         this._keyVacMap = '';
         this._keyLights = this._keyZones = this._keyHalos = '';
-        this._keyGhost = this._keyGps = this._keyCompass = this._keyWeather = this._keyBgText = '';
+        this._keyGhost = this._keyNeighborhood = this._keyGps = this._keyCompass = this._keyWeather = this._keyBgText = '';
         this._trigPrevOn.clear();
         this._actionTrigAt.clear();
         this._recentTrigs.length = 0;
@@ -920,6 +921,23 @@ export class ThreeView extends LitElement {
         r.updateGhostFloors(
           p.store.floors.filter(fl => !fl.disabled || fl.id === f.id),
           f.id, scMerged, p.store.customObjects, layers);
+      }
+
+      // Neighborhood overlay (OpenFreeMap — Wave 2: buildings). Floor-relative
+      // (maps through the active frame like ghost floors), so it's cleared on a
+      // floor switch above and rebuilt here. neighborhoodRev bumps on every
+      // extraction (a completed async fetch / align nudge) so a fresh solve
+      // triggers exactly one rebuild; opacity/color changes ride configRev.
+      const nbCfg = p.store.neighborhood;
+      const nbData = (nbCfg?.enabled && p.neighborhoodData) ? p.neighborhoodData : null;
+      const nbL = nbCfg?.layers;
+      const keyNeighborhood = `${p.configRev}|${p.neighborhoodRev}|${layers.neighborhood !== false}|` +
+        `${nbCfg?.opacity ?? 1}|${nbCfg?.colorBuildings ?? ''}|${nbCfg?.colorRoads ?? ''}|${nbCfg?.colorWater ?? ''}|${nbCfg?.colorLanduse ?? ''}|` +
+        `${nbL?.buildings !== false ? 1 : 0}${nbL?.roads !== false ? 1 : 0}${nbL?.water !== false ? 1 : 0}${nbL?.landuse === true ? 1 : 0}|${nbData ? '1' : '0'}`;
+      if (keyNeighborhood !== this._keyNeighborhood) {
+        this._keyNeighborhood = keyNeighborhood;
+        r.updateNeighborhood(nbData,
+          nbData ? { opacity: nbCfg?.opacity, colorBuildings: nbCfg?.colorBuildings, colorRoads: nbCfg?.colorRoads, colorWater: nbCfg?.colorWater, colorLanduse: nbCfg?.colorLanduse } : null);
       }
 
       // Glass-house transit puppet (Tier 2 stretch): when glass-house is on and a

@@ -1,0 +1,379 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>NEIGHBORHOOD …</title>
+<style>
+  body { margin:0; background:#0d1116; color:#cfd8dc; font:13px/1.5 sans-serif; padding:14px; }
+  h1 { font-size:15px; margin:0 0 4px; } h2 { font-size:13px; color:#90caf9; margin:14px 0 4px; }
+  #summary { font-size:14px; font-weight:bold; margin:10px 0; padding:8px 10px; border-radius:5px; }
+  .okbg { background:#12331f; color:#69f0ae; } .badbg { background:#3a1414; color:#ff8a80; }
+  .row { display:flex; justify-content:space-between; gap:10px; padding:2px 0; border-bottom:1px solid #1c2530; }
+  .pass { color:#69f0ae; } .fail { color:#ff5252; }
+  .name { color:#cfd8dc; } .extra { color:#ffd54f; font-size:11px; }
+</style>
+<h1>Neighborhood overlay — MVT decode · tile math · height/exclusion/cap/align · Planner fetch/cache</h1>
+<div id="summary">Running…</div>
+<div id="rows"></div>
+
+<!-- Build the pure bundles NEXT TO this html, plus a fake-store planner bundle:
+       npx esbuild src/mvt-decode.ts   --format=esm --outfile=test-pages/mvt.mod.js
+       npx esbuild src/neighborhood.ts --bundle --format=esm --outfile=test-pages/neighborhood.mod.js
+       npx esbuild src/geo.ts          --format=esm --outfile=test-pages/geo.mod.js
+       T=$(mktemp -d); cp -r src/* "$T"/
+       cp test-pages/fake-avatar-store.ts       "$T"/avatar-store.ts
+       cp test-pages/fake-neighborhood-store.ts "$T"/neighborhood-store.ts
+       npx esbuild "$T"/planner.ts --bundle --format=esm --outfile=test-pages/planner.mod.js
+     Serve over http (module imports + fixtures are CORS-blocked on file://):
+       python3 -m http.server  →  /test-pages/neighborhood-test.html -->
+<script type="module">
+  const results = [];
+  const ok = (name, cond, extra = '') => results.push({ name, pass: !!cond, extra: String(extra) });
+  const near = (name, got, want, tol, extra = '') => ok(name, Math.abs(got - want) <= tol, `${got} ≈ ${want} ±${tol} ${extra}`);
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  async function waitFor(cond, tries = 800) { for (let i = 0; i < tries; i++) { if (cond()) return true; await sleep(4); } return !!cond(); }
+
+  // ── Load real OpenFreeMap tile fixtures with the REAL fetch, up front ───────
+  const FX = {
+    brooklyn: 'brooklyn-14-4826-6162.pbf',
+    smalltown: 'smalltown-ks-14-3671-6269.pbf',
+    rural: 'rural-sd-14-3499-5938.pbf',
+  };
+  const realFetch = window.fetch.bind(window);
+  const bytesOf = {};
+  for (const [k, f] of Object.entries(FX)) {
+    const r = await realFetch('./fixtures/mvt/' + f);
+    bytesOf[k] = await r.arrayBuffer();
+  }
+
+  // ═══════════════ PURE: decoder + math ═══════════════
+  const { decodeTile } = await import('./mvt.mod.js');
+  const NB = await import('./neighborhood.mod.js');
+  const { fitGeoTransform, latLonToPlan } = await import('./geo.mod.js');
+
+  const decB = decodeTile(new Uint8Array(bytesOf.brooklyn));
+  const decS = decodeTile(new Uint8Array(bytesOf.smalltown));
+  const decR = decodeTile(new Uint8Array(bytesOf.rural));
+
+  // — Decoder: real fixtures —
+  ok('decode brooklyn: many layers', Object.keys(decB.layers).length >= 8, Object.keys(decB.layers).length);
+  ok('decode brooklyn: buildings > 0', (decB.layers.building?.features.length ?? 0) > 0, decB.layers.building?.features.length);
+  ok('decode brooklyn: water > 0', (decB.layers.water?.features.length ?? 0) > 0, decB.layers.water?.features.length);
+  ok('decode brooklyn: transportation > 0', (decB.layers.transportation?.features.length ?? 0) > 0, decB.layers.transportation?.features.length);
+  ok('decode smalltown: buildings > 0', (decS.layers.building?.features.length ?? 0) > 0, decS.layers.building?.features.length);
+  ok('decode smalltown: layers present', Object.keys(decS.layers).length >= 5, Object.keys(decS.layers).length);
+  ok('decode rural (sparse): object w/ layers, no throw', decR && typeof decR.layers === 'object', Object.keys(decR.layers).length + ' layers');
+
+  // — Geometry: winding + tags + holes —
+  const bldg = decB.layers.building;
+  const anyExteriorPos = bldg.features.some(f => f.geometry.some(r => r.length >= 3 && NB.signedArea(r) > 0));
+  ok('brooklyn: exterior ring has positive surveyor area', anyExteriorPos);
+  const anyHoleNeg = bldg.features.some(f => f.geometry.some(r => r.length >= 3 && NB.signedArea(r) < 0));
+  ok('brooklyn: hole ring present (negative area) — holes decoded', anyHoleNeg);
+  const multi = bldg.features.some(f => f.geometry.length > 1);
+  ok('brooklyn: multipolygon feature (>1 ring) decoded', multi);
+  const tagged = bldg.features.some(f => typeof f.tags.render_height === 'number');
+  ok('brooklyn: building tags resolved (render_height numeric)', tagged);
+  // ring vertices are absolute (cursor-integrated) tile coords within 0..extent(+buffer)
+  const r0 = bldg.features[0].geometry[0];
+  ok('geometry: vertices are integers in tile space', r0.every(p => Number.isFinite(p.x) && Number.isFinite(p.y)));
+
+  // — Decoder robustness: never throws —
+  let threw = false;
+  try { const e = decodeTile(new Uint8Array(0)); ok('empty buffer → {layers:{}}', Object.keys(e.layers).length === 0); }
+  catch { threw = true; ok('empty buffer → {layers:{}}', false, 'threw'); }
+  try {
+    const garbage = new Uint8Array(200); for (let i = 0; i < 200; i++) garbage[i] = (i * 37 + 11) & 0xff;
+    const g = decodeTile(garbage); ok('garbage bytes → object, no throw', g && typeof g.layers === 'object');
+  } catch { ok('garbage bytes → object, no throw', false, 'threw'); }
+  try {
+    const trunc = new Uint8Array(bytesOf.brooklyn.slice(0, 137));
+    const tr = decodeTile(trunc); ok('truncated tile → object, no throw', tr && typeof tr.layers === 'object');
+  } catch { ok('truncated tile → object, no throw', false, 'threw'); }
+  ok('no exception escaped the robustness cases', !threw);
+
+  // — Tile math goldens (standard slippy formula) —
+  const gB = NB.lonLatToTile(40.6782, -73.9442, 14);
+  ok('lonLatToTile brooklyn → 14/4826/6162', gB.z === 14 && gB.x === 4826 && gB.y === 6162, `${gB.x}/${gB.y}`);
+  const gM = NB.lonLatToTile(40.4168, -3.7038, 14);
+  ok('lonLatToTile madrid → 14/8023/6177', gM.x === 8023 && gM.y === 6177, `${gM.x}/${gM.y}`);
+  // roundtrip: center of a tile → same tile
+  const c = NB.tileToLonLat({ z: 14, x: 4826, y: 6162 }, 0.5, 0.5);
+  const back = NB.lonLatToTile(c.lat, c.lon, 14);
+  ok('tileToLonLat→lonLatToTile roundtrip', back.x === 4826 && back.y === 6162, `${back.x}/${back.y}`);
+  ok('tileToLonLat center is inside the tile lon/lat span', c.lon > -74 && c.lon < -73.9 && c.lat > 40.6 && c.lat < 40.72, `${c.lat.toFixed(3)},${c.lon.toFixed(3)}`);
+  const t350 = NB.tilesForRadius(40.6782, -73.9442, 350, 14);
+  ok('tilesForRadius 350 m → 1..4 tiles, all z14', t350.length >= 1 && t350.length <= 4 && t350.every(t => t.z === 14), t350.length);
+  const t2000 = NB.tilesForRadius(40.6782, -73.9442, 2000, 14);
+  ok('tilesForRadius grows with radius', t2000.length >= t350.length, `${t350.length}→${t2000.length}`);
+
+  // — Height resolution matrix (ORCHESTRATOR PIN) —
+  ok('height: render_height present → itself', NB.resolveBuildingHeightM({ render_height: 12 }, 3) === 12);
+  ok('height: levels only → levels×default', NB.resolveBuildingHeightM({ 'building:levels': 4 }, 3) === 12);
+  ok('height: neither → default (one storey)', NB.resolveBuildingHeightM({}, 3) === 3);
+  ok('height: render_height ≤ 0 falls through to default', NB.resolveBuildingHeightM({ render_height: 0 }, 3) === 3);
+  ok('base: render_min_height present → itself', NB.resolveBuildingBaseM({ render_min_height: 6 }) === 6);
+  ok('base: absent → 0', NB.resolveBuildingBaseM({}) === 0);
+
+  // — buildNeighborhoodFeatures: synthetic single-building tile (deterministic) —
+  const tf0 = fitGeoTransform([{ x: 0, y: 0, lat: 40.6782, lon: -73.9442 }], 0); // single, quality 'single', origin plan (0,0)
+  // exterior square in tile coords (positive surveyor area, y-down CW): (0,0)(10,0)(10,10)(0,10)
+  const synthTile = {
+    addr: { z: 14, x: 4826, y: 6162 },
+    layers: {
+      building: {
+        name: 'building', extent: 4096,
+        features: [{ id: 1, type: 'polygon', tags: { render_height: 10, render_min_height: 3 },
+          geometry: [[{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }]] }],
+      },
+    },
+  };
+  const fs1 = NB.buildNeighborhoodFeatures([synthTile], tf0, { verticalScale: 1, defaultLevelHeightM: 3 });
+  ok('build: synthetic building extracted', fs1.buildings.length === 1, fs1.buildings.length);
+  ok('build: heightMm = 10 m ×1000 ×vScale1', fs1.buildings[0]?.heightMm === 10000, fs1.buildings[0]?.heightMm);
+  ok('build: baseMm = render_min_height podium', fs1.buildings[0]?.baseMm === 3000, fs1.buildings[0]?.baseMm);
+  const fs2 = NB.buildNeighborhoodFeatures([synthTile], tf0, { verticalScale: 2, defaultLevelHeightM: 3 });
+  ok('build: verticalScale ×2 doubles heightMm', fs2.buildings[0]?.heightMm === 20000, fs2.buildings[0]?.heightMm);
+  ok('build: fetchedAt + tileCount carried', fs1.tileCount === 1 && typeof fs1.fetchedAt === 'number', `${fs1.tileCount}`);
+  // layer toggles
+  const roadTile = {
+    addr: { z: 14, x: 4826, y: 6162 },
+    layers: { transportation: { name: 'transportation', extent: 4096, features: [
+      { id: 2, type: 'line', tags: { class: 'residential' }, geometry: [[{ x: 0, y: 0 }, { x: 100, y: 50 }, { x: 200, y: 60 }]] }] } },
+  };
+  const fsRoadsOff = NB.buildNeighborhoodFeatures([roadTile], tf0, { layers: { roads: false } });
+  ok('build: roads layer OFF suppresses roads', fsRoadsOff.roads.length === 0);
+  const fsRoadsOn = NB.buildNeighborhoodFeatures([roadTile], tf0, { layers: { roads: true } });
+  ok('build: roads layer ON → road with class width', fsRoadsOn.roads.length === 1 && fsRoadsOn.roads[0].widthMm === NB.roadWidthMm('residential'), fsRoadsOn.roads[0]?.widthMm);
+  ok('build: landuse default OFF', NB.buildNeighborhoodFeatures([{ addr: roadTile.addr, layers: { landuse: { name: 'landuse', extent: 4096, features: [{ id: 3, type: 'polygon', tags: { class: 'park' }, geometry: [[{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }]] }] } } }], tf0, {}).landuse.length === 0);
+
+  // — Exclusion helpers —
+  const sq = (cx, cy, r) => [{ x: cx - r, y: cy - r }, { x: cx + r, y: cy - r }, { x: cx + r, y: cy + r }, { x: cx - r, y: cy + r }];
+  const excl = [sq(0, 0, 1000)];
+  ok('excl: building inside → intersects (drop)', NB.polygonIntersectsAny(sq(0, 0, 100), excl) === true);
+  ok('excl: building far outside → no intersect', NB.polygonIntersectsAny(sq(9000, 9000, 100), excl) === false);
+  ok('excl: building straddling boundary (edge cross) → intersects', NB.polygonIntersectsAny(sq(1000, 0, 300), excl) === true);
+  ok('excl: no exclusions → keep', NB.polygonIntersectsAny(sq(0, 0, 100), []) === false);
+  // build with a big exclusion over the origin drops the synthetic building
+  const bigExcl = [sq(0, 0, 1e9)];
+  ok('excl: full-cover exclusion drops all buildings', NB.buildNeighborhoodFeatures([synthTile], tf0, { exclusions: bigExcl }).buildings.length === 0);
+  // road segment filtering: a polyline crossing an exclusion loses its inside segments
+  const line = [{ x: -2000, y: 0 }, { x: 0, y: 0 }, { x: 2000, y: 0 }]; // middle vertex at origin, mid of both segs near origin
+  const runs = NB.filterPolylineByExclusions(line, [sq(0, 0, 1500)]);
+  ok('excl: road segments with midpoint inside are dropped', runs.every(run => run.every(p => Math.abs(p.x) > 0) ) && runs.reduce((n, r) => n + r.length, 0) < line.length + runs.length, JSON.stringify(runs.map(r => r.length)));
+  ok('excl: no exclusion → single run unchanged', (() => { const r = NB.filterPolylineByExclusions(line, []); return r.length === 1 && r[0].length === 3; })());
+
+  // — capBuildings nearest-N —
+  const mk = (x) => ({ points: [{ x, y: 0 }, { x: x + 10, y: 0 }, { x: x + 10, y: 10 }, { x, y: 10 }], heightMm: 3000, baseMm: 0 });
+  const many = [mk(5000), mk(100), mk(9000), mk(300), mk(50)];
+  const cap2 = NB.capBuildings(many, { x: 0, y: 0 }, 2);
+  ok('cap: returns N nearest by centroid', cap2.length === 2 && cap2.every(b => b.points[0].x < 400), cap2.map(b => b.points[0].x).join(','));
+  ok('cap: list ≤ N returns all', NB.capBuildings(many, { x: 0, y: 0 }, 10).length === 5);
+
+  // — align golden (screen-CW rotate about origin, then translate) —
+  const aT = NB.alignPlanPoint({ x: 50, y: 20 }, { x: 0, y: 0 }, { dx: 5, dy: -3 });
+  ok('align: translation golden', aT.x === 55 && aT.y === 17, `${aT.x},${aT.y}`);
+  const aR = NB.alignPlanPoint({ x: 100, y: 0 }, { x: 0, y: 0 }, { rotDeg: 90 });
+  near('align: rot 90° screen-CW → (0,-100)', aR.x, 0, 1e-6, `x`); near('align: rot 90° screen-CW y', aR.y, -100, 1e-6, `y`);
+  const aO = NB.alignPlanPoint({ x: 110, y: 10 }, { x: 10, y: 10 }, { rotDeg: 90 }); // rotate (100,0) about origin → (0,-100)+origin
+  ok('align: rotate about non-zero origin', Math.abs(aO.x - 10) < 1e-6 && Math.abs(aO.y - (-90)) < 1e-6, `${aO.x.toFixed(2)},${aO.y.toFixed(2)}`);
+  // align applied inside build: dx shifts every projected point by exactly dx
+  const noA = NB.buildNeighborhoodFeatures([synthTile], tf0, {});
+  const wiA = NB.buildNeighborhoodFeatures([synthTile], tf0, { align: { dx: 1234, dy: -567 } });
+  const dxOk = Math.abs((wiA.buildings[0].points[0].x - noA.buildings[0].points[0].x) - 1234) < 1e-6;
+  const dyOk = Math.abs((wiA.buildings[0].points[0].y - noA.buildings[0].points[0].y) - (-567)) < 1e-6;
+  ok('align: dx/dy applied to projected building points', dxOk && dyOk);
+
+  // — url template helpers —
+  ok('tileUrl: {z}/{x}/{y} substitution', NB.tileUrl('https://h/{z}/{x}/{y}.pbf', { z: 14, x: 3, y: 7 }) === 'https://h/14/3/7.pbf');
+  ok('scheme: https ok', NB.tileTemplateSchemeOk('https://h/{z}/{x}/{y}.pbf') === true);
+  ok('scheme: http ok', NB.tileTemplateSchemeOk('http://h/{z}/{x}/{y}.pbf') === true);
+  ok('scheme: ftp rejected', NB.tileTemplateSchemeOk('ftp://h/{z}/{x}/{y}.pbf') === false);
+  ok('scheme: file rejected', NB.tileTemplateSchemeOk('file:///etc/passwd') === false);
+  ok('scheme: empty rejected', NB.tileTemplateSchemeOk('') === false);
+
+  // ═══════════════ PLANNER: fetch / cache / gates ═══════════════
+  await runPlanner();
+
+  async function runPlanner() {
+    const { Planner } = await import('./planner.mod.js?v=' + Date.now());
+    const store = (globalThis).__nbhdStore; // fake IDB controls
+
+    const clone = x => JSON.parse(JSON.stringify(x));
+    const LEGACY = 'diorama';
+
+    class FakeHa {
+      constructor(seed, offline) {
+        this.map = new Map();
+        for (const [k, v] of Object.entries(seed || {})) this.map.set(k, clone(v));
+        this.states = {}; this._s = []; this._c = []; this.offline = offline === true;
+      }
+      connect() { for (const cb of this._c) cb('connected'); for (const cb of this._s) cb(this.states, undefined); }
+      onState(fn) { this._s.push(fn); } onConn(fn) { this._c.push(fn); }
+      callService() { return Promise.resolve(); }
+      async getHistory() { return {}; } async getWeatherForecasts() { return null; }
+      async getDevices() { return []; } async getEntityRegistry() { return []; }
+      async updateEntityRegistry() { return true; }
+      async getUserData(k) { return this.map.has(k) ? clone(this.map.get(k)) : null; }
+      async setUserData(k, v) { this.map.set(k, clone(v)); return true; }
+      async refreshStates() {} peek(k) { return this.map.has(k) ? clone(this.map.get(k)) : null; }
+    }
+
+    function makeStore(extra) {
+      return {
+        v: 2, currentFloorId: 'f1', activeSensorId: null,
+        coverage: true, imperial: false, showDetails: false, useRawTargets: false,
+        floors: [{ id: 'f1', name: 'Home', w: 8000, d: 6000, walls: [], furniture: [], lights: [], switches: [],
+          sensors: [], motionSensors: [], roamers: [], envSensors: [], doors: [], windows: [], bg: null, rooms: [],
+          bleProxies: [], alarmPanels: [], safetySensors: [], robots: [], presenceZones: [], cameras: [], groundAreas: [], voidAreas: [] }],
+        ...extra,
+      };
+    }
+    // A calibrated landmark at brooklyn center → geoFit quality 'single', tiles near the fixture.
+    const geoCal = { landmarks: [{ id: 'lm1', name: 'Home', x: 4000, y: 3000, lat: 40.6782, lon: -73.9442 }] };
+
+    // ── fetch stub: TileJSON + .pbf served from the brooklyn fixture ──────────
+    let pbfCount = 0, tileJsonCount = 0;
+    window.fetch = async (url) => {
+      url = String(url);
+      if (url.includes('/planet') && !url.endsWith('.pbf')) {
+        tileJsonCount++;
+        return { ok: true, json: async () => ({ tiles: ['https://stub.tiles/{z}/{x}/{y}.pbf'] }) };
+      }
+      if (url.endsWith('.pbf')) {
+        pbfCount++;
+        return { ok: true, arrayBuffer: async () => bytesOf.brooklyn.slice(0) };
+      }
+      return { ok: false, status: 404, arrayBuffer: async () => new ArrayBuffer(0), json: async () => ({}) };
+    };
+
+    async function fresh(seed, offline) {
+      localStorage.removeItem('diorama:store:v1'); localStorage.removeItem('diorama:configs');
+      const stub = new FakeHa(seed, offline); const p = new Planner(); p.connectWith(stub);
+      await waitFor(() => p.configIndex !== null);
+      return { p, stub };
+    }
+
+    // (P1) enabled + fit → data extracted, tiles fetched
+    store.clear();
+    const { p: p1, stub } = await fresh({ [LEGACY]: makeStore({ geo: geoCal, neighborhood: { enabled: true } }) });
+    await waitFor(() => p1.neighborhoodData !== null, 1500);
+    ok('planner: enabled+fit → neighborhoodData populated', !!p1.neighborhoodData);
+    ok('planner: buildings extracted (>0)', (p1.neighborhoodData?.buildings.length ?? 0) > 0, p1.neighborhoodData?.buildings.length);
+    ok('planner: capped at MAX_BUILDINGS', (p1.neighborhoodData?.buildings.length ?? 0) <= 400, p1.neighborhoodData?.buildings.length);
+    ok('planner: fetchedAt set', (p1.neighborhoodData?.fetchedAt ?? 0) > 0);
+    ok('planner: TileJSON fetched once', tileJsonCount === 1, tileJsonCount);
+    ok('planner: tiles fetched via stub', pbfCount > 0, pbfCount);
+    const rev0 = p1.neighborhoodRev;
+    ok('planner: neighborhoodRev bumped on extraction', rev0 > 0, rev0);
+
+    // (P4) verticalScale change → RE-EXTRACT with ZERO new fetches
+    const pbfAfterLoad = pbfCount;
+    const h0 = p1.neighborhoodData.buildings[0].heightMm;
+    p1.setNeighborhood(n => { n.verticalScale = 2; });
+    await waitFor(() => p1.neighborhoodData && p1.neighborhoodData.buildings[0] && p1.neighborhoodData.buildings[0].heightMm !== h0, 800);
+    ok('planner: verticalScale change re-extracts (no refetch)', pbfCount === pbfAfterLoad, `pbf ${pbfAfterLoad}→${pbfCount}`);
+    ok('planner: verticalScale ×2 doubled a building height', Math.abs(p1.neighborhoodData.buildings[0].heightMm - h0 * 2) < 1, `${h0}→${p1.neighborhoodData.buildings[0].heightMm}`);
+    ok('planner: neighborhoodRev bumps on re-extract', p1.neighborhoodRev > rev0, `${rev0}→${p1.neighborhoodRev}`);
+
+    // (P5) fresh Planner sharing the module-level IDB → IDB hit, 0 new .pbf fetches
+    const pbfBeforeReload = pbfCount;
+    const p2 = new Planner(); p2.connectWith(stub); await waitFor(() => p2.configIndex !== null);
+    await waitFor(() => p2.neighborhoodData !== null, 1500);
+    ok('planner: reload from IDB → data (no new tile fetch)', !!p2.neighborhoodData && pbfCount === pbfBeforeReload, `pbf ${pbfBeforeReload}→${pbfCount}`);
+
+    // (P6) TTL-expired entry → refetch
+    store.ageAll(31 * 24 * 60 * 60 * 1000);
+    const pbfBeforeTtl = pbfCount;
+    const p3 = new Planner(); p3.connectWith(stub); await waitFor(() => p3.configIndex !== null);
+    await waitFor(() => p3.neighborhoodData !== null, 1500);
+    ok('planner: TTL-expired IDB entry refetches', pbfCount > pbfBeforeTtl, `pbf ${pbfBeforeTtl}→${pbfCount}`);
+
+    // (P7) disabled → inert
+    store.clear();
+    const { p: pd } = await fresh({ [LEGACY]: makeStore({ geo: geoCal, neighborhood: { enabled: false } }) });
+    await sleep(40);
+    ok('planner: disabled → data null', pd.neighborhoodData === null);
+
+    // (P8) no geo fit → inert
+    store.clear();
+    const { p: pn } = await fresh({ [LEGACY]: makeStore({ neighborhood: { enabled: true } }) });
+    await sleep(40);
+    ok('planner: no calibrated landmark → data null', pn.neighborhoodData === null);
+
+    // (P9) offline → inert (no fetch)
+    store.clear();
+    const pbfBeforeOffline = pbfCount;
+    const { p: po } = await fresh({ [LEGACY]: makeStore({ geo: geoCal, neighborhood: { enabled: true } }) }, true);
+    await sleep(40);
+    ok('planner: offline → data null', po.neighborhoodData === null);
+    ok('planner: offline → no tile fetch', pbfCount === pbfBeforeOffline, `pbf ${pbfBeforeOffline}→${pbfCount}`);
+
+    // (P10) custom bad scheme → inert, no fetch
+    store.clear();
+    const pbfBeforeBad = pbfCount;
+    const { p: pbad } = await fresh({ [LEGACY]: makeStore({ geo: geoCal, neighborhood: { enabled: true, source: 'custom', tileUrlTemplate: 'ftp://evil/{z}/{x}/{y}.pbf' } }) });
+    await sleep(60);
+    ok('planner: custom bad scheme → data null', pbad.neighborhoodData === null);
+    ok('planner: custom bad scheme → no tile fetch', pbfCount === pbfBeforeBad, `pbf ${pbfBeforeBad}→${pbfCount}`);
+
+    // (P11) custom http scheme → fetches template-substituted URL, data extracted
+    store.clear();
+    const { p: pc } = await fresh({ [LEGACY]: makeStore({ geo: geoCal, neighborhood: { enabled: true, source: 'custom', tileUrlTemplate: 'https://myhost/tiles/{z}/{x}/{y}.pbf' } }) });
+    await waitFor(() => pc.neighborhoodData !== null, 1500);
+    ok('planner: custom http source → data extracted', !!pc.neighborhoodData && pc.neighborhoodData.buildings.length > 0);
+
+    // (P12) align nudge → RE-EXTRACT with ZERO new fetches, points shifted by dx/dy
+    const sqL = (cx, cy, r) => [{ x: cx - r, y: cy - r }, { x: cx + r, y: cy - r }, { x: cx + r, y: cy + r }, { x: cx - r, y: cy + r }];
+    store.clear();
+    const { p: pa } = await fresh({ [LEGACY]: makeStore({ geo: geoCal, neighborhood: { enabled: true } }) });
+    await waitFor(() => pa.neighborhoodData && pa.neighborhoodData.buildings.length > 0, 1500);
+    const pbfBeforeAlign = pbfCount;
+    const revA = pa.neighborhoodRev;
+    // Per-building shift math is proven in the pure section (single synthetic
+    // building, no cap reordering); here we assert the PLANNER wiring: align
+    // writes to the store + triggers a re-extract with NO new fetch + bumps the
+    // rev. (An exact-geometry probe is unreliable at this layer because
+    // capBuildings reorders the nearest-N set by distance to the fixed geo origin
+    // when a dense tile carries >MAX_BUILDINGS.)
+    pa.setNeighborhood(n => { n.align = { dx: 7000, dy: -3000 }; });
+    await waitFor(() => pa.neighborhoodRev > revA, 800);
+    ok('planner: align nudge re-extracts (no refetch)', pbfCount === pbfBeforeAlign, `pbf ${pbfBeforeAlign}→${pbfCount}`);
+    ok('planner: align written to store', pa.store.neighborhood.align?.dx === 7000 && pa.store.neighborhood.align?.dy === -3000);
+    ok('planner: align neighborhoodRev bumps', pa.neighborhoodRev > revA, `${revA}→${pa.neighborhoodRev}`);
+    pa.setNeighborhood(n => { n.align = {}; });   // reset for the exclusion test below
+    await waitFor(() => pa.neighborhoodData && pa.neighborhoodData.buildings.length > 0, 800);
+
+    // (P13) exclusion append via the draw latch → re-extract drops intersecting
+    // buildings; NO new fetch. A full-cover mask drops every building.
+    const pbfBeforeExcl = pbfCount;
+    const nBefore = pa.neighborhoodData.buildings.length;
+    ok('planner: buildings present before exclusion', nBefore > 0, nBefore);
+    pa.drawingExclusion = { points: sqL(0, 0, 1e9) };   // simulate the finished latch
+    pa.finishExclusion();
+    await waitFor(() => pa.neighborhoodData && pa.neighborhoodData.buildings.length === 0, 800);
+    ok('planner: full-cover exclusion drops all buildings', pa.neighborhoodData.buildings.length === 0, pa.neighborhoodData.buildings.length);
+    ok('planner: exclusion re-extract does NOT refetch', pbfCount === pbfBeforeExcl, `pbf ${pbfBeforeExcl}→${pbfCount}`);
+    ok('planner: exclusion persisted in store', (pa.store.neighborhood.exclusions ?? []).length === 1);
+    pa.deleteExclusion(0);
+    await waitFor(() => pa.neighborhoodData && pa.neighborhoodData.buildings.length > 0, 800);
+    ok('planner: deleteExclusion restores buildings (still no refetch)', pa.neighborhoodData.buildings.length > 0 && pbfCount === pbfBeforeExcl, `pbf=${pbfCount}`);
+
+    // (P14) refresh tiles → clears IDB + warm cache + REFETCHES (fetch count +N)
+    const pbfBeforeRefresh = pbfCount;
+    await pa.clearNeighborhoodCache();
+    await waitFor(() => pbfCount > pbfBeforeRefresh, 1500);
+    ok('planner: refresh clears cache + refetches', pbfCount > pbfBeforeRefresh, `pbf ${pbfBeforeRefresh}→${pbfCount}`);
+  }
+
+  // ── Summary ────────────────────────────────────────────────────────────────
+  const pass = results.filter(r => r.pass).length, total = results.length;
+  const sum = document.getElementById('summary');
+  sum.textContent = `NEIGHBORHOOD ${pass === total ? 'PASS' : 'FAIL'} ${pass}/${total}`;
+  sum.className = pass === total ? 'okbg' : 'badbg';
+  document.title = `NEIGHBORHOOD ${pass === total ? 'PASS' : 'FAIL'} ${pass}/${total}`;
+  const rows = document.getElementById('rows');
+  for (const r of results) {
+    const d = document.createElement('div'); d.className = 'row';
+    d.innerHTML = `<span class="name">${r.pass ? '<span class=pass>PASS</span>' : '<span class=fail>FAIL</span>'} ${r.name}</span><span class="extra">${r.extra}</span>`;
+    rows.appendChild(d);
+  }
+</script>

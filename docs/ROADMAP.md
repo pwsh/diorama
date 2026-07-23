@@ -312,7 +312,12 @@ design doc pinned before the first line of code, per the house pattern.
   the plan frame, and that this must degrade to nothing when no source is
   configured.
 
-- **P5 — Neighborhood overlay (OpenFreeMap)** (L/5). Render the surrounding
+- ✅ **P5 — Neighborhood overlay (OpenFreeMap)** — SHIPPED 2026-07-20 in
+  3 waves (data layer: zero-dep MVT decoder + tile math + IDB cache;
+  renderer: toon building extrusions + attribution; UI: roads/water/
+  landuse + exclusion draw tool + sidebar alignment/scale controls +
+  Settings block). neighborhood-test 84/84 + render 41/41. Original
+  brief (L/5): Render the surrounding
   neighborhood — 3D building extrusions + road/landuse overlays — sourced
   from https://openfreemap.org/ (OpenStreetMap data). Positioned by the
   existing **GPS landmark fit**, with user **fine-tuning of alignment**

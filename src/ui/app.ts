@@ -367,6 +367,21 @@ export class App extends LitElement {
               <!-- Compass overlay: same shared-canvas mount as the chip (one
                    instance covers 2D + 3D); hidden unless compass.show. -->
               <diorama-compass .planner=${p}></diorama-compass>
+              <!-- Neighborhood attribution (OpenFreeMap — compliance, not
+                   configurable): shown in ALL UI modes whenever the overlay
+                   feature is enabled AND data is resolved. Fixed bottom-left of
+                   the shared canvas; links are the only pointer-interactive part. -->
+              ${p.store.neighborhood?.enabled === true && p.neighborhoodData != null ? html`
+                <div style="position:absolute;bottom:6px;left:8px;font-size:10px;line-height:1.2;
+                            color:var(--text-dim);pointer-events:none;
+                            text-shadow:0 0 4px rgba(0,0,0,0.85),0 0 2px rgba(0,0,0,0.85)">
+                  <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer"
+                     style="color:inherit;pointer-events:auto;text-decoration:underline">© OpenStreetMap</a>
+                  ·
+                  <a href="https://openfreemap.org" target="_blank" rel="noopener noreferrer"
+                     style="color:inherit;pointer-events:auto;text-decoration:underline">OpenFreeMap</a>
+                </div>
+              ` : nothing}
               <diorama-zone-edit-bar .planner=${p}></diorama-zone-edit-bar>
               ${p.store.showFloorStats !== false ? html`<div style="position:absolute;bottom:10px;right:10px;color:var(--text-dim);font-size:11px;
                           padding:2px 6px;pointer-events:none;

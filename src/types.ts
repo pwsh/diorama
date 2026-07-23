@@ -1179,6 +1179,41 @@ export interface GeoConfig {
                                // (mirrors the calibration tracker selection)
 }
 
+// ── Neighborhood overlay (OpenFreeMap) ───────────────────────────────────
+// Store-level (property-wide) — one address, one real-world context (mirrors
+// Store.geo / Store.weather). Absent/undefined is fully inert; `enabled`
+// defaults OFF (it calls a third-party network service — opt-in only, never
+// default-on). Must be in Planner._loadFromHa's explicit field list (the
+// standard reset-on-load gotcha) — _normalizeStore is shared with the
+// undo/redo _applyHistorySnapshot path, so one entry covers both.
+// See docs/research/neighborhood-openfreemap.md §7.1.
+export interface NeighborhoodConfig {
+  enabled?: boolean;                    // absent = OFF (opt-in — third-party fetch)
+  source?: 'openfreemap' | 'custom';    // default 'openfreemap'
+  tileUrlTemplate?: string;             // 'custom' only — a {z}/{x}/{y}.pbf template (http(s) only)
+
+  radiusM?: number;                     // fetch radius around the geo origin; default 350, clamp 100..1000
+
+  layers?: {
+    buildings?: boolean;                // default true
+    roads?: boolean;                    // default true
+    water?: boolean;                    // default true
+    landuse?: boolean;                  // default false — ambient-only, opt-in
+    labels?: boolean;                   // default false — deferred (no-op until a future phase)
+  };
+
+  verticalScale?: number;               // multiplies every resolved building height; default 1, clamp 0.2..3
+  defaultLevelHeightM?: number;         // fallback per-level height (no OSM tag); default 3, clamp 2..5
+
+  align?: { dx?: number; dy?: number; rotDeg?: number }; // fine nudge ON TOP of the landmark GeoTransform
+
+  opacity?: number;                     // building/road/water alpha; default 1, clamp 0.3..1
+  colorBuildings?: string; colorRoads?: string; colorWater?: string; colorLanduse?: string; // hex overrides
+
+  exclusions?: Vec2[][];                // plan-mm mask polygons (same shared frame as Store.geo.landmarks) —
+                                        // neighborhood geometry intersecting one is clipped OUT
+}
+
 // ── MQTT bridge (Phase 5) ────────────────────────────────────────────────
 // Direct-MQTT bridge config (Frigate ground-truth targets + Valetudo maps).
 // `mode` is the enabled bit + transport choice — safe to SYNC. Broker
@@ -1230,6 +1265,7 @@ export interface Store {
   alerts?: AlertsConfig;             // Alert Center (persistent notifications + Repairs surfacing)
   geo?: GeoConfig;                   // landmarks + lat/lon↔plan calibration (Feature G)
   mqttBridge?: MqttBridgeConfig;     // direct-MQTT bridge (Phase 5) — secrets stay in localStorage
+  neighborhood?: NeighborhoodConfig; // OpenFreeMap neighborhood overlay (buildings/roads/water/landuse)
 
   avatarPacks?: Record<string, AvatarPackConfig>;   // per-pack loaded/active/members (avatar packs)
   notes?: string;                    // free-text description of this configuration; shown in Settings ▸ Data; rides export/import
@@ -1347,6 +1383,7 @@ export interface Layers2D {
   vacuumMap?: boolean;  // Valetudo robot room-map overlay (2D fill + 3D patches); default OFF (diagnostic)
   heatmap?: boolean;    // per-room temperature heat-map (2D fill + label, 3D patches); default OFF (opt-in analysis view)
   dimensions?: boolean; // rulers + wall/structure dimension lines (2D); default ON
+  neighborhood?: boolean; // OpenFreeMap neighborhood overlay (3D buildings this wave); default ON — but the FEATURE is opt-in via neighborhood.enabled, so this leaks nothing on its own
 }
 
 export interface Layer2DPreset {

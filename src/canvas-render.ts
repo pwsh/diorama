@@ -255,6 +255,11 @@ export function drawAll(ctx: CanvasRenderingContext2D, p: Planner, view: View,
   const L = p.store.layers2d ?? {};
   const on = (v: boolean | undefined) => v !== false;
   drawFloor(ctx, p, view, on(L.bg) ? bgImg : null);
+  // Neighborhood overlay (OpenFreeMap) — muted background CONTEXT drawn EARLY
+  // (right after bg, before ground paint) so it reads unambiguously as backdrop.
+  // Gated on its own layer (default on) AND the FEATURE being enabled with data
+  // resolved. Exclusion masks draw dashed-dim in edit mode.
+  if (on(L.neighborhood) && p.store.neighborhood?.enabled) drawNeighborhood(ctx, p, view);
   // Ground / yard covering areas — painted right after the floor, under walls /
   // furniture / everything structural.
   if (on(L.ground)) drawGroundAreas(ctx, p, view);
@@ -3221,6 +3226,92 @@ function drawWalls(ctx: CanvasRenderingContext2D, p: Planner, view: View): void 
 // coordinates (stacked stories register when dims match — no transform), plus a
 // dim name tag near the floor's wall bbox. Structure outline only (no doors /
 // windows / furniture in v1). Cheap per-frame loop; the RAF redraws each frame.
+// Neighborhood overlay (OpenFreeMap) — a muted, non-interactive backdrop drawn
+// early (after bg, before ground). Buildings = thin dim outlines + faint fill;
+// roads = thin grey centerlines at their real width (px-clamped); water =
+// translucent fill; landuse skipped in 2D v1. Exclusion masks (edit mode only)
+// draw dashed-dim with vertex dots so the clip regions are visible while
+// authoring. Same visual weight as drawPeekFloors — context, not content.
+function drawNeighborhood(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
+  const data = p.neighborhoodData;
+  const dpr = window.devicePixelRatio || 1;
+  ctx.save();
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  if (data) {
+    const cfg = p.store.neighborhood;
+    // Water first (lowest), then buildings, then roads on top.
+    ctx.fillStyle = hexToRgba(cfg?.colorWater ?? '#3d7bb8', 0.28);
+    for (const w of data.water) {
+      if (w.points.length < 3) continue;
+      ctx.beginPath();
+      const a = mmToPx(view, w.points[0].x, w.points[0].y);
+      ctx.moveTo(a.x, a.y);
+      for (let i = 1; i < w.points.length; i++) { const pt = mmToPx(view, w.points[i].x, w.points[i].y); ctx.lineTo(pt.x, pt.y); }
+      ctx.closePath(); ctx.fill();
+    }
+    // Buildings: faint fill + thin outline.
+    const bCol = cfg?.colorBuildings ?? '#9aa2ab';
+    ctx.lineWidth = 1 * dpr;
+    for (const b of data.buildings) {
+      if (b.points.length < 3) continue;
+      ctx.beginPath();
+      const a = mmToPx(view, b.points[0].x, b.points[0].y);
+      ctx.moveTo(a.x, a.y);
+      for (let i = 1; i < b.points.length; i++) { const pt = mmToPx(view, b.points[i].x, b.points[i].y); ctx.lineTo(pt.x, pt.y); }
+      ctx.closePath();
+      ctx.fillStyle = hexToRgba(bCol, 0.10); ctx.fill();
+      ctx.strokeStyle = hexToRgba(bCol, 0.45); ctx.stroke();
+    }
+    // Roads: thin grey centerlines, width scaled to the real mm (px-clamped).
+    const rCol = cfg?.colorRoads ?? '#6b7078';
+    for (const road of data.roads) {
+      if (road.points.length < 2) continue;
+      ctx.strokeStyle = hexToRgba(rCol, 0.5);
+      ctx.lineWidth = Math.max(1 * dpr, Math.min(10 * dpr, road.widthMm * view.scale));
+      ctx.beginPath();
+      const a = mmToPx(view, road.points[0].x, road.points[0].y);
+      ctx.moveTo(a.x, a.y);
+      for (let i = 1; i < road.points.length; i++) { const pt = mmToPx(view, road.points[i].x, road.points[i].y); ctx.lineTo(pt.x, pt.y); }
+      ctx.stroke();
+    }
+  }
+  // Exclusion masks — edit mode only. Dashed red outline + vertex dots (both
+  // committed polygons and the in-progress draw latch).
+  if (p.uiMode === 'edit') {
+    const excls = p.store.neighborhood?.exclusions ?? [];
+    ctx.setLineDash([5 * dpr, 4 * dpr]);
+    ctx.strokeStyle = 'rgba(255,82,82,0.7)';
+    ctx.lineWidth = 1.5 * dpr;
+    for (const poly of excls) {
+      if (poly.length < 2) continue;
+      ctx.beginPath();
+      const a = mmToPx(view, poly[0].x, poly[0].y);
+      ctx.moveTo(a.x, a.y);
+      for (let i = 1; i < poly.length; i++) { const pt = mmToPx(view, poly[i].x, poly[i].y); ctx.lineTo(pt.x, pt.y); }
+      ctx.closePath(); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = 'rgba(255,82,82,0.85)';
+      for (const v of poly) { const pt = mmToPx(view, v.x, v.y); ctx.beginPath(); ctx.arc(pt.x, pt.y, 2.5 * dpr, 0, Math.PI * 2); ctx.fill(); }
+      ctx.setLineDash([5 * dpr, 4 * dpr]);
+    }
+    // In-progress draw latch: open polyline + vertex dots.
+    const drawing = p.drawingExclusion;
+    if (drawing && drawing.points.length) {
+      ctx.strokeStyle = 'rgba(255,138,128,0.9)';
+      ctx.beginPath();
+      const a = mmToPx(view, drawing.points[0].x, drawing.points[0].y);
+      ctx.moveTo(a.x, a.y);
+      for (let i = 1; i < drawing.points.length; i++) { const pt = mmToPx(view, drawing.points[i].x, drawing.points[i].y); ctx.lineTo(pt.x, pt.y); }
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = 'rgba(255,138,128,0.95)';
+      for (const v of drawing.points) { const pt = mmToPx(view, v.x, v.y); ctx.beginPath(); ctx.arc(pt.x, pt.y, 3 * dpr, 0, Math.PI * 2); ctx.fill(); }
+    }
+    ctx.setLineDash([]);
+  }
+  ctx.restore();
+}
+
 function drawPeekFloors(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
   const peeks = peekFloors(p.store.floors, p.store.currentFloorId);
   if (!peeks.length) return;

@@ -2303,6 +2303,15 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
     p.emitConfig();
     return;
   }
+  if (p.tool === 'nbhd_excl') {
+    // Neighborhood exclusion polygon draw latch (mirrors the void tool): each
+    // click appends a world-mm vertex; double-click / Enter finishes (3–12 pts).
+    const v = { x: snap(mm.x, 10), y: snap(mm.y, 10) };
+    if (!p.drawingExclusion) p.drawingExclusion = { points: [v] };
+    else if (p.drawingExclusion.points.length < 12) p.drawingExclusion.points.push(v);
+    p.emitConfig();
+    return;
+  }
   if (p.tool === 'ruler') {
     // Two-click placement latch. Each click resolves to a wall / furniture
     // anchor or a free point (rulerEndAt). First click sets end A; second click
@@ -2703,6 +2712,12 @@ export function onCanvasDblClick(p: Planner, canvas: HTMLCanvasElement, view: Vi
   if (p.tool === 'void' && p.drawingVoidArea) {
     if (p.drawingVoidArea.points.length >= 3) p.finishVoidArea();
     else { p.drawingVoidArea = null; p.emitConfig(); }
+    p.setTool('select');
+    return;
+  }
+  if (p.tool === 'nbhd_excl' && p.drawingExclusion) {
+    if (p.drawingExclusion.points.length >= 3) p.finishExclusion();
+    else { p.drawingExclusion = null; p.emitConfig(); }
     p.setTool('select');
     return;
   }

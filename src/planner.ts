@@ -51,7 +51,7 @@ import type {
   Store, Floor, Sensor, ZonesLive, ObjectHalo, LerpSlot,
   HassState, ConnStatus, DiscoveredDevice, Vec2, AvatarKind, WeatherConfig, CameraFixture,
   ConfigIndex, ConfigMeta, ThermostatFixture, SafetySensor, AlertBeacon, Furniture, MqttBridgeConfig,
-  AlertsConfig, GroundArea, Pool, CompassConfig, Ruler, RulerEnd, DimensionMode,
+  AlertsConfig, GroundArea, Pool, CompassConfig, Ruler, RulerEnd, DimensionMode, NeighborhoodConfig,
 } from './types.js';
 
 // Full export envelope (Batch B). `store` is the WHOLE Store serialized (no
@@ -75,6 +75,13 @@ import { solvePosition, type ProxyObs } from './trilateration.js';
 import type { BridgeStatus, BridgeHandle } from './mqtt-bridge.js';
 // Valetudo map parsing is pure (no three.js) — a plain static import is fine.
 import { decodeMapDataPayload, cleanSegmentPayload, type ParsedVacMap } from './valetudo-map.js';
+// Neighborhood overlay (OpenFreeMap) — all pure, zero three.js (stays in app.js).
+import { decodeTile, type MvtLayer } from './mvt-decode.js';
+import {
+  tilesForRadius, buildNeighborhoodFeatures, tileUrl, tileTemplateSchemeOk,
+  MAX_BUILDINGS, DEFAULT_TILE_ZOOM, type NeighborhoodFeatures, type TileAddr,
+} from './neighborhood.js';
+import { getTile, putTile, tileCacheKey, clearNeighborhoodTiles, TILE_TTL_MS } from './neighborhood-store.js';
 import {
   fetchOpenMeteo, fetchOpenMeteoForecast, geocodeZip, resolveWeatherEntity, deriveFromSensors,
   toCelsius, toKmh, toMmPerH, forecastRainSoon, parseWeatherAlerts,
@@ -268,7 +275,7 @@ export interface EditZone {
   mousePos: Vec2 | null;
 }
 
-export type Tool = 'select' | 'wall' | 'sensor' | 'motion' | 'env' | 'infocard' | 'action' | 'bleproxy' | 'alarm' | 'calendar' | 'thermostat' | 'safety' | 'alertbeacon' | 'robot' | 'camera' | 'projector' | 'valve' | 'sprinkler' | 'flagpole' | 'plug' | 'pzone' | 'ground' | 'path' | 'pool' | 'void' | 'ruler' | 'furniture' | 'light' | 'switch' | 'door' | 'window' | 'delete';
+export type Tool = 'select' | 'wall' | 'sensor' | 'motion' | 'env' | 'infocard' | 'action' | 'bleproxy' | 'alarm' | 'calendar' | 'thermostat' | 'safety' | 'alertbeacon' | 'robot' | 'camera' | 'projector' | 'valve' | 'sprinkler' | 'flagpole' | 'plug' | 'pzone' | 'ground' | 'path' | 'pool' | 'void' | 'nbhd_excl' | 'ruler' | 'furniture' | 'light' | 'switch' | 'door' | 'window' | 'delete';
 
 // Live robot state (runtime-only). `x/y/heading/phase/activity/led` are the
 // DISPLAY fields both canvases read; the rest are the movement controller's
@@ -469,6 +476,13 @@ export class Planner extends EventTarget {
   activeVoidAreaId: string | null = null;
   drawingVoidArea: { points: Vec2[]; id?: string } | null = null;
 
+  // Neighborhood-overlay exclusion mask (OpenFreeMap). A plan-mm clip polygon —
+  // neighborhood geometry intersecting one is dropped at extraction. Same
+  // presence-zone draw-latch idiom (parallel field): each click appends a vertex,
+  // dblclick/Enter finishes (3–12 pts). NO vertex-drag editing v1 (delete +
+  // redraw). Runtime-only; the finished polygon lands in store.neighborhood.
+  drawingExclusion: { points: Vec2[] } | null = null;
+
   // Ruler (measure tool). `drawingRuler` is the half-placed latch: the first
   // click (ruler tool) sets end `a`; the second click sets `b` + creates the
   // ruler (staying armed for more). Cleared on tool switch / ESC / store load /
@@ -646,6 +660,26 @@ export class Planner extends EventTarget {
   private static readonly CAM_MATCH_MM = 2500;        // nearest-position successor match radius
   private static readonly CAM_RETIRE_MS = 8000;       // release a slot after this long without an update
 
+  // ── Neighborhood overlay (OpenFreeMap — Wave 1 data layer) ─────────────────
+  // Resolved plan-frame features (buildings/roads/water/landuse). Runtime-only,
+  // NEVER persisted (same rule as weatherNow / blePeople). The renderer wave
+  // consumes this. Null when disabled / no geo fit / offline / fetch failed.
+  neighborhoodData: NeighborhoodFeatures | null = null;
+  // Monotonic revision bumped every time _extractNeighborhood rewrites
+  // neighborhoodData (including → null). Runtime-only, NEVER persisted. The
+  // renderer wave folds this into its _keyNeighborhood dirty key so a completed
+  // async fetch / align nudge triggers exactly one rebuild (the Floor.model3d
+  // rev-changed idiom).
+  neighborhoodRev = 0;
+  // Warm in-memory decoded-layer cache (keyed by tileCacheKey) so an align /
+  // verticalScale / exclusion change RE-EXTRACTS without re-fetching or even
+  // re-decoding (PIN: extraction is separable from fetching). IDB holds the raw
+  // bytes for cross-session reuse; this is the per-session convenience layer.
+  private _nbhdDecoded = new Map<string, { addr: TileAddr; layers: Record<string, MvtLayer> }>();
+  private _nbhdTemplate: { source: string; custom?: string; template: string } | null = null;
+  private _nbhdSourceKey = '';                     // last source/custom key — clears the caches on a source switch
+  private _nbhdRunId = 0;                           // guards against an older async reconfigure clobbering a newer
+
   private _weatherGeocoding = false;
   private _weatherFetching = false;
   private _weatherOkAt = 0;     // ms epoch of the last successful Open-Meteo fetch
@@ -753,7 +787,7 @@ export class Planner extends EventTarget {
       // Leave no edit affordances dangling.
       this.drag = null; this.editZone = null; this.drawingWall = null;
       this.drawingPresenceZone = null; this.drawingGroundArea = null; this.drawingVoidArea = null;
-      this.drawingPath = null; this.drawingPoolArea = null;
+      this.drawingPath = null; this.drawingPoolArea = null; this.drawingExclusion = null;
       this.drawingRuler = null; this.pickingDimWalls = false;
       this.tool = 'select'; this.placingRoomId = null; this.placingLandmarkId = null;
       this.placingCamCalibId = null; this.pendingCamCalibUV = null;
@@ -1027,7 +1061,7 @@ export class Planner extends EventTarget {
     this.drag = null; this.editZone = null;
     this.drawingWall = null; this.drawingPresenceZone = null;
     this.drawingGroundArea = null; this.drawingVoidArea = null;
-    this.drawingPath = null; this.drawingPoolArea = null;
+    this.drawingPath = null; this.drawingPoolArea = null; this.drawingExclusion = null;
     this.drawingRuler = null; this.pickingDimWalls = false;
   }
 
@@ -1654,6 +1688,7 @@ export class Planner extends EventTarget {
       this.drawingVoidArea = null;
       this.drawingPath = null;
       this.drawingPoolArea = null;
+      this.drawingExclusion = null;
       this.drawingRuler = null;
       this.pickingDimWalls = false;
       this.showDetails = this.store.showDetails === true;
@@ -1672,6 +1707,9 @@ export class Planner extends EventTarget {
     // (Re)start the MQTT bridge to match the authoritative config.
     this._mqttInited = true;
     void this._reconfigureMqtt();
+    // (Re)resolve the OpenFreeMap neighborhood overlay to match the config +
+    // geo fit (inert unless enabled + a calibrated landmark exists).
+    void this._reconfigureNeighborhood();
     // (Re)start the Alert Center collectors to match the authoritative config
     // (honors the enabled toggle; only starts once a connection exists).
     if (this._alertInited) this._reconfigureAlertCenter();
@@ -1715,6 +1753,7 @@ export class Planner extends EventTarget {
       weather:        remote.weather        ?? undefined,
       geo:            remote.geo            ?? undefined,
       mqttBridge:     remote.mqttBridge     ?? undefined,
+      neighborhood:   remote.neighborhood   ?? undefined,
       avatarPacks:    remote.avatarPacks    ?? undefined,
       notes:          remote.notes          ?? undefined,
       avatarInteractions: remote.avatarInteractions ?? undefined,
@@ -2651,6 +2690,7 @@ export class Planner extends EventTarget {
     if (t !== 'path') this.drawingPath = null;
     if (t !== 'pool') this.drawingPoolArea = null;
     if (t !== 'void') this.drawingVoidArea = null;
+    if (t !== 'nbhd_excl') this.drawingExclusion = null;
     if (t !== 'ruler') this.drawingRuler = null;   // drop the half-placed ruler
     this.pickingDimWalls = false;  // any tool pick disarms the dimension wall-pick latch
     this.placingRoomId = null;  // picking any tool cancels a pending room placement
@@ -3166,6 +3206,32 @@ export class Planner extends EventTarget {
     }
     this.save();
     this.emitConfig();
+  }
+
+  // ── Neighborhood-overlay exclusion masks ──────────────────────────────────
+  // Arm the exclusion draw tool (sidebar "+ Add exclusion"). Mirrors the
+  // presence-zone/void arming: sets the tool + an empty latch.
+  armExclusionDraw(): void {
+    this.setTool('nbhd_excl');
+    this.drawingExclusion = { points: [] };
+    this.emitConfig();
+  }
+
+  // Commit the in-progress exclusion polygon (3–12 pts) into the store-level
+  // neighborhood config and re-extract (setNeighborhood saves + reconfigures).
+  finishExclusion(): void {
+    const d = this.drawingExclusion;
+    this.drawingExclusion = null;
+    if (!d || d.points.length < 3) { this.emitConfig(); return; }
+    const pts = d.points.slice(0, 12).map(p => ({ x: Math.round(p.x), y: Math.round(p.y) }));
+    this.setNeighborhood(n => { (n.exclusions ??= []).push(pts); });
+  }
+
+  // Delete the exclusion at `index` (sidebar list ✕). Re-extracts.
+  deleteExclusion(index: number): void {
+    const ex = this.store.neighborhood?.exclusions;
+    if (!ex || index < 0 || index >= ex.length) return;
+    this.setNeighborhood(n => { n.exclusions?.splice(index, 1); });
   }
 
   // ── Rulers (measure tool) + wall/structure dimensions ─────────────────────
@@ -4770,6 +4836,134 @@ export class Planner extends EventTarget {
       this._mqttStatus = 'error';
       this.emitConfig();
     }
+  }
+
+  // ── Neighborhood overlay (OpenFreeMap — Wave 1) ─────────────────────────────
+  // Mutate the neighborhood config (creating it on first use), persist and
+  // re-resolve. Mirrors setWeather / setMqttBridge. `_reconfigureNeighborhood`
+  // only fetches tiles NOT already in the warm decoded cache, so an align /
+  // verticalScale / exclusion change re-extracts with ZERO new fetches.
+  setNeighborhood(mut: (n: NeighborhoodConfig) => void): void {
+    if (!this.store.neighborhood) this.store.neighborhood = { source: 'openfreemap' };
+    mut(this.store.neighborhood);
+    this.save();
+    void this._reconfigureNeighborhood();
+    this.emitConfig();
+  }
+
+  // Clear the persistent tile cache (future Settings "reset cache" button) and
+  // re-fetch. Also drops the warm decoded cache so the next reconfigure refetches.
+  async clearNeighborhoodCache(): Promise<void> {
+    await clearNeighborhoodTiles();
+    this._nbhdDecoded.clear();
+    this._nbhdTemplate = null;
+    await this._reconfigureNeighborhood();
+  }
+
+  // (Re)resolve the neighborhood overlay to match the current config + geo fit.
+  // Inert (data null) when disabled / offline / no calibrated landmark. Network
+  // is fully isolated in try/catch — a fetch failure never throws into the tick
+  // path, it just leaves that tile's data absent (weather.ts fetchOpenMeteo idiom).
+  private async _reconfigureNeighborhood(): Promise<void> {
+    const runId = ++this._nbhdRunId;
+    const cfg = this.store.neighborhood;
+    if (!cfg?.enabled || this.isOffline) { this.neighborhoodData = null; this.emitConfig(); return; }
+    const fit = this.geoFit();
+    if (!fit || fit.transform.quality === 'none') { this.neighborhoodData = null; this.emitConfig(); return; }
+
+    const source = cfg.source ?? 'openfreemap';
+    // A source (or custom-template) change invalidates every warm/template cache
+    // so we never serve the wrong endpoint's tiles.
+    const srcKey = source === 'custom' ? `custom:${cfg.tileUrlTemplate ?? ''}` : 'openfreemap';
+    if (srcKey !== this._nbhdSourceKey) {
+      this._nbhdDecoded.clear();
+      this._nbhdTemplate = null;
+      this._nbhdSourceKey = srcKey;
+    }
+
+    const t = fit.transform;
+    const radiusM = Math.max(100, Math.min(1000, cfg.radiusM ?? 350));
+    const addrs = tilesForRadius(t.originLat, t.originLon, radiusM, DEFAULT_TILE_ZOOM);
+
+    // Resolve the tile-URL template (openfreemap: fetch TileJSON once + cache;
+    // custom: the user template after a scheme check). A bad-scheme custom URL or
+    // a failed TileJSON leaves data null.
+    let template: string | null;
+    try { template = await this._resolveTileTemplate(source, cfg.tileUrlTemplate); }
+    catch { this.neighborhoodData = null; this.emitConfig(); return; }
+    if (runId !== this._nbhdRunId) return;   // a newer reconfigure superseded us
+    if (!template) { this.neighborhoodData = null; this.emitConfig(); return; }
+
+    // Ensure every needed tile is decoded (warm cache → IDB → network), fetching
+    // only misses. All I/O per-tile try/caught.
+    for (const a of addrs) {
+      const key = tileCacheKey(source, a.z, a.x, a.y);
+      if (this._nbhdDecoded.has(key)) continue;
+      let bytes: ArrayBuffer | null = null;
+      try {
+        const cached = await getTile(key, TILE_TTL_MS);
+        if (cached) bytes = cached.bytes;
+        else {
+          const res = await fetch(tileUrl(template, a));
+          if (res.ok) {
+            bytes = await res.arrayBuffer();
+            void putTile(key, { bytes, fetchedAt: Date.now() });
+          }
+        }
+      } catch { bytes = null; }
+      if (runId !== this._nbhdRunId) return;   // superseded mid-fetch
+      if (bytes) {
+        try {
+          const decoded = decodeTile(new Uint8Array(bytes));
+          this._nbhdDecoded.set(key, { addr: a, layers: decoded.layers });
+        } catch { /* skip a bad tile — decoder never throws anyway */ }
+      }
+    }
+    if (runId !== this._nbhdRunId) return;
+    this._extractNeighborhood(source, addrs, t);
+  }
+
+  // Resolve (and cache) the OpenFreeMap tile-URL template, or validate a custom
+  // one. Throws on a non-http(s) custom scheme so the caller can null the data.
+  private async _resolveTileTemplate(source: string, custom: string | undefined): Promise<string | null> {
+    if (source === 'custom') {
+      if (!tileTemplateSchemeOk(custom)) throw new Error('custom tile URL must be http(s)');
+      return custom!.trim();
+    }
+    if (this._nbhdTemplate?.source === 'openfreemap') return this._nbhdTemplate.template;
+    // The version-stamped path segment changes weekly — always read the TileJSON
+    // rather than hardcoding it (research §2).
+    const res = await fetch('https://tiles.openfreemap.org/planet');
+    if (!res.ok) return null;
+    const j = await res.json() as { tiles?: unknown };
+    const tmpl = Array.isArray(j.tiles) && typeof j.tiles[0] === 'string' ? j.tiles[0] as string : null;
+    if (!tmpl) return null;
+    this._nbhdTemplate = { source: 'openfreemap', template: tmpl };
+    return tmpl;
+  }
+
+  // Re-run the PURE feature build over the warm decoded cache — the separable
+  // "extraction" half (no fetch/decode). Called at the end of every reconfigure
+  // and cheap enough that an align-slider nudge feels live.
+  private _extractNeighborhood(source: string, addrs: TileAddr[], t: GeoTransform): void {
+    const cfg = this.store.neighborhood;
+    if (!cfg) { this.neighborhoodData = null; this.neighborhoodRev++; this.emitConfig(); return; }
+    const tiles: Array<{ addr: TileAddr; layers: Record<string, MvtLayer> }> = [];
+    for (const a of addrs) {
+      const d = this._nbhdDecoded.get(tileCacheKey(source, a.z, a.x, a.y));
+      if (d) tiles.push({ addr: a, layers: d.layers });
+    }
+    this.neighborhoodData = buildNeighborhoodFeatures(tiles, t, {
+      align: cfg.align,
+      exclusions: cfg.exclusions,
+      verticalScale: Math.max(0.2, Math.min(3, cfg.verticalScale ?? 1)),
+      defaultLevelHeightM: Math.max(2, Math.min(5, cfg.defaultLevelHeightM ?? 3)),
+      layers: cfg.layers,
+      fetchedAt: Date.now(),
+      maxBuildings: MAX_BUILDINGS,
+    });
+    this.neighborhoodRev++;
+    this.emitConfig();
   }
 
   // ── Valetudo room-map overlay (Phase 5, batch M-C) ──────────────────────────

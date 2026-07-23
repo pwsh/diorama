@@ -30,7 +30,7 @@ import {
   SPRINKLER_DEFAULTS, sprinklerRunning, sprinklerHeadKind, sprinklerArcDeg, sprinklerRadius, sprinklerRotation,
   FLAGPOLE_DEFAULTS, flagpoleHeight, flagpoleHoistFraction,
   PLUG_DEFAULTS, PLUG_PLATE_DEPTH_MM, plugHeight,
-  GROUND_KINDS,
+  GROUND_KINDS, bufferPolyline,
   ENV_KINDS, envKindOf, envColor, envValueText, envHeight, envScale,
   infoCardText, infoCardRule, infoCardScale, infoCardMount, infoCardHeight,
   infoCardW, infoCardH,
@@ -92,6 +92,7 @@ import {
   tickerScrollX, tickerHeadlineIndex, type CalEvent,
 } from './surfaces.js';
 import type { ForecastRecord } from './ha-client.js';
+import type { NeighborhoodFeatures } from './neighborhood.js';
 import { vacMapAffine, vacPixelToWorld, vacSegColor, type VacCal, type VacSegment } from './valetudo-map.js';
 import {
   resolveDef, resolveAvatar, avatarFromPool, resolveLook,
@@ -1462,6 +1463,18 @@ export class ThreeDRenderer {
   // Ghost (glass-house) floors: translucent shells of every OTHER story,
   // stacked at their story heights. Cleared with _clearGroup (no sprites).
   private _ghostGroup = new THREE.Group();
+  // ── Neighborhood overlay (OpenFreeMap — Wave 2: buildings) ────────────────
+  // Toon-extruded background building prisms from the wave-1 data layer. Mapped
+  // through the ACTIVE floor's world→scene frame (identical to `_w` / the ghost
+  // floors: sceneX = afw/2 − wx, sceneZ = wy − afd/2), so — like the ghost group
+  // and UNLIKE the geo-anchored sky — it is floor-relative and IS torn down in
+  // clearTransientGroups (rebuilt on floor switch) + destroy(). NO inverted-hull
+  // outline shells + NO blob shadows (hundreds of pieces of background context;
+  // toon bands suffice). Every mesh carries userData.outlineSkip. Rebuilt only
+  // under three-view's _keyNeighborhood (configRev | neighborhoodRev | layer flag
+  // | opacity/color), zero per-frame work once built. Buildings share ONE material
+  // per (color,opacity), disposed by _clearGroup on rebuild.
+  private _neighborhoodGroup = new THREE.Group();
   // Glass-house transit puppet (Tier 2, stretch): a SINGLE scripted display-only
   // rig that walks a linked stair's run while its Y crosses STORY_H between two
   // ghost story offsets — pure theater (no nav / raycast / bubbles), disposed on
@@ -2037,6 +2050,7 @@ export class ThreeDRenderer {
                     this._robotGroup, this._robotRigGroup, this._cameraGroup, this._projGroup, this._valveGroup, this._plugGroup, this._camAlertGroup, this._pzoneGroup,
                     this._groundGroup, this._poolGroup, this._sprinklerGroup, this._flagpoleGroup, this._vacMapGroup, this._heatmapGroup,
                     this._lightGroup, this._switchGroup, this._targetGroup, this._ghostGroup,
+                    this._neighborhoodGroup,
                     this._transitGroup,
                     this._gpsGroup, this._compassGroup, this._weatherGroup, this._skyGroup, this._bgTextGroup, this._pulseGroup, this._nowPlayingGroup);
 
@@ -2658,6 +2672,7 @@ export class ThreeDRenderer {
       this._safetyGroup, this._alertGroup, this._robotGroup, this._robotRigGroup, this._cameraGroup, this._projGroup, this._valveGroup, this._plugGroup, this._camAlertGroup, this._pzoneGroup,
       this._groundGroup, this._poolGroup, this._sprinklerGroup, this._flagpoleGroup, this._heatmapGroup,
       this._lightGroup, this._switchGroup, this._targetGroup, this._ghostGroup,
+      this._neighborhoodGroup,
       this._pulseGroup, this._nowPlayingGroup, this._bgTextGroup, this._compassGroup,
     ]) {
       this._disposeSpriteMaps(g);
@@ -4156,6 +4171,9 @@ export class ThreeDRenderer {
     // _targetGroup, so this can't be a group flip — updateTargets gates each
     // rig's label sprite visibility on this flag every frame.
     this._showNameLabels = v.nameLabels !== false;
+    // Neighborhood overlay rides its own layer (default on; the whole FEATURE is
+    // opt-in via store.neighborhood.enabled, so an absent flag leaks nothing).
+    this._neighborhoodGroup.visible = v.neighborhood !== false;
   }
   private _showNameLabels = true;
 
@@ -5371,6 +5389,149 @@ export class ThreeDRenderer {
 
       this._ghostGroup.add(gGrp);
     }
+  }
+
+  // ── Neighborhood overlay (OpenFreeMap — Wave 2: buildings) ────────────────
+  // Build one toon-extruded prism per neighborhood building footprint. `data`
+  // buildings are already capped/aligned/excluded + carry heights ALREADY in mm
+  // (verticalScale folded at extraction, see buildNeighborhoodFeatures). Mapped
+  // through the ACTIVE floor's world→scene frame (same asx/asz as the ghost
+  // floors + `_w`). NO outline shells, NO blob shadows (background context —
+  // toon bands suffice); every mesh is outlineSkip. Buildings SHARE ONE material
+  // per (color, opacity), built once per update + disposed by _clearGroup on the
+  // next rebuild. Rebuilt only under three-view's _keyNeighborhood.
+  updateNeighborhood(data: NeighborhoodFeatures | null,
+                     cfg: { opacity?: number; colorBuildings?: string; colorRoads?: string; colorWater?: string; colorLanduse?: string } | null): void {
+    if (!this._scene) return;
+    this._clearGroup(this._neighborhoodGroup);
+    const anyContent = !!data && (data.buildings.length || data.roads.length || data.water.length || data.landuse.length);
+    if (!data || !anyContent) return;
+
+    const afw = this._fw, afd = this._fd;
+    const asx = (wx: number) => afw / 2 - wx;
+    const asz = (wy: number) => wy - afd / 2;
+
+    const opacity = Math.max(0.3, Math.min(1, cfg?.opacity ?? 1));
+    const transparent = opacity < 1;
+
+    // ── Roads / water / landuse: flat toon patches under the building prisms.
+    // Y-STACK (verified against updateGroundAreas): yardFill y=2, ground-area
+    // paint y=elev+4. Neighborhood context slots BELOW user paint so a user's own
+    // driveway/GroundArea always wins visually: landuse y=1 (ambient), water y=2,
+    // roads y=3. A flat patch is a Shape rotated −π/2 (local (sx,sy) → scene
+    // (sx,0,−sy)); we want scene (asx(wx), y, asz(wy)), so sx=asx(wx),
+    // sy=−asz(wy) — the SAME documented shape-y negation as the buildings above.
+    const flatPatch = (points: { x: number; y: number }[], y: number, mat: THREE.Material): THREE.Mesh | null => {
+      if (points.length < 3) return null;
+      try {
+        const shape = new THREE.Shape();
+        points.forEach((pt, k) => {
+          const sx = asx(pt.x), sy = -asz(pt.y);
+          if (k === 0) shape.moveTo(sx, sy); else shape.lineTo(sx, sy);
+        });
+        shape.closePath();
+        const mesh = new THREE.Mesh(new THREE.ShapeGeometry(shape), mat);
+        mesh.rotation.x = -Math.PI / 2;
+        mesh.position.y = y;
+        mesh.userData.outlineSkip = true;
+        return mesh;
+      } catch { return null; }
+    };
+
+    // Landuse (y=1): faint green-grey ambient dressing. Data only carries it when
+    // the layer is enabled (buildNeighborhoodFeatures gates landuse OFF by
+    // default), so drawing data.landuse already respects layers.landuse.
+    if (data.landuse.length) {
+      const luColor = cfg?.colorLanduse ? hexToInt(cfg.colorLanduse) : 0x7f8c72;
+      const luMat = this._mat({ color: luColor, transparent: true, opacity: Math.min(opacity, 0.35), side: THREE.DoubleSide });
+      for (const patch of data.landuse) {
+        const m = flatPatch(patch.points, 1, luMat);
+        if (m) this._neighborhoodGroup.add(m);
+      }
+    }
+
+    // Water (y=2): the ground-area water blue family; opacity clamped ≤0.85.
+    if (data.water.length) {
+      const wColor = cfg?.colorWater ? hexToInt(cfg.colorWater) : hexToInt(GROUND_KINDS.water.color);
+      const wMat = this._mat({ color: wColor, transparent: true, opacity: Math.min(opacity, 0.85), side: THREE.DoubleSide });
+      for (const patch of data.water) {
+        const m = flatPatch(patch.points, 2, wMat);
+        if (m) this._neighborhoodGroup.add(m);
+      }
+    }
+
+    // Roads (y=3): each class-width centerline → a ribbon polygon via the
+    // ALREADY-SHIPPED bufferPolyline, drawn as a flat patch. Capped defensively.
+    if (data.roads.length) {
+      const rColor = cfg?.colorRoads ? hexToInt(cfg.colorRoads) : 0x4a4e55;
+      const rMat = this._mat({ color: rColor, transparent, opacity, side: THREE.DoubleSide });
+      const ROAD_CAP = 600;
+      let built = 0, skipped = 0;
+      for (const road of data.roads) {
+        if (built >= ROAD_CAP) { skipped++; continue; }
+        const ribbon = bufferPolyline(road.points, road.widthMm);
+        const m = flatPatch(ribbon, 3, rMat);
+        if (m) { this._neighborhoodGroup.add(m); built++; }
+      }
+      if (skipped > 0) console.info(`[neighborhood] road cap: ${built} ribbons drawn, ${skipped} skipped (>${ROAD_CAP})`);
+    }
+
+    if (!data.buildings.length) return;
+
+    // Muted concrete default; OSM colour override honored (rare) with the usual
+    // _mat saturation push. ONE material for the whole overlay this update.
+    const colorInt = cfg?.colorBuildings ? hexToInt(cfg.colorBuildings) : 0x9aa2ab;
+    const mat = this._mat({ color: colorInt, transparent, opacity });
+
+    for (const b of data.buildings) {
+      if (b.points.length < 3) continue;
+      // A self-intersecting OSM ring triangulates to garbage (earcut doesn't
+      // throw, so the try/catch alone can't catch it) — pre-reject it so the
+      // rest of the overlay still builds. Cheap: footprints are small polygons.
+      if (this._ringSelfIntersects(b.points)) continue;
+      const depth = Math.max(1, b.heightMm - b.baseMm);
+      let mesh: THREE.Mesh | null = null;
+      try {
+        // Author the footprint Shape in ACTIVE-frame scene coords. ExtrudeGeometry
+        // extrudes along local +Z; geometry.rotateX(-π/2) then maps local
+        // (sx, sy, z) → scene (sx, z, -sy). We want scene (asx(wx), z, asz(wy)),
+        // so sx = asx(wx) and -sy = asz(wy) ⇒ sy = -asz(wy) = afd/2 − wy. That
+        // NEGATION is the documented ghost-slab / glass-house shape-y mirror fix
+        // — omit it and the whole neighborhood mirrors front-to-back.
+        const shape = new THREE.Shape();
+        b.points.forEach((pt, k) => {
+          const sx = asx(pt.x), sy = -asz(pt.y);
+          if (k === 0) shape.moveTo(sx, sy); else shape.lineTo(sx, sy);
+        });
+        shape.closePath();
+        const geo = new THREE.ExtrudeGeometry(shape, { depth, bevelEnabled: false });
+        geo.rotateX(-Math.PI / 2);        // stand the prism upright (local +Z → world +Y)
+        mesh = new THREE.Mesh(geo, mat);
+        mesh.position.y = b.baseMm;        // podium base (0 at grade) → spans baseMm..heightMm
+      } catch { mesh = null; }             // defensive: never abort the overlay on one bad ring
+      if (!mesh) continue;
+      mesh.userData.outlineSkip = true;    // background context — no inverted-hull shell
+      this._neighborhoodGroup.add(mesh);
+    }
+  }
+
+  // Proper self-intersection test on a footprint ring (non-adjacent edge pairs).
+  // Deterministic; used to reject rings earcut would silently mistriangulate.
+  private _ringSelfIntersects(pts: { x: number; y: number }[]): boolean {
+    const n = pts.length;
+    if (n < 4) return false;
+    const sgn = (o: { x: number; y: number }, a: { x: number; y: number }, b: { x: number; y: number }) =>
+      Math.sign((a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x));
+    for (let i = 0; i < n; i++) {
+      const a = pts[i], b = pts[(i + 1) % n];
+      for (let j = i + 1; j < n; j++) {
+        // Skip edges sharing a vertex (adjacent, incl. the wrap-around pair).
+        if ((j + 1) % n === i || (i + 1) % n === j) continue;
+        const c = pts[j], d = pts[(j + 1) % n];
+        if (sgn(a, b, c) !== sgn(a, b, d) && sgn(c, d, a) !== sgn(c, d, b)) return true;
+      }
+    }
+    return false;
   }
 
   // ── Foreground wall cutaway (Sims dollhouse) ──────────────────────────────
@@ -17902,7 +18063,7 @@ export class ThreeDRenderer {
       this._alarmGroup, this._calendarGroup, this._thermoGroup, this._safetyGroup, this._alertGroup, this._robotGroup, this._robotRigGroup,
       this._cameraGroup, this._projGroup, this._valveGroup, this._plugGroup, this._camAlertGroup, this._pzoneGroup, this._groundGroup, this._poolGroup, this._sprinklerGroup, this._flagpoleGroup, this._heatmapGroup,
       this._lightGroup, this._switchGroup, this._targetGroup, this._gpsGroup, this._compassGroup, this._weatherGroup,
-      this._skyGroup, this._bgTextGroup, this._pulseGroup, this._nowPlayingGroup,
+      this._skyGroup, this._bgTextGroup, this._pulseGroup, this._nowPlayingGroup, this._neighborhoodGroup,
     ]) {
       this._disposeSpriteMaps(g);
       this._clearGroup(g);

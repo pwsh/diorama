@@ -408,6 +408,7 @@ export class Canvas2D extends LitElement {
       if (p.drawingPath) { p.drawingPath = null; p.emitConfig(); return; }
       if (p.drawingPoolArea) { p.drawingPoolArea = null; p.emitConfig(); return; }
       if (p.drawingVoidArea) { p.drawingVoidArea = null; p.emitConfig(); return; }
+      if (p.drawingExclusion) { p.drawingExclusion = null; p.emitConfig(); return; }
       if (p.drawingRuler) { p.drawingRuler = null; p.emitConfig(); return; }
       if (p.pickingDimWalls) { p.setPickingDimWalls(false); return; }
       if (p.store.activeSensorId) { p.store.activeSensorId = null; p.save(); p.emitConfig(); }
@@ -418,6 +419,7 @@ export class Canvas2D extends LitElement {
     if (e.key === 'Enter' && p.drawingPath) { p.finishPath(); return; }
     if (e.key === 'Enter' && p.drawingPoolArea) { p.finishPoolArea(); return; }
     if (e.key === 'Enter' && p.drawingVoidArea) { p.finishVoidArea(); return; }
+    if (e.key === 'Enter' && p.drawingExclusion) { p.finishExclusion(); return; }
     if (e.key === '0' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); p.resetView(); return; }
     if (this.planner.uiMode !== 'edit') return;  // kiosk/view: no edit keys
     // Undo / redo. Ctrl/Cmd+Z = undo, Ctrl/Cmd+Shift+Z or Ctrl/Cmd+Y = redo.

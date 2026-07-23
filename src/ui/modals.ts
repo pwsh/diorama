@@ -983,7 +983,65 @@ export class SettingsDrawer extends LitElement {
       </label>
       ${this._alertsBlock()}
       ${this._mqttBlock()}
+      ${this._neighborhoodBlock()}
     `;
+  }
+
+  // ── Neighborhood (OpenFreeMap) block ────────────────────────────────────
+  private _neighborhoodBlock() {
+    const p = this.planner;
+    const cfg = p.store.neighborhood ?? {};
+    const enabled = cfg.enabled === true;
+    const source = cfg.source ?? 'openfreemap';
+    const set = (mut: (n: import('../types.js').NeighborhoodConfig) => void) => p.setNeighborhood(mut);
+    const customUrl = cfg.tileUrlTemplate ?? '';
+    const schemeOk = customUrl.trim() === '' || /^https?:\/\//i.test(customUrl.trim());
+    return html`
+      <div style="border-top:1px solid var(--border);margin-top:12px;padding-top:12px">
+        <div style="font-size:12px;font-weight:600;margin-bottom:6px">Neighborhood (OpenFreeMap)</div>
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text)"
+               title="Fetch surrounding building/road map data from OpenFreeMap and align it to your calibrated GPS landmarks.">
+          <input type="checkbox" .checked=${enabled}
+                 @change=${(e: Event) => set(n => { n.enabled = (e.target as HTMLInputElement).checked; })}>
+          <span style="flex:1">Show neighborhood overlay</span>
+        </label>
+        <div style="font-size:10px;color:var(--text-dim);line-height:1.4;margin:4px 0 6px">
+          Fetches map data for your address from OpenFreeMap (openfreemap.org), a free
+          public service. Your address is sent to their servers as tile coordinates.
+        </div>
+        ${enabled ? html`
+          <div style="margin:6px 0 0 8px;display:flex;flex-direction:column;gap:6px">
+            <div class="row" style="align-items:center">
+              <label style="font-size:12px;color:var(--text)">Source</label>
+              <select .value=${source}
+                      @change=${(e: Event) => set(n => { n.source = (e.target as HTMLSelectElement).value as 'openfreemap' | 'custom'; })}>
+                <option value="openfreemap">OpenFreeMap</option>
+                <option value="custom">Custom tile URL</option>
+              </select>
+            </div>
+            ${source === 'custom' ? html`
+              <div>
+                <label style="font-size:10px;color:var(--text-dim);display:block;margin-bottom:2px">Tile URL template ({z}/{x}/{y}.pbf)</label>
+                <input type="text" placeholder="https://host/tiles/{z}/{x}/{y}.pbf" .value=${customUrl}
+                       @change=${(e: Event) => set(n => { const v = (e.target as HTMLInputElement).value.trim(); n.tileUrlTemplate = v || undefined; })}
+                       style="width:100%;padding:5px 7px;border-radius:4px;border:1px solid ${schemeOk ? 'var(--border)' : '#ff5252'};background:#111;color:var(--text);font-size:12px;box-sizing:border-box">
+                ${!schemeOk ? html`<div style="font-size:10px;color:#ff5252;margin-top:2px">Must start with http:// or https://</div>`
+                  : html`<div style="font-size:10px;color:var(--text-dim);margin-top:2px">Self-hosted OpenFreeMap or a Protomaps/PMTiles extract. Data is still OSM/OpenMapTiles-derived (attribution still applies).</div>`}
+              </div>` : nothing}
+            <div class="row" style="align-items:center">
+              <label style="font-size:12px;color:var(--text)" title="Fetch radius around your calibrated address (metres).">Radius (m)</label>
+              <input type="number" min="100" max="1000" step="50" .value=${String(cfg.radiusM ?? 350)}
+                     @change=${(e: Event) => set(n => { const v = parseFloat((e.target as HTMLInputElement).value); n.radiusM = isFinite(v) ? Math.max(100, Math.min(1000, v)) : 350; })}
+                     style="width:80px">
+            </div>
+            <button class="btn" style="align-self:flex-start" @click=${() => { void this.planner.clearNeighborhoodCache(); }}>Clear tile cache</button>
+            <div style="font-size:10px;color:var(--text-dim);line-height:1.35">
+              Third-party fetch when enabled. Data: © OpenMapTiles · © OpenStreetMap
+              contributors. Detailed layer / alignment controls live in the sidebar
+              "Neighborhood" section.
+            </div>
+          </div>` : nothing}
+      </div>`;
   }
 
   // ── Alert Center block (Alert Center, Track A) ──────────────────────────

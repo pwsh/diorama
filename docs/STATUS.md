@@ -161,6 +161,22 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Roadmap P5 — OpenFreeMap neighborhood** (2026-07-20; 3 sequential
+  Opus waves per `docs/research/neighborhood-openfreemap.md`; MapLibre
+  rejected for a zero-dep in-house path). Wave 1 data layer:
+  hand-rolled MVT decoder (never-throws, real-tile fixtures incl.
+  8191-footprint Brooklyn), z14 tile math through the landmark fit,
+  height resolution w/ extraction-time verticalScale, exclusion
+  helpers, 400-building cap, IDB 30-day cache, fetch/extract
+  SEPARATION (align/scale/exclusion edits never refetch). Wave 2:
+  toon building prisms in the active-floor frame (mirror-catch test),
+  `Layers2D.neighborhood`, OSM/OpenFreeMap attribution chip. Wave 3:
+  road ribbons y=3 / water y=2 / landuse y=1 (under user paint), 2D
+  ghost-context underlay, `nbhd_excl` exclusion draw latch, sidebar
+  Neighborhood section (align nudges, scale honesty hint, refresh),
+  Settings Integrations block, offline/demo inert. 84/84 + 41/41;
+  ruler-dims/floors-view/toolbar/glass-see regressions green.
+
 - **Roadmap P1–P3** (2026-07-20; 1 Sonnet research + 3 parallel Opus).
   **P1 Lovelace card**: `<diorama-card>` third Vite entry
   (`dist/diorama-card.js`; chunkVersionQuery covered it generically; ONE
