@@ -1,5 +1,7 @@
 // Base ▸ Careers — builtin base-group pack (dynamic-import only). Members keep
-// their EXACT bare legacy ids + legacyAccessories markers.
+// their EXACT bare legacy ids. The 10 formerly-imperative kinds (professional …
+// wise_oracle) build via declarative `accessories` prims; the pre-existing
+// base-careers occupations were always declarative.
 import type { AvatarPackDef } from '../avatars.js';
 
 const CHARCOAL = 0x2c2e34, NEARBLACK = 0x161619, PALE = 0xe7c6a4;
@@ -8,62 +10,133 @@ const GOLD = 0xcaa53a, ROBE = 0x7b718f;
 const pack: AvatarPackDef = {
   id: 'base-careers', version: 4, label: 'Careers', path: ['Base', 'Careers'], builtin: true,
   avatars: [
-    { id: 'professional', label: 'Professional', rig: 'humanoid', legacyAccessories: 'professional',
-      humanoid: { body: CHARCOAL, shoe: 0x141416, emI: 0.20 }, bubbles: ['📊', '☕'] },
-    { id: 'hacker', label: 'Hacker', rig: 'humanoid', legacyAccessories: 'hacker',
+    // ── Declarative accessory blocks. Each transcribes the former per-kind
+    // mesh block into `accessories` prims from
+    // docs/research/legacy-accessory-migration.md Part 1 (resolved to numbers at
+    // the member's sk/HEAD_R). Fixed-hex parts set emissive/emissiveIntensity to
+    // reproduce `_mat`'s output; rig-material parts use the color TOKENS. See
+    // test-pages/legacy-migration-test.html for the parity harness.
+    { id: 'professional', label: 'Professional', rig: 'humanoid',
+      humanoid: { body: CHARCOAL, shoe: 0x141416, emI: 0.20 },
+      // White V-neck (3-segment flat wedge cone, apex down + face-front) + tint tie.
+      accessories: [
+        { shape: 'cone', size: [81.6, 360], segments: 3, anchor: 'chest', pos: [0, 12, -8], rot: [Math.PI, Math.PI / 3, 0], color: 0xf2f2f0, emissive: 0x000000, emissiveIntensity: 1 },
+        { shape: 'box', size: [24, 264, 14], anchor: 'chest', pos: [0, -12, -132.8 + 70], color: 'tint' }, // tie, proud of the cone
+      ],
+      bubbles: ['📊', '☕'] },
+    { id: 'hacker', label: 'Hacker', rig: 'humanoid',
       // legColor = dark trousers matching the near-black hoodie (was pale skin — no
       // pants); shoe 0x141416 stays distinct.
-      humanoid: { skin: PALE, body: NEARBLACK, shoe: 0x141416, emI: 0.15, earSkip: true, legColor: CHARCOAL }, bubbles: ['💻', '🔓'] },
-    { id: 'tech_expert', label: 'Tech expert', rig: 'humanoid', legacyAccessories: 'tech_expert',
-      humanoid: { body: NEARBLACK, shoe: 0x33363c, emI: 0.20, earSkip: true }, bubbles: ['💡', '🔌'] },
-    { id: 'farmer', label: 'Farmer', rig: 'humanoid', legacyAccessories: 'farmer',
+      humanoid: { skin: PALE, body: NEARBLACK, shoe: 0x141416, emI: 0.15, earSkip: true, legColor: CHARCOAL },
+      // Hoodie cowl: dark partial shell tilted back so the front rim clears the brow.
+      accessories: [
+        { shape: 'sphere', size: 153.72, sphereArc: [0, Math.PI * 2, 0, Math.PI * 0.6], anchor: 'head', pos: [0, 10.08, 42.84], rot: [0.5, 0, 0], color: 0x18181c, emissive: 0x000000, emissiveIntensity: 1 },
+      ],
+      bubbles: ['💻', '🔓'] },
+    { id: 'tech_expert', label: 'Tech expert', rig: 'humanoid',
+      humanoid: { body: NEARBLACK, shoe: 0x33363c, emI: 0.20, earSkip: true },
+      // Rectangular glasses (2 lenses + bridge) + half-ring headset band + mic +
+      // tint utility belt.
+      accessories: [
+        { shape: 'box', size: [50.4, 37.8, 20], anchor: 'face', pos: [-47.88, 15.12, 10.08], color: 0x17181c, emissive: 0x000000, emissiveIntensity: 1 }, // lens L
+        { shape: 'box', size: [50.4, 37.8, 20], anchor: 'face', pos: [47.88, 15.12, 10.08], color: 0x17181c, emissive: 0x000000, emissiveIntensity: 1 }, // lens R
+        { shape: 'box', size: [25.2, 16, 16], anchor: 'face', pos: [0, 15.12, 7.56], color: 0x17181c, emissive: 0x000000, emissiveIntensity: 1 }, // bridge
+        { shape: 'torus', size: [128.52, 16, Math.PI], anchor: 'head', color: 0x2c2e34, emissive: 0x000000, emissiveIntensity: 1 }, // headset band (half ring)
+        { shape: 'cylinder', size: [10, 10, 88.2], anchor: 'head', pos: [78.12, -44.1, -63], rot: [0, 0, 1.15], color: 0x2c2e34, emissive: 0x000000, emissiveIntensity: 1 }, // mic stub
+        { shape: 'sphere', size: 22, anchor: 'head', pos: [40.32, -63, -63], color: 'tint' }, // mic tip
+        { shape: 'box', size: [252, 60, 147], anchor: 'hip', pos: [0, 48, 0], color: 'tint' }, // utility belt
+      ],
+      bubbles: ['💡', '🔌'] },
+    { id: 'farmer', label: 'Farmer', rig: 'humanoid',
       // Decal: a plaid CHECK print on the chest reads as the flannel shirt without
       // texturing the toon body (crisp canvas decal plane, house style).
       humanoid: { shoe: 0x5a3d28, emI: 0.22, decals: [{ kind: 'print', print: 'check', color: 0x8a3b2e, anchor: 'chest' }] },
+      // Straw hat (brim + crown) + denim overall bib + shoulder straps. Straw/denim
+      // emissive default = color (eI 0.15), so only the color token is authored.
+      accessories: [
+        { shape: 'cylinder', size: [163.8, 163.8, 20], anchor: 'head', pos: [0, 69.3, 0], color: 0xd9b36a }, // straw brim
+        { shape: 'cylinder', size: [88.2, 88.2, 69.3], anchor: 'head', pos: [0, 104.58, 0], color: 0xd9b36a }, // straw crown
+        { shape: 'box', size: [134.4, 300, 20], anchor: 'chest', pos: [0, -30, -10], color: 0x3f5f8a }, // denim bib
+        { shape: 'box', size: [48, 300, 16], anchor: 'chest', pos: [-62.4, 168, -8], color: 0x3f5f8a }, // strap L
+        { shape: 'box', size: [48, 300, 16], anchor: 'chest', pos: [62.4, 168, -8], color: 0x3f5f8a }, // strap R
+      ],
       bubbles: ['🌽', '🚜'] },
-    { id: 'cowboy', label: 'Cowboy', rig: 'humanoid', legacyAccessories: 'cowboy',
+    { id: 'cowboy', label: 'Cowboy', rig: 'humanoid',
       humanoid: { shoe: 0x5a3d28, emI: 0.22 },
       // Coiled lasso at the hip (mirrors the Catwoman-whip idiom — a flat cylinder
-      // reads as a coil without needing a curved primitive). Composes with the
-      // imperative cowboy build (hat/bandana/vest).
+      // reads as a coil without needing a curved primitive) + wide-brim hat + tint
+      // bandana + brown vest front panels (hat/vest emissive default = color, eI 0.12).
       accessories: [
         { shape: 'cylinder', size: [55, 55, 14], anchor: 'hip', pos: [80, -10, 0], rot: [1.5708, 0, 0], color: 0x9c7a45 }, // coiled lasso
+        { shape: 'cylinder', size: [178.92, 178.92, 24], anchor: 'head', pos: [0, 69.3, 0], color: 0x7a5230, emissiveIntensity: 0.12 }, // hat brim
+        { shape: 'cylinder', size: [90.72, 90.72, 90.72], anchor: 'head', pos: [0, 114.66, 0], color: 0x7a5230, emissiveIntensity: 0.12 }, // hat crown
+        { shape: 'box', size: [187.2, 55, 126], anchor: 'hip', pos: [0, 620, 0], color: 'tint' }, // bandana
+        { shape: 'box', size: [76.8, 432, 18], anchor: 'chest', pos: [-79.2, 30, -8], color: 0x6b4226, emissiveIntensity: 0.12 }, // vest L
+        { shape: 'box', size: [76.8, 432, 18], anchor: 'chest', pos: [79.2, 30, -8], color: 0x6b4226, emissiveIntensity: 0.12 }, // vest R
       ],
       bubbles: ['🤠', '🐴'] },
-    { id: 'athlete', label: 'Athlete', rig: 'humanoid', legacyAccessories: 'athlete',
+    { id: 'athlete', label: 'Athlete', rig: 'humanoid',
       // Decals: a jersey number '7' on the BACK + a team emblem star on the CHEST
       // (crisp canvas decal planes — text + glyph — riding proud of the jersey).
       humanoid: { shoe: 0xf2f2f2, decals: [
         { kind: 'text', text: '7', color: 0xf4f4f6, anchor: 'back' },
         { kind: 'glyph', glyph: '★', color: 0xf4f4f6, anchor: 'chest', scale: 0.6 },
       ] },
+      // White forehead headband (full torus ring) + dark shorts (emissive default = color).
+      accessories: [
+        { shape: 'torus', size: [117.18, 16.38], anchor: 'head', pos: [0, 56.7, 0], rot: [Math.PI / 2, 0, 0], color: 0xf2f2f2, emissive: 0x000000, emissiveIntensity: 1 }, // headband
+        { shape: 'box', size: [249.6, 204, 145.6], anchor: 'hip', pos: [0, 108, 0], color: 0x243043 }, // shorts
+      ],
       bubbles: ['🏆', '💪'] },
-    { id: 'movie_star', label: 'Movie star', rig: 'humanoid', legacyAccessories: 'movie_star',
+    { id: 'movie_star', label: 'Movie star', rig: 'humanoid',
       // Decal: a film-clapper glyph on the chest (canon: the star's craft).
       humanoid: { body: GOLD, shoe: 0x0a0a0c, emI: 0.20, eyes: 'shades',
         decals: [{ kind: 'glyph', glyph: '🎬', anchor: 'chest', scale: 0.7 }] },
+      // Golden accent stripe down the chest (shades handled in the face pass).
+      accessories: [
+        { shape: 'box', size: [38.4, 468, 20], anchor: 'chest', pos: [0, 0, -6], color: 0xffdd66, emissive: 0xcaa53a, emissiveIntensity: 0.4 },
+      ],
       bubbles: ['🎬', '🌟'] },
-    { id: 'supermodel', label: 'Supermodel', rig: 'humanoid', legacyAccessories: 'supermodel',
+    { id: 'supermodel', label: 'Supermodel', rig: 'humanoid',
       humanoid: { sk: 1.05, headR: 124, limbR: 0.9, shoe: 0xf2f2f2, earSkip: true },
+      // Long dark hair (crown cap + fall) + sunglasses pushed up + tint dress below
+      // the hips. HEAD_R-derived sizes/positions divide by sk (1.05) because HEAD_R
+      // is absolute; TORSO-derived dress dims factor sk cleanly.
+      accessories: [
+        { shape: 'sphere', size: 124 * 1.13 / 1.05, sphereArc: [0, Math.PI * 2, 0, Math.PI * 0.44], anchor: 'head', pos: [0, 124 * 0.04 / 1.05, 124 * 0.04 / 1.05], rot: [0.28, 0, 0], color: 0x2a2026, emissive: 0x000000, emissiveIntensity: 1 }, // hair cap
+        { shape: 'box', size: [124 * 1.6 / 1.05, 124 * 1.9 / 1.05, 124 * 0.5 / 1.05], anchor: 'head', pos: [0, -124 * 0.4 / 1.05, 124 * 0.72 / 1.05], color: 0x2a2026, emissive: 0x000000, emissiveIntensity: 1 }, // hair fall
+        { shape: 'box', size: [124 * 1.1 / 1.05, 124 * 0.22 / 1.05, 124 * 0.16 / 1.05], anchor: 'head', pos: [0, 124 * 0.62 / 1.05, -124 * 0.72 / 1.05], color: 0x0a0a0c, emissive: 0x000000, emissiveIntensity: 1 }, // sunglasses
+        { shape: 'box', size: [240 * 1.06, 600 * 0.46, 140 * 1.06], anchor: 'hip', pos: [0, 0, 0], color: 'tint' }, // dress
+      ],
       personality: { swayMul: 1.35, ampMul: 1.1 }, bubbles: ['📸', '💅'] },
-    { id: 'magician', label: 'Magician', rig: 'humanoid', legacyAccessories: 'magician',
+    { id: 'magician', label: 'Magician', rig: 'humanoid',
       humanoid: { body: NEARBLACK, shoe: 0x0a0a0c, emI: 0.20 },
-      // Wand — black with a white tip; composes with the imperative magician build
-      // (top hat + bowtie).
+      // Wand (black + white tip; hand-anchored, composes with the top hat) + black
+      // top hat (brim + crown) + white shirt V (3-seg cone) + tint bowtie.
       accessories: [
         { shape: 'cylinder', size: [6, 6, 240], anchor: 'handR', pos: [0, -110, 0], color: 0x141414 },
         { shape: 'sphere', size: 11, anchor: 'handR', pos: [0, 10, 0], color: 0xf2f2f0 }, // white tip
+        { shape: 'cylinder', size: [141.12, 141.12, 18], anchor: 'head', pos: [0, 75.6, 0], color: 0x111114, emissive: 0x000000, emissiveIntensity: 1 }, // top-hat brim
+        { shape: 'cylinder', size: [88.2, 88.2, 157.5], anchor: 'head', pos: [0, 154.98, 0], color: 0x111114, emissive: 0x000000, emissiveIntensity: 1 }, // top-hat crown
+        { shape: 'cone', size: [81.6, 360], segments: 3, anchor: 'chest', pos: [0, 12, -8], rot: [Math.PI, Math.PI / 3, 0], color: 0xf2f2f0, emissive: 0x000000, emissiveIntensity: 1 }, // shirt V
+        { shape: 'box', size: [72, 45, 22], anchor: 'chest', pos: [0, 264, -12], color: 'tint' }, // bowtie
       ],
       bubbles: ['🎩', '✨', '🐇'] },
-    { id: 'wise_oracle', label: 'Wise oracle', rig: 'humanoid', legacyAccessories: 'wise_oracle',
-      humanoid: { skin: PALE, body: ROBE, shoe: 0x3a3542, emI: 0.15, earSkip: true },
+    { id: 'wise_oracle', label: 'Wise oracle', rig: 'humanoid',
+      // gown = force floor-length-robe leg-swing damping (was the renderer's
+      // kind==='wise_oracle' special case; now data-driven).
+      humanoid: { skin: PALE, body: ROBE, shoe: 0x3a3542, emI: 0.15, earSkip: true, gown: true },
       // Two-handed staff: a long wooden pole gripped by BOTH hands — registered on
       // handR and re-aimed toward handL every frame, so it tracks walking / sitting.
       // (A two-handed prop keeps its POSITION at the anchor hand; only orientation
       // is driven, so a single centered cylinder passing through the grip is the
       // right authoring — a second offset prim would not ride the staff end.)
+      // Plus: ankle-length robe skirt (body material), white beard, tint amulet.
       accessories: [
         { shape: 'cylinder', size: [17, 21, 1320], anchor: 'handR', color: 0x6b4a2b, twoHanded: true },
+        { shape: 'box', size: [348, 850, 280], anchor: 'hip', pos: [0, -385, 0], color: 'body' }, // robe skirt
+        { shape: 'box', size: [78.12, 107.1, 35.28], anchor: 'face', pos: [0, -98.28, 35.28], color: 0xe8e8e4, emissiveIntensity: 0.1 }, // beard
+        { shape: 'sphere', size: 50, anchor: 'chest', pos: [0, 132, -24], color: 'tint' }, // amulet
       ],
       personality: { cadenceMul: 0.8, swayMul: 0.6 }, bubbles: ['🔮', '📜'] },
 

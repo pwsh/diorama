@@ -1280,8 +1280,8 @@ mutually exclusive with fidgets), (3) **umbrella — ALL rigs incl. radar/BLE/ca
 (pinned delta: passive weather garment like costumes; checked BEFORE the
 synthetic gate)** when outdoors + rainy, (4) quad carry. Classes 1/2/4 are
 synthetic-only (`ai`/`roam`). Prop-swap: authored HAND accessories (tracked via
-`handAccessories`, declarative pipeline only — legacy imperative hand props are
-a known v1 gap) hide during a session, restore after; per-session meshes build
+`handAccessories` — ALL accessories are declarative since the 2026-07-20
+migration, so the coverage is complete) hide during a session, restore after; per-session meshes build
 via the extracted `_buildPrimitiveMesh` (shared with `_addDeclarativeAccessories`)
 and dispose sparkle-style (hex materials owned; `'tint'`/shared never disposed).
 Gate: `Store.avatarProps` (absent = ON, in `_loadFromHa`; Settings ▸ Display
@@ -1386,10 +1386,33 @@ reference; keep it updated when the schema grows.
   cylinder/cone at anchors `crown|head|face|chest|back|hip|root|handL|handR|
   shoulderL|shoulderR|neck|tailbone` (+ quad `qhead|qneck|qback|qrump`), sizes
   mm at sk=1 (cone accepts 2-tuple `[r,h]`), colors hex/`'tint'`/`'skin'`/
-  `'body'`/`'dark'`/`'accent'`, optional `sphereArc`. Built via `_mat()`,
-  parented to the rig root (outline/fade/privacy pick them up automatically).
-  Legacy kinds keep their hand-tuned imperative accessories via
-  `legacyAccessories: '<kind>'` → `_addAvatarAccessories`.
+  `'body'`/`'dark'`/`'accent'`, optional `sphereArc`, `'torus'` shape
+  (`size:[radius, tube, arc?]`), per-prim `opacity` (transparent → auto
+  outline-skip) + `segments` (cone/cylinder radial count — the professional's
+  flat shirt-V is a 3-segment cone). Built via `_mat()`, parented to the rig
+  root (outline/fade/privacy pick them up automatically).
+  **The imperative legacy path is GONE (2026-07-20 migration)**: ALL ~625
+  members incl. the original 24 base kinds are fully declarative —
+  `_addAvatarAccessories` + `legacyAccessories` + every kind-string rig branch
+  were deleted. The former special cases are now def fields: `gown?: boolean`
+  (wise_oracle), `earSkip: boolean | 'left' | 'right'` ('right' = skip the +x
+  ear; cyborg keeps its −x organic ear), and `limbColors` entries widened to
+  `number | {color, metalness?, roughness?, emissiveIntensity?}` (object form
+  = prosthetic — recolors the whole arm INCLUDING the hand; number form =
+  flat recolor, hand stays skin; note `_mat()` is MeshToonMaterial and DROPS
+  metalness/roughness — steel is observable only via color+emissive).
+  Hand-anchored declarative accessories register in `handAccessories` and
+  hide/restore during prop sessions — the old "legacy imperative hand props"
+  prop-swap gap is CLOSED. Parity is locked by
+  `test-pages/legacy-migration-test.html` + the IMMUTABLE fixture
+  `test-pages/fixtures/legacy-accessory-parity.json` (world-geometry
+  signatures captured from the pre-migration build; `LEGACYMIG PASS 187/187`
+  at ≤0.05 mm; regen procedure in the page header — only regenerate if a
+  deliberate visual change to those members is intended). Migration inventory:
+  `docs/research/legacy-accessory-migration.md`. Humanoid rig note: there is
+  NO independent head group (head accessories parent to root at fixed offsets
+  — a hat never head-tracks); the QUAD `qhead` anchor DOES ride the nodding
+  head group.
   **ANCHOR ASYMMETRY (2026-07-20 fix — the "invisible accessory" trap)**:
   `chest` resolves to the torso FRONT face (`z = −TORSO_D/2` = −70 at sk 1) so
   a chest tie needs only −6…−16 more, but `neck` resolves to the torso CENTRE

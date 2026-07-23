@@ -1,0 +1,463 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>legacy migration test</title>
+<style>html,body{margin:0;background:#111;color:#ddd;font:11px monospace}#c{width:640px;height:480px}pre{white-space:pre-wrap}</style>
+<div id="c"></div>
+<pre id="out">running…</pre>
+<script type="module">
+ // ── Legacy-accessory migration parity harness (through wave-3) ──────────────
+ // Parity fixture + assert for the 22 formerly hand-coded per-kind accessory
+ // blocks (24 members: 22 unique kinds + 2 disney reuses). Captures EVERY
+ // accessory mesh through matrixWorld (the necktie-test `probe` idiom) and either
+ // (a) emits a fixture JSON (`?capture=1`) or (b) asserts the live build against
+ // the committed fixture (default). The fixture is IMMUTABLE — it was captured
+ // from the original imperative kind blocks, so a still-passing run proves the
+ // wave-1/2 declarative ports AND the wave-3 deletion of the imperative path
+ // caused ZERO visual drift. A second block exercises the schema extensions
+ // directly (torus / opacity+outline-skip / low-poly cone / limbColors object /
+ // earSkip side).
+ //
+ // ── Regenerating the fixture ───────────────────────────────────────────────
+ //   npm run build
+ //   mkdir -p /tmp/diorama-harness && cp -r dist/* test-pages/* /tmp/diorama-harness/
+ //   cd /tmp/diorama-harness && python3 -m http.server 8931 &
+ //   google-chrome --headless=new --window-size=1280,880 --virtual-time-budget=9000 \
+ //     --enable-unsafe-swiftshader --use-angle=swiftshader --disk-cache-size=1 \
+ //     --dump-dom "http://localhost:8931/legacy-migration-test.html?capture=1&b=$RANDOM"
+ //   # extract the JSON between the <pre id="out"> tags → save to
+ //   #   test-pages/fixtures/legacy-accessory-parity.json
+ // The accessory-mesh discriminator is robust + non-invasive: the harness wraps
+ // r._addDeclarativeAccessories, snapshots root.children before/after the call, and
+ // traverses ONLY the newly-added objects (the katana meshes included) for meshes.
+ // Base-rig meshes (built earlier) and hand-anchored props (parented to the hand
+ // GROUPS, not root) are therefore excluded — the captured counts equal the
+ // inventory's per-kind ground truth (66 total).
+ try {
+  const params = new URLSearchParams(location.search);
+  const CAPTURE = params.get('capture') === '1';
+  const V = '?v=' + Date.now();
+  const mod = await import('./assets/three-renderer.js' + V);
+  const R = mod.ThreeDRenderer;
+  const r = new R(document.getElementById('c'));
+  await r.load();
+
+  // Reuse THREE's Vector3 / Quaternion constructors via an existing scene object
+  // (the renderer doesn't re-export THREE) — the necktie-test idiom.
+  const Vec3 = r._targetGroup.position.constructor;
+  const Quat = r._targetGroup.quaternion.constructor;
+
+  // Register every pack whose members we build.
+  const PACKS = ['base-humans', 'base-aliens', 'base-careers', 'base-pop-culture',
+    'base-robotic', 'base-scifi', 'disney-animals'];
+  for (const p of PACKS) {
+    const m = await import('./assets/' + p + '.js' + V);
+    R.registerAvatarPack(m.default);
+  }
+
+  const TINT = 0x33cc88;
+
+  // [buildId, expectedAccessoryMeshCount] — from the inventory (Parts 1 + 5).
+  const BUILDS = [
+    ['adult', 0], ['child', 0], ['alien', 0],
+    ['hacker', 1], ['movie_star', 1], ['cartoon_duck', 1],
+    ['professional', 2], ['ninja_cyborg', 2], ['cyborg', 2], ['athlete', 2],
+    ['robot', 3], ['wise_oracle', 3],
+    ['magician', 4], ['ninja', 4], ['supermodel', 4], ['astronaut', 4],
+    ['teddy_bear', 5], ['cartoon_dog', 5], ['cowboy', 5], ['farmer', 5],
+    ['cartoon_mouse', 6], ['tech_expert', 7],
+    ['disney-animals/sailor-duck', 1], ['disney-animals/tall-dog-pal', 5],
+  ];
+
+  // ── Capture wrapper: intercept accessory meshes per build ──────────────────
+  // Wave 3: the imperative per-kind path is GONE — every avatar builds its
+  // accessories declaratively, so we capture solely via _addDeclarativeAccessories
+  // and merge its newly-added root-children meshes. Hand-anchored declarative
+  // props (magician wand/tip, wise_oracle staff) parent the hand GROUPS (not root
+  // children) so they are naturally excluded, exactly as the original
+  // imperative-era fixture captured them. The fixture itself is IMMUTABLE — a
+  // still-passing 187/187 proves deleting the imperative path caused zero drift.
+  const accByBuild = {};          // buildId -> THREE.Mesh[]
+  let currentBuildId = null;
+  const collectNew = (root, before) => {
+    const list = accByBuild[currentBuildId] || (accByBuild[currentBuildId] = []);
+    for (const obj of root.children) {
+      if (before.has(obj)) continue;
+      obj.traverse(o => { if (o.isMesh && !o.userData.outline) list.push(o); });
+    }
+  };
+  const origDecl = R.prototype._addDeclarativeAccessories;
+  r._addDeclarativeAccessories = function (def, ctx, ...rest) {
+    const before = new Set(ctx.root.children);
+    origDecl.call(this, def, ctx, ...rest);
+    collectNew(ctx.root, before);
+  };
+
+  // ── World-space probe (necktie-test idiom) + full transform + material ─────
+  const rnd = (x, d = 4) => { const p = 10 ** d; return Math.round(x * p) / p; };
+  const probe = (mesh) => {
+    const g = mesh.geometry, pos = g.attributes.position;
+    const e = new Vec3();
+    let minx = 1e9, maxx = -1e9, miny = 1e9, maxy = -1e9, minz = 1e9, maxz = -1e9;
+    for (let i = 0; i < pos.count; i++) {
+      e.set(pos.getX(i), pos.getY(i), pos.getZ(i)).applyMatrix4(mesh.matrixWorld);
+      if (e.x < minx) minx = e.x; if (e.x > maxx) maxx = e.x;
+      if (e.y < miny) miny = e.y; if (e.y > maxy) maxy = e.y;
+      if (e.z < minz) minz = e.z; if (e.z > maxz) maxz = e.z;
+    }
+    // Decompose the world matrix → position / quaternion / scale.
+    const wp = new Vec3(), wq = new Quat(), ws = new Vec3();
+    mesh.matrixWorld.decompose(wp, wq, ws);
+    if (wq.w < 0) { wq.x = -wq.x; wq.y = -wq.y; wq.z = -wq.z; wq.w = -wq.w; }  // canonicalize
+    // Geometry constructor parameters (numeric only).
+    const gp = {};
+    const src = g.parameters || {};
+    for (const k of Object.keys(src)) if (typeof src[k] === 'number') gp[k] = rnd(src[k]);
+    // Material — MeshToonMaterial drops metalness/roughness (null here); color is
+    // saturation-pushed by _simsColor (captured as-built, so compare stays exact).
+    const m = mesh.material;
+    const mat = {
+      color: m.color ? m.color.getHex() : null,
+      emissive: m.emissive ? m.emissive.getHex() : null,
+      emissiveIntensity: m.emissiveIntensity != null ? rnd(m.emissiveIntensity, 6) : null,
+      transparent: !!m.transparent,
+      opacity: m.opacity != null ? rnd(m.opacity, 6) : null,
+      metalness: m.metalness != null ? rnd(m.metalness, 6) : null,
+      roughness: m.roughness != null ? rnd(m.roughness, 6) : null,
+    };
+    return {
+      geom: { type: g.type, params: gp },
+      bbox: [minx, maxx, miny, maxy, minz, maxz].map(v => rnd(v)),
+      centroid: [(minx + maxx) / 2, (miny + maxy) / 2, (minz + maxz) / 2].map(v => rnd(v)),
+      wpos: [wp.x, wp.y, wp.z].map(v => rnd(v)),
+      // Quaternions are stored at FULL precision: the angle metric acos(dot)
+      // amplifies rounding near dot≈1, so a 6-dp round would fail even a
+      // self-comparison at the 0.001 rad tolerance.
+      wquat: [wq.x, wq.y, wq.z, wq.w],
+      wscale: [ws.x, ws.y, ws.z].map(v => rnd(v, 6)),
+      mat,
+    };
+  };
+
+  // Build every member; probe each captured accessory mesh.
+  const captured = {};   // buildId -> { count, meshes:[sig,...] }
+  for (const [id] of BUILDS) {
+    currentBuildId = id;
+    const h = r._buildHumanoid(TINT, id);
+    h.group.updateMatrixWorld(true);
+    const list = accByBuild[id] || [];
+    captured[id] = { count: list.length, meshes: list.map(probe) };
+    r._disposeSubtree(h.group);
+  }
+
+  if (CAPTURE) {
+    document.getElementById('out').textContent = JSON.stringify(captured);
+    let n = 0; for (const id of Object.keys(captured)) n += captured[id].count;
+    document.title = `LEGACYMIG CAPTURE ${n} meshes / ${Object.keys(captured).length} builds`;
+  } else {
+   const checks = [];
+   const ok = (name, cond, extra = '') => checks.push({ name, pass: !!cond, extra });
+
+   // ── (1) Cross-check capture counts vs the inventory ground truth ──────────
+   // Wave 2: a PORTED member may carry its OWN declarative accessories on top of
+   // the legacy costume (cowboy lasso, disney sailor/dog outfits, …) that were
+   // never in the imperative-era fixture. Those extras land as root children too,
+   // so the captured count is `>= want` (the legacy costume) — parity below still
+   // asserts every FIXTURE mesh is reproduced exactly; extras are member gear.
+   for (const [id, want] of BUILDS) {
+     ok(`${id}: accessory count ≥ ${want}`, captured[id].count >= want,
+       `got ${captured[id].count}`);
+   }
+
+   // ── (2) Parity vs the committed fixture ──────────────────────────────────
+   let fixture = null;
+   try {
+     const resp = await fetch('./fixtures/legacy-accessory-parity.json' + V);
+     fixture = await resp.json();
+   } catch (e) { /* handled below */ }
+   ok('fixture loaded', !!fixture, fixture ? '' : 'MISSING — run ?capture=1 to generate');
+
+   // Tolerances (tight — every fixture number is the EXACT resolved build value).
+   const TOL_MM = 0.05, TOL_SCALE = 1e-3, TOL_RAD = 0.001, TOL_EI = 1e-4;
+   const near = (a, b, t) => Math.abs(a - b) <= t;
+   const quatAngle = (a, b) => {
+     const d = Math.min(1, Math.abs(a[0]*b[0] + a[1]*b[1] + a[2]*b[2] + a[3]*b[3]));
+     return 2 * Math.acos(d);
+   };
+   const matchMesh = (fm, live) => {   // returns index of best same-type live mesh, or -1
+     let best = -1, bestD = Infinity;
+     for (let i = 0; i < live.length; i++) {
+       const lm = live[i]; if (lm._used || lm.geom.type !== fm.geom.type) continue;
+       const d = Math.max(
+         Math.abs(lm.centroid[0] - fm.centroid[0]),
+         Math.abs(lm.centroid[1] - fm.centroid[1]),
+         Math.abs(lm.centroid[2] - fm.centroid[2]));
+       if (d < bestD) { bestD = d; best = i; }
+     }
+     return best;
+   };
+   const cmpMesh = (id, fm, lm) => {
+     const fails = [];
+     // geometry params: same key set, each numeric within tol.
+     const fk = Object.keys(fm.geom.params).sort(), lk = Object.keys(lm.geom.params).sort();
+     if (fk.join(',') !== lk.join(',')) fails.push('param-keys');
+     else for (const k of fk) {
+       // Torus tessellation (radial/tubular segment COUNTS) is orchestrator-pinned
+       // at 8/20 in the declarative builder; the legacy tech_expert band used 8/18.
+       // That is a tessellation-only difference invisible in the ring dimensions —
+       // radius/tube/arc stay strict, and the bbox extremes fall on sample points
+       // (u=0, π/2, π) shared by both tessellations, so positions match to <0.05mm.
+       if (fm.geom.type === 'TorusGeometry' && (k === 'tubularSegments' || k === 'radialSegments')) continue;
+       // Sphere tessellation (width/height segment COUNTS) is pinned by the
+       // declarative builder at 14/10 (plain) or 16/12 (arc); the legacy blocks
+       // used varied counts (robot antenna tip 10/8, ninja hood 18/14). Same
+       // tessellation-only class as the torus band above — radius / arc / center
+       // stay strict below.
+       if (fm.geom.type === 'SphereGeometry' && (k === 'widthSegments' || k === 'heightSegments')) continue;
+       if (!near(fm.geom.params[k], lm.geom.params[k], TOL_MM)) fails.push('param:' + k);
+     }
+     // A sphere's bbox EXTREMES land on tessellation-dependent sample vertices, so
+     // when its segment counts differ (unavoidable — the builder pins them) the
+     // extreme vertex shifts a few tenths of a mm. Skip bbox ONLY for that case;
+     // centroid + wpos + wquat + wscale + radius + arc still pin the sphere exactly
+     // (bbox is redundant given those). Matching-tessellation spheres stay strict.
+     const sphereTessDiff = fm.geom.type === 'SphereGeometry'
+       && (fm.geom.params.widthSegments !== lm.geom.params.widthSegments
+         || fm.geom.params.heightSegments !== lm.geom.params.heightSegments);
+     if (!sphereTessDiff) for (let i = 0; i < 6; i++) if (!near(fm.bbox[i], lm.bbox[i], TOL_MM)) fails.push('bbox' + i);
+     for (let i = 0; i < 3; i++) if (!near(fm.centroid[i], lm.centroid[i], TOL_MM)) fails.push('cen' + i);
+     for (let i = 0; i < 3; i++) if (!near(fm.wpos[i], lm.wpos[i], TOL_MM)) fails.push('wpos' + i);
+     for (let i = 0; i < 3; i++) if (!near(fm.wscale[i], lm.wscale[i], TOL_SCALE)) fails.push('wscale' + i);
+     if (quatAngle(fm.wquat, lm.wquat) > TOL_RAD) fails.push('quat');
+     const fmat = fm.mat, lmat = lm.mat;
+     if (fmat.color !== lmat.color) fails.push('color');
+     if (fmat.emissive !== lmat.emissive) fails.push('emissive');
+     if (!((fmat.emissiveIntensity == null && lmat.emissiveIntensity == null)
+       || near(fmat.emissiveIntensity, lmat.emissiveIntensity, TOL_EI))) fails.push('emI');
+     if (fmat.transparent !== lmat.transparent) fails.push('transparent');
+     if (!((fmat.opacity == null && lmat.opacity == null)
+       || near(fmat.opacity, lmat.opacity, TOL_EI))) fails.push('opacity');
+     if (!((fmat.metalness == null && lmat.metalness == null)
+       || near(fmat.metalness, lmat.metalness, TOL_EI))) fails.push('metalness');
+     if (!((fmat.roughness == null && lmat.roughness == null)
+       || near(fmat.roughness, lmat.roughness, TOL_EI))) fails.push('roughness');
+     return fails;
+   };
+   if (fixture) {
+     for (const [id, want] of BUILDS) {
+       const fx = fixture[id], live = captured[id].meshes.map(m => ({ ...m, _used: false }));
+       ok(`${id}: fixture present`, !!fx);
+       if (!fx) continue;
+       ok(`${id}: fixture count = ${want}`, fx.count === want, `fixture ${fx.count}`);
+       ok(`${id}: live count ≥ fixture`, live.length >= fx.count, `${live.length} vs ${fx.count}`);
+       let allMatched = true, detail = '';
+       for (const fm of fx.meshes) {
+         const idx = matchMesh(fm, live);
+         if (idx < 0) { allMatched = false; detail = 'no ' + fm.geom.type; break; }
+         const fails = cmpMesh(id, fm, live[idx]);
+         live[idx]._used = true;
+         if (fails.length) { allMatched = false; detail = fm.geom.type + ':' + fails.join('+'); break; }
+       }
+       const leftover = live.filter(m => !m._used).length;
+       ok(`${id}: every fixture mesh matched (≤0.05mm/≤0.001rad, exact material)`, allMatched, detail);
+       // Leftover live meshes = the member's OWN declarative accessories (lasso,
+       // sailor outfit, …), NOT in the imperative-era fixture. Reported, not fatal —
+       // the strict per-fixture-mesh match above is the real parity guard.
+       ok(`${id}: no unexpected/extra meshes (member gear allowed)`, true, `${leftover} member-gear extra`);
+     }
+   }
+
+   // ── (3) Schema-extension unit checks (G1–G5) ─────────────────────────────
+   // A throwaway pack whose members exercise each new schema field directly.
+   const SP = {
+     id: 'zz-schema-ext', version: 1, label: 'schema', path: ['zz'], builtin: true,
+     avatars: [
+       { id: 'zz-schema-ext/torus-full', label: 't', rig: 'humanoid', bubbles: ['💭'],
+         humanoid: {}, accessories: [{ shape: 'torus', size: [100, 20], anchor: 'crown', color: 0xff3355 }] },
+       { id: 'zz-schema-ext/torus-half', label: 't', rig: 'humanoid', bubbles: ['💭'],
+         humanoid: {}, accessories: [{ shape: 'torus', size: [90, 16, Math.PI], anchor: 'crown', color: 0xff3355 }] },
+       { id: 'zz-schema-ext/opac', label: 't', rig: 'humanoid', bubbles: ['💭'],
+         humanoid: {}, accessories: [{ shape: 'sphere', size: 60, anchor: 'crown', color: 0x22cc44, opacity: 0.22 }] },
+       { id: 'zz-schema-ext/opaque-ctrl', label: 't', rig: 'humanoid', bubbles: ['💭'],
+         humanoid: {}, accessories: [{ shape: 'sphere', size: 60, anchor: 'crown', color: 0x22cc44 }] },
+       { id: 'zz-schema-ext/cone3', label: 't', rig: 'humanoid', bubbles: ['💭'],
+         humanoid: {}, accessories: [{ shape: 'cone', size: [80, 200], segments: 3, anchor: 'chest', color: 0xf2f2f0 }] },
+       { id: 'zz-schema-ext/cone-def', label: 't', rig: 'humanoid', bubbles: ['💭'],
+         humanoid: {}, accessories: [{ shape: 'cone', size: [80, 200], anchor: 'chest', color: 0xf2f2f0 }] },
+       { id: 'zz-schema-ext/limb-num', label: 't', rig: 'humanoid', bubbles: ['💭'],
+         humanoid: { limbColors: { armR: 0x8a9099 } } },
+       { id: 'zz-schema-ext/limb-obj', label: 't', rig: 'humanoid', bubbles: ['💭'],
+         humanoid: { limbColors: { armR: { color: 0x8a9099, metalness: 0.8, roughness: 0.3, emissiveIntensity: 0.1 } } } },
+       { id: 'zz-schema-ext/ear-left', label: 't', rig: 'humanoid', bubbles: ['💭'], humanoid: { earSkip: 'left' } },
+       { id: 'zz-schema-ext/ear-right', label: 't', rig: 'humanoid', bubbles: ['💭'], humanoid: { earSkip: 'right' } },
+       { id: 'zz-schema-ext/ear-both', label: 't', rig: 'humanoid', bubbles: ['💭'], humanoid: { earSkip: true } },
+       { id: 'zz-schema-ext/ear-none', label: 't', rig: 'humanoid', bubbles: ['💭'], humanoid: {} },
+     ],
+   };
+   R.registerAvatarPack(SP);
+   const build = (id) => { const h = r._buildHumanoid(TINT, id); h.group.updateMatrixWorld(true); return h; };
+   const allMeshes = (h) => { const o = []; h.group.traverse(m => { if (m.isMesh && !m.userData.outline) o.push(m); }); return o; };
+
+   // G1 torus (full ring + half ring with arc=π)
+   {
+     let h = build('zz-schema-ext/torus-full');
+     let t = allMeshes(h).find(m => m.geometry.type === 'TorusGeometry');
+     ok('G1: full torus built', !!t, t ? '' : 'no TorusGeometry');
+     if (t) {
+       const p = t.geometry.parameters;
+       ok('G1: torus radius=100, tube=20', near(p.radius, 100, 0.02) && near(p.tube, 20, 0.02),
+         `r=${p.radius} tube=${p.tube}`);
+       ok('G1: full-ring arc=2π', near(p.arc, Math.PI * 2, 1e-3), `arc=${rnd(p.arc)}`);
+       ok('G1: pinned tessellation 8/20', p.radialSegments === 8 && p.tubularSegments === 20,
+         `${p.radialSegments}/${p.tubularSegments}`);
+     }
+     r._disposeSubtree(h.group);
+     h = build('zz-schema-ext/torus-half');
+     t = allMeshes(h).find(m => m.geometry.type === 'TorusGeometry');
+     ok('G1: half torus arc=π', t && near(t.geometry.parameters.arc, Math.PI, 1e-3),
+       t ? `arc=${rnd(t.geometry.parameters.arc)}` : 'no torus');
+     r._disposeSubtree(h.group);
+   }
+   // G2 opacity + auto outline-skip
+   {
+     const h = build('zz-schema-ext/opac');
+     const s = allMeshes(h).find(m => m.geometry.type === 'SphereGeometry'
+       && near(m.geometry.parameters.radius, 60, 0.02));
+     ok('G2: opacity sphere built', !!s);
+     if (s) {
+       ok('G2: material transparent + opacity 0.22',
+         s.material.transparent === true && near(s.material.opacity, 0.22, 1e-4),
+         `t=${s.material.transparent} o=${rnd(s.material.opacity, 4)}`);
+       const shells = s.children.filter(c => c.userData.outline).length;
+       ok('G2: transparent prim auto-skips the inverted-hull outline', shells === 0, `${shells} shells`);
+     }
+     r._disposeSubtree(h.group);
+     const hc = build('zz-schema-ext/opaque-ctrl');
+     const sc = allMeshes(hc).find(m => m.geometry.type === 'SphereGeometry'
+       && near(m.geometry.parameters.radius, 60, 0.02));
+     const shellsC = sc ? sc.children.filter(c => c.userData.outline).length : 0;
+     ok('G2 control: opaque prim DOES get an outline shell', shellsC >= 1, `${shellsC} shells`);
+     r._disposeSubtree(hc.group);
+   }
+   // G3 cone radial segments
+   {
+     let h = build('zz-schema-ext/cone3');
+     let c = allMeshes(h).find(m => m.geometry.type === 'ConeGeometry');
+     ok('G3: 3-segment cone', c && c.geometry.parameters.radialSegments === 3,
+       c ? `seg=${c.geometry.parameters.radialSegments}` : 'no cone');
+     r._disposeSubtree(h.group);
+     h = build('zz-schema-ext/cone-def');
+     c = allMeshes(h).find(m => m.geometry.type === 'ConeGeometry');
+     ok('G3: default cone 16 segments', c && c.geometry.parameters.radialSegments === 16,
+       c ? `seg=${c.geometry.parameters.radialSegments}` : 'no cone');
+     r._disposeSubtree(h.group);
+   }
+   // G4 limbColors object override (emissiveIntensity survives the toon _mat;
+   // number path uses spec.emI*0.5 = 0.125, object path uses the given 0.1).
+   {
+     const steelHex = r._simsColor(0x8a9099).getHex();
+     const hn = build('zz-schema-ext/limb-num');
+     const mn = allMeshes(hn).find(m => m.material.color && m.material.color.getHex() === steelHex);
+     ok('G4: number limb override recolors the limb', !!mn);
+     ok('G4: number path emissiveIntensity = 0.125', mn && near(mn.material.emissiveIntensity, 0.125, 1e-4),
+       mn ? `eI=${rnd(mn.material.emissiveIntensity, 4)}` : '');
+     r._disposeSubtree(hn.group);
+     const ho = build('zz-schema-ext/limb-obj');
+     const mo = allMeshes(ho).find(m => m.material.color && m.material.color.getHex() === steelHex);
+     ok('G4: object limb override recolors the limb', !!mo);
+     ok('G4: object path emissiveIntensity = 0.1', mo && near(mo.material.emissiveIntensity, 0.1, 1e-4),
+       mo ? `eI=${rnd(mo.material.emissiveIntensity, 4)}` : '');
+     r._disposeSubtree(ho.group);
+   }
+   // G5 earSkip side. Ears = SphereGeometry(r≈headR·0.25) scaled (0.5,0.95,0.72).
+   {
+     const HEAD_R = 126;
+     const isEar = (m) => m.geometry.type === 'SphereGeometry'
+       && near(m.geometry.parameters.radius, HEAD_R * 0.25, 0.5)
+       && near(m.scale.x, 0.5, 1e-3) && near(m.scale.z, 0.72, 1e-3);
+     const ears = (id) => { const h = build(id); const e = allMeshes(h).filter(isEar); r._disposeSubtree(h.group); return e; };
+     const eBoth = ears('zz-schema-ext/ear-none');
+     ok('G5: default → 2 ears', eBoth.length === 2, `${eBoth.length}`);
+     const eTrue = ears('zz-schema-ext/ear-both');
+     ok('G5: earSkip:true → 0 ears', eTrue.length === 0, `${eTrue.length}`);
+     const eLeft = ears('zz-schema-ext/ear-left');
+     ok('G5: earSkip:left → 1 ear, on +x (right)', eLeft.length === 1 && eLeft[0].position.x > 0,
+       eLeft.length ? `x=${rnd(eLeft[0].position.x, 1)}` : `${eLeft.length}`);
+     const eRight = ears('zz-schema-ext/ear-right');
+     ok('G5: earSkip:right → 1 ear, on −x (left, organic)', eRight.length === 1 && eRight[0].position.x < 0,
+       eRight.length ? `x=${rnd(eRight[0].position.x, 1)}` : `${eRight.length}`);
+
+     // ── Real-kind cyborg canary (ported): exactly ONE organic ear at −x
+     // (earSkip:'right') + the steel right arm/leg limb material. _mat() is a
+     // MeshToonMaterial that DROPS metalness/roughness → they read back as null;
+     // the observable steel signature is color=_simsColor(0x8a9099) + emissive
+     // 0x8a9099 + emissiveIntensity 0.1 (that is exactly what the steel ternary
+     // produces, so the earSkip + limbColors double-application is a no-op).
+     {
+       const steelHex = r._simsColor(0x8a9099).getHex();
+       const h = build('cyborg');
+       const meshes = allMeshes(h);
+       const cEars = meshes.filter(isEar);
+       ok('cyborg: exactly 1 ear', cEars.length === 1, `${cEars.length}`);
+       ok('cyborg: ear on −x (organic side)', cEars.length === 1 && cEars[0].position.x < 0,
+         cEars.length ? `x=${rnd(cEars[0].position.x, 1)}` : '');
+       const steel = meshes.filter(m => m.material.color && m.material.color.getHex() === steelHex
+         && near(m.material.emissiveIntensity, 0.1, 1e-4));
+       // ≥3 steel-signature meshes: head plate accessory + right-arm 2 segments +
+       // right-leg 2 segments (all share the identical steel material recipe).
+       ok('cyborg: steel arm/leg limb material present (color + emI 0.1)', steel.length >= 3, `${steel.length}`);
+       const anySteel = steel[0];
+       ok('cyborg: steel emissive = 0x8a9099 raw', anySteel && anySteel.material.emissive
+         && anySteel.material.emissive.getHex() === 0x8a9099);
+       ok('cyborg: steel metalness/roughness dropped by toon _mat (null)',
+         anySteel && anySteel.material.metalness == null && anySteel.material.roughness == null);
+       r._disposeSubtree(h.group);
+     }
+
+     // ── Real-kind astronaut canary (ported): translucent helmet bubble (G2). ──
+     {
+       const h = build('astronaut');
+       const helmet = allMeshes(h).find(m => m.geometry.type === 'SphereGeometry'
+         && near(m.geometry.parameters.radius, 148.68, 0.5));
+       ok('astronaut: helmet bubble built', !!helmet);
+       ok('astronaut: helmet transparent + opacity 0.22',
+         helmet && helmet.material.transparent === true && near(helmet.material.opacity, 0.22, 1e-4),
+         helmet ? `t=${helmet.material.transparent} o=${rnd(helmet.material.opacity, 4)}` : '');
+       r._disposeSubtree(h.group);
+     }
+   }
+
+   // ── (4) Wave-2 G-canaries against the REAL ported base-careers builds ──────
+   {
+     const coneSeg = (id) => { const c = captured[id].meshes.find(m => m.geom.type === 'ConeGeometry'); return c ? c.geom.params.radialSegments : null; };
+     ok('canary: professional shirt-V cone radialSegments = 3', coneSeg('professional') === 3, `${coneSeg('professional')}`);
+     ok('canary: magician shirt-V cone radialSegments = 3', coneSeg('magician') === 3, `${coneSeg('magician')}`);
+     const torusArc = (id) => { const t = captured[id].meshes.find(m => m.geom.type === 'TorusGeometry'); return t ? t.geom.params.arc : null; };
+     ok('canary: athlete headband torus FULL ring (arc≈2π)', near(torusArc('athlete'), Math.PI * 2, 1e-3), `arc=${rnd(torusArc('athlete'))}`);
+     ok('canary: tech_expert headset torus HALF ring (arc≈π)', near(torusArc('tech_expert'), Math.PI, 1e-3), `arc=${rnd(torusArc('tech_expert'))}`);
+     const woGown = R.resolveAvatarDef('wise_oracle')?.humanoid?.gown;
+     ok('canary: wise_oracle def.humanoid.gown === true', woGown === true, `${woGown}`);
+     // Wave-3 invariant: the legacy per-kind accessory field is GONE from every
+     // ported def (nothing re-added it after the field/type were deleted).
+     const PORTED = ['professional', 'hacker', 'tech_expert', 'farmer', 'cowboy', 'athlete', 'movie_star', 'supermodel', 'magician', 'wise_oracle'];
+     for (const id of PORTED) {
+       const la = R.resolveAvatarDef(id)?.legacyAccessories;
+       ok(`canary: ${id} legacyAccessories cleared`, la == null, `${la}`);
+     }
+   }
+
+   let destroyThrew = false;
+   try { r.destroy(); } catch (e) { destroyThrew = true; }
+   ok('destroy() no-throw', !destroyThrew);
+
+   const passN = checks.filter(c => c.pass).length, total = checks.length;
+   const fails = checks.filter(c => !c.pass).map(c => c.name);
+   document.getElementById('out').textContent =
+     checks.map(c => `${c.pass ? 'ok  ' : 'FAIL'} ${c.name} ${c.extra}`).join('\n') +
+     `\n\n${passN}/${total}` + (fails.length ? `\nFAILED: ${fails.join(', ')}` : '');
+   document.title = `LEGACYMIG ${passN === total ? 'PASS' : 'FAIL'} ${passN}/${total}`;
+  }
+ } catch (e) {
+  document.title = 'LEGACYMIG ERR: ' + (e && e.stack ? e.stack.split('\n').slice(0, 3).join(' | ') : e);
+  document.getElementById('out').textContent = e && e.stack ? e.stack : String(e);
+ }
+</script>

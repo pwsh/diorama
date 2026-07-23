@@ -1,5 +1,5 @@
 // Base ▸ Sci-Fi — builtin base-group pack (dynamic-import only). Members keep
-// their EXACT bare legacy ids + legacyAccessories markers.
+// their EXACT bare legacy ids; all accessories build declaratively.
 import type { AvatarPackDef } from '../avatars.js';
 
 const WHITE = 0xf2f2f2;
@@ -7,8 +7,16 @@ const WHITE = 0xf2f2f2;
 const pack: AvatarPackDef = {
   id: 'base-scifi', version: 2, label: 'Sci-Fi', path: ['Base', 'Sci-Fi'], builtin: true,
   avatars: [
-    { id: 'astronaut', label: 'Astronaut', rig: 'humanoid', legacyAccessories: 'astronaut',
+    // wave-2B port: translucent helmet bubble (G2 opacity 0.22) + grey chest
+    // panel + tint status lamp + light-grey backpack.
+    { id: 'astronaut', label: 'Astronaut', rig: 'humanoid',
       humanoid: { headR: 118, limbR: 1.1, skin: WHITE, body: WHITE, shoe: WHITE, emI: 0.15, earSkip: true },
+      accessories: [
+        { shape: 'sphere', size: 148.68, anchor: 'head', color: 0xbfd8e8, emissive: 0, emissiveIntensity: 1, opacity: 0.22, outlineSkip: true }, // helmet bubble (translucent)
+        { shape: 'box', size: [120, 168, 26], anchor: 'chest', pos: [0, 60, -10], color: 0x8a9099, emissive: 0, emissiveIntensity: 1 }, // chest control panel
+        { shape: 'sphere', size: 20, anchor: 'chest', pos: [33.6, 108, -26], color: 'tint' }, // status lamp
+        { shape: 'box', size: [204, 360, 84], anchor: 'back', pos: [0, 30, 44.8], color: 0xd8d8dc, emissive: 0, emissiveIntensity: 1 }, // backpack
+      ],
       personality: { bobMul: 1.5, cadenceMul: 0.75 }, bubbles: ['🚀', '⭐'] },
 
     // ── New generic sci-fi archetypes (Batch C2). Desaturated utilitarian tones;

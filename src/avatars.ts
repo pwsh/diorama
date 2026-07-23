@@ -13,22 +13,18 @@
 
 export type AvatarId = string;
 
-// The old hard-coded 24-value union, kept for typing the CORE pack + defaults.
-export type LegacyAvatarKind =
-  | 'adult' | 'child' | 'robot' | 'alien' | 'professional'
-  | 'hacker' | 'movie_star' | 'ninja' | 'cyborg' | 'ninja_cyborg' | 'athlete'
-  | 'teddy_bear' | 'cartoon_mouse' | 'cartoon_dog' | 'cartoon_duck'
-  | 'cowboy' | 'magician' | 'farmer' | 'tech_expert' | 'supermodel'
-  | 'wise_oracle' | 'astronaut'
-  | 'cat' | 'dog';
-
 // A declarative accessory primitive. Sizes are in mm at sk=1 (scaled by the
 // rig's sk at build); positions/rotations are body-local (-Z = front). Colors
 // resolve against the rig's materials (see three-renderer._addDeclarativeAccessories).
 export interface AvatarPrimitive {
-  shape: 'box' | 'sphere' | 'cylinder' | 'cone' | 'cape';
+  shape: 'box' | 'sphere' | 'cylinder' | 'cone' | 'cape' | 'torus';
   // box: [w,h,d]; sphere: r or [rx,ry,rz]; cyl: [rTop,rBot,h]; cone: [r,h]
   // (2-tuple accepted for cones; a third element is tolerated and ignored).
+  // torus (G1): [radius, tube] or [radius, tube, arcLength] — a ring of major
+  //   `radius` and tube thickness `tube`; the optional 3rd element is the sweep
+  //   arc in radians (default 2π = full ring; π = half ring, e.g. a headset band).
+  //   Built as TorusGeometry(radius·sk, tube·sk, 8, 20, arc); `segments` is NOT
+  //   applied to a torus (its radial/tubular tessellation is fixed at 8/20).
   // cape: [shoulderWidth, length, flareBottomWidth] — a draped CURVED sheet, NOT
   //   a cone/box: an open-ended cylinder-wall segment (arc ~1.65 rad centered on
   //   the back +Z), top radius narrower than the flared bottom, flattened ~0.5 in
@@ -39,6 +35,7 @@ export interface AvatarPrimitive {
   //   always fastens at the neck and drapes downward, regardless of the authored
   //   pos.y. pos.x / pos.z still fine-tune lateral / depth placement; a small
   //   outward X `rot` makes it drape off the shoulders and clear the torso.
+  // torus (G1) reads size as [radius, tube] or [radius, tube, arcLength].
   size: number | [number, number] | [number, number, number];
   anchor:
     | 'crown' | 'head' | 'face' | 'chest' | 'back' | 'hip' | 'root'
@@ -55,6 +52,17 @@ export interface AvatarPrimitive {
   color: number | 'tint' | 'skin' | 'body' | 'dark' | 'accent';
   emissive?: number; emissiveIntensity?: number;
   metalness?: number; roughness?: number;
+  // G2: per-primitive transparency. When set (0..1), the resolved fixed-hex
+  // material builds with { transparent: true, opacity } — a translucent part
+  // (e.g. an astronaut helmet bubble). Transparent materials auto-skip the
+  // inverted-hull outline pass (house convention in _addOutlines), so no
+  // separate outlineSkip is required. Ignored on named-color prims
+  // (tint/skin/body/dark/accent share a solid rig material).
+  opacity?: number;
+  // G3: radial/tubular segment count for cone + cylinder geometry (default 16).
+  // A low value (e.g. 3) yields a flat faceted wedge (the professional/magician
+  // shirt-V is a 3-segment cone). Not applied to torus (fixed 8/20) or box/sphere.
+  segments?: number;
   outlineSkip?: boolean;
   // Sphere-section support for hoods / hair / shells:
   // [phiStart, phiLength, thetaStart, thetaLength].
@@ -154,6 +162,14 @@ export interface AvatarPattern {
 
 // Humanoid rig spec — mirrors the old SPECS row. Colors accept 'tint' (resolves
 // to the passed-in identity color at build, exactly like the old `skin: color`).
+// Per-limb material spec (G4). A bare hex is a flat recolor; the object form adds
+// a prosthetic/steel finish (metalness/roughness are dropped by the toon _mat()
+// factory but kept in the schema for parity with the legacy steel material +
+// future non-toon use; emissiveIntensity survives).
+export type LimbColor =
+  | number
+  | { color: number; metalness?: number; roughness?: number; emissiveIntensity?: number };
+
 export interface HumanoidFields {
   // sk = overall skeleton-length scale. CLAMPED at build to [0.45, 1.2] — small
   // avatars (child ~0.65) pass, but oversized values are capped so heights stay
@@ -173,15 +189,25 @@ export interface HumanoidFields {
   eyeColor?: number;
   steel?: boolean; armL?: number; legL?: number;
   footMul?: [number, number, number]; legColor?: number;
-  earSkip?: boolean;                // replaces the old EAR_SKIP set membership
+  // Skin-ear control (G5). `true` = skip BOTH ears (old EAR_SKIP set membership);
+  // `'left'` = skip only the −x (left) ear, keep the +x (right); `'right'` = skip
+  // only the +x (right) ear, keep the −x/left one (the cyborg organic-ear pattern).
+  // Absent/false = both ears build.
+  earSkip?: boolean | 'left' | 'right';
   // ── Batch C1 rig extensions ────────────────────────────────────────────────
   noFace?: boolean;                 // skip nose + mouth + brows (eyes still per `eyes`)
   opacity?: number;                 // 0..1 → transparent skin + body materials (ghosts)
   hover?: number;                   // mm: omit BOTH legs, float the root so the hip
                                     //   sits `hover` mm off the floor, gentle idle bob
   // Per-limb material overrides (cyborg steel-limb pattern generalized). Recolors
-  // BOTH segments of that limb (upper + lower) — NOT the hand / shoe.
-  limbColors?: { armL?: number; armR?: number; legL?: number; legR?: number };
+  // BOTH segments of that limb (upper + lower) — NOT the hand / shoe. A plain
+  // number is a flat recolor (today's behavior); an object (G4) additionally
+  // carries metalness/roughness/emissiveIntensity for a prosthetic/steel look
+  // (metalness/roughness are dropped by the toon _mat() factory, matching the
+  // legacy steel material; emissiveIntensity survives).
+  limbColors?: {
+    armL?: LimbColor; armR?: LimbColor; legL?: LimbColor; legR?: LimbColor;
+  };
   // Floor-length robe/gown hint: DAMPS the leg-swing amplitude (~0.22×) during the
   // walk cycle so legs don't poke through a draping skirt (the "leg showing through
   // the gown" bug). Cheaper + cleaner than oversizing the robe geometry. The
@@ -248,7 +274,6 @@ export interface AvatarDef {
   rig: 'humanoid' | 'quadruped';
   humanoid?: HumanoidFields; quadruped?: QuadrupedFields;
   accessories?: AvatarPrimitive[];
-  legacyAccessories?: LegacyAvatarKind;   // route to _addAvatarAccessories(kind)
   personality?: { bobMul?: number; swayMul?: number; cadenceMul?: number; ampMul?: number };
   bubbles?: string[];
   pet?: boolean;   // excluded from the bare-'random' human fallback pool
@@ -305,7 +330,9 @@ export interface PackEntry { def: AvatarPackDef; source: 'builtin' | 'user' }
 // every id through this bundled core → adult fallback.
 
 const CORE_AVATARS: AvatarDef[] = [
-  { id: 'adult', label: 'Adult', rig: 'humanoid', legacyAccessories: 'adult',
+  // Zero-accessory kind (wave-2B port): the legacy switch built no extra meshes
+  // for 'adult' — the bare rig is the whole look. Nothing to port.
+  { id: 'adult', label: 'Adult', rig: 'humanoid',
     humanoid: {}, bubbles: ['💭'] },
 ];
 

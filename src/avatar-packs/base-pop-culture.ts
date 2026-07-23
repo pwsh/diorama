@@ -1,5 +1,5 @@
 // Base ▸ Pop Culture — builtin base-group pack (dynamic-import only). Members
-// keep their EXACT bare legacy ids + legacyAccessories markers.
+// keep their EXACT bare legacy ids; all accessories build declaratively.
 import type { AvatarPackDef } from '../avatars.js';
 
 const MATTE = 0x1a1a1e, PLUSH = 0x8b5e3c, MOUSE = 0x9e9e9e;
@@ -8,20 +8,57 @@ const DOG_C = 0xa1704a, DUCKW = 0xf2f0e6;
 const pack: AvatarPackDef = {
   id: 'base-pop-culture', version: 3, label: 'Pop Culture', path: ['Base', 'Pop Culture'], builtin: true,
   avatars: [
-    { id: 'teddy_bear', label: 'Teddy bear', rig: 'humanoid', legacyAccessories: 'teddy_bear',
+    // wave-2B port: skin ears + lighter (0xc9a87c) muzzle/belly/tail ellipsoids.
+    { id: 'teddy_bear', label: 'Teddy bear', rig: 'humanoid',
       humanoid: { sk: 0.9, headR: 140, limbR: 1.3, skin: PLUSH, body: PLUSH, shoe: PLUSH, emI: 0.20, armL: 0.8, legL: 0.8, earSkip: true },
+      accessories: [
+        { shape: 'sphere', size: 65.3333, anchor: 'head', pos: [-96.4444, 121.3333, 0], color: 'skin' }, // ear L
+        { shape: 'sphere', size: 65.3333, anchor: 'head', pos: [96.4444, 121.3333, 0], color: 'skin' }, // ear R
+        { shape: 'sphere', size: [65.3333, 47.04, 45.7333], anchor: 'head', pos: [0, -43.5556, -124.4444], color: 0xc9a87c, emissive: 0xc9a87c, emissiveIntensity: 0.15 }, // muzzle
+        { shape: 'sphere', size: [100.8, 126, 35.28], anchor: 'chest', pos: [0, -48, -8], color: 0xc9a87c, emissive: 0xc9a87c, emissiveIntensity: 0.15 }, // belly patch
+        { shape: 'sphere', size: 66, anchor: 'back', pos: [0, -204, 30], color: 0xc9a87c, emissive: 0xc9a87c, emissiveIntensity: 0.15 }, // tail
+      ],
       personality: { bobMul: 1.3, cadenceMul: 0.85 }, bubbles: ['🍯', '🤗'] },
-    { id: 'cartoon_mouse', label: 'Cartoon mouse', rig: 'humanoid', legacyAccessories: 'cartoon_mouse',
+    // wave-2B port: big skin ear discs + pink inner discs + a 2-segment tail.
+    { id: 'cartoon_mouse', label: 'Cartoon mouse', rig: 'humanoid',
       humanoid: { sk: 0.85, headR: 120, limbR: 0.9, skin: MOUSE, body: MOUSE, shoe: 0x555a60, emI: 0.20, earSkip: true },
+      accessories: [
+        { shape: 'cylinder', size: [79.0588, 79.0588, 26], rot: [Math.PI / 2, 0, 0], anchor: 'head', pos: [-104.4706, 121.4118, 0], color: 'skin' }, // ear disc L
+        { shape: 'cylinder', size: [50.8235, 50.8235, 10], rot: [Math.PI / 2, 0, 0], anchor: 'head', pos: [-104.4706, 121.4118, -12], color: 0xf2a0b5, emissive: 0xf2a0b5, emissiveIntensity: 0.2 }, // inner disc L
+        { shape: 'cylinder', size: [79.0588, 79.0588, 26], rot: [Math.PI / 2, 0, 0], anchor: 'head', pos: [104.4706, 121.4118, 0], color: 'skin' }, // ear disc R
+        { shape: 'cylinder', size: [50.8235, 50.8235, 10], rot: [Math.PI / 2, 0, 0], anchor: 'head', pos: [104.4706, 121.4118, -12], color: 0xf2a0b5, emissive: 0xf2a0b5, emissiveIntensity: 0.2 }, // inner disc R
+        { shape: 'cylinder', size: [15, 15, 300], rot: [-1.15, 0, 0], anchor: 'root', pos: [0, 783, 160], color: 'skin' }, // tail seg 1
+        { shape: 'cylinder', size: [11, 11, 240], rot: [-0.35, 0, 0], anchor: 'root', pos: [0, 626.4, 370], color: 'skin' }, // tail seg 2
+      ],
       personality: { cadenceMul: 1.25, bobMul: 1.2 }, bubbles: ['🧀'] },
-    { id: 'cartoon_dog', label: 'Cartoon dog', rig: 'humanoid', legacyAccessories: 'cartoon_dog',
+    // wave-2B port: floppy ear slabs + lighter muzzle box + dark nose + tail.
+    { id: 'cartoon_dog', label: 'Cartoon dog', rig: 'humanoid',
       humanoid: { sk: 0.95, headR: 128, skin: DOG_C, body: DOG_C, shoe: 0x5a3d28, emI: 0.20, earSkip: true },
+      accessories: [
+        { shape: 'box', size: [44, 148.2105, 80.8421], rot: [0, 0, 0.18], anchor: 'head', pos: [-141.4737, 6.7368, 0], color: 0x6b4226, emissive: 0x6b4226, emissiveIntensity: 0.15 }, // ear L
+        { shape: 'box', size: [44, 148.2105, 80.8421], rot: [0, 0, -0.18], anchor: 'head', pos: [141.4737, 6.7368, 0], color: 0x6b4226, emissive: 0x6b4226, emissiveIntensity: 0.15 }, // ear R
+        { shape: 'box', size: [86.2316, 61.9789, 80.8421], anchor: 'head', pos: [0, -37.7263, -134.7368], color: 0xc99e6a, emissive: 0xc99e6a, emissiveIntensity: 0.15 }, // snout
+        { shape: 'sphere', size: 24.2526, anchor: 'head', pos: [0, -24.2526, -177.8526], color: 'dark' }, // nose
+        { shape: 'cylinder', size: [18, 18, 250], rot: [-0.9, 0, 0], anchor: 'root', pos: [0, 826.5, 160], color: 0x6b4226, emissive: 0x6b4226, emissiveIntensity: 0.15 }, // tail
+      ],
       personality: { cadenceMul: 1.1 }, bubbles: ['🦴', '🎾'] },
-    { id: 'cartoon_duck', label: 'Cartoon duck', rig: 'humanoid', legacyAccessories: 'cartoon_duck',
+    // wave-2B port: wide flat yellow-orange bill (legs/feet via legColor/footMul).
+    { id: 'cartoon_duck', label: 'Cartoon duck', rig: 'humanoid',
       humanoid: { sk: 0.85, headR: 122, limbR: 0.9, skin: DUCKW, body: DUCKW, shoe: 0xe8a020, emI: 0.20, armL: 0.6, footMul: [1.6, 0.7, 1.35], legColor: 0xe8a020, earSkip: true },
+      accessories: [
+        { shape: 'box', size: [150.7059, 24.4, 86.1176], anchor: 'head', pos: [0, -20.0941, -155.0118], color: 0xe8931d, emissive: 0xe8931d, emissiveIntensity: 0.25 }, // bill
+      ],
       personality: { swayMul: 1.7, cadenceMul: 1.15 }, bubbles: ['💦', '🐟'] },
-    { id: 'ninja', label: 'Ninja', rig: 'humanoid', legacyAccessories: 'ninja',
-      humanoid: { headR: 120, skin: MATTE, body: MATTE, shoe: 0x0a0a0c, emI: 0.05, eyes: 'slit', earSkip: true }, bubbles: ['🥷', '💨'] },
+    // wave-2B port: back-slung katana (blade + tint grip) + full head hood + tint sash.
+    { id: 'ninja', label: 'Ninja', rig: 'humanoid',
+      humanoid: { headR: 120, skin: MATTE, body: MATTE, shoe: 0x0a0a0c, emI: 0.05, eyes: 'slit', earSkip: true },
+      accessories: [
+        { shape: 'box', size: [26, 810, 26], anchor: 'root', pos: [-24, 1170, 100], rot: [0, 0, 0.55], color: 0x2a2a30, emissive: 0x11121a, emissiveIntensity: 0.1 }, // katana blade
+        { shape: 'box', size: [30, 204, 30], anchor: 'root', pos: [-243.5286, 1528.0603, 100], rot: [0, 0, 0.55], color: 'tint' }, // katana handle
+        { shape: 'sphere', size: 136.8, sphereArc: [0, Math.PI * 2, 0, Math.PI * 0.85], anchor: 'head', color: 0x131317, emissive: 0, emissiveIntensity: 1 }, // hood
+        { shape: 'box', size: [254.4, 72, 148.4], anchor: 'root', pos: [0, 1002, 0], color: 'tint' }, // waist sash
+      ],
+      bubbles: ['🥷', '💨'] },
 
     // ── New costume/folklore archetypes (Batch C2). Non-IP Halloween-aisle
     // silhouettes; tint kept on an accent piece where the costume overrides skin.

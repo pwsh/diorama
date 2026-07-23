@@ -5,7 +5,9 @@ import type { AvatarPackDef } from '../avatars.js';
 const pack: AvatarPackDef = {
   id: 'base-humans', version: 1, label: 'Humans', path: ['Base', 'Humans'], builtin: true,
   avatars: [
-    { id: 'child', label: 'Child', rig: 'humanoid', legacyAccessories: 'child',
+    // Zero-accessory kind (wave-2B port): the bare rig IS the whole look — the
+    // legacy switch built nothing for 'child', so there is nothing to port.
+    { id: 'child', label: 'Child', rig: 'humanoid',
       humanoid: { sk: 0.6, headR: 107 }, personality: { bobMul: 1.25 }, bubbles: ['🎈', '🍭'] },
 
     // ── New age variants (Batch C2) ──────────────────────────────────────────

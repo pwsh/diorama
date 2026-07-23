@@ -96,8 +96,9 @@ import { vacMapAffine, vacPixelToWorld, vacSegColor, type VacCal, type VacSegmen
 import {
   resolveDef, resolveAvatar, avatarFromPool, resolveLook,
   registerPack, unregisterPack, setAvatarPacksConfig,
-  type AvatarDef, type AvatarPrimitive, type LegacyAvatarKind, type AvatarPackDef,
+  type AvatarDef, type AvatarPrimitive, type AvatarPackDef,
   type AvatarPacksConfig, type AvatarPattern, type AvatarDecal, type LookKey,
+  type LimbColor,
 } from './avatars.js';
 
 // Reused scratch objects for per-frame two-handed-prop orientation (zero
@@ -15936,395 +15937,11 @@ export class ThreeDRenderer {
   // Stick-figure proportions (mm). Body forward is +Z (default) and is
   // rotated via group.rotation.y to match velocity direction. Each limb is
   // a 2-segment chain so knees / elbows can flex during the walk cycle.
-  // Per-variant accessory meshes bolted onto a freshly-built rig, keyed by kind.
-  // Runs BEFORE the outline pass so accessories get cartoon shells; small parts
-  // are auto-skipped by the outline minDim, emissive parts opt out explicitly.
-  // Everything is a child of `root` (the rig group) so the privacy-blur / fade
-  // systems hide/fade them along with the body automatically.
-  private _addAvatarAccessories(
-    kind: LegacyAvatarKind,
-    _spec: { skin: number; body: number },
-    root: THREE.Group,
-    c: {
-      color: number; accent: THREE.Material; dark: THREE.Material;
-      shoeMat: THREE.Material; skin: THREE.Material; bodyMat: THREE.Material;
-      HEAD_R: number; headY: number; torsoY: number; hipY: number;
-      TORSO_W: number; TORSO_H: number; TORSO_D: number; sk: number;
-    },
-  ): void {
-    const { HEAD_R, headY, torsoY, hipY, TORSO_W, TORSO_H, TORSO_D, sk } = c;
-    const frontZ = -TORSO_D / 2;   // torso front face (body-forward = -Z)
-    const backZ = TORSO_D / 2;
-    // Small helpers to keep the variant blocks tidy.
-    const box = (w: number, h: number, d: number, mat: THREE.Material) =>
-      new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
-    const sphere = (r: number, mat: THREE.Material) =>
-      new THREE.Mesh(new THREE.SphereGeometry(r, 14, 10), mat);
-    const cyl = (r: number, h: number, mat: THREE.Material) =>
-      new THREE.Mesh(new THREE.CylinderGeometry(r, r, h, 16), mat);
-
-    if (kind === 'robot') {
-      // Antenna: thin stalk up from the crown + a tiny tint ball.
-      const stalk = new THREE.Mesh(
-        new THREE.CylinderGeometry(9 * sk, 9 * sk, 130 * sk, 8),
-        c.dark,
-      );
-      stalk.position.set(0, headY + HEAD_R + 65 * sk, 0);
-      root.add(stalk);
-      const tip = new THREE.Mesh(new THREE.SphereGeometry(26 * sk, 10, 8), c.accent);
-      tip.position.set(0, headY + HEAD_R + 135 * sk, 0);
-      root.add(tip);
-      // Tint accent stripe across the chest (restores sensor colour coding).
-      const stripe = new THREE.Mesh(
-        new THREE.BoxGeometry(TORSO_W * 0.9, TORSO_H * 0.18, 24 * sk),
-        c.accent,
-      );
-      stripe.position.set(0, torsoY + TORSO_H * 0.12, frontZ - 6 * sk);
-      root.add(stripe);
-    } else if (kind === 'professional') {
-      // White shirt triangle down the chest + a thin tie stripe in the tint.
-      const shirt = new THREE.Mesh(
-        new THREE.ConeGeometry(TORSO_W * 0.34, TORSO_H * 0.6, 3),
-        this._mat({ color: 0xf2f2f0, roughness: 0.6, metalness: 0.0 }),
-      );
-      shirt.rotation.x = Math.PI;          // apex down (V-neck: wide at the collar,
-                                           // point at the sternum — NOT a tie shape)
-      // Flat face toward the viewer. A 3-segment cone has vertices every 120°, so
-      // the offset that lands a FACE on body-front (−Z) after the apex-down flip is
-      // π/3, not π/4 — π/4 left the triangle 15° off-front AND lopsided about the
-      // body centreline (world x spanned −79..+58 instead of ±71).
-      shirt.rotation.y = Math.PI / 3;
-      shirt.position.set(0, torsoY + TORSO_H * 0.02, frontZ - 8 * sk);
-      root.add(shirt);
-      const tie = new THREE.Mesh(
-        new THREE.BoxGeometry(TORSO_W * 0.1, TORSO_H * 0.44, 14 * sk),
-        c.accent,
-      );
-      // The tie must sit PROUD OF the shirt cone, not inside it: the cone's front
-      // flat face stands its inradius (radius/2 = TORSO_W·0.17) ahead of the cone
-      // origin, so the old `frontZ − 16` buried the whole blade behind the shirt and
-      // only the stub below the apex showed — leaving the wide-at-top / pointed-at-
-      // bottom white triangle as the only tie-shaped read (i.e. an upside-down tie).
-      tie.position.set(0, torsoY - TORSO_H * 0.02, frontZ - 8 * sk - TORSO_W * 0.17 - 14 * sk);
-      root.add(tie);
-    } else if (kind === 'hacker') {
-      // Hoodie cowl: a dark shell capping the back/top of the head. Tilted back
-      // (rotation.x) and pushed rearward so the front rim rides ABOVE the brow —
-      // a symmetric downward bowl otherwise drapes its front rim to eye level and
-      // hides the face (the "hood covering the eyes" bug).
-      const hood = new THREE.Mesh(
-        new THREE.SphereGeometry(HEAD_R * 1.22, 16, 12, 0, Math.PI * 2, 0, Math.PI * 0.6),
-        this._mat({ color: 0x18181c, roughness: 0.85, metalness: 0.0 }),
-      );
-      hood.rotation.x = 0.5;
-      hood.position.set(0, headY + HEAD_R * 0.08, HEAD_R * 0.34);
-      root.add(hood);
-    } else if (kind === 'movie_star') {
-      // Golden accent stripe down the chest (shades handled in the face pass).
-      const stripe = new THREE.Mesh(
-        new THREE.BoxGeometry(TORSO_W * 0.16, TORSO_H * 0.78, 20 * sk),
-        this._mat({ color: 0xffdd66, emissive: 0xcaa53a, emissiveIntensity: 0.4, metalness: 0.5, roughness: 0.3 }),
-      );
-      stripe.position.set(0, torsoY, frontZ - 6 * sk);
-      root.add(stripe);
-    } else if (kind === 'ninja_cyborg' || kind === 'ninja') {
-      // Katana slung diagonally across the back (+Z side) — shared by both
-      // ninja flavors.
-      const katana = new THREE.Group();
-      const blade = new THREE.Mesh(
-        new THREE.BoxGeometry(26 * sk, TORSO_H * 1.35, 26 * sk),
-        this._mat({ color: 0x2a2a30, emissive: 0x11121a, emissiveIntensity: 0.1, metalness: 0.6, roughness: 0.35 }),
-      );
-      katana.add(blade);
-      const handle = new THREE.Mesh(
-        new THREE.BoxGeometry(30 * sk, TORSO_H * 0.34, 30 * sk),
-        c.accent,   // tint the grip so the sensor colour survives the all-black body
-      );
-      handle.position.set(0, TORSO_H * 0.7, 0);
-      katana.add(handle);
-      katana.position.set(-TORSO_W * 0.1, torsoY, backZ + 30 * sk);
-      katana.rotation.z = 0.55;
-      root.add(katana);
-      if (kind === 'ninja') {
-        // Full hood wrap: a near-complete dark shell around the head — the
-        // skin-tone eye-slit band (face pass) pokes proud of it at the front.
-        // NO metal, NO emissive: this is the classic-shinobi look, distinct
-        // from ninja_cyborg's red visor + steel arm.
-        const hood = new THREE.Mesh(
-          new THREE.SphereGeometry(HEAD_R * 1.14, 18, 14, 0, Math.PI * 2, 0, Math.PI * 0.85),
-          this._mat({ color: 0x131317, roughness: 0.9, metalness: 0.0 }),
-        );
-        hood.position.set(0, headY, 0);
-        root.add(hood);
-        // Waist sash: thin tint band around the lower torso (slightly proud —
-        // coincident-face gotcha).
-        const sash = new THREE.Mesh(
-          new THREE.BoxGeometry(TORSO_W * 1.06, TORSO_H * 0.12, TORSO_D * 1.06),
-          c.accent,
-        );
-        sash.position.set(0, torsoY - TORSO_H * 0.28, 0);
-        root.add(sash);
-      }
-    } else if (kind === 'cyborg') {
-      // Head half-plate: a steel shell over the +x side of the head (the same
-      // side as the red implant eye, steel arm, and steel leg).
-      const steel = this._mat({ color: 0x8a9099, emissive: 0x8a9099, emissiveIntensity: 0.1, metalness: 0.8, roughness: 0.3 });
-      // Half-sphere shell (phi 0..π), rotated so the open seam runs down the
-      // head's centerline and the shell covers the +x half.
-      const plate = new THREE.Mesh(
-        new THREE.SphereGeometry(HEAD_R * 1.06, 16, 12, 0, Math.PI),
-        steel,
-      );
-      plate.rotation.y = Math.PI / 2;
-      plate.position.set(0, headY, 0);
-      root.add(plate);
-      // Small tint chest panel (slightly proud of the torso front face).
-      const panel = new THREE.Mesh(
-        new THREE.BoxGeometry(TORSO_W * 0.34, TORSO_H * 0.22, 22 * sk),
-        c.accent,
-      );
-      panel.position.set(TORSO_W * 0.18, torsoY + TORSO_H * 0.16, frontZ - 6 * sk);
-      root.add(panel);
-    } else if (kind === 'athlete') {
-      // White headband around the forehead. Sits high (0.45·HEAD_R above the
-      // head center) so it rides above the brow instead of reading as a monk's
-      // tonsure; the major radius hugs the sphere's smaller circle at that
-      // height (≈0.89·HEAD_R → 0.93·HEAD_R with the tube).
-      const band = new THREE.Mesh(
-        new THREE.TorusGeometry(HEAD_R * 0.93, HEAD_R * 0.13, 8, 20),
-        this._mat({ color: 0xf2f2f2, roughness: 0.65, metalness: 0.0 }),
-      );
-      band.rotation.x = Math.PI / 2;
-      band.position.set(0, headY + HEAD_R * 0.45, 0);
-      root.add(band);
-      // Shorts: a darker lower-torso overlay (slightly proud so it never lands
-      // coplanar with the torso faces — see the coincident-face gotcha).
-      const shorts = new THREE.Mesh(
-        new THREE.BoxGeometry(TORSO_W * 1.04, TORSO_H * 0.34, TORSO_D * 1.04),
-        this._mat({ color: 0x243043, emissive: 0x243043, emissiveIntensity: 0.15, roughness: 0.6, metalness: 0.05 }),
-      );
-      shorts.position.set(0, torsoY - TORSO_H * 0.32, 0);
-      root.add(shorts);
-    } else if (kind === 'teddy_bear') {
-      // Round ears on top, lighter muzzle + belly patch, stubby round tail.
-      const lite = this._mat({ color: 0xc9a87c, emissive: 0xc9a87c, emissiveIntensity: 0.15, roughness: 0.7, metalness: 0.0 });
-      for (const sx of [-1, 1]) {
-        const ear = sphere(HEAD_R * 0.42, c.skin);
-        ear.position.set(sx * HEAD_R * 0.62, headY + HEAD_R * 0.78, 0);
-        root.add(ear);
-      }
-      const muzzle = sphere(HEAD_R * 0.42, lite);
-      muzzle.scale.set(1, 0.72, 0.7);
-      muzzle.position.set(0, headY - HEAD_R * 0.28, -HEAD_R * 0.8);
-      root.add(muzzle);
-      const belly = sphere(TORSO_W * 0.42, lite);
-      belly.scale.set(1, 1.25, 0.35);
-      belly.position.set(0, torsoY - TORSO_H * 0.08, frontZ - 8 * sk);
-      root.add(belly);
-      const tail = sphere(66 * sk, lite);
-      tail.position.set(0, torsoY - TORSO_H * 0.34, backZ + 30 * sk);
-      root.add(tail);
-    } else if (kind === 'cartoon_mouse') {
-      // BIG round ear discs with pink inner discs + a thin two-segment tail.
-      const pink = this._mat({ color: 0xf2a0b5, emissive: 0xf2a0b5, emissiveIntensity: 0.2, roughness: 0.65, metalness: 0.0 });
-      for (const sx of [-1, 1]) {
-        const ear = cyl(HEAD_R * 0.56, 26 * sk, c.skin);
-        ear.rotation.x = Math.PI / 2;   // disc plane faces the body-forward -Z
-        ear.position.set(sx * HEAD_R * 0.74, headY + HEAD_R * 0.86, 0);
-        root.add(ear);
-        const inner = cyl(HEAD_R * 0.36, 10 * sk, pink);
-        inner.rotation.x = Math.PI / 2;
-        inner.position.set(sx * HEAD_R * 0.74, headY + HEAD_R * 0.86, -12 * sk);
-        root.add(inner);
-      }
-      const tail1 = cyl(15 * sk, 300 * sk, c.skin);
-      tail1.rotation.x = -1.15;   // sweeps down-back from the lower spine
-      tail1.position.set(0, hipY * 0.9, backZ + 90 * sk);
-      root.add(tail1);
-      const tail2 = cyl(11 * sk, 240 * sk, c.skin);
-      tail2.rotation.x = -0.35;   // tip curls back up
-      tail2.position.set(0, hipY * 0.72, backZ + 300 * sk);
-      root.add(tail2);
-    } else if (kind === 'cartoon_dog') {
-      // Floppy ear slabs, lighter muzzle box + dark nose sphere, tail.
-      const earMat = this._mat({ color: 0x6b4226, emissive: 0x6b4226, emissiveIntensity: 0.15, roughness: 0.75, metalness: 0.0 });
-      const muzzleMat = this._mat({ color: 0xc99e6a, emissive: 0xc99e6a, emissiveIntensity: 0.15, roughness: 0.7, metalness: 0.0 });
-      for (const sx of [-1, 1]) {
-        const ear = box(44 * sk, HEAD_R * 1.1, HEAD_R * 0.6, earMat);
-        ear.rotation.z = -sx * 0.18;   // outward flop
-        ear.position.set(sx * HEAD_R * 1.05, headY + HEAD_R * 0.05, 0);
-        root.add(ear);
-      }
-      const snout = box(HEAD_R * 0.64, HEAD_R * 0.46, HEAD_R * 0.6, muzzleMat);
-      snout.position.set(0, headY - HEAD_R * 0.28, -HEAD_R * 1.0);
-      root.add(snout);
-      const nose = sphere(HEAD_R * 0.18, c.dark);
-      nose.position.set(0, headY - HEAD_R * 0.18, -HEAD_R * 1.32);
-      root.add(nose);
-      const tail = cyl(18 * sk, 250 * sk, earMat);
-      tail.rotation.x = -0.9;   // wags up-back
-      tail.position.set(0, hipY * 0.95, backZ + 90 * sk);
-      root.add(tail);
-    } else if (kind === 'cartoon_duck') {
-      // Wide flat yellow-orange bill (legs/feet handled by spec legColor/footMul).
-      const billMat = this._mat({ color: 0xe8931d, emissive: 0xe8931d, emissiveIntensity: 0.25, roughness: 0.55, metalness: 0.0 });
-      const bill = box(HEAD_R * 1.05, HEAD_R * 0.17, HEAD_R * 0.6, billMat);
-      bill.position.set(0, headY - HEAD_R * 0.14, -HEAD_R * 1.08);
-      root.add(bill);
-    } else if (kind === 'cowboy') {
-      // Wide-brim hat + tint bandana + brown vest front panels.
-      const hatMat = this._mat({ color: 0x7a5230, emissive: 0x7a5230, emissiveIntensity: 0.12, roughness: 0.75, metalness: 0.0 });
-      const brim = cyl(HEAD_R * 1.42, 24 * sk, hatMat);
-      brim.position.set(0, headY + HEAD_R * 0.55, 0);
-      root.add(brim);
-      const crown = cyl(HEAD_R * 0.72, HEAD_R * 0.72, hatMat);
-      crown.position.set(0, headY + HEAD_R * 0.55 + HEAD_R * 0.36, 0);
-      root.add(crown);
-      const bandana = box(TORSO_W * 0.78, 55 * sk, TORSO_D * 0.9, c.accent);
-      bandana.position.set(0, torsoY + TORSO_H * 0.5 + 20 * sk, 0);
-      root.add(bandana);
-      const vestMat = this._mat({ color: 0x6b4226, emissive: 0x6b4226, emissiveIntensity: 0.12, roughness: 0.75, metalness: 0.0 });
-      for (const sx of [-1, 1]) {
-        const panel = box(TORSO_W * 0.32, TORSO_H * 0.72, 18 * sk, vestMat);
-        panel.position.set(sx * TORSO_W * 0.33, torsoY + TORSO_H * 0.05, frontZ - 8 * sk);
-        root.add(panel);
-      }
-    } else if (kind === 'magician') {
-      // Black top hat + white shirt V (professional's cone) + tint bowtie.
-      const hatMat = this._mat({ color: 0x111114, roughness: 0.6, metalness: 0.1 });
-      const brim = cyl(HEAD_R * 1.12, 18 * sk, hatMat);
-      brim.position.set(0, headY + HEAD_R * 0.6, 0);
-      root.add(brim);
-      const crown = cyl(HEAD_R * 0.7, HEAD_R * 1.25, hatMat);
-      crown.position.set(0, headY + HEAD_R * 0.6 + HEAD_R * 0.63, 0);
-      root.add(crown);
-      const shirt = new THREE.Mesh(
-        new THREE.ConeGeometry(TORSO_W * 0.34, TORSO_H * 0.6, 3),
-        this._mat({ color: 0xf2f2f0, roughness: 0.6, metalness: 0.0 }),
-      );
-      shirt.rotation.x = Math.PI;
-      shirt.rotation.y = Math.PI / 3;   // face-front + centreline-symmetric (see 'professional')
-      shirt.position.set(0, torsoY + TORSO_H * 0.02, frontZ - 8 * sk);
-      root.add(shirt);
-      const bowtie = box(TORSO_W * 0.3, 45 * sk, 22 * sk, c.accent);
-      bowtie.position.set(0, torsoY + TORSO_H * 0.44, frontZ - 12 * sk);
-      root.add(bowtie);
-    } else if (kind === 'farmer') {
-      // Straw hat (lighter tan) + denim overall bib with shoulder straps.
-      const straw = this._mat({ color: 0xd9b36a, emissive: 0xd9b36a, emissiveIntensity: 0.15, roughness: 0.8, metalness: 0.0 });
-      const brim = cyl(HEAD_R * 1.3, 20 * sk, straw);
-      brim.position.set(0, headY + HEAD_R * 0.55, 0);
-      root.add(brim);
-      const crown = cyl(HEAD_R * 0.7, HEAD_R * 0.55, straw);
-      crown.position.set(0, headY + HEAD_R * 0.55 + HEAD_R * 0.28, 0);
-      root.add(crown);
-      const denim = this._mat({ color: 0x3f5f8a, emissive: 0x3f5f8a, emissiveIntensity: 0.15, roughness: 0.7, metalness: 0.0 });
-      const bib = box(TORSO_W * 0.56, TORSO_H * 0.5, 20 * sk, denim);
-      bib.position.set(0, torsoY - TORSO_H * 0.05, frontZ - 10 * sk);
-      root.add(bib);
-      for (const sx of [-1, 1]) {
-        const strap = box(48 * sk, TORSO_H * 0.5, 16 * sk, denim);
-        strap.position.set(sx * TORSO_W * 0.26, torsoY + TORSO_H * 0.28, frontZ - 8 * sk);
-        root.add(strap);
-      }
-    } else if (kind === 'tech_expert') {
-      // Rectangular glasses + headset band with mic stub + tint utility belt.
-      const frame = this._mat({ color: 0x17181c, roughness: 0.5, metalness: 0.2 });
-      for (const sx of [-1, 1]) {
-        const lens = box(HEAD_R * 0.4, HEAD_R * 0.3, 20 * sk, frame);
-        lens.position.set(sx * HEAD_R * 0.38, headY + HEAD_R * 0.12, -HEAD_R * 0.92);
-        root.add(lens);
-      }
-      const bridge = box(HEAD_R * 0.2, 16 * sk, 16 * sk, frame);
-      bridge.position.set(0, headY + HEAD_R * 0.12, -HEAD_R * 0.94);
-      root.add(bridge);
-      const bandMat = this._mat({ color: 0x2c2e34, roughness: 0.6, metalness: 0.2 });
-      const band = new THREE.Mesh(
-        new THREE.TorusGeometry(HEAD_R * 1.02, 16 * sk, 8, 18, Math.PI),
-        bandMat,
-      );
-      band.position.set(0, headY, 0);   // arcs ear-to-ear over the crown
-      root.add(band);
-      const mic = cyl(10 * sk, HEAD_R * 0.7, bandMat);
-      mic.rotation.z = 1.15;
-      mic.position.set(HEAD_R * 0.62, headY - HEAD_R * 0.35, -HEAD_R * 0.5);
-      root.add(mic);
-      const micTip = sphere(22 * sk, c.accent);
-      micTip.position.set(HEAD_R * 0.32, headY - HEAD_R * 0.5, -HEAD_R * 0.5);
-      root.add(micTip);
-      const belt = box(TORSO_W * 1.05, TORSO_H * 0.1, TORSO_D * 1.05, c.accent);
-      belt.position.set(0, torsoY - TORSO_H * 0.42, 0);
-      root.add(belt);
-    } else if (kind === 'supermodel') {
-      // Long dark hair shell + sunglasses pushed up + tint dress below the hips.
-      const hairMat = this._mat({ color: 0x2a2026, roughness: 0.75, metalness: 0.05 });
-      // Crown cap: phiLength trimmed so the front hairline lands at the brow
-      // rather than raking down over the eyes; tilted back a touch so the bangs
-      // clear the face. The long fall behind (+Z) covers the back and sides.
-      const cap = new THREE.Mesh(
-        new THREE.SphereGeometry(HEAD_R * 1.13, 16, 12, 0, Math.PI * 2, 0, Math.PI * 0.44),
-        hairMat,
-      );
-      cap.rotation.x = 0.28;
-      cap.position.set(0, headY + HEAD_R * 0.04, HEAD_R * 0.04);
-      root.add(cap);
-      const fall = box(HEAD_R * 1.6, HEAD_R * 1.9, HEAD_R * 0.5, hairMat);
-      fall.position.set(0, headY - HEAD_R * 0.4, HEAD_R * 0.72);
-      root.add(fall);
-      const glasses = box(HEAD_R * 1.1, HEAD_R * 0.22, HEAD_R * 0.16,
-        this._mat({ color: 0x0a0a0c, metalness: 0.5, roughness: 0.2 }));
-      glasses.position.set(0, headY + HEAD_R * 0.62, -HEAD_R * 0.72);
-      root.add(glasses);
-      const dress = box(TORSO_W * 1.06, TORSO_H * 0.46, TORSO_D * 1.06, c.accent);
-      dress.position.set(0, torsoY - TORSO_H * 0.5, 0);   // hem lands below the hips
-      root.add(dress);
-    } else if (kind === 'wise_oracle') {
-      // Ankle-length robe skirt (shares the torso material — a static shell
-      // around the still-working leg joints; Sims-style it may intersect
-      // seats while sitting), white beard block, tint amulet at the chest.
-      // Widened + deepened so the (gown-damped) legs stay hidden through the
-      // walk cycle — the rig is force-gowned in _buildHumanoid, so the residual
-      // swing is small and this cover is generous enough for it.
-      const skirtH = hipY - 20 * sk;
-      const skirt = box(TORSO_W * 1.45, skirtH, TORSO_D * 2.0, c.bodyMat);
-      skirt.position.set(0, hipY + 40 * sk - skirtH / 2, 0);
-      root.add(skirt);
-      const beard = box(HEAD_R * 0.62, HEAD_R * 0.85, HEAD_R * 0.28,
-        this._mat({ color: 0xe8e8e4, emissive: 0xe8e8e4, emissiveIntensity: 0.1, roughness: 0.85, metalness: 0.0 }));
-      beard.position.set(0, headY - HEAD_R * 0.78, -HEAD_R * 0.72);
-      root.add(beard);
-      const amulet = sphere(50 * sk, c.accent);
-      amulet.position.set(0, torsoY + TORSO_H * 0.22, frontZ - 24 * sk);
-      root.add(amulet);
-    } else if (kind === 'astronaut') {
-      // Translucent helmet bubble + grey chest control panel + backpack.
-      const helmet = sphere(HEAD_R * 1.26, this._mat({
-        color: 0xbfd8e8, roughness: 0.15, metalness: 0.1,
-        transparent: true, opacity: 0.22,
-      }));
-      helmet.userData.outlineSkip = true;   // transparent anyway, but explicit
-      helmet.position.set(0, headY, 0);
-      root.add(helmet);
-      const panelMat = this._mat({ color: 0x8a9099, roughness: 0.5, metalness: 0.3 });
-      const panel = box(TORSO_W * 0.5, TORSO_H * 0.28, 26 * sk, panelMat);
-      panel.position.set(0, torsoY + TORSO_H * 0.1, frontZ - 10 * sk);
-      root.add(panel);
-      // Tiny tint status light on the panel keeps sensor colour coding.
-      const lamp = sphere(20 * sk, c.accent);
-      lamp.position.set(TORSO_W * 0.14, torsoY + TORSO_H * 0.18, frontZ - 26 * sk);
-      root.add(lamp);
-      const pack = box(TORSO_W * 0.85, TORSO_H * 0.6, TORSO_D * 0.6,
-        this._mat({ color: 0xd8d8dc, roughness: 0.6, metalness: 0.1 }));
-      pack.position.set(0, torsoY + TORSO_H * 0.05, backZ + TORSO_D * 0.32);
-      root.add(pack);
-    }
-    // adult / child / alien: no extra accessory meshes.
-  }
 
   // ── Declarative accessories (pack members) ─────────────────────────────────
   // Build `AvatarPrimitive[]` from a def onto the rig `root`. Anchors resolve to
-  // the SAME HEAD_R / headY / torsoY / hipY / TORSO_D metrics (humanoid) or quad
-  // metrics the imperative blocks use; sizes scale by `sk`; colors resolve
+  // the HEAD_R / headY / torsoY / hipY / TORSO_D metrics (humanoid) or the quad
+  // metrics; sizes scale by `sk`; colors resolve
   // tint/skin/body/dark/accent to the rig's materials. All parts are plain
   // children of `root` (or the hand groups, so they swing) — the outline pass /
   // privacy-blur / fade systems pick them up automatically (outline minDim
@@ -16376,6 +15993,9 @@ export class ThreeDRenderer {
         color: col, emissive: prim.emissive ?? col,
         emissiveIntensity: prim.emissiveIntensity ?? 0.15,
         metalness: prim.metalness ?? 0.1, roughness: prim.roughness ?? 0.6,
+        // G2: per-primitive translucency (astronaut-helmet pattern). Transparent
+        // materials auto-skip the inverted-hull outline pass (see _addOutlines).
+        ...(prim.opacity != null ? { transparent: true, opacity: prim.opacity } : {}),
       });
     };
 
@@ -16458,11 +16078,22 @@ export class ThreeDRenderer {
           geo = new THREE.BoxGeometry(arr[0] * sk, arr[1] * sk, arr[2] * sk);
           break;
         case 'cylinder':
-          geo = new THREE.CylinderGeometry(arr[0] * sk, arr[1] * sk, arr[2] * sk, 16);
+          // G3: radial segments (default 16).
+          geo = new THREE.CylinderGeometry(arr[0] * sk, arr[1] * sk, arr[2] * sk, prim.segments ?? 16);
           break;
         case 'cone':
-          geo = new THREE.ConeGeometry(arr[0] * sk, arr[1] * sk, 16);
+          // G3: radial segments (default 16); a value of 3 yields the flat faceted
+          // shirt-V wedge.
+          geo = new THREE.ConeGeometry(arr[0] * sk, arr[1] * sk, prim.segments ?? 16);
           break;
+        case 'torus': {
+          // G1: ring — size = [radius, tube] or [radius, tube, arcLength] (arc in
+          // radians, default 2π; π = a half-ring headset band). Fixed 8 radial /
+          // 20 tubular segments (orchestrator-pinned), independent of `segments`.
+          const arc = Array.isArray(size) && size.length >= 3 ? (size[2] as number) : Math.PI * 2;
+          geo = new THREE.TorusGeometry(arr[0] * sk, arr[1] * sk, 8, 20, arc);
+          break;
+        }
         case 'cape': {
           // Draped curved sheet: an open-ended cylinder-WALL segment (arc ~1.65 rad
           // centered on the back +Z), top radius narrower than the flared bottom,
@@ -17510,9 +17141,9 @@ export class ThreeDRenderer {
     // Sessile / rooted rig (Phase 4a): legless like hover, but grounded (no float).
     const sessile = def.sessile === true;
     const legless = hover || sessile;         // both omit legs + null the joints
-    // Floor-length robe: damp the leg swing so legs don't poke through. The legacy
-    // wise_oracle robe (imperative below) is force-gowned regardless of the flag.
-    const gown = (hf.gown ?? false) || kind === 'wise_oracle';
+    // Floor-length robe: damp the leg swing so legs don't poke through
+    // (wise_oracle and other robed members set `humanoid.gown: true`).
+    const gown = hf.gown ?? false;
     const armL = spec.armL ?? 1, legL = spec.legL ?? 1;
     const [fmW, fmH, fmD] = spec.footMul ?? [1, 1, 1];
     const pers = def.personality ?? {};
@@ -17863,19 +17494,21 @@ export class ThreeDRenderer {
       }
     }
     // Ears: skin half-domes on the sides for kinds not wearing side-covering
-    // hair / hoods / helmets. Cyborg shows only its organic (−x) ear (the +x
-    // side carries the steel head plate).
-    if (!spec.earSkip && spec.headShape !== 'box') {
-      if (kind === 'cyborg') makeEar(-1);
-      else { makeEar(-1); makeEar(1); }
+    // hair / hoods / helmets. `earSkip: 'right'` keeps only the −x/left ear
+    // (cyborg's single organic ear — the +x side carries its steel head plate).
+    if (spec.headShape !== 'box') {
+      const es = spec.earSkip;
+      if (es === 'left') makeEar(1);         // skip −x (left) ear, keep the +x (right)
+      else if (es === 'right') makeEar(-1);  // skip +x (right) ear, keep the −x/left
+      else if (!es) { makeEar(-1); makeEar(1); }   // both ears
+      // es === true → skip both ears.
     }
 
-    // Limbs. Cyborg kinds get a brushed-steel prosthetic right (+x) arm; the
-    // plain cyborg additionally gets a steel right leg (same side as its arm
-    // + head plate). `legColor` (duck's yellow legs) recolors BOTH legs.
-    const steelMat = (kind === 'ninja_cyborg' || kind === 'cyborg')
-      ? this._mat({ color: 0x8a9099, emissive: 0x8a9099, emissiveIntensity: 0.1, metalness: 0.8, roughness: 0.3 })
-      : skin;
+    // Limbs. A brushed-steel prosthetic (cyborg right arm+leg, ninja_cyborg
+    // right arm) is expressed entirely through the def's `humanoid.limbColors`
+    // object entries (color + metalness/roughness/emissiveIntensity) — see the
+    // prosthetic-vs-recolor split at the arm/leg build below. `legColor` (duck's
+    // yellow legs) recolors BOTH legs.
     // Trouser tone: plain rigs whose legs would otherwise render in the raw
     // identity tint (spec.skin === the passed-in `color`) read as a head-to-toe
     // unitard ("missing pants"). Give BOTH leg segments (upper + lower — not the
@@ -17899,18 +17532,34 @@ export class ThreeDRenderer {
     // Per-limb material overrides (Batch C1 limbColors): recolor BOTH segments of
     // a limb, not its hand/shoe. undefined → the limb's default material.
     const lc = spec.limbColors;
-    const limbMat = (c?: number): THREE.Material | undefined => c === undefined ? undefined
-      : this._mat({ color: c, emissive: c, emissiveIntensity: spec.emI * 0.5, metalness: 0.1, roughness: 0.6, ...opac });
+    // G4: a limb override is a bare hex (flat recolor — byte-identical to before)
+    // or an object carrying a prosthetic/steel finish (metalness/roughness are
+    // dropped by _mat() as for every toon material; emissiveIntensity survives).
+    const limbMat = (c?: LimbColor): THREE.Material | undefined => {
+      if (c === undefined) return undefined;
+      if (typeof c === 'number')
+        return this._mat({ color: c, emissive: c, emissiveIntensity: spec.emI * 0.5, metalness: 0.1, roughness: 0.6, ...opac });
+      return this._mat({
+        color: c.color, emissive: c.color,
+        emissiveIntensity: c.emissiveIntensity ?? spec.emI * 0.5,
+        metalness: c.metalness ?? 0.1, roughness: c.roughness ?? 0.6, ...opac,
+      });
+    };
     const armLSeg = limbMat(lc.armL), armRSeg = limbMat(lc.armR);
     const legLSeg = limbMat(lc.legL), legRSeg = limbMat(lc.legR);
 
     // Legless rigs omit BOTH legs entirely: HOVER rigs (ghosts / floating droids)
     // float the root in updateTargets so the hip sits `hover` mm off the floor;
     // SESSILE rigs (plants / totems) stay grounded and root a trunk via accessories.
+    // A prosthetic limb (object-form `limbColors`, e.g. cyborg's steel arm+leg)
+    // replaces the WHOLE limb incl. hand; a flat recolor (number-form) touches
+    // only the two segments + elbow/knee bump, leaving the hand on `skin` (matching
+    // the left arm). `armRHand` is the right-arm hand material under that rule.
+    const armRHand = (typeof lc.armR === 'object') ? (armRSeg ?? skin) : skin;
     const leftLeg  = legless ? null : makeLeg(-TORSO_W / 4, legLSeg ?? baseLegMat);
-    const rightLeg = legless ? null : makeLeg( TORSO_W / 4, legRSeg ?? (kind === 'cyborg' ? steelMat : baseLegMat));
+    const rightLeg = legless ? null : makeLeg( TORSO_W / 4, legRSeg ?? baseLegMat);
     const leftArm  = makeArm(-(TORSO_W / 2 + ARM_UPPER_R * 0.7), skin, armLSeg ?? skin);
-    const rightArm = makeArm( TORSO_W / 2 + ARM_UPPER_R * 0.7, steelMat, armRSeg ?? steelMat);
+    const rightArm = makeArm( TORSO_W / 2 + ARM_UPPER_R * 0.7, armRHand, armRSeg ?? skin);
     // Relaxed A-pose: arms splay a touch outward so the silhouette isn't a
     // rigid soldier. Static roll — updateTargets only animates rotation.x.
     leftArm.shoulder.rotation.z  = -0.08;
@@ -17930,14 +17579,9 @@ export class ThreeDRenderer {
 
     // ── Per-variant accessories (added BEFORE the outline pass so they get
     // cartoon shells too; emissive parts opt out via userData.outlineSkip).
-    // Legacy core kinds keep their hand-tuned imperative blocks; pack members
-    // (and any def with `accessories`) build declaratively.
-    if (def.legacyAccessories) {
-      this._addAvatarAccessories(def.legacyAccessories, spec, root, {
-        color, accent, dark, shoeMat, skin, bodyMat,
-        HEAD_R, headY, torsoY, hipY, TORSO_W, TORSO_H, TORSO_D, sk,
-      });
-    }
+    // Every avatar (core + pack members) builds its accessories declaratively
+    // from `def.accessories` in `_addDeclarativeAccessories` below — there is no
+    // imperative per-kind path anymore.
     const animPrims: AnimPrim[] = [];
     const twoHandProps: { mesh: THREE.Object3D; otherHand: THREE.Object3D }[] = [];
     const handAccessories: { mesh: THREE.Object3D; hand: 'L' | 'R' }[] = [];

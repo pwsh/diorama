@@ -1,5 +1,5 @@
 // Base ▸ Aliens — builtin base-group pack (dynamic-import only). Members keep
-// their EXACT bare legacy ids + legacyAccessories markers.
+// their EXACT bare legacy ids; all accessories build declaratively.
 import type { AvatarPackDef } from '../avatars.js';
 
 const GREEN = 0x86d46a;
@@ -7,7 +7,9 @@ const GREEN = 0x86d46a;
 const pack: AvatarPackDef = {
   id: 'base-aliens', version: 2, label: 'Aliens', path: ['Base', 'Aliens'], builtin: true,
   avatars: [
-    { id: 'alien', label: 'Alien', rig: 'humanoid', legacyAccessories: 'alien',
+    // Zero-accessory kind (wave-2B port): the legacy switch built nothing for
+    // 'alien' — the bare big-head rig is the whole look. Nothing to port.
+    { id: 'alien', label: 'Alien', rig: 'humanoid',
       humanoid: { headR: 158, limbR: 0.8, skin: GREEN, body: GREEN, emI: 0.35, eyes: 'almond', earSkip: true },
       bubbles: ['🛸', '❓'] },
 

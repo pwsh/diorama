@@ -152,6 +152,22 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Legacy avatar-accessory migration** (2026-07-20; Fable-orchestrated:
+  1 Sonnet inventory + 4 Opus agents in 3 waves). ALL 24 legacy members
+  (22 kind blocks, 66 meshes + 2 disney reuses = 72 fixture builds)
+  ported from the imperative `_addAvatarAccessories` to declarative
+  `AvatarPrimitive[]` data; the 384-line imperative path, the
+  `legacyAccessories` field, and every kind-string rig branch DELETED.
+  Schema grew: `'torus'` shape, per-prim `opacity` + `segments`,
+  `limbColors` object form (prosthetic vs flat-recolor semantics),
+  `earSkip` side values, `gown` field. Zero visual drift proven by an
+  immutable pre-migration fixture (world-geometry signatures,
+  `LEGACYMIG PASS 187/187` at ≤0.05 mm, before AND after deletion).
+  Prop-swap gap CLOSED (magician wand / oracle staff now hide during
+  prop sessions — props-test 96→99). Inventory:
+  `docs/research/legacy-accessory-migration.md`. Suites: content
+  637/637, build 117/117, necktie 155/155, costume 47/47, anim 32/32.
+
 - **Fix batch: accessories, props, floorplans** (2026-07-20; 3 parallel
   Opus agents; user-reported). Each report started narrow and uncovered a
   systemic defect:

@@ -1,8 +1,9 @@
 // Cartoons ▸ Disney Animals — franchise pack (opt-in, defaults loaded:false).
 // Stylized geometric toon homage — NOT licensed characters, colour + silhouette
 // only. Mixed rigs: dressed anthropomorphic mascots (humanoid) + true pets/wild
-// animals (quadruped). The mascot recolors reuse existing geometry branches via
-// legacyAccessories WITHOUT touching the locked core kinds. Sizes are mm at sk=1.
+// animals (quadruped). The mascot recolors reuse the same declarative accessory
+// prims as the base cartoon kinds WITHOUT touching the locked core kinds.
+// Sizes are mm at sk=1.
 //
 // approx: the doc's quadruped bodyLen/bodyW/bodyH were written as multipliers;
 // converted here to absolute mm at sk=1 (the shipped QuadrupedFields convention,
@@ -35,8 +36,9 @@ const pack: AvatarPackDef = {
       humanoid: { sk: 0.85, headR: 122, headShape: 'sphere', limbR: 0.9, skin: 0xf2f0e6, body: 0xf2f0e6,
         shoe: 0xe8a020, legColor: 0xe8a020, footMul: [1.6, 0.7, 1.35], emI: 0.20, hands: 'sphere',
         eyes: 'dots', steel: false },
-      legacyAccessories: 'cartoon_duck',
       accessories: [
+        // wave-2B: own copy of the ported cartoon_duck bill (sk 0.85, headR 122).
+        { shape: 'box', size: [150.7059, 24.4, 86.1176], anchor: 'head', pos: [0, -20.0941, -155.0118], color: 0xe8931d, emissive: 0xe8931d, emissiveIntensity: 0.25 }, // bill
         { shape: 'box', size: [250, 12, 90], anchor: 'chest', pos: [-70, 150, 70], rot: [0, 0, 0.5], color: 0x2255aa },
         { shape: 'box', size: [250, 12, 90], anchor: 'chest', pos: [70, 150, 70], rot: [0, 0, -0.5], color: 0x2255aa },
         { shape: 'box', size: [260, 14, 40], anchor: 'chest', pos: [0, 130, -60], color: 0x2255aa },
@@ -53,8 +55,14 @@ const pack: AvatarPackDef = {
       humanoid: { sk: 1.05, headR: 128, headShape: 'sphere', limbR: 0.85, skin: 0xd98a4a, body: 0xd98a4a,
         shoe: 0x5a3d28, legColor: 0x2b4a8a, emI: 0.18, armL: 1.15, legL: 1.15, hands: 'sphere',
         eyes: 'dots', steel: false },
-      legacyAccessories: 'cartoon_dog',
       accessories: [
+        // wave-2B: own copy of the ported cartoon_dog geometry (sk 1.05, headR 128;
+        // the ear/muzzle browns + dark nose are fixed hex, not this def's skin).
+        { shape: 'box', size: [44, 134.0952, 73.1429], rot: [0, 0, 0.18], anchor: 'root', pos: [-128, 1759.5, 0], color: 0x6b4226, emissive: 0x6b4226, emissiveIntensity: 0.15 }, // ear L
+        { shape: 'box', size: [44, 134.0952, 73.1429], rot: [0, 0, -0.18], anchor: 'root', pos: [128, 1759.5, 0], color: 0x6b4226, emissive: 0x6b4226, emissiveIntensity: 0.15 }, // ear R
+        { shape: 'box', size: [78.019, 56.0762, 73.1429], anchor: 'root', pos: [0, 1719.2714, -121.9048], color: 0xc99e6a, emissive: 0xc99e6a, emissiveIntensity: 0.15 }, // snout
+        { shape: 'sphere', size: 21.9429, anchor: 'root', pos: [0, 1731.4619, -160.9143], color: 'dark' }, // nose
+        { shape: 'cylinder', size: [18, 18, 250], rot: [-0.9, 0, 0], anchor: 'root', pos: [0, 941.925, 160], color: 0x6b4226, emissive: 0x6b4226, emissiveIntensity: 0.15 }, // tail
         { shape: 'cylinder', size: [88, 88, 180], anchor: 'crown', pos: [0, 130, -10], color: 0x1f7a3a },
         { shape: 'cylinder', size: [150, 150, 20], anchor: 'crown', pos: [0, 45, -10], color: 0x1f7a3a },
         { shape: 'box', size: [190, 40, 150], anchor: 'crown', pos: [0, 62, -10], color: 0x161619 },

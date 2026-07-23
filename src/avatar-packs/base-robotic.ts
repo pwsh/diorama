@@ -1,5 +1,5 @@
 // Base ▸ Robotic — builtin base-group pack (dynamic-import only). Members keep
-// their EXACT bare legacy ids + legacyAccessories markers.
+// their EXACT bare legacy ids; all accessories build declaratively.
 import type { AvatarPackDef } from '../avatars.js';
 
 const GREY = 0x9aa3ad, MATTE = 0x1a1a1e;
@@ -7,13 +7,41 @@ const GREY = 0x9aa3ad, MATTE = 0x1a1a1e;
 const pack: AvatarPackDef = {
   id: 'base-robotic', version: 2, label: 'Robotic', path: ['Base', 'Robotic'], builtin: true,
   avatars: [
-    { id: 'robot', label: 'Robot', rig: 'humanoid', legacyAccessories: 'robot',
+    // wave-2B port: antenna stalk (dark) + tint tip + tint chest stripe.
+    { id: 'robot', label: 'Robot', rig: 'humanoid',
       humanoid: { headR: 128, headShape: 'box', skin: GREY, body: GREY, shoe: 0x33363c, emI: 0.10, hands: 'box', eyes: 'visor', steel: true, earSkip: true },
+      accessories: [
+        { shape: 'cylinder', size: [9, 9, 130], segments: 8, anchor: 'crown', pos: [0, 65, 0], color: 'dark' }, // antenna stalk
+        { shape: 'sphere', size: 26, anchor: 'crown', pos: [0, 135, 0], color: 'tint' }, // antenna tip
+        { shape: 'box', size: [216, 108, 24], anchor: 'chest', pos: [0, 72, -6], color: 'tint' }, // chest stripe
+      ],
       bubbles: ['⚙️', '🔋'] },
-    { id: 'cyborg', label: 'Cyborg', rig: 'humanoid', legacyAccessories: 'cyborg',
-      humanoid: { eyes: 'halfred' }, bubbles: ['🔧', '⚡'] },
-    { id: 'ninja_cyborg', label: 'Ninja cyborg', rig: 'humanoid', legacyAccessories: 'ninja_cyborg',
-      humanoid: { headR: 120, skin: MATTE, body: MATTE, shoe: 0x0a0a0c, emI: 0.05, eyes: 'redvisor', earSkip: true }, bubbles: ['⚔️'] },
+    // steel head half-plate + tint chest panel. The steel right arm+leg (a
+    // prosthetic = object-form limbColors, so the WHOLE limb incl. hand goes
+    // steel) + single organic (−x) ear are fully data-driven: earSkip:'right'
+    // and the object-form limbColors below drive them in _buildHumanoid.
+    { id: 'cyborg', label: 'Cyborg', rig: 'humanoid',
+      humanoid: { eyes: 'halfred', earSkip: 'right',
+        limbColors: {
+          armR: { color: 0x8a9099, metalness: 0.8, roughness: 0.3, emissiveIntensity: 0.1 },
+          legR: { color: 0x8a9099, metalness: 0.8, roughness: 0.3, emissiveIntensity: 0.1 },
+        } },
+      accessories: [
+        { shape: 'sphere', size: 133.56, sphereArc: [0, Math.PI, 0, Math.PI], rot: [0, Math.PI / 2, 0], anchor: 'head', color: 0x8a9099, emissive: 0x8a9099, emissiveIntensity: 0.1, metalness: 0.8, roughness: 0.3 }, // head half-plate (steel)
+        { shape: 'box', size: [81.6, 132, 22], anchor: 'chest', pos: [43.2, 96, -6], color: 'tint' }, // chest panel
+      ],
+      bubbles: ['🔧', '⚡'] },
+    // back-slung katana (blade + tint grip). The steel right arm is a prosthetic
+    // (object-form limbColors.armR → whole arm incl. hand goes steel), fully
+    // data-driven in _buildHumanoid.
+    { id: 'ninja_cyborg', label: 'Ninja cyborg', rig: 'humanoid',
+      humanoid: { headR: 120, skin: MATTE, body: MATTE, shoe: 0x0a0a0c, emI: 0.05, eyes: 'redvisor', earSkip: true,
+        limbColors: { armR: { color: 0x8a9099, metalness: 0.8, roughness: 0.3, emissiveIntensity: 0.1 } } },
+      accessories: [
+        { shape: 'box', size: [26, 810, 26], anchor: 'root', pos: [-24, 1170, 100], rot: [0, 0, 0.55], color: 0x2a2a30, emissive: 0x11121a, emissiveIntensity: 0.1 }, // katana blade
+        { shape: 'box', size: [30, 204, 30], anchor: 'root', pos: [-243.5286, 1528.0603, 100], rot: [0, 0, 0.55], color: 'tint' }, // katana handle
+      ],
+      bubbles: ['⚔️'] },
 
     // ── New machines (Batch C2). Each keeps one 'tint' accent (antenna tip / seam /
     // stripe / drone) so per-sensor color coding survives on a fixed-metal body.

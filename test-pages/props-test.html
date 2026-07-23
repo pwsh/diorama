@@ -19,6 +19,10 @@
   const { ThreeDRenderer, PROP_DEFS, propEligible, propTierOf } = mod;
   const _dom = await import('./assets/base-domestic-animals.js?v=' + Date.now());
   ThreeDRenderer.registerAvatarPack(_dom.default);
+  // base-careers carries the migrated `magician` (hand-anchored wand) + `wise_oracle`
+  // (two-handed staff) — used by the prop-swap-of-a-REAL-member assertion below.
+  const _careers = await import('./assets/base-careers.js?v=' + Date.now());
+  ThreeDRenderer.registerAvatarPack(_careers.default);
 
   const r = new ThreeDRenderer(document.getElementById('c'));
   await r.load();
@@ -232,6 +236,20 @@
     check('swap: authored accessory hidden during session', authored.visible === false && h.propHiddenAccessories.length === 1);
     r._endPropSession(h);
     check('swap: authored accessory restored after session', authored.visible === true && h.propHiddenAccessories.length === 0);
+
+    // Wave-3 gap closure: a REAL migrated member's hand accessory (magician's
+    // declarative wand+tip on handR) is captured in handAccessories and hides /
+    // restores during a prop session — the "legacy imperative hand props" gap is
+    // gone now that every hand item is declarative.
+    const mag = r._buildHumanoid(TINT, 'magician');
+    const magHand = (mag.handAccessories ?? []).filter(a => a.hand === 'R').map(a => a.mesh);
+    check('swap: magician wand captured on handR', magHand.length === 2);
+    r._startPropSession(mag, 'vacuum_cleaner', null, null, 10);   // handR grip
+    check('swap: magician wand hidden during session',
+      magHand.length === 2 && magHand.every(m => m.visible === false) && mag.propHiddenAccessories.length === 2);
+    r._endPropSession(mag);
+    check('swap: magician wand restored after session',
+      magHand.every(m => m.visible === true) && mag.propHiddenAccessories.length === 0);
   }
 
   // ── 9. Build + dispose (no leaked geometry/material; shared-material guard) ───
