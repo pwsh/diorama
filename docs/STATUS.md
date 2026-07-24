@@ -1,6 +1,6 @@
 # Project status & pick-up guide
 
-Last updated: 2026-07-20, at **v0.27.0**. This is the single document to
+Last updated: 2026-07-24, at **v0.28.0**. This is the single document to
 read (alongside `CLAUDE.md`) to resume work with full context.
 
 ## Where things stand
@@ -158,6 +158,13 @@ instance.
   + necktie/cone bugs, 11/13 props re-oriented (no-wrist root cause) +
   broom/shovel handle attachment, all 12 demo floorplans re-validated
   for doorway clearance/wall overlap/nav reachability/chair facing).
+  → v0.28.0 meet the neighbors (roadmap P5 — OpenFreeMap/OSM
+  neighborhood overlay: zero-dep hand-rolled MVT vector-tile decoder,
+  toon-extruded surrounding buildings + roads/water/landuse positioned
+  by the GPS landmark fit, sidebar alignment nudges + vertical scaling
+  + user-drawn exclusion polygons, 30-day IndexedDB tile cache w/
+  fetch/extract separation, OSM attribution chip, Settings ▸
+  Integrations enablement).
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
