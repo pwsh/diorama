@@ -1,6 +1,6 @@
 # Project status & pick-up guide
 
-Last updated: 2026-07-24, at **v0.28.0**. This is the single document to
+Last updated: 2026-07-25, at **v0.29.0**. This is the single document to
 read (alongside `CLAUDE.md`) to resume work with full context.
 
 ## Where things stand
@@ -165,6 +165,15 @@ instance.
   + user-drawn exclusion polygons, 30-day IndexedDB tile cache w/
   fetch/extract separation, OSM attribution chip, Settings ▸
   Integrations enablement).
+  → v0.29.0 cleared for takeoff (roadmap P4 — live ADS-B aircraft in
+  the 3D sky via airplanes.live / local receiver / HA-entity proxy,
+  compressed distance+altitude display shell, prop/jet/heli models w/
+  callsign tow banners + cel-shaded labels showing real altitude,
+  dead reckoning between polls, ISS tracking via wheretheiss.at,
+  low-overflight/watch-list/ISS-rise alerts in the alert bell +
+  flyover thought bubbles, airplanes.live attribution; GPS landmark
+  CSV import — label/lat/lon columns, fit-poisoning guard via
+  pendingPlace pins excluded from the calibration until placed).
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
