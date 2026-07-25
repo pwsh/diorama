@@ -1,6 +1,6 @@
 # Project status & pick-up guide
 
-Last updated: 2026-07-25, at **v0.29.0**. This is the single document to
+Last updated: 2026-07-25, at **v0.29.1**. This is the single document to
 read (alongside `CLAUDE.md`) to resume work with full context.
 
 ## Where things stand
@@ -174,6 +174,10 @@ instance.
   flyover thought bubbles, airplanes.live attribution; GPS landmark
   CSV import — label/lat/lon columns, fit-poisoning guard via
   pendingPlace pins excluded from the calibration until placed).
+  → v0.29.1 steady skies (fix: routine flight/ISS polls no longer bump
+  configRev — an 8 s poll was rebuilding every configRev-keyed 3D
+  group, visibly resetting weather particles + the decorative
+  plane/train; polls are live-path now, regression-pinned).
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
