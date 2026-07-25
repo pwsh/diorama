@@ -1,0 +1,664 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>FLIGHTS …</title>
+<style>
+  body { margin:0; background:#0d1116; color:#cfd8dc; font:13px/1.5 sans-serif; padding:14px; }
+  h1 { font-size:15px; margin:0 0 10px; }
+  h2 { font-size:12px; margin:14px 0 4px; color:#78909c; text-transform:uppercase; letter-spacing:.06em; }
+  #summary { font-size:14px; font-weight:bold; margin:10px 0; padding:8px 10px; border-radius:5px; }
+  .okbg { background:#12331f; color:#69f0ae; } .badbg { background:#3a1414; color:#ff8a80; }
+  .row { display:flex; justify-content:space-between; gap:10px; padding:2px 0; border-bottom:1px solid #1c2530; }
+  .pass { color:#69f0ae; } .fail { color:#ff5252; }
+  .name { color:#90caf9; } .extra { color:#ffd54f; font-size:11px; }
+</style>
+<h1>Flights &amp; ISS (roadmap P4) — normalizer · compression curves · bearing/distance · satAltAz · Planner wiring</h1>
+<div id="summary">Running…</div>
+<div id="rows"></div>
+
+<!-- Fixture provenance:
+       fixtures/adsb/airplanes-live-lax.json — REAL capture (2026-07-24) of
+         `curl -s 'https://api.airplanes.live/v2/point/33.9425/-118.408/25'`
+         (94 aircraft, 50 of them on the ground). Not hand-edited.
+       fixtures/adsb/local-aircraft.json — hand-authored readsb {aircraft:[...]}
+         shape covering the edge cases a real capture won't reliably contain:
+         a "ground" sentinel, a no-position entry, an mlat/alt_geom-only entry,
+         a military dbFlags entry, a string-typed lat, a blank callsign.
+       fixtures/adsb/garbage.json — hand-authored malformed corpus.
+
+     Build (flights.ts is genuinely zero-import → plain transpile; sky-astro.ts
+     pulls in sky-catalog.ts → bundle; planner per the config-test recipe, with
+     the in-memory avatar-store swap because IndexedDB does not complete under
+     --virtual-time-budget):
+       npx esbuild src/flights.ts --format=esm --outfile=<harness>/flights.mod.js
+       npx esbuild src/sky-astro.ts --bundle --format=esm --outfile=<harness>/sky-astro.mod.js
+       T=$(mktemp -d); cp -r src/* "$T"/
+       cp test-pages/fake-avatar-store.ts "$T"/avatar-store.ts
+       npx esbuild "$T"/planner.ts --bundle --format=esm --outfile=<harness>/planner.mod.js
+-->
+<script type="module">
+  const V = '?v=' + Date.now();
+  const F = await import('./flights.mod.js' + V);
+  const SA = await import('./sky-astro.mod.js' + V);
+  const { Planner } = await import('./planner.mod.js' + V);
+
+  const results = [];
+  const ok = (name, cond, extra = '') => results.push({ name, pass: !!cond, extra: String(extra) });
+  const near = (name, got, want, tol, extra = '') =>
+    ok(name, Math.abs(got - want) <= tol, extra || `got ${got}, want ${want}±${tol}`);
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  async function waitFor(cond, tries = 800) {
+    for (let i = 0; i < tries; i++) { if (cond()) return true; await sleep(4); }
+    return !!cond();
+  }
+  const clone = x => JSON.parse(JSON.stringify(x));
+  const TWO_PI = Math.PI * 2;
+
+  const LAX = await (await fetch('./fixtures/adsb/airplanes-live-lax.json' + V)).json();
+  const LOCAL = await (await fetch('./fixtures/adsb/local-aircraft.json' + V)).json();
+  const GARBAGE = await (await fetch('./fixtures/adsb/garbage.json' + V)).json();
+
+  try {
+    // ── 1. Normalizer ────────────────────────────────────────────────────────
+    {
+      const cloud = F.normalizeAircraftList(LAX);
+      ok('1: real cloud fixture parses', cloud.length === 44, `n=${cloud.length} (94 raw, 50 on ground)`);
+      ok('1: every entry has finite hex/lat/lon/altFt', cloud.every(a =>
+        typeof a.hex === 'string' && a.hex.length > 0 &&
+        Number.isFinite(a.lat) && Number.isFinite(a.lon) && Number.isFinite(a.altFt)));
+      ok('1: hex lowercased', cloud.every(a => a.hex === a.hex.toLowerCase()));
+      ok('1: no "ground" survivors', cloud.every(a => a.altFt !== 'ground'));
+      ok('1: callsigns trimmed (no trailing pad)', cloud.every(a =>
+        a.callsign === null || a.callsign === a.callsign.trim()));
+      ok('1: blank callsigns became null', cloud.filter(a => a.callsign === null).length === 2,
+        `nulls=${cloud.filter(a => a.callsign === null).length}`);
+      ok('1: cloud dst carried into distNm', cloud.every(a => Number.isFinite(a.distNm)));
+
+      const local = F.normalizeAircraftList(LOCAL);
+      ok('2: local {aircraft:[…]} envelope parses', local.length === 5, `n=${local.length}`);
+      const byHex = Object.fromEntries(local.map(a => [a.hex, a]));
+      ok('2: "ground" sentinel filtered (no alt_geom fallback)', !byHex.bbbbbb);
+      ok('2: no-position entry filtered', !byHex.cccccc);
+      ok('2: string lat rejected (strict numbers)', !byHex['111111']);
+      ok('2: normal entry fields', byHex.a1b2c3 && byHex.a1b2c3.callsign === 'UAL123' &&
+        byHex.a1b2c3.altFt === 12000 && byHex.a1b2c3.gsKt === 320.4 &&
+        byHex.a1b2c3.trackDeg === 180.2 && byHex.a1b2c3.vertRateFpm === -640 &&
+        byHex.a1b2c3.seenPosS === 0.4 && byHex.a1b2c3.category === 'A3');
+      ok('2: mlat entry kept via alt_geom fallback', byHex.dddddd && byHex.dddddd.altFt === 3400);
+      ok('2: source hex uppercase → lowercased', !!byHex.eeeeee);
+      ok('2: blank flight → null callsign', byHex.eeeeee && byHex.eeeeee.callsign === null);
+      ok('2: dbFlags bit 1 → military', byHex.eeeeee && byHex.eeeeee.military === true);
+      ok('2: dbFlags 8 (LADD) is NOT military', byHex.ffffff && byHex.ffffff.military === false);
+      ok('2: absent dbFlags → military false', byHex.a1b2c3 && byHex.a1b2c3.military === false);
+      ok('2: geom_rate vertRate fallback', byHex.ffffff && byHex.ffffff.vertRateFpm === 300);
+      ok('2: true_heading track fallback', byHex['222222'] && byHex['222222'].trackDeg === 45);
+      ok('2: absent optional fields → null not NaN', byHex.dddddd &&
+        byHex.dddddd.vertRateFpm === null && byHex['222222'].vertRateFpm === null);
+      ok('2: no distNm when source lacks dst', byHex.a1b2c3 && byHex.a1b2c3.distNm === undefined);
+
+      // Envelope equivalence: {ac} vs {aircraft} vs a bare array.
+      const bare = LOCAL.aircraft;
+      const asAc = F.normalizeAircraftList({ ac: bare });
+      const asFlights = F.normalizeAircraftList({ flights: bare });
+      const asBare = F.normalizeAircraftList(bare);
+      const sig = l => JSON.stringify(l.map(a => a.hex + ':' + a.altFt));
+      ok('3: {ac} envelope == {aircraft}', sig(asAc) === sig(local));
+      ok('3: {flights} envelope == {aircraft}', sig(asFlights) === sig(local));
+      ok('3: bare array == {aircraft}', sig(asBare) === sig(local));
+
+      // Never throws — every shape of garbage.
+      let threw = false;
+      const bad = [null, undefined, 42, 'string', true, {}, { aircraft: 'nope' }, { ac: 42 },
+        [[]], [null], NaN, { aircraft: null }, () => {}];
+      let allEmpty = true;
+      for (const b of bad) {
+        try { const r = F.normalizeAircraftList(b); if (r.length !== 0) allEmpty = false; }
+        catch { threw = true; }
+      }
+      ok('4: garbage inputs never throw', !threw);
+      ok('4: garbage inputs → []', allEmpty);
+      let g = null, gThrew = false;
+      try { g = F.normalizeAircraftList(GARBAGE); } catch { gThrew = true; }
+      ok('4: malformed-entry corpus does not throw', !gThrew);
+      ok('4: every malformed entry skipped', g && g.length === 0, `n=${g ? g.length : 'threw'}`);
+      ok('4: out-of-range lat/lon rejected', g && g.length === 0);
+    }
+
+    // ── 2. aircraftModelKind ────────────────────────────────────────────────
+    {
+      const mk = c => F.aircraftModelKind({ category: c });
+      ok('5: A7 → heli', mk('A7') === 'heli');
+      ok('5: A1 → prop', mk('A1') === 'prop');
+      ok('5: A2 → prop', mk('A2') === 'prop');
+      ok('5: A3 → jet', mk('A3') === 'jet');
+      ok('5: A5 → jet', mk('A5') === 'jet');
+      ok('5: null category → jet', mk(null) === 'jet');
+      ok('5: unknown category → jet', mk('D7') === 'jet');
+    }
+
+    // ── 3. compressRadiusMm ─────────────────────────────────────────────────
+    {
+      const R = F.FLIGHT_SHELL.rMaxMm;
+      ok('6: 0 nm → 0 mm', F.compressRadiusMm(0, 30) === 0);
+      let mono = true, bounded = true, prev = -1;
+      for (let d = 0; d <= 250; d += 0.1) {
+        const v = F.compressRadiusMm(d, 30);
+        if (v <= prev - 1e-9) mono = false;
+        if (!(v < R)) bounded = false;
+        prev = v;
+      }
+      ok('6: monotonically increasing over 0..250 nm', mono);
+      ok('6: strictly below rMaxMm everywhere', bounded, `rMax=${R}`);
+      ok('6: negative distance clamps to 0', F.compressRadiusMm(-5, 30) === 0);
+      ok('6: non-finite distance clamps to 0', F.compressRadiusMm(NaN, 30) === 0);
+      // K floor: radiusNm 5 → K = max(4, 1.25) = 4, so it must NOT use r/4.
+      near('6: K floor at radiusNm=5 (K=4)', F.compressRadiusMm(4, 5), R / 2, 1e-6);
+      near('6: K = radiusNm/4 at radiusNm=100 (K=25)', F.compressRadiusMm(25, 100), R / 2, 1e-6);
+      ok('6: bigger radius pushes the same aircraft inward',
+        F.compressRadiusMm(20, 100) < F.compressRadiusMm(20, 20));
+    }
+
+    // ── 4. compressAltitudeMm ───────────────────────────────────────────────
+    {
+      const S = F.FLIGHT_SHELL;
+      near('7: 0 ft → yMinMm', F.compressAltitudeMm(0), S.yMinMm, 1e-9);
+      near('7: altMaxFt → yMaxMm', F.compressAltitudeMm(S.altMaxFt), S.yMaxMm, 1e-9);
+      ok('7: clamps above altMaxFt', F.compressAltitudeMm(120000) === F.compressAltitudeMm(S.altMaxFt));
+      ok('7: clamps below 0', F.compressAltitudeMm(-2000) === F.compressAltitudeMm(0));
+      let mono = true, inBand = true, prev = -1;
+      for (let a = 0; a <= 50000; a += 25) {
+        const v = F.compressAltitudeMm(a);
+        if (v < prev - 1e-9) mono = false;
+        if (v < S.yMinMm - 1e-9 || v > S.yMaxMm + 1e-9) inBand = false;
+        prev = v;
+      }
+      ok('7: monotonic over 0..50000 ft', mono);
+      ok('7: stays inside [yMin, yMax]', inBand);
+      ok('7: non-finite → yMinMm', F.compressAltitudeMm(NaN) === S.yMinMm);
+      ok('7: log knee spends detail low (3000 ft past halfway of 45000 ft band)',
+        F.compressAltitudeMm(3000) - S.yMinMm > (S.yMaxMm - S.yMinMm) * 0.24);
+    }
+
+    // ── 5. flightBearingDistance goldens ────────────────────────────────────
+    {
+      const OLAT = 47.6, OLON = -122.3;
+      const b = (dlat, dlon) => F.flightBearingDistance(OLAT, OLON, OLAT + dlat, OLON + dlon);
+      const n = b(0.1, 0), e = b(0, 0.1), s = b(-0.1, 0), w = b(0, -0.1);
+      near('8: due north bearing = 0', n.bearingRad, 0, 1e-9);
+      near('8: due north distance ≈ 6.004 nm', n.distNm, 6.00405, 0.001);
+      near('8: due east bearing = π/2', e.bearingRad, Math.PI / 2, 1e-9);
+      near('8: due east distance ≈ 4.049 nm (cos lat)', e.distNm, 4.04854, 0.001);
+      near('8: due south bearing = π', s.bearingRad, Math.PI, 1e-9);
+      near('8: due west bearing = 3π/2 (normalized, never negative)', w.bearingRad, 3 * Math.PI / 2, 1e-9);
+      let inRange = true;
+      for (let dl = -1; dl <= 1; dl += 0.05) for (let dn = -1; dn <= 1; dn += 0.05) {
+        const r = b(dn, dl).bearingRad;
+        if (!(r >= 0 && r < TWO_PI)) inRange = false;
+      }
+      ok('8: bearing always in [0, 2π)', inRange);
+      ok('8: zero offset → distance 0', b(0, 0).distNm === 0);
+      // City pair sanity vs the true great-circle distance (LAX → Long Beach).
+      const city = F.flightBearingDistance(33.9425, -118.408, 33.8177, -118.1516);
+      const TRUE_NM = 14.8151;   // haversine, R = 6371 km
+      ok('8: LAX→LGB distance within 2% of great-circle',
+        Math.abs(city.distNm - TRUE_NM) / TRUE_NM < 0.02, `got ${city.distNm.toFixed(3)} nm`);
+      near('8: LAX→LGB bearing ≈ 120.4° (SE)', city.bearingRad * 180 / Math.PI, 120.4, 0.5);
+    }
+
+    // ── 6. flightDisplayPos ─────────────────────────────────────────────────
+    {
+      const OLAT = 47.6, OLON = -122.3;
+      const fp = (dlat, dlon, alt) => ({ lat: OLAT + dlat, lon: OLON + dlon, altFt: alt });
+      const north = F.flightDisplayPos(fp(0.1, 0, 10000), OLAT, OLON, 0, 30);
+      ok('9: θ=0 north aircraft → planY > 0', north.planY > 0, `planY=${north.planY.toFixed(1)}`);
+      near('9: θ=0 north aircraft → planX ≈ 0', north.planX, 0, 1e-6);
+      near('9: radius matches compressRadiusMm', Math.hypot(north.planX, north.planY),
+        F.compressRadiusMm(north.distNm, 30), 1e-6);
+      near('9: dispY matches compressAltitudeMm', north.dispY, F.compressAltitudeMm(10000), 1e-9);
+      near('9: distNm echoed from flightBearingDistance', north.distNm, 6.00405, 0.001);
+      near('9: bearingRad echoed', north.bearingRad, 0, 1e-9);
+
+      const rot = F.flightDisplayPos(fp(0.1, 0, 10000), OLAT, OLON, Math.PI / 2, 30);
+      near('9: θ=π/2 rotates north aircraft onto −X', rot.planX, -Math.hypot(north.planX, north.planY), 1e-6);
+      near('9: θ=π/2 leaves planY ≈ 0', rot.planY, 0, 1e-6);
+      near('9: rotation preserves radius', Math.hypot(rot.planX, rot.planY),
+        Math.hypot(north.planX, north.planY), 1e-6);
+
+      const east = F.flightDisplayPos(fp(0, 0.1, 10000), OLAT, OLON, 0, 30);
+      ok('9: θ=0 east aircraft → planX > 0 and planY ≈ 0',
+        east.planX > 0 && Math.abs(east.planY) < 1e-6);
+      const far = F.flightDisplayPos(fp(0.4, 0, 10000), OLAT, OLON, 0, 30);
+      ok('9: farther aircraft renders farther out', far.planY > north.planY);
+      ok('9: nothing escapes the shell', Math.hypot(far.planX, far.planY) < F.FLIGHT_SHELL.rMaxMm);
+      // The whole real fixture, projected: no NaN, everything inside the shell.
+      const cloud = F.normalizeAircraftList(LAX);
+      let clean = true;
+      for (const a of cloud) {
+        const p = F.flightDisplayPos(a, 33.9425, -118.408, 0.3, 25);
+        if (!Number.isFinite(p.planX) || !Number.isFinite(p.planY) || !Number.isFinite(p.dispY)) clean = false;
+        if (Math.hypot(p.planX, p.planY) >= F.FLIGHT_SHELL.rMaxMm) clean = false;
+        if (p.dispY < F.FLIGHT_SHELL.yMinMm || p.dispY > F.FLIGHT_SHELL.yMaxMm) clean = false;
+      }
+      ok('9: all 44 real aircraft project finite + inside the shell', clean);
+    }
+
+    // ── 7. satAltAz goldens ─────────────────────────────────────────────────
+    {
+      const overhead = SA.satAltAz(47.6, -122.3, 47.6, -122.3, 420);
+      near('10: satellite directly overhead → alt = π/2', overhead.altRad, Math.PI / 2, 1e-9);
+      const anti = SA.satAltAz(47.6, -122.3, -47.6, 57.7, 420);
+      ok('10: antipodal satellite → alt < 0', anti.altRad < 0, `alt=${anti.altRad.toFixed(3)}`);
+      near('10: antipodal alt ≈ −π/2', anti.altRad, -Math.PI / 2, 0.01);
+      const eastSat = SA.satAltAz(0, 0, 0, 5, 420);
+      near('10: equator satellite due east → az = π/2', eastSat.azRad, Math.PI / 2, 1e-9);
+      ok('10: equator satellite 5° east is above the horizon', eastSat.altRad > 0,
+        `alt=${(eastSat.altRad * 180 / Math.PI).toFixed(1)}°`);
+      const westSat = SA.satAltAz(0, 0, 0, -5, 420);
+      near('10: equator satellite due west → az = 3π/2', westSat.azRad, 3 * Math.PI / 2, 1e-9);
+      near('10: east/west symmetry in altitude', eastSat.altRad, westSat.altRad, 1e-12);
+      const northSat = SA.satAltAz(0, 0, 5, 0, 420);
+      near('10: satellite due north → az = 0', northSat.azRad, 0, 1e-9);
+      const southSat = SA.satAltAz(0, 0, -5, 0, 420);
+      near('10: satellite due south → az = π', southSat.azRad, Math.PI, 1e-9);
+      const pole = SA.satAltAz(89.9, 0, 80, 0, 420);
+      near('10: observer near the pole, satellite down lon 0 → az = π', pole.azRad, Math.PI, 1e-6);
+      let ranged = true;
+      for (let la = -80; la <= 80; la += 17) for (let lo = -180; lo < 180; lo += 23) {
+        const r = SA.satAltAz(47.6, -122.3, la, lo, 420);
+        if (!(r.azRad >= 0 && r.azRad < TWO_PI)) ranged = false;
+        if (!(r.altRad >= -Math.PI / 2 - 1e-9 && r.altRad <= Math.PI / 2 + 1e-9)) ranged = false;
+      }
+      ok('10: az in [0,2π) and alt in [−π/2, π/2] across the globe', ranged);
+      ok('10: higher orbit raises a horizon-grazing satellite',
+        SA.satAltAz(0, 0, 0, 20, 2000).altRad > SA.satAltAz(0, 0, 0, 20, 420).altRad);
+      ok('10: deterministic (same input, same output)',
+        JSON.stringify(SA.satAltAz(12, 34, 56, 78, 420)) === JSON.stringify(SA.satAltAz(12, 34, 56, 78, 420)));
+    }
+
+    // ── 8. Planner wiring (real Planner + fake HaApi + stubbed fetch) ────────
+    {
+      // Stubbed network. `handler(url)` returns a JSON value, or null → !ok.
+      // `calls` records ONLY flight/ISS traffic — the Planner also polls
+      // Open-Meteo for the weather config these scenarios use as the origin
+      // fallback, and that noise must not count as a flight fetch.
+      const isFlightUrl = u =>
+        u.includes('airplanes.live') || u.includes('wheretheiss') || u.includes('aircraft.json');
+      const calls = [];
+      let handler = () => null;
+      const realFetch = globalThis.fetch;
+      globalThis.fetch = async (url, init) => {
+        const u = String(url);
+        if (u.includes('/fixtures/') || u.includes('.mod.js')) return realFetch(url, init);
+        if (isFlightUrl(u)) calls.push(u);
+        const body = handler(u);
+        if (body == null) return { ok: false, status: 503, json: async () => { throw new Error('no body'); } };
+        return { ok: true, status: 200, json: async () => body };
+      };
+      const aircraftCalls = () => calls.filter(u => !u.includes('wheretheiss'));
+      const issCalls = () => calls.filter(u => u.includes('wheretheiss'));
+
+      class FakeHa {
+        constructor(seed, states) {
+          this.map = new Map();
+          for (const [k, v] of Object.entries(seed || {})) this.map.set(k, clone(v));
+          this.states = states || {};
+          this._stateCbs = []; this._connCbs = [];
+        }
+        connect() {
+          for (const cb of this._connCbs) cb('connected');
+          for (const cb of this._stateCbs) cb(this.states, undefined);
+        }
+        push(id, st) {
+          this.states[id] = st;
+          for (const cb of this._stateCbs) cb(this.states, id);
+        }
+        onState(fn) { this._stateCbs.push(fn); }
+        onConn(fn) { this._connCbs.push(fn); }
+        callService() { return Promise.resolve(); }
+        async getHistory() { return {}; }
+        async getWeatherForecasts() { return null; }
+        async getDevices() { return []; }
+        async getEntityRegistry() { return []; }
+        async updateEntityRegistry() { return true; }
+        async getCalendarEvents() { return []; }
+        async subscribePersistentNotifications() { return () => {}; }
+        async listRepairsIssues() { return []; }
+        async subscribeMqtt() { return () => {}; }
+        async publishMqtt() { return true; }
+        async getUserData(key) { return this.map.has(key) ? clone(this.map.get(key)) : null; }
+        async setUserData(key, value) { this.map.set(key, clone(value)); return true; }
+        async refreshStates() {}
+        peek(key) { return this.map.has(key) ? clone(this.map.get(key)) : null; }
+      }
+
+      const makeStore = extra => ({
+        v: 2,
+        floors: [{
+          id: 'f1', name: 'Home', w: 8000, d: 6000,
+          walls: [], furniture: [], lights: [], switches: [], sensors: [], motionSensors: [],
+          roamers: [], envSensors: [], doors: [], windows: [], bg: null, rooms: [], bleProxies: [],
+          alarmPanels: [], safetySensors: [], robots: [], presenceZones: [], cameras: [],
+          groundAreas: [], voidAreas: [],
+        }],
+        currentFloorId: 'f1', activeSensorId: null,
+        coverage: true, imperial: false, showDetails: false, useRawTargets: false,
+        ...extra,
+      });
+
+      const HOME = { lat: 47.6, lon: -122.3 };
+      const WEATHER = { source: 'openmeteo', lat: HOME.lat, lon: HOME.lon, chip: true };
+      const seedFor = store => ({
+        'diorama-configs': { version: 1, activeId: 'default', configs: [{ id: 'default', name: 'Default', updatedAt: 1 }] },
+        'diorama-cfg-default': store,
+      });
+
+      async function boot(store, states) {
+        localStorage.removeItem('diorama:store:v1');
+        localStorage.removeItem('diorama:configs');
+        const stub = new FakeHa(seedFor(store), states);
+        const p = new Planner();
+        p.connectWith(stub);
+        await waitFor(() => p.configIndex !== null);
+        return { p, stub };
+      }
+      // Stop a scenario's timers so virtual time can't spin them during later ones.
+      const quiesce = p => { p.setFlights(f => { f.enabled = false; }); };
+
+      // Build a synthetic cloud payload of n aircraft, ringed outward from home.
+      function ring(n, { startNm = 1, stepNm = 0.4, alt = 10000 } = {}) {
+        const ac = [];
+        for (let i = 0; i < n; i++) {
+          const nm = startNm + i * stepNm;
+          const dlat = (nm * 1852) / (6371000 * Math.PI / 180);   // due north
+          ac.push({
+            hex: 'f' + String(i).padStart(5, '0'), flight: 'TST' + i + '   ',
+            lat: HOME.lat + dlat, lon: HOME.lon,
+            alt_baro: typeof alt === 'function' ? alt(i) : alt,
+            gs: 300, track: 180, category: 'A3', seen_pos: 0.5,
+          });
+        }
+        return { ac, now: 1, total: n };
+      }
+
+      // (a) enabled + cloud + origin → poll lands, rev bumps, status ok.
+      {
+        calls.length = 0;
+        handler = u => u.includes('wheretheiss')
+          ? { latitude: -16.7, longitude: 90.1, altitude: 418.9, velocity: 27586.1, timestamp: 1784953269 }
+          : ring(3);
+        const { p } = await boot(makeStore({
+          weather: WEATHER, flights: { enabled: true, source: 'cloud', radiusNm: 30 },
+        }));
+        await waitFor(() => p.flightsStatus === 'ok' && (p.flightsNow?.length ?? 0) === 3);
+        ok('11a: status ok after a successful poll', p.flightsStatus === 'ok', p.flightsStatus);
+        ok('11a: aircraft stored', (p.flightsNow?.length ?? 0) === 3, `n=${p.flightsNow?.length}`);
+        ok('11a: flightsAt stamped', p.flightsAt > 0);
+        // A NEW aircraft list on a later poll must bump the revision (the
+        // renderer's only "something changed" signal). The poll is driven
+        // directly — the 8 s interval outlives the harness's virtual clock.
+        const rev0 = p.flightsRev;
+        handler = u => u.includes('wheretheiss')
+          ? { latitude: -16.7, longitude: 90.1, altitude: 418.9, velocity: 27586.1, timestamp: 1784953269 }
+          : ring(7);
+        await p._pollFlights();
+        ok('11a: a later poll replaces the list', (p.flightsNow?.length ?? 0) === 7, `n=${p.flightsNow?.length}`);
+        ok('11a: flightsRev bumped on new data', p.flightsRev > rev0, `${rev0}→${p.flightsRev}`);
+        ok('11a: distNm filled from the origin', p.flightsNow.every(a => Number.isFinite(a.distNm)));
+        ok('11a: cloud endpoint hit with the configured point + radius',
+          aircraftCalls().some(u => u.includes('/v2/point/47.6000/-122.3000/30')), aircraftCalls()[0] || '');
+        ok('11a: flightsOrigin falls back to weather lat/lon',
+          JSON.stringify(p.flightsOrigin()) === JSON.stringify(HOME), JSON.stringify(p.flightsOrigin()));
+        await waitFor(() => p.issNow !== null);
+        ok('11a: ISS polled alongside', p.issNow !== null);
+        near('11a: ISS velocity normalized km/h → km/s', p.issNow?.velKmS ?? 0, 7.6628, 0.001);
+        near('11a: ISS timestamp normalized s → ms', p.issNow?.tsMs ?? 0, 1784953269000, 0.5);
+        near('11a: ISS altitude km passed through', p.issNow?.altKm ?? 0, 418.9, 1e-9);
+        quiesce(p);
+      }
+
+      // (b) disabled → completely inert, no fetch at all.
+      {
+        calls.length = 0;
+        handler = () => ring(3);
+        const { p } = await boot(makeStore({ weather: WEATHER, flights: { enabled: false, source: 'cloud' } }));
+        await sleep(120);
+        ok('11b: disabled → status off', p.flightsStatus === 'off', p.flightsStatus);
+        ok('11b: disabled → no aircraft data', p.flightsNow === null);
+        ok('11b: disabled → no ISS data', p.issNow === null);
+        ok('11b: disabled → ZERO network calls', calls.length === 0, `calls=${calls.length}`);
+        quiesce(p);
+      }
+
+      // (c) absent flights config → equally inert.
+      {
+        calls.length = 0;
+        handler = () => ring(3);
+        const { p } = await boot(makeStore({ weather: WEATHER }));
+        await sleep(120);
+        ok('11c: absent config → status off + no calls', p.flightsStatus === 'off' && calls.length === 0,
+          `${p.flightsStatus} calls=${calls.length}`);
+        quiesce(p);
+      }
+
+      // (d) enabled but no resolvable origin → 'no-origin', still no fetch.
+      {
+        calls.length = 0;
+        handler = () => ring(3);
+        const { p } = await boot(makeStore({ flights: { enabled: true, source: 'cloud' } }));
+        await waitFor(() => p.flightsStatus === 'no-origin');
+        ok('11d: no origin → status no-origin', p.flightsStatus === 'no-origin', p.flightsStatus);
+        ok('11d: no origin → no data', p.flightsNow === null && p.issNow === null);
+        ok('11d: no origin → no network calls', calls.length === 0, `calls=${calls.length}`);
+        ok('11d: flightsOrigin() === null', p.flightsOrigin() === null);
+        quiesce(p);
+      }
+
+      // (e) a calibrated geo landmark WINS over the weather lat/lon.
+      {
+        calls.length = 0;
+        handler = () => ring(1);
+        const { p } = await boot(makeStore({
+          weather: WEATHER,
+          geo: { landmarks: [{ id: 'l1', name: 'Mailbox', x: 1000, y: 2000, lat: 40.5, lon: -74.25 }] },
+          flights: { enabled: true, source: 'cloud', iss: false },
+        }));
+        await waitFor(() => p.flightsStatus === 'ok');
+        const o = p.flightsOrigin();
+        ok('11e: geo fit origin beats weather lat/lon',
+          o && Math.abs(o.lat - 40.5) < 1e-9 && Math.abs(o.lon + 74.25) < 1e-9, JSON.stringify(o));
+        ok('11e: cloud query uses the landmark point',
+          aircraftCalls().some(u => u.includes('/40.5000/-74.2500/')), aircraftCalls()[0] || '');
+        ok('11e: iss:false → no ISS poll', issCalls().length === 0, `iss calls=${issCalls().length}`);
+        quiesce(p);
+      }
+
+      // (f) radius + altitude filters, nearest-first ordering, MAX_AIRCRAFT cap.
+      {
+        calls.length = 0;
+        // 80 aircraft from 1 nm outward in 0.2 nm steps → all inside 20 nm, so
+        // the cap (not the radius) is what trims the list.
+        handler = () => ring(80, { startNm: 1, stepNm: 0.2 });
+        const { p } = await boot(makeStore({
+          weather: WEATHER, flights: { enabled: true, source: 'cloud', radiusNm: 20, iss: false },
+        }));
+        await waitFor(() => (p.flightsNow?.length ?? 0) > 0);
+        const list = p.flightsNow;
+        ok('11f: radius filter applied (all ≤ 20 nm)', list.every(a => a.distNm <= 20 + 1e-6));
+        ok('11f: capped at MAX_AIRCRAFT', list.length === F.MAX_AIRCRAFT, `n=${list.length}`);
+        let sorted = true;
+        for (let i = 1; i < list.length; i++) if (list[i].distNm < list[i - 1].distNm - 1e-9) sorted = false;
+        ok('11f: sorted nearest-first', sorted);
+        ok('11f: cap keeps the NEAREST 50, dropping the 30 farther ones',
+          list[0].hex === 'f00000' && list[list.length - 1].distNm < 11,
+          `first=${list[0].hex} lastDist=${list[list.length - 1].distNm.toFixed(2)} nm`);
+        quiesce(p);
+      }
+      {
+        calls.length = 0;
+        handler = () => ring(9, { startNm: 1, stepNm: 0.5, alt: i => 500 + i * 2500 });
+        const { p } = await boot(makeStore({
+          weather: WEATHER,
+          flights: { enabled: true, source: 'cloud', radiusNm: 50, minAltFt: 3000, maxAltFt: 15000, iss: false },
+        }));
+        await waitFor(() => p.flightsStatus === 'ok');
+        const alts = (p.flightsNow ?? []).map(a => a.altFt);
+        ok('11f: minAltFt filter applied', alts.every(a => a >= 3000), JSON.stringify(alts));
+        ok('11f: maxAltFt filter applied', alts.every(a => a <= 15000));
+        ok('11f: altitude band keeps the in-band entries', alts.length === 5, `n=${alts.length}`);
+        quiesce(p);
+      }
+
+      // (g) a failed fetch KEEPS the last data (stale-tolerant).
+      {
+        calls.length = 0;
+        handler = () => ring(4);
+        const { p } = await boot(makeStore({
+          weather: WEATHER, flights: { enabled: true, source: 'cloud', radiusNm: 30, iss: false },
+        }));
+        await waitFor(() => (p.flightsNow?.length ?? 0) === 4);
+        const keptRev = p.flightsRev;
+        handler = () => null;                       // every fetch now fails
+        const before = calls.length;
+        await p._pollFlights();
+        await p._pollFlights();
+        ok('11g: the failing polls really ran', calls.length > before, `${before}→${calls.length}`);
+        ok('11g: failed poll keeps the previous aircraft', (p.flightsNow?.length ?? 0) === 4,
+          `n=${p.flightsNow?.length}`);
+        ok('11g: failed poll keeps status ok (data still valid)', p.flightsStatus === 'ok', p.flightsStatus);
+        ok('11g: failed poll does not bump the revision', p.flightsRev === keptRev);
+        quiesce(p);
+      }
+
+      // (h) a failing FIRST poll with nothing cached → status 'error'.
+      {
+        calls.length = 0;
+        handler = () => null;
+        const { p } = await boot(makeStore({
+          weather: WEATHER, flights: { enabled: true, source: 'cloud', radiusNm: 30, iss: false },
+        }));
+        await waitFor(() => p.flightsStatus === 'error');
+        ok('11h: no data + failed fetch → status error', p.flightsStatus === 'error', p.flightsStatus);
+        ok('11h: flightsNow stays null', p.flightsNow === null);
+        quiesce(p);
+      }
+
+      // (i) local source fetches the configured URL verbatim; a bad scheme never fetches.
+      {
+        calls.length = 0;
+        handler = () => LOCAL;
+        const { p } = await boot(makeStore({
+          weather: WEATHER,
+          flights: { enabled: true, source: 'local', localUrl: 'http://pi.local:8080/data/aircraft.json',
+                     radiusNm: 100, iss: false },
+        }));
+        await waitFor(() => p.flightsStatus === 'ok');
+        ok('11i: local URL used verbatim',
+          calls.some(u => u === 'http://pi.local:8080/data/aircraft.json'), calls[0] || '');
+        ok('11i: local {aircraft:[…]} parsed + filtered', (p.flightsNow?.length ?? 0) > 0,
+          `n=${p.flightsNow?.length}`);
+        quiesce(p);
+      }
+      {
+        calls.length = 0;
+        handler = () => LOCAL;
+        const { p } = await boot(makeStore({
+          weather: WEATHER,
+          flights: { enabled: true, source: 'local', localUrl: 'javascript:alert(1)', iss: false },
+        }));
+        await sleep(150);
+        ok('11i: non-http(s) localUrl is never fetched', calls.length === 0, `calls=${calls.length}`);
+        quiesce(p);
+      }
+
+      // (j) entity source: no polling timer, reads attributes on state change.
+      {
+        calls.length = 0;
+        handler = () => ring(3);
+        const states = { 'sensor.adsb_proxy': { state: '0', attributes: { aircraft: [] } } };
+        const { p, stub } = await boot(makeStore({
+          weather: WEATHER,
+          flights: { enabled: true, source: 'entity', entityId: 'sensor.adsb_proxy', radiusNm: 100, iss: false },
+        }), states);
+        await sleep(120);
+        ok('11j: entity source makes NO network calls', calls.length === 0, `calls=${calls.length}`);
+        stub.push('sensor.adsb_proxy', { state: '5', attributes: { aircraft: LOCAL.aircraft } });
+        await waitFor(() => (p.flightsNow?.length ?? 0) === 5);
+        ok('11j: attributes.aircraft consumed on state change', (p.flightsNow?.length ?? 0) === 5,
+          `n=${p.flightsNow?.length}`);
+        ok('11j: status ok', p.flightsStatus === 'ok', p.flightsStatus);
+        stub.push('sensor.adsb_proxy', { state: '2', attributes: { ac: LOCAL.aircraft.slice(0, 1) } });
+        await waitFor(() => (p.flightsNow?.length ?? 0) === 1);
+        ok('11j: `ac` attribute shape also consumed', (p.flightsNow?.length ?? 0) === 1);
+        ok('11j: bound entity id is config-path', p._isSlowEntity('sensor.adsb_proxy') === true);
+        ok('11j: an unrelated entity is NOT config-path via flights',
+          p._isSlowEntity('sensor.something_else') === false);
+        quiesce(p);
+      }
+
+      // (k) setFlights persists + reconfigures; store survives a reload.
+      {
+        calls.length = 0;
+        handler = () => ring(2);
+        const { p, stub } = await boot(makeStore({ weather: WEATHER }));
+        ok('11k: starts off', p.flightsStatus === 'off');
+        p.setFlights(f => { f.enabled = true; f.source = 'cloud'; f.radiusNm = 42; f.iss = false; });
+        await waitFor(() => p.flightsStatus === 'ok');
+        ok('11k: setFlights starts the feed', p.flightsStatus === 'ok', p.flightsStatus);
+        ok('11k: setFlights created the config object',
+          p.store.flights?.enabled === true && p.store.flights?.radiusNm === 42);
+        await p.saveConfigNow();
+        const saved = stub.peek('diorama-cfg-default');
+        ok('11k: flights config written to HA storage',
+          saved?.flights?.enabled === true && saved?.flights?.radiusNm === 42,
+          JSON.stringify(saved?.flights));
+        quiesce(p);
+
+        // Reload from the same backing store — the _normalizeStore field list.
+        const p2 = new Planner();
+        p2.connectWith(stub);
+        await waitFor(() => p2.configIndex !== null && p2.store.flights !== undefined);
+        ok('11k: flights survives the load (in _normalizeStore field list)',
+          p2.store.flights?.enabled === true && p2.store.flights?.radiusNm === 42,
+          JSON.stringify(p2.store.flights));
+        quiesce(p2);
+      }
+
+      // (l) toggling back off tears the feed down.
+      {
+        calls.length = 0;
+        handler = u => u.includes('wheretheiss')
+          ? { latitude: 1, longitude: 2, altitude: 420, velocity: 27000, timestamp: 1784953270 }
+          : ring(2);
+        const { p } = await boot(makeStore({
+          weather: WEATHER, flights: { enabled: true, source: 'cloud', radiusNm: 30 },
+        }));
+        await waitFor(() => p.flightsStatus === 'ok' && p.issNow !== null);
+        p.setFlights(f => { f.enabled = false; });
+        ok('11l: disabling clears aircraft data', p.flightsNow === null);
+        ok('11l: disabling clears the ISS fix', p.issNow === null);
+        ok('11l: disabling sets status off', p.flightsStatus === 'off', p.flightsStatus);
+        const after = calls.length;
+        await sleep(150);
+        ok('11l: no further network calls once disabled', calls.length === after,
+          `${after}→${calls.length}`);
+      }
+
+      globalThis.fetch = realFetch;
+    }
+  } catch (err) {
+    ok('HARNESS threw', false, String(err && err.stack || err));
+  }
+
+  // ── Report ────────────────────────────────────────────────────────────────
+  const pass = results.filter(r => r.pass).length;
+  const total = results.length;
+  const bad = results.filter(r => !r.pass);
+  document.title = `FLIGHTS ${bad.length ? 'FAIL' : 'PASS'} ${pass}/${total}`
+    + (bad.length ? ' :: ' + bad.slice(0, 6).map(r => r.name).join(' | ') : '');
+  const sum = document.getElementById('summary');
+  sum.textContent = document.title;
+  sum.className = bad.length ? 'badbg' : 'okbg';
+  document.getElementById('rows').innerHTML = results.map(r =>
+    `<div class="row"><span class="name">${r.name}</span>` +
+    `<span class="${r.pass ? 'pass' : 'fail'}">${r.pass ? 'PASS' : 'FAIL'} ` +
+    `<span class="extra">${r.extra}</span></span></div>`).join('');
+</script>

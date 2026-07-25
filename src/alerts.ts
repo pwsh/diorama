@@ -15,7 +15,10 @@ import type { AlertsConfig } from './types.js';
 // from text); system_log uses Python log levels. This 4-level ladder is the
 // lowest-common-denominator the badge coloring uses — it is APPROXIMATE.
 export type AlertSeverity = 'info' | 'warning' | 'error' | 'critical';
-export type AlertSource = 'notification' | 'repair' | 'system';
+// 'flight' alerts are CLIENT-LOCAL (roadmap P4): the Planner builds them from
+// its own polled aircraft/ISS data — there is no HA-side source to collect or
+// filter, so they arrive at buildAlertFeed already-built via the `extra` param.
+export type AlertSource = 'notification' | 'repair' | 'system' | 'flight';
 
 export const SEVERITY_RANK: Record<AlertSeverity, number> = {
   info: 0, warning: 1, error: 2, critical: 3,
@@ -114,10 +117,18 @@ function severityFloor(cfg?: AlertsConfig): AlertSeverity {
 // Build the merged, filtered, sorted alert feed. Per-source toggles (default ON
 // for notifications + repairs), severity floor applied to repairs (§4.1). Newest
 // + most-severe first. Deterministic — no Date/Math.random.
+//
+// `extra` (optional, back-compatible) carries ALREADY-BUILT client-local alerts —
+// today only the flight/ISS notices the Planner computes from its own polled
+// data. They are appended VERBATIM: the per-source toggles and the Repairs
+// severity floor are HA-source policy and deliberately do NOT apply to them (the
+// caller owns their whole lifecycle, including dismissal). They still take part
+// in the shared sort.
 export function buildAlertFeed(
   notifications: HaNotification[],
   repairs: RepairIssue[],
   cfg?: AlertsConfig,
+  extra?: PanelAlert[],
 ): PanelAlert[] {
   const out: PanelAlert[] = [];
   if (cfg?.showPersistentNotifications !== false) {
@@ -155,6 +166,7 @@ export function buildAlertFeed(
       });
     }
   }
+  if (extra) for (const a of extra) out.push(a);
   out.sort((a, b) => {
     const d = severityRank(b.severity) - severityRank(a.severity);
     if (d !== 0) return d;

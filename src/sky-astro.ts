@@ -288,6 +288,47 @@ export function moonAltAz(ms: number, latRad: number, lonRad: number):
   return raDecToAltAz(raRad, decRad, latRad, lstRad(ms, lonRad));
 }
 
+// ── Earth satellites ──────────────────────────────────────────────────────
+// Horizontal coordinates of a satellite whose GEOGRAPHIC sub-point + altitude
+// are already known (the wheretheiss.at ISS feed shape) — no propagation, no
+// epoch: this is pure geometry on a spherical Earth. Observer and satellite are
+// placed in ECEF (R = 6371 km for the observer, R + altKm for the satellite),
+// and the difference vector is rotated into the observer's ENU frame.
+//
+// Returns the SAME convention as raDecToAltAz: altRad above the horizon (+up)
+// and azRad CLOCKWISE from true north, so both feed the renderer's geo-θ
+// rotation identically. A satellite below the observer's horizon returns a
+// negative altRad (the caller decides whether to draw it).
+const SAT_EARTH_R_KM = 6371;
+
+export function satAltAz(
+  obsLatDeg: number, obsLonDeg: number,
+  satLatDeg: number, satLonDeg: number, satAltKm: number,
+): { altRad: number; azRad: number } {
+  const oLat = obsLatDeg * DEG, oLon = obsLonDeg * DEG;
+  const sLat = satLatDeg * DEG, sLon = satLonDeg * DEG;
+  const rs = SAT_EARTH_R_KM + (isFinite(satAltKm) ? satAltKm : 0);
+
+  // ECEF (km).
+  const ox = SAT_EARTH_R_KM * Math.cos(oLat) * Math.cos(oLon);
+  const oy = SAT_EARTH_R_KM * Math.cos(oLat) * Math.sin(oLon);
+  const oz = SAT_EARTH_R_KM * Math.sin(oLat);
+  const dx = rs * Math.cos(sLat) * Math.cos(sLon) - ox;
+  const dy = rs * Math.cos(sLat) * Math.sin(sLon) - oy;
+  const dz = rs * Math.sin(sLat) - oz;
+
+  // Observer ENU basis.
+  const up = Math.cos(oLat) * Math.cos(oLon) * dx + Math.cos(oLat) * Math.sin(oLon) * dy
+    + Math.sin(oLat) * dz;
+  const east = -Math.sin(oLon) * dx + Math.cos(oLon) * dy;
+  const north = -Math.sin(oLat) * Math.cos(oLon) * dx - Math.sin(oLat) * Math.sin(oLon) * dy
+    + Math.cos(oLat) * dz;
+
+  const len = Math.hypot(dx, dy, dz);
+  const altRad = len > 0 ? Math.asin(Math.max(-1, Math.min(1, up / len))) : 0;
+  return { altRad, azRad: rev(Math.atan2(east, north)) };
+}
+
 // ── Snapshot ──────────────────────────────────────────────────────────────
 export const PLANETS = ['mercury', 'venus', 'mars', 'jupiter', 'saturn'] as const;
 

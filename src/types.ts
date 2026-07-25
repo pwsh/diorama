@@ -1214,6 +1214,43 @@ export interface NeighborhoodConfig {
                                         // neighborhood geometry intersecting one is clipped OUT
 }
 
+// ── Flight & satellite tracking (roadmap P4) ─────────────────────────────
+// Live aircraft overhead (ADS-B) + the ISS, rendered into the existing 3D sky
+// on a compressed, deliberately NOT-to-scale display shell (see src/flights.ts).
+// Store-level (property-wide), NOT per-floor. Opt-in like every other
+// network-calling Store field — absent or `enabled: false` makes the whole
+// feature inert (no fetch, no timer, no render). MUST be in
+// Planner._normalizeStore's explicit field list or it resets on every load.
+//
+// Sources (all three carry the same normalized shape through flights.ts):
+//   'cloud'  — airplanes.live direct browser fetch; the only keyless cloud ADS-B
+//              API that sends an open CORS header. Sends the configured lat/lon
+//              to a third party.
+//   'local'  — the user's own LAN receiver aircraft.json (dump1090-fa / readsb /
+//              tar1090 / ultrafeeder). Freshest + no third party, but the
+//              receiver needs a CORS header added and must not be plain http
+//              behind an https panel.
+//   'entity' — an HA rest/template sensor that fetched the data SERVER-side
+//              (no CORS at all); its attributes carry the aircraft array. The
+//              only way to use the CORS-blocked adsb.lol / adsb.fi feeds.
+export interface FlightsConfig {
+  enabled?: boolean;                      // absent/false = feature fully inert
+  source?: 'cloud' | 'local' | 'entity';  // default 'cloud' (airplanes.live)
+  localUrl?: string;                      // 'local' — the receiver's aircraft.json URL, used verbatim
+  entityId?: string;                      // 'entity' — HA sensor whose attributes hold the aircraft array
+  radiusNm?: number;                      // search + display radius; default 30, clamp 5..100
+  pollSeconds?: number;                   // default 8, clamp 5..60 (under airplanes.live's 1 req/s)
+  minAltFt?: number;                      // optional altitude band filters
+  maxAltFt?: number;
+  showLabels?: boolean;                   // callsign labels in 3D; default true
+  iss?: boolean;                          // live ISS dot; default true (active only while `enabled`)
+  alerts?: {                              // low-overflight / watch-list / ISS-pass notices
+    lowAltFt?: number;
+    watch?: string[];                     // callsign or hex fragments
+    issPass?: boolean;
+  };
+}
+
 // ── MQTT bridge (Phase 5) ────────────────────────────────────────────────
 // Direct-MQTT bridge config (Frigate ground-truth targets + Valetudo maps).
 // `mode` is the enabled bit + transport choice — safe to SYNC. Broker
@@ -1266,6 +1303,7 @@ export interface Store {
   geo?: GeoConfig;                   // landmarks + lat/lon↔plan calibration (Feature G)
   mqttBridge?: MqttBridgeConfig;     // direct-MQTT bridge (Phase 5) — secrets stay in localStorage
   neighborhood?: NeighborhoodConfig; // OpenFreeMap neighborhood overlay (buildings/roads/water/landuse)
+  flights?: FlightsConfig;           // live aircraft (ADS-B) + ISS sky overlay (roadmap P4)
 
   avatarPacks?: Record<string, AvatarPackConfig>;   // per-pack loaded/active/members (avatar packs)
   notes?: string;                    // free-text description of this configuration; shown in Settings ▸ Data; rides export/import
@@ -1384,6 +1422,7 @@ export interface Layers2D {
   heatmap?: boolean;    // per-room temperature heat-map (2D fill + label, 3D patches); default OFF (opt-in analysis view)
   dimensions?: boolean; // rulers + wall/structure dimension lines (2D); default ON
   neighborhood?: boolean; // OpenFreeMap neighborhood overlay (3D buildings this wave); default ON — but the FEATURE is opt-in via neighborhood.enabled, so this leaks nothing on its own
+  flights?: boolean;      // live aircraft + ISS sky overlay; default ON — but the FEATURE is opt-in via flights.enabled, so this leaks nothing on its own
 }
 
 export interface Layer2DPreset {

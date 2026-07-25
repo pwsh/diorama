@@ -1,0 +1,369 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>FLIGHTSRENDER …</title>
+<style>
+  html,body{margin:0;background:#0b0f14;color:#cfd8dc;font:13px/1.4 sans-serif}
+  #c{width:1000px;height:640px}
+  #log{position:fixed;right:8px;top:8px;width:430px;max-height:96vh;overflow:auto;
+       background:#111820;border:1px solid #263340;border-radius:6px;padding:8px 10px;font-size:11px}
+  .pass{color:#69f0ae}.fail{color:#ff5252}.hd{font-weight:bold;margin:2px 0 6px}
+</style>
+<div id="c"></div>
+<div id="log"></div>
+<script type="module">
+  // Renderer harness: live aircraft (ADS-B) + ISS sky overlay — roadmap P4 wave 2.
+  // The whole body is SYNCHRONOUS after the imports + load()/updateFloor, so the
+  // renderer's own _animate RAF never interleaves — every read reflects only the
+  // manual updateFlights / updateIss / _advanceFlights calls below. Imports the
+  // BUILT renderer chunk (which bundles THREE); the page itself never imports
+  // THREE (Vector3s are obtained by cloning renderer-owned ones).
+  //
+  // Build (flights.ts is genuinely zero-import → plain transpile; sky-astro.ts
+  // pulls in sky-catalog.ts → bundle):
+  //   npm run build
+  //   npx esbuild src/flights.ts --format=esm --outfile=<harness>/flights.mod.js
+  //   npx esbuild src/sky-astro.ts --bundle --format=esm --outfile=<harness>/sky-astro.mod.js
+  //   mkdir -p /tmp/h && cp -r dist/* test-pages/* /tmp/h/ && cd /tmp/h && python3 -m http.server 8931
+  //   google-chrome --headless=new --virtual-time-budget=9000 --dump-dom \
+  //     "http://localhost:8931/flights-render-test.html?b=$RANDOM" | grep -o "<title>[^<]*</title>"
+  const V = '?v=' + Date.now();
+  const mod = await import('./assets/three-renderer.js' + V);
+  const F = await import('./flights.mod.js' + V);
+  const SA = await import('./sky-astro.mod.js' + V);
+
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+
+  const AFW = 10000, AFD = 8000;
+  r.updateFloor({
+    id: 'f1', name: 'T', w: AFW, d: AFD,
+    walls: [{ id: 'w', points: [{x:200,y:200},{x:9800,y:200},{x:9800,y:7800},{x:200,y:7800},{x:200,y:200}] }],
+    furniture: [], lights: [], switches: [], sensors: [], motionSensors: [],
+    envSensors: [], doors: [], windows: [], bg: null, model3d: null, look3d: null,
+  }, { preset: 'night', floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6' });
+
+  const tests = [];
+  const ok = (name, cond, detail) => tests.push({ name, ok: !!cond, detail: detail ?? '' });
+  const near = (name, got, want, tol, detail) =>
+    ok(name, Math.abs(got - want) <= tol, detail ?? `got ${got}, want ${want}±${tol}`);
+
+  // ── fixtures ───────────────────────────────────────────────────────────────
+  const OLAT = 40, OLON = -75;                 // home origin
+  const ORIGIN = { lat: OLAT, lon: OLON };
+  const RAD_NM = 30;
+  const ANCHOR = { x: 1500, z: -900 };         // deliberately NOT the floor centre
+  const FP = o => ({
+    hex: 'aaa001', callsign: null, lat: OLAT + 0.2, lon: OLON + 0.2, altFt: 10000,
+    gsKt: null, trackDeg: null, vertRateFpm: null, category: null, seenPosS: null,
+    military: false, ...o,
+  });
+  const upd = (list, opts = {}) => r.updateFlights(
+    list,
+    'origin' in opts ? opts.origin : ORIGIN,
+    opts.theta ?? 0, opts.radiusNm ?? RAD_NM,
+    opts.showLabels !== false,
+    opts.anchor ?? ANCHOR);
+  const step = (dt, n = 1) => { for (let i = 0; i < n; i++) r._advanceFlights(dt); };
+  const rig = hex => r._flightRigs.get(hex);
+  // Expected scene-RELATIVE offset for a fix: relative plan → scene flips dx,
+  // keeps dy (the _w mirror); y = the compressed display altitude.
+  const expectPos = (fp, theta = 0, radiusNm = RAD_NM) => {
+    const d = F.flightDisplayPos(fp, OLAT, OLON, theta, radiusNm);
+    return { x: -d.planX, y: d.dispY, z: d.planY };
+  };
+  const descendants = (o) => { const out = []; o.traverse(c => out.push(c)); return out; };
+  const geoTypes = (o, t) => descendants(o).filter(c => c.geometry && c.geometry.type === t).length;
+  const findUD = (o, key) => descendants(o).some(c => c.userData && c.userData[key]);
+  const sprites = o => descendants(o).filter(c => c.isSprite);
+  // Nose direction (local −Z) in world space, without importing THREE.
+  const noseDir = (asm) => {
+    const v = asm.position.clone();
+    asm.getWorldDirection(v);        // world +Z
+    return { x: -v.x, y: -v.y, z: -v.z };
+  };
+
+  // ── 1. rig lifecycle ───────────────────────────────────────────────────────
+  const A = FP({ hex: 'a1', category: 'A1', callsign: 'N123AB', trackDeg: 0, gsKt: 120 });
+  const B = FP({ hex: 'b2', category: 'A3', callsign: 'DAL42', lon: OLON + 0.3, trackDeg: 90, gsKt: 420 });
+  const C = FP({ hex: 'c3', category: 'A7', callsign: 'LIFE1', lat: OLAT + 0.1, trackDeg: 200, gsKt: 110 });
+  upd([A, B, C]);
+  ok('3 aircraft → 3 rigs', r._flightRigs.size === 3, `n=${r._flightRigs.size}`);
+  ok('3 rigs parented under _flightsGroup', r._flightsGroup.children.length === 3,
+     `n=${r._flightsGroup.children.length}`);
+  ok('_flightsGroup anchored at the home point',
+     r._flightsGroup.position.x === ANCHOR.x && r._flightsGroup.position.z === ANCHOR.z,
+     `${r._flightsGroup.position.x},${r._flightsGroup.position.z}`);
+
+  // Track the jet's per-rig label texture so disposal is provable.
+  const jetRig = rig('b2');
+  const jetTex = jetRig.label && jetRig.label.material.map;
+  let jetTexDisposals = 0;
+  if (jetTex) {
+    const orig = jetTex.dispose.bind(jetTex);
+    jetTex.dispose = () => { jetTexDisposals++; orig(); };
+  }
+  const jetAsm = jetRig.asm;
+
+  upd([A, C]);                                     // b2 vanished
+  ok('vanished hex marked dying, not yet removed',
+     r._flightRigs.size === 3 && rig('b2') && rig('b2').dying === true);
+  step(0.1, 3);
+  ok('mid-fade rig still present + shrinking',
+     r._flightRigs.size === 3 && rig('b2').fade < 1 && rig('b2').fade > 0,
+     `fade=${rig('b2') && rig('b2').fade}`);
+  step(0.1, 9);                                    // total > FLIGHT_FADE_S (0.8 s)
+  ok('faded rig disposed after >1 s', r._flightRigs.size === 2 && !rig('b2'),
+     `n=${r._flightRigs.size}`);
+  ok('faded rig detached from _flightsGroup',
+     r._flightsGroup.children.length === 2 && jetAsm.parent === null);
+  ok('per-rig label CanvasTexture freed on dispose', jetTexDisposals >= 1,
+     `disposals=${jetTexDisposals}`);
+
+  // Re-acquire mid-fade keeps the SAME rig (no rebuild).
+  upd([A, C]);
+  const cRigRef = rig('c3');
+  upd([A]);                                        // c3 vanishes
+  step(0.1, 2);
+  upd([A, C]);                                     // …and comes back
+  ok('re-acquired mid-fade revives the same rig',
+     rig('c3') === cRigRef && rig('c3').dying === false);
+  step(0.5, 3);
+  ok('revived rig ramps back to full scale', rig('c3').fade === 1, `fade=${rig('c3').fade}`);
+
+  // ── 2. model kinds ─────────────────────────────────────────────────────────
+  upd([]); step(1, 2);                              // clear the board
+  ok('empty list → all rigs disposed', r._flightRigs.size === 0);
+
+  upd([A, B, C]);
+  const rp = rig('a1'), rj = rig('b2'), rh = rig('c3');
+  ok('A1 → prop model', rp.kind === 'prop');
+  ok('A3 → jet model', rj.kind === 'jet');
+  ok('A7 → heli model', rh.kind === 'heli');
+  ok('no category → jet fallback',
+     mod.ThreeDRenderer && (() => { upd([A, B, C, FP({ hex: 'z9' })]);
+       const k = rig('z9').kind; upd([A, B, C]); step(1, 2); return k === 'jet'; })());
+  ok('prop rig has a spinning prop group', !!rp.prop && rp.propRate > 0);
+  ok('jet rig has NO prop', rj.prop === null && rj.propRate === 0);
+  ok('jet carries underwing engine pods (cylinders)', geoTypes(rj.asm, 'CylinderGeometry') >= 2,
+     `n=${geoTypes(rj.asm, 'CylinderGeometry')}`);
+  ok('prop carries no engine pods', geoTypes(rp.asm, 'CylinderGeometry') === 0);
+  ok('heli rig has main + tail rotor', !!rh.prop && !!rh.tailRotor);
+
+  const propZ0 = rp.prop.rotation.z, heliY0 = rh.prop.rotation.y, tailX0 = rh.tailRotor.rotation.x;
+  step(0.1, 3);
+  ok('prop spins about local Z', rp.prop.rotation.z !== propZ0);
+  ok('heli main rotor spins about Y', rh.prop.rotation.y !== heliY0);
+  ok('heli main rotor does NOT spin about Z', rh.prop.rotation.z === 0);
+  ok('heli tail rotor spins about X', rh.tailRotor.rotation.x !== tailX0);
+
+  // Military livery differs from civil (fuselage = the first mesh child).
+  upd([]); step(1, 2);
+  upd([FP({ hex: 'civ', category: 'A1' }), FP({ hex: 'mil', category: 'A1', military: true, lon: OLON + 0.05 })]);
+  const civC = rig('civ').asm.children[0].material.color.getHex();
+  const milC = rig('mil').asm.children[0].material.color.getHex();
+  ok('military tint differs from civil', civC !== milC, `civ=${civC.toString(16)} mil=${milC.toString(16)}`);
+  ok('military rig flagged', rig('mil').military === true && rig('civ').military === false);
+
+  // ── 3. banner vs sprite label ──────────────────────────────────────────────
+  upd([]); step(1, 2);
+  upd([A, B]);
+  ok('prop + callsign → towed banner', !!rig('a1').banner && findUD(rig('a1').banner, 'bannerFront'));
+  ok('prop + callsign → no sprite label', rig('a1').label === null);
+  ok('jet → camera-facing sprite label', !!rig('b2').label && rig('b2').label.isSprite === true);
+  ok('jet → no banner', rig('b2').banner === null);
+  upd([]); step(1, 2);
+  upd([FP({ hex: 'nc', category: 'A1', callsign: null })]);
+  ok('prop WITHOUT callsign → sprite label, no banner',
+     !!rig('nc').label && rig('nc').banner === null);
+  upd([]); step(1, 2);
+  upd([A, B], { showLabels: false });
+  ok('showLabels=false → no banner', rig('a1').banner === null);
+  ok('showLabels=false → no sprite label', rig('b2').label === null);
+  ok('showLabels=false → asm carries no sprites', sprites(rig('b2').asm).length === 0);
+  // Toggling labels back on restores them (and off again tears them down).
+  upd([A, B], { showLabels: true });
+  ok('labels re-enabled → banner + sprite rebuilt',
+     !!rig('a1').banner && !!rig('b2').label);
+
+  // ── 4. placement (anchor + relative offset) ────────────────────────────────
+  upd([]); step(1, 2);
+  const P4 = FP({ hex: 'p4', lat: OLAT + 0.15, lon: OLON - 0.22, altFt: 24000 });
+  upd([P4]);
+  const e4 = expectPos(P4);
+  const g4 = rig('p4').asm.position;
+  near('fresh rig snaps to display x', g4.x, e4.x, 1);
+  near('fresh rig snaps to display y (compressed altitude)', g4.y, e4.y, 1);
+  near('fresh rig snaps to display z', g4.z, e4.z, 1);
+  ok('display radius stays inside the shell',
+     Math.hypot(e4.x, e4.z) < F.FLIGHT_SHELL.rMaxMm, `r=${Math.round(Math.hypot(e4.x, e4.z))}`);
+  // Anchor change moves the whole shell, not the rigs' local offsets.
+  upd([P4], { anchor: { x: -2200, z: 3300 } });
+  ok('anchor shift moves _flightsGroup',
+     r._flightsGroup.position.x === -2200 && r._flightsGroup.position.z === 3300);
+  near('rig local offset unchanged by the anchor shift', rig('p4').asm.position.x, e4.x, 1);
+  upd([P4], { anchor: ANCHOR });
+
+  // _flightScenePos (the renderer's zero-alloc inline) must agree with the pure
+  // flightDisplayPos it mirrors — the whole point of single-sourcing the curves.
+  for (const [lat, lon, alt] of [[OLAT + 0.4, OLON + 0.05, 3000], [OLAT - 0.3, OLON - 0.5, 41000], [OLAT, OLON, 800]]) {
+    const want = expectPos(FP({ lat, lon, altFt: alt }));
+    const got = r._flightScenePos(lat, lon, alt, r._v3flight);
+    ok(`_flightScenePos == flightDisplayPos (${lat},${lon})`,
+       Math.abs(got.x - want.x) < 0.001 && Math.abs(got.y - want.y) < 0.001
+       && Math.abs(got.z - want.z) < 0.001,
+       `got ${got.x.toFixed(2)},${got.y.toFixed(2)},${got.z.toFixed(2)}`);
+  }
+
+  // ── 5. heading ─────────────────────────────────────────────────────────────
+  // track 0 (due north), θ=0 → geo unit (e,n)=(0,1) → plan (0,1) → scene velocity
+  // (−planX, +planY) = (0,+1): the aircraft flies toward scene +Z.
+  upd([]); step(1, 2);
+  upd([FP({ hex: 'h0', trackDeg: 0, gsKt: 300, lon: OLON + 0.1 })]);
+  step(0.05);
+  const n0 = noseDir(rig('h0').asm);
+  ok('north-bound (θ=0) nose points at scene +Z', n0.z > 0.999, `nose=(${n0.x.toFixed(3)},${n0.z.toFixed(3)})`);
+  near('north-bound yaw = π', rig('h0').yaw, Math.PI, 1e-6);
+  // θ = π/2 rotates plan-north onto plan −X → scene velocity (+1, 0).
+  upd([]); step(1, 2);
+  upd([FP({ hex: 'h9', trackDeg: 0, gsKt: 300, lon: OLON + 0.1 })], { theta: Math.PI / 2 });
+  step(0.05);
+  const n9 = noseDir(rig('h9').asm);
+  ok('θ=π/2 rotates the heading onto scene +X', n9.x > 0.999,
+     `nose=(${n9.x.toFixed(3)},${n9.z.toFixed(3)})`);
+  // Eased, not snapped: a settled rig turning 90° moves partway in one frame.
+  upd([]); step(1, 2);
+  const H = FP({ hex: 'hE', trackDeg: 0, gsKt: 300, lon: OLON + 0.1 });
+  upd([H]); step(0.05, 10);
+  const yawBefore = rig('hE').yaw;
+  upd([{ ...H, trackDeg: 90 }]);
+  step(0.05);
+  const yawAfter = rig('hE').yaw, yawWant = Math.atan2(1, 0);   // plan (1,0) → φ = atan2(px,−py)
+  ok('yaw eased toward the new track (moved)', Math.abs(yawAfter - yawBefore) > 1e-4);
+  ok('yaw eased toward the new track (not snapped)',
+     Math.abs(yawAfter - yawWant) > 0.5 * Math.abs(yawBefore - yawWant),
+     `before=${yawBefore.toFixed(3)} after=${yawAfter.toFixed(3)} want=${yawWant.toFixed(3)}`);
+
+  // ── 6. dead reckoning ──────────────────────────────────────────────────────
+  upd([]); step(1, 2);
+  const E = FP({ hex: 'dr', trackDeg: 90, gsKt: 300, lat: OLAT, lon: OLON + 0.1, altFt: 12000 });
+  upd([E]);
+  const lon0 = rig('dr').lon, radius0 = Math.hypot(rig('dr').asm.position.x, rig('dr').asm.position.z);
+  const curX0 = rig('dr').curX;
+  step(0.05, 40);                                   // 2 s
+  const dLon = rig('dr').lon - lon0;
+  // 300 kt = 154.33 m/s; 2 s → 308.7 m east → 308.7 / (111320·cos40°) deg.
+  const wantDLon = (300 * 1852 / 3600) * 2 / (111320 * Math.cos(OLAT * Math.PI / 180));
+  near('dead reckoning advances longitude at ground speed', dLon, wantDLon, wantDLon * 0.02,
+       `got ${dLon.toExponential(3)}`);
+  ok('latitude unchanged on a due-east track', Math.abs(rig('dr').lat - OLAT) < 1e-9);
+  const radius1 = Math.hypot(rig('dr').asm.position.x, rig('dr').asm.position.z);
+  ok('flying away from home increases the compressed radius', radius1 > radius0,
+     `${radius0.toFixed(0)} → ${radius1.toFixed(0)}`);
+  ok('east-bound display motion goes to scene −X (θ=0)', rig('dr').curX < curX0,
+     `${curX0.toFixed(0)} → ${rig('dr').curX.toFixed(0)}`);
+  // No gs / no track → the rig holds its fix (never invents a direction).
+  upd([]); step(1, 2);
+  upd([FP({ hex: 'nr', gsKt: null, trackDeg: null })]);
+  const nrLat = rig('nr').lat;
+  step(0.05, 20);
+  ok('missing gs/track → no dead reckoning', rig('nr').lat === nrLat && rig('nr').lon === FP({}).lon);
+
+  // ── 7. pitch sign ──────────────────────────────────────────────────────────
+  upd([]); step(1, 2);
+  upd([FP({ hex: 'up', vertRateFpm: 3000, trackDeg: 0, gsKt: 200, lon: OLON + 0.1 }),
+       FP({ hex: 'dn', vertRateFpm: -3000, trackDeg: 0, gsKt: 200, lon: OLON + 0.12 })]);
+  step(0.05);
+  ok('climb → positive rotation.x', rig('up').asm.rotation.x > 0, `${rig('up').asm.rotation.x}`);
+  ok('descent → negative rotation.x', rig('dn').asm.rotation.x < 0, `${rig('dn').asm.rotation.x}`);
+  near('pitch magnitude = |vert/6000| · 0.12', Math.abs(rig('up').asm.rotation.x), 0.06, 1e-9);
+  ok('climb → nose above the horizon', noseDir(rig('up').asm).y > 0,
+     `y=${noseDir(rig('up').asm).y.toFixed(4)}`);
+  ok('descent → nose below the horizon', noseDir(rig('dn').asm).y < 0);
+  upd([]); step(1, 2);
+
+  // ── 8. ISS ─────────────────────────────────────────────────────────────────
+  const R_ISS = 26000;
+  r.updateIss(null, ORIGIN, 0); step(0.05);
+  ok('no ISS fix → sprite absent or hidden', !r._issSprite || r._issSprite.visible === false);
+  r.updateIss({ lat: OLAT, lon: OLON, altKm: 420, velKmS: 7.66, tsMs: 1000 }, ORIGIN, 0);
+  step(0.05);
+  ok('overhead ISS fix → sprite visible', !!r._issSprite && r._issSprite.visible === true);
+  near('overhead ISS sits at the shell zenith', r._issSprite.position.y, R_ISS, R_ISS * 0.05,
+       `y=${r._issSprite.position.y.toFixed(0)}`);
+  ok('overhead ISS at full ramp opacity', r._issSprite.material.opacity > 0.85,
+     `op=${r._issSprite.material.opacity.toFixed(3)}`);
+  ok('_issGroup recentered on the camera',
+     Math.abs(r._issGroup.position.x - r._camera.position.x) < 1e-6
+     && Math.abs(r._issGroup.position.y - r._camera.position.y) < 1e-6);
+  // Below the horizon → hidden (a 420 km orbit's horizon is ~19.8° of arc).
+  r.updateIss({ lat: OLAT, lon: OLON + 120, altKm: 420, velKmS: 7.66, tsMs: 2000 }, ORIGIN, 0);
+  step(0.05);
+  ok('below-horizon ISS hidden', r._issSprite.visible === false);
+  // Near-horizon ramp: find the lon offset that puts the ISS at ≈1° altitude.
+  let bestLon = 0, bestErr = 1e9;
+  for (let d = 0; d <= 25; d += 0.01) {
+    const alt = SA.satAltAz(OLAT, OLON, OLAT, OLON + d, 420).altRad * 180 / Math.PI;
+    const err = Math.abs(alt - 1);
+    if (err < bestErr) { bestErr = err; bestLon = d; }
+  }
+  r.updateIss({ lat: OLAT, lon: OLON + bestLon, altKm: 420, velKmS: 7.66, tsMs: 3000 }, ORIGIN, 0);
+  step(0.001);
+  ok('near-horizon ISS visible but dim', r._issSprite.visible === true
+     && r._issSprite.material.opacity < 0.5 && r._issSprite.material.opacity > 0,
+     `op=${r._issSprite.material.opacity.toFixed(3)} lonOff=${bestLon.toFixed(2)}`);
+  // Dead reckoning from the fix PAIR (clear first — a fix with a predecessor
+  // legitimately derives a rate, so "first fix" means genuinely first).
+  r.updateIss(null, ORIGIN, 0);
+  r.updateIss({ lat: OLAT, lon: OLON, altKm: 420, velKmS: 7.66, tsMs: 10000 }, ORIGIN, 0);
+  ok('first fix of a pair sets no rate', r._issLonPerS === 0);
+  r.updateIss({ lat: OLAT + 1, lon: OLON + 2, altKm: 420, velKmS: 7.66, tsMs: 20000 }, ORIGIN, 0);
+  near('ISS ground-track rate from the fix pair (lon)', r._issLonPerS, 0.2, 1e-9);
+  near('ISS ground-track rate from the fix pair (lat)', r._issLatPerS, 0.1, 1e-9);
+  step(1, 5);
+  near('ISS dead-reckons between polls', r._issLon, OLON + 2 + 1.0, 1e-6, `lon=${r._issLon}`);
+  // No observer → inert.
+  r.updateIss({ lat: OLAT, lon: OLON, altKm: 420, velKmS: 7.66, tsMs: 30000 }, null, 0);
+  step(0.05);
+  ok('no observer → ISS hidden', r._issSprite.visible === false);
+
+  // ── 9. layer gating ────────────────────────────────────────────────────────
+  upd([A, B]);
+  r.setLayerVisibility({ flights: false });
+  ok('flights layer off hides the aircraft group', r._flightsGroup.visible === false);
+  ok('flights layer off hides the ISS group', r._issGroup.visible === false);
+  r.setLayerVisibility({});
+  ok('absent flights flag = layer on (aircraft)', r._flightsGroup.visible === true);
+  ok('absent flights flag = layer on (ISS)', r._issGroup.visible === true);
+
+  // ── 10. poll-correction ease ───────────────────────────────────────────────
+  upd([]); step(1, 2);
+  const FIXA = FP({ hex: 'ez', lat: OLAT + 0.2, lon: OLON + 0.2, altFt: 10000 });
+  const FIXB = { ...FIXA, lon: OLON + 0.24 };
+  upd([FIXA]);
+  const eA = expectPos(FIXA), eB = expectPos(FIXB);
+  near('rig snapped to fix A', rig('ez').curX, eA.x, 1);
+  upd([FIXB]);
+  step(0.1);
+  const cx = rig('ez').curX;
+  const t = (cx - eA.x) / (eB.x - eA.x);
+  ok('a poll correction glides (strictly between A and B)', t > 0.001 && t < 0.5,
+     `t=${t.toFixed(4)}`);
+  ok('correction did NOT snap to B', Math.abs(cx - eB.x) > 1,
+     `cx=${cx.toFixed(1)} eB=${eB.x.toFixed(1)}`);
+
+  // ── 11. inert paths ────────────────────────────────────────────────────────
+  r.updateFlights([A, B], null, 0, RAD_NM, true, ANCHOR);     // no origin resolved
+  ok('no origin → no new rigs built + existing fade out',
+     !rig('a1') || rig('a1').dying === true);
+  step(1, 3);
+  ok('no origin → shell empties', r._flightRigs.size === 0 && r._flightsGroup.children.length === 0);
+
+  // ── report ─────────────────────────────────────────────────────────────────
+  const pass = tests.filter(t => t.ok).length;
+  const fail = tests.length - pass;
+  document.title = `FLIGHTSRENDER ${fail ? 'FAIL' : 'PASS'} ${pass}/${tests.length}`;
+  document.getElementById('log').innerHTML =
+    `<div class="hd">${document.title}</div>` +
+    tests.map(t => `<div class="${t.ok ? 'pass' : 'fail'}">${t.ok ? '✓' : '✗'} ${t.name}` +
+      `${t.detail ? ` <span style="opacity:.65">— ${t.detail}</span>` : ''}</div>`).join('');
+</script>

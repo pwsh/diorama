@@ -85,7 +85,14 @@ interface RobotRig {
 }
 import { wallCutsForSegment, WINDOW_DEFAULTS, closedWallLoops, wallKind, WALL_KINDS, furnitureLocalToWorld, furnitureWorldToLocal, pointInPolygon as pip, centroid, loopContaining, resolveRoomForPoint, roomLabel, intersectLoopWithRect, polygonArea, heatmapColor, groundAreaSkirtBase, poolWaterColor, poolDepthMm, poolRaisedMm, poolHeaterState, poolPumpOn, poolLightOn, poolRimY, poolBasinFloorY, poolWaterSurfaceY, POOL_COPING_COLOR, POOL_HEAT_GLOW, type RoomTemp } from './geometry.js';
 import { visibilityToFogDensity, moonPhaseFraction, type WeatherNow } from './weather.js';
-import { skySnapshot, moonAltAz, capSampleAltAz } from './sky-astro.js';
+import { skySnapshot, moonAltAz, capSampleAltAz, satAltAz } from './sky-astro.js';
+// flights.ts is deliberately zero-import (three-free) and shared by BOTH the app
+// graph and this lazy chunk — the avatars.ts precedent. Only the pure compression
+// curves + the model-kind classifier are pulled in; NEVER adsb-sources or Planner.
+import {
+  compressRadiusMm, compressAltitudeMm, aircraftModelKind,
+  type FlightPoint, type IssNow,
+} from './flights.js';
 import { STARS as SKY_STARS, LINES as SKY_LINES } from './sky-catalog.js';
 import {
   paintCalendarCanvas, paintNewsTickerCanvas, paintWeatherCardCanvas,
@@ -557,6 +564,51 @@ interface BgRig {
   // train
   train?: BgTrain;
 }
+
+// ── Live aircraft (roadmap P4) ────────────────────────────────────────────
+// One PERSISTENT rig per ICAO hex (the humanoid idiom — mutated in place across
+// polls, never rebuilt per update). Two coordinate lives run side by side:
+//   • REAL space (lat/lon/altFt) — dead-reckoned between polls from gs+track,
+//     and CORRECTED (not snapped) by each poll.
+//   • DISPLAY space (scene-relative offsets from the home anchor) — the real
+//     position pushed through flights.ts's compression curves, then EASED so a
+//     poll correction glides instead of jump-cutting.
+interface FlightRig {
+  hex: string;
+  asm: THREE.Group;                 // model + label/banner; child of _flightsGroup
+  kind: 'prop' | 'jet' | 'heli';
+  military: boolean;
+  prop: THREE.Object3D | null;      // prop disc (spins about local Z) / main rotor (about Y)
+  tailRotor: THREE.Object3D | null; // heli only (spins about X)
+  propRate: number;                 // rad/s
+  label: THREE.Sprite | null;       // camera-facing callsign+altitude plate
+  banner: THREE.Group | null;       // prop-with-callsign tow banner (two FrontSide planes)
+  labelKey: string;                 // last painted label content — repaint only on change
+  bannerKey: string;                // last painted banner text
+  // real space
+  lat: number; lon: number; altFt: number;
+  latPerS: number; lonPerS: number; // dead-reckoning rates from gs + track
+  trackRad: number | null;          // true track (rad CW from north); null → hold last yaw
+  vertRateFpm: number;
+  // display space (scene-relative, anchored at the home point)
+  curX: number; curY: number; curZ: number;
+  yaw: number;                      // eased rotation.y
+  yawInit: boolean;                 // false until the first track fix snaps the yaw
+  spin: number;                     // accumulated prop/rotor angle
+  fade: number;                     // 1 alive; ramps to 0 while dying, then disposed
+  dying: boolean;
+}
+// Re-derived here rather than imported so flights.ts stays zero-import; the
+// values are the same sphere/nm/degree constants it uses (asserted equal by
+// flights-render-test, which cross-checks _flightScenePos vs flightDisplayPos).
+const FLIGHT_EARTH_R_M = 6371000;
+const FLIGHT_NM_M = 1852;
+const FLIGHT_DEG = Math.PI / 180;
+const FLIGHT_M_PER_DEG = 111320;     // metres per degree of latitude (dead reckoning)
+const FLIGHT_FADE_S = 0.8;           // despawn scale-out (the humanoid despawn idiom)
+const FLIGHT_PITCH_MAX = 0.12;       // rad at ±6000 fpm — a hint, not a stunt
+const ISS_SHELL_R = 26000;           // inside the 30 m sky dome (the sun-disc radius)
+const ISS_RAMP_RAD = 3 * Math.PI / 180;   // opacity ramp over the first ~3° of altitude
 
 // Build context for a declarative primitive (shared by the initial-rig
 // accessory build AND a runtime prop-equip via _buildPrimitiveMesh). Carries the
@@ -1161,6 +1213,7 @@ const BUBBLE_POOL_EVENT: Record<string, string[]> = {
   severe_weather:  ['⛈️', '⚡', '😰'],
   severe_alert:    ['🚨', '⚠️'],
   lightning_strike:['⚡', '😳'],
+  flyover:         ['✈️', '👀', '🛩️'],   // low aircraft overhead — rigs glance up
 };
 
 // Per-rig adoption stagger: a rig delays reacting to an event by up to
@@ -1602,6 +1655,33 @@ export class ThreeDRenderer {
   private _moonRealAlt = 0;                         // moon altitude (rad) in real mode
   private _skyOvercast = 0;                         // cached overcast amount (moon dim)
   private _v3a = new THREE.Vector3();               // scratch (real-sky recompute)
+
+  // ── Live aircraft + ISS (roadmap P4) ──────────────────────────────────────
+  // Aircraft rigs hang in _flightsGroup, whose POSITION is the home anchor in
+  // scene coords (the geo fit's plan origin, else the floor centre) — every rig
+  // carries a RELATIVE offset, so the whole shell moves with one transform.
+  // Home-relative, NOT floor-relative: like _skyGroup it is deliberately NOT in
+  // clearTransientGroups (a floor switch re-anchors it on the next update
+  // instead of tearing every rig down), only in destroy().
+  private _flightsGroup = new THREE.Group();
+  private _flightRigs = new Map<string, FlightRig>();
+  private _flightsOrigin: { lat: number; lon: number } | null = null;
+  private _flightsTheta = 0;             // geo θ (true north → plan), radians
+  private _flightsRadius = 30;           // configured search/display radius (nm)
+  private _flightsShowLabels = true;
+  private _v3flight = new THREE.Vector3();   // scratch — _advanceFlights allocates nothing
+  // ISS: one sprite in its OWN camera-recentered subgroup (the _realSkyGroup
+  // idiom) so its position is a pure direction offset at a fixed radius. The
+  // glyph texture is built once and disposed only in destroy().
+  private _issGroup = new THREE.Group();
+  private _issSprite: THREE.Sprite | null = null;
+  private _issTex: THREE.CanvasTexture | null = null;
+  private _issFix: IssNow | null = null;
+  private _issLat = 0; private _issLon = 0;      // dead-reckoned between 10 s polls
+  private _issLatPerS = 0; private _issLonPerS = 0;
+  private _issObserver: { lat: number; lon: number } | null = null;
+  private _issRot = 0;                            // geo θ for the sat az mapping
+  private _issOpacity = 0;
 
   // ── Playful background text (skywriting / banner plane / grass writing) ────
   // A short decorative message written INTO the world. Lives in its own group
@@ -2052,7 +2132,9 @@ export class ThreeDRenderer {
                     this._lightGroup, this._switchGroup, this._targetGroup, this._ghostGroup,
                     this._neighborhoodGroup,
                     this._transitGroup,
-                    this._gpsGroup, this._compassGroup, this._weatherGroup, this._skyGroup, this._bgTextGroup, this._pulseGroup, this._nowPlayingGroup);
+                    this._gpsGroup, this._compassGroup, this._weatherGroup, this._skyGroup,
+                    this._flightsGroup, this._issGroup,
+                    this._bgTextGroup, this._pulseGroup, this._nowPlayingGroup);
 
     this._controls = new OrbitControls(this._camera, this._renderer.domElement);
     this._controls.enableDamping = true;
@@ -4174,6 +4256,10 @@ export class ThreeDRenderer {
     // Neighborhood overlay rides its own layer (default on; the whole FEATURE is
     // opt-in via store.neighborhood.enabled, so an absent flag leaks nothing).
     this._neighborhoodGroup.visible = v.neighborhood !== false;
+    // Live aircraft + the ISS ride their own layer (default on; the FEATURE is
+    // opt-in via store.flights.enabled, so an absent flag leaks nothing).
+    this._flightsGroup.visible = v.flights !== false;
+    this._issGroup.visible = v.flights !== false;
   }
   private _showNameLabels = true;
 
@@ -11329,6 +11415,448 @@ export class ThreeDRenderer {
     for (const v of t.vehicles) for (const wh of v.wheels) wh.rotation.x -= spin;
   }
 
+  // ── Live aircraft (ADS-B) + ISS — roadmap P4 ──────────────────────────────
+  // Diffed, NEVER rebuilt wholesale, under three-view's _keyFlights: a new hex
+  // builds a rig, a known hex updates its real-motion state in place, a vanished
+  // hex fades out over FLIGHT_FADE_S and disposes. All per-frame motion (dead
+  // reckoning, eased display correction, yaw, pitch, prop spin, fade) lives in
+  // _advanceFlights.
+  //
+  // `anchorScene` is the HOME point in scene coords, NOT the floor centre:
+  // three-view resolves it from the geo fit's plan origin (tx, ty) so the shell
+  // centres on the real observer, falling back to the floor centre. Every rig
+  // carries a RELATIVE offset, so the whole shell re-anchors with one transform.
+  updateFlights(list: FlightPoint[], origin: { lat: number; lon: number } | null,
+                thetaRad: number, radiusNm: number, showLabels: boolean,
+                anchorScene: { x: number; z: number }): void {
+    this._flightsOrigin = origin;
+    this._flightsTheta = isFinite(thetaRad) ? thetaRad : 0;
+    this._flightsRadius = isFinite(radiusNm) && radiusNm > 0 ? radiusNm : 30;
+    this._flightsShowLabels = showLabels !== false;
+    this._flightsGroup.position.set(anchorScene?.x ?? 0, 0, anchorScene?.z ?? 0);
+
+    const seen = new Set<string>();
+    if (origin) {
+      for (const fp of (list ?? [])) {
+        if (!fp || typeof fp.hex !== 'string') continue;
+        seen.add(fp.hex);
+        const rig = this._flightRigs.get(fp.hex) ?? this._buildFlightRig(fp);
+        this._applyFlightFix(rig, fp);
+      }
+    }
+    // Vanished (or origin lost) → start the fade. Idempotent: a rig that
+    // reappears mid-fade is revived by _applyFlightFix above, same rig.
+    for (const rig of this._flightRigs.values()) {
+      if (!seen.has(rig.hex)) rig.dying = true;
+    }
+  }
+
+  // Fold one poll fix into a live rig: real position + dead-reckoning rates +
+  // label/banner refresh. Never touches the eased display position — a poll is a
+  // CORRECTION the per-frame ease glides onto, not a jump cut.
+  private _applyFlightFix(rig: FlightRig, fp: FlightPoint): void {
+    rig.dying = false;
+    rig.lat = fp.lat; rig.lon = fp.lon; rig.altFt = fp.altFt;
+    rig.vertRateFpm = fp.vertRateFpm ?? 0;
+    rig.trackRad = fp.trackDeg == null ? null : fp.trackDeg * FLIGHT_DEG;
+    // Ground speed (kt) along the track → deg/s. Missing gs OR track = no dead
+    // reckoning (holding the last fix beats inventing a direction).
+    if (fp.gsKt == null || fp.trackDeg == null) {
+      rig.latPerS = 0; rig.lonPerS = 0;
+    } else {
+      const ms = fp.gsKt * FLIGHT_NM_M / 3600;
+      const tr = fp.trackDeg * FLIGHT_DEG;
+      const cosLat = Math.max(0.02, Math.abs(Math.cos(fp.lat * FLIGHT_DEG)));
+      rig.latPerS = (ms * Math.cos(tr)) / FLIGHT_M_PER_DEG;
+      rig.lonPerS = (ms * Math.sin(tr)) / (FLIGHT_M_PER_DEG * cosLat);
+    }
+    this._syncFlightLabel(rig, fp);
+  }
+
+  // Label policy: a PROP with a callsign tows a broadside banner (the bg
+  // tow-plane idiom); everything else gets a camera-facing two-line plate.
+  // Repainted only when the content changes (altitude bucketed to 100 ft so a
+  // climbing aircraft doesn't repaint every poll).
+  private _syncFlightLabel(rig: FlightRig, fp: FlightPoint): void {
+    const name = (fp.callsign ?? fp.hex.toUpperCase()).trim() || fp.hex.toUpperCase();
+    const wantBanner = this._flightsShowLabels && rig.kind === 'prop' && !!fp.callsign;
+    const wantLabel = this._flightsShowLabels && !wantBanner;
+
+    if (wantBanner) {
+      if (rig.bannerKey !== name) {
+        this._removeFlightBanner(rig);
+        const tex = this._makeBgTextTexture(name, 'banner');
+        const cv = tex.image as HTMLCanvasElement;
+        const aspect = cv.width / cv.height;
+        const bh = 260;
+        const b = this._buildBanner(tex, bh, aspect);
+        b.rotation.y = Math.PI / 2;                            // broadside-readable
+        b.position.set(0, 20, 620 + (bh * aspect) / 2);        // trails behind (+Z = tail)
+        rig.asm.add(b);
+        rig.banner = b; rig.bannerKey = name;
+      }
+    } else if (rig.banner) this._removeFlightBanner(rig);
+
+    if (wantLabel) {
+      const altK = Math.round(fp.altFt / 100) * 100;
+      const key = `${name}|${altK}`;
+      if (rig.labelKey !== key) {
+        this._removeFlightLabel(rig);
+        const spr = this._makeFlightLabel(name, altK);
+        spr.position.set(0, 700, 0);
+        spr.userData.outlineSkip = true;
+        rig.asm.add(spr);
+        rig.label = spr; rig.labelKey = key;
+      }
+    } else if (rig.label) this._removeFlightLabel(rig);
+  }
+
+  private _removeFlightLabel(rig: FlightRig): void {
+    if (!rig.label) return;
+    rig.asm.remove(rig.label);
+    const m = rig.label.material as THREE.SpriteMaterial;
+    m.map?.dispose(); m.dispose();
+    rig.label = null; rig.labelKey = '';
+  }
+
+  private _removeFlightBanner(rig: FlightRig): void {
+    if (!rig.banner) return;
+    rig.asm.remove(rig.banner);
+    this._disposeSpriteMaps(rig.banner);   // the two planes SHARE one map (dedup-guarded)
+    this._disposeSubtree(rig.banner);
+    rig.banner = null; rig.bannerKey = '';
+  }
+
+  // Two-line callsign plate. The altitude line carries the REAL altitude —
+  // honest where the compressed display shell deliberately is not. Flat
+  // SpriteMaterial: the documented _mat() exemption (a billboarded readout, like
+  // the weather particle / info-card text materials).
+  private _makeFlightLabel(name: string, altFt: number): THREE.Sprite {
+    const cv = document.createElement('canvas');
+    const g = cv.getContext('2d')!;
+    const alt = `${Math.round(altFt).toLocaleString('en-US')} ft`;
+    const f1 = '700 46px system-ui, sans-serif';
+    const f2 = '400 34px system-ui, sans-serif';
+    g.font = f1; const w1 = g.measureText(name).width;
+    g.font = f2; const w2 = g.measureText(alt).width;
+    const padX = 26;
+    cv.width = Math.ceil(Math.max(w1, w2, 90) + padX * 2);
+    cv.height = 124;
+    const c2 = cv.getContext('2d')!;                 // canvas resize resets ctx state
+    c2.beginPath();
+    c2.roundRect(2, 2, cv.width - 4, cv.height - 4, 18);
+    c2.fillStyle = 'rgba(8,12,20,0.82)'; c2.fill();
+    c2.lineWidth = 3; c2.strokeStyle = 'rgba(148,178,214,0.75)'; c2.stroke();
+    c2.textAlign = 'center';
+    c2.textBaseline = 'middle';
+    c2.font = f1; c2.fillStyle = '#f2f6fb';
+    c2.fillText(name, cv.width / 2, 44);
+    c2.font = f2; c2.fillStyle = 'rgba(190,206,224,0.85)';
+    c2.fillText(alt, cv.width / 2, 88);
+    const tex = new THREE.CanvasTexture(cv);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    const spr = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: tex, transparent: true, depthWrite: false, fog: false,
+    }));
+    const H = 300;
+    spr.scale.set(H * (cv.width / cv.height), H, 1);
+    return spr;
+  }
+
+  private _buildFlightRig(fp: FlightPoint): FlightRig {
+    const kind = aircraftModelKind(fp);
+    const built = this._buildAircraftModel(kind, fp.military);
+    // YXZ: yaw outermost, pitch applied in the YAWED frame (the humanoid-root
+    // convention) — with XYZ a climbing aircraft would bank as it turned.
+    built.asm.rotation.order = 'YXZ';
+    this._flightsGroup.add(built.asm);
+    const rig: FlightRig = {
+      hex: fp.hex, asm: built.asm, kind, military: fp.military,
+      prop: built.prop, tailRotor: built.tailRotor, propRate: built.propRate,
+      label: null, banner: null, labelKey: '', bannerKey: '',
+      lat: fp.lat, lon: fp.lon, altFt: fp.altFt, latPerS: 0, lonPerS: 0,
+      trackRad: fp.trackDeg == null ? null : fp.trackDeg * FLIGHT_DEG,
+      vertRateFpm: fp.vertRateFpm ?? 0,
+      curX: 0, curY: 0, curZ: 0, yaw: 0, yawInit: false,
+      spin: 0, fade: 1, dying: false,
+    };
+    // A FRESH rig snaps onto its display position (no glide-in from the anchor);
+    // every later poll correction eases.
+    this._flightScenePos(fp.lat, fp.lon, fp.altFt, this._v3flight);
+    rig.curX = this._v3flight.x; rig.curY = this._v3flight.y; rig.curZ = this._v3flight.z;
+    rig.asm.position.set(rig.curX, rig.curY, rig.curZ);
+    this._flightRigs.set(fp.hex, rig);
+    return rig;
+  }
+
+  // Real lat/lon/altitude → SCENE-RELATIVE display offset from the home anchor.
+  // Mirrors flights.ts's flightDisplayPos EXACTLY: the compression curves are
+  // imported (single-sourced), only the bearing + θ rotation is inlined so this
+  // allocates nothing per frame. flights-render-test asserts the two agree.
+  // Relative plan → scene: dx FLIPS, dy keeps (the _w mirror), y = display alt.
+  private _flightScenePos(lat: number, lon: number, altFt: number,
+                          out: THREE.Vector3): THREE.Vector3 {
+    const o = this._flightsOrigin;
+    if (!o) return out.set(0, compressAltitudeMm(altFt), 0);
+    const east = (lon - o.lon) * FLIGHT_DEG * Math.cos(o.lat * FLIGHT_DEG) * FLIGHT_EARTH_R_M;
+    const north = (lat - o.lat) * FLIGHT_DEG * FLIGHT_EARTH_R_M;
+    const len = Math.hypot(east, north);
+    const distNm = len / FLIGHT_NM_M;
+    // e = sin(bearing), n = cos(bearing) — the unit geo vector, without the
+    // atan2 round-trip. Degenerate (aircraft exactly overhead) → r = 0 anyway.
+    const e = len > 0 ? east / len : 0, n = len > 0 ? north / len : 1;
+    const c = Math.cos(this._flightsTheta), s = Math.sin(this._flightsTheta);
+    const r = compressRadiusMm(distNm, this._flightsRadius);
+    return out.set(-(c * e - s * n) * r, compressAltitudeMm(altFt), (s * e + c * n) * r);
+  }
+
+  private _disposeFlightRig(rig: FlightRig): void {
+    this._disposeSpriteMaps(rig.asm);      // per-rig label + banner CanvasTextures
+    this._clearGroup(rig.asm);
+    this._flightsGroup.remove(rig.asm);
+    this._flightRigs.delete(rig.hex);
+  }
+
+  // Toy toon aircraft, ~900–1100 mm long (the bg tow-plane's scale), nose along
+  // local −Z. No blob shadow (it is in the sky) and no outline shells on the
+  // small parts. Military → olive-drab body, civil accents kept.
+  private _buildAircraftModel(kind: 'prop' | 'jet' | 'heli', military: boolean): {
+    asm: THREE.Group; prop: THREE.Object3D | null;
+    tailRotor: THREE.Object3D | null; propRate: number;
+  } {
+    const asm = new THREE.Group();
+    const MIL = 0x6b7a4f;
+    const dark = this._mat({ color: 0x33363b });
+    let prop: THREE.Object3D | null = null, tailRotor: THREE.Object3D | null = null;
+    let propRate = 22;
+    const box = (w: number, h: number, d: number, m: THREE.Material,
+                 x: number, y: number, z: number) => {
+      const me = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m);
+      me.position.set(x, y, z); asm.add(me); return me;
+    };
+
+    if (kind === 'prop') {
+      // High-wing light single — the bg tow-plane composition, restyled.
+      const body = this._mat({ color: military ? MIL : 0xdad7cf });
+      const accent = this._mat({ color: military ? 0x4d5940 : 0xc94f3d });
+      box(180, 180, 900, body, 0, 0, 0);
+      box(1300, 60, 260, accent, 0, 40, -40);          // high wing
+      box(520, 50, 150, accent, 0, 60, 420);           // tailplane
+      box(50, 260, 160, body, 0, 150, 420);            // fin
+      const propG = new THREE.Group();                  // spins about local Z (flight axis)
+      const hub = new THREE.Mesh(new THREE.ConeGeometry(48, 150, 12), dark);
+      hub.rotation.x = -Math.PI / 2;                    // apex → −Z (nose forward)
+      hub.userData.outlineSkip = true; propG.add(hub);
+      for (const rot of [0, Math.PI / 2]) {
+        const blade = new THREE.Mesh(new THREE.BoxGeometry(80, 760, 12), dark);
+        blade.rotation.z = rot; blade.userData.outlineSkip = true; propG.add(blade);
+      }
+      propG.position.set(0, 40, -480); propG.userData.outlineSkip = true;
+      asm.add(propG); prop = propG; propRate = 22;
+    } else if (kind === 'jet') {
+      // Swept low-wing twin. Wings sweep BACK: R_y(φ)·(1,0,0) = (cosφ, 0, −sinφ),
+      // so the +X wing needs φ < 0 to put its tip at +Z (toward the tail).
+      const body = this._mat({ color: military ? MIL : 0xe8ecf0 });
+      const accent = this._mat({ color: military ? 0x4d5940 : 0x2f6fb0 });
+      box(170, 170, 1100, body, 0, 0, 0);
+      const nose = new THREE.Mesh(new THREE.ConeGeometry(88, 240, 12), body);
+      nose.rotation.x = -Math.PI / 2; nose.position.set(0, 0, -660); asm.add(nose);
+      const sweep = 25 * Math.PI / 180;
+      for (const sx of [-1, 1]) {
+        const wing = new THREE.Mesh(new THREE.BoxGeometry(620, 36, 200), accent);
+        wing.position.set(sx * 350, -30, 90);
+        wing.rotation.y = -sx * sweep;
+        asm.add(wing);
+        const pod = new THREE.Mesh(new THREE.CylinderGeometry(58, 58, 300, 10), dark);
+        pod.rotation.x = Math.PI / 2;                   // barrel along Z
+        pod.position.set(sx * 330, -90, 150);
+        pod.userData.outlineSkip = true; asm.add(pod);
+      }
+      box(460, 34, 150, accent, 0, 120, 480);           // swept tailplane
+      const fin = new THREE.Mesh(new THREE.BoxGeometry(38, 300, 230), body);
+      fin.position.set(0, 200, 470); fin.rotation.x = -0.18; asm.add(fin);
+      propRate = 0;                                     // no prop
+    } else {
+      // Light helicopter — the bg chopper composition minus the NEWS livery.
+      const body = this._mat({ color: military ? MIL : 0x35506e });
+      const cabin = new THREE.Mesh(new THREE.SphereGeometry(260, 16, 12), body);
+      cabin.position.set(0, 300, -200); cabin.scale.set(1, 0.85, 1.15); asm.add(cabin);
+      box(80, 80, 820, body, 0, 350, 300);              // tail boom
+      box(36, 200, 110, body, 0, 440, 690);             // fin
+      for (const sx of [-1, 1]) box(46, 26, 660, dark, sx * 175, 55, -110);   // skids
+      const rotor = new THREE.Group();                  // main rotor spins about Y
+      for (const rot of [0, Math.PI / 2]) {
+        const blade = new THREE.Mesh(new THREE.BoxGeometry(1500, 16, 80), dark);
+        blade.rotation.y = rot; rotor.add(blade);
+      }
+      rotor.position.set(0, 520, -120); rotor.userData.outlineSkip = true; asm.add(rotor);
+      const mast = new THREE.Mesh(new THREE.CylinderGeometry(22, 22, 180, 8), dark);
+      mast.position.set(0, 430, -120); asm.add(mast);
+      const tr = new THREE.Group();                      // tail rotor spins about X
+      for (const rot of [0, Math.PI / 2]) {
+        const blade = new THREE.Mesh(new THREE.BoxGeometry(16, 320, 36), dark);
+        blade.rotation.x = rot; tr.add(blade);
+      }
+      tr.position.set(60, 440, 720); tr.userData.outlineSkip = true; asm.add(tr);
+      prop = rotor; tailRotor = tr; propRate = 42;
+    }
+    // Silhouette shells on the airframe only (minDim keeps blades/pods clean).
+    this._addOutlines(asm, 8, 220);
+    return { asm, prop, tailRotor, propRate };
+  }
+
+  // Per-frame aircraft + ISS motion (from _animate, beside _advanceBgText).
+  // Zero allocation on the aircraft path — the scratch Vector3 is reused and the
+  // display transform is recomputed inline (see _flightScenePos).
+  private _advanceFlights(dt: number): void {
+    if (this._flightRigs.size > 0) {
+      const kPos = Math.min(1, dt / 1.5);      // τ ≈ 1.5 s — a poll correction glides
+      const kYaw = Math.min(1, dt / 0.3);      // τ ≈ 0.3 s — shortest-arc yaw
+      // Deleting the CURRENT entry during Map iteration is well-defined.
+      for (const rig of this._flightRigs.values()) {
+        if (rig.dying) {
+          rig.fade -= dt / FLIGHT_FADE_S;
+          if (rig.fade <= 0) { this._disposeFlightRig(rig); continue; }
+        } else if (rig.fade < 1) {
+          rig.fade = Math.min(1, rig.fade + dt / FLIGHT_FADE_S);
+        }
+        // Dead reckoning happens in REAL space; the display transform is
+        // recomputed from it every frame (a few trig calls × ≤ MAX_AIRCRAFT).
+        rig.lat += rig.latPerS * dt;
+        rig.lon += rig.lonPerS * dt;
+        this._flightScenePos(rig.lat, rig.lon, rig.altFt, this._v3flight);
+        rig.curX += (this._v3flight.x - rig.curX) * kPos;
+        rig.curY += (this._v3flight.y - rig.curY) * kPos;
+        rig.curZ += (this._v3flight.z - rig.curZ) * kPos;
+        rig.asm.position.set(rig.curX, rig.curY, rig.curZ);
+        // Heading: true track → geo unit (e,n) → plan via θ → scene velocity
+        // (−planX, +planY). Nose is local −Z, whose world dir under R_y(φ) is
+        // (−sinφ, −cosφ) in (x,z) ⇒ φ = atan2(−vx, −vz) = atan2(planX, −planY).
+        // Identical to the bg tow-plane's atan2(tangentX, tangentZ) + π.
+        if (rig.trackRad != null) {
+          const e = Math.sin(rig.trackRad), n = Math.cos(rig.trackRad);
+          const c = Math.cos(this._flightsTheta), s = Math.sin(this._flightsTheta);
+          const px = c * e - s * n, py = s * e + c * n;
+          const want = Math.atan2(px, -py);
+          if (!rig.yawInit) { rig.yaw = want; rig.yawInit = true; }
+          else {
+            let d = want - rig.yaw;
+            while (d > Math.PI) d -= Math.PI * 2;
+            while (d < -Math.PI) d += Math.PI * 2;
+            rig.yaw += d * kYaw;
+          }
+        }
+        rig.asm.rotation.y = rig.yaw;
+        // Climb/descent pitch. Nose is local −Z; R_x(p)·(0,0,−1) = (0, sin p,
+        // −cos p), so POSITIVE rotation.x is nose UP → climb takes the + sign.
+        rig.asm.rotation.x =
+          Math.max(-1, Math.min(1, rig.vertRateFpm / 6000)) * FLIGHT_PITCH_MAX;
+        rig.asm.scale.setScalar(rig.fade);
+        if (rig.label) (rig.label.material as THREE.SpriteMaterial).opacity = rig.fade;
+        if (rig.propRate > 0) {
+          rig.spin = (rig.spin + rig.propRate * dt) % (Math.PI * 2);
+          if (rig.prop) {
+            if (rig.kind === 'heli') rig.prop.rotation.y = rig.spin;
+            else rig.prop.rotation.z = rig.spin;
+          }
+          if (rig.tailRotor) rig.tailRotor.rotation.x = (rig.spin * 1.6) % (Math.PI * 2);
+        }
+      }
+    }
+    this._advanceIss(dt);
+  }
+
+  // Live ISS dot. wheretheiss.at is a POSITION FEED, not a propagator — between
+  // ~10 s polls the ground track is dead-reckoned from the last fix PAIR's
+  // rates, then converted to horizontal coords for the resolved observer.
+  private _advanceIss(dt: number): void {
+    const spr = this._issSprite;
+    if (!spr) return;
+    // Camera-recentered subgroup (the _realSkyGroup idiom) so the sprite's own
+    // position stays a pure direction offset at ISS_SHELL_R.
+    if (this._camera) this._issGroup.position.copy(this._camera.position);
+    const obs = this._issObserver;
+    if (!this._issFix || !obs) { spr.visible = false; this._issOpacity = 0; return; }
+    this._issLat += this._issLatPerS * dt;
+    this._issLon += this._issLonPerS * dt;
+    // satAltAz returns a fresh {altRad, azRad} — ONE small object per frame
+    // (not per rig); the aircraft path above stays allocation-free.
+    const aa = satAltAz(obs.lat, obs.lon, this._issLat, this._issLon, this._issFix.altKm);
+    if (aa.altRad <= 0) { spr.visible = false; this._issOpacity = 0; return; }
+    this._skyScenePos(aa.altRad, aa.azRad, ISS_SHELL_R, spr.position, this._issRot);
+    // Ramp in over the first ~3° above the horizon (the sun-disc idiom).
+    this._issOpacity = Math.min(1, aa.altRad / ISS_RAMP_RAD) * 0.9;
+    (spr.material as THREE.SpriteMaterial).opacity = this._issOpacity;
+    spr.visible = this._issOpacity > 0.01;
+  }
+
+  // Fold a new ISS fix in. Observer is the SAME resolution chain the sky-astro
+  // observer uses (geo origin, else weather lat/lon) — three-view resolves it.
+  updateIss(iss: IssNow | null, observer: { lat: number; lon: number } | null,
+            thetaRad: number): void {
+    this._issObserver = observer;
+    this._issRot = isFinite(thetaRad) ? thetaRad : 0;
+    if (!iss || !observer) {
+      this._issFix = null;
+      if (this._issSprite) { this._issSprite.visible = false; this._issOpacity = 0; }
+      return;
+    }
+    this._ensureIss();
+    const prev = this._issFix;
+    if (prev && iss.tsMs > prev.tsMs) {
+      const dtS = (iss.tsMs - prev.tsMs) / 1000;
+      let dLon = iss.lon - prev.lon;
+      if (dLon > 180) dLon -= 360; else if (dLon < -180) dLon += 360;   // antimeridian
+      this._issLatPerS = (iss.lat - prev.lat) / dtS;
+      this._issLonPerS = dLon / dtS;
+    } else if (!prev) {
+      this._issLatPerS = 0; this._issLonPerS = 0;      // first fix: no predecessor
+    }
+    this._issFix = iss;
+    this._issLat = iss.lat; this._issLon = iss.lon;
+  }
+
+  // Station glyph: body + two solar arrays + an "ISS" caption. Built ONCE; the
+  // CanvasTexture is shared for the renderer's life (disposed only in destroy).
+  private _ensureIss(): void {
+    if (this._issSprite) return;
+    const cv = document.createElement('canvas');
+    cv.width = 256; cv.height = 192;
+    const g = cv.getContext('2d');
+    if (g) {
+      const cx = 128, cy = 74;
+      g.fillStyle = '#2b3d6b';                                   // solar arrays
+      g.fillRect(cx - 110, cy - 28, 74, 56);
+      g.fillRect(cx + 36, cy - 28, 74, 56);
+      g.strokeStyle = 'rgba(130,168,224,0.85)'; g.lineWidth = 2;
+      for (let i = 1; i < 4; i++) {
+        const dx = (74 / 4) * i;
+        g.beginPath(); g.moveTo(cx - 110 + dx, cy - 28); g.lineTo(cx - 110 + dx, cy + 28); g.stroke();
+        g.beginPath(); g.moveTo(cx + 36 + dx, cy - 28); g.lineTo(cx + 36 + dx, cy + 28); g.stroke();
+      }
+      g.fillStyle = '#cfd8dc';
+      g.fillRect(cx - 42, cy - 6, 84, 12);                        // truss
+      g.fillRect(cx - 17, cy - 22, 34, 44);                       // body
+      g.fillStyle = '#f2f6fb';
+      g.font = '700 42px system-ui, sans-serif';
+      g.textAlign = 'center'; g.textBaseline = 'middle';
+      g.fillText('ISS', cx, 152);
+    }
+    const tex = new THREE.CanvasTexture(cv);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    this._issTex = tex;
+    const spr = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: tex, transparent: true, depthWrite: false, fog: false, opacity: 0,
+    }));
+    const H = 1400;
+    spr.scale.set(H * (cv.width / cv.height), H, 1);
+    spr.userData.outlineSkip = true;
+    spr.frustumCulled = false;      // a far, hugely-scaled sprite culls by its centre
+    spr.visible = false;
+    this._issSprite = spr;
+    this._issGroup.add(spr);
+  }
+
   // ── Outdoor weather effects (Feature W, phase W2) ─────────────────────────
   // Rebuilt under three-view's _keyWeather dirty key (condition + intensity
   // bucket + layer flags + configRev). Per-frame motion happens in
@@ -11991,8 +12519,12 @@ export class ThreeDRenderer {
   // to _sunTargetFromSky's plan mapping, but skipping the atan2 round-trip
   // (sin(planAz)=dx, cos(planAz)=dy for the rotated unit vector). out is written
   // in place (zero alloc).
-  private _skyScenePos(altRad: number, azTrueRad: number, R: number, out: THREE.Vector3): THREE.Vector3 {
-    const c = Math.cos(this._skyRotRad), s = Math.sin(this._skyRotRad);
+  // `rotRad` defaults to the sky's own geo θ; the flights/ISS path passes its own
+  // (it resolves θ independently of the weather-fx state ever having run) — never
+  // double-rotate by pre-rotating az AND passing a rot.
+  private _skyScenePos(altRad: number, azTrueRad: number, R: number, out: THREE.Vector3,
+                       rotRad = this._skyRotRad): THREE.Vector3 {
+    const c = Math.cos(rotRad), s = Math.sin(rotRad);
     const east = Math.sin(azTrueRad), north = Math.cos(azTrueRad);
     const dx = c * east - s * north, dy = s * east + c * north;   // rotated unit dir (plan frame)
     const horiz = Math.cos(altRad) * R, y = Math.sin(altRad) * R;
@@ -18063,11 +18595,17 @@ export class ThreeDRenderer {
       this._alarmGroup, this._calendarGroup, this._thermoGroup, this._safetyGroup, this._alertGroup, this._robotGroup, this._robotRigGroup,
       this._cameraGroup, this._projGroup, this._valveGroup, this._plugGroup, this._camAlertGroup, this._pzoneGroup, this._groundGroup, this._poolGroup, this._sprinklerGroup, this._flagpoleGroup, this._heatmapGroup,
       this._lightGroup, this._switchGroup, this._targetGroup, this._gpsGroup, this._compassGroup, this._weatherGroup,
-      this._skyGroup, this._bgTextGroup, this._pulseGroup, this._nowPlayingGroup, this._neighborhoodGroup,
+      this._skyGroup, this._flightsGroup, this._issGroup,
+      this._bgTextGroup, this._pulseGroup, this._nowPlayingGroup, this._neighborhoodGroup,
     ]) {
       this._disposeSpriteMaps(g);
       this._clearGroup(g);
     }
+    // Aircraft rig bookkeeping (their subtrees + per-rig label/banner textures
+    // went with _flightsGroup above); the ISS glyph texture is shared → here only.
+    this._flightRigs.clear();
+    this._issSprite = null;
+    this._issTex?.dispose(); this._issTex = null;
     this._flagpoleRigs = [];
     // Per-flag CanvasTextures are shared across poles + rebuilds → disposed once here.
     for (const t of Object.values(this._flagTexCache)) t.dispose();
@@ -18291,6 +18829,9 @@ export class ThreeDRenderer {
     // Playful background text — sky drift / twinkle, banner orbit, prop spin.
     // Zero allocation after build (transform + opacity mutation only).
     this._advanceBgText(frameDt, nowS);
+    // Live aircraft (dead reckoning + eased display correction + prop spin +
+    // despawn fade) and the ISS dot. Zero allocation on the aircraft path.
+    this._advanceFlights(frameDt);
     // Thermostat vent airflow particles — buffer mutation only (zero allocation).
     this._advanceVents(frameDt);
     // Climate/airflow furniture: AC/heater vent particles, floor-fan spin +

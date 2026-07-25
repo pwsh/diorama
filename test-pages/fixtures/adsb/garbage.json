@@ -1,0 +1,18 @@
+{
+  "aircraft": [
+    null,
+    42,
+    "not-an-object",
+    [],
+    {},
+    { "hex": 123, "lat": 47.6, "lon": -122.3, "alt_baro": 5000 },
+    { "hex": "   ", "lat": 47.6, "lon": -122.3, "alt_baro": 5000 },
+    { "hex": "aaaaaa", "lat": null, "lon": 5, "alt_baro": 5000 },
+    { "hex": "bbbbbb", "lat": 47.6, "lon": -122.3 },
+    { "hex": "cccccc", "lat": 47.6, "lon": -122.3, "alt_baro": "n/a" },
+    { "hex": "dddddd", "lat": 991.0, "lon": -122.3, "alt_baro": 5000 },
+    { "hex": "eeeeee", "lat": 47.6, "lon": -999.0, "alt_baro": 5000 },
+    { "hex": "ffffff", "lat": { "deg": 47.6 }, "lon": -122.3, "alt_baro": 5000 }
+  ],
+  "msg": "malformed corpus — every entry must be skipped"
+}

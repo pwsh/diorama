@@ -76,7 +76,8 @@ export class AlertCenter extends LitElement {
   }
 
   private _sourceLabel(a: PanelAlert): string {
-    return a.source === 'repair' ? 'Repairs' : a.source === 'system' ? 'System log' : 'Notification';
+    return a.source === 'repair' ? 'Repairs' : a.source === 'system' ? 'System log'
+      : a.source === 'flight' ? 'Flights' : 'Notification';
   }
 
   private _row(a: PanelAlert, canAct: boolean) {

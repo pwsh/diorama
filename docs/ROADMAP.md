@@ -295,7 +295,18 @@ design doc pinned before the first line of code, per the house pattern.
   that seeds a one-piece floor). Cheap, and it turns the static gallery into
   a try-it surface. Touches `scripts/docs-site/*` + a small app-side param.
 
-- **P4 — Flight & satellite tracking** (M–L/4). Aircraft (and satellite
+- ✅ **P4 — Flight & satellite tracking** — SHIPPED 2026-07-25 in 3 waves
+  (data layer: pure flights.ts normalizer + compression shell + adsb-sources
+  fetch isolation + satAltAz; renderer: prop/jet/heli rigs w/ callsign
+  banners/labels + dead reckoning + ISS sprite + 2D glyphs; UI: Settings
+  block + airplanes.live attribution + alert-center 'flight' source + flyover
+  bubbles). flights-test 144/144, flights-render 80/80, flights-ui 55/55.
+  Authoritative research: `docs/research/flight-tracking.md` — pinned there:
+  cloud = airplanes.live ONLY (sole CORS-open API; adsb.lol/adsb.fi have no
+  CORS header, OpenSky is CORS-locked + ToS-forbidden), local receivers need
+  a user-added CORS header, satellites = ISS-only via wheretheiss.at (no
+  SGP4/no npm dep; pass PREDICTION deferred to a v2 propagator decision).
+  Original brief (M–L/4): Aircraft (and satellite
   passes) overhead, rendered in the existing sky dome. Sources: **local
   ADS-B** (dump1090/readsb/tar1090 on the LAN, or HA's ADS-B integrations)
   AND a **cloud fallback** (adsb.lol / OpenSky / airplanes.live — compare

@@ -736,6 +736,7 @@ export class ThreeView extends LitElement {
   private _keyCompass = '';
   private _keyWeather = '';
   private _keyBgText = '';
+  private _keyFlights = '';
   // Tier 2 glass-house transit puppets already triggered (`${personId}:${at}`) so
   // one transit spawns at most one puppet. Runtime-only; grows negligibly.
   private _spawnedPuppets = new Set<string>();
@@ -763,6 +764,10 @@ export class ThreeView extends LitElement {
         this._keyVacMap = '';
         this._keyLights = this._keyZones = this._keyHalos = '';
         this._keyGhost = this._keyNeighborhood = this._keyGps = this._keyCompass = this._keyWeather = this._keyBgText = '';
+        // The flight shell is home-anchored (NOT floor-relative, like the sky) —
+        // its rigs survive the floor switch, but the key must re-run so the
+        // anchor re-resolves against the new floor rect.
+        this._keyFlights = '';
         this._trigPrevOn.clear();
         this._actionTrigAt.clear();
         this._recentTrigs.length = 0;
@@ -1465,6 +1470,35 @@ export class ThreeView extends LitElement {
       if (keyBgText !== this._keyBgText) {
         this._keyBgText = keyBgText;
         r.updateBgTexts(bgEntries, bgStorm, fx.windBearingPlanRad ?? 0, fx.windKmh);
+      }
+
+      // Live aircraft (ADS-B) + the ISS — roadmap P4. Poll data lives on the
+      // planner (flightsRev bumps on EVERY data change, ISS included), so the key
+      // is just configRev|flightsRev|layer. The geo fit is resolved HERE rather
+      // than off the weather-fx state so the shell works with no weather source.
+      //
+      // ANCHOR: the flight shell centres on the HOME POINT, not the floor centre
+      // — geoFit maps the origin lat/lon to plan (tx, ty). Uncalibrated (origin
+      // came from weather.lat/lon) → the floor centre. Scene coords use the
+      // standard _w mirror: (fw/2 − ax, 0, ay − fd/2).
+      const flCfg = p.store.flights;
+      const flOrigin = flCfg?.enabled ? p.flightsOrigin() : null;
+      const keyFlights = `${p.configRev}|${p.flightsRev}|${layers.flights !== false ? 1 : 0}`;
+      if (keyFlights !== this._keyFlights) {
+        this._keyFlights = keyFlights;
+        const gfit = p.geoFit();
+        const calibrated = !!gfit && gfit.transform.quality !== 'none';
+        const flTheta = calibrated ? gfit!.transform.thetaRad : 0;
+        const ax = calibrated ? gfit!.transform.tx : f.w / 2;
+        const ay = calibrated ? gfit!.transform.ty : f.d / 2;
+        const anchorScene = { x: f.w / 2 - ax, z: ay - f.d / 2 };
+        const radiusNm = flCfg?.radiusNm ?? 30;
+        const showLabels = flCfg?.showLabels !== false;
+        // Feature off / no origin → an empty list + null ISS: the renderer fades
+        // everything out and goes inert (no separate teardown path).
+        r.updateFlights(flOrigin ? (p.flightsNow ?? []) : [], flOrigin,
+                        flTheta, radiusNm, showLabels, anchorScene);
+        r.updateIss(flOrigin && flCfg?.iss !== false ? p.issNow : null, flOrigin, flTheta);
       }
 
       // Yard flagpoles (furniture layer). Structural (flag / height / halfMast /

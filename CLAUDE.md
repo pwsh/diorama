@@ -279,6 +279,76 @@ If you add a renderer input (new prop, new entity dependency), **add it to the c
 ### Neighborhood overlay (OpenFreeMap/OSM — roadmap P5)
 `Store.neighborhood?: NeighborhoodConfig` (opt-in `enabled`, in `_normalizeStore`'s field list — covers load + undo; research `docs/research/neighborhood-openfreemap.md`): surrounding buildings/roads/water/landuse from OpenFreeMap vector tiles (z14; custom `{z}/{x}/{y}` template with http(s)-only scheme check), positioned by the landmark `geoFit` (feature inert when quality 'none' / disabled / `isOffline`). **Data layer** (all three-free): `src/mvt-decode.ts` (zero-import hand-rolled MVT/protobuf decoder, mqtt-ws discipline — never throws, garbage → empty; real-tile fixture corpus in `test-pages/fixtures/mvt/` incl. a dense-Brooklyn tile), `src/neighborhood.ts` (tile math, height resolution `render_height` → `levels × defaultLevelHeightM` → 1 storey with `verticalScale` folded AT EXTRACTION, road `widthMm` by class, exclusion helpers — buildings drop on footprint intersection, road segments filter by midpoint, `capBuildings` `MAX_BUILDINGS=400` nearest-first, `align` dx/dy/rot post-transform), `src/neighborhood-store.ts` (IDB `diorama-tiles`, 30-day TTL, `clearNeighborhoodTiles`). **Planner**: `_reconfigureNeighborhood` (fetch/decode; warm per-session decoded cache + TileJSON template cache) vs `_extractNeighborhood` (pure re-extract — align/verticalScale/exclusion changes NEVER refetch); runtime `neighborhoodData` + `neighborhoodRev`; `setNeighborhood(mut)` / `clearNeighborhoodCache()`. **Renderer** `_neighborhoodGroup` (active-floor world frame — the ghost-floor `asx/asz` mapping incl. the shape-y NEGATION; cleared on floor switch): toon-extruded building prisms (ONE shared `_mat()` per update, default concrete `0x9aa2ab`, podium `baseMm` support, self-intersecting rings pre-rejected, NO outline shells/blob shadows, all outlineSkip), road ribbons via `bufferPolyline` at **y=3**, water **y=2**, landuse (opt-in, default off) **y=1** — below user ground paint (elev+4) so the user's own yard always wins; 600-ribbon road cap. Dirty key `_keyNeighborhood` (configRev | neighborhoodRev | layer flags | opacity/colors); `Layers2D.neighborhood` (absent = on) in setLayerVisibility + the sidebar layer defs. **2D** `drawNeighborhood` (early in drawAll, after bg before ground): muted water fill, faint building fill+outline, px-clamped road centerlines, dashed-red exclusion masks (edit mode). **Exclusions**: draw-latch `drawingExclusion` (tool `nbhd_excl`, presence-zone idiom; 3–12 verts, dblclick/Enter finish, ESC cancel; no vertex-drag v1 — delete + redraw). **Sidebar** `_section('neighborhood', …)` (the user-pinned home for overlay/alignment controls): enable, fit-dependency status, layer checkboxes, verticalScale 0.2–3 + defaultLevelHeightM 2–5 + the "most OSM buildings carry no height data" honesty hint, align nudges (dx/dy arrows + ↺/↻ 0.5°/5°, shares `diorama:moveStep`, one undo step each, Reset), opacity 0.3–1, color rows, exclusion list, Refresh tiles. **Settings ▸ Integrations** "Neighborhood (OpenFreeMap)" block (enable/source/custom URL/radius 100–1000 m/Clear cache/usage note). **Attribution (compliance, non-configurable)**: fixed bottom-left chip in app.ts — `© OpenStreetMap · OpenFreeMap` links — whenever enabled + data present, all UI modes. Tests: `neighborhood-test.html` (`NEIGHBORHOOD PASS 84/84`), `neighborhood-render-test.html` (`NBHDRENDER PASS 41/41` incl. the asymmetric-footprint mirror catch).
 
+### Flight & satellite tracking (roadmap P4)
+`Store.flights?: FlightsConfig` (opt-in `enabled`, in `_normalizeStore`'s field list; research
+`docs/research/flight-tracking.md` — live-curl-verified source landscape): live ADS-B aircraft +
+the ISS rendered in the 3D sky. **Sources**: `cloud` (default — **airplanes.live**, the ONLY
+CORS-open keyless ADS-B API; adsb.lol/adsb.fi send no CORS header, OpenSky is CORS-locked to its
+own origin AND ToS-forbidden — never add it), `local` (the user's receiver `aircraft.json` URL —
+tar1090/readsb need a user-added lighttpd CORS block, documented in the research doc; the Settings
+block shows a LIVE mixed-content warning when an https panel binds an http URL), `entity` (HA
+rest-sensor proxy — attributes carry an aircraft array under `aircraft`/`ac`/`flights`; the bound
+id is config-path in `_isSlowEntity`). **Pure data layer** `src/flights.ts` (ZERO-import,
+importable by BOTH the app graph and the renderer chunk — the avatars.ts precedent):
+`FlightPoint`, `normalizeAircraftList` (mqtt-ws discipline — `{aircraft}`/`{ac}`/bare-array +
+fr24 aliases, no-position + `alt_baro === 'ground'` filtered, never throws), `aircraftModelKind`
+(`A7`→heli, `A1|A2`→prop, else jet), `MAX_AIRCRAFT` 50 nearest-first, and the **display-shell
+compression** (deliberately NOT to scale — the neighborhood honesty precedent): `compressRadiusMm`
+(asymptotic `rMax·d/(d+K)`, K = max(4, radius/4) nm, rMax 24 000 mm inside the 30 000 sky dome) +
+`compressAltitudeMm` (log 2 500–22 000 mm band over 0–45 000 ft) + `flightBearingDistance`/
+`flightDisplayPos` (plan-frame mm relative to the HOME anchor). `src/adsb-sources.ts` is the ONLY
+fetch site (weather.ts isolation; wheretheiss.at velocity arrives km/h → normalized km/s).
+`satAltAz(obsLat, obsLon, satLat, satLon, altKm)` in sky-astro.ts (spherical-earth ECEF→ENU, az
+CW-from-north matching `raDecToAltAz`). **NOTE: planner imports `satAltAz`, which moved sky-astro
++ sky-catalog into the STARTUP chunk** (net shipped bytes unchanged — the renderer shares the
+copy; chunk split verified intact). **Planner**: `_reconfigureFlights`/`_flightsInited` (weather
+idiom; offline does NOT block — the cloud source works in the gh-pages demo; only `enabled` +
+origin gate), poll clamp 5–60 s default 8, ISS on its own 10 s timer for all sources (`iss !==
+false`); runtime `flightsNow`/`flightsAt`/`flightsRev` (bumps on ISS changes too — ONE dirty-key
+input)/`issNow`/`flightsStatus` (`off|no-origin|ok|error`; 'error' only when nothing cached —
+stale-tolerant) + public `flightsOrigin()` (geo-fit origin → `weather.lat/lon` → null — the
+observer chain, do not fork a second one). **Renderer**: `_flightsGroup` positioned at the home
+anchor's scene coords (anchor = geo `tx/ty` when fit exists, else floor centre; rig offsets =
+`(−planX, dispY, +planY)`), **NOT in `clearTransientGroups`** (home-relative, persists across
+floor switches like `_skyGroup`), in `destroy()`, `layers.flights` via setLayerVisibility.
+Persistent `_flightRigs` keyed by ICAO hex (humanoid idiom — mutate in place): `_buildAircraftModel`
+prop/jet/heli via `_mat()` (military `dbFlags` bit 1 → olive tint); prop + callsign tows a REAL
+banner (`_buildBanner` + `_makeBgTextTexture('banner')`), everything else gets a camera-facing
+sprite label — callsign + **real altitude ft** (honest where the shell is not); labels repaint
+only on text change, per-rig CanvasTextures freed on rig dispose. `_advanceFlights(dt)` (from
+`_animate`, zero-alloc): dead reckoning in REAL space (per-rig `latPerS/lonPerS` from gs/track),
+display pos eased τ≈1.5 s (poll corrections glide), yaw shortest-arc τ≈0.3 s — `rotation.y =
+atan2(px, −py)`, the SAME convention as the bg tow-plane's tangent formula; `rotation.order='YXZ'`
+(XYZ would bank a climbing turn); pitch `clamp(vertRate/6000)·0.12`; prop/rotor spin accumulates
+per-rig (never the absolute clock — fresh rigs would pop phase); removal = 0.8 s scale-out then
+dispose. **ISS**: `_issGroup` camera-recentered (self-contained in `_advanceFlights` — NOT the
+`_skyBuilt`-gated sky block), one sprite (`_issTex` built once, disposed in destroy), position =
+`satAltAz` + `_skyScenePos(alt, az, 26000, out, rotRad)` — `_skyScenePos` gained an optional
+trailing `rotRad` (defaults `_skyRotRad`; flights pass geo θ explicitly so there's no stale-0 /
+double-rotation), dead-reckoned between 10 s fixes from the fix-pair delta, visible only above
+the horizon with a ramp-in. three-view `_keyFlights` = `configRev|flightsRev|layers.flights`
+(in the floor-switch blank list; disabled/no-origin → empty list = cheap inert). **2D**
+`drawFlights` (late in drawAll, `flights` layer absent = on, sidebar layer "Flights"): dart glyph
+rotated to track, callsign + alt ft text, olive military. **Alerts**: `AlertSource` gained
+`'flight'`; `buildAlertFeed(notifications, repairs, cfg?, extra?)` — the optional 4th channel
+appends already-built CLIENT-LOCAL alerts verbatim (source toggles/severity floor deliberately
+don't apply). `Planner._computeFlightAlerts()` (after each aircraft poll + ISS update): low
+overflight (`alerts.lowAltFt`, within 3 nm, severity warning, 10 min/hex cooldown), watch-list
+(uppercase callsign-prefix or exact hex, info, 30 min/hex), ISS rise (alt crossing 10°, edge
+detector `_issWasUp`, info); prune 15 min cap 8; `dismissAlert` 'flight' branch is hass-free and
+a dismissal RE-ARMS once the cooldown passes (stable per-hex ids would otherwise mute forever);
+returns `changed` — call sites own the single `emitConfig`. A low overflight also pushes
+`householdEvents` kind `flyover` (x/y null = house-wide) → `BUBBLE_POOL_EVENT.flyover` ✈️👀🛩️.
+**Settings ▸ Integrations "Flight tracking"** block (status line w/ aircraft count + poll age,
+source radios w/ the airplanes.live privacy disclosure + CORS/mixed-content hints, radius 5–100 nm,
+poll, min/max alt filters, "Callsign labels" + "Track the ISS", alerts sub-group — the watch-list
+normalizes in `setFlights` (trim/uppercase), not the UI, so imports get the same shape).
+**Attribution**: "Flight data © airplanes.live" joins the fixed bottom-left chip (stacked with the
+OSM line) whenever cloud + enabled + data. Tests: `flights-test.html` (`FLIGHTS PASS 144/144` —
+fixture = a REAL 94-aircraft airplanes.live LAX capture), `flights-render-test.html`
+(`FLIGHTSRENDER PASS 80/80` — heading/pitch signs asserted via `getWorldDirection`),
+`flights-ui-test.html` (`FLIGHTSUI 55/55`; alert-center 67/67 stays green).
+
 ### Geo reference & GPS device pins (World Outside, Feature G)
 Landmarks (`Store.geo.landmarks`, property-wide/store-level — NOT per-floor) are placed on the plan and calibrated to real-world lat/lon (`src/geo.ts` pure math: equirectangular projection, 2D Procrustes fit scale-locked at 1 + `fittedScale` diagnostic, single-landmark `northDeg` path, median lat/lon, `parseLatLon` manual-entry parse; test page `geo-test.html`). `Planner.geoFit()` returns the fitted `GeoTransform` (+ calibrated landmark list). Landmarks calibrate via GPS sampling OR manual lat/lon entry in the sidebar (paste a `lat, lon` pair into the Latitude field to split both); **manual entry sets `sampledAt` but CLEARS `accuracy`/`sampleCount`** (no sampling run happened — absent `sampleCount` + present `lat` is the "manual" sentinel, shown as `manual · <date>`), so the fit-quality readout stays honest. **GPS device pins (G2)**: `Planner.gpsPins` (runtime getter, cheap, safe per frame) resolves each `Store.people` entry with a GPS source (prefer `person.*` via `haPersonId`, else `device_tracker.*` via `gpsTrackerId`) — reads `latitude`/`longitude`/`gps_accuracy` off the entity, projects via `latLonToPlan`, and classifies vs the CURRENT floor rect:
 - `indoor` — inside `0..fw × 0..fd` (GPS indoors is tens of metres off → the pin is a "find my phone" hint, drawn dimmed with a `~±N m indoors` caution, not a placement).

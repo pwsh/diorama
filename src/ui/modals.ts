@@ -984,7 +984,183 @@ export class SettingsDrawer extends LitElement {
       ${this._alertsBlock()}
       ${this._mqttBlock()}
       ${this._neighborhoodBlock()}
+      ${this._flightsBlock()}
     `;
+  }
+
+  // ── Flight & satellite tracking block (roadmap P4) ───────────────────────
+  private _flightsBlock() {
+    const p = this.planner;
+    const cfg = p.store.flights ?? {};
+    const enabled = cfg.enabled === true;
+    const source = cfg.source ?? 'cloud';
+    const set = (mut: (f: import('../types.js').FlightsConfig) => void) => p.setFlights(mut);
+
+    // Live status line off the planner's own poll state.
+    const status = p.flightsStatus;
+    const ageS = p.flightsAt ? Math.max(0, Math.round((Date.now() - p.flightsAt) / 1000)) : null;
+    const statusLine = status === 'off'
+      ? html`<span style="color:var(--text-dim)">disabled</span>`
+      : status === 'no-origin'
+        ? html`<span style="color:#fb8c00">needs a location — calibrate a GPS landmark or set a weather location</span>`
+        : status === 'error'
+          ? html`<span style="color:#ff5252">fetch failing — check source settings</span>`
+          : html`<span style="color:#69f0ae">${p.flightsNow?.length ?? 0} aircraft${ageS !== null ? ` · updated ${ageS}s ago` : ''}</span>`;
+
+    // Mixed content is a hard browser block, not a warning we can work around:
+    // an HTTPS-served panel cannot fetch an http:// LAN receiver at all.
+    const localUrl = cfg.localUrl ?? '';
+    const mixedContent = typeof window !== 'undefined'
+      && window.location?.protocol === 'https:' && /^http:\/\//i.test(localUrl.trim());
+
+    const sourceRow = (val: 'cloud' | 'local' | 'entity', label: string, hint: string) => html`
+      <label style="display:flex;gap:8px;align-items:flex-start;cursor:pointer;font-size:12px;color:var(--text);margin:4px 0">
+        <input type="radio" name="flightsource" .checked=${source === val}
+               @change=${() => set(f => { f.source = val; })}>
+        <span style="flex:1"><span>${label}</span>
+          <span style="display:block;color:var(--text-dim);font-size:10px;line-height:1.35">${hint}</span></span>
+      </label>`;
+
+    // Blank clears the field (both altitude filters + the low-overflight
+    // threshold are "off when absent", never 0).
+    const numOrUndef = (v: string, lo: number, hi: number): number | undefined => {
+      const n = parseFloat(v);
+      return v.trim() === '' || !isFinite(n) ? undefined : Math.max(lo, Math.min(hi, n));
+    };
+
+    return html`
+      <div style="border-top:1px solid var(--border);margin-top:12px;padding-top:12px">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:2px">
+          <strong style="font-size:12px;color:var(--text)">Flight tracking</strong>
+          <span style="font-size:10px;text-align:right">${statusLine}</span>
+        </div>
+        <div style="font-size:10px;color:var(--text-dim);line-height:1.4;margin-bottom:6px">
+          Live aircraft overhead (ADS-B) and the ISS, drawn into the 3D sky on a
+          compressed display shell — positions are true in bearing, not to scale.
+        </div>
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text)">
+          <input type="checkbox" .checked=${enabled}
+                 @change=${(e: Event) => set(f => { f.enabled = (e.target as HTMLInputElement).checked; })}>
+          <span style="flex:1">Show aircraft &amp; satellites</span>
+        </label>
+        ${enabled ? html`
+          <div style="margin:6px 0 0 8px;display:flex;flex-direction:column;gap:2px">
+            ${sourceRow('cloud', 'Cloud (airplanes.live)',
+              'Sends your home coordinates to airplanes.live (third-party, non-commercial feed, no SLA).')}
+            ${sourceRow('local', 'Local receiver (LAN)',
+              'Your own dump1090 / readsb / tar1090 aircraft.json — freshest, no third party.')}
+            ${source === 'local' ? html`
+              <div style="margin:0 0 6px 24px">
+                <input type="text" placeholder="http://192.0.2.10/tar1090/data/aircraft.json"
+                       .value=${localUrl}
+                       @change=${(e: Event) => set(f => { const v = (e.target as HTMLInputElement).value.trim(); f.localUrl = v || undefined; })}
+                       style="width:100%;padding:5px 7px;border-radius:4px;border:1px solid ${mixedContent ? '#fb8c00' : 'var(--border)'};background:#111;color:var(--text);font-size:12px;box-sizing:border-box">
+                <div style="font-size:10px;color:var(--text-dim);margin-top:2px;line-height:1.35">
+                  The receiver must send an <code>Access-Control-Allow-Origin</code>
+                  header on <code>aircraft.json</code> — it does NOT by default
+                  (see docs/research/flight-tracking.md §2.2 for the one-block fix).
+                </div>
+                ${mixedContent ? html`
+                  <div style="font-size:10px;color:#fb8c00;margin-top:3px;line-height:1.35">
+                    Blocked by the browser: an HTTPS panel cannot fetch an HTTP receiver.
+                  </div>` : nothing}
+              </div>` : nothing}
+            ${sourceRow('entity', 'Home Assistant entity',
+              'An HA rest sensor whose attributes carry an aircraft array — see the research doc. Fetched server-side, so no CORS applies.')}
+            ${source === 'entity' ? html`
+              <div class="row" style="align-items:center;margin:0 0 6px 24px">
+                <span style="flex:1;font-size:11px;color:${cfg.entityId ? 'var(--text)' : 'var(--text-dim)'};
+                             overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+                  ${cfg.entityId ?? 'not bound'}</span>
+                <button class="btn" @click=${() => this._pickFlightsEntity()}>🔗</button>
+                ${cfg.entityId ? html`<button class="btn"
+                  @click=${() => set(f => { f.entityId = undefined; })}>✕</button>` : nothing}
+              </div>` : nothing}
+
+            <div class="row" style="align-items:center;margin-top:4px">
+              <label style="font-size:12px;color:var(--text);flex:1" title="Search + display radius around home.">Radius (nm)</label>
+              <input type="number" min="5" max="100" step="5" .value=${String(cfg.radiusNm ?? 30)}
+                     @change=${(e: Event) => set(f => { f.radiusNm = numOrUndef((e.target as HTMLInputElement).value, 5, 100) ?? 30; })}
+                     style="width:80px">
+            </div>
+            <div class="row" style="align-items:center">
+              <label style="font-size:12px;color:var(--text);flex:1" title="Poll cadence. airplanes.live documents a 1 request/second limit.">Poll (s)</label>
+              <input type="number" min="5" max="60" step="1" .value=${String(cfg.pollSeconds ?? 8)}
+                     @change=${(e: Event) => set(f => { f.pollSeconds = numOrUndef((e.target as HTMLInputElement).value, 5, 60) ?? 8; })}
+                     style="width:80px">
+            </div>
+            <div class="row" style="align-items:center">
+              <label style="font-size:12px;color:var(--text);flex:1" title="Blank = no filter.">Min altitude (ft)</label>
+              <input type="number" min="0" max="60000" step="500" placeholder="off"
+                     .value=${cfg.minAltFt != null ? String(cfg.minAltFt) : ''}
+                     @change=${(e: Event) => set(f => { f.minAltFt = numOrUndef((e.target as HTMLInputElement).value, 0, 60000); })}
+                     style="width:80px">
+            </div>
+            <div class="row" style="align-items:center">
+              <label style="font-size:12px;color:var(--text);flex:1" title="Blank = no filter.">Max altitude (ft)</label>
+              <input type="number" min="0" max="60000" step="500" placeholder="off"
+                     .value=${cfg.maxAltFt != null ? String(cfg.maxAltFt) : ''}
+                     @change=${(e: Event) => set(f => { f.maxAltFt = numOrUndef((e.target as HTMLInputElement).value, 0, 60000); })}
+                     style="width:80px">
+            </div>
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text);margin-top:4px">
+              <input type="checkbox" .checked=${cfg.showLabels !== false}
+                     @change=${(e: Event) => set(f => { f.showLabels = (e.target as HTMLInputElement).checked; })}>
+              <span style="flex:1">Callsign labels</span>
+            </label>
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text)">
+              <input type="checkbox" .checked=${cfg.iss !== false}
+                     @change=${(e: Event) => set(f => { f.iss = (e.target as HTMLInputElement).checked; })}>
+              <span style="flex:1">Track the ISS</span>
+            </label>
+
+            <div style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--border)">
+              <div style="font-size:11px;font-weight:600;margin-bottom:4px">Alerts</div>
+              <div class="row" style="align-items:center">
+                <label style="font-size:12px;color:var(--text);flex:1"
+                       title="Warn when an aircraft passes below this altitude within 3 nm. Blank = off.">Low overflight (ft)</label>
+                <input type="number" min="0" max="20000" step="250" placeholder="off"
+                       .value=${cfg.alerts?.lowAltFt != null ? String(cfg.alerts.lowAltFt) : ''}
+                       @change=${(e: Event) => set(f => {
+                         if (!f.alerts) f.alerts = {};
+                         f.alerts.lowAltFt = numOrUndef((e.target as HTMLInputElement).value, 0, 20000);
+                       })}
+                       style="width:80px">
+              </div>
+              <label style="font-size:10px;color:var(--text-dim);display:block;margin:6px 0 2px">
+                Watch list (callsign prefixes or hex codes, comma-separated)
+              </label>
+              <input type="text" placeholder="UAL, N12345, a1b2c3"
+                     .value=${(cfg.alerts?.watch ?? []).join(', ')}
+                     @change=${(e: Event) => set(f => {
+                       if (!f.alerts) f.alerts = {};
+                       // setFlights normalizes (trim/uppercase/drop blanks).
+                       f.alerts.watch = (e.target as HTMLInputElement).value.split(',');
+                     })}
+                     style="width:100%;padding:5px 7px;border-radius:4px;border:1px solid var(--border);
+                            background:#111;color:var(--text);font-size:12px;box-sizing:border-box">
+              <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text);margin-top:6px"
+                     title="Notify when the ISS rises above 10° — a live edge detector, not an advance prediction.">
+                <input type="checkbox" .checked=${cfg.alerts?.issPass !== false}
+                       @change=${(e: Event) => set(f => {
+                         if (!f.alerts) f.alerts = {};
+                         f.alerts.issPass = (e.target as HTMLInputElement).checked;
+                       })}>
+                <span style="flex:1">ISS pass alert</span>
+              </label>
+            </div>
+          </div>` : nothing}
+      </div>`;
+  }
+
+  private _pickFlightsEntity(): void {
+    this.dispatchEvent(new CustomEvent('open-entity-picker', {
+      bubbles: true, composed: true,
+      detail: {
+        domain: 'sensor',
+        onPick: (entityId: string) => this.planner.setFlights(f => { f.entityId = entityId; }),
+      },
+    }));
   }
 
   // ── Neighborhood (OpenFreeMap) block ────────────────────────────────────

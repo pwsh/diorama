@@ -52,7 +52,21 @@ import type {
   HassState, ConnStatus, DiscoveredDevice, Vec2, AvatarKind, WeatherConfig, CameraFixture,
   ConfigIndex, ConfigMeta, ThermostatFixture, SafetySensor, AlertBeacon, Furniture, MqttBridgeConfig,
   AlertsConfig, GroundArea, Pool, CompassConfig, Ruler, RulerEnd, DimensionMode, NeighborhoodConfig,
+  FlightsConfig,
 } from './types.js';
+import { normalizeAircraftList, flightBearingDistance, MAX_AIRCRAFT,
+         type FlightPoint, type IssNow } from './flights.js';
+import { fetchLocalAircraft, fetchAirplanesLive, fetchIssNow } from './adsb-sources.js';
+// The ONE satellite alt/az routine (the renderer's sky uses the same function —
+// never re-derive it here). sky-astro is pure + three.js-FREE, so importing it
+// does NOT pull three into the startup graph (verified: dist/assets/app.js still
+// greps 0 for MeshToonMaterial, three-renderer remains its own lazy chunk).
+// Measured cost: because sky-astro also pulls its sibling star table
+// (sky-catalog.ts, which does NOT tree-shake — the renderer's skySnapshot needs
+// it and both consumers now share one copy), this moved ~14 kB raw / ~6 kB gzip
+// out of the three-renderer chunk and into the shared startup chunk. Total
+// shipped bytes are unchanged; only the split point moved.
+import { satAltAz } from './sky-astro.js';
 
 // Full export envelope (Batch B). `store` is the WHOLE Store serialized (no
 // field list on export — nothing stripped); `userAvatarPacks` carries the
@@ -679,6 +693,41 @@ export class Planner extends EventTarget {
   private _nbhdTemplate: { source: string; custom?: string; template: string } | null = null;
   private _nbhdSourceKey = '';                     // last source/custom key — clears the caches on a source switch
   private _nbhdRunId = 0;                           // guards against an older async reconfigure clobbering a newer
+
+  // ── Flights & ISS (roadmap P4) ────────────────────────────────────────────
+  // Runtime-only, NEVER persisted (the weatherNow / neighborhoodData rule).
+  // `flightsNow` is already filtered (radius + altitude band), sorted nearest
+  // first and capped at MAX_AIRCRAFT, with distNm filled in. `flightsRev` is a
+  // monotonic revision bumped on EVERY data change (aircraft or ISS) so the
+  // renderer wave can fold it into one dirty key. Null data + status 'off'
+  // whenever the feature is disabled.
+  flightsNow: FlightPoint[] | null = null;
+  flightsAt = 0;                 // ms epoch of the last successful aircraft poll
+  flightsRev = 0;
+  issNow: IssNow | null = null;
+  flightsStatus: 'off' | 'no-origin' | 'ok' | 'error' = 'off';
+  private _flightsTimer: ReturnType<typeof setInterval> | null = null;
+  private _issTimer: ReturnType<typeof setInterval> | null = null;
+  private _flightsFetching = false;
+  private _flightsInited = false;
+  private static readonly ISS_POLL_MS = 10000;   // well under wheretheiss.at's ~350 req / 5 min
+  private static readonly FLIGHTS_DEFAULT_RADIUS_NM = 30;
+
+  // Client-local flight/ISS alerts (research §6.3). Runtime-only, NEVER
+  // persisted — they are recomputed from live poll data, so a reload simply
+  // starts clean (the doorbellRings / householdEvents rule). They reach the
+  // shared Alert Center through buildAlertFeed's `extra` param: no HA source
+  // collects them, so the per-source toggles / severity floor don't apply.
+  flightAlerts: PanelAlert[] = [];
+  private _flightAlertDismissed = new Set<string>();     // ids the user dismissed this session
+  private _flightAlertAt = new Map<string, number>();    // per-hex cooldown clock (ms epoch)
+  private _issWasUp = false;                             // ISS-above-horizon edge detector
+  private static readonly FLIGHT_ALERT_TTL_MS = 15 * 60 * 1000;  // prune window
+  private static readonly FLIGHT_ALERT_CAP = 8;                   // newest-wins cap
+  private static readonly FLIGHT_LOW_COOLDOWN_MS = 10 * 60 * 1000;
+  private static readonly FLIGHT_WATCH_COOLDOWN_MS = 30 * 60 * 1000;
+  private static readonly FLIGHT_LOW_DIST_NM = 3;        // "overhead", not merely in-radius
+  private static readonly ISS_UP_ALT_DEG = 10;           // horizon threshold for a pass notice
 
   private _weatherGeocoding = false;
   private _weatherFetching = false;
@@ -1515,6 +1564,20 @@ export class Planner extends EventTarget {
       this._alertInited = true;
       this._reconfigureAlertCenter();
     }
+    // One-time flight/ISS poll start from the local-cache config on the first
+    // full load (mirrors _weatherInited). _applyLoadedStore re-runs it once HA's
+    // authoritative config lands; both are idempotent.
+    if (!this._flightsInited && changedId === undefined) {
+      this._flightsInited = true;
+      void this._reconfigureFlights();
+    }
+    // 'entity' flight source: the bound rest-sensor proxy pushed new aircraft.
+    // Its id is config-path (see _isSlowEntity) so the sidebar repaints too.
+    const fCfg = this.store.flights;
+    if (fCfg?.enabled && (fCfg.source ?? 'cloud') === 'entity' && fCfg.entityId
+        && (changedId === undefined || changedId === fCfg.entityId)) {
+      this._recomputeFlightsFromEntity();
+    }
 
     this.emitLive();
 
@@ -1710,6 +1773,10 @@ export class Planner extends EventTarget {
     // (Re)resolve the OpenFreeMap neighborhood overlay to match the config +
     // geo fit (inert unless enabled + a calibrated landmark exists).
     void this._reconfigureNeighborhood();
+    // (Re)start the flight/ISS polls to match the authoritative config (inert
+    // unless enabled + an observer origin resolves).
+    this._flightsInited = true;
+    void this._reconfigureFlights();
     // (Re)start the Alert Center collectors to match the authoritative config
     // (honors the enabled toggle; only starts once a connection exists).
     if (this._alertInited) this._reconfigureAlertCenter();
@@ -1754,6 +1821,7 @@ export class Planner extends EventTarget {
       geo:            remote.geo            ?? undefined,
       mqttBridge:     remote.mqttBridge     ?? undefined,
       neighborhood:   remote.neighborhood   ?? undefined,
+      flights:        remote.flights        ?? undefined,
       avatarPacks:    remote.avatarPacks    ?? undefined,
       notes:          remote.notes          ?? undefined,
       avatarInteractions: remote.avatarInteractions ?? undefined,
@@ -2035,6 +2103,11 @@ export class Planner extends EventTarget {
   private _isSlowEntity(id: string): boolean {
     if (!id) return false;
     if (id.startsWith('number.') || id.startsWith('switch.')) return true;
+    // The 'entity' flight source's bound rest-sensor proxy: config-path so the
+    // sidebar status + the renderer dirty key repaint when a new aircraft list
+    // lands. Scoped to that ONE configured id, and only while that source is
+    // selected (a blanket rule would emit for unrelated sensor traffic).
+    if (this.store.flights?.source === 'entity' && this.store.flights.entityId === id) return true;
     // Bound environmental sensor entities route through the config channel so
     // the sidebar's live readings re-render. Only entities actually bound on
     // the current floor qualify — a blanket sensor.* rule would emit config
@@ -2827,7 +2900,11 @@ export class Planner extends EventTarget {
   get alertFeed(): PanelAlert[] {
     const cfg = this.store.alerts;
     if (!alertCenterEnabled(cfg)) return [];
-    return buildAlertFeed(this.notifications, this.repairIssues, cfg);
+    // Flight/ISS notices are client-local and already built — they ride the
+    // `extra` channel (no HA source toggle / severity floor applies) and are
+    // filtered against the session's dismissed-id set.
+    return buildAlertFeed(this.notifications, this.repairIssues, cfg,
+      this.flightAlerts.filter(a => !this._flightAlertDismissed.has(a.id)));
   }
 
   // Mutate the alert config (creating a sensible default the first time), persist,
@@ -2917,7 +2994,16 @@ export class Planner extends EventTarget {
   // from the feed, keeps it in the registry). View mode refuses. The optimistic
   // local removal keeps the drawer snappy; the next push / poll reconciles.
   dismissAlert(a: PanelAlert): void {
-    if (this.uiMode === 'view' || !this.hass) return;
+    if (this.uiMode === 'view') return;
+    // Flight/ISS notices are client-local — dismissing one is a purely local
+    // mute (no service call), so it works with or without a live connection.
+    if (a.source === 'flight') {
+      this._flightAlertDismissed.add(a.id);
+      this.flightAlerts = this.flightAlerts.filter(x => x.id !== a.id);
+      this.emitConfig();
+      return;
+    }
+    if (!this.hass) return;
     if (a.source === 'notification' && a.notificationId) {
       this.hass.callService('persistent_notification', 'dismiss', { notification_id: a.notificationId });
       this.notifications = this.notifications.filter(n => n.notification_id !== a.notificationId);
@@ -4921,6 +5007,300 @@ export class Planner extends EventTarget {
     }
     if (runId !== this._nbhdRunId) return;
     this._extractNeighborhood(source, addrs, t);
+  }
+
+  // ── Flights & ISS (roadmap P4) ──────────────────────────────────────────────
+  // Mutate the flight config (creating it on first use), persist, re-apply the
+  // source and repaint — the setWeather / setNeighborhood pattern, so switching
+  // source or cadence restarts / stops the polls cleanly.
+  setFlights(mut: (f: FlightsConfig) => void): void {
+    if (!this.store.flights) this.store.flights = { source: 'cloud' };
+    mut(this.store.flights);
+    // Normalize the watch list HERE (not only in the settings UI) so every entry
+    // point — settings edit, import, hand-edited config — stores the same
+    // uppercase, trimmed, blank-free shape the matcher expects.
+    const al = this.store.flights.alerts;
+    if (al && al.watch) {
+      const w = al.watch.map(s => String(s).trim().toUpperCase()).filter(s => s !== '');
+      al.watch = w.length ? w : undefined;
+    }
+    this.save();
+    void this._reconfigureFlights();
+    this.emitConfig();
+  }
+
+  // Where the house is, in the real world — the observer point every bearing /
+  // distance / satellite-altitude calculation needs. The SAME fallback chain the
+  // sky-astro observer already uses (three-view will reuse this helper), so
+  // there is only one "where is the house" resolution path: a calibrated
+  // landmark fit first, then the weather config's lat/lon, then nothing. Cheap
+  // enough to call per frame.
+  flightsOrigin(): { lat: number; lon: number } | null {
+    const fit = this.geoFit();
+    if (fit && fit.transform.quality !== 'none') {
+      return { lat: fit.transform.originLat, lon: fit.transform.originLon };
+    }
+    const w = this.store.weather;
+    if (w && typeof w.lat === 'number' && isFinite(w.lat)
+      && typeof w.lon === 'number' && isFinite(w.lon)) {
+      return { lat: w.lat, lon: w.lon };
+    }
+    return null;
+  }
+
+  // Configured search/display radius (nm) and poll cadence (s), clamped.
+  private _flightsRadiusNm(): number {
+    const r = this.store.flights?.radiusNm;
+    return Math.max(5, Math.min(100,
+      typeof r === 'number' && isFinite(r) ? r : Planner.FLIGHTS_DEFAULT_RADIUS_NM));
+  }
+
+  private _flightsPollMs(): number {
+    const p = this.store.flights?.pollSeconds;
+    return Math.max(5, Math.min(60, typeof p === 'number' && isFinite(p) ? p : 8)) * 1000;
+  }
+
+  // (Re)apply the flight config: stop both timers, then start whatever the
+  // current source needs. Idempotent. Inert (no fetch, no timer, data nulled)
+  // when the feature is disabled or no observer origin resolves — the display
+  // math needs a real lat/lon for EVERY source, not just the cloud one. Offline
+  // mode is deliberately NOT a gate: "offline" means no HA backend, not no
+  // internet (the Open-Meteo precedent).
+  private async _reconfigureFlights(): Promise<void> {
+    if (this._flightsTimer) { clearInterval(this._flightsTimer); this._flightsTimer = null; }
+    if (this._issTimer) { clearInterval(this._issTimer); this._issTimer = null; }
+
+    const cfg = this.store.flights;
+    if (!cfg?.enabled) {
+      this.flightsNow = null; this.issNow = null;
+      this.flightsStatus = 'off'; this.flightsRev++;
+      this.emitConfig();
+      return;
+    }
+    if (!this.flightsOrigin()) {
+      this.flightsNow = null; this.issNow = null;
+      this.flightsStatus = 'no-origin'; this.flightsRev++;
+      this.emitConfig();
+      return;
+    }
+
+    const source = cfg.source ?? 'cloud';
+    if (source === 'entity') {
+      // No timer: the bound entity pushes over state_changed (config-path, see
+      // _isSlowEntity). Recompute now from whatever state is already loaded.
+      this._recomputeFlightsFromEntity();
+    } else {
+      void this._pollFlights();
+      this._flightsTimer = setInterval(() => void this._pollFlights(), this._flightsPollMs());
+    }
+
+    // The ISS runs on its own cadence, independent of the aircraft source.
+    if (cfg.iss !== false) {
+      void this._pollIss();
+      this._issTimer = setInterval(() => void this._pollIss(), Planner.ISS_POLL_MS);
+    } else if (this.issNow) {
+      this.issNow = null; this.flightsRev++; this.emitConfig();
+    }
+  }
+
+  // Fetch + apply one aircraft poll (cloud / local sources). Guarded against
+  // overlapping fetches. A failed fetch KEEPS the last data (stale-tolerant like
+  // weather) and only reports 'error' when there is nothing to show.
+  private async _pollFlights(): Promise<void> {
+    const cfg = this.store.flights;
+    if (!cfg?.enabled) return;
+    const source = cfg.source ?? 'cloud';
+    if (source === 'entity') return;
+    const origin = this.flightsOrigin();
+    if (!origin) return;
+    if (this._flightsFetching) return;
+    this._flightsFetching = true;
+    try {
+      const json = source === 'local'
+        ? (cfg.localUrl ? await fetchLocalAircraft(cfg.localUrl) : null)
+        : await fetchAirplanesLive(origin.lat, origin.lon, this._flightsRadiusNm());
+      if (json) {
+        this._applyFlights(normalizeAircraftList(json), origin);
+      } else if (!this.flightsNow && this.flightsStatus !== 'error') {
+        // Nothing to fall back on — report once, don't spam on every retry.
+        this.flightsStatus = 'error';
+        this.emitConfig();
+      }
+    } finally {
+      this._flightsFetching = false;
+    }
+  }
+
+  // Recompute from the bound HA entity's attributes ('entity' source — an HA
+  // rest/template sensor that did the fetching SERVER-side, so no CORS applies).
+  // Accepts the array under `aircraft` / `ac` / `flights` (the fr24 HACS shape),
+  // or an attributes object that is itself an array — normalizeAircraftList
+  // unwraps all of them.
+  private _recomputeFlightsFromEntity(): void {
+    const cfg = this.store.flights;
+    if (!cfg?.enabled || (cfg.source ?? 'cloud') !== 'entity' || !cfg.entityId) return;
+    const origin = this.flightsOrigin();
+    if (!origin) return;
+    const attrs = this.hass?.states?.[cfg.entityId]?.attributes;
+    if (!attrs) {
+      if (!this.flightsNow && this.flightsStatus !== 'error') {
+        this.flightsStatus = 'error'; this.emitConfig();
+      }
+      return;
+    }
+    this._applyFlights(normalizeAircraftList(attrs), origin);
+  }
+
+  // Shared post-processing for every source: fill distNm from the observer
+  // origin (recomputed even when the cloud supplied `dst`, so one consistent
+  // number feeds both the filter and the display shell), drop anything outside
+  // the radius / altitude band, sort nearest-first and cap the render count.
+  private _applyFlights(list: FlightPoint[], origin: { lat: number; lon: number }): void {
+    const cfg = this.store.flights;
+    const radiusNm = this._flightsRadiusNm();
+    const minAlt = typeof cfg?.minAltFt === 'number' && isFinite(cfg.minAltFt) ? cfg.minAltFt : null;
+    const maxAlt = typeof cfg?.maxAltFt === 'number' && isFinite(cfg.maxAltFt) ? cfg.maxAltFt : null;
+    const kept: FlightPoint[] = [];
+    for (const fp of list) {
+      const { distNm } = flightBearingDistance(origin.lat, origin.lon, fp.lat, fp.lon);
+      if (distNm > radiusNm) continue;
+      if (minAlt !== null && fp.altFt < minAlt) continue;
+      if (maxAlt !== null && fp.altFt > maxAlt) continue;
+      fp.distNm = distNm;
+      kept.push(fp);
+    }
+    kept.sort((a, b) => (a.distNm ?? 0) - (b.distNm ?? 0));
+    this.flightsNow = kept.slice(0, MAX_AIRCRAFT);
+    this.flightsAt = Date.now();
+    this.flightsStatus = 'ok';
+    this.flightsRev++;
+    // Evaluate the alert triggers over the FILTERED list, then repaint once —
+    // the emitConfig below covers both the data change and any new alert.
+    this._computeFlightAlerts();
+    this.emitConfig();
+  }
+
+  // ── Flight / ISS alert triggers (research §6.3) ─────────────────────────────
+  // Cheap: it only walks the already-polled, already-capped aircraft list plus a
+  // single ISS altitude — no fetch, no allocation beyond the alerts themselves.
+  // Called at the end of every successful aircraft poll AND every advanced ISS
+  // fix. Returns whether `flightAlerts` changed; it deliberately does NOT emit —
+  // both call sites emitConfig unconditionally right after (one repaint covers
+  // the data change and the alert).
+  private _computeFlightAlerts(): boolean {
+    const cfg = this.store.flights;
+    const now = Date.now();
+    const before = this.flightAlerts.length ? this.flightAlerts.map(a => a.id).join('|') : '';
+
+    // Prune the retention window first so a stale notice can't linger behind the
+    // cap and starve a fresh one.
+    this.flightAlerts = this.flightAlerts.filter(
+      a => now - (a.createdAt ? Date.parse(a.createdAt) : 0) < Planner.FLIGHT_ALERT_TTL_MS);
+
+    if (cfg?.enabled) {
+      const push = (a: PanelAlert, cooldownMs: number): void => {
+        const last = this._flightAlertAt.get(a.id) ?? 0;
+        if (now - last < cooldownMs) return;
+        this._flightAlertAt.set(a.id, now);
+        // A push past the cooldown is a genuinely NEW event, so re-arm an id the
+        // user dismissed earlier (ids are stable per hex — without this, one
+        // dismissal would mute that aircraft for the whole session).
+        this._flightAlertDismissed.delete(a.id);
+        this.flightAlerts = this.flightAlerts.filter(x => x.id !== a.id);
+        this.flightAlerts.push(a);
+      };
+
+      const lowAlt = cfg.alerts?.lowAltFt;
+      const watch = cfg.alerts?.watch;
+      const list = this.flightsNow ?? [];
+
+      for (const fp of list) {
+        const who = fp.callsign ?? fp.hex.toUpperCase();
+        // Low overflight: below the threshold AND genuinely overhead (the radius
+        // filter alone would fire for anything low anywhere in a 30 nm circle).
+        if (typeof lowAlt === 'number' && isFinite(lowAlt)
+          && fp.altFt < lowAlt && (fp.distNm ?? 99) <= Planner.FLIGHT_LOW_DIST_NM) {
+          push({
+            id: `flight:low:${fp.hex}`,
+            source: 'flight',
+            severity: 'warning',
+            title: `Low overflight: ${who} at ${Math.round(fp.altFt).toLocaleString()} ft`,
+            message: `${(fp.distNm ?? 0).toFixed(1)} nm from home`,
+            createdAt: new Date(now).toISOString(),
+            dismissible: true,
+          }, Planner.FLIGHT_LOW_COOLDOWN_MS);
+          // A low flyover is also a house-wide "moment" — avatars glance up
+          // (the weather-event precedent: no fixture anchor, x/y null).
+          this.householdEvents.push({ furnitureId: null, kind: 'flyover', at: now });
+          this._pruneEvents(now);
+        }
+        // Watch list: uppercase callsign PREFIX or an exact hex match. Entries
+        // are normalized to uppercase on save, but re-upper here so a
+        // hand-edited config still matches.
+        if (watch && watch.length) {
+          const cs = (fp.callsign ?? '').toUpperCase();
+          const hex = fp.hex.toUpperCase();
+          const hit = watch.some(w => {
+            const t = w.trim().toUpperCase();
+            return t !== '' && ((cs !== '' && cs.startsWith(t)) || hex === t);
+          });
+          if (hit) {
+            push({
+              id: `flight:watch:${fp.hex}`,
+              source: 'flight',
+              severity: 'info',
+              title: `Watched flight: ${who}`,
+              message: `${Math.round(fp.altFt).toLocaleString()} ft · ${(fp.distNm ?? 0).toFixed(1)} nm`,
+              createdAt: new Date(now).toISOString(),
+              dismissible: true,
+            }, Planner.FLIGHT_WATCH_COOLDOWN_MS);
+          }
+        }
+      }
+
+      // ISS pass: a live EDGE DETECTOR, not a prediction (§6.3 — the v1 ISS
+      // source reports position only, it cannot propagate). Fires once on the
+      // below→above transition of the horizon threshold.
+      const iss = this.issNow;
+      const origin = this.flightsOrigin();
+      if (cfg.alerts?.issPass !== false && iss && origin) {
+        const { altRad } = satAltAz(origin.lat, origin.lon, iss.lat, iss.lon, iss.altKm);
+        const altDeg = altRad * 180 / Math.PI;
+        const up = altDeg > Planner.ISS_UP_ALT_DEG;
+        if (up && !this._issWasUp) {
+          // Hour-bucketed id: an ISS pass is a one-off moment, and the bucket
+          // keeps a re-entry within the same hour from stacking duplicates.
+          push({
+            id: `flight:iss:${Math.floor(now / 3600000)}`,
+            source: 'flight',
+            severity: 'info',
+            title: `ISS pass — above the horizon now (alt ${Math.round(altDeg)}°)`,
+            message: 'The International Space Station is up.',
+            createdAt: new Date(now).toISOString(),
+            dismissible: true,
+          }, 0);
+        }
+        this._issWasUp = up;
+      }
+    }
+
+    if (this.flightAlerts.length > Planner.FLIGHT_ALERT_CAP)
+      this.flightAlerts.splice(0, this.flightAlerts.length - Planner.FLIGHT_ALERT_CAP);
+    return this.flightAlerts.map(a => a.id).join('|') !== before;
+  }
+
+  // Poll the live ISS sub-point. Repaints only when the fix actually advanced
+  // (the feed's own timestamp changed), so the 10 s timer doesn't churn.
+  private async _pollIss(): Promise<void> {
+    const cfg = this.store.flights;
+    if (!cfg?.enabled || cfg.iss === false) return;
+    const iss = await fetchIssNow();
+    if (!iss) return;                                   // keep the last fix
+    if (this.issNow && this.issNow.tsMs === iss.tsMs) return;
+    this.issNow = iss;
+    this.flightsRev++;
+    this._computeFlightAlerts();   // ISS-above-horizon edge; the emit below repaints
+    this.emitConfig();
   }
 
   // Resolve (and cache) the OpenFreeMap tile-URL template, or validate a custom

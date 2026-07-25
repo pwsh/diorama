@@ -168,6 +168,40 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Roadmap P4 — flight & satellite tracking** (2026-07-25; 3 sequential
+  Opus waves per `docs/research/flight-tracking.md` — that doc pinned the
+  source landscape with live-curl verification: airplanes.live is the ONLY
+  CORS-open cloud ADS-B API (adsb.lol/adsb.fi send no CORS header; OpenSky
+  is CORS-locked to its own origin AND its ToS forbids operational product
+  use); local receivers (tar1090/readsb/dump1090-fa) need a user-added
+  lighttpd CORS block; satellites v1 = ISS-only via wheretheiss.at (CORS
+  open, 350 req/5 min) — NO SGP4, no npm dep, pass prediction deferred.
+  Wave 1 data layer: pure zero-import `flights.ts` (normalizer over
+  {aircraft}/{ac}/bare-array + fr24 aliases, 'ground' filtered; asymptotic
+  radius + log altitude compression into the 24 000/2 500–22 000 mm display
+  shell — deliberately not to scale; bearing math; MAX_AIRCRAFT 50),
+  `adsb-sources.ts` fetch isolation, `satAltAz` ECEF/ENU in sky-astro,
+  planner poll wiring (cloud/local/entity sources, ISS 10 s timer,
+  flightsOrigin() = geo-fit origin → weather lat/lon, flightsStatus,
+  stale-tolerant). Real 94-aircraft LAX capture as fixture; 144/144.
+  Wave 2 renderer: home-anchored `_flightsGroup` (persists across floors),
+  persistent per-hex rigs, prop/jet/heli models by ADS-B category +
+  military olive tint, prop+callsign tows a real banner (reused
+  `_buildBanner`), others get cel-shaded sprite labels w/ REAL altitude,
+  zero-alloc dead reckoning (eased display pos τ1.5 s, shortest-arc yaw
+  shared w/ the bg tow-plane convention, YXZ order, vert-rate pitch),
+  camera-recentered ISS sprite via satAltAz + `_skyScenePos(rotRad)`,
+  2D dart glyphs + `flights` layer; 80/80. Wave 3 UI/alerts: Settings ▸
+  Integrations block (status line, source radios w/ privacy disclosure +
+  CORS hint + live mixed-content warning, radius/poll/alt filters, labels
+  + ISS toggles, watch-list), airplanes.live attribution chip (stacked w/
+  OSM), alert-center `'flight'` source via buildAlertFeed's new optional
+  extra channel (low overflight <N ft within 3 nm w/ 10 min/hex cooldown,
+  watch-list, ISS-rise edge >10°; dismiss re-arms past cooldown),
+  householdEvents `flyover` → ✈️ thought bubbles; 55/55 + alert-center
+  67/67 regression green. sky-astro+catalog moved to the startup chunk
+  (planner imports satAltAz) — net shipped bytes unchanged, split intact.
+
 - **Roadmap P5 — OpenFreeMap neighborhood** (2026-07-20; 3 sequential
   Opus waves per `docs/research/neighborhood-openfreemap.md`; MapLibre
   rejected for a zero-dep in-house path). Wave 1 data layer:

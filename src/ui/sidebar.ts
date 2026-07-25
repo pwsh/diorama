@@ -6196,6 +6196,7 @@ export class Sidebar extends LitElement {
       { key: 'battery', label: 'Battery warnings' },
       { key: 'dimensions', label: 'Dimensions' },
       { key: 'neighborhood', label: 'Neighborhood' },
+      { key: 'flights', label: 'Flights' },
       { key: 'activity', label: 'Activity glow' },
     ];
     // Display order only: alphabetical by label (locale compare). The preset

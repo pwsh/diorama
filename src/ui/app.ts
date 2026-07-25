@@ -367,19 +367,32 @@ export class App extends LitElement {
               <!-- Compass overlay: same shared-canvas mount as the chip (one
                    instance covers 2D + 3D); hidden unless compass.show. -->
               <diorama-compass .planner=${p}></diorama-compass>
-              <!-- Neighborhood attribution (OpenFreeMap — compliance, not
-                   configurable): shown in ALL UI modes whenever the overlay
-                   feature is enabled AND data is resolved. Fixed bottom-left of
-                   the shared canvas; links are the only pointer-interactive part. -->
-              ${p.store.neighborhood?.enabled === true && p.neighborhoodData != null ? html`
-                <div style="position:absolute;bottom:6px;left:8px;font-size:10px;line-height:1.2;
+              <!-- Data attribution (compliance, NOT configurable): shown in ALL
+                   UI modes whenever a third-party data feed is enabled AND its
+                   data is resolved. One fixed bottom-left container; each active
+                   source is its own stacked line. Links are the only
+                   pointer-interactive part. -->
+              ${(p.store.neighborhood?.enabled === true && p.neighborhoodData != null)
+                || (p.store.flights?.enabled === true
+                    && (p.store.flights.source ?? 'cloud') === 'cloud' && p.flightsNow != null) ? html`
+                <div style="position:absolute;bottom:6px;left:8px;font-size:10px;line-height:1.35;
                             color:var(--text-dim);pointer-events:none;
                             text-shadow:0 0 4px rgba(0,0,0,0.85),0 0 2px rgba(0,0,0,0.85)">
-                  <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer"
-                     style="color:inherit;pointer-events:auto;text-decoration:underline">© OpenStreetMap</a>
-                  ·
-                  <a href="https://openfreemap.org" target="_blank" rel="noopener noreferrer"
-                     style="color:inherit;pointer-events:auto;text-decoration:underline">OpenFreeMap</a>
+                  ${p.store.neighborhood?.enabled === true && p.neighborhoodData != null ? html`
+                    <div>
+                      <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer"
+                         style="color:inherit;pointer-events:auto;text-decoration:underline">© OpenStreetMap</a>
+                      ·
+                      <a href="https://openfreemap.org" target="_blank" rel="noopener noreferrer"
+                         style="color:inherit;pointer-events:auto;text-decoration:underline">OpenFreeMap</a>
+                    </div>` : nothing}
+                  ${p.store.flights?.enabled === true
+                    && (p.store.flights.source ?? 'cloud') === 'cloud' && p.flightsNow != null ? html`
+                    <div>
+                      Flight data
+                      <a href="https://airplanes.live" target="_blank" rel="noopener noreferrer"
+                         style="color:inherit;pointer-events:auto;text-decoration:underline">© airplanes.live</a>
+                    </div>` : nothing}
                 </div>
               ` : nothing}
               <diorama-zone-edit-bar .planner=${p}></diorama-zone-edit-bar>

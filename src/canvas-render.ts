@@ -40,6 +40,7 @@ import { CONDITION_GLYPH } from './weather.js';
 import { ALERT_BEACON_DEFAULTS, alertBeaconState, alertBeaconColor, alertBeaconAlarming, isAlertDomain } from './alerts.js';
 import { flagDominant } from './flags.js';
 import { vacMapAffine, vacSegColor, type ParsedVacMap, type VacSegment } from './valetudo-map.js';
+import { flightDisplayPos } from './flights.js';
 import type { Planner } from './planner.js';
 import type { Vec2, LightIconKind, Furniture, ObjectRecipe, RecipePrimitive, HassState } from './types.js';
 
@@ -320,6 +321,9 @@ export function drawAll(ctx: CanvasRenderingContext2D, p: Planner, view: View,
   // Geo landmark pins + GPS device pins + geo_location event pins (all ride the
   // `geo` layer).
   if (on(L.geo)) { drawGeoLandmarks(ctx, p, view); drawRecordedPins(ctx, p, view); drawGpsPins(ctx, p, view); drawGeoEventPins(ctx, p, view); }
+  // Live aircraft (roadmap P4) — display-only darts on the compressed shell,
+  // drawn late (over everything structural) but under the screen-fixed overlays.
+  if (on(L.flights)) drawFlights(ctx, p, view);
   drawNorthMarker(ctx, p, view);
   drawDoorbellPulses(ctx, p, view);
   // Dimensions overlay (rulers + wall/structure dimension lines) — drawn LATE so
@@ -327,6 +331,71 @@ export function drawAll(ctx: CanvasRenderingContext2D, p: Planner, view: View,
   if (on(L.dimensions)) { drawWallDimensions(ctx, p, view); drawRulers(ctx, p, view); }
   drawAlignGuides(ctx, p, view);
   drawFloorEditHandles(ctx, p, view);
+}
+
+// Live aircraft (ADS-B, roadmap P4). Display-only — no hit test, nothing
+// selectable. Positions come from the SAME pure flightDisplayPos the 3D shell
+// uses, so both views place a given aircraft on the same compressed bearing/
+// radius; the shell is anchored on the HOME POINT (the geo fit's plan origin,
+// else the floor centre), not on the floor rect.
+function drawFlights(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
+  const cfg = p.store.flights;
+  if (!cfg?.enabled) return;
+  const list = p.flightsNow;
+  if (!list || list.length === 0) return;
+  const origin = p.flightsOrigin();
+  if (!origin) return;
+  const f = p.floor();
+  const fit = p.geoFit();
+  const calibrated = !!fit && fit.transform.quality !== 'none';
+  const theta = calibrated ? fit!.transform.thetaRad : 0;
+  const ax = calibrated ? fit!.transform.tx : f.w / 2;
+  const ay = calibrated ? fit!.transform.ty : f.d / 2;
+  const radiusNm = cfg.radiusNm ?? 30;
+  const showLabels = cfg.showLabels !== false;
+  const dpr = window.devicePixelRatio || 1;
+  const R = 9 * dpr;
+  ctx.save();
+  for (const fp of list) {
+    const d = flightDisplayPos(fp, origin.lat, origin.lon, theta, radiusNm);
+    const pt = mmToPx(view, ax + d.planX, ay + d.planY);
+    // Screen rotation: the glyph is authored pointing SCREEN-UP (0,−1). Canvas y
+    // is flipped, so a plan track unit (px, py) points at screen (px, −py); a
+    // ctx.rotate(a) sends (0,−1) to (sin a, −cos a) ⇒ a = atan2(px, py).
+    let a = 0;
+    if (fp.trackDeg != null) {
+      const e = Math.sin(fp.trackDeg * Math.PI / 180), n = Math.cos(fp.trackDeg * Math.PI / 180);
+      const c = Math.cos(theta), s = Math.sin(theta);
+      a = Math.atan2(c * e - s * n, s * e + c * n);
+    }
+    ctx.save();
+    ctx.translate(pt.x, pt.y);
+    ctx.rotate(a);
+    ctx.beginPath();
+    ctx.moveTo(0, -R);                       // nose
+    ctx.lineTo(R * 0.62, R * 0.58);          // right tail
+    ctx.lineTo(0, R * 0.22);                 // notch
+    ctx.lineTo(-R * 0.62, R * 0.58);         // left tail
+    ctx.closePath();
+    ctx.fillStyle = fp.military ? 'rgba(139,152,99,0.92)' : 'rgba(203,213,225,0.9)';
+    ctx.fill();
+    ctx.lineWidth = 1 * dpr;
+    ctx.strokeStyle = 'rgba(15,23,32,0.7)';
+    ctx.stroke();
+    ctx.restore();
+    if (showLabels) {
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      ctx.font = `${10 * dpr}px sans-serif`;
+      ctx.fillStyle = 'rgba(203,213,225,0.85)';
+      ctx.fillText(fp.callsign ?? fp.hex.toUpperCase(), pt.x + R + 3 * dpr, pt.y - 3 * dpr);
+      ctx.font = `${9 * dpr}px sans-serif`;
+      ctx.fillStyle = 'rgba(148,163,184,0.7)';
+      ctx.fillText(`${Math.round(fp.altFt).toLocaleString('en-US')} ft`,
+                   pt.x + R + 3 * dpr, pt.y + 8 * dpr);
+    }
+  }
+  ctx.restore();
 }
 
 // In-plan north icon (compass feature). Gated on Store.compass.showNorthMarker
