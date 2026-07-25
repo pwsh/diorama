@@ -273,6 +273,116 @@ export function fmtAccuracyM(meters: number, imperial?: boolean): string {
   return `±${Math.round(m)} m`;
 }
 
+// ── Landmark CSV import (bulk lat/lon entry) ──────────────────────────────
+// A user with a surveyed / Google-My-Maps-exported list of points can paste it
+// in as landmarks instead of typing each lat/lon by hand. PURE + deterministic
+// + never throws (garbage in → empty rows + explanatory errors), matching the
+// mvt-decode / weather.ts defensive-parser discipline. The caller (Planner)
+// decides where each row lands on the plan.
+export interface LandmarkCsvRow { label: string; lat: number; lon: number; }
+
+// One physical CSV record + the 1-based source line it started on (used for the
+// `line N: …` error prefixes; a quoted field may span newlines, so the record
+// index and the line number are NOT the same thing).
+interface CsvRecord { cells: string[]; line: number; }
+
+const CSV_MAX_ROWS = 200;                       // sanity cap
+const CSV_NUM_RE = /^[+-]?(\d+\.?\d*|\.\d+)$/;  // same strictness as parseLatLon
+const CSV_LABEL_KEYS = ['label', 'name', 'title'];
+const CSV_LAT_KEYS = ['lat', 'latitude'];
+const CSV_LON_KEYS = ['lon', 'lng', 'long', 'longitude'];
+
+// RFC-4180-ish record splitter: comma delimiter, double-quoted fields (which may
+// contain commas and newlines), `""` as an escaped quote inside a quoted field.
+// CR is dropped outside quotes (CRLF files parse identically to LF ones).
+// Records whose cells are ALL blank are skipped (blank / trailing lines).
+function splitCsvRecords(text: string): CsvRecord[] {
+  const out: CsvRecord[] = [];
+  let cells: string[] = [];
+  let cur = '';
+  let quoted = false, inRec = false;
+  let line = 1, recLine = 1;
+  const begin = () => { if (!inRec) { inRec = true; recLine = line; } };
+  const endRecord = () => {
+    cells.push(cur); cur = '';
+    if (cells.some(c => c.trim() !== '')) out.push({ cells: cells.map(c => c.trim()), line: recLine });
+    cells = []; inRec = false;
+  };
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (quoted) {
+      if (ch === '"') {
+        if (text[i + 1] === '"') { cur += '"'; i++; } else quoted = false;
+      } else { cur += ch; if (ch === '\n') line++; }
+      continue;
+    }
+    if (ch === '"') { begin(); quoted = true; continue; }
+    if (ch === ',') { begin(); cells.push(cur); cur = ''; continue; }
+    if (ch === '\r') continue;
+    if (ch === '\n') { if (inRec) endRecord(); line++; continue; }
+    begin(); cur += ch;
+  }
+  if (inRec) endRecord();
+  return out;
+}
+
+const csvNum = (s: string): number | null => (CSV_NUM_RE.test(s) && isFinite(Number(s)) ? Number(s) : null);
+
+// Parse landmark rows out of CSV text.
+//   • Header row (optional): if the first record names a label/name/title column
+//     AND a lat/latitude column AND a lon/lng/long/longitude column (any order,
+//     case-insensitive, extra columns ignored), those positions are used.
+//   • No recognizable header: columns are assumed to be label,lat,lon. The first
+//     record counts as DATA when its lat/lon cells parse as numbers; otherwise it
+//     is skipped as an unrecognized header (noted in `errors`).
+//   • Per-row validation: non-empty label (the dedupe key upstream), finite
+//     lat ∈ [−90,90] and lon ∈ [−180,180]. A bad row contributes ONE `errors`
+//     entry and is skipped — the good rows still import (partial success).
+export function parseLandmarkCsv(text: string): { rows: LandmarkCsvRow[]; errors: string[] } {
+  const rows: LandmarkCsvRow[] = [];
+  const errors: string[] = [];
+  if (typeof text !== 'string' || text.trim() === '') return { rows, errors };
+
+  let recs: CsvRecord[];
+  try { recs = splitCsvRecords(text); } catch { return { rows, errors: ['could not read the file as CSV'] }; }
+  if (recs.length === 0) return { rows, errors };
+
+  // ── Column resolution ─────────────────────────────────────────────────────
+  let iLabel = 0, iLat = 1, iLon = 2, start = 0;
+  const head = recs[0].cells.map(c => c.toLowerCase());
+  const find = (keys: string[]) => head.findIndex(c => keys.indexOf(c) >= 0);
+  const hL = find(CSV_LABEL_KEYS), hA = find(CSV_LAT_KEYS), hO = find(CSV_LON_KEYS);
+  if (hL >= 0 && hA >= 0 && hO >= 0) {
+    iLabel = hL; iLat = hA; iLon = hO; start = 1;
+  } else {
+    // Headerless: treat row 1 as data only if its lat/lon cells are numbers.
+    const c = recs[0].cells;
+    if (csvNum(c[1] ?? '') == null || csvNum(c[2] ?? '') == null) {
+      start = 1;
+      errors.push(`line ${recs[0].line}: skipped (unrecognized header — expected label, latitude, longitude)`);
+    }
+  }
+
+  for (let r = start; r < recs.length; r++) {
+    const { cells, line } = recs[r];
+    if (rows.length >= CSV_MAX_ROWS) {
+      errors.push(`line ${line}: stopped — at most ${CSV_MAX_ROWS} landmarks per import`);
+      break;
+    }
+    const label = (cells[iLabel] ?? '').trim();
+    const latRaw = (cells[iLat] ?? '').trim();
+    const lonRaw = (cells[iLon] ?? '').trim();
+    if (!label) { errors.push(`line ${line}: empty label`); continue; }
+    const lat = csvNum(latRaw), lon = csvNum(lonRaw);
+    if (lat == null) { errors.push(`line ${line}: latitude "${latRaw}" is not a number`); continue; }
+    if (lon == null) { errors.push(`line ${line}: longitude "${lonRaw}" is not a number`); continue; }
+    if (lat < -90 || lat > 90) { errors.push(`line ${line}: latitude ${lat} out of range (-90..90)`); continue; }
+    if (lon < -180 || lon > 180) { errors.push(`line ${line}: longitude ${lon} out of range (-180..180)`); continue; }
+    rows.push({ label, lat, lon });
+  }
+  return { rows, errors };
+}
+
 export interface LatLonSample { lat: number; lon: number; accuracy?: number; }
 export interface MedianLatLon { lat: number; lon: number; count: number; accuracy: number | null; }
 

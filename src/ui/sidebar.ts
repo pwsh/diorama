@@ -6321,6 +6321,8 @@ export class Sidebar extends LitElement {
   @state() private _recordLon = '';
   @state() private _recordErr = '';
   @state() private _recordGroundKind: GroundKind = 'grass';
+  // Landmark CSV import: the last import's summary (dismissible inline banner).
+  @state() private _csvResult: { added: number; updated: number; pending: number; errors: string[] } | null = null;
   // 1 s liveness ticker: while an active session's card is on screen we force a
   // re-render every second so elapsed time / "last fix ago" stay current even
   // when zero samples arrive. Reconciled in updated(); cleared on disconnect.
@@ -6356,10 +6358,21 @@ export class Sidebar extends LitElement {
             it by standing there with your phone (open-sky, away from walls).
           </div>` : nothing}
         ${landmarks.map(lm => this._landmarkItem(lm))}
-        <button class="btn" style="width:100%;margin-top:6px"
-                @click=${() => { p.placingLandmarkId = NEW_LANDMARK; p.maybeCloseSidebarForPlacement(); p.emitConfig(); }}>
-          + Add landmark
-        </button>
+        <div style="display:flex;gap:4px;margin-top:6px">
+          <button class="btn" style="flex:1"
+                  @click=${() => { p.placingLandmarkId = NEW_LANDMARK; p.maybeCloseSidebarForPlacement(); p.emitConfig(); }}>
+            + Add landmark
+          </button>
+          <button class="btn" style="flex:1"
+                  title="Bulk-import landmarks from a CSV of label, latitude, longitude"
+                  @click=${this._importLandmarkCsv}>
+            ⤓ Import CSV
+          </button>
+        </div>
+        <div style="font-size:10px;color:var(--text-dim);padding:2px 0">
+          CSV columns: label, latitude, longitude (header optional)
+        </div>
+        ${this._csvSummary()}
 
         ${fit ? this._geoFitReadout(fit) : nothing}
         ${this._recordedSection()}
@@ -6536,24 +6549,72 @@ export class Sidebar extends LitElement {
     `);
   }
 
+  // Landmark CSV import (label, latitude, longitude — header optional). The
+  // file input is created on demand (the sh3d / avatar-pack import idiom); the
+  // parse + placement policy lives entirely in Planner.importLandmarksCsv.
+  private _importLandmarkCsv = () => {
+    const inp = document.createElement('input');
+    inp.type = 'file'; inp.accept = '.csv,text/csv';
+    inp.onchange = async () => {
+      const file = inp.files?.[0]; if (!file) return;
+      try {
+        const text = await file.text();
+        this._csvResult = this.planner.importLandmarksCsv(text);
+      } catch (err) {
+        this._csvResult = { added: 0, updated: 0, pending: 0, errors: ['Could not read the file: ' + (err as Error).message] };
+      }
+      this.requestUpdate();
+    };
+    inp.click();
+  };
+
+  private _csvSummary() {
+    const r = this._csvResult;
+    if (!r) return nothing;
+    const errs = r.errors.slice(0, 4);
+    const more = r.errors.length - errs.length;
+    return html`
+      <div style="border:1px solid var(--border);border-radius:4px;padding:5px 6px;margin:4px 0;font-size:11px">
+        <div style="display:flex;align-items:flex-start;gap:6px">
+          <span style="flex:1">Imported: ${r.added} added, ${r.updated} updated</span>
+          <button class="icon-btn" title="Dismiss"
+                  @click=${() => { this._csvResult = null; this.requestUpdate(); }}>✕</button>
+        </div>
+        ${r.pending > 0 ? html`
+          <div style="color:#ffb74d;padding-top:2px">
+            ${r.pending} need${r.pending === 1 ? 's' : ''} placing — click each row's 📍 button, then click the plan.
+          </div>` : nothing}
+        ${errs.length ? html`
+          <div style="color:#ff8a80;padding-top:3px">
+            ${errs.map(e => html`<div>${e}</div>`)}
+            ${more > 0 ? html`<div>+ ${more} more</div>` : nothing}
+          </div>` : nothing}
+      </div>`;
+  }
+
   private _landmarkItem(lm: GeoLandmark) {
     const p = this.planner;
     const calibrated = lm.lat != null && lm.lon != null;
+    // CSV-imported with real lat/lon but no plan position yet — excluded from
+    // the fit until the user places the pin (📍 → click the plan).
+    const pending = lm.pendingPlace === true;
     // Manually-entered landmarks have no sampling run (sampleCount absent).
     const manual = calibrated && lm.sampleCount == null;
     const dateStr = lm.sampledAt ? ` · ${new Date(lm.sampledAt).toLocaleDateString()}` : '';
-    const status = !calibrated
-      ? 'uncalibrated'
-      : manual
-        ? `manual${dateStr}`
-        : `${lm.accuracy != null ? fmtAccuracyM(lm.accuracy, p.store.imperial) : 'calibrated'}`
-          + ` · ${lm.sampleCount} samples${dateStr}`;
+    const status = pending
+      ? 'not placed — imported from CSV'
+      : !calibrated
+        ? 'uncalibrated'
+        : manual
+          ? `manual${dateStr}`
+          : `${lm.accuracy != null ? fmtAccuracyM(lm.accuracy, p.store.imperial) : 'calibrated'}`
+            + ` · ${lm.sampleCount} samples${dateStr}`;
     const cardOpen = this._calibLandmarkId === lm.id;
     const manualOpen = this._manualLandmarkId === lm.id;
     return html`
       <div style="border-bottom:1px solid var(--border)">
         <div class="sensor-item" style="cursor:default;gap:4px">
-          <div class="dot" style="background:${calibrated ? '#4dd0e1' : '#90a4ae'}"></div>
+          <div class="dot" style="background:${pending ? '#ffb74d' : calibrated ? '#4dd0e1' : '#90a4ae'}"></div>
           <input type="text" .value=${lm.name} style="flex:1;min-width:0" placeholder="Landmark name…"
                  @input=${(e: Event) => p.updateLandmark(lm.id, l => { l.name = (e.target as HTMLInputElement).value; })}>
           <button class="icon-btn" title=${lm.hidden ? 'Show pin' : 'Hide pin'}
@@ -6564,7 +6625,7 @@ export class Sidebar extends LitElement {
           <button class="icon-btn" title="Delete"
                   @click=${() => { if (this._calibLandmarkId === lm.id) this._calibLandmarkId = null; p.deleteLandmark(lm.id); }}>✕</button>
         </div>
-        <div style="font-size:10px;color:${calibrated ? 'var(--text-dim)' : '#ffb74d'};padding:0 0 3px 20px">
+        <div style="font-size:10px;color:${calibrated && !pending ? 'var(--text-dim)' : '#ffb74d'};padding:0 0 3px 20px">
           ${status}
         </div>
         ${calibrated ? html`

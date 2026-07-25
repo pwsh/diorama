@@ -1,0 +1,369 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>LANDMARKCSV …</title>
+<style>
+  body { margin:0; background:#0d1116; color:#cfd8dc; font:13px/1.45 sans-serif; padding:14px; }
+  h1 { font-size:15px; margin:0 0 8px; } h2 { font-size:12px; margin:12px 0 4px; color:#90caf9; }
+  #summary { font-size:14px; font-weight:bold; margin:8px 0; padding:8px 10px; border-radius:5px; }
+  .okbg { background:#12331f; color:#69f0ae; } .badbg { background:#3a1414; color:#ff8a80; }
+  .row { font-size:11px; padding:1px 0; } .pass { color:#69f0ae; } .fail { color:#ff5252; }
+</style>
+</head>
+<body>
+<h1>Landmark CSV import — pure parser + real Planner over a fake HaApi</h1>
+<div id="summary">Running…</div>
+<div id="rows"></div>
+
+<!-- Harness build (from the repo root; NEVER reuse stale bundles):
+       H=/tmp/diorama-harness-csv
+       rm -rf "$H"; mkdir -p "$H"; cp -r dist/* "$H"/
+       cp test-pages/landmark-csv-test.html "$H"/
+       npx esbuild src/geo.ts --format=esm --outfile="$H"/geo.mod.js
+       T=$(mktemp -d); cp -r src/* "$T"/
+       cp test-pages/fake-avatar-store.ts "$T"/avatar-store.ts
+       cp test-pages/fake-neighborhood-store.ts "$T"/neighborhood-store.ts
+       npx esbuild "$T"/planner.ts --bundle --format=esm --outfile="$H"/planner.mod.js
+     Run headless (serve over http — Chrome blocks dynamic module imports on file://):
+       (cd "$H" && python3 -m http.server 8797 &)
+       google-chrome --headless=new --disable-gpu --use-angle=swiftshader \
+         --virtual-time-budget=30000 --dump-dom \
+         "http://localhost:8797/landmark-csv-test.html" | grep -o "<title>[^<]*"  -->
+<script type="module">
+  const V = '?v=' + Date.now();
+  const { parseLandmarkCsv, fitGeoTransform, latLonToPlan, unprojectMeters } = await import('./geo.mod.js' + V);
+  const { Planner } = await import('./planner.mod.js' + V);
+
+  const results = [];
+  const ok = (name, cond, extra = '') => results.push({ name, pass: !!cond, extra: String(extra) });
+  const near = (a, b, tol = 1e-4) => Math.abs(a - b) <= tol;
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  async function waitFor(cond, tries = 600) {
+    for (let i = 0; i < tries; i++) { if (cond()) return true; await sleep(4); }
+    return !!cond();
+  }
+  const H = t => document.getElementById('rows').insertAdjacentHTML('beforeend', `<h2>${t}</h2>`);
+
+  // ── Fake HaApi over a Map (LocalApi seam) ─────────────────────────────────
+  class FakeHa {
+    constructor(seed) {
+      this.map = new Map();
+      for (const [k, v] of Object.entries(seed || {})) this.map.set(k, JSON.parse(JSON.stringify(v)));
+      this.states = {}; this._s = []; this._c = [];
+    }
+    connect() { for (const cb of this._c) cb('connected'); for (const cb of this._s) cb(this.states, undefined); }
+    onState(fn) { this._s.push(fn); } onConn(fn) { this._c.push(fn); }
+    callService() { return Promise.resolve(); }
+    async getHistory() { return {}; } async getWeatherForecasts() { return null; }
+    async getDevices() { return []; } async getEntityRegistry() { return []; } async updateEntityRegistry() { return true; }
+    async getUserData(k) { return this.map.has(k) ? JSON.parse(JSON.stringify(this.map.get(k))) : null; }
+    async setUserData(k, v) { this.map.set(k, JSON.parse(JSON.stringify(v))); return true; }
+    async refreshStates() {} async subscribeMqtt() { return () => {}; } async publishMqtt() {}
+  }
+
+  const FW = 12000, FD = 10000;
+  // A METRICALLY CONSISTENT calibration pair: the geo coordinates are derived
+  // from the plan positions (plan mm → metres → lat/lon about the origin), so
+  // the two-landmark Procrustes fit is EXACT (theta 0, rms 0, scale 1). That
+  // matters for §3's fit-neutrality assertions — a hand-typed lat/lon pair whose
+  // real-world separation disagreed with the plan separation would carry a large
+  // baseline residual and swamp the "imported rows don't move the fit" signal.
+  const LAT0 = 45, LON0 = -93;
+  const geoAt = (xMm, yMm) => unprojectMeters(xMm / 1000, yMm / 1000, LAT0, LON0);
+  const CAL = () => ([
+    { id: 'lmA', name: 'A', x: 0,    y: 0,    lat: LAT0, lon: LON0, sampleCount: 9 },
+    { id: 'lmB', name: 'B', x: 3000, y: 1000, ...geoAt(3000, 1000), sampleCount: 9 },
+  ]);
+  const FIT = fitGeoTransform(CAL().map(l => ({ x: l.x, y: l.y, lat: l.lat, lon: l.lon })));
+  // Import rows placed at exact plan positions, so a correct projection lands on
+  // an exact integer mm and contributes a genuinely zero-residual pair.
+  const IMPORTED = [
+    { label: 'Gate',    x: 5000,  y: 2000 },
+    { label: 'Mailbox', x: -1200, y: 4000 },
+    { label: 'Post',    x: 2500,  y: -800 },
+  ].map(r => ({ ...r, ...geoAt(r.x, r.y) }));
+  const IMPORT_CSV = 'label,latitude,longitude\n'
+    + IMPORTED.map(r => `${r.label},${r.lat},${r.lon}`).join('\n') + '\n';
+
+  async function mkPlanner({ landmarks = [], mode = 'edit' } = {}) {
+    localStorage.removeItem('diorama:store:v1'); localStorage.removeItem('diorama:configs');
+    const floor = { id: 'f1', name: 'Home', w: FW, d: FD, walls: [], furniture: [],
+      lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [], bleProxies: [],
+      doors: [], windows: [], rooms: [], groundAreas: [], bg: null };
+    const seed = { v: 2, floors: [floor], currentFloorId: 'f1', activeSensorId: null,
+      coverage: true, imperial: false, showDetails: false, useRawTargets: false,
+      geo: { landmarks, accuracyGateM: 30 } };
+    const p = new Planner();
+    p.connectWith(new FakeHa({ diorama: seed }));
+    await waitFor(() => p.configIndex !== null);
+    if (mode !== 'edit') p.setUiMode(mode);
+    return p;
+  }
+
+  try {
+    // ═══ 1. Parser — headers, quoting, validation ═══════════════════════════
+    H('1. parser');
+    {
+      const r = parseLandmarkCsv('label,latitude,longitude\nOak,45.1,-93.2\nShed,45.2,-93.3\n');
+      ok('1A header rows parsed', r.rows.length === 2, JSON.stringify(r.rows));
+      ok('1B header no errors', r.errors.length === 0, r.errors.join('|'));
+      ok('1C values', r.rows[0].label === 'Oak' && r.rows[0].lat === 45.1 && r.rows[1].lon === -93.3);
+    }
+    {
+      // Header in ANY order, extra/unknown columns ignored, case-insensitive.
+      const r = parseLandmarkCsv('LNG,Notes,NAME,Lat\n-93.2,hi,Oak,45.1\n');
+      ok('1D header any order + extras', r.rows.length === 1 && r.rows[0].label === 'Oak'
+        && r.rows[0].lat === 45.1 && r.rows[0].lon === -93.2, JSON.stringify(r.rows));
+    }
+    {
+      const r = parseLandmarkCsv('longitude,label,latitude\n-93.2,Oak,45.1\n');
+      ok('1E longitude/latitude spelled out, label mid', r.rows.length === 1
+        && r.rows[0].lon === -93.2 && r.rows[0].lat === 45.1);
+    }
+    {
+      // Headerless: first row is DATA because its lat/lon cells are numbers.
+      const r = parseLandmarkCsv('Oak,45.1,-93.2\nShed,45.2,-93.3');
+      ok('1F headerless numeric first row imported', r.rows.length === 2 && r.rows[0].label === 'Oak');
+      ok('1G headerless no errors', r.errors.length === 0, r.errors.join('|'));
+    }
+    {
+      // Unrecognized non-numeric first row → skipped as a header, WITH a note.
+      const r = parseLandmarkCsv('spot,where,coords\nOak,45.1,-93.2\n');
+      ok('1H unrecognized header skipped', r.rows.length === 1 && r.rows[0].label === 'Oak');
+      ok('1I unrecognized header noted', r.errors.length === 1 && /line 1/.test(r.errors[0]), r.errors[0]);
+    }
+    {
+      const r = parseLandmarkCsv('label,lat,lon\n"Oak, big one",45.1,-93.2\n');
+      ok('1J quoted label with comma', r.rows.length === 1 && r.rows[0].label === 'Oak, big one', r.rows[0]?.label);
+    }
+    {
+      const r = parseLandmarkCsv('label,lat,lon\n"The ""Big"" Oak",45.1,-93.2\n');
+      ok('1K "" escape', r.rows.length === 1 && r.rows[0].label === 'The "Big" Oak', r.rows[0]?.label);
+    }
+    {
+      const r = parseLandmarkCsv('label,lat,lon\n"Two\nLines",45.1,-93.2\nShed,45.2,-93.3\n');
+      ok('1L quoted newline keeps one record', r.rows.length === 2 && r.rows[0].label === 'Two\nLines',
+        JSON.stringify(r.rows.map(x => x.label)));
+      ok('1M line numbering after a multiline field', r.errors.length === 0, r.errors.join('|'));
+    }
+    {
+      const r = parseLandmarkCsv('label,lat,lon\n\nOak,45.1,-93.2\n\n\nShed,45.2,-93.3\n\n');
+      ok('1N blank lines skipped', r.rows.length === 2 && r.errors.length === 0, r.errors.join('|'));
+    }
+    {
+      const r = parseLandmarkCsv('label,lat,lon\r\nOak,45.1,-93.2\r\nShed,45.2,-93.3\r\n');
+      ok('1O CRLF', r.rows.length === 2 && r.rows[0].label === 'Oak', JSON.stringify(r.rows.map(x => x.label)));
+    }
+    {
+      const r = parseLandmarkCsv('label,lat,lon\n Oak , 45.1 , -93.2 \n');
+      ok('1P cells trimmed', r.rows.length === 1 && r.rows[0].label === 'Oak' && r.rows[0].lat === 45.1);
+    }
+    {
+      const r = parseLandmarkCsv([
+        'label,lat,lon',
+        'Good1,45.1,-93.2',
+        'TooFarNorth,91,-93.2',
+        'BadLon,45.1,-999',
+        'NotNumeric,north,-93.2',
+        ',45.3,-93.4',
+        'Good2,45.5,-93.6',
+      ].join('\n'));
+      ok('2A good rows survive bad ones', r.rows.length === 2
+        && r.rows[0].label === 'Good1' && r.rows[1].label === 'Good2', JSON.stringify(r.rows.map(x => x.label)));
+      ok('2B one error per bad row', r.errors.length === 4, r.errors.join(' | '));
+      ok('2C lat range error names line 3', /line 3/.test(r.errors[0]) && /lat/i.test(r.errors[0]), r.errors[0]);
+      ok('2D lon range error names line 4', /line 4/.test(r.errors[1]) && /lon/i.test(r.errors[1]), r.errors[1]);
+      ok('2E non-numeric error names line 5', /line 5/.test(r.errors[2]), r.errors[2]);
+      ok('2F empty label error names line 6', /line 6/.test(r.errors[3]) && /label/.test(r.errors[3]), r.errors[3]);
+    }
+    {
+      const lines = ['label,lat,lon'];
+      for (let i = 0; i < 250; i++) lines.push(`P${i},45.${i % 90},-93.1`);
+      const r = parseLandmarkCsv(lines.join('\n'));
+      ok('2G cap 200 rows', r.rows.length === 200, r.rows.length);
+      ok('2H cap noted in errors', r.errors.some(e => /200/.test(e)), r.errors.join('|'));
+    }
+    {
+      // Never throws on garbage.
+      let threw = false; let out = null;
+      try {
+        out = parseLandmarkCsv(' �",,,\n\n"""\n\x7f\x80,,');
+      } catch { threw = true; }
+      ok('2I garbage does not throw', !threw && out != null);
+      ok('2J garbage yields no rows', out && out.rows.length === 0, JSON.stringify(out?.rows));
+      ok('2K empty text → empty result', parseLandmarkCsv('').rows.length === 0
+        && parseLandmarkCsv('   ').errors.length === 0);
+      ok('2L non-string tolerated', parseLandmarkCsv(null).rows.length === 0);
+    }
+
+    // ═══ 3. Import WITH an existing fit → projected, fit-neutral ════════════
+    H('3. import with a live fit');
+    {
+      const p = await mkPlanner({ landmarks: CAL() });
+      const before = p.geoFit();
+      ok('3A seeded fit is full', before.transform.quality === 'full', before.transform.quality);
+      ok('3A2 seeded fit is exact (consistent fixture)', before.transform.rmsMm < 1e-3, before.transform.rmsMm);
+      const res = p.importLandmarksCsv(IMPORT_CSV);
+      ok('3B added 3', res.added === 3 && res.updated === 0, JSON.stringify(res));
+      ok('3C nothing pending (fit projected them)', res.pending === 0);
+      ok('3D no errors', res.errors.length === 0, res.errors.join('|'));
+      ok('3E landmark count 2→5', p.geoLandmarks().length === 5, p.geoLandmarks().length);
+      const gate = p.geoLandmarks().find(l => l.name === 'Gate');
+      const want = latLonToPlan(FIT, IMPORTED[0].lat, IMPORTED[0].lon);
+      ok('3F projected x matches latLonToPlan', gate.x === Math.round(want.x) && gate.x === IMPORTED[0].x,
+        `${gate.x} ≈ ${want.x}`);
+      ok('3G projected y matches latLonToPlan', gate.y === Math.round(want.y) && gate.y === IMPORTED[0].y,
+        `${gate.y} ≈ ${want.y}`);
+      ok('3H no pendingPlace flag', gate.pendingPlace === undefined);
+      ok('3I manual sentinel: sampledAt set', typeof gate.sampledAt === 'string');
+      ok('3J manual sentinel: no accuracy/sampleCount', gate.accuracy === undefined && gate.sampleCount === undefined);
+      // Fit neutrality: pair count grows, geometry does not move.
+      const after = p.geoFit();
+      ok('3K fit pair count 2→5', after.landmarks.length === 5, after.landmarks.length);
+      ok('3L quality unchanged', after.transform.quality === before.transform.quality);
+      ok('3M thetaRad stable', near(after.transform.thetaRad, before.transform.thetaRad, 1e-6),
+        `${after.transform.thetaRad} vs ${before.transform.thetaRad}`);
+      ok('3N tx stable', near(after.transform.tx, before.transform.tx, 0.01), `${after.transform.tx} vs ${before.transform.tx}`);
+      ok('3O ty stable', near(after.transform.ty, before.transform.ty, 0.01), `${after.transform.ty} vs ${before.transform.ty}`);
+      ok('3P rms stays sub-mm (zero-residual pairs)', after.transform.rmsMm < 0.05, after.transform.rmsMm);
+      ok('3P2 fittedScale still ≈ 1', near(after.transform.fittedScale, 1, 1e-6), after.transform.fittedScale);
+      // The fit is snapshotted ONCE: every row projects through the ORIGINAL fit.
+      const post = p.geoLandmarks().find(l => l.name === 'Post');
+      const wantPost = latLonToPlan(FIT, IMPORTED[2].lat, IMPORTED[2].lon);
+      ok('3Q later rows use the SAME (pre-import) fit',
+        post.x === Math.round(wantPost.x) && post.y === Math.round(wantPost.y) && post.x === IMPORTED[2].x,
+        `${post.x},${post.y} ≈ ${wantPost.x},${wantPost.y}`);
+    }
+
+    // ═══ 4. Import with NO fit → pendingPlace, excluded from the fit ════════
+    H('4. import with no fit');
+    {
+      const p = await mkPlanner({ landmarks: [] });
+      ok('4A no fit to begin with', p.geoFit() === null);
+      const res = p.importLandmarksCsv('label,lat,lon\nGate,45.0001,-92.9998\nShed,45.0003,-92.9995\n');
+      ok('4B added 2, pending 2', res.added === 2 && res.pending === 2, JSON.stringify(res));
+      const lms = p.geoLandmarks();
+      ok('4C both flagged pendingPlace', lms.every(l => l.pendingPlace === true));
+      ok('4D spaced-row placement', lms[0].x === Math.round(FW / 2) && lms[0].y === Math.round(FD / 2)
+        && lms[1].x === Math.round(FW / 2 + 600) && lms[1].y === Math.round(FD / 2),
+        lms.map(l => `${l.x},${l.y}`).join(' '));
+      ok('4E lat/lon retained', lms[0].lat === 45.0001 && lms[1].lon === -92.9995);
+      ok('4F geoFit still null (pending excluded)', p.geoFit() === null, JSON.stringify(p.geoFit()));
+      // Placement (what canvas-interact's landmark latch does) clears the flag.
+      p.updateLandmark(lms[0].id, l => { l.x = 1000; l.y = 2000; delete l.pendingPlace; });
+      ok('4G placement clears the flag', p.geoLandmarks()[0].pendingPlace === undefined);
+      const fit1 = p.geoFit();
+      ok('4H one placed landmark → single-quality fit', fit1 && fit1.transform.quality === 'single'
+        && fit1.landmarks.length === 1, fit1 && fit1.transform.quality);
+      p.updateLandmark(lms[1].id, l => { l.x = 4000; l.y = 2500; delete l.pendingPlace; });
+      const fit2 = p.geoFit();
+      ok('4I both placed → full fit over 2 pairs', fit2.transform.quality === 'full' && fit2.landmarks.length === 2);
+      // A later import now HAS a fit and lands projected.
+      const res2 = p.importLandmarksCsv('label,lat,lon\nPost,45.0002,-92.9996\n');
+      ok('4J later import projects (no pending)', res2.added === 1 && res2.pending === 0, JSON.stringify(res2));
+      ok('4K projected landmark carries no flag',
+        p.geoLandmarks().find(l => l.name === 'Post').pendingPlace === undefined);
+    }
+    {
+      // A second pending import continues the spaced row rather than stacking.
+      const p = await mkPlanner({ landmarks: [] });
+      p.importLandmarksCsv('A,45.0001,-93');
+      p.importLandmarksCsv('B,45.0002,-93');
+      const lms = p.geoLandmarks();
+      ok('4L second pending import offsets past the first',
+        lms[1].x === Math.round(FW / 2 + 600), lms.map(l => l.x).join(','));
+    }
+
+    // ═══ 5. Update path (label is the dedupe key) ═══════════════════════════
+    H('5. update by label');
+    {
+      const seeded = CAL();
+      seeded[0].accuracy = 7; seeded[0].sampledAt = '2020-01-01T00:00:00.000Z';
+      const p = await mkPlanner({ landmarks: seeded });
+      // "  a  " matches "A" (case-insensitive + trimmed).
+      const res = p.importLandmarksCsv('label,lat,lon\n"  a  ",45.5,-93.5\n');
+      ok('5A updated 1, added 0', res.updated === 1 && res.added === 0, JSON.stringify(res));
+      ok('5B count unchanged', p.geoLandmarks().length === 2);
+      const a = p.geoLandmarks()[0];
+      ok('5C lat/lon replaced', a.lat === 45.5 && a.lon === -93.5, `${a.lat},${a.lon}`);
+      ok('5D plan position kept', a.x === 0 && a.y === 0, `${a.x},${a.y}`);
+      ok('5E accuracy cleared', a.accuracy === undefined);
+      ok('5F sampleCount cleared', a.sampleCount === undefined);
+      ok('5G sampledAt refreshed', typeof a.sampledAt === 'string' && a.sampledAt !== '2020-01-01T00:00:00.000Z', a.sampledAt);
+      ok('5H name preserved as stored', a.name === 'A', a.name);
+    }
+    {
+      // Updating a landmark that is STILL pending keeps it pending.
+      const p = await mkPlanner({ landmarks: [] });
+      p.importLandmarksCsv('Gate,45.0001,-93');
+      const res = p.importLandmarksCsv('Gate,45.0009,-93.0009');
+      ok('5I re-import of a pending landmark updates it', res.updated === 1 && res.added === 0, JSON.stringify(res));
+      const g = p.geoLandmarks()[0];
+      ok('5J still pending (no real plan position yet)', g.pendingPlace === true);
+      ok('5K lat/lon updated', g.lat === 45.0009 && g.lon === -93.0009);
+      ok('5L geoFit still excludes it', p.geoFit() === null);
+    }
+    {
+      // A duplicate label WITHIN one file updates the row it just created.
+      const p = await mkPlanner({ landmarks: CAL() });
+      const res = p.importLandmarksCsv('label,lat,lon\nGate,45.0001,-93\nGate,45.0005,-93\n');
+      ok('5M in-file duplicate → 1 added + 1 updated', res.added === 1 && res.updated === 1, JSON.stringify(res));
+      ok('5N only one Gate exists', p.geoLandmarks().filter(l => l.name === 'Gate').length === 1);
+      ok('5O last value wins', p.geoLandmarks().find(l => l.name === 'Gate').lat === 45.0005);
+    }
+
+    // ═══ 6. Edit-mode gate ═════════════════════════════════════════════════
+    H('6. edit-only');
+    {
+      const p = await mkPlanner({ landmarks: CAL(), mode: 'kiosk' });
+      const res = p.importLandmarksCsv('label,lat,lon\nGate,45.0001,-93\n');
+      ok('6A kiosk refused', res.added === 0 && res.updated === 0 && res.errors.length > 0, JSON.stringify(res));
+      ok('6B store untouched', p.geoLandmarks().length === 2);
+      const pv = await mkPlanner({ landmarks: CAL(), mode: 'view' });
+      ok('6C view refused', pv.importLandmarksCsv('Gate,45.0001,-93').added === 0);
+      ok('6D view store untouched', pv.geoLandmarks().length === 2);
+    }
+    {
+      // An all-bad file mutates nothing and explains itself.
+      const p = await mkPlanner({ landmarks: CAL() });
+      const res = p.importLandmarksCsv('label,lat,lon\nBad,north,west\n');
+      ok('6E all-bad file adds nothing', res.added === 0 && res.errors.length >= 1, JSON.stringify(res));
+      ok('6F store untouched', p.geoLandmarks().length === 2);
+    }
+
+    // ═══ 7. Undo — one import is ONE step ══════════════════════════════════
+    H('7. undo');
+    {
+      const p = await mkPlanner({ landmarks: CAL() });
+      const before = p.geoLandmarks().map(l => l.name).join(',');
+      p.importLandmarksCsv('label,lat,lon\nGate,45.0001,-93\nShed,45.0002,-93\nPost,45.0003,-93\n');
+      ok('7A 5 landmarks after import', p.geoLandmarks().length === 5);
+      ok('7B canUndo', p.canUndo === true);
+      p.undo();
+      ok('7C ONE undo restores the pre-import list', p.geoLandmarks().map(l => l.name).join(',') === before,
+        p.geoLandmarks().map(l => l.name).join(','));
+      ok('7D and the count', p.geoLandmarks().length === 2);
+      p.redo();
+      ok('7E redo re-applies the whole import', p.geoLandmarks().length === 5);
+    }
+  } catch (e) {
+    ok('harness threw', false, e && (e.stack || e.message || String(e)));
+  }
+
+  // ── render ──
+  const rows = document.getElementById('rows');
+  let passN = 0, failN = 0;
+  for (const r of results) {
+    if (r.pass) passN++; else failN++;
+    rows.insertAdjacentHTML('beforeend',
+      `<div class="row"><span class="${r.pass ? 'pass' : 'fail'}">${r.pass ? 'PASS' : 'FAIL'}</span> ${r.name} <span style="color:#607d8b">${r.extra}</span></div>`);
+  }
+  const sum = document.getElementById('summary');
+  sum.className = failN === 0 ? 'okbg' : 'badbg';
+  sum.textContent = `LANDMARKCSV ${failN === 0 ? 'PASS' : 'FAIL'} ${passN}/${results.length}`;
+  document.title = `LANDMARKCSV ${failN === 0 ? 'PASS' : 'FAIL'} ${passN}/${results.length}`
+    + (failN ? ` [${results.filter(r => !r.pass).map(r => r.name).join(', ')}]` : '');
+</script>
+</body>
+</html>

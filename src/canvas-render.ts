@@ -636,17 +636,22 @@ function drawGeoLandmarks(ctx: CanvasRenderingContext2D, p: Planner, view: View)
     if (lm.hidden) continue;
     const c = mmToPx(view, lm.x, lm.y);
     const calibrated = lm.lat != null && lm.lon != null;
+    // CSV-imported, awaiting placement: real lat/lon but only a placeholder plan
+    // position (excluded from the fit) — draw it in the dashed/dim uncalibrated
+    // idiom, tinted amber so it reads as "needs you".
+    const pending = lm.pendingPlace === true;
     const active = p.placingLandmarkId === lm.id || p.geoCalib?.landmarkId === lm.id;
-    const base = calibrated ? '#4dd0e1' : '#90a4ae';
+    const solid = calibrated && !pending;
+    const base = pending ? '#ffb74d' : calibrated ? '#4dd0e1' : '#90a4ae';
     // Highlight ring for active (placing / calibrating) pins.
     if (active) {
       ctx.strokeStyle = '#ffd54f'; ctx.lineWidth = 2;
       ctx.beginPath(); ctx.arc(c.x, c.y, 12 * dpr, 0, 2 * Math.PI); ctx.stroke();
     }
     // Pin body.
-    ctx.fillStyle = calibrated ? base : 'rgba(144,164,174,0.6)';
+    ctx.fillStyle = solid ? base : pending ? 'rgba(255,183,77,0.6)' : 'rgba(144,164,174,0.6)';
     ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5;
-    if (!calibrated) ctx.setLineDash([3, 3]);
+    if (!solid) ctx.setLineDash([3, 3]);
     ctx.beginPath(); ctx.arc(c.x, c.y, 7 * dpr, 0, 2 * Math.PI);
     ctx.fill(); ctx.stroke(); ctx.setLineDash([]);
     // Pin glyph.
@@ -656,16 +661,18 @@ function drawGeoLandmarks(ctx: CanvasRenderingContext2D, p: Planner, view: View)
     // Name + calibration caption below.
     ctx.textBaseline = 'top';
     const txt = lm.name || 'Landmark';
-    const cap = calibrated
-      ? (lm.accuracy != null ? fmtAccuracyM(lm.accuracy, p.store.imperial) : 'calibrated')
-      : 'uncalibrated';
+    const cap = pending
+      ? 'imported · place me'
+      : calibrated
+        ? (lm.accuracy != null ? fmtAccuracyM(lm.accuracy, p.store.imperial) : 'calibrated')
+        : 'uncalibrated';
     ctx.font = `${10 * dpr}px sans-serif`;
     const tw = Math.max(ctx.measureText(txt).width, ctx.measureText(cap).width) + 8 * dpr;
     ctx.fillStyle = 'rgba(0,0,0,0.7)';
     ctx.fillRect(c.x - tw / 2, c.y + 11 * dpr, tw, 25 * dpr);
     ctx.fillStyle = '#fff';
     ctx.fillText(txt, c.x, c.y + 13 * dpr);
-    ctx.fillStyle = calibrated ? 'rgba(129,212,250,0.85)' : 'rgba(176,190,197,0.75)';
+    ctx.fillStyle = pending ? 'rgba(255,183,77,0.9)' : calibrated ? 'rgba(129,212,250,0.85)' : 'rgba(176,190,197,0.75)';
     ctx.font = `${9 * dpr}px sans-serif`;
     ctx.fillText(cap, c.x, c.y + 25 * dpr);
   }

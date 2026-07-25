@@ -1900,13 +1900,20 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
 
   // Geo-landmark placement latch (GPS / Geo UI): the next click places a pin.
   // NEW_LANDMARK creates a fresh (uncalibrated) landmark; an existing id
-  // re-places that pin. Landmarks are store-level (property-wide).
+  // re-places that pin. Landmarks are store-level (property-wide). This is the
+  // ONLY way a landmark's plan position changes from user action (landmarks are
+  // not canvas-draggable), so it is where a CSV-imported landmark's
+  // `pendingPlace` flag clears — it now has a real plan position, which makes it
+  // a live calibrated pair for geoFit().
   if (p.placingLandmarkId) {
     if (p.placingLandmarkId === NEW_LANDMARK) {
       p.addGeoLandmark(mm.x, mm.y);
     } else {
       const id = p.placingLandmarkId;
-      p.updateLandmark(id, l => { l.x = Math.round(mm.x); l.y = Math.round(mm.y); });
+      p.updateLandmark(id, l => {
+        l.x = Math.round(mm.x); l.y = Math.round(mm.y);
+        delete l.pendingPlace;
+      });
     }
     p.placingLandmarkId = null;
     p.emitConfig();

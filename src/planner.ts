@@ -17,7 +17,7 @@ import { stepFusion, newFusionState, DEFAULT_FUSION_CFG,
 import { buildAlertFeed, alertCenterEnabled, isAlertDomain,
          type PanelAlert, type HaNotification, type RepairIssue } from './alerts.js';
 import { fitGeoTransform, latLonToPlan, clampToBoundary, planBearingDeg, compass8, medianLatLon,
-         fmtDistanceM, fmtAccuracyM, projectRecordedPins, parseLatLon,
+         fmtDistanceM, fmtAccuracyM, projectRecordedPins, parseLatLon, parseLandmarkCsv,
          type GeoTransform, type GeoPair, type LatLonSample, type ProjectedRecordedPin } from './geo.js';
 import type { GeoConfig, GeoLandmark, RecordedPin, GroundKind, DioramaPerson, RobotFixture, ActionButton, Light, ValveFixture, BgTextEntry, BgTextEntryMode } from './types.js';
 import { formatEntityValue } from './value-rules.js';
@@ -3539,11 +3539,85 @@ export class Planner extends EventTarget {
     this.emitConfig();
   }
 
+  // Bulk-import landmarks from CSV text (columns label, latitude, longitude —
+  // header optional; see parseLandmarkCsv). Edit-only; ONE save()+emitConfig()
+  // for the whole import, so it is ONE undo step.
+  //
+  // The fit-poisoning problem: an imported row has a REAL lat/lon but no plan
+  // position, and geoFit() treats every lat/lon-bearing landmark as a calibrated
+  // pair. Dropping rows at a dummy x/y would wreck the transform. So:
+  //   • A usable fit already exists → project each row through it. The landmark
+  //     lands at its CORRECT plan position, contributing a zero-residual pair
+  //     (fit-neutral). The fit is computed ONCE up front and never recomputed
+  //     mid-import, so earlier rows can't shift where later rows project.
+  //   • No fit → the row imports with `pendingPlace: true` (EXCLUDED from
+  //     geoFit) at a spaced row near the current floor's centre so it is visible
+  //     and grabbable. Placing the pin clears the flag and it becomes a real
+  //     calibrated pair.
+  // A row whose label matches an existing landmark (case-insensitive, trimmed)
+  // UPDATES that landmark's lat/lon in place, keeping its plan position and
+  // following the manual-entry sentinel exactly (sampledAt set, accuracy +
+  // sampleCount cleared — no sampling run happened).
+  importLandmarksCsv(text: string): { added: number; updated: number; pending: number; errors: string[] } {
+    if (this.uiMode !== 'edit') return { added: 0, updated: 0, pending: 0, errors: ['Import is available in edit mode only.'] };
+    const parsed = parseLandmarkCsv(text);
+    const errors = [...parsed.errors];
+    if (parsed.rows.length === 0) {
+      if (errors.length === 0) errors.push('No landmark rows found in the file.');
+      return { added: 0, updated: 0, pending: 0, errors };
+    }
+    const g = this._ensureGeo();
+    // Resolve the fit ONCE (before any row lands) — see the note above.
+    const fitR = this.geoFit();
+    const fit = fitR && fitR.transform.quality !== 'none' ? fitR.transform : null;
+    const f = this.floor();
+    const key = (s: string) => s.trim().toLowerCase();
+    const byName = new Map<string, GeoLandmark>();
+    for (const lm of g.landmarks) { const k = key(lm.name || ''); if (k && !byName.has(k)) byName.set(k, lm); }
+    // Spaced-row fallback index continues past landmarks already awaiting placement.
+    let slot = g.landmarks.filter(l => l.pendingPlace).length;
+    const now = new Date().toISOString();
+    let added = 0, updated = 0, pending = 0;
+
+    for (const row of parsed.rows) {
+      const existing = byName.get(key(row.label));
+      if (existing) {
+        existing.lat = row.lat; existing.lon = row.lon;
+        existing.sampledAt = now;
+        delete existing.accuracy; delete existing.sampleCount;
+        // A landmark still awaiting placement STAYS pending (it has no real plan
+        // position yet); one already placed keeps its position and stays live.
+        updated++;
+        continue;
+      }
+      const lm: GeoLandmark = { id: newId('lm'), name: row.label, x: 0, y: 0,
+                                lat: row.lat, lon: row.lon, sampledAt: now };
+      const plan = fit ? latLonToPlan(fit, row.lat, row.lon) : null;
+      if (plan) {
+        lm.x = Math.round(plan.x); lm.y = Math.round(plan.y);
+      } else {
+        lm.x = Math.round(f.w / 2 + slot * 600); lm.y = Math.round(f.d / 2);
+        lm.pendingPlace = true;
+        slot++; pending++;
+      }
+      g.landmarks.push(lm);
+      byName.set(key(lm.name), lm);
+      added++;
+    }
+
+    this.save();
+    this.emitConfig();
+    return { added, updated, pending, errors };
+  }
+
   // Fit the current geo transform from calibrated landmarks. Returns the fit
   // plus the calibrated-landmark list aligned to `transform.residualsMm`, so the
   // sidebar can flag the worst outlier by name. Null when nothing is calibrated.
+  // Landmarks awaiting placement (CSV-imported, `pendingPlace`) are EXCLUDED —
+  // they carry a real lat/lon but only a placeholder plan position, which would
+  // poison the fit.
   geoFit(): { transform: GeoTransform; landmarks: GeoLandmark[] } | null {
-    const cal = this.geoLandmarks().filter(l => l.lat != null && l.lon != null);
+    const cal = this.geoLandmarks().filter(l => l.lat != null && l.lon != null && !l.pendingPlace);
     if (cal.length === 0) return null;
     const pairs: GeoPair[] = cal.map(l => ({ x: l.x, y: l.y, lat: l.lat!, lon: l.lon! }));
     return { transform: fitGeoTransform(pairs, this.store.geo?.northDeg), landmarks: cal };

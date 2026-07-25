@@ -1146,6 +1146,11 @@ export interface GeoLandmark {
   sampleCount?: number;        // usable samples the median was taken over
   sampledAt?: string;          // ISO timestamp of the calibration
   hidden?: boolean;            // per-landmark hide (plus the whole `geo` layer toggle)
+  pendingPlace?: boolean;      // CSV-imported with real lat/lon but NO plan position yet
+                               // (imported while no geo fit existed, so it couldn't be
+                               // projected). Planner.geoFit() EXCLUDES these — a dummy
+                               // x/y would poison the fit. Cleared when the user places
+                               // the pin on the plan (canvas-interact placement latch).
 }
 
 // A recorded-position pin (roadmap P2 — the REVERSE of a landmark): capture the

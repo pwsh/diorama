@@ -168,6 +168,16 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **GPS landmark CSV import** (2026-07-25; single Opus pass). Sidebar
+  GPS/Geo "⤓ Import CSV" — columns label/latitude/longitude, header in
+  any order or headerless, RFC-4180-ish quoting, per-row errors w/
+  partial success. Fit-poisoning guard: with a live fit rows project
+  onto correct plan spots (fit-neutral); without one they import as
+  `pendingPlace` pins EXCLUDED from `geoFit()` until the user places
+  them (placement latch clears the flag). Label-keyed updates follow
+  the manual-entry sentinel. landmark-csv-test 85/85; geo 80/80 +
+  flights 144/144 regression green.
+
 - **Roadmap P4 — flight & satellite tracking** (2026-07-25; 3 sequential
   Opus waves per `docs/research/flight-tracking.md` — that doc pinned the
   source landscape with live-curl verification: airplanes.live is the ONLY
