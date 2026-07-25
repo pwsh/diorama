@@ -1,6 +1,6 @@
 # Project status & pick-up guide
 
-Last updated: 2026-07-25, at **v0.29.1**. This is the single document to
+Last updated: 2026-07-25, at **v0.30.0**. This is the single document to
 read (alongside `CLAUDE.md`) to resume work with full context.
 
 ## Where things stand
@@ -178,8 +178,40 @@ instance.
   configRev — an 8 s poll was rebuilding every configRev-keyed 3D
   group, visibly resetting weather particles + the decorative
   plane/train; polls are live-path now, regression-pinned).
+  → v0.30.0 around the block (neighborhood draw distance to 3 km —
+  dynamic camera frustum w/ exact stock restore, radius-scaled
+  building/road caps; 6 showcase floorplans: appliance showroom,
+  garden center, interior design studio, pocket zoo w/ confined
+  animal avatars, underground hangout, starship deck — 18-plan
+  library 399/399; docs overhaul: guide refreshed v0.22→v0.29 w/ 2
+  new pages + 9 scripted feature screenshots (features.mjs), model
+  gallery recaptured at current designs incl. 6 never-captured light
+  kinds + siren + gate, floorplan captures refreshed, per-plan demo
+  links verified).
 
 ### Shipped since the DESIGN-sims arc (reverse order)
+
+- **Docs program + neighborhood draw distance** (2026-07-25; 6 parallel
+  agents: guide/captures/2×plans/gallery/draw-distance). Guide 9→11
+  pages current through v0.29.1 w/ config steps + 9 committed feature
+  screenshots captured by the NEW scripts/docs-site/features.mjs (CDP
+  recipe from floorplans.mjs; live Paris tiles + live LAX aircraft in
+  the shots); build.mjs gained guide-image copying. 6 showcase plans
+  (appliance-showroom, garden-center, interior-design-store, zoo,
+  underground-hangout, starship) — lib.mjs additively passes
+  customObjects + avatarPacks (starship loads star-trek-tng); zoo
+  confines animals via demo sensors in fence-loop rooms; 18-plan
+  build 399/399; full capture refresh (70 shots; zoo 2D re-shot after
+  a first-run boot-race blank) + all 18 ?demo= links verified.
+  Gallery capture-main.ts: +6 light kinds w/ per-kind framing table,
+  +siren, +gate, exhaust_wall wall-mount, ceiling-detector close-ups;
+  full 653-subject forced recapture at current designs. Neighborhood
+  draw distance: radius 100–3000 m via Planner.neighborhoodRadiusM()
+  (single clamp), buildingCapForRadius/roadCapForRadius (400→1600 /
+  600→1800), renderer _applyFrustumForRange — stock triple
+  10/150000/45000 restores EXACTLY when overlay off (load-bearing:
+  banner orbits + 15000:1 depth ratio for outline shells); tests
+  95/95 + 61/61.
 
 - **Flight-poll scene-churn fix** (2026-07-25, user-reported: sky items
   reset every ~5 s). Routine aircraft/ISS polls emitConfig'd → configRev
