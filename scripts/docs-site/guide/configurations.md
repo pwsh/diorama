@@ -50,8 +50,7 @@ with its description intact.
 An exported configuration is a self-contained snapshot. It includes the entire
 plan — floors, walls, rooms, doors and windows, furniture and custom objects,
 lighting and switches, sensors, people, roaming avatars, weather and geo
-settings, layers, saved views, and the notes field — **plus any avatar packs
-you have imported yourself**. That means a plan you hand to someone on a fresh
+settings, layers, saved views, and the notes field — **plus any avatar packs you have imported yourself**. That means a plan you hand to someone on a fresh
 browser brings its custom avatars with it and renders exactly as you built it,
 with nothing else to install.
 
@@ -63,19 +62,11 @@ through).
 
 If you've already drawn your home in **Sweet Home 3D**, you can import its
 native `.sh3d` file as a real, editable Diorama plan — not just a reference
-model. Diorama reads the file and builds actual **floors, walls, rooms, doors,
-windows, and furniture** you can then edit like anything you drew by hand.
+model. Diorama reads the file and builds actual **floors, walls, rooms, doors, windows, and furniture** you can then edit like anything you drew by hand.
 
-- Use **Import Sweet Home 3D (.sh3d)** in **Settings ▸ Data** (or the 3D Model
-  sidebar section). Levels become stacked floors that line up, walls become wall
-  runs, room polygons become named rooms, and doors/windows snap onto their
-  walls.
-- Furniture is matched best-effort by name to Diorama's kinds (toggle it off if
-  you'd rather not); pieces it can't recognize are skipped rather than dropped in
-  as mystery blocks.
-- The import arrives as a **new configuration** after a summary confirmation, so
-  it never disturbs your current plan. Any open-plan rooms that aren't fully
-  enclosed by walls are flagged but still imported.
+- Use **Import Sweet Home 3D (.sh3d)** in **Settings ▸ Data** (or the 3D Model sidebar section). Levels become stacked floors that line up, walls become wall runs, room polygons become named rooms, and doors/windows snap onto their walls.
+- Furniture is matched best-effort by name to Diorama's kinds (toggle it off if you'd rather not); pieces it can't recognize are skipped rather than dropped in as mystery blocks.
+- The import arrives as a **new configuration** after a summary confirmation, so it never disturbs your current plan. Any open-plan rooms that aren't fully enclosed by walls are flagged but still imported.
 
 This is different from the visual OBJ/MTL model import (covered in
 [The 3D view](3d-view.html)), which drops a non-editable model *under* your plan
@@ -84,8 +75,7 @@ use the OBJ import when you just want a visual backdrop.
 
 ## Offline standalone mode
 
-Diorama also runs as a plain web page with **no Home Assistant connection at
-all** — handy for designing a floor plan, building a demo, or trying it out
+Diorama also runs as a plain web page with **no Home Assistant connection at all** — handy for designing a floor plan, building a demo, or trying it out
 before you wire anything up.
 
 **Serve the files statically.** Serve the built `dist/` folder from any static
@@ -97,8 +87,7 @@ cd dist && python3 -m http.server 8080   # or any static server
 # open http://localhost:8080/index.html
 ```
 
-**Choose offline on the connect screen.** On first load, click **Use offline —
-no Home Assistant**. An **Offline** pill appears in the topbar to remind you.
+**Choose offline on the connect screen.** On first load, click **Use offline — no Home Assistant**. An **Offline** pill appears in the topbar to remind you.
 
 In offline mode the full editor works — place walls, furniture, roamers, demo
 avatars, and unbound fixtures (which you can still toggle locally), and weather
@@ -110,5 +99,19 @@ configurations — is stored **in this browser** (local storage) rather than in
 Home Assistant. To move a configuration to another browser or machine, use
 **Export** / **Import** as described above.
 
-**Reconnecting later.** To connect to Home Assistant, open **Settings ▸
-Connection** and click **Exit offline mode**.
+**Reconnecting later.** To connect to Home Assistant, open **Settings ▸ Connection** and click **Exit offline mode**.
+
+## The live demo
+
+Offline mode is also how the [live demo](../demo/index.html?demo=ranch-3bed) at
+`pwsh.github.io/diorama/demo` works: it's the real production build running
+client-side in your browser, with nothing installed and no account.
+
+- It arrives seeded with **twelve sample homes** — a studio through a large multi-level house — each loaded as its own configuration. Switch between them from the configuration dropdown, or link straight to one with `?demo=<name>` (the floor-plan library pages do exactly that).
+- Everything is **editable**. Draw, place, bind, orbit — the whole editor works. Bound devices simply show no live state, since there's no Home Assistant.
+- Your edits are saved **only in that browser's local storage**, never uploaded.
+- A **Reset demo** button in the topbar clears your changes and restores the original samples.
+
+It's the easiest way to try a feature before building it into your real plan —
+and because a configuration **Export** file is portable, you can build something
+in the demo and import it into your own Diorama afterwards.

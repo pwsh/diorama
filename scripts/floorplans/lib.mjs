@@ -332,9 +332,16 @@ export function floorplan(planId) {
   /**
    * Assemble the full Store. `floors` = Floor[] (from floor()). Optional
    * top-level `roamers` attach to the FIRST floor (convenience for single-floor
-   * plans). `scene3d` / `notes` as given.
+   * plans). `scene3d` / `notes` as given. `customObjects` = ObjectRecipe[] for
+   * plans that author their own primitive-built pieces (default []).
+   * `avatarPacks` = Record<packId, {loaded?, active?, members?}> for plans that
+   * need a non-default (franchise) avatar pack; omitted entirely when absent so
+   * plans that don't use it stay byte-identical.
    */
-  const assembleStore = ({ name, floors, scene3d, roamers: topRoamers, notes, imperial }) => {
+  const assembleStore = ({
+    name, floors, scene3d, roamers: topRoamers, notes, imperial,
+    customObjects, avatarPacks,
+  }) => {
     if (!floors || !floors.length) throw new Error(`${planId}: assembleStore needs ≥1 floor`);
     if (topRoamers && topRoamers.length) {
       floors[0].roamers = [...(floors[0].roamers ?? []), ...topRoamers];
@@ -350,9 +357,10 @@ export function floorplan(planId) {
       useRawTargets: false,
       showMotionZones: true,
       scene3d: scene3d ?? { preset: 'day' },
-      customObjects: [],
+      customObjects: customObjects ?? [],
       people: [],
       bleShowUnknown: true,
+      ...(avatarPacks ? { avatarPacks } : {}),
       notes: notes ?? '',
     };
   };

@@ -1,0 +1,1103 @@
+{
+  "diorama": 2,
+  "name": "The Bunker — Underground Hangout",
+  "exportedAt": "2026-07-25T00:00:00.000Z",
+  "store": {
+    "v": 2,
+    "floors": [
+      {
+        "id": "underground-hangout-fl1",
+        "name": "The Bunker",
+        "w": 14000,
+        "d": 10000,
+        "walls": [
+          {
+            "id": "underground-hangout-w1",
+            "points": [
+              {
+                "x": 800,
+                "y": 800
+              },
+              {
+                "x": 13600,
+                "y": 800
+              },
+              {
+                "x": 13600,
+                "y": 9400
+              },
+              {
+                "x": 800,
+                "y": 9400
+              },
+              {
+                "x": 800,
+                "y": 800
+              }
+            ]
+          },
+          {
+            "id": "underground-hangout-w2",
+            "points": [
+              {
+                "x": 6200,
+                "y": 800
+              },
+              {
+                "x": 6200,
+                "y": 5600
+              }
+            ]
+          },
+          {
+            "id": "underground-hangout-w3",
+            "points": [
+              {
+                "x": 800,
+                "y": 5600
+              },
+              {
+                "x": 6200,
+                "y": 5600
+              }
+            ]
+          },
+          {
+            "id": "underground-hangout-w4",
+            "points": [
+              {
+                "x": 6200,
+                "y": 5600
+              },
+              {
+                "x": 6200,
+                "y": 9400
+              }
+            ]
+          }
+        ],
+        "furniture": [
+          {
+            "id": "underground-hangout-fn1",
+            "x": 3400,
+            "y": 850,
+            "w": 2600,
+            "h": 180,
+            "kind": "wall_tv",
+            "rotation": 180,
+            "elevation": 1400,
+            "label": "Projection screen",
+            "localState": "playing"
+          },
+          {
+            "id": "underground-hangout-fn2",
+            "x": 3400,
+            "y": 1200,
+            "w": 450,
+            "h": 160,
+            "kind": "center_channel",
+            "rotation": 180,
+            "elevation": 500
+          },
+          {
+            "id": "underground-hangout-fn3",
+            "x": 1300,
+            "y": 1200,
+            "w": 250,
+            "h": 350,
+            "kind": "speaker_tower",
+            "rotation": 180
+          },
+          {
+            "id": "underground-hangout-fn4",
+            "x": 5500,
+            "y": 1200,
+            "w": 250,
+            "h": 350,
+            "kind": "speaker_tower",
+            "rotation": 180
+          },
+          {
+            "id": "underground-hangout-fn5",
+            "x": 1300,
+            "y": 2200,
+            "w": 400,
+            "h": 450,
+            "kind": "subwoofer",
+            "rotation": 180
+          },
+          {
+            "id": "underground-hangout-fn6",
+            "x": 2600,
+            "y": 2600,
+            "w": 950,
+            "h": 1000,
+            "kind": "theater_recliner"
+          },
+          {
+            "id": "underground-hangout-fn7",
+            "x": 4200,
+            "y": 2600,
+            "w": 950,
+            "h": 1000,
+            "kind": "theater_recliner"
+          },
+          {
+            "id": "underground-hangout-fn8",
+            "x": 3400,
+            "y": 4200,
+            "w": 3600,
+            "h": 1800,
+            "kind": "riser_platform"
+          },
+          {
+            "id": "underground-hangout-fn9",
+            "x": 3400,
+            "y": 4200,
+            "w": 2900,
+            "h": 1000,
+            "kind": "recliner_row3",
+            "elevation": 220
+          },
+          {
+            "id": "underground-hangout-fn10",
+            "x": 1200,
+            "y": 5200,
+            "w": 200,
+            "h": 280,
+            "kind": "speaker_bookshelf",
+            "elevation": 1600
+          },
+          {
+            "id": "underground-hangout-fn11",
+            "x": 5600,
+            "y": 5200,
+            "w": 200,
+            "h": 280,
+            "kind": "speaker_bookshelf",
+            "elevation": 1600
+          },
+          {
+            "id": "underground-hangout-fn12",
+            "x": 3400,
+            "y": 3300,
+            "w": 4600,
+            "h": 3000,
+            "kind": "rug",
+            "color": "#1a1420"
+          },
+          {
+            "id": "underground-hangout-fn13",
+            "x": 1300,
+            "y": 6200,
+            "w": 900,
+            "h": 400,
+            "kind": "cabinet",
+            "rotation": 90,
+            "label": "Arcade cabinet",
+            "color": "#2b1b46"
+          },
+          {
+            "id": "underground-hangout-fn14",
+            "x": 1300,
+            "y": 7300,
+            "w": 900,
+            "h": 400,
+            "kind": "cabinet",
+            "rotation": 90,
+            "label": "Arcade cabinet",
+            "color": "#123a46"
+          },
+          {
+            "id": "underground-hangout-fn15",
+            "x": 3400,
+            "y": 6900,
+            "w": 1400,
+            "h": 800,
+            "kind": "table",
+            "label": "Foosball table",
+            "color": "#20303a"
+          },
+          {
+            "id": "underground-hangout-fn16",
+            "x": 5800,
+            "y": 6400,
+            "w": 800,
+            "h": 350,
+            "kind": "bookshelf",
+            "rotation": 90,
+            "label": "Game shelf"
+          },
+          {
+            "id": "underground-hangout-fn17",
+            "x": 2000,
+            "y": 8800,
+            "w": 1400,
+            "h": 700,
+            "kind": "desk",
+            "rotation": 180,
+            "label": "Battlestation 1"
+          },
+          {
+            "id": "underground-hangout-fn18",
+            "x": 2000,
+            "y": 8100,
+            "w": 500,
+            "h": 500,
+            "kind": "chair",
+            "rotation": 180
+          },
+          {
+            "id": "underground-hangout-fn19",
+            "x": 2000,
+            "y": 9000,
+            "w": 700,
+            "h": 200,
+            "kind": "tv",
+            "rotation": 180,
+            "elevation": 750,
+            "label": "Monitor 1",
+            "localState": "on"
+          },
+          {
+            "id": "underground-hangout-fn20",
+            "x": 4200,
+            "y": 8800,
+            "w": 1400,
+            "h": 700,
+            "kind": "desk",
+            "rotation": 180,
+            "label": "Battlestation 2"
+          },
+          {
+            "id": "underground-hangout-fn21",
+            "x": 4200,
+            "y": 8100,
+            "w": 500,
+            "h": 500,
+            "kind": "chair",
+            "rotation": 180
+          },
+          {
+            "id": "underground-hangout-fn22",
+            "x": 4200,
+            "y": 9000,
+            "w": 700,
+            "h": 200,
+            "kind": "tv",
+            "rotation": 180,
+            "elevation": 750,
+            "label": "Monitor 2",
+            "localState": "on"
+          },
+          {
+            "id": "underground-hangout-fn23",
+            "x": 3400,
+            "y": 8000,
+            "w": 2800,
+            "h": 1600,
+            "kind": "rug",
+            "color": "#141b26"
+          },
+          {
+            "id": "underground-hangout-fn24",
+            "x": 9000,
+            "y": 1300,
+            "w": 3000,
+            "h": 700,
+            "kind": "counter",
+            "label": "Bar",
+            "color": "#2a1d16"
+          },
+          {
+            "id": "underground-hangout-fn25",
+            "x": 7800,
+            "y": 2100,
+            "w": 400,
+            "h": 400,
+            "kind": "stool",
+            "rotation": 180
+          },
+          {
+            "id": "underground-hangout-fn26",
+            "x": 8600,
+            "y": 2100,
+            "w": 400,
+            "h": 400,
+            "kind": "stool",
+            "rotation": 180
+          },
+          {
+            "id": "underground-hangout-fn27",
+            "x": 9400,
+            "y": 2100,
+            "w": 400,
+            "h": 400,
+            "kind": "stool",
+            "rotation": 180
+          },
+          {
+            "id": "underground-hangout-fn28",
+            "x": 10200,
+            "y": 2100,
+            "w": 400,
+            "h": 400,
+            "kind": "stool",
+            "rotation": 180
+          },
+          {
+            "id": "underground-hangout-fn29",
+            "x": 11200,
+            "y": 1300,
+            "w": 910,
+            "h": 760,
+            "kind": "fridge",
+            "rotation": 180,
+            "label": "Bar fridge",
+            "localState": "on"
+          },
+          {
+            "id": "underground-hangout-fn30",
+            "x": 11200,
+            "y": 1300,
+            "w": 520,
+            "h": 390,
+            "kind": "microwave",
+            "rotation": 180,
+            "elevation": 1900
+          },
+          {
+            "id": "underground-hangout-fn31",
+            "x": 12600,
+            "y": 1200,
+            "w": 900,
+            "h": 400,
+            "kind": "cabinet",
+            "label": "Glassware"
+          },
+          {
+            "id": "underground-hangout-fn32",
+            "x": 7600,
+            "y": 5000,
+            "w": 2000,
+            "h": 900,
+            "kind": "sofa",
+            "rotation": 90
+          },
+          {
+            "id": "underground-hangout-fn33",
+            "x": 8800,
+            "y": 5000,
+            "w": 1100,
+            "h": 600,
+            "kind": "coffee_table"
+          },
+          {
+            "id": "underground-hangout-fn34",
+            "x": 10600,
+            "y": 5000,
+            "w": 1600,
+            "h": 450,
+            "kind": "tv_stand",
+            "rotation": 270
+          },
+          {
+            "id": "underground-hangout-fn35",
+            "x": 10600,
+            "y": 5000,
+            "w": 1450,
+            "h": 250,
+            "kind": "tv",
+            "rotation": 270,
+            "elevation": 550,
+            "label": "Lounge TV",
+            "localState": "playing"
+          },
+          {
+            "id": "underground-hangout-fn36",
+            "x": 10600,
+            "y": 3800,
+            "w": 250,
+            "h": 350,
+            "kind": "speaker_tower",
+            "rotation": 270
+          },
+          {
+            "id": "underground-hangout-fn37",
+            "x": 10600,
+            "y": 6200,
+            "w": 250,
+            "h": 350,
+            "kind": "speaker_tower",
+            "rotation": 270
+          },
+          {
+            "id": "underground-hangout-fn38",
+            "x": 9000,
+            "y": 5000,
+            "w": 3200,
+            "h": 2600,
+            "kind": "rug",
+            "color": "#181d2a"
+          },
+          {
+            "id": "underground-hangout-fn39",
+            "x": 13200,
+            "y": 3000,
+            "w": 800,
+            "h": 350,
+            "kind": "bookshelf",
+            "rotation": 90,
+            "label": "Vinyl wall"
+          },
+          {
+            "id": "underground-hangout-fn40",
+            "x": 12800,
+            "y": 8600,
+            "w": 400,
+            "h": 400,
+            "kind": "plant"
+          },
+          {
+            "id": "underground-hangout-fn41",
+            "x": 12900,
+            "y": 7000,
+            "w": 1000,
+            "h": 3600,
+            "kind": "stairs",
+            "stairLinkId": "bunker-l1l2"
+          }
+        ],
+        "lights": [
+          {
+            "id": "underground-hangout-lt1",
+            "x": 3400,
+            "y": 1500,
+            "entity_id": null,
+            "iconKind": "strip",
+            "color": "#ff2d95",
+            "radius": 1800,
+            "rotation": 0,
+            "length": 3400,
+            "localState": "on",
+            "label": "Screen wall neon"
+          },
+          {
+            "id": "underground-hangout-lt2",
+            "x": 900,
+            "y": 3200,
+            "entity_id": null,
+            "iconKind": "strip",
+            "color": "#7c4dff",
+            "radius": 1400,
+            "rotation": 90,
+            "length": 3600,
+            "localState": "on",
+            "label": "Theater cove W"
+          },
+          {
+            "id": "underground-hangout-lt3",
+            "x": 6100,
+            "y": 3200,
+            "entity_id": null,
+            "iconKind": "strip",
+            "color": "#7c4dff",
+            "radius": 1400,
+            "rotation": 90,
+            "length": 3600,
+            "localState": "on",
+            "label": "Theater cove E"
+          },
+          {
+            "id": "underground-hangout-lt4",
+            "x": 3400,
+            "y": 2400,
+            "entity_id": null,
+            "iconKind": "recessed",
+            "radius": 1200,
+            "label": "Theater can"
+          },
+          {
+            "id": "underground-hangout-lt5",
+            "x": 900,
+            "y": 7500,
+            "entity_id": null,
+            "iconKind": "strip",
+            "color": "#00e5ff",
+            "radius": 1500,
+            "rotation": 90,
+            "length": 3400,
+            "localState": "on",
+            "label": "Arcade neon W"
+          },
+          {
+            "id": "underground-hangout-lt6",
+            "x": 3400,
+            "y": 6900,
+            "entity_id": null,
+            "iconKind": "pendant",
+            "color": "#ffd54f",
+            "radius": 1400,
+            "height": 2100,
+            "localState": "on",
+            "label": "Foosball pendant"
+          },
+          {
+            "id": "underground-hangout-lt7",
+            "x": 3100,
+            "y": 9200,
+            "entity_id": null,
+            "iconKind": "string",
+            "color": "#39ff88",
+            "rotation": 0,
+            "length": 4200,
+            "localState": "on",
+            "label": "Battlestation string"
+          },
+          {
+            "id": "underground-hangout-lt8",
+            "x": 9000,
+            "y": 1000,
+            "entity_id": null,
+            "iconKind": "under_cabinet",
+            "color": "#7c4dff",
+            "rotation": 0,
+            "length": 2900,
+            "localState": "on",
+            "label": "Bar under-shelf"
+          },
+          {
+            "id": "underground-hangout-lt9",
+            "x": 9000,
+            "y": 2200,
+            "entity_id": null,
+            "iconKind": "strip",
+            "color": "#ff6d00",
+            "radius": 1600,
+            "rotation": 0,
+            "length": 3200,
+            "localState": "on",
+            "label": "Bar rail neon"
+          },
+          {
+            "id": "underground-hangout-lt10",
+            "x": 7300,
+            "y": 6400,
+            "entity_id": null,
+            "iconKind": "lamp",
+            "color": "#ff6d00",
+            "radius": 900,
+            "height": 1500,
+            "localState": "on",
+            "label": "Lava lamp"
+          },
+          {
+            "id": "underground-hangout-lt11",
+            "x": 11800,
+            "y": 5000,
+            "entity_id": null,
+            "iconKind": "lamp",
+            "color": "#00e676",
+            "radius": 900,
+            "height": 1500,
+            "localState": "on",
+            "label": "Lava lamp 2"
+          },
+          {
+            "id": "underground-hangout-lt12",
+            "x": 12600,
+            "y": 8200,
+            "entity_id": null,
+            "iconKind": "sconce",
+            "color": "#ff2d95",
+            "radius": 700,
+            "localState": "on",
+            "label": "Stair sconce"
+          },
+          {
+            "id": "underground-hangout-lt13",
+            "x": 9800,
+            "y": 7600,
+            "entity_id": null,
+            "iconKind": "bowl",
+            "radius": 1600,
+            "localState": "on",
+            "label": "Lounge uplight"
+          }
+        ],
+        "switches": [
+          {
+            "id": "underground-hangout-sw1",
+            "x": 6100,
+            "y": 2900,
+            "entity_id": null,
+            "rotation": 90,
+            "label": "Theater"
+          },
+          {
+            "id": "underground-hangout-sw2",
+            "x": 6100,
+            "y": 7700,
+            "entity_id": null,
+            "rotation": 90,
+            "label": "Arcade"
+          },
+          {
+            "id": "underground-hangout-sw3",
+            "x": 12500,
+            "y": 5800,
+            "entity_id": null,
+            "rotation": 270,
+            "label": "Stair"
+          }
+        ],
+        "sensors": [],
+        "motionSensors": [
+          {
+            "id": "underground-hangout-mo1",
+            "x": 3400,
+            "y": 3400,
+            "heading": 0,
+            "fov": 360,
+            "range": 5000,
+            "label": "Theater presence",
+            "entity_id": null,
+            "color": "#ff2d95",
+            "plumbobColor": "#ff80ab",
+            "avatar": true,
+            "demo": true,
+            "avatarKinds": [
+              "teen",
+              "movie_star"
+            ]
+          },
+          {
+            "id": "underground-hangout-mo2",
+            "x": 3400,
+            "y": 7600,
+            "heading": 0,
+            "fov": 360,
+            "range": 5000,
+            "label": "Arcade presence",
+            "entity_id": null,
+            "color": "#00e5ff",
+            "plumbobColor": "#84ffff",
+            "avatar": true,
+            "demo": true,
+            "avatarKinds": [
+              "hacker",
+              "tech_expert"
+            ]
+          },
+          {
+            "id": "underground-hangout-mo3",
+            "x": 9800,
+            "y": 4000,
+            "heading": 0,
+            "fov": 360,
+            "range": 6000,
+            "label": "Lounge presence",
+            "entity_id": null,
+            "color": "#ffab40",
+            "plumbobColor": "#ffd180",
+            "avatar": true,
+            "demo": true,
+            "avatarKinds": [
+              "adult",
+              "ninja",
+              "athlete"
+            ]
+          }
+        ],
+        "roamers": [
+          {
+            "id": "underground-hangout-ro1",
+            "name": "Rae",
+            "avatarKinds": [
+              "hacker",
+              "teen"
+            ],
+            "color": "#ff2d95"
+          },
+          {
+            "id": "underground-hangout-ro2",
+            "name": "Jonas",
+            "avatarKinds": [
+              "adult",
+              "athlete"
+            ],
+            "color": "#00e5ff"
+          },
+          {
+            "id": "underground-hangout-ro3",
+            "name": "Nix",
+            "avatarKinds": [
+              "ninja",
+              "tech_expert"
+            ],
+            "color": "#39ff88"
+          }
+        ],
+        "envSensors": [
+          {
+            "id": "underground-hangout-env1",
+            "x": 3400,
+            "y": 5300,
+            "entity_id": null,
+            "kind": "temperature",
+            "label": "Theater temp",
+            "height": 1500
+          },
+          {
+            "id": "underground-hangout-env2",
+            "x": 9800,
+            "y": 8800,
+            "entity_id": null,
+            "kind": "co2",
+            "label": "Bunker CO₂",
+            "height": 1500
+          },
+          {
+            "id": "underground-hangout-env3",
+            "x": 5900,
+            "y": 8900,
+            "entity_id": null,
+            "kind": "humidity",
+            "label": "Bunker RH",
+            "height": 1500
+          }
+        ],
+        "look3d": {
+          "floorTex": "concrete",
+          "floorColor": "#2b2f38",
+          "wallColor": "#1e222b"
+        },
+        "doors": [
+          {
+            "id": "underground-hangout-dr1",
+            "x": 6200,
+            "y": 2200,
+            "w": 1200,
+            "rotation": 270,
+            "entity_id": null,
+            "label": "Theater"
+          },
+          {
+            "id": "underground-hangout-dr2",
+            "x": 2000,
+            "y": 5600,
+            "w": 1200,
+            "rotation": 0,
+            "entity_id": null,
+            "label": "Arcade"
+          },
+          {
+            "id": "underground-hangout-dr3",
+            "x": 6200,
+            "y": 7000,
+            "w": 1200,
+            "rotation": 270,
+            "entity_id": null,
+            "label": "Game room"
+          }
+        ],
+        "windows": [],
+        "bg": null,
+        "model3d": null,
+        "rooms": [
+          {
+            "id": "underground-hangout-rm1",
+            "name": "Home Theater",
+            "anchor": {
+              "x": 3400,
+              "y": 3000
+            }
+          },
+          {
+            "id": "underground-hangout-rm2",
+            "name": "Arcade",
+            "anchor": {
+              "x": 3400,
+              "y": 7500
+            }
+          },
+          {
+            "id": "underground-hangout-rm3",
+            "name": "Bunker Lounge",
+            "anchor": {
+              "x": 9800,
+              "y": 5000
+            }
+          }
+        ],
+        "bleProxies": [],
+        "alarmPanels": [],
+        "safetySensors": [
+          {
+            "id": "underground-hangout-sf1",
+            "x": 9800,
+            "y": 2600,
+            "kind": "smoke",
+            "entity_id": null,
+            "label": "Bar smoke"
+          },
+          {
+            "id": "underground-hangout-sf2",
+            "x": 3400,
+            "y": 4900,
+            "kind": "co",
+            "entity_id": null,
+            "label": "Theater CO"
+          }
+        ],
+        "robots": [],
+        "presenceZones": [],
+        "cameras": [],
+        "groundAreas": [],
+        "voidAreas": []
+      },
+      {
+        "id": "underground-hangout-fl2",
+        "name": "Shed (grade)",
+        "w": 14000,
+        "d": 10000,
+        "walls": [
+          {
+            "id": "underground-hangout-w5",
+            "points": [
+              {
+                "x": 10200,
+                "y": 5000
+              },
+              {
+                "x": 13600,
+                "y": 5000
+              },
+              {
+                "x": 13600,
+                "y": 9400
+              },
+              {
+                "x": 10200,
+                "y": 9400
+              },
+              {
+                "x": 10200,
+                "y": 5000
+              }
+            ]
+          }
+        ],
+        "furniture": [
+          {
+            "id": "underground-hangout-fn42",
+            "x": 12900,
+            "y": 7000,
+            "w": 1000,
+            "h": 3600,
+            "kind": "stairs",
+            "rotation": 180,
+            "stairLinkId": "bunker-l1l2"
+          },
+          {
+            "id": "underground-hangout-fn43",
+            "x": 11600,
+            "y": 8800,
+            "w": 1400,
+            "h": 700,
+            "kind": "desk",
+            "rotation": 180,
+            "label": "Workbench"
+          },
+          {
+            "id": "underground-hangout-fn44",
+            "x": 11600,
+            "y": 8100,
+            "w": 500,
+            "h": 500,
+            "kind": "chair",
+            "rotation": 180
+          },
+          {
+            "id": "underground-hangout-fn45",
+            "x": 10800,
+            "y": 6200,
+            "w": 900,
+            "h": 400,
+            "kind": "cabinet",
+            "rotation": 90,
+            "label": "Parts cabinet"
+          },
+          {
+            "id": "underground-hangout-fn46",
+            "x": 10500,
+            "y": 7400,
+            "w": 800,
+            "h": 350,
+            "kind": "bookshelf",
+            "rotation": 90,
+            "label": "Tool shelves"
+          },
+          {
+            "id": "underground-hangout-fn47",
+            "x": 12000,
+            "y": 6000,
+            "w": 600,
+            "h": 700,
+            "kind": "trash_bin"
+          }
+        ],
+        "lights": [
+          {
+            "id": "underground-hangout-lt14",
+            "x": 11800,
+            "y": 7400,
+            "entity_id": null,
+            "iconKind": "strip",
+            "radius": 2000,
+            "rotation": 0,
+            "length": 2600,
+            "localState": "on",
+            "label": "Shop light"
+          },
+          {
+            "id": "underground-hangout-lt15",
+            "x": 11600,
+            "y": 8600,
+            "entity_id": null,
+            "iconKind": "under_cabinet",
+            "rotation": 0,
+            "length": 1400,
+            "localState": "on",
+            "label": "Bench task light"
+          },
+          {
+            "id": "underground-hangout-lt16",
+            "x": 12800,
+            "y": 5300,
+            "entity_id": null,
+            "iconKind": "flood",
+            "radius": 2000,
+            "rotation": 180,
+            "label": "Bay floodlight"
+          }
+        ],
+        "switches": [
+          {
+            "id": "underground-hangout-sw4",
+            "x": 10300,
+            "y": 8500,
+            "entity_id": null,
+            "rotation": 90,
+            "label": "Shed"
+          }
+        ],
+        "sensors": [],
+        "motionSensors": [],
+        "roamers": [
+          {
+            "id": "underground-hangout-ro4",
+            "name": "Toby",
+            "avatarKinds": [
+              "farmer",
+              "adult"
+            ],
+            "color": "#ffab40"
+          }
+        ],
+        "envSensors": [],
+        "look3d": {
+          "floorTex": "concrete",
+          "floorColor": "#54595f",
+          "wallColor": "#6b6255"
+        },
+        "doors": [
+          {
+            "id": "underground-hangout-dr4",
+            "x": 10800,
+            "y": 5000,
+            "w": 2400,
+            "rotation": 0,
+            "entity_id": null,
+            "kind": "garage",
+            "label": "Bay door"
+          },
+          {
+            "id": "underground-hangout-dr5",
+            "x": 10200,
+            "y": 8200,
+            "w": 800,
+            "rotation": 270,
+            "entity_id": null,
+            "label": "Side door"
+          }
+        ],
+        "windows": [
+          {
+            "id": "underground-hangout-win1",
+            "x": 13600,
+            "y": 6400,
+            "w": 1000,
+            "rotation": 90,
+            "entity_id": null,
+            "sill": 1200,
+            "height": 900,
+            "label": "Shed east"
+          }
+        ],
+        "bg": null,
+        "model3d": null,
+        "rooms": [
+          {
+            "id": "underground-hangout-rm4",
+            "name": "Shed / Garage",
+            "anchor": {
+              "x": 11400,
+              "y": 6600
+            }
+          }
+        ],
+        "bleProxies": [],
+        "alarmPanels": [],
+        "safetySensors": [
+          {
+            "id": "underground-hangout-sf3",
+            "x": 11600,
+            "y": 6800,
+            "kind": "co",
+            "entity_id": null,
+            "label": "Shed CO"
+          }
+        ],
+        "robots": [],
+        "presenceZones": [],
+        "cameras": [],
+        "groundAreas": [],
+        "voidAreas": []
+      }
+    ],
+    "currentFloorId": "underground-hangout-fl1",
+    "activeSensorId": null,
+    "coverage": true,
+    "imperial": false,
+    "showDetails": false,
+    "useRawTargets": false,
+    "showMotionZones": true,
+    "scene3d": {
+      "preset": "night",
+      "lightMode": "manual",
+      "floorTex": "concrete",
+      "floorColor": "#2b2f38",
+      "wallColor": "#1e222b",
+      "glassHouse": false,
+      "wallCutaway": true,
+      "plumbobs": true,
+      "cinematicOrbit": true,
+      "skyBackdrop": false
+    },
+    "customObjects": [],
+    "people": [],
+    "bleShowUnknown": true,
+    "notes": "~112 m² basement + ~13 m² shed · 2 floors · 4 rooms · after-dark hangout\n\nThe house is beside the point — this plan is about what is UNDER the yard. At\ngrade there is only a modest single-bay shed/garage: a bay door, a side door, a\nworkbench, tool shelves and a parts cabinet. In the corner of it, a stair drops\ninto a 12.8 × 8.6 m concrete bunker that fills the whole lot, and that is where\neveryone actually is. Store.floors order puts the basement FIRST (index 0 is the\nlowest story) and a single stairLinkId pairs the two flights at the same world\nposition, so avatars really do transit between the levels.\n\nHOME THEATER (south-west) — a full projection wall with a wall-mounted screen,\ncentre channel, two tower speakers, a subwoofer, and rear bookshelf surrounds\nmounted high on the back wall. Two front-row recliners sit on the floor; a\nthree-seat recliner row rides a 220 mm riser platform behind them (the riser is\nwalkable terrain, so avatars climb up to their seats). Magenta and violet cove\nstrips wash the walls.\n\nARCADE / GAME ZONE (north-west) — two upright arcade cabinets against the west\nwall under a cyan neon run, a foosball table under a warm pendant, a game shelf,\nand two battlestations (desk + chair + monitor) along the back wall under a green\nLED string.\n\nBUNKER LOUNGE (east) — a 3 m bar with four stools, a bar fridge with an\nover-counter microwave and a glassware cabinet, all lit by violet under-shelf LEDs\nand an orange rail strip. The seating half has an L-facing sofa, coffee table, a\nwall TV on a stand flanked by tower speakers, a vinyl-record shelf, two lava\nlamps, and the stair up to the shed under a magenta sconce.\n\nLIGHTING — the scene runs at the `night` preset with glass-house OFF and wall\ncutaway ON, so the camera can see into the bunker while the neon carries the\nwhole room. Every light is UNBOUND with localState \"on\", so nothing needs Home\nAssistant. Demo AI presences live in each of the three basement rooms (confined to\ntheir room), plus three free-range roamers downstairs and one in the shed."
+  }
+}

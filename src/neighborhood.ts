@@ -15,7 +15,31 @@ import type { Vec2 } from './types.js';
 import type { MvtLayer } from './mvt-decode.js';
 
 export const DEFAULT_TILE_ZOOM = 14;      // OpenMapTiles building layer is present at z13–14; z14 = full detail
-export const MAX_BUILDINGS = 400;         // nearest-by-centroid cap (renderer wave consumes it)
+export const MAX_BUILDINGS = 400;         // nearest-by-centroid cap at the REFERENCE radius (see CAP_REF_RADIUS_M)
+export const MAX_ROADS = 600;             // road-ribbon cap at the reference radius (renderer default)
+
+// Reference radius the two base caps were tuned against. Bigger fetch radii
+// scale their caps LINEARLY off this (not by area — the caps exist to bound
+// mesh count, and a linear ramp keeps a 3 km overlay drawable on a tablet while
+// still letting far content through; the hard ceilings below are the real
+// guard). Both helpers are pure + monotonic.
+export const CAP_REF_RADIUS_M = 500;
+export const MAX_BUILDINGS_CEIL = 1600;
+export const MAX_ROADS_CEIL = 1800;
+
+// Nearest-N building cap for a fetch radius (m). Never below MAX_BUILDINGS.
+export function buildingCapForRadius(radiusM: number): number {
+  const r = isFinite(radiusM) ? radiusM : CAP_REF_RADIUS_M;
+  const n = Math.round((MAX_BUILDINGS * r) / CAP_REF_RADIUS_M);
+  return Math.max(MAX_BUILDINGS, Math.min(MAX_BUILDINGS_CEIL, n));
+}
+
+// Road-ribbon cap for a fetch radius (m). Never below MAX_ROADS.
+export function roadCapForRadius(radiusM: number): number {
+  const r = isFinite(radiusM) ? radiusM : CAP_REF_RADIUS_M;
+  const n = Math.round((MAX_ROADS * r) / CAP_REF_RADIUS_M);
+  return Math.max(MAX_ROADS, Math.min(MAX_ROADS_CEIL, n));
+}
 
 export interface TileAddr { z: number; x: number; y: number; }
 
@@ -194,7 +218,10 @@ export function centroidOf(points: Vec2[]): Vec2 {
   const n = points.length || 1;
   return { x: sx / n, y: sy / n };
 }
-export function capBuildings(list: NbBuilding[], origin: Vec2, n: number): NbBuilding[] {
+// `n` defaults to the reference cap so an old call site (and the renderer's own
+// defensive path) keeps today's behavior; the Planner passes the radius-derived
+// cap from buildingCapForRadius.
+export function capBuildings(list: NbBuilding[], origin: Vec2, n: number = MAX_BUILDINGS): NbBuilding[] {
   if (list.length <= n) return list;
   const scored = list.map(b => ({ b, d: dist2(centroidOf(b.points), origin) }));
   scored.sort((p, q) => p.d - q.d);

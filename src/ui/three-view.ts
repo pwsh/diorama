@@ -15,6 +15,7 @@ import { poolWaterColor } from '../geometry.js';
 import { resolveScreenContent } from '../surfaces.js';
 import { resolveScenePreset, resolveTimeBucket } from '../time-of-day.js';
 import { conditionIntensity, weatherEffectEnabled, worstAlertSeverity } from '../weather.js';
+import { roadCapForRadius } from '../neighborhood.js';
 import { loadModel } from '../model-store.js';
 import { newId } from '../storage.js';
 import type { Planner } from '../planner.js';
@@ -936,13 +937,16 @@ export class ThreeView extends LitElement {
       const nbCfg = p.store.neighborhood;
       const nbData = (nbCfg?.enabled && p.neighborhoodData) ? p.neighborhoodData : null;
       const nbL = nbCfg?.layers;
+      // The road-ribbon cap scales with the fetch radius (the 600 default was
+      // tuned at 500 m and would eat the far half of a 3 km overlay).
+      const nbRoadCap = roadCapForRadius(p.neighborhoodRadiusM());
       const keyNeighborhood = `${p.configRev}|${p.neighborhoodRev}|${layers.neighborhood !== false}|` +
         `${nbCfg?.opacity ?? 1}|${nbCfg?.colorBuildings ?? ''}|${nbCfg?.colorRoads ?? ''}|${nbCfg?.colorWater ?? ''}|${nbCfg?.colorLanduse ?? ''}|` +
-        `${nbL?.buildings !== false ? 1 : 0}${nbL?.roads !== false ? 1 : 0}${nbL?.water !== false ? 1 : 0}${nbL?.landuse === true ? 1 : 0}|${nbData ? '1' : '0'}`;
+        `${nbL?.buildings !== false ? 1 : 0}${nbL?.roads !== false ? 1 : 0}${nbL?.water !== false ? 1 : 0}${nbL?.landuse === true ? 1 : 0}|${nbData ? '1' : '0'}|${nbRoadCap}`;
       if (keyNeighborhood !== this._keyNeighborhood) {
         this._keyNeighborhood = keyNeighborhood;
         r.updateNeighborhood(nbData,
-          nbData ? { opacity: nbCfg?.opacity, colorBuildings: nbCfg?.colorBuildings, colorRoads: nbCfg?.colorRoads, colorWater: nbCfg?.colorWater, colorLanduse: nbCfg?.colorLanduse } : null);
+          nbData ? { opacity: nbCfg?.opacity, colorBuildings: nbCfg?.colorBuildings, colorRoads: nbCfg?.colorRoads, colorWater: nbCfg?.colorWater, colorLanduse: nbCfg?.colorLanduse, maxRoads: nbRoadCap } : null);
       }
 
       // Glass-house transit puppet (Tier 2 stretch): when glass-house is on and a

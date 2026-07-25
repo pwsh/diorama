@@ -167,6 +167,45 @@
   const cap2 = NB.capBuildings(many, { x: 0, y: 0 }, 2);
   ok('cap: returns N nearest by centroid', cap2.length === 2 && cap2.every(b => b.points[0].x < 400), cap2.map(b => b.points[0].x).join(','));
   ok('cap: list ≤ N returns all', NB.capBuildings(many, { x: 0, y: 0 }, 10).length === 5);
+  ok('cap: n omitted → MAX_BUILDINGS default (back-compat)', NB.capBuildings(many, { x: 0, y: 0 }).length === 5);
+
+  // — Radius-scaled render caps (larger fetch radius must not be eaten by the
+  //   caps tuned at CAP_REF_RADIUS_M) —
+  ok('capForRadius: reference radius → base caps',
+     NB.buildingCapForRadius(NB.CAP_REF_RADIUS_M) === NB.MAX_BUILDINGS && NB.roadCapForRadius(NB.CAP_REF_RADIUS_M) === NB.MAX_ROADS,
+     `${NB.buildingCapForRadius(500)}/${NB.roadCapForRadius(500)}`);
+  ok('capForRadius: small radius never drops below the base caps',
+     NB.buildingCapForRadius(100) === NB.MAX_BUILDINGS && NB.roadCapForRadius(100) === NB.MAX_ROADS,
+     `${NB.buildingCapForRadius(100)}/${NB.roadCapForRadius(100)}`);
+  ok('capForRadius: 1000 m → 2× the base caps',
+     NB.buildingCapForRadius(1000) === 800 && NB.roadCapForRadius(1000) === 1200,
+     `${NB.buildingCapForRadius(1000)}/${NB.roadCapForRadius(1000)}`);
+  ok('capForRadius: 3000 m clamps at the ceilings',
+     NB.buildingCapForRadius(3000) === NB.MAX_BUILDINGS_CEIL && NB.roadCapForRadius(3000) === NB.MAX_ROADS_CEIL,
+     `${NB.buildingCapForRadius(3000)}/${NB.roadCapForRadius(3000)}`);
+  ok('capForRadius: monotonic non-decreasing in radius', (() => {
+    let pb = 0, pr = 0;
+    for (let r = 100; r <= 3000; r += 50) {
+      const b = NB.buildingCapForRadius(r), rd = NB.roadCapForRadius(r);
+      if (b < pb || rd < pr) return false;
+      if (b > NB.MAX_BUILDINGS_CEIL || rd > NB.MAX_ROADS_CEIL) return false;
+      pb = b; pr = rd;
+    }
+    return true;
+  })());
+  ok('capForRadius: non-finite radius → base caps (never NaN)',
+     NB.buildingCapForRadius(NaN) === NB.MAX_BUILDINGS && NB.roadCapForRadius(Infinity) === NB.MAX_ROADS);
+  // capBuildings honors a cap ABOVE the reference default (the whole point).
+  const manyMore = [];
+  for (let i = 0; i < 900; i++) manyMore.push(mk(i * 10));
+  ok('cap: honors a passed cap above MAX_BUILDINGS', NB.capBuildings(manyMore, { x: 0, y: 0 }, NB.buildingCapForRadius(1000)).length === 800,
+     NB.capBuildings(manyMore, { x: 0, y: 0 }, NB.buildingCapForRadius(1000)).length);
+  ok('cap: build passes maxBuildings through', NB.buildNeighborhoodFeatures([synthTile], tf0, { maxBuildings: 0 }).buildings.length === 0);
+
+  // — tilesForRadius at the new 3 km ceiling: a handful of z14 tiles, not hundreds —
+  const t3000 = NB.tilesForRadius(40.6782, -73.9442, 3000, 14);
+  ok('tilesForRadius 3000 m @z14 → a small tile block (≤ 36)', t3000.length >= 9 && t3000.length <= 36 && t3000.every(t => t.z === 14), t3000.length);
+  ok('tilesForRadius 3000 m ⊇ 350 m tiles', t350.every(a => t3000.some(b => b.x === a.x && b.y === a.y)), `${t350.length} ⊂ ${t3000.length}`);
 
   // — align golden (screen-CW rotate about origin, then translate) —
   const aT = NB.alignPlanPoint({ x: 50, y: 20 }, { x: 0, y: 0 }, { dx: 5, dy: -3 });

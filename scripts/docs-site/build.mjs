@@ -39,12 +39,14 @@ const GUIDE = [
   { slug: 'devices', title: 'Devices & bindings', md: 'devices.md' },
   { slug: 'info-displays', title: 'Info displays & alerts', md: 'info-displays.md' },
   { slug: 'avatars-people', title: 'Avatars & people', md: 'avatars-people.md' },
-  { slug: 'outdoor-weather', title: 'Outdoor, weather & geo', md: 'outdoor-weather.md' },
+  { slug: 'yard-terrain', title: 'Yard & terrain', md: 'yard-terrain.md' },
+  { slug: 'outdoor-weather', title: 'Weather, sky & geo', md: 'outdoor-weather.md' },
+  { slug: 'neighborhood-flights', title: 'Neighborhood & flights', md: 'neighborhood-flights.md' },
   { slug: 'kiosk-modes', title: 'Kiosk & display modes', md: 'kiosk-modes.md' },
   { slug: 'configurations', title: 'Configurations, notes & offline', md: 'configurations.md' },
 ];
 
-// Guide sidebar nav — all eight links, active one highlighted. depth is the
+// Guide sidebar nav — one link per GUIDE entry, active one highlighted. depth is the
 // guide page's directory depth below the site root (guide/*.html → 1), so links
 // to sibling guide pages are bare slugs.
 function guideNav(activeSlug) {
@@ -79,6 +81,34 @@ function buildGuide(version, date) {
   return { built, skipped };
 }
 
+// Guide screenshots live (committed) in scripts/docs-site/guide/img/ and are
+// referenced from the markdown as bare `img/<name>.png`, which resolves next to
+// the rendered guide/*.html. Copy the whole directory verbatim.
+//
+// Tolerant by design: the captures are produced by a separate pipeline, so the
+// directory may be absent or empty (only a .gitkeep) when the site is built.
+// A missing image is a missing picture, never a failed build.
+function copyGuideImages() {
+  const src = path.join(GUIDE_SRC, 'img');
+  const dest = path.join(SITE_ROOT, 'guide', 'img');
+  if (!fs.existsSync(src)) { log('no guide/img directory — skipping screenshots'); return 0; }
+  fs.mkdirSync(dest, { recursive: true });
+  let n = 0;
+  for (const ent of fs.readdirSync(src, { withFileTypes: true })) {
+    if (ent.name.startsWith('.')) continue;              // .gitkeep and friends
+    const from = path.join(src, ent.name);
+    const to = path.join(dest, ent.name);
+    try {
+      if (ent.isDirectory()) fs.cpSync(from, to, { recursive: true });
+      else { fs.copyFileSync(from, to); n++; }
+    } catch (err) {
+      log(`WARNING: could not copy guide image ${ent.name}: ${err.message}`);
+    }
+  }
+  if (n === 0) log('guide/img is empty — screenshots will render as broken images until captured');
+  return n;
+}
+
 function buildHome(version, date) {
   const features = [
     ['The Sims, for your house',
@@ -87,16 +117,18 @@ function buildHome(version, date) {
       'Figures walk around furniture and through doorways, sit down, and run contextual activities — making coffee, watching a TV that’s actually on, working out, sleeping two-to-a-bed — with time- and place-aware thought bubbles.'],
     ['First-class mmWave radar',
       'Multi-sensor, multi-target HLK-LD2450 tracking with in-place zone and object editing, per-sensor colors, and animated figures that reflect where people actually are.'],
-    ['Any Home Assistant entity',
-      'Lights, switches, fans, media players, environmental sensors, cameras, locks, covers, alarm keypads, vacuums and mowers — drop it on the plan, bind it, and click to control.'],
+    ['Build it fast, bind anything',
+      'A visual toolbar with real 3D thumbnails for every piece, rulers and CAD dimensions while you draw — then bind lights, switches, fans, media players, sensors, cameras, locks, covers, thermostats, alarm keypads, vacuums and mowers, and click to control.'],
     ['Know who’s who',
       'A People registry (names, colors, pets), BLE / Bermuda indoor positioning solved from your Bluetooth proxies, and identity fusion that dresses a precise radar figure in a person’s avatar and name label.'],
-    ['The world outside',
-      'GPS device pins in the yard with a landmark calibration flow, plus weather from an entity, local sensors, or keyless Open-Meteo — with a corner chip and 3D rain, snow, fog, wind, and lightning.'],
-    ['Kiosk & display modes',
-      'Lock a plan into a live wall display with URL templates for mode, floor, view, layers, and camera. A Kiosk-link button mints the URL from your current view.'],
-    ['Runs offline too',
-      'Use Diorama with no Home Assistant at all — serve it statically and design a plan, build a demo, or try it out, with multiple named configurations and export / import.'],
+    ['Your yard, in full',
+      'Ground coverings and raised terraces, fences, hedges and gates, paths and driveways, sprinklers, flagpoles, and pools and spas with heater, pump, light, and water-chemistry bindings.'],
+    ['The neighborhood & the sky',
+      'Surrounding buildings, roads, and water from OpenStreetMap; live aircraft and the ISS overhead; an astronomically correct night sky for your latitude; and weather with 3D rain, snow, fog, wind, and lightning.'],
+    ['On the wall or on a dashboard',
+      'Lock a plan into a live wall display with URL templates for mode, floor, view, layers, and camera — or drop a read-only Diorama card straight onto a Lovelace dashboard.'],
+    ['Try it, or run it offline',
+      'A full editable demo runs in your browser with no install at all — and Diorama works the same served statically with no Home Assistant, with multiple named configurations and export / import.'],
   ];
 
   const tiles = features.map(([t, d]) =>
@@ -147,9 +179,11 @@ function main() {
   const date = isoDate();
   buildHome(version, date);
   const { built, skipped } = buildGuide(version, date);
+  const images = copyGuideImages();
   console.log('\n──────── docs-site summary ────────');
   console.log(`home page:  docs-site/index.html`);
   console.log(`guide pages: ${built}/${GUIDE.length} built${skipped ? `, ${skipped} skipped (--allow-missing)` : ''}`);
+  console.log(`guide images: ${images} copied → docs-site/guide/img/`);
   console.log(`assets:     docs-site/assets/site.css`);
   console.log('DOCS-SITE OK');
 }

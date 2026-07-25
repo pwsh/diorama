@@ -188,7 +188,12 @@
   for (let i = 0; i < 700; i++) manyRoads.push({ points: [{x:100+i,y:100},{x:200+i,y:100}], widthMm: 500, cls: 'service', bridge: false });
   r.updateNeighborhood({ buildings: [], roads: manyRoads, water: [], landuse: [] }, null);
   const cappedRoads = meshesOf().filter(m => m.position.y === 3);
-  ok('700 roads → capped at 600 ribbons', cappedRoads.length === 600, `n=${cappedRoads.length}`);
+  ok('700 roads → capped at 600 ribbons (default, no maxRoads)', cappedRoads.length === 600, `n=${cappedRoads.length}`);
+  // A caller-supplied cap (roadCapForRadius at a big fetch radius) raises it.
+  r.updateNeighborhood({ buildings: [], roads: manyRoads, water: [], landuse: [] }, { maxRoads: 1200 });
+  ok('maxRoads 1200 → all 700 ribbons drawn', meshesOf().filter(m => m.position.y === 3).length === 700, `n=${meshesOf().filter(m => m.position.y === 3).length}`);
+  r.updateNeighborhood({ buildings: [], roads: manyRoads, water: [], landuse: [] }, { maxRoads: 50 });
+  ok('maxRoads 50 → capped at 50 ribbons', meshesOf().filter(m => m.position.y === 3).length === 50, `n=${meshesOf().filter(m => m.position.y === 3).length}`);
 
   // ── 18. all flat patches carry outlineSkip ──────────────────────────────────
   r.updateNeighborhood({ buildings: [tri], roads: [road], water: [waterPoly], landuse: [luPoly] }, null);
@@ -199,6 +204,65 @@
      meshesOf().some(m => m.position.y === 2) &&
      meshesOf().some(m => m.position.y === 1), `n=${meshesOf().length}`);
   r.updateNeighborhood(null, null);
+
+  // ── 19. dynamic camera frustum for far-flung overlay content ────────────────
+  // STOCK triple (load-bearing): near 10 / far 150000 / maxDistance 45000. The
+  // overlay may widen it to reach distant buildings and MUST restore it exactly
+  // when the overlay goes away.
+  const NEAR0 = 10, FAR0 = 150000, MAXD0 = 45000, RATIO = 15000;
+  const camState = () => ({ near: r._camera.near, far: r._camera.far, maxD: r._controls.maxDistance });
+  const stockOk = s => s.near === NEAR0 && s.far === FAR0 && s.maxD === MAXD0;
+
+  ok('frustum: stock triple at rest (10 / 150000 / 45000)', stockOk(camState()), JSON.stringify(camState()));
+
+  // Nearby content (the small tri, reach ≈ 4.2 m) must NOT widen anything.
+  r.updateNeighborhood({ buildings: [tri], roads: [], water: [], landuse: [] }, null);
+  ok('frustum: near content keeps the stock triple', stockOk(camState()), JSON.stringify(camState()));
+
+  // A building 100 m from the scene origin → the un-clamped formula.
+  // asx(wx) = 5000 − wx, so wx = −95000 → sx = 100000 (sz = 0 at wy = 4000).
+  const farSq = (wx, wy, s, ht) => ({ points: [{x:wx,y:wy},{x:wx+s,y:wy},{x:wx+s,y:wy+s},{x:wx,y:wy+s}], heightMm: ht, baseMm: 0 });
+  // Independent reach computation (max |(asx, asz)| over the footprint, and the
+  // building top) — mirrors the renderer's own scan.
+  const reachOf = b => Math.max(b.heightMm, ...b.points.map(p => Math.hypot(asx(p.x), asz(p.y))));
+  const bldgA = farSq(-95000, 4000, 1000, 5000);        // ≈100 m from the scene origin
+  const REQ_A = reachOf(bldgA);
+  r.updateNeighborhood({ buildings: [bldgA], roads: [], water: [], landuse: [] }, null);
+  const fa = 1.25 * REQ_A + 30000;                      // ≈155000 — above the 150000 floor, below the ceiling
+  const sA = camState();
+  ok('frustum: test req ≈ 100 m (formula un-clamped here)', fa > FAR0 && fa < 600000, `req=${REQ_A.toFixed(0)} far=${fa.toFixed(0)}`);
+  ok('frustum: far building grows far to 1.25·req+30000', near(sA.far, fa, 1), `far=${sA.far} want=${fa}`);
+  ok('frustum: near = far / 15000', near(sA.near, sA.far / RATIO, 1e-6), `near=${sA.near}`);
+  ok('frustum: maxDistance = req·1.15', near(sA.maxD, REQ_A * 1.15, 1), `maxD=${sA.maxD}`);
+  ok('frustum: near:far ratio ≤ 15000 (depth precision)', sA.far / sA.near <= RATIO + 1e-6, `${(sA.far / sA.near).toFixed(0)}`);
+  ok('frustum: widened values never below stock', sA.far >= FAR0 && sA.near >= NEAR0 && sA.maxD >= MAXD0);
+
+  // A building 2.5 km out → both ceilings engage (600000 / 550000).
+  const REQ_B = 2500000;
+  const bldgB = farSq(-(REQ_B - 5000), 4000, 1000, 5000);
+  r.updateNeighborhood({ buildings: [bldgB], roads: [], water: [], landuse: [] }, null);
+  const sB = camState();
+  ok('frustum: 2.5 km content clamps far at 600000', sB.far === 600000, `far=${sB.far}`);
+  ok('frustum: clamped near = 600000/15000 = 40', near(sB.near, 40, 1e-6), `near=${sB.near}`);
+  ok('frustum: clamped maxDistance at 550000', sB.maxD === 550000, `maxD=${sB.maxD}`);
+  ok('frustum: ratio still ≤ 15000 when clamped', sB.far / sB.near <= RATIO + 1e-6, `${(sB.far / sB.near).toFixed(0)}`);
+  ok('frustum: minDistance (1000) still clears near', r._controls.minDistance > sB.near, `min=${r._controls.minDistance} near=${sB.near}`);
+
+  // Overlay off → the stock triple restores EXACTLY (never sticky).
+  r.updateNeighborhood(null, null);
+  ok('frustum: overlay null restores stock triple exactly', stockOk(camState()), JSON.stringify(camState()));
+  // …and so does empty content (the other no-content path).
+  r.updateNeighborhood({ buildings: [bldgB], roads: [], water: [], landuse: [] }, null);
+  ok('frustum: re-widens on new far content', camState().far === 600000, `far=${camState().far}`);
+  r.updateNeighborhood({ buildings: [], roads: [], water: [], landuse: [] }, null);
+  ok('frustum: empty content restores stock triple exactly', stockOk(camState()), JSON.stringify(camState()));
+  // A resize must not clobber the widened frustum (it only touches fov/aspect).
+  r.updateNeighborhood({ buildings: [bldgA], roads: [], water: [], landuse: [] }, null);
+  r.resize(800, 500);
+  const sR = camState();
+  ok('frustum: resize preserves near/far/maxDistance', near(sR.far, fa, 1) && near(sR.near, fa / RATIO, 1e-6) && near(sR.maxD, REQ_A * 1.15, 1), JSON.stringify(sR));
+  r.updateNeighborhood(null, null);
+  ok('frustum: final state back to stock', stockOk(camState()), JSON.stringify(camState()));
 
   // ── report ──────────────────────────────────────────────────────────────────
   const pass = tests.filter(t => t.ok).length, total = tests.length;

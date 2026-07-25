@@ -1197,7 +1197,9 @@ export interface NeighborhoodConfig {
   source?: 'openfreemap' | 'custom';    // default 'openfreemap'
   tileUrlTemplate?: string;             // 'custom' only — a {z}/{x}/{y}.pbf template (http(s) only)
 
-  radiusM?: number;                     // fetch radius around the geo origin; default 350, clamp 100..1000
+  radiusM?: number;                     // fetch radius around the geo origin; default 350, clamp 100..3000
+                                        // (clamped in ONE place — Planner.neighborhoodRadiusM; the render
+                                        //  caps + the 3D camera frustum scale off it)
 
   layers?: {
     buildings?: boolean;                // default true

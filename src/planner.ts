@@ -93,7 +93,7 @@ import { decodeMapDataPayload, cleanSegmentPayload, type ParsedVacMap } from './
 import { decodeTile, type MvtLayer } from './mvt-decode.js';
 import {
   tilesForRadius, buildNeighborhoodFeatures, tileUrl, tileTemplateSchemeOk,
-  MAX_BUILDINGS, DEFAULT_TILE_ZOOM, type NeighborhoodFeatures, type TileAddr,
+  buildingCapForRadius, DEFAULT_TILE_ZOOM, type NeighborhoodFeatures, type TileAddr,
 } from './neighborhood.js';
 import { getTile, putTile, tileCacheKey, clearNeighborhoodTiles, TILE_TTL_MS } from './neighborhood-store.js';
 import {
@@ -5011,6 +5011,14 @@ export class Planner extends EventTarget {
     this.emitConfig();
   }
 
+  // The neighborhood fetch radius (m), clamped ONCE here so the fetch, the
+  // radius-derived render caps and the settings UI can never disagree. 3 km is
+  // the ceiling: at z14 that is a handful of tiles (cached 30 days), and the
+  // renderer widens its camera frustum to match (see _applyFrustumForRange).
+  neighborhoodRadiusM(): number {
+    return Math.max(100, Math.min(3000, this.store.neighborhood?.radiusM ?? 350));
+  }
+
   // Clear the persistent tile cache (future Settings "reset cache" button) and
   // re-fetch. Also drops the warm decoded cache so the next reconfigure refetches.
   async clearNeighborhoodCache(): Promise<void> {
@@ -5042,7 +5050,7 @@ export class Planner extends EventTarget {
     }
 
     const t = fit.transform;
-    const radiusM = Math.max(100, Math.min(1000, cfg.radiusM ?? 350));
+    const radiusM = this.neighborhoodRadiusM();
     const addrs = tilesForRadius(t.originLat, t.originLon, radiusM, DEFAULT_TILE_ZOOM);
 
     // Resolve the tile-URL template (openfreemap: fetch TileJSON once + cache;
@@ -5439,7 +5447,9 @@ export class Planner extends EventTarget {
       defaultLevelHeightM: Math.max(2, Math.min(5, cfg.defaultLevelHeightM ?? 3)),
       layers: cfg.layers,
       fetchedAt: Date.now(),
-      maxBuildings: MAX_BUILDINGS,
+      // Nearest-N cap scales with the fetch radius — a 400-building cap tuned
+      // for 500 m would silently eat everything a 3 km radius fetched.
+      maxBuildings: buildingCapForRadius(this.neighborhoodRadiusM()),
     });
     this.neighborhoodRev++;
     this.emitConfig();

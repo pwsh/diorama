@@ -7,7 +7,10 @@ Settings ▸ Data ▸ Configurations ▸ Import.
 
 | Plan | Floors | Footprint | Summary |
 |---|---|---|---|
+| [Appliance Showroom — Watt’s Cooking](appliance-showroom.json) | 1 | 14000 × 10000 mm | ~1,507 sq ft (140 m²) retail hall · 1 floor · 3 rooms — appliance feature showcase |
 | [Bungalow — Cottage + Yard](bungalow-cottage-yard.json) | 1 | 15750 × 15500 mm | ~997 sq ft (92.6 m²) interior · 1 floor · 13 rooms + landscaped yard |
+| [Lawn & Garden Center — The Potting Shed](garden-center.json) | 1 | 16000 × 12000 mm | ~310 sq ft shop + ~14,900 sq ft fenced lot · 1 floor · 3 rooms — yard & terrain showcase |
+| [Interior Design Studio — Vignette & Co.](interior-design-store.json) | 1 | 13000 × 11000 mm | ~1,539 sq ft (143 m²) showroom · 1 floor · 6 vignettes — staging & dimensions showcase |
 | [Large Multilevel — Aldergate](large-multilevel.json) | 3 | 19200 × 9750 mm | ~4,590 sq ft (427 m²) · 3 levels + garage · 46 rooms |
 | [One-Bedroom Apartment](one-bedroom-apartment.json) | 1 | 8500 × 8200 mm | ~750 sq ft (69.7 m²) · 1 floor · 10 rooms |
 | [Open-Concept Entertainer](open-concept-entertainer.json) | 1 | 21000 × 16000 mm | ~2,205 sq ft (204 m²) heated + 441 sq ft garage · 1 floor · 15 rooms — entertainer’s edition |
@@ -15,9 +18,12 @@ Settings ▸ Data ▸ Configurations ▸ Import.
 | [Ranch — 3 Bed / 2 Bath](ranch-3bed.json) | 1 | 22100 × 10000 mm | ~1,723 sq ft (160 m²) heated + 400 sq ft garage · 1 floor · 15 rooms |
 | [Ranch — Smart Home](ranch-smart-home.json) | 1 | 22100 × 10000 mm | ~1,723 sq ft (160 m²) heated + 400 sq ft garage · 1 floor · 15 rooms · smart-home demo |
 | [Small 2-Bed Bungalow](small-bungalow.json) | 1 | 9750 × 9500 mm | ~997 sq ft (92.6 m²) · 1 floor · 13 rooms |
+| [SSV Diorama — Starship Deck](starship.json) | 1 | 15600 × 9600 mm | ~78 m² pressurised deck (15.6 × 9.6 m hull) · 1 floor · 8 compartments · crewed |
 | [Studio Apartment](studio-apartment.json) | 1 | 6600 × 6350 mm | ~451 sq ft (42 m²) · 1 floor · 4 rooms |
 | [Townhouse — 3 Level](townhouse-3level.json) | 3 | 6000 × 11000 mm | ~1,875 sq ft (174 m²) heated + 256 sq ft garage · 3 floors · 21 rooms |
 | [Townhouse — Minimalist](townhouse-minimal.json) | 3 | 6000 × 11000 mm | ~1,875 sq ft (174 m²) heated + 256 sq ft garage · 3 floors · 21 rooms — minimalist edition |
 | [Two-Story Colonial](two-story-colonial.json) | 2 | 18300 × 9900 mm | ~2,600 sq ft (242 m²) · 2 floors + garage · 22 rooms |
+| [The Bunker — Underground Hangout](underground-hangout.json) | 2 | 14000 × 10000 mm | ~112 m² basement + ~13 m² shed · 2 floors · 4 rooms · after-dark hangout |
+| [Pocket Zoo — Toon Safari](zoo.json) | 1 | 18000 × 14000 mm | 252 m² lot (18 × 14 m) · 1 floor · 5 fenced enclosures + keeper hut · mostly outdoor |
 
-_12 plan(s). Regenerate with `npm run floorplans:build`._
+_18 plan(s). Regenerate with `npm run floorplans:build`._

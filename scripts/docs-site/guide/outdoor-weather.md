@@ -1,18 +1,19 @@
-# Outdoor, weather & geo
+# Weather, sky & geo
 
-Diorama reaches past your walls: live weather with 3D effects, GPS pins that
-show where people are relative to home, and outdoor features for the yard.
+Diorama reaches past your walls: live weather with 3D effects, a living sky, an
+on-screen compass, and GPS pins that show where people are relative to home.
+
+Building the yard itself — ground, terraces, fences, paths, and pools — is in
+[Yard & terrain](yard-terrain.html); the surrounding streets and the traffic
+overhead are in [Neighborhood & flights](neighborhood-flights.html).
 
 ### Weather sources
 
 Set up weather in the **Weather** settings. Pick one of three sources:
 
-- **HA weather entity** — bind any `weather.` entity and Diorama reads its
-  condition, temperature, wind, and forecast.
-- **Local sensor station** — point Diorama at your own precipitation, wind,
-  temperature, and lightning sensors, and it derives a condition from them.
-- **Open-Meteo** — a free, keyless online forecast. Enter a ZIP code (or
-  lat/lon) and Diorama geocodes it once and polls every 15 minutes.
+- **HA weather entity** — bind any `weather.` entity and Diorama reads its condition, temperature, wind, and forecast.
+- **Local sensor station** — point Diorama at your own precipitation, wind, temperature, and lightning sensors, and it derives a condition from them.
+- **Open-Meteo** — a free, keyless online forecast. Enter a ZIP code (or lat/lon) and Diorama geocodes it once and polls every 15 minutes.
 
 The panel keeps working offline — the last reading holds and is marked stale
 after a while.
@@ -26,12 +27,9 @@ source is set. In edit mode, clicking it jumps to the Weather settings.
 
 In the Weather settings' **Chip appearance** block you can:
 
-- **Reposition** it to any of six anchors (the corners plus top-and
-  bottom-center), or nudge it with custom pixel offsets.
+- **Reposition** it to any of six anchors (the corners plus top-and bottom-center), or nudge it with custom pixel offsets.
 - **Add content rows** — feels-like temperature, humidity, and wind.
-- **Show forecast strips** — a horizontal hourly strip and a vertical daily
-  list (with a hi/lo per day), reading from your source's forecast. Set how many
-  entries each shows.
+- **Show forecast strips** — a horizontal hourly strip and a vertical daily list (with a hi/lo per day), reading from your source's forecast. Set how many entries each shows.
 
 With any of these on, the compact pill grows into a small panel.
 
@@ -43,30 +41,21 @@ condition. In the Weather settings' **Alerts** block, pick a Home Assistant
 alert entity (Diorama understands the common NWS, Environment Canada, DWD, and
 MeteoAlarm shapes and sorts them into advisory / watch / warning).
 
-- The weather chip grows a severity-tinted **⚠ badge**; clicking it opens a
-  panel listing each alert with its event, headline, and expiry.
-- A subtle **3D beacon** — a low colored light that gently pulses over the floor
-  (faster and brighter for a warning, slower for an advisory) — washes the scene
-  when an alert is active. Toggle it with the beacon checkbox.
+- The weather chip grows a severity-tinted **⚠ badge**; clicking it opens a panel listing each alert with its event, headline, and expiry.
+- A subtle **3D beacon** — a low colored light that gently pulses over the floor (faster and brighter for a warning, slower for an advisory) — washes the scene when an alert is active. Toggle it with the beacon checkbox.
 
 ### 3D weather effects
 
 When effects are on, current conditions play out in the 3D scene:
 
-- **Precipitation** — rain, snow, hail, and mixes fall across the floor, drifting
-  with the wind.
-- **Fog** — thickens the air and rolls translucent ground layers, scaled to real
-  visibility.
+- **Precipitation** — rain, snow, hail, and mixes fall across the floor, drifting with the wind.
+- **Fog** — thickens the air and rolls translucent ground layers, scaled to real visibility.
 - **Lightning** — flashes the scene during storms (no audio).
-- **Wind** — drives the precipitation drift, with gust bursts, and can raise
-  drifting dust on windy-but-dry days.
-- **Clouds** — cloud-shadow patches drift across the ground, scaled to cloud
-  cover.
-- **Sun position** — the sun light follows your `sun.sun` entity's real azimuth
-  and elevation.
+- **Wind** — drives the precipitation drift, with gust bursts, and can raise drifting dust on windy-but-dry days.
+- **Clouds** — cloud-shadow patches drift across the ground, scaled to cloud cover.
+- **Sun position** — the sun light follows your `sun.sun` entity's real azimuth and elevation.
 - **Frost** — icicles and a rim appear when it's cold enough.
-- **Puddles** — rain leaves puddles that linger for several minutes after it
-  stops.
+- **Puddles** — rain leaves puddles that linger for several minutes after it stops.
 
 You can toggle each effect individually under the 3D effects controls, and there
 is a master effects switch. Overcast, rainy, foggy, and stormy weather also
@@ -77,13 +66,13 @@ gently **dims** a daytime scene toward dusk (you can turn that off).
 Turn on the **Sky backdrop** (Display settings — on by default when a weather
 source is set) to replace the flat background with a living sky:
 
-- A **gradient sky dome** colored by the time of day, condition, and cloud
-  cover, darkening its upwind horizon when a storm is brewing.
-- A **sun disc** that follows your `sun.sun` entity's real position, and a
-  night **starfield**.
-- A **moon** with correct phases — bind a moon-phase `sensor.` (from Home
-  Assistant's core Moon integration) in the Weather settings and the drawn moon
-  matches tonight's phase; unbound, it shows a full moon.
+- A **gradient sky dome** colored by the time of day, condition, and cloud cover, darkening its upwind horizon when a storm is brewing.
+- A **sun disc** that follows your `sun.sun` entity's real position, and a night **starfield**.
+- A **moon** with correct phases — bind a moon-phase `sensor.` (from Home Assistant's core Moon integration) in the Weather settings and the drawn moon matches tonight's phase; unbound, it shows a full moon.
+
+Once Diorama knows your location, the night sky becomes astronomically correct —
+real stars, constellations, planets, and the moon's true position. See
+[The night sky](3d-view.html).
 
 ### Background text
 
@@ -92,8 +81,7 @@ For a playful touch, write a short message into the world itself with
 message or bind an entity to display its live value:
 
 - **Skywriting** — glowing cloud letters drifting high in the sky with the wind.
-- **Banner plane** — a little toy plane towing a readable banner on a slow
-  orbit.
+- **Banner plane** — a little toy plane towing a readable banner on a slow orbit.
 - **Grass writing** — mowed-in lettering on the widest open patch of yard.
 
 Skywriting and the banner hide during heavy storms (they'd read wrong in a
@@ -105,20 +93,73 @@ To place GPS positions on your plan, Diorama needs to know how your plan lines u
 with the real world. You teach it by calibrating **landmarks** in the
 **GPS / Geo** section (edit mode).
 
-1. **Add a landmark** and click on the plan to drop it at a known spot (a corner
-   of the house, a mailbox).
-2. **Calibrate** it either by **GPS sampling** — pick a `device_tracker`, press
-   Start, and physically stand at the landmark while Diorama collects fixes
-   (it asks the companion app for high-accuracy updates) — or by **manual entry**
-   of a `lat, lon` pair.
+1. **Add a landmark** and click on the plan to drop it at a known spot (a corner of the house, a mailbox).
+2. **Calibrate** it either by **GPS sampling** — pick a `device_tracker`, press Start, and physically stand at the landmark while Diorama collects fixes (it asks the companion app for high-accuracy updates) — or by **manual entry** of a `lat, lon` pair.
 
 Landmarks are shared across all floors, not per floor.
 
-- With **one** calibrated landmark, set the **north** direction (compass bearing
-  of the plan's up direction) so orientation is known.
-- With **two or more**, Diorama fits both position and rotation automatically and
-  shows a **fit quality** readout (RMS error and a warning if a landmark looks
-  off).
+- With **one** calibrated landmark, set the **north** direction (compass bearing of the plan's up direction) so orientation is known.
+- With **two or more**, Diorama fits both position and rotation automatically and shows a **fit quality** readout (RMS error and a warning if a landmark looks off).
+
+A calibrated landmark shows its stored coordinates under its row, and distances
+throughout the geo features follow your imperial/metric setting.
+
+#### Importing landmarks from a CSV
+
+If you already have coordinates — from a survey, a mapping app, or a GPS
+handheld — use **⤓ Import CSV** in the GPS / Geo section. The file needs three
+columns, **label, latitude, longitude**, with a header row in any order or no
+header at all. Rows that don't parse are reported individually and the rest
+still import.
+
+Where the imported landmarks land depends on what Diorama already knows:
+
+- **With a working fit**, each row is projected onto its correct spot on the plan straight away.
+- **Without one** (your first import), rows arrive as **unplaced** pins — they carry real coordinates but no position yet, are marked "not placed — imported from CSV" in amber, and are deliberately **left out of the calibration** until you place them. Click a pin's 📍 button and then click the plan to drop it; it joins the fit at that moment. This keeps a bulk import from poisoning the transform with guessed positions.
+
+Rows are matched to existing landmarks by label, so re-importing a corrected
+file updates rather than duplicates.
+
+### Recorded position pins
+
+The reverse of a landmark: instead of telling Diorama where a plan point is in
+the world, you **walk the world and record points**. It's the fastest way to
+capture a property boundary, a fence line, or the edge of a patio.
+
+In the GPS / Geo section's **Recorded positions (boundary)** block:
+
+1. Pick the tracker to record from (it remembers your choice).
+2. Stand at the first corner and press the record button. Diorama stores the raw coordinates and shows the fix accuracy. A poor fix is recorded with a warning rather than refused — it never blocks you mid-walk.
+3. Walk the boundary, recording a pin at each corner. You can also add one by typing a `lat, lon` pair.
+
+Pins draw as numbered amber diamonds joined by a dashed chain, with each
+segment's length labeled and a running total in the sidebar. Reorder them with
+↑ / ↓ (the order *is* the boundary), and **close the chain** to join the last
+pin back to the first.
+
+**Convert to a ground area** turns the chain into a real ground covering of the
+kind you choose — your actual lot line, at its exact recorded coordinates,
+ready to paint as grass. The pins are kept, so you can walk more of the boundary
+and convert again.
+
+Because pins store coordinates rather than plan positions, re-calibrating your
+landmarks later retroactively corrects every recorded pin.
+
+### The on-screen compass
+
+![The compass rose overlay and the red north arrow beside the floor plan](img/compass-north.png)
+
+Turn on **Settings ▸ Display ▸ Compass** for a small pseudo-3D compass rose that
+sits over both the 2D and 3D views and turns as you orbit, in every mode.
+
+- **North source** — **auto** (the default) uses your landmark calibration when there is one, and falls back to a manual bearing; **manual** always uses the bearing you type. The manual field is the compass bearing that the plan's **up** direction faces, and the block shows a live line telling you which source is currently in effect.
+- **Anchor** — place the rose at any of six positions with the anchor grid, or give it custom pixel offsets. (It defaults to the top-right so it doesn't collide with the weather chip.)
+- **Show north icon on plan** — adds a red-and-white arrow just outside the floor edge, in both 2D and 3D, pointing where true north leaves your plan. **North icon size** scales it from 0.5× to 4×.
+
+In edit mode, clicking the rose jumps straight to these settings.
+
+Rotating your plan (Floors ▸ Rotate plan) rotates the north reference with it,
+so the compass keeps telling the truth.
 
 ### GPS device pins
 
@@ -126,13 +167,9 @@ Once at least one landmark is calibrated, bind a person to an HA person or
 device_tracker to pin them on the plan. Each pin is classified against the
 current floor:
 
-- **Indoor** — the fix lands inside the house. GPS is tens of meters off
-  indoors, so the pin is drawn dimmed as a rough "find my phone" hint.
-- **Yard** — within the boundary around the house (default 30 m). Drawn at its
-  true position with an accuracy ring.
-- **Beyond** — outside the boundary. Clamped to the boundary edge along the true
-  bearing, labeled with the distance and compass direction (for example,
-  "Name · 320 m NE").
+- **Indoor** — the fix lands inside the house. GPS is tens of meters off indoors, so the pin is drawn dimmed as a rough "find my phone" hint.
+- **Yard** — within the boundary around the house (default 30 m). Drawn at its true position with an accuracy ring.
+- **Beyond** — outside the boundary. Clamped to the boundary edge along the true bearing, labeled with the distance and compass direction (for example, "Name · 320 m NE").
 
 Pins show the person's color and initials, dim when stale, and render in kiosk
 and view modes too. In 3D they appear as floating labels; landmarks show as 📍
@@ -145,14 +182,12 @@ Diorama can plot them as warning diamonds around your home once geo is
 calibrated, labeled with magnitude, distance, and direction. Toggle them with
 the "Show events" option in the GPS / Geo section.
 
-### Yard features
+### Building the yard itself
 
-- **Ground coverings** — the Ground tool paints polygon areas of grass, rock,
-  concrete, blacktop, mulch, sand, or water onto the ground plane, each with a
-  toon texture. Hide the ground layer to click through a large painted area.
-- **Outdoor furniture** — the furniture catalog includes an outdoor category:
-  trees, pines, bushes, flower beds, a bird bath, a fountain, a swing set, lawn
-  chairs (which figures actually sit in), a picnic table, and curbside trash and
-  recycle bins.
-- **3D grid** — the ground grid shows behind the scene when there's no
-  background image; toggle it with the "3D grid" layer.
+Ground coverings, terraces, fences and gates, paths and driveways, pools and
+spas, sprinklers, flagpoles, and the outdoor furniture catalog all have their
+own page: [Yard & terrain](yard-terrain.html).
+
+To draw the *neighbors'* buildings and streets around your plan — which needs
+the landmark calibration above — see
+[Neighborhood & flights](neighborhood-flights.html).

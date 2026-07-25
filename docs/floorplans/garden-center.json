@@ -1,0 +1,1534 @@
+{
+  "diorama": 2,
+  "name": "Lawn & Garden Center — The Potting Shed",
+  "exportedAt": "2026-07-25T00:00:00.000Z",
+  "store": {
+    "v": 2,
+    "floors": [
+      {
+        "id": "garden-center-fl1",
+        "name": "Garden Centre",
+        "w": 16000,
+        "d": 12000,
+        "walls": [
+          {
+            "id": "garden-center-w1",
+            "points": [
+              {
+                "x": 0,
+                "y": 0
+              },
+              {
+                "x": 6000,
+                "y": 0
+              }
+            ]
+          },
+          {
+            "id": "garden-center-w2",
+            "points": [
+              {
+                "x": 0,
+                "y": 0
+              },
+              {
+                "x": 0,
+                "y": 4800
+              }
+            ]
+          },
+          {
+            "id": "garden-center-w3",
+            "points": [
+              {
+                "x": 0,
+                "y": 4800
+              },
+              {
+                "x": 6000,
+                "y": 4800
+              }
+            ]
+          },
+          {
+            "id": "garden-center-w4",
+            "points": [
+              {
+                "x": 6000,
+                "y": 0
+              },
+              {
+                "x": 6000,
+                "y": 4800
+              }
+            ]
+          },
+          {
+            "id": "garden-center-w5",
+            "points": [
+              {
+                "x": 6000,
+                "y": 0
+              },
+              {
+                "x": 16000,
+                "y": 0
+              }
+            ],
+            "kind": "fence_picket"
+          },
+          {
+            "id": "garden-center-w6",
+            "points": [
+              {
+                "x": 16000,
+                "y": 0
+              },
+              {
+                "x": 16000,
+                "y": 12000
+              }
+            ],
+            "kind": "fence_picket"
+          },
+          {
+            "id": "garden-center-w7",
+            "points": [
+              {
+                "x": 16000,
+                "y": 12000
+              },
+              {
+                "x": 0,
+                "y": 12000
+              }
+            ],
+            "kind": "fence_privacy"
+          },
+          {
+            "id": "garden-center-w8",
+            "points": [
+              {
+                "x": 0,
+                "y": 12000
+              },
+              {
+                "x": 0,
+                "y": 4800
+              }
+            ],
+            "kind": "fence_privacy"
+          },
+          {
+            "id": "garden-center-w9",
+            "points": [
+              {
+                "x": 7200,
+                "y": 8000
+              },
+              {
+                "x": 11600,
+                "y": 8000
+              }
+            ],
+            "kind": "hedge"
+          },
+          {
+            "id": "garden-center-w10",
+            "points": [
+              {
+                "x": 12000,
+                "y": 8600
+              },
+              {
+                "x": 14600,
+                "y": 8600
+              }
+            ]
+          },
+          {
+            "id": "garden-center-w11",
+            "points": [
+              {
+                "x": 14600,
+                "y": 8600
+              },
+              {
+                "x": 14600,
+                "y": 10800
+              }
+            ]
+          },
+          {
+            "id": "garden-center-w12",
+            "points": [
+              {
+                "x": 14600,
+                "y": 10800
+              },
+              {
+                "x": 12000,
+                "y": 10800
+              }
+            ]
+          },
+          {
+            "id": "garden-center-w13",
+            "points": [
+              {
+                "x": 12000,
+                "y": 10800
+              },
+              {
+                "x": 12000,
+                "y": 8600
+              }
+            ]
+          }
+        ],
+        "furniture": [
+          {
+            "id": "garden-center-fn1",
+            "x": 1500,
+            "y": 2200,
+            "w": 2000,
+            "h": 1000,
+            "kind": "island",
+            "label": "Checkout",
+            "color": "#4e6b3a"
+          },
+          {
+            "id": "garden-center-fn2",
+            "x": 1500,
+            "y": 3800,
+            "w": 2200,
+            "h": 700,
+            "kind": "counter",
+            "label": "Wrap counter"
+          },
+          {
+            "id": "garden-center-fn3",
+            "x": 3600,
+            "y": 4400,
+            "w": 1800,
+            "h": 650,
+            "kind": "counter",
+            "label": "Seed & bulb counter"
+          },
+          {
+            "id": "garden-center-fn4",
+            "x": 300,
+            "y": 900,
+            "w": 900,
+            "h": 400,
+            "kind": "cabinet",
+            "rotation": 90,
+            "label": "Tool wall"
+          },
+          {
+            "id": "garden-center-fn5",
+            "x": 5700,
+            "y": 1000,
+            "w": 800,
+            "h": 350,
+            "kind": "bookshelf",
+            "rotation": 90,
+            "label": "Pot shelving"
+          },
+          {
+            "id": "garden-center-fn6",
+            "x": 5700,
+            "y": 1900,
+            "w": 800,
+            "h": 350,
+            "kind": "bookshelf",
+            "rotation": 90,
+            "label": "Fertiliser shelving"
+          },
+          {
+            "id": "garden-center-fn7",
+            "x": 5600,
+            "y": 4300,
+            "w": 600,
+            "h": 500,
+            "kind": "utility_sink",
+            "label": "Shop potting sink"
+          },
+          {
+            "id": "garden-center-fn8",
+            "x": 3400,
+            "y": 900,
+            "w": 400,
+            "h": 400,
+            "kind": "plant",
+            "label": "Houseplants"
+          },
+          {
+            "id": "garden-center-fn9",
+            "x": 4000,
+            "y": 900,
+            "w": 400,
+            "h": 400,
+            "kind": "plant"
+          },
+          {
+            "id": "garden-center-fn10",
+            "x": 4600,
+            "y": 900,
+            "w": 400,
+            "h": 400,
+            "kind": "plant"
+          },
+          {
+            "id": "garden-center-fn11",
+            "x": 3400,
+            "y": 1700,
+            "w": 400,
+            "h": 400,
+            "kind": "plant"
+          },
+          {
+            "id": "garden-center-fn12",
+            "x": 4000,
+            "y": 1700,
+            "w": 400,
+            "h": 400,
+            "kind": "plant"
+          },
+          {
+            "id": "garden-center-fn13",
+            "x": 4600,
+            "y": 1700,
+            "w": 400,
+            "h": 400,
+            "kind": "plant"
+          },
+          {
+            "id": "garden-center-fn14",
+            "x": 1500,
+            "y": 1000,
+            "w": 2400,
+            "h": 1400,
+            "kind": "rug",
+            "label": "Entry mat",
+            "color": "#5d4037"
+          },
+          {
+            "id": "garden-center-fn15",
+            "x": 6800,
+            "y": 1500,
+            "w": 700,
+            "h": 1200,
+            "kind": "lawn_chair",
+            "rotation": 270,
+            "label": "Patio set — chair"
+          },
+          {
+            "id": "garden-center-fn16",
+            "x": 8600,
+            "y": 1500,
+            "w": 1800,
+            "h": 1500,
+            "kind": "picnic_table",
+            "label": "Patio set — table"
+          },
+          {
+            "id": "garden-center-fn17",
+            "x": 10400,
+            "y": 1500,
+            "w": 700,
+            "h": 1200,
+            "kind": "lawn_chair",
+            "rotation": 90,
+            "label": "Patio set — chair"
+          },
+          {
+            "id": "garden-center-fn18",
+            "x": 11800,
+            "y": 700,
+            "w": 600,
+            "h": 700,
+            "kind": "trash_bin"
+          },
+          {
+            "id": "garden-center-fn19",
+            "x": 12500,
+            "y": 700,
+            "w": 600,
+            "h": 700,
+            "kind": "recycle_bin"
+          },
+          {
+            "id": "garden-center-fn20",
+            "x": 12200,
+            "y": 1600,
+            "w": 800,
+            "h": 600,
+            "kind": "rock_cluster",
+            "label": "Boulder display"
+          },
+          {
+            "id": "garden-center-fn21",
+            "x": 13000,
+            "y": 2200,
+            "w": 450,
+            "h": 450,
+            "kind": "bird_bath"
+          },
+          {
+            "id": "garden-center-fn22",
+            "x": 14600,
+            "y": 900,
+            "w": 800,
+            "h": 800,
+            "kind": "pine_tree"
+          },
+          {
+            "id": "garden-center-fn23",
+            "x": 6900,
+            "y": 700,
+            "w": 800,
+            "h": 600,
+            "kind": "rock_cluster"
+          },
+          {
+            "id": "garden-center-fn24",
+            "x": 7600,
+            "y": 4100,
+            "w": 900,
+            "h": 450,
+            "kind": "flower_bed",
+            "elevation": 200,
+            "label": "Annuals"
+          },
+          {
+            "id": "garden-center-fn25",
+            "x": 8800,
+            "y": 4100,
+            "w": 900,
+            "h": 450,
+            "kind": "flower_bed",
+            "elevation": 200,
+            "label": "Annuals"
+          },
+          {
+            "id": "garden-center-fn26",
+            "x": 10000,
+            "y": 4100,
+            "w": 900,
+            "h": 450,
+            "kind": "flower_bed",
+            "elevation": 200,
+            "label": "Annuals"
+          },
+          {
+            "id": "garden-center-fn27",
+            "x": 8400,
+            "y": 5400,
+            "w": 700,
+            "h": 700,
+            "kind": "bush",
+            "elevation": 450,
+            "label": "Topiary"
+          },
+          {
+            "id": "garden-center-fn28",
+            "x": 9100,
+            "y": 5400,
+            "w": 800,
+            "h": 600,
+            "kind": "rock_cluster",
+            "elevation": 450
+          },
+          {
+            "id": "garden-center-fn29",
+            "x": 9800,
+            "y": 5400,
+            "w": 700,
+            "h": 700,
+            "kind": "bush",
+            "elevation": 450,
+            "label": "Topiary"
+          },
+          {
+            "id": "garden-center-fn30",
+            "x": 6800,
+            "y": 6000,
+            "w": 900,
+            "h": 900,
+            "kind": "tree",
+            "label": "Shade tree"
+          },
+          {
+            "id": "garden-center-fn31",
+            "x": 14300,
+            "y": 4700,
+            "w": 1200,
+            "h": 1200,
+            "kind": "fountain",
+            "label": "Pond fountain"
+          },
+          {
+            "id": "garden-center-fn32",
+            "x": 15200,
+            "y": 3000,
+            "w": 900,
+            "h": 900,
+            "kind": "tree"
+          },
+          {
+            "id": "garden-center-fn33",
+            "x": 13900,
+            "y": 7000,
+            "w": 2800,
+            "h": 1600,
+            "kind": "swingset",
+            "label": "Swing-set display"
+          },
+          {
+            "id": "garden-center-fn34",
+            "x": 7000,
+            "y": 8600,
+            "w": 700,
+            "h": 700,
+            "kind": "bush"
+          },
+          {
+            "id": "garden-center-fn35",
+            "x": 8200,
+            "y": 8600,
+            "w": 700,
+            "h": 700,
+            "kind": "bush"
+          },
+          {
+            "id": "garden-center-fn36",
+            "x": 9400,
+            "y": 8600,
+            "w": 700,
+            "h": 700,
+            "kind": "bush"
+          },
+          {
+            "id": "garden-center-fn37",
+            "x": 10600,
+            "y": 8600,
+            "w": 700,
+            "h": 700,
+            "kind": "bush"
+          },
+          {
+            "id": "garden-center-fn38",
+            "x": 7300,
+            "y": 10000,
+            "w": 900,
+            "h": 450,
+            "kind": "flower_bed"
+          },
+          {
+            "id": "garden-center-fn39",
+            "x": 8500,
+            "y": 10000,
+            "w": 900,
+            "h": 450,
+            "kind": "flower_bed"
+          },
+          {
+            "id": "garden-center-fn40",
+            "x": 9700,
+            "y": 10000,
+            "w": 900,
+            "h": 450,
+            "kind": "flower_bed"
+          },
+          {
+            "id": "garden-center-fn41",
+            "x": 10900,
+            "y": 10000,
+            "w": 900,
+            "h": 450,
+            "kind": "flower_bed"
+          },
+          {
+            "id": "garden-center-fn42",
+            "x": 7300,
+            "y": 11100,
+            "w": 900,
+            "h": 450,
+            "kind": "flower_bed"
+          },
+          {
+            "id": "garden-center-fn43",
+            "x": 8500,
+            "y": 11100,
+            "w": 900,
+            "h": 450,
+            "kind": "flower_bed"
+          },
+          {
+            "id": "garden-center-fn44",
+            "x": 9700,
+            "y": 11100,
+            "w": 900,
+            "h": 450,
+            "kind": "flower_bed"
+          },
+          {
+            "id": "garden-center-fn45",
+            "x": 10900,
+            "y": 11100,
+            "w": 900,
+            "h": 450,
+            "kind": "flower_bed"
+          },
+          {
+            "id": "garden-center-fn46",
+            "x": 15300,
+            "y": 11200,
+            "w": 800,
+            "h": 800,
+            "kind": "pine_tree"
+          },
+          {
+            "id": "garden-center-fn47",
+            "x": 13000,
+            "y": 10400,
+            "w": 1600,
+            "h": 650,
+            "kind": "counter",
+            "label": "Potting bench"
+          },
+          {
+            "id": "garden-center-fn48",
+            "x": 14200,
+            "y": 10400,
+            "w": 600,
+            "h": 500,
+            "kind": "utility_sink",
+            "label": "Shed sink"
+          },
+          {
+            "id": "garden-center-fn49",
+            "x": 12400,
+            "y": 9400,
+            "w": 800,
+            "h": 350,
+            "kind": "bookshelf",
+            "rotation": 90,
+            "label": "Seed store"
+          },
+          {
+            "id": "garden-center-fn50",
+            "x": 14200,
+            "y": 9200,
+            "w": 400,
+            "h": 400,
+            "kind": "plant"
+          },
+          {
+            "id": "garden-center-fn51",
+            "x": 900,
+            "y": 6400,
+            "w": 700,
+            "h": 700,
+            "kind": "bush"
+          },
+          {
+            "id": "garden-center-fn52",
+            "x": 1900,
+            "y": 6400,
+            "w": 700,
+            "h": 700,
+            "kind": "bush"
+          },
+          {
+            "id": "garden-center-fn53",
+            "x": 3000,
+            "y": 6800,
+            "w": 800,
+            "h": 600,
+            "kind": "rock_cluster",
+            "label": "Bulk stone"
+          },
+          {
+            "id": "garden-center-fn54",
+            "x": 4600,
+            "y": 7400,
+            "w": 800,
+            "h": 600,
+            "kind": "rock_cluster",
+            "label": "Bulk stone"
+          },
+          {
+            "id": "garden-center-fn55",
+            "x": 1200,
+            "y": 9200,
+            "w": 800,
+            "h": 800,
+            "kind": "pine_tree"
+          },
+          {
+            "id": "garden-center-fn56",
+            "x": 2600,
+            "y": 10400,
+            "w": 800,
+            "h": 800,
+            "kind": "pine_tree"
+          },
+          {
+            "id": "garden-center-fn57",
+            "x": 4600,
+            "y": 9600,
+            "w": 900,
+            "h": 900,
+            "kind": "tree"
+          },
+          {
+            "id": "garden-center-fn58",
+            "x": 1200,
+            "y": 11200,
+            "w": 700,
+            "h": 1200,
+            "kind": "lawn_chair",
+            "rotation": 180,
+            "label": "Lounger display"
+          },
+          {
+            "id": "garden-center-fn59",
+            "x": 2200,
+            "y": 11200,
+            "w": 700,
+            "h": 1200,
+            "kind": "lawn_chair",
+            "rotation": 180,
+            "label": "Lounger display"
+          }
+        ],
+        "lights": [
+          {
+            "id": "garden-center-lt1",
+            "x": 1500,
+            "y": 2200,
+            "entity_id": null,
+            "iconKind": "pendant",
+            "localState": "on",
+            "label": "Checkout pendant"
+          },
+          {
+            "id": "garden-center-lt2",
+            "x": 3000,
+            "y": 2600,
+            "entity_id": null,
+            "iconKind": "strip",
+            "rotation": 0,
+            "length": 4000,
+            "localState": "on",
+            "label": "Shop strip"
+          },
+          {
+            "id": "garden-center-lt3",
+            "x": 4600,
+            "y": 4200,
+            "entity_id": null,
+            "iconKind": "round",
+            "localState": "on",
+            "label": "Shop back"
+          },
+          {
+            "id": "garden-center-lt4",
+            "x": 300,
+            "y": 3600,
+            "entity_id": null,
+            "iconKind": "sconce",
+            "radius": 500,
+            "rotation": 270,
+            "label": "Tool wall sconce"
+          },
+          {
+            "id": "garden-center-lt5",
+            "x": 7200,
+            "y": 3000,
+            "entity_id": null,
+            "iconKind": "inground",
+            "localState": "on",
+            "label": "Path marker 1"
+          },
+          {
+            "id": "garden-center-lt6",
+            "x": 9000,
+            "y": 3000,
+            "entity_id": null,
+            "iconKind": "inground",
+            "localState": "on",
+            "label": "Path marker 2"
+          },
+          {
+            "id": "garden-center-lt7",
+            "x": 10800,
+            "y": 3000,
+            "entity_id": null,
+            "iconKind": "inground",
+            "localState": "on",
+            "label": "Path marker 3"
+          },
+          {
+            "id": "garden-center-lt8",
+            "x": 11800,
+            "y": 5200,
+            "entity_id": null,
+            "iconKind": "inground",
+            "localState": "on",
+            "label": "Path marker 4"
+          },
+          {
+            "id": "garden-center-lt9",
+            "x": 11800,
+            "y": 7200,
+            "entity_id": null,
+            "iconKind": "inground",
+            "localState": "on",
+            "label": "Path marker 5"
+          },
+          {
+            "id": "garden-center-lt10",
+            "x": 6300,
+            "y": 5600,
+            "entity_id": null,
+            "iconKind": "ground_spot",
+            "rotation": 45,
+            "localState": "on",
+            "label": "Tree uplight"
+          },
+          {
+            "id": "garden-center-lt11",
+            "x": 14200,
+            "y": 3200,
+            "entity_id": null,
+            "iconKind": "ground_spot",
+            "rotation": 330,
+            "localState": "on",
+            "label": "Pond uplight"
+          },
+          {
+            "id": "garden-center-lt12",
+            "x": 1800,
+            "y": 9600,
+            "entity_id": null,
+            "iconKind": "ground_spot",
+            "rotation": 300,
+            "label": "Pine uplight"
+          },
+          {
+            "id": "garden-center-lt13",
+            "x": 8600,
+            "y": 2400,
+            "entity_id": null,
+            "iconKind": "string",
+            "radius": 1600,
+            "localState": "on",
+            "label": "Patio string"
+          },
+          {
+            "id": "garden-center-lt14",
+            "x": 6200,
+            "y": 4700,
+            "entity_id": null,
+            "iconKind": "flood",
+            "rotation": 180,
+            "localState": "on",
+            "label": "Yard flood"
+          },
+          {
+            "id": "garden-center-lt15",
+            "x": 15200,
+            "y": 8400,
+            "entity_id": null,
+            "iconKind": "flood",
+            "rotation": 90,
+            "label": "Delivery flood"
+          },
+          {
+            "id": "garden-center-lt16",
+            "x": 13300,
+            "y": 9600,
+            "entity_id": null,
+            "iconKind": "jar",
+            "localState": "on",
+            "label": "Shed lantern"
+          }
+        ],
+        "switches": [
+          {
+            "id": "garden-center-sw1",
+            "x": 2000,
+            "y": 200,
+            "entity_id": null,
+            "rotation": 0,
+            "label": "Shop entry"
+          },
+          {
+            "id": "garden-center-sw2",
+            "x": 5800,
+            "y": 4000,
+            "entity_id": null,
+            "rotation": 90,
+            "label": "Yard lights"
+          },
+          {
+            "id": "garden-center-sw3",
+            "x": 12300,
+            "y": 8800,
+            "entity_id": null,
+            "rotation": 0,
+            "label": "Shed"
+          }
+        ],
+        "sensors": [],
+        "motionSensors": [
+          {
+            "id": "garden-center-mo1",
+            "x": 3000,
+            "y": 2600,
+            "heading": 0,
+            "fov": 360,
+            "range": 4500,
+            "label": "Shop presence",
+            "entity_id": null,
+            "color": "#66bb6a",
+            "avatar": true,
+            "demo": true,
+            "avatarKinds": [
+              "adult",
+              "elder"
+            ]
+          },
+          {
+            "id": "garden-center-mo2",
+            "x": 9600,
+            "y": 3200,
+            "heading": 0,
+            "fov": 360,
+            "range": 7000,
+            "label": "Nursery yard presence",
+            "entity_id": null,
+            "color": "#8bc34a",
+            "avatar": true,
+            "demo": true,
+            "avatarKinds": [
+              "professional",
+              "farmer",
+              "adult"
+            ]
+          },
+          {
+            "id": "garden-center-mo3",
+            "x": 3400,
+            "y": 8800,
+            "heading": 0,
+            "fov": 360,
+            "range": 6000,
+            "label": "West lawn presence",
+            "entity_id": null,
+            "color": "#ffb300",
+            "avatar": true,
+            "demo": true,
+            "avatarKinds": [
+              "teen",
+              "child"
+            ]
+          }
+        ],
+        "roamers": [
+          {
+            "id": "garden-center-ro1",
+            "name": "Marigold",
+            "avatarKinds": [
+              "adult",
+              "elder"
+            ],
+            "color": "#7cb342"
+          },
+          {
+            "id": "garden-center-ro2",
+            "name": "Basil",
+            "avatarKinds": [
+              "farmer",
+              "professional"
+            ],
+            "color": "#ff8f00"
+          },
+          {
+            "id": "garden-center-ro3",
+            "name": "Clover",
+            "avatarKinds": [
+              "dog"
+            ],
+            "color": "#8d6e63"
+          }
+        ],
+        "envSensors": [
+          {
+            "id": "garden-center-env1",
+            "x": 4900,
+            "y": 2600,
+            "entity_id": null,
+            "kind": "temperature",
+            "label": "Shop temp",
+            "height": 1500
+          },
+          {
+            "id": "garden-center-env2",
+            "x": 12300,
+            "y": 9800,
+            "entity_id": null,
+            "kind": "humidity",
+            "label": "Shed RH",
+            "height": 1500
+          },
+          {
+            "id": "garden-center-env3",
+            "x": 11300,
+            "y": 4400,
+            "entity_id": null,
+            "kind": "illuminance",
+            "label": "Yard lux",
+            "height": 1200
+          }
+        ],
+        "look3d": {
+          "floorTex": "concrete",
+          "floorColor": "#b0ad9e",
+          "wallColor": "#efe6d3"
+        },
+        "doors": [
+          {
+            "id": "garden-center-dr1",
+            "x": 2200,
+            "y": 0,
+            "w": 1600,
+            "rotation": 0,
+            "entity_id": null,
+            "doorbellEntity": null,
+            "label": "Shop entrance"
+          },
+          {
+            "id": "garden-center-dr2",
+            "x": 6000,
+            "y": 3600,
+            "w": 1200,
+            "rotation": 90,
+            "entity_id": null,
+            "label": "Shop → yard"
+          },
+          {
+            "id": "garden-center-dr3",
+            "x": 9000,
+            "y": 0,
+            "w": 1400,
+            "rotation": 0,
+            "entity_id": null,
+            "kind": "gate",
+            "label": "Yard gate"
+          },
+          {
+            "id": "garden-center-dr4",
+            "x": 16000,
+            "y": 8200,
+            "w": 1600,
+            "rotation": 90,
+            "entity_id": null,
+            "kind": "gate",
+            "label": "Delivery gate"
+          },
+          {
+            "id": "garden-center-dr5",
+            "x": 12600,
+            "y": 8600,
+            "w": 900,
+            "rotation": 0,
+            "entity_id": null,
+            "label": "Potting shed"
+          }
+        ],
+        "windows": [
+          {
+            "id": "garden-center-win1",
+            "x": 1200,
+            "y": 0,
+            "w": 1600,
+            "rotation": 0,
+            "entity_id": null,
+            "sill": 900,
+            "height": 1500,
+            "kind": "picture",
+            "label": "Shop front W"
+          },
+          {
+            "id": "garden-center-win2",
+            "x": 4800,
+            "y": 0,
+            "w": 1600,
+            "rotation": 0,
+            "entity_id": null,
+            "sill": 900,
+            "height": 1500,
+            "kind": "picture",
+            "label": "Shop front E"
+          },
+          {
+            "id": "garden-center-win3",
+            "x": 0,
+            "y": 2400,
+            "w": 1400,
+            "rotation": 90,
+            "entity_id": null,
+            "sill": 1000,
+            "height": 1200,
+            "kind": "sliding",
+            "label": "Shop west"
+          },
+          {
+            "id": "garden-center-win4",
+            "x": 3000,
+            "y": 4800,
+            "w": 1800,
+            "rotation": 0,
+            "entity_id": null,
+            "sill": 900,
+            "height": 1400,
+            "kind": "sliding",
+            "label": "Yard view"
+          },
+          {
+            "id": "garden-center-win5",
+            "x": 12000,
+            "y": 9700,
+            "w": 800,
+            "rotation": 90,
+            "entity_id": null,
+            "sill": 1100,
+            "height": 900,
+            "label": "Shed west"
+          },
+          {
+            "id": "garden-center-win6",
+            "x": 14600,
+            "y": 9700,
+            "w": 800,
+            "rotation": 90,
+            "entity_id": null,
+            "sill": 1100,
+            "height": 900,
+            "label": "Shed east"
+          }
+        ],
+        "bg": null,
+        "model3d": null,
+        "rooms": [
+          {
+            "id": "garden-center-rm1",
+            "name": "Garden Shop",
+            "anchor": {
+              "x": 3000,
+              "y": 2400
+            }
+          },
+          {
+            "id": "garden-center-rm2",
+            "name": "Nursery Yard",
+            "anchor": {
+              "x": 9000,
+              "y": 5600
+            }
+          },
+          {
+            "id": "garden-center-rm3",
+            "name": "Potting Shed",
+            "anchor": {
+              "x": 13300,
+              "y": 9700
+            }
+          }
+        ],
+        "bleProxies": [],
+        "alarmPanels": [],
+        "safetySensors": [
+          {
+            "id": "garden-center-sf1",
+            "x": 3000,
+            "y": 3400,
+            "kind": "smoke",
+            "entity_id": null,
+            "label": "Shop smoke"
+          }
+        ],
+        "robots": [
+          {
+            "id": "garden-center-rv1",
+            "x": 5300,
+            "y": 11300,
+            "kind": "mower",
+            "entity_id": null,
+            "label": "Yard mower"
+          }
+        ],
+        "presenceZones": [],
+        "cameras": [],
+        "groundAreas": [
+          {
+            "id": "garden-center-ga1",
+            "kind": "grass",
+            "points": [
+              {
+                "x": 6100,
+                "y": 100
+              },
+              {
+                "x": 15900,
+                "y": 100
+              },
+              {
+                "x": 15900,
+                "y": 11900
+              },
+              {
+                "x": 6100,
+                "y": 11900
+              }
+            ],
+            "name": "East lawn"
+          },
+          {
+            "id": "garden-center-ga2",
+            "kind": "grass",
+            "points": [
+              {
+                "x": 100,
+                "y": 4900
+              },
+              {
+                "x": 6100,
+                "y": 4900
+              },
+              {
+                "x": 6100,
+                "y": 11900
+              },
+              {
+                "x": 100,
+                "y": 11900
+              }
+            ],
+            "name": "West lawn"
+          },
+          {
+            "id": "garden-center-ga3",
+            "kind": "rock",
+            "points": [
+              {
+                "x": 6400,
+                "y": 400
+              },
+              {
+                "x": 8600,
+                "y": 400
+              },
+              {
+                "x": 8600,
+                "y": 2600
+              },
+              {
+                "x": 6400,
+                "y": 2600
+              }
+            ],
+            "name": "Gravel bay"
+          },
+          {
+            "id": "garden-center-ga4",
+            "kind": "sand",
+            "points": [
+              {
+                "x": 11000,
+                "y": 700
+              },
+              {
+                "x": 13400,
+                "y": 700
+              },
+              {
+                "x": 13400,
+                "y": 2800
+              },
+              {
+                "x": 11000,
+                "y": 2800
+              }
+            ],
+            "name": "Paver-sand bay"
+          },
+          {
+            "id": "garden-center-ga5",
+            "kind": "water",
+            "points": [
+              {
+                "x": 13000,
+                "y": 3400
+              },
+              {
+                "x": 15700,
+                "y": 3400
+              },
+              {
+                "x": 15700,
+                "y": 6000
+              },
+              {
+                "x": 13000,
+                "y": 6000
+              }
+            ],
+            "name": "Display pond"
+          },
+          {
+            "id": "garden-center-ga6",
+            "kind": "mulch",
+            "points": [
+              {
+                "x": 7000,
+                "y": 3800
+              },
+              {
+                "x": 11200,
+                "y": 3800
+              },
+              {
+                "x": 11200,
+                "y": 7000
+              },
+              {
+                "x": 7000,
+                "y": 7000
+              }
+            ],
+            "name": "Terrace tier 1",
+            "elevationMm": 200
+          },
+          {
+            "id": "garden-center-ga7",
+            "kind": "rock",
+            "points": [
+              {
+                "x": 7900,
+                "y": 4500
+              },
+              {
+                "x": 10300,
+                "y": 4500
+              },
+              {
+                "x": 10300,
+                "y": 6300
+              },
+              {
+                "x": 7900,
+                "y": 6300
+              }
+            ],
+            "name": "Terrace tier 2",
+            "elevationMm": 450
+          },
+          {
+            "id": "garden-center-ga8",
+            "kind": "mulch",
+            "points": [
+              {
+                "x": 6800,
+                "y": 9400
+              },
+              {
+                "x": 11800,
+                "y": 9400
+              },
+              {
+                "x": 11800,
+                "y": 11600
+              },
+              {
+                "x": 6800,
+                "y": 11600
+              }
+            ],
+            "name": "Perennial beds"
+          },
+          {
+            "id": "garden-center-ga9",
+            "kind": "concrete",
+            "points": [
+              {
+                "x": 6300,
+                "y": 3700
+              },
+              {
+                "x": 11100,
+                "y": 3700
+              },
+              {
+                "x": 11100,
+                "y": 8900
+              },
+              {
+                "x": 13050,
+                "y": 8900
+              },
+              {
+                "x": 13050,
+                "y": 7500
+              },
+              {
+                "x": 12500,
+                "y": 7500
+              },
+              {
+                "x": 12500,
+                "y": 2300
+              },
+              {
+                "x": 6300,
+                "y": 2300
+              }
+            ],
+            "name": "Main yard path",
+            "path": {
+              "centerline": [
+                {
+                  "x": 6300,
+                  "y": 3000
+                },
+                {
+                  "x": 11800,
+                  "y": 3000
+                },
+                {
+                  "x": 11800,
+                  "y": 8200
+                },
+                {
+                  "x": 13050,
+                  "y": 8200
+                }
+              ],
+              "width": 1400
+            }
+          },
+          {
+            "id": "garden-center-ga10",
+            "kind": "concrete",
+            "points": [
+              {
+                "x": 9100,
+                "y": 300
+              },
+              {
+                "x": 9100,
+                "y": 2400
+              },
+              {
+                "x": 10300,
+                "y": 2400
+              },
+              {
+                "x": 10300,
+                "y": 300
+              }
+            ],
+            "name": "Gate spur",
+            "path": {
+              "centerline": [
+                {
+                  "x": 9700,
+                  "y": 300
+                },
+                {
+                  "x": 9700,
+                  "y": 2400
+                }
+              ],
+              "width": 1200
+            }
+          }
+        ],
+        "voidAreas": [],
+        "sprinklerZones": [
+          {
+            "id": "garden-center-spz1",
+            "x": 9000,
+            "y": 6000,
+            "entity_id": null,
+            "headKind": "rotor",
+            "arcDeg": 200,
+            "rotation": 0,
+            "radius": 3500,
+            "zoneNumber": 1,
+            "label": "Zone 1 — nursery beds",
+            "localState": "on"
+          },
+          {
+            "id": "garden-center-spz2",
+            "x": 11200,
+            "y": 9800,
+            "entity_id": null,
+            "headKind": "spray",
+            "arcDeg": 120,
+            "rotation": 270,
+            "radius": 2400,
+            "zoneNumber": 2,
+            "label": "Zone 2 — perennial beds"
+          },
+          {
+            "id": "garden-center-spz3",
+            "x": 3000,
+            "y": 8600,
+            "entity_id": null,
+            "headKind": "spray",
+            "arcDeg": 180,
+            "rotation": 90,
+            "radius": 3000,
+            "zoneNumber": 3,
+            "label": "Zone 3 — west lawn",
+            "localState": "on"
+          }
+        ],
+        "flagpoles": [
+          {
+            "id": "garden-center-fp1",
+            "x": 15200,
+            "y": 1300,
+            "flag": "open_sign",
+            "height": 6000,
+            "label": "OPEN flag"
+          }
+        ]
+      }
+    ],
+    "currentFloorId": "garden-center-fl1",
+    "activeSensorId": null,
+    "coverage": true,
+    "imperial": false,
+    "showDetails": false,
+    "useRawTargets": false,
+    "showMotionZones": true,
+    "scene3d": {
+      "preset": "day",
+      "floorTex": "concrete",
+      "floorColor": "#b0ad9e",
+      "wallColor": "#efe6d3",
+      "wallCutaway": true,
+      "plumbobs": true
+    },
+    "customObjects": [],
+    "people": [],
+    "bleShowUnknown": true,
+    "notes": "~310 sq ft shop + ~14,900 sq ft fenced lot · 1 floor · 3 rooms — yard & terrain showcase\n\nA neighbourhood lawn-and-garden centre on a 16 × 12 m corner lot: a compact indoor\nshop in the south-west corner and a big fenced nursery yard wrapping around it.\nThis plan exists to exercise the whole outdoor/terrain arc at once — ground\ncoverings, terraces, path ribbons, fences, gates, hedges, sprinklers, a flagpole\nand the full outdoor furniture family — rather than to model a home.\n\nBoundary: white picket along the street frontage (south and east), solid privacy\nboard along the two back lot lines, a customer gate off the street and a delivery\ngate on the east side. A clipped hedge run divides the shrub display from the\nnursery beds without closing the yard off.\n\nGround: grass over the whole lot, a gravel bulk bay and a paver-sand bay along the\nfrontage, a mulched perennial bed behind the hedge, and a water display pond with\na fountain in it. A two-tier terraced display bed sits mid-yard — a mulch podium\nraised 200 mm with a rock-capped tier raised 450 mm nested inside it, planted with\nannual flower beds and topiary bushes. Two concrete path ribbons (authored as\ncenterlines and buffered into polygons) run from the shop door out to the potting\nshed and from the customer gate up into the yard.\n\nGarden Shop: checkout island on an entry mat, wrap counter, seed & bulb counter,\n  a tool-wall cabinet, two shelving runs for pots and fertiliser, a potting sink\n  and two rows of houseplants under a picture-window frontage.\nNursery Yard: patio-furniture display (picnic table flanked by two lawn chairs),\n  boulder and bulk-stone displays, bird bath, shade and pine trees, a shrub row,\n  eight perennial flower beds in two rows, a swing-set display, and curbside bins.\n  Three sprinkler zones (a 200° rotor over the nursery beds plus two spray heads)\n  and a robot-mower dock keep it maintained; an OPEN flag flies at the frontage.\nPotting Shed: a free-standing 2.6 × 2.2 m shed with a potting bench, a shed sink,\n  seed shelving and a plant, lit by a mason-jar lantern.\n\nLighting leans on the ground light kinds: five flush in-ground path markers along\nthe main ribbon, three aimable ground spots uplighting the shade tree, the pond\nand a pine, a string-light wash over the patio display, and two floodlights on\nthe shop and delivery gate. Three unbound demo AI-avatar presence sensors (shop,\nnursery yard, west lawn) keep customers and staff moving with no Home Assistant\nattached."
+  }
+}

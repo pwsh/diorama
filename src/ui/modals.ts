@@ -1205,10 +1205,15 @@ export class SettingsDrawer extends LitElement {
                   : html`<div style="font-size:10px;color:var(--text-dim);margin-top:2px">Self-hosted OpenFreeMap or a Protomaps/PMTiles extract. Data is still OSM/OpenMapTiles-derived (attribution still applies).</div>`}
               </div>` : nothing}
             <div class="row" style="align-items:center">
-              <label style="font-size:12px;color:var(--text)" title="Fetch radius around your calibrated address (metres).">Radius (m)</label>
-              <input type="number" min="100" max="1000" step="50" .value=${String(cfg.radiusM ?? 350)}
-                     @change=${(e: Event) => set(n => { const v = parseFloat((e.target as HTMLInputElement).value); n.radiusM = isFinite(v) ? Math.max(100, Math.min(1000, v)) : 350; })}
+              <label style="font-size:12px;color:var(--text)" title="Fetch radius around your calibrated address (metres). Up to 3 km — the 3D camera widens its view distance to match.">Radius (m)</label>
+              <input type="number" min="100" max="3000" step="50" .value=${String(cfg.radiusM ?? 350)}
+                     @change=${(e: Event) => set(n => { const v = parseFloat((e.target as HTMLInputElement).value); n.radiusM = isFinite(v) ? Math.max(100, Math.min(3000, v)) : 350; })}
                      style="width:80px">
+            </div>
+            <div style="font-size:10px;color:var(--text-dim);line-height:1.35;margin-top:-2px">
+              Larger radii fetch more tiles (the count grows with the area) — tiles are
+              cached on this device for 30 days, and the 3D view automatically extends
+              its camera range so distant buildings stay visible.
             </div>
             <button class="btn" style="align-self:flex-start" @click=${() => { void this.planner.clearNeighborhoodCache(); }}>Clear tile cache</button>
             <div style="font-size:10px;color:var(--text-dim);line-height:1.35">

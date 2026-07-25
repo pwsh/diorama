@@ -12,15 +12,10 @@ Home Assistant entity as crisp text — a temperature, a person's location, a
 sensor reading, anything. It generalizes the environmental-sensor chip to every
 domain.
 
-- **Bind any entity**, or set the card to a **clock** or **date** mode that
-  needs no binding at all.
-- **Formatting** — choose precision, a unit, prefix/suffix, and how binary and
-  enumerated states read.
-- **Color rules** — add value rules (less-than, greater-than, between,
-  contains, matches) that recolor the card or make it **flash** when a reading
-  crosses a threshold, so a card can turn red when a freezer warms up.
-- **Placement** — a card can face the camera (**billboard**) or mount flat on a
-  wall, and it snaps flush to the nearest wall on drop.
+- **Bind any entity**, or set the card to a **clock** or **date** mode that needs no binding at all.
+- **Formatting** — choose precision, a unit, prefix/suffix, and how binary and enumerated states read.
+- **Color rules** — add value rules (less-than, greater-than, between, contains, matches) that recolor the card or make it **flash** when a reading crosses a threshold, so a card can turn red when a freezer warms up.
+- **Placement** — a card can face the camera (**billboard**) or mount flat on a wall, and it snaps flush to the nearest wall on drop.
 
 Info cards are display-only — clicking one just selects it for editing. They
 have their own **info** layer.
@@ -31,12 +26,10 @@ The **Action (🔘)** tool places a button that fires a configurable Home
 Assistant service when tapped — a "goodnight" scene, a script, an automation,
 a scene, or any custom `domain.service` with your own data.
 
-- **Any action** — pick the action kind and its target, or write a custom
-  service call with JSON service data (validated inline).
+- **Any action** — pick the action kind and its target, or write a custom service call with JSON service data (validated inline).
 - **Mounting** — wall-plate, or a free-standing table / floor puck.
 - **Confirm** — turn on a confirmation prompt for destructive actions.
-- **Feedback** — the cap depresses and pulses a ring on press, the sidebar
-  shows a "fired N ago" line, and nearby figures react with a thought bubble.
+- **Feedback** — the cap depresses and pulses a ring on press, the sidebar shows a "fired N ago" line, and nearby figures react with a thought bubble.
 
 Action buttons ride the **switches** layer. In Kiosk mode they fire; in View
 mode they are inert. A quick **Test** button in the sidebar lets you try the
@@ -67,10 +60,8 @@ the sidebar section is where you configure it.
 A TV or wall-TV in your plan can show more than now-playing art. In the TV
 furniture editor, pick a **Screen** mode:
 
-- **News ticker** — bind a headline sensor (an RSS/feed sensor or an event
-  entity) and the screen scrolls its headlines, rotating through them.
-- **Weather on TV** — a mini weather card drawn from your weather source and
-  forecast (no binding needed).
+- **News ticker** — bind a headline sensor (an RSS/feed sensor or an event entity) and the screen scrolls its headlines, rotating through them.
+- **Weather on TV** — a mini weather card drawn from your weather source and forecast (no binding needed).
 
 Whenever the TV is actually presenting media, the now-playing card always wins
 and hides the surface. A small `📰` / `⛅` line appears under the TV in 2D as a
@@ -96,6 +87,10 @@ registry — in one place. The bell carries a severity-tinted unread badge and
 pulses when a new alert arrives; clicking it opens a dropdown of alert rows
 (newest and most severe first) with relative times, a Dismiss / Ignore action
 per source, and a deep-link into Repairs.
+
+**Flight alerts** land in the same bell when you enable flight tracking — a low
+overflight, a callsign from your watch list, or the ISS rising over your house.
+See [Neighborhood & flights](neighborhood-flights.html).
 
 Configure it in **Settings ▸ Integrations ▸ Alert Center**: per-source toggles,
 a minimum Repairs severity, and whether the bell shows in Kiosk / View modes

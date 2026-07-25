@@ -610,6 +610,20 @@ const FLIGHT_PITCH_MAX = 0.12;       // rad at ±6000 fpm — a hint, not a stun
 const ISS_SHELL_R = 26000;           // inside the 30 m sky dome (the sun-disc radius)
 const ISS_RAMP_RAD = 3 * Math.PI / 180;   // opacity ramp over the first ~3° of altitude
 
+// ── Camera frustum (STOCK values — load-bearing, see _init + _applyFrustumForRange)
+// near 10 / far 150000 / maxDistance 45000 is the scene's tuned default: far was
+// raised to 150000 so the banner-plane orbit + message-train loop stop clipping
+// against the camera-centered sky dome, and near:far = 15000:1 keeps depth
+// precision fine enough for the polygonOffset outline shells. NOTHING may widen
+// these except a feature that genuinely needs the reach (today: the neighborhood
+// overlay at a large fetch radius) — and it must restore them exactly when off.
+const CAM_NEAR_DEFAULT = 10;
+const CAM_FAR_DEFAULT = 150000;
+const CAM_MAXDIST_DEFAULT = 45000;
+const CAM_NEAR_FAR_RATIO = 15000;    // near = far / ratio — pinned at today's 10:150000
+const CAM_FAR_CEIL = 600000;
+const CAM_MAXDIST_CEIL = 550000;
+
 // Build context for a declarative primitive (shared by the initial-rig
 // accessory build AND a runtime prop-equip via _buildPrimitiveMesh). Carries the
 // LIVE anchor groups + shared material refs + per-rig metrics.
@@ -2063,7 +2077,7 @@ export class ThreeDRenderer {
     // arc past ~70000 from the camera — clipping AGAINST the camera-centered sky
     // dome (always 30000 away) so props vanished "behind the sky". 150000 clears
     // every background prop at any zoom; near stays 10.
-    this._camera = new THREE.PerspectiveCamera(50, w / h, 10, 150000);
+    this._camera = new THREE.PerspectiveCamera(50, w / h, CAM_NEAR_DEFAULT, CAM_FAR_DEFAULT);
     this._lastCanvasW = Math.max(w, 1); this._lastCanvasH = Math.max(h, 1);
     this._camera.position.set(0, 9000, -6000);
     this._camera.lookAt(0, 0, 0);
@@ -2142,7 +2156,7 @@ export class ThreeDRenderer {
     this._controls.target.set(0, 0, 0);
     this._controls.maxPolarAngle = Math.PI * 0.49;
     this._controls.minDistance = 1000;
-    this._controls.maxDistance = 45000;
+    this._controls.maxDistance = CAM_MAXDIST_DEFAULT;
     this._controls.update();
 
     // Sims cam azimuth snap: after any orbit gesture ends, if the snap mode is
@@ -3004,6 +3018,41 @@ export class ThreeDRenderer {
         Math.tan((this._fovH / 2) * rad) / Math.tan((this._fovV / 2) * rad);
     }
     this._camera.updateProjectionMatrix();
+  }
+
+  // Widen (or restore) the camera frustum + orbit range so far-flung background
+  // content is actually reachable/visible. `requiredMm` = how far from the scene
+  // origin the content extends; null (or ≤0) restores the STOCK triple EXACTLY
+  // (near 10 / far 150000 / maxDistance 45000) — every caller must pass null when
+  // its content goes away, so toggling a feature off never leaves the scene on a
+  // stretched frustum (depth precision + zoom feel are tuned for the stock one).
+  //
+  // Only widening is possible: far/maxDistance clamp at ≥ their defaults, and
+  // near tracks far at the pinned 15000:1 ratio so depth precision never degrades
+  // past today's. minDistance (1000) stays well clear of the widest near (40).
+  // The sky dome (camera-centered R=30000, renderOrder −10, depthWrite:false)
+  // needs no change: distant buildings simply paint over it, and a bigger far
+  // plane never pushes the dome out of range.
+  //
+  // Guarded on the last applied requirement, so a per-update call is free.
+  private _frustumRangeMm: number | null = null;
+  private _applyFrustumForRange(requiredMm: number | null): void {
+    const req = requiredMm != null && isFinite(requiredMm) && requiredMm > 0 ? requiredMm : null;
+    if (req === this._frustumRangeMm) return;
+    this._frustumRangeMm = req;
+    const cam = this._camera;
+    let far = CAM_FAR_DEFAULT, near = CAM_NEAR_DEFAULT, maxDist = CAM_MAXDIST_DEFAULT;
+    if (req != null) {
+      far = Math.max(CAM_FAR_DEFAULT, Math.min(CAM_FAR_CEIL, 1.25 * req + 30000));
+      near = Math.max(CAM_NEAR_DEFAULT, far / CAM_NEAR_FAR_RATIO);
+      maxDist = Math.max(CAM_MAXDIST_DEFAULT, Math.min(CAM_MAXDIST_CEIL, req * 1.15));
+    }
+    if (cam) {
+      cam.near = near;
+      cam.far = far;
+      cam.updateProjectionMatrix();   // NB: never touches fov/aspect (that is _applyCameraFov's job)
+    }
+    if (this._controls) this._controls.maxDistance = maxDist;
   }
 
   // Surface height (mm) under a world point: the highest stair tread or
@@ -5487,15 +5536,36 @@ export class ThreeDRenderer {
   // per (color, opacity), built once per update + disposed by _clearGroup on the
   // next rebuild. Rebuilt only under three-view's _keyNeighborhood.
   updateNeighborhood(data: NeighborhoodFeatures | null,
-                     cfg: { opacity?: number; colorBuildings?: string; colorRoads?: string; colorWater?: string; colorLanduse?: string } | null): void {
+                     cfg: { opacity?: number; colorBuildings?: string; colorRoads?: string; colorWater?: string; colorLanduse?: string; maxRoads?: number } | null): void {
     if (!this._scene) return;
     this._clearGroup(this._neighborhoodGroup);
     const anyContent = !!data && (data.buildings.length || data.roads.length || data.water.length || data.landuse.length);
-    if (!data || !anyContent) return;
+    if (!data || !anyContent) { this._applyFrustumForRange(null); return; }
 
     const afw = this._fw, afd = this._fd;
     const asx = (wx: number) => afw / 2 - wx;
     const asz = (wy: number) => wy - afd / 2;
+
+    // How far the overlay reaches from the scene origin — the camera's stock
+    // 150 m far plane clips anything past it, so a 1–3 km fetch radius would be
+    // fetched, extracted and then invisible. One cheap pass over the (already
+    // capped) point lists; null on the no-content path above restores the stock
+    // frustum, so turning the overlay off is never sticky.
+    {
+      let reach = 0;
+      const scan = (pts: { x: number; y: number }[]) => {
+        for (const pt of pts) {
+          const sx = asx(pt.x), sz = asz(pt.y);
+          const d = Math.sqrt(sx * sx + sz * sz);
+          if (d > reach) reach = d;
+        }
+      };
+      for (const b of data.buildings) { scan(b.points); if (b.heightMm > reach) reach = b.heightMm; }
+      for (const r of data.roads) scan(r.points);
+      for (const p of data.water) scan(p.points);
+      for (const p of data.landuse) scan(p.points);
+      this._applyFrustumForRange(reach > 0 ? reach : null);
+    }
 
     const opacity = Math.max(0.3, Math.min(1, cfg?.opacity ?? 1));
     const transparent = opacity < 1;
@@ -5551,7 +5621,12 @@ export class ThreeDRenderer {
     if (data.roads.length) {
       const rColor = cfg?.colorRoads ? hexToInt(cfg.colorRoads) : 0x4a4e55;
       const rMat = this._mat({ color: rColor, transparent, opacity, side: THREE.DoubleSide });
-      const ROAD_CAP = 600;
+      // Defensive ribbon cap. The caller scales it with the fetch radius
+      // (roadCapForRadius); absent → the reference 600 (stale-chunk safe).
+      // (600 = neighborhood.ts MAX_ROADS, duplicated as a literal because that
+      // module stays a TYPE-only import here — a value import would pull the
+      // pure module into the lazy three chunk.)
+      const ROAD_CAP = Math.max(1, Math.round(cfg?.maxRoads ?? 600));
       let built = 0, skipped = 0;
       for (const road of data.roads) {
         if (built >= ROAD_CAP) { skipped++; continue; }

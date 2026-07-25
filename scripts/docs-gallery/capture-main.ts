@@ -253,7 +253,27 @@ function capAppliance(sub: Subject, o: CapOpts): string {
 
 // Lighting: a two-wall corner + floor; off → on → color sweep → dim → off
 // (fireplace: off → flicker → off; wall kinds mount on the wall).
-const WALL_LIGHT = new Set<LightIconKind>(['sconce', 'wall_sconce', 'step', 'flood']);
+const WALL_LIGHT = new Set<LightIconKind>(['sconce', 'wall_sconce', 'step', 'flood', 'exhaust_wall']);
+// Ground-level kinds (fixture body at grade, not the 2500 mm ceiling default):
+// the standard room-wide framing renders them as a speck in the lower third, so
+// they get their own tighter, lower orbit that fills the frame with the trim
+// ring / stake head and still fits the upward beam (inground cone tops out at
+// ~1600 mm, ground_spot's beam leaves frame by design).
+const GROUND_LIGHT = new Set<LightIconKind>(['inground', 'ground_spot']);
+// Per-kind camera framing overrides {targetY, radius, elevDeg}. The default
+// room-scale orbit ([0,1200,0] r6800 e22) works for every kind that throws a
+// floor pool — the pool is what makes a small ceiling fixture read. The exhaust
+// family deliberately skips the floor disc (see the renderer's pool-skip list),
+// so at room scale they render as an unreadable speck: they get a tight orbit
+// on the fixture itself (negative elevation = camera BELOW the target, looking
+// up at the ceiling grille's underside where the spinning blades live).
+const LIGHT_FRAMING: Partial<Record<LightIconKind, [number, number, number]>> = {
+  inground: [600, 3400, 14],
+  ground_spot: [600, 3400, 14],
+  exhaust: [2400, 1400, -45],
+  exhaust_light: [2400, 1400, -45],
+  exhaust_wall: [2000, 1100, 2],
+};
 function capLight(sub: Subject, o: CapOpts): string {
   const gifPx = o.size ?? 400, N = o.frames ?? 34, fps = o.fps ?? 12;
   const kind = sub.id as LightIconKind;
@@ -266,9 +286,11 @@ function capLight(sub: Subject, o: CapOpts): string {
   const lx = onWall ? 2400 : f.w / 2;
   const ly = onWall ? 600 : f.d / 2;
   // Fireplace front = local −Z and the sconce dome faces −Z (wall-mount convention);
-  // at rotation 0 both point AWAY from the room-side camera. Rotate those two 180°
-  // so their fronts face the camera (the other 18 kinds already read correctly).
-  const rotation = (kind === 'fireplace' || kind === 'sconce') ? 180 : 0;
+  // at rotation 0 both point AWAY from the room-side camera. Rotate those 180°
+  // so their fronts face the camera (the other kinds already read correctly).
+  // exhaust_wall shares the sconce convention exactly (housing toward +Z into the
+  // wall, blades + louver shutter on local −Z), so it joins them.
+  const rotation = (kind === 'fireplace' || kind === 'sconce' || kind === 'exhaust_wall') ? 180 : 0;
   const light = {
     id: 'l', x: lx, y: ly, entity_id: 'light.demo', iconKind: kind, rotation,
     label: '', length: 1600,
@@ -276,11 +298,12 @@ function capLight(sub: Subject, o: CapOpts): string {
   f.lights = [light];
   const isFire = kind === 'fireplace';
   R.updateFloor(f, isFire ? NIGHT : DUSK, undefined, undefined, nullState);
-  const target: [number, number, number] = [0, 1200, 0];
+  const [tgtY, radius, elevDeg] = LIGHT_FRAMING[kind] ?? [1200, 6800, 22];
+  const target: [number, number, number] = [0, tgtY, 0];
   // Camera on the ROOM side (+z / -x): the back wall (scene z ≈ -1900) and side
   // wall (scene x ≈ +2100) sit BEHIND the fixture, not between it and the camera
   // (was Math.PI * 0.86, which put the camera inside the wall corner). +π = 180°.
-  orbitCam(target, 6800, 22, Math.PI * 1.86);
+  orbitCam(target, radius, elevDeg, Math.PI * 1.86);
   const lightState = (i: number): Record<string, unknown> => {
     const t = i / N;
     if (t < 0.12 || t > 0.94) return { 'light.demo': { state: 'off', attributes: {} } };
@@ -422,13 +445,17 @@ function capSafety(sub: Subject, o: CapOpts): string {
   const gifPx = o.size ?? 400, N = o.frames ?? 34, fps = o.fps ?? 12;
   const kind = sub.id;
   const isLeak = kind === 'leak';
-  // Smaller floor → iso frames the ceiling detector closer; tighter leak orbit
-  // (3600 → 3000) enlarges the puddle (zoomed in).
   const f = baseFloor(3800, 3800);
   f.safetySensors = [{ id: 'sf', x: f.w / 2, y: f.d / 2, kind, entity_id: 'binary_sensor.safety', label: '' }];
   R.updateFloor(f, DAY, undefined, undefined, nullState);
+  // Leak is a FLOOR puck — a low tight orbit enlarges its spreading puddle.
+  // The others hang from the ceiling (2743 mm): the 'iso' preset frames the
+  // whole FLOOR, which left the detector a few pixels wide at the very top edge
+  // of the frame. Orbit the detector itself instead, from just below (negative
+  // elevation) so the puck's underside + its expanding alarm rings fill the
+  // frame; the radius still admits the widest ring.
   if (isLeak) orbitCam([0, 300, 0], 3000, 22, Math.PI * 0.85);
-  else R.applyViewPreset('iso');
+  else orbitCam([0, 2500, 0], 2700, -14, Math.PI * 0.85);
   return runCapture(N, gifPx, fps, 40, (i) => {
     const alarm = i > N * 0.18;
     R.updateSafetySensors(f.safetySensors, stateOf({ 'binary_sensor.safety': { state: alarm ? 'on' : 'off', attributes: {} } }));
@@ -481,7 +508,10 @@ function capOpening(sub: Subject, o: CapOpts): string {
   const gifPx = o.size ?? 400, N = o.frames ?? 30, fps = o.fps ?? 12;
   const isWindow = sub.type === 'window';
   const f = baseFloor(6000, 4000);
-  f.walls = [{ id: 'wb', points: [{ x: 500, y: 2000 }, { x: 5500, y: 2000 }] }];
+  // A gate is a fence/hedge opening — host it on a picket fence run so the panel
+  // reads in context (a gate cut into a full 2743 mm wall looks like a bug).
+  const wallKind = (!isWindow && sub.id === 'gate') ? 'fence_picket' : 'full';
+  f.walls = [{ id: 'wb', kind: wallKind, points: [{ x: 500, y: 2000 }, { x: 5500, y: 2000 }] }];
   if (isWindow) {
     f.windows = [{ id: 'w', x: 3000, y: 2000, w: 1600, rotation: 0, entity_id: 'cover.demo', kind: sub.id }];
   } else {
@@ -611,6 +641,12 @@ const LIGHT_KINDS: { id: LightIconKind; label: string; glyph: string }[] = [
   { id: 'under_cabinet', label: 'Under-cabinet strip', glyph: '▂' },
   { id: 'wall_sconce', label: 'Wall sconce', glyph: '◨' }, { id: 'step', label: 'Step light', glyph: '▤' },
   { id: 'flood', label: 'Floodlight', glyph: '🔆' },
+  { id: 'inground', label: 'In-ground uplight', glyph: '⤒' },
+  { id: 'ground_spot', label: 'Ground spot', glyph: '⟰' },
+  { id: 'heatlamp', label: 'Heat lamp', glyph: '♨' },
+  { id: 'exhaust', label: 'Exhaust fan', glyph: '❊' },
+  { id: 'exhaust_wall', label: 'Wall exhaust fan', glyph: '⊛' },
+  { id: 'exhaust_light', label: 'Exhaust + light', glyph: '❈' },
 ];
 const CAT_PAGE: Record<string, string> = { furniture: 'furniture', appliance: 'appliances', bathroom: 'bathroom', outdoor: 'outdoor' };
 const CAT_TITLE: Record<string, string> = { furniture: 'Furniture', appliance: 'Appliances', bathroom: 'Bathroom', outdoor: 'Outdoor & yard' };
@@ -644,7 +680,7 @@ function buildCatalog(): any {
   for (const lk of LIGHT_KINDS) {
     push({
       type: 'light', id: lk.id, page: 'lighting', group: 'Light fixtures', label: lk.label,
-      notes: `${lk.glyph} · ${WALL_LIGHT.has(lk.id) ? 'wall-mounted' : 'ceiling/floor'} · off → on → color → dim`,
+      notes: `${lk.glyph} · ${WALL_LIGHT.has(lk.id) ? 'wall-mounted' : GROUND_LIGHT.has(lk.id) ? 'ground-level' : 'ceiling/floor'} · off → on → color → dim`,
       gif: `media/lighting/${safeId(lk.id)}.gif`, meta: { glyph: lk.glyph },
     });
   }
@@ -662,8 +698,12 @@ function buildCatalog(): any {
   for (const [kind, def] of Object.entries(ENV_KINDS)) {
     push({ type: 'env', id: kind, page: 'sensors', group: 'Environment', label: `${def.glyph} ${kind}`, notes: def.warn != null ? `warn ${def.warn} / danger ${def.danger}` : 'live reading', gif: `media/sensors/env_${safeId(kind)}.gif`, meta: { glyph: def.glyph } });
   }
-  for (const sk of ['smoke', 'co', 'gas', 'leak']) {
-    push({ type: 'safety', id: sk, page: 'sensors', group: 'Safety', label: `${sk.toUpperCase()} detector`, notes: sk === 'leak' ? 'floor puck → spreading puddle' : 'idle → alarm rings', gif: `media/sensors/safety_${sk}.gif`, meta: {} });
+  for (const sk of ['smoke', 'co', 'gas', 'leak', 'siren']) {
+    const label = sk === 'siren' ? 'Siren beacon' : `${sk.toUpperCase()} detector`;
+    const notes = sk === 'leak' ? 'floor puck → spreading puddle'
+      : sk === 'siren' ? 'idle → rotating beacon + strobe'
+        : 'idle → alarm rings';
+    push({ type: 'safety', id: sk, page: 'sensors', group: 'Safety', label, notes, gif: `media/sensors/safety_${sk}.gif`, meta: {} });
   }
   for (const bk of ['trash_bin', 'recycle_bin']) {
     const def = FURNITURE_KINDS[bk as keyof typeof FURNITURE_KINDS];
@@ -671,7 +711,8 @@ function buildCatalog(): any {
   }
 
   // Doors & windows.
-  for (const dk of ['swing', 'garage']) push({ type: 'door', id: dk, page: 'doors-windows', group: 'Doors', label: dk === 'swing' ? 'Swing door' : 'Garage door', notes: 'open → close', gif: `media/doors-windows/door_${dk}.gif`, meta: {} });
+  const DOOR_LABEL: Record<string, string> = { swing: 'Swing door', garage: 'Garage door', gate: 'Gate' };
+  for (const dk of ['swing', 'garage', 'gate']) push({ type: 'door', id: dk, page: 'doors-windows', group: 'Doors', label: DOOR_LABEL[dk], notes: dk === 'gate' ? 'picket gate on a fence run · open → close' : 'open → close', gif: `media/doors-windows/door_${dk}.gif`, meta: {} });
   for (const wk of ['single', 'double_hung', 'casement_pair', 'sliding', 'picture']) push({ type: 'window', id: wk, page: 'doors-windows', group: 'Windows', label: wk.replace(/_/g, ' '), notes: 'open → close', gif: `media/doors-windows/window_${safeId(wk)}.gif`, meta: {} });
 
   // Robots.
