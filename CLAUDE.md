@@ -307,7 +307,17 @@ origin gate), poll clamp 5–60 s default 8, ISS on its own 10 s timer for all s
 false`); runtime `flightsNow`/`flightsAt`/`flightsRev` (bumps on ISS changes too — ONE dirty-key
 input)/`issNow`/`flightsStatus` (`off|no-origin|ok|error`; 'error' only when nothing cached —
 stale-tolerant) + public `flightsOrigin()` (geo-fit origin → `weather.lat/lon` → null — the
-observer chain, do not fork a second one). **Renderer**: `_flightsGroup` positioned at the home
+observer chain, do not fork a second one). **Routine polls are LIVE-path — they must NEVER
+`emitConfig()`** (user-reported regression: a per-poll configRev bump rebuilt every
+configRev-keyed 3D group each 8 s — weather particles re-seeded, the decorative bg-text
+plane/train snapped back to their build angle). The renderer needs no config event —
+`_tickOnce` recomputes `_keyFlights` every tick, so `flightsRev` alone drives `updateFlights`;
+the 2D RAF reads `flightsNow` per frame. `emitConfig` fires ONLY on structural transitions:
+`flightsStatus` change, `flightsNow`/`issNow` null-transitions (the attribution chip), and
+`_computeFlightAlerts()` returning changed. The entity source needs no emit of its own — the
+bound id is config-path in `_isSlowEntity`, so HA's state_changed already emitted (cadence =
+the rest sensor's user-controlled scan_interval). Regression-pinned: flights-test asserts two
+routine polls leave `configRev` UNCHANGED while `flightsRev` advances twice. **Renderer**: `_flightsGroup` positioned at the home
 anchor's scene coords (anchor = geo `tx/ty` when fit exists, else floor centre; rig offsets =
 `(−planX, dispY, +planY)`), **NOT in `clearTransientGroups`** (home-relative, persists across
 floor switches like `_skyGroup`), in `destroy()`, `layers.flights` via setLayerVisibility.
@@ -344,10 +354,10 @@ source radios w/ the airplanes.live privacy disclosure + CORS/mixed-content hint
 poll, min/max alt filters, "Callsign labels" + "Track the ISS", alerts sub-group — the watch-list
 normalizes in `setFlights` (trim/uppercase), not the UI, so imports get the same shape).
 **Attribution**: "Flight data © airplanes.live" joins the fixed bottom-left chip (stacked with the
-OSM line) whenever cloud + enabled + data. Tests: `flights-test.html` (`FLIGHTS PASS 144/144` —
-fixture = a REAL 94-aircraft airplanes.live LAX capture), `flights-render-test.html`
-(`FLIGHTSRENDER PASS 80/80` — heading/pitch signs asserted via `getWorldDirection`),
-`flights-ui-test.html` (`FLIGHTSUI 55/55`; alert-center 67/67 stays green).
+OSM line) whenever cloud + enabled + data. Tests: `flights-test.html` (`FLIGHTS PASS 160/160` —
+fixture = a REAL 94-aircraft airplanes.live LAX capture; incl. the live-path emit matrix),
+`flights-render-test.html` (`FLIGHTSRENDER PASS 80/80` — heading/pitch signs asserted via
+`getWorldDirection`), `flights-ui-test.html` (`FLIGHTSUI 55/55`; alert-center 67/67 stays green).
 
 ### Geo reference & GPS device pins (World Outside, Feature G)
 Landmarks (`Store.geo.landmarks`, property-wide/store-level — NOT per-floor) are placed on the plan and calibrated to real-world lat/lon (`src/geo.ts` pure math: equirectangular projection, 2D Procrustes fit scale-locked at 1 + `fittedScale` diagnostic, single-landmark `northDeg` path, median lat/lon, `parseLatLon` manual-entry parse; test page `geo-test.html`). `Planner.geoFit()` returns the fitted `GeoTransform` (+ calibrated landmark list). Landmarks calibrate via GPS sampling OR manual lat/lon entry in the sidebar (paste a `lat, lon` pair into the Latitude field to split both); **manual entry sets `sampledAt` but CLEARS `accuracy`/`sampleCount`** (no sampling run happened — absent `sampleCount` + present `lat` is the "manual" sentinel, shown as `manual · <date>`), so the fit-quality readout stays honest. **GPS device pins (G2)**: `Planner.gpsPins` (runtime getter, cheap, safe per frame) resolves each `Store.people` entry with a GPS source (prefer `person.*` via `haPersonId`, else `device_tracker.*` via `gpsTrackerId`) — reads `latitude`/`longitude`/`gps_accuracy` off the entity, projects via `latLonToPlan`, and classifies vs the CURRENT floor rect:

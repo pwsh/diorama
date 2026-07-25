@@ -642,6 +642,124 @@
           `${after}→${calls.length}`);
       }
 
+      // (m) LIVE-path discipline (user-reported bug): a routine poll must NOT
+      // bump configRev. Every three-view dirty key folds configRev, so a
+      // per-poll emit rebuilt the weather group (precip re-seeded) and the
+      // bg-text rigs (banner plane / chopper / train snapped back to their
+      // build-time orbit angle) every few seconds. `flightsRev` is the renderer's
+      // signal — _keyFlights is recomputed every tick, so it alone suffices.
+      // Config emits are reserved for structural transitions.
+      {
+        calls.length = 0;
+        // Boot with the feed FAILING so the first poll lands no data — that way
+        // the first SUCCESSFUL poll below is driven explicitly and configRev can
+        // be sampled immediately before it (booting straight into success races
+        // the transition emit against the await).
+        handler = () => null;
+        const { p } = await boot(makeStore({
+          weather: WEATHER,
+          // No alert triggers configured: every poll below is routine by
+          // construction, so nothing but the transition rules can emit.
+          flights: { enabled: true, source: 'cloud', radiusNm: 30, iss: false },
+        }));
+        await waitFor(() => p.flightsStatus === 'error');
+
+        // (b) the FIRST successful poll is a transition ('error' → 'ok', plus
+        // null → data) and MUST repaint — the app.ts attribution chip only
+        // appears on a config emit.
+        const revBeforeFirst = p.configRev;
+        handler = () => ring(3);
+        await p._pollFlights();
+        ok('11m: first successful poll lands data', p.flightsStatus === 'ok'
+          && (p.flightsNow?.length ?? 0) === 3, `${p.flightsStatus} n=${p.flightsNow?.length}`);
+        ok('11m: first successful poll emits config (status error→ok, chip appears)',
+          p.configRev > revBeforeFirst, `${revBeforeFirst}→${p.configRev}`);
+
+        // (a) two consecutive routine polls: flightsRev twice, configRev never.
+        const cfgRev0 = p.configRev, fRev0 = p.flightsRev;
+        handler = () => ring(4);
+        await p._pollFlights();
+        const cfgRev1 = p.configRev, fRev1 = p.flightsRev;
+        handler = () => ring(5);
+        await p._pollFlights();
+        ok('11m: routine poll #1 bumps flightsRev', fRev1 === fRev0 + 1, `${fRev0}→${fRev1}`);
+        ok('11m: routine poll #2 bumps flightsRev', p.flightsRev === fRev1 + 1,
+          `${fRev1}→${p.flightsRev}`);
+        ok('11m: two routine polls leave configRev UNCHANGED',
+          p.configRev === cfgRev0 && cfgRev1 === cfgRev0,
+          `${cfgRev0}→${cfgRev1}→${p.configRev}`);
+        ok('11m: the routine polls really landed new data', (p.flightsNow?.length ?? 0) === 5,
+          `n=${p.flightsNow?.length}`);
+
+        // (c) a failed poll while data is cached: status stays 'ok', nothing
+        // changes, so no repaint either.
+        const cfgRev2 = p.configRev;
+        handler = () => null;
+        await p._pollFlights();
+        ok('11m: failed poll with cached data keeps status ok', p.flightsStatus === 'ok',
+          p.flightsStatus);
+        ok('11m: failed poll with cached data emits NO config',
+          p.configRev === cfgRev2, `${cfgRev2}→${p.configRev}`);
+        quiesce(p);
+      }
+
+      // (n) ISS: the first fix repaints (chip), later advanced fixes do not.
+      {
+        calls.length = 0;
+        let issTs = 1784953269;
+        handler = u => u.includes('wheretheiss')
+          // Far from home + iss:true, so the above-horizon edge never fires and
+          // every update below is routine.
+          ? { latitude: -16.7, longitude: 90.1, altitude: 418.9, velocity: 27586.1, timestamp: issTs }
+          : ring(1);
+        const { p } = await boot(makeStore({
+          weather: WEATHER, flights: { enabled: true, source: 'cloud', radiusNm: 30, iss: true },
+        }));
+        await waitFor(() => p.issNow !== null);
+        ok('11n: first ISS fix landed', p.issNow !== null);
+
+        const cfgRev0 = p.configRev, fRev0 = p.flightsRev;
+        issTs += 10;                                  // the feed's fix advanced
+        await p._pollIss();
+        ok('11n: an advanced ISS fix bumps flightsRev', p.flightsRev > fRev0,
+          `${fRev0}→${p.flightsRev}`);
+        ok('11n: ISS fix stored', p.issNow?.tsMs === issTs * 1000, String(p.issNow?.tsMs));
+        ok('11n: routine ISS update emits NO config', p.configRev === cfgRev0,
+          `${cfgRev0}→${p.configRev}`);
+
+        // An unchanged timestamp is not even a data change.
+        const fRev1 = p.flightsRev;
+        await p._pollIss();
+        ok('11n: an unchanged ISS timestamp bumps nothing',
+          p.flightsRev === fRev1 && p.configRev === cfgRev0);
+        quiesce(p);
+      }
+
+      // (e) a failing FIRST poll with nothing cached IS a status transition
+      // (→ 'error') and must repaint so the UI can surface it.
+      {
+        calls.length = 0;
+        handler = () => ring(2);
+        const { p } = await boot(makeStore({
+          weather: WEATHER, flights: { enabled: false, source: 'cloud', radiusNm: 30, iss: false },
+        }));
+        await sleep(60);
+        handler = () => null;                          // every fetch fails
+        const cfgRev0 = p.configRev;
+        p.setFlights(f => { f.enabled = true; });      // setFlights itself emits…
+        await waitFor(() => p.flightsStatus === 'error');
+        const cfgRevErr = p.configRev;
+        ok('11o: no data + failed fetch → status error', p.flightsStatus === 'error',
+          p.flightsStatus);
+        ok('11o: the error transition emitted config', cfgRevErr > cfgRev0,
+          `${cfgRev0}→${cfgRevErr}`);
+        // …but a SECOND failing poll is no longer a transition — silent.
+        await p._pollFlights();
+        ok('11o: a repeat error poll emits no further config',
+          p.configRev === cfgRevErr, `${cfgRevErr}→${p.configRev}`);
+        quiesce(p);
+      }
+
       globalThis.fetch = realFetch;
     }
   } catch (err) {

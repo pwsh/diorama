@@ -5210,6 +5210,13 @@ export class Planner extends EventTarget {
   // Accepts the array under `aircraft` / `ac` / `flights` (the fr24 HACS shape),
   // or an attributes object that is itself an array — normalizeAircraftList
   // unwraps all of them.
+  //
+  // NB: this runs off the bound entity's `state_changed`, and that entity id is
+  // config-path in `_isSlowEntity` — so HA's own state event has ALREADY emitted
+  // config by the time we get here. Do NOT add a second emit: `_applyFlights`
+  // stays conditional. That single emit is acceptable because the entity source's
+  // cadence is the HA rest sensor's own `scan_interval` (user-controlled, usually
+  // minutes), not our few-second poll.
   private _recomputeFlightsFromEntity(): void {
     const cfg = this.store.flights;
     if (!cfg?.enabled || (cfg.source ?? 'cloud') !== 'entity' || !cfg.entityId) return;
@@ -5244,14 +5251,26 @@ export class Planner extends EventTarget {
       kept.push(fp);
     }
     kept.sort((a, b) => (a.distNm ?? 0) - (b.distNm ?? 0));
+
+    // Routine polls are LIVE-path — configRev must NOT bump every few seconds or
+    // every configRev-keyed 3D group (weather particles, bg-text aircraft)
+    // rebuilds and visibly resets (user-reported). `flightsRev` alone is enough:
+    // three-view recomputes `_keyFlights = configRev|flightsRev|layers.flights`
+    // EVERY tick, and the 2D canvas RAF reads `flightsNow` per frame. This
+    // mirrors the `_solveBle` precedent (~0.1 Hz solves never emitConfig).
+    const prevStatus = this.flightsStatus;
+    const hadData = this.flightsNow !== null;
+
     this.flightsNow = kept.slice(0, MAX_AIRCRAFT);
     this.flightsAt = Date.now();
     this.flightsStatus = 'ok';
     this.flightsRev++;
-    // Evaluate the alert triggers over the FILTERED list, then repaint once —
-    // the emitConfig below covers both the data change and any new alert.
-    this._computeFlightAlerts();
-    this.emitConfig();
+    // Evaluate the alert triggers over the FILTERED list. Repaint ONLY on a
+    // genuinely structural transition (all rare): a status change, the first
+    // data after nothing (the app.ts attribution chip appears), or a flight
+    // alert appearing/being pruned (the alert bell subscribes to config).
+    const alertsChanged = this._computeFlightAlerts();
+    if (alertsChanged || prevStatus !== 'ok' || !hadData) this.emitConfig();
   }
 
   // ── Flight / ISS alert triggers (research §6.3) ─────────────────────────────
@@ -5259,8 +5278,8 @@ export class Planner extends EventTarget {
   // single ISS altitude — no fetch, no allocation beyond the alerts themselves.
   // Called at the end of every successful aircraft poll AND every advanced ISS
   // fix. Returns whether `flightAlerts` changed; it deliberately does NOT emit —
-  // both call sites emitConfig unconditionally right after (one repaint covers
-  // the data change and the alert).
+  // both call sites emit CONDITIONALLY on that return value (plus their own
+  // structural transitions), because a routine poll must stay LIVE-path.
   private _computeFlightAlerts(): boolean {
     const cfg = this.store.flights;
     const now = Date.now();
@@ -5363,18 +5382,24 @@ export class Planner extends EventTarget {
     return this.flightAlerts.map(a => a.id).join('|') !== before;
   }
 
-  // Poll the live ISS sub-point. Repaints only when the fix actually advanced
-  // (the feed's own timestamp changed), so the 10 s timer doesn't churn.
+  // Poll the live ISS sub-point. Advances only when the fix actually moved (the
+  // feed's own timestamp changed), so the 10 s timer doesn't churn. Like the
+  // aircraft poll this is LIVE-path: `flightsRev` is what the renderer reads —
+  // bumping configRev every 10 s would rebuild every configRev-keyed 3D group
+  // (weather particles, bg-text aircraft) and visibly reset them.
   private async _pollIss(): Promise<void> {
     const cfg = this.store.flights;
     if (!cfg?.enabled || cfg.iss === false) return;
     const iss = await fetchIssNow();
     if (!iss) return;                                   // keep the last fix
     if (this.issNow && this.issNow.tsMs === iss.tsMs) return;
+    const hadIss = this.issNow !== null;
     this.issNow = iss;
     this.flightsRev++;
-    this._computeFlightAlerts();   // ISS-above-horizon edge; the emit below repaints
-    this.emitConfig();
+    // ISS-above-horizon edge. Repaint only on a structural transition: the first
+    // fix (null → non-null, the attribution chip) or a new/pruned alert.
+    const alertsChanged = this._computeFlightAlerts();
+    if (alertsChanged || !hadIss) this.emitConfig();
   }
 
   // Resolve (and cache) the OpenFreeMap tile-URL template, or validate a custom

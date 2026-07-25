@@ -177,6 +177,15 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Flight-poll scene-churn fix** (2026-07-25, user-reported: sky items
+  reset every ~5 s). Routine aircraft/ISS polls emitConfig'd → configRev
+  bumped → every configRev-keyed 3D group rebuilt per poll (weather
+  particles re-seeded, bg-text plane/train snapped to build angle).
+  Polls are now LIVE-path (flightsRev only; `_keyFlights` recomputes per
+  tick); emitConfig only on status/null transitions + alert changes.
+  flights-test 144→160 incl. "two polls leave configRev unchanged",
+  proven failing against the pre-fix planner.
+
 - **GPS landmark CSV import** (2026-07-25; single Opus pass). Sidebar
   GPS/Geo "⤓ Import CSV" — columns label/latitude/longitude, header in
   any order or headerless, RFC-4180-ish quoting, per-row errors w/
