@@ -206,6 +206,15 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Sun-disc toggle** (2026-07-26, user request; single Opus pass).
+  `sunDisc` joins the W3 per-effect keys (default ON) — gated like
+  sunPosition (own key + live source, never effects3d/weatherFx —
+  sky prop, not a group member); zeroes the sprite's opacity TARGET
+  so the τ≈2 s ease fades it (no pop); stale-chunk shows it
+  (`!== false`). "Sun disc" checkbox in Settings ▸ Weather 3D
+  effects. weather-test 197→200 (CLAUDE.md's 164 was stale),
+  weather-fx sky 34→45; all other cases + sky-real green.
+
 - **Sky/weather visual fixes** (2026-07-26, three user reports; single
   Opus pass, renderer-only). (a) Cloud shadows read as WHITE circles:
   `_cloudShadowTexture` painted dark-slate rgb that linear→sRGB output

@@ -135,7 +135,7 @@ const _propScratch = new THREE.Vector3();
 // WeatherFxState without the W3 `effects` map (preserves legacy W2 behavior).
 const WEATHER_ALL_EFFECTS: Record<WeatherEffectKey, boolean> = {
   precip: true, fog: true, lightning: true, wind: true, clouds: true,
-  sunPosition: true, frost: true, puddles: true, precipForecast: true,
+  sunPosition: true, sunDisc: true, frost: true, puddles: true, precipForecast: true,
 };
 
 // Phase 3 sky-backdrop condition sets. DIM = conditions that grey-out / darken
@@ -213,8 +213,9 @@ export interface VacMapEntry {
 //   effects            — resolved per-effect on/off (W3). three-view has ALREADY
 //                        folded the master effects3d kill-switch + the weatherFx
 //                        layer into every effect-GROUP member; `sunPosition`
-//                        (a lighting behavior, not a group member) reflects only
-//                        its own key. A stale caller omits this → treated as all
+//                        (a lighting behavior) and `sunDisc` (the sky sun
+//                        sprite) are not group members and reflect only their
+//                        own key. A stale caller omits this → treated as all
 //                        group members ON (legacy W2 behavior).
 //   cloudCoverage …    — extended attributes (W3), all optional per provider;
 //                        every visual no-ops when its field is null/undefined.
@@ -13366,10 +13367,15 @@ export class ThreeDRenderer {
     const az = fx.sunAzimuthDeg ?? 0;
     const overcast = this._overcastAmt(cond, fx.cloudCoverage ?? null);
     this._skyOvercast = overcast;
-    // Sun disc: up + not night + sky on. Ramp in over the first ~6° above the
-    // horizon, dim under overcast, warm-tint near the horizon.
+    // Sun disc: up + not night + sky on + the sunDisc key. Ramp in over the
+    // first ~6° above the horizon, dim under overcast, warm-tint near the
+    // horizon. The key only zeroes the OPACITY TARGET — _advanceWeather eases
+    // the sprite out (τ≈2 s) and drops `visible` below the 0.01 floor, so
+    // turning it off fades rather than pops. `!== false` keeps a stale
+    // three-view (whose effects map predates the key) showing the disc.
     let sunOp = 0;
-    if (this._skyVisible && this._preset !== 'night' && elev != null && elev > 0) {
+    if (eff.sunDisc !== false
+        && this._skyVisible && this._preset !== 'night' && elev != null && elev > 0) {
       // Additive glare: ease the PEAK back a little as the sun climbs so a high
       // midday sun reads as diffuse brightness rather than a hard bright ball.
       const high = Math.min(1, Math.max(0, elev / 55));

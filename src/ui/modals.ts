@@ -2002,10 +2002,14 @@ export class SettingsDrawer extends LitElement {
     const defs: Array<[WeatherEffectKey, string]> = [
       ['precip', 'Precipitation'], ['fog', 'Fog'], ['lightning', 'Lightning'],
       ['wind', 'Wind dust & gusts'], ['clouds', 'Cloud shadows'],
-      ['sunPosition', 'True sun position'], ['frost', 'Frost & icicles'],
+      ['sunPosition', 'True sun position'], ['sunDisc', 'Sun disc'],
+      ['frost', 'Frost & icicles'],
       ['puddles', 'Rain puddles'], ['precipForecast', 'Forecast storm-brewing'],
     ];
-    const dimmed = (k: WeatherEffectKey) => !master && k !== 'sunPosition';
+    // sunPosition + sunDisc are lighting/sky behaviors, not effect-GROUP
+    // members — the effects3d master never disables them, so they stay live.
+    const dimmed = (k: WeatherEffectKey) =>
+      !master && k !== 'sunPosition' && k !== 'sunDisc';
     return html`
       <div style="margin:2px 0 2px 14px;display:flex;flex-direction:column;gap:1px">
         ${defs.map(([key, label]) => html`

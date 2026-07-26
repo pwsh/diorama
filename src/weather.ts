@@ -120,7 +120,7 @@ export function parseWindBearing(raw: unknown): number | null {
 // stays a pure lookup the test page and sidebar share.
 const WEATHER_EFFECT_DEFAULTS: Record<WeatherEffectKey, boolean> = {
   precip: true, fog: true, lightning: true, wind: true, clouds: true,
-  sunPosition: true, puddles: true,
+  sunPosition: true, sunDisc: true, puddles: true,
   frost: false, precipForecast: false,
 };
 

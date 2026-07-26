@@ -147,7 +147,7 @@
   } else if (scene === 'w3') {
     // Cloud coverage + visibility + gust + frost + puddles + sun-position, all on.
     const allOn = { precip:true, fog:true, lightning:true, wind:true, clouds:true,
-      sunPosition:true, frost:true, puddles:true, precipForecast:true };
+      sunPosition:true, sunDisc:true, frost:true, puddles:true, precipForecast:true };
     r.updateWeather(fx({ condition:'rainy', intensity01:0.55, windKmh:20, windBearingPlanRad:0.3,
       isDay:true, effects:allOn, cloudCoverage:90, visibilityKm:1, windGustKmh:45,
       apparentC:-5, sunAzimuthDeg:120, sunElevationDeg:30, rainSoon:true }));
@@ -406,6 +406,71 @@
     r.updateWeather(fx({ condition: 'sunny', isDay: true, skyBackdrop: true }));
     step(650);
     ok('storm darkening clears', r._skyMat.uniforms.uStormAmt.value < 0.05, `amt=${r._skyMat.uniforms.uStormAmt.value.toFixed(3)}`);
+
+    // ── sunDisc key (W3 per-effect toggle): the sun sprite alone toggles off ──
+    // sunDisc is a SKY behavior, not a _weatherGroup member — three-view folds
+    // neither the effects3d master nor the weatherFx layer into it, so the key
+    // is its only gate. It zeroes the opacity TARGET, so the disc EASES out.
+    r.applyScenePreset('day');
+    const allOnSun = { precip:true, fog:true, lightning:true, wind:true, clouds:true,
+      sunPosition:true, sunDisc:true, frost:true, puddles:true, precipForecast:true };
+    const sunSky = (eff) => fx(Object.assign(
+      { condition:'sunny', isDay:true, skyBackdrop:true,
+        sunAzimuthDeg:120, sunElevationDeg:35, cloudCoverage:5 },
+      eff ? { effects: eff } : {}));
+
+    // (a) No effects map at all (a stale three-view chunk) → disc still shown.
+    r.updateWeather(sunSky(null));
+    step(360);
+    ok('sun disc shown when effects map absent',
+       r._sunSprite.visible && r._sunSprite.material.opacity > 0.5,
+       `vis=${r._sunSprite.visible} op=${r._sunSprite.material.opacity.toFixed(2)}`);
+
+    // (b) sunDisc explicitly ON → shown.
+    r.updateWeather(sunSky(allOnSun));
+    step(360);
+    ok('sun disc shown when sunDisc true',
+       r._sunSprite.visible && r._sunSprite.material.opacity > 0.5,
+       `op=${r._sunSprite.material.opacity.toFixed(2)}`);
+    const starsVisOn = r._starField.visible, starsOpOn = r._starField.material.opacity;
+    const moonVisOn = r._moonSprite.visible, moonWantOn = r._moonWantOpacity;
+    const domeTopOn = r._skyTopTarget.getHex();
+
+    // (c) sunDisc OFF → target zeroed at once, sprite eases out (never a pop).
+    r.updateWeather(sunSky(Object.assign({}, allOnSun, { sunDisc:false })));
+    ok('sunDisc off zeroes the opacity target', r._sunWantOpacity === 0, `want=${r._sunWantOpacity}`);
+    step(6);   // ~0.1 s — mid-fade, still on screen
+    ok('sun disc fades out rather than popping',
+       r._sunSprite.visible && r._sunSprite.material.opacity > 0.05,
+       `op=${r._sunSprite.material.opacity.toFixed(3)}`);
+    step(720);
+    ok('sun disc hidden when sunDisc false',
+       !r._sunSprite.visible && r._sunSprite.material.opacity < 0.02,
+       `vis=${r._sunSprite.visible} op=${r._sunSprite.material.opacity.toFixed(3)}`);
+
+    // The key touches the DISC only — dome / stars / moon / sun-light untouched.
+    ok('sunDisc off keeps the dome built + visible',
+       r._skyGroup.visible && !!r._skyDome && r._skyDome.visible, `vis=${r._skyGroup.visible}`);
+    ok('sunDisc off leaves the dome color alone', r._skyTopTarget.getHex() === domeTopOn,
+       `now=${r._skyTopTarget.getHex().toString(16)} was=${domeTopOn.toString(16)}`);
+    // (star opacity is itself an eased ramp, so compare with a tolerance —
+    // the contract is "the key doesn't move it", not "frozen to the ULP".)
+    ok('sunDisc off leaves the starfield alone',
+       r._starField.visible === starsVisOn
+       && Math.abs(r._starField.material.opacity - starsOpOn) < 0.01,
+       `vis=${r._starField.visible}/${starsVisOn} op=${r._starField.material.opacity.toFixed(4)} was=${starsOpOn.toFixed(4)}`);
+    ok('sunDisc off leaves the moon alone',
+       r._moonSprite.visible === moonVisOn && r._moonWantOpacity === moonWantOn,
+       `vis=${r._moonSprite.visible}/${moonVisOn} want=${r._moonWantOpacity}`);
+    ok('sunDisc off leaves sunPosition (the sun LIGHT) targeting',
+       !!r._weatherSunTarget, `t=${!!r._weatherSunTarget}`);
+
+    // (d) Re-enabled → the disc eases back in.
+    r.updateWeather(sunSky(allOnSun));
+    step(720);
+    ok('sun disc returns when re-enabled',
+       r._sunSprite.visible && r._sunSprite.material.opacity > 0.5,
+       `op=${r._sunSprite.material.opacity.toFixed(2)}`);
 
     // skyBackdrop off → the whole group hides.
     r.updateWeather(fx({ condition: 'sunny', isDay: true, skyBackdrop: false }));

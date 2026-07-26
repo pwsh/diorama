@@ -1118,9 +1118,11 @@ export interface WeatherConfig {
                            // Drives the 3D moon prop's phase texture; unbound → default full moon.
   // Per-effect toggles (W3). Absent key = the per-key default (see
   // weatherEffectEnabled in weather.ts): ON for precip/fog/lightning/wind/
-  // clouds/sunPosition/puddles, OFF for frost/precipForecast. `sunPosition` is
-  // a LIGHTING behavior (orients the sun light), NOT an effect-group member, so
-  // it is gated only on its own key — never on effects3d.
+  // clouds/sunPosition/sunDisc/puddles, OFF for frost/precipForecast.
+  // `sunPosition` (orients the sun LIGHT) and `sunDisc` (the sky backdrop's
+  // warm sun-glow sprite) are lighting/sky behaviors, NOT effect-group members,
+  // so both are gated only on their own key + a live source — never on
+  // effects3d or the weatherFx layer.
   effects?: Partial<Record<WeatherEffectKey, boolean>>;
   // ── DC-C: chip position + content + forecast display (all optional/additive) ──
   // Anchor corner for the chip overlay (default 'br' = bottom-right, the legacy
@@ -1150,7 +1152,7 @@ export interface WeatherConfig {
 // One toggleable 3D weather visualization (W3). See weatherEffectEnabled.
 export type WeatherEffectKey =
   | 'precip' | 'fog' | 'lightning' | 'wind' | 'clouds'
-  | 'sunPosition' | 'frost' | 'puddles' | 'precipForecast';
+  | 'sunPosition' | 'sunDisc' | 'frost' | 'puddles' | 'precipForecast';
 
 // ── Geo reference (the "World Outside" arc, Feature G) ────────────────────
 // Landmarks are placed on the plan (world mm) and calibrated to a real-world

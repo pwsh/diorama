@@ -129,6 +129,12 @@
     eq('effect wind default on',          weatherEffectEnabled(undefined, 'wind'), true);
     eq('effect clouds default on',        weatherEffectEnabled(undefined, 'clouds'), true);
     eq('effect sunPosition default on',   weatherEffectEnabled(undefined, 'sunPosition'), true);
+    eq('effect sunDisc default on',       weatherEffectEnabled(undefined, 'sunDisc'), true);
+    eq('effect sunDisc override off',
+       weatherEffectEnabled({ source:'openmeteo', effects:{ sunDisc:false } }, 'sunDisc'), false);
+    // sunDisc + sunPosition are independent keys — one off must not move the other.
+    eq('sunDisc off leaves sunPosition on',
+       weatherEffectEnabled({ source:'openmeteo', effects:{ sunDisc:false } }, 'sunPosition'), true);
     eq('effect puddles default on',       weatherEffectEnabled(undefined, 'puddles'), true);
     eq('effect frost default OFF',        weatherEffectEnabled(undefined, 'frost'), false);
     eq('effect precipForecast default OFF', weatherEffectEnabled(undefined, 'precipForecast'), false);

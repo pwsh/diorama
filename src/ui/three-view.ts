@@ -591,9 +591,10 @@ export class ThreeView extends LitElement {
     const states = p.hass?.states ?? {};
     // Effect-resolution flow (W3): the weatherFx LAYER + the effects3d MASTER +
     // the presence of live weather gate every effect-GROUP member; each member
-    // ALSO honors its own per-key toggle (weatherEffectEnabled). `sunPosition` is
-    // a lighting behavior (not a group member), so it is gated ONLY on its own
-    // key + a live source — never on effects3d or the layer.
+    // ALSO honors its own per-key toggle (weatherEffectEnabled). `sunPosition`
+    // (orients the sun light) and `sunDisc` (the sky backdrop's sun sprite) are
+    // lighting/sky behaviors, not group members, so both are gated ONLY on their
+    // own key + a live source — never on effects3d or the layer.
     const groupOn = layers.weatherFx !== false && w?.effects3d !== false && !!wnow;
     const mk = (k: import('../types.js').WeatherEffectKey) => groupOn && weatherEffectEnabled(w, k);
     const effects: Record<import('../types.js').WeatherEffectKey, boolean> = {
@@ -601,6 +602,7 @@ export class ThreeView extends LitElement {
       wind: mk('wind'), clouds: mk('clouds'), frost: mk('frost'),
       puddles: mk('puddles'), precipForecast: mk('precipForecast'),
       sunPosition: !!wnow && weatherEffectEnabled(w, 'sunPosition'),
+      sunDisc: !!wnow && weatherEffectEnabled(w, 'sunDisc'),
     };
 
     // DC-D alert beacon severity: gated by the weatherFx LAYER + effects3d MASTER
