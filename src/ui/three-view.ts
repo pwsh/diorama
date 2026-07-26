@@ -16,6 +16,7 @@ import { resolveScreenContent } from '../surfaces.js';
 import { resolveScenePreset, resolveTimeBucket } from '../time-of-day.js';
 import { conditionIntensity, weatherEffectEnabled, worstAlertSeverity } from '../weather.js';
 import { roadCapForRadius } from '../neighborhood.js';
+import { FLIGHTS_DEFAULT_RADIUS_NM } from '../flights.js';
 import { loadModel } from '../model-store.js';
 import { newId } from '../storage.js';
 import type { Planner } from '../planner.js';
@@ -1496,7 +1497,7 @@ export class ThreeView extends LitElement {
         const ax = calibrated ? gfit!.transform.tx : f.w / 2;
         const ay = calibrated ? gfit!.transform.ty : f.d / 2;
         const anchorScene = { x: f.w / 2 - ax, z: ay - f.d / 2 };
-        const radiusNm = flCfg?.radiusNm ?? 30;
+        const radiusNm = flCfg?.radiusNm ?? FLIGHTS_DEFAULT_RADIUS_NM;
         const showLabels = flCfg?.showLabels !== false;
         // Feature off / no origin → an empty list + null ISS: the renderer fades
         // everything out and goes inert (no separate teardown path).

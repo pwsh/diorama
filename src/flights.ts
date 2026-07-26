@@ -13,12 +13,19 @@
 // An aircraft 20 nm out sits ≈37,040,000 mm from the house in real units, while
 // the camera far plane is 150,000 mm and the sky dome radius is 30,000 mm. A
 // literal geo projection would place it ~250× beyond the dome. Both the
-// horizontal radius and the altitude are therefore compressed by INDEPENDENT
-// non-linear curves into a bounded display shell inside the dome. Consequence,
-// stated plainly (the neighborhood overlay's verticalScale honesty precedent):
+// horizontal radius and the altitude are therefore compressed by non-linear
+// curves into a bounded display shell inside the dome. Consequence, stated
+// plainly (the neighborhood overlay's verticalScale honesty precedent):
 // aircraft do NOT render at a consistent scale relative to each other or to the
 // house — only in a rough, decorative, "that one is farther / higher" sense.
 // TRUE BEARING is preserved exactly; only the radius is compressed.
+//
+// The two curves are NOT independent: `flightDisplayPos` caps the compressed
+// altitude at the TRUE elevation angle (`r · alt/dist`), so a distant aircraft
+// hugs the horizon instead of hanging overhead. Before that cap, the altitude
+// band (2,500–22,000 mm) was comparable to the radial shell (24,000 mm), which
+// put a cruise-altitude jet 40–60° up whether it was 2 nm or 30 nm away — every
+// aircraft read as "directly above the property". See `flightDisplayPos`.
 
 // ── Normalized aircraft ────────────────────────────────────────────────────
 // The field set local dump1090/readsb `aircraft.json` and the cloud
@@ -70,6 +77,13 @@ export interface FlightPoint {
 // research pass. Nearest-first, mirroring the neighborhood overlay's
 // capBuildings safety valve.
 export const MAX_AIRCRAFT = 50;
+
+// Default search + display radius (nm) when `FlightsConfig.radiusNm` is absent.
+// ONE number for the query radius, the display-shell knee K and the settings
+// input's placeholder, so the compressed shell can never disagree with the set
+// of aircraft that was actually fetched. Planner-side clamp stays 5..100; a
+// stored radiusNm is untouched by a change here.
+export const FLIGHTS_DEFAULT_RADIUS_NM = 15;
 
 // Finite-number coercion. Deliberately STRICT: a numeric-looking STRING is
 // rejected, because the one documented string sentinel in this data
@@ -257,6 +271,10 @@ export function compressRadiusMm(distNm: number, radiusNm: number): number {
 // Altitude compression: log curve over [0, altMaxFt] → [yMinMm, yMaxMm].
 // Monotonic and bounded at both ends; altitudes above altMaxFt clamp to yMaxMm,
 // below-sea-level readings clamp to yMinMm.
+//
+// This is the OVERHEAD/near-traffic branch only — it knows nothing about
+// distance, so `flightDisplayPos` caps its output at the true elevation angle
+// before using it. Do not read it as "the display altitude".
 export function compressAltitudeMm(altFt: number): number {
   const { yMinMm, yMaxMm, altRefFt, altMaxFt } = FLIGHT_SHELL;
   const a = Math.max(0, Math.min(altMaxFt, isFinite(altFt) ? altFt : 0));
@@ -266,8 +284,38 @@ export function compressAltitudeMm(altFt: number): number {
 
 const EARTH_R_M = 6371000;   // sphere radius (matches geo.ts)
 const NM_M = 1852;           // 1 nautical mile in metres
+const FT_M = 0.3048;         // 1 foot in metres
 const DEG = Math.PI / 180;
 const TWO_PI = Math.PI * 2;
+
+// ── Display altitude: the elevation-true cap ───────────────────────────────
+// THE one place the display height is composed, from an aircraft's real
+// altitude + real distance and the ALREADY-COMPRESSED radius it will be drawn
+// at. Both `flightDisplayPos` (2D + the planner) and the renderer's zero-alloc
+// scene-space projection call it, so the two views can never disagree about how
+// high a plane hangs.
+//
+//   dispY = max(yMinMm, min(compressAltitudeMm(altFt), rMm · altM / distM))
+//
+// The second term is the height that reproduces the aircraft's TRUE elevation
+// angle on the compressed radius: `atan2(dispY, rMm)` then equals
+// `atan2(altM, distM)` exactly. Since rMm = rMax·d/(d+K), it simplifies to
+// `rMax · altM / (NM_M · (d + K))` — for a fixed altitude, strictly DECREASING
+// in distance, so a farther aircraft always sits lower in the sky. The min()
+// leaves the log curve in charge of near/overhead traffic (where the elevation
+// term is the larger of the two), so a plane genuinely overhead still reads
+// overhead, and everywhere else the display angle can only be ≤ the true one.
+// The yMinMm floor is the single exception: it lifts a very distant, very low
+// aircraft clear of rooftops / neighborhood buildings instead of burying it.
+export function flightDisplayAltitudeMm(altFt: number, distNm: number, rMm: number): number {
+  const altM = (isFinite(altFt) ? altFt : 0) * FT_M;
+  // distM floored at 1 m so an aircraft sitting exactly on the origin (r = 0
+  // anyway) can never divide by zero.
+  const distM = Math.max((isFinite(distNm) && distNm > 0 ? distNm : 0) * NM_M, 1);
+  const r = isFinite(rMm) && rMm > 0 ? rMm : 0;
+  return Math.max(FLIGHT_SHELL.yMinMm,
+                  Math.min(compressAltitudeMm(altFt), r * (altM / distM)));
+}
 
 // True bearing + great-circle-ish distance from the home origin to an aircraft.
 // Equirectangular tangent plane — the same math geo.ts's projectLatLon uses
@@ -292,6 +340,9 @@ export function flightBearingDistance(
 // geo.ts's latLonToPlan rotates projected metres, so the shell shares the plan
 // frame's north with landmarks, the compass and the neighborhood overlay. Only
 // the RADIUS is compressed — the bearing survives untouched.
+//
+// The display ALTITUDE is capped at the true elevation angle — see
+// `flightDisplayAltitudeMm`, which owns that composition for both views.
 export function flightDisplayPos(
   fp: FlightPoint, originLat: number, originLon: number, thetaRad: number, radiusNm: number,
 ): { planX: number; planY: number; dispY: number; distNm: number; bearingRad: number } {
@@ -302,7 +353,7 @@ export function flightDisplayPos(
   return {
     planX: (c * e - s * n) * r,
     planY: (s * e + c * n) * r,
-    dispY: compressAltitudeMm(fp.altFt),
+    dispY: flightDisplayAltitudeMm(fp.altFt, distNm, r),
     distNm, bearingRad,
   };
 }

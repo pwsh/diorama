@@ -90,8 +90,8 @@ import { skySnapshot, moonAltAz, capSampleAltAz, satAltAz } from './sky-astro.js
 // graph and this lazy chunk — the avatars.ts precedent. Only the pure compression
 // curves + the model-kind classifier are pulled in; NEVER adsb-sources or Planner.
 import {
-  compressRadiusMm, compressAltitudeMm, isEmergency,
-  FLIGHT_LABEL_FIELDS_DEFAULT, sanitizeLabelFields,
+  compressRadiusMm, compressAltitudeMm, flightDisplayAltitudeMm, isEmergency,
+  FLIGHT_LABEL_FIELDS_DEFAULT, FLIGHTS_DEFAULT_RADIUS_NM, sanitizeLabelFields,
   type FlightPoint, type IssNow,
 } from './flights.js';
 // aircraft-types.ts is likewise pure/zero-import (the same shared-chunk
@@ -643,13 +643,40 @@ const ISS_RAMP_RAD = 3 * Math.PI / 180;   // opacity ramp over the first ~3° of
 // against the camera-centered sky dome, and near:far = 15000:1 keeps depth
 // precision fine enough for the polygonOffset outline shells. NOTHING may widen
 // these except a feature that genuinely needs the reach (today: the neighborhood
-// overlay at a large fetch radius) — and it must restore them exactly when off.
+// overlay at a large fetch radius) — and it must restore them EXACTLY when off
+// (strict ===, see _applyFrustumForRange's null branch).
+//
+// The widened path is CAMERA-DISTANCE-TRACKING, not static. The far plane is
+// measured FROM THE CAMERA, so the governing invariant is
+//
+//     far ≥ camDist + CAM_FAR_REACH_FACTOR·req + CAM_FAR_MARGIN
+//
+// whenever the overlay is on (`req` = how far the content reaches from the scene
+// origin). A STATIC far violates it the moment the user pulls back: zooming out
+// drags the far-clip boundary in through the tile content and the horizon creeps
+// toward the property (the reported bug). `_updateDynamicFrustum` re-evaluates it
+// per frame from the live orbit distance, with 5 % hysteresis so an idle camera
+// never churns the projection matrix.
 const CAM_NEAR_DEFAULT = 10;
 const CAM_FAR_DEFAULT = 150000;
 const CAM_MAXDIST_DEFAULT = 45000;
 const CAM_NEAR_FAR_RATIO = 15000;    // near = far / ratio — pinned at today's 10:150000
-const CAM_FAR_CEIL = 600000;
-const CAM_MAXDIST_CEIL = 550000;
+const CAM_FAR_REACH_FACTOR = 1.25;   // slack multiplier on the content extent
+const CAM_FAR_MARGIN = 30000;        // flat slack past the content extent (mm)
+// Orbit reach: to FRAME a content radius `req` at vertical fov 50° you need
+// camDist ≥ req / tan(25°) = 2.144·req; 2.2 adds a little air so a top-down /
+// iso pose at maxDistance really does see the whole extent.
+const CAM_MAXDIST_FACTOR = 2.2;
+const CAM_FAR_HYSTERESIS = 0.05;     // |Δfar|/far before a projection-matrix rewrite
+// Ceilings sized for the worst case the overlay can ask for: a 3 km fetch radius
+// reaches ~3.8e6 mm from the origin (radius + tile-grid diagonal), so
+//   maxDist ≤ 2.2·3.8e6 = 8.36e6  → CAM_MAXDIST_CEIL 8.5e6
+//   far     ≤ maxDist + 1.25·3.8e6 + 30000 = 13.3e6 → CAM_FAR_CEIL 13.5e6
+// At the far ceiling near = 13.5e6/15000 = 900 mm, which still sits under the
+// controls' minDistance (1000) — but only just; do not raise CAM_FAR_CEIL
+// without raising minDistance or relaxing the ratio.
+const CAM_FAR_CEIL = 13_500_000;
+const CAM_MAXDIST_CEIL = 8_500_000;
 
 // Build context for a declarative primitive (shared by the initial-rig
 // accessory build AND a runtime prop-equip via _buildPrimitiveMesh). Carries the
@@ -3053,39 +3080,68 @@ export class ThreeDRenderer {
     this._camera.updateProjectionMatrix();
   }
 
-  // Widen (or restore) the camera frustum + orbit range so far-flung background
-  // content is actually reachable/visible. `requiredMm` = how far from the scene
+  // Record (or clear) the reach requirement for far-flung background content, so
+  // the per-frame `_updateDynamicFrustum` can keep the camera frustum + orbit
+  // range wide enough to actually see it. `requiredMm` = how far from the scene
   // origin the content extends; null (or ≤0) restores the STOCK triple EXACTLY
-  // (near 10 / far 150000 / maxDistance 45000) — every caller must pass null when
-  // its content goes away, so toggling a feature off never leaves the scene on a
-  // stretched frustum (depth precision + zoom feel are tuned for the stock one).
+  // (near 10 / far 150000 / maxDistance 45000) and stops the dynamic updating —
+  // every caller must pass null when its content goes away, so toggling a feature
+  // off never leaves the scene on a stretched frustum (depth precision + zoom feel
+  // are tuned for the stock one). The stock restore always WINS: the dynamic
+  // updater is gated on `_frustumRangeMm != null`, so it cannot write back after.
   //
   // Only widening is possible: far/maxDistance clamp at ≥ their defaults, and
   // near tracks far at the pinned 15000:1 ratio so depth precision never degrades
-  // past today's. minDistance (1000) stays well clear of the widest near (40).
+  // past today's. minDistance (1000) still clears the widest near (900, at the
+  // far ceiling).
   // The sky dome (camera-centered R=30000, renderOrder −10, depthWrite:false)
-  // needs no change: distant buildings simply paint over it, and a bigger far
-  // plane never pushes the dome out of range.
+  // needs no change: distant buildings simply paint over it (it writes no depth),
+  // and a bigger far plane never pushes the dome out of range.
   //
-  // Guarded on the last applied requirement, so a per-update call is free.
+  // Guarded on the last recorded requirement, so a per-update call is free.
   private _frustumRangeMm: number | null = null;
   private _applyFrustumForRange(requiredMm: number | null): void {
     const req = requiredMm != null && isFinite(requiredMm) && requiredMm > 0 ? requiredMm : null;
     if (req === this._frustumRangeMm) return;
     this._frustumRangeMm = req;
+    if (req == null) {
+      if (this._camera) {
+        this._camera.near = CAM_NEAR_DEFAULT;
+        this._camera.far = CAM_FAR_DEFAULT;
+        this._camera.updateProjectionMatrix();   // NB: never fov/aspect (that is _applyCameraFov's job)
+      }
+      if (this._controls) this._controls.maxDistance = CAM_MAXDIST_DEFAULT;
+      return;
+    }
+    // Let the user pull back far enough to frame the whole extent (see
+    // CAM_MAXDIST_FACTOR) — otherwise the content is reachable but unviewable.
+    if (this._controls) {
+      this._controls.maxDistance =
+        Math.max(CAM_MAXDIST_DEFAULT, Math.min(CAM_MAXDIST_CEIL, req * CAM_MAXDIST_FACTOR));
+    }
+    // Apply once immediately (bypassing hysteresis) so the very first frame after
+    // a fetch already reaches the new content.
+    this._updateDynamicFrustum(true);
+  }
+
+  // Per-frame far/near tracking for the widened path. ACTIVE ONLY while a reach
+  // requirement is recorded; a null requirement leaves the stock triple alone.
+  // The far plane is measured from the camera, so it must grow as the camera
+  // pulls back — a static far would drag the horizon in through the content on
+  // zoom-out. Rewrites the projection matrix only past CAM_FAR_HYSTERESIS so an
+  // idle / gently-drifting camera costs nothing. Zero allocation (distanceTo is
+  // arithmetic-only). Writes near/far ONLY — fov/aspect stay _applyCameraFov's.
+  private _updateDynamicFrustum(force = false): void {
+    const req = this._frustumRangeMm;
     const cam = this._camera;
-    let far = CAM_FAR_DEFAULT, near = CAM_NEAR_DEFAULT, maxDist = CAM_MAXDIST_DEFAULT;
-    if (req != null) {
-      far = Math.max(CAM_FAR_DEFAULT, Math.min(CAM_FAR_CEIL, 1.25 * req + 30000));
-      near = Math.max(CAM_NEAR_DEFAULT, far / CAM_NEAR_FAR_RATIO);
-      maxDist = Math.max(CAM_MAXDIST_DEFAULT, Math.min(CAM_MAXDIST_CEIL, req * 1.15));
-    }
-    if (cam) {
-      cam.near = near;
-      cam.far = far;
-      cam.updateProjectionMatrix();   // NB: never touches fov/aspect (that is _applyCameraFov's job)
-    }
-    if (this._controls) this._controls.maxDistance = maxDist;
+    if (req == null || !cam || !this._controls) return;
+    const camDist = cam.position.distanceTo(this._controls.target);
+    const want = Math.max(CAM_FAR_DEFAULT, Math.min(CAM_FAR_CEIL,
+      camDist + CAM_FAR_REACH_FACTOR * req + CAM_FAR_MARGIN));
+    if (!force && Math.abs(want - cam.far) / cam.far <= CAM_FAR_HYSTERESIS) return;
+    cam.far = want;
+    cam.near = Math.max(CAM_NEAR_DEFAULT, want / CAM_NEAR_FAR_RATIO);
+    cam.updateProjectionMatrix();
   }
 
   // Surface height (mm) under a world point: the highest stair tread or
@@ -11546,7 +11602,7 @@ export class ThreeDRenderer {
                 opts?: { labelFields?: string[]; beacons?: boolean; privacyDim?: boolean }): void {
     this._flightsOrigin = origin;
     this._flightsTheta = isFinite(thetaRad) ? thetaRad : 0;
-    this._flightsRadius = isFinite(radiusNm) && radiusNm > 0 ? radiusNm : 30;
+    this._flightsRadius = isFinite(radiusNm) && radiusNm > 0 ? radiusNm : FLIGHTS_DEFAULT_RADIUS_NM;
     this._flightsShowLabels = showLabels !== false;
     this._flightsLabelFields =
       sanitizeLabelFields(opts?.labelFields) ?? FLIGHT_LABEL_FIELDS_DEFAULT.slice();
@@ -11980,7 +12036,11 @@ export class ThreeDRenderer {
     const e = len > 0 ? east / len : 0, n = len > 0 ? north / len : 1;
     const c = Math.cos(this._flightsTheta), s = Math.sin(this._flightsTheta);
     const r = compressRadiusMm(distNm, this._flightsRadius);
-    return out.set(-(c * e - s * n) * r, compressAltitudeMm(altFt), (s * e + c * n) * r);
+    // Display height goes through the SHARED composition (elevation-true cap)
+    // so this inline can never drift from the pure flightDisplayPos the 2D
+    // canvas draws with — flights-render-test asserts the two agree.
+    return out.set(-(c * e - s * n) * r, flightDisplayAltitudeMm(altFt, distNm, r),
+                   (s * e + c * n) * r);
   }
 
   private _disposeFlightRig(rig: FlightRig): void {
@@ -19367,6 +19427,11 @@ export class ThreeDRenderer {
       }
     }
     if (this._controls) this._controls.update();
+    // Track the camera distance with the far plane while a far-flung overlay is
+    // up (no-op otherwise) — must run AFTER controls.update() so it sees this
+    // frame's settled pose, and BEFORE the render. Auto-follow / cinematic orbit
+    // move the camera above; this simply follows wherever they left it.
+    this._updateDynamicFrustum();
     // Foreground wall cutaway — cheap per-frame dot products over tagged walls.
     this._updateWallCutaway();
     // Spin fan rotors (own method so it's driveable deterministically in tests).

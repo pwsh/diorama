@@ -215,7 +215,13 @@
       near('9: θ=0 north aircraft → planX ≈ 0', north.planX, 0, 1e-6);
       near('9: radius matches compressRadiusMm', Math.hypot(north.planX, north.planY),
         F.compressRadiusMm(north.distNm, 30), 1e-6);
-      near('9: dispY matches compressAltitudeMm', north.dispY, F.compressAltitudeMm(10000), 1e-9);
+      // dispY is NO LONGER compressAltitudeMm alone — it is capped at the true
+      // elevation angle (see section 6b). At 6 nm / 10,000 ft the cap bites.
+      ok('9: dispY is the elevation cap, not the raw altitude curve',
+        north.dispY < F.compressAltitudeMm(10000) - 1,
+        `dispY=${north.dispY.toFixed(1)} rawCurve=${F.compressAltitudeMm(10000).toFixed(1)}`);
+      near('9: dispY == flightDisplayAltitudeMm(alt, dist, r)', north.dispY,
+        F.flightDisplayAltitudeMm(10000, north.distNm, F.compressRadiusMm(north.distNm, 30)), 1e-9);
       near('9: distNm echoed from flightBearingDistance', north.distNm, 6.00405, 0.001);
       near('9: bearingRad echoed', north.bearingRad, 0, 1e-9);
 
@@ -241,6 +247,129 @@
         if (p.dispY < F.FLIGHT_SHELL.yMinMm || p.dispY > F.FLIGHT_SHELL.yMaxMm) clean = false;
       }
       ok('9: all 44 real aircraft project finite + inside the shell', clean);
+    }
+
+    // ── 6b. Elevation-true altitude cap ─────────────────────────────────────
+    // The user-reported bug: EVERY aircraft read as "directly above the
+    // property", because dispY came from compressAltitudeMm alone — a curve
+    // that never looked at distance, over a 2,500–22,000 mm band comparable to
+    // the 24,000 mm radial shell. The fix caps the display height at the TRUE
+    // elevation angle:
+    //   dispY = max(yMinMm, min(compressAltitudeMm(alt), r · altM / distM))
+    {
+      const OLAT = 47.6, OLON = -122.3;
+      const FT_M = 0.3048, NM_M = 1852, EARTH_R_M = 6371000, DEGR = Math.PI / 180;
+      // An aircraft due NORTH at exactly `distNm` (equirectangular with dlon=0
+      // makes east 0, so hypot(east, north) is the north leg exactly).
+      const atNm = (distNm, altFt) => ({
+        lat: OLAT + (distNm * NM_M) / (EARTH_R_M * DEGR), lon: OLON, altFt,
+      });
+      const D = (distNm, altFt, radiusNm = 15) =>
+        F.flightDisplayPos(atNm(distNm, altFt), OLAT, OLON, 0, radiusNm);
+      const dispAngDeg = d => Math.atan2(d.dispY, Math.hypot(d.planX, d.planY)) * 180 / Math.PI;
+      const trueAngDeg = (altFt, distNm) =>
+        Math.atan2(altFt * FT_M, distNm * NM_M) * 180 / Math.PI;
+
+      // Distance goldens (radius 15 nm → K = max(4, 15/4) = 4).
+      const g1 = D(8.7, 35000);
+      near('9b: 35,000 ft @ 8.7 nm → r', Math.hypot(g1.planX, g1.planY), 16440.9449, 0.01);
+      near('9b: 35,000 ft @ 8.7 nm → dispY', g1.dispY, 10885.5292, 0.01);
+      near('9b: 35,000 ft @ 8.7 nm → 33.5° up (== true)', dispAngDeg(g1), 33.508, 0.01);
+
+      const g2 = D(15, 35000);
+      near('9b: 35,000 ft @ 15 nm → r', Math.hypot(g2.planX, g2.planY), 18947.3684, 0.01);
+      near('9b: 35,000 ft @ 15 nm → dispY', g2.dispY, 7276.1169, 0.01);
+      near('9b: 35,000 ft @ 15 nm → 21.0° up (== true)', dispAngDeg(g2), 21.008, 0.01);
+
+      // Overhead traffic must STAY overhead — here the log curve is the smaller
+      // of the two terms, so it (not the elevation cap) governs.
+      const g3 = D(0.5, 5000);
+      near('9b: 5,000 ft @ 0.5 nm → r', Math.hypot(g3.planX, g3.planY), 2666.6667, 0.01);
+      near('9b: 5,000 ft @ 0.5 nm → dispY (elevation branch)', g3.dispY, 4388.7689, 0.01);
+      near('9b: 5,000 ft @ 0.5 nm → 58.7° up (truly overhead)', dispAngDeg(g3), 58.717, 0.01);
+      const g4 = D(0.5, 35000);
+      near('9b: 35,000 ft @ 0.5 nm → the log curve wins (overhead stays steep)',
+        g4.dispY, F.compressAltitudeMm(35000), 1e-9);
+      ok('9b: …and reads > 80° up', dispAngDeg(g4) > 80, `${dispAngDeg(g4).toFixed(1)}°`);
+
+      // THE regression: dispY used to be independent of distance.
+      ok('9b: dispY is NOT independent of distance (the reported bug)',
+        Math.abs(D(3, 35000).dispY - D(30, 35000).dispY) > 1000,
+        `${D(3, 35000).dispY.toFixed(0)} vs ${D(30, 35000).dispY.toFixed(0)}`);
+
+      // Strictly DECREASING in distance for a fixed altitude, once past the
+      // crossover (35,000 ft crosses at ≈2.8 nm at radius 15) and before the
+      // yMin floor (≈51 nm). dispY_elev ∝ alt / (d + K).
+      let mono = true, prev = Infinity;
+      for (let d = 3; d <= 40; d += 0.5) {
+        const v = D(d, 35000).dispY;
+        if (!(v < prev - 1e-9)) { mono = false; break; }
+        prev = v;
+      }
+      ok('9b: fixed altitude → dispY strictly decreases with distance', mono);
+      // …and the radius still strictly INCREASES over the same sweep, i.e. the
+      // aircraft walks out toward the horizon rather than merely shrinking.
+      let rMono = true, rPrev = -Infinity;
+      for (let d = 3; d <= 40; d += 0.5) {
+        const v = Math.hypot(...(x => [x.planX, x.planY])(D(d, 35000)));
+        if (!(v > rPrev + 1e-9)) { rMono = false; break; }
+        rPrev = v;
+      }
+      ok('9b: …while the display radius still grows', rMono);
+
+      // Monotonic (non-decreasing) in altitude at a fixed distance — both terms
+      // are non-decreasing in altitude, so min() and the floor are too.
+      let altMono = true, aPrev = -Infinity;
+      for (let a = 0; a <= 45000; a += 250) {
+        const v = D(10, a).dispY;
+        if (v < aPrev - 1e-9) { altMono = false; break; }
+        aPrev = v;
+      }
+      ok('9b: fixed distance → dispY non-decreasing in altitude', altMono);
+
+      // Angle parity: where the elevation branch is active the DISPLAYED angle
+      // equals the TRUE one; nowhere (above the floor) may it exceed it.
+      let parity = true, never = true, sawElev = 0, sawCurve = 0;
+      for (const alt of [500, 1500, 4000, 9000, 18000, 27000, 35000, 43000]) {
+        for (const d of [0.25, 0.75, 2, 5, 9, 15, 25, 40]) {
+          const p = D(d, alt);
+          const disp = dispAngDeg(p), tru = trueAngDeg(alt, d);
+          const floored = p.dispY <= F.FLIGHT_SHELL.yMinMm + 1e-9;
+          const elevBranch = !floored && p.dispY < F.compressAltitudeMm(alt) - 1e-6;
+          if (elevBranch) { sawElev++; if (Math.abs(disp - tru) > 1e-6) parity = false; }
+          else if (!floored) sawCurve++;
+          if (!floored && disp > tru + 1e-6) never = false;
+        }
+      }
+      ok('9b: elevation branch reproduces the TRUE elevation angle exactly',
+        parity && sawElev > 20, `${sawElev} samples on the elevation branch`);
+      ok('9b: display angle never EXCEEDS the true angle (above the floor)', never);
+      ok('9b: the log curve still governs some near/high traffic', sawCurve > 0, `${sawCurve} samples`);
+
+      // The yMinMm floor: a very distant, very low aircraft is lifted clear of
+      // rooftops instead of being buried in the ground plane.
+      near('9b: 1,000 ft @ 15 nm floors at yMinMm', D(15, 1000).dispY, F.FLIGHT_SHELL.yMinMm, 1e-9);
+      ok('9b: nothing ever sits below yMinMm', D(90, 500).dispY === F.FLIGHT_SHELL.yMinMm);
+
+      // Bounds + garbage tolerance on the shared helper itself.
+      ok('9b: helper clamps to the shell band',
+        F.flightDisplayAltitudeMm(99999, 1, 24000) <= F.FLIGHT_SHELL.yMaxMm
+        && F.flightDisplayAltitudeMm(-5000, 10, 18000) === F.FLIGHT_SHELL.yMinMm);
+      ok('9b: helper survives non-finite input',
+        F.flightDisplayAltitudeMm(NaN, NaN, NaN) === F.FLIGHT_SHELL.yMinMm
+        && F.flightDisplayAltitudeMm(10000, 0, 0) === F.FLIGHT_SHELL.yMinMm);
+      ok('9b: helper agrees with flightDisplayPos on the real fixture', (() => {
+        for (const a of F.normalizeAircraftList(LAX)) {
+          const p = F.flightDisplayPos(a, 33.9425, -118.408, 0.3, 25);
+          const r = Math.hypot(p.planX, p.planY);
+          if (Math.abs(p.dispY - F.flightDisplayAltitudeMm(a.altFt, p.distNm, r)) > 1e-9) return false;
+        }
+        return true;
+      })());
+
+      // The shipped default radius — one shared constant across planner,
+      // both renderers and the settings input.
+      ok('9b: FLIGHTS_DEFAULT_RADIUS_NM is 15', F.FLIGHTS_DEFAULT_RADIUS_NM === 15);
     }
 
     // ── 7. satAltAz goldens ─────────────────────────────────────────────────

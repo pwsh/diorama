@@ -191,6 +191,43 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Camera-distance-tracking frustum** (2026-07-25, user-reported: zooming
+  out pulled the horizon IN, clipping distant OpenStreetMap content;
+  zooming in restored it). The neighborhood frustum was STATIC
+  (far = 1.25·req+30000 capped at 600 k mm — couldn't even cover a 600 m
+  reach); the far plane is measured FROM THE CAMERA, so the invariant is
+  `far ≥ camDist + 1.25·req + 30000`. `_applyFrustumForRange` is now a
+  requirement recorder; new per-frame `_updateDynamicFrustum` (zero
+  alloc, 5 % hysteresis) tracks camera distance; ceilings raised
+  (far 13.5 M, maxDistance 8.5 M, maxDist factor 1.15→2.2 so a 3 km
+  fetch is fully frameable); stock triple still restores strict-===.
+  At the far ceiling near=900 vs minDistance 1000 — raising CAM_FAR_CEIL
+  further requires raising minDistance (documented at the constant).
+  neighborhood-render 61→78; camera 12/12, neighborhood 95/95,
+  flights-render 220/220, ghost-align 16/16, glass-see 26/26 green.
+
+- **Flight distance scaling + landmark alignment exclusion** (2026-07-25,
+  user-reported pair, single Opus pass). (a) Planes bunched overhead:
+  `dispY` was distance-blind (alt band 2.5–22 k mm vs radial shell 24 k
+  mm → every cruise jet read 40–60° up at any range). New
+  `flightDisplayAltitudeMm` caps the log curve at the TRUE elevation
+  angle (`min(compressAlt, r·altM/distM)`, yMin floor) — far aircraft
+  hug the horizon, overhead stays overhead; displayed angle == true
+  angle where the cap is active (golden-asserted). Default radius
+  30→15 nm via ONE exported `FLIGHTS_DEFAULT_RADIUS_NM` (six call
+  sites carried their own `?? 30` — hoisted so the display knee K can
+  never disagree with the fetched set). Renderer `_flightScenePos`
+  (which MIRRORS flightDisplayPos) routes through the same helper.
+  (b) `GeoLandmark.excluded?` — "Use in alignment" checkbox per
+  calibrated row; geoFit's single filter site gains `!l.excluded`
+  (CSV snapshot fit + all consumers inherit); per-landmark residual
+  readout (`off by N m`, worst in red ⚠, `Sidebar._fitResiduals`
+  single source) to FIND the pin poisoning the user's 25–30° north
+  error; excluded pins draw dashed/dimmed cyan. Tests: flights
+  310→335, landmark-csv 85→114 (incl. a numeric θ-recovery fixture:
+  bad pin drags 25°→47°, excluding recovers 25.000000°), geo 80/80,
+  gps 28/28, compass 54/54, record-pin 53/53, render/ui suites green.
+
 - **Flight fields, archetype models, beacons & label customization**
   (2026-07-25, unreleased on main; research
   `docs/research/flight-fields-models.md` + 2 sequential Opus waves).

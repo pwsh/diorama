@@ -209,13 +209,40 @@
   // STOCK triple (load-bearing): near 10 / far 150000 / maxDistance 45000. The
   // overlay may widen it to reach distant buildings and MUST restore it exactly
   // when the overlay goes away.
+  //
+  // The widened path is CAMERA-DISTANCE-TRACKING, not static: the far plane is
+  // measured from the camera, so the invariant is
+  //     far ≥ camDist + 1.25·req + 30000   (clamped to [150000, 13.5e6])
+  // A static far let a zoom-out drag the far-clip boundary in through the tile
+  // content — the horizon crept toward the property (the reported bug). Here the
+  // per-frame `_updateDynamicFrustum()` is driven MANUALLY (this whole body is
+  // synchronous, so no _animate RAF interleaves and every read is deterministic).
   const NEAR0 = 10, FAR0 = 150000, MAXD0 = 45000, RATIO = 15000;
+  const FAR_CEIL = 13_500_000, MAXD_CEIL = 8_500_000;
+  const REACH_F = 1.25, MARGIN = 30000, MAXD_F = 2.2, HYST = 0.05;
   const camState = () => ({ near: r._camera.near, far: r._camera.far, maxD: r._controls.maxDistance });
   const stockOk = s => s.near === NEAR0 && s.far === FAR0 && s.maxD === MAXD0;
+  // Live orbit distance the renderer itself measures.
+  const camDist = () => r._camera.position.distanceTo(r._controls.target);
+  // Park the camera at a chosen orbit distance along the current view ray, then
+  // let the renderer re-evaluate (exactly what _animate does after controls.update).
+  const zoomTo = d => {
+    const t = r._controls.target, p = r._camera.position;
+    const dx = p.x - t.x, dy = p.y - t.y, dz = p.z - t.z;
+    const k = d / Math.hypot(dx, dy, dz);
+    p.set(t.x + dx * k, t.y + dy * k, t.z + dz * k);
+    r._updateDynamicFrustum();
+  };
+  const wantFar = req => Math.max(FAR0, Math.min(FAR_CEIL, camDist() + REACH_F * req + MARGIN));
+  // Count projection-matrix rewrites so hysteresis is observable.
+  let projCalls = 0;
+  const realUPM = r._camera.updateProjectionMatrix.bind(r._camera);
+  r._camera.updateProjectionMatrix = () => { projCalls++; realUPM(); };
 
   ok('frustum: stock triple at rest (10 / 150000 / 45000)', stockOk(camState()), JSON.stringify(camState()));
 
-  // Nearby content (the small tri, reach ≈ 4.2 m) must NOT widen anything.
+  // Nearby content (the small tri, reach ≈ 4.2 m) must NOT widen anything — the
+  // formula stays under every floor at a normal orbit distance.
   r.updateNeighborhood({ buildings: [tri], roads: [], water: [], landuse: [] }, null);
   ok('frustum: near content keeps the stock triple', stockOk(camState()), JSON.stringify(camState()));
 
@@ -228,39 +255,105 @@
   const bldgA = farSq(-95000, 4000, 1000, 5000);        // ≈100 m from the scene origin
   const REQ_A = reachOf(bldgA);
   r.updateNeighborhood({ buildings: [bldgA], roads: [], water: [], landuse: [] }, null);
-  const fa = 1.25 * REQ_A + 30000;                      // ≈155000 — above the 150000 floor, below the ceiling
+  const dA = camDist();
+  const fa = dA + REACH_F * REQ_A + MARGIN;
   const sA = camState();
-  ok('frustum: test req ≈ 100 m (formula un-clamped here)', fa > FAR0 && fa < 600000, `req=${REQ_A.toFixed(0)} far=${fa.toFixed(0)}`);
-  ok('frustum: far building grows far to 1.25·req+30000', near(sA.far, fa, 1), `far=${sA.far} want=${fa}`);
+  ok('frustum: test req ≈ 100 m (formula un-clamped here)', fa > FAR0 && fa < FAR_CEIL, `req=${REQ_A.toFixed(0)} camDist=${dA.toFixed(0)} far=${fa.toFixed(0)}`);
+  ok('frustum: far building grows far to camDist+1.25·req+30000', near(sA.far, fa, 1), `far=${sA.far} want=${fa}`);
   ok('frustum: near = far / 15000', near(sA.near, sA.far / RATIO, 1e-6), `near=${sA.near}`);
-  ok('frustum: maxDistance = req·1.15', near(sA.maxD, REQ_A * 1.15, 1), `maxD=${sA.maxD}`);
+  ok('frustum: maxDistance = req·2.2 (frameable extent)', near(sA.maxD, Math.max(MAXD0, REQ_A * MAXD_F), 1), `maxD=${sA.maxD}`);
   ok('frustum: near:far ratio ≤ 15000 (depth precision)', sA.far / sA.near <= RATIO + 1e-6, `${(sA.far / sA.near).toFixed(0)}`);
   ok('frustum: widened values never below stock', sA.far >= FAR0 && sA.near >= NEAR0 && sA.maxD >= MAXD0);
+  ok('frustum: invariant far ≥ camDist + 1.25·req + margin', sA.far >= camDist() + REACH_F * REQ_A + MARGIN - 1e-6, `far=${sA.far}`);
 
-  // A building 2.5 km out → both ceilings engage (600000 / 550000).
-  const REQ_B = 2500000;
+  // ── the reported bug: ZOOMING OUT must PUSH the far plane out, not clip.
+  const farAtNear = camState().far;
+  zoomTo(200000);   // still inside controls.maxDistance (req·2.2 = 220 m) — a reachable pull-back
+  const sOut = camState();
+  ok('frustum: zoom-out grows far (the horizon bug)', sOut.far > farAtNear, `${farAtNear} → ${sOut.far}`);
+  ok('frustum: zoom-out far tracks camDist+1.25·req+margin', near(sOut.far, wantFar(REQ_A), 1), `far=${sOut.far} want=${wantFar(REQ_A)}`);
+  ok('frustum: zoom-out invariant holds (content not clipped)', sOut.far >= camDist() + REACH_F * REQ_A + MARGIN - 1e-6, `far=${sOut.far} camDist=${camDist().toFixed(0)}`);
+  ok('frustum: zoom-out near still = far/15000', near(sOut.near, sOut.far / RATIO, 1e-6), `near=${sOut.near}`);
+  // …and zooming back in brings it back down (never one-way sticky).
+  zoomTo(dA);
+  const sBack = camState();
+  ok('frustum: zoom back in shrinks far again', sBack.far < sOut.far && near(sBack.far, fa, 1), `far=${sBack.far} want=${fa}`);
+
+  // ── hysteresis: a small camera wiggle must NOT rewrite the projection matrix.
+  {
+    const before = projCalls, farBefore = camState().far;
+    zoomTo(dA * 1.02);          // +2 % orbit distance — well inside the 5 % band
+    zoomTo(dA * 0.98);
+    ok('frustum: 2 % camDist wiggle does not bump projection updates', projCalls === before, `calls=${projCalls - before}`);
+    ok('frustum: …and leaves far untouched', camState().far === farBefore, `far=${camState().far}`);
+    // A move big enough to clear the band DOES update.
+    const wiggleFar = camState().far;
+    zoomTo(dA + wiggleFar * HYST * 2);
+    ok('frustum: a >5 % move does update far', camState().far !== wiggleFar && projCalls > before, `far=${camState().far} calls=${projCalls - before}`);
+    zoomTo(dA);
+  }
+
+  // ── a 3 km-scale fetch: the worst case the overlay can ask for. Both ceilings
+  // engage, and the invariant must STILL hold at controls.maxDistance.
+  const REQ_B = 12_000_000;                       // past both ceilings by design
   const bldgB = farSq(-(REQ_B - 5000), 4000, 1000, 5000);
   r.updateNeighborhood({ buildings: [bldgB], roads: [], water: [], landuse: [] }, null);
   const sB = camState();
-  ok('frustum: 2.5 km content clamps far at 600000', sB.far === 600000, `far=${sB.far}`);
-  ok('frustum: clamped near = 600000/15000 = 40', near(sB.near, 40, 1e-6), `near=${sB.near}`);
-  ok('frustum: clamped maxDistance at 550000', sB.maxD === 550000, `maxD=${sB.maxD}`);
+  ok('frustum: huge content clamps far at the 13.5e6 ceiling', sB.far === FAR_CEIL, `far=${sB.far}`);
+  ok('frustum: clamped near = 13.5e6/15000 = 900', near(sB.near, 900, 1e-6), `near=${sB.near}`);
+  ok('frustum: clamped maxDistance at 8.5e6', sB.maxD === MAXD_CEIL, `maxD=${sB.maxD}`);
   ok('frustum: ratio still ≤ 15000 when clamped', sB.far / sB.near <= RATIO + 1e-6, `${(sB.far / sB.near).toFixed(0)}`);
-  ok('frustum: minDistance (1000) still clears near', r._controls.minDistance > sB.near, `min=${r._controls.minDistance} near=${sB.near}`);
+  ok('frustum: minDistance (1000) still clears the widest near', r._controls.minDistance > sB.near, `min=${r._controls.minDistance} near=${sB.near}`);
 
-  // Overlay off → the stock triple restores EXACTLY (never sticky).
+  // A realistic 3 km fetch (reach ≈ 3.8e6 mm) framed from controls.maxDistance:
+  // the whole point of the maxDistance factor is that this pose still sees it all.
+  const REQ_C = 3_800_000;
+  const bldgC = farSq(-(REQ_C - 5000), 4000, 1000, 5000);
+  r.updateNeighborhood({ buildings: [bldgC], roads: [], water: [], landuse: [] }, null);
+  const maxD_C = r._controls.maxDistance;
+  ok('frustum: 3 km req un-clamped maxDistance = req·2.2', near(maxD_C, REQ_C * MAXD_F, 1) && maxD_C < MAXD_CEIL, `maxD=${maxD_C}`);
+  ok('frustum: maxDistance frames the extent (d·tan(25°) ≥ req)', maxD_C * Math.tan(25 * Math.PI / 180) >= REQ_C, `${(maxD_C * Math.tan(25*Math.PI/180)).toFixed(0)} ≥ ${REQ_C}`);
+  zoomTo(maxD_C);
+  const sC = camState();
+  ok('frustum: invariant holds at maxDistance for a 3 km req', sC.far >= camDist() + REACH_F * REQ_C + MARGIN - 1e-6 || sC.far === FAR_CEIL, `far=${sC.far} camDist=${camDist().toFixed(0)}`);
+  ok('frustum: 3 km far stays under the ceiling', sC.far <= FAR_CEIL, `far=${sC.far}`);
+  ok('frustum: near tracks far/15000 with the 10 floor', near(sC.near, Math.max(NEAR0, sC.far / RATIO), 1e-6), `near=${sC.near}`);
+  zoomTo(dA);
+
+  // Overlay off → the stock triple restores EXACTLY (never sticky) and the
+  // dynamic updater goes quiet (the stock restore must WIN over any pending value).
   r.updateNeighborhood(null, null);
   ok('frustum: overlay null restores stock triple exactly', stockOk(camState()), JSON.stringify(camState()));
+  zoomTo(40000); zoomTo(20000);
+  ok('frustum: dynamic updater inert once the overlay is off', stockOk(camState()), JSON.stringify(camState()));
   // …and so does empty content (the other no-content path).
   r.updateNeighborhood({ buildings: [bldgB], roads: [], water: [], landuse: [] }, null);
-  ok('frustum: re-widens on new far content', camState().far === 600000, `far=${camState().far}`);
+  ok('frustum: re-widens on new far content', camState().far === FAR_CEIL, `far=${camState().far}`);
   r.updateNeighborhood({ buildings: [], roads: [], water: [], landuse: [] }, null);
   ok('frustum: empty content restores stock triple exactly', stockOk(camState()), JSON.stringify(camState()));
-  // A resize must not clobber the widened frustum (it only touches fov/aspect).
+  // A resize / setFov must not clobber the frustum (they only touch fov/aspect).
   r.updateNeighborhood({ buildings: [bldgA], roads: [], water: [], landuse: [] }, null);
+  zoomTo(dA);
+  const fResize = camState().far;
   r.resize(800, 500);
   const sR = camState();
-  ok('frustum: resize preserves near/far/maxDistance', near(sR.far, fa, 1) && near(sR.near, fa / RATIO, 1e-6) && near(sR.maxD, REQ_A * 1.15, 1), JSON.stringify(sR));
+  ok('frustum: resize preserves near/far/maxDistance',
+     sR.far === fResize && near(sR.near, fResize / RATIO, 1e-6) && near(sR.maxD, REQ_A * MAXD_F, 1), JSON.stringify(sR));
+  r.setFov(70, 90);
+  const sF = camState();
+  ok('frustum: setFov preserves near/far/maxDistance',
+     sF.far === fResize && sF.near === sR.near && sF.maxD === sR.maxD, JSON.stringify(sF));
+  r.setFov(50, null);
+  // Interaction pin: the camera-centered sky dome writes no depth and renders
+  // first, so distant buildings overdraw it however wide the far plane gets.
+  if (r._skyDome) {
+    ok('frustum: sky dome still depthWrite:false / renderOrder −10 (buildings overdraw it)',
+       r._skyDome.material.depthWrite === false && r._skyDome.renderOrder === -10,
+       `dw=${r._skyDome.material.depthWrite} ro=${r._skyDome.renderOrder}`);
+  } else {
+    ok('frustum: sky dome not built in this harness (no depth interaction)', true, 'skipped');
+  }
+  r._camera.updateProjectionMatrix = realUPM;
   r.updateNeighborhood(null, null);
   ok('frustum: final state back to stock', stockOk(camState()), JSON.stringify(camState()));
 

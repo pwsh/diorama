@@ -6342,7 +6342,12 @@ export class Sidebar extends LitElement {
     const p = this.planner;
     const landmarks = p.geoLandmarks();
     const fit = p.geoFit();
-    const calCount = landmarks.filter(l => l.lat != null && l.lon != null).length;
+    // Count only landmarks that actually FEED the fit — an excluded (or
+    // pending-placement) pin must not make the single-landmark north-bearing
+    // input disappear, because with it switched off the fit really is 'single'.
+    const calCount = landmarks.filter(
+      l => l.lat != null && l.lon != null && !l.pendingPlace && !l.excluded).length;
+    const { resById, worstId } = this._fitResiduals(fit);
     const placingNew = p.placingLandmarkId === NEW_LANDMARK;
     const geo = p.store.geo;
     return this._section('geo', 'GPS / Geo', () => html`
@@ -6357,7 +6362,7 @@ export class Sidebar extends LitElement {
             No landmarks yet. Add one, click a known spot on the plan, then calibrate
             it by standing there with your phone (open-sky, away from walls).
           </div>` : nothing}
-        ${landmarks.map(lm => this._landmarkItem(lm))}
+        ${landmarks.map(lm => this._landmarkItem(lm, resById.get(lm.id) ?? null, worstId === lm.id))}
         <div style="display:flex;gap:4px;margin-top:6px">
           <button class="btn" style="flex:1"
                   @click=${() => { p.placingLandmarkId = NEW_LANDMARK; p.maybeCloseSidebarForPlacement(); p.emitConfig(); }}>
@@ -6592,12 +6597,17 @@ export class Sidebar extends LitElement {
       </div>`;
   }
 
-  private _landmarkItem(lm: GeoLandmark) {
+  // One landmark row. `residualMm` is this landmark's reprojection error under
+  // the CURRENT fit (null when it isn't in the fit, or the fit is single/none);
+  // `worst` flags the largest one, which is the pin most likely skewing north.
+  private _landmarkItem(lm: GeoLandmark, residualMm: number | null = null, worst = false) {
     const p = this.planner;
     const calibrated = lm.lat != null && lm.lon != null;
     // CSV-imported with real lat/lon but no plan position yet — excluded from
     // the fit until the user places the pin (📍 → click the plan).
     const pending = lm.pendingPlace === true;
+    // User-switched-off: kept + drawn, but contributes nothing to the transform.
+    const excluded = lm.excluded === true;
     // Manually-entered landmarks have no sampling run (sampleCount absent).
     const manual = calibrated && lm.sampleCount == null;
     const dateStr = lm.sampledAt ? ` · ${new Date(lm.sampledAt).toLocaleDateString()}` : '';
@@ -6612,7 +6622,7 @@ export class Sidebar extends LitElement {
     const cardOpen = this._calibLandmarkId === lm.id;
     const manualOpen = this._manualLandmarkId === lm.id;
     return html`
-      <div style="border-bottom:1px solid var(--border)">
+      <div style="border-bottom:1px solid var(--border)${excluded ? ';opacity:0.55' : ''}">
         <div class="sensor-item" style="cursor:default;gap:4px">
           <div class="dot" style="background:${pending ? '#ffb74d' : calibrated ? '#4dd0e1' : '#90a4ae'}"></div>
           <input type="text" .value=${lm.name} style="flex:1;min-width:0" placeholder="Landmark name…"
@@ -6631,6 +6641,25 @@ export class Sidebar extends LitElement {
         ${calibrated ? html`
           <div style="font-family:monospace;font-size:10px;color:var(--text-dim);padding:0 0 3px 20px">
             ${lm.lat!.toFixed(6)}, ${lm.lon!.toFixed(6)}
+          </div>` : nothing}
+        ${calibrated && !pending ? html`
+          <div style="display:flex;align-items:center;gap:6px;font-size:10px;padding:0 0 3px 20px">
+            <label style="display:flex;align-items:center;gap:4px;cursor:pointer;color:var(--text-dim)"
+                   title="Uncheck to keep this landmark but leave it out of the lat/lon ↔ plan fit (north bearing, GPS pins, map overlays). Useful when one bad calibration is skewing everything.">
+              <input type="checkbox" .checked=${!excluded} style="margin:0"
+                     @change=${(e: Event) => p.updateLandmark(lm.id, l => {
+                       if ((e.target as HTMLInputElement).checked) delete l.excluded;
+                       else l.excluded = true;
+                     })}>
+              Use in alignment
+            </label>
+            ${excluded
+              ? html`<span style="color:#ffb74d">excluded from alignment</span>`
+              : residualMm != null
+                ? html`<span style="color:${worst ? '#ff8a80' : 'var(--text-dim)'}"
+                             title=${worst ? 'Largest residual — the most likely culprit if the alignment looks rotated.' : 'How far this landmark lands from where the fit predicts.'}
+                        >${worst ? '⚠ ' : ''}off by ${fmtDistanceM(residualMm / 1000, p.store.imperial)}</span>`
+                : nothing}
           </div>` : nothing}
         <div style="padding:0 0 4px 20px;display:flex;gap:4px;flex-wrap:wrap;align-items:center">
           <button class="btn" style="font-size:10px;padding:2px 8px"
@@ -6984,15 +7013,36 @@ export class Sidebar extends LitElement {
       </div>`;
   }
 
+  // Per-landmark fit residuals, keyed by landmark id, plus the id of the worst
+  // outlier. `fit.landmarks` is index-aligned with `transform.residualsMm` by
+  // construction (geoFit builds the pair list from that exact array, in order).
+  // Only a FULL Procrustes fit has residuals — the single-landmark path solves
+  // exactly, so there is nothing to report. THE one place this is computed:
+  // both the per-row readout and the fit summary read it, so "worst" can never
+  // mean two different landmarks in the same panel.
+  private _fitResiduals(fit: ReturnType<Planner['geoFit']>):
+    { resById: Map<string, number>; worstId: string | null } {
+    const resById = new Map<string, number>();
+    if (!fit || fit.transform.quality !== 'full') return { resById, worstId: null };
+    const res = fit.transform.residualsMm;
+    let mi = -1;
+    fit.landmarks.forEach((l, i) => {
+      const v = res[i];
+      if (typeof v !== 'number' || !isFinite(v)) return;
+      resById.set(l.id, v);
+      if (mi < 0 || v > res[mi]) mi = i;
+    });
+    return { resById, worstId: mi >= 0 ? (fit.landmarks[mi]?.id ?? null) : null };
+  }
+
   private _geoFitReadout(fit: NonNullable<ReturnType<Planner['geoFit']>>) {
     const t = fit.transform;
     const scaleWarn = Math.abs(t.fittedScale - 1) > 0.15;
-    let worst: { name: string; res: number } | null = null;
-    if (t.quality === 'full' && t.residualsMm.length) {
-      let mi = 0;
-      for (let i = 1; i < t.residualsMm.length; i++) if (t.residualsMm[i] > t.residualsMm[mi]) mi = i;
-      worst = { name: fit.landmarks[mi]?.name || 'Landmark', res: t.residualsMm[mi] };
-    }
+    const { resById, worstId } = this._fitResiduals(fit);
+    const worstLm = worstId ? fit.landmarks.find(l => l.id === worstId) ?? null : null;
+    const worst = worstLm
+      ? { name: worstLm.name || 'Landmark', res: resById.get(worstLm.id) ?? 0 }
+      : null;
     return html`
       <div style="font-size:11px;margin-top:8px;padding:6px 8px;background:rgba(0,0,0,0.25);border-radius:4px;line-height:1.5">
         <div><b>Fit:</b> ${t.quality === 'single'

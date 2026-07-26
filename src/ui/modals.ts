@@ -13,6 +13,7 @@ import type { Floor, HassState, WeatherConfig, WeatherEffectKey, ScenePreset, Fl
 import { resolveNorth } from '../compass.js';
 import {
   FLIGHT_LABEL_FIELDS, FLIGHT_LABEL_FIELDS_DEFAULT, sanitizeLabelFields,
+  FLIGHTS_DEFAULT_RADIUS_NM,
 } from '../flights.js';
 
 // ── Floor settings modal ─────────────────────────────────────────────────
@@ -1082,8 +1083,8 @@ export class SettingsDrawer extends LitElement {
 
             <div class="row" style="align-items:center;margin-top:4px">
               <label style="font-size:12px;color:var(--text);flex:1" title="Search + display radius around home.">Radius (nm)</label>
-              <input type="number" min="5" max="100" step="5" .value=${String(cfg.radiusNm ?? 30)}
-                     @change=${(e: Event) => set(f => { f.radiusNm = numOrUndef((e.target as HTMLInputElement).value, 5, 100) ?? 30; })}
+              <input type="number" min="5" max="100" step="5" .value=${String(cfg.radiusNm ?? FLIGHTS_DEFAULT_RADIUS_NM)}
+                     @change=${(e: Event) => set(f => { f.radiusNm = numOrUndef((e.target as HTMLInputElement).value, 5, 100) ?? FLIGHTS_DEFAULT_RADIUS_NM; })}
                      style="width:80px">
             </div>
             <div class="row" style="align-items:center">

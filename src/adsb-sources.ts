@@ -52,7 +52,7 @@ export async function fetchAirplanesLive(
   lat: number, lon: number, radiusNm: number,
 ): Promise<unknown | null> {
   if (!isFinite(lat) || !isFinite(lon)) return null;
-  const r = Math.max(1, Math.min(250, Math.round(isFinite(radiusNm) ? radiusNm : 30)));
+  const r = Math.max(1, Math.min(250, Math.round(isFinite(radiusNm) ? radiusNm : 15)));
   return getJson(
     `https://api.airplanes.live/v2/point/${lat.toFixed(4)}/${lon.toFixed(4)}/${r}`);
 }

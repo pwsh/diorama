@@ -42,7 +42,7 @@ import { flagDominant } from './flags.js';
 import { vacMapAffine, vacSegColor, type ParsedVacMap, type VacSegment } from './valetudo-map.js';
 import {
   flightDisplayPos, isEmergency, sanitizeLabelFields,
-  FLIGHT_LABEL_FIELDS_DEFAULT, type FlightPoint,
+  FLIGHT_LABEL_FIELDS_DEFAULT, FLIGHTS_DEFAULT_RADIUS_NM, type FlightPoint,
 } from './flights.js';
 import type { Planner } from './planner.js';
 import type { Vec2, LightIconKind, Furniture, ObjectRecipe, RecipePrimitive, HassState } from './types.js';
@@ -417,7 +417,7 @@ function drawFlights(ctx: CanvasRenderingContext2D, p: Planner, view: View): voi
   const theta = calibrated ? fit!.transform.thetaRad : 0;
   const ax = calibrated ? fit!.transform.tx : f.w / 2;
   const ay = calibrated ? fit!.transform.ty : f.d / 2;
-  const radiusNm = cfg.radiusNm ?? 30;
+  const radiusNm = cfg.radiusNm ?? FLIGHTS_DEFAULT_RADIUS_NM;
   const showLabels = cfg.showLabels !== false;
   const fields = sanitizeLabelFields(cfg.labelFields) ?? FLIGHT_LABEL_FIELDS_DEFAULT;
   const beaconsOn = cfg.beacons !== false;
@@ -734,8 +734,13 @@ function drawGeoLandmarks(ctx: CanvasRenderingContext2D, p: Planner, view: View)
     // position (excluded from the fit) — draw it in the dashed/dim uncalibrated
     // idiom, tinted amber so it reads as "needs you".
     const pending = lm.pendingPlace === true;
+    // Switched off by the user: still a real calibrated pin (KEEPS its colour so
+    // it stays recognisable) but it feeds nothing — drawn in the dashed/dim
+    // idiom, the same visual grammar as "not participating". Distinct from
+    // `hidden`, which skips the draw entirely.
+    const excluded = lm.excluded === true;
     const active = p.placingLandmarkId === lm.id || p.geoCalib?.landmarkId === lm.id;
-    const solid = calibrated && !pending;
+    const solid = calibrated && !pending && !excluded;
     const base = pending ? '#ffb74d' : calibrated ? '#4dd0e1' : '#90a4ae';
     // Highlight ring for active (placing / calibrating) pins.
     if (active) {
@@ -743,7 +748,10 @@ function drawGeoLandmarks(ctx: CanvasRenderingContext2D, p: Planner, view: View)
       ctx.beginPath(); ctx.arc(c.x, c.y, 12 * dpr, 0, 2 * Math.PI); ctx.stroke();
     }
     // Pin body.
-    ctx.fillStyle = solid ? base : pending ? 'rgba(255,183,77,0.6)' : 'rgba(144,164,174,0.6)';
+    ctx.fillStyle = solid ? base
+      : pending ? 'rgba(255,183,77,0.6)'
+      : excluded && calibrated ? 'rgba(77,208,225,0.45)'
+      : 'rgba(144,164,174,0.6)';
     ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5;
     if (!solid) ctx.setLineDash([3, 3]);
     ctx.beginPath(); ctx.arc(c.x, c.y, 7 * dpr, 0, 2 * Math.PI);
@@ -757,16 +765,20 @@ function drawGeoLandmarks(ctx: CanvasRenderingContext2D, p: Planner, view: View)
     const txt = lm.name || 'Landmark';
     const cap = pending
       ? 'imported · place me'
-      : calibrated
-        ? (lm.accuracy != null ? fmtAccuracyM(lm.accuracy, p.store.imperial) : 'calibrated')
-        : 'uncalibrated';
+      : excluded && calibrated
+        ? 'excluded from alignment'
+        : calibrated
+          ? (lm.accuracy != null ? fmtAccuracyM(lm.accuracy, p.store.imperial) : 'calibrated')
+          : 'uncalibrated';
     ctx.font = `${10 * dpr}px sans-serif`;
     const tw = Math.max(ctx.measureText(txt).width, ctx.measureText(cap).width) + 8 * dpr;
     ctx.fillStyle = 'rgba(0,0,0,0.7)';
     ctx.fillRect(c.x - tw / 2, c.y + 11 * dpr, tw, 25 * dpr);
     ctx.fillStyle = '#fff';
     ctx.fillText(txt, c.x, c.y + 13 * dpr);
-    ctx.fillStyle = pending ? 'rgba(255,183,77,0.9)' : calibrated ? 'rgba(129,212,250,0.85)' : 'rgba(176,190,197,0.75)';
+    ctx.fillStyle = pending ? 'rgba(255,183,77,0.9)'
+      : excluded && calibrated ? 'rgba(129,212,250,0.55)'
+      : calibrated ? 'rgba(129,212,250,0.85)' : 'rgba(176,190,197,0.75)';
     ctx.font = `${9 * dpr}px sans-serif`;
     ctx.fillText(cap, c.x, c.y + 25 * dpr);
   }

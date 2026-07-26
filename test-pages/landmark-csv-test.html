@@ -347,6 +347,135 @@
       p.redo();
       ok('7E redo re-applies the whole import', p.geoLandmarks().length === 5);
     }
+
+    // ═══ 8. Per-landmark "use in alignment" (GeoLandmark.excluded) ══════════
+    // The user report: one mis-sampled landmark was rotating the whole geo fit
+    // (north off by 25–30°), and the only escape was DELETING it. `excluded`
+    // keeps the landmark + its coordinates but drops it from geoFit().
+    H('8. excluded from alignment');
+    {
+      // Exclusion must be indistinguishable from deletion, fit-wise.
+      const p = await mkPlanner({ landmarks: CAL() });
+      const base = p.geoFit();
+      ok('8A baseline: 2-pair full fit', base.transform.quality === 'full' && base.landmarks.length === 2);
+      p.updateLandmark('lmB', l => { l.excluded = true; });
+      const excl = p.geoFit();
+      ok('8B excluded landmark is KEPT in the store', p.geoLandmarks().length === 2
+        && p.geoLandmarks().find(l => l.id === 'lmB').excluded === true);
+      ok('8C excluded landmark keeps its lat/lon',
+        p.geoLandmarks().find(l => l.id === 'lmB').lat != null);
+      ok('8D it drops out of the fit pair list', excl.landmarks.length === 1
+        && excl.landmarks[0].id === 'lmA', excl.landmarks.map(l => l.id).join(','));
+      ok('8E 2 pairs → 1 downgrades the fit to single quality',
+        excl.transform.quality === 'single', excl.transform.quality);
+
+      // …and it matches a planner where that landmark was actually DELETED.
+      const pDel = await mkPlanner({ landmarks: CAL() });
+      pDel.deleteLandmark('lmB');
+      const del = pDel.geoFit();
+      ok('8F excluding == deleting (quality)', excl.transform.quality === del.transform.quality);
+      ok('8G excluding == deleting (thetaRad)', near(excl.transform.thetaRad, del.transform.thetaRad, 1e-12),
+        `${excl.transform.thetaRad} vs ${del.transform.thetaRad}`);
+      ok('8H excluding == deleting (tx/ty)', near(excl.transform.tx, del.transform.tx, 1e-9)
+        && near(excl.transform.ty, del.transform.ty, 1e-9));
+
+      // Re-including restores the ORIGINAL fit exactly.
+      p.updateLandmark('lmB', l => { delete l.excluded; });
+      const back = p.geoFit();
+      ok('8I re-including restores the pair count', back.landmarks.length === 2);
+      ok('8J re-including restores thetaRad', near(back.transform.thetaRad, base.transform.thetaRad, 1e-12));
+      ok('8K re-including restores rms', near(back.transform.rmsMm, base.transform.rmsMm, 1e-9));
+    }
+    {
+      // THE user's scenario, numerically. Two consistent landmarks define a
+      // plan rotated 25° from true north; a third carries a mis-sampled lat/lon
+      // (its coordinates belong 60° around from where the pin sits). The
+      // 3-pair Procrustes fit splits the difference and north lands ~22° out —
+      // exactly the "north is off by 25–30 degrees" symptom. Switching the bad
+      // landmark OFF recovers the true rotation to the last bit.
+      const THETA_TRUE = 25 * Math.PI / 180;
+      const DEG = Math.PI / 180;
+      // Plan mm → the lat/lon a fit with rotation `theta` (origin at LAT0/LON0)
+      // projects EXACTLY onto that plan point: plan = R(θ)·p ⇒ p = R(−θ)·plan.
+      const geoForPlan = (x, y, theta = THETA_TRUE) => {
+        const c = Math.cos(theta), s = Math.sin(theta);
+        return unprojectMeters((c * x + s * y) / 1000, (-s * x + c * y) / 1000, LAT0, LON0);
+      };
+      const SKEWED = [
+        { id: 'lg1', name: 'Corner', x: 0,    y: 0,    ...geoForPlan(0, 0),       sampleCount: 9 },
+        { id: 'lg2', name: 'Shed',   x: 6000, y: 1000, ...geoForPlan(6000, 1000), sampleCount: 9 },
+        { id: 'lgBad', name: 'Bad',  x: 2000, y: 5000,
+          ...geoForPlan(2000, 5000, THETA_TRUE + 60 * DEG), sampleCount: 9 },
+      ];
+      const p = await mkPlanner({ landmarks: SKEWED.map(l => ({ ...l })) });
+      const poisoned = p.geoFit();
+      const poisonedDeg = poisoned.transform.thetaRad / DEG;
+      ok('8L poisoned fit uses all 3 pairs', poisoned.landmarks.length === 3);
+      ok('8M one bad landmark skews north by > 20°',
+        Math.abs(poisonedDeg - 25) > 20, `θ = ${poisonedDeg.toFixed(2)}° (true 25°)`);
+      ok('8N …and blows up the residuals', poisoned.transform.rmsMm > 1000,
+        poisoned.transform.rmsMm.toFixed(0));
+      ok('8O …and fittedScale drifts far from 1 (the existing ⚠ hint)',
+        Math.abs(poisoned.transform.fittedScale - 1) > 0.15, poisoned.transform.fittedScale.toFixed(3));
+
+      // The sidebar's per-row residual readout relies on residualsMm being
+      // index-aligned with geoFit().landmarks — and on the worst one naming the
+      // culprit. Both asserted here, since that is how a user FINDS the pin.
+      const res = poisoned.transform.residualsMm;
+      ok('8P residualsMm is index-aligned with geoFit().landmarks',
+        res.length === poisoned.landmarks.length, `${res.length} vs ${poisoned.landmarks.length}`);
+      let worstI = 0;
+      for (let i = 1; i < res.length; i++) if (res[i] > res[worstI]) worstI = i;
+      ok('8Q the worst residual names the bad landmark',
+        poisoned.landmarks[worstI].id === 'lgBad', poisoned.landmarks[worstI].id);
+
+      // Switch it off → true north recovered exactly.
+      p.updateLandmark('lgBad', l => { l.excluded = true; });
+      const fixed = p.geoFit();
+      ok('8R excluding it recovers θ = 25.000°',
+        near(fixed.transform.thetaRad, THETA_TRUE, 1e-6), `${(fixed.transform.thetaRad / DEG).toFixed(6)}°`);
+      ok('8S …with a sub-mm rms', fixed.transform.rmsMm < 1e-3, fixed.transform.rmsMm);
+      ok('8T …and fittedScale back at 1', near(fixed.transform.fittedScale, 1, 1e-6),
+        fixed.transform.fittedScale);
+      ok('8U …over 2 pairs, with all 3 landmarks still in the store',
+        fixed.landmarks.length === 2 && p.geoLandmarks().length === 3);
+      ok('8V the excluded landmark has NO residual to show (not in the fit)',
+        !fixed.landmarks.some(l => l.id === 'lgBad'));
+
+      // The flag survives the load/undo normalization path (_normalizeStore's
+      // geo passthrough) — the real risk when adding a field.
+      ok('8W excluding is ONE undo step', p.canUndo === true);
+      p.undo();
+      ok('8X undo restores the poisoned fit',
+        p.geoLandmarks().find(l => l.id === 'lgBad').excluded === undefined
+        && Math.abs(p.geoFit().transform.thetaRad / DEG - 25) > 20);
+      p.redo();
+      ok('8Y redo re-applies the exclusion through _normalizeStore',
+        p.geoLandmarks().find(l => l.id === 'lgBad').excluded === true
+        && near(p.geoFit().transform.thetaRad, THETA_TRUE, 1e-6));
+    }
+    {
+      // An excluded landmark must not poison importLandmarksCsv's snapshot fit
+      // either — that fit is taken from geoFit(), so the exclusion rides along
+      // and imported rows land on their exact plan positions.
+      const bad = { id: 'lmBad', name: 'Bad', x: 4000, y: 4000,
+                    ...geoAt(-9000, 9000), sampleCount: 9, excluded: true };
+      const p = await mkPlanner({ landmarks: [...CAL(), bad] });
+      const fit = p.geoFit();
+      ok('8Z snapshot fit ignores the excluded landmark',
+        fit.landmarks.length === 2 && fit.transform.rmsMm < 1e-3, fit.transform.rmsMm);
+      const res = p.importLandmarksCsv(IMPORT_CSV);
+      ok('8AA import projected all 3 rows', res.added === 3 && res.pending === 0, JSON.stringify(res));
+      const gate = p.geoLandmarks().find(l => l.name === 'Gate');
+      ok('8AB rows land on their exact plan positions (unpoisoned projection)',
+        gate.x === IMPORTED[0].x && gate.y === IMPORTED[0].y, `${gate.x},${gate.y}`);
+      // Sanity: WITHOUT the exclusion the same fixture would land somewhere else.
+      const pPoison = await mkPlanner({ landmarks: [...CAL(), { ...bad, excluded: undefined }] });
+      pPoison.importLandmarksCsv(IMPORT_CSV);
+      const gp = pPoison.geoLandmarks().find(l => l.name === 'Gate');
+      ok('8AC control: the same bad landmark INCLUDED moves the projection',
+        Math.hypot(gp.x - IMPORTED[0].x, gp.y - IMPORTED[0].y) > 100, `${gp.x},${gp.y}`);
+    }
   } catch (e) {
     ok('harness threw', false, e && (e.stack || e.message || String(e)));
   }

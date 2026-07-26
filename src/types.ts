@@ -1151,6 +1151,12 @@ export interface GeoLandmark {
                                // projected). Planner.geoFit() EXCLUDES these — a dummy
                                // x/y would poison the fit. Cleared when the user places
                                // the pin on the plan (canvas-interact placement latch).
+  excluded?: boolean;          // excluded from the geo fit (kept, drawn dimmed) — user toggle.
+                               // ABSENT = participates (backward compatible). Distinct from
+                               // `hidden`, which only suppresses the 2D pin: an excluded
+                               // landmark still draws (dashed/dim) but contributes nothing to
+                               // the transform, so one bad calibration can be neutralized
+                               // without losing its coordinates.
 }
 
 // A recorded-position pin (roadmap P2 — the REVERSE of a landmark): capture the
@@ -1245,7 +1251,7 @@ export interface FlightsConfig {
   source?: 'cloud' | 'local' | 'entity';  // default 'cloud' (airplanes.live)
   localUrl?: string;                      // 'local' — the receiver's aircraft.json URL, used verbatim
   entityId?: string;                      // 'entity' — HA sensor whose attributes hold the aircraft array
-  radiusNm?: number;                      // search + display radius; default 30, clamp 5..100
+  radiusNm?: number;                      // search + display radius; default 15, clamp 5..100
   pollSeconds?: number;                   // default 8, clamp 5..60 (under airplanes.live's 1 req/s)
   minAltFt?: number;                      // optional altitude band filters
   maxAltFt?: number;

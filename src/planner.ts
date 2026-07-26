@@ -56,6 +56,7 @@ import type {
 } from './types.js';
 import { normalizeAircraftList, flightBearingDistance, MAX_AIRCRAFT,
          isEmergency, emergencySquawk, sanitizeLabelFields,
+         FLIGHTS_DEFAULT_RADIUS_NM,
          type FlightPoint, type IssNow } from './flights.js';
 import { fetchLocalAircraft, fetchAirplanesLive, fetchIssNow } from './adsb-sources.js';
 // The ONE satellite alt/az routine (the renderer's sky uses the same function —
@@ -712,7 +713,8 @@ export class Planner extends EventTarget {
   private _flightsFetching = false;
   private _flightsInited = false;
   private static readonly ISS_POLL_MS = 10000;   // well under wheretheiss.at's ~350 req / 5 min
-  private static readonly FLIGHTS_DEFAULT_RADIUS_NM = 30;
+  // Shared with both renderers + the settings UI — see flights.ts.
+  private static readonly FLIGHTS_DEFAULT_RADIUS_NM = FLIGHTS_DEFAULT_RADIUS_NM;
 
   // Client-local flight/ISS alerts (research §6.3). Runtime-only, NEVER
   // persisted — they are recomputed from live poll data, so a reload simply
@@ -3619,9 +3621,14 @@ export class Planner extends EventTarget {
   // sidebar can flag the worst outlier by name. Null when nothing is calibrated.
   // Landmarks awaiting placement (CSV-imported, `pendingPlace`) are EXCLUDED —
   // they carry a real lat/lon but only a placeholder plan position, which would
-  // poison the fit.
+  // poison the fit. So are landmarks the user has switched OFF (`excluded`) —
+  // the manual escape hatch for one mis-sampled pin skewing θ. This is the ONE
+  // site that gathers calibrated pairs; importLandmarksCsv's snapshot fit and
+  // every consumer (compass, GPS pins, neighborhood, recorded pins, flights)
+  // route through it, so both exclusions apply everywhere by construction.
   geoFit(): { transform: GeoTransform; landmarks: GeoLandmark[] } | null {
-    const cal = this.geoLandmarks().filter(l => l.lat != null && l.lon != null && !l.pendingPlace);
+    const cal = this.geoLandmarks().filter(
+      l => l.lat != null && l.lon != null && !l.pendingPlace && !l.excluded);
     if (cal.length === 0) return null;
     const pairs: GeoPair[] = cal.map(l => ({ x: l.x, y: l.y, lat: l.lat!, lon: l.lon! }));
     return { transform: fitGeoTransform(pairs, this.store.geo?.northDeg), landmarks: cal };
