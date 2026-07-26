@@ -15,9 +15,10 @@
   </style>
 </head>
 <body>
-  <h1>Flights UI wave — alert feed `extra` channel · low-overflight · watch list · ISS edge · dismiss · prune · flyover event · watch normalization</h1>
+  <h1>Flights UI — alert feed `extra` channel · low-overflight · watch list · ISS edge · dismiss · prune · flyover event · watch normalization · labelFields/beacons/privacyDim config · 2D beacons + privacy dim + label fields · settings drawer</h1>
   <div id="summary">Running…</div>
   <div id="rows"></div>
+  <div id="mount"></div>
 
   <!-- Two bundles, no live HA (the alert-center-test / config-test recipe):
          # pure alerts module (zero deps):
@@ -27,7 +28,21 @@
          T=$(mktemp -d); cp -r src/* "$T"/
          cp test-pages/fake-avatar-store.ts "$T"/avatar-store.ts
          npx esbuild "$T"/planner.ts --bundle --format=esm --outfile=<harness>/planner.mod.js
-       globalThis.fetch is stubbed below so no flight/ISS poll ever leaves the page.
+       # 2D flight drawing (pure/no-three):
+         npx esbuild src/canvas-render.ts --bundle --format=esm --outfile=<harness>/canvas-render.mod.js
+       # the REAL settings drawer (Lit, light DOM) + its own Planner export —
+       # the sensor-focus recipe: copy tsconfig.json into the temp src dir (else
+       # esbuild leaves raw decorators), alias lit, and DEFINE the build tag:
+         T=$(mktemp -d); cp -r src/* "$T"/; cp tsconfig.json "$T"/
+         cp test-pages/fake-avatar-store.ts "$T"/avatar-store.ts
+         printf "export { Planner } from '../planner.js';\nimport './modals.js';\n" > "$T"/ui/flightsui-entry.ts
+         npx esbuild "$T"/ui/flightsui-entry.ts --bundle --format=esm --tsconfig="$T"/tsconfig.json \
+           --alias:lit=$PWD/node_modules/lit/index.js \
+           --alias:lit/decorators.js=$PWD/node_modules/lit/decorators.js \
+           --define:__DIORAMA_VERSION__='"test"' \
+           --outfile=<harness>/flightsui.mod.js
+       Run wide (--window-size=1200,900); globalThis.fetch is stubbed below so no
+       flight/ISS poll ever leaves the page.
   -->
   <script type="module">
     import { buildAlertFeed } from './alerts.mod.js';
@@ -364,6 +379,221 @@
       p.flightsNow = [ac('a1b2c3', 'UAL123', 1500, 2)];
       p._computeFlightAlerts();
       eq('flights disabled → no alerts computed', p.flightAlerts.length, 0);
+
+      // ── 10. Label field config round-trip (setFlights sanitizer) ───────────
+      section('labelFields / beacons / privacyDim config');
+      p.setFlights(f => { f.enabled = false; f.labelFields = ['reg', 'ALT', 'bogus', 'reg']; });
+      ok('labelFields sanitized (known keys, lowercased, de-duped)',
+        JSON.stringify(p.store.flights.labelFields) === JSON.stringify(['reg', 'alt']),
+        JSON.stringify(p.store.flights.labelFields));
+      p.setFlights(f => { f.labelFields = ['nope', '']; });
+      eq('an all-unknown list clears to undefined', p.store.flights.labelFields, undefined);
+      p.setFlights(f => { f.labelFields = ['dist', 'callsign']; });
+      ok('user ORDER is preserved by the sanitizer',
+        JSON.stringify(p.store.flights.labelFields) === JSON.stringify(['dist', 'callsign']),
+        JSON.stringify(p.store.flights.labelFields));
+      p.setFlights(f => { f.beacons = false; f.privacyDim = false; });
+      eq('beacons round-trips', p.store.flights.beacons, false);
+      eq('privacyDim round-trips', p.store.flights.privacyDim, false);
+      p.setFlights(f => { f.beacons = true; f.privacyDim = true; f.labelFields = undefined; });
+      eq('beacons back on', p.store.flights.beacons, true);
+      eq('labelFields cleared', p.store.flights.labelFields, undefined);
+
+      // ── 11. 2D drawing (canvas-render) ────────────────────────────────────
+      section('2D beacons / privacy dim / label fields');
+      const CR = await import('./canvas-render.mod.js' + V);
+
+      // Pure helpers first — these MIRROR three-renderer's private versions, so
+      // the 2D and 3D readouts can never drift apart silently.
+      const fpOf = o => ({
+        hex: 'abc123', callsign: null, lat: 40, lon: -75, altFt: 10000, gsKt: null,
+        trackDeg: null, vertRateFpm: null, category: 'A3', seenPosS: 0, military: false,
+        reg: null, typeCode: null, typeDesc: null, operator: null, emergency: null,
+        squawk: null, interesting: false, pia: false, ladd: false, ...o,
+      });
+      eq('2D beacon: emergency enum → red',
+        CR.flightBeaconColor(fpOf({ emergency: 'general' }), true), CR.FLIGHT_BEACON_COLORS.emergency);
+      eq('2D beacon: squawk 7700 → red',
+        CR.flightBeaconColor(fpOf({ squawk: '7700' }), true), CR.FLIGHT_BEACON_COLORS.emergency);
+      eq('2D beacon: interesting → yellow',
+        CR.flightBeaconColor(fpOf({ interesting: true }), true), CR.FLIGHT_BEACON_COLORS.interesting);
+      eq('2D beacon: military → green',
+        CR.flightBeaconColor(fpOf({ military: true }), true), CR.FLIGHT_BEACON_COLORS.military);
+      eq('2D beacon: LADD → white',
+        CR.flightBeaconColor(fpOf({ ladd: true }), true), CR.FLIGHT_BEACON_COLORS.ladd);
+      eq('2D beacon: unflagged → none', CR.flightBeaconColor(fpOf({}), true), null);
+      eq('2D beacon: PIA alone does not beacon', CR.flightBeaconColor(fpOf({ pia: true }), true), null);
+      eq('2D beacon: emergency outranks everything', CR.flightBeaconColor(
+        fpOf({ emergency: 'downed', interesting: true, military: true, ladd: true }), true),
+        CR.FLIGHT_BEACON_COLORS.emergency);
+      eq('2D beacon: interesting outranks military',
+        CR.flightBeaconColor(fpOf({ interesting: true, military: true }), true),
+        CR.FLIGHT_BEACON_COLORS.interesting);
+      eq('2D beacon: gate off → null',
+        CR.flightBeaconColor(fpOf({ military: true }), false), null);
+
+      const LFP = fpOf({ callsign: 'AAL266', reg: 'N454AL', typeCode: 'B38M',
+        operator: 'AMERICAN AIRLINES INC', altFt: 12340, gsKt: 322,
+        vertRateFpm: 1800, squawk: '1200', distNm: 13.7 });
+      const lines = (fields, fp = LFP, dim = true) => CR.flightLabelLines(fp, fields, dim);
+      eq('2D label default fields', JSON.stringify(lines(['callsign', 'alt'])),
+        JSON.stringify({ top: 'AAL266', sub: '12,300 ft' }));
+      eq('2D label reg/type/speed', JSON.stringify(lines(['reg', 'type', 'speed'])),
+        JSON.stringify({ top: 'N454AL', sub: 'B38M · 320 kt' }));
+      eq('2D label trend + distance', JSON.stringify(lines(['trend', 'dist'])),
+        JSON.stringify({ top: '↑ climb', sub: '13.5 nm' }));
+      eq('2D label level flight drops the trend',
+        lines(['callsign', 'trend'], fpOf({ callsign: 'X1', vertRateFpm: 0 })).sub, '');
+      eq('2D label PIA suppression shows the hex only',
+        lines(['callsign', 'reg', 'operator'],
+              fpOf({ callsign: 'SECRET1', reg: 'N1PIA', operator: 'ACME', pia: true })).top,
+        '🔒 ABC123');
+      eq('2D label LADD keeps its identity (badged)',
+        lines(['callsign'], fpOf({ callsign: 'N66168', ladd: true })).top, '🔒 N66168');
+      eq('2D label privacyDim off → no badge, full identity',
+        CR.flightLabelLines(fpOf({ callsign: 'SECRET1', pia: true }), ['callsign'], false).top,
+        'SECRET1');
+      eq('2D and 3D field text agree on bucketing',
+        CR.flightFieldText('alt', LFP, 'x', false) + '/' + CR.flightFieldText('speed', LFP, 'x', false),
+        '12,300 ft/320 kt');
+
+      // Integration: drive the REAL drawAll over a recording 2D context and
+      // watch what the flight layer actually emits.
+      const rec = { texts: [], strokes: [], alphas: [] };
+      const cv = document.createElement('canvas');
+      cv.width = 900; cv.height = 600;
+      const raw = cv.getContext('2d');
+      const ctx = new Proxy(raw, {
+        get(t, k) {
+          const v = t[k];
+          if (typeof v === 'function') {
+            return (...a) => {
+              if (k === 'fillText') rec.texts.push(String(a[0]));
+              if (k === 'stroke') rec.strokes.push(String(t.strokeStyle));
+              return v.apply(t, a);
+            };
+          }
+          return v;
+        },
+        set(t, k, v) {
+          if (k === 'globalAlpha') rec.alphas.push(v);
+          t[k] = v; return true;
+        },
+      });
+      const clearRec = () => { rec.texts.length = 0; rec.strokes.length = 0; rec.alphas.length = 0; };
+      const view = { ox: 450, oy: 300, scale: 0.02 };
+      const draw2d = () => { clearRec(); CR.drawAll(ctx, p, view, cv); };
+
+      p.store.flights = { enabled: true, source: 'cloud', iss: false };
+      p.flightsNow = [fpOf({ hex: 'mil001', callsign: 'RCH123', reg: 'N1MIL',
+        military: true, lat: 40.05, lon: -75.05, distNm: 4 })];
+      let drew = null;
+      try { draw2d(); } catch (e) { drew = e; }
+      ok('drawAll with aircraft does not throw', drew === null, drew && drew.message);
+      ok('military aircraft draws its green beacon ring',
+        rec.strokes.includes(CR.FLIGHT_BEACON_COLORS.military), rec.strokes.slice(-6).join(','));
+      ok('default plate draws callsign + altitude',
+        rec.texts.includes('RCH123') && rec.texts.some(t => /10,000 ft/.test(t)),
+        rec.texts.slice(-4).join('|'));
+
+      p.store.flights = { enabled: true, source: 'cloud', iss: false, beacons: false };
+      draw2d();
+      ok('beacons:false draws no beacon ring',
+        !rec.strokes.includes(CR.FLIGHT_BEACON_COLORS.military));
+
+      p.store.flights = { enabled: true, source: 'cloud', iss: false, labelFields: ['reg', 'type'] };
+      p.flightsNow = [fpOf({ hex: 'lf0001', callsign: 'AAL266', reg: 'N454AL',
+        typeCode: 'B38M', lat: 40.05, lon: -75.05 })];
+      draw2d();
+      ok('labelFields drives the 2D text',
+        rec.texts.includes('N454AL') && rec.texts.includes('B38M')
+        && !rec.texts.includes('AAL266'), rec.texts.slice(-4).join('|'));
+
+      p.store.flights = { enabled: true, source: 'cloud', iss: false };
+      p.flightsNow = [fpOf({ hex: 'pia001', callsign: 'SECRET1', reg: 'N1PIA',
+        pia: true, lat: 40.05, lon: -75.05 })];
+      draw2d();
+      ok('PIA aircraft is drawn dimmed', rec.alphas.includes(0.45), rec.alphas.join(','));
+      ok('PIA identity is suppressed in 2D',
+        !rec.texts.includes('SECRET1') && !rec.texts.includes('N1PIA')
+        && rec.texts.some(t => t.includes('PIA001')), rec.texts.slice(-4).join('|'));
+
+      p.store.flights = { enabled: true, source: 'cloud', iss: false, privacyDim: false };
+      draw2d();
+      ok('privacyDim:false draws the PIA aircraft at full alpha + identity',
+        !rec.alphas.includes(0.45) && rec.texts.includes('SECRET1'),
+        rec.texts.slice(-4).join('|'));
+
+      p.store.flights = { enabled: true, source: 'cloud', iss: false };
+      p.flightsNow = [fpOf({ hex: 'ldd001', callsign: 'N66168', ladd: true,
+        lat: 40.05, lon: -75.05 })];
+      draw2d();
+      ok('LADD aircraft is dimmed but STILL beacons white',
+        rec.alphas.includes(0.45) && rec.strokes.includes(CR.FLIGHT_BEACON_COLORS.ladd));
+      p.flightsNow = [];
+
+      // ── 12. Settings ▸ Integrations — the flights block ────────────────────
+      section('Settings drawer (flights block)');
+      const UI = await import('./flightsui.mod.js' + V);
+      const p2 = new UI.Planner();
+      p2.connectWith(new FakeHa());
+      await sleep(20);
+      p2.store.flights = { enabled: true, source: 'cloud' };
+      const drawer = document.createElement('diorama-settings-drawer');
+      drawer.planner = p2;
+      document.getElementById('mount').appendChild(drawer);
+      drawer.show('integrations');
+      await drawer.updateComplete;
+      // EXACT label text — "Callsign" (a label field) and "Callsign labels"
+      // (the master toggle) both exist, and a startsWith match would confuse them.
+      const cbFor = text => {
+        const l = [...drawer.querySelectorAll('label')]
+          .find(el => el.textContent.replace(/\s+/g, ' ').trim() === text);
+        return l ? l.querySelector('input[type=checkbox]') : null;
+      };
+      const flip = async (el, v) => {
+        el.checked = v; el.dispatchEvent(new Event('change'));
+        await drawer.updateComplete; await sleep(4);
+      };
+      const beaconsCb = cbFor('Status beacons');
+      const privacyCb = cbFor('Dim privacy-flagged aircraft');
+      ok('“Status beacons” checkbox rendered', !!beaconsCb);
+      ok('“Dim privacy-flagged aircraft” checkbox rendered', !!privacyCb);
+      eq('beacons checkbox defaults ON', beaconsCb && beaconsCb.checked, true);
+      eq('privacy checkbox defaults ON', privacyCb && privacyCb.checked, true);
+      await flip(beaconsCb, false);
+      eq('unchecking beacons writes the store', p2.store.flights.beacons, false);
+      await flip(cbFor('Dim privacy-flagged aircraft'), false);
+      eq('unchecking privacy dim writes the store', p2.store.flights.privacyDim, false);
+      await flip(cbFor('Status beacons'), true);
+      eq('re-checking beacons writes the store', p2.store.flights.beacons, true);
+
+      const FIELD_LABELS = ['Callsign', 'Registration', 'Type', 'Operator', 'Altitude',
+                            'Speed', 'Climb/descend', 'Squawk', 'Distance'];
+      const fieldCbs = FIELD_LABELS.map(t => cbFor(t));
+      eq('all 9 label-field checkboxes rendered', fieldCbs.filter(Boolean).length, 9);
+      eq('Callsign checked by default', fieldCbs[0].checked, true);
+      eq('Altitude checked by default', fieldCbs[4].checked, true);
+      eq('Registration unchecked by default', fieldCbs[1].checked, false);
+      await flip(cbFor('Registration'), true);
+      ok('checking a field writes canonical-order labelFields',
+        JSON.stringify(p2.store.flights.labelFields) === JSON.stringify(['callsign', 'reg', 'alt']),
+        JSON.stringify(p2.store.flights.labelFields));
+      await flip(cbFor('Callsign'), false);
+      await flip(cbFor('Altitude'), false);
+      ok('unchecking leaves only the remaining field',
+        JSON.stringify(p2.store.flights.labelFields) === JSON.stringify(['reg']),
+        JSON.stringify(p2.store.flights.labelFields));
+      await flip(cbFor('Registration'), false);
+      eq('an empty selection clears back to the default plate',
+        p2.store.flights.labelFields, undefined);
+      // The field grid is only offered while labels are on at all.
+      await flip(cbFor('Callsign labels'), false);
+      eq('labels off hides the label-field grid', cbFor('Registration'), null);
+      await flip(cbFor('Callsign labels'), true);
+      ok('labels back on restores the grid', !!cbFor('Registration'));
+      drawer.remove();
+
     } catch (err) {
       ok('Planner section ran without throwing', false, String((err && err.stack) || err));
     } finally {

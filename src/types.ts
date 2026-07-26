@@ -1250,6 +1250,18 @@ export interface FlightsConfig {
   minAltFt?: number;                      // optional altitude band filters
   maxAltFt?: number;
   showLabels?: boolean;                   // callsign labels in 3D; default true
+  // Which lines the label plate carries, in order. Allowed keys (see
+  // FLIGHT_LABEL_FIELDS in src/flights.ts, which also owns the sanitizer
+  // setFlights runs): 'callsign' | 'reg' | 'type' | 'operator' | 'alt' |
+  // 'speed' | 'trend' | 'squawk' | 'dist'. ABSENT = today's shipped two-line
+  // plate, ['callsign','alt'] — the field is purely additive.
+  labelFields?: string[];
+  beacons?: boolean;                      // status beacons (emergency/military/…); absent = ON
+  // Courtesy dimming of the registration/operator text on PIA/LADD-flagged
+  // aircraft (research §4.2 — the data source deliberately does not enforce
+  // the FAA privacy programs, so honoring them is the consumer's call).
+  // Absent = ON; set false to see every flagged aircraft in full.
+  privacyDim?: boolean;
   iss?: boolean;                          // live ISS dot; default true (active only while `enabled`)
   alerts?: {                              // low-overflight / watch-list / ISS-pass notices
     lowAltFt?: number;

@@ -11,6 +11,9 @@ import { AVATAR_PACK_MANIFEST } from '../avatar-packs/manifest.js';
 import type { Planner } from '../planner.js';
 import type { Floor, HassState, WeatherConfig, WeatherEffectKey, ScenePreset, FloorTexKind, MqttBridgeConfig, BgTextEntry, BgTextEntryMode, HeatmapConfig, CompassConfig } from '../types.js';
 import { resolveNorth } from '../compass.js';
+import {
+  FLIGHT_LABEL_FIELDS, FLIGHT_LABEL_FIELDS_DEFAULT, sanitizeLabelFields,
+} from '../flights.js';
 
 // ── Floor settings modal ─────────────────────────────────────────────────
 @customElement('diorama-floor-modal')
@@ -1108,6 +1111,19 @@ export class SettingsDrawer extends LitElement {
                      @change=${(e: Event) => set(f => { f.showLabels = (e.target as HTMLInputElement).checked; })}>
               <span style="flex:1">Callsign labels</span>
             </label>
+            ${cfg.showLabels !== false ? this._flightLabelFieldsRow(cfg, set) : nothing}
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text)"
+                   title="A flashing bead on the fuselage: red = emergency, yellow = flagged noteworthy by the data source, green = military, white = LADD (an FAA privacy program).">
+              <input type="checkbox" .checked=${cfg.beacons !== false}
+                     @change=${(e: Event) => set(f => { f.beacons = (e.target as HTMLInputElement).checked; })}>
+              <span style="flex:1">Status beacons</span>
+            </label>
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text)"
+                   title="PIA / LADD are FAA privacy programs the ADS-B source deliberately does not enforce. Dim those aircraft (and hide a PIA aircraft's identity) as a courtesy — off shows everything in full.">
+              <input type="checkbox" .checked=${cfg.privacyDim !== false}
+                     @change=${(e: Event) => set(f => { f.privacyDim = (e.target as HTMLInputElement).checked; })}>
+              <span style="flex:1">Dim privacy-flagged aircraft</span>
+            </label>
             <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text)">
               <input type="checkbox" .checked=${cfg.iss !== false}
                      @change=${(e: Event) => set(f => { f.iss = (e.target as HTMLInputElement).checked; })}>
@@ -1150,6 +1166,43 @@ export class SettingsDrawer extends LitElement {
               </label>
             </div>
           </div>` : nothing}
+      </div>`;
+  }
+
+  // Which fields the label plate (3D) + the 2D text line carry. Checked = in;
+  // order is the canonical FLIGHT_LABEL_FIELDS order filtered by the checked
+  // set, so toggling can never produce a weird sequence. The empty set clears
+  // the field entirely, which setFlights's sanitizer turns back into the
+  // default ['callsign','alt'] plate.
+  private _flightLabelFieldsRow(
+    cfg: import('../types.js').FlightsConfig,
+    set: (mut: (f: import('../types.js').FlightsConfig) => void) => void,
+  ) {
+    const chosen = new Set(
+      (sanitizeLabelFields(cfg.labelFields) ?? FLIGHT_LABEL_FIELDS_DEFAULT) as string[]);
+    const LABELS: Record<string, string> = {
+      callsign: 'Callsign', reg: 'Registration', type: 'Type', operator: 'Operator',
+      alt: 'Altitude', speed: 'Speed', trend: 'Climb/descend', squawk: 'Squawk',
+      dist: 'Distance',
+    };
+    return html`
+      <div style="margin-top:6px">
+        <label style="font-size:10px;color:var(--text-dim);display:block;margin-bottom:3px">
+          Label fields
+        </label>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:2px 10px">
+          ${FLIGHT_LABEL_FIELDS.map(k => html`
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:11px;color:var(--text)">
+              <input type="checkbox" .checked=${chosen.has(k)}
+                     @change=${(e: Event) => set(f => {
+                       const next = new Set(chosen);
+                       if ((e.target as HTMLInputElement).checked) next.add(k); else next.delete(k);
+                       const list = FLIGHT_LABEL_FIELDS.filter(x => next.has(x));
+                       f.labelFields = list.length ? [...list] : undefined;
+                     })}>
+              <span style="flex:1">${LABELS[k]}</span>
+            </label>`)}
+        </div>
       </div>`;
   }
 

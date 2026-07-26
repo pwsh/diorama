@@ -191,6 +191,32 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Flight fields, archetype models, beacons & label customization**
+  (2026-07-25, unreleased on main; research
+  `docs/research/flight-fields-models.md` + 2 sequential Opus waves).
+  Wave 1 data: `FlightPoint` gained reg/typeCode/typeDesc/operator/
+  emergency/squawk + interesting/pia/ladd (dbFlags bits 2/4/8);
+  `C*`/`B3` non-aircraft categories filtered (LAX ramp-vehicle bug);
+  `isEmergency` (enum OR squawk 7500/7600/7700); NEW pure
+  `src/aircraft-types.ts` — 8 archetypes, 184-designator
+  `TYPE_ARCHETYPE` (CRJ/ERJ=bizjet geometry, PC-12/King Air low-wing),
+  category fallback ladder; `FlightsConfig.labelFields/beacons/
+  privacyDim`; emergency alert (severity error, no 3-nm gate, prune/cap
+  exempt while active, refreshed in place — live-path emit discipline
+  intact). Wave 2 renderer/UI: 8-way `_buildAircraftModel` at ~2× scale
+  w/ the identifier painted un-mirrored on both fuselage flanks
+  (`_buildFlightIdPlanes`), archetype resolved renderer-side w/
+  in-place rebuild on change; status beacons (emergency red >
+  interesting yellow > military green > LADD white, 1.2 Hz, zero-alloc
+  in `_advanceFlights`) + matching 2D pulse ring; privacy dimming (PIA
+  identity blanked to hex, LADD dimmed but named); labelFields-driven
+  3D plates + 2D text (9 field keys, canonical order); Settings ▸
+  Flight tracking grew the label-field grid + beacon/privacy toggles.
+  Tests: flights 160→310, flights-render 80→220, flights-ui 55→105,
+  alert-center 67/67 green; chunk split intact. Noted follow-up: hoist
+  the mirrored beacon/label-field resolvers (renderer + canvas-render)
+  into `flights.ts`.
+
 - **Docs program + neighborhood draw distance** (2026-07-25; 6 parallel
   agents: guide/captures/2×plans/gallery/draw-distance). Guide 9→11
   pages current through v0.29.1 w/ config steps + 9 committed feature
@@ -211,7 +237,9 @@ instance.
   600→1800), renderer _applyFrustumForRange — stock triple
   10/150000/45000 restores EXACTLY when overlay off (load-bearing:
   banner orbits + 15000:1 depth ratio for outline shells); tests
-  95/95 + 61/61.
+  95/95 + 61/61. Site published to gh-pages 2026-07-25 and verified
+  live (18 plans in the demo manifest, 653 gallery GIFs serving, both
+  new guide chapters + images 200).
 
 - **Flight-poll scene-churn fix** (2026-07-25, user-reported: sky items
   reset every ~5 s). Routine aircraft/ISS polls emitConfig'd → configRev

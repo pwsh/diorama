@@ -25,11 +25,12 @@
          a military dbFlags entry, a string-typed lat, a blank callsign.
        fixtures/adsb/garbage.json — hand-authored malformed corpus.
 
-     Build (flights.ts is genuinely zero-import → plain transpile; sky-astro.ts
-     pulls in sky-catalog.ts → bundle; planner per the config-test recipe, with
-     the in-memory avatar-store swap because IndexedDB does not complete under
-     --virtual-time-budget):
+     Build (flights.ts AND aircraft-types.ts are genuinely zero-import → plain
+     transpile; sky-astro.ts pulls in sky-catalog.ts → bundle; planner per the
+     config-test recipe, with the in-memory avatar-store swap because IndexedDB
+     does not complete under --virtual-time-budget):
        npx esbuild src/flights.ts --format=esm --outfile=<harness>/flights.mod.js
+       npx esbuild src/aircraft-types.ts --format=esm --outfile=<harness>/aircraft-types.mod.js
        npx esbuild src/sky-astro.ts --bundle --format=esm --outfile=<harness>/sky-astro.mod.js
        T=$(mktemp -d); cp -r src/* "$T"/
        cp test-pages/fake-avatar-store.ts "$T"/avatar-store.ts
@@ -38,6 +39,7 @@
 <script type="module">
   const V = '?v=' + Date.now();
   const F = await import('./flights.mod.js' + V);
+  const AT = await import('./aircraft-types.mod.js' + V);
   const SA = await import('./sky-astro.mod.js' + V);
   const { Planner } = await import('./planner.mod.js' + V);
 
@@ -760,7 +762,490 @@
         quiesce(p);
       }
 
+      // (p) EMERGENCY alerts (research §2 / §5.5). The loudest trigger in the
+      // feature: severity 'error', no 3 nm overhead gate, and — unlike every
+      // other flight alert — an ACTIVE emergency must not age out of the 15 min
+      // retention window while the aircraft is still declaring one.
+      {
+        calls.length = 0;
+        handler = () => ring(1);
+        const { p } = await boot(makeStore({
+          weather: WEATHER, flights: { enabled: false, source: 'cloud', iss: false },
+        }));
+        const savedNow = Date.now;
+        let NOW = Date.parse('2026-07-25T12:00:00Z');
+        Date.now = () => NOW;
+        const advMin = m => { NOW += m * 60000; };
+        // Config assigned DIRECTLY (not via setFlights) so no poll timer starts
+        // — _computeFlightAlerts is driven explicitly, the flights-ui-test idiom.
+        p.store.flights = { enabled: true, source: 'cloud', iss: false };
+        const mk = (hex, over) => ({
+          hex, callsign: null, lat: 47.6, lon: -122.3, altFt: 9000, gsKt: null,
+          trackDeg: null, vertRateFpm: null, category: null, seenPosS: 0,
+          military: false, reg: null, typeCode: null, typeDesc: null, operator: null,
+          emergency: null, squawk: null, interesting: false, pia: false, ladd: false,
+          distNm: 12, ...over,
+        });
+        const emergs = () => p.flightAlerts.filter(a => a.id.startsWith('flight:emerg:'));
+        const reset = () => {
+          p.flightAlerts = [];
+          p._flightAlertDismissed = new Set();
+          p._flightAlertAt = new Map();
+          p.householdEvents = [];
+          p.issNow = null;
+        };
+
+        // Squawk 7700, 12 nm out — far outside the 3 nm low-overflight gate.
+        reset();
+        p.flightsNow = [mk('a1b2c3', { callsign: 'SWA1234', squawk: '7700', distNm: 12 })];
+        const chg0 = p._computeFlightAlerts();
+        ok('11p: squawk 7700 raises one emergency alert', emergs().length === 1, `n=${emergs().length}`);
+        ok('11p: emergency id is per-hex', emergs()[0]?.id === 'flight:emerg:a1b2c3', emergs()[0]?.id);
+        ok('11p: emergency severity is error', emergs()[0]?.severity === 'error', emergs()[0]?.severity);
+        ok('11p: emergency source is flight', emergs()[0]?.source === 'flight');
+        ok('11p: emergency is dismissible', emergs()[0]?.dismissible === true);
+        ok('11p: title names the callsign + the squawk',
+          /^EMERGENCY: SWA1234 squawking 7700$/.test(emergs()[0]?.title ?? ''), emergs()[0]?.title);
+        ok('11p: a new emergency reports changed', chg0 === true);
+        ok('11p: emergency ignores the 3 nm overhead gate (12 nm still fires)',
+          emergs().length === 1 && /12\.0 nm/.test(emergs()[0]?.message ?? ''), emergs()[0]?.message);
+
+        // Still declaring 20 minutes later: past FLIGHT_ALERT_TTL_MS (15 min),
+        // and it must NOT be pruned — nor churn the id list (LIVE-path).
+        const created0 = emergs()[0]?.createdAt;
+        advMin(20);
+        const chg1 = p._computeFlightAlerts();
+        ok('11p: an ACTIVE emergency survives the 15 min prune', emergs().length === 1,
+          `n=${emergs().length}`);
+        ok('11p: refreshed in place — createdAt preserved', emergs()[0]?.createdAt === created0,
+          `${created0} → ${emergs()[0]?.createdAt}`);
+        ok('11p: refreshing a persisting emergency reports NO change (no configRev bump)',
+          chg1 === false);
+
+        // The aircraft stops declaring → the notice ages out normally.
+        p.flightsNow = [mk('a1b2c3', { callsign: 'SWA1234', squawk: '1200' })];
+        p._computeFlightAlerts();
+        ok('11p: cleared emergency past the TTL is pruned', emergs().length === 0,
+          `n=${emergs().length}`);
+
+        // The `emergency` enum fires on its own (it is a SUPERSET of the
+        // squawks — lifeguard/minfuel/downed have no code of their own), and a
+        // routine 1200 must never be announced as "squawking 1200".
+        reset();
+        p.flightsNow = [mk('bbb111', { callsign: 'LIFE1', emergency: 'lifeguard', squawk: '1200' })];
+        p._computeFlightAlerts();
+        ok('11p: `emergency` enum fires without an emergency squawk', emergs().length === 1);
+        ok('11p: title reports the enum, not the routine squawk',
+          emergs()[0]?.title === 'EMERGENCY: LIFE1 squawking lifeguard', emergs()[0]?.title);
+
+        // 7600/7500 also fire; a normalized "none" never does.
+        for (const [sq, label] of [['7600', 'nordo'], ['7500', 'unlawful']]) {
+          reset();
+          p.flightsNow = [mk('ccc222', { squawk: sq })];
+          p._computeFlightAlerts();
+          ok(`11p: squawk ${sq} (${label}) fires`, emergs().length === 1);
+        }
+        reset();
+        p.flightsNow = [mk('ddd333', { squawk: '1200', emergency: null })];
+        p._computeFlightAlerts();
+        ok('11p: an ordinary aircraft raises nothing', emergs().length === 0);
+
+        // No callsign → the uppercase hex, like the other triggers.
+        reset();
+        p.flightsNow = [mk('a7d588', { squawk: '7700' })];
+        p._computeFlightAlerts();
+        ok('11p: no callsign → uppercase hex in the title',
+          /^EMERGENCY: A7D588 /.test(emergs()[0]?.title ?? ''), emergs()[0]?.title);
+
+        // Two emergencies → two distinct per-hex alerts.
+        reset();
+        p.flightsNow = [mk('e1e1e1', { squawk: '7700' }), mk('e2e2e2', { emergency: 'downed' })];
+        p._computeFlightAlerts();
+        ok('11p: two emergencies → two distinct alerts', emergs().length === 2,
+          `n=${emergs().length}`);
+
+        // Dismissal: local mute, then a re-arm once the 10 min cooldown passes
+        // (stable per-hex ids would otherwise mute that aircraft forever).
+        reset();
+        p.flightsNow = [mk('f0f0f0', { callsign: 'EMG1', squawk: '7700' })];
+        p._computeFlightAlerts();
+        const target = emergs()[0];
+        p.dismissAlert(target);
+        ok('11p: dismissal removes the emergency', emergs().length === 0);
+        advMin(5);
+        p._computeFlightAlerts();
+        ok('11p: dismissed emergency stays muted inside the cooldown', emergs().length === 0,
+          `n=${emergs().length}`);
+        advMin(6);                                    // 11 min total > 10 min
+        p._computeFlightAlerts();
+        ok('11p: a still-live emergency re-arms past the cooldown', emergs().length === 1,
+          `n=${emergs().length}`);
+        ok('11p: the re-armed alert is freshly stamped',
+          emergs()[0]?.createdAt === new Date(NOW).toISOString(), emergs()[0]?.createdAt);
+
+        // The newest-wins cap must never be the thing that mutes an emergency.
+        reset();
+        p.store.flights = { enabled: true, source: 'cloud', iss: false, alerts: { watch: ['TST'] } };
+        const many = [];
+        for (let i = 0; i < 8; i++) many.push(mk('c' + String(i).padStart(5, '0'), { callsign: 'TST' + i }));
+        many.push(mk('9f9f9f', { callsign: 'MAYDAY1', squawk: '7700' }));
+        p.flightsNow = many;
+        p._computeFlightAlerts();
+        ok('11p: emergency survives the newest-wins cap alongside 8 watch alerts',
+          emergs().length === 1, `alerts=${p.flightAlerts.length} emerg=${emergs().length}`);
+        ok('11p: the cap dropped a WATCH alert instead',
+          p.flightAlerts.filter(a => a.id.startsWith('flight:watch:')).length === 7,
+          `watch=${p.flightAlerts.filter(a => a.id.startsWith('flight:watch:')).length}`);
+
+        // Disabled feature → no emergency alerts at all.
+        reset();
+        p.store.flights = { enabled: false, source: 'cloud', iss: false };
+        p.flightsNow = [mk('aaa999', { squawk: '7700' })];
+        p._computeFlightAlerts();
+        ok('11p: flights disabled → no emergency alert', emergs().length === 0);
+
+        Date.now = savedNow;
+        p.store.flights = { enabled: false, source: 'cloud', iss: false };
+      }
+
+      // (q) labelFields sanitization rides setFlights (the watch-list precedent:
+      // normalize at the STORE boundary, not in the settings UI, so an import or
+      // a hand-edited config lands in the same shape).
+      {
+        calls.length = 0;
+        handler = () => ring(1);
+        const { p, stub } = await boot(makeStore({ weather: WEATHER }));
+        p.setFlights(f => { f.labelFields = ['callsign', 'ALT', ' reg ', 'callsign', 'bogus', 42, 'dist']; });
+        ok('11q: setFlights filters/lowercases/dedupes labelFields',
+          JSON.stringify(p.store.flights.labelFields) === JSON.stringify(['callsign', 'alt', 'reg', 'dist']),
+          JSON.stringify(p.store.flights.labelFields));
+        p.setFlights(f => { f.labelFields = ['nope', 'alsonope']; });
+        ok('11q: an all-unknown list becomes undefined (= default plate)',
+          p.store.flights.labelFields === undefined, String(p.store.flights.labelFields));
+        p.setFlights(f => { f.labelFields = []; });
+        ok('11q: an empty list becomes undefined', p.store.flights.labelFields === undefined);
+        p.setFlights(f => { f.labelFields = 'callsign'; });
+        ok('11q: a non-array becomes undefined', p.store.flights.labelFields === undefined);
+        p.setFlights(f => { f.labelFields = ['type', 'operator', 'speed', 'trend', 'squawk']; });
+        p.setFlights(f => { f.radiusNm = 33; });
+        ok('11q: an unrelated setFlights leaves labelFields intact',
+          JSON.stringify(p.store.flights.labelFields)
+            === JSON.stringify(['type', 'operator', 'speed', 'trend', 'squawk']),
+          JSON.stringify(p.store.flights.labelFields));
+        p.setFlights(f => { f.beacons = false; f.privacyDim = false; });
+        await p.saveConfigNow();
+        const saved = stub.peek('diorama-cfg-default');
+        ok('11q: labelFields + beacons + privacyDim persist through the store',
+          JSON.stringify(saved?.flights?.labelFields) === JSON.stringify(['type', 'operator', 'speed', 'trend', 'squawk'])
+          && saved?.flights?.beacons === false && saved?.flights?.privacyDim === false,
+          JSON.stringify(saved?.flights));
+        quiesce(p);
+      }
+
       globalThis.fetch = realFetch;
+    }
+
+    // ── 9. Registry-enrichment field extraction (research §1.2 / §1.5) ──────
+    // The identity fields the aggregator's OWN database adds on top of the raw
+    // Mode-S broadcast — an aircraft never transmits its tail number or owner
+    // over the air, so all of them are nullable by design.
+    {
+      const cloud = F.normalizeAircraftList(LAX);
+      const raw = LAX.ac;
+      const airborne = raw.filter(a => a.alt_baro !== 'ground');
+      const count = k => cloud.filter(a => a[k] !== null).length;
+
+      ok('12: reg (`r`) extracted for every DB-matched aircraft', count('reg') === 42,
+        `n=${count('reg')} of ${cloud.length}`);
+      ok('12: typeCode (`t`) extracted', count('typeCode') === 40, `n=${count('typeCode')}`);
+      ok('12: typeDesc (`desc`) extracted', count('typeDesc') === 40, `n=${count('typeDesc')}`);
+      ok('12: operator (`ownOp`) extracted', count('operator') === 37, `n=${count('operator')}`);
+      ok('12: squawk extracted', count('squawk') === 42, `n=${count('squawk')}`);
+      ok('12: ~15% of live traffic has NO type designator (§0.6 — the fallback ladder is not an edge case)',
+        cloud.length - count('typeCode') === 4, `missing=${cloud.length - count('typeCode')}`);
+      ok('12: typeCode is uppercased', cloud.every(a => a.typeCode === null || a.typeCode === a.typeCode.toUpperCase()));
+      ok('12: every enrichment field is a trimmed string or null', cloud.every(a =>
+        [a.reg, a.typeCode, a.typeDesc, a.operator, a.squawk].every(
+          v => v === null || (typeof v === 'string' && v === v.trim() && v !== ''))));
+      ok('12: fixture emergency is always "none" → normalized to null',
+        cloud.every(a => a.emergency === null)
+        && airborne.filter(a => a.emergency === 'none').length === 42,
+        `nonNull=${cloud.filter(a => a.emergency !== null).length}`);
+      const b752 = cloud.find(a => a.typeCode === 'B752');
+      ok('12: a known entry carries the full identity set',
+        !!b752 && b752.reg !== null && b752.typeDesc !== null, JSON.stringify(
+          b752 && { r: b752.reg, t: b752.typeCode, d: b752.typeDesc, o: b752.operator }));
+
+      // dbFlags bit 8 (LADD) — the only bit this real capture exercises.
+      const laddRaw = raw.filter(a => a.dbFlags === 8);
+      const ladd = cloud.filter(a => a.ladd);
+      ok('12: the fixture carries 4 LADD-flagged aircraft', laddRaw.length === 4, `n=${laddRaw.length}`);
+      ok('12: 2 of them are airborne → 2 survive the ground filter', ladd.length === 2,
+        `n=${ladd.length} (${ladd.map(a => a.hex).join(',')})`);
+      ok('12: LADD entries are the expected hexes',
+        ladd.map(a => a.hex).sort().join(',') === 'a7d588,a8bb3b', ladd.map(a => a.hex).join(','));
+      ok('12: LADD does NOT set military/pia/interesting',
+        ladd.every(a => !a.military && !a.pia && !a.interesting));
+      ok('12: §0.2 — the source keeps a LADD aircraft\'s registration anyway',
+        ladd.every(a => a.reg !== null && a.typeCode !== null),
+        ladd.map(a => `${a.reg}/${a.typeCode}`).join(' '));
+      ok('12: no military/PIA/interesting anywhere in this capture',
+        cloud.every(a => !a.military && !a.pia && !a.interesting));
+    }
+
+    // ── 10. Non-aircraft categories are filtered (research §0.8 / §3.6.2) ───
+    // `C*` = surface vehicles + fixed obstacles, `B3` = parachutist. The real
+    // fixture's three `C2` LAX ramp vehicles were previously rendered as toy
+    // jets by the category-only model pick.
+    {
+      const cloud = F.normalizeAircraftList(LAX);
+      const hexes = new Set(cloud.map(a => a.hex));
+      const c2 = LAX.ac.filter(a => (a.category || '').startsWith('C'));
+      ok('13: the fixture contains 3 C-category ground vehicles', c2.length === 3,
+        c2.map(a => a.hex).join(','));
+      ok('13: none of them survives normalization',
+        c2.every(a => !hexes.has(a.hex.toLowerCase())), c2.map(a => a.hex).join(','));
+      ok('13: (they are also `alt_baro:"ground"` — both filters agree here)',
+        c2.every(a => a.alt_baro === 'ground'));
+
+      // Synthetic AIRBORNE non-aircraft: the ground sentinel cannot save us.
+      const mk = (hex, category) => ({
+        hex, flight: 'X', lat: 47.6, lon: -122.3, alt_baro: 500, gs: 20, category,
+      });
+      const kinds = ['C0', 'C1', 'C2', 'C3', 'C4', 'C5', 'B3'];
+      const dropped = F.normalizeAircraftList(kinds.map((c, i) => mk('d' + i, c)));
+      ok('13: airborne C0–C5 + B3 all dropped', dropped.length === 0, `n=${dropped.length}`);
+      const kept = F.normalizeAircraftList([
+        mk('k0', 'B1'), mk('k1', 'B2'), mk('k2', 'B4'), mk('k3', 'B6'), mk('k4', 'A1'),
+      ]);
+      ok('13: real aircraft categories (B1/B2/B4/B6/A1) are NOT dropped', kept.length === 5,
+        `n=${kept.length}`);
+      ok('13: lowercase category is filtered too (defensive)',
+        F.normalizeAircraftList([mk('lc', 'c2')]).length === 0);
+      ok('13: an absent category is never mistaken for a ground vehicle',
+        F.normalizeAircraftList([{ hex: 'nc', lat: 47.6, lon: -122.3, alt_baro: 4000 }]).length === 1);
+    }
+
+    // ── 11. dbFlags bit matrix (research §1.3) ──────────────────────────────
+    {
+      const mk = dbFlags => F.normalizeAircraftList([{
+        hex: 'abc123', lat: 47.6, lon: -122.3, alt_baro: 5000, category: 'A3', dbFlags,
+      }])[0];
+      const bits = a => [a.military, a.interesting, a.pia, a.ladd];
+      ok('14: dbFlags 0 → no bits', JSON.stringify(bits(mk(0))) === JSON.stringify([false, false, false, false]));
+      ok('14: dbFlags 1 → military', JSON.stringify(bits(mk(1))) === JSON.stringify([true, false, false, false]));
+      ok('14: dbFlags 2 → interesting', JSON.stringify(bits(mk(2))) === JSON.stringify([false, true, false, false]));
+      ok('14: dbFlags 4 → PIA', JSON.stringify(bits(mk(4))) === JSON.stringify([false, false, true, false]));
+      ok('14: dbFlags 8 → LADD', JSON.stringify(bits(mk(8))) === JSON.stringify([false, false, false, true]));
+      ok('14: dbFlags 3 → military + interesting',
+        JSON.stringify(bits(mk(3))) === JSON.stringify([true, true, false, false]));
+      ok('14: dbFlags 12 → PIA + LADD',
+        JSON.stringify(bits(mk(12))) === JSON.stringify([false, false, true, true]));
+      ok('14: dbFlags 15 → all four',
+        JSON.stringify(bits(mk(15))) === JSON.stringify([true, true, true, true]));
+      ok('14: absent dbFlags → all false',
+        JSON.stringify(bits(mk(undefined))) === JSON.stringify([false, false, false, false]));
+      ok('14: a non-numeric dbFlags is ignored, not crashed on',
+        JSON.stringify(bits(mk('8'))) === JSON.stringify([false, false, false, false]));
+      ok('14: bit 1 is still the shipped `military` field', mk(9).military === true && mk(9).ladd === true);
+    }
+
+    // ── 12. isEmergency / emergencySquawk (research §1.4) ───────────────────
+    {
+      const E = (emergency, squawk) => F.isEmergency({ emergency, squawk });
+      ok('15: emergency "general" → true', E('general', '1200') === true);
+      ok('15: emergency "lifeguard" (no squawk equivalent) → true', E('lifeguard', null) === true);
+      ok('15: emergency "minfuel" → true', E('minfuel', null) === true);
+      ok('15: emergency "downed" → true', E('downed', null) === true);
+      ok('15: emergency "none" → false', E('none', '1200') === false);
+      ok('15: emergency "NONE" (case) → false', E('NONE', null) === false);
+      ok('15: emergency null → false', E(null, '1200') === false);
+      ok('15: emergency "" → false', E('', null) === false);
+      ok('15: squawk 7700 → true', E(null, '7700') === true);
+      ok('15: squawk 7600 → true', E(null, '7600') === true);
+      ok('15: squawk 7500 → true', E(null, '7500') === true);
+      ok('15: squawk 1200 → false', E(null, '1200') === false);
+      ok('15: squawk 7000 (not one of the three) → false', E(null, '7000') === false);
+      ok('15: no fields at all → false', F.isEmergency({}) === false);
+      ok('15: emergencySquawk returns only the three codes',
+        F.emergencySquawk({ squawk: '7700' }) === '7700'
+        && F.emergencySquawk({ squawk: '1200' }) === null
+        && F.emergencySquawk({}) === null);
+      ok('15: EMERGENCY_SQUAWKS is the documented set',
+        F.EMERGENCY_SQUAWKS.join(',') === '7500,7600,7700', F.EMERGENCY_SQUAWKS.join(','));
+      // Through the normalizer: "none" collapses, a real value survives, and a
+      // numeric squawk from a proxy still resolves.
+      const norm = q => F.normalizeAircraftList([{
+        hex: 'e1', lat: 47.6, lon: -122.3, alt_baro: 5000, category: 'A3', ...q,
+      }])[0];
+      ok('15: normalizer collapses "none" → null', norm({ emergency: 'none' }).emergency === null);
+      ok('15: normalizer keeps a real emergency', norm({ emergency: 'nordo' }).emergency === 'nordo');
+      ok('15: a normalized emergency entry is an emergency', F.isEmergency(norm({ emergency: 'nordo' })) === true);
+      ok('15: a numeric squawk normalizes to a string and still fires',
+        norm({ squawk: 7700 }).squawk === '7700' && F.isEmergency(norm({ squawk: 7700 })) === true);
+    }
+
+    // ── 13. Archetype table — every §3.5 row (golden matrix) ────────────────
+    // EXPECTED is transcribed independently from docs/research/flight-fields-
+    // models.md §3.5, then cross-checked BOTH ways against TYPE_ARCHETYPE so a
+    // typo on either side fails.
+    {
+      const EXPECTED = {
+        'ga-high': ['C172', 'C152', 'C150', 'C182', 'C170', 'C180', 'C185', 'C206', 'C207',
+          'C208', 'C210', 'P210', 'C72R', 'C177', 'PA18', 'A188', 'MAUL', 'M7', 'KODI'],
+        'ga-low': ['P28A', 'P28B', 'P28R', 'PA28', 'P46T', 'M500', 'M600', 'SR20', 'SR22',
+          'BE33', 'BE35', 'BE36', 'M20P', 'M20T', 'DA40', 'PC12', 'TBM7', 'TBM8', 'TBM9',
+          'RV3', 'RV4', 'RV6', 'RV7', 'RV8', 'RV9', 'RV10', 'RV12', 'RV14'],
+        'twin-prop': ['PA34', 'BE58', 'BE55', 'DA42', 'BE9L', 'BE20', 'B350', 'SF34', 'SW4',
+          'PAY2', 'PAY3', 'C310', 'C340', 'C414', 'C421', 'BE76'],
+        'turboprop': ['AT43', 'AT44', 'AT45', 'AT72', 'AT75', 'AT76', 'DH8A', 'DH8B', 'DH8C',
+          'DH8D', 'SB20', 'C130', 'C30J', 'A400'],
+        'narrowbody': ['A318', 'A319', 'A320', 'A321', 'A20N', 'A21N', 'B737', 'B738', 'B739',
+          'B37M', 'B38M', 'B39M', 'BCS1', 'BCS3', 'B752', 'B753', 'E170', 'E175', 'E190',
+          'E195', 'E75L', 'E75S', 'E290', 'E295'],
+        'widebody': ['A332', 'A333', 'A339', 'A343', 'A345', 'A346', 'A359', 'A35K', 'A388',
+          'B744', 'B748', 'B763', 'B764', 'B772', 'B77L', 'B77W', 'B788', 'B789', 'B78X',
+          'C17', 'C5M', 'K35R'],
+        'bizjet': ['CRJ1', 'CRJ2', 'CRJ7', 'CRJ9', 'E135', 'E145', 'E35L', 'C25A', 'C25B',
+          'C525', 'C56X', 'C680', 'C68A', 'C700', 'CL30', 'CL35', 'CL60', 'GLF4', 'GLF5',
+          'GLF6', 'G280', 'GA5C', 'GA6C', 'LJ35', 'LJ45', 'LJ60', 'F2TH', 'FA7X', 'FA8X',
+          'H25B', 'E50P', 'E55P', 'GL5T', 'GL7T', 'F15', 'F16', 'F18', 'F35'],
+        'heli': ['R22', 'R44', 'R66', 'B06', 'B407', 'B429', 'H500', 'EC30', 'EC35', 'EC45',
+          'EC75', 'H145', 'H175', 'AS50', 'AS55', 'AS65', 'A139', 'S76', 'S92', 'UH60',
+          'H60', 'MH60', 'CH47'],
+      };
+      let expectedCount = 0;
+      for (const [want, list] of Object.entries(EXPECTED)) {
+        expectedCount += list.length;
+        // Resolved with a DELIBERATELY WRONG category so only the table can be
+        // answering (A5 would otherwise say widebody for everything).
+        const bad = list.filter(t => AT.aircraftArchetype(t, 'A5') !== want);
+        ok(`16: every ${want} designator resolves (${list.length} rows)`, bad.length === 0,
+          bad.length ? `mismatched: ${bad.join(',')}` : '');
+        const badNoCat = list.filter(t => AT.aircraftArchetype(t, null) !== want);
+        ok(`16: …and with no category at all (${want})`, badNoCat.length === 0,
+          badNoCat.length ? `mismatched: ${badNoCat.join(',')}` : '');
+      }
+      const tableKeys = Object.keys(AT.TYPE_ARCHETYPE);
+      const expectedKeys = Object.values(EXPECTED).flat();
+      ok('16: TYPE_ARCHETYPE has no designator the doc does not list',
+        tableKeys.filter(k => !expectedKeys.includes(k)).length === 0,
+        tableKeys.filter(k => !expectedKeys.includes(k)).join(','));
+      ok('16: the doc lists no designator the table is missing',
+        expectedKeys.filter(k => !tableKeys.includes(k)).length === 0,
+        expectedKeys.filter(k => !tableKeys.includes(k)).join(','));
+      ok('16: table size matches the transcription', tableKeys.length === expectedCount,
+        `table=${tableKeys.length} doc=${expectedCount}`);
+      ok('16: no duplicate designators in the transcription',
+        new Set(expectedKeys).size === expectedKeys.length);
+      ok('16: every value is one of the 8 archetypes', tableKeys.every(k =>
+        ['ga-high', 'ga-low', 'twin-prop', 'turboprop', 'narrowbody', 'widebody', 'bizjet', 'heli']
+          .includes(AT.TYPE_ARCHETYPE[k])));
+
+      // Spotlights — the calls the research pass singled out.
+      ok('16: §3.3 CRJ family is BIZJET geometry, not narrowbody',
+        ['CRJ1', 'CRJ2', 'CRJ7', 'CRJ9'].every(t => AT.aircraftArchetype(t, 'A3') === 'bizjet'));
+      ok('16: §3.3 old ERJ135/145 are bizjet too',
+        ['E135', 'E145', 'E35L'].every(t => AT.aircraftArchetype(t, 'A3') === 'bizjet'));
+      ok('16: §3.3 the NEWER E-Jets are underwing narrowbodies',
+        ['E170', 'E175', 'E190', 'E195', 'E75L'].every(t => AT.aircraftArchetype(t, 'A3') === 'narrowbody'));
+      ok('16: §3.4 PC-12 is LOW wing (not a Caravan)', AT.aircraftArchetype('PC12', 'A1') === 'ga-low');
+      ok('16: §3.4 C208 Caravan is high wing', AT.aircraftArchetype('C208', 'A1') === 'ga-high');
+      ok('16: §3.4 King Air is a low-wing twin, not a regional turboprop',
+        ['BE20', 'B350', 'BE9L'].every(t => AT.aircraftArchetype(t, 'A2') === 'twin-prop'));
+      ok('16: §3.4 ATR/Dash-8 are the high-wing T-tail turboprops',
+        ['AT72', 'DH8D'].every(t => AT.aircraftArchetype(t, 'A2') === 'turboprop'));
+      ok('16: §0.7 the 757 stays NARROWBODY even self-reporting A4',
+        AT.aircraftArchetype('B752', 'A4') === 'narrowbody'
+        && AT.aircraftArchetype('B753', 'A4') === 'narrowbody');
+      ok('16: §3.4 a big bizjet reporting A3 is still a bizjet',
+        AT.aircraftArchetype('GL5T', 'A3') === 'bizjet');
+      ok('16: §3.4 C-130 is turboprop, C-17 is widebody (the military split)',
+        AT.aircraftArchetype('C130', null) === 'turboprop' && AT.aircraftArchetype('C17', null) === 'widebody');
+      ok('16: type designator OUTRANKS the category ladder',
+        AT.aircraftArchetype('R44', 'A3') === 'heli' && AT.aircraftArchetype('A388', 'A1') === 'widebody');
+      ok('16: lookup is case/whitespace tolerant',
+        AT.aircraftArchetype(' c172 ', null) === 'ga-high' && AT.aircraftArchetype('b78x', null) === 'widebody');
+      ok('16: an open-ended RV designator resolves by prefix',
+        AT.aircraftArchetype('RV7A', null) === 'ga-low' && AT.aircraftArchetype('RV6A', 'A1') === 'ga-low');
+
+      // Every type designator the real fixture contains resolves off the table
+      // (no fixture aircraft falls through to the category ladder).
+      const cloud = F.normalizeAircraftList(LAX);
+      const fixtureTypes = [...new Set(cloud.map(a => a.typeCode).filter(Boolean))];
+      const unmapped = fixtureTypes.filter(t => !AT.TYPE_ARCHETYPE[t]);
+      ok('16: every type designator in the real capture is in the table', unmapped.length === 0,
+        `unmapped: ${unmapped.join(',')} of ${fixtureTypes.length}`);
+    }
+
+    // ── 14. Category fallback ladder (§3.6) + defensive behavior ────────────
+    {
+      const A = c => AT.aircraftArchetype(null, c);
+      ok('17: A7 → heli', A('A7') === 'heli');
+      ok('17: A5 → widebody', A('A5') === 'widebody');
+      ok('17: A4 → narrowbody, NEVER widebody', A('A4') === 'narrowbody');
+      ok('17: A3 → narrowbody (the statistical default)', A('A3') === 'narrowbody');
+      ok('17: A2 → twin-prop', A('A2') === 'twin-prop');
+      ok('17: A1 → ga-high (the Cessna plurality)', A('A1') === 'ga-high');
+      ok('17: A6 → bizjet (nearest small-fast-jet shape)', A('A6') === 'bizjet');
+      ok('17: A0 → narrowbody default', A('A0') === 'narrowbody');
+      ok('17: no category (TIS-B ghost) → narrowbody', A(null) === 'narrowbody' && A('') === 'narrowbody');
+      ok('17: an unknown type falls THROUGH to the ladder',
+        AT.aircraftArchetype('ZZZZ', 'A7') === 'heli' && AT.aircraftArchetype('ZZZZ', 'A1') === 'ga-high');
+      ok('17: C*/B3 defended (callers pre-filter, this never throws)',
+        ['C1', 'C2', 'C5', 'B3'].every(c => A(c) === 'narrowbody'));
+      ok('17: lowercase category resolves', A('a7') === 'heli' && A('a5') === 'widebody');
+      let threw = false, allValid = true;
+      const ARCH = ['ga-high', 'ga-low', 'twin-prop', 'turboprop', 'narrowbody', 'widebody', 'bizjet', 'heli'];
+      for (const t of [undefined, null, 42, {}, [], '', '  ', 'A'.repeat(300), '💥']) {
+        for (const c of [undefined, null, 7, {}, '', 'ZZ', '💥']) {
+          try { if (!ARCH.includes(AT.aircraftArchetype(t, c))) allValid = false; }
+          catch { threw = true; }
+        }
+      }
+      ok('17: garbage inputs never throw', !threw);
+      ok('17: garbage inputs always return a real archetype', allValid);
+    }
+
+    // ── 15. Legacy 3-way wrapper (stale-chunk safety) ───────────────────────
+    {
+      ok('18: legacyModelKind maps heli → heli', AT.legacyModelKind('heli') === 'heli');
+      ok('18: all four prop-ish archetypes → prop',
+        ['ga-high', 'ga-low', 'twin-prop', 'turboprop'].every(a => AT.legacyModelKind(a) === 'prop'));
+      ok('18: all three jet archetypes → jet',
+        ['narrowbody', 'widebody', 'bizjet'].every(a => AT.legacyModelKind(a) === 'jet'));
+      // The shipped renderer still calls aircraftModelKind(fp) — it must keep
+      // agreeing with the new ladder on the category-only path it can see.
+      const cats = ['A0', 'A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7', null, 'D7'];
+      const agree = cats.every(c =>
+        F.aircraftModelKind({ category: c }) === AT.legacyModelKind(AT.aircraftArchetype(null, c)));
+      ok('18: the legacy wrapper agrees with the archetype ladder for every category', agree,
+        cats.map(c => `${c}:${F.aircraftModelKind({ category: c })}`).join(' '));
+      ok('18: legacy wrapper unchanged for the real fixture',
+        F.normalizeAircraftList(LAX).every(a =>
+          ['prop', 'jet', 'heli'].includes(F.aircraftModelKind(a))));
+    }
+
+    // ── 16. Label-field sanitizer (pure, §4.1) ──────────────────────────────
+    {
+      const S = F.sanitizeLabelFields;
+      ok('19: FLIGHT_LABEL_FIELDS is the documented key set',
+        F.FLIGHT_LABEL_FIELDS.join(',') === 'callsign,reg,type,operator,alt,speed,trend,squawk,dist',
+        F.FLIGHT_LABEL_FIELDS.join(','));
+      ok('19: the default plate is callsign + alt',
+        F.FLIGHT_LABEL_FIELDS_DEFAULT.join(',') === 'callsign,alt');
+      ok('19: known keys survive in the caller\'s order',
+        JSON.stringify(S(['alt', 'callsign'])) === JSON.stringify(['alt', 'callsign']));
+      ok('19: unknown keys dropped', JSON.stringify(S(['callsign', 'nope'])) === JSON.stringify(['callsign']));
+      ok('19: case + whitespace normalized', JSON.stringify(S([' REG '])) === JSON.stringify(['reg']));
+      ok('19: duplicates dropped', JSON.stringify(S(['alt', 'alt', 'ALT'])) === JSON.stringify(['alt']));
+      ok('19: non-string entries ignored', JSON.stringify(S([42, null, {}, 'dist'])) === JSON.stringify(['dist']));
+      ok('19: empty / all-unknown → undefined',
+        S([]) === undefined && S(['zzz']) === undefined);
+      ok('19: non-array → undefined',
+        S(undefined) === undefined && S(null) === undefined && S('callsign') === undefined && S(7) === undefined);
+      ok('19: every documented key round-trips',
+        JSON.stringify(S([...F.FLIGHT_LABEL_FIELDS])) === JSON.stringify([...F.FLIGHT_LABEL_FIELDS]));
     }
   } catch (err) {
     ok('HARNESS threw', false, String(err && err.stack || err));

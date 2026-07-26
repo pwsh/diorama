@@ -40,7 +40,10 @@ import { CONDITION_GLYPH } from './weather.js';
 import { ALERT_BEACON_DEFAULTS, alertBeaconState, alertBeaconColor, alertBeaconAlarming, isAlertDomain } from './alerts.js';
 import { flagDominant } from './flags.js';
 import { vacMapAffine, vacSegColor, type ParsedVacMap, type VacSegment } from './valetudo-map.js';
-import { flightDisplayPos } from './flights.js';
+import {
+  flightDisplayPos, isEmergency, sanitizeLabelFields,
+  FLIGHT_LABEL_FIELDS_DEFAULT, type FlightPoint,
+} from './flights.js';
 import type { Planner } from './planner.js';
 import type { Vec2, LightIconKind, Furniture, ObjectRecipe, RecipePrimitive, HassState } from './types.js';
 
@@ -338,6 +341,69 @@ export function drawAll(ctx: CanvasRenderingContext2D, p: Planner, view: View,
 // uses, so both views place a given aircraft on the same compressed bearing/
 // radius; the shell is anchored on the HOME POINT (the geo fit's plan origin,
 // else the floor centre), not on the floor rect.
+// ── Flight status beacon (research §2 / §4.2) ────────────────────────────────
+// EXACTLY ONE beacon per aircraft, highest priority wins. Deliberately mirrors
+// three-renderer's _flightBeaconColor (~6 lines each) rather than importing it —
+// canvas-render must never reach into the lazy three.js chunk. Keep the two in
+// step; a shared home in flights.ts is the natural hoist.
+export const FLIGHT_BEACON_COLORS = {
+  emergency: '#ff2a1a',
+  interesting: '#ffd400',
+  military: '#2ee56a',
+  ladd: '#f2f6fb',
+} as const;
+
+export function flightBeaconColor(fp: FlightPoint, on: boolean): string | null {
+  if (!on) return null;
+  if (isEmergency(fp)) return FLIGHT_BEACON_COLORS.emergency;
+  if (fp.interesting) return FLIGHT_BEACON_COLORS.interesting;
+  if (fp.military) return FLIGHT_BEACON_COLORS.military;
+  if (fp.ladd) return FLIGHT_BEACON_COLORS.ladd;    // dimmed, but still beacons
+  return null;
+}
+
+// One label field's text. Mirrors three-renderer's _flightFieldText (same
+// buckets, same fallbacks) so 2D and 3D read identically.
+export function flightFieldText(field: string, fp: FlightPoint,
+                                ident: string, suppress: boolean): string {
+  switch (field) {
+    case 'callsign': return ident;
+    case 'reg':      return suppress ? '' : (fp.reg ?? '');
+    case 'type':     return suppress ? '' : (fp.typeCode ?? '');
+    case 'operator': return suppress || !fp.operator ? '' : fp.operator.slice(0, 22);
+    case 'alt':      return `${(Math.round(fp.altFt / 100) * 100).toLocaleString('en-US')} ft`;
+    case 'speed':    return fp.gsKt == null ? '' : `${Math.round(fp.gsKt / 10) * 10} kt`;
+    case 'trend': {
+      const v = fp.vertRateFpm ?? 0;
+      return v >= 300 ? '↑ climb' : v <= -300 ? '↓ descend' : '';
+    }
+    case 'squawk':   return fp.squawk ? `sq ${fp.squawk}` : '';
+    case 'dist':     return fp.distNm == null ? ''
+      : `${(Math.round(fp.distNm * 2) / 2).toFixed(1)} nm`;
+    default:         return '';
+  }
+}
+
+// The 2D label's two lines, from the user's labelFields (absent = the shipped
+// callsign + altitude pair). PIA-suppressed aircraft show only their hex.
+export function flightLabelLines(
+  fp: FlightPoint, fields: string[], privacyDim: boolean,
+): { top: string; sub: string } {
+  const suppress = privacyDim && fp.pia === true;
+  const dimmed = privacyDim && (fp.pia === true || fp.ladd === true);
+  const cs = (fp.callsign ?? '').trim();
+  const reg = (fp.reg ?? '').trim();
+  const ident = (dimmed ? '🔒 ' : '')
+    + (suppress ? fp.hex.toUpperCase() : (cs || reg || fp.hex.toUpperCase()));
+  const parts: string[] = [];
+  for (const f of fields) {
+    const t = flightFieldText(f, fp, ident, suppress);
+    if (t) parts.push(t);
+  }
+  if (!parts.length) parts.push(ident);
+  return { top: parts[0], sub: parts.slice(1).join(' · ') };
+}
+
 function drawFlights(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
   const cfg = p.store.flights;
   if (!cfg?.enabled) return;
@@ -353,8 +419,15 @@ function drawFlights(ctx: CanvasRenderingContext2D, p: Planner, view: View): voi
   const ay = calibrated ? fit!.transform.ty : f.d / 2;
   const radiusNm = cfg.radiusNm ?? 30;
   const showLabels = cfg.showLabels !== false;
+  const fields = sanitizeLabelFields(cfg.labelFields) ?? FLIGHT_LABEL_FIELDS_DEFAULT;
+  const beaconsOn = cfg.beacons !== false;
+  const privacyDim = cfg.privacyDim !== false;
   const dpr = window.devicePixelRatio || 1;
   const R = 9 * dpr;
+  // Beacon flash + the appliance-LED idiom: the 2D RAF redraws every frame, so
+  // a clock-driven alpha is the cheapest possible pulse (no per-aircraft state).
+  const beat = (Math.sin(performance.now() / 1000 * 1.2 * Math.PI * 2) + 1) / 2;
+  const beaconAlpha = 0.18 + 0.82 * beat * beat * beat;
   ctx.save();
   for (const fp of list) {
     const d = flightDisplayPos(fp, origin.lat, origin.lon, theta, radiusNm);
@@ -368,9 +441,13 @@ function drawFlights(ctx: CanvasRenderingContext2D, p: Planner, view: View): voi
       const c = Math.cos(theta), s = Math.sin(theta);
       a = Math.atan2(c * e - s * n, s * e + c * n);
     }
+    // PIA/LADD courtesy dimming (research §4.2) — the glyph AND its text fade;
+    // the status beacon deliberately does NOT (a LADD aircraft still beacons).
+    const dim = privacyDim && (fp.pia === true || fp.ladd === true);
     ctx.save();
     ctx.translate(pt.x, pt.y);
     ctx.rotate(a);
+    ctx.globalAlpha = dim ? 0.45 : 1;
     ctx.beginPath();
     ctx.moveTo(0, -R);                       // nose
     ctx.lineTo(R * 0.62, R * 0.58);          // right tail
@@ -383,16 +460,33 @@ function drawFlights(ctx: CanvasRenderingContext2D, p: Planner, view: View): voi
     ctx.strokeStyle = 'rgba(15,23,32,0.7)';
     ctx.stroke();
     ctx.restore();
+    // Status beacon: a pulsing ring around the dart, in the priority color.
+    const bc = flightBeaconColor(fp, beaconsOn);
+    if (bc) {
+      ctx.save();
+      ctx.globalAlpha = beaconAlpha;
+      ctx.beginPath();
+      ctx.arc(pt.x, pt.y, R * 1.5, 0, Math.PI * 2);
+      ctx.lineWidth = 2 * dpr;
+      ctx.strokeStyle = bc;
+      ctx.stroke();
+      ctx.restore();
+    }
     if (showLabels) {
+      const { top, sub } = flightLabelLines(fp, fields, privacyDim);
+      ctx.save();
+      ctx.globalAlpha = dim ? 0.5 : 1;
       ctx.textAlign = 'left';
       ctx.textBaseline = 'middle';
       ctx.font = `${10 * dpr}px sans-serif`;
       ctx.fillStyle = 'rgba(203,213,225,0.85)';
-      ctx.fillText(fp.callsign ?? fp.hex.toUpperCase(), pt.x + R + 3 * dpr, pt.y - 3 * dpr);
-      ctx.font = `${9 * dpr}px sans-serif`;
-      ctx.fillStyle = 'rgba(148,163,184,0.7)';
-      ctx.fillText(`${Math.round(fp.altFt).toLocaleString('en-US')} ft`,
-                   pt.x + R + 3 * dpr, pt.y + 8 * dpr);
+      ctx.fillText(top, pt.x + R + 3 * dpr, pt.y - 3 * dpr);
+      if (sub) {
+        ctx.font = `${9 * dpr}px sans-serif`;
+        ctx.fillStyle = 'rgba(148,163,184,0.7)';
+        ctx.fillText(sub, pt.x + R + 3 * dpr, pt.y + 8 * dpr);
+      }
+      ctx.restore();
     }
   }
   ctx.restore();

@@ -281,7 +281,8 @@ If you add a renderer input (new prop, new entity dependency), **add it to the c
 
 ### Flight & satellite tracking (roadmap P4)
 `Store.flights?: FlightsConfig` (opt-in `enabled`, in `_normalizeStore`'s field list; research
-`docs/research/flight-tracking.md` — live-curl-verified source landscape): live ADS-B aircraft +
+`docs/research/flight-tracking.md` — live-curl-verified source landscape — plus
+`docs/research/flight-fields-models.md` for the field/archetype enhancement): live ADS-B aircraft +
 the ISS rendered in the 3D sky. **Sources**: `cloud` (default — **airplanes.live**, the ONLY
 CORS-open keyless ADS-B API; adsb.lol/adsb.fi send no CORS header, OpenSky is CORS-locked to its
 own origin AND ToS-forbidden — never add it), `local` (the user's receiver `aircraft.json` URL —
@@ -290,13 +291,24 @@ block shows a LIVE mixed-content warning when an https panel binds an http URL),
 rest-sensor proxy — attributes carry an aircraft array under `aircraft`/`ac`/`flights`; the bound
 id is config-path in `_isSlowEntity`). **Pure data layer** `src/flights.ts` (ZERO-import,
 importable by BOTH the app graph and the renderer chunk — the avatars.ts precedent):
-`FlightPoint`, `normalizeAircraftList` (mqtt-ws discipline — `{aircraft}`/`{ac}`/bare-array +
-fr24 aliases, no-position + `alt_baro === 'ground'` filtered, never throws), `aircraftModelKind`
-(`A7`→heli, `A1|A2`→prop, else jet), `MAX_AIRCRAFT` 50 nearest-first, and the **display-shell
-compression** (deliberately NOT to scale — the neighborhood honesty precedent): `compressRadiusMm`
+`FlightPoint` (incl. `reg`/`typeCode` uppercased/`typeDesc`/`operator`/`emergency` (`"none"`→null)/
+`squawk` + `military`/`interesting`/`pia`/`ladd` from the `dbFlags` bits 1/2/4/8),
+`normalizeAircraftList` (mqtt-ws discipline — `{aircraft}`/`{ac}`/bare-array +
+fr24 aliases, no-position + `alt_baro === 'ground'` filtered, **`C*`/`B3` non-aircraft categories
+dropped** (ground vehicles/obstructions — the ground sentinel can't catch airborne-flagged ones),
+never throws), `isEmergency` (enum non-null OR squawk 7500/7600/7700), `FLIGHT_LABEL_FIELDS` +
+`sanitizeLabelFields` (keys `callsign|reg|type|operator|alt|speed|trend|squawk|dist`, default
+`['callsign','alt']`), `aircraftModelKind` (legacy 3-way — provably `legacyModelKind(aircraftArchetype(null, cat))`),
+`MAX_AIRCRAFT` 50 nearest-first, and the **display-shell compression** (deliberately NOT to scale — the neighborhood honesty precedent): `compressRadiusMm`
 (asymptotic `rMax·d/(d+K)`, K = max(4, radius/4) nm, rMax 24 000 mm inside the 30 000 sky dome) +
 `compressAltitudeMm` (log 2 500–22 000 mm band over 0–45 000 ft) + `flightBearingDistance`/
-`flightDisplayPos` (plan-frame mm relative to the HOME anchor). `src/adsb-sources.ts` is the ONLY
+`flightDisplayPos` (plan-frame mm relative to the HOME anchor). **`src/aircraft-types.ts`** (pure,
+zero-import, lands only in the RENDERER chunk): `AircraftArchetype` (8: `ga-high`/`ga-low`/
+`twin-prop`/`turboprop`/`narrowbody`/`widebody`/`bizjet`/`heli`), `TYPE_ARCHETYPE` (184 ICAO type
+designators — CRJ/ERJ135-145 are BIZJET geometry (rear pods + T-tail), E-Jets narrowbody, PC-12/
+King Air low-wing), `aircraftArchetype(typeCode, category)` (table first, then the category
+ladder A7→heli/A5→widebody/A4|A3→narrowbody/A2→twin-prop/A1→ga-high/A6→bizjet/none→narrowbody;
+never throws), `legacyModelKind`. `src/adsb-sources.ts` is the ONLY
 fetch site (weather.ts isolation; wheretheiss.at velocity arrives km/h → normalized km/s).
 `satAltAz(obsLat, obsLon, satLat, satLon, altKm)` in sky-astro.ts (spherical-earth ECEF→ENU, az
 CW-from-north matching `raDecToAltAz`). **NOTE: planner imports `satAltAz`, which moved sky-astro
@@ -322,10 +334,27 @@ anchor's scene coords (anchor = geo `tx/ty` when fit exists, else floor centre; 
 `(−planX, dispY, +planY)`), **NOT in `clearTransientGroups`** (home-relative, persists across
 floor switches like `_skyGroup`), in `destroy()`, `layers.flights` via setLayerVisibility.
 Persistent `_flightRigs` keyed by ICAO hex (humanoid idiom — mutate in place): `_buildAircraftModel`
-prop/jet/heli via `_mat()` (military `dbFlags` bit 1 → olive tint); prop + callsign tows a REAL
-banner (`_buildBanner` + `_makeBgTextTexture('banner')`), everything else gets a camera-facing
-sprite label — callsign + **real altitude ft** (honest where the shell is not); labels repaint
-only on text change, per-rig CanvasTextures freed on rig dispose. `_advanceFlights(dt)` (from
+is **8-way archetype-driven** (the RENDERER resolves `aircraftArchetype(fp.typeCode, fp.category)` —
+rebuild-on-change lives in one place; `_flightArchetypeMetrics` is the single source of truth for
+fuselage dims + attachment points; military → olive tint), ~2× the original scale with the
+identifier (callsign else reg else hex) painted on BOTH fuselage flanks via the two-FrontSide-plane
+technique (`_buildFlightIdPlanes`, un-mirrored glyphs, one shared map, dedup-freed); an archetype/
+military/privacy change REBUILDS that hex's rig in place without losing motion state. Piston
+archetypes (ga-high/ga-low) + callsign tow the REAL banner (`_buildBanner` +
+`_makeBgTextTexture('banner')`), everything else gets a camera-facing sprite label plate rendering
+`sanitizeLabelFields(flights.labelFields)` (absent = callsign + **real altitude ft** — honest where
+the shell is not; alt/speed/dist bucketed for repaint discipline); labels repaint only on text
+change, per-rig CanvasTextures freed on rig dispose. **Status beacons** (`flights.beacons !==
+false`): ONE emissive bead + additive glow sprite per flagged aircraft, priority **emergency red >
+interesting yellow > military green > LADD white**, pulsed ~1.2 Hz in `_advanceFlights` off a
+per-rig phase (zero-alloc); the glow wraps a renderer-lifetime shared texture —
+`_disposeSpriteMaps` gained a `userData.sharedMap` opt-out so the per-rig sprite sweep never frees
+it. **Privacy dimming** (`flights.privacyDim !== false`, research §4.2): PIA/LADD rigs build
+translucent at 0.45 (which also skips outline shells) with a 🔒 label badge; PIA additionally
+blanks identity everywhere (fuselage + label show the hex, no towed banner); LADD keeps its
+identity + white beacon. Config plumbing rides an optional trailing `updateFlights` opts arg
+(stale-chunk safe; labelFields/beacons/privacyDim are config-path → `configRev` already covers
+them, no new dirty-key inputs). `_advanceFlights(dt)` (from
 `_animate`, zero-alloc): dead reckoning in REAL space (per-rig `latPerS/lonPerS` from gs/track),
 display pos eased τ≈1.5 s (poll corrections glide), yaw shortest-arc τ≈0.3 s — `rotation.y =
 atan2(px, −py)`, the SAME convention as the bg tow-plane's tangent formula; `rotation.order='YXZ'`
@@ -339,25 +368,36 @@ double-rotation), dead-reckoned between 10 s fixes from the fix-pair delta, visi
 the horizon with a ramp-in. three-view `_keyFlights` = `configRev|flightsRev|layers.flights`
 (in the floor-switch blank list; disabled/no-origin → empty list = cheap inert). **2D**
 `drawFlights` (late in drawAll, `flights` layer absent = on, sidebar layer "Flights"): dart glyph
-rotated to track, callsign + alt ft text, olive military. **Alerts**: `AlertSource` gained
+rotated to track, labelFields-driven text, olive military, pulsing priority-colored beacon ring,
+privacy dim (glyph/text at 0.45/0.5 alpha); canvas-render exports the pure `flightBeaconColor`/
+`flightFieldText`/`flightLabelLines` (mirrored ~6/20-line copies of the renderer's resolvers —
+canvas-render must never import the three.js chunk; hoisting both into `flights.ts` is a noted
+follow-up). **Alerts**: `AlertSource` gained
 `'flight'`; `buildAlertFeed(notifications, repairs, cfg?, extra?)` — the optional 4th channel
 appends already-built CLIENT-LOCAL alerts verbatim (source toggles/severity floor deliberately
 don't apply). `Planner._computeFlightAlerts()` (after each aircraft poll + ISS update): low
 overflight (`alerts.lowAltFt`, within 3 nm, severity warning, 10 min/hex cooldown), watch-list
 (uppercase callsign-prefix or exact hex, info, 30 min/hex), ISS rise (alt crossing 10°, edge
-detector `_issWasUp`, info); prune 15 min cap 8; `dismissAlert` 'flight' branch is hass-free and
+detector `_issWasUp`, info), **emergency** (`flight:emerg:<hex>`, severity `error`, no 3-nm gate,
+exempt from the 15-min prune AND the newest-wins cap eviction while active, refreshed IN PLACE so
+routine polls still report "unchanged" — live-path emit discipline intact; dismissal re-arms after
+10 min); prune 15 min cap 8; `dismissAlert` 'flight' branch is hass-free and
 a dismissal RE-ARMS once the cooldown passes (stable per-hex ids would otherwise mute forever);
 returns `changed` — call sites own the single `emitConfig`. A low overflight also pushes
 `householdEvents` kind `flyover` (x/y null = house-wide) → `BUBBLE_POOL_EVENT.flyover` ✈️👀🛩️.
 **Settings ▸ Integrations "Flight tracking"** block (status line w/ aircraft count + poll age,
 source radios w/ the airplanes.live privacy disclosure + CORS/mixed-content hints, radius 5–100 nm,
-poll, min/max alt filters, "Callsign labels" + "Track the ISS", alerts sub-group — the watch-list
-normalizes in `setFlights` (trim/uppercase), not the UI, so imports get the same shape).
+poll, min/max alt filters, "Callsign labels" + a 9-checkbox "Label fields" grid (canonical order,
+gated behind "Callsign labels") + "Status beacons" + "Dim privacy-flagged aircraft" + "Track the
+ISS", alerts sub-group — the watch-list normalizes in `setFlights` (trim/uppercase), and
+`setFlights` sanitizes `labelFields`, not the UI, so imports get the same shape).
 **Attribution**: "Flight data © airplanes.live" joins the fixed bottom-left chip (stacked with the
-OSM line) whenever cloud + enabled + data. Tests: `flights-test.html` (`FLIGHTS PASS 160/160` —
-fixture = a REAL 94-aircraft airplanes.live LAX capture; incl. the live-path emit matrix),
-`flights-render-test.html` (`FLIGHTSRENDER PASS 80/80` — heading/pitch signs asserted via
-`getWorldDirection`), `flights-ui-test.html` (`FLIGHTSUI 55/55`; alert-center 67/67 stays green).
+OSM line) whenever cloud + enabled + data. Tests: `flights-test.html` (`FLIGHTS PASS 310/310` —
+fixture = a REAL 94-aircraft airplanes.live LAX capture; incl. the live-path emit matrix, the
+archetype golden matrix, and the emergency-alert lifecycle), `flights-render-test.html`
+(`FLIGHTSRENDER PASS 220/220` — heading/pitch signs asserted via `getWorldDirection`; archetype
+geometry, un-mirrored flank text, beacon priority/gating, privacy dim, in-place rebuild),
+`flights-ui-test.html` (`FLIGHTSUI 105/105`; alert-center 67/67 stays green).
 
 ### Geo reference & GPS device pins (World Outside, Feature G)
 Landmarks (`Store.geo.landmarks`, property-wide/store-level — NOT per-floor) are placed on the plan and calibrated to real-world lat/lon (`src/geo.ts` pure math: equirectangular projection, 2D Procrustes fit scale-locked at 1 + `fittedScale` diagnostic, single-landmark `northDeg` path, median lat/lon, `parseLatLon` manual-entry parse; test page `geo-test.html`). `Planner.geoFit()` returns the fitted `GeoTransform` (+ calibrated landmark list). Landmarks calibrate via GPS sampling OR manual lat/lon entry in the sidebar (paste a `lat, lon` pair into the Latitude field to split both); **manual entry sets `sampledAt` but CLEARS `accuracy`/`sampleCount`** (no sampling run happened — absent `sampleCount` + present `lat` is the "manual" sentinel, shown as `manual · <date>`), so the fit-quality readout stays honest. **GPS device pins (G2)**: `Planner.gpsPins` (runtime getter, cheap, safe per frame) resolves each `Store.people` entry with a GPS source (prefer `person.*` via `haPersonId`, else `device_tracker.*` via `gpsTrackerId`) — reads `latitude`/`longitude`/`gps_accuracy` off the entity, projects via `latLonToPlan`, and classifies vs the CURRENT floor rect:

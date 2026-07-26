@@ -55,6 +55,7 @@ import type {
   FlightsConfig,
 } from './types.js';
 import { normalizeAircraftList, flightBearingDistance, MAX_AIRCRAFT,
+         isEmergency, emergencySquawk, sanitizeLabelFields,
          type FlightPoint, type IssNow } from './flights.js';
 import { fetchLocalAircraft, fetchAirplanesLive, fetchIssNow } from './adsb-sources.js';
 // The ONE satellite alt/az routine (the renderer's sky uses the same function —
@@ -726,6 +727,9 @@ export class Planner extends EventTarget {
   private static readonly FLIGHT_ALERT_CAP = 8;                   // newest-wins cap
   private static readonly FLIGHT_LOW_COOLDOWN_MS = 10 * 60 * 1000;
   private static readonly FLIGHT_WATCH_COOLDOWN_MS = 30 * 60 * 1000;
+  // A dismissed EMERGENCY re-arms after this long if the aircraft is still
+  // declaring one (an active emergency is otherwise exempt from the TTL prune).
+  private static readonly FLIGHT_EMERG_COOLDOWN_MS = 10 * 60 * 1000;
   private static readonly FLIGHT_LOW_DIST_NM = 3;        // "overhead", not merely in-radius
   private static readonly ISS_UP_ALT_DEG = 10;           // horizon threshold for a pass notice
 
@@ -5106,6 +5110,13 @@ export class Planner extends EventTarget {
       const w = al.watch.map(s => String(s).trim().toUpperCase()).filter(s => s !== '');
       al.watch = w.length ? w : undefined;
     }
+    // Same discipline for the label-plate field list: unknown keys, duplicates
+    // and casing are normalized HERE (pure helper in flights.ts), so an import
+    // or a hand-edited config lands in the shape the renderer expects. Empty →
+    // undefined = "use the default plate".
+    if (this.store.flights.labelFields !== undefined) {
+      this.store.flights.labelFields = sanitizeLabelFields(this.store.flights.labelFields);
+    }
     this.save();
     void this._reconfigureFlights();
     this.emitConfig();
@@ -5293,10 +5304,23 @@ export class Planner extends EventTarget {
     const now = Date.now();
     const before = this.flightAlerts.length ? this.flightAlerts.map(a => a.id).join('|') : '';
 
+    // An ACTIVE emergency is exempt from the retention prune: a squawk-7700
+    // aircraft still overhead 20 minutes later is not a stale notice (research
+    // §2 — `emergency` outranks everything else in this feature). Ids are
+    // collected from the current list BEFORE pruning, and refreshed in place
+    // below so the alert keeps its original createdAt.
+    const emergIds = new Set<string>();
+    if (cfg?.enabled) {
+      for (const fp of this.flightsNow ?? []) {
+        if (isEmergency(fp)) emergIds.add(`flight:emerg:${fp.hex}`);
+      }
+    }
+
     // Prune the retention window first so a stale notice can't linger behind the
     // cap and starve a fresh one.
     this.flightAlerts = this.flightAlerts.filter(
-      a => now - (a.createdAt ? Date.parse(a.createdAt) : 0) < Planner.FLIGHT_ALERT_TTL_MS);
+      a => emergIds.has(a.id)
+        || now - (a.createdAt ? Date.parse(a.createdAt) : 0) < Planner.FLIGHT_ALERT_TTL_MS);
 
     if (cfg?.enabled) {
       const push = (a: PanelAlert, cooldownMs: number): void => {
@@ -5317,6 +5341,50 @@ export class Planner extends EventTarget {
 
       for (const fp of list) {
         const who = fp.callsign ?? fp.hex.toUpperCase();
+
+        // EMERGENCY (research §2 / §5.5) — the loudest trigger in the feature,
+        // and the only one that deliberately IGNORES the 3 nm overhead gate: a
+        // squawk 7700 anywhere in the configured radius matters. Severity
+        // 'error', above the low-overflight 'warning'. It does NOT go through
+        // `push()`: an active emergency must persist (refreshed in place, so
+        // the id order — and therefore the `changed` signal — stays stable),
+        // not re-fire on a cooldown.
+        if (isEmergency(fp)) {
+          const id = `flight:emerg:${fp.hex}`;
+          const dismissed = this._flightAlertDismissed.has(id);
+          const last = this._flightAlertAt.get(id) ?? 0;
+          if (!dismissed || now - last >= Planner.FLIGHT_EMERG_COOLDOWN_MS) {
+            if (dismissed) {
+              // Past the cooldown a still-live emergency re-arms (the same
+              // re-arm semantics `push()` gives the other triggers).
+              this._flightAlertDismissed.delete(id);
+              this._flightAlertAt.set(id, now);
+            }
+            const code = emergencySquawk(fp) ?? fp.emergency ?? fp.squawk ?? 'emergency';
+            const title = `EMERGENCY: ${who} squawking ${code}`;
+            const message = `${Math.round(fp.altFt).toLocaleString()} ft · ${(fp.distNm ?? 0).toFixed(1)} nm from home`;
+            const existing = this.flightAlerts.find(a => a.id === id);
+            if (existing) {
+              // Refresh IN PLACE — keeps the original createdAt and the array
+              // order, so a routine poll over a persisting emergency reports
+              // "nothing changed" and stays LIVE-path (no configRev bump).
+              existing.title = title;
+              existing.message = message;
+            } else {
+              this._flightAlertAt.set(id, now);
+              this.flightAlerts.push({
+                id,
+                source: 'flight',
+                severity: 'error',
+                title,
+                message,
+                createdAt: new Date(now).toISOString(),
+                dismissible: true,
+              });
+            }
+          }
+        }
+
         // Low overflight: below the threshold AND genuinely overhead (the radius
         // filter alone would fire for anything low anywhere in a 30 nm circle).
         if (typeof lowAlt === 'number' && isFinite(lowAlt)
@@ -5385,8 +5453,16 @@ export class Planner extends EventTarget {
       }
     }
 
-    if (this.flightAlerts.length > Planner.FLIGHT_ALERT_CAP)
-      this.flightAlerts.splice(0, this.flightAlerts.length - Planner.FLIGHT_ALERT_CAP);
+    // Cap: oldest-out, but an ACTIVE emergency is never the one dropped (it
+    // would be silently muted exactly when it matters most). Only emergencies
+    // alone exceeding the cap can push the list past it.
+    if (this.flightAlerts.length > Planner.FLIGHT_ALERT_CAP) {
+      let excess = this.flightAlerts.length - Planner.FLIGHT_ALERT_CAP;
+      this.flightAlerts = this.flightAlerts.filter(a => {
+        if (excess > 0 && !emergIds.has(a.id)) { excess--; return false; }
+        return true;
+      });
+    }
     return this.flightAlerts.map(a => a.id).join('|') !== before;
   }
 

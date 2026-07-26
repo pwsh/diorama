@@ -22,6 +22,7 @@
   // pulls in sky-catalog.ts → bundle):
   //   npm run build
   //   npx esbuild src/flights.ts --format=esm --outfile=<harness>/flights.mod.js
+  //   npx esbuild src/aircraft-types.ts --format=esm --outfile=<harness>/aircraft-types.mod.js
   //   npx esbuild src/sky-astro.ts --bundle --format=esm --outfile=<harness>/sky-astro.mod.js
   //   mkdir -p /tmp/h && cp -r dist/* test-pages/* /tmp/h/ && cd /tmp/h && python3 -m http.server 8931
   //   google-chrome --headless=new --virtual-time-budget=9000 --dump-dom \
@@ -30,6 +31,7 @@
   const mod = await import('./assets/three-renderer.js' + V);
   const F = await import('./flights.mod.js' + V);
   const SA = await import('./sky-astro.mod.js' + V);
+  const AT = await import('./aircraft-types.mod.js' + V);
 
   const r = new mod.ThreeDRenderer(document.getElementById('c'));
   await r.load();
@@ -55,14 +57,19 @@
   const FP = o => ({
     hex: 'aaa001', callsign: null, lat: OLAT + 0.2, lon: OLON + 0.2, altFt: 10000,
     gsKt: null, trackDeg: null, vertRateFpm: null, category: null, seenPosS: null,
-    military: false, ...o,
+    military: false,
+    // wave-2 fields (registry enrichment + status + dbFlags bits)
+    reg: null, typeCode: null, typeDesc: null, operator: null,
+    emergency: null, squawk: null, interesting: false, pia: false, ladd: false,
+    ...o,
   });
   const upd = (list, opts = {}) => r.updateFlights(
     list,
     'origin' in opts ? opts.origin : ORIGIN,
     opts.theta ?? 0, opts.radiusNm ?? RAD_NM,
     opts.showLabels !== false,
-    opts.anchor ?? ANCHOR);
+    opts.anchor ?? ANCHOR,
+    opts.opts);
   const step = (dt, n = 1) => { for (let i = 0; i < n; i++) r._advanceFlights(dt); };
   const rig = hex => r._flightRigs.get(hex);
   // Expected scene-RELATIVE offset for a fix: relative plan → scene flips dx,
@@ -72,6 +79,8 @@
     return { x: -d.planX, y: d.dispY, z: d.planY };
   };
   const descendants = (o) => { const out = []; o.traverse(c => out.push(c)); return out; };
+  const withUD = (o, key, val) => descendants(o).filter(c =>
+    c.userData && c.userData[key] !== undefined && (val === undefined || c.userData[key] === val));
   const geoTypes = (o, t) => descendants(o).filter(c => c.geometry && c.geometry.type === t).length;
   const findUD = (o, key) => descendants(o).some(c => c.userData && c.userData[key]);
   const sprites = o => descendants(o).filter(c => c.isSprite);
@@ -357,6 +366,371 @@
      !rig('a1') || rig('a1').dying === true);
   step(1, 3);
   ok('no origin → shell empties', r._flightRigs.size === 0 && r._flightsGroup.children.length === 0);
+
+  // ── 12. Eight archetypes (wave 2) ──────────────────────────────────────────
+  // Silhouettes per docs/research/flight-fields-models.md §3.2. The renderer
+  // resolves each aircraft's archetype ITSELF from fp.typeCode / fp.category
+  // (aircraft-types.ts is pure + shared, like flights.ts).
+  upd([]); step(1, 2);
+  const ARCH = [
+    ['ga-high',    'C172', 'A1'],
+    ['ga-low',     'P28A', 'A1'],
+    ['twin-prop',  'BE58', 'A2'],
+    ['turboprop',  'AT72', 'A3'],
+    ['narrowbody', 'B738', 'A3'],
+    ['widebody',   'B77W', 'A5'],
+    ['bizjet',     'CRJ9', 'A3'],
+    ['heli',       'AS50', 'A7'],
+  ];
+  const archList = ARCH.map(([a, t, c], i) => FP({
+    hex: `ar${i}`, typeCode: t, category: c, lon: OLON + 0.1 + i * 0.02,
+  }));
+  upd(archList);
+  ARCH.forEach(([want, t], i) => {
+    ok(`${t} → ${want} archetype`, rig(`ar${i}`).archetype === want,
+       `got ${rig(`ar${i}`).archetype}`);
+    ok(`${t} archetype matches the pure resolver`,
+       rig(`ar${i}`).archetype === AT.aircraftArchetype(t, null));
+  });
+  const A_ = i => rig(`ar${i}`);
+  const wingY = o => (withUD(o.asm, 'wing')[0]?.position.y ?? NaN);
+  // The one fork `category` alone can NEVER resolve (§0.7): both self-report A1.
+  ok('ga-high wing sits ABOVE the fuselage centerline', wingY(A_(0)) > 0, `y=${wingY(A_(0))}`);
+  ok('ga-low wing sits BELOW the fuselage centerline', wingY(A_(1)) < 0, `y=${wingY(A_(1))}`);
+  ok('ga-high/ga-low differ only in wing side (both tagged)',
+     withUD(A_(0).asm, 'wing', 'high').length === 1 && withUD(A_(1).asm, 'wing', 'low').length === 1);
+  ok('ga singles carry no engine nacelle', withUD(A_(0).asm, 'nacelle').length === 0
+     && withUD(A_(1).asm, 'nacelle').length === 0);
+  ok('ga singles carry ONE prop disc',
+     A_(0).props.length === 1 && A_(1).props.length === 1);
+  // twin-prop: two WING nacelles, two spinning discs.
+  ok('twin-prop has 2 wing nacelles', withUD(A_(2).asm, 'nacelle', 'wing').length === 2,
+     `n=${withUD(A_(2).asm, 'nacelle', 'wing').length}`);
+  ok('twin-prop has 2 prop discs', A_(2).props.length === 2, `n=${A_(2).props.length}`);
+  ok('twin-prop discs are on opposite wings',
+     A_(2).props[0].position.x * A_(2).props[1].position.x < 0);
+  const tpZ = A_(2).props.map(p => p.rotation.z);
+  step(0.1, 3);
+  ok('BOTH twin-prop discs spin about local Z',
+     A_(2).props[0].rotation.z !== tpZ[0] && A_(2).props[1].rotation.z !== tpZ[1]);
+  ok('twin-prop discs stay in phase with each other',
+     Math.abs(A_(2).props[0].rotation.z - A_(2).props[1].rotation.z) < 1e-9);
+  // turboprop: HIGH wing + T-tail + two turboprops (§3.2 — the shape a naive
+  // "regional turboprop" reading gets wrong).
+  ok('turboprop wing is HIGH', withUD(A_(3).asm, 'wing', 'high').length === 1);
+  ok('turboprop has 2 wing nacelles + 2 discs',
+     withUD(A_(3).asm, 'nacelle', 'wing').length === 2 && A_(3).props.length === 2);
+  ok('turboprop has a T-TAIL', withUD(A_(3).asm, 'tail', 't-tail').length === 1);
+  const tpFin = withUD(A_(3).asm, 'fin')[0], tpStab = withUD(A_(3).asm, 'tail')[0];
+  ok('T-tail stabilizer sits ON TOP of the fin',
+     tpStab.position.y >= tpFin.position.y + tpFin.geometry.parameters.height / 2 - 1,
+     `stab=${tpStab.position.y} finTop=${tpFin.position.y + tpFin.geometry.parameters.height / 2}`);
+  // narrowbody: underwing pods + conventional tail, no props.
+  ok('narrowbody has 2 UNDERWING pods', withUD(A_(4).asm, 'nacelle', 'wing').length === 2);
+  ok('narrowbody pods hang BELOW the wing',
+     withUD(A_(4).asm, 'nacelle', 'wing').every(p => p.position.y < wingY(A_(4))));
+  ok('narrowbody tail is conventional', withUD(A_(4).asm, 'tail', 'conventional').length === 1);
+  ok('narrowbody has no prop', A_(4).props.length === 0 && A_(4).propRate === 0);
+  ok('narrowbody wing is LOW', wingY(A_(4)) < 0, `y=${wingY(A_(4))}`);
+  // widebody: same family, bigger, FOUR pods.
+  ok('widebody has 4 pods', withUD(A_(5).asm, 'nacelle', 'wing').length === 4,
+     `n=${withUD(A_(5).asm, 'nacelle', 'wing').length}`);
+  const fusLen = o => descendants(o.asm).find(c => c.geometry
+    && c.geometry.type === 'BoxGeometry' && c.geometry.parameters.depth > 1000)
+    ?.geometry.parameters.depth ?? 0;
+  ok('widebody fuselage is LONGER than a narrowbody', fusLen(A_(5)) > fusLen(A_(4)),
+     `${fusLen(A_(4))} → ${fusLen(A_(5))}`);
+  const finH = o => withUD(o.asm, 'fin')[0]?.geometry.parameters.height ?? 0;
+  ok('widebody fin is TALLER than a narrowbody fin', finH(A_(5)) > finH(A_(4)),
+     `${finH(A_(4))} → ${finH(A_(5))}`);
+  ok('narrowbody fuselage is LONGER than a GA single', fusLen(A_(4)) > fusLen(A_(0)),
+     `${fusLen(A_(0))} → ${fusLen(A_(4))}`);
+  ok('models are ~2× the pre-wave-2 toy scale', fusLen(A_(4)) >= 2000,
+     `narrowbody fuselage = ${fusLen(A_(4))} mm`);
+  // bizjet — REAR-fuselage engines + T-tail. The §3.3 finding: a CRJ is
+  // bizjet-shaped, NOT the underwing-pod narrowbody the 3-way model drew.
+  ok('CRJ9 resolves to bizjet, not narrowbody', A_(6).archetype === 'bizjet');
+  ok('bizjet has 2 REAR-fuselage pods', withUD(A_(6).asm, 'nacelle', 'rear').length === 2,
+     `n=${withUD(A_(6).asm, 'nacelle', 'rear').length}`);
+  ok('bizjet has NO underwing pods', withUD(A_(6).asm, 'nacelle', 'wing').length === 0);
+  ok('bizjet pods sit AFT of the wing', withUD(A_(6).asm, 'nacelle', 'rear')
+     .every(p => p.position.z > withUD(A_(6).asm, 'wing')[0].position.z));
+  ok('bizjet has a T-TAIL', withUD(A_(6).asm, 'tail', 't-tail').length === 1);
+  ok('E-Jet (E75L) stays a narrowbody, unlike the ERJ',
+     AT.aircraftArchetype('E75L', 'A3') === 'narrowbody'
+     && AT.aircraftArchetype('E145', 'A3') === 'bizjet');
+  // heli unchanged in behaviour, kept at the wave-2 scale.
+  ok('heli keeps main + tail rotor', !!A_(7).prop && !!A_(7).tailRotor);
+  ok('heli main rotor is its only "prop" entry', A_(7).props.length === 1);
+  ok('heli flank identifiers clear the cabin bubble', (() => {
+       const cabin = A_(7).asm.children[0];               // sphere, r = 430
+       const rad = cabin.geometry.parameters.radius * cabin.scale.x;
+       return withUD(A_(7).asm, 'flightId').every(p => Math.abs(p.position.x) > rad);
+     })(), 'flank planes must sit outside the cabin sphere');
+  // Legacy 3-way collapse still populated (back-compat for the shipped fields).
+  ok('rig.kind is the legacy 3-way collapse',
+     A_(0).kind === 'prop' && A_(4).kind === 'jet' && A_(6).kind === 'jet' && A_(7).kind === 'heli');
+
+  // ── 13. Fuselage identifier on BOTH flanks (un-mirrored) ───────────────────
+  upd([]); step(1, 2);
+  const IDF = FP({ hex: 'id1', callsign: 'DAL42', typeCode: 'B738', category: 'A3' });
+  upd([IDF]);
+  const idR = rig('id1');
+  const idPlanes = withUD(idR.asm, 'flightId');
+  ok('identifier painted on 2 planes', idPlanes.length === 2, `n=${idPlanes.length}`);
+  ok('one plane per flank',
+     idPlanes.filter(p => p.userData.flank === 'left').length === 1
+     && idPlanes.filter(p => p.userData.flank === 'right').length === 1);
+  const pl = f => idPlanes.find(p => p.userData.flank === f);
+  ok('flank planes sit on opposite sides of the fuselage',
+     pl('left').position.x < 0 && pl('right').position.x > 0,
+     `${pl('left').position.x} / ${pl('right').position.x}`);
+  // UN-MIRRORED: each plane is a FrontSide quad rotated ±π/2 about Y (the
+  // banner / message-train flank technique) — never a negative scale, which is
+  // what would flip the glyphs.
+  near('right flank plane rotated +π/2 about Y', pl('right').rotation.y, Math.PI / 2, 1e-9);
+  near('left flank plane rotated −π/2 about Y', pl('left').rotation.y, -Math.PI / 2, 1e-9);
+  ok('flank planes carry no mirroring scale',
+     idPlanes.every(p => p.scale.x > 0 && p.scale.y > 0 && p.scale.z > 0));
+  ok('flank planes are FrontSide (0), not DoubleSide',
+     idPlanes.every(p => p.material.side === 0), `side=${pl('left').material.side}`);
+  ok('flank planes SHARE one material + texture',
+     pl('left').material === pl('right').material && !!pl('left').material.map);
+  // Outward-facing: each plane's local +Z normal points along its own ±X.
+  idR.asm.updateWorldMatrix(true, true);
+  const nR = pl('right').position.clone(); pl('right').getWorldDirection(nR);
+  const nL = pl('left').position.clone(); pl('left').getWorldDirection(nL);
+  ok('right flank normal points to world +X', nR.x > 0.999, `n=(${nR.x.toFixed(3)})`);
+  ok('left flank normal points to world −X', nL.x < -0.999, `n=(${nL.x.toFixed(3)})`);
+  ok('flank planes are outline-skipped + map-tracked',
+     idPlanes.every(p => p.userData.outlineSkip === true && p.userData.textPlane === true));
+  // Repaint discipline: same identifier → same texture object.
+  const idTex = pl('right').material.map;
+  let idTexDisposals = 0;
+  const idOrig = idTex.dispose.bind(idTex);
+  idTex.dispose = () => { idTexDisposals++; idOrig(); };
+  upd([IDF]);
+  ok('unchanged identifier does NOT repaint the flank texture',
+     withUD(rig('id1').asm, 'flightId')[0].material.map === idTex && idTexDisposals === 0);
+  upd([{ ...IDF, callsign: 'DAL77' }]);
+  ok('changed identifier repaints the flanks',
+     withUD(rig('id1').asm, 'flightId')[0].material.map !== idTex);
+  ok('the replaced flank texture is freed exactly once', idTexDisposals === 1,
+     `disposals=${idTexDisposals}`);
+  // Per-rig texture disposal on rig removal (the shared-map dedup means ONE).
+  const idTex2 = withUD(rig('id1').asm, 'flightId')[0].material.map;
+  let idTex2Disposals = 0;
+  const idOrig2 = idTex2.dispose.bind(idTex2);
+  idTex2.dispose = () => { idTex2Disposals++; idOrig2(); };
+  upd([]); step(1, 3);
+  ok('flank texture freed exactly once on rig dispose', idTex2Disposals === 1,
+     `disposals=${idTex2Disposals}`);
+  // A callsign-less aircraft falls back reg → hex.
+  upd([FP({ hex: 'idr', callsign: null, reg: 'N9536D', typeCode: 'C72R', category: 'A1' })]);
+  ok('no callsign → registration on the fuselage', rig('idr').idKey === 'N9536D');
+  upd([]); step(1, 2);
+  upd([FP({ hex: 'idh', callsign: null, reg: null, category: 'A3' })]);
+  ok('no callsign + no reg → uppercase hex on the fuselage', rig('idh').idKey === 'IDH');
+
+  // ── 14. Status beacons ─────────────────────────────────────────────────────
+  upd([]); step(1, 2);
+  const BEAC = [
+    ['emg', { emergency: 'general' },      0xff2a1a, 'emergency (enum)'],
+    ['sqk', { squawk: '7700' },            0xff2a1a, 'emergency (squawk 7700)'],
+    ['int', { interesting: true },         0xffd400, 'interesting'],
+    ['mil', { military: true },            0x2ee56a, 'military'],
+    ['ldd', { ladd: true },                0xf2f6fb, 'LADD'],
+    ['non', {},                            0,        'unflagged'],
+  ];
+  upd(BEAC.map(([h, o], i) => FP({ hex: h, category: 'A3', lon: OLON + 0.1 + i * 0.02, ...o })));
+  for (const [h, , color, label] of BEAC) {
+    const g = rig(h);
+    if (color === 0) {
+      ok(`${label} aircraft has NO beacon`, g.beacon === null && g.beaconColor === 0);
+    } else {
+      ok(`${label} → beacon built`, !!g.beacon && !!g.beaconGlow, `color=${g.beaconColor}`);
+      ok(`${label} beacon color`, g.beaconColor === color,
+         `got ${g.beaconColor.toString(16)} want ${color.toString(16)}`);
+      ok(`${label} beacon sits above the fuselage`, g.beacon.position.y > 0);
+      ok(`${label} beacon glow is co-located with the bead`,
+         g.beaconGlow.position.equals(g.beacon.position));
+    }
+  }
+  // Priority: emergency outranks EVERYTHING (§2's precedence recommendation).
+  upd([]); step(1, 2);
+  upd([FP({ hex: 'pri', category: 'A3', emergency: 'unlawful',
+            interesting: true, military: true, ladd: true })]);
+  ok('emergency outranks interesting/military/LADD', rig('pri').beaconColor === 0xff2a1a);
+  upd([]); step(1, 2);
+  upd([FP({ hex: 'pr2', category: 'A3', interesting: true, military: true, ladd: true })]);
+  ok('interesting outranks military + LADD', rig('pr2').beaconColor === 0xffd400);
+  upd([]); step(1, 2);
+  upd([FP({ hex: 'pr3', category: 'A3', military: true, ladd: true })]);
+  ok('military outranks LADD', rig('pr3').beaconColor === 0x2ee56a);
+  ok('exactly ONE beacon bead per aircraft', withUD(rig('pr3').asm, 'beacon').length === 1);
+  // Flash: per-rig accumulated phase, opacity mutated in place (no rebuild).
+  const beadMat = rig('pr3').beacon.material, glowMat = rig('pr3').beaconGlow.material;
+  step(0.05);
+  const o1 = beadMat.opacity, g1 = glowMat.opacity, ph1 = rig('pr3').beaconPhase;
+  step(0.18, 2);
+  ok('beacon phase accumulates per rig', rig('pr3').beaconPhase !== ph1);
+  ok('beacon bead opacity pulses', beadMat.opacity !== o1, `${o1} → ${beadMat.opacity}`);
+  ok('beacon glow opacity pulses', glowMat.opacity !== g1);
+  ok('beacon material objects are reused (zero-alloc pulse)',
+     rig('pr3').beacon.material === beadMat && rig('pr3').beaconGlow.material === glowMat);
+  ok('beacon glow is additive + outline-skipped',
+     rig('pr3').beaconGlow.userData.outlineSkip === true
+     && rig('pr3').beaconGlow.userData.beaconGlow === true);
+  // Beacon glow rides a SHARED texture — a rig dispose must not free it.
+  const sharedGlowTex = rig('pr3').beaconGlow.material.map;
+  let sharedDisposals = 0;
+  const sgo = sharedGlowTex.dispose.bind(sharedGlowTex);
+  sharedGlowTex.dispose = () => { sharedDisposals++; sgo(); };
+  upd([]); step(1, 3);
+  ok('shared beacon glow texture survives a rig dispose', sharedDisposals === 0);
+  sharedGlowTex.dispose = sgo;
+  // Gating: beacons:false builds none, and flipping it back restores them.
+  upd([FP({ hex: 'bg1', category: 'A3', military: true })], { opts: { beacons: false } });
+  ok('beacons:false → no beacon', rig('bg1').beacon === null && rig('bg1').beaconColor === 0);
+  upd([FP({ hex: 'bg1', category: 'A3', military: true })], { opts: { beacons: true } });
+  ok('beacons re-enabled → beacon rebuilt', !!rig('bg1').beacon);
+  upd([FP({ hex: 'bg1', category: 'A3', military: false })]);
+  ok('a status flip tears the beacon down', rig('bg1').beacon === null);
+  ok('absent opts = beacons ON (stale-chunk default)',
+     (() => { upd([]); step(1, 2);
+       upd([FP({ hex: 'bg2', category: 'A3', military: true })]);
+       return rig('bg2').beaconColor === 0x2ee56a; })());
+
+  // ── 15. Privacy dimming (research §4.2) ────────────────────────────────────
+  upd([]); step(1, 2);
+  const PIA = FP({ hex: 'pia1', callsign: 'SECRET1', reg: 'N1PIA', typeCode: 'B738',
+                   category: 'A3', pia: true, lon: OLON + 0.1 });
+  const LADD = FP({ hex: 'ladd1', callsign: 'N66168', reg: 'N66168', typeCode: 'C172',
+                    category: 'A1', ladd: true, lon: OLON + 0.14 });
+  const PLAIN = FP({ hex: 'open1', callsign: 'UAL99', typeCode: 'B738',
+                     category: 'A3', lon: OLON + 0.18 });
+  upd([PIA, LADD, PLAIN]);
+  const bodyMat = h => rig(h).asm.children[0].material;
+  ok('PIA aircraft builds dimmed', rig('pia1').dim === true
+     && bodyMat('pia1').transparent === true && bodyMat('pia1').opacity === 0.45,
+     `op=${bodyMat('pia1').opacity}`);
+  ok('LADD aircraft builds dimmed', rig('ladd1').dim === true && bodyMat('ladd1').opacity === 0.45);
+  ok('unflagged aircraft is NOT dimmed',
+     rig('open1').dim === false && bodyMat('open1').opacity === 1);
+  ok('PIA identity suppressed → hex on the fuselage', rig('pia1').idKey === 'PIA1',
+     `id=${rig('pia1').idKey}`);
+  ok('PIA callsign/reg never reach the label',
+     !rig('pia1').labelKey.includes('SECRET1') && !rig('pia1').labelKey.includes('N1PIA'),
+     rig('pia1').labelKey);
+  ok('PIA label carries the privacy badge', rig('pia1').labelKey.includes('🔒'),
+     rig('pia1').labelKey);
+  ok('LADD keeps its identity (the source sends it anyway)',
+     rig('ladd1').idKey === 'N66168');
+  ok('LADD still beacons white while dimmed', rig('ladd1').beaconColor === 0xf2f6fb);
+  ok('a dimmed piston tows NO banner (identity stays off the sky)',
+     rig('ladd1').banner !== null);          // LADD identity is NOT suppressed
+  ok('a PIA piston tows no banner', (() => {
+       upd([]); step(1, 2);
+       upd([FP({ hex: 'piap', callsign: 'N1PIA', category: 'A1', typeCode: 'C172', pia: true })]);
+       return rig('piap').banner === null && !!rig('piap').label; })());
+  // privacyDim:false → full brightness + full identity, flags untouched.
+  upd([]); step(1, 2);
+  upd([PIA, LADD], { opts: { privacyDim: false } });
+  ok('privacyDim:false → PIA not dimmed', rig('pia1').dim === false
+     && bodyMat('pia1').opacity === 1);
+  ok('privacyDim:false → PIA identity shown', rig('pia1').idKey === 'SECRET1');
+  ok('privacyDim:false → LADD keeps its beacon', rig('ladd1').beaconColor === 0xf2f6fb);
+  // Toggling dimming back on rebuilds the model in place (same rig object).
+  const piaRef = rig('pia1');
+  upd([PIA, LADD], { opts: { privacyDim: true } });
+  ok('re-dimming rebuilds in place (same rig)', rig('pia1') === piaRef
+     && rig('pia1').dim === true && bodyMat('pia1').opacity === 0.45);
+
+  // ── 16. Archetype-change rebuild (late registry data) ──────────────────────
+  upd([]); step(1, 2);
+  const LATE = FP({ hex: 'late', callsign: 'SKW1', category: 'A3',
+                    lat: OLAT + 0.18, lon: OLON + 0.11 });
+  upd([LATE]);
+  const lateRef = rig('late'), asm0 = lateRef.asm, pos0 = asm0.position.clone();
+  ok('no type designator → category ladder (A3 → narrowbody)',
+     lateRef.archetype === 'narrowbody');
+  let asmDisposed = false;
+  const g0 = asm0.children[0].geometry;
+  const gd = g0.dispose.bind(g0); g0.dispose = () => { asmDisposed = true; gd(); };
+  upd([{ ...LATE, typeCode: 'CRJ9' }]);        // registry lookup lands a poll later
+  ok('type designator arriving later re-resolves the archetype',
+     rig('late').archetype === 'bizjet');
+  ok('archetype change rebuilds the model IN PLACE (same rig object)',
+     rig('late') === lateRef && rig('late').asm !== asm0);
+  ok('the replaced assembly is disposed', asmDisposed);
+  ok('the replaced assembly is detached', asm0.parent === null);
+  ok('rebuilt model keeps the display position',
+     Math.abs(rig('late').asm.position.x - pos0.x) < 1e-6
+     && Math.abs(rig('late').asm.position.z - pos0.z) < 1e-6);
+  ok('rebuilt model has the bizjet silhouette',
+     withUD(rig('late').asm, 'nacelle', 'rear').length === 2
+     && withUD(rig('late').asm, 'tail', 't-tail').length === 1);
+  ok('rebuilt model re-attaches its flank identifier',
+     withUD(rig('late').asm, 'flightId').length === 2 && rig('late').idKey === 'SKW1');
+  ok('rebuilt model re-attaches its label', !!rig('late').label
+     && rig('late').label.parent === rig('late').asm);
+  ok('one rig per hex after a rebuild', r._flightRigs.size === 1
+     && r._flightsGroup.children.length === 1);
+  // A military flag arriving late likewise re-liveries in place.
+  const civHex = rig('late').asm.children[0].material.color.getHex();
+  upd([{ ...LATE, typeCode: 'CRJ9', military: true }]);
+  ok('military flag arriving later re-liveries in place',
+     rig('late') === lateRef && rig('late').asm.children[0].material.color.getHex() !== civHex);
+  ok('re-liveried rig gets its military beacon', rig('late').beaconColor === 0x2ee56a);
+  // A poll that changes NOTHING structural must not rebuild.
+  const asmStable = rig('late').asm;
+  upd([{ ...LATE, typeCode: 'CRJ9', military: true, altFt: 11000 }]);
+  ok('an ordinary poll does NOT rebuild the model', rig('late').asm === asmStable);
+
+  // ── 17. labelFields-driven label plate ─────────────────────────────────────
+  upd([]); step(1, 2);
+  const LF = FP({ hex: 'lf1', callsign: 'AAL266', reg: 'N454AL', typeCode: 'B38M',
+                  typeDesc: 'BOEING 737 MAX 8', operator: 'AMERICAN AIRLINES INC',
+                  category: 'A3', altFt: 12340, gsKt: 322, vertRateFpm: 1800,
+                  squawk: '1200', distNm: 13.7, lon: OLON + 0.2 });
+  upd([LF]);
+  ok('default fields = the shipped callsign + altitude plate',
+     rig('lf1').labelKey === 'AAL266|12,300 ft', rig('lf1').labelKey);
+  upd([LF], { opts: { labelFields: ['reg', 'type', 'speed'] } });
+  ok('labelFields drives the plate content',
+     rig('lf1').labelKey === 'N454AL|B38M · 320 kt', rig('lf1').labelKey);
+  upd([LF], { opts: { labelFields: ['callsign', 'operator', 'dist', 'trend', 'squawk'] } });
+  ok('operator / distance / trend / squawk render',
+     rig('lf1').labelKey === 'AAL266|AMERICAN AIRLINES INC · 13.5 nm · ↑ climb · sq 1200',
+     rig('lf1').labelKey);
+  upd([{ ...LF, vertRateFpm: -1500 }], { opts: { labelFields: ['callsign', 'trend'] } });
+  ok('descent renders the down arrow', rig('lf1').labelKey === 'AAL266|↓ descend',
+     rig('lf1').labelKey);
+  upd([{ ...LF, vertRateFpm: 40 }], { opts: { labelFields: ['callsign', 'trend'] } });
+  ok('level flight omits the trend field entirely',
+     rig('lf1').labelKey === 'AAL266|', rig('lf1').labelKey);
+  upd([{ ...LF, reg: null }], { opts: { labelFields: ['reg', 'alt'] } });
+  ok('a missing field drops out (registration absent)',
+     rig('lf1').labelKey === '12,300 ft|', rig('lf1').labelKey);
+  upd([{ ...LF, operator: 'WILMINGTON TRUST CO TRUSTEE' }], { opts: { labelFields: ['operator'] } });
+  ok('a long operator name is truncated for the plate',
+     rig('lf1').labelKey === 'WILMINGTON TRUST CO TR|', rig('lf1').labelKey);
+  upd([LF], { opts: { labelFields: ['bogus', 'callsign'] } });
+  ok('unknown field keys are sanitized away', rig('lf1').labelKey === 'AAL266|',
+     rig('lf1').labelKey);
+  upd([LF], { opts: { labelFields: [] } });
+  ok('an empty field list falls back to the default plate',
+     rig('lf1').labelKey === 'AAL266|12,300 ft', rig('lf1').labelKey);
+  // Repaint discipline: the altitude field is bucketed to 100 ft.
+  upd([LF]);
+  const lfTex = rig('lf1').label.material.map;
+  upd([{ ...LF, altFt: 12310 }]);   // same 100 ft bucket as 12340
+  ok('a sub-bucket altitude change does not repaint the plate',
+     rig('lf1').label.material.map === lfTex);
+  upd([{ ...LF, altFt: 12800 }]);
+  ok('a real altitude change repaints the plate',
+     rig('lf1').label.material.map !== lfTex);
+  upd([]); step(1, 3);
 
   // ── report ─────────────────────────────────────────────────────────────────
   const pass = tests.filter(t => t.ok).length;

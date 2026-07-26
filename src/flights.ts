@@ -35,6 +35,34 @@ export interface FlightPoint {
   category: string | null;     // ADS-B emitter category, 'A1'..'D7'
   seenPosS: number | null;     // seconds since the last position update
   military: boolean;           // dbFlags bit 1
+
+  // ── Registry enrichment (research §1.5) ──────────────────────────────────
+  // The aggregator's OWN database lookup layered on the raw Mode-S feed — an
+  // aircraft never transmits its tail number or owner over the air. Present
+  // whenever the source has a match; a bare local receiver with no --db-file
+  // delivers none of them, so every one is nullable by design.
+  reg: string | null;          // `r` — registration / tail number
+  typeCode: string | null;     // `t` — ICAO type designator, uppercased
+  typeDesc: string | null;     // `desc` — long type name ("BOEING 737 MAX 8")
+  operator: string | null;     // `ownOp` — registered owner/operator
+
+  // ── Status (research §1.4) ───────────────────────────────────────────────
+  // `emergency` is a SUPERSET of the 7×00 squawks (it also carries lifeguard /
+  // minfuel / downed, which have no squawk of their own) — normalized to null
+  // for the overwhelmingly common `"none"`, so a non-null value always means
+  // something is actually wrong. See `isEmergency`.
+  emergency: string | null;    // `emergency`, minus the "none" no-op
+  squawk: string | null;       // `squawk` — Mode A code, 4 octal digits
+
+  // ── dbFlags bits (research §1.3): military=1, interesting=2, PIA=4, LADD=8 ─
+  // `interesting` is the aggregator's own curated "noteworthy" tag (criteria
+  // undocumented — §2). PIA/LADD are the two FAA privacy programs; the data
+  // source deliberately does NOT enforce them (§0.2), so honoring them at all
+  // is the CONSUMER's courtesy call.
+  interesting: boolean;
+  pia: boolean;
+  ladd: boolean;
+
   distNm?: number;             // filled by the planner's filter step (nm from home)
 }
 
@@ -48,6 +76,14 @@ export const MAX_AIRCRAFT = 50;
 // (`alt_baro: "ground"`) must not silently parse as a number.
 function num(v: unknown): number | null {
   return typeof v === 'number' && isFinite(v) ? v : null;
+}
+
+// Trimmed non-empty string, or null. A NUMBER is accepted (some proxies emit a
+// numeric `squawk`) and stringified; anything else is null.
+function str(v: unknown): string | null {
+  if (typeof v === 'string') { const t = v.trim(); return t ? t : null; }
+  if (typeof v === 'number' && isFinite(v)) return String(v);
+  return null;
 }
 
 // Pull the aircraft array out of whichever envelope this payload uses:
@@ -80,6 +116,14 @@ export function normalizeAircraftList(json: unknown): FlightPoint[] {
     const hexRaw = a.hex ?? a.icao ?? a.icao24;
     if (typeof hexRaw !== 'string' || !hexRaw.trim()) continue;
 
+    // NOT AN AIRCRAFT (research §0.8 / §3.6 step 2): the DO-260B emitter
+    // category table reserves `C*` for surface vehicles + fixed obstacles and
+    // `B3` for parachutists. The committed LAX fixture carries three real `C2`
+    // airport service vehicles — without this they would be rendered as toy
+    // jets. Drop them before anything else looks at the entry.
+    const catRaw = typeof a.category === 'string' ? a.category.trim().toUpperCase() : '';
+    if (catRaw.startsWith('C') || catRaw === 'B3') continue;
+
     const lat = num(a.lat ?? a.latitude);
     const lon = num(a.lon ?? a.longitude);
     if (lat === null || lon === null) continue;
@@ -92,7 +136,8 @@ export function normalizeAircraftList(json: unknown): FlightPoint[] {
 
     const flight = typeof a.flight === 'string' ? a.flight.trim()
       : typeof a.callsign === 'string' ? a.callsign.trim() : '';
-    const dbFlags = num(a.dbFlags);
+    const dbFlags = num(a.dbFlags) ?? 0;
+    const emerg = str(a.emergency);
 
     out.push({
       hex: hexRaw.trim().toLowerCase(),
@@ -103,16 +148,83 @@ export function normalizeAircraftList(json: unknown): FlightPoint[] {
       vertRateFpm: num(a.baro_rate) ?? num(a.geom_rate),
       category: typeof a.category === 'string' && a.category ? a.category : null,
       seenPosS: num(a.seen_pos),
-      military: dbFlags !== null && (dbFlags & 1) === 1,
+      military: (dbFlags & 1) === 1,
+      reg: str(a.r),
+      typeCode: str(a.t)?.toUpperCase() ?? null,
+      typeDesc: str(a.desc),
+      operator: str(a.ownOp),
+      // "none" is the overwhelmingly common value — collapse it to null so a
+      // non-null `emergency` always means something is genuinely wrong.
+      emergency: emerg && emerg.toLowerCase() !== 'none' ? emerg : null,
+      squawk: str(a.squawk),
+      interesting: (dbFlags & 2) === 2,
+      pia: (dbFlags & 4) === 4,
+      ladd: (dbFlags & 8) === 8,
       ...(num(a.dst) !== null ? { distNm: num(a.dst) as number } : {}),
     });
   }
   return out;
 }
 
-// Which toy model the renderer builds. ADS-B emitter categories: A7 = rotorcraft,
-// A1/A2 = light/small (prop). Everything else — including an absent category —
-// falls back to a jet, the commonest thing overhead.
+// ── Emergency status (research §1.4 / §2) ──────────────────────────────────
+// The three universal Mode A codes. `emergency` supersedes them (it carries
+// lifeguard/minfuel/downed too), but plenty of transponders only squawk.
+export const EMERGENCY_SQUAWKS = ['7500', '7600', '7700'] as const;
+
+// Is this aircraft declaring an emergency? Takes a partial so a caller can ask
+// about a hand-built point. `emergency` is already "none"-collapsed by the
+// normalizer; the explicit re-check keeps hand-built inputs honest.
+export function isEmergency(
+  fp: { emergency?: string | null; squawk?: string | null },
+): boolean {
+  const e = typeof fp.emergency === 'string' ? fp.emergency.trim().toLowerCase() : '';
+  if (e !== '' && e !== 'none') return true;
+  return emergencySquawk(fp) !== null;
+}
+
+// The squawk, but only when it is one of the three emergency codes — so a
+// routine 1200/VFR code never gets announced as "squawking 1200".
+export function emergencySquawk(fp: { squawk?: string | null }): string | null {
+  const s = typeof fp.squawk === 'string' ? fp.squawk.trim()
+    : typeof fp.squawk === 'number' ? String(fp.squawk) : '';
+  return (EMERGENCY_SQUAWKS as readonly string[]).includes(s) ? s : null;
+}
+
+// ── Label plate field selection (research §4.1) ────────────────────────────
+// Which lines a flight's label plate may carry. The default (an absent
+// `FlightsConfig.labelFields`) is today's shipped two-line plate —
+// callsign + real altitude — so the field is purely additive.
+export const FLIGHT_LABEL_FIELDS = [
+  'callsign', 'reg', 'type', 'operator', 'alt', 'speed', 'trend', 'squawk', 'dist',
+] as const;
+export type FlightLabelField = typeof FLIGHT_LABEL_FIELDS[number];
+export const FLIGHT_LABEL_FIELDS_DEFAULT: FlightLabelField[] = ['callsign', 'alt'];
+
+// Normalize a stored/imported label-field list: keep only known keys, in the
+// user's order, de-duplicated. An empty or unusable result → undefined, i.e.
+// "fall back to the default plate" — the same trim-and-drop-blanks discipline
+// `setFlights` already applies to the watch list.
+export function sanitizeLabelFields(v: unknown): FlightLabelField[] | undefined {
+  if (!Array.isArray(v)) return undefined;
+  const allowed = FLIGHT_LABEL_FIELDS as readonly string[];
+  const out: FlightLabelField[] = [];
+  for (const raw of v) {
+    if (typeof raw !== 'string') continue;
+    const k = raw.trim().toLowerCase();
+    if (!allowed.includes(k) || out.includes(k as FlightLabelField)) continue;
+    out.push(k as FlightLabelField);
+  }
+  return out.length ? out : undefined;
+}
+
+// LEGACY 3-way model pick — the three toy bodies the shipped renderer chunk
+// builds. Kept EXACTLY as-is (category-only) for stale-chunk safety: a fresh
+// app paired with a cached renderer must keep resolving a model.
+//
+// The richer 8-archetype resolution lives in `src/aircraft-types.ts`
+// (`aircraftArchetype(typeCode, category)` + `legacyModelKind()` for the
+// mapping back onto these three) — deliberately a SEPARATE module so this one
+// stays genuinely zero-import.
 export function aircraftModelKind(fp: FlightPoint): 'prop' | 'jet' | 'heli' {
   const c = fp.category;
   if (c === 'A7') return 'heli';

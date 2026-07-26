@@ -1500,8 +1500,19 @@ export class ThreeView extends LitElement {
         const showLabels = flCfg?.showLabels !== false;
         // Feature off / no origin → an empty list + null ISS: the renderer fades
         // everything out and goes inert (no separate teardown path).
+        // Wave-2 display options ride an OPTIONAL trailing arg (stale-chunk
+        // safe: an older renderer chunk ignores it and keeps the shipped
+        // two-line plate with beacons + privacy dimming on by default). All
+        // three are config-path, so configRev — already in the key — covers
+        // them; no new dirty-key input. The renderer resolves each aircraft's
+        // ARCHETYPE itself from fp.typeCode/fp.category (aircraft-types.ts is
+        // pure and shared by both graphs, like flights.ts).
         r.updateFlights(flOrigin ? (p.flightsNow ?? []) : [], flOrigin,
-                        flTheta, radiusNm, showLabels, anchorScene);
+                        flTheta, radiusNm, showLabels, anchorScene, {
+                          labelFields: flCfg?.labelFields,
+                          beacons: flCfg?.beacons,
+                          privacyDim: flCfg?.privacyDim,
+                        });
         r.updateIss(flOrigin && flCfg?.iss !== false ? p.issNow : null, flOrigin, flTheta);
       }
 

@@ -90,9 +90,15 @@ import { skySnapshot, moonAltAz, capSampleAltAz, satAltAz } from './sky-astro.js
 // graph and this lazy chunk — the avatars.ts precedent. Only the pure compression
 // curves + the model-kind classifier are pulled in; NEVER adsb-sources or Planner.
 import {
-  compressRadiusMm, compressAltitudeMm, aircraftModelKind,
+  compressRadiusMm, compressAltitudeMm, isEmergency,
+  FLIGHT_LABEL_FIELDS_DEFAULT, sanitizeLabelFields,
   type FlightPoint, type IssNow,
 } from './flights.js';
+// aircraft-types.ts is likewise pure/zero-import (the same shared-chunk
+// discipline as flights.ts + avatars.ts) — the 8-archetype silhouette table.
+import {
+  aircraftArchetype, legacyModelKind, type AircraftArchetype,
+} from './aircraft-types.js';
 import { STARS as SKY_STARS, LINES as SKY_LINES } from './sky-catalog.js';
 import {
   paintCalendarCanvas, paintNewsTickerCanvas, paintWeatherCardCanvas,
@@ -576,15 +582,24 @@ interface BgRig {
 interface FlightRig {
   hex: string;
   asm: THREE.Group;                 // model + label/banner; child of _flightsGroup
-  kind: 'prop' | 'jet' | 'heli';
+  kind: 'prop' | 'jet' | 'heli';    // LEGACY 3-way collapse of `archetype` (test/back-compat)
+  archetype: AircraftArchetype;     // the 8-way silhouette family actually built
   military: boolean;
-  prop: THREE.Object3D | null;      // prop disc (spins about local Z) / main rotor (about Y)
+  dim: boolean;                     // privacy-dimmed build (PIA/LADD, research §4.2)
+  prop: THREE.Object3D | null;      // FIRST prop disc (spins about local Z) / main rotor (about Y)
+  props: THREE.Object3D[];          // every prop disc (twins carry two)
   tailRotor: THREE.Object3D | null; // heli only (spins about X)
   propRate: number;                 // rad/s
-  label: THREE.Sprite | null;       // camera-facing callsign+altitude plate
-  banner: THREE.Group | null;       // prop-with-callsign tow banner (two FrontSide planes)
+  label: THREE.Sprite | null;       // camera-facing label plate (labelFields-driven)
+  banner: THREE.Group | null;       // piston-with-callsign tow banner (two FrontSide planes)
   labelKey: string;                 // last painted label content — repaint only on change
   bannerKey: string;                // last painted banner text
+  idPlanes: THREE.Group | null;     // fuselage identifier, both flanks (un-mirrored)
+  idKey: string;                    // last painted fuselage identifier
+  beacon: THREE.Mesh | null;        // status beacon body (emissive)
+  beaconGlow: THREE.Sprite | null;  // additive glow on top of it
+  beaconColor: number;              // 0 = no beacon
+  beaconPhase: number;              // per-rig flash accumulator (never the absolute clock)
   // real space
   lat: number; lon: number; altFt: number;
   latPerS: number; lonPerS: number; // dead-reckoning rates from gs + track
@@ -607,6 +622,18 @@ const FLIGHT_DEG = Math.PI / 180;
 const FLIGHT_M_PER_DEG = 111320;     // metres per degree of latitude (dead reckoning)
 const FLIGHT_FADE_S = 0.8;           // despawn scale-out (the humanoid despawn idiom)
 const FLIGHT_PITCH_MAX = 0.12;       // rad at ±6000 fpm — a hint, not a stunt
+// Status beacons (research §2 / §4.2). EXACTLY ONE per aircraft — the highest
+// priority wins: emergency RED > interesting YELLOW > military GREEN > LADD
+// WHITE. `emergency` outranks everything (it is the one field in the whole
+// inventory where the UI treatment genuinely matters). Mirrored — deliberately,
+// each in ~6 lines — by canvas-render's 2D flightBeaconColor; the two must stay
+// in step (a shared home in flights.ts is the natural wave-3 hoist).
+const FLIGHT_BEACON_EMERGENCY = 0xff2a1a;
+const FLIGHT_BEACON_INTERESTING = 0xffd400;
+const FLIGHT_BEACON_MILITARY = 0x2ee56a;
+const FLIGHT_BEACON_LADD = 0xf2f6fb;
+const FLIGHT_BEACON_HZ = 1.2;        // flashes per second
+const FLIGHT_PRIVACY_OPACITY = 0.45; // PIA/LADD courtesy dim (research §4.2)
 const ISS_SHELL_R = 26000;           // inside the 30 m sky dome (the sun-disc radius)
 const ISS_RAMP_RAD = 3 * Math.PI / 180;   // opacity ramp over the first ~3° of altitude
 
@@ -1683,6 +1710,12 @@ export class ThreeDRenderer {
   private _flightsTheta = 0;             // geo θ (true north → plan), radians
   private _flightsRadius = 30;           // configured search/display radius (nm)
   private _flightsShowLabels = true;
+  // Wave-2 display options (all stale-chunk-safe defaults: an older three-view
+  // that passes no opts keeps exactly the shipped two-line plate + beacons on).
+  private _flightsLabelFields: string[] = FLIGHT_LABEL_FIELDS_DEFAULT.slice();
+  private _flightsBeacons = true;
+  private _flightsPrivacyDim = true;
+  private _beaconGlowTex: THREE.CanvasTexture | null = null;   // shared; freed in destroy()
   private _v3flight = new THREE.Vector3();   // scratch — _advanceFlights allocates nothing
   // ISS: one sprite in its OWN camera-recentered subgroup (the _realSkyGroup
   // idiom) so its position is a pure direction offset at a fixed radius. The
@@ -10770,7 +10803,10 @@ export class ThreeDRenderer {
     };
     g.traverse(o => {
       const s = o as THREE.Sprite;
-      if (s.isSprite) { free(s.material.map); return; }
+      // userData.sharedMap opts a sprite OUT: its texture is one of the
+      // renderer-lifetime shared maps (flight status beacons wrap the shared
+      // _beaconGlowTex), freed only in destroy() — like _blobTex/_sparkleTex.
+      if (s.isSprite) { if (!s.userData?.sharedMap) free(s.material.map); return; }
       // Fixed-orientation info-card text lives on a plain Mesh (userData.textPlane)
       // whose CanvasTexture map _clearGroup disposes as a material — but its map
       // must be freed too. Sweep it here (the isSprite guard would skip it).
@@ -11501,13 +11537,21 @@ export class ThreeDRenderer {
   // three-view resolves it from the geo fit's plan origin (tx, ty) so the shell
   // centres on the real observer, falling back to the floor centre. Every rig
   // carries a RELATIVE offset, so the whole shell re-anchors with one transform.
+  //
+  // `opts` (wave 2) is OPTIONAL and every field defaults to today's behavior, so
+  // a stale three-view calling the 6-arg form still gets the shipped plate.
   updateFlights(list: FlightPoint[], origin: { lat: number; lon: number } | null,
                 thetaRad: number, radiusNm: number, showLabels: boolean,
-                anchorScene: { x: number; z: number }): void {
+                anchorScene: { x: number; z: number },
+                opts?: { labelFields?: string[]; beacons?: boolean; privacyDim?: boolean }): void {
     this._flightsOrigin = origin;
     this._flightsTheta = isFinite(thetaRad) ? thetaRad : 0;
     this._flightsRadius = isFinite(radiusNm) && radiusNm > 0 ? radiusNm : 30;
     this._flightsShowLabels = showLabels !== false;
+    this._flightsLabelFields =
+      sanitizeLabelFields(opts?.labelFields) ?? FLIGHT_LABEL_FIELDS_DEFAULT.slice();
+    this._flightsBeacons = opts?.beacons !== false;
+    this._flightsPrivacyDim = opts?.privacyDim !== false;
     this._flightsGroup.position.set(anchorScene?.x ?? 0, 0, anchorScene?.z ?? 0);
 
     const seen = new Set<string>();
@@ -11531,6 +11575,15 @@ export class ThreeDRenderer {
   // CORRECTION the per-frame ease glides onto, not a jump cut.
   private _applyFlightFix(rig: FlightRig, fp: FlightPoint): void {
     rig.dying = false;
+    // The registry lookup that resolves an archetype can arrive on a LATER poll
+    // than the first position (~15 % of live traffic has no `t` at all, §0.6),
+    // and the privacy/military liveries are build-time — so a change in any of
+    // the three rebuilds this hex's model IN PLACE, keeping its motion state.
+    const wantArch = aircraftArchetype(fp.typeCode, fp.category);
+    const wantDim = this._flightPrivacyDimmed(fp);
+    if (rig.archetype !== wantArch || rig.military !== fp.military || rig.dim !== wantDim) {
+      this._rebuildFlightModel(rig, wantArch, fp.military, wantDim);
+    }
     rig.lat = fp.lat; rig.lon = fp.lon; rig.altFt = fp.altFt;
     rig.vertRateFpm = fp.vertRateFpm ?? 0;
     rig.trackRad = fp.trackDeg == null ? null : fp.trackDeg * FLIGHT_DEG;
@@ -11546,44 +11599,249 @@ export class ThreeDRenderer {
       rig.lonPerS = (ms * Math.sin(tr)) / (FLIGHT_M_PER_DEG * cosLat);
     }
     this._syncFlightLabel(rig, fp);
+    this._syncFlightBeacon(rig, fp);
   }
 
-  // Label policy: a PROP with a callsign tows a broadside banner (the bg
-  // tow-plane idiom); everything else gets a camera-facing two-line plate.
-  // Repainted only when the content changes (altitude bucketed to 100 ft so a
-  // climbing aircraft doesn't repaint every poll).
+  // Privacy courtesy (research §4.2): the data source deliberately does NOT
+  // enforce the FAA's PIA/LADD programs, so honoring them is the consumer's
+  // call — dim the whole rig, and (PIA only, whose entire point is that the hex
+  // can't be mapped back to a tail number) drop the identity text.
+  private _flightPrivacyDimmed(fp: FlightPoint): boolean {
+    return this._flightsPrivacyDim && (fp.pia === true || fp.ladd === true);
+  }
+
+  private _flightIdentitySuppressed(fp: FlightPoint): boolean {
+    return this._flightsPrivacyDim && fp.pia === true;
+  }
+
+  // EXACTLY ONE beacon, highest priority wins (see FLIGHT_BEACON_*). 0 = none.
+  private _flightBeaconColor(fp: FlightPoint): number {
+    if (!this._flightsBeacons) return 0;
+    if (isEmergency(fp)) return FLIGHT_BEACON_EMERGENCY;
+    if (fp.interesting) return FLIGHT_BEACON_INTERESTING;
+    if (fp.military) return FLIGHT_BEACON_MILITARY;
+    if (fp.ladd) return FLIGHT_BEACON_LADD;          // dimmed, but still beacons
+    return 0;
+  }
+
+  // Beacon = an emissive bead on the spine + an additive glow sprite over it.
+  // Both are flat/additive — the documented _mat() exemption family. Rebuilt
+  // only when the resolved color changes (a status flip), never per frame.
+  private _syncFlightBeacon(rig: FlightRig, fp: FlightPoint): void {
+    const want = this._flightBeaconColor(fp);
+    if (want === rig.beaconColor) return;
+    this._removeFlightBeacon(rig);
+    rig.beaconColor = want;
+    if (!want) return;
+    const m = this._flightArchetypeMetrics(rig.archetype);
+    const bead = new THREE.Mesh(
+      new THREE.SphereGeometry(46, 10, 8),
+      new THREE.MeshBasicMaterial({ color: want, transparent: true, opacity: 1, fog: false }),
+    );
+    bead.position.set(0, m.beaconY, m.beaconZ);
+    bead.userData.outlineSkip = true;
+    bead.userData.beacon = true;
+    rig.asm.add(bead);
+    const glow = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: this._beaconGlowTexture(), color: want, transparent: true,
+      depthWrite: false, blending: THREE.AdditiveBlending, fog: false, opacity: 0.6,
+    }));
+    glow.scale.setScalar(340);
+    glow.position.copy(bead.position);
+    glow.userData.outlineSkip = true;
+    glow.userData.beaconGlow = true;
+    glow.userData.sharedMap = true;      // _beaconGlowTex is renderer-lifetime
+    rig.asm.add(glow);
+    rig.beacon = bead; rig.beaconGlow = glow;
+  }
+
+  private _removeFlightBeacon(rig: FlightRig): void {
+    if (rig.beacon) {
+      rig.asm.remove(rig.beacon);
+      rig.beacon.geometry.dispose();
+      (rig.beacon.material as THREE.Material).dispose();
+      rig.beacon = null;
+    }
+    if (rig.beaconGlow) {
+      rig.asm.remove(rig.beaconGlow);
+      (rig.beaconGlow.material as THREE.SpriteMaterial).dispose();   // map is SHARED
+      rig.beaconGlow = null;
+    }
+    rig.beaconColor = 0;
+  }
+
+  // Shared white radial glow (tinted per beacon via SpriteMaterial.color) —
+  // built once, disposed only in destroy(), like _blobTex / _sunGlowTex.
+  private _beaconGlowTexture(): THREE.CanvasTexture {
+    if (this._beaconGlowTex) return this._beaconGlowTex;
+    const c = document.createElement('canvas'); c.width = c.height = 64;
+    const g = c.getContext('2d')!;
+    const grd = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+    grd.addColorStop(0, 'rgba(255,255,255,1)');
+    grd.addColorStop(0.35, 'rgba(255,255,255,0.55)');
+    grd.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = grd; g.fillRect(0, 0, 64, 64);
+    this._beaconGlowTex = new THREE.CanvasTexture(c);
+    return this._beaconGlowTex;
+  }
+
+  // One label FIELD, rendered for the plate / the 2D line. Numeric fields are
+  // BUCKETED (alt 100 ft, speed 10 kt, distance 0.5 nm) so a live aircraft
+  // doesn't repaint its plate every poll. `suppress` is the PIA identity gate.
+  // Mirrored by canvas-render's flightFieldText — keep the two in step.
+  private _flightFieldText(field: string, fp: FlightPoint,
+                           ident: string, suppress: boolean): string {
+    switch (field) {
+      case 'callsign': return ident;
+      case 'reg':      return suppress ? '' : (fp.reg ?? '');
+      case 'type':     return suppress ? '' : (fp.typeCode ?? '');
+      case 'operator': return suppress || !fp.operator ? '' : fp.operator.slice(0, 22);
+      case 'alt':      return `${(Math.round(fp.altFt / 100) * 100).toLocaleString('en-US')} ft`;
+      case 'speed':    return fp.gsKt == null ? '' : `${Math.round(fp.gsKt / 10) * 10} kt`;
+      case 'trend': {
+        const v = fp.vertRateFpm ?? 0;
+        return v >= 300 ? '↑ climb' : v <= -300 ? '↓ descend' : '';
+      }
+      case 'squawk':   return fp.squawk ? `sq ${fp.squawk}` : '';
+      case 'dist':     return fp.distNm == null ? ''
+        : `${(Math.round(fp.distNm * 2) / 2).toFixed(1)} nm`;
+      default:         return '';
+    }
+  }
+
+  // The plate's two lines: the FIRST resolved field is the headline, the rest
+  // join into a detail line. Empty fields (no registration, level flight, …)
+  // simply drop out.
+  private _flightLabelLines(fp: FlightPoint): { top: string; sub: string } {
+    const suppress = this._flightIdentitySuppressed(fp);
+    const badge = this._flightPrivacyDimmed(fp) ? '🔒 ' : '';
+    const ident = badge + this._flightIdentifier(fp, suppress);
+    const parts: string[] = [];
+    for (const f of this._flightsLabelFields) {
+      const t = this._flightFieldText(f, fp, ident, suppress);
+      if (t) parts.push(t);
+    }
+    if (!parts.length) parts.push(ident);
+    return { top: parts[0], sub: parts.slice(1).join(' · ') };
+  }
+
+  // What goes on the fuselage: callsign → registration → hex. PIA-suppressed
+  // aircraft show the hex only (that is exactly what a Privacy ICAO Address is).
+  private _flightIdentifier(fp: FlightPoint, suppress: boolean): string {
+    if (suppress) return fp.hex.toUpperCase();
+    const cs = (fp.callsign ?? '').trim();
+    if (cs) return cs;
+    const reg = (fp.reg ?? '').trim();
+    return reg || fp.hex.toUpperCase();
+  }
+
+  // Label policy: a PISTON single (ga-high / ga-low) with a callsign tows a
+  // broadside banner (the bg tow-plane idiom); everything else gets a
+  // camera-facing plate. The fuselage identifier is painted on BOTH flanks
+  // regardless. Everything repaints only when its content changes.
   private _syncFlightLabel(rig: FlightRig, fp: FlightPoint): void {
-    const name = (fp.callsign ?? fp.hex.toUpperCase()).trim() || fp.hex.toUpperCase();
-    const wantBanner = this._flightsShowLabels && rig.kind === 'prop' && !!fp.callsign;
+    const suppress = this._flightIdentitySuppressed(fp);
+    const ident = this._flightIdentifier(fp, suppress);
+    const piston = rig.archetype === 'ga-high' || rig.archetype === 'ga-low';
+    const wantBanner = this._flightsShowLabels && piston && !!fp.callsign && !suppress;
     const wantLabel = this._flightsShowLabels && !wantBanner;
 
+    // Fuselage flanks — the identifier painted onto the model itself.
+    if (rig.idKey !== ident) {
+      this._removeFlightIdPlanes(rig);
+      const planes = this._buildFlightIdPlanes(ident, rig.archetype);
+      if (planes) { rig.asm.add(planes); rig.idPlanes = planes; }
+      rig.idKey = ident;
+    }
+
     if (wantBanner) {
-      if (rig.bannerKey !== name) {
+      if (rig.bannerKey !== ident) {
         this._removeFlightBanner(rig);
-        const tex = this._makeBgTextTexture(name, 'banner');
+        const tex = this._makeBgTextTexture(ident, 'banner');
         const cv = tex.image as HTMLCanvasElement;
         const aspect = cv.width / cv.height;
         const bh = 260;
         const b = this._buildBanner(tex, bh, aspect);
         b.rotation.y = Math.PI / 2;                            // broadside-readable
-        b.position.set(0, 20, 620 + (bh * aspect) / 2);        // trails behind (+Z = tail)
+        b.position.set(0, 20, 900 + (bh * aspect) / 2);        // trails behind (+Z = tail)
         rig.asm.add(b);
-        rig.banner = b; rig.bannerKey = name;
+        rig.banner = b; rig.bannerKey = ident;
       }
     } else if (rig.banner) this._removeFlightBanner(rig);
 
     if (wantLabel) {
-      const altK = Math.round(fp.altFt / 100) * 100;
-      const key = `${name}|${altK}`;
+      const { top, sub } = this._flightLabelLines(fp);
+      const key = `${top}|${sub}`;
       if (rig.labelKey !== key) {
         this._removeFlightLabel(rig);
-        const spr = this._makeFlightLabel(name, altK);
-        spr.position.set(0, 700, 0);
+        const spr = this._makeFlightLabel(top, sub);
+        spr.position.set(0, this._flightArchetypeMetrics(rig.archetype).labelY, 0);
         spr.userData.outlineSkip = true;
         rig.asm.add(spr);
         rig.label = spr; rig.labelKey = key;
       }
     } else if (rig.label) this._removeFlightLabel(rig);
+  }
+
+  // The identifier on BOTH fuselage flanks, un-mirrored: two FrontSide planes
+  // sharing ONE geometry + material + CanvasTexture, rotated ±π/2 about Y so
+  // each faces outward with its glyphs the right way round (the _buildBanner /
+  // message-train flank technique — a single DoubleSide plane shows the far
+  // side mirrored). The shared map is dedup-freed by _disposeSpriteMaps.
+  private _buildFlightIdPlanes(text: string, arch: AircraftArchetype): THREE.Group | null {
+    const t = (text || '').trim();
+    if (!t) return null;
+    const m = this._flightArchetypeMetrics(arch);
+    const tex = this._makeFlightIdTexture(t);
+    const cv = tex.image as HTMLCanvasElement;
+    const h = m.idH;
+    const len = Math.min(m.fusLen * 0.55, h * (cv.width / cv.height));
+    const geo = new THREE.PlaneGeometry(len, h);
+    const mat = new THREE.MeshBasicMaterial({
+      map: tex, side: THREE.FrontSide, transparent: true, depthWrite: false, fog: false,
+    });
+    const grp = new THREE.Group();
+    for (const sx of [-1, 1] as const) {
+      const p = new THREE.Mesh(geo, mat);
+      p.rotation.y = sx * Math.PI / 2;              // +Z(local) → ±X, glyphs unmirrored
+      p.position.set(sx * (m.fusHalfW + 6), m.idY, m.idZ);
+      p.userData.textPlane = true;                  // → _disposeSpriteMaps frees the map
+      p.userData.outlineSkip = true;
+      p.userData.flightId = true;
+      p.userData.flank = sx < 0 ? 'left' : 'right';
+      grp.add(p);
+    }
+    grp.userData.flightIdPlanes = true;
+    return grp;
+  }
+
+  private _removeFlightIdPlanes(rig: FlightRig): void {
+    if (!rig.idPlanes) return;
+    rig.asm.remove(rig.idPlanes);
+    this._disposeSpriteMaps(rig.idPlanes);   // the two planes SHARE one map (dedup-guarded)
+    this._disposeSubtree(rig.idPlanes);
+    rig.idPlanes = null; rig.idKey = '';
+  }
+
+  // Fuselage lettering: transparent ground + a dark halo so it reads on any
+  // livery. Flat MeshBasicMaterial downstream — the documented _mat() exemption.
+  private _makeFlightIdTexture(text: string): THREE.CanvasTexture {
+    const txt = text.slice(0, 10) || ' ';
+    const cv = document.createElement('canvas');
+    const g0 = cv.getContext('2d')!;
+    const font = '700 88px system-ui, "Segoe UI", sans-serif';
+    g0.font = font;
+    const tw = Math.ceil(g0.measureText(txt).width);
+    cv.width = Math.max(tw + 48, 160); cv.height = 128;
+    const g = cv.getContext('2d')!;                  // resize resets ctx state
+    g.font = font; g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.lineWidth = 10; g.strokeStyle = 'rgba(246,249,255,0.9)';
+    g.strokeText(txt, cv.width / 2, cv.height / 2);
+    g.fillStyle = '#1b2430';
+    g.fillText(txt, cv.width / 2, cv.height / 2);
+    const tex = new THREE.CanvasTexture(cv);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    return tex;
   }
 
   private _removeFlightLabel(rig: FlightRig): void {
@@ -11602,21 +11860,23 @@ export class ThreeDRenderer {
     rig.banner = null; rig.bannerKey = '';
   }
 
-  // Two-line callsign plate. The altitude line carries the REAL altitude —
-  // honest where the compressed display shell deliberately is not. Flat
-  // SpriteMaterial: the documented _mat() exemption (a billboarded readout, like
-  // the weather particle / info-card text materials).
-  private _makeFlightLabel(name: string, altFt: number): THREE.Sprite {
+  // The label plate. Line 1 is the headline field, line 2 the joined rest (both
+  // resolved by _flightLabelLines from the user's labelFields). An altitude
+  // field carries the REAL altitude — honest where the compressed display shell
+  // deliberately is not. Flat SpriteMaterial: the documented _mat() exemption
+  // (a billboarded readout, like the weather particle / info-card text
+  // materials).
+  private _makeFlightLabel(name: string, sub: string): THREE.Sprite {
     const cv = document.createElement('canvas');
     const g = cv.getContext('2d')!;
-    const alt = `${Math.round(altFt).toLocaleString('en-US')} ft`;
+    const alt = sub;
     const f1 = '700 46px system-ui, sans-serif';
     const f2 = '400 34px system-ui, sans-serif';
     g.font = f1; const w1 = g.measureText(name).width;
-    g.font = f2; const w2 = g.measureText(alt).width;
+    g.font = f2; const w2 = alt ? g.measureText(alt).width : 0;
     const padX = 26;
     cv.width = Math.ceil(Math.max(w1, w2, 90) + padX * 2);
-    cv.height = 124;
+    cv.height = alt ? 124 : 84;
     const c2 = cv.getContext('2d')!;                 // canvas resize resets ctx state
     c2.beginPath();
     c2.roundRect(2, 2, cv.width - 4, cv.height - 4, 18);
@@ -11639,16 +11899,21 @@ export class ThreeDRenderer {
   }
 
   private _buildFlightRig(fp: FlightPoint): FlightRig {
-    const kind = aircraftModelKind(fp);
-    const built = this._buildAircraftModel(kind, fp.military);
+    const archetype = aircraftArchetype(fp.typeCode, fp.category);
+    const dim = this._flightPrivacyDimmed(fp);
+    const built = this._buildAircraftModel(archetype, fp.military, dim);
     // YXZ: yaw outermost, pitch applied in the YAWED frame (the humanoid-root
     // convention) — with XYZ a climbing aircraft would bank as it turned.
     built.asm.rotation.order = 'YXZ';
     this._flightsGroup.add(built.asm);
     const rig: FlightRig = {
-      hex: fp.hex, asm: built.asm, kind, military: fp.military,
-      prop: built.prop, tailRotor: built.tailRotor, propRate: built.propRate,
+      hex: fp.hex, asm: built.asm, kind: legacyModelKind(archetype), archetype,
+      military: fp.military, dim,
+      prop: built.props[0] ?? null, props: built.props,
+      tailRotor: built.tailRotor, propRate: built.propRate,
       label: null, banner: null, labelKey: '', bannerKey: '',
+      idPlanes: null, idKey: '',
+      beacon: null, beaconGlow: null, beaconColor: 0, beaconPhase: 0,
       lat: fp.lat, lon: fp.lon, altFt: fp.altFt, latPerS: 0, lonPerS: 0,
       trackRad: fp.trackDeg == null ? null : fp.trackDeg * FLIGHT_DEG,
       vertRateFpm: fp.vertRateFpm ?? 0,
@@ -11662,6 +11927,39 @@ export class ThreeDRenderer {
     rig.asm.position.set(rig.curX, rig.curY, rig.curZ);
     this._flightRigs.set(fp.hex, rig);
     return rig;
+  }
+
+  // Swap a live rig's MODEL without touching its motion state — the registry
+  // lookup that resolves an archetype (or the military / privacy livery) can
+  // arrive polls after the first position. The old subtree is disposed through
+  // the same pairing _disposeFlightRig uses; label / banner / id planes / beacon
+  // are dropped with their keys cleared so the next _syncFlight* rebuilds them
+  // onto the new assembly (with archetype-correct metrics).
+  private _rebuildFlightModel(rig: FlightRig, archetype: AircraftArchetype,
+                              military: boolean, dim: boolean): void {
+    this._removeFlightLabel(rig);
+    this._removeFlightBanner(rig);
+    this._removeFlightIdPlanes(rig);
+    const hadBeacon = rig.beaconColor;
+    this._removeFlightBeacon(rig);
+    this._disposeSpriteMaps(rig.asm);
+    this._clearGroup(rig.asm);
+    this._flightsGroup.remove(rig.asm);
+
+    const built = this._buildAircraftModel(archetype, military, dim);
+    built.asm.rotation.order = 'YXZ';
+    built.asm.position.set(rig.curX, rig.curY, rig.curZ);
+    built.asm.rotation.y = rig.yaw;
+    built.asm.scale.setScalar(rig.fade);
+    this._flightsGroup.add(built.asm);
+
+    rig.asm = built.asm;
+    rig.archetype = archetype; rig.kind = legacyModelKind(archetype);
+    rig.military = military; rig.dim = dim;
+    rig.props = built.props; rig.prop = built.props[0] ?? null;
+    rig.tailRotor = built.tailRotor; rig.propRate = built.propRate;
+    rig.labelKey = ''; rig.bannerKey = ''; rig.idKey = '';
+    rig.beaconColor = hadBeacon === 0 ? 0 : -1;   // force _syncFlightBeacon to rebuild
   }
 
   // Real lat/lon/altitude → SCENE-RELATIVE display offset from the home anchor.
@@ -11692,92 +11990,262 @@ export class ThreeDRenderer {
     this._flightRigs.delete(rig.hex);
   }
 
-  // Toy toon aircraft, ~900–1100 mm long (the bg tow-plane's scale), nose along
-  // local −Z. No blob shadow (it is in the sky) and no outline shells on the
-  // small parts. Military → olive-drab body, civil accents kept.
-  private _buildAircraftModel(kind: 'prop' | 'jet' | 'heli', military: boolean): {
-    asm: THREE.Group; prop: THREE.Object3D | null;
+  // ── Aircraft archetype metrics ────────────────────────────────────────────
+  // Per-silhouette dimensions that the model builder AND its attachment points
+  // (fuselage identifier planes, status beacon, label plate) both read, so a
+  // widebody's lettering lands on a widebody's flank. Everything is ~2× the
+  // pre-wave-2 toy scale so the fuselage can carry readable text; the RELATIVE
+  // sizes follow the real families (widebody largest, GA smallest) — decorative,
+  // NOT to scale, exactly like the display shell itself (flights.ts's header).
+  private _flightArchetypeMetrics(a: AircraftArchetype): {
+    fusLen: number; fusHalfW: number; idY: number; idZ: number; idH: number;
+    beaconY: number; beaconZ: number; labelY: number;
+  } {
+    switch (a) {
+      case 'ga-high':
+        return { fusLen: 1700, fusHalfW: 160, idY: 0, idZ: 120, idH: 170,
+                 beaconY: 240, beaconZ: 420, labelY: 950 };
+      case 'ga-low':
+        return { fusLen: 1700, fusHalfW: 150, idY: 0, idZ: 120, idH: 160,
+                 beaconY: 220, beaconZ: 300, labelY: 950 };
+      case 'twin-prop':
+        return { fusLen: 2000, fusHalfW: 170, idY: 10, idZ: 140, idH: 180,
+                 beaconY: 250, beaconZ: 400, labelY: 1050 };
+      case 'turboprop':
+        return { fusLen: 2400, fusHalfW: 190, idY: 10, idZ: 120, idH: 200,
+                 beaconY: 260, beaconZ: 560, labelY: 1250 };
+      case 'widebody':
+        return { fusLen: 3200, fusHalfW: 220, idY: 30, idZ: -260, idH: 260,
+                 beaconY: 300, beaconZ: 380, labelY: 1450 };
+      case 'bizjet':
+        return { fusLen: 1900, fusHalfW: 145, idY: 10, idZ: -180, idH: 160,
+                 beaconY: 210, beaconZ: 200, labelY: 1000 };
+      case 'heli':
+        // fusHalfW clears the 430 mm cabin sphere (the "fuselage" here is the
+        // bubble); the beacon rides the fin tip, the real-world position.
+        return { fusLen: 1600, fusHalfW: 450, idY: 480, idZ: -320, idH: 250,
+                 beaconY: 920, beaconZ: 1180, labelY: 1300 };
+      default:   // narrowbody
+        return { fusLen: 2400, fusHalfW: 170, idY: 20, idZ: -220, idH: 210,
+                 beaconY: 240, beaconZ: 340, labelY: 1200 };
+    }
+  }
+
+  // Toy toon aircraft, nose along local −Z, sized by _flightArchetypeMetrics.
+  // No blob shadow (it is in the sky) and no outline shells on the small parts.
+  // Military → olive-drab body, civil accents kept. `dim` is the PIA/LADD
+  // privacy courtesy (research §4.2): every material builds translucent, which
+  // also makes _addOutlines skip the whole airframe (transparent → no shell).
+  //
+  // Eight silhouettes (research §3.2), the two distinctions the shipped 3-way
+  // model could not see: wing position on GA singles (both self-report `A1`)
+  // and underwing pods vs. REAR-fuselage engines on jets (both `A3` — the CRJ /
+  // ERJ family really is bizjet-shaped, §3.3).
+  private _buildAircraftModel(archetype: AircraftArchetype, military: boolean,
+                              dim = false): {
+    asm: THREE.Group; props: THREE.Object3D[];
     tailRotor: THREE.Object3D | null; propRate: number;
   } {
     const asm = new THREE.Group();
+    const M = this._flightArchetypeMetrics(archetype);
     const MIL = 0x6b7a4f;
-    const dark = this._mat({ color: 0x33363b });
-    let prop: THREE.Object3D | null = null, tailRotor: THREE.Object3D | null = null;
+    const props: THREE.Object3D[] = [];
+    let tailRotor: THREE.Object3D | null = null;
     let propRate = 22;
+    const trans = dim
+      ? { transparent: true, opacity: FLIGHT_PRIVACY_OPACITY }
+      : {};
+    const mk = (color: number) => this._mat({ color, ...trans });
+    const dark = mk(0x33363b);
+    const glass = this._mat({ color: 0x2a3946,
+      transparent: true, opacity: dim ? FLIGHT_PRIVACY_OPACITY * 0.8 : 0.85 });
+
     const box = (w: number, h: number, d: number, m: THREE.Material,
                  x: number, y: number, z: number) => {
       const me = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m);
       me.position.set(x, y, z); asm.add(me); return me;
     };
+    // Engine nacelle / pod — a barrel along the flight axis (Z).
+    const pod = (r: number, len: number, m: THREE.Material,
+                 x: number, y: number, z: number, where: 'wing' | 'rear') => {
+      const p = new THREE.Mesh(new THREE.CylinderGeometry(r, r, len, 12), m);
+      p.rotation.x = Math.PI / 2;
+      p.position.set(x, y, z);
+      p.userData.outlineSkip = true;
+      p.userData.nacelle = where;
+      asm.add(p); return p;
+    };
+    // A spinning propeller disc (about local Z, the flight axis).
+    const propAt = (x: number, y: number, z: number, blade: number) => {
+      const g = new THREE.Group();
+      const hub = new THREE.Mesh(new THREE.ConeGeometry(blade * 0.09, blade * 0.28, 12), dark);
+      hub.rotation.x = -Math.PI / 2;                  // apex → −Z (nose forward)
+      hub.userData.outlineSkip = true; g.add(hub);
+      for (const rot of [0, Math.PI / 2]) {
+        const b = new THREE.Mesh(new THREE.BoxGeometry(blade * 0.11, blade, 14), dark);
+        b.rotation.z = rot; b.userData.outlineSkip = true; g.add(b);
+      }
+      g.position.set(x, y, z);
+      g.userData.outlineSkip = true; g.userData.propDisc = true;
+      asm.add(g); props.push(g); return g;
+    };
+    const nose = (r: number, len: number, m: THREE.Material, z: number) => {
+      const n = new THREE.Mesh(new THREE.ConeGeometry(r, len, 14), m);
+      n.rotation.x = -Math.PI / 2; n.position.set(0, 0, z); asm.add(n); return n;
+    };
+    // Horizontal stabilizer + fin. `tTail` lifts the stabilizer onto the fin tip
+    // (the ATR / Dash-8 / CRJ / Learjet family, §3.2).
+    const tail = (m: THREE.Material, span: number, z: number,
+                  finH: number, finBaseY: number, tTail: boolean) => {
+      const fin = box(Math.max(38, span * 0.05), finH, span * 0.44, m,
+                      0, finBaseY + finH / 2, z);
+      fin.userData.fin = true;
+      const st = box(span, Math.max(34, span * 0.045), span * 0.28, m, 0,
+                     tTail ? finBaseY + finH : finBaseY + finH * 0.12,
+                     tTail ? z + span * 0.02 : z);
+      st.userData.tail = tTail ? 't-tail' : 'conventional';
+      return st;
+    };
 
-    if (kind === 'prop') {
-      // High-wing light single — the bg tow-plane composition, restyled.
-      const body = this._mat({ color: military ? MIL : 0xdad7cf });
-      const accent = this._mat({ color: military ? 0x4d5940 : 0xc94f3d });
-      box(180, 180, 900, body, 0, 0, 0);
-      box(1300, 60, 260, accent, 0, 40, -40);          // high wing
-      box(520, 50, 150, accent, 0, 60, 420);           // tailplane
-      box(50, 260, 160, body, 0, 150, 420);            // fin
-      const propG = new THREE.Group();                  // spins about local Z (flight axis)
-      const hub = new THREE.Mesh(new THREE.ConeGeometry(48, 150, 12), dark);
-      hub.rotation.x = -Math.PI / 2;                    // apex → −Z (nose forward)
-      hub.userData.outlineSkip = true; propG.add(hub);
-      for (const rot of [0, Math.PI / 2]) {
-        const blade = new THREE.Mesh(new THREE.BoxGeometry(80, 760, 12), dark);
-        blade.rotation.z = rot; blade.userData.outlineSkip = true; propG.add(blade);
+    if (archetype === 'ga-high' || archetype === 'ga-low') {
+      // Light single. The ONE fork `category` alone can never resolve: the wing
+      // sits ON TOP of the fuselage (Cessna) or UNDER it (Cherokee/Cirrus).
+      const high = archetype === 'ga-high';
+      const body = mk(military ? MIL : (high ? 0xdad7cf : 0xe6e2d8));
+      const accent = mk(military ? 0x4d5940 : (high ? 0xc94f3d : 0x2f6fb0));
+      const fw = M.fusHalfW * 2, fh = high ? 300 : 270;
+      box(fw, fh, M.fusLen, body, 0, 0, 0);                   // fuselage (child 0)
+      box(fw * 0.86, fh * 0.5, 520, glass, 0, fh * 0.32, -260); // cabin greenhouse
+      nose(fw * 0.42, 300, body, -1000);
+      const wingY = high ? fh / 2 + 55 : -(fh / 2 + 40);
+      const wing = box(high ? 2400 : 2200, 62, high ? 480 : 440, accent, 0, wingY, -110);
+      wing.userData.wing = high ? 'high' : 'low';
+      if (high) {                                              // strut-braced
+        for (const sx of [-1, 1]) {
+          const s = box(34, 260, 90, body, sx * 620, wingY - 140, -60);
+          s.rotation.z = sx * 0.32; s.userData.outlineSkip = true;
+        }
       }
-      propG.position.set(0, 40, -480); propG.userData.outlineSkip = true;
-      asm.add(propG); prop = propG; propRate = 22;
-    } else if (kind === 'jet') {
-      // Swept low-wing twin. Wings sweep BACK: R_y(φ)·(1,0,0) = (cosφ, 0, −sinφ),
-      // so the +X wing needs φ < 0 to put its tip at +Z (toward the tail).
-      const body = this._mat({ color: military ? MIL : 0xe8ecf0 });
-      const accent = this._mat({ color: military ? 0x4d5940 : 0x2f6fb0 });
-      box(170, 170, 1100, body, 0, 0, 0);
-      const nose = new THREE.Mesh(new THREE.ConeGeometry(88, 240, 12), body);
-      nose.rotation.x = -Math.PI / 2; nose.position.set(0, 0, -660); asm.add(nose);
-      const sweep = 25 * Math.PI / 180;
+      // Fixed gear hint — boxes + sphere wheels (NEVER cylinders: the model's
+      // "a piston single carries no engine nacelle" reading stays clean).
       for (const sx of [-1, 1]) {
-        const wing = new THREE.Mesh(new THREE.BoxGeometry(620, 36, 200), accent);
-        wing.position.set(sx * 350, -30, 90);
-        wing.rotation.y = -sx * sweep;
+        box(30, 150, 60, dark, sx * 240, -(fh / 2 + 70), -260);
+        const w = new THREE.Mesh(new THREE.SphereGeometry(58, 8, 6), dark);
+        w.position.set(sx * 240, -(fh / 2 + 150), -260);
+        w.userData.outlineSkip = true; asm.add(w);
+      }
+      tail(body, 900, 760, 400, fh / 2 - 20, false);
+      propAt(0, 0, -1130, 780);
+      propRate = 22;
+    } else if (archetype === 'twin-prop') {
+      // Low/mid wing, TWO wing-mounted engines (Baron / King Air / Seneca).
+      const body = mk(military ? MIL : 0xe4e6e9);
+      const accent = mk(military ? 0x4d5940 : 0x24527e);
+      box(M.fusHalfW * 2, 320, M.fusLen, body, 0, 0, 0);
+      box(300, 160, 560, glass, 0, 105, -420);
+      nose(150, 320, body, -1160);
+      const wing = box(2800, 62, 520, accent, 0, -50, 20);
+      wing.userData.wing = 'mid';
+      for (const sx of [-1, 1]) {
+        pod(95, 620, body, sx * 700, -40, -180, 'wing');
+        propAt(sx * 700, -40, -540, 700);
+      }
+      tail(body, 1000, 880, 420, 140, false);
+      propRate = 22;
+    } else if (archetype === 'turboprop') {
+      // HIGH wing + two turboprops + T-TAIL (ATR / Dash-8, §3.2) — the shape a
+      // naive "regional turboprop" reading gets wrong.
+      const body = mk(military ? MIL : 0xeceef1);
+      const accent = mk(military ? 0x4d5940 : 0x1f7a6a);
+      box(M.fusHalfW * 2, 360, M.fusLen, body, 0, 0, 0);
+      box(340, 170, 620, glass, 0, 120, -700);
+      nose(170, 340, body, -1370);
+      const wing = box(3200, 68, 560, accent, 0, 245, -60);
+      wing.userData.wing = 'high';
+      for (const sx of [-1, 1]) {
+        pod(110, 700, body, sx * 780, 190, -240, 'wing');
+        propAt(sx * 780, 190, -640, 820);
+      }
+      tail(body, 1200, 1080, 620, 180, true);                 // T-tail
+      propRate = 20;
+    } else if (archetype === 'narrowbody' || archetype === 'widebody') {
+      // Tube + swept low wing + UNDERWING pods + conventional tail. Widebody =
+      // the same family, longer/fatter, four pods (§3.2 / §3.4's A380 call).
+      const wide = archetype === 'widebody';
+      const body = mk(military ? MIL : 0xe8ecf0);
+      const accent = mk(military ? 0x4d5940 : (wide ? 0x1f5aa0 : 0x2f6fb0));
+      const len = M.fusLen, hw = M.fusHalfW;
+      box(hw * 2, hw * 2, len, body, 0, 0, 0);
+      box(hw * 1.7, hw * 0.7, 420, glass, 0, hw * 0.5, -len * 0.36);
+      nose(hw * 0.92, wide ? 420 : 340, body, -(len / 2 + (wide ? 200 : 160)));
+      const sweep = 25 * Math.PI / 180;
+      const span = wide ? 1550 : 1250;
+      for (const sx of [-1, 1]) {
+        const wing = new THREE.Mesh(
+          new THREE.BoxGeometry(span, 44, wide ? 400 : 320), accent);
+        wing.position.set(sx * (span / 2 + hw * 0.7), -hw * 0.35, wide ? 200 : 160);
+        wing.rotation.y = -sx * sweep;                        // tips sweep to +Z
+        wing.userData.wing = 'low';
         asm.add(wing);
-        const pod = new THREE.Mesh(new THREE.CylinderGeometry(58, 58, 300, 10), dark);
-        pod.rotation.x = Math.PI / 2;                   // barrel along Z
-        pod.position.set(sx * 330, -90, 150);
-        pod.userData.outlineSkip = true; asm.add(pod);
+        pod(wide ? 130 : 110, wide ? 660 : 560, dark,
+            sx * (hw * 0.7 + span * 0.34), -hw * 0.9, wide ? 60 : 40, 'wing');
+        if (wide) pod(130, 660, dark, sx * (hw * 0.7 + span * 0.72), -hw * 0.75, 240, 'wing');
       }
-      box(460, 34, 150, accent, 0, 120, 480);           // swept tailplane
-      const fin = new THREE.Mesh(new THREE.BoxGeometry(38, 300, 230), body);
-      fin.position.set(0, 200, 470); fin.rotation.x = -0.18; asm.add(fin);
-      propRate = 0;                                     // no prop
+      tail(body, wide ? 1300 : 1000, len * 0.42, wide ? 700 : 560, hw * 0.9, false);
+      propRate = 0;                                           // no prop
+    } else if (archetype === 'bizjet') {
+      // Rear-FUSELAGE engines + T-tail. Learjet/Citation/Gulfstream — AND the
+      // Bombardier CRJ / older Embraer ERJ families (§3.3), which the shipped
+      // 3-way model drew as underwing-pod narrowbodies.
+      const body = mk(military ? MIL : 0xf0f2f5);
+      const accent = mk(military ? 0x4d5940 : 0x3b4a5c);
+      box(M.fusHalfW * 2, M.fusHalfW * 2, M.fusLen, body, 0, 0, 0);
+      box(250, 130, 420, glass, 0, 90, -600);
+      nose(140, 320, body, -1110);
+      const sweep = 27 * Math.PI / 180;
+      for (const sx of [-1, 1]) {
+        const wing = new THREE.Mesh(new THREE.BoxGeometry(1000, 38, 300), accent);
+        wing.position.set(sx * 640, -110, 180);
+        wing.rotation.y = -sx * sweep;
+        wing.userData.wing = 'low';
+        asm.add(wing);
+        pod(92, 420, dark, sx * 250, 90, 560, 'rear');        // REAR fuselage pods
+      }
+      tail(body, 800, 880, 520, 130, true);                   // T-tail
+      propRate = 0;
     } else {
-      // Light helicopter — the bg chopper composition minus the NEWS livery.
-      const body = this._mat({ color: military ? MIL : 0x35506e });
-      const cabin = new THREE.Mesh(new THREE.SphereGeometry(260, 16, 12), body);
-      cabin.position.set(0, 300, -200); cabin.scale.set(1, 0.85, 1.15); asm.add(cabin);
-      box(80, 80, 820, body, 0, 350, 300);              // tail boom
-      box(36, 200, 110, body, 0, 440, 690);             // fin
-      for (const sx of [-1, 1]) box(46, 26, 660, dark, sx * 175, 55, -110);   // skids
-      const rotor = new THREE.Group();                  // main rotor spins about Y
+      // Light helicopter — the shipped chopper composition at the wave-2 scale.
+      const body = mk(military ? MIL : 0x35506e);
+      const cabin = new THREE.Mesh(new THREE.SphereGeometry(430, 16, 12), body);
+      cabin.position.set(0, 470, -330); cabin.scale.set(1, 0.85, 1.15);
+      asm.add(cabin);
+      box(140, 140, 1420, body, 0, 570, 500);                 // tail boom
+      box(60, 340, 190, body, 0, 720, 1180);                  // fin
+      for (const sx of [-1, 1]) box(78, 44, 1120, dark, sx * 300, 60, -190);   // skids
+      const rotor = new THREE.Group();                        // main rotor (about Y)
       for (const rot of [0, Math.PI / 2]) {
-        const blade = new THREE.Mesh(new THREE.BoxGeometry(1500, 16, 80), dark);
-        blade.rotation.y = rot; rotor.add(blade);
+        const b = new THREE.Mesh(new THREE.BoxGeometry(2600, 26, 135), dark);
+        b.rotation.y = rot; b.userData.outlineSkip = true; rotor.add(b);
       }
-      rotor.position.set(0, 520, -120); rotor.userData.outlineSkip = true; asm.add(rotor);
-      const mast = new THREE.Mesh(new THREE.CylinderGeometry(22, 22, 180, 8), dark);
-      mast.position.set(0, 430, -120); asm.add(mast);
-      const tr = new THREE.Group();                      // tail rotor spins about X
+      rotor.position.set(0, 900, -200);
+      rotor.userData.outlineSkip = true; rotor.userData.mainRotor = true;
+      asm.add(rotor); props.push(rotor);
+      const mast = new THREE.Mesh(new THREE.CylinderGeometry(36, 36, 300, 8), dark);
+      mast.position.set(0, 740, -200); asm.add(mast);
+      const tr = new THREE.Group();                           // tail rotor (about X)
       for (const rot of [0, Math.PI / 2]) {
-        const blade = new THREE.Mesh(new THREE.BoxGeometry(16, 320, 36), dark);
-        blade.rotation.x = rot; tr.add(blade);
+        const b = new THREE.Mesh(new THREE.BoxGeometry(26, 550, 60), dark);
+        b.rotation.x = rot; b.userData.outlineSkip = true; tr.add(b);
       }
-      tr.position.set(60, 440, 720); tr.userData.outlineSkip = true; asm.add(tr);
-      prop = rotor; tailRotor = tr; propRate = 42;
+      tr.position.set(100, 730, 1230);
+      tr.userData.outlineSkip = true; asm.add(tr);
+      tailRotor = tr; propRate = 42;
     }
+    // The helicopter's cabin is added first; every fixed-wing build puts its
+    // FUSELAGE first (children[0] = the body mesh — the livery test hook).
     // Silhouette shells on the airframe only (minDim keeps blades/pods clean).
-    this._addOutlines(asm, 8, 220);
-    return { asm, prop, tailRotor, propRate };
+    this._addOutlines(asm, 10, 320);
+    return { asm, props, tailRotor, propRate };
   }
 
   // Per-frame aircraft + ISS motion (from _animate, beside _advanceBgText).
@@ -11830,11 +12298,26 @@ export class ThreeDRenderer {
         if (rig.label) (rig.label.material as THREE.SpriteMaterial).opacity = rig.fade;
         if (rig.propRate > 0) {
           rig.spin = (rig.spin + rig.propRate * dt) % (Math.PI * 2);
-          if (rig.prop) {
-            if (rig.kind === 'heli') rig.prop.rotation.y = rig.spin;
-            else rig.prop.rotation.z = rig.spin;
+          // Twins carry two discs; the helicopter's single entry is its main
+          // rotor (about Y). Per-rig accumulator, never the absolute clock —
+          // a fresh rig must not pop into another's phase.
+          for (const d of rig.props) {
+            if (rig.archetype === 'heli') d.rotation.y = rig.spin;
+            else d.rotation.z = rig.spin;
           }
           if (rig.tailRotor) rig.tailRotor.rotation.x = (rig.spin * 1.6) % (Math.PI * 2);
+        }
+        // Status beacon flash — a sharpened sine so it reads as a strobe, not a
+        // throb. Mutates existing materials in place (zero allocation).
+        if (rig.beacon && rig.beaconGlow) {
+          rig.beaconPhase = (rig.beaconPhase + dt * FLIGHT_BEACON_HZ * Math.PI * 2)
+            % (Math.PI * 2);
+          const s = Math.max(0, Math.sin(rig.beaconPhase));
+          const f = s * s * s;                     // sharp on, long off
+          (rig.beacon.material as THREE.MeshBasicMaterial).opacity =
+            (0.28 + 0.72 * f) * rig.fade;
+          (rig.beaconGlow.material as THREE.SpriteMaterial).opacity =
+            (0.10 + 0.85 * f) * rig.fade;
         }
       }
     }
@@ -18726,6 +19209,7 @@ export class ThreeDRenderer {
     this._puddleTex?.dispose(); this._puddleTex = null;
     // Phase 3 sky prop textures (shared, built once — freed only here).
     this._sunGlowTex?.dispose(); this._sunGlowTex = null;
+    this._beaconGlowTex?.dispose(); this._beaconGlowTex = null;   // flight status beacons
     this._starTex?.dispose(); this._starTex = null;
     for (const t of Object.values(this._moonTexCache)) t?.dispose();
     this._moonTexCache = {};
