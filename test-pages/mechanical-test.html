@@ -1,0 +1,464 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>mechanical appliance test</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<script type="module">
+  // Mechanical & utility appliances batch: 10 FurnitureKinds (water_heater /
+  // air_handler / floor_radiator / wall_radiator / boiler / ac_condenser /
+  // heat_pump / sump_pump / recirc_pump / printer_3d), all cat 'appliance'.
+  //   pure : geometry.mod.js — FURNITURE_KINDS defaults, isMechanicalApplianceKind /
+  //          isPumpKind, mechanicalBindDomains, defaultFurnitureElevation,
+  //          printerProgress, mechanicalRun (the heat/cool/fan glow matrix).
+  //   3D   : built renderer chunk — every kind builds; glow color follows the
+  //          resolved state; condenser/heat-pump fans spin ONLY while running;
+  //          pump flow textures scroll while on + freeze while off + are disposed
+  //          on rebuild; the printer head oscillates + the print grows with a bound
+  //          progress; the generic green in-use LED is suppressed on all 10.
+  //   2D   : canvas-render.mod.js drawFurniturePrimitiveLocal no-throw per kind.
+  //
+  // Build (from the repo root):
+  //   npm run build
+  //   H=/tmp/diorama-mech; mkdir -p $H; cp -r dist/* test-pages/* $H/
+  //   npx esbuild src/geometry.ts     --bundle --format=esm --outfile=$H/geometry.mod.js
+  //   npx esbuild src/canvas-render.ts --bundle --format=esm --outfile=$H/canvas-render.mod.js
+  //   (cd $H && python3 -m http.server 8934)
+  const mod = await import('./assets/three-renderer.js?v=' + Date.now());
+  const geo = await import('./geometry.mod.js?v=' + Date.now());
+  const cr  = await import('./canvas-render.mod.js?v=' + Date.now());
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+
+  const results = [];
+  const assert = (name, cond, detail = '') => results.push(`${cond ? 'PASS' : 'FAIL'} ${name}${detail ? ' (' + detail + ')' : ''}`);
+  const findByFixtureId = (grp, id) => {
+    let found = null;
+    grp.traverse(o => { if (!found && o.userData && o.userData.fixtureId === id) found = o; });
+    return found;
+  };
+  const meshCount = (g) => { let n = 0; g && g.traverse(o => { if (o.isMesh) n++; }); return n; };
+  // All emissive hexes actually GLOWING (intensity above the near-dark floor) in
+  // a subtree, excluding the shared inverted-hull outline shells.
+  const glowHexes = (g) => {
+    const out = new Set();
+    g && g.traverse(o => {
+      if (!o.isMesh || o.userData?.outline) return;
+      const m = o.material;
+      if (!m || Array.isArray(m) || !m.emissive) return;
+      if ((m.emissiveIntensity ?? 0) > 0.1) out.add(m.emissive.getHex());
+    });
+    return out;
+  };
+
+  const KINDS = ['water_heater','air_handler','floor_radiator','wall_radiator','boiler',
+                 'ac_condenser','heat_pump','sump_pump','recirc_pump','printer_3d'];
+  const HEAT = 0xff6d4d, COOL = 0x4dd0ff, FAN = 0xf2f5f7, GREEN_LED = 0x00c853;
+
+  const baseFloor = (furniture) => ({
+    id: 'f1', name: 'F', w: 20000, d: 12000,
+    walls: [], furniture: furniture || [], lights: [], switches: [],
+    sensors: [], motionSensors: [], envSensors: [], doors: [], windows: [],
+    bg: null, model3d: null, look3d: null, rooms: [],
+  });
+  const build = (furniture, states) =>
+    r.updateFloor(baseFloor(furniture), { preset: 'day' }, undefined, undefined,
+                  id => (states && states[id]) || null);
+  const piece = (kind, over) => Object.assign(
+    { id: kind, x: 2000, y: 2000, w: geo.FURNITURE_KINDS[kind].w, h: geo.FURNITURE_KINDS[kind].h, kind },
+    over || {});
+
+  // Deterministic clock so _advanceClimateGlows (performance.now) is stable.
+  let _clock = 1000;
+  performance.now = () => _clock;
+
+  // ── pure: kinds + predicates + domains + elevation ───────────────────────
+  function testPure() {
+    const K = geo.FURNITURE_KINDS;
+    assert('all 10 mechanical FurnitureKinds present', KINDS.every(k => !!K[k]),
+      KINDS.filter(k => !K[k]).join(',') || 'ok');
+    const dims = {
+      water_heater:[560,560,1500], air_handler:[600,750,1350], floor_radiator:[1500,150,250],
+      wall_radiator:[800,110,600], boiler:[600,650,900], ac_condenser:[900,900,700],
+      heat_pump:[950,400,800], sump_pump:[350,350,450], recirc_pump:[300,180,220],
+      printer_3d:[420,420,480],
+    };
+    assert('pinned footprint/height defaults', KINDS.every(k =>
+      K[k].w === dims[k][0] && K[k].h === dims[k][1] && K[k].ht === dims[k][2]),
+      KINDS.filter(k => !(K[k].w===dims[k][0] && K[k].h===dims[k][1] && K[k].ht===dims[k][2]))
+        .map(k => `${k}:${K[k].w}x${K[k].h}x${K[k].ht}`).join(' ') || 'ok');
+    assert('all 10 are cat=appliance (rides the appliances layer + hash)',
+      KINDS.every(k => K[k].cat === 'appliance'),
+      KINDS.filter(k => K[k].cat !== 'appliance').join(',') || 'ok');
+    assert('printer_3d is mountable (sits on a desk/counter)', K.printer_3d.mountable === true);
+    assert('isMechanicalApplianceKind true for all 10', KINDS.every(k => geo.isMechanicalApplianceKind(k)));
+    assert('isMechanicalApplianceKind false for fridge/table/window_ac',
+      !geo.isMechanicalApplianceKind('fridge') && !geo.isMechanicalApplianceKind('table') &&
+      !geo.isMechanicalApplianceKind('window_ac'));
+    assert('isPumpKind only sump_pump + recirc_pump',
+      geo.isPumpKind('sump_pump') && geo.isPumpKind('recirc_pump') &&
+      !geo.isPumpKind('boiler') && !geo.isPumpKind('printer_3d'));
+    assert('mechanicalBindDomains water_heater includes water_heater domain',
+      geo.mechanicalBindDomains('water_heater').includes('water_heater'));
+    assert('mechanicalBindDomains air_handler/heat_pump = climate/fan/switch',
+      geo.mechanicalBindDomains('air_handler').join() === 'climate,fan,switch' &&
+      geo.mechanicalBindDomains('heat_pump').join() === 'climate,fan,switch');
+    assert('mechanicalBindDomains pumps = switch/binary_sensor',
+      geo.mechanicalBindDomains('sump_pump').join() === 'switch,binary_sensor' &&
+      geo.mechanicalBindDomains('recirc_pump').join() === 'switch,binary_sensor');
+    assert('mechanicalBindDomains printer_3d includes sensor',
+      geo.mechanicalBindDomains('printer_3d').includes('sensor'));
+    assert('mechanicalBindDomains condenser/radiators/boiler = climate/switch/binary_sensor',
+      ['ac_condenser','floor_radiator','wall_radiator','boiler'].every(k =>
+        geo.mechanicalBindDomains(k).join() === 'climate,switch,binary_sensor'));
+    assert('defaultFurnitureElevation wall_radiator = 200 (others 0)',
+      geo.defaultFurnitureElevation('wall_radiator') === 200 &&
+      geo.defaultFurnitureElevation('boiler') === 0 &&
+      geo.defaultFurnitureElevation('printer_3d') === 0);
+    assert('MECH_GLOW_COLORS heat/cool reuse the HVAC vent palette',
+      geo.MECH_GLOW_COLORS.heat === geo.HVAC_VENT_COLORS.heat &&
+      geo.MECH_GLOW_COLORS.cool === geo.HVAC_VENT_COLORS.cool);
+    assert("mechanicalGlowColor('none') = null", geo.mechanicalGlowColor('none') === null);
+  }
+
+  // ── pure: printerProgress (defensive parse) ──────────────────────────────
+  function testPrinterProgress() {
+    const pp = geo.printerProgress;
+    assert('printerProgress bare numeric state', pp({ state: '42' }) === 42);
+    assert('printerProgress decimal + clamping', pp({ state: '12.5' }) === 12.5 &&
+      pp({ state: '140' }) === 100 && pp({ state: '-8' }) === 0);
+    assert('printerProgress falls back to progress attributes',
+      pp({ state: 'printing', attributes: { progress: 63 } }) === 63 &&
+      pp({ state: 'on', attributes: { print_progress: '17' } }) === 17 &&
+      pp({ state: 'on', attributes: { completion: 88.5 } }) === 88.5);
+    assert('printerProgress non-numeric / missing → null',
+      pp({ state: 'printing' }) === null && pp(null) === null &&
+      pp({ state: '', attributes: {} }) === null &&
+      pp({ state: '12:30' }) === null);
+    assert('printerProgress never throws on garbage',
+      (() => { try { pp({ state: {}, attributes: { progress: {} } }); return true; } catch { return false; } })());
+  }
+
+  // ── pure: mechanicalRun glow matrix ──────────────────────────────────────
+  function testMechanicalRun() {
+    const mr = geo.mechanicalRun;
+    // water heater: any live operation mode = heating; off/unknown = idle.
+    assert('water_heater eco/gas/performance → running heat',
+      ['eco','gas','performance','heat_pump','high_demand','on'].every(s =>
+        { const m = mr({ state: s }, 'water_heater'); return m.running && m.glow === 'heat'; }));
+    assert('water_heater off/unavailable/unknown → idle, no glow',
+      ['off','unavailable','unknown',''].every(s =>
+        { const m = mr({ state: s }, 'water_heater'); return !m.running && m.glow === 'none'; }));
+    assert('water_heater never glows cool even in a cool-ish mode',
+      mr({ state: 'cool' }, 'water_heater').glow === 'heat');
+    // air handler: tri-state through hvacAirflow.
+    assert('air_handler cool → cool, heat → heat, fan_only → fan',
+      mr({ state: 'cool' }, 'air_handler').glow === 'cool' &&
+      mr({ state: 'heat' }, 'air_handler').glow === 'heat' &&
+      mr({ state: 'fan_only' }, 'air_handler').glow === 'fan');
+    assert('air_handler hvac_action wins over the mode',
+      mr({ state: 'heat_cool', attributes: { hvac_action: 'cooling' } }, 'air_handler').glow === 'cool' &&
+      mr({ state: 'heat_cool', attributes: { hvac_action: 'heating' } }, 'air_handler').glow === 'heat');
+    assert('air_handler mode heat + action idle → NOT running (honest dark)',
+      !mr({ state: 'heat', attributes: { hvac_action: 'idle' } }, 'air_handler').running);
+    assert('air_handler auto/dry with no action → running white (other mode)',
+      mr({ state: 'auto' }, 'air_handler').glow === 'fan' &&
+      mr({ state: 'dry' }, 'air_handler').glow === 'fan');
+    assert('heat_pump tri-state cool/heat/other',
+      mr({ state: 'cool' }, 'heat_pump').glow === 'cool' &&
+      mr({ state: 'heat' }, 'heat_pump').glow === 'heat' &&
+      mr({ state: 'auto' }, 'heat_pump').glow === 'fan');
+    // Single-purpose plant can only do its one job.
+    assert('ac_condenser always cool (even bound to a plain switch)',
+      mr({ state: 'on' }, 'ac_condenser').glow === 'cool' &&
+      mr({ state: 'cool' }, 'ac_condenser').glow === 'cool' &&
+      mr({ state: 'heat' }, 'ac_condenser').glow === 'cool');
+    assert('ac_condenser off → idle', !mr({ state: 'off' }, 'ac_condenser').running);
+    assert('radiators + boiler always heat',
+      ['floor_radiator','wall_radiator','boiler'].every(k =>
+        mr({ state: 'on' }, k).glow === 'heat' &&
+        mr({ state: 'heat', attributes: { hvac_action: 'heating' } }, k).glow === 'heat'));
+    assert('radiators idle when action reports idle',
+      !mr({ state: 'heat', attributes: { hvac_action: 'idle' } }, 'floor_radiator').running);
+    // Pumps: no glow ever, on/off only.
+    assert('pumps run on on/open/running, never glow',
+      ['on','open','running','playing'].every(s => {
+        const m = mr({ state: s }, 'sump_pump'); return m.running && m.glow === 'none'; }));
+    assert('pumps idle on off/closed/unknown',
+      ['off','closed','unknown',''].every(s => !mr({ state: s }, 'recirc_pump').running));
+    // Printer.
+    assert('printer running only between 0 and 100 %',
+      mr({ state: '0' }, 'printer_3d').running === false &&
+      mr({ state: '25' }, 'printer_3d').running === true &&
+      mr({ state: '100' }, 'printer_3d').running === false);
+    assert('printer progress carried through', mr({ state: '75' }, 'printer_3d').progress === 75);
+    assert('printer on/off binding runs with null progress',
+      (() => { const m = mr({ state: 'printing' }, 'printer_3d'); return m.running && m.progress === null; })());
+    assert('mechanicalRun tolerates a null state envelope',
+      KINDS.every(k => { const m = mr(null, k); return !m.running && m.glow === 'none'; }));
+    assert('non-mechanical progress is always null',
+      mr({ state: 'on' }, 'boiler').progress === null);
+  }
+
+  // ── 3D: all 10 build ─────────────────────────────────────────────────────
+  function testBuild() {
+    const furn = KINDS.map((k, i) => piece(k, { id: k, x: 1200 + i * 1700, y: 3000,
+                                                elevation: k === 'wall_radiator' ? 200 : 0 }));
+    build(furn, {});
+    const missing = [], thin = [];
+    for (const k of KINDS) {
+      const g = findByFixtureId(r._floorGroup, k);
+      if (!g) { missing.push(k); continue; }
+      if (meshCount(g) < 4) thin.push(`${k}:${meshCount(g)}`);
+    }
+    assert('all 10 mechanical kinds build a 3D group', missing.length === 0, missing.join(',') || 'ok');
+    assert('every build has real composite geometry (>= 4 meshes)', thin.length === 0, thin.join(' ') || 'ok');
+    // Blob shadow policy: floor-standing pieces get one, the wall-hung radiator
+    // (elevation 200) does not.
+    const hasBlob = (g) => { let f = false; g.traverse(o => { if (o.isMesh && o.material?.map && o.material.transparent && o.geometry?.type === 'PlaneGeometry') f = true; }); return f; };
+    assert('floor-standing boiler gets a blob shadow', hasBlob(findByFixtureId(r._floorGroup, 'boiler')));
+    assert('wall-hung radiator (elev 200) skips the blob shadow',
+      !hasBlob(findByFixtureId(r._floorGroup, 'wall_radiator')));
+    // Outlines: the shared dressing pass ran (inverted-hull shells present).
+    let shells = 0;
+    findByFixtureId(r._floorGroup, 'boiler').traverse(o => { if (o.userData?.outline) shells++; });
+    assert('cartoon outline shells applied to a mechanical body', shells > 0, `shells=${shells}`);
+    // Click tagging: single click toggles (the 'media' path).
+    assert('mechanical pieces are tagged clickable (media path)',
+      KINDS.every(k => findByFixtureId(r._floorGroup, k)?.userData?.kind === 'media'),
+      KINDS.filter(k => findByFixtureId(r._floorGroup, k)?.userData?.kind !== 'media').join(',') || 'ok');
+  }
+
+  // ── 3D: glow color matrix ────────────────────────────────────────────────
+  function testGlow() {
+    const cases = [
+      ['water_heater', { state: 'eco' },  HEAT, 'water heater heating = red'],
+      ['water_heater', { state: 'off' },  null, 'water heater off = dark'],
+      ['air_handler',  { state: 'cool' }, COOL, 'air handler cooling = blue'],
+      ['air_handler',  { state: 'heat' }, HEAT, 'air handler heating = red'],
+      ['air_handler',  { state: 'fan_only' }, FAN, 'air handler fan = white'],
+      ['air_handler',  { state: 'off' },  null, 'air handler off = dark'],
+      ['floor_radiator', { state: 'on' }, HEAT, 'floor radiator heating = red'],
+      ['floor_radiator', { state: 'off' }, null, 'floor radiator off = dark'],
+      ['wall_radiator',  { state: 'on' }, HEAT, 'wall radiator heating = red'],
+      ['boiler',       { state: 'heat', attributes: { hvac_action: 'heating' } }, HEAT, 'boiler firing = red'],
+      ['boiler',       { state: 'heat', attributes: { hvac_action: 'idle' } }, null, 'boiler idle = dark'],
+      ['ac_condenser', { state: 'cool' }, COOL, 'condenser cooling = blue'],
+      ['ac_condenser', { state: 'off' },  null, 'condenser off = dark'],
+      ['heat_pump',    { state: 'cool' }, COOL, 'heat pump cooling = blue'],
+      ['heat_pump',    { state: 'heat' }, HEAT, 'heat pump heating = red'],
+      ['heat_pump',    { state: 'auto' }, FAN,  'heat pump other mode = white'],
+    ];
+    for (const [kind, st, want, label] of cases) {
+      build([piece(kind, { id: 'g', entity_id: 'x.y', elevation: kind === 'wall_radiator' ? 200 : 0 })],
+            { 'x.y': st });
+      const g = findByFixtureId(r._floorGroup, 'g');
+      const hexes = glowHexes(g);
+      if (want == null) {
+        assert(label, !hexes.has(HEAT) && !hexes.has(COOL) && !hexes.has(FAN),
+          [...hexes].map(h => h.toString(16)).join(','));
+      } else {
+        assert(label, hexes.has(want), [...hexes].map(h => h.toString(16)).join(',') || 'none');
+      }
+    }
+    // The generic green in-use LED must never appear on these kinds.
+    build([piece('boiler', { id: 'g', entity_id: 'x.y' })], { 'x.y': { state: 'on' } });
+    assert('no generic green in-use LED on a mechanical piece',
+      !glowHexes(findByFixtureId(r._floorGroup, 'g')).has(GREEN_LED));
+    build([piece('sump_pump', { id: 'g', entity_id: 'x.y' })], { 'x.y': { state: 'on' } });
+    assert('running pump carries no heat/cool/fan glow',
+      (() => { const h = glowHexes(findByFixtureId(r._floorGroup, 'g'));
+               return !h.has(HEAT) && !h.has(COOL) && !h.has(FAN); })());
+  }
+
+  // ── 3D: outdoor unit fans spin only while running ────────────────────────
+  function testFans() {
+    for (const [kind, st, want] of [['ac_condenser', 'cool', true], ['ac_condenser', 'off', false],
+                                    ['heat_pump', 'heat', true], ['heat_pump', 'off', false]]) {
+      build([piece(kind, { id: 'f', entity_id: 'x.y' })], { 'x.y': { state: st } });
+      const fan = r._floorFans.find(f => f.id === 'f');
+      assert(`${kind} @${st} registers a rotor with rps ${want ? '> 0' : '= 0'}`,
+        !!fan && (want ? fan.rps > 0 : fan.rps === 0), fan ? `rps=${fan.rps}` : 'no rotor');
+      assert(`${kind} @${st} rotor never oscillates`, !!fan && fan.oscillate === false);
+    }
+    // Blades actually turn over frames while cooling, and stay put while off.
+    build([piece('ac_condenser', { id: 'f', entity_id: 'x.y' })], { 'x.y': { state: 'cool' } });
+    const rot = r._floorFans.find(f => f.id === 'f').rotor;
+    const a0 = rot.rotation.z;
+    for (let i = 0; i < 40; i++) r._advanceFloorFans(0.05);
+    const a1 = rot.rotation.z;
+    assert('condenser blades advance while cooling', Math.abs(a1 - a0) > 0.2, `${a0.toFixed(3)}→${a1.toFixed(3)}`);
+    build([piece('ac_condenser', { id: 'f', entity_id: 'x.y' })], { 'x.y': { state: 'off' } });
+    const rotOff = r._floorFans.find(f => f.id === 'f').rotor;
+    // Spin eases to rest; after a long settle the angle stops moving.
+    for (let i = 0; i < 200; i++) r._advanceFloorFans(0.05);
+    const b0 = rotOff.rotation.z;
+    for (let i = 0; i < 20; i++) r._advanceFloorFans(0.05);
+    assert('condenser blades come to rest when off', Math.abs(rotOff.rotation.z - b0) < 1e-4);
+  }
+
+  // ── 3D: pump water motion (flow-texture clone lifecycle) ─────────────────
+  function testPumpFlow() {
+    build([piece('sump_pump', { id: 'p1', entity_id: 'x.y' }),
+           piece('recirc_pump', { id: 'p2', x: 4000, entity_id: 'x.z' })],
+          { 'x.y': { state: 'on' }, 'x.z': { state: 'on' } });
+    assert('a running pump enrols one flow-texture clone each', r._pumpFlowTextures.length === 2,
+      `n=${r._pumpFlowTextures.length}`);
+    const t = r._pumpFlowTextures[0];
+    const o0 = t.offset.y;
+    r._advancePumpFlows(0.2);
+    const o1 = t.offset.y;
+    assert('flow texture scrolls while the pump runs', Math.abs(o1 - o0) > 1e-4,
+      `${o0.toFixed(4)}→${o1.toFixed(4)}`);
+    // Disposal probe: the clones must be freed on the next furniture rebuild
+    // (_clearGroup frees materials, not their maps).
+    let disposals = 0;
+    for (const tx of r._pumpFlowTextures) {
+      const orig = tx.dispose.bind(tx);
+      tx.dispose = () => { disposals++; orig(); };
+    }
+    build([piece('sump_pump', { id: 'p1', entity_id: 'x.y' })], { 'x.y': { state: 'off' } });
+    assert('flow clones disposed on rebuild', disposals === 2, `disposals=${disposals}`);
+    assert('a STOPPED pump enrols no clone (its water is frozen)',
+      r._pumpFlowTextures.length === 0, `n=${r._pumpFlowTextures.length}`);
+    // Frozen: with nothing enrolled, advancing is a no-op (and never throws).
+    assert('advancing with no running pump is inert',
+      (() => { try { r._advancePumpFlows(1); return true; } catch { return false; } })());
+    // The shared source texture survives the clone disposal.
+    build([piece('recirc_pump', { id: 'p2', entity_id: 'x.z' })], { 'x.z': { state: 'on' } });
+    assert('shared flow source survives clone disposal (a new clone still builds)',
+      r._pumpFlowTextures.length === 1 && !!r._pumpFlowTextures[0].image);
+    // The pipe run carries the flow map.
+    let flowMesh = null;
+    findByFixtureId(r._floorGroup, 'p2').traverse(o => { if (o.userData?.pumpFlow) flowMesh = o; });
+    assert('recirc pipe run carries the scrolling flow map',
+      !!flowMesh && !!flowMesh.material?.map);
+  }
+
+  // ── 3D: 3D printer head + growing print ──────────────────────────────────
+  function testPrinter() {
+    // Bound numeric progress: the print height tracks it.
+    const heightAt = (pct) => {
+      build([piece('printer_3d', { id: 'pr', entity_id: 'sensor.pr' })],
+            { 'sensor.pr': { state: String(pct) } });
+      let box = null;
+      findByFixtureId(r._floorGroup, 'pr').traverse(o => { if (o.userData?.printBox) box = o; });
+      return box ? { h: box.scale.y * box.geometry.parameters.height, vis: box.visible, y: box.position.y } : null;
+    };
+    const h25 = heightAt(25), h75 = heightAt(75), h0 = heightAt(0);
+    assert('print grows with the bound progress (25 → 75 %)',
+      !!h25 && !!h75 && h75.h > h25.h * 2.4 && h75.h < h25.h * 3.6,
+      `${h25 && h25.h.toFixed(1)} → ${h75 && h75.h.toFixed(1)}`);
+    assert('print sits ON the bed (rises with height)', !!h25 && !!h75 && h75.y > h25.y);
+    assert('print hidden at 0 %', !!h0 && h0.vis === false);
+    // Head oscillates while printing…
+    build([piece('printer_3d', { id: 'pr', entity_id: 'sensor.pr' })], { 'sensor.pr': { state: '40' } });
+    const rig = r._printers.find(p => p.fuId === 'pr');
+    assert('printer registers a rig with a real head travel', !!rig && rig.travel > 0);
+    const xs = [];
+    for (let i = 0; i < 30; i++) { r._advancePrinters(0.1); xs.push(rig.head.position.x); }
+    const span = Math.max(...xs) - Math.min(...xs);
+    assert('gantry head sweeps the rail while printing', span > rig.travel,
+      `span=${span.toFixed(1)} travel=${rig.travel.toFixed(1)}`);
+    assert('head stays within its travel', Math.max(...xs.map(Math.abs)) <= rig.travel + 1e-6);
+    // …and is frozen when the printer is off.
+    build([piece('printer_3d', { id: 'pr2', entity_id: 'sensor.pr' })], { 'sensor.pr': { state: 'off' } });
+    const idle = r._printers.find(p => p.fuId === 'pr2');
+    const x0 = idle.head.position.x;
+    for (let i = 0; i < 30; i++) r._advancePrinters(0.1);
+    assert('head frozen while the printer is off', idle.head.position.x === x0 && !idle.running);
+    // On/off binding (no numeric progress): the print grows on the phase loop.
+    build([piece('printer_3d', { id: 'pr3', entity_id: 'switch.pr' })], { 'switch.pr': { state: 'on' } });
+    const loop = r._printers.find(p => p.fuId === 'pr3');
+    assert('on/off binding runs with a null progress', loop.running && loop.progress === null);
+    const s0 = loop.print.scale.y;
+    for (let i = 0; i < 100; i++) r._advancePrinters(0.1);
+    assert('on/off print grows on the deterministic loop', loop.print.scale.y > s0,
+      `${s0.toFixed(4)} → ${loop.print.scale.y.toFixed(4)}`);
+    // The optional secondary progress sensor wins over an on/off primary.
+    build([piece('printer_3d', { id: 'pr4', entity_id: 'switch.pr', printProgressEntity: 'sensor.pct' })],
+          { 'switch.pr': { state: 'on' }, 'sensor.pct': { state: '60' } });
+    assert('printProgressEntity overrides the primary on/off binding',
+      r._printers.find(p => p.fuId === 'pr4')?.progress === 60);
+    // Head phase survives a rebuild (no pop back to the rail centre).
+    build([piece('printer_3d', { id: 'pr5', entity_id: 'sensor.pr' })], { 'sensor.pr': { state: '40' } });
+    for (let i = 0; i < 7; i++) r._advancePrinters(0.1);
+    const before = r._printers.find(p => p.fuId === 'pr5').head.position.x;
+    build([piece('printer_3d', { id: 'pr5', entity_id: 'sensor.pr' })], { 'sensor.pr': { state: '41' } });
+    const after = r._printers.find(p => p.fuId === 'pr5').head.position.x;
+    assert('head phase survives a _keyFloor rebuild', Math.abs(after - before) < 1e-6,
+      `${before.toFixed(3)} vs ${after.toFixed(3)}`);
+  }
+
+  // ── 3D: unbound pieces run off localState ────────────────────────────────
+  function testLocalState() {
+    build([piece('boiler', { id: 'lb', entity_id: null, localState: 'on' })], {});
+    assert('unbound boiler with localState on glows red',
+      glowHexes(findByFixtureId(r._floorGroup, 'lb')).has(HEAT));
+    build([piece('boiler', { id: 'lb', entity_id: null, localState: 'off' })], {});
+    assert('unbound boiler with localState off is dark',
+      !glowHexes(findByFixtureId(r._floorGroup, 'lb')).has(HEAT));
+    build([piece('sump_pump', { id: 'lp', entity_id: null, localState: 'on' })], {});
+    assert('unbound pump with localState on moves water', r._pumpFlowTextures.length === 1);
+  }
+
+  // ── 3D: floor switch tears the tracking lists down ───────────────────────
+  function testTeardown() {
+    build([piece('sump_pump', { id: 'p', entity_id: null, localState: 'on' }),
+           piece('printer_3d', { id: 'pr', x: 4000, entity_id: null, localState: 'on' })], {});
+    assert('lists populated before teardown',
+      r._pumpFlowTextures.length === 1 && r._printers.length === 1);
+    r.clearTransientGroups();
+    assert('clearTransientGroups drops pump clones + printer rigs',
+      r._pumpFlowTextures.length === 0 && r._printers.length === 0);
+    assert('clearTransientGroups resets the printer phase map',
+      Object.keys(r._printerPhase).length === 0);
+    assert('advances are inert after teardown',
+      (() => { try { r._advancePumpFlows(1); r._advancePrinters(1); return true; } catch { return false; } })());
+  }
+
+  // ── 2D: drawFurniturePrimitiveLocal no-throw for every new kind ──────────
+  function test2D() {
+    const cvs = document.createElement('canvas'); cvs.width = 200; cvs.height = 200;
+    const ctx = cvs.getContext('2d');
+    let threw = '';
+    for (const k of KINDS) {
+      try {
+        ctx.save(); ctx.translate(100, 100);
+        cr.drawFurniturePrimitiveLocal(ctx, { id: 'x', x: 0, y: 0, w: geo.FURNITURE_KINDS[k].w,
+          h: geo.FURNITURE_KINDS[k].h, kind: k }, 40, 30, [], false, {});
+        ctx.restore();
+      } catch (e) { threw += `${k}:${e.message} `; }
+    }
+    assert('2D drawFurniturePrimitiveLocal no-throw for all 10 kinds', threw === '', threw);
+    // Each glyph actually paints something (non-blank canvas).
+    let blank = '';
+    for (const k of KINDS) {
+      const c2 = document.createElement('canvas'); c2.width = 120; c2.height = 120;
+      const g2 = c2.getContext('2d');
+      g2.translate(60, 60);
+      cr.drawFurniturePrimitiveLocal(g2, { id: 'x', x: 0, y: 0, w: geo.FURNITURE_KINDS[k].w,
+        h: geo.FURNITURE_KINDS[k].h, kind: k }, 36, 26, [], false, {});
+      const px = g2.getImageData(0, 0, 120, 120).data;
+      let any = false;
+      for (let i = 3; i < px.length; i += 4) if (px[i] > 0) { any = true; break; }
+      if (!any) blank += k + ' ';
+    }
+    assert('every 2D glyph paints pixels', blank === '', blank);
+  }
+
+  try { testPure(); } catch (e) { assert('testPure threw', false, e.message); }
+  try { testPrinterProgress(); } catch (e) { assert('testPrinterProgress threw', false, e.message); }
+  try { testMechanicalRun(); } catch (e) { assert('testMechanicalRun threw', false, e.message); }
+  try { testBuild(); } catch (e) { assert('testBuild threw', false, e.message); }
+  try { testGlow(); } catch (e) { assert('testGlow threw', false, e.message); }
+  try { testFans(); } catch (e) { assert('testFans threw', false, e.message); }
+  try { testPumpFlow(); } catch (e) { assert('testPumpFlow threw', false, e.message); }
+  try { testPrinter(); } catch (e) { assert('testPrinter threw', false, e.message); }
+  try { testLocalState(); } catch (e) { assert('testLocalState threw', false, e.message); }
+  try { testTeardown(); } catch (e) { assert('testTeardown threw', false, e.message); }
+  try { test2D(); } catch (e) { assert('test2D threw', false, e.message); }
+
+  const pass = results.filter(x => x.startsWith('PASS')).length;
+  const fail = results.filter(x => x.startsWith('FAIL')).length;
+  document.title = `MECHANICAL ${fail === 0 ? 'PASS' : 'FAIL'} ${pass}/${pass + fail} | ` + results.join(' · ');
+</script>

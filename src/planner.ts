@@ -319,6 +319,46 @@ export const NEW_ROOM = '__new_room__';
 // the next canvas click" (vs an existing landmark id = re-place that pin).
 export const NEW_LANDMARK = '__new_landmark__';
 
+// ── Floor-switch viewport retention (pure) ─────────────────────────────────
+// World mm coordinates are SHARED across stacked stories — the ghost-floor /
+// 2D peek machinery depends on identical world coords landing at identical
+// positions — so a floor switch does NOT change the coordinate frame; floors
+// differ only in rect SIZE. That's why `switchFloor` retains pan/zoom.
+
+// How far outside the new floor's `0..w × 0..d` rect a retained 2D `viewCenter`
+// may land before it's considered stale. Inflated by this fraction of the
+// LARGER dimension on every side, so a modestly-offset centre survives but a
+// centre from a wildly different plan can't strand the user on blank canvas.
+export const VIEW_RETAIN_MARGIN_FRAC = 0.5;
+
+/**
+ * Does a retained 2D pan centre still make sense on a floor of `w × d` mm?
+ * True while it lies inside the floor rect inflated by
+ * `VIEW_RETAIN_MARGIN_FRAC · max(w, d)` on every side.
+ */
+export function viewCenterFitsFloor(w: number, d: number, cx: number, cy: number): boolean {
+  if (!Number.isFinite(cx) || !Number.isFinite(cy)) return false;
+  const m = VIEW_RETAIN_MARGIN_FRAC * Math.max(w, d);
+  return cx >= -m && cx <= w + m && cy >= -m && cy <= d + m;
+}
+
+/**
+ * Scene-space translation that keeps the 3D camera looking at the SAME WORLD
+ * POINT across a floor switch. The renderer's world→scene mapping is
+ * floor-dim-derived (`_w(wx, wy, h) = (fw/2 − wx, h, wy − fd/2)`), so a floor
+ * with different `w`/`d` shifts all content by this delta in scene coords:
+ *   x: fw/2 − wx  →  fw′/2 − wx  = x + (fw′ − fw)/2
+ *   z: wy − fd/2  →  wy − fd′/2  = z − (fd′ − fd)/2
+ * Equal dims → exact `{0, 0}` no-op. Add it to BOTH camera position and target.
+ */
+export function floorSwitchCameraDelta(
+  prevW: number, prevD: number, nextW: number, nextD: number,
+): { dx: number; dz: number } {
+  const ok = (n: number) => Number.isFinite(n);
+  if (!ok(prevW) || !ok(prevD) || !ok(nextW) || !ok(nextD)) return { dx: 0, dz: 0 };
+  return { dx: (nextW - prevW) / 2, dz: -(nextD - prevD) / 2 };
+}
+
 // Active geo-calibration session (runtime only). Records the sampling window
 // and a live sample counter; the median is pulled from recorder history at
 // Finish so the panel need not stay open at the landmark.
@@ -845,6 +885,7 @@ export class Planner extends EventTarget {
       this.drawingPath = null; this.drawingPoolArea = null; this.drawingExclusion = null;
       this.drawingRuler = null; this.pickingDimWalls = false;
       this.tool = 'select'; this.placingRoomId = null; this.placingLandmarkId = null;
+      this.landmarkSuggestId = null;
       this.placingCamCalibId = null; this.pendingCamCalibUV = null;
       this.alignGuides = []; this.alignCandidates = [];
       // A disabled floor is hidden from the kiosk/view picker — don't strand the
@@ -886,6 +927,14 @@ export class Planner extends EventTarget {
   // click places a landmark pin. NEW_LANDMARK = create fresh; else re-place the
   // held landmark id. Runtime + edit-only, never persisted.
   placingLandmarkId: string | null = null;
+
+  // Suggested-position latch: when set, the 2D canvas draws a ghost pin where
+  // the CURRENT geo fit says this landmark SHOULD sit (its lat/lon projected
+  // back onto the plan — the exact endpoint the "off by N m" residual measures
+  // against) and the sidebar offers to move the pin there. A pure inspection
+  // affordance: nothing changes until the user applies it. Runtime + edit-only,
+  // never persisted.
+  landmarkSuggestId: string | null = null;
 
   // Active geo-calibration session (runtime only; see GeoCalibSession).
   geoCalib: GeoCalibSession | null = null;
@@ -1118,6 +1167,7 @@ export class Planner extends EventTarget {
     this.drawingGroundArea = null; this.drawingVoidArea = null;
     this.drawingPath = null; this.drawingPoolArea = null; this.drawingExclusion = null;
     this.drawingRuler = null; this.pickingDimWalls = false;
+    this.landmarkSuggestId = null;
   }
 
   // ── Delete the current selection ────────────────────────────────────────────
@@ -1760,6 +1810,7 @@ export class Planner extends EventTarget {
       this.drawingExclusion = null;
       this.drawingRuler = null;
       this.pickingDimWalls = false;
+      this.landmarkSuggestId = null;
       this.showDetails = this.store.showDetails === true;
       this.useRawTargets = this.store.useRawTargets === true;
       // Mirror to localStorage as the ACTIVE config body cache.
@@ -3536,10 +3587,62 @@ export class Planner extends EventTarget {
     this.emitConfig();
   }
 
+  // Where the CURRENT fit says landmark `id` should sit on the plan: its stored
+  // lat/lon projected back through the transform. That is exactly the endpoint
+  // the per-landmark residual ("off by N m") measures against, so the ghost pin
+  // and the residual readout can never disagree.
+  //
+  // Consistency rule: this uses the FULL current fit — the same one every other
+  // consumer sees — never a leave-one-out refit. For a landmark that FEEDS the
+  // fit the suggestion is therefore its own least-squares reprojection (moving
+  // there removes its residual and nudges the transform); for an EXCLUDED (or
+  // otherwise non-contributing) landmark the fit is genuinely independent of it,
+  // which is what makes exclude → inspect → apply → re-include the recommended
+  // repair flow for one mis-sampled pin.
+  //
+  // Fails soft to null: no fit / unknown id / uncalibrated / still awaiting
+  // placement / a non-finite projection.
+  private _landmarkSuggestionFor(id: string): {
+    id: string; x: number; y: number; curX: number; curY: number; distMm: number;
+  } | null {
+    const lm = this.geoLandmarks().find(l => l.id === id);
+    if (!lm || lm.lat == null || lm.lon == null || lm.pendingPlace) return null;
+    const fitR = this.geoFit();
+    if (!fitR || fitR.transform.quality === 'none') return null;
+    const plan = latLonToPlan(fitR.transform, lm.lat, lm.lon);
+    if (!plan || !isFinite(plan.x) || !isFinite(plan.y)) return null;
+    return {
+      id, x: plan.x, y: plan.y, curX: lm.x, curY: lm.y,
+      distMm: Math.hypot(plan.x - lm.x, plan.y - lm.y),
+    };
+  }
+
+  // The live suggestion for the latched landmark (null when nothing is latched
+  // or it can't be resolved). Cheap — safe to call from the 2D RAF each frame.
+  landmarkSuggestion(): {
+    id: string; x: number; y: number; curX: number; curY: number; distMm: number;
+  } | null {
+    return this.landmarkSuggestId ? this._landmarkSuggestionFor(this.landmarkSuggestId) : null;
+  }
+
+  // Move a landmark's pin onto its suggested position. Recomputes the projection
+  // fresh (never trusts a stale latch snapshot), then rides updateLandmark — so
+  // it is ONE undo step + save + emitConfig, like every other landmark edit.
+  // Edit-mode only. Returns false (and changes nothing) when unresolvable.
+  applyLandmarkSuggestion(id: string): boolean {
+    if (this.uiMode !== 'edit') return false;
+    const s = this._landmarkSuggestionFor(id);
+    if (!s) return false;
+    if (this.landmarkSuggestId === id) this.landmarkSuggestId = null;
+    this.updateLandmark(id, l => { l.x = Math.round(s.x); l.y = Math.round(s.y); });
+    return true;
+  }
+
   deleteLandmark(id: string): void {
     if (!this.store.geo) return;
     this.store.geo.landmarks = this.store.geo.landmarks.filter(l => l.id !== id);
     if (this.placingLandmarkId === id) this.placingLandmarkId = null;
+    if (this.landmarkSuggestId === id) this.landmarkSuggestId = null;
     if (this.geoCalib?.landmarkId === id) void this.cancelGeoCalibration();
     this.save();
     this.emitConfig();
@@ -6320,10 +6423,21 @@ export class Planner extends EventTarget {
     this.pickingDimWalls = false;
     this.robotStates = {};   // positions are per-floor; recomputed on the new floor
     this.activeFurnitureId = null;
-    // Reset pan/zoom — viewCenter is in world mm and a different floor has
-    // a different coord space; keeping it would leave the new floor offscreen.
-    this.viewCenter = null;
-    this.zoom = 1;
+    // RETAIN pan/zoom across a same-config floor switch. Stacked stories share
+    // one world-mm frame (the ghost-floor + 2D peek underlay both rely on
+    // identical world coords landing at identical positions) — floors differ
+    // only in rect SIZE — so the viewport stays meaningful and throwing it away
+    // used to yank the user back to fit-to-canvas on every story change.
+    // `viewCenter === null` (never panned) stays null: the fit-to-canvas default
+    // self-adapts to the new rect. Safety guard: a centre far outside the NEW
+    // floor's rect (a wildly different plan) falls back to the fit so the user
+    // is never left staring at blank canvas. A different CONFIG genuinely is a
+    // different plan — those paths (_applyLoadedStore) still reset.
+    const nf = this.store.floors.find(x => x.id === id);
+    if (this.viewCenter && (!nf || !viewCenterFitsFloor(nf.w, nf.d, this.viewCenter.x, this.viewCenter.y))) {
+      this.viewCenter = null;
+      this.zoom = 1;
+    }
     // Clear in-flight interactions
     this.drag = null;
     this.editZone = null;

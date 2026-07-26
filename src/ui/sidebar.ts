@@ -38,6 +38,7 @@ import {
   INFO_CARD_MOUNT_DEFAULTS, INFO_CARD_SCALE_MIN, INFO_CARD_SCALE_MAX,
   infoCardText, infoCardMount, infoCardHeight, infoCardW, infoCardH, infoCardScale,
   furnitureCat, type FurnitureCat, isBinKind, isSinkKind, isVehicleKind, isStairsKind, isClimateApplianceKind, isBladedFanKind,
+  isMechanicalApplianceKind, mechanicalBindDomains, mechanicalRun,
   closedWallLoops, loopContaining, resolveRoomForPointFuzzy, roomLabel,
   floorsDisplayOrder,
 } from '../geometry.js';
@@ -4765,6 +4766,7 @@ export class Sidebar extends LitElement {
           curKind === 'stove' || curKind === 'microwave' ? this._jobStateRow(piece, upd) : nothing}
         ${curKind === 'car' || curKind === 'ev_charger' ? this._evChargerRows(piece, upd) : nothing}
         ${curKind === 'mailbox' ? this._mailboxRows(piece, upd) : nothing}
+        ${isMechanicalApplianceKind(curKind) ? this._mechanicalRows(piece, upd) : nothing}
         ${isBladedFanKind(curKind) ? html`
           <div class="row"><label title="While running, the fan head yaws in a slow ±45° sweep (blades keep spinning inside the sweeping head)">Oscillate</label>
             <input type="checkbox" .checked=${piece.oscillate === true}
@@ -4893,7 +4895,7 @@ export class Sidebar extends LitElement {
   private _furnitureBindRow(piece: Furniture, upd: (mut: () => void) => void) {
     const p = this.planner;
     const def = resolveFurnitureDef(piece, p.store.customObjects);
-    if (!def.activity && furnitureKind(piece) !== 'tv' && !isBinKind(piece.kind) && !isVehicleKind(piece.kind) && !isClimateApplianceKind(piece.kind)) return nothing;
+    if (!def.activity && furnitureKind(piece) !== 'tv' && !isBinKind(piece.kind) && !isVehicleKind(piece.kind) && !isClimateApplianceKind(piece.kind) && !isMechanicalApplianceKind(piece.kind)) return nothing;
     return html`
       <div class="row"><label>HA entity</label>
         <span style="font-size:11px;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
@@ -5292,6 +5294,39 @@ export class Sidebar extends LitElement {
         () => mut(o => o.powerEntity = undefined))}`;
   }
 
+  // Mechanical / utility plant: a live resolved-state readout in the SAME color
+  // language as the 2D halo / 3D glow (heat red / cool blue / fan white, dim when
+  // idle), plus — for the 3D printer — an OPTIONAL secondary progress sensor.
+  // The main binding is picked through the standard HA-entity row above; this
+  // block only explains what the panel resolved and adds the printer's extra bind.
+  private _mechanicalRows(piece: Furniture, upd: (mut: () => void) => void) {
+    const p = this.planner;
+    const m = mechanicalRun(p.effectiveState(piece), piece.kind);
+    const col = m.running
+      ? (m.glow === 'heat' ? '#ff6d4d' : m.glow === 'cool' ? '#4dd0ff'
+         : m.glow === 'fan' ? '#e8edf0' : '#4aa8d8')
+      : 'var(--text-dim)';
+    const word = !m.running ? 'idle'
+      : m.glow === 'heat' ? 'heating' : m.glow === 'cool' ? 'cooling'
+      : m.glow === 'fan' ? 'running (fan / other mode)'
+      : piece.kind === 'printer_3d' ? 'printing' : 'pumping';
+    const prog = piece.printProgressEntity && p.hass?.states
+      ? p.hass.states[piece.printProgressEntity] : null;
+    return html`
+      <div class="row"><label title="Resolved from the bound entity (or the local on/off state when unbound) — this is what the 2D halo + 3D glow show">Status</label>
+        <span style="font-size:11px;color:${col};flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+          ${word}${m.progress != null ? ` · ${Math.round(m.progress)}%` : ''}
+        </span>
+      </div>
+      ${piece.kind === 'printer_3d' ? this._bindRow(
+        'Print progress',
+        'OPTIONAL sensor.* whose numeric state is 0–100 % — only needed when the main binding is a plain switch. The print on the bed grows to match.',
+        piece.printProgressEntity ?? undefined, prog?.state ?? '', '#2ec5b6',
+        () => this._pickEntity('sensor', id => upd(() => { piece.printProgressEntity = id; })),
+        () => upd(() => { piece.printProgressEntity = null; })) : nothing}
+    `;
+  }
+
   // Mailbox mail/packages bindings. countEntity (numeric sensor) > 0 raises the
   // flag + shows a badge; flagEntity (binary_sensor lid) 'on' tilts the lid open.
   private _mailboxRows(piece: Furniture, upd: (mut: () => void) => void) {
@@ -5321,6 +5356,9 @@ export class Sidebar extends LitElement {
       : piece.kind === 'bathtub' ? ['switch', 'binary_sensor']   // bathtub: in-use state
       : isClimateApplianceKind(piece.kind)   // AC/fans: climate/fan/switch; heaters: climate/switch
         ? (climateHeater ? ['climate', 'switch'] : ['climate', 'fan', 'switch'])
+      // Mechanical/utility plant: per-kind domain list (water_heater/climate/
+      // switch/binary_sensor/fan/sensor) resolved by the shared pure helper.
+      : isMechanicalApplianceKind(piece.kind) ? mechanicalBindDomains(piece.kind)
       : 'switch';
     this.dispatchEvent(new CustomEvent('open-entity-picker', {
       bubbles: true, composed: true,
@@ -6362,7 +6400,8 @@ export class Sidebar extends LitElement {
             No landmarks yet. Add one, click a known spot on the plan, then calibrate
             it by standing there with your phone (open-sky, away from walls).
           </div>` : nothing}
-        ${landmarks.map(lm => this._landmarkItem(lm, resById.get(lm.id) ?? null, worstId === lm.id))}
+        ${landmarks.map(lm => this._landmarkItem(lm, resById.get(lm.id) ?? null, worstId === lm.id,
+                                                 fit != null && fit.transform.quality !== 'none'))}
         <div style="display:flex;gap:4px;margin-top:6px">
           <button class="btn" style="flex:1"
                   @click=${() => { p.placingLandmarkId = NEW_LANDMARK; p.maybeCloseSidebarForPlacement(); p.emitConfig(); }}>
@@ -6600,7 +6639,9 @@ export class Sidebar extends LitElement {
   // One landmark row. `residualMm` is this landmark's reprojection error under
   // the CURRENT fit (null when it isn't in the fit, or the fit is single/none);
   // `worst` flags the largest one, which is the pin most likely skewing north.
-  private _landmarkItem(lm: GeoLandmark, residualMm: number | null = null, worst = false) {
+  // `fitOk` gates the "suggested position" affordance — without a transform
+  // there is nowhere to project the landmark's lat/lon back to.
+  private _landmarkItem(lm: GeoLandmark, residualMm: number | null = null, worst = false, fitOk = false) {
     const p = this.planner;
     const calibrated = lm.lat != null && lm.lon != null;
     // CSV-imported with real lat/lon but no plan position yet — excluded from
@@ -6621,6 +6662,10 @@ export class Sidebar extends LitElement {
             + ` · ${lm.sampleCount} samples${dateStr}`;
     const cardOpen = this._calibLandmarkId === lm.id;
     const manualOpen = this._manualLandmarkId === lm.id;
+    // Suggested-position latch lives on the PLANNER (the 2D canvas draws the
+    // matching ghost pin), so the toggle rides emitConfig like the placement
+    // latches rather than a component @state.
+    const suggestOpen = p.landmarkSuggestId === lm.id;
     return html`
       <div style="border-bottom:1px solid var(--border)${excluded ? ';opacity:0.55' : ''}">
         <div class="sensor-item" style="cursor:default;gap:4px">
@@ -6698,11 +6743,62 @@ export class Sidebar extends LitElement {
                         delete l.accuracy; delete l.sampleCount; delete l.sampledAt;
                       });
                     }}>✕ clear coords</button>` : nothing}
+          ${calibrated && !pending && fitOk ? html`
+            <button class="btn" style="font-size:10px;padding:2px 8px${suggestOpen ? ';outline:1px solid #4dd0e1' : ''}"
+                    title="Show a ghost pin on the plan where the current alignment says this landmark should sit, then optionally move it there."
+                    @click=${() => {
+                      p.landmarkSuggestId = suggestOpen ? null : lm.id;
+                      p.emitConfig();
+                    }}>
+              ${suggestOpen ? '🎯 Hide suggestion' : '🎯 Suggested position'}
+            </button>` : nothing}
         </div>
+        ${suggestOpen ? this._suggestCard(lm) : nothing}
         ${manualOpen ? this._manualCoordCard(lm) : nothing}
         ${cardOpen ? this._calibCard(lm) : nothing}
       </div>
     `;
+  }
+
+  // Suggested-position card: where the CURRENT fit projects this landmark's
+  // lat/lon back onto the plan, how far that is from where the pin sits, and the
+  // one-click move. The gap is the same number the row's "off by N m" residual
+  // reports for a landmark that feeds the fit; for an EXCLUDED pin the fit is
+  // independent of it, which is what makes exclude → inspect → apply →
+  // re-include the repair flow for one mis-sampled landmark.
+  private _suggestCard(lm: GeoLandmark) {
+    const p = this.planner;
+    const s = p.landmarkSuggestion();
+    if (!s || s.id !== lm.id) {
+      return html`<div style="font-size:10px;color:#ffb74d;padding:0 0 6px 20px">
+        Can't project this landmark — calibrate at least one other landmark first.
+      </div>`;
+    }
+    const excluded = lm.excluded === true;
+    return html`
+      <div style="margin:0 0 6px 20px;padding:6px 8px;border:1px solid #4dd0e1;border-radius:4px">
+        <div style="font-size:11px">
+          Alignment puts this landmark
+          <b style="color:#81d4fa">${fmtDistanceM(s.distMm / 1000, p.store.imperial)}</b>
+          from its pin.
+        </div>
+        <div style="font-family:monospace;font-size:10px;color:var(--text-dim);padding:2px 0">
+          now ${Math.round(s.curX)}, ${Math.round(s.curY)} → ${Math.round(s.x)}, ${Math.round(s.y)} mm
+        </div>
+        <div style="font-size:10px;color:var(--text-dim);padding:0 0 4px">
+          ${excluded
+            ? 'This landmark is excluded, so the position comes from the OTHER landmarks — moving the pin here, then switching it back on, re-aligns it with them.'
+            : 'The ghost pin on the plan shows the spot. Moving the pin here zeroes its residual and re-fits the alignment.'}
+        </div>
+        <div style="display:flex;gap:4px;flex-wrap:wrap">
+          <button class="btn" style="font-size:10px;padding:2px 8px"
+                  @click=${() => { p.applyLandmarkSuggestion(lm.id); }}>
+            ✔ Apply — move pin here
+          </button>
+          <button class="btn" style="font-size:10px;padding:2px 8px"
+                  @click=${() => { p.landmarkSuggestId = null; p.emitConfig(); }}>Cancel</button>
+        </div>
+      </div>`;
   }
 
   // Manual lat/lon entry card. The Latitude field accepts a pasted combined

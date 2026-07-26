@@ -6,7 +6,7 @@ import { customElement } from './define.js';
 // startup path never downloads it.
 import type { ThreeDRenderer, ZoneWorld, HaloWorld, TargetWorld, ActivityContext,
   InteractiveItem, GpsPinWorld, GpsLandmarkWorld, GeoEventWorld, WeatherFxState, VacMapEntry } from '../three-renderer.js';
-import { localToWorld, transformVerts, pointInPolygon, sensorColor, hexToInt, motionColor, lightIconKind, furnitureKind, resolveFurnitureDef, furnitureCat, isBinKind, isSpeakerKind, isSinkKind, isVehicleKind, isClimateApplianceKind, isBladedFanKind, isStairsKind, alarmStateColor, valveOpenness, sprinklerRunning, sprinklerHeadKind, sprinklerArcDeg, sprinklerRadius, sprinklerRotation, flagpoleHoistFraction, doorSpanCenter, isDroopPlant, plantThirsty, PLANT_MOISTURE_DEFAULT_THRESHOLD } from '../geometry.js';
+import { localToWorld, transformVerts, pointInPolygon, sensorColor, hexToInt, motionColor, lightIconKind, furnitureKind, resolveFurnitureDef, furnitureCat, isBinKind, isSpeakerKind, isSinkKind, isVehicleKind, isClimateApplianceKind, isMechanicalApplianceKind, mechanicalBindDomains, isBladedFanKind, isStairsKind, alarmStateColor, valveOpenness, sprinklerRunning, sprinklerHeadKind, sprinklerArcDeg, sprinklerRadius, sprinklerRotation, flagpoleHoistFraction, doorSpanCenter, isDroopPlant, plantThirsty, PLANT_MOISTURE_DEFAULT_THRESHOLD } from '../geometry.js';
 import { compass8, fmtDistanceM } from '../geo.js';
 import { resolveNorth, markerScaleOf } from '../compass.js';
 import { parseNowPlaying, isMediaPlayerId } from '../geometry.js';
@@ -20,6 +20,7 @@ import { FLIGHTS_DEFAULT_RADIUS_NM } from '../flights.js';
 import { loadModel } from '../model-store.js';
 import { newId } from '../storage.js';
 import type { Planner } from '../planner.js';
+import { floorSwitchCameraDelta } from '../planner.js';
 
 @customElement('diorama-three-view')
 export class ThreeView extends LitElement {
@@ -399,6 +400,20 @@ export class ThreeView extends LitElement {
           }
           return;
         }
+        // Mechanical/utility appliances likewise ride the 'media' click tag but
+        // bind their own per-kind domains, never a media_player.
+        if (fu0 && isMechanicalApplianceKind(fu0.kind)) {
+          if (p.uiMode === 'edit' && !entity_id) {
+            this.dispatchEvent(new CustomEvent('open-entity-picker', {
+              bubbles: true, composed: true,
+              detail: {
+                domain: mechanicalBindDomains(fu0.kind),
+                onPick: (id: string) => { fu0.entity_id = id; p.save(); p.emitConfig(); },
+              },
+            }));
+          }
+          return;
+        }
         if (entity_id) {
           this.dispatchEvent(new CustomEvent('open-media-config', {
             bubbles: true, composed: true, detail: { entityId: entity_id },
@@ -489,6 +504,10 @@ export class ThreeView extends LitElement {
   }
 
   private _lastFloorId: string | null = null;
+  // Previous floor's rect, kept beside `_lastFloorId` so a switch can translate
+  // the camera by the scene-frame delta (see floorSwitchCameraDelta).
+  private _lastFloorW = 0;
+  private _lastFloorD = 0;
   // Recent-trigger tracking for thought bubbles: prev on/off per interactive
   // fixture (light / switch / TV) keyed by item id, and a rolling list of the
   // last few transitions (world mm + wall-clock). Fed into ActivityContext each
@@ -756,6 +775,25 @@ export class ThreeView extends LitElement {
       // suspenders so a stale renderer state never bleeds across floors.
       // Also clear the dirty keys so everything rebuilds.
       if (this._lastFloorId !== f.id) {
+        // Keep the camera on the SAME WORLD POINT across the switch. The scene
+        // frame is floor-dim-derived (_w(wx, wy, h) = (fw/2 − wx, h, wy − fd/2)),
+        // so a floor with different w/d shifts every piece of content in scene
+        // coords and the untouched camera would appear to jump. Equal dims →
+        // exact no-op. Auto-follow / cinematic orbit / sims-cam snap all ease
+        // from the CURRENT pose, so they simply continue from the compensated
+        // one. Skipped on the very first tick (no previous floor).
+        if (this._lastFloorId !== null) {
+          const { dx, dz } = floorSwitchCameraDelta(this._lastFloorW, this._lastFloorD, f.w, f.d);
+          if (dx !== 0 || dz !== 0) {
+            const cv = r.cameraView();
+            if (cv) {
+              r.setCameraView(
+                [cv.pos[0] + dx, cv.pos[1], cv.pos[2] + dz],
+                [cv.target[0] + dx, cv.target[1], cv.target[2] + dz],
+              );
+            }
+          }
+        }
         this._lastFloorId = f.id;
         r.clearTransientGroups();
         this._keyFloor = this._keyDoors = this._keySensors = '';
@@ -774,6 +812,10 @@ export class ThreeView extends LitElement {
         this._actionTrigAt.clear();
         this._recentTrigs.length = 0;
       }
+      // Track the rendered floor's rect every tick (not just on a switch) so a
+      // floor-edge resize can't leave the switch delta reading stale dims.
+      this._lastFloorW = f.w;
+      this._lastFloorD = f.d;
 
       // Layer visibility (shared with the 2D layer flags): group-scoped
       // layers are cheap per-tick visible flips; furniture + bg gate at
@@ -871,12 +913,16 @@ export class ThreeView extends LitElement {
         // rps seed). Fold those attributes in so a same-mode action/speed change
         // still rebuilds the floor (re-seeds the vent/rotor).
         let clim = '';
-        if (isClimateApplianceKind(fu.kind)) {
+        if (isClimateApplianceKind(fu.kind) || isMechanicalApplianceKind(fu.kind)) {
           const cst = p.effectiveState(fu);
           const ca = (cst?.attributes ?? {}) as Record<string, unknown>;
           const pct = isBladedFanKind(fu.kind) && typeof ca.percentage === 'number'
             ? Math.round((ca.percentage as number) / 5) : '';
           clim = `${ca.hvac_action ?? ''}:${pct}:${ca.direction ?? ''}`;
+          // A secondary print-progress sensor drives the growing print box —
+          // fold its state in so the model tracks it live (powerEntity idiom:
+          // _keyFloor recomputes per tick, no _isSlowEntity entry needed).
+          if (fu.printProgressEntity) clim += `:${stOf(fu.printProgressEntity)}`;
         }
         // "Job done" badge (event-focused thought bubbles): the appliance's
         // finished-window flag drives a blue emissive badge built inside

@@ -71,7 +71,21 @@ export type FurnitureKind =
   | 'center_channel'     // horizontal, mountable under/over a screen
   | 'theater_recliner'   // plush single recliner; watch_tv resolves from the room TV
   | 'recliner_row3'      // three-seat shared-arm recliner row (3 sit spots)
-  | 'riser_platform';    // walkable tiered-seating deck; does NOT block nav
+  | 'riser_platform'     // walkable tiered-seating deck; does NOT block nav
+  // mechanical / utility plant (cat 'appliance'). Bindable via the generic
+  // entity_id; each resolves a running state + a GLOW COLOR (heat red / cool
+  // blue / fan white) through geometry.mechanicalRun — they are excluded from
+  // the generic green in-use LED because the glow IS their state language.
+  | 'water_heater'    // tank + flue; burner window glows red while heating
+  | 'air_handler'     // sheet-metal cabinet; louver strip glows heat/cool/fan
+  | 'floor_radiator'  // finned baseboard run; glows red while heating
+  | 'wall_radiator'   // slim ribbed wall panel (elevation 200); red while heating
+  | 'boiler'          // squat cylinder + gauge + pipe stubs; red burner glow
+  | 'ac_condenser'    // outdoor cube; top fan spins + blue glow while cooling
+  | 'heat_pump'       // outdoor slim cabinet; side fan + blue/red/white glow
+  | 'sump_pump'       // sump barrel + riser pipe; water scrolls while running
+  | 'recirc_pump'     // inline pump on a horizontal pipe run; water scrolls
+  | 'printer_3d';     // open-frame FDM printer; head oscillates + print grows
 
 // Contextual activity a piece of furniture anchors (Sims-style character
 // behavior — later phases dwell-trigger these). Set on the kind def (or an
@@ -185,6 +199,12 @@ export interface Furniture {
   oscillate?: boolean;        // bladed floor fans (floor_fan/retro_fan/modern_fan) only: while running, the
                               //   fan HEAD yaws in a slow ±45° sine sweep (blades keep spinning inside the
                               //   sweeping head). Item-level → no repairFloor change.
+  printProgressEntity?: string | null; // printer_3d only: an OPTIONAL secondary sensor.* whose numeric state
+                              //   (0–100) is the print progress driving the growing print on the bed. Only
+                              //   needed when the piece's own entity_id is a switch/binary_sensor — a
+                              //   numerically-stated primary binding already carries the progress.
+                              //   Display/animation-only; never feeds effectiveState. Item-level → no
+                              //   repairFloor change.
 }
 
 export type LightIconKind =

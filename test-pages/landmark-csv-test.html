@@ -476,6 +476,142 @@
       ok('8AC control: the same bad landmark INCLUDED moves the projection',
         Math.hypot(gp.x - IMPORTED[0].x, gp.y - IMPORTED[0].y) > 100, `${gp.x},${gp.y}`);
     }
+    // ═══ 9. Suggested landmark position (landmarkSuggestId / applyLandmarkSuggestion) ══
+    // "Where does the alignment think this landmark IS?" — the landmark's stored
+    // lat/lon projected back through the CURRENT fit (never a leave-one-out
+    // refit), i.e. the exact endpoint the per-row "off by N m" residual measures
+    // against. A latch drives the 2D ghost pin; Apply moves the pin there.
+    H('9. suggested position');
+    {
+      // Fail-soft matrix: every unresolvable latch returns null rather than
+      // throwing or handing back a bogus point.
+      const pNo = await mkPlanner({ landmarks: [{ id: 'lmU', name: 'U', x: 100, y: 100 }] });
+      pNo.landmarkSuggestId = 'lmU';
+      ok('9A no fit → null', pNo.landmarkSuggestion() === null, JSON.stringify(pNo.landmarkSuggestion()));
+      ok('9B …and apply refuses', pNo.applyLandmarkSuggestion('lmU') === false);
+
+      const p = await mkPlanner({ landmarks: [...CAL(), { id: 'lmU', name: 'U', x: 100, y: 100 }] });
+      ok('9C unset latch → null', p.landmarkSuggestion() === null);
+      p.landmarkSuggestId = 'lmU';
+      ok('9D uncalibrated landmark → null', p.landmarkSuggestion() === null);
+      p.landmarkSuggestId = 'nope';
+      ok('9E unknown id → null', p.landmarkSuggestion() === null);
+      p.landmarkSuggestId = null;
+
+      const pPend = await mkPlanner({ landmarks: [...CAL(),
+        { id: 'lmP', name: 'P', x: 0, y: 0, ...geoAt(5000, 5000), pendingPlace: true }] });
+      pPend.landmarkSuggestId = 'lmP';
+      ok('9F pendingPlace landmark → null', pPend.landmarkSuggestion() === null);
+      ok('9G …and apply refuses', pPend.applyLandmarkSuggestion('lmP') === false);
+    }
+    {
+      // Golden: the suggestion IS latLonToPlan of the same fit, and distMm is
+      // the gap from where the pin actually sits.
+      const OFF = 900; // drag landmark B 900 mm off its true spot
+      const bmoved = { ...CAL()[1], x: 3000 + OFF, y: 1000 };
+      const p = await mkPlanner({ landmarks: [CAL()[0], bmoved] });
+      p.landmarkSuggestId = 'lmB';
+      const s = p.landmarkSuggestion();
+      const fit = p.geoFit();
+      const golden = latLonToPlan(fit.transform, bmoved.lat, bmoved.lon);
+      ok('9H suggestion == latLonToPlan of the CURRENT fit',
+        near(s.x, golden.x, 1e-6) && near(s.y, golden.y, 1e-6),
+        `${s.x},${s.y} vs ${golden.x},${golden.y}`);
+      ok("9I carries the pin's current position", s.curX === bmoved.x && s.curY === bmoved.y);
+      ok('9J distMm == |suggested − current|',
+        near(s.distMm, Math.hypot(s.x - s.curX, s.y - s.curY), 1e-9), s.distMm);
+      ok('9K id echoed', s.id === 'lmB');
+
+      // Apply → the pin lands on the (rounded) projection, latch cleared.
+      // NB snapshot the numbers — geoLandmarks() hands back LIVE store objects,
+      // which updateLandmark mutates in place.
+      const beforeX = p.geoLandmarks().find(l => l.id === 'lmB').x;
+      const beforeY = p.geoLandmarks().find(l => l.id === 'lmB').y;
+      const rmsBefore = p.geoFit().transform.rmsMm;
+      const px = Math.round(s.x), py = Math.round(s.y);
+      ok('9L applied', p.applyLandmarkSuggestion('lmB') === true);
+      const after = p.geoLandmarks().find(l => l.id === 'lmB');
+      ok('9M pin moved onto the projection', after.x === px && after.y === py, `${after.x},${after.y}`);
+      ok('9N …which is NOT where it was', beforeX !== px || beforeY !== py, `${beforeX},${beforeY}`);
+      ok('9O latch cleared by apply', p.landmarkSuggestId === null);
+      // For a landmark that FEEDS the fit, moving it onto its own reprojection
+      // pulls the transform toward it — the error shrinks but need not vanish
+      // (scale is locked at 1, so two pairs whose plan separation disagrees with
+      // their real-world separation always keep a residual). The exact-zero case
+      // is the EXCLUDED one, asserted in 9AF.
+      const rmsAfter = p.geoFit().transform.rmsMm;
+      ok('9P applying strictly reduces the fit error', rmsAfter < rmsBefore - 1,
+        `${rmsBefore.toFixed(1)} → ${rmsAfter.toFixed(1)} mm`);
+
+      // ONE undo step.
+      ok('9Q canUndo', p.canUndo === true);
+      p.undo();
+      const undone = p.geoLandmarks().find(l => l.id === 'lmB');
+      ok('9R undo restores the original pin', undone.x === bmoved.x && undone.y === bmoved.y,
+        `${undone.x},${undone.y}`);
+      p.redo();
+      ok('9S redo re-applies the move',
+        p.geoLandmarks().find(l => l.id === 'lmB').x === px);
+    }
+    {
+      // Latch is runtime-only: it must not survive a mode change or a config load.
+      const p = await mkPlanner({ landmarks: CAL() });
+      p.landmarkSuggestId = 'lmB';
+      p.setUiMode('kiosk');
+      ok('9T latch cleared on mode change', p.landmarkSuggestId === null);
+      ok('9U kiosk refuses apply', p.applyLandmarkSuggestion('lmB') === false);
+      const kx = p.geoLandmarks().find(l => l.id === 'lmB').x;
+      ok('9V …and changes nothing', kx === 3000);
+      p.setUiMode('view');
+      ok('9W view refuses apply', p.applyLandmarkSuggestion('lmB') === false);
+
+      const p2 = await mkPlanner({ landmarks: CAL() });
+      p2.landmarkSuggestId = 'lmB';
+      await p2.newConfig('Blank');
+      ok('9X latch cleared on config load', p2.landmarkSuggestId === null);
+    }
+    {
+      // The repair flow the feature exists for: exclude the bad pin → its
+      // suggestion comes from the OTHER landmarks alone → apply → re-include,
+      // and the fit is restored to the truth with a ~0 residual for that pin.
+      const DEG = Math.PI / 180;
+      const THETA = 25 * DEG;
+      const geoForPlan = (x, y, theta = THETA) => {
+        const c = Math.cos(theta), s = Math.sin(theta);
+        return unprojectMeters((c * x + s * y) / 1000, (-s * x + c * y) / 1000, LAT0, LON0);
+      };
+      // Two good pairs define θ = 25°; the third pin SITS in the wrong place
+      // (its lat/lon is correct for plan 2000,5000 but the pin is 2 m away).
+      const TRUEX = 2000, TRUEY = 5000;
+      const p = await mkPlanner({ landmarks: [
+        { id: 'lg1', name: 'Corner', x: 0, y: 0, ...geoForPlan(0, 0), sampleCount: 9 },
+        { id: 'lg2', name: 'Shed', x: 6000, y: 1000, ...geoForPlan(6000, 1000), sampleCount: 9 },
+        { id: 'lgBad', name: 'Bad', x: TRUEX + 2000, y: TRUEY - 1200,
+          ...geoForPlan(TRUEX, TRUEY), sampleCount: 9, excluded: true },
+      ]});
+      const clean = p.geoFit();
+      ok('9Y excluded → the fit is the clean 2-pair one',
+        clean.landmarks.length === 2 && near(clean.transform.thetaRad, THETA, 1e-9));
+      p.landmarkSuggestId = 'lgBad';
+      const s = p.landmarkSuggestion();
+      ok('9Z an EXCLUDED landmark still gets a suggestion', s != null);
+      ok('9AA …and it is its true plan position (from the other pins)',
+        near(s.x, TRUEX, 1e-3) && near(s.y, TRUEY, 1e-3), `${s.x},${s.y}`);
+      ok('9AB …with the offset the user sees', Math.abs(s.distMm - Math.hypot(2000, 1200)) < 1e-3,
+        s.distMm);
+      ok('9AC apply succeeds on an excluded landmark', p.applyLandmarkSuggestion('lgBad') === true);
+      // Re-include: a perfectly consistent pair leaves the transform alone and
+      // contributes a ~0 residual.
+      p.updateLandmark('lgBad', l => { delete l.excluded; });
+      const back = p.geoFit();
+      ok('9AD re-included → 3 pairs', back.landmarks.length === 3);
+      ok('9AE θ unchanged by the repaired pin', near(back.transform.thetaRad, THETA, 1e-6),
+        `${(back.transform.thetaRad / DEG).toFixed(6)}°`);
+      const i = back.landmarks.findIndex(l => l.id === 'lgBad');
+      ok("9AF the repaired landmark's residual is ~0", back.transform.residualsMm[i] < 1,
+        back.transform.residualsMm[i]);
+      ok('9AG …and the whole fit is sub-mm', back.transform.rmsMm < 1, back.transform.rmsMm);
+    }
   } catch (e) {
     ok('harness threw', false, e && (e.stack || e.message || String(e)));
   }

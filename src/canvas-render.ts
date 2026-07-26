@@ -21,6 +21,7 @@ import {
   powerGlowScale,
   hexToRgba, lighten, furnitureKind, furnitureCorners, resolveFurnitureDef, isBinKind, isSinkKind, binStateIsFull,
   isClimateApplianceKind, climateApplianceRun,
+  isMechanicalApplianceKind, isPumpKind, mechanicalRun, mechanicalGlowColor,
   isDroopPlant, plantThirsty, PLANT_MOISTURE_DEFAULT_THRESHOLD,
   isVehicleKind, evStatusOf, evStatusColor, evChargePercent, carChargeState,
   isStairsKind, stairChipArrow,
@@ -782,6 +783,46 @@ function drawGeoLandmarks(ctx: CanvasRenderingContext2D, p: Planner, view: View)
     ctx.font = `${9 * dpr}px sans-serif`;
     ctx.fillText(cap, c.x, c.y + 25 * dpr);
   }
+  ctx.restore();
+  drawLandmarkSuggestion(ctx, p, view);
+}
+
+// Ghost pin for the latched landmark's SUGGESTED position (edit mode only — it
+// is an authoring affordance, not a display prop). Draws where the current geo
+// fit says the pin should sit, a dashed connector from where it actually sits,
+// and the gap in metres/feet at the midpoint. Zero latch → zero cost.
+function drawLandmarkSuggestion(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
+  if (p.uiMode !== 'edit') return;
+  const s = p.landmarkSuggestion();
+  if (!s) return;
+  const dpr = window.devicePixelRatio || 1;
+  const cur = mmToPx(view, s.curX, s.curY);
+  const sug = mmToPx(view, s.x, s.y);
+  ctx.save();
+  // Dashed connector current → suggested.
+  ctx.strokeStyle = 'rgba(77,208,225,0.55)';
+  ctx.lineWidth = 1.5 * dpr;
+  ctx.setLineDash([5 * dpr, 4 * dpr]);
+  ctx.beginPath(); ctx.moveTo(cur.x, cur.y); ctx.lineTo(sug.x, sug.y); ctx.stroke();
+  // Ghost pin: hollow dashed ring in the calibrated cyan, plus a faded glyph.
+  ctx.strokeStyle = 'rgba(77,208,225,0.9)';
+  ctx.lineWidth = 1.8 * dpr;
+  ctx.beginPath(); ctx.arc(sug.x, sug.y, 7 * dpr, 0, 2 * Math.PI); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.globalAlpha = 0.55;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.font = `${9 * dpr}px sans-serif`;
+  ctx.fillText('📍', sug.x, sug.y);
+  ctx.globalAlpha = 1;
+  // Gap label at the midpoint of the connector.
+  const txt = `⇢ ${fmtDistanceM(s.distMm / 1000, p.store.imperial)}`;
+  ctx.font = `${10 * dpr}px sans-serif`;
+  const tw = ctx.measureText(txt).width + 8 * dpr;
+  const mx = (cur.x + sug.x) / 2, my = (cur.y + sug.y) / 2;
+  ctx.fillStyle = 'rgba(0,0,0,0.7)';
+  ctx.fillRect(mx - tw / 2, my - 7 * dpr, tw, 14 * dpr);
+  ctx.fillStyle = 'rgba(129,212,250,0.95)';
+  ctx.fillText(txt, mx, my);
   ctx.restore();
 }
 
@@ -3812,7 +3853,13 @@ function drawFurniture(ctx: CanvasRenderingContext2D, p: Planner, view: View,
     const climateHeater = piece.kind === 'space_heater' || piece.kind === 'wall_heater' || piece.kind === 'towel_warmer';
     const climateOn = isClimateApplianceKind(piece.kind) &&
       climateApplianceRun(p.effectiveState(piece), climateHeater ? 'heat' : 'cool').running;
-    const applianceOn = stateOn || powerInUse || climateOn;
+    // Mechanical / utility plant (water heater, air handler, radiators, boiler,
+    // condenser, heat pump, pumps, 3D printer): its heat/cool/fan GLOW (or the
+    // pumps' moving water) IS the state language, so these kinds opt OUT of the
+    // generic green in-use halo — exactly like the 3D LED exclusion.
+    const mech = isMechanicalApplianceKind(piece.kind)
+      ? mechanicalRun(p.effectiveState(piece), piece.kind) : null;
+    const applianceOn = !mech && (stateOn || powerInUse || climateOn);
     // Intensity multiplier: scale by power when a reading > 5 W exists, else full.
     const glowScale = isFinite(powerW) && powerW > 5 ? powerGlowScale(powerW) : 1;
     const doorOpen = !!piece.doorEntity &&
@@ -3827,6 +3874,49 @@ function drawFurniture(ctx: CanvasRenderingContext2D, p: Planner, view: View,
       ctx.shadowBlur = 14 * dpr * glowScale;
       ctx.fillStyle = `rgba(0,200,83,${(0.13 * glowScale).toFixed(3)})`;
       ctx.fillRect(-halfW, -halfH, halfW * 2, halfH * 2);
+      ctx.restore();
+    }
+    // Mechanical/utility running cue, in the SAME color language as the 3D glow:
+    // a pulsing halo tinted heat red / cool blue / fan white (time-based alpha —
+    // the RAF redraws every frame). Pumps + the printer carry no glow color; they
+    // get a cool "water/working" wash instead, with the pumps' flow direction
+    // shown as marching dashes along the piece's long (X) axis.
+    if (mech?.running) {
+      const gc = mechanicalGlowColor(mech.glow) ?? '#4aa8d8';
+      const pulse = 0.5 + 0.5 * Math.sin(now * 2.4);
+      ctx.save();
+      ctx.shadowColor = hexToRgba(gc, 0.5 + 0.35 * pulse);
+      ctx.shadowBlur = 16 * dpr;
+      ctx.fillStyle = hexToRgba(gc, 0.1 + 0.09 * pulse);
+      ctx.fillRect(-halfW, -halfH, halfW * 2, halfH * 2);
+      ctx.restore();
+      if (isPumpKind(piece.kind)) {
+        ctx.save();
+        ctx.strokeStyle = 'rgba(130,208,238,0.95)';
+        ctx.lineWidth = Math.max(1.5, 2 * dpr);
+        const ph = (now * 1.6) % 1;
+        for (let i = 0; i < 3; i++) {
+          const f = (ph + i / 3) % 1;
+          const tx = -halfW * 0.8 + f * halfW * 1.6;
+          ctx.beginPath();
+          ctx.moveTo(tx, 0); ctx.lineTo(tx + halfW * 0.22, 0);
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+    }
+    // 3D printer: a live progress chip beside the frame when a numeric progress
+    // is bound (0/100 included — the number is the point).
+    if (piece.kind === 'printer_3d' && mech?.progress != null) {
+      ctx.save();
+      ctx.font = `${Math.max(8, Math.round(9 * dpr))}px system-ui, sans-serif`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      const txt = `${Math.round(mech.progress)}%`;
+      const tw = ctx.measureText(txt).width + 8;
+      ctx.fillStyle = 'rgba(12,16,20,0.82)';
+      ctx.fillRect(-tw / 2, -halfH - 16 * dpr, tw, 13 * dpr);
+      ctx.fillStyle = '#2ec5b6';
+      ctx.fillText(txt, 0, -halfH - 16 * dpr + 6.5 * dpr);
       ctx.restore();
     }
     // Screen bias lighting (home-theater arc): a subtle colored halo ring around
@@ -4644,6 +4734,148 @@ export function drawFurniturePrimitiveLocal(
         const bx = x + w * (0.14 + i * 0.18);
         ctx.beginPath(); ctx.moveTo(bx, y + h * 0.14); ctx.lineTo(bx, y + h * 0.86); ctx.stroke();
       }
+      break;
+    }
+    // ── Mechanical / utility plant (top-down; front = -Y / bottom edge) ────
+    case 'water_heater': {
+      // Tank circle + a flue dot + a burner flame tick at the front.
+      const rr = Math.min(halfW, halfH) * 0.92;
+      ctx.fillStyle = bodyFill('rgba(214,218,222,0.7)', 0.7);
+      ctx.strokeStyle = '#8d959b'; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(0, 0, rr, 0, 2 * Math.PI); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#78848c';
+      ctx.beginPath(); ctx.arc(0, 0, Math.max(2, rr * 0.2), 0, 2 * Math.PI); ctx.fill();
+      ctx.strokeStyle = '#ff6a1a'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(-rr * 0.3, rr * 0.55); ctx.lineTo(rr * 0.3, rr * 0.55); ctx.stroke();
+      break;
+    }
+    case 'air_handler': {
+      // Cabinet rect + louver lines on the front + a plenum band at the back.
+      fill(bodyFill('rgba(182,190,196,0.65)', 0.65));
+      stroke('#78848c');
+      ctx.fillStyle = 'rgba(141,149,155,0.8)';
+      ctx.fillRect(x, y, w, Math.max(3, h * 0.18));                  // plenum (back / +Y)
+      ctx.strokeStyle = '#4dd0ff'; ctx.lineWidth = 1.5;
+      for (let i = 0; i < 4; i++) {
+        const gy = y + h * (0.45 + i * 0.13);
+        ctx.beginPath(); ctx.moveTo(x + w * 0.18, gy); ctx.lineTo(x + w * 0.82, gy); ctx.stroke();
+      }
+      break;
+    }
+    case 'floor_radiator': {
+      // Long finned strip: body bar + a fin comb across it.
+      fill(bodyFill('rgba(215,220,224,0.65)', 0.65));
+      stroke('#90a4ae');
+      ctx.strokeStyle = '#b0b8be'; ctx.lineWidth = 1;
+      const nf = Math.max(5, Math.min(24, Math.round(w / 8)));
+      for (let i = 0; i < nf; i++) {
+        const fx = x + w * ((i + 0.5) / nf);
+        ctx.beginPath(); ctx.moveTo(fx, y + h * 0.2); ctx.lineTo(fx, y + h * 0.8); ctx.stroke();
+      }
+      ctx.strokeStyle = '#ff6a1a'; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(x + w * 0.04, y + h * 0.92); ctx.lineTo(x + w * 0.96, y + h * 0.92); ctx.stroke();
+      break;
+    }
+    case 'wall_radiator': {
+      // Slim ribbed wall panel + a warm bar along the room-facing edge.
+      fill(bodyFill('rgba(227,231,234,0.65)', 0.65));
+      stroke('#90a4ae');
+      ctx.strokeStyle = '#aeb6bc'; ctx.lineWidth = 1;
+      for (let i = 0; i < 7; i++) {
+        const rx = x + w * (0.08 + i * 0.14);
+        ctx.beginPath(); ctx.moveTo(rx, y + h * 0.18); ctx.lineTo(rx, y + h * 0.82); ctx.stroke();
+      }
+      ctx.strokeStyle = '#ff6a1a'; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(x + w * 0.06, y + h * 0.9); ctx.lineTo(x + w * 0.94, y + h * 0.9); ctx.stroke();
+      break;
+    }
+    case 'boiler': {
+      // Jacket circle + a gauge dot at the front + two pipe stubs at the back.
+      const rr = Math.min(halfW, halfH) * 0.9;
+      ctx.fillStyle = bodyFill('rgba(154,164,173,0.65)', 0.65);
+      ctx.strokeStyle = '#6f787f'; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(0, 0, rr, 0, 2 * Math.PI); ctx.fill(); ctx.stroke();
+      ctx.strokeStyle = '#8d959b'; ctx.lineWidth = 2;
+      for (const sx of [-0.5, 0.5]) {
+        ctx.beginPath(); ctx.moveTo(rr * sx, -rr * 0.8); ctx.lineTo(rr * sx, -rr * 1.25); ctx.stroke();
+      }
+      ctx.fillStyle = '#eceff1';
+      ctx.beginPath(); ctx.arc(rr * 0.28, rr * 0.5, Math.max(2, rr * 0.17), 0, 2 * Math.PI); ctx.fill();
+      ctx.strokeStyle = '#ff6a1a'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(-rr * 0.55, rr * 0.55); ctx.lineTo(-rr * 0.05, rr * 0.55); ctx.stroke();
+      break;
+    }
+    case 'ac_condenser': {
+      // Square cabinet + a top fan circle with a 4-spoke cross.
+      fill(bodyFill('rgba(168,176,182,0.6)', 0.6));
+      stroke('#6f787f');
+      const rr = Math.min(halfW, halfH) * 0.66;
+      ctx.strokeStyle = '#596066'; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(0, 0, rr, 0, 2 * Math.PI); ctx.stroke();
+      ctx.strokeStyle = '#4dd0ff'; ctx.lineWidth = 2;
+      for (let i = 0; i < 4; i++) {
+        const a = (i * Math.PI) / 2 + Math.PI / 6;
+        ctx.beginPath(); ctx.moveTo(0, 0);
+        ctx.lineTo(Math.cos(a) * rr * 0.86, Math.sin(a) * rr * 0.86); ctx.stroke();
+      }
+      ctx.fillStyle = '#455a64';
+      ctx.beginPath(); ctx.arc(0, 0, Math.max(2, rr * 0.16), 0, 2 * Math.PI); ctx.fill();
+      break;
+    }
+    case 'heat_pump': {
+      // Slim cabinet + a fan circle toward the front (-Y) + a control block.
+      fill(bodyFill('rgba(159,168,174,0.6)', 0.6));
+      stroke('#6f787f');
+      const rr = Math.min(halfW * 0.5, halfH * 0.9);
+      ctx.strokeStyle = '#4dd0ff'; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(-halfW * 0.2, 0, rr, 0, 2 * Math.PI); ctx.stroke();
+      ctx.strokeStyle = '#8d959b'; ctx.lineWidth = 1.5;
+      for (let i = 0; i < 3; i++) {
+        const a = (i * 2 * Math.PI) / 3;
+        ctx.beginPath(); ctx.moveTo(-halfW * 0.2, 0);
+        ctx.lineTo(-halfW * 0.2 + Math.cos(a) * rr * 0.85, Math.sin(a) * rr * 0.85); ctx.stroke();
+      }
+      ctx.fillStyle = 'rgba(106,114,120,0.9)';
+      ctx.fillRect(halfW * 0.14, y + h * 0.24, halfW * 0.5, h * 0.52);
+      break;
+    }
+    case 'sump_pump': {
+      // Basin circle + lid ring + a riser pipe stub off the +X side.
+      const rr = Math.min(halfW, halfH) * 0.88;
+      ctx.fillStyle = bodyFill('rgba(84,110,122,0.6)', 0.6);
+      ctx.strokeStyle = '#455a64'; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(0, 0, rr, 0, 2 * Math.PI); ctx.fill(); ctx.stroke();
+      ctx.strokeStyle = '#78909c'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.arc(0, 0, rr * 0.62, 0, 2 * Math.PI); ctx.stroke();
+      ctx.strokeStyle = '#4aa8d8'; ctx.lineWidth = Math.max(2, rr * 0.22);
+      ctx.beginPath(); ctx.moveTo(rr * 0.25, 0); ctx.lineTo(rr * 1.35, 0); ctx.stroke();
+      break;
+    }
+    case 'recirc_pump': {
+      // Inline unit: a pipe run across X + a volute circle + a motor square.
+      ctx.strokeStyle = '#8d959b'; ctx.lineWidth = Math.max(2, halfH * 0.42);
+      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x + w, 0); ctx.stroke();
+      ctx.strokeStyle = '#4aa8d8'; ctx.lineWidth = Math.max(1, halfH * 0.18);
+      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x + w, 0); ctx.stroke();
+      const rr = Math.min(halfW, halfH) * 0.72;
+      ctx.fillStyle = bodyFill('rgba(122,92,58,0.75)', 0.75);
+      ctx.strokeStyle = '#5d4526'; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(0, 0, rr, 0, 2 * Math.PI); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = 'rgba(60,66,72,0.9)';
+      ctx.fillRect(-rr * 0.5, -rr * 0.5, rr, rr);
+      break;
+    }
+    case 'printer_3d': {
+      // Open frame square + a bed rect + the gantry rail across the back.
+      ctx.fillStyle = bodyFill('rgba(55,71,79,0.55)', 0.55);
+      ctx.strokeStyle = '#78848c'; ctx.lineWidth = 1.5;
+      ctx.fillRect(x, y, w, h); ctx.strokeRect(x, y, w, h);
+      ctx.fillStyle = 'rgba(27,31,35,0.95)';
+      ctx.fillRect(x + w * 0.14, y + h * 0.22, w * 0.72, h * 0.62);   // print bed
+      ctx.strokeStyle = '#9aa2a8'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(x + w * 0.06, y + h * 0.12); ctx.lineTo(x + w * 0.94, y + h * 0.12); ctx.stroke();
+      ctx.fillStyle = '#2ec5b6';
+      ctx.fillRect(-w * 0.09, -h * 0.09, w * 0.18, h * 0.18);          // the print
       break;
     }
     case 'exercise_equipment': {

@@ -191,6 +191,64 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Flight property-clearance floor** (2026-07-25, user-reported
+  follow-up to the elevation cap: aircraft <2000 ft rendered near
+  ground level). The cap made the old 2500 mm yMinMm floor the COMMON
+  case for distant low traffic (approach traffic skimmed the yard).
+  New `FLIGHT_SHELL.clearMm` = 6500 hard render floor (clears a
+  2-story house); yMinMm survives only as the altitude-curve 0-ft
+  anchor. Aircraft ≲6600 ft can never clear the floor from the
+  elevation branch (max elev term 3.24·altM) — they ride it by
+  design. Orchestrator-direct fix; flights-test 335→337 (goldens
+  reworked: 5000 ft@0.5 nm now floor-lifted to ~67.7°, mono sweep
+  bounded at the ≈17.3 nm floor crossover).
+
+- **Landmark suggested-position repair** (2026-07-25, user request;
+  single Opus pass). 🎯 toggle per calibrated landmark row: projects
+  the pin's lat/lon back through the FULL current fit (the exact
+  endpoint the residual measures — ghost and readout can never
+  disagree), draws a dashed ghost pin + connector + distance chip on
+  the 2D geo layer (edit-only, runtime latch `landmarkSuggestId`,
+  zero cost when idle), "Apply — move pin here" = one undo step via
+  updateLandmark. Repair flow for a mis-sampled pin: exclude →
+  inspect ghost → apply → re-include (θ unchanged, ~0 residual —
+  asserted). Applying on a PARTICIPATING pin asserts strict rms
+  reduction (scale-locked fit can't zero its own residual).
+  landmark-csv 114→147; geo 80/80, gps 28/28, sensor-focus 9/9.
+
+- **Mechanical & utility appliances** (2026-07-25, user request; single
+  Opus pass + orchestrator three-view follow-ups). Ten bindable animated
+  kinds, all cat 'appliance': water_heater (red burner glow; binds HA's
+  water_heater domain), air_handler + heat_pump (blue/red/white via
+  hvacAirflow, action beats mode), floor/wall_radiator + boiler (red;
+  hvac_action 'idle' = honest dark), ac_condenser (blue + top fan spins
+  only while cooling — rotor in a −90°/X holder so shared _floorFans
+  spin code drives a horizontal fan), sump/recirc pumps (scrolling
+  water via per-pump _flowTexture clones, _waterPatchTextures dispose
+  discipline, frozen when off), printer_3d (mountable; oscillating
+  gantry + growing print box from a numeric progress binding /
+  printProgressEntity / deterministic loop). Pure helpers
+  mechanicalRun/mechanicalBindDomains/printerProgress (geometry.ts);
+  glow replaces the green in-use LED for these kinds. Orchestrator
+  follow-ups in three-view: clim hash gate widened to
+  isMechanicalApplianceKind, printProgressEntity folded into the hash,
+  mechanical dblclick-binder branch. mechanical-test NEW 100/100;
+  climate-appliance 64/64, sink 48/48 green. (localstate-test
+  window_unbound_open fails — PRE-EXISTING, reproduced on HEAD.)
+
+- **Floor-switch view retention** (2026-07-25, user request; single Opus
+  pass). `switchFloor` keeps 2D `viewCenter`/`zoom` (stacked stories
+  share one world-mm frame — the old "different coord space" reset
+  rationale was stale), guarded by pure `viewCenterFitsFloor` (rect
+  inflated 0.5·max(w,d) per side; far-outside centre → reset; null
+  stays null; resetView/config-switch/load still reset). 3D: three-view
+  translates camera pos+target by `floorSwitchCameraDelta` =
+  {(Δfw)/2, −(Δfd)/2} (the scene frame is floor-dim-derived; equal
+  dims = no-op), dims refreshed per tick so floor-edge resizes can't
+  stale the delta. floors-view-test 32→67; undo 44/44. Known
+  non-route: the `floor=` URL param sets currentFloorId directly
+  (boot-time, unpanned) — retention not applicable.
+
 - **Camera-distance-tracking frustum** (2026-07-25, user-reported: zooming
   out pulled the horizon IN, clipping distant OpenStreetMap content;
   zooming in restored it). The neighborhood frustum was STATIC

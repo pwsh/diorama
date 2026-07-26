@@ -251,10 +251,16 @@ export function aircraftModelKind(fp: FlightPoint): 'prop' | 'jet' | 'heli' {
 // through it; the altitude band is a separate domain with its own curve.
 export const FLIGHT_SHELL = {
   rMaxMm: 24000,     // horizontal display shell ceiling (asymptote — never reached)
-  yMinMm: 2500,      // display altitude at 0 ft
+  yMinMm: 2500,      // altitude-curve band bottom (0 ft anchor — NOT the render floor)
   yMaxMm: 22000,     // display altitude at altMaxFt and above
   altRefFt: 3000,    // log knee — detail is spent on low, visually interesting traffic
   altMaxFt: 45000,   // above this the altitude curve saturates
+  // Hard render floor: no aircraft may EVER draw lower than this, whatever the
+  // curves say — it must clear the property (2-story house ≈ 6000 mm + margin).
+  // The elevation-true cap made this reachable for ALL distant low traffic
+  // (approach traffic at 1500–2000 ft was skimming the yard at the old
+  // 2500 mm yMinMm floor — user-reported); the clearance floor is the fix.
+  clearMm: 6500,
 } as const;
 
 // Horizontal compression: asymptotic, so a nearer aircraft is always visibly
@@ -295,7 +301,7 @@ const TWO_PI = Math.PI * 2;
 // scene-space projection call it, so the two views can never disagree about how
 // high a plane hangs.
 //
-//   dispY = max(yMinMm, min(compressAltitudeMm(altFt), rMm · altM / distM))
+//   dispY = max(clearMm, min(compressAltitudeMm(altFt), rMm · altM / distM))
 //
 // The second term is the height that reproduces the aircraft's TRUE elevation
 // angle on the compressed radius: `atan2(dispY, rMm)` then equals
@@ -305,15 +311,16 @@ const TWO_PI = Math.PI * 2;
 // leaves the log curve in charge of near/overhead traffic (where the elevation
 // term is the larger of the two), so a plane genuinely overhead still reads
 // overhead, and everywhere else the display angle can only be ≤ the true one.
-// The yMinMm floor is the single exception: it lifts a very distant, very low
-// aircraft clear of rooftops / neighborhood buildings instead of burying it.
+// The clearMm floor is the single exception to angle-honesty: NOTHING renders
+// below the property-clearance height (a plane must never be able to hit the
+// house), so distant low approach traffic rides the floor instead of the yard.
 export function flightDisplayAltitudeMm(altFt: number, distNm: number, rMm: number): number {
   const altM = (isFinite(altFt) ? altFt : 0) * FT_M;
   // distM floored at 1 m so an aircraft sitting exactly on the origin (r = 0
   // anyway) can never divide by zero.
   const distM = Math.max((isFinite(distNm) && distNm > 0 ? distNm : 0) * NM_M, 1);
   const r = isFinite(rMm) && rMm > 0 ? rMm : 0;
-  return Math.max(FLIGHT_SHELL.yMinMm,
+  return Math.max(FLIGHT_SHELL.clearMm,
                   Math.min(compressAltitudeMm(altFt), r * (altM / distM)));
 }
 

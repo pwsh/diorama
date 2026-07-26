@@ -244,7 +244,7 @@
         const p = F.flightDisplayPos(a, 33.9425, -118.408, 0.3, 25);
         if (!Number.isFinite(p.planX) || !Number.isFinite(p.planY) || !Number.isFinite(p.dispY)) clean = false;
         if (Math.hypot(p.planX, p.planY) >= F.FLIGHT_SHELL.rMaxMm) clean = false;
-        if (p.dispY < F.FLIGHT_SHELL.yMinMm || p.dispY > F.FLIGHT_SHELL.yMaxMm) clean = false;
+        if (p.dispY < F.FLIGHT_SHELL.clearMm || p.dispY > F.FLIGHT_SHELL.yMaxMm) clean = false;
       }
       ok('9: all 44 real aircraft project finite + inside the shell', clean);
     }
@@ -255,7 +255,10 @@
     // that never looked at distance, over a 2,500–22,000 mm band comparable to
     // the 24,000 mm radial shell. The fix caps the display height at the TRUE
     // elevation angle:
-    //   dispY = max(yMinMm, min(compressAltitudeMm(alt), r · altM / distM))
+    //   dispY = max(clearMm, min(compressAltitudeMm(alt), r · altM / distM))
+    // clearMm (6500) is the property-clearance render floor — no aircraft may
+    // ever draw low enough to hit the house (user-reported: approach traffic
+    // at 1500–2000 ft skimmed the yard at the old 2500 mm yMinMm floor).
     {
       const OLAT = 47.6, OLON = -122.3;
       const FT_M = 0.3048, NM_M = 1852, EARTH_R_M = 6371000, DEGR = Math.PI / 180;
@@ -281,12 +284,14 @@
       near('9b: 35,000 ft @ 15 nm → dispY', g2.dispY, 7276.1169, 0.01);
       near('9b: 35,000 ft @ 15 nm → 21.0° up (== true)', dispAngDeg(g2), 21.008, 0.01);
 
-      // Overhead traffic must STAY overhead — here the log curve is the smaller
-      // of the two terms, so it (not the elevation cap) governs.
+      // Overhead traffic must STAY overhead. The raw elevation term here is
+      // 4388.77 mm — BELOW the 6500 property-clearance floor, so the floor
+      // lifts it (and the read stays steeply overhead: ~67.7°).
       const g3 = D(0.5, 5000);
       near('9b: 5,000 ft @ 0.5 nm → r', Math.hypot(g3.planX, g3.planY), 2666.6667, 0.01);
-      near('9b: 5,000 ft @ 0.5 nm → dispY (elevation branch)', g3.dispY, 4388.7689, 0.01);
-      near('9b: 5,000 ft @ 0.5 nm → 58.7° up (truly overhead)', dispAngDeg(g3), 58.717, 0.01);
+      near('9b: 5,000 ft @ 0.5 nm → dispY rides the clearance floor', g3.dispY, F.FLIGHT_SHELL.clearMm, 1e-9);
+      ok('9b: 5,000 ft @ 0.5 nm → still reads overhead (> 60° up)', dispAngDeg(g3) > 60,
+        `${dispAngDeg(g3).toFixed(1)}°`);
       const g4 = D(0.5, 35000);
       near('9b: 35,000 ft @ 0.5 nm → the log curve wins (overhead stays steep)',
         g4.dispY, F.compressAltitudeMm(35000), 1e-9);
@@ -299,9 +304,10 @@
 
       // Strictly DECREASING in distance for a fixed altitude, once past the
       // crossover (35,000 ft crosses at ≈2.8 nm at radius 15) and before the
-      // yMin floor (≈51 nm). dispY_elev ∝ alt / (d + K).
+      // clearance floor (35,000 ft reaches 6500 mm at ≈17.3 nm).
+      // dispY_elev ∝ alt / (d + K).
       let mono = true, prev = Infinity;
-      for (let d = 3; d <= 40; d += 0.5) {
+      for (let d = 3; d <= 17; d += 0.5) {
         const v = D(d, 35000).dispY;
         if (!(v < prev - 1e-9)) { mono = false; break; }
         prev = v;
@@ -334,7 +340,7 @@
         for (const d of [0.25, 0.75, 2, 5, 9, 15, 25, 40]) {
           const p = D(d, alt);
           const disp = dispAngDeg(p), tru = trueAngDeg(alt, d);
-          const floored = p.dispY <= F.FLIGHT_SHELL.yMinMm + 1e-9;
+          const floored = p.dispY <= F.FLIGHT_SHELL.clearMm + 1e-9;
           const elevBranch = !floored && p.dispY < F.compressAltitudeMm(alt) - 1e-6;
           if (elevBranch) { sawElev++; if (Math.abs(disp - tru) > 1e-6) parity = false; }
           else if (!floored) sawCurve++;
@@ -342,22 +348,31 @@
         }
       }
       ok('9b: elevation branch reproduces the TRUE elevation angle exactly',
-        parity && sawElev > 20, `${sawElev} samples on the elevation branch`);
+        // The 6500 clearance floor absorbs the low-altitude rows of the sample
+        // grid (alt ≲ 6600 ft can never clear it: max elev term = rMax·altM/
+        // (NM_M·K) = 3.24·altM), so the elevation branch keeps ~14 of 64 cells.
+        parity && sawElev >= 12, `${sawElev} samples on the elevation branch`);
       ok('9b: display angle never EXCEEDS the true angle (above the floor)', never);
       ok('9b: the log curve still governs some near/high traffic', sawCurve > 0, `${sawCurve} samples`);
 
-      // The yMinMm floor: a very distant, very low aircraft is lifted clear of
-      // rooftops instead of being buried in the ground plane.
-      near('9b: 1,000 ft @ 15 nm floors at yMinMm', D(15, 1000).dispY, F.FLIGHT_SHELL.yMinMm, 1e-9);
-      ok('9b: nothing ever sits below yMinMm', D(90, 500).dispY === F.FLIGHT_SHELL.yMinMm);
+      // The clearMm property-clearance floor: NOTHING may render low enough to
+      // hit the house — distant low approach traffic rides the floor.
+      near('9b: 1,000 ft @ 15 nm floors at clearMm', D(15, 1000).dispY, F.FLIGHT_SHELL.clearMm, 1e-9);
+      ok('9b: nothing ever sits below clearMm', D(90, 500).dispY === F.FLIGHT_SHELL.clearMm);
+      ok('9b: clearance floor clears a 2-story house (≥ 6000 mm + margin)',
+        F.FLIGHT_SHELL.clearMm >= 6500);
+      // The user-reported regression: 1,500–2,000 ft approach traffic a few nm
+      // out must never skim the yard.
+      ok('9b: 1,800 ft @ 5 nm sits at/above the clearance floor',
+        D(5, 1800).dispY >= F.FLIGHT_SHELL.clearMm);
 
       // Bounds + garbage tolerance on the shared helper itself.
       ok('9b: helper clamps to the shell band',
         F.flightDisplayAltitudeMm(99999, 1, 24000) <= F.FLIGHT_SHELL.yMaxMm
-        && F.flightDisplayAltitudeMm(-5000, 10, 18000) === F.FLIGHT_SHELL.yMinMm);
+        && F.flightDisplayAltitudeMm(-5000, 10, 18000) === F.FLIGHT_SHELL.clearMm);
       ok('9b: helper survives non-finite input',
-        F.flightDisplayAltitudeMm(NaN, NaN, NaN) === F.FLIGHT_SHELL.yMinMm
-        && F.flightDisplayAltitudeMm(10000, 0, 0) === F.FLIGHT_SHELL.yMinMm);
+        F.flightDisplayAltitudeMm(NaN, NaN, NaN) === F.FLIGHT_SHELL.clearMm
+        && F.flightDisplayAltitudeMm(10000, 0, 0) === F.FLIGHT_SHELL.clearMm);
       ok('9b: helper agrees with flightDisplayPos on the real fixture', (() => {
         for (const a of F.normalizeAircraftList(LAX)) {
           const p = F.flightDisplayPos(a, 33.9425, -118.408, 0.3, 25);

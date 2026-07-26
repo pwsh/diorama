@@ -2093,6 +2093,21 @@ export const FURNITURE_KINDS: Record<FurnitureKind, FurnitureKindDef> = {
   // "away", on = solid, unbound = always solid. ev_charger is a wall-post EVSE.
   car:           { label: 'Car',           w: 1850, h: 4800, ht: 1450, back: 'none', color: 0x37516b, cat: 'vehicle' },
   ev_charger:    { label: 'EV charger',     w: 350,  h: 250,  ht: 1200, back: 'none', color: 0x2f3237, cat: 'vehicle' },
+  // Mechanical / utility plant. All cat 'appliance' so they ride the appliances
+  // layer + the three-view appliance-state hash for free. Sizes follow common
+  // residential spec sheets (50 gal tank ⌀560×1500, 3-ton condenser 900², a
+  // 1500 mm baseboard run, an Ender-class printer 420²×480). Front (control
+  // face / grille / print bed opening) = -Z. Symmetric pieces skip the chevron.
+  water_heater:  { label: 'Water heater',  w: 560,  h: 560,  ht: 1500, back: 'none', color: 0xd6dade, cat: 'appliance', frontArrow: false },
+  air_handler:   { label: 'Air handler',   w: 600,  h: 750,  ht: 1350, back: 'none', color: 0xb6bec4, cat: 'appliance' },
+  floor_radiator:{ label: 'Floor radiator', w: 1500, h: 150,  ht: 250,  back: 'none', color: 0xd7dce0, cat: 'appliance', frontArrow: false },
+  wall_radiator: { label: 'Wall radiator', w: 800,  h: 110,  ht: 600,  back: 'none', color: 0xe3e7ea, cat: 'appliance', frontArrow: false },
+  boiler:        { label: 'Boiler',        w: 600,  h: 650,  ht: 900,  back: 'none', color: 0x9aa4ad, cat: 'appliance' },
+  ac_condenser:  { label: 'AC condenser',  w: 900,  h: 900,  ht: 700,  back: 'none', color: 0xa8b0b6, cat: 'appliance', frontArrow: false },
+  heat_pump:     { label: 'Heat pump',     w: 950,  h: 400,  ht: 800,  back: 'none', color: 0x9fa8ae, cat: 'appliance' },
+  sump_pump:     { label: 'Sump pump',     w: 350,  h: 350,  ht: 450,  back: 'none', color: 0x546e7a, cat: 'appliance', frontArrow: false },
+  recirc_pump:   { label: 'Recirc pump',   w: 300,  h: 180,  ht: 220,  back: 'none', color: 0x7a5c3a, cat: 'appliance', frontArrow: false },
+  printer_3d:    { label: '3D printer',    w: 420,  h: 420,  ht: 480,  back: 'none', color: 0x37474f, cat: 'appliance', mountable: true },
 };
 
 // Ground / yard covering kinds (the "yard" arc): a flat display color for the 2D
@@ -2278,6 +2293,7 @@ export function defaultFurnitureElevation(kind: FurnitureKind | undefined): numb
     case 'mini_split':  return 2100;
     case 'wall_heater': return 200;
     case 'towel_warmer': return 800;
+    case 'wall_radiator': return 200;   // hydronic panel sits just off the floor
     default: return 0;
   }
 }
@@ -2304,6 +2320,135 @@ export function climateApplianceRun(
   }
   // fan.* / switch.* / localState — 'on'/'playing' runs at the fallback airflow.
   return { running: s === 'on' || s === 'playing', air: airFallback };
+}
+
+// ── Mechanical / utility appliances (this batch) ───────────────────────────
+// Water heater, air handler, radiators, boiler, outdoor condenser / heat pump,
+// sump + recirculating pumps, 3D printer. All cat 'appliance' — they ride the
+// appliances layer + the three-view appliance-state hash with no predicate
+// change. This helper is the gate for: the mechanical GLOW (2D halo + 3D
+// emissive), the generic green in-use LED EXCLUSION (glow is their state
+// language), the 'media' click tag (unbound pieces flip localState), and the
+// sidebar bind row / per-kind picker domains.
+export function isMechanicalApplianceKind(kind: FurnitureKind | undefined): boolean {
+  return kind === 'water_heater' || kind === 'air_handler' ||
+         kind === 'floor_radiator' || kind === 'wall_radiator' || kind === 'boiler' ||
+         kind === 'ac_condenser' || kind === 'heat_pump' ||
+         kind === 'sump_pump' || kind === 'recirc_pump' || kind === 'printer_3d';
+}
+// The two pumps — their "running" cue is WATER MOVING through the pipe run
+// (a scrolling flow texture), not an emissive glow.
+export function isPumpKind(kind: FurnitureKind | undefined): boolean {
+  return kind === 'sump_pump' || kind === 'recirc_pump';
+}
+// Per-kind entity-picker domains. Deliberately DOMAIN-FLEXIBLE (the pool /
+// EV-charger precedent): design around the common shape, never one vendor's
+// entity ids. Unknown kind → the generic switch list.
+export function mechanicalBindDomains(kind: FurnitureKind | undefined): string[] {
+  switch (kind) {
+    case 'water_heater':   return ['water_heater', 'climate', 'switch', 'binary_sensor'];
+    case 'air_handler':
+    case 'heat_pump':      return ['climate', 'fan', 'switch'];
+    case 'ac_condenser':
+    case 'floor_radiator':
+    case 'wall_radiator':
+    case 'boiler':         return ['climate', 'switch', 'binary_sensor'];
+    case 'sump_pump':
+    case 'recirc_pump':    return ['switch', 'binary_sensor'];
+    case 'printer_3d':     return ['switch', 'binary_sensor', 'sensor'];
+    default:               return ['switch', 'binary_sensor'];
+  }
+}
+// Glow color language, shared 2D + 3D. 'none' = no glow (pumps show flow, an
+// idle unit stays dark). heat/cool/fan reuse the HVAC vent palette so the whole
+// climate story reads with one color vocabulary.
+export type MechanicalGlow = 'heat' | 'cool' | 'fan' | 'none';
+export const MECH_GLOW_COLORS: Record<'heat' | 'cool' | 'fan', string> = {
+  heat: HVAC_VENT_COLORS.heat, cool: HVAC_VENT_COLORS.cool, fan: '#f2f5f7',
+};
+export function mechanicalGlowColor(g: MechanicalGlow): string | null {
+  return g === 'none' ? null : MECH_GLOW_COLORS[g];
+}
+// States that mean "not running" across every domain we accept (climate mode,
+// water_heater operation mode, switch/binary_sensor, unbound localState).
+const MECH_OFF_STATES = new Set(['', 'off', 'unavailable', 'unknown', 'none',
+                                 'idle', 'standby', 'closed', 'false', 'paused']);
+// Print progress 0..100 from a RESOLVED state envelope. The state itself wins
+// when it is a bare number; otherwise the common progress-shaped attributes are
+// tried in order. Anything unparseable → null (never throws, never guesses a
+// vendor's key set — the evStatusOf discipline).
+export function printerProgress(
+  st: { state?: string; attributes?: Record<string, unknown> } | null | undefined,
+): number | null {
+  const clamp = (n: number): number | null =>
+    isFinite(n) ? Math.max(0, Math.min(100, n)) : null;
+  const raw = String(st?.state ?? '').trim();   // String(): a non-string state must never throw
+  if (/^[+-]?(\d+\.?\d*|\.\d+)$/.test(raw)) return clamp(parseFloat(raw));
+  const a = st?.attributes;
+  if (a) {
+    for (const key of ['progress', 'print_progress', 'completion', 'percentage', 'percent_complete']) {
+      const v = a[key];
+      const n = typeof v === 'number' ? v : parseFloat(String(v ?? ''));
+      if (isFinite(n)) return clamp(n);
+    }
+  }
+  return null;
+}
+export interface MechanicalRun {
+  running: boolean;         // the unit is doing work right now
+  glow: MechanicalGlow;     // emissive/halo color language ('none' = dark / pumps)
+  progress: number | null;  // printer_3d only: 0..100, else null
+}
+// Resolve running + glow (+ print progress) for a mechanical appliance from its
+// RESOLVED state envelope (Planner.effectiveState / the renderer's itemState —
+// localState already folded). Pure + defensive: every branch tolerates a missing
+// state, a missing attribute bag, and a vendor-specific state string.
+//
+// Climate-bound units resolve airflow through the shared `hvacAirflow` (action
+// wins over mode, exactly like the thermostat vent), so a unit sitting in mode
+// `heat` with action `idle` reads as NOT running — an honest dark radiator.
+// Units with no action reported and a non-off state run at their kind's natural
+// color (a water heater in `eco` heats; an air handler in `auto` is "some other
+// mode" → white).
+export function mechanicalRun(
+  st: { state?: string; attributes?: Record<string, unknown> } | null | undefined,
+  kind: FurnitureKind | undefined,
+): MechanicalRun {
+  const s = String(st?.state ?? '').trim().toLowerCase();   // String(): never throw on a non-string state
+  if (kind === 'printer_3d') {
+    const progress = printerProgress(st);
+    const running = progress != null
+      ? progress > 0 && progress < 100
+      : (s === 'printing' || s === 'on' || s === 'busy' || s === 'running' || s === 'playing');
+    return { running, glow: 'none', progress };
+  }
+  if (isPumpKind(kind)) {
+    const running = s === 'on' || s === 'open' || s === 'opening' ||
+                    s === 'running' || s === 'playing' || s === 'true';
+    return { running, glow: 'none', progress: null };
+  }
+  // Natural color for a running unit whose mode carries no airflow hint.
+  const natural: MechanicalGlow =
+    kind === 'ac_condenser' ? 'cool'
+    : kind === 'air_handler' || kind === 'heat_pump' ? 'fan'
+    : 'heat';   // water_heater / radiators / boiler
+  if (!s || MECH_OFF_STATES.has(s)) return { running: false, glow: 'none', progress: null };
+  const action = st?.attributes?.hvac_action as string | undefined;
+  const air = hvacAirflow(s, action);
+  if (air) {
+    // Single-purpose plant can only do its one job: a condenser never heats,
+    // a radiator/boiler/water heater never cools.
+    const glow: MechanicalGlow =
+      kind === 'ac_condenser' ? 'cool'
+      : (kind === 'floor_radiator' || kind === 'wall_radiator' ||
+         kind === 'boiler' || kind === 'water_heater') ? 'heat'
+      : air;
+    return { running: true, glow, progress: null };
+  }
+  // An explicit action that maps to no airflow (idle / drying / defrosting) is
+  // the physical truth — the unit is NOT moving heat.
+  if (action) return { running: false, glow: 'none', progress: null };
+  return { running: true, glow: natural, progress: null };
 }
 
 // Floodlight/exhaust wall-plate depth (three-renderer housing Z). Wall-mount

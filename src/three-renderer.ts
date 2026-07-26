@@ -12,6 +12,7 @@ import {
   motionColor, motionIntensity, hexToInt, bleProxyHeight, BLE_PROXY_DEFAULTS,
   furnitureDef, resolveFurnitureDef, furnitureColor, furnitureCat, isBinKind, binStateIsFull, isSpeakerKind, isSinkKind, isRiserKind, doorOpenDeltaDeg,
   isClimateApplianceKind, isBladedFanKind, climateApplianceRun,
+  isMechanicalApplianceKind, isPumpKind, mechanicalRun, mechanicalGlowColor, type MechanicalRun,
   plantThirsty, PLANT_MOISTURE_DEFAULT_THRESHOLD,
   isVehicleKind, evStatusOf, evStatusColor, carChargeState,
   doorOpenFraction, GARAGE_DOOR_H,
@@ -2002,6 +2003,27 @@ export class ThreeDRenderer {
   private _climateEased: { fuId: string; running: boolean; tauUp: number; tauDown: number;
                            apply: (blend: number) => void }[] = [];
   private _climateBlends: Record<string, number> = {};
+  // ── Mechanical / utility appliances (this batch) ─────────────────────────
+  // Pump pipe-run flow textures: the shared `_flowTexture()` canvas is a single
+  // cached texture — mutating ITS offset would scroll every pump in lockstep and
+  // fight the cache, so each RUNNING pump gets a build-time CLONE (shares the
+  // source canvas, own offset/repeat) tracked here and scrolled by
+  // _advancePumpFlows (zero alloc). Clones are NOT freed by `_clearGroup` (it
+  // disposes materials, not maps — the shared source must survive), so they are
+  // disposed explicitly on every furniture rebuild + on floor switch + destroy.
+  // Only running pumps enroll → a stopped pump's water is simply frozen.
+  private _pumpFlowTextures: THREE.Texture[] = [];
+  private _flowTex: THREE.CanvasTexture | null = null;
+  private _PUMP_FLOW_DRIFT = 0.55;   // uv/s along the pipe axis
+  // 3D printers: the gantry/print-head oscillation + the growing print box. The
+  // head travel + the bed print are rebuilt with the furniture; the accumulated
+  // phase persists per fixture id (survives _keyFloor rebuilds, so a rebuild
+  // never pops the head back to the rail centre). `growS` null = a bound numeric
+  // progress drives the print height directly (no phase loop).
+  private _printers: { fuId: string; head: THREE.Object3D; travel: number;
+                       print: THREE.Mesh | null; maxH: number;
+                       running: boolean; progress: number | null }[] = [];
+  private _printerPhase: Record<string, number> = {};
   // TVs grouped by the room they sit in — the watch_tv seated activity checks
   // whether a bound TV in the seated person's room is on. Rebuilt in updateFloor.
   private _tvsByRoom: Record<string, { furnitureId: string; hasEntity: boolean }[]> = {};
@@ -2930,6 +2952,12 @@ export class ThreeDRenderer {
     this._climateGlows = [];
     this._climateEased = [];
     this._climateBlends = {};
+    // Mechanical/utility plant: printer rigs + their accumulated head phase are
+    // per-floor, and the pump flow clones lived under _floorGroup (just cleared)
+    // — dispose them so _advancePumpFlows can never scroll a freed texture.
+    this._printers = [];
+    this._printerPhase = {};
+    this._disposePumpFlowTextures();
     // Plant droop rigs + their eased blend reset on floor switch (pivots were just
     // disposed with _floorGroup; the blend map is rebuilt as updateFloor re-registers).
     this._plants = [];
@@ -3339,6 +3367,89 @@ export class ThreeDRenderer {
       let o = t.offset.y + dt * (this._WATER_DRIFT * 0.7);   // calmer than open water
       if (o > 1) o -= 1;
       t.offset.y = o;
+    }
+  }
+
+  // Pump pipe flow (mechanical batch): a small procedural texture of blue water
+  // with lighter chevron bands. Built ONCE and cached (disposed only in
+  // destroy(), like _blobTex / _gradientMapTex); each running pump scrolls its
+  // OWN clone (see _pumpFlowTextures). A dedicated source rather than the ground
+  // water texture: a thin pipe needs high-contrast directional bands to read.
+  private _flowTexture(): THREE.CanvasTexture {
+    if (this._flowTex) return this._flowTex;
+    const S = 64;
+    const cv = document.createElement('canvas');
+    cv.width = S; cv.height = S;
+    const g = cv.getContext('2d')!;
+    g.fillStyle = '#1c6ea8';
+    g.fillRect(0, 0, S, S);
+    g.strokeStyle = '#7fd0f0';
+    g.lineWidth = 5;
+    // Two chevron bands pointing along +v (the scroll direction = flow).
+    for (const cy of [S * 0.25, S * 0.75]) {
+      g.beginPath();
+      g.moveTo(S * 0.12, cy + S * 0.10);
+      g.lineTo(S * 0.5,  cy - S * 0.10);
+      g.lineTo(S * 0.88, cy + S * 0.10);
+      g.stroke();
+    }
+    g.strokeStyle = 'rgba(255,255,255,0.35)';
+    g.lineWidth = 2;
+    for (const cy of [S * 0.5, S * 1.0 - 1]) {
+      g.beginPath(); g.moveTo(0, cy); g.lineTo(S, cy); g.stroke();
+    }
+    const tex = new THREE.CanvasTexture(cv);
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.colorSpace = THREE.SRGBColorSpace;
+    this._flowTex = tex;
+    return tex;
+  }
+  private _disposePumpFlowTextures(): void {
+    for (const t of this._pumpFlowTextures) t.dispose();
+    this._pumpFlowTextures = [];
+  }
+  private _pumpFlowTexClone(repeatV = 2): THREE.Texture {
+    const c = this._flowTexture().clone();
+    c.needsUpdate = true;
+    c.wrapS = c.wrapT = THREE.RepeatWrapping;
+    c.colorSpace = THREE.SRGBColorSpace;
+    c.repeat.set(1, repeatV);
+    this._pumpFlowTextures.push(c);
+    return c;
+  }
+  // Scroll every RUNNING pump's flow clone along the pipe axis (zero alloc).
+  // Stopped pumps never enrol, so their water stays frozen where it stopped.
+  private _advancePumpFlows(dt: number): void {
+    if (!this._pumpFlowTextures.length) return;
+    for (const t of this._pumpFlowTextures) {
+      let o = t.offset.y - dt * this._PUMP_FLOW_DRIFT;
+      if (o < 0) o += 1;
+      t.offset.y = o;
+    }
+  }
+
+  // 3D printers: oscillate the gantry head along its rail and grow the print on
+  // the bed. Phase accumulates per fixture id (NEVER the absolute clock — a
+  // freshly-rebuilt rig would pop) and survives _keyFloor rebuilds. With a bound
+  // numeric progress the print height is that fraction (set at build); without
+  // one it cycles on a slow deterministic loop so an on/off binding still reads
+  // as "printing". Zero allocation.
+  private _PRINTER_HEAD_HZ = 0.55;    // gantry sweeps back and forth
+  private _PRINTER_LOOP_S = 60;       // on/off mode: one print grows over ~60 s
+  private _advancePrinters(dt: number): void {
+    if (!this._printers.length) return;
+    for (const pr of this._printers) {
+      if (!pr.running) continue;
+      const t = (this._printerPhase[pr.fuId] ?? 0) + dt;
+      this._printerPhase[pr.fuId] = t;
+      pr.head.position.x = Math.sin(t * this._PRINTER_HEAD_HZ * 2 * Math.PI) * pr.travel;
+      if (pr.print && pr.progress == null) {
+        const frac = (t % this._PRINTER_LOOP_S) / this._PRINTER_LOOP_S;
+        const h = Math.max(1, pr.maxH * frac);
+        pr.print.scale.y = h / pr.maxH;
+        pr.print.position.y = pr.print.userData.baseY + h / 2;
+        pr.print.visible = frac > 0.02;
+      }
     }
   }
 
@@ -4828,6 +4939,12 @@ export class ThreeDRenderer {
     this._applianceVents = [];
     this._climateGlows = [];
     this._climateEased = [];
+    // Mechanical/utility plant: the printer rigs are rebuilt with the furniture
+    // (the accumulated head phase persists in _printerPhase), and the pump flow
+    // texture CLONES must be disposed explicitly — _clearGroup frees materials
+    // but not their maps, and the shared _flowTex source must survive.
+    this._printers = [];
+    this._disposePumpFlowTextures();
     // Fountain spray clouds are rebuilt with the furniture under _floorGroup;
     // drop the tracking list so _advanceFountains never iterates freed geometry.
     this._fountains = [];
@@ -4876,6 +4993,18 @@ export class ThreeDRenderer {
           const mag = typeof fa.percentage === 'number'
             ? Math.max(0, Math.min(100, fa.percentage as number)) / 100 * MAX_FAN_RPS : 1.2;
           fanRps = fa.direction === 'reverse' ? -mag : mag;
+        }
+      }
+      // Mechanical / utility plant (this batch): resolve {running, glow, progress}
+      // from the piece's RESOLVED state through the pure `mechanicalRun`. The
+      // printer's optional secondary progress sensor wins over its own state when
+      // bound (the primary binding is then just an on/off switch).
+      let mech: MechanicalRun | undefined;
+      if (isMechanicalApplianceKind(fu.kind)) {
+        mech = mechanicalRun(st0, fu.kind);
+        if (fu.kind === 'printer_3d' && fu.printProgressEntity && stateProvider) {
+          const ps = mechanicalRun(stateProvider(fu.printProgressEntity), 'printer_3d');
+          if (ps.progress != null) mech = { ...mech, running: ps.running || mech.running, progress: ps.progress };
         }
       }
       // Bound temperature reading (stove/oven/fridge): a rounded chip/sprite.
@@ -4941,7 +5070,8 @@ export class ThreeDRenderer {
       const grp = this._buildFurniture(fu, f.furniture, customObjects,
                                        { applianceOn, ledScale, doorSink, plantSink, sinkSink, tempLabel, binFull, speakerPlaying, biasOn, biasColor,
                                          vehicleGhost, evCharging, evColor, mailFlagUp, mailCountLabel, jobDone,
-                                         climateRunning, climateAir, fanRps, oscillate: (fu as Furniture).oscillate === true });
+                                         climateRunning, climateAir, fanRps, oscillate: (fu as Furniture).oscillate === true,
+                                         mech });
       this._shadowFlags(grp);
       // Custom-recipe front-arrow indicator: custom objects draw only as a
       // labeled rect in 2D and had no 3D front cue, so when a recipe piece is
@@ -5052,6 +5182,13 @@ export class ThreeDRenderer {
       // 'media' click path → toggleItem: toggleEntity when bound (climate/fan/
       // switch.toggle), else flip localState). Tagged regardless of binding.
       if (isClimateApplianceKind(fu.kind)) {
+        grp.userData = { ...grp.userData, kind: 'media', entity_id: fu.entity_id ?? null, fixtureId: fu.id };
+        this._mediaClickables.push(grp);
+      }
+      // Mechanical / utility plant reuses the same 'media' click path (single
+      // click → toggleItem: toggleEntity when bound, else flip localState).
+      // Tagged regardless of binding so an unbound piece can be run locally.
+      if (isMechanicalApplianceKind(fu.kind)) {
         grp.userData = { ...grp.userData, kind: 'media', entity_id: fu.entity_id ?? null, fixtureId: fu.id };
         this._mediaClickables.push(grp);
       }
@@ -6977,7 +7114,8 @@ export class ThreeDRenderer {
                                    jobDone?: boolean;
                                    climateRunning?: boolean;
                                    climateAir?: import('./geometry.js').HvacAirflowKind;
-                                   fanRps?: number; oscillate?: boolean }): THREE.Group {
+                                   fanRps?: number; oscillate?: boolean;
+                                   mech?: MechanicalRun }): THREE.Group {
     const recipe = fu.customKindId ? customObjects?.find(o => o.id === fu.customKindId) : undefined;
     const def = recipe ?? furnitureDef(fu);
     const W = fu.w, D = fu.h, HT = def.ht;
@@ -8399,6 +8537,362 @@ export class ThreeDRenderer {
           tauUp: 1.8, tauDown: 2.6, apply: applyWarm });   // ~4 s warm-up / ~6 s cool-down
         break;
       }
+      // ── Mechanical / utility plant (front = local -Z) ────────────────────
+      // Every one resolves {running, glow, progress} in updateFloor via the pure
+      // `mechanicalRun`; the glow color (heat red / cool blue / fan white) is the
+      // whole state language, so these kinds are EXCLUDED from the generic green
+      // in-use LED further down. Emissive parts are outline-skipped.
+      case 'water_heater': {
+        // Vertical tank on a short skirt: jacket cylinder + domed top + flue pipe
+        // + cold/hot stubs + a burner inspection window that glows while heating.
+        const jacket = this._mat({ color: tint, metalness: 0.35, roughness: 0.45 });
+        const R = Math.min(W, D) * 0.46;
+        const skirtH = 90, tankH = HT * 0.82;
+        addCyl(R * 0.96, R * 0.96, skirtH, dark, 0, skirtH / 2, 0, 20);        // base skirt
+        addCyl(R, R, tankH, jacket, 0, skirtH + tankH / 2, 0, 22);             // jacket
+        addCyl(R * 0.72, R, HT - skirtH - tankH, jacket,
+               0, skirtH + tankH + (HT - skirtH - tankH) / 2, 0, 22);          // domed top
+        const pipe = this._mat({ color: 0x9aa2a8, metalness: 0.6, roughness: 0.4 });
+        // Flue base is BURIED in the dome — a flush bottom face coplanar with the
+        // dome's top would hatch (the coincident-face gotcha).
+        addCyl(52, 52, 260, pipe, 0, HT + 110, 0, 12);                          // flue
+        for (const sx of [-1, 1])                                               // cold / hot stubs
+          addCyl(30, 30, 150, pipe, sx * R * 0.55, HT + 60, 0, 10);
+        // Burner window near the base, on the front face (-Z), proud of the jacket.
+        const burnMat = this._mechGlowMat(opts?.mech, 0x2a1206, (fu.x + fu.y) % 6.28,
+          { om: 2.2, on: 1.0, amp: 0.4 });
+        const burn = new THREE.Mesh(new THREE.BoxGeometry(W * 0.34, 90, 14), burnMat);
+        burn.position.set(0, skirtH + 110, -R - 6);
+        burn.userData.outlineSkip = true;
+        grp.add(burn);
+        addBox(W * 0.42, 150, 12, this._mat({ color: 0x60686e, roughness: 0.6 }),
+               0, skirtH + 320, -R - 4);                                        // control panel
+        break;
+      }
+      case 'air_handler': {
+        // Sheet-metal cabinet + a top supply plenum + a front louver strip that
+        // glows in the airflow color. Running → airflow particles off the plenum.
+        const shell = this._mat({ color: tint, metalness: 0.45, roughness: 0.45 });
+        const cabH = HT * 0.78;
+        addBox(W, cabH, D, shell, 0, cabH / 2, 0);
+        addBox(W * 1.1, HT - cabH, D * 1.06, this._mat({ color: 0x8d959b, metalness: 0.4, roughness: 0.5 }),
+               0, cabH + (HT - cabH) / 2, 0);                                   // supply plenum
+        // Everything proud of the front OVERLAPS the cabinet face rather than
+        // sitting flush on it (a coplanar back face would hatch).
+        addBox(W * 0.9, 16, 16, dark, 0, cabH * 0.62, -D / 2 - 6);              // access-panel seam
+        for (const sx of [-1, 1])                                               // panel latches
+          addBox(26, 26, 12, dark, sx * W * 0.36, cabH * 0.3, -D / 2 - 4);
+        const louverMat = this._mechGlowMat(opts?.mech, 0x2b3238, (fu.x + fu.y) % 6.28,
+          { om: 2.0, on: 0.85, amp: 0.3 });
+        for (let i = 0; i < 4; i++) {                                           // glowing louver strip
+          const s = new THREE.Mesh(new THREE.BoxGeometry(W * 0.62, 24, 10), louverMat);
+          s.position.set(0, cabH * (0.2 + i * 0.11), -D / 2 - 3);
+          s.userData.outlineSkip = true;
+          grp.add(s);
+        }
+        if (opts?.mech?.running && opts.mech.glow !== 'none')
+          this._buildApplianceVent(grp, opts.mech.glow, 0, HT + 30, -D * 0.1,
+            0, 1, -0.25, 20, 0.75);
+        break;
+      }
+      case 'floor_radiator': {
+        // Finned baseboard run: back plate + a repeating fin comb + a top cap,
+        // with a long emissive strip glowing between the fins while heating.
+        const shell = this._mat({ color: tint, metalness: 0.3, roughness: 0.5 });
+        // Back plate stops SHORT of the cap (a shared back plane with a 1 mm
+        // vertical overlap would hatch — the coincident-face gotcha).
+        addBox(W, HT * 0.86, 22, shell, 0, HT * 0.43, D / 2 - 11);              // back plate
+        addBox(W, 26, D, shell, 0, HT - 13, 0);                                 // top cap
+        addBox(W, 40, D * 0.8, shell, 0, 20, 0);                                // bottom rail
+        const finMat = this._mat({ color: 0xc2c8cc, metalness: 0.5, roughness: 0.4 });
+        const nFins = Math.max(6, Math.min(26, Math.round(W / 70)));
+        for (let i = 0; i < nFins; i++) {
+          const fx = -W / 2 + W * ((i + 0.5) / nFins);
+          const fin = new THREE.Mesh(new THREE.BoxGeometry(10, HT * 0.6, D * 0.66), finMat);
+          fin.position.set(fx, HT * 0.5, 0);
+          fin.userData.outlineSkip = true;                                      // 10 mm sheet — no shell
+          grp.add(fin);
+        }
+        const glowMat = this._mechGlowMat(opts?.mech, 0x3a1400, (fu.x + fu.y) % 6.28,
+          { om: 1.8, on: 0.8, amp: 0.28 });
+        const strip = new THREE.Mesh(new THREE.BoxGeometry(W * 0.94, HT * 0.34, 12), glowMat);
+        strip.position.set(0, HT * 0.44, -D / 2 - 3);
+        strip.userData.outlineSkip = true;
+        grp.add(strip);
+        break;
+      }
+      case 'wall_radiator': {
+        // Slim hydronic panel: body + vertical ribs on the front + top/bottom
+        // manifold tubes; the rib gaps glow red while heating. Wall-hung
+        // (defaultFurnitureElevation 200).
+        const shell = this._mat({ color: tint, metalness: 0.2, roughness: 0.5 });
+        addBox(W, HT, D * 0.7, shell, 0, HT / 2, D * 0.15);
+        const tube = this._mat({ color: 0xb6bec4, metalness: 0.55, roughness: 0.4 });
+        for (const ty of [HT - 26, 26]) {
+          const t = addCyl(24, 24, W * 0.94, tube, 0, ty, D * 0.1, 12);
+          t.rotation.z = Math.PI / 2;
+        }
+        // Three depth layers, each OVERLAPPING the one behind (never flush):
+        // panel front at -D*0.2, glow at -D*0.245, ribs in front of both.
+        const glowMat = this._mechGlowMat(opts?.mech, 0x3a1400, (fu.x + fu.y) % 6.28,
+          { om: 1.9, on: 0.75, amp: 0.25 });
+        const back = new THREE.Mesh(new THREE.BoxGeometry(W * 0.92, HT * 0.72, 8), glowMat);
+        back.position.set(0, HT * 0.5, -D * 0.245);
+        back.userData.outlineSkip = true;
+        grp.add(back);
+        const ribMat = this._mat({ color: tint, metalness: 0.25, roughness: 0.5 });
+        const nRibs = Math.max(5, Math.min(18, Math.round(W / 90)));
+        for (let i = 0; i < nRibs; i++) {
+          const rx = -W / 2 + W * ((i + 0.5) / nRibs);
+          const rib = new THREE.Mesh(new THREE.BoxGeometry(W / nRibs * 0.55, HT * 0.8, 14), ribMat);
+          rib.position.set(rx, HT * 0.5, -D * 0.31);
+          rib.userData.outlineSkip = true;
+          grp.add(rib);
+        }
+        break;
+      }
+      case 'boiler': {
+        // Squat jacketed cylinder + pressure gauge + top pipe stubs + a burner
+        // slot at the base that glows while firing.
+        const shell = this._mat({ color: tint, metalness: 0.4, roughness: 0.45 });
+        const R = Math.min(W, D) * 0.45;
+        addCyl(R, R, HT * 0.86, shell, 0, HT * 0.43 + 30, 0, 22);
+        addCyl(R * 0.9, R, HT * 0.14, shell, 0, HT * 0.93, 0, 22);              // shoulder
+        addCyl(R * 1.02, R * 1.02, 30, dark, 0, 15, 0, 22);                     // plinth
+        const pipe = this._mat({ color: 0x9aa2a8, metalness: 0.6, roughness: 0.4 });
+        for (const sx of [-1, 1]) {                                             // flow / return stubs
+          addCyl(34, 34, 170, pipe, sx * R * 0.6, HT + 60, 0, 10);
+          const el = addCyl(34, 34, 160, pipe, sx * (R * 0.6 + 80), HT + 130, 0, 10);
+          el.rotation.z = Math.PI / 2;
+        }
+        // Pressure gauge on the front face.
+        const gauge = addCyl(58, 58, 16, this._mat({ color: 0xeceff1, roughness: 0.4 }),
+                             W * 0.16, HT * 0.66, -R - 6, 18);
+        gauge.rotation.x = Math.PI / 2;
+        gauge.userData.outlineSkip = true;
+        const needle = addBox(6, 44, 6, this._mat({ color: 0xd32f2f }), W * 0.16, HT * 0.66, -R - 14);
+        needle.rotation.z = 0.6;
+        needle.userData.outlineSkip = true;
+        const burnMat = this._mechGlowMat(opts?.mech, 0x2a1206, (fu.x + fu.y + 1) % 6.28,
+          { om: 2.8, on: 1.0, amp: 0.42 });
+        const burn = new THREE.Mesh(new THREE.BoxGeometry(W * 0.4, 70, 14), burnMat);
+        burn.position.set(-W * 0.1, 90, -R - 6);
+        burn.userData.outlineSkip = true;
+        grp.add(burn);
+        break;
+      }
+      case 'ac_condenser': {
+        // Outdoor cube: louvered coil cage + a TOP fan grille whose rotor spins
+        // while cooling + a blue glow ring under the grille. The rotor sits in a
+        // holder rotated -90° about X so the shared _floorFans machinery (which
+        // spins about the rotor's LOCAL Z) drives a horizontal, upward-facing fan.
+        const shell = this._mat({ color: tint, metalness: 0.5, roughness: 0.45 });
+        const bodyH = HT;
+        addBox(W, bodyH, D, shell, 0, bodyH / 2, 0);
+        const louver = this._mat({ color: 0x707980, roughness: 0.7, metalness: 0.3 });
+        for (let i = 0; i < 5; i++) {                                            // coil louver bands
+          const ly = bodyH * (0.14 + i * 0.15);
+          addBox(W * 0.96, 12, D + 10, louver, 0, ly, 0).userData.outlineSkip = true;
+        }
+        // The whole fan stack sits ABOVE the cabinet top face so nothing is
+        // buried inside the body: dark well → glow ring → rotor → wire grille.
+        const fanR = Math.min(W, D) * 0.36;
+        const well = addCyl(fanR * 1.08, fanR * 1.08, 26,
+          this._mat({ color: 0x1b1f23, roughness: 0.9 }), 0, HT - 4, 0, 24);
+        well.userData.outlineSkip = true;
+        const grille = new THREE.Mesh(new THREE.TorusGeometry(fanR, 16, 8, 26),
+          this._mat({ color: 0x596066, metalness: 0.5, roughness: 0.4 }));
+        grille.rotation.x = Math.PI / 2;
+        grille.position.y = HT + 62;
+        grille.userData.outlineSkip = true;
+        grp.add(grille);
+        const holder = new THREE.Group();
+        holder.position.set(0, HT + 34, 0);
+        holder.rotation.x = -Math.PI / 2;   // local Z now points UP
+        grp.add(holder);
+        const rotor = new THREE.Group();
+        const bladeMat = this._mat({ color: 0x2f353a, metalness: 0.3, roughness: 0.6,
+                                     side: THREE.DoubleSide });
+        for (let k2 = 0; k2 < 4; k2++) {
+          const arm = new THREE.Group();
+          arm.rotation.z = (k2 * Math.PI) / 2;
+          const blade = new THREE.Mesh(new THREE.BoxGeometry(fanR * 0.9, fanR * 0.42, 8), bladeMat);
+          blade.position.set(fanR * 0.5, 0, 0);
+          blade.rotation.x = 0.3;
+          arm.add(blade);
+          rotor.add(arm);
+        }
+        const seedC = this._floorFanSpin[fu.id ?? ''];
+        if (seedC) rotor.rotation.z = seedC.angle;
+        holder.add(rotor);
+        this._floorFans.push({ rotor, head: null, id: fu.id ?? '',
+                               rps: opts?.mech?.running ? 1.6 : 0, oscillate: false });
+        const glowMat = this._mechGlowMat(opts?.mech, 0x0d2732, (fu.x + fu.y) % 6.28,
+          { om: 1.7, on: 0.8, amp: 0.25 });
+        const ring = new THREE.Mesh(new THREE.TorusGeometry(fanR * 1.16, 10, 6, 24), glowMat);
+        ring.rotation.x = Math.PI / 2;
+        ring.position.y = HT + 10;
+        ring.userData.outlineSkip = true;
+        grp.add(ring);
+        break;
+      }
+      case 'heat_pump': {
+        // Outdoor slim cabinet with the fan on its FRONT face (-Z): the rotor's
+        // local Z already points forward, so it drops straight into _floorFans.
+        // Glow follows the mode — blue cooling / red heating / white otherwise.
+        const shell = this._mat({ color: tint, metalness: 0.5, roughness: 0.45 });
+        addBox(W, HT, D, shell, 0, HT / 2, 0);
+        // Top cap rides slightly PROUD of the cabinet top (a flush shared top
+        // plane over an inset footprint would z-fight).
+        addBox(W * 0.96, 60, D * 0.9, this._mat({ color: 0x81898f, metalness: 0.4, roughness: 0.5 }),
+               0, HT - 26, 0);                                                   // top cap
+        const fanR = Math.min(W * 0.42, HT * 0.38);
+        const cage = new THREE.Mesh(new THREE.TorusGeometry(fanR, 14, 8, 26),
+          this._mat({ color: 0x596066, metalness: 0.5, roughness: 0.4 }));
+        cage.position.set(-W * 0.2, HT * 0.52, -D / 2 - 8);
+        cage.userData.outlineSkip = true;
+        grp.add(cage);
+        const rotor = new THREE.Group();
+        rotor.position.set(-W * 0.2, HT * 0.52, -D / 2 - 7);   // clear of the cabinet face
+        const bladeMat = this._mat({ color: 0x2f353a, metalness: 0.3, roughness: 0.6,
+                                     side: THREE.DoubleSide });
+        for (let k2 = 0; k2 < 3; k2++) {
+          const arm = new THREE.Group();
+          arm.rotation.z = (k2 * 2 * Math.PI) / 3;
+          const blade = new THREE.Mesh(new THREE.BoxGeometry(fanR * 0.85, fanR * 0.44, 8), bladeMat);
+          blade.position.set(fanR * 0.48, 0, 0);
+          blade.rotation.x = 0.32;
+          arm.add(blade);
+          rotor.add(arm);
+        }
+        const seedH = this._floorFanSpin[fu.id ?? ''];
+        if (seedH) rotor.rotation.z = seedH.angle;
+        grp.add(rotor);
+        this._floorFans.push({ rotor, head: null, id: fu.id ?? '',
+                               rps: opts?.mech?.running ? 1.4 : 0, oscillate: false });
+        // Service/control panel on the right third, with the mode glow bar.
+        addBox(W * 0.26, HT * 0.5, 14, this._mat({ color: 0x6a7278, roughness: 0.6 }),
+               W * 0.3, HT * 0.5, -D / 2 - 5);
+        const glowMat = this._mechGlowMat(opts?.mech, 0x14202a, (fu.x + fu.y) % 6.28,
+          { om: 2.1, on: 0.9, amp: 0.3 });
+        const bar = new THREE.Mesh(new THREE.BoxGeometry(W * 0.2, 30, 10), glowMat);
+        bar.position.set(W * 0.3, HT * 0.66, -D / 2 - 11);
+        bar.userData.outlineSkip = true;
+        grp.add(bar);
+        break;
+      }
+      case 'sump_pump':
+      case 'recirc_pump': {
+        // Both show the SAME cue: water visibly moving through the pipe run (a
+        // scrolling flow-texture clone, enrolled only while running — a stopped
+        // pump's water is simply frozen where it was). No emissive glow.
+        const mechR = opts?.mech;
+        const casing = this._mat({ color: tint, metalness: 0.55, roughness: 0.4 });
+        const pipeMat = this._mat({ color: 0x8d959b, metalness: 0.6, roughness: 0.4 });
+        const flowMat = () => this._mat({
+          color: 0xffffff, roughness: 0.35, metalness: 0.1,
+          map: mechR?.running ? this._pumpFlowTexClone(kind === 'sump_pump' ? 3 : 2) : undefined,
+          emissive: 0x0d3d5c, emissiveIntensity: mechR?.running ? 0.35 : 0.0,
+        });
+        if (kind === 'sump_pump') {
+          // Vertical barrel with a lid + a riser pipe carrying the flow upward.
+          const R = Math.min(W, D) * 0.46;
+          addCyl(R, R, HT * 0.7, casing, 0, HT * 0.35, 0, 20);                  // sump basin
+          addCyl(R * 1.05, R * 1.05, 34, dark, 0, HT * 0.7 + 6, 0, 20);         // lid (buried 11 mm)
+          // The riser IS the flow pipe (a wider sleeve around it would hide the
+          // scrolling water); two short collars read as the pipe couplings.
+          const riser = addCyl(40, 40, HT * 0.62, flowMat(), W * 0.16, HT * 0.9, 0, 14);
+          riser.userData.pumpFlow = true;
+          riser.userData.outlineSkip = true;
+          for (const cy of [HT * 0.68, HT * 1.1])
+            addCyl(52, 52, 26, pipeMat, W * 0.16, cy, 0, 14);                   // couplings
+          const elbow = addCyl(40, 40, W * 0.5, pipeMat, W * 0.36, HT * 1.18, 0, 14);
+          elbow.rotation.z = Math.PI / 2;
+          addBox(W * 0.34, 60, D * 0.34, this._mat({ color: 0x37474f, roughness: 0.6 }),
+                 -W * 0.14, HT * 0.7 + 60, 0);                                  // float switch head
+        } else {
+          // Inline circulator: a horizontal pipe run through a volute + motor can.
+          const pipeR = Math.min(HT, D) * 0.24;
+          const run = addCyl(pipeR, pipeR, W, flowMat(), 0, HT * 0.34, 0, 14);
+          run.rotation.z = Math.PI / 2;
+          run.userData.pumpFlow = true;
+          run.userData.outlineSkip = true;
+          for (const sx of [-1, 1]) {                                           // union flanges
+            const fl = addCyl(pipeR * 1.5, pipeR * 1.5, 26, pipeMat, sx * W * 0.36, HT * 0.34, 0, 14);
+            fl.rotation.z = Math.PI / 2;
+          }
+          addCyl(pipeR * 1.9, pipeR * 1.9, D * 0.7, casing, 0, HT * 0.34, 0, 16).rotation.x = Math.PI / 2;
+          addCyl(HT * 0.26, HT * 0.26, HT * 0.5, casing, 0, HT * 0.66, 0, 16);  // motor can
+          addBox(W * 0.2, 18, 18, dark, 0, HT * 0.9, -D * 0.1);                 // terminal box
+        }
+        break;
+      }
+      case 'printer_3d': {
+        // Open-frame FDM printer: base + two side towers + a top gantry rail, a
+        // print bed, and a HEAD group that oscillates along X while printing.
+        // The print on the bed grows with a bound numeric progress (build time)
+        // or on a slow deterministic loop for an on/off binding (per frame).
+        const frame = this._mat({ color: tint, metalness: 0.4, roughness: 0.5 });
+        const baseH = HT * 0.24;
+        addBox(W, baseH, D, frame, 0, baseH / 2, 0);                            // electronics base
+        const towerW = W * 0.09;
+        for (const sx of [-1, 1])
+          addBox(towerW, HT - baseH, towerW, frame, sx * (W / 2 - towerW / 2), baseH + (HT - baseH) / 2, D * 0.28);
+        // Cross-member is INSET in x and DEEPER in z than the towers, so no two
+        // faces land coplanar over an overlapping area.
+        addBox(W * 0.98, towerW, towerW * 1.2, frame, 0, HT - towerW / 2, D * 0.28);
+        const railY = baseH + (HT - baseH) * 0.62;
+        addBox(W * 0.92, 20, 20, this._mat({ color: 0x9aa2a8, metalness: 0.7, roughness: 0.3 }),
+               0, railY, D * 0.28);                                             // gantry rail
+        const bedY = baseH + 5;   // bed bottom buried in the base (never flush)
+        const bed = addBox(W * 0.76, 22, D * 0.66, this._mat({ color: 0x1b1f23, roughness: 0.8 }),
+                           0, bedY, -D * 0.05);
+        bed.userData.outlineSkip = true;
+        // Gantry head (carriage + hotend + a small extruder spool nub).
+        const head = new THREE.Group();
+        head.position.set(0, railY, D * 0.28);
+        grp.add(head);
+        const carr = new THREE.Mesh(new THREE.BoxGeometry(W * 0.2, 70, 46),
+          this._mat({ color: 0x2b3238, roughness: 0.6, metalness: 0.3 }));
+        head.add(carr);
+        const hot = new THREE.Mesh(new THREE.ConeGeometry(20, 60, 10),
+          this._mat({ color: 0xb0863a, metalness: 0.6, roughness: 0.4,
+                      emissive: opts?.mech?.running ? 0xff6a1a : 0x000000,
+                      emissiveIntensity: opts?.mech?.running ? 0.8 : 0 }));
+        hot.rotation.x = Math.PI;                                               // nozzle points DOWN
+        hot.position.set(0, -66, -D * 0.3);
+        hot.userData.outlineSkip = true;
+        head.add(hot);
+        const arm = new THREE.Mesh(new THREE.BoxGeometry(26, 26, D * 0.3),
+          this._mat({ color: 0x2b3238, roughness: 0.6 }));
+        arm.position.set(0, -30, -D * 0.16);
+        head.add(arm);
+        // The growing print. maxH keeps a full-height print clear of the nozzle.
+        const maxH = Math.max(40, railY - (bedY + 11) - 110);
+        const prog = opts?.mech?.progress ?? null;
+        const printMat = this._mat({ color: 0x2ec5b6, roughness: 0.6, metalness: 0.1 });
+        const print = new THREE.Mesh(new THREE.BoxGeometry(W * 0.3, maxH, D * 0.3), printMat);
+        print.userData.baseY = bedY + 11;
+        print.userData.printBox = true;
+        print.userData.outlineSkip = true;
+        const frac0 = prog != null ? prog / 100
+                    : (opts?.mech?.running
+                        ? ((this._printerPhase[fu.id ?? ''] ?? 0) % this._PRINTER_LOOP_S) / this._PRINTER_LOOP_S
+                        : 0);
+        const h0 = Math.max(1, maxH * frac0);
+        print.scale.y = h0 / maxH;
+        print.position.set(0, print.userData.baseY + h0 / 2, -D * 0.05);
+        print.visible = frac0 > 0.02;
+        grp.add(print);
+        // Re-apply the persisted head phase so a _keyFloor rebuild never pops the
+        // carriage back to the rail centre.
+        const travel = W * 0.28;
+        const ph0 = this._printerPhase[fu.id ?? ''] ?? 0;
+        head.position.x = Math.sin(ph0 * this._PRINTER_HEAD_HZ * 2 * Math.PI) * travel;
+        this._printers.push({ fuId: fu.id ?? '', head, travel, print, maxH,
+                              running: !!opts?.mech?.running, progress: prog });
+        break;
+      }
       case 'exercise_equipment': {
         // Treadmill: raised running deck + side rails, uprights + console at
         // the front (-Z), matching the appliance front-faces-camera convention.
@@ -8747,7 +9241,10 @@ export class ThreeDRenderer {
     // control area when the appliance is on/playing (build-time on/off — no
     // per-frame animation here; three-view folds appliance state into _keyFloor
     // so this rebuilds on a change). Front face is local -Z.
-    if (opts?.applianceOn && furnitureCat(def) === 'appliance' && !isClimateApplianceKind(kind)) {
+    // (Mechanical/utility plant is excluded too — its heat/cool/fan GLOW is its
+    // state language; a green dot on top of a red-glowing boiler reads wrong.)
+    if (opts?.applianceOn && furnitureCat(def) === 'appliance' &&
+        !isClimateApplianceKind(kind) && !isMechanicalApplianceKind(kind)) {
       const led = new THREE.Mesh(
         new THREE.BoxGeometry(34, 34, 12),
         this._mat({ color: 0x69f0ae, emissive: 0x00c853,
@@ -9687,6 +10184,30 @@ export class ThreeDRenderer {
     points.userData = { outlineSkip: true, ventKind: kind };
     parent.add(points);
     this._applianceVents.push({ points, pos, vel, life, count, ox, oy, oz, dirX, dirY, dirZ, spread, speed });
+  }
+
+  // Mechanical-appliance glow material. Returns a toon material whose emissive is
+  // the resolved glow color (heat red / cool blue / fan white) at `on` intensity
+  // while running, or an almost-dark `off` intensity otherwise. A RUNNING glow is
+  // enrolled in _climateGlows so it breathes per frame (the space-heater ember
+  // idiom — zero per-frame alloc, the closure is built once here). `phase`
+  // desyncs sibling glows / neighbouring pieces.
+  private _mechGlowMat(
+    mech: MechanicalRun | undefined, bodyColor: number, phase: number,
+    o?: { om?: number; on?: number; off?: number; amp?: number },
+  ): THREE.MeshToonMaterial {
+    const hex = mech?.running ? mechanicalGlowColor(mech.glow) : null;
+    const on = o?.on ?? 0.95, off = o?.off ?? 0.03, amp = o?.amp ?? 0.35;
+    const mat = this._mat({
+      color: bodyColor, roughness: 0.5, metalness: 0.15,
+      emissive: hex ? hexToInt(hex) : 0x000000,
+      emissiveIntensity: hex ? on : off,
+    });
+    if (hex) {
+      this._climateGlows.push({ phase, om: o?.om ?? 2.6,
+        apply: k => { mat.emissiveIntensity = on - amp + amp * 2 * k; } });
+    }
+    return mat;
   }
 
   // Advance furniture airflow particles (AC/heater vents) — zero-alloc position-
@@ -19255,6 +19776,8 @@ export class ThreeDRenderer {
     this._groundTexCache = {};
     this._disposeWaterPatchTextures();   // per-patch water shimmer clones
     this._disposePoolWaterTextures();    // per-pool water surface shimmer clones
+    this._disposePumpFlowTextures();     // per-pump pipe-flow scroll clones
+    this._flowTex?.dispose(); this._flowTex = null;   // shared pump flow source
     this._fenceMeshTex?.dispose(); this._fenceMeshTex = null;
     this._hedgeTex?.dispose(); this._hedgeTex = null;
     this._blurTexStand?.dispose(); this._blurTexStand = null;
@@ -19464,6 +19987,10 @@ export class ThreeDRenderer {
     this._advanceFloorFans(frameDt);
     this._advanceClimateGlows();
     this._advanceClimateEased(frameDt);
+    // Mechanical/utility plant: pump pipe-flow scroll + 3D printer gantry sweep
+    // and growing print. Both early-return when the floor carries none.
+    this._advancePumpFlows(frameDt);
+    this._advancePrinters(frameDt);
     // Valetudo cleaning-segment glow pulse — opacity-only on the tracked list.
     this._advanceVacMap(nowS);
     // Glass-house transit puppet — scripted cross-STORY_H walk (Tier 2 stretch).

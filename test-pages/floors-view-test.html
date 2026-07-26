@@ -11,13 +11,14 @@
   .name { color:#90caf9; } .extra { color:#ffd54f; font-size:11px; }
   h2 { font-size:12px; color:#80cbc4; margin:14px 0 4px; }
 </style>
-<h1>Floor list order + plan nudge + tri-state visibility — pure helpers + real Planner</h1>
+<h1>Floor list order + plan nudge + tri-state visibility + floor-switch viewport retention — pure helpers + real Planner</h1>
 <div id="summary">Running…</div>
 <div id="rows"></div>
 
-<!-- Harness build (from the repo root; NEVER reuse stale bundles):
+<!-- Harness build (from the repo root; NEVER reuse stale bundles). This page
+     imports ONLY the two esbuild bundles below — no built dist/ required:
        H=/tmp/diorama-harness-floorsview
-       rm -rf "$H"; mkdir -p "$H"; cp -r dist/* "$H"/
+       rm -rf "$H"; mkdir -p "$H"
        cp test-pages/floors-view-test.html "$H"/
        npx esbuild src/geometry.ts --bundle --format=esm --outfile="$H"/geometry.mod.js
        T=$(mktemp -d); cp -r src/* "$T"/
@@ -32,7 +33,8 @@
   const V = '?v=' + Date.now();
   const G = await import('./geometry.mod.js' + V);
   const { floorsDisplayOrder, peekFloors } = G;
-  const { Planner } = await import('./planner.mod.js' + V);
+  const { Planner, viewCenterFitsFloor, floorSwitchCameraDelta, VIEW_RETAIN_MARGIN_FRAC } =
+    await import('./planner.mod.js' + V);
 
   const results = [];
   const ok = (name, cond, extra = '') => results.push({ name, pass: !!cond, extra: String(extra) });
@@ -195,6 +197,111 @@
       ok('7a only p1 (current + hidden + plain excluded)', ids(pk) === 'p1', ids(pk));
       ok('7b none when current is the only peek', peekFloors([{ id: 'cur', peek2d: true }], 'cur').length === 0, '');
       ok('7c empty floors → empty', peekFloors([], 'x').length === 0, '');
+    }
+
+    // ═══ 8. viewCenterFitsFloor — the 2D retention safety guard ═══
+    document.getElementById('rows').insertAdjacentHTML('beforeend', '<h2>8. viewCenterFitsFloor guard</h2>');
+    {
+      // 12000 × 8000 → margin = 0.5 · max(w,d) = 6000 on EVERY side.
+      // Accepted band: x ∈ [-6000, 18000], y ∈ [-6000, 14000].
+      ok('8a margin frac is 0.5', VIEW_RETAIN_MARGIN_FRAC === 0.5, VIEW_RETAIN_MARGIN_FRAC);
+      ok('8b centre inside rect', viewCenterFitsFloor(12000, 8000, 6000, 4000) === true, '');
+      ok('8c exactly on the rect corner', viewCenterFitsFloor(12000, 8000, 0, 0) === true, '');
+      ok('8d just inside +x margin (17999)', viewCenterFitsFloor(12000, 8000, 17999, 4000) === true, '');
+      ok('8e exactly on +x margin (18000)', viewCenterFitsFloor(12000, 8000, 18000, 4000) === true, '');
+      ok('8f past +x margin (18001)', viewCenterFitsFloor(12000, 8000, 18001, 4000) === false, '');
+      ok('8g exactly on -x margin (-6000)', viewCenterFitsFloor(12000, 8000, -6000, 4000) === true, '');
+      ok('8h past -x margin (-6001)', viewCenterFitsFloor(12000, 8000, -6001, 4000) === false, '');
+      ok('8i exactly on +y margin (14000)', viewCenterFitsFloor(12000, 8000, 6000, 14000) === true, '');
+      ok('8j past +y margin (14001)', viewCenterFitsFloor(12000, 8000, 6000, 14001) === false, '');
+      // Margin keys off the LARGER dimension in both axes (12000 here, not 8000).
+      ok('8k y margin uses max(w,d)', viewCenterFitsFloor(12000, 8000, 6000, -6000) === true, '');
+      ok('8l NaN centre rejected', viewCenterFitsFloor(12000, 8000, NaN, 0) === false, '');
+    }
+
+    // ═══ 9. floorSwitchCameraDelta — 3D scene-frame compensation ═══
+    document.getElementById('rows').insertAdjacentHTML('beforeend', '<h2>9. floorSwitchCameraDelta</h2>');
+    {
+      // The renderer maps world→scene as _w(wx, wy, h) = (fw/2 − wx, h, wy − fd/2).
+      // A world point must keep its scene position ⇒ dx = (fw′−fw)/2, dz = −(fd′−fd)/2.
+      const eq = (d, dx, dz) => d.dx === dx && d.dz === dz;
+      const d0 = floorSwitchCameraDelta(12000, 8000, 12000, 8000);
+      ok('9a equal dims → exact {0,0} no-op', eq(d0, 0, 0), `${d0.dx},${d0.dz}`);
+      const dg = floorSwitchCameraDelta(12000, 8000, 16000, 10000);
+      ok('9b growing floor → dx +2000', dg.dx === 2000, dg.dx);
+      ok('9c growing floor → dz -1000 (negated)', dg.dz === -1000, dg.dz);
+      const ds = floorSwitchCameraDelta(16000, 10000, 12000, 8000);
+      ok('9d shrinking floor → dx -2000, dz +1000', eq(ds, -2000, 1000), `${ds.dx},${ds.dz}`);
+      ok('9e round-trip cancels', dg.dx + ds.dx === 0 && dg.dz + ds.dz === 0, '');
+      // Sign convention asserted directly against _w's mirror math for a real point.
+      const wx = 3000, wy = 2000, fw = 12000, fd = 8000, fw2 = 16000, fd2 = 10000;
+      const sx = fw / 2 - wx,  sz = wy - fd / 2;
+      const sx2 = fw2 / 2 - wx, sz2 = wy - fd2 / 2;
+      const dd = floorSwitchCameraDelta(fw, fd, fw2, fd2);
+      ok('9f delta == _w(new) − _w(old) in x', sx + dd.dx === sx2, `${sx + dd.dx} vs ${sx2}`);
+      ok('9g delta == _w(new) − _w(old) in z', sz + dd.dz === sz2, `${sz + dd.dz} vs ${sz2}`);
+      ok('9h non-finite input → {0,0}', eq(floorSwitchCameraDelta(NaN, 8000, 12000, 8000), 0, 0), '');
+    }
+
+    // ═══ 10. switchFloor RETAINS pan/zoom (real Planner) ═══
+    document.getElementById('rows').insertAdjacentHTML('beforeend', '<h2>10. switchFloor retains viewCenter/zoom</h2>');
+    {
+      // Same dims on both floors — the common stacked-story case.
+      const p = await mkPlanner([mkFloor('A', 'A'), mkFloor('B', 'B')]);
+      ok('10a fresh load starts unpanned', p.viewCenter === null && p.zoom === 1, `${p.viewCenter},${p.zoom}`);
+      // Never-panned view stays null across a switch (fit-to-canvas self-adapts).
+      p.switchFloor('B');
+      ok('10b null centre stays null', p.viewCenter === null, `${p.viewCenter}`);
+      ok('10c zoom untouched at 1', p.zoom === 1, p.zoom);
+      // Now pan + zoom, then switch back: both retained EXACTLY.
+      p.viewCenter = { x: 5000, y: 4000 }; p.zoom = 2.75;
+      p.switchFloor('A');
+      ok('10d same-dims switch retains centre', p.viewCenter && p.viewCenter.x === 5000 && p.viewCenter.y === 4000,
+         JSON.stringify(p.viewCenter));
+      ok('10e same-dims switch retains zoom', p.zoom === 2.75, p.zoom);
+      // Retention survives repeated switches (no drift).
+      p.switchFloor('B'); p.switchFloor('A');
+      ok('10f retained over repeated switches', p.viewCenter.x === 5000 && p.zoom === 2.75, `${p.viewCenter.x},${p.zoom}`);
+    }
+    {
+      // Different-dims floors: retain while the centre is inside the inflated
+      // rect, fall back to the fit when it's far outside.
+      const p = await mkPlanner([mkFloor('big', 'Big', { w: 40000, d: 40000 }), mkFloor('sm', 'Small', { w: 6000, d: 6000 })]);
+      // Small floor guard band: 0..6000 inflated by 3000 → [-3000, 9000].
+      p.viewCenter = { x: 8000, y: 5000 }; p.zoom = 3;
+      p.switchFloor('sm');
+      ok('10g different dims, centre in band → retained', p.viewCenter && p.viewCenter.x === 8000, JSON.stringify(p.viewCenter));
+      ok('10h zoom retained with the centre', p.zoom === 3, p.zoom);
+      // Way outside the small floor's band → reset to fit.
+      p.switchFloor('big');
+      p.viewCenter = { x: 35000, y: 35000 }; p.zoom = 3;
+      p.switchFloor('sm');
+      ok('10i far-outside centre resets to null', p.viewCenter === null, JSON.stringify(p.viewCenter));
+      ok('10j reset also restores zoom 1', p.zoom === 1, p.zoom);
+      // Unknown floor id → treated as stale (defensive).
+      p.viewCenter = { x: 1000, y: 1000 }; p.zoom = 2;
+      p.switchFloor('nope');
+      ok('10k unknown floor id resets', p.viewCenter === null && p.zoom === 1, `${p.viewCenter},${p.zoom}`);
+    }
+    {
+      // The OTHER reset paths must still reset — a different CONFIG genuinely
+      // is a different plan, and resetView is the explicit user action.
+      const p = await mkPlanner([mkFloor('A', 'A'), mkFloor('B', 'B')]);
+      p.viewCenter = { x: 5000, y: 5000 }; p.zoom = 2;
+      p.resetView();
+      ok('10l resetView() still resets', p.viewCenter === null && p.zoom === 1, `${p.viewCenter},${p.zoom}`);
+      p.viewCenter = { x: 5000, y: 5000 }; p.zoom = 2;
+      await p.newConfig('Second plan');
+      ok('10m newConfig resets (different plan)', p.viewCenter === null && p.zoom === 1, `${p.viewCenter},${p.zoom}`);
+      // switchConfig back to the original also resets.
+      const first = p.configIndex.configs.find(c => c.name !== 'Second plan');
+      p.viewCenter = { x: 4000, y: 4000 }; p.zoom = 1.5;
+      await p.switchConfig(first.id);
+      ok('10n switchConfig resets', p.viewCenter === null && p.zoom === 1, `${p.viewCenter},${p.zoom}`);
+      // A fresh Planner load (the _applyLoadedStore path) starts unpanned.
+      const p2 = new Planner(); p2.connectWith(new FakeHa({ diorama: { v: 2, floors: [mkFloor('A', 'A')], currentFloorId: 'A' } }));
+      await waitFor(() => p2.configIndex !== null);
+      ok('10o fresh load starts unpanned', p2.viewCenter === null && p2.zoom === 1, `${p2.viewCenter},${p2.zoom}`);
     }
   } catch (err) {
     ok('unhandled error', false, (err && (err.stack || err.message)) || String(err));
