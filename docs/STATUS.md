@@ -1,6 +1,6 @@
 # Project status & pick-up guide
 
-Last updated: 2026-07-26, at **v0.31.0**. This is the single document to
+Last updated: 2026-07-26, at **v0.32.0**. This is the single document to
 read (alongside `CLAUDE.md`) to resume work with full context.
 
 ## Where things stand
@@ -203,6 +203,13 @@ instance.
   pan/zoom + 3D camera compensation); 10 mechanical appliance kinds
   (water heater, air handler, radiators, boiler, condenser, heat
   pump, pumps w/ flowing water, 3D printer w/ live print progress)).
+  → v0.32.0 down to earth (sky/weather honesty fixes: cloud shadows
+  darken instead of rendering white (colorSpace lift), sun disc reads
+  as warm additive glare instead of a flat ball, constellations fully
+  gated to darkness via live sun elevation (overcast-day dusk-preset
+  leak); sun-disc per-effect toggle; adjustable ground level —
+  Scene3D.groundLevelMm shifts grid + neighborhood + yardFill vs the
+  slab, yard avatars settle onto the lowered grade).
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
