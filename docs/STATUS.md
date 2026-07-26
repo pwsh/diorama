@@ -1,6 +1,6 @@
 # Project status & pick-up guide
 
-Last updated: 2026-07-25, at **v0.30.0**. This is the single document to
+Last updated: 2026-07-26, at **v0.31.0**. This is the single document to
 read (alongside `CLAUDE.md`) to resume work with full context.
 
 ## Where things stand
@@ -188,6 +188,21 @@ instance.
   gallery recaptured at current designs incl. 6 never-captured light
   kinds + siren + gate, floorplan captures refreshed, per-plan demo
   links verified).
+  → v0.31.0 traffic in sight (the flight arc matured across 6 user
+  batches: extended ADS-B fields + 184-designator archetype table w/
+  8 aircraft silhouettes, status beacons (emergency/interesting/
+  military/LADD), privacy dimming, label-field customization,
+  elevation-true altitude cap + 6500 mm property-clearance floor +
+  shell rescale ×5 (7 nm ⇒ 76 m out), livery text (operator flanks +
+  spine identification), optional tow banners, clickable aircraft
+  detail card, fog-exempt flight materials; default radius 15 nm;
+  camera-distance-tracking frustum (horizon no longer clips on
+  zoom-out) w/ per-source nbhd/flights requirement union; GPS
+  landmark alignment tools: per-pin exclusion + residual readout +
+  suggested-position ghost/apply; floor-switch view retention (2D
+  pan/zoom + 3D camera compensation); 10 mechanical appliance kinds
+  (water heater, air handler, radiators, boiler, condenser, heat
+  pump, pumps w/ flowing water, 3D printer w/ live print progress)).
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
