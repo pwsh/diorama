@@ -165,6 +165,47 @@
       const s0 = r._weatherCloudShadows[0].mesh.position.x; step(30);
       return Math.abs(r._weatherCloudShadows[0].mesh.position.x - s0) > 1e-3;
     })());
+    // ── Cloud shadows must read as SHADE, not as pale blobs ──
+    // The decal is a NormalBlending quad: dst·(1−a) + src·a. Its texture rgb is
+    // pure black so that reduces to an exact multiply by (1−a) — it darkens
+    // every surface and can never lighten one. A dark-but-nonzero src (the old
+    // rgb(20,24,32), lifted to mid-grey by the linear→sRGB output step) read as
+    // WHITE circles over dark ground. Sample the shared canvas directly.
+    {
+      const tex = r._cloudShadowTexture();
+      const cv = tex.image, g2 = cv.getContext('2d');
+      const at = (fx01) => g2.getImageData(Math.round(cv.width * fx01), cv.height >> 1, 1, 1).data;
+      const centre = at(0.5), mid = at(0.75), rim = at(0.99);
+      const lum = (d) => 0.3 * d[0] + 0.59 * d[1] + 0.11 * d[2];
+      ok('shadow texture centre is dark', lum(centre) < 24,
+         `L=${lum(centre).toFixed(0)} rgb=${centre[0]},${centre[1]},${centre[2]}`);
+      ok('shadow texture rgb is pure black (exact multiply)',
+         centre[0] === 0 && centre[1] === 0 && centre[2] === 0 && mid[0] === 0,
+         `centre=${centre[0]},${centre[1]},${centre[2]} mid=${mid[0]},${mid[1]},${mid[2]}`);
+      ok('shadow alpha is a soft ramp (opaque core → 0 rim)',
+         centre[3] > 120 && mid[3] > 8 && mid[3] < centre[3] && rim[3] < 8,
+         `a=${centre[3]}/${mid[3]}/${rim[3]}`);
+      const m0 = r._weatherCloudShadows[0].mesh;
+      const mm = m0.material;
+      // blending: 1 = THREE.NormalBlending, 2 = AdditiveBlending. Additive would
+      // turn the shade back into a bright patch.
+      ok('shadow material normal-blended + translucent',
+         mm.transparent === true && mm.blending === 1 && mm.depthWrite === false,
+         `t=${mm.transparent} blend=${mm.blending} dw=${mm.depthWrite}`);
+      ok('shadow material untinted (map carries it)', mm.color.getHex() === 0xffffff,
+         `hex=${mm.color.getHex().toString(16)}`);
+      ok('shadow stays subtle (never a hole)', mm.opacity > 0.05 && mm.opacity < 0.4,
+         `op=${mm.opacity.toFixed(3)}`);
+      ok('shadow decal above the floor decals', m0.position.y >= 10 && m0.renderOrder === 1,
+         `y=${m0.position.y} ro=${m0.renderOrder}`);
+    }
+    // Darkness scales with coverage: heavier overcast ⇒ more opaque shade.
+    r.updateWeather(fx({ condition:'cloudy', effects:allOn, cloudCoverage:40, isDay:true }));
+    const lightOp = r._weatherCloudShadows[0]?.mesh.material.opacity ?? 0;
+    r.updateWeather(fx({ condition:'cloudy', effects:allOn, cloudCoverage:100, isDay:true }));
+    const heavyOp = r._weatherCloudShadows[0]?.mesh.material.opacity ?? 0;
+    ok('shade scales with cloud coverage', heavyOp > lightOp + 0.05,
+       `40%=${lightOp.toFixed(3)} 100%=${heavyOp.toFixed(3)}`);
     // Low coverage ⇒ no cloud shadows.
     r.updateWeather(fx({ condition:'cloudy', effects:allOn, cloudCoverage:15, isDay:true }));
     ok('low coverage → no shadows', r._weatherCloudShadows.length === 0, `shadows=${r._weatherCloudShadows.length}`);
@@ -239,7 +280,49 @@
        `op=${r._sunSprite.material.opacity.toFixed(2)}`);
     ok('moon hidden by day', !r._moonSprite.visible, `mvis=${r._moonSprite.visible}`);
     ok('stars faded out by day', r._starField.material.opacity < 0.15, `s=${r._starField.material.opacity.toFixed(2)}`);
+    ok('starfield hidden outright by day', !r._starField.visible, `vis=${r._starField.visible}`);
     const dayTop = r._skyTopTarget.getHex(), dayBot = r._skyBotTarget.getHex();
+
+    // ── The sun must read as a warm GLOW, not a flat white ball ──
+    // A small hot core + a long soft warm tail, additively blended so it adds
+    // light to the sky rather than pasting a hard-edged disc over it.
+    {
+      const tex = r._sunGlowTexture();
+      const cv = tex.image, g2 = cv.getContext('2d');
+      // radius fraction f (0 = centre, 1 = rim) → x pixel along the mid row.
+      const atR = (f) => g2.getImageData(
+        Math.min(cv.width - 1, Math.round(cv.width * (0.5 + f / 2))), cv.height >> 1, 1, 1).data;
+      const c = atR(0), r10 = atR(0.10), r30 = atR(0.30), r55 = atR(0.55), rim = atR(0.98);
+      ok('sun texture centre warm (r>g>b)', c[0] > c[1] && c[1] > c[2],
+         `rgb=${c[0]},${c[1]},${c[2]}`);
+      ok('sun texture centre bright', lum(c) > 200, `L=${lum(c).toFixed(0)}`);
+      ok('sun stays warm across the halo', r30[0] > r30[2] + 40 && r55[0] > r55[2] + 40,
+         `r30=${r30[0]},${r30[1]},${r30[2]} r55=${r55[0]},${r55[1]},${r55[2]}`);
+      ok('sun core is SMALL (falls off fast)', r10[3] > 180 && r30[3] < 90,
+         `a10=${r10[3]} a30=${r30[3]}`);
+      ok('sun halo is wide + soft (no hard edge)', r55[3] > 4 && r55[3] < 60 && rim[3] < 6,
+         `a55=${r55[3]} arim=${rim[3]}`);
+      // 2 = THREE.AdditiveBlending.
+      ok('sun sprite additively blended', r._sunSprite.material.blending === 2,
+         `blend=${r._sunSprite.material.blending}`);
+      ok('sun tint warm at altitude (r>g>b)', (() => {
+        const col = r._sunSprite.material.color;
+        return col.r > col.g && col.g > col.b;
+      })(), `tint=${r._sunSprite.material.color.getHexString()}`);
+    }
+    // Midday glare: the PEAK opacity eases back as the sun climbs (a high sun is
+    // brightness, not a hard bright ball). Same clear sky, two elevations.
+    r.updateWeather(fx({ condition: 'sunny', isDay: true, skyBackdrop: true,
+      sunAzimuthDeg: 120, sunElevationDeg: 20, cloudCoverage: 0 }));
+    const lowPeak = r._sunWantOpacity;
+    r.updateWeather(fx({ condition: 'sunny', isDay: true, skyBackdrop: true,
+      sunAzimuthDeg: 120, sunElevationDeg: 80, cloudCoverage: 0 }));
+    const highPeak = r._sunWantOpacity;
+    ok('high sun dims below low sun', highPeak < lowPeak - 0.05 && highPeak > 0.5,
+       `low=${lowPeak.toFixed(2)} high=${highPeak.toFixed(2)}`);
+    r.updateWeather(fx({ condition: 'sunny', isDay: true, skyBackdrop: true,
+      sunAzimuthDeg: 120, sunElevationDeg: 35, cloudCoverage: 5 }));
+    step(120);
 
     // NIGHT: sun hidden even with elev>0; moon shown; stars faded in.
     r.applyScenePreset('night');
@@ -249,9 +332,22 @@
     ok('sun hidden at night', !r._sunSprite.visible, `svis=${r._sunSprite.visible} op=${r._sunSprite.material.opacity.toFixed(3)}`);
     ok('moon shown at night', r._moonSprite.visible && r._moonSprite.material.opacity > 0.5,
        `op=${r._moonSprite.material.opacity.toFixed(2)}`);
+    // Daylight rule: a LIVE sun above the horizon suppresses the stars even when
+    // the preset says night (an overcast day is preset-downgraded to dusk, which
+    // used to paint a full star sky over a bright daytime dome). This fixture
+    // still carries sunElevationDeg 20 from the sun-disc checks above.
+    ok('sun-up suppresses stars regardless of preset',
+       r._starField.material.opacity < 0.05 && !r._starField.visible,
+       `s=${r._starField.material.opacity.toFixed(3)} vis=${r._starField.visible}`);
+    // Sun actually below the horizon → the night sky comes back.
+    r.updateWeather(fx({ condition: 'clear-night', isDay: false, skyBackdrop: true,
+      sunAzimuthDeg: 120, sunElevationDeg: -25, moonPhase: 'waxing_crescent' }));
+    step(720);
     ok('stars faded in at night', r._starField.material.opacity > 0.7, `s=${r._starField.material.opacity.toFixed(2)}`);
+    ok('starfield visible at night', r._starField.visible, `vis=${r._starField.visible}`);
     // Moon positioned opposite the sun azimuth (300 vs 120), high in the sky.
-    const moonWant = sunVec(300, Math.min(58, Math.max(22, -20)), 24000);
+    // (Decorative moon elevation = clamp(−sunElev, 22, 58); sunElev is −25 here.)
+    const moonWant = sunVec(300, Math.min(58, Math.max(22, 25)), 24000);
     ok('moon opposite sun azimuth', Math.hypot(
        r._skyMoonTarget.x - moonWant.x, r._skyMoonTarget.z - moonWant.z) < 2,
        `mt=(${r._skyMoonTarget.x.toFixed(0)},${r._skyMoonTarget.z.toFixed(0)})`);

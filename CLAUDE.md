@@ -482,8 +482,8 @@ Landmarks (`Store.geo.landmarks`, property-wide/store-level — NOT per-floor) a
 ### Weather visuals W3: per-effect toggles + attribute-driven effects
 - **Per-effect toggles**: `WeatherConfig.effects?: Partial<Record<WeatherEffectKey, boolean>>` — keys `precip|fog|lightning|wind|clouds|sunPosition|frost|puddles|precipForecast`, resolved by the pure `weatherEffectEnabled(cfg, key)` (weather.ts; defaults ON except `frost`/`precipForecast`). `effects3d` stays the master kill-switch and `layers.weatherFx` the layer gate for GROUP members; **`sunPosition` is a lighting behavior, NOT a group member** — gated only by its own key + a live source. three-view folds the resolved booleans into `WeatherFxState.effects`; a stale renderer chunk without `effects` treats all group members as on. Sidebar: indented per-effect checkboxes under "3D effects" (dimmed when master off; sunPosition stays live).
 - **New WeatherNow fields** (all optional, null when the provider lacks them): `cloudCoverage`, `visibilityKm` (`toKm` normalizes mi/m), `uvIndex`, `windGustKmh`, `apparentC`, `humidity`, `rainSoon`. Entity source reads public converted attributes (`wind_bearing` may be a cardinal STRING — `parseWindBearing` handles both); Open-Meteo `current=` gained cloud_cover/relative_humidity_2m/apparent_temperature/wind_gusts_10m/visibility + `hourly=precipitation_probability,weather_code&forecast_hours=4` for `rainSoon`.
-- **New visuals** (in `_weatherGroup` unless noted; zero per-frame allocation; shared `_cloudShadowTex`/`_puddleTex` disposed only in destroy): cloud-shadow decals drifting with wind scaled by `cloudCoverage` (<30% none); fog density continuously from `visibilityToFogDensity(vis)` (condition `fog` is a floor; 2 s ease kept); **true sun position** — `sun.sun` azimuth (mapped through geo θ in three-view like wind) + elevation orient the preset sun light, eased τ≈2 s in `_animate`; gust bursts (gust > wind+15 → scheduled 1.5 s ~2× drift multiplier); frost icicles + rim at `apparentC ≤ −3` (build-time); **rain puddles** — deterministic seeded decals whose per-floor `_puddleFade` SURVIVES `_keyWeather` rebuilds, lingering ~10 min after rain stops; forecast storm-brewing (rainSoon + dry now → upwind horizon cloud bank + eased sky-tint darken). `_keyWeather` gained bucketed terms (cloud%/10, vis/2 km, gust/10, apparent/3°, sun-az/5°, elevation sign, rainSoon, effects bitmask).
-- **Forecast plumbing**: `HaApi.getWeatherForecasts(entityId, 'daily'|'hourly')` in BOTH clients — WS `call_service` `weather.get_forecasts` with `return_response: true`, normalized by the shared `normalizeForecasts` (null on any failure). Planner refreshes entity-source forecasts every 30 min + on reconfigure (`_refreshEntityForecasts` → `forecastCondition` from daily, `rainSoon` from hourly, re-applied over recomputes via `_applyForecastToNow`); the legacy `forecast` attribute read remains only as a pre-2024.4 fallback. **DC-C forecast cache**: `_refreshEntityForecasts` now ALSO retains the full normalized arrays in runtime `Planner.forecastDaily`/`forecastHourly` (`ForecastRecord[] | null`, not persisted; entity temps normalized to °C via the entity's `temperature_unit` so `tempText` stays imperial-correct), `emitConfig`-ing on any array refresh; the Open-Meteo poll fills the same two fields from `weather.ts`'s wider `fetchOpenMeteoForecast` (24 h hourly + 7 d daily, parsed by the pure `parseOpenMeteoForecast`); the sensors source leaves them null; both reset on a source switch. The chip's forecast strip reads them. Test pages: weather-test `WEATHER PASS 164/164`; weather-fx-test gained `?c=w3` (12/12) + `?c=alert` (7/7).
+- **New visuals** (in `_weatherGroup` unless noted; zero per-frame allocation; shared `_cloudShadowTex`/`_puddleTex` disposed only in destroy): cloud-shadow decals drifting with wind scaled by `cloudCoverage` (<30% none) — the shared `_cloudShadowTex` is **pure-black rgb with a soft alpha ramp**, so NormalBlending reduces to an exact multiply by `(1−a)`: darkens any surface, can never lighten one. A dark-but-nonzero rgb is NOT a shadow — textures carry no colorSpace tag, so linear→sRGB output lifts e.g. rgb(20,24,32) to mid-grey ≈(76,84,92), which read as WHITE circles over dark ground (user-reported, fixed). Never tint the decal material; `_buildStormBank` shares the map, so its sprite `color` is multiplied against zero by design; fog density continuously from `visibilityToFogDensity(vis)` (condition `fog` is a floor; 2 s ease kept); **true sun position** — `sun.sun` azimuth (mapped through geo θ in three-view like wind) + elevation orient the preset sun light, eased τ≈2 s in `_animate`; gust bursts (gust > wind+15 → scheduled 1.5 s ~2× drift multiplier); frost icicles + rim at `apparentC ≤ −3` (build-time); **rain puddles** — deterministic seeded decals whose per-floor `_puddleFade` SURVIVES `_keyWeather` rebuilds, lingering ~10 min after rain stops; forecast storm-brewing (rainSoon + dry now → upwind horizon cloud bank + eased sky-tint darken). `_keyWeather` gained bucketed terms (cloud%/10, vis/2 km, gust/10, apparent/3°, sun-az/5°, elevation sign, rainSoon, effects bitmask).
+- **Forecast plumbing**: `HaApi.getWeatherForecasts(entityId, 'daily'|'hourly')` in BOTH clients — WS `call_service` `weather.get_forecasts` with `return_response: true`, normalized by the shared `normalizeForecasts` (null on any failure). Planner refreshes entity-source forecasts every 30 min + on reconfigure (`_refreshEntityForecasts` → `forecastCondition` from daily, `rainSoon` from hourly, re-applied over recomputes via `_applyForecastToNow`); the legacy `forecast` attribute read remains only as a pre-2024.4 fallback. **DC-C forecast cache**: `_refreshEntityForecasts` now ALSO retains the full normalized arrays in runtime `Planner.forecastDaily`/`forecastHourly` (`ForecastRecord[] | null`, not persisted; entity temps normalized to °C via the entity's `temperature_unit` so `tempText` stays imperial-correct), `emitConfig`-ing on any array refresh; the Open-Meteo poll fills the same two fields from `weather.ts`'s wider `fetchOpenMeteoForecast` (24 h hourly + 7 d daily, parsed by the pure `parseOpenMeteoForecast`); the sensors source leaves them null; both reset on a source switch. The chip's forecast strip reads them. Test pages: weather-test `WEATHER PASS 164/164`; weather-fx-test gained `?c=w3` (20/20) + `?c=alert` (7/7).
 
 ### Sky backdrop, sun & moon props (phase 3)
 The scene's flat `THREE.Color` background gains a living sky, all in a dedicated
@@ -509,8 +509,13 @@ integration) drives the moon phase.
   elev, R=26000)` (same `sun.sun` az/elev source as the W3 sun-light `sunPosition`
   effect, larger radius). Visible only when `elevation > 0` AND preset ≠ night AND
   `skyBackdrop`; opacity ramps in over the first ~6° above the horizon, dims under
-  overcast; tint warm→white by elevation. Eased opacity + position (snaps into place
-  while invisible to avoid a swoop-in).
+  overcast. Eased opacity + position (snaps into place while invisible to avoid a
+  swoop-in). **Look (user-reported "purposeless white ball", fixed)**: `_sunGlowTexture`
+  is a small hot core + a long soft WARM tail (warm `r>g>b` at every gradient stop),
+  sprite 5000 mm (mostly halo), **AdditiveBlending** — a sun ADDS light to its sky;
+  NormalBlending pasted a hard-edged white ball over the dome. Tint stays warm at every
+  elevation (`0xffeec4` high end) and peak opacity eases back ~28 % as the sun climbs
+  (midday = glare, not a bright ball).
 - **Moon disc**: a `THREE.Sprite` whose per-phase `CanvasTexture` (cached in `_moonTexCache`)
   is drawn from `moonPhaseFraction(state)` (pure, in `weather.ts`; state → signed
   illuminated fraction, magnitude 0=new..1=full, sign +waxing/−waning). Drawn as a lit
@@ -519,7 +524,17 @@ integration) drives the moon phase.
   — HA exposes no real moon position) at a fixed pleasant elevation arc; visible only at
   the `night` preset. Unbound `moonEntity` → default full moon.
 - **Starfield**: one `THREE.Points` (~140–220 dots, DPR-capped, built once on the dome),
-  opacity ramped by `(1 − dayness)` where dayness eases day=1/dusk=0.4/night=0. **Horizon-ring
+  opacity ramped by `(1 − dayness)`. **Daylight star gate (load-bearing, user-reported
+  "constellations in daytime", fixed)**: dayness is `max(preset dayness, sun-up amount)` —
+  the preset ramp alone (day=1/dusk=0.4/night=0) FAILED because `resolveScenePreset`
+  downgrades an overcast DAY to the `dusk` preset, pinning the ramp at 0.6 and painting a
+  full constellation sky over a bright grey daytime dome. A live `sunElevationDeg` folds
+  in (starless at/above the horizon, ramping through civil twilight 0°→−6°; no elevation
+  data → the preset ramp stands, keeping fixtures/no-weather setups unchanged). Below
+  `STAR_RAMP_MIN` (0.02) the whole starfield/catalog group flips `visible = false` (the
+  exponential ease asymptotes, never reaching 0), and the FIRST dayness target SNAPS so a
+  panel opened in daylight never fades a full star sky out over ~8 s. Lines + planet
+  sprites ride the same ramp as the stars. **Horizon-ring
   fix**: the old build sampled `y = max(0.06, rnd·2−1)` — the whole lower hemisphere CLAMPED
   onto one latitude (alt≈3.4°) = a dense ring. Now `capSampleAltAz` (area-uniform on the
   ≥8° cap, `asin(mix(sin8°,1,rnd))`) + a per-vertex brightness fade below 15°.
@@ -542,14 +557,14 @@ integration) drives the moon phase.
   alloc, shared textures disposed only in `destroy()`. No new config. Test pages
   `sky-astro-test.html` (`SKYASTRO PASS 36/36` — JD/GMST goldens, Polaris alt≈lat, Mercury
   RA/Dec to 4 dp, eclipse-node geometry, solstice sun dec, cap-sampling histogram) +
-  `sky-real-test.html` (`SKYREAL PASS 22/22`).
+  `sky-real-test.html` (`SKYREAL PASS 32/32`).
 - **Shared textures** (`_sunGlowTex`, `_starTex`, `_moonTexCache`) are built once and
   disposed only in `destroy()` (like `_blobTex`/`_gradientMapTex`). Per-frame motion is
   all in `_advanceWeather` (ABOVE the `_weatherGroup.visible` early-return — the sky is
   lighting-adjacent, independent of the weatherFx layer), zero allocation.
 - **`_keyWeather`** gained `effPreset:moonPhase:skyBackdrop` (`skyBucket`) so the sky
   rebuilds on a preset flip / phase change / toggle. Test pages: `weather-fx-test.html?c=sky`
-  (23/23 — sun position recomputed, moon phase pixel-sampled, dome colors differ day/night/
+  (34/34 — sun position recomputed, moon phase pixel-sampled, dome colors differ day/night/
   overcast, easing verified, upwind storm darkening); `weather-test.html` moon-phase matrix.
 
 ### Playful background text (skywriting / banner plane / grass / TRAIN / CHOPPER — multi-entry)

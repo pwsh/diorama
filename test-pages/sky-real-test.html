@@ -123,6 +123,69 @@
   ok('no horizon ring (0-10° band < 22% of stars)', lowFrac < 0.22, `lowBand=${(lowFrac * 100).toFixed(0)}%`);
   ok('stars span a wide elevation range', (bins.filter(b => b > 0).length) >= 6, `binsUsed=${bins.filter(b => b > 0).length}`);
 
+  // ── DAYLIGHT: the catalog sky must be completely gone when it is light out ──
+  // Three ways a daytime scene can present, all of which used to leave stars /
+  // constellation lines / planets painted over a bright dome:
+  //   a) the plain `day` preset (ramp asymptotes toward 0 but never reaches it),
+  //   b) an OVERCAST day, which resolveScenePreset downgrades to the `dusk`
+  //      preset — that alone left the ramp at 0.6 in broad daylight,
+  //   c) a manual `night` preset while the live sun is still above the horizon.
+  // All three must end with the whole group `visible === false`.
+  const catalogOpacities = () => ({
+    stars: r._realStars.material.opacity,
+    lines: r._constLineMat.opacity,
+    planet: Math.max(...r._planetSprites.map((s) => s.material.opacity)),
+  });
+  r.setSkyEpochOverride(EPOCH);
+  r.applyScenePreset('day');
+  r.updateWeather(fx({ skyBackdrop: true, isDay: true, condition: 'sunny',
+    sunAzimuthDeg: 120, sunElevationDeg: 40, observer: { lat: LAT, lon: LON }, skyRotRad: 0 }));
+  step(900);   // 15 s — past the exponential dayness ease
+  const dayOp = catalogOpacities();
+  ok('day: catalog group hidden', r._realSkyGroup.visible === false, `vis=${r._realSkyGroup.visible}`);
+  ok('day: catalog stars transparent', dayOp.stars < 0.02, `op=${dayOp.stars.toExponential(1)}`);
+  ok('day: constellation lines transparent', dayOp.lines < 0.02, `op=${dayOp.lines.toExponential(1)}`);
+  ok('day: planet sprites transparent', dayOp.planet < 0.02, `op=${dayOp.planet.toExponential(1)}`);
+  ok('day: decorative starfield hidden too', r._starField.visible === false, `vis=${r._starField.visible}`);
+
+  // (b) overcast DAY → dusk preset downgrade, sun still well up.
+  r.applyScenePreset('dusk');
+  r.updateWeather(fx({ skyBackdrop: true, isDay: true, condition: 'cloudy', cloudCoverage: 95,
+    sunAzimuthDeg: 120, sunElevationDeg: 35, observer: { lat: LAT, lon: LON }, skyRotRad: 0 }));
+  step(900);
+  ok('overcast day (dusk preset, sun up): catalog hidden',
+     r._realSkyGroup.visible === false && r._constLineMat.opacity < 0.02,
+     `vis=${r._realSkyGroup.visible} lines=${r._constLineMat.opacity.toExponential(1)}`);
+
+  // (c) manual night preset while the sun is up → still no stars.
+  r.applyScenePreset('night');
+  r.updateWeather(fx({ skyBackdrop: true, isDay: true, condition: 'sunny',
+    sunAzimuthDeg: 120, sunElevationDeg: 12, observer: { lat: LAT, lon: LON }, skyRotRad: 0 }));
+  step(900);
+  ok('night preset + sun up: catalog hidden', r._realSkyGroup.visible === false,
+     `vis=${r._realSkyGroup.visible}`);
+
+  // …and it all comes back once the sun sets (no one-way latch).
+  r.updateWeather(fx({ skyBackdrop: true, sunAzimuthDeg: 120, sunElevationDeg: -25,
+    observer: { lat: LAT, lon: LON }, skyRotRad: 0, moonPhase: 'waxing_gibbous' }));
+  step(900);
+  const nightOp = catalogOpacities();
+  ok('sunset restores the catalog sky', r._realSkyGroup.visible === true, `vis=${r._realSkyGroup.visible}`);
+  ok('night: stars + lines + planets all ride the ramp',
+     nightOp.stars > 0.9 && nightOp.lines > 0.4 && nightOp.planet > 0.9,
+     `stars=${nightOp.stars.toFixed(2)} lines=${nightOp.lines.toFixed(2)} planets=${nightOp.planet.toFixed(2)}`);
+  ok('civil twilight is a partial ramp, not a switch', (() => {
+    r.updateWeather(fx({ skyBackdrop: true, sunAzimuthDeg: 120, sunElevationDeg: -3,
+      observer: { lat: LAT, lon: LON }, skyRotRad: 0 }));
+    step(900);
+    const o = r._realStars.material.opacity;
+    return o > 0.3 && o < 0.7;
+  })(), `op=${r._realStars.material.opacity.toFixed(2)}`);
+  // Restore a full night sky for the final backdrop-off check.
+  r.updateWeather(fx({ skyBackdrop: true, sunAzimuthDeg: 120, sunElevationDeg: -25,
+    observer: { lat: LAT, lon: LON }, skyRotRad: 0 }));
+  step(300);
+
   // ── skyBackdrop off hides everything ───────────────────────────────────────
   r.updateWeather(fx({ skyBackdrop: false, observer: { lat: LAT, lon: LON } }));
   ok('skyBackdrop off hides sky group', !r._skyGroup.visible, `vis=${r._skyGroup.visible}`);

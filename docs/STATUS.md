@@ -206,6 +206,24 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Sky/weather visual fixes** (2026-07-26, three user reports; single
+  Opus pass, renderer-only). (a) Cloud shadows read as WHITE circles:
+  `_cloudShadowTexture` painted dark-slate rgb that linear→sRGB output
+  lifted to mid-grey — over dark ground the blend LIGHTENED. Now pure
+  black + alpha ramp = exact multiply by (1−a), can only darken
+  (_buildStormBank shares the map; its tint set white by design).
+  (b) The "purposeless white ball" was the SUN disc — hard-edged
+  gradient + NormalBlending + near-neutral tint. Now hot core + long
+  soft warm tail, AdditiveBlending, 5000 mm mostly-halo, warm at every
+  elevation, peak opacity eases back at midday (glare, not a ball).
+  (c) Constellations in daylight: the star ramp keyed off the PRESET,
+  and resolveScenePreset downgrades an overcast day to dusk → ramp
+  pinned 0.6. Dayness now = max(preset, sun-up amount from live
+  elevation, civil-twilight ramp 0°→−6°); STAR_RAMP_MIN 0.02 flips the
+  group visible=false (the ease asymptotes); first target SNAPS (no
+  8 s star fade on a daylight panel open). weather-fx w3 12→20, sky
+  23→34, sky-real 22→32; sky-astro 36/36 + regression sweep green.
+
 - **Flight display + inspection wave** (2026-07-26, user requests;
   single Opus pass on top of the rescale). Optional tow banners
   (`FlightsConfig.banners`, Settings checkbox); livery text layout —

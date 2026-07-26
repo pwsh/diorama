@@ -148,6 +148,12 @@ const WEATHER_DIM_SKY = new Set<string>([
 const WEATHER_WET_SKY = new Set<string>([
   'rainy', 'pouring', 'snowy-rainy', 'hail', 'lightning-rainy',
 ]);
+// Below this the (1 − dayness) star ramp is visually zero. The dayness ease is
+// exponential and asymptotes rather than landing on 0, so the whole night-sky
+// group (decorative starfield / catalog stars / constellation lines / planets)
+// flips `visible = false` here instead of drawing near-invisible geometry in
+// broad daylight. Exported for the sky test pages.
+export const STAR_RAMP_MIN = 0.02;
 
 // What a 3D pick surfaces. `kind` is the userData tag the raycast walker found
 // on the nearest hit's first tagged ancestor; three-view routes on it. Most
@@ -1740,6 +1746,10 @@ export class ThreeDRenderer {
   private _skyBotTarget = new THREE.Color(0x151b2e);
   private _skyDayness = 0;                         // eased 0(night)..1(day) — star fade
   private _skyDaynessTarget = 0;
+  // First target SNAPS (no ease). Dayness starts at 0 = "full night sky", so a
+  // panel opened in daylight used to fade a complete constellation sky out over
+  // ~8 s on every load; only a LATER preset/elevation change should ease.
+  private _skyDaynessSeeded = false;
   private _skySunTarget = new THREE.Vector3(0, 20000, 0);
   private _skyMoonTarget = new THREE.Vector3(0, 14000, 0);
   private _sunWantOpacity = 0; private _sunOpacityCur = 0;
@@ -2623,17 +2633,26 @@ export class ThreeDRenderer {
     this._fogPlaneTex = t;
     return this._fogPlaneTex;
   }
-  // Soft dark blob for drifting cloud shadows (W3). Like _blobTex but darker /
-  // wider-falloff so overlapping decals read as a big moving overcast patch.
+  // Soft blob for drifting cloud shadows (W3). Like _blobTex but wider-falloff
+  // so overlapping decals read as a big moving overcast patch.
+  //
+  // RGB is PURE BLACK on purpose — the shade lives entirely in the ALPHA ramp.
+  // A NormalBlending decal computes dst·(1−a) + src·a, so a black src makes the
+  // decal an exact MULTIPLY by (1−a): it darkens every surface proportionally
+  // and can never lighten one. The old dark-slate rgb(20,24,32) was a *color*
+  // being lerped toward: textures carry no colorSpace tag, so the renderer's
+  // linear→sRGB output step lifted it to ≈ rgb(76,84,92) mid-grey, which is
+  // BRIGHTER than a dark floor / dark yard — the "cloud shadows are white
+  // circles" report. Keep the rgb at 0 (and never tint the decal material).
   private _cloudShadowTexture(): THREE.CanvasTexture {
     if (this._cloudShadowTex) return this._cloudShadowTex;
     const c = document.createElement('canvas');
     c.width = c.height = 128;
     const g = c.getContext('2d')!;
     const grad = g.createRadialGradient(64, 64, 4, 64, 64, 64);
-    grad.addColorStop(0, 'rgba(20,24,32,0.55)');
-    grad.addColorStop(0.6, 'rgba(20,24,32,0.28)');
-    grad.addColorStop(1, 'rgba(20,24,32,0)');
+    grad.addColorStop(0, 'rgba(0,0,0,0.60)');
+    grad.addColorStop(0.6, 'rgba(0,0,0,0.30)');
+    grad.addColorStop(1, 'rgba(0,0,0,0)');
     g.fillStyle = grad; g.fillRect(0, 0, 128, 128);
     this._cloudShadowTex = new THREE.CanvasTexture(c);
     return this._cloudShadowTex;
@@ -13351,14 +13370,20 @@ export class ThreeDRenderer {
     // horizon, dim under overcast, warm-tint near the horizon.
     let sunOp = 0;
     if (this._skyVisible && this._preset !== 'night' && elev != null && elev > 0) {
-      sunOp = Math.min(1, elev / 6) * (1 - 0.7 * overcast);
+      // Additive glare: ease the PEAK back a little as the sun climbs so a high
+      // midday sun reads as diffuse brightness rather than a hard bright ball.
+      const high = Math.min(1, Math.max(0, elev / 55));
+      sunOp = Math.min(1, elev / 6) * (1 - 0.7 * overcast) * (1 - 0.28 * high);
     }
     this._sunWantOpacity = sunOp;
     this._skySunTarget.copy(this._sunTargetFromSky(az, Math.max(2, elev ?? 20), 26000));
     if (this._sunSprite) {
+      // Horizon amber → high-sun warm white. The high end stays WARM (r>g>b) —
+      // a neutral white top end is what made the midday disc read as a bare
+      // white ball against the blue dome.
       const k = elev == null ? 1 : Math.min(1, Math.max(0, elev / 40));
       (this._sunSprite.material as THREE.SpriteMaterial).color
-        .copy(new THREE.Color(0xff8a4a)).lerp(new THREE.Color(0xfff6e0), k);
+        .copy(new THREE.Color(0xff8a4a)).lerp(new THREE.Color(0xffeec4), k);
     }
     // Moon disc. REAL MODE (observer): the moon rides its true ephemeris
     // direction (_moonRealDir, camera-recentered in _advanceWeather) and is
@@ -13625,11 +13650,14 @@ export class ThreeDRenderer {
     if (m < 1e-3) { ux = -1; uz = 0; } else { ux /= m; uz /= m; }
     const dist = Math.max(this._fw, this._fd) + 14000;
     const cx = ux * dist, cz = uz * dist;
+    // Shares the cloud-shadow blob. That map is ALPHA-ONLY (pure black rgb), so
+    // the sprite reads as a soft dark silhouette and a `color` tint would be
+    // multiplied against zero — don't add one back expecting slate.
     const tex = this._cloudShadowTexture();
     for (let i = 0; i < 3; i++) {
       const s = 9000 + i * 3500;
       const spr = new THREE.Sprite(new THREE.SpriteMaterial({
-        map: tex, color: 0x2b3340, transparent: true, opacity: 0.5, depthWrite: false,
+        map: tex, color: 0xffffff, transparent: true, opacity: 0.5, depthWrite: false,
       }));
       spr.scale.set(s, s * 0.55, 1);
       spr.position.set(cx + (i - 1) * 3800, 4200 + i * 600, cz + (i - 1) * 1400 * uz);
@@ -13726,11 +13754,16 @@ export class ThreeDRenderer {
     // Sun disc — soft warm radial-glow billboard. depthTest on so foreground
     // geometry (roof / walls) occludes it naturally; dome writes no depth so it
     // shows in open sky. Positioned + faded per-frame in _advanceWeather.
+    // AdditiveBlending: a sun ADDS light to the sky it sits in. With the small
+    // hot core + long tail of _sunGlowTexture that gives glare + bloom rather
+    // than the flat pasted-on white disc NormalBlending produced. The sprite is
+    // larger than before because most of it is now halo, not disc.
     const sun = new THREE.Sprite(new THREE.SpriteMaterial({
       map: this._sunGlowTexture(), transparent: true, depthWrite: false,
       depthTest: true, opacity: 0, color: 0xfff2d6, fog: false,
+      blending: THREE.AdditiveBlending,
     }));
-    sun.scale.set(3200, 3200, 1);
+    sun.scale.set(5000, 5000, 1);
     sun.renderOrder = -8;
     sun.position.copy(this._skySunTarget);
     this._sunSprite = sun; this._skyGroup.add(sun);
@@ -13750,15 +13783,25 @@ export class ThreeDRenderer {
     this._skyGroup.add(this._starField);
   }
 
+  // Sun glow. A SMALL bright core (~12 % of the sprite) plus a long, soft warm
+  // halo out to the rim — the old ramp held ~0.96 alpha out to 22 % and only
+  // reached 0.5 at half-radius, which with NormalBlending read as a flat white
+  // ball with a hard edge ("the white ball in the sky has no purpose"). Paired
+  // with AdditiveBlending in _ensureSky the core blows out to glare and the tail
+  // brightens the surrounding sky instead of cutting a disc out of it. Stays
+  // warm (r > g > b) at every stop so the sun never reads as a plain white dot.
   private _sunGlowTexture(): THREE.CanvasTexture {
     if (this._sunGlowTex) return this._sunGlowTex;
     const c = document.createElement('canvas'); c.width = c.height = 128;
     const g = c.getContext('2d')!;
     const grd = g.createRadialGradient(64, 64, 0, 64, 64, 64);
-    grd.addColorStop(0, 'rgba(255,253,240,1)');
-    grd.addColorStop(0.22, 'rgba(255,247,216,0.96)');
-    grd.addColorStop(0.5, 'rgba(255,232,176,0.5)');
-    grd.addColorStop(1, 'rgba(255,222,150,0)');
+    grd.addColorStop(0, 'rgba(255,250,232,1)');
+    grd.addColorStop(0.10, 'rgba(255,244,208,0.90)');
+    grd.addColorStop(0.19, 'rgba(255,231,172,0.50)');
+    grd.addColorStop(0.32, 'rgba(255,215,140,0.22)');
+    grd.addColorStop(0.55, 'rgba(255,202,122,0.09)');
+    grd.addColorStop(0.80, 'rgba(255,196,112,0.03)');
+    grd.addColorStop(1, 'rgba(255,194,110,0)');
     g.fillStyle = grd; g.fillRect(0, 0, 128, 128);
     this._sunGlowTex = new THREE.CanvasTexture(c);
     return this._sunGlowTex;
@@ -14050,7 +14093,19 @@ export class ThreeDRenderer {
     const { top, bottom } = this._skyColorsFor(preset, cond, cov);
     this._skyTopTarget.copy(top);
     this._skyBotTarget.copy(bottom);
-    this._skyDaynessTarget = preset === 'day' ? 1 : preset === 'dusk' ? 0.4 : 0;
+    // Dayness drives the star / constellation / planet ramp (1 = no stars).
+    // The preset alone is NOT a reliable "is it light out" signal: an overcast
+    // or rainy DAY is downgraded to the dusk preset by resolveScenePreset, which
+    // left the ramp at 0.6 and painted a full constellation sky over a bright
+    // grey daytime dome (the "constellations show during daytime" report). When
+    // a live sun elevation exists, fold it in: fully starless at/above the
+    // horizon, fading in through civil twilight (0° → −6°). No elevation data
+    // (no weather source / test fixtures) → the preset ramp stands unchanged.
+    let dayness = preset === 'day' ? 1 : preset === 'dusk' ? 0.4 : 0;
+    const elev = this._weatherFx?.sunElevationDeg;
+    if (elev != null) dayness = Math.max(dayness, Math.min(1, Math.max(0, (elev + 6) / 6)));
+    this._skyDaynessTarget = dayness;
+    if (!this._skyDaynessSeeded) { this._skyDaynessSeeded = true; this._skyDayness = dayness; }
   }
 
   private _hashStr(s: string): number {
@@ -14190,22 +14245,26 @@ export class ThreeDRenderer {
       }
       this._skyDayness += (this._skyDaynessTarget - this._skyDayness) * k;
       const starRamp = this._skyVisible ? Math.max(0, 1 - this._skyDayness) : 0;
+      // Below this the ramp is visually zero — flip the whole group off rather
+      // than leave near-zero-alpha geometry drawing every frame in daylight
+      // (the dayness ease is exponential and never reaches exactly 0).
+      const starsShow = starRamp > STAR_RAMP_MIN;
       // Decorative starfield shows only when the real catalog sky is inactive.
       if (this._starField) {
-        this._starField.visible = this._skyVisible && !this._skyRealMode;
+        this._starField.visible = this._skyVisible && !this._skyRealMode && starsShow;
         (this._starField.material as THREE.PointsMaterial).opacity = starRamp;
       }
-      // Real catalog sky: stars / figure lines / planets share the star ramp,
-      // gated on real mode. Group visibility folds in skyVisible + mode.
+      // Real catalog sky: stars / figure lines / planets ALL share the star
+      // ramp, gated on real mode. Group visibility folds in skyVisible + mode +
+      // the daylight cutoff, so daytime draws no constellation lines at all.
       if (this._realStars) {
-        this._realSkyGroup.visible = this._skyVisible && this._skyRealMode;
+        this._realSkyGroup.visible = this._skyVisible && this._skyRealMode && starsShow;
         (this._realStars.material as THREE.PointsMaterial).opacity = starRamp;
         if (this._constLineMat) this._constLineMat.opacity = starRamp * 0.55;
         for (const spr of this._planetSprites) {
-          // Planets fade with the stars but stay a touch brighter (min 0.4 while
-          // any sky shows) so a bright planet reads even near twilight.
-          (spr.material as THREE.SpriteMaterial).opacity =
-            this._skyVisible ? Math.max(starRamp, this._skyRealMode ? 0.4 * (1 - this._skyDayness) : 0) : 0;
+          // Planets ride the same ramp (they are the brightest sky objects, so
+          // they keep their own larger sprite scale rather than extra opacity).
+          (spr.material as THREE.SpriteMaterial).opacity = starRamp;
         }
       }
       this._sunOpacityCur += (this._sunWantOpacity - this._sunOpacityCur) * k;
