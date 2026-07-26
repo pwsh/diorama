@@ -1351,11 +1351,14 @@ export class ThreeView extends LitElement {
       const groundList = f.groundAreas ?? [];
       const wallHash = (f.walls ?? []).map(w =>
         `${w.kind ?? ''}:${w.points.map(v => `${v.x | 0},${v.y | 0}`).join(',')}`).join(';');
-      const keyGround = `${p.configRev}|${f.yardFill ?? ''}|${f.w | 0}x${f.d | 0}|${wallHash}|` + groundList.map(g =>
+      // groundLevelMm shifts the yard-fill underlay (the surrounding grade);
+      // configRev already covers a scene3d edit, the explicit term documents it.
+      const groundLevelMm = scBase.groundLevelMm ?? 0;
+      const keyGround = `${p.configRev}|${f.yardFill ?? ''}|${f.w | 0}x${f.d | 0}|${wallHash}|${groundLevelMm}|` + groundList.map(g =>
         `${g.id}:${g.kind}:${g.elevationMm ?? 0}:${g.hidden ? 'h' : ''}:${g.points.map(v => `${v.x | 0},${v.y | 0}`).join(';')}`).join('|');
       if (keyGround !== this._keyGround) {
         this._keyGround = keyGround;
-        r.updateGroundAreas(groundList, f.yardFill, f.w, f.d, f.walls ?? [], !!scBase.glassHouse);
+        r.updateGroundAreas(groundList, f.yardFill, f.w, f.d, f.walls ?? [], !!scBase.glassHouse, groundLevelMm);
       }
 
       // Pools / spas (T4): structural geometry + a bound-entity state hash (heater

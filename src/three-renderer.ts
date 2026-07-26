@@ -731,6 +731,16 @@ const CAM_FAR_HYSTERESIS = 0.05;     // |Δfar|/far before a projection-matrix r
 const CAM_FAR_CEIL = 13_500_000;
 const CAM_MAXDIST_CEIL = 8_500_000;
 
+// Scene3D.groundLevelMm — how far the SURROUNDINGS (backdrop grid, neighborhood
+// overlay, yard fill, outdoor standing height) sit above / below the floor slab.
+// Clamped so a fat-fingered value can't fling the grid past the far plane; the
+// house-on-a-foundation case lives in the first metre of the negative range.
+const GROUND_LEVEL_LIMIT = 10000;
+export function resolveGroundLevelMm(v: number | null | undefined): number {
+  if (typeof v !== 'number' || !isFinite(v)) return 0;
+  return Math.max(-GROUND_LEVEL_LIMIT, Math.min(GROUND_LEVEL_LIMIT, v));
+}
+
 // Build context for a declarative primitive (shared by the initial-rig
 // accessory build AND a runtime prop-equip via _buildPrimitiveMesh). Carries the
 // LIVE anchor groups + shared material refs + per-rig metrics.
@@ -1521,6 +1531,11 @@ export class ThreeDRenderer {
   private _appliedFovH: number | null | undefined = undefined;
   private _grid: THREE.GridHelper | null = null;
   private _bgVisibleNow = false;   // last-computed bg-image visibility (grid suppression; set in updateFloor)
+  // Scene3D.groundLevelMm resolved + clamped (set in updateFloor). 0 = today's
+  // behavior everywhere; NEGATIVE sinks the SURROUNDINGS (grid / neighborhood
+  // overlay / yard fill / outdoor standing height) below the floor slab, which
+  // reads as the house sitting on a raised foundation.
+  private _groundLevel = 0;
   private _floorGroup = new THREE.Group();
   private _doorGroup = new THREE.Group();
   private _modelGroup = new THREE.Group();
@@ -3302,7 +3317,15 @@ export class ThreeDRenderer {
       }
       if (!found || gy > g) { g = gy; found = true; }
     }
-    return found ? g : 0;
+    if (found) return g;
+    // No terrain under the point → the slab (0) indoors, the SURROUNDINGS level
+    // outdoors (Scene3D.groundLevelMm), so rigs / blob shadows / robot rigs
+    // settle onto the yard fill + grid the user lowered. Terraces + stairs +
+    // risers keep their AUTHORED heights (they're property terrain, handled
+    // above). `_outdoors` treats a loop-less floor as indoors — which is right
+    // here too: with no closed loop the slab covers the whole rect, so there is
+    // no "outside" to stand on. Short-circuit at 0 keeps the default path free.
+    return this._groundLevel !== 0 && this._outdoors(wx, wy) ? this._groundLevel : 0;
   }
 
   // World→3D mapping: flip X so screen-right matches 2D world +X; world Y → 3D Z.
@@ -3985,8 +4008,14 @@ export class ThreeDRenderer {
   // uses). Rebuilt under _keyGround in three-view. Rides the `ground` layer.
   // Terrace TOPS are registered into _terrain in updateFloor (which owns that
   // array) so nav height survives _keyFloor rebuilds — this call is visuals only.
-  updateGroundAreas(areas: GroundArea[], yardFill?: GroundKind, fw?: number, fd?: number, walls?: Wall[], glassHouse?: boolean): void {
+  updateGroundAreas(areas: GroundArea[], yardFill?: GroundKind, fw?: number, fd?: number, walls?: Wall[], glassHouse?: boolean,
+                    groundLevelMm?: number): void {
     if (!this._scene) return;
+    // Surroundings level: ONLY the yard-fill underlay follows it (it IS the
+    // surrounding grade). User-drawn ground areas / terraces / pools / paths are
+    // authored property terrain with their own elevationMm and never move.
+    // Absent arg → the level updateFloor resolved (stale-caller safe).
+    const gl = resolveGroundLevelMm(groundLevelMm ?? this._groundLevel);
     this._clearGroup(this._groundGroup);
     // Free the previous rebuild's per-patch water clones (the shared cache entry
     // is untouched; only these throwaway clones are ours to dispose).
@@ -4004,8 +4033,15 @@ export class ThreeDRenderer {
         : (glassHouse ? { transparent: true, opacity: 0.45, depthWrite: true } : {});
 
     // Yard fill: one underlay patch = floor rect minus closed wall loops (holes).
+    // The holes exist so the fill never paints over the house slab — which is
+    // only a risk while the two are coplanar or the grade is ABOVE the slab.
+    // Once the grade is LOWERED (gl < 0, the raised-foundation case) the house
+    // pad floats over those holes and a low camera looks straight through them
+    // at the backdrop grid; the grade must run CONTINUOUSLY under the pad
+    // instead. So: punch holes at gl ≥ 0 (today's behavior at 0), skip them
+    // below. The slab always wins the depth test — it's 600+ mm higher.
     if (yardFill && fw && fd) {
-      const loops = closedWallLoops(walls ?? []);
+      const loops = gl < 0 ? [] : closedWallLoops(walls ?? []);
       const yf = GROUND_KINDS[yardFill] ?? GROUND_KINDS.grass;
       const yfIsWater0 = yardFill === 'water';
       const ytex = yfIsWater0 ? this._waterTexClone() : this._groundTexture(yardFill);
@@ -4035,7 +4071,7 @@ export class ThreeDRenderer {
         ...groundGlass(yfIsWater, yf.opacity ?? 0.85),
       }));
       yMesh.rotation.x = -Math.PI / 2;
-      yMesh.position.y = 2;
+      yMesh.position.y = 2 + gl;
       yMesh.receiveShadow = true;
       yMesh.userData.outlineSkip = true;
       yMesh.userData.yardFill = true;
@@ -4628,6 +4664,13 @@ export class ThreeDRenderer {
               jobDoneProvider?: (fuId: string) => boolean): void {
     if (!this._scene) return;
     this._fw = f.w; this._fd = f.d; this._floorId = f.id;
+    // Ground (surroundings) level: the grid + neighborhood overlay ride it as a
+    // whole-group offset, the yard-fill patch adds it to its own y, and
+    // _groundYAt returns it for outdoor points. Everything the USER authored on
+    // the plan (slab, walls, furniture, ground areas, pools, paths) stays put.
+    this._groundLevel = resolveGroundLevelMm(scene3d?.groundLevelMm);
+    if (this._grid) this._grid.position.y = this._groundLevel;
+    this._neighborhoodGroup.position.y = this._groundLevel;
     // Foreground wall cutaway: default ON, opt out with wallCutaway === false.
     this._cutaway = scene3d?.wallCutaway !== false;
     this._cutawayWalls = [];
@@ -5875,6 +5918,11 @@ export class ThreeDRenderer {
                      cfg: { opacity?: number; colorBuildings?: string; colorRoads?: string; colorWater?: string; colorLanduse?: string; maxRoads?: number } | null): void {
     if (!this._scene) return;
     this._clearGroup(this._neighborhoodGroup);
+    // Surroundings level (Scene3D.groundLevelMm) is a whole-GROUP offset, so the
+    // internal landuse/water/road y=1/2/3 stack + podium bases are preserved.
+    // Re-applied here (as well as in updateFloor) so the overlay lands correctly
+    // whatever order the two dirty keys fire in.
+    this._neighborhoodGroup.position.y = this._groundLevel;
     const anyContent = !!data && (data.buildings.length || data.roads.length || data.water.length || data.landuse.length);
     if (!data || !anyContent) { this._recordFrustumReq('nbhd', null); return; }
 

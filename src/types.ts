@@ -935,6 +935,13 @@ export interface Scene3D {
   skyBackdrop?: boolean;     // phase 3: gradient sky dome + sun/moon/star props replacing the flat
                              // background. Default ON when a weather source is configured; the 3D
                              // "Sky backdrop" Display checkbox overrides.
+  groundLevelMm?: number;    // height of the SURROUNDINGS relative to the floor slab; default 0 =
+                             // today. The backdrop grid, the OpenStreetMap neighborhood overlay and
+                             // the yard-fill underlay shift by this much (and avatars walking
+                             // outside every closed wall loop settle onto it); the floor slab,
+                             // walls, furniture, fixtures and authored ground areas / terraces /
+                             // pools never move. NEGATIVE = surroundings BELOW the slab — the
+                             // raised-foundation / hilltop look. Clamped ±10 000 mm.
 }
 
 // A named room. No polygon is persisted — the room IS whichever closed wall

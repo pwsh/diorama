@@ -22,6 +22,17 @@
    - a rebuild with a changed elevation re-lands the top patch (dirty-key proxy);
    - a robot rig re-grounds on a terrace top via _groundYAt (mower hookup).
 
+  Ground level (Scene3D.groundLevelMm — the SURROUNDINGS move, the house does
+  not): defaults are byte-compatible (grid/neighborhood y=0, yard fill y=2);
+  a lowered level drops the backdrop grid, the neighborhood overlay GROUP and
+  the yard-fill underlay, leaves authored ground areas / terraces where they
+  are, runs the fill continuously UNDER the raised house pad (the wall-loop
+  holes are punched only at level ≥ 0 — below it they'd expose the backdrop
+  grid), makes _groundYAt return the level OUTSIDE every wall loop but 0 inside
+  (and terrace tops keep their authored height), re-applies on a neighborhood-
+  only rebuild, falls back to the floor's level when updateGroundAreas is
+  called without the arg, clamps at ±10 000 mm, and restores exactly at 0.
+
   Build the geometry bundle next to this file:
     npx esbuild src/geometry.ts --bundle --format=esm --outfile=<harness>/geometry.mod.js
   and serve the built renderer chunk (dist/assets/three-renderer.js) alongside.
@@ -222,6 +233,116 @@
     const rig2 = r._robotRigs['rb1'];
     ok('R10b robot rig at grade off-terrace (y=0)', Math.abs(rig2.group.position.y - 0) < 1e-6,
        `y=${rig2.group.position.y}`);
+  }
+
+  // ── G: ground level (Scene3D.groundLevelMm) — surroundings move, house doesn't
+  {
+    // A closed house loop so _outdoors can tell inside from outside, plus one
+    // authored terrace OUTSIDE it (must keep its own elevation).
+    const houseLoop = [
+      { x: 3000, y: 3000 }, { x: 7000, y: 3000 }, { x: 7000, y: 6000 },
+      { x: 3000, y: 6000 }, { x: 3000, y: 3000 },
+    ];
+    const houseWalls = [{ id: 'gw', points: houseLoop, kind: 'full' }];
+    const terr = { id: 'gterr', kind: 'grass', points: sq(9500, 8000, 700), elevationMm: 500 };
+    const mkG = (sc3) => {
+      r.updateFloor(mkFloor([terr], { walls: houseWalls }), sc3);
+      r.updateGroundAreas([terr], 'grass', FW, FD, houseWalls, false, sc3.groundLevelMm);
+    };
+    // Minimal neighborhood payload (one building + one road + one water patch).
+    const nb = {
+      buildings: [{ points: sq(11000, 2000, 600), heightMm: 6000, baseMm: 0 }],
+      roads: [{ points: [{ x: 0, y: 1500 }, { x: FW, y: 1500 }], widthMm: 3000, cls: 'residential', bridge: false }],
+      water: [{ points: sq(1000, 9000, 500), cls: 'water' }],
+      landuse: [], fetchedAt: 0, tileCount: 1, tileAddrs: [],
+    };
+
+    // G0: defaults are exactly today's numbers.
+    mkG(scene);
+    r.updateNeighborhood(nb, { opacity: 1 });
+    ok('G0 default: grid + neighborhood at y=0, yard fill at y=2',
+       r._grid.position.y === 0 && r._neighborhoodGroup.position.y === 0 && yardOf()[0].position.y === 2,
+       `grid=${r._grid.position.y} nbhd=${r._neighborhoodGroup.position.y} yard=${yardOf()[0]?.position.y}`);
+    ok('G0b default: _groundYAt outdoors = 0', r._groundYAt(11000, 9500) === 0,
+       `gy=${r._groundYAt(11000, 9500)}`);
+    const nbKids = r._neighborhoodGroup.children.length;
+    ok('G0c neighborhood payload actually built', nbKids >= 3, `children=${nbKids}`);
+
+    // G1..G7: lowered surroundings (raised-foundation case).
+    const LOW = -600;
+    const sceneLow = { ...scene, groundLevelMm: LOW };
+    mkG(sceneLow);
+    r.updateNeighborhood(nb, { opacity: 1 });
+    ok('G1 backdrop grid drops to the ground level', r._grid.position.y === LOW, `y=${r._grid.position.y}`);
+    ok('G2 neighborhood group drops to the ground level', r._neighborhoodGroup.position.y === LOW,
+       `y=${r._neighborhoodGroup.position.y}`);
+    ok('G3 yard-fill underlay at 2 + level', yardOf()[0].position.y === 2 + LOW,
+       `y=${yardOf()[0]?.position.y}`);
+    ok('G4 authored ground area NOT offset (elev + 4)', topsOf()[0].position.y === 504,
+       `y=${topsOf()[0]?.position.y}`);
+    ok('G5 _groundYAt outdoors = ground level', r._groundYAt(11000, 9500) === LOW,
+       `gy=${r._groundYAt(11000, 9500)}`);
+    ok('G6 _groundYAt inside the wall loop stays on the slab (0)', r._groundYAt(5000, 4500) === 0,
+       `gy=${r._groundYAt(5000, 4500)}`);
+    ok('G7 _groundYAt on a terrace keeps its authored height', r._groundYAt(9500, 8000) === 500,
+       `gy=${r._groundYAt(9500, 8000)}`);
+    // Building prisms keep their local podium base — only the group moved.
+    {
+      const prism = r._neighborhoodGroup.children.find(c => c.geometry && c.geometry.type === 'ExtrudeGeometry');
+      ok('G8 neighborhood building keeps local base 0 (whole-group offset)',
+         !!prism && prism.position.y === 0, `y=${prism?.position.y}`);
+    }
+    // G9: a neighborhood-ONLY rebuild re-applies the offset (key-order safety).
+    r.updateNeighborhood(null, null);
+    r.updateNeighborhood(nb, { opacity: 1 });
+    ok('G9 neighborhood-only rebuild re-applies the offset', r._neighborhoodGroup.position.y === LOW,
+       `y=${r._neighborhoodGroup.position.y}`);
+
+    // G9b: with a LOWERED grade the yard fill runs continuously under the raised
+    // house pad (no wall-loop holes to see the backdrop grid through). At level
+    // 0 the holes are still punched — that's R7 above.
+    {
+      const yf = yardOf()[0];
+      const geo = yf.geometry, pos = geo.getAttribute('position'), idx = geo.getIndex();
+      const readW = (vi) => ({ x: FW / 2 - pos.getX(vi), y: FD / 2 - pos.getY(vi) });
+      const triN = idx ? idx.count / 3 : pos.count / 3;
+      let inLoop = 0;
+      for (let t = 0; t < triN; t++) {
+        const a = idx ? idx.getX(t * 3) : t * 3, b = idx ? idx.getX(t * 3 + 1) : t * 3 + 1, c = idx ? idx.getX(t * 3 + 2) : t * 3 + 2;
+        const wa = readW(a), wb = readW(b), wc = readW(c);
+        const cx = (wa.x + wb.x + wc.x) / 3, cy = (wa.y + wb.y + wc.y) / 3;
+        if (G.pointInPolygon(cx, cy, houseLoop.slice(0, 4))) inLoop++;
+      }
+      ok('G9b lowered grade fills UNDER the house pad (no wall-loop hole)', inLoop > 0,
+         `inLoop=${inLoop}/${triN}`);
+    }
+
+    // G10: updateGroundAreas without the arg falls back to the floor's level.
+    r.updateGroundAreas([terr], 'grass', FW, FD, houseWalls);
+    ok('G10 yard fill falls back to the floor level without the arg',
+       yardOf()[0].position.y === 2 + LOW, `y=${yardOf()[0]?.position.y}`);
+
+    // G11: a rig standing outdoors settles onto the lowered ground.
+    {
+      const robot = { id: 'grb', kind: 'mower', x: 11000, y: 9500, w: 600, h: 400, rotation: 0 };
+      r.updateRobotRigs([robot], { grb: { x: 11000, y: 9500, heading: 0, phase: 0, activity: 'docked', led: '#43a047' } });
+      const rig = r._robotRigs['grb'];
+      ok('G11 outdoor robot rig settles on the lowered ground',
+         !!rig && Math.abs(rig.group.position.y - LOW) < 1e-6, `y=${rig?.group.position.y}`);
+    }
+
+    // G12: clamp — an absurd value never flings the grid past the far plane.
+    mkG({ ...scene, groundLevelMm: -99999 });
+    ok('G12 ground level clamps at −10000', r._grid.position.y === -10000, `y=${r._grid.position.y}`);
+
+    // G13: back to 0 restores exactly (default path unchanged).
+    mkG(scene);
+    r.updateNeighborhood(nb, { opacity: 1 });
+    ok('G13 level 0 restores grid/neighborhood/yard/_groundYAt exactly',
+       r._grid.position.y === 0 && r._neighborhoodGroup.position.y === 0 &&
+       yardOf()[0].position.y === 2 && r._groundYAt(11000, 9500) === 0,
+       `grid=${r._grid.position.y} nbhd=${r._neighborhoodGroup.position.y} yard=${yardOf()[0]?.position.y} gy=${r._groundYAt(11000, 9500)}`);
+    r.updateNeighborhood(null, null);   // leave the frustum as we found it
   }
 
   let pass = 0; const fails = [];

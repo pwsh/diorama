@@ -206,6 +206,20 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Adjustable ground level** (2026-07-26, user request, clarified:
+  surroundings move vs the house; single Opus pass).
+  `Scene3D.groundLevelMm` (default 0, ±10 000, negative = below slab):
+  offsets GridHelper + the whole neighborhood group + the yardFill
+  underlay; slab/walls/furniture/authored terrain stay. `_groundYAt`
+  returns the level outdoors (outside every wall loop) so yard rigs/
+  blob shadows/robots settle onto the lowered grade (eased doorway
+  step). Visual-driven fix: yardFill wall-loop holes punch only at
+  level ≥ 0 (below, the grade runs under the raised pad — a low
+  camera otherwise saw the grid through the holes). Settings ▸
+  Display "Ground level (mm)". terrain-test 21→38; yard/nbhd-render/
+  neighborhood/glass-see/stairs-descend/path-pool green. v1 limits:
+  no foundation skirt, GPS pin sprites slab-relative.
+
 - **Sun-disc toggle** (2026-07-26, user request; single Opus pass).
   `sunDisc` joins the W3 per-effect keys (default ON) — gated like
   sunPosition (own key + live source, never effects3d/weatherFx —

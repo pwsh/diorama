@@ -1673,6 +1673,20 @@ export class SettingsDrawer extends LitElement {
                style="width:36px;height:24px;padding:0;border:1px solid var(--border);background:#111"
                @input=${(e: Event) => upd(() => { p.store.scene3d!.wallColor = (e.target as HTMLInputElement).value; })}>
       </div>
+      <div class="row" title="Height of the SURROUNDINGS (backdrop grid, neighborhood overlay, yard fill) relative to the floor slab. Negative = ground below a raised foundation.">
+        <label>Ground level (mm)</label>
+        <input type="number" step="50" min="-10000" max="10000" style="width:80px"
+               .value=${String(sc.groundLevelMm ?? 0)}
+               @change=${(e: Event) => upd(() => {
+                 const n = Number((e.target as HTMLInputElement).value);
+                 const v = isFinite(n) ? Math.max(-10000, Math.min(10000, Math.round(n))) : 0;
+                 p.store.scene3d!.groundLevelMm = v === 0 ? undefined : v;
+               })}>
+      </div>
+      <div style="font-size:10px;color:var(--text-dim);line-height:1.3;margin:2px 0 4px">
+        Surroundings relative to the floor slab — negative = ground below a raised foundation.
+        The house, furniture and your own ground areas / terraces stay put.
+      </div>
       ${check('Glass house', !!sc.glassHouse, v => { p.store.scene3d!.glassHouse = v; })}
       ${check('Wall cutaway', sc.wallCutaway !== false, v => { p.store.scene3d!.wallCutaway = v; })}
       ${check('Auto-follow camera', !!sc.autoFollow, v => { p.store.scene3d!.autoFollow = v; })}
