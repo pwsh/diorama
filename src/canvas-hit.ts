@@ -5,7 +5,7 @@ import { switchSize, distMM, pointToSeg, transformVerts, centroid, localToWorld,
 import type { Planner } from './planner.js';
 import type { Vec2, Wall, Sensor, Furniture, BgImage, MotionSensor, EnvSensor, BleProxy, AlarmPanel, CalendarPanel, ThermostatFixture, SafetySensor, AlertBeacon, RobotFixture, CameraFixture, ProjectorFixture, ValveFixture, PlugFixture, SprinklerZone, FlagpoleFixture, PresenceZone, InfoCard, ActionButton, Door, Window as WindowType, Floor, Ruler } from './types.js';
 import type { FloorEdge } from './geometry.js';
-import { envChipHalfPx, infoCardHalfPx, actionButtonHalfPx, type View } from './canvas-render.js';
+import { envChipHalfPx, infoCardHalfPx, actionButtonHalfPx, flightHitPx, type View } from './canvas-render.js';
 import { vacMapAffine, vacWorldToPixel, vacSegHasPixel } from './valetudo-map.js';
 
 export function hitPx(view: View): number {
@@ -438,6 +438,24 @@ export function hitRobot(p: Planner, view: View, mm: Vec2): RobotFixture | null 
     if (rs && Math.hypot(rs.x - mm.x, rs.y - mm.y) < h) return r;
   }
   return null;
+}
+
+// Which live aircraft (if any) sits under the world point. LOW priority — the
+// callers run this AFTER every fixture hit, so a dart drifting over a lamp never
+// swallows the lamp's click. Reads the positions drawFlights published last
+// frame (the envChipHalfPx idiom: world anchor + screen-px radius); the map is
+// cleared every frame in drawAll, so a hidden `flights` layer is untappable and
+// a stale aircraft cannot be picked. Nearest dart wins.
+export function hitFlight(p: Planner, view: View, mm: Vec2): string | null {
+  if (!p.store.flights?.enabled) return null;
+  if (flightHitPx.size === 0) return null;
+  const pad = 3 * (window.devicePixelRatio || 1);
+  let best: string | null = null, bestD = Infinity;
+  for (const [hex, t] of flightHitPx) {
+    const d = distMM(t, mm);
+    if (d < (t.rPx + pad) / Math.max(view.scale, 1e-9) && d < bestD) { bestD = d; best = hex; }
+  }
+  return best;
 }
 
 export function hitCamera(p: Planner, view: View, mm: Vec2): CameraFixture | null {

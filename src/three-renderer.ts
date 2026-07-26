@@ -92,6 +92,7 @@ import { skySnapshot, moonAltAz, capSampleAltAz, satAltAz } from './sky-astro.js
 // curves + the model-kind classifier are pulled in; NEVER adsb-sources or Planner.
 import {
   compressRadiusMm, compressAltitudeMm, flightDisplayAltitudeMm, isEmergency,
+  flightDisplayScale, FLIGHT_SHELL_REACH_MM,
   FLIGHT_LABEL_FIELDS_DEFAULT, FLIGHTS_DEFAULT_RADIUS_NM, sanitizeLabelFields,
   type FlightPoint, type IssNow,
 } from './flights.js';
@@ -146,6 +147,29 @@ const WEATHER_DIM_SKY = new Set<string>([
 ]);
 const WEATHER_WET_SKY = new Set<string>([
   'rainy', 'pouring', 'snowy-rainy', 'hail', 'lightning-rainy',
+]);
+
+// What a 3D pick surfaces. `kind` is the userData tag the raycast walker found
+// on the nearest hit's first tagged ancestor; three-view routes on it. Most
+// kinds resolve a per-floor fixture by `fixtureId`; 'flight' is the outlier —
+// an ADS-B aircraft is not a placed fixture, so it carries `hex` (its ICAO
+// address, also mirrored into fixtureId so the shape stays uniform) and never
+// an entity_id.
+export type FixtureClickKind =
+  | 'light' | 'switch' | 'media' | 'alarm' | 'thermostat' | 'safety' | 'alert'
+  | 'robot' | 'lock' | 'appliance' | 'action' | 'projector' | 'valve' | 'plug'
+  | 'sprinkler' | 'flight';
+export interface FixtureClickInfo {
+  kind: FixtureClickKind;
+  entity_id: string | null;
+  fixtureId: string;
+  hex?: string;          // 'flight' only — the aircraft's ICAO 24-bit address
+}
+// The single source of truth the raycast walker tests against (adding a kind to
+// the union above and forgetting the walker was the old failure mode).
+const FIXTURE_CLICK_KINDS = new Set<string>([
+  'light', 'switch', 'media', 'alarm', 'thermostat', 'safety', 'alert', 'robot',
+  'lock', 'appliance', 'action', 'projector', 'valve', 'plug', 'sprinkler', 'flight',
 ]);
 
 export interface ZoneWorld { vertices: Vec2[]; color: number; occupied: boolean; }
@@ -635,6 +659,27 @@ const FLIGHT_BEACON_MILITARY = 0x2ee56a;
 const FLIGHT_BEACON_LADD = 0xf2f6fb;
 const FLIGHT_BEACON_HZ = 1.2;        // flashes per second
 const FLIGHT_PRIVACY_OPACITY = 0.45; // PIA/LADD courtesy dim (research §4.2)
+// Airframes with enough flank + spine to carry TWO markings (operator broadside,
+// identification along the top). Everything not listed — the GA singles and the
+// helicopter — is a small airframe and keeps the single flank marking.
+const FLIGHT_BIG_FUSELAGE: ReadonlySet<AircraftArchetype> = new Set<AircraftArchetype>([
+  'narrowbody', 'widebody', 'bizjet', 'turboprop', 'twin-prop',
+]);
+// Fuselage lettering truncation. An operator name ("WILMINGTON TRUST CO TRUSTEE")
+// is far longer than a callsign, and the flank plane is length-clamped against
+// the fuselage anyway — so trim before painting rather than shrinking to
+// illegibility. The spine carries only identifiers, which are already short.
+const FLIGHT_FLANK_CHARS = 16;
+const FLIGHT_TOP_CHARS = 10;
+// Size a lettering plane at its texture's OWN aspect, height-first, shrinking
+// BOTH dimensions when the run would overhang the surface. Clamping the width
+// alone (the pre-wave-3 form) horizontally squashed a long operator name.
+function fitTextPlane(aspect: number, hMax: number, wMax: number):
+    { w: number; h: number } {
+  const a = isFinite(aspect) && aspect > 0 ? aspect : 1;
+  const w = hMax * a;
+  return w <= wMax ? { w, h: hMax } : { w: wMax, h: wMax / a };
+}
 const ISS_SHELL_R = 26000;           // inside the 30 m sky dome (the sun-disc radius)
 const ISS_RAMP_RAD = 3 * Math.PI / 180;   // opacity ramp over the first ~3° of altitude
 
@@ -1743,6 +1788,7 @@ export class ThreeDRenderer {
   private _flightsLabelFields: string[] = FLIGHT_LABEL_FIELDS_DEFAULT.slice();
   private _flightsBeacons = true;
   private _flightsPrivacyDim = true;
+  private _flightsBanners = true;         // FlightsConfig.banners (absent = ON)
   private _beaconGlowTex: THREE.CanvasTexture | null = null;   // shared; freed in destroy()
   private _v3flight = new THREE.Vector3();   // scratch — _advanceFlights allocates nothing
   // ISS: one sprite in its OWN camera-recentered subgroup (the _realSkyGroup
@@ -1813,8 +1859,8 @@ export class ThreeDRenderer {
   private _lastAnimT = 0;   // performance.now()/1000 of the previous _animate frame
   private _ZONE_H = 305;  // 1 ft — low outlines that don't wall off the room
   private _OBJ_H = 900;
-  private _onFixtureClick: ((info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'thermostat' | 'safety' | 'alert' | 'robot' | 'lock' | 'appliance' | 'action' | 'projector' | 'valve' | 'plug' | 'sprinkler'; entity_id: string | null; fixtureId: string }) => void) | null = null;
-  private _onFixtureDblClick: ((info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'thermostat' | 'safety' | 'alert' | 'robot' | 'lock' | 'appliance' | 'action' | 'projector' | 'valve' | 'plug' | 'sprinkler'; entity_id: string | null; fixtureId: string }) => void) | null = null;
+  private _onFixtureClick: ((info: FixtureClickInfo) => void) | null = null;
+  private _onFixtureDblClick: ((info: FixtureClickInfo) => void) | null = null;
   // Valetudo tap-to-clean: separate callback (kept OUT of the fixture-click union)
   // so the vac-map raycast stays a low-priority overlay concern.
   private _onVacSegClick: ((info: { robotId: string; segId: string }) => void) | null = null;
@@ -2311,15 +2357,14 @@ export class ThreeDRenderer {
     this._animate();
   }
 
-  onFixtureClick(fn: (info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'thermostat' | 'safety' | 'alert' | 'robot' | 'lock' | 'appliance' | 'action' | 'projector' | 'valve' | 'plug' | 'sprinkler'; entity_id: string | null; fixtureId: string }) => void): void {
+  onFixtureClick(fn: (info: FixtureClickInfo) => void): void {
     this._onFixtureClick = fn;
   }
-  onFixtureDblClick(fn: (info: { kind: 'light' | 'switch' | 'media' | 'alarm' | 'thermostat' | 'safety' | 'alert' | 'robot' | 'lock' | 'appliance' | 'action' | 'projector' | 'valve' | 'plug' | 'sprinkler'; entity_id: string | null; fixtureId: string }) => void): void {
+  onFixtureDblClick(fn: (info: FixtureClickInfo) => void): void {
     this._onFixtureDblClick = fn;
   }
 
-  private _raycastFixture(clientX: number, clientY: number):
-      { kind: 'light' | 'switch' | 'media' | 'alarm' | 'thermostat' | 'safety' | 'alert' | 'robot' | 'lock' | 'appliance' | 'action' | 'projector' | 'valve' | 'plug' | 'sprinkler'; entity_id: string | null; fixtureId: string } | null {
+  private _raycastFixture(clientX: number, clientY: number): FixtureClickInfo | null {
     if (!this._renderer || !this._camera) return null;
     const rect = this._renderer.domElement.getBoundingClientRect();
     const ndc = new THREE.Vector2(
@@ -2362,6 +2407,11 @@ export class ThreeDRenderer {
     // Door lock deadbolts (userData.kind='lock') ride the always-visible door
     // group; the door panel itself carries no clickable tag, so only the bolt hits.
     if (this._doorGroup.visible) roots.push(this._doorGroup);
+    // Live aircraft (roadmap P4 wave 3): every rig's assembly carries
+    // userData.kind='flight' + its hex, so a hit on ANY part — fuselage, wing,
+    // label sprite, towed banner — walks up to the same tag. Layer-hidden
+    // flights aren't click targets, exactly like lights.
+    if (this._flightsGroup.visible) roots.push(this._flightsGroup);
     if (!roots.length) return null;
     const hits = this._raycaster.intersectObjects(roots, true);
     for (const h of hits) {
@@ -2369,8 +2419,13 @@ export class ThreeDRenderer {
       let obj: THREE.Object3D | null = h.object;
       while (obj) {
         const ud = obj.userData;
-        if (ud && (ud.kind === 'light' || ud.kind === 'switch' || ud.kind === 'media' || ud.kind === 'alarm' || ud.kind === 'thermostat' || ud.kind === 'safety' || ud.kind === 'alert' || ud.kind === 'robot' || ud.kind === 'lock' || ud.kind === 'appliance' || ud.kind === 'action' || ud.kind === 'projector' || ud.kind === 'valve' || ud.kind === 'plug' || ud.kind === 'sprinkler')) {
-          return { kind: ud.kind, entity_id: ud.entity_id ?? null, fixtureId: String(ud.fixtureId) };
+        if (ud && FIXTURE_CLICK_KINDS.has(ud.kind)) {
+          const kind = ud.kind as FixtureClickKind;
+          const info: FixtureClickInfo = {
+            kind, entity_id: ud.entity_id ?? null, fixtureId: String(ud.fixtureId),
+          };
+          if (kind === 'flight') info.hex = String(ud.hex ?? ud.fixtureId);
+          return info;
         }
         obj = obj.parent;
       }
@@ -3127,29 +3182,61 @@ export class ThreeDRenderer {
   // and a bigger far plane never pushes the dome out of range.
   //
   // Guarded on the last recorded requirement, so a per-update call is free.
+  //
+  // `orbitMm` is the requirement that may also widen controls.maxDistance —
+  // deliberately SEPARATE from the far-plane requirement (see _recordFrustumReq).
+  // It defaults to `requiredMm`, which is the historical single-source behavior.
   private _frustumRangeMm: number | null = null;
-  private _applyFrustumForRange(requiredMm: number | null): void {
-    const req = requiredMm != null && isFinite(requiredMm) && requiredMm > 0 ? requiredMm : null;
-    if (req === this._frustumRangeMm) return;
+  private _frustumOrbitMm: number | null = null;
+  private _applyFrustumForRange(requiredMm: number | null,
+                                orbitMm: number | null = requiredMm): void {
+    const pos = (v: number | null | undefined) =>
+      v != null && isFinite(v) && v > 0 ? v : null;
+    const req = pos(requiredMm), orbit = pos(orbitMm);
+    if (req === this._frustumRangeMm && orbit === this._frustumOrbitMm) return;
     this._frustumRangeMm = req;
+    this._frustumOrbitMm = orbit;
+    // Let the user pull back far enough to frame the whole extent (see
+    // CAM_MAXDIST_FACTOR) — otherwise the content is reachable but unviewable.
+    if (this._controls) {
+      this._controls.maxDistance = orbit == null ? CAM_MAXDIST_DEFAULT
+        : Math.max(CAM_MAXDIST_DEFAULT, Math.min(CAM_MAXDIST_CEIL, orbit * CAM_MAXDIST_FACTOR));
+    }
     if (req == null) {
       if (this._camera) {
         this._camera.near = CAM_NEAR_DEFAULT;
         this._camera.far = CAM_FAR_DEFAULT;
         this._camera.updateProjectionMatrix();   // NB: never fov/aspect (that is _applyCameraFov's job)
       }
-      if (this._controls) this._controls.maxDistance = CAM_MAXDIST_DEFAULT;
       return;
-    }
-    // Let the user pull back far enough to frame the whole extent (see
-    // CAM_MAXDIST_FACTOR) — otherwise the content is reachable but unviewable.
-    if (this._controls) {
-      this._controls.maxDistance =
-        Math.max(CAM_MAXDIST_DEFAULT, Math.min(CAM_MAXDIST_CEIL, req * CAM_MAXDIST_FACTOR));
     }
     // Apply once immediately (bypassing hysteresis) so the very first frame after
     // a fetch already reaches the new content.
     this._updateDynamicFrustum(true);
+  }
+
+  // ── Frustum reach requirements: PER SOURCE, effective = MAX ────────────────
+  // Two independent features draw content past the stock 150,000 mm far plane:
+  // the neighborhood overlay (tile extent, up to km) and the live-aircraft
+  // display shell (FLIGHT_SHELL_REACH_MM, ≈137 m). Each records its OWN
+  // requirement; the far/near widening uses the larger of the two, and the stock
+  // triple restores EXACTLY (strict ===) only when BOTH are absent — the
+  // load-bearing restore contract, now a union.
+  //
+  // ASYMMETRY (deliberate): only the neighborhood requirement raises
+  // `controls.maxDistance`. Framing a whole neighborhood needs a 260 m+ pull-back
+  // to be usable at all; watching aircraft does not — the shell is centred on the
+  // house and reads fine from the normal orbit range, and stretching the zoom
+  // range whenever a plane flies over would change the feel of the scene for a
+  // transient. Flights therefore widen far/near ONLY.
+  private _frustumReqNbhd: number | null = null;
+  private _frustumReqFlights: number | null = null;
+  private _recordFrustumReq(src: 'nbhd' | 'flights', requiredMm: number | null): void {
+    const v = requiredMm != null && isFinite(requiredMm) && requiredMm > 0 ? requiredMm : null;
+    if (src === 'nbhd') this._frustumReqNbhd = v; else this._frustumReqFlights = v;
+    const n = this._frustumReqNbhd, f = this._frustumReqFlights;
+    const eff = n == null ? f : f == null ? n : Math.max(n, f);
+    this._applyFrustumForRange(eff, n);
   }
 
   // Per-frame far/near tracking for the widened path. ACTIVE ONLY while a reach
@@ -4509,6 +4596,9 @@ export class ThreeDRenderer {
     // opt-in via store.flights.enabled, so an absent flag leaks nothing).
     this._flightsGroup.visible = v.flights !== false;
     this._issGroup.visible = v.flights !== false;
+    // A hidden shell must not hold the camera frustum open (and unhiding it must
+    // re-widen immediately, before the next updateFlights).
+    this._recordFlightsFrustum();
   }
   private _showNameLabels = true;
 
@@ -5766,7 +5856,7 @@ export class ThreeDRenderer {
     if (!this._scene) return;
     this._clearGroup(this._neighborhoodGroup);
     const anyContent = !!data && (data.buildings.length || data.roads.length || data.water.length || data.landuse.length);
-    if (!data || !anyContent) { this._applyFrustumForRange(null); return; }
+    if (!data || !anyContent) { this._recordFrustumReq('nbhd', null); return; }
 
     const afw = this._fw, afd = this._fd;
     const asx = (wx: number) => afw / 2 - wx;
@@ -5790,7 +5880,7 @@ export class ThreeDRenderer {
       for (const r of data.roads) scan(r.points);
       for (const p of data.water) scan(p.points);
       for (const p of data.landuse) scan(p.points);
-      this._applyFrustumForRange(reach > 0 ? reach : null);
+      this._recordFrustumReq('nbhd', reach > 0 ? reach : null);
     }
 
     const opacity = Math.max(0.3, Math.min(1, cfg?.opacity ?? 1));
@@ -12120,7 +12210,8 @@ export class ThreeDRenderer {
   updateFlights(list: FlightPoint[], origin: { lat: number; lon: number } | null,
                 thetaRad: number, radiusNm: number, showLabels: boolean,
                 anchorScene: { x: number; z: number },
-                opts?: { labelFields?: string[]; beacons?: boolean; privacyDim?: boolean }): void {
+                opts?: { labelFields?: string[]; beacons?: boolean; privacyDim?: boolean;
+                         banners?: boolean }): void {
     this._flightsOrigin = origin;
     this._flightsTheta = isFinite(thetaRad) ? thetaRad : 0;
     this._flightsRadius = isFinite(radiusNm) && radiusNm > 0 ? radiusNm : FLIGHTS_DEFAULT_RADIUS_NM;
@@ -12129,6 +12220,7 @@ export class ThreeDRenderer {
       sanitizeLabelFields(opts?.labelFields) ?? FLIGHT_LABEL_FIELDS_DEFAULT.slice();
     this._flightsBeacons = opts?.beacons !== false;
     this._flightsPrivacyDim = opts?.privacyDim !== false;
+    this._flightsBanners = opts?.banners !== false;
     this._flightsGroup.position.set(anchorScene?.x ?? 0, 0, anchorScene?.z ?? 0);
 
     const seen = new Set<string>();
@@ -12145,6 +12237,19 @@ export class ThreeDRenderer {
     for (const rig of this._flightRigs.values()) {
       if (!seen.has(rig.hex)) rig.dying = true;
     }
+    this._flightsHaveContent = seen.size > 0;
+    this._recordFlightsFrustum();
+  }
+
+  // The aircraft shell's camera-frustum reach requirement (see
+  // _recordFrustumReq): the shell's constant far corner while aircraft are
+  // actually on screen, null otherwise. Re-evaluated both here and from
+  // setLayerVisibility, because hiding the Flights layer leaves the rigs alive
+  // but invisible — an invisible shell must not hold the frustum open.
+  private _flightsHaveContent = false;
+  private _recordFlightsFrustum(): void {
+    const live = this._flightsHaveContent && this._flightsGroup.visible;
+    this._recordFrustumReq('flights', live ? FLIGHT_SHELL_REACH_MM : null);
   }
 
   // Fold one poll fix into a live rig: real position + dead-reckoning rates +
@@ -12313,22 +12418,25 @@ export class ThreeDRenderer {
   }
 
   // Label policy: a PISTON single (ga-high / ga-low) with a callsign tows a
-  // broadside banner (the bg tow-plane idiom); everything else gets a
-  // camera-facing plate. The fuselage identifier is painted on BOTH flanks
-  // regardless. Everything repaints only when its content changes.
+  // broadside banner (the bg tow-plane idiom) UNLESS the user turned banners
+  // off; everything else gets a camera-facing plate. Fuselage lettering follows
+  // the airline-livery layout below. Everything repaints only on a content change.
   private _syncFlightLabel(rig: FlightRig, fp: FlightPoint): void {
     const suppress = this._flightIdentitySuppressed(fp);
     const ident = this._flightIdentifier(fp, suppress);
     const piston = rig.archetype === 'ga-high' || rig.archetype === 'ga-low';
-    const wantBanner = this._flightsShowLabels && piston && !!fp.callsign && !suppress;
+    const wantBanner = this._flightsShowLabels && this._flightsBanners
+      && piston && !!fp.callsign && !suppress;
     const wantLabel = this._flightsShowLabels && !wantBanner;
 
-    // Fuselage flanks — the identifier painted onto the model itself.
-    if (rig.idKey !== ident) {
+    // Fuselage lettering — painted onto the model itself, real-livery style.
+    const { flank, top } = this._flightFuselageText(rig.archetype, fp, ident, suppress);
+    const idKey = `${flank}|${top}`;
+    if (rig.idKey !== idKey) {
       this._removeFlightIdPlanes(rig);
-      const planes = this._buildFlightIdPlanes(ident, rig.archetype);
+      const planes = this._buildFlightIdPlanes(flank, top, rig.archetype);
       if (planes) { rig.asm.add(planes); rig.idPlanes = planes; }
-      rig.idKey = ident;
+      rig.idKey = idKey;
     }
 
     if (wantBanner) {
@@ -12360,32 +12468,81 @@ export class ThreeDRenderer {
     } else if (rig.label) this._removeFlightLabel(rig);
   }
 
-  // The identifier on BOTH fuselage flanks, un-mirrored: two FrontSide planes
+  // Fuselage lettering layout, real-livery style (wave 3). A large-fuselage
+  // airframe has room for BOTH markings, so it carries the OPERATOR broadside
+  // on each flank (where an airline paints its name) and the IDENTIFICATION
+  // along the spine, readable from above — which is the only view a top-down /
+  // Sims camera gets of an aircraft passing overhead. Small airframes (GA
+  // singles, helicopters) keep the shipped single-marking layout: identity on
+  // the flanks, nothing on top.
+  //
+  // Two honest fallbacks: an aircraft with NO operator (the registry match is
+  // missing on ~15 % of live traffic) puts its identity back on the flanks
+  // rather than leaving them blank, and a PIA aircraft — whose whole point is
+  // that the hex maps to nothing — shows the hex and NEVER an operator, on any
+  // surface (the identity suppression flows through unchanged).
+  private _flightFuselageText(arch: AircraftArchetype, fp: FlightPoint,
+                              ident: string, suppress: boolean):
+      { flank: string; top: string } {
+    const operator = suppress ? '' : (fp.operator ?? '').trim();
+    if (!FLIGHT_BIG_FUSELAGE.has(arch) || !operator) return { flank: ident, top: '' };
+    return { flank: operator, top: ident };
+  }
+
+  // Fuselage markings. The FLANK pair is un-mirrored: two FrontSide planes
   // sharing ONE geometry + material + CanvasTexture, rotated ±π/2 about Y so
   // each faces outward with its glyphs the right way round (the _buildBanner /
   // message-train flank technique — a single DoubleSide plane shows the far
-  // side mirrored). The shared map is dedup-freed by _disposeSpriteMaps.
-  private _buildFlightIdPlanes(text: string, arch: AircraftArchetype): THREE.Group | null {
-    const t = (text || '').trim();
-    if (!t) return null;
+  // side mirrored). The optional TOP plane lies flat on the spine and needs no
+  // mirror partner (it is only ever seen from above). Shared maps are
+  // dedup-freed by _disposeSpriteMaps.
+  private _buildFlightIdPlanes(flankText: string, topText: string,
+                               arch: AircraftArchetype): THREE.Group | null {
+    const flank = (flankText || '').trim();
+    const top = (topText || '').trim();
+    if (!flank && !top) return null;
     const m = this._flightArchetypeMetrics(arch);
-    const tex = this._makeFlightIdTexture(t);
-    const cv = tex.image as HTMLCanvasElement;
-    const h = m.idH;
-    const len = Math.min(m.fusLen * 0.55, h * (cv.width / cv.height));
-    const geo = new THREE.PlaneGeometry(len, h);
-    const mat = new THREE.MeshBasicMaterial({
-      map: tex, side: THREE.FrontSide, transparent: true, depthWrite: false, fog: false,
-    });
     const grp = new THREE.Group();
-    for (const sx of [-1, 1] as const) {
-      const p = new THREE.Mesh(geo, mat);
-      p.rotation.y = sx * Math.PI / 2;              // +Z(local) → ±X, glyphs unmirrored
-      p.position.set(sx * (m.fusHalfW + 6), m.idY, m.idZ);
-      p.userData.textPlane = true;                  // → _disposeSpriteMaps frees the map
+    if (flank) {
+      const tex = this._makeFlightIdTexture(flank, FLIGHT_FLANK_CHARS);
+      const cv = tex.image as HTMLCanvasElement;
+      const { w: len, h } = fitTextPlane(cv.width / cv.height, m.idH, m.fusLen * 0.55);
+      const geo = new THREE.PlaneGeometry(len, h);
+      const mat = new THREE.MeshBasicMaterial({
+        map: tex, side: THREE.FrontSide, transparent: true, depthWrite: false, fog: false,
+      });
+      for (const sx of [-1, 1] as const) {
+        const p = new THREE.Mesh(geo, mat);
+        p.rotation.y = sx * Math.PI / 2;              // +Z(local) → ±X, glyphs unmirrored
+        p.position.set(sx * (m.fusHalfW + 6), m.idY, m.idZ);
+        p.userData.textPlane = true;                  // → _disposeSpriteMaps frees the map
+        p.userData.outlineSkip = true;
+        p.userData.flightId = true;
+        p.userData.flank = sx < 0 ? 'left' : 'right';
+        grp.add(p);
+      }
+    }
+    if (top) {
+      const tex = this._makeFlightIdTexture(top, FLIGHT_TOP_CHARS);
+      const cv = tex.image as HTMLCanvasElement;
+      // h = ACROSS the spine (world X), len = ALONG it (world Z) — capped to the
+      // silhouette's clear upper run so the lettering never runs under the fin.
+      const { w: len, h } = fitTextPlane(cv.width / cv.height, m.topH, m.topLen);
+      const p = new THREE.Mesh(new THREE.PlaneGeometry(len, h),
+        new THREE.MeshBasicMaterial({
+          map: tex, side: THREE.FrontSide, transparent: true, depthWrite: false, fog: false,
+        }));
+      // Lie flat, face UP, and read nose-to-tail: with YXZ, Ry(−90)·Rx(−90)
+      // sends local +X → world +Z (text advances toward the TAIL) and local +Y
+      // → world +X. Seen from above with the nose to the left, that is upright
+      // left-to-right lettering — the wing-registration convention.
+      p.rotation.order = 'YXZ';
+      p.rotation.set(-Math.PI / 2, -Math.PI / 2, 0);
+      p.position.set(0, m.topY, m.topZ);
+      p.userData.textPlane = true;
       p.userData.outlineSkip = true;
       p.userData.flightId = true;
-      p.userData.flank = sx < 0 ? 'left' : 'right';
+      p.userData.flank = 'top';
       grp.add(p);
     }
     grp.userData.flightIdPlanes = true;
@@ -12402,8 +12559,8 @@ export class ThreeDRenderer {
 
   // Fuselage lettering: transparent ground + a dark halo so it reads on any
   // livery. Flat MeshBasicMaterial downstream — the documented _mat() exemption.
-  private _makeFlightIdTexture(text: string): THREE.CanvasTexture {
-    const txt = text.slice(0, 10) || ' ';
+  private _makeFlightIdTexture(text: string, maxChars = FLIGHT_FLANK_CHARS): THREE.CanvasTexture {
+    const txt = text.slice(0, maxChars) || ' ';
     const cv = document.createElement('canvas');
     const g0 = cv.getContext('2d')!;
     const font = '700 88px system-ui, "Segoe UI", sans-serif';
@@ -12475,6 +12632,17 @@ export class ThreeDRenderer {
     return spr;
   }
 
+  // Make a rig's whole assembly one click target (wave 3). Only the ASSEMBLY is
+  // tagged, never its children: _raycastFixture walks up from the nearest hit,
+  // so a fuselage box, a wingtip, the label sprite and the towed banner all
+  // resolve to the same aircraft with one tag and no per-part bookkeeping. Must
+  // be re-applied by _rebuildFlightModel — a livery/archetype swap replaces asm.
+  private _tagFlightAsm(asm: THREE.Group, hex: string): void {
+    asm.userData.kind = 'flight';
+    asm.userData.hex = hex;
+    asm.userData.fixtureId = hex;
+  }
+
   private _buildFlightRig(fp: FlightPoint): FlightRig {
     const archetype = aircraftArchetype(fp.typeCode, fp.category);
     const dim = this._flightPrivacyDimmed(fp);
@@ -12482,6 +12650,7 @@ export class ThreeDRenderer {
     // YXZ: yaw outermost, pitch applied in the YAWED frame (the humanoid-root
     // convention) — with XYZ a climbing aircraft would bank as it turned.
     built.asm.rotation.order = 'YXZ';
+    this._tagFlightAsm(built.asm, fp.hex);
     this._flightsGroup.add(built.asm);
     const rig: FlightRig = {
       hex: fp.hex, asm: built.asm, kind: legacyModelKind(archetype), archetype,
@@ -12502,6 +12671,7 @@ export class ThreeDRenderer {
     this._flightScenePos(fp.lat, fp.lon, fp.altFt, this._v3flight);
     rig.curX = this._v3flight.x; rig.curY = this._v3flight.y; rig.curZ = this._v3flight.z;
     rig.asm.position.set(rig.curX, rig.curY, rig.curZ);
+    rig.asm.scale.setScalar(this._flightRigScale(rig));
     this._flightRigs.set(fp.hex, rig);
     return rig;
   }
@@ -12525,9 +12695,10 @@ export class ThreeDRenderer {
 
     const built = this._buildAircraftModel(archetype, military, dim);
     built.asm.rotation.order = 'YXZ';
+    this._tagFlightAsm(built.asm, rig.hex);
     built.asm.position.set(rig.curX, rig.curY, rig.curZ);
     built.asm.rotation.y = rig.yaw;
-    built.asm.scale.setScalar(rig.fade);
+    built.asm.scale.setScalar(this._flightRigScale(rig));
     this._flightsGroup.add(built.asm);
 
     rig.asm = built.asm;
@@ -12537,6 +12708,16 @@ export class ThreeDRenderer {
     rig.tailRotor = built.tailRotor; rig.propRate = built.propRate;
     rig.labelKey = ''; rig.bannerKey = ''; rig.idKey = '';
     rig.beaconColor = hadBeacon === 0 ? 0 : -1;   // force _syncFlightBeacon to rebuild
+  }
+
+  // The rig's world scale: the spawn/despawn FADE composed (multiplicatively)
+  // with the distance-compensated display scale, so a dying rim aircraft still
+  // shrinks to nothing from its enlarged size and neither term can overwrite the
+  // other. Read from the EASED display radius (hypot of the current x/z offset),
+  // so the growth glides with the position rather than snapping on each poll.
+  // Zero allocation. Labels + towed banners are children, so they ride along.
+  private _flightRigScale(rig: FlightRig): number {
+    return rig.fade * flightDisplayScale(Math.hypot(rig.curX, rig.curZ));
   }
 
   // Real lat/lon/altitude → SCENE-RELATIVE display offset from the home anchor.
@@ -12578,37 +12759,59 @@ export class ThreeDRenderer {
   // pre-wave-2 toy scale so the fuselage can carry readable text; the RELATIVE
   // sizes follow the real families (widebody largest, GA smallest) — decorative,
   // NOT to scale, exactly like the display shell itself (flights.ts's header).
+  // topY / topZ / topH / topLen place the SPINE marking (wave 3). topY clears the
+  // body's upper skin by a few mm (the coincident-face gotcha — a decal exactly
+  // ON the hull hatches); topH is the band's extent ACROSS the spine; topZ +
+  // topLen bracket the CLEAR run of upper fuselage, which is per-silhouette:
+  // the tail fin's root, the cockpit greenhouse, and (on the turboprop) the HIGH
+  // wing all sit on top of the body and would otherwise swallow the lettering.
+  // Only the large-fuselage archetypes ever use them (FLIGHT_BIG_FUSELAGE), but
+  // every case carries plausible values so a future layout change can't read
+  // undefined.
   private _flightArchetypeMetrics(a: AircraftArchetype): {
     fusLen: number; fusHalfW: number; idY: number; idZ: number; idH: number;
     beaconY: number; beaconZ: number; labelY: number;
+    topY: number; topZ: number; topH: number; topLen: number;
   } {
     switch (a) {
       case 'ga-high':
         return { fusLen: 1700, fusHalfW: 160, idY: 0, idZ: 120, idH: 170,
-                 beaconY: 240, beaconZ: 420, labelY: 950 };
+                 beaconY: 240, beaconZ: 420, labelY: 950,
+                 topY: 158, topZ: 300, topH: 250, topLen: 600 };
       case 'ga-low':
         return { fusLen: 1700, fusHalfW: 150, idY: 0, idZ: 120, idH: 160,
-                 beaconY: 220, beaconZ: 300, labelY: 950 };
+                 beaconY: 220, beaconZ: 300, labelY: 950,
+                 topY: 143, topZ: 300, topH: 235, topLen: 600 };
       case 'twin-prop':
+        // Clear run: aft of the cockpit glass (ends z −140), forward of the fin
+        // root (starts z 660).
         return { fusLen: 2000, fusHalfW: 170, idY: 10, idZ: 140, idH: 180,
-                 beaconY: 250, beaconZ: 400, labelY: 1050 };
+                 beaconY: 250, beaconZ: 400, labelY: 1050,
+                 topY: 168, topZ: 250, topH: 260, topLen: 780 };
       case 'turboprop':
+        // The tightest spine on the board: HIGH wing over z −340…220, fin root
+        // at z 816. The lettering lives in the gap between them.
         return { fusLen: 2400, fusHalfW: 190, idY: 10, idZ: 120, idH: 200,
-                 beaconY: 260, beaconZ: 560, labelY: 1250 };
+                 beaconY: 260, beaconZ: 560, labelY: 1250,
+                 topY: 188, topZ: 510, topH: 250, topLen: 580 };
       case 'widebody':
         return { fusLen: 3200, fusHalfW: 220, idY: 30, idZ: -260, idH: 260,
-                 beaconY: 300, beaconZ: 380, labelY: 1450 };
+                 beaconY: 300, beaconZ: 380, labelY: 1450,
+                 topY: 228, topZ: -150, topH: 340, topLen: 1850 };
       case 'bizjet':
         return { fusLen: 1900, fusHalfW: 145, idY: 10, idZ: -180, idH: 160,
-                 beaconY: 210, beaconZ: 200, labelY: 1000 };
+                 beaconY: 210, beaconZ: 200, labelY: 1000,
+                 topY: 153, topZ: -200, topH: 220, topLen: 1050 };
       case 'heli':
         // fusHalfW clears the 430 mm cabin sphere (the "fuselage" here is the
         // bubble); the beacon rides the fin tip, the real-world position.
         return { fusLen: 1600, fusHalfW: 450, idY: 480, idZ: -320, idH: 250,
-                 beaconY: 920, beaconZ: 1180, labelY: 1300 };
+                 beaconY: 920, beaconZ: 1180, labelY: 1300,
+                 topY: 640, topZ: 500, topH: 220, topLen: 700 };
       default:   // narrowbody
         return { fusLen: 2400, fusHalfW: 170, idY: 20, idZ: -220, idH: 210,
-                 beaconY: 240, beaconZ: 340, labelY: 1200 };
+                 beaconY: 240, beaconZ: 340, labelY: 1200,
+                 topY: 178, topZ: -100, topH: 260, topLen: 1350 };
     }
   }
 
@@ -12636,9 +12839,14 @@ export class ThreeDRenderer {
     const trans = dim
       ? { transparent: true, opacity: FLIGHT_PRIVACY_OPACITY }
       : {};
-    const mk = (color: number) => this._mat({ color, ...trans });
+    // fog: false on EVERY aircraft material — an aircraft is a SKY object on the
+    // compressed display shell, kilometres past the scene's FogExp2 falloff, so
+    // weather fog would erase the whole fleet while the sky dome behind it still
+    // painted. Same exemption the status beacons, label plates and towed banners
+    // already carry; the airframe simply never had it (wave-A finding).
+    const mk = (color: number) => this._mat({ color, fog: false, ...trans });
     const dark = mk(0x33363b);
-    const glass = this._mat({ color: 0x2a3946,
+    const glass = this._mat({ color: 0x2a3946, fog: false,
       transparent: true, opacity: dim ? FLIGHT_PRIVACY_OPACITY * 0.8 : 0.85 });
 
     const box = (w: number, h: number, d: number, m: THREE.Material,
@@ -12825,7 +13033,14 @@ export class ThreeDRenderer {
     // The helicopter's cabin is added first; every fixed-wing build puts its
     // FUSELAGE first (children[0] = the body mesh — the livery test hook).
     // Silhouette shells on the airframe only (minDim keeps blades/pods clean).
-    this._addOutlines(asm, 10, 320);
+    // The shells take a PER-MODEL clone of the outline material with fog off
+    // (the humanoid per-rig-clone precedent): the shared _outlineMaterial is
+    // fogged on purpose for ground geometry, and _disposeSubtree would free it
+    // out from under the rest of the scene if it were reused here.
+    this._addOutlines(new THREE.Group(), 10, 320);      // ensure _outlineMaterial exists
+    const outlineMat = this._outlineMaterial!.clone();
+    outlineMat.fog = false;
+    this._addOutlines(asm, 10, 320, outlineMat);
     return { asm, props, tailRotor, propRate };
   }
 
@@ -12875,7 +13090,7 @@ export class ThreeDRenderer {
         // −cos p), so POSITIVE rotation.x is nose UP → climb takes the + sign.
         rig.asm.rotation.x =
           Math.max(-1, Math.min(1, rig.vertRateFpm / 6000)) * FLIGHT_PITCH_MAX;
-        rig.asm.scale.setScalar(rig.fade);
+        rig.asm.scale.setScalar(this._flightRigScale(rig));
         if (rig.label) (rig.label.material as THREE.SpriteMaterial).opacity = rig.fade;
         if (rig.propRate > 0) {
           rig.spin = (rig.spin + rig.propRate * dt) % (Math.PI * 2);
@@ -19743,6 +19958,8 @@ export class ThreeDRenderer {
     // Aircraft rig bookkeeping (their subtrees + per-rig label/banner textures
     // went with _flightsGroup above); the ISS glyph texture is shared → here only.
     this._flightRigs.clear();
+    this._flightsHaveContent = false;
+    this._recordFlightsFrustum();     // no shell left → drop its frustum requirement
     this._issSprite = null;
     this._issTex?.dispose(); this._issTex = null;
     this._flagpoleRigs = [];

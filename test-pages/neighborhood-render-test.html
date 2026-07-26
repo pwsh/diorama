@@ -353,9 +353,94 @@
   } else {
     ok('frustum: sky dome not built in this harness (no depth interaction)', true, 'skipped');
   }
-  r._camera.updateProjectionMatrix = realUPM;
   r.updateNeighborhood(null, null);
   ok('frustum: final state back to stock', stockOk(camState()), JSON.stringify(camState()));
+
+  // ── 19b. UNION of per-source reach requirements (nbhd ∪ flights) ────────────
+  // The neighborhood overlay is no longer the only feature that draws past the
+  // stock far plane: the live-aircraft display shell reaches ≈137 m from the
+  // home anchor (FLIGHT_SHELL_REACH_MM). Each source records its OWN
+  // requirement; the far/near widening uses the MAX, and the stock triple
+  // restores EXACTLY only when BOTH are absent.
+  //
+  // ASYMMETRY under test: only the NEIGHBORHOOD requirement may raise
+  // controls.maxDistance. Framing a km-scale overlay needs the pull-back;
+  // watching aircraft does not, and a transient overflight must not change the
+  // scene's zoom feel.
+  //
+  // Driven through the recorder seam `_recordFrustumReq` so this page needs no
+  // flights bundle — flights-render-test §4c pins the real updateFlights path
+  // (and that the recorded value IS the shell constant).
+  {
+    zoomTo(dA);
+    const REQ_F = Math.hypot(120000, 66000);        // the flight-shell reach (≈136,953)
+    const REQ_N_BIG = 900000;                       // a ~1 km overlay fetch
+    const REQ_N_SMALL = 60000;                      // widens maxDistance but not far
+    const both = (n, f) => { r._recordFrustumReq('nbhd', n); r._recordFrustumReq('flights', f); };
+    const wantMaxD = n => n == null ? MAXD0 : Math.max(MAXD0, Math.min(MAXD_CEIL, n * MAXD_F));
+
+    both(null, null);
+    ok('union: both sources absent → stock triple exactly', stockOk(camState()), JSON.stringify(camState()));
+
+    // FLIGHTS ONLY — far/near widen, maxDistance must NOT move.
+    both(null, REQ_F);
+    const sF = camState();
+    ok('union: flights-only widens the far plane', sF.far > FAR0 && near(sF.far, wantFar(REQ_F), 1),
+       `far=${sF.far.toFixed(0)} want=${wantFar(REQ_F).toFixed(0)}`);
+    ok('union: flights-only keeps near = far/15000', near(sF.near, sF.far / RATIO, 1e-6), `near=${sF.near}`);
+    ok('union: flights-only leaves maxDistance STOCK (the asymmetry)',
+       sF.maxD === MAXD0, `maxD=${sF.maxD}`);
+    ok('union: flights-only far clears the shell reach from the camera',
+       sF.far >= camDist() + REACH_F * REQ_F + MARGIN - 1e-6, `far=${sF.far}`);
+
+    // NBHD ONLY — unchanged from today (far AND maxDistance widen).
+    both(REQ_N_BIG, null);
+    const sN = camState();
+    ok('union: nbhd-only widens far', near(sN.far, wantFar(REQ_N_BIG), 1), `far=${sN.far.toFixed(0)}`);
+    ok('union: nbhd-only widens maxDistance', near(sN.maxD, wantMaxD(REQ_N_BIG), 1), `maxD=${sN.maxD}`);
+
+    // BOTH, neighborhood larger → far tracks the neighborhood.
+    both(REQ_N_BIG, REQ_F);
+    const sBN = camState();
+    ok('union: both present, nbhd larger → far = max(nbhd, flights)',
+       near(sBN.far, wantFar(REQ_N_BIG), 1), `far=${sBN.far.toFixed(0)}`);
+    ok('union: …maxDistance still from the neighborhood alone',
+       near(sBN.maxD, wantMaxD(REQ_N_BIG), 1), `maxD=${sBN.maxD}`);
+
+    // BOTH, flights larger → far tracks the flights shell, maxDistance still
+    // comes from the (smaller) neighborhood requirement only.
+    both(REQ_N_SMALL, REQ_F);
+    const sBF = camState();
+    ok('union: both present, flights larger → far = max(nbhd, flights)',
+       near(sBF.far, wantFar(REQ_F), 1), `far=${sBF.far.toFixed(0)} want=${wantFar(REQ_F).toFixed(0)}`);
+    ok('union: …and that is strictly wider than the nbhd term alone',
+       wantFar(REQ_F) > wantFar(REQ_N_SMALL),
+       `${wantFar(REQ_F).toFixed(0)} > ${wantFar(REQ_N_SMALL).toFixed(0)}`);
+    ok('union: …maxDistance comes from the nbhd requirement, never the flights one',
+       near(sBF.maxD, wantMaxD(REQ_N_SMALL), 1), `maxD=${sBF.maxD}`);
+
+    // Dropping ONE source must not restore stock while the other is live.
+    both(null, REQ_F);
+    ok('union: dropping nbhd keeps the flights widening', camState().far > FAR0 && !stockOk(camState()),
+       JSON.stringify(camState()));
+    ok('union: …and maxDistance falls back to stock with the nbhd gone',
+       camState().maxD === MAXD0, `maxD=${camState().maxD}`);
+    r._recordFrustumReq('nbhd', REQ_N_BIG);
+    r._recordFrustumReq('flights', null);
+    ok('union: dropping flights keeps the nbhd widening',
+       near(camState().far, wantFar(REQ_N_BIG), 1) && camState().maxD > MAXD0, JSON.stringify(camState()));
+
+    // Only when BOTH are gone does the stock triple come back — strict ===.
+    both(null, null);
+    ok('union: both cleared → stock triple restored EXACTLY (strict ===)',
+       stockOk(camState()), JSON.stringify(camState()));
+    zoomTo(60000); zoomTo(25000);
+    ok('union: …and the dynamic updater is inert afterwards', stockOk(camState()),
+       JSON.stringify(camState()));
+    zoomTo(dA);
+  }
+
+  r._camera.updateProjectionMatrix = realUPM;
 
   // ── report ──────────────────────────────────────────────────────────────────
   const pass = tests.filter(t => t.ok).length, total = tests.length;

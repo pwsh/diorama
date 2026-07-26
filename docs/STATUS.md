@@ -191,6 +191,36 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Flight display + inspection wave** (2026-07-26, user requests;
+  single Opus pass on top of the rescale). Optional tow banners
+  (`FlightsConfig.banners`, Settings checkbox); livery text layout —
+  operator on both flanks + identification on a flat spine plane for
+  big-fuselage archetypes (per-silhouette `topLen` clears fin/cockpit/
+  high-wing; `fitTextPlane` aspect-preserving shrink), small airframes
+  keep flanks-only, PIA withholds operator everywhere; every flight
+  material `fog:false` (sky objects — outline shells use a per-model
+  clone so the shared outline material keeps fogging ground geometry);
+  clickable aircraft — assembly-tagged raycast (`FixtureClickKind`
+  hoisted union) + 2D `flightHitPx`/`hitFlight` low-priority click →
+  `<diorama-flight-modal>` read-only card (real alt/speed/vert-rate/
+  squawk/distance/bearing/fix-age + status chips + PIA anonymization +
+  signal-lost; live-channel repaint; edit+kiosk, view refuses) fed by
+  `Planner.flightByHex`. flights-render 243→288, flights-ui 105→172.
+
+- **Flight shell rescale ×5** (2026-07-26, user-reported: "bunched up
+  in a much smaller area, 7 nm planes directly over the property").
+  rMax 24k→120k mm (7 nm @ radius 15 ⇒ 76.4 m out, golden ≥60 m),
+  yMax 22k→66k (elevation branch governs cruise from ≈7.4 nm;
+  crossover swept 8–60 nm), clearMm/yMin/K unchanged — display ANGLES
+  unchanged (elevation math is scale-invariant). Shell now exceeds the
+  30k sky dome (harmless — depthWrite:false). flightDisplayScale
+  (1+2.2·r/rMax) grows rig scale with distance, composed with fade.
+  Frustum: per-source union `_recordFrustumReq('nbhd'|'flights')`,
+  flights record FLIGHT_SHELL_REACH_MM ≈137k while drawn+visible;
+  only nbhd raises maxDistance (orbit term split). flights 337→358,
+  flights-render 220→243, nbhd-render 78→95. Noted: flight materials
+  lacked fog:false (invisible under weather fog) — wave B fixes.
+
 - **Flight property-clearance floor** (2026-07-25, user-reported
   follow-up to the elevation cap: aircraft <2000 ft rendered near
   ground level). The cap made the old 2500 mm yMinMm floor the COMMON

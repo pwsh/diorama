@@ -13,7 +13,7 @@ import {
   hitCamera, hitCameraRotateHandle, hitProjector, hitValve, hitSprinklerZone, hitFlagpole, hitPlug, hitInfoCard, hitActionButton, hitPresenceZone, hitPresenceZoneVertex,
   hitGroundArea, hitGroundAreaVertex, hitPathVertex,
   hitPool, hitPoolVertex,
-  hitVacuumSegment,
+  hitVacuumSegment, hitFlight,
   hitVoidArea, hitVoidAreaVertex,
   hitRulerEnd, hitRulerBody,
   hitDoor, hitDoorEnd, hitDoorLock, hitWindow, hitWindowEnd, hitFloorEdge,
@@ -409,6 +409,20 @@ function openThermostatModal(canvas: HTMLCanvasElement, id: string): void {
   canvas.dispatchEvent(new CustomEvent('open-thermostat', {
     bubbles: true, composed: true, detail: { id },
   }));
+}
+
+// Live-aircraft detail card (roadmap P4 wave 3). Returns true when the click
+// landed on a dart so the caller stops. Deliberately LOW priority in both click
+// branches: the flight shell overlays the whole plan, so an aircraft must never
+// intercept a click meant for a fixture beneath it. Read-only inspection — it
+// opens in edit AND kiosk (view never reaches here).
+function tryOpenFlightInfo(p: Planner, canvas: HTMLCanvasElement, view: View, mm: Vec2): boolean {
+  const hex = hitFlight(p, view, mm);
+  if (!hex) return false;
+  canvas.dispatchEvent(new CustomEvent('open-flight-info', {
+    bubbles: true, composed: true, detail: { hex },
+  }));
+  return true;
 }
 
 // Tap-to-clean a Valetudo room segment. Low-priority (callers run it AFTER all
@@ -1873,6 +1887,8 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
     if (fu2 && isBinKind(fu2.item.kind)) { p.toggleItem(fu2.item); return; }
     // Sinks → run/stop the water (session-only in kiosk; save() no-ops).
     if (fu2 && isSinkKind(fu2.item.kind)) { p.toggleItem(fu2.item); return; }
+    // Live aircraft → open the detail card (low priority, after all fixtures).
+    if (tryOpenFlightInfo(p, canvas, view, mm)) return;
     // Valetudo room segment → tap-to-clean (lowest priority, after all fixtures).
     if (tryVacuumSegmentClean(p, mm)) return;
     return;
@@ -1938,6 +1954,11 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
     p.emitConfig();
     return;
   }
+
+  // Live aircraft → open the detail card (edit + select). Same low-priority
+  // reasoning as the segment tap below: a draggable fixture's click is swallowed
+  // by dragJustEnded long before it reaches here.
+  if (p.tool === 'select' && tryOpenFlightInfo(p, canvas, view, mm)) return;
 
   // Valetudo room segment → tap-to-clean (edit + select). Low priority: draggable
   // fixtures start a drag on mousedown, so their click is swallowed by

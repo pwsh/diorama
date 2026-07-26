@@ -28,8 +28,13 @@
          T=$(mktemp -d); cp -r src/* "$T"/
          cp test-pages/fake-avatar-store.ts "$T"/avatar-store.ts
          npx esbuild "$T"/planner.ts --bundle --format=esm --outfile=<harness>/planner.mod.js
-       # 2D flight drawing (pure/no-three):
-         npx esbuild src/canvas-render.ts --bundle --format=esm --outfile=<harness>/canvas-render.mod.js
+       # 2D flight drawing + hit-testing + click routing. ONE bundle so all three
+       # modules share module state — flightHitPx is populated by drawAll and read
+       # by hitFlight, which a second bundle would silently duplicate:
+         T=$(mktemp -d); cp -r src/* "$T"/
+         cp test-pages/fake-avatar-store.ts "$T"/avatar-store.ts
+         printf "export { drawAll, flightBeaconColor, flightLabelLines, flightFieldText, FLIGHT_BEACON_COLORS, flightHitPx } from './canvas-render.js';\nexport { hitFlight } from './canvas-hit.js';\nexport { onCanvasClick } from './canvas-interact.js';\n" > "$T"/flights2d-entry.ts
+         npx esbuild "$T"/flights2d-entry.ts --bundle --format=esm --outfile=<harness>/canvas-render.mod.js
        # the REAL settings drawer (Lit, light DOM) + its own Planner export —
        # the sensor-focus recipe: copy tsconfig.json into the temp src dir (else
        # esbuild leaves raw decorators), alias lit, and DEFINE the build tag:
@@ -398,6 +403,25 @@
       p.setFlights(f => { f.beacons = true; f.privacyDim = true; f.labelFields = undefined; });
       eq('beacons back on', p.store.flights.beacons, true);
       eq('labelFields cleared', p.store.flights.labelFields, undefined);
+      // Tow banners (wave 3): opt-OUT, so absent must read as ON everywhere.
+      eq('banners absent by default', p.store.flights.banners, undefined);
+      p.setFlights(f => { f.banners = false; });
+      eq('banners:false round-trips', p.store.flights.banners, false);
+      p.setFlights(f => { f.banners = true; });
+      eq('banners:true round-trips', p.store.flights.banners, true);
+      p.setFlights(f => { f.banners = undefined; });
+      eq('banners clears back to the default', p.store.flights.banners, undefined);
+
+      // ── 10b. flightByHex (what the detail card reads) ──────────────────────
+      section('flightByHex lookup');
+      p.flightsNow = [ac('a0b1c2', 'UAL9', 9000, 3), ac('d3e4f5', 'DAL1', 30000, 12)];
+      eq('flightByHex finds an aircraft', p.flightByHex('d3e4f5')?.callsign, 'DAL1');
+      eq('flightByHex is case-insensitive', p.flightByHex('D3E4F5')?.callsign, 'DAL1');
+      eq('flightByHex misses cleanly', p.flightByHex('zzzzzz'), null);
+      eq('flightByHex tolerates null', p.flightByHex(null), null);
+      p.flightsNow = null;
+      eq('flightByHex with no feed at all', p.flightByHex('a0b1c2'), null);
+      p.flightsNow = [];
 
       // ── 11. 2D drawing (canvas-render) ────────────────────────────────────
       section('2D beacons / privacy dim / label fields');
@@ -532,6 +556,81 @@
         rec.alphas.includes(0.45) && rec.strokes.includes(CR.FLIGHT_BEACON_COLORS.ladd));
       p.flightsNow = [];
 
+      // ── 11b. 2D pick: hitFlight + click routing ────────────────────────────
+      // hitFlight reads the positions drawAll published LAST FRAME (world anchor
+      // + screen-px radius), so every case here draws first, then picks.
+      section('2D flight pick + click routing');
+      p.store.flights = { enabled: true, source: 'cloud', iss: false };
+      const PICKED = fpOf({ hex: 'pik001', callsign: 'SWA55', lat: 40.05, lon: -75.05 });
+      p.flightsNow = [PICKED];
+      draw2d();
+      const pickT = CR.flightHitPx.get('pik001');
+      ok('drawAll publishes a pick target per aircraft', !!pickT
+         && isFinite(pickT.x) && isFinite(pickT.y) && pickT.rPx > 0,
+         JSON.stringify(pickT));
+      eq('a click on the dart resolves the aircraft',
+         CR.hitFlight(p, view, { x: pickT.x, y: pickT.y }), 'pik001');
+      eq('a click just off the dart still resolves (touch margin)',
+         CR.hitFlight(p, view, { x: pickT.x + 300, y: pickT.y }), 'pik001');
+      eq('a click far away resolves nothing',
+         CR.hitFlight(p, view, { x: pickT.x + 90000, y: pickT.y }), null);
+      // Nearest dart wins when two overlap in the pick radius.
+      p.flightsNow = [PICKED, fpOf({ hex: 'pik002', callsign: 'AAL2',
+        lat: 40.0505, lon: -75.0505 })];
+      draw2d();
+      const pickT2 = CR.flightHitPx.get('pik002');
+      eq('the NEAREST dart wins an overlap',
+         CR.hitFlight(p, view, { x: pickT2.x, y: pickT2.y }), 'pik002');
+      p.flightsNow = [PICKED];
+      // Hiding the layer empties the map — a hidden aircraft is untappable.
+      p.store.layers2d = { flights: false };
+      draw2d();
+      eq('a hidden Flights layer clears the pick map', CR.flightHitPx.size, 0);
+      eq('…so nothing is pickable', CR.hitFlight(p, view, { x: pickT.x, y: pickT.y }), null);
+      p.store.layers2d = {};
+      draw2d();
+      eq('showing the layer again restores the pick',
+         CR.hitFlight(p, view, { x: pickT.x, y: pickT.y }), 'pik001');
+      // Feature disabled → no pick even with a stale map.
+      p.store.flights = { enabled: false, source: 'cloud' };
+      eq('flights disabled → no pick',
+         CR.hitFlight(p, view, { x: pickT.x, y: pickT.y }), null);
+      p.store.flights = { enabled: true, source: 'cloud', iss: false };
+      draw2d();
+
+      // Click routing through the REAL onCanvasClick. The stub rect makes
+      // pxToMm's client→world mapping exact (dpr 1 in the headless harness).
+      const clickCanvas = document.createElement('canvas');
+      clickCanvas.getBoundingClientRect = () => ({ left: 0, top: 0, width: 900, height: 600 });
+      const opened = [];
+      clickCanvas.addEventListener('open-flight-info', e => opened.push(e.detail.hex));
+      const dpr1 = window.devicePixelRatio || 1;
+      const clickAt = (mm) => {
+        opened.length = 0;
+        p.dragJustEnded = false;
+        CR.onCanvasClick(p, clickCanvas, view, {
+          clientX: (mm.x * view.scale + view.ox) / dpr1,
+          clientY: (view.oy - mm.y * view.scale) / dpr1,
+        });
+        return opened.slice();
+      };
+      p.uiMode = 'edit'; p.tool = 'select';
+      eq('edit + select: clicking a dart opens the card',
+         clickAt(pickT).join(), 'pik001');
+      eq('edit: clicking empty sky opens nothing',
+         clickAt({ x: pickT.x + 90000, y: pickT.y }).length, 0);
+      p.uiMode = 'kiosk';
+      eq('kiosk: clicking a dart opens the card', clickAt(pickT).join(), 'pik001');
+      p.uiMode = 'view';
+      eq('view mode refuses (no interaction at all)', clickAt(pickT).length, 0);
+      p.uiMode = 'edit';
+      // A non-select tool is placing something — the dart must not steal it.
+      p.tool = 'motion';
+      eq('a placement tool is not hijacked by a dart', clickAt(pickT).length, 0);
+      p.tool = 'select';
+      p.flightsNow = [];
+      p.store.layers2d = {};
+
       // ── 12. Settings ▸ Integrations — the flights block ────────────────────
       section('Settings drawer (flights block)');
       const UI = await import('./flightsui.mod.js' + V);
@@ -568,6 +667,16 @@
       await flip(cbFor('Status beacons'), true);
       eq('re-checking beacons writes the store', p2.store.flights.beacons, true);
 
+      // Tow banners (wave 3) — an opt-OUT nested under the labels master.
+      const bannersCb = cbFor('Tow banners (small planes)');
+      ok('“Tow banners (small planes)” checkbox rendered', !!bannersCb);
+      eq('banners checkbox defaults ON', bannersCb && bannersCb.checked, true);
+      await flip(bannersCb, false);
+      eq('unchecking banners writes the store', p2.store.flights.banners, false);
+      eq('…and the checkbox reflects it', cbFor('Tow banners (small planes)').checked, false);
+      await flip(cbFor('Tow banners (small planes)'), true);
+      eq('re-checking banners writes the store', p2.store.flights.banners, true);
+
       const FIELD_LABELS = ['Callsign', 'Registration', 'Type', 'Operator', 'Altitude',
                             'Speed', 'Climb/descend', 'Squawk', 'Distance'];
       const fieldCbs = FIELD_LABELS.map(t => cbFor(t));
@@ -592,7 +701,134 @@
       eq('labels off hides the label-field grid', cbFor('Registration'), null);
       await flip(cbFor('Callsign labels'), true);
       ok('labels back on restores the grid', !!cbFor('Registration'));
+      ok('labels back on restores the banner toggle', !!cbFor('Tow banners (small planes)'));
       drawer.remove();
+
+      // ── 13. Flight detail card (diorama-flight-modal) ──────────────────────
+      section('Flight detail card');
+      p2.store.weather = { source: 'openmeteo', lat: 40, lon: -75 };
+      p2.store.flights = { enabled: true, source: 'cloud', iss: false };
+      const mkFp = o => ({
+        hex: 'ab1234', callsign: null, lat: 40, lon: -75, altFt: 10000, gsKt: null,
+        trackDeg: null, vertRateFpm: null, category: null, seenPosS: null, military: false,
+        reg: null, typeCode: null, typeDesc: null, operator: null, emergency: null,
+        squawk: null, interesting: false, pia: false, ladd: false, ...o,
+      });
+      const card = document.createElement('diorama-flight-modal');
+      card.planner = p2;
+      document.getElementById('mount').appendChild(card);
+      const cardText = async () => { await card.updateComplete; await sleep(4);
+                                     return card.textContent.replace(/\s+/g, ' ').trim(); };
+      const has = (t, sub) => t.includes(sub);
+
+      const FULL = mkFp({
+        hex: 'a1b2c3', callsign: 'AAL266', reg: 'N454AL', typeCode: 'B38M',
+        typeDesc: 'BOEING 737 MAX 8', operator: 'AMERICAN AIRLINES INC',
+        category: 'A3', altFt: 12340, gsKt: 322, trackDeg: 275, vertRateFpm: 1800,
+        squawk: '1200', seenPosS: 3, lat: 40.2, lon: -75.0,
+      });
+      p2.flightsNow = [FULL];
+      card.show('a1b2c3');
+      let t = await cardText();
+      ok('card renders the callsign as the headline', has(t, 'AAL266'), t.slice(0, 80));
+      ok('card shows the ICAO hex', has(t, 'A1B2C3'));
+      ok('card shows the registration', has(t, 'N454AL'));
+      ok('card shows the operator', has(t, 'AMERICAN AIRLINES INC'));
+      ok('card shows the type code + long description',
+         has(t, 'B38M') && has(t, 'BOEING 737 MAX 8'));
+      ok('card shows the resolved archetype + ADS-B category',
+         has(t, 'narrowbody airliner') && has(t, 'category A3'), t.slice(0, 200));
+      ok('card shows the REAL altitude in ft', has(t, '12,340 ft'), t.slice(0, 200));
+      ok('card shows a climb arrow', has(t, '↑'));
+      ok('card shows ground speed in kt', has(t, '322 kt'));
+      ok('card shows the vertical rate in fpm', has(t, '+1,800 fpm'));
+      ok('card shows the track + compass point', has(t, '275°') && has(t, 'W'));
+      ok('card shows the squawk', has(t, '1200'));
+      ok('card shows distance + bearing from home',
+         /\d+\.\d nm N/.test(t), t.slice(0, 300));
+      ok('card shows the fix age', has(t, '3 s ago'));
+      ok('card is honest about the compressed shell',
+         has(t, 'true in bearing, not to scale'));
+      ok('an unflagged aircraft shows no status chips',
+         !has(t, 'MILITARY') && !has(t, 'EMERGENCY') && !has(t, 'LADD'));
+      // A descending aircraft flips the arrow.
+      p2.flightsNow = [{ ...FULL, vertRateFpm: -1400 }];
+      p2.dispatchEvent(new CustomEvent('live'));
+      t = await cardText();
+      ok('the card refreshes on the LIVE channel (descent arrow)',
+         has(t, '↓') && has(t, '-1,400 fpm'), t.slice(0, 200));
+
+      // Status flags.
+      p2.flightsNow = [{ ...FULL, military: true, interesting: true, ladd: true,
+                         emergency: 'lifeguard', squawk: '7700' }];
+      p2.dispatchEvent(new CustomEvent('live'));
+      t = await cardText();
+      ok('card chips EMERGENCY with the reported string',
+         has(t, 'EMERGENCY') && has(t, 'LIFEGUARD'), t.slice(0, 220));
+      ok('card chips MILITARY', has(t, 'MILITARY'));
+      ok('card chips INTERESTING', has(t, 'INTERESTING'));
+      ok('card chips LADD', has(t, 'LADD'));
+      ok('LADD does NOT anonymize (registration + operator kept)',
+         has(t, 'N454AL') && has(t, 'AMERICAN AIRLINES INC'));
+
+      // PIA anonymization.
+      const PIAFP = mkFp({ hex: 'ff9911', callsign: 'SECRET1', reg: 'N1PIA',
+        typeCode: 'B738', typeDesc: 'BOEING 737-800', operator: 'A VERY PRIVATE LLC',
+        category: 'A3', pia: true, altFt: 33000 });
+      p2.flightsNow = [PIAFP];
+      card.show('ff9911');
+      t = await cardText();
+      ok('PIA card shows the hex as the identity', has(t, 'FF9911'), t.slice(0, 80));
+      ok('PIA card withholds the callsign', !has(t, 'SECRET1'), t.slice(0, 200));
+      ok('PIA card withholds the registration', !has(t, 'N1PIA'));
+      ok('PIA card withholds the operator', !has(t, 'A VERY PRIVATE LLC'));
+      ok('PIA card keeps type + category (not identifying)',
+         has(t, 'B738') && has(t, 'category A3'));
+      ok('PIA card explains itself', has(t, 'anonymized (PIA)'), t.slice(0, 260));
+      ok('PIA card still chips PIA', has(t, 'PIA'));
+      // privacyDim off → the courtesy is the user's call.
+      p2.store.flights = { enabled: true, source: 'cloud', iss: false, privacyDim: false };
+      p2.dispatchEvent(new CustomEvent('live'));
+      t = await cardText();
+      ok('privacyDim:false shows the PIA identity in full',
+         has(t, 'SECRET1') && has(t, 'N1PIA') && !has(t, 'anonymized (PIA)'),
+         t.slice(0, 200));
+      p2.store.flights = { enabled: true, source: 'cloud', iss: false };
+
+      // Signal lost: the aircraft leaves the feed while the card is open.
+      p2.flightsNow = [FULL];
+      card.show('a1b2c3');
+      await cardText();
+      p2.flightsNow = [];
+      p2.dispatchEvent(new CustomEvent('live'));
+      t = await cardText();
+      ok('an aircraft leaving the feed shows "signal lost"',
+         has(t, 'Signal lost'), t.slice(0, 160));
+      ok('…and keeps the last received data', has(t, 'AAL266') && has(t, '12,340 ft'));
+      p2.flightsNow = null;
+      p2.dispatchEvent(new CustomEvent('live'));
+      t = await cardText();
+      ok('a null feed does not crash the open card', has(t, 'AAL266'));
+
+      // Sparse aircraft: nothing invented for missing fields.
+      p2.flightsNow = [mkFp({ hex: 'bare01', altFt: 5000 })];
+      card.show('bare01');
+      t = await cardText();
+      ok('a bare aircraft falls back to its hex', has(t, 'BARE01'));
+      ok('missing fields are omitted, not blank-labelled',
+         !has(t, 'Registration') && !has(t, 'Operator') && !has(t, 'Squawk')
+         && !has(t, 'Ground speed'), t.slice(0, 260));
+      ok('altitude still renders', has(t, '5,000 ft'));
+
+      // Never opened / closed → renders nothing.
+      card.open = false;
+      t = await cardText();
+      eq('a closed card renders nothing', t, '');
+      // Unknown hex with no prior data → nothing (never throws).
+      card.show('nosuch');
+      t = await cardText();
+      eq('an unknown hex renders nothing', t, '');
+      card.remove();
 
     } catch (err) {
       ok('Planner section ran without throwing', false, String((err && err.stack) || err));

@@ -325,8 +325,11 @@ export function drawAll(ctx: CanvasRenderingContext2D, p: Planner, view: View,
   // Geo landmark pins + GPS device pins + geo_location event pins (all ride the
   // `geo` layer).
   if (on(L.geo)) { drawGeoLandmarks(ctx, p, view); drawRecordedPins(ctx, p, view); drawGpsPins(ctx, p, view); drawGeoEventPins(ctx, p, view); }
-  // Live aircraft (roadmap P4) — display-only darts on the compressed shell,
-  // drawn late (over everything structural) but under the screen-fixed overlays.
+  // Live aircraft (roadmap P4) — darts on the compressed shell, drawn late (over
+  // everything structural) but under the screen-fixed overlays. Clicking one
+  // opens the flight card, so the pick map is rebuilt every frame; clearing it
+  // HERE (outside the layer gate) is what makes a hidden layer untappable.
+  flightHitPx.clear();
   if (on(L.flights)) drawFlights(ctx, p, view);
   drawNorthMarker(ctx, p, view);
   drawDoorbellPulses(ctx, p, view);
@@ -405,6 +408,14 @@ export function flightLabelLines(
   return { top: parts[0], sub: parts.slice(1).join(' · ') };
 }
 
+// Where each aircraft's dart landed last frame, for hit-testing (the
+// envChipHalfPx idiom: a WORLD anchor + a screen-px extent, so the hit test
+// scales with zoom exactly like the glyph does). The anchor is the aircraft's
+// COMPUTED display position rather than a stored fixture x/y — there is no
+// placed object here — which is why it has to be published from the draw pass.
+// Cleared by drawAll every frame, so hiding the layer empties it too.
+export const flightHitPx = new Map<string, { x: number; y: number; rPx: number }>();
+
 function drawFlights(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
   const cfg = p.store.flights;
   if (!cfg?.enabled) return;
@@ -432,7 +443,11 @@ function drawFlights(ctx: CanvasRenderingContext2D, p: Planner, view: View): voi
   ctx.save();
   for (const fp of list) {
     const d = flightDisplayPos(fp, origin.lat, origin.lon, theta, radiusNm);
-    const pt = mmToPx(view, ax + d.planX, ay + d.planY);
+    const wx = ax + d.planX, wy = ay + d.planY;
+    const pt = mmToPx(view, wx, wy);
+    // Publish the pick target: the dart plus a comfortable touch margin (the
+    // glyph itself is only ~9 px, far under a finger).
+    flightHitPx.set(fp.hex, { x: wx, y: wy, rPx: R * 1.8 });
     // Screen rotation: the glyph is authored pointing SCREEN-UP (0,−1). Canvas y
     // is flipped, so a plan track unit (px, py) points at screen (px, −py); a
     // ctx.rotate(a) sends (0,−1) to (sin a, −cos a) ⇒ a = atan2(px, py).

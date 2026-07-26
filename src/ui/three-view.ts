@@ -214,9 +214,19 @@ export class ThreeView extends LitElement {
     this._ro.observe(this._area);
     // Fixture click → toggle whatever entity is bound (uses entity's actual
     // domain so a "switch" fixture bound to a light entity does light.toggle).
-    this._renderer.onFixtureClick(({ kind, entity_id, fixtureId }) => {
+    this._renderer.onFixtureClick(({ kind, entity_id, fixtureId, hex }) => {
       const p = this.planner;
       if (!this.interactive) return;   // view-mode card: no device interaction
+      // Live aircraft → open the flight detail card. Not a placed fixture and
+      // nothing to actuate: the click is pure inspection, so it opens in edit
+      // AND kiosk and refuses only in view (like the alarm/thermostat modals).
+      if (kind === 'flight') {
+        if (p.uiMode === 'view') return;
+        this.dispatchEvent(new CustomEvent('open-flight-info', {
+          bubbles: true, composed: true, detail: { hex: hex ?? fixtureId },
+        }));
+        return;
+      }
       // Alarm keypad → open the control/status modal (view mode: no interaction).
       if (kind === 'alarm') {
         if (p.uiMode === 'view') return;
@@ -348,6 +358,9 @@ export class ThreeView extends LitElement {
       const p = this.planner;
       if (!this.interactive) return;   // view-mode card: no device interaction
       if (p.uiMode === 'view') return;
+      // Aircraft have no dblclick action — the first tap already opened the
+      // detail card, and there is nothing to bind.
+      if (kind === 'flight') return;
       const f = p.floor();
 
       // Bound media furniture (TVs): open the media control modal. Unbound in
@@ -1559,6 +1572,7 @@ export class ThreeView extends LitElement {
                           labelFields: flCfg?.labelFields,
                           beacons: flCfg?.beacons,
                           privacyDim: flCfg?.privacyDim,
+                          banners: flCfg?.banners,
                         });
         r.updateIss(flOrigin && flCfg?.iss !== false ? p.issNow : null, flOrigin, flTheta);
       }

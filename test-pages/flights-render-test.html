@@ -223,6 +223,99 @@
        `got ${got.x.toFixed(2)},${got.y.toFixed(2)},${got.z.toFixed(2)}`);
   }
 
+  // ── 4b. distance-compensated model scale ───────────────────────────────────
+  // The 2026-07 shell rescale (rMaxMm 24,000 → 120,000) put the rim 120 m from
+  // the house, where a fixed-size toy model is a speck. The rig GROUP scale is
+  // flightDisplayScale(displayRadius), COMPOSED multiplicatively with the
+  // spawn/despawn fade — neither term may overwrite the other.
+  {
+    upd([]); step(1, 3);
+    const rOf = rg => Math.hypot(rg.curX, rg.curZ);
+    const wantScale = rg => rg.fade * F.flightDisplayScale(rOf(rg));
+    // Two aircraft, one close in, one far enough out to sit near the rim.
+    const NEARBY = FP({ hex: 'sn', lat: OLAT + 0.005, lon: OLON, altFt: 4000 });
+    const RIMMED = FP({ hex: 'sf', lat: OLAT + 3.5, lon: OLON, altFt: 35000 });
+    upd([NEARBY, RIMMED]);
+    const rn = rig('sn'), rf = rig('sf');
+    ok('4b: fresh rig scale = fade × flightDisplayScale(r) (near)',
+       Math.abs(rn.asm.scale.x - wantScale(rn)) < 1e-9,
+       `scale=${rn.asm.scale.x.toFixed(4)} want=${wantScale(rn).toFixed(4)}`);
+    ok('4b: fresh rig scale = fade × flightDisplayScale(r) (rim)',
+       Math.abs(rf.asm.scale.x - wantScale(rf)) < 1e-9,
+       `scale=${rf.asm.scale.x.toFixed(4)} want=${wantScale(rf).toFixed(4)}`);
+    ok('4b: a distant rig renders LARGER than a near one',
+       rf.asm.scale.x > rn.asm.scale.x * 1.5,
+       `near ${rn.asm.scale.x.toFixed(2)}× rim ${rf.asm.scale.x.toFixed(2)}×`);
+    ok('4b: a near rig is ~unchanged from the pre-rescale 1× size',
+       rn.asm.scale.x < 1.2, `near=${rn.asm.scale.x.toFixed(3)}×`);
+    ok('4b: scale is uniform on all three axes',
+       rn.asm.scale.x === rn.asm.scale.y && rn.asm.scale.y === rn.asm.scale.z);
+    ok('4b: rim scale stays under the 1+gain ceiling',
+       rf.asm.scale.x <= 1 + F.FLIGHT_SCALE_GAIN + 1e-9, `${rf.asm.scale.x.toFixed(4)}×`);
+    // _advanceFlights keeps the composition every frame.
+    step(0.05, 4);
+    ok('4b: per-frame advance keeps scale = fade × displayScale',
+       Math.abs(rig('sf').asm.scale.x - wantScale(rig('sf'))) < 1e-9);
+    // …and the FADE composes: a dying rim rig shrinks FROM its enlarged size.
+    const rimFull = rig('sf').asm.scale.x;
+    upd([NEARBY]);                                  // 'sf' vanishes → fade out
+    step(0.1, 3);
+    const dyingRim = rig('sf');
+    ok('4b: dying rim rig is mid-fade', dyingRim.fade > 0 && dyingRim.fade < 1,
+       `fade=${dyingRim.fade.toFixed(3)}`);
+    ok('4b: …its scale is the FADED enlarged size (fade composes, not overwrites)',
+       Math.abs(dyingRim.asm.scale.x - wantScale(dyingRim)) < 1e-9
+       && dyingRim.asm.scale.x < rimFull
+       && dyingRim.asm.scale.x > dyingRim.fade + 1e-6,
+       `scale=${dyingRim.asm.scale.x.toFixed(4)} fade=${dyingRim.fade.toFixed(4)}`);
+    upd([]); step(1, 3);
+    ok('4b: board clear after the scale checks', r._flightRigs.size === 0);
+  }
+
+  // ── 4c. camera-frustum reach requirement ───────────────────────────────────
+  // The shell reaches ≈137 m from the home anchor; the stock far plane (150,000)
+  // is measured FROM THE CAMERA, so a rim aircraft on the far side clips at any
+  // real orbit distance. Aircraft therefore join the neighborhood overlay's
+  // dynamic-frustum requirement — but ONLY the far/near half of it: watching
+  // planes must not stretch controls.maxDistance (documented asymmetry).
+  {
+    const NEAR0 = 10, FAR0 = 150000, MAXD0 = 45000;
+    const stock = () => r._camera.near === NEAR0 && r._camera.far === FAR0
+      && r._controls.maxDistance === MAXD0;
+    ok('4c: stock frustum triple with no aircraft', stock(),
+       `${r._camera.near}/${r._camera.far}/${r._controls.maxDistance}`);
+    upd([FP({ hex: 'fr1', lat: OLAT + 0.5, altFt: 20000 })]);
+    ok('4c: aircraft on screen widen the far plane past stock',
+       r._camera.far > FAR0, `far=${r._camera.far.toFixed(0)}`);
+    ok('4c: …near tracks far at the pinned 15000:1 ratio',
+       Math.abs(r._camera.near - r._camera.far / 15000) < 1e-6, `near=${r._camera.near}`);
+    ok('4c: …but maxDistance stays STOCK (flights never stretch the orbit range)',
+       r._controls.maxDistance === MAXD0, `maxD=${r._controls.maxDistance}`);
+    ok('4c: the recorded requirement is the shell reach constant',
+       r._frustumReqFlights === F.FLIGHT_SHELL_REACH_MM, `${r._frustumReqFlights}`);
+    // Hiding the Flights layer must drop the requirement (rigs stay alive).
+    r.setLayerVisibility({ flights: false });
+    ok('4c: hiding the Flights layer restores the stock triple exactly', stock(),
+       `${r._camera.near}/${r._camera.far}/${r._controls.maxDistance}`);
+    ok('4c: …with the rigs still alive (visibility, not teardown)',
+       r._flightRigs.size === 1 && r._frustumReqFlights === null);
+    r.setLayerVisibility({});
+    ok('4c: unhiding re-widens immediately', r._camera.far > FAR0, `far=${r._camera.far.toFixed(0)}`);
+    // An empty list clears it — the stock restore must be EXACT (strict ===).
+    upd([]);
+    ok('4c: empty aircraft list restores the stock triple exactly', stock(),
+       `${r._camera.near}/${r._camera.far}/${r._controls.maxDistance}`);
+    ok('4c: flights requirement cleared', r._frustumReqFlights === null);
+    // Losing the geo origin is the other no-content path.
+    upd([FP({ hex: 'fr2', lat: OLAT + 0.5, altFt: 20000 })]);
+    ok('4c: re-widens on new aircraft', r._camera.far > FAR0);
+    upd([FP({ hex: 'fr2', lat: OLAT + 0.5, altFt: 20000 })], { origin: null });
+    ok('4c: losing the geo origin restores the stock triple', stock(),
+       `${r._camera.near}/${r._camera.far}/${r._controls.maxDistance}`);
+    upd([]); step(1, 3);
+    ok('4c: board clear after the frustum checks', r._flightRigs.size === 0);
+  }
+
   // ── 5. heading ─────────────────────────────────────────────────────────────
   // track 0 (due north), θ=0 → geo unit (e,n)=(0,1) → plan (0,1) → scene velocity
   // (−planX, +planY) = (0,+1): the aircraft flies toward scene +Z.
@@ -527,10 +620,10 @@
      `disposals=${idTex2Disposals}`);
   // A callsign-less aircraft falls back reg → hex.
   upd([FP({ hex: 'idr', callsign: null, reg: 'N9536D', typeCode: 'C72R', category: 'A1' })]);
-  ok('no callsign → registration on the fuselage', rig('idr').idKey === 'N9536D');
+  ok('no callsign → registration on the fuselage', rig('idr').idKey === 'N9536D|');
   upd([]); step(1, 2);
   upd([FP({ hex: 'idh', callsign: null, reg: null, category: 'A3' })]);
-  ok('no callsign + no reg → uppercase hex on the fuselage', rig('idh').idKey === 'IDH');
+  ok('no callsign + no reg → uppercase hex on the fuselage', rig('idh').idKey === 'IDH|');
 
   // ── 14. Status beacons ─────────────────────────────────────────────────────
   upd([]); step(1, 2);
@@ -617,7 +710,7 @@
   ok('LADD aircraft builds dimmed', rig('ladd1').dim === true && bodyMat('ladd1').opacity === 0.45);
   ok('unflagged aircraft is NOT dimmed',
      rig('open1').dim === false && bodyMat('open1').opacity === 1);
-  ok('PIA identity suppressed → hex on the fuselage', rig('pia1').idKey === 'PIA1',
+  ok('PIA identity suppressed → hex on the fuselage', rig('pia1').idKey === 'PIA1|',
      `id=${rig('pia1').idKey}`);
   ok('PIA callsign/reg never reach the label',
      !rig('pia1').labelKey.includes('SECRET1') && !rig('pia1').labelKey.includes('N1PIA'),
@@ -625,7 +718,7 @@
   ok('PIA label carries the privacy badge', rig('pia1').labelKey.includes('🔒'),
      rig('pia1').labelKey);
   ok('LADD keeps its identity (the source sends it anyway)',
-     rig('ladd1').idKey === 'N66168');
+     rig('ladd1').idKey === 'N66168|');
   ok('LADD still beacons white while dimmed', rig('ladd1').beaconColor === 0xf2f6fb);
   ok('a dimmed piston tows NO banner (identity stays off the sky)',
      rig('ladd1').banner !== null);          // LADD identity is NOT suppressed
@@ -638,7 +731,7 @@
   upd([PIA, LADD], { opts: { privacyDim: false } });
   ok('privacyDim:false → PIA not dimmed', rig('pia1').dim === false
      && bodyMat('pia1').opacity === 1);
-  ok('privacyDim:false → PIA identity shown', rig('pia1').idKey === 'SECRET1');
+  ok('privacyDim:false → PIA identity shown', rig('pia1').idKey === 'SECRET1|');
   ok('privacyDim:false → LADD keeps its beacon', rig('ladd1').beaconColor === 0xf2f6fb);
   // Toggling dimming back on rebuilds the model in place (same rig object).
   const piaRef = rig('pia1');
@@ -671,7 +764,7 @@
      withUD(rig('late').asm, 'nacelle', 'rear').length === 2
      && withUD(rig('late').asm, 'tail', 't-tail').length === 1);
   ok('rebuilt model re-attaches its flank identifier',
-     withUD(rig('late').asm, 'flightId').length === 2 && rig('late').idKey === 'SKW1');
+     withUD(rig('late').asm, 'flightId').length === 2 && rig('late').idKey === 'SKW1|');
   ok('rebuilt model re-attaches its label', !!rig('late').label
      && rig('late').label.parent === rig('late').asm);
   ok('one rig per hex after a rebuild', r._flightRigs.size === 1
@@ -730,6 +823,224 @@
   upd([{ ...LF, altFt: 12800 }]);
   ok('a real altitude change repaints the plate',
      rig('lf1').label.material.map !== lfTex);
+  upd([]); step(1, 3);
+
+  // ── 18. Optional tow banners (wave 3 — FlightsConfig.banners) ──────────────
+  // A light piston with a callsign tows a banner by default; the option turns
+  // that off WITHOUT touching the identity (the plate takes over instead).
+  upd([]); step(1, 3);
+  const PIS = FP({ hex: 'ban1', callsign: 'N400XY', typeCode: 'C172', category: 'A1' });
+  upd([PIS]);
+  ok('banners absent (default ON) → a piston with a callsign tows one',
+     !!rig('ban1').banner && rig('ban1').label === null);
+  upd([PIS], { opts: { banners: true } });
+  ok('banners:true tows one too', !!rig('ban1').banner);
+  // Track the banner's shared map so the teardown is provable.
+  const banTex = rig('ban1').banner.children[0].material.map;
+  let banTexDisposals = 0;
+  const banOrig = banTex.dispose.bind(banTex);
+  banTex.dispose = () => { banTexDisposals++; banOrig(); };
+  upd([PIS], { opts: { banners: false } });
+  ok('banners:false tears the live banner down', rig('ban1').banner === null);
+  ok('banners:false frees the banner texture exactly once', banTexDisposals === 1,
+     `disposals=${banTexDisposals}`);
+  ok('banners:false falls back to the label plate', !!rig('ban1').label
+     && rig('ban1').label.parent === rig('ban1').asm);
+  ok('banners:false keeps the fuselage identity', rig('ban1').idKey === 'N400XY|');
+  upd([PIS], { opts: { banners: true } });
+  ok('banners back on rebuilds the banner + drops the plate',
+     !!rig('ban1').banner && rig('ban1').label === null);
+  // The option is orthogonal to showLabels: labels off kills BOTH.
+  upd([PIS], { opts: { banners: true }, showLabels: false });
+  ok('showLabels:false suppresses the banner regardless of the banner option',
+     rig('ban1').banner === null && rig('ban1').label === null);
+  // A jet never towed one, with or without the option.
+  upd([]); step(1, 3);
+  upd([FP({ hex: 'ban2', callsign: 'DAL9', typeCode: 'B738', category: 'A3' })],
+      { opts: { banners: true } });
+  ok('an airliner never tows a banner', rig('ban2').banner === null && !!rig('ban2').label);
+
+  // ── 19. Fuselage text layout: operator on the flanks, ID on the spine ──────
+  upd([]); step(1, 3);
+  const BIG = FP({ hex: 'lay1', callsign: 'AAL266', reg: 'N801AL', typeCode: 'B738',
+                   category: 'A3', operator: 'AMERICAN AIRLINES' });
+  upd([BIG]);
+  const layPlanes = () => withUD(rig('lay1').asm, 'flightId');
+  ok('a large fuselage with an operator carries THREE markings',
+     layPlanes().length === 3, `n=${layPlanes().length}`);
+  ok('two of them are the flanks, one is the spine',
+     layPlanes().filter(p => p.userData.flank === 'left').length === 1
+     && layPlanes().filter(p => p.userData.flank === 'right').length === 1
+     && layPlanes().filter(p => p.userData.flank === 'top').length === 1);
+  ok('operator goes broadside, identification goes on top',
+     rig('lay1').idKey === 'AMERICAN AIRLINES|AAL266', rig('lay1').idKey);
+  const topPl = () => layPlanes().find(p => p.userData.flank === 'top');
+  const flankPl = () => layPlanes().filter(p => p.userData.flank !== 'top');
+  ok('the flank pair still SHARES one material + texture',
+     flankPl()[0].material === flankPl()[1].material);
+  ok('the spine marking has its OWN texture (different content)',
+     topPl().material !== flankPl()[0].material
+     && topPl().material.map !== flankPl()[0].material.map);
+  ok('the spine marking is outline-skipped + map-tracked',
+     topPl().userData.outlineSkip === true && topPl().userData.textPlane === true);
+  ok('the spine marking is FrontSide (0) and unmirrored',
+     topPl().material.side === 0 && topPl().scale.x > 0 && topPl().scale.y > 0);
+  // Geometry: it lies ON TOP of the fuselage, above the body's upper skin.
+  const bodyBox = rig('lay1').asm.children[0].geometry.parameters;
+  ok('the spine marking sits above the fuselage skin',
+     topPl().position.y > bodyBox.height / 2 && topPl().position.y < bodyBox.height / 2 + 40,
+     `y=${topPl().position.y} skin=${bodyBox.height / 2}`);
+  ok('the spine marking is centred on the fuselage axis', topPl().position.x === 0);
+  // Orientation: normal UP, and local +X (the text advance) → world +Z (tail),
+  // so from above with the nose to the left the lettering reads left-to-right.
+  rig('lay1').asm.rotation.y = 0;
+  rig('lay1').asm.updateWorldMatrix(true, true);
+  const topN = topPl().position.clone(); topPl().getWorldDirection(topN);
+  ok('the spine marking faces UP', topN.y > 0.999, `n.y=${topN.y.toFixed(3)}`);
+  const topAdvance = topPl().localToWorld(topN.set(1, 0, 0));
+  const topOrigin = topPl().localToWorld(topN.clone().set(0, 0, 0));
+  const advZ = topAdvance.z - topOrigin.z, advX = topAdvance.x - topOrigin.x;
+  ok('spine text advances toward the TAIL (local +X → world +Z)',
+     advZ > 0.999 && Math.abs(advX) < 1e-6, `d=(${advX.toFixed(3)},${advZ.toFixed(3)})`);
+  const topUp = topPl().localToWorld(topN.clone().set(0, 1, 0));
+  ok('spine glyph "up" lies across the fuselage (local +Y → world +X)',
+     (topUp.x - topOrigin.x) > 0.999, `dx=${(topUp.x - topOrigin.x).toFixed(3)}`);
+  // Fallback: no operator → identification back on the flanks, no spine plane.
+  upd([{ ...BIG, operator: null }]);
+  ok('a large fuselage with NO operator keeps its ID on the flanks',
+     layPlanes().length === 2 && rig('lay1').idKey === 'AAL266|', rig('lay1').idKey);
+  ok('…and grows no spine marking',
+     layPlanes().every(p => p.userData.flank !== 'top'));
+  // Small airframes: identification only, whatever the registry says.
+  upd([]); step(1, 3);
+  for (const [hex, type, cat, what] of [
+        ['sm1', 'C172', 'A1', 'ga-high'], ['sm2', 'PA28', 'A1', 'ga-low'],
+        ['sm3', 'R44',  'A7', 'heli']]) {
+    upd([FP({ hex, callsign: 'N123AB', typeCode: type, category: cat,
+              operator: 'SOME FLIGHT SCHOOL LLC' })]);
+    const pls = withUD(rig(hex).asm, 'flightId');
+    ok(`${what}: identification on the flanks only`,
+       pls.length === 2 && pls.every(p => p.userData.flank !== 'top')
+       && rig(hex).idKey === 'N123AB|', `${pls.length} / ${rig(hex).idKey}`);
+    upd([]); step(1, 3);
+  }
+  // Big turboprop / twin-prop / bizjet DO take the two-marking layout.
+  for (const [hex, type, cat, what] of [
+        ['bg1x', 'AT76', 'A5', 'turboprop'], ['bg2x', 'BE58', 'A1', 'twin-prop'],
+        ['bg3x', 'LJ45', 'A2', 'bizjet']]) {
+    upd([FP({ hex, callsign: 'ABC123', typeCode: type, category: cat, operator: 'ACME AIR' })]);
+    const pls = withUD(rig(hex).asm, 'flightId');
+    ok(`${what}: operator broadside + ID on the spine`,
+       pls.length === 3 && rig(hex).idKey === 'ACME AIR|ABC123',
+       `${pls.length} / ${rig(hex).idKey}`);
+    upd([]); step(1, 3);
+  }
+  // PIA: hex only, and the operator is withheld on EVERY surface.
+  upd([FP({ hex: 'piaop', callsign: 'SECRET2', reg: 'N2PIA', typeCode: 'B738',
+            category: 'A3', operator: 'A VERY PRIVATE LLC', pia: true })]);
+  ok('a PIA aircraft shows the hex and no operator anywhere',
+     withUD(rig('piaop').asm, 'flightId').length === 2
+     && rig('piaop').idKey === 'PIAOP|', rig('piaop').idKey);
+  // A long operator SHRINKS instead of squashing: the plane stays inside the
+  // fuselage length AND keeps its texture aspect.
+  upd([]); step(1, 3);
+  upd([{ ...BIG, hex: 'lay2', operator: 'WILMINGTON TRUST CO TRUSTEE' }]);
+  const longFl = withUD(rig('lay2').asm, 'flightId')
+    .filter(p => p.userData.flank !== 'top')[0];
+  const longGeo = longFl.geometry.parameters;
+  const longTex = longFl.material.map.image;
+  ok('a long operator name stays within the fuselage',
+     longGeo.width <= 2400 * 0.55 + 1e-6, `w=${longGeo.width}`);
+  near('a long operator keeps its glyph aspect (no horizontal squash)',
+       longGeo.width / longGeo.height, longTex.width / longTex.height, 1e-6);
+  upd([]); step(1, 3);
+
+  // ── 20. Sky objects never fog (wave-A finding) ─────────────────────────────
+  // The compressed shell puts aircraft kilometres out, past any weather
+  // FogExp2 falloff — without fog:false the whole fleet greys out while the sky
+  // dome behind it still paints. Every material on a rig must opt out.
+  upd([FP({ hex: 'fog1', callsign: 'UAL1', typeCode: 'B738', category: 'A3',
+            operator: 'UNITED AIRLINES' })]);
+  const fogged = [];
+  rig('fog1').asm.traverse(o => {
+    const mats = Array.isArray(o.material) ? o.material : (o.material ? [o.material] : []);
+    for (const m of mats) if (m.fog !== false) fogged.push(`${o.type}/${m.type}`);
+  });
+  ok('every material on an aircraft rig has fog disabled', fogged.length === 0,
+     fogged.slice(0, 4).join(', '));
+  ok('…including the inverted-hull outline shells', (() => {
+       const shells = [];
+       rig('fog1').asm.traverse(o => { if (o.userData && o.userData.outline) shells.push(o); });
+       return shells.length > 0 && shells.every(o => o.material.fog === false);
+     })());
+  ok('the outline shells use a per-model CLONE, not the shared material', (() => {
+       const shells = [];
+       rig('fog1').asm.traverse(o => { if (o.userData && o.userData.outline) shells.push(o); });
+       return shells.every(o => o.material !== r._outlineMaterial);
+     })());
+  ok('the SHARED outline material still fogs (ground geometry unaffected)',
+     r._outlineMaterial.fog !== false);
+  // A dimmed (privacy) build takes the same exemption.
+  upd([FP({ hex: 'fog2', callsign: 'X', typeCode: 'C172', category: 'A1', ladd: true })]);
+  const fogged2 = [];
+  rig('fog2').asm.traverse(o => {
+    const mats = Array.isArray(o.material) ? o.material : (o.material ? [o.material] : []);
+    for (const m of mats) if (m.fog !== false) fogged2.push(m.type);
+  });
+  ok('a privacy-dimmed rig is fog-exempt too', fogged2.length === 0, fogged2.join(', '));
+  ok('the towed banner is fog-exempt', (() => {
+       upd([FP({ hex: 'fog3', callsign: 'N9', typeCode: 'C172', category: 'A1' })]);
+       const b = rig('fog3').banner;
+       return !!b && b.children.every(c => c.material.fog === false); })());
+  upd([]); step(1, 3);
+
+  // ── 21. Aircraft are clickable → {kind:'flight', hex} ──────────────────────
+  // Point the camera at a rig and raycast the canvas centre. The tag lives on
+  // the ASSEMBLY, so the walker resolves the same aircraft from any part.
+  upd([FP({ hex: 'clk1', callsign: 'DAL7', typeCode: 'B738', category: 'A3',
+            operator: 'DELTA AIR LINES', lat: OLAT + 0.05, lon: OLON + 0.05 })]);
+  const clk = rig('clk1');
+  ok('the rig assembly carries the flight click tag',
+     clk.asm.userData.kind === 'flight' && clk.asm.userData.hex === 'clk1'
+     && clk.asm.userData.fixtureId === 'clk1');
+  const wp = clk.asm.position.clone(); clk.asm.getWorldPosition(wp);
+  const rect = r._renderer.domElement.getBoundingClientRect();
+  const pickX = rect.left + rect.width / 2, pickY = rect.top + rect.height / 2;
+  const aimAt = (t, dist) => {
+    r.setCameraView([t.x, t.y + dist * 0.15, t.z + dist], [t.x, t.y, t.z]);
+    r._camera.updateMatrixWorld(true);
+    r._scene.updateMatrixWorld(true);
+  };
+  aimAt(wp, 6000);
+  const hitBody = r._raycastFixture(pickX, pickY);
+  ok('a click on the airframe surfaces the flight',
+     !!hitBody && hitBody.kind === 'flight' && hitBody.hex === 'clk1'
+     && hitBody.entity_id === null, JSON.stringify(hitBody));
+  // …and on its camera-facing label plate, which floats above the model.
+  const lp = clk.label.position.clone(); clk.label.getWorldPosition(lp);
+  aimAt(lp, 6000);
+  const hitLabel = r._raycastFixture(pickX, pickY);
+  ok('a click on the label sprite surfaces the same flight',
+     !!hitLabel && hitLabel.kind === 'flight' && hitLabel.hex === 'clk1',
+     JSON.stringify(hitLabel));
+  ok('the label sprite hangs off the tagged assembly (walker reaches it)',
+     clk.label.parent === clk.asm);
+  // Layer-hidden flights are not click targets (the lights precedent).
+  r.setLayerVisibility({ flights: false });
+  aimAt(wp, 6000);
+  ok('a hidden Flights layer makes aircraft untappable',
+     r._raycastFixture(pickX, pickY) === null);
+  r.setLayerVisibility({});
+  aimAt(wp, 6000);
+  ok('showing the layer again restores the pick', (() => {
+       const h = r._raycastFixture(pickX, pickY);
+       return !!h && h.kind === 'flight'; })());
+  // A model rebuild (late registry data) must RE-tag the new assembly.
+  upd([FP({ hex: 'clk1', callsign: 'DAL7', typeCode: 'LJ45', category: 'A2',
+            operator: 'DELTA AIR LINES', lat: OLAT + 0.05, lon: OLON + 0.05 })]);
+  ok('a rebuilt model keeps its click tag',
+     rig('clk1').archetype === 'bizjet' && rig('clk1').asm.userData.kind === 'flight'
+     && rig('clk1').asm.userData.hex === 'clk1');
   upd([]); step(1, 3);
 
   // ── report ─────────────────────────────────────────────────────────────────

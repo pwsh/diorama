@@ -16,7 +16,7 @@ import './compass.js';
 import './toolbar.js';
 import './modals.js';
 import type { AuthScreen } from './auth-screen.js';
-import type { FloorModal, EntityPicker, LightConfig, MediaConfig, AlarmModal, ThermostatModal, SettingsDrawer } from './modals.js';
+import type { FloorModal, EntityPicker, LightConfig, MediaConfig, AlarmModal, ThermostatModal, FlightModal, SettingsDrawer } from './modals.js';
 
 @customElement('diorama-app')
 export class App extends LitElement {
@@ -30,6 +30,7 @@ export class App extends LitElement {
   @query('diorama-media-config') private _mediaConfig?: MediaConfig;
   @query('diorama-alarm-modal') private _alarmModal?: AlarmModal;
   @query('diorama-thermostat-modal') private _thermoModal?: ThermostatModal;
+  @query('diorama-flight-modal') private _flightModal?: FlightModal;
   @query('diorama-settings-drawer') private _settings?: SettingsDrawer;
 
   protected override createRenderRoot() { return this; }
@@ -176,6 +177,14 @@ export class App extends LitElement {
       const { id } = (e as CustomEvent).detail as { id: string };
       if (this._planner?.uiMode === 'view') return;   // view-only: no interaction
       this._thermoModal?.show(id);
+    });
+    // Live aircraft (3D raycast or 2D dart tap) → the read-only detail card.
+    // Opens in edit + kiosk; view mode never dispatches, and this guard makes
+    // that structural rather than incidental (the alarm/thermostat idiom).
+    this.addEventListener('open-flight-info', e => {
+      const { hex } = (e as CustomEvent).detail as { hex: string };
+      if (this._planner?.uiMode === 'view') return;   // view-only: no interaction
+      this._flightModal?.show(hex);
     });
     this.addEventListener('open-entity-picker', e => {
       const { domain, onPick, devices, title } = (e as CustomEvent).detail as
@@ -413,6 +422,7 @@ export class App extends LitElement {
         <diorama-media-config .planner=${p}></diorama-media-config>
         <diorama-alarm-modal .planner=${p}></diorama-alarm-modal>
         <diorama-thermostat-modal .planner=${p}></diorama-thermostat-modal>
+        <diorama-flight-modal .planner=${p}></diorama-flight-modal>
         <diorama-settings-drawer .planner=${p}></diorama-settings-drawer>
       </div>
     `;

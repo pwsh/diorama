@@ -5251,6 +5251,16 @@ export class Planner extends EventTarget {
     return null;
   }
 
+  // One aircraft out of the LIVE feed by ICAO hex — what the flight detail card
+  // reads (opened by a 3D/2D click, kept fresh on the live channel). Case-
+  // insensitive because a click can carry either casing; null once the aircraft
+  // drops out of the feed, which the card renders as "signal lost".
+  flightByHex(hex: string | null | undefined): FlightPoint | null {
+    if (!hex) return null;
+    const h = String(hex).toLowerCase();
+    return (this.flightsNow ?? []).find(fp => fp.hex.toLowerCase() === h) ?? null;
+  }
+
   // Configured search/display radius (nm) and poll cadence (s), clamped.
   private _flightsRadiusNm(): number {
     const r = this.store.flights?.radiusNm;

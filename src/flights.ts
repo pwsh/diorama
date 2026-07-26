@@ -23,9 +23,29 @@
 // The two curves are NOT independent: `flightDisplayPos` caps the compressed
 // altitude at the TRUE elevation angle (`r · alt/dist`), so a distant aircraft
 // hugs the horizon instead of hanging overhead. Before that cap, the altitude
-// band (2,500–22,000 mm) was comparable to the radial shell (24,000 mm), which
-// put a cruise-altitude jet 40–60° up whether it was 2 nm or 30 nm away — every
-// aircraft read as "directly above the property". See `flightDisplayPos`.
+// band was comparable to the radial shell, which put a cruise-altitude jet
+// 40–60° up whether it was 2 nm or 30 nm away — every aircraft read as
+// "directly above the property". See `flightDisplayPos`.
+//
+// ── Shell SIZE: why 120 m and not 24 m (user-reported, 2026-07) ────────────
+// The shell was originally sized to sit inside the 30,000 mm sky dome, back
+// when nothing in the scene rendered beyond the yard. Two later changes made
+// that cramped: (a) the neighborhood overlay draws REAL-scale streets out to
+// kilometres, so a 7 nm airliner parked 15 m from the house read as absurd;
+// (b) the elevation-true altitude cap above correctly flattened distant
+// traffic into a narrow vertical band, removing the vertical spread that had
+// been disguising the horizontal cramming. Everything then read as a crowded
+// shelf hovering over the property. `rMaxMm` is therefore 120,000 — at the
+// default 15 nm search radius a 7 nm aircraft lands ≈76 m out, clearly beyond
+// the property, and `yMaxMm` scales with it so the ELEVATION branch (not the
+// log curve) governs cruise traffic from ≈7.4 nm outward.
+//
+// The shell is now LARGER than the 30,000 mm sky dome, and that is fine: the
+// dome is camera-centered, `depthWrite:false`, `renderOrder −10`, so it writes
+// no depth and paints first — an aircraft outside it simply draws over it and
+// can never be occluded by it. The camera frustum is the real constraint, and
+// aircraft join the neighborhood overlay's dynamic-frustum requirement (see
+// `FLIGHT_SHELL_REACH_MM` + the renderer's `_recordFrustumReq`).
 
 // ── Normalized aircraft ────────────────────────────────────────────────────
 // The field set local dump1090/readsb `aircraft.json` and the cloud
@@ -247,12 +267,14 @@ export function aircraftModelKind(fp: FlightPoint): 'prop' | 'jet' | 'heli' {
 }
 
 // ── Display shell geometry ─────────────────────────────────────────────────
-// rMaxMm sits comfortably inside the 30,000 mm sky dome so aircraft never clip
-// through it; the altitude band is a separate domain with its own curve.
+// The shell EXCEEDS the 30,000 mm sky dome by design (see the header): the dome
+// is camera-centered + depthWrite:false + renderOrder −10, so it can never
+// occlude an aircraft drawn outside it. Reach is a CAMERA FRUSTUM concern, not
+// a dome one — see FLIGHT_SHELL_REACH_MM.
 export const FLIGHT_SHELL = {
-  rMaxMm: 24000,     // horizontal display shell ceiling (asymptote — never reached)
+  rMaxMm: 120000,    // horizontal display shell ceiling (asymptote — never reached)
   yMinMm: 2500,      // altitude-curve band bottom (0 ft anchor — NOT the render floor)
-  yMaxMm: 22000,     // display altitude at altMaxFt and above
+  yMaxMm: 66000,     // display altitude at altMaxFt and above
   altRefFt: 3000,    // log knee — detail is spent on low, visually interesting traffic
   altMaxFt: 45000,   // above this the altitude curve saturates
   // Hard render floor: no aircraft may EVER draw lower than this, whatever the
@@ -260,8 +282,19 @@ export const FLIGHT_SHELL = {
   // The elevation-true cap made this reachable for ALL distant low traffic
   // (approach traffic at 1500–2000 ft was skimming the yard at the old
   // 2500 mm yMinMm floor — user-reported); the clearance floor is the fix.
+  // It does NOT scale with rMaxMm: on the bigger shell the floored elevation
+  // angles simply get shallower, which is exactly the far-off-in-the-sky read.
   clearMm: 6500,
 } as const;
+
+// How far from the shell's own centre (the home anchor) anything may be drawn —
+// the far corner of the (rMaxMm × yMaxMm) shell. The renderer records this as a
+// camera-frustum reach requirement while aircraft are on screen, exactly as the
+// neighborhood overlay records its tile extent; the stock 150,000 mm far plane
+// is measured FROM THE CAMERA, so a rim aircraft on the far side of the shell
+// would otherwise clip whenever the overlay is off. Derived, never configured.
+export const FLIGHT_SHELL_REACH_MM =
+  Math.hypot(FLIGHT_SHELL.rMaxMm, FLIGHT_SHELL.yMaxMm);   // ≈136,953 mm
 
 // Horizontal compression: asymptotic, so a nearer aircraft is always visibly
 // nearer (monotonic) and NOTHING ever reaches rMaxMm. K sets the knee — a
@@ -286,6 +319,26 @@ export function compressAltitudeMm(altFt: number): number {
   const a = Math.max(0, Math.min(altMaxFt, isFinite(altFt) ? altFt : 0));
   const t = Math.log(1 + a / altRefFt) / Math.log(1 + altMaxFt / altRefFt);
   return yMinMm + (yMaxMm - yMinMm) * t;
+}
+
+// ── Distance-compensated model scale ───────────────────────────────────────
+// The toy aircraft models are authored at a fixed size, so on the 120 m shell a
+// rim aircraft is a few pixels of nothing. This grows the rig linearly with its
+// compressed display radius — a decorative legibility aid in exactly the spirit
+// of the shell itself (NOT perspective correction, which would be 1/z and would
+// make near traffic vanish). Monotonic, bounded, and 1 at the origin so nothing
+// nearby changes size vs. today.
+//
+//   scale = 1 + FLIGHT_SCALE_GAIN · (rMm / rMaxMm)      → [1, 1 + gain]
+//
+// The renderer COMPOSES this with the spawn/despawn fade scale (multiplicative),
+// so a dying rim aircraft still shrinks to nothing from its enlarged size.
+export const FLIGHT_SCALE_GAIN = 2.2;
+
+export function flightDisplayScale(rMm: number): number {
+  const r = isFinite(rMm) && rMm > 0 ? rMm : 0;
+  const t = Math.min(1, r / FLIGHT_SHELL.rMaxMm);
+  return 1 + FLIGHT_SCALE_GAIN * t;
 }
 
 const EARTH_R_M = 6371000;   // sphere radius (matches geo.ts)

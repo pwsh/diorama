@@ -13,8 +13,11 @@ import type { Floor, HassState, WeatherConfig, WeatherEffectKey, ScenePreset, Fl
 import { resolveNorth } from '../compass.js';
 import {
   FLIGHT_LABEL_FIELDS, FLIGHT_LABEL_FIELDS_DEFAULT, sanitizeLabelFields,
-  FLIGHTS_DEFAULT_RADIUS_NM,
+  FLIGHTS_DEFAULT_RADIUS_NM, flightBearingDistance, isEmergency,
 } from '../flights.js';
+import type { FlightPoint } from '../flights.js';
+import { aircraftArchetype } from '../aircraft-types.js';
+import { compass8 } from '../geo.js';
 
 // ── Floor settings modal ─────────────────────────────────────────────────
 @customElement('diorama-floor-modal')
@@ -859,6 +862,172 @@ export class ThermostatModal extends LitElement {
   }
 }
 
+// ── Live aircraft detail card (roadmap P4 wave 3) ────────────────────────
+// Everything the ADS-B feed knows about ONE aircraft, at a readable size — the
+// 3D shell's plate and the 2D dart label only ever carry two lines, and the
+// display shell itself is deliberately not to scale, so this card is where the
+// HONEST numbers live (real altitude, real distance, real fix age).
+//
+// Read-only by nature: an aircraft is not a device and there is nothing to
+// actuate, so there are no controls and no service calls. Opened by a 3D
+// raycast or a 2D dart tap in edit AND kiosk (view never dispatches).
+//
+// Freshness: aircraft are LIVE-path (a poll bumps flightsRev without an
+// emitConfig), so the card subscribes to BOTH planner channels while open —
+// the live one is what actually repaints it each poll. An aircraft that leaves
+// the feed is NOT an error: the last frame is kept and captioned "signal lost"
+// (a plane flying out of range mid-read is the normal case).
+const FLIGHT_ARCHETYPE_LABEL: Record<string, string> = {
+  'ga-high': 'light single (high wing)',
+  'ga-low': 'light single (low wing)',
+  'twin-prop': 'light twin (piston)',
+  turboprop: 'regional turboprop',
+  narrowbody: 'narrowbody airliner',
+  widebody: 'widebody airliner',
+  bizjet: 'business / regional jet',
+  heli: 'helicopter',
+};
+
+@customElement('diorama-flight-modal')
+export class FlightModal extends LitElement {
+  @property({ attribute: false }) planner!: Planner;
+  @state() open = false;
+  @state() private _hex = '';
+  // Last non-null fix, so an aircraft dropping out of the feed keeps its data.
+  private _last: FlightPoint | null = null;
+
+  protected override createRenderRoot() { return this; }
+
+  override connectedCallback(): void {
+    super.connectedCallback();
+    this.planner.addEventListener('config', this._tick);
+    this.planner.addEventListener('live', this._tick);
+  }
+  override disconnectedCallback(): void {
+    super.disconnectedCallback();
+    this.planner.removeEventListener('config', this._tick);
+    this.planner.removeEventListener('live', this._tick);
+  }
+  private _tick = () => { if (this.open) this.requestUpdate(); };
+
+  show(hex: string): void {
+    this._hex = String(hex ?? '').toLowerCase();
+    this._last = this.planner.flightByHex(this._hex);
+    this.open = true;
+  }
+
+  private _row(label: string, value: unknown, dim = false) {
+    if (value === null || value === undefined || value === '') return nothing;
+    return html`
+      <div style="display:flex;gap:12px;align-items:baseline;padding:5px 0;border-bottom:1px solid var(--border)">
+        <span style="flex:0 0 108px;font-size:11px;color:var(--text-dim);text-transform:uppercase;
+                     letter-spacing:0.04em">${label}</span>
+        <span style="flex:1;font-size:14px;color:${dim ? 'var(--text-dim)' : 'var(--text)'};
+                     word-break:break-word">${value}</span>
+      </div>`;
+  }
+
+  private _chip(text: string, color: string) {
+    return html`<span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:10px;
+                             font-weight:700;letter-spacing:0.06em;color:${color};
+                             border:1px solid ${color};background:${color}1f">${text}</span>`;
+  }
+
+  override render() {
+    if (!this.open) return nothing;
+    const p = this.planner;
+    const live = p.flightByHex(this._hex);
+    if (live) this._last = live;
+    const fp = this._last;
+    if (!fp) return nothing;
+    const lost = !live;
+
+    // PIA is the one FAA privacy program whose entire point is that the hex maps
+    // to nothing — honor it here exactly as the 3D lettering does (the courtesy
+    // is gated by the same `privacyDim` opt-out).
+    const privacyDim = p.store.flights?.privacyDim !== false;
+    const anon = privacyDim && fp.pia === true;
+    const arch = aircraftArchetype(fp.typeCode, fp.category);
+    const ident = anon ? fp.hex.toUpperCase()
+      : ((fp.callsign ?? '').trim() || (fp.reg ?? '').trim() || fp.hex.toUpperCase());
+
+    const vr = fp.vertRateFpm ?? 0;
+    const trend = vr >= 300 ? '↑' : vr <= -300 ? '↓' : '→';
+    const trendColor = vr >= 300 ? '#69f0ae' : vr <= -300 ? '#ffab40' : 'var(--text-dim)';
+
+    // Distance + TRUE compass bearing from home. Both come off the raw lat/lon
+    // (never the compressed shell radius), so this is the honest geometry.
+    const origin = p.flightsOrigin();
+    let bearingLine: string | null = null;
+    if (origin) {
+      const { bearingRad, distNm } = flightBearingDistance(origin.lat, origin.lon, fp.lat, fp.lon);
+      const deg = bearingRad * 180 / Math.PI;
+      bearingLine = `${distNm.toFixed(1)} nm ${compass8(deg)} (${Math.round(deg)}°)`;
+    } else if (fp.distNm != null) {
+      bearingLine = `${fp.distNm.toFixed(1)} nm`;
+    }
+
+    const flags = [
+      isEmergency(fp) ? this._chip(`EMERGENCY · ${String(fp.emergency).toUpperCase()}`, '#ff5252') : null,
+      fp.military ? this._chip('MILITARY', '#8bc34a') : null,
+      fp.interesting ? this._chip('INTERESTING', '#ffd400') : null,
+      fp.ladd ? this._chip('LADD', '#eceff1') : null,
+      fp.pia ? this._chip('PIA', '#eceff1') : null,
+    ].filter(Boolean);
+
+    return html`
+      <div class="modal-ov" @click=${(e: MouseEvent) => { if (e.target === e.currentTarget) this.open = false; }}>
+        <div class="modal" style="max-width:460px">
+          <h3>Aircraft
+            <button class="close" @click=${() => this.open = false}>✕</button>
+          </h3>
+          <div style="padding:10px 0 12px;border-bottom:1px solid var(--border)">
+            <div style="font-size:30px;font-weight:700;letter-spacing:0.04em;line-height:1.1;
+                        color:${lost ? 'var(--text-dim)' : 'var(--text)'}">${ident}</div>
+            <div style="font-size:11px;color:var(--text-dim);margin-top:3px;font-family:monospace">
+              ${fp.hex.toUpperCase()}</div>
+            ${flags.length ? html`
+              <div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:8px">${flags}</div>` : nothing}
+            ${anon ? html`
+              <div style="font-size:11px;color:var(--text-dim);margin-top:8px;line-height:1.4">
+                Identity anonymized (PIA) — this aircraft is flying under a temporary
+                Privacy ICAO Address, so its registration and operator are withheld.
+              </div>` : nothing}
+            ${lost ? html`
+              <div style="font-size:11px;color:#ffab40;margin-top:8px">
+                Signal lost — showing the last received data.</div>` : nothing}
+          </div>
+          <div style="padding:4px 0">
+            ${anon ? nothing : this._row('Registration', fp.reg)}
+            ${anon ? nothing : this._row('Operator', fp.operator)}
+            ${this._row('Type', fp.typeCode
+              ? html`${fp.typeCode}${fp.typeDesc ? html` <span style="color:var(--text-dim)">— ${fp.typeDesc}</span>` : nothing}`
+              : null)}
+            ${this._row('Model', `${FLIGHT_ARCHETYPE_LABEL[arch] ?? arch}${fp.category ? ` · category ${fp.category}` : ''}`)}
+            ${this._row('Altitude', html`
+              ${Math.round(fp.altFt).toLocaleString('en-US')} ft
+              <span style="color:${trendColor}">${trend}</span>`)}
+            ${this._row('Ground speed', fp.gsKt == null ? null : `${Math.round(fp.gsKt)} kt`)}
+            ${this._row('Vertical rate', fp.vertRateFpm == null ? null
+              : `${vr > 0 ? '+' : ''}${Math.round(vr).toLocaleString('en-US')} fpm`)}
+            ${this._row('Track', fp.trackDeg == null ? null
+              : `${Math.round(fp.trackDeg)}° ${compass8(fp.trackDeg)}`)}
+            ${this._row('Squawk', fp.squawk)}
+            ${this._row('From home', bearingLine)}
+            ${this._row('Fix age', fp.seenPosS == null ? null
+              : `${fp.seenPosS < 1 ? '<1' : Math.round(fp.seenPosS)} s ago`, true)}
+          </div>
+          <div style="font-size:10px;color:var(--text-dim);line-height:1.4;padding-top:8px;
+                      border-top:1px solid var(--border)">
+            Altitude, speed and distance are the real reported values. The 3D sky
+            positions aircraft on a compressed shell — true in bearing, not to scale.
+          </div>
+        </div>
+      </div>
+    `;
+  }
+}
+
 // ── Settings drawer ──────────────────────────────────────────────────────
 type SettingsTab = 'connection' | 'display' | 'weather' | 'avatars' | 'integrations' | 'data';
 
@@ -1112,6 +1281,13 @@ export class SettingsDrawer extends LitElement {
                      @change=${(e: Event) => set(f => { f.showLabels = (e.target as HTMLInputElement).checked; })}>
               <span style="flex:1">Callsign labels</span>
             </label>
+            ${cfg.showLabels !== false ? html`
+              <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text);margin-left:22px"
+                     title="A light piston single with a callsign tows a broadside banner instead of a label plate. Charming over a quiet field, busy over a dense one.">
+                <input type="checkbox" .checked=${cfg.banners !== false}
+                       @change=${(e: Event) => set(f => { f.banners = (e.target as HTMLInputElement).checked; })}>
+                <span style="flex:1">Tow banners (small planes)</span>
+              </label>` : nothing}
             ${cfg.showLabels !== false ? this._flightLabelFieldsRow(cfg, set) : nothing}
             <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text)"
                    title="A flashing bead on the fuselage: red = emergency, yellow = flagged noteworthy by the data source, green = military, white = LADD (an FAA privacy program).">

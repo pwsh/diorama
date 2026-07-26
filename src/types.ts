@@ -1276,6 +1276,10 @@ export interface FlightsConfig {
   minAltFt?: number;                      // optional altitude band filters
   maxAltFt?: number;
   showLabels?: boolean;                   // callsign labels in 3D; default true
+  // Towed banners on small piston singles with a callsign (the bg tow-plane
+  // idiom). Charming but busy over a dense feed — ABSENT = ON (today's
+  // behavior); false swaps those aircraft back onto the ordinary label plate.
+  banners?: boolean;
   // Which lines the label plate carries, in order. Allowed keys (see
   // FLIGHT_LABEL_FIELDS in src/flights.ts, which also owns the sanitizer
   // setFlights runs): 'callsign' | 'reg' | 'type' | 'operator' | 'alt' |
