@@ -1,6 +1,6 @@
 # Project status & pick-up guide
 
-Last updated: 2026-07-27, at **v0.33.0**. This is the single document to
+Last updated: 2026-07-27, at **v0.34.0**. This is the single document to
 read (alongside `CLAUDE.md`) to resume work with full context.
 
 ## Where things stand
@@ -219,6 +219,14 @@ instance.
   phase); message-plane aircraft picker (8 archetypes tow the banner)
   + independent model-size knobs for message rigs (0.5–5×) and ADS-B
   traffic (0.5–4×)).
+  → v0.34.0 signal lights (configurable aircraft glow rules — ordered
+  first-match-wins list, 7 aviation-grounded patterns (solid/flash/
+  strobe twin-pop/rotating-beacon never-dark/fade/alternate/mute) ×
+  ≤2 colors, wildcard + range + flag criteria, regex-injection-safe,
+  emergency always wins; radius-anchored distance mapping — d=radius
+  renders AT the rim near the horizon, ⅔ radius at the midpoint,
+  P = ln2/ln1.5 derived from the user's anchors, radius-invariant;
+  rim aircraft read small (scale gain 2.2→0.8)).
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
