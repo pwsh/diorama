@@ -238,6 +238,23 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Near-field flight compression fix + real draw-radius knob**
+  (2026-07-27, user-reported: "6.5 nm renders in the backyard, 2 nm
+  over the house; draw distance changes nothing"; unreleased). Two
+  reversals, both reasoning-pinned in CLAUDE.md: (1) the radial
+  power law u^P collapsed the near field (6.5 of 15 nm → 24 % of
+  shell, 2 nm → 3 %) — replaced by PIECEWISE-LINEAR through the same
+  two anchors (f(u)=0.75u ≤2/3, 1.5u−0.5 above; anchors bit-exact;
+  near field proportional: 6.5 nm → 97.5 m, 2 nm → 30 m at 300 m
+  shell, regression-pinned ±1 mm; radialExponent GONE, radialMidU/F
+  added; sub-midpoint dispY_elev exactly constant in d; floored
+  parity-grid cells 110→77 = more true-angle traffic). (2) the
+  similarity factor `s` on flightDisplayScale made the draw-radius
+  knob a perceptual no-op (position+size scaling together preserves
+  all apparent angles/sizes) — dropped; scale now shell-invariant at
+  equal u, knob genuinely moves traffic, modelScale is the size
+  lever. flights 561→577; render 393 + ui 271 green.
+
 - **Card scene controls, layers multi-select, bgText layer,
   attribution gating** (2026-07-27, user request; unreleased — on
   main past v0.35.0). (1) Card visual editor: Layers = preset

@@ -304,23 +304,25 @@ never throws), `isEmergency` (enum non-null OR squawk 7500/7600/7700), `FLIGHT_L
 `sanitizeLabelFields` (keys `callsign|reg|type|operator|alt|speed|trend|squawk|dist`, default
 `['callsign','alt']`), `aircraftModelKind` (legacy 3-way — provably `legacyModelKind(aircraftArchetype(null, cat))`),
 `MAX_AIRCRAFT` 50 nearest-first, and the **display-shell compression** (deliberately NOT to scale — the neighborhood honesty precedent): `compressRadiusMm`
-(**radius-anchored power law** `rMax·clamp(d/R, 0, 1.05)^P`, `P = ln2/ln1.5 ≈ 1.7095` in
-`FLIGHT_SHELL.radialExponent`, **rMax 120 000 mm**) — the exponent is DERIVED, not tuned:
-`f(1) = 1` and `f(2/3) = 1/2` are exactly the user's two anchors ("an aircraft at the configured
-radius renders AT the rim; 10 of 15 nm renders half way out"), so the shell is a scale model of
-whatever radius is typed and 10-of-15 reads identically to 20-of-30. The old asymptotic
-`rMax·d/(d+K)` front-loaded distance and never reached the rim (10 nm sat at 71 % of the shell)
-— user-reported as "flights 10 miles away still appear close to the property line". The 1.05
+(**radius-anchored PIECEWISE-LINEAR mapping**: `u = clamp(d/R, 0, 1.05)`, `f(u) = 0.75·u` for
+u ≤ 2/3 else `1.5·u − 0.5`, `r = shellMm·f(u)`) — the two slopes are DERIVED, not tuned, from the
+user's two anchors `f(1) = 1` and `f(2/3) = 1/2` ("an aircraft at the configured radius renders
+AT the rim; 10 of 15 nm renders half way out"), so the shell is a scale model of whatever radius
+is typed and 10-of-15 reads identically to 20-of-30. Both predecessors are user-reported
+failures: the asymptotic `rMax·d/(d+K)` never reached the rim (10 nm sat at 71 %), and the power
+law `u^P` (P = ln2/ln1.5) hit the anchors but COLLAPSED the near field (2 nm of 15 ⇒ 3 % of the
+shell, "rendering over the house") — see the piecewise-linear note further down. The 1.05
 headroom is dead-reckoning slack past the rim (the planner filters d > radiusNm); zero/garbage
 radius falls back to `FLIGHTS_DEFAULT_RADIUS_NM`. Plus
 `compressAltitudeMm` (log 2 500–**66 000** mm band over 0–45 000 ft) — **but the two curves are NOT
 independent**: `flightDisplayAltitudeMm(altFt, distNm, rMm)` (the ONE place display height is
 composed) caps the log curve at the TRUE elevation angle, `dispY = max(clearMm,
-min(compressAltitudeMm(alt), r·altM/distM))`. **The power law flipped the cap's algebra**:
-`dispY_elev` reduces to `rMax·altM·d^(P−1)/(NM_M·R^P)`, which RISES with distance (P > 1) —
-"farther = lower in the sky" is now purely an ANGLE property (angle == true on the elevation
-branch, and TRUE angle falls with distance; dispY is constant while r grows on the curve/floor
-branches) — the tests assert the display elevation ANGLE sweep, never dispY monotonicity. At the
+min(compressAltitudeMm(alt), r·altM/distM))`. Under the piecewise-linear mapping the cap's
+algebra is simple: on the sub-midpoint branch (r ∝ d) `dispY_elev = shell·0.75·altM/(NM_M·R)` —
+EXACTLY constant in d (test-asserted, spread ~2e-11 mm), rising only above the midpoint —
+"farther = lower in the sky" is purely an ANGLE property (angle == true on the elevation branch,
+and TRUE angle falls with distance) — the tests assert the display elevation ANGLE sweep, never
+dispY monotonicity. At the
 default radius the elevation branch (or the clearMm floor) always wins; the log curve governs
 only at small radii (both branches stay test-witnessed via a radius-swept parity grid). A plane
 genuinely overhead still reads overhead; elsewhere the display angle can only be ≤ the true one.
@@ -336,18 +338,23 @@ cap the altitude band was comparable to the radial shell, so every cruise-altitu
 **Shell SIZE (third user report of the arc)**: the original 24 000 mm shell put a 7 nm airliner
 15 m from the house — absurd once the neighborhood overlay drew real-scale streets, and no longer
 disguised once the elevation cap flattened distant traffic into a narrow vertical band ("bunched
-up in a much smaller area"). rMax is 120 000; under the power law 7 nm @ radius 15 ⇒ ~32.7 m
-(27 % of the shell — well beyond the property), 10 nm ⇒ 60 m midpoint, 15 nm ⇒ the 120 m rim
-(golden-pinned at radius 5/15/30/100). NB near-field compression is strong by construction
-(P > 1): sub-1.5 nm traffic sits near home on the clearMm floor — physically consistent with the
-anchors; the lever if it ever reads badly is clearMm or a near-field linear blend. The shell
+up in a much smaller area"). On the base shell 7 nm @ radius 15 ⇒ 42 m (35 %), 10 nm ⇒ 60 m
+midpoint, 15 nm ⇒ the 120 m rim (golden-pinned at radius 5/15/30/100). **The mapping is
+PIECEWISE-LINEAR through the two user anchors** (fifth report of the arc: the earlier power law
+`u^P`, P = ln2/ln1.5, satisfied the anchors but COLLAPSED the near field — 6.5 of 15 nm at 24 %
+of the shell "in the backyard", 2 nm at 3 % "over the house"): `f(u) = 0.75·u` for u ≤ 2/3,
+`1.5·u − 0.5` above, u clamped to `radialHeadroom` 1.05 (f = 1.075 max); anchors
+`radialMidU: 2/3, radialMidF: 0.5` in FLIGHT_SHELL (`radialExponent` is GONE), slopes DERIVED
+from them, f(1) = 1 and f(2/3) = 1/2 bit-exact, near field PROPORTIONAL (f′(0) = 0.75 — 6.5 of
+15 nm ⇒ 32.5 %, 2 nm ⇒ 10 %, regression-pinned ±1 mm), kink at 2/3 imperceptible
+(continuity asserted), radius-invariant in u. The shell
 EXCEEDS the 30 000 mm sky dome — harmless: the dome is camera-centered `depthWrite:false`
-`renderOrder −10` and can never occlude. `flightDisplayScale(rMm) = 1 +
-FLIGHT_SCALE_GAIN(0.8)·min(1, rMm/rMax)` (rim 1.8× — was 2.2/3.2×; a rim aircraft must read
-"fairly small", perspective at 120 m does the work, `modelScale` composes for taste), composed
+`renderOrder −10` and can never occlude. `flightDisplayScale(rMm, shellMm) = 1 +
+FLIGHT_SCALE_GAIN(0.8)·min(1, rMm/shellMm)` (rim 1.8× — was 2.2/3.2×; a rim aircraft must read
+"fairly small", perspective does the work, `modelScale` composes for taste; shell-invariant at
+equal u — see the no-similarity note below), composed
 MULTIPLICATIVELY with the spawn/fade scale in `_advanceFlights` (read off the eased radius);
-`FLIGHT_SHELL_REACH_MM` (= hypot(rMax, yMax) ≈ 136 953) is the frustum requirement both sides
-share.
+`flightShellReachMm(shellMm)` is the frustum requirement both sides share.
 **Shell RADIUS is USER-DEFINABLE (fourth user report — "the maximum draw distance needs to be
 doubled or tripled; make a user definable draw radius that aircraft will be scaled into")**:
 `FlightsConfig.shellRadiusM` (metres, **default 300**, clamp **60–1000**, exactly-the-default →
@@ -356,12 +363,15 @@ undefined in `setFlights`, the modelScale idiom; Settings ▸ Flight tracking "D
 is a BASE value and every shell-geometry function takes a TRAILING optional `shellMm =
 flightShellMm()` (`compressRadiusMm` / `compressAltitudeMm` / `flightDisplayAltitudeMm` /
 `flightDisplayScale` / `flightDisplayPos`; absent = the 300 m default, so every stale caller
-still agrees). The whole shell is a **SIMILARITY TRANSFORM** by `s = shellMm /
-FLIGHT_SHELL_BASE_MM`: planX/planY/dispY AND `flightDisplayScale` (= `s·(1 + gain·r/shellMm)`)
-all carry the factor — **the model scale MUST carry it too**, or every aircraft silently shrinks
-by 1/s ("the planes got tiny again", the regression the gain reduction already fought once).
-Elevation-angle honesty is untouched (a similarity cannot change an angle) EXCEPT where the
-floor bites. Two things deliberately do NOT scale: **`clearMm` (absolute physical clearance over
+still agrees). POSITIONS are a **similarity transform** by `s = shellMm / FLIGHT_SHELL_BASE_MM`
+(planX/planY/dispY all carry the factor) — but **`flightDisplayScale` deliberately does NOT**
+(= `1 + gain·min(1, r/shellMm)`, shell-invariant at equal u; rim 1.8×). This has now flipped
+BOTH ways, so pin the reasoning: a leading `s` on the model scale makes position AND size scale
+together, which preserves every apparent angle and apparent size from the house viewpoint — the
+"Draw radius (m)" knob became a perceptual NO-OP (user-reported: "setting the draw distance
+larger or smaller doesn't change how far it is away"). Without it, a bigger draw radius
+genuinely reads farther (perspective shrinks the model); `modelScale` is the size-taste lever.
+Elevation-angle honesty is untouched EXCEPT where the floor bites. Two things deliberately do NOT scale: **`clearMm` (absolute physical clearance over
 a physical house — load-bearing now that the shell is configurable)** and the altitude anchors
 `altRefFt`/`altMaxFt` (real-world feet). `flightShellReachMm(shellMm)` scales the reach (≈342 383
 at 300 m, ≈1.14e6 at 1 000 m — far inside CAM_FAR_CEIL 13.5e6); the `FLIGHT_SHELL_REACH_MM`
@@ -534,7 +544,7 @@ new dirty-key input. 2D `drawFlights` calls the same pair (`solid`+colorB = two 
 call `resolveFlightGlow`, never re-derive locally. Settings ▸ Flight tracking "Glow rules"
 editor (collapsed summary rows, ✎ expand, ▲▼ reorder — order materially changes behaviour).
 **Attribution**: "Flight data © airplanes.live" joins the fixed bottom-left chip (stacked with the
-OSM line) whenever cloud + enabled + data. Tests: `flights-test.html` (`FLIGHTS PASS 561/561` —
+OSM line) whenever cloud + enabled + data. Tests: `flights-test.html` (`FLIGHTS PASS 577/577` —
 fixture = a REAL 94-aircraft airplanes.live LAX capture; incl. the live-path emit matrix, the
 archetype golden matrix, the emergency-alert lifecycle, the shell-rescale golden/property suite,
 and §6e's draw-radius clamp matrix + similarity law — the pre-existing derivation goldens run

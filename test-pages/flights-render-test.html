@@ -252,15 +252,16 @@
     ok('4b: a distant rig renders LARGER than a near one',
        rf.asm.scale.x > rn.asm.scale.x * 1.5,
        `near ${rn.asm.scale.x.toFixed(2)}× rim ${rf.asm.scale.x.toFixed(2)}×`);
-    // The similarity factor rides IN the model scale on purpose: on the 300 m
-    // default shell a near rig is 2.5× the authored size while sitting 2.5×
-    // farther out, so its APPARENT size is unchanged. Measured against s.
-    ok('4b: a near rig is ~unchanged from the pre-rescale 1× size (× the shell factor)',
-       rn.asm.scale.x < 1.2 * SFAC(SHELL0), `near=${rn.asm.scale.x.toFixed(3)}×`);
+    // The shell factor deliberately does NOT ride in the model scale (see
+    // flights.ts's flightDisplayScale): scaling size WITH position preserves
+    // every apparent size and made the draw-radius knob a no-op. The scale
+    // therefore stays in [1, 1+gain] at every shell radius.
+    ok('4b: a near rig is ~the authored 1× size, at any shell radius',
+       rn.asm.scale.x < 1.2, `near=${rn.asm.scale.x.toFixed(3)}×`);
     ok('4b: scale is uniform on all three axes',
        rn.asm.scale.x === rn.asm.scale.y && rn.asm.scale.y === rn.asm.scale.z);
-    ok('4b: rim scale stays under the 1+gain ceiling (× the shell factor)',
-       rf.asm.scale.x <= SFAC(SHELL0) * (1 + F.FLIGHT_SCALE_GAIN) + 1e-9,
+    ok('4b: rim scale stays under the 1+gain ceiling (no shell factor)',
+       rf.asm.scale.x <= (1 + F.FLIGHT_SCALE_GAIN) + 1e-9,
        `${rf.asm.scale.x.toFixed(4)}×`);
     // _advanceFlights keeps the composition every frame.
     step(0.05, 4);
@@ -467,13 +468,17 @@
     step(0);
     const rg = rig('sh1');
     const wantScale = rg.fade * F.flightDisplayScale(Math.hypot(rg.curX, rg.curZ), SHELL2) * 1.5;
-    ok('4d: rig scale composes the shell factor with modelScale',
+    ok('4d: rig scale composes the LIVE shell with modelScale',
        Math.abs(rg.asm.scale.x - wantScale) < 1e-9,
        `scale=${rg.asm.scale.x.toFixed(4)} want=${wantScale.toFixed(4)}`);
-    ok('4d: …and the shell factor is genuinely in there (2× the base-shell size)',
+    // …and the shell radius does NOT multiply the size: the same aircraft at
+    // the same FRACTION of the shell renders at the same size on any shell.
+    // (Scaling size with position preserved every apparent size and made the
+    // draw-radius knob a perceptual no-op — user-reported; see flights.ts.)
+    ok('4d: …and the shell factor is NOT in the size (equal u ⇒ equal scale)',
        Math.abs(rg.asm.scale.x
-         - 2 * rg.fade * F.flightDisplayScale(Math.hypot(rg.curX, rg.curZ) / 2,
-                                              F.FLIGHT_SHELL_BASE_MM) * 1.5) < 1e-6);
+         - rg.fade * F.flightDisplayScale(Math.hypot(rg.curX, rg.curZ) / 2,
+                                          F.FLIGHT_SHELL_BASE_MM) * 1.5) < 1e-9);
 
     // Frustum reach follows the live shell — never the base constant.
     upd([FAR_FP], { opts: { shellMm: SHELL2 } });

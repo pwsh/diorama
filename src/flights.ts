@@ -36,9 +36,10 @@
 // traffic into a narrow vertical band, removing the vertical spread that had
 // been disguising the horizontal cramming. Everything then read as a crowded
 // shelf hovering over the property. `rMaxMm` is therefore 120,000 — at the
-// default 15 nm search radius a 7 nm aircraft lands ≈76 m out, clearly beyond
-// the property, and `yMaxMm` scales with it so the ELEVATION branch (not the
-// log curve) governs cruise traffic from ≈7.4 nm outward.
+// default 15 nm search radius a 7 nm aircraft lands 35 % of the way out
+// (42 m on the base shell, 105 m on the shipped 300 m one), clearly beyond the
+// property, and `yMaxMm` scales with it so the ELEVATION branch (not the log
+// curve) governs cruise traffic well inside the configured radius.
 //
 // The shell is now LARGER than the 30,000 mm sky dome, and that is fine: the
 // dome is camera-centered, `depthWrite:false`, `renderOrder −10`, so it writes
@@ -49,16 +50,16 @@
 //
 // ── Shell RADIUS is now user-definable (FlightsConfig.shellRadiusM) ────────
 // 120 m is the AUTHORED reference scale (`FLIGHT_SHELL_BASE_MM`), not a fixed
-// ceiling. Every shell-geometry function takes a trailing `shellMm` and the
-// whole display is a SIMILARITY TRANSFORM of that reference by
+// ceiling. Every shell-geometry function takes a trailing `shellMm`, and the
+// POSITION geometry is a similarity transform of that reference by
 //
 //   s = shellMm / FLIGHT_SHELL_BASE_MM
 //
-// i.e. planX / planY / dispY / the model scale ALL multiply by s (the model
-// scale included — that is what keeps a given aircraft's apparent ANGULAR size
-// unchanged while it sits proportionally farther out; without it a bigger
-// shell would simply make every plane look tiny again). The default is 300 m,
-// 2.5× the reference. Two things deliberately do NOT scale:
+// i.e. planX / planY / dispY all multiply by s. The default is 300 m, 2.5× the
+// reference. Three things deliberately do NOT scale:
+//   • the MODEL SCALE (`flightDisplayScale`) — scaling size along with position
+//     would preserve every apparent angle and size, making the user's draw-
+//     radius knob a perceptual no-op (user-reported; see that function).
 //   • `clearMm` — an absolute physical property-clearance floor (see below).
 //   • `altRefFt` / `altMaxFt` — real-world altitude anchors, not geometry.
 // See `flightShellMm`, `flightShellReachMm` and each function's `shellMm` note.
@@ -652,17 +653,23 @@ export const FLIGHT_SHELL = {
   // on a 1,000 m one alike. On a bigger shell the floored elevation angles
   // simply get shallower, which is exactly the far-off-in-the-sky read.
   clearMm: 6500,
-  // Radial mapping exponent — see compressRadiusMm. DERIVED, not tuned: it is
-  // the unique power P satisfying the two anchors the user specified,
-  //   f(u) = u^P  with  f(1) = 1  and  f(2/3) = 1/2
-  // ("an aircraft at the configured radius renders AT the rim; one at 10 of
-  // 15 nm renders half way out"), so P = ln 2 / ln 1.5 ≈ 1.7095.
-  radialExponent: Math.LN2 / Math.log(1.5),
+  // Radial mapping ANCHORS — see compressRadiusMm. The two points the user
+  // specified: "an aircraft at the configured radius renders AT the rim"
+  // (f(1) = 1, implicit) and "one at 10 of 15 nm renders half way out"
+  // (f(2/3) = 1/2). The mapping is the PIECEWISE-LINEAR curve through
+  // (0,0) → (radialMidU, radialMidF) → (1,1); its two slopes are DERIVED from
+  // these anchors, not tuned:
+  //   below the midpoint  f′ = radialMidF / radialMidU          = 0.75
+  //   above the midpoint  f′ = (1 − radialMidF)/(1 − radialMidU) = 1.5
+  // (The previous power law u^P hit the same two anchors but collapsed the
+  // near field — see the compressRadiusMm comment for the user report.)
+  radialMidU: 2 / 3,
+  radialMidF: 0.5,
   // How far PAST the configured radius the mapping keeps expanding before it
   // pins. The planner already filters aircraft beyond the radius, so this is
   // purely slack for boundary jitter + dead reckoning between polls: without it
   // a rig drifting past the rim would freeze its radius and slide along the rim
-  // instead of continuing outward. 5 % of the radius, i.e. ≤ 1.05^P ≈ 1.086×
+  // instead of continuing outward. 5 % of the radius, i.e. ≤ f(1.05) = 1.075×
   // rMaxMm — comfortably inside the frustum widen that FLIGHT_SHELL_REACH_MM
   // already requests (1.25 × req + 30,000).
   radialHeadroom: 1.05,
@@ -719,28 +726,39 @@ export function flightShellReachMm(shellMm: number = flightShellMm()): number {
   return s * FLIGHT_SHELL_REACH_MM;
 }
 
-// Horizontal compression: RADIUS-ANCHORED power law. The shell is a scale
-// model of the user's configured search radius —
+// Horizontal compression: RADIUS-ANCHORED PIECEWISE-LINEAR mapping. The shell
+// is a scale model of the user's configured search radius —
 //
 //   u = clamp(distNm / radiusNm, 0, radialHeadroom)
-//   r = rMaxMm · u^radialExponent
+//   f(u) = 0.75·u              for u ≤ 2/3     (radialMidF / radialMidU)
+//   f(u) = 1.5·u − 0.5         for u > 2/3     ((1−radialMidF)/(1−radialMidU))
+//   r = shellMm · f(u)
 //
 // so the mapping is defined entirely by "where does the configured radius
-// render": at the RIM, exactly. The exponent is derived from the two anchors
-// the user asked for (see FLIGHT_SHELL.radialExponent): d = radiusNm lands on
-// the rim, d = ⅔·radiusNm lands at the halfway point. Both hold for ANY
-// configured radius — 10 of 15 nm and 20 of 30 nm read identically — which is
-// what "the drawing distance should match the radius entry" means.
+// render": at the RIM, exactly. Both slopes are DERIVED from the two anchors
+// the user asked for (see FLIGHT_SHELL.radialMidU / radialMidF): d = radiusNm
+// lands on the rim, d = ⅔·radiusNm lands at the halfway point — EXACTLY, and
+// for ANY configured radius. 10 of 15 nm and 20 of 30 nm read identically,
+// which is what "the drawing distance should match the radius entry" means.
 //
-// Superlinear (P > 1) is the point: it pushes the near/middle band INWARD, so
-// mid-range traffic no longer crowds the outer shell and only genuinely
-// far-out aircraft sit near the horizon. The previous asymptotic curve
-// (rMax·d/(d+K)) did the opposite — it front-loaded distance and never reached
-// the rim, so at radius 15 a 10 nm aircraft already sat 71 % of the way out and
-// nothing could ever render AT the horizon (user-reported: "flights 10 miles
-// away still appear close to the property line").
+// ── Why linear and not the previous power law (user-reported, 2026-07) ──────
+// The mapping used to be u^P with P = ln2/ln1.5 ≈ 1.7095, the unique power
+// through those same two anchors. The anchors held, but a superlinear curve
+// COLLAPSES everything below the midpoint: at radius 15 on the 300 m default
+// shell, 6.5 nm landed at u^P = 0.239 → ≈72 m ("renders this plane in the
+// backyard") and 2 nm at 0.032 → ≈10 m ("at 2 nm it is rendering over the
+// house"). The piecewise-linear curve keeps both anchors but makes the NEAR
+// FIELD PROPORTIONAL (f′(0) = 0.75 instead of 0): 6.5 of 15 nm now lands at
+// 32.5 % of the shell (≈97 m at 300 m) and 2 nm at 10 % (30 m).
 //
-// Monotonic, f(0) = 0, and bounded by shellMm · radialHeadroom^P.
+// Properties: monotonic, continuous (the kink at u = 2/3 is imperceptible —
+// the slope only changes from 0.75 to 1.5 at the halfway point), f(0) = 0,
+// bounded by shellMm · f(radialHeadroom) = 1.075 · shellMm, and a pure
+// function of u — so the shell stays a scale model of whatever radius is
+// typed. The earlier asymptotic curve (rMax·d/(d+K)) satisfied none of this:
+// it front-loaded distance and never reached the rim, putting a 10 nm aircraft
+// 71 % of the way out at radius 15 (user-reported: "flights 10 miles away
+// still appear close to the property line").
 //
 // `shellMm` is the shell RIM (the user's draw radius, resolved by
 // flightShellMm) and takes the place of the authored FLIGHT_SHELL.rMaxMm — the
@@ -749,14 +767,17 @@ export function flightShellReachMm(shellMm: number = flightShellMm()): number {
 export function compressRadiusMm(
   distNm: number, radiusNm: number, shellMm: number = flightShellMm(),
 ): number {
-  const { radialExponent, radialHeadroom } = FLIGHT_SHELL;
+  const { radialMidU, radialMidF, radialHeadroom } = FLIGHT_SHELL;
   const rMax = isFinite(shellMm) && shellMm > 0 ? shellMm : flightShellMm();
   const d = isFinite(distNm) && distNm > 0 ? distNm : 0;
   // A missing / garbage / non-positive radius falls back to the shipped default
   // rather than dividing by zero — the shell must always have a scale.
   const R = isFinite(radiusNm) && radiusNm > 0 ? radiusNm : FLIGHTS_DEFAULT_RADIUS_NM;
   const u = Math.min(d / R, radialHeadroom);
-  return rMax * Math.pow(u, radialExponent);
+  const f = u <= radialMidU
+    ? (radialMidF / radialMidU) * u
+    : radialMidF + ((1 - radialMidF) / (1 - radialMidU)) * (u - radialMidU);
+  return rMax * f;
 }
 
 // Altitude compression: log curve over [0, altMaxFt] → [yMinMm, yMaxMm].
@@ -798,28 +819,38 @@ export function compressAltitudeMm(
 // while the old asymptotic radial curve bunched everything into the outer
 // shell and rim growth was the only thing keeping distant traffic legible. The
 // radius-anchored mapping spreads the band properly, and a rim aircraft should
-// read "fairly small" (the user's word) — natural perspective at 120 m does
-// most of the work now, and this only stops the model dissolving into a pixel.
-// Personal taste rides FlightsConfig.modelScale (0.5–4) on top of it.
+// read "fairly small" (the user's word) — natural perspective does most of the
+// work now, and this only stops the model dissolving into a pixel. Personal
+// taste rides FlightsConfig.modelScale (0.5–4) on top of it.
 //
-// ── Why the SHELL FACTOR multiplies in here too ────────────────────────────
-// The returned scale is `s · (1 + gain · r/shellMm)` for
-// `s = shellMm / FLIGHT_SHELL_BASE_MM`. That leading `s` is the whole point of
-// making the shell user-definable as a SIMILARITY transform: position and size
-// grow together, so an aircraft on a 300 m shell sits 2.5× farther out at 2.5×
-// the model size and therefore subtends the SAME angle on screen as it did on
-// the 120 m shell. Drop the factor and every plane silently shrinks by 1/s —
-// exactly the "planes got tiny again" regression the gain was reduced to avoid.
+// ── Why there is NO shell factor here (2026-07, the SECOND reversal) ───────
+// This function briefly returned `s · (1 + gain · r/shellMm)` for
+// `s = shellMm / FLIGHT_SHELL_BASE_MM`, on the reasoning that a user-definable
+// shell should be a full SIMILARITY transform (position and size scaling
+// together, so a given aircraft keeps its apparent angular size). That is
+// geometrically true and is exactly the problem: scaling POSITION and SIZE by
+// the same factor preserves every apparent angle and apparent size from the
+// house viewpoint, so the "Draw radius (m)" setting became a perceptual
+// NO-OP. User-reported, verbatim: "setting the draw distance larger or smaller
+// doesn't change how far it is away."
+//
+// Without the factor the knob does what it says: a bigger draw radius genuinely
+// pushes traffic away and ordinary perspective shrinks it. Do NOT reintroduce
+// the leading `s` — if models read too small at a large shell, the size lever
+// is `FlightsConfig.modelScale` (0.5–4), which is the user's own control.
+//
+// The scale therefore depends only on u = r/shellMm — invariant across shell
+// sizes, unlike the POSITION, which still scales (the shell is a similarity in
+// position only; see flightShellReachMm, which is unaffected).
 export const FLIGHT_SCALE_GAIN = 0.8;
 
 export function flightDisplayScale(
   rMm: number, shellMm: number = flightShellMm(),
 ): number {
   const shell = isFinite(shellMm) && shellMm > 0 ? shellMm : flightShellMm();
-  const s = shell / FLIGHT_SHELL_BASE_MM;
   const r = isFinite(rMm) && rMm > 0 ? rMm : 0;
   const t = Math.min(1, r / shell);
-  return s * (1 + FLIGHT_SCALE_GAIN * t);
+  return 1 + FLIGHT_SCALE_GAIN * t;
 }
 
 const EARTH_R_M = 6371000;   // sphere radius (matches geo.ts)
@@ -839,14 +870,18 @@ const TWO_PI = Math.PI * 2;
 //
 // The second term is the height that reproduces the aircraft's TRUE elevation
 // angle on the compressed radius: `atan2(dispY, rMm)` then equals
-// `atan2(altM, distM)` exactly. Under the radius-anchored mapping
-// rMm = rMax·(d/R)^P it works out to `rMax · altM · d^(P−1) / (NM_M · R^P)` —
-// for a fixed altitude that is INCREASING in d (P ≈ 1.71 > 1), so unlike the
-// old asymptotic curve the elevation term no longer falls away with distance
-// on its own. Distant traffic still hugs the horizon, but now for the honest
-// geometric reason: the radius grows FASTER than the height does, so
-// atan2(dispY, rMm) — which is exactly the true elevation angle — shrinks. The
-// min() still
+// `atan2(altM, distM)` exactly. Under the piecewise-linear radial mapping the
+// sub-midpoint branch is r = shellMm · 0.75 · d/R, so the elevation term
+// reduces to `shellMm · 0.75 · altM / (NM_M · R)` — CONSTANT in d for a fixed
+// altitude, because radius and height grow together there. Above the midpoint
+// (slope 1.5) it grows with d. Either way "farther = lower in the sky" is an
+// ANGLE property, never a dispY one: atan2(dispY, rMm) is exactly the true
+// elevation angle on this branch, and the true angle falls with distance.
+//
+// Relative to the previous power-law radius, the near-field r is now much
+// LARGER, so the elevation term is larger too and FEWER aircraft bottom out on
+// the clearMm floor — strictly more of them display at their true elevation
+// angle, i.e. strictly more honest. The min() still
 // leaves the log curve in charge of near/overhead traffic (where the elevation
 // term is the larger of the two), so a plane genuinely overhead still reads
 // overhead, and everywhere else the display angle can only be ≤ the true one.
