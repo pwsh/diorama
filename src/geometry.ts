@@ -3182,6 +3182,33 @@ export function floorsUnionCenter(floors: readonly { w: number; d: number }[]): 
   return { x: maxW / 2, y: maxD / 2 };
 }
 
+// 3D camera pivot / movement policy, resolved from the two INDEPENDENT booleans
+// `Scene3D.pivotLocked` (absent = TRUE) and `Scene3D.freeMovement` (absent =
+// FALSE), with a back-compat read of the DEPRECATED `Scene3D.cameraPivot` enum
+// for stores written before the split. Either new field being present means the
+// store is in the new world and the legacy enum is ignored entirely (so a stale
+// `cameraPivot:'free'` can never override an explicit new setting).
+//
+//   locked   free    behaviour
+//   ------   ----    --------------------------------------------------------
+//   true     false   the DEFAULT: pan disabled, target eased back to the plan
+//                    centre (`_updateCameraPivot`).
+//   true     true    pan enabled, but rotation rigidly spins the camera+target
+//                    pair about the plan centre (custom gesture in the
+//                    renderer; OrbitControls' own rotate is turned off).
+//   false    true    classic OrbitControls — pan enabled, pivot follows.
+//   false    false   degenerate but defined: pan disabled, stock rotate, no
+//                    enforcement — the pivot simply stays wherever it is.
+export function resolvePivotMode(
+  sc3: { pivotLocked?: boolean; freeMovement?: boolean; cameraPivot?: 'center' | 'free' } | undefined | null,
+): { locked: boolean; free: boolean } {
+  if (sc3 && (sc3.pivotLocked !== undefined || sc3.freeMovement !== undefined)) {
+    return { locked: sc3.pivotLocked !== false, free: sc3.freeMovement === true };
+  }
+  if (sc3 && sc3.cameraPivot === 'free') return { locked: false, free: true };
+  return { locked: true, free: false };
+}
+
 // Floors whose 2D wall outline should draw as a reference underlay while some
 // OTHER floor is the active one: peek2d && !disabled, excluding the current
 // floor. Pure selection helper (consumed by canvas-render's onion-skin pass).

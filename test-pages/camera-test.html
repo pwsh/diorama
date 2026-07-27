@@ -27,7 +27,7 @@
   // Whole body is synchronous after load() so no background _animate RAF can
   // interleave — every read reflects only manual setter calls.
   const mod = await import('./assets/three-renderer.js?v=' + Date.now());
-  const { floorsUnionCenter } = await import('./geometry.mod.js?v=' + Date.now());
+  const { floorsUnionCenter, resolvePivotMode } = await import('./geometry.mod.js?v=' + Date.now());
   const r = new mod.ThreeDRenderer(document.getElementById('c'));
   await r.load();
 
@@ -106,7 +106,7 @@
   ok('applyViewPreset(iso) does not change aspect',
      near(r._camera.aspect, preAspect, 1e-9), `aspect=${r._camera.aspect} pre=${preAspect}`);
 
-  // ── 8. camera pivot policy (Scene3D.cameraPivot; absent = 'center') ───────
+  // ── 8. camera pivot policy (Scene3D.pivotLocked / .freeMovement) ──────────
   const ctrl = r._controls, cam = r._camera;
   // Deterministic frame driver: the RAF's _animate also calls _updateCameraPivot,
   // but this whole body is synchronous so no frame can interleave here.
@@ -119,10 +119,10 @@
                             z: cam.position.z - ctrl.target.z });
 
   // 8a. mode drives OrbitControls panning (covers mouse pan AND 2-finger touch)
-  r.setCameraPivot('center', 0, 0);
+  r.setCameraPivot(true, false, 0, 0);
   ok('setCameraPivot(center) → controls.enablePan false', ctrl.enablePan === false,
      `enablePan=${ctrl.enablePan}`);
-  r.setCameraPivot('free', 0, 0);
+  r.setCameraPivot(false, true, 0, 0);
   ok('setCameraPivot(free) → controls.enablePan true', ctrl.enablePan === true,
      `enablePan=${ctrl.enablePan}`);
 
@@ -134,7 +134,7 @@
      `t=(${ctrl.target.x.toFixed(1)},${ctrl.target.z.toFixed(1)})`);
 
   // 8c. centre mode eases a drifted target home, preserving the camera offset
-  r.setCameraPivot('center', 0, 0);
+  r.setCameraPivot(true, false, 0, 0);
   putTarget(3000, -2400);
   ctrl.target.y = 600;
   const off0 = offsetOf();
@@ -150,7 +150,7 @@
      `y=${ctrl.target.y}`);
 
   // 8d. a non-zero pivot (the glass-house union centre case) is honoured
-  r.setCameraPivot('center', 900, -400);
+  r.setCameraPivot(true, false, 900, -400);
   putTarget(0, 0);
   advance(400);
   ok('centre mode: eases to a non-zero pivot',
@@ -158,12 +158,12 @@
      `t=(${ctrl.target.x.toFixed(2)},${ctrl.target.z.toFixed(2)})`);
 
   // 8e. self-guard: repeating the same call mid-ease must not reset progress
-  r.setCameraPivot('center', 0, 0);
+  r.setCameraPivot(true, false, 0, 0);
   putTarget(4000, 0);
   advance(6);                                     // partway home
   const mid = ctrl.target.x;
-  r.setCameraPivot('center', 0, 0);               // identical args, twice
-  r.setCameraPivot('center', 0, 0);
+  r.setCameraPivot(true, false, 0, 0);               // identical args, twice
+  r.setCameraPivot(true, false, 0, 0);
   ok('self-guard: repeat setCameraPivot does not reset an in-flight ease',
      near(ctrl.target.x, mid, 1e-9) && ctrl.enablePan === false && mid < 4000 && mid > 0,
      `mid=${mid.toFixed(1)}`);
@@ -203,6 +203,193 @@
      us.x === 3500 && us.y === 1500, `(${us.x},${us.y})`);
   const ue = floorsUnionCenter([]);
   ok('floorsUnionCenter: empty list → origin', ue.x === 0 && ue.y === 0, `(${ue.x},${ue.y})`);
+
+  // ── 10. pure resolvePivotMode (two booleans + deprecated enum fallback) ────
+  const pvEq = (got, l, f) => got.locked === l && got.free === f;
+  const pvS = (g) => `locked=${g.locked} free=${g.free}`;
+  ok('resolvePivotMode: undefined → locked, not free (the default)',
+     pvEq(resolvePivotMode(undefined), true, false), pvS(resolvePivotMode(undefined)));
+  ok('resolvePivotMode: empty scene3d → locked, not free',
+     pvEq(resolvePivotMode({}), true, false), pvS(resolvePivotMode({})));
+  ok('resolvePivotMode: pivotLocked:false alone → unlocked, not free',
+     pvEq(resolvePivotMode({ pivotLocked: false }), false, false),
+     pvS(resolvePivotMode({ pivotLocked: false })));
+  ok('resolvePivotMode: freeMovement:true alone → locked AND free (the new mode)',
+     pvEq(resolvePivotMode({ freeMovement: true }), true, true),
+     pvS(resolvePivotMode({ freeMovement: true })));
+  ok('resolvePivotMode: both explicit → unlocked + free',
+     pvEq(resolvePivotMode({ pivotLocked: false, freeMovement: true }), false, true),
+     pvS(resolvePivotMode({ pivotLocked: false, freeMovement: true })));
+  ok('resolvePivotMode: legacy cameraPivot:free migrates to unlocked + free',
+     pvEq(resolvePivotMode({ cameraPivot: 'free' }), false, true),
+     pvS(resolvePivotMode({ cameraPivot: 'free' })));
+  ok('resolvePivotMode: legacy cameraPivot:center migrates to locked, not free',
+     pvEq(resolvePivotMode({ cameraPivot: 'center' }), true, false),
+     pvS(resolvePivotMode({ cameraPivot: 'center' })));
+  ok('resolvePivotMode: new pivotLocked WINS over a stale legacy free',
+     pvEq(resolvePivotMode({ cameraPivot: 'free', pivotLocked: true }), true, false),
+     pvS(resolvePivotMode({ cameraPivot: 'free', pivotLocked: true })));
+  ok('resolvePivotMode: new freeMovement WINS over a stale legacy center',
+     pvEq(resolvePivotMode({ cameraPivot: 'center', freeMovement: true }), true, true),
+     pvS(resolvePivotMode({ cameraPivot: 'center', freeMovement: true })));
+
+  // ── 11. the four combinations drive pan / rotate per the matrix ───────────
+  r.setAutoFollow(false); r.setCinematicOrbit(false);
+  const flags = (locked, free) => { r.setCameraPivot(locked, free, 0, 0);
+                                    return `pan=${ctrl.enablePan} rot=${ctrl.enableRotate}`; };
+  let f1 = flags(true, false);
+  ok('matrix locked+!free: pan off, stock rotate on',
+     ctrl.enablePan === false && ctrl.enableRotate === true, f1);
+  let f2 = flags(true, true);
+  ok('matrix locked+free: pan ON, stock rotate OFF (we drive rotation)',
+     ctrl.enablePan === true && ctrl.enableRotate === false, f2);
+  let f3 = flags(false, true);
+  ok('matrix !locked+free: classic — pan on, stock rotate on',
+     ctrl.enablePan === true && ctrl.enableRotate === true, f3);
+  let f4 = flags(false, false);
+  ok('matrix !locked+!free: pan off, stock rotate on',
+     ctrl.enablePan === false && ctrl.enableRotate === true, f4);
+
+  // ── 12. locked+free rigid rotation about the plan-centre pivot ────────────
+  // A non-trivial (glass-house-ish) pivot. PY is the pivot HEIGHT — every pose
+  // below parks target.y there, which is the height `_applyPivotRotate` uses by
+  // default (and the gesture captures at pointerdown).
+  const PX = 900, PZ = -400, PY = 600;
+  const setPose = (cx, cy, cz, tx, ty, tz) => {
+    cam.position.set(cx, cy, cz); ctrl.target.set(tx, ty, tz);
+    r.setCameraPivot(true, true, PX, PZ);
+  };
+  const azOf = (o) => Math.atan2(o.x - PX, o.z - PZ);          // about the pivot's vertical axis
+  const hRadOf = (o) => Math.hypot(o.x - PX, o.z - PZ);
+  const distP = (o) => Math.hypot(o.x - PX, o.y - PY, o.z - PZ);
+  const sep = () => Math.hypot(cam.position.x - ctrl.target.x,
+                               cam.position.y - ctrl.target.y,
+                               cam.position.z - ctrl.target.z);
+
+  // 12a. PURE AZIMUTH on a PANNED pose (target deliberately off the pivot).
+  setPose(6000, 4200, 5200, 2600, 600, 1800);
+  const sep0 = sep(), camH0 = hRadOf(cam.position), tgtH0 = hRadOf(ctrl.target);
+  const camAz0 = azOf(cam.position), tgtAz0 = azOf(ctrl.target), tgtY0 = ctrl.target.y;
+  const DAZ = 0.37;
+  r._applyPivotRotate(DAZ, 0);
+  ok('locked+free azimuth: camera→target separation preserved',
+     near(sep(), sep0, 1e-6), `sep=${sep().toFixed(6)} was ${sep0.toFixed(6)}`);
+  ok('locked+free azimuth: camera distance to the pivot AXIS preserved',
+     near(hRadOf(cam.position), camH0, 1e-6),
+     `r=${hRadOf(cam.position).toFixed(6)} was ${camH0.toFixed(6)}`);
+  ok('locked+free azimuth: the PANNED target keeps its pivot-axis distance too',
+     near(hRadOf(ctrl.target), tgtH0, 1e-6),
+     `r=${hRadOf(ctrl.target).toFixed(6)} was ${tgtH0.toFixed(6)}`);
+  ok('locked+free azimuth: camera azimuth about the PIVOT advances by exactly dAz',
+     near(azOf(cam.position) - camAz0, DAZ, 1e-9),
+     `d=${(azOf(cam.position) - camAz0).toFixed(9)}`);
+  ok('locked+free azimuth: the target rotates rigidly by the same dAz',
+     near(azOf(ctrl.target) - tgtAz0, DAZ, 1e-9),
+     `d=${(azOf(ctrl.target) - tgtAz0).toFixed(9)}`);
+  ok('locked+free azimuth: heights untouched (y is the rotation axis)',
+     near(ctrl.target.y, tgtY0, 1e-9) && near(cam.position.y, 4200, 1e-9),
+     `ty=${ctrl.target.y} cy=${cam.position.y}`);
+
+  // 12b. COMBINED az+polar: rigid ⇒ every distance to the pivot POINT is kept.
+  setPose(6000, 4200, 5200, 2600, 600, 1800);
+  const dc0 = distP(cam.position), dt0 = distP(ctrl.target), s0 = sep();
+  r._applyPivotRotate(-0.21, 0.13);
+  ok('locked+free rigid: |camera − pivot| preserved',
+     near(distP(cam.position), dc0, 1e-6), `d=${distP(cam.position).toFixed(6)} was ${dc0.toFixed(6)}`);
+  ok('locked+free rigid: |target − pivot| preserved',
+     near(distP(ctrl.target), dt0, 1e-6), `d=${distP(ctrl.target).toFixed(6)} was ${dt0.toFixed(6)}`);
+  ok('locked+free rigid: camera→target separation preserved',
+     near(sep(), s0, 1e-6), `sep=${sep().toFixed(6)} was ${s0.toFixed(6)}`);
+  // …and the camera still LOOKS at the target once OrbitControls settles.
+  ctrl.update();
+  const fwd = new (cam.position.constructor)();
+  cam.getWorldDirection(fwd);
+  const want = { x: ctrl.target.x - cam.position.x, y: ctrl.target.y - cam.position.y,
+                 z: ctrl.target.z - cam.position.z };
+  const wl = Math.hypot(want.x, want.y, want.z);
+  ok('locked+free rigid: camera still looks at the target after controls.update()',
+     near(fwd.x, want.x / wl, 1e-4) && near(fwd.y, want.y / wl, 1e-4) && near(fwd.z, want.z / wl, 1e-4),
+     `fwd=(${fwd.x.toFixed(4)},${fwd.y.toFixed(4)},${fwd.z.toFixed(4)})`);
+
+  // 12c. POLAR CLAMP — a huge delta is REDUCED, never wrapped past the caps.
+  const polarOf = () => Math.atan2(Math.hypot(cam.position.x - PX, cam.position.z - PZ),
+                                   cam.position.y - PY);
+  r.setBelowHorizon(false);                     // maxPolarAngle = π·0.49
+  setPose(6000, 4200, 5200, 2600, 600, 1800);
+  r._applyPivotRotate(0, +9);                   // wildly overshoot toward the horizon
+  ok('polar clamp: a huge downward delta stops at controls.maxPolarAngle',
+     polarOf() <= ctrl.maxPolarAngle + 1e-6 && polarOf() > ctrl.maxPolarAngle - 1e-6,
+     `phi=${polarOf().toFixed(6)} max=${ctrl.maxPolarAngle.toFixed(6)}`);
+  setPose(6000, 4200, 5200, 2600, 600, 1800);
+  r._applyPivotRotate(0, -9);                   // wildly overshoot toward the pole
+  ok('polar clamp: a huge upward delta stops at the 0.05 rad floor',
+     near(polarOf(), 0.05, 1e-6), `phi=${polarOf().toFixed(6)}`);
+  r.setBelowHorizon(true);                      // the clamp must FOLLOW the setting
+  setPose(6000, 4200, 5200, 2600, 600, 1800);
+  r._applyPivotRotate(0, +9);
+  ok('polar clamp: honours belowHorizon (clamps at π−0.02, not π·0.49)',
+     near(polarOf(), Math.PI - 0.02, 1e-6), `phi=${polarOf().toFixed(6)}`);
+  r.setBelowHorizon(false);
+
+  // 12d. locked+FREE must NOT ease the target home — the pan is the point.
+  r.setCameraPivot(true, true, 0, 0);
+  putTarget(3000, -2400);
+  advance(400);
+  ok('locked+free: the panned target is NOT eased back to the pivot',
+     near(ctrl.target.x, 3000, 1e-6) && near(ctrl.target.z, -2400, 1e-6),
+     `t=(${ctrl.target.x.toFixed(1)},${ctrl.target.z.toFixed(1)})`);
+  // …while locked+!free still does (the mode flip is the only difference).
+  r.setCameraPivot(true, false, 0, 0);
+  advance(400);
+  ok('locked+!free: the same drifted target IS eased home',
+     Math.abs(ctrl.target.x) < 1 && Math.abs(ctrl.target.z) < 1,
+     `t=(${ctrl.target.x.toFixed(3)},${ctrl.target.z.toFixed(3)})`);
+
+  // 12e. the real pointer gesture: a left drag rotates only in locked+free, is
+  // abandoned once a second finger lands, and pauses auto-follow.
+  // NB OrbitControls' own pointerdown calls `setPointerCapture(pointerId)`,
+  // which THROWS NotFoundError for a synthetic pointer id (no active pointer).
+  // The console therefore shows a few of those here — expected, harness-only,
+  // and harmless: an exception in one listener never stops the others, so our
+  // rotate handler still runs (it takes no capture of its own). It also means
+  // OrbitControls does nothing at all for these events, which isolates the
+  // assertions below to our handler.
+  const dom = r._renderer.domElement;
+  const pev = (type, id, x, y, extra = {}) => {
+    try {
+      dom.dispatchEvent(new PointerEvent(type, {
+        pointerId: id, clientX: x, clientY: y, button: 0, buttons: 1,
+        pointerType: 'mouse', bubbles: true, ...extra }));
+    } catch (e) { /* OrbitControls' setPointerCapture on a synthetic id — ignore */ }
+  };
+  const dragAz = () => {
+    setPose(6000, 4200, 5200, 2600, 600, 1800);
+    const a0 = azOf(cam.position);
+    pev('pointerdown', 7, 500, 300); pev('pointermove', 7, 560, 300); pev('pointerup', 7, 560, 300);
+    return azOf(cam.position) - a0;
+  };
+  r._followPauseUntil = 0;
+  const dAzDrag = dragAz();
+  ok('gesture: a left drag RIGHT rotates the view about the pivot (azimuth falls)',
+     dAzDrag < -1e-4, `dAz=${dAzDrag.toFixed(5)}`);
+  ok('gesture: a rotate drag pauses auto-follow / cinematic (6 s window)',
+     r._followPauseUntil > performance.now() / 1000 + 4, `until=${r._followPauseUntil.toFixed(2)}`);
+  // A second pointer hands the gesture back to OrbitControls' 2-finger dolly/pan.
+  setPose(6000, 4200, 5200, 2600, 600, 1800);
+  const az2 = azOf(cam.position);
+  pev('pointerdown', 8, 500, 300); pev('pointerdown', 9, 700, 300);
+  pev('pointermove', 8, 620, 300);
+  ok('gesture: a second pointer abandons the custom rotate',
+     near(azOf(cam.position), az2, 1e-12), `d=${(azOf(cam.position) - az2).toExponential(1)}`);
+  pev('pointerup', 8, 620, 300); pev('pointerup', 9, 700, 300);
+  // …and the gesture is inert in every other combination.
+  cam.position.set(6000, 4200, 5200); ctrl.target.set(2600, 600, 1800);
+  r.setCameraPivot(false, true, PX, PZ);
+  const az3 = azOf(cam.position);
+  pev('pointerdown', 10, 500, 300); pev('pointermove', 10, 600, 300); pev('pointerup', 10, 600, 300);
+  ok('gesture: inert in !locked+free (OrbitControls owns rotation there)',
+     near(azOf(cam.position), az3, 1e-12), `d=${(azOf(cam.position) - az3).toExponential(1)}`);
+  r.setCameraPivot(true, false, 0, 0);
 
   // ── report ────────────────────────────────────────────────────────────────
   const pass = tests.filter(t => t.ok).length, total = tests.length;

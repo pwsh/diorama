@@ -934,13 +934,19 @@ export interface Scene3D {
   belowHorizon?: boolean;    // allow orbiting the camera below the horizon (look up at the floor's underside);
                              // default false = today's ~88° max polar angle
   cameraPivot?: 'center' | 'free';
-                             // 3D orbit pivot policy. ABSENT = 'center' (the DEFAULT): panning is
-                             // disabled and `controls.target` is eased back onto the plan centre
-                             // (the active floor's rect centre, or the union centre of every
-                             // enabled floor under glass house), so the camera always orbits the
-                             // property instead of drifting to whatever point was last panned to.
-                             // 'free' restores the classic OrbitControls behaviour (pan enabled,
-                             // pivot follows the pan).
+                             // DEPRECATED (superseded by pivotLocked + freeMovement below). Read
+                             // ONLY for back-compat by `resolvePivotMode`; never written again.
+                             // Legacy semantics: 'free' → {locked:false, free:true}; absent /
+                             // 'center' → {locked:true, free:false}.
+  pivotLocked?: boolean;     // 3D orbit pivot is LOCKED to the plan centre (the active floor's rect
+                             // centre, or the union centre of every enabled floor under glass
+                             // house). ABSENT = true (the DEFAULT). Locked + no free movement =
+                             // panning disabled and `controls.target` eased home. Locked + free
+                             // movement = panning allowed, but rotation rigidly spins the whole
+                             // view around the plan centre instead of the panned-to point.
+  freeMovement?: boolean;    // allow panning the 3D view (side to side / forward and back).
+                             // ABSENT = false. Independent of `pivotLocked` — see the matrix in
+                             // `resolvePivotMode` (geometry.ts) and `setCameraPivot`.
   fovV?: number;             // vertical field-of-view in degrees; default 50 (the constructor's value)
   fovH?: number;             // horizontal field-of-view in degrees; absent = auto (derive from the canvas
                              // aspect, today's behavior). When set, the frustum is fixed and independent of

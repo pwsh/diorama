@@ -12,7 +12,7 @@ import { resolveNorth, markerScaleOf } from '../compass.js';
 import { parseNowPlaying, isMediaPlayerId } from '../geometry.js';
 import { robotProgress } from '../geometry.js';
 import { poolWaterColor } from '../geometry.js';
-import { floorsUnionCenter } from '../geometry.js';
+import { floorsUnionCenter, resolvePivotMode } from '../geometry.js';
 import { resolveScreenContent } from '../surfaces.js';
 import { resolveScenePreset, resolveTimeBucket } from '../time-of-day.js';
 import { conditionIntensity, weatherEffectEnabled, worstAlertSeverity } from '../weather.js';
@@ -108,12 +108,18 @@ export class ThreeView extends LitElement {
                          ? 'background:#2e7d32;border:1px solid #43a047;color:#e8f5e9'
                          : 'background:#1c2733;border:1px solid #33465a;color:#a5d6a7'}"
                 @click=${() => this._toggleCinematicOrbit()}>🎬</button>
-        <button title="Free camera movement (slide the view; pivot follows). Off: camera always pivots around the plan centre."
+        <button title="Free camera movement — pan the view side to side and forward/back. Off: panning is disabled."
                 style="font-size:10px;padding:3px 7px;border-radius:3px;cursor:pointer;
-                       ${(sc3?.cameraPivot ?? 'center') === 'free'
+                       ${resolvePivotMode(sc3).free
                          ? 'background:#2e7d32;border:1px solid #43a047;color:#e8f5e9'
                          : 'background:#1c2733;border:1px solid #33465a;color:#a5d6a7'}"
-                @click=${() => this._toggleCameraPivot()}>✋</button>
+                @click=${() => this._toggleFreeMovement()}>✋</button>
+        <button title="Pivot locked to the plan centre — rotation always spins around the floor plan. Off: rotation pivots wherever the view was panned."
+                style="font-size:10px;padding:3px 7px;border-radius:3px;cursor:pointer;
+                       ${resolvePivotMode(sc3).locked
+                         ? 'background:#2e7d32;border:1px solid #43a047;color:#e8f5e9'
+                         : 'background:#1c2733;border:1px solid #33465a;color:#a5d6a7'}"
+                @click=${() => this._togglePivotLocked()}>📌</button>
         ${saved.length ? html`
           <select style="font-size:10px;background:#1c2733;border:1px solid #33465a;border-radius:3px;
                          color:#cfd8dc;max-width:110px"
@@ -172,14 +178,32 @@ export class ThreeView extends LitElement {
     this.requestUpdate();
   }
 
-  // Camera-pivot toggle: 'free' restores classic pan-and-the-pivot-follows
-  // OrbitControls; toggling back DELETES the key so the store carries the
-  // default ('center') rather than a redundant explicit value.
-  private _toggleCameraPivot(): void {
+  // Camera pivot / movement toggles. Both write the NEW independent booleans
+  // (never the deprecated `cameraPivot` enum) and DELETE the key when it would
+  // hold the default value — so a store that never touched these stays clean,
+  // and the legacy enum stops being consulted the moment either is set.
+  // Display state comes from the merged `_sc3()` via `resolvePivotMode`, so a
+  // card `scene3dOverride` highlights correctly too.
+  private _toggleFreeMovement(): void {
     const p = this.planner;
     if (!p.store.scene3d) p.store.scene3d = { preset: 'night' };
-    if ((p.store.scene3d.cameraPivot ?? 'center') === 'free') delete p.store.scene3d.cameraPivot;
-    else p.store.scene3d.cameraPivot = 'free';
+    const cur = resolvePivotMode(this._sc3());
+    if (cur.free) delete p.store.scene3d.freeMovement;
+    else p.store.scene3d.freeMovement = true;
+    // Pin the other half explicitly the first time either is touched, so the
+    // resolver stops falling through to the deprecated enum mid-way.
+    if (p.store.scene3d.pivotLocked === undefined && !cur.locked) p.store.scene3d.pivotLocked = false;
+    p.save(); p.emitConfig();
+    this.requestUpdate();
+  }
+
+  private _togglePivotLocked(): void {
+    const p = this.planner;
+    if (!p.store.scene3d) p.store.scene3d = { preset: 'night' };
+    const cur = resolvePivotMode(this._sc3());
+    if (cur.locked) p.store.scene3d.pivotLocked = false;
+    else delete p.store.scene3d.pivotLocked;
+    if (p.store.scene3d.freeMovement === undefined && cur.free) p.store.scene3d.freeMovement = true;
     p.save(); p.emitConfig();
     this.requestUpdate();
   }
@@ -920,8 +944,8 @@ export class ThreeView extends LitElement {
       r.setBelowHorizon(sc3o?.belowHorizon === true);
       r.setFov(sc3o?.fovV ?? 50, sc3o?.fovH ?? null);
 
-      // Camera pivot policy (absent = 'center'): keep the orbit pivot pinned to
-      // the plan centre so panning can never drift it. Under glass house the
+      // Camera pivot policy (pivotLocked absent = true, freeMovement absent =
+      // false): keep the orbit pivot pinned to the plan centre. Under glass house the
       // whole stack is on screen, so the pivot is the union centre of every
       // ENABLED floor; otherwise it's this floor's own rect centre. World mm →
       // scene coords through the SAME `_w()` mapping the renderer uses
@@ -932,7 +956,8 @@ export class ThreeView extends LitElement {
       const pivotWorld = sc3o?.glassHouse
         ? floorsUnionCenter(p.enabledFloors())
         : { x: f.w / 2, y: f.d / 2 };
-      r.setCameraPivot(sc3o?.cameraPivot ?? 'center',
+      const pv = resolvePivotMode(sc3o);
+      r.setCameraPivot(pv.locked, pv.free,
                        f.w / 2 - pivotWorld.x, pivotWorld.y - f.d / 2);
 
       // Floor / walls / furniture / bg: structural + effective lighting

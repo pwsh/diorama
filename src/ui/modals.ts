@@ -2,7 +2,7 @@ import { LitElement, html, nothing } from 'lit';
 import { property, state } from 'lit/decorators.js';
 import { customElement } from './define.js';
 import { finishZoneEdit, cancelZoneEdit } from '../canvas-interact.js';
-import { alarmStateColor, hvacModeColor, climateFeature, CLIMATE_FEATURE, climateTempUnit, fmtTempNum, clampSetpoint } from '../geometry.js';
+import { alarmStateColor, hvacModeColor, climateFeature, CLIMATE_FEATURE, climateTempUnit, fmtTempNum, clampSetpoint, resolvePivotMode } from '../geometry.js';
 import { CONDITION_GLYPH, CONDITION_LABEL, tempText, weatherEffectEnabled, worstAlertSeverity } from '../weather.js';
 import { listPacks, getPack, packEffectiveState, resolveDef } from '../avatars.js';
 import { OFFLINE_FLAG_KEY } from '../ha-local.js';
@@ -2017,17 +2017,35 @@ export class SettingsDrawer extends LitElement {
         'Gradient sky dome + sun / moon / stars behind the scene (default on when weather is configured)')}
       <div style="border-top:1px solid var(--border);margin:10px 0 0;padding-top:8px">
         <div style="font-weight:600;font-size:11px;margin-bottom:4px">Camera</div>
-        <div class="row" title="Plan centre: the camera always orbits the middle of the floor (or of the whole stack under glass house) and panning is disabled, so the view can never drift off-centre. Free movement: classic behaviour — pan the view and the pivot follows.">
-          <label>Camera pivot</label>
-          <select .value=${sc.cameraPivot ?? 'center'}
-                  @change=${(e: Event) => upd(() => {
-                    const v = (e.target as HTMLSelectElement).value;
-                    p.store.scene3d!.cameraPivot = v === 'free' ? 'free' : undefined;
-                  })}>
-            <option value="center">Plan centre (default)</option>
-            <option value="free">Free movement</option>
-          </select>
-        </div>
+        ${check('Lock pivot to plan centre', resolvePivotMode(sc).locked,
+          v => {
+            // Resolve BEFORE mutating — the "pin the other half" check below
+            // must see the pre-edit state (`sc` IS p.store.scene3d when set).
+            const wasFree = resolvePivotMode(sc).free;
+            // Default is LOCKED, so the default value clears the key.
+            if (v) delete p.store.scene3d!.pivotLocked;
+            else p.store.scene3d!.pivotLocked = false;
+            // Pin the other half once either is touched so the resolver stops
+            // consulting the deprecated `cameraPivot` enum half-way.
+            if (p.store.scene3d!.freeMovement === undefined && wasFree) {
+              p.store.scene3d!.freeMovement = true;
+            }
+          },
+          'The camera always orbits the middle of the floor (or of the whole stack under glass house), '
+          + 'so the view can never end up spinning around some off-centre point. '
+          + 'Off: rotation pivots wherever the view was panned to.')}
+        ${check('Free movement (pan)', resolvePivotMode(sc).free,
+          v => {
+            const wasLocked = resolvePivotMode(sc).locked;   // resolve BEFORE mutating
+            // Default is NOT free, so the default value clears the key.
+            if (v) p.store.scene3d!.freeMovement = true;
+            else delete p.store.scene3d!.freeMovement;
+            if (p.store.scene3d!.pivotLocked === undefined && !wasLocked) {
+              p.store.scene3d!.pivotLocked = false;
+            }
+          },
+          'Pan the view side to side and forward/back (mouse pan button and two-finger touch). '
+          + 'With the pivot locked you can still pan freely — rotation just keeps spinning around the plan centre.')}
         ${check('Allow orbiting below the horizon', !!sc.belowHorizon,
           v => { p.store.scene3d!.belowHorizon = v; },
           'Let the camera drop below the horizon and look up at the floor from underneath')}

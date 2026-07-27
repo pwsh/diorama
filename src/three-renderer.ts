@@ -129,6 +129,13 @@ const _thpQuat = new THREE.Quaternion();
 const _THP_UP = new THREE.Vector3(0, 1, 0);
 // Build-time axis for the upright-authoring counter-rotation (PropDef.handPitch).
 const _THP_X = new THREE.Vector3(1, 0, 0);
+// Reused scratch for the locked-pivot rigid rotation (`_applyPivotRotate`) —
+// zero allocation per pointermove.
+const _pvtP = new THREE.Vector3();
+const _pvtV = new THREE.Vector3();
+const _pvtAxis = new THREE.Vector3();
+const _pvtQ = new THREE.Quaternion();
+const _pvtUp = new THREE.Vector3(0, 1, 0);
 // Shared-props: scratch vector for a plant pivot's world position (zero-alloc).
 const _propScratch = new THREE.Vector3();
 
@@ -1630,15 +1637,25 @@ export class ThreeDRenderer {
   private _appliedBelowHorizon: boolean | null = null;
   private _appliedFovV: number | null = null;
   private _appliedFovH: number | null | undefined = undefined;
-  // Camera pivot policy (Scene3D.cameraPivot; absent = 'center'). In 'center'
-  // OrbitControls panning is DISABLED and `_updateCameraPivot` eases the orbit
-  // target back onto `_pivotX/_pivotZ` (scene coords) every frame, translating
-  // the camera by the same delta so the view slides home rather than swinging.
-  // 'free' is the classic behaviour (pan enabled, no enforcement).
-  private _cameraPivotMode: 'center' | 'free' = 'center';
+  // Camera pivot policy — two INDEPENDENT flags (Scene3D.pivotLocked, absent =
+  // true; Scene3D.freeMovement, absent = false; resolved by the pure
+  // `resolvePivotMode` in geometry.ts). See `setCameraPivot` for the full
+  // matrix. `_pivotX/_pivotZ` are the plan centre in SCENE coords.
+  private _pivotLocked = true;
+  private _pivotFree = false;
   private _pivotX = 0;
   private _pivotZ = 0;
-  private _appliedPivotMode: 'center' | 'free' | null = null;
+  private _appliedPivotLocked: boolean | null = null;
+  private _appliedPivotFree: boolean | null = null;
+  // Custom locked+free rotate gesture state (see `_installPivotRotate`).
+  // `_pivotPointers` tracks every pointer down on the canvas so a second finger
+  // can abandon the gesture to OrbitControls' 2-finger dolly/pan.
+  private _pivotPointers = new Set<number>();
+  private _pivotRotId: number | null = null;
+  private _pivotRotX = 0;
+  private _pivotRotY = 0;
+  private _pivotRotPivotY = 0;   // pivot HEIGHT captured at pointerdown (see _applyPivotRotate)
+  private _pivotRotAbort = false;
   private _grid: THREE.GridHelper | null = null;
   private _bgVisibleNow = false;   // last-computed bg-image visibility (grid suppression; set in updateFloor)
   // Scene3D.groundLevelMm resolved + clamped (set in updateFloor). 0 = today's
@@ -2439,10 +2456,12 @@ export class ThreeDRenderer {
     this._controls.maxPolarAngle = Math.PI * 0.49;
     this._controls.minDistance = 1000;
     this._controls.maxDistance = CAM_MAXDIST_DEFAULT;
-    // Pivot policy: 'center' (the default) disables panning so the orbit pivot
-    // can't drift off the plan. `setCameraPivot` (called per tick by three-view)
-    // is the authority; this just makes the very first frames agree with it.
-    this._controls.enablePan = this._cameraPivotMode === 'free';
+    // Pivot policy: locked + no free movement (the default) disables panning so
+    // the orbit pivot can't drift off the plan. `setCameraPivot` (called per
+    // tick by three-view) is the authority; this just makes the very first
+    // frames agree with it.
+    this._controls.enablePan = this._pivotFree;
+    this._controls.enableRotate = !(this._pivotLocked && this._pivotFree);
     this._controls.update();
 
     // Sims cam azimuth snap: after any orbit gesture ends, if the snap mode is
@@ -2487,6 +2506,10 @@ export class ThreeDRenderer {
     // tap. Two taps within 350 ms count as a dblclick. The slop/window are
     // POINTER-TYPE aware (TAP_*_TOUCH vs TAP_*_MOUSE) — a finger is not a mouse.
     const dom = this._renderer.domElement;
+    // Locked-pivot custom rotate (inert unless pivotLocked AND freeMovement).
+    // Registered BEFORE the tap gate purely for readability — the two are
+    // independent (the tap gate discards anything past its movement slop).
+    this._installPivotRotate(dom);
     let downX = 0, downY = 0, downT = 0, lastTapT = 0, downTouch = false;
     dom.addEventListener('pointerdown', e => {
       downX = e.clientX; downY = e.clientY; downT = e.timeStamp;
@@ -3347,27 +3370,44 @@ export class ThreeDRenderer {
     this._controls.maxPolarAngle = on ? Math.PI - 0.02 : Math.PI * 0.49;
   }
 
-  // Camera pivot policy. 'center' (the DEFAULT) pins the orbit pivot to the plan
-  // centre: OrbitControls panning is disabled (that covers BOTH the mouse pan
-  // button and the two-finger touch pan) and `_updateCameraPivot` eases
-  // `controls.target` x/z back onto (centerX, centerZ) — moving the camera by
-  // the SAME delta so the scene slides home instead of the world swinging around
-  // a drifted pivot. 'free' restores classic OrbitControls (pan on, pivot
-  // follows). Self-guarding like setFov/setBelowHorizon: calling it every tick
-  // only touches `enablePan` on an actual mode change, so an in-flight ease is
-  // never disturbed. NB the pivot CENTRE is refreshed unconditionally (it moves
-  // with the floor rect / glass-house union, which is not a "change" worth
-  // guarding). `applyViewPreset`/`setCameraView` (and the URL/card `cam=`
-  // template) set their own target; under 'center' the enforcement then eases
-  // that target's x/z home — accepted and consistent with the mode (the presets
+  // Camera pivot policy — two independent flags (see `resolvePivotMode`):
+  //
+  //   locked  free   pan       rotate                enforcement
+  //   ------  ----   -------   -------------------   ---------------------------
+  //   true    false  DISABLED  stock OrbitControls    `_updateCameraPivot` eases
+  //                                                   the target home (default).
+  //   true    true   enabled   CUSTOM rigid rotation  none (pan is the point)
+  //                            about the plan centre
+  //   false   true   enabled   stock                  none (classic behaviour)
+  //   false   false  DISABLED  stock                  none (pivot stays put)
+  //
+  // In the LOCKED + FREE combination OrbitControls' own rotate is turned off —
+  // it can only ever rotate about its own `target`, which panning has just moved
+  // — and `_onPivotRotate` rotates the {camera, target} pair rigidly about
+  // (centerX, centerZ) instead, so the world always spins around the plan while
+  // the pan still slides the view.
+  //
+  // Self-guarding like setFov/setBelowHorizon: calling it every tick only
+  // touches the controls on an actual change, so an in-flight ease is never
+  // disturbed. NB the pivot CENTRE is refreshed unconditionally (it moves with
+  // the floor rect / glass-house union, which is not a "change" worth guarding).
+  // `applyViewPreset`/`setCameraView` (and the URL/card `cam=` template) set
+  // their own target; under locked-and-not-free the enforcement then eases that
+  // target's x/z home — accepted and consistent with the mode (the presets
   // already frame the floor centre, so in practice it is a no-op).
-  setCameraPivot(mode: 'center' | 'free', centerX: number, centerZ: number): void {
+  setCameraPivot(locked: boolean, free: boolean, centerX: number, centerZ: number): void {
     this._pivotX = isFinite(centerX) ? centerX : 0;
     this._pivotZ = isFinite(centerZ) ? centerZ : 0;
-    if (mode === this._appliedPivotMode) return;
-    this._appliedPivotMode = mode;
-    this._cameraPivotMode = mode;
-    if (this._controls) this._controls.enablePan = mode === 'free';
+    if (locked === this._appliedPivotLocked && free === this._appliedPivotFree) return;
+    this._appliedPivotLocked = locked;
+    this._appliedPivotFree = free;
+    this._pivotLocked = locked;
+    this._pivotFree = free;
+    if (this._controls) {
+      this._controls.enablePan = free;
+      // Stock rotate is surrendered ONLY for locked+free (we drive it ourselves).
+      this._controls.enableRotate = !(locked && free);
+    }
   }
 
   // Independent horizontal / vertical field of view. A PerspectiveCamera carries
@@ -20724,7 +20764,136 @@ export class ThreeDRenderer {
     cam.position.z = t.z + r * Math.cos(a);
   }
 
-  // Central camera pivot enforcement (Scene3D.cameraPivot === 'center', the
+  // Rigid rotation of the {camera.position, controls.target} pair about the
+  // LOCKED plan-centre pivot — the locked+free combination's replacement for
+  // OrbitControls' rotate (which can only ever spin about its own target, and
+  // panning has just moved that off the plan). Deltas mirror OrbitControls'
+  // own formula exactly (rotateSpeed 1): dAz = −2π·dx/clientHeight,
+  // dPol = −2π·dy/clientHeight.
+  //
+  //   * AZIMUTH — rotate both points about the VERTICAL axis through
+  //     P = (pivotX, target.y, pivotZ) by dAz. `makeRotationY(a)` increases
+  //     atan2(x, z) by a, which is exactly OrbitControls' `theta -= 2π·dx/h`.
+  //   * POLAR — axis = normalize(Ŷ × û) where û is the unit HORIZONTAL
+  //     component of (camera − P); rotating about that axis by dPol adds dPol
+  //     to the camera's polar angle. Degenerate case (camera vertically above
+  //     P, |horizontal| < 1e-6): fall back to the horizontal projection of the
+  //     camera's own right vector, which is perpendicular to the view for free.
+  //     CLAMPED by computing the post-rotation polar angle and REDUCING dPol
+  //     (never by snapping afterwards) so the elevation stays inside
+  //     [0.05, controls.maxPolarAngle] — i.e. it honours `setBelowHorizon`.
+  //
+  // The target rides along, so the pan offset the user established is rigidly
+  // carried around the plan rather than reset. Zero allocation (module scratch).
+  //
+  // `pivotY` defaults to the CURRENT `target.y`, but the gesture passes the
+  // value captured at pointerdown: a rigid rotation about a horizontal axis
+  // gives the (panned, off-pivot) target a y component, so re-reading target.y
+  // every move event would walk the pivot height and the view would slowly sink
+  // or rise through a long drag. One height per gesture keeps the drag a single
+  // exactly-rigid rotation.
+  private _applyPivotRotate(dAz: number, dPol: number, pivotY?: number): void {
+    const cam = this._camera, ctrl = this._controls;
+    if (!cam || !ctrl) return;
+    _pvtP.set(this._pivotX, pivotY ?? ctrl.target.y, this._pivotZ);
+
+    if (dAz) {
+      _pvtQ.setFromAxisAngle(_pvtUp, dAz);
+      _pvtV.copy(cam.position).sub(_pvtP).applyQuaternion(_pvtQ).add(_pvtP);
+      cam.position.copy(_pvtV);
+      _pvtV.copy(ctrl.target).sub(_pvtP).applyQuaternion(_pvtQ).add(_pvtP);
+      ctrl.target.copy(_pvtV);
+    }
+    if (!dPol) return;
+
+    // Axis + clamp are both computed from the POST-azimuth camera vector.
+    _pvtV.copy(cam.position).sub(_pvtP);
+    const hLen = Math.hypot(_pvtV.x, _pvtV.z);
+    if (hLen > 1e-6) {
+      _pvtAxis.set(_pvtV.z / hLen, 0, -_pvtV.x / hLen);   // Ŷ × û
+    } else {
+      // Camera is (near) vertically above the pivot — no horizontal component to
+      // build the axis from. The camera's own right vector is perpendicular to
+      // the view direction, so its horizontal projection is a sane substitute.
+      _pvtAxis.setFromMatrixColumn(cam.matrixWorld, 0);
+      _pvtAxis.y = 0;
+      if (_pvtAxis.lengthSq() < 1e-12) _pvtAxis.set(1, 0, 0);
+      _pvtAxis.normalize();
+    }
+    const phi = Math.atan2(hLen, _pvtV.y);
+    const maxP = ctrl.maxPolarAngle ?? Math.PI * 0.49;
+    const want = Math.max(0.05, Math.min(maxP, phi + dPol));
+    const eff = want - phi;
+    if (!eff) return;
+    _pvtQ.setFromAxisAngle(_pvtAxis, eff);
+    _pvtV.applyQuaternion(_pvtQ).add(_pvtP);              // _pvtV is already cam − P
+    cam.position.copy(_pvtV);
+    _pvtV.copy(ctrl.target).sub(_pvtP).applyQuaternion(_pvtQ).add(_pvtP);
+    ctrl.target.copy(_pvtV);
+  }
+
+  // Custom rotate gesture for locked+free. Registered ONCE in `load()`; every
+  // handler no-ops unless that exact combination is active, so the other three
+  // matrix cells behave byte-identically to before.
+  //
+  // Coexistence notes:
+  //  * TAP GATE — the fixture click/dblclick pair (also on this element)
+  //    measures pointer travel and discards anything past the slop, so a rotate
+  //    drag is already ignored by it; a click that never moves rotates by 0.
+  //  * ORBITCONTROLS — it still sets pointer capture on this element (so our
+  //    pointermove keeps arriving during a drag outside the canvas) and still
+  //    owns wheel zoom, pan, and every 2-finger gesture. With enableRotate
+  //    false it dispatches no 'start' for a left drag, hence the explicit
+  //    auto-follow / cinematic pause below (mirroring its 'start'/'end'
+  //    listeners); it DOES still dispatch 'end' on pointerup, so the sims-cam
+  //    azimuth snap composes exactly as it does for a pan gesture today.
+  //  * TWO FINGERS — the moment a second pointer is down we abandon the gesture
+  //    for good (that pointer set belongs to OrbitControls' dolly/pan).
+  //  * AUTO-FOLLOW / CINEMATIC — they own the camera but stock rotate still
+  //    works during them (and pauses them 6 s); this matches that exactly.
+  private _installPivotRotate(dom: HTMLElement): void {
+    const eligible = (): boolean => this._pivotLocked && this._pivotFree;
+    dom.addEventListener('pointerdown', e => {
+      this._pivotPointers.add(e.pointerId);
+      if (this._pivotPointers.size > 1) { this._endPivotRotate(); this._pivotRotAbort = true; return; }
+      this._pivotRotAbort = false;
+      if (!eligible()) return;
+      // Mirror OrbitControls' default LEFT=rotate mapping (a modified drag is
+      // its pan/dolly mapping and stays OrbitControls'). A single touch pointer
+      // is the touch rotate gesture.
+      const touch = e.pointerType === 'touch';
+      if (!touch && (e.button !== 0 || e.ctrlKey || e.shiftKey || e.metaKey)) return;
+      this._pivotRotId = e.pointerId;
+      this._pivotRotX = e.clientX; this._pivotRotY = e.clientY;
+      this._pivotRotPivotY = this._controls ? this._controls.target.y : 0;
+      this._followPauseUntil = performance.now() / 1000 + 6;
+    });
+    dom.addEventListener('pointermove', e => {
+      if (this._pivotRotId !== e.pointerId || this._pivotRotAbort || !eligible()) return;
+      const h = dom.clientHeight || 1;
+      const dx = e.clientX - this._pivotRotX, dy = e.clientY - this._pivotRotY;
+      this._pivotRotX = e.clientX; this._pivotRotY = e.clientY;
+      if (!dx && !dy) return;
+      this._applyPivotRotate(-2 * Math.PI * dx / h, -2 * Math.PI * dy / h, this._pivotRotPivotY);
+      this._followPauseUntil = performance.now() / 1000 + 6;
+      this._controls?.update();
+    });
+    const up = (e: PointerEvent): void => {
+      this._pivotPointers.delete(e.pointerId);
+      if (this._pivotPointers.size === 0) this._pivotRotAbort = false;
+      if (this._pivotRotId === e.pointerId) this._endPivotRotate();
+    };
+    dom.addEventListener('pointerup', up);
+    dom.addEventListener('pointercancel', up);
+  }
+
+  private _endPivotRotate(): void {
+    if (this._pivotRotId == null) return;
+    this._pivotRotId = null;
+    this._followPauseUntil = performance.now() / 1000 + 6;
+  }
+
+  // Central camera pivot enforcement (locked pivot with free movement OFF — the
   // default). Panning is already disabled by `setCameraPivot`, so this only has
   // to heal a target that some OTHER path moved (a view preset, a saved view, a
   // URL/card `cam=` pose, a floor-switch delta): ease `controls.target` x/z
@@ -20738,8 +20907,13 @@ export class ThreeDRenderer {
   // centre and are explicit opt-ins, so they WIN — enforcement skips entirely
   // while either is on (pan stays disabled; only the easing yields). Sims-cam
   // azimuth snap composes fine: it rotates about the target wherever this left it.
+  //
+  // NB it is also inert when FREE MOVEMENT is on even though the pivot is locked
+  // — there the lock is expressed by the custom rotation (`_applyPivotRotate`)
+  // spinning about the plan centre, and easing the target home would undo the
+  // pan the user just made, which is the whole point of that combination.
   private _updateCameraPivot(dt: number): void {
-    if (this._cameraPivotMode !== 'center') return;
+    if (!this._pivotLocked || this._pivotFree) return;
     if (this._autoFollow || this._cinematicOrbit) return;
     const cam = this._camera, ctrl = this._controls;
     if (!cam || !ctrl) return;

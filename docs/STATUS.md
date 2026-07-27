@@ -247,6 +247,18 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Pivot lock × free movement as two independent options**
+  (2026-07-27, follow-up to the bullet below; unreleased).
+  `Scene3D.cameraPivot` is DEPRECATED (still read for back-compat)
+  in favour of `pivotLocked` (absent = true) + `freeMovement`
+  (absent = false), resolved by the pure `resolvePivotMode`
+  (geometry.ts). New cell: **locked + free** — panning is enabled
+  but OrbitControls' rotate is surrendered (`enableRotate = false`)
+  and a custom pointer gesture rotates the {camera, target} pair
+  RIGIDLY about the plan centre, so you can slide the view yet
+  rotation always spins around the floor plan. ✋ now toggles free
+  movement, new 📌 toggles the lock; Settings ▸ Display Camera is
+  two checkboxes. camera-test 28→60, floors-view 67/67 green.
 - **Central camera pivot (new default) + free-movement mode**
   (2026-07-27, user-reported: "pivot point doesn't stay at the
   property centre; sliding the map moves it and it's hard to
