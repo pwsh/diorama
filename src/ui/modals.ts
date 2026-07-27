@@ -1163,6 +1163,7 @@ export class SettingsDrawer extends LitElement {
           (via Open-Meteo) all work.
         </div>
         <button class="btn-primary" @click=${this._exitOffline}>Exit offline mode</button>
+        ${this._aboutBlock()}
       `;
     }
     return html`
@@ -1184,7 +1185,34 @@ export class SettingsDrawer extends LitElement {
         Save &amp; Reconnect
       </button>
       <button class="danger-btn" @click=${this._clearConn}>Clear &amp; Log Out</button>
+      ${this._aboutBlock()}
     `;
+  }
+
+  // ── About block (Connection tab footer) ─────────────────────────────────
+  // What Diorama is + where the docs and source live. Shown in every UI mode
+  // (the Connection tab is the one tab kiosk/view users can reach).
+  private _aboutBlock() {
+    const link = (href: string, label: string) => html`
+      <a href=${href} target="_blank" rel="noreferrer"
+         style="color:var(--accent);text-decoration:none">${label}</a>`;
+    return html`
+      <div style="border-top:1px solid var(--border);margin-top:18px;padding-top:12px">
+        <strong style="font-size:12px;color:var(--text)">About Diorama</strong>
+        <div style="font-size:11px;color:var(--text-dim);line-height:1.55;margin:6px 0 8px">
+          Diorama is a graphical design interface for Home Assistant: build a
+          virtual copy of your home, watch live device state in spatial
+          context — presence radar, lights, appliances, weather, even aircraft
+          overhead — and click anything to control it. First-class LD2450
+          mmWave support; works with any HA entity.
+        </div>
+        <div style="font-size:11px;line-height:1.8">
+          📖 ${link('https://pwsh.github.io/diorama/', 'Documentation & user guide')}
+          — setup, features, floor-plan library, live demo<br>
+          🐙 ${link('https://github.com/pwsh/diorama', 'GitHub repository')}
+          — source, releases, issue tracker
+        </div>
+      </div>`;
   }
 
   // ── Integrations tab ────────────────────────────────────────────────────
