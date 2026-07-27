@@ -1,6 +1,6 @@
 # Project status & pick-up guide
 
-Last updated: 2026-07-27, at **v0.35.0**. This is the single document to
+Last updated: 2026-07-27, at **v0.36.0**. This is the single document to
 read (alongside `CLAUDE.md`) to resume work with full context.
 
 ## Where things stand
@@ -235,6 +235,15 @@ instance.
   screen-space nearest-aircraft fallback pick 28 px, fixtures always
   win; Settings ▸ Connection "About Diorama" footer w/ purpose
   summary + docs/repo/changelog links, all UI modes).
+  → v0.36.0 down the street (card visual-editor "No type provided"
+  fix — type survives the round-trip; card designer controls —
+  layers preset dropdown + Custom… multi-select grid, card-local
+  Scene (3D) overrides (glass house/cutaway/auto-follow/cinematic/
+  sims cam/plumbobs/sky backdrop/FOV); new Background text layer;
+  attribution chip follows the neighborhood/flights layers;
+  piecewise-linear flight distance mapping — near field proportional
+  (6.5 nm → 97 m not the backyard, 2 nm → 30 m not over the house),
+  anchors bit-exact, draw-radius knob made genuinely perceptible).
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
