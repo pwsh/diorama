@@ -33,10 +33,12 @@
      card mounts; the 2D assertions never touch it.) -->
 <script type="module">
   const V = '?v=' + Date.now();
-  const { Planner, peekSharedPlanner, validateCardConfig } = await import('./card.mod.js' + V);
+  const { Planner, peekSharedPlanner, validateCardConfig,
+          LAYER_DEFS, SIMPLE_LAYERS, CARD_SCENE_BOOLS } = await import('./card.mod.js' + V);
 
   const results = [];
   const ok = (name, cond, extra = '') => results.push({ name, pass: !!cond, extra: String(extra) });
+  window.__R = results;   // harness-debug hook: inspect progress if the page hangs mid-run
   const sleep = ms => new Promise(r => setTimeout(r, ms));
   async function waitFor(cond, tries = 800) {
     for (let i = 0; i < tries; i++) { if (cond()) return true; await sleep(5); }
@@ -243,6 +245,228 @@
     editor._emit({ compact: true });
     ok('j: editor emit round-trips an existing type',
        !!emitted && emitted.type === 'custom:diorama-card' && emitted.view === '3d' && emitted.compact === true, '');
+
+    // ── (k) shared layer defs ─────────────────────────────────────────────────
+    // LAYER_DEFS is the ONE key→label list (sidebar + card editor); SIMPLE_LAYERS
+    // is the ONE "Simple floorplan" literal (sidebar, ?layers=simple, card).
+    ok('k: LAYER_DEFS is a non-empty {key,label} list',
+       Array.isArray(LAYER_DEFS) && LAYER_DEFS.length > 20 &&
+       LAYER_DEFS.every(d => typeof d.key === 'string' && typeof d.label === 'string'),
+       `n=${LAYER_DEFS.length}`);
+    ok('k: LAYER_DEFS keys are unique',
+       new Set(LAYER_DEFS.map(d => d.key)).size === LAYER_DEFS.length, '');
+    ok('k: LAYER_DEFS includes the new bgText layer',
+       LAYER_DEFS.some(d => d.key === 'bgText' && d.label === 'Background text'), '');
+    ok('k: SIMPLE_LAYERS turns background text OFF',
+       SIMPLE_LAYERS.bgText === false, JSON.stringify(SIMPLE_LAYERS.bgText));
+    ok('k: SIMPLE_LAYERS keeps avatars + activity ON',
+       SIMPLE_LAYERS.targets === true && SIMPLE_LAYERS.activity === true, '');
+
+    // ── (l) validateCardConfig: scene block ───────────────────────────────────
+    const fullScene = {
+      glassHouse: true, wallCutaway: false, autoFollow: true, cinematicOrbit: false,
+      simsCam: true, plumbobs: false, skyBackdrop: true, fovV: 60, fovH: 90,
+    };
+    const vFull = validateCardConfig({ type: 'custom:diorama-card', view: '3d', scene: fullScene });
+    ok('l: full valid scene object round-trips',
+       !!vFull.scene && vFull.scene.glassHouse === true && vFull.scene.wallCutaway === false &&
+       vFull.scene.simsCam === true && vFull.scene.fovV === 60 && vFull.scene.fovH === 90,
+       JSON.stringify(vFull.scene));
+    ok('l: scene round-trip keeps type', vFull.type === 'custom:diorama-card', '');
+    const throwsCfg = (raw) => { try { validateCardConfig(raw); return false; } catch { return true; } };
+    ok('l: scene.fovV 200 throws (out of 10–120)', throwsCfg({ scene: { fovV: 200 } }), '');
+    ok('l: scene.fovV 5 throws (below 10)', throwsCfg({ scene: { fovV: 5 } }), '');
+    ok('l: scene.fovH 200 throws (out of 10–150)', throwsCfg({ scene: { fovH: 200 } }), '');
+    ok('l: scene.fovH 150 accepted (inclusive upper bound)',
+       validateCardConfig({ scene: { fovH: 150 } }).scene.fovH === 150, '');
+    ok('l: scene.fovV non-number throws', throwsCfg({ scene: { fovV: '60' } }), '');
+    ok('l: scene.glassHouse non-boolean throws', throwsCfg({ scene: { glassHouse: 'yes' } }), '');
+    ok('l: scene.plumbobs non-boolean throws', throwsCfg({ scene: { plumbobs: 1 } }), '');
+    ok('l: scene non-object throws', throwsCfg({ scene: 'glass' }), '');
+    const vUnknown = validateCardConfig({ scene: { glassHouse: true, somethingNew: 'x' } });
+    ok('l: unknown scene key tolerated (ignored, rest kept)',
+       !!vUnknown.scene && vUnknown.scene.glassHouse === true && vUnknown.scene.somethingNew === undefined,
+       JSON.stringify(vUnknown.scene));
+    ok('l: an all-unknown scene block drops entirely',
+       validateCardConfig({ scene: { nope: 1 } }).scene === undefined, '');
+    ok('l: CARD_SCENE_BOOLS covers the 7 boolean knobs',
+       CARD_SCENE_BOOLS.length === 7 && CARD_SCENE_BOOLS.includes('simsCam') &&
+       CARD_SCENE_BOOLS.includes('wallCutaway') && CARD_SCENE_BOOLS.includes('skyBackdrop'),
+       CARD_SCENE_BOOLS.join(','));
+
+    // ── (m) validateCardConfig: layers as an object ───────────────────────────
+    const vLayObj = validateCardConfig({ type: 'custom:diorama-card', layers: { lights: false, targets: true } });
+    ok('m: layers object round-trips',
+       vLayObj.layers && vLayObj.layers.lights === false && vLayObj.layers.targets === true,
+       JSON.stringify(vLayObj.layers));
+    ok('m: layers object is COPIED (not the caller\'s reference)', (() => {
+       const src = { lights: false }; const out = validateCardConfig({ layers: src });
+       return out.layers !== src; })(), '');
+    ok('m: layers string still accepted', validateCardConfig({ layers: 'simple' }).layers === 'simple', '');
+    ok('m: layers with a non-boolean value throws', throwsCfg({ layers: { lights: 'off' } }), '');
+    ok('m: layers as an array throws', throwsCfg({ layers: ['lights'] }), '');
+    ok('m: layers as a number throws', throwsCfg({ layers: 3 }), '');
+
+    // ── (n) applyCardConfig: a layers OBJECT lands immediately ────────────────
+    const cardL = mkCard();
+    cardL.setConfig({ view: '2d', mode: 'kiosk', layers: { lights: false, targets: true, bgText: false } });
+    cardL.hass = makeHass(SEED);
+    const plL = cardL._planner;
+    ok('n: layers object applied synchronously (no retry needed)',
+       plL.store.layers2d && plL.store.layers2d.lights === false &&
+       plL.store.layers2d.targets === true && plL.store.layers2d.bgText === false,
+       JSON.stringify(plL.store.layers2d));
+    ok('n: layers object is copied onto the store, not aliased',
+       plL.store.layers2d !== cardL._config.layers, '');
+    // The string path still resolves through the URL template.
+    cardL.setConfig({ view: '2d', mode: 'kiosk', layers: 'simple' });
+    await waitFor(() => plL.store.layers2d && plL.store.layers2d.bgText === false &&
+                        plL.store.layers2d.furniture === false, 400);
+    ok('n: layers:"simple" applies the shared SIMPLE_LAYERS literal',
+       plL.store.layers2d.furniture === false && plL.store.layers2d.bgText === false &&
+       plL.store.layers2d.targets === true, JSON.stringify(plL.store.layers2d));
+    ok('n: layers:"simple" does NOT set the urlTemplate to an object',
+       typeof plL.urlTemplate.layers === 'string', String(plL.urlTemplate.layers));
+
+    // ── (o) the card passes scene overrides down to <diorama-three-view> ──────
+    const cardS = mkCard();
+    cardS.setConfig({ view: '3d', mode: 'kiosk',
+                      scene: { glassHouse: true, plumbobs: false, simsCam: true, fovV: 70 } });
+    cardS.hass = makeHass(SEED);
+    await cardS.updateComplete;
+    await waitFor(() => !!cardS.querySelector('diorama-three-view'), 400);
+    const tv = cardS.querySelector('diorama-three-view');
+    ok('o: three-view receives scene3dOverride.glassHouse',
+       !!tv && !!tv.scene3dOverride && tv.scene3dOverride.glassHouse === true,
+       JSON.stringify(tv?.scene3dOverride));
+    ok('o: override carries plumbobs:false + fovV (Scene3D field names)',
+       !!tv.scene3dOverride && tv.scene3dOverride.plumbobs === false && tv.scene3dOverride.fovV === 70, '');
+    ok('o: simsCam rides its OWN prop, not scene3dOverride',
+       tv.simsCamOverride === true && tv.scene3dOverride.simsCam === undefined, '');
+    ok('o: _sc3() merges the override OVER store.scene3d (override wins)', (() => {
+       const p2 = tv.planner; const prev = p2.store.scene3d;
+       p2.store.scene3d = { preset: 'day', glassHouse: false, floorColor: '#123456' };
+       const m = tv._sc3();
+       p2.store.scene3d = prev;
+       return m.glassHouse === true && m.floorColor === '#123456' && m.preset === 'day';
+     })(), '');
+    ok('o: _sc3() with NO override returns the store object untouched', (() => {
+       const p2 = tv.planner; const prev = p2.store.scene3d; const prevOv = tv.scene3dOverride;
+       const sc = { preset: 'night' }; p2.store.scene3d = sc; tv.scene3dOverride = null;
+       const m = tv._sc3();
+       p2.store.scene3d = prev; tv.scene3dOverride = prevOv;
+       return m === sc; })(), '');
+    // A 3D card with no scene block leaves both props null (panel path unchanged).
+    const tvPlain = card3d.querySelector('diorama-three-view');
+    ok('o: no scene block → scene3dOverride null + simsCamOverride null',
+       !!tvPlain && tvPlain.scene3dOverride === null && tvPlain.simsCamOverride === null,
+       `${tvPlain?.scene3dOverride} / ${tvPlain?.simsCamOverride}`);
+
+    // ── (p) editor: layers preset dropdown + custom multi-select grid ─────────
+    // Deterministic seed for the "Custom…" grid: clear the shared store's layers
+    // so the default-on / default-off resolution is what the grid starts from.
+    peekSharedPlanner().store.layers2d = undefined;
+    const ed2 = await CardCls.getConfigElement();
+    ed2.hass = makeHass(SEED);
+    stage.appendChild(ed2);   // Lit only starts updating once CONNECTED (updateComplete would hang otherwise)
+    ed2.setConfig({ type: 'custom:diorama-card', view: '2d' });
+    await ed2.updateComplete;
+    let emit2 = null;
+    ed2.addEventListener('config-changed', e => { emit2 = e.detail.config; });
+    const layerSel = [...ed2.querySelectorAll('select')].find(
+      s => [...s.options].some(o => o.value === '__custom'));
+    ok('p: editor renders a layers preset dropdown with Custom…', !!layerSel, '');
+    ok('p: dropdown lists (unchanged) / full / simple / Custom…',
+       !!layerSel && ['', 'full', 'simple', '__custom'].every(v =>
+         [...layerSel.options].some(o => o.value === v)),
+       layerSel ? [...layerSel.options].map(o => o.value).join(',') : '');
+    layerSel.value = 'simple'; layerSel.dispatchEvent(new Event('change'));
+    ok('p: picking a preset emits layers as a STRING',
+       !!emit2 && emit2.layers === 'simple' && emit2.type === 'custom:diorama-card', JSON.stringify(emit2));
+    emit2 = null;
+    layerSel.value = ''; layerSel.dispatchEvent(new Event('change'));
+    ok('p: picking (unchanged) drops the layers key',
+       !!emit2 && emit2.layers === undefined, JSON.stringify(emit2));
+    emit2 = null;
+    layerSel.value = '__custom'; layerSel.dispatchEvent(new Event('change'));
+    ok('p: picking Custom… emits an EXPLICIT object with every layer key',
+       !!emit2 && typeof emit2.layers === 'object' &&
+       LAYER_DEFS.every(d => typeof emit2.layers[d.key] === 'boolean'),
+       emit2 ? Object.keys(emit2.layers).length + ' keys' : '');
+    ok('p: Custom… emission keeps type', !!emit2 && emit2.type === 'custom:diorama-card', '');
+    ok('p: Custom… seeds default-OFF layers as false',
+       !!emit2 && emit2.layers.activity === false && emit2.layers.heatmap === false &&
+       emit2.layers.vacuumMap === false && emit2.layers.lights === true, '');
+    await ed2.updateComplete;
+    const gridBoxes = [...ed2.querySelectorAll('div[style*="grid-template-columns"] input[type=checkbox]')];
+    ok('p: custom grid renders exactly one checkbox per layer def',
+       gridBoxes.length === LAYER_DEFS.length, `${gridBoxes.length} boxes / ${LAYER_DEFS.length} defs`);
+    // Toggle the bgText box off and confirm the whole explicit object re-emits.
+    const bgIdx = LAYER_DEFS.findIndex(d => d.key === 'bgText');
+    emit2 = null;
+    gridBoxes[bgIdx].checked = false;
+    gridBoxes[bgIdx].dispatchEvent(new Event('change'));
+    ok('p: unchecking a grid box re-emits the full explicit object',
+       !!emit2 && emit2.layers.bgText === false &&
+       Object.keys(emit2.layers).length === LAYER_DEFS.length, JSON.stringify(emit2?.layers?.bgText));
+    ok('p: grid toggle still keeps type', !!emit2 && emit2.type === 'custom:diorama-card', '');
+
+    // ── (q) editor: Scene (3D) tri-state selects + FOV inputs ─────────────────
+    const ed3 = await CardCls.getConfigElement();
+    ed3.hass = makeHass(SEED);
+    stage.appendChild(ed3);   // Lit only starts updating once CONNECTED (updateComplete would hang otherwise)
+    ed3.setConfig({ type: 'custom:diorama-card', view: '3d' });
+    await ed3.updateComplete;
+    let emit3 = null;
+    ed3.addEventListener('config-changed', e => { emit3 = e.detail.config; });
+    const selects = [...ed3.querySelectorAll('select')];
+    const triSels = selects.filter(s => {
+      const vals = [...s.options].map(o => o.value).join(',');
+      return vals === ',on,off';
+    });
+    ok('q: 3D editor renders one (inherit)/On/Off select per scene bool',
+       triSels.length === CARD_SCENE_BOOLS.length, `${triSels.length} vs ${CARD_SCENE_BOOLS.length}`);
+    triSels[0].value = 'on'; triSels[0].dispatchEvent(new Event('change'));
+    ok('q: picking On emits scene.glassHouse true',
+       !!emit3 && !!emit3.scene && emit3.scene.glassHouse === true, JSON.stringify(emit3?.scene));
+    await ed3.updateComplete;
+    const triSels2 = [...ed3.querySelectorAll('select')].filter(
+      s => [...s.options].map(o => o.value).join(',') === ',on,off');
+    triSels2[1].value = 'off'; triSels2[1].dispatchEvent(new Event('change'));
+    ok('q: picking Off emits scene.wallCutaway false alongside the first key',
+       !!emit3 && emit3.scene.glassHouse === true && emit3.scene.wallCutaway === false,
+       JSON.stringify(emit3.scene));
+    await ed3.updateComplete;
+    const triSels3 = [...ed3.querySelectorAll('select')].filter(
+      s => [...s.options].map(o => o.value).join(',') === ',on,off');
+    triSels3[0].value = ''; triSels3[0].dispatchEvent(new Event('change'));
+    ok('q: picking (inherit) DELETES the nested key',
+       !!emit3 && emit3.scene.glassHouse === undefined &&
+       !('glassHouse' in emit3.scene) && emit3.scene.wallCutaway === false,
+       JSON.stringify(emit3.scene));
+    await ed3.updateComplete;
+    const triSels4 = [...ed3.querySelectorAll('select')].filter(
+      s => [...s.options].map(o => o.value).join(',') === ',on,off');
+    triSels4[1].value = ''; triSels4[1].dispatchEvent(new Event('change'));
+    ok('q: clearing the LAST scene key drops the scene block entirely',
+       !!emit3 && emit3.scene === undefined && !('scene' in emit3), JSON.stringify(emit3));
+    ok('q: scene cleanup never drops type', !!emit3 && emit3.type === 'custom:diorama-card', '');
+    // FOV number inputs
+    await ed3.updateComplete;
+    const nums = [...ed3.querySelectorAll('input[type=number]')];
+    ok('q: two FOV number inputs render', nums.length === 2, String(nums.length));
+    nums[0].value = '70'; nums[0].dispatchEvent(new Event('change'));
+    ok('q: fovV input emits a number', !!emit3 && emit3.scene && emit3.scene.fovV === 70,
+       JSON.stringify(emit3?.scene));
+    await ed3.updateComplete;
+    const nums2 = [...ed3.querySelectorAll('input[type=number]')];
+    nums2[0].value = ''; nums2[0].dispatchEvent(new Event('change'));
+    ok('q: blanking fovV inherits again (key removed, block dropped)',
+       !!emit3 && emit3.scene === undefined, JSON.stringify(emit3));
+    // Emitted scene configs must survive the card's own validator.
+    ok('q: an editor-emitted scene config validates',
+       validateCardConfig({ type: 'custom:diorama-card', view: '3d',
+                            scene: { glassHouse: true, fovV: 70 } }).scene.fovV === 70, '');
 
   } catch (err) {
     ok('harness threw', false, (err && err.stack) ? err.stack.split('\n').slice(0, 4).join(' | ') : String(err));

@@ -238,6 +238,28 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Card scene controls, layers multi-select, bgText layer,
+  attribution gating** (2026-07-27, user request; unreleased — on
+  main past v0.35.0). (1) Card visual editor: Layers = preset
+  dropdown ((unchanged)/Full/Simple/saved presets/Custom…) with a
+  Custom… checkbox grid emitting an explicit `{layer: bool}` object
+  (config `layers` now string OR object; object applies immediately
+  in applyCardConfig); Scene (3D) block (view:3d only) = tri-state
+  inherit/On/Off for glassHouse/wallCutaway/autoFollow/
+  cinematicOrbit/simsCam/plumbobs/skyBackdrop + fovV/fovH inputs.
+  (2) `scene?: CardSceneConfig` = CARD-LOCAL overrides via
+  three-view's new `scene3dOverride` (merged by `_sc3()`, all ~19
+  scene3d reads routed; identity-return when no override) +
+  `simsCamOverride` (snap always, 'sims' pose only without
+  cam/view3d). (3) New `Layers2D.bgText` layer (absent = on) hides
+  the decorative bg-text rigs; off in Simple preset; `_keyBgText`
+  gains the flag, empty-list disposal, `_bgTextPhase` resumes.
+  (4) `src/layer-defs.ts` extracted (LAYER_DEFS/SIMPLE_LAYERS/
+  layerIsOn — sidebar + app + card-shared + editor share one
+  catalog). (5) Attribution chip lines follow their layers
+  (neighborhood OSM line + flights line hide when the layer is
+  hidden). card-test 38→92, bgtext-multi 102→112, sensor-focus 9/9.
+
 - **Card visual-editor "No type provided" fix** (2026-07-27,
   user-reported; unreleased — on main past v0.35.0).
   `validateCardConfig` rebuilt the config without `type`, so the

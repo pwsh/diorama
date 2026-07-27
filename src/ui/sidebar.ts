@@ -64,6 +64,7 @@ function gpsZoneGlyph(zone: 'indoor' | 'yard' | 'beyond'): string {
 import { saveModel, deleteModel } from '../model-store.js';
 import { newId } from '../storage.js';
 import { FLAG_PAINTERS } from '../flags.js';
+import { LAYER_DEFS, SIMPLE_LAYERS, layerIsOn } from '../layer-defs.js';
 
 const LIGHT_KINDS: { id: LightIconKind; label: string; glyph: string }[] = [
   { id: 'bulb',      label: 'Bulb',      glyph: '💡' },
@@ -6205,52 +6206,24 @@ export class Sidebar extends LitElement {
   private _layers2dSection() {
     const p = this.planner;
     const L = p.store.layers2d ?? {};
-    const isOn = (k: keyof Layers2D) => (k === 'activity' || k === 'vacuumMap' || k === 'heatmap') ? L[k] === true : L[k] !== false;
+    // Default-on vs default-off resolution lives in ../layer-defs.js (shared).
+    const isOn = (k: keyof Layers2D) => layerIsOn(L, k);
     const setLayers = (nl: Layers2D | undefined) => {
       p.store.layers2d = nl; p.save(); p.emitConfig();
     };
     const presets = p.store.layerPresets2d ?? [];
-    const defs: { key: keyof Layers2D; label: string }[] = [
-      { key: 'bg', label: 'Background image' },
-      { key: 'walls', label: 'Walls' },
-      { key: 'labels', label: 'Room labels' },
-      { key: 'furniture', label: 'Furniture' },
-      { key: 'appliances', label: 'Appliances' },
-      { key: 'lights', label: 'Lights' },
-      { key: 'switches', label: 'Switches' },
-      { key: 'sensors', label: 'mmWave sensors' },
-      { key: 'motion', label: 'Motion sensors' },
-      { key: 'env', label: 'Env sensors' },
-      { key: 'info', label: 'Info cards' },
-      { key: 'zones', label: 'Zones & halos' },
-      { key: 'ground', label: 'Ground / yard' },
-      { key: 'vacuumMap', label: 'Vacuum room map' },
-      { key: 'heatmap', label: 'Temperature heat-map' },
-      { key: 'grid', label: '3D grid' },
-      { key: 'targets', label: 'Avatars' },
-      { key: 'geo', label: 'Geo landmarks' },
-      { key: 'weatherFx', label: 'Weather effects (3D)' },
-      { key: 'nameLabels', label: 'Name labels' },
-      { key: 'battery', label: 'Battery warnings' },
-      { key: 'dimensions', label: 'Dimensions' },
-      { key: 'neighborhood', label: 'Neighborhood' },
-      { key: 'flights', label: 'Flights' },
-      { key: 'activity', label: 'Activity glow' },
-    ];
+    // Canonical key→label list lives in ../layer-defs.js (shared with the
+    // Lovelace card's visual editor so both surfaces list the same layers).
     // Display order only: alphabetical by label (locale compare). The preset
     // save loop keys by `d.key`, so display order doesn't affect semantics.
-    const sortedDefs = [...defs].sort((a, b) => a.label.localeCompare(b.label));
+    const sortedDefs = [...LAYER_DEFS].sort((a, b) => a.label.localeCompare(b.label));
     return this._section('layers', 'Layers', () => html`
         <div class="row"><label>Preset</label>
           <select @change=${(e: Event) => {
                     const el = e.target as HTMLSelectElement;
                     const v = el.value; el.value = '';
                     if (v === 'full') setLayers(undefined);
-                    else if (v === 'simple') setLayers({
-                      bg: false, furniture: false, appliances: false, lights: false,
-                      switches: false, sensors: false,
-                      motion: false, env: false, zones: false, targets: true, activity: true,
-                    });
+                    else if (v === 'simple') setLayers({ ...SIMPLE_LAYERS });
                     else {
                       const pr = presets.find(x => x.id === v);
                       if (pr) setLayers({ ...pr.layers });
@@ -6313,7 +6286,7 @@ export class Sidebar extends LitElement {
             if (!name) return;
             if (!p.store.layerPresets2d) p.store.layerPresets2d = [];
             const cur: Layers2D = {};
-            for (const d of defs) cur[d.key] = isOn(d.key);
+            for (const d of LAYER_DEFS) cur[d.key] = isOn(d.key);
             p.store.layerPresets2d.push({ id: newId('lp'), name, layers: cur });
             p.save(); p.emitConfig();
           }}>💾 Save preset…</button>

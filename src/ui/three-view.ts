@@ -21,6 +21,7 @@ import { loadModel } from '../model-store.js';
 import { newId } from '../storage.js';
 import type { Planner } from '../planner.js';
 import { floorSwitchCameraDelta } from '../planner.js';
+import type { Scene3D } from '../types.js';
 
 @customElement('diorama-three-view')
 export class ThreeView extends LitElement {
@@ -31,6 +32,16 @@ export class ThreeView extends LitElement {
   // card sharing the always-kiosk card Planner must not toggle devices).
   @property({ attribute: false }) compact = false;
   @property({ attribute: false }) interactive = true;
+  // CARD-LOCAL 3D scene overrides (Lovelace `scene:` block). Merged OVER
+  // store.scene3d by _sc3(); the panel app never sets this. Keys present here
+  // PIN the effective value for this view — the 3D-bar toggle handlers still
+  // mutate store.scene3d (shared, persisted), so with an override in place the
+  // button flips the store but the pinned value keeps winning. Acceptable: a
+  // card that hard-configures glass house is asking for exactly that.
+  @property({ attribute: false }) scene3dOverride: Partial<Scene3D> | null = null;
+  // Card-local Sims-cam force: true → snap on (+ frame the dimetric preset when
+  // the card gave no explicit cam/view3d), false → snap off, null → user-driven.
+  @property({ attribute: false }) simsCamOverride: boolean | null = null;
   @query('#three-area') private _area!: HTMLElement;
   private _renderer: ThreeDRenderer | null = null;
   private _ro: ResizeObserver | null = null;
@@ -40,8 +51,20 @@ export class ThreeView extends LitElement {
 
   protected override createRenderRoot() { return this; }
 
+  // THE single read of the effective 3D scene config for this view: the shared
+  // store's scene3d with any card-local override spread on top (override wins).
+  // Returns undefined only when neither exists, so every `?.` call site keeps
+  // its existing "absent → default" semantics.
+  private _sc3(): Scene3D | undefined {
+    const sc = this.planner?.store.scene3d;
+    const ov = this.scene3dOverride;
+    if (!ov || Object.keys(ov).length === 0) return sc;
+    return { preset: 'night', ...(sc ?? {}), ...ov };
+  }
+
   override render() {
     const p = this.planner;
+    const sc3 = this._sc3();
     const saved = p?.store.views3d ?? [];
     const btn = (label: string, title: string, k: 'iso' | 'top' | 'front' | 'back' | 'left' | 'right') => html`
       <button title=${title}
@@ -68,19 +91,19 @@ export class ThreeView extends LitElement {
                 @click=${() => this._toggleSimsCam()}>💎 Sims</button>
         <button title="Glass house — show every floor at once, other stories translucent"
                 style="font-size:10px;padding:3px 7px;border-radius:3px;cursor:pointer;
-                       ${p?.store.scene3d?.glassHouse
+                       ${sc3?.glassHouse
                          ? 'background:#2e7d32;border:1px solid #43a047;color:#e8f5e9'
                          : 'background:#1c2733;border:1px solid #33465a;color:#a5d6a7'}"
                 @click=${() => this._toggleGlassHouse()}>🏠</button>
         <button title="Auto-follow — camera tracks and frames the active people"
                 style="font-size:10px;padding:3px 7px;border-radius:3px;cursor:pointer;
-                       ${p?.store.scene3d?.autoFollow
+                       ${sc3?.autoFollow
                          ? 'background:#2e7d32;border:1px solid #43a047;color:#e8f5e9'
                          : 'background:#1c2733;border:1px solid #33465a;color:#a5d6a7'}"
                 @click=${() => this._toggleAutoFollow()}>🎥</button>
         <button title="Cinematic orbit — slowly circle the camera around the avatars"
                 style="font-size:10px;padding:3px 7px;border-radius:3px;cursor:pointer;
-                       ${p?.store.scene3d?.cinematicOrbit
+                       ${sc3?.cinematicOrbit
                          ? 'background:#2e7d32;border:1px solid #43a047;color:#e8f5e9'
                          : 'background:#1c2733;border:1px solid #33465a;color:#a5d6a7'}"
                 @click=${() => this._toggleCinematicOrbit()}>🎬</button>
@@ -177,6 +200,13 @@ export class ThreeView extends LitElement {
 
   override firstUpdated(): void {
     void this._setup();
+  }
+
+  // Re-apply the card-local Sims-cam force when the card's config changes live
+  // (the visual editor re-emits on every keystroke). scene3dOverride needs no
+  // hook — _sc3() re-reads it every tick.
+  override updated(changed: Map<string, unknown>): void {
+    if (changed.has('simsCamOverride') && this._renderer) this._applySimsCamOverride();
   }
 
   // Card lifecycle: a dashboard may detach + re-attach the SAME element on a
@@ -504,7 +534,26 @@ export class ThreeView extends LitElement {
       }
     });
     this._initialized = true;
+    this._applySimsCamOverride();
     this._startSync();
+  }
+
+  // Card-local Sims-cam force, applied once the renderer is ready. The dimetric
+  // FRAMING is only applied when the card gave no explicit cam/view3d — an
+  // explicit camera template must win over the preset pose — but the 45° azimuth
+  // SNAP is enabled either way (it's a behavior, not a pose). The 3D-bar button
+  // stays live afterwards so a kiosk user can still flip it for the session.
+  private _applySimsCamOverride(): void {
+    const ov = this.simsCamOverride;
+    if (ov == null || !this._renderer) return;
+    this._simsCamOn = ov;
+    if (ov) {
+      const tpl = this.planner?.urlTemplate;
+      const hasCamTemplate = !!(tpl && (tpl.cam || tpl.view3d));
+      if (!hasCamTemplate) this._renderer.applyViewPreset('sims');
+    }
+    this._renderer.setSimsCam(ov);
+    this.requestUpdate();
   }
 
   override disconnectedCallback(): void {
@@ -619,7 +668,7 @@ export class ThreeView extends LitElement {
     // moon.* entity's raw 8-state string (read opportunistically each tick, like
     // sun.sun below — no _isSlowEntity entry needed; the RAF re-reads states and
     // _keyWeather folds the phase so updateWeather rebuilds on a phase change).
-    const sc3 = p.store.scene3d;
+    const sc3 = this._sc3();
     const skyBackdrop = sc3?.skyBackdrop ?? (w != null);
     const moonPhase = w?.moonEntity ? (states[w.moonEntity]?.state ?? null) : null;
 
@@ -836,24 +885,26 @@ export class ThreeView extends LitElement {
       // layers are cheap per-tick visible flips; furniture + bg gate at
       // floor build time below (they live inside _floorGroup).
       const layers = p.store.layers2d ?? {};
+      // Effective scene config: store.scene3d + this card's `scene:` override.
+      const sc3o = this._sc3();
       r.setLayerVisibility(layers);
-      r.setPlumbobs((p.store.scene3d?.plumbobs) !== false);
+      r.setPlumbobs((sc3o?.plumbobs) !== false);
 
       // Auto-follow camera flag (cheap; the renderer does the per-frame easing).
-      r.setAutoFollow(!!p.store.scene3d?.autoFollow);
+      r.setAutoFollow(!!sc3o?.autoFollow);
       // Cinematic slow-orbit flag (renderer advances the azimuth per frame).
-      r.setCinematicOrbit(!!p.store.scene3d?.cinematicOrbit);
+      r.setCinematicOrbit(!!sc3o?.cinematicOrbit);
 
       // Camera below-horizon + independent H/V FOV. Both setters self-guard
       // (no-op unless the value changed) so calling them every tick is free —
       // no dirty key needed; the values change only on a settings edit.
-      r.setBelowHorizon(p.store.scene3d?.belowHorizon === true);
-      r.setFov(p.store.scene3d?.fovV ?? 50, p.store.scene3d?.fovH ?? null);
+      r.setBelowHorizon(sc3o?.belowHorizon === true);
+      r.setFov(sc3o?.fovV ?? 50, sc3o?.fovH ?? null);
 
       // Floor / walls / furniture / bg: structural + effective lighting
       // preset (auto modes flip it as the sun/lux sensor moves) + per-floor
       // look overrides + build-time-gated layers.
-      const scBase = p.store.scene3d ?? { preset: 'night' as const };
+      const scBase = sc3o ?? { preset: 'night' as const };
       const effPreset = this._effectivePreset(scBase, states);
       const scMerged = { ...scBase, ...(f.look3d ?? {}), preset: effPreset };
       // The `geo` layer's 3D pins (landmarks + GPS devices) build in a dedicated
@@ -1525,7 +1576,12 @@ export class ThreeView extends LitElement {
       // change. sky + banner hide under pouring/lightning (they read wrong in a
       // downpour); grass (a ground decal) always shows. Per-frame motion runs in
       // the renderer's _advanceBgText.
-      const bgEntries = p.bgTextsResolved();
+      // Layer gate (`bgText`, absent = ON): hidden → feed an EMPTY entry list so
+      // the existing rebuild path disposes every rig. The persistent
+      // _bgTextPhase map survives by design, so re-enabling resumes the plane /
+      // train mid-course exactly like any other legitimate rebuild.
+      const bgTextOn = layers.bgText !== false;
+      const bgEntries = bgTextOn ? p.bgTextsResolved() : [];
       const bgStorm = fx.condition === 'pouring' || fx.condition === 'lightning'
         || fx.condition === 'lightning-rainy';
       // NO configRev term — deliberately. The builder consumes only the RESOLVED
@@ -1537,6 +1593,7 @@ export class ThreeView extends LitElement {
       // build angle. Legit rebuilds still resume mid-course via the renderer's
       // persistent _bgTextPhase, but a rebuild is no longer free of cost.
       const keyBgText = `${f.id}|${f.w | 0}x${f.d | 0}|${bgStorm ? 's' : '-'}|${groundLevelMm}|${wallHash}|`
+        + `${bgTextOn ? 'v' : 'h'}|`
         + bgEntries.map(e => {
             const ga = e.grassArea
               ? `${Math.round(e.grassArea.cx / 100)},${Math.round(e.grassArea.cy / 100)},`

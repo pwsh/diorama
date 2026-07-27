@@ -8,4 +8,5 @@
 import './card.js';
 export { Planner } from './planner.js';
 export { getOrCreatePlanner, peekSharedPlanner, cardMountCount } from './card-shared.js';
-export { validateCardConfig } from './card-config.js';
+export { validateCardConfig, CARD_SCENE_BOOLS } from './card-config.js';
+export { LAYER_DEFS, SIMPLE_LAYERS, layerIsOn } from './layer-defs.js';

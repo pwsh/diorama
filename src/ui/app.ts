@@ -6,6 +6,7 @@ import { LocalApi, shouldStartOffline } from '../ha-local.js';
 import { seedDemoConfigs, seedModelViewer, demoSeedHash, DEMO_SEEDED_KEY, type DemoManifestEntry } from '../demo-seed.js';
 import { fmtLen } from '../geometry.js';
 import { injectSharedStyles } from '../styles.js';
+import { SIMPLE_LAYERS } from '../layer-defs.js';
 import './auth-screen.js';
 import './topbar.js';
 import './sidebar.js';
@@ -108,9 +109,7 @@ export class App extends LitElement {
       if (!this._tplDone.layers) {
         const want = (p.urlTemplate.layers ?? '').toLowerCase();
         if (want === 'simple') {
-          p.store.layers2d = { bg: false, furniture: false, appliances: false, lights: false,
-                               switches: false, sensors: false,
-                               motion: false, env: false, zones: false, targets: true, activity: true };
+          p.store.layers2d = { ...SIMPLE_LAYERS };
           this._tplDone.layers = true; p.emitConfig();
         } else if (want === 'full') {
           p.store.layers2d = undefined;
@@ -378,16 +377,23 @@ export class App extends LitElement {
               <diorama-compass .planner=${p}></diorama-compass>
               <!-- Data attribution (compliance, NOT configurable): shown in ALL
                    UI modes whenever a third-party data feed is enabled AND its
-                   data is resolved. One fixed bottom-left container; each active
-                   source is its own stacked line. Links are the only
+                   data is resolved AND its LAYER is visible. Still not a user
+                   setting — it simply FOLLOWS the layer: attribution is required
+                   whenever the data is DISPLAYED, and a hidden layer displays
+                   nothing, so suppressing its line is compliant. It un-hides the
+                   moment the layer does. One fixed bottom-left container; each
+                   active source is its own stacked line. Links are the only
                    pointer-interactive part. -->
-              ${(p.store.neighborhood?.enabled === true && p.neighborhoodData != null)
+              ${(p.store.neighborhood?.enabled === true && p.neighborhoodData != null
+                  && p.store.layers2d?.neighborhood !== false)
                 || (p.store.flights?.enabled === true
-                    && (p.store.flights.source ?? 'cloud') === 'cloud' && p.flightsNow != null) ? html`
+                    && (p.store.flights.source ?? 'cloud') === 'cloud' && p.flightsNow != null
+                    && p.store.layers2d?.flights !== false) ? html`
                 <div style="position:absolute;bottom:6px;left:8px;font-size:10px;line-height:1.35;
                             color:var(--text-dim);pointer-events:none;
                             text-shadow:0 0 4px rgba(0,0,0,0.85),0 0 2px rgba(0,0,0,0.85)">
-                  ${p.store.neighborhood?.enabled === true && p.neighborhoodData != null ? html`
+                  ${p.store.neighborhood?.enabled === true && p.neighborhoodData != null
+                    && p.store.layers2d?.neighborhood !== false ? html`
                     <div>
                       <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer"
                          style="color:inherit;pointer-events:auto;text-decoration:underline">© OpenStreetMap</a>
@@ -396,7 +402,8 @@ export class App extends LitElement {
                          style="color:inherit;pointer-events:auto;text-decoration:underline">OpenFreeMap</a>
                     </div>` : nothing}
                   ${p.store.flights?.enabled === true
-                    && (p.store.flights.source ?? 'cloud') === 'cloud' && p.flightsNow != null ? html`
+                    && (p.store.flights.source ?? 'cloud') === 'cloud' && p.flightsNow != null
+                    && p.store.layers2d?.flights !== false ? html`
                     <div>
                       Flight data
                       <a href="https://airplanes.live" target="_blank" rel="noopener noreferrer"

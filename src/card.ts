@@ -15,6 +15,7 @@ import { state } from 'lit/decorators.js';
 import { customElement } from './ui/define.js';
 import { injectSharedStyles } from './styles.js';
 import type { Planner } from './planner.js';
+import type { Scene3D } from './types.js';
 import {
   getOrCreatePlanner, applyCardConfig, noteCardMounted, noteCardUnmounted,
 } from './card-shared.js';
@@ -124,6 +125,26 @@ export class DioramaCard extends LitElement {
 
   private get _compact(): boolean { return this._config.compact ?? this._autoCompact; }
 
+  // Card-local 3D scene override, built from the `scene:` config block. The
+  // boolean/number keys map 1:1 onto Scene3D field names (simsCam is the one
+  // exception — it's a runtime three-view toggle, not a Scene3D field, so it
+  // rides its own prop). Returns null when nothing was configured so the panel
+  // path (and 2D cards, which ignore it entirely) stays byte-identical.
+  private get _sceneOverride(): Partial<Scene3D> | null {
+    const s = this._config.scene;
+    if (!s) return null;
+    const o: Partial<Scene3D> = {};
+    if (s.glassHouse !== undefined) o.glassHouse = s.glassHouse;
+    if (s.wallCutaway !== undefined) o.wallCutaway = s.wallCutaway;
+    if (s.autoFollow !== undefined) o.autoFollow = s.autoFollow;
+    if (s.cinematicOrbit !== undefined) o.cinematicOrbit = s.cinematicOrbit;
+    if (s.plumbobs !== undefined) o.plumbobs = s.plumbobs;
+    if (s.skyBackdrop !== undefined) o.skyBackdrop = s.skyBackdrop;
+    if (s.fovV !== undefined) o.fovV = s.fovV;
+    if (s.fovH !== undefined) o.fovH = s.fovH;
+    return Object.keys(o).length ? o : null;
+  }
+
   override render() {
     const p = this._planner;
     if (!p) {
@@ -143,7 +164,9 @@ export class DioramaCard extends LitElement {
       <div style="position:relative;height:100%;min-height:${minH}px;overflow:hidden;
                   border-radius:12px;background:var(--bg,#0d1116)">
         ${view === '3d'
-          ? html`<diorama-three-view .planner=${p} .compact=${compact} .interactive=${interactive}></diorama-three-view>`
+          ? html`<diorama-three-view .planner=${p} .compact=${compact} .interactive=${interactive}
+                    .scene3dOverride=${this._sceneOverride}
+                    .simsCamOverride=${this._config.scene?.simsCam ?? null}></diorama-three-view>`
           : html`<div style="position:absolute;inset:0">
               <diorama-canvas-2d .planner=${p} .compact=${compact} .interactive=${interactive}></diorama-canvas-2d>
             </div>`}

@@ -12,12 +12,38 @@ export interface DioramaCardConfig {
   floor?: string;                // floor name or id  (== ?floor=)
   view?: '2d' | '3d';            // == ?view=
   mode?: 'kiosk' | 'view';       // NEVER 'edit' — setConfig rejects it
-  layers?: string;               // preset name/id, or 'simple' | 'full'  (== ?layers=)
+  // Preset name/id, or 'simple' | 'full' (== ?layers=) — OR an explicit
+  // {layerKey: boolean} object emitted by the editor's multi-select grid (no
+  // name resolution needed, so it applies immediately).
+  layers?: string | Record<string, boolean>;
   view3d?: string;               // saved 3D view name/id  (== ?view3d=)
   cam?: [number, number, number, number, number, number]; // == ?cam=
   compact?: boolean;             // hide overlay chrome (auto below ~360px if unset)
   panelPath?: string;            // href for the ⤢ expand-to-panel link (default '/diorama')
+  // CARD-LOCAL 3D scene overrides. Each present key pins the effective value for
+  // THIS card's <diorama-three-view> (merged over store.scene3d, override wins);
+  // absent keys inherit the shared store. Nothing here is persisted — 2D cards
+  // ignore the block entirely.
+  scene?: CardSceneConfig;
 }
+
+export interface CardSceneConfig {
+  glassHouse?: boolean;
+  wallCutaway?: boolean;
+  autoFollow?: boolean;
+  cinematicOrbit?: boolean;
+  simsCam?: boolean;      // NOT a Scene3D field — drives three-view's runtime azimuth-snap toggle
+  plumbobs?: boolean;
+  skyBackdrop?: boolean;
+  fovV?: number;          // vertical FOV degrees, 10–120
+  fovH?: number;          // horizontal FOV degrees, 10–150 (independent frustum)
+}
+
+// scene.* boolean keys, in editor display order.
+export const CARD_SCENE_BOOLS = [
+  'glassHouse', 'wallCutaway', 'autoFollow', 'cinematicOrbit',
+  'simsCam', 'plumbobs', 'skyBackdrop',
+] as const satisfies readonly (keyof CardSceneConfig)[];
 
 // Validate + normalize a raw config object. THROWS (synchronously) on invalid
 // input so HA renders its red error card from the message (custom-card contract).
@@ -46,8 +72,19 @@ export function validateCardConfig(raw: unknown): DioramaCardConfig {
     if (c.floor) out.floor = c.floor;
   }
   if (c.layers !== undefined) {
-    if (typeof c.layers !== 'string') throw new Error('diorama-card: layers must be a string (preset name/id, or "simple"/"full")');
-    if (c.layers) out.layers = c.layers;
+    if (typeof c.layers === 'string') {
+      if (c.layers) out.layers = c.layers;
+    } else if (c.layers && typeof c.layers === 'object' && !Array.isArray(c.layers)) {
+      const src = c.layers as Record<string, unknown>;
+      for (const [k, v] of Object.entries(src)) {
+        if (typeof v !== 'boolean') {
+          throw new Error(`diorama-card: layers.${k} must be true or false (got ${JSON.stringify(v)})`);
+        }
+      }
+      out.layers = { ...(src as Record<string, boolean>) };
+    } else {
+      throw new Error('diorama-card: layers must be a string (preset name/id, or "simple"/"full") or an object of layer→boolean');
+    }
   }
   if (c.view3d !== undefined) {
     if (typeof c.view3d !== 'string') throw new Error('diorama-card: view3d must be a string (saved view name/id)');
@@ -67,6 +104,30 @@ export function validateCardConfig(raw: unknown): DioramaCardConfig {
   if (c.panelPath !== undefined) {
     if (typeof c.panelPath !== 'string') throw new Error('diorama-card: panelPath must be a string');
     if (c.panelPath) out.panelPath = c.panelPath;
+  }
+  if (c.scene !== undefined) {
+    if (!c.scene || typeof c.scene !== 'object' || Array.isArray(c.scene)) {
+      throw new Error('diorama-card: scene must be an object');
+    }
+    const s = c.scene as Record<string, unknown>;
+    const scene: CardSceneConfig = {};
+    for (const k of CARD_SCENE_BOOLS) {
+      if (s[k] === undefined) continue;
+      if (typeof s[k] !== 'boolean') throw new Error(`diorama-card: scene.${k} must be true or false`);
+      scene[k] = s[k] as boolean;
+    }
+    const num = (k: 'fovV' | 'fovH', lo: number, hi: number) => {
+      if (s[k] === undefined) return;
+      const v = s[k];
+      if (typeof v !== 'number' || !isFinite(v) || v < lo || v > hi) {
+        throw new Error(`diorama-card: scene.${k} must be a number ${lo}–${hi}`);
+      }
+      scene[k] = v;
+    };
+    num('fovV', 10, 120);
+    num('fovH', 10, 150);
+    // Unknown keys inside `scene` are tolerated (ignored) — forward compat.
+    if (Object.keys(scene).length) out.scene = scene;
   }
   return out;
 }

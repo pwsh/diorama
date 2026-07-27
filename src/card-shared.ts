@@ -14,6 +14,8 @@
 import { Planner } from './planner.js';
 import { HassPanelAdapter } from './ha-panel-adapter.js';
 import type { DioramaCardConfig } from './card-config.js';
+import { SIMPLE_LAYERS } from './layer-defs.js';
+import type { Layers2D } from './types.js';
 
 type CardHass = Parameters<HassPanelAdapter['attach']>[0];
 
@@ -53,20 +55,35 @@ export function cardMountCount(): number { return mountCount; }
 // NOTE: floor + layers are GLOBAL on the shared Planner, so with multiple cards
 // the last-applied config wins — a known, documented v1 limitation of the
 // shared-Planner design (research §3.3, open question 3). The common case (one
-// Diorama card, or several on the same floor) is unaffected.
+// Diorama card, or several on the same floor) is unaffected. That applies to the
+// explicit `layers: {…}` object form too. By contrast the card's `scene:` block
+// is CARD-LOCAL (passed as a prop into that card's own <diorama-three-view>), so
+// two 3D cards can legitimately differ on glass house / auto-follow / FOV.
 //
 // Returns a disposer that cancels the pending retry listener (call it when the
 // card disconnects or re-applies a new config so listeners don't accumulate).
 export function applyCardConfig(p: Planner, cfg: DioramaCardConfig): () => void {
-  // view3d / cam ride the URL-template that three-view reads on mount.
+  // view3d / cam ride the URL-template that three-view reads on mount. Only the
+  // STRING form of `layers` is a template (it needs the store's preset list to
+  // resolve a name); the object form is applied outright below.
+  const layerName = typeof cfg.layers === 'string' ? cfg.layers : undefined;
   p.urlTemplate = {
     floor: cfg.floor,
-    layers: cfg.layers,
+    layers: layerName,
     view3d: cfg.view3d,
     cam: cfg.cam ? [...cfg.cam] : undefined,
   };
 
   const done = { floor: !cfg.floor, layers: !cfg.layers };
+
+  // Explicit {layerKey: boolean} object — no name to resolve, so it lands
+  // immediately (and is GLOBAL on the shared Planner, same caveat as below).
+  if (cfg.layers && typeof cfg.layers === 'object') {
+    p.store.layers2d = { ...(cfg.layers as Layers2D) };
+    done.layers = true;
+    p.emitConfig();
+  }
+
   if (done.floor && done.layers) return () => {};
 
   const started = Date.now();
@@ -84,19 +101,17 @@ export function applyCardConfig(p: Planner, cfg: DioramaCardConfig): () => void 
         p.emitConfig();
       }
     }
-    if (!done.layers && cfg.layers) {
-      const want = cfg.layers.toLowerCase();
+    if (!done.layers && layerName) {
+      const want = layerName.toLowerCase();
       if (want === 'simple') {
-        p.store.layers2d = { bg: false, furniture: false, appliances: false, lights: false,
-                             switches: false, sensors: false,
-                             motion: false, env: false, zones: false, targets: true, activity: true };
+        p.store.layers2d = { ...SIMPLE_LAYERS };
         done.layers = true; p.emitConfig();
       } else if (want === 'full') {
         p.store.layers2d = undefined;
         done.layers = true; p.emitConfig();
       } else {
         const pr = (p.store.layerPresets2d ?? []).find(x =>
-          x.id === cfg.layers || x.name.toLowerCase() === want);
+          x.id === layerName || x.name.toLowerCase() === want);
         if (pr) { p.store.layers2d = { ...pr.layers }; done.layers = true; p.emitConfig(); }
       }
     }

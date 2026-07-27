@@ -1526,6 +1526,7 @@ export interface Layers2D {
   dimensions?: boolean; // rulers + wall/structure dimension lines (2D); default ON
   neighborhood?: boolean; // OpenFreeMap neighborhood overlay (3D buildings this wave); default ON — but the FEATURE is opt-in via neighborhood.enabled, so this leaks nothing on its own
   flights?: boolean;      // live aircraft + ISS sky overlay; default ON — but the FEATURE is opt-in via flights.enabled, so this leaks nothing on its own
+  bgText?: boolean;       // decorative background-text rigs (skywriting / banner plane / grass message / train / news chopper); default ON. 3D-ONLY — these have no 2D drawing, so the flag gates only three-view's updateBgTexts feed.
 }
 
 export interface Layer2DPreset {

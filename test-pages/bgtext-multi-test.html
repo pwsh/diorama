@@ -902,6 +902,60 @@
     r.updateBgTexts([], false, 0, 0);
   }
 
+  // ════════════ LAYER GATE (Layers2D.bgText, absent = ON) ════════════
+  // three-view feeds updateBgTexts an EMPTY entry list whenever the `bgText`
+  // layer is hidden (and folds the flag into _keyBgText so the swap actually
+  // rebuilds). This asserts the RENDERER half of that contract: an empty feed
+  // disposes every rig and frees its group, and re-enabling rebuilds the rigs —
+  // resuming mid-course off the persistent _bgTextPhase, exactly like any other
+  // legitimate rebuild.
+  {
+    const ENTRIES = [
+      { id: 'lgTrain', mode: 'train', text: 'LAYER TRAIN' },
+      { id: 'lgPlane', mode: 'banner', text: 'LAYER PLANE' },
+      { id: 'lgGrass', mode: 'grass', text: 'LAYER LAWN' },
+    ];
+    r.updateBgTexts(ENTRIES, false, 0, 0);
+    ok('LAYER on: three entries build three rigs', r._bgRigs.length === 3, `n=${r._bgRigs.length}`);
+    const groupBefore = r._bgTextGroup.children.length;
+    ok('LAYER on: the bg-text group has scene content', groupBefore > 0, `children=${groupBefore}`);
+
+    // Fly a while so the phases are demonstrably mid-course.
+    for (let i = 0; i < 400; i++) { clk += 1 / 60; r._advanceBgText(1 / 60, clk); }
+    const flownAngle = r._bgRigs.find(x => x.mode === 'banner').angle;
+    const flownS = r._bgRigs.find(x => x.mode === 'train').train.s;
+    ok('LAYER on: rigs actually moved off their build pose',
+       Math.abs(flownAngle) > 1e-6 && flownS > 1e-6, `angle=${flownAngle.toFixed(3)} s=${flownS.toFixed(1)}`);
+
+    // Layer OFF → three-view passes []. Every rig must go.
+    r.updateBgTexts([], false, 0, 0);
+    ok('LAYER off: empty feed leaves ZERO rigs', r._bgRigs.length === 0, `n=${r._bgRigs.length}`);
+    ok('LAYER off: the bg-text group is emptied', r._bgTextGroup.children.length === 0,
+       `children=${r._bgTextGroup.children.length}`);
+    // A per-frame advance over an empty rig list must be a safe no-op.
+    let advThrew = false;
+    try { clk += 1; r._advanceBgText(1, clk); } catch { advThrew = true; }
+    ok('LAYER off: _advanceBgText over zero rigs is a safe no-op', !advThrew, '');
+
+    // Layer back ON → rigs return, and the persistent phase map resumes them.
+    r.updateBgTexts(ENTRIES, false, 0, 0);
+    ok('LAYER on again: rigs return', r._bgRigs.length === 3, `n=${r._bgRigs.length}`);
+    ok('LAYER on again: the group is repopulated', r._bgTextGroup.children.length > 0,
+       `children=${r._bgTextGroup.children.length}`);
+    const backAngle = r._bgRigs.find(x => x.mode === 'banner').angle;
+    const backS = r._bgRigs.find(x => x.mode === 'train').train.s;
+    ok('LAYER on again: phase persistence survives the hide/show cycle',
+       Math.abs(backAngle - flownAngle) < 1e-9 && Math.abs(backS - flownS) < 1e-6,
+       `dAngle=${(backAngle - flownAngle).toExponential(1)} dS=${(backS - flownS).toExponential(1)}`);
+    // Hiding while entries exist must not be confused with "no entries authored":
+    // toggling twice in a row is idempotent.
+    r.updateBgTexts([], false, 0, 0);
+    r.updateBgTexts([], false, 0, 0);
+    ok('LAYER off twice is idempotent (still zero rigs, no leak)',
+       r._bgRigs.length === 0 && r._bgTextGroup.children.length === 0,
+       `n=${r._bgRigs.length} children=${r._bgTextGroup.children.length}`);
+  }
+
   // ════════════ report ════════════
   const pass = tests.filter(t => t.ok).length, total = tests.length;
   const allPass = pass === total;
