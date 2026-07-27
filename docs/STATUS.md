@@ -1,6 +1,6 @@
 # Project status & pick-up guide
 
-Last updated: 2026-07-26, at **v0.32.0**. This is the single document to
+Last updated: 2026-07-27, at **v0.33.0**. This is the single document to
 read (alongside `CLAUDE.md`) to resume work with full context.
 
 ## Where things stand
@@ -210,6 +210,15 @@ instance.
   leak); sun-disc per-effect toggle; adjustable ground level —
   Scene3D.groundLevelMm shifts grid + neighborhood + yardFill vs the
   slab, yard avatars settle onto the lowered grade).
+  → v0.33.0 groundskeeping (ground level part 2: every free-standing
+  outdoor thing follows the grade — grass writing, furniture w/
+  correct outdoor seating, yard lights, areas/terraces/pools,
+  flagpoles, robot docks, cameras, GPS pins, train rails, aircraft
+  AGL; chopper banner hangs from its leading corner; bg-text rigs no
+  longer reset on config churn (consumption-hashed key + persistent
+  phase); message-plane aircraft picker (8 archetypes tow the banner)
+  + independent model-size knobs for message rigs (0.5–5×) and ADS-B
+  traffic (0.5–4×)).
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
