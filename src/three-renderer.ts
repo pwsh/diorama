@@ -582,15 +582,34 @@ interface BgTrain {
   wheelR: number;                           // wheel radius (mm) → spin rate = speed/wheelR
   s: number;                                // engine arc position (mm, wraps at total)
   chunks: string[];                         // per-car message chunks (test hook)
+  baseY: number;                            // rail height = the surroundings grade (Scene3D.groundLevelMm)
+}
+// PERSISTENT per-entry animation phase (the _fanSpin / _applianceDoorBlend
+// idiom). A rebuild of _bgTextGroup — a text edit, a storm flip, a floor
+// switch — must not teleport a plane back to its build angle or restart the
+// train's lap, so the flight/orbit/drift clocks live OUTSIDE the rigs, keyed by
+// BgTextEntry.id, and are re-seeded into the fresh rig in updateBgTexts. All
+// four members are dimensionless or wrapped, so they survive a floor switch
+// (entries are store-level, not per-floor); only destroy() drops them. Bob /
+// prop spin / rotor spin already run off the ABSOLUTE clock and are continuous
+// across a rebuild by construction.
+interface BgPhase {
+  angle?: number;      // aircraft orbit angle (rad)
+  skyPhase?: number;   // skywriting drift + twinkle clock (s)
+  trainS?: number;     // train engine arc position (mm along the loop)
+  wheelRot?: number;   // train wheel spin (rad) — cosmetic continuity
 }
 interface BgRig {
   mode: BgTextEntryMode;
   index: number;                            // list index (drives placement stagger + phase desync)
+  ph?: BgPhase;                             // persistent phase slot (written back each frame)
   // sky
   sky?: THREE.Sprite; skyBaseX?: number; skyPhase?: number;
   // aircraft (banner plane + chopper)
   asm?: THREE.Group;
-  prop?: THREE.Object3D;                    // plane prop OR chopper main rotor
+  prop?: THREE.Object3D;                    // plane prop OR chopper main rotor (= props[0])
+  props?: THREE.Object3D[];                 // every spinning disc (a twin carries two)
+  rotorY?: boolean;                         // spin the discs about Y (a rotorcraft) not Z
   tailRotor?: THREE.Object3D;               // chopper tail rotor
   towWire?: THREE.Object3D;                 // chopper→banner tow line
   banner?: THREE.Object3D;                  // trailing/hanging text plane (Group: 2 FrontSide planes)
@@ -601,6 +620,37 @@ interface BgRig {
   grassMesh?: THREE.Mesh;                    // the decal mesh (test hook + texture read)
   // train
   train?: BgTrain;
+}
+
+// Per-entry model-size multiplier for a background-text rig (BgTextEntry.scale)
+// and for every live-aircraft rig (FlightsConfig.modelScale). Both are pure,
+// total, and absent/garbage → 1, so a stale caller (or a hand-edited config)
+// reproduces the shipped size exactly. The UI clamps to the same window; these
+// are the authoritative guards.
+const BG_SCALE_MIN = 0.5, BG_SCALE_MAX = 5;
+function bgModelScale(v: unknown): number {
+  const n = typeof v === 'number' ? v : NaN;
+  if (!isFinite(n) || n <= 0) return 1;
+  return Math.min(BG_SCALE_MAX, Math.max(BG_SCALE_MIN, n));
+}
+const FLIGHT_SCALE_MIN = 0.5, FLIGHT_SCALE_MAX = 4;
+function flightModelScale(v: unknown): number {
+  const n = typeof v === 'number' ? v : NaN;
+  if (!isFinite(n) || n <= 0) return 1;
+  return Math.min(FLIGHT_SCALE_MAX, Math.max(FLIGHT_SCALE_MIN, n));
+}
+
+// The eight flight archetypes as VALUES — aircraft-types.ts exports the union
+// type + the designator table, not a runtime list. A background-text entry names
+// one by string (BgTextEntry.aircraft); anything else falls back to the classic
+// toy tow plane, so an unknown/garbage string can never throw.
+const BG_ARCHETYPES: readonly AircraftArchetype[] = [
+  'ga-high', 'ga-low', 'twin-prop', 'turboprop',
+  'narrowbody', 'widebody', 'bizjet', 'heli',
+];
+function bgArchetype(v: unknown): AircraftArchetype | null {
+  return typeof v === 'string' && (BG_ARCHETYPES as readonly string[]).includes(v)
+    ? v as AircraftArchetype : null;
 }
 
 // ── Live aircraft (roadmap P4) ────────────────────────────────────────────
@@ -740,6 +790,27 @@ export function resolveGroundLevelMm(v: number | null | undefined): number {
   if (typeof v !== 'number' || !isFinite(v)) return 0;
   return Math.max(-GROUND_LEVEL_LIMIT, Math.min(GROUND_LEVEL_LIMIT, v));
 }
+
+// Furniture kinds that belong to the HOUSE rather than the ground under them:
+// pieces built INTO a wall plane (their elevation is measured off the wall, and
+// an exterior-wall piece's anchor can fall outside the loop) and the stairs
+// family (structure — a descending flight cuts the slab and registers its own
+// terrain). These never follow the surroundings grade; everything else obeys
+// the positional _itemGroundY rule. Mirrors scripts/floorplans/physical.mjs's
+// WALL_HUGGING_KINDS minus the two GROUND-STANDING members there (ev_charger is
+// a post on the driveway, shower stands on the slab).
+const HOUSE_MOUNTED_FURNITURE_KINDS = new Set<string>([
+  'wall_tv', 'wall_heater', 'towel_warmer', 'mini_split', 'window_ac',
+  'stairs', 'stairs_half', 'stair_landing',
+]);
+
+// Light kinds that STAND ON THE GROUND (as opposed to hanging from a ceiling or
+// bolting to a wall) and so follow the surroundings grade when placed outdoors.
+// Everything else — bulb / spot / pendant / strip / recessed / fan / heatlamp /
+// exhaust (ceiling) and sconce / wall_sconce / flood / fireplace / exhaust_wall
+// / step (wall-snapped; `step` rides snapStepLightToSurface) — is mounted on the
+// house and stays slab-relative.
+const GROUND_STANDING_LIGHT_KINDS = new Set<string>(['lamp', 'inground', 'ground_spot']);
 
 // Build context for a declarative primitive (shared by the initial-rig
 // accessory build AND a runtime prop-equip via _buildPrimitiveMesh). Carries the
@@ -1815,6 +1886,9 @@ export class ThreeDRenderer {
   private _flightsBeacons = true;
   private _flightsPrivacyDim = true;
   private _flightsBanners = true;         // FlightsConfig.banners (absent = ON)
+  // FlightsConfig.modelScale — a plain display multiplier folded into
+  // _flightRigScale (the ONE site build / rebuild / advance all read).
+  private _flightsModelScale = 1;
   private _beaconGlowTex: THREE.CanvasTexture | null = null;   // shared; freed in destroy()
   private _v3flight = new THREE.Vector3();   // scratch — _advanceFlights allocates nothing
   // ISS: one sprite in its OWN camera-recentered subgroup (the _realSkyGroup
@@ -1855,6 +1929,9 @@ export class ThreeDRenderer {
   // Grass decal world-frame placement (mm) — exposed for the test harness so it
   // can assert the decal lands OUTSIDE every wall loop + inside the floor rect.
   private _bgGrassInfo: { cx: number; cy: number; w: number; h: number } | null = null;
+  // Per-entry-id animation phase that OUTLIVES a _bgTextGroup rebuild (see
+  // BgPhase). Cleared only in destroy().
+  private _bgTextPhase: Record<string, BgPhase> = {};
   private static readonly SKY_PRESET: Record<ScenePreset, { top: number; bottom: number }> = {
     day:   { top: 0x4a90d9, bottom: 0xbcd9f2 },
     dusk:  { top: 0x2b2450, bottom: 0xff9a5a },
@@ -3325,7 +3402,39 @@ export class ThreeDRenderer {
     // above). `_outdoors` treats a loop-less floor as indoors — which is right
     // here too: with no closed loop the slab covers the whole rect, so there is
     // no "outside" to stand on. Short-circuit at 0 keeps the default path free.
+    return this._itemGroundY(wx, wy);
+  }
+
+  // Ground reference for a FREE-STANDING item anchored at plan point (wx, wy):
+  // the SURROUNDINGS level (Scene3D.groundLevelMm) when that point lies outside
+  // every closed wall loop, else the slab (0). ONE rule for every builder that
+  // plants something on the ground — a tree, a lawn chair, a yard lamp, a
+  // flagpole, a robot dock, a ground-area patch, a pool basin, a lawn decal —
+  // so the visual build always agrees with _groundYAt (the rig/nav ground
+  // truth, which routes through here for its no-terrain fallback).
+  //
+  //   • Things MOUNTED ON THE HOUSE never call this: wall plates (switch /
+  //     thermostat / alarm / plug / action / calendar / info card), wall or
+  //     ceiling light kinds, wall-plane furniture, doors, windows, walls. They
+  //     belong to the structure and stay slab-relative even when their anchor
+  //     lands a few mm outside a loop (a sconce on an exterior wall).
+  //   • Indoor content never moves — the point is inside a loop, so 0.
+  //   • A loop-less floor reads as all-indoors (see _outdoors), so nothing
+  //     moves there either.
+  //   • groundLevelMm = 0 short-circuits to 0 everywhere: byte-identical to the
+  //     pre-ground-level build.
+  private _itemGroundY(wx: number, wy: number): number {
     return this._groundLevel !== 0 && this._outdoors(wx, wy) ? this._groundLevel : 0;
+  }
+
+  // Grade for content that ENCIRCLES the property and therefore has no single
+  // plan anchor to test: the background-text train's loop (~1800 mm outside the
+  // floor rect) and the banner-plane / news-chopper orbits (radius ≥ 6 m about
+  // the floor centre). They are definitionally out in the yard / the sky over
+  // it, so they take the surroundings level unconditionally — an aircraft keeps
+  // a constant height ABOVE GRADE and the train stays on its embankment.
+  private _yardGroundY(): number {
+    return this._groundLevel;
   }
 
   // World→3D mapping: flip X so screen-right matches 2D world +X; world Y → 3D Z.
@@ -3779,7 +3888,8 @@ export class ThreeDRenderer {
       const sc = H / FLAGPOLE_DEFAULTS.height;
       const grp = new THREE.Group();
       const base = this._w(fp.x, fp.y, 0);
-      grp.position.set(base.x, 0, base.z);
+      // Free-standing yard fixture: plant the pole on the surroundings grade.
+      grp.position.set(base.x, this._itemGroundY(fp.x, fp.y), base.z);
       // Tapered pole = two stacked cylinders (wider lower, slimmer upper).
       const poleMat = this._mat({ color: 0xd8dce0, metalness: 0.6, roughness: 0.35 });
       const lowerH = H * 0.55, upperH = H - lowerH;
@@ -4011,11 +4121,16 @@ export class ThreeDRenderer {
   updateGroundAreas(areas: GroundArea[], yardFill?: GroundKind, fw?: number, fd?: number, walls?: Wall[], glassHouse?: boolean,
                     groundLevelMm?: number): void {
     if (!this._scene) return;
-    // Surroundings level: ONLY the yard-fill underlay follows it (it IS the
-    // surrounding grade). User-drawn ground areas / terraces / pools / paths are
-    // authored property terrain with their own elevationMm and never move.
+    // Surroundings level: the yard-fill underlay IS the surrounding grade, and
+    // a user-drawn area whose CENTROID is outdoors is paint ON that grade — its
+    // authored elevationMm composes on top (gl + elevationMm + 4), so a grass
+    // patch in a lowered yard sits on the yardFill instead of floating over it.
+    // An area centred INSIDE a wall loop is indoor flooring and never moves.
     // Absent arg → the level updateFloor resolved (stale-caller safe).
     const gl = resolveGroundLevelMm(groundLevelMm ?? this._groundLevel);
+    // Per-area grade (the _itemGroundY rule, resolved against the level THIS
+    // call was handed so a stale caller can't split the patch from its yardFill).
+    const areaGY = (cx: number, cy: number) => (gl !== 0 && this._outdoors(cx, cy) ? gl : 0);
     this._clearGroup(this._groundGroup);
     // Free the previous rebuild's per-patch water clones (the shared cache entry
     // is untouched; only these throwaway clones are ours to dispose).
@@ -4087,7 +4202,9 @@ export class ThreeDRenderer {
       const tex = isWater ? this._waterTexClone() : this._groundTexture(a.kind);
       if (!isWater) tex.repeat.set(1 / 800, 1 / 800);   // raw-mm ShapeGeometry UVs → one tile / 800 mm
       const elev = a.elevationMm ?? 0;
-      const topY = elev + 4;
+      const ctr = centroid(a.points);
+      const aGY = areaGY(ctr.x, ctr.y);   // outdoors → the tier stacks on the grade
+      const topY = elev + 4 + aGY;
       // rotation.x = -π/2 maps a shape vertex (sx, sy) → world (sx, 0, -sy);
       // feed (w.x, -w.z) so the patch lands at world (w.x, y, w.z).
       const shape = new THREE.Shape();
@@ -4116,10 +4233,12 @@ export class ThreeDRenderer {
       // polygons can self-intersect on the outward offset — accepted as a minor
       // v1 artifact (pinned decision 1), no miter clamp.
       if (elev !== 0) {
-        const base = groundAreaSkirtBase(a, areas);
+        // Skirt semantics unchanged: the base is the sibling stack's resolved
+        // elevation (groundAreaSkirtBase), just shifted onto the same grade as
+        // the top so an outdoor tier's skirt lands on the yardFill.
+        const base = groundAreaSkirtBase(a, areas) + aGY;
         const angled = a.kind === 'grass' || a.kind === 'mulch' || a.kind === 'sand';
-        const outset = angled ? Math.abs(elev - base) * 1.5 : 0;
-        const ctr = centroid(a.points);
+        const outset = angled ? Math.abs(topY - 4 - base) * 1.5 : 0;
         const pos: number[] = [], uv: number[] = [];
         const n = a.points.length;
         let along = 0;
@@ -4180,9 +4299,15 @@ export class ThreeDRenderer {
     for (const pl of pools ?? []) {
       if (pl.hidden || pl.points.length < 3) continue;
       const water = hexToInt(poolWaterColor(pl));
-      const rimY = poolRimY(pl);
-      const floorY = poolBasinFloorY(pl);
-      const surfY = poolWaterSurfaceY(pl);
+      // A pool dug in the YARD recesses from the surroundings grade, not from
+      // the house slab: shift the whole basin (floor / walls / coping / water /
+      // light all derive from these three) by the grade at its centroid. A pool
+      // centred inside a wall loop (an indoor spa) stays slab-relative.
+      const pCtr = centroid(pl.points);
+      const pGY = this._itemGroundY(pCtr.x, pCtr.y);
+      const rimY = poolRimY(pl) + pGY;
+      const floorY = poolBasinFloorY(pl) + pGY;
+      const surfY = poolWaterSurfaceY(pl) + pGY;
       // Resolve the heater/pump/light sub-states (bound entity, else localState).
       const sub = (entity: string | undefined, local: string | undefined) =>
         entity ? stateProvider(entity) : (local ? ({ state: local, attributes: {} } as HassState) : null);
@@ -4247,7 +4372,7 @@ export class ThreeDRenderer {
 
       // Coping ring — a flat lip at the rim, outset radially from the centroid.
       {
-        const ctr = centroid(pl.points);
+        const ctr = pCtr;
         const COPING_W = 450;
         const n = pl.points.length;
         const pos: number[] = [];
@@ -4302,8 +4427,7 @@ export class ThreeDRenderer {
       // Underwater light — a toon-blue emissive disc mid-basin when any bound
       // light is on (ScreenLogic-brand lights are on/off only; fixed glow).
       if (anyLightOn) {
-        const ctr = centroid(pl.points);
-        const c = this._w(ctr.x, ctr.y, surfY - 300);
+        const c = this._w(pCtr.x, pCtr.y, surfY - 300);
         const disc = new THREE.Mesh(new THREE.CircleGeometry(220, 20), this._mat({
           color: 0x9fe6ff, emissive: 0x6fd0ff, emissiveIntensity: 0.9,
           transparent: true, opacity: 0.85, side: THREE.DoubleSide,
@@ -5107,6 +5231,17 @@ export class ThreeDRenderer {
     this._terrain = [];
     const rooms = f.rooms ?? [];
     for (const fu of visFurniture) {
+      // Surroundings grade for THIS piece: a free-standing piece whose plan
+      // anchor is outdoors sits on the yard, not on the (possibly higher) slab.
+      // Applied ONCE to the built group's y below, so every child — blob shadow,
+      // appliance-door pivots, plant pivots, sink water, EV/mail bits, the
+      // front-arrow decal — inherits it; the seat / bed / terrain registrations
+      // below add the same offset so avatars sit ON an outdoor lawn chair.
+      // Wall-plane + stairs kinds belong to the house and never move. A piece
+      // MOUNTED on a surface host takes the same offset as its host (both share
+      // the host's outdoor anchor), so `elevation` composes without doubling.
+      const furnGY = HOUSE_MOUNTED_FURNITURE_KINDS.has(fu.kind ?? '')
+        ? 0 : this._itemGroundY(fu.x, fu.y);
       // Appliance in-use indicator: resolve effective on/off (bound entity or
       // unbound localState). Appliance doors are built CLOSED as hinge pivots
       // (collected in doorSink) and animated per frame in updateTargets.
@@ -5225,6 +5360,7 @@ export class ThreeDRenderer {
                                          vehicleGhost, evCharging, evColor, mailFlagUp, mailCountLabel, jobDone,
                                          climateRunning, climateAir, fanRps, oscillate: (fu as Furniture).oscillate === true,
                                          mech });
+      grp.position.y += furnGY;   // outdoor pieces stand on the surroundings grade
       this._shadowFlags(grp);
       // Custom-recipe front-arrow indicator: custom objects draw only as a
       // labeled rect in 2D and had no 3D front cue, so when a recipe piece is
@@ -5352,7 +5488,9 @@ export class ThreeDRenderer {
       if (isRiserKind(fu.kind)) {
         this._terrain.push({
           x: fu.x, y: fu.y, w: fu.w, h: fu.h, rotation: fu.rotation,
-          ht: def.ht, elevation: fu.elevation ?? 0, kind: 'riser_platform',
+          // + the grade so a deck out in the yard reports the height the built
+          // mesh actually sits at (the group carries the same furnGY offset).
+          ht: def.ht, elevation: (fu.elevation ?? 0) + furnGY, kind: 'riser_platform',
         });
       }
       // Stairs and landings are walkable terrain for humanoid targets.
@@ -5505,7 +5643,7 @@ export class ThreeDRenderer {
           const APPROACH = 350 + SEAT_FRONT_INSET;
           this._sitSpots.push({
             id: `${fu.id}:${i}`,
-            x: sx, z: sz, seatY: seatH + (fu.elevation ?? 0),
+            x: sx, z: sz, seatY: seatH + (fu.elevation ?? 0) + furnGY,
             facing, r,
             frontNx: fNx, frontNz: fNz,
             approachX: sx + fNx * APPROACH, approachZ: sz + fNz * APPROACH,
@@ -5545,7 +5683,7 @@ export class ThreeDRenderer {
         const c = this._w(fu.x, fu.y, 0);
         this._beds.push({
           id: fu.id, x: fu.x, y: fu.y, w: fu.w, h: fu.h, rotation: fu.rotation,
-          color: def.color, matressTop: def.ht * 1.05, cx: c.x, cz: c.z,
+          color: def.color, matressTop: def.ht * 1.05 + furnGY, cx: c.x, cz: c.z,
           // Two-person shared-covers effect on unless explicitly disabled.
           sharedCovers: fu.sharedBedCovers !== false,
         });
@@ -5651,10 +5789,16 @@ export class ThreeDRenderer {
           if (pt.x < minX) minX = pt.x; if (pt.x > maxX) maxX = pt.x;
           if (pt.y < minY) minY = pt.y; if (pt.y > maxY) maxY = pt.y;
         }
+        // A terrace whose CENTROID is outdoors is a tier of the yard, so its
+        // authored elevationMm composes ON TOP of the surroundings grade — the
+        // same offset updateGroundAreas gives the visual patch (centroid, not
+        // bbox centre, in both places so they can never disagree).
+        const tctr = centroid(a.points);
         this._terrain.push({
           x: (minX + maxX) / 2, y: (minY + maxY) / 2,
           w: maxX - minX, h: maxY - minY, rotation: 0,
-          ht: 0, elevation: elev, kind: 'terrace', poly: a.points,
+          ht: 0, elevation: elev + this._itemGroundY(tctr.x, tctr.y),
+          kind: 'terrace', poly: a.points,
         });
       }
     }
@@ -9688,7 +9832,10 @@ export class ThreeDRenderer {
       // Body: pivot group aimed by heading. Local +Z faces the aim direction
       // (matches _w's mirror + the sensor-body convention).
       const grp = new THREE.Group();
-      const bp = this._w(cam.x, cam.y, heightMm);
+      // Free placement (no wall snap): an outdoor camera's `height` is measured
+      // from the yard, so body + FOV decal both ride the surroundings grade.
+      const camGY = this._itemGroundY(cam.x, cam.y);
+      const bp = this._w(cam.x, cam.y, heightMm + camGY);
       grp.position.set(bp.x, bp.y, bp.z);
       grp.rotation.y = -((cam.rotation || 0) * Math.PI / 180);
       const bodyMat = this._mat({ color: 0x2b3038, metalness: 0.2, roughness: 0.6 });
@@ -9733,7 +9880,7 @@ export class ThreeDRenderer {
       const fp = this._w(cam.x, cam.y, 0);
       for (const o of [wedge, rim]) {
         o.rotation.x = -Math.PI / 2;      // lay the XY shape flat on the floor
-        o.position.set(fp.x, 14, fp.z);   // few mm up to avoid z-fighting
+        o.position.set(fp.x, 14 + camGY, fp.z);   // few mm up to avoid z-fighting
         this._cameraGroup.add(o);
       }
     }
@@ -9759,7 +9906,10 @@ export class ThreeDRenderer {
       // Body pivot aimed by heading (matches camera/sensor convention). Local
       // -Z (after the _w X-mirror) is the front / aim side, like the camera lens.
       const grp = new THREE.Group();
-      const bp = this._w(pr.x, pr.y, heightMm);
+      // Free placement (no wall snap): an outdoor projector's mount height is
+      // measured from the yard.
+      const projGY = this._itemGroundY(pr.x, pr.y);
+      const bp = this._w(pr.x, pr.y, heightMm + projGY);
       grp.position.set(bp.x, bp.y, bp.z);
       grp.rotation.y = -((pr.rotation || 0) * Math.PI / 180);
       grp.userData = { kind: 'projector', entity_id: pr.entity_id ?? null, fixtureId: pr.id };
@@ -9783,8 +9933,11 @@ export class ThreeDRenderer {
       // Aim: the bound screen center (world plan + height), else a heading throw.
       const screen = pr.screenId ? furniture.find(x => x.id === pr.screenId) : null;
       const aim = projectorAim(pr, screen ? { x: screen.x, y: screen.y, cy: screenCenterHeight(screen.kind) } : null);
-      const L = this._w(pr.x, pr.y, heightMm);            // lens ≈ mount
-      const T = this._w(aim.x, aim.y, aim.y3);            // aim point (screen center)
+      const L = this._w(pr.x, pr.y, heightMm + projGY);   // lens ≈ mount
+      // The screen carries ITS OWN grade (screenCenterHeight is slab-relative,
+      // and an outdoor screen's furniture group is offset the same way), so
+      // resolve the aim end independently — the beam spans real geometry.
+      const T = this._w(aim.x, aim.y, aim.y3 + this._itemGroundY(aim.x, aim.y));
       const dir = new THREE.Vector3().subVectors(T, L);
       const dist = dir.length() || 1;
       dir.normalize();
@@ -9952,7 +10105,9 @@ export class ThreeDRenderer {
       const trans = valveTransitional(st);
       const ud = { kind: 'valve' as const, entity_id: v.entity_id ?? null, fixtureId: v.id };
       const grp = new THREE.Group();
-      const P = this._w(v.x, v.y, R);
+      // Free placement (no wall snap): an irrigation valve out in the yard sits
+      // on the surroundings grade.
+      const P = this._w(v.x, v.y, R + this._itemGroundY(v.x, v.y));
       grp.position.set(P.x, P.y, P.z);
       grp.rotation.y = -((v.rotation || 0) * Math.PI / 180);
       const pipeMat = this._mat({ color: 0x90a4ae, metalness: 0.4, roughness: 0.5 });
@@ -10490,7 +10645,9 @@ export class ThreeDRenderer {
       if (safetyIsFloor(kind)) {
         liveLeak.add(s.id);
         const grp = new THREE.Group();
-        const fp = this._w(s.x, s.y, SAFETY_DEFAULTS.leakFloorMm);
+        // FLOOR puck (unlike the ceiling detectors below): outdoors it rests on
+        // the surroundings grade. The puddle decal is a child, so it follows.
+        const fp = this._w(s.x, s.y, SAFETY_DEFAULTS.leakFloorMm + this._itemGroundY(s.x, s.y));
         grp.position.set(fp.x, fp.y, fp.z);
         // Squat puck body on the floor.
         const puck = new THREE.Mesh(
@@ -10737,7 +10894,9 @@ export class ThreeDRenderer {
         contact.position.set(0, 40, 120); contact.userData = ud; grp.add(contact);
       }
       this._addOutlines(grp);
-      const p = this._w(r.x, r.y, 0);
+      // A mower dock lives in the yard: stand it on the surroundings grade (the
+      // moving rigs already resolve their height through _groundYAt).
+      const p = this._w(r.x, r.y, this._itemGroundY(r.x, r.y));
       grp.position.set(p.x, p.y, p.z);
       this._robotGroup.add(grp);
     }
@@ -11408,15 +11567,20 @@ export class ThreeDRenderer {
     if (!this._scene) return;
     this._disposeSpriteMaps(this._gpsGroup);
     this._clearGroup(this._gpsGroup);
+    // Every pin's height is measured from the ground under it: a landmark or a
+    // person out in the yard rides the surroundings grade, an indoor pin (the
+    // common "find my phone" case) stays slab-relative — the shared
+    // _itemGroundY rule. _keyGps already hashes configRev, so a ground-level
+    // edit rebuilds these.
     for (const lm of landmarks) {
       const sp = this._makeTextSprite(`📍 ${lm.name || 'Landmark'}`, '#4dd0e1', 0.7);
-      const p = this._w(lm.x, lm.y, 300);
+      const p = this._w(lm.x, lm.y, 300 + this._itemGroundY(lm.x, lm.y));
       sp.position.set(p.x, p.y, p.z);
       this._gpsGroup.add(sp);
     }
     for (const pin of pins) {
       const sp = this._makeTextSprite(pin.label, pin.color, 1);
-      const p = this._w(pin.x, pin.y, 1800);
+      const p = this._w(pin.x, pin.y, 1800 + this._itemGroundY(pin.x, pin.y));
       sp.position.set(p.x, p.y, p.z);
       if (pin.stale) sp.material.opacity = 0.4;
       this._gpsGroup.add(sp);
@@ -11425,7 +11589,7 @@ export class ThreeDRenderer {
     // they don't overlap a person standing in the yard.
     for (const ev of events) {
       const sp = this._makeTextSprite(ev.label, ev.color, 1);
-      const p = this._w(ev.x, ev.y, 2100);
+      const p = this._w(ev.x, ev.y, 2100 + this._itemGroundY(ev.x, ev.y));
       sp.position.set(p.x, p.y, p.z);
       this._gpsGroup.add(sp);
     }
@@ -11563,6 +11727,7 @@ export class ThreeDRenderer {
   // each style so the original bgtext-test keeps reading them.
   updateBgTexts(entries: {
                   id: string; mode: BgTextEntryMode; text: string; maxCars?: number;
+                  aircraft?: string; scale?: number;
                   grassAreaId?: string; grassArea?: { cx: number; cy: number; w: number; h: number };
                 }[],
                 storm: boolean, windRad = 0, windKmh = 0): void {
@@ -11588,13 +11753,23 @@ export class ThreeDRenderer {
       if (!text) continue;
       const isAircraft = e.mode === 'sky' || e.mode === 'banner' || e.mode === 'chopper';
       if (storm && isAircraft) continue;                 // aircraft/skywriting hide in a downpour
+      // Per-entry model size (default 1 = the shipped build, exactly). Applied
+      // as a group-level multiplier at BUILD; every per-frame advance writes
+      // position / rotation / opacity only, so nothing overwrites it.
+      const sc = bgModelScale(e.scale);
       let rig: BgRig | null = null;
-      if (e.mode === 'sky')          rig = this._buildBgSky(text, i, n, diag);
-      else if (e.mode === 'banner')  rig = this._buildBgAircraft('plane', text, i, n, diag);
-      else if (e.mode === 'chopper') rig = this._buildBgAircraft('chopper', text, i, n, diag);
-      else if (e.mode === 'grass')   rig = this._buildBgGrass(text, i, grassSlot++, e.grassArea);
-      else if (e.mode === 'train')   rig = this._buildBgTrain(text, i, e.maxCars);
-      if (rig) this._bgRigs.push(rig);
+      if (e.mode === 'sky')          rig = this._buildBgSky(text, i, n, diag, sc);
+      else if (e.mode === 'banner')  rig = this._buildBgAircraft('plane', text, i, n, diag, sc, bgArchetype(e.aircraft));
+      else if (e.mode === 'chopper') rig = this._buildBgAircraft('chopper', text, i, n, diag, sc, null);
+      else if (e.mode === 'grass')   rig = this._buildBgGrass(text, i, grassSlot++, e.grassArea, sc);
+      else if (e.mode === 'train')   rig = this._buildBgTrain(text, i, e.maxCars, sc);
+      if (rig) {
+        // Resume where this entry left off (a FRESH id starts at its build
+        // stagger, exactly as before).
+        rig.ph = (this._bgTextPhase[e.id] ??= {});
+        this._seedBgPhase(rig);
+        this._bgRigs.push(rig);
+      }
     }
     // Legacy single-rig mirrors (first of each style) for bgtext-test back-compat.
     const skyRig = this._bgRigs.find(r => r.mode === 'sky');
@@ -11624,17 +11799,18 @@ export class ThreeDRenderer {
 
   // Skywriting billboard. Multiple skies stagger in x (≈0.25·diag apart) with
   // alternating y/z so two skywriters never overlap.
-  private _buildBgSky(text: string, i: number, n: number, diag: number): BgRig {
+  private _buildBgSky(text: string, i: number, n: number, diag: number, sc = 1): BgRig {
     const tex = this._makeBgTextTexture(text, 'sky');
     const cv = tex.image as HTMLCanvasElement;
     const spr = new THREE.Sprite(new THREE.SpriteMaterial({
       map: tex, transparent: true, depthWrite: false, depthTest: true,
       opacity: 0.9, blending: THREE.AdditiveBlending, fog: false,
     }));
-    const H = Math.max(2200, diag * 0.22);
+    const H = Math.max(2200, diag * 0.22) * sc;
     spr.scale.set(H * (cv.width / cv.height), H, 1);
     const baseX = (i - (n - 1) / 2) * diag * 0.25;
-    const y = 6000 + (i % 2 === 1 ? -220 : 220);
+    // Skywriting altitude is above the YARD, like the tow plane / chopper.
+    const y = 6000 + (i % 2 === 1 ? -220 : 220) + this._yardGroundY();
     const z = -diag * 0.35 + (i % 2 === 1 ? diag * 0.08 : 0);
     spr.position.set(baseX, y, z);
     spr.renderOrder = -6;
@@ -11651,9 +11827,19 @@ export class ThreeDRenderer {
   // text banner. Both orbit; instances stagger by radius (±15 %), altitude
   // (+800 mm each) and starting angle (spread evenly). Choppers orbit the
   // OPPOSITE direction, higher + tighter, with a bigger hover bob.
+  //
+  // `archetype` (banner mode only) swaps the classic toy tow plane for one of
+  // the eight FLIGHT silhouettes, built by the SAME _buildAircraftModel the
+  // ADS-B rigs use — civil paint, no beacon / privacy dim / livery lettering,
+  // because this is a message prop and not live traffic. A `heli` archetype
+  // flies the ordinary banner orbit (it is NOT re-routed to the news-chopper
+  // flight profile — `mode: 'chopper'` remains the dedicated news build); only
+  // its rotor axes differ, carried by rig.rotorY. `sc` scales the whole rig.
   private _buildBgAircraft(kind: 'plane' | 'chopper', text: string,
-                           i: number, n: number, diag: number): BgRig {
-    const asm = new THREE.Group();
+                           i: number, n: number, diag: number, sc = 1,
+                           archetype: AircraftArchetype | null = null): BgRig {
+    const useArch = kind === 'plane' ? archetype : null;
+    let asm = new THREE.Group();
     const baseR = Math.max(6000, diag * 0.75);
     const factor = 1 + 0.15 * ((i % 3) - 1);            // 0.85 / 1.0 / 1.15
     const angle = i * (Math.PI * 2 / Math.max(1, n));   // spread evenly
@@ -11665,13 +11851,36 @@ export class ThreeDRenderer {
     const cv = tex.image as HTMLCanvasElement;
     const aspect = cv.width / cv.height;
     const bh = 1400;
-    const banner = this._buildBanner(tex, bh, aspect);
+    // The chopper tows from the banner's LEADING TOP CORNER, so its group origin
+    // is moved onto that corner (originCorner) and the cloth extends back/down
+    // from it. The plane's banner trails from its CENTRE (origin centred).
+    const banner = this._buildBanner(tex, bh, aspect, kind === 'chopper');
     banner.rotation.y = Math.PI / 2;
 
-    let prop: THREE.Object3D, tailRotor: THREE.Object3D | undefined, towWire: THREE.Object3D | undefined;
+    let prop: THREE.Object3D | undefined, tailRotor: THREE.Object3D | undefined,
+        towWire: THREE.Object3D | undefined;
+    let props: THREE.Object3D[] = [];
+    let rotorY = false;
     let radius: number, alt: number, dir: number, bobAmp: number, propRate: number;
 
-    if (kind === 'plane') {
+    if (useArch) {
+      // A real flight silhouette flying the tow-plane's orbit. `military` and
+      // `dim` are both false: a message plane is neither traffic nor a privacy
+      // subject, so it always wears the civil paint.
+      const built = this._buildAircraftModel(useArch, false, false);
+      asm = built.asm;
+      props = built.props;
+      prop = built.props[0];
+      tailRotor = built.tailRotor ?? undefined;
+      propRate = built.propRate;
+      rotorY = useArch === 'heli';                       // main rotor spins about Y
+      // Trail the banner clear of the tail: the archetype's own fuselage length
+      // sets the standoff, so a widebody does not swallow its own message.
+      const M = this._flightArchetypeMetrics(useArch);
+      banner.position.set(0, M.idY, M.fusLen / 2 + 500 + (bh * aspect) / 2);
+      asm.add(banner);
+      radius = baseR * factor; alt = 6000 + 800 * i + this._yardGroundY(); dir = 1; bobAmp = 120;
+    } else if (kind === 'plane') {
       const bodyMat = this._mat({ color: 0xdad7cf });
       const accent = this._mat({ color: 0xc94f3d });
       asm.add(new THREE.Mesh(new THREE.BoxGeometry(180, 180, 900), bodyMat));
@@ -11698,7 +11907,9 @@ export class ThreeDRenderer {
       prop = propG; asm.add(prop);
       banner.position.set(0, 40, 1200 + (bh * aspect) / 2);   // trail straight behind
       asm.add(banner);
-      radius = baseR * factor; alt = 6000 + 800 * i; dir = 1; bobAmp = 120; propRate = 22;
+      // Altitude is AGL: the orbit rides the surroundings grade (_yardGroundY),
+      // so a lowered yard lowers the flight path with it.
+      radius = baseR * factor; alt = 6000 + 800 * i + this._yardGroundY(); dir = 1; bobAmp = 120; propRate = 22;
     } else {
       // News helicopter: cabin bubble + tail boom + skids + a NEWS-style stripe.
       const bodyMat = this._mat({ color: 0x2f6fb0 });     // news blue
@@ -11759,13 +11970,15 @@ export class ThreeDRenderer {
       towLine.userData.bannerTop = bannerCorner.toArray();   // legacy key: now the leading-top corner
       asm.add(towLine);
       towWire = towLine;
-      radius = baseR * 0.6 * factor; alt = 7500 + 800 * i; dir = -1; bobAmp = 150; propRate = 42;
+      radius = baseR * 0.6 * factor; alt = 7500 + 800 * i + this._yardGroundY(); dir = -1; bobAmp = 150; propRate = 42;
     }
 
+    if (props.length === 0 && prop) props = [prop];      // classic toy plane / chopper rotor
+    asm.scale.setScalar(sc);            // per-entry size; the advance never writes scale
     this._bgTextGroup.add(asm);
     return {
-      mode: kind === 'plane' ? 'banner' : 'chopper', index: i, asm, prop, tailRotor, towWire,
-      banner, angle, radius, alt, dir, bobAmp, propRate,
+      mode: kind === 'plane' ? 'banner' : 'chopper', index: i, asm, prop, props, rotorY,
+      tailRotor, towWire, banner, angle, radius, alt, dir, bobAmp, propRate,
     };
   }
 
@@ -11813,14 +12026,26 @@ export class ThreeDRenderer {
   // the strip's aspect. Either way the text word-wraps to the target aspect and
   // picks the largest font that fits (min-font floor + ellipsis trim).
   private _buildBgGrass(text: string, i: number, slot: number,
-                        area?: { cx: number; cy: number; w: number; h: number }): BgRig {
+                        area?: { cx: number; cy: number; w: number; h: number },
+                        sc = 1): BgRig {
     const place = area ?? this._bgGrassPlacement(slot);
     const gtex = this._makeGrassTextTexture(text, place.w / place.h);
     const mesh = new THREE.Mesh(
       new THREE.PlaneGeometry(place.w, place.h),
       new THREE.MeshBasicMaterial({ map: gtex, fog: false, depthWrite: false }));
     mesh.rotation.x = -Math.PI / 2;
-    mesh.position.copy(this._w(place.cx, place.cy, 6));
+    // Lawn text is MOWED INTO the ground it lies on, so its height comes from
+    // _groundYAt at the decal centre — the surroundings grade for the auto
+    // margin-strip placement (always outside the footprint bbox, i.e. the yard)
+    // and the terrace/grade top when the user aimed it at a GroundArea (whose
+    // patch tops out 4 mm above that same value, so +6 keeps the decal 2 mm
+    // proud of the paint). At ground level 0 with no terrain this is the
+    // original y = 6.
+    mesh.position.copy(this._w(place.cx, place.cy, this._groundYAt(place.cx, place.cy) + 6));
+    // The size knob multiplies the FITTED rect (a scale > 1 deliberately spills
+    // past the auto margin strip / chosen ground area — the user asked for a
+    // bigger message). rig.grass keeps the unscaled placement rect.
+    mesh.scale.setScalar(sc);
     mesh.renderOrder = 1;
     mesh.userData.textPlane = true;
     mesh.userData.outlineSkip = true;
@@ -11908,7 +12133,7 @@ export class ThreeDRenderer {
   // (left of travel) gets chunk[i] (engine→tail order), the local +X flank gets
   // chunk[N−1−i] (reversed) so a viewer on that side ALSO reads engine→tail.
   // Glyphs are never mirrored (pure ±90° rotations, FrontSide).
-  private _buildBgTrain(text: string, i: number, maxCars?: number): BgRig {
+  private _buildBgTrain(text: string, i: number, maxCars?: number, sc = 1): BgRig {
     const CHARS_PER_CAR = 6;
     const mc = Math.min(12, Math.max(2, Math.round(maxCars ?? 8)));
     const N = Math.min(mc, Math.max(1, Math.ceil(text.length / CHARS_PER_CAR)));
@@ -11928,11 +12153,19 @@ export class ThreeDRenderer {
     // vehicle origins sit at ground level, so a uniform scale keeps them on the
     // ground; spacing (1480) + wheelR (162 = 90·1.8) are the SCALED counterparts
     // (spacing prevents overlap; wheelR keeps the spin rate = speed/wheelR right).
-    for (const v of vehicles) v.obj.scale.setScalar(1.8);
+    // …and the per-entry size knob (default 1) multiplies that base ×1.8, with
+    // spacing + wheelR carried along so a bigger consist neither overlaps nor
+    // spins its wheels at the wrong rate. _positionTrain writes position +
+    // rotation only, so the scale survives every frame.
+    for (const v of vehicles) v.obj.scale.setScalar(1.8 * sc);
     for (const v of vehicles) this._bgTextGroup.add(v.obj);
     const train: BgTrain = {
       loopScene: loop.loopScene, loopWorld: loop.loopWorld, cum: loop.cum, total: loop.total,
-      vehicles, spacing: 1480, wheelR: 162, s: 0, chunks,
+      vehicles, spacing: 1480 * sc, wheelR: 162 * sc, s: 0, chunks,
+      // The loop runs ~1800 mm OUTSIDE the floor rect — always in the yard — so
+      // the whole consist rides the surroundings grade. Per-frame car posing
+      // (_positionTrain) composes on top of this base.
+      baseY: this._yardGroundY(),
     };
     this._positionTrain(train);       // settle initial poses before the first frame
     return { mode: 'train', index: i, train };
@@ -12092,7 +12325,7 @@ export class ThreeDRenderer {
     for (let k = 0; k < t.vehicles.length; k++) {
       const sp = this._sampleTrainLoop(t, t.s - k * t.spacing);
       const obj = t.vehicles[k].obj;
-      obj.position.set(sp.x, 0, sp.z);
+      obj.position.set(sp.x, t.baseY, sp.z);
       obj.rotation.y = Math.atan2(-sp.tx, -sp.tz);
     }
   }
@@ -12204,6 +12437,27 @@ export class ThreeDRenderer {
     return { cx, cy, w: Math.max(300, w), h: Math.max(150, h) };
   }
 
+  // Re-seed a freshly built rig from its persistent phase and settle it into
+  // that pose immediately (a dt=0 advance), so a rebuild resumes the flight /
+  // lap / drift mid-course instead of snapping back to the build angle. No-op
+  // for a first-seen entry id (empty slot → the builder's own stagger stands).
+  private _seedBgPhase(rig: BgRig): void {
+    const ph = rig.ph;
+    if (!ph) return;
+    const nowS = performance.now() / 1000;
+    if (rig.mode === 'sky') {
+      if (ph.skyPhase != null) { rig.skyPhase = ph.skyPhase; this._advanceBgSky(rig, 0); }
+    } else if (rig.mode === 'banner' || rig.mode === 'chopper') {
+      if (ph.angle != null) { rig.angle = ph.angle; this._advanceBgAircraft(rig, 0, nowS); }
+    } else if (rig.mode === 'train' && rig.train) {
+      const t = rig.train;
+      // Arc length is loop-relative: wrap it in case the loop changed size
+      // (a floor switch / floor resize).
+      if (ph.trainS != null && t.total > 0) { t.s = ph.trainS % t.total; this._positionTrain(t); }
+      if (ph.wheelRot != null) for (const v of t.vehicles) for (const wh of v.wheels) wh.rotation.x = ph.wheelRot;
+    }
+  }
+
   // Per-frame background-text motion (from _animate, alongside _advanceWeather).
   // Zero allocation after build — transform + opacity mutation only.
   private _advanceBgText(dt: number, nowS: number): void {
@@ -12226,6 +12480,7 @@ export class ThreeDRenderer {
     spr.position.x = (rig.skyBaseX ?? 0) + Math.sin(ph * speed / amp) * amp * dir;
     (spr.material as THREE.SpriteMaterial).opacity =
       0.72 + 0.2 * (0.5 + 0.5 * Math.sin(ph * 1.3));
+    if (rig.ph) rig.ph.skyPhase = ph;
   }
 
   // Banner plane + news chopper: slow orbit; the assembly yaws so its nose
@@ -12240,14 +12495,22 @@ export class ThreeDRenderer {
     rig.asm!.position.set(Math.cos(a) * R, (rig.alt ?? 6000) + bob, Math.sin(a) * R);
     const tx = -Math.sin(a) * dir, tz = Math.cos(a) * dir;   // tangent (direction of travel)
     rig.asm!.rotation.y = Math.atan2(tx, tz) + Math.PI;      // nose (−Z) → tangent
-    if (rig.prop) {
-      if (rig.mode === 'chopper') rig.prop.rotation.y = (nowS * (rig.propRate ?? 42)) % (Math.PI * 2);
-      else rig.prop.rotation.z = (nowS * (rig.propRate ?? 22)) % (Math.PI * 2);
+    // Prop / rotor spin. A twin-engine archetype carries TWO discs, a jet none;
+    // `rotorY` (the news chopper, and a `heli` archetype towing a banner) spins
+    // about the vertical axis, everything else about the flight axis.
+    const rate = rig.propRate ?? (rig.mode === 'chopper' ? 42 : 22);
+    if (rate > 0) {
+      const spin = (nowS * rate) % (Math.PI * 2);
+      const aboutY = rig.mode === 'chopper' || rig.rotorY === true;
+      for (const d of (rig.props ?? (rig.prop ? [rig.prop] : []))) {
+        if (aboutY) d.rotation.y = spin; else d.rotation.z = spin;
+      }
     }
     if (rig.tailRotor) rig.tailRotor.rotation.x = (nowS * (rig.propRate ?? 42) * 1.6) % (Math.PI * 2);
     if (rig.mode === 'chopper' && rig.banner) {
       rig.banner.rotation.y = Math.PI / 2 + Math.sin(nowS * 0.8) * 0.12;   // trailing lag sway
     }
+    if (rig.ph) rig.ph.angle = rig.angle;
   }
 
   // Message train: walk the loop by arc length (~1.1 m/s), reposition + yaw
@@ -12259,6 +12522,10 @@ export class ThreeDRenderer {
     this._positionTrain(t);
     const spin = (speed * dt) / t.wheelR;
     for (const v of t.vehicles) for (const wh of v.wheels) wh.rotation.x -= spin;
+    if (rig.ph) {
+      rig.ph.trainS = t.s;
+      rig.ph.wheelRot = t.vehicles[0]?.wheels[0]?.rotation.x ?? 0;
+    }
   }
 
   // ── Live aircraft (ADS-B) + ISS — roadmap P4 ──────────────────────────────
@@ -12279,7 +12546,7 @@ export class ThreeDRenderer {
                 thetaRad: number, radiusNm: number, showLabels: boolean,
                 anchorScene: { x: number; z: number },
                 opts?: { labelFields?: string[]; beacons?: boolean; privacyDim?: boolean;
-                         banners?: boolean }): void {
+                         banners?: boolean; modelScale?: number }): void {
     this._flightsOrigin = origin;
     this._flightsTheta = isFinite(thetaRad) ? thetaRad : 0;
     this._flightsRadius = isFinite(radiusNm) && radiusNm > 0 ? radiusNm : FLIGHTS_DEFAULT_RADIUS_NM;
@@ -12289,6 +12556,10 @@ export class ThreeDRenderer {
     this._flightsBeacons = opts?.beacons !== false;
     this._flightsPrivacyDim = opts?.privacyDim !== false;
     this._flightsBanners = opts?.banners !== false;
+    // Absent / garbage → 1 (a stale three-view omitting the field keeps the
+    // shipped plate size exactly). LIVE rigs pick the new factor up on the very
+    // next frame — _advanceFlights re-reads _flightRigScale every tick.
+    this._flightsModelScale = flightModelScale(opts?.modelScale);
     this._flightsGroup.position.set(anchorScene?.x ?? 0, 0, anchorScene?.z ?? 0);
 
     const seen = new Set<string>();
@@ -12784,8 +13055,12 @@ export class ThreeDRenderer {
   // other. Read from the EASED display radius (hypot of the current x/z offset),
   // so the growth glides with the position rather than snapping on each poll.
   // Zero allocation. Labels + towed banners are children, so they ride along.
+  // The user's size preference (FlightsConfig.modelScale, default 1) is the
+  // THIRD multiplicative term, so it can neither flatten the rim-growth curve
+  // nor cancel a fade.
   private _flightRigScale(rig: FlightRig): number {
-    return rig.fade * flightDisplayScale(Math.hypot(rig.curX, rig.curZ));
+    return rig.fade * flightDisplayScale(Math.hypot(rig.curX, rig.curZ))
+      * this._flightsModelScale;
   }
 
   // Real lat/lon/altitude → SCENE-RELATIVE display offset from the home anchor.
@@ -14451,6 +14726,13 @@ export class ThreeDRenderer {
       const kind = lightIconKind(l);
       const lh = lightHeight(l);
       const lr = lightRadius(l);
+      // Ground-standing kinds (lamp / inground / ground_spot) measure their
+      // height from the surface they stand on, so out in the yard they follow
+      // the surroundings grade — body, click sphere, point light and floor pool
+      // all take the same offset. Ceiling + wall-snapped kinds are mounted on
+      // the HOUSE and never move (see GROUND_STANDING_LIGHT_KINDS).
+      const lightGY = GROUND_STANDING_LIGHT_KINDS.has(kind)
+        ? this._itemGroundY(l.x, l.y) : 0;
       let r = 1, g = 0.9, b = 0.7;
       if (rgb && isOn) { r = rgb[0] / 255; g = rgb[1] / 255; b = rgb[2] / 255; }
       // Fireplace forces warm orange-red regardless of HA color, plus a
@@ -15311,7 +15593,7 @@ export class ThreeDRenderer {
         return { group: g, bodyY };
       };
       const { group: body, bodyY } = buildBody();
-      const p = this._w(l.x, l.y, bodyY);
+      const p = this._w(l.x, l.y, bodyY + lightGY);
       body.position.set(p.x, p.y, p.z);
       // Orient directional bodies (fireplace hearth, strip bar, sconce).
       // Same sign convention as furniture: 2D screen-CW → negate for scene Y.
@@ -15411,7 +15693,7 @@ export class ThreeDRenderer {
           // sunk below the floor (negative height — a step light on a sunken
           // stair shaft) the surface it washes is lower too, so draw the pool
           // at its own level; ceiling lights (height ≫ 3) still pool at y≈3.
-          const dp2 = this._w(l.x, l.y, Math.min(3, lightHeight(l) + 3));
+          const dp2 = this._w(l.x, l.y, Math.min(3, lightHeight(l) + 3) + lightGY);
           disc.position.set(dp2.x, dp2.y, dp2.z);
           // Floor pool is also a click target — much bigger than the body, so
           // a bird's-eye click anywhere in the lit area toggles the light.
@@ -20071,6 +20353,7 @@ export class ThreeDRenderer {
     // Aircraft rig bookkeeping (their subtrees + per-rig label/banner textures
     // went with _flightsGroup above); the ISS glyph texture is shared → here only.
     this._flightRigs.clear();
+    this._bgTextPhase = {};           // per-entry bg-text flight/lap clocks
     this._flightsHaveContent = false;
     this._recordFlightsFrustum();     // no shell left → drop its frustum requirement
     this._issSprite = null;

@@ -2320,11 +2320,13 @@ export class Planner extends EventTarget {
   // fits the text into that yard patch instead of the auto margin strip.
   bgTextsResolved(): {
     id: string; mode: BgTextEntryMode; text: string; maxCars?: number;
+    aircraft?: string; scale?: number;
     grassAreaId?: string; grassArea?: { cx: number; cy: number; w: number; h: number };
   }[] {
     const list = this.store.bgTexts ?? [];
     const out: {
       id: string; mode: BgTextEntryMode; text: string; maxCars?: number;
+      aircraft?: string; scale?: number;
       grassAreaId?: string; grassArea?: { cx: number; cy: number; w: number; h: number };
     }[] = [];
     for (const e of list) {
@@ -2332,9 +2334,15 @@ export class Planner extends EventTarget {
       if (text == null) continue;
       const row: {
         id: string; mode: BgTextEntryMode; text: string; maxCars?: number;
+        aircraft?: string; scale?: number;
         grassAreaId?: string; grassArea?: { cx: number; cy: number; w: number; h: number };
       } = { id: e.id, mode: e.mode, text };
       if (e.mode === 'train') row.maxCars = e.maxCars;
+      // The tow-aircraft silhouette is banner-only; the size knob applies to
+      // every style. Both pass STRAIGHT through — the renderer owns the
+      // validity check (unknown archetype → the toy plane) and the clamp.
+      if (e.mode === 'banner' && e.aircraft) row.aircraft = e.aircraft;
+      if (e.scale != null) row.scale = e.scale;
       if (e.mode === 'grass' && e.grassAreaId) {
         const rect = this._grassAreaRect(e.grassAreaId);
         if (rect) { row.grassAreaId = e.grassAreaId; row.grassArea = rect; }
@@ -5226,6 +5234,15 @@ export class Planner extends EventTarget {
     // undefined = "use the default plate".
     if (this.store.flights.labelFields !== undefined) {
       this.store.flights.labelFields = sanitizeLabelFields(this.store.flights.labelFields);
+    }
+    // Model-size preference: clamp 0.5..4 HERE (not only in the settings UI) so
+    // an import or a hand-edited config can never hand the renderer a NaN or a
+    // 1000× plate. Exactly 1 (or anything unusable) clears back to "default".
+    const ms = this.store.flights.modelScale;
+    if (ms !== undefined) {
+      const n = typeof ms === 'number' && isFinite(ms) && ms > 0
+        ? Math.min(4, Math.max(0.5, ms)) : 1;
+      this.store.flights.modelScale = n === 1 ? undefined : n;
     }
     this.save();
     void this._reconfigureFlights();

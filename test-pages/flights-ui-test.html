@@ -412,6 +412,23 @@
       p.setFlights(f => { f.banners = undefined; });
       eq('banners clears back to the default', p.store.flights.banners, undefined);
 
+      // Model-size preference (0.5..4, default 1). Clamped in setFlights — not
+      // only in the settings UI — so an import can never hand the renderer a
+      // NaN or a 1000× plate; exactly-1 normalizes back to "absent".
+      eq('modelScale absent by default', p.store.flights.modelScale, undefined);
+      p.setFlights(f => { f.modelScale = 2.5; });
+      eq('modelScale round-trips', p.store.flights.modelScale, 2.5);
+      p.setFlights(f => { f.modelScale = 99; });
+      eq('modelScale clamps above 4', p.store.flights.modelScale, 4);
+      p.setFlights(f => { f.modelScale = 0.01; });
+      eq('modelScale clamps below 0.5', p.store.flights.modelScale, 0.5);
+      p.setFlights(f => { f.modelScale = NaN; });
+      eq('modelScale NaN → default (undefined)', p.store.flights.modelScale, undefined);
+      p.setFlights(f => { f.modelScale = -3; });
+      eq('modelScale negative → default (undefined)', p.store.flights.modelScale, undefined);
+      p.setFlights(f => { f.modelScale = 1; });
+      eq('modelScale exactly 1 normalizes to absent', p.store.flights.modelScale, undefined);
+
       // ── 10b. flightByHex (what the detail card reads) ──────────────────────
       section('flightByHex lookup');
       p.flightsNow = [ac('a0b1c2', 'UAL9', 9000, 3), ac('d3e4f5', 'DAL1', 30000, 12)];
@@ -702,7 +719,89 @@
       await flip(cbFor('Callsign labels'), true);
       ok('labels back on restores the grid', !!cbFor('Registration'));
       ok('labels back on restores the banner toggle', !!cbFor('Tow banners (small planes)'));
+
+      // Model size × — a plain number input beside the ISS toggle.
+      const numFor = text => {
+        const l = [...drawer.querySelectorAll('label')]
+          .find(el => el.textContent.replace(/\s+/g, ' ').trim() === text);
+        return l ? l.parentElement.querySelector('input[type=number]') : null;
+      };
+      const typeIn = async (el, v) => {
+        el.value = String(v); el.dispatchEvent(new Event('change'));
+        await drawer.updateComplete; await sleep(4);
+      };
+      const msIn = numFor('Model size ×');
+      ok('“Model size ×” input rendered', !!msIn);
+      eq('model-size input shows the default 1', msIn && msIn.value, '1');
+      await typeIn(msIn, 2.5);
+      eq('typing a model size writes the store', p2.store.flights.modelScale, 2.5);
+      eq('…and the input reflects it', numFor('Model size ×').value, '2.5');
+      await typeIn(numFor('Model size ×'), 50);
+      eq('an out-of-range model size is clamped by setFlights', p2.store.flights.modelScale, 4);
+      await typeIn(numFor('Model size ×'), 1);
+      eq('back to 1 clears the field', p2.store.flights.modelScale, undefined);
       drawer.remove();
+
+      // ── 12b. Settings ▸ Display — background-text entry rows ───────────────
+      // The tow-aircraft picker + the per-entry model-size knob. The bg-text
+      // editor lives in the Display tab of the SAME drawer, so this page is
+      // where it is covered.
+      section('Settings drawer (background text rows)');
+      const p3 = new UI.Planner();
+      p3.connectWith(new FakeHa());
+      await sleep(20);
+      p3.store.bgTexts = [{ id: 'bt1', mode: 'banner', text: 'HELLO' }];
+      const dw = document.createElement('diorama-settings-drawer');
+      dw.planner = p3;
+      document.getElementById('mount').appendChild(dw);
+      dw.show('display');
+      await dw.updateComplete;
+      const labelled = (text, sel) => {
+        const l = [...dw.querySelectorAll('label')]
+          .find(el => el.textContent.replace(/\s+/g, ' ').trim() === text);
+        return l ? l.parentElement.querySelector(sel) : null;
+      };
+      const acSel = labelled('Aircraft', 'select');
+      ok('BG banner row offers an “Aircraft” picker', !!acSel);
+      eq('the picker defaults to the classic tow plane', acSel && acSel.value, '');
+      eq('all 8 archetypes + the classic plane are listed', acSel && acSel.options.length, 9);
+      acSel.value = 'widebody'; acSel.dispatchEvent(new Event('change'));
+      await dw.updateComplete; await sleep(4);
+      eq('picking an archetype writes the entry', p3.store.bgTexts[0].aircraft, 'widebody');
+      ok('…and bgTextsResolved passes it through to the renderer',
+        p3.bgTextsResolved()[0].aircraft === 'widebody',
+        JSON.stringify(p3.bgTextsResolved()[0]));
+      labelled('Aircraft', 'select').value = '';
+      labelled('Aircraft', 'select').dispatchEvent(new Event('change'));
+      await dw.updateComplete; await sleep(4);
+      eq('choosing the classic plane clears the field', p3.store.bgTexts[0].aircraft, undefined);
+
+      const szIn = labelled('Model size ×', 'input[type=number]');
+      ok('BG entry row offers a “Model size ×” input', !!szIn);
+      eq('bg model size defaults to 1', szIn && szIn.value, '1');
+      const typeSz = async (v) => {
+        const el = labelled('Model size ×', 'input[type=number]');
+        el.value = String(v); el.dispatchEvent(new Event('change'));
+        await dw.updateComplete; await sleep(4);
+      };
+      await typeSz(3);
+      eq('typing a bg model size writes the entry', p3.store.bgTexts[0].scale, 3);
+      ok('…and bgTextsResolved passes the scale through',
+        p3.bgTextsResolved()[0].scale === 3, JSON.stringify(p3.bgTextsResolved()[0]));
+      await typeSz(99);
+      eq('the bg model size clamps at 5', p3.store.bgTexts[0].scale, 5);
+      await typeSz(0.01);
+      eq('…and at 0.5', p3.store.bgTexts[0].scale, 0.5);
+      await typeSz(1);
+      eq('back to 1 clears the bg scale field', p3.store.bgTexts[0].scale, undefined);
+
+      // The aircraft picker is banner-ONLY; the size knob is on every mode.
+      p3.store.bgTexts = [{ id: 'bt2', mode: 'train', text: 'CHOO' }];
+      dw.requestUpdate(); await dw.updateComplete; await sleep(4);
+      eq('a train row has no aircraft picker', labelled('Aircraft', 'select'), null);
+      ok('a train row still has the model-size knob',
+        !!labelled('Model size ×', 'input[type=number]'));
+      dw.remove();
 
       // ── 13. Flight detail card (diorama-flight-modal) ──────────────────────
       section('Flight detail card');

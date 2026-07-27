@@ -278,14 +278,20 @@
        `y=${r._neighborhoodGroup.position.y}`);
     ok('G3 yard-fill underlay at 2 + level', yardOf()[0].position.y === 2 + LOW,
        `y=${yardOf()[0]?.position.y}`);
-    ok('G4 authored ground area NOT offset (elev + 4)', topsOf()[0].position.y === 504,
-       `y=${topsOf()[0]?.position.y}`);
+    // An area whose CENTROID is outdoors is paint ON the yard, so its authored
+    // elevationMm stacks on the grade (level + elev + 4). (Superseded the
+    // original "authored areas never move" rule — a grass patch painted on a
+    // lowered yard used to float above the yard fill.)
+    ok('G4 outdoor ground area stacks on the grade (level + elev + 4)',
+       topsOf()[0].position.y === LOW + 504, `y=${topsOf()[0]?.position.y}`);
     ok('G5 _groundYAt outdoors = ground level', r._groundYAt(11000, 9500) === LOW,
        `gy=${r._groundYAt(11000, 9500)}`);
     ok('G6 _groundYAt inside the wall loop stays on the slab (0)', r._groundYAt(5000, 4500) === 0,
        `gy=${r._groundYAt(5000, 4500)}`);
-    ok('G7 _groundYAt on a terrace keeps its authored height', r._groundYAt(9500, 8000) === 500,
-       `gy=${r._groundYAt(9500, 8000)}`);
+    // …and _groundYAt agrees with the patch it just built (the tier's walkable
+    // top is level + elevation, 4 mm under the visual top).
+    ok('G7 _groundYAt on an outdoor terrace = level + authored height',
+       r._groundYAt(9500, 8000) === LOW + 500, `gy=${r._groundYAt(9500, 8000)}`);
     // Building prisms keep their local podium base — only the group moved.
     {
       const prism = r._neighborhoodGroup.children.find(c => c.geometry && c.geometry.type === 'ExtrudeGeometry');
@@ -343,6 +349,168 @@
        yardOf()[0].position.y === 2 && r._groundYAt(11000, 9500) === 0,
        `grid=${r._grid.position.y} nbhd=${r._neighborhoodGroup.position.y} yard=${yardOf()[0]?.position.y} gy=${r._groundYAt(11000, 9500)}`);
     r.updateNeighborhood(null, null);   // leave the frustum as we found it
+  }
+
+  // ── H: FREE-STANDING content follows the ground level ────────────────────
+  // One rule (_itemGroundY): anything planted on the ground whose plan anchor
+  // is OUTSIDE every closed wall loop builds on the surroundings grade; things
+  // mounted on the HOUSE (wall plates, wall/ceiling light kinds) and everything
+  // indoors stay slab-relative. Every H case runs at level −600 AND at 0, and
+  // the 0 run must reproduce the pre-ground-level numbers exactly.
+  {
+    const LOW = -600;
+    const houseLoop = [
+      { x: 3000, y: 3000 }, { x: 7000, y: 3000 }, { x: 7000, y: 6000 },
+      { x: 3000, y: 6000 }, { x: 3000, y: 3000 },
+    ];
+    const houseWalls = [{ id: 'hw', points: houseLoop, kind: 'full' }];
+    const OUT = { x: 10000, y: 8000 };     // clear of the house loop
+    const IN  = { x: 5000,  y: 4500 };     // inside it
+    const sceneAt = (gl) => (gl === 0 ? scene : { ...scene, groundLevelMm: gl });
+    const near = (a, b, tol = 1e-6) => Math.abs(a - b) <= tol;
+
+    // ── H1/H2: furniture. An outdoor tree stands on the grade, an identical
+    // indoor one does not. Groups are found by their scene x (= fw/2 − wx).
+    const fu = (id, kind, x, y, w, h, extra = {}) =>
+      ({ id, kind, x, y, w, h, rotation: 0, ...extra });
+    const grpAtWorldX = (wx) => r._floorGroup.children.find(
+      c => c.type === 'Group' && Math.abs(c.position.x - (FW / 2 - wx)) < 1);
+    const treeYs = (gl) => {
+      r.updateFloor(mkFloor([], {
+        walls: houseWalls,
+        furniture: [fu('tOut', 'tree', OUT.x, OUT.y, 900, 900),
+                    fu('tIn', 'tree', IN.x, IN.y, 900, 900)],
+      }), sceneAt(gl));
+      return { out: grpAtWorldX(OUT.x)?.position.y, in: grpAtWorldX(IN.x)?.position.y };
+    };
+    {
+      const lo = treeYs(LOW), zero = treeYs(0);
+      ok('H1 outdoor furniture stands on the lowered grade, indoor does not',
+         near(lo.out, LOW) && near(lo.in, 0), `out=${lo.out} in=${lo.in}`);
+      ok('H2 level 0 restores both to the slab exactly',
+         zero.out === 0 && zero.in === 0, `out=${zero.out} in=${zero.in}`);
+    }
+
+    // ── H3/H4: an outdoor lawn chair's SitSpot rides the grade, and a rig that
+    // dwells there sits ON the cushion (the whole seated pose drops with it).
+    const realNow = performance.now.bind(performance);
+    let fakeNow = realNow();
+    performance.now = () => fakeNow;
+    const sitOnLawnChair = (gl) => {
+      r.clearTransientGroups();
+      r.updateFloor(mkFloor([], {
+        walls: houseWalls,
+        furniture: [fu('lc', 'lawn_chair', OUT.x, OUT.y, 700, 1200)],
+      }), sceneAt(gl));
+      const seatY = r._sitSpots[0]?.seatY;
+      for (let i = 0; i < 420; i++) {
+        fakeNow += 16.7;
+        r.updateTargets([{ key: 'LC', x: OUT.x, y: OUT.y - 700, color: 0x4fc3f7 }]);
+      }
+      const h = r._humanoids['LC'];
+      return { seatY, sit: h?.sit ?? 0, rootY: h?.group.position.y ?? NaN };
+    };
+    {
+      const lo = sitOnLawnChair(LOW), zero = sitOnLawnChair(0);
+      // lawn_chair seat = 380 mm; the spot is the seat height + the grade.
+      ok('H3 outdoor SitSpot seat height rides the grade',
+         near(zero.seatY, 380) && near(lo.seatY, 380 + LOW),
+         `seat0=${zero.seatY} seatLow=${lo.seatY}`);
+      ok('H4 a rig seated outdoors drops with the chair (Δroot = level)',
+         lo.sit > 0.9 && zero.sit > 0.9 && near(lo.rootY - zero.rootY, LOW, 1),
+         `sit=${lo.sit.toFixed(2)}/${zero.sit.toFixed(2)} Δroot=${(lo.rootY - zero.rootY).toFixed(1)}`);
+    }
+    performance.now = realNow;
+
+    // ── H5: ground areas — an INDOOR area is floor covering and never moves.
+    {
+      const inArea = { id: 'ai', kind: 'concrete', points: sq(IN.x, IN.y, 400), elevationMm: 0 };
+      const outArea = { id: 'ao', kind: 'grass', points: sq(OUT.x, OUT.y, 700), elevationMm: 0 };
+      r.updateFloor(mkFloor([inArea, outArea], { walls: houseWalls }), sceneAt(LOW));
+      r.updateGroundAreas([inArea, outArea], undefined, FW, FD, houseWalls, false, LOW);
+      const tops = topsOf();
+      const yIn = tops.find(t => Math.abs(t.position.x - (FW / 2 - IN.x)) < 5000 && t.position.y === 4);
+      const ys = tops.map(t => t.position.y).sort((a, b) => a - b);
+      ok('H5 outdoor patch on the grade (4 + level), indoor patch at 4',
+         ys.length === 2 && ys[0] === LOW + 4 && ys[1] === 4 && !!yIn,
+         `ys=[${ys.join(',')}]`);
+    }
+
+    // ── H6: pools. An outdoor basin recesses from the grade.
+    {
+      const pool = { id: 'pl', kind: 'pool', points: sq(OUT.x, OUT.y, 1200), depthMm: 1400 };
+      const surfOf = () => r._poolGroup.children.find(c => c.userData && c.userData.poolWater)?.position.y;
+      r.updateFloor(mkFloor([], { walls: houseWalls, pools: [pool] }), sceneAt(LOW));
+      r.updatePools([pool], () => null);
+      const lo = surfOf();
+      r.updateFloor(mkFloor([], { walls: houseWalls, pools: [pool] }), sceneAt(0));
+      r.updatePools([pool], () => null);
+      const zero = surfOf();
+      ok('H6 outdoor pool water surface rides the grade',
+         near(zero, G.poolWaterSurfaceY(pool)) && near(lo, G.poolWaterSurfaceY(pool) + LOW),
+         `surf0=${zero} surfLow=${lo}`);
+    }
+
+    // ── H7/H8: lights. A ground-standing lamp (+ its floor pool) follows the
+    // grade outdoors; a WALL-mounted sconce and a wall switch never do.
+    {
+      const lamp = { id: 'lp', x: OUT.x, y: OUT.y, entity_id: null, iconKind: 'lamp',
+                     height: 1500, localState: 'on' };
+      const sconce = { id: 'sc', x: OUT.x + 500, y: OUT.y, entity_id: null, iconKind: 'sconce',
+                       height: 2200, localState: 'on' };
+      const sw = { id: 'sw1', x: OUT.x, y: OUT.y + 500, entity_id: null, localState: 'on' };
+      const read = (gl) => {
+        r.updateFloor(mkFloor([], { walls: houseWalls, lights: [lamp, sconce], switches: [sw] }), sceneAt(gl));
+        r.updateLightsSwitches([lamp, sconce], [sw], () => null);
+        const lit = r._lightGroup.children;
+        const bodyAtX = (wx) => lit.find(c => c.type === 'Group' && Math.abs(c.position.x - (FW / 2 - wx)) < 1);
+        const disc = lit.find(c => c.isMesh && c.geometry.type === 'CircleGeometry');
+        return {
+          lamp: bodyAtX(OUT.x)?.position.y, sconce: bodyAtX(OUT.x + 500)?.position.y,
+          pool: disc?.position.y, sw: r._switchGroup.children[0]?.position.y,
+        };
+      };
+      const lo = read(LOW), zero = read(0);
+      // (A floor lamp's body group origin sits at the floor — the pole rises
+      // from it — so the invariant is the DELTA, not an absolute height.)
+      ok('H7 outdoor ground-standing lamp + its floor pool ride the grade',
+         near(zero.pool, 3) && near(lo.pool - zero.pool, LOW) &&
+         near(lo.lamp - zero.lamp, LOW) && zero.lamp != null,
+         `lamp=${zero.lamp}/${lo.lamp} pool=${zero.pool}/${lo.pool}`);
+      ok('H8 wall-mounted sconce + wall switch never move',
+         near(zero.sconce, lo.sconce) && near(zero.sw, lo.sw) && near(lo.sw, 1200),
+         `sconce=${zero.sconce}/${lo.sconce} switch=${zero.sw}/${lo.sw}`);
+    }
+
+    // ── H9: GPS landmarks / pins. Outdoors they ride the grade; the indoor
+    // "find my phone" pin stays slab-relative.
+    {
+      const lms = [{ x: OUT.x, y: OUT.y, name: 'Mailbox' }];
+      const pins = [{ x: IN.x, y: IN.y, label: 'A', color: '#4fc3f7', stale: false }];
+      const read = (gl) => {
+        r.updateFloor(mkFloor([], { walls: houseWalls }), sceneAt(gl));
+        r.updateGpsPins(pins, lms);
+        return r._gpsGroup.children.map(c => c.position.y);
+      };
+      const lo = read(LOW), zero = read(0);
+      ok('H9 outdoor landmark sprite rides the grade, indoor pin does not',
+         zero[0] === 300 && zero[1] === 1800 && lo[0] === 300 + LOW && lo[1] === 1800,
+         `zero=[${zero.join(',')}] low=[${lo.join(',')}]`);
+    }
+
+    // ── H10: the lawn-text decal is MOWED INTO the ground it lies on (the
+    // reported bug: it stayed at slab height while the yard dropped).
+    {
+      const read = (gl) => {
+        r.updateFloor(mkFloor([], { walls: houseWalls }), sceneAt(gl));
+        r.updateBgTexts([{ id: 'g1', mode: 'grass', text: 'HELLO' }], false, 0, 0);
+        return r._bgRigs.find(x => x.mode === 'grass')?.grassMesh?.position.y;
+      };
+      const lo = read(LOW), zero = read(0);
+      ok('H10 grass background text follows the ground level',
+         zero === 6 && near(lo, 6 + LOW), `y0=${zero} yLow=${lo}`);
+      r.updateBgTexts([], false, 0, 0);
+    }
   }
 
   let pass = 0; const fails = [];

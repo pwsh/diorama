@@ -562,6 +562,346 @@
        `sky=${skyCv.width} tight=${tightW}`);
   }
 
+  // ════════════ GROUND LEVEL (Scene3D.groundLevelMm) ════════════
+  // Every bg-text rig lives in the yard or the sky over it, so all four styles
+  // ride the surroundings grade: the train's rails, the tow plane's and
+  // chopper's AGL flight altitude, and the skywriting. Grass is covered in
+  // terrain-test's section H (it resolves through _groundYAt). Level 0 must
+  // reproduce today's numbers exactly.
+  {
+    const LOW = -600;
+    const sc0 = { preset: 'day', floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6' };
+    const scLow = { ...sc0, groundLevelMm: LOW };
+    const entries = [
+      { id: 'gtrain', mode: 'train', text: 'ALL ABOARD' },
+      { id: 'gplane', mode: 'banner', text: 'HELLO' },
+      { id: 'gchop', mode: 'chopper', text: 'NEWS' },
+      { id: 'gsky', mode: 'sky', text: 'HI' },
+    ];
+    const read = (sc) => {
+      r.updateFloor(floor, sc);
+      // Fresh entry ids per level so the persistent phase never crosses runs.
+      const es = entries.map(e => ({ ...e, id: e.id + (sc === scLow ? 'L' : '0') }));
+      r.updateBgTexts(es, false, 0, 0);
+      const by = (m) => r._bgRigs.find(x => x.mode === m);
+      return {
+        train: by('train').train.baseY,
+        trainCar: by('train').train.vehicles[0].obj.position.y,
+        plane: by('banner').alt,
+        chop: by('chopper').alt,
+        sky: by('sky').sky.position.y,
+      };
+    };
+    const zero = read(sc0), lo = read(scLow);
+    ok('GL train rails ride the grade', zero.train === 0 && lo.train === LOW &&
+       zero.trainCar === 0 && lo.trainCar === LOW,
+       `base=${zero.train}/${lo.train} car=${zero.trainCar}/${lo.trainCar}`);
+    ok('GL banner-plane altitude is AGL', lo.plane - zero.plane === LOW,
+       `alt=${zero.plane}/${lo.plane}`);
+    ok('GL chopper altitude is AGL', lo.chop - zero.chop === LOW,
+       `alt=${zero.chop}/${lo.chop}`);
+    ok('GL skywriting altitude is AGL', lo.sky - zero.sky === LOW,
+       `y=${zero.sky}/${lo.sky}`);
+    r.updateFloor(floor, sc0);
+    r.updateBgTexts([], false, 0, 0);
+  }
+
+  // ════════════ CHOPPER TOW POINT: leading TOP corner, not the middle ═══════
+  // The banner Group origin must BE the corner the wire ends at, so the sway
+  // (banner.rotation.y) pivots there and the cloth trails back + down from it.
+  {
+    r.updateBgTexts([{ id: 'tow', mode: 'chopper', text: 'BREAKING NEWS' }], false, 0, 0);
+    const rig = r._bgRigs.find(x => x.mode === 'chopper');
+    const banner = rig.banner, wire = rig.towWire;
+    const front = banner.children.find(c => c.userData && c.userData.bannerFace === 'front');
+    const len = front.geometry.parameters.width, bh = front.geometry.parameters.height;
+    // Planes are shifted so the group origin lands on their +X/+Y corner.
+    ok('CHOP banner planes hang off the group origin corner (−len/2, −bh/2)',
+       Math.abs(front.position.x + len / 2) < 1 && Math.abs(front.position.y + bh / 2) < 1,
+       `off=(${front.position.x.toFixed(0)},${front.position.y.toFixed(0)}) len=${len | 0} bh=${bh | 0}`);
+    // …so the cloth occupies local x ∈ [−len, 0], y ∈ [−bh, 0]: the origin is
+    // the extreme +X (leading, toward the nose after the +π/2 broadside yaw)
+    // and +Y (top) corner of the banner.
+    front.geometry.computeBoundingBox();
+    const bb = front.geometry.boundingBox;
+    const maxX = front.position.x + bb.max.x, maxY = front.position.y + bb.max.y;
+    ok('CHOP group origin IS the leading TOP corner of the cloth',
+       Math.abs(maxX) < 1 && Math.abs(maxY) < 1, `maxX=${maxX.toFixed(1)} maxY=${maxY.toFixed(1)}`);
+    // The tow line's far end coincides with that corner (it is built as a
+    // cylinder centred on the attach→corner midpoint; userData carries both).
+    const att = wire.userData.attach, cor = wire.userData.bannerTop;
+    const bp = banner.position;
+    const wireEnd = Math.hypot(cor[0] - bp.x, cor[1] - bp.y, cor[2] - bp.z);
+    const mid = [(att[0] + cor[0]) / 2, (att[1] + cor[1]) / 2, (att[2] + cor[2]) / 2];
+    ok('CHOP tow wire ends exactly at the banner group origin (the corner)',
+       wireEnd < 1 &&
+       Math.abs(wire.position.x - mid[0]) < 1 && Math.abs(wire.position.y - mid[1]) < 1 &&
+       Math.abs(wire.position.z - mid[2]) < 1,
+       `gap=${wireEnd.toFixed(1)}`);
+    // The cloth trails BEHIND (local −X → scene +Z after rotation.y=+π/2) and
+    // BELOW the tow point, never in front of the chopper.
+    ok('CHOP cloth trails back + below the tow point',
+       bb.min.x + front.position.x <= -len + 1 && bb.min.y + front.position.y <= -bh + 1,
+       `min=(${(bb.min.x + front.position.x).toFixed(0)},${(bb.min.y + front.position.y).toFixed(0)})`);
+    // Sway pivots about the corner: the origin is invariant under rotation.y.
+    const before = banner.position.clone();
+    r._advanceBgText(0.5, 12345);
+    ok('CHOP sway pivots about the towed corner (origin unmoved)',
+       banner.position.distanceTo(before) < 1e-6, `d=${banner.position.distanceTo(before)}`);
+    r.updateBgTexts([], false, 0, 0);
+  }
+
+  // ════════════ PHASE PERSISTENCE ACROSS REBUILDS ════════════
+  // Reported bug: the plane + train reset their lap every ~25-30 s. Two halves:
+  // three-view's _keyBgText no longer carries configRev (so unrelated config
+  // churn stops rebuilding these at all), and — belt and braces — a rebuild
+  // that DOES happen resumes from the persistent per-entry phase instead of the
+  // build angle.
+  {
+    const es = (txt) => [
+      { id: 'pTrain', mode: 'train', text: txt },
+      { id: 'pPlane', mode: 'banner', text: txt },
+      { id: 'pSky', mode: 'sky', text: txt },
+    ];
+    r.updateBgTexts(es('LAP ONE'), false, 0, 0);
+    const rigOf = (m) => r._bgRigs.find(x => x.mode === m);
+    const build = { angle: rigOf('banner').angle, s: rigOf('train').train.s, sky: rigOf('sky').skyPhase };
+    // Fly / drive for ~20 s of virtual time.
+    for (let i = 0; i < 1200; i++) { clk += 1 / 60; r._advanceBgText(1 / 60, clk); }
+    const flown = { angle: rigOf('banner').angle, s: rigOf('train').train.s, sky: rigOf('sky').skyPhase,
+                    planePos: rigOf('banner').asm.position.clone(),
+                    carPos: rigOf('train').train.vehicles[0].obj.position.clone() };
+    ok('PHASE motion actually advanced before the rebuild',
+       flown.angle !== build.angle && flown.s !== build.s && flown.sky !== build.sky,
+       `angle=${flown.angle.toFixed(3)} s=${flown.s | 0}`);
+    // A rebuild with the SAME entries (what an unrelated config bump used to do)
+    // must not move anything.
+    r.updateBgTexts(es('LAP ONE'), false, 0, 0);
+    const same = { angle: rigOf('banner').angle, s: rigOf('train').train.s,
+                   planePos: rigOf('banner').asm.position.clone(),
+                   carPos: rigOf('train').train.vehicles[0].obj.position.clone() };
+    // Horizontal (orbit / arc-length) position must be identical; the plane's
+    // vertical bob is a pure function of the ABSOLUTE clock, so the re-seed
+    // settles it at the real `performance.now()` rather than this page's fake
+    // clock — it is continuous by construction and re-lands on the next frame.
+    const planeXZ = Math.hypot(same.planePos.x - flown.planePos.x, same.planePos.z - flown.planePos.z);
+    ok('PHASE identical rebuild leaves the plane + train exactly where they were',
+       Math.abs(same.angle - flown.angle) < 1e-9 && Math.abs(same.s - flown.s) < 1e-6 &&
+       planeXZ < 1e-6 && same.carPos.distanceTo(flown.carPos) < 1e-6,
+       `dAngle=${(same.angle - flown.angle).toExponential(1)} dPlaneXZ=${planeXZ.toExponential(1)} dCar=${same.carPos.distanceTo(flown.carPos).toExponential(1)}`);
+    // A REAL rebuild (the bound entity's text changed) also resumes mid-course.
+    r.updateBgTexts(es('LAP TWO'), false, 0, 0);
+    const edited = { angle: rigOf('banner').angle, s: rigOf('train').train.s,
+                     sky: rigOf('sky').skyPhase };
+    ok('PHASE text-change rebuild resumes mid-course (no restart)',
+       Math.abs(edited.angle - flown.angle) < 1e-9 && Math.abs(edited.s - flown.s) < 1e-6 &&
+       Math.abs(edited.sky - flown.sky) < 1e-9 && edited.angle !== build.angle,
+       `angle=${edited.angle.toFixed(3)} vs build ${build.angle.toFixed(3)}`);
+    // A FRESH entry id still starts at its own build stagger.
+    r.updateBgTexts([{ id: 'brandNew', mode: 'banner', text: 'NEW' }], false, 0, 0);
+    ok('PHASE a fresh entry id starts at its build angle',
+       Math.abs(rigOf('banner').angle - 0) < 1e-9, `angle=${rigOf('banner').angle}`);
+    r.updateBgTexts([], false, 0, 0);
+  }
+
+  // ════════════ TOW AIRCRAFT MODEL (BgTextEntry.aircraft) ════════════
+  // A banner entry may tow its message with any of the 8 FLIGHT archetypes,
+  // built by the same _buildAircraftModel the ADS-B rigs use. Absent / garbage
+  // must reproduce the classic toy plane byte-for-byte.
+  {
+    // Signature of a rig's silhouette: mesh count + the fuselage/first-mesh
+    // footprint + the total bounding span (banner excluded — it is identical
+    // across models, so it would mask the difference).
+    const airframe = (rig) => {
+      const out = [];
+      rig.asm.traverse(o => {
+        const u = o.userData || {};
+        if (o.isMesh && !u.textPlane && !u.outline && !u.outlineSkip) {
+          // Skip anything under the banner group.
+          let p = o.parent, inBanner = false;
+          while (p) { if (p === rig.banner) { inBanner = true; break; } p = p.parent; }
+          if (!inBanner) out.push(o);
+        }
+      });
+      return out;
+    };
+    const span = (rig) => {
+      let w = 0, l = 0;
+      for (const m of airframe(rig)) {
+        m.geometry.computeBoundingBox();
+        const bb = m.geometry.boundingBox;
+        w = Math.max(w, Math.abs(m.position.x) + Math.max(Math.abs(bb.min.x), Math.abs(bb.max.x)));
+        l = Math.max(l, Math.abs(m.position.z) + Math.max(Math.abs(bb.min.z), Math.abs(bb.max.z)));
+      }
+      return { w, l, n: airframe(rig).length };
+    };
+    const build = (aircraft) => {
+      r.updateBgTexts([{ id: 'ac_' + String(aircraft), mode: 'banner', text: 'FLY ME', aircraft }],
+                      false, 0, 0);
+      return r._bgRigs.find(x => x.mode === 'banner');
+    };
+
+    const toy = span(build(undefined));
+    const toyGarbage = span(build('not-a-plane'));
+    ok('AC absent → the classic toy tow plane',
+       toy.n === 4 && Math.abs(toy.w - 650) < 1,          // 1300 mm wing, 4 body meshes
+       `n=${toy.n} w=${toy.w}`);
+    ok('AC unknown archetype falls back to the toy plane (never throws)',
+       toyGarbage.n === toy.n && Math.abs(toyGarbage.w - toy.w) < 1e-6 &&
+       Math.abs(toyGarbage.l - toy.l) < 1e-6,
+       `n=${toyGarbage.n} w=${toyGarbage.w}`);
+
+    // One SMALL archetype and one BIG one — distinguishable from each other and
+    // from the toy plane by real geometry, not by a flag.
+    const ga = build('ga-high');
+    const gaS = span(ga);
+    ok('AC ga-high builds a distinct silhouette (not the toy plane)',
+       gaS.n !== toy.n || Math.abs(gaS.w - toy.w) > 50, `n=${gaS.n} w=${gaS.w} vs toy w=${toy.w}`);
+    let highWing = false;
+    ga.asm.traverse(o => { if (o.userData && o.userData.wing === 'high') highWing = true; });
+    ok('AC ga-high carries the HIGH-wing tag', highWing);
+    const wide = build('widebody');
+    const wideS = span(wide);
+    ok('AC widebody is markedly bigger than ga-high (>2× the plan footprint)',
+       wideS.w * wideS.l > gaS.w * gaS.l * 2 && wideS.l > gaS.l * 1.4,
+       `wide=${wideS.w.toFixed(0)}x${wideS.l.toFixed(0)} ga=${gaS.w.toFixed(0)}x${gaS.l.toFixed(0)}`);
+    let pods = 0;
+    wide.asm.traverse(o => { if (o.userData && o.userData.nacelle === 'wing') pods++; });
+    ok('AC widebody carries underwing engine pods', pods >= 2, `pods=${pods}`);
+
+    // The banner still tows, behind the tail, on every archetype.
+    for (const [a, rig] of [['ga-high', ga], ['widebody', wide]]) {
+      const front = rig.banner.children.find(c => c.userData && c.userData.bannerFace === 'front');
+      ok(`AC ${a} still tows a readable banner`,
+         !!front && !!front.material.map && rig.banner.position.z > 0 && readability(front) > 0,
+         `z=${rig.banner.position.z | 0}`);
+    }
+    ok('AC widebody trails its banner clear of the longer fuselage',
+       wide.banner.position.z > ga.banner.position.z,
+       `wide=${wide.banner.position.z | 0} ga=${ga.banner.position.z | 0}`);
+
+    // Prop / rotor spin: props spin about the FLIGHT axis (Z), a rotorcraft
+    // about Y; a jet has no disc at all.
+    const spun = (rig) => { clk += 0.5; r._advanceBgText(0.5, clk); return rig; };
+    const tp = build('twin-prop');
+    ok('AC twin-prop carries TWO spinning discs', (tp.props ?? []).length === 2,
+       `n=${(tp.props ?? []).length}`);
+    spun(tp);
+    ok('AC twin-prop discs spin about Z (the flight axis)',
+       tp.props.every(d => d.rotation.z !== 0 && d.rotation.y === 0),
+       `z=${tp.props[0].rotation.z.toFixed(2)} y=${tp.props[0].rotation.y}`);
+    const heli = build('heli');
+    spun(heli);
+    ok('AC heli on a BANNER entry spins its main rotor about Y',
+       heli.rotorY === true && heli.props[0].rotation.y !== 0 && heli.props[0].rotation.z === 0,
+       `y=${heli.props[0].rotation.y.toFixed(2)} z=${heli.props[0].rotation.z}`);
+    ok('AC heli on a banner entry flies the BANNER orbit (not the chopper profile)',
+       heli.mode === 'banner' && heli.dir === 1, `mode=${heli.mode} dir=${heli.dir}`);
+    ok('AC heli tail rotor spins about X', heli.tailRotor && heli.tailRotor.rotation.x !== 0);
+    const jet = build('narrowbody');
+    spun(jet);
+    ok('AC a jet archetype has no propeller disc',
+       (jet.props ?? []).length === 0 && jet.propRate === 0,
+       `n=${(jet.props ?? []).length} rate=${jet.propRate}`);
+    // The dedicated news chopper is untouched by the archetype path.
+    r.updateBgTexts([{ id: 'newschop', mode: 'chopper', text: 'NEWS', aircraft: 'widebody' }],
+                    false, 0, 0);
+    const nc = r._bgRigs.find(x => x.mode === 'chopper');
+    ok('AC `aircraft` is ignored on a chopper entry (dedicated news build kept)',
+       !!nc.towWire && !!nc.tailRotor && nc.dir === -1, `dir=${nc.dir}`);
+    r.updateBgTexts([], false, 0, 0);
+  }
+
+  // ════════════ MODEL SIZE (BgTextEntry.scale) ════════════
+  // Independent per-entry knob: the world grew ~190× across the frustum work,
+  // so the toys need to be scalable without moving their flight paths.
+  {
+    const buildAll = (scale, tag) => {
+      r.updateBgTexts([
+        { id: 'sTrain' + tag, mode: 'train', text: 'BIG TRAIN', scale },
+        { id: 'sPlane' + tag, mode: 'banner', text: 'BIG PLANE', scale },
+        { id: 'sChop' + tag, mode: 'chopper', text: 'BIG CHOP', scale },
+        { id: 'sSky' + tag, mode: 'sky', text: 'BIG SKY', scale },
+        { id: 'sGrass' + tag, mode: 'grass', text: 'BIG LAWN', scale },
+      ], false, 0, 0);
+      const by = (m) => r._bgRigs.find(x => x.mode === m);
+      const t = by('train').train;
+      return {
+        plane: by('banner').asm.scale.x, chop: by('chopper').asm.scale.x,
+        sky: by('sky').sky.scale.y, grass: by('grass').grassMesh.scale.x,
+        car: t.vehicles[0].obj.scale.x, spacing: t.spacing, wheelR: t.wheelR,
+        alt: by('banner').alt, radius: by('banner').radius,
+        carPos: t.vehicles[0].obj.position.clone(),
+      };
+    };
+    const one = buildAll(undefined, '1'), three = buildAll(3, '3');
+    ok('SCALE default (absent) is exactly 1 on every style',
+       one.plane === 1 && one.chop === 1 && one.grass === 1 && one.car === 1.8 &&
+       one.spacing === 1480 && one.wheelR === 162,
+       `plane=${one.plane} car=${one.car} sp=${one.spacing}`);
+    ok('SCALE ×3 scales the banner plane + chopper assemblies',
+       Math.abs(three.plane - 3) < 1e-9 && Math.abs(three.chop - 3) < 1e-9,
+       `plane=${three.plane} chop=${three.chop}`);
+    ok('SCALE ×3 scales the skywriting sprite + grass decal',
+       Math.abs(three.sky / one.sky - 3) < 1e-6 && Math.abs(three.grass - 3) < 1e-9,
+       `sky=${(three.sky / one.sky).toFixed(3)} grass=${three.grass}`);
+    ok('SCALE ×3 scales the train consist AND its spacing / wheel radius',
+       Math.abs(three.car - 5.4) < 1e-9 && Math.abs(three.spacing - 4440) < 1e-6 &&
+       Math.abs(three.wheelR - 486) < 1e-6,
+       `car=${three.car} sp=${three.spacing} wR=${three.wheelR}`);
+    ok('SCALE leaves the flight path alone (altitude + orbit radius unchanged)',
+       three.alt === one.alt && three.radius === one.radius,
+       `alt=${one.alt}/${three.alt} R=${one.radius | 0}/${three.radius | 0}`);
+    // Clamp 0.5..5, garbage → 1.
+    const lo = buildAll(0.01, 'lo'), hi = buildAll(999, 'hi'), bad = buildAll(NaN, 'bad');
+    const neg = buildAll(-2, 'neg');
+    ok('SCALE clamps below 0.5', Math.abs(lo.plane - 0.5) < 1e-9, `=${lo.plane}`);
+    ok('SCALE clamps above 5', Math.abs(hi.plane - 5) < 1e-9, `=${hi.plane}`);
+    ok('SCALE garbage (NaN / negative) → 1',
+       bad.plane === 1 && neg.plane === 1, `NaN=${bad.plane} neg=${neg.plane}`);
+
+    // Composition: the scale rides on TOP of the ground-level grade, and the
+    // per-entry phase still persists across a rebuild with a scale set.
+    const LOW = -600;
+    const sc0 = { preset: 'day', floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6' };
+    r.updateFloor(floor, { ...sc0, groundLevelMm: LOW });
+    r.updateBgTexts([
+      { id: 'sgTrain', mode: 'train', text: 'LOW BIG', scale: 2 },
+      { id: 'sgPlane', mode: 'banner', text: 'LOW BIG', scale: 2, aircraft: 'widebody' },
+    ], false, 0, 0);
+    const gTrain = r._bgRigs.find(x => x.mode === 'train');
+    const gPlane = r._bgRigs.find(x => x.mode === 'banner');
+    ok('SCALE composes with ground level (rails on the grade, consist scaled)',
+       gTrain.train.baseY === LOW && Math.abs(gTrain.train.vehicles[0].obj.scale.x - 3.6) < 1e-9 &&
+       gTrain.train.vehicles[0].obj.position.y === LOW,
+       `baseY=${gTrain.train.baseY} sc=${gTrain.train.vehicles[0].obj.scale.x}`);
+    ok('SCALE composes with an AGL flight altitude on an archetype model',
+       gPlane.alt === 6000 + LOW + 800 && Math.abs(gPlane.asm.scale.x - 2) < 1e-9,
+       `alt=${gPlane.alt} sc=${gPlane.asm.scale.x}`);
+    // Fly, then rebuild the SAME entries: phase persists AND the scale is re-applied.
+    for (let i = 0; i < 600; i++) { clk += 1 / 60; r._advanceBgText(1 / 60, clk); }
+    const flownAngle = gPlane.angle, flownS = gTrain.train.s;
+    r.updateBgTexts([
+      { id: 'sgTrain', mode: 'train', text: 'LOW BIG', scale: 2 },
+      { id: 'sgPlane', mode: 'banner', text: 'LOW BIG', scale: 2, aircraft: 'widebody' },
+    ], false, 0, 0);
+    const g2Train = r._bgRigs.find(x => x.mode === 'train');
+    const g2Plane = r._bgRigs.find(x => x.mode === 'banner');
+    ok('SCALE + archetype rebuild resumes mid-course and keeps the scale',
+       Math.abs(g2Plane.angle - flownAngle) < 1e-9 && Math.abs(g2Train.train.s - flownS) < 1e-6 &&
+       Math.abs(g2Plane.asm.scale.x - 2) < 1e-9 &&
+       Math.abs(g2Train.train.vehicles[0].obj.scale.x - 3.6) < 1e-9,
+       `dAngle=${(g2Plane.angle - flownAngle).toExponential(1)} sc=${g2Plane.asm.scale.x}`);
+    // A per-frame advance must never overwrite the group scale.
+    clk += 1; r._advanceBgText(1, clk);
+    ok('SCALE survives the per-frame advance (nothing writes scale)',
+       Math.abs(g2Plane.asm.scale.x - 2) < 1e-9 &&
+       Math.abs(g2Train.train.vehicles[0].obj.scale.x - 3.6) < 1e-9,
+       `plane=${g2Plane.asm.scale.x} car=${g2Train.train.vehicles[0].obj.scale.x}`);
+    r.updateFloor(floor, sc0);
+    r.updateBgTexts([], false, 0, 0);
+  }
+
   // ════════════ report ════════════
   const pass = tests.filter(t => t.ok).length, total = tests.length;
   const allPass = pass === total;

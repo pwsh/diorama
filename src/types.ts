@@ -1285,6 +1285,11 @@ export interface FlightsConfig {
   minAltFt?: number;                      // optional altitude band filters
   maxAltFt?: number;
   showLabels?: boolean;                   // callsign labels in 3D; default true
+  // Size multiplier for every aircraft rig (default 1, clamp 0.5..4). Composed
+  // MULTIPLICATIVELY with the distance-compensated display scale + the spawn
+  // fade, so the rim/near growth curve and the fade-out are both preserved —
+  // this only sets how big the toy plate reads at a given zoom.
+  modelScale?: number;
   // Towed banners on small piston singles with a callsign (the bg tow-plane
   // idiom). Charming but busy over a dense feed — ABSENT = ON (today's
   // behavior); false swaps those aircraft back onto the ordinary label plate.
@@ -1430,6 +1435,22 @@ export interface BgTextEntry {
   entityId?: string;             // optional bound entity — its formatted state replaces `text`
   format?: InfoCardFormat;       // formatting for the bound entity's value
   maxCars?: number;              // train-only: cap on message cars (default 8, clamp 2..12)
+  // banner-only: build the tow aircraft from one of the eight FLIGHT archetypes
+  // (see AircraftArchetype in src/aircraft-types.ts — 'ga-high' | 'ga-low' |
+  // 'twin-prop' | 'turboprop' | 'narrowbody' | 'widebody' | 'bizjet' | 'heli')
+  // instead of the classic toy tow plane. ABSENT (or an unknown string) = the
+  // toy plane, byte-identical to the shipped build. Civil paint, no status
+  // beacons / privacy dimming / livery lettering — this is a message prop, not
+  // live traffic. `heli` flies the same banner orbit with its rotors spinning
+  // (the dedicated news-chopper build stays on `mode: 'chopper'`).
+  aircraft?: string;
+  // Model size multiplier for THIS entry's whole rig (default 1, clamp 0.5..5):
+  // train consist + car text planes, tow plane + banner, chopper + banner, sky
+  // sprite, grass decal. Purely a display preference — the orbit radius, flight
+  // altitude and train loop are unchanged, so a bigger model just reads better
+  // from a zoomed-out camera (the world grew ~190× across the frustum work; the
+  // toys never shrank).
+  scale?: number;
   grassAreaId?: string;          // grass-only: a Floor.groundAreas id to fit the text INTO
                                  // (bbox inset ~10%). Store-level bgTexts + per-floor ground
                                  // areas → a stale id (area not on the current floor) fails

@@ -1301,6 +1301,18 @@ export class SettingsDrawer extends LitElement {
                      @change=${(e: Event) => set(f => { f.privacyDim = (e.target as HTMLInputElement).checked; })}>
               <span style="flex:1">Dim privacy-flagged aircraft</span>
             </label>
+            <div class="row" style="align-items:center">
+              <label style="font-size:12px;color:var(--text);flex:1"
+                     title="Size multiplier for every aircraft model (0.5–4, default 1). Composed with the distance-compensated growth curve, so nearby and rim aircraft keep their relative sizes — this just makes the whole fleet read bigger from a zoomed-out camera.">Model size ×</label>
+              <input type="number" min="0.5" max="4" step="0.1"
+                     .value=${String(cfg.modelScale ?? 1)}
+                     @change=${(e: Event) => set(f => {
+                       const v = Number((e.target as HTMLInputElement).value);
+                       // setFlights clamps + normalizes 1 → undefined.
+                       f.modelScale = isFinite(v) ? v : 1;
+                     })}
+                     style="width:80px">
+            </div>
             <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text)">
               <input type="checkbox" .checked=${cfg.iss !== false}
                      @change=${(e: Event) => set(f => { f.iss = (e.target as HTMLInputElement).checked; })}>
@@ -1907,6 +1919,21 @@ export class SettingsDrawer extends LitElement {
       ['sky', 'Skywriting (sky)'], ['banner', 'Banner plane'],
       ['grass', 'Grass writing'], ['train', 'Message train'], ['chopper', 'News chopper'],
     ];
+    // The eight flight archetypes (src/aircraft-types.ts) a banner entry can
+    // tow its message with, plus the classic toy plane. Listed here as plain
+    // strings — aircraft-types.ts exports the union TYPE and the designator
+    // table, not a runtime list, and the renderer re-validates anyway.
+    const AIRCRAFT: Array<[string, string]> = [
+      ['', 'Classic tow plane'],
+      ['ga-high', 'Light single, high wing (Cessna)'],
+      ['ga-low', 'Light single, low wing (Cirrus)'],
+      ['twin-prop', 'Twin prop (King Air)'],
+      ['turboprop', 'Regional turboprop (ATR / Dash 8)'],
+      ['narrowbody', 'Airliner — narrowbody (737 / A320)'],
+      ['widebody', 'Airliner — widebody (747 / 777)'],
+      ['bizjet', 'Business jet (Learjet / CRJ)'],
+      ['heli', 'Helicopter'],
+    ];
     // Resolved strings (per entry, in list order) for the live preview.
     const resolved = new Map(p.bgTextsResolved().map(r => [r.id, r.text]));
     const row = (e: BgTextEntry, idx: number) => {
@@ -1970,6 +1997,28 @@ export class SettingsDrawer extends LitElement {
                        e.maxCars = isFinite(v) ? Math.min(12, Math.max(2, v)) : 8;
                      })}>
             </div>` : nothing}
+          ${e.mode === 'banner' ? html`
+            <div class="row" style="margin-top:2px">
+              <label title="Which aircraft tows the banner. The eight silhouettes are the same models the live flight tracker builds — in civil paint, with no status beacons or registration lettering.">Aircraft</label>
+              <select style="flex:1;min-width:0"
+                      @change=${(ev: Event) => upd(() => {
+                        const v = (ev.target as HTMLSelectElement).value;
+                        e.aircraft = v || undefined;
+                      })}>
+                ${AIRCRAFT.map(([v, l]) => html`
+                  <option value=${v} ?selected=${(e.aircraft ?? '') === v}>${l}</option>`)}
+              </select>
+            </div>` : nothing}
+          <div class="row" style="margin-top:2px">
+            <label title="Size multiplier for this entry's model (0.5–5, default 1). The flight path, train loop and text stay put — only the model gets bigger, which reads better from a zoomed-out camera.">Model size ×</label>
+            <input type="number" min="0.5" max="5" step="0.1" style="width:64px"
+                   .value=${String(e.scale ?? 1)}
+                   @change=${(ev: Event) => upd(() => {
+                     const v = Number((ev.target as HTMLInputElement).value);
+                     const n = isFinite(v) && v > 0 ? Math.min(5, Math.max(0.5, v)) : 1;
+                     e.scale = n === 1 ? undefined : n;
+                   })}>
+          </div>
           ${e.mode === 'grass' ? html`
             <div class="row" style="margin-top:2px">
               <label title="Fit the lawn text into a ground area's bounding box (else auto-placed in the widest open yard margin). Ground areas are per-floor — a choice on another floor falls back to auto here.">Fit to area</label>

@@ -213,6 +213,38 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Bg-text aircraft picker + model-size knobs** (2026-07-26, two user
+  requests; single Opus pass). `BgTextEntry.aircraft` (banner mode):
+  any of the 8 flight archetypes builds the tow plane via the shared
+  `_buildAircraftModel` (civil paint, no beacons/livery; heli flies
+  the banner orbit w/ rotorY axis flip; chopper mode ignores it;
+  absent = classic toy, byte-identical; standoff scales w/ fuselage).
+  `BgTextEntry.scale` (0.5–5) group-scales the whole rig per entry
+  (train spacing/wheelR scaled alongside; grass spills at >1 by
+  design); `FlightsConfig.modelScale` (0.5–4) = third multiplicative
+  term in `_flightRigScale`. Both fold into their keys; per-frame
+  advances never write scale. bgtext-multi 74→102, flights-render
+  288→299, flights-ui 172→200; flights/terrain/bgtext green.
+
+- **Ground level part 2: free-standing content follows the grade +
+  bg-text fixes** (2026-07-26, four user reports in one batch; single
+  Opus pass w/ 4 addenda). Rule: `_itemGroundY` (outdoors → grade,
+  routed through `_groundYAt`'s fallback so nav + visuals agree) +
+  `_yardGroundY` (encircling content). Moved: outdoor furniture
+  (+SitSpots — avatars sit ON the lowered lawn chair), ground areas/
+  terraces/pools (gl + elevation composes; fixes the patch-over-
+  lowered-yardFill inconsistency), ground-standing lights + pools,
+  flagpoles, robot docks, cameras, valves, projectors, leak pucks,
+  GPS/landmark/geo-event pins (indoor pins stay), grass bg-text
+  decal, train loop, banner-plane/chopper/sky AGL. Stays: wall-plane
+  furniture + stairs, wall/ceiling fixtures, room-bound overlays.
+  Chopper banner now hangs from its leading TOP corner (originCorner
+  was never passed — wire met the middle). Bg-text reset-every-30 s
+  fixed: `_keyBgText` dropped configRev (chatty config-path entity
+  churn) for a resolved-consumption hash + persistent `_bgTextPhase`
+  (rebuilds resume mid-course). terrain 38→48, bgtext-multi 61→74;
+  yard/path-pool/stairs/glass-see/nbhd-render/seating green.
+
 - **Adjustable ground level** (2026-07-26, user request, clarified:
   surroundings move vs the house; single Opus pass).
   `Scene3D.groundLevelMm` (default 0, ±10 000, negative = below slab):

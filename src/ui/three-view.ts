@@ -1528,13 +1528,24 @@ export class ThreeView extends LitElement {
       const bgEntries = p.bgTextsResolved();
       const bgStorm = fx.condition === 'pouring' || fx.condition === 'lightning'
         || fx.condition === 'lightning-rainy';
-      const keyBgText = `${p.configRev}|${f.id}|${bgStorm ? 's' : '-'}|`
+      // NO configRev term — deliberately. The builder consumes only the RESOLVED
+      // entry list + the floor's frame (dims + wall loops drive the grass margin
+      // strip and the train loop) + storm + the surroundings grade, so hashing
+      // exactly those keeps unrelated config churn (a weather poll, a thermostat
+      // attribute, a GPS fix — anything that bumps configRev every ~25-30 s)
+      // from rebuilding the rigs and snapping the plane/train back to their
+      // build angle. Legit rebuilds still resume mid-course via the renderer's
+      // persistent _bgTextPhase, but a rebuild is no longer free of cost.
+      const keyBgText = `${f.id}|${f.w | 0}x${f.d | 0}|${bgStorm ? 's' : '-'}|${groundLevelMm}|${wallHash}|`
         + bgEntries.map(e => {
             const ga = e.grassArea
               ? `${Math.round(e.grassArea.cx / 100)},${Math.round(e.grassArea.cy / 100)},`
                 + `${Math.round(e.grassArea.w / 100)},${Math.round(e.grassArea.h / 100)}`
               : '';
-            return `${e.id}:${e.mode}:${e.text}:${e.maxCars ?? ''}:${e.grassAreaId ?? ''}:${ga}`;
+            // aircraft (the banner-plane silhouette) + scale are BUILD-time
+            // inputs like maxCars — both must rebuild the rig when they change.
+            return `${e.id}:${e.mode}:${e.text}:${e.maxCars ?? ''}:${e.aircraft ?? ''}`
+              + `:${e.scale ?? ''}:${e.grassAreaId ?? ''}:${ga}`;
           }).join('|');
       if (keyBgText !== this._keyBgText) {
         this._keyBgText = keyBgText;
@@ -1578,6 +1589,7 @@ export class ThreeView extends LitElement {
                           beacons: flCfg?.beacons,
                           privacyDim: flCfg?.privacyDim,
                           banners: flCfg?.banners,
+                          modelScale: flCfg?.modelScale,
                         });
         r.updateIss(flOrigin && flCfg?.iss !== false ? p.issNow : null, flOrigin, flTheta);
       }
