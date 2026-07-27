@@ -26,6 +26,12 @@ export function validateCardConfig(raw: unknown): DioramaCardConfig {
   const c = (raw ?? {}) as Record<string, unknown>;
   const out: DioramaCardConfig = {};
 
+  // `type` must SURVIVE validation: the visual editor round-trips its config
+  // through here and re-emits it via config-changed — dropping the key made HA
+  // reject every editor edit with "No type provided" (user-reported). HA owns
+  // the value; we only carry it.
+  if (typeof c.type === 'string' && c.type) out.type = c.type;
+
   if (c.view !== undefined) {
     if (c.view !== '2d' && c.view !== '3d') throw new Error(`diorama-card: view must be "2d" or "3d" (got ${JSON.stringify(c.view)})`);
     out.view = c.view;
@@ -70,4 +76,6 @@ export function resolvedView(cfg: DioramaCardConfig): '2d' | '3d' { return cfg.v
 export function resolvedMode(cfg: DioramaCardConfig): 'kiosk' | 'view' { return cfg.mode ?? 'kiosk'; }
 export function resolvedPanelPath(cfg: DioramaCardConfig): string { return cfg.panelPath ?? '/diorama'; }
 
-export const STUB_CONFIG: DioramaCardConfig = { view: '2d', mode: 'kiosk' };
+// getStubConfig result — includes `type` so the very first editor open already
+// has a complete config even before HA merges its own.
+export const STUB_CONFIG: DioramaCardConfig = { type: 'custom:diorama-card', view: '2d', mode: 'kiosk' };

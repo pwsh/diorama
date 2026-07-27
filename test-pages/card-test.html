@@ -33,7 +33,7 @@
      card mounts; the 2D assertions never touch it.) -->
 <script type="module">
   const V = '?v=' + Date.now();
-  const { Planner, peekSharedPlanner } = await import('./card.mod.js' + V);
+  const { Planner, peekSharedPlanner, validateCardConfig } = await import('./card.mod.js' + V);
 
   const results = [];
   const ok = (name, cond, extra = '') => results.push({ name, pass: !!cond, extra: String(extra) });
@@ -215,6 +215,34 @@
       await sleep(30);
     } catch (err) { threeThrew = true; }
     ok('i: 3D card mounts three-view, no sync throw', !threeThrew && !!card3d.querySelector('diorama-three-view'), '');
+
+    // ── (j) `type` survives the visual-editor round-trip ──────────────────────
+    // Regression (user-reported): validateCardConfig rebuilt the config without
+    // `type`, so every editor edit emitted a type-less config and HA threw
+    // "No type provided" — the visual editor wedged any card it touched.
+    const CardCls = customElements.get('diorama-card');
+    ok('j: validateCardConfig preserves type',
+       validateCardConfig({ type: 'custom:diorama-card', view: '3d' }).type === 'custom:diorama-card', '');
+    ok('j: validateCardConfig without type stays typeless (card path unaffected)',
+       validateCardConfig({ view: '2d' }).type === undefined, '');
+    ok('j: getStubConfig carries type',
+       CardCls.getStubConfig().type === 'custom:diorama-card', '');
+    const editor = await CardCls.getConfigElement();
+    // A config stored BEFORE the fix lacks type — the editor must still emit it.
+    editor.setConfig({ view: '2d', mode: 'kiosk' });
+    let emitted = null;
+    editor.addEventListener('config-changed', e => { emitted = e.detail.config; });
+    editor._emit({ mode: 'view' });
+    ok('j: editor emit injects type on a legacy typeless config',
+       !!emitted && emitted.type === 'custom:diorama-card', JSON.stringify(emitted));
+    ok('j: editor emit applies the patch alongside type',
+       !!emitted && emitted.mode === 'view' && emitted.view === '2d', '');
+    // And a modern config's own type value is carried through untouched.
+    editor.setConfig({ type: 'custom:diorama-card', view: '3d' });
+    emitted = null;
+    editor._emit({ compact: true });
+    ok('j: editor emit round-trips an existing type',
+       !!emitted && emitted.type === 'custom:diorama-card' && emitted.view === '3d' && emitted.compact === true, '');
 
   } catch (err) {
     ok('harness threw', false, (err && err.stack) ? err.stack.split('\n').slice(0, 4).join(' | ') : String(err));

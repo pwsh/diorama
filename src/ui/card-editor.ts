@@ -42,7 +42,11 @@ export class DioramaCardEditor extends LitElement {
   }
 
   private _emit(patch: Partial<DioramaCardConfig>): void {
-    const next: DioramaCardConfig = { ...this._config, ...patch };
+    // `type` FIRST so a spread can only ever overwrite it with the real value —
+    // an emitted config missing `type` makes HA throw "No type provided" and
+    // wedges the visual editor (user-reported). validateCardConfig preserves it
+    // now, but a config stored before that fix may still lack it.
+    const next: DioramaCardConfig = { type: 'custom:diorama-card', ...this._config, ...patch };
     // Drop empty-string / undefined keys so the YAML stays clean.
     for (const k of Object.keys(next) as (keyof DioramaCardConfig)[]) {
       if (next[k] === '' || next[k] === undefined) delete next[k];

@@ -238,6 +238,17 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Card visual-editor "No type provided" fix** (2026-07-27,
+  user-reported; unreleased — on main past v0.35.0).
+  `validateCardConfig` rebuilt the config without `type`, so the
+  editor's every config-changed emit was type-less and HA rejected
+  it (YAML with an explicit type worked until the visual editor
+  touched it). Fix in three layers: the validator carries `type`
+  through, `STUB_CONFIG` includes it, and `_emit` spreads
+  `{type:'custom:diorama-card', ...}` first so a pre-fix stored
+  config still re-emits complete. card-test 32→38 (round-trip +
+  legacy-typeless-emit + stub asserts).
+
 - **Mobile flight tap fix + About block** (2026-07-27, user-reported:
   "tapping planes in the HA phone app doesn't show the info card";
   unreleased). Two compounding 3D-view causes: the manual
