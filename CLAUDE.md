@@ -459,14 +459,40 @@ anonymization, "signal lost" when the aircraft leaves the feed — fed by the ne
 `Planner.flightByHex(hex)` and repainted on the LIVE channel while open. NB flights-ui-test's
 `canvas-render.mod.js` is a COMBINED bundle of canvas-render + canvas-hit + canvas-interact from
 one temp entry (separate bundles would each get their own `flightHitPx` module instance).
+**User glow rules** (`Store.flights.glowRules?: FlightGlowRule[]`, cap 30, research
+`docs/research/flight-glow-rules.md`): an ordered, FIRST-MATCH-WINS list (the `evalRules` idiom)
+assigning a colour + animation pattern to matching aircraft. Whole surface is pure, in
+**`src/flights.ts`** (still zero-import, shared by both graphs): `globMatch` (hybrid wildcard —
+plain text = substring, any `*`/`?` = ANCHORED, `?` = exactly one char, case-insensitive;
+hand-walked + escaped so user text NEVER reaches `new RegExp` unescaped — this must not become a
+second real-regex surface), `matchesGlowCriteria` (AND across present criteria: 6 wildcard
+strings / 3 numeric min-max pairs — a null live field FAILS rather than passing / 5 tri-state
+flags), `resolveFlightGlow(fp, rules, beaconsOn)` (**the one home for the whole ladder**, called
+by 3D AND 2D: master `beacons` gate → EMERGENCY unconditionally, before any rule → first enabled
+match REPLACES the default → today's unchanged interesting/military/LADD; `pattern:'none'` →
+null = a supported mute), `flightGlowFrame(pattern, tSec) → {alpha, glow, mix}` (7 patterns:
+none/solid/flash/strobe/rotate/fade/alternate; `flash` IS the shipped 1.2 Hz envelope verbatim,
+`glow` is a genuine SECOND curve because bead and halo were always driven differently; `rotate`
+floor-clamps at 0.35 — real beacons never go fully dark), `lerpHexColor`,
+`sanitizeFlightGlowRules` (run in `setFlights`; **a blank text criterion collapses to
+`undefined` — never a match-everything `**`**). Renderer: matching runs at POLL cadence in
+`_syncFlightBeacon` (guard widened to `pattern|colorA|colorB`), storing `glowPattern`/
+`glowTwoColor` + three persistent `THREE.Color`s on the rig; `_advanceFlights` only samples the
+envelope and writes opacity/colour in place (`beaconPhase` accumulates in SECONDS, unwrapped —
+`alternate`/`flash` count whole cycles). Zero rules configured is byte-for-byte the shipped
+behavior. `glowRules` rides `updateFlights` opts (stale-chunk default = none) + configRev — no
+new dirty-key input. 2D `drawFlights` calls the same pair (`solid`+colorB = two rings) — the old
+"mirrored ~6 lines" ladder duplication between canvas-render and three-renderer is RETIRED; both
+call `resolveFlightGlow`, never re-derive locally. Settings ▸ Flight tracking "Glow rules"
+editor (collapsed summary rows, ✎ expand, ▲▼ reorder — order materially changes behaviour).
 **Attribution**: "Flight data © airplanes.live" joins the fixed bottom-left chip (stacked with the
-OSM line) whenever cloud + enabled + data. Tests: `flights-test.html` (`FLIGHTS PASS 358/358` —
+OSM line) whenever cloud + enabled + data. Tests: `flights-test.html` (`FLIGHTS PASS 498/498` —
 fixture = a REAL 94-aircraft airplanes.live LAX capture; incl. the live-path emit matrix, the
 archetype golden matrix, the emergency-alert lifecycle, and the shell-rescale golden/property
-suite), `flights-render-test.html` (`FLIGHTSRENDER PASS 299/299` — heading/pitch signs asserted
+suite), `flights-render-test.html` (`FLIGHTSRENDER PASS 350/350` — heading/pitch signs asserted
 via `getWorldDirection`; archetype geometry, livery text layout, beacon priority/gating, privacy
 dim, in-place rebuild, distance scale, fog exemption, flight raycast), `flights-ui-test.html`
-(`FLIGHTSUI 200/200` — settings round-trips, flight modal matrix, 2D hit routing; alert-center
+(`FLIGHTSUI 261/261` — settings round-trips, flight modal matrix, 2D hit routing; alert-center
 67/67 stays green).
 
 ### Geo reference & GPS device pins (World Outside, Feature G)

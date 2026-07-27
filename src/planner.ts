@@ -56,7 +56,7 @@ import type {
 } from './types.js';
 import { normalizeAircraftList, flightBearingDistance, MAX_AIRCRAFT,
          isEmergency, emergencySquawk, sanitizeLabelFields,
-         FLIGHTS_DEFAULT_RADIUS_NM,
+         sanitizeFlightGlowRules, FLIGHTS_DEFAULT_RADIUS_NM,
          type FlightPoint, type IssNow } from './flights.js';
 import { fetchLocalAircraft, fetchAirplanesLive, fetchIssNow } from './adsb-sources.js';
 // The ONE satellite alt/az routine (the renderer's sky uses the same function —
@@ -5243,6 +5243,14 @@ export class Planner extends EventTarget {
       const n = typeof ms === 'number' && isFinite(ms) && ms > 0
         ? Math.min(4, Math.max(0.5, ms)) : 1;
       this.store.flights.modelScale = n === 1 ? undefined : n;
+    }
+    // Same discipline for the user glow rules (docs/research/flight-glow-rules.md
+    // §6.3): unknown patterns / unusable colours drop the rule, numeric criteria
+    // clamp and swap-if-inverted, ids de-duplicate, the cap is enforced, and —
+    // the trap worth naming — a BLANK text criterion collapses to `undefined`
+    // rather than compiling to `**` and matching every aircraft on that field.
+    if (this.store.flights.glowRules !== undefined) {
+      this.store.flights.glowRules = sanitizeFlightGlowRules(this.store.flights.glowRules);
     }
     this.save();
     void this._reconfigureFlights();

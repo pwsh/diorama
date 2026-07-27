@@ -42,7 +42,8 @@ import { ALERT_BEACON_DEFAULTS, alertBeaconState, alertBeaconColor, alertBeaconA
 import { flagDominant } from './flags.js';
 import { vacMapAffine, vacSegColor, type ParsedVacMap, type VacSegment } from './valetudo-map.js';
 import {
-  flightDisplayPos, isEmergency, sanitizeLabelFields,
+  flightDisplayPos, sanitizeLabelFields,
+  resolveFlightGlow, flightGlowFrame, lerpHexColor, FLIGHT_DEFAULT_BEACON,
   FLIGHT_LABEL_FIELDS_DEFAULT, FLIGHTS_DEFAULT_RADIUS_NM, type FlightPoint,
 } from './flights.js';
 import type { Planner } from './planner.js';
@@ -345,25 +346,20 @@ export function drawAll(ctx: CanvasRenderingContext2D, p: Planner, view: View,
 // uses, so both views place a given aircraft on the same compressed bearing/
 // radius; the shell is anchored on the HOME POINT (the geo fit's plan origin,
 // else the floor centre), not on the floor rect.
-// ── Flight status beacon (research §2 / §4.2) ────────────────────────────────
-// EXACTLY ONE beacon per aircraft, highest priority wins. Deliberately mirrors
-// three-renderer's _flightBeaconColor (~6 lines each) rather than importing it —
-// canvas-render must never reach into the lazy three.js chunk. Keep the two in
-// step; a shared home in flights.ts is the natural hoist.
-export const FLIGHT_BEACON_COLORS = {
-  emergency: '#ff2a1a',
-  interesting: '#ffd400',
-  military: '#2ee56a',
-  ladd: '#f2f6fb',
-} as const;
+// ── Flight status beacon (research §2 / §4.2 + flight-glow-rules.md) ─────────
+// EXACTLY ONE beacon per aircraft. The resolution ladder — master gate,
+// unconditional emergency, first matching USER GLOW RULE, then the shipped
+// interesting/military/LADD default — now lives in the pure `resolveFlightGlow`
+// in flights.ts, which BOTH views call. The old "deliberately mirrored in ~6
+// lines each, keep the two in step" arrangement is retired: flights.ts is
+// zero-import and app-graph-safe, so 2D imports it directly and the two can no
+// longer drift. This wrapper survives for the default-only callers (and the
+// tests) that just want the priority colour.
+export const FLIGHT_BEACON_COLORS = FLIGHT_DEFAULT_BEACON;
 
-export function flightBeaconColor(fp: FlightPoint, on: boolean): string | null {
-  if (!on) return null;
-  if (isEmergency(fp)) return FLIGHT_BEACON_COLORS.emergency;
-  if (fp.interesting) return FLIGHT_BEACON_COLORS.interesting;
-  if (fp.military) return FLIGHT_BEACON_COLORS.military;
-  if (fp.ladd) return FLIGHT_BEACON_COLORS.ladd;    // dimmed, but still beacons
-  return null;
+export function flightBeaconColor(fp: FlightPoint, on: boolean,
+                                  rules?: import('./flights.js').FlightGlowRule[]): string | null {
+  return resolveFlightGlow(fp, rules, on)?.colorA ?? null;
 }
 
 // One label field's text. Mirrors three-renderer's _flightFieldText (same
@@ -434,12 +430,14 @@ function drawFlights(ctx: CanvasRenderingContext2D, p: Planner, view: View): voi
   const fields = sanitizeLabelFields(cfg.labelFields) ?? FLIGHT_LABEL_FIELDS_DEFAULT;
   const beaconsOn = cfg.beacons !== false;
   const privacyDim = cfg.privacyDim !== false;
+  const glowRules = cfg.glowRules;
   const dpr = window.devicePixelRatio || 1;
   const R = 9 * dpr;
-  // Beacon flash + the appliance-LED idiom: the 2D RAF redraws every frame, so
-  // a clock-driven alpha is the cheapest possible pulse (no per-aircraft state).
-  const beat = (Math.sin(performance.now() / 1000 * 1.2 * Math.PI * 2) + 1) / 2;
-  const beaconAlpha = 0.18 + 0.82 * beat * beat * beat;
+  // Beacon animation + the appliance-LED idiom: the 2D RAF redraws every frame
+  // and keeps NO per-aircraft state, so the clock IS the phase — fed into the
+  // SAME pure `flightGlowFrame` the 3D rigs sample from their per-rig
+  // accumulator, so one formula serves both views (research §5).
+  const tSec = performance.now() / 1000;
   ctx.save();
   for (const fp of list) {
     const d = flightDisplayPos(fp, origin.lat, origin.lon, theta, radiusNm);
@@ -476,16 +474,37 @@ function drawFlights(ctx: CanvasRenderingContext2D, p: Planner, view: View): voi
     ctx.strokeStyle = 'rgba(15,23,32,0.7)';
     ctx.stroke();
     ctx.restore();
-    // Status beacon: a pulsing ring around the dart, in the priority color.
-    const bc = flightBeaconColor(fp, beaconsOn);
-    if (bc) {
+    // Status / user-rule glow: a pulsing ring around the dart (research §5).
+    // Still at most two ctx.arc strokes — `solid` with a second colour draws a
+    // dimmer outer ring as the 2D analog of "bead core + tinted halo";
+    // everything else animates one ring's alpha + colour off the shared
+    // envelope. `none` resolves to null and draws nothing, exactly like the old
+    // no-beacon branch.
+    const glow = resolveFlightGlow(fp, glowRules, beaconsOn);
+    if (glow) {
+      const fr = flightGlowFrame(glow.pattern, tSec);
+      // `solid` / `alternate` hold a constant brightness — the colour is the
+      // whole signal there, so the ring must not breathe (§5).
+      const steady = glow.pattern === 'solid' || glow.pattern === 'alternate';
+      const stroke = glow.colorB && !steady
+        ? lerpHexColor(glow.colorA, glow.colorB, fr.mix)
+        : glow.pattern === 'alternate' && glow.colorB
+          ? (fr.mix >= 0.5 ? glow.colorB : glow.colorA)     // hard swap, no lerp
+          : glow.colorA;
       ctx.save();
-      ctx.globalAlpha = beaconAlpha;
+      ctx.globalAlpha = steady ? 0.6 : fr.alpha;
       ctx.beginPath();
       ctx.arc(pt.x, pt.y, R * 1.5, 0, Math.PI * 2);
       ctx.lineWidth = 2 * dpr;
-      ctx.strokeStyle = bc;
+      ctx.strokeStyle = stroke;
       ctx.stroke();
+      if (glow.pattern === 'solid' && glow.colorB) {
+        ctx.globalAlpha = 0.35;
+        ctx.beginPath();
+        ctx.arc(pt.x, pt.y, R * 1.95, 0, Math.PI * 2);
+        ctx.strokeStyle = glow.colorB;
+        ctx.stroke();
+      }
       ctx.restore();
     }
     if (showLabels) {

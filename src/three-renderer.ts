@@ -94,7 +94,8 @@ import {
   compressRadiusMm, compressAltitudeMm, flightDisplayAltitudeMm, isEmergency,
   flightDisplayScale, FLIGHT_SHELL_REACH_MM,
   FLIGHT_LABEL_FIELDS_DEFAULT, FLIGHTS_DEFAULT_RADIUS_NM, sanitizeLabelFields,
-  type FlightPoint, type IssNow,
+  resolveFlightGlow, flightGlowFrame, sanitizeFlightGlowRules,
+  type FlightPoint, type IssNow, type FlightGlowPattern, type FlightGlowRule,
 } from './flights.js';
 // aircraft-types.ts is likewise pure/zero-import (the same shared-chunk
 // discipline as flights.ts + avatars.ts) — the 8-archetype silhouette table.
@@ -680,8 +681,22 @@ interface FlightRig {
   idKey: string;                    // last painted fuselage identifier
   beacon: THREE.Mesh | null;        // status beacon body (emissive)
   beaconGlow: THREE.Sprite | null;  // additive glow on top of it
-  beaconColor: number;              // 0 = no beacon
-  beaconPhase: number;              // per-rig flash accumulator (never the absolute clock)
+  beaconColor: number;              // 0 = no beacon; the RESOLVED colorA as an int
+  // Per-rig accumulated glow phase, in SECONDS (it was radians before the glow
+  // rules landed — `alternate`/`flash` need whole-cycle counting, which a
+  // radian accumulator can't express). Never the absolute clock: a rebuild
+  // triggered by a rule/colour change must not pop the animation, and a fresh
+  // rig must not spawn into another's phase.
+  beaconPhase: number;
+  // Resolved glow (research flight-glow-rules.md). `glowKey` is the rebuild
+  // guard — `pattern|colorA|colorB` — so a poll whose resolution is unchanged
+  // touches nothing (§7 widens the old single-colour compare).
+  glowKey: string;
+  glowPattern: FlightGlowPattern;
+  glowTwoColor: boolean;            // false → per-frame colour writes are skipped
+  glowColorA: THREE.Color | null;   // persistent; built at poll cadence, never per frame
+  glowColorB: THREE.Color | null;
+  glowCur: THREE.Color | null;      // scratch — lerpColors target, mutated in place
   // real space
   lat: number; lon: number; altFt: number;
   latPerS: number; lonPerS: number; // dead-reckoning rates from gs + track
@@ -704,17 +719,15 @@ const FLIGHT_DEG = Math.PI / 180;
 const FLIGHT_M_PER_DEG = 111320;     // metres per degree of latitude (dead reckoning)
 const FLIGHT_FADE_S = 0.8;           // despawn scale-out (the humanoid despawn idiom)
 const FLIGHT_PITCH_MAX = 0.12;       // rad at ±6000 fpm — a hint, not a stunt
-// Status beacons (research §2 / §4.2). EXACTLY ONE per aircraft — the highest
-// priority wins: emergency RED > interesting YELLOW > military GREEN > LADD
-// WHITE. `emergency` outranks everything (it is the one field in the whole
-// inventory where the UI treatment genuinely matters). Mirrored — deliberately,
-// each in ~6 lines — by canvas-render's 2D flightBeaconColor; the two must stay
-// in step (a shared home in flights.ts is the natural wave-3 hoist).
-const FLIGHT_BEACON_EMERGENCY = 0xff2a1a;
-const FLIGHT_BEACON_INTERESTING = 0xffd400;
-const FLIGHT_BEACON_MILITARY = 0x2ee56a;
-const FLIGHT_BEACON_LADD = 0xf2f6fb;
-const FLIGHT_BEACON_HZ = 1.2;        // flashes per second
+// Status beacons (research §2 / §4.2), now the DEFAULT tier of the glow-rule
+// ladder (docs/research/flight-glow-rules.md §4). EXACTLY ONE per aircraft —
+// emergency RED (unconditional, before any user rule) > first matching user rule
+// > interesting YELLOW > military GREEN > LADD WHITE. The resolution itself has
+// moved into flights.ts's `resolveFlightGlow` — the shared home the old
+// "mirrored in ~6 lines by canvas-render" comment predicted — so 2D and 3D can
+// no longer drift. These ints are kept only as the test-facing names for the
+// four default colours — which are FLIGHT_DEFAULT_BEACON in flights.ts, and the
+// `flash` pattern's 1.2 Hz rate lives beside them in `flightGlowFrame`.
 const FLIGHT_PRIVACY_OPACITY = 0.45; // PIA/LADD courtesy dim (research §4.2)
 // Airframes with enough flank + spine to carry TWO markings (operator broadside,
 // identification along the top). Everything not listed — the GA singles and the
@@ -1884,6 +1897,9 @@ export class ThreeDRenderer {
   // that passes no opts keeps exactly the shipped two-line plate + beacons on).
   private _flightsLabelFields: string[] = FLIGHT_LABEL_FIELDS_DEFAULT.slice();
   private _flightsBeacons = true;
+  // User glow rules, first-match-wins (docs/research/flight-glow-rules.md).
+  // undefined = none authored = today's default beacon ladder, unchanged.
+  private _flightsGlowRules: FlightGlowRule[] | undefined = undefined;
   private _flightsPrivacyDim = true;
   private _flightsBanners = true;         // FlightsConfig.banners (absent = ON)
   // FlightsConfig.modelScale — a plain display multiplier folded into
@@ -12546,7 +12562,8 @@ export class ThreeDRenderer {
                 thetaRad: number, radiusNm: number, showLabels: boolean,
                 anchorScene: { x: number; z: number },
                 opts?: { labelFields?: string[]; beacons?: boolean; privacyDim?: boolean;
-                         banners?: boolean; modelScale?: number }): void {
+                         banners?: boolean; modelScale?: number;
+                         glowRules?: FlightGlowRule[] }): void {
     this._flightsOrigin = origin;
     this._flightsTheta = isFinite(thetaRad) ? thetaRad : 0;
     this._flightsRadius = isFinite(radiusNm) && radiusNm > 0 ? radiusNm : FLIGHTS_DEFAULT_RADIUS_NM;
@@ -12554,6 +12571,11 @@ export class ThreeDRenderer {
     this._flightsLabelFields =
       sanitizeLabelFields(opts?.labelFields) ?? FLIGHT_LABEL_FIELDS_DEFAULT.slice();
     this._flightsBeacons = opts?.beacons !== false;
+    // Absent (a stale three-view, or simply no rules authored) → undefined, and
+    // resolveFlightGlow falls straight through to the shipped default ladder.
+    // Re-sanitized HERE as well as in setFlights: the renderer must never trust
+    // a hand-edited config to have been through the planner's write path.
+    this._flightsGlowRules = sanitizeFlightGlowRules(opts?.glowRules);
     this._flightsPrivacyDim = opts?.privacyDim !== false;
     this._flightsBanners = opts?.banners !== false;
     // Absent / garbage → 1 (a stale three-view omitting the field keeps the
@@ -12635,37 +12657,65 @@ export class ThreeDRenderer {
     return this._flightsPrivacyDim && fp.pia === true;
   }
 
-  // EXACTLY ONE beacon, highest priority wins (see FLIGHT_BEACON_*). 0 = none.
-  private _flightBeaconColor(fp: FlightPoint): number {
-    if (!this._flightsBeacons) return 0;
-    if (isEmergency(fp)) return FLIGHT_BEACON_EMERGENCY;
-    if (fp.interesting) return FLIGHT_BEACON_INTERESTING;
-    if (fp.military) return FLIGHT_BEACON_MILITARY;
-    if (fp.ladd) return FLIGHT_BEACON_LADD;          // dimmed, but still beacons
-    return 0;
+  // EXACTLY ONE glow per aircraft. The whole three-tier resolution (master gate
+  // → unconditional emergency → first matching user rule → the unchanged default
+  // ladder) lives in flights.ts so 2D reads the identical answer; this is just
+  // the renderer's binding of the rule list it was handed by updateFlights.
+  //
+  // Runs at POLL cadence (once per aircraft per _applyFlightFix), NEVER per
+  // frame — a FlightPoint's matchable fields don't change between polls, so
+  // re-matching 60×/s would buy nothing (§7).
+  private _flightResolveGlow(fp: FlightPoint) {
+    return resolveFlightGlow(fp, this._flightsGlowRules, this._flightsBeacons);
   }
 
   // Beacon = an emissive bead on the spine + an additive glow sprite over it.
   // Both are flat/additive — the documented _mat() exemption family. Rebuilt
-  // only when the resolved color changes (a status flip), never per frame.
+  // only when the RESOLVED GLOW changes (§7 widened the guard from a single
+  // colour number to the `pattern|colorA|colorB` tuple), never per frame.
   private _syncFlightBeacon(rig: FlightRig, fp: FlightPoint): void {
-    const want = this._flightBeaconColor(fp);
-    if (want === rig.beaconColor) return;
+    const want = this._flightResolveGlow(fp);
+    // `pattern: 'none'` and "no beacon at all" both resolve to null → the same
+    // empty key, so a rule muting a class of aircraft tears the bead down
+    // exactly like a status flip does.
+    const key = want ? `${want.pattern}|${want.colorA}|${want.colorB ?? ''}` : '';
+    if (key === rig.glowKey) return;
     this._removeFlightBeacon(rig);
-    rig.beaconColor = want;
+    rig.glowKey = key;
     if (!want) return;
+    // Persistent per-rig Colors, allocated HERE (poll cadence) so _advanceFlights
+    // never parses a string or news a Color — §7's zero-alloc-per-frame rule.
+    const colA = new THREE.Color(want.colorA);
+    const colB = want.colorB ? new THREE.Color(want.colorB) : colA.clone();
+    rig.glowPattern = want.pattern;
+    rig.glowColorA = colA;
+    rig.glowColorB = colB;
+    rig.glowCur = colA.clone();
+    // `solid` has no time axis to crossfade over: its second colour tints the
+    // HALO once here instead (§2's documented exception), so it must not lerp.
+    rig.glowTwoColor = want.pattern !== 'solid' && want.colorB != null
+      && colB.getHex() !== colA.getHex();
+    rig.beaconColor = colA.getHex();
+    const first = flightGlowFrame(want.pattern, rig.beaconPhase);
     const m = this._flightArchetypeMetrics(rig.archetype);
     const bead = new THREE.Mesh(
       new THREE.SphereGeometry(46, 10, 8),
-      new THREE.MeshBasicMaterial({ color: want, transparent: true, opacity: 1, fog: false }),
+      new THREE.MeshBasicMaterial({
+        color: colA, transparent: true, opacity: first.alpha, fog: false,
+      }),
     );
     bead.position.set(0, m.beaconY, m.beaconZ);
     bead.userData.outlineSkip = true;
     bead.userData.beacon = true;
     rig.asm.add(bead);
     const glow = new THREE.Sprite(new THREE.SpriteMaterial({
-      map: this._beaconGlowTexture(), color: want, transparent: true,
-      depthWrite: false, blending: THREE.AdditiveBlending, fog: false, opacity: 0.6,
+      // The halo carries colorB on `solid` (bead core + tinted halo), colorA
+      // everywhere else — the animated patterns drive both from one lerp.
+      map: this._beaconGlowTexture(),
+      color: want.pattern === 'solid' ? colB : colA,
+      transparent: true,
+      depthWrite: false, blending: THREE.AdditiveBlending, fog: false,
+      opacity: first.glow,
     }));
     glow.scale.setScalar(340);
     glow.position.copy(bead.position);
@@ -12689,6 +12739,10 @@ export class ThreeDRenderer {
       rig.beaconGlow = null;
     }
     rig.beaconColor = 0;
+    rig.glowKey = '';
+    rig.glowPattern = 'none';
+    rig.glowTwoColor = false;
+    rig.glowColorA = null; rig.glowColorB = null; rig.glowCur = null;
   }
 
   // Shared white radial glow (tinted per beacon via SpriteMaterial.color) —
@@ -12999,6 +13053,8 @@ export class ThreeDRenderer {
       label: null, banner: null, labelKey: '', bannerKey: '',
       idPlanes: null, idKey: '',
       beacon: null, beaconGlow: null, beaconColor: 0, beaconPhase: 0,
+      glowKey: '', glowPattern: 'none', glowTwoColor: false,
+      glowColorA: null, glowColorB: null, glowCur: null,
       lat: fp.lat, lon: fp.lon, altFt: fp.altFt, latPerS: 0, lonPerS: 0,
       trackRad: fp.trackDeg == null ? null : fp.trackDeg * FLIGHT_DEG,
       vertRateFpm: fp.vertRateFpm ?? 0,
@@ -13026,7 +13082,7 @@ export class ThreeDRenderer {
     this._removeFlightLabel(rig);
     this._removeFlightBanner(rig);
     this._removeFlightIdPlanes(rig);
-    const hadBeacon = rig.beaconColor;
+    const hadBeacon = rig.glowKey;
     this._removeFlightBeacon(rig);
     this._disposeSpriteMaps(rig.asm);
     this._clearGroup(rig.asm);
@@ -13046,7 +13102,10 @@ export class ThreeDRenderer {
     rig.props = built.props; rig.prop = built.props[0] ?? null;
     rig.tailRotor = built.tailRotor; rig.propRate = built.propRate;
     rig.labelKey = ''; rig.bannerKey = ''; rig.idKey = '';
-    rig.beaconColor = hadBeacon === 0 ? 0 : -1;   // force _syncFlightBeacon to rebuild
+    // Force _syncFlightBeacon to rebuild onto the new assembly (with
+    // archetype-correct metrics) — but only if there WAS a beacon: an empty key
+    // already agrees with "resolves to nothing", so a beaconless rig stays so.
+    rig.glowKey = hadBeacon === '' ? '' : ' rebuild';
   }
 
   // The rig's world scale: the spawn/despawn FADE composed (multiplicatively)
@@ -13446,17 +13505,25 @@ export class ThreeDRenderer {
           }
           if (rig.tailRotor) rig.tailRotor.rotation.x = (rig.spin * 1.6) % (Math.PI * 2);
         }
-        // Status beacon flash — a sharpened sine so it reads as a strobe, not a
-        // throb. Mutates existing materials in place (zero allocation).
+        // Status / user-rule glow. The PATTERN was resolved at poll cadence
+        // (_syncFlightBeacon); this only samples its envelope and writes the
+        // result onto the two existing materials — ZERO allocation: no Color is
+        // constructed, no hex string is parsed, `lerpColors` mutates the rig's
+        // own persistent scratch Color in place. `beaconPhase` accumulates in
+        // SECONDS and is never wrapped (whole-cycle patterns like `alternate`
+        // need an unbounded count; a double holds this for years of uptime).
         if (rig.beacon && rig.beaconGlow) {
-          rig.beaconPhase = (rig.beaconPhase + dt * FLIGHT_BEACON_HZ * Math.PI * 2)
-            % (Math.PI * 2);
-          const s = Math.max(0, Math.sin(rig.beaconPhase));
-          const f = s * s * s;                     // sharp on, long off
-          (rig.beacon.material as THREE.MeshBasicMaterial).opacity =
-            (0.28 + 0.72 * f) * rig.fade;
-          (rig.beaconGlow.material as THREE.SpriteMaterial).opacity =
-            (0.10 + 0.85 * f) * rig.fade;
+          rig.beaconPhase += dt;
+          const fr = flightGlowFrame(rig.glowPattern, rig.beaconPhase);
+          (rig.beacon.material as THREE.MeshBasicMaterial).opacity = fr.alpha * rig.fade;
+          (rig.beaconGlow.material as THREE.SpriteMaterial).opacity = fr.glow * rig.fade;
+          // Single-colour glows (every default beacon) never touch .color — the
+          // shipped path stays byte-identical to what it was before the rules.
+          if (rig.glowTwoColor && rig.glowColorA && rig.glowColorB && rig.glowCur) {
+            rig.glowCur.lerpColors(rig.glowColorA, rig.glowColorB, fr.mix);
+            (rig.beacon.material as THREE.MeshBasicMaterial).color.copy(rig.glowCur);
+            (rig.beaconGlow.material as THREE.SpriteMaterial).color.copy(rig.glowCur);
+          }
         }
       }
     }

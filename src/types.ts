@@ -6,6 +6,11 @@ import type { FurnitureKindDef } from './geometry.js';
 // Shared value-display rule engine + format config (Display & Controls arc).
 // Type-only — value-rules.ts is pure and imports nothing back.
 import type { ValueRule, InfoCardFormat } from './value-rules.js';
+// Type-only — flights.ts is pure + zero-import (shared by the app graph AND the
+// lazy renderer chunk), so mirroring its glow-rule shape here costs nothing at
+// runtime and keeps the schema's single home in that module.
+import type { FlightGlowRule } from './flights.js';
+export type { FlightGlowRule, FlightGlowCriteria, FlightGlowPattern } from './flights.js';
 
 export interface Vec2 { x: number; y: number; }
 
@@ -1301,6 +1306,16 @@ export interface FlightsConfig {
   // plate, ['callsign','alt'] — the field is purely additive.
   labelFields?: string[];
   beacons?: boolean;                      // status beacons (emergency/military/…); absent = ON
+  // User-authored glow rules (docs/research/flight-glow-rules.md): an ordered,
+  // FIRST-MATCH-WINS list assigning a colour + animation pattern to matching
+  // aircraft. Layered ON TOP of the default beacon ladder — an emergency
+  // aircraft always keeps the red flash (§4 tier 1), a no-match aircraft falls
+  // through to today's unchanged interesting/military/LADD treatment, and the
+  // `beacons` toggle above gates ALL glow (default and user-ruled alike).
+  // Capped at MAX_FLIGHT_GLOW_RULES (30) and sanitized in `Planner.setFlights`
+  // via `sanitizeFlightGlowRules` (src/flights.ts, which owns the whole type +
+  // matcher + pattern-math surface).
+  glowRules?: FlightGlowRule[];
   // Courtesy dimming of the registration/operator text on PIA/LADD-flagged
   // aircraft (research §4.2 — the data source deliberately does not enforce
   // the FAA privacy programs, so honoring them is the consumer's call).

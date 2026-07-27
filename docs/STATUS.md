@@ -222,6 +222,23 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Flight glow rules** (2026-07-27, user request; Sonnet research →
+  `docs/research/flight-glow-rules.md` → single Opus pass). Ordered
+  first-match-wins rule list (cap 30) assigning colour + pattern to
+  matching aircraft: 7 patterns (solid/flash 1.2 Hz/strobe twin-pop/
+  rotate w/ 0.35 never-dark floor/fade 5 s/alternate/none-mute), ≤2
+  colours each; criteria = 6 wildcard strings (hand-walked glob,
+  substring-vs-anchored hybrid, regex-injection-safe) + speed/alt/
+  dist min-max + 5 tri-state flags, AND semantics. Precedence:
+  beacons master gate → emergency unconditional → first rule match
+  REPLACES default → interesting/military/LADD ladder. Whole surface
+  pure in flights.ts; resolveFlightGlow is the ONE ladder home (3D +
+  2D — the mirrored-6-lines duplication retired); rig stores resolved
+  colours at poll cadence, per-frame only samples the envelope.
+  Settings ▸ Flight tracking "Glow rules" editor (reorderable rows).
+  flights 358→498, flights-render 299→350, flights-ui 200→261;
+  terrain/bgtext-multi/alert-center/nbhd-render green.
+
 - **Bg-text aircraft picker + model-size knobs** (2026-07-26, two user
   requests; single Opus pass). `BgTextEntry.aircraft` (banner mode):
   any of the 8 flight archetypes builds the tow plane via the shared

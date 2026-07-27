@@ -251,6 +251,348 @@ export function sanitizeLabelFields(v: unknown): FlightLabelField[] | undefined 
   return out.length ? out : undefined;
 }
 
+// ── User-configurable glow rules (research docs/research/flight-glow-rules.md) ─
+// An ordered, FIRST-MATCH-WINS rule list (the value-rules.ts `evalRules` idiom)
+// assigning a glow colour + animation pattern to matching aircraft, layered on
+// top of the shipped status-beacon ladder. Everything here is pure and lives in
+// this module so the 3D renderer, the 2D canvas and the settings UI all read one
+// implementation — the "keep the two beacon ladders in step" comment pair that
+// used to be duplicated across three-renderer.ts and canvas-render.ts is now
+// this single home (§8).
+//
+// Seven patterns (§1): five have real aviation-lighting analogs, two (`fade`,
+// `alternate`) are deliberately DECORATIVE additions with no aviation source —
+// the same honesty the neighborhood overlay's verticalScale hint sets.
+export type FlightGlowPattern =
+  'none' | 'solid' | 'flash' | 'strobe' | 'rotate' | 'fade' | 'alternate';
+
+export const FLIGHT_GLOW_PATTERNS: readonly FlightGlowPattern[] =
+  ['none', 'solid', 'flash', 'strobe', 'rotate', 'fade', 'alternate'] as const;
+
+// AND across every PRESENT criterion; an absent field is a wildcard "any", and
+// an entirely empty object matches every aircraft (a legitimate catch-all rule
+// at the end of the list).
+export interface FlightGlowCriteria {
+  operator?: string; typeCode?: string; typeDesc?: string;
+  reg?: string; callsign?: string; category?: string;   // wildcard strings, §3.1
+  minSpeedKt?: number; maxSpeedKt?: number;
+  minAltFt?: number; maxAltFt?: number;
+  minDistNm?: number; maxDistNm?: number;               // distNm is planner-filled
+  military?: boolean; interesting?: boolean; ladd?: boolean; pia?: boolean;
+  // UNREACHABLE in v1 by design (§4): an emergency aircraft is intercepted by
+  // tier 1 before the rule list is consulted, so a rule keyed on it can never
+  // fire. Kept in the schema for forward compatibility and so the flag set does
+  // not look like it has an accidental gap.
+  emergency?: boolean;
+}
+
+export interface FlightGlowRule {
+  id: string;                 // 'fgr_…', stable across edits
+  label?: string;             // optional user-facing name for the summary row
+  enabled?: boolean;          // absent = true
+  criteria: FlightGlowCriteria;
+  pattern: FlightGlowPattern;
+  colorA?: string;            // '#rrggbb'; required whenever pattern !== 'none'
+  colorB?: string;            // '#rrggbb'; optional second colour
+}
+
+export const MAX_FLIGHT_GLOW_RULES = 30;
+
+// The shipped default ladder, as hex strings — the ONE home for the four
+// constants three-renderer's FLIGHT_BEACON_* numbers and canvas-render's
+// FLIGHT_BEACON_COLORS strings both encode.
+export const FLIGHT_DEFAULT_BEACON = {
+  emergency: '#ff2a1a',
+  interesting: '#ffd400',
+  military: '#2ee56a',
+  ladd: '#f2f6fb',
+} as const;
+
+// ── Wildcard matching (§3.1 / §3.2) ────────────────────────────────────────
+// `*` = any run, `?` = exactly one character, case-insensitive. A pattern with
+// NEITHER wildcard is a friendly SUBSTRING match; a pattern with either is
+// matched ANCHORED start-to-end. The pattern is hand-walked and every other
+// character escaped — the user's raw string is NEVER handed to `new RegExp`, so
+// this can never become a second real-regex surface (a user typing `AAL.*`
+// means a literal dot) and a pathological input cannot backtrack.
+const _wcCache = new Map<string, RegExp | null>();
+
+function compileWildcard(pattern: string): RegExp | null {
+  const key = pattern.toLowerCase();
+  const hit = _wcCache.get(key);
+  if (hit !== undefined) return hit;
+  let out = '', hasWildcard = false;
+  for (const ch of key) {
+    if (ch === '*') { out += '.*'; hasWildcard = true; }
+    else if (ch === '?') { out += '.'; hasWildcard = true; }
+    else out += ch.replace(/[.*+?^${}()|[\]\\/-]/g, '\\$&');
+  }
+  const body = hasWildcard ? out : `.*${out}.*`;
+  let re: RegExp | null;
+  try { re = new RegExp(`^${body}$`, 'is'); } catch { re = null; }
+  // Bounded implicitly by the rule cap; cheap insurance, not load-bearing (§7).
+  if (_wcCache.size > 512) _wcCache.clear();
+  _wcCache.set(key, re);
+  return re;
+}
+
+// Does `text` satisfy the user's glob? A blank/absent PATTERN is "any" (true —
+// the unset-criterion semantics); a null TEXT can only satisfy a blank pattern
+// (an aircraft with no registration must not match `N*`). Never throws.
+export function globMatch(pattern: string | null | undefined, text: string | null | undefined): boolean {
+  const pat = typeof pattern === 'string' ? pattern.trim() : '';
+  if (!pat) return true;
+  if (typeof text !== 'string' || text === '') return false;
+  const re = compileWildcard(pat);
+  return re ? re.test(text) : false;
+}
+
+// AND across every present criterion (§3.3). A null LIVE field fails a numeric
+// criterion rather than silently passing — ValueRule's NaN-never-matches rule.
+export function matchesGlowCriteria(fp: FlightPoint, c: FlightGlowCriteria | undefined): boolean {
+  if (!c) return true;
+  if (!globMatch(c.operator, fp.operator)) return false;
+  if (!globMatch(c.typeCode, fp.typeCode)) return false;
+  if (!globMatch(c.typeDesc, fp.typeDesc)) return false;
+  if (!globMatch(c.reg, fp.reg)) return false;
+  if (!globMatch(c.callsign, fp.callsign)) return false;
+  if (!globMatch(c.category, fp.category)) return false;
+  if (c.minSpeedKt != null && (fp.gsKt == null || fp.gsKt < c.minSpeedKt)) return false;
+  if (c.maxSpeedKt != null && (fp.gsKt == null || fp.gsKt > c.maxSpeedKt)) return false;
+  if (c.minAltFt != null && !(fp.altFt >= c.minAltFt)) return false;
+  if (c.maxAltFt != null && !(fp.altFt <= c.maxAltFt)) return false;
+  if (c.minDistNm != null && (fp.distNm == null || fp.distNm < c.minDistNm)) return false;
+  if (c.maxDistNm != null && (fp.distNm == null || fp.distNm > c.maxDistNm)) return false;
+  if (c.military != null && fp.military !== c.military) return false;
+  if (c.interesting != null && fp.interesting !== c.interesting) return false;
+  if (c.ladd != null && fp.ladd !== c.ladd) return false;
+  if (c.pia != null && fp.pia !== c.pia) return false;
+  if (c.emergency != null && isEmergency(fp) !== c.emergency) return false;
+  return true;
+}
+
+// One rule against one aircraft, INCLUDING the enable flag — the predicate the
+// resolver walks the list with (and the one a UI preview should call).
+export function flightGlowRuleMatch(rule: FlightGlowRule | null | undefined, fp: FlightPoint): boolean {
+  if (!rule || rule.enabled === false) return false;
+  return matchesGlowCriteria(fp, rule.criteria);
+}
+
+export interface ResolvedGlow { pattern: FlightGlowPattern; colorA: string; colorB?: string; }
+
+// §4's three tiers, folded into ONE call site so 2D and 3D can never disagree:
+//   1. `beacons` off  → no glow at all (the single master gate, user rules included).
+//   2. EMERGENCY      → the red flash, unconditionally, before any rule is read.
+//                       A decorative preference must never be able to recolour or
+//                       silence safety-relevant information, even by accident.
+//   3. first matching ENABLED rule → REPLACES the whole default resolution
+//                       (pattern AND colours; never blended, the evalRules
+//                       semantics). `pattern: 'none'` resolves to null — a
+//                       supported way to mute a class of aircraft.
+//   4. otherwise      → today's UNCHANGED ladder. Zero rules configured is
+//                       byte-for-byte identical to the shipped behavior.
+export function resolveFlightGlow(
+  fp: FlightPoint, rules: FlightGlowRule[] | undefined, beaconsOn: boolean,
+): ResolvedGlow | null {
+  if (!beaconsOn) return null;
+  if (isEmergency(fp)) return { pattern: 'flash', colorA: FLIGHT_DEFAULT_BEACON.emergency };
+  if (rules) {
+    for (const r of rules) {
+      if (!flightGlowRuleMatch(r, fp)) continue;
+      if (r.pattern === 'none') return null;
+      return { pattern: r.pattern, colorA: r.colorA ?? '#ffffff', colorB: r.colorB };
+    }
+  }
+  if (fp.interesting) return { pattern: 'flash', colorA: FLIGHT_DEFAULT_BEACON.interesting };
+  if (fp.military) return { pattern: 'flash', colorA: FLIGHT_DEFAULT_BEACON.military };
+  if (fp.ladd) return { pattern: 'flash', colorA: FLIGHT_DEFAULT_BEACON.ladd };
+  return null;
+}
+
+// ── Pattern math (§2) ──────────────────────────────────────────────────────
+// `tSec` is a PER-RIG ACCUMULATED phase (never an absolute clock), so a rebuild
+// triggered by a rule/colour change cannot pop the animation; only a genuinely
+// new rig starts at 0. Pure, zero-alloc apart from the returned literal, and
+// deterministic.
+//
+//   alpha — the BEAD (core) opacity 0..1
+//   glow  — the additive HALO sprite's opacity 0..1
+//   mix   — crossfade weight toward colorB (0 = pure colorA)
+//
+// DELIVERING BOTH `alpha` AND `glow` is a deliberate extension of §2's
+// `{alpha, mix}`: the shipped beacon drives the bead and the halo from two
+// DIFFERENT envelopes (0.28 + 0.72·f vs 0.10 + 0.85·f), and `flash` must stay
+// byte-identical to it. §2's alpha formulas are reproduced verbatim.
+export interface FlightGlowFrame { alpha: number; glow: number; mix: number; }
+
+const GLOW_TWO_PI = Math.PI * 2;
+
+export function flightGlowFrame(pattern: FlightGlowPattern, tSec: number): FlightGlowFrame {
+  const t = isFinite(tSec) ? tSec : 0;
+  switch (pattern) {
+    case 'solid':
+      // No time axis to crossfade over — `solid`'s second colour tints the HALO
+      // instead (assigned once at build, §2's documented exception), so mix is
+      // meaningless here and the caller must not lerp.
+      return { alpha: 1, glow: 0.6, mix: 0 };
+
+    case 'flash': {                    // the EXISTING shipped envelope, verbatim
+      const F = 1.2;                   // FLIGHT_BEACON_HZ, unchanged
+      const s = Math.max(0, Math.sin(GLOW_TWO_PI * F * t));
+      const f = s * s * s;             // sharp on, long off
+      return {
+        alpha: 0.28 + 0.72 * f,
+        glow: 0.10 + 0.85 * f,
+        mix: Math.floor(F * t) % 2,    // whole cycles alternate colour
+      };
+    }
+
+    case 'strobe': {                   // aviation double-flash: two narrow pops
+      const F = 1.0, GAP = 0.12, WIDTH = 0.05;      // cycle FRACTIONS
+      const phase = ((F * t) % 1 + 1) % 1;
+      const pop = (center: number) => {
+        let d = Math.abs(phase - center);
+        d = Math.min(d, 1 - d);                     // wrap around the cycle
+        return d >= WIDTH ? 0 : Math.cos((d / WIDTH) * (Math.PI / 2)) ** 2;
+      };
+      const a = pop(0), b = pop(GAP);
+      const peak = Math.max(a, b);
+      return { alpha: 0.15 + 0.85 * peak, glow: 0.06 + 0.90 * peak, mix: b > a ? 1 : 0 };
+    }
+
+    case 'rotate': {                   // rotating beacon sweep — NEVER fully dark
+      const F = 0.9;
+      const w = 0.5 + 0.5 * Math.cos(GLOW_TWO_PI * F * t);       // 0..1
+      return { alpha: 0.35 + 0.65 * w, glow: 0.20 + 0.70 * w, mix: 1 - w };
+    }
+
+    case 'fade': {                     // slow breathe, 5 s period
+      const F = 0.2;
+      const w = 0.5 + 0.5 * Math.sin(GLOW_TWO_PI * F * t);
+      return { alpha: 0.15 + 0.85 * w, glow: 0.08 + 0.75 * w, mix: w };
+    }
+
+    case 'alternate': {                // hard colour swap, constant brightness
+      const T = 0.8;                   // seconds held per colour
+      return { alpha: 1, glow: 0.6, mix: Math.floor(t / T) % 2 };
+    }
+
+    case 'none':
+    default:
+      return { alpha: 0, glow: 0, mix: 0 };
+  }
+}
+
+// Linear RGB lerp between two '#rrggbb' strings, returning '#rrggbb'. Lives
+// here rather than reaching for geometry.ts's lighten/hexToRgba because this
+// module is zero-import by design; ~10 lines is cheaper than breaking that.
+// Garbage in → `a` (never throws, never emits a malformed colour).
+export function lerpHexColor(a: string, b: string | undefined, mix: number): string {
+  const pa = parseHex6(a);
+  if (!pa) return typeof a === 'string' ? a : '#ffffff';
+  const pb = b ? parseHex6(b) : null;
+  if (!pb) return a;
+  const t = Math.max(0, Math.min(1, isFinite(mix) ? mix : 0));
+  const ch = (x: number, y: number) => Math.round(x + (y - x) * t);
+  const hx = (n: number) => n.toString(16).padStart(2, '0');
+  return `#${hx(ch(pa[0], pb[0]))}${hx(ch(pa[1], pb[1]))}${hx(ch(pa[2], pb[2]))}`;
+}
+
+function parseHex6(v: unknown): [number, number, number] | null {
+  if (typeof v !== 'string') return null;
+  const m = /^#?([0-9a-f]{6})$/i.exec(v.trim());
+  if (!m) return null;
+  const n = parseInt(m[1], 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+// ── Sanitizer (§6.3) ───────────────────────────────────────────────────────
+// Run from `Planner.setFlights` (the labelFields / watch-list precedent) so a
+// settings edit, an import and a hand-edited config all land in the same shape.
+//
+// PITFALL this guards: an emptied text input naively kept as `''` would, under
+// §3.1's hybrid rule, compile to `**` and match EVERY aircraft on that field.
+// `str()` collapses blank/whitespace to `undefined` — an unset criterion, which
+// is the intended no-op.
+export function sanitizeFlightGlowRules(v: unknown): FlightGlowRule[] | undefined {
+  if (!Array.isArray(v)) return undefined;
+  const patterns = new Set<string>(FLIGHT_GLOW_PATTERNS as readonly string[]);
+  const str = (x: unknown) => {
+    const s = typeof x === 'string' ? x.trim() : '';
+    return s ? s : undefined;
+  };
+  const hex = (x: unknown) => {
+    const p = parseHex6(x);
+    if (!p) return undefined;
+    const hx = (n: number) => n.toString(16).padStart(2, '0');
+    return `#${hx(p[0])}${hx(p[1])}${hx(p[2])}`.toLowerCase();
+  };
+  const num = (x: unknown) => (typeof x === 'number' && isFinite(x) ? x : undefined);
+  const clamp = (n: number | undefined, lo: number, hi: number) =>
+    n === undefined ? undefined : Math.max(lo, Math.min(hi, n));
+  const swap = (a?: number, b?: number): [number | undefined, number | undefined] =>
+    a != null && b != null && a > b ? [b, a] : [a, b];
+  const bool = (x: unknown) => (typeof x === 'boolean' ? x : undefined);
+
+  const seen = new Set<string>();
+  const out: FlightGlowRule[] = [];
+  let auto = 0;
+  for (const raw of v) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+    const r = raw as Record<string, unknown>;
+    const pattern = typeof r.pattern === 'string' && patterns.has(r.pattern)
+      ? (r.pattern as FlightGlowPattern) : null;
+    if (!pattern) continue;                 // unknown pattern → drop the rule
+    const colorA = hex(r.colorA);
+    const colorB = hex(r.colorB);
+    // A VISIBLE pattern needs at least one usable colour; 'none' needs none.
+    if (pattern !== 'none' && !colorA) continue;
+
+    // Ids stay stable across edits, but a missing/duplicate one is repaired
+    // DETERMINISTICALLY (no Math.random — this module never rolls dice, and a
+    // stable id keeps an import byte-reproducible).
+    let id = typeof r.id === 'string' && r.id.trim() ? r.id.trim() : '';
+    while (!id || seen.has(id)) id = `fgr_${++auto}_${out.length}`;
+    seen.add(id);
+
+    const c = (r.criteria && typeof r.criteria === 'object'
+      ? r.criteria : {}) as Record<string, unknown>;
+    const [minAlt, maxAlt] = swap(clamp(num(c.minAltFt), 0, 60000), clamp(num(c.maxAltFt), 0, 60000));
+    const [minSp, maxSp] = swap(clamp(num(c.minSpeedKt), 0, 800), clamp(num(c.maxSpeedKt), 0, 800));
+    const [minDs, maxDs] = swap(clamp(num(c.minDistNm), 0, 500), clamp(num(c.maxDistNm), 0, 500));
+
+    out.push({
+      id,
+      label: str(r.label),
+      enabled: r.enabled !== false,
+      pattern,
+      colorA, colorB,
+      criteria: {
+        // Uppercased ONLY where the live data is uppercase (typeCode/reg/
+        // callsign/category are uppercase by construction in the normalizer);
+        // operator and typeDesc are free text and matched case-insensitively.
+        operator: str(c.operator),
+        typeCode: str(c.typeCode)?.toUpperCase(),
+        typeDesc: str(c.typeDesc),
+        reg: str(c.reg)?.toUpperCase(),
+        callsign: str(c.callsign)?.toUpperCase(),
+        category: str(c.category)?.toUpperCase(),
+        minSpeedKt: minSp, maxSpeedKt: maxSp,
+        minAltFt: minAlt, maxAltFt: maxAlt,
+        minDistNm: minDs, maxDistNm: maxDs,
+        military: bool(c.military), interesting: bool(c.interesting),
+        ladd: bool(c.ladd), pia: bool(c.pia), emergency: bool(c.emergency),
+      },
+    });
+    if (out.length >= MAX_FLIGHT_GLOW_RULES) break;
+  }
+  return out.length ? out : undefined;
+}
+
+// Task-facing alias — the sanitizer is referred to by both names in the design
+// notes; ONE implementation, two exports.
+export const sanitizeGlowRules = sanitizeFlightGlowRules;
+
 // LEGACY 3-way model pick — the three toy bodies the shipped renderer chunk
 // builds. Kept EXACTLY as-is (category-only) for stale-chunk safety: a fresh
 // app paired with a cached renderer must keep resolving a model.

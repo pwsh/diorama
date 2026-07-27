@@ -14,8 +14,11 @@ import { resolveNorth } from '../compass.js';
 import {
   FLIGHT_LABEL_FIELDS, FLIGHT_LABEL_FIELDS_DEFAULT, sanitizeLabelFields,
   FLIGHTS_DEFAULT_RADIUS_NM, flightBearingDistance, isEmergency,
+  FLIGHT_GLOW_PATTERNS, MAX_FLIGHT_GLOW_RULES,
 } from '../flights.js';
-import type { FlightPoint } from '../flights.js';
+import type {
+  FlightPoint, FlightGlowRule, FlightGlowPattern, FlightGlowCriteria,
+} from '../flights.js';
 import { aircraftArchetype } from '../aircraft-types.js';
 import { compass8 } from '../geo.js';
 
@@ -1028,6 +1031,39 @@ export class FlightModal extends LitElement {
   }
 }
 
+// A glow rule's criteria as one short human line, for the collapsed summary row
+// of an unnamed rule. PRESENTATION TEXT ONLY — deliberately NOT in flights.ts,
+// which owns matching logic and stays free of UI copy (research §8).
+export function summarizeGlowCriteria(c: FlightGlowCriteria | undefined): string {
+  if (!c) return 'any aircraft';
+  const parts: string[] = [];
+  const wild: [keyof FlightGlowCriteria, string][] = [
+    ['operator', 'operator'], ['typeCode', 'type'], ['typeDesc', 'desc'],
+    ['reg', 'reg'], ['callsign', 'callsign'], ['category', 'cat'],
+  ];
+  for (const [k, label] of wild) {
+    const v = c[k];
+    if (typeof v === 'string' && v) parts.push(`${label}=${v}`);
+  }
+  const range = (lo: number | undefined, hi: number | undefined, label: string, unit: string) => {
+    if (lo != null && hi != null) parts.push(`${label} ${lo}–${hi} ${unit}`);
+    else if (lo != null) parts.push(`${label} ≥ ${lo} ${unit}`);
+    else if (hi != null) parts.push(`${label} ≤ ${hi} ${unit}`);
+  };
+  range(c.minSpeedKt, c.maxSpeedKt, 'speed', 'kt');
+  range(c.minAltFt, c.maxAltFt, 'alt', 'ft');
+  range(c.minDistNm, c.maxDistNm, 'dist', 'nm');
+  const flags: [boolean | undefined, string][] = [
+    [c.military, 'military'], [c.interesting, 'noteworthy'],
+    [c.ladd, 'LADD'], [c.pia, 'PIA'], [c.emergency, 'emergency'],
+  ];
+  for (const [v, label] of flags) {
+    if (v === true) parts.push(label);
+    else if (v === false) parts.push(`not ${label}`);
+  }
+  return parts.length ? parts.join(' · ') : 'any aircraft';
+}
+
 // ── Settings drawer ──────────────────────────────────────────────────────
 type SettingsTab = 'connection' | 'display' | 'weather' | 'avatars' | 'integrations' | 'data';
 
@@ -1045,6 +1081,11 @@ export class SettingsDrawer extends LitElement {
   @state() private _sh3dBusy = false;
   // Which pack rows have their member list expanded (runtime-only).
   private _packExpanded = new Set<string>();
+  // Which flight glow rule is expanded into its full criteria form. A glow rule
+  // carries ~15 fields, so the list is collapsed summary lines by default (the
+  // sidebar's collapsible-section idiom) rather than value-rules' always-open
+  // rows — 10 expanded rules would be unusably tall. Runtime-only, one at a time.
+  @state() private _glowRuleOpen: string | null = null;
 
   protected override createRenderRoot() { return this; }
 
@@ -1319,6 +1360,8 @@ export class SettingsDrawer extends LitElement {
               <span style="flex:1">Track the ISS</span>
             </label>
 
+            ${this._flightGlowRulesBlock(cfg, set)}
+
             <div style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--border)">
               <div style="font-size:11px;font-weight:600;margin-bottom:4px">Alerts</div>
               <div class="row" style="align-items:center">
@@ -1392,6 +1435,225 @@ export class SettingsDrawer extends LitElement {
               <span style="flex:1">${LABELS[k]}</span>
             </label>`)}
         </div>
+      </div>`;
+  }
+
+  // ── Flight glow rules (docs/research/flight-glow-rules.md §6.4) ──────────
+  // An ordered, first-match-wins list. Each row is a COLLAPSED summary line
+  // (label or a criteria digest + pattern + colour swatches + an [off] tag);
+  // ✎ expands it in place into the full criteria form. ▲/▼ reorder — unlike the
+  // value-rules editor, order materially changes behaviour here (two rules can
+  // easily both match one aircraft along independent dimensions), so nudge
+  // buttons are not optional. Everything writes through `planner.setFlights`,
+  // which sanitizes on every write.
+  private _flightGlowRulesBlock(
+    cfg: import('../types.js').FlightsConfig,
+    set: (mut: (f: import('../types.js').FlightsConfig) => void) => void,
+  ) {
+    const rules = cfg.glowRules ?? [];
+    const beaconsOn = cfg.beacons !== false;
+    // Always write a fresh array — setFlights replaces it with the sanitized
+    // result, so mutating the stored objects in place would fight the sanitizer.
+    const write = (next: FlightGlowRule[]) => set(f => {
+      f.glowRules = next.length ? next : undefined;
+    });
+    const edit = (id: string, mut: (r: FlightGlowRule) => void) =>
+      write(rules.map(r => {
+        if (r.id !== id) return r;
+        const copy: FlightGlowRule = { ...r, criteria: { ...r.criteria } };
+        mut(copy);
+        return copy;
+      }));
+    const move = (i: number, d: number) => {
+      const j = i + d;
+      if (j < 0 || j >= rules.length) return;
+      const next = rules.slice();
+      [next[i], next[j]] = [next[j], next[i]];
+      write(next);
+    };
+    const PATTERN_LABELS: Record<FlightGlowPattern, string> = {
+      none: 'No glow (mute)', solid: 'Solid (steady)', flash: 'Flash (1.2 Hz)',
+      strobe: 'Strobe (double-flash)', rotate: 'Rotating beacon',
+      fade: 'Fade (slow breathe)', alternate: 'Alternate (wig-wag)',
+    };
+    // Blank clears a criterion. NEVER store '' — under the hybrid wildcard rule
+    // an empty pattern would compile to `**` and match every aircraft on that
+    // field (the sanitizer guards this too; the UI simply never authors it).
+    const txt = (v: string) => { const s = v.trim(); return s ? s : undefined; };
+    const numOr = (v: string, lo: number, hi: number) => {
+      const n = parseFloat(v);
+      return v.trim() === '' || !isFinite(n) ? undefined : Math.max(lo, Math.min(hi, n));
+    };
+
+    const swatch = (c: string | undefined) => c
+      ? html`<span style="display:inline-block;width:9px;height:9px;border-radius:50%;
+                          background:${c};border:1px solid rgba(255,255,255,0.35)"></span>`
+      : nothing;
+
+    const wildRow = (r: FlightGlowRule, key: 'operator' | 'typeCode' | 'typeDesc' | 'reg' | 'callsign' | 'category',
+                     label: string, ph: string) => html`
+      <div class="row" style="align-items:center;margin:0">
+        <label style="font-size:11px;color:var(--text-dim);flex:1">${label}</label>
+        <input type="text" data-glow-field=${key} placeholder=${ph} .value=${r.criteria[key] ?? ''}
+               @change=${(e: Event) => edit(r.id, x => {
+                 x.criteria[key] = txt((e.target as HTMLInputElement).value); })}
+               style="width:132px;padding:2px 5px;border-radius:3px;border:1px solid var(--border);
+                      background:#111;color:var(--text);font-size:11px">
+      </div>`;
+
+    const rangeRow = (r: FlightGlowRule, lo: 'minSpeedKt' | 'minAltFt' | 'minDistNm',
+                      hi: 'maxSpeedKt' | 'maxAltFt' | 'maxDistNm',
+                      label: string, max: number, step: number) => html`
+      <div class="row" style="align-items:center;margin:0">
+        <label style="font-size:11px;color:var(--text-dim);flex:1">${label}</label>
+        <input type="number" data-glow-field=${lo} min="0" max=${max} step=${step} placeholder="min"
+               .value=${r.criteria[lo] != null ? String(r.criteria[lo]) : ''}
+               @change=${(e: Event) => edit(r.id, x => {
+                 x.criteria[lo] = numOr((e.target as HTMLInputElement).value, 0, max); })}
+               style="width:62px">
+        <input type="number" data-glow-field=${hi} min="0" max=${max} step=${step} placeholder="max"
+               .value=${r.criteria[hi] != null ? String(r.criteria[hi]) : ''}
+               @change=${(e: Event) => edit(r.id, x => {
+                 x.criteria[hi] = numOr((e.target as HTMLInputElement).value, 0, max); })}
+               style="width:62px;margin-left:4px">
+      </div>`;
+
+    const flagRow = (r: FlightGlowRule, key: 'military' | 'interesting' | 'ladd' | 'pia' | 'emergency',
+                     label: string, title?: string) => html`
+      <div class="row" style="align-items:center;margin:0" title=${title ?? ''}>
+        <label style="font-size:11px;color:var(--text-dim);flex:1">${label}</label>
+        <select data-glow-field=${key} style="width:80px;font-size:11px"
+                @change=${(e: Event) => edit(r.id, x => {
+                  const v = (e.target as HTMLSelectElement).value;
+                  x.criteria[key] = v === '' ? undefined : v === 'yes'; })}>
+          <option value="" ?selected=${r.criteria[key] == null}>Any</option>
+          <option value="yes" ?selected=${r.criteria[key] === true}>Yes</option>
+          <option value="no" ?selected=${r.criteria[key] === false}>No</option>
+        </select>
+      </div>`;
+
+    return html`
+      <div style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--border)">
+        <div style="font-size:11px;font-weight:600;margin-bottom:2px">Glow rules</div>
+        <div style="font-size:10px;color:var(--text-dim);line-height:1.4;margin-bottom:5px">
+          Give matching aircraft their own glow colour and pattern. First match
+          wins; anything unmatched keeps the default beacon above. Text fields
+          accept <code>*</code> and <code>?</code> wildcards — plain text matches
+          anywhere in the value.
+          ${beaconsOn ? nothing : html`<span style="color:#fb8c00">
+            Status beacons are off, so no glow renders at all right now.</span>`}
+        </div>
+        ${rules.length === 0 ? html`
+          <div style="font-size:10px;color:var(--text-dim);font-style:italic;margin-bottom:4px">
+            No rules — every aircraft uses the default beacon.
+          </div>` : nothing}
+        ${rules.map((r, i) => {
+          const open = this._glowRuleOpen === r.id;
+          const off = r.enabled === false;
+          return html`
+            <div data-glow-rule=${r.id}
+                 style="border:1px solid var(--border);border-radius:4px;padding:4px 5px;margin-bottom:4px;
+                        background:rgba(0,0,0,0.22);opacity:${off ? 0.55 : 1}">
+              <div style="display:flex;align-items:center;gap:5px">
+                <span style="flex:1;font-size:11px;color:var(--text);overflow:hidden;
+                             text-overflow:ellipsis;white-space:nowrap">
+                  ${r.label || summarizeGlowCriteria(r.criteria)}
+                </span>
+                <span style="font-size:10px;color:var(--text-dim)">${r.pattern}</span>
+                ${swatch(r.colorA)}${swatch(r.colorB)}
+                ${off ? html`<span style="font-size:9px;color:#fb8c00">[off]</span>` : nothing}
+                <button class="btn" style="font-size:10px;padding:1px 4px" title="Move earlier"
+                        ?disabled=${i === 0} @click=${() => move(i, -1)}>▲</button>
+                <button class="btn" style="font-size:10px;padding:1px 4px" title="Move later"
+                        ?disabled=${i === rules.length - 1} @click=${() => move(i, 1)}>▼</button>
+                <button class="btn" style="font-size:10px;padding:1px 4px" title="Edit conditions"
+                        @click=${() => { this._glowRuleOpen = open ? null : r.id; }}>${open ? '▾' : '✎'}</button>
+                <button class="btn" style="font-size:10px;padding:1px 4px" title="Delete rule"
+                        @click=${() => { this._glowRuleOpen = null; write(rules.filter(x => x.id !== r.id)); }}>✕</button>
+              </div>
+              ${open ? html`
+                <div style="margin-top:5px;padding-top:5px;border-top:1px solid var(--border);
+                            display:flex;flex-direction:column;gap:3px">
+                  <div class="row" style="align-items:center;margin:0">
+                    <label style="font-size:11px;color:var(--text-dim);flex:1">Name</label>
+                    <input type="text" data-glow-field="label" placeholder="optional" .value=${r.label ?? ''}
+                           @change=${(e: Event) => edit(r.id, x => {
+                             x.label = txt((e.target as HTMLInputElement).value); })}
+                           style="width:132px;padding:2px 5px;border-radius:3px;border:1px solid var(--border);
+                                  background:#111;color:var(--text);font-size:11px">
+                  </div>
+                  ${wildRow(r, 'operator', 'Operator', 'Southwest')}
+                  ${wildRow(r, 'typeCode', 'Type code', 'B73?')}
+                  ${wildRow(r, 'typeDesc', 'Type name', '*MAX*')}
+                  ${wildRow(r, 'reg', 'Registration', 'N*')}
+                  ${wildRow(r, 'callsign', 'Callsign', 'SWA*')}
+                  ${wildRow(r, 'category', 'ADS-B category', 'A3')}
+                  ${rangeRow(r, 'minSpeedKt', 'maxSpeedKt', 'Speed (kt)', 800, 10)}
+                  ${rangeRow(r, 'minAltFt', 'maxAltFt', 'Altitude (ft)', 60000, 500)}
+                  ${rangeRow(r, 'minDistNm', 'maxDistNm', 'Distance (nm)', 500, 1)}
+                  ${flagRow(r, 'military', 'Military')}
+                  ${flagRow(r, 'interesting', 'Noteworthy')}
+                  ${flagRow(r, 'ladd', 'LADD')}
+                  ${flagRow(r, 'pia', 'PIA')}
+                  ${flagRow(r, 'emergency', 'Emergency',
+                    'Aircraft squawking an emergency always show the red emergency beacon, whatever this condition says — kept for forward compatibility only.')}
+                  <div style="font-size:9px;color:var(--text-dim);line-height:1.35;margin:-1px 0 2px">
+                    An emergency aircraft always keeps the red beacon, so an
+                    “Emergency = Yes” condition can never fire.
+                  </div>
+                  <div class="row" style="align-items:center;margin:0">
+                    <label style="font-size:11px;color:var(--text-dim);flex:1">Pattern</label>
+                    <select data-glow-field="pattern" style="width:132px;font-size:11px"
+                            @change=${(e: Event) => edit(r.id, x => {
+                              x.pattern = (e.target as HTMLSelectElement).value as FlightGlowPattern;
+                              // A visible pattern needs a colour or the sanitizer
+                              // would drop the whole rule on write.
+                              if (x.pattern !== 'none' && !x.colorA) x.colorA = '#ffd400';
+                            })}>
+                      ${FLIGHT_GLOW_PATTERNS.map(pk => html`
+                        <option value=${pk} ?selected=${r.pattern === pk}>${PATTERN_LABELS[pk]}</option>`)}
+                    </select>
+                  </div>
+                  ${r.pattern === 'none' ? nothing : html`
+                    <div class="row" style="align-items:center;margin:0">
+                      <label style="font-size:11px;color:var(--text-dim);flex:1">Colours</label>
+                      <input type="color" data-glow-field="colorA" style="width:34px;padding:0" .value=${r.colorA ?? '#ffd400'}
+                             @change=${(e: Event) => edit(r.id, x => {
+                               x.colorA = (e.target as HTMLInputElement).value; })}>
+                      <input type="color" data-glow-field="colorB" style="width:34px;padding:0;margin-left:4px"
+                             .value=${r.colorB ?? '#ffffff'}
+                             @change=${(e: Event) => edit(r.id, x => {
+                               x.colorB = (e.target as HTMLInputElement).value; })}>
+                      ${r.colorB ? html`<button class="btn" style="font-size:10px;padding:1px 4px;margin-left:3px"
+                        title="Clear the second colour"
+                        @click=${() => edit(r.id, x => { x.colorB = undefined; })}>✕</button>` : nothing}
+                    </div>
+                    <div style="font-size:9px;color:var(--text-dim);line-height:1.35">
+                      ${r.pattern === 'solid'
+                        ? 'Second colour tints the halo around the steady bead.'
+                        : 'Second colour is optional — patterns cycle between the two when set.'}
+                    </div>`}
+                  <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:11px;color:var(--text)">
+                    <input type="checkbox" data-glow-field="enabled" .checked=${r.enabled !== false}
+                           @change=${(e: Event) => edit(r.id, x => {
+                             x.enabled = (e.target as HTMLInputElement).checked; })}>
+                    <span style="flex:1">Rule enabled</span>
+                  </label>
+                </div>` : nothing}
+            </div>`;
+        })}
+        <button class="btn" data-glow-add style="width:100%;font-size:10px"
+                ?disabled=${rules.length >= MAX_FLIGHT_GLOW_RULES}
+                @click=${() => {
+                  const id = `fgr_${Math.random().toString(36).slice(2, 9)}`;
+                  // Appended EXPANDED with empty criteria (matches everything
+                  // until narrowed) + a sane visible default, the "+ Add rule"
+                  // convention the value-rules editor set.
+                  write([...rules, { id, criteria: {}, pattern: 'flash', colorA: '#ffd400' }]);
+                  this._glowRuleOpen = id;
+                }}>
+          + Add rule${rules.length >= MAX_FLIGHT_GLOW_RULES ? ` (max ${MAX_FLIGHT_GLOW_RULES})` : ''}
+        </button>
       </div>`;
   }
 

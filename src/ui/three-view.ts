@@ -1590,6 +1590,12 @@ export class ThreeView extends LitElement {
                           privacyDim: flCfg?.privacyDim,
                           banners: flCfg?.banners,
                           modelScale: flCfg?.modelScale,
+                          // User glow rules (docs/research/flight-glow-rules.md).
+                          // Config-path like every other opt here, so configRev
+                          // — already in the key — covers an edit; no new
+                          // dirty-key input. Matching itself runs renderer-side
+                          // at POLL cadence, never per frame.
+                          glowRules: flCfg?.glowRules,
                         });
         r.updateIss(flOrigin && flCfg?.iss !== false ? p.issNow : null, flOrigin, flTheta);
       }

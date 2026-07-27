@@ -1172,6 +1172,56 @@
         quiesce(p);
       }
 
+      // (r) glowRules sanitization rides setFlights too (flight-glow-rules.md
+      // §6.3) — the SAME store-boundary discipline, so an import or a
+      // hand-edited config can never hand the renderer an unknown pattern, a
+      // malformed colour, an inverted range or a blank `**` text criterion.
+      {
+        calls.length = 0;
+        handler = () => ring(1);
+        const { p, stub } = await boot(makeStore({ weather: WEATHER }));
+        p.setFlights(f => {
+          f.glowRules = [
+            { id: 'r1', label: '  SWA  ', pattern: 'strobe', colorA: '#FF0000', colorB: '#ffffff',
+              criteria: { callsign: ' swa* ', typeCode: 'b73?', operator: '  ', minAltFt: 9000, maxAltFt: 2000 } },
+            { id: 'r2', pattern: 'nonsense', colorA: '#00ff00', criteria: {} },     // dropped
+            { id: 'r3', pattern: 'solid', colorA: 'not-a-color', criteria: {} },    // dropped
+            { id: 'r4', pattern: 'none', criteria: { military: true } },            // kept w/o colour
+          ];
+        });
+        const gr = p.store.flights.glowRules;
+        ok('11r: unknown pattern + colourless visible pattern are dropped', gr.length === 2,
+          `n=${gr?.length}`);
+        ok('11r: label trimmed, colours normalized to lowercase hex',
+          gr[0].label === 'SWA' && gr[0].colorA === '#ff0000' && gr[0].colorB === '#ffffff',
+          JSON.stringify(gr[0].label) + ' ' + gr[0].colorA);
+        ok('11r: uppercase-data criteria uppercased, blank criterion → undefined',
+          gr[0].criteria.callsign === 'SWA*' && gr[0].criteria.typeCode === 'B73?'
+          && gr[0].criteria.operator === undefined,
+          JSON.stringify(gr[0].criteria));
+        ok('11r: an inverted min/max pair is swapped',
+          gr[0].criteria.minAltFt === 2000 && gr[0].criteria.maxAltFt === 9000,
+          `${gr[0].criteria.minAltFt}..${gr[0].criteria.maxAltFt}`);
+        ok("11r: pattern 'none' survives without a colour", gr[1].pattern === 'none' && gr[1].id === 'r4');
+        p.setFlights(f => { f.glowRules = []; });
+        ok('11r: an empty list becomes undefined', p.store.flights.glowRules === undefined);
+        p.setFlights(f => { f.glowRules = 'nope'; });
+        ok('11r: a non-array becomes undefined', p.store.flights.glowRules === undefined);
+        p.setFlights(f => {
+          f.glowRules = [{ id: 'keep', pattern: 'fade', colorA: '#123456', criteria: { military: true } }];
+        });
+        p.setFlights(f => { f.radiusNm = 21; });
+        ok('11r: an unrelated setFlights leaves glowRules intact',
+          p.store.flights.glowRules?.length === 1 && p.store.flights.glowRules[0].pattern === 'fade');
+        await p.saveConfigNow();
+        const savedG = stub.peek('diorama-cfg-default');
+        ok('11r: glowRules persist through the store (in the _normalizeStore field list)',
+          savedG?.flights?.glowRules?.length === 1
+          && savedG.flights.glowRules[0].colorA === '#123456',
+          JSON.stringify(savedG?.flights?.glowRules));
+        quiesce(p);
+      }
+
       globalThis.fetch = realFetch;
     }
 
@@ -1476,6 +1526,456 @@
         S(undefined) === undefined && S(null) === undefined && S('callsign') === undefined && S(7) === undefined);
       ok('19: every documented key round-trips',
         JSON.stringify(S([...F.FLIGHT_LABEL_FIELDS])) === JSON.stringify([...F.FLIGHT_LABEL_FIELDS]));
+    }
+
+    // ── 17. Glow-rule wildcard matcher (docs/research/flight-glow-rules.md §3) ─
+    // The hybrid rule: a pattern with NO wildcard is a friendly SUBSTRING match;
+    // a pattern with `*` or `?` is matched ANCHORED. Compiled by hand-walking
+    // the string — the user's raw text NEVER reaches `new RegExp` unescaped, so
+    // this can never become a second real-regex surface.
+    {
+      const G = F.globMatch;
+      ok('20: bare text is a substring match', G('Southwest', 'Southwest Airlines Co.'));
+      ok('20: bare text matches mid-string too', G('west Air', 'Southwest Airlines Co.'));
+      ok('20: bare text is case-insensitive both ways',
+        G('southWEST', 'Southwest Airlines Co.') && G('SOUTHWEST', 'southwest airlines'));
+      ok('20: bare text that is absent does not match', G('Delta', 'Southwest Airlines Co.') === false);
+
+      ok('20: a `*` makes the match ANCHORED (prefix)', G('SWA*', 'SWA2451'));
+      ok('20: anchored prefix rejects a mid-string hit', G('SWA*', 'XSWA2451') === false);
+      ok('20: `*` matches the empty run', G('SWA*', 'SWA'));
+      ok('20: a leading `*` anchors at the end', G('*451', 'SWA2451') && G('*451', 'SWA24510') === false);
+      ok('20: `*x*` is an explicit substring', G('*west*', 'Southwest Airlines'));
+      ok('20: `?` is EXACTLY one character',
+        G('B73?', 'B737') && G('B73?', 'B738') && G('B73?', 'B73') === false
+        && G('B73?', 'B7378') === false);
+      ok('20: `?` and `*` compose', G('N?2*', 'N123AB') && G('N?2*', 'N13AB') === false);
+      ok('20: anchored is NOT substring — the §3.1 false-positive guard',
+        G('A32*', 'A320') && G('A32*', 'DC-A320') === false);
+
+      // Regex metacharacters in a LITERAL pattern must stay literal (a user
+      // typing "AAL.*" means a dot, not "any run"), and nothing may throw.
+      ok('20: a literal dot is a dot, not a regex wildcard',
+        G('AAL.', 'AAL.') && G('AAL.', 'AALX') === false);
+      ok('20: `.*` in plain text is literal (no accidental regex)',
+        G('AAL.*', 'AAL.*23') && G('AAL.*', 'AAL123') === false);
+      const hostiles = ['(((', ')', '[a-z', '\\', '^$', '+++', '{2,}', 'a|b', '/x/', 'a-b',
+        '(a+)+$', '\\d{3}'];
+      let threw = false, matchedItself = true;
+      for (const h of hostiles) {
+        try {
+          if (!G(h, `pre${h}post`)) matchedItself = false;
+        } catch { threw = true; }
+      }
+      ok('20: metacharacter-laden literals never throw', threw === false);
+      ok('20: metacharacter-laden literals match themselves literally', matchedItself);
+      ok('20: a catastrophic-backtracking shape is inert (no regex semantics)',
+        G('(a+)+$', 'aaaaaaaaaaaaaaaaaaaaaaaaaaX') === false);
+
+      ok('20: a blank / absent pattern is "any" (unset criterion)',
+        G('', 'anything') && G('   ', 'anything') && G(undefined, 'anything') && G(null, 'anything'));
+      ok('20: a null value can only satisfy a blank pattern',
+        G('N*', null) === false && G('N*', undefined) === false && G('N*', '') === false
+        && G('', null) === true);
+      ok('20: repeated calls hit the compile cache and agree',
+        G('SWA*', 'SWA1') && G('SWA*', 'SWA1') && G('SWA*', 'AAL1') === false);
+    }
+
+    // ── 18. Criteria matching — AND across every present field (§3.3) ────────
+    {
+      const M = F.matchesGlowCriteria;
+      const AC = o => ({
+        hex: 'abc123', callsign: 'SWA2451', lat: 40, lon: -75, altFt: 12000,
+        gsKt: 320, trackDeg: 90, vertRateFpm: 0, category: 'A3', seenPosS: 1,
+        military: false, reg: 'N8642A', typeCode: 'B738',
+        typeDesc: 'BOEING 737 MAX 8', operator: 'Southwest Airlines Co.',
+        emergency: null, squawk: '1200', interesting: false, pia: false, ladd: false,
+        distNm: 7.5, ...o,
+      });
+      const base = AC();
+      ok('21: empty criteria match everything (the catch-all rule)',
+        M(base, {}) && M(AC({ military: true, callsign: null }), {}));
+      ok('21: undefined criteria object matches', M(base, undefined));
+
+      ok('21: operator wildcard', M(base, { operator: 'Southwest' }) && !M(base, { operator: 'Delta' }));
+      ok('21: typeCode wildcard', M(base, { typeCode: 'B73*' }) && !M(base, { typeCode: 'A32*' }));
+      ok('21: typeDesc wildcard', M(base, { typeDesc: '*MAX*' }) && !M(base, { typeDesc: '*NEO*' }));
+      ok('21: reg wildcard', M(base, { reg: 'N*' }) && !M(base, { reg: 'G-*' }));
+      ok('21: callsign wildcard', M(base, { callsign: 'SWA*' }) && !M(base, { callsign: 'UAL*' }));
+      ok('21: category wildcard', M(base, { category: 'A3' }) && !M(base, { category: 'A7' }));
+      ok('21: a null string field fails a set criterion',
+        !M(AC({ reg: null }), { reg: 'N*' }) && M(AC({ reg: null }), {}));
+
+      ok('21: minAltFt / maxAltFt bound independently',
+        M(base, { minAltFt: 10000 }) && !M(base, { minAltFt: 15000 })
+        && M(base, { maxAltFt: 15000 }) && !M(base, { maxAltFt: 10000 }));
+      ok('21: an altitude RANGE is inclusive at both ends',
+        M(base, { minAltFt: 12000, maxAltFt: 12000 })
+        && M(base, { minAltFt: 5000, maxAltFt: 20000 })
+        && !M(base, { minAltFt: 5000, maxAltFt: 11999 }));
+      ok('21: speed bounds', M(base, { minSpeedKt: 300, maxSpeedKt: 400 })
+        && !M(base, { minSpeedKt: 400 }) && !M(base, { maxSpeedKt: 200 }));
+      ok('21: a NULL speed FAILS a speed criterion (never silently passes)',
+        !M(AC({ gsKt: null }), { minSpeedKt: 0 }) && !M(AC({ gsKt: null }), { maxSpeedKt: 900 })
+        && M(AC({ gsKt: null }), {}));
+      ok('21: distance bounds use the planner-filled distNm',
+        M(base, { maxDistNm: 10 }) && !M(base, { maxDistNm: 5 })
+        && M(base, { minDistNm: 5 }) && !M(base, { minDistNm: 10 }));
+      ok('21: a missing distNm FAILS a distance criterion',
+        !M(AC({ distNm: undefined }), { maxDistNm: 500 }));
+
+      ok('21: tri-state military', M(AC({ military: true }), { military: true })
+        && !M(base, { military: true }) && M(base, { military: false })
+        && M(AC({ military: true }), {}));
+      ok('21: tri-state interesting / ladd / pia',
+        M(AC({ interesting: true }), { interesting: true }) && !M(base, { interesting: true })
+        && M(AC({ ladd: true }), { ladd: true }) && M(base, { ladd: false })
+        && M(AC({ pia: true }), { pia: true }) && !M(base, { pia: true }));
+      ok('21: tri-state emergency reads through isEmergency (squawk or field)',
+        M(AC({ squawk: '7700' }), { emergency: true })
+        && M(AC({ emergency: 'lifeguard' }), { emergency: true })
+        && M(base, { emergency: false }) && !M(base, { emergency: true }));
+
+      ok('21: every present criterion is ANDed',
+        M(base, { operator: 'Southwest', typeCode: 'B73*', minAltFt: 10000, military: false })
+        && !M(base, { operator: 'Southwest', typeCode: 'B73*', minAltFt: 10000, military: true })
+        && !M(base, { operator: 'Delta', typeCode: 'B73*' }));
+
+      // The real 94-aircraft capture: wildcard matching against genuine data.
+      const real = F.normalizeAircraftList(LAX);
+      const nReg = real.filter(a => M(a, { reg: 'N*' })).length;
+      const anyReg = real.filter(a => a.reg != null).length;
+      ok('21: `N*` matches only US-registered aircraft in the real capture',
+        nReg > 0 && nReg <= anyReg && real.every(a => !M(a, { reg: 'N*' }) || /^N/i.test(a.reg ?? '')),
+        `${nReg}/${anyReg} registered`);
+      ok('21: a catch-all matches every aircraft in the real capture',
+        real.every(a => M(a, {})), `n=${real.length}`);
+    }
+
+    // ── 19. Resolution: rule list + the three-tier precedence (§4) ───────────
+    {
+      const R = F.resolveFlightGlow;
+      const AC = o => ({
+        hex: 'abc123', callsign: 'SWA2451', lat: 40, lon: -75, altFt: 12000,
+        gsKt: 320, trackDeg: 90, vertRateFpm: 0, category: 'A3', seenPosS: 1,
+        military: false, reg: 'N8642A', typeCode: 'B738', typeDesc: 'BOEING 737 MAX 8',
+        operator: 'Southwest Airlines Co.', emergency: null, squawk: '1200',
+        interesting: false, pia: false, ladd: false, distNm: 7.5, ...o,
+      });
+      const rule = o => ({ id: o.id ?? 'r', criteria: {}, pattern: 'flash', colorA: '#ffffff', ...o });
+
+      // Tier 4 — no rules at all reproduces the shipped ladder EXACTLY.
+      ok('22: no rules → default emergency red flash',
+        JSON.stringify(R(AC({ squawk: '7700' }), undefined, true))
+          === JSON.stringify({ pattern: 'flash', colorA: '#ff2a1a' }));
+      ok('22: no rules → interesting yellow',
+        R(AC({ interesting: true }), undefined, true).colorA === '#ffd400');
+      ok('22: no rules → military green',
+        R(AC({ military: true }), undefined, true).colorA === '#2ee56a');
+      ok('22: no rules → LADD white',
+        R(AC({ ladd: true }), undefined, true).colorA === '#f2f6fb');
+      ok('22: no rules + no status → null', R(AC(), undefined, true) === null);
+      ok('22: interesting outranks military outranks LADD (unchanged ladder)',
+        R(AC({ interesting: true, military: true, ladd: true }), [], true).colorA === '#ffd400'
+        && R(AC({ military: true, ladd: true }), [], true).colorA === '#2ee56a');
+      ok('22: every default resolution is the `flash` pattern',
+        ['interesting', 'military', 'ladd'].every(k =>
+          R(AC({ [k]: true }), [], true).pattern === 'flash'));
+
+      // Tier 1 — the master gate.
+      ok('22: beacons:false silences EVERYTHING, user rules included',
+        R(AC({ squawk: '7700' }), [rule({ pattern: 'solid', colorA: '#00ff00' })], false) === null
+        && R(AC({ military: true }), undefined, false) === null);
+
+      // Tier 2 — emergency short-circuits BEFORE any rule is read.
+      const hijack = [rule({ id: 'm', pattern: 'solid', colorA: '#00ff00', criteria: { military: true } })];
+      const em = R(AC({ military: true, squawk: '7700' }), hijack, true);
+      ok('22: EMERGENCY wins over a matching user rule (pattern + colour)',
+        em.pattern === 'flash' && em.colorA === '#ff2a1a' && em.colorB === undefined,
+        JSON.stringify(em));
+      ok('22: emergency wins over a catch-all rule too',
+        R(AC({ emergency: 'downed' }), [rule({ pattern: 'none' })], true).colorA === '#ff2a1a');
+
+      // Tier 3 — first ENABLED match wins and REPLACES the whole resolution.
+      const list = [
+        rule({ id: 'a', pattern: 'strobe', colorA: '#ff0000', colorB: '#ffffff',
+               criteria: { operator: 'Southwest' } }),
+        rule({ id: 'b', pattern: 'rotate', colorA: '#2196f3', criteria: { typeCode: 'B73*' } }),
+      ];
+      const first = R(AC(), list, true);
+      ok('22: FIRST match wins across overlapping rules',
+        first.pattern === 'strobe' && first.colorA === '#ff0000' && first.colorB === '#ffffff',
+        JSON.stringify(first));
+      ok('22: reordering the same two rules changes the answer',
+        R(AC(), [list[1], list[0]], true).pattern === 'rotate');
+      ok('22: a DISABLED rule is skipped, the next one wins',
+        R(AC(), [{ ...list[0], enabled: false }, list[1]], true).pattern === 'rotate');
+      ok('22: enabled:true is explicit-and-fine',
+        R(AC(), [{ ...list[0], enabled: true }], true).pattern === 'strobe');
+      ok('22: a matching rule REPLACES the default status treatment',
+        R(AC({ military: true }), [rule({ pattern: 'fade', colorA: '#ff00ff',
+                                          criteria: { military: true } })], true).colorA === '#ff00ff');
+      ok('22: a non-matching rule falls through to the default ladder',
+        R(AC({ military: true }), [rule({ pattern: 'fade', colorA: '#ff00ff',
+                                          criteria: { operator: 'Delta' } })], true).colorA === '#2ee56a');
+      ok('22: a colourless visible rule defaults to white (defensive)',
+        R(AC(), [{ id: 'x', criteria: {}, pattern: 'solid' }], true).colorA === '#ffffff');
+
+      // pattern:'none' — a supported way to mute a class of aircraft.
+      ok("22: pattern 'none' resolves to null (mutes the default LADD beacon)",
+        R(AC({ ladd: true }), [rule({ pattern: 'none', criteria: { ladd: true } })], true) === null);
+      ok("22: 'none' does NOT fall through to the later rules",
+        R(AC({ military: true }), [rule({ id: 'n', pattern: 'none' }),
+                                   rule({ id: 'z', pattern: 'solid', colorA: '#00ff00' })], true) === null);
+      ok("22: a DISABLED 'none' rule does not mute",
+        R(AC({ military: true }), [{ ...rule({ pattern: 'none' }), enabled: false }], true).colorA === '#2ee56a');
+
+      // flightGlowRuleMatch — the enable-aware predicate the resolver walks with.
+      ok('22: flightGlowRuleMatch honours enabled',
+        F.flightGlowRuleMatch(list[0], AC()) === true
+        && F.flightGlowRuleMatch({ ...list[0], enabled: false }, AC()) === false
+        && F.flightGlowRuleMatch(null, AC()) === false
+        && F.flightGlowRuleMatch(undefined, AC()) === false);
+    }
+
+    // ── 20. Pattern math — flightGlowFrame goldens (§2) ──────────────────────
+    {
+      const FR = F.flightGlowFrame;
+      const inRange = fr => fr.alpha >= 0 && fr.alpha <= 1 && fr.glow >= 0 && fr.glow <= 1
+        && fr.mix >= 0 && fr.mix <= 1;
+      const PATTERNS = ['none', 'solid', 'flash', 'strobe', 'rotate', 'fade', 'alternate'];
+      ok('23: FLIGHT_GLOW_PATTERNS is the documented 7-value enum',
+        F.FLIGHT_GLOW_PATTERNS.join(',') === PATTERNS.join(','), F.FLIGHT_GLOW_PATTERNS.join(','));
+      let allBounded = true;
+      for (const pat of PATTERNS) {
+        for (let t = 0; t < 12; t += 0.0137) if (!inRange(FR(pat, t))) allBounded = false;
+      }
+      ok('23: every pattern stays inside 0..1 for alpha/glow/mix over 12 s', allBounded);
+      ok('23: garbage / non-finite t never produces NaN',
+        PATTERNS.every(p => [NaN, Infinity, -Infinity, undefined].every(t => {
+          const fr = FR(p, t); return isFinite(fr.alpha) && isFinite(fr.glow) && isFinite(fr.mix); })));
+      ok('23: an unknown pattern is dark (defensive default)',
+        FR('zzz', 1).alpha === 0 && FR('zzz', 1).glow === 0);
+
+      // none
+      ok("23: 'none' is fully dark at every phase",
+        [0, 0.3, 1, 7.7].every(t => FR('none', t).alpha === 0 && FR('none', t).glow === 0));
+
+      // solid — steady, never animates, mix is meaningless (caller must not lerp)
+      ok("23: 'solid' is a constant steady-on",
+        [0, 0.4, 3.3, 9].every(t => FR('solid', t).alpha === 1 && FR('solid', t).glow === 0.6
+                                    && FR('solid', t).mix === 0));
+
+      // flash — the EXISTING shipped envelope, 1.2 Hz, verbatim
+      const flashAt = t => {
+        const s = Math.max(0, Math.sin(2 * Math.PI * 1.2 * t)), f = s * s * s;
+        return { alpha: 0.28 + 0.72 * f, glow: 0.10 + 0.85 * f };
+      };
+      let flashExact = true;
+      for (let t = 0; t < 5; t += 0.011) {
+        const g = FR('flash', t), w = flashAt(t);
+        if (Math.abs(g.alpha - w.alpha) > 1e-12 || Math.abs(g.glow - w.glow) > 1e-12) flashExact = false;
+      }
+      ok('23: `flash` reproduces the SHIPPED beacon envelope exactly (byte-identical default)', flashExact);
+      near('23: flash peaks at the quarter cycle', FR('flash', 1 / (1.2 * 4)).alpha, 1, 1e-9);
+      near('23: flash floors through the dark half', FR('flash', 0.6).alpha, 0.28, 1e-9);
+      ok('23: flash alternates colour by WHOLE cycle',
+        FR('flash', 0.1).mix === 0 && FR('flash', 0.7).mix === 0
+        && FR('flash', 1.0).mix === 1 && FR('flash', 1.6).mix === 1
+        && FR('flash', 1.7).mix === 0);
+
+      // strobe — TWO narrow pops per 1 s cycle, then a long dark gap
+      const peaks = [];
+      let prev = FR('strobe', -0.002).alpha;
+      // Sweep ONE cycle, stopping short of the wrap so t≈1.0 isn't counted as a
+      // third peak (it is the next cycle's first pop).
+      for (let t = 0; t <= 0.98; t += 0.002) {
+        const a = FR('strobe', t).alpha, next = FR('strobe', t + 0.002).alpha;
+        if (a > prev && a >= next && a > 0.5) peaks.push(t);
+        prev = a;
+      }
+      ok('23: strobe fires TWO pops per second', peaks.length === 2, JSON.stringify(peaks));
+      near('23: strobe pop 1 sits at phase 0', peaks[0] ?? -9, 0, 0.008);
+      near('23: strobe pop 2 sits at the 0.12 gap', peaks[1] ?? -9, 0.12, 0.008);
+      near('23: strobe peaks at full brightness', FR('strobe', 0).alpha, 1, 1e-9);
+      near('23: strobe rests near dark between pops', FR('strobe', 0.5).alpha, 0.15, 1e-9);
+      ok('23: the first pop is colour A, the second colour B',
+        FR('strobe', 0).mix === 0 && FR('strobe', 0.12).mix === 1);
+      ok('23: strobe mix is BINARY by construction (no lerp needed in 2D)',
+        (() => { for (let t = 0; t < 3; t += 0.007) {
+          const m = FR('strobe', t).mix; if (m !== 0 && m !== 1) return false; } return true; })());
+      ok('23: strobe repeats every 1.0 s',
+        Math.abs(FR('strobe', 0.03).alpha - FR('strobe', 1.03).alpha) < 1e-12);
+
+      // rotate — a sweep that NEVER goes fully dark (the physical discriminator)
+      let rotMin = 1, rotMax = 0;
+      for (let t = 0; t < 4; t += 0.003) {
+        const a = FR('rotate', t).alpha; rotMin = Math.min(rotMin, a); rotMax = Math.max(rotMax, a);
+      }
+      near('23: rotate never dips below its 0.35 floor', rotMin, 0.35, 1e-6);
+      near('23: rotate reaches full brightness', rotMax, 1, 1e-6);
+      ok('23: rotate is strictly brighter than a strobe gap at every phase',
+        (() => { for (let t = 0; t < 4; t += 0.01) if (FR('rotate', t).alpha < 0.349) return false;
+                 return true; })());
+      near('23: rotate colour eases WITH brightness (bright = colour A)', FR('rotate', 0).mix, 0, 1e-9);
+      near('23: rotate is colour B at its dim end', FR('rotate', 1 / (0.9 * 2)).mix, 1, 1e-9);
+      near('23: rotate period is 1/0.9 s',
+        FR('rotate', 0.2).alpha, FR('rotate', 0.2 + 1 / 0.9).alpha, 1e-9);
+
+      // fade — a 5 s breathing period
+      near('23: fade is mid-way at t=0', FR('fade', 0).alpha, 0.575, 1e-9);
+      near('23: fade peaks a quarter period in (1.25 s)', FR('fade', 1.25).alpha, 1, 1e-9);
+      near('23: fade bottoms three quarters in (3.75 s)', FR('fade', 3.75).alpha, 0.15, 1e-9);
+      near('23: fade has a 5 s period', FR('fade', 0.4).alpha, FR('fade', 5.4).alpha, 1e-9);
+      ok('23: fade crossfades colour smoothly (mix tracks brightness, not a step)',
+        (() => { for (let t = 0; t < 5; t += 0.05) {
+          const fr = FR('fade', t); if (Math.abs(fr.mix - (fr.alpha - 0.15) / 0.85) > 1e-9) return false; }
+          return true; })());
+
+      // alternate — hard swap, constant brightness (wig-wag)
+      ok("23: 'alternate' holds a constant brightness",
+        [0, 0.5, 1.4, 3.9].every(t => FR('alternate', t).alpha === 1 && FR('alternate', t).glow === 0.6));
+      ok('23: alternate swaps colour every 0.8 s, hard (never a fraction)',
+        FR('alternate', 0).mix === 0 && FR('alternate', 0.79).mix === 0
+        && FR('alternate', 0.81).mix === 1 && FR('alternate', 1.59).mix === 1
+        && FR('alternate', 1.61).mix === 0);
+      ok('23: alternate mix is only ever 0 or 1',
+        (() => { for (let t = 0; t < 6; t += 0.013) {
+          const m = FR('alternate', t).mix; if (m !== 0 && m !== 1) return false; } return true; })());
+
+      // The halo envelope is a genuine SECOND curve, not a copy of alpha.
+      ok('23: the halo (glow) envelope differs from the bead (alpha) envelope',
+        FR('flash', 0.6).glow === 0.10 && FR('flash', 0.6).alpha === 0.28
+        && Math.abs(FR('rotate', 0).glow - 0.9) < 1e-9
+        && FR('rotate', 0).glow !== FR('rotate', 0).alpha);
+    }
+
+    // ── 21. lerpHexColor (§5's 2D colour blend) ──────────────────────────────
+    {
+      const L = F.lerpHexColor;
+      ok('24: mix 0 is colour A, mix 1 is colour B',
+        L('#ff0000', '#0000ff', 0) === '#ff0000' && L('#ff0000', '#0000ff', 1) === '#0000ff');
+      ok('24: mix 0.5 is the midpoint', L('#000000', '#ffffff', 0.5) === '#808080',
+        L('#000000', '#ffffff', 0.5));
+      ok('24: per-channel lerp', L('#ff0000', '#00ff00', 0.5) === '#808000', L('#ff0000', '#00ff00', 0.5));
+      ok('24: output is always 6-digit lowercase hex',
+        /^#[0-9a-f]{6}$/.test(L('#010203', '#0a0b0c', 0.37)));
+      ok('24: mix is clamped', L('#000000', '#ffffff', -3) === '#000000'
+        && L('#000000', '#ffffff', 9) === '#ffffff');
+      ok('24: a missing / malformed B returns A unchanged',
+        L('#123456', undefined, 0.5) === '#123456' && L('#123456', 'nope', 0.5) === '#123456'
+        && L('#123456', null, 0.5) === '#123456');
+      ok('24: garbage A never throws and never emits a malformed colour',
+        L('nope', '#ffffff', 0.5) === 'nope' && L(null, '#ffffff', 0.5) === '#ffffff');
+      ok('24: a NaN mix falls back to colour A', L('#ff0000', '#0000ff', NaN) === '#ff0000');
+    }
+
+    // ── 22. sanitizeFlightGlowRules (§6.3) ──────────────────────────────────
+    {
+      const S = F.sanitizeFlightGlowRules;
+      ok('25: the alias and the canonical name are ONE implementation',
+        F.sanitizeGlowRules === S);
+      ok('25: a non-array → undefined',
+        S(undefined) === undefined && S(null) === undefined && S('x') === undefined && S(7) === undefined);
+      ok('25: an empty array → undefined', S([]) === undefined);
+      ok('25: non-object entries are skipped',
+        S([null, 42, 'x', [], { id: 'a', pattern: 'solid', colorA: '#ffffff', criteria: {} }]).length === 1);
+
+      ok('25: an unknown pattern drops the whole rule',
+        S([{ id: 'a', pattern: 'sparkle', colorA: '#ffffff', criteria: {} }]) === undefined);
+      ok('25: a missing pattern drops the rule',
+        S([{ id: 'a', colorA: '#ffffff', criteria: {} }]) === undefined);
+      ok('25: a visible pattern with NO usable colour drops the rule',
+        S([{ id: 'a', pattern: 'flash', criteria: {} }]) === undefined
+        && S([{ id: 'a', pattern: 'flash', colorA: 'red', criteria: {} }]) === undefined
+        && S([{ id: 'a', pattern: 'flash', colorA: '#fff', criteria: {} }]) === undefined);
+      ok("25: pattern 'none' is kept WITHOUT a colour",
+        S([{ id: 'a', pattern: 'none', criteria: {} }])?.length === 1);
+
+      const one = S([{ id: 'a', pattern: 'FLASH', colorA: '#FFD400', criteria: {} }]);
+      ok('25: the pattern enum is case-SENSITIVE (an uppercase value drops)', one === undefined);
+      const col = S([{ id: 'a', pattern: 'flash', colorA: '#FFD400', colorB: 'FF0000', criteria: {} }])[0];
+      ok('25: colours normalize to lowercase #rrggbb (with or without the hash)',
+        col.colorA === '#ffd400' && col.colorB === '#ff0000', `${col.colorA} ${col.colorB}`);
+      ok('25: an unusable colorB is dropped, not kept malformed',
+        S([{ id: 'a', pattern: 'flash', colorA: '#ffffff', colorB: 'zzz', criteria: {} }])[0].colorB === undefined);
+
+      ok('25: enabled defaults to true and false survives',
+        S([{ id: 'a', pattern: 'none', criteria: {} }])[0].enabled === true
+        && S([{ id: 'a', pattern: 'none', enabled: false, criteria: {} }])[0].enabled === false);
+      ok('25: a blank label collapses to undefined; a real one is trimmed',
+        S([{ id: 'a', pattern: 'none', label: '   ', criteria: {} }])[0].label === undefined
+        && S([{ id: 'a', pattern: 'none', label: ' hi ', criteria: {} }])[0].label === 'hi');
+
+      // THE trap: a blank text criterion must NOT become `**` (match-everything).
+      const blank = S([{ id: 'a', pattern: 'none',
+        criteria: { operator: '', typeCode: '   ', reg: 42, callsign: null } }])[0];
+      ok('25: blank / whitespace / non-string criteria → undefined, NEVER `**`',
+        blank.criteria.operator === undefined && blank.criteria.typeCode === undefined
+        && blank.criteria.reg === undefined && blank.criteria.callsign === undefined);
+      ok('25: a blank-criteria rule still matches everything (unset = any)',
+        F.matchesGlowCriteria(F.normalizeAircraftList(LAX)[0], blank.criteria) === true);
+
+      const up = S([{ id: 'a', pattern: 'none', criteria: {
+        typeCode: ' b738 ', reg: 'n8642a', callsign: 'swa*', category: 'a3',
+        operator: '  Southwest  ', typeDesc: ' Boeing 737 ' } }])[0].criteria;
+      ok('25: uppercase-in-the-data fields are uppercased',
+        up.typeCode === 'B738' && up.reg === 'N8642A' && up.callsign === 'SWA*' && up.category === 'A3');
+      ok('25: free-text fields keep their casing (matched case-insensitively anyway)',
+        up.operator === 'Southwest' && up.typeDesc === 'Boeing 737');
+
+      const cl = S([{ id: 'a', pattern: 'none', criteria: {
+        minAltFt: -500, maxAltFt: 999999, minSpeedKt: -3, maxSpeedKt: 5000,
+        minDistNm: -1, maxDistNm: 9999 } }])[0].criteria;
+      ok('25: numeric criteria clamp to their documented bands',
+        cl.minAltFt === 0 && cl.maxAltFt === 60000 && cl.minSpeedKt === 0
+        && cl.maxSpeedKt === 800 && cl.minDistNm === 0 && cl.maxDistNm === 500,
+        JSON.stringify(cl));
+      const sw = S([{ id: 'a', pattern: 'none', criteria: {
+        minAltFt: 30000, maxAltFt: 1000, minSpeedKt: 400, maxSpeedKt: 100,
+        minDistNm: 20, maxDistNm: 5 } }])[0].criteria;
+      ok('25: an inverted min/max pair is swapped, not dropped',
+        sw.minAltFt === 1000 && sw.maxAltFt === 30000 && sw.minSpeedKt === 100
+        && sw.maxSpeedKt === 400 && sw.minDistNm === 5 && sw.maxDistNm === 20);
+      const nn = S([{ id: 'a', pattern: 'none', criteria: {
+        minAltFt: NaN, maxAltFt: '5000', minSpeedKt: Infinity, military: 'yes', pia: 1 } }])[0].criteria;
+      ok('25: non-finite / non-number / non-boolean criteria collapse to undefined',
+        nn.minAltFt === undefined && nn.maxAltFt === undefined && nn.minSpeedKt === undefined
+        && nn.military === undefined && nn.pia === undefined);
+      ok('25: a non-object criteria field is tolerated as empty',
+        S([{ id: 'a', pattern: 'none', criteria: 'nope' }])[0].criteria.operator === undefined
+        && S([{ id: 'a', pattern: 'none' }])?.length === 1);
+      ok('25: every tri-state boolean round-trips both ways',
+        (() => { const c = S([{ id: 'a', pattern: 'none', criteria: {
+          military: true, interesting: false, ladd: true, pia: false, emergency: true } }])[0].criteria;
+          return c.military === true && c.interesting === false && c.ladd === true
+            && c.pia === false && c.emergency === true; })());
+
+      ok('25: MAX_FLIGHT_GLOW_RULES is 30', F.MAX_FLIGHT_GLOW_RULES === 30);
+      const many = S(Array.from({ length: 44 },
+        (_, i) => ({ id: `r${i}`, pattern: 'none', criteria: {} })));
+      ok('25: the cap is enforced, keeping the FIRST 30', many.length === 30
+        && many[0].id === 'r0' && many[29].id === 'r29', `n=${many.length}`);
+
+      const dup = S([{ id: 'same', pattern: 'none', criteria: {} },
+                     { id: 'same', pattern: 'none', criteria: {} },
+                     { pattern: 'none', criteria: {} },
+                     { id: '   ', pattern: 'none', criteria: {} }]);
+      ok('25: ids are de-duplicated and a missing/blank one is repaired',
+        dup.length === 4 && new Set(dup.map(r => r.id)).size === 4 && dup[0].id === 'same'
+        && dup.every(r => typeof r.id === 'string' && r.id.trim() !== ''),
+        dup.map(r => r.id).join(','));
+      ok('25: id repair is DETERMINISTIC (no Math.random — imports stay reproducible)',
+        JSON.stringify(S([{ pattern: 'none', criteria: {} }, { pattern: 'none', criteria: {} }]))
+          === JSON.stringify(S([{ pattern: 'none', criteria: {} }, { pattern: 'none', criteria: {} }])));
+
+      // Sanitizing twice is a no-op — the shape the store keeps is stable.
+      const once = S([{ pattern: 'strobe', colorA: '#FF0000', colorB: '#00FF00', label: ' hi ',
+        criteria: { callsign: ' swa* ', minAltFt: 9000, maxAltFt: 2000, military: true } }]);
+      ok('25: sanitizing an already-sanitized list is idempotent',
+        JSON.stringify(S(once)) === JSON.stringify(once), JSON.stringify(once));
+      ok('25: the sanitized shape is JSON-round-trippable (store-safe)',
+        JSON.stringify(S(JSON.parse(JSON.stringify(once)))) === JSON.stringify(once));
     }
   } catch (err) {
     ok('HARNESS threw', false, String(err && err.stack || err));

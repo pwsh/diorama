@@ -500,7 +500,10 @@
 
       // Integration: drive the REAL drawAll over a recording 2D context and
       // watch what the flight layer actually emits.
-      const rec = { texts: [], strokes: [], alphas: [] };
+      // `strokePairs` records the alpha IN FORCE at each stroke — the ring's own
+      // opacity, which `alphas` (every globalAlpha assignment, glyph + label
+      // included) cannot isolate.
+      const rec = { texts: [], strokes: [], alphas: [], strokePairs: [] };
       const cv = document.createElement('canvas');
       cv.width = 900; cv.height = 600;
       const raw = cv.getContext('2d');
@@ -510,7 +513,10 @@
           if (typeof v === 'function') {
             return (...a) => {
               if (k === 'fillText') rec.texts.push(String(a[0]));
-              if (k === 'stroke') rec.strokes.push(String(t.strokeStyle));
+              if (k === 'stroke') {
+                rec.strokes.push(String(t.strokeStyle));
+                rec.strokePairs.push({ style: String(t.strokeStyle), alpha: t.globalAlpha });
+              }
               return v.apply(t, a);
             };
           }
@@ -521,7 +527,10 @@
           t[k] = v; return true;
         },
       });
-      const clearRec = () => { rec.texts.length = 0; rec.strokes.length = 0; rec.alphas.length = 0; };
+      const clearRec = () => {
+        rec.texts.length = 0; rec.strokes.length = 0; rec.alphas.length = 0;
+        rec.strokePairs.length = 0;
+      };
       const view = { ox: 450, oy: 300, scale: 0.02 };
       const draw2d = () => { clearRec(); CR.drawAll(ctx, p, view, cv); };
 
@@ -571,6 +580,147 @@
       draw2d();
       ok('LADD aircraft is dimmed but STILL beacons white',
         rec.alphas.includes(0.45) && rec.strokes.includes(CR.FLIGHT_BEACON_COLORS.ladd));
+      p.flightsNow = [];
+
+      // ── 11a-2. 2D glow rules (docs/research/flight-glow-rules.md §5) ───────
+      // The 2D ring reads the SAME pure resolver + envelope the 3D rigs do, so
+      // a rule can never colour one view and not the other. `performance.now`
+      // is the 2D phase source (no per-aircraft state there), so it is stubbed
+      // to sample specific phases deterministically.
+      section('2D glow rules');
+      const FLM = await import('./flights.mod.js' + V);
+      const realPerfNow = performance.now.bind(performance);
+      let PNOW = 0;
+      performance.now = () => PNOW;
+      try {
+        const RULED = fpOf({ hex: 'gl0001', callsign: 'SWA1', operator: 'Southwest Airlines Co.',
+          military: true, lat: 40.05, lon: -75.05, distNm: 4 });
+        const rule = o => ({ id: o.id ?? 'g', criteria: {}, pattern: 'flash', colorA: '#ffd400', ...o });
+        const withRules = (rules, extra = {}) => {
+          p.store.flights = { enabled: true, source: 'cloud', iss: false, glowRules: rules, ...extra };
+        };
+
+        // The exported helper takes the rule list as an optional third arg.
+        eq('2D flightBeaconColor honours a matching rule',
+          CR.flightBeaconColor(RULED, true,
+            [rule({ pattern: 'solid', colorA: '#ff0000', criteria: { operator: 'Southwest' } })]),
+          '#ff0000');
+        eq('2D flightBeaconColor falls through when nothing matches',
+          CR.flightBeaconColor(RULED, true,
+            [rule({ pattern: 'solid', colorA: '#ff0000', criteria: { operator: 'Delta' } })]),
+          CR.FLIGHT_BEACON_COLORS.military);
+        eq('2D flightBeaconColor with no rules is exactly the old ladder',
+          CR.flightBeaconColor(RULED, true), CR.FLIGHT_BEACON_COLORS.military);
+
+        // A matched rule REPLACES the default ring colour in a real draw.
+        p.flightsNow = [RULED];
+        withRules([rule({ pattern: 'solid', colorA: '#ff0000', criteria: { operator: 'Southwest' } })]);
+        PNOW = 0; draw2d();
+        ok('a matching rule recolours the 2D ring',
+          rec.strokes.includes('#ff0000')
+          && !rec.strokes.includes(CR.FLIGHT_BEACON_COLORS.military), rec.strokes.join(','));
+        ok('a steady pattern draws the ring at a constant 0.6 alpha',
+          rec.alphas.includes(0.6), rec.alphas.join(','));
+
+        // solid + a second colour = two rings (the 2D "bead core + halo").
+        withRules([rule({ pattern: 'solid', colorA: '#ff0000', colorB: '#0000ff',
+                          criteria: { operator: 'Southwest' } })]);
+        draw2d();
+        ok('solid with a second colour draws BOTH rings',
+          rec.strokes.includes('#ff0000') && rec.strokes.includes('#0000ff'),
+          rec.strokes.join(','));
+        ok('the outer halo ring is drawn dimmer', rec.alphas.includes(0.35));
+
+        // alternate — a hard colour swap on the wall clock, no lerp.
+        withRules([rule({ pattern: 'alternate', colorA: '#ff0000', colorB: '#0000ff',
+                          criteria: { operator: 'Southwest' } })]);
+        PNOW = 100; draw2d();
+        const altEarly = rec.strokes.includes('#ff0000') && !rec.strokes.includes('#0000ff');
+        PNOW = 900; draw2d();
+        const altLate = rec.strokes.includes('#0000ff') && !rec.strokes.includes('#ff0000');
+        PNOW = 1700; draw2d();
+        const altBack = rec.strokes.includes('#ff0000');
+        ok('alternate hard-swaps the 2D ring colour every 0.8 s',
+          altEarly && altLate && altBack, `${altEarly}/${altLate}/${altBack}`);
+
+        // rotate — a genuine crossfade: the mid-phase stroke is NEITHER colour.
+        withRules([rule({ pattern: 'rotate', colorA: '#000000', colorB: '#ffffff',
+                          criteria: { operator: 'Southwest' } })]);
+        PNOW = (1000 / 0.9) / 4; draw2d();
+        const mid = rec.strokes[rec.strokes.length - 1];
+        ok('rotate crossfades the 2D ring colour through the pair',
+          /^#[0-9a-f]{6}$/.test(mid) && mid !== '#000000' && mid !== '#ffffff', mid);
+        // …and its alpha never drops below the documented 0.35 floor.
+        let rotMin = 1;
+        for (let ms = 0; ms < 3000; ms += 20) {
+          PNOW = ms; draw2d();
+          for (const a of rec.alphas) if (a < rotMin && a > 0) rotMin = a;
+        }
+        ok('the rotate ring never dips below its 0.35 floor', rotMin > 0.34, `min=${rotMin}`);
+
+        // The 2D alpha IS flightGlowFrame's alpha — one formula, two views.
+        withRules([rule({ pattern: 'fade', colorA: '#123456',
+                          criteria: { operator: 'Southwest' } })]);
+        PNOW = 1250; draw2d();
+        const wantFade = FLM.flightGlowFrame('fade', 1.25).alpha;
+        ok('the 2D ring alpha comes from the shared flightGlowFrame',
+          rec.alphas.some(a => Math.abs(a - wantFade) < 1e-9),
+          `want ${wantFade} got ${rec.alphas.join(',')}`);
+
+        // strobe — two pops per second, the twin-pop envelope on the ring alpha.
+        withRules([rule({ pattern: 'strobe', colorA: '#ff0000', colorB: '#00ff00',
+                          criteria: { operator: 'Southwest' } })]);
+        let popFrames = 0, dimFrames = 0;
+        for (let ms = 0; ms < 1000; ms += 5) {
+          PNOW = ms; draw2d();
+          const ring = rec.strokePairs.filter(s2 => s2.style === '#ff0000' || s2.style === '#00ff00');
+          if (ring.some(s2 => s2.alpha > 0.9)) popFrames++;
+          if (ring.length && ring.every(s2 => s2.alpha < 0.2)) dimFrames++;
+        }
+        ok('the strobe ring is bright only during its two narrow pops',
+          popFrames >= 6 && popFrames <= 30, `bright frames=${popFrames}/200`);
+        ok('the strobe ring is dark for most of the cycle',
+          dimFrames > 140, `dark frames=${dimFrames}/200`);
+        PNOW = 0; draw2d();
+        const s0 = rec.strokes[rec.strokes.length - 1];
+        PNOW = 120; draw2d();
+        const s1 = rec.strokes[rec.strokes.length - 1];
+        ok('the strobe ring uses colour A on pop 1 and colour B on pop 2',
+          s0 === '#ff0000' && s1 === '#00ff00', `${s0} / ${s1}`);
+
+        // 'none' silences the ring; the aircraft itself still draws.
+        withRules([rule({ pattern: 'none', criteria: { military: true } })]);
+        PNOW = 0; draw2d();
+        ok("a 'none' rule draws no 2D ring at all",
+          !rec.strokes.includes(CR.FLIGHT_BEACON_COLORS.military)
+          && rec.texts.includes('SWA1'), rec.strokes.join(','));
+
+        // Emergency ignores a matching rule in 2D too.
+        p.flightsNow = [fpOf({ hex: 'gl0002', callsign: 'EMG1', military: true,
+          squawk: '7700', lat: 40.05, lon: -75.05, distNm: 4 })];
+        withRules([rule({ pattern: 'solid', colorA: '#00ff00', criteria: { military: true } })]);
+        draw2d();
+        ok('an emergency aircraft keeps the red 2D ring through a matching rule',
+          rec.strokes.includes(CR.FLIGHT_BEACON_COLORS.emergency)
+          && !rec.strokes.includes('#00ff00'), rec.strokes.join(','));
+
+        // The master gate still wins over the rules.
+        withRules([rule({ pattern: 'solid', colorA: '#00ff00' })], { beacons: false });
+        draw2d();
+        ok('beacons:false silences user-ruled 2D rings too',
+          !rec.strokes.includes('#00ff00'));
+
+        // A garbage rule list must never break the RAF path.
+        p.flightsNow = [RULED];
+        withRules([{ id: 'x', pattern: 'sparkle', colorA: '#00ff00', criteria: {} }]);
+        let threw2d = null;
+        try { draw2d(); } catch (e) { threw2d = e; }
+        ok('an unusable rule list never throws in the 2D draw path', threw2d === null,
+          threw2d && threw2d.message);
+      } finally {
+        performance.now = realPerfNow;
+      }
+      p.store.flights = { enabled: true, source: 'cloud', iss: false };
       p.flightsNow = [];
 
       // ── 11b. 2D pick: hitFlight + click routing ────────────────────────────
@@ -740,6 +890,138 @@
       eq('an out-of-range model size is clamped by setFlights', p2.store.flights.modelScale, 4);
       await typeIn(numFor('Model size ×'), 1);
       eq('back to 1 clears the field', p2.store.flights.modelScale, undefined);
+
+      // ── 12a. Glow rules editor (flight-glow-rules.md §6.4) ─────────────────
+      // Collapsed summary rows + an ✎-expanded criteria form, every write going
+      // through setFlights (which sanitizes) — so the editor can never author a
+      // shape the matcher would reject.
+      section('Settings drawer (glow rules editor)');
+      const glowRows = () => [...drawer.querySelectorAll('[data-glow-rule]')];
+      const addBtn = () => drawer.querySelector('[data-glow-add]');
+      const fieldIn = (id, name) => drawer.querySelector(
+        `[data-glow-rule="${id}"] [data-glow-field="${name}"]`);
+      const rowBtn = (id, title) => [...drawer.querySelectorAll(`[data-glow-rule="${id}"] button`)]
+        .find(b => b.title === title);
+      const setField = async (id, name, v) => {
+        const el = fieldIn(id, name);
+        if (el.type === 'checkbox') el.checked = v; else el.value = String(v);
+        el.dispatchEvent(new Event('change'));
+        await drawer.updateComplete; await sleep(4);
+      };
+      const click = async el => { el.click(); await drawer.updateComplete; await sleep(4); };
+
+      ok('“+ Add rule” button rendered', !!addBtn());
+      eq('no rules by default', glowRows().length, 0);
+      await click(addBtn());
+      eq('adding a rule writes one entry to the store', p2.store.flights.glowRules?.length, 1);
+      const rid = p2.store.flights.glowRules[0].id;
+      eq('a new rule defaults to a visible pattern', p2.store.flights.glowRules[0].pattern, 'flash');
+      ok('a new rule survives the sanitizer (it ships with a colour)',
+        /^#[0-9a-f]{6}$/.test(p2.store.flights.glowRules[0].colorA ?? ''),
+        p2.store.flights.glowRules[0].colorA);
+      eq('a new rule starts enabled', p2.store.flights.glowRules[0].enabled, true);
+      eq('a new rule matches everything until narrowed',
+        JSON.stringify(Object.values(p2.store.flights.glowRules[0].criteria)
+          .filter(v => v !== undefined)), '[]');
+      eq('the new rule renders a row', glowRows().length, 1);
+      ok('a new rule opens EXPANDED for editing', !!fieldIn(rid, 'operator'));
+      ok('an unnamed rule summarizes as the catch-all',
+        glowRows()[0].textContent.includes('any aircraft'), glowRows()[0].textContent.slice(0, 60));
+
+      await setField(rid, 'label', '  Southwest 737s  ');
+      eq('the name input writes a trimmed label', p2.store.flights.glowRules[0].label, 'Southwest 737s');
+      await setField(rid, 'operator', 'Southwest');
+      eq('a wildcard criterion writes the store',
+        p2.store.flights.glowRules[0].criteria.operator, 'Southwest');
+      await setField(rid, 'typeCode', 'b73?');
+      eq('setFlights uppercases the uppercase-in-the-data criteria',
+        p2.store.flights.glowRules[0].criteria.typeCode, 'B73?');
+      await setField(rid, 'minAltFt', 5000);
+      await setField(rid, 'maxAltFt', 30000);
+      eq('a numeric range writes both bounds',
+        `${p2.store.flights.glowRules[0].criteria.minAltFt}-${p2.store.flights.glowRules[0].criteria.maxAltFt}`,
+        '5000-30000');
+      await setField(rid, 'minAltFt', '');
+      eq('blanking a bound clears it (never 0)',
+        p2.store.flights.glowRules[0].criteria.minAltFt, undefined);
+      await setField(rid, 'operator', '   ');
+      eq('blanking a text criterion clears it — never an accidental match-all',
+        p2.store.flights.glowRules[0].criteria.operator, undefined);
+      await setField(rid, 'operator', 'Southwest');
+      await setField(rid, 'military', 'yes');
+      eq('a tri-state select writes true', p2.store.flights.glowRules[0].criteria.military, true);
+      await setField(rid, 'military', 'no');
+      eq('a tri-state select writes false', p2.store.flights.glowRules[0].criteria.military, false);
+      await setField(rid, 'military', '');
+      eq('“Any” clears the tri-state', p2.store.flights.glowRules[0].criteria.military, undefined);
+
+      await setField(rid, 'pattern', 'strobe');
+      eq('the pattern dropdown writes the store', p2.store.flights.glowRules[0].pattern, 'strobe');
+      eq('the pattern dropdown offers all 7 patterns',
+        fieldIn(rid, 'pattern').querySelectorAll('option').length, 7);
+      await setField(rid, 'colorA', '#ff0000');
+      await setField(rid, 'colorB', '#00ff00');
+      eq('both colour pickers write the store',
+        `${p2.store.flights.glowRules[0].colorA}/${p2.store.flights.glowRules[0].colorB}`,
+        '#ff0000/#00ff00');
+      await click(rowBtn(rid, 'Clear the second colour'));
+      eq('the ✕ clears colour B only',
+        p2.store.flights.glowRules[0].colorB === undefined
+          && p2.store.flights.glowRules[0].colorA === '#ff0000', true);
+      await setField(rid, 'pattern', 'none');
+      ok('choosing “no glow” hides the colour row', !fieldIn(rid, 'colorA'));
+      await setField(rid, 'pattern', 'flash');
+      ok('switching back to a visible pattern restores a colour', !!fieldIn(rid, 'colorA'));
+
+      await setField(rid, 'enabled', false);
+      eq('the enable checkbox writes false', p2.store.flights.glowRules[0].enabled, false);
+      ok('a disabled row is tagged [off]', glowRows()[0].textContent.includes('[off]'));
+      await setField(rid, 'enabled', true);
+      eq('re-enabling writes true', p2.store.flights.glowRules[0].enabled, true);
+
+      // Collapse / re-expand.
+      await click(rowBtn(rid, 'Edit conditions'));
+      ok('collapsing hides the criteria form', !fieldIn(rid, 'operator'));
+      ok('a named rule shows its NAME in the summary row',
+        glowRows()[0].textContent.includes('Southwest 737s'));
+      await click(rowBtn(rid, 'Edit conditions'));
+      ok('re-expanding restores the form with its values',
+        !!fieldIn(rid, 'operator') && fieldIn(rid, 'operator').value === 'Southwest');
+
+      // Reorder — order is first-match-wins, so ▲/▼ change behaviour.
+      await click(addBtn());
+      const rid2 = p2.store.flights.glowRules[1].id;
+      eq('a second rule appends at the END', p2.store.flights.glowRules.length, 2);
+      ok('the first row cannot move up', rowBtn(rid, 'Move earlier').disabled === true);
+      ok('the last row cannot move down', rowBtn(rid2, 'Move later').disabled === true);
+      await click(rowBtn(rid2, 'Move earlier'));
+      eq('▲ moves a rule earlier in the list',
+        p2.store.flights.glowRules.map(r => r.id).join(','), `${rid2},${rid}`);
+      await click(rowBtn(rid2, 'Move later'));
+      eq('▼ moves it back',
+        p2.store.flights.glowRules.map(r => r.id).join(','), `${rid},${rid2}`);
+      eq('reordering preserves the rules themselves',
+        p2.store.flights.glowRules[0].label, 'Southwest 737s');
+
+      // Delete.
+      await click(rowBtn(rid2, 'Delete rule'));
+      eq('✕ deletes just that rule', p2.store.flights.glowRules.map(r => r.id).join(','), rid);
+      await click(rowBtn(rid, 'Delete rule'));
+      eq('deleting the last rule clears the field entirely',
+        p2.store.flights.glowRules, undefined);
+      eq('…and the list renders empty', glowRows().length, 0);
+
+      // The cap is surfaced, not just enforced silently.
+      p2.setFlights(f => {
+        f.glowRules = Array.from({ length: 30 }, (_, i) => ({
+          id: `cap${i}`, pattern: 'none', criteria: {} }));
+      });
+      await drawer.updateComplete; await sleep(4);
+      eq('30 rules render', glowRows().length, 30);
+      ok('the add button is disabled at the cap', addBtn().disabled === true);
+      p2.setFlights(f => { f.glowRules = undefined; });
+      await drawer.updateComplete; await sleep(4);
+      ok('the add button is live again below the cap', addBtn().disabled === false);
       drawer.remove();
 
       // ── 12b. Settings ▸ Display — background-text entry rows ───────────────

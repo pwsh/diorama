@@ -1117,6 +1117,324 @@
      && rig('clk1').asm.userData.hex === 'clk1');
   upd([]); step(1, 3);
 
+  // ── 24. User glow rules (docs/research/flight-glow-rules.md) ───────────────
+  // The rule list arrives through updateFlights's opts; matching happens at POLL
+  // cadence inside _syncFlightBeacon, and _advanceFlights only samples the
+  // resolved pattern's envelope. Colours are read off the live materials.
+  {
+    const hex = m => m.color.getHex();
+    const GR = (o) => ({ id: o.id ?? 'g', criteria: {}, pattern: 'flash', colorA: '#ffd400', ...o });
+    const glowUpd = (list, rules, extra = {}) =>
+      upd(list, { opts: { glowRules: rules, ...extra } });
+
+    // (a) A matched operator rule REPLACES the default treatment entirely.
+    upd([]); step(1, 3);
+    const RULES_A = [GR({ id: 'swa', pattern: 'strobe', colorA: '#ff0000', colorB: '#ffffff',
+                          criteria: { operator: 'Southwest' } })];
+    const SWA = FP({ hex: 'gr1', category: 'A3', operator: 'Southwest Airlines Co.',
+                     military: true, lon: OLON + 0.1 });
+    glowUpd([SWA], RULES_A);
+    ok('a matching rule builds the beacon in ITS colour, not the status colour',
+       rig('gr1').beaconColor === 0xff0000, rig('gr1').beaconColor.toString(16));
+    ok('a matching rule sets the rig glow pattern', rig('gr1').glowPattern === 'strobe',
+       rig('gr1').glowPattern);
+    ok('a two-colour rule arms the per-frame colour lerp', rig('gr1').glowTwoColor === true);
+    ok('the rebuild key records pattern|colorA|colorB',
+       rig('gr1').glowKey === 'strobe|#ff0000|#ffffff', rig('gr1').glowKey);
+    ok('persistent per-rig Colors exist (built at POLL cadence, never per frame)',
+       !!rig('gr1').glowColorA && !!rig('gr1').glowColorB && !!rig('gr1').glowCur
+       && rig('gr1').glowColorA.getHex() === 0xff0000
+       && rig('gr1').glowColorB.getHex() === 0xffffff);
+
+    // Re-polling with an UNCHANGED resolution must not rebuild the bead/glow.
+    const beadA = rig('gr1').beacon, glowA = rig('gr1').beaconGlow;
+    glowUpd([SWA], RULES_A);
+    ok('an unchanged resolved glow does NOT rebuild the bead/sprite',
+       rig('gr1').beacon === beadA && rig('gr1').beaconGlow === glowA);
+
+    // (b) strobe — TWO opacity pops per 1 s period, sampled through real frames.
+    {
+      // Start mid-GAP so the sweep covers a full period with BOTH pops' rising
+      // edges inside the sample window (starting at a pop's own peak would hide
+      // it — there is no earlier sample to rise from).
+      rig('gr1').beaconPhase = 0.45;
+      const bm = rig('gr1').beacon.material;
+      const samples = [];
+      for (let i = 0; i < 100; i++) { step(0.01); samples.push(bm.opacity); }
+      let pops = 0;
+      for (let i = 1; i < samples.length - 1; i++) {
+        if (samples[i] > 0.6 && samples[i] >= samples[i - 1] && samples[i] > samples[i + 1]) pops++;
+      }
+      ok('strobe drives TWO opacity pops per second on the live material', pops === 2, `pops=${pops}`);
+      ok('strobe rests dark between pops', Math.min(...samples) < 0.2, `min=${Math.min(...samples)}`);
+      ok('strobe reaches full brightness', Math.max(...samples) > 0.98, `max=${Math.max(...samples)}`);
+      // Its two pops carry the two DIFFERENT colours.
+      rig('gr1').beaconPhase = 0; step(0.0001);
+      const popAColor = hex(bm);
+      rig('gr1').beaconPhase = 0.12; step(0.0001);
+      const popBColor = hex(bm);
+      ok('strobe pop 1 is colour A, pop 2 is colour B',
+         popAColor === 0xff0000 && popBColor === 0xffffff,
+         `${popAColor.toString(16)} / ${popBColor.toString(16)}`);
+      ok('the halo sprite is recoloured in lockstep with the bead',
+         hex(rig('gr1').beaconGlow.material) === popBColor);
+    }
+
+    // (c) rotate — never fully dark, and the colour eases with the brightness.
+    upd([]); step(1, 3);
+    glowUpd([FP({ hex: 'gr2', category: 'A3', lon: OLON + 0.1 })],
+            [GR({ id: 'rot', pattern: 'rotate', colorA: '#0000ff', colorB: '#00ff00' })]);
+    {
+      const bm = rig('gr2').beacon.material;
+      rig('gr2').beaconPhase = 0;
+      let min = 1, max = 0;
+      for (let i = 0; i < 250; i++) { step(0.01); min = Math.min(min, bm.opacity); max = Math.max(max, bm.opacity); }
+      ok('rotate NEVER dips below its 0.35 floor (the beacon-vs-strobe tell)',
+         min > 0.34, `min=${min}`);
+      ok('rotate still reaches full brightness', max > 0.98, `max=${max}`);
+      rig('gr2').beaconPhase = 0; step(0.0001);
+      ok('rotate is colour A at its bright end', hex(bm) === 0x0000ff, hex(bm).toString(16));
+      rig('gr2').beaconPhase = 1 / (0.9 * 2); step(0.0001);
+      ok('rotate is colour B at its dim end', hex(bm) === 0x00ff00, hex(bm).toString(16));
+      rig('gr2').beaconPhase = 1 / (0.9 * 4); step(0.0001);
+      const mid = hex(bm);
+      ok('rotate crossfades THROUGH the two colours (a genuine lerp)',
+         mid !== 0x0000ff && mid !== 0x00ff00, mid.toString(16));
+    }
+
+    // (d) alternate — hard colour swap, constant brightness.
+    upd([]); step(1, 3);
+    glowUpd([FP({ hex: 'gr3', category: 'A3', lon: OLON + 0.1 })],
+            [GR({ id: 'alt', pattern: 'alternate', colorA: '#ff00ff', colorB: '#00ffff' })]);
+    {
+      const bm = rig('gr3').beacon.material;
+      rig('gr3').beaconPhase = 0.1; step(0.0001);
+      const c1 = hex(bm), a1 = bm.opacity;
+      rig('gr3').beaconPhase = 0.9; step(0.0001);
+      const c2 = hex(bm), a2 = bm.opacity;
+      rig('gr3').beaconPhase = 1.7; step(0.0001);
+      const c3 = hex(bm);
+      ok('alternate hard-swaps A → B → A every 0.8 s',
+         c1 === 0xff00ff && c2 === 0x00ffff && c3 === 0xff00ff,
+         [c1, c2, c3].map(c => c.toString(16)).join(' '));
+      ok('alternate holds a constant brightness (colour is the whole signal)',
+         a1 === a2 && a1 === 1, `${a1} / ${a2}`);
+    }
+
+    // (e) solid — static two-tone: colorA bead core, colorB halo, no lerp.
+    upd([]); step(1, 3);
+    glowUpd([FP({ hex: 'gr4', category: 'A3', lon: OLON + 0.1 })],
+            [GR({ id: 'sol', pattern: 'solid', colorA: '#ff8800', colorB: '#2222ff' })]);
+    {
+      const bm = rig('gr4').beacon.material, gm = rig('gr4').beaconGlow.material;
+      ok('solid: the bead is colour A, the halo is colour B (§2 exception)',
+         hex(bm) === 0xff8800 && hex(gm) === 0x2222ff,
+         `${hex(bm).toString(16)} / ${hex(gm).toString(16)}`);
+      ok('solid does NOT arm the per-frame lerp', rig('gr4').glowTwoColor === false);
+      const a0 = bm.opacity, g0 = gm.opacity;
+      step(0.37, 9);
+      ok('solid never animates its opacity', bm.opacity === a0 && gm.opacity === g0
+         && a0 === 1 && Math.abs(g0 - 0.6) < 1e-9, `${a0} / ${g0}`);
+      ok('solid never repaints its colours', hex(bm) === 0xff8800 && hex(gm) === 0x2222ff);
+    }
+    // A single-colour solid repeats colour A on the halo.
+    upd([]); step(1, 3);
+    glowUpd([FP({ hex: 'gr5', category: 'A3', lon: OLON + 0.1 })],
+            [GR({ id: 'sol1', pattern: 'solid', colorA: '#ff8800' })]);
+    ok('solid with no second colour tints the halo colour A too',
+       hex(rig('gr5').beacon.material) === 0xff8800
+       && hex(rig('gr5').beaconGlow.material) === 0xff8800);
+
+    // (f) fade — a slow breathe with a smooth crossfade.
+    upd([]); step(1, 3);
+    glowUpd([FP({ hex: 'gr6', category: 'A3', lon: OLON + 0.1 })],
+            [GR({ id: 'fd', pattern: 'fade', colorA: '#000000', colorB: '#ffffff' })]);
+    {
+      const bm = rig('gr6').beacon.material;
+      rig('gr6').beaconPhase = 1.25; step(0.0001);
+      const top = bm.opacity, topC = hex(bm);
+      rig('gr6').beaconPhase = 3.75; step(0.0001);
+      const bot = bm.opacity, botC = hex(bm);
+      ok('fade peaks a quarter period in and bottoms three quarters in',
+         Math.abs(top - 1) < 1e-6 && Math.abs(bot - 0.15) < 1e-6, `${top} / ${bot}`);
+      ok('fade crossfades all the way between the two colours',
+         topC === 0xffffff && botC === 0x000000,
+         `${topC.toString(16)} / ${botC.toString(16)}`);
+    }
+
+    // (g) pattern 'none' MUTES an aircraft that would otherwise beacon.
+    upd([]); step(1, 3);
+    const MUTE = [GR({ id: 'mute', pattern: 'none', criteria: { ladd: true } })];
+    glowUpd([FP({ hex: 'gr7', category: 'A3', ladd: true, lon: OLON + 0.1 })], MUTE);
+    ok("pattern 'none' removes the bead + halo entirely",
+       rig('gr7').beacon === null && rig('gr7').beaconGlow === null
+       && rig('gr7').beaconColor === 0 && rig('gr7').glowKey === '',
+       rig('gr7').glowPattern);
+    ok("a 'none' rule does not disturb an aircraft it doesn't match", (() => {
+      glowUpd([FP({ hex: 'gr7', category: 'A3', ladd: true, lon: OLON + 0.1 }),
+               FP({ hex: 'gr8', category: 'A3', military: true, lon: OLON + 0.12 })], MUTE);
+      return rig('gr8').beaconColor === 0x2ee56a && rig('gr7').beacon === null; })());
+
+    // (h) an UNMATCHED aircraft keeps the default ladder EXACTLY.
+    upd([]); step(1, 3);
+    const NARROW = [GR({ id: 'nm', pattern: 'solid', colorA: '#123456',
+                         criteria: { operator: 'NeverMatchesAnything' } })];
+    glowUpd([FP({ hex: 'gr9', category: 'A3', military: true, lon: OLON + 0.1 })], NARROW);
+    ok('an unmatched aircraft keeps the default military green + flash',
+       rig('gr9').beaconColor === 0x2ee56a && rig('gr9').glowPattern === 'flash'
+       && rig('gr9').glowTwoColor === false);
+    // …and its envelope is the SHIPPED one, sampled on the live materials.
+    {
+      const bm = rig('gr9').beacon.material, gm = rig('gr9').beaconGlow.material;
+      let worst = 0;
+      for (let i = 0; i < 60; i++) {
+        step(0.017);
+        const t = rig('gr9').beaconPhase;
+        const s = Math.max(0, Math.sin(2 * Math.PI * 1.2 * t)), f = s * s * s;
+        worst = Math.max(worst, Math.abs(bm.opacity - (0.28 + 0.72 * f)),
+                                Math.abs(gm.opacity - (0.10 + 0.85 * f)));
+      }
+      ok('the default flash envelope is byte-identical to the shipped beacon',
+         worst < 1e-12, `worst=${worst}`);
+      ok('a single-colour glow never repaints .color (default path untouched)',
+         hex(bm) === 0x2ee56a && hex(gm) === 0x2ee56a);
+    }
+
+    // (i) EMERGENCY still wins end-to-end, through a matching user rule.
+    upd([]); step(1, 3);
+    glowUpd([FP({ hex: 'gra', category: 'A3', military: true, squawk: '7700', lon: OLON + 0.1 })],
+            [GR({ id: 'hij', pattern: 'solid', colorA: '#00ff00', criteria: { military: true } })]);
+    ok('an emergency aircraft ignores a matching user rule (red flash wins)',
+       rig('gra').beaconColor === 0xff2a1a && rig('gra').glowPattern === 'flash');
+
+    // (j) the master gate still silences user rules.
+    upd([]); step(1, 3);
+    glowUpd([FP({ hex: 'grb', category: 'A3', lon: OLON + 0.1 })],
+            [GR({ id: 'any', pattern: 'solid', colorA: '#00ff00' })], { beacons: false });
+    ok('beacons:false silences a user rule too', rig('grb').beacon === null);
+
+    // (k) rules RE-RESOLVE on a poll update — a live rig switches in place.
+    upd([]); step(1, 3);
+    // `interesting` is fixed across the polls so the FALLBACK is the yellow
+    // default — and, unlike military/LADD, it is not one of the three build-time
+    // livery inputs, so nothing here can trigger a model rebuild and the "the
+    // rig survives a glow change" assertion below stays honest.
+    const AC = o => FP({ hex: 'grc', category: 'A3', operator: 'Acme Air',
+                         interesting: true, altFt: 30000, lon: OLON + 0.1, ...o });
+    const HI = [GR({ id: 'hi', pattern: 'rotate', colorA: '#00ff00',
+                     criteria: { minAltFt: 20000 } })];
+    glowUpd([AC()], HI);
+    const asmBefore = rig('grc').asm, phaseBefore = (rig('grc').beaconPhase = 3.3);
+    ok('a live rig picks up the altitude-keyed rule', rig('grc').glowPattern === 'rotate');
+    // Same rig, new fix that no longer matches → back to the default ladder.
+    glowUpd([AC({ altFt: 4000 })], HI);
+    ok('a poll that stops matching falls back to the default ladder',
+       rig('grc').glowPattern === 'flash' && rig('grc').beaconColor === 0xffd400,
+       rig('grc').beaconColor.toString(16));
+    ok('the rig itself is NOT rebuilt by a glow change (motion state survives)',
+       rig('grc').asm === asmBefore && rig('grc').beaconPhase === phaseBefore);
+    // Editing the RULE LIST (same aircraft) re-resolves too.
+    glowUpd([AC({ altFt: 4000 })],
+            [GR({ id: 'lo', pattern: 'alternate', colorA: '#ff0000', colorB: '#0000ff',
+                  criteria: { maxAltFt: 10000 } })]);
+    ok('editing the rule list re-resolves a live rig',
+       rig('grc').glowPattern === 'alternate' && rig('grc').beaconColor === 0xff0000);
+    // Dropping the rules entirely restores the default.
+    glowUpd([AC({ altFt: 4000 })], undefined);
+    ok('removing every rule restores the default ladder',
+       rig('grc').glowPattern === 'flash' && rig('grc').beaconColor === 0xffd400);
+
+    // (l) first-match-wins + disabled, end-to-end through the renderer.
+    upd([]); step(1, 3);
+    const ORDER = [
+      GR({ id: 'first', pattern: 'solid', colorA: '#111111', criteria: { typeCode: 'B73*' } }),
+      GR({ id: 'second', pattern: 'fade', colorA: '#222222', criteria: { operator: 'Acme' } }),
+    ];
+    const BOTH = FP({ hex: 'grd', category: 'A3', typeCode: 'B738',
+                      operator: 'Acme Air', lon: OLON + 0.1 });
+    glowUpd([BOTH], ORDER);
+    ok('the FIRST matching rule wins in the renderer', rig('grd').beaconColor === 0x111111);
+    glowUpd([BOTH], [ORDER[1], ORDER[0]]);
+    ok('reordering the rules changes the live rig', rig('grd').beaconColor === 0x222222);
+    glowUpd([BOTH], [{ ...ORDER[1], enabled: false }, ORDER[0]]);
+    ok('a disabled rule is skipped in the renderer', rig('grd').beaconColor === 0x111111);
+
+    // (m) a garbage rule list never reaches the rig (the renderer re-sanitizes,
+    // it never trusts a hand-edited config to have been through setFlights).
+    upd([]); step(1, 3);
+    glowUpd([FP({ hex: 'gre', category: 'A3', military: true, lon: OLON + 0.1 })],
+            [{ id: 'bad', pattern: 'sparkle', colorA: '#00ff00', criteria: {} },
+             { id: 'bad2', pattern: 'solid', colorA: 'not-a-colour', criteria: {} }]);
+    ok('an unusable rule list is dropped, the default ladder stands',
+       rig('gre').beaconColor === 0x2ee56a && rig('gre').glowPattern === 'flash');
+    ok('a non-array rule list is tolerated', (() => {
+      glowUpd([FP({ hex: 'gre', category: 'A3', military: true, lon: OLON + 0.1 })], 'nope');
+      return rig('gre').beaconColor === 0x2ee56a; })());
+
+    // (n) a model rebuild (late registry data) re-applies the RESOLVED glow onto
+    // the new assembly, not the old default.
+    upd([]); step(1, 3);
+    const REB = o => FP({ hex: 'grf', category: 'A3', operator: 'Acme Air', lon: OLON + 0.1, ...o });
+    const REBR = [GR({ id: 'reb', pattern: 'alternate', colorA: '#ff0000', colorB: '#0000ff',
+                       criteria: { operator: 'Acme' } })];
+    glowUpd([REB()], REBR);
+    const oldAsm = rig('grf').asm;
+    glowUpd([REB({ typeCode: 'LJ45' })], REBR);      // → bizjet, model rebuild
+    ok('a model rebuild re-attaches the RULE glow (not the default)',
+       rig('grf').asm !== oldAsm && rig('grf').archetype === 'bizjet'
+       && rig('grf').beaconColor === 0xff0000 && rig('grf').glowPattern === 'alternate',
+       rig('grf').glowKey);
+    ok('the rebuilt beacon still hangs off the NEW assembly',
+       rig('grf').beacon.parent === rig('grf').asm
+       && withUD(rig('grf').asm, 'beacon').length === 1);
+    // A beaconless rig stays beaconless across a rebuild.
+    upd([]); step(1, 3);
+    glowUpd([FP({ hex: 'grg', category: 'A3', lon: OLON + 0.1 })], []);
+    ok('an unflagged aircraft has no beacon', rig('grg').beacon === null);
+    glowUpd([FP({ hex: 'grg', category: 'A3', typeCode: 'LJ45', lon: OLON + 0.1 })], []);
+    ok('a beaconless rig stays beaconless through a model rebuild',
+       rig('grg').beacon === null && rig('grg').glowKey === '');
+
+    // (o) the fade-out still scales the glow — rig.fade multiplies every pattern.
+    upd([]); step(1, 3);
+    glowUpd([FP({ hex: 'grh', category: 'A3', lon: OLON + 0.1 })],
+            [GR({ id: 'sd', pattern: 'solid', colorA: '#ff8800' })]);
+    {
+      const bm = rig('grh').beacon.material;
+      step(0.05);
+      ok('a live solid glow sits at full opacity', Math.abs(bm.opacity - 1) < 1e-9, bm.opacity);
+      upd([]);                                    // vanished → dying
+      step(0.3);
+      ok('a dying rig fades its glow with the airframe',
+         bm.opacity > 0 && bm.opacity < 1 && Math.abs(bm.opacity - rig('grh').fade) < 1e-9,
+         `${bm.opacity} vs fade ${rig('grh').fade}`);
+      step(1, 3);
+    }
+
+    // (p) ZERO per-frame allocation: the materials, the persistent Colors and
+    // the scratch Color are all the SAME objects after many frames. (The source
+    // rule is enforced by inspection — _advanceFlights constructs no Color and
+    // parses no hex string; `lerpColors` writes into rig.glowCur in place.)
+    upd([]); step(1, 3);
+    glowUpd([FP({ hex: 'gri', category: 'A3', lon: OLON + 0.1 })],
+            [GR({ id: 'zz', pattern: 'rotate', colorA: '#ff0000', colorB: '#00ff00' })]);
+    {
+      const g = rig('gri');
+      const ids = [g.beacon.material, g.beaconGlow.material, g.glowColorA, g.glowColorB, g.glowCur,
+                   g.beacon.material.color, g.beaconGlow.material.color];
+      step(0.016, 120);
+      ok('120 frames allocate no new glow objects (identity preserved)',
+         g.beacon.material === ids[0] && g.beaconGlow.material === ids[1]
+         && g.glowColorA === ids[2] && g.glowColorB === ids[3] && g.glowCur === ids[4]
+         && g.beacon.material.color === ids[5] && g.beaconGlow.material.color === ids[6]);
+      ok('the persistent source Colors are never mutated by the per-frame lerp',
+         g.glowColorA.getHex() === 0xff0000 && g.glowColorB.getHex() === 0x00ff00);
+      ok('the phase accumulates in SECONDS (not radians) and is not wrapped',
+         g.beaconPhase > 1.9, `phase=${g.beaconPhase}`);
+    }
+    upd([]); step(1, 3);
+  }
+
   // ── report ─────────────────────────────────────────────────────────────────
   const pass = tests.filter(t => t.ok).length;
   const fail = tests.length - pass;
