@@ -1551,6 +1551,175 @@
     upd([]); step(1, 3);
   }
 
+  // ── 25. Mobile taps: pointer-type tap gate + fat-finger aircraft pick ──────
+  // User-reported: tapping a plane in the HA phone app never opened the info
+  // card. Two causes — (1) the manual pointerdown/pointerup tap gate used the
+  // MOUSE slop (5 px / 500 ms) for every pointer, and a finger tap routinely
+  // travels further; (2) even a passing tap had to hit the dart's exact
+  // geometry, which on a phone is a handful of pixels. Fix: touch pointers get
+  // canvas-2d's synthesis tolerances (12 px / 600 ms), and a screen-space
+  // nearest-aircraft fallback (`_raycastFlightNear`, 28 px touch / 12 px mouse)
+  // runs AFTER the precise raycast misses.
+  {
+    const dom = r._renderer.domElement;
+    // OrbitControls captures the pointer on pointerdown; our synthetic events
+    // carry no real pointerId, so neuter the capture API for the dispatches.
+    dom.setPointerCapture = () => {};
+    dom.releasePointerCapture = () => {};
+    dom.hasPointerCapture = () => false;
+
+    const clicks = [];
+    r.onFixtureClick(info => clicks.push(info));
+    // timeStamp is spoofed per event so the gate's TIME arm is testable without
+    // real waits (and so consecutive taps never look like a 350 ms dblclick).
+    let tsBase = 100000;
+    const pev = (type, x, y, pointerType, ts) => {
+      const e = new PointerEvent(type, {
+        clientX: x, clientY: y, pointerType, pointerId: 1,
+        bubbles: true, cancelable: true, isPrimary: true, view: window });
+      Object.defineProperty(e, 'timeStamp', { value: ts, configurable: true });
+      return e;
+    };
+    const tapAt = (x, y, dx, dy, pointerType, dtMs = 10) => {
+      clicks.length = 0;
+      tsBase += 5000;
+      dom.dispatchEvent(pev('pointerdown', x, y, pointerType, tsBase));
+      dom.dispatchEvent(pev('pointerup', x + dx, y + dy, pointerType, tsBase + dtMs));
+      return clicks.slice();
+    };
+
+    upd([FP({ hex: 'tap1', callsign: 'UAL9', typeCode: 'B738', category: 'A3',
+              lat: OLAT + 0.05, lon: OLON + 0.05 })]);
+    const tRect = dom.getBoundingClientRect();
+    ok('the harness canvas has a real rect (the px pick needs one)',
+       tRect.width > 100 && tRect.height > 100, `${tRect.width}x${tRect.height}`);
+    const twp = r._camera.position.clone(); rig('tap1').asm.getWorldPosition(twp);
+    // Far enough back that the airframe covers well under the 150 px probe
+    // offset below (the models are ~2x scale; from 6 m one fills the canvas).
+    const AIM = 40000;
+    aimAt(twp, AIM);
+    // The rig's own projected client px — the same NDC→rect math the pick uses.
+    const projPx = obj => {
+      const v = r._camera.position.clone();
+      obj.getWorldPosition(v);
+      v.project(r._camera);
+      return { x: tRect.left + (v.x * 0.5 + 0.5) * tRect.width,
+               y: tRect.top + (-v.y * 0.5 + 0.5) * tRect.height };
+    };
+    const P = projPx(rig('tap1').asm);
+    ok('the aimed rig projects inside the canvas',
+       P.x > tRect.left && P.x < tRect.right && P.y > tRect.top && P.y < tRect.bottom,
+       `${P.x.toFixed(1)},${P.y.toFixed(1)}`);
+
+    // (a) tap gate — slop is pointer-type aware.
+    ok('a touch tap that drifts 10 px still opens the aircraft',
+       tapAt(P.x, P.y, 7, 7, 'touch').some(c => c.kind === 'flight' && c.hex === 'tap1'));
+    ok('a MOUSE drag of the same 10 px is still a micro-orbit, not a click',
+       tapAt(P.x, P.y, 7, 7, 'mouse').length === 0);
+    ok('a tight 3 px mouse click still opens the aircraft',
+       tapAt(P.x, P.y, 3, 0, 'mouse').some(c => c.kind === 'flight' && c.hex === 'tap1'));
+    ok('a touch drag past 12 px is a drag, not a tap',
+       tapAt(P.x, P.y, 13, 0, 'touch').length === 0);
+    // …and the TIME arm: 550 ms is a touch tap but a mouse hold.
+    ok('a 550 ms touch tap still counts (600 ms window)',
+       tapAt(P.x, P.y, 0, 0, 'touch', 550).some(c => c.kind === 'flight'));
+    ok('a 550 ms mouse press does not (500 ms window)',
+       tapAt(P.x, P.y, 0, 0, 'mouse', 550).length === 0);
+    ok('a 650 ms touch press is a long press, not a tap',
+       tapAt(P.x, P.y, 0, 0, 'touch', 650).length === 0);
+
+    // (b) the screen-space pick itself.
+    const OFF = 150;                                   // far outside the model
+    ok('the precise raycast misses well off the airframe',
+       r._raycastFixture(P.x, P.y + OFF) === null);
+    const nearHit = r._raycastFlightNear(P.x, P.y + OFF, 250);
+    ok('the nearest-aircraft pick finds it inside the radius',
+       !!nearHit && nearHit.kind === 'flight' && nearHit.hex === 'tap1'
+       && nearHit.fixtureId === 'tap1' && nearHit.entity_id === null,
+       JSON.stringify(nearHit));
+    ok('outside the radius it picks nothing',
+       r._raycastFlightNear(P.x, P.y + OFF, 28) === null);
+    ok('dead on the projected point it picks with a tiny radius',
+       (r._raycastFlightNear(P.x, P.y, 3) || {}).hex === 'tap1');
+    // Layer-hidden flights are untappable — the lights precedent, mirrored.
+    r.setLayerVisibility({ flights: false });
+    ok('a hidden Flights layer makes the proximity pick inert',
+       r._raycastFlightNear(P.x, P.y + OFF, 250) === null);
+    r.setLayerVisibility({});
+    ok('showing the layer again restores the proximity pick',
+       (r._raycastFlightNear(P.x, P.y + OFF, 250) || {}).hex === 'tap1');
+    // A rig fading out of the sky is not a target.
+    {
+      const g = rig('tap1'); const keep = g.fade; g.fade = 0;
+      ok('a fully faded rig is not a proximity target',
+         r._raycastFlightNear(P.x, P.y + OFF, 250) === null);
+      g.fade = keep;
+    }
+    // Behind the camera: `project` wraps such a point onto the screen, so the
+    // camera-forward dot must reject it.
+    r.setCameraView([twp.x, twp.y, twp.z + 6000], [twp.x, twp.y, twp.z + 18000]);
+    r._camera.updateMatrixWorld(true); r._scene.updateMatrixWorld(true);
+    ok('an aircraft behind the camera never picks',
+       r._raycastFlightNear(tRect.left + tRect.width / 2,
+                            tRect.top + tRect.height / 2, 400) === null);
+    aimAt(twp, AIM);
+
+    // (c) nearest wins when two aircraft are both in range.
+    upd([FP({ hex: 'tap1', callsign: 'UAL9', typeCode: 'B738', category: 'A3',
+              lat: OLAT + 0.05, lon: OLON + 0.05 }),
+         FP({ hex: 'tap2', callsign: 'AAL2', typeCode: 'B738', category: 'A3',
+              lat: OLAT + 0.05, lon: OLON + 0.055 })]);
+    aimAt(twp, 12000);
+    {
+      const P1 = projPx(rig('tap1').asm), P2 = projPx(rig('tap2').asm);
+      const sep = Math.hypot(P2.x - P1.x, P2.y - P1.y);
+      ok('the two rigs project to distinct screen points', sep > 20, `sep=${sep.toFixed(1)}px`);
+      const mx = P1.x + (P2.x - P1.x) * 0.3, my = P1.y + (P2.y - P1.y) * 0.3;
+      ok('the pick returns the NEAREST of two in-range aircraft',
+         (r._raycastFlightNear(mx, my, sep * 2) || {}).hex === 'tap1');
+      const nx = P1.x + (P2.x - P1.x) * 0.7, ny = P1.y + (P2.y - P1.y) * 0.7;
+      ok('…and the other one from the other side',
+         (r._raycastFlightNear(nx, ny, sep * 2) || {}).hex === 'tap2');
+    }
+
+    // (d) wiring + priority inside the pointerup handler. Stubbing the precise
+    // raycast keeps this independent of how many px the airframe covers.
+    aimAt(twp, AIM);
+    const realRF = r._raycastFixture.bind(r);
+    r._raycastFixture = () => null;
+    ok('a touch tap 20 px off the dart still opens the aircraft (fallback wired)',
+       tapAt(P.x, P.y + 20, 0, 0, 'touch').some(c => c.kind === 'flight' && c.hex === 'tap1'));
+    ok('a MOUSE click 20 px off does not (12 px mouse radius)',
+       tapAt(P.x, P.y + 20, 0, 0, 'mouse').length === 0);
+    ok('a mouse click 8 px off does (inside the 12 px mouse radius)',
+       tapAt(P.x, P.y + 8, 0, 0, 'mouse').some(c => c.kind === 'flight'));
+    ok('a touch tap 40 px off does not (outside the 28 px touch radius)',
+       tapAt(P.x, P.y + 40, 0, 0, 'touch').length === 0);
+    // Precise beats proximity: a fixture under the finger must win over a dart.
+    r._raycastFixture = () => ({ kind: 'light', entity_id: 'light.x', fixtureId: 'L1' });
+    ok('a precise fixture hit beats the nearby aircraft',
+       (tapAt(P.x, P.y, 0, 0, 'touch')[0] || {}).kind === 'light');
+    r._raycastFixture = realRF;
+    // Two rapid proximity taps both open the card (aircraft have no dblclick
+    // action, so the proximity path clears the dblclick timer rather than
+    // arming it and swallowing the second tap).
+    r._raycastFixture = () => null;
+    {
+      clicks.length = 0;
+      tsBase += 5000;
+      dom.dispatchEvent(pev('pointerdown', P.x, P.y + 20, 'touch', tsBase));
+      dom.dispatchEvent(pev('pointerup', P.x, P.y + 20, 'touch', tsBase + 10));
+      dom.dispatchEvent(pev('pointerdown', P.x, P.y + 20, 'touch', tsBase + 120));
+      dom.dispatchEvent(pev('pointerup', P.x, P.y + 20, 'touch', tsBase + 130));
+      ok('two rapid proximity taps both open the flight card',
+         clicks.length === 2 && clicks.every(c => c.kind === 'flight' && c.hex === 'tap1'),
+         `${clicks.length} clicks`);
+    }
+    r._raycastFixture = realRF;
+    r.onFixtureClick(() => {});
+    upd([]); step(1, 3);
+  }
+
   // ── report ─────────────────────────────────────────────────────────────────
   const pass = tests.filter(t => t.ok).length;
   const fail = tests.length - pass;

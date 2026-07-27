@@ -230,6 +230,21 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Mobile flight tap fix + About block** (2026-07-27, user-reported:
+  "tapping planes in the HA phone app doesn't show the info card";
+  unreleased). Two compounding 3D-view causes: the manual
+  pointerdown/up tap gate discarded finger taps (5 px slop; a finger
+  wobbles more) and exact-geometry raycasting can't hit a few-px
+  dart. Fix: pointer-type-aware gate (touch 12 px / 600 ms = the
+  canvas-2d synthesis constants; mouse keeps 5 px / 500 ms) +
+  `_raycastFlightNear` screen-space nearest-aircraft fallback
+  (28 px touch / 12 px mouse, zero-alloc, after `_raycastFixture`,
+  before vacseg — fixtures always win; proximity hit clears the
+  dblclick timer). 2D path + three-view kiosk dispatch verified
+  already correct. flights-render 367→393. Plus: Settings ▸
+  Connection "About Diorama" footer (purpose summary + docs-site +
+  GitHub repo links, shown in all UI modes incl. offline).
+
 - **User-definable flight draw radius** (2026-07-27, user request:
   "max draw distance needs to be doubled or tripled; make a user
   definable draw radius aircraft scale into"; unreleased — on main

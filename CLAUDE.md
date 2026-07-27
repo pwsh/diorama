@@ -490,7 +490,15 @@ fogging for ground geometry, and `_disposeSubtree` would free it). **Aircraft ar
 label sprite, banner — walks up to one aircraft; the fixture-click union is the exported
 `FixtureClickKind`/`FixtureClickInfo` (+ optional `hex`) tested via `FIXTURE_CLICK_KINDS`, and
 `_flightsGroup` joins the raycast roots when visible. three-view dispatches `open-flight-info
-{hex}` (view refuses; dblclick ignores flights). 2D: `drawFlights` publishes `flightHitPx`
+{hex}` (view refuses; dblclick ignores flights). **Touch tap gate + fat-finger pick** (user-
+reported: phone taps on planes never opened the card): the manual pointerdown/up tap gate is
+POINTER-TYPE aware — touch gets 12 px / 600 ms (canvas-2d's synthesis constants; `TAP_SLOP_PX_*`/
+`TAP_MAX_MS_*`), mouse/pen keep 5 px / 500 ms — and when the precise raycast misses,
+`_raycastFlightNear(x, y, maxPx)` (28 px touch / 12 px mouse) picks the nearest on-screen,
+non-faded, in-front-of-camera flight rig by projected screen distance (the 3D analog of
+`flightHitPx`; zero-alloc `_v3pick*` scratch). Runs AFTER `_raycastFixture` and BEFORE
+`_raycastVacSeg` — a fixture under the finger always beats a distant dart; a proximity hit clears
+the dblclick timer (flights have no dblclick, a second tap re-opens the card). 2D: `drawFlights` publishes `flightHitPx`
 (world anchor + px radius, the `envChipHalfPx` idiom) which `drawAll` clears OUTSIDE the layer
 gate so a hidden layer is untappable; `hitFlight` + `tryOpenFlightInfo` run LOW priority in both
 click branches. `<diorama-flight-modal>` (modals.ts, alarm/thermostat recipe, mounted in app.ts)
@@ -530,7 +538,7 @@ OSM line) whenever cloud + enabled + data. Tests: `flights-test.html` (`FLIGHTS 
 fixture = a REAL 94-aircraft airplanes.live LAX capture; incl. the live-path emit matrix, the
 archetype golden matrix, the emergency-alert lifecycle, the shell-rescale golden/property suite,
 and §6e's draw-radius clamp matrix + similarity law — the pre-existing derivation goldens run
-through an `FB` wrapper that pins `shellMm` to FLIGHT_SHELL_BASE_MM and stay byte-identical), `flights-render-test.html` (`FLIGHTSRENDER PASS 367/367` — heading/pitch signs asserted
+through an `FB` wrapper that pins `shellMm` to FLIGHT_SHELL_BASE_MM and stay byte-identical), `flights-render-test.html` (`FLIGHTSRENDER PASS 393/393` — heading/pitch signs asserted
 via `getWorldDirection`; archetype geometry, livery text layout, beacon priority/gating, privacy
 dim, in-place rebuild, distance scale, fog exemption, flight raycast, §4d's non-default-shell
 position/scale/frustum parity), `flights-ui-test.html`

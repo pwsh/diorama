@@ -178,6 +178,23 @@ const FIXTURE_CLICK_KINDS = new Set<string>([
   'light', 'switch', 'media', 'alarm', 'thermostat', 'safety', 'alert', 'robot',
   'lock', 'appliance', 'action', 'projector', 'valve', 'plug', 'sprinkler', 'flight',
 ]);
+// Tap gate for the manual pointerdown/pointerup pair (see the listener in
+// `load()`). A FINGER tap routinely travels well past the few px a mouse click
+// does and lingers longer, so a touch pointer gets the SAME tolerances
+// canvas-2d's touch→click synthesis uses (12 px / 600 ms) — the tight mouse
+// numbers discarded most phone taps as micro-orbits (user-reported: tapping an
+// aircraft in the HA phone app never opened the flight card). Mouse/pen keep the
+// tight gate so a real micro-drag still reads as an orbit, not a click.
+const TAP_SLOP_PX_MOUSE = 5;
+const TAP_MAX_MS_MOUSE = 500;
+const TAP_SLOP_PX_TOUCH = 12;
+const TAP_MAX_MS_TOUCH = 600;
+// Fat-finger pick radius for the screen-space aircraft fallback
+// (`_raycastFlightNear`). Exact-geometry raycasting can essentially never hit a
+// dart on the display shell from a phone; the 2D view already solves this with
+// a screen-px pick radius (`flightHitPx` rPx ≈ 16 px + pad), and these mirror it.
+const FLIGHT_PICK_PX_TOUCH = 28;
+const FLIGHT_PICK_PX_MOUSE = 12;
 
 export interface ZoneWorld { vertices: Vec2[]; color: number; occupied: boolean; }
 export interface HaloWorld { x: number; y: number; radius: number; occupied: boolean; }
@@ -1911,6 +1928,11 @@ export class ThreeDRenderer {
   private _flightShellMm = flightShellMm();
   private _beaconGlowTex: THREE.CanvasTexture | null = null;   // shared; freed in destroy()
   private _v3flight = new THREE.Vector3();   // scratch — _advanceFlights allocates nothing
+  // Scratch for _raycastFlightNear (screen-space aircraft pick): world pos,
+  // camera→rig direction, camera forward. Allocated once, mutated per call.
+  private _v3pick = new THREE.Vector3();
+  private _v3pickDir = new THREE.Vector3();
+  private _v3pickFwd = new THREE.Vector3();
   // ISS: one sprite in its OWN camera-recentered subgroup (the _realSkyGroup
   // idiom) so its position is a pure direction offset at a fixed radius. The
   // glyph texture is built once and disposed only in destroy().
@@ -2448,19 +2470,33 @@ export class ThreeDRenderer {
     // the browser-synthesized `click`. OrbitControls' damping + capture means
     // the synthesized `click` was unreliable across browsers (sometimes
     // suppressed entirely after a small orbit drag). We track movement
-    // ourselves: pointerup within 5 px and 500 ms of pointerdown counts as a
-    // tap. Two taps within 350 ms count as a dblclick.
+    // ourselves: pointerup within the tap slop/window of pointerdown counts as a
+    // tap. Two taps within 350 ms count as a dblclick. The slop/window are
+    // POINTER-TYPE aware (TAP_*_TOUCH vs TAP_*_MOUSE) — a finger is not a mouse.
     const dom = this._renderer.domElement;
-    let downX = 0, downY = 0, downT = 0, lastTapT = 0;
+    let downX = 0, downY = 0, downT = 0, lastTapT = 0, downTouch = false;
     dom.addEventListener('pointerdown', e => {
       downX = e.clientX; downY = e.clientY; downT = e.timeStamp;
+      downTouch = e.pointerType === 'touch';
     });
     dom.addEventListener('pointerup', e => {
+      const touch = downTouch || e.pointerType === 'touch';
+      const maxMs = touch ? TAP_MAX_MS_TOUCH : TAP_MAX_MS_MOUSE;
+      const maxPx = touch ? TAP_SLOP_PX_TOUCH : TAP_SLOP_PX_MOUSE;
       const dt = e.timeStamp - downT;
       const dx = Math.abs(e.clientX - downX), dy = Math.abs(e.clientY - downY);
-      if (dt > 500 || dx > 5 || dy > 5) return;
+      if (dt > maxMs || dx > maxPx || dy > maxPx) return;
       const hit = this._raycastFixture(e.clientX, e.clientY);
       if (!hit) {
+        // Fat-finger fallback for aircraft ONLY, and only once the precise
+        // raycast has missed — so a lamp under the finger always beats a distant
+        // dart (flights stay lowest priority, matching the 2D click ordering).
+        // A proximity flight hit clears the dblclick timer rather than arming
+        // it: aircraft have no dblclick action (three-view returns early on
+        // kind 'flight'), so a second tap should re-open the card, not be eaten.
+        const near = this._raycastFlightNear(
+          e.clientX, e.clientY, touch ? FLIGHT_PICK_PX_TOUCH : FLIGHT_PICK_PX_MOUSE);
+        if (near) { this._onFixtureClick?.(near); lastTapT = 0; return; }
         // Low-priority: only when no fixture was under the cursor, try the
         // Valetudo room-map overlay (tap-to-clean).
         const seg = this._raycastVacSeg(e.clientX, e.clientY);
@@ -2554,6 +2590,45 @@ export class ThreeDRenderer {
       }
     }
     return null;
+  }
+
+  // Screen-space nearest-aircraft pick — the fat-finger fallback for flights.
+  // `_raycastFixture` is exact geometry: an aircraft out on the display shell is
+  // a handful of pixels on a phone screen, so a finger can essentially never hit
+  // one even when the tap gate passes (user-reported: taps on planes in the HA
+  // phone app never opened the info card). The 2D view already solves this class
+  // of problem with a screen-px pick radius (`flightHitPx`); this is the 3D
+  // equivalent. Called ONLY after the precise raycast misses, so it can never
+  // steal a click from a real fixture. Zero allocation — reuses instance scratch
+  // vectors (the `_v3flight` idiom).
+  private _raycastFlightNear(clientX: number, clientY: number, maxPx: number): FixtureClickInfo | null {
+    if (!this._renderer || !this._camera) return null;
+    // Layer-hidden flights aren't click targets, exactly like lights.
+    if (!this._flightsGroup.visible || this._flightRigs.size === 0) return null;
+    const rect = this._renderer.domElement.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return null;
+    const cam = this._camera;
+    cam.getWorldDirection(this._v3pickFwd);
+    let bestHex: string | null = null;
+    let bestD2 = maxPx * maxPx;
+    for (const rig of this._flightRigs.values()) {
+      if (rig.fade <= 0.05) continue;          // faded out of the sky — not a target
+      rig.asm.getWorldPosition(this._v3pick);
+      // Behind the camera: `project` wraps such a point back onto the screen, so
+      // reject it up front with the camera-forward dot rather than trusting NDC.
+      this._v3pickDir.subVectors(this._v3pick, cam.position);
+      if (this._v3pickDir.dot(this._v3pickFwd) <= 0) continue;
+      this._v3pick.project(cam);
+      if (this._v3pick.z > 1) continue;        // past the far plane
+      const px = rect.left + (this._v3pick.x * 0.5 + 0.5) * rect.width;
+      const py = rect.top + (-this._v3pick.y * 0.5 + 0.5) * rect.height;
+      const ddx = px - clientX, ddy = py - clientY;
+      const d2 = ddx * ddx + ddy * ddy;
+      if (d2 <= bestD2) { bestD2 = d2; bestHex = rig.hex; }
+    }
+    if (bestHex == null) return null;
+    // Same shape the precise aircraft raycast returns (see `_tagFlightAsm`).
+    return { kind: 'flight', entity_id: null, fixtureId: bestHex, hex: bestHex };
   }
 
   // Dispose all GPU-side resources (geometries + materials + textures) for a
