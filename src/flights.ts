@@ -46,6 +46,22 @@
 // can never be occluded by it. The camera frustum is the real constraint, and
 // aircraft join the neighborhood overlay's dynamic-frustum requirement (see
 // `FLIGHT_SHELL_REACH_MM` + the renderer's `_recordFrustumReq`).
+//
+// ── Shell RADIUS is now user-definable (FlightsConfig.shellRadiusM) ────────
+// 120 m is the AUTHORED reference scale (`FLIGHT_SHELL_BASE_MM`), not a fixed
+// ceiling. Every shell-geometry function takes a trailing `shellMm` and the
+// whole display is a SIMILARITY TRANSFORM of that reference by
+//
+//   s = shellMm / FLIGHT_SHELL_BASE_MM
+//
+// i.e. planX / planY / dispY / the model scale ALL multiply by s (the model
+// scale included — that is what keeps a given aircraft's apparent ANGULAR size
+// unchanged while it sits proportionally farther out; without it a bigger
+// shell would simply make every plane look tiny again). The default is 300 m,
+// 2.5× the reference. Two things deliberately do NOT scale:
+//   • `clearMm` — an absolute physical property-clearance floor (see below).
+//   • `altRefFt` / `altMaxFt` — real-world altitude anchors, not geometry.
+// See `flightShellMm`, `flightShellReachMm` and each function's `shellMm` note.
 
 // ── Normalized aircraft ────────────────────────────────────────────────────
 // The field set local dump1090/readsb `aircraft.json` and the cloud
@@ -613,10 +629,15 @@ export function aircraftModelKind(fp: FlightPoint): 'prop' | 'jet' | 'heli' {
 // is camera-centered + depthWrite:false + renderOrder −10, so it can never
 // occlude an aircraft drawn outside it. Reach is a CAMERA FRUSTUM concern, not
 // a dome one — see FLIGHT_SHELL_REACH_MM.
+//
+// Every mm figure here is a BASE (reference-scale) value, authored at
+// FLIGHT_SHELL_BASE_MM. The live shell multiplies them by
+// `s = shellMm / FLIGHT_SHELL_BASE_MM` — with the sole, deliberate exception of
+// `clearMm`, which is absolute (see its comment).
 export const FLIGHT_SHELL = {
-  rMaxMm: 120000,    // horizontal display shell rim — REACHED exactly at d = radiusNm
-  yMinMm: 2500,      // altitude-curve band bottom (0 ft anchor — NOT the render floor)
-  yMaxMm: 66000,     // display altitude at altMaxFt and above
+  rMaxMm: 120000,    // BASE horizontal display shell rim — REACHED exactly at d = radiusNm
+  yMinMm: 2500,      // BASE altitude-curve band bottom (0 ft anchor — NOT the render floor)
+  yMaxMm: 66000,     // BASE display altitude at altMaxFt and above
   altRefFt: 3000,    // log knee — detail is spent on low, visually interesting traffic
   altMaxFt: 45000,   // above this the altitude curve saturates
   // Hard render floor: no aircraft may EVER draw lower than this, whatever the
@@ -624,8 +645,12 @@ export const FLIGHT_SHELL = {
   // The elevation-true cap made this reachable for ALL distant low traffic
   // (approach traffic at 1500–2000 ft was skimming the yard at the old
   // 2500 mm yMinMm floor — user-reported); the clearance floor is the fix.
-  // It does NOT scale with rMaxMm: on the bigger shell the floored elevation
-  // angles simply get shallower, which is exactly the far-off-in-the-sky read.
+  // It does NOT scale with rMaxMm — and now that the shell radius is
+  // user-definable (FLIGHT_SHELL_BASE_MM / flightShellMm), that is a LOAD-
+  // BEARING exception rather than a hypothetical: `clearMm` is a physical
+  // clearance over a physical house, so it stays 6,500 mm on a 60 m shell and
+  // on a 1,000 m one alike. On a bigger shell the floored elevation angles
+  // simply get shallower, which is exactly the far-off-in-the-sky read.
   clearMm: 6500,
   // Radial mapping exponent — see compressRadiusMm. DERIVED, not tuned: it is
   // the unique power P satisfying the two anchors the user specified,
@@ -643,14 +668,56 @@ export const FLIGHT_SHELL = {
   radialHeadroom: 1.05,
 } as const;
 
+// ── User-definable shell radius ────────────────────────────────────────────
+// The scale FLIGHT_SHELL's millimetre figures are authored at. Every live shell
+// is this reference times `s = shellMm / FLIGHT_SHELL_BASE_MM`, so a shellMm of
+// exactly 120,000 reproduces the pre-2026-07 geometry byte-for-byte.
+export const FLIGHT_SHELL_BASE_MM = 120000;
+
+// Default user-facing shell radius, in METRES: 300 m = 2.5× the authored
+// reference. The old 120 m shell put the whole visible fleet close enough to the
+// property that it read as a shelf hovering over the yard once the neighborhood
+// overlay drew real-scale streets around it (user-reported). 300 m spreads the
+// same traffic properly toward the horizon while — because the model scale
+// rides the same similarity factor — every aircraft keeps its apparent size.
+export const FLIGHT_SHELL_DEFAULT_RADIUS_M = 300;
+
+// Clamp window for FlightsConfig.shellRadiusM, in metres. The lower bound keeps
+// the shell clear of the house + yard; the upper stays far inside CAM_FAR_CEIL
+// (a 1,000 m shell reaches ≈1.14e6 mm, vs the renderer's 13.5e6 ceiling).
+export const FLIGHT_SHELL_MIN_RADIUS_M = 60;
+export const FLIGHT_SHELL_MAX_RADIUS_M = 1000;
+
+// Resolve a configured shell radius (metres) to the display shell's rim, in mm.
+// Absent / non-finite / non-positive → the 300 m default, so an omitted config
+// field, a stale caller and a hand-edited store all land on the same shell.
+export function flightShellMm(shellRadiusM?: number | null): number {
+  const m = typeof shellRadiusM === 'number' && isFinite(shellRadiusM) && shellRadiusM > 0
+    ? Math.min(FLIGHT_SHELL_MAX_RADIUS_M, Math.max(FLIGHT_SHELL_MIN_RADIUS_M, shellRadiusM))
+    : FLIGHT_SHELL_DEFAULT_RADIUS_M;
+  return m * 1000;
+}
+
 // How far from the shell's own centre (the home anchor) anything may be drawn —
 // the far corner of the (rMaxMm × yMaxMm) shell. The renderer records this as a
 // camera-frustum reach requirement while aircraft are on screen, exactly as the
 // neighborhood overlay records its tile extent; the stock 150,000 mm far plane
 // is measured FROM THE CAMERA, so a rim aircraft on the far side of the shell
 // would otherwise clip whenever the overlay is off. Derived, never configured.
+// This constant is the BASE (120 m shell) reach — kept exported unchanged for
+// stale-chunk back-compat. Live callers must use `flightShellReachMm(shellMm)`,
+// which scales it by the similarity factor.
 export const FLIGHT_SHELL_REACH_MM =
   Math.hypot(FLIGHT_SHELL.rMaxMm, FLIGHT_SHELL.yMaxMm);   // ≈136,953 mm
+
+// The same reach for a shell of the given rim, i.e. the base reach × s. At the
+// 300 m default that is ≈342,383 mm; at the 1,000 m maximum ≈1,141,275 mm —
+// both comfortably inside the renderer's CAM_FAR_CEIL (13.5e6 mm).
+export function flightShellReachMm(shellMm: number = flightShellMm()): number {
+  const s = (isFinite(shellMm) && shellMm > 0 ? shellMm : flightShellMm())
+    / FLIGHT_SHELL_BASE_MM;
+  return s * FLIGHT_SHELL_REACH_MM;
+}
 
 // Horizontal compression: RADIUS-ANCHORED power law. The shell is a scale
 // model of the user's configured search radius —
@@ -673,15 +740,23 @@ export const FLIGHT_SHELL_REACH_MM =
 // nothing could ever render AT the horizon (user-reported: "flights 10 miles
 // away still appear close to the property line").
 //
-// Monotonic, f(0) = 0, and bounded by rMaxMm · radialHeadroom^P.
-export function compressRadiusMm(distNm: number, radiusNm: number): number {
-  const { rMaxMm, radialExponent, radialHeadroom } = FLIGHT_SHELL;
+// Monotonic, f(0) = 0, and bounded by shellMm · radialHeadroom^P.
+//
+// `shellMm` is the shell RIM (the user's draw radius, resolved by
+// flightShellMm) and takes the place of the authored FLIGHT_SHELL.rMaxMm — the
+// mapping's SHAPE is untouched, only its overall size, so the result is exactly
+// `s ×` the base value for `s = shellMm / FLIGHT_SHELL_BASE_MM`.
+export function compressRadiusMm(
+  distNm: number, radiusNm: number, shellMm: number = flightShellMm(),
+): number {
+  const { radialExponent, radialHeadroom } = FLIGHT_SHELL;
+  const rMax = isFinite(shellMm) && shellMm > 0 ? shellMm : flightShellMm();
   const d = isFinite(distNm) && distNm > 0 ? distNm : 0;
   // A missing / garbage / non-positive radius falls back to the shipped default
   // rather than dividing by zero — the shell must always have a scale.
   const R = isFinite(radiusNm) && radiusNm > 0 ? radiusNm : FLIGHTS_DEFAULT_RADIUS_NM;
   const u = Math.min(d / R, radialHeadroom);
-  return rMaxMm * Math.pow(u, radialExponent);
+  return rMax * Math.pow(u, radialExponent);
 }
 
 // Altitude compression: log curve over [0, altMaxFt] → [yMinMm, yMaxMm].
@@ -691,11 +766,19 @@ export function compressRadiusMm(distNm: number, radiusNm: number): number {
 // This is the OVERHEAD/near-traffic branch only — it knows nothing about
 // distance, so `flightDisplayPos` caps its output at the true elevation angle
 // before using it. Do not read it as "the display altitude".
-export function compressAltitudeMm(altFt: number): number {
+//
+// BOTH band ends scale with the shell (`s = shellMm / FLIGHT_SHELL_BASE_MM`) so
+// the vertical stays in proportion with the horizontal — the altitude ANCHORS
+// (altRefFt / altMaxFt) are real-world feet and never scale.
+export function compressAltitudeMm(
+  altFt: number, shellMm: number = flightShellMm(),
+): number {
   const { yMinMm, yMaxMm, altRefFt, altMaxFt } = FLIGHT_SHELL;
+  const s = (isFinite(shellMm) && shellMm > 0 ? shellMm : flightShellMm())
+    / FLIGHT_SHELL_BASE_MM;
   const a = Math.max(0, Math.min(altMaxFt, isFinite(altFt) ? altFt : 0));
   const t = Math.log(1 + a / altRefFt) / Math.log(1 + altMaxFt / altRefFt);
-  return yMinMm + (yMaxMm - yMinMm) * t;
+  return s * (yMinMm + (yMaxMm - yMinMm) * t);
 }
 
 // ── Distance-compensated model scale ───────────────────────────────────────
@@ -718,12 +801,25 @@ export function compressAltitudeMm(altFt: number): number {
 // read "fairly small" (the user's word) — natural perspective at 120 m does
 // most of the work now, and this only stops the model dissolving into a pixel.
 // Personal taste rides FlightsConfig.modelScale (0.5–4) on top of it.
+//
+// ── Why the SHELL FACTOR multiplies in here too ────────────────────────────
+// The returned scale is `s · (1 + gain · r/shellMm)` for
+// `s = shellMm / FLIGHT_SHELL_BASE_MM`. That leading `s` is the whole point of
+// making the shell user-definable as a SIMILARITY transform: position and size
+// grow together, so an aircraft on a 300 m shell sits 2.5× farther out at 2.5×
+// the model size and therefore subtends the SAME angle on screen as it did on
+// the 120 m shell. Drop the factor and every plane silently shrinks by 1/s —
+// exactly the "planes got tiny again" regression the gain was reduced to avoid.
 export const FLIGHT_SCALE_GAIN = 0.8;
 
-export function flightDisplayScale(rMm: number): number {
+export function flightDisplayScale(
+  rMm: number, shellMm: number = flightShellMm(),
+): number {
+  const shell = isFinite(shellMm) && shellMm > 0 ? shellMm : flightShellMm();
+  const s = shell / FLIGHT_SHELL_BASE_MM;
   const r = isFinite(rMm) && rMm > 0 ? rMm : 0;
-  const t = Math.min(1, r / FLIGHT_SHELL.rMaxMm);
-  return 1 + FLIGHT_SCALE_GAIN * t;
+  const t = Math.min(1, r / shell);
+  return s * (1 + FLIGHT_SCALE_GAIN * t);
 }
 
 const EARTH_R_M = 6371000;   // sphere radius (matches geo.ts)
@@ -757,14 +853,22 @@ const TWO_PI = Math.PI * 2;
 // The clearMm floor is the single exception to angle-honesty: NOTHING renders
 // below the property-clearance height (a plane must never be able to hit the
 // house), so distant low approach traffic rides the floor instead of the yard.
-export function flightDisplayAltitudeMm(altFt: number, distNm: number, rMm: number): number {
+//
+// Under a shell rescale (`shellMm`) BOTH inner terms are exactly `s ×` their
+// base values — the log curve because compressAltitudeMm scales, the elevation
+// term because `rMm` does — so dispY is `s ×` the base dispY *except* where the
+// ABSOLUTE clearMm floor engages. There the display elevation angle gets
+// shallower on a bigger shell, which is the correct far-off-in-the-sky read.
+export function flightDisplayAltitudeMm(
+  altFt: number, distNm: number, rMm: number, shellMm: number = flightShellMm(),
+): number {
   const altM = (isFinite(altFt) ? altFt : 0) * FT_M;
   // distM floored at 1 m so an aircraft sitting exactly on the origin (r = 0
   // anyway) can never divide by zero.
   const distM = Math.max((isFinite(distNm) && distNm > 0 ? distNm : 0) * NM_M, 1);
   const r = isFinite(rMm) && rMm > 0 ? rMm : 0;
   return Math.max(FLIGHT_SHELL.clearMm,
-                  Math.min(compressAltitudeMm(altFt), r * (altM / distM)));
+                  Math.min(compressAltitudeMm(altFt, shellMm), r * (altM / distM)));
 }
 
 // True bearing + great-circle-ish distance from the home origin to an aircraft.
@@ -793,17 +897,23 @@ export function flightBearingDistance(
 //
 // The display ALTITUDE is capped at the true elevation angle — see
 // `flightDisplayAltitudeMm`, which owns that composition for both views.
+//
+// `shellMm` (the user's draw radius, resolved by flightShellMm) rescales the
+// whole result as a similarity: planX / planY / dispY are all exactly `s ×`
+// their 120 m-reference values, except where dispY's absolute clearMm floor
+// engages. Absent = the 300 m default.
 export function flightDisplayPos(
   fp: FlightPoint, originLat: number, originLon: number, thetaRad: number, radiusNm: number,
+  shellMm: number = flightShellMm(),
 ): { planX: number; planY: number; dispY: number; distNm: number; bearingRad: number } {
   const { bearingRad, distNm } = flightBearingDistance(originLat, originLon, fp.lat, fp.lon);
   const e = Math.sin(bearingRad), n = Math.cos(bearingRad);   // unit geo vector
   const c = Math.cos(thetaRad), s = Math.sin(thetaRad);
-  const r = compressRadiusMm(distNm, radiusNm);
+  const r = compressRadiusMm(distNm, radiusNm, shellMm);
   return {
     planX: (c * e - s * n) * r,
     planY: (s * e + c * n) * r,
-    dispY: flightDisplayAltitudeMm(fp.altFt, distNm, r),
+    dispY: flightDisplayAltitudeMm(fp.altFt, distNm, r, shellMm),
     distNm, bearingRad,
   };
 }

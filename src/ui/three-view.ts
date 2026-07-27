@@ -16,7 +16,7 @@ import { resolveScreenContent } from '../surfaces.js';
 import { resolveScenePreset, resolveTimeBucket } from '../time-of-day.js';
 import { conditionIntensity, weatherEffectEnabled, worstAlertSeverity } from '../weather.js';
 import { roadCapForRadius } from '../neighborhood.js';
-import { FLIGHTS_DEFAULT_RADIUS_NM } from '../flights.js';
+import { FLIGHTS_DEFAULT_RADIUS_NM, flightShellMm } from '../flights.js';
 import { loadModel } from '../model-store.js';
 import { newId } from '../storage.js';
 import type { Planner } from '../planner.js';
@@ -1590,6 +1590,11 @@ export class ThreeView extends LitElement {
                           privacyDim: flCfg?.privacyDim,
                           banners: flCfg?.banners,
                           modelScale: flCfg?.modelScale,
+                          // User draw radius → the display shell's rim in mm.
+                          // Config-path like every other opt here, so configRev
+                          // (already in _keyFlights) covers an edit; no new
+                          // dirty-key input.
+                          shellMm: flightShellMm(flCfg?.shellRadiusM),
                           // User glow rules (docs/research/flight-glow-rules.md).
                           // Config-path like every other opt here, so configRev
                           // — already in the key — covers an edit; no new

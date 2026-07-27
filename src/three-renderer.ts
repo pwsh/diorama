@@ -92,7 +92,7 @@ import { skySnapshot, moonAltAz, capSampleAltAz, satAltAz } from './sky-astro.js
 // curves + the model-kind classifier are pulled in; NEVER adsb-sources or Planner.
 import {
   compressRadiusMm, compressAltitudeMm, flightDisplayAltitudeMm, isEmergency,
-  flightDisplayScale, FLIGHT_SHELL_REACH_MM,
+  flightDisplayScale, flightShellMm, flightShellReachMm,
   FLIGHT_LABEL_FIELDS_DEFAULT, FLIGHTS_DEFAULT_RADIUS_NM, sanitizeLabelFields,
   resolveFlightGlow, flightGlowFrame, sanitizeFlightGlowRules,
   type FlightPoint, type IssNow, type FlightGlowPattern, type FlightGlowRule,
@@ -1905,6 +1905,10 @@ export class ThreeDRenderer {
   // FlightsConfig.modelScale — a plain display multiplier folded into
   // _flightRigScale (the ONE site build / rebuild / advance all read).
   private _flightsModelScale = 1;
+  // FlightsConfig.shellRadiusM resolved to the display shell's rim, in mm — the
+  // similarity factor every flight-geometry call is scaled by. Stale-chunk
+  // default = the same 300 m default flights.ts resolves for an absent config.
+  private _flightShellMm = flightShellMm();
   private _beaconGlowTex: THREE.CanvasTexture | null = null;   // shared; freed in destroy()
   private _v3flight = new THREE.Vector3();   // scratch — _advanceFlights allocates nothing
   // ISS: one sprite in its OWN camera-recentered subgroup (the _realSkyGroup
@@ -3346,7 +3350,8 @@ export class ThreeDRenderer {
   // ── Frustum reach requirements: PER SOURCE, effective = MAX ────────────────
   // Two independent features draw content past the stock 150,000 mm far plane:
   // the neighborhood overlay (tile extent, up to km) and the live-aircraft
-  // display shell (FLIGHT_SHELL_REACH_MM, ≈137 m). Each records its OWN
+  // display shell (flightShellReachMm — ≈342 m at the 300 m default draw
+  // radius, ≈1.14 km at the 1,000 m maximum). Each records its OWN
   // requirement; the far/near widening uses the larger of the two, and the stock
   // triple restores EXACTLY (strict ===) only when BOTH are absent — the
   // load-bearing restore contract, now a union.
@@ -12563,7 +12568,7 @@ export class ThreeDRenderer {
                 anchorScene: { x: number; z: number },
                 opts?: { labelFields?: string[]; beacons?: boolean; privacyDim?: boolean;
                          banners?: boolean; modelScale?: number;
-                         glowRules?: FlightGlowRule[] }): void {
+                         glowRules?: FlightGlowRule[]; shellMm?: number }): void {
     this._flightsOrigin = origin;
     this._flightsTheta = isFinite(thetaRad) ? thetaRad : 0;
     this._flightsRadius = isFinite(radiusNm) && radiusNm > 0 ? radiusNm : FLIGHTS_DEFAULT_RADIUS_NM;
@@ -12582,6 +12587,11 @@ export class ThreeDRenderer {
     // shipped plate size exactly). LIVE rigs pick the new factor up on the very
     // next frame — _advanceFlights re-reads _flightRigScale every tick.
     this._flightsModelScale = flightModelScale(opts?.modelScale);
+    // User draw radius (FlightsConfig.shellRadiusM → flightShellMm). Absent (a
+    // stale three-view) → the shared default, so both graphs agree on the shell
+    // even across a mixed-version module pair.
+    this._flightShellMm = flightShellMm(opts?.shellMm != null
+      ? opts.shellMm / 1000 : undefined);
     this._flightsGroup.position.set(anchorScene?.x ?? 0, 0, anchorScene?.z ?? 0);
 
     const seen = new Set<string>();
@@ -12610,7 +12620,11 @@ export class ThreeDRenderer {
   private _flightsHaveContent = false;
   private _recordFlightsFrustum(): void {
     const live = this._flightsHaveContent && this._flightsGroup.visible;
-    this._recordFrustumReq('flights', live ? FLIGHT_SHELL_REACH_MM : null);
+    // Scales with the user's shell radius: ≈342,383 mm at the 300 m default,
+    // ≈1,141,275 mm at the 1,000 m maximum — both far inside CAM_FAR_CEIL
+    // (13.5e6). Flights still deliberately do NOT raise controls.maxDistance.
+    this._recordFrustumReq('flights',
+      live ? flightShellReachMm(this._flightShellMm) : null);
   }
 
   // Fold one poll fix into a live rig: real position + dead-reckoning rates +
@@ -13118,7 +13132,7 @@ export class ThreeDRenderer {
   // THIRD multiplicative term, so it can neither flatten the rim-growth curve
   // nor cancel a fade.
   private _flightRigScale(rig: FlightRig): number {
-    return rig.fade * flightDisplayScale(Math.hypot(rig.curX, rig.curZ))
+    return rig.fade * flightDisplayScale(Math.hypot(rig.curX, rig.curZ), this._flightShellMm)
       * this._flightsModelScale;
   }
 
@@ -13130,7 +13144,7 @@ export class ThreeDRenderer {
   private _flightScenePos(lat: number, lon: number, altFt: number,
                           out: THREE.Vector3): THREE.Vector3 {
     const o = this._flightsOrigin;
-    if (!o) return out.set(0, compressAltitudeMm(altFt), 0);
+    if (!o) return out.set(0, compressAltitudeMm(altFt, this._flightShellMm), 0);
     const east = (lon - o.lon) * FLIGHT_DEG * Math.cos(o.lat * FLIGHT_DEG) * FLIGHT_EARTH_R_M;
     const north = (lat - o.lat) * FLIGHT_DEG * FLIGHT_EARTH_R_M;
     const len = Math.hypot(east, north);
@@ -13139,11 +13153,12 @@ export class ThreeDRenderer {
     // atan2 round-trip. Degenerate (aircraft exactly overhead) → r = 0 anyway.
     const e = len > 0 ? east / len : 0, n = len > 0 ? north / len : 1;
     const c = Math.cos(this._flightsTheta), s = Math.sin(this._flightsTheta);
-    const r = compressRadiusMm(distNm, this._flightsRadius);
+    const r = compressRadiusMm(distNm, this._flightsRadius, this._flightShellMm);
     // Display height goes through the SHARED composition (elevation-true cap)
     // so this inline can never drift from the pure flightDisplayPos the 2D
     // canvas draws with — flights-render-test asserts the two agree.
-    return out.set(-(c * e - s * n) * r, flightDisplayAltitudeMm(altFt, distNm, r),
+    return out.set(-(c * e - s * n) * r,
+                   flightDisplayAltitudeMm(altFt, distNm, r, this._flightShellMm),
                    (s * e + c * n) * r);
   }
 

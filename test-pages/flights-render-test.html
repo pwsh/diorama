@@ -74,8 +74,14 @@
   const rig = hex => r._flightRigs.get(hex);
   // Expected scene-RELATIVE offset for a fix: relative plan → scene flips dx,
   // keeps dy (the _w mirror); y = the compressed display altitude.
-  const expectPos = (fp, theta = 0, radiusNm = RAD_NM) => {
-    const d = F.flightDisplayPos(fp, OLAT, OLON, theta, radiusNm);
+  // The display shell's radius is USER-DEFINABLE (FlightsConfig.shellRadiusM →
+  // updateFlights opts.shellMm). With no opts the renderer resolves the SAME
+  // default the pure module does, so `expectPos` may omit it; section 4d drives
+  // a non-default shell explicitly and threads it through everywhere.
+  const SHELL0 = F.flightShellMm();                    // the 300 m default, in mm
+  const SFAC = shellMm => shellMm / F.FLIGHT_SHELL_BASE_MM;   // similarity factor
+  const expectPos = (fp, theta = 0, radiusNm = RAD_NM, shellMm = SHELL0) => {
+    const d = F.flightDisplayPos(fp, OLAT, OLON, theta, radiusNm, shellMm);
     return { x: -d.planX, y: d.dispY, z: d.planY };
   };
   const descendants = (o) => { const out = []; o.traverse(c => out.push(c)); return out; };
@@ -204,7 +210,7 @@
   near('fresh rig snaps to display y (compressed altitude)', g4.y, e4.y, 1);
   near('fresh rig snaps to display z', g4.z, e4.z, 1);
   ok('display radius stays inside the shell',
-     Math.hypot(e4.x, e4.z) < F.FLIGHT_SHELL.rMaxMm, `r=${Math.round(Math.hypot(e4.x, e4.z))}`);
+     Math.hypot(e4.x, e4.z) < SHELL0, `r=${Math.round(Math.hypot(e4.x, e4.z))}`);
   // Anchor change moves the whole shell, not the rigs' local offsets.
   upd([P4], { anchor: { x: -2200, z: 3300 } });
   ok('anchor shift moves _flightsGroup',
@@ -246,12 +252,16 @@
     ok('4b: a distant rig renders LARGER than a near one',
        rf.asm.scale.x > rn.asm.scale.x * 1.5,
        `near ${rn.asm.scale.x.toFixed(2)}× rim ${rf.asm.scale.x.toFixed(2)}×`);
-    ok('4b: a near rig is ~unchanged from the pre-rescale 1× size',
-       rn.asm.scale.x < 1.2, `near=${rn.asm.scale.x.toFixed(3)}×`);
+    // The similarity factor rides IN the model scale on purpose: on the 300 m
+    // default shell a near rig is 2.5× the authored size while sitting 2.5×
+    // farther out, so its APPARENT size is unchanged. Measured against s.
+    ok('4b: a near rig is ~unchanged from the pre-rescale 1× size (× the shell factor)',
+       rn.asm.scale.x < 1.2 * SFAC(SHELL0), `near=${rn.asm.scale.x.toFixed(3)}×`);
     ok('4b: scale is uniform on all three axes',
        rn.asm.scale.x === rn.asm.scale.y && rn.asm.scale.y === rn.asm.scale.z);
-    ok('4b: rim scale stays under the 1+gain ceiling',
-       rf.asm.scale.x <= 1 + F.FLIGHT_SCALE_GAIN + 1e-9, `${rf.asm.scale.x.toFixed(4)}×`);
+    ok('4b: rim scale stays under the 1+gain ceiling (× the shell factor)',
+       rf.asm.scale.x <= SFAC(SHELL0) * (1 + F.FLIGHT_SCALE_GAIN) + 1e-9,
+       `${rf.asm.scale.x.toFixed(4)}×`);
     // _advanceFlights keeps the composition every frame.
     step(0.05, 4);
     ok('4b: per-frame advance keeps scale = fade × displayScale',
@@ -365,8 +375,10 @@
        Math.abs(r._camera.near - r._camera.far / 15000) < 1e-6, `near=${r._camera.near}`);
     ok('4c: …but maxDistance stays STOCK (flights never stretch the orbit range)',
        r._controls.maxDistance === MAXD0, `maxD=${r._controls.maxDistance}`);
-    ok('4c: the recorded requirement is the shell reach constant',
-       r._frustumReqFlights === F.FLIGHT_SHELL_REACH_MM, `${r._frustumReqFlights}`);
+    ok('4c: the recorded requirement is the shell reach at the live draw radius',
+       r._frustumReqFlights === F.flightShellReachMm(SHELL0), `${r._frustumReqFlights}`);
+    ok('4c: …i.e. the base constant scaled by the shell factor',
+       Math.abs(r._frustumReqFlights - SFAC(SHELL0) * F.FLIGHT_SHELL_REACH_MM) < 1e-6);
     // Hiding the Flights layer must drop the requirement (rigs stay alive).
     r.setLayerVisibility({ flights: false });
     ok('4c: hiding the Flights layer restores the stock triple exactly', stock(),
@@ -388,6 +400,110 @@
        `${r._camera.near}/${r._camera.far}/${r._controls.maxDistance}`);
     upd([]); step(1, 3);
     ok('4c: board clear after the frustum checks', r._flightRigs.size === 0);
+  }
+
+  // ── 4d. USER-DEFINABLE draw radius (updateFlights opts.shellMm) ───────────
+  // FlightsConfig.shellRadiusM → flightShellMm → opts.shellMm. The renderer
+  // must thread ONE stored factor through all four consumers — _flightScenePos
+  // (position), _flightRigScale (size), the frustum requirement, and the
+  // no-origin fallback — so the 3D shell can never disagree with the pure
+  // module the 2D canvas draws from.
+  {
+    upd([]); step(1, 3);
+    const SHELL2 = 240000;                      // 240 m — deliberately NOT the default
+    const FAR_FP = FP({ hex: 'sh1', lat: OLAT + 0.18, lon: OLON - 0.25, altFt: 28000 });
+    upd([FAR_FP], { opts: { shellMm: SHELL2 } });
+    const want2 = expectPos(FAR_FP, 0, RAD_NM, SHELL2);
+    const got2 = rig('sh1').asm.position;
+    ok('4d: rig snaps to the NON-DEFAULT shell position',
+       Math.abs(got2.x - want2.x) < 1 && Math.abs(got2.y - want2.y) < 1
+       && Math.abs(got2.z - want2.z) < 1,
+       `got ${got2.x.toFixed(1)},${got2.y.toFixed(1)},${got2.z.toFixed(1)}`);
+    ok('4d: …and that is NOT where the default shell would have put it',
+       Math.abs(got2.x - expectPos(FAR_FP).x) > 1000);
+
+    // The zero-alloc inline must mirror the pure function AT THIS SHELL TOO —
+    // the parity the whole single-sourcing discipline exists for.
+    let parity = true;
+    for (const [lat, lon, alt] of [[OLAT + 0.4, OLON + 0.05, 3000],
+                                   [OLAT - 0.3, OLON - 0.5, 41000], [OLAT, OLON, 800]]) {
+      const w = expectPos(FP({ lat, lon, altFt: alt }), 0, RAD_NM, SHELL2);
+      const g = r._flightScenePos(lat, lon, alt, r._v3flight);
+      if (Math.abs(g.x - w.x) > 0.001 || Math.abs(g.y - w.y) > 0.001
+        || Math.abs(g.z - w.z) > 0.001) parity = false;
+    }
+    ok('4d: _flightScenePos == flightDisplayPos at a non-default shell', parity);
+
+    // Similarity: 240,000 is exactly 2× the 120,000 authored reference. A FRESH
+    // rig snaps to its display position (a poll on a LIVE rig is a correction
+    // the per-frame ease glides onto), so each shell gets a clean board.
+    upd([]); step(1, 3);
+    upd([FAR_FP], { opts: { shellMm: F.FLIGHT_SHELL_BASE_MM } });
+    const pBase = rig('sh1').asm.position.clone();
+    upd([]); step(1, 3);
+    upd([FAR_FP], { opts: { shellMm: SHELL2 } });
+    const pTwice = rig('sh1').asm.position.clone();
+    ok('4d: the rescale is a pure similarity (2× shell → 2× offsets)',
+       Math.abs(pTwice.x - 2 * pBase.x) < 0.01 && Math.abs(pTwice.z - 2 * pBase.z) < 0.01
+       && Math.abs(pTwice.y - 2 * pBase.y) < 0.01,
+       `${pBase.x.toFixed(0)} → ${pTwice.x.toFixed(0)}`);
+    // A LIVE rig glides to the new shell rather than jumping — the same eased
+    // correction path a poll uses, so a settings edit is not a jump cut.
+    upd([FAR_FP], { opts: { shellMm: F.FLIGHT_SHELL_BASE_MM } });
+    const midEase = rig('sh1').asm.position.x;
+    step(0.05, 2);
+    ok('4d: a live rig EASES toward the new shell, never snaps',
+       Math.abs(rig('sh1').asm.position.x - midEase) > 1e-6
+       && Math.abs(rig('sh1').asm.position.x - pBase.x)
+          < Math.abs(midEase - pBase.x) + 1e-6,
+       `${midEase.toFixed(0)} → ${rig('sh1').asm.position.x.toFixed(0)} (target ${pBase.x.toFixed(0)})`);
+    step(0.5, 90);
+    ok('4d: …and converges on the new shell position',
+       Math.abs(rig('sh1').asm.position.x - pBase.x) < 1,
+       `${rig('sh1').asm.position.x.toFixed(1)} want ${pBase.x.toFixed(1)}`);
+
+    // Size composition: fade × flightDisplayScale(r, shell) × modelScale.
+    upd([FAR_FP], { opts: { shellMm: SHELL2, modelScale: 1.5 } });
+    step(0);
+    const rg = rig('sh1');
+    const wantScale = rg.fade * F.flightDisplayScale(Math.hypot(rg.curX, rg.curZ), SHELL2) * 1.5;
+    ok('4d: rig scale composes the shell factor with modelScale',
+       Math.abs(rg.asm.scale.x - wantScale) < 1e-9,
+       `scale=${rg.asm.scale.x.toFixed(4)} want=${wantScale.toFixed(4)}`);
+    ok('4d: …and the shell factor is genuinely in there (2× the base-shell size)',
+       Math.abs(rg.asm.scale.x
+         - 2 * rg.fade * F.flightDisplayScale(Math.hypot(rg.curX, rg.curZ) / 2,
+                                              F.FLIGHT_SHELL_BASE_MM) * 1.5) < 1e-6);
+
+    // Frustum reach follows the live shell — never the base constant.
+    upd([FAR_FP], { opts: { shellMm: SHELL2 } });
+    ok('4d: the frustum requirement scales with the draw radius',
+       Math.abs(r._frustumReqFlights - F.flightShellReachMm(SHELL2)) < 1e-6,
+       `${r._frustumReqFlights}`);
+    ok('4d: …which is 2× the base reach constant',
+       Math.abs(r._frustumReqFlights - 2 * F.FLIGHT_SHELL_REACH_MM) < 1e-6);
+    ok('4d: …and maxDistance is STILL stock (the deliberate asymmetry holds)',
+       r._controls.maxDistance === 45000, `maxD=${r._controls.maxDistance}`);
+
+    // Clamp + stale-chunk safety, renderer-side.
+    upd([FAR_FP], { opts: { shellMm: 10000 } });          // 10 m → clamps up to 60 m
+    ok('4d: an absurdly small shell clamps up to the 60 m minimum',
+       Math.abs(r._frustumReqFlights - F.flightShellReachMm(60000)) < 1e-6,
+       `${r._frustumReqFlights}`);
+    upd([FAR_FP], { opts: { shellMm: NaN } });
+    ok('4d: garbage shellMm falls back to the default shell',
+       Math.abs(r._frustumReqFlights - F.flightShellReachMm(SHELL0)) < 1e-6);
+    upd([]); step(1, 3);
+    upd([FAR_FP], { opts: { modelScale: 1 } });            // opts present, shellMm absent
+    ok('4d: opts without shellMm (a stale three-view) = the default shell',
+       Math.abs(r._frustumReqFlights - F.flightShellReachMm(SHELL0)) < 1e-6);
+    const wantDef = expectPos(FAR_FP);
+    ok('4d: …and the position matches the default-shell projection',
+       Math.abs(rig('sh1').asm.position.x - wantDef.x) < 1,
+       `${rig('sh1').asm.position.x.toFixed(1)} want ${wantDef.x.toFixed(1)}`);
+
+    upd([]); step(1, 3);                                  // back to the default shell
+    ok('4d: board clear after the draw-radius checks', r._flightRigs.size === 0);
   }
 
   // ── 5. heading ─────────────────────────────────────────────────────────────

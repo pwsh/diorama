@@ -42,7 +42,7 @@ import { ALERT_BEACON_DEFAULTS, alertBeaconState, alertBeaconColor, alertBeaconA
 import { flagDominant } from './flags.js';
 import { vacMapAffine, vacSegColor, type ParsedVacMap, type VacSegment } from './valetudo-map.js';
 import {
-  flightDisplayPos, sanitizeLabelFields,
+  flightDisplayPos, flightShellMm, sanitizeLabelFields,
   resolveFlightGlow, flightGlowFrame, lerpHexColor, FLIGHT_DEFAULT_BEACON,
   FLIGHT_LABEL_FIELDS_DEFAULT, FLIGHTS_DEFAULT_RADIUS_NM, type FlightPoint,
 } from './flights.js';
@@ -426,6 +426,10 @@ function drawFlights(ctx: CanvasRenderingContext2D, p: Planner, view: View): voi
   const ax = calibrated ? fit!.transform.tx : f.w / 2;
   const ay = calibrated ? fit!.transform.ty : f.d / 2;
   const radiusNm = cfg.radiusNm ?? FLIGHTS_DEFAULT_RADIUS_NM;
+  // User draw radius → the display shell's rim in mm. The 2D plan and the 3D
+  // shell must resolve it identically (both go through flightShellMm), or a
+  // dot and its rig would sit at different distances from the house.
+  const shellMm = flightShellMm(cfg.shellRadiusM);
   const showLabels = cfg.showLabels !== false;
   const fields = sanitizeLabelFields(cfg.labelFields) ?? FLIGHT_LABEL_FIELDS_DEFAULT;
   const beaconsOn = cfg.beacons !== false;
@@ -440,7 +444,7 @@ function drawFlights(ctx: CanvasRenderingContext2D, p: Planner, view: View): voi
   const tSec = performance.now() / 1000;
   ctx.save();
   for (const fp of list) {
-    const d = flightDisplayPos(fp, origin.lat, origin.lon, theta, radiusNm);
+    const d = flightDisplayPos(fp, origin.lat, origin.lon, theta, radiusNm, shellMm);
     const wx = ax + d.planX, wy = ay + d.planY;
     const pt = mmToPx(view, wx, wy);
     // Publish the pick target: the dart plus a comfortable touch margin (the

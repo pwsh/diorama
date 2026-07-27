@@ -57,6 +57,8 @@ import type {
 import { normalizeAircraftList, flightBearingDistance, MAX_AIRCRAFT,
          isEmergency, emergencySquawk, sanitizeLabelFields,
          sanitizeFlightGlowRules, FLIGHTS_DEFAULT_RADIUS_NM,
+         FLIGHT_SHELL_DEFAULT_RADIUS_M, FLIGHT_SHELL_MIN_RADIUS_M,
+         FLIGHT_SHELL_MAX_RADIUS_M,
          type FlightPoint, type IssNow } from './flights.js';
 import { fetchLocalAircraft, fetchAirplanesLive, fetchIssNow } from './adsb-sources.js';
 // The ONE satellite alt/az routine (the renderer's sky uses the same function —
@@ -5243,6 +5245,18 @@ export class Planner extends EventTarget {
       const n = typeof ms === 'number' && isFinite(ms) && ms > 0
         ? Math.min(4, Math.max(0.5, ms)) : 1;
       this.store.flights.modelScale = n === 1 ? undefined : n;
+    }
+    // Display-shell radius (metres): same discipline as modelScale — clamp
+    // 60..1000 HERE so an import or hand-edited config can never hand the
+    // renderer a NaN or a 50 km shell, and exactly the default (300) clears
+    // back to undefined so the stored config stays minimal.
+    const sr = this.store.flights.shellRadiusM;
+    if (sr !== undefined) {
+      const n = typeof sr === 'number' && isFinite(sr) && sr > 0
+        ? Math.min(FLIGHT_SHELL_MAX_RADIUS_M, Math.max(FLIGHT_SHELL_MIN_RADIUS_M, sr))
+        : FLIGHT_SHELL_DEFAULT_RADIUS_M;
+      this.store.flights.shellRadiusM =
+        n === FLIGHT_SHELL_DEFAULT_RADIUS_M ? undefined : n;
     }
     // Same discipline for the user glow rules (docs/research/flight-glow-rules.md
     // §6.3): unknown patterns / unusable colours drop the rule, numeric criteria

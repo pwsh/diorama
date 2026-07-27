@@ -230,6 +230,29 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **User-definable flight draw radius** (2026-07-27, user request:
+  "max draw distance needs to be doubled or tripled; make a user
+  definable draw radius aircraft scale into"; unreleased — on main
+  past v0.34.0). `FlightsConfig.shellRadiusM` (Settings ▸ Flight
+  tracking "Draw radius (m)", clamp 60–1000, **default 300** = 2.5×
+  the old fixed 120 m shell; exactly-default → undefined in
+  setFlights, the modelScale idiom). The whole shell is now a
+  SIMILARITY transform of the authored 120 m reference
+  (`FLIGHT_SHELL_BASE_MM`): every shell fn takes a trailing
+  `shellMm = flightShellMm()` and scales rMax/yMin/yMax by
+  `s = shellMm/120000`; `flightDisplayScale` gains a leading `s`
+  factor so apparent angular sizes are IDENTICAL at every scale (no
+  "planes got tiny" regression); `clearMm` 6500 stays ABSOLUTE (a
+  physical property-clearance floor — floored traffic reads
+  shallower on a bigger shell, correct). Frustum requirement is now
+  `flightShellReachMm(_flightShellMm)` (≈342 k default / ≈1.14 M max,
+  far inside CAM_FAR_CEIL); flights still never raise
+  controls.maxDistance. Renderer re-clamps `opts.shellMm/1000`
+  through the one flightShellMm implementation. flights 518→561,
+  render 350→367 (incl. non-default-shell parity + eased-glide
+  pinning — a live rig glides, never snaps, on a shell change),
+  ui 261→271; NBHDRENDER 95/95 re-verified (shared frustum recorder).
+
 - **Radius-anchored flight distance mapping** (2026-07-27,
   user-reported: "10 mi flights still near the property line; 15 nm
   should render at the rim, 10 nm at the midpoint"). compressRadiusMm

@@ -1295,6 +1295,15 @@ export interface FlightsConfig {
   // fade, so the rim/near growth curve and the fade-out are both preserved —
   // this only sets how big the toy plate reads at a given zoom.
   modelScale?: number;
+  // Scene radius (METRES) the search radius maps onto — the display shell's
+  // rim, i.e. where an aircraft at exactly `radiusNm` renders. Default 300,
+  // clamp 60..1000 (FLIGHT_SHELL_DEFAULT_RADIUS_M / flightShellMm in
+  // src/flights.ts, which owns the resolution + the clamp). The shell is a
+  // SIMILARITY transform of a 120 m reference: raising this pushes traffic
+  // deeper toward the horizon AND grows the models by the same factor, so
+  // apparent sizes are unchanged. `setFlights` normalizes exactly-300 back to
+  // undefined (the modelScale idiom).
+  shellRadiusM?: number;
   // Towed banners on small piston singles with a callsign (the bg tow-plane
   // idiom). Charming but busy over a dense feed — ABSENT = ON (today's
   // behavior); false swaps those aircraft back onto the ordinary label plate.

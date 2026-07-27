@@ -39,6 +39,25 @@
 <script type="module">
   const V = '?v=' + Date.now();
   const F = await import('./flights.mod.js' + V);
+
+  // ── Base-shell view of the geometry API ──────────────────────────────────
+  // The display shell's radius is USER-DEFINABLE (FlightsConfig.shellRadiusM):
+  // every geometry function takes a trailing `shellMm`, whose ABSENT default is
+  // the 300 m user default. All the derivation goldens below were authored
+  // against the 120 m AUTHORED REFERENCE (FLIGHT_SHELL_BASE_MM), so sections
+  // 3–6d call through `FB` — the very same functions with `shellMm` pinned to
+  // that reference — and stay byte-identical. Section 6e then exercises the new
+  // default, the clamp and the SIMILARITY law that relates the two.
+  const BASE = F.FLIGHT_SHELL_BASE_MM;
+  const FB = {
+    ...F,
+    compressRadiusMm: (d, r, s = BASE) => F.compressRadiusMm(d, r, s),
+    compressAltitudeMm: (a, s = BASE) => F.compressAltitudeMm(a, s),
+    flightDisplayAltitudeMm: (a, d, r, s = BASE) => F.flightDisplayAltitudeMm(a, d, r, s),
+    flightDisplayScale: (r, s = BASE) => F.flightDisplayScale(r, s),
+    flightDisplayPos: (fp, la, lo, th, rad, s = BASE) =>
+      F.flightDisplayPos(fp, la, lo, th, rad, s),
+  };
   const AT = await import('./aircraft-types.mod.js' + V);
   const SA = await import('./sky-astro.mod.js' + V);
   const { Planner } = await import('./planner.mod.js' + V);
@@ -148,12 +167,12 @@
     //   r = rMax · clamp(d/R, 0, 1.05)^P,  P = ln2/ln1.5 ≈ 1.7095
     // whose exponent is DERIVED from exactly those two anchors.
     {
-      const R = F.FLIGHT_SHELL.rMaxMm, P = F.FLIGHT_SHELL.radialExponent;
-      const HEAD = F.FLIGHT_SHELL.radialHeadroom, RMAX_HEAD = R * Math.pow(HEAD, P);
-      ok('6: 0 nm → 0 mm', F.compressRadiusMm(0, 30) === 0);
+      const R = FB.FLIGHT_SHELL.rMaxMm, P = FB.FLIGHT_SHELL.radialExponent;
+      const HEAD = FB.FLIGHT_SHELL.radialHeadroom, RMAX_HEAD = R * Math.pow(HEAD, P);
+      ok('6: 0 nm → 0 mm', FB.compressRadiusMm(0, 30) === 0);
       let mono = true, bounded = true, prev = -1;
       for (let d = 0; d <= 250; d += 0.1) {
-        const v = F.compressRadiusMm(d, 30);
+        const v = FB.compressRadiusMm(d, 30);
         if (v < prev - 1e-9) mono = false;
         if (!(v <= RMAX_HEAD + 1e-6)) bounded = false;
         prev = v;
@@ -161,8 +180,8 @@
       ok('6: monotonically non-decreasing over 0..250 nm', mono);
       ok('6: bounded by rMaxMm · headroom^P (the dead-reckoning slack)', bounded,
         `cap=${RMAX_HEAD.toFixed(1)}`);
-      ok('6: negative distance clamps to 0', F.compressRadiusMm(-5, 30) === 0);
-      ok('6: non-finite distance clamps to 0', F.compressRadiusMm(NaN, 30) === 0);
+      ok('6: negative distance clamps to 0', FB.compressRadiusMm(-5, 30) === 0);
+      ok('6: non-finite distance clamps to 0', FB.compressRadiusMm(NaN, 30) === 0);
 
       // THE exponent, and the two anchors it was derived from.
       near('6: radialExponent is ln2/ln1.5', P, Math.LN2 / Math.log(1.5), 1e-15);
@@ -174,22 +193,22 @@
       // typed, so 10-of-15 and 20-of-30 read identically.
       let rimAll = true, midAll = true, sevenAll = true;
       for (const rad of [5, 15, 30, 100]) {
-        if (Math.abs(F.compressRadiusMm(rad, rad) - R) > 1e-6) rimAll = false;
-        if (Math.abs(F.compressRadiusMm(2 * rad / 3, rad) - R / 2) > 1e-6) midAll = false;
+        if (Math.abs(FB.compressRadiusMm(rad, rad) - R) > 1e-6) rimAll = false;
+        if (Math.abs(FB.compressRadiusMm(2 * rad / 3, rad) - R / 2) > 1e-6) midAll = false;
         // …and the whole curve is radius-invariant in u, not just the anchors.
-        if (Math.abs(F.compressRadiusMm(7 * rad / 15, rad) / R - 0.2717461217) > 1e-9) sevenAll = false;
+        if (Math.abs(FB.compressRadiusMm(7 * rad / 15, rad) / R - 0.2717461217) > 1e-9) sevenAll = false;
       }
       ok('6: d = radiusNm renders AT the rim, at every radius (5/15/30/100)', rimAll);
       ok('6: d = ⅔·radiusNm renders at the MIDPOINT, at every radius', midAll);
       ok('6: the curve is a pure function of d/radiusNm (scale model)', sevenAll);
 
       // The user's headline numbers, at the shipped default radius.
-      near('6: 15 nm @ radius 15 → the rim exactly', F.compressRadiusMm(15, 15), 120000, 1e-9);
-      near('6: 10 nm @ radius 15 → half way out exactly', F.compressRadiusMm(10, 15), 60000, 1e-9);
+      near('6: 15 nm @ radius 15 → the rim exactly', FB.compressRadiusMm(15, 15), 120000, 1e-9);
+      near('6: 10 nm @ radius 15 → half way out exactly', FB.compressRadiusMm(10, 15), 60000, 1e-9);
       near('6: 7.5 nm @ radius 15 → 36,691.6 mm (30.6 %)',
-        F.compressRadiusMm(7.5, 15), 36691.6354, 0.01);
+        FB.compressRadiusMm(7.5, 15), 36691.6354, 0.01);
       // The OLD curve put 10 nm at 71 % of the shell — the whole complaint.
-      const pct10 = 100 * F.compressRadiusMm(10, 15) / R;
+      const pct10 = 100 * FB.compressRadiusMm(10, 15) / R;
       ok('6: 10 nm is no longer crowded into the outer shell (was 71 %)',
         pct10 > 45 && pct10 < 55, `${pct10.toFixed(1)} %`);
 
@@ -197,45 +216,45 @@
       // pins — the planner filters d > radiusNm, so this is dead-reckoning
       // slack only (a drifting rig must not freeze onto the rim).
       ok('6: keeps expanding just past the rim (dead-reckoning slack)',
-        F.compressRadiusMm(15.3, 15) > R);
+        FB.compressRadiusMm(15.3, 15) > R);
       near('6: pins at the headroom cap past 1.05·radius',
-        F.compressRadiusMm(90, 15), RMAX_HEAD, 1e-6);
+        FB.compressRadiusMm(90, 15), RMAX_HEAD, 1e-6);
       ok('6: bigger radius pushes the same aircraft inward',
-        F.compressRadiusMm(20, 100) < F.compressRadiusMm(20, 20));
+        FB.compressRadiusMm(20, 100) < FB.compressRadiusMm(20, 20));
       // A garbage/zero radius must not divide by zero — it falls back to the
       // shipped default rather than producing NaN/Infinity.
       near('6: radius 0 falls back to the default radius',
-        F.compressRadiusMm(10, 0), F.compressRadiusMm(10, F.FLIGHTS_DEFAULT_RADIUS_NM), 1e-9);
+        FB.compressRadiusMm(10, 0), FB.compressRadiusMm(10, FB.FLIGHTS_DEFAULT_RADIUS_NM), 1e-9);
       ok('6: non-finite radius is finite + defaulted',
-        Number.isFinite(F.compressRadiusMm(10, NaN))
-        && F.compressRadiusMm(10, NaN) === F.compressRadiusMm(10, F.FLIGHTS_DEFAULT_RADIUS_NM));
+        Number.isFinite(FB.compressRadiusMm(10, NaN))
+        && FB.compressRadiusMm(10, NaN) === FB.compressRadiusMm(10, FB.FLIGHTS_DEFAULT_RADIUS_NM));
     }
 
     // ── 4. compressAltitudeMm ───────────────────────────────────────────────
     {
-      const S = F.FLIGHT_SHELL;
-      near('7: 0 ft → yMinMm', F.compressAltitudeMm(0), S.yMinMm, 1e-9);
-      near('7: altMaxFt → yMaxMm', F.compressAltitudeMm(S.altMaxFt), S.yMaxMm, 1e-9);
-      ok('7: clamps above altMaxFt', F.compressAltitudeMm(120000) === F.compressAltitudeMm(S.altMaxFt));
-      ok('7: clamps below 0', F.compressAltitudeMm(-2000) === F.compressAltitudeMm(0));
+      const S = FB.FLIGHT_SHELL;
+      near('7: 0 ft → yMinMm', FB.compressAltitudeMm(0), S.yMinMm, 1e-9);
+      near('7: altMaxFt → yMaxMm', FB.compressAltitudeMm(S.altMaxFt), S.yMaxMm, 1e-9);
+      ok('7: clamps above altMaxFt', FB.compressAltitudeMm(120000) === FB.compressAltitudeMm(S.altMaxFt));
+      ok('7: clamps below 0', FB.compressAltitudeMm(-2000) === FB.compressAltitudeMm(0));
       let mono = true, inBand = true, prev = -1;
       for (let a = 0; a <= 50000; a += 25) {
-        const v = F.compressAltitudeMm(a);
+        const v = FB.compressAltitudeMm(a);
         if (v < prev - 1e-9) mono = false;
         if (v < S.yMinMm - 1e-9 || v > S.yMaxMm + 1e-9) inBand = false;
         prev = v;
       }
       ok('7: monotonic over 0..50000 ft', mono);
       ok('7: stays inside [yMin, yMax]', inBand);
-      ok('7: non-finite → yMinMm', F.compressAltitudeMm(NaN) === S.yMinMm);
+      ok('7: non-finite → yMinMm', FB.compressAltitudeMm(NaN) === S.yMinMm);
       ok('7: log knee spends detail low (3000 ft past halfway of 45000 ft band)',
-        F.compressAltitudeMm(3000) - S.yMinMm > (S.yMaxMm - S.yMinMm) * 0.24);
+        FB.compressAltitudeMm(3000) - S.yMinMm > (S.yMaxMm - S.yMinMm) * 0.24);
     }
 
     // ── 5. flightBearingDistance goldens ────────────────────────────────────
     {
       const OLAT = 47.6, OLON = -122.3;
-      const b = (dlat, dlon) => F.flightBearingDistance(OLAT, OLON, OLAT + dlat, OLON + dlon);
+      const b = (dlat, dlon) => FB.flightBearingDistance(OLAT, OLON, OLAT + dlat, OLON + dlon);
       const n = b(0.1, 0), e = b(0, 0.1), s = b(-0.1, 0), w = b(0, -0.1);
       near('8: due north bearing = 0', n.bearingRad, 0, 1e-9);
       near('8: due north distance ≈ 6.004 nm', n.distNm, 6.00405, 0.001);
@@ -251,7 +270,7 @@
       ok('8: bearing always in [0, 2π)', inRange);
       ok('8: zero offset → distance 0', b(0, 0).distNm === 0);
       // City pair sanity vs the true great-circle distance (LAX → Long Beach).
-      const city = F.flightBearingDistance(33.9425, -118.408, 33.8177, -118.1516);
+      const city = FB.flightBearingDistance(33.9425, -118.408, 33.8177, -118.1516);
       const TRUE_NM = 14.8151;   // haversine, R = 6371 km
       ok('8: LAX→LGB distance within 2% of great-circle',
         Math.abs(city.distNm - TRUE_NM) / TRUE_NM < 0.02, `got ${city.distNm.toFixed(3)} nm`);
@@ -262,41 +281,41 @@
     {
       const OLAT = 47.6, OLON = -122.3;
       const fp = (dlat, dlon, alt) => ({ lat: OLAT + dlat, lon: OLON + dlon, altFt: alt });
-      const north = F.flightDisplayPos(fp(0.1, 0, 10000), OLAT, OLON, 0, 30);
+      const north = FB.flightDisplayPos(fp(0.1, 0, 10000), OLAT, OLON, 0, 30);
       ok('9: θ=0 north aircraft → planY > 0', north.planY > 0, `planY=${north.planY.toFixed(1)}`);
       near('9: θ=0 north aircraft → planX ≈ 0', north.planX, 0, 1e-6);
       near('9: radius matches compressRadiusMm', Math.hypot(north.planX, north.planY),
-        F.compressRadiusMm(north.distNm, 30), 1e-6);
+        FB.compressRadiusMm(north.distNm, 30), 1e-6);
       // dispY is NO LONGER compressAltitudeMm alone — it is capped at the true
       // elevation angle (see section 6b). At 6 nm / 10,000 ft the cap bites.
       ok('9: dispY is the elevation cap, not the raw altitude curve',
-        north.dispY < F.compressAltitudeMm(10000) - 1,
-        `dispY=${north.dispY.toFixed(1)} rawCurve=${F.compressAltitudeMm(10000).toFixed(1)}`);
+        north.dispY < FB.compressAltitudeMm(10000) - 1,
+        `dispY=${north.dispY.toFixed(1)} rawCurve=${FB.compressAltitudeMm(10000).toFixed(1)}`);
       near('9: dispY == flightDisplayAltitudeMm(alt, dist, r)', north.dispY,
-        F.flightDisplayAltitudeMm(10000, north.distNm, F.compressRadiusMm(north.distNm, 30)), 1e-9);
+        FB.flightDisplayAltitudeMm(10000, north.distNm, FB.compressRadiusMm(north.distNm, 30)), 1e-9);
       near('9: distNm echoed from flightBearingDistance', north.distNm, 6.00405, 0.001);
       near('9: bearingRad echoed', north.bearingRad, 0, 1e-9);
 
-      const rot = F.flightDisplayPos(fp(0.1, 0, 10000), OLAT, OLON, Math.PI / 2, 30);
+      const rot = FB.flightDisplayPos(fp(0.1, 0, 10000), OLAT, OLON, Math.PI / 2, 30);
       near('9: θ=π/2 rotates north aircraft onto −X', rot.planX, -Math.hypot(north.planX, north.planY), 1e-6);
       near('9: θ=π/2 leaves planY ≈ 0', rot.planY, 0, 1e-6);
       near('9: rotation preserves radius', Math.hypot(rot.planX, rot.planY),
         Math.hypot(north.planX, north.planY), 1e-6);
 
-      const east = F.flightDisplayPos(fp(0, 0.1, 10000), OLAT, OLON, 0, 30);
+      const east = FB.flightDisplayPos(fp(0, 0.1, 10000), OLAT, OLON, 0, 30);
       ok('9: θ=0 east aircraft → planX > 0 and planY ≈ 0',
         east.planX > 0 && Math.abs(east.planY) < 1e-6);
-      const far = F.flightDisplayPos(fp(0.4, 0, 10000), OLAT, OLON, 0, 30);
+      const far = FB.flightDisplayPos(fp(0.4, 0, 10000), OLAT, OLON, 0, 30);
       ok('9: farther aircraft renders farther out', far.planY > north.planY);
-      ok('9: nothing escapes the shell', Math.hypot(far.planX, far.planY) < F.FLIGHT_SHELL.rMaxMm);
+      ok('9: nothing escapes the shell', Math.hypot(far.planX, far.planY) < FB.FLIGHT_SHELL.rMaxMm);
       // The whole real fixture, projected: no NaN, everything inside the shell.
-      const cloud = F.normalizeAircraftList(LAX);
+      const cloud = FB.normalizeAircraftList(LAX);
       let clean = true;
       for (const a of cloud) {
-        const p = F.flightDisplayPos(a, 33.9425, -118.408, 0.3, 25);
+        const p = FB.flightDisplayPos(a, 33.9425, -118.408, 0.3, 25);
         if (!Number.isFinite(p.planX) || !Number.isFinite(p.planY) || !Number.isFinite(p.dispY)) clean = false;
-        if (Math.hypot(p.planX, p.planY) >= F.FLIGHT_SHELL.rMaxMm) clean = false;
-        if (p.dispY < F.FLIGHT_SHELL.clearMm || p.dispY > F.FLIGHT_SHELL.yMaxMm) clean = false;
+        if (Math.hypot(p.planX, p.planY) >= FB.FLIGHT_SHELL.rMaxMm) clean = false;
+        if (p.dispY < FB.FLIGHT_SHELL.clearMm || p.dispY > FB.FLIGHT_SHELL.yMaxMm) clean = false;
       }
       ok('9: all 44 real aircraft project finite + inside the shell', clean);
     }
@@ -320,7 +339,7 @@
         lat: OLAT + (distNm * NM_M) / (EARTH_R_M * DEGR), lon: OLON, altFt,
       });
       const D = (distNm, altFt, radiusNm = 15) =>
-        F.flightDisplayPos(atNm(distNm, altFt), OLAT, OLON, 0, radiusNm);
+        FB.flightDisplayPos(atNm(distNm, altFt), OLAT, OLON, 0, radiusNm);
       const dispAngDeg = d => Math.atan2(d.dispY, Math.hypot(d.planX, d.planY)) * 180 / Math.PI;
       const trueAngDeg = (altFt, distNm) =>
         Math.atan2(altFt * FT_M, distNm * NM_M) * 180 / Math.PI;
@@ -364,7 +383,7 @@
       const g3 = D(0.5, 5000);
       near('9b: 5,000 ft @ 0.5 nm → r', Math.hypot(g3.planX, g3.planY), 358.1177, 0.01);
       near('9b: 5,000 ft @ 0.5 nm → dispY rides the clearance floor',
-        g3.dispY, F.FLIGHT_SHELL.clearMm, 1e-9);
+        g3.dispY, FB.FLIGHT_SHELL.clearMm, 1e-9);
       ok('9b: 5,000 ft @ 0.5 nm → still reads overhead (> 55° up)', dispAngDeg(g3) > 55,
         `${dispAngDeg(g3).toFixed(1)}°`);
       ok('9b: the floor only ever raises the angle, never lowers it',
@@ -378,7 +397,7 @@
       // aircraft is a large fraction of the shell.
       const g5 = D(5, 35000, 5);
       near('9b: 35,000 ft @ 5 nm, radius 5 → the log curve wins',
-        g5.dispY, F.compressAltitudeMm(35000), 1e-9);
+        g5.dispY, FB.compressAltitudeMm(35000), 1e-9);
       ok('9b: …and the capped angle stays BELOW the true one',
         dispAngDeg(g5) < trueAngDeg(35000, 5), `${dispAngDeg(g5).toFixed(1)}° < 49.0°`);
 
@@ -455,8 +474,8 @@
         for (const frac of [0.02, 0.05, 0.14, 0.33, 0.6, 1, 1.66, 2.66]) {
           const d = frac * rad, p = D(d, alt, rad);
           const disp = dispAngDeg(p), tru = trueAngDeg(alt, d);
-          const floored = p.dispY <= F.FLIGHT_SHELL.clearMm + 1e-9;
-          const elevBranch = !floored && p.dispY < F.compressAltitudeMm(alt) - 1e-6;
+          const floored = p.dispY <= FB.FLIGHT_SHELL.clearMm + 1e-9;
+          const elevBranch = !floored && p.dispY < FB.compressAltitudeMm(alt) - 1e-6;
           if (elevBranch) { sawElev++; if (Math.abs(disp - tru) > 1e-6) parity = false; }
           else if (!floored) sawCurve++;
           if (!floored && disp > tru + 1e-6) never = false;
@@ -475,34 +494,34 @@
 
       // The clearMm property-clearance floor: NOTHING may render low enough to
       // hit the house — distant low approach traffic rides the floor.
-      near('9b: 1,000 ft @ 15 nm floors at clearMm', D(15, 1000).dispY, F.FLIGHT_SHELL.clearMm, 1e-9);
-      ok('9b: nothing ever sits below clearMm', D(90, 500).dispY === F.FLIGHT_SHELL.clearMm);
+      near('9b: 1,000 ft @ 15 nm floors at clearMm', D(15, 1000).dispY, FB.FLIGHT_SHELL.clearMm, 1e-9);
+      ok('9b: nothing ever sits below clearMm', D(90, 500).dispY === FB.FLIGHT_SHELL.clearMm);
       ok('9b: clearance floor clears a 2-story house (≥ 6000 mm + margin)',
-        F.FLIGHT_SHELL.clearMm >= 6500);
+        FB.FLIGHT_SHELL.clearMm >= 6500);
       // The user-reported regression: 1,500–2,000 ft approach traffic a few nm
       // out must never skim the yard.
       ok('9b: 1,800 ft @ 5 nm sits at/above the clearance floor',
-        D(5, 1800).dispY >= F.FLIGHT_SHELL.clearMm);
+        D(5, 1800).dispY >= FB.FLIGHT_SHELL.clearMm);
 
       // Bounds + garbage tolerance on the shared helper itself.
       ok('9b: helper clamps to the shell band',
-        F.flightDisplayAltitudeMm(99999, 1, 24000) <= F.FLIGHT_SHELL.yMaxMm
-        && F.flightDisplayAltitudeMm(-5000, 10, 18000) === F.FLIGHT_SHELL.clearMm);
+        FB.flightDisplayAltitudeMm(99999, 1, 24000) <= FB.FLIGHT_SHELL.yMaxMm
+        && FB.flightDisplayAltitudeMm(-5000, 10, 18000) === FB.FLIGHT_SHELL.clearMm);
       ok('9b: helper survives non-finite input',
-        F.flightDisplayAltitudeMm(NaN, NaN, NaN) === F.FLIGHT_SHELL.clearMm
-        && F.flightDisplayAltitudeMm(10000, 0, 0) === F.FLIGHT_SHELL.clearMm);
+        FB.flightDisplayAltitudeMm(NaN, NaN, NaN) === FB.FLIGHT_SHELL.clearMm
+        && FB.flightDisplayAltitudeMm(10000, 0, 0) === FB.FLIGHT_SHELL.clearMm);
       ok('9b: helper agrees with flightDisplayPos on the real fixture', (() => {
-        for (const a of F.normalizeAircraftList(LAX)) {
-          const p = F.flightDisplayPos(a, 33.9425, -118.408, 0.3, 25);
+        for (const a of FB.normalizeAircraftList(LAX)) {
+          const p = FB.flightDisplayPos(a, 33.9425, -118.408, 0.3, 25);
           const r = Math.hypot(p.planX, p.planY);
-          if (Math.abs(p.dispY - F.flightDisplayAltitudeMm(a.altFt, p.distNm, r)) > 1e-9) return false;
+          if (Math.abs(p.dispY - FB.flightDisplayAltitudeMm(a.altFt, p.distNm, r)) > 1e-9) return false;
         }
         return true;
       })());
 
       // The shipped default radius — one shared constant across planner,
       // both renderers and the settings input.
-      ok('9b: FLIGHTS_DEFAULT_RADIUS_NM is 15', F.FLIGHTS_DEFAULT_RADIUS_NM === 15);
+      ok('9b: FLIGHTS_DEFAULT_RADIUS_NM is 15', FB.FLIGHTS_DEFAULT_RADIUS_NM === 15);
     }
 
     // ── 6c. Shell SIZE — the user's exact complaint, golden-pinned ───────────
@@ -519,12 +538,12 @@
       });
       const R7 = alt => Math.hypot(
         ...(p => [p.planX, p.planY])(
-          F.flightDisplayPos(atNm(7, alt), OLAT, OLON, 0, F.FLIGHTS_DEFAULT_RADIUS_NM)));
+          FB.flightDisplayPos(atNm(7, alt), OLAT, OLON, 0, FB.FLIGHTS_DEFAULT_RADIUS_NM)));
 
-      near('9c: shell rMaxMm is 120,000 mm', F.FLIGHT_SHELL.rMaxMm, 120000, 0);
-      near('9c: shell yMaxMm is 66,000 mm', F.FLIGHT_SHELL.yMaxMm, 66000, 0);
-      near('9c: clearMm unchanged at 6,500 mm', F.FLIGHT_SHELL.clearMm, 6500, 0);
-      near('9c: yMinMm unchanged at 2,500 mm', F.FLIGHT_SHELL.yMinMm, 2500, 0);
+      near('9c: shell rMaxMm is 120,000 mm', FB.FLIGHT_SHELL.rMaxMm, 120000, 0);
+      near('9c: shell yMaxMm is 66,000 mm', FB.FLIGHT_SHELL.yMaxMm, 66000, 0);
+      near('9c: clearMm unchanged at 6,500 mm', FB.FLIGHT_SHELL.clearMm, 6500, 0);
+      near('9c: yMinMm unchanged at 2,500 mm', FB.FLIGHT_SHELL.yMinMm, 2500, 0);
       near('9c: 7 nm @ default radius → r = 32,609.5 mm', R7(35000), 32609.5346, 0.01);
       // The absolute "≥ 60 m" pin from the SHELL-RESCALE report is superseded by
       // the RADIAL-REMAP report: an absolute floor on a mid-range aircraft is
@@ -532,7 +551,7 @@
       // is RELATIVE — 7 of 15 nm belongs in the inner third, well clear of the
       // property but nowhere near the horizon.
       let far7 = true, same7 = true;
-      const pct7 = 100 * R7(35000) / F.FLIGHT_SHELL.rMaxMm;
+      const pct7 = 100 * R7(35000) / FB.FLIGHT_SHELL.rMaxMm;
       for (const alt of [1200, 4500, 12000, 24000, 35000, 43000]) {
         if (R7(alt) < 25000) far7 = false;                    // ≥ 25 m from the property
         if (Math.abs(R7(alt) - R7(35000)) > 1e-9) same7 = false;
@@ -547,16 +566,16 @@
       const ALT_M = 35000 * 0.3048;
       let elevGoverns = true;
       for (let d = 8; d <= 60; d += 0.5) {
-        const r = F.compressRadiusMm(d, F.FLIGHTS_DEFAULT_RADIUS_NM);
-        if (!(F.compressAltitudeMm(35000) > r * (ALT_M / (d * NM_M)))) elevGoverns = false;
+        const r = FB.compressRadiusMm(d, FB.FLIGHTS_DEFAULT_RADIUS_NM);
+        if (!(FB.compressAltitudeMm(35000) > r * (ALT_M / (d * NM_M)))) elevGoverns = false;
       }
       ok('9c: yMaxMm is sized so the elevation branch governs cruise ≥ 8 nm', elevGoverns);
       // Reach constant (the renderer's camera-frustum requirement).
-      near('9c: FLIGHT_SHELL_REACH_MM = hypot(rMax, yMax)', F.FLIGHT_SHELL_REACH_MM,
+      near('9c: FLIGHT_SHELL_REACH_MM = hypot(rMax, yMax)', FB.FLIGHT_SHELL_REACH_MM,
         Math.hypot(120000, 66000), 1e-9);
       ok('9c: shell reach exceeds the stock 150,000 far plane once orbited',
-        F.FLIGHT_SHELL_REACH_MM + 45000 > 150000,
-        `${(F.FLIGHT_SHELL_REACH_MM + 45000).toFixed(0)} mm`);
+        FB.FLIGHT_SHELL_REACH_MM + 45000 > 150000,
+        `${(FB.FLIGHT_SHELL_REACH_MM + 45000).toFixed(0)} mm`);
     }
 
     // ── 6d. flightDisplayScale (distance-compensated model size) ─────────────
@@ -564,19 +583,19 @@
     // linearly with the compressed radius. Monotonic, bounded, 1 at the origin
     // (so nothing near the house changes size), garbage-safe.
     {
-      const S = F.flightDisplayScale, R = F.FLIGHT_SHELL.rMaxMm;
+      const S = FB.flightDisplayScale, R = FB.FLIGHT_SHELL.rMaxMm;
       near('9d: scale at r=0 is exactly 1', S(0), 1, 0);
-      near('9d: scale at rMax is 1 + gain', S(R), 1 + F.FLIGHT_SCALE_GAIN, 1e-12);
+      near('9d: scale at rMax is 1 + gain', S(R), 1 + FB.FLIGHT_SCALE_GAIN, 1e-12);
       // Eased 2.2 → 0.8 with the radial remap: the user wants an aircraft AT
       // the configured radius to read "fairly small". Perspective at 120 m does
       // the work; the gain only keeps the rim model from dissolving.
-      near('9d: gain is 0.8 (rim = 1.8×, "fairly small")', F.FLIGHT_SCALE_GAIN, 0.8, 0);
+      near('9d: gain is 0.8 (rim = 1.8×, "fairly small")', FB.FLIGHT_SCALE_GAIN, 0.8, 0);
       near('9d: half-shell scales 1.4×', S(R / 2), 1.4, 1e-12);
       let mono = true, bounded = true, prev = -Infinity;
       for (let r = 0; r <= R * 1.5; r += R / 400) {
         const v = S(r);
         if (v < prev - 1e-12) mono = false;
-        if (v < 1 - 1e-12 || v > 1 + F.FLIGHT_SCALE_GAIN + 1e-12) bounded = false;
+        if (v < 1 - 1e-12 || v > 1 + FB.FLIGHT_SCALE_GAIN + 1e-12) bounded = false;
         prev = v;
       }
       ok('9d: monotonically non-decreasing in radius', mono);
@@ -585,7 +604,7 @@
       ok('9d: garbage-safe → 1 (non-finite is NOT treated as "at the rim")',
         S(NaN) === 1 && S(-5) === 1 && S(undefined) === 1 && S(Infinity) === 1);
       // Real-world read: a 7 nm aircraft is visibly bigger than a 2 nm one.
-      const s7 = S(F.compressRadiusMm(7, 15)), s2 = S(F.compressRadiusMm(2, 15));
+      const s7 = S(FB.compressRadiusMm(7, 15)), s2 = S(FB.compressRadiusMm(2, 15));
       ok('9d: farther aircraft render LARGER (legibility, not perspective)', s7 > s2,
         `2 nm ${s2.toFixed(2)}× → 7 nm ${s7.toFixed(2)}×`);
       near('9d: 7 nm @ default radius scales 1.217×', s7, 1.2174, 0.001);
@@ -593,6 +612,165 @@
       // distance read the radial remap just bought.
       ok('9d: the rim model stays under 2× (the "fairly small" requirement)',
         S(R) < 2, `${S(R).toFixed(2)}×`);
+    }
+
+    // ── 6e. USER-DEFINABLE shell radius — clamp + the SIMILARITY law ────────
+    // "The maximum draw distance on planes needs to be doubled or tripled. Make
+    // a user definable draw radius that aircraft will be scaled into."
+    // FlightsConfig.shellRadiusM (default 300 m, clamp 60..1000) sets the rim;
+    // the whole display is a SIMILARITY TRANSFORM of the 120 m authored
+    // reference by s = shellMm / FLIGHT_SHELL_BASE_MM. Position AND model scale
+    // carry the same factor, which is what keeps a given aircraft's apparent
+    // angular size unchanged while it sits proportionally farther out (drop the
+    // factor from flightDisplayScale and every plane silently shrinks by 1/s).
+    // The ONE thing that does not scale is clearMm — an absolute clearance over
+    // a physical house.
+    {
+      const M = F.flightShellMm;
+      near('9e: FLIGHT_SHELL_BASE_MM is the 120,000 mm authored reference',
+        F.FLIGHT_SHELL_BASE_MM, 120000, 0);
+      near('9e: FLIGHT_SHELL_DEFAULT_RADIUS_M is 300 m (2.5× the reference)',
+        F.FLIGHT_SHELL_DEFAULT_RADIUS_M, 300, 0);
+      near('9e: clamp window is 60..1000 m',
+        F.FLIGHT_SHELL_MIN_RADIUS_M * 1e6 + F.FLIGHT_SHELL_MAX_RADIUS_M, 60 * 1e6 + 1000, 0);
+
+      // Clamp matrix — every unusable input lands on the default, never NaN.
+      near('9e: shellMm(300) → 300,000 mm', M(300), 300000, 0);
+      near('9e: shellMm() → the 300 m default', M(), 300000, 0);
+      near('9e: shellMm(undefined) → default', M(undefined), 300000, 0);
+      near('9e: shellMm(null) → default', M(null), 300000, 0);
+      near('9e: shellMm(NaN) → default', M(NaN), 300000, 0);
+      near('9e: shellMm(0) → default', M(0), 300000, 0);
+      near('9e: shellMm(-5) → default', M(-5), 300000, 0);
+      near('9e: shellMm(59) clamps up to 60 m', M(59), 60000, 0);
+      near('9e: shellMm(60) → 60,000 mm', M(60), 60000, 0);
+      near('9e: shellMm(1000) → 1,000,000 mm', M(1000), 1000000, 0);
+      near('9e: shellMm(1001) clamps down to 1000 m', M(1001), 1000000, 0);
+      near('9e: shellMm(120) reproduces the authored reference', M(120), BASE, 0);
+      // Swept over POSITIVE inputs only: 0 and below are "unusable" and land on
+      // the default (300 m), which is deliberately not a monotone continuation.
+      let clampMono = true, cPrev = -Infinity;
+      for (let m = 1; m <= 1200; m += 5) {
+        const v = M(m);
+        if (v < cPrev - 1e-9) clampMono = false;
+        if (v < 60000 - 1e-9 || v > 1000000 + 1e-9) clampMono = false;
+        cPrev = v;
+      }
+      ok('9e: shellMm is monotonic and stays inside the clamp window', clampMono);
+
+      // Reach: the base constant still means the base shell (stale-chunk
+      // back-compat), and the function scales it.
+      ok('9e: flightShellReachMm(BASE) === FLIGHT_SHELL_REACH_MM',
+        F.flightShellReachMm(BASE) === F.FLIGHT_SHELL_REACH_MM,
+        `${F.flightShellReachMm(BASE)}`);
+      near('9e: FLIGHT_SHELL_REACH_MM itself is unchanged (≈136,953 mm)',
+        F.FLIGHT_SHELL_REACH_MM, Math.hypot(120000, 66000), 1e-9);
+      near('9e: flightShellReachMm() defaults to the 300 m shell',
+        F.flightShellReachMm(), 2.5 * F.FLIGHT_SHELL_REACH_MM, 1e-6);
+      near('9e: reach scales linearly with the shell (1,000 m → ≈1.141e6 mm)',
+        F.flightShellReachMm(M(1000)), (1000000 / BASE) * F.FLIGHT_SHELL_REACH_MM, 1e-6);
+      ok('9e: even the maximum shell stays inside CAM_FAR_CEIL (13.5e6 mm)',
+        F.flightShellReachMm(M(1000)) < 13.5e6, `${F.flightShellReachMm(M(1000)).toFixed(0)} mm`);
+      near('9e: garbage shellMm → the default reach',
+        F.flightShellReachMm(NaN), F.flightShellReachMm(), 1e-9);
+
+      // ── The similarity law itself ─────────────────────────────────────────
+      const OLAT = 47.6, OLON = -122.3;
+      const NM_M = 1852, EARTH_R_M = 6371000, DEGR = Math.PI / 180, FT_M = 0.3048;
+      const atNm = (distNm, altFt) => ({
+        lat: OLAT + (distNm * NM_M) / (EARTH_R_M * DEGR), lon: OLON, altFt,
+      });
+      const P = (distNm, altFt, radiusNm, shellMm) =>
+        F.flightDisplayPos(atNm(distNm, altFt), OLAT, OLON, 0.3, radiusNm, shellMm);
+      const rel = (a, b) => Math.abs(a - b) / Math.max(1, Math.abs(b));
+      const GRID = [];
+      for (const rad of [5, 15, 30]) for (const alt of [800, 1800, 9000, 22000, 35000])
+        for (const frac of [0.05, 0.2, 0.45, 0.7, 1]) GRID.push([frac * rad, alt, rad]);
+
+      let xyAll = true, dyGeneral = true, dyStrict = true, dyChecked = 0;
+      let angAll = true, angChecked = 0, floorSeen = 0;
+      for (const k of [0.5, 1, 2.5, 3]) {
+        const shell = k * BASE;
+        for (const [d, alt, rad] of GRID) {
+          const b = P(d, alt, rad, BASE), q = P(d, alt, rad, shell);
+          // planX / planY are EXACTLY k× the base values.
+          if (rel(q.planX, k * b.planX) > 1e-6) xyAll = false;
+          if (rel(q.planY, k * b.planY) > 1e-6) xyAll = false;
+          // dispY = max(clearMm, k · unflooredBase) — the general identity, with
+          // the ABSOLUTE clearance floor left unscaled.
+          const rBase = Math.hypot(b.planX, b.planY);
+          const unfloored = Math.min(FB.compressAltitudeMm(alt),
+                                     rBase * (alt * FT_M / Math.max(d * NM_M, 1)));
+          if (rel(q.dispY, Math.max(F.FLIGHT_SHELL.clearMm, k * unfloored)) > 1e-6) dyGeneral = false;
+          // …and the simple form the brief pins: base above the floor and k ≥ 1
+          // ⇒ scaled dispY is exactly k× the base dispY.
+          if (k >= 1 && b.dispY > F.FLIGHT_SHELL.clearMm + 1e-6) {
+            dyChecked++;
+            if (rel(q.dispY, k * b.dispY) > 1e-6) dyStrict = false;
+          }
+          // Angle honesty: a similarity cannot change an elevation angle, so
+          // wherever the floor is NOT engaged the display angle is invariant.
+          const floored = q.dispY <= F.FLIGHT_SHELL.clearMm + 1e-9
+            || b.dispY <= F.FLIGHT_SHELL.clearMm + 1e-9;
+          if (floored) { floorSeen++; continue; }
+          angChecked++;
+          const ab = Math.atan2(b.dispY, rBase);
+          const aq = Math.atan2(q.dispY, Math.hypot(q.planX, q.planY));
+          if (Math.abs(ab - aq) > 1e-9) angAll = false;
+        }
+      }
+      ok('9e: planX/planY are exactly k× the base shell (k = 0.5/1/2.5/3)', xyAll);
+      ok('9e: dispY = max(clearMm, k · unfloored base) on every sample', dyGeneral);
+      ok('9e: …so above the floor, k ≥ 1 ⇒ dispY is exactly k× the base', dyStrict,
+        `${dyChecked} samples`);
+      ok('9e: the elevation ANGLE is invariant under the rescale (off the floor)',
+        angAll && angChecked > 50, `${angChecked} samples`);
+      ok('9e: …and the clearance floor is genuinely exercised too', floorSeen > 0,
+        `${floorSeen} floored samples`);
+
+      // k = 1 must be byte-identical to the pre-rescale geometry.
+      let identity = true;
+      for (const [d, alt, rad] of GRID) {
+        const b = P(d, alt, rad, BASE), q = P(d, alt, rad, 120000);
+        if (b.planX !== q.planX || b.planY !== q.planY || b.dispY !== q.dispY) identity = false;
+      }
+      ok('9e: shellMm = 120,000 reproduces the reference geometry bit-for-bit', identity);
+
+      // The default shell is 2.5× — the "doubled or tripled" ask, on the nose.
+      const dFar = P(15, 35000, 15, M());
+      near('9e: an aircraft at the search radius sits at the shell rim (300 m)',
+        Math.hypot(dFar.planX, dFar.planY), 300000, 0.05);
+      ok('9e: …i.e. 2.5× farther out than the old 120 m shell',
+        Math.hypot(dFar.planX, dFar.planY)
+          > 2.4 * Math.hypot(...(x => [x.planX, x.planY])(P(15, 35000, 15, BASE))));
+
+      // ── Model scale carries the SAME factor ───────────────────────────────
+      // The regression this guards: without the leading s the rim model would
+      // read 1/2.5 of its old size — "the planes got tiny again".
+      let scaleAll = true;
+      for (const k of [0.5, 1, 2.5, 3]) {
+        const shell = k * BASE;
+        for (const r0 of [0, 12000, 60000, 120000, 200000]) {
+          if (rel(F.flightDisplayScale(k * r0, shell), k * F.flightDisplayScale(r0, BASE)) > 1e-9) {
+            scaleAll = false;
+          }
+        }
+      }
+      ok('9e: flightDisplayScale(k·r, k·shell) = k · flightDisplayScale(r, shell)', scaleAll);
+      near('9e: scale at the DEFAULT shell rim is 2.5 × (1 + gain)',
+        F.flightDisplayScale(M(), M()), 2.5 * (1 + F.FLIGHT_SCALE_GAIN), 1e-9);
+      near('9e: scale at the origin is s itself (apparent size preserved)',
+        F.flightDisplayScale(0, M()), 2.5, 1e-12);
+      ok('9e: garbage shellMm → the default shell, never NaN',
+        Number.isFinite(F.flightDisplayScale(1000, NaN))
+        && F.flightDisplayScale(1000, NaN) === F.flightDisplayScale(1000, M()));
+      ok('9e: compressRadiusMm/compressAltitudeMm default to the 300 m shell',
+        F.compressRadiusMm(15, 15) === F.compressRadiusMm(15, 15, M())
+        && F.compressAltitudeMm(0) === F.compressAltitudeMm(0, M())
+        && F.compressAltitudeMm(0) === 2.5 * F.FLIGHT_SHELL.yMinMm);
+      ok('9e: …and clearMm is NOT scaled by the shell (absolute clearance)',
+        F.flightDisplayAltitudeMm(200, 40, 10, M(1000)) === F.FLIGHT_SHELL.clearMm
+        && F.FLIGHT_SHELL.clearMm === 6500);
     }
 
     // ── 7. satAltAz goldens ─────────────────────────────────────────────────
@@ -1284,6 +1462,28 @@
           JSON.stringify(p.store.flights.labelFields)
             === JSON.stringify(['type', 'operator', 'speed', 'trend', 'squawk']),
           JSON.stringify(p.store.flights.labelFields));
+        // shellRadiusM rides the SAME store-boundary discipline as modelScale:
+        // clamp 60..1000 here (not in the settings UI), and exactly the default
+        // (300) clears back to undefined so the stored config stays minimal.
+        p.setFlights(f => { f.shellRadiusM = 500; });
+        ok('11q: setFlights keeps an in-range draw radius',
+          p.store.flights.shellRadiusM === 500, String(p.store.flights.shellRadiusM));
+        p.setFlights(f => { f.shellRadiusM = 30; });
+        ok('11q: setFlights clamps a too-small draw radius up to 60',
+          p.store.flights.shellRadiusM === 60, String(p.store.flights.shellRadiusM));
+        p.setFlights(f => { f.shellRadiusM = 5000; });
+        ok('11q: setFlights clamps a too-large draw radius down to 1000',
+          p.store.flights.shellRadiusM === 1000, String(p.store.flights.shellRadiusM));
+        p.setFlights(f => { f.shellRadiusM = 300; });
+        ok('11q: exactly the default draw radius normalizes to undefined',
+          p.store.flights.shellRadiusM === undefined, String(p.store.flights.shellRadiusM));
+        p.setFlights(f => { f.shellRadiusM = NaN; });
+        ok('11q: a non-finite draw radius falls back to the default (undefined)',
+          p.store.flights.shellRadiusM === undefined, String(p.store.flights.shellRadiusM));
+        p.setFlights(f => { f.shellRadiusM = 450; });
+        p.setFlights(f => { f.radiusNm = 34; });
+        ok('11q: an unrelated setFlights leaves shellRadiusM intact',
+          p.store.flights.shellRadiusM === 450, String(p.store.flights.shellRadiusM));
         p.setFlights(f => { f.beacons = false; f.privacyDim = false; });
         await p.saveConfigNow();
         const saved = stub.peek('diorama-cfg-default');
@@ -1291,6 +1491,8 @@
           JSON.stringify(saved?.flights?.labelFields) === JSON.stringify(['type', 'operator', 'speed', 'trend', 'squawk'])
           && saved?.flights?.beacons === false && saved?.flights?.privacyDim === false,
           JSON.stringify(saved?.flights));
+        ok('11q: shellRadiusM persists through the store too',
+          saved?.flights?.shellRadiusM === 450, String(saved?.flights?.shellRadiusM));
         quiesce(p);
       }
 

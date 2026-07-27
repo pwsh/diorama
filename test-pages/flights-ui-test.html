@@ -891,6 +891,28 @@
       await typeIn(numFor('Model size ×'), 1);
       eq('back to 1 clears the field', p2.store.flights.modelScale, undefined);
 
+      // Draw radius (m) — the user-definable display shell rim, beside Radius (nm).
+      const drIn = numFor('Draw radius (m)');
+      ok('“Draw radius (m)” input rendered', !!drIn);
+      eq('draw-radius input shows the 300 m default', drIn && drIn.value, '300');
+      await typeIn(drIn, 500);
+      eq('typing a draw radius writes the store', p2.store.flights.shellRadiusM, 500);
+      eq('…and the input reflects it', numFor('Draw radius (m)').value, '500');
+      await typeIn(numFor('Draw radius (m)'), 5000);
+      eq('an out-of-range draw radius is clamped to 1000',
+        p2.store.flights.shellRadiusM, 1000);
+      await typeIn(numFor('Draw radius (m)'), 10);
+      eq('…and a too-small one to 60', p2.store.flights.shellRadiusM, 60);
+      await typeIn(numFor('Draw radius (m)'), 300);
+      eq('back to the default clears the field', p2.store.flights.shellRadiusM, undefined);
+      eq('…and the input falls back to the default', numFor('Draw radius (m)').value, '300');
+      // Editing the draw radius must not disturb its neighbours.
+      await typeIn(numFor('Draw radius (m)'), 450);
+      eq('editing the draw radius leaves Radius (nm) alone',
+        numFor('Radius (nm)').value, String(p2.store.flights.radiusNm ?? 15));
+      eq('…and leaves modelScale alone', p2.store.flights.modelScale, undefined);
+      await typeIn(numFor('Draw radius (m)'), 300);
+
       // ── 12a. Glow rules editor (flight-glow-rules.md §6.4) ─────────────────
       // Collapsed summary rows + an ✎-expanded criteria form, every write going
       // through setFlights (which sanitizes) — so the editor can never author a

@@ -13,7 +13,8 @@ import type { Floor, HassState, WeatherConfig, WeatherEffectKey, ScenePreset, Fl
 import { resolveNorth } from '../compass.js';
 import {
   FLIGHT_LABEL_FIELDS, FLIGHT_LABEL_FIELDS_DEFAULT, sanitizeLabelFields,
-  FLIGHTS_DEFAULT_RADIUS_NM, flightBearingDistance, isEmergency,
+  FLIGHTS_DEFAULT_RADIUS_NM, FLIGHT_SHELL_DEFAULT_RADIUS_M,
+  flightBearingDistance, isEmergency,
   FLIGHT_GLOW_PATTERNS, MAX_FLIGHT_GLOW_RULES,
 } from '../flights.js';
 import type {
@@ -1296,6 +1297,20 @@ export class SettingsDrawer extends LitElement {
               <input type="number" min="5" max="100" step="5" .value=${String(cfg.radiusNm ?? FLIGHTS_DEFAULT_RADIUS_NM)}
                      @change=${(e: Event) => set(f => { f.radiusNm = numOrUndef((e.target as HTMLInputElement).value, 5, 100) ?? FLIGHTS_DEFAULT_RADIUS_NM; })}
                      style="width:80px">
+            </div>
+            <div class="row" style="align-items:center">
+              <label style="font-size:12px;color:var(--text);flex:1" title="How far out, in scene metres, an aircraft sitting at exactly the search radius is drawn. The whole shell scales together — models grow with it, so apparent sizes stay the same.">Draw radius (m)</label>
+              <input type="number" min="60" max="1000" step="10"
+                     .value=${String(cfg.shellRadiusM ?? FLIGHT_SHELL_DEFAULT_RADIUS_M)}
+                     @change=${(e: Event) => set(f => {
+                       // setFlights clamps 60..1000 + normalizes the default to undefined.
+                       f.shellRadiusM = numOrUndef((e.target as HTMLInputElement).value, 60, 1000)
+                         ?? FLIGHT_SHELL_DEFAULT_RADIUS_M;
+                     })}
+                     style="width:80px">
+            </div>
+            <div style="font-size:10px;color:var(--text-dim);margin:-2px 0 4px;line-height:1.35">
+              Scene distance the search radius maps onto — larger spreads traffic deeper toward the horizon.
             </div>
             <div class="row" style="align-items:center">
               <label style="font-size:12px;color:var(--text);flex:1" title="Poll cadence. airplanes.live documents a 1 request/second limit.">Poll (s)</label>
