@@ -137,26 +137,78 @@
       ok('5: unknown category → jet', mk('D7') === 'jet');
     }
 
-    // ── 3. compressRadiusMm ─────────────────────────────────────────────────
+    // ── 3. compressRadiusMm — RADIUS-ANCHORED power law ─────────────────────
+    // The user's report: "flights 10 miles away still appear close to the
+    // property line… if 15 nm is entered, the entries 15 miles away should be
+    // fairly small and render at the edge of the dome; the 10 nm entries should
+    // be midpoint between the home and the horizon." The old asymptotic curve
+    // (rMax·d/(d+K)) front-loaded distance and NEVER reached the rim — at
+    // radius 15 it put 10 nm at 71 % of the shell and 15 nm at 79 %. The
+    // mapping is now anchored to the configured radius itself:
+    //   r = rMax · clamp(d/R, 0, 1.05)^P,  P = ln2/ln1.5 ≈ 1.7095
+    // whose exponent is DERIVED from exactly those two anchors.
     {
-      const R = F.FLIGHT_SHELL.rMaxMm;
+      const R = F.FLIGHT_SHELL.rMaxMm, P = F.FLIGHT_SHELL.radialExponent;
+      const HEAD = F.FLIGHT_SHELL.radialHeadroom, RMAX_HEAD = R * Math.pow(HEAD, P);
       ok('6: 0 nm → 0 mm', F.compressRadiusMm(0, 30) === 0);
       let mono = true, bounded = true, prev = -1;
       for (let d = 0; d <= 250; d += 0.1) {
         const v = F.compressRadiusMm(d, 30);
-        if (v <= prev - 1e-9) mono = false;
-        if (!(v < R)) bounded = false;
+        if (v < prev - 1e-9) mono = false;
+        if (!(v <= RMAX_HEAD + 1e-6)) bounded = false;
         prev = v;
       }
-      ok('6: monotonically increasing over 0..250 nm', mono);
-      ok('6: strictly below rMaxMm everywhere', bounded, `rMax=${R}`);
+      ok('6: monotonically non-decreasing over 0..250 nm', mono);
+      ok('6: bounded by rMaxMm · headroom^P (the dead-reckoning slack)', bounded,
+        `cap=${RMAX_HEAD.toFixed(1)}`);
       ok('6: negative distance clamps to 0', F.compressRadiusMm(-5, 30) === 0);
       ok('6: non-finite distance clamps to 0', F.compressRadiusMm(NaN, 30) === 0);
-      // K floor: radiusNm 5 → K = max(4, 1.25) = 4, so it must NOT use r/4.
-      near('6: K floor at radiusNm=5 (K=4)', F.compressRadiusMm(4, 5), R / 2, 1e-6);
-      near('6: K = radiusNm/4 at radiusNm=100 (K=25)', F.compressRadiusMm(25, 100), R / 2, 1e-6);
+
+      // THE exponent, and the two anchors it was derived from.
+      near('6: radialExponent is ln2/ln1.5', P, Math.LN2 / Math.log(1.5), 1e-15);
+      near('6: radialExponent ≈ 1.7095', P, 1.7095112914, 1e-9);
+      near('6: radialHeadroom is 1.05', HEAD, 1.05, 0);
+
+      // "Matches the radius entry": the SAME two anchors must hold at every
+      // configured radius — the shell is a scale model of whatever the user
+      // typed, so 10-of-15 and 20-of-30 read identically.
+      let rimAll = true, midAll = true, sevenAll = true;
+      for (const rad of [5, 15, 30, 100]) {
+        if (Math.abs(F.compressRadiusMm(rad, rad) - R) > 1e-6) rimAll = false;
+        if (Math.abs(F.compressRadiusMm(2 * rad / 3, rad) - R / 2) > 1e-6) midAll = false;
+        // …and the whole curve is radius-invariant in u, not just the anchors.
+        if (Math.abs(F.compressRadiusMm(7 * rad / 15, rad) / R - 0.2717461217) > 1e-9) sevenAll = false;
+      }
+      ok('6: d = radiusNm renders AT the rim, at every radius (5/15/30/100)', rimAll);
+      ok('6: d = ⅔·radiusNm renders at the MIDPOINT, at every radius', midAll);
+      ok('6: the curve is a pure function of d/radiusNm (scale model)', sevenAll);
+
+      // The user's headline numbers, at the shipped default radius.
+      near('6: 15 nm @ radius 15 → the rim exactly', F.compressRadiusMm(15, 15), 120000, 1e-9);
+      near('6: 10 nm @ radius 15 → half way out exactly', F.compressRadiusMm(10, 15), 60000, 1e-9);
+      near('6: 7.5 nm @ radius 15 → 36,691.6 mm (30.6 %)',
+        F.compressRadiusMm(7.5, 15), 36691.6354, 0.01);
+      // The OLD curve put 10 nm at 71 % of the shell — the whole complaint.
+      const pct10 = 100 * F.compressRadiusMm(10, 15) / R;
+      ok('6: 10 nm is no longer crowded into the outer shell (was 71 %)',
+        pct10 > 45 && pct10 < 55, `${pct10.toFixed(1)} %`);
+
+      // Beyond the radius the mapping keeps expanding for `headroom`, then
+      // pins — the planner filters d > radiusNm, so this is dead-reckoning
+      // slack only (a drifting rig must not freeze onto the rim).
+      ok('6: keeps expanding just past the rim (dead-reckoning slack)',
+        F.compressRadiusMm(15.3, 15) > R);
+      near('6: pins at the headroom cap past 1.05·radius',
+        F.compressRadiusMm(90, 15), RMAX_HEAD, 1e-6);
       ok('6: bigger radius pushes the same aircraft inward',
         F.compressRadiusMm(20, 100) < F.compressRadiusMm(20, 20));
+      // A garbage/zero radius must not divide by zero — it falls back to the
+      // shipped default rather than producing NaN/Infinity.
+      near('6: radius 0 falls back to the default radius',
+        F.compressRadiusMm(10, 0), F.compressRadiusMm(10, F.FLIGHTS_DEFAULT_RADIUS_NM), 1e-9);
+      ok('6: non-finite radius is finite + defaulted',
+        Number.isFinite(F.compressRadiusMm(10, NaN))
+        && F.compressRadiusMm(10, NaN) === F.compressRadiusMm(10, F.FLIGHTS_DEFAULT_RADIUS_NM));
     }
 
     // ── 4. compressAltitudeMm ───────────────────────────────────────────────
@@ -273,60 +325,108 @@
       const trueAngDeg = (altFt, distNm) =>
         Math.atan2(altFt * FT_M, distNm * NM_M) * 180 / Math.PI;
 
-      // Distance goldens (radius 15 nm → K = max(4, 15/4) = 4), recomputed for
-      // the 2026-07 shell rescale (rMaxMm 24000 → 120000, yMaxMm 22000 → 66000).
-      // The RADII are exactly 5× their pre-rescale values; the display ANGLES are
-      // unchanged, because the elevation branch reproduces the true angle at any
-      // shell size — which is the whole point of the rescale being safe.
+      // Distance goldens (radius 15 nm), recomputed for the 2026-07 RADIAL
+      // REMAP (asymptotic rMax·d/(d+K) → radius-anchored rMax·(d/R)^P). The
+      // display ANGLES are UNCHANGED — the elevation branch reproduces the true
+      // angle at any radius, which is exactly what makes remapping the radius
+      // safe — only the radii (and the heights that keep the angle true) move.
       const g1 = D(8.7, 35000);
-      near('9b: 35,000 ft @ 8.7 nm → r', Math.hypot(g1.planX, g1.planY), 82204.7244, 0.01);
-      near('9b: 35,000 ft @ 8.7 nm → dispY', g1.dispY, 54427.6458, 0.01);
+      near('9b: 35,000 ft @ 8.7 nm → r', Math.hypot(g1.planX, g1.planY), 47288.8475, 0.01);
+      near('9b: 35,000 ft @ 8.7 nm → dispY', g1.dispY, 31309.8871, 0.01);
       near('9b: 35,000 ft @ 8.7 nm → 33.5° up (== true)', dispAngDeg(g1), 33.508, 0.01);
 
+      // THE user-facing anchor: an aircraft at exactly the configured radius
+      // renders ON the rim, small and low in the sky.
       const g2 = D(15, 35000);
-      near('9b: 35,000 ft @ 15 nm → r', Math.hypot(g2.planX, g2.planY), 94736.8421, 0.01);
-      near('9b: 35,000 ft @ 15 nm → dispY', g2.dispY, 36380.5843, 0.01);
+      // (atNm's nm → latitude round-trip is float-exact only to ~1e-9 nm, so
+      // the anchor is pinned to 0.01 mm rather than bit-equality here; the
+      // exact-equality form lives in section 3 on the pure function.)
+      near('9b: 35,000 ft @ 15 nm → r is the rim exactly',
+        Math.hypot(g2.planX, g2.planY), 120000, 0.01);
+      near('9b: 35,000 ft @ 15 nm → dispY', g2.dispY, 46082.0734, 0.01);
       near('9b: 35,000 ft @ 15 nm → 21.0° up (== true)', dispAngDeg(g2), 21.008, 0.01);
 
-      // Overhead traffic must STAY overhead. On the rescaled shell the elevation
-      // term (21943.8 mm) now clears the 6500 clearance floor comfortably, so
-      // this sample is angle-TRUE rather than floored — a strict improvement.
+      // …and the second anchor: ⅔ of the radius sits at the shell midpoint.
+      const gMid = D(10, 35000);
+      near('9b: 35,000 ft @ 10 nm → r is the midpoint exactly',
+        Math.hypot(gMid.planX, gMid.planY), 60000, 0.01);
+      near('9b: 35,000 ft @ 10 nm → 29.9° up (== true)', dispAngDeg(gMid), 29.943, 0.01);
+      ok('9b: the rim aircraft reads LOWER in the sky than the midpoint one',
+        dispAngDeg(g2) < dispAngDeg(gMid), `${dispAngDeg(g2).toFixed(1)}° < ${dispAngDeg(gMid).toFixed(1)}°`);
+
+      // Overhead traffic. The radius remap pulls the near band far inward (a
+      // 0.5 nm aircraft is 1/30th of the radius, so 0.5^P ≈ 0.3 % of the
+      // shell), which drops the elevation term below the clearance floor — so
+      // very near traffic now RIDES the floor. It still reads steeply overhead,
+      // which is the property that matters; the floor is the one documented
+      // exception to angle-honesty (a plane must never be able to hit the
+      // house), and it can only push the angle UP, never down.
       const g3 = D(0.5, 5000);
-      near('9b: 5,000 ft @ 0.5 nm → r', Math.hypot(g3.planX, g3.planY), 13333.3333, 0.01);
-      near('9b: 5,000 ft @ 0.5 nm → dispY', g3.dispY, 21943.8445, 0.01);
-      ok('9b: 5,000 ft @ 0.5 nm → clears the floor (no longer pinned to it)',
-        g3.dispY > F.FLIGHT_SHELL.clearMm + 1, `dispY=${g3.dispY.toFixed(0)}`);
-      near('9b: 5,000 ft @ 0.5 nm → reads at the TRUE elevation angle',
-        dispAngDeg(g3), trueAngDeg(5000, 0.5), 1e-6);
+      near('9b: 5,000 ft @ 0.5 nm → r', Math.hypot(g3.planX, g3.planY), 358.1177, 0.01);
+      near('9b: 5,000 ft @ 0.5 nm → dispY rides the clearance floor',
+        g3.dispY, F.FLIGHT_SHELL.clearMm, 1e-9);
       ok('9b: 5,000 ft @ 0.5 nm → still reads overhead (> 55° up)', dispAngDeg(g3) > 55,
         `${dispAngDeg(g3).toFixed(1)}°`);
+      ok('9b: the floor only ever raises the angle, never lowers it',
+        dispAngDeg(g3) >= trueAngDeg(5000, 0.5));
       const g4 = D(0.5, 35000);
-      near('9b: 35,000 ft @ 0.5 nm → the log curve wins (overhead stays steep)',
-        g4.dispY, F.compressAltitudeMm(35000), 1e-9);
-      ok('9b: …and reads > 75° up', dispAngDeg(g4) > 75, `${dispAngDeg(g4).toFixed(1)}°`);
+      ok('9b: 35,000 ft @ 0.5 nm → reads > 75° up (overhead stays overhead)',
+        dispAngDeg(g4) > 75, `${dispAngDeg(g4).toFixed(1)}°`);
+      // The log-curve branch is no longer reachable at the default radius (the
+      // elevation term peaks at ≈1.05·rMax·altM/(R·NM_M), below the curve for
+      // every altitude at R = 15) — it governs at SMALL radii, where the same
+      // aircraft is a large fraction of the shell.
+      const g5 = D(5, 35000, 5);
+      near('9b: 35,000 ft @ 5 nm, radius 5 → the log curve wins',
+        g5.dispY, F.compressAltitudeMm(35000), 1e-9);
+      ok('9b: …and the capped angle stays BELOW the true one',
+        dispAngDeg(g5) < trueAngDeg(35000, 5), `${dispAngDeg(g5).toFixed(1)}° < 49.0°`);
 
       // THE regression: dispY used to be independent of distance.
       ok('9b: dispY is NOT independent of distance (the reported bug)',
         Math.abs(D(3, 35000).dispY - D(30, 35000).dispY) > 1000,
         `${D(3, 35000).dispY.toFixed(0)} vs ${D(30, 35000).dispY.toFixed(0)}`);
 
-      // Strictly DECREASING in distance for a fixed altitude, once past the
-      // crossover (35,000 ft crosses at ≈7.40 nm at radius 15) and before the
-      // clearance floor (35,000 ft reaches 6500 mm at ≈102.3 nm). Both bounds
-      // moved OUT with the shell rescale — the elevation branch now governs a
-      // far wider distance band, which is exactly the "far off in the sky" read.
-      // dispY_elev ∝ alt / (d + K).
-      let mono = true, prev = Infinity;
-      for (let d = 7.5; d <= 100; d += 0.5) {
-        const v = D(d, 35000).dispY;
-        if (!(v < prev - 1e-9)) { mono = false; break; }
-        prev = v;
+      // "Farther = lower in the sky" is an ANGLE property, and under the
+      // radius-anchored mapping it is the angle that must be asserted. Under
+      // the OLD asymptotic radius, dispY_elev reduced to rMax·altM/(NM_M·(d+K))
+      // and fell with distance; now r = rMax·(d/R)^P gives
+      // dispY_elev = rMax·altM·d^(P−1)/(NM_M·R^P), which RISES with distance
+      // (P > 1). The aircraft is drawn higher AND much farther out, and the
+      // ratio — the elevation angle — still strictly falls, on every branch:
+      // elevation (angle == true, and true falls), log curve (dispY constant,
+      // r grows) and clearance floor (dispY constant, r grows). Swept over the
+      // domain the planner actually feeds, d ≤ radiusNm.
+      let angMono = true, aprev = Infinity;
+      for (let d = 0.25; d <= 15; d += 0.05) {
+        const v = dispAngDeg(D(d, 35000));
+        if (!(v < aprev - 1e-9)) { angMono = false; break; }
+        aprev = v;
       }
-      ok('9b: fixed altitude → dispY strictly decreases with distance', mono);
-      // …and the radius still strictly INCREASES over the same sweep, i.e. the
+      ok('9b: fixed altitude → display ELEVATION ANGLE strictly falls with distance', angMono);
+      let angAll = true;
+      for (const rad of [5, 15, 30, 100]) for (const alt of [1500, 10000, 35000]) {
+        let p2 = Infinity;
+        for (let d = 0.25; d <= rad; d += rad / 200) {
+          const v = dispAngDeg(D(d, alt, rad));
+          if (!(v < p2 - 1e-9)) { angAll = false; break; }
+          p2 = v;
+        }
+      }
+      ok('9b: …at every radius (5/15/30/100) and altitude', angAll);
+      let yUp = true, yprev = -Infinity;
+      for (let d = 0.5; d <= 15; d += 0.25) {
+        const v = D(d, 35000).dispY;
+        if (v < yprev - 1e-9) { yUp = false; break; }
+        yprev = v;
+      }
+      ok('9b: …while dispY itself now RISES with distance (P > 1, angle still falls)', yUp);
+      // …and the radius strictly INCREASES right out to the rim, i.e. the
       // aircraft walks out toward the horizon rather than merely shrinking.
+      // (Bounded at the configured radius: past 1.05·R the mapping pins, and
+      // the planner has filtered those aircraft out anyway.)
       let rMono = true, rPrev = -Infinity;
-      for (let d = 3; d <= 40; d += 0.5) {
+      for (let d = 3; d <= 15; d += 0.5) {
         const v = Math.hypot(...(x => [x.planX, x.planY])(D(d, 35000)));
         if (!(v > rPrev + 1e-9)) { rMono = false; break; }
         rPrev = v;
@@ -345,10 +445,15 @@
 
       // Angle parity: where the elevation branch is active the DISPLAYED angle
       // equals the TRUE one; nowhere (above the floor) may it exceed it.
+      // Swept over RADIUS as well as distance/altitude: the log-curve branch is
+      // unreachable at radius 15 (see g5), so a fixed-radius grid could no
+      // longer witness both branches. Distances are expressed as fractions of
+      // the radius, which is the frame the mapping is defined in.
       let parity = true, never = true, sawElev = 0, sawCurve = 0;
+      for (const rad of [5, 15, 40])
       for (const alt of [500, 1500, 4000, 9000, 18000, 27000, 35000, 43000]) {
-        for (const d of [0.25, 0.75, 2, 5, 9, 15, 25, 40]) {
-          const p = D(d, alt);
+        for (const frac of [0.02, 0.05, 0.14, 0.33, 0.6, 1, 1.66, 2.66]) {
+          const d = frac * rad, p = D(d, alt, rad);
           const disp = dispAngDeg(p), tru = trueAngDeg(alt, d);
           const floored = p.dispY <= F.FLIGHT_SHELL.clearMm + 1e-9;
           const elevBranch = !floored && p.dispY < F.compressAltitudeMm(alt) - 1e-6;
@@ -358,14 +463,15 @@
         }
       }
       ok('9b: elevation branch reproduces the TRUE elevation angle exactly',
-        // The 6500 clearance floor absorbs the low-altitude rows of the sample
-        // grid (alt ≲ 1320 ft can never clear it: max elev term = rMax·altM/
-        // (NM_M·K) = 16.20·altM at K=4 — the coefficient grew 5× with rMaxMm, so
-        // far FEWER cells are floored than before), leaving 25 of 64 cells on
-        // the elevation branch and 21 floored.
-        parity && sawElev >= 24, `${sawElev} samples on the elevation branch`);
+        // The 6500 clearance floor absorbs the low-altitude + very-near rows of
+        // the grid: the elevation term is now rMax·altM·d^(P−1)/(NM_M·R^P), so
+        // it vanishes as d → 0 and the innermost cells all floor. 67 of the 192
+        // cells land on the elevation branch, 15 on the log curve (small radii
+        // only) and 110 on the floor.
+        parity && sawElev >= 60, `${sawElev} samples on the elevation branch`);
       ok('9b: display angle never EXCEEDS the true angle (above the floor)', never);
-      ok('9b: the log curve still governs some near/high traffic', sawCurve > 0, `${sawCurve} samples`);
+      ok('9b: the log curve still governs some near/high traffic at small radii',
+        sawCurve > 0, `${sawCurve} samples`);
 
       // The clearMm property-clearance floor: NOTHING may render low enough to
       // hit the house — distant low approach traffic rides the floor.
@@ -419,14 +525,22 @@
       near('9c: shell yMaxMm is 66,000 mm', F.FLIGHT_SHELL.yMaxMm, 66000, 0);
       near('9c: clearMm unchanged at 6,500 mm', F.FLIGHT_SHELL.clearMm, 6500, 0);
       near('9c: yMinMm unchanged at 2,500 mm', F.FLIGHT_SHELL.yMinMm, 2500, 0);
-      near('9c: 7 nm @ default radius → r = 76,363.6 mm', R7(35000), 76363.6364, 0.01);
+      near('9c: 7 nm @ default radius → r = 32,609.5 mm', R7(35000), 32609.5346, 0.01);
+      // The absolute "≥ 60 m" pin from the SHELL-RESCALE report is superseded by
+      // the RADIAL-REMAP report: an absolute floor on a mid-range aircraft is
+      // exactly what pushed 10 nm out to 71 % of the shell. The honest invariant
+      // is RELATIVE — 7 of 15 nm belongs in the inner third, well clear of the
+      // property but nowhere near the horizon.
       let far7 = true, same7 = true;
+      const pct7 = 100 * R7(35000) / F.FLIGHT_SHELL.rMaxMm;
       for (const alt of [1200, 4500, 12000, 24000, 35000, 43000]) {
-        if (R7(alt) < 60000) far7 = false;                    // ≥ 60 m from the property
+        if (R7(alt) < 25000) far7 = false;                    // ≥ 25 m from the property
         if (Math.abs(R7(alt) - R7(35000)) > 1e-9) same7 = false;
       }
-      ok('9c: 7 nm at ANY cruise altitude lands ≥ 60 m out (the complaint)', far7,
+      ok('9c: 7 nm at ANY cruise altitude lands ≥ 25 m out (well past the yard)', far7,
         `r=${R7(35000).toFixed(0)} mm`);
+      ok('9c: …and sits in the inner third of the shell, not crowding the rim',
+        pct7 > 25 && pct7 < 35, `${pct7.toFixed(1)} % of the shell`);
       ok('9c: …and the display radius is altitude-independent', same7);
       // The elevation branch must GOVERN cruise traffic from ~8 nm outward —
       // that is what makes a distant jet hug the horizon instead of the roof.
@@ -453,7 +567,11 @@
       const S = F.flightDisplayScale, R = F.FLIGHT_SHELL.rMaxMm;
       near('9d: scale at r=0 is exactly 1', S(0), 1, 0);
       near('9d: scale at rMax is 1 + gain', S(R), 1 + F.FLIGHT_SCALE_GAIN, 1e-12);
-      near('9d: gain is 2.2 (rim ≈ 3.2×)', F.FLIGHT_SCALE_GAIN, 2.2, 0);
+      // Eased 2.2 → 0.8 with the radial remap: the user wants an aircraft AT
+      // the configured radius to read "fairly small". Perspective at 120 m does
+      // the work; the gain only keeps the rim model from dissolving.
+      near('9d: gain is 0.8 (rim = 1.8×, "fairly small")', F.FLIGHT_SCALE_GAIN, 0.8, 0);
+      near('9d: half-shell scales 1.4×', S(R / 2), 1.4, 1e-12);
       let mono = true, bounded = true, prev = -Infinity;
       for (let r = 0; r <= R * 1.5; r += R / 400) {
         const v = S(r);
@@ -470,7 +588,11 @@
       const s7 = S(F.compressRadiusMm(7, 15)), s2 = S(F.compressRadiusMm(2, 15));
       ok('9d: farther aircraft render LARGER (legibility, not perspective)', s7 > s2,
         `2 nm ${s2.toFixed(2)}× → 7 nm ${s7.toFixed(2)}×`);
-      near('9d: 7 nm @ default radius scales 2.40×', s7, 2.4, 0.001);
+      near('9d: 7 nm @ default radius scales 1.217×', s7, 1.2174, 0.001);
+      // A rim aircraft must stay modest — the growth curve must never undo the
+      // distance read the radial remap just bought.
+      ok('9d: the rim model stays under 2× (the "fairly small" requirement)',
+        S(R) < 2, `${S(R).toFixed(2)}×`);
     }
 
     // ── 7. satAltAz goldens ─────────────────────────────────────────────────

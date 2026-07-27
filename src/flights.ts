@@ -614,7 +614,7 @@ export function aircraftModelKind(fp: FlightPoint): 'prop' | 'jet' | 'heli' {
 // occlude an aircraft drawn outside it. Reach is a CAMERA FRUSTUM concern, not
 // a dome one — see FLIGHT_SHELL_REACH_MM.
 export const FLIGHT_SHELL = {
-  rMaxMm: 120000,    // horizontal display shell ceiling (asymptote — never reached)
+  rMaxMm: 120000,    // horizontal display shell rim — REACHED exactly at d = radiusNm
   yMinMm: 2500,      // altitude-curve band bottom (0 ft anchor — NOT the render floor)
   yMaxMm: 66000,     // display altitude at altMaxFt and above
   altRefFt: 3000,    // log knee — detail is spent on low, visually interesting traffic
@@ -627,6 +627,20 @@ export const FLIGHT_SHELL = {
   // It does NOT scale with rMaxMm: on the bigger shell the floored elevation
   // angles simply get shallower, which is exactly the far-off-in-the-sky read.
   clearMm: 6500,
+  // Radial mapping exponent — see compressRadiusMm. DERIVED, not tuned: it is
+  // the unique power P satisfying the two anchors the user specified,
+  //   f(u) = u^P  with  f(1) = 1  and  f(2/3) = 1/2
+  // ("an aircraft at the configured radius renders AT the rim; one at 10 of
+  // 15 nm renders half way out"), so P = ln 2 / ln 1.5 ≈ 1.7095.
+  radialExponent: Math.LN2 / Math.log(1.5),
+  // How far PAST the configured radius the mapping keeps expanding before it
+  // pins. The planner already filters aircraft beyond the radius, so this is
+  // purely slack for boundary jitter + dead reckoning between polls: without it
+  // a rig drifting past the rim would freeze its radius and slide along the rim
+  // instead of continuing outward. 5 % of the radius, i.e. ≤ 1.05^P ≈ 1.086×
+  // rMaxMm — comfortably inside the frustum widen that FLIGHT_SHELL_REACH_MM
+  // already requests (1.25 × req + 30,000).
+  radialHeadroom: 1.05,
 } as const;
 
 // How far from the shell's own centre (the home anchor) anything may be drawn —
@@ -638,15 +652,36 @@ export const FLIGHT_SHELL = {
 export const FLIGHT_SHELL_REACH_MM =
   Math.hypot(FLIGHT_SHELL.rMaxMm, FLIGHT_SHELL.yMaxMm);   // ≈136,953 mm
 
-// Horizontal compression: asymptotic, so a nearer aircraft is always visibly
-// nearer (monotonic) and NOTHING ever reaches rMaxMm. K sets the knee — a
-// quarter of the configured search radius, floored at 4 nm so a tiny radius
-// still spreads its traffic instead of pinning everything to the rim.
+// Horizontal compression: RADIUS-ANCHORED power law. The shell is a scale
+// model of the user's configured search radius —
+//
+//   u = clamp(distNm / radiusNm, 0, radialHeadroom)
+//   r = rMaxMm · u^radialExponent
+//
+// so the mapping is defined entirely by "where does the configured radius
+// render": at the RIM, exactly. The exponent is derived from the two anchors
+// the user asked for (see FLIGHT_SHELL.radialExponent): d = radiusNm lands on
+// the rim, d = ⅔·radiusNm lands at the halfway point. Both hold for ANY
+// configured radius — 10 of 15 nm and 20 of 30 nm read identically — which is
+// what "the drawing distance should match the radius entry" means.
+//
+// Superlinear (P > 1) is the point: it pushes the near/middle band INWARD, so
+// mid-range traffic no longer crowds the outer shell and only genuinely
+// far-out aircraft sit near the horizon. The previous asymptotic curve
+// (rMax·d/(d+K)) did the opposite — it front-loaded distance and never reached
+// the rim, so at radius 15 a 10 nm aircraft already sat 71 % of the way out and
+// nothing could ever render AT the horizon (user-reported: "flights 10 miles
+// away still appear close to the property line").
+//
+// Monotonic, f(0) = 0, and bounded by rMaxMm · radialHeadroom^P.
 export function compressRadiusMm(distNm: number, radiusNm: number): number {
+  const { rMaxMm, radialExponent, radialHeadroom } = FLIGHT_SHELL;
   const d = isFinite(distNm) && distNm > 0 ? distNm : 0;
-  const r = isFinite(radiusNm) ? radiusNm : 0;
-  const K = Math.max(4, r / 4);
-  return FLIGHT_SHELL.rMaxMm * d / (d + K);
+  // A missing / garbage / non-positive radius falls back to the shipped default
+  // rather than dividing by zero — the shell must always have a scale.
+  const R = isFinite(radiusNm) && radiusNm > 0 ? radiusNm : FLIGHTS_DEFAULT_RADIUS_NM;
+  const u = Math.min(d / R, radialHeadroom);
+  return rMaxMm * Math.pow(u, radialExponent);
 }
 
 // Altitude compression: log curve over [0, altMaxFt] → [yMinMm, yMaxMm].
@@ -675,7 +710,15 @@ export function compressAltitudeMm(altFt: number): number {
 //
 // The renderer COMPOSES this with the spawn/despawn fade scale (multiplicative),
 // so a dying rim aircraft still shrinks to nothing from its enlarged size.
-export const FLIGHT_SCALE_GAIN = 2.2;
+//
+// The gain is deliberately GENTLE (0.8 → 1.8× at the rim). It was 2.2 (3.2×)
+// while the old asymptotic radial curve bunched everything into the outer
+// shell and rim growth was the only thing keeping distant traffic legible. The
+// radius-anchored mapping spreads the band properly, and a rim aircraft should
+// read "fairly small" (the user's word) — natural perspective at 120 m does
+// most of the work now, and this only stops the model dissolving into a pixel.
+// Personal taste rides FlightsConfig.modelScale (0.5–4) on top of it.
+export const FLIGHT_SCALE_GAIN = 0.8;
 
 export function flightDisplayScale(rMm: number): number {
   const r = isFinite(rMm) && rMm > 0 ? rMm : 0;
@@ -700,9 +743,14 @@ const TWO_PI = Math.PI * 2;
 //
 // The second term is the height that reproduces the aircraft's TRUE elevation
 // angle on the compressed radius: `atan2(dispY, rMm)` then equals
-// `atan2(altM, distM)` exactly. Since rMm = rMax·d/(d+K), it simplifies to
-// `rMax · altM / (NM_M · (d + K))` — for a fixed altitude, strictly DECREASING
-// in distance, so a farther aircraft always sits lower in the sky. The min()
+// `atan2(altM, distM)` exactly. Under the radius-anchored mapping
+// rMm = rMax·(d/R)^P it works out to `rMax · altM · d^(P−1) / (NM_M · R^P)` —
+// for a fixed altitude that is INCREASING in d (P ≈ 1.71 > 1), so unlike the
+// old asymptotic curve the elevation term no longer falls away with distance
+// on its own. Distant traffic still hugs the horizon, but now for the honest
+// geometric reason: the radius grows FASTER than the height does, so
+// atan2(dispY, rMm) — which is exactly the true elevation angle — shrinks. The
+// min() still
 // leaves the log curve in charge of near/overhead traffic (where the elevation
 // term is the larger of the two), so a plane genuinely overhead still reads
 // overhead, and everywhere else the display angle can only be ≤ the true one.

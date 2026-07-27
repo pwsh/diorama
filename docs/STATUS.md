@@ -222,6 +222,20 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Radius-anchored flight distance mapping** (2026-07-27,
+  user-reported: "10 mi flights still near the property line; 15 nm
+  should render at the rim, 10 nm at the midpoint"). compressRadiusMm
+  is now `rMax·clamp(d/R, 0, 1.05)^P`, P = ln2/ln1.5 ≈ 1.7095 —
+  DERIVED from the user's two anchors (d=R → rim exactly, ⅔R →
+  midpoint), radius-invariant in u so the shell is a scale model of
+  whatever radius is entered; K is gone. Elevation-cap algebra sign
+  FLIPPED (dispY_elev rises with distance at P>1) — honesty is now an
+  ANGLE property, tests sweep display elevation angle. Near-field
+  compression strong by construction (sub-1.5 nm rides clearMm —
+  lever documented). FLIGHT_SCALE_GAIN 2.2→0.8 (rim 1.8×, "fairly
+  small"). flights 498→518; render 350/350 unchanged (nothing was
+  hardcoded to the old curve), ui 261/261, alert-center 67/67.
+
 - **Flight glow rules** (2026-07-27, user request; Sonnet research →
   `docs/research/flight-glow-rules.md` → single Opus pass). Ordered
   first-match-wins rule list (cap 30) assigning colour + pattern to

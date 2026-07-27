@@ -304,14 +304,26 @@ never throws), `isEmergency` (enum non-null OR squawk 7500/7600/7700), `FLIGHT_L
 `sanitizeLabelFields` (keys `callsign|reg|type|operator|alt|speed|trend|squawk|dist`, default
 `['callsign','alt']`), `aircraftModelKind` (legacy 3-way — provably `legacyModelKind(aircraftArchetype(null, cat))`),
 `MAX_AIRCRAFT` 50 nearest-first, and the **display-shell compression** (deliberately NOT to scale — the neighborhood honesty precedent): `compressRadiusMm`
-(asymptotic `rMax·d/(d+K)`, K = max(4, radius/4) nm, **rMax 120 000 mm**) +
+(**radius-anchored power law** `rMax·clamp(d/R, 0, 1.05)^P`, `P = ln2/ln1.5 ≈ 1.7095` in
+`FLIGHT_SHELL.radialExponent`, **rMax 120 000 mm**) — the exponent is DERIVED, not tuned:
+`f(1) = 1` and `f(2/3) = 1/2` are exactly the user's two anchors ("an aircraft at the configured
+radius renders AT the rim; 10 of 15 nm renders half way out"), so the shell is a scale model of
+whatever radius is typed and 10-of-15 reads identically to 20-of-30. The old asymptotic
+`rMax·d/(d+K)` front-loaded distance and never reached the rim (10 nm sat at 71 % of the shell)
+— user-reported as "flights 10 miles away still appear close to the property line". The 1.05
+headroom is dead-reckoning slack past the rim (the planner filters d > radiusNm); zero/garbage
+radius falls back to `FLIGHTS_DEFAULT_RADIUS_NM`. Plus
 `compressAltitudeMm` (log 2 500–**66 000** mm band over 0–45 000 ft) — **but the two curves are NOT
 independent**: `flightDisplayAltitudeMm(altFt, distNm, rMm)` (the ONE place display height is
 composed) caps the log curve at the TRUE elevation angle, `dispY = max(clearMm,
-min(compressAltitudeMm(alt), r·altM/distM))`. Since `r = rMax·d/(d+K)` the cap reduces to
-`rMax·altM/(NM_M·(d+K))` — strictly DECREASING in distance at fixed altitude, so far aircraft hug
-the horizon; the `min()` leaves the log curve governing near/overhead traffic (a plane genuinely
-overhead still reads overhead) and elsewhere the display angle can only be ≤ the true one.
+min(compressAltitudeMm(alt), r·altM/distM))`. **The power law flipped the cap's algebra**:
+`dispY_elev` reduces to `rMax·altM·d^(P−1)/(NM_M·R^P)`, which RISES with distance (P > 1) —
+"farther = lower in the sky" is now purely an ANGLE property (angle == true on the elevation
+branch, and TRUE angle falls with distance; dispY is constant while r grows on the curve/floor
+branches) — the tests assert the display elevation ANGLE sweep, never dispY monotonicity. At the
+default radius the elevation branch (or the clearMm floor) always wins; the log curve governs
+only at small radii (both branches stay test-witnessed via a radius-swept parity grid). A plane
+genuinely overhead still reads overhead; elsewhere the display angle can only be ≤ the true one.
 **`FLIGHT_SHELL.clearMm` (6500) is the hard property-clearance render floor** and the single
 exception to angle-honesty: NOTHING may draw lower (a plane must never be able to hit the house).
 The elevation cap made the old 2500 mm `yMinMm` floor reachable for ALL distant low traffic —
@@ -324,13 +336,16 @@ cap the altitude band was comparable to the radial shell, so every cruise-altitu
 **Shell SIZE (third user report of the arc)**: the original 24 000 mm shell put a 7 nm airliner
 15 m from the house — absurd once the neighborhood overlay drew real-scale streets, and no longer
 disguised once the elevation cap flattened distant traffic into a narrow vertical band ("bunched
-up in a much smaller area"). rMax is 120 000 (7 nm @ the default 15 nm radius ⇒ 76.4 m,
-golden-pinned ≥ 60 m); yMax 66 000 is sized so the ELEVATION branch governs cruise traffic from
-≈7.4 nm outward (the crossover sweep is asserted 8–60 nm). The shell now EXCEEDS the 30 000 mm
-sky dome — harmless: the dome is camera-centered `depthWrite:false` `renderOrder −10` and can
-never occlude. `flightDisplayScale(rMm) = 1 + FLIGHT_SCALE_GAIN(2.2)·min(1, rMm/rMax)` grows the
-rig GROUP scale with display distance for rim legibility, composed MULTIPLICATIVELY with the
-spawn/fade scale in `_advanceFlights` (read off the eased radius so growth glides);
+up in a much smaller area"). rMax is 120 000; under the power law 7 nm @ radius 15 ⇒ ~32.7 m
+(27 % of the shell — well beyond the property), 10 nm ⇒ 60 m midpoint, 15 nm ⇒ the 120 m rim
+(golden-pinned at radius 5/15/30/100). NB near-field compression is strong by construction
+(P > 1): sub-1.5 nm traffic sits near home on the clearMm floor — physically consistent with the
+anchors; the lever if it ever reads badly is clearMm or a near-field linear blend. The shell
+EXCEEDS the 30 000 mm sky dome — harmless: the dome is camera-centered `depthWrite:false`
+`renderOrder −10` and can never occlude. `flightDisplayScale(rMm) = 1 +
+FLIGHT_SCALE_GAIN(0.8)·min(1, rMm/rMax)` (rim 1.8× — was 2.2/3.2×; a rim aircraft must read
+"fairly small", perspective at 120 m does the work, `modelScale` composes for taste), composed
+MULTIPLICATIVELY with the spawn/fade scale in `_advanceFlights` (read off the eased radius);
 `FLIGHT_SHELL_REACH_MM` (= hypot(rMax, yMax) ≈ 136 953) is the frustum requirement both sides
 share. `FlightsConfig.modelScale` (0.5–4, default 1; clamped in `setFlights` AND the renderer,
 exactly-1 → undefined) folds into `_flightRigScale` as a THIRD multiplicative term — `fade ×
@@ -486,7 +501,7 @@ new dirty-key input. 2D `drawFlights` calls the same pair (`solid`+colorB = two 
 call `resolveFlightGlow`, never re-derive locally. Settings ▸ Flight tracking "Glow rules"
 editor (collapsed summary rows, ✎ expand, ▲▼ reorder — order materially changes behaviour).
 **Attribution**: "Flight data © airplanes.live" joins the fixed bottom-left chip (stacked with the
-OSM line) whenever cloud + enabled + data. Tests: `flights-test.html` (`FLIGHTS PASS 498/498` —
+OSM line) whenever cloud + enabled + data. Tests: `flights-test.html` (`FLIGHTS PASS 518/518` —
 fixture = a REAL 94-aircraft airplanes.live LAX capture; incl. the live-path emit matrix, the
 archetype golden matrix, the emergency-alert lifecycle, and the shell-rescale golden/property
 suite), `flights-render-test.html` (`FLIGHTSRENDER PASS 350/350` — heading/pitch signs asserted
