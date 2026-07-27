@@ -1630,6 +1630,15 @@ export class ThreeDRenderer {
   private _appliedBelowHorizon: boolean | null = null;
   private _appliedFovV: number | null = null;
   private _appliedFovH: number | null | undefined = undefined;
+  // Camera pivot policy (Scene3D.cameraPivot; absent = 'center'). In 'center'
+  // OrbitControls panning is DISABLED and `_updateCameraPivot` eases the orbit
+  // target back onto `_pivotX/_pivotZ` (scene coords) every frame, translating
+  // the camera by the same delta so the view slides home rather than swinging.
+  // 'free' is the classic behaviour (pan enabled, no enforcement).
+  private _cameraPivotMode: 'center' | 'free' = 'center';
+  private _pivotX = 0;
+  private _pivotZ = 0;
+  private _appliedPivotMode: 'center' | 'free' | null = null;
   private _grid: THREE.GridHelper | null = null;
   private _bgVisibleNow = false;   // last-computed bg-image visibility (grid suppression; set in updateFloor)
   // Scene3D.groundLevelMm resolved + clamped (set in updateFloor). 0 = today's
@@ -2430,6 +2439,10 @@ export class ThreeDRenderer {
     this._controls.maxPolarAngle = Math.PI * 0.49;
     this._controls.minDistance = 1000;
     this._controls.maxDistance = CAM_MAXDIST_DEFAULT;
+    // Pivot policy: 'center' (the default) disables panning so the orbit pivot
+    // can't drift off the plan. `setCameraPivot` (called per tick by three-view)
+    // is the authority; this just makes the very first frames agree with it.
+    this._controls.enablePan = this._cameraPivotMode === 'free';
     this._controls.update();
 
     // Sims cam azimuth snap: after any orbit gesture ends, if the snap mode is
@@ -3332,6 +3345,29 @@ export class ThreeDRenderer {
     this._appliedBelowHorizon = on;
     if (!this._controls) return;
     this._controls.maxPolarAngle = on ? Math.PI - 0.02 : Math.PI * 0.49;
+  }
+
+  // Camera pivot policy. 'center' (the DEFAULT) pins the orbit pivot to the plan
+  // centre: OrbitControls panning is disabled (that covers BOTH the mouse pan
+  // button and the two-finger touch pan) and `_updateCameraPivot` eases
+  // `controls.target` x/z back onto (centerX, centerZ) — moving the camera by
+  // the SAME delta so the scene slides home instead of the world swinging around
+  // a drifted pivot. 'free' restores classic OrbitControls (pan on, pivot
+  // follows). Self-guarding like setFov/setBelowHorizon: calling it every tick
+  // only touches `enablePan` on an actual mode change, so an in-flight ease is
+  // never disturbed. NB the pivot CENTRE is refreshed unconditionally (it moves
+  // with the floor rect / glass-house union, which is not a "change" worth
+  // guarding). `applyViewPreset`/`setCameraView` (and the URL/card `cam=`
+  // template) set their own target; under 'center' the enforcement then eases
+  // that target's x/z home — accepted and consistent with the mode (the presets
+  // already frame the floor centre, so in practice it is a no-op).
+  setCameraPivot(mode: 'center' | 'free', centerX: number, centerZ: number): void {
+    this._pivotX = isFinite(centerX) ? centerX : 0;
+    this._pivotZ = isFinite(centerZ) ? centerZ : 0;
+    if (mode === this._appliedPivotMode) return;
+    this._appliedPivotMode = mode;
+    this._cameraPivotMode = mode;
+    if (this._controls) this._controls.enablePan = mode === 'free';
   }
 
   // Independent horizontal / vertical field of view. A PerspectiveCamera carries
@@ -20688,6 +20724,39 @@ export class ThreeDRenderer {
     cam.position.z = t.z + r * Math.cos(a);
   }
 
+  // Central camera pivot enforcement (Scene3D.cameraPivot === 'center', the
+  // default). Panning is already disabled by `setCameraPivot`, so this only has
+  // to heal a target that some OTHER path moved (a view preset, a saved view, a
+  // URL/card `cam=` pose, a floor-switch delta): ease `controls.target` x/z
+  // toward the stored plan centre and translate the CAMERA by the identical
+  // delta, so the camera→target offset (azimuth, elevation, distance — the whole
+  // zoom feel) is preserved exactly and the motion reads as the view sliding
+  // home. `target.y` is deliberately untouched (presets park it at ~600 and the
+  // vertical framing must not shift). Snap-stops within 1 mm so it settles.
+  //
+  // PRECEDENCE: auto-follow and cinematic orbit already own the target / orbit
+  // centre and are explicit opt-ins, so they WIN — enforcement skips entirely
+  // while either is on (pan stays disabled; only the easing yields). Sims-cam
+  // azimuth snap composes fine: it rotates about the target wherever this left it.
+  private _updateCameraPivot(dt: number): void {
+    if (this._cameraPivotMode !== 'center') return;
+    if (this._autoFollow || this._cinematicOrbit) return;
+    const cam = this._camera, ctrl = this._controls;
+    if (!cam || !ctrl) return;
+    const ex = this._pivotX - ctrl.target.x, ez = this._pivotZ - ctrl.target.z;
+    if (Math.abs(ex) < 1 && Math.abs(ez) < 1) {
+      if (ex !== 0 || ez !== 0) {             // snap-stop the last sub-mm
+        ctrl.target.x += ex; ctrl.target.z += ez;
+        cam.position.x += ex; cam.position.z += ez;
+      }
+      return;
+    }
+    const k = Math.min(1, dt * 2);            // τ ≈ 0.5 s
+    const dx = ex * k, dz = ez * k;
+    ctrl.target.x += dx; ctrl.target.z += dz;
+    cam.position.x += dx; cam.position.z += dz;
+  }
+
   private _animate = (): void => {
     this._rafId = requestAnimationFrame(this._animate);
     const nowS = performance.now() / 1000;
@@ -20699,6 +20768,9 @@ export class ThreeDRenderer {
     // Cinematic slow-orbit rides on top of auto-follow's framing (or orbits the
     // avatars on its own when auto-follow is off).
     this._updateCinematicOrbit(frameDt);
+    // Central pivot enforcement — inert in 'free' mode and skipped whenever
+    // auto-follow / cinematic orbit are driving the target (they win).
+    this._updateCameraPivot(frameDt);
     // Sims-cam azimuth glide: rotate the camera about the target toward the
     // snap goal, easing the shortest arc. Cleared once within ~0.5°. SUSPENDED
     // while cinematic orbit runs (continuous orbit vs 45° snap would fight — the

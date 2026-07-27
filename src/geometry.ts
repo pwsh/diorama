@@ -3167,6 +3167,21 @@ export function floorsDisplayOrder<T>(floors: readonly T[]): T[] {
   return floors.slice().reverse();
 }
 
+// Centre of the union of every given floor's rect, in world mm. All floors share
+// ONE world frame and every rect is anchored at the origin (0..w × 0..d), so the
+// union is simply 0..max(w) × 0..max(d) and its centre is max/2. Used by the 3D
+// camera-pivot enforcement to orbit the whole stack under glass house instead of
+// just the active story. Empty list → the origin.
+export function floorsUnionCenter(floors: readonly { w: number; d: number }[]): { x: number; y: number } {
+  let maxW = 0, maxD = 0;
+  for (const f of floors) {
+    const w = Number(f?.w), d = Number(f?.d);
+    if (isFinite(w) && w > maxW) maxW = w;
+    if (isFinite(d) && d > maxD) maxD = d;
+  }
+  return { x: maxW / 2, y: maxD / 2 };
+}
+
 // Floors whose 2D wall outline should draw as a reference underlay while some
 // OTHER floor is the active one: peek2d && !disabled, excluding the current
 // floor. Pure selection helper (consumed by canvas-render's onion-skin pass).

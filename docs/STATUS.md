@@ -247,6 +247,19 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Central camera pivot (new default) + free-movement mode**
+  (2026-07-27, user-reported: "pivot point doesn't stay at the
+  property centre; sliding the map moves it and it's hard to
+  recenter"; unreleased). `Scene3D.cameraPivot` ('center' default /
+  'free'): center = pan disabled + per-frame ease of target x/z to
+  the plan centre (camera translated by the identical delta so the
+  pose is preserved; snap <1 mm; y untouched); pivot = current
+  floor centre, or `floorsUnionCenter(enabledFloors)` under glass
+  house (pure, geometry.ts) mapped through the active `_w()` frame;
+  autoFollow/cinematicOrbit take precedence; free = today's
+  behavior. ✋ 3D-bar toggle + Settings ▸ Display Camera select.
+  camera-test 12→28, floors-view 67/67 green.
+
 - **Near-field flight compression fix + real draw-radius knob**
   (2026-07-27, user-reported: "6.5 nm renders in the backyard, 2 nm
   over the house; draw distance changes nothing"; unreleased). Two

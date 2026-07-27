@@ -2017,6 +2017,17 @@ export class SettingsDrawer extends LitElement {
         'Gradient sky dome + sun / moon / stars behind the scene (default on when weather is configured)')}
       <div style="border-top:1px solid var(--border);margin:10px 0 0;padding-top:8px">
         <div style="font-weight:600;font-size:11px;margin-bottom:4px">Camera</div>
+        <div class="row" title="Plan centre: the camera always orbits the middle of the floor (or of the whole stack under glass house) and panning is disabled, so the view can never drift off-centre. Free movement: classic behaviour — pan the view and the pivot follows.">
+          <label>Camera pivot</label>
+          <select .value=${sc.cameraPivot ?? 'center'}
+                  @change=${(e: Event) => upd(() => {
+                    const v = (e.target as HTMLSelectElement).value;
+                    p.store.scene3d!.cameraPivot = v === 'free' ? 'free' : undefined;
+                  })}>
+            <option value="center">Plan centre (default)</option>
+            <option value="free">Free movement</option>
+          </select>
+        </div>
         ${check('Allow orbiting below the horizon', !!sc.belowHorizon,
           v => { p.store.scene3d!.belowHorizon = v; },
           'Let the camera drop below the horizon and look up at the floor from underneath')}

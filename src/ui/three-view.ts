@@ -12,6 +12,7 @@ import { resolveNorth, markerScaleOf } from '../compass.js';
 import { parseNowPlaying, isMediaPlayerId } from '../geometry.js';
 import { robotProgress } from '../geometry.js';
 import { poolWaterColor } from '../geometry.js';
+import { floorsUnionCenter } from '../geometry.js';
 import { resolveScreenContent } from '../surfaces.js';
 import { resolveScenePreset, resolveTimeBucket } from '../time-of-day.js';
 import { conditionIntensity, weatherEffectEnabled, worstAlertSeverity } from '../weather.js';
@@ -107,6 +108,12 @@ export class ThreeView extends LitElement {
                          ? 'background:#2e7d32;border:1px solid #43a047;color:#e8f5e9'
                          : 'background:#1c2733;border:1px solid #33465a;color:#a5d6a7'}"
                 @click=${() => this._toggleCinematicOrbit()}>🎬</button>
+        <button title="Free camera movement (slide the view; pivot follows). Off: camera always pivots around the plan centre."
+                style="font-size:10px;padding:3px 7px;border-radius:3px;cursor:pointer;
+                       ${(sc3?.cameraPivot ?? 'center') === 'free'
+                         ? 'background:#2e7d32;border:1px solid #43a047;color:#e8f5e9'
+                         : 'background:#1c2733;border:1px solid #33465a;color:#a5d6a7'}"
+                @click=${() => this._toggleCameraPivot()}>✋</button>
         ${saved.length ? html`
           <select style="font-size:10px;background:#1c2733;border:1px solid #33465a;border-radius:3px;
                          color:#cfd8dc;max-width:110px"
@@ -161,6 +168,18 @@ export class ThreeView extends LitElement {
     const p = this.planner;
     if (!p.store.scene3d) p.store.scene3d = { preset: 'night' };
     p.store.scene3d.cinematicOrbit = !p.store.scene3d.cinematicOrbit;
+    p.save(); p.emitConfig();
+    this.requestUpdate();
+  }
+
+  // Camera-pivot toggle: 'free' restores classic pan-and-the-pivot-follows
+  // OrbitControls; toggling back DELETES the key so the store carries the
+  // default ('center') rather than a redundant explicit value.
+  private _toggleCameraPivot(): void {
+    const p = this.planner;
+    if (!p.store.scene3d) p.store.scene3d = { preset: 'night' };
+    if ((p.store.scene3d.cameraPivot ?? 'center') === 'free') delete p.store.scene3d.cameraPivot;
+    else p.store.scene3d.cameraPivot = 'free';
     p.save(); p.emitConfig();
     this.requestUpdate();
   }
@@ -900,6 +919,21 @@ export class ThreeView extends LitElement {
       // no dirty key needed; the values change only on a settings edit.
       r.setBelowHorizon(sc3o?.belowHorizon === true);
       r.setFov(sc3o?.fovV ?? 50, sc3o?.fovH ?? null);
+
+      // Camera pivot policy (absent = 'center'): keep the orbit pivot pinned to
+      // the plan centre so panning can never drift it. Under glass house the
+      // whole stack is on screen, so the pivot is the union centre of every
+      // ENABLED floor; otherwise it's this floor's own rect centre. World mm →
+      // scene coords through the SAME `_w()` mapping the renderer uses
+      // (sceneX = fw/2 − wx, sceneZ = wy − fd/2) against the ACTIVE floor's
+      // frame — exactly how ghost floors are mapped, so the union centre lands
+      // where the stacked stories actually are. For the current-floor case this
+      // reduces to (0, 0). Self-guarding setter → no dirty key needed.
+      const pivotWorld = sc3o?.glassHouse
+        ? floorsUnionCenter(p.enabledFloors())
+        : { x: f.w / 2, y: f.d / 2 };
+      r.setCameraPivot(sc3o?.cameraPivot ?? 'center',
+                       f.w / 2 - pivotWorld.x, pivotWorld.y - f.d / 2);
 
       // Floor / walls / furniture / bg: structural + effective lighting
       // preset (auto modes flip it as the sun/lux sensor moves) + per-floor

@@ -10,11 +10,24 @@
 </style>
 <div id="c"></div>
 <div id="log"></div>
+<!-- Harness build (from the repo root; NEVER reuse stale bundles):
+       npm run build
+       H=/tmp/diorama-harness-camera
+       rm -rf "$H"; mkdir -p "$H"
+       cp -r dist/* "$H"/; cp test-pages/camera-test.html "$H"/
+       npx esbuild src/geometry.ts --bundle --format=esm --outfile="$H"/geometry.mod.js
+     Run headless (serve over http — Chrome blocks dynamic module imports on file://):
+       (cd "$H" && python3 -m http.server 8811 &)
+       google-chrome --headless=new --disable-gpu --enable-unsafe-swiftshader \
+         --window-size=1280,880 --virtual-time-budget=15000 --dump-dom \
+         "http://localhost:8811/camera-test.html?b=$RANDOM" | grep -o "<title>[^<]*"  -->
 <script type="module">
-  // Renderer-harness camera test: below-horizon polar cap + independent H/V FOV.
+  // Renderer-harness camera test: below-horizon polar cap, independent H/V FOV,
+  // and the central camera-pivot policy (Scene3D.cameraPivot).
   // Whole body is synchronous after load() so no background _animate RAF can
   // interleave — every read reflects only manual setter calls.
   const mod = await import('./assets/three-renderer.js?v=' + Date.now());
+  const { floorsUnionCenter } = await import('./geometry.mod.js?v=' + Date.now());
   const r = new mod.ThreeDRenderer(document.getElementById('c'));
   await r.load();
 
@@ -92,6 +105,104 @@
      r._camera.fov === preFov, `fov=${r._camera.fov} pre=${preFov}`);
   ok('applyViewPreset(iso) does not change aspect',
      near(r._camera.aspect, preAspect, 1e-9), `aspect=${r._camera.aspect} pre=${preAspect}`);
+
+  // ── 8. camera pivot policy (Scene3D.cameraPivot; absent = 'center') ───────
+  const ctrl = r._controls, cam = r._camera;
+  // Deterministic frame driver: the RAF's _animate also calls _updateCameraPivot,
+  // but this whole body is synchronous so no frame can interleave here.
+  const advance = (n, dt = 1 / 60) => { for (let i = 0; i < n; i++) r._updateCameraPivot(dt); };
+  const putTarget = (x, z) => {   // move ONLY the target (simulating a drifted pivot)
+    ctrl.target.x = x; ctrl.target.z = z;
+  };
+  const offsetOf = () => ({ x: cam.position.x - ctrl.target.x,
+                            y: cam.position.y - ctrl.target.y,
+                            z: cam.position.z - ctrl.target.z });
+
+  // 8a. mode drives OrbitControls panning (covers mouse pan AND 2-finger touch)
+  r.setCameraPivot('center', 0, 0);
+  ok('setCameraPivot(center) → controls.enablePan false', ctrl.enablePan === false,
+     `enablePan=${ctrl.enablePan}`);
+  r.setCameraPivot('free', 0, 0);
+  ok('setCameraPivot(free) → controls.enablePan true', ctrl.enablePan === true,
+     `enablePan=${ctrl.enablePan}`);
+
+  // 8b. free mode does NOT enforce — a drifted target stays where it is
+  putTarget(3000, -2400);
+  advance(60);
+  ok('free mode: drifted target is left alone',
+     near(ctrl.target.x, 3000, 1e-6) && near(ctrl.target.z, -2400, 1e-6),
+     `t=(${ctrl.target.x.toFixed(1)},${ctrl.target.z.toFixed(1)})`);
+
+  // 8c. centre mode eases a drifted target home, preserving the camera offset
+  r.setCameraPivot('center', 0, 0);
+  putTarget(3000, -2400);
+  ctrl.target.y = 600;
+  const off0 = offsetOf();
+  advance(400);                                   // ~6.7 s at 60 fps (τ ≈ 0.5 s) → inside the 1 mm snap
+  ok('centre mode: target x/z converge to the pivot',
+     Math.abs(ctrl.target.x) < 1 && Math.abs(ctrl.target.z) < 1,
+     `t=(${ctrl.target.x.toFixed(3)},${ctrl.target.z.toFixed(3)})`);
+  const off1 = offsetOf();
+  ok('centre mode: camera→target offset preserved through the ease',
+     near(off1.x, off0.x, 1e-6) && near(off1.y, off0.y, 1e-6) && near(off1.z, off0.z, 1e-6),
+     `d=(${(off1.x-off0.x).toExponential(1)},${(off1.y-off0.y).toExponential(1)},${(off1.z-off0.z).toExponential(1)})`);
+  ok('centre mode: target.y untouched by the ease', near(ctrl.target.y, 600, 1e-9),
+     `y=${ctrl.target.y}`);
+
+  // 8d. a non-zero pivot (the glass-house union centre case) is honoured
+  r.setCameraPivot('center', 900, -400);
+  putTarget(0, 0);
+  advance(400);
+  ok('centre mode: eases to a non-zero pivot',
+     near(ctrl.target.x, 900, 1) && near(ctrl.target.z, -400, 1),
+     `t=(${ctrl.target.x.toFixed(2)},${ctrl.target.z.toFixed(2)})`);
+
+  // 8e. self-guard: repeating the same call mid-ease must not reset progress
+  r.setCameraPivot('center', 0, 0);
+  putTarget(4000, 0);
+  advance(6);                                     // partway home
+  const mid = ctrl.target.x;
+  r.setCameraPivot('center', 0, 0);               // identical args, twice
+  r.setCameraPivot('center', 0, 0);
+  ok('self-guard: repeat setCameraPivot does not reset an in-flight ease',
+     near(ctrl.target.x, mid, 1e-9) && ctrl.enablePan === false && mid < 4000 && mid > 0,
+     `mid=${mid.toFixed(1)}`);
+  advance(400);
+  ok('self-guard: ease still completes after the repeat calls',
+     Math.abs(ctrl.target.x) < 1, `x=${ctrl.target.x.toFixed(3)}`);
+
+  // 8f. precedence: auto-follow owns the target, so enforcement yields to it
+  r.setAutoFollow(true);
+  putTarget(2500, 1500);
+  advance(60);
+  ok('auto-follow wins: pivot enforcement leaves the target alone',
+     near(ctrl.target.x, 2500, 1e-6) && near(ctrl.target.z, 1500, 1e-6),
+     `t=(${ctrl.target.x.toFixed(1)},${ctrl.target.z.toFixed(1)})`);
+  ok('auto-follow: panning still disabled in centre mode', ctrl.enablePan === false,
+     `enablePan=${ctrl.enablePan}`);
+  r.setAutoFollow(false);
+
+  // 8g. precedence: cinematic orbit likewise owns the orbit centre
+  r.setCinematicOrbit(true);
+  putTarget(-1800, 700);
+  advance(60);
+  ok('cinematic orbit wins: pivot enforcement leaves the target alone',
+     near(ctrl.target.x, -1800, 1e-6) && near(ctrl.target.z, 700, 1e-6),
+     `t=(${ctrl.target.x.toFixed(1)},${ctrl.target.z.toFixed(1)})`);
+  r.setCinematicOrbit(false);
+  advance(400);
+  ok('enforcement resumes once cinematic orbit is off', Math.abs(ctrl.target.x) < 1,
+     `x=${ctrl.target.x.toFixed(3)}`);
+
+  // ── 9. pure floorsUnionCenter ─────────────────────────────────────────────
+  const uc = floorsUnionCenter([{ w: 10000, d: 8000 }, { w: 6000, d: 12000 }]);
+  ok('floorsUnionCenter: multi-floor differing dims → max/2',
+     uc.x === 5000 && uc.y === 6000, `(${uc.x},${uc.y})`);
+  const us = floorsUnionCenter([{ w: 7000, d: 3000 }]);
+  ok('floorsUnionCenter: single floor → its own centre',
+     us.x === 3500 && us.y === 1500, `(${us.x},${us.y})`);
+  const ue = floorsUnionCenter([]);
+  ok('floorsUnionCenter: empty list → origin', ue.x === 0 && ue.y === 0, `(${ue.x},${ue.y})`);
 
   // ── report ────────────────────────────────────────────────────────────────
   const pass = tests.filter(t => t.ok).length, total = tests.length;
