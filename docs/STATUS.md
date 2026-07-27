@@ -1,6 +1,6 @@
 # Project status & pick-up guide
 
-Last updated: 2026-07-27, at **v0.34.0**. This is the single document to
+Last updated: 2026-07-27, at **v0.35.0**. This is the single document to
 read (alongside `CLAUDE.md`) to resume work with full context.
 
 ## Where things stand
@@ -227,6 +227,14 @@ instance.
   renders AT the rim near the horizon, ⅔ radius at the midpoint,
   P = ln2/ln1.5 derived from the user's anchors, radius-invariant;
   rim aircraft read small (scale gain 2.2→0.8)).
+  → v0.35.0 within reach (user-definable flight draw radius —
+  FlightsConfig.shellRadiusM 60–1000 m default 300 = 2.5× the old
+  fixed 120 m shell, whole display a similarity transform so apparent
+  sizes/angles hold, clearMm floor stays absolute, frustum tracks;
+  phone taps on planes fixed — touch-aware 3D tap gate 12 px/600 ms +
+  screen-space nearest-aircraft fallback pick 28 px, fixtures always
+  win; Settings ▸ Connection "About Diorama" footer w/ purpose
+  summary + docs/repo/changelog links, all UI modes).
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 

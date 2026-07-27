@@ -1210,7 +1210,9 @@ export class SettingsDrawer extends LitElement {
           📖 ${link('https://pwsh.github.io/diorama/', 'Documentation & user guide')}
           — setup, features, floor-plan library, live demo<br>
           🐙 ${link('https://github.com/pwsh/diorama', 'GitHub repository')}
-          — source, releases, issue tracker
+          — source, issue tracker<br>
+          📋 ${link('https://github.com/pwsh/diorama/releases', 'Changelog')}
+          — release notes for every version
         </div>
       </div>`;
   }
