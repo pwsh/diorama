@@ -351,14 +351,26 @@ export function viewCenterFitsFloor(w: number, d: number, cx: number, cy: number
  * with different `w`/`d` shifts all content by this delta in scene coords:
  *   x: fw/2 − wx  →  fw′/2 − wx  = x + (fw′ − fw)/2
  *   z: wy − fd/2  →  wy − fd′/2  = z − (fd′ − fd)/2
- * Equal dims → exact `{0, 0}` no-op. Add it to BOTH camera position and target.
+ *
+ * The frame is ALSO floor-ELEVATION-derived: the active slab always builds at
+ * scene y=0, so switching from a floor at elevation E to one at E′ slides the
+ * whole world (ground plane, neighborhood, the other stories in glass house)
+ * down by (E′ − E) in scene coords. Compensating with `dy = E − E′` keeps the
+ * camera at the same height ABOVE THE GROUND, which is what makes the fixed
+ * ground plane read as fixed across a floor switch.
+ *
+ * Equal dims + equal elevations → exact `{0, 0, 0}` no-op. Add it to BOTH camera
+ * position and target. Elevation args are optional (default 0) so callers that
+ * predate the ground-plane work behave exactly as before.
  */
 export function floorSwitchCameraDelta(
   prevW: number, prevD: number, nextW: number, nextD: number,
-): { dx: number; dz: number } {
+  prevElevMm = 0, nextElevMm = 0,
+): { dx: number; dz: number; dy: number } {
   const ok = (n: number) => Number.isFinite(n);
-  if (!ok(prevW) || !ok(prevD) || !ok(nextW) || !ok(nextD)) return { dx: 0, dz: 0 };
-  return { dx: (nextW - prevW) / 2, dz: -(nextD - prevD) / 2 };
+  if (!ok(prevW) || !ok(prevD) || !ok(nextW) || !ok(nextD)) return { dx: 0, dz: 0, dy: 0 };
+  const dy = (ok(prevElevMm) && ok(nextElevMm)) ? prevElevMm - nextElevMm : 0;
+  return { dx: (nextW - prevW) / 2, dz: -(nextD - prevD) / 2, dy };
 }
 
 // Active geo-calibration session (runtime only). Records the sampling window

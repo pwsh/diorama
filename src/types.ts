@@ -1126,6 +1126,13 @@ export interface Floor {
   peek2d?: boolean;         // "peek" tri-state: enabled AND its wall outline draws as a 2D
                             // reference underlay (onion-skin) when viewing OTHER floors.
                             // Only meaningful when !disabled (hide wins over peek).
+  elevationMm?: number;     // this slab's height above the WORLD GROUND PLANE. Absent = AUTO
+                            // = arrayIndex × STORY_H_MM (3000) — floors[0] sits ON the ground,
+                            // reproducing the historical story stack. Negative = basement; the
+                            // ground plane may bisect a floor (e.g. a walk-out level at −1300).
+                            // Resolved by geometry.floorElevationMm against the FULL floors
+                            // array (the AUTO value is index-derived). repairFloor passes it
+                            // through.
 }
 
 // Weather source + display config (the "World Outside" arc, Feature W). All

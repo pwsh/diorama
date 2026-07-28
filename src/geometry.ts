@@ -3167,6 +3167,59 @@ export function floorsDisplayOrder<T>(floors: readonly T[]): T[] {
   return floors.slice().reverse();
 }
 
+// Scene3D.groundLevelMm — the USER's offset of the world ground plane relative
+// to the floor stack. Clamped so a fat-fingered value can't fling the backdrop
+// grid past the far plane; the house-on-a-foundation case lives in the first
+// metre of the negative range. NOTE this bounds the USER value ONLY — the
+// EFFECTIVE level the renderer consumes is this minus the active floor's
+// elevation and is deliberately unbounded (see three-view's injection point and
+// three-renderer's sanitizeGroundLevelMm). Lives here (pure, three-free) so
+// three-view can clamp without static-importing the lazy renderer chunk;
+// three-renderer re-exports it as its historical public home.
+const GROUND_LEVEL_LIMIT = 10000;
+export function resolveGroundLevelMm(v: number | null | undefined): number {
+  if (typeof v !== 'number' || !isFinite(v)) return 0;
+  return Math.max(-GROUND_LEVEL_LIMIT, Math.min(GROUND_LEVEL_LIMIT, v));
+}
+
+// ── Floor elevation above the WORLD GROUND PLANE ─────────────────────────────
+// Nominal story height (2743 mm wall + slab). The single source of truth: the
+// renderer's ghost-floor stacking, the glass-house transit puppet's Y sweep and
+// the AUTO elevation below all read it, so a change lands everywhere at once.
+export const STORY_H_MM = 3000;
+
+/**
+ * A floor slab's height above the world ground plane, in mm.
+ *
+ * The ground plane is FIXED in the world; floors sit at their own elevations
+ * relative to it (this is what makes the grade stop riding whichever story
+ * happens to be selected). `Floor.elevationMm` is the explicit value; when it is
+ * absent the elevation is AUTO = `indexInFloorsArray × STORY_H_MM`, which
+ * reproduces the historical ghost-floor stack exactly and puts floors[0] — the
+ * lowest story — ON the ground plane. Negative is legal (a basement), and the
+ * ground plane may bisect a floor (e.g. a walk-out lower level at −1300).
+ *
+ * `floors` MUST be the FULL `Store.floors` array (canonical story order): the
+ * AUTO value is index-derived, so resolving against a filtered list (e.g. the
+ * enabled-only list the ghost builder renders) would re-stack the autos every
+ * time an unrelated floor was disabled.
+ *
+ * Unknown id → 0 (the ground plane itself) — never throws, never NaN.
+ */
+export function floorElevationMm(
+  floors: readonly { id: string; elevationMm?: number }[] | null | undefined,
+  floorId: string,
+): number {
+  if (!floors) return 0;
+  for (let i = 0; i < floors.length; i++) {
+    const f = floors[i];
+    if (!f || f.id !== floorId) continue;
+    const e = f.elevationMm;
+    return (typeof e === 'number' && isFinite(e)) ? e : i * STORY_H_MM;
+  }
+  return 0;
+}
+
 // Centre of the union of every given floor's rect, in world mm. All floors share
 // ONE world frame and every rect is anchored at the origin (0..w × 0..d), so the
 // union is simply 0..max(w) × 0..max(d) and its centre is max/2. Used by the 3D

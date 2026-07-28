@@ -247,6 +247,24 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Fixed world ground plane + per-floor elevations** (2026-07-27,
+  user-reported: "the ground plane changes depending on which floor
+  is selected; glass view has a different offset"; unreleased).
+  `Floor.elevationMm` (repairFloor list; absent = AUTO = full-array
+  index × STORY_H_MM 3000; negative = basement; ground may bisect a
+  floor; sidebar "Elevation above ground (mm)" w/ auto placeholder)
+  + pure `floorElevationMm` (geometry.ts). ONE injection site in
+  three-view: `effGroundMm = resolveGroundLevelMm(user) − E_active`
+  overwrites scMerged.groundLevelMm — every grade consumer inherits
+  unchanged. `resolveGroundLevelMm` MOVED to geometry.ts (clamps the
+  USER value only; renderer re-exports; effective value may exceed
+  ±10000). Ghost stack + transit puppet elevation-driven (trailing
+  elevMm map, stale-chunk safe); `floorSwitchCameraDelta` gains a dy
+  term (camera keeps height above ground → floor switches leave the
+  grade/neighborhood/stack visually fixed); flights shell anchors to
+  the grade. Single-floor byte-identical. terrain 48→67, ghost-align
+  16→22, floors-view 67→86, camera 60/60, stair-link 25/25.
+
 - **Pivot lock × free movement as two independent options**
   (2026-07-27, follow-up to the bullet below; unreleased).
   `Scene3D.cameraPivot` is DEPRECATED (still read for back-compat)

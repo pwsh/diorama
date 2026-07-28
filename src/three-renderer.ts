@@ -36,6 +36,7 @@ import {
   infoCardText, infoCardRule, infoCardScale, infoCardMount, infoCardHeight,
   infoCardW, infoCardH,
   logicLightState, actionButtonHeight, actionButtonSize, actionButtonColor, ACTION_BUTTON_DEFAULTS,
+  STORY_H_MM, resolveGroundLevelMm,
 } from './geometry.js';
 import { ALERT_BEACON_DEFAULTS, alertBeaconState, alertBeaconColor, alertBeaconAlarming, isAlertDomain } from './alerts.js';
 import { northMarkerPos } from './compass.js';
@@ -822,10 +823,21 @@ const CAM_MAXDIST_CEIL = 8_500_000;
 // overlay, yard fill, outdoor standing height) sit above / below the floor slab.
 // Clamped so a fat-fingered value can't fling the grid past the far plane; the
 // house-on-a-foundation case lives in the first metre of the negative range.
-const GROUND_LEVEL_LIMIT = 10000;
-export function resolveGroundLevelMm(v: number | null | undefined): number {
-  if (typeof v !== 'number' || !isFinite(v)) return 0;
-  return Math.max(-GROUND_LEVEL_LIMIT, Math.min(GROUND_LEVEL_LIMIT, v));
+// Lives in geometry.ts (pure, shared by BOTH module graphs) so three-view can
+// clamp the user value without statically importing this lazy chunk; re-exported
+// here because the renderer has always been its public home.
+export { resolveGroundLevelMm };
+
+// The value the RENDERER consumes is the EFFECTIVE ground level:
+//   effGround = resolveGroundLevelMm(user value) − floorElevationMm(active floor)
+// composed caller-side (three-view). The ±10 000 clamp above therefore applies
+// to the USER's stored offset ONLY — the effective value legitimately runs past
+// it (a 3rd story is −9000 before the user offset even starts, and explicit
+// Floor.elevationMm has no such bound). Internal call sites must use this
+// finite-guard-only sanitizer, never re-clamp; re-clamping would silently pin
+// tall stacks to the grade and undo the whole fixed-ground-plane behaviour.
+function sanitizeGroundLevelMm(v: number | null | undefined): number {
+  return (typeof v === 'number' && isFinite(v)) ? v : 0;
 }
 
 // Furniture kinds that belong to the HOUSE rather than the ground under them:
@@ -4299,7 +4311,7 @@ export class ThreeDRenderer {
     // patch in a lowered yard sits on the yardFill instead of floating over it.
     // An area centred INSIDE a wall loop is indoor flooring and never moves.
     // Absent arg → the level updateFloor resolved (stale-caller safe).
-    const gl = resolveGroundLevelMm(groundLevelMm ?? this._groundLevel);
+    const gl = sanitizeGroundLevelMm(groundLevelMm ?? this._groundLevel);
     // Per-area grade (the _itemGroundY rule, resolved against the level THIS
     // call was handed so a stale caller can't split the patch from its yardFill).
     const areaGY = (cx: number, cy: number) => (gl !== 0 && this._outdoors(cx, cy) ? gl : 0);
@@ -4964,7 +4976,12 @@ export class ThreeDRenderer {
     // whole-group offset, the yard-fill patch adds it to its own y, and
     // _groundYAt returns it for outdoor points. Everything the USER authored on
     // the plan (slab, walls, furniture, ground areas, pools, paths) stays put.
-    this._groundLevel = resolveGroundLevelMm(scene3d?.groundLevelMm);
+    // EFFECTIVE ground level (already composed by three-view as
+    // userGroundLevel − activeFloorElevation), so the world ground plane is
+    // FIXED and the floors sit relative to it: viewing an upper story puts the
+    // grade a story below the slab instead of dragging the ground up with it.
+    // Finite-guard only — the ±10 000 clamp belongs to the USER value alone.
+    this._groundLevel = sanitizeGroundLevelMm(scene3d?.groundLevelMm);
     if (this._grid) this._grid.position.y = this._groundLevel;
     this._neighborhoodGroup.position.y = this._groundLevel;
     // Foreground wall cutaway: default ON, opt out with wallCutaway === false.
@@ -6085,9 +6102,16 @@ export class ThreeDRenderer {
   // (no opening cuts), footprint furniture boxes — no outlines, blobs, shadows,
   // or raycast targets. Each ghost floor uses ITS OWN w/d for coordinate
   // mapping but is centered on the scene origin, so all stories line up.
+  // `elevMm` (optional, stale-chunk safe): floorId → elevation above the world
+  // ground plane, resolved caller-side from the FULL Store.floors array (the
+  // AUTO value is index-derived, so it must NOT be computed from the enabled-only
+  // list passed in as `floors` — disabling one story would otherwise re-stack
+  // every other story's auto elevation). Absent → the legacy index × STORY_H
+  // stack, which is exactly what the auto elevations reproduce anyway.
   updateGhostFloors(floors: Floor[], currentId: string, scene3d?: Scene3D,
                     customObjects?: ObjectRecipe[],
-                    layers?: import('./types.js').Layers2D): void {
+                    layers?: import('./types.js').Layers2D,
+                    elevMm?: Record<string, number>): void {
     if (!this._scene) return;
     this._clearGroup(this._ghostGroup);
     this._cutawayGhostWalls = [];
@@ -6099,8 +6123,22 @@ export class ThreeDRenderer {
     const showFurniture = layers?.furniture !== false;
     const showAppliances = layers?.appliances !== false;
 
-    const STORY_H = 3000;   // 2743 mm wall + slab
+    const STORY_H = STORY_H_MM;   // 2743 mm wall + slab
     const curIdx = Math.max(0, floors.findIndex(fl => fl.id === currentId));
+    // Ghost story offset in scene mm. The ACTIVE slab always builds at scene
+    // y=0, so every ghost sits at its elevation MINUS the active floor's — with
+    // auto elevations that is identical to (i − curIdx) · STORY_H, and with
+    // explicit Floor.elevationMm the stack honours the real heights (unequal
+    // story heights, a mezzanine, a half-sunk basement). renderOrder below stays
+    // INDEX-based: it is a transparent-sort concern, not a height one.
+    const elevOff = (fl: Floor, i: number): number => {
+      if (!elevMm) return (i - curIdx) * STORY_H;
+      const g = elevMm[fl.id], c = elevMm[currentId];
+      if (typeof g !== 'number' || !isFinite(g) || typeof c !== 'number' || !isFinite(c)) {
+        return (i - curIdx) * STORY_H;
+      }
+      return g - c;
+    };
 
     // Cross-floor REGISTRATION invariant: all floors' plans live in ONE shared
     // world frame (origin 0,0) — the same frame the 2D peek underlay and the
@@ -6122,7 +6160,7 @@ export class ThreeDRenderer {
     for (let i = 0; i < floors.length; i++) {
       if (floors[i].id === currentId) continue;   // active floor is live
       const gf = floors[i];
-      const yOff = (i - curIdx) * STORY_H;
+      const yOff = elevOff(gf, i);
       const gw = gf.w, gd = gf.d;
 
       const gGrp = new THREE.Group();
@@ -12743,7 +12781,14 @@ export class ThreeDRenderer {
     // even across a mixed-version module pair.
     this._flightShellMm = flightShellMm(opts?.shellMm != null
       ? opts.shellMm / 1000 : undefined);
-    this._flightsGroup.position.set(anchorScene?.x ?? 0, 0, anchorScene?.z ?? 0);
+    // Anchor Y = the EFFECTIVE ground level, not the slab: the display shell
+    // (including the FLIGHT_SHELL.clearMm property-clearance floor) is measured
+    // from the GROUND, so an aircraft keeps a constant height above grade and
+    // the traffic band stops jumping a story every time the active floor
+    // changes. `_groundLevel` is whatever updateFloor last resolved (it is
+    // re-run on every floor switch and on any configRev bump, both of which also
+    // re-key updateFlights), so no extra plumbing is needed.
+    this._flightsGroup.position.set(anchorScene?.x ?? 0, this._groundLevel, anchorScene?.z ?? 0);
 
     const seen = new Set<string>();
     if (origin) {

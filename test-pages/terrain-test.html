@@ -337,9 +337,21 @@
          !!rig && Math.abs(rig.group.position.y - LOW) < 1e-6, `y=${rig?.group.position.y}`);
     }
 
-    // G12: clamp — an absurd value never flings the grid past the far plane.
-    mkG({ ...scene, groundLevelMm: -99999 });
-    ok('G12 ground level clamps at −10000', r._grid.position.y === -10000, `y=${r._grid.position.y}`);
+    // G12: the ±10 000 clamp now guards the USER's stored offset only, and it
+    // lives in geometry.ts (pure — three-view clamps without importing the lazy
+    // renderer chunk); three-renderer re-exports it from its historical home.
+    ok('G12 user ground offset clamps at ±10000 (pure)',
+       G.resolveGroundLevelMm(-99999) === -10000 && G.resolveGroundLevelMm(99999) === 10000 &&
+       G.resolveGroundLevelMm(-600) === -600 && G.resolveGroundLevelMm(undefined) === 0,
+       `${G.resolveGroundLevelMm(-99999)}/${G.resolveGroundLevelMm(99999)}`);
+    ok('G12a renderer re-exports the same clamp',
+       mod.resolveGroundLevelMm(-99999) === -10000 && mod.resolveGroundLevelMm(250) === 250);
+    // G12b: the EFFECTIVE level the renderer consumes (user offset − active
+    // floor elevation) must NOT be re-clamped — a 3rd story is −9000 before the
+    // user offset even starts, so re-clamping would pin tall stacks to grade.
+    mkG({ ...scene, groundLevelMm: -15000 });
+    ok('G12b effective ground level is NOT re-clamped by the renderer',
+       r._grid.position.y === -15000, `y=${r._grid.position.y}`);
 
     // G13: back to 0 restores exactly (default path unchanged).
     mkG(scene);
@@ -511,6 +523,91 @@
          zero === 6 && near(lo, 6 + LOW), `y0=${zero} yLow=${lo}`);
       r.updateBgTexts([], false, 0, 0);
     }
+  }
+
+  // ── I: FIXED WORLD GROUND PLANE — per-floor elevation + effective level ───
+  // The ground plane is fixed in the world and the floors sit relative to it;
+  // the active slab still builds at scene y=0, so three-view feeds the renderer
+  //   effGround = resolveGroundLevelMm(user offset) − floorElevationMm(active)
+  // and every downstream consumer is unchanged. Pure resolver here + the
+  // composed value landing on the real renderer.
+  {
+    const fl = (id, elevationMm) => ({ id, elevationMm });
+    const autoStack = [fl('a'), fl('b'), fl('c')];              // all AUTO
+    ok('I1 STORY_H_MM is 3000 (the nominal story)', G.STORY_H_MM === 3000, `v=${G.STORY_H_MM}`);
+    ok('I2 auto elevation = index × STORY_H_MM (floors[0] sits ON the ground)',
+       G.floorElevationMm(autoStack, 'a') === 0 &&
+       G.floorElevationMm(autoStack, 'b') === 3000 &&
+       G.floorElevationMm(autoStack, 'c') === 6000,
+       `${autoStack.map(x => G.floorElevationMm(autoStack, x.id)).join(',')}`);
+    const mixed = [fl('base', -2800), fl('mid'), fl('top', 5400)];
+    ok('I3 explicit elevationMm wins over the auto index value',
+       G.floorElevationMm(mixed, 'base') === -2800 && G.floorElevationMm(mixed, 'top') === 5400,
+       `base=${G.floorElevationMm(mixed, 'base')} top=${G.floorElevationMm(mixed, 'top')}`);
+    ok('I4 a floor without elevationMm still falls back to its own index',
+       G.floorElevationMm(mixed, 'mid') === 3000, `mid=${G.floorElevationMm(mixed, 'mid')}`);
+    ok('I5 negative elevation is legal (basement / walk-out below grade)',
+       G.floorElevationMm([fl('x', -1300)], 'x') === -1300);
+    ok('I6 unknown id / empty / null → 0, never NaN',
+       G.floorElevationMm(autoStack, 'nope') === 0 && G.floorElevationMm([], 'a') === 0 &&
+       G.floorElevationMm(null, 'a') === 0 && G.floorElevationMm(undefined, 'a') === 0);
+    ok('I7 garbage elevationMm falls back to AUTO (never NaN)',
+       G.floorElevationMm([fl('a'), { id: 'b', elevationMm: NaN }], 'b') === 3000 &&
+       G.floorElevationMm([fl('a'), { id: 'b', elevationMm: Infinity }], 'b') === 3000);
+    ok('I8 AUTO elevations resolve against the FULL array (a filtered list would re-stack)',
+       G.floorElevationMm(autoStack, 'c') === 6000 &&
+       G.floorElevationMm(autoStack.filter(x => x.id !== 'b'), 'c') === 3000,
+       'documents why the map is built from store.floors, not the enabled-only list');
+
+    // Composition on the real renderer: the ground plane must land at the SAME
+    // world height whichever story is selected. Selecting story N just means the
+    // grade sits N stories BELOW the (always-at-0) active slab.
+    const houseLoop2 = [
+      { x: 3000, y: 3000 }, { x: 7000, y: 3000 }, { x: 7000, y: 6000 },
+      { x: 3000, y: 6000 }, { x: 3000, y: 3000 },
+    ];
+    const walls2 = [{ id: 'iw', points: houseLoop2, kind: 'full' }];
+    const OUT2 = { x: 11000, y: 9500 };
+    // three-view's injection point, replicated exactly.
+    const eff = (userMm, floors, activeId) =>
+      G.resolveGroundLevelMm(userMm) - G.floorElevationMm(floors, activeId);
+    const applyEff = (userMm, floors, activeId) => {
+      r.updateFloor(mkFloor([], { walls: walls2 }), { ...scene, groundLevelMm: eff(userMm, floors, activeId) });
+      return { grid: r._grid.position.y, nbhd: r._neighborhoodGroup.position.y,
+               gy: r._groundYAt(OUT2.x, OUT2.y) };
+    };
+    const g0 = applyEff(0, autoStack, 'a');
+    ok('I9 ground floor (auto 0): grade at the slab — today\'s behavior byte-identical',
+       g0.grid === 0 && g0.nbhd === 0 && g0.gy === 0, JSON.stringify(g0));
+    const g1 = applyEff(0, autoStack, 'b');
+    ok('I10 selecting story 1 puts the grade one story BELOW the slab (the fix)',
+       g1.grid === -3000 && g1.nbhd === -3000 && g1.gy === -3000, JSON.stringify(g1));
+    const g2 = applyEff(0, autoStack, 'c');
+    ok('I11 story 2 → two stories below; the ground plane never moved in world terms',
+       g2.grid === -6000 && g2.nbhd === -6000 && g2.gy === -6000, JSON.stringify(g2));
+    ok('I12 grade steps by exactly one story per floor (fixed plane invariant)',
+       (g0.grid - g1.grid) === 3000 && (g1.grid - g2.grid) === 3000);
+    const gb = applyEff(0, mixed, 'base');
+    ok('I13 a basement at −2800 puts the grade ABOVE its slab',
+       gb.grid === 2800 && gb.gy === 2800, JSON.stringify(gb));
+    const gu = applyEff(-600, autoStack, 'b');
+    ok('I14 the user offset composes on top of the elevation (−600 − 3000)',
+       gu.grid === -3600 && gu.gy === -3600, JSON.stringify(gu));
+    const gbis = applyEff(0, [fl('walkout', 1300)], 'walkout');
+    ok('I15 the ground plane may BISECT a floor (slab 1300 above grade)',
+       gbis.grid === -1300, JSON.stringify(gbis));
+    // Effective values legitimately exceed the ±10 000 user clamp.
+    const tall = [fl('a'), fl('b'), fl('c'), fl('d'), fl('e')];
+    const gt = applyEff(-8000, tall, 'e');
+    ok('I16 effective level past the user clamp survives (5th story + −8000 offset)',
+       eff(-8000, tall, 'e') === -20000 && gt.grid === -20000, `grid=${gt.grid}`);
+    // Flights anchor rides the grade, not the slab.
+    r.updateFlights([], null, 0, 15, true, { x: 0, z: 0 });
+    ok('I17 flights shell anchors on the GROUND, not the active slab',
+       Math.abs(r._flightsGroup.position.y - (-20000)) < 1e-6,
+       `y=${r._flightsGroup.position.y}`);
+    // Restore the default frame for anything downstream.
+    r.updateFloor(mkFloor([], { walls: walls2 }), scene);
   }
 
   let pass = 0; const fails = [];

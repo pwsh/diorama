@@ -46,6 +46,7 @@ import { solveHomography, homographyResidualsMm } from '../homography.js';
 import { CLOCK_PRESETS, DATE_PRESETS, type ValueRule, type RuleOp } from '../value-rules.js';
 import type { Vec2, InfoCard, InfoCardMount, InfoCardDisplayMode, ActionButton, ActionKind, Ruler, DimensionMode, NeighborhoodConfig } from '../types.js';
 import { resolveRulerEnds } from '../geometry.js';
+import { floorElevationMm } from '../geometry.js';
 
 // Compact relative-age label for a GPS fix timestamp (ms epoch).
 function gpsAgeText(ts: number): string {
@@ -558,7 +559,26 @@ export class Sidebar extends LitElement {
                         @click=${(e: Event) => { e.stopPropagation(); p.cycleFloorVisibility(f.id); }}>
                   ${state === 'show' ? '👁' : state === 'peek' ? this._peekGlyph() : '🙈'}
                 </button>
-              </div>`;
+              </div>
+              ${cur ? html`
+                <div style="display:flex;align-items:center;gap:5px;padding:0 6px 2px 6px">
+                  <span style="color:var(--text-dim);font-size:10px;flex:1"
+                        title="Height of this floor's slab above the WORLD GROUND PLANE. The ground plane is fixed — floors sit relative to it — so selecting a floor (or glass house) never moves the ground. Negative = below grade; the ground plane may bisect a floor. Blank = auto (story order × 3000 mm).">Elevation above ground (mm)</span>
+                  <input type="number" step="100"
+                         style="width:82px;background:#111;color:var(--text);border:1px solid var(--border);
+                                border-radius:4px;padding:2px 4px;font-size:11px"
+                         placeholder=${`auto: ${floorElevationMm(floors, f.id)}`}
+                         .value=${f.elevationMm == null ? '' : String(f.elevationMm)}
+                         @click=${(e: Event) => e.stopPropagation()}
+                         @change=${(e: Event) => {
+                           const raw = (e.target as HTMLInputElement).value.trim();
+                           const v = raw === '' ? undefined : Number(raw);
+                           // Blank (or garbage) clears back to AUTO; any finite
+                           // value — negative included — pins the slab.
+                           f.elevationMm = (v != null && Number.isFinite(v)) ? v : undefined;
+                           p.save(); p.emitConfig();
+                         }}>
+                </div>` : nothing}`;
           })}
         </div>
         <div style="display:flex;gap:4px">

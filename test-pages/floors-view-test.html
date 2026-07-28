@@ -241,6 +241,66 @@
       ok('9f delta == _w(new) − _w(old) in x', sx + dd.dx === sx2, `${sx + dd.dx} vs ${sx2}`);
       ok('9g delta == _w(new) − _w(old) in z', sz + dd.dz === sz2, `${sz + dd.dz} vs ${sz2}`);
       ok('9h non-finite input → {0,0}', eq(floorSwitchCameraDelta(NaN, 8000, 12000, 8000), 0, 0), '');
+      // ── Y term: the world GROUND PLANE is fixed and the active slab always
+      // builds at scene y=0, so switching from a floor at elevation E to one at
+      // E′ slides the ground (and the neighborhood, and the glass-house stack)
+      // by E′ − E. dy = E − E′ keeps the camera at the same height ABOVE GROUND,
+      // which is what makes the fixed plane actually read as fixed.
+      ok('9i elevation args omitted → dy 0 (pre-ground-plane callers unchanged)',
+         d0.dy === 0 && dg.dy === 0, `${d0.dy},${dg.dy}`);
+      const du = floorSwitchCameraDelta(12000, 8000, 12000, 8000, 0, 3000);
+      ok('9j going UP one story → dy −3000 (camera drops with the ground)', du.dy === -3000, du.dy);
+      const dd2 = floorSwitchCameraDelta(12000, 8000, 12000, 8000, 3000, 0);
+      ok('9k coming DOWN one story → dy +3000', dd2.dy === 3000, dd2.dy);
+      ok('9l up/down round-trip cancels in y', du.dy + dd2.dy === 0, '');
+      ok('9m dy is independent of the rect delta',
+         floorSwitchCameraDelta(12000, 8000, 16000, 10000, 0, 2400).dy === -2400 &&
+         floorSwitchCameraDelta(12000, 8000, 16000, 10000, 0, 2400).dx === 2000, '');
+      ok('9n basement (−2800) → dy +2800 going down to it',
+         floorSwitchCameraDelta(12000, 8000, 12000, 8000, 0, -2800).dy === 2800, '');
+      ok('9o equal elevations → exact dy 0 no-op',
+         floorSwitchCameraDelta(12000, 8000, 12000, 8000, 5400, 5400).dy === 0, '');
+      ok('9p non-finite elevation → dy 0 (never NaN into the camera)',
+         floorSwitchCameraDelta(12000, 8000, 12000, 8000, NaN, 3000).dy === 0 &&
+         floorSwitchCameraDelta(12000, 8000, 12000, 8000, 0, Infinity).dy === 0, '');
+      ok('9q non-finite rect still zeroes everything incl. dy',
+         floorSwitchCameraDelta(NaN, 8000, 12000, 8000, 0, 3000).dy === 0, '');
+    }
+
+    // ═══ 9b. floorElevationMm — per-floor height above the fixed ground plane ═══
+    document.getElementById('rows').insertAdjacentHTML('beforeend', '<h2>9b. floorElevationMm (fixed ground plane)</h2>');
+    {
+      const { floorElevationMm, STORY_H_MM } = G;
+      const fl = (id, elevationMm) => ({ id, elevationMm });
+      const auto = [fl('a'), fl('b'), fl('c')];
+      ok('9b1 STORY_H_MM = 3000', STORY_H_MM === 3000, STORY_H_MM);
+      ok('9b2 AUTO = index × STORY_H_MM; floors[0] sits ON the ground plane',
+         floorElevationMm(auto, 'a') === 0 && floorElevationMm(auto, 'b') === 3000 &&
+         floorElevationMm(auto, 'c') === 6000, '');
+      ok('9b3 explicit elevationMm wins (incl. negative)',
+         floorElevationMm([fl('x', 2400)], 'x') === 2400 &&
+         floorElevationMm([fl('y', -1300)], 'y') === -1300, '');
+      ok('9b4 unknown id → 0', floorElevationMm(auto, 'zz') === 0, '');
+      ok('9b5 empty / null / undefined list → 0',
+         floorElevationMm([], 'a') === 0 && floorElevationMm(null, 'a') === 0 &&
+         floorElevationMm(undefined, 'a') === 0, '');
+      ok('9b6 garbage elevationMm falls back to AUTO',
+         floorElevationMm([fl('a'), { id: 'b', elevationMm: NaN }], 'b') === 3000, '');
+      ok('9b7 reordering changes AUTO elevations (array order is canonical)',
+         floorElevationMm([fl('a'), fl('b')], 'b') === 3000 &&
+         floorElevationMm([fl('b'), fl('a')], 'b') === 0, '');
+      ok('9b8 a filtered list would re-stack autos — hence resolve on store.floors',
+         floorElevationMm(auto, 'c') === 6000 &&
+         floorElevationMm(auto.filter(f => f.id !== 'b'), 'c') === 3000, '');
+      // Composition rule three-view applies (documented here so the pure side
+      // pins it even though the injection itself lives in the view layer).
+      const eff = (user, floors, id) => G.resolveGroundLevelMm(user) - floorElevationMm(floors, id);
+      ok('9b9 effective ground = clamped user offset − active elevation',
+         eff(0, auto, 'a') === 0 && eff(0, auto, 'b') === -3000 &&
+         eff(-600, auto, 'b') === -3600, '');
+      ok('9b10 user offset clamps at ±10000, effective value does not',
+         G.resolveGroundLevelMm(-99999) === -10000 &&
+         eff(-10000, [fl('a'), fl('b'), fl('c'), fl('d')], 'd') === -19000, '');
     }
 
     // ═══ 10. switchFloor RETAINS pan/zoom (real Planner) ═══

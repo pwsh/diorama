@@ -9,6 +9,20 @@
   // floor's frame — the same frame the 2D peek underlay + world geo landmarks
   // use), NOT centered on each ghost's own w/d. See CLAUDE.md "Glass house &
   // wall cutaway".
+  //
+  // Test 5 additionally covers the FIXED WORLD GROUND PLANE work: ghost story
+  // offsets come from real Floor elevations (Floor.elevationMm, else auto =
+  // index × STORY_H_MM), NOT (index − activeIndex) · 3000.
+  //
+  // Harness build (from the repo root; NEVER reuse stale bundles):
+  //   H=/tmp/diorama-harness-ghost
+  //   rm -rf "$H"; mkdir -p "$H"; cp -r dist/* "$H"/
+  //   cp test-pages/ghost-align-test.html "$H"/
+  //   npx esbuild src/geometry.ts --bundle --format=esm --outfile="$H"/geometry.mod.js
+  //   (cd "$H" && python3 -m http.server 8932 &)
+  //   google-chrome --headless=new --disable-gpu --enable-unsafe-swiftshader \
+  //     --virtual-time-budget=20000 --dump-dom \
+  //     "http://localhost:8932/ghost-align-test.html?b=$RANDOM" | grep -o "<title>[^<]*"
   const mod = await import('./assets/three-renderer.js?v=' + Date.now());
   const r = new mod.ThreeDRenderer(document.getElementById('c'));
   await r.load();
@@ -150,6 +164,72 @@
          wallZs.length > 0 && wallZs.every(z => z >= zMin - 1 && z <= zMax + 1),
          `slabZ=[${zMin},${zMax}] wallZ=[${wallZs.join(',')}]`);
     }
+  }
+
+  // ── Test 5: STORY STACKING uses real floor elevations (fixed ground plane) ──
+  //    The active slab always builds at scene y=0, so a ghost sits at
+  //    (its elevation − the active floor's). With AUTO elevations that is the
+  //    historical index × 3000; with explicit Floor.elevationMm the stack honours
+  //    the real heights. The elevation map is resolved caller-side from the FULL
+  //    store.floors array — disabling an unrelated floor must not re-stack the
+  //    autos, which is why it is NOT derived from the enabled-only list passed in.
+  {
+    const G = await import('./geometry.mod.js?v=' + Date.now());
+    const mk = (id) => baseFloor({ id, name: id, w: 10000, d: 8000,
+      walls: [wall(id + 'w', [{ x: 500, y: 500 }, { x: 9500, y: 500 },
+                              { x: 9500, y: 7500 }, { x: 500, y: 7500 }, { x: 500, y: 500 }])],
+      furniture: [] });
+    const groupsY = () => r._ghostGroup.children.map(g => g.position.y);
+    const elevMapOf = (floors) => {
+      const m = {}; for (const f of floors) m[f.id] = G.floorElevationMm(floors, f.id); return m;
+    };
+
+    // 5a: AUTO elevations reproduce the legacy index × STORY_H stack exactly.
+    const autoFloors = [mk('g0'), mk('g1'), mk('g2')];
+    r.updateFloor(autoFloors[0], sc);
+    r.updateGhostFloors(autoFloors, 'g0', sc, [], {}, elevMapOf(autoFloors));
+    let ys = groupsY().slice().sort((a, b) => a - b);
+    ok('T5a auto elevations → legacy 3000-per-story stack', ys.length === 2 && near(ys[0], 3000) && near(ys[1], 6000), `[${ys}]`);
+
+    // 5b: omitting the map entirely (a stale three-view) keeps the same stack.
+    r.updateGhostFloors(autoFloors, 'g0', sc, [], {});
+    ys = groupsY().slice().sort((a, b) => a - b);
+    ok('T5b no elevation map (stale caller) → identical legacy stack',
+       ys.length === 2 && near(ys[0], 3000) && near(ys[1], 6000), `[${ys}]`);
+
+    // 5c: EXPLICIT elevations win — a 2400 mm story is stacked at 2400, not 3000.
+    const expl = [Object.assign(mk('e0'), { elevationMm: 0 }),
+                  Object.assign(mk('e1'), { elevationMm: 2400 })];
+    r.updateFloor(expl[0], sc);
+    r.updateGhostFloors(expl, 'e0', sc, [], {}, elevMapOf(expl));
+    ok('T5c explicit elevation 2400 stacks the ghost at 2400 (not STORY_H)',
+       groupsY().length === 1 && near(groupsY()[0], 2400), `[${groupsY()}]`);
+
+    // 5d: viewing the UPPER floor puts the lower ghost BELOW it — the ghost
+    //     offset is a difference, so the whole stack keeps its world shape.
+    r.updateFloor(expl[1], sc);
+    r.updateGhostFloors(expl, 'e1', sc, [], {}, elevMapOf(expl));
+    ok('T5d viewing the upper floor puts the lower ghost at −2400',
+       groupsY().length === 1 && near(groupsY()[0], -2400), `[${groupsY()}]`);
+
+    // 5e: a negative (basement) elevation stacks below grade.
+    const base = [Object.assign(mk('b0'), { elevationMm: -2800 }), Object.assign(mk('b1'), { elevationMm: 0 })];
+    r.updateFloor(base[1], sc);
+    r.updateGhostFloors(base, 'b1', sc, [], {}, elevMapOf(base));
+    ok('T5e basement ghost stacks at −2800 under the ground floor',
+       groupsY().length === 1 && near(groupsY()[0], -2800), `[${groupsY()}]`);
+
+    // 5f: disabling an unrelated floor must NOT re-stack the AUTO elevations.
+    //     The map comes from the FULL array; only the RENDER list is filtered.
+    const full = [mk('d0'), mk('d1'), mk('d2')];
+    full[1].disabled = true;
+    const rendered = full.filter(f => !f.disabled || f.id === 'd0');
+    r.updateFloor(full[0], sc);
+    r.updateGhostFloors(rendered, 'd0', sc, [], {}, elevMapOf(full));
+    ok('T5f disabling the middle floor leaves d2 at 6000 (autos never re-stack)',
+       groupsY().length === 1 && near(groupsY()[0], 6000), `[${groupsY()}]`);
+
+    r.updateGhostFloors([], 'none', sc, [], {});
   }
 
   document.title = `GHOSTALIGN ${fails.length === 0 ? 'PASS' : 'FAIL'} ${pass}/${n}`;

@@ -13,6 +13,7 @@ import { parseNowPlaying, isMediaPlayerId } from '../geometry.js';
 import { robotProgress } from '../geometry.js';
 import { poolWaterColor } from '../geometry.js';
 import { floorsUnionCenter, resolvePivotMode } from '../geometry.js';
+import { floorElevationMm, resolveGroundLevelMm } from '../geometry.js';
 import { resolveScreenContent } from '../surfaces.js';
 import { resolveScenePreset, resolveTimeBucket } from '../time-of-day.js';
 import { conditionIntensity, weatherEffectEnabled, worstAlertSeverity } from '../weather.js';
@@ -613,6 +614,9 @@ export class ThreeView extends LitElement {
   // the camera by the scene-frame delta (see floorSwitchCameraDelta).
   private _lastFloorW = 0;
   private _lastFloorD = 0;
+  // …and its elevation above the world ground plane, for the switch delta's Y
+  // term (the ground plane is fixed; the active slab is always at scene y=0).
+  private _lastFloorElev = 0;
   // Recent-trigger tracking for thought bubbles: prev on/off per interactive
   // fixture (light / switch / TV) keyed by item id, and a rolling list of the
   // last few transitions (world mm + wall-clock). Fed into ActivityContext each
@@ -889,14 +893,22 @@ export class ThreeView extends LitElement {
         // exact no-op. Auto-follow / cinematic orbit / sims-cam snap all ease
         // from the CURRENT pose, so they simply continue from the compensated
         // one. Skipped on the very first tick (no previous floor).
+        // The frame is ALSO elevation-derived now: the active slab always builds
+        // at scene y=0, so switching to a floor at a different elevation slides
+        // the (fixed) world ground plane, the neighborhood overlay and the other
+        // glass-house stories by the elevation difference. dy = prevElev −
+        // nextElev keeps the camera at the same height ABOVE GROUND, which is
+        // what makes the fixed ground plane actually read as fixed.
         if (this._lastFloorId !== null) {
-          const { dx, dz } = floorSwitchCameraDelta(this._lastFloorW, this._lastFloorD, f.w, f.d);
-          if (dx !== 0 || dz !== 0) {
+          const { dx, dz, dy } = floorSwitchCameraDelta(
+            this._lastFloorW, this._lastFloorD, f.w, f.d,
+            this._lastFloorElev, floorElevationMm(p.store.floors, f.id));
+          if (dx !== 0 || dz !== 0 || dy !== 0) {
             const cv = r.cameraView();
             if (cv) {
               r.setCameraView(
-                [cv.pos[0] + dx, cv.pos[1], cv.pos[2] + dz],
-                [cv.target[0] + dx, cv.target[1], cv.target[2] + dz],
+                [cv.pos[0] + dx, cv.pos[1] + dy, cv.pos[2] + dz],
+                [cv.target[0] + dx, cv.target[1] + dy, cv.target[2] + dz],
               );
             }
           }
@@ -919,10 +931,12 @@ export class ThreeView extends LitElement {
         this._actionTrigAt.clear();
         this._recentTrigs.length = 0;
       }
-      // Track the rendered floor's rect every tick (not just on a switch) so a
-      // floor-edge resize can't leave the switch delta reading stale dims.
+      // Track the rendered floor's rect + elevation every tick (not just on a
+      // switch) so a floor-edge resize / an elevation edit / a reorder (which
+      // moves an AUTO elevation) can't leave the switch delta reading stale.
       this._lastFloorW = f.w;
       this._lastFloorD = f.d;
+      this._lastFloorElev = floorElevationMm(p.store.floors, f.id);
 
       // Layer visibility (shared with the 2D layer flags): group-scoped
       // layers are cheap per-tick visible flips; furniture + bg gate at
@@ -965,7 +979,40 @@ export class ThreeView extends LitElement {
       // look overrides + build-time-gated layers.
       const scBase = sc3o ?? { preset: 'night' as const };
       const effPreset = this._effectivePreset(scBase, states);
-      const scMerged = { ...scBase, ...(f.look3d ?? {}), preset: effPreset };
+      // ── FIXED WORLD GROUND PLANE (the single injection point) ──────────────
+      // The active slab always builds at scene y=0, so the renderer's whole
+      // "surroundings level" machinery (backdrop grid, _neighborhoodGroup,
+      // yardFill, _groundYAt / _itemGroundY / _yardGroundY and every outdoor
+      // item that rides them) is expressed RELATIVE TO THE ACTIVE SLAB. Feeding
+      // it the raw user offset therefore made the ground implicitly ride
+      // whichever story was selected. Composing the offset ONCE here —
+      //     effGroundMm = clamped user offset − active floor's elevation
+      // — pins the ground plane in the world and lets the floors sit relative to
+      // it: viewing story 1 (auto elevation 3000) puts the grade 3000 mm below
+      // the slab, a basement at −2800 puts it 2800 mm ABOVE, and a floor whose
+      // elevation straddles the plane is bisected by it. Nothing downstream in
+      // the renderer changes.
+      //
+      // The clamp order matters: resolveGroundLevelMm bounds the USER's stored
+      // value at ±10 000, then the elevation is subtracted — the EFFECTIVE value
+      // is deliberately unbounded (a 3rd story alone is −9000).
+      //
+      // The hole-punch rule ("yard-fill wall-loop holes only at level ≥ 0")
+      // composes correctly: an elevated active floor has effGround < 0, so the
+      // grade runs continuously UNDER the raised pad — exactly right.
+      //
+      // Because this is injected into scMerged, every consumer inherits it with
+      // no further plumbing: updateFloor (grid y, _neighborhoodGroup y,
+      // _groundLevel → _groundYAt and the flights anchor), updateGhostFloors,
+      // and — via the `groundLevelMm` local below — updateGroundAreas and the
+      // bg-text builders. Dirty keys: _keyFloor / _keyGhost / _keyNeighborhood
+      // ride configRev (an elevation edit calls emitConfig), _keyGround and
+      // _keyBgText fold the effective value explicitly (they consume it), and a
+      // floor switch clears every key outright.
+      const effGroundMm =
+        resolveGroundLevelMm(scBase.groundLevelMm) - floorElevationMm(p.store.floors, f.id);
+      const scMerged = { ...scBase, ...(f.look3d ?? {}), preset: effPreset,
+                         groundLevelMm: effGroundMm };
       // The `geo` layer's 3D pins (landmarks + GPS devices) build in a dedicated
       // _gpsGroup under the _keyGps dirty key below (not part of keyFloor).
       // Appliance in-use indicators + fridge door swings build inside
@@ -1076,7 +1123,13 @@ export class ThreeView extends LitElement {
       // floor rebuild.
       const selFu = f.furniture.find(x => x.id === p.activeFurnitureId);
       const selCustomId = (selFu && selFu.customKindId) ? selFu.id : '';
-      const keyFloor = `${p.configRev}|${effPreset}|` +
+      // effGroundMm is folded in explicitly: updateFloor is what parks the
+      // backdrop grid + _neighborhoodGroup at the grade and stores _groundLevel
+      // for _groundYAt / the flights anchor. configRev already covers every path
+      // that can change it (a scene3d edit, an elevationMm edit, a floor
+      // reorder) and a floor switch clears the key outright — the term documents
+      // the dependency and makes it immune to a future non-configRev path.
+      const keyFloor = `${p.configRev}|${effPreset}|${effGroundMm}|` +
         `${layers.furniture !== false}|${layers.appliances !== false}|` +
         `${layers.bg !== false}|${layers.walls !== false}|` +
         `${layers.grid !== false}|` +
@@ -1092,13 +1145,26 @@ export class ThreeView extends LitElement {
 
       // Glass-house ghost floors: every OTHER story as a translucent shell.
       // Cheap to rebuild; keyed on the glassHouse flag + active floor id.
-      const keyGhost = `${p.configRev}|${!!scBase.glassHouse}|${f.id}|` +
+      // Story offsets are now elevation-driven (see updateGhostFloors), so the
+      // per-floor elevations join the key. configRev covers every write path
+      // today (elevationMm edit, floor reorder, add/delete); the explicit term
+      // documents it. Compact — one number per floor.
+      const ghostElevKey = p.store.floors
+        .map(fl => floorElevationMm(p.store.floors, fl.id)).join(',');
+      const keyGhost = `${p.configRev}|${!!scBase.glassHouse}|${f.id}|${ghostElevKey}|` +
         `${layers.furniture !== false}|${layers.appliances !== false}`;
       if (keyGhost !== this._keyGhost) {
         this._keyGhost = keyGhost;
+        // Elevations are resolved from the FULL floors array — the AUTO value is
+        // index-derived, so building the map from the enabled-only list handed to
+        // the renderer would re-stack every other story's auto elevation the
+        // moment one floor was disabled. configRev (in keyGhost) covers an
+        // elevationMm edit.
+        const ghostElev: Record<string, number> = {};
+        for (const fl of p.store.floors) ghostElev[fl.id] = floorElevationMm(p.store.floors, fl.id);
         r.updateGhostFloors(
           p.store.floors.filter(fl => !fl.disabled || fl.id === f.id),
-          f.id, scMerged, p.store.customObjects, layers);
+          f.id, scMerged, p.store.customObjects, layers, ghostElev);
       }
 
       // Neighborhood overlay (OpenFreeMap — Wave 2: buildings). Floor-relative
@@ -1461,9 +1527,13 @@ export class ThreeView extends LitElement {
       const groundList = f.groundAreas ?? [];
       const wallHash = (f.walls ?? []).map(w =>
         `${w.kind ?? ''}:${w.points.map(v => `${v.x | 0},${v.y | 0}`).join(',')}`).join(';');
-      // groundLevelMm shifts the yard-fill underlay (the surrounding grade);
-      // configRev already covers a scene3d edit, the explicit term documents it.
-      const groundLevelMm = scBase.groundLevelMm ?? 0;
+      // groundLevelMm shifts the yard-fill underlay (the surrounding grade).
+      // This is the EFFECTIVE level (user offset − active floor elevation, see
+      // the injection point at scMerged) so the yard grade stays welded to the
+      // fixed world ground plane instead of following the selected story;
+      // configRev covers a scene3d/elevation edit, the explicit key term
+      // documents the dependency and covers a floor switch.
+      const groundLevelMm = effGroundMm;
       const keyGround = `${p.configRev}|${f.yardFill ?? ''}|${f.w | 0}x${f.d | 0}|${wallHash}|${groundLevelMm}|` + groundList.map(g =>
         `${g.id}:${g.kind}:${g.elevationMm ?? 0}:${g.hidden ? 'h' : ''}:${g.points.map(v => `${v.x | 0},${v.y | 0}`).join(';')}`).join('|');
       if (keyGround !== this._keyGround) {
@@ -2132,9 +2202,13 @@ export class ThreeView extends LitElement {
   private _maybeSpawnTransitPuppet(p: Planner, curId: string,
                                    r: import('../three-renderer.js').ThreeDRenderer): void {
     const now = Date.now();
-    const STORY_H = 3000;
     const floors = p.store.floors;
-    const curIdx = floors.findIndex(fl => fl.id === curId);
+    // Scene Y of a floor's slab: its elevation above the fixed world ground
+    // plane, minus the active floor's (the active slab always builds at y=0).
+    // With auto elevations this is exactly the old (idx − curIdx) · STORY_H;
+    // with explicit elevations the puppet walks the REAL height difference.
+    const curElev = floorElevationMm(floors, curId);
+    const sceneY = (fid: string) => floorElevationMm(floors, fid) - curElev;
     const stairOn = (fid: string, linkId: string) => {
       const fl = floors.find(f => f.id === fid);
       if (!fl) return null;
@@ -2152,7 +2226,6 @@ export class ThreeView extends LitElement {
       const src = stairOn(tr.fromFloorId, tr.viaLinkId);
       const dst = stairOn(tr.toFloorId, tr.viaLinkId);
       if (!src || !dst) continue;                                          // missing fixture → skip
-      const srcIdx = floors.indexOf(src.fl), dstIdx = floors.indexOf(dst.fl);
       const person = p.store.people?.find(pe => pe.id === personId);
       this._spawnedPuppets.add(sig);
       r.spawnTransitPuppet({
@@ -2161,8 +2234,8 @@ export class ThreeView extends LitElement {
         x: src.fu.x, y: src.fu.y,
         rotationDeg: src.fu.rotation ?? 0,
         runLength: src.fu.h,
-        yStart: (srcIdx - curIdx) * STORY_H,
-        yEnd: (dstIdx - curIdx) * STORY_H,
+        yStart: sceneY(tr.fromFloorId),
+        yEnd: sceneY(tr.toFloorId),
         durationS: 8,
       });
     }
