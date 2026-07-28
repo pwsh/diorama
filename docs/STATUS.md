@@ -1,6 +1,6 @@
 # Project status & pick-up guide
 
-Last updated: 2026-07-28, at **v0.38.0**. This is the single document to
+Last updated: 2026-07-28, at **v0.39.0**. This is the single document to
 read (alongside `CLAUDE.md`) to resume work with full context.
 
 ## Where things stand
@@ -261,12 +261,16 @@ instance.
   bg-text truly clipped to the area's polygon, transparent texture over
   the area's own material, groundTextInk per-kind palette, camera-facing
   via texture rotation, "Ground writing" label).
+  → v0.39.0 open air (stairs/ramp sides removed — curbs + sunken shaft
+  walls gone; Furniture.stairsOpen "Open underneath" floating slabs
+  w/ bit-identical top surfaces; ground-writing faceCamera toggle +
+  static rotationDeg via pure bgGroundFixedYaw).
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
 - **Stairs family "open underneath" option** (2026-07-28,
   user-requested: "add a stair option to be open underneath and not
-  closed off"; unreleased — on main past v0.38.0).
+  closed off"; released in v0.39.0).
   `Furniture.stairsOpen` + sidebar checkbox: floating 60 mm tread
   slabs / 80 mm sloped ramp slab (parallelogram extrude, foot clipped
   at y=0) / 60 mm landing platform — 3D-build-only, top surfaces
@@ -275,7 +279,7 @@ instance.
   stairs-descend 23/23, stair-link 25/25, terrain 103/103 held.
 - **Ground writing: follow-camera toggle + static rotation**
   (2026-07-28, user-requested: "an option to retain the autofollow and
-  also to have a static rotation"; unreleased — on main past v0.38.0).
+  also to have a static rotation"; released in v0.39.0).
   `BgTextEntry.faceCamera?`/`rotationDeg?` (absent = follow, pristine
   hash byte-identical); pure `bgGroundFixedYaw` (ψ = π − deg·π/180,
   world-space-pinned at 0/90/180/−90°); same ease machinery, snap on
@@ -283,8 +287,7 @@ instance.
   checkbox + "Rotation (°)" in Settings ▸ Display. bgtext-multi
   193→229 (BGTEXTMULTI PASS 229/229), bgtext 29/29 held.
 - **Stairs/ramp sides removed** (2026-07-28, user-requested: "remove
-  the sides from the stairs and the ramps"; unreleased — on main past
-  v0.38.0). The ramp's raised side curbs and the sunken-flight dark
+  the sides from the stairs and the ramps"; released in v0.39.0). The ramp's raised side curbs and the sunken-flight dark
   shaft side walls (stairs/ramp/landing + the faceOpen adjacency
   probe) are gone — outdoor flights fitted between yard levels grew
   ugly flanking walls. Stairwell hole + dark void plane still mark
