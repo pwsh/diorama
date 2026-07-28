@@ -1374,8 +1374,20 @@ the ramp's curbs AND the sunken-flight dark shaft side walls (stairs/ramp/
 landing, with their `faceOpen` adjacency probe) were REMOVED — outdoor flights
 fitted between yard levels grew ugly flanking walls; the stairwell hole + dark
 void plane still mark indoor wells, and `_buildFurniture`'s `neighbors` param
-stays for interface stability. Test `stairs-fit-test.html` (`STAIRSFIT PASS
-62/62` — D3 now pins the curb-less wedge).
+stays for interface stability. **Open underneath** (`Furniture.stairsOpen?`,
+item-level, absent = solid = byte-identical; "Open underneath" sidebar
+checkbox on family pieces; **3D-BUILD-ONLY** — top surfaces are bit-identical
+so `_groundYAt`/nav/terrain/2D/autofit are untouched by construction): treads
+become floating 60 mm slabs (the unchanged 22 mm nosing cap over a 38 mm body
+inset 4 mm/side so the cap overhangs — no coplanar faces; `bodyH` clamps so a
+50 mm first riser never dips below 0), the ramp becomes an 80 mm sloped slab
+(parallelogram extrude profile CLIPPED at y=0 at the foot, top plane
+identical; slope shallower than the slab thickness falls back solid), the
+landing a 60 mm platform (unchanged 40 mm 1.02× cap over a 20 mm body).
+Family still skips blob shadows (an open flight arguably wants one — noted,
+not built). Test `stairs-fit-test.html` (`STAIRSFIT PASS 78/78` — D3 pins the
+curb-less wedge, section H pins open-vs-solid top-surface + `_groundYAt`
+equality).
 
 ### Descending stairs (below floor level)
 Stairs-family pieces with `elevation < 0` cut their own stairwell hole and

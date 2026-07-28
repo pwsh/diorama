@@ -264,6 +264,15 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Stairs family "open underneath" option** (2026-07-28,
+  user-requested: "add a stair option to be open underneath and not
+  closed off"; unreleased — on main past v0.38.0).
+  `Furniture.stairsOpen` + sidebar checkbox: floating 60 mm tread
+  slabs / 80 mm sloped ramp slab (parallelogram extrude, foot clipped
+  at y=0) / 60 mm landing platform — 3D-build-only, top surfaces
+  bit-identical so ground truth, nav, 2D and autofit are untouched;
+  solid builds byte-identical. STAIRSFIT 62→78 (PASS 78/78);
+  stairs-descend 23/23, stair-link 25/25, terrain 103/103 held.
 - **Ground writing: follow-camera toggle + static rotation**
   (2026-07-28, user-requested: "an option to retain the autofollow and
   also to have a static rotation"; unreleased — on main past v0.38.0).

@@ -30,6 +30,9 @@
    (F) Planner.autofitStairs on a real Planner: terrace→grade sizes elevation +
        rise (1 tread), the reversed piece auto-rotates 180°, level ends refuse
        with a reason, a ramp fits identically, and locked/non-family refuse.
+   (H) Furniture.stairsOpen ("open underneath", 3D-BUILD-ONLY): floating tread /
+       ramp / landing slabs whose TOP surfaces are bit-identical to the solid
+       build, open air beneath, and a _groundYAt that cannot tell the difference.
 -->
 <script type="module">
   const G = await import('./geometry.mod.js');
@@ -378,6 +381,136 @@
        threw === null, threw ?? 'ok');
     ok('G2 every glyph paints pixels', ramp > 0 && short > 0 && dflt > 0,
        `ramp=${ramp} short=${short} default=${dflt}`);
+  }
+
+  // ══ (H) stairsOpen — "open underneath" floating slabs ═════════════════════
+  // A 3D-BUILD-ONLY option: the TOP surfaces must be bit-identical to the solid
+  // build (so _groundYAt / _buildNav / _terrain / autofit are untouched) while
+  // everything BELOW them disappears.
+  {
+    const minY = (o) => {
+      let lo = Infinity;
+      for (const m of realMeshes(o)) {
+        m.geometry.computeBoundingBox();
+        let y = m.position.y + m.geometry.boundingBox.min.y;
+        let p = m.parent;
+        while (p && p !== o) { y += p.position.y; p = p.parent; }
+        if (y < lo) lo = y;
+      }
+      return lo;
+    };
+    const capYs = (o) => treadCaps(o).map(m => m.position.y).sort((a, b) => a - b);
+
+    // ── flights: solid vs open, same rise, same run ───────────────────────────
+    const HT = 700, RUN = 1000;
+    const solid = { id: 'hSolid', x: 2000, y: 2000, w: 1000, h: RUN, kind: 'stairs', rotation: 0, ht: HT };
+    const openS = { ...solid, id: 'hOpen', x: 5000, stairsOpen: true };
+    r.updateFloor(mkFloor({ furniture: [solid, openS] }), scene);
+    const gS = grpAt(solid), gO = grpAt(openS);
+    const n = G.stairsTreadCount(RUN, HT), riser = HT / n, treadD = RUN / n;
+
+    ok('H1 open flight builds the SAME tread count as the solid one',
+       treadCaps(gO).length === n && treadCaps(gS).length === n, `open=${treadCaps(gO).length} solid=${treadCaps(gS).length} n=${n}`);
+    {
+      const a = capYs(gS), b = capYs(gO);
+      const same = a.length === b.length && a.every((y, i) => near(y, b[i], 1e-9));
+      const atRise = b.every((y, i) => near(y + 11, riser * (i + 1), 1e-9));
+      ok('H2 every tread TOP is unchanged (cap y + 11 = riser·(i+1))', same && atRise,
+         `solid=[${a.map(v => v.toFixed(1))}] open=[${b.map(v => v.toFixed(1))}]`);
+    }
+    ok('H3 open flight tops out at the rise, exactly like the solid one',
+       near(topY(gO), HT, 1e-9) && near(topY(gS), HT, 1e-9), `open=${topY(gO)} solid=${topY(gS)}`);
+    {
+      // The HIGHEST tread must float: its lowest geometry sits just under its
+      // own top, not down at the base.
+      const lastZ = -RUN / 2 + (n - 0.5) * treadD;
+      let lo = Infinity;
+      for (const m of realMeshes(gO)) {
+        if (!near(m.position.z, lastZ, 1)) continue;
+        m.geometry.computeBoundingBox();
+        lo = Math.min(lo, m.position.y + m.geometry.boundingBox.min.y);
+      }
+      ok('H4 the top tread is open underneath (min y ≥ riser·(n−1) − 70)',
+         lo >= riser * (n - 1) - 70 && near(lo, HT - 60, 1),
+         `min=${lo} floor=${riser * (n - 1) - 70}`);
+    }
+    ok('H5 NOTHING in the open flight reaches the base (min y = riser − 60 > 0)',
+       minY(gO) > 0 && near(minY(gO), riser - 60, 1), `min=${minY(gO)}`);
+    ok('H6 SOLID regression: the first tread still reaches y = 0',
+       near(minY(gS), 0, 1e-9), `min=${minY(gS)}`);
+    ok('H7 _groundYAt is identical on the open and the solid flight',
+       near(r._groundYAt(5000, 2000 - RUN / 2 + 5), r._groundYAt(2000, 2000 - RUN / 2 + 5), 1e-9) &&
+       near(r._groundYAt(5000, 2000 + RUN / 2 - 5), r._groundYAt(2000, 2000 + RUN / 2 - 5), 1e-9) &&
+       near(r._groundYAt(5000, 2000 + RUN / 2 - 5), HT, 1e-9),
+       `${r._groundYAt(5000, 2000 - RUN / 2 + 5)}/${r._groundYAt(2000, 2000 - RUN / 2 + 5)} · ` +
+       `${r._groundYAt(5000, 2000 + RUN / 2 - 5)}/${r._groundYAt(2000, 2000 + RUN / 2 - 5)}`);
+
+    // ── ramp: sloped slab, same top plane ────────────────────────────────────
+    {
+      const RHT = 600, RD = 2400, SLAB = 80;
+      const vert = SLAB * Math.hypot(RD, RHT) / RD;   // perpendicular slab → vertical drop
+      const rSolid = { id: 'hrS', x: 2000, y: 6000, w: 1200, h: RD, kind: 'ramp', rotation: 0, ht: RHT };
+      const rOpen = { ...rSolid, id: 'hrO', x: 6000, stairsOpen: true };
+      r.updateFloor(mkFloor({ furniture: [rSolid, rOpen] }), scene);
+      const go = grpAt(rOpen);
+      const wedges = realMeshes(go).filter(m => m.geometry?.type === 'ExtrudeGeometry');
+      ok('H8 the open ramp is still ONE extruded prism (never a rotated box)',
+         wedges.length === 1 && near(wedges[0].rotation.y, -Math.PI / 2, 1e-9) &&
+         near(wedges[0].position.x, rOpen.w / 2, 1e-9), `n=${wedges.length}`);
+      {
+        const pos = wedges[0].geometry.getAttribute('position');
+        let footMax = -Infinity, headMax = -Infinity, headMin = Infinity, above = 0, gmin = Infinity;
+        for (let i = 0; i < pos.count; i++) {
+          const wz = pos.getX(i), ly = pos.getY(i);
+          if (near(wz, -RD / 2, 1)) footMax = Math.max(footMax, ly);
+          if (near(wz, RD / 2, 1)) { headMax = Math.max(headMax, ly); headMin = Math.min(headMin, ly); }
+          if (ly > RHT * (wz + RD / 2) / RD + 1) above++;
+          gmin = Math.min(gmin, ly);
+        }
+        ok('H9 the open ramp TOP plane is unchanged (0 at the foot, HT at the head, nothing above)',
+           near(footMax, 0, 1e-6) && near(headMax, RHT, 1e-6) && above === 0,
+           `foot=${footMax} head=${headMax} above=${above}`);
+        ok('H10 …and it is a SLAB: the head end bottoms out at HT − slab/cos(slope), well above 0',
+           near(headMin, RHT - vert, 0.01) && headMin > 0,
+           `headMin=${headMin} expect=${RHT - vert}`);
+        ok('H11 …still touching down at the foot (underside clipped at y = 0)',
+           near(gmin, 0, 1e-6), `min=${gmin}`);
+      }
+      ok('H12 _groundYAt on the open ramp is the identical linear slope',
+         near(r._groundYAt(6000, 6000), r._groundYAt(2000, 6000), 1e-9) &&
+         near(r._groundYAt(6000, 6000), RHT / 2, 1) &&
+         near(r._groundYAt(6000, 6000 + RD / 4), 3 * RHT / 4, 2),
+         `${r._groundYAt(6000, 6000)}/${r._groundYAt(2000, 6000)}`);
+      // SOLID regression: the untouched wedge still runs down to y = 0 everywhere.
+      {
+        const ws = realMeshes(grpAt(rSolid)).filter(m => m.geometry?.type === 'ExtrudeGeometry')[0];
+        const pos = ws.geometry.getAttribute('position');
+        let headMin = Infinity;
+        for (let i = 0; i < pos.count; i++) {
+          if (near(pos.getX(i), RD / 2, 1)) headMin = Math.min(headMin, pos.getY(i));
+        }
+        ok('H13 SOLID regression: the plain wedge still reaches y = 0 at the head',
+           near(headMin, 0, 1e-9), `headMin=${headMin}`);
+      }
+    }
+
+    // ── landing ──────────────────────────────────────────────────────────────
+    {
+      const LHT = 400;
+      const lSolid = { id: 'hlS', x: 2000, y: 8500, w: 1000, h: 1000, kind: 'stair_landing', rotation: 0, ht: LHT };
+      const lOpen = { ...lSolid, id: 'hlO', x: 5000, stairsOpen: true };
+      r.updateFloor(mkFloor({ furniture: [lSolid, lOpen] }), scene);
+      ok('H14 the open landing tops out at HT, exactly like the solid one',
+         near(topY(grpAt(lOpen)), LHT, 1e-9) && near(topY(grpAt(lSolid)), LHT, 1e-9),
+         `open=${topY(grpAt(lOpen))} solid=${topY(grpAt(lSolid))}`);
+      ok('H15 …and it is a platform slab (bottom ≥ HT − 70), while the solid one still reaches 0',
+         minY(grpAt(lOpen)) >= LHT - 70 && near(minY(grpAt(lOpen)), LHT - 60, 1) &&
+         near(minY(grpAt(lSolid)), 0, 1e-9),
+         `open=${minY(grpAt(lOpen))} solid=${minY(grpAt(lSolid))}`);
+      ok('H16 _groundYAt on the open landing is unchanged',
+         near(r._groundYAt(5000, 8500), LHT, 1e-9) && near(r._groundYAt(2000, 8500), LHT, 1e-9),
+         `${r._groundYAt(5000, 8500)}/${r._groundYAt(2000, 8500)}`);
+    }
   }
 
   // Restore a clean frame for the tally.

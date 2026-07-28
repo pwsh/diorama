@@ -906,6 +906,13 @@ const HOUSE_MOUNTED_FURNITURE_KINDS = new Set<string>([
   'stairs', 'stairs_half', 'stair_landing', 'ramp',
 ]);
 
+// "Open underneath" stairs-family slab thicknesses (Furniture.stairsOpen — a
+// 3D-BUILD-ONLY option; every top surface stays exactly where the solid build
+// puts it). Treads/landings: a 60 mm total slab whose upper 22 / 40 mm IS the
+// existing nosing cap. Ramp: 80 mm measured PERPENDICULAR to the slope.
+const STAIRS_OPEN_SLAB_MM = 60;
+const RAMP_OPEN_SLAB_MM = 80;
+
 // Light kinds that STAND ON THE GROUND (as opposed to hanging from a ceiling or
 // bolting to a wall) and so follow the surroundings grade when placed outdoors.
 // Everything else — bulb / spot / pendant / strip / recessed / fan / heatlamp /
@@ -7826,6 +7833,7 @@ export class ThreeDRenderer {
   private _buildFurniture(fu: { id?: string; x: number; y: number; w: number; h: number;
                                  kind?: import('./types.js').FurnitureKind;
                                  rotation?: number; elevation?: number;
+                                 stairsOpen?: boolean;
                                  color?: string; customKindId?: string },
                           neighbors?: Furniture[],
                           customObjects?: ObjectRecipe[],
@@ -8231,11 +8239,26 @@ export class ThreeDRenderer {
         const n = stairsTreadCount(D, HT);
         const riser = HT / n, treadD = D / n;
         const treadMat = this._mat({ color: 0xa1887f, roughness: 0.6 });
+        // "Open underneath" (Furniture.stairsOpen): each tread is a FLOATING
+        // ~60 mm slab (38 mm body + the same 22 mm nosing cap) instead of a
+        // full-height mass down to the base — open air beneath, no stringers,
+        // no risers. The cap is untouched, so every tread TOP stays exactly
+        // riser·(i+1) and _groundYAt / _buildNav / _terrain never notice.
+        const open = fu.stairsOpen === true;
         for (let i = 0; i < n; i++) {
           const hStep = riser * (i + 1);
-          addBox(W, hStep, treadD, wood, 0, hStep / 2, -D / 2 + (i + 0.5) * treadD);
+          const cz = -D / 2 + (i + 0.5) * treadD;
+          if (open) {
+            // Body inset 4 mm per side so the cap overhangs it — a real nosing
+            // line, and never a coplanar body/cap side face (the solid build
+            // buries its cap inside the mass, where it can't hatch).
+            const bodyH = Math.max(1, Math.min(STAIRS_OPEN_SLAB_MM - 22, hStep - 22));
+            addBox(W - 8, bodyH, treadD - 8, wood, 0, hStep - 22 - bodyH / 2, cz);
+          } else {
+            addBox(W, hStep, treadD, wood, 0, hStep / 2, cz);
+          }
           // Tread cap for a visible nosing line.
-          addBox(W, 22, treadD, treadMat, 0, hStep - 11, -D / 2 + (i + 0.5) * treadD);
+          addBox(W, 22, treadD, treadMat, 0, hStep - 11, cz);
         }
         break;
       }
@@ -8250,10 +8273,31 @@ export class ThreeDRenderer {
       case 'ramp': {
         // Profile authored in (worldZ, worldY): foot → head base → head top.
         const prof = new THREE.Shape();
-        prof.moveTo(-D / 2, 0);
-        prof.lineTo(D / 2, 0);
-        prof.lineTo(D / 2, HT);
-        prof.closePath();
+        // "Open underneath" (Furniture.stairsOpen): the solid wedge becomes a
+        // SLOPED SLAB — a parallelogram whose TOP edge is the identical plane
+        // (0 at the −Z foot → HT at the +Z head, so the walkable ground truth
+        // is unchanged) and whose underside is that same line dropped by
+        // `vert` — the VERTICAL drop that yields RAMP_OPEN_SLAB_MM measured
+        // PERPENDICULAR to the slope (vert = t / cos θ = t·hypot(D,HT)/D).
+        // The underside is clipped at y = 0 so the foot still touches down
+        // instead of burying a tail below the ground. Authored as a profile,
+        // never a rotated box — the top must stay the exact plane _groundYAt
+        // walks. A slope shallower than the slab is thick already IS the slab,
+        // so it falls back to the solid triangle.
+        const rampVert = fu.stairsOpen === true
+          ? RAMP_OPEN_SLAB_MM * Math.hypot(D, HT) / Math.max(1, Math.abs(D)) : 0;
+        if (rampVert > 0 && rampVert < HT) {
+          prof.moveTo(-D / 2, 0);
+          prof.lineTo(D / 2, HT);
+          prof.lineTo(D / 2, HT - rampVert);
+          prof.lineTo(-D / 2 + D * rampVert / HT, 0);   // underside crosses y = 0
+          prof.closePath();
+        } else {
+          prof.moveTo(-D / 2, 0);
+          prof.lineTo(D / 2, 0);
+          prof.lineTo(D / 2, HT);
+          prof.closePath();
+        }
         const wedge = new THREE.Mesh(
           new THREE.ExtrudeGeometry(prof, { depth: W, bevelEnabled: false }), wood);
         // Shape +X → world +Z and the extrusion (shape +Z) → world −X, so shift
@@ -8266,7 +8310,17 @@ export class ThreeDRenderer {
         break;
       }
       case 'stair_landing': {
-        addBox(W, HT - 40, D, wood, 0, (HT - 40) / 2, 0);
+        // "Open underneath" (Furniture.stairsOpen): a ~60 mm floating platform
+        // slab (20 mm body under the same 40 mm cap) instead of a solid box
+        // down to the base. The cap — and therefore the walkable top at HT —
+        // is untouched; the body stays inside the 1.02× cap so no side face is
+        // ever coplanar with it.
+        if (fu.stairsOpen === true) {
+          const bodyH = Math.min(STAIRS_OPEN_SLAB_MM - 40, HT - 40);
+          if (bodyH > 0) addBox(W, bodyH, D, wood, 0, HT - 40 - bodyH / 2, 0);
+        } else {
+          addBox(W, HT - 40, D, wood, 0, (HT - 40) / 2, 0);
+        }
         addBox(W * 1.02, 40, D * 1.02,
                this._mat({ color: 0xa1887f, roughness: 0.6 }),
                0, HT - 20, 0);

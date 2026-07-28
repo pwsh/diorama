@@ -140,6 +140,12 @@ export interface Furniture {
                       // rise AND depth (geometry.stairsTreadCount); absent / < 50 →
                       // the kind default, which keeps every untouched flight identical.
                       // Item-level → no repairFloor change. See stairsRiseMm.
+  stairsOpen?: boolean; // STAIRS FAMILY ONLY (3D build only): render the piece FLOATING —
+                      // open air underneath instead of a solid mass down to the base. Treads
+                      // become ~60 mm slabs, the ramp a ~80 mm sloped slab, a landing a ~60 mm
+                      // platform; every TOP surface is bit-identical to the solid build, so
+                      // _groundYAt / _buildNav / _terrain / 2D / autofit are untouched. Absent
+                      // = solid = the classic build. Item-level → no repairFloor change.
   color?: string;     // hex override of the kind's default tint; undefined = use def color
   locked?: boolean;   // canvas move/resize/rotate/delete disabled
   entity_id?: string | null;  // HA binding for appliances / TV (media_player etc.)

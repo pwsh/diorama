@@ -4893,6 +4893,13 @@ export class Sidebar extends LitElement {
                 }}>⇅ Fit between levels</button>
         ${msg ? html`<span style="font-size:10px;color:var(--text-dim);margin-left:6px">${msg}</span>` : nothing}
       </div>
+      <div class="row">
+        <label title="Render the flight / ramp / landing FLOATING — thin slabs with open air underneath instead of a solid mass down to the base. The walking surface is identical either way (3D look only).">Open underneath</label>
+        <input type="checkbox" .checked=${piece.stairsOpen === true}
+               @change=${(e: Event) => upd(() => {
+                 piece.stairsOpen = (e.target as HTMLInputElement).checked || undefined;
+               })}>
+      </div>
     `;
   }
 
