@@ -82,10 +82,13 @@ message or bind an entity to display its live value:
 
 - **Skywriting** — glowing cloud letters drifting high in the sky with the wind.
 - **Banner plane** — a little toy plane towing a readable banner on a slow orbit.
-- **Grass writing** — mowed-in lettering on the widest open patch of yard.
+- **Ground writing** — lettering cut into the ground itself. By default it lands on
+  the widest open patch of yard; point it at a ground area ("Fit to area") and the
+  writing is clipped to that area's real shape and painted through its own surface
+  — grass, concrete, sand, water and the rest each get their own ink.
 
 Skywriting and the banner hide during heavy storms (they'd read wrong in a
-downpour); grass writing always shows.
+downpour); ground writing always shows.
 
 ### Geo landmarks & calibration
 

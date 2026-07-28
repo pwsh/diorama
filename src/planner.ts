@@ -418,6 +418,23 @@ function applianceEventKind(fu: { kind?: import('./types.js').FurnitureKind }): 
   }
 }
 
+// The "fit to area" payload a ground-writing (mode 'grass') entry carries when
+// its grassAreaId resolves on the current floor. cx/cy = the area bbox CENTRE
+// (the decal's world position); w/h = the ~10%-inset bbox the text block is
+// fitted into; points/kind/elevationMm describe the REAL area so the renderer
+// can clip the decal to that geometry and paint it through the area's own
+// surface. points/kind are optional purely for stale-chunk pairing — a renderer
+// built before they existed reads only cx/cy/w/h and draws the legacy rect.
+export type BgTextGrassArea = {
+  cx: number; cy: number; w: number; h: number;
+  points?: Vec2[]; kind?: GroundKind; elevationMm?: number;
+};
+export type BgTextResolved = {
+  id: string; mode: BgTextEntryMode; text: string; maxCars?: number;
+  aircraft?: string; scale?: number;
+  grassAreaId?: string; grassArea?: BgTextGrassArea;
+};
+
 // Single-source-of-truth Planner. Lit components subscribe via addEventListener.
 export class Planner extends EventTarget {
   store: Store;
@@ -2311,11 +2328,14 @@ export class Planner extends EventTarget {
     return s.length > cap ? s.slice(0, cap) : s;
   }
 
-  // Bbox (inset ~10% each side) of one of the current floor's GroundAreas, for a
-  // grass entry's "fit to area" target. Returns null when the id isn't a valid
-  // area ON THE CURRENT FLOOR (bgTexts is store-level; ground areas are per-floor)
-  // — a stale id fails soft and the renderer auto-places.
-  private _grassAreaRect(areaId: string): { cx: number; cy: number; w: number; h: number } | null {
+  // The "fit to area" target of a ground-writing entry: the chosen GroundArea's
+  // bbox CENTRE + a ~10%-inset bbox (the text-fit rect), PLUS the area's raw
+  // polygon / kind / elevation so the renderer can constrain the decal to the
+  // real geometry and paint it through that surface's own material. Returns
+  // null when the id isn't a valid area ON THE CURRENT FLOOR (bgTexts is
+  // store-level; ground areas are per-floor) — a stale id fails soft and the
+  // renderer auto-places. cx/cy stay the bbox centre (the decal's position).
+  private _grassAreaRect(areaId: string): BgTextGrassArea | null {
     const ga = (this.floor().groundAreas ?? []).find(a => a.id === areaId);
     if (!ga || !Array.isArray(ga.points) || ga.points.length < 3) return null;
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
@@ -2325,33 +2345,31 @@ export class Planner extends EventTarget {
     }
     const w = maxX - minX, h = maxY - minY;
     if (!(w > 0) || !(h > 0)) return null;
-    return { cx: (minX + maxX) / 2, cy: (minY + maxY) / 2, w: w * 0.8, h: h * 0.8 };
+    return {
+      cx: (minX + maxX) / 2, cy: (minY + maxY) / 2, w: w * 0.8, h: h * 0.8,
+      // Raw polygon (copied — the renderer must never alias store points),
+      // surface kind + authored elevation. A renderer chunk from before this
+      // shipped simply ignores the extra fields and draws the legacy rect.
+      points: ga.points.map(p => ({ x: p.x, y: p.y })),
+      kind: ga.kind,
+      ...(ga.elevationMm != null ? { elevationMm: ga.elevationMm } : {}),
+    };
   }
 
   // Resolved background-text entries for the renderer/settings preview: one row
   // per configured entry that currently has content (empty/no-reading entries are
-  // skipped). Order follows the stored list. Read by three-view (3D). Grass rows
-  // with a resolvable grassAreaId carry the target rect (world mm) so the renderer
-  // fits the text into that yard patch instead of the auto margin strip.
-  bgTextsResolved(): {
-    id: string; mode: BgTextEntryMode; text: string; maxCars?: number;
-    aircraft?: string; scale?: number;
-    grassAreaId?: string; grassArea?: { cx: number; cy: number; w: number; h: number };
-  }[] {
+  // skipped). Order follows the stored list. Read by three-view (3D). Ground-
+  // writing rows with a resolvable grassAreaId carry that area's fit rect AND its
+  // real polygon/kind (world mm) so the renderer clips the decal to the actual
+  // area geometry and lets its surface material show through, instead of the auto
+  // margin strip.
+  bgTextsResolved(): BgTextResolved[] {
     const list = this.store.bgTexts ?? [];
-    const out: {
-      id: string; mode: BgTextEntryMode; text: string; maxCars?: number;
-      aircraft?: string; scale?: number;
-      grassAreaId?: string; grassArea?: { cx: number; cy: number; w: number; h: number };
-    }[] = [];
+    const out: BgTextResolved[] = [];
     for (const e of list) {
       const text = this._resolveBgEntryText(e);
       if (text == null) continue;
-      const row: {
-        id: string; mode: BgTextEntryMode; text: string; maxCars?: number;
-        aircraft?: string; scale?: number;
-        grassAreaId?: string; grassArea?: { cx: number; cy: number; w: number; h: number };
-      } = { id: e.id, mode: e.mode, text };
+      const row: BgTextResolved = { id: e.id, mode: e.mode, text };
       if (e.mode === 'train') row.maxCars = e.maxCars;
       // The tow-aircraft silhouette is banner-only; the size knob applies to
       // every style. Both pass STRAIGHT through — the renderer owns the

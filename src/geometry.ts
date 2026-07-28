@@ -2261,6 +2261,27 @@ export const GROUND_KINDS: Record<GroundKind, { label: string; color: string; op
   sand:     { label: 'Sand',     color: '#d8c69a' },
   water:    { label: 'Water',    color: '#3d7bb8', opacity: 0.85 },
 };
+// Ink for GROUND WRITING (BgTextEntry mode 'grass') aimed at a user-chosen
+// GroundArea. That path paints the lettering onto a TRANSPARENT canvas so the
+// area's OWN patch material shows through — "use the material of the area" —
+// which means the ink is the only thing carrying contrast and has to read
+// against each surface. `fill` is the cut/engraved letter body, `stroke` the
+// lighter relief edge behind it (the mowed-lawn pair is the shipped grass one,
+// kept bit-identical so a grass area looks exactly like the auto placement).
+// Pure data; the auto margin-strip placement never consults it (it still paints
+// its own opaque mowed-grass backdrop).
+export const GROUND_TEXT_INK: Record<GroundKind, { fill: string; stroke: string }> = {
+  grass:    { fill: '#31521d', stroke: '#7bab52' },   // dark cut / light mow relief
+  rock:     { fill: '#3c4249', stroke: '#c3c9cf' },   // slate etch / pale chip
+  concrete: { fill: '#4a4a4f', stroke: '#e6e6ea' },   // charcoal etch / light grey
+  blacktop: { fill: '#15181b', stroke: '#9aa1a8' },   // near-black / grey chalk
+  mulch:    { fill: '#33200f', stroke: '#b58a58' },   // dark bark / tan
+  sand:     { fill: '#8a6f3c', stroke: '#f4e8c6' },   // wet-sand groove / dry crest
+  water:    { fill: '#0f3459', stroke: '#a8e2ff' },   // deep blue / pale cyan
+};
+export function groundTextInk(k: GroundKind): { fill: string; stroke: string } {
+  return GROUND_TEXT_INK[k] ?? GROUND_TEXT_INK.grass;
+}
 export function groundKindLabel(k: GroundKind): string { return GROUND_KINDS[k]?.label ?? k; }
 export function groundAreaColor(g: { kind: GroundKind }): string { return GROUND_KINDS[g.kind]?.color ?? '#4c7a34'; }
 

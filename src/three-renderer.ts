@@ -32,7 +32,7 @@ import {
   SPRINKLER_DEFAULTS, sprinklerRunning, sprinklerHeadKind, sprinklerArcDeg, sprinklerRadius, sprinklerRotation,
   FLAGPOLE_DEFAULTS, flagpoleHeight, flagpoleHoistFraction,
   PLUG_DEFAULTS, PLUG_PLATE_DEPTH_MM, plugHeight,
-  GROUND_KINDS, bufferPolyline,
+  GROUND_KINDS, groundTextInk, bufferPolyline,
   ENV_KINDS, envKindOf, envColor, envValueText, envHeight, envScale,
   infoCardText, infoCardRule, infoCardScale, infoCardMount, infoCardHeight,
   infoCardW, infoCardH,
@@ -629,6 +629,7 @@ interface BgPhase {
 interface BgRig {
   mode: BgTextEntryMode;
   index: number;                            // list index (drives placement stagger + phase desync)
+  // (see BgGrassArea below for the ground-writing "fit to area" payload)
   ph?: BgPhase;                             // persistent phase slot (written back each frame)
   // sky
   sky?: THREE.Sprite; skyBaseX?: number; skyPhase?: number;
@@ -642,14 +643,27 @@ interface BgRig {
   banner?: THREE.Object3D;                  // trailing/hanging text plane (Group: 2 FrontSide planes)
   angle?: number; radius?: number; alt?: number; dir?: number;
   bobAmp?: number; propRate?: number;
-  // grass
+  // grass (ground writing)
   grass?: { cx: number; cy: number; w: number; h: number };
   grassMesh?: THREE.Mesh;                    // the decal mesh (test hook + texture read)
   grassYaw?: number;                          // eased camera-facing yaw (rad); undefined = snap on
                                               // the first advance, so a rebuild never swings
+  grassTexRot?: boolean;                      // area-bound (polygon-clipped) decal: the camera-facing
+                                              // yaw drives texture.rotation, NOT mesh.rotation.y — a
+                                              // polygon mesh must stay put or it leaves its area
   // train
   train?: BgTrain;
 }
+
+// Ground-writing "fit to area" payload (Planner.bgTextsResolved → updateBgTexts).
+// cx/cy = the chosen GroundArea's bbox centre (the decal position); w/h = the
+// ~10%-inset bbox the text block fits into. `points`/`kind` are OPTIONAL: a
+// planner from before they shipped sends only the rect, and the build falls back
+// to the legacy PlaneGeometry + opaque mowed-grass painting verbatim.
+type BgGrassArea = {
+  cx: number; cy: number; w: number; h: number;
+  points?: { x: number; y: number }[]; kind?: GroundKind; elevationMm?: number;
+};
 
 // Per-entry model-size multiplier for a background-text rig (BgTextEntry.scale)
 // and for every live-aircraft rig (FlightsConfig.modelScale). Both are pure,
@@ -1993,7 +2007,7 @@ export class ThreeDRenderer {
   private _issRot = 0;                            // geo θ for the sat az mapping
   private _issOpacity = 0;
 
-  // ── Playful background text (skywriting / banner plane / grass writing) ────
+  // ── Playful background text (skywriting / banner plane / ground writing) ──
   // A short decorative message written INTO the world. Lives in its own group
   // NEXT TO _skyGroup; rebuilt only under three-view's _keyBgText (text + mode +
   // storm-hide + floor), per-frame motion in _advanceBgText (zero alloc). The
@@ -12164,7 +12178,7 @@ export class ThreeDRenderer {
   updateBgTexts(entries: {
                   id: string; mode: BgTextEntryMode; text: string; maxCars?: number;
                   aircraft?: string; scale?: number;
-                  grassAreaId?: string; grassArea?: { cx: number; cy: number; w: number; h: number };
+                  grassAreaId?: string; grassArea?: BgGrassArea;
                 }[],
                 storm: boolean, windRad = 0, windKmh = 0): void {
     this._disposeSpriteMaps(this._bgTextGroup);
@@ -12454,17 +12468,27 @@ export class ThreeDRenderer {
     return grp;
   }
 
-  // Flat lawn text decal. When `area` is given (the user chose a "fit to area"
-  // GroundArea, already bbox-inset in plan mm) the text reflows multi-line into
-  // that rect — drawn there even if it overlaps the house (the user's call).
-  // Otherwise it auto-places in the widest open yard margin strip (successive
-  // grass entries take the next strip via `slot`) and still reflows multi-line to
-  // the strip's aspect. Either way the text word-wraps to the target aspect and
-  // picks the largest font that fits (min-font floor + ellipsis trim).
+  // Flat ground-writing decal. Two placements:
+  //
+  //  • AREA-BOUND (`area.points` present — the user picked a GroundArea): the
+  //    decal is a ShapeGeometry of that area's REAL polygon, so the writing is
+  //    clipped to the actual shape instead of a box of its own, and the texture
+  //    paints the lettering on a TRANSPARENT canvas so the area's own patch
+  //    material (grass / concrete / water / …) IS the backdrop — with per-kind
+  //    ink (groundTextInk) carrying the contrast. Such a mesh must never rotate
+  //    (it would swing out of its area), so the camera-facing behaviour moves
+  //    into the TEXTURE (see the UV square below + _advanceBgGrass).
+  //  • AUTO (no area, or a stale planner sending only a rect): the widest open
+  //    yard margin strip (successive entries take the next strip via `slot`),
+  //    drawn exactly as shipped — opaque mowed-grass PlaneGeometry, mesh yaw.
+  //
+  // Either way the text word-wraps to the target aspect and picks the largest
+  // font that fits (min-font floor + ellipsis trim).
   private _buildBgGrass(text: string, i: number, slot: number,
-                        area?: { cx: number; cy: number; w: number; h: number },
-                        sc = 1): BgRig {
+                        area?: BgGrassArea, sc = 1): BgRig {
     const place = area ?? this._bgGrassPlacement(slot);
+    const poly = (area?.points && area.points.length >= 3) ? area.points : null;
+    if (poly) return this._buildBgGroundPoly(text, i, place, poly, area!.kind ?? 'grass', sc);
     const gtex = this._makeGrassTextTexture(text, place.w / place.h);
     const mesh = new THREE.Mesh(
       new THREE.PlaneGeometry(place.w, place.h),
@@ -12500,6 +12524,120 @@ export class ThreeDRenderer {
     };
   }
 
+  // Area-bound ground writing: the decal IS the GroundArea's polygon.
+  //
+  // ── Polygon mapping (must match updateGroundAreas exactly, or the writing
+  //    would slide off the paint it's written on) ────────────────────────────
+  // A ShapeGeometry rotated −π/2 about X maps shape (sx, sy) → local (sx, 0,
+  // −sy), and the mesh sits at _w(cx, cy, y). updateGroundAreas feeds a patch
+  // vertex as (w.x, −w.z) with w = _w(px, py, 0), i.e. (fw/2 − px, fd/2 − py).
+  // Subtracting the centre's own pair gives the LOCAL authoring rule
+  //     sx = cx − px,   sy = cy − py
+  // which lands the vertex back at exactly _w(px, py, y) — same world point the
+  // ground patch uses, at every vertex. (Verified in bgtext-multi-test against
+  // the real updateGroundAreas output for two asymmetric vertices.)
+  //
+  // ── UV square (camera-facing without moving the mesh) ────────────────────
+  // The camera-facing behaviour rotates the TEXTURE instead of the mesh, so the
+  // UV window must be ISOTROPIC or a rotation would shear the glyphs: it's a
+  // SQUARE of side S = the polygon's full bbox diagonal, centred on (cx, cy).
+  // Every polygon vertex is within half that diagonal of the bbox centre, so at
+  // ANY texture rotation the sampled uv stays inside [0,1] (ClampToEdge then
+  // only ever repeats the deliberately-transparent border).
+  //     u = 0.5 + sx/S,   v = 0.5 + sy/S
+  // Sign check: the surface's u-axis is local +x = scene local +x, and its
+  // v-axis is local +y → scene local −z. That is the SAME frame a PlaneGeometry
+  // gives the legacy path (u along +x, v along −z), so the texture-rotation sign
+  // matches the mesh-yaw sign one-for-one (see _applyGrassYaw).
+  private _buildBgGroundPoly(text: string, i: number,
+                             place: { cx: number; cy: number; w: number; h: number },
+                             poly: { x: number; y: number }[], kind: GroundKind,
+                             sc: number): BgRig {
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const p of poly) {
+      minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+      minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+    }
+    const S = Math.max(1, Math.hypot(maxX - minX, maxY - minY));
+    const shape = new THREE.Shape();
+    for (let k = 0; k < poly.length; k++) {
+      const sx = place.cx - poly[k].x, sy = place.cy - poly[k].y;
+      if (k === 0) shape.moveTo(sx, sy); else shape.lineTo(sx, sy);
+    }
+    shape.closePath();
+    const geo = new THREE.ShapeGeometry(shape);
+    const pos = geo.attributes.position, uv = geo.attributes.uv;
+    for (let k = 0; k < pos.count; k++)
+      uv.setXY(k, 0.5 + pos.getX(k) / S, 0.5 + pos.getY(k) / S);
+    uv.needsUpdate = true;
+
+    const gtex = this._makeGroundTextTexture(text, place.w, place.h, S, kind, sc);
+    const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+      map: gtex, fog: false, depthWrite: false,
+      transparent: true,                    // the area's own patch shows through
+    }));
+    mesh.rotation.order = 'YXZ';
+    mesh.rotation.x = -Math.PI / 2;
+    mesh.rotation.y = 0;                    // stays 0 forever — the TEXTURE spins
+    // Same height rule as the auto placement: the area's patch tops out at
+    // grade + elevation + 4, so +6 keeps the writing 2 mm proud of the paint.
+    mesh.position.copy(this._w(place.cx, place.cy, this._groundYAt(place.cx, place.cy) + 6));
+    // The size knob must NOT scale the mesh here — the decal is the area, and
+    // growing it would spill the polygon past the paint it's clipped to. `sc`
+    // instead multiplies the fitted font inside the texture, so a big message
+    // simply runs out to (and clips at) the area's real edges.
+    mesh.renderOrder = 1;
+    mesh.userData.textPlane = true;
+    mesh.userData.outlineSkip = true;
+    this._bgTextGroup.add(mesh);
+    return {
+      mode: 'grass', index: i, grassMesh: mesh, grassTexRot: true,
+      grass: { cx: place.cx, cy: place.cy, w: place.w, h: place.h },
+    };
+  }
+
+  // Ground-writing texture for the AREA-BOUND path: a SQUARE canvas (side = the
+  // UV window S, so tex.rotation is distortion-free) with a fully TRANSPARENT
+  // background — only the lettering is painted, in the surface's own ink, so the
+  // GroundArea's material reads straight through. The text block is fitted into
+  // the area's inner rect (w × h of the 10%-inset bbox) expressed as a fraction
+  // of that square, then multiplied by the per-entry size knob `sc` (which may
+  // push it past the polygon edges — deliberate, that's the constraint the user
+  // asked for). Border pixels are cleared so ClampToEdge can only ever repeat
+  // transparency. Deterministic (no Math.random).
+  private _makeGroundTextTexture(text: string, innerW: number, innerH: number,
+                                 S: number, kind: GroundKind, sc: number): THREE.CanvasTexture {
+    const cv = document.createElement('canvas');
+    const g = cv.getContext('2d')!;
+    const N = 640;
+    cv.width = N; cv.height = N;
+    const iw = N * Math.min(1, Math.max(0.05, innerW / S));
+    const ih = N * Math.min(1, Math.max(0.05, innerH / S));
+    const pad = Math.round(Math.min(iw, ih) * 0.08);
+    const fit = this._fitLawnText(g, text, Math.max(20, iw - pad * 2),
+                                          Math.max(20, ih - pad * 2));
+    const ink = groundTextInk(kind);
+    const fs = fit.fs * sc, lineH = fit.lineH * sc;
+    g.font = `800 ${fs}px system-ui, "Segoe UI", sans-serif`;
+    g.textAlign = 'center'; g.textBaseline = 'middle';
+    let y = (N - fit.lines.length * lineH) / 2 + lineH / 2;
+    for (const line of fit.lines) {
+      g.lineWidth = Math.max(3, 10 * sc); g.strokeStyle = ink.stroke;
+      g.strokeText(line, N / 2 + 4 * sc, y + 6 * sc);
+      g.fillStyle = ink.fill;
+      g.fillText(line, N / 2, y + 2 * sc);
+      y += lineH;
+    }
+    // Transparent 1 px frame (ClampToEdge safety at large `sc`).
+    g.clearRect(0, 0, N, 1); g.clearRect(0, N - 1, N, 1);
+    g.clearRect(0, 0, 1, N); g.clearRect(N - 1, 0, 1, N);
+    const tex = new THREE.CanvasTexture(cv);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
+    tex.center.set(0.5, 0.5);               // rotate about the area centre
+    return tex;
+  }
+
   // Multi-line lawn-relief text baked to a CanvasTexture at the target aspect
   // (w/h of the decal rect). Word-wraps + picks the LARGEST font whose wrapped
   // lines all fit the padded rect; below a min-font floor it wraps at the floor
@@ -12512,7 +12650,32 @@ export class ThreeDRenderer {
     const W = Math.max(160, Math.round(H * Math.max(0.1, aspect)));
     cv.width = W; cv.height = H;
     const pad = Math.round(Math.min(W, H) * 0.08);
-    const availW = W - pad * 2, availH = H - pad * 2;
+    const { fs, lineH, lines } = this._fitLawnText(g, text, W - pad * 2, H - pad * 2);
+    // Paint: grass base + per-line mow highlight (lighter) over darker cut.
+    g.font = `800 ${fs}px system-ui, "Segoe UI", sans-serif`;
+    g.fillStyle = '#4f7a34'; g.fillRect(0, 0, W, H);
+    g.textAlign = 'center'; g.textBaseline = 'middle';
+    const totalH = lines.length * lineH;
+    let y = (H - totalH) / 2 + lineH / 2;
+    for (const line of lines) {
+      g.lineWidth = 10; g.strokeStyle = '#7bab52';
+      g.strokeText(line, W / 2 + 4, y + 6);
+      g.fillStyle = '#31521d';
+      g.fillText(line, W / 2, y + 2);
+      y += lineH;
+    }
+    const tex = new THREE.CanvasTexture(cv);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    return tex;
+  }
+
+  // Shared text fitter for both ground-writing painters: greedy word wrap +
+  // the LARGEST font whose wrapped lines all fit the padded rect; below a
+  // min-font floor it wraps at the floor and trims with an ellipsis. Mutates
+  // only `g.font` (the caller re-sets it before painting). Deterministic.
+  private _fitLawnText(g: CanvasRenderingContext2D, text: string,
+                       availW: number, availH: number,
+                      ): { fs: number; lineH: number; lines: string[] } {
     const words = (text || ' ').trim().split(/\s+/).filter(Boolean);
     if (words.length === 0) words.push(' ');
     const fontOf = (fs: number) => `800 ${fs}px system-ui, "Segoe UI", sans-serif`;
@@ -12552,22 +12715,7 @@ export class ThreeDRenderer {
         lines[maxLines - 1] = last + '…';
       }
     }
-    // Paint: grass base + per-line mow highlight (lighter) over darker cut.
-    g.font = fontOf(fs);
-    g.fillStyle = '#4f7a34'; g.fillRect(0, 0, W, H);
-    g.textAlign = 'center'; g.textBaseline = 'middle';
-    const totalH = lines.length * lineH;
-    let y = (H - totalH) / 2 + lineH / 2;
-    for (const line of lines) {
-      g.lineWidth = 10; g.strokeStyle = '#7bab52';
-      g.strokeText(line, W / 2 + 4, y + 6);
-      g.fillStyle = '#31521d';
-      g.fillText(line, W / 2, y + 2);
-      y += lineH;
-    }
-    const tex = new THREE.CanvasTexture(cv);
-    tex.colorSpace = THREE.SRGBColorSpace;
-    return tex;
+    return { fs, lineH, lines };
   }
 
   // Message train circling the yard at ground level. The consist is engine +
@@ -12942,13 +13090,36 @@ export class ThreeDRenderer {
     if (!mesh || !cam) return;
     const want = Math.atan2(cam.position.x - mesh.position.x,
                             cam.position.z - mesh.position.z);
-    if (rig.grassYaw == null) { rig.grassYaw = want; mesh.rotation.y = want; return; }
+    if (rig.grassYaw == null) { rig.grassYaw = want; this._applyGrassYaw(rig, want); return; }
     let d = want - rig.grassYaw;
     while (d > Math.PI) d -= 2 * Math.PI;
     while (d < -Math.PI) d += 2 * Math.PI;
     if (Math.abs(d) < 0.009) rig.grassYaw = want;                 // ~0.5° → snap
     else rig.grassYaw += d * (1 - Math.exp(-dt / 0.6));           // τ = 0.6 s
-    mesh.rotation.y = rig.grassYaw;
+    this._applyGrassYaw(rig, rig.grassYaw);
+  }
+
+  // Apply the eased ground-writing yaw. AUTO placement spins the MESH (its own
+  // vertical axis, the shipped behaviour). An AREA-BOUND decal must not move —
+  // it's clipped to the polygon — so the identical angle drives `tex.rotation`
+  // instead, about `tex.center` (0.5, 0.5) = the area centre.
+  //
+  // Sign: three's uv transform rotates the SAMPLING coordinate by [[c,s],[−s,c]]
+  // about the centre, i.e. the painted image turns CCW in uv space by +rotation.
+  // With the surface's u-axis along scene local +x and its v-axis along scene
+  // local −z (guaranteed by the UV rewrite in _buildBgGroundPoly, and what a
+  // PlaneGeometry gives the legacy path), the image's "up" ends at
+  // (−sin θ, 0, −cos θ) in local scene coords — the exact vector mesh yaw ψ
+  // produces via Ry(ψ)·(0,0,−1). So θ = ψ: the SAME value, no flip, no offset.
+  private _applyGrassYaw(rig: BgRig, yaw: number): void {
+    const mesh = rig.grassMesh;
+    if (!mesh) return;
+    if (rig.grassTexRot) {
+      const tex = (mesh.material as THREE.MeshBasicMaterial).map;
+      if (tex) tex.rotation = yaw;
+    } else {
+      mesh.rotation.y = yaw;
+    }
   }
 
   private _advanceBgSky(rig: BgRig, dt: number): void {

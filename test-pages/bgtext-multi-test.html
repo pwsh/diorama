@@ -175,6 +175,26 @@
        Math.abs(ga.w - 3200) < 1 && Math.abs(ga.h - 1600) < 1,
        ga ? `cx=${ga.cx} cy=${ga.cy} w=${ga.w} h=${ga.h}` : 'no rect');
     ok('grass carries grassAreaId when resolved', res[0].grassAreaId === 'ga1');
+    // GROUND WRITING: the row also carries the area's REAL polygon + kind so the
+    // renderer can clip the decal to it and paint through its own material.
+    ok('ground-writing row carries the area polygon (copied, not aliased)',
+       !!ga && Array.isArray(ga.points) && ga.points.length === 4 &&
+       ga.points[1].x === 5000 && ga.points[1].y === 1000 &&
+       ga.points !== p.floor().groundAreas[0].points &&
+       ga.points[0] !== p.floor().groundAreas[0].points[0],
+       ga ? `n=${ga.points && ga.points.length}` : 'no rect');
+    ok('ground-writing row carries the area kind', !!ga && ga.kind === 'grass', ga && ga.kind);
+    ok('flat area omits elevationMm', !!ga && ga.elevationMm === undefined);
+    p.floor().groundAreas[0].kind = 'concrete';
+    p.floor().groundAreas[0].elevationMm = 250;
+    const ga2 = p.bgTextsResolved()[0].grassArea;
+    ok('ground-writing row tracks a kind + elevation change',
+       !!ga2 && ga2.kind === 'concrete' && ga2.elevationMm === 250,
+       ga2 ? `${ga2.kind}/${ga2.elevationMm}` : 'none');
+    // Degenerate polygons still fail soft (auto placement).
+    p.floor().groundAreas = [{ id: 'ga1', kind: 'grass', points: [{ x: 0, y: 0 }, { x: 10, y: 0 }] }];
+    ok('a <3-point area fails soft (no grassArea → auto)',
+       p.bgTextsResolved()[0].grassArea === undefined);
   }
   {
     // Stale grassAreaId (area not on the current floor) → no rect, auto fallback.
@@ -1125,6 +1145,250 @@
     while (dGrs < -Math.PI) dGrs += 2 * Math.PI;
     ok('…while GRASS alone tracked the 180° camera move',
        Math.abs(Math.abs(dGrs) - Math.PI) < 1e-6, `d=${dGrs.toFixed(6)} rad`);
+  }
+
+  // ════════════ GROUND WRITING: area-bound polygon decals ════════════
+  // The "fit to area" path must (a) clip the writing to the area's REAL polygon
+  // — never a box of its own — landing on exactly the world points the ground
+  // patch uses, (b) paint on a TRANSPARENT canvas so the area's own material is
+  // the backdrop, with per-kind ink, and (c) stay camera-facing by spinning the
+  // TEXTURE, since the mesh itself can never move off its area.
+  {
+    // Asymmetric L (a box-fitting build would cover the notch).
+    const L = [{ x: 1000, y: 500 }, { x: 5000, y: 500 }, { x: 5000, y: 1500 },
+               { x: 3000, y: 1500 }, { x: 3000, y: 3500 }, { x: 1000, y: 3500 }];
+    const CX = 3000, CY = 2000;                    // bbox centre
+    const S = Math.hypot(4000, 3000);              // bbox diagonal = the UV square side
+    const areaOf = (kind = 'grass', extra) => ({ cx: CX, cy: CY, w: 3200, h: 2400,
+                                                 points: L, kind, ...(extra || {}) });
+    const build = (area, scale) => {
+      r.updateBgTexts([{ id: 'gw', mode: 'grass', text: 'HELLO YARD',
+                         grassArea: area, ...(scale ? { scale } : {}) }], false, 0, 0);
+      return r._bgRigs.find(x => x.mode === 'grass');
+    };
+
+    const rigP = build(areaOf());
+    const meshP = rigP.grassMesh, geoP = meshP.geometry;
+    ok('area-bound decal builds a ShapeGeometry of the polygon (not a plane)',
+       geoP.type === 'ShapeGeometry' && geoP.attributes.position.count > 4 &&
+       geoP.parameters.width === undefined,
+       `type=${geoP.type} verts=${geoP.attributes.position.count}`);
+
+    // ── the decal's vertices land on the SAME world points the ground patch uses
+    r.updateGroundAreas([{ id: 'gaP', kind: 'grass', points: L }], undefined,
+                        12000, 8000, [], false, 0);
+    const patch = r._groundGroup.children.find(c => c.userData && c.userData.terraceTop !== undefined);
+    ok('a real ground patch was built for the comparison', !!patch,
+       `children=${r._groundGroup.children.length}`);
+    let maxDev = Infinity;
+    if (patch) {
+      meshP.updateMatrixWorld(true); patch.updateMatrixWorld(true);
+      const pd = geoP.attributes.position, pp = patch.geometry.attributes.position;
+      maxDev = -1;
+      if (pd.count === pp.count) {
+        for (let k = 0; k < pd.count; k++) {
+          // both are ShapeGeometry(rotation.x=-PI/2): shape (sx,sy) → local (sx,0,-sy)
+          const dx = meshP.position.x + pd.getX(k), dz = meshP.position.z - pd.getY(k);
+          const px = patch.position.x + pp.getX(k), pz = patch.position.z - pp.getY(k);
+          maxDev = Math.max(maxDev, Math.abs(dx - px), Math.abs(dz - pz));
+        }
+      }
+      ok('every decal vertex matches the ground patch world position (x/z)',
+         pd.count === pp.count && maxDev >= 0 && maxDev < 1e-6,
+         `n=${pd.count}/${pp.count} maxDev=${maxDev}`);
+      // Two ASYMMETRIC vertices spot-checked against _w() directly. (ShapeGeometry
+      // may reverse/rotate the contour when triangulating, so match by position,
+      // not by index — the index-wise patch comparison above already pins order.)
+      for (const ix of [1, 3]) {
+        const w = r._w(L[ix].x, L[ix].y, 0);
+        let best = Infinity;
+        for (let k = 0; k < pd.count; k++) {
+          const gx = meshP.position.x + pd.getX(k), gz = meshP.position.z - pd.getY(k);
+          best = Math.min(best, Math.hypot(gx - w.x, gz - w.z));
+        }
+        ok(`asymmetric vertex (${L[ix].x},${L[ix].y}) maps through _w() exactly`,
+           best < 1e-6, `nearest decal vertex is ${best.toFixed(6)} mm away`);
+      }
+    }
+
+    // ── the L's NOTCH is genuinely outside the decal ────────────────────────
+    // Point-in-mesh over the triangulated geometry, in world XZ.
+    const inDecal = (mesh, px, py) => {
+      const w = r._w(px, py, 0), g = mesh.geometry;
+      const pos = g.attributes.position, idx = g.index;
+      const n = idx ? idx.count : pos.count;
+      const vx = (k) => mesh.position.x + pos.getX(idx ? idx.getX(k) : k);
+      const vz = (k) => mesh.position.z - pos.getY(idx ? idx.getX(k) : k);
+      const sign = (ax, az, bx, bz, cx2, cz2) => (ax - cx2) * (bz - cz2) - (bx - cx2) * (az - cz2);
+      for (let t = 0; t + 2 < n; t += 3) {
+        const d1 = sign(w.x, w.z, vx(t), vz(t), vx(t + 1), vz(t + 1));
+        const d2 = sign(w.x, w.z, vx(t + 1), vz(t + 1), vx(t + 2), vz(t + 2));
+        const d3 = sign(w.x, w.z, vx(t + 2), vz(t + 2), vx(t), vz(t));
+        const neg = d1 < 0 || d2 < 0 || d3 < 0, pos2 = d1 > 0 || d2 > 0 || d3 > 0;
+        if (!(neg && pos2)) return true;
+      }
+      return false;
+    };
+    ok('a point in the L body IS covered by the decal', inDecal(meshP, 2000, 2500));
+    ok('a point in the L NOTCH is NOT covered (truly constrained to the geometry)',
+       !inDecal(meshP, 4200, 2800), 'notch (4200,2800)');
+    ok('a point outside the bbox is NOT covered', !inDecal(meshP, 8000, 7000));
+
+    // ── UV square: isotropic window of side S centred on the area centre ────
+    {
+      const pos = geoP.attributes.position, uv = geoP.attributes.uv;
+      let bad = 0, checked = 0, outside = 0;
+      for (let k = 0; k < pos.count; k++) {
+        const sx = pos.getX(k), sy = pos.getY(k);
+        if (Math.abs(uv.getX(k) - (0.5 + sx / S)) > 1e-6 ||
+            Math.abs(uv.getY(k) - (0.5 + sy / S)) > 1e-6) bad++;
+        if (uv.getX(k) < -1e-9 || uv.getX(k) > 1 + 1e-9 ||
+            uv.getY(k) < -1e-9 || uv.getY(k) > 1 + 1e-9) outside++;
+        checked++;
+      }
+      ok('every uv = (0.5 + sx/S, 0.5 + sy/S) with sx=cx−px, sy=cy−py',
+         bad === 0 && checked > 4, `bad=${bad}/${checked}`);
+      ok('every uv stays inside [0,1] (rotation can never sample past the border)',
+         outside === 0, `outside=${outside}`);
+      // Spot-check the known corner (5000,500): sx=−2000 sy=1500 → u=0.1 v=0.8.
+      let hit = -1;
+      for (let k = 0; k < pos.count; k++)
+        if (Math.abs(pos.getX(k) - (CX - 5000)) < 1e-6 && Math.abs(pos.getY(k) - (CY - 500)) < 1e-6) hit = k;
+      ok('known vertex (5000,500) has uv (0.1, 0.8)',
+         hit >= 0 && Math.abs(uv.getX(hit) - 0.1) < 1e-6 && Math.abs(uv.getY(hit) - 0.8) < 1e-6,
+         hit >= 0 ? `uv=(${uv.getX(hit).toFixed(4)},${uv.getY(hit).toFixed(4)})` : 'vertex not found');
+      ok('the texture rotates about its centre (0.5, 0.5)',
+         meshP.material.map.center.x === 0.5 && meshP.material.map.center.y === 0.5);
+      const cvSq = meshP.material.map.image;
+      ok('area-bound texture canvas is SQUARE (rotation cannot distort)',
+         cvSq.width === cvSq.height, `${cvSq.width}x${cvSq.height}`);
+    }
+
+    // ── transparent backdrop + per-kind ink ────────────────────────────────
+    const inkStats = (mesh) => {
+      const cv = mesh.material.map.image, g2 = cv.getContext('2d');
+      const d = g2.getImageData(0, 0, cv.width, cv.height).data;
+      let n = 0, R = 0, G = 0, B = 0, opaque = 0;
+      let minX = 1e9, maxX = -1e9, minY = 1e9, maxY = -1e9;
+      for (let i = 0; i < d.length; i += 4) {
+        if (d[i + 3] > 40) {
+          n++; R += d[i]; G += d[i + 1]; B += d[i + 2];
+          if (d[i + 3] > 200) opaque++;
+          const px = (i / 4) % cv.width, py = Math.floor((i / 4) / cv.width);
+          if (px < minX) minX = px; if (px > maxX) maxX = px;
+          if (py < minY) minY = py; if (py > maxY) maxY = py;
+        }
+      }
+      return { n, r: R / Math.max(1, n), g: G / Math.max(1, n), b: B / Math.max(1, n),
+               opaque, w: maxX - minX, h: maxY - minY, cv };
+    };
+    const grassInk = inkStats(meshP);
+    const cvG = grassInk.cv, gg = cvG.getContext('2d');
+    const alphaAt = (cv, x, y) => cv.getContext('2d').getImageData(x, y, 1, 1).data[3];
+    ok('area-bound canvas corner is fully TRANSPARENT (area material shows through)',
+       alphaAt(cvG, 0, 0) === 0 && alphaAt(cvG, cvG.width - 1, cvG.height - 1) === 0 &&
+       alphaAt(cvG, cvG.width - 1, 0) === 0,
+       `a=${alphaAt(cvG, 0, 0)}/${alphaAt(cvG, cvG.width - 1, cvG.height - 1)}`);
+    ok('area-bound canvas paints only the lettering (mostly transparent)',
+       grassInk.n > 200 && grassInk.n < cvG.width * cvG.height * 0.5,
+       `ink=${grassInk.n}/${cvG.width * cvG.height}`);
+    ok('area-bound material is transparent', meshP.material.transparent === true);
+
+    const concreteInk = inkStats(build(areaOf('concrete')).grassMesh);
+    ok('concrete-area ink differs from grass-area ink',
+       Math.abs(concreteInk.r - grassInk.r) > 25 || Math.abs(concreteInk.b - grassInk.b) > 25,
+       `grass=(${grassInk.r | 0},${grassInk.g | 0},${grassInk.b | 0}) ` +
+       `concrete=(${concreteInk.r | 0},${concreteInk.g | 0},${concreteInk.b | 0})`);
+    ok('grass ink stays green-dominant (shipped palette unchanged)',
+       grassInk.g > grassInk.r + 10 && grassInk.g > grassInk.b + 10,
+       `(${grassInk.r | 0},${grassInk.g | 0},${grassInk.b | 0})`);
+    ok('concrete ink is neutral grey (not green)',
+       Math.abs(concreteInk.r - concreteInk.g) < 25 && Math.abs(concreteInk.g - concreteInk.b) < 25,
+       `(${concreteInk.r | 0},${concreteInk.g | 0},${concreteInk.b | 0})`);
+    const waterInk = inkStats(build(areaOf('water')).grassMesh);
+    ok('water ink is blue-dominant', waterInk.b > waterInk.r + 20,
+       `(${waterInk.r | 0},${waterInk.g | 0},${waterInk.b | 0})`);
+
+    // ── the size knob scales the TEXT, never the polygon ───────────────────
+    const rig1 = build(areaOf(), 1), ink1 = inkStats(rig1.grassMesh);
+    const rig2 = build(areaOf(), 2), ink2 = inkStats(rig2.grassMesh);
+    ok('area-bound decal keeps mesh.scale = 1 at scale ×2 (never spills the area)',
+       rig2.grassMesh.scale.x === 1 && rig2.grassMesh.scale.y === 1 && rig2.grassMesh.scale.z === 1,
+       `s=${rig2.grassMesh.scale.x}`);
+    ok('…and grows the PAINTED text instead', ink2.h > ink1.h * 1.5 && ink2.n > ink1.n,
+       `h ${ink1.h}→${ink2.h}, ink ${ink1.n}→${ink2.n}`);
+    r.updateBgTexts([{ id: 'auto2', mode: 'grass', text: 'AUTO BIG', scale: 2 }], false, 0, 0);
+    ok('AUTO placement still scales the MESH at scale ×2 (regression)',
+       r._bgRigs.find(x => x.mode === 'grass').grassMesh.scale.x === 2);
+
+    // ── camera-facing via TEXTURE rotation (the mesh must never move) ──────
+    const rigC = build(areaOf());
+    const meshC = rigC.grassMesh, texC = meshC.material.map;
+    const home = { x: meshC.position.x, y: meshC.position.y, z: meshC.position.z };
+    const placeCam2 = (mesh, azi) =>
+      r._camera.position.set(mesh.position.x + Math.sin(azi) * 9000, 5000,
+                             mesh.position.z + Math.cos(azi) * 9000);
+    placeCam2(meshC, 0.7); step(400);
+    const rot1 = texC.rotation;
+    placeCam2(meshC, 0.7 + 2.0); step(400);
+    ok('area-bound decal spins the TEXTURE as the camera moves',
+       Math.abs(texC.rotation - rot1) > 1.0, `${rot1.toFixed(3)} → ${texC.rotation.toFixed(3)}`);
+    ok('…while mesh.rotation.y stays 0 (the polygon never leaves its area)',
+       meshC.rotation.y === 0, `y=${meshC.rotation.y}`);
+    ok('…and the mesh never moves', meshC.position.x === home.x &&
+       meshC.position.y === home.y && meshC.position.z === home.z);
+
+    // World-space readability at four azimuths. The surface's u-axis is local +X
+    // and its v-axis local +Y (→ world −Z after rotation.x=−PI/2); three rotates
+    // the SAMPLED uv by [[c,s],[−s,c]], so the painted image's own axes sit at
+    //   textRight = cosθ·right + sinθ·up,  textUp = −sinθ·right + cosθ·up
+    // with right/up read off matrixWorld. Same invariants as the mesh-yaw path.
+    const unit2 = (v) => { const L2 = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0] / L2, v[1] / L2, v[2] / L2]; };
+    const dot2 = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    const cross2 = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+    for (const azi of [0, 1.3, -2.2, Math.PI]) {
+      placeCam2(meshC, azi); step(600);
+      meshC.updateMatrixWorld(true);
+      const m = meshC.matrixWorld.elements;
+      const right = unit2([m[0], m[1], m[2]]), up = unit2([m[4], m[5], m[6]]);
+      const nrm = unit2([m[8], m[9], m[10]]);
+      const th = texC.rotation, c = Math.cos(th), s = Math.sin(th);
+      const tR = unit2([c * right[0] + s * up[0], c * right[1] + s * up[1], c * right[2] + s * up[2]]);
+      const tU = unit2([-s * right[0] + c * up[0], -s * right[1] + c * up[1], -s * right[2] + c * up[2]]);
+      const toC = unit2([meshC.position.x - r._camera.position.x, 0,
+                         meshC.position.z - r._camera.position.z]);
+      const cr = cross2(tR, tU);
+      const tag = `azi ${azi.toFixed(2)}`;
+      ok(`ground-writing ${tag}: decal stays FLAT (normal = world +Y)`, nrm[1] > 0.9999);
+      ok(`ground-writing ${tag}: text-up points AWAY from the camera`,
+         dot2(tU, toC) > 0.9999, `dot=${dot2(tU, toC).toFixed(5)}`);
+      ok(`ground-writing ${tag}: cross(textRight, textUp) = +Y → unmirrored`,
+         cr[1] > 0.9999 && Math.abs(cr[0]) < 1e-6 && Math.abs(cr[2]) < 1e-6,
+         `c=(${cr.map(v => v.toFixed(3))})`);
+    }
+
+    // ── stale planner (rect only, no points) → the legacy plane, verbatim ──
+    r.updateBgTexts([{ id: 'legacy', mode: 'grass', text: 'OLD WAY',
+                       grassArea: { cx: 6000, cy: 4000, w: 3000, h: 1500 } }], false, 0, 0);
+    const rigL = r._bgRigs.find(x => x.mode === 'grass');
+    ok('a grassArea WITHOUT points takes the legacy PlaneGeometry path (stale planner)',
+       rigL.grassMesh.geometry.type === 'PlaneGeometry' &&
+       Math.abs(rigL.grassMesh.geometry.parameters.width - 3000) < 1 &&
+       !rigL.grassTexRot,
+       `type=${rigL.grassMesh.geometry.type} texRot=${rigL.grassTexRot}`);
+    ok('…with the opaque mowed-grass backdrop (canvas corner NOT transparent)',
+       alphaAt(rigL.grassMesh.material.map.image, 0, 0) === 255);
+    placeCam2(rigL.grassMesh, 1.1); step(300);
+    ok('…and still yaws the MESH, not the texture',
+       Math.abs(rigL.grassMesh.rotation.y) > 0.05 && rigL.grassMesh.material.map.rotation === 0,
+       `y=${rigL.grassMesh.rotation.y.toFixed(3)} texRot=${rigL.grassMesh.material.map.rotation}`);
+    // A polygon area with fewer than 3 points also falls back.
+    r.updateBgTexts([{ id: 'thin', mode: 'grass', text: 'THIN',
+                       grassArea: { cx: 6000, cy: 4000, w: 3000, h: 1500,
+                                    points: [{ x: 0, y: 0 }, { x: 10, y: 10 }], kind: 'sand' } }],
+                    false, 0, 0);
+    ok('a degenerate 2-point polygon falls back to the legacy plane',
+       r._bgRigs.find(x => x.mode === 'grass').grassMesh.geometry.type === 'PlaneGeometry');
   }
 
   // ════════════ report ════════════

@@ -257,6 +257,22 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Ground writing: true polygon constraint + area material** (2026-07-28,
+  user-requested: "it should truly constrain to the geometry of that
+  area and not just draw a box… It should also use the material of
+  the area being chosen" + label rename to "Ground writing";
+  unreleased — on main past v0.37.0). Area-bound bg-text decals are
+  now the area's real polygon (ShapeGeometry, index-matched to the
+  `updateGroundAreas` patch mapping) with a TRANSPARENT texture so
+  the area's own material shows through; text ink from the pure
+  `groundTextInk(kind)` palette (mowed green / etched concrete /
+  sand / water…); camera-facing preserved by rotating the TEXTURE
+  (square UV window, side = full bbox diagonal, θ = ψ exactly)
+  while the mesh stays put; `scale` scales the painted text
+  (mesh pinned — polygon never grows past the area). Auto
+  margin-strip placement byte-identical; stale-chunk safe both
+  directions. bgtext-multi 146→193 (BGTEXTMULTI PASS 193/193),
+  bgtext 29/29, terrain 103/103 held.
 - **Stairs rise + autofit + ramp kind** (2026-07-28, user-requested:
   "steps need a height adjustment or an autofit so they can fit
   between 2 levels even of short heights with one or 2 steps" + "the

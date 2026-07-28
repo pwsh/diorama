@@ -2243,7 +2243,7 @@ export class SettingsDrawer extends LitElement {
       </div>`;
   }
 
-  // ── Background text (playful skywriting / banner plane / grass writing) ──
+  // ── Background text (playful skywriting / banner plane / ground writing) ──
   private _bgTextBlock() {
     const p = this.planner;
     const list: BgTextEntry[] = p.store.bgTexts ?? [];
@@ -2253,7 +2253,7 @@ export class SettingsDrawer extends LitElement {
     };
     const modes: Array<[BgTextEntryMode, string]> = [
       ['sky', 'Skywriting (sky)'], ['banner', 'Banner plane'],
-      ['grass', 'Grass writing'], ['train', 'Message train'], ['chopper', 'News chopper'],
+      ['grass', 'Ground writing'], ['train', 'Message train'], ['chopper', 'News chopper'],
     ];
     // The eight flight archetypes (src/aircraft-types.ts) a banner entry can
     // tow its message with, plus the classic toy plane. Listed here as plain
@@ -2357,7 +2357,7 @@ export class SettingsDrawer extends LitElement {
           </div>
           ${e.mode === 'grass' ? html`
             <div class="row" style="margin-top:2px">
-              <label title="Fit the lawn text into a ground area's bounding box (else auto-placed in the widest open yard margin). Ground areas are per-floor — a choice on another floor falls back to auto here.">Fit to area</label>
+              <label title="Constrain the writing to a ground area: the text is clipped to that area's real shape and painted through its own surface material (else auto-placed in the widest open yard margin). Ground areas are per-floor — a choice on another floor falls back to auto here.">Fit to area</label>
               <select style="flex:1;min-width:0"
                       @change=${(ev: Event) => upd(() => {
                         const v = (ev.target as HTMLSelectElement).value;
@@ -2383,12 +2383,12 @@ export class SettingsDrawer extends LitElement {
                                 style="font-weight:600">Background text</label></div>
         ${list.length ? list.map((e, i) => row(e, i))
           : html`<div style="font-size:10px;color:var(--text-dim);margin:0 0 6px">
-                   None. Add a skywriter, banner plane, lawn message, message train, or news chopper.</div>`}
+                   None. Add a skywriter, banner plane, ground message, message train, or news chopper.</div>`}
         <button class="btn" style="font-size:11px;padding:3px 8px" ?disabled=${list.length >= 6}
                 @click=${() => upd(() => { p.store.bgTexts!.push({ id: newId(), mode: 'sky' }); })}>
           + Add${list.length >= 6 ? ' (max 6)' : ''}</button>
         <div style="font-size:10px;color:var(--text-dim);line-height:1.3;margin:4px 0 0">
-          Up to 6. Skywriting / banner plane / news chopper hide during storms; grass + train stay.</div>
+          Up to 6. Skywriting / banner plane / news chopper hide during storms; ground writing + train stay.</div>
       </div>`;
   }
 
