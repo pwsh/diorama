@@ -8009,22 +8009,13 @@ export class ThreeDRenderer {
       return floorY;
     };
 
-    // A well face is left OPEN when another sunken stair-family piece
-    // adjoins it (flight → landing → flight compositions must connect, not
-    // brick each other over). Probes a point just beyond the face center.
-    const faceOpen = (lxOff: number, lyOff: number): boolean => {
-      if (!neighbors) return false;
-      const wpt = furnitureLocalToWorld(fu.rotation, lxOff, lyOff);
-      const px = fu.x + wpt.x, py = fu.y + wpt.y;
-      return neighbors.some(nb => {
-        if (nb.x === fu.x && nb.y === fu.y && nb.w === fu.w && nb.h === fu.h &&
-            nb.kind === fu.kind && nb.rotation === fu.rotation) return false;
-        if (!isStairsKind(nb.kind)) return false;
-        if ((nb.elevation ?? 0) >= 0) return false;
-        const l = furnitureWorldToLocal(nb.rotation, px - nb.x, py - nb.y);
-        return Math.abs(l.x) <= nb.w / 2 + 60 && Math.abs(l.y) <= nb.h / 2 + 60;
-      });
-    };
+    // (Sunken flights used to line their well with dark shaft side walls,
+    // gated by a neighbor-adjacency faceOpen probe — removed 2026-07-28 at
+    // the user's request ("remove the sides from the stairs and the ramps"):
+    // outdoor flights fitted between yard levels grew dark flanking walls.
+    // The stairwell hole + dark void plane still mark indoor wells; the
+    // `neighbors` param stays for interface stability.)
+    void neighbors;
 
     const kind = fu.kind ?? 'block';
     // Custom object recipes build from their generic primitive list, then get
@@ -8216,20 +8207,6 @@ export class ThreeDRenderer {
           // Tread cap for a visible nosing line.
           addBox(W, 22, treadD, treadMat, 0, hStep - 11, -D / 2 + (i + 0.5) * treadD);
         }
-        // Sunk below the floor (descending flight): line the stairwell with
-        // dark shaft walls up to floor level so the opening reads as a well.
-        if ((fu.elevation ?? 0) < 0) {
-          const shaftMat = this._mat({
-            color: 0x2a2d31, roughness: 0.9, side: THREE.DoubleSide,
-          });
-          const wellH = -(fu.elevation ?? 0);
-          // Skip any face that connects to an adjoining sunken stair piece
-          // (e.g. this flight's top meeting a landing) — walling it over
-          // blocked the staircase.
-          if (!faceOpen(-W / 2 - 150, 0)) addBox(24, wellH, D, shaftMat, -W / 2 + 12, wellH / 2, 0);
-          if (!faceOpen(W / 2 + 150, 0))  addBox(24, wellH, D, shaftMat, W / 2 - 12, wellH / 2, 0);
-          if (!faceOpen(0, D / 2 + 150))  addBox(W, wellH, 24, shaftMat, 0, wellH / 2, D / 2 - 12);
-        }
         break;
       }
       // ── ramp: the no-tread stairs-family member ────────────────────────────
@@ -8254,31 +8231,8 @@ export class ThreeDRenderer {
         wedge.rotation.y = -Math.PI / 2;
         wedge.position.x = W / 2;
         grp.add(wedge);
-        // Two raised side curbs running the slope, so the wedge reads as a ramp
-        // and not a mis-built box. Half-buried in the slope (offset along the
-        // surface normal by less than half their height) — a curb flush with the
-        // sloped face would be coplanar with it and hatch under flat toon shading.
-        const slopeLen = Math.hypot(D, HT);
-        const nY = D / slopeLen, nZ = -HT / slopeLen;   // unit up-normal of the slope
-        const CURB_H = 80, CURB_W = 40, EMBED = 25;
-        const off = CURB_H / 2 - EMBED;
-        const curbMat = this._mat({ color: 0xa1887f, roughness: 0.6 });
-        for (const sx of [-1, 1]) {
-          const curb = addBox(CURB_W, CURB_H, slopeLen, curbMat,
-                              sx * (W / 2 - CURB_W / 2), HT / 2 + nY * off, nZ * off);
-          curb.rotation.x = -Math.atan2(HT, D);
-        }
-        // Sunk below the floor (descending ramp): same dark shaft lining the
-        // descending flights get, so the opening reads as a well.
-        if ((fu.elevation ?? 0) < 0) {
-          const shaftMat = this._mat({
-            color: 0x2a2d31, roughness: 0.9, side: THREE.DoubleSide,
-          });
-          const wellH = -(fu.elevation ?? 0);
-          if (!faceOpen(-W / 2 - 150, 0)) addBox(24, wellH, D, shaftMat, -W / 2 + 12, wellH / 2, 0);
-          if (!faceOpen(W / 2 + 150, 0))  addBox(24, wellH, D, shaftMat, W / 2 - 12, wellH / 2, 0);
-          if (!faceOpen(0, D / 2 + 150))  addBox(W, wellH, 24, shaftMat, 0, wellH / 2, D / 2 - 12);
-        }
+        // No side curbs / no shaft lining — the bare wedge IS the ramp (user
+        // request: "remove the sides from the stairs and the ramps").
         break;
       }
       case 'stair_landing': {
@@ -8286,22 +8240,6 @@ export class ThreeDRenderer {
         addBox(W * 1.02, 40, D * 1.02,
                this._mat({ color: 0xa1887f, roughness: 0.6 }),
                0, HT - 20, 0);
-        // Sunk landings line their well with shaft walls from the landing
-        // surface up to floor level (same treatment as sunken stairs).
-        if ((fu.elevation ?? 0) < 0) {
-          const shaftMat = this._mat({
-            color: 0x2a2d31, roughness: 0.9, side: THREE.DoubleSide,
-          });
-          const floorLvl = -(fu.elevation ?? 0);  // local y of this floor's level
-          const wallH2 = Math.max(0, floorLvl - HT);
-          if (wallH2 > 10) {
-            // Faces adjoining sunken flights stay open (that's the path).
-            if (!faceOpen(-W / 2 - 150, 0)) addBox(24, wallH2, D, shaftMat, -W / 2 + 12, HT + wallH2 / 2, 0);
-            if (!faceOpen(W / 2 + 150, 0))  addBox(24, wallH2, D, shaftMat, W / 2 - 12, HT + wallH2 / 2, 0);
-            if (!faceOpen(0, D / 2 + 150))  addBox(W, wallH2, 24, shaftMat, 0, HT + wallH2 / 2, D / 2 - 12);
-            if (!faceOpen(0, -D / 2 - 150)) addBox(W, wallH2, 24, shaftMat, 0, HT + wallH2 / 2, -D / 2 + 12);
-          }
-        }
         break;
       }
       // ── casework: box body + top slab + door/drawer seams on the front

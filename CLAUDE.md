@@ -1357,13 +1357,18 @@ semantics pinned by test; any change to one must land in both), then sets
 level"); a NEGATIVE diff auto-rotates the piece 180° and fits from the true
 lower end; values landing exactly on defaults are stored as `undefined`.
 **Ramp**: a toon right-triangle `ExtrudeGeometry` wedge (sloped top y=0 at the
-−Z foot → HT at the +Z head) + two half-buried 40×80 curbs running the slope
-(no coplanar faces); `_groundYAt` has a LINEAR `t.kind === 'ramp'` branch
-(`elevation + ht·frac`, no quantization — rigs walk a smooth slope); 2D =
-rectangle + 3 chevrons toward the high end (flipped + `DN` when sunk); rides
-the whole family contract (nav exemption, shaft walls, blob-shadow skip,
-house-mounted set, rise input, autofit) via `isStairsKind`. Test
-`stairs-fit-test.html` (`STAIRSFIT PASS 62/62`).
+−Z foot → HT at the +Z head) — a BARE wedge, no side curbs; `_groundYAt` has a
+LINEAR `t.kind === 'ramp'` branch (`elevation + ht·frac`, no quantization —
+rigs walk a smooth slope); 2D = rectangle + 3 chevrons toward the high end
+(flipped + `DN` when sunk); rides the whole family contract (nav exemption,
+blob-shadow skip, house-mounted set, rise input, autofit) via `isStairsKind`.
+**No side walls on the family (2026-07-28 user request "remove the sides")**:
+the ramp's curbs AND the sunken-flight dark shaft side walls (stairs/ramp/
+landing, with their `faceOpen` adjacency probe) were REMOVED — outdoor flights
+fitted between yard levels grew ugly flanking walls; the stairwell hole + dark
+void plane still mark indoor wells, and `_buildFurniture`'s `neighbors` param
+stays for interface stability. Test `stairs-fit-test.html` (`STAIRSFIT PASS
+62/62` — D3 now pins the curb-less wedge).
 
 ### Descending stairs (below floor level)
 Stairs-family pieces with `elevation < 0` cut their own stairwell hole and

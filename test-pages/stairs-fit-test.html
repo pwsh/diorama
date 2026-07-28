@@ -8,8 +8,9 @@
   app-side ground mirror, and the one-click level fit.
 
   Modules (transpile into the harness dir before serving):
-    npx esbuild src/geometry.ts --bundle --format=esm --outfile=<harness>/geometry.mod.js
-    npx esbuild src/planner.ts  --bundle --format=esm --outfile=<harness>/planner.mod.js
+    npx esbuild src/geometry.ts      --bundle --format=esm --outfile=<harness>/geometry.mod.js
+    npx esbuild src/planner.ts       --bundle --format=esm --outfile=<harness>/planner.mod.js
+    npx esbuild src/canvas-render.ts --bundle --format=esm --outfile=<harness>/canvas-render.mod.js
     (the built three-renderer chunk is served next to this file, like the other 3D pages)
 
   Asserts:
@@ -22,7 +23,7 @@
        builds TWO, tops land at the rise, and _groundYAt returns exactly those
        heights. Plus the default-flight regression pin (13 treads, top 2743).
    (D) ramp: one wedge whose sloped top runs 0 at the local −Z foot → HT at the
-       +Z head, two proud side curbs, and a LINEAR _groundYAt (mid = base+ht/2).
+       +Z head (a bare wedge — no curbs), and a LINEAR _groundYAt (mid = base+ht/2).
    (E) resolveItemGroundMm (pure, app-side) === the renderer's _itemGroundY at
        grade / terrace / indoor points, including the floor-elevation composition
        that three-view performs before handing the level to the renderer.
@@ -95,9 +96,9 @@
   // The builder caps every tread with a 22 mm nosing box — one per step.
   const treadCaps = (o) => realMeshes(o).filter(
     m => m.geometry?.type === 'BoxGeometry' && near(m.geometry.parameters.height, 22, 0.001));
-  // Top of the highest TREAD (nosing cap + 11). Deliberately not the group's
-  // overall max Y — a sunk flight also carries dark shaft walls that rise to
-  // floor level and would swamp it.
+  // Top of the highest TREAD (nosing cap + 11). Kept distinct from the
+  // group's overall max Y as a helper (sunken flights no longer build shaft
+  // side walls — removed 2026-07-28 — but the cap-based read stays precise).
   const treadTopY = (o) => {
     let hi = -Infinity;
     for (const m of treadCaps(o)) hi = Math.max(hi, m.position.y + 11);
@@ -160,13 +161,13 @@
     const wedges = realMeshes(g).filter(m => m.geometry?.type === 'ExtrudeGeometry');
     ok('D1 ramp builds exactly one wedge prism', wedges.length === 1, `n=${wedges.length}`);
     ok('D2 ramp has NO treads', treadCaps(g).length === 0, `caps=${treadCaps(g).length}`);
-    // Curbs: the two boxes that are not the wedge, sized CURB_W × CURB_H.
+    // No side curbs — the bare wedge IS the ramp (user request 2026-07-28:
+    // "remove the sides from the stairs and the ramps"). The wedge (+ blob
+    // shadow decal) is the whole build.
     const curbs = realMeshes(g).filter(
       m => m.geometry?.type === 'BoxGeometry' && near(m.geometry.parameters.width, 40, 0.001)
                                               && near(m.geometry.parameters.height, 80, 0.001));
-    ok('D3 two side curbs run the slope, tilted to it', curbs.length === 2 &&
-       curbs.every(c => near(c.rotation.x, -Math.atan2(HT, D), 1e-6)),
-       `n=${curbs.length} rotX=${curbs[0]?.rotation.x?.toFixed(4)}`);
+    ok('D3 ramp has NO side curbs (bare wedge)', curbs.length === 0, `n=${curbs.length}`);
     // The wedge's LOCAL frame maps (x,y,z) → world (W/2 − z, y, x): rotation.y
     // = −π/2 plus the +W/2 shift. So the sloped top must read 0 at world
     // z = −D/2 (the local −Z foot) and HT at world z = +D/2 (the head).

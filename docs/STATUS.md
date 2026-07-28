@@ -264,6 +264,15 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Stairs/ramp sides removed** (2026-07-28, user-requested: "remove
+  the sides from the stairs and the ramps"; unreleased — on main past
+  v0.38.0). The ramp's raised side curbs and the sunken-flight dark
+  shaft side walls (stairs/ramp/landing + the faceOpen adjacency
+  probe) are gone — outdoor flights fitted between yard levels grew
+  ugly flanking walls. Stairwell hole + dark void plane still mark
+  indoor wells. STAIRSFIT 62/62 (D3 flipped to pin the bare wedge);
+  stairs-descend 23/23, stair-link 25/25, terrain 103/103 held.
+
 - **Ground writing: true polygon constraint + area material** (2026-07-28,
   user-requested: "it should truly constrain to the geometry of that
   area and not just draw a box… It should also use the material of
