@@ -1735,8 +1735,13 @@ export class ThreeView extends LitElement {
               : '';
             // aircraft (the banner-plane silhouette) + scale are BUILD-time
             // inputs like maxCars — both must rebuild the rig when they change.
+            // Ground-writing orientation is a BUILD-time input too (the static
+            // yaw is stamped on the rig), so both fields must rebuild on change.
+            // A follow row carries neither ⇒ this suffix is '::' exactly as the
+            // pre-feature key already was for the fields it didn't have.
             return `${e.id}:${e.mode}:${e.text}:${e.maxCars ?? ''}:${e.aircraft ?? ''}`
-              + `:${e.scale ?? ''}:${e.grassAreaId ?? ''}:${ga}`;
+              + `:${e.scale ?? ''}:${e.grassAreaId ?? ''}:${ga}`
+              + `:${e.faceCamera === false ? 'f' : ''}:${e.rotationDeg ?? ''}`;
           }).join('|');
       if (keyBgText !== this._keyBgText) {
         this._keyBgText = keyBgText;

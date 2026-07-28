@@ -433,6 +433,11 @@ export type BgTextResolved = {
   id: string; mode: BgTextEntryMode; text: string; maxCars?: number;
   aircraft?: string; scale?: number;
   grassAreaId?: string; grassArea?: BgTextGrassArea;
+  // Ground-writing orientation (grass rows only; see BgTextEntry). Both absent =
+  // autofollow, exactly as shipped. `faceCamera` is only ever emitted as the
+  // explicit `false` opt-out, so a row that follows the camera hashes/serializes
+  // identically to a pre-feature one.
+  faceCamera?: boolean; rotationDeg?: number;
 };
 
 // Single-source-of-truth Planner. Lit components subscribe via addEventListener.
@@ -2379,6 +2384,15 @@ export class Planner extends EventTarget {
       if (e.mode === 'grass' && e.grassAreaId) {
         const rect = this._grassAreaRect(e.grassAreaId);
         if (rect) { row.grassAreaId = e.grassAreaId; row.grassArea = rect; }
+      }
+      // Ground-writing orientation. Only the STATIC opt-out travels — a follow
+      // row carries neither field, so the renderer's "absent = follow the
+      // camera" default (and the _keyBgText hash) stay byte-identical to the
+      // shipped build. rotationDeg passes straight through; the renderer owns
+      // the finite guard + the degrees→yaw mapping.
+      if (e.mode === 'grass' && e.faceCamera === false) {
+        row.faceCamera = false;
+        if (e.rotationDeg != null) row.rotationDeg = e.rotationDeg;
       }
       out.push(row);
     }

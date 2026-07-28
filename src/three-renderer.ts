@@ -651,6 +651,9 @@ interface BgRig {
   grassTexRot?: boolean;                      // area-bound (polygon-clipped) decal: the camera-facing
                                               // yaw drives texture.rotation, NOT mesh.rotation.y — a
                                               // polygon mesh must stay put or it leaves its area
+  grassFixedYaw?: number;                     // STATIC orientation (rad): the entry opted out of
+                                              // autofollow, so _advanceBgGrass wants THIS instead of
+                                              // the camera formula. undefined = follow the camera
   // train
   train?: BgTrain;
 }
@@ -676,6 +679,33 @@ function bgModelScale(v: unknown): number {
   if (!isFinite(n) || n <= 0) return 1;
   return Math.min(BG_SCALE_MAX, Math.max(BG_SCALE_MIN, n));
 }
+// Ground-writing (mode 'grass') orientation: the entry's faceCamera/rotationDeg
+// pair → the STATIC decal yaw ψ in radians, or null for "follow the camera"
+// (the shipped behaviour). Pure + total: anything other than an explicit
+// `faceCamera === false` follows, and a garbage/absent rotationDeg reads as 0°,
+// so BOTH stale directions hold — a planner that never sends the fields keeps
+// autofollow, and a renderer that ignores them does too.
+//
+// ── Degrees → ψ (derived in world space, pinned by bgtext-multi-test) ───────
+// The decal carries Euler 'YXZ' with rotation.x = −π/2, so its world orientation
+// is Ry(ψ)·Rx(−π/2) and the TEXTURE-TOP axis (local +Y) lands at
+//     textUp_scene = (−sin ψ, 0, −cos ψ).
+// Scene ← plan is the standard _w mirror (wx, wy) → (fw/2 − wx, ·, wy − fd/2),
+// so a scene DIRECTION (sx, ·, sz) is the plan direction (−sx, sz):
+//     textUp_plan = ( sin ψ, −cos ψ ).
+// The repo angle convention is "0 = +Y world, positive = screen-CW"
+// (rotPointDeg's [[cos,sin],[−sin,cos]] takes plan +Y → +X at 90°), so:
+//     0°  ⇒ textUp_plan = (0, 1)  ⇒ sin ψ = 0, cos ψ = −1  ⇒ ψ = π
+//     90° ⇒ textUp_plan = (1, 0)  ⇒ sin ψ = 1, cos ψ =  0  ⇒ ψ = π/2
+// Both fixed by the single mapping below (and 180° ⇒ ψ = 0 ⇒ plan −Y, as it
+// must). The AREA-BOUND path drives texture.rotation with the identical value —
+// _applyGrassYaw proves θ = ψ with no flip or offset.
+function bgGroundFixedYaw(faceCamera: unknown, rotationDeg: unknown): number | null {
+  if (faceCamera !== false) return null;                 // absent/true = autofollow
+  const d = typeof rotationDeg === 'number' && isFinite(rotationDeg) ? rotationDeg : 0;
+  return Math.PI - d * Math.PI / 180;
+}
+
 const FLIGHT_SCALE_MIN = 0.5, FLIGHT_SCALE_MAX = 4;
 function flightModelScale(v: unknown): number {
   const n = typeof v === 'number' ? v : NaN;
@@ -12117,6 +12147,9 @@ export class ThreeDRenderer {
                   id: string; mode: BgTextEntryMode; text: string; maxCars?: number;
                   aircraft?: string; scale?: number;
                   grassAreaId?: string; grassArea?: BgGrassArea;
+                  // Ground-writing orientation (grass only, both optional —
+                  // absent = follow the camera, i.e. the shipped behaviour).
+                  faceCamera?: boolean; rotationDeg?: number;
                 }[],
                 storm: boolean, windRad = 0, windKmh = 0): void {
     this._disposeSpriteMaps(this._bgTextGroup);
@@ -12149,7 +12182,8 @@ export class ThreeDRenderer {
       if (e.mode === 'sky')          rig = this._buildBgSky(text, i, n, diag, sc);
       else if (e.mode === 'banner')  rig = this._buildBgAircraft('plane', text, i, n, diag, sc, bgArchetype(e.aircraft));
       else if (e.mode === 'chopper') rig = this._buildBgAircraft('chopper', text, i, n, diag, sc, null);
-      else if (e.mode === 'grass')   rig = this._buildBgGrass(text, i, grassSlot++, e.grassArea, sc);
+      else if (e.mode === 'grass')   rig = this._buildBgGrass(text, i, grassSlot++, e.grassArea, sc,
+                                                              bgGroundFixedYaw(e.faceCamera, e.rotationDeg));
       else if (e.mode === 'train')   rig = this._buildBgTrain(text, i, e.maxCars, sc);
       if (rig) {
         // Resume where this entry left off (a FRESH id starts at its build
@@ -12422,11 +12456,18 @@ export class ThreeDRenderer {
   //
   // Either way the text word-wraps to the target aspect and picks the largest
   // font that fits (min-font floor + ellipsis trim).
+  //
+  // ORIENTATION: `fixedYaw` null (the default, and what every pre-feature caller
+  // sends) = camera-facing autofollow. A number = the entry pinned itself to a
+  // static plan rotation (bgGroundFixedYaw), which is stamped on the rig and
+  // applied HERE as well as through the shared advance path, so the decal is
+  // never rendered for a frame at the build-default yaw 0.
   private _buildBgGrass(text: string, i: number, slot: number,
-                        area?: BgGrassArea, sc = 1): BgRig {
+                        area?: BgGrassArea, sc = 1, fixedYaw: number | null = null): BgRig {
     const place = area ?? this._bgGrassPlacement(slot);
     const poly = (area?.points && area.points.length >= 3) ? area.points : null;
-    if (poly) return this._buildBgGroundPoly(text, i, place, poly, area!.kind ?? 'grass', sc);
+    if (poly) return this._seedGrassYaw(
+      this._buildBgGroundPoly(text, i, place, poly, area!.kind ?? 'grass', sc), fixedYaw);
     const gtex = this._makeGrassTextTexture(text, place.w / place.h);
     const mesh = new THREE.Mesh(
       new THREE.PlaneGeometry(place.w, place.h),
@@ -12456,10 +12497,23 @@ export class ThreeDRenderer {
     mesh.userData.textPlane = true;
     mesh.userData.outlineSkip = true;
     this._bgTextGroup.add(mesh);
-    return {
+    return this._seedGrassYaw({
       mode: 'grass', index: i, grassMesh: mesh,
       grass: { cx: place.cx, cy: place.cy, w: place.w, h: place.h },
-    };
+    }, fixedYaw);
+  }
+
+  // Stamp a freshly-built ground-writing rig with its orientation mode. Static
+  // rigs get the yaw immediately (and `grassYaw` pre-seeded so the very first
+  // _advanceBgGrass is a no-op rather than a snap); follow rigs are left exactly
+  // as built — `grassYaw` undefined, so their first advance SNAPS to the current
+  // camera pose, which is what keeps a _keyBgText rebuild from swinging in.
+  private _seedGrassYaw(rig: BgRig, fixedYaw: number | null): BgRig {
+    if (fixedYaw == null) return rig;
+    rig.grassFixedYaw = fixedYaw;
+    rig.grassYaw = fixedYaw;
+    this._applyGrassYaw(rig, fixedYaw);
+    return rig;
   }
 
   // Area-bound ground writing: the decal IS the GroundArea's polygon.
@@ -13023,11 +13077,19 @@ export class ThreeDRenderer {
   // Zero allocation; transform writes only. NB at some yaws the (scaled) decal
   // can overhang its fitted margin strip / ground-area rect — accepted, exactly
   // like BgTextEntry.scale > 1 "deliberately spills".
+  //
+  // STATIC option (BgTextEntry.faceCamera === false): the ONLY thing that
+  // changes is the WANT — the entry's fixed yaw replaces the camera formula, and
+  // the identical ease/shortest-arc/snap machinery runs on top, so an orbiting
+  // camera simply leaves it alone. (A settings edit changes the _keyBgText hash
+  // ⇒ the rigs are rebuilt, and a static rebuild lands on its yaw at build time
+  // via _seedGrassYaw — there is no swing to ease.)
   private _advanceBgGrass(rig: BgRig, dt: number): void {
     const mesh = rig.grassMesh, cam = this._camera;
     if (!mesh || !cam) return;
-    const want = Math.atan2(cam.position.x - mesh.position.x,
-                            cam.position.z - mesh.position.z);
+    const want = rig.grassFixedYaw != null ? rig.grassFixedYaw
+      : Math.atan2(cam.position.x - mesh.position.x,
+                   cam.position.z - mesh.position.z);
     if (rig.grassYaw == null) { rig.grassYaw = want; this._applyGrassYaw(rig, want); return; }
     let d = want - rig.grassYaw;
     while (d > Math.PI) d -= 2 * Math.PI;

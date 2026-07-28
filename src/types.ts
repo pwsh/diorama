@@ -1507,6 +1507,23 @@ export interface BgTextEntry {
                                  // (bbox inset ~10%). Store-level bgTexts + per-floor ground
                                  // areas → a stale id (area not on the current floor) fails
                                  // soft, falling back to auto margin-strip placement.
+  // Ground-writing (mode 'grass') ORIENTATION. Both fields are grass-only —
+  // every other mode ignores them — and both ABSENT reproduces the shipped
+  // behaviour byte-for-byte.
+  //   faceCamera  absent/true  = autofollow: the decal turns to stay readable
+  //                              from wherever the camera is (the shipped look).
+  //               false        = STATIC: the decal is pinned to `rotationDeg`.
+  //   rotationDeg  the static plan rotation in degrees, read ONLY when
+  //                faceCamera === false (absent = 0). Follows the repo-wide
+  //                angle convention — 0 = the text's TOP points at world +Y
+  //                (screen-up in the 2D top view), increasing degrees turn the
+  //                writing screen-CLOCKWISE — the same convention as
+  //                Light.rotation / Furniture.rotation.
+  // NB Planner.rotateFloorContent deliberately does NOT rotate this: bgTexts are
+  // STORE-level, not per-floor, so a message the user aimed at the driveway stays
+  // aimed when one floor's plan is re-oriented.
+  faceCamera?: boolean;
+  rotationDeg?: number;
 }
 
 // ── Multiple-configuration registry (Batch B) ─────────────────────────────

@@ -264,6 +264,15 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Ground writing: follow-camera toggle + static rotation**
+  (2026-07-28, user-requested: "an option to retain the autofollow and
+  also to have a static rotation"; unreleased — on main past v0.38.0).
+  `BgTextEntry.faceCamera?`/`rotationDeg?` (absent = follow, pristine
+  hash byte-identical); pure `bgGroundFixedYaw` (ψ = π − deg·π/180,
+  world-space-pinned at 0/90/180/−90°); same ease machinery, snap on
+  rebuild; both mesh-yaw and texture-rotation paths; "Follow camera"
+  checkbox + "Rotation (°)" in Settings ▸ Display. bgtext-multi
+  193→229 (BGTEXTMULTI PASS 229/229), bgtext 29/29 held.
 - **Stairs/ramp sides removed** (2026-07-28, user-requested: "remove
   the sides from the stairs and the ramps"; unreleased — on main past
   v0.38.0). The ramp's raised side curbs and the sunken-flight dark
@@ -287,7 +296,7 @@ instance.
   while the mesh stays put; `scale` scales the painted text
   (mesh pinned — polygon never grows past the area). Auto
   margin-strip placement byte-identical; stale-chunk safe both
-  directions. bgtext-multi 146→193 (BGTEXTMULTI PASS 193/193),
+  directions. bgtext-multi 146→193 (later 229/229),
   bgtext 29/29, terrain 103/103 held.
 - **Stairs rise + autofit + ramp kind** (2026-07-28, user-requested:
   "steps need a height adjustment or an autofit so they can fit
@@ -1142,7 +1151,7 @@ instance.
   left-to-right; cars bend around corners; wheels spin) and NEWS
   CHOPPER (spinning main/tail rotors, banner slung below on a tow line,
   opposite-direction higher orbit + hover bob; storm-hidden like
-  sky/banner while grass+train stay). `BGTEXTMULTI PASS 29/29`, legacy
+  sky/banner while grass+train stay). `BGTEXT PASS 29/29` legacy page,
   bgtext 29/29 via wrapper. Merged-HEAD green set: sink 48/48, props
   63/63, WFX sky 23/23.
 

@@ -1391,6 +1391,241 @@
        r._bgRigs.find(x => x.mode === 'grass').grassMesh.geometry.type === 'PlaneGeometry');
   }
 
+  // ════════════ ground writing: STATIC ROTATION (faceCamera:false) ════════════
+  // BgTextEntry gains an autofollow opt-out: `faceCamera:false` pins the decal to
+  // `rotationDeg` instead of turning it toward the camera. Both fields absent =
+  // the shipped autofollow (every section above exercises that path).
+  //
+  // The angle convention is the repo-wide one — 0 = the text's TOP points at
+  // world/plan +Y (screen-up in the 2D top view), increasing degrees turn the
+  // writing screen-CLOCKWISE — so the assertions below measure the decal's
+  // text-up direction in WORLD space and map it back through _w's X mirror
+  // (plan (dx,dy) → scene (−dx, ·, dy), so scene (sx,·,sz) → plan (−sx, sz)).
+  // ψ(deg) = π − deg·π/180 is the mapping that must fall out; it is DERIVED here
+  // from the measured world vectors, never assumed.
+  {
+    const unit3 = (v) => { const L = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0] / L, v[1] / L, v[2] / L]; };
+    const cross3 = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+    // World basis of the PAINTED image, folding in texture.rotation (0 on the
+    // mesh-yaw path) exactly like the autofollow section above does.
+    const imageBasis = (mesh) => {
+      r._bgTextGroup.updateMatrixWorld(true);
+      const m = mesh.matrixWorld.elements;
+      const right = unit3([m[0], m[1], m[2]]), up = unit3([m[4], m[5], m[6]]);
+      const nrm = unit3([m[8], m[9], m[10]]);
+      const th = mesh.material.map ? mesh.material.map.rotation : 0;
+      const c = Math.cos(th), s = Math.sin(th);
+      return {
+        nrm,
+        right: unit3([c * right[0] + s * up[0], c * right[1] + s * up[1], c * right[2] + s * up[2]]),
+        up: unit3([-s * right[0] + c * up[0], -s * right[1] + c * up[1], -s * right[2] + c * up[2]]),
+      };
+    };
+    // Scene direction → PLAN direction (undo the _w X mirror), normalised in 2D.
+    const toPlan = (v) => { const p = [-v[0], v[2]]; const L = Math.hypot(p[0], p[1]) || 1; return [p[0] / L, p[1] / L]; };
+    const camAt = (mesh, azi, R = 9000, H = 5000) =>
+      r._camera.position.set(mesh.position.x + Math.sin(azi) * R, H,
+                             mesh.position.z + Math.cos(azi) * R);
+    const psiOf = (deg) => Math.PI - deg * Math.PI / 180;   // the claimed mapping
+
+    // ── auto placement, 0° ────────────────────────────────────────────────
+    r.updateBgTexts([{ id: 'st0', mode: 'grass', text: 'DUE NORTH',
+                       faceCamera: false, rotationDeg: 0 }], false, 0, 0);
+    const rigS0 = r._bgRigs.find(x => x.mode === 'grass');
+    const meshS0 = rigS0.grassMesh;
+    ok('static entry stamps grassFixedYaw on the rig (autofollow disabled)',
+       rigS0.grassFixedYaw != null && !rigS0.grassTexRot,
+       `fixed=${rigS0.grassFixedYaw}`);
+    camAt(meshS0, 0.0); step(400);
+    ok('static 0°: mesh.rotation.y = ψ(0) = π',
+       Math.abs(meshS0.rotation.y - psiOf(0)) < 1e-9,
+       `y=${meshS0.rotation.y.toFixed(6)} want=${psiOf(0).toFixed(6)}`);
+    {
+      const b = imageBasis(meshS0), up = toPlan(b.up);
+      ok('static 0°: decal stays FLAT (normal = world +Y)', b.nrm[1] > 0.9999);
+      ok('static 0°: text-TOP points at plan +Y (world-space, the 0° convention)',
+         Math.abs(up[0]) < 1e-6 && up[1] > 0.999999, `up_plan=(${up[0].toFixed(6)}, ${up[1].toFixed(6)})`);
+      const c = cross3(b.right, b.up);
+      ok('static 0°: cross(textRight, textUp) = +Y → unmirrored, readable',
+         c[1] > 0.9999 && Math.abs(c[0]) < 1e-6 && Math.abs(c[2]) < 1e-6);
+    }
+    // The whole point: the camera moves, the writing does NOT.
+    const y0a = meshS0.rotation.y;
+    camAt(meshS0, 2.2); step(400);
+    ok('static 0°: a camera move leaves the yaw untouched (autofollow is off)',
+       meshS0.rotation.y === y0a, `y=${meshS0.rotation.y.toFixed(6)}`);
+    camAt(meshS0, -1.1); step(400);
+    ok('static 0°: a SECOND camera position leaves it untouched too',
+       meshS0.rotation.y === y0a, `y=${meshS0.rotation.y.toFixed(6)}`);
+
+    // ── auto placement, 90° = a screen-CW quarter turn ────────────────────
+    r.updateBgTexts([{ id: 'st90', mode: 'grass', text: 'DUE EAST',
+                       faceCamera: false, rotationDeg: 90 }], false, 0, 0);
+    const meshS90 = r._bgRigs.find(x => x.mode === 'grass').grassMesh;
+    camAt(meshS90, 0.0); step(400);
+    ok('static 90°: mesh.rotation.y = ψ(90) = π/2',
+       Math.abs(meshS90.rotation.y - psiOf(90)) < 1e-9,
+       `y=${meshS90.rotation.y.toFixed(6)} want=${psiOf(90).toFixed(6)}`);
+    ok('static 90° is a QUARTER turn from 0° (right direction: ψ decreases as ° grows)',
+       Math.abs((psiOf(0) - meshS90.rotation.y) - Math.PI / 2) < 1e-9,
+       `Δψ=${(psiOf(0) - meshS90.rotation.y).toFixed(6)}`);
+    {
+      const b = imageBasis(meshS90), up = toPlan(b.up);
+      // 90° screen-CW from "top toward +Y" is "top toward +X" (rotPointDeg's
+      // [[cos,sin],[−sin,cos]] takes (0,1) → (1,0) at φ=90).
+      ok('static 90°: text-TOP points at plan +X (world-space; screen-CW from +Y)',
+         up[0] > 0.999999 && Math.abs(up[1]) < 1e-6, `up_plan=(${up[0].toFixed(6)}, ${up[1].toFixed(6)})`);
+      const c = cross3(b.right, b.up);
+      ok('static 90°: still unmirrored', c[1] > 0.9999);
+    }
+    camAt(meshS90, 1.9); step(400);
+    ok('static 90°: camera-independent', Math.abs(meshS90.rotation.y - psiOf(90)) < 1e-9);
+
+    // 180° closes the convention (top toward plan −Y, ψ = 0).
+    r.updateBgTexts([{ id: 'st180', mode: 'grass', text: 'DUE SOUTH',
+                       faceCamera: false, rotationDeg: 180 }], false, 0, 0);
+    const meshS180 = r._bgRigs.find(x => x.mode === 'grass').grassMesh;
+    step(200);
+    {
+      const up = toPlan(imageBasis(meshS180).up);
+      ok('static 180°: text-TOP points at plan −Y (ψ = 0)',
+         Math.abs(up[0]) < 1e-6 && up[1] < -0.999999 && Math.abs(meshS180.rotation.y - psiOf(180)) < 1e-9,
+         `up_plan=(${up[0].toFixed(6)}, ${up[1].toFixed(6)}) y=${meshS180.rotation.y.toFixed(6)}`);
+    }
+
+    // ── AREA-BOUND (polygon) static: the TEXTURE carries the same ψ ────────
+    const areaPoly = { cx: 6000, cy: 4000, w: 2700, h: 1350, kind: 'concrete',
+                       points: [{ x: 4500, y: 3250 }, { x: 7500, y: 3250 },
+                                { x: 7500, y: 4750 }, { x: 4500, y: 4750 }] };
+    r.updateBgTexts([{ id: 'stArea', mode: 'grass', text: 'PARK HERE',
+                       grassArea: areaPoly, faceCamera: false, rotationDeg: 90 }], false, 0, 0);
+    const rigSA = r._bgRigs.find(x => x.mode === 'grass');
+    const meshSA = rigSA.grassMesh, texSA = meshSA.material.map;
+    ok('area-bound static entry takes the polygon path (texture rotation)',
+       rigSA.grassTexRot === true && meshSA.geometry.type === 'ShapeGeometry');
+    camAt(meshSA, 0.4); step(400);
+    ok('area-bound static: tex.rotation = the SAME ψ(90) the mesh path uses',
+       Math.abs(texSA.rotation - psiOf(90)) < 1e-9,
+       `tex=${texSA.rotation.toFixed(6)} want=${psiOf(90).toFixed(6)}`);
+    ok('area-bound static: mesh.rotation.y stays 0 (the polygon never leaves its area)',
+       meshSA.rotation.y === 0, `y=${meshSA.rotation.y}`);
+    {
+      const up = toPlan(imageBasis(meshSA).up);
+      ok('area-bound static 90°: painted text-TOP points at plan +X (same convention)',
+         up[0] > 0.999999 && Math.abs(up[1]) < 1e-6, `up_plan=(${up[0].toFixed(6)}, ${up[1].toFixed(6)})`);
+    }
+    const texA = texSA.rotation;
+    camAt(meshSA, 2.6); step(400);
+    ok('area-bound static: a camera move leaves tex.rotation untouched',
+       texSA.rotation === texA && meshSA.rotation.y === 0, `tex=${texSA.rotation.toFixed(6)}`);
+    camAt(meshSA, -0.9); step(400);
+    ok('area-bound static: a SECOND camera position leaves it untouched too',
+       texSA.rotation === texA);
+
+    // ── regression: fields ABSENT still follows the camera ─────────────────
+    r.updateBgTexts([{ id: 'stFollow', mode: 'grass', text: 'STILL FOLLOWS' }], false, 0, 0);
+    const rigF = r._bgRigs.find(x => x.mode === 'grass');
+    const meshF = rigF.grassMesh;
+    ok('follow mode: no fields ⇒ grassFixedYaw stays undefined',
+       rigF.grassFixedYaw === undefined);
+    camAt(meshF, 0.3); step(400);
+    const yF1 = meshF.rotation.y;
+    camAt(meshF, 0.3 + 2.0); step(400);
+    ok('follow mode (fields absent) still tracks the camera',
+       Math.abs(yF1 - meshF.rotation.y) > 1.0, `${yF1.toFixed(3)} → ${meshF.rotation.y.toFixed(3)}`);
+    // faceCamera:true is the explicit spelling of the same default.
+    r.updateBgTexts([{ id: 'stTrue', mode: 'grass', text: 'TRUE FOLLOWS',
+                       faceCamera: true, rotationDeg: 45 }], false, 0, 0);
+    const rigT = r._bgRigs.find(x => x.mode === 'grass');
+    camAt(rigT.grassMesh, 1.4); step(400);
+    ok('faceCamera:true follows the camera and IGNORES rotationDeg',
+       rigT.grassFixedYaw === undefined &&
+       Math.abs(rigT.grassMesh.rotation.y - psiOf(45)) > 0.2,
+       `y=${rigT.grassMesh.rotation.y.toFixed(3)}`);
+
+    // ── toggling follow → static rebuilds the rig, so the yaw SNAPS ────────
+    // A settings edit changes _keyBgText, so three-view feeds updateBgTexts a
+    // fresh list and every rig is rebuilt. _seedGrassYaw applies the static yaw
+    // AT BUILD, so the decal is correct on frame zero — no ease, no swing. (The
+    // shared ease still runs; it just has nothing to travel.)
+    r.updateBgTexts([{ id: 'tog', mode: 'grass', text: 'TOGGLE ME' }], false, 0, 0);
+    const meshTogA = r._bgRigs.find(x => x.mode === 'grass').grassMesh;
+    camAt(meshTogA, 1.2); step(400);
+    ok('toggle: follow build settles somewhere other than ψ(30)',
+       Math.abs(meshTogA.rotation.y - psiOf(30)) > 0.2, `y=${meshTogA.rotation.y.toFixed(3)}`);
+    r.updateBgTexts([{ id: 'tog', mode: 'grass', text: 'TOGGLE ME',
+                       faceCamera: false, rotationDeg: 30 }], false, 0, 0);
+    const meshTogB = r._bgRigs.find(x => x.mode === 'grass').grassMesh;
+    ok('toggle → static: the rebuilt rig is already AT ψ(30) before any advance',
+       Math.abs(meshTogB.rotation.y - psiOf(30)) < 1e-9, `y=${meshTogB.rotation.y.toFixed(6)}`);
+    step(1);
+    ok('toggle → static: the first advance is a no-op (no swing to ease)',
+       Math.abs(meshTogB.rotation.y - psiOf(30)) < 1e-9, `y=${meshTogB.rotation.y.toFixed(6)}`);
+    step(400);
+    ok('toggle → static: still pinned after 400 frames',
+       Math.abs(meshTogB.rotation.y - psiOf(30)) < 1e-9);
+    // …and back: clearing both fields restores autofollow.
+    r.updateBgTexts([{ id: 'tog', mode: 'grass', text: 'TOGGLE ME' }], false, 0, 0);
+    const meshTogC = r._bgRigs.find(x => x.mode === 'grass').grassMesh;
+    camAt(meshTogC, -0.6); step(400);
+    const yC1 = meshTogC.rotation.y;
+    camAt(meshTogC, -0.6 + 2.0); step(400);
+    ok('toggle back → follow: the camera drives it again',
+       Math.abs(yC1 - meshTogC.rotation.y) > 1.0, `${yC1.toFixed(3)} → ${meshTogC.rotation.y.toFixed(3)}`);
+
+    // ── stale/garbage tolerance (both directions of the pairing) ───────────
+    r.updateBgTexts([{ id: 'stNoDeg', mode: 'grass', text: 'NO DEGREES',
+                       faceCamera: false }], false, 0, 0);
+    const meshND = r._bgRigs.find(x => x.mode === 'grass').grassMesh;
+    step(200);
+    ok('faceCamera:false with NO rotationDeg reads as 0° (ψ = π)',
+       Math.abs(meshND.rotation.y - psiOf(0)) < 1e-9, `y=${meshND.rotation.y.toFixed(6)}`);
+    r.updateBgTexts([{ id: 'stNaN', mode: 'grass', text: 'GARBAGE',
+                       faceCamera: false, rotationDeg: NaN }], false, 0, 0);
+    const meshNaN = r._bgRigs.find(x => x.mode === 'grass').grassMesh;
+    step(200);
+    ok('a non-finite rotationDeg falls back to 0° (never NaN into the transform)',
+       Math.abs(meshNaN.rotation.y - psiOf(0)) < 1e-9, `y=${meshNaN.rotation.y.toFixed(6)}`);
+    // Negative + >360 degrees are honoured verbatim (no clamp — a rotation wraps).
+    r.updateBgTexts([{ id: 'stNeg', mode: 'grass', text: 'NEG',
+                       faceCamera: false, rotationDeg: -90 }], false, 0, 0);
+    step(200);
+    ok('a negative rotationDeg turns the other way (ψ(−90) = 3π/2)',
+       Math.abs(r._bgRigs.find(x => x.mode === 'grass').grassMesh.rotation.y - psiOf(-90)) < 1e-9);
+    // Other modes ignore the fields entirely.
+    r.updateBgTexts([{ id: 'stSky', mode: 'sky', text: 'SKY',
+                       faceCamera: false, rotationDeg: 90 }], false, 0, 0);
+    ok('non-grass modes ignore faceCamera/rotationDeg (a sky rig still builds)',
+       r._bgRigs.length === 1 && r._bgRigs[0].mode === 'sky' &&
+       r._bgRigs[0].grassFixedYaw === undefined);
+  }
+
+  // ════════════ Planner: ground-writing orientation resolution ════════════
+  // bgTextsResolved must carry the STATIC opt-out through to the renderer, and
+  // must carry NOTHING for a follow row (so the _keyBgText hash — and therefore
+  // the rebuild behaviour — is byte-identical to the pre-feature build).
+  {
+    // Reuses the module-level real Planner (store already normalized above).
+    p.store.bgTexts = [
+      { id: 'r1', mode: 'grass', text: 'FOLLOW' },
+      { id: 'r2', mode: 'grass', text: 'STATIC', faceCamera: false, rotationDeg: 45 },
+      { id: 'r3', mode: 'grass', text: 'STATIC0', faceCamera: false },
+      { id: 'r4', mode: 'grass', text: 'EXPLICIT', faceCamera: true, rotationDeg: 45 },
+      { id: 'r5', mode: 'sky', text: 'SKYROW', faceCamera: false, rotationDeg: 45 },
+    ];
+    const rows = new Map(p.bgTextsResolved().map(x => [x.id, x]));
+    ok('resolve: a follow row carries NEITHER field',
+       rows.get('r1').faceCamera === undefined && rows.get('r1').rotationDeg === undefined);
+    ok('resolve: a static row carries faceCamera:false + rotationDeg',
+       rows.get('r2').faceCamera === false && rows.get('r2').rotationDeg === 45);
+    ok('resolve: static with no degrees carries only faceCamera:false',
+       rows.get('r3').faceCamera === false && rows.get('r3').rotationDeg === undefined);
+    ok('resolve: faceCamera:true is the default ⇒ nothing travels',
+       rows.get('r4').faceCamera === undefined && rows.get('r4').rotationDeg === undefined);
+    ok('resolve: a NON-grass row never carries the orientation fields',
+       rows.get('r5').faceCamera === undefined && rows.get('r5').rotationDeg === undefined);
+  }
+
   // ════════════ report ════════════
   const pass = tests.filter(t => t.ok).length, total = tests.length;
   const allPass = pass === total;

@@ -2367,7 +2367,32 @@ export class SettingsDrawer extends LitElement {
                 ${(p.floor().groundAreas ?? []).map(a => html`
                   <option value=${a.id} ?selected=${e.grassAreaId === a.id}>${a.name || a.kind} area</option>`)}
               </select>
-            </div>` : nothing}
+            </div>
+            <div class="row" style="margin-top:2px">
+              <label title="Keep the writing turned toward the camera so it always reads like a page on the floor (the default). Uncheck to pin it to a fixed rotation instead.">Follow camera</label>
+              <input type="checkbox" .checked=${e.faceCamera !== false}
+                     @change=${(ev: Event) => upd(() => {
+                       // Re-checking clears BOTH fields — back to pristine, so the
+                       // entry serializes exactly like one that never used this.
+                       if ((ev.target as HTMLInputElement).checked) {
+                         e.faceCamera = undefined; e.rotationDeg = undefined;
+                       } else e.faceCamera = false;
+                     })}>
+            </div>
+            ${e.faceCamera === false ? html`
+              <div class="row" style="margin-top:2px">
+                <label title="Fixed rotation of the writing, in degrees. 0° puts the top of the text toward the top of the 2D plan; increasing values turn it clockwise on screen.">Rotation (°)</label>
+                <input type="number" step="5" style="width:72px" placeholder="0"
+                       .value=${e.rotationDeg == null ? '' : String(e.rotationDeg)}
+                       @change=${(ev: Event) => upd(() => {
+                         // Blank clears to undefined (= 0°, the renderer's default);
+                         // any finite number — including an explicit 0 — is stored
+                         // as typed. Garbage clears rather than persisting a NaN.
+                         const raw = (ev.target as HTMLInputElement).value.trim();
+                         const v = Number(raw);
+                         e.rotationDeg = raw === '' || !isFinite(v) ? undefined : v;
+                       })}>
+              </div>` : nothing}` : nothing}
           <div style="font-size:10px;color:var(--text-dim);line-height:1.3;margin:3px 0 0">
             ${e.entityId
               ? html`Bound: the entity's state replaces the static message${cur
