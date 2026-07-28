@@ -247,6 +247,18 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Grass writing faces the camera** (2026-07-27, user request;
+  unreleased). The grass bg-text decal stays flat on the lawn but
+  yaws about its rect centre to track the camera — text-top away
+  from the viewer (page-on-the-floor), never mirrored
+  (`cross(right, up) = +Y` asserted at 4 azimuths), shortest-arc
+  ease τ≈0.6 s, first-advance snap so rebuilds re-acquire
+  instantly. Implemented via `rotation.order='YXZ'` on the mesh
+  (no parent group — keeps terrain/bgtext harness reads intact);
+  `BgRig.grassYaw` state; both margin-strip and grassAreaId
+  placements. bgtext-multi 112→146; bgtext 29/29 + terrain 67/67
+  re-verified.
+
 - **Focusin cooling — renaming a yard area no longer deletes it**
   (2026-07-27, user-reported; unreleased). The in-input Delete was
   already guarded, but the selection stayed HOT through a typing

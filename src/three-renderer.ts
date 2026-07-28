@@ -644,6 +644,8 @@ interface BgRig {
   // grass
   grass?: { cx: number; cy: number; w: number; h: number };
   grassMesh?: THREE.Mesh;                    // the decal mesh (test hook + texture read)
+  grassYaw?: number;                          // eased camera-facing yaw (rad); undefined = snap on
+                                              // the first advance, so a rebuild never swings
   // train
   train?: BgTrain;
 }
@@ -12243,6 +12245,14 @@ export class ThreeDRenderer {
     const mesh = new THREE.Mesh(
       new THREE.PlaneGeometry(place.w, place.h),
       new THREE.MeshBasicMaterial({ map: gtex, fog: false, depthWrite: false }));
+    // Flat on the lawn, but READABLE from wherever the camera is: the decal
+    // spins about its own vertical axis (_advanceBgGrass). Euler order 'YXZ'
+    // makes rotation = Ry(yaw)·Rx(−π/2), i.e. the yaw is applied in the PARENT
+    // frame about world +Y through the mesh's own position — exactly what a
+    // yaw parent group at the rect centre would do, with no extra node (and
+    // without moving the decal off `_bgTextGroup.children[0]` / off its own
+    // `position`, which existing test pages read).
+    mesh.rotation.order = 'YXZ';
     mesh.rotation.x = -Math.PI / 2;
     // Lawn text is MOWED INTO the ground it lies on, so its height comes from
     // _groundYAt at the decal centre — the surroundings grade for the auto
@@ -12676,8 +12686,45 @@ export class ThreeDRenderer {
       if (rig.mode === 'sky') this._advanceBgSky(rig, dt);
       else if (rig.mode === 'banner' || rig.mode === 'chopper') this._advanceBgAircraft(rig, dt, nowS);
       else if (rig.mode === 'train') this._advanceBgTrain(rig, dt);
-      // grass: static flat decal — no per-frame motion.
+      else if (rig.mode === 'grass') this._advanceBgGrass(rig, dt);
     }
+  }
+
+  // Lawn writing stays FLAT on the grass but turns to face the camera, like a
+  // page read on the floor. Geometry (all in SCENE space, plane built in XY,
+  // Euler 'YXZ' so rotation = Ry(ψ)·Rx(−π/2)):
+  //
+  //   Rx(−π/2):  local +X → +X,  local +Y (texture TOP) → −Z,  local +Z → +Y
+  //   then Ry(ψ): textRight = ( cos ψ, 0, −sin ψ)
+  //               textUp    = (−sin ψ, 0, −cos ψ)      (normal stays +Y — flat)
+  //
+  // The page convention puts the TOP of the text FARTHEST from the viewer, i.e.
+  //   textUp ∝ (centre − camera)  ⇒  −sin ψ = d̂x, −cos ψ = d̂z
+  //   ⇒  ψ = atan2(camX − centreX, camZ − centreZ)
+  // Readability follows for free: (textRight × textUp) = +Y = the plane normal,
+  // a right-handed frame pointing at the viewer overhead, so the glyphs are
+  // never mirrored at any yaw.
+  //
+  // Eased along the SHORTEST arc (τ ≈ 0.6 s, the h.facing idiom) so orbiting
+  // swings the text the short way; snapped within ~0.5°. State lives on the rig
+  // (`grassYaw`) rather than in `_bgTextPhase`: undefined means "first advance",
+  // which SNAPS, so a `_keyBgText` rebuild re-acquires the current camera pose
+  // instantly instead of swinging in from the build angle — nothing to persist.
+  // Zero allocation; transform writes only. NB at some yaws the (scaled) decal
+  // can overhang its fitted margin strip / ground-area rect — accepted, exactly
+  // like BgTextEntry.scale > 1 "deliberately spills".
+  private _advanceBgGrass(rig: BgRig, dt: number): void {
+    const mesh = rig.grassMesh, cam = this._camera;
+    if (!mesh || !cam) return;
+    const want = Math.atan2(cam.position.x - mesh.position.x,
+                            cam.position.z - mesh.position.z);
+    if (rig.grassYaw == null) { rig.grassYaw = want; mesh.rotation.y = want; return; }
+    let d = want - rig.grassYaw;
+    while (d > Math.PI) d -= 2 * Math.PI;
+    while (d < -Math.PI) d += 2 * Math.PI;
+    if (Math.abs(d) < 0.009) rig.grassYaw = want;                 // ~0.5° → snap
+    else rig.grassYaw += d * (1 - Math.exp(-dt / 0.6));           // τ = 0.6 s
+    mesh.rotation.y = rig.grassYaw;
   }
 
   private _advanceBgSky(rig: BgRig, dt: number): void {

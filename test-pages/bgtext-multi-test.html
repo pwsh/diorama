@@ -956,6 +956,177 @@
        `n=${r._bgRigs.length} children=${r._bgTextGroup.children.length}`);
   }
 
+  // ════════════ GRASS DECAL FACES THE CAMERA (item 12) ════════════
+  // The lawn decal must stay FLAT (normal = world +Y) but yaw about its own
+  // vertical axis so the text reads like a page lying on the floor: glyphs
+  // left-to-right, unmirrored, TOP of the text FARTHEST from the viewer.
+  //
+  //   The plane is built in XY (texture right = local +X, texture top =
+  //   local +Y, normal = local +Z) and carries Euler order 'YXZ', so its world
+  //   orientation is Ry(psi)·Rx(-PI/2):
+  //     textRight = ( cos psi, 0, -sin psi)
+  //     textUp    = (-sin psi, 0, -cos psi)
+  //     normal    = ( 0, 1, 0)                       <- always flat
+  //   The page convention wants textUp ∝ (centre - camera), which pins
+  //     psi = atan2(camX - centreX, camZ - centreZ).
+  //   Readability then follows for free: cross(textRight, textUp) = +Y = the
+  //   normal, i.e. a right-handed frame whose "out of the page" axis points at
+  //   the overhead viewer — the unmirrored condition, true at every yaw.
+  //
+  // Everything below measures WORLD space off matrixWorld, never rotation.y.
+  {
+    const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+    const unit = (a) => { const L = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / L, a[1] / L, a[2] / L]; };
+    const basis = (mesh) => {
+      r._bgTextGroup.updateMatrixWorld(true);
+      const m = mesh.matrixWorld.elements;   // column-major: col0/1/2 = local +X/+Y/+Z
+      return { right: unit([m[0], m[1], m[2]]), up: unit([m[4], m[5], m[6]]),
+               nrm: unit([m[8], m[9], m[10]]) };
+    };
+    // Horizontal unit vector from the camera TOWARD the decal centre.
+    const camToCentre = (mesh) => unit([mesh.position.x - r._camera.position.x, 0,
+                                        mesh.position.z - r._camera.position.z]);
+    const placeCam = (mesh, azi, R = 9000, H = 5000) =>
+      r._camera.position.set(mesh.position.x + Math.sin(azi) * R, H,
+                             mesh.position.z + Math.cos(azi) * R);
+    // Advance n frames, accumulating the WRAPPED per-frame yaw delta = the arc
+    // actually travelled (the terminal snap-to-target can jump the raw value by
+    // 2*PI without moving the decal, so the wrap matters).
+    const arcOver = (mesh, n) => {
+      let prev = mesh.rotation.y, acc = 0;
+      for (let i = 0; i < n; i++) {
+        step(1);
+        let d = mesh.rotation.y - prev;
+        while (d > Math.PI) d -= 2 * Math.PI;
+        while (d < -Math.PI) d += 2 * Math.PI;
+        acc += Math.abs(d); prev = mesh.rotation.y;
+      }
+      return acc;
+    };
+    const readable = (mesh, label) => {
+      const b = basis(mesh), toC = camToCentre(mesh);
+      ok(`grass ${label}: decal stays FLAT (normal = world +Y)`,
+         b.nrm[1] > 0.9999, `n=(${b.nrm.map(v => v.toFixed(3))})`);
+      ok(`grass ${label}: text-up is HORIZONTAL`,
+         Math.abs(b.up[1]) < 1e-6 && Math.abs(b.right[1]) < 1e-6,
+         `up.y=${b.up[1].toExponential(1)} right.y=${b.right[1].toExponential(1)}`);
+      ok(`grass ${label}: text-up points AWAY from the camera (page convention)`,
+         dot(b.up, toC) > 0.9999, `dot=${dot(b.up, toC).toFixed(5)}`);
+      const c = cross(b.right, b.up);
+      ok(`grass ${label}: cross(textRight, textUp) = +Y → unmirrored, readable`,
+         c[1] > 0.9999 && Math.abs(c[0]) < 1e-6 && Math.abs(c[2]) < 1e-6,
+         `c=(${c.map(v => v.toFixed(3))})`);
+    };
+
+    // ── auto margin-strip placement ─────────────────────────────────────────
+    r.updateBgTexts([{ id: 'gyaw', mode: 'grass', text: 'READ ME' }], false, 0, 0);
+    const rigA = r._bgRigs.find(x => x.mode === 'grass');
+    const meshA = rigA.grassMesh;
+    const homeA = { x: meshA.position.x, y: meshA.position.y, z: meshA.position.z };
+    placeCam(meshA, 0.0);               // camera due +Z of the decal
+    step(400);
+    readable(meshA, 'azimuth 0');
+    ok('grass yaw pivots in place (position untouched by the advance)',
+       Math.abs(meshA.position.x - homeA.x) < 1e-9 &&
+       Math.abs(meshA.position.y - homeA.y) < 1e-9 &&
+       Math.abs(meshA.position.z - homeA.z) < 1e-9);
+
+    // Orbit ~120° → re-settles the SHORT way (arc travelled well under PI).
+    placeCam(meshA, 0.0 + 2 * Math.PI / 3);
+    const arc120 = arcOver(meshA, 400);
+    readable(meshA, 'after +120° orbit');
+    ok('grass re-settles via the SHORTEST arc after a +120° orbit',
+       arc120 < Math.PI && arc120 > 2 * Math.PI / 3 - 0.05,
+       `arc=${arc120.toFixed(3)} rad (expect ~2.094, < PI)`);
+
+    // The discriminating case: a further +120° (240° nominal from the start)
+    // must go the SHORT way (-120°), never the 240° long way round.
+    placeCam(meshA, 0.0 + 4 * Math.PI / 3);
+    const arcWrap = arcOver(meshA, 400);
+    readable(meshA, 'after wrap-crossing orbit');
+    ok('grass takes the short arc across the ±PI wrap (never the long way)',
+       arcWrap < Math.PI && arcWrap > 2 * Math.PI / 3 - 0.05,
+       `arc=${arcWrap.toFixed(3)} rad (long way would be ~4.19)`);
+
+    // Easing is gradual, not a per-frame snap: one 60 Hz frame after a 120°
+    // jump must cover only a small fraction of it (tau ~ 0.6 s).
+    placeCam(meshA, 0.0);
+    const before = meshA.rotation.y;
+    step(1);
+    let d1 = meshA.rotation.y - before;
+    while (d1 > Math.PI) d1 -= 2 * Math.PI;
+    while (d1 < -Math.PI) d1 += 2 * Math.PI;
+    ok('grass yaw EASES (a single frame covers only part of the swing)',
+       Math.abs(d1) > 1e-4 && Math.abs(d1) < 0.35, `d=${d1.toFixed(4)} rad/frame`);
+    step(400);
+    readable(meshA, 'settled after ease');
+
+    // ── grassArea (grassAreaId) placement: same behaviour, about the AREA centre ──
+    const gaRect = { cx: 6000, cy: 4000, w: 3000, h: 1500 };
+    r.updateBgTexts([{ id: 'gyawA', mode: 'grass', text: 'AREA TEXT', grassArea: gaRect }],
+                    false, 0, 0);
+    const rigB = r._bgRigs.find(x => x.mode === 'grass');
+    const meshB = rigB.grassMesh;
+    const homeB = { x: meshB.position.x, z: meshB.position.z };
+    placeCam(meshB, -2.0);
+    step(400);
+    readable(meshB, 'grassArea');
+    ok('grassArea decal yaws about the AREA rect centre (scene pos unmoved)',
+       Math.abs(meshB.position.x - homeB.x) < 1e-9 && Math.abs(meshB.position.z - homeB.z) < 1e-9 &&
+       Math.abs(rigB.grass.cx - gaRect.cx) < 1 && Math.abs(rigB.grass.cy - gaRect.cy) < 1);
+    // A fresh rig SNAPS on its first advance (no swing in from the build angle).
+    r.updateBgTexts([{ id: 'gyawS', mode: 'grass', text: 'SNAP', grassArea: gaRect }],
+                    false, 0, 0);
+    const meshS = r._bgRigs.find(x => x.mode === 'grass').grassMesh;
+    placeCam(meshS, 2.5);
+    step(1);
+    readable(meshS, 'fresh rig first frame (snap)');
+
+    // ── non-grass rigs are camera-INDEPENDENT ───────────────────────────────
+    // Same entries, same virgin phases, same clock, two opposite camera poses:
+    // sky / banner / train / chopper must land bit-identical; only grass moves.
+    const snapshotAll = (tag, azi) => {
+      const ents = [
+        { id: 'ci' + tag, mode: 'sky', text: 'SKY' },
+        { id: 'cb' + tag, mode: 'banner', text: 'BAN' },
+        { id: 'ct' + tag, mode: 'train', text: 'TRAIN CARS' },
+        { id: 'cc' + tag, mode: 'chopper', text: 'CHOP' },
+        { id: 'cg' + tag, mode: 'grass', text: 'GRASS', grassArea: gaRect },
+      ];
+      r.updateBgTexts(ents, false, 0, 0);
+      const by = (m) => r._bgRigs.find(x => x.mode === m);
+      r._camera.position.set(by('grass').grassMesh.position.x + Math.sin(azi) * 9000, 5000,
+                             by('grass').grassMesh.position.z + Math.cos(azi) * 9000);
+      clk = 5000;                                  // fixed absolute clock for both runs
+      for (let i = 0; i < 120; i++) { clk += 1 / 60; r._advanceBgText(1 / 60, clk); }
+      return {
+        skyX: by('sky').sky.position.x,
+        banY: by('banner').asm.rotation.y, banX: by('banner').asm.position.x,
+        choY: by('chopper').asm.rotation.y,
+        trnY: by('train').train.vehicles[0].obj.rotation.y,
+        trnS: by('train').train.s,
+        grsY: by('grass').grassMesh.rotation.y,
+      };
+    };
+    const runN = snapshotAll('N', 0), runS = snapshotAll('S', Math.PI);
+    ok('sky rig is camera-independent (unchanged drift)', runN.skyX === runS.skyX,
+       `${runN.skyX} vs ${runS.skyX}`);
+    ok('banner plane is camera-independent (orbit pose + yaw identical)',
+       runN.banY === runS.banY && runN.banX === runS.banX,
+       `y ${runN.banY} vs ${runS.banY}`);
+    ok('chopper is camera-independent (orbit yaw identical)', runN.choY === runS.choY,
+       `${runN.choY} vs ${runS.choY}`);
+    ok('train is camera-independent (arc position + car yaw identical)',
+       runN.trnY === runS.trnY && runN.trnS === runS.trnS,
+       `s ${runN.trnS} vs ${runS.trnS}`);
+    let dGrs = runN.grsY - runS.grsY;
+    while (dGrs > Math.PI) dGrs -= 2 * Math.PI;
+    while (dGrs < -Math.PI) dGrs += 2 * Math.PI;
+    ok('…while GRASS alone tracked the 180° camera move',
+       Math.abs(Math.abs(dGrs) - Math.PI) < 1e-6, `d=${dGrs.toFixed(6)} rad`);
+  }
+
   // ════════════ report ════════════
   const pass = tests.filter(t => t.ok).length, total = tests.length;
   const allPass = pass === total;
