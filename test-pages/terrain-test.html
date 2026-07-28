@@ -33,6 +33,13 @@
   only rebuild, falls back to the floor's level when updateGroundAreas is
   called without the arg, clamps at ±10 000 mm, and restores exactly at 0.
 
+  Section K (terrace-aware _itemGroundY): free-standing content (trees, seats,
+  fences) grounds on an authored TERRACE, not just the flat grade, so the visual
+  build agrees with _groundYAt everywhere; a sunken tier reads as a pit (surface
+  moved, pit walls to the surrounding level) and a pad drawn inside it skirts
+  down to that tier instead of floating over it as a thicker slab. Stair treads
+  and riser decks stay EXCLUDED (pieces on a riser carry a manual `elevation`).
+
   Build the geometry bundle next to this file:
     npx esbuild src/geometry.ts --bundle --format=esm --outfile=<harness>/geometry.mod.js
   and serve the built renderer chunk (dist/assets/three-renderer.js) alongside.
@@ -80,6 +87,22 @@
   ok('P6 non-containing lower ignored → 0',
      G.groundAreaSkirtBase(in1500, [far600, in1500]) === 0,
      `base=${G.groundAreaSkirtBase(in1500, [far600, in1500])}`);
+  // Nesting is resolved by ENCLOSURE (smallest strictly-larger containing
+  // polygon), so it reads correctly in both directions, not just "raised on
+  // raised": a pedestal drawn inside a sunken lawn drops to the lawn, and the
+  // lawn itself is NOT dragged up by the small pad drawn on top of it.
+  const bigSunk = { id: 'bs', kind: 'grass', points: sq(5000, 5000, 3000), elevationMm: -950 };
+  const padIn   = { id: 'pi', kind: 'concrete', points: sq(5000, 5000, 500), elevationMm: 100 };
+  ok('P8 raised pad inside a sunken lawn drops to the lawn (−950)',
+     G.groundAreaSkirtBase(padIn, [bigSunk, padIn]) === -950,
+     `base=${G.groundAreaSkirtBase(padIn, [bigSunk, padIn])}`);
+  ok('P9 the sunken lawn is not lifted by the pad drawn inside it (0)',
+     G.groundAreaSkirtBase(bigSunk, [bigSunk, padIn]) === 0,
+     `base=${G.groundAreaSkirtBase(bigSunk, [bigSunk, padIn])}`);
+  const deepPit = { id: 'dp', kind: 'water', points: sq(5000, 5000, 900), elevationMm: -1600 };
+  ok('P10 a pit inside a pit stops at the outer pit floor (−950)',
+     G.groundAreaSkirtBase(deepPit, [bigSunk, deepPit]) === -950,
+     `base=${G.groundAreaSkirtBase(deepPit, [bigSunk, deepPit])}`);
   // polygonCentroid of a square is its center; inside the polygon.
   const ctr = G.polygonCentroid(sq(5000, 5000, 1000));
   ok('P7 polygonCentroid is the interior center',
@@ -727,6 +750,195 @@
     // Restore.
     r.updateFloor(mkFloor([]), scene);
     r.updateDoorsWindows([], [], () => null);
+  }
+
+  // ── K: free-standing content rides TERRACES, not just the flat grade ──────
+  // Reported: "adding yard areas places items at the level of the selected
+  // floor and not the level of the ground" + "raising/lowering grass or
+  // concrete just increases the thickness". Both are the same gap: _itemGroundY
+  // resolved only the grade, so a tree inside a −950 backyard floated a metre
+  // over the lawn the AVATARS (via the terrace-aware _groundYAt) stood on, and
+  // a pad drawn inside that lawn stopped its skirt at grade so it read as a
+  // thicker slab instead of a pedestal. Modelled on the user's plan: grade
+  // −800, a sunken grass backyard at −950 with a raised concrete patio inside
+  // it, plus a shed pad out on plain grade.
+  {
+    const GL = -800;
+    const near = (a, b, tol = 1e-6) => Math.abs(a - b) <= tol;
+    const houseLoopK = [
+      { x: 3000, y: 3000 }, { x: 7000, y: 3000 }, { x: 7000, y: 6000 },
+      { x: 3000, y: 6000 }, { x: 3000, y: 3000 },
+    ];
+    const fenceK = { id: 'fK', kind: 'fence_picket',
+                     points: [{ x: 7500, y: 7000 }, { x: 10500, y: 7000 }] };
+    const wallsK = [{ id: 'hwK', kind: 'full', points: houseLoopK }, fenceK];
+    const backyard = { id: 'by', kind: 'grass',    points: sq(9000, 8000, 2000), elevationMm: -950 };
+    const patio    = { id: 'pt', kind: 'concrete', points: sq(10000, 8600, 500), elevationMm: 100 };
+    const shed     = { id: 'sh', kind: 'concrete', points: sq(1600, 8600, 600),  elevationMm: 100 };
+    const areasK = [backyard, patio, shed];
+    const TREE_SUNK = { x: 8000, y: 7000 };    // in the backyard, clear of the patio
+    const CHAIR     = { x: 10000, y: 8600 };   // on the patio
+    const TREE_FLAT = { x: 1500, y: 2000 };    // plain grade, clear of every area
+    const IN_HOUSE  = { x: 5000, y: 4500 };
+    const fuK = (id, kind, p, w, h) => ({ id, kind, x: p.x, y: p.y, w, h, rotation: 0 });
+    const floorK = (gl, areas, elevScale = 1) => {
+      const as = areas.map(a => ({ ...a, elevationMm: (a.elevationMm ?? 0) * elevScale }));
+      const f = mkFloor(as, {
+        walls: wallsK,
+        furniture: [fuK('tSunk', 'tree', TREE_SUNK, 900, 900),
+                    fuK('tFlat', 'tree', TREE_FLAT, 900, 900),
+                    fuK('lcK', 'lawn_chair', CHAIR, 700, 1200)],
+      });
+      r.updateFloor(f, gl === 0 ? scene : { ...scene, groundLevelMm: gl });
+      r.updateGroundAreas(as, undefined, FW, FD, wallsK, false, gl);
+      return as;
+    };
+    const grpAtK = (p) => r._floorGroup.children.find(
+      c => c.type === 'Group' && Math.abs(c.position.x - (FW / 2 - p.x)) < 1);
+    const skirtNear = (wx) => skirtsOf().find(s => {
+      s.geometry.computeBoundingBox();
+      const b = s.geometry.boundingBox;
+      return Math.abs((b.min.x + b.max.x) / 2 - (FW / 2 - wx)) < 400;
+    });
+    const vertY = (mesh) => {
+      const pos = mesh.geometry.getAttribute('position');
+      let lo = Infinity, hi = -Infinity;
+      for (let i = 0; i < pos.count; i++) {
+        const y = pos.getY(i);
+        if (y < lo) lo = y; if (y > hi) hi = y;
+      }
+      return { lo, hi };
+    };
+
+    floorK(GL, areasK);
+
+    // K1: a tree inside the sunken lawn stands ON the lawn — and on exactly the
+    // height the rigs already used (_groundYAt), which is the whole point.
+    {
+      const g = grpAtK(TREE_SUNK), gy = r._groundYAt(TREE_SUNK.x, TREE_SUNK.y);
+      ok('K1 tree inside the sunken terrace grounds on the lawn (grade − 950)',
+         !!g && near(g.position.y, GL - 950) && near(g.position.y, gy),
+         `y=${g?.position.y} groundYAt=${gy}`);
+      // K1b: its blob shadow is a child, so it rides down with the group.
+      const blob = g?.children.find(c => c.isMesh && c.geometry.type === 'PlaneGeometry'
+                                    && c.material.depthWrite === false);
+      ok('K1b the tree blob shadow rides the terrace with it',
+         !!blob && near(g.position.y + blob.position.y, GL - 950 + 8),
+         `blobWorldY=${blob ? g.position.y + blob.position.y : 'none'}`);
+    }
+
+    // K2: a lawn chair on the raised patio sits on the pad, and its SitSpot
+    // carries the same offset (an avatar sits ON the cushion, not through it).
+    {
+      const g = grpAtK(CHAIR), gy = r._groundYAt(CHAIR.x, CHAIR.y);
+      const spot = r._sitSpots.find(s => s.furnitureId === 'lcK') ?? r._sitSpots[0];
+      ok('K2 lawn chair on the raised pad grounds on the pad (grade + 100)',
+         !!g && near(g.position.y, GL + 100) && near(g.position.y, gy),
+         `y=${g?.position.y} groundYAt=${gy}`);
+      ok('K2b its SitSpot seat height carries the same offset (380 + grade + 100)',
+         !!spot && near(spot.seatY, 380 + GL + 100), `seatY=${spot?.seatY}`);
+    }
+
+    // K3: a tree on plain grade is untouched by the change (pre-change value).
+    ok('K3 a tree on plain grade still bases on the grade only',
+       near(grpAtK(TREE_FLAT)?.position.y, GL), `y=${grpAtK(TREE_FLAT)?.position.y}`);
+
+    // K4: the agreement invariant — the visual rule and the rig/nav rule must
+    // return the same number everywhere (terrace, grade, indoors).
+    {
+      const pts = [TREE_SUNK, CHAIR, TREE_FLAT, IN_HOUSE, { x: 1600, y: 8600 }];
+      const bad = pts.filter(p => r._groundYAt(p.x, p.y) !== r._itemGroundY(p.x, p.y));
+      ok('K4 _groundYAt === _itemGroundY on terrace / grade / indoor points',
+         bad.length === 0 && r._itemGroundY(IN_HOUSE.x, IN_HOUSE.y) === 0,
+         `mismatches=${bad.length} indoor=${r._itemGroundY(IN_HOUSE.x, IN_HOUSE.y)}`);
+    }
+
+    // K5: the sunken lawn READS sunken — the top patch moved down and the skirt
+    // is a pit wall spanning [sunken top … surrounding grade], nothing above it.
+    {
+      const top = topsOf().find(t => t.userData.terraceTop === -950);
+      const sk = skirtNear(9000);
+      const v = sk ? vertY(sk) : null;
+      ok('K5 sunken lawn top patch sits at grade − 950 + 4 (surface moved)',
+         !!top && top.position.y === GL - 946, `y=${top?.position.y}`);
+      ok('K5b its skirt spans the pit walls [top … surrounding grade], none above',
+         !!sk && sk.userData.skirtBase === GL &&
+         near(v.lo, GL - 946, 1) && v.hi <= GL + 4 + 1e-6 && (v.hi - v.lo) > 900,
+         `base=${sk?.userData.skirtBase} span=[${v?.lo.toFixed(0)},${v?.hi.toFixed(0)}]`);
+    }
+
+    // K6: the pad drawn INSIDE the sunken lawn is a pedestal down to the lawn
+    // (this is what used to render as a 100 mm-thick slab floating over it);
+    // the shed pad out on plain grade keeps its pre-change skirt to the grade.
+    {
+      const pk = skirtNear(10000), sh = skirtNear(1600);
+      const vp = pk ? vertY(pk) : null;
+      ok('K6 pad inside the sunken lawn skirts DOWN to the lawn, not to grade',
+         !!pk && pk.userData.skirtBase === GL - 950 &&
+         near(vp.lo, GL - 946, 1) && near(vp.hi, GL + 104, 1),
+         `base=${pk?.userData.skirtBase} span=[${vp?.lo.toFixed(0)},${vp?.hi.toFixed(0)}]`);
+      ok('K6b the pad on plain grade is unchanged: top grade+104, skirt to grade',
+         !!sh && sh.userData.skirtBase === GL &&
+         topsOf().filter(t => t.userData.terraceTop === 100)
+                 .every(t => t.position.y === GL + 104),
+         `base=${sh?.userData.skirtBase}`);
+    }
+
+    // K7: a fence crossing the terrace bases on the terrace top (inherited from
+    // _itemGroundY — no second rule), while the house wall stays on the slab.
+    {
+      const realMeshesK = (o) => {
+        const a = []; o.traverse(m => { if (m.isMesh && !m.userData?.outline) a.push(m); }); return a;
+      };
+      const baseYOfK = (o) => {
+        let lo = Infinity;
+        for (const m of realMeshesK(o)) {
+          m.geometry.computeBoundingBox();
+          let y = m.position.y + m.geometry.boundingBox.min.y;
+          let p = m.parent;
+          while (p && p !== o) { y += p.position.y; p = p.parent; }
+          if (y < lo) lo = y;
+        }
+        return lo;
+      };
+      const wallGroupAtK = (wx, wy, tol = 900) => {
+        const sx = FW / 2 - wx, sz = wy - FD / 2;
+        for (const g of r._floorGroup.children) {
+          if (g.type !== 'Group') continue;
+          let hit = false;
+          g.traverse(o => { if (o.isMesh && Math.hypot(o.position.x - sx, o.position.z - sz) < tol) hit = true; });
+          if (hit) return g;
+        }
+        return null;
+      };
+      ok('K7 a fence crossing the sunken terrace bases on the terrace top',
+         near(baseYOfK(wallGroupAtK(7500, 7000)), GL - 950, 1),
+         `y=${baseYOfK(wallGroupAtK(7500, 7000))}`);
+      ok('K7b the house wall still stays on the slab',
+         near(baseYOfK(wallGroupAtK(7000, 6000)), 0, 1),
+         `y=${baseYOfK(wallGroupAtK(7000, 6000))}`);
+    }
+
+    // K8: zero grade + zero elevations → everything back on the slab with no
+    // skirts at all (the byte-identical default path: no grade, no terraces).
+    {
+      floorK(0, areasK, 0);
+      const ys = [TREE_SUNK, CHAIR, TREE_FLAT].map(p => grpAtK(p)?.position.y);
+      ok('K8 zero grade + zero elevation: every base is 0 and no skirt is built',
+         ys.every(y => y === 0) && skirtsOf().length === 0 &&
+         r._itemGroundY(TREE_SUNK.x, TREE_SUNK.y) === 0,
+         `ys=[${ys.join(',')}] skirts=${skirtsOf().length}`);
+      // …and terraces alone (no grade) still lift content, since a terrace is
+      // authored height, not grade: this is the ONLY zero-grade change.
+      floorK(0, areasK);
+      ok('K8b at zero grade a terrace still grounds its content on the tier',
+         near(grpAtK(TREE_SUNK)?.position.y, -950) && near(grpAtK(CHAIR)?.position.y, 100) &&
+         grpAtK(TREE_FLAT)?.position.y === 0,
+         `sunk=${grpAtK(TREE_SUNK)?.position.y} pad=${grpAtK(CHAIR)?.position.y} flat=${grpAtK(TREE_FLAT)?.position.y}`);
+    }
+    // Restore a clean frame for the tally.
+    r.updateFloor(mkFloor([]), scene);
+    r.updateGroundAreas([]);
   }
 
   let pass = 0; const fails = [];

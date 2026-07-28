@@ -247,6 +247,24 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Items follow terrace surfaces + sunken-tier fixes** (2026-07-28,
+  user-reported with a real floor plan; unreleased). `_itemGroundY`
+  is now TERRACE-first: free-standing outdoor content (trees,
+  furniture + SitSpot seatY, ground lights, flagpoles, docks,
+  cameras, valves, projectors, leak pucks, geo sprites, fence
+  segments) settles onto the highest containing terrace top instead
+  of floating at grade over a sunken lawn (avatars already did).
+  Stairs/risers stay excluded (manual-elevation convention).
+  `groundAreaSkirtBase` picks the reference tier by ENCLOSURE
+  (smallest strictly-larger containing polygon, any sign) — a
+  raised pad inside a sunken backyard now skirts down to the lawn
+  instead of clamping at 0 ("raising just increases thickness"
+  report). Terrace registration moved to top of updateFloor.
+  Zero-grade + no-terrace configs byte-identical. terrain 86→103;
+  fence-gate 37/37, yard 4/4, path-pool 50/50 green. Same session:
+  diagnosed user config where groundLevelMm 801 cancelled
+  Floor.elevationMm 800 (effective grade +1 mm).
+
 - **Yard walls follow the grade** (2026-07-27, user-reported;
   unreleased). With per-floor elevations, a newly drawn wall in the
   yard floated at the slab plane while the ground sat a story below.

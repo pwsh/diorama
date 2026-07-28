@@ -2222,23 +2222,37 @@ export function polygonCentroid(verts: Vec2[]): Vec2 {
   return { x: cx / (6 * a), y: cy / (6 * a) };
 }
 
-// Terraced-ground skirt base: the elevation the skirt of `area` should drop
-// DOWN to. A small tier nested on a larger, lower tier must stop at that tier's
-// elevation (not always grade 0), else it cuts a visible cliff through the tier
-// beneath. Resolved once per area at build time (never per frame) by testing
-// `area`'s representative interior point against every OTHER area's polygon and
-// taking the highest elevation that is (a) at or below `area`'s own elevation
-// and (b) contains the point. Pure/O(areas²) over a small per-floor array — the
-// same idiom closedWallLoops / mowerSweepWaypoints use. A single sunken area
-// (negative elevation, no lower sibling) returns 0 → its skirt rises to grade.
+// Terraced-ground skirt base: the elevation the skirt of `area` should reach —
+// the surface the tier is BUILT ON (raised) or CUT INTO (sunken). A small tier
+// nested on a larger, lower tier must stop at that tier's elevation (not always
+// grade 0), else it cuts a visible cliff through the tier beneath. Resolved once
+// per area at build time (never per frame) by testing `area`'s representative
+// interior point against every OTHER area's polygon. Pure/O(areas²) over a small
+// per-floor array — the same idiom closedWallLoops / mowerSweepWaypoints use.
+//
+// The reference tier is picked by ENCLOSURE, not by elevation: the containing
+// area with the SMALLEST polygon area among those strictly LARGER than this one
+// — the immediate enclosing tier. Its elevation is the base, whatever its sign;
+// no enclosing tier → 0 (grade). This reads correctly in BOTH directions:
+//   • Raised on raised: concentric tiers all share a centroid, so every inner
+//     tier "contains" the outer one's rep point — the larger-area requirement is
+//     what stops an outer tier's skirt from climbing to the innermost tier.
+//   • Raised in sunken (the reported case): a patio pedestal drawn inside a
+//     sunken lawn drops its skirt to that lawn instead of stopping at grade and
+//     floating a metre over its own yard, where it read as a thicker slab.
+//   • Sunken in sunken / sunken in raised: a pit inside a pit stops at the outer
+//     pit's floor; a pit cut into a patio rises to the patio, not to grade.
+// Equal-area overlaps enclose nothing (strict >) and fall through to 0.
 export function groundAreaSkirtBase(area: GroundArea, all: GroundArea[]): number {
-  const ae = area.elevationMm ?? 0;
   const rep = polygonCentroid(area.points);
-  let base = 0;
+  const own = Math.abs(polygonArea(area.points));
+  let base = 0, bestArea = Infinity;
   for (const other of all) {
     if (other.id === area.id || other.hidden || (other.points?.length ?? 0) < 3) continue;
-    const oe = other.elevationMm ?? 0;
-    if (oe <= ae && oe > base && pointInPolygon(rep.x, rep.y, other.points)) base = oe;
+    const oa = Math.abs(polygonArea(other.points));
+    if (oa <= own || oa >= bestArea) continue;             // not the immediate encloser
+    if (!pointInPolygon(rep.x, rep.y, other.points)) continue;
+    base = other.elevationMm ?? 0; bestArea = oa;
   }
   return base;
 }

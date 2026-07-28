@@ -2315,6 +2315,10 @@ export class ThreeDRenderer {
   // surface height instead of the floor plane.
   private _terrain: { x: number; y: number; w: number; h: number; rotation?: number;
                       ht: number; elevation: number; kind: string; poly?: Vec2[] }[] = [];
+  // Does _terrain hold at least one `terrace` entry? Gates the terrace lookup in
+  // _itemGroundY (and the wall/opening base short-circuits) so a plan with no
+  // terraces keeps the pre-terrace fast path exactly. Reset wherever _terrain is.
+  private _hasTerrace = false;
   // Navigation grid (world coords, mm), rebuilt by every updateFloor. cell =
   // 150 mm. `blocked` marks cells whose center is inside a furniture footprint
   // (inflated by PERSON_R) or a solid wall run (door/window openings stay
@@ -3288,6 +3292,7 @@ export class ThreeDRenderer {
     this._plants = [];
     this._plantBlend = {};
     this._terrain = [];
+    this._hasTerrace = false;
     // Water shimmer clones live under _groundGroup (just cleared) — dispose them
     // + drop the list so _advanceGroundWater can't drift freed textures before
     // the next updateGroundAreas.
@@ -3601,29 +3606,77 @@ export class ThreeDRenderer {
     // above). `_outdoors` treats a loop-less floor as indoors — which is right
     // here too: with no closed loop the slab covers the whole rect, so there is
     // no "outside" to stand on. Short-circuit at 0 keeps the default path free.
+    // NOT circular even though _itemGroundY is itself terrace-aware: we only
+    // reach here when NO terrain entry contains the point, so its terrace scan
+    // (a subset of the loop above) can't find one either and falls to the grade.
     return this._itemGroundY(wx, wy);
   }
 
-  // Ground reference for a FREE-STANDING item anchored at plan point (wx, wy):
-  // the SURROUNDINGS level (Scene3D.groundLevelMm) when that point lies outside
-  // every closed wall loop, else the slab (0). ONE rule for every builder that
-  // plants something on the ground — a tree, a lawn chair, a yard lamp, a
-  // flagpole, a robot dock, a ground-area patch, a pool basin, a lawn decal —
-  // so the visual build always agrees with _groundYAt (the rig/nav ground
-  // truth, which routes through here for its no-terrain fallback).
+  // Ground reference for a FREE-STANDING item anchored at plan point (wx, wy).
+  // ONE rule for every builder that plants something on the ground — a tree, a
+  // lawn chair, a yard lamp, a flagpole, a robot dock, a pool basin, a lawn
+  // decal, a fence segment — so the visual build always agrees with _groundYAt
+  // (the rig/nav ground truth, which routes through here for its no-terrain
+  // fallback). THE RULE, in order:
   //
+  //   1. TERRACE: the highest registered `terrace` terrain entry whose polygon
+  //      contains the point wins — its flat top (elevation + ht, already grade-
+  //      composed at registration). So a tree inside a sunken lawn stands ON the
+  //      lawn and a chair on a raised pad stands ON the pad, exactly where the
+  //      avatars (which read _groundYAt) already stood. Terrace tops are
+  //      absolute-from-grade, never stacked, so nesting can't double-count.
+  //   2. Otherwise the SURROUNDINGS level (Scene3D.groundLevelMm) when the point
+  //      lies outside every closed wall loop, else the slab (0).
+  //
+  //   • DELIBERATELY NOT terrain-aware beyond terraces: stair treads, landings
+  //     and `riser_platform` decks are excluded. Existing plans place recliners
+  //     on a riser with a MANUAL `elevation` equal to the riser height; auto-
+  //     grounding them would double that offset. Avatars still climb those via
+  //     _groundYAt — that asymmetry is intentional and load-bearing.
   //   • Things MOUNTED ON THE HOUSE never call this: wall plates (switch /
   //     thermostat / alarm / plug / action / calendar / info card), wall or
   //     ceiling light kinds, wall-plane furniture, doors, windows, walls. They
   //     belong to the structure and stay slab-relative even when their anchor
   //     lands a few mm outside a loop (a sconce on an exterior wall).
-  //   • Indoor content never moves — the point is inside a loop, so 0.
-  //   • A loop-less floor reads as all-indoors (see _outdoors), so nothing
-  //     moves there either.
-  //   • groundLevelMm = 0 short-circuits to 0 everywhere: byte-identical to the
-  //     pre-ground-level build.
+  //   • Indoor content never moves: inside a closed wall loop both the terrace
+  //     lookup and the grade are skipped (an indoor painted area with an
+  //     elevation is out of scope), so 0. A loop-less floor has no interior to
+  //     be inside of, so terraces DO apply there (matching _groundYAt) while
+  //     the grade still doesn't (see _outdoors).
+  //   • No terraces AND groundLevelMm = 0 → 0 everywhere, with no extra work:
+  //     byte-identical to the pre-ground-level build.
   private _itemGroundY(wx: number, wy: number): number {
+    if (this._hasTerrace && !this._insideWallLoop(wx, wy)) {
+      // Terrace entries are registered axis-aligned (rotation 0) with their bbox
+      // in x/y/w/h and the true polygon in `poly` — same bbox-then-pip test
+      // _groundYAt runs, same highest-wins tie-break.
+      let g = 0, found = false;
+      for (const t of this._terrain) {
+        if (t.kind !== 'terrace') continue;
+        if (Math.abs(wx - t.x) > t.w / 2 || Math.abs(wy - t.y) > t.h / 2) continue;
+        if (t.poly && !pip(wx, wy, t.poly)) continue;
+        const gy = t.elevation + t.ht;
+        if (!found || gy > g) { g = gy; found = true; }
+      }
+      if (found) return g;
+    }
+    return this._gradeY(wx, wy);
+  }
+
+  // The SURROUNDINGS grade at a plan point with NO terrain lookup: the level
+  // outdoors, the slab (0) indoors or on a loop-less floor. This is the base
+  // half of the _itemGroundY rule AND the reference terraces are authored
+  // against — a terrace top is grade + elevationMm, never another terrace's
+  // top, so registering tiers can never stack (the terrace registration in
+  // updateFloor must call THIS, not _itemGroundY).
+  private _gradeY(wx: number, wy: number): number {
     return this._groundLevel !== 0 && this._outdoors(wx, wy) ? this._groundLevel : 0;
+  }
+
+  // Does the point lie inside some closed wall loop (i.e. indoors)? Distinct
+  // from !_outdoors, which also reports "indoors" for a floor with NO loops.
+  private _insideWallLoop(wx: number, wy: number): boolean {
+    return this._wallLoops.some(lp => pip(wx, wy, lp));
   }
 
   // Vertical base (mm) for ONE wall segment a→b of kind `kind`, against the
@@ -3647,11 +3700,13 @@ export class ThreeDRenderer {
   //   3. `invisible` renders nothing; it only ever reaches here through the
   //      _wallSegBases table, where it behaves like a solid kind.
   //
-  // Follow-up (noted, not built): the fence branch deliberately uses the flat
-  // _itemGroundY rather than the terrace-aware _groundYAt, matching furniture —
-  // a fence crossing an authored terrace does not step up onto it.
+  // A fence crossing an authored TERRACE now steps up onto it: _itemGroundY is
+  // terrace-aware, and the fence branch inherits that automatically (per
+  // segment, so a run crossing a tier edge steps once at that edge).
   private _wallSegmentBaseY(kind: string, a: Vec2, b: Vec2, loops: Vec2[][]): number {
-    if (this._groundLevel === 0) return 0;   // byte-identical default path
+    // Byte-identical default path: nothing can lift a wall with no grade and no
+    // terrace, so skip the loop-membership test entirely.
+    if (this._groundLevel === 0 && !this._hasTerrace) return 0;
     const isFence = kind === 'fence_picket' || kind === 'fence_privacy'
       || kind === 'fence_chainlink' || kind === 'hedge';
     if (!isFence && wallSegmentInLoops(a, b, loops)) return 0;   // house structure
@@ -3665,7 +3720,7 @@ export class ThreeDRenderer {
   // than the snap distance from every segment has no host and stays at 0.
   // Zero-cost (and byte-identical) whenever the ground level is 0.
   private _openingBaseY(x: number, y: number): number {
-    if (this._groundLevel === 0) return 0;
+    if (this._groundLevel === 0 && !this._hasTerrace) return 0;
     let best = 0, bestD2 = OPENING_HOST_MAX_MM * OPENING_HOST_MAX_MM;
     for (const s of this._wallSegBases) {
       const dx = s.bx - s.ax, dy = s.by - s.ay, len2 = dx * dx + dy * dy;
@@ -5075,6 +5130,51 @@ export class ThreeDRenderer {
     // rendering a wall. No closed loop → classic full-rectangle floor.
     const loops = closedWallLoops(f.walls ?? []);
     this._wallLoops = loops;
+    this._terrain = [];
+    this._hasTerrace = false;
+
+    // Terraced ground (T1): register each raised/sunk GroundArea's TOP polygon
+    // as walkable flat-top terrain so _groundYAt lifts rigs / blob shadows onto
+    // it (the same mechanism risers/landings use). Registered HERE — updateFloor
+    // owns _terrain and rebuilds it every call — so terrace height survives a
+    // _keyFloor rebuild that doesn't also bump _keyGround. Skipped when the
+    // ground layer is hidden (mirrors furniture: hiding it drops its terrain).
+    // The visual patch/skirt live in updateGroundAreas (_groundGroup). NON-nav:
+    // _buildNav never blocks terraces (like risers), so avatars step on/off.
+    //
+    // ORDER IS LOAD-BEARING: registration runs FIRST — immediately after
+    // _wallLoops (which _gradeY/_insideWallLoop need) and BEFORE every
+    // _itemGroundY consumer, i.e. the wall/opening base pass, the furniture loop
+    // (groups + their seats / beds / riser terrain) and the front-arrow decal
+    // here, plus updateLightsSwitches / updatePools / the rest afterwards.
+    // _itemGroundY is TERRACE-AWARE: a tree — or a fence — inside a sunken lawn
+    // must resolve the lawn, not the grade. The registration itself takes the
+    // flat _gradeY: a terrace top is authored against the GRADE, so tiers drawn
+    // on tiers must never stack.
+    if (layers?.ground !== false) {
+      for (const a of f.groundAreas ?? []) {
+        const elev = a.elevationMm ?? 0;
+        if (a.hidden || elev === 0 || a.points.length < 3) continue;
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        for (const pt of a.points) {
+          if (pt.x < minX) minX = pt.x; if (pt.x > maxX) maxX = pt.x;
+          if (pt.y < minY) minY = pt.y; if (pt.y > maxY) maxY = pt.y;
+        }
+        // A terrace whose CENTROID is outdoors is a tier of the yard, so its
+        // authored elevationMm composes ON TOP of the surroundings grade — the
+        // same offset updateGroundAreas gives the visual patch (centroid, not
+        // bbox centre, in both places so they can never disagree).
+        const tctr = centroid(a.points);
+        this._terrain.push({
+          x: (minX + maxX) / 2, y: (minY + maxY) / 2,
+          w: maxX - minX, h: maxY - minY, rotation: 0,
+          ht: 0, elevation: elev + this._gradeY(tctr.x, tctr.y),
+          kind: 'terrace', poly: a.points,
+        });
+        this._hasTerrace = true;
+      }
+    }
+
     const showFurniture = layers?.furniture !== false;
     const showAppliances = layers?.appliances !== false;
     const showBg = layers?.bg !== false;
@@ -5501,7 +5601,6 @@ export class ThreeDRenderer {
     this._tvsByRoom = {};
     this._beds = [];
     this._roomZones = [];
-    this._terrain = [];
     const rooms = f.rooms ?? [];
     for (const fu of visFurniture) {
       // Surroundings grade for THIS piece: a free-standing piece whose plan
@@ -6043,37 +6142,6 @@ export class ThreeDRenderer {
       const sprite = this._makeRoomLabelSprite(lbl.text, lbl.placeholder);
       sprite.position.set(wp.x, wp.y, wp.z);
       this._floorGroup.add(sprite);
-    }
-
-    // Terraced ground (T1): register each raised/sunk GroundArea's TOP polygon
-    // as walkable flat-top terrain so _groundYAt lifts rigs / blob shadows onto
-    // it (the same mechanism risers/landings use). Registered HERE — updateFloor
-    // owns _terrain and rebuilds it every call — so terrace height survives a
-    // _keyFloor rebuild that doesn't also bump _keyGround. Skipped when the
-    // ground layer is hidden (mirrors furniture: hiding it drops its terrain).
-    // The visual patch/skirt live in updateGroundAreas (_groundGroup). NON-nav:
-    // _buildNav never blocks terraces (like risers), so avatars step on/off.
-    if (layers?.ground !== false) {
-      for (const a of f.groundAreas ?? []) {
-        const elev = a.elevationMm ?? 0;
-        if (a.hidden || elev === 0 || a.points.length < 3) continue;
-        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-        for (const pt of a.points) {
-          if (pt.x < minX) minX = pt.x; if (pt.x > maxX) maxX = pt.x;
-          if (pt.y < minY) minY = pt.y; if (pt.y > maxY) maxY = pt.y;
-        }
-        // A terrace whose CENTROID is outdoors is a tier of the yard, so its
-        // authored elevationMm composes ON TOP of the surroundings grade — the
-        // same offset updateGroundAreas gives the visual patch (centroid, not
-        // bbox centre, in both places so they can never disagree).
-        const tctr = centroid(a.points);
-        this._terrain.push({
-          x: (minX + maxX) / 2, y: (minY + maxY) / 2,
-          w: maxX - minX, h: maxY - minY, rotation: 0,
-          ht: 0, elevation: elev + this._itemGroundY(tctr.x, tctr.y),
-          kind: 'terrace', poly: a.points,
-        });
-      }
     }
 
     // Rebuild the humanoid navigation grid from the same walls + furniture.
@@ -19295,7 +19363,7 @@ export class ThreeDRenderer {
   // umbrellas on a wall-less test floor).
   private _outdoors(wx: number, wy: number): boolean {
     if (!this._wallLoops.length) return false;
-    return !this._wallLoops.some(lp => pip(wx, wy, lp));
+    return !this._insideWallLoop(wx, wy);
   }
 
   // Does the rig's current room have a BOUND TV that is ON? Reuses the danceRoom /
