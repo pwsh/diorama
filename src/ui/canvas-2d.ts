@@ -73,6 +73,7 @@ export class Canvas2D extends LitElement {
       window.addEventListener('mouseup', this._onUp);
       window.addEventListener('keydown', this._onKey);
       window.addEventListener('keyup', this._onKeyUp);
+      window.addEventListener('focusin', this._onFocusIn);
       this.planner.addEventListener('config', this._onConfig);
       requestAnimationFrame(() => this._resize());
       this._startRaf();
@@ -87,8 +88,22 @@ export class Canvas2D extends LitElement {
     window.removeEventListener('mouseup', this._onUp);
     window.removeEventListener('keydown', this._onKey);
     window.removeEventListener('keyup', this._onKeyUp);
+    window.removeEventListener('focusin', this._onFocusIn);
     this.planner.removeEventListener('config', this._onConfig);
   }
+
+  // Focusing ANY editable target (a sidebar name input, a settings field…)
+  // COOLS the hot selection: the user has moved from canvas selection into a
+  // TYPING session, and a Delete/Backspace that lands outside the input after
+  // a stray blur (tap-away, Tab, a tablet keyboard dismissing) must edit
+  // NOTHING — not delete the still-selected item (user-reported: renaming a
+  // yard area, Delete removed the area; the in-input case was already guarded
+  // by isEditableTarget, this closes the after-blur window). Re-selecting on
+  // the canvas or a sidebar row re-heats via the setActive* markSelectionHot
+  // paths; the delete TOOL and the sidebar Delete buttons bypass the gate.
+  private _onFocusIn = (e: FocusEvent) => {
+    if (isEditableTarget(e.target)) this.planner.selectionHot = false;
+  };
 
   private _onConfig = () => {
     if (this.planner.view === '2d') {
@@ -196,6 +211,7 @@ export class Canvas2D extends LitElement {
     window.addEventListener('mouseup', this._onUp);
     window.addEventListener('keydown', this._onKey);
     window.addEventListener('keyup', this._onKeyUp);
+    window.addEventListener('focusin', this._onFocusIn);
 
     // Touch — 1 finger uses mouse path; 2 fingers do pinch+pan.
     const toEvt = (t: Touch): MouseEvent => new MouseEvent('mousemove', {

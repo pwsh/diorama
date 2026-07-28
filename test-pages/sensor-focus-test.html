@@ -22,7 +22,7 @@
        cp test-pages/sensor-focus-test.html "$H"/
        T=$(mktemp -d); cp -r src/* "$T"/; cp tsconfig.json "$T"/
        cp test-pages/fake-avatar-store.ts "$T"/avatar-store.ts
-       printf "export { Planner } from '../planner.js';\nimport './sidebar.js';\n" > "$T"/ui/sfocus-entry.ts
+       printf "export { Planner } from '../planner.js';\nimport './sidebar.js';\nimport './canvas-2d.js';\n" > "$T"/ui/sfocus-entry.ts
        npx esbuild "$T"/ui/sfocus-entry.ts --bundle --format=esm --tsconfig="$T"/tsconfig.json \
          --alias:lit=$PWD/node_modules/lit/index.js \
          --alias:lit/decorators.js=$PWD/node_modules/lit/decorators.js \
@@ -72,8 +72,14 @@
   try {
     ok('viewport wide enough (>=900)', window.innerWidth >= 900, `innerWidth=${window.innerWidth}`);
 
-    // Mount a real <diorama-sidebar> bound to a real Planner.
+    // Mount a real <diorama-sidebar> bound to a real Planner, PLUS the real
+    // <diorama-canvas-2d> — it owns the window keydown/focusin listeners the
+    // hot-selection gate + focusin cooling live in (section C).
     const p = await mkPlanner();
+    const c2d = document.createElement('diorama-canvas-2d');
+    c2d.planner = p;
+    c2d.style.cssText = 'display:block;width:400px;height:300px';
+    document.getElementById('mount').appendChild(c2d);
     const sb = document.createElement('diorama-sidebar');
     sb.planner = p;
     document.getElementById('mount').appendChild(sb);
@@ -98,7 +104,11 @@
     // input.select() → the default name is fully selected, ready to overtype.
     const selAll = input && input.selectionStart === 0 && input.selectionEnd === (input.value || '').length && (input.value || '').length > 0;
     ok('A4 default text is selected for overtype', selAll, input ? `${input.selectionStart}-${input.selectionEnd}/${(input.value||'').length}` : 'n/a');
-    ok('A5 placement heated the selection', p.selectionHot === true, p.selectionHot);
+    // The autofocus lands in the Label input = a TYPING session — the focusin
+    // cooling (canvas-2d) disarms the Delete hotkey so a stray blur + Backspace
+    // can never delete the just-placed item. (Before the yard-area fix this
+    // asserted heated; the delete TOOL + sidebar Delete buttons bypass the gate.)
+    ok('A5 autofocus cooled the selection (typing session)', p.selectionHot === false, p.selectionHot);
 
     // A plain re-select of an EXISTING sensor must NOT steal focus (no autofocus).
     p.floor().sensors.push(mkSensor('s2', 'Sensor 2'));
@@ -115,6 +125,51 @@
     ok('B2 plain select does NOT steal focus', document.activeElement !== s2input,
        document.activeElement ? (document.activeElement.tagName || '') : 'null');
     ok('B3 setActiveSensor still heats selection', p.selectionHot === true, p.selectionHot);
+
+    // ── C: focusin cooling — renaming a yard area must never delete it ────────
+    // (User-reported: edit a ground area's name, press Delete → area gone. The
+    // in-input keystroke was already guarded by isEditableTarget; the leak was
+    // the AFTER-BLUR window — selection stayed hot from setActiveGroundArea, so
+    // once focus left the input, Delete hit the body and fired deleteSelection.)
+    // Clean fixture: deleteSelection is a PRIORITY list and the persisted
+    // activeSensorId (still s2 from section B) outranks a ground area — clear
+    // it so C exercises the area path, not the sensor one.
+    p.store.activeSensorId = null;
+    p.floor().groundAreas = p.floor().groundAreas ?? [];
+    p.floor().groundAreas.push({ id: 'g1', kind: 'grass',
+      points: [{ x: 500, y: 500 }, { x: 3000, y: 500 }, { x: 1500, y: 3000 }] });
+    p.setActiveGroundArea('g1');
+    ok('C1 selecting the area heats', p.selectionHot === true, p.selectionHot);
+
+    const nameInput = document.createElement('input');
+    document.getElementById('mount').appendChild(nameInput);
+    nameInput.focus();
+    await frames(1);
+    ok('C2 focusing a text input cools the selection', p.selectionHot === false, p.selectionHot);
+
+    // Blur (tap-away / tablet keyboard dismiss) then a stray Delete on the body.
+    nameInput.blur();
+    document.body.focus?.();
+    await frames(1);
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete' }));
+    await frames(1);
+    ok('C3 stray Delete after blur does NOT delete the area',
+       (p.floor().groundAreas ?? []).some(g => g.id === 'g1'),
+       `areas=${(p.floor().groundAreas ?? []).length}`);
+
+    // Re-selecting re-heats; Delete then works as an intentional removal.
+    // (setActiveGroundArea TOGGLES — the area is still selected from C1, so
+    // simulate the canvas body-re-click path, which calls markSelectionHot.)
+    p.markSelectionHot();
+    ok('C4 re-select re-heats (area still active)',
+       p.selectionHot === true && p.activeGroundAreaId === 'g1',
+       `hot=${p.selectionHot} active=${p.activeGroundAreaId}`);
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete' }));
+    await frames(1);
+    ok('C5 hot Delete still removes the area (gate intact)',
+       !(p.floor().groundAreas ?? []).some(g => g.id === 'g1'),
+       `areas=${(p.floor().groundAreas ?? []).length}`);
+    nameInput.remove();
   } catch (err) {
     ok('unhandled error', false, (err && (err.stack || err.message)) || String(err));
   }

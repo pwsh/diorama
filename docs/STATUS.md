@@ -247,6 +247,19 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Focusin cooling — renaming a yard area no longer deletes it**
+  (2026-07-27, user-reported; unreleased). The in-input Delete was
+  already guarded, but the selection stayed HOT through a typing
+  session — after any blur, Backspace hit the body and
+  deleteSelection removed the still-selected area. canvas-2d's new
+  window `focusin` listener cools `selectionHot` whenever an
+  editable target gains focus; re-selecting on canvas/sidebar row
+  re-heats; delete tool + sidebar buttons unaffected. Placement
+  autofocus now also cools (protective). sensor-focus 9→14 (the
+  regression suite documents two fixture traps: setActiveGroundArea
+  TOGGLES, and deleteSelection's priority list puts the always-set
+  activeSensorId above ground areas).
+
 - **Fixed world ground plane + per-floor elevations** (2026-07-27,
   user-reported: "the ground plane changes depending on which floor
   is selected; glass view has a different offset"; unreleased).
