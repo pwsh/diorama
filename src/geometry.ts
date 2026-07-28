@@ -616,10 +616,65 @@ export const STEP_LIGHT_EDGE_KINDS = new Set<FurnitureKind>(['stairs', 'stairs_h
 
 // Stairs-family kinds (floor transitions). Shared by the cross-floor stair-link
 // feature: only these kinds may carry a Furniture.stairLinkId and take part in a
-// transit portal. Same membership as STEP_LIGHT_EDGE_KINDS, named for its own use.
-export const STAIRS_KINDS = new Set<FurnitureKind>(['stairs', 'stairs_half', 'stair_landing']);
-export function isStairsKind(kind?: FurnitureKind): boolean {
+// transit portal. Superset of STEP_LIGHT_EDGE_KINDS (which is treads-only —
+// a step light has nothing to mount to on a ramp). Membership grants the whole
+// stairs contract: nav-footprint exemption, slab-relative elevation (never
+// auto-grounded), no blob shadow, glass-house translucency + cutaway, stairwell
+// hole + shaft walls when sunk, the per-piece Rise override and Fit-between-levels.
+export const STAIRS_KINDS = new Set<FurnitureKind>(['stairs', 'stairs_half', 'stair_landing', 'ramp']);
+export function isStairsKind(kind?: FurnitureKind): kind is FurnitureKind {
   return kind != null && STAIRS_KINDS.has(kind);
+}
+
+// ── Stairs rise & tread count ────────────────────────────────────────────────
+// Shortest rise a stairs-family piece may be given (one very shallow step).
+export const STAIRS_MIN_RISE_MM = 50;
+// Shortest sensible RISER. Divides the rise into treads: a 200 mm patio step is
+// ONE step, not the three the depth-only rule used to force. Deliberately below
+// code minimums (a real riser is ~150–200 mm) so the cap only ever bites on
+// SHORT rises and every default flight keeps the tread count it always had.
+export const STAIRS_MIN_RISER_MM = 130;
+// Nominal tread depth — the historical depth-only rule, kept verbatim.
+export const STAIRS_TREAD_DEPTH_MM = 280;
+
+/**
+ * The RISE (total height, mm) of a stairs-family piece.
+ *
+ * `Furniture.ht` is an item-level per-piece override so a flight can bridge a
+ * short level change (a +50 patio step, a −950 sunken yard, an 800 mm entrance
+ * slab) instead of being stuck at its kind's storey-sized default. Only the
+ * stairs family honours it — every other kind reads its `FurnitureKindDef.ht`
+ * exactly as before, so this is a no-op for the rest of the catalogue.
+ *
+ * An absent / non-finite / below-STAIRS_MIN_RISE_MM value falls back to the
+ * kind default, which is what makes untouched flights byte-identical.
+ */
+export function stairsRiseMm(fu: { kind?: FurnitureKind; ht?: number }, defHt: number): number {
+  if (!isStairsKind(fu?.kind)) return defHt;
+  const v = fu?.ht;
+  if (typeof v !== 'number' || !isFinite(v) || v < STAIRS_MIN_RISE_MM) return defHt;
+  return v;
+}
+
+/**
+ * How many treads a flight of run `depthMm` and rise `riseMm` gets.
+ *
+ * THE ONE RULE — consumed by the 3D builder (`case 'stairs'`), the nav/rig
+ * ground truth (`_groundYAt`'s tread quantization) and the 2D plan glyph, so
+ * what you walk on can never disagree with what you see.
+ *
+ *   min( max(3, round(depth / 280)),  max(1, floor(rise / 130)) )
+ *
+ * The depth term IS the historical formula. The rise cap only bites when the
+ * rise is short (≤ ~390 mm for a normal run), so every default flight keeps its
+ * exact tread count: stairs 3600/2743 → 13, stairs_half 1800/1372 → 6.
+ */
+export function stairsTreadCount(depthMm: number, riseMm: number): number {
+  const d = (typeof depthMm === 'number' && isFinite(depthMm)) ? depthMm : 0;
+  const r = (typeof riseMm === 'number' && isFinite(riseMm)) ? Math.abs(riseMm) : 0;
+  const byDepth = Math.max(3, Math.round(d / STAIRS_TREAD_DEPTH_MM));
+  const byRise = Math.max(1, Math.floor(r / STAIRS_MIN_RISER_MM));
+  return Math.min(byDepth, byRise);
 }
 
 // Direction glyph for a linked-stairs chip: '▲' when the partner piece sits on a
@@ -2078,6 +2133,11 @@ export const FURNITURE_KINDS: Record<FurnitureKind, FurnitureKindDef> = {
   stairs:        { label: 'Stairs (full flight)', w: 1000, h: 3600, ht: 2743, back: 'none', color: 0x8d6e63 },
   stairs_half:   { label: 'Stairs (half flight)', w: 1000, h: 1800, ht: 1372, back: 'none', color: 0x8d6e63 },
   stair_landing: { label: 'Stair landing',        w: 1000, h: 1000, ht: 1372, back: 'none', color: 0x8d6e63 },
+  // Ramp: the no-tread member of the stairs family (STAIRS_KINDS), rising
+  // toward local +Z exactly like a flight. Default 400 mm rise over 2400 mm of
+  // run (~1:6) — a short accessible slope; use the per-piece Rise override /
+  // "Fit between levels" to bridge any real level change.
+  ramp:          { label: 'Ramp',                 w: 1000, h: 2400, ht: 400,  back: 'none', color: 0x8d6e63 },
   coffee_table:  { label: 'Coffee table',  w: 1100, h: 600,  ht: 450,  back: 'none', color: 0x795548 },
   tv_stand:      { label: 'TV stand',      w: 1600, h: 450,  ht: 550,  back: 'none', color: 0x4e342e, surface: true },
   dresser:       { label: 'Dresser',       w: 1200, h: 500,  ht: 900,  back: 'none', color: 0x6d4c41, surface: true },
@@ -3311,6 +3371,67 @@ export function floorElevationMm(
     return (typeof e === 'number' && isFinite(e)) ? e : i * STORY_H_MM;
   }
   return 0;
+}
+
+// ── Item ground level, app-side ──────────────────────────────────────────────
+// A pure MIRROR of the renderer's `_itemGroundY` (three-renderer.ts) so the app
+// graph can answer "what height is the ground at this plan point?" without
+// touching the lazy three.js chunk. The two MUST agree — terrain-test pins them
+// against each other at grade / terrace / indoor points. If you change one, and
+// only one, avatars will stand somewhere the geometry says they don't.
+//
+// THE RULE, in order (see _itemGroundY's own comment for the full rationale):
+//   1. TERRACE — the highest `GroundArea` with a non-zero `elevationMm` whose
+//      polygon contains the point wins: its top is `elevationMm + grade(at the
+//      area's CENTROID)`. Terrace tops are authored against the grade, never
+//      against another terrace, so nesting can't double-count. Skipped for a
+//      point INSIDE a closed wall loop (indoors never moves).
+//   2. Otherwise the surroundings GRADE when the point lies outside every closed
+//      wall loop, else the slab (0). A loop-less floor has no interior, so the
+//      grade never applies there — but terraces still do.
+//
+// The grade itself is the EFFECTIVE one: the user's `Scene3D.groundLevelMm`
+// (clamped) minus this floor's elevation above the fixed world ground plane,
+// exactly the value three-view injects into the renderer.
+export interface ItemGroundFloor {
+  id: string;
+  walls?: readonly { points: Vec2[] }[];
+  groundAreas?: readonly { points: Vec2[]; elevationMm?: number; hidden?: boolean }[];
+}
+export function resolveItemGroundMm(
+  floor: ItemGroundFloor | null | undefined,
+  floors: readonly { id: string; elevationMm?: number }[] | null | undefined,
+  groundLevelMmUser: number | null | undefined,
+  x: number, y: number,
+): number {
+  if (!floor) return 0;
+  const grade = resolveGroundLevelMm(groundLevelMmUser) - floorElevationMm(floors, floor.id);
+  const loops = closedWallLoops((floor.walls ?? []) as { points: Vec2[] }[]);
+  const inside = (px: number, py: number) => loops.some(lp => pointInPolygon(px, py, lp));
+  // _gradeY: outdoors = outside every loop, and a floor with NO loops reads as
+  // indoors (we can't tell) — the same asymmetry `_outdoors` documents.
+  const gradeAt = (px: number, py: number) =>
+    (grade !== 0 && loops.length > 0 && !inside(px, py)) ? grade : 0;
+
+  if (!inside(x, y)) {
+    let g = 0, found = false;
+    for (const a of floor.groundAreas ?? []) {
+      const elev = a.elevationMm ?? 0;
+      if (a.hidden || elev === 0 || !a.points || a.points.length < 3) continue;
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for (const pt of a.points) {
+        if (pt.x < minX) minX = pt.x; if (pt.x > maxX) maxX = pt.x;
+        if (pt.y < minY) minY = pt.y; if (pt.y > maxY) maxY = pt.y;
+      }
+      if (x < minX || x > maxX || y < minY || y > maxY) continue;   // bbox pre-filter
+      if (!pointInPolygon(x, y, a.points)) continue;
+      const c = centroid(a.points);
+      const gy = elev + gradeAt(c.x, c.y);
+      if (!found || gy > g) { g = gy; found = true; }
+    }
+    if (found) return g;
+  }
+  return gradeAt(x, y);
 }
 
 // Centre of the union of every given floor's rect, in world mm. All floors share

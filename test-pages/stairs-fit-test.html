@@ -1,0 +1,394 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>stairs fit test</title>
+<style>html,body{margin:0;background:#111;color:#ccc;font:12px sans-serif}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<!--
+  Short-rise stairs + ramps — per-piece rise, rise-aware tread count, the
+  app-side ground mirror, and the one-click level fit.
+
+  Modules (transpile into the harness dir before serving):
+    npx esbuild src/geometry.ts --bundle --format=esm --outfile=<harness>/geometry.mod.js
+    npx esbuild src/planner.ts  --bundle --format=esm --outfile=<harness>/planner.mod.js
+    (the built three-renderer chunk is served next to this file, like the other 3D pages)
+
+  Asserts:
+   (A) pure stairsTreadCount: the golden matrix (defaults UNCHANGED — stairs
+       3600/2743 → 13, half 1800/1372 → 6), the short-rise cases the feature
+       exists for, and monotonicity in rise at fixed depth.
+   (B) pure stairsRiseMm: honours Furniture.ht on the stairs family only, falls
+       back on absent / garbage / below-minimum values.
+   (C) builder ↔ ground-truth agreement: a 200 mm rise builds ONE tread, 350 mm
+       builds TWO, tops land at the rise, and _groundYAt returns exactly those
+       heights. Plus the default-flight regression pin (13 treads, top 2743).
+   (D) ramp: one wedge whose sloped top runs 0 at the local −Z foot → HT at the
+       +Z head, two proud side curbs, and a LINEAR _groundYAt (mid = base+ht/2).
+   (E) resolveItemGroundMm (pure, app-side) === the renderer's _itemGroundY at
+       grade / terrace / indoor points, including the floor-elevation composition
+       that three-view performs before handing the level to the renderer.
+   (F) Planner.autofitStairs on a real Planner: terrace→grade sizes elevation +
+       rise (1 tread), the reversed piece auto-rotates 180°, level ends refuse
+       with a reason, a ramp fits identically, and locked/non-family refuse.
+-->
+<script type="module">
+  const G = await import('./geometry.mod.js');
+  const P = await import('./planner.mod.js');
+  const mod = await import('./assets/three-renderer.js?v=' + Date.now());
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+
+  const tests = [];
+  const ok = (name, cond, detail) => tests.push({ name, ok: !!cond, detail });
+  const near = (a, b, tol = 1) => Number.isFinite(a) && Math.abs(a - b) <= tol;
+
+  // ══ (A) pure stairsTreadCount ═════════════════════════════════════════════
+  const TC = G.stairsTreadCount;
+  ok('A1 default full flight 3600/2743 → 13 (regression pin)', TC(3600, 2743) === 13, `n=${TC(3600, 2743)}`);
+  ok('A2 default half flight 1800/1372 → 6 (regression pin)', TC(1800, 1372) === 6, `n=${TC(1800, 1372)}`);
+  ok('A3 short rise 1000/200 → 1 step', TC(1000, 200) === 1, `n=${TC(1000, 200)}`);
+  ok('A4 short rise 1000/350 → 2 steps', TC(1000, 350) === 2, `n=${TC(1000, 350)}`);
+  ok('A5 tiny run + tiny rise 600/180 → 1 step', TC(600, 180) === 1, `n=${TC(600, 180)}`);
+  ok('A6 the depth floor of 3 still holds for a tall rise', TC(300, 2743) === 3, `n=${TC(300, 2743)}`);
+  ok('A7 a 50 mm rise is still one real step', TC(2400, 50) === 1, `n=${TC(2400, 50)}`);
+  {
+    let mono = true, prev = 0;
+    for (let rise = 0; rise <= 4000; rise += 25) {
+      const n = TC(3600, rise);
+      if (n < prev) mono = false;
+      prev = n;
+    }
+    ok('A8 monotonic non-decreasing in rise at fixed depth', mono && prev === 13, `top=${prev}`);
+  }
+  ok('A9 garbage inputs never NaN / never below 1',
+     TC(NaN, NaN) === 1 && TC(undefined, undefined) === 1 && TC(-3600, -2743) === 3,
+     `${TC(NaN, NaN)}/${TC(undefined, undefined)}/${TC(-3600, -2743)}`);
+
+  // ══ (B) pure stairsRiseMm ═════════════════════════════════════════════════
+  const RM = G.stairsRiseMm;
+  ok('B1 absent ht → the kind default', RM({ kind: 'stairs' }, 2743) === 2743);
+  ok('B2 a set ht wins', RM({ kind: 'stairs', ht: 200 }, 2743) === 200);
+  ok('B3 landings + ramps honour it too',
+     RM({ kind: 'stair_landing', ht: 400 }, 1372) === 400 && RM({ kind: 'ramp', ht: 900 }, 400) === 900);
+  ok('B4 non-family kinds ignore ht entirely', RM({ kind: 'sofa', ht: 200 }, 800) === 800);
+  ok('B5 garbage / sub-minimum falls back',
+     RM({ kind: 'stairs', ht: 0 }, 2743) === 2743 && RM({ kind: 'stairs', ht: 10 }, 2743) === 2743 &&
+     RM({ kind: 'stairs', ht: NaN }, 2743) === 2743,
+     `min=${G.STAIRS_MIN_RISE_MM}`);
+  ok('B6 ramp is a full stairs-family member', G.isStairsKind('ramp') === true && !!G.FURNITURE_KINDS.ramp);
+
+  // ══ shared renderer fixture ═══════════════════════════════════════════════
+  const FW = 10000, FD = 10000;
+  const scene = { preset: 'day', floorColor: '#8a7860', floorTex: 'none', wallColor: '#cfd2d6' };
+  const mkFloor = (extra = {}) => ({
+    id: 'f1', name: 'T', w: FW, d: FD, walls: [], furniture: [],
+    lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [], windows: [], bg: null, model3d: null, look3d: null, rooms: [],
+    groundAreas: [], ...extra,
+  });
+  const grpAt = (fu) => r._floorGroup.children.find(
+    c => c.type === 'Group' &&
+         Math.abs(c.position.x - (FW / 2 - fu.x)) < 1 &&
+         Math.abs(c.position.z - (fu.y - FD / 2)) < 1);
+  const realMeshes = (o) => {
+    const a = []; o.traverse(m => { if (m.isMesh && !m.userData?.outline) a.push(m); }); return a;
+  };
+  // The builder caps every tread with a 22 mm nosing box — one per step.
+  const treadCaps = (o) => realMeshes(o).filter(
+    m => m.geometry?.type === 'BoxGeometry' && near(m.geometry.parameters.height, 22, 0.001));
+  // Top of the highest TREAD (nosing cap + 11). Deliberately not the group's
+  // overall max Y — a sunk flight also carries dark shaft walls that rise to
+  // floor level and would swamp it.
+  const treadTopY = (o) => {
+    let hi = -Infinity;
+    for (const m of treadCaps(o)) hi = Math.max(hi, m.position.y + 11);
+    return hi;
+  };
+  const topY = (o) => {
+    let hi = -Infinity;
+    for (const m of realMeshes(o)) {
+      m.geometry.computeBoundingBox();
+      let y = m.position.y + m.geometry.boundingBox.max.y;
+      let p = m.parent;
+      while (p && p !== o) { y += p.position.y; p = p.parent; }
+      if (y > hi) hi = y;
+    }
+    return hi;
+  };
+
+  // ══ (C) builder ↔ _groundYAt agreement ════════════════════════════════════
+  {
+    const mk = (id, x, ht) => ({ id, x, y: 5000, w: 1000, h: 1000, kind: 'stairs', rotation: 0, ...(ht ? { ht } : {}) });
+    const dflt = { id: 'sDef', x: 8000, y: 5000, w: 1000, h: 3600, kind: 'stairs', rotation: 0 };
+    const s200 = mk('s200', 2000, 200), s350 = mk('s350', 5000, 350);
+    r.updateFloor(mkFloor({ furniture: [s200, s350, dflt] }), scene);
+
+    ok('C1 a 200 mm rise builds exactly ONE tread', treadCaps(grpAt(s200)).length === 1,
+       `n=${treadCaps(grpAt(s200)).length}`);
+    ok('C2 …topping out at the rise', near(topY(grpAt(s200)), 200), `top=${topY(grpAt(s200))}`);
+    ok('C3 a 350 mm rise builds TWO treads', treadCaps(grpAt(s350)).length === 2,
+       `n=${treadCaps(grpAt(s350)).length}`);
+    ok('C4 …topping out at the rise', near(topY(grpAt(s350)), 350), `top=${topY(grpAt(s350))}`);
+    // Ground truth must agree with the mesh, tread for tread.
+    ok('C5 _groundYAt on the 1-tread flight = 200 everywhere on it',
+       near(r._groundYAt(2000, 4700), 200) && near(r._groundYAt(2000, 5400), 200),
+       `${r._groundYAt(2000, 4700)}/${r._groundYAt(2000, 5400)}`);
+    ok('C6 _groundYAt on the 2-tread flight steps 175 → 350',
+       near(r._groundYAt(5000, 4700), 175) && near(r._groundYAt(5000, 5400), 350),
+       `${r._groundYAt(5000, 4700)}/${r._groundYAt(5000, 5400)}`);
+    // REGRESSION PIN — an untouched flight is exactly what it always was.
+    ok('C7 default flight still 13 treads', treadCaps(grpAt(dflt)).length === 13,
+       `n=${treadCaps(grpAt(dflt)).length}`);
+    ok('C8 default flight still tops out at 2743', near(topY(grpAt(dflt)), 2743), `top=${topY(grpAt(dflt))}`);
+    ok('C9 default flight _groundYAt still quantizes to 13 treads',
+       near(r._groundYAt(8000, 5000 - 1800 + 3600 / 13 / 2), 2743 / 13) &&
+       near(r._groundYAt(8000, 5000 + 1800 - 1), 2743),
+       `${r._groundYAt(8000, 5000 - 1800 + 3600 / 13 / 2)}/${r._groundYAt(8000, 5000 + 1800 - 1)}`);
+    // A landing honours the override on its slab height.
+    const land = { id: 'lnd', x: 2000, y: 8000, w: 1000, h: 1000, kind: 'stair_landing', rotation: 0, ht: 300 };
+    r.updateFloor(mkFloor({ furniture: [land] }), scene);
+    ok('C10 landing rise override drives its slab + ground truth',
+       near(topY(grpAt(land)), 300) && near(r._groundYAt(2000, 8000), 300),
+       `top=${topY(grpAt(land))} g=${r._groundYAt(2000, 8000)}`);
+  }
+
+  // ══ (D) ramp ══════════════════════════════════════════════════════════════
+  {
+    const HT = 600, D = 2400;
+    const rp = { id: 'rp', x: 4000, y: 5000, w: 1200, h: D, kind: 'ramp', rotation: 0, ht: HT };
+    r.updateFloor(mkFloor({ furniture: [rp] }), scene);
+    const g = grpAt(rp);
+    const wedges = realMeshes(g).filter(m => m.geometry?.type === 'ExtrudeGeometry');
+    ok('D1 ramp builds exactly one wedge prism', wedges.length === 1, `n=${wedges.length}`);
+    ok('D2 ramp has NO treads', treadCaps(g).length === 0, `caps=${treadCaps(g).length}`);
+    // Curbs: the two boxes that are not the wedge, sized CURB_W × CURB_H.
+    const curbs = realMeshes(g).filter(
+      m => m.geometry?.type === 'BoxGeometry' && near(m.geometry.parameters.width, 40, 0.001)
+                                              && near(m.geometry.parameters.height, 80, 0.001));
+    ok('D3 two side curbs run the slope, tilted to it', curbs.length === 2 &&
+       curbs.every(c => near(c.rotation.x, -Math.atan2(HT, D), 1e-6)),
+       `n=${curbs.length} rotX=${curbs[0]?.rotation.x?.toFixed(4)}`);
+    // The wedge's LOCAL frame maps (x,y,z) → world (W/2 − z, y, x): rotation.y
+    // = −π/2 plus the +W/2 shift. So the sloped top must read 0 at world
+    // z = −D/2 (the local −Z foot) and HT at world z = +D/2 (the head).
+    {
+      const w = wedges[0], pos = w.geometry.getAttribute('position');
+      let footMax = -Infinity, headMax = -Infinity, above = 0;
+      for (let i = 0; i < pos.count; i++) {
+        const lx = pos.getX(i), ly = pos.getY(i);
+        const wz = lx;                        // world z of this vertex
+        if (near(wz, -D / 2, 1)) footMax = Math.max(footMax, ly);
+        if (near(wz, D / 2, 1))  headMax = Math.max(headMax, ly);
+        if (ly > HT * (wz + D / 2) / D + 1) above++;   // nothing may sit above the slope
+      }
+      ok('D4 sloped top: 0 at the foot, HT at the head, nothing above the plane',
+         near(footMax, 0) && near(headMax, HT) && above === 0,
+         `foot=${footMax} head=${headMax} above=${above}`);
+      ok('D5 the wedge is oriented so world +Z is uphill',
+         near(w.rotation.y, -Math.PI / 2, 1e-9) && near(w.position.x, rp.w / 2, 1e-9),
+         `rotY=${w.rotation.y} x=${w.position.x}`);
+    }
+    // Ground truth is the LINEAR slope, not a staircase.
+    ok('D6 _groundYAt mid-ramp = base + ht/2', near(r._groundYAt(4000, 5000), HT / 2),
+       `g=${r._groundYAt(4000, 5000)}`);
+    ok('D7 _groundYAt at the foot ≈ 0 and at the head ≈ HT',
+       near(r._groundYAt(4000, 5000 - D / 2 + 5), 0, 5) && near(r._groundYAt(4000, 5000 + D / 2 - 5), HT, 5),
+       `${r._groundYAt(4000, 5000 - D / 2 + 5)}/${r._groundYAt(4000, 5000 + D / 2 - 5)}`);
+    ok('D8 the slope is continuous (quarter points interpolate)',
+       near(r._groundYAt(4000, 5000 - D / 4), HT / 4, 2) && near(r._groundYAt(4000, 5000 + D / 4), 3 * HT / 4, 2),
+       `${r._groundYAt(4000, 5000 - D / 4)}/${r._groundYAt(4000, 5000 + D / 4)}`);
+    // A sunk ramp carries a raised BASE, and the slope rides on top of it.
+    const rd = { ...rp, id: 'rd', x: 7500, elevation: -400 };
+    r.updateFloor(mkFloor({ furniture: [rd] }), scene);
+    ok('D9 elevation offsets the whole slope (descending ramp)',
+       near(r._groundYAt(7500, 5000), -400 + HT / 2) && near(grpAt(rd).position.y, -400),
+       `g=${r._groundYAt(7500, 5000)} y=${grpAt(rd).position.y}`);
+    ok('D10 a ramp casts no blob shadow (stairs-family rule)',
+       realMeshes(grpAt(rd)).every(m => !m.userData?.blob) &&
+       !grpAt(rd).children.some(c => c.isMesh && c.geometry?.type === 'PlaneGeometry' && c.position.y === 8 + 400),
+       'ok');
+  }
+
+  // ══ (E) resolveItemGroundMm ≡ _itemGroundY ════════════════════════════════
+  {
+    // A house loop in one corner + one sunken terrace out in the yard.
+    const walls = [{ id: 'w', points: [
+      { x: 1000, y: 1000 }, { x: 3000, y: 1000 }, { x: 3000, y: 3000 },
+      { x: 1000, y: 3000 }, { x: 1000, y: 1000 }] }];
+    const terrace = { id: 'tr', kind: 'grass', elevationMm: -150, points: [
+      { x: 5000, y: 3000 }, { x: 9000, y: 3000 }, { x: 9000, y: 5000 }, { x: 5000, y: 5000 }] };
+    const f = mkFloor({ walls, groundAreas: [terrace] });
+    const PTS = [
+      ['grade (outdoors, no terrace)', 6000, 8000],
+      ['terrace interior', 7000, 4000],
+      ['indoors', 2000, 2000],
+      ['just outside the terrace', 7000, 5400],
+    ];
+    // Single floor: floorElevationMm('f1') = 0, so effective === the user value.
+    const floors1 = [{ id: 'f1' }];
+    const USER = -800;
+    r.updateFloor(f, { ...scene, groundLevelMm: USER });
+    for (const [label, x, y] of PTS) {
+      const pure = G.resolveItemGroundMm(f, floors1, USER, x, y);
+      const rend = r._itemGroundY(x, y);
+      ok(`E ${label}: pure resolveItemGroundMm === renderer _itemGroundY`, near(pure, rend, 0.001),
+         `pure=${pure} renderer=${rend}`);
+    }
+    ok('E5 the terrace really is a distinct level (sanity, not a trivial pass)',
+       G.resolveItemGroundMm(f, floors1, USER, 7000, 4000) === -950 &&
+       G.resolveItemGroundMm(f, floors1, USER, 6000, 8000) === -800 &&
+       G.resolveItemGroundMm(f, floors1, USER, 2000, 2000) === 0,
+       `${G.resolveItemGroundMm(f, floors1, USER, 7000, 4000)}/${G.resolveItemGroundMm(f, floors1, USER, 6000, 8000)}`);
+    // Two floors: 'f1' is index 1 → AUTO elevation 3000, so the pure resolver
+    // must subtract it exactly as three-view does before the renderer sees it.
+    {
+      const floors2 = [{ id: 'f0' }, { id: 'f1' }];
+      const eff = USER - G.floorElevationMm(floors2, 'f1');
+      r.updateFloor(f, { ...scene, groundLevelMm: eff });
+      let allMatch = true;
+      for (const [, x, y] of PTS) {
+        if (!near(G.resolveItemGroundMm(f, floors2, USER, x, y), r._itemGroundY(x, y), 0.001)) allMatch = false;
+      }
+      ok('E6 upper-storey floor elevation composes identically in both', allMatch && eff === -3800, `eff=${eff}`);
+    }
+    ok('E7 a loop-less floor: terraces apply, the grade does not (matches _outdoors)',
+       G.resolveItemGroundMm(mkFloor({ groundAreas: [terrace] }), floors1, USER, 7000, 4000) === -150 &&
+       G.resolveItemGroundMm(mkFloor({ groundAreas: [terrace] }), floors1, USER, 6000, 8000) === 0,
+       'ok');
+    ok('E8 zero ground level + no terraces → 0 everywhere (default path)',
+       G.resolveItemGroundMm(mkFloor({ walls }), floors1, 0, 6000, 8000) === 0 &&
+       G.resolveItemGroundMm(mkFloor({ walls }), floors1, undefined, 2000, 2000) === 0, 'ok');
+  }
+
+  // ══ (F) Planner.autofitStairs ═════════════════════════════════════════════
+  {
+    const walls = [{ id: 'w', points: [
+      { x: 1000, y: 1000 }, { x: 3000, y: 1000 }, { x: 3000, y: 3000 },
+      { x: 1000, y: 3000 }, { x: 1000, y: 1000 }] }];
+    const terrace = () => ({ id: 'tr', kind: 'grass', elevationMm: -150, points: [
+      { x: 5000, y: 3000 }, { x: 9000, y: 3000 }, { x: 9000, y: 5000 }, { x: 5000, y: 5000 }] });
+    // Foot (local −Z) lands at y = 5000 − 1350 = 3650 → on the terrace (−950);
+    // head at y = 6350 → plain grade (−800). Rise = 150.
+    const piece = (over = {}) => ({ id: 'st', x: 7000, y: 5000, w: 1000, h: 2400,
+                                    kind: 'stairs', rotation: 0, ...over });
+    const mkPlanner = (fu) => {
+      const p = new P.Planner();
+      p.store = {
+        v: 1, currentFloorId: 'f1', activeSensorId: null,
+        coverage: false, imperial: false, showDetails: false, useRawTargets: false,
+        scene3d: { preset: 'day', groundLevelMm: -800 },
+        floors: [{
+          id: 'f1', name: 'Ground', w: FW, d: FD, walls, furniture: [fu],
+          lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+          doors: [], windows: [], bg: null, model3d: null, look3d: null, rooms: [],
+          groundAreas: [terrace()],
+        }],
+      };
+      p.uiMode = 'edit';
+      return p;
+    };
+
+    {
+      const fu = piece(), p = mkPlanner(fu);
+      const res = p.autofitStairs(fu);
+      ok('F1 terrace → grade fits: no refusal', res === null, `res=${res}`);
+      ok('F2 elevation = the LOWER end ground (−950)', fu.elevation === -950, `elev=${fu.elevation}`);
+      ok('F3 rise = the level difference (150)', fu.ht === 150, `ht=${fu.ht}`);
+      ok('F4 rotation untouched when already uphill', (fu.rotation ?? 0) === 0, `rot=${fu.rotation}`);
+      ok('F5 that fit is ONE real step', G.stairsTreadCount(fu.h, G.stairsRiseMm(fu, 2743)) === 1,
+         `n=${G.stairsTreadCount(fu.h, G.stairsRiseMm(fu, 2743))}`);
+      // …and the renderer agrees: base −950, top −800.
+      r.updateFloor({ ...p.store.floors[0] }, { ...scene, groundLevelMm: -800 });
+      ok('F6 the built flight spans terrace → grade in the scene',
+         near(grpAt(fu).position.y, -950) && near(treadTopY(grpAt(fu)) + (fu.elevation ?? 0), -800),
+         `base=${grpAt(fu).position.y} top=${treadTopY(grpAt(fu)) + (fu.elevation ?? 0)}`);
+    }
+    {
+      // Aimed downhill (rotated 180°): fit must flip it back and size it the same.
+      const fu = piece({ rotation: 180 }), p = mkPlanner(fu);
+      const res = p.autofitStairs(fu);
+      ok('F7 a downhill-aimed piece is accepted', res === null, `res=${res}`);
+      ok('F8 …auto-rotated 180° so it rises from the low end', fu.rotation === 0, `rot=${fu.rotation}`);
+      ok('F9 …with the same elevation + rise', fu.elevation === -950 && fu.ht === 150,
+         `elev=${fu.elevation} ht=${fu.ht}`);
+    }
+    {
+      // Both ends on plain grade → refuse with a reason, mutate nothing.
+      const fu = piece({ x: 2000, y: 7000 }), p = mkPlanner(fu);
+      const res = p.autofitStairs(fu);
+      ok('F10 level ends refuse with a reason', typeof res === 'string' && /level/i.test(res), `res=${res}`);
+      ok('F11 …and nothing was mutated', fu.elevation === undefined && fu.ht === undefined,
+         `elev=${fu.elevation} ht=${fu.ht}`);
+    }
+    {
+      // A ramp fits identically — same family predicate, same code path.
+      const fu = piece({ kind: 'ramp' }), p = mkPlanner(fu);
+      const res = p.autofitStairs(fu);
+      ok('F12 a ramp fits between the same two levels', res === null && fu.elevation === -950 && fu.ht === 150,
+         `res=${res} elev=${fu.elevation} ht=${fu.ht}`);
+      r.updateFloor({ ...p.store.floors[0] }, { ...scene, groundLevelMm: -800 });
+      ok('F13 …and its slope really spans them in the scene',
+         near(r._groundYAt(7000, 5000 - 1200 + 5), -950, 5) && near(r._groundYAt(7000, 5000 + 1200 - 5), -800, 5),
+         `${r._groundYAt(7000, 5000 - 1200 + 5)}/${r._groundYAt(7000, 5000 + 1200 - 5)}`);
+    }
+    {
+      const fu = piece({ locked: true }), p = mkPlanner(fu);
+      ok('F14 a locked piece refuses', typeof p.autofitStairs(fu) === 'string', `res=${p.autofitStairs(fu)}`);
+      const sofa = piece({ kind: 'sofa' }), p2 = mkPlanner(sofa);
+      ok('F15 a non-family kind refuses', typeof p2.autofitStairs(sofa) === 'string');
+      const fu3 = piece(), p3 = mkPlanner(fu3);
+      p3.uiMode = 'view';
+      ok('F16 view mode refuses', typeof p3.autofitStairs(fu3) === 'string' && fu3.ht === undefined);
+    }
+    {
+      // Exactly at the kind default the override is dropped (stays "untouched").
+      const fu = piece({ h: 3600 }), p = mkPlanner(fu);
+      p.store.floors[0].groundAreas = [{ ...terrace(), elevationMm: -2743 }];  // grade −800 → top −3543
+      p.store.floors[0].furniture[0].y = 5000;
+      const res = p.autofitStairs(fu);
+      ok('F17 a fit that lands on the kind default clears the override',
+         res === null && fu.ht === undefined && fu.elevation === -3543,
+         `res=${res} ht=${fu.ht} elev=${fu.elevation}`);
+    }
+  }
+
+  // ══ (G) 2D plan symbols ═══════════════════════════════════════════════════
+  {
+    const cr = await import('./canvas-render.mod.js?v=' + Date.now());
+    const paint = (fu) => {
+      const cv = document.createElement('canvas'); cv.width = 120; cv.height = 120;
+      const ctx = cv.getContext('2d');
+      ctx.translate(60, 60);
+      cr.drawFurniturePrimitiveLocal(ctx, { id: 'x', x: 0, y: 0, ...fu }, 40, 44, [], false, {});
+      const d = ctx.getImageData(0, 0, 120, 120).data;
+      let painted = 0;
+      for (let i = 3; i < d.length; i += 4) if (d[i] > 0) painted++;
+      return painted;
+    };
+    let threw = null;
+    let ramp = 0, short = 0, dflt = 0;
+    try {
+      ramp  = paint({ w: 1000, h: 2400, kind: 'ramp', ht: 600 });
+      short = paint({ w: 1000, h: 1000, kind: 'stairs', ht: 200 });
+      dflt  = paint({ w: 1000, h: 3600, kind: 'stairs' });
+      paint({ w: 1000, h: 2400, kind: 'ramp', ht: 600, elevation: -600 });   // DN chevrons
+      paint({ w: 1000, h: 1000, kind: 'stair_landing', ht: 300 });
+    } catch (e) { threw = String(e); }
+    ok('G1 2D plan symbols draw without throwing (ramp / short flight / default / sunk)',
+       threw === null, threw ?? 'ok');
+    ok('G2 every glyph paints pixels', ramp > 0 && short > 0 && dflt > 0,
+       `ramp=${ramp} short=${short} default=${dflt}`);
+  }
+
+  // Restore a clean frame for the tally.
+  r.updateFloor(mkFloor(), scene);
+
+  let pass = 0; const fails = [];
+  for (const t of tests) { if (t.ok) pass++; else fails.push(t.name); }
+  const total = tests.length, allPass = pass === total;
+  const title = allPass ? `STAIRSFIT PASS ${pass}/${total}` : `STAIRSFIT FAIL ${pass}/${total} [${fails.join(',')}]`;
+  document.title = title;
+  window.__RESULT__ = { title };
+  document.body.insertAdjacentHTML('beforeend',
+    `<pre style="position:fixed;left:8px;top:8px;color:#8f8">${title}\n` +
+    tests.map(t => `${t.ok ? 'PASS' : 'FAIL'} ${t.name} — ${t.detail ?? ''}`).join('\n') + `</pre>`);
+</script>

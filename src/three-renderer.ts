@@ -14,6 +14,7 @@ import {
   isClimateApplianceKind, isBladedFanKind, climateApplianceRun,
   isMechanicalApplianceKind, isPumpKind, mechanicalRun, mechanicalGlowColor, type MechanicalRun,
   plantThirsty, PLANT_MOISTURE_DEFAULT_THRESHOLD,
+  isStairsKind, stairsRiseMm, stairsTreadCount,
   isVehicleKind, evStatusOf, evStatusColor, carChargeState,
   doorOpenFraction, GARAGE_DOOR_H,
   alarmHeight, alarmStateColor, ALARM_DEFAULTS, ALARM_PLATE_DEPTH_MM,
@@ -858,7 +859,7 @@ const OPENING_HOST_MAX_MM = 500;
 // a post on the driveway, shower stands on the slab).
 const HOUSE_MOUNTED_FURNITURE_KINDS = new Set<string>([
   'wall_tv', 'wall_heater', 'towel_warmer', 'mini_split', 'window_ac',
-  'stairs', 'stairs_half', 'stair_landing',
+  'stairs', 'stairs_half', 'stair_landing', 'ramp',
 ]);
 
 // Light kinds that STAND ON THE GROUND (as opposed to hanging from a ceiling or
@@ -3590,8 +3591,16 @@ export class ThreeDRenderer {
       let gy: number;
       if (t.kind === 'stair_landing' || t.kind === 'riser_platform' || t.kind === 'terrace') {
         gy = t.elevation + t.ht;   // flat top
+      } else if (t.kind === 'ramp') {
+        // A ramp has no treads — its surface is the LINEAR slope the wedge mesh
+        // renders, foot (local −Z) to head (+Z). Rigs ease h.groundY, so walking
+        // a continuous slope needs nothing else.
+        const frac = Math.min(1, Math.max(0, (l.y + t.h / 2) / t.h));
+        gy = t.elevation + t.ht * frac;
       } else {
-        const n = Math.max(3, Math.round(t.h / 280));
+        // Tread kinds: quantize to the SAME step layout the builder renders
+        // (rise AND depth — a short flight is 1–2 steps, not a forced 3).
+        const n = stairsTreadCount(t.h, t.ht);
         const frac = (l.y + t.h / 2) / t.h;  // 0 at the front → 1 at the top
         const step = Math.min(n - 1, Math.max(0, Math.floor(frac * n)));
         gy = t.elevation + (t.ht / n) * (step + 1);
@@ -5189,8 +5198,7 @@ export class ThreeDRenderer {
     // opening so the descending flight is visible from above. No holes when
     // furniture (incl. stairs) is layer-hidden.
     const wellCuts = (showFurniture ? (f.furniture ?? []) : []).filter(fu =>
-      (fu.kind === 'stairs' || fu.kind === 'stairs_half' || fu.kind === 'stair_landing') &&
-      (fu.elevation ?? 0) < 0);
+      isStairsKind(fu.kind) && (fu.elevation ?? 0) < 0);
     // Floor voids / openings (Tier-1): user-drawn "no floor here" polygons cut
     // from the slab as HOLES, same earcut path as stairwell wells. World-space
     // polygons (≥3 pts, not hidden). Ghosts ignore these (stay cheap, like wells).
@@ -5865,11 +5873,14 @@ export class ThreeDRenderer {
           ht: def.ht, elevation: (fu.elevation ?? 0) + furnGY, kind: 'riser_platform',
         });
       }
-      // Stairs and landings are walkable terrain for humanoid targets.
-      if (fu.kind === 'stairs' || fu.kind === 'stairs_half' || fu.kind === 'stair_landing') {
+      // Stairs, ramps and landings are walkable terrain for humanoid targets.
+      // `ht` is the piece's RESOLVED rise (the per-piece Furniture.ht override
+      // when set) — _groundYAt divides it by the SAME stairsTreadCount the
+      // builder uses, so what a rig stands on can never diverge from the mesh.
+      if (isStairsKind(fu.kind)) {
         this._terrain.push({
           x: fu.x, y: fu.y, w: fu.w, h: fu.h, rotation: fu.rotation,
-          ht: def.ht, elevation: fu.elevation ?? 0, kind: fu.kind,
+          ht: stairsRiseMm(fu, def.ht), elevation: fu.elevation ?? 0, kind: fu.kind,
         });
         // Glass-house: build the stairs translucent so the storey reads through.
         // Cutaway: enroll the solid step meshes so a foreground stairwell fades
@@ -6655,7 +6666,7 @@ export class ThreeDRenderer {
     for (const fu of furniture) {
       const def = resolveFurnitureDef(fu, customObjects);
       if (def.rug) continue;
-      if (fu.kind === 'stairs' || fu.kind === 'stairs_half' || fu.kind === 'stair_landing') continue;
+      if (isStairsKind(fu.kind)) continue;
       // Beds are occupiable — people walk in and lie down / get covered. Blocking
       // the footprint makes nav steer settling occupants back OUT (breaking the
       // lie + shared-covers settle), so leave beds walkable like rugs/stairs.
@@ -6733,8 +6744,7 @@ export class ThreeDRenderer {
     // neighbour's walkable terrain (skipped below via onStairTerrain — same
     // abutment test idiom as _buildFurniture's faceOpen). Ascending flights
     // (elevation ≥ 0) are untouched — no regression to existing stairs.
-    const stairsFamily = furniture.filter(fu =>
-      fu.kind === 'stairs' || fu.kind === 'stairs_half' || fu.kind === 'stair_landing');
+    const stairsFamily = furniture.filter(fu => isStairsKind(fu.kind));
     const sunkenStairs = stairsFamily.filter(fu => (fu.elevation ?? 0) < 0);
     // A cell inside ANY stairs-family footprint is walkable terrain — never rail
     // it (keeps chained sunken pieces connected at their shared edges).
@@ -7792,7 +7802,10 @@ export class ThreeDRenderer {
                                    mech?: MechanicalRun }): THREE.Group {
     const recipe = fu.customKindId ? customObjects?.find(o => o.id === fu.customKindId) : undefined;
     const def = recipe ?? furnitureDef(fu);
-    const W = fu.w, D = fu.h, HT = def.ht;
+    // Stairs-family pieces honour a per-piece RISE override (Furniture.ht) so a
+    // flight/ramp can bridge a short level change; every other kind reads its
+    // kind default unchanged (stairsRiseMm is a no-op off the family).
+    const W = fu.w, D = fu.h, HT = stairsRiseMm(fu, def.ht);
     // Per-piece color override wins over the kind/recipe default tint. Custom
     // recipe primitives that fix their own color/role keep it (see
     // _buildFromRecipe); the override only flows into `tint`, which the
@@ -7992,7 +8005,7 @@ export class ThreeDRenderer {
       return neighbors.some(nb => {
         if (nb.x === fu.x && nb.y === fu.y && nb.w === fu.w && nb.h === fu.h &&
             nb.kind === fu.kind && nb.rotation === fu.rotation) return false;
-        if (!(nb.kind === 'stairs' || nb.kind === 'stairs_half' || nb.kind === 'stair_landing')) return false;
+        if (!isStairsKind(nb.kind)) return false;
         if ((nb.elevation ?? 0) >= 0) return false;
         const l = furnitureWorldToLocal(nb.rotation, px - nb.x, py - nb.y);
         return Math.abs(l.x) <= nb.w / 2 + 60 && Math.abs(l.y) <= nb.h / 2 + 60;
@@ -8177,8 +8190,10 @@ export class ThreeDRenderer {
       case 'stairs':
       case 'stairs_half': {
         // Solid stacked steps rising toward local +Z (the plan-top). Tread
-        // count follows the run depth (~280 mm treads); riser = HT / n.
-        const n = Math.max(3, Math.round(D / 280));
+        // count follows the run depth (~280 mm treads) AND the rise (~130 mm
+        // minimum riser), so a short-rise flight is 1–2 steps instead of three
+        // impossible slivers. Default flights are unchanged. riser = HT / n.
+        const n = stairsTreadCount(D, HT);
         const riser = HT / n, treadD = D / n;
         const treadMat = this._mat({ color: 0xa1887f, roughness: 0.6 });
         for (let i = 0; i < n; i++) {
@@ -8197,6 +8212,55 @@ export class ThreeDRenderer {
           // Skip any face that connects to an adjoining sunken stair piece
           // (e.g. this flight's top meeting a landing) — walling it over
           // blocked the staircase.
+          if (!faceOpen(-W / 2 - 150, 0)) addBox(24, wellH, D, shaftMat, -W / 2 + 12, wellH / 2, 0);
+          if (!faceOpen(W / 2 + 150, 0))  addBox(24, wellH, D, shaftMat, W / 2 - 12, wellH / 2, 0);
+          if (!faceOpen(0, D / 2 + 150))  addBox(W, wellH, 24, shaftMat, 0, wellH / 2, D / 2 - 12);
+        }
+        break;
+      }
+      // ── ramp: the no-tread stairs-family member ────────────────────────────
+      // A right-triangle prism whose sloped top runs from y = 0 at the local −Z
+      // FOOT to y = HT at the +Z HEAD (the same rise direction as a flight), so
+      // everything stairs-shaped downstream — nav exemption, slab-relative
+      // elevation, glass-house / cutaway enrolment, the stairwell hole + shaft
+      // walls when sunk — applies unchanged. _groundYAt reads this surface as a
+      // LINEAR slope (no tread quantization), so the mesh and the walkable
+      // ground truth are the same plane by construction.
+      case 'ramp': {
+        // Profile authored in (worldZ, worldY): foot → head base → head top.
+        const prof = new THREE.Shape();
+        prof.moveTo(-D / 2, 0);
+        prof.lineTo(D / 2, 0);
+        prof.lineTo(D / 2, HT);
+        prof.closePath();
+        const wedge = new THREE.Mesh(
+          new THREE.ExtrudeGeometry(prof, { depth: W, bevelEnabled: false }), wood);
+        // Shape +X → world +Z and the extrusion (shape +Z) → world −X, so shift
+        // back by W/2 to centre the prism on the piece.
+        wedge.rotation.y = -Math.PI / 2;
+        wedge.position.x = W / 2;
+        grp.add(wedge);
+        // Two raised side curbs running the slope, so the wedge reads as a ramp
+        // and not a mis-built box. Half-buried in the slope (offset along the
+        // surface normal by less than half their height) — a curb flush with the
+        // sloped face would be coplanar with it and hatch under flat toon shading.
+        const slopeLen = Math.hypot(D, HT);
+        const nY = D / slopeLen, nZ = -HT / slopeLen;   // unit up-normal of the slope
+        const CURB_H = 80, CURB_W = 40, EMBED = 25;
+        const off = CURB_H / 2 - EMBED;
+        const curbMat = this._mat({ color: 0xa1887f, roughness: 0.6 });
+        for (const sx of [-1, 1]) {
+          const curb = addBox(CURB_W, CURB_H, slopeLen, curbMat,
+                              sx * (W / 2 - CURB_W / 2), HT / 2 + nY * off, nZ * off);
+          curb.rotation.x = -Math.atan2(HT, D);
+        }
+        // Sunk below the floor (descending ramp): same dark shaft lining the
+        // descending flights get, so the opening reads as a well.
+        if ((fu.elevation ?? 0) < 0) {
+          const shaftMat = this._mat({
+            color: 0x2a2d31, roughness: 0.9, side: THREE.DoubleSide,
+          });
+          const wellH = -(fu.elevation ?? 0);
           if (!faceOpen(-W / 2 - 150, 0)) addBox(24, wellH, D, shaftMat, -W / 2 + 12, wellH / 2, 0);
           if (!faceOpen(W / 2 + 150, 0))  addBox(24, wellH, D, shaftMat, W / 2 - 12, wellH / 2, 0);
           if (!faceOpen(0, D / 2 + 150))  addBox(W, wellH, 24, shaftMat, 0, wellH / 2, D / 2 - 12);
@@ -9974,7 +10038,7 @@ export class ThreeDRenderer {
     // pieces (counter-top appliances, sunken stairs) don't touch it.
     this._addOutlines(grp);
     const onFloor = !def.rug &&
-      kind !== 'stairs' && kind !== 'stairs_half' && kind !== 'stair_landing' &&
+      !isStairsKind(kind) &&
       kind !== 'wall_tv' &&   // hangs on a wall, never touches the floor
       kind !== 'riser_platform' &&   // a floor-like deck; a huge blob reads wrong
       !opts?.vehicleGhost &&   // an empty bay shouldn't cast a solid shadow

@@ -79,7 +79,7 @@ export function blocksNav(fu, geom) {
   const def = geom.FURNITURE_KINDS[fu.kind ?? 'block'];
   if (!def) return true;
   if (def.rug) return false;
-  if (fu.kind === 'stairs' || fu.kind === 'stairs_half' || fu.kind === 'stair_landing') return false;
+  if (fu.kind === 'stairs' || fu.kind === 'stairs_half' || fu.kind === 'stair_landing' || fu.kind === 'ramp') return false;
   if (fu.kind === 'bed') return false;
   if (geom.isRiserKind ? geom.isRiserKind(fu.kind) : fu.kind === 'riser_platform') return false;
   if ((fu.elevation ?? 0) >= 300) return false;
@@ -230,7 +230,7 @@ export function buildNavGrid(f, geom) {
   }
 
   const stairsFamily = (f.furniture ?? []).filter(fu =>
-    fu.kind === 'stairs' || fu.kind === 'stairs_half' || fu.kind === 'stair_landing');
+    fu.kind === 'stairs' || fu.kind === 'stairs_half' || fu.kind === 'stair_landing' || fu.kind === 'ramp');
   const onStairTerrain = (wx, wy) => stairsFamily.some(st => {
     const l = furnitureWorldToLocal(st.rotation, wx - st.x, wy - st.y);
     return Math.abs(l.x) <= st.w / 2 && Math.abs(l.y) <= st.h / 2;

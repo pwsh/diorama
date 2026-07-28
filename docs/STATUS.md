@@ -257,6 +257,23 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Stairs rise + autofit + ramp kind** (2026-07-28, user-requested:
+  "steps need a height adjustment or an autofit so they can fit
+  between 2 levels even of short heights with one or 2 steps" + "the
+  2 level fit also needs a ramp option"; unreleased — on main past
+  v0.37.0). Per-piece "Rise (mm)" on stairs-family pieces
+  (`Furniture.ht`, family-scoped via `stairsRiseMm`); tread count
+  from the ONE pure `stairsTreadCount(depth, rise)` rule (min-3
+  clamp capped by rise/130 — 200 mm → 1 step, 350 mm → 2, default
+  flights byte-identical at 13/6) shared by the 3D builder,
+  `_groundYAt` quantization and the 2D glyph; "⇅ Fit between levels"
+  autofit (`Planner.autofitStairs` probing foot/head ground via the
+  pure `resolveItemGroundMm` mirror of `_itemGroundY`, auto-180° on
+  reversed placement, refuses level ends); new `ramp` FurnitureKind —
+  toon wedge + curbs, LINEAR `_groundYAt` branch, full family
+  contract via the now-canonical `isStairsKind` type guard. Test
+  `stairs-fit-test.html` (STAIRSFIT PASS 62/62); terrain 103/103,
+  stairs-descend 23/23, stair-link 25/25 held.
 - **Items follow terrace surfaces + sunken-tier fixes** (2026-07-28,
   user-reported with a real floor plan; released in v0.37.0). `_itemGroundY`
   is now TERRACE-first: free-standing outdoor content (trees,

@@ -37,7 +37,7 @@ import {
   envKindOf, envColor, envValueText, envHeight, envScale,
   INFO_CARD_MOUNT_DEFAULTS, INFO_CARD_SCALE_MIN, INFO_CARD_SCALE_MAX,
   infoCardText, infoCardMount, infoCardHeight, infoCardW, infoCardH, infoCardScale,
-  furnitureCat, type FurnitureCat, isBinKind, isSinkKind, isVehicleKind, isStairsKind, isClimateApplianceKind, isBladedFanKind,
+  furnitureCat, type FurnitureCat, isBinKind, isSinkKind, isVehicleKind, isStairsKind, STAIRS_MIN_RISE_MM, isClimateApplianceKind, isBladedFanKind,
   isMechanicalApplianceKind, mechanicalBindDomains, mechanicalRun,
   closedWallLoops, loopContaining, resolveRoomForPointFuzzy, roomLabel,
   floorsDisplayOrder,
@@ -4834,6 +4834,7 @@ export class Sidebar extends LitElement {
                    piece.elevation = isFinite(v) && v !== 0 ? v : undefined;
                  })}>
         </div>
+        ${isStairsKind(curKind) ? this._stairsFitRows(piece, curKind, upd) : nothing}
         ${isStairsKind(curKind) ? this._stairLinkRow(piece, upd) : nothing}
         <div class="row"><label>Rotation (°)</label>
           <input type="number" step="15" .value=${String(Math.round(piece.rotation ?? 0))}
@@ -4858,6 +4859,39 @@ export class Sidebar extends LitElement {
           Front (backrest, headboard, pillows) faces +Y world at rotation 0.
           Snaps to 15° increments. Corner-resize handles hide while rotated.
         </div>
+      </div>
+    `;
+  }
+
+  // Per-piece RISE + the one-click level fit, on every stairs-family kind
+  // (flights, landings and ramps). The Rise input writes Furniture.ht — blank /
+  // the kind default clears it, so an untouched flight stays exactly as built.
+  // "Fit between levels" reads the ground just beyond each end of the piece and
+  // sizes it to bridge them; its refusal reason shows dim beside the button.
+  @state() private _stairsFitMsg: Record<string, string> = {};
+  private _stairsFitRows(piece: Furniture, curKind: FurnitureKind,
+                         upd: (mut: () => void) => void) {
+    const defHt = FURNITURE_KINDS[curKind].ht;
+    const msg = this._stairsFitMsg[piece.id];
+    return html`
+      <div class="row"><label>Rise (mm)</label>
+        <input type="number" min=${STAIRS_MIN_RISE_MM} step="10" .value=${piece.ht != null ? String(Math.round(piece.ht)) : ''}
+               placeholder=${String(defHt)}
+               title="Total height this flight / ramp climbs, foot to head. Blank = the kind default (${defHt} mm). Steps are laid out from the rise AND the run, so a short rise builds one or two real steps instead of three slivers."
+               @input=${(e: Event) => upd(() => {
+                 const v = parseFloat((e.target as HTMLInputElement).value);
+                 piece.ht = (isFinite(v) && v >= STAIRS_MIN_RISE_MM && Math.round(v) !== defHt) ? v : undefined;
+               })}>
+      </div>
+      <div class="row"><label></label>
+        <button class="btn" style="font-size:10px;padding:2px 6px"
+                title="Read the ground just past each end of the piece and set its elevation + rise to bridge them. If the piece is aimed downhill it is rotated 180° so it still rises from the lower end."
+                @click=${() => {
+                  const reason = this.planner.autofitStairs(piece);
+                  this._stairsFitMsg = { ...this._stairsFitMsg, [piece.id]: reason ?? '' };
+                  this.requestUpdate();
+                }}>⇅ Fit between levels</button>
+        ${msg ? html`<span style="font-size:10px;color:var(--text-dim);margin-left:6px">${msg}</span>` : nothing}
       </div>
     `;
   }

@@ -42,6 +42,7 @@ export type FurnitureKind =
   | 'sofa_l_right'  // L sectional, chaise on the plan-right end
   | 'sofa_u'        // U sectional, returns on both ends
   | 'stairs' | 'stairs_half' | 'stair_landing'  // floor transitions; compose L/U runs
+  | 'ramp'          // accessible slope — a full stairs-family member (STAIRS_KINDS)
   | 'coffee_table' | 'tv_stand' | 'dresser' | 'nightstand' | 'wardrobe'
   | 'ottoman' | 'stool' | 'plant' | 'counter' | 'island' | 'cabinet'
   // appliances
@@ -133,6 +134,12 @@ export interface Furniture {
   rotation?: number;  // degrees, screen-CW (matches motion sensor heading convention); default 0
   elevation?: number; // mm the piece's base sits above the floor (upper stair
                       // flights, items on counters, wall-hung units); default 0
+  ht?: number;        // STAIRS FAMILY ONLY: per-piece RISE (mm) overriding the kind's
+                      // storey-sized default, so a flight can bridge a short level change
+                      // (a 200 mm patio step, a 950 mm sunken yard). Tread count follows
+                      // rise AND depth (geometry.stairsTreadCount); absent / < 50 →
+                      // the kind default, which keeps every untouched flight identical.
+                      // Item-level → no repairFloor change. See stairsRiseMm.
   color?: string;     // hex override of the kind's default tint; undefined = use def color
   locked?: boolean;   // canvas move/resize/rotate/delete disabled
   entity_id?: string | null;  // HA binding for appliances / TV (media_player etc.)

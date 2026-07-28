@@ -10,6 +10,7 @@ import { slugToName, normMac, localToWorld, segCrossesSolidWall, mowerSweepWaypo
          closedWallLoops, envKindOf, tempToCelsius, aggregateRoomTemps,
          bufferPolyline, PATH_DEFAULT_WIDTH, poolHeaterState, poolPumpOn,
          rotPointDeg, floorContentBbox, GRID_MM, rulerSetLength,
+         furnitureLocalToWorld, furnitureDef, resolveItemGroundMm, STAIRS_MIN_RISE_MM,
          type LockGlyphState, type RoomTemp, type TempSample } from './geometry.js';
 import { solveHomography, applyHomography } from './homography.js';
 import { stepFusion, newFusionState, DEFAULT_FUSION_CFG,
@@ -4702,6 +4703,57 @@ export class Planner extends EventTarget {
     if (!a?.stairLinkId) return;
     this._unlinkStairPartners(a.stairLinkId);
     this.save(); this.emitConfig();
+  }
+
+  // ── Fit a stairs-family piece between two ground levels ────────────────────
+  // Reads the GROUND at each end of the flight/ramp and sizes it to bridge them
+  // in ONE edit (one save → one undo step).
+  //
+  //   • Steps rise toward local +Z, so the FOOT is sampled just beyond the −Z
+  //     edge and the HEAD just beyond +Z — both at (depth/2 + AUTOFIT_PROBE_MM)
+  //     along the piece's rotated local Z, i.e. on the landings the flight
+  //     actually meets, not under its own footprint (which is its own terrain).
+  //   • Ground comes from the pure resolveItemGroundMm — the app-side mirror of
+  //     the renderer's _itemGroundY — so terraces, the surroundings grade and
+  //     the floor's own elevation above the world ground plane all compose
+  //     exactly as they do in the scene.
+  //   • elevation = the LOWER end's ground. Stairs are exempt from automatic
+  //     ground-following (HOUSE_MOUNTED_FURNITURE_KINDS), so `elevation` IS the
+  //     base height and must carry the grade itself.
+  //   • ht = the rise. A NEGATIVE difference means the piece is aimed downhill:
+  //     it is rotated 180° so it still rises from the true lower end.
+  //   • Ends closer than STAIRS_MIN_RISE_MM are refused (returns a reason)
+  //     rather than producing a degenerate near-zero-rise piece.
+  //
+  // Returns null on success, a human-readable reason when it refuses.
+  static readonly AUTOFIT_PROBE_MM = 150;
+  autofitStairs(piece: { id: string }): string | null {
+    if (this.uiMode !== 'edit') return 'editing is disabled in this mode';
+    const f = this.floor();
+    const fu = f.furniture.find(o => o.id === piece.id);
+    if (!fu) return 'piece not found';
+    if (!isStairsKind(fu.kind)) return 'not a stairs or ramp piece';
+    if (fu.locked) return 'piece is locked';
+    const reach = fu.h / 2 + Planner.AUTOFIT_PROBE_MM;
+    const gAt = (ly: number) => {
+      const d = furnitureLocalToWorld(fu.rotation, 0, ly);
+      return resolveItemGroundMm(f, this.store.floors, this.store.scene3d?.groundLevelMm,
+                                 fu.x + d.x, fu.y + d.y);
+    };
+    const footG = gAt(-reach), headG = gAt(reach);
+    const diff = headG - footG;
+    if (!isFinite(diff)) return 'could not read the ground at both ends';
+    if (Math.abs(diff) < STAIRS_MIN_RISE_MM) {
+      return `ends are level (${Math.round(footG)} mm at both ends)`;
+    }
+    const base = diff > 0 ? footG : headG;
+    fu.elevation = base !== 0 ? Math.round(base) : undefined;
+    const rise = Math.round(Math.abs(diff));
+    const defHt = furnitureDef(fu).ht;
+    fu.ht = rise === defHt ? undefined : rise;
+    if (diff < 0) fu.rotation = (((fu.rotation ?? 0) + 180) % 360 + 360) % 360;
+    this.save(); this.emitConfig();
+    return null;
   }
 
   // Strip a stairLinkId off EVERY piece across ALL floors carrying it.

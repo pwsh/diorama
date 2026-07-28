@@ -226,7 +226,7 @@ function bestWeldTarget(f: WeldWalls,
 //      perpendicular gap, preserving your placement ALONG the edge — so a
 //      flight can meet a wider landing mid-edge.
 // Position-only — elevation stays manual. Locked pieces never move.
-const STAIR_KINDS = new Set(['stairs', 'stairs_half', 'stair_landing']);
+const STAIR_KINDS = new Set(['stairs', 'stairs_half', 'stair_landing', 'ramp']);
 
 type StairPiece = { id: string; x: number; y: number; w: number; h: number;
                     kind?: string; rotation?: number; locked?: boolean };

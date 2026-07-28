@@ -24,7 +24,7 @@ import {
   isMechanicalApplianceKind, isPumpKind, mechanicalRun, mechanicalGlowColor,
   isDroopPlant, plantThirsty, PLANT_MOISTURE_DEFAULT_THRESHOLD,
   isVehicleKind, evStatusOf, evStatusColor, evChargePercent, carChargeState,
-  isStairsKind, stairChipArrow,
+  isStairsKind, stairChipArrow, stairsRiseMm, stairsTreadCount, FURNITURE_KINDS,
   doorEndpoint, doorOpenDeltaDeg, doorOpenFraction, doorSpanCenter, windowEndpoints, wallCutsForSegment, wallKind,
   ENV_KINDS, envKindOf, envColor, envValueText, envScale,
   infoCardText, infoCardRule, infoCardScale, infoCardMount,
@@ -4458,7 +4458,9 @@ export function drawFurniturePrimitiveLocal(
       fill('rgba(141,110,99,0.4)');
       stroke('#a1887f');
       ctx.strokeStyle = '#8d6e63'; ctx.lineWidth = 1;
-      const nSteps = Math.max(3, Math.round(piece.h / 280));
+      // Same shared rule the 3D builder + _groundYAt use, so the plan symbol
+      // never shows a different number of treads than you can walk on.
+      const nSteps = stairsTreadCount(piece.h, stairsRiseMm(piece, FURNITURE_KINDS[kind].ht));
       for (let i = 1; i < nSteps; i++) {
         const ty = y + (h * i) / nSteps;
         ctx.beginPath(); ctx.moveTo(x + 2, ty); ctx.lineTo(x + w - 2, ty); ctx.stroke();
@@ -4483,6 +4485,30 @@ export function drawFurniturePrimitiveLocal(
         ctx.fillStyle = '#eceff1'; ctx.font = '9px sans-serif';
         ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
         ctx.fillText('DN', ax, y + h * 0.5);
+      }
+      break;
+    }
+    case 'ramp': {
+      // Plan symbol: the footprint plus evenly spaced chevrons pointing at the
+      // HIGH end (local +Z = plan-top, the same rise direction as a flight).
+      fill('rgba(141,110,99,0.4)');
+      stroke('#a1887f');
+      const down = (piece.elevation ?? 0) < 0;
+      ctx.strokeStyle = '#eceff1'; ctx.lineWidth = 1.5;
+      const cxr = x + w / 2, half = Math.min(w * 0.28, 9);
+      for (let i = 0; i < 3; i++) {
+        // t runs foot → head; a sunk ramp flips so the chevrons point DOWN.
+        const t = 0.28 + i * 0.22;
+        const cy = down ? y + h * (1 - t) : y + h * t;
+        const tip = down ? cy + 7 : cy - 7;
+        ctx.beginPath();
+        ctx.moveTo(cxr - half, cy); ctx.lineTo(cxr, tip); ctx.lineTo(cxr + half, cy);
+        ctx.stroke();
+      }
+      if (down) {
+        ctx.fillStyle = '#eceff1'; ctx.font = '9px sans-serif';
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText('DN', cxr, y + h * 0.86);
       }
       break;
     }
