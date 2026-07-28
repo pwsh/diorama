@@ -1,6 +1,6 @@
 # Project status & pick-up guide
 
-Last updated: 2026-07-27, at **v0.36.0**. This is the single document to
+Last updated: 2026-07-28, at **v0.37.0**. This is the single document to
 read (alongside `CLAUDE.md`) to resume work with full context.
 
 ## Where things stand
@@ -244,11 +244,21 @@ instance.
   piecewise-linear flight distance mapping — near field proportional
   (6.5 nm → 97 m not the backyard, 2 nm → 30 m not over the house),
   anchors bit-exact, draw-radius knob made genuinely perceptible).
+  → v0.37.0 lay of the land (fixed world ground plane — per-floor
+  Floor.elevationMm w/ auto story stacking, one effGroundMm injection
+  site, elevation-driven ghost stack, camera dy compensation on floor
+  switches, flight shell anchored to grade; yard walls/fences/gates
+  follow the grade via wallSegmentInLoops loop-membership; terrace-
+  first _itemGroundY — free-standing items settle onto sunken/raised
+  yard areas, enclosure-based groundAreaSkirtBase; central camera
+  pivot + pivot-lock × free-movement matrix w/ custom rigid rotate
+  gesture; focusin cooling — renaming can't delete the selection;
+  camera-facing grass bg-text).
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
 - **Items follow terrace surfaces + sunken-tier fixes** (2026-07-28,
-  user-reported with a real floor plan; unreleased). `_itemGroundY`
+  user-reported with a real floor plan; released in v0.37.0). `_itemGroundY`
   is now TERRACE-first: free-standing outdoor content (trees,
   furniture + SitSpot seatY, ground lights, flagpoles, docks,
   cameras, valves, projectors, leak pucks, geo sprites, fence
@@ -266,7 +276,7 @@ instance.
   Floor.elevationMm 800 (effective grade +1 mm).
 
 - **Yard walls follow the grade** (2026-07-27, user-reported;
-  unreleased). With per-floor elevations, a newly drawn wall in the
+  released in v0.37.0). With per-floor elevations, a newly drawn wall in the
   yard floated at the slab plane while the ground sat a story below.
   New per-segment base rule `_wallSegmentBaseY`: fence family
   (picket/privacy/chainlink/hedge) always bases at the grade
@@ -282,7 +292,7 @@ instance.
   67→86, fence-gate 32→37, window 15/15 green.
 
 - **Grass writing faces the camera** (2026-07-27, user request;
-  unreleased). The grass bg-text decal stays flat on the lawn but
+  released in v0.37.0). The grass bg-text decal stays flat on the lawn but
   yaws about its rect centre to track the camera — text-top away
   from the viewer (page-on-the-floor), never mirrored
   (`cross(right, up) = +Y` asserted at 4 azimuths), shortest-arc
@@ -294,7 +304,7 @@ instance.
   re-verified.
 
 - **Focusin cooling — renaming a yard area no longer deletes it**
-  (2026-07-27, user-reported; unreleased). The in-input Delete was
+  (2026-07-27, user-reported; released in v0.37.0). The in-input Delete was
   already guarded, but the selection stayed HOT through a typing
   session — after any blur, Backspace hit the body and
   deleteSelection removed the still-selected area. canvas-2d's new
@@ -308,7 +318,7 @@ instance.
 
 - **Fixed world ground plane + per-floor elevations** (2026-07-27,
   user-reported: "the ground plane changes depending on which floor
-  is selected; glass view has a different offset"; unreleased).
+  is selected; glass view has a different offset"; released in v0.37.0).
   `Floor.elevationMm` (repairFloor list; absent = AUTO = full-array
   index × STORY_H_MM 3000; negative = basement; ground may bisect a
   floor; sidebar "Elevation above ground (mm)" w/ auto placeholder)
@@ -325,7 +335,7 @@ instance.
   16→22, floors-view 67→86, camera 60/60, stair-link 25/25.
 
 - **Pivot lock × free movement as two independent options**
-  (2026-07-27, follow-up to the bullet below; unreleased).
+  (2026-07-27, follow-up to the bullet below; released in v0.37.0).
   `Scene3D.cameraPivot` is DEPRECATED (still read for back-compat)
   in favour of `pivotLocked` (absent = true) + `freeMovement`
   (absent = false), resolved by the pure `resolvePivotMode`
@@ -339,7 +349,7 @@ instance.
 - **Central camera pivot (new default) + free-movement mode**
   (2026-07-27, user-reported: "pivot point doesn't stay at the
   property centre; sliding the map moves it and it's hard to
-  recenter"; unreleased). `Scene3D.cameraPivot` ('center' default /
+  recenter"; released in v0.37.0). `Scene3D.cameraPivot` ('center' default /
   'free'): center = pan disabled + per-frame ease of target x/z to
   the plan centre (camera translated by the identical delta so the
   pose is preserved; snap <1 mm; y untouched); pivot = current
@@ -351,7 +361,7 @@ instance.
 
 - **Near-field flight compression fix + real draw-radius knob**
   (2026-07-27, user-reported: "6.5 nm renders in the backyard, 2 nm
-  over the house; draw distance changes nothing"; unreleased). Two
+  over the house; draw distance changes nothing"; released in v0.37.0). Two
   reversals, both reasoning-pinned in CLAUDE.md: (1) the radial
   power law u^P collapsed the near field (6.5 of 15 nm → 24 % of
   shell, 2 nm → 3 %) — replaced by PIECEWISE-LINEAR through the same
@@ -367,8 +377,7 @@ instance.
   lever. flights 561→577; render 393 + ui 271 green.
 
 - **Card scene controls, layers multi-select, bgText layer,
-  attribution gating** (2026-07-27, user request; unreleased — on
-  main past v0.35.0). (1) Card visual editor: Layers = preset
+  attribution gating** (2026-07-27, user request; released in v0.36.0). (1) Card visual editor: Layers = preset
   dropdown ((unchanged)/Full/Simple/saved presets/Custom…) with a
   Custom… checkbox grid emitting an explicit `{layer: bool}` object
   (config `layers` now string OR object; object applies immediately
@@ -389,7 +398,7 @@ instance.
   hidden). card-test 38→92, bgtext-multi 102→112, sensor-focus 9/9.
 
 - **Card visual-editor "No type provided" fix** (2026-07-27,
-  user-reported; unreleased — on main past v0.35.0).
+  user-reported; released in v0.36.0).
   `validateCardConfig` rebuilt the config without `type`, so the
   editor's every config-changed emit was type-less and HA rejected
   it (YAML with an explicit type worked until the visual editor
@@ -401,7 +410,7 @@ instance.
 
 - **Mobile flight tap fix + About block** (2026-07-27, user-reported:
   "tapping planes in the HA phone app doesn't show the info card";
-  unreleased). Two compounding 3D-view causes: the manual
+  released in v0.37.0). Two compounding 3D-view causes: the manual
   pointerdown/up tap gate discarded finger taps (5 px slop; a finger
   wobbles more) and exact-geometry raycasting can't hit a few-px
   dart. Fix: pointer-type-aware gate (touch 12 px / 600 ms = the
@@ -416,7 +425,7 @@ instance.
 
 - **User-definable flight draw radius** (2026-07-27, user request:
   "max draw distance needs to be doubled or tripled; make a user
-  definable draw radius aircraft scale into"; unreleased — on main
+  definable draw radius aircraft scale into"; released in v0.35.0 — on main
   past v0.34.0). `FlightsConfig.shellRadiusM` (Settings ▸ Flight
   tracking "Draw radius (m)", clamp 60–1000, **default 300** = 2.5×
   the old fixed 120 m shell; exactly-default → undefined in
@@ -667,7 +676,7 @@ instance.
   gps 28/28, compass 54/54, record-pin 53/53, render/ui suites green.
 
 - **Flight fields, archetype models, beacons & label customization**
-  (2026-07-25, unreleased on main; research
+  (2026-07-25, released in v0.34.0; research
   `docs/research/flight-fields-models.md` + 2 sequential Opus waves).
   Wave 1 data: `FlightPoint` gained reg/typeCode/typeDesc/operator/
   emergency/squawk + interesting/pia/ladd (dbFlags bits 2/4/8);
