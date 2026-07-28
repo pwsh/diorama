@@ -1,6 +1,6 @@
 # Project status & pick-up guide
 
-Last updated: 2026-07-28, at **v0.37.0**. This is the single document to
+Last updated: 2026-07-28, at **v0.38.0**. This is the single document to
 read (alongside `CLAUDE.md`) to resume work with full context.
 
 ## Where things stand
@@ -254,6 +254,13 @@ instance.
   pivot + pivot-lock × free-movement matrix w/ custom rigid rotate
   gesture; focusin cooling — renaming can't delete the selection;
   camera-facing grass bg-text).
+  → v0.38.0 set in stone (stairs rise + fit-between-levels — per-piece
+  Rise (mm), stairsTreadCount(depth, rise) one-rule 1–2-step short
+  flights, ⇅ autofit via resolveItemGroundMm w/ auto-180°, new ramp
+  FurnitureKind w/ linear _groundYAt slope; ground writing — area-bound
+  bg-text truly clipped to the area's polygon, transparent texture over
+  the area's own material, groundTextInk per-kind palette, camera-facing
+  via texture rotation, "Ground writing" label).
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
@@ -261,7 +268,7 @@ instance.
   user-requested: "it should truly constrain to the geometry of that
   area and not just draw a box… It should also use the material of
   the area being chosen" + label rename to "Ground writing";
-  unreleased — on main past v0.37.0). Area-bound bg-text decals are
+  released in v0.38.0). Area-bound bg-text decals are
   now the area's real polygon (ShapeGeometry, index-matched to the
   `updateGroundAreas` patch mapping) with a TRANSPARENT texture so
   the area's own material shows through; text ink from the pure
@@ -276,8 +283,7 @@ instance.
 - **Stairs rise + autofit + ramp kind** (2026-07-28, user-requested:
   "steps need a height adjustment or an autofit so they can fit
   between 2 levels even of short heights with one or 2 steps" + "the
-  2 level fit also needs a ramp option"; unreleased — on main past
-  v0.37.0). Per-piece "Rise (mm)" on stairs-family pieces
+  2 level fit also needs a ramp option"; released in v0.38.0). Per-piece "Rise (mm)" on stairs-family pieces
   (`Furniture.ht`, family-scoped via `stairsRiseMm`); tread count
   from the ONE pure `stairsTreadCount(depth, rise)` rule (min-3
   clamp capped by rise/130 — 200 mm → 1 step, 350 mm → 2, default
