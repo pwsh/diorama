@@ -141,6 +141,67 @@
   ok('nav_fence_blocks', blockedAt(2000, wallY), `cell=${cellIdx(2000, wallY)}`);
   ok('nav_gate_walkable', !blockedAt(6000, wallY), `cell=${cellIdx(6000, wallY)}`);
 
+  // === 9. Fences ride the surroundings grade; gates hang with them ========
+  // Fence-family kinds are yard structures — with a per-floor elevation the
+  // grade can sit a whole storey below the slab, and a fence floating up there
+  // is exactly the reported bug. Needs a closed wall loop on the floor: with no
+  // loops at all `_outdoors` reads the whole rect as INDOORS (documented), so
+  // nothing moves — asserted below too.
+  {
+    const GL = -3000;
+    const FWx = 12000, FDx = 5000;
+    const houseLoop = [
+      { x: 500, y: 500 }, { x: 3000, y: 500 }, { x: 3000, y: 2000 },
+      { x: 500, y: 2000 }, { x: 500, y: 500 },
+    ];
+    const houseWall = { id: 'hw', kind: 'full', points: houseLoop };
+    const yardFence = { id: 'yf', kind: 'fence_picket', points: [{ x: 6000, y: 4000 }, { x: 10000, y: 4000 }] };
+    const yardGate  = { id: 'yg', x: 7000, y: 4000, w: 900, rotation: 0, kind: 'gate', entity_id: null };
+    const mkFloorG = (walls) => ({ ...mkFloor(walls, [yardGate]), w: FWx, d: FDx });
+    const realMeshes = (o) => { const a = []; o.traverse(m => { if (m.isMesh && !m.userData?.outline) a.push(m); }); return a; };
+    const baseYOf = (o) => {
+      let lo = Infinity;
+      for (const m of realMeshes(o)) {
+        m.geometry.computeBoundingBox();
+        let y = m.position.y + m.geometry.boundingBox.min.y, p = m.parent;
+        while (p && p !== o) { y += p.position.y; p = p.parent; }
+        if (y < lo) lo = y;
+      }
+      return lo;
+    };
+    const groupAt = (wx, wy, tol = 900) => {
+      const sx = FWx / 2 - wx, sz = wy - FDx / 2;
+      for (const g of r._floorGroup.children) {
+        if (g.type !== 'Group') continue;
+        let hit = false;
+        g.traverse(o => { if (o.isMesh && Math.hypot(o.position.x - sx, o.position.z - sz) < tol) hit = true; });
+        if (hit) return g;
+      }
+      return null;
+    };
+    const run = (gl, walls) => {
+      r.updateFloor(mkFloorG(walls), gl === 0 ? scene3d : { ...scene3d, groundLevelMm: gl });
+      r.updateDoorsWindows([yardGate], [], () => null);
+    };
+    run(GL, [houseWall, yardFence]);
+    const fy = baseYOf(groupAt(6000, 4000));
+    ok('grade_fence_follows', Math.abs(fy - GL) < 1, String(fy));
+    ok('grade_house_wall_stays', Math.abs(baseYOf(groupAt(3000, 2000))) < 1,
+       String(baseYOf(groupAt(3000, 2000))));
+    const gh = r._doorGroup.children[0];
+    ok('grade_gate_hangs_in_fence', Math.abs(gh.position.y - GL) < 1, String(gh.position.y));
+    // No closed loop → nothing is "outdoors" → the whole build is unchanged.
+    run(GL, [yardFence]);
+    ok('grade_no_loops_no_move', Math.abs(baseYOf(groupAt(6000, 4000))) < 1
+       && r._doorGroup.children[0].position.y === 0, String(baseYOf(groupAt(6000, 4000))));
+    // Ground level 0 → byte-identical to the pre-change build.
+    run(0, [houseWall, yardFence]);
+    const ys = new Set(realMeshes(groupAt(6000, 4000)).map(m => Math.round(m.position.y)));
+    ok('grade_zero_identical', Math.abs(baseYOf(groupAt(6000, 4000))) < 1
+       && ys.has(550) && ys.has(920) && r._doorGroup.children[0].position.y === 0,
+       [...ys].sort((a, b) => a - b).join(','));
+  }
+
   const n = results.length, pcount = results.filter(x => x.startsWith('ok')).length;
   const pass = pcount === n;
   document.title = `FENCEGATE ${pass ? 'PASS' : 'FAIL'} ${pcount}/${n} ${results.filter(x=>x.startsWith('FAIL')).join(' ')}`;

@@ -247,6 +247,22 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Yard walls follow the grade** (2026-07-27, user-reported;
+  unreleased). With per-floor elevations, a newly drawn wall in the
+  yard floated at the slab plane while the ground sat a story below.
+  New per-segment base rule `_wallSegmentBaseY`: fence family
+  (picket/privacy/chainlink/hedge) always bases at the grade
+  (`_itemGroundY` at segment midpoint); solid kinds (full/half/
+  railing) follow the grade only when free-standing — the pure
+  `wallSegmentInLoops` (geometry.ts, 25 mm weld, exact
+  adjacent-pair + sampled-union superset for tee-split perimeter
+  walls) runs first so house walls stay slab-based. Doors/windows
+  inherit the host segment's base via `_wallSegBases` +
+  `_openingBaseY` (hinge/pane group offset — panels, slats, gate
+  pickets, deadbolts, shades, curtains ride along); `_keyDoors`
+  carries effGroundMm. Zero-grade configs byte-identical. terrain
+  67→86, fence-gate 32→37, window 15/15 green.
+
 - **Grass writing faces the camera** (2026-07-27, user request;
   unreleased). The grass bg-text decal stays flat on the lawn but
   yaws about its rect centre to track the camera — text-top away

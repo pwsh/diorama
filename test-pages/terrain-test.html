@@ -610,6 +610,125 @@
     r.updateFloor(mkFloor([], { walls: walls2 }), scene);
   }
 
+  // ── J: WALLS follow the world ground plane — but only yard structure ──────
+  // Fence-family kinds always ride the grade; solid kinds (full/half/railing)
+  // ride it only when FREE-STANDING (no closed-loop membership) and outdoors.
+  // The loop test must win over the outdoors test, or the whole house envelope
+  // (whose midpoints sit ON the loop boundary, which pointInPolygon excludes)
+  // would sink a storey. Doors/windows inherit their host segment's base.
+  {
+    const GL = -3000;                       // one storey — the reported case
+    const near = (a, b, tol = 1e-6) => Math.abs(a - b) <= tol;
+    const houseLoopJ = [
+      { x: 3000, y: 3000 }, { x: 7000, y: 3000 }, { x: 7000, y: 6000 },
+      { x: 3000, y: 6000 }, { x: 3000, y: 3000 },
+    ];
+    const houseWallJ = { id: 'hwJ', kind: 'full', points: houseLoopJ };
+    const yardWallJ  = { id: 'ywJ', kind: 'full', points: [{ x: 9500, y: 8500 }, { x: 11500, y: 8500 }] };
+    const fenceJ     = { id: 'fwJ', kind: 'fence_picket', points: [{ x: 500, y: 8500 }, { x: 4000, y: 8500 }] };
+    const teeJ       = { id: 'twJ', kind: 'full', points: [{ x: 5000, y: 3000 }, { x: 5000, y: 6000 }] };
+    const gateJ      = { id: 'gJ', x: 1600, y: 8500, w: 900, rotation: 0, kind: 'gate', entity_id: null };
+    const houseDoorJ = { id: 'hdJ', x: 5600, y: 6000, w: 900, rotation: 0, kind: 'swing', entity_id: null };
+    const wallsJ  = [houseWallJ, yardWallJ, fenceJ];
+    const loopsJ  = G.closedWallLoops(wallsJ);
+    const loopsT  = G.closedWallLoops([houseWallJ, teeJ, yardWallJ, fenceJ]);
+    const seg = (ax, ay, bx, by) => [{ x: ax, y: ay }, { x: bx, y: by }];
+
+    // Pure: wallSegmentInLoops.
+    ok('J1 a house-loop segment is a loop member',
+       G.wallSegmentInLoops(...seg(3000, 3000, 7000, 3000), loopsJ), `loops=${loopsJ.length}`);
+    ok('J2 membership is direction-agnostic (b→a matches too)',
+       G.wallSegmentInLoops(...seg(7000, 3000, 3000, 3000), loopsJ));
+    ok('J3 a free-standing yard polyline is NOT a member',
+       !G.wallSegmentInLoops(...seg(9500, 8500, 11500, 8500), loopsJ));
+    ok('J4 a yard fence run is NOT a member',
+       !G.wallSegmentInLoops(...seg(500, 8500, 4000, 8500), loopsJ));
+    ok('J5 endpoints off by <25 mm still weld onto the loop edge',
+       G.wallSegmentInLoops(...seg(3020, 3000, 6980, 3012), loopsJ));
+    ok('J6 endpoints off by 200 mm do not',
+       !G.wallSegmentInLoops(...seg(3000, 3200, 7000, 3200), loopsJ));
+    ok('J7 no loops at all → never a member',
+       !G.wallSegmentInLoops(...seg(3000, 3000, 7000, 3000), []));
+    ok('J8 a wall SPLIT by an interior tee is still a member (coverage path)',
+       G.wallSegmentInLoops(...seg(3000, 3000, 7000, 3000), loopsT), `loops=${loopsT.length}`);
+    ok('J9 wallInLoops convenience: house wall yes, yard wall no',
+       G.wallInLoops(houseWallJ, loopsJ) && !G.wallInLoops(yardWallJ, loopsJ));
+
+    // Renderer: base heights.
+    const realMeshes = (o) => {
+      const a = []; o.traverse(m => { if (m.isMesh && !m.userData?.outline) a.push(m); }); return a;
+    };
+    const baseYOf = (o) => {
+      let lo = Infinity;
+      for (const m of realMeshes(o)) {
+        m.geometry.computeBoundingBox();
+        let y = m.position.y + m.geometry.boundingBox.min.y;
+        let p = m.parent;
+        while (p && p !== o) { y += p.position.y; p = p.parent; }
+        if (y < lo) lo = y;
+      }
+      return lo;
+    };
+    const wallGroupAt = (wx, wy, tol = 900) => {
+      const sx = FW / 2 - wx, sz = wy - FD / 2;
+      for (const g of r._floorGroup.children) {
+        if (g.type !== 'Group') continue;
+        let hit = false;
+        g.traverse(o => {
+          if (o.isMesh && Math.hypot(o.position.x - sx, o.position.z - sz) < tol) hit = true;
+        });
+        if (hit) return g;
+      }
+      return null;
+    };
+    const hingeAt = (dx) => r._doorGroup.children.find(
+      c => Math.abs(c.position.x - (FW / 2 - dx)) < 1);
+    const applyJ = (gl, walls = wallsJ) => {
+      r.updateFloor(mkFloor([], { walls }), gl === 0 ? scene : { ...scene, groundLevelMm: gl });
+      r.updateDoorsWindows([gateJ, houseDoorJ], [], () => null);
+    };
+
+    applyJ(GL);
+    ok('J10 a yard FENCE segment bases on the grade',
+       near(baseYOf(wallGroupAt(500, 8500)), GL, 1), `y=${baseYOf(wallGroupAt(500, 8500))}`);
+    ok('J11 a FREE-STANDING solid wall in the yard bases on the grade',
+       near(baseYOf(wallGroupAt(9500, 8500)), GL, 1), `y=${baseYOf(wallGroupAt(9500, 8500))}`);
+    ok('J12 a closed-loop HOUSE wall stays on the slab (loop test beats outdoors)',
+       near(baseYOf(wallGroupAt(7000, 6000)), 0, 1), `y=${baseYOf(wallGroupAt(7000, 6000))}`);
+    ok('J13 a gate on the yard fence hangs at the FENCE base, not the slab',
+       near(hingeAt(1600)?.position.y, GL, 1), `y=${hingeAt(1600)?.position.y}`);
+    ok('J14 a door in the house wall stays at the slab',
+       near(hingeAt(5600)?.position.y, 0, 1), `y=${hingeAt(5600)?.position.y}`);
+
+    // The tee-split regression: an interior partition splits the perimeter wall
+    // into several loop edges — it must STILL read as house structure.
+    applyJ(GL, [houseWallJ, teeJ, yardWallJ, fenceJ]);
+    ok('J15 a perimeter wall split by an interior tee still stays on the slab',
+       near(baseYOf(wallGroupAt(7000, 6000)), 0, 1), `y=${baseYOf(wallGroupAt(7000, 6000))}`);
+
+    // Ground level 0 → every wall back on the slab, at the pre-change numbers.
+    applyJ(0);
+    const fenceGrp0 = wallGroupAt(500, 8500), yardGrp0 = wallGroupAt(9500, 8500);
+    ok('J16 at ground 0 every wall bases at 0 (fence, yard wall, house wall)',
+       near(baseYOf(fenceGrp0), 0, 1) && near(baseYOf(yardGrp0), 0, 1)
+       && near(baseYOf(wallGroupAt(7000, 6000)), 0, 1),
+       `fence=${baseYOf(fenceGrp0)} yard=${baseYOf(yardGrp0)}`);
+    // Pre-change constants: picket posts span 0..1100 → centre 550; the top rail
+    // spans 880..960 → centre 920; a solid wall extrusion sits at y = 0.
+    const ys0 = new Set(realMeshes(fenceGrp0).map(m => Math.round(m.position.y)));
+    ok('J17 at ground 0 the picket mesh heights are byte-identical (550 / 920)',
+       ys0.has(550) && ys0.has(920), [...ys0].sort((a, b) => a - b).join(','));
+    ok('J18 at ground 0 the free-standing solid wall extrusion still sits at y=0',
+       realMeshes(yardGrp0).every(m => m.position.y === 0),
+       realMeshes(yardGrp0).map(m => m.position.y).join(','));
+    ok('J19 at ground 0 both openings hang at the slab',
+       hingeAt(1600)?.position.y === 0 && hingeAt(5600)?.position.y === 0,
+       `${hingeAt(1600)?.position.y},${hingeAt(5600)?.position.y}`);
+    // Restore.
+    r.updateFloor(mkFloor([]), scene);
+    r.updateDoorsWindows([], [], () => null);
+  }
+
   let pass = 0; const fails = [];
   for (const t of tests) { if (t.ok) pass++; else fails.push(t.name); }
   const total = tests.length, allPass = pass === total;

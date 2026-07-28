@@ -1208,7 +1208,12 @@ export class ThreeView extends LitElement {
         const pos = (s.attributes as Record<string, unknown> | undefined)?.current_position;
         return typeof pos === 'number' ? `${s.state}:${Math.round(pos / 5)}` : s.state;
       };
-      const keyDoors = `${p.configRev}|` +
+      // effGroundMm is folded in explicitly: door / window panels inherit their
+      // host wall segment's vertical base, and a free-standing (yard) wall now
+      // follows the surroundings grade. configRev + the floor-switch key clear
+      // already cover every way the effective level can change today — this is
+      // belt-and-braces so the two builders can never disagree about the grade.
+      const keyDoors = `${p.configRev}|${effGroundMm}|` +
         f.doors.map(d => `${openKey(d.entity_id)}:${stOf(d.lockEntity)}:${d.lockControl === 'display' ? 'd' : 'f'}`).join(',') + '|' +
         f.windows.map(w => `${openKey(w.entity_id)}:${openKey(w.coverEntity)}:${openKey(w.curtain?.entityId)}`).join(',');
       if (keyDoors !== this._keyDoors) {

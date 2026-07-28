@@ -377,6 +377,85 @@ export function closedWallLoops(walls: { points: Vec2[] }[]): Vec2[][] {
   return out;
 }
 
+// Is the wall SEGMENT a→b part of the building envelope, i.e. does it bound one
+// of the closed wall loops `closedWallLoops` traced? Pure; loops are the ones
+// that function returned (vertices are welded node positions, no repeated first
+// point — adjacency wraps).
+//
+// Used by the 3D wall builder to decide whether a wall follows the surroundings
+// grade (free-standing yard structure) or stays on the slab (house structure).
+// It must run BEFORE any "is the midpoint outdoors" test: a perimeter wall's own
+// midpoint lies exactly ON its loop boundary, and pointInPolygon EXCLUDES the
+// boundary, so an outdoors-only predicate would read the whole house envelope as
+// "outside" and sink it to the grade.
+//
+// Two ways a segment can be a member:
+//  1. Exact edge match — some adjacent loop pair (u, v) has a≈u and b≈v (either
+//     direction), within the same 25 mm weld closedWallLoops uses to heal the
+//     small gaps baked into saved plans.
+//  2. Boundary coverage — closedWallLoops SPLITS a wall at every T-junction and
+//     crossing node, so a perimeter wall carrying an interior partition tee
+//     appears as two or more shorter edges (often in DIFFERENT loops: the tee
+//     splits the room in two, and each half-wall bounds its own room) and can
+//     never match (1). A segment whose whole extent runs along the UNION of the
+//     loop boundaries (sampled) is a member too. (1) is a strict subset of (2);
+//     it is kept as the cheap exact path.
+export function wallSegmentInLoops(
+  a: Vec2, b: Vec2, loops: Vec2[][], weldMm = 25,
+): boolean {
+  if (!loops.length) return false;
+  const w2 = weldMm * weldMm;
+  const d2 = (p: Vec2, q: Vec2) => {
+    const dx = p.x - q.x, dy = p.y - q.y;
+    return dx * dx + dy * dy;
+  };
+  // Squared distance from (px, py) to the closed polyline `lp`.
+  const distToLoop2 = (px: number, py: number, lp: Vec2[]): number => {
+    let best = Infinity;
+    for (let i = 0, n = lp.length; i < n; i++) {
+      const u = lp[i], v = lp[(i + 1) % n];
+      const dx = v.x - u.x, dy = v.y - u.y, len2 = dx * dx + dy * dy;
+      let t = len2 > 0 ? ((px - u.x) * dx + (py - u.y) * dy) / len2 : 0;
+      t = t < 0 ? 0 : t > 1 ? 1 : t;
+      const qx = u.x + t * dx - px, qy = u.y + t * dy - py;
+      const d = qx * qx + qy * qy;
+      if (d < best) best = d;
+    }
+    return best;
+  };
+  for (const lp of loops) {
+    if (lp.length < 3) continue;
+    for (let i = 0, n = lp.length; i < n; i++) {
+      const u = lp[i], v = lp[(i + 1) % n];
+      if ((d2(a, u) <= w2 && d2(b, v) <= w2) || (d2(a, v) <= w2 && d2(b, u) <= w2)) return true;
+    }
+  }
+  const SAMPLES = 16;   // 17 points t = 0, 1/16 … 1 along the segment
+  for (let k = 0; k <= SAMPLES; k++) {
+    const t = k / SAMPLES;
+    const px = a.x + (b.x - a.x) * t, py = a.y + (b.y - a.y) * t;
+    let nearAny = false;
+    for (const lp of loops) {
+      if (lp.length < 3) continue;
+      if (distToLoop2(px, py, lp) <= w2) { nearAny = true; break; }
+    }
+    if (!nearAny) return false;
+  }
+  return true;
+}
+
+// Convenience: does ANY segment of this wall polyline bound a closed loop?
+// (A wall is "free-standing" only when none of its segments does.)
+export function wallInLoops(
+  wall: { points: Vec2[] }, loops: Vec2[][], weldMm = 25,
+): boolean {
+  const pts = wall.points ?? [];
+  for (let i = 0; i < pts.length - 1; i++) {
+    if (wallSegmentInLoops(pts[i], pts[i + 1], loops, weldMm)) return true;
+  }
+  return false;
+}
+
 // ── Rooms ────────────────────────────────────────────────────────────────
 // A room is a name + anchor point; the room IS whichever closed wall loop
 // currently contains the anchor. These two helpers resolve that live.

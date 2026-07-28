@@ -85,7 +85,7 @@ interface RobotRig {
   progressGroup: THREE.Group;       // toggled visible on/off by source presence
   progressMats: THREE.MeshToonMaterial[]; // ordered fill segments (strip L→R / ring CW)
 }
-import { wallCutsForSegment, WINDOW_DEFAULTS, closedWallLoops, wallKind, WALL_KINDS, furnitureLocalToWorld, furnitureWorldToLocal, pointInPolygon as pip, centroid, loopContaining, resolveRoomForPoint, roomLabel, intersectLoopWithRect, polygonArea, heatmapColor, groundAreaSkirtBase, poolWaterColor, poolDepthMm, poolRaisedMm, poolHeaterState, poolPumpOn, poolLightOn, poolRimY, poolBasinFloorY, poolWaterSurfaceY, POOL_COPING_COLOR, POOL_HEAT_GLOW, type RoomTemp } from './geometry.js';
+import { wallCutsForSegment, WINDOW_DEFAULTS, closedWallLoops, wallSegmentInLoops, doorSpanCenter, wallKind, WALL_KINDS, furnitureLocalToWorld, furnitureWorldToLocal, pointInPolygon as pip, centroid, loopContaining, resolveRoomForPoint, roomLabel, intersectLoopWithRect, polygonArea, heatmapColor, groundAreaSkirtBase, poolWaterColor, poolDepthMm, poolRaisedMm, poolHeaterState, poolPumpOn, poolLightOn, poolRimY, poolBasinFloorY, poolWaterSurfaceY, POOL_COPING_COLOR, POOL_HEAT_GLOW, type RoomTemp } from './geometry.js';
 import { visibilityToFogDensity, moonPhaseFraction, type WeatherNow } from './weather.js';
 import { skySnapshot, moonAltAz, capSampleAltAz, satAltAz } from './sky-astro.js';
 // flights.ts is deliberately zero-import (three-free) and shared by BOTH the app
@@ -841,6 +841,12 @@ export { resolveGroundLevelMm };
 function sanitizeGroundLevelMm(v: number | null | undefined): number {
   return (typeof v === 'number' && isFinite(v)) ? v : 0;
 }
+
+// How far a door / window may sit from a wall segment and still be treated as
+// hosted BY it (for inheriting that segment's vertical base — see
+// _openingBaseY). Mirrors canvas-interact's snapOpeningToWall reach, which is
+// what put the opening on the wall axis in the first place.
+const OPENING_HOST_MAX_MM = 500;
 
 // Furniture kinds that belong to the HOUSE rather than the ground under them:
 // pieces built INTO a wall plane (their elevation is measured off the wall, and
@@ -2277,6 +2283,12 @@ export class ThreeDRenderer {
   // from simple presence sensors are hard-confined to the loop containing
   // their sensor — radar-driven targets roam wherever the radar says.
   private _wallLoops: Vec2[][] = [];
+  // Per-wall-segment vertical base (mm) for the CURRENT floor, rebuilt by
+  // updateFloor (see _wallSegmentBaseY). Kept as renderer state — the doors /
+  // windows builder runs under its OWN dirty key (_keyDoors) and must be able to
+  // hang a gate in its fence without a floor rebuild. Empty / all-zero whenever
+  // the effective ground level is 0, so the default build is untouched.
+  private _wallSegBases: { ax: number; ay: number; bx: number; by: number; baseY: number }[] = [];
   // Bed occupancy summary produced by _updateBedCovers for NEXT frame's thought-
   // bubble resolution (one-frame lag is fine — bubble commit has 2.5 s
   // hysteresis). hiddenKeys: rigs currently hidden under the two-in-bed covers.
@@ -3250,6 +3262,7 @@ export class ThreeDRenderer {
     this._beds = [];
     this._roomZones = [];
     this._wallLoops = [];
+    this._wallSegBases = [];
     this._disposeBedCovers();
     this._fanRotors = [];
     // Fan spin velocity/phase is per-floor (fixtures differ) — drop it on switch so
@@ -3611,6 +3624,58 @@ export class ThreeDRenderer {
   //     pre-ground-level build.
   private _itemGroundY(wx: number, wy: number): number {
     return this._groundLevel !== 0 && this._outdoors(wx, wy) ? this._groundLevel : 0;
+  }
+
+  // Vertical base (mm) for ONE wall segment a→b of kind `kind`, against the
+  // floor's closed wall `loops`. This is the WALL half of the _itemGroundY rule:
+  // free-standing yard structures ride the surroundings grade, house structure
+  // stays on the slab.
+  //
+  //   1. Fence family (fence_picket / fence_privacy / fence_chainlink / hedge)
+  //      ALWAYS follows the grade, per segment — these are yard structures by
+  //      nature, and a fence sitting a storey above its own lawn is never right.
+  //      They take _itemGroundY (the FURNITURE rule) at the segment midpoint, so
+  //      a fence indoors / on a loop-less floor still reads 0.
+  //   2. Solid kinds (full / half / railing) follow the grade ONLY when
+  //      FREE-STANDING: the segment bounds no closed wall loop AND its midpoint
+  //      is outdoors. ORDER IS LOAD-BEARING — the loop test must run FIRST and
+  //      win. A perimeter wall's own midpoint lies exactly ON its loop boundary
+  //      and pointInPolygon EXCLUDES the boundary, so `_outdoors` alone reads the
+  //      entire house envelope as outside and would sink the whole building to
+  //      the grade. (That is exactly why walls were originally exempted from the
+  //      ground level altogether.)
+  //   3. `invisible` renders nothing; it only ever reaches here through the
+  //      _wallSegBases table, where it behaves like a solid kind.
+  //
+  // Follow-up (noted, not built): the fence branch deliberately uses the flat
+  // _itemGroundY rather than the terrace-aware _groundYAt, matching furniture —
+  // a fence crossing an authored terrace does not step up onto it.
+  private _wallSegmentBaseY(kind: string, a: Vec2, b: Vec2, loops: Vec2[][]): number {
+    if (this._groundLevel === 0) return 0;   // byte-identical default path
+    const isFence = kind === 'fence_picket' || kind === 'fence_privacy'
+      || kind === 'fence_chainlink' || kind === 'hedge';
+    if (!isFence && wallSegmentInLoops(a, b, loops)) return 0;   // house structure
+    return this._itemGroundY((a.x + b.x) / 2, (a.y + b.y) / 2);
+  }
+
+  // Vertical base for a door / window PANEL: the base of the wall segment that
+  // hosts it, so a gate hangs in its fence instead of at slab level. Openings
+  // already sit on their wall axis (canvas-interact snaps them within 500 mm),
+  // so nearest-segment resolution mirrors that association; an opening farther
+  // than the snap distance from every segment has no host and stays at 0.
+  // Zero-cost (and byte-identical) whenever the ground level is 0.
+  private _openingBaseY(x: number, y: number): number {
+    if (this._groundLevel === 0) return 0;
+    let best = 0, bestD2 = OPENING_HOST_MAX_MM * OPENING_HOST_MAX_MM;
+    for (const s of this._wallSegBases) {
+      const dx = s.bx - s.ax, dy = s.by - s.ay, len2 = dx * dx + dy * dy;
+      let t = len2 > 0 ? ((x - s.ax) * dx + (y - s.ay) * dy) / len2 : 0;
+      t = t < 0 ? 0 : t > 1 ? 1 : t;
+      const qx = s.ax + t * dx - x, qy = s.ay + t * dy - y;
+      const d2 = qx * qx + qy * qy;
+      if (d2 <= bestD2) { bestD2 = d2; best = s.baseY; }
+    }
+    return best;
   }
 
   // Grade for content that ENCIRCLES the property and therefore has no single
@@ -5231,6 +5296,19 @@ export class ThreeDRenderer {
       emissive: 0x444444, emissiveIntensity: 0.1,
       transparent: true, opacity: wallOpacity, side: THREE.DoubleSide, depthWrite: false,
     });
+    // Per-segment vertical base (the surroundings grade for yard structures, the
+    // slab for the house). Recorded for EVERY wall — including invisible ones and
+    // walls a hidden layer skips — so a door/window can resolve its host segment
+    // under its own dirty key. See _wallSegmentBaseY for the predicate.
+    this._wallSegBases = [];
+    for (const wall of f.walls ?? []) {
+      const kind = wallKind(wall);
+      for (let i = 0; i < wall.points.length - 1; i++) {
+        const a = wall.points[i], b = wall.points[i + 1];
+        this._wallSegBases.push({ ax: a.x, ay: a.y, bx: b.x, by: b.y,
+                                  baseY: this._wallSegmentBaseY(kind, a, b, loops) });
+      }
+    }
     for (const wall of showWalls ? f.walls : []) {
       if (wall.points.length < 2) continue;
       const kind = wallKind(wall);
@@ -5259,6 +5337,10 @@ export class ThreeDRenderer {
         if (len < 1) continue;
         const ux = dx / len, uy = dy / len;
         const angle = Math.atan2(-dx, dy);
+        // Vertical base for THIS segment: 0 (the slab) for house structure,
+        // the surroundings grade for a yard structure. Added to every height
+        // this segment's meshes resolve, so the whole run shifts rigidly.
+        const bY = this._wallSegmentBaseY(kind, a, b, loops);
         if (kind === 'railing') {
           // Banister: end/interval posts + top rail + thin balusters.
           const railMat = this._mat({
@@ -5267,7 +5349,7 @@ export class ThreeDRenderer {
           });
           const bar = (t: number, w2: number, y0: number, y1: number, d2 = 70) => {
             const m = new THREE.Mesh(new THREE.BoxGeometry(d2, y1 - y0, w2), railMat);
-            const p = this._w(a.x + ux * t, a.y + uy * t, (y0 + y1) / 2);
+            const p = this._w(a.x + ux * t, a.y + uy * t, bY + (y0 + y1) / 2);
             m.position.set(p.x, p.y, p.z);
             m.rotation.y = angle;
             group.add(m);
@@ -5289,7 +5371,7 @@ export class ThreeDRenderer {
           });
           const bar = (t: number, w2: number, y0: number, y1: number, d2 = 40) => {
             const m = new THREE.Mesh(new THREE.BoxGeometry(d2, y1 - y0, w2), woodMat);
-            const p = this._w(a.x + ux * t, a.y + uy * t, (y0 + y1) / 2);
+            const p = this._w(a.x + ux * t, a.y + uy * t, bY + (y0 + y1) / 2);
             m.position.set(p.x, p.y, p.z);
             m.rotation.y = angle;
             group.add(m);
@@ -5308,7 +5390,7 @@ export class ThreeDRenderer {
           const postMat = this._mat({ color: 0x9aa0a6, metalness: 0.4, roughness: 0.5 });
           const post = (t: number) => {
             const m = new THREE.Mesh(new THREE.CylinderGeometry(28, 28, kindH, 8), postMat);
-            const p = this._w(a.x + ux * t, a.y + uy * t, kindH / 2);
+            const p = this._w(a.x + ux * t, a.y + uy * t, bY + kindH / 2);
             m.position.set(p.x, p.y, p.z);
             group.add(m);
           };
@@ -5327,7 +5409,7 @@ export class ThreeDRenderer {
             depthWrite: false,
           });
           const plane = new THREE.Mesh(planeGeo, meshMat);
-          const pc = this._w(a.x + ux * (len / 2), a.y + uy * (len / 2), kindH / 2);
+          const pc = this._w(a.x + ux * (len / 2), a.y + uy * (len / 2), bY + kindH / 2);
           plane.position.set(pc.x, pc.y, pc.z);
           plane.rotation.y = Math.atan2(-uy, -ux);   // face broadside along the run
           plane.userData.outlineSkip = true;
@@ -5346,7 +5428,7 @@ export class ThreeDRenderer {
         // unaffected.
         const { openings } = wallCutsForSegment(a, b, f.doors ?? [], f.windows ?? []);
         const angleY = Math.atan2(-uy, -ux);   // shape t-axis → scene along-wall dir
-        const basePos = this._w(a.x, a.y, 0);   // shape origin (t=0, y=0) in scene
+        const basePos = this._w(a.x, a.y, bY);   // shape origin (t=0, y=0) in scene
         for (const mesh of this._buildSolidWallSegment(openings, len, kindH, segThick, SILL_TOP, WINDOW_GLASS_H, DOOR_HEAD, segMatFor)) {
           mesh.position.set(basePos.x, basePos.y, basePos.z);
           mesh.rotation.y = angleY;
@@ -5364,7 +5446,7 @@ export class ThreeDRenderer {
           const crown = new THREE.Mesh(
             new THREE.BoxGeometry(segThick - 90, 260, len),
             segMatFor());
-          const cp = this._w(a.x + ux * (len / 2), a.y + uy * (len / 2), kindH - 60);
+          const cp = this._w(a.x + ux * (len / 2), a.y + uy * (len / 2), bY + kindH - 60);
           crown.position.set(cp.x, cp.y, cp.z);
           crown.rotation.y = angle;
           crown.userData.outlineSkip = true;
@@ -7294,7 +7376,11 @@ export class ThreeDRenderer {
       const cy = sill + glassH / 2;                     // vertical center of glazing
       // Pane center group at (w.x, w.y); rotation matches wall axis.
       const grp = new THREE.Group();
-      const wp = this._w(w.x, w.y, 0);
+      // Vertical base = the host wall segment's base (the sibling of the door
+      // hinge above): a window in a free-standing graded wall rides down with it.
+      // (w.x, w.y) is already the pane centre on the wall axis. Panes, frames,
+      // shades and curtains are all children of grp, so they follow.
+      const wp = this._w(w.x, w.y, this._openingBaseY(w.x, w.y));
       grp.position.set(wp.x, wp.y, wp.z);
       grp.rotation.y = -((w.rotation || 0) * Math.PI / 180);
       const glass = (pw: number, ph: number) => new THREE.Mesh(new THREE.BoxGeometry(pw, ph, PANE_T), mat);
@@ -7503,7 +7589,13 @@ export class ThreeDRenderer {
       // flip the panel renders on the wrong side of the hinge and the open
       // swing animates in the opposite direction from the 2D plan.
       const hinge = new THREE.Group();
-      const hp = this._w(d.x, d.y, 0);
+      // Vertical base = the host wall segment's base, so a gate hangs in its
+      // fence (which follows the surroundings grade) rather than at slab level.
+      // Resolved from the door's SPAN CENTRE — d.x/d.y is the hinge — and 0
+      // whenever the ground level is 0. Panel, slats and lock bolts are all
+      // children of this hinge group, so they ride along for free.
+      const dc = doorSpanCenter(d);
+      const hp = this._w(d.x, d.y, this._openingBaseY(dc.x, dc.y));
       hinge.position.set(hp.x, hp.y, hp.z);
       const rotR = -((d.rotation || 0) * Math.PI / 180);
 
