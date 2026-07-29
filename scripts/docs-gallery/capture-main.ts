@@ -515,8 +515,17 @@ function capOpening(sub: Subject, o: CapOpts): string {
   if (isWindow) {
     f.windows = [{ id: 'w', x: 3000, y: 2000, w: 1600, rotation: 0, entity_id: 'cover.demo', kind: sub.id }];
   } else {
-    const garage = sub.id === 'garage';
-    f.doors = [{ id: 'd', x: garage ? 1800 : 2200, y: 2000, w: garage ? 2400 : 900, rotation: 0, kind: sub.id, entity_id: 'cover.demo' }];
+    // Per-kind natural span (mirrors geometry.ts's doorDefaultWidth): garage is
+    // wide, double-leaf/glass-slider kinds are medium, everything else is a
+    // standard single leaf. Centered on the 5000 mm wall span (500..5500) so
+    // every kind — including the 5 added alongside sliding/pocket/double/
+    // french/sliding_glass coverage — frames the same regardless of width.
+    const kind = sub.id;
+    const w = kind === 'garage' ? 2400
+      : (kind === 'double' || kind === 'french' || kind === 'sliding_glass') ? 1500
+        : 900;
+    const x = 3000 - w / 2;
+    f.doors = [{ id: 'd', x, y: 2000, w, rotation: 0, kind: sub.id, entity_id: 'cover.demo' }];
   }
   R.updateFloor(f, DAY, undefined, undefined, nullState);
   orbitCam([0, 1100, 0], 6600, 16, Math.PI * 0.8);
@@ -649,7 +658,14 @@ const LIGHT_KINDS: { id: LightIconKind; label: string; glyph: string }[] = [
   { id: 'exhaust_light', label: 'Exhaust + light', glyph: '❈' },
 ];
 const CAT_PAGE: Record<string, string> = { furniture: 'furniture', appliance: 'appliances', bathroom: 'bathroom', outdoor: 'outdoor' };
-const CAT_TITLE: Record<string, string> = { furniture: 'Furniture', appliance: 'Appliances', bathroom: 'Bathroom', outdoor: 'Outdoor & yard' };
+const CAT_TITLE: Record<string, string> = {
+  furniture: 'Furniture', appliance: 'Appliances', bathroom: 'Bathroom', outdoor: 'Outdoor & yard',
+  // theater/vehicle fall through to their own page (CAT_PAGE has no entry, so
+  // `page = CAT_PAGE[cat] ?? cat` already yields 'theater'/'vehicle') — these
+  // just give the in-page group heading the same phrasing sidebar.ts's
+  // furnitureCat optgroups use, instead of the raw lowercase cat id.
+  theater: 'Home theater', vehicle: 'Vehicle / garage',
+};
 
 function slug(s: string): string { return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''); }
 function safeId(id: string): string { return id.replace(/[^a-zA-Z0-9_-]+/g, '_'); }
@@ -710,9 +726,16 @@ function buildCatalog(): any {
     push({ type: 'bin', id: bk, page: 'sensors', group: 'Bins', label: def.label, notes: 'lid flip empty ↔ full', gif: `media/sensors/${bk}.gif`, meta: {} });
   }
 
-  // Doors & windows.
-  const DOOR_LABEL: Record<string, string> = { swing: 'Swing door', garage: 'Garage door', gate: 'Gate' };
-  for (const dk of ['swing', 'garage', 'gate']) push({ type: 'door', id: dk, page: 'doors-windows', group: 'Doors', label: DOOR_LABEL[dk], notes: dk === 'gate' ? 'picket gate on a fence run · open → close' : 'open → close', gif: `media/doors-windows/door_${dk}.gif`, meta: {} });
+  // Doors & windows. All 8 DoorKind values (types.ts) — swing/garage/gate plus
+  // the sliding-family (sliding/pocket/sliding_glass) and double-leaf family
+  // (double/french) added alongside home-theater/vehicle furniture coverage.
+  const DOOR_LABEL: Record<string, string> = {
+    swing: 'Swing door', garage: 'Garage door', gate: 'Gate',
+    sliding: 'Sliding (barn)', pocket: 'Pocket', double: 'Double swing',
+    french: 'French', sliding_glass: 'Sliding glass',
+  };
+  const DOOR_KINDS = ['swing', 'garage', 'gate', 'sliding', 'pocket', 'double', 'french', 'sliding_glass'];
+  for (const dk of DOOR_KINDS) push({ type: 'door', id: dk, page: 'doors-windows', group: 'Doors', label: DOOR_LABEL[dk], notes: dk === 'gate' ? 'picket gate on a fence run · open → close' : 'open → close', gif: `media/doors-windows/door_${dk}.gif`, meta: {} });
   for (const wk of ['single', 'double_hung', 'casement_pair', 'sliding', 'picture']) push({ type: 'window', id: wk, page: 'doors-windows', group: 'Windows', label: wk.replace(/_/g, ' '), notes: 'open → close', gif: `media/doors-windows/window_${safeId(wk)}.gif`, meta: {} });
 
   // Robots.
@@ -734,6 +757,22 @@ function buildCatalog(): any {
         gif: `media/${page}/${safeId(m.id)}.gif`, meta: { bubble: (ad.bubbles && ad.bubbles[0]) || null },
       });
     }
+  }
+
+  // Core pack's 'adult' lives in avatars.ts (CORE_PACK, registered directly in
+  // ensureInit-independent module init — see avatars.ts's trailing
+  // `registerPack(CORE_PACK, 'builtin')`) rather than in AVATAR_PACK_MANIFEST,
+  // so the loop above never sees it. Push it explicitly onto the Base avatars
+  // page so gallery coverage is every resolvable avatar id, not just the
+  // manifest's members.
+  {
+    const ad = MOD.ThreeDRenderer.resolveAvatarDef('adult');
+    push({
+      type: 'avatar', id: 'adult', page: 'avatars/base', group: 'Core', topLevel: 'Base', packId: 'core',
+      franchise: false, label: ad.label ?? 'Adult', rig: ad.rig,
+      notes: `Core · ${ad.rig}`,
+      gif: 'media/avatars/base/adult.gif', meta: { bubble: (ad.bubbles && ad.bubbles[0]) || null },
+    });
   }
 
   return { subjects, generatedAt: new Date().toISOString() };

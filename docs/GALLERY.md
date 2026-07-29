@@ -60,11 +60,16 @@ automatically the next time you run it — nothing to hand-maintain.
 ## How it stays automatically current
 
 The catalog is enumerated **dynamically** at capture time from the shipped source
-of truth — `FURNITURE_KINDS` + `furnitureCat`, the light-icon kind list,
-`ENV_KINDS`, the safety/door/window kind unions, and **every** avatar pack in
-`src/avatar-packs/manifest.ts` (all packs registered + force-activated so
-franchise members resolve to their real rigs). The doc generator consumes that
-catalog; it never hard-codes a model list.
+of truth where the runtime allows it — `FURNITURE_KINDS` + `furnitureCat`,
+`ENV_KINDS`, and **every** avatar pack in `src/avatar-packs/manifest.ts` (all
+packs registered + force-activated so franchise members resolve to their real
+rigs; the core `adult` rig is pushed explicitly — 512/512). The light-icon,
+safety, door and window lists are hand-typed in `capture-main.ts` (type unions
+are erased at runtime and can't be enumerated), but `generate.mjs` cross-checks
+their counts against the real unions parsed from `src/types.ts` on EVERY run —
+a new kind that misses the capture list fails the build loudly instead of
+silently getting no GIF (added 2026-07-29 after 5 of 8 door kinds shipped
+without gallery entries).
 
 ## Architecture
 

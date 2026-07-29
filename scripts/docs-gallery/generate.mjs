@@ -220,6 +220,7 @@ function inspectGif(buf) {
 // ── markdown generation ───────────────────────────────────────────────────────────
 const PAGE_TITLE = {
   furniture: 'Furniture', appliances: 'Appliances', bathroom: 'Bathroom', outdoor: 'Outdoor & yard',
+  theater: 'Home theater', vehicle: 'Vehicle / garage',
   lighting: 'Lighting', 'switches-controls': 'Switches & controls', sensors: 'Sensors',
   'doors-windows': 'Doors & windows', robots: 'Robots',
 };
@@ -228,6 +229,8 @@ const PAGE_INTRO = {
   appliances: 'Appliance kinds — fixed 3/4 view; the door opens then closes and the in-use LED / screen is lit.',
   bathroom: 'Bathroom fixtures. 360° turntable of the default-size 3D piece.',
   outdoor: 'Outdoor & yard pieces. 360° turntable of the default-size 3D piece.',
+  theater: 'Home-theater seating and speakers. 360° turntable of the default-size 3D piece.',
+  vehicle: 'Garage vehicle and EV-charging pieces. 360° turntable of the default-size 3D piece.',
   lighting: 'Light-fixture icon kinds in a corner environment: off → on → color sweep → dim → off (fireplace flickers).',
   'switches-controls': 'Wall controls: switch plate, alarm keypad, and door lock — each cycling its states.',
   sensors: 'Presence, environment, safety, and bin sensors — each showing its live-state animation.',
@@ -304,7 +307,7 @@ function writeMarkdown(subjects) {
 // <page>.html per category page, avatars/index.html + one avatars/<group>.html per
 // pack group, and a single shared assets/site.css (dark editor-vibe theme). No
 // external fonts / CDNs / JS frameworks — a few lines of vanilla JS drive the mobile
-// nav toggle. GIFs lazy-load (581 of them). Every card carries an anchor id.
+// nav toggle. GIFs lazy-load (~675 of them). Every card carries an anchor id.
 
 let NAV_TOP = [];   // sorted top-level page keys (set by writeHtml)
 let NAV_AV = [];    // sorted avatar page keys ('avatars/<group>')
@@ -453,6 +456,43 @@ function verifyRefs(subjects) {
   return { broken, checked: subjects.length };
 }
 
+// ── hand-maintained-list guard ─────────────────────────────────────────────────
+// capture-main.ts's LIGHT_KINDS array and safety-kind loop are hand-typed lists
+// that are supposed to mirror src/types.ts's `LightIconKind` / `SafetyKind`
+// unions, but capture-main.ts is NEVER type-checked: it lives outside
+// tsconfig.json's `include: ["src"]`, and esbuild (its only compile step, run
+// below) transpiles TS syntax without verifying types at all. So a future kind
+// added to either union with no matching row in capture-main.ts would silently
+// under-document itself forever — no `npm run typecheck`, no build, no test
+// suite would ever catch it. Cross-check the CAPTURED catalog's subject counts
+// against the real union member count parsed straight out of src/types.ts (the
+// actual source of truth) so a mismatch fails the run loudly instead.
+function countTypeUnionMembers(typeName) {
+  const src = fs.readFileSync(path.join(REPO, 'src', 'types.ts'), 'utf8');
+  const m = src.match(new RegExp(`export type ${typeName}\\s*=([\\s\\S]*?);`));
+  if (!m) throw new Error(`hand-maintained-list guard: could not locate "export type ${typeName}" in src/types.ts`);
+  const members = new Set((m[1].match(/'[^']+'/g) || []).map((s) => s.slice(1, -1)));
+  if (members.size === 0) throw new Error(`hand-maintained-list guard: parsed zero members for ${typeName} — regex out of sync with src/types.ts?`);
+  return members.size;
+}
+function verifyHandMaintainedLists(subjects) {
+  const checks = [
+    { subjectType: 'light', typeName: 'LightIconKind' },
+    { subjectType: 'safety', typeName: 'SafetyKind' },
+  ];
+  for (const { subjectType, typeName } of checks) {
+    const expected = countTypeUnionMembers(typeName);
+    const got = subjects.filter((s) => s.type === subjectType).length;
+    if (got !== expected) {
+      throw new Error(
+        `hand-maintained-list guard FAILED: catalog has ${got} '${subjectType}' subject(s) but ` +
+        `src/types.ts's ${typeName} union has ${expected} member(s) — a kind was added to (or ` +
+        `removed from) the type without updating scripts/docs-gallery/capture-main.ts, or vice versa.`);
+    }
+    log(`hand-maintained-list guard OK: ${subjectType} (${typeName}) = ${got}`);
+  }
+}
+
 // ── smoke subset ──────────────────────────────────────────────────────────────────
 function smokeSelect(subjects) {
   const pick = [];
@@ -512,6 +552,7 @@ function pagesOnly() {
   const version = cached.version || PKG.version;
   const date = cached.generatedAt ? cached.generatedAt.slice(0, 10) : isoDate();
   log(`pages-only: ${subjects.length} subjects from cached catalog (captured ${date}, v${version})`);
+  verifyHandMaintainedLists(subjects);
   writeMarkdown(subjects);
   writeHtml(subjects, version, date);
 
@@ -577,6 +618,7 @@ async function main() {
   const catalog = await cdp.eval('window.dgCatalog()', true);
   let subjects = catalog.subjects;
   log(`catalog: ${subjects.length} subjects across ${new Set(subjects.map((s) => s.page)).size} pages`);
+  verifyHandMaintainedLists(subjects);
 
   // Markdown + HTML always reflect the FULL catalog (generated docs stay complete
   // even on a partial capture run). Persist the catalog so `--pages-only` can

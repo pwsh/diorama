@@ -288,6 +288,21 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Docs-site campaign: guide + coverage + full regen + publish**
+  (2026-07-29, user-directed with Opus-orchestration/Sonnet-implementation
+  routing; unreleased — on main past v0.44.0, docs-site published
+  separately to gh-pages). Guide: 11 pages refreshed against the
+  shipped feature set (10 major gaps closed, 6 stale claims fixed).
+  Floorplans: showroom rebuilt 14×10→20×14 m (5 zones, lighting
+  gallery, mechanical room), duplication halved; coverage now 96/96
+  furniture, 26/26 lights, 8/8 doors across the 18 plans;
+  ranch-smart-home gained the smart fixture tier; FLOORPLANS
+  399/399 byte-deterministic. Gallery generator: doors 3→8, core
+  adult avatar added (512/512), hand-list count guards vs types.ts
+  (fail-loud), theater/vehicle page intros. Full regen: 675/675
+  GIFs (~15 min), 70/70 plan screenshots (2 transient blanks
+  auto-caught + retried), demo bundle 18 plans. Published to
+  gh-pages.
 - **TypeScript 7.0.2 (Go-native compiler)** (2026-07-29,
   user-directed "move to TS7"; unreleased — on main past v0.44.0).
   Zero code/config changes needed — the v0.42.0 6.x bridge absorbed
@@ -1811,7 +1826,7 @@ instance.
   TMNT/Hulk sizes, zebra flank stripes, TMNT shell rotation, Pandora single
   tails, Cap shield flat) + 44 cone/box capes converted, 36 packs
   version-bumped, ids untouched (content 589/589, build 62/62). Full regen
-  581/581 (230 MB, 45-frame captures) republished to Pages.
+  581/581 (230 MB, 45-frame captures) republished to Pages (675/675 as of 2026-07-29).
 
 - **Docs-gallery pipeline** (`npm run docs:gallery`, `docs/GALLERY.md`;
   scripts committed, `docs-site/` output gitignored by design; **hosted at
@@ -1827,7 +1842,7 @@ instance.
   own bubble glyph; appliances no-spin door/LED animations; lighting in a
   wall+floor corner cycling off→on→RGB→dim (fireplace flickers); switches/
   alarm/locks shown working; sensors/safety/robots state cycles. Verified
-  full run: **581/581 GIFs, 0 failures, ~7.3 min, 163 MB**. One renderer
+  full run: **675/675 GIFs (as of the 2026-07-29 regen), 0 failures, ~7.3 min, 163 MB**. One renderer
   addition: opt-in `preserveDrawingBuffer` constructor option (default
   false).
 
