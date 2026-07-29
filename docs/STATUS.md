@@ -273,6 +273,15 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Dependency bump + tech-debt audit** (2026-07-28, user-requested;
+  unreleased — on main past v0.40.0). vite 8.0.16→8.1.5 + three/
+  @types/three 0.184→0.185.1 as one gated batch — typecheck/build/
+  chunk-split grep clean and NINE renderer-heavy pages at their
+  counts (terrain 103, stairs-fit 78, tree 74, door-kinds 87,
+  bgtext-multi 229, flights-render 393, camera 60, ghost-align 22,
+  neighborhood-render 95). TypeScript held at 5.9 (7.x native-port
+  churn; 6.x bridge under evaluation). Full audit + actioned/
+  not-actioned classification + execution plan: `docs/TECH-DEBT.md`.
 - **Wall editing prefs: snap toggles + Alt free placement**
   (2026-07-28, user-requested: "an on/off method to disable the 15
   degree lock and the automatic linking of walls at corners or some
