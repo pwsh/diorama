@@ -98,6 +98,8 @@ import {
   flightDisplayScale, flightShellMm, flightShellReachMm,
   FLIGHT_LABEL_FIELDS_DEFAULT, FLIGHTS_DEFAULT_RADIUS_NM, sanitizeLabelFields,
   resolveFlightGlow, flightGlowFrame, sanitizeFlightGlowRules,
+  flightFieldText, flightLabelLines, flightIdentifier,
+  flightIdentitySuppressed, flightPrivacyDimmed,
   type FlightPoint, type IssNow, type FlightGlowPattern, type FlightGlowRule,
 } from './flights.js';
 // aircraft-types.ts is likewise pure/zero-import (the same shared-chunk
@@ -13670,12 +13672,14 @@ export class ThreeDRenderer {
   // enforce the FAA's PIA/LADD programs, so honoring them is the consumer's
   // call — dim the whole rig, and (PIA only, whose entire point is that the hex
   // can't be mapped back to a tail number) drop the identity text.
+  // (Both predicates live in flights.ts alongside the label resolvers that
+  // consume them; these wrappers just bind `_flightsPrivacyDim`.)
   private _flightPrivacyDimmed(fp: FlightPoint): boolean {
-    return this._flightsPrivacyDim && (fp.pia === true || fp.ladd === true);
+    return flightPrivacyDimmed(fp, this._flightsPrivacyDim);
   }
 
   private _flightIdentitySuppressed(fp: FlightPoint): boolean {
-    return this._flightsPrivacyDim && fp.pia === true;
+    return flightIdentitySuppressed(fp, this._flightsPrivacyDim);
   }
 
   // EXACTLY ONE glow per aircraft. The whole three-tier resolution (master gate
@@ -13781,54 +13785,24 @@ export class ThreeDRenderer {
     return this._beaconGlowTex;
   }
 
-  // One label FIELD, rendered for the plate / the 2D line. Numeric fields are
-  // BUCKETED (alt 100 ft, speed 10 kt, distance 0.5 nm) so a live aircraft
-  // doesn't repaint its plate every poll. `suppress` is the PIA identity gate.
-  // Mirrored by canvas-render's flightFieldText — keep the two in step.
+  // One label FIELD, and the plate's two lines. Both resolve in flights.ts —
+  // the pure, zero-import home the 2D canvas reads too, so the 3D plate and the
+  // 2D line cannot drift (they used to be mirrored ~20-line copies). These thin
+  // wrappers just bind the renderer's live config (`_flightsLabelFields`,
+  // `_flightsPrivacyDim`) to the pure signatures.
   private _flightFieldText(field: string, fp: FlightPoint,
                            ident: string, suppress: boolean): string {
-    switch (field) {
-      case 'callsign': return ident;
-      case 'reg':      return suppress ? '' : (fp.reg ?? '');
-      case 'type':     return suppress ? '' : (fp.typeCode ?? '');
-      case 'operator': return suppress || !fp.operator ? '' : fp.operator.slice(0, 22);
-      case 'alt':      return `${(Math.round(fp.altFt / 100) * 100).toLocaleString('en-US')} ft`;
-      case 'speed':    return fp.gsKt == null ? '' : `${Math.round(fp.gsKt / 10) * 10} kt`;
-      case 'trend': {
-        const v = fp.vertRateFpm ?? 0;
-        return v >= 300 ? '↑ climb' : v <= -300 ? '↓ descend' : '';
-      }
-      case 'squawk':   return fp.squawk ? `sq ${fp.squawk}` : '';
-      case 'dist':     return fp.distNm == null ? ''
-        : `${(Math.round(fp.distNm * 2) / 2).toFixed(1)} nm`;
-      default:         return '';
-    }
+    return flightFieldText(field, fp, ident, suppress);
   }
 
-  // The plate's two lines: the FIRST resolved field is the headline, the rest
-  // join into a detail line. Empty fields (no registration, level flight, …)
-  // simply drop out.
   private _flightLabelLines(fp: FlightPoint): { top: string; sub: string } {
-    const suppress = this._flightIdentitySuppressed(fp);
-    const badge = this._flightPrivacyDimmed(fp) ? '🔒 ' : '';
-    const ident = badge + this._flightIdentifier(fp, suppress);
-    const parts: string[] = [];
-    for (const f of this._flightsLabelFields) {
-      const t = this._flightFieldText(f, fp, ident, suppress);
-      if (t) parts.push(t);
-    }
-    if (!parts.length) parts.push(ident);
-    return { top: parts[0], sub: parts.slice(1).join(' · ') };
+    return flightLabelLines(fp, this._flightsLabelFields, this._flightsPrivacyDim);
   }
 
   // What goes on the fuselage: callsign → registration → hex. PIA-suppressed
   // aircraft show the hex only (that is exactly what a Privacy ICAO Address is).
   private _flightIdentifier(fp: FlightPoint, suppress: boolean): string {
-    if (suppress) return fp.hex.toUpperCase();
-    const cs = (fp.callsign ?? '').trim();
-    if (cs) return cs;
-    const reg = (fp.reg ?? '').trim();
-    return reg || fp.hex.toUpperCase();
+    return flightIdentifier(fp, suppress);
   }
 
   // Label policy: a PISTON single (ga-high / ga-low) with a callsign tows a

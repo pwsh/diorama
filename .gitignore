@@ -14,3 +14,7 @@ deploy.local.json
 /docs-site/
 # private infrastructure notes (remotes, hosts) — never push
 docs/STATUS.local.md
+# generated test-harness bundles — every test page documents its own esbuild
+# regen command in its header; ~27 pages write the SAME planner.mod.js name, so
+# a committed copy is only ever "whatever ran last" (a real flake source)
+test-pages/*.mod.js

@@ -268,6 +268,73 @@ export function sanitizeLabelFields(v: unknown): FlightLabelField[] | undefined 
   return out.length ? out : undefined;
 }
 
+// ── Label text resolution — ONE home for 2D + 3D ───────────────────────────
+// three-renderer paints these onto the camera-facing plate; canvas-render draws
+// them under the 2D dart. They were mirrored ~20-line copies (the last such
+// pair after the glow ladder moved here); both now delegate, so the 2D label
+// and the 3D plate cannot drift. Pure + zero-import, like the rest of this file.
+
+// Privacy gates (research §4.2). LADD keeps its identity and only gets the
+// 🔒 badge; PIA is a Privacy ICAO Address, so its identity is WITHHELD
+// everywhere — the hex is all it legitimately has.
+export function flightPrivacyDimmed(fp: FlightPoint, privacyDim: boolean): boolean {
+  return privacyDim && (fp.pia === true || fp.ladd === true);
+}
+export function flightIdentitySuppressed(fp: FlightPoint, privacyDim: boolean): boolean {
+  return privacyDim && fp.pia === true;
+}
+
+// What identifies an aircraft: callsign → registration → hex.
+export function flightIdentifier(fp: FlightPoint, suppress: boolean): string {
+  if (suppress) return fp.hex.toUpperCase();
+  const cs = (fp.callsign ?? '').trim();
+  if (cs) return cs;
+  const reg = (fp.reg ?? '').trim();
+  return reg || fp.hex.toUpperCase();
+}
+
+// One label FIELD's text. Numeric fields are BUCKETED (alt 100 ft, speed 10 kt,
+// distance 0.5 nm) so a live aircraft doesn't repaint its plate every poll.
+// `suppress` is the PIA identity gate; a field it withholds returns '' and
+// simply drops out of the line.
+export function flightFieldText(field: string, fp: FlightPoint,
+                                ident: string, suppress: boolean): string {
+  switch (field) {
+    case 'callsign': return ident;
+    case 'reg':      return suppress ? '' : (fp.reg ?? '');
+    case 'type':     return suppress ? '' : (fp.typeCode ?? '');
+    case 'operator': return suppress || !fp.operator ? '' : fp.operator.slice(0, 22);
+    case 'alt':      return `${(Math.round(fp.altFt / 100) * 100).toLocaleString('en-US')} ft`;
+    case 'speed':    return fp.gsKt == null ? '' : `${Math.round(fp.gsKt / 10) * 10} kt`;
+    case 'trend': {
+      const v = fp.vertRateFpm ?? 0;
+      return v >= 300 ? '↑ climb' : v <= -300 ? '↓ descend' : '';
+    }
+    case 'squawk':   return fp.squawk ? `sq ${fp.squawk}` : '';
+    case 'dist':     return fp.distNm == null ? ''
+      : `${(Math.round(fp.distNm * 2) / 2).toFixed(1)} nm`;
+    default:         return '';
+  }
+}
+
+// The label's two lines: the FIRST resolved field is the headline, the rest
+// join into a detail line. Empty fields (no registration, level flight, …)
+// drop out; if EVERY field resolves empty the identifier stands alone.
+export function flightLabelLines(
+  fp: FlightPoint, fields: string[], privacyDim: boolean,
+): { top: string; sub: string } {
+  const suppress = flightIdentitySuppressed(fp, privacyDim);
+  const badge = flightPrivacyDimmed(fp, privacyDim) ? '🔒 ' : '';
+  const ident = badge + flightIdentifier(fp, suppress);
+  const parts: string[] = [];
+  for (const f of fields) {
+    const t = flightFieldText(f, fp, ident, suppress);
+    if (t) parts.push(t);
+  }
+  if (!parts.length) parts.push(ident);
+  return { top: parts[0], sub: parts.slice(1).join(' · ') };
+}
+
 // ── User-configurable glow rules (research docs/research/flight-glow-rules.md) ─
 // An ordered, FIRST-MATCH-WINS rule list (the value-rules.ts `evalRules` idiom)
 // assigning a glow colour + animation pattern to matching aircraft, layered on

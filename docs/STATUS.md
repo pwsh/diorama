@@ -279,6 +279,17 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Tech-debt batch A** (2026-07-29, per docs/TECH-DEBT.md; unreleased
+  — on main past v0.42.0). Committed test bundles untracked +
+  gitignored (the void-test clean-checkout flake mechanism);
+  hitDoor/hitDoorEnd through effectiveState (DOORKINDS 97/97 w/
+  restored-bug negative proof); README factual fix (migration DOES
+  exist) + full feature refresh (24-row entity table, 32 tools,
+  machine-checked counts); localstate-test window heuristic fixed
+  (LOCALSTATE 16/16, was 9/10 known-red since the window-glass
+  rework); flight label resolvers hoisted into flights.ts (FLIGHTS
+  602/602, render 393/393, ui 271/271); docs/models tree species.
+  engines field + CLAUDE.md count fix landed separately (825f4ce).
 - **TypeScript 6.0.3 (the 5.9→7.0 bridge line)** (2026-07-28,
   user-requested evaluation; released in v0.42.0).
   Research + empirical trial both green: 6.0 is the LAST JS-based
@@ -780,7 +791,8 @@ instance.
   isMechanicalApplianceKind, printProgressEntity folded into the hash,
   mechanical dblclick-binder branch. mechanical-test NEW 100/100;
   climate-appliance 64/64, sink 48/48 green. (localstate-test
-  window_unbound_open fails — PRE-EXISTING, reproduced on HEAD.)
+  window_unbound_open was red here — FIXED 2026-07-29, tech-debt #6:
+  the heuristic predated the window-glass rework; now LOCALSTATE 16/16.)
 
 - **Floor-switch view retention** (2026-07-25, user request; single Opus
   pass). `switchFloor` keeps 2D `viewCenter`/`zoom` (stacked stories

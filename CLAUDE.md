@@ -465,10 +465,12 @@ the horizon with a ramp-in. three-view `_keyFlights` = `configRev|flightsRev|lay
 (in the floor-switch blank list; disabled/no-origin → empty list = cheap inert). **2D**
 `drawFlights` (late in drawAll, `flights` layer absent = on, sidebar layer "Flights"): dart glyph
 rotated to track, labelFields-driven text, olive military, pulsing priority-colored beacon ring,
-privacy dim (glyph/text at 0.45/0.5 alpha); canvas-render exports the pure `flightBeaconColor`/
-`flightFieldText`/`flightLabelLines` (mirrored ~6/20-line copies of the renderer's resolvers —
-canvas-render must never import the three.js chunk; hoisting both into `flights.ts` is a noted
-follow-up). **Alerts**: `AlertSource` gained
+privacy dim (glyph/text at 0.45/0.5 alpha); the label resolvers `flightFieldText`/
+`flightLabelLines` (+ `flightIdentifier`/`flightIdentitySuppressed`/`flightPrivacyDimmed`)
+were HOISTED into `flights.ts` (2026-07-29, tech-debt #7) — BOTH renderers delegate,
+canvas-render re-exports them for the flights-ui combined bundle, the old mirrored copies are
+gone (golden-pinned in flights-test §16b; canvas-render still must never import the three.js
+chunk). **Alerts**: `AlertSource` gained
 `'flight'`; `buildAlertFeed(notifications, repairs, cfg?, extra?)` — the optional 4th channel
 appends already-built CLIENT-LOCAL alerts verbatim (source toggles/severity floor deliberately
 don't apply). `Planner._computeFlightAlerts()` (after each aircraft poll + ISS update): low
@@ -549,7 +551,7 @@ new dirty-key input. 2D `drawFlights` calls the same pair (`solid`+colorB = two 
 call `resolveFlightGlow`, never re-derive locally. Settings ▸ Flight tracking "Glow rules"
 editor (collapsed summary rows, ✎ expand, ▲▼ reorder — order materially changes behaviour).
 **Attribution**: "Flight data © airplanes.live" joins the fixed bottom-left chip (stacked with the
-OSM line) whenever cloud + enabled + data. Tests: `flights-test.html` (`FLIGHTS PASS 577/577` —
+OSM line) whenever cloud + enabled + data. Tests: `flights-test.html` (`FLIGHTS PASS 602/602` —
 fixture = a REAL 94-aircraft airplanes.live LAX capture; incl. the live-path emit matrix, the
 archetype golden matrix, the emergency-alert lifecycle, the shell-rescale golden/property suite,
 and §6e's draw-radius clamp matrix + similarity law — the pre-existing derivation goldens run
@@ -1368,9 +1370,11 @@ Design `docs/DESIGN-terrain.md` (T4 bullet + pinned decision 3); research
   only hit the swung panel; `hitDoorEnd`'s handle displacement is now swing/gate-only,
   following the glyph). Unknown kind strings fall through to the swing branch in BOTH
   renderers + both hit fns (stale-chunk safe, test-driven with a literal unknown kind).
-  NB `hitDoor`/`hitDoorEnd` still read raw `states[entity_id] === 'on'`, not
-  `effectiveState` — harmless now the closed span always hits. Test `door-kinds-test.html`
-  (`DOORKINDS PASS 87/87`; combined canvas-render+canvas-hit bundle — same flightHitPx-style
+  `hitDoor`/`hitDoorEnd` resolve openness via `doorOpenFraction(p.effectiveState(d)) > 0.02`
+  (2026-07-29, tech-debt #2 — the old raw `states[entity_id] === 'on'` read bypassed
+  `localState` and cover partials; an unbound-open or partially-open door's swung panel is
+  now hittable, negative-controlled in tests). Test `door-kinds-test.html`
+  (`DOORKINDS PASS 97/97`; combined canvas-render+canvas-hit bundle — same flightHitPx-style
   single-module-instance reasoning).
 - **2D door swing arc sweeps the TRUE opening side (2026-07-28 fix, user-reported)**: a
   `doorEndpoint` offset lands at CANVAS angle `+rotation` (mmToCanvas's y-flip), so the dashed

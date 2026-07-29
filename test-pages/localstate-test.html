@@ -53,8 +53,68 @@
   const dg = r._doorGroup.children;
   check('door_unbound_open', emissiveGreen(dg[1]));       // d_open (localState:on)
   check('door_unbound_closed_notopen', !emissiveGreen(dg[0])); // d_closed stays closed
-  check('window_unbound_open', emissiveGreen(dg[2]));     // w_open (localState:on)
-  check('window_unbound_closed_notopen', !emissiveGreen(dg[3]));
+  // Windows do NOT signal open with a colour change. The `emissiveGreen`
+  // heuristic above is DOOR-only: `openMat` (green emissive 0x1b5e20) lives in
+  // `_buildDoors`. `_buildWindows` used to have a matching blue-closed /
+  // green-open pair, but the "Polish wave 2" glass redesign (607331e) replaced
+  // it with realistic light-grey glass (#c9ced4) for every kind, moving the
+  // open-state language into two honest cues documented in CLAUDE.md:
+  //   (a) SASH GEOMETRY — the double-hung's lower sash rises to meet the upper,
+  //       the slider's movable sash slides behind its neighbour, the casement's
+  //       leaves swing out, the single pane tilts;
+  //   (b) GLASS CLARITY — opacity 0.16 closed → 0.08 open (clearer when ajar).
+  // These assertions test THOSE. (The old pair asserted green-dominant emissive
+  // on windows: the "open" half had been red since 607331e and the "closed"
+  // half was vacuously green — no window mesh carries emissive at all now.)
+  // Translucent glass panes only: skips the opaque frame bars / meeting rails
+  // and the inverted-hull outline shells (which use the shared opaque material).
+  const panes = grp => {
+    const out = [];
+    grp.traverse(o => {
+      if (o.isMesh && o.material && o.material.transparent && !o.userData.outline) out.push(o);
+    });
+    return out;
+  };
+  const paneOpacity = grp => { const ps = panes(grp); return ps.length ? ps[0].material.opacity : NaN; };
+  const near = (a, b, t = 1e-6) => Math.abs(a - b) <= t;
+
+  // w_open = double_hung, localState:'on' → openFrac 1 → glass 0.16 − 0.08·1.
+  check('window_unbound_open_glass_clear', near(paneOpacity(dg[2]), 0.08, 1e-3));
+  // w_closed = sliding, localState:'off' → openFrac 0 → glass 0.16.
+  check('window_unbound_closed_glass_opaque', near(paneOpacity(dg[3]), 0.16, 1e-3));
+  // Geometry: an OPEN double-hung raises its lower sash level with the upper.
+  {
+    const ps = panes(dg[2]);
+    check('window_unbound_open_sash_raised',
+          ps.length === 2 && near(ps[0].position.y, ps[1].position.y, 1e-6));
+  }
+  // Geometry: a CLOSED slider keeps its two sashes side by side (distinct x).
+  {
+    const ps = panes(dg[3]);
+    check('window_unbound_closed_sash_apart',
+          ps.length === 2 && Math.abs(ps[0].position.x - ps[1].position.x) > 100);
+  }
+  // Negative controls — the SAME kinds with the state flipped, proving both
+  // cues discriminate rather than being true by construction.
+  r.updateDoorsWindows([], [
+    { id: 'w_dh_closed', x: 6800, y: 2500, w: 1200, rotation: 0, entity_id: null, localState: 'off', kind: 'double_hung', label: '' },
+    { id: 'w_sl_open',   x: 8000, y: 2500, w: 900,  rotation: 0, entity_id: null, localState: 'on',  kind: 'sliding',     label: '' },
+  ], id => noStates[id] || null);
+  const cg = r._doorGroup.children;
+  {
+    const ps = panes(cg[0]);
+    check('window_ctrl_closed_sash_apart',
+          ps.length === 2 && Math.abs(ps[0].position.y - ps[1].position.y) > 100);
+    check('window_ctrl_closed_glass_opaque', near(paneOpacity(cg[0]), 0.16, 1e-3));
+  }
+  {
+    const ps = panes(cg[1]);
+    check('window_ctrl_open_sash_stacked',
+          ps.length === 2 && near(ps[0].position.x, ps[1].position.x, 1e-6));
+    check('window_ctrl_open_glass_clear', near(paneOpacity(cg[1]), 0.08, 1e-3));
+  }
+  // Rebuild the original fixture so anything downstream sees the same scene.
+  r.updateDoorsWindows(floor.doors, floor.windows, id => noStates[id] || null);
 
   // ── Lights: unbound lit bulb + unbound flickering fireplace ──────────────
   const lights = [

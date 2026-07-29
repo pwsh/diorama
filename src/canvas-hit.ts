@@ -1,7 +1,7 @@
 import { switchSize, distMM, pointToSeg, transformVerts, centroid, localToWorld,
          bgLocalToWorld, bgWorldToLocal, furnitureWorldToLocal,
          furnitureCorners, furnitureLocalToWorld, doorEndpoint,
-         doorOpenDeltaDeg, isDoubleLeafDoorKind, windowEndpoints, pointInPolygon, resolveRulerEnds, SPRINKLER_DEFAULTS, FLAGPOLE_DEFAULTS } from './geometry.js';
+         doorOpenDeltaDeg, doorOpenFraction, isDoubleLeafDoorKind, windowEndpoints, pointInPolygon, resolveRulerEnds, SPRINKLER_DEFAULTS, FLAGPOLE_DEFAULTS } from './geometry.js';
 import type { Planner } from './planner.js';
 import type { Vec2, Wall, Sensor, Furniture, BgImage, MotionSensor, EnvSensor, BleProxy, AlarmPanel, CalendarPanel, ThermostatFixture, SafetySensor, AlertBeacon, RobotFixture, CameraFixture, ProjectorFixture, ValveFixture, PlugFixture, SprinklerZone, FlagpoleFixture, PresenceZone, InfoCard, ActionButton, Door, Window as WindowType, Floor, Ruler } from './types.js';
 import type { FloorEdge } from './geometry.js';
@@ -210,7 +210,6 @@ export function hitObjectRadiusHandle(p: Planner, view: View, mm: Vec2): ObjectR
 
 export function hitDoor(p: Planner, view: View, mm: Vec2): { door: Door; idx: number } | null {
   const f = p.floor();
-  const states = p.hass?.states;
   const tol = Math.max(80, 10 / Math.max(view.scale, 1e-9));
   for (let i = f.doors.length - 1; i >= 0; i--) {
     const d = f.doors[i];
@@ -221,7 +220,12 @@ export function hitDoor(p: Planner, view: View, mm: Vec2): { door: Door; idx: nu
     const closed = doorEndpoint(d);
     if (pointToSeg(mm.x, mm.y, d.x, d.y, closed.x, closed.y) < tol)
       return { door: d, idx: i };
-    const isOpen = d.entity_id && states ? states[d.entity_id]?.state === 'on' : false;
+    // Openness resolves through the SAME one resolver the drawer uses
+    // (`effectiveState` → `doorOpenFraction`), so an unbound door driven by
+    // `localState` and a cover reporting a partial position both put their
+    // swung panel where it is DRAWN — and therefore where it is hittable.
+    // Reading `states[entity_id]` raw here bypassed both.
+    const isOpen = doorOpenFraction(p.effectiveState(d)) > 0.02;
     if (!isOpen) continue;
     const kind = d.kind ?? 'swing';
     if (isDoubleLeafDoorKind(kind)) {
@@ -268,7 +272,6 @@ export function hitDoorLock(p: Planner, view: View, mm: Vec2): { door: Door; idx
 
 export function hitDoorEnd(p: Planner, view: View, mm: Vec2): { door: Door; idx: number } | null {
   const f = p.floor();
-  const states = p.hass?.states;
   const dpr = window.devicePixelRatio || 1;
   const tol = Math.max(80, (10 * dpr) / Math.max(view.scale, 1e-9));
   for (let i = f.doors.length - 1; i >= 0; i--) {
@@ -278,7 +281,8 @@ export function hitDoorEnd(p: Planner, view: View, mm: Vec2): { door: Door; idx:
     // kind (garage / sliding family / double / french) draws it at the CLOSED
     // span endpoint, so the hit target must follow the glyph.
     const swings = (d.kind ?? 'swing') === 'swing' || d.kind === 'gate';
-    const isOpen = swings && d.entity_id && states ? states[d.entity_id]?.state === 'on' : false;
+    // Same one-resolver rule as hitDoor: localState + partial cover positions.
+    const isOpen = swings && doorOpenFraction(p.effectiveState(d)) > 0.02;
     const end = doorEndpoint(d, isOpen ? doorOpenDeltaDeg(d) : 0);
     if (distMM(end, mm) < tol) return { door: d, idx: i };
   }

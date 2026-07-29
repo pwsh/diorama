@@ -70,6 +70,22 @@ execution.
   geometry; no train smoke puffs; no blob shadow under open-underneath
   stairs; docs-gallery legacy GIF-dir relocation shim.
 
+## Execution log
+
+- 2026-07-28: plan agreed; vite+three shipped (v0.41.0); TS 6.0.3 shipped
+  (v0.42.0); items **4** (engines) + **5** (CLAUDE.md count) done (825f4ce).
+- 2026-07-29: batch A shipped — items **1** (test-pages/*.mod.js untracked +
+  gitignored), **2** (hitDoor/hitDoorEnd → effectiveState; DOORKINDS 97/97),
+  **3+8** (README migration fix + full feature refresh, machine-checked
+  counts), **6** (localstate-test window heuristic predated the window-glass
+  rework — test fixed, LOCALSTATE 16/16, was 9/10 known-red), **7** (flight
+  label resolvers hoisted into flights.ts; FLIGHTS 602/602, render 393/393,
+  ui 271/271), **9** (docs/models tree species §8–§12). Remaining: **#10**
+  (physical.mjs nav parity guard) — in flight as its own batch.
+- Noted, unresolved: `FURNITURE_KINDS.birch_tree.color` `#7fbf4d` vs shipped
+  foliage `#8fc95a` (possible intentional two-tier); plants-landscaping §8
+  TOC anchor mismatch (pre-existing).
+
 ## Execution plan (agreed 2026-07-28)
 
 1. This document (commit).

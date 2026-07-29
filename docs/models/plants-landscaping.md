@@ -17,18 +17,22 @@ without re-deriving real-world dimensions, colors, or animation ideas from scrat
 6. [Deciduous shade tree — maple, oak](#6-deciduous-shade-tree--maple-oak)
 7. [Evergreen / pine / conifer tree](#7-evergreen--pine--conifer-tree)
 8. [Palm tree and tropical](#8-palm-tree-and-tropical)
-9. [Shrub / bush and foundation planting](#9-shrub--bush-and-foundation-planting)
-10. [Hedge / privacy row](#10-hedge--privacy-row)
-11. [Flower bed and annual/perennial border](#11-flower-bed-and-annualperennial-border)
-12. [Vegetable garden bed and raised planter box](#12-vegetable-garden-bed-and-raised-planter-box)
-13. [Lawn / turf grass](#13-lawn--turf-grass)
-14. [Mulch bed and ground cover](#14-mulch-bed-and-ground-cover)
-15. [Ornamental grass](#15-ornamental-grass)
-16. [Cactus and desert / xeriscape planting](#16-cactus-and-desert--xeriscape-planting)
-17. [Climbing vine and trellis / arbor](#17-climbing-vine-and-trellis--arbor)
-18. [Outdoor potted plant and hanging basket](#18-outdoor-potted-plant-and-hanging-basket)
-19. [Rock garden and decorative boulders](#19-rock-garden-and-decorative-boulders)
-20. [Modeling notes for Diorama](#modeling-notes-for-diorama)
+9. [Oak tree (`oak_tree`)](#9-oak-tree-oak_tree)
+10. [Birch tree (`birch_tree`)](#10-birch-tree-birch_tree)
+11. [Willow tree (`willow_tree`)](#11-willow-tree-willow_tree)
+12. [Spruce tree (`spruce_tree`)](#12-spruce-tree-spruce_tree)
+13. [Shrub / bush and foundation planting](#13-shrub--bush-and-foundation-planting)
+14. [Hedge / privacy row](#14-hedge--privacy-row)
+15. [Flower bed and annual/perennial border](#15-flower-bed-and-annualperennial-border)
+16. [Vegetable garden bed and raised planter box](#16-vegetable-garden-bed-and-raised-planter-box)
+17. [Lawn / turf grass](#17-lawn--turf-grass)
+18. [Mulch bed and ground cover](#18-mulch-bed-and-ground-cover)
+19. [Ornamental grass](#19-ornamental-grass)
+20. [Cactus and desert / xeriscape planting](#20-cactus-and-desert--xeriscape-planting)
+21. [Climbing vine and trellis / arbor](#21-climbing-vine-and-trellis--arbor)
+22. [Outdoor potted plant and hanging basket](#22-outdoor-potted-plant-and-hanging-basket)
+23. [Rock garden and decorative boulders](#23-rock-garden-and-decorative-boulders)
+24. [Modeling notes for Diorama](#modeling-notes-for-diorama)
 
 ---
 
@@ -802,6 +806,33 @@ Front face = any orientation; palms are radially symmetric, no true "front" need
   crown assembly pattern.
 - No moving/openable parts — purely decorative, static geometry.
 
+**Diorama's shipped build** (the outdoor `palm_tree` `FurnitureKind`,
+`three-renderer.ts._buildFurniture`'s `case 'palm_tree'`) implements a specific,
+narrower version of the pattern above — fully deterministic (no `Math.random`), with
+`userData.treePart` tagging `'trunk'`/`'crown'`:
+
+- **Trunk**: unlike the generic "1–3 canes" guidance above, the shipped build is a
+  SINGLE trunk made of 3 stacked cylinder segments walked tip-to-tip, holding
+  `trunkH = HT × 0.86` of the total height (`HT = treeHeightMm(fu, def.ht)`) — by far
+  the tallest trunk fraction of any tree kind, since the frond crown is a small mass
+  near the very top. Segment tilts are `[0, 0.10, 0.20]` radians: the FIRST segment is
+  dead vertical (so the trunk's base sits flat on the ground rather than a tilted base
+  corner dipping below y=0), and the lean increases from the second segment up,
+  producing a gentle S-curve rather than a straight pole. Each segment tapers slightly
+  (`rTop = W×0.030 − i×W×0.004`, `rBot = W×0.034 − i×W×0.004`), tagged `'trunk'`.
+- **Crown hub**: a small sphere (`hubR = W × 0.055`) at the trunk's final tip position,
+  tagged `'crown'`.
+- **Fronds**: exactly `NF = 7`, evenly yawed around the hub, tagged `'crown'`. EVEN-
+  indexed fronds arch UP (`rotation.x = −0.30`), ODD-indexed fronds droop DOWN
+  (`rotation.x = +0.46`) — an explicit alternating pattern, not the generic "several
+  tilted downward" guidance above. Each frond is a thin `BoxGeometry` (not a flattened
+  cone), length `fl = min(min(W,D)×0.5×0.95, py×0.9)` — capped by BOTH the footprint
+  AND 90% of the crown height, so a drooping frond can never clip through the ground.
+- **Central spear**: a thin cone reaching from the hub straight up to exactly `HT`
+  (`spearH = max(hubR, HT − py)`) — guarantees the authored height is always met, the
+  same "reach exactly HT" pattern `oak_tree`'s clamped top lobe and `willow_tree`'s
+  clamped dome use, tagged `'crown'`.
+
 ### Colors & finishes
 - Foliage: mid-to-dark green (`#2e7d32`–`#3a5f3a` range), lighter yellow-green
   new-growth fronds optional as a second tone; toon shading bands this into 2 visible
@@ -811,13 +842,27 @@ Front face = any orientation; palms are radially symmetric, no true "front" need
 - Pot: standard planter finishes — matte black, white, terracotta, or woven-basket tan.
 - Soil: dark brown top disc, optionally with a lighter mulch/rock topping.
 
+**Shipped hex values**: bark `#8a6b45` (tan-brown), fronds/spear `#4f9e3a` — the frond
+green matches `FURNITURE_KINDS.palm_tree.color` (`#4f9e3a`) exactly (unlike
+`birch_tree`, where the kind-default swatch and the shipped leaf hex differ slightly).
+As with every tree kind, `roughness` on these materials (0.9/0.95) is authored but
+silently dropped by the shared toon `_mat()` factory — only color renders. 2D glyph
+(`canvas-render.ts`, `case 'palm_tree'`): a small translucent hub disc
+(`rgba(79,158,58,0.4)`, radius `r×0.55`) with 7 straight radiating strokes
+(`#4f9e3a`, `lineWidth 1.5`) out to the full radius — a literal top-down frond-star
+matching the 7 shipped 3D fronds — plus a tan trunk dot (`rgba(138,107,69,0.95)`,
+radius `r×0.16`).
+
 ### Placement
 - Indoor: **floor**-resting (pot base at y=0), typically corners of living rooms,
   entryways, sunrooms/offices, near windows. Also a small **mountable** tabletop
   variant (console table, desk) at 8–10″ pot scale.
 - Outdoor: floor/ground-resting in the yard — pairs with the existing `outdoor`
-  furniture category (alongside `tree`, `pine_tree`, `bush`, `flower_bed`) as a new
-  `palm_tree` kind; no wall/ceiling mounting variant makes sense.
+  furniture category (alongside `tree`, `pine_tree`, `bush`, `flower_bed`) as the
+  shipped `palm_tree` kind (`FURNITURE_KINDS.palm_tree`: `w:2200, h:2200, ht:5000` mm
+  default, `cat:'outdoor'`, `frontArrow:false`, `elevation` default 0, standard
+  blob-shadow decal + inverted-hull outline shell like every other tree kind); no
+  wall/ceiling mounting variant makes sense.
 - No standard rest height beyond "on the ground/floor" — height is all in the plant
   itself.
 
@@ -840,6 +885,14 @@ Front face = any orientation; palms are radially symmetric, no true "front" need
   as sibling kinds reusing the same pot+stem+foliage assembly.
 - Pot style options: black plastic nursery pot, decorative ceramic, woven basket, or
   none (ground-planted outdoor).
+- **Height (mm) override** (outdoor variant only — the shipped `palm_tree` is a member
+  of `TREE_KINDS`, like `tree`/`pine_tree`/`oak_tree`/`birch_tree`/`willow_tree`/
+  `spruce_tree`): the sidebar furniture editor shows a "Height (mm)" row writing the
+  per-piece `Furniture.ht` field (clamp `TREE_MIN_HEIGHT_MM`–`TREE_MAX_HEIGHT_MM` =
+  1000–15000 mm via `treeHeightMm`); blank/default keeps the kind's 5000 mm. The
+  trunk-segment walk, hub, all 7 fronds, and the central spear all scale together from
+  `HT = treeHeightMm(fu, def.ht)`, so a taller value grows a bigger palm of the same
+  proportions rather than stretching the shipped default.
 
 ### Animation opportunities
 - **Idle**: gentle continuous frond sway (small per-frond sinusoidal rotation.z/x
@@ -853,6 +906,11 @@ Front face = any orientation; palms are radially symmetric, no true "front" need
   "shiver" if a nearby door/window opens (nice-to-have, not required).
 - No seasonal state change expected (palms are evergreen) — unlike deciduous `tree`/
   `bush` kinds.
+- `userData.treePart` already tags the trunk segments/hub (`'trunk'`) separately from
+  the fronds/spear (`'crown'`) at build time — the natural split point for a future
+  per-frond sway pass (alternating up/down fronds would read especially well with a
+  phase-offset wobble); nothing reads these tags per frame yet, so this is a hook, not
+  a shipped behavior.
 
 **Sources**: [Palm Trees: Areca, Parlour, Kentia & Lady — HORTOLOGY](https://hortology.co.uk/blogs/guides-to-greenery/which-palm-is-right-for-you),
 [Kentia Palm Care — Joy Us Garden](https://www.joyusgarden.com/elegant-plant-lower-light-kentia-palm/),
@@ -865,7 +923,349 @@ Front face = any orientation; palms are radially symmetric, no true "front" need
 
 ---
 
-## 9. Shrub / bush and foundation planting
+## 9. Oak tree (`oak_tree`)
+
+### Typical dimensions
+Real-world oaks are the widest-canopied common shade tree (the generic write-up in
+[§6](#6-deciduous-shade-tree--maple-oak) already covers full nursery-to-heritage
+sizing); Diorama ships `oak_tree` as one discrete `FurnitureKind`
+(`geometry.ts` `FURNITURE_KINDS.oak_tree`) rather than a slider on the generic `tree`
+kind:
+
+| | Footprint (w × h) | Default height (`ht`) | Tint |
+|---|---|---|---|
+| Shipped default (`FURNITURE_KINDS.oak_tree`) | 3000 × 3000 mm | 5500 mm | `#4a7c2f` |
+
+The footprint is the WIDEST of the five species kinds — matching oak's real-world
+reputation for the broadest canopy of any common shade tree. **Height (mm) override**:
+like every kind in `TREE_KINDS` (`tree`, `pine_tree`, `oak_tree`, `birch_tree`,
+`palm_tree`, `willow_tree`, `spruce_tree`), the sidebar furniture editor for an
+`oak_tree` piece shows a "Height (mm)" row that writes the per-piece `Furniture.ht`
+field — the SAME field the stairs family uses for rise, a disjoint consumer — clamped
+`TREE_MIN_HEIGHT_MM`–`TREE_MAX_HEIGHT_MM` (1000–15000 mm); blank/default leaves the
+piece at the kind's 5500 mm. Because the build below is fully parametric in
+`HT = treeHeightMm(fu, def.ht)`, raising this value grows a proportionally bigger oak
+(trunk AND all four canopy lobes scale together) rather than stretching the default
+one — the footprint (width/depth) independently still sets how wide the canopy can
+spread.
+
+### Shape breakdown
+Built in `three-renderer.ts._buildFurniture`'s `case 'oak_tree'`, fully deterministic
+(no `Math.random` — the same piece rebuilds byte-identical every `_keyFloor` pass).
+Origin at ground/trunk-base center; `frontArrow: false` (radially near-symmetric, no
+selection chevron), though the four canopy lobes are NOT perfectly symmetric, so the
+piece's `rotation` still visibly turns the silhouette.
+
+- **Trunk**: one tapered cylinder, thick and SHORT relative to the broadleaf canopy —
+  `trunkH = HT × 0.34`, radius `W × 0.055` (top) tapering to `W × 0.085` (bottom), 12
+  radial segments. Tagged `userData.treePart = 'trunk'`.
+- **Canopy — four overlapping lobes** (each a `SphereGeometry`, tagged
+  `userData.treePart = 'canopy'`), radius `r = min(min(W,D)×0.5, span×0.85)` where
+  `span = HT − trunkH` (the canopy radius tracks the footprint UNLESS the authored
+  height is too short to hold it, in which case the available vertical span caps it —
+  the same clamp reused by `birch_tree`/`willow_tree` so a squashed tree never sinks
+  its lobes underground):
+  - Center-low lobe: radius `r × 0.62`, at `(0, trunkH + span×0.30, 0)`.
+  - Right lobe: radius `r × 0.50`, at `(r×0.42, trunkH + span×0.52, −r×0.20)`.
+  - Left lobe: radius `r × 0.46`, at `(−r×0.40, trunkH + span×0.50, r×0.24)`.
+  - Top lobe: radius `r × 0.44`, at
+    `(r×0.06, max(trunkH + topR×0.5, HT − topR), −r×0.05)` — its Y is clamped so the
+    canopy crown touches `HT` EXACTLY at any height setting.
+  The four-lobe offset cluster (rather than one or two spheres) is what reads as oak's
+  broader, lumpier, less-uniform silhouette next to the tidier `tree`/`birch_tree`
+  builds.
+
+### Colors & finishes
+- Trunk/bark: `#6b4a2b` (mid brown) — the SAME trunk hex every non-birch/non-palm/
+  non-willow tree kind uses.
+- Canopy: `#4a7c2f` (a duller, darker olive-green than `tree`'s `#3f7d2e`), matching
+  `FURNITURE_KINDS.oak_tree.color` exactly — the kind's default swatch and the shipped
+  3D leaf material agree for this kind.
+- Materials go through the shared `_mat()` toon factory: the `roughness: 0.9`/`0.95`
+  authored on the trunk/leaf materials is a PBR-only knob `_mat()` silently drops (see
+  "Sims-style rendering" in the codebase notes) — only `color` actually renders; real
+  banding comes from the shared 4-step toon gradient map.
+- 2D glyph (`canvas-render.ts.drawFurniturePrimitive`, `case 'oak_tree'`): a filled disc
+  (`rgba(74,124,47,0.6)`, i.e. `#4a7c2f`) with a `#3d6828` outer stroke, then three
+  overlapping stroke-only circles (`rgba(61,104,40,0.85)`, radius `r×0.44`, offset
+  `r×0.36` from center at 120° apart) reading as "scalloped" lobes from above, plus a
+  brown trunk dot (`rgba(107,74,43,0.9)`, radius `r×0.16`). `Furniture.color` (a
+  per-piece override, distinct from the kind default) recolors the base disc fill via
+  the shared `bodyFill()` helper; the lobe/trunk accents stay fixed.
+
+### Placement
+- `cat: 'outdoor'` — ground-resting only (`elevation` default 0), sits on grade in the
+  yard alongside `tree`/`pine_tree`/`bush`/`birch_tree`/etc. No wall/ceiling/mountable
+  variant.
+- Blocks nav by its footprint exactly like any other furniture piece (not exempted the
+  way rugs/stairs/elevated pieces are) — same real-world guidance as §6 applies (keep
+  clear of foundations in practice; the tool doesn't hard-block placement).
+- Gets the standard blob-shadow decal + inverted-hull outline shell like all furniture
+  (no exemption for trees).
+
+### Active / interactive state
+- No HA entity binding, no `activity` anchor — pure static outdoor decor, same class as
+  `tree`/`pine_tree`/`bush`. No click-to-toggle, no powered state.
+
+### Variations & customizations
+- **Height (mm) override** (see "Typical dimensions" above) is the one species-specific
+  variation knob beyond the standard footprint (w/h) and per-piece color/rotation/
+  elevation/lock fields every furniture piece already has.
+- Footprint (w/h) independently controls canopy spread; height independently controls
+  how tall the trunk + all four lobes scale — the two together let a modeler dial a
+  short-fat oak or a tall-narrow one from the same piece.
+- `Furniture.color` overrides the 2D glyph fill only (see Colors above); the 3D leaf
+  material color is fixed per-kind (no live 3D recolor path for trees today).
+
+### Animation opportunities
+- **Not yet built** — `userData.treePart` tags each mesh's structural role
+  (`'trunk'`/`'canopy'`) at build time, but nothing currently reads those tags per
+  frame (no wind-sway pass exists for any tree kind yet). That tagging is exactly the
+  hook a future sway system would need: it could rotate/wobble the four `'canopy'`
+  lobes independently of the rigid `'trunk'` mesh without re-deriving which children
+  are foliage, mirroring the idle-sway idiom already described in §6/§7 for the generic
+  `tree`/`pine_tree` kinds.
+
+---
+
+## 10. Birch tree (`birch_tree`)
+
+### Typical dimensions
+| | Footprint (w × h) | Default height (`ht`) | Tint |
+|---|---|---|---|
+| Shipped default (`FURNITURE_KINDS.birch_tree`) | 1800 × 1800 mm | 5000 mm | `#7fbf4d` |
+
+The narrowest footprint of the five species kinds — matching real birches' slender,
+airy silhouette next to a broad oak. Same **Height (mm) override** mechanism as every
+`TREE_KINDS` member: a sidebar "Height (mm)" row writing `Furniture.ht`, clamped
+1000–15000 mm, parametric in `HT = treeHeightMm(fu, def.ht)` so a taller value grows a
+bigger birch (trunk, bark bands, and both canopy clumps all scale together) rather than
+stretching the default 5000 mm one.
+
+### Shape breakdown
+`three-renderer.ts._buildFurniture` `case 'birch_tree'`; deterministic, no
+`Math.random`. `frontArrow: false`, but the two-clump canopy is asymmetric so
+`rotation` still changes the silhouette.
+
+- **Trunk**: unusually TALL and slender relative to the other species —
+  `trunkH = HT × 0.55` (birch is the only kind whose trunk holds more than half the
+  total height; compare oak's `0.34` and pine's `0.16`) — radius `W × 0.032` (top) to
+  `W × 0.042` (bottom), 10 radial segments. Tagged `'trunk'`.
+- **Bark bands** — birch's signature dark horizontal scars: 4 thin oversized rings
+  (short cylinders, radius ≈ the trunk's interpolated taper radius at that height ×
+  1.06 so the band pokes slightly proud of the trunk surface, height
+  `max(20, HT × 0.012)`) at fractional trunk heights `f = 0.16, 0.33, 0.5, 0.68`. Also
+  tagged `'trunk'`.
+- **Canopy — two clumps** (spheres, tagged `'canopy'`), radius
+  `r = min(min(W,D)×0.5, span×0.85)` where `span = HT − trunkH` (the same footprint/
+  span cap `oak_tree` uses):
+  - Lower clump: radius `r × 0.72`, at `(−r×0.10, trunkH + span×0.32, r×0.08)`.
+  - Top clump: radius `r × 0.62`, at
+    `(r×0.18, max(trunkH + cTopR×0.5, HT − cTopR), −r×0.12)` — clamped so the crown
+    touches `HT` exactly.
+  Only TWO clumps (vs. oak's four or `tree`'s three) is what reads as birch's lighter,
+  airier canopy — deliberately sparser than the broadleaf kinds.
+
+### Colors & finishes
+- **Bark**: `#e8e4dc` — a near-white/cream, distinctly lighter than every other tree
+  kind's brown bark (birch's real-world signature). Bark bands: `#3a3a38` (near-black
+  dark grey), reading as the classic birch scar marks.
+- **Canopy**: `#8fc95a` (a bright light green) in the actual 3D build — note this does
+  **not** exactly match `FURNITURE_KINDS.birch_tree.color` (`#7fbf4d`, a slightly
+  different light green used for the kind's default swatch/list tint); the two are
+  close but not identical, unlike `oak_tree` where the def color and the shipped leaf
+  hex agree exactly.
+- `roughness` values on the bark/band/leaf materials (0.85/0.9/0.95) are authored but
+  silently dropped by the shared toon `_mat()` factory (PBR-only knobs) — only color
+  renders.
+- 2D glyph (`canvas-render.ts`, `case 'birch_tree'`): filled disc `rgba(143,201,90,0.55)`
+  (`#8fc95a`) with a `#7fbf4d` stroke — reading airier/lighter than oak's denser fill
+  alpha (0.55 vs 0.6). A distinctly pale trunk dot (`rgba(232,228,220,0.95)` = the bark
+  cream, radius `r×0.2`) with a dark `rgba(58,58,56,0.9)` outline — the one species
+  whose top-down trunk dot reads white/cream instead of brown, visually calling out the
+  bark color from the 2D plan.
+
+### Placement
+- `cat: 'outdoor'`, ground-resting only, `elevation` default 0 — alongside `tree`/
+  `oak_tree`/`bush`, no mountable/wall/ceiling variant.
+- Ordinary nav-blocking footprint; standard blob shadow + outline shell.
+
+### Active / interactive state
+- No HA binding, no `activity` anchor — static decor like the other tree kinds.
+
+### Variations & customizations
+- **Height (mm) override** — see "Typical dimensions." The only species-specific knob
+  beyond the standard footprint/color/rotation/elevation/lock fields.
+- Because the trunk holds most of the authored height (`0.55×`) here, raising
+  "Height (mm)" visibly stretches the exposed white trunk + bands more than it grows
+  the canopy — the opposite emphasis from e.g. `spruce_tree`, where nearly all of a
+  height increase goes into the needle tiers.
+
+### Animation opportunities
+- Not yet built (see `oak_tree`'s note — no wind-sway pass exists for any tree kind).
+  `userData.treePart` distinguishes the trunk+bands (`'trunk'`) from the two canopy
+  clumps (`'canopy'`), the natural split point for a future sway pass; birch's slender
+  trunk and sparse two-clump canopy would read especially well with a slightly larger
+  sway amplitude than the denser oak/spruce canopies (real birches are famously
+  wind-responsive) — a tuning note for whoever builds that system, not shipped today.
+
+---
+
+## 11. Willow tree (`willow_tree`)
+
+### Typical dimensions
+| | Footprint (w × h) | Default height (`ht`) | Tint |
+|---|---|---|---|
+| Shipped default (`FURNITURE_KINDS.willow_tree`) | 3200 × 3200 mm | 4500 mm | `#6a9c47` |
+
+The WIDEST footprint of all five species kinds (even wider than `oak_tree`'s 3000 mm)
+paired with the SHORTEST default height (4500 mm) — matching a real weeping willow's
+low, wide-spreading, ground-hugging silhouette rather than a tall canopy. Same
+**Height (mm) override** mechanism: a sidebar "Height (mm)" row writes `Furniture.ht`
+(clamped 1000–15000 mm via `treeHeightMm`); the build is parametric in `HT`, so raising
+it grows the trunk, dome, AND all 8 drapes together.
+
+### Shape breakdown
+`three-renderer.ts._buildFurniture` `case 'willow_tree'`; deterministic. `frontArrow:
+false`; the drape ring is evenly spaced but the code still applies `fu.rotation` like
+every other kind, so the piece can still be turned.
+
+- **Trunk**: `trunkH = HT × 0.30`, radius `W × 0.045` (top) to `W × 0.065` (bottom), 12
+  radial segments. Tagged `'trunk'`.
+- **Canopy dome**: one SQUASHED sphere — radius `domeR = r × 0.82` where
+  `r = min(min(W,D)×0.5, span×0.85)` (`span = HT − trunkH`, the same footprint/span cap
+  as `oak_tree`/`birch_tree`), vertically scaled to `domeSY = 0.78` (flattened, not a
+  full sphere), positioned so its top touches `HT` exactly
+  (`domeCY = HT − domeR × domeSY`). Tagged `'canopy'`.
+- **Drapes — the weeping signature**: a ring of 8 tapered cylinders (`ND = 8`), tagged
+  `'drape'` (a `treePart` value unique to this kind — no other tree kind uses it),
+  hanging `drapeLen = span × 0.60` down from the dome's underside. Each drape tapers
+  from `W × 0.050` (thick, where it meets the foliage mass) down to `W × 0.014` (a thin
+  drooping tip), arranged evenly around a ring of radius `r × 0.72` at
+  `y = domeCY − drapeLen × 0.45`. The 8 hanging drapes are what visually separate
+  willow from every other canopy-dome kind — nothing else in `TREE_KINDS` has a
+  drooping fringe layer.
+
+### Colors & finishes
+- Trunk: `#6b5439` (medium brown, distinct from the `#6b4a2b` every kind but
+  `birch_tree`/`palm_tree` shares).
+- Canopy dome: `#6a9c47` — matches `FURNITURE_KINDS.willow_tree.color` exactly.
+- Drapes: `#7fae52` — a separate, slightly lighter/yellower green than the dome, so the
+  hanging fronds read as a distinct layer rather than blending into the canopy mass.
+- 2D glyph (`canvas-render.ts`, `case 'willow_tree'`): a filled disc at `r × 0.78`
+  (smaller than the full footprint radius, echoing the squashed/domed 3D canopy) —
+  `rgba(106,156,71,0.55)` with a `#6a9c47` stroke — followed by 8 small stroke-only
+  circles (`rgba(127,174,82,0.9)`, radius `r×0.14`) arranged around a ring at
+  `r × 0.72`, i.e. a literal top-down read of the 8 drapes, plus a brown trunk dot
+  (`rgba(107,84,57,0.9)`, radius `r×0.14`).
+
+### Placement
+- `cat: 'outdoor'`, ground-resting (`elevation` 0), alongside `tree`/`bush`/etc. Real
+  weeping willows want damp ground near water features (pairs conceptually with
+  `bird_bath`/`fountain` in the same category) — no special placement enforcement in
+  the tool though.
+- Ordinary nav-blocking footprint (the widest of the five, so it reserves the most
+  floor-plan real estate); standard blob shadow + outline shell.
+
+### Active / interactive state
+- No HA binding, no `activity` anchor — static decor.
+
+### Variations & customizations
+- **Height (mm) override** — see "Typical dimensions."
+- Because willow's footprint is the largest of the five kinds while its default height
+  is the smallest, it's the one species where the width×depth fields do most of the
+  visual "size" work rather than the height field — worth calling out to a modeler
+  expecting height to dominate scale the way it does for `spruce_tree`.
+
+### Animation opportunities
+- Not yet built. Willow is the single best candidate for a future sway pass among the
+  five species — real weeping willows are famous for cascading, wind-responsive
+  drapes — and `userData.treePart === 'drape'` already isolates exactly the 8 meshes
+  that should lag/sway independently of the rigid dome and trunk, the same idiom the
+  codebase already uses for macrame-planter trailing vines ([§4](#4-hanging-indoor-plant-and-macrame-planter))
+  and pothos vine tips ([§1](#1-small-indoor-potted-plant-succulent--pothos--herb)) —
+  drapes phase-offset per drape for a "trailing in the breeze" look, not synchronized.
+
+---
+
+## 12. Spruce tree (`spruce_tree`)
+
+### Typical dimensions
+| | Footprint (w × h) | Default height (`ht`) | Tint |
+|---|---|---|---|
+| Shipped default (`FURNITURE_KINDS.spruce_tree`) | 2000 × 2000 mm | 6000 mm | `#2c5f52` |
+
+The TALLEST default height of all five species kinds (6000 mm — taller even than
+`oak_tree`'s 5500 mm) on a comparatively modest footprint, matching a real spruce's
+narrow, towering profile next to a broad oak or willow. Same **Height (mm) override**:
+a sidebar "Height (mm)" row writes `Furniture.ht` (clamp 1000–15000 mm via
+`treeHeightMm`); the build is parametric in `HT`, so a taller value grows every one of
+the five stacked cone tiers together.
+
+### Shape breakdown
+`three-renderer.ts._buildFurniture` `case 'spruce_tree'` — "a denser, bluer, taller
+sibling of the [existing] `pine_tree`." Deterministic. `frontArrow: false` (the cone
+stack IS fully radially symmetric, so rotation has no visible effect here — unlike
+oak/birch/willow/palm).
+
+- **Trunk**: the SHORTEST exposed trunk of any kind, `trunkH = HT × 0.10` (branches
+  read almost to the ground, even more than `pine_tree`'s already-short `0.16`), radius
+  `W × 0.045` (top) to `W × 0.062` (bottom), 10 radial segments. Tagged `'trunk'`.
+- **Canopy — five stacked cones** (tagged `'canopy'`), radius `r = min(W, D) × 0.5`
+  (unlike oak/birch/willow, the radius is NOT additionally capped by the vertical span
+  — five overlapping tiers can't sink underground the way 1–4 offset spheres can).
+  `span = HT − trunkH`, `tiers = 5`, `overlap = 1.45`. Each tier's cone HEIGHT is
+  `ch = (span / tiers) × overlap` — 45% taller than an even division of the span, so
+  consecutive tiers overlap vertically and there's no visible gap between them. Tier
+  radius shrinks 17% per tier going up (`rr = r × (1 − i × 0.17)`, i = 0..4) — the
+  classic tightening Christmas-tree taper. Tier Y position is
+  `trunkH + span × (i / tiers) + ch × k`, where `k = 1/overlap − 0.5` is a constant
+  DERIVED from the overlap factor specifically so the fifth (top) tier's tip lands
+  exactly on `HT` at any height — the same "reach exactly HT" pattern as `oak_tree`'s
+  clamped top lobe, but solved algebraically here instead of clamped per-frame.
+
+### Colors & finishes
+- Trunk: `#5c4630` (a darker, slightly redder brown than the other kinds' `#6b4a2b`).
+- Needles: `#2c5f52` — a dark, muted BLUE-green (visibly bluer/darker than every other
+  species' canopy hex), reading as a blue-spruce-flavored conifer next to `pine_tree`'s
+  plain forest green (`#2f6d3a`). Matches `FURNITURE_KINDS.spruce_tree.color` exactly.
+- 2D glyph (`canvas-render.ts`, `case 'spruce_tree'`): "like the pine hint but denser +
+  a dark blue-green outer ring" — filled disc `rgba(44,95,82,0.6)` (`#2c5f52`) with the
+  outer boundary itself STROKED `#1f4a40` at `lineWidth 1.5` (`pine_tree`'s glyph never
+  strokes its outer boundary, only fills it), then two concentric inner rings
+  (`rgba(31,74,64,0.85)`, radius `r×0.68` and `r×0.4`) — where `pine_tree`'s glyph
+  draws only ONE inner ring — visually implying the extra tiers (5 vs. pine's 3). Brown
+  trunk dot (`rgba(92,70,48,0.9)`, radius `r×0.14`).
+
+### Placement
+- `cat: 'outdoor'`, ground-resting (`elevation` 0), alongside `pine_tree`/`tree`/`bush`.
+  Real spruces are the classic tight-spacing screening conifer (§7's spacing guidance
+  applies) — no enforcement in the tool.
+- Ordinary nav-blocking footprint; standard blob shadow + outline shell.
+
+### Active / interactive state
+- No HA binding, no `activity` anchor — static decor, same as `pine_tree`.
+
+### Variations & customizations
+- **Height (mm) override** — see "Typical dimensions." Because the trunk holds only
+  10% of the total height, almost the entire "Height (mm)" range goes into stretching
+  the five-tier canopy — the opposite trade-off from `birch_tree`, where more than half
+  the height is exposed trunk.
+- The `overlap`/`k` derivation is fixed at build time (not user-exposed) — a modeler
+  wanting a looser/gappier tier stack would need a new kind or a recipe override, not a
+  sidebar field.
+
+### Animation opportunities
+- Not yet built (see `oak_tree`). `userData.treePart` tags all five cone tiers as
+  `'canopy'` uniformly (no per-tier distinction), so a future sway pass would most
+  naturally treat the whole stack as one rigid-ish mass with a small per-tier phase
+  offset — matching §7's existing suggestion for the generic `pine_tree`/conifer
+  family (subtle rotation wobble, low amplitude, offset phase per tree so a planted
+  row doesn't sway in lockstep).
+
+---
+
+## 13. Shrub / bush and foundation planting
 
 ### Typical dimensions
 Mature, landscape-installed — width × depth (spread, roughly circular canopy so W≈D) ×
@@ -973,7 +1373,7 @@ All primitives, no moving parts — static landscaping prop.
 
 ---
 
-## 10. Hedge / privacy row
+## 14. Hedge / privacy row
 
 ### Typical dimensions
 Build as a repeatable linear segment (e.g. 1000 mm) and array along a wall/property
@@ -1070,7 +1470,7 @@ Per 1000 mm run segment, arrayed/tiled along a path.
 
 ---
 
-## 11. Flower bed and annual/perennial border
+## 15. Flower bed and annual/perennial border
 
 ### Typical dimensions
 Footprint sits flush on the ground/yard plane, no meaningful "height" beyond mounded
@@ -1181,7 +1581,7 @@ Front = local −Z, the side that "faces" the walkway/lawn where low plants go.
 
 ---
 
-## 12. Vegetable garden bed and raised planter box
+## 16. Vegetable garden bed and raised planter box
 
 ### Typical dimensions
 Ground-level raised bed, box-frame construction.
@@ -1278,7 +1678,7 @@ Origin at bed center on the floor, +Z = front/long viewing side.
 
 ---
 
-## 13. Lawn / turf grass
+## 17. Lawn / turf grass
 
 ### Typical dimensions
 A ground-covering material, not a discrete object — "size" means patch footprint +
@@ -1385,7 +1785,7 @@ Not a primitive-composite prop like furniture — a **ground plane treatment**.
 
 ---
 
-## 14. Mulch bed and ground cover
+## 18. Mulch bed and ground cover
 
 ### Typical dimensions
 A garden bed as a landscaping "fixture," not a single object.
@@ -1489,7 +1889,7 @@ A garden bed as a landscaping "fixture," not a single object.
 
 ---
 
-## 15. Ornamental grass
+## 19. Ornamental grass
 
 ### Typical dimensions
 Planted clump, in-ground or large planter; W×D roughly equal (radially symmetric).
@@ -1597,7 +1997,7 @@ placement.
 
 ---
 
-## 16. Cactus and desert / xeriscape planting
+## 20. Cactus and desert / xeriscape planting
 
 ### Typical dimensions
 Width × depth × height in mm; W×D = canopy/rosette footprint, not pot.
@@ -1738,7 +2138,7 @@ matters for pot label/shadow bias.
 
 ---
 
-## 17. Climbing vine and trellis / arbor
+## 21. Climbing vine and trellis / arbor
 
 ### Typical dimensions
 Three related placeable sub-types — wall trellis, freestanding obelisk/tuteur, and
@@ -1862,7 +2262,7 @@ Local origin at ground center, +Z = front/viewing side.
 
 ---
 
-## 18. Outdoor potted plant and hanging basket
+## 22. Outdoor potted plant and hanging basket
 
 ### Typical dimensions
 Converted from standard nursery/retail sizing.
@@ -1972,7 +2372,7 @@ but keep foliage asymmetry facing +Z.
 
 ---
 
-## 19. Rock garden and decorative boulders
+## 23. Rock garden and decorative boulders
 
 ### Typical dimensions
 Footprint bed × height; boulders given as diameter.

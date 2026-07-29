@@ -46,7 +46,13 @@ import {
   flightDisplayPos, flightShellMm, sanitizeLabelFields,
   resolveFlightGlow, flightGlowFrame, lerpHexColor, FLIGHT_DEFAULT_BEACON,
   FLIGHT_LABEL_FIELDS_DEFAULT, FLIGHTS_DEFAULT_RADIUS_NM, type FlightPoint,
+  flightFieldText, flightLabelLines,
 } from './flights.js';
+// The label-text resolvers live in flights.ts (pure, shared with three-renderer
+// so the 2D line and the 3D plate can never drift — they used to be mirrored
+// copies here). Re-exported because the flights-ui test page consumes them off
+// the combined canvas bundle.
+export { flightFieldText, flightLabelLines };
 import type { Planner } from './planner.js';
 import type { Vec2, LightIconKind, Furniture, ObjectRecipe, RecipePrimitive, HassState } from './types.js';
 
@@ -364,48 +370,6 @@ export const FLIGHT_BEACON_COLORS = FLIGHT_DEFAULT_BEACON;
 export function flightBeaconColor(fp: FlightPoint, on: boolean,
                                   rules?: import('./flights.js').FlightGlowRule[]): string | null {
   return resolveFlightGlow(fp, rules, on)?.colorA ?? null;
-}
-
-// One label field's text. Mirrors three-renderer's _flightFieldText (same
-// buckets, same fallbacks) so 2D and 3D read identically.
-export function flightFieldText(field: string, fp: FlightPoint,
-                                ident: string, suppress: boolean): string {
-  switch (field) {
-    case 'callsign': return ident;
-    case 'reg':      return suppress ? '' : (fp.reg ?? '');
-    case 'type':     return suppress ? '' : (fp.typeCode ?? '');
-    case 'operator': return suppress || !fp.operator ? '' : fp.operator.slice(0, 22);
-    case 'alt':      return `${(Math.round(fp.altFt / 100) * 100).toLocaleString('en-US')} ft`;
-    case 'speed':    return fp.gsKt == null ? '' : `${Math.round(fp.gsKt / 10) * 10} kt`;
-    case 'trend': {
-      const v = fp.vertRateFpm ?? 0;
-      return v >= 300 ? '↑ climb' : v <= -300 ? '↓ descend' : '';
-    }
-    case 'squawk':   return fp.squawk ? `sq ${fp.squawk}` : '';
-    case 'dist':     return fp.distNm == null ? ''
-      : `${(Math.round(fp.distNm * 2) / 2).toFixed(1)} nm`;
-    default:         return '';
-  }
-}
-
-// The 2D label's two lines, from the user's labelFields (absent = the shipped
-// callsign + altitude pair). PIA-suppressed aircraft show only their hex.
-export function flightLabelLines(
-  fp: FlightPoint, fields: string[], privacyDim: boolean,
-): { top: string; sub: string } {
-  const suppress = privacyDim && fp.pia === true;
-  const dimmed = privacyDim && (fp.pia === true || fp.ladd === true);
-  const cs = (fp.callsign ?? '').trim();
-  const reg = (fp.reg ?? '').trim();
-  const ident = (dimmed ? '🔒 ' : '')
-    + (suppress ? fp.hex.toUpperCase() : (cs || reg || fp.hex.toUpperCase()));
-  const parts: string[] = [];
-  for (const f of fields) {
-    const t = flightFieldText(f, fp, ident, suppress);
-    if (t) parts.push(t);
-  }
-  if (!parts.length) parts.push(ident);
-  return { top: parts[0], sub: parts.slice(1).join(' · ') };
 }
 
 // Where each aircraft's dart landed last frame, for hit-testing (the

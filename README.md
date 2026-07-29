@@ -41,28 +41,53 @@ pushes the whole site to GitHub Pages.
   and through doorways**, sit down, and run contextual activities: making
   coffee, loading the dishwasher, watching a TV that's actually on, working
   out, getting **censored in the shower**, and hiding under the **covers**
-  two-to-a-bed. Time- and place-aware thought bubbles. 22 avatar models with
-  their own walk styles; motion sensors can drive room-confined **AI avatars**.
+  two-to-a-bed. Idle fidgets, shared **props** (broom, watering can, umbrella,
+  snacks), automatic **costume swaps** (pyjamas at night, an apron while
+  cooking), and time- and place-aware thought bubbles. Avatars ship as
+  **loadable packs** — 9 always-on base packs plus 52 opt-in franchise packs —
+  and motion sensors can drive room-confined **AI avatars** or always-on
+  **demo avatars**; **roamers** need no sensor at all.
 - **Know who's who** — a **People** registry (avatars, colors, pets), **BLE /
   Bermuda** indoor positioning solved panel-side from your Bluetooth proxies,
   and **identity fusion** that dresses a precise radar figure in a person's
   avatar and floating **name label**. **Pets** render as cat/dog rigs.
 - **The world outside** — **GPS device pins** in the yard with a landmark
-  calibration flow, and **weather** (entity / local sensors / keyless
-  Open-Meteo) with a corner chip plus 3D rain, snow, fog, wind, and lightning.
-- **Real floor plans** — walls with 15° snapping and auto-welding, half walls
-  and railings, doors and five window styles that cut real openings, stairs
-  with landings, floors clipped to your rooms, named rooms, item locking, and
+  calibration flow (CSV import, per-pin alignment exclusion), an on-screen
+  **compass** and north marker, **weather** (entity / local sensors / keyless
+  Open-Meteo) with a corner chip, government **weather alerts**, and 3D rain,
+  snow, fog, wind and lightning under an astronomically-correct **night sky**
+  (real constellations, planets, and moon phase).
+- **Beyond the property line** — a **neighborhood overlay** that pulls the real
+  surrounding buildings, roads and water from OpenFreeMap/OSM vector tiles, and
+  live **flight tracking** — ADS-B aircraft and the ISS rendered in the sky,
+  with archetype-accurate models, callsign labels, status beacons and
+  user-defined glow rules.
+- **Real floor plans** — walls with 15° snapping and auto-welding, half walls,
+  railings, fences and hedges, **8 door kinds** and **5 window styles** that cut
+  real openings, curtains and blinds, stairs with landings and descending
+  flights, floor voids, per-floor elevations, floors clipped to your rooms,
+  named rooms, a ruler tool with CAD dimensions, item locking, undo/redo, and
   smart alignment guides.
-- **A full catalog + custom objects** — seating, sectionals, beds, casework
-  with door pulls, spec-size appliances, bathroom fixtures, counter-mounted
-  gadgets — plus a form-based editor to build your own objects from primitives.
-- **Every kind of light** — recessed cans, pendants, sconces, step lights, LED
-  strips and strings, under-cabinet lighting, ceiling fans that spin at the
-  fan's real speed, and a crackling wall-snapping fireplace.
-- **Synced through HA** — the whole model lives in Home Assistant user data, so
-  every browser and tablet sees the same home.
-- **Kiosk & view-only modes** — pin a wall tablet to a configured view via URL.
+- **A full catalog + custom objects** — ~96 furniture kinds across furniture,
+  appliance, bathroom, outdoor, theater and vehicle categories: seating,
+  sectionals, beds, casework with door pulls, spec-size appliances, mechanical
+  plant (water heaters, HVAC, pumps, a 3D printer), home-theater seating,
+  vehicles and EV chargers — plus a form-based editor to build your own objects
+  from primitives, and a **Sweet Home 3D importer** that turns a `.sh3d` file
+  into real editable walls, rooms, openings and furniture.
+- **Every kind of light** — 26 fixture kinds: recessed cans, pendants, sconces,
+  step lights, LED strips and strings, under-cabinet lighting, floodlights,
+  in-ground uplights, heat lamps, exhaust fans, ceiling fans that spin at the
+  fan's real speed, and a crackling wall-snapping fireplace. Lights can also be
+  driven by **logic rules** off any entity's value.
+- **The yard** — ground paint (grass / rock / concrete / blacktop / mulch /
+  sand / water), terraced elevations, paths and driveways, pools and spas,
+  sprinkler zones, and a flagpole with 16 flags.
+- **Synced through HA** — the whole model lives in Home Assistant user data as
+  a registry of **named configurations**, so every browser and tablet sees the
+  same home, and you can keep several plans side by side.
+- **Kiosk & view-only modes** — pin a wall tablet to a configured view via URL,
+  or drop the **Lovelace card** onto any dashboard.
 
 ### Kiosk & view-only modes
 
@@ -83,36 +108,55 @@ See the [full parameter table](docs/GUIDE.md#kiosk--view-only-modes).
 
 ## Layout
 
+Three build entries share one code-split three.js chunk: the standalone/iframe
+page, the HA `panel_custom` module, and the Lovelace card.
+
 ```
 .
 ├── package.json
 ├── tsconfig.json
 ├── vite.config.ts
-├── index.html              # entry; mounts <diorama-app>
+├── index.html              # entry 1 — standalone / iframe; mounts <diorama-app>
+├── test-pages/             # deterministic renderer + logic test harnesses
 └── src/
     ├── main.ts             # bootstrap
+    ├── panel.ts            # entry 2 — HA panel_custom → dist/diorama-panel.js
+    ├── card.ts             # entry 3 — Lovelace card → dist/diorama-card.js
     ├── types.ts            # domain types (Floor, Sensor, MotionSensor, Light,
     │                       # SwitchFixture, Furniture, FurnitureKind, LightIconKind, ...)
     ├── storage.ts          # localStorage cache (key: diorama:store:v1)
     ├── geometry.ts         # transforms, snap, point-in-polygon, fixture defaults,
     │                       # FURNITURE_KINDS, SENSOR_PALETTE, hex/lighten utilities
     ├── ha-client.ts        # HA WebSocket client + device/entity registry + user-data store
+    ├── ha-panel-adapter.ts # HaApi over the hass object HA injects into panels
+    ├── ha-local.ts         # offline / standalone HaApi (localStorage-backed)
     ├── sensor-discovery.ts # LD2450 entity discovery per device
     ├── three-renderer.ts   # Three.js 3D scene + raycast click + animated humanoids
     ├── planner.ts          # central state class (events: live, config, conn)
     ├── canvas-render.ts    # 2D canvas drawing
     ├── canvas-hit.ts       # 2D hit tests
     ├── canvas-interact.ts  # mouse / touch handlers, zone editor, fixture click-vs-drag
+    ├── avatars.ts          # avatar-pack registry + resolution (three.js-free)
+    ├── avatar-packs/       # built-in avatar packs (lazy-loaded bodies)
+    ├── sh3d.ts             # Sweet Home 3D .sh3d structural importer
+    ├── geo.ts              # lat/lon ↔ plan fit, landmarks, GPS pins
+    ├── weather.ts          # weather normalization + Open-Meteo (pure + isolated fetch)
+    ├── flights.ts          # ADS-B normalization, label + glow resolution (pure)
+    ├── neighborhood.ts     # OSM/OpenFreeMap tile extraction (pure)
+    ├── mqtt-ws.ts          # MQTT 3.1.1 codec + WS client (Frigate / Valetudo bridge)
+    ├── value-rules.ts      # shared rule engine (info cards, action buttons, logic lights)
     ├── styles.ts           # shared CSS (light-DOM components)
     └── ui/
         ├── app.ts          # <diorama-app> root
         ├── auth-screen.ts  # <diorama-auth>
         ├── topbar.ts       # <diorama-topbar>
         ├── sidebar.ts      # <diorama-sidebar>
+        ├── toolbar.ts      # <diorama-toolbar> visual placement dock
         ├── canvas-2d.ts    # <diorama-canvas-2d>
         ├── three-view.ts   # <diorama-three-view>
+        ├── card-editor.ts  # <diorama-card-editor> (Lovelace visual editor)
         └── modals.ts       # floor settings, entity picker, light config,
-                            # zone-edit bar, settings drawer
+                            # zone-edit bar, settings drawer, fixture cards
 ```
 
 ## Develop
@@ -291,38 +335,62 @@ later, open **Settings ▸ Connection** and click **Exit offline mode**.
 
 ## Sweet Home 3D import
 
+Three ways in, from cheapest to most useful:
+
+- **Structural import (recommended)**: **Settings ▸ Data ▸ Import Sweet Home 3D
+  (`.sh3d`)** reads the native archive and builds **real, editable Diorama
+  data** — levels become floors (stacked and registered), walls become walls,
+  rooms become named rooms, doors and windows snap onto their host walls, and
+  furniture maps to the closest Diorama kind at its real footprint. Unmatched
+  pieces are skipped rather than dropped in as blank blocks, and anything
+  ambiguous (an open-plan room with no enclosing walls, say) is reported as a
+  warning instead of failing the import.
 - **Plan underlay (2D)**: export your plan as SVG (Plan → Export to SVG
   format), then upload via the sidebar's **Background image** section. SVG
   stays crisp at any zoom.
-- **Full 3D model**: export via 3D view → Export to OBJ format, then import
-  the `.obj` (plus `.mtl` for colors) in the sidebar's **3D Model** section.
-  Sweet Home 3D exports centimeters, so the default 10 mm/unit scale is 1:1.
-  Adjust X/Y offset + rotation to line the model up with your floor. Model
-  geometry is stored in the browser (IndexedDB); placement settings sync
-  through HA.
+- **Full 3D model (visual shell)**: export via 3D view → Export to OBJ format,
+  then import the `.obj` (plus `.mtl` for colors) in the sidebar's **3D Model**
+  section. Sweet Home 3D exports centimeters, so the default 10 mm/unit scale
+  is 1:1. Adjust X/Y offset + rotation to line the model up with your floor.
+  Imported materials are converted to the toon look so the shell matches the
+  rest of the scene. Model geometry is stored in the browser (IndexedDB);
+  placement settings sync through HA.
 
 ## 3D scene appearance
 
-Sidebar **3D Scene** section: lighting presets (Night / Day / Dusk), floor
-color, procedural floor textures (wood / tile / concrete), wall color. Night
-keeps the original dark look where bound HA lights dominate; Day/Dusk add
-hemisphere + sun lighting for exterior-style renders.
+**Settings ▸ Display**: lighting presets (Night / Day / Dusk), floor color,
+procedural floor textures (wood / tile / concrete), wall color. Night keeps the
+original dark look where bound HA lights dominate; Day/Dusk add hemisphere +
+sun lighting for exterior-style renders. Lighting can also follow the clock
+(via `sun.sun`) or a lux sensor automatically, and each floor can override the
+global colors.
+
+Also here: the **glass-house** doll's-house view and wall cutaway, auto-follow
+and cinematic-orbit cameras, camera pivot / free-movement and FOV, the sky
+backdrop, ground level, the compass, and background text. Per-floor elevations
+and the yard fill live in the sidebar's **Floors** section.
 
 ## Storage
 
 **Home Assistant is the source of truth.** The full diorama (floors, walls,
 furniture, sensors, motion sensors, lights, switches, bg images) is persisted
-in HA's `frontend.user_data` table under the key `diorama` — the same plumbing
-HA's own UI uses for sidebar order / theme prefs. This means:
+in HA's `frontend.user_data` table — the same plumbing HA's own UI uses for
+sidebar order / theme prefs. This means:
 
 - Data syncs across browsers / devices automatically.
 - It survives browser data clear.
 - It's included in HA backups.
 
-`localStorage` (key `diorama:store:v1`) is the **local cache** so the panel
-paints instantly on load, then reconciles with HA once the WebSocket auth
-completes. If HA returns a payload, it replaces the cache. If HA is empty
-(first launch), the local cache is pushed up.
+Diorama stores a **registry of named configurations**, not a single plan: an
+index at `diorama-configs` plus one full body per configuration at
+`diorama-cfg-<id>`. Manage them under **Settings ▸ Data ▸ Configurations**
+(save as, new, rename, import, export, delete) — handy for keeping a
+work-in-progress redesign beside your live home.
+
+`localStorage` (key `diorama:store:v1`) is the **local cache** of the active
+configuration so the panel paints instantly on load, then reconciles with HA
+once the WebSocket auth completes. If HA returns a payload, it replaces the
+cache. If HA is empty (first launch), the local cache is pushed up.
 
 Saves are debounced 600 ms before being pushed to HA so rapid edits (dragging
 a vertex, sliding the opacity slider) don't hammer the WS.
@@ -335,17 +403,45 @@ Connection settings live in `localStorage` under `diorama:url` and
 | Element       | Bind to              | What it surfaces |
 |---------------|----------------------|------------------|
 | mmWave sensor | LD2450 ESPHome device| Live multi-target tracking, in-place zone/object editing, object halos, sensor pose (height + tilt from HA), animated figures in 3D. Per-sensor color + avatar pool. |
-| Motion sensor | `binary_sensor.*` (or any entity) | Configurable detection cone (heading / FOV / range); cone glows when ON. Per-sensor **color** + **intensity**. Optional room-confined **AI avatar**. |
-| Env sensor    | any `sensor.*`       | Value chip (temperature / humidity / CO₂ / CO / PM / VOC / pressure / illuminance); icon + color auto-detected from device class; health-threshold amber/red. |
+| Motion sensor | `binary_sensor.*` (or any entity) | Configurable detection cone (heading / FOV / range); cone glows when ON. Per-sensor **color** + **intensity**. Optional room-confined **AI avatar** or always-on **demo avatar**. |
+| Env sensor    | any `sensor.*`       | Value chip (temperature / humidity / CO₂ / CO / PM / VOC / pressure / illuminance / radon / sound / NO₂ / O₃ / AQI); icon + color auto-detected from device class; health-threshold amber/red. Also feeds the per-room temperature heat-map. |
+| Info card     | any entity (or none) | Generic value plaque — live state + unit as crisp text, colored/flashing by **value rules**; entity-free clock and date modes. Wall-mounts, table-mounts or stands on the floor. |
+| Action button | any service target   | A dispatcher, not an entity: fires `button.press`, `scene.turn_on`, `script.turn_on`, `automation.trigger`, a domain-aware toggle, or any custom `domain.service` with JSON data. Optional confirm. |
+| Alarm keypad  | `alarm_control_panel.*` | State-colored wall plate (arming / pending / triggered pulses); tap opens a Disarm / Arm Home / Arm Away card with optional code. |
+| Thermostat    | `climate.*`          | Wall plate showing current → target, mode-colored; tap opens setpoint steppers, HVAC modes, fan and preset. Active heating/cooling blows visible **airflow particles** from a vent. |
+| Wall calendar | one or more `calendar.*` | Read-only agenda plaque; polls `calendar.get_events` for the real upcoming list, not just the next-event state. |
+| Safety sensor | `binary_sensor.*`    | Smoke / CO / gas ceiling detectors and floor **leak** pucks; alarm pulses rings, and a leak grows a spreading puddle. |
+| Alert beacon  | `alert.*` or any `binary_sensor.*` | Ceiling beacon: active (pulsing red) / acknowledged (amber) / idle. Tap acknowledges. Pairs with the topbar **Alert Center** (HA persistent notifications + Repairs). |
+| Robot         | `vacuum.*` / `lawn_mower.*` | Dock fixture plus a live rig that roams: real Roborock map position when calibrated, GPS for mowers, simulated otherwise. Tap starts or docks. Optional **Valetudo** room map with tap-to-clean. |
+| Camera        | `camera.*`           | Body + lens with a FOV wedge; sidebar snapshot, alert popups from a bound motion `binary_sensor`, and optional **Frigate** calibration turning detection boxes into real floor targets. |
+| Projector     | `media_player.*` / `switch.*` / `light.*` | Ceiling projector with a throw wedge onto a chosen TV/screen piece while projecting. |
+| Water valve   | `valve.*` / `switch.*` / `binary_sensor.*` | Pipe run + hand-wheel that rotates with openness; animated water flow while open. State-aware open/close (never a blind toggle). |
+| Smart plug    | `switch.*` / `light.*` (+ optional power `sensor.*`) | Wall outlet that wall-snaps flush; energized glow scaled by live watts. |
+| Sprinkler zone| `switch.*` / `valve.*` / `binary_sensor.*` | Head with a spray arc — pulse, sweeping rotor, or drip — throwing real droplets in 3D while running. |
+| Flagpole      | optional percent / `cover.*` | Waving cloth flag from a 16-flag library, at full or half mast, rippling with the live wind. |
+| Presence zone | `binary_sensor.*`    | A drawn polygon (FP2 / Frigate zone shape) that glows when occupied, in 2D and 3D. |
 | BLE proxy     | ESPHome/Shelly proxy device | Antenna puck fixture; its Bermuda distances feed panel-side trilateration for indoor Bluetooth positioning. |
-| Light         | `light.*`            | Click toggles; dblclick → color/brightness/temp. Per-fixture height, radius, intensity, and **kind** — bulb, pendant, spot, recessed, round, tiered, sconce/wall-sconce, step, bowl/jar/oval, strip, under-cabinet, LED string, floor lamp, ceiling fan (+ light), fireplace. |
+| Light         | `light.*`, or **logic rules** on any entity | Click toggles; dblclick → color/brightness/temp. Per-fixture height, radius, intensity, tilt, and **26 kinds** — bulb, pendant, spot, recessed, round, tiered, sconce/wall-sconce, step, bowl/jar/oval, strip, under-cabinet, LED string, floor lamp, ceiling fan (+ light), floodlight, in-ground uplight, ground spot, heat lamp, exhaust (ceiling/wall/+light), fireplace. |
 | Switch        | `switch.*` *or* `light.*` | Click toggles; wall-snaps and gangs. Fans expose power + % slider; TVs (`media_player`) expose play/pause, volume, source. |
-| Furniture     | (optional appliance/TV entity) | Seating, sectionals, tables/desks, beds, casework (drawer pulls), spec-size appliances, bathroom fixtures, stairs, counter-mounted gadgets, rugs, plants — plus **custom objects** built from primitives. Sittable pieces anchor seating; some anchor activities. |
+| Furniture     | (optional appliance / TV / media entity) | ~96 kinds across furniture, appliance, bathroom, outdoor, theater and vehicle: seating, sectionals, tables/desks, beds, casework (drawer pulls), spec-size appliances, mechanical plant, bathroom fixtures, stairs, counter-mounted gadgets, rugs, plants, trees, vehicles and EV chargers — plus **custom objects** built from primitives. Sittable pieces anchor seating; some anchor activities. Per-piece extras bind too: fridge door sensors, oven temperature, plant soil moisture, appliance power, mail counts, TV bias light and **screen surfaces** (now-playing / news ticker / weather). |
+| Doors         | `binary_sensor.*` / `cover.*` (+ optional `lock.*`) | **8 kinds** — swing, garage, gate, sliding, pocket, double, french, sliding-glass — cutting real wall openings and opening proportionally to a cover's position. Clickable deadbolts; doorbell bindings ring visible pulses. |
+| Windows       | `binary_sensor.*` (+ optional shade / curtain `cover.*`) | **5 styles** — single, double-hung, casement pair, sliding, picture — with per-window sill/height, roller shades, and interior curtains in three styles. |
 | Person / pet  | Bluetooth device + `person.*`/`device_tracker.*` | Registry entry with a name, color, and avatar (incl. cat/dog pet rigs); drives BLE figures, fused radar figures, and GPS pins. |
 
-Drop on the canvas, bind via the entity picker (filterable by domain or by HA
-device, searchable by entity / friendly / device name). Click toggles,
-double-click opens the deeper config or the bind picker.
+Drop on the canvas from the sidebar or the visual **placement toolbar** (a
+bottom dock with category tabs and real 3D thumbnails), then bind via the
+entity picker (filterable by domain or by HA device, searchable by entity /
+friendly / device name). Click toggles, double-click opens the deeper config or
+the bind picker. **Unbound** fixtures stay interactive — they hold a local
+state you can toggle, so you can design and demo a home before wiring anything
+up.
+
+Not everything is a bound fixture. Rooms, **ground paint** (grass / rock /
+concrete / blacktop / mulch / sand / water, with terraced elevations), paths
+and driveways, **pools and spas**, floor voids, geo **landmarks**, rulers, and
+decorative **background text** (skywriting, a banner-towing plane, mowed lawn
+text, a message train, a news chopper) are all placed the same way and need no
+entity at all.
 
 ## Interactions
 
@@ -357,7 +453,16 @@ double-click opens the deeper config or the bind picker.
 - **Click on a bound light/switch**: toggle (small movement ≤ 30 mm = click; larger = drag-to-move).
 - **Double-click on a bound light**: color/brightness/temp modal.
 - **Double-click on an unbound fixture**: open the entity picker.
-- **Tools**: Select / Wall / mmWave / Motion / Env / BLE / Furniture / Light / Switch / Door / Window / Delete (1–8 and `m` shortcut the first eight).
+- **Tools**: Select, Wall, mmWave, Motion, Env, Info, Action, BLE, Alarm,
+  Calendar, Thermostat, Safety/Siren, Alert beacon, Robot, Camera, Projector,
+  Valve, Sprinkler, Flagpole, Plug, Presence zone, Ground area, Path/drive,
+  Pool/spa, Floor void, Ruler, Furniture, Light, Switch, Door, Window, Delete.
+  Keyboard shortcuts cover the eight most-used: `1` Select, `2` Wall,
+  `3` mmWave, `4` Motion, `5` Furniture, `6` Light, `7` Switch, `8` Delete
+  (`m` also picks Motion). Hotkeys are ignored while you're typing in a field.
+- **Delete / Backspace**: removes the current selection (vertex → furniture →
+  sensor → fixture → zone → ground → void), and **Ctrl/Cmd + Z** / **Shift+Z**
+  undo and redo.
 
 ### 3D
 - **Orbit / pan / zoom**: standard Three.js OrbitControls (touch-friendly).
@@ -446,8 +551,6 @@ edit. Image stored as a data URL in HA along with the rest of the diorama.
 - **Multi-device sync**: changes from another browser / device aren't pulled
   mid-session; the panel only fetches HA data on initial connect. A
   `frontend.user_data` change made elsewhere shows up after a panel reload.
-- **Storage migration**: `diorama:store:v1` and the HA key `diorama` have no
-  migration code. Bumping either would orphan existing data.
 - **Zone polygon round-trip**: ESPHome treats vertex `(0, 0)` after slot 0 as
   a sentinel for "no more vertices" — don't place a real vertex at origin
   past the first slot.

@@ -1940,6 +1940,101 @@
         JSON.stringify(S([...F.FLIGHT_LABEL_FIELDS])) === JSON.stringify([...F.FLIGHT_LABEL_FIELDS]));
     }
 
+    // ── 16b. Label TEXT resolvers, hoisted into flights.ts ──────────────────
+    // `flightFieldText` / `flightLabelLines` (+ the privacy gates and the
+    // identifier ladder they call) used to be mirrored ~20-line copies in
+    // canvas-render.ts and three-renderer.ts with no parity test — the last
+    // such pair after the glow ladder moved here. Both renderers now delegate
+    // to THESE, so goldening them here pins the 2D line and the 3D plate at
+    // once. Numeric fields are BUCKETED so a live aircraft doesn't repaint
+    // every poll: alt 100 ft, speed 10 kt, distance 0.5 nm.
+    {
+      const FT = F.flightFieldText, LL = F.flightLabelLines;
+      // A fully-populated aircraft; bucketing boundaries chosen to be visible.
+      const fp = {
+        hex: 'a1b2c3', callsign: 'SWA2451', reg: 'N8654B', typeCode: 'B738',
+        operator: 'Southwest Airlines Company', altFt: 34567, gsKt: 447,
+        vertRateFpm: 0, squawk: '1200', distNm: 7.34,
+        pia: false, ladd: false,
+      };
+      ok('19b: callsign field is the resolved identifier',
+        FT('callsign', fp, 'IDENT', false) === 'IDENT', FT('callsign', fp, 'IDENT', false));
+      ok('19b: reg / type pass through verbatim',
+        FT('reg', fp, '', false) === 'N8654B' && FT('type', fp, '', false) === 'B738');
+      ok('19b: operator truncates at 22 chars',
+        FT('operator', fp, '', false) === 'Southwest Airlines Com'
+        && fp.operator.length > 22,
+        FT('operator', fp, '', false));
+      ok('19b: alt buckets to 100 ft and thousands-separates',
+        FT('alt', fp, '', false) === '34,600 ft', FT('alt', fp, '', false));
+      ok('19b: speed buckets to 10 kt',
+        FT('speed', fp, '', false) === '450 kt', FT('speed', fp, '', false));
+      ok('19b: dist buckets to 0.5 nm at one decimal',
+        FT('dist', fp, '', false) === '7.5 nm', FT('dist', fp, '', false));
+      ok('19b: squawk is prefixed', FT('squawk', fp, '', false) === 'sq 1200');
+      ok('19b: level flight yields no trend', FT('trend', fp, '', false) === '');
+      ok('19b: climb / descend at the ±300 fpm gates',
+        FT('trend', { ...fp, vertRateFpm: 300 }, '', false) === '↑ climb'
+        && FT('trend', { ...fp, vertRateFpm: -300 }, '', false) === '↓ descend'
+        && FT('trend', { ...fp, vertRateFpm: 299 }, '', false) === '');
+      ok('19b: suppress withholds reg / type / operator, never alt',
+        FT('reg', fp, '', true) === '' && FT('type', fp, '', true) === ''
+        && FT('operator', fp, '', true) === '' && FT('alt', fp, '', true) === '34,600 ft');
+      ok('19b: missing optional fields resolve empty, not "null"',
+        FT('reg', { ...fp, reg: null }, '', false) === ''
+        && FT('speed', { ...fp, gsKt: null }, '', false) === ''
+        && FT('dist', { ...fp, distNm: null }, '', false) === ''
+        && FT('squawk', { ...fp, squawk: null }, '', false) === '');
+      ok('19b: an unknown field key resolves empty', FT('nope', fp, 'IDENT', false) === '');
+
+      // Identifier ladder: callsign → registration → hex (uppercased).
+      ok('19b: identifier prefers callsign, then reg, then hex',
+        F.flightIdentifier(fp, false) === 'SWA2451'
+        && F.flightIdentifier({ ...fp, callsign: '  ' }, false) === 'N8654B'
+        && F.flightIdentifier({ ...fp, callsign: null, reg: null }, false) === 'A1B2C3');
+      ok('19b: a suppressed identifier is the hex alone',
+        F.flightIdentifier(fp, true) === 'A1B2C3');
+
+      // Privacy gates: LADD keeps identity + badge; PIA withholds identity.
+      ok('19b: privacy gates are off when privacyDim is off',
+        F.flightPrivacyDimmed({ ...fp, pia: true }, false) === false
+        && F.flightIdentitySuppressed({ ...fp, pia: true }, false) === false);
+      ok('19b: LADD dims but does not suppress',
+        F.flightPrivacyDimmed({ ...fp, ladd: true }, true) === true
+        && F.flightIdentitySuppressed({ ...fp, ladd: true }, true) === false);
+      ok('19b: PIA both dims and suppresses',
+        F.flightPrivacyDimmed({ ...fp, pia: true }, true) === true
+        && F.flightIdentitySuppressed({ ...fp, pia: true }, true) === true);
+
+      // Two-line goldens — the exact strings both renderers paint.
+      const dflt = LL(fp, [...F.FLIGHT_LABEL_FIELDS_DEFAULT], true);
+      ok('19b: default plate is callsign headline + altitude detail',
+        dflt.top === 'SWA2451' && dflt.sub === '34,600 ft', `${dflt.top} / ${dflt.sub}`);
+      const many = LL(fp, ['callsign', 'operator', 'alt', 'speed', 'dist'], true);
+      ok('19b: first field is the headline, the rest join on " · "',
+        many.top === 'SWA2451'
+        && many.sub === 'Southwest Airlines Com · 34,600 ft · 450 kt · 7.5 nm',
+        `${many.top} / ${many.sub}`);
+      const gappy = LL({ ...fp, reg: null, vertRateFpm: 0 }, ['reg', 'trend', 'alt'], true);
+      ok('19b: empty fields drop out rather than blanking a line',
+        gappy.top === '34,600 ft' && gappy.sub === '', `${gappy.top} / ${gappy.sub}`);
+      const none = LL({ ...fp, reg: null }, ['reg'], true);
+      ok('19b: when every field resolves empty the identifier stands alone',
+        none.top === 'SWA2451' && none.sub === '', `${none.top} / ${none.sub}`);
+      const pia = LL({ ...fp, pia: true }, ['callsign', 'reg', 'operator', 'alt'], true);
+      ok('19b: a PIA plate shows the badged hex + altitude, no identity',
+        pia.top === '🔒 A1B2C3' && pia.sub === '34,600 ft', `${pia.top} / ${pia.sub}`);
+      const piaOff = LL({ ...fp, pia: true }, ['callsign', 'reg', 'alt'], false);
+      ok('19b: privacyDim:false restores a PIA aircraft\'s identity',
+        piaOff.top === 'SWA2451' && piaOff.sub === 'N8654B · 34,600 ft',
+        `${piaOff.top} / ${piaOff.sub}`);
+      const ladd = LL({ ...fp, ladd: true }, ['callsign', 'reg'], true);
+      ok('19b: a LADD plate keeps its identity behind the 🔒 badge',
+        ladd.top === '🔒 SWA2451' && ladd.sub === 'N8654B', `${ladd.top} / ${ladd.sub}`);
+      ok('19b: an empty field list still yields the identifier',
+        LL(fp, [], true).top === 'SWA2451');
+    }
+
     // ── 17. Glow-rule wildcard matcher (docs/research/flight-glow-rules.md §3) ─
     // The hybrid rule: a pattern with NO wildcard is a friendly SUBSTRING match;
     // a pattern with `*` or `?` is matched ANCHORED. Compiled by hand-walking

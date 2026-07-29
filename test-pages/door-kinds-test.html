@@ -404,6 +404,52 @@
        && hitDoorEnd(pO, view, { x: 4200, y: 2500 }) === null);
   }
 
+  // 14. hitDoor / hitDoorEnd resolve openness through the ONE resolver ═══════
+  //     (`effectiveState` → `doorOpenFraction`), not a raw `states[entity_id]`
+  //     read. Two things that raw read could never see: an UNBOUND door driven
+  //     by `localState`, and a cover reporting a PARTIAL position. In both the
+  //     panel is DRAWN swung, so it must be HITTABLE swung.
+  {
+    // (a) Unbound + localState:'on' — no entity at all.
+    const pLocal = await mkPlanner([D2({ kind: 'swing', w: 1200, entity_id: null, localState: 'on' })]);
+    ok('hit_unbound_open_panel', !!hitDoor(pLocal, view, { x: 3000, y: 3100 }));
+    ok('hit_unbound_open_span',  !!hitDoor(pLocal, view, { x: 3600, y: 2500 }));   // closed span still hits
+    ok('handle_unbound_open_follows',
+       !!hitDoorEnd(pLocal, view, { x: 3000, y: 3700 })
+       && hitDoorEnd(pLocal, view, { x: 4200, y: 2500 }) === null);
+    // Control: unbound + localState:'off' leaves the panel closed, so the
+    // swung position must NOT hit and the handle stays at the span end.
+    const pLocalOff = await mkPlanner([D2({ kind: 'swing', w: 1200, entity_id: null, localState: 'off' })]);
+    ok('hit_unbound_closed_no_panel', hitDoor(pLocalOff, view, { x: 3000, y: 3100 }) === null);
+    ok('handle_unbound_closed_at_span', !!hitDoorEnd(pLocalOff, view, { x: 4200, y: 2500 }));
+    // (b) A cover at a partial position: state 'open' + current_position 40
+    //     is fraction 0.4 > 0.02, so the door reads OPEN. The raw
+    //     `state === 'on'` test read this as CLOSED.
+    const pCov = await mkPlanner(
+      [D2({ kind: 'swing', w: 1200, entity_id: 'cover.d' })],
+      { 'cover.d': { state: 'open', attributes: { current_position: 40 } } });
+    ok('hit_cover_partial_open_panel', !!hitDoor(pCov, view, { x: 3000, y: 3100 }));
+    ok('handle_cover_partial_follows',
+       !!hitDoorEnd(pCov, view, { x: 3000, y: 3700 })
+       && hitDoorEnd(pCov, view, { x: 4200, y: 2500 }) === null);
+    // Control: a fully-closed cover (position 0) stays closed.
+    const pCovShut = await mkPlanner(
+      [D2({ kind: 'swing', w: 1200, entity_id: 'cover.d' })],
+      { 'cover.d': { state: 'closed', attributes: { current_position: 0 } } });
+    ok('hit_cover_closed_no_panel', hitDoor(pCovShut, view, { x: 3000, y: 3100 }) === null);
+    // (c) A BOUND entity always wins over a stale localState (binding makes
+    //     localState inert — the documented transition rule).
+    const pBoundOff = await mkPlanner(
+      [D2({ kind: 'swing', w: 1200, entity_id: 'binary_sensor.d', localState: 'on' })],
+      { 'binary_sensor.d': { state: 'off', attributes: {} } });
+    ok('hit_bound_off_beats_localstate', hitDoor(pBoundOff, view, { x: 3000, y: 3100 }) === null);
+    // (d) Double-leaf kinds take the same path — an unbound OPEN double door
+    //     must hit on leaf A's swung position.
+    const pDbl = await mkPlanner([D2({ kind: 'double', x: 3000, y: 2500, w: 1600,
+                                       entity_id: null, localState: 'on' })]);
+    ok('hit_unbound_open_double_leafA', !!hitDoor(pDbl, view, { x: 3000, y: 3300 }));
+  }
+
   const n = results.length, pcount = results.filter(x => x.startsWith('ok')).length;
   const pass = pcount === n;
   document.title = `DOORKINDS ${pass ? 'PASS' : 'FAIL'} ${pcount}/${n} ${results.filter(x => !x.startsWith('ok')).join(' ')}`;
