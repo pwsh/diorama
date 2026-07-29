@@ -1,0 +1,418 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>nav parity test</title>
+<style>html,body{margin:0;background:#111;color:#ccc;font:12px sans-serif}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<!--
+  NAV PARITY — the differential guard for `scripts/floorplans/physical.mjs`.
+
+  `physical.mjs.buildNavGrid` is a hand-written REPLICA of three-renderer's
+  private `_buildNav` (150 mm grid, PERSON_R 170 inflation, wall capsules with
+  door/window openings excised, the rug/stairs/bed/riser/elevated exempt list,
+  void + pool polygon blocking, sunken-stairs rails, 8-neighbour no-corner-cut
+  flood fill). The floorplan validator's checks 9–12 stand on it, so a
+  `_buildNav` change that the replica misses would silently stop validating
+  what it claims to validate.
+
+  This page is that guard: it runs BOTH implementations over the same fixture
+  matrix and asserts they agree CELL FOR CELL — grid dims, the blocked bitmap,
+  the blocked count, the region labelling (both label in the same scan order,
+  so the Int32 region arrays must match exactly) and the region-size multiset.
+
+  **Change `_buildNav` → run this page.** A red cell-diff here means the
+  validator has drifted; fix physical.mjs (the renderer is ground truth).
+
+  Fixture matrix
+   A  multi-room shell — perimeter loop + interior tee walls, 3 doors, 3
+      windows (openings must stay walkable), a rotated interior wall.
+   B  furniture mix — nav-EXEMPT rug / bed / stairs / stair_landing / ramp /
+      riser_platform / elevated-300 piece vs BLOCKING sofa / table / counter /
+      wardrobe, several rotated off-axis, plus a custom-recipe piece
+      (customKindId → resolveFurnitureDef) to pin the def resolution.
+   C  pool + void areas — both block (pool at its rim, no inflation; a void
+      is bridged by a stairs footprint), plus a hidden pool + hidden void that
+      must NOT block.
+   D  yard — fence_picket / fence_privacy / fence_chainlink / hedge runs with a
+      gate opening (fences block nav like solid walls; the gate must not) and
+      an `invisible` wall that must NOT block.
+   E  sliver channel — a sofa parked ~1 cell off a long wall, the classic
+      narrow free-cell strip that separates a tiny region from the room.
+   F  sunken stairs — a descending flight (elevation < 0) whose nav RAILS close
+      the two long sides + the deep end, plus a chained flight → landing pair
+      whose shared edge must stay open (onStairTerrain abutment).
+   G  diagonal pinch — two halves touching at exactly ONE diagonal cell pair,
+      the only fixture that discriminates the no-corner-cut flood-fill rule.
+
+  The matrix is mutation-tested: seeding physical.mjs with a dropped rail loop,
+  a dropped bed exemption, non-blocking pools, PERSON_R 170→180, WALL_HALF
+  50→55, or a dropped no-corner-cut rule each turns this page red.
+
+  Constants (§C): the renderer keeps `cell` / `PERSON_R` / `WALL_HALF` private
+  inside `_buildNav`, so they are pinned numerically rather than by import —
+  `_nav.cell` is read directly, and single-piece / single-wall probes derive
+  the blocked set ANALYTICALLY from physical.mjs's PERSON_R and
+  WALL_HALF + PERSON_R and require an exact match (a probe that also fails at
+  ±1 cell of inflation, so the match is not vacuous). MIN_STANDING_CELLS is a
+  validator-only policy threshold with no renderer counterpart — asserted to be
+  a sane positive integer only.
+
+  Build the bundles next to this file:
+    npx esbuild src/geometry.ts --bundle --format=esm --outfile=<harness>/geometry.mod.js
+    npx esbuild scripts/floorplans/physical.mjs --bundle --format=esm --outfile=<harness>/physical.mod.js
+  and serve the built renderer chunk (dist/assets/three-renderer.js) alongside.
+-->
+<script type="module">
+  const G = await import('./geometry.mod.js');
+  const P = await import('./physical.mod.js');
+  const mod = await import('./assets/three-renderer.js');
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+
+  const tests = [];
+  const ok = (name, cond, detail) => tests.push({ name, ok: !!cond, detail });
+
+  const scene = { preset: 'day', floorColor: '#8a7860', floorTex: 'none', wallColor: '#cfd2d6' };
+  const baseFloor = (extra = {}) => ({
+    id: 'f1', name: 'Parity', w: 8000, d: 6000,
+    walls: [], furniture: [], lights: [], switches: [], sensors: [], motionSensors: [],
+    envSensors: [], doors: [], windows: [], rooms: [], voidAreas: [], groundAreas: [],
+    pools: [], presenceZones: [], cameras: [], robots: [], safetySensors: [],
+    alarmPanels: [], bleProxies: [], roamers: [],
+    bg: null, model3d: null, look3d: null,
+    ...extra,
+  });
+
+  const wall = (id, points, kind) => (kind ? { id, points, kind } : { id, points });
+  const door = (id, x, y, w, rotation, extra = {}) => ({ id, x, y, w, rotation, ...extra });
+  const win = (id, x, y, w, rotation = 0) => ({ id, x, y, w, rotation, sill: 900, height: 1200 });
+  const furn = (id, kind, x, y, w, h, extra = {}) => ({ id, kind, x, y, w, h, rotation: 0, ...extra });
+
+  // ── the differential ─────────────────────────────────────────────────────
+  // Runs both nav builders over one floor and asserts full agreement. Returns
+  // the renderer's grid so a fixture can make extra sanity claims on top.
+  const compare = (tag, floor, customObjects) => {
+    r.updateFloor(floor, scene, undefined, customObjects);
+    const n = r._nav;                                   // renderer = ground truth
+    const v = P.buildNavGrid(floor, G, customObjects);  // validator replica
+
+    ok(`${tag} grid dims match`,
+       n.nx === v.nx && n.ny === v.ny && n.cell === v.cell,
+       `renderer ${n.nx}x${n.ny}@${n.cell} vs validator ${v.nx}x${v.ny}@${v.cell}`);
+    if (n.nx !== v.nx || n.ny !== v.ny) return n;       // cell diff meaningless
+
+    // Cell-for-cell blocked agreement.
+    const diffs = [];
+    for (let i = 0; i < n.blocked.length; i++) {
+      if (n.blocked[i] === v.blocked[i]) continue;
+      if (diffs.length < 6) {
+        const cx = i % n.nx, cy = (i / n.nx) | 0;
+        diffs.push(`(${cx},${cy})@${((cx + 0.5) * n.cell) | 0},${((cy + 0.5) * n.cell) | 0}` +
+                   ` r=${n.blocked[i]} v=${v.blocked[i]}`);
+      }
+    }
+    let nBlocked = 0;
+    for (let i = 0; i < n.blocked.length; i++) if (n.blocked[i]) nBlocked++;
+    ok(`${tag} blocked bitmap identical (${n.nx * n.ny} cells)`, diffs.length === 0,
+       diffs.length ? `${diffs.length}+ mismatches: ${diffs.join(' ')}` : `${nBlocked} blocked`);
+    ok(`${tag} blockedCount matches`, n.blockedCount === nBlocked,
+       `nav.blockedCount=${n.blockedCount} counted=${nBlocked}`);
+
+    // Region labelling: same algorithm + same scan order ⇒ identical ids.
+    let regDiff = -1;
+    for (let i = 0; i < n.region.length; i++) {
+      if (n.region[i] !== v.region[i]) { regDiff = i; break; }
+    }
+    ok(`${tag} region labels identical`, regDiff === -1,
+       regDiff === -1 ? `${n.regionSize.length} region(s)`
+                      : `first at cell ${regDiff % n.nx},${(regDiff / n.nx) | 0}` +
+                        ` r=${n.region[regDiff]} v=${v.region[regDiff]}`);
+
+    const rs = (a) => [...a].sort((x, y) => x - y).join(',');
+    ok(`${tag} region sizes identical`,
+       n.regionSize.length === v.regionSize.length && rs(n.regionSize) === rs(v.regionSize),
+       `renderer [${rs(n.regionSize)}] vs validator [${rs(v.regionSize)}]`);
+    return n;
+  };
+
+  const cellIdx = (n, wx, wy) => {
+    const cx = Math.max(0, Math.min(n.nx - 1, Math.floor(wx / n.cell)));
+    const cy = Math.max(0, Math.min(n.ny - 1, Math.floor(wy / n.cell)));
+    return cy * n.nx + cx;
+  };
+  const blockedAt = (n, wx, wy) => n.blocked[cellIdx(n, wx, wy)];
+
+  // ── Fixture A: multi-room shell with doors + windows ─────────────────────
+  // 8000 x 6000 perimeter, an interior N–S wall at x=3600 (tee into both the
+  // top and bottom runs), an interior E–W wall at y=3000 east of it, and a
+  // short 30°-rotated wall so the capsule rasterizer runs off-axis. Doors punch
+  // the perimeter + both interior walls; windows punch the perimeter.
+  const rot30 = (() => {
+    const a = { x: 5200, y: 1200 }, L = 1800, th = 30 * Math.PI / 180;
+    return [a, { x: a.x + L * Math.cos(th), y: a.y + L * Math.sin(th) }];
+  })();
+  const floorA = baseFloor({
+    walls: [
+      wall('wA1', [{ x: 0, y: 0 }, { x: 8000, y: 0 }, { x: 8000, y: 6000 }, { x: 0, y: 6000 }, { x: 0, y: 0 }]),
+      wall('wA2', [{ x: 3600, y: 0 }, { x: 3600, y: 6000 }]),
+      wall('wA3', [{ x: 3600, y: 3000 }, { x: 8000, y: 3000 }]),
+      wall('wA4', rot30),
+    ],
+    doors: [
+      door('dA1', 1800, 0, 900, 0, { label: 'Entry' }),        // perimeter, south
+      door('dA2', 3600, 1500, 900, 90),                        // interior N–S wall
+      door('dA3', 6000, 3000, 900, 0),                         // interior E–W wall
+    ],
+    windows: [win('nA1', 900, 6000, 1200), win('nA2', 8000, 4500, 1500, 90), win('nA3', 6200, 0, 1000)],
+    rooms: [
+      { id: 'rA1', name: 'West', anchor: { x: 1800, y: 3000 } },
+      { id: 'rA2', name: 'NE', anchor: { x: 6000, y: 4600 } },
+      { id: 'rA3', name: 'SE', anchor: { x: 6000, y: 1500 } },
+    ],
+  });
+  const navA = compare('A shell', floorA);
+  // Sanity: the openings really are walkable (otherwise "agreement" could be
+  // two identically-wrong grids that block every doorway). A Door's x/y is its
+  // HINGE — probe the span CENTRE, exactly like wallCutsForSegment does.
+  const dc = (d) => G.doorSpanCenter(d);
+  const [cA1, cA2, cA3] = floorA.doors.map(dc);
+  ok('A door + window openings stay walkable',
+     !blockedAt(navA, cA1.x, cA1.y) && !blockedAt(navA, cA2.x, cA2.y) &&
+     !blockedAt(navA, cA3.x, cA3.y) && !blockedAt(navA, 900, 5940),
+     `d1=${blockedAt(navA, cA1.x, cA1.y)} d2=${blockedAt(navA, cA2.x, cA2.y)} ` +
+     `d3=${blockedAt(navA, cA3.x, cA3.y)} w1=${blockedAt(navA, 900, 5940)}`);
+  ok('A solid wall stretches block', blockedAt(navA, 3600, 4500) === 1 && blockedAt(navA, 5000, 3000) === 1,
+     `x3600y4500=${blockedAt(navA, 3600, 4500)} x5000y3000=${blockedAt(navA, 5000, 3000)}`);
+
+  // ── Fixture B: furniture mix (exempt list + custom recipe) ───────────────
+  const customObjectsB = [{
+    id: 'recipe-console', label: 'Console', w: 1400, h: 600, ht: 1000,
+    color: 0x2b333d, primitives: [{ shape: 'box', size: [1400, 900, 600], pos: [0, 450, 0], color: '#2b333d' }],
+  }];
+  const floorB = baseFloor({
+    walls: [wall('wB1', [{ x: 0, y: 0 }, { x: 8000, y: 0 }, { x: 8000, y: 6000 }, { x: 0, y: 6000 }, { x: 0, y: 0 }])],
+    furniture: [
+      // EXEMPT (never block)
+      furn('fB1', 'rug', 1500, 1500, 2400, 1700),
+      furn('fB2', 'bed', 6200, 1400, 1600, 2000),
+      furn('fB3', 'stairs', 4000, 5200, 1200, 3000, { rotation: 0 }),
+      furn('fB4', 'stair_landing', 4000, 3400, 1200, 1200),
+      furn('fB5', 'ramp', 1200, 4600, 1000, 2200, { rotation: 15 }),
+      furn('fB6', 'riser_platform', 6600, 4600, 2000, 1400),
+      furn('fB7', 'nightstand', 5100, 800, 450, 400, { elevation: 900 }),   // ≥300 → exempt
+      // BLOCKING
+      furn('fB8', 'sofa', 2400, 3200, 2100, 900, { rotation: 37 }),         // rotated
+      furn('fB9', 'table', 5400, 2400, 1600, 900, { rotation: 90 }),
+      furn('fB10', 'counter', 300, 2600, 600, 2400),
+      furn('fB11', 'wardrobe', 7500, 5600, 1200, 600, { rotation: 214 }),
+      furn('fB12', 'nightstand', 5100, 300, 450, 400, { elevation: 200 }),  // <300 → blocks
+      // custom recipe — def must resolve through resolveFurnitureDef
+      { id: 'fB13', kind: 'block', customKindId: 'recipe-console', x: 2000, y: 300, w: 1400, h: 600, rotation: 0 },
+    ],
+  });
+  const navB = compare('B furniture', floorB, customObjectsB);
+  ok('B exempt kinds leave their footprint walkable',
+     !blockedAt(navB, 1500, 1500) && !blockedAt(navB, 6200, 1400) && !blockedAt(navB, 4000, 5200) &&
+     !blockedAt(navB, 4000, 3400) && !blockedAt(navB, 6600, 4600) && !blockedAt(navB, 5100, 800),
+     `rug=${blockedAt(navB, 1500, 1500)} bed=${blockedAt(navB, 6200, 1400)} ` +
+     `stairs=${blockedAt(navB, 4000, 5200)} landing=${blockedAt(navB, 4000, 3400)} ` +
+     `riser=${blockedAt(navB, 6600, 4600)} elev900=${blockedAt(navB, 5100, 800)}`);
+  ok('B blocking kinds (incl. custom recipe + rotated) block',
+     blockedAt(navB, 2400, 3200) === 1 && blockedAt(navB, 5400, 2400) === 1 &&
+     blockedAt(navB, 7500, 5600) === 1 && blockedAt(navB, 2000, 300) === 1 &&
+     blockedAt(navB, 5100, 300) === 1,
+     `sofa=${blockedAt(navB, 2400, 3200)} table=${blockedAt(navB, 5400, 2400)} ` +
+     `wardrobe=${blockedAt(navB, 7500, 5600)} custom=${blockedAt(navB, 2000, 300)} ` +
+     `elev200=${blockedAt(navB, 5100, 300)}`);
+
+  // ── Fixture C: pool + void areas (incl. hidden ones) ─────────────────────
+  const poly = (pts) => pts.map(([x, y]) => ({ x, y }));
+  const floorC = baseFloor({
+    walls: [wall('wC1', [{ x: 0, y: 0 }, { x: 8000, y: 0 }, { x: 8000, y: 6000 }, { x: 0, y: 6000 }, { x: 0, y: 0 }])],
+    // Full-width void band, bridged at x≈6200 by a flat stairs footprint.
+    voidAreas: [
+      { id: 'vC1', points: poly([[-500, 2400], [8500, 2400], [8500, 3200], [-500, 3200]]) },
+      { id: 'vC2', hidden: true, points: poly([[500, 4500], [2000, 4500], [2000, 5500], [500, 5500]]) },
+    ],
+    pools: [
+      { id: 'pC1', points: poly([[1000, 200], [3400, 200], [3400, 2000], [1000, 2000]]) },
+      { id: 'pC2', hidden: true, points: poly([[5000, 4200], [6400, 4200], [6400, 5400], [5000, 5400]]) },
+    ],
+    furniture: [furn('fC1', 'stairs', 6200, 2800, 1200, 1600)],
+  });
+  const navC = compare('C pool+void', floorC);
+  ok('C void blocks, hidden void does not, stairs bridge it',
+     blockedAt(navC, 1200, 2800) === 1 && !blockedAt(navC, 1200, 5000) && !blockedAt(navC, 6200, 2800),
+     `void=${blockedAt(navC, 1200, 2800)} hiddenVoid=${blockedAt(navC, 1200, 5000)} ` +
+     `bridge=${blockedAt(navC, 6200, 2800)}`);
+  ok('C pool blocks at its rim, hidden pool does not',
+     blockedAt(navC, 2200, 1100) === 1 && !blockedAt(navC, 5700, 4800),
+     `pool=${blockedAt(navC, 2200, 1100)} hiddenPool=${blockedAt(navC, 5700, 4800)}`);
+
+  // ── Fixture D: yard fences / hedge / gate / invisible wall ───────────────
+  const floorD = baseFloor({
+    walls: [
+      wall('wD1', [{ x: 400, y: 400 }, { x: 7600, y: 400 }], 'fence_picket'),
+      wall('wD2', [{ x: 7600, y: 400 }, { x: 7600, y: 5600 }], 'fence_privacy'),
+      wall('wD3', [{ x: 7600, y: 5600 }, { x: 400, y: 5600 }], 'fence_chainlink'),
+      wall('wD4', [{ x: 400, y: 5600 }, { x: 400, y: 400 }], 'hedge'),
+      wall('wD5', [{ x: 4000, y: 400 }, { x: 4000, y: 5600 }], 'invisible'),
+      wall('wD6', [{ x: 1200, y: 2800 }, { x: 3400, y: 2800 }], 'half'),
+      wall('wD7', [{ x: 4600, y: 2800 }, { x: 6800, y: 2800 }], 'railing'),
+    ],
+    doors: [door('dD1', 2000, 400, 1000, 0, { kind: 'gate' })],
+    furniture: [furn('fD1', 'tree', 5600, 1600, 900, 900), furn('fD2', 'bush', 1400, 4600, 700, 700)],
+  });
+  const navD = compare('D yard', floorD);
+  const cD1 = dc(floorD.doors[0]);   // hinge → span centre
+  ok('D fences/hedge/half/railing block, invisible + gate do not',
+     blockedAt(navD, 6000, 400) === 1 && blockedAt(navD, 7600, 3000) === 1 &&
+     blockedAt(navD, 4000, 5600) === 1 && blockedAt(navD, 400, 3000) === 1 &&
+     blockedAt(navD, 2200, 2800) === 1 && blockedAt(navD, 5600, 2800) === 1 &&
+     !blockedAt(navD, 4000, 1600) && !blockedAt(navD, cD1.x, cD1.y),
+     `picket=${blockedAt(navD, 6000, 400)} privacy=${blockedAt(navD, 7600, 3000)} ` +
+     `chain=${blockedAt(navD, 4000, 5600)} hedge=${blockedAt(navD, 400, 3000)} ` +
+     `half=${blockedAt(navD, 2200, 2800)} railing=${blockedAt(navD, 5600, 2800)} ` +
+     `invis=${blockedAt(navD, 4000, 1600)} gate=${blockedAt(navD, cD1.x, cD1.y)}`);
+
+  // ── Fixture E: sliver channel (sofa parked just off a wall) ──────────────
+  // Wall face at y=6000 (inflated reach 6000−220=5780); the sofa's inflated
+  // top edge sits at 5600+450+170=6220 … a strip of free cells survives only
+  // where the cell CENTRE escapes both, which is exactly the sliver the
+  // renderer's region-size-aware snap exists for. Any drift in either
+  // inflation constant changes the sliver's cell count immediately.
+  const floorE = baseFloor({
+    walls: [wall('wE1', [{ x: 0, y: 0 }, { x: 8000, y: 0 }, { x: 8000, y: 6000 }, { x: 0, y: 6000 }, { x: 0, y: 0 }])],
+    furniture: [
+      furn('fE1', 'sofa', 4000, 5100, 4000, 900),   // long side toward the north wall
+      furn('fE2', 'bookshelf', 700, 3000, 400, 2400),
+    ],
+  });
+  const navE = compare('E sliver', floorE);
+  ok('E open room is the largest region and a sliver strip exists',
+     navE.regionSize.length >= 1 && Math.max(...navE.regionSize) > 200,
+     `regions=[${[...navE.regionSize].join(',')}]`);
+
+  // ── Fixture F: sunken stairs rails + chained flight/landing ──────────────
+  // fF1 descends (elevation −1500): rails close its ±x sides and the deep
+  // (−y) end, top (+y) stays open. fF2/fF3 are a chained sunken flight +
+  // landing sharing an edge — that edge must stay OPEN (onStairTerrain).
+  const floorF = baseFloor({
+    walls: [wall('wF1', [{ x: 0, y: 0 }, { x: 8000, y: 0 }, { x: 8000, y: 6000 }, { x: 0, y: 6000 }, { x: 0, y: 0 }])],
+    furniture: [
+      furn('fF1', 'stairs', 2000, 3000, 1200, 2800, { elevation: -1500, rotation: 0 }),
+      furn('fF2', 'stairs', 6000, 2000, 1200, 2000, { elevation: -1500, rotation: 0 }),
+      furn('fF3', 'stair_landing', 6000, 3600, 1200, 1200, { elevation: -1200, rotation: 0 }),
+      // Ascending → no rails. Kept clear of the perimeter wall band so the
+      // "deep end is open" probe can't be answered by the wall instead.
+      furn('fF4', 'stairs', 4200, 2900, 1200, 2000, { elevation: 0, rotation: 0 }),
+    ],
+  });
+  const navF = compare('F sunken stairs', floorF);
+  ok('F sunken flight is railed on both long sides + the deep end, open at top',
+     blockedAt(navF, 2000 - 600 - 75, 3000) === 1 && blockedAt(navF, 2000 + 600 + 75, 3000) === 1 &&
+     blockedAt(navF, 2000, 3000 - 1400 - 75) === 1 && !blockedAt(navF, 2000, 3000 + 1400 + 75),
+     `left=${blockedAt(navF, 1325, 3000)} right=${blockedAt(navF, 2675, 3000)} ` +
+     `deep=${blockedAt(navF, 2000, 1525)} top=${blockedAt(navF, 2000, 4475)}`);
+  ok('F chained flight → landing shared edge stays open',
+     !blockedAt(navF, 6000, 3000) && !blockedAt(navF, 6000, 2900) && !blockedAt(navF, 6000, 3100),
+     `y2900=${blockedAt(navF, 6000, 2900)} y3000=${blockedAt(navF, 6000, 3000)} ` +
+     `y3100=${blockedAt(navF, 6000, 3100)}`);
+  ok('F ascending flight is NOT railed',
+     !blockedAt(navF, 4200 - 600 - 75, 2900) && !blockedAt(navF, 4200, 2900 - 1000 - 75),
+     `side=${blockedAt(navF, 3525, 2900)} deep=${blockedAt(navF, 4200, 1825)}`);
+
+  // ── Fixture G: diagonal pinch (the no-corner-cut flood-fill rule) ────────
+  // Two thin bars offset by exactly one cell in BOTH axes, so the upper and
+  // lower halves touch at a single DIAGONAL cell pair whose two shared
+  // orthogonals are blocked. With the no-corner-cut rule (both sides have it)
+  // that is NOT a connection → 2 regions; drop the rule on either side and the
+  // count collapses to 1. Nothing else in the matrix discriminates this, so
+  // without fixture G the flood-fill rule is unguarded.
+  //   left  bar → cells cx 0..26, cy 20..21   (x band 25..4025, y band 2930..3370)
+  //   right bar → cells cx 27..53, cy 22..23  (x band 4075..8075, y band 3230..3670)
+  // Bar half-extents are w/2 + PERSON_R = 2000 and h/2 + PERSON_R = 220, which
+  // straddle exactly two cell rows (170 ≤ 220 < 225) — the tightest band a
+  // PERSON_R-inflated piece can produce.
+  const floorG = baseFloor({
+    furniture: [
+      furn('fG1', 'block', 2025, 3150, 3660, 100),
+      furn('fG2', 'block', 6075, 3450, 3660, 100),
+    ],
+  });
+  const navG = compare('G diagonal pinch', floorG);
+  ok('G diagonal-only contact does NOT connect (2 regions)',
+     navG.regionSize.length === 2,
+     `regions=[${[...navG.regionSize].join(',')}]`);
+  ok('G the pinch really is a diagonal pair (both orthogonals blocked)',
+     !blockedAt(navG, 4125, 3225) && !blockedAt(navG, 3975, 3375) &&
+     blockedAt(navG, 3975, 3225) === 1 && blockedAt(navG, 4125, 3375) === 1 &&
+     navG.region[cellIdx(navG, 4125, 3225)] !== navG.region[cellIdx(navG, 3975, 3375)],
+     `a=${blockedAt(navG, 4125, 3225)} b=${blockedAt(navG, 3975, 3375)} ` +
+     `o1=${blockedAt(navG, 3975, 3225)} o2=${blockedAt(navG, 4125, 3375)} ` +
+     `regA=${navG.region[cellIdx(navG, 4125, 3225)]} regB=${navG.region[cellIdx(navG, 3975, 3375)]}`);
+
+  // ── §C Constants ─────────────────────────────────────────────────────────
+  // cell pitch is exposed directly on _nav.
+  ok('C1 NAV_CELL matches renderer _nav.cell', navA.cell === P.NAV_CELL,
+     `renderer=${navA.cell} validator=${P.NAV_CELL}`);
+
+  // PERSON_R probe: ONE axis-aligned blocking piece, no walls. The blocked set
+  // is exactly {cells whose centre is inside the footprint inflated by
+  // PERSON_R}. Compare the renderer's bitmap to that analytic set, and to the
+  // same set at ±1 cell of inflation (which must NOT match — a non-vacuous
+  // probe).
+  const PW = 1200, PH = 800, PX = 4000, PY = 3000;
+  const probeFloor = baseFloor({ furniture: [furn('fP', 'wardrobe', PX, PY, PW, PH)] });
+  r.updateFloor(probeFloor, scene);
+  const navP = r._nav;
+  const inflatedMatches = (inflate) => {
+    for (let cy = 0; cy < navP.ny; cy++) for (let cx = 0; cx < navP.nx; cx++) {
+      const wx = (cx + 0.5) * navP.cell, wy = (cy + 0.5) * navP.cell;
+      const want = (Math.abs(wx - PX) <= PW / 2 + inflate && Math.abs(wy - PY) <= PH / 2 + inflate) ? 1 : 0;
+      if (navP.blocked[cy * navP.nx + cx] !== want) return false;
+    }
+    return true;
+  };
+  ok('C2 PERSON_R matches (analytic footprint inflation)', inflatedMatches(P.PERSON_R),
+     `PERSON_R=${P.PERSON_R}`);
+  ok('C2b PERSON_R probe is non-vacuous (±1 cell fails)',
+     !inflatedMatches(P.PERSON_R + P.NAV_CELL) && !inflatedMatches(P.PERSON_R - P.NAV_CELL),
+     `±${P.NAV_CELL} both reject`);
+
+  // WALL_HALF + PERSON_R probe: one isolated wall run, no openings, no
+  // furniture. Blocked = {cells within WALL_HALF+PERSON_R of the segment}.
+  // PERSON_R is pinned above, so this pins WALL_HALF.
+  const WA = { x: 1500, y: 3000 }, WB = { x: 6500, y: 3000 };
+  r.updateFloor(baseFloor({ walls: [wall('wP', [WA, WB])] }), scene);
+  const navW = r._nav;
+  const radMatches = (rad) => {
+    for (let cy = 0; cy < navW.ny; cy++) for (let cx = 0; cx < navW.nx; cx++) {
+      const wx = (cx + 0.5) * navW.cell, wy = (cy + 0.5) * navW.cell;
+      const t = Math.max(WA.x, Math.min(WB.x, wx));
+      const want = Math.hypot(wx - t, wy - WA.y) <= rad ? 1 : 0;
+      if (navW.blocked[cy * navW.nx + cx] !== want) return false;
+    }
+    return true;
+  };
+  ok('C3 WALL_HALF + PERSON_R matches (analytic capsule radius)',
+     radMatches(P.WALL_HALF + P.PERSON_R), `rad=${P.WALL_HALF + P.PERSON_R}`);
+  ok('C3b capsule probe is non-vacuous (±1 cell fails)',
+     !radMatches(P.WALL_HALF + P.PERSON_R + P.NAV_CELL) &&
+     !radMatches(P.WALL_HALF + P.PERSON_R - P.NAV_CELL),
+     `±${P.NAV_CELL} both reject`);
+
+  // MIN_STANDING_CELLS is validator POLICY (the "too small to insist it be
+  // reachable" threshold) — the renderer has no counterpart, so only sanity.
+  ok('C4 MIN_STANDING_CELLS is a sane positive integer',
+     Number.isInteger(P.MIN_STANDING_CELLS) && P.MIN_STANDING_CELLS > 0 && P.MIN_STANDING_CELLS < 1000,
+     `MIN_STANDING_CELLS=${P.MIN_STANDING_CELLS} (validator-only policy)`);
+
+  // ── report ───────────────────────────────────────────────────────────────
+  const pass = tests.filter(t => t.ok).length;
+  document.title = `NAVPARITY ${pass === tests.length ? 'PASS' : 'FAIL'} ${pass}/${tests.length}` +
+    (pass === tests.length ? '' : ' — ' + tests.filter(t => !t.ok).map(t => `${t.name} [${t.detail}]`).join(' | '));
+  const pre = document.createElement('pre');
+  pre.style.cssText = 'position:absolute;left:8px;top:8px;color:#ccc;font:11px monospace;z-index:9;max-height:860px;overflow:auto;background:rgba(0,0,0,.72);padding:8px';
+  pre.textContent = tests.map(t => `${t.ok ? 'ok  ' : 'FAIL'} ${t.name}${t.detail ? '  — ' + t.detail : ''}`).join('\n');
+  document.body.appendChild(pre);
+</script>

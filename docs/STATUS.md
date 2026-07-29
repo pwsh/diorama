@@ -279,6 +279,16 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Nav parity guard (tech-debt #10 — list complete)** (2026-07-29;
+  unreleased — on main past v0.42.0). Differential golden test
+  `nav-parity-test.html` (NAVPARITY 54/54): renderer `_nav` vs the
+  floorplans validator replica, 7 fixtures, cell-for-cell blocked +
+  region-label agreement, analytic PERSON_R/WALL_HALF probes,
+  mutation-tested. First run caught two REAL divergences, fixed
+  validator-side: missing sunken-stairs nav rails; custom-recipe
+  defs unresolved (resolveFurnitureDef threaded through
+  physical.mjs/validate.mjs). FLOORPLANS 399/399 byte-identical;
+  terrain 103/103, stairs-fit 78/78 held.
 - **Tech-debt batch A** (2026-07-29, per docs/TECH-DEBT.md; unreleased
   — on main past v0.42.0). Committed test bundles untracked +
   gitignored (the void-test clean-checkout flake mechanism);

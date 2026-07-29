@@ -6698,6 +6698,12 @@ export class ThreeDRenderer {
   // walkable. Build cost is cells × pieces + segment tests — build-time only.
   // `furnitureOn` mirrors the layer gate: pass `null` to treat furniture as
   // layer-hidden (don't block on it), else `undefined`.
+  //
+  // MIRRORED BY `scripts/floorplans/physical.mjs.buildNavGrid` — the floorplan
+  // validator's reachability checks stand on a hand-written replica of this
+  // method. `test-pages/nav-parity-test.html` runs both over a fixture matrix
+  // and asserts cell-for-cell agreement, so **any change here must be answered
+  // by that page** (update physical.mjs until it is green again).
   private _buildNav(f: Floor, furnitureOn: Furniture[] | null | undefined,
                     customObjects?: ObjectRecipe[], wallsOn = true): void {
     const cell = 150;

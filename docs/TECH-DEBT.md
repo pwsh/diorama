@@ -80,8 +80,17 @@ execution.
   counts), **6** (localstate-test window heuristic predated the window-glass
   rework — test fixed, LOCALSTATE 16/16, was 9/10 known-red), **7** (flight
   label resolvers hoisted into flights.ts; FLIGHTS 602/602, render 393/393,
-  ui 271/271), **9** (docs/models tree species §8–§12). Remaining: **#10**
-  (physical.mjs nav parity guard) — in flight as its own batch.
+  ui 271/271), **9** (docs/models tree species §8–§12).
+- 2026-07-29: **#10 DONE — the DO-ACTION list is complete.** Route chosen:
+  differential golden test (`nav-parity-test.html`, NAVPARITY 54/54 — 7
+  fixtures, cell-for-cell blocked + region-label agreement, analytic
+  constant probes, mutation-tested non-vacuous), NOT a shared-module
+  extraction (renderer-state interleaving made that riskier than the guard).
+  The guard's first run found TWO real replica divergences, both fixed
+  validator-side: sunken-stairs nav rails were absent, and custom-recipe
+  defs weren't resolved (`resolveFurnitureDef` now threaded); inline kind
+  lists replaced with `isStairsKind`/`isRiserKind`. FLOORPLANS 399/399
+  byte-identical.
 - Noted, unresolved: `FURNITURE_KINDS.birch_tree.color` `#7fbf4d` vs shipped
   foliage `#8fc95a` (possible intentional two-tier); plants-landscaping §8
   TOC anchor mismatch (pre-existing).

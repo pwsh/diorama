@@ -1,10 +1,15 @@
 // Physical-plausibility checks for floorplan envelopes: doorway clearance,
 // furniture-vs-wall overlap, nav reachability, and chair/table alignment.
 //
-// The nav rasterizer here is a deliberate REPLICA of three-renderer's
-// `_buildNav` (150 mm grid, PERSON_R = 170, same block/exempt rules, same
-// 8-neighbour no-corner-cut flood fill) so a plan that passes here is a plan
-// avatars can actually walk. Keep the two in sync when _buildNav changes.
+// The nav rasterizer here (`buildNavGrid`) is a deliberate REPLICA of
+// three-renderer's `_buildNav` (150 mm grid, PERSON_R = 170, same block/exempt
+// rules, same sunken-stairs rails, same 8-neighbour no-corner-cut flood fill)
+// so a plan that passes here is a plan avatars can actually walk.
+//
+// PARITY GUARD: `test-pages/nav-parity-test.html` runs BOTH implementations
+// over a fixture matrix and asserts cell-for-cell agreement of the blocked
+// bitmap + region structure. **Change `_buildNav` → run that page** (and vice
+// versa); it is the only thing keeping these two from silently desyncing.
 
 export const DOOR_CLEAR = 600;        // mm of keep-clear on BOTH sides of a door
 export const NAV_CELL = 150;          // nav grid pitch (must match _buildNav)
@@ -74,14 +79,18 @@ export function convexPenetration(pa, pb) {
 
 // ── shared plan model ───────────────────────────────────────────────────────
 
-/** Does this piece block nav? Mirrors _buildNav's furniture skip list exactly. */
-export function blocksNav(fu, geom) {
-  const def = geom.FURNITURE_KINDS[fu.kind ?? 'block'];
+/**
+ * Does this piece block nav? Mirrors _buildNav's furniture skip list exactly
+ * (rug → stairs family → bed → riser → elevation ≥ 300), including the custom
+ * -recipe def resolution.
+ */
+export function blocksNav(fu, geom, customObjects) {
+  const def = geom.resolveFurnitureDef(fu, customObjects);
   if (!def) return true;
   if (def.rug) return false;
-  if (fu.kind === 'stairs' || fu.kind === 'stairs_half' || fu.kind === 'stair_landing' || fu.kind === 'ramp') return false;
+  if (geom.isStairsKind(fu.kind)) return false;
   if (fu.kind === 'bed') return false;
-  if (geom.isRiserKind ? geom.isRiserKind(fu.kind) : fu.kind === 'riser_platform') return false;
+  if (geom.isRiserKind(fu.kind)) return false;
   if ((fu.elevation ?? 0) >= 300) return false;
   return true;
 }
@@ -123,7 +132,7 @@ const fname = (fu) => fu.label || fu.kind || fu.id;
  * centred on the door span: door width along the wall axis, 2·DOOR_CLEAR deep
  * across it.
  */
-export function doorwayBlockers(f, geom) {
+export function doorwayBlockers(f, geom, customObjects) {
   const bad = [];
   for (const d of (f.doors ?? [])) {
     const c = geom.doorSpanCenter(d);
@@ -131,7 +140,7 @@ export function doorwayBlockers(f, geom) {
     // into the furniture rect convention (front = local −Y ⇒ same rotation).
     const zone = rectCorners(c.x, c.y, d.w, 2 * DOOR_CLEAR, d.rotation ?? 0);
     for (const fu of (f.furniture ?? [])) {
-      if (!blocksNav(fu, geom)) continue;
+      if (!blocksNav(fu, geom, customObjects)) continue;
       const pen = convexPenetration(zone, rectCorners(fu.x, fu.y, fu.w, fu.h, fu.rotation));
       if (pen > 1) bad.push(`${d.label || d.id} ↔ ${fname(fu)}(${fu.id}) ${fmt(pen)}mm`);
     }
@@ -190,8 +199,14 @@ export function wallOverlaps(f, geom) {
 
 // ── 3. Nav reachability ─────────────────────────────────────────────────────
 
-/** Rasterize + flood-fill exactly like _buildNav. Returns {nx,ny,cell,region}. */
-export function buildNavGrid(f, geom) {
+/**
+ * Rasterize + flood-fill exactly like _buildNav. Returns
+ * `{nx, ny, cell, blocked, region, regionSize}`.
+ *
+ * Cell-for-cell parity with the renderer is asserted by
+ * `test-pages/nav-parity-test.html` — keep them in step.
+ */
+export function buildNavGrid(f, geom, customObjects) {
   const cell = NAV_CELL;
   const nx = Math.max(1, Math.ceil(f.w / cell));
   const ny = Math.max(1, Math.ceil(f.d / cell));
@@ -201,7 +216,7 @@ export function buildNavGrid(f, geom) {
   const { furnitureWorldToLocal, pointInPolygon } = geom;
 
   for (const fu of (f.furniture ?? [])) {
-    if (!blocksNav(fu, geom)) continue;
+    if (!blocksNav(fu, geom, customObjects)) continue;
     const halfW = fu.w / 2 + PERSON_R, halfH = fu.h / 2 + PERSON_R;
     const reach = Math.hypot(halfW, halfH);
     for (let cy = clampY(Math.floor((fu.y - reach) / cell)); cy <= clampY(Math.floor((fu.y + reach) / cell)); cy++) {
@@ -229,8 +244,8 @@ export function buildNavGrid(f, geom) {
     }
   }
 
-  const stairsFamily = (f.furniture ?? []).filter(fu =>
-    fu.kind === 'stairs' || fu.kind === 'stairs_half' || fu.kind === 'stair_landing' || fu.kind === 'ramp');
+  const stairsFamily = (f.furniture ?? []).filter(fu => geom.isStairsKind(fu.kind));
+  const sunkenStairs = stairsFamily.filter(fu => (fu.elevation ?? 0) < 0);
   const onStairTerrain = (wx, wy) => stairsFamily.some(st => {
     const l = furnitureWorldToLocal(st.rotation, wx - st.x, wy - st.y);
     return Math.abs(l.x) <= st.w / 2 && Math.abs(l.y) <= st.h / 2;
@@ -250,6 +265,34 @@ export function buildNavGrid(f, geom) {
     for (let cy = 0; cy < ny; cy++) for (let cx = 0; cx < nx; cx++) {
       const wx = (cx + 0.5) * cell, wy = (cy + 0.5) * cell;
       if (pointInPolygon(wx, wy, pl.points)) blocked[cy * nx + cx] = 1;
+    }
+  }
+
+  // Nav rails for SUNKEN (elevation < 0) stairs-family flights: a one-cell band
+  // (thickened to 1.5 cells so rotation can't leak a gap) hugging the two long
+  // (±x) sides and the deep (−y) end, leaving the shallow (+y) top edge open —
+  // so a descending flight is a dead-end corridor you can only enter from the
+  // top. Cells that are another flight's walkable terrain are never railed
+  // (chained flight → landing → flight stays connected).
+  const railBand = cell * 1.5;
+  for (const fu of sunkenStairs) {
+    const halfW = fu.w / 2, halfH = fu.h / 2;
+    const reach = Math.hypot(halfW, halfH) + railBand + cell;
+    for (let cy = clampY(Math.floor((fu.y - reach) / cell)); cy <= clampY(Math.floor((fu.y + reach) / cell)); cy++) {
+      for (let cx = clampX(Math.floor((fu.x - reach) / cell)); cx <= clampX(Math.floor((fu.x + reach) / cell)); cx++) {
+        const wx = (cx + 0.5) * cell, wy = (cy + 0.5) * cell;
+        const l = furnitureWorldToLocal(fu.rotation, wx - fu.x, wy - fu.y);
+        if (Math.abs(l.x) <= halfW && Math.abs(l.y) <= halfH) continue;  // tread
+        const rightSide = l.x > halfW && l.x <= halfW + railBand &&
+                          l.y <= halfH && l.y >= -halfH - railBand;
+        const leftSide  = l.x < -halfW && l.x >= -halfW - railBand &&
+                          l.y <= halfH && l.y >= -halfH - railBand;
+        const deepEnd   = l.y < -halfH && l.y >= -halfH - railBand &&
+                          l.x <= halfW + railBand && l.x >= -halfW - railBand;
+        if (!(rightSide || leftSide || deepEnd)) continue;
+        if (onStairTerrain(wx, wy)) continue;
+        blocked[cy * nx + cx] = 1;
+      }
     }
   }
 
@@ -285,8 +328,8 @@ export function buildNavGrid(f, geom) {
  * Every room anchor's enclosing loop must resolve to the SAME nav region — the
  * interior is one connected walkable space. Returns { groups, empties }.
  */
-export function roomRegions(f, geom) {
-  const grid = buildNavGrid(f, geom);
+export function roomRegions(f, geom, customObjects) {
+  const grid = buildNavGrid(f, geom, customObjects);
   const loops = geom.closedWallLoops(f.walls ?? []);
   const out = [];
   for (const rm of (f.rooms ?? [])) {

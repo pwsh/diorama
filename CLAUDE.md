@@ -54,7 +54,11 @@ loops, room anchors, opening snap distance, kinds, stair-link pairs).
 door's span × 2·`DOOR_CLEAR` 600 mm OBB — same block/exempt rules as
 `_buildNav`), furniture-vs-solid-wall overlap (openings excised via the real
 `wallCutsForSegment`; elevated/mountable/wall-plane/stairs exempt), **nav
-reachability** (a faithful `_buildNav` replica — 150 mm grid, `PERSON_R` 170
+reachability** (a faithful `_buildNav` replica — **GUARDED by the differential
+`test-pages/nav-parity-test.html` (`NAVPARITY PASS 54/54`, 7 fixtures, cell-for-cell +
+region-label agreement, mutation-tested): any `_buildNav` change → run that page; the guard's
+first run caught the replica missing the sunken-stairs nav rails and custom-recipe def
+resolution, both fixed 2026-07-29** — 150 mm grid, `PERSON_R` 170
 inflation, wall capsules, 8-neighbour fill — asserting every room resolves to
 ONE region per floor, tiny closets under `MIN_STANDING_CELLS` exempt), and
 seat alignment (a table-captured chair must aim its −Z front at the tabletop's

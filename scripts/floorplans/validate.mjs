@@ -124,7 +124,7 @@ export function validatePlan(env, geom) {
 
     // 9. Doorway clearance — no nav-blocking piece in a door's span or its
     //    DOOR_CLEAR-deep approach zone on either side of the wall.
-    const dz = doorwayBlockers(f, geom);
+    const dz = doorwayBlockers(f, geom, store.customObjects);
     ok(dz.length === 0, `${tag}: doorways clear (±${DOOR_CLEAR}mm)` + (dz.length ? ` — blocked: ${dz.join('; ')}` : ''));
 
     // 10. Furniture must not overlap a solid wall run (openings excised).
@@ -134,7 +134,7 @@ export function validatePlan(env, geom) {
     // 11. Nav reachability — every room resolves to ONE connected nav region.
     //     Reach-in closets / appliance nooks (< MIN_STANDING_CELLS of floor)
     //     are exempt — nobody walks into them.
-    const rr = roomRegions(f, geom).filter(r => r.cells >= MIN_STANDING_CELLS);
+    const rr = roomRegions(f, geom, store.customObjects).filter(r => r.cells >= MIN_STANDING_CELLS);
     const regions = [...new Set(rr.map(r => r.region))];
     let navMsg = `${tag}: walkable rooms in one nav region (${rr.length} room(s))`;
     if (regions.length > 1) {
