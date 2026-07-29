@@ -1,6 +1,6 @@
 # Project status & pick-up guide
 
-Last updated: 2026-07-28, at **v0.40.0**. This is the single document to
+Last updated: 2026-07-28, at **v0.41.0**. This is the single document to
 read (alongside `CLAUDE.md`) to resume work with full context.
 
 ## Where things stand
@@ -270,11 +270,14 @@ instance.
   swing-arc side/seam fix; five new door kinds + open-door
   closed-span hint + closed-span hitDoor; wall editing prefs —
   angle/grid/weld toggles + Alt free placement).
+  → v0.41.0 fresh bearings (vite 8.1.5 + three 0.185.1 gated bump —
+  nine renderer pages verified; docs/TECH-DEBT.md audit + execution
+  plan; TS held at 5.9 pending the 6.x bridge evaluation).
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
 - **Dependency bump + tech-debt audit** (2026-07-28, user-requested;
-  unreleased — on main past v0.40.0). vite 8.0.16→8.1.5 + three/
+  released in v0.41.0). vite 8.0.16→8.1.5 + three/
   @types/three 0.184→0.185.1 as one gated batch — typecheck/build/
   chunk-split grep clean and NINE renderer-heavy pages at their
   counts (terrain 103, stairs-fit 78, tree 74, door-kinds 87,
