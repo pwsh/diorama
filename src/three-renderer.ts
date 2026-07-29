@@ -15,6 +15,7 @@ import {
   isMechanicalApplianceKind, isPumpKind, mechanicalRun, mechanicalGlowColor, type MechanicalRun,
   plantThirsty, PLANT_MOISTURE_DEFAULT_THRESHOLD,
   isStairsKind, stairsRiseMm, stairsTreadCount,
+  isTreeKind, treeHeightMm,
   isVehicleKind, evStatusOf, evStatusColor, carChargeState,
   doorOpenFraction, GARAGE_DOOR_H,
   alarmHeight, alarmStateColor, ALARM_DEFAULTS, ALARM_PLATE_DEPTH_MM,
@@ -7855,9 +7856,11 @@ export class ThreeDRenderer {
     const recipe = fu.customKindId ? customObjects?.find(o => o.id === fu.customKindId) : undefined;
     const def = recipe ?? furnitureDef(fu);
     // Stairs-family pieces honour a per-piece RISE override (Furniture.ht) so a
-    // flight/ramp can bridge a short level change; every other kind reads its
-    // kind default unchanged (stairsRiseMm is a no-op off the family).
-    const W = fu.w, D = fu.h, HT = stairsRiseMm(fu, def.ht);
+    // flight/ramp can bridge a short level change; TREE kinds honour the same
+    // field as their overall HEIGHT (the two kind sets are disjoint, so the
+    // resolvers can never see each other's pieces). Every other kind reads its
+    // kind default unchanged (both resolvers are no-ops off their families).
+    const W = fu.w, D = fu.h, HT = isTreeKind(fu.kind) ? treeHeightMm(fu, def.ht) : stairsRiseMm(fu, def.ht);
     // Per-piece color override wins over the kind/recipe default tint. Custom
     // recipe primitives that fix their own color/role keep it (see
     // _buildFromRecipe); the override only flows into `tint`, which the
@@ -8412,6 +8415,13 @@ export class ThreeDRenderer {
         break;
       }
       // ── outdoor / yard objects ──
+      // TREES. Every tree kind is authored as PROPORTIONS of (W, D, HT) where
+      // HT = treeHeightMm(fu, def.ht) — the per-piece "Height (mm)" override.
+      // So raising the height grows a taller tree of the same species instead
+      // of stretching one; the canopy radius still tracks the footprint (W/D),
+      // exactly as it always has. Geometry is DETERMINISTIC (no Math.random) so
+      // a _keyFloor rebuild reproduces the same tree. `userData.treePart` tags
+      // the structural role (trunk / canopy / crown / drape) for the tests.
       case 'tree': {
         const trunk = this._mat({ color: 0x6b4a2b, roughness: 0.9 });
         const green = this._mat({ color: 0x3f7d2e, roughness: 0.95 });
@@ -8439,6 +8449,167 @@ export class ThreeDRenderer {
           const ch = (span / tiers) * 1.3;
           const cone = new THREE.Mesh(new THREE.ConeGeometry(rr, ch, 12), green);
           cone.position.set(0, trunkH + span * (i / tiers) + ch * 0.38, 0);
+          grp.add(cone);
+        }
+        break;
+      }
+      case 'oak_tree': {
+        // Thick short trunk + a broad four-lobe canopy. The top lobe is placed
+        // so its crown touches HT exactly.
+        const trunk = this._mat({ color: 0x6b4a2b, roughness: 0.9 });
+        const leaf = this._mat({ color: 0x4a7c2f, roughness: 0.95 });
+        const trunkH = HT * 0.34;
+        const tk = addCyl(W * 0.055, W * 0.085, trunkH, trunk, 0, trunkH / 2, 0, 12);
+        tk.userData.treePart = 'trunk';
+        const span = HT - trunkH;
+        // Canopy radius tracks the FOOTPRINT — except when the authored height
+        // is too short to hold it, where the crown span caps it so a squashed
+        // tree stays a (small) tree instead of sinking its lobes underground.
+        // Never bites at any sane height:footprint ratio.
+        const r = Math.min(Math.min(W, D) * 0.5, span * 0.85);
+        const topR = r * 0.44;
+        const lobes: [number, number, number, number][] = [
+          //  radius,      x,        y,                          z
+          [r * 0.62, 0, trunkH + span * 0.30, 0],
+          [r * 0.50, r * 0.42, trunkH + span * 0.52, -r * 0.20],
+          [r * 0.46, -r * 0.40, trunkH + span * 0.50, r * 0.24],
+          [topR, r * 0.06, Math.max(trunkH + topR * 0.5, HT - topR), -r * 0.05],
+        ];
+        for (const [lr, lx, ly, lz] of lobes) {
+          const m = new THREE.Mesh(new THREE.SphereGeometry(lr, 12, 10), leaf);
+          m.position.set(lx, ly, lz);
+          m.userData.treePart = 'canopy';
+          grp.add(m);
+        }
+        break;
+      }
+      case 'birch_tree': {
+        // Slim WHITE trunk banded with dark scars + a light, airy two-clump
+        // canopy. The bands are thin over-sized rings on the trunk axis.
+        const bark = this._mat({ color: 0xe8e4dc, roughness: 0.85 });
+        const band = this._mat({ color: 0x3a3a38, roughness: 0.9 });
+        const leaf = this._mat({ color: 0x8fc95a, roughness: 0.95 });
+        const trunkH = HT * 0.55;
+        const rTop = W * 0.032, rBot = W * 0.042;
+        const tk = addCyl(rTop, rBot, trunkH, bark, 0, trunkH / 2, 0, 10);
+        tk.userData.treePart = 'trunk';
+        const bandH = Math.max(20, HT * 0.012);
+        for (const f of [0.16, 0.33, 0.5, 0.68]) {
+          // Radius interpolated along the taper, nudged out so the band reads.
+          const rr = (rBot + (rTop - rBot) * f) * 1.06;
+          const b = addCyl(rr, rr, bandH, band, 0, trunkH * f, 0, 10);
+          b.userData.treePart = 'trunk';
+        }
+        const span = HT - trunkH;
+        const r = Math.min(Math.min(W, D) * 0.5, span * 0.85);   // see oak_tree
+        const cTopR = r * 0.62;
+        const c1 = new THREE.Mesh(new THREE.SphereGeometry(r * 0.72, 12, 10), leaf);
+        c1.position.set(-r * 0.10, trunkH + span * 0.32, r * 0.08);
+        c1.userData.treePart = 'canopy'; grp.add(c1);
+        const c2 = new THREE.Mesh(new THREE.SphereGeometry(cTopR, 12, 10), leaf);
+        c2.position.set(r * 0.18, Math.max(trunkH + cTopR * 0.5, HT - cTopR), -r * 0.12);
+        c2.userData.treePart = 'canopy'; grp.add(c2);
+        break;
+      }
+      case 'palm_tree': {
+        // Slender CURVED trunk (3 stacked, progressively-leaning segments walked
+        // tip-to-tip) topped by a fan of fronds — alternating arched-up and
+        // drooping — plus a central spear that reaches exactly HT.
+        const bark = this._mat({ color: 0x8a6b45, roughness: 0.9 });
+        const frond = this._mat({ color: 0x4f9e3a, roughness: 0.95 });
+        const trunkH = HT * 0.86;
+        const segH = trunkH / 3;
+        // rad, leaning toward +x. The FIRST segment is dead vertical so the
+        // trunk's base face sits flat on the ground (a tilted base corner would
+        // dip below y = 0); the lean builds from the second segment up.
+        const tilts = [0, 0.10, 0.20];
+        let px = 0, py = 0;
+        for (let i = 0; i < 3; i++) {
+          const a = tilts[i];
+          const dx = Math.sin(a), dy = Math.cos(a);
+          const rTop = W * 0.030 - i * W * 0.004;
+          const rBot = W * 0.034 - i * W * 0.004;
+          const seg = addCyl(rTop, rBot, segH, bark, px + dx * segH / 2, py + dy * segH / 2, 0, 10);
+          seg.rotation.z = -a;   // +x lean: rotating about -z tips local +y toward +x
+          seg.userData.treePart = 'trunk';
+          px += dx * segH; py += dy * segH;
+        }
+        const hubR = W * 0.055;
+        const hub = new THREE.Mesh(new THREE.SphereGeometry(hubR, 10, 8), bark);
+        hub.position.set(px, py, 0);
+        hub.userData.treePart = 'crown'; grp.add(hub);
+        // Frond length tracks the footprint, capped by the crown height so a
+        // drooping frond can never reach the ground (see oak_tree).
+        const fl = Math.min(Math.min(W, D) * 0.5 * 0.95, py * 0.9);
+        const fw = W * 0.085, ft = Math.max(15, HT * 0.008);
+        const NF = 7;
+        for (let i = 0; i < NF; i++) {
+          const pivot = new THREE.Group();
+          pivot.position.set(px, py, 0);
+          pivot.rotation.y = (i / NF) * Math.PI * 2;
+          const arm = new THREE.Group();
+          // Even fronds arch UP, odd fronds droop (rotation.x maps the frond's
+          // local +z tip to y = -fl·sin θ, so a negative angle lifts it).
+          arm.rotation.x = (i % 2 === 0) ? -0.30 : 0.46;
+          const b = new THREE.Mesh(new THREE.BoxGeometry(fw, ft, fl), frond);
+          b.position.set(0, 0, fl * 0.5);
+          b.userData.treePart = 'crown';
+          arm.add(b); pivot.add(arm); grp.add(pivot);
+        }
+        // Central spear — guarantees the crown reaches the authored height.
+        const spearH = Math.max(hubR, HT - py);
+        const spear = new THREE.Mesh(new THREE.ConeGeometry(W * 0.03, spearH, 8), frond);
+        spear.position.set(px, py + spearH / 2, 0);
+        spear.userData.treePart = 'crown'; grp.add(spear);
+        break;
+      }
+      case 'willow_tree': {
+        // Weeping willow: medium trunk, a squashed dome canopy whose crown
+        // touches HT, and a ring of tapered drapes hanging ~60% back down.
+        const trunk = this._mat({ color: 0x6b5439, roughness: 0.9 });
+        const leaf = this._mat({ color: 0x6a9c47, roughness: 0.95 });
+        const drapeMat = this._mat({ color: 0x7fae52, roughness: 0.95 });
+        const trunkH = HT * 0.30;
+        const tk = addCyl(W * 0.045, W * 0.065, trunkH, trunk, 0, trunkH / 2, 0, 12);
+        tk.userData.treePart = 'trunk';
+        const span = HT - trunkH;
+        const r = Math.min(Math.min(W, D) * 0.5, span * 0.85);   // see oak_tree
+        const domeR = r * 0.82, domeSY = 0.78;
+        const domeCY = HT - domeR * domeSY;
+        const dome = new THREE.Mesh(new THREE.SphereGeometry(domeR, 14, 10), leaf);
+        dome.scale.y = domeSY;
+        dome.position.set(0, domeCY, 0);
+        dome.userData.treePart = 'canopy'; grp.add(dome);
+        const ND = 8;
+        const drapeLen = span * 0.60;
+        for (let i = 0; i < ND; i++) {
+          const a = (i / ND) * Math.PI * 2;
+          const rr = r * 0.72;
+          const d = addCyl(W * 0.050, W * 0.014, drapeLen, drapeMat,
+                           Math.cos(a) * rr, domeCY - drapeLen * 0.45, Math.sin(a) * rr, 8);
+          d.userData.treePart = 'drape';
+        }
+        break;
+      }
+      case 'spruce_tree': {
+        // Denser, bluer, taller sibling of the pine: five stacked cones. The
+        // tier offset is DERIVED from the overlap factor so the top tip lands
+        // exactly on HT at any height.
+        const trunk = this._mat({ color: 0x5c4630, roughness: 0.9 });
+        const needle = this._mat({ color: 0x2c5f52, roughness: 0.95 });
+        const trunkH = HT * 0.10;
+        const tk = addCyl(W * 0.045, W * 0.062, trunkH, trunk, 0, trunkH / 2, 0, 10);
+        tk.userData.treePart = 'trunk';
+        const r = Math.min(W, D) * 0.5;
+        const span = HT - trunkH;
+        const tiers = 5, overlap = 1.45;
+        const ch = (span / tiers) * overlap;
+        const k = 1 / overlap - 0.5;   // tip of the last tier == trunkH + span == HT
+        for (let i = 0; i < tiers; i++) {
+          const rr = r * (1 - i * 0.17);
+          const cone = new THREE.Mesh(new THREE.ConeGeometry(rr, ch, 12), needle);
+          cone.position.set(0, trunkH + span * (i / tiers) + ch * k, 0);
+          cone.userData.treePart = 'canopy';
           grp.add(cone);
         }
         break;

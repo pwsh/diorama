@@ -62,6 +62,9 @@ export type FurnitureKind =
   // outdoor
   | 'trash_bin' | 'recycle_bin'   // wheeled curbside bins; entity 'on'/'full' = full
   | 'tree' | 'pine_tree' | 'bush' | 'flower_bed' | 'bird_bath'
+  // more tree species — every tree kind honours the per-piece `ht` height
+  // override (see isTreeKind / treeHeightMm in geometry.ts)
+  | 'oak_tree' | 'birch_tree' | 'palm_tree' | 'willow_tree' | 'spruce_tree'
   | 'fountain' | 'swingset' | 'lawn_chair' | 'picnic_table'
   | 'rock_cluster'  // decorative boulder cluster (2–4 overlapping grey shapes); blocks nav
   | 'mailbox'       // post-mounted mail/parcel box; mailCount badge + raised flag

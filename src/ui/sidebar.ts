@@ -38,6 +38,7 @@ import {
   INFO_CARD_MOUNT_DEFAULTS, INFO_CARD_SCALE_MIN, INFO_CARD_SCALE_MAX,
   infoCardText, infoCardMount, infoCardHeight, infoCardW, infoCardH, infoCardScale,
   furnitureCat, type FurnitureCat, isBinKind, isSinkKind, isVehicleKind, isStairsKind, STAIRS_MIN_RISE_MM, isClimateApplianceKind, isBladedFanKind,
+  isTreeKind, TREE_MIN_HEIGHT_MM, TREE_MAX_HEIGHT_MM,
   isMechanicalApplianceKind, mechanicalBindDomains, mechanicalRun,
   closedWallLoops, loopContaining, resolveRoomForPointFuzzy, roomLabel,
   floorsDisplayOrder,
@@ -4836,6 +4837,7 @@ export class Sidebar extends LitElement {
         </div>
         ${isStairsKind(curKind) ? this._stairsFitRows(piece, curKind, upd) : nothing}
         ${isStairsKind(curKind) ? this._stairLinkRow(piece, upd) : nothing}
+        ${isTreeKind(curKind) ? this._treeHeightRow(piece, curKind, upd) : nothing}
         <div class="row"><label>Rotation (°)</label>
           <input type="number" step="15" .value=${String(Math.round(piece.rotation ?? 0))}
                  @input=${(e: Event) => upd(() => {
@@ -4859,6 +4861,29 @@ export class Sidebar extends LitElement {
           Front (backrest, headboard, pillows) faces +Y world at rotation 0.
           Snaps to 15° increments. Corner-resize handles hide while rotated.
         </div>
+      </div>
+    `;
+  }
+
+  // Per-piece HEIGHT on every tree kind. Writes the SAME Furniture.ht field the
+  // stairs Rise row writes — the two kind sets are disjoint (STAIRS_KINDS ∩
+  // TREE_KINDS = ∅) so only one row can ever be showing for a given piece.
+  // Blank / the kind default clears it, leaving an untouched tree as built.
+  private _treeHeightRow(piece: Furniture, curKind: FurnitureKind,
+                         upd: (mut: () => void) => void) {
+    const defHt = FURNITURE_KINDS[curKind].ht;
+    return html`
+      <div class="row"><label>Height (mm)</label>
+        <input type="number" min=${TREE_MIN_HEIGHT_MM} max=${TREE_MAX_HEIGHT_MM} step="100"
+               .value=${piece.ht != null ? String(Math.round(piece.ht)) : ''}
+               placeholder=${String(defHt)}
+               title="Overall height of this tree, ground to crown. Blank = the kind default (${defHt} mm). The trunk and canopy scale together, so a taller value grows a bigger tree rather than stretching this one. Clamped ${TREE_MIN_HEIGHT_MM}–${TREE_MAX_HEIGHT_MM} mm; the footprint (width/depth above) still sets the canopy spread."
+               @input=${(e: Event) => upd(() => {
+                 const v = parseFloat((e.target as HTMLInputElement).value);
+                 piece.ht = (isFinite(v) && Math.round(v) !== defHt)
+                   ? Math.min(TREE_MAX_HEIGHT_MM, Math.max(TREE_MIN_HEIGHT_MM, v))
+                   : undefined;
+               })}>
       </div>
     `;
   }

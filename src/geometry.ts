@@ -2213,6 +2213,14 @@ export const FURNITURE_KINDS: Record<FurnitureKind, FurnitureKindDef> = {
   // Outdoor — yard objects (the "yard" arc). Symmetric pieces skip the front chevron.
   tree:          { label: 'Tree',          w: 900,  h: 900,  ht: 3000, back: 'none', color: 0x4c8c2b, cat: 'outdoor', frontArrow: false },
   pine_tree:     { label: 'Pine tree',     w: 800,  h: 800,  ht: 3200, back: 'none', color: 0x2f6d3a, cat: 'outdoor', frontArrow: false },
+  // Additional species. Every tree kind is built PARAMETRICALLY from (w, h, HT)
+  // where HT = treeHeightMm(piece, def.ht) — so the sidebar "Height (mm)" row
+  // grows a bigger tree rather than stretching the default one.
+  oak_tree:      { label: 'Oak tree',      w: 3000, h: 3000, ht: 5500, back: 'none', color: 0x4a7c2f, cat: 'outdoor', frontArrow: false },
+  birch_tree:    { label: 'Birch tree',    w: 1800, h: 1800, ht: 5000, back: 'none', color: 0x7fbf4d, cat: 'outdoor', frontArrow: false },
+  palm_tree:     { label: 'Palm tree',     w: 2200, h: 2200, ht: 5000, back: 'none', color: 0x4f9e3a, cat: 'outdoor', frontArrow: false },
+  willow_tree:   { label: 'Willow tree',   w: 3200, h: 3200, ht: 4500, back: 'none', color: 0x6a9c47, cat: 'outdoor', frontArrow: false },
+  spruce_tree:   { label: 'Spruce tree',   w: 2000, h: 2000, ht: 6000, back: 'none', color: 0x2c5f52, cat: 'outdoor', frontArrow: false },
   bush:          { label: 'Bush',          w: 700,  h: 700,  ht: 700,  back: 'none', color: 0x5a9e35, cat: 'outdoor', frontArrow: false },
   flower_bed:    { label: 'Flower bed',    w: 900,  h: 450,  ht: 300,  back: 'none', color: 0x6b4a2b, cat: 'outdoor', frontArrow: false },
   bird_bath:     { label: 'Bird bath',     w: 450,  h: 450,  ht: 950,  back: 'none', color: 0xb0b6bb, cat: 'outdoor', frontArrow: false },
@@ -2758,6 +2766,42 @@ export function resolveFurnitureDef(f: Furniture, customObjects?: ObjectRecipe[]
     return rec ?? FURNITURE_KINDS.block;
   }
   return furnitureDef(f);
+}
+
+// ── Tree species & per-piece height ───────────────────────────────────────────
+// Every tree kind (NOT `bush` — a shrub is not a tree, and its build has no
+// trunk/canopy split to scale). Membership grants exactly one thing: the
+// per-piece `Furniture.ht` HEIGHT override honoured by treeHeightMm below, and
+// the sidebar "Height (mm)" row that writes it. Nav / terrain / grounding are
+// untouched — a tree blocks nav by its footprint exactly as before.
+export const TREE_KINDS = new Set<FurnitureKind>([
+  'tree', 'pine_tree', 'oak_tree', 'birch_tree', 'palm_tree', 'willow_tree', 'spruce_tree',
+]);
+export function isTreeKind(kind?: FurnitureKind): kind is FurnitureKind {
+  return kind != null && TREE_KINDS.has(kind);
+}
+
+// A tree may be anywhere from a 1 m sapling to a 15 m specimen.
+export const TREE_MIN_HEIGHT_MM = 1000;
+export const TREE_MAX_HEIGHT_MM = 15000;
+
+/**
+ * The overall HEIGHT (mm, ground to crown) of a tree piece.
+ *
+ * `Furniture.ht` is an item-level per-piece override — the same field the
+ * stairs family uses for its RISE (`stairsRiseMm`), and the two consumers are
+ * disjoint by kind (STAIRS_KINDS ∩ TREE_KINDS = ∅), so neither can read the
+ * other's value. Every other kind still reads its `FurnitureKindDef.ht`.
+ *
+ * Clamped to [TREE_MIN_HEIGHT_MM, TREE_MAX_HEIGHT_MM]; absent / non-finite
+ * falls back to the kind default, which is what keeps untouched trees
+ * byte-identical to the pre-feature build.
+ */
+export function treeHeightMm(fu: { kind?: FurnitureKind; ht?: number }, defHt: number): number {
+  if (!isTreeKind(fu?.kind)) return defHt;
+  const v = fu?.ht;
+  if (typeof v !== 'number' || !isFinite(v)) return defHt;
+  return Math.min(TREE_MAX_HEIGHT_MM, Math.max(TREE_MIN_HEIGHT_MM, v));
 }
 
 // ── Plant health (soil-moisture droop) ────────────────────────────────────────

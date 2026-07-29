@@ -1,0 +1,332 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>tree test</title>
+<style>html,body{margin:0;background:#111;color:#ccc;font:12px sans-serif}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<!--
+  TREE SPECIES + per-piece height override.
+
+  Modules (transpile into the harness dir before serving):
+    npx esbuild src/geometry.ts --bundle --format=esm --outfile=<harness>/geometry.mod.js
+    npx esbuild src/canvas-render.ts --bundle --format=esm --outfile=<harness>/canvas-render.mod.js
+    (the built three-renderer chunk + its assets/ siblings are copied next to
+     this file from dist/, like the other 3D renderer pages)
+
+  Asserts:
+   (A) pure isTreeKind: all seven tree kinds true; bush + non-outdoor kinds false;
+       DISJOINT from the stairs family (both read Furniture.ht).
+   (B) pure treeHeightMm: honours ht on tree kinds only, clamps to
+       [TREE_MIN_HEIGHT_MM, TREE_MAX_HEIGHT_MM], falls back on absent / garbage.
+   (C) the five NEW species build: a real group, ≥2 body meshes, a crown that
+       reaches the kind's default height (±5%), and a horizontal extent that
+       tracks the authored footprint.
+   (D) the height override drives the build: oak at ht 9000 tops out ≈9000, the
+       same piece with no ht tops out at its default, and the clamp bites at the
+       extremes. Trees with a HUGE ht keep their footprint (height-only knob).
+   (E) PARAMETRIC-REFACTOR REGRESSION PINS. `tree` and `pine_tree` were switched
+       from `stairsRiseMm(fu, def.ht)` (a no-op off the stairs family, i.e. the
+       raw kind default) to `treeHeightMm(fu, def.ht)`. At the DEFAULT height the
+       output must be bit-identical. The goldens below were captured from the
+       PRE-refactor build (commit a9dda13) with the same measurement code:
+         tree      bodies=5 outlines=4 xSpan=954        zSpan=900 topY=2506.5
+         pine_tree bodies=5 outlines=4 xSpan=800        zSpan=800 topY=3329.024024
+       (bodies includes the one auto blob-shadow decal; spans are vertex-derived
+       world extents excluding that decal.)
+   (F) 2D glyphs: drawFurniturePrimitiveLocal paints a non-trivial number of
+       non-background pixels for each new kind (smoke — no golden imaging), and
+       each species' glyph differs from the others' pixel signature.
+   (G) species distinguishable: the palm crown carries more meshes than the oak
+       canopy, the willow has ≥6 drapes, and the birch trunk material is LIGHT.
+-->
+<script type="module">
+  const G = await import('./geometry.mod.js');
+  const CR = await import('./canvas-render.mod.js');
+  const mod = await import('./assets/three-renderer.js?v=' + Date.now());
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+
+  const tests = [];
+  const ok = (name, cond, detail) => tests.push({ name, ok: !!cond, detail });
+  const near = (a, b, tol = 1) => Number.isFinite(a) && Math.abs(a - b) <= tol;
+  const pct = (a, b, p) => Number.isFinite(a) && Math.abs(a - b) <= Math.abs(b) * p;
+
+  // ── measurement helpers ────────────────────────────────────────────────────
+  // Body meshes = every mesh that is not an inverted-hull outline shell. The
+  // blob-shadow decal IS counted (matching the pre-refactor golden capture) but
+  // is excluded from the vertex extents so the canopy geometry is measured.
+  const isBlob = (o) => o.userData.outlineSkip && o.geometry.type === 'PlaneGeometry';
+  const measure = (grp) => {
+    grp.updateMatrixWorld(true);
+    let bodies = 0, outlines = 0;
+    let minx = Infinity, maxx = -Infinity, miny = Infinity, maxy = -Infinity, minz = Infinity, maxz = -Infinity;
+    grp.traverse(o => {
+      if (!o.isMesh) return;
+      if (o.userData.outline) { outlines++; return; }
+      bodies++;
+      if (isBlob(o)) return;
+      const p = o.geometry.attributes.position, m = o.matrixWorld.elements;
+      for (let i = 0; i < p.count; i++) {
+        const vx = p.getX(i), vy = p.getY(i), vz = p.getZ(i);
+        const X = m[0] * vx + m[4] * vy + m[8] * vz + m[12];
+        const Y = m[1] * vx + m[5] * vy + m[9] * vz + m[13];
+        const Z = m[2] * vx + m[6] * vy + m[10] * vz + m[14];
+        if (X < minx) minx = X; if (X > maxx) maxx = X;
+        if (Y < miny) miny = Y; if (Y > maxy) maxy = Y;
+        if (Z < minz) minz = Z; if (Z > maxz) maxz = Z;
+      }
+    });
+    return { bodies, outlines, xSpan: maxx - minx, zSpan: maxz - minz, topY: maxy, botY: miny };
+  };
+  const parts = (grp, tag) => {
+    let n = 0;
+    grp.traverse(o => { if (o.isMesh && !o.userData.outline && o.userData.treePart === tag) n++; });
+    return n;
+  };
+  const partMat = (grp, tag) => {
+    let m = null;
+    grp.traverse(o => { if (!m && o.isMesh && !o.userData.outline && o.userData.treePart === tag) m = o.material; });
+    return m;
+  };
+  const build = (kind, extra = {}) => {
+    const d = G.FURNITURE_KINDS[kind];
+    return r._buildFurniture({ id: 'x_' + kind, x: 0, y: 0, w: d.w, h: d.h, kind, rotation: 0, ...extra });
+  };
+
+  const NEW_KINDS = ['oak_tree', 'birch_tree', 'palm_tree', 'willow_tree', 'spruce_tree'];
+  const ALL_TREES = ['tree', 'pine_tree', ...NEW_KINDS];
+
+  // ══ (A) pure isTreeKind ═══════════════════════════════════════════════════
+  ok('A1 all seven tree kinds are trees',
+     ALL_TREES.every(k => G.isTreeKind(k) === true), ALL_TREES.join(','));
+  ok('A2 bush is NOT a tree (a shrub has no trunk/canopy split)', G.isTreeKind('bush') === false);
+  ok('A3 non-outdoor kinds are not trees',
+     !G.isTreeKind('sofa') && !G.isTreeKind('stairs') && !G.isTreeKind('flower_bed') && !G.isTreeKind('rock_cluster'));
+  ok('A4 absent / garbage kind is not a tree',
+     !G.isTreeKind(undefined) && !G.isTreeKind(null) && !G.isTreeKind('nope'));
+  {
+    // Both families read Furniture.ht — membership MUST be disjoint or a
+    // stairs rise would be read as a tree height (and vice versa).
+    const overlap = [...G.TREE_KINDS].filter(k => G.STAIRS_KINDS.has(k));
+    ok('A5 TREE_KINDS ∩ STAIRS_KINDS = ∅ (both consume Furniture.ht)',
+       overlap.length === 0 && G.TREE_KINDS.size === 7, `overlap=${overlap} size=${G.TREE_KINDS.size}`);
+  }
+  ok('A6 every tree kind is a real FURNITURE_KINDS entry in the outdoor cat',
+     ALL_TREES.every(k => G.FURNITURE_KINDS[k] && G.FURNITURE_KINDS[k].cat === 'outdoor'));
+
+  // ══ (B) pure treeHeightMm ═════════════════════════════════════════════════
+  const TH = G.treeHeightMm;
+  ok('B1 absent ht → the kind default', TH({ kind: 'oak_tree' }, 5500) === 5500);
+  ok('B2 a set ht wins', TH({ kind: 'oak_tree', ht: 9000 }, 5500) === 9000);
+  ok('B3 the legacy tree kinds honour it too',
+     TH({ kind: 'tree', ht: 4200 }, 3000) === 4200 && TH({ kind: 'pine_tree', ht: 8000 }, 3200) === 8000);
+  ok('B4 non-tree kinds ignore ht entirely (stairs keep their own resolver)',
+     TH({ kind: 'sofa', ht: 9000 }, 800) === 800 &&
+     TH({ kind: 'stairs', ht: 200 }, 2743) === 2743 &&
+     TH({ kind: 'bush', ht: 9000 }, 700) === 700);
+  ok('B5 clamped to the low bound',
+     TH({ kind: 'oak_tree', ht: 10 }, 5500) === G.TREE_MIN_HEIGHT_MM &&
+     TH({ kind: 'oak_tree', ht: -4000 }, 5500) === G.TREE_MIN_HEIGHT_MM,
+     `min=${G.TREE_MIN_HEIGHT_MM}`);
+  ok('B6 clamped to the high bound',
+     TH({ kind: 'oak_tree', ht: 999999 }, 5500) === G.TREE_MAX_HEIGHT_MM,
+     `max=${G.TREE_MAX_HEIGHT_MM}`);
+  ok('B7 garbage falls back to the kind default',
+     TH({ kind: 'oak_tree', ht: NaN }, 5500) === 5500 &&
+     TH({ kind: 'oak_tree', ht: Infinity }, 5500) === 5500 &&
+     TH({ kind: 'oak_tree', ht: 'tall' }, 5500) === 5500 &&
+     TH({}, 5500) === 5500 && TH(undefined, 5500) === 5500);
+  ok('B8 the stairs resolver is unchanged and still ignores tree pieces',
+     G.stairsRiseMm({ kind: 'oak_tree', ht: 9000 }, 5500) === 5500 &&
+     G.stairsRiseMm({ kind: 'stairs', ht: 200 }, 2743) === 200);
+
+  // ══ (C) the five new species build ════════════════════════════════════════
+  const M = {};
+  for (const k of NEW_KINDS) M[k] = measure(build(k));
+  for (const k of NEW_KINDS) {
+    const d = G.FURNITURE_KINDS[k], m = M[k];
+    ok(`C·${k} builds ≥2 body meshes`, m.bodies >= 3, `bodies=${m.bodies}`);
+    ok(`C·${k} crown reaches its default height ${d.ht} (±5%)`, pct(m.topY, d.ht, 0.05),
+       `topY=${m.topY.toFixed(1)} ht=${d.ht}`);
+    ok(`C·${k} sits on the ground (bottom ≈ 0)`, near(m.botY, 0, 1), `botY=${m.botY}`);
+    ok(`C·${k} horizontal extent tracks the ${d.w}×${d.h} footprint (±35%)`,
+       pct(m.xSpan, d.w, 0.35) && pct(m.zSpan, d.h, 0.35),
+       `x=${m.xSpan.toFixed(0)} z=${m.zSpan.toFixed(0)}`);
+    ok(`C·${k} gets outline shells + a blob shadow like every tree`,
+       m.outlines >= 1, `outlines=${m.outlines}`);
+  }
+  {
+    // Determinism: two builds of the same descriptor are identical (no
+    // Math.random in any species — a _keyFloor rebuild must reproduce it).
+    let same = true;
+    for (const k of NEW_KINDS) {
+      const a = measure(build(k)), b = measure(build(k));
+      if (a.bodies !== b.bodies || a.topY !== b.topY || a.xSpan !== b.xSpan) same = false;
+    }
+    ok('C·determinism: rebuilding a species reproduces it exactly', same);
+  }
+
+  // ══ (D) the per-piece height override drives the build ════════════════════
+  {
+    const oakDef = measure(build('oak_tree'));
+    const oakTall = measure(build('oak_tree', { ht: 9000 }));
+    const oakShort = measure(build('oak_tree', { ht: 2000 }));
+    ok('D1 oak with ht 9000 tops out ≈9000 (±5%)', pct(oakTall.topY, 9000, 0.05), `topY=${oakTall.topY.toFixed(1)}`);
+    ok('D2 the same piece with NO ht tops out at the kind default ≈5500 (±5%)',
+       pct(oakDef.topY, 5500, 0.05), `topY=${oakDef.topY.toFixed(1)}`);
+    ok('D3 ht 2000 really shrinks it', oakShort.topY < oakDef.topY * 0.55, `topY=${oakShort.topY.toFixed(1)}`);
+    ok('D4 height is a HEIGHT knob — the footprint is unchanged',
+       near(oakTall.xSpan, oakDef.xSpan, 1e-6) && near(oakTall.zSpan, oakDef.zSpan, 1e-6),
+       `x ${oakDef.xSpan.toFixed(1)} → ${oakTall.xSpan.toFixed(1)}`);
+    ok('D5 mesh composition is height-independent (same species, bigger)',
+       oakTall.bodies === oakDef.bodies && oakShort.bodies === oakDef.bodies,
+       `${oakDef.bodies}/${oakTall.bodies}/${oakShort.bodies}`);
+    const oakHuge = measure(build('oak_tree', { ht: 99999 }));
+    ok('D6 an absurd ht clamps at TREE_MAX_HEIGHT_MM',
+       pct(oakHuge.topY, G.TREE_MAX_HEIGHT_MM, 0.05), `topY=${oakHuge.topY.toFixed(0)}`);
+    // An absurdly small ht clamps at TREE_MIN_HEIGHT_MM — and the crown-span
+    // cap keeps the squashed canopy ABOVE ground (a 3 m-wide oak forced to 1 m
+    // would otherwise sink its footprint-sized lobes under the lawn).
+    const oakTiny = measure(build('oak_tree', { ht: 1 }));
+    ok('D7 an absurdly small ht clamps at TREE_MIN_HEIGHT_MM (never inverted, never underground)',
+       near(oakTiny.topY, G.TREE_MIN_HEIGHT_MM, 1e-3) && oakTiny.botY >= -1e-3,
+       `topY=${oakTiny.topY.toFixed(3)} botY=${oakTiny.botY.toFixed(3)}`);
+    {
+      // The same guard on every new species, at the worst aspect each has.
+      let allAbove = true; const worst = [];
+      for (const k of NEW_KINDS) {
+        const m = measure(build(k, { ht: G.TREE_MIN_HEIGHT_MM }));
+        worst.push(`${k}:${m.botY.toFixed(1)}`);
+        if (!(m.botY >= -1)) allAbove = false;
+      }
+      ok('D7b every new species stays above ground at the minimum height', allAbove, worst.join(' '));
+    }
+    // Every species honours it, not just the oak. The five new species are
+    // authored so the crown touches HT exactly; `pine_tree`'s legacy cone stack
+    // is proportional to HT (crown = 1.04·HT — an overshoot that is itself a
+    // regression pin, see E4); `tree`'s legacy canopy radius comes from the
+    // FOOTPRINT, so its crown is AFFINE in HT (0.42·HT + a constant canopy
+    // term). All three shapes are asserted rather than smoothed over, because
+    // the legacy silhouettes must not change.
+    let newExact = true; const rows = [];
+    for (const k of NEW_KINDS) {
+      const t = measure(build(k, { ht: 7000 }));
+      rows.push(`${k}:${t.topY.toFixed(1)}`);
+      if (!pct(t.topY, 7000, 0.001)) newExact = false;
+    }
+    ok('D8 the five new species top out EXACTLY at the authored height', newExact, rows.join(' '));
+    const pA = measure(build('pine_tree')), pB = measure(build('pine_tree', { ht: 7000 }));
+    ok('D8b pine_tree stays proportional in ht (crown = 1.04·HT)',
+       pct(pB.topY / pA.topY, 7000 / 3200, 0.001), `${(pB.topY / pA.topY).toFixed(4)}`);
+    const tA = measure(build('tree')), tB = measure(build('tree', { ht: 7000 }));
+    ok('D8c tree is affine in ht — the crown rises by 0.42 of the delta, the ' +
+       'footprint-derived canopy term is unchanged',
+       near(tB.topY - tA.topY, (7000 - 3000) * 0.42, 1e-6) && tB.topY > tA.topY,
+       `Δ=${(tB.topY - tA.topY).toFixed(3)}`);
+    // A non-tree piece must still ignore ht entirely.
+    const sofaA = measure(build('sofa'));
+    const sofaB = measure(build('sofa', { ht: 9000 }));
+    ok('D9 a sofa with ht 9000 is untouched (the field is tree/stairs-only)',
+       near(sofaA.topY, sofaB.topY, 1e-9) && sofaA.bodies === sofaB.bodies,
+       `${sofaA.topY} vs ${sofaB.topY}`);
+  }
+
+  // ══ (E) parametric-refactor regression pins (PRE-refactor goldens) ════════
+  {
+    const t = measure(build('tree'));
+    ok('E1 tree: mesh counts unchanged (5 bodies incl. blob, 4 outline shells)',
+       t.bodies === 5 && t.outlines === 4, `bodies=${t.bodies} outlines=${t.outlines}`);
+    ok('E2 tree: bbox unchanged to 1e-6 (xSpan 954, zSpan 900, topY 2506.5)',
+       near(t.xSpan, 954, 1e-6) && near(t.zSpan, 900, 1e-6) && near(t.topY, 2506.5, 1e-6),
+       `x=${t.xSpan} z=${t.zSpan} y=${t.topY}`);
+    const p = measure(build('pine_tree'));
+    ok('E3 pine_tree: mesh counts unchanged (5 bodies incl. blob, 4 outline shells)',
+       p.bodies === 5 && p.outlines === 4, `bodies=${p.bodies} outlines=${p.outlines}`);
+    ok('E4 pine_tree: bbox unchanged to 1e-6 (xSpan 800, zSpan 800, topY 3329.024024)',
+       near(p.xSpan, 800, 1e-6) && near(p.zSpan, 800, 1e-6) && near(p.topY, 3329.024024, 1e-6),
+       `x=${p.xSpan} z=${p.zSpan} y=${p.topY}`);
+    // An explicitly-set ht EQUAL to the default must also be identical (the
+    // sidebar clears the field at the default, but an imported plan may carry it).
+    const t2 = measure(build('tree', { ht: 3000 }));
+    ok('E5 tree with ht === its default is identical to the untouched build',
+       t2.bodies === t.bodies && near(t2.topY, t.topY, 1e-9) && near(t2.xSpan, t.xSpan, 1e-9));
+    const b = measure(build('bush'));
+    ok('E6 bush (deliberately NOT a tree) is untouched by the feature',
+       b.bodies === 3 && near(b.topY, 462, 1e-6), `bodies=${b.bodies} topY=${b.topY}`);
+  }
+
+  // ══ (F) 2D glyphs ═════════════════════════════════════════════════════════
+  {
+    const cv = document.createElement('canvas');
+    cv.width = 120; cv.height = 120;
+    const ctx = cv.getContext('2d', { willReadFrequently: true });
+    const sigs = {};
+    for (const k of NEW_KINDS) {
+      ctx.clearRect(0, 0, 120, 120);
+      ctx.save();
+      ctx.translate(60, 60);
+      // Local frame: the primitive draws about the origin (x/y = -halfW/-halfH).
+      const kd = G.FURNITURE_KINDS[k];
+      CR.drawFurniturePrimitiveLocal(
+        ctx, { id: 'p', x: 0, y: 0, w: kd.w, h: kd.h, kind: k, rotation: 0 }, 45, 45);
+      ctx.restore();
+      const px = ctx.getImageData(0, 0, 120, 120).data;
+      let painted = 0, sum = 0;
+      for (let i = 0; i < px.length; i += 4) {
+        if (px[i + 3] > 8) { painted++; sum += px[i] * 7 + px[i + 1] * 11 + px[i + 2] * 13 + (i % 977); }
+      }
+      sigs[k] = { painted, sum };
+      ok(`F·${k} 2D glyph paints a real mark (>600 px)`, painted > 600, `px=${painted}`);
+    }
+    const uniq = new Set(NEW_KINDS.map(k => sigs[k].sum));
+    ok('F·each new species has a DISTINCT 2D pixel signature', uniq.size === NEW_KINDS.length,
+       NEW_KINDS.map(k => `${k}:${sigs[k].painted}`).join(' '));
+  }
+
+  // ══ (G) species are visually distinguishable ══════════════════════════════
+  {
+    const oak = build('oak_tree'), palm = build('palm_tree'), willow = build('willow_tree'),
+          birch = build('birch_tree'), spruce = build('spruce_tree');
+    const oakCanopy = parts(oak, 'canopy'), palmCrown = parts(palm, 'crown');
+    ok('G1 the palm crown carries more meshes than the oak canopy',
+       palmCrown > oakCanopy && oakCanopy >= 3, `palm=${palmCrown} oak=${oakCanopy}`);
+    ok('G2 the willow hangs ≥6 drapes', parts(willow, 'drape') >= 6, `drapes=${parts(willow, 'drape')}`);
+    ok('G3 the willow also has a dome canopy over the drapes', parts(willow, 'canopy') >= 1);
+    const bark = partMat(birch, 'trunk');
+    const lum = bark ? (0.299 * bark.color.r + 0.587 * bark.color.g + 0.114 * bark.color.b) : 0;
+    ok('G4 the birch trunk material is LIGHT (white bark)', lum > 0.6, `lum=${lum.toFixed(3)}`);
+    const oakBark = partMat(oak, 'trunk');
+    const oakLum = oakBark ? (0.299 * oakBark.color.r + 0.587 * oakBark.color.g + 0.114 * oakBark.color.b) : 1;
+    ok('G5 …and clearly lighter than the oak trunk', lum > oakLum + 0.3, `birch=${lum.toFixed(3)} oak=${oakLum.toFixed(3)}`);
+    ok('G6 the spruce is a 5-cone stack (denser than the pine\'s 3)',
+       parts(spruce, 'canopy') === 5, `cones=${parts(spruce, 'canopy')}`);
+    const spruceMat = partMat(spruce, 'canopy');
+    ok('G7 …and its needles are blue-green (blue channel > red)',
+       spruceMat && spruceMat.color.b > spruceMat.color.r,
+       spruceMat ? `r=${spruceMat.color.r.toFixed(3)} b=${spruceMat.color.b.toFixed(3)}` : 'no mat');
+    ok('G8 the palm trunk is a 3-segment curve (segments are tilted)',
+       parts(palm, 'trunk') === 3, `segs=${parts(palm, 'trunk')}`);
+    {
+      let tilted = 0;
+      palm.traverse(o => { if (o.isMesh && !o.userData.outline && o.userData.treePart === 'trunk' && Math.abs(o.rotation.z) > 1e-6) tilted++; });
+      // Segment 0 is deliberately vertical so the base face sits flat on the
+      // ground; the two above it lean, which is what makes the trunk curve.
+      ok('G9 …with a flat vertical base and two leaning segments above it',
+         tilted === 2, `tilted=${tilted}`);
+    }
+    ok('G10 the birch trunk carries dark bands (trunk parts > 1)',
+       parts(birch, 'trunk') === 5, `parts=${parts(birch, 'trunk')}`);
+  }
+
+  // Restore a clean frame for the tally.
+  r.clearTransientGroups();
+
+  let pass = 0; const fails = [];
+  for (const t of tests) { if (t.ok) pass++; else fails.push(t.name); }
+  const total = tests.length, allPass = pass === total;
+  const title = allPass ? `TREE PASS ${pass}/${total}` : `TREE FAIL ${pass}/${total} [${fails.join(',')}]`;
+  document.title = title;
+  window.__RESULT__ = { title };
+  document.body.insertAdjacentHTML('beforeend',
+    `<pre style="position:fixed;left:8px;top:8px;color:#8f8">${title}\n` +
+    tests.map(t => `${t.ok ? 'PASS' : 'FAIL'} ${t.name} — ${t.detail ?? ''}`).join('\n') + `</pre>`);
+</script>

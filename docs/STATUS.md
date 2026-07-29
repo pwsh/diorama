@@ -268,6 +268,16 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Tree species + adjustable height** (2026-07-28, user-requested:
+  "add more tree species models and allow adjusting the height of the
+  trees"; unreleased — on main past v0.39.0). Five new outdoor kinds
+  (oak/birch/palm/willow/spruce, parametric in W/D/HT, toon +
+  outlines + blob shadows, 2D glyphs); `TREE_KINDS`/`isTreeKind` +
+  `treeHeightMm` — `Furniture.ht` now shared by two disjoint
+  consumers (stairs rise / tree height); "Height (mm)" sidebar row
+  (clamp 1000–15000); legacy tree/pine golden-pinned byte-identical.
+  New tree-test.html (TREE PASS 74/74); yard 4/4, terrain 103/103,
+  toolbar 42/42, stairs-fit 78/78, floorplans 399/399 held.
 - **Live drag dimension readouts** (2026-07-28, user-requested: "when
   resizing objects or drawing walls or other areas, show the
   dimensions… in real time until releasing the anchor"; unreleased —

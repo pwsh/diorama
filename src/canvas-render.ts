@@ -5168,6 +5168,84 @@ export function drawFurniturePrimitiveLocal(
       ctx.beginPath(); ctx.arc(0, 0, r * 0.16, 0, 2 * Math.PI); ctx.fill();
       break;
     }
+    // Additional tree species — same top-down language as tree/pine_tree
+    // (canopy disc + trunk dot) with one distinguishing touch each.
+    case 'oak_tree': {
+      // Broad canopy with three overlapping lobes read as scallops.
+      const r = Math.min(halfW, halfH);
+      ctx.fillStyle = bodyFill('rgba(74,124,47,0.6)', 0.6);
+      ctx.beginPath(); ctx.arc(0, 0, r, 0, 2 * Math.PI); ctx.fill();
+      ctx.strokeStyle = '#3d6828'; ctx.lineWidth = 1; ctx.stroke();
+      ctx.strokeStyle = 'rgba(61,104,40,0.85)';
+      for (let i = 0; i < 3; i++) {
+        const a = (i / 3) * 2 * Math.PI - Math.PI / 2;
+        ctx.beginPath();
+        ctx.arc(Math.cos(a) * r * 0.36, Math.sin(a) * r * 0.36, r * 0.44, 0, 2 * Math.PI);
+        ctx.stroke();
+      }
+      ctx.fillStyle = 'rgba(107,74,43,0.9)';
+      ctx.beginPath(); ctx.arc(0, 0, r * 0.16, 0, 2 * Math.PI); ctx.fill();
+      break;
+    }
+    case 'birch_tree': {
+      // Airy LIGHT canopy + a white trunk dot.
+      const r = Math.min(halfW, halfH);
+      ctx.fillStyle = bodyFill('rgba(143,201,90,0.55)', 0.55);
+      ctx.beginPath(); ctx.arc(0, 0, r, 0, 2 * Math.PI); ctx.fill();
+      ctx.strokeStyle = '#7fbf4d'; ctx.lineWidth = 1; ctx.stroke();
+      ctx.fillStyle = 'rgba(232,228,220,0.95)';
+      ctx.beginPath(); ctx.arc(0, 0, r * 0.2, 0, 2 * Math.PI); ctx.fill();
+      ctx.strokeStyle = 'rgba(58,58,56,0.9)';
+      ctx.beginPath(); ctx.arc(0, 0, r * 0.2, 0, 2 * Math.PI); ctx.stroke();
+      break;
+    }
+    case 'palm_tree': {
+      // Frond star radiating from the crown.
+      const r = Math.min(halfW, halfH);
+      ctx.fillStyle = bodyFill('rgba(79,158,58,0.4)', 0.4);
+      ctx.beginPath(); ctx.arc(0, 0, r * 0.55, 0, 2 * Math.PI); ctx.fill();
+      ctx.strokeStyle = '#4f9e3a'; ctx.lineWidth = 1.5;
+      for (let i = 0; i < 7; i++) {
+        const a = (i / 7) * 2 * Math.PI;
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r);
+        ctx.stroke();
+      }
+      ctx.fillStyle = 'rgba(138,107,69,0.95)';
+      ctx.beginPath(); ctx.arc(0, 0, r * 0.16, 0, 2 * Math.PI); ctx.fill();
+      break;
+    }
+    case 'willow_tree': {
+      // Dome + a dashed fringe ring for the hanging drapes.
+      const r = Math.min(halfW, halfH);
+      ctx.fillStyle = bodyFill('rgba(106,156,71,0.55)', 0.55);
+      ctx.beginPath(); ctx.arc(0, 0, r * 0.78, 0, 2 * Math.PI); ctx.fill();
+      ctx.strokeStyle = '#6a9c47'; ctx.lineWidth = 1; ctx.stroke();
+      ctx.strokeStyle = 'rgba(127,174,82,0.9)';
+      for (let i = 0; i < 8; i++) {
+        const a = (i / 8) * 2 * Math.PI;
+        ctx.beginPath();
+        ctx.arc(Math.cos(a) * r * 0.72, Math.sin(a) * r * 0.72, r * 0.14, 0, 2 * Math.PI);
+        ctx.stroke();
+      }
+      ctx.fillStyle = 'rgba(107,84,57,0.9)';
+      ctx.beginPath(); ctx.arc(0, 0, r * 0.14, 0, 2 * Math.PI); ctx.fill();
+      break;
+    }
+    case 'spruce_tree': {
+      // Like the pine hint but denser + a dark blue-green outer ring.
+      const r = Math.min(halfW, halfH);
+      ctx.fillStyle = bodyFill('rgba(44,95,82,0.6)', 0.6);
+      ctx.beginPath(); ctx.arc(0, 0, r, 0, 2 * Math.PI); ctx.fill();
+      ctx.strokeStyle = '#1f4a40'; ctx.lineWidth = 1.5; ctx.stroke();
+      ctx.strokeStyle = 'rgba(31,74,64,0.85)'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.arc(0, 0, r * 0.68, 0, 2 * Math.PI); ctx.stroke();
+      ctx.beginPath(); ctx.arc(0, 0, r * 0.4, 0, 2 * Math.PI); ctx.stroke();
+      ctx.fillStyle = 'rgba(92,70,48,0.9)';
+      ctx.beginPath(); ctx.arc(0, 0, r * 0.14, 0, 2 * Math.PI); ctx.fill();
+      break;
+    }
     case 'flower_bed': {
       fill(bodyFill('rgba(92,61,34,0.5)', 0.5));
       stroke('#5c3d22');
