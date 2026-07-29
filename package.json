@@ -1,7 +1,7 @@
 {
   "name": "diorama",
   "private": true,
-  "version": "0.41.0",
+  "version": "0.42.0",
   "type": "module",
   "description": "Diorama — a living model of your Home Assistant home. Spatial design + live state visualization + device control.",
   "scripts": {

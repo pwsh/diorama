@@ -1,6 +1,6 @@
 # Project status & pick-up guide
 
-Last updated: 2026-07-28, at **v0.41.0**. This is the single document to
+Last updated: 2026-07-28, at **v0.42.0**. This is the single document to
 read (alongside `CLAUDE.md`) to resume work with full context.
 
 ## Where things stand
@@ -273,11 +273,14 @@ instance.
   → v0.41.0 fresh bearings (vite 8.1.5 + three 0.185.1 gated bump —
   nine renderer pages verified; docs/TECH-DEBT.md audit + execution
   plan; TS held at 5.9 pending the 6.x bridge evaluation).
+  → v0.42.0 bridge line (TypeScript 6.0.3 — the last JS-based
+  compiler release, staged for the Go-native 7.0; one-line mqtt-ws
+  send-typing fix; explicit types/rootDir keys).
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
 - **TypeScript 6.0.3 (the 5.9→7.0 bridge line)** (2026-07-28,
-  user-requested evaluation; unreleased — on main past v0.41.0).
+  user-requested evaluation; released in v0.42.0).
   Research + empirical trial both green: 6.0 is the LAST JS-based
   compiler release, aligned with the Go-native 7.0's defaults;
   every 6.0 breaking change was already satisfied by our tsconfig
