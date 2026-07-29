@@ -1575,7 +1575,10 @@ export interface SavedView3D {
 export interface Layers2D {
   bg?: boolean;
   walls?: boolean;      // wall bodies (2D strokes + 3D meshes); doors/windows stay
-  labels?: boolean;     // room-name labels (2D text + 3D billboards)
+  labels?: boolean;     // room + AREA name labels (2D room text/ground-area/pool names + 3D room billboards)
+  objectLabels?: boolean; // NAME/caption text on fixtures + structural items (2D); default ON. State/value readouts are NOT names and stay under each item's own layer.
+  openings?: boolean;   // doors + windows (2D glyphs/pills + the 3D _doorGroup, which also carries curtains + deadbolts); default ON
+  peekFloors?: boolean; // onion-skin wall outlines of other floors flagged peek2d (2D); default ON
   furniture?: boolean;  // non-appliance furniture (appliances ride their own key)
   appliances?: boolean; // appliance furniture (fridge/stove/tv/…, cat === 'appliance')
   lights?: boolean;     // light fixture markers

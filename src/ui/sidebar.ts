@@ -67,7 +67,7 @@ function gpsZoneGlyph(zone: 'indoor' | 'yard' | 'beyond'): string {
 import { saveModel, deleteModel } from '../model-store.js';
 import { newId } from '../storage.js';
 import { FLAG_PAINTERS } from '../flags.js';
-import { LAYER_DEFS, SIMPLE_LAYERS, layerIsOn } from '../layer-defs.js';
+import { LAYER_DEFS, SIMPLE_LAYERS, layerIsOn, layerDefsByCat } from '../layer-defs.js';
 
 const LIGHT_KINDS: { id: LightIconKind; label: string; glyph: string }[] = [
   { id: 'bulb',      label: 'Bulb',      glyph: '💡' },
@@ -6473,11 +6473,11 @@ export class Sidebar extends LitElement {
       p.store.layers2d = nl; p.save(); p.emitConfig();
     };
     const presets = p.store.layerPresets2d ?? [];
-    // Canonical key→label list lives in ../layer-defs.js (shared with the
-    // Lovelace card's visual editor so both surfaces list the same layers).
-    // Display order only: alphabetical by label (locale compare). The preset
-    // save loop keys by `d.key`, so display order doesn't affect semantics.
-    const sortedDefs = [...LAYER_DEFS].sort((a, b) => a.label.localeCompare(b.label));
+    // Canonical key→label list AND its grouping live in ../layer-defs.js
+    // (shared with the Lovelace card's visual editor so both surfaces list the
+    // same layers in the same sections). Display order/grouping only: the
+    // preset save loop keys by `d.key`, so neither affects semantics.
+    const grouped = layerDefsByCat();
     return this._section('layers', 'Layers', () => html`
         <div class="row"><label>Preset</label>
           <select @change=${(e: Event) => {
@@ -6496,19 +6496,22 @@ export class Sidebar extends LitElement {
             ${presets.map(pr => html`<option value=${pr.id}>${pr.name}</option>`)}
           </select>
         </div>
-        ${sortedDefs.map(d => html`
-          <label class="row" style="padding:0">
-            <span style="color:var(--text-dim);font-size:11px;flex:1">${d.label}</span>
-            <span class="mini-toggle">
-              <input type="checkbox" .checked=${isOn(d.key)}
-                     @change=${(e: Event) => {
-                       const nl: Layers2D = { ...(p.store.layers2d ?? {}) };
-                       nl[d.key] = (e.target as HTMLInputElement).checked;
-                       setLayers(nl);
-                     }}>
-              <span></span>
-            </span>
-          </label>`)}
+        ${grouped.map(grp => html`
+          <div class="layer-cat" style="font-size:10px;text-transform:uppercase;letter-spacing:0.06em;
+                      color:var(--text-dim);opacity:0.6;margin:8px 0 2px 0">${grp.cat.label}</div>
+          ${grp.defs.map(d => html`
+            <label class="row" style="padding:0">
+              <span style="color:var(--text-dim);font-size:11px;flex:1">${d.label}</span>
+              <span class="mini-toggle">
+                <input type="checkbox" .checked=${isOn(d.key)}
+                       @change=${(e: Event) => {
+                         const nl: Layers2D = { ...(p.store.layers2d ?? {}) };
+                         nl[d.key] = (e.target as HTMLInputElement).checked;
+                         setLayers(nl);
+                       }}>
+                <span></span>
+              </span>
+            </label>`)}`)}
         <div style="border-top:1px solid var(--border);margin:6px 0"></div>
         <label class="row" style="padding:0"
                title="Show mmWave sensor coverage cones (2D + 3D)">

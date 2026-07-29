@@ -5102,6 +5102,11 @@ export class ThreeDRenderer {
     this._valveGroup.visible = v.sensors !== false;
     this._plugGroup.visible = v.switches !== false;
     this._camAlertGroup.visible = v.sensors !== false;   // alert cards ride the sensors layer
+    // Doors + windows (plus the curtains and lock deadbolts that live in the
+    // same group) ride the `openings` layer. Hiding it also drops them from the
+    // raycast roots (see _raycastFixture's `.visible` gate) — the same
+    // "hidden layer is untappable" semantics the lights layer has.
+    this._doorGroup.visible = v.openings !== false;
     this._motionGroup.visible = v.motion !== false;
     this._envGroup.visible = v.env !== false;
     // Info-card plaques ride their own `info` layer (default on).

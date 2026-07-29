@@ -208,7 +208,18 @@ export function hitObjectRadiusHandle(p: Planner, view: View, mm: Vec2): ObjectR
   return distMM(mm, wp) < hit ? { oi: eo, startR: o.radius, startMm: mm } : null;
 }
 
+// Doors + windows are only hittable while the `openings` layer is visible
+// (absent = on) — invisible geometry must never capture input (the same rule
+// zonesInteractive / groundInteractive enforce in canvas-interact, and the same
+// semantics the 3D side gets from `_doorGroup.visible` gating the raycast
+// roots). Gated HERE rather than at the ~10 call sites so the mousedown, cursor,
+// click and kiosk paths can't drift apart.
+export function openingsVisible(p: Planner): boolean {
+  return p.store.layers2d?.openings !== false;
+}
+
 export function hitDoor(p: Planner, view: View, mm: Vec2): { door: Door; idx: number } | null {
+  if (!openingsVisible(p)) return null;
   const f = p.floor();
   const tol = Math.max(80, 10 / Math.max(view.scale, 1e-9));
   for (let i = f.doors.length - 1; i >= 0; i--) {
@@ -251,6 +262,7 @@ export function hitDoor(p: Planner, view: View, mm: Vec2): { door: Door; idx: nu
 // binding (bound lockEntity OR unbound lockLocalState). Wins over the door-panel
 // hit within its small radius so a lock toggle doesn't also open the door.
 export function hitDoorLock(p: Planner, view: View, mm: Vec2): { door: Door; idx: number } | null {
+  if (!openingsVisible(p)) return null;
   const f = p.floor();
   const dpr = window.devicePixelRatio || 1;
   const tol = Math.max(60, (11 * dpr) / Math.max(view.scale, 1e-9));
@@ -271,6 +283,7 @@ export function hitDoorLock(p: Planner, view: View, mm: Vec2): { door: Door; idx
 }
 
 export function hitDoorEnd(p: Planner, view: View, mm: Vec2): { door: Door; idx: number } | null {
+  if (!openingsVisible(p)) return null;
   const f = p.floor();
   const dpr = window.devicePixelRatio || 1;
   const tol = Math.max(80, (10 * dpr) / Math.max(view.scale, 1e-9));
@@ -290,6 +303,7 @@ export function hitDoorEnd(p: Planner, view: View, mm: Vec2): { door: Door; idx:
 }
 
 export function hitWindow(p: Planner, view: View, mm: Vec2): { win: WindowType; idx: number } | null {
+  if (!openingsVisible(p)) return null;
   const f = p.floor();
   const tol = Math.max(80, 10 / Math.max(view.scale, 1e-9));
   for (let i = f.windows.length - 1; i >= 0; i--) {
@@ -303,6 +317,7 @@ export function hitWindow(p: Planner, view: View, mm: Vec2): { win: WindowType; 
 
 export function hitWindowEnd(p: Planner, view: View, mm: Vec2):
     { win: WindowType; idx: number; end: 'a' | 'b' } | null {
+  if (!openingsVisible(p)) return null;
   const f = p.floor();
   const dpr = window.devicePixelRatio || 1;
   const tol = Math.max(80, (10 * dpr) / Math.max(view.scale, 1e-9));

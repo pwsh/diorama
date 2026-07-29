@@ -284,6 +284,22 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Layers overhaul + 2D floor paint** (2026-07-29, user-requested
+  ×4; unreleased — on main past v0.43.0). `labels` → "Room & area
+  labels" (now gates ground-area/pool names too); NEW `objectLabels`
+  (fixture/door/window/furniture NAME text — value readouts stay
+  with their fixture layers; fixtureCaption keeps state badges),
+  `openings` (doors+windows, hit-testing follows visibility),
+  `peekFloors`; layer panel grouped into 6 categories via
+  LayerDef.cat/layerDefsByCat (sidebar + card editor from ONE
+  catalog); all new keys opt-out — old presets byte-identical.
+  Floor color/texture verdict: a GAP, never a regression — 2D
+  drawFloor had a hard-coded fill since day one; now paints
+  look3d/scene3d floorColor + deterministic 800 mm-scale
+  wood/tile/concrete pattern tiles matching the 3D repeat scale.
+  New layers2d-test.html (LAYERS2D PASS 47/47); ruler-dims 107/107,
+  sensor-focus 14/14, area-binding 71/71, toolbar 42/42, card
+  92/92, door-kinds 97/97, flights-ui 271/271 held.
 - **HA floor/area → room binding + area-filtered pickers** (2026-07-29,
   user-requested: "bind floors to defined parent areas in home
   assistant and then the areas on that floor to defined rooms on the

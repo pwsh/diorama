@@ -8,7 +8,7 @@ import { customElement } from './define.js';
 import { injectSharedStyles } from '../styles.js';
 import { getOrCreatePlanner } from '../card-shared.js';
 import { validateCardConfig, CARD_SCENE_BOOLS, type DioramaCardConfig, type CardSceneConfig } from '../card-config.js';
-import { LAYER_DEFS, layerIsOn } from '../layer-defs.js';
+import { LAYER_DEFS, layerIsOn, layerDefsByCat } from '../layer-defs.js';
 import type { Planner } from '../planner.js';
 import type { Layers2D } from '../types.js';
 
@@ -167,19 +167,24 @@ export class DioramaCardEditor extends LitElement {
         </select>
       </div>
       ${custom ? html`
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:2px 10px;margin:2px 0 10px 0;
-                    padding:6px 8px;border:1px solid var(--border,#2a3a4c);border-radius:5px">
-          ${LAYER_DEFS.map(d => html`
-            <label style="display:flex;align-items:center;gap:6px;font-size:11px;
-                          color:var(--text-dim,#8aa);cursor:pointer">
-              <input type="checkbox" .checked=${L[d.key] !== false}
-                     @change=${(e: Event) => {
-                       const nl = this._explicitLayers(L);
-                       nl[d.key] = (e.target as HTMLInputElement).checked;
-                       this._emit({ layers: nl as Record<string, boolean> });
-                     }}>
-              <span>${d.label}</span>
-            </label>`)}
+        <div style="margin:2px 0 10px 0;padding:6px 8px;
+                    border:1px solid var(--border,#2a3a4c);border-radius:5px">
+          ${layerDefsByCat().map(grp => html`
+            <div class="layer-cat" style="font-size:10px;text-transform:uppercase;letter-spacing:0.06em;
+                        color:var(--text-dim,#8aa);opacity:0.65;margin:6px 0 2px 0">${grp.cat.label}</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:2px 10px">
+              ${grp.defs.map(d => html`
+                <label style="display:flex;align-items:center;gap:6px;font-size:11px;
+                              color:var(--text-dim,#8aa);cursor:pointer">
+                  <input type="checkbox" .checked=${L[d.key] !== false}
+                         @change=${(e: Event) => {
+                           const nl = this._explicitLayers(L);
+                           nl[d.key] = (e.target as HTMLInputElement).checked;
+                           this._emit({ layers: nl as Record<string, boolean> });
+                         }}>
+                  <span>${d.label}</span>
+                </label>`)}
+            </div>`)}
         </div>` : nothing}
     `;
   }

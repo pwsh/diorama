@@ -54,7 +54,28 @@ import {
 // the combined canvas bundle.
 export { flightFieldText, flightLabelLines };
 import type { Planner } from './planner.js';
-import type { Vec2, LightIconKind, Furniture, ObjectRecipe, RecipePrimitive, HassState } from './types.js';
+import type { Vec2, LightIconKind, Furniture, ObjectRecipe, RecipePrimitive, HassState, FloorTexKind } from './types.js';
+
+// ── `objectLabels` layer (absent = ON) ──────────────────────────────────────
+// Gates NAME / caption text on fixtures and structural items — door + window
+// pills, furniture piece labels, and every "<name> · <state>" fixture caption.
+// It deliberately does NOT gate VALUE readouts (env readings, info-card values,
+// thermostat temps, power W chips, mail counts, open %): those convey STATE, not
+// identity, and stay under their own fixture's layer. Self-gating on the store
+// (the drawBatteryBadge idiom) so no draw* signature had to grow a parameter.
+function objectLabelsOn(p: Planner): boolean {
+  return p.store.layers2d?.objectLabels !== false;
+}
+
+// Compose a fixture caption from its NAME and its optional STATE badge under the
+// objectLabels layer. With names hidden the badge survives on its own (`Porch ·
+// armed away` → `armed away`); with no badge at all the caption disappears
+// entirely. Returns '' when nothing should be drawn.
+function fixtureCaption(showNames: boolean, name: string, badge?: string | null): string {
+  const b = (badge ?? '').trim();
+  if (!showNames) return b;
+  return b ? `${name} · ${b}` : name;
+}
 
 // Per-sink 2D fill level (0..1), eased toward 1 while the sink runs and 0 when
 // off (mirrors the 3D _sinkFill blend, but 2D has no renderer state — track it
@@ -291,12 +312,16 @@ export function drawAll(ctx: CanvasRenderingContext2D, p: Planner, view: View,
   if (L.heatmap === true) drawHeatmap(ctx, p, view);
   // Peek floors — onion-skin reference underlay: other floors flagged `peek2d`
   // (and not disabled) draw their wall outlines as thin ghost strokes, BEFORE
-  // the active floor's walls. A display state (like disabled) — all UI modes.
-  drawPeekFloors(ctx, p, view);
+  // the active floor's walls. A display state (like disabled) — all UI modes,
+  // and hideable wholesale via its own layer (a card / kiosk preset cannot
+  // reach the per-floor `peek2d` flags).
+  if (on(L.peekFloors)) drawPeekFloors(ctx, p, view);
   if (on(L.walls)) drawWalls(ctx, p, view);
   if (on(L.labels)) drawRooms(ctx, p, view);
-  drawDoors(ctx, p, view);
-  drawWindows(ctx, p, view);
+  // Doors + windows share ONE key: they are a single "openings" concept to a
+  // user, and in 3D they share `_doorGroup` (which also carries curtains and
+  // lock deadbolts), so a split would need a build-time group split too.
+  if (on(L.openings)) { drawDoors(ctx, p, view); drawWindows(ctx, p, view); }
   if (on(L.furniture) || on(L.appliances)) drawFurniture(ctx, p, view, on(L.furniture), on(L.appliances));
   if (L.activity === true) drawActivity(ctx, p, view);
   if (on(L.lights) || on(L.switches)) drawFixtures(ctx, p, view, on(L.lights), on(L.switches));
@@ -1425,6 +1450,7 @@ function drawHeatmap(ctx: CanvasRenderingContext2D, p: Planner, view: View): voi
 }
 
 function drawMotionSensors(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
+  const names = objectLabelsOn(p);
   const dpr = window.devicePixelRatio || 1;
   const f = p.floor();
   const states = p.hass?.states;
@@ -1477,15 +1503,17 @@ function drawMotionSensors(ctx: CanvasRenderingContext2D, p: Planner, view: View
     ctx.fillStyle = '#fff'; ctx.font = `${9 * dpr}px sans-serif`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillText('◓', c.x, c.y);
-    // Label below
-    ctx.font = `${10 * dpr}px sans-serif`;
-    ctx.textBaseline = 'top';
-    const txt = m.label || 'Motion';
-    const tw = ctx.measureText(txt).width + 8 * dpr;
-    ctx.fillStyle = 'rgba(0,0,0,0.7)';
-    ctx.fillRect(c.x - tw / 2, c.y + 11 * dpr, tw, 13 * dpr);
-    ctx.fillStyle = isOn ? lit : '#fff';
-    ctx.fillText(txt, c.x, c.y + 13 * dpr);
+    // Label below (a pure NAME — hidden wholesale by `objectLabels`).
+    if (names) {
+      ctx.font = `${10 * dpr}px sans-serif`;
+      ctx.textBaseline = 'top';
+      const txt = m.label || 'Motion';
+      const tw = ctx.measureText(txt).width + 8 * dpr;
+      ctx.fillStyle = 'rgba(0,0,0,0.7)';
+      ctx.fillRect(c.x - tw / 2, c.y + 11 * dpr, tw, 13 * dpr);
+      ctx.fillStyle = isOn ? lit : '#fff';
+      ctx.fillText(txt, c.x, c.y + 13 * dpr);
+    }
     drawBatteryBadge(ctx, p, m.entity_id, c.x + 8 * dpr, c.y - 8 * dpr);
     // Rotate handle when active and not omnidirectional (locked = no anchor)
     if (selected && !fov360 && !m.locked) {
@@ -1503,6 +1531,7 @@ function drawMotionSensors(ctx: CanvasRenderingContext2D, p: Planner, view: View
 // read solid; unbound ones read dashed. Rides the sensors layer (gated by
 // the caller).
 function drawBleProxies(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
+  const names = objectLabelsOn(p);
   const dpr = window.devicePixelRatio || 1;
   const f = p.floor();
   const base = BLE_PROXY_DEFAULTS.color;
@@ -1521,15 +1550,17 @@ function drawBleProxies(ctx: CanvasRenderingContext2D, p: Planner, view: View): 
     ctx.fillStyle = '#04252b'; ctx.font = `${9 * dpr}px sans-serif`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillText('📶', c.x, c.y);
-    // Label below
-    ctx.font = `${10 * dpr}px sans-serif`;
-    ctx.textBaseline = 'top';
-    const txt = b.name || 'Proxy';
-    const tw = ctx.measureText(txt).width + 8 * dpr;
-    ctx.fillStyle = 'rgba(0,0,0,0.7)';
-    ctx.fillRect(c.x - tw / 2, c.y + 11 * dpr, tw, 13 * dpr);
-    ctx.fillStyle = '#fff';
-    ctx.fillText(txt, c.x, c.y + 13 * dpr);
+    // Label below (pure NAME).
+    if (names) {
+      ctx.font = `${10 * dpr}px sans-serif`;
+      ctx.textBaseline = 'top';
+      const txt = b.name || 'Proxy';
+      const tw = ctx.measureText(txt).width + 8 * dpr;
+      ctx.fillStyle = 'rgba(0,0,0,0.7)';
+      ctx.fillRect(c.x - tw / 2, c.y + 11 * dpr, tw, 13 * dpr);
+      ctx.fillStyle = '#fff';
+      ctx.fillText(txt, c.x, c.y + 13 * dpr);
+    }
     drawBatteryBadgeForDevice(ctx, p, b.haDeviceId, c.x + 8 * dpr, c.y - 8 * dpr);
   }
 }
@@ -1540,6 +1571,7 @@ function drawBleProxies(ctx: CanvasRenderingContext2D, p: Planner, view: View): 
 // fireplace-flicker idiom's 2D cousin). Unbound-with-localState reads dimmed.
 // Rides the sensors layer (gated by the caller).
 function drawAlarmPanels(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
+  const names = objectLabelsOn(p);
   const dpr = window.devicePixelRatio || 1;
   const f = p.floor();
   const t = performance.now() / 1000;
@@ -1594,7 +1626,7 @@ function drawAlarmPanels(ctx: CanvasRenderingContext2D, p: Planner, view: View):
     ctx.font = `${10 * dpr}px sans-serif`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'top';
     const badge = state ? state.replace('armed_', '').replace('_', ' ') : (unbound ? 'unbound' : '—');
-    const txt = `${label} · ${badge}`;
+    const txt = fixtureCaption(names, label, badge);
     const tw = ctx.measureText(txt).width + 8 * dpr;
     const by = c.y + hh + 4 * dpr;
     ctx.fillStyle = 'rgba(0,0,0,0.7)';
@@ -1611,6 +1643,7 @@ function drawAlarmPanels(ctx: CanvasRenderingContext2D, p: Planner, view: View):
 // (Planner.calendarEvents), NOT entity state. Rides the sensors layer (gated by
 // the caller).
 function drawCalendarPanels(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
+  const names = objectLabelsOn(p);
   const dpr = window.devicePixelRatio || 1;
   const f = p.floor();
   const now = new Date();
@@ -1643,7 +1676,7 @@ function drawCalendarPanels(ctx: CanvasRenderingContext2D, p: Planner, view: Vie
     ctx.font = `${9 * dpr}px sans-serif`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'top';
     const label = cp.label?.trim() || 'Calendar';
-    const line = model.empty ? `${label} · no events`
+    const line = model.empty ? fixtureCaption(names, label, 'no events')
       : `${model.header}${model.rows[0] ? ' · ' + model.rows[0].time + ' ' + model.rows[0].title.slice(0, 12) : ''}`;
     const txt = line.length > 40 ? line.slice(0, 39) + '…' : line;
     const tw = ctx.measureText(txt).width + 8 * dpr;
@@ -1662,6 +1695,7 @@ function drawCalendarPanels(ctx: CanvasRenderingContext2D, p: Planner, view: Vie
 // the vent color animates below the plate. Unbound reads dimmed. Rides the
 // sensors layer (gated by the caller).
 function drawThermostats(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
+  const names = objectLabelsOn(p);
   const dpr = window.devicePixelRatio || 1;
   const f = p.floor();
   const imperial = p.store.imperial;
@@ -1749,7 +1783,7 @@ function drawThermostats(ctx: CanvasRenderingContext2D, p: Planner, view: View):
     ctx.textAlign = 'center'; ctx.textBaseline = 'top';
     const unit = climateTempUnit(st, imperial);
     const badge = mode ? `${mode.replace('_', ' ')}${cur ? ` ${cur}${unit}` : ''}` : (unbound ? 'unbound' : '—');
-    const txt = `${label} · ${badge}`;
+    const txt = fixtureCaption(names, label, badge);
     const tw = ctx.measureText(txt).width + 8 * dpr;
     const by = c.y + hh + 4 * dpr;
     ctx.fillStyle = 'rgba(0,0,0,0.7)';
@@ -1768,6 +1802,7 @@ function drawThermostats(ctx: CanvasRenderingContext2D, p: Planner, view: View):
 // layer (gated by the caller).
 export const actionButtonHalfPx = new Map<string, number>();
 function drawActionButtons(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
+  const names = objectLabelsOn(p);
   const dpr = window.devicePixelRatio || 1;
   const f = p.floor();
   const nowMs = performance.now();
@@ -1812,7 +1847,7 @@ function drawActionButtons(ctx: CanvasRenderingContext2D, p: Planner, view: View
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillText(actionButtonIcon(b), c.x, c.y + 1 * dpr);
     // Label below
-    const label = b.label?.trim();
+    const label = names ? b.label?.trim() : '';
     if (label) {
       ctx.font = `${10 * dpr}px sans-serif`;
       ctx.textBaseline = 'top';
@@ -1848,6 +1883,7 @@ const SAFETY_DISC_R_MM = 140;
 const _leakAlarmStart = new Map<string, number>();
 
 function drawSafetySensors(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
+  const names = objectLabelsOn(p);
   const dpr = window.devicePixelRatio || 1;
   const f = p.floor();
   const t = performance.now() / 1000;
@@ -1901,7 +1937,7 @@ function drawSafetySensors(ctx: CanvasRenderingContext2D, p: Planner, view: View
       ctx.restore();
       const label = s.label?.trim() || 'Leak';
       const badge = alarming ? 'LEAK' : (st ? 'dry' : (s.entity_id ? '—' : 'unbound'));
-      const txt = `${label} · ${badge}`;
+      const txt = fixtureCaption(names, label, badge);
       ctx.font = `${10 * dpr}px sans-serif`;
       ctx.textAlign = 'center'; ctx.textBaseline = 'top';
       const tw = ctx.measureText(txt).width + 8 * dpr;
@@ -1965,7 +2001,7 @@ function drawSafetySensors(ctx: CanvasRenderingContext2D, p: Planner, view: View
       ctx.restore();
       const label = s.label?.trim() || 'Siren';
       const badge = alarming ? 'SOUNDING' : (st ? 'idle' : (s.entity_id ? '—' : 'unbound'));
-      const txt = `${label} · ${badge}`;
+      const txt = fixtureCaption(names, label, badge);
       ctx.font = `${10 * dpr}px sans-serif`;
       ctx.textAlign = 'center'; ctx.textBaseline = 'top';
       const tw = ctx.measureText(txt).width + 8 * dpr;
@@ -2025,7 +2061,7 @@ function drawSafetySensors(ctx: CanvasRenderingContext2D, p: Planner, view: View
     const label = s.label?.trim() ||
       (kind === 'co' ? 'CO' : kind === 'gas' ? 'Gas' : 'Smoke');
     const badge = alarming ? 'ALARM' : (st ? 'ok' : (s.entity_id ? '—' : 'unbound'));
-    const txt = `${label} · ${badge}`;
+    const txt = fixtureCaption(names, label, badge);
     ctx.font = `${10 * dpr}px sans-serif`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'top';
     const tw = ctx.measureText(txt).width + 8 * dpr;
@@ -2045,6 +2081,7 @@ function drawSafetySensors(ctx: CanvasRenderingContext2D, p: Planner, view: View
 // site). State resolves via effectiveState → alertBeaconState (alert.* domain
 // gets the three-state acknowledge semantics; binary_sensor only on/off).
 function drawAlertBeacons(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
+  const names = objectLabelsOn(p);
   const dpr = window.devicePixelRatio || 1;
   const f = p.floor();
   const t = performance.now() / 1000;
@@ -2094,7 +2131,7 @@ function drawAlertBeacons(ctx: CanvasRenderingContext2D, p: Planner, view: View)
     const label = b.label?.trim() || 'Alert';
     const badge = bs === 'active' ? 'ALERT' : bs === 'ack' ? 'ack'
                 : (st ? 'idle' : (b.entity_id ? '—' : 'unbound'));
-    const txt = `${label} · ${badge}`;
+    const txt = fixtureCaption(names, label, badge);
     ctx.font = `${10 * dpr}px sans-serif`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'top';
     const tw = ctx.measureText(txt).width + 8 * dpr;
@@ -2113,6 +2150,7 @@ function drawAlertBeacons(ctx: CanvasRenderingContext2D, p: Planner, view: View)
 // by Planner.stepRobots from the 2D RAF) — the single source of truth for both
 // 2D and 3D so the robot moves even when the 3D view was never opened.
 function drawRobots(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
+  const names = objectLabelsOn(p);
   const dpr = window.devicePixelRatio || 1;
   const f = p.floor();
   for (const r of f.robots ?? []) {
@@ -2194,7 +2232,8 @@ function drawRobots(ctx: CanvasRenderingContext2D, p: Planner, view: View): void
     ctx.restore();
 
     // Label: glyph + activity.
-    const txt = `${robotGlyph(kind)} ${r.label?.trim() || (kind === 'mower' ? 'Mower' : 'Vacuum')} · ${act}`;
+    const rName = r.label?.trim() || (kind === 'mower' ? 'Mower' : 'Vacuum');
+    const txt = `${robotGlyph(kind)} ${fixtureCaption(names, rName, act)}`;
     ctx.font = `${10 * dpr}px sans-serif`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'top';
     const tw = ctx.measureText(txt).width + 8 * dpr;
@@ -2233,6 +2272,7 @@ function camSnapshot(url: string): HTMLImageElement | null {
 // shifts red when the camera entity state is 'recording'. Rides the sensors
 // layer (gated at the call site). Rotation convention: 0 = +Y world.
 function drawCameras(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
+  const names = objectLabelsOn(p);
   const dpr = window.devicePixelRatio || 1;
   const f = p.floor();
   const states = p.hass?.states;
@@ -2271,15 +2311,17 @@ function drawCameras(ctx: CanvasRenderingContext2D, p: Planner, view: View): voi
     ctx.fillStyle = '#fff'; ctx.font = `${9 * dpr}px sans-serif`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillText('📷', c.x, c.y);
-    // Label below.
-    const txt = cam.label?.trim() || 'Camera';
-    ctx.font = `${10 * dpr}px sans-serif`;
-    ctx.textBaseline = 'top';
-    const tw = ctx.measureText(txt).width + 8 * dpr;
-    ctx.fillStyle = 'rgba(0,0,0,0.7)';
-    ctx.fillRect(c.x - tw / 2, c.y + 11 * dpr, tw, 13 * dpr);
-    ctx.fillStyle = recording ? '#ef5350' : '#fff';
-    ctx.fillText(txt, c.x, c.y + 13 * dpr);
+    // Label below (pure NAME).
+    if (names) {
+      const txt = cam.label?.trim() || 'Camera';
+      ctx.font = `${10 * dpr}px sans-serif`;
+      ctx.textBaseline = 'top';
+      const tw = ctx.measureText(txt).width + 8 * dpr;
+      ctx.fillStyle = 'rgba(0,0,0,0.7)';
+      ctx.fillRect(c.x - tw / 2, c.y + 11 * dpr, tw, 13 * dpr);
+      ctx.fillStyle = recording ? '#ef5350' : '#fff';
+      ctx.fillText(txt, c.x, c.y + 13 * dpr);
+    }
     drawBatteryBadge(ctx, p, cam.entity_id, c.x + 8 * dpr, c.y - 8 * dpr);
     // Rotate handle when active + unlocked.
     if (selected && !cam.locked) {
@@ -2316,6 +2358,7 @@ function drawCameras(ctx: CanvasRenderingContext2D, p: Planner, view: View): voi
 // a translucent dashed throw wedge aims toward the target screen (or along the
 // rotation heading when no screen is bound). Rides the sensors layer.
 function drawProjectors(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
+  const names = objectLabelsOn(p);
   const dpr = window.devicePixelRatio || 1;
   const f = p.floor();
   for (const pr of f.projectors ?? []) {
@@ -2357,15 +2400,17 @@ function drawProjectors(ctx: CanvasRenderingContext2D, p: Planner, view: View): 
     ctx.fillStyle = '#fff'; ctx.font = `${9 * dpr}px sans-serif`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillText('📽', c.x, c.y);
-    // Label below.
-    const txt = pr.label?.trim() || 'Projector';
-    ctx.font = `${10 * dpr}px sans-serif`;
-    ctx.textBaseline = 'top';
-    const tw = ctx.measureText(txt).width + 8 * dpr;
-    ctx.fillStyle = 'rgba(0,0,0,0.7)';
-    ctx.fillRect(c.x - tw / 2, c.y + 11 * dpr, tw, 13 * dpr);
-    ctx.fillStyle = projecting ? beamCol : '#fff';
-    ctx.fillText(txt, c.x, c.y + 13 * dpr);
+    // Label below (pure NAME).
+    if (names) {
+      const txt = pr.label?.trim() || 'Projector';
+      ctx.font = `${10 * dpr}px sans-serif`;
+      ctx.textBaseline = 'top';
+      const tw = ctx.measureText(txt).width + 8 * dpr;
+      ctx.fillStyle = 'rgba(0,0,0,0.7)';
+      ctx.fillRect(c.x - tw / 2, c.y + 11 * dpr, tw, 13 * dpr);
+      ctx.fillStyle = projecting ? beamCol : '#fff';
+      ctx.fillText(txt, c.x, c.y + 13 * dpr);
+    }
     drawBatteryBadge(ctx, p, pr.entity_id ?? null, c.x + 8 * dpr, c.y - 8 * dpr);
   }
 }
@@ -2375,6 +2420,7 @@ function drawProjectors(ctx: CanvasRenderingContext2D, p: Planner, view: View): 
 // transitional (opening/closing) = pulsing. The wheel rotates ∝ openness (a
 // quarter-turn ball-valve feel). Unbound reads dimmed. Rides the sensors layer.
 function drawValves(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
+  const names = objectLabelsOn(p);
   const dpr = window.devicePixelRatio || 1;
   const f = p.floor();
   const t = performance.now() / 1000;
@@ -2453,7 +2499,7 @@ function drawValves(ctx: CanvasRenderingContext2D, p: Planner, view: View): void
     // Label below (screen space, unrotated).
     const label = v.label?.trim() || 'Valve';
     const badge = st ? (flowing ? (trans ? (st.state) : 'open') : 'closed') : (unbound ? 'unbound' : '—');
-    const txt = `${label} · ${badge}`;
+    const txt = fixtureCaption(names, label, badge);
     ctx.font = `${10 * dpr}px sans-serif`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'top';
     const tw = ctx.measureText(txt).width + 8 * dpr;
@@ -2473,6 +2519,7 @@ function drawValves(ctx: CanvasRenderingContext2D, p: Planner, view: View): void
 // Head hit-test is a point-in-circle; the wedge is non-interactive (clicking
 // toggles the head, not the water). Rides the `ground` layer.
 function drawSprinklerZones(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
+  const names = objectLabelsOn(p);
   const dpr = window.devicePixelRatio || 1;
   const f = p.floor();
   const t = performance.now() / 1000;
@@ -2530,8 +2577,8 @@ function drawSprinklerZones(ctx: CanvasRenderingContext2D, p: Planner, view: Vie
     }
     ctx.restore();
     // Optional label (zone number / name) below the head.
-    const labelTxt = z.zoneNumber != null ? `Zone ${z.zoneNumber}` : (z.label?.trim() || '');
-    if (selected || labelTxt) {
+    const labelTxt = names ? (z.zoneNumber != null ? `Zone ${z.zoneNumber}` : (z.label?.trim() || '')) : '';
+    if (names && (selected || labelTxt)) {
       const txt = labelTxt || 'Sprinkler';
       ctx.font = `${9 * dpr}px sans-serif`;
       ctx.textAlign = 'center'; ctx.textBaseline = 'top';
@@ -2551,6 +2598,7 @@ function drawSprinklerZones(ctx: CanvasRenderingContext2D, p: Planner, view: Vie
 // resolved fraction (full / half / lowered). A ⯪ half-mast caption when hoisted
 // to ~0.5. The 3D view carries the real waving cloth; 2D is a glanceable marker.
 function drawFlagpoles(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
+  const names = objectLabelsOn(p);
   const dpr = window.devicePixelRatio || 1;
   const t = performance.now() / 1000;
   const f = p.floor();
@@ -2600,7 +2648,7 @@ function drawFlagpoles(ctx: CanvasRenderingContext2D, p: Planner, view: View): v
       ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5;
       ctx.strokeRect(c.x - 6 * dpr, topY - 4 * dpr, fwid + 14 * dpr, poleLen + 10 * dpr);
     }
-    const nm = fp.label?.trim();
+    const nm = names ? fp.label?.trim() : '';
     if (nm) {
       ctx.fillStyle = '#ddd'; ctx.font = `${10 * dpr}px sans-serif`;
       ctx.textAlign = 'center'; ctx.textBaseline = 'top';
@@ -2614,6 +2662,7 @@ function drawFlagpoles(ctx: CanvasRenderingContext2D, p: Planner, view: View): v
 // optional power draw) + a W readout chip when a powerEntity is bound. Unbound
 // reads dimmed. Rides the switches layer.
 function drawPlugs(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
+  const names = objectLabelsOn(p);
   const dpr = window.devicePixelRatio || 1;
   const f = p.floor();
   for (const pl of f.plugs ?? []) {
@@ -2668,8 +2717,8 @@ function drawPlugs(ctx: CanvasRenderingContext2D, p: Planner, view: View): void 
     ctx.restore();
     // Label + optional W chip below (screen space, unrotated).
     const label = pl.label?.trim() || 'Plug';
-    let txt = `${label} · ${st ? (on ? 'on' : 'off') : (unbound ? 'unbound' : '—')}`;
-    if (isFinite(powerW) && on) txt += ` · ${Math.round(powerW)}W`;
+    let txt = fixtureCaption(names, label, st ? (on ? 'on' : 'off') : (unbound ? 'unbound' : '—'));
+    if (isFinite(powerW) && on) txt += `${txt ? ' · ' : ''}${Math.round(powerW)}W`;
     ctx.font = `${10 * dpr}px sans-serif`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'top';
     const tw = ctx.measureText(txt).width + 8 * dpr;
@@ -2732,7 +2781,8 @@ function drawCameraAlertCard(
   ctx.fillStyle = '#ffcdd2';
   ctx.font = `${11 * dpr}px sans-serif`;
   ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-  ctx.fillText((cam.label?.trim() || 'Camera') + ' · ALERT', cardX + 8 * dpr, cardY + CH - 11 * dpr);
+  ctx.fillText(fixtureCaption(objectLabelsOn(p), cam.label?.trim() || 'Camera', 'ALERT'),
+               cardX + 8 * dpr, cardY + CH - 11 * dpr);
   // Alert-red border on top.
   ctx.lineWidth = 2.5 * dpr;
   ctx.strokeStyle = '#ef5350';
@@ -2828,6 +2878,7 @@ function drawPools(ctx: CanvasRenderingContext2D, p: Planner, view: View): void 
   const dpr = window.devicePixelRatio || 1;
   const f = p.floor();
   const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+  const areaLabels = p.store.layers2d?.labels !== false;
   for (const pl of f.pools ?? []) {
     if (pl.hidden || pl.points.length < 3) continue;
     const active = p.activePoolId === pl.id;
@@ -2887,13 +2938,16 @@ function drawPools(ctx: CanvasRenderingContext2D, p: Planner, view: View): void 
     ctx.lineWidth = active ? 2 : 1;
     ctx.stroke();
     ctx.restore();
-    // Name label at centroid.
+    // Name label at centroid — an AREA name, so it rides `labels` with the room
+    // and ground-area names (the water-quality chip below is a VALUE and stays).
     const ctr = centroid(pl.points);
     const cp = mmToPx(view, ctr.x, ctr.y);
-    ctx.fillStyle = hexToRgba('#ffffff', 0.9);
-    ctx.font = `${11 * dpr}px sans-serif`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText(pl.name?.trim() || (pl.kind === 'spa' ? 'Spa' : 'Pool'), cp.x, cp.y);
+    if (areaLabels) {
+      ctx.fillStyle = hexToRgba('#ffffff', 0.9);
+      ctx.font = `${11 * dpr}px sans-serif`;
+      ctx.fillText(pl.name?.trim() || (pl.kind === 'spa' ? 'Spa' : 'Pool'), cp.x, cp.y);
+    }
     // Water-quality chip (temp · pH · ORP · salt) from whichever sensors bound.
     const st = (id?: string) => id ? (p.hass?.states?.[id] ?? null) : null;
     const parts: string[] = [];
@@ -2945,6 +2999,7 @@ function drawPools(ctx: CanvasRenderingContext2D, p: Planner, view: View): void 
 function drawGroundAreas(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
   const dpr = window.devicePixelRatio || 1;
   const f = p.floor();
+  const areaLabels = p.store.layers2d?.labels !== false;
   // Yard fill (opt-in): a flat low-priority underlay of the floor rect MINUS
   // every closed wall loop (even-odd), drawn after the floor slab / before the
   // ground areas so painted patches + structure sit on top. Gated by the caller
@@ -3001,17 +3056,24 @@ function drawGroundAreas(ctx: CanvasRenderingContext2D, p: Planner, view: View):
       ctx.lineWidth = 1.5 * dpr;
       ctx.stroke();
     }
-    // Kind label at the centroid.
+    // Name / kind label at the centroid. An AREA name is the same "what is this
+    // space called" text a room label is, so it rides the `labels` layer (which
+    // is why that layer is called "Room & area labels") rather than `ground`.
     const ctr = centroid(g.points);
     const cp = mmToPx(view, ctr.x, ctr.y);
-    ctx.fillStyle = hexToRgba('#ffffff', 0.85);
-    ctx.font = `${11 * dpr}px sans-serif`;
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText(g.name?.trim() || groundKindLabel(g.kind), cp.x, cp.y);
+    if (areaLabels) {
+      ctx.fillStyle = hexToRgba('#ffffff', 0.85);
+      ctx.font = `${11 * dpr}px sans-serif`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(g.name?.trim() || groundKindLabel(g.kind), cp.x, cp.y);
+    }
     // Elevation caption on the selected non-zero tier (existing chip idiom).
+    // Selection UI, not a name — un-gated, and it sets its own text alignment
+    // now that the label block above may not have run.
     if (active && elev !== 0) {
       ctx.fillStyle = hexToRgba(elev > 0 ? '#ffe0a0' : '#a0c4ff', 0.95);
       ctx.font = `bold ${11 * dpr}px sans-serif`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
       ctx.fillText(`${elev > 0 ? '+' : '−'}${Math.abs(elev)} mm`, cp.x, cp.y + 14 * dpr);
     }
     // Vertex handles on the active (unlocked) area. A PATH-backed area shows its
@@ -3177,6 +3239,7 @@ function drawVoidAreas(ctx: CanvasRenderingContext2D, p: Planner, view: View): v
 }
 
 function drawPresenceZones(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
+  const names = objectLabelsOn(p);
   const dpr = window.devicePixelRatio || 1;
   const f = p.floor();
   const states = p.hass?.states;
@@ -3208,10 +3271,10 @@ function drawPresenceZones(ctx: CanvasRenderingContext2D, p: Planner, view: View
     const ctr = centroid(z.points);
     const cp = mmToPx(view, ctr.x, ctr.y);
     const label = z.name?.trim() || 'Zone';
-    const badge = occupied ? ' · occupied' : bound ? ' · clear' : ' · unbound';
+    const badge = occupied ? 'occupied' : bound ? 'clear' : 'unbound';
     ctx.fillStyle = col; ctx.font = `${11 * dpr}px sans-serif`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText(label + badge, cp.x, cp.y);
+    ctx.fillText(fixtureCaption(names, label, badge), cp.x, cp.y);
     // Vertex handles on the active (unlocked) zone.
     if (active && !z.locked) {
       for (const pt of pts) {
@@ -3258,6 +3321,7 @@ function drawPresenceZones(ctx: CanvasRenderingContext2D, p: Planner, view: View
 export const envChipHalfPx = new Map<string, { w: number; h: number }>();
 
 function drawEnvSensors(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
+  const names = objectLabelsOn(p);
   const dpr = window.devicePixelRatio || 1;
   const f = p.floor();
   const states = p.hass?.states;
@@ -3311,8 +3375,9 @@ function drawEnvSensors(ctx: CanvasRenderingContext2D, p: Planner, view: View): 
       ctx.fill(); ctx.stroke();
     }
 
-    // Label below when selected
-    if (selected && e.label) {
+    // Name caption below when selected — a NAME, so `objectLabels` hides it.
+    // The value chip itself is a READOUT and stays under the `env` layer.
+    if (selected && e.label && names) {
       ctx.font = `${10 * dpr}px sans-serif`;
       ctx.textBaseline = 'top';
       const tw = ctx.measureText(e.label).width + 8 * dpr;
@@ -3329,6 +3394,7 @@ function drawEnvSensors(ctx: CanvasRenderingContext2D, p: Planner, view: View): 
 export const infoCardHalfPx = new Map<string, { w: number; h: number }>();
 
 function drawInfoCards(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
+  const names = objectLabelsOn(p);
   const dpr = window.devicePixelRatio || 1;
   const f = p.floor();
   const states = p.hass?.states;
@@ -3371,8 +3437,9 @@ function drawInfoCards(ctx: CanvasRenderingContext2D, p: Planner, view: View): v
     ctx.fillStyle = unbound ? 'rgba(255,255,255,0.4)' : hexToRgba(unavail ? '#ef9a9a' : color, flashA);
     ctx.fillText(unbound ? 'unbound' : (label || '—'), c.x, c.y + 0.5 * dpr);
 
-    // Label caption below when selected
-    if (selected && ic.label) {
+    // Name caption below when selected — a NAME (the card's value text above is
+    // a READOUT and stays under the `info` layer).
+    if (selected && ic.label && names) {
       ctx.font = `${10 * dpr}px sans-serif`;
       ctx.textBaseline = 'top';
       const tw = ctx.measureText(ic.label).width + 8 * dpr;
@@ -3394,14 +3461,121 @@ function drawInfoCards(ctx: CanvasRenderingContext2D, p: Planner, view: View): v
   ctx.textAlign = 'center';
 }
 
+// ── 2D floor colour + texture ───────────────────────────────────────────────
+// `Scene3D.floorColor` / `floorTex` (and the per-floor `Floor.look3d` override)
+// drove ONLY the 3D slab until now — the 2D plan painted a hard-coded slate
+// rect, so a user who picked a wood floor saw it in one view and not the other.
+//
+// The 2D rendition is NOT a port of the 3D CanvasTexture: it is a cheap tiled
+// pattern whose 256 px tile covers the same 800 mm the 3D material's
+// `repeat = 1/800` maps, so the two read at the same physical scale. The tile
+// BASE is the floor colour itself (cache key = kind + colour) with the kind's
+// detail — plank seams, grout, speckle — painted over it in translucent
+// black/white, so the chosen colour always reads through instead of being
+// multiplied into mud the way a faithful colour × map would on a dark default.
+// Deterministic (a tiny LCG, never Math.random): a cached tile must not flicker.
+const FLOOR_COLOR_DEFAULT = '#101820';
+const FLOOR_TEX_MM = 800;    // world mm covered by one 256 px tile (matches the 3D repeat)
+const FLOOR_TILE_PX = 256;
+const _floorPatCache = new Map<string, CanvasPattern | null>();
+
+function floorPatternTile(ctx: CanvasRenderingContext2D,
+                          kind: FloorTexKind, color: string): CanvasPattern | null {
+  if (kind === 'none') return null;
+  const key = `${kind}|${color}`;
+  const hit = _floorPatCache.get(key);
+  if (hit !== undefined) return hit;
+  let pat: CanvasPattern | null = null;
+  try {
+    const c = document.createElement('canvas');
+    c.width = FLOOR_TILE_PX; c.height = FLOOR_TILE_PX;
+    const g = c.getContext('2d');
+    if (g) {
+      g.fillStyle = color;
+      g.fillRect(0, 0, FLOOR_TILE_PX, FLOOR_TILE_PX);
+      // Deterministic pseudo-random: the 3D builder uses Math.random, but this
+      // tile is cached and re-blitted every frame — a re-seeded tile would make
+      // the plan crawl on any cache miss.
+      let seed = 0x9e3779b1;
+      const rnd = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 0x100000000; };
+      if (kind === 'wood') {
+        // Plank bands + seam lines + a few grain streaks (3D's 32 px courses).
+        for (let y = 0; y < FLOOR_TILE_PX; y += 32) {
+          g.fillStyle = `rgba(0,0,0,${(0.06 + (y / 32 % 2) * 0.05).toFixed(3)})`;
+          g.fillRect(0, y, FLOOR_TILE_PX, 32);
+          g.strokeStyle = 'rgba(0,0,0,0.42)'; g.lineWidth = 1.5;
+          g.beginPath(); g.moveTo(0, y); g.lineTo(FLOOR_TILE_PX, y); g.stroke();
+          for (let i = 0; i < 4; i++) {
+            g.strokeStyle = `rgba(0,0,0,${(0.08 + rnd() * 0.08).toFixed(3)})`;
+            g.lineWidth = 0.8;
+            const yy = y + 5 + rnd() * 22;
+            g.beginPath(); g.moveTo(0, yy);
+            g.bezierCurveTo(64, yy + rnd() * 4 - 2, 192, yy + rnd() * 4 - 2, FLOOR_TILE_PX, yy);
+            g.stroke();
+          }
+        }
+      } else if (kind === 'tile') {
+        // 64 px grout grid + mild per-tile shade variance (mirrors the 3D tile).
+        g.strokeStyle = 'rgba(0,0,0,0.38)'; g.lineWidth = 3;
+        for (let i = 0; i <= FLOOR_TILE_PX; i += 64) {
+          g.beginPath(); g.moveTo(i, 0); g.lineTo(i, FLOOR_TILE_PX); g.stroke();
+          g.beginPath(); g.moveTo(0, i); g.lineTo(FLOOR_TILE_PX, i); g.stroke();
+        }
+        for (let x = 0; x < FLOOR_TILE_PX; x += 64) for (let y = 0; y < FLOOR_TILE_PX; y += 64) {
+          g.fillStyle = `rgba(255,255,255,${(rnd() * 0.05).toFixed(3)})`;
+          g.fillRect(x, y, 64, 64);
+        }
+      } else {
+        // Concrete: fine two-tone speckle. Drawn as dots rather than a
+        // getImageData round-trip — cheaper and works on a tainted-free tile.
+        for (let i = 0; i < 2600; i++) {
+          const x = rnd() * FLOOR_TILE_PX, y = rnd() * FLOOR_TILE_PX;
+          const up = rnd() < 0.5;
+          g.fillStyle = up ? 'rgba(255,255,255,0.055)' : 'rgba(0,0,0,0.09)';
+          g.fillRect(x, y, 1.6, 1.6);
+        }
+      }
+      pat = ctx.createPattern(c, 'repeat');
+    }
+  } catch (_) { pat = null; }   // never let a texture break the frame
+  _floorPatCache.set(key, pat);
+  return pat;
+}
+
+function drawFloorTexture(ctx: CanvasRenderingContext2D, view: View,
+                          kind: FloorTexKind, color: string,
+                          p0: { x: number; y: number }, p1: { x: number; y: number }): void {
+  if (kind === 'none') return;
+  // One tile spans FLOOR_TEX_MM of world, so the pattern scale follows zoom.
+  const k = (FLOOR_TEX_MM * view.scale) / FLOOR_TILE_PX;
+  if (!isFinite(k) || k < 0.02) return;   // zoomed so far out the detail is sub-pixel
+  const pat = floorPatternTile(ctx, kind, color);
+  if (!pat) return;
+  ctx.save();
+  // Anchor the tiling at world (0,0) so the grain doesn't swim while panning.
+  ctx.translate(p0.x, p0.y);
+  ctx.scale(k, k);
+  ctx.fillStyle = pat;
+  ctx.fillRect((p1.x - p0.x) / k, (p1.y - p0.y) / k, (p0.x - p1.x) / k, (p0.y - p1.y) / k);
+  ctx.restore();
+}
+
 function drawFloor(ctx: CanvasRenderingContext2D, p: Planner, view: View,
                    bgImg: HTMLImageElement | null): void {
   const dpr = window.devicePixelRatio || 1;
   const f = p.floor();
   const p0 = mmToPx(view, 0, 0);
   const p1 = mmToPx(view, f.w, f.d);
-  ctx.fillStyle = '#101020';
+  // Floor colour + texture — the SAME two fields the 3D slab reads, resolved
+  // identically (per-floor look3d override wins over the global scene3d). The
+  // 2D plan hard-coded '#101020' here from the beginning, so these settings
+  // simply never reached this view; see floorPatternTile for the texture.
+  const sc3 = p.store.scene3d;
+  const floorColor = f.look3d?.floorColor ?? sc3?.floorColor ?? FLOOR_COLOR_DEFAULT;
+  const floorTex = (f.look3d?.floorTex ?? sc3?.floorTex ?? 'none') as FloorTexKind;
+  ctx.fillStyle = floorColor;
   ctx.fillRect(p1.x, p1.y, p0.x - p1.x, p0.y - p1.y);
+  drawFloorTexture(ctx, view, floorTex, floorColor, p0, p1);
   ctx.strokeStyle = '#2e3a55'; ctx.lineWidth = 1.5;
   ctx.strokeRect(p1.x, p1.y, p0.x - p1.x, p0.y - p1.y);
 
@@ -3736,6 +3910,7 @@ function drawPeekFloors(ctx: CanvasRenderingContext2D, p: Planner, view: View): 
 }
 
 function drawDoors(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
+  const names = objectLabelsOn(p);
   const dpr = window.devicePixelRatio || 1;
   const f = p.floor();
   if (!f.doors) return;
@@ -3792,7 +3967,8 @@ function drawDoors(ctx: CanvasRenderingContext2D, p: Planner, view: View): void 
       const pctN = Math.round(frac * 100);
       const stateStr = !st ? ''
         : isOpen ? (pct ? (pctN >= 99 ? 'OPEN' : `${pctN}%`) : 'OPEN') : 'closed';
-      const txt = (d.label?.trim() || fallback) + (stateStr ? ` · ${stateStr}` : '');
+      const txt = fixtureCaption(names, d.label?.trim() || fallback, stateStr);
+      if (!txt) return;
       ctx.font = `${10 * dpr}px sans-serif`;
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
       const tw = ctx.measureText(txt).width + 8 * dpr;
@@ -4006,7 +4182,7 @@ function drawDoors(ctx: CanvasRenderingContext2D, p: Planner, view: View): void 
     // Label + state pill
     const pillX = (hinge.x + endPt.x) / 2;
     const pillY = (hinge.y + endPt.y) / 2 - 12 * dpr;
-    const txt = (d.label?.trim() || 'Door') + (st ? ` · ${isOpen ? 'OPEN' : 'closed'}` : '');
+    const txt = fixtureCaption(names, d.label?.trim() || 'Door', st ? (isOpen ? 'OPEN' : 'closed') : '');
     ctx.font = `${10 * dpr}px sans-serif`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     const tw = ctx.measureText(txt).width + 8 * dpr;
@@ -4054,6 +4230,7 @@ function drawDoorbellPulses(ctx: CanvasRenderingContext2D, p: Planner, view: Vie
 }
 
 function drawWindows(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
+  const names = objectLabelsOn(p);
   const dpr = window.devicePixelRatio || 1;
   const f = p.floor();
   if (!f.windows) return;
@@ -4139,7 +4316,7 @@ function drawWindows(ctx: CanvasRenderingContext2D, p: Planner, view: View): voi
     ctx.beginPath(); ctx.arc(c.x, c.y, 4 * dpr, 0, 2 * Math.PI);
     ctx.fill(); ctx.stroke();
     // Label + state pill
-    const txt = (w.label?.trim() || 'Window') + (st ? ` · ${isOpen ? 'OPEN' : 'closed'}` : '');
+    const txt = fixtureCaption(names, w.label?.trim() || 'Window', st ? (isOpen ? 'OPEN' : 'closed') : '');
     ctx.font = `${10 * dpr}px sans-serif`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     const tw = ctx.measureText(txt).width + 8 * dpr;
@@ -4154,6 +4331,7 @@ function drawWindows(ctx: CanvasRenderingContext2D, p: Planner, view: View): voi
 function drawFurniture(ctx: CanvasRenderingContext2D, p: Planner, view: View,
                        showFurniture = true, showAppliances = true): void {
   const f = p.floor();
+  const names = objectLabelsOn(p);
   const customObjects = p.store.customObjects;
   const isEdit = p.uiMode === 'edit';
   const dpr = window.devicePixelRatio || 1;
@@ -4382,10 +4560,14 @@ function drawFurniture(ctx: CanvasRenderingContext2D, p: Planner, view: View,
       ctx.fill();
       ctx.restore();
     }
-    if (piece.label) {
+    // The piece NAME rides objectLabels; the now-playing / TV-screen lines
+    // below are live CONTENT and stay. `labelShown` (not `piece.label`) drives
+    // their offset so they close the gap when the name is hidden.
+    const labelShown = names && !!piece.label;
+    if (labelShown) {
       ctx.fillStyle = '#ddd'; ctx.font = '10px sans-serif';
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.fillText(piece.label, 0, 0);
+      ctx.fillText(piece.label!, 0, 0);
     }
     // Now-playing (#11): a `♪ title` line under the label for a media_player-bound
     // piece that is playing. Reads live state (LIVE-path; the RAF redraws every
@@ -4397,7 +4579,7 @@ function drawFurniture(ctx: CanvasRenderingContext2D, p: Planner, view: View,
         if (txt.length > 30) txt = txt.slice(0, 29) + '…';
         ctx.fillStyle = 'rgba(0,230,118,0.95)'; ctx.font = '9px sans-serif';
         ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-        ctx.fillText(txt, 0, (piece.label ? 11 : 0));
+        ctx.fillText(txt, 0, (labelShown ? 11 : 0));
       }
     }
     // TV screen surfaces (calendar-tv feature): a glanceable 📰/⛅ line under the
@@ -4424,7 +4606,7 @@ function drawFurniture(ctx: CanvasRenderingContext2D, p: Planner, view: View,
         if (scr) {
           ctx.fillStyle = 'rgba(127,212,255,0.95)'; ctx.font = '9px sans-serif';
           ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-          ctx.fillText(scr, 0, (piece.label ? 11 : 0) + 11);
+          ctx.fillText(scr, 0, (labelShown ? 11 : 0) + 11);
         }
       }
     }
@@ -5703,6 +5885,7 @@ function drawFixtures(ctx: CanvasRenderingContext2D, p: Planner, view: View,
                       showLights = true, showSwitches = true): void {
   const dpr = window.devicePixelRatio || 1;
   const f = p.floor();
+  const names = objectLabelsOn(p);
   const fxBodyR = Math.max(6, 180 * view.scale);
 
   if (showLights) for (const l of f.lights) {
@@ -5784,7 +5967,7 @@ function drawFixtures(ctx: CanvasRenderingContext2D, p: Planner, view: View,
       ctx.fillStyle = isOn ? '#2a2a2a' : '#d0d0d0';
       ctx.fillText(LIGHT_GLYPH[kind] || '💡', pt.x, pt.y);
     }
-    if (l.label) {
+    if (l.label && names) {
       ctx.fillStyle = '#ddd'; ctx.font = `${10 * dpr}px sans-serif`;
       ctx.fillText(l.label, pt.x, pt.y + fxBodyR + 10 * dpr);
     }
@@ -5814,7 +5997,7 @@ function drawFixtures(ctx: CanvasRenderingContext2D, p: Planner, view: View,
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillText('⏻', 0, 0);
     ctx.restore();
-    if (sw.label && switchLabelPos(sw) !== 'hide') {
+    if (sw.label && names && switchLabelPos(sw) !== 'hide') {
       const pos = switchLabelPos(sw);
       const off = halfPx + 10 * dpr;
       let lx = pt.x, ly = pt.y;
@@ -5887,12 +6070,14 @@ function drawSensorBody(ctx: CanvasRenderingContext2D, p: Planner, view: View,
   ctx.restore();
   ctx.font = `${11 * dpr}px sans-serif`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'top';
-  const txt = s.label || 'Sensor';
-  const tw = ctx.measureText(txt).width + 8 * dpr;
-  ctx.fillStyle = 'rgba(0,0,0,0.7)';
-  ctx.fillRect(c.x - tw / 2, c.y + 14 * dpr, tw, 15 * dpr);
-  ctx.fillStyle = '#fff';
-  ctx.fillText(txt, c.x, c.y + 16 * dpr);
+  if (objectLabelsOn(p)) {
+    const txt = s.label || 'Sensor';
+    const tw = ctx.measureText(txt).width + 8 * dpr;
+    ctx.fillStyle = 'rgba(0,0,0,0.7)';
+    ctx.fillRect(c.x - tw / 2, c.y + 14 * dpr, tw, 15 * dpr);
+    ctx.fillStyle = '#fff';
+    ctx.fillText(txt, c.x, c.y + 16 * dpr);
+  }
   if (selected && !s.locked) {
     const rhx = c.x + Math.cos(base) * 34 * dpr;
     const rhy = c.y + Math.sin(base) * 34 * dpr;
@@ -5911,7 +6096,10 @@ function drawAllZones(ctx: CanvasRenderingContext2D, p: Planner, view: View): vo
     if (!s.deviceSlug) continue;
     const zones = p.zonesBy[s.id]; const objs = p.objectsBy[s.id];
     if (!zones || !objs) continue;
-    const prefixLabel = (txt: string) => multipleBound ? `${s.label || 'Sensor'} · ${txt}` : txt;
+    // The sensor-NAME prefix (only used when several sensors are bound) rides
+    // objectLabels; the zone/object label itself is content under `zones`.
+    const prefixLabel = (txt: string) =>
+      (multipleBound && objectLabelsOn(p)) ? `${s.label || 'Sensor'} · ${txt}` : txt;
 
     for (let zi = 0; zi < zones.inclusion.length; zi++) {
       const z = zones.inclusion[zi];

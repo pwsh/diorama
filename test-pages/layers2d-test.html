@@ -1,0 +1,439 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>LAYERS2D …</title>
+<style>
+  body { margin:0; background:#0d1116; color:#cfd8dc; font:13px/1.5 sans-serif; padding:14px; }
+  h1 { font-size:15px; margin:0 0 10px; }
+  #summary { font-size:14px; font-weight:bold; margin:10px 0; padding:8px 10px; border-radius:5px; }
+  .okbg { background:#12331f; color:#69f0ae; } .badbg { background:#3a1414; color:#ff8a80; }
+  .row { display:flex; justify-content:space-between; gap:10px; padding:2px 0; border-bottom:1px solid #1c2530; }
+  .pass { color:#69f0ae; } .fail { color:#ff5252; }
+  .name { color:#90caf9; } .extra { color:#ffd54f; font-size:11px; }
+  h2 { font-size:12px; color:#80cbc4; margin:14px 0 4px; }
+  #mount { position:absolute; left:-4000px; top:0; width:1200px; }
+</style>
+<h1>2D layers — floor colour/texture, label gating, coverage keys, grouped UI</h1>
+<div id="summary">Running…</div>
+<div id="rows"></div>
+<div id="mount"></div>
+
+<!-- Harness build (from the repo root; NEVER reuse stale bundles):
+       npm run build
+       H=/tmp/diorama-harness-layers2d
+       rm -rf "$H"; mkdir -p "$H"; cp -r dist/* "$H"/
+       cp test-pages/layers2d-test.html "$H"/
+       T=$(mktemp -d); cp -r src/* "$T"/; cp tsconfig.json "$T"/
+       cp test-pages/fake-avatar-store.ts "$T"/avatar-store.ts
+       cp test-pages/layers2d-entry.ts    "$T"/layers2d-entry.ts
+       npx esbuild "$T"/layers2d-entry.ts --bundle --format=esm --tsconfig="$T"/tsconfig.json \
+         --alias:lit=$PWD/node_modules/lit/index.js \
+         --alias:lit/decorators.js=$PWD/node_modules/lit/decorators.js \
+         --outfile="$H"/layers2d.mod.js
+     Run headless (serve over http — Chrome blocks dynamic module imports on file://):
+       (cd "$H" && python3 -m http.server 8931 &)
+       google-chrome --headless=new --disable-gpu --use-angle=swiftshader \
+         --enable-unsafe-swiftshader --window-size=1300,1000 \
+         --virtual-time-budget=40000 --dump-dom \
+         "http://localhost:8931/layers2d-test.html" | grep -o "<title>[^<]*"  -->
+<script type="module">
+  const V = '?v=' + Date.now();
+  const M = await import('./layers2d.mod.js' + V);
+  const { Planner, drawAll, computeView, mmToPx, hitDoor, hitWindow,
+          LAYER_DEFS, LAYER_CATS, SIMPLE_LAYERS, DEFAULT_OFF_LAYERS,
+          layerIsOn, layerDefsByCat } = M;
+
+  const results = [];
+  const ok = (name, cond, extra = '') => results.push({ name, pass: !!cond, extra: String(extra) });
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const frames = n => new Promise(r => { let i = 0; const go = () => (++i >= n ? r() : requestAnimationFrame(go)); requestAnimationFrame(go); });
+  async function waitFor(cond, tries = 800) {
+    for (let i = 0; i < tries; i++) { if (cond()) return true; await sleep(4); }
+    return !!cond();
+  }
+  const P = (x, y) => ({ x, y });
+
+  // ── Fake HaApi over a Map (the ruler-dims / config-test seam) ─────────────
+  class FakeHa {
+    constructor(seed) { this.map = new Map(); for (const [k, v] of Object.entries(seed || {})) this.map.set(k, JSON.parse(JSON.stringify(v))); this.states = {}; this._s = []; this._c = []; }
+    connect() { for (const cb of this._c) cb('connected'); for (const cb of this._s) cb(this.states, undefined); }
+    onState(fn) { this._s.push(fn); } onConn(fn) { this._c.push(fn); }
+    callService() { return Promise.resolve(); }
+    async getHistory() { return {}; } async getWeatherForecasts() { return null; }
+    async getDevices() { return []; } async getEntityRegistry() { return []; } async updateEntityRegistry() { return true; }
+    async getAreaRegistry() { return []; } async getFloorRegistry() { return []; }
+    async getUserData(k) { return this.map.has(k) ? JSON.parse(JSON.stringify(this.map.get(k))) : null; }
+    async setUserData(k, v) { this.map.set(k, JSON.parse(JSON.stringify(v))); return true; }
+    async refreshStates() {} async subscribeMqtt() { return () => {}; } async publishMqtt() {}
+    async getCalendarEvents() { return {}; }
+    async subscribePersistentNotifications() { return () => {}; }
+    async listRepairsIssues() { return []; }
+  }
+  const baseFloor = (over = {}) => Object.assign({
+    id: 'f1', name: 'Home', w: 8000, d: 6000,
+    walls: [], furniture: [], lights: [], switches: [], sensors: [], motionSensors: [],
+    envSensors: [], bleProxies: [], doors: [], windows: [], rooms: [], groundAreas: [],
+    voidAreas: [], pools: [], bg: null }, over);
+  async function mkPlanner(floors, extra = {}) {
+    localStorage.removeItem('diorama:store:v1'); localStorage.removeItem('diorama:configs');
+    const seed = Object.assign({ v: 2, floors, currentFloorId: floors[0].id, activeSensorId: null,
+      coverage: false, imperial: false, showDetails: false, useRawTargets: false }, extra);
+    const p = new Planner(); p.connectWith(new FakeHa({ diorama: seed }));
+    await waitFor(() => p.configIndex !== null);
+    return p;
+  }
+
+  // ── Offscreen paint helpers (the ruler-dims §11M/§12 technique) ───────────
+  const CW = 600, CH = 420;
+  function mkCanvas() {
+    const c = document.createElement('canvas'); c.width = CW; c.height = CH;
+    return { c, ctx: c.getContext('2d', { willReadFrequently: true }) };
+  }
+  // drawAll deliberately carries ctx state between calls (each draw* relies on
+  // the font / textAlign an earlier one set), so a FIRST paint onto a virgin
+  // context differs from every later one. Paint twice — the second frame is the
+  // steady state, which is what every snapshot comparison here needs.
+  const paint = (ctx, p) => {
+    const v = computeView(ctx.canvas, p.floor().w, p.floor().d, null, 1);
+    drawAll(ctx, p, v, null); drawAll(ctx, p, v, null);
+    return v;
+  };
+  const snap = ctx => ctx.getImageData(0, 0, CW, CH).data.slice();
+  // Modal (most common) pixel colour over a box — grid lines / labels are sparse,
+  // so the mode of a floor-interior box IS the floor fill.
+  function dominant(ctx, x, y, w, h) {
+    const d = ctx.getImageData(x, y, w, h).data;
+    const tally = new Map();
+    for (let i = 0; i < d.length; i += 4) {
+      const k = `${d[i]},${d[i+1]},${d[i+2]}`;
+      tally.set(k, (tally.get(k) ?? 0) + 1);
+    }
+    let best = null, n = -1;
+    for (const [k, c] of tally) if (c > n) { n = c; best = k; }
+    return { color: best, count: n, total: (w * h) };
+  }
+  const distinctColors = (ctx, x, y, w, h) => {
+    const d = ctx.getImageData(x, y, w, h).data;
+    const s = new Set();
+    for (let i = 0; i < d.length; i += 4) s.add(`${d[i]},${d[i+1]},${d[i+2]}`);
+    return s.size;
+  };
+  // Count "text ink" — near-white pixels — in a screen-space box.
+  function ink(ctx, x, y, w, h, thr = 170) {
+    x = Math.max(0, Math.round(x)); y = Math.max(0, Math.round(y));
+    w = Math.min(CW - x, Math.round(w)); h = Math.min(CH - y, Math.round(h));
+    if (w <= 0 || h <= 0) return 0;
+    const d = ctx.getImageData(x, y, w, h).data;
+    let n = 0;
+    for (let i = 0; i < d.length; i += 4) if (d[i] > thr && d[i+1] > thr && d[i+2] > thr) n++;
+    return n;
+  }
+  // Pixel diff restricted to a screen box — the precise "did THIS text go away"
+  // probe (robust to the dim alphas room/area labels paint at, where a
+  // brightness threshold would miss them entirely).
+  const boxDiff = (a, b, x, y, w, h) => {
+    let n = 0;
+    const x0 = Math.max(0, Math.round(x)), x1 = Math.min(CW, Math.round(x + w));
+    const y0 = Math.max(0, Math.round(y)), y1 = Math.min(CH, Math.round(y + h));
+    for (let yy = y0; yy < y1; yy++) for (let xx = x0; xx < x1; xx++) {
+      const i = (yy * CW + xx) * 4;
+      if (a[i] !== b[i] || a[i+1] !== b[i+1] || a[i+2] !== b[i+2]) n++;
+    }
+    return n;
+  };
+  const diffPixels = (a, b) => { let n = 0; for (let i = 0; i < a.length; i += 4) if (a[i] !== b[i] || a[i+1] !== b[i+1] || a[i+2] !== b[i+2]) n++; return n; };
+  const setLayers = (p, l) => { p.store.layers2d = l; };
+  const hexRGB = h => `${parseInt(h.slice(1,3),16)},${parseInt(h.slice(3,5),16)},${parseInt(h.slice(5,7),16)}`;
+  const sec = t => document.getElementById('rows').insertAdjacentHTML('beforeend', `<h2>${t}</h2>`);
+
+  try {
+    // ═══ 1. Floor colour + texture reach the 2D view ══════════════════════════
+    // NOT a regression: `git log -S floorColor -- src/canvas-render.ts` is empty
+    // across all history — the 2D plan hard-coded '#101020' from day one, so
+    // these are NEW assertions pinning the gap closure.
+    sec('1. floor colour + texture (scene3d / look3d)');
+    {
+      const { ctx } = mkCanvas();
+      const p = await mkPlanner([baseFloor()]);
+      // A generous interior box, clear of the rect edges + their dim W/D labels.
+      const BOX = [180, 130, 240, 160];
+      paint(ctx, p);
+      ok('1A default floor paints the 3D default #101820',
+         dominant(ctx, ...BOX).color === hexRGB('#101820'), dominant(ctx, ...BOX).color);
+
+      p.store.scene3d = { preset: 'day', floorColor: '#8a7860' };
+      paint(ctx, p);
+      ok('1B scene3d.floorColor paints the 2D floor',
+         dominant(ctx, ...BOX).color === hexRGB('#8a7860'), dominant(ctx, ...BOX).color);
+      ok('1B untextured floor is FLAT (one colour dominates; the rest is grid)',
+         dominant(ctx, ...BOX).count > dominant(ctx, ...BOX).total * 0.4,
+         `${dominant(ctx, ...BOX).count}/${dominant(ctx, ...BOX).total}`);
+
+      p.floor().look3d = { floorColor: '#3d5a80' };
+      paint(ctx, p);
+      ok('1C per-floor look3d.floorColor WINS over scene3d',
+         dominant(ctx, ...BOX).color === hexRGB('#3d5a80'), dominant(ctx, ...BOX).color);
+      delete p.floor().look3d;
+
+      // Texture: same colour, different `floorTex` ⇒ different pixels.
+      p.store.scene3d.floorTex = 'none';
+      paint(ctx, p); const noneSnap = snap(ctx); const noneDistinct = distinctColors(ctx, ...BOX);
+      p.store.scene3d.floorTex = 'wood';
+      paint(ctx, p); const woodSnap = snap(ctx); const woodDistinct = distinctColors(ctx, ...BOX);
+      ok('1D floorTex "wood" changes pixels vs "none"', diffPixels(noneSnap, woodSnap) > 2000,
+         `${diffPixels(noneSnap, woodSnap)} px`);
+      ok('1D wood adds tonal variety (grain/seams)', woodDistinct > noneDistinct + 5,
+         `${noneDistinct} → ${woodDistinct}`);
+      p.store.scene3d.floorTex = 'tile';
+      paint(ctx, p); const tileSnap = snap(ctx);
+      ok('1E "tile" differs from "wood"', diffPixels(woodSnap, tileSnap) > 2000,
+         `${diffPixels(woodSnap, tileSnap)} px`);
+      p.store.scene3d.floorTex = 'concrete';
+      paint(ctx, p); const concSnap = snap(ctx);
+      ok('1E "concrete" differs from "tile"', diffPixels(tileSnap, concSnap) > 1000,
+         `${diffPixels(tileSnap, concSnap)} px`);
+
+      // Deterministic: the cached tile must not re-seed between frames.
+      p.store.scene3d.floorTex = 'wood';
+      paint(ctx, p); const a = snap(ctx);
+      paint(ctx, p); const b = snap(ctx);
+      ok('1F texture is deterministic frame to frame', diffPixels(a, b) === 0, diffPixels(a, b));
+
+      // The chosen colour still reads through the texture (the tile BASE is it).
+      // The tile BASE is the floor colour with translucent detail over it, so a
+      // textured floor must stay NEAR its colour (never multiplied into mud) and
+      // must MOVE when the colour changes.
+      const chanDist = (a, b) => {
+        const [ar,ag,ab] = a.split(',').map(Number), [br,bg,bb] = b.split(',').map(Number);
+        return Math.max(Math.abs(ar-br), Math.abs(ag-bg), Math.abs(ab-bb));
+      };
+      p.store.scene3d = { preset: 'day', floorColor: '#8a7860', floorTex: 'wood' };
+      paint(ctx, p);
+      const dmWarm = dominant(ctx, ...BOX).color;
+      ok('1G textured floor stays near its chosen colour',
+         chanDist(dmWarm, hexRGB('#8a7860')) <= 45, `${dmWarm} vs ${hexRGB('#8a7860')}`);
+      p.store.scene3d.floorColor = '#2f6f4f';
+      paint(ctx, p);
+      const dmGreen = dominant(ctx, ...BOX).color;
+      ok('1G the colour still drives a TEXTURED floor',
+         chanDist(dmGreen, hexRGB('#2f6f4f')) <= 45 && dmGreen !== dmWarm,
+         `${dmWarm} → ${dmGreen}`);
+      // …and the per-floor override still wins WITH a texture applied.
+      p.floor().look3d = { floorColor: '#7d3c4a', floorTex: 'tile' };
+      paint(ctx, p);
+      ok('1G look3d colour+tex override wins',
+         chanDist(dominant(ctx, ...BOX).color, hexRGB('#7d3c4a')) <= 45,
+         dominant(ctx, ...BOX).color);
+    }
+
+    // ═══ 2. `labels` covers ROOM names AND ground/pool AREA names ════════════
+    sec('2. labels layer → room + area names');
+    {
+      const walls = [{ id: 'w1', points: [P(500,500), P(3500,500), P(3500,3500), P(500,3500), P(500,500)] }];
+      const p = await mkPlanner([baseFloor({
+        walls,
+        rooms: [{ id: 'r1', name: 'Kitchen', anchor: P(2000, 2000) }],
+        groundAreas: [{ id: 'g1', kind: 'grass', name: 'Backyard',
+                        points: [P(5000,1000), P(7500,1000), P(7500,4000), P(5000,4000)] }],
+        pools: [{ id: 'pl1', kind: 'pool', name: 'Plunge',
+                  points: [P(5200,4600), P(7000,4600), P(7000,5600), P(5200,5600)] }],
+      })]);
+      const { ctx } = mkCanvas();
+      const v = paint(ctx, p);
+      const box = (wx, wy, w = 80, h = 20) => { const s = mmToPx(v, wx, wy); return [s.x - w/2, s.y - h/2, w, h]; };
+      const roomBox = box(2000, 2000), areaBox = box(6250, 2500), poolBox = box(6100, 5100);
+      const fillBox = box(6250, 3600, 40, 24);   // area PAINT, clear of its centroid label
+
+      const on = snap(ctx);
+      setLayers(p, { labels: false });
+      paint(ctx, p);
+      const off = snap(ctx);
+
+      ok('2A labels OFF hides the ROOM name', boxDiff(on, off, ...roomBox) > 8, boxDiff(on, off, ...roomBox));
+      ok('2A labels OFF hides the GROUND-AREA name', boxDiff(on, off, ...areaBox) > 8, boxDiff(on, off, ...areaBox));
+      ok('2A labels OFF hides the POOL name', boxDiff(on, off, ...poolBox) > 8, boxDiff(on, off, ...poolBox));
+      // Nothing BUT those three captions changed — the layer gates text, not paint.
+      const perBox = boxDiff(on, off, ...roomBox) + boxDiff(on, off, ...areaBox) + boxDiff(on, off, ...poolBox);
+      ok('2B only the label text changed', diffPixels(on, off) === perBox,
+         `${diffPixels(on, off)} total vs ${perBox} in the three caption boxes`);
+      ok('2B the ground-area FILL survives', boxDiff(on, off, ...fillBox) === 0, boxDiff(on, off, ...fillBox));
+
+      // Hiding `ground` is the separate switch that removes the paint itself.
+      setLayers(p, { ground: false });
+      paint(ctx, p);
+      ok('2C ground=false removes the area paint too', boxDiff(on, snap(ctx), ...fillBox) > 100,
+         boxDiff(on, snap(ctx), ...fillBox));
+
+      setLayers(p, undefined);
+      paint(ctx, p);
+      ok('2D labels back ON restores every name (byte-identical)', diffPixels(on, snap(ctx)) === 0,
+         diffPixels(on, snap(ctx)));
+    }
+
+    // ═══ 3. `objectLabels` — NAMES go, VALUE readouts stay ═══════════════════
+    sec('3. objectLabels layer');
+    {
+      const p = await mkPlanner([baseFloor({
+        walls: [{ id: 'w1', points: [P(1000,1000), P(7000,1000)] }],
+        doors: [{ id: 'd1', x: 2000, y: 1000, w: 900, rotation: 0, label: 'Front' }],
+        furniture: [{ id: 'fu1', kind: 'table', x: 3000, y: 3000, w: 1200, h: 800, rotation: 0, label: 'Dining' }],
+        envSensors: [{ id: 'e1', x: 6000, y: 3000, entity_id: 'sensor.t', kind: 'temperature', label: 'Hall probe' }],
+        alarmPanels: [{ id: 'a1', x: 1600, y: 4600, rotation: 0, label: 'Keypad' }],
+      })]);
+      p.hass.states['sensor.t'] = { entity_id: 'sensor.t', state: '21.5',
+        attributes: { unit_of_measurement: '°C', device_class: 'temperature' } };
+      p.activeEnvId = 'e1';   // the env NAME caption only draws when selected
+      const { ctx } = mkCanvas();
+      const v = paint(ctx, p);
+      const box = (wx, wy, w, h, dy = 0) => { const s = mmToPx(v, wx, wy); return [s.x - w/2, s.y - h/2 + dy, w, h]; };
+      const doorBox = box(2450, 1000, 110, 16, -13);
+      const furnBox = box(3000, 3000, 90, 14);
+      const envValBox = box(6000, 3000, 60, 16);
+      const envNameBox = box(6000, 3000, 90, 16, 24);
+      const alarmBox = box(1600, 4600, 130, 16, 22);
+
+      const on = snap(ctx);
+      const alarmInkOn = ink(ctx, ...alarmBox, 120);
+      setLayers(p, { objectLabels: false });
+      paint(ctx, p);
+      const off = snap(ctx);
+      const alarmInkOff = ink(ctx, ...alarmBox, 120);
+
+      ok('3A objectLabels OFF hides the DOOR pill', boxDiff(on, off, ...doorBox) > 6, boxDiff(on, off, ...doorBox));
+      ok('3A objectLabels OFF hides the FURNITURE label', boxDiff(on, off, ...furnBox) > 4, boxDiff(on, off, ...furnBox));
+      ok('3A objectLabels OFF hides the env NAME caption',
+         boxDiff(on, off, ...envNameBox) > 4, boxDiff(on, off, ...envNameBox));
+      ok('3B the env VALUE chip is UNTOUCHED (state is not a name)',
+         boxDiff(on, off, ...envValBox) === 0, boxDiff(on, off, ...envValBox));
+      ok('3B the alarm caption keeps its STATE badge, loses the name',
+         alarmInkOff > 0 && alarmInkOff < alarmInkOn, `${alarmInkOn} → ${alarmInkOff}`);
+
+      // The door BODY is untouched — only its text pill went.
+      setLayers(p, { objectLabels: false, openings: false });
+      paint(ctx, p);
+      ok('3C the door GLYPH still draws with only objectLabels off',
+         diffPixels(off, snap(ctx)) > 30, diffPixels(off, snap(ctx)));
+
+      setLayers(p, undefined);
+      paint(ctx, p);
+      ok('3D objectLabels back ON restores every name (byte-identical)',
+         diffPixels(on, snap(ctx)) === 0, diffPixels(on, snap(ctx)));
+    }
+
+    // ═══ 4. New coverage keys: openings + peekFloors ═════════════════════════
+    sec('4. coverage keys (openings, peekFloors)');
+    {
+      const p = await mkPlanner([baseFloor({
+        walls: [{ id: 'w1', points: [P(1000,1000), P(7000,1000)] }],
+        doors: [{ id: 'd1', x: 2000, y: 1000, w: 900, rotation: 0 }],
+        windows: [{ id: 'wi1', x: 5000, y: 1000, w: 1200, rotation: 0 }],
+      }), baseFloor({
+        id: 'f2', name: 'Upstairs', peek2d: true,
+        walls: [{ id: 'w2', points: [P(2000,3000), P(6000,3000), P(6000,5000), P(2000,5000), P(2000,3000)] }],
+      })]);
+      const { ctx } = mkCanvas();
+      paint(ctx, p); const all = snap(ctx);
+      paint(ctx, p);
+      ok('4A the settled frame is deterministic (no clock-driven paint here)',
+         diffPixels(all, snap(ctx)) === 0, diffPixels(all, snap(ctx)));
+
+      setLayers(p, { openings: false });
+      paint(ctx, p); const noOpen = snap(ctx);
+      ok('4B openings=false hides doors + windows', diffPixels(all, noOpen) > 200, diffPixels(all, noOpen));
+
+      setLayers(p, { peekFloors: false });
+      paint(ctx, p); const noPeek = snap(ctx);
+      ok('4C peekFloors=false hides the onion-skin underlay',
+         diffPixels(all, noPeek) > 100, diffPixels(all, noPeek));
+
+      setLayers(p, undefined);
+      paint(ctx, p);
+      ok('4D absent keys = everything back (byte-identical)',
+         diffPixels(all, snap(ctx)) === 0, diffPixels(all, snap(ctx)));
+      // Absent-flag defaults: the new keys must be opt-OUT.
+      ok('4E new keys default ON',
+         layerIsOn({}, 'objectLabels') && layerIsOn({}, 'openings') && layerIsOn({}, 'peekFloors'), '');
+      // A hidden layer must not capture input (the zonesInteractive rule).
+      const v4 = paint(ctx, p);
+      ok('4F doors/windows are hittable with the layer ON',
+         !!hitDoor(p, v4, { x: 2450, y: 1000 }) && !!hitWindow(p, v4, { x: 5000, y: 1000 }), '');
+      setLayers(p, { openings: false });
+      ok('4F a hidden openings layer captures no input',
+         !hitDoor(p, v4, { x: 2450, y: 1000 }) && !hitWindow(p, v4, { x: 5000, y: 1000 }), '');
+      setLayers(p, undefined);
+      ok('4E default-off set unchanged',
+         JSON.stringify([...DEFAULT_OFF_LAYERS].sort()) === JSON.stringify(['activity','heatmap','vacuumMap']),
+         DEFAULT_OFF_LAYERS.join(','));
+    }
+
+    // ═══ 5. Layer catalog metadata (the ONE grouping source) ═════════════════
+    sec('5. LAYER_DEFS / LAYER_CATS metadata');
+    {
+      ok('5A every def carries a known category',
+         LAYER_DEFS.every(d => LAYER_CATS.some(c => c.id === d.cat)),
+         LAYER_DEFS.filter(d => !LAYER_CATS.some(c => c.id === d.cat)).map(d => d.key).join(','));
+      ok('5A keys unique', new Set(LAYER_DEFS.map(d => d.key)).size === LAYER_DEFS.length, LAYER_DEFS.length);
+      const grouped = layerDefsByCat();
+      const flat = grouped.flatMap(g => g.defs);
+      ok('5B layerDefsByCat covers every def exactly once',
+         flat.length === LAYER_DEFS.length && new Set(flat.map(d => d.key)).size === LAYER_DEFS.length,
+         `${flat.length}/${LAYER_DEFS.length}`);
+      ok('5B groups follow LAYER_CATS order',
+         JSON.stringify(grouped.map(g => g.cat.id)) ===
+           JSON.stringify(LAYER_CATS.filter(c => LAYER_DEFS.some(d => d.cat === c.id)).map(c => c.id)),
+         grouped.map(g => g.cat.id).join(','));
+      ok('5C `labels` is relabelled for rooms AND areas',
+         LAYER_DEFS.find(d => d.key === 'labels')?.label === 'Room & area labels',
+         LAYER_DEFS.find(d => d.key === 'labels')?.label);
+      for (const k of ['objectLabels', 'openings', 'peekFloors'])
+        ok(`5C ${k} is in the catalog`, LAYER_DEFS.some(d => d.key === k), '');
+      ok('5D SIMPLE_LAYERS semantics untouched',
+         SIMPLE_LAYERS.targets === true && SIMPLE_LAYERS.activity === true &&
+         SIMPLE_LAYERS.bgText === false && SIMPLE_LAYERS.objectLabels === undefined,
+         JSON.stringify(SIMPLE_LAYERS.objectLabels));
+    }
+
+    // ═══ 6. Grouped layer UI in the REAL sidebar ═════════════════════════════
+    sec('6. sidebar renders the grouped grid');
+    {
+      const p = await mkPlanner([baseFloor()]);
+      p.setUiMode('edit');
+      // Expand the layers section (collapse state is device-local localStorage).
+      localStorage.setItem('diorama:sidebar:collapsed', '[]');
+      const mount = document.getElementById('mount');
+      const sb = document.createElement('diorama-sidebar');
+      sb.planner = p;
+      mount.appendChild(sb);
+      await sb.updateComplete; await frames(3);
+
+      const caps = [...sb.querySelectorAll('.layer-cat')].map(n => n.textContent.trim());
+      ok('6A a section caption per non-empty category',
+         caps.length === layerDefsByCat().length, `${caps.length} vs ${layerDefsByCat().length}`);
+      ok('6A captions are the LAYER_CATS labels in order',
+         JSON.stringify(caps) === JSON.stringify(layerDefsByCat().map(g => g.cat.label)),
+         caps.join(' | '));
+      // Every def still has exactly one toggle, grouping notwithstanding.
+      const labelTexts = [...sb.querySelectorAll('label.row span')].map(n => n.textContent.trim());
+      const missing = LAYER_DEFS.filter(d => !labelTexts.includes(d.label)).map(d => d.key);
+      ok('6B every LAYER_DEFS entry renders a row', missing.length === 0, missing.join(','));
+      ok('6B the new keys are reachable in the UI',
+         labelTexts.includes('Object labels') && labelTexts.includes('Doors & windows') &&
+         labelTexts.includes('Peek floors') && labelTexts.includes('Room & area labels'), '');
+      sb.remove();
+    }
+  } catch (err) {
+    ok('harness threw', false, (err && err.stack) || String(err));
+  }
+
+  const pass = results.filter(r => r.pass).length;
+  const rows = document.getElementById('rows');
+  for (const r of results) {
+    rows.insertAdjacentHTML('beforeend',
+      `<div class="row"><span class="name">${r.name}</span>` +
+      `<span class="${r.pass ? 'pass' : 'fail'}">${r.pass ? 'PASS' : 'FAIL'} <span class="extra">${r.extra}</span></span></div>`);
+  }
+  const good = pass === results.length;
+  const sum = document.getElementById('summary');
+  sum.className = good ? 'okbg' : 'badbg';
+  sum.textContent = `${good ? 'PASS' : 'FAIL'} ${pass}/${results.length}`;
+  document.title = `LAYERS2D ${good ? 'PASS' : 'FAIL'} ${pass}/${results.length}`;
+</script>
