@@ -45,9 +45,10 @@ import {
 } from '../geometry.js';
 import { solveHomography, homographyResidualsMm } from '../homography.js';
 import { CLOCK_PRESETS, DATE_PRESETS, type ValueRule, type RuleOp } from '../value-rules.js';
-import type { Vec2, InfoCard, InfoCardMount, InfoCardDisplayMode, ActionButton, ActionKind, Ruler, DimensionMode, NeighborhoodConfig } from '../types.js';
+import type { Vec2, InfoCard, InfoCardMount, InfoCardDisplayMode, ActionButton, ActionKind, Ruler, DimensionMode, NeighborhoodConfig, DoorKind } from '../types.js';
 import { resolveRulerEnds } from '../geometry.js';
-import { floorElevationMm } from '../geometry.js';
+import { floorElevationMm, DOOR_DEFAULT_W, doorDefaultWidth, isSlidingDoorKind,
+  isDoubleLeafDoorKind } from '../geometry.js';
 
 // Compact relative-age label for a GPS fix timestamp (ms epoch).
 function gpsAgeText(ts: number): string {
@@ -4361,14 +4362,20 @@ export class Sidebar extends LitElement {
         </div>
         <div class="row"><label>Kind</label>
           <select @change=${(e: Event) => upd(() => {
-                    const k = (e.target as HTMLSelectElement).value as 'swing' | 'garage' | 'gate';
+                    const k = (e.target as HTMLSelectElement).value as DoorKind;
                     d.kind = k;
-                    // Bump a still-default swing width up to a garage-sized opening.
-                    if (k === 'garage' && d.w === 800) d.w = 2400;
+                    // Bump a still-default 800 mm opening to the kind's own span
+                    // (garage 2400; double / french / sliding glass 1500).
+                    if (d.w === DOOR_DEFAULT_W) d.w = doorDefaultWidth(k);
                   })}>
             <option value="swing" ?selected=${(d.kind ?? 'swing') === 'swing'}>Swing</option>
             <option value="garage" ?selected=${d.kind === 'garage'}>Garage</option>
             <option value="gate" ?selected=${d.kind === 'gate'}>Gate</option>
+            <option value="sliding" ?selected=${d.kind === 'sliding'}>Sliding</option>
+            <option value="pocket" ?selected=${d.kind === 'pocket'}>Pocket</option>
+            <option value="double" ?selected=${d.kind === 'double'}>Double swing</option>
+            <option value="french" ?selected=${d.kind === 'french'}>French</option>
+            <option value="sliding_glass" ?selected=${d.kind === 'sliding_glass'}>Sliding glass</option>
           </select>
         </div>
         <div class="row"><label>Width (mm)</label>
@@ -4384,16 +4391,20 @@ export class Sidebar extends LitElement {
                    d.rotation = ((Math.round(v / 15) * 15) % 360 + 360) % 360;
                  })}>
         </div>
-        ${(d.kind ?? 'swing') === 'garage' ? nothing : html`
-        <div class="row"><label>Hinge</label>
+        ${(d.kind ?? 'swing') === 'garage' || isDoubleLeafDoorKind(d.kind) ? nothing : html`
+        <div class="row"><label>${isSlidingDoorKind(d.kind) ? 'Slide side' : 'Hinge / slide side'}</label>
           <div style="display:flex;gap:4px">
             <button class="btn ${(d.hinge ?? 'right') === 'left' ? 'active' : ''}"
                     style="font-size:11px;padding:3px 8px"
-                    title="Left-hand hinge: door swings clockwise on screen"
+                    title=${isSlidingDoorKind(d.kind)
+                      ? 'Panel retracts toward the far (endpoint) end'
+                      : 'Left-hand hinge: door swings clockwise on screen'}
                     @click=${() => upd(() => { d.hinge = 'left'; })}>◐ Left</button>
             <button class="btn ${(d.hinge ?? 'right') === 'right' ? 'active' : ''}"
                     style="font-size:11px;padding:3px 8px"
-                    title="Right-hand hinge: door swings counter-clockwise on screen"
+                    title=${isSlidingDoorKind(d.kind)
+                      ? 'Panel retracts toward the hinge (X,Y) end'
+                      : 'Right-hand hinge: door swings counter-clockwise on screen'}
                     @click=${() => upd(() => { d.hinge = 'right'; })}>Right ◑</button>
           </div>
         </div>`}
@@ -4414,7 +4425,9 @@ export class Sidebar extends LitElement {
         ${this._doorLockBindRow(d, upd)}
         ${this._doorbellBindRow(d, upd)}
         <div style="font-size:10px;color:var(--text-dim);margin-top:6px;line-height:1.3">
-          Hinge at (X,Y). Panel extends along rotation (15° snap). Bind to a
+          Hinge at (X,Y). Panel extends along rotation (15° snap). Sliding /
+          pocket / sliding-glass kinds read "slide side" as the end the panel
+          retracts toward; double + french open as a mirrored pair. Bind to a
           binary_sensor ("on" = open) or a cover.* (garage / position). Optional
           lock.* padlock + doorbell (event/binary/button) are display only.
         </div>

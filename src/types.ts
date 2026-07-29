@@ -689,7 +689,14 @@ export interface Ruler {
 //   custom   — only walls with Wall.dimension === true
 export type DimensionMode = 'off' | 'all' | 'outside' | 'custom';
 
-export type DoorKind = 'swing' | 'garage' | 'gate';
+// Door leaf styles. `swing` reproduces the legacy hinged panel.
+//   sliding       — barn-style slab hung proud of the wall, slides along it
+//   pocket        — slab inside the wall cavity, retracts into the adjacent run
+//   double        — two solid half-width leaves swinging as a mirrored pair
+//   french        — `double` geometry with glazed, muntin-gridded leaves
+//   sliding_glass — two framed glass panels, one fixed / one sliding behind it
+export type DoorKind = 'swing' | 'garage' | 'gate'
+  | 'sliding' | 'pocket' | 'double' | 'french' | 'sliding_glass';
 
 export interface Door {
   id: string;
@@ -697,6 +704,7 @@ export interface Door {
   w: number;                   // panel length in mm (default 800; garage typically 2400+)
   rotation: number;            // panel direction (closed) in degrees, screen-CW; 0 = panel along +X world
   kind?: DoorKind;             // 'swing' (default, hinged panel) | 'garage' (segmented overhead door) | 'gate' (picket-styled swinging panel on a fence/hedge)
+                               // | 'sliding' | 'pocket' | 'double' | 'french' | 'sliding_glass' (see DoorKind)
   entity_id: string | null;    // binary_sensor ("on" = open) OR cover.* ('open'/'closed', current_position for partial)
   label?: string;
   localState?: string;         // local control when UNBOUND ('on'=open/'off'); inert once bound. See Planner.effectiveState.
@@ -715,6 +723,9 @@ export interface Door {
                                // CHANGE fires a transient ring pulse (Planner.doorbellRings). Display only, no toggle.
   hinge?: 'right' | 'left';    // which side the hinge sits on. Determines swing direction.
                                // 'right' (default) = swings CCW on screen; 'left' = swings CW.
+                               // SLIDING FAMILY (sliding/pocket/sliding_glass) reads the same field as
+                               // the SLIDE SIDE: 'right' (default) retracts toward the (x,y) hinge end,
+                               // 'left' toward the endpoint. IGNORED by double/french (symmetric pair).
   locked?: boolean;            // canvas move/rotate/delete disabled
 }
 

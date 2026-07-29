@@ -1221,7 +1221,7 @@ Design `docs/DESIGN-terrain.md`; research `docs/research/terrain-enhancements.md
   shared swing/lock/doorbell/`doorOpenFraction` machinery (cover.* with
   device_class `gate` binds like any cover). Doors snapped onto a fence/hedge
   wall DEFAULT to `'gate'` silently (`nearestWallKind` in canvas-interact);
-  override via the Doors Kind dropdown (now swing/garage/gate).
+  override via the Doors Kind dropdown (eight kinds — see "Covers & doorbell").
 - Test pages `terrain-test.html` (103/103), `fence-gate-test.html` (37/37).
 
 ### Yard life (batch T3): water shimmer, fountain spray, sprinklers, rock_cluster
@@ -1346,6 +1346,32 @@ Design `docs/DESIGN-terrain.md` (T4 bullet + pinned decision 3); research
 - **Plumbob colors**: `Sensor.plumbobColor` / `MotionSensor.plumbobColor` (optional per-fixture override) — sidebar color rows in the mmWave + motion editors. `TargetWorld.plumbobColor` (additive, optional) is stamped by three-view ONLY for an explicit override (radar/AI/demo/roamer read the fixture's `plumbobColor`; a **fused** radar target stamps the fused person's color when the sensor set none). When unset it is left undefined and **the renderer defaults the plumbob to the target's IDENTITY color** — `wantPlumbob = t.plumbobColor ?? t.color ?? PLUMBOB_GREEN` in `updateTargets`: `t.color` is the sensor tint (`sensorColor(s,idx)`) for radar, the motion/roamer `color` for AI/demo/roam, the person color for BLE — so every avatar's plumbob visually matches the source it originated from without any config. An EXPLICIT `plumbobColor` always wins; `PLUMBOB_GREEN` (0x2ee56a) is now only the build-time seed + a defensive last-ditch fallback for a color-less target. Plumbob materials are per-rig already — recolored IN PLACE via the `h.plumbobColor` compare (which starts undefined on a fresh rig, so the set/identity color **re-applies after every rebuild/respawn/re-roll/fade-reacquire**, no rebuild); pets ride along. Test pages: `roadmap-geom-test.html` 25/25, `geoevents-test.html` 16/16, `plumbob-color-test.html` 19/19.
 
 ### Covers & doorbell (batch F)
+- **Eight door kinds (2026-07-28)**: `Door.kind` = `swing` (default) / `garage` / `gate` +
+  `sliding` (barn slab proud of the wall on a 2×span top track, TRANSLATES `dir·frac·w`,
+  never rotates) / `pocket` (0.6·DOOR_T slab inside the wall plane retracting into the
+  adjacent solid run — the opaque wall extrusion hides it; slim jamb strip at the mouth) /
+  `double` (two half-width leaves pivoting at the two span ends, mirrored ±π/2·frac, same
+  opening side) / `french` (double + stile/rail frames, window-idiom glass `#c9ced4` 0.16 +
+  2×3 muntin bars 42 mm proud of the 20 mm glass — coincident-face safe) / `sliding_glass`
+  (two framed panes at z ±26; the FIXED pane sits on the slide-side half, the mover parks
+  BEHIND it). Helpers in geometry.ts: `isSlidingDoorKind`/`isDoubleLeafDoorKind`/
+  `isGlassDoorKind`/`doorSlideDir` (+1 default 'right' = retract toward the (x,y) hinge end)
+  + `doorDefaultWidth(kind)`/`DOOR_DEFAULT_W` (kind-switch bumps width only when still 800:
+  garage 2400, double/french/sliding_glass 1500). **`hinge` doubles as the slide side** on
+  sliding kinds (sidebar label "Slide side"); hidden for double/french/garage. Locks build
+  through one `addLockBolts()` helper (swing branch converted byte-equivalently). Toolbar
+  door variant row (`DOOR_KINDS` in tool-arm.ts) lists all eight. **Open-door closed-span
+  hint (user-requested)**: every OPEN door draws a dashed `rgba(144,164,174,0.55)` line
+  along its CLOSED position (both leaves for double/french; the span guides upgrade in
+  place for garage/sliding family) BEFORE the live panel, and **`hitDoor` tests the closed
+  span FIRST, unconditionally** (an open door is clickable where it belongs — the old code
+  only hit the swung panel; `hitDoorEnd`'s handle displacement is now swing/gate-only,
+  following the glyph). Unknown kind strings fall through to the swing branch in BOTH
+  renderers + both hit fns (stale-chunk safe, test-driven with a literal unknown kind).
+  NB `hitDoor`/`hitDoorEnd` still read raw `states[entity_id] === 'on'`, not
+  `effectiveState` — harmless now the closed span always hits. Test `door-kinds-test.html`
+  (`DOORKINDS PASS 87/87`; combined canvas-render+canvas-hit bundle — same flightHitPx-style
+  single-module-instance reasoning).
 - **2D door swing arc sweeps the TRUE opening side (2026-07-28 fix, user-reported)**: a
   `doorEndpoint` offset lands at CANVAS angle `+rotation` (mmToCanvas's y-flip), so the dashed
   arc's canvas delta is `+openDelta` — the old `−openDelta` MIRRORED the hint to the wrong side

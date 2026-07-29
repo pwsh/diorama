@@ -12,7 +12,8 @@ import type {
 } from '../types.js';
 import { FURNITURE_KINDS, furnitureCat, type FurnitureCat, GROUND_KINDS } from '../geometry.js';
 
-type DoorKind = 'swing' | 'garage' | 'gate';
+type DoorKind = 'swing' | 'garage' | 'gate'
+  | 'sliding' | 'pocket' | 'double' | 'french' | 'sliding_glass';
 
 // What the thumbnail service should render / how to key its cache.
 export type ThumbDesc =
@@ -123,6 +124,9 @@ const WALL_KINDS: { id: WallKind; label: string }[] = [
 ];
 const DOOR_KINDS: { id: DoorKind; label: string }[] = [
   { id: 'swing', label: 'Swing' }, { id: 'garage', label: 'Garage' }, { id: 'gate', label: 'Gate' },
+  { id: 'sliding', label: 'Sliding' }, { id: 'pocket', label: 'Pocket' },
+  { id: 'double', label: 'Double swing' }, { id: 'french', label: 'French' },
+  { id: 'sliding_glass', label: 'Sliding glass' },
 ];
 const WINDOW_KINDS: { id: WindowKind; label: string }[] = [
   { id: 'single', label: 'Single' }, { id: 'double_hung', label: 'Double-hung' },

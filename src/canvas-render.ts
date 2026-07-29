@@ -25,7 +25,8 @@ import {
   isDroopPlant, plantThirsty, PLANT_MOISTURE_DEFAULT_THRESHOLD,
   isVehicleKind, evStatusOf, evStatusColor, evChargePercent, carChargeState,
   isStairsKind, stairChipArrow, stairsRiseMm, stairsTreadCount, FURNITURE_KINDS,
-  doorEndpoint, doorOpenDeltaDeg, doorOpenFraction, doorSpanCenter, windowEndpoints, wallCutsForSegment, wallKind,
+  doorEndpoint, doorOpenDeltaDeg, doorOpenFraction, doorSpanCenter, doorSlideDir,
+  windowEndpoints, wallCutsForSegment, wallKind,
   ENV_KINDS, envKindOf, envColor, envValueText, envScale,
   infoCardText, infoCardRule, infoCardScale, infoCardMount,
   closedWallLoops, loopContaining, roomLabel,
@@ -3783,42 +3784,208 @@ function drawDoors(ctx: CanvasRenderingContext2D, p: Planner, view: View): void 
     const openColor = '#66bb6a';
     const color = isOpen ? openColor : closedColor;
     const hinge = mmToPx(view, d.x, d.y);
-
-    // Garage door: no swing arc — a dashed line across the opening (hinge →
-    // endpoint along rotation) that RETRACTS toward the hinge as it opens (the
-    // drawn length is the still-closed fraction). Segments vanish as it rolls up.
-    if ((d.kind ?? 'swing') === 'garage') {
-      const end = doorEndpoint(d);
-      const epx = mmToPx(view, end.x, end.y);
-      const covered = 1 - frac;                     // still-covering fraction
-      const cx = hinge.x + (epx.x - hinge.x) * covered;
-      const cy = hinge.y + (epx.y - hinge.y) * covered;
-      // Faint full-span guide (the opening extent).
-      ctx.strokeStyle = 'rgba(144,164,174,0.30)'; ctx.lineWidth = 1;
-      ctx.beginPath(); ctx.moveTo(hinge.x, hinge.y); ctx.lineTo(epx.x, epx.y); ctx.stroke();
-      // The closed portion as a dashed panel.
-      if (covered > 0.01) {
-        ctx.strokeStyle = color; ctx.lineWidth = 5; ctx.setLineDash([7, 5]);
-        ctx.beginPath(); ctx.moveTo(hinge.x, hinge.y); ctx.lineTo(cx, cy); ctx.stroke();
-        ctx.setLineDash([]);
-      }
-      // Endpoint handle (drag to rotate) — hidden when locked.
-      if (!d.locked) {
-        ctx.fillStyle = '#ffb74d'; ctx.strokeStyle = '#fff'; ctx.lineWidth = 1;
-        ctx.beginPath(); ctx.arc(epx.x, epx.y, 5 * dpr, 0, 2 * Math.PI); ctx.fill(); ctx.stroke();
-      }
-      // Label + state pill (percentage when partially open).
-      const pillX = (hinge.x + epx.x) / 2, pillY = (hinge.y + epx.y) / 2 - 12 * dpr;
-      const pct = Math.round(frac * 100);
-      const stateStr = !st ? '' : isOpen ? (pct >= 99 ? 'OPEN' : `${pct}%`) : 'closed';
-      const txt = (d.label?.trim() || 'Garage') + (stateStr ? ` · ${stateStr}` : '');
+    const kind = d.kind ?? 'swing';
+    // Closed span endpoint (px) + its vector — every kind's plan glyph is laid
+    // out along it. `dir` (+1 default) is the SLIDE side in the door's own
+    // frame: the panel retracts toward the (x, y) hinge end, i.e. along −v.
+    const spanEnd = doorEndpoint(d);
+    const sep = mmToPx(view, spanEnd.x, spanEnd.y);
+    const vX = sep.x - hinge.x, vY = sep.y - hinge.y;
+    const dir = doorSlideDir(d);
+    const at = (t: number) => ({ x: hinge.x + vX * t, y: hinge.y + vY * t });
+    const vLen = Math.hypot(vX, vY) || 1;
+    const pX = -vY / vLen, pY = vX / vLen;           // unit perpendicular (px)
+    const line = (ax: number, ay: number, bx: number, by: number) => {
+      ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
+    };
+    // "Where the closed panel belongs" hint — drawn whenever the door is OPEN so
+    // the user can see (and click) the closed position to shut it (hitDoor
+    // accepts the closed span for exactly this reason). Dimmed grey dashes,
+    // painted BEFORE the live panel so the panel wins wherever they overlap.
+    const closedHint = (ax: number, ay: number, bx: number, by: number) => {
+      if (!isOpen) return;
+      ctx.strokeStyle = 'rgba(144,164,174,0.55)'; ctx.lineWidth = 2;
+      ctx.setLineDash([5, 4]); line(ax, ay, bx, by); ctx.setLineDash([]);
+    };
+    // Endpoint handle (drag to rotate) — hidden when locked.
+    const endHandle = (px: { x: number; y: number }) => {
+      if (d.locked) return;
+      ctx.fillStyle = '#ffb74d'; ctx.strokeStyle = '#fff'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.arc(px.x, px.y, 5 * dpr, 0, 2 * Math.PI); ctx.fill(); ctx.stroke();
+    };
+    // Lock-state padlock near the hinge (+ low-battery badge). Same click target
+    // as the swing door (hitDoorLock); garage doors deliberately draw none.
+    const lockGlyph = () => {
+      if (!d.lockEntity && !d.lockLocalState) return;
+      const lst = p.doorLockState(d);
+      drawPadlock(ctx, hinge.x - 9 * dpr, hinge.y - 11 * dpr, 5 * dpr, lst, d.lockControl === 'display');
+      if (d.lockEntity) drawBatteryBadge(ctx, p, d.lockEntity, hinge.x + 9 * dpr, hinge.y - 11 * dpr);
+    };
+    // Label + state pill at a given anchor. `pct` kinds report a percentage
+    // while partially open (fraction-driven glyphs); the rest say OPEN/closed.
+    const pill = (ax: number, ay: number, fallback: string, pct: boolean) => {
+      const pctN = Math.round(frac * 100);
+      const stateStr = !st ? ''
+        : isOpen ? (pct ? (pctN >= 99 ? 'OPEN' : `${pctN}%`) : 'OPEN') : 'closed';
+      const txt = (d.label?.trim() || fallback) + (stateStr ? ` · ${stateStr}` : '');
       ctx.font = `${10 * dpr}px sans-serif`;
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
       const tw = ctx.measureText(txt).width + 8 * dpr;
       ctx.fillStyle = 'rgba(0,0,0,0.7)';
-      ctx.fillRect(pillX - tw / 2, pillY - 7 * dpr, tw, 14 * dpr);
+      ctx.fillRect(ax - tw / 2, ay - 7 * dpr, tw, 14 * dpr);
       ctx.fillStyle = isOpen ? openColor : '#cfd8dc';
-      ctx.fillText(txt, pillX, pillY);
+      ctx.fillText(txt, ax, ay);
+    };
+
+    // Garage door: no swing arc — a dashed line across the opening (hinge →
+    // endpoint along rotation) that RETRACTS toward the hinge as it opens (the
+    // drawn length is the still-closed fraction). Segments vanish as it rolls up.
+    if (kind === 'garage') {
+      const covered = 1 - frac;                     // still-covering fraction
+      const c = at(covered);
+      // Full-span guide (the opening extent). Once OPEN it becomes the shared
+      // dimmed-dash "closed position" hint rather than a second faint line.
+      if (isOpen) closedHint(hinge.x, hinge.y, sep.x, sep.y);
+      else {
+        ctx.strokeStyle = 'rgba(144,164,174,0.30)'; ctx.lineWidth = 1;
+        line(hinge.x, hinge.y, sep.x, sep.y);
+      }
+      // The closed portion as a dashed panel.
+      if (covered > 0.01) {
+        ctx.strokeStyle = color; ctx.lineWidth = 5; ctx.setLineDash([7, 5]);
+        line(hinge.x, hinge.y, c.x, c.y);
+        ctx.setLineDash([]);
+      }
+      endHandle(sep);
+      pill((hinge.x + sep.x) / 2, (hinge.y + sep.y) / 2 - 12 * dpr, 'Garage', true);
+      continue;
+    }
+
+    // ── Sliding family: the slab TRANSLATES along the span ──────────────────
+    // px displacement = −dir·frac·v (local +X, the retract direction, points
+    // from the endpoint back toward the hinge).
+    if (kind === 'sliding' || kind === 'pocket' || kind === 'sliding_glass') {
+      const shift = -dir * frac;
+      // Track / guide: the opening span, plus (barn slide) the parking run the
+      // slab retracts over. Open → the span reads as the dashed closed hint.
+      ctx.strokeStyle = 'rgba(144,164,174,0.28)'; ctx.lineWidth = 1;
+      if (kind === 'sliding') {
+        const t0 = at(dir > 0 ? -1 : 0), t1 = at(dir > 0 ? 1 : 2);
+        line(t0.x, t0.y, t1.x, t1.y);
+      }
+      if (isOpen) closedHint(hinge.x, hinge.y, sep.x, sep.y);
+      else { ctx.strokeStyle = 'rgba(144,164,174,0.30)'; line(hinge.x, hinge.y, sep.x, sep.y); }
+
+      if (kind === 'sliding_glass') {
+        // Two parallel thin panes: one FIXED on the stack side, one sliding
+        // behind it (drawn on the other side of the centreline so they read).
+        const pwT = 0.5 + 60 / Math.max(1, d.w);   // pane length as a span fraction
+        const travelT = 1 - pwT;
+        const fixed0 = dir > 0 ? 0 : 1 - pwT;
+        const move0 = (dir > 0 ? 1 - pwT : 0) + shift * travelT;
+        const glassTint = isOpen ? openColor : (unavail ? '#c62828' : '#9fb8c6');
+        const paneLine = (t0: number, off: number, w2: number) => {
+          const a = at(t0), b = at(t0 + pwT);
+          ctx.strokeStyle = glassTint; ctx.lineWidth = w2;
+          line(a.x + pX * off, a.y + pY * off, b.x + pX * off, b.y + pY * off);
+        };
+        paneLine(fixed0, 2.6 * dpr, 3);
+        paneLine(move0, -2.6 * dpr, 4);
+        // Leading-stile tick on the moving pane.
+        const lead = at(move0 + (dir > 0 ? 0 : pwT));
+        ctx.strokeStyle = color; ctx.lineWidth = 2;
+        line(lead.x - pX * 5 * dpr, lead.y - pY * 5 * dpr,
+             lead.x + pX * 5 * dpr, lead.y + pY * 5 * dpr);
+      } else {
+        // Solid slab, offset one line-width to the panel side. A pocket slab
+        // dims where it has slid PAST the mouth (into the wall cavity).
+        const off = (kind === 'pocket' ? 0 : 3.5 * dpr);
+        const s0 = shift, s1 = shift + 1;
+        const seg = (t0: number, t1: number, style: string, w2: number, dash: number[]) => {
+          if (t1 - t0 < 0.01) return;
+          const a = at(t0), b = at(t1);
+          ctx.strokeStyle = style; ctx.lineWidth = w2; ctx.setLineDash(dash);
+          line(a.x + pX * off, a.y + pY * off, b.x + pX * off, b.y + pY * off);
+          ctx.setLineDash([]);
+        };
+        if (kind === 'pocket') {
+          // Cavity hint: a short dashed run beyond the mouth (where the slab goes).
+          const m0 = dir > 0 ? 0 : 1, m1 = dir > 0 ? -0.85 : 1.85;
+          const a = at(m0), b = at(m1);
+          ctx.strokeStyle = 'rgba(144,164,174,0.30)'; ctx.lineWidth = 1;
+          ctx.setLineDash([3, 4]);
+          line(a.x + pX * 4 * dpr, a.y + pY * 4 * dpr, b.x + pX * 4 * dpr, b.y + pY * 4 * dpr);
+          line(a.x - pX * 4 * dpr, a.y - pY * 4 * dpr, b.x - pX * 4 * dpr, b.y - pY * 4 * dpr);
+          ctx.setLineDash([]);
+          // In-opening portion solid; retracted portion dimmed.
+          seg(Math.max(s0, 0), Math.min(s1, 1), color, 5, []);
+          if (s0 < 0) seg(s0, 0, 'rgba(144,164,174,0.35)', 4, [4, 3]);
+          if (s1 > 1) seg(1, s1, 'rgba(144,164,174,0.35)', 4, [4, 3]);
+        } else {
+          seg(s0, s1, color, 5, []);
+        }
+        // Leading-edge tick (the edge the slab travels toward).
+        const lead = at(dir > 0 ? s0 : s1);
+        ctx.strokeStyle = color; ctx.lineWidth = 2;
+        line(lead.x + pX * (off - 5 * dpr), lead.y + pY * (off - 5 * dpr),
+             lead.x + pX * (off + 5 * dpr), lead.y + pY * (off + 5 * dpr));
+      }
+      lockGlyph();
+      endHandle(sep);
+      pill((hinge.x + sep.x) / 2, (hinge.y + sep.y) / 2 - 12 * dpr,
+           kind === 'pocket' ? 'Pocket' : kind === 'sliding' ? 'Sliding' : 'Sliding glass', true);
+      continue;
+    }
+
+    // ── Double / french: two mirrored quarter arcs ──────────────────────────
+    // Leaf A hinges at (x, y) and swings like a RIGHT-hand door (canvas delta
+    // −90°); leaf B hinges at the span endpoint, its closed panel points back
+    // toward the centre (canvas angle rotation+180) and it swings +90° so both
+    // leaves end up on the SAME side. Same signed-sweep arc technique as the
+    // single swing door (anticlockwise flag from the delta's sign).
+    if (kind === 'double' || kind === 'french') {
+      const mid = at(0.5);
+      const rPx = (d.w / 2) * view.scale;
+      // Rotate a point about a pivot by `deg` in CANVAS space (y-down ⇒ the
+      // standard matrix turns clockwise on screen, matching arc's angle sense).
+      const rotAbout = (hx: number, hy: number, ex: number, ey: number, deg: number) => {
+        const a = deg * Math.PI / 180, c = Math.cos(a), s = Math.sin(a);
+        const ddx = ex - hx, ddy = ey - hy;
+        return { x: hx + ddx * c - ddy * s, y: hy + ddx * s + ddy * c };
+      };
+      const leaf = (piv: { x: number; y: number }, deltaDeg: number) => {
+        const closedA = Math.atan2(mid.y - piv.y, mid.x - piv.x);
+        const openA = closedA + deltaDeg * Math.PI / 180;
+        ctx.strokeStyle = 'rgba(144,164,174,0.35)';
+        ctx.setLineDash([3, 3]); ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(piv.x, piv.y, rPx, closedA, openA, deltaDeg < 0);
+        ctx.stroke(); ctx.setLineDash([]);
+        // Closed-position hint under the live panel (click here to shut it).
+        closedHint(piv.x, piv.y, mid.x, mid.y);
+        const tip = isOpen ? rotAbout(piv.x, piv.y, mid.x, mid.y, deltaDeg * frac) : mid;
+        ctx.strokeStyle = color; ctx.lineWidth = 4;
+        line(piv.x, piv.y, tip.x, tip.y);
+        // French leaves are glazed: two short cross-ticks near the leaf middle.
+        if (kind === 'french') {
+          const mx = (piv.x + tip.x) / 2, my = (piv.y + tip.y) / 2;
+          const ux = (tip.x - piv.x) / (Math.hypot(tip.x - piv.x, tip.y - piv.y) || 1);
+          const uy = (tip.y - piv.y) / (Math.hypot(tip.x - piv.x, tip.y - piv.y) || 1);
+          ctx.strokeStyle = 'rgba(187,222,251,0.7)'; ctx.lineWidth = 1.5;
+          for (const s of [-4 * dpr, 4 * dpr]) {
+            const cx2 = mx + ux * s, cy2 = my + uy * s;
+            line(cx2 - uy * 4 * dpr, cy2 + ux * 4 * dpr, cx2 + uy * 4 * dpr, cy2 - ux * 4 * dpr);
+          }
+        }
+        // Pivot marker.
+        ctx.fillStyle = color; ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.arc(piv.x, piv.y, 4 * dpr, 0, 2 * Math.PI); ctx.fill(); ctx.stroke();
+      };
+      leaf(hinge, -90);
+      leaf(sep, +90);
+      lockGlyph();
+      endHandle(sep);
+      pill(mid.x, mid.y - 12 * dpr, kind === 'french' ? 'French' : 'Double', false);
       continue;
     }
     // Closed end: along rotation. Open end: rotation + doorOpenDeltaDeg
@@ -3845,6 +4012,9 @@ function drawDoors(ctx: CanvasRenderingContext2D, p: Planner, view: View): void 
     ctx.beginPath();
     ctx.arc(hinge.x, hinge.y, rPx, closedA, openA, openDelta < 0);
     ctx.stroke(); ctx.setLineDash([]);
+    // Closed-position hint: while OPEN, dash in the panel's closed span so the
+    // user can see (and click — hitDoor accepts it) where to shut the door.
+    closedHint(hinge.x, hinge.y, cep.x, cep.y);
     // Active panel
     const endPt = isOpen ? oep : cep;
     ctx.strokeStyle = color; ctx.lineWidth = 4;

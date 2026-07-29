@@ -268,6 +268,19 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Five new door kinds + open-door closed-span hint** (2026-07-28,
+  user-requested: "create more door types. Sliding, pocket, double
+  swing, french, sliding glass" + "open doors need a dashed line
+  showing the closed door position… so users know where to click to
+  close them"; unreleased — on main past v0.39.0). Door.kind grows to
+  eight; hinge doubles as slide side on sliding kinds;
+  doorDefaultWidth kind-switch bump; shared addLockBolts; toolbar
+  variant row lists all eight; every open door draws a dashed
+  closed-position line and hitDoor tests the closed span first
+  (kiosk click inherits); unknown kinds fall through to swing
+  (stale-chunk tested). New door-kinds-test.html (DOORKINDS PASS
+  87/87); covers 22/22, fence-gate 37/37, window 15/15, curtain
+  25/25, ruler-dims 107/107, lockoven 31/31 held.
 - **Door swing dashed arc fixed** (2026-07-28, user-reported: "the
   door opening dashed line… is not always correctly representing the
   direction the door opens"; unreleased — on main past v0.39.0). Two

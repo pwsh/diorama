@@ -17,7 +17,7 @@ import {
   isStairsKind, stairsRiseMm, stairsTreadCount,
   isTreeKind, treeHeightMm,
   isVehicleKind, evStatusOf, evStatusColor, carChargeState,
-  doorOpenFraction, GARAGE_DOOR_H,
+  doorOpenFraction, GARAGE_DOOR_H, doorSlideDir,
   alarmHeight, alarmStateColor, ALARM_DEFAULTS, ALARM_PLATE_DEPTH_MM,
   calendarHeight, CALENDAR_DEFAULTS, CALENDAR_PLATE_DEPTH_MM,
   thermostatHeight, THERMO_DEFAULTS, THERMO_PLATE_DEPTH_MM, hvacModeColor, hvacAirflow, HVAC_VENT_COLORS,
@@ -42,7 +42,7 @@ import {
 } from './geometry.js';
 import { ALERT_BEACON_DEFAULTS, alertBeaconState, alertBeaconColor, alertBeaconAlarming, isAlertDomain } from './alerts.js';
 import { northMarkerPos } from './compass.js';
-import type { Door, Window as WindowType, WindowCurtainStyle, EnvSensor, BleProxy, AlarmPanel, CalendarPanel, ThermostatFixture, SafetySensor, AlertBeacon, RobotFixture, CameraFixture, ProjectorFixture, ValveFixture, SprinklerZone, FlagpoleFixture, PlugFixture, PresenceZone, InfoCard, ActionButton, ObjectRecipe, ActivityKind, Pool } from './types.js';
+import type { Door, DoorKind, Window as WindowType, WindowCurtainStyle, EnvSensor, BleProxy, AlarmPanel, CalendarPanel, ThermostatFixture, SafetySensor, AlertBeacon, RobotFixture, CameraFixture, ProjectorFixture, ValveFixture, SprinklerZone, FlagpoleFixture, PlugFixture, PresenceZone, InfoCard, ActionButton, ObjectRecipe, ActivityKind, Pool } from './types.js';
 import { flagEntry } from './flags.js';
 
 // The subset of Planner.RobotState the renderer reads (structural — keeps the
@@ -7706,6 +7706,18 @@ export class ThreeDRenderer {
     // Neutral panel material for garage slats — the roll-up motion signals state,
     // not a color change (the grey slabs read as a real overhead door).
     const garageMat = this._mat({ color: 0xb0b6bc, roughness: 0.55, metalness: 0.2 });
+    // Glazing for french / sliding-glass leaves: the WINDOW glass idiom (light
+    // grey, translucent, DoubleSide, depthWrite off). Transparent ⇒ _addOutlines
+    // skips it automatically, so no inverted-hull shell wraps a pane.
+    const doorGlassMat = this._mat({
+      color: 0xc9ced4, transparent: true, opacity: 0.16,
+      side: THREE.DoubleSide, depthWrite: false,
+    });
+    // Opaque stiles / rails / muntins / tracks. Deliberately THICKER than the
+    // glass they cross so no face is ever coplanar with a pane (the
+    // coincident-face gotcha — flat toon banding hatches otherwise).
+    const doorFrameMat = this._mat({ color: 0x9aa4ad, roughness: 0.6, metalness: 0.1 });
+    const trackMat = this._mat({ color: 0x78848c, roughness: 0.5, metalness: 0.3 });
     for (const d of doors) {
       const st = itemState(d, stateOf);
       // Fractional open state (0..1): binary sensors resolve to 0|1; a cover
@@ -7728,8 +7740,51 @@ export class ThreeDRenderer {
       const hp = this._w(d.x, d.y, this._openingBaseY(dc.x, dc.y));
       hinge.position.set(hp.x, hp.y, hp.z);
       const rotR = -((d.rotation || 0) * Math.PI / 180);
+      const kind = (d.kind ?? 'swing') as DoorKind;
 
-      if ((d.kind ?? 'swing') === 'garage') {
+      // Lock deadbolt / latch: an emissive box near the panel's FREE edge,
+      // rendered on BOTH faces so the state reads from either side. Red =
+      // locked, green = unlocked, grey = unknown/unavailable. State resolves
+      // from the bound lock.* entity OR the unbound lockLocalState. Clicking a
+      // bolt toggles the lock (userData.kind='lock' → raycast walker → planner).
+      // Each bolt's inner cap is buried inside the panel so it isn't coplanar
+      // with the panel face (coincident-face gotcha). Shared by every kind —
+      // only the anchor point differs (leading stile / meeting stile / pull).
+      const lockSt = d.lockEntity
+        ? itemState({ entity_id: d.lockEntity }, stateOf)?.state
+        : d.lockLocalState;
+      const hasLock = !!(d.lockEntity || d.lockLocalState);
+      const addLockBolts = (parent: THREE.Object3D, x: number, y: number,
+                            zCenter: number, zHalf: number,
+                            size: [number, number, number] = [70, 100, 30]) => {
+        if (!hasLock) return;
+        // Shared color resolution (jammed=amber, transitional=target color, etc).
+        const lc = hexToInt(lockGlyphColor(lockSt));
+        // Transitional (locking/unlocking/opening) reads dimmer; display-only
+        // locks further reduce emissive as a "look-but-don't-touch" cue.
+        let ei = lockSt ? 0.85 : 0.25;
+        if (lockGlyphTransitional(lockSt)) ei = 0.5;
+        if (d.lockControl === 'display') ei *= 0.65;
+        const boltMat = this._mat({ color: lc, emissive: lc, emissiveIntensity: ei });
+        for (const zs of [1, -1]) {
+          const bolt = new THREE.Mesh(new THREE.BoxGeometry(size[0], size[1], size[2]), boltMat);
+          bolt.position.set(x, y, zCenter + zs * (zHalf + 10));
+          bolt.userData.outlineSkip = true;
+          bolt.userData.kind = 'lock';
+          bolt.userData.fixtureId = d.id;
+          bolt.userData.entity_id = d.lockEntity ?? null;
+          parent.add(bolt);
+        }
+      };
+      const addBox = (parent: THREE.Object3D, sx: number, sy: number, sz: number,
+                      m: THREE.Material, px: number, py: number, pz: number) => {
+        const box = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz), m);
+        box.position.set(px, py, pz);
+        parent.add(box);
+        return box;
+      };
+
+      if (kind === 'garage') {
         // Segmented overhead door: a stack of N horizontal slats filling the
         // opening (0..GARAGE_DOOR_H). Opening rolls the door UP — the bottom
         // edge lifts by frac·H, and the portion that passes the lintel folds
@@ -7759,6 +7814,122 @@ export class ThreeDRenderer {
         continue;
       }
 
+      // ── Sliding family (barn slide / pocket / sliding glass) ───────────────
+      // These TRANSLATE their panel along the wall — the hinge group never
+      // swings, so its rotation is the wall axis alone. Local −X runs hinge →
+      // endpoint, so a panel retracting toward the (x, y) hinge end moves in
+      // +X: `dir` (+1 default / −1 for the 'left' slide side) carries that sign.
+      if (kind === 'sliding' || kind === 'pocket' || kind === 'sliding_glass') {
+        hinge.rotation.y = rotR;
+        const dir = doorSlideDir(d);
+        const w = d.w;
+        const closedX = -w / 2;                       // closed slab centre
+        if (kind === 'sliding') {
+          // Barn slab: hung PROUD of the wall face (+Z) off a top track that
+          // spans 2× the opening so the parked slab has somewhere to go.
+          const zOff = DOOR_T;
+          const slabX = closedX + dir * frac * w;
+          addBox(hinge, w * 2, 60, 44, trackMat, closedX + dir * w / 2, DOOR_H + 92, zOff);
+          const slab = addBox(hinge, w - 20, DOOR_H, DOOR_T, mat, slabX, DOOR_H / 2, zOff);
+          slab.userData.doorPanel = 'slide';
+          for (const s of [-1, 1])
+            addBox(hinge, 44, 116, 26, trackMat, slabX + s * w * 0.3, DOOR_H + 50, zOff);
+          // Deadbolt on the slab's LEADING edge (the side it travels toward).
+          addLockBolts(hinge, slabX + dir * (w / 2 - 120), DOOR_H * 0.5, zOff, DOOR_T / 2);
+        } else if (kind === 'pocket') {
+          // Slab INSIDE the wall plane, thinner than the cavity; it retracts
+          // into the adjacent solid run, which (being opaque) hides it.
+          const SLAB_T = DOOR_T * 0.6;
+          const slabX = closedX + dir * frac * w;
+          const slab = addBox(hinge, w - 20, DOOR_H, SLAB_T, mat, slabX, DOOR_H / 2, 0);
+          slab.userData.doorPanel = 'slide';
+          // Pocket mouth jamb: a slim strip at the retracting end so the kind
+          // still reads when the slab is fully closed (the cavity is invisible).
+          addBox(hinge, 30, DOOR_H, DOOR_T + 24, doorFrameMat, dir > 0 ? 0 : -w, DOOR_H / 2, 0);
+          // Edge pull (a pocket slab has no room for a proud deadbolt).
+          addLockBolts(hinge, slabX + dir * (w / 2 - 90), DOOR_H * 0.5, 0, SLAB_T / 2,
+                       [46, 74, 18]);
+        } else {
+          // Sliding glass: two framed panes at slightly different depths so
+          // they pass. The FIXED pane sits on the STACK side (the slide-side
+          // end) and the mover starts on the other half, ending BEHIND it.
+          const pw = w / 2 + 60;                      // small meeting overlap
+          const travel = w - pw;
+          const fixedX = dir > 0 ? -pw / 2 : -w + pw / 2;
+          const moverX = (dir > 0 ? -w + pw / 2 : -pw / 2) + dir * frac * travel;
+          const pane = (cx: number, z: number, moving: boolean) => {
+            const g = new THREE.Group();
+            g.position.set(cx, 0, z);
+            g.userData.doorPanel = moving ? 'slide' : 'fixed';
+            const railT = 80, stileW = 70, panelT = 44;
+            addBox(g, pw, railT, panelT, doorFrameMat, 0, DOOR_H - railT / 2, 0);
+            addBox(g, pw, railT, panelT, doorFrameMat, 0, railT / 2, 0);
+            for (const s of [-1, 1])
+              addBox(g, stileW, DOOR_H, panelT, doorFrameMat, s * (pw - stileW) / 2, DOOR_H / 2, 0);
+            // Glass inset into the frame: THINNER in z (20 vs 44) and lapped
+            // 8 mm under the stiles/rails, so no face is coplanar with a bar.
+            addBox(g, pw - 2 * stileW + 8, DOOR_H - 2 * railT + 8, 20, doorGlassMat,
+                   0, DOOR_H / 2, 0);
+            hinge.add(g);
+            return g;
+          };
+          pane(fixedX, 26, false);
+          pane(moverX, -26, true);
+          // Latch on the moving pane's leading stile.
+          addLockBolts(hinge, moverX + dir * (pw / 2 - 40), DOOR_H * 0.5, -26, 22, [50, 84, 24]);
+        }
+        this._addOutlines(hinge);
+        this._doorGroup.add(hinge);
+        continue;
+      }
+
+      // ── Double / french: two mirrored half-width leaves ────────────────────
+      // Leaf A hinges at the (x, y) end, leaf B at the endpoint; they meet at
+      // the span centre and swing to the SAME side (`hinge` is ignored — the
+      // pair is symmetric). Each leaf carries the swing math at half width.
+      if (kind === 'double' || kind === 'french') {
+        hinge.rotation.y = rotR;
+        const w = d.w, half = w / 2;
+        const swing = (Math.PI / 2) * frac;
+        const leafA = new THREE.Group();               // at the hinge end
+        leafA.rotation.y = swing;
+        leafA.userData.doorLeaf = 'a';
+        const leafB = new THREE.Group();               // at the endpoint end
+        leafB.position.set(-w, 0, 0);
+        leafB.rotation.y = -swing;
+        leafB.userData.doorLeaf = 'b';
+        hinge.add(leafA, leafB);
+        // sign −1 = the leaf extends toward local −X (leaf A), +1 = +X (leaf B).
+        const buildLeaf = (g: THREE.Group, sign: number) => {
+          const leafW = half - 8;
+          const cx = sign * (leafW / 2);
+          if (kind === 'double') {
+            addBox(g, leafW, DOOR_H, DOOR_T, mat, cx, DOOR_H / 2, 0);
+            return;
+          }
+          // French: stile/rail frame + a glass pane + a 2×3 muntin grid. The
+          // bars are DEEPER than the pane (42 vs 20) so they read as proud
+          // grid lines instead of hatching against a coplanar glass face.
+          const railT = 90, stileW = 80;
+          addBox(g, leafW, railT, DOOR_T, doorFrameMat, cx, DOOR_H - railT / 2, 0);
+          addBox(g, leafW, railT, DOOR_T, doorFrameMat, cx, railT / 2, 0);
+          for (const s of [-1, 1])
+            addBox(g, stileW, DOOR_H, DOOR_T, doorFrameMat, cx + s * (leafW - stileW) / 2, DOOR_H / 2, 0);
+          const gw = leafW - 2 * stileW, gh = DOOR_H - 2 * railT;
+          addBox(g, gw + 8, gh + 8, 20, doorGlassMat, cx, DOOR_H / 2, 0);
+          addBox(g, 26, gh, DOOR_T * 0.7, doorFrameMat, cx, DOOR_H / 2, 0);   // 2 columns
+          for (const s of [-1, 1])                                            // 3 rows
+            addBox(g, gw, 26, DOOR_T * 0.7, doorFrameMat, cx, DOOR_H / 2 + s * gh / 6, 0);
+        };
+        buildLeaf(leafA, -1);
+        buildLeaf(leafB, +1);
+        // Deadbolt on leaf A, at the MEETING stile (the span centre when shut).
+        addLockBolts(leafA, -(half - 90), DOOR_H * 0.5, 0, DOOR_T / 2);
+        this._addOutlines(hinge);
+        this._doorGroup.add(hinge);
+        continue;
+      }
+
       // Swing door. 2D rotation is screen-CW; the X-mirror flips the sense so we
       // negate. Open swing direction depends on hinge side: right-hinge swings
       // screen-CCW (+π/2 around scene-Y), left-hinge swings screen-CW (-π/2).
@@ -7767,7 +7938,7 @@ export class ThreeDRenderer {
       const openR = -(doorOpenDeltaDeg(d) * Math.PI / 180) * frac;
       hinge.rotation.y = rotR + openR;
 
-      if ((d.kind ?? 'swing') === 'gate') {
+      if (kind === 'gate') {
         // Gate: a picket-styled swinging panel (flat boards, shorter ~1100) on
         // the SAME hinge/swing math as a swing door — top/bottom rails + vertical
         // pickets, all in `mat` (green while open). The shared lock/doorbell/
@@ -7793,35 +7964,8 @@ export class ThreeDRenderer {
         panel.position.set(-d.w / 2, DOOR_H / 2, 0);
         hinge.add(panel);
       }
-      // Lock deadbolt: an emissive box near the free edge (opposite the hinge),
-      // rendered on BOTH panel faces so the state reads from either side. Red =
-      // locked, green = unlocked, grey = unknown/unavailable. State resolves from
-      // the bound lock.* entity OR the unbound lockLocalState. Clicking a bolt
-      // toggles the lock (userData.kind='lock' → raycast walker → planner). Each
-      // bolt's inner cap is buried inside the panel so it isn't coplanar with the
-      // panel face (coincident-face gotcha).
-      const lockSt = d.lockEntity
-        ? itemState({ entity_id: d.lockEntity }, stateOf)?.state
-        : d.lockLocalState;
-      if (d.lockEntity || d.lockLocalState) {
-        // Shared color resolution (jammed=amber, transitional=target color, etc).
-        const lc = hexToInt(lockGlyphColor(lockSt));
-        // Transitional (locking/unlocking/opening) reads dimmer; display-only
-        // locks further reduce emissive as a "look-but-don't-touch" cue.
-        let ei = lockSt ? 0.85 : 0.25;
-        if (lockGlyphTransitional(lockSt)) ei = 0.5;
-        if (d.lockControl === 'display') ei *= 0.65;
-        const boltMat = this._mat({ color: lc, emissive: lc, emissiveIntensity: ei });
-        for (const zc of [DOOR_T / 2 + 10, -(DOOR_T / 2 + 10)]) {
-          const bolt = new THREE.Mesh(new THREE.BoxGeometry(70, 100, 30), boltMat);
-          bolt.position.set(-d.w + 100, DOOR_H * 0.5, zc);
-          bolt.userData.outlineSkip = true;
-          bolt.userData.kind = 'lock';
-          bolt.userData.fixtureId = d.id;
-          bolt.userData.entity_id = d.lockEntity ?? null;
-          hinge.add(bolt);
-        }
-      }
+      // Deadbolt near the free edge (opposite the hinge) — see addLockBolts.
+      addLockBolts(hinge, -d.w + 100, DOOR_H * 0.5, 0, DOOR_T / 2);
       this._addOutlines(hinge);
       this._doorGroup.add(hinge);
     }

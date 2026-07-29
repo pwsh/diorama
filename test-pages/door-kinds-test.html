@@ -1,0 +1,412 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>door kinds test</title>
+<style>html,body{margin:0;background:#111;color:#ccc;font:12px sans-serif}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<!--
+  Five new Door.kinds: sliding / pocket / double / french / sliding_glass, plus
+  the open-door "closed position" dashed hint + its hitDoor click target.
+  Pure helpers via geometry.mod.js; the 3D builds via the BUILT three-renderer
+  chunk; the 2D glyphs + hit tests via ONE COMBINED canvas bundle (canvas-render
+  and canvas-hit must share a module instance — the flights-ui-test precedent).
+
+  Harness build (from the repo root; NEVER reuse stale bundles):
+    npm run build
+    H=/tmp/diorama-harness-doorkinds
+    rm -rf "$H"; mkdir -p "$H"; cp -r dist/* "$H"/
+    cp test-pages/door-kinds-test.html "$H"/
+    npx esbuild src/geometry.ts --bundle --format=esm --outfile="$H"/geometry.mod.js
+    T=$(mktemp -d); cp -r src/* "$T"/; cp tsconfig.json "$T"/../ 2>/dev/null
+    cp test-pages/fake-avatar-store.ts "$T"/avatar-store.ts
+    printf "export * from './canvas-render.js';\nexport * from './canvas-hit.js';\n" > "$T"/canvas2d-entry.ts
+    npx esbuild "$T"/planner.ts       --bundle --format=esm --outfile="$H"/planner.mod.js
+    npx esbuild "$T"/canvas2d-entry.ts --bundle --format=esm --outfile="$H"/canvas-render.mod.js
+  Run headless (serve over http — Chrome blocks dynamic module imports on file://):
+    (cd "$H" && python3 -m http.server 8841 &)
+    node scratchpad/title-probe.mjs "http://localhost:8841/door-kinds-test.html"
+-->
+<script type="module">
+ try {
+  const V = '?v=' + Date.now();
+  const geo = await import('./geometry.mod.js' + V);
+  const mod = await import('./assets/three-renderer.js' + V);
+  const { Planner } = await import('./planner.mod.js' + V);
+  const C2D = await import('./canvas-render.mod.js' + V);
+  const { drawAll, computeView, mmToPx } = C2D;
+  const { hitDoor, hitDoorEnd } = C2D;
+  const { isSlidingDoorKind, isDoubleLeafDoorKind, isGlassDoorKind, doorSlideDir,
+          doorDefaultWidth, DOOR_DEFAULT_W, wallCutsForSegment } = geo;
+
+  const results = [];
+  const ok = (name, cond, detail = '') => results.push(`${cond ? 'ok' : 'FAIL'}:${name}${detail ? '(' + detail + ')' : ''}`);
+  const near = (a, b, t = 1e-6) => Math.abs(a - b) <= t;
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  async function waitFor(cond, tries = 600) {
+    for (let i = 0; i < tries; i++) { if (cond()) return true; await sleep(4); }
+    return !!cond();
+  }
+
+  // ═══ 1. Pure kind-family helpers ══════════════════════════════════════════
+  ok('fam_sliding',  isSlidingDoorKind('sliding') && isSlidingDoorKind('pocket')
+                     && isSlidingDoorKind('sliding_glass'));
+  ok('fam_sliding_neg', !isSlidingDoorKind('swing') && !isSlidingDoorKind('garage')
+                     && !isSlidingDoorKind('double') && !isSlidingDoorKind(undefined));
+  ok('fam_double',   isDoubleLeafDoorKind('double') && isDoubleLeafDoorKind('french'));
+  ok('fam_double_neg', !isDoubleLeafDoorKind('swing') && !isDoubleLeafDoorKind('sliding'));
+  ok('fam_glass',    isGlassDoorKind('french') && isGlassDoorKind('sliding_glass')
+                     && !isGlassDoorKind('sliding') && !isGlassDoorKind('double'));
+  ok('slide_dir_default', doorSlideDir({}) === 1 && doorSlideDir({ hinge: 'right' }) === 1);
+  ok('slide_dir_left',    doorSlideDir({ hinge: 'left' }) === -1);
+  ok('defw_swing',   doorDefaultWidth('swing') === 800 && DOOR_DEFAULT_W === 800);
+  ok('defw_garage',  doorDefaultWidth('garage') === 2400);
+  ok('defw_wide',    doorDefaultWidth('double') === 1500 && doorDefaultWidth('french') === 1500
+                     && doorDefaultWidth('sliding_glass') === 1500);
+  ok('defw_narrow',  doorDefaultWidth('sliding') === 800 && doorDefaultWidth('pocket') === 800);
+  ok('defw_unknown', doorDefaultWidth('nonsense') === 800 && doorDefaultWidth(undefined) === 800);
+
+  // ═══ Renderer setup ═══════════════════════════════════════════════════════
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+  const scene3d = { preset: 'day', floorColor: '#8a7860', floorTex: 'none', wallColor: '#cfd2d6' };
+  const wallY = 2500, FW = 12000, FD = 5000;
+  const wallA = { x: 500, y: wallY }, wallB = { x: 11500, y: wallY };
+  const mkFloor = (doors, over = {}) => Object.assign({
+    id: 'f1', name: 'T', w: FW, d: FD,
+    walls: [{ id: 'w1', points: [wallA, wallB] }],
+    furniture: [], lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors, windows: [], bg: null, model3d: null, look3d: null, rooms: [],
+  }, over);
+  const mkDoor = (over) => Object.assign(
+    { id: 'd1', x: 4000, y: wallY, w: 900, rotation: 0, entity_id: 'cover.d' }, over);
+  // Build a floor + doors at open fraction `frac`; return the door's hinge group.
+  const build = (door, frac, floorOver = {}, sc = scene3d) => {
+    const st = { 'cover.d': { state: frac <= 0 ? 'closed' : 'open',
+                              attributes: { current_position: Math.round(frac * 100) } } };
+    r.updateFloor(mkFloor([door], floorOver), sc);
+    r.updateDoorsWindows([door], [], id => st[id] || null);
+    return r._doorGroup.children[0];
+  };
+  const realMeshes = (o) => { const a = []; o.traverse(m => { if (m.isMesh && !m.userData?.outline) a.push(m); }); return a; };
+  const transparentMats = (o) => realMeshes(o).filter(m => m.material && m.material.transparent);
+  const findByData = (o, key, val) => {
+    let found = null;
+    o.traverse(n => { if (!found && n.userData && n.userData[key] === val) found = n; });
+    return found;
+  };
+  const allByData = (o, key) => { const a = []; o.traverse(n => { if (n.userData && n.userData[key] != null) a.push(n); }); return a; };
+  // World-mm x of an object inside the (rotation-0) hinge group: scene x maps
+  // back through _w's mirror, wx = FW/2 − sceneX.
+  const worldXOf = (grp, obj) => FW / 2 - (grp.position.x + obj.position.x);
+
+  // ═══ 2. Each new kind BUILDS against a wall ═══════════════════════════════
+  const KINDS = ['sliding', 'pocket', 'double', 'french', 'sliding_glass'];
+  for (const k of KINDS) {
+    const g = build(mkDoor({ kind: k, w: k === 'sliding' || k === 'pocket' ? 900 : 1500 }), 0);
+    ok(`build_${k}_group`, !!g && g.type === 'Group');
+    const meshes = realMeshes(g);
+    ok(`build_${k}_meshes`, meshes.length >= 2 && meshes.length <= 40, String(meshes.length));
+  }
+  // Glazed kinds carry translucent panes; solid ones do not.
+  {
+    const gf = build(mkDoor({ kind: 'french', w: 1500 }), 0);
+    ok('french_has_glass', transparentMats(gf).length >= 2, String(transparentMats(gf).length));
+    const gs = build(mkDoor({ kind: 'sliding_glass', w: 1500 }), 0);
+    ok('slidingglass_has_glass', transparentMats(gs).length >= 2, String(transparentMats(gs).length));
+    const gd = build(mkDoor({ kind: 'double', w: 1500 }), 0);
+    ok('double_no_glass', transparentMats(gd).length === 0, String(transparentMats(gd).length));
+    const gsl = build(mkDoor({ kind: 'sliding' }), 0);
+    ok('sliding_no_glass', transparentMats(gsl).length === 0, String(transparentMats(gsl).length));
+    // Two leaf subgroups on the double-leaf kinds — exactly two.
+    ok('double_two_leaves', allByData(gd, 'doorLeaf').length === 2, String(allByData(gd, 'doorLeaf').length));
+    ok('french_two_leaves', allByData(gf, 'doorLeaf').length === 2, String(allByData(gf, 'doorLeaf').length));
+    // French muntins: more opaque bars per leaf than the plain double panel.
+    ok('french_more_parts', realMeshes(gf).length > realMeshes(gd).length,
+       `${realMeshes(gf).length} vs ${realMeshes(gd).length}`);
+  }
+
+  // ═══ 3. Open fraction: sliding + pocket TRANSLATE by frac·w ═══════════════
+  for (const k of ['sliding', 'pocket']) {
+    const d = mkDoor({ kind: k, w: 900 });
+    const g0 = build(d, 0);
+    const s0 = findByData(g0, 'doorPanel', 'slide');
+    const x0 = s0.position.x;
+    const g6 = build(d, 0.6);
+    const s6 = findByData(g6, 'doorPanel', 'slide');
+    const x6 = s6.position.x;
+    // Default (right) slide side: local +X, i.e. toward the (x, y) hinge end.
+    ok(`${k}_translates`, near(x6 - x0, 0.6 * 900, 1), `${x0.toFixed(0)}→${x6.toFixed(0)}`);
+    ok(`${k}_no_rotate`, near(g6.rotation.y, 0, 1e-6) && near(s6.rotation.y, 0, 1e-6));
+    // Left slide side mirrors the travel.
+    const dl = mkDoor({ kind: k, w: 900, hinge: 'left' });
+    const gl = build(dl, 0.6);
+    const sl = findByData(gl, 'doorPanel', 'slide');
+    ok(`${k}_left_mirrors`, near(sl.position.x - x0, -0.6 * 900, 1), sl.position.x.toFixed(0));
+  }
+  // Fully closed vs fully open span check (a 1.0 slab clears the opening).
+  {
+    const d = mkDoor({ kind: 'sliding', w: 900 });
+    const g1 = build(d, 1);
+    const s1 = findByData(g1, 'doorPanel', 'slide');
+    ok('sliding_full_clears', near(s1.position.x, 900 / 2, 1), s1.position.x.toFixed(0));
+  }
+
+  // ═══ 4. Pocket: the retracted slab sits inside the adjacent SOLID run ═════
+  {
+    const d = mkDoor({ kind: 'pocket', w: 900 });
+    const g = build(d, 1);
+    const slab = findByData(g, 'doorPanel', 'slide');
+    const cx = worldXOf(g, slab);
+    const halfW = slab.geometry.parameters.width / 2;
+    const lo = cx - halfW, hi = cx + halfW;
+    const { solids } = wallCutsForSegment(wallA, wallB, [d], []);
+    // t values are mm from wallA; convert the slab span into the same frame.
+    const t0 = lo - wallA.x, t1 = hi - wallA.x;
+    const inside = solids.some(s => t0 >= s.t0 - 1 && t1 <= s.t1 + 1);
+    ok('pocket_retracts_into_wall', inside,
+       `slab t=[${t0.toFixed(0)},${t1.toFixed(0)}] solids=${solids.map(s => `${s.t0.toFixed(0)}-${s.t1.toFixed(0)}`).join('|')}`);
+    // …and when CLOSED it fills the opening instead.
+    const gc = build(d, 0);
+    const sc2 = findByData(gc, 'doorPanel', 'slide');
+    const cc = worldXOf(gc, sc2) - wallA.x;
+    const inOpening = solids.every(s => !(cc >= s.t0 && cc <= s.t1));
+    ok('pocket_closed_in_opening', inOpening, cc.toFixed(0));
+  }
+
+  // ═══ 5. Double / french leaves rotate OPPOSITE signs ══════════════════════
+  for (const k of ['double', 'french']) {
+    const d = mkDoor({ kind: k, w: 1500 });
+    const g0 = build(d, 0);
+    const l0 = allByData(g0, 'doorLeaf');
+    ok(`${k}_closed_flat`, l0.every(l => near(l.rotation.y, 0, 1e-6)));
+    const g1 = build(d, 1);
+    const l1 = allByData(g1, 'doorLeaf');
+    const a = l1.find(l => l.userData.doorLeaf === 'a').rotation.y;
+    const b = l1.find(l => l.userData.doorLeaf === 'b').rotation.y;
+    ok(`${k}_opposite_signs`, a * b < 0 && near(Math.abs(a), Math.PI / 2, 1e-6)
+       && near(Math.abs(b), Math.PI / 2, 1e-6), `${a.toFixed(3)} / ${b.toFixed(3)}`);
+    // Partial cover position swings both leaves partway.
+    const gh = build(d, 0.5);
+    const ah = allByData(gh, 'doorLeaf').find(l => l.userData.doorLeaf === 'a').rotation.y;
+    ok(`${k}_partial`, near(Math.abs(ah), Math.PI / 4, 1e-6), ah.toFixed(3));
+    // Leaf B hinges at the span endpoint (local −w), leaf A at the hinge (0).
+    const la = l1.find(l => l.userData.doorLeaf === 'a');
+    const lb = l1.find(l => l.userData.doorLeaf === 'b');
+    ok(`${k}_leaf_pivots`, near(la.position.x, 0, 1e-6) && near(lb.position.x, -1500, 1e-6),
+       `${la.position.x} / ${lb.position.x}`);
+  }
+
+  // ═══ 6. Sliding glass: mover translates, fixed pane does NOT ══════════════
+  {
+    const d = mkDoor({ kind: 'sliding_glass', w: 1500 });
+    const g0 = build(d, 0);
+    const f0 = findByData(g0, 'doorPanel', 'fixed').position.x;
+    const m0 = findByData(g0, 'doorPanel', 'slide').position.x;
+    const g1 = build(d, 1);
+    const f1 = findByData(g1, 'doorPanel', 'fixed').position.x;
+    const m1 = findByData(g1, 'doorPanel', 'slide').position.x;
+    ok('sg_fixed_static', near(f0, f1, 1e-6), `${f0.toFixed(0)}/${f1.toFixed(0)}`);
+    ok('sg_mover_moves', Math.abs(m1 - m0) > 100, `${m0.toFixed(0)}→${m1.toFixed(0)}`);
+    // Fully open, the mover overlaps the fixed pane (it parks behind it).
+    ok('sg_parks_behind', Math.abs(m1 - f1) < 120, Math.abs(m1 - f1).toFixed(0));
+    // …at a different depth so they can pass.
+    const zf = findByData(g1, 'doorPanel', 'fixed').position.z;
+    const zm = findByData(g1, 'doorPanel', 'slide').position.z;
+    ok('sg_depth_offset', Math.abs(zf - zm) > 20, `${zf}/${zm}`);
+  }
+
+  // ═══ 7. Locks: every new kind tags clickable bolts ════════════════════════
+  for (const k of KINDS) {
+    const g = build(mkDoor({ kind: k, w: 1200, lockLocalState: 'locked' }), 0);
+    const bolts = [];
+    g.traverse(n => { if (n.userData?.kind === 'lock') bolts.push(n); });
+    ok(`lock_${k}`, bolts.length === 2 && bolts.every(b => b.userData.fixtureId === 'd1'),
+       String(bolts.length));
+  }
+
+  // ═══ 8. Grade riding: a door on a graded yard wall hangs with it ══════════
+  // (fence-gate-test §9 technique — the group's own y IS the segment base.)
+  {
+    const GL = -3000;
+    const houseLoop = [{ x: 500, y: 500 }, { x: 3000, y: 500 }, { x: 3000, y: 2000 },
+                       { x: 500, y: 2000 }, { x: 500, y: 500 }];
+    const walls = [{ id: 'hw', kind: 'full', points: houseLoop },
+                   { id: 'yf', kind: 'fence_privacy', points: [{ x: 6000, y: 4000 }, { x: 10000, y: 4000 }] }];
+    for (const k of KINDS) {
+      const yd = mkDoor({ id: 'd1', x: 7000, y: 4000, w: 900, kind: k, entity_id: null });
+      r.updateFloor(mkFloor([yd], { walls }), { ...scene3d, groundLevelMm: GL });
+      r.updateDoorsWindows([yd], [], () => null);
+      const g = r._doorGroup.children[0];
+      ok(`grade_${k}`, Math.abs(g.position.y - GL) < 1, String(g.position.y));
+    }
+    // groundLevelMm 0 ⇒ byte-identical base (no drift).
+    const yd = mkDoor({ id: 'd1', x: 7000, y: 4000, w: 900, kind: 'french', entity_id: null });
+    r.updateFloor(mkFloor([yd], { walls }), scene3d);
+    r.updateDoorsWindows([yd], [], () => null);
+    ok('grade_zero_identical', r._doorGroup.children[0].position.y === 0);
+  }
+
+  // ═══ 9. Stale-chunk direction: an UNKNOWN kind falls back to swing ════════
+  {
+    const known = build(mkDoor({ kind: 'swing', w: 900 }), 0);
+    const kMesh = realMeshes(known).length, kRot = known.rotation.y;
+    const unk = build(mkDoor({ kind: 'totally_new_kind', w: 900 }), 0);
+    ok('unknown_kind_builds', realMeshes(unk).length === kMesh, `${realMeshes(unk).length} vs ${kMesh}`);
+    const unkOpen = build(mkDoor({ kind: 'totally_new_kind', w: 900 }), 1);
+    const knownOpen = build(mkDoor({ kind: 'swing', w: 900 }), 1);
+    ok('unknown_kind_swings', near(unkOpen.rotation.y, knownOpen.rotation.y, 1e-9)
+       && !near(knownOpen.rotation.y, kRot, 1e-6),
+       `${unkOpen.rotation.y.toFixed(3)} vs ${knownOpen.rotation.y.toFixed(3)}`);
+  }
+
+  // ═══ 2D harness (real Planner + the real drawAll / hit tests) ═════════════
+  class FakeHa {
+    constructor(seed) { this.map = new Map(); for (const [k, v] of Object.entries(seed || {})) this.map.set(k, JSON.parse(JSON.stringify(v))); this.states = {}; this._s = []; this._c = []; }
+    connect() { for (const cb of this._c) cb('connected'); for (const cb of this._s) cb(this.states, undefined); }
+    onState(fn) { this._s.push(fn); } onConn(fn) { this._c.push(fn); }
+    callService() { return Promise.resolve(); }
+    async getHistory() { return {}; } async getWeatherForecasts() { return null; }
+    async getDevices() { return []; } async getEntityRegistry() { return []; } async updateEntityRegistry() { return true; }
+    async getUserData(k) { return this.map.has(k) ? JSON.parse(JSON.stringify(this.map.get(k))) : null; }
+    async setUserData(k, v) { this.map.set(k, JSON.parse(JSON.stringify(v))); return true; }
+    async refreshStates() {} async subscribeMqtt() { return () => {}; } async publishMqtt() {}
+  }
+  const flat2d = (doors) => ({ id: 'f1', name: 'Home', w: 8000, d: 5000,
+    walls: [{ id: 'w1', points: [{ x: 500, y: 2500 }, { x: 7500, y: 2500 }] }],
+    furniture: [], lights: [], switches: [], sensors: [], motionSensors: [],
+    envSensors: [], bleProxies: [], doors, windows: [], rooms: [], bg: null });
+  async function mkPlanner(doors, states) {
+    localStorage.removeItem('diorama:store:v1'); localStorage.removeItem('diorama:configs');
+    const seed = { v: 2, floors: [flat2d(doors)], currentFloorId: 'f1', activeSensorId: null,
+      coverage: true, imperial: false, showDetails: false, useRawTargets: false };
+    const p = new Planner();
+    const ha = new FakeHa({ diorama: seed });
+    ha.states = states || {};
+    p.connectWith(ha);
+    await waitFor(() => p.configIndex !== null);
+    return p;
+  }
+  const cvs = document.createElement('canvas'); cvs.width = 600; cvs.height = 400;
+  const ctx = cvs.getContext('2d', { willReadFrequently: true });
+  const view = computeView(cvs, 8000, 5000, null, 1);
+  const snap = () => ctx.getImageData(0, 0, cvs.width, cvs.height).data.slice();
+  const diffCount = (base) => {
+    const d = ctx.getImageData(0, 0, cvs.width, cvs.height).data;
+    let n = 0;
+    for (let i = 0; i < d.length; i += 4)
+      if (d[i] !== base[i] || d[i + 1] !== base[i + 1] || d[i + 2] !== base[i + 2]) n++;
+    return n;
+  };
+  const P0 = await mkPlanner([]);
+  drawAll(ctx, P0, view, null);
+  const blank = snap();
+
+  // 10. Per-kind 2D smoke: each kind paints a visible glyph.
+  const D2 = (over) => Object.assign({ id: 'dd', x: 3000, y: 2500, w: 1200, rotation: 0,
+                                       entity_id: null, label: '' }, over);
+  for (const k of [...KINDS, 'swing', 'garage']) {
+    const p = await mkPlanner([D2({ kind: k })]);
+    drawAll(ctx, p, view, null);
+    ok(`draw2d_${k}`, diffCount(blank) > 200, String(diffCount(blank)));
+  }
+
+  // 11. OPEN doors paint the dashed closed-position hint (more pixels along the
+  //     closed span than the closed render does NOT have — the panel has left).
+  //     Count changed pixels in a thin band around the closed span, EXCLUDING
+  //     the hinge/handle blobs at the ends.
+  const spanBand = (base, y, x0, x1) => {
+    const d = ctx.getImageData(0, 0, cvs.width, cvs.height).data;
+    let n = 0;
+    for (let yy = Math.round(y) - 2; yy <= Math.round(y) + 2; yy++)
+      for (let xx = Math.round(x0); xx <= Math.round(x1); xx++) {
+        const i = (yy * cvs.width + xx) * 4;
+        if (d[i] !== base[i] || d[i + 1] !== base[i + 1] || d[i + 2] !== base[i + 2]) n++;
+      }
+    return n;
+  };
+  {
+    // A swing door OPEN: the live panel swings away, but the dashed hint stays
+    // on the closed span. Without the hint the band would be near-empty.
+    const dSw = D2({ kind: 'swing', w: 1200, entity_id: 'binary_sensor.d' });
+    const hp = mmToPx(view, 3000, 2500), ep = mmToPx(view, 4200, 2500);
+    const inner0 = hp.x + 12, inner1 = ep.x - 12;
+    const pOpen = await mkPlanner([dSw], { 'binary_sensor.d': { state: 'on', attributes: {} } });
+    drawAll(ctx, pOpen, view, null);
+    const openBand = spanBand(blank, hp.y, inner0, inner1);
+    ok('swing_open_hint_paints', openBand > 20, String(openBand));
+    // Sanity: with the hint suppressed there would be nothing there — compare
+    // against a door whose span is elsewhere (same scene otherwise).
+    const pAway = await mkPlanner([D2({ kind: 'swing', x: 3000, y: 900, w: 1200 })]);
+    drawAll(ctx, pAway, view, null);
+    const emptyBand = spanBand(blank, hp.y, inner0, inner1);
+    ok('swing_hint_band_control', emptyBand === 0, String(emptyBand));
+    // Sliding: OPEN still shows a dashed full-span closed hint.
+    const pSl = await mkPlanner([D2({ kind: 'sliding', w: 1200, entity_id: 'binary_sensor.d' })],
+                                { 'binary_sensor.d': { state: 'on', attributes: {} } });
+    drawAll(ctx, pSl, view, null);
+    ok('sliding_open_hint_paints', spanBand(blank, hp.y, inner0, inner1) > 20,
+       String(spanBand(blank, hp.y, inner0, inner1)));
+  }
+
+  // 12. Double door: the two leaf arcs live on OPPOSITE sides of the span
+  //     centre and on the SAME side of the opening (ruler-dims §12 technique).
+  {
+    const dDb = D2({ kind: 'double', x: 3000, y: 2500, w: 1600 });
+    const p = await mkPlanner([dDb]);
+    drawAll(ctx, p, view, null);
+    const hp = mmToPx(view, 3000, 2500), ep = mmToPx(view, 4600, 2500);
+    const rPx = 800 * view.scale;
+    const arcDiff = (base, hx, hy, a0, a1) => {
+      const d = ctx.getImageData(0, 0, cvs.width, cvs.height).data;
+      let n = 0;
+      for (let y = 0; y < cvs.height; y++) for (let x = 0; x < cvs.width; x++) {
+        const i = (y * cvs.width + x) * 4;
+        if (d[i] === base[i] && d[i+1] === base[i+1] && d[i+2] === base[i+2]) continue;
+        const dx = x - hx, dy = y - hy;
+        if (Math.abs(Math.hypot(dx, dy) - rPx) > 5) continue;
+        const a = Math.atan2(dy, dx) * 180 / Math.PI;
+        if (a >= a0 && a <= a1) n++;
+      }
+      return n;
+    };
+    // Leaf A pivots at the hinge, sweeping canvas 0° → −90° (screen up).
+    const aUp = arcDiff(blank, hp.x, hp.y, -80, -10);
+    const aDn = arcDiff(blank, hp.x, hp.y, 10, 80);
+    ok('double_leafA_arc_up', aUp > 6 && aDn === 0, `up=${aUp} down=${aDn}`);
+    // Leaf B pivots at the span endpoint, closed dir 180° → open −90°: its arc
+    // occupies the 180°..270° quadrant, i.e. canvas −180°..−90°.
+    const bUp = arcDiff(blank, ep.x, ep.y, -170, -100);
+    const bDn = arcDiff(blank, ep.x, ep.y, 100, 170);
+    ok('double_leafB_arc_up', bUp > 6 && bDn === 0, `up=${bUp} down=${bDn}`);
+  }
+
+  // 13. hitDoor accepts the CLOSED span midpoint on an OPEN door ════════════
+  {
+    const states = { 'binary_sensor.d': { state: 'on', attributes: {} } };
+    for (const k of ['swing', 'sliding', 'pocket', 'double', 'french', 'sliding_glass', 'garage']) {
+      const dd = D2({ kind: k, w: 1200, entity_id: 'binary_sensor.d' });
+      const p = await mkPlanner([dd], states);
+      const hit = hitDoor(p, view, { x: 3600, y: 2500 });   // closed-span midpoint
+      ok(`hit_closed_span_${k}`, !!hit && hit.door.id === 'dd', hit ? 'hit' : 'miss');
+    }
+    // A closed door is unaffected (the span IS the panel).
+    const pC = await mkPlanner([D2({ kind: 'swing', w: 1200 })]);
+    ok('hit_closed_door_span', !!hitDoor(pC, view, { x: 3600, y: 2500 }));
+    // The swung panel of an OPEN swing door still hits (right hinge ⇒ +Y world).
+    const pO = await mkPlanner([D2({ kind: 'swing', w: 1200, entity_id: 'binary_sensor.d' })], states);
+    ok('hit_open_panel_swing', !!hitDoor(pO, view, { x: 3000, y: 3100 }));
+    // Nothing far away.
+    ok('hit_miss_far', hitDoor(pO, view, { x: 1000, y: 1000 }) === null);
+    // Rotate handle stays at the CLOSED endpoint on non-swinging kinds.
+    const pS = await mkPlanner([D2({ kind: 'sliding', w: 1200, entity_id: 'binary_sensor.d' })], states);
+    ok('handle_sliding_at_span_end', !!hitDoorEnd(pS, view, { x: 4200, y: 2500 }));
+    // …and follows the swung panel on a swing door.
+    ok('handle_swing_follows', !!hitDoorEnd(pO, view, { x: 3000, y: 3700 })
+       && hitDoorEnd(pO, view, { x: 4200, y: 2500 }) === null);
+  }
+
+  const n = results.length, pcount = results.filter(x => x.startsWith('ok')).length;
+  const pass = pcount === n;
+  document.title = `DOORKINDS ${pass ? 'PASS' : 'FAIL'} ${pcount}/${n} ${results.filter(x => !x.startsWith('ok')).join(' ')}`;
+  r.applyViewPreset('iso');
+ } catch (e) { document.title = 'ERR: ' + (e && e.stack ? e.stack.split('\n').slice(0,4).join(' | ') : e); }
+</script>

@@ -1,7 +1,7 @@
 import { switchSize, distMM, pointToSeg, transformVerts, centroid, localToWorld,
          bgLocalToWorld, bgWorldToLocal, furnitureWorldToLocal,
          furnitureCorners, furnitureLocalToWorld, doorEndpoint,
-         doorOpenDeltaDeg, windowEndpoints, pointInPolygon, resolveRulerEnds, SPRINKLER_DEFAULTS, FLAGPOLE_DEFAULTS } from './geometry.js';
+         doorOpenDeltaDeg, isDoubleLeafDoorKind, windowEndpoints, pointInPolygon, resolveRulerEnds, SPRINKLER_DEFAULTS, FLAGPOLE_DEFAULTS } from './geometry.js';
 import type { Planner } from './planner.js';
 import type { Vec2, Wall, Sensor, Furniture, BgImage, MotionSensor, EnvSensor, BleProxy, AlarmPanel, CalendarPanel, ThermostatFixture, SafetySensor, AlertBeacon, RobotFixture, CameraFixture, ProjectorFixture, ValveFixture, PlugFixture, SprinklerZone, FlagpoleFixture, PresenceZone, InfoCard, ActionButton, Door, Window as WindowType, Floor, Ruler } from './types.js';
 import type { FloorEdge } from './geometry.js';
@@ -214,10 +214,30 @@ export function hitDoor(p: Planner, view: View, mm: Vec2): { door: Door; idx: nu
   const tol = Math.max(80, 10 / Math.max(view.scale, 1e-9));
   for (let i = f.doors.length - 1; i >= 0; i--) {
     const d = f.doors[i];
-    const isOpen = d.entity_id && states ? states[d.entity_id]?.state === 'on' : false;
-    const end = doorEndpoint(d, isOpen ? doorOpenDeltaDeg(d) : 0);
-    if (pointToSeg(mm.x, mm.y, d.x, d.y, end.x, end.y) < tol)
+    // The CLOSED span is ALWAYS a valid target — an open door draws a dashed
+    // hint along it, and clicking where the door BELONGS is how you shut it
+    // (user-reported: an open swung panel left no obvious close affordance).
+    // For a closed door this is the live panel, so nothing changes.
+    const closed = doorEndpoint(d);
+    if (pointToSeg(mm.x, mm.y, d.x, d.y, closed.x, closed.y) < tol)
       return { door: d, idx: i };
+    const isOpen = d.entity_id && states ? states[d.entity_id]?.state === 'on' : false;
+    if (!isOpen) continue;
+    const kind = d.kind ?? 'swing';
+    if (isDoubleLeafDoorKind(kind)) {
+      // Two half-width leaves swung to the same side: A about (x, y) at canvas
+      // −90°, B about the span endpoint at +90° off its (rotation+180) closed
+      // direction — mirrors the 3D leaves and the 2D arcs.
+      const a = doorEndpoint({ x: d.x, y: d.y, w: d.w / 2, rotation: d.rotation }, -90);
+      if (pointToSeg(mm.x, mm.y, d.x, d.y, a.x, a.y) < tol) return { door: d, idx: i };
+      const b = doorEndpoint({ x: closed.x, y: closed.y, w: d.w / 2, rotation: d.rotation + 180 }, +90);
+      if (pointToSeg(mm.x, mm.y, closed.x, closed.y, b.x, b.y) < tol) return { door: d, idx: i };
+    } else if (kind === 'swing' || kind === 'gate') {
+      const end = doorEndpoint(d, doorOpenDeltaDeg(d));
+      if (pointToSeg(mm.x, mm.y, d.x, d.y, end.x, end.y) < tol) return { door: d, idx: i };
+    }
+    // Sliding family + garage: the panel only ever travels along (or retracts
+    // out of) the span, so the closed-span test above already covers them.
   }
   return null;
 }
@@ -254,7 +274,11 @@ export function hitDoorEnd(p: Planner, view: View, mm: Vec2): { door: Door; idx:
   for (let i = f.doors.length - 1; i >= 0; i--) {
     const d = f.doors[i];
     if (d.locked) continue;  // no rotate anchor on locked doors
-    const isOpen = d.entity_id && states ? states[d.entity_id]?.state === 'on' : false;
+    // Only the single swung kinds move their handle with the panel; every other
+    // kind (garage / sliding family / double / french) draws it at the CLOSED
+    // span endpoint, so the hit target must follow the glyph.
+    const swings = (d.kind ?? 'swing') === 'swing' || d.kind === 'gate';
+    const isOpen = swings && d.entity_id && states ? states[d.entity_id]?.state === 'on' : false;
     const end = doorEndpoint(d, isOpen ? doorOpenDeltaDeg(d) : 0);
     if (distMM(end, mm) < tol) return { door: d, idx: i };
   }

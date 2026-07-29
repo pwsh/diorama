@@ -1,4 +1,4 @@
-import { snap, snapVertex15, distMM, worldToLocal, localToWorld, FURNITURE_KINDS, furnitureCorners, furnitureLocalToWorld, furnitureWorldToLocal, resolveFurnitureDef, resolveFurnitureWallCollision, resolveSeatTableCollision, seatBelongsToTable, snapStepLightToSurface, snapFireplaceToWall, snapFloodlightToWall, snapExhaustToWall, snapSwitchToWall, snapAlarmToWall, snapCalendarToWall, snapThermostatToWall, snapPlugToWall, snapInfoCardToWall, snapActionButtonToWall, isBinKind, isSinkKind, defaultFurnitureElevation, nearestAlign, envScale, ENV_SCALE_MIN, ENV_SCALE_MAX, GRID_MM, floorContentBbox, resolveFloorEdgeDrag } from './geometry.js';
+import { snap, snapVertex15, distMM, worldToLocal, localToWorld, FURNITURE_KINDS, furnitureCorners, furnitureLocalToWorld, furnitureWorldToLocal, resolveFurnitureDef, resolveFurnitureWallCollision, resolveSeatTableCollision, seatBelongsToTable, snapStepLightToSurface, snapFireplaceToWall, snapFloodlightToWall, snapExhaustToWall, snapSwitchToWall, snapAlarmToWall, snapCalendarToWall, snapThermostatToWall, snapPlugToWall, snapInfoCardToWall, snapActionButtonToWall, isBinKind, isSinkKind, defaultFurnitureElevation, nearestAlign, envScale, ENV_SCALE_MIN, ENV_SCALE_MAX, GRID_MM, floorContentBbox, resolveFloorEdgeDrag, DOOR_DEFAULT_W, doorDefaultWidth } from './geometry.js';
 import { newId } from './storage.js';
 import {
   pxToMm, type View,
@@ -20,7 +20,7 @@ import {
 } from './canvas-hit.js';
 import type { Planner, Drag } from './planner.js';
 import { NEW_ROOM, NEW_LANDMARK } from './planner.js';
-import type { Vec2, Furniture, ObjectRecipe, Light, WindowKind, RulerEnd } from './types.js';
+import type { Vec2, Furniture, ObjectRecipe, Light, WindowKind, DoorKind, RulerEnd } from './types.js';
 
 // Drag kinds that move a single placeable and therefore get alignment guides
 // (Feature C). Wall vertices / doors / windows / zones are excluded.
@@ -2414,16 +2414,17 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
   }
   if (p.tool === 'door') {
     const d: { id: string; x: number; y: number; w: number; rotation: number;
-               entity_id: null; label: string; kind?: 'swing' | 'garage' | 'gate' } = {
+               entity_id: null; label: string; kind?: DoorKind } = {
       id: newId('dr'),
       x: snap(mm.x, 10), y: snap(mm.y, 10),
-      w: 800, rotation: 0, entity_id: null, label: '',
+      w: DOOR_DEFAULT_W, rotation: 0, entity_id: null, label: '',
     };
-    // Visual toolbar can pre-pick a door kind (swing/garage/gate); default
-    // 'swing' keeps the classic drop (incl. the fence→gate auto below).
+    // Visual toolbar can pre-pick a door kind; default 'swing' keeps the
+    // classic drop (incl. the fence→gate auto below). Wider kinds (garage /
+    // double / french / sliding glass) drop at their own default span.
     if (p.pendingDoorKind && p.pendingDoorKind !== 'swing') {
       d.kind = p.pendingDoorKind;
-      if (p.pendingDoorKind === 'garage') d.w = 2400;   // garage default span
+      d.w = doorDefaultWidth(p.pendingDoorKind);
     }
     snapOpeningToWall(f, d);
     // A fresh door snapped onto a fence/hedge run defaults to a gate (silent;

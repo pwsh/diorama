@@ -952,7 +952,7 @@ export class Planner extends EventTarget {
   // can pre-select a variant (mirrors pendingFurnitureKind / pendingWallKind).
   pendingLightKind: import('./types.js').LightIconKind = 'bulb';
   pendingWindowKind: import('./types.js').WindowKind = 'single';
-  pendingDoorKind: 'swing' | 'garage' | 'gate' = 'swing';
+  pendingDoorKind: import('./types.js').DoorKind = 'swing';
   pendingGroundKind: import('./types.js').GroundKind = 'grass';
 
   // Room placement latch: when set, the next 2D canvas click sets a room's

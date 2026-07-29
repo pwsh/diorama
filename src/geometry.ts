@@ -3,7 +3,7 @@
 import type { Vec2, Sensor, BgImage, LightIconKind, FurnitureKind, EnvKind, WallKind,
   ActivityKind, ObjectRecipe, Furniture, Room, Floor, SafetyKind, GroundKind, GroundArea,
   InfoCard, InfoCardMount, ActionKind, SprinklerHeadKind, Pool,
-  Wall, Ruler, RulerEnd } from './types.js';
+  Wall, Ruler, RulerEnd, DoorKind } from './types.js';
 import { formatEntityValue, formatClock, evalRules, ruleMatches, relTimeText,
   type HassStateLike, type ClockMode, type ValueRule } from './value-rules.js';
 
@@ -536,7 +536,7 @@ export interface WallOpeningCut { t0: number; t1: number; kind: 'door' | 'window
 // counts when its center projects onto the segment within `tol` of the axis.
 export function wallCutsForSegment(
   a: Vec2, b: Vec2,
-  doors: { x: number; y: number; w: number; rotation: number; kind?: 'swing' | 'garage' | 'gate' }[],
+  doors: { x: number; y: number; w: number; rotation: number; kind?: DoorKind }[],
   windows: { x: number; y: number; w: number; sill?: number; height?: number }[],
   tol = 150,
 ): { solids: { t0: number; t1: number }[]; openings: WallOpeningCut[] } {
@@ -2843,6 +2843,39 @@ export function doorEndpoint(d: { x: number; y: number; w: number; rotation: num
 // (open is rotation−90°); left-hinge = swing CW on screen (open is rotation+90°).
 export function doorOpenDeltaDeg(d: { hinge?: 'right' | 'left' }): number {
   return d.hinge === 'left' ? +90 : -90;
+}
+
+// ── Door kind families ─────────────────────────────────────────────────────
+// Sliding kinds TRANSLATE their panel along the wall instead of swinging; the
+// existing `hinge` field is re-read as the SLIDE SIDE (see doorSlideDir).
+export function isSlidingDoorKind(kind?: DoorKind): boolean {
+  return kind === 'sliding' || kind === 'pocket' || kind === 'sliding_glass';
+}
+// Two mirrored half-width leaves meeting at the span centre. `hinge` is IGNORED
+// (the pair is symmetric — leaf A hinges at (x,y), leaf B at the endpoint).
+export function isDoubleLeafDoorKind(kind?: DoorKind): boolean {
+  return kind === 'double' || kind === 'french';
+}
+// Kinds whose leaves are GLAZED (window-glass idiom in 3D, blue-grey in 2D).
+export function isGlassDoorKind(kind?: DoorKind): boolean {
+  return kind === 'french' || kind === 'sliding_glass';
+}
+// Slide direction along the span, in the door's own frame: +1 = the panel
+// retracts toward the (x, y) HINGE end (default), −1 = toward the endpoint.
+export function doorSlideDir(d: { hinge?: 'right' | 'left' }): number {
+  return d.hinge === 'left' ? -1 : 1;
+}
+// Default opening span per kind (mm). The sidebar / toolbar drop bump a
+// still-default 800 mm opening when the kind changes (garage 800→2400 idiom).
+export const DOOR_DEFAULT_W = 800;
+export function doorDefaultWidth(kind?: DoorKind): number {
+  switch (kind) {
+    case 'garage':        return 2400;
+    case 'double':
+    case 'french':
+    case 'sliding_glass': return 1500;
+    default:              return DOOR_DEFAULT_W;
+  }
 }
 
 // Garage-door opening height (mm). Slats fill 0..GARAGE_DOOR_H when closed; the
