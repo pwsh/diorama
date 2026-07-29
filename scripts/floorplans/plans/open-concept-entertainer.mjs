@@ -15,7 +15,7 @@ export const name = 'Open-Concept Entertainer';
 
 export function build() {
   const b = floorplan(id);
-  const { furn, light, switchFix, roamer, floor, assembleStore } = b;
+  const { furn, light, switchFix, roamer, floor, assembleStore, id: nid } = b;
   const { W, D, walls, rooms, doors, windows } = buildBaseGeometry(b);
 
   const moody = '#2b2f3a';   // charcoal accent (bar / media)
@@ -111,6 +111,25 @@ export function build() {
     furn('tree', 3000, 12000, { rotation: 0 }),
     furn('trash_bin', 6300, -600, { rotation: 0 }),
     furn('recycle_bin', 7000, -600, { rotation: 0 }),
+    furn('mailbox', 8000, -600, { rotation: 180, label: 'Curbside mailbox' }),
+    // West yard: the pool deck. A shade oak up-yard, loungers along the coping.
+    furn('oak_tree', 4800, 10200, { rotation: 0, label: 'Shade oak' }),
+    furn('chaise', 5700, 13300, { rotation: 0, label: 'Poolside lounger' }),
+    furn('chaise', 5700, 14400, { rotation: 0, label: 'Poolside lounger' }),
+  ];
+
+  // In-ground pool in the west yard, off the pool deck (unbound heater / pump /
+  // underwater lights, so it demos with no Home Assistant).
+  const pools = [
+    {
+      id: nid('pool'), name: 'Lap pool', kind: 'pool', depthMm: 1400,
+      waterColor: '#2fa8c8',
+      points: [
+        { x: 700, y: 12900 }, { x: 4800, y: 12900 },
+        { x: 4800, y: 15500 }, { x: 700, y: 15500 },
+      ],
+      localState: { pump: 'on', heater: 'on' },
+    },
   ];
 
   const lights = [
@@ -152,6 +171,9 @@ export function build() {
     walls, rooms, doors, windows, furniture, lights, switches,
     look3d: { floorTex: 'wood', floorColor: '#8f7654', wallColor: '#3d4048' },
   });
+  // Pool has no lib.mjs floor() spec key — attached directly (the garden-centre
+  // sprinkler-zone pattern); it rides repairFloor's explicit field list.
+  f.pools = pools;
 
   // Party-ish pool: adults, a teen, and a professional (all real base-* ids).
   const roamers = [
@@ -199,7 +221,10 @@ export function build() {
       'Primary Bedroom: king bed, two nightstands, dresser, lounge chaise, dark rug.',
       'Primary Bath: double vanity, toilet, walk-in shower; sconce pair.',
       'Primary Walk-in Closet: two built-in wardrobe runs.',
-      'Covered Patio: outdoor sofa + coffee table, fountain, lawn chair; party string lights.',
+      'Covered Patio: outdoor sofa + coffee table, fountain, lawn chair; party string',
+      '  lights, reached through a 3 m two-panel sliding-glass wall.',
+      'Pool Deck (west yard): a heated in-ground lap pool with its pump running, two',
+      '  poolside loungers along the coping, a shade oak up-yard and a curbside mailbox.',
     ].join('\n'),
   });
 }

@@ -1,7 +1,7 @@
 {
   "diorama": 2,
   "name": "Open-Concept Modern",
-  "exportedAt": "2026-07-25T00:00:00.000Z",
+  "exportedAt": "2026-07-29T00:00:00.000Z",
   "store": {
     "v": 2,
     "floors": [
@@ -883,6 +883,24 @@
           },
           {
             "id": "open-concept-modern-fn69",
+            "x": 4748,
+            "y": 14100,
+            "w": 3200,
+            "h": 3200,
+            "kind": "willow_tree",
+            "label": "Weeping willow"
+          },
+          {
+            "id": "open-concept-modern-fn70",
+            "x": 2500,
+            "y": 9700,
+            "w": 1800,
+            "h": 1800,
+            "kind": "birch_tree",
+            "label": "Paper birch"
+          },
+          {
+            "id": "open-concept-modern-fn71",
             "x": 6300,
             "y": -600,
             "w": 600,
@@ -890,12 +908,22 @@
             "kind": "trash_bin"
           },
           {
-            "id": "open-concept-modern-fn70",
+            "id": "open-concept-modern-fn72",
             "x": 7000,
             "y": -600,
             "w": 600,
             "h": 700,
             "kind": "recycle_bin"
+          },
+          {
+            "id": "open-concept-modern-fn73",
+            "x": 8000,
+            "y": -600,
+            "w": 250,
+            "h": 350,
+            "kind": "mailbox",
+            "rotation": 180,
+            "label": "Curbside mailbox"
           }
         ],
         "lights": [
@@ -1215,6 +1243,7 @@
             "w": 1500,
             "rotation": 0,
             "entity_id": null,
+            "kind": "sliding_glass",
             "label": "Patio door L"
           },
           {
@@ -1224,6 +1253,7 @@
             "w": 1500,
             "rotation": 0,
             "entity_id": null,
+            "kind": "sliding_glass",
             "label": "Patio door R"
           },
           {
@@ -1569,6 +1599,6 @@
     "customObjects": [],
     "people": [],
     "bleShowUnknown": true,
-    "notes": "~2,205 sq ft (204 m²) heated + 441 sq ft garage · 1 floor · 15 rooms\n\nA wide, shallow-U modern-farmhouse: an attached two-car garage + laundry/pantry\nutility block on the west end, a wide-open great room (kitchen + dining + living\nunder one volume, no interior partitions) in the center with sightlines straight\nfrom the recessed entry porch through to the covered rear patio, and a private\nbedroom wing on the east — office and two secondary bedrooms up front, the primary\nsuite tucked at the quiet back corner off a corridor spine. Light white-oak floors\nrun the great room + hallway + office; bedrooms read as warm greige carpet; wet\nrooms tile. The unbuilt side yard and open porch/patio render as bare ground.\n\nGarage: two storage bookshelves + a tool cabinet; twin LED strips, garage-door floods.\nLaundry: side-by-side washer + dryer and a utility sink.\nWalk-in Pantry: two shelving runs off the kitchen.\nFoyer: entry bench beside the double front door.\nKitchen: west-wall galley (counter run, fridge, stove, over-range microwave,\n  dishwasher) plus a 2,400 mm island with a sink; island pendant + ceiling light.\nDining: six-seat table on a rug, pendant overhead, porch window.\nLiving: U-sectional facing a TV on a media stand, coffee table, reading chair +\n  plant by the patio doors, large rug; ceiling light + reading lamp.\nHallway: slim console + plant along the bedroom-wing spine; recessed light.\nOffice / Den: desk + chair and a corner bookshelf.\nBedroom 2: queen bed, two nightstands, dresser, reach-in wardrobe, carpet rug.\nBath 2 (shared): toilet, double vanity, tub/shower combo; sconce pair.\nBedroom 3: queen bed, two nightstands, study desk, reach-in wardrobe, carpet rug.\nPrimary Bedroom: king bed under the back picture window, two nightstands, dresser,\n  reading chair, carpet rug.\nPrimary Bath: double vanity, toilet, walk-in shower; sconce pair.\nPrimary Walk-in Closet: two built-in wardrobe runs.\nPatio / Yard: picnic table + lawn chairs on the covered patio, side-yard trees,\n  curbside trash + recycle bins at the front."
+    "notes": "~2,205 sq ft (204 m²) heated + 441 sq ft garage · 1 floor · 15 rooms\n\nA wide, shallow-U modern-farmhouse: an attached two-car garage + laundry/pantry\nutility block on the west end, a wide-open great room (kitchen + dining + living\nunder one volume, no interior partitions) in the center with sightlines straight\nfrom the recessed entry porch through to the covered rear patio, and a private\nbedroom wing on the east — office and two secondary bedrooms up front, the primary\nsuite tucked at the quiet back corner off a corridor spine. Light white-oak floors\nrun the great room + hallway + office; bedrooms read as warm greige carpet; wet\nrooms tile. The unbuilt side yard and open porch/patio render as bare ground.\n\nGarage: two storage bookshelves + a tool cabinet; twin LED strips, garage-door floods.\nLaundry: side-by-side washer + dryer and a utility sink.\nWalk-in Pantry: two shelving runs off the kitchen.\nFoyer: entry bench beside the double front door.\nKitchen: west-wall galley (counter run, fridge, stove, over-range microwave,\n  dishwasher) plus a 2,400 mm island with a sink; island pendant + ceiling light.\nDining: six-seat table on a rug, pendant overhead, porch window.\nLiving: U-sectional facing a TV on a media stand, coffee table, reading chair +\n  plant by the patio doors, large rug; ceiling light + reading lamp.\nHallway: slim console + plant along the bedroom-wing spine; recessed light.\nOffice / Den: desk + chair and a corner bookshelf.\nBedroom 2: queen bed, two nightstands, dresser, reach-in wardrobe, carpet rug.\nBath 2 (shared): toilet, double vanity, tub/shower combo; sconce pair.\nBedroom 3: queen bed, two nightstands, study desk, reach-in wardrobe, carpet rug.\nPrimary Bedroom: king bed under the back picture window, two nightstands, dresser,\n  reading chair, carpet rug.\nPrimary Bath: double vanity, toilet, walk-in shower; sconce pair.\nPrimary Walk-in Closet: two built-in wardrobe runs.\nPatio / Yard: picnic table + lawn chairs on the covered patio behind a 3 m\n  two-panel sliding-glass wall, side-yard trees with a mature weeping willow and\n  a paper birch in the deep west yard, curbside trash + recycle bins and a\n  mailbox at the front."
   }
 }

@@ -1,7 +1,7 @@
 {
   "diorama": 2,
   "name": "Studio Apartment",
-  "exportedAt": "2026-07-25T00:00:00.000Z",
+  "exportedAt": "2026-07-29T00:00:00.000Z",
   "store": {
     "v": 2,
     "floors": [
@@ -481,6 +481,7 @@
             "w": 850,
             "rotation": 0,
             "entity_id": null,
+            "kind": "pocket",
             "label": "Bathroom"
           },
           {
@@ -592,6 +593,6 @@
     "customObjects": [],
     "people": [],
     "bleShowUnknown": true,
-    "notes": "~451 sq ft (42 m²) · 1 floor · 4 rooms\n\nA bright open urban studio where one great room does triple duty — a one-wall\ngalley kitchen, a dining nook, a living/TV pocket, and a bedroom nook — wrapped\naround a compact core of full bathroom, entry coat closet, and a stacked\nwasher/dryer utility closet. Warm oak-look floors, soft warm-white walls, light\nfrom north and west exposures.\n\nKitchen / Living / Bedroom (great room):\n  • Galley kitchen: stove, over-range microwave, dishwasher, sink under the west\n    window, two counter runs, and a counter-depth refrigerator.\n  • Dining nook: a small 2-top table with two chairs.\n  • Living pocket: sofa facing a wall-mounted TV on a stand, coffee table, area\n    rug, a floor lamp, and an entry bookshelf.\n  • Bedroom nook: queen bed against the north wall flanked by two nightstands, a\n    dresser and a wardrobe along the north wall.\n  • Lighting: kitchen flush-mount, dining pendant, bedroom + living + entry\n    ceiling lights, and the sofa floor lamp.\nBathroom: bathtub/shower combo, toilet, and a vanity sink; recessed ceiling light.\nEntry Closet: reach-in coat closet at the door.\nUtility Closet: stacked washer + dryer."
+    "notes": "~451 sq ft (42 m²) · 1 floor · 4 rooms\n\nA bright open urban studio where one great room does triple duty — a one-wall\ngalley kitchen, a dining nook, a living/TV pocket, and a bedroom nook — wrapped\naround a compact core of full bathroom, entry coat closet, and a stacked\nwasher/dryer utility closet. Warm oak-look floors, soft warm-white walls, light\nfrom north and west exposures.\n\nKitchen / Living / Bedroom (great room):\n  • Galley kitchen: stove, over-range microwave, dishwasher, sink under the west\n    window, two counter runs, and a counter-depth refrigerator.\n  • Dining nook: a small 2-top table with two chairs.\n  • Living pocket: sofa facing a wall-mounted TV on a stand, coffee table, area\n    rug, a floor lamp, and an entry bookshelf.\n  • Bedroom nook: queen bed against the north wall flanked by two nightstands, a\n    dresser and a wardrobe along the north wall.\n  • Lighting: kitchen flush-mount, dining pendant, bedroom + living + entry\n    ceiling lights, and the sofa floor lamp.\nBathroom: bathtub/shower combo, toilet, and a vanity sink; recessed ceiling light.\nEntry Closet: reach-in coat closet at the door.\nUtility Closet: stacked washer + dryer.\n\nSpace-saving detail: the bathroom is on a pocket door — an 850 mm swing arc is the\n  one thing a 451 sq ft studio genuinely cannot afford."
   }
 }

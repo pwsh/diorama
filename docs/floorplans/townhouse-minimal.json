@@ -1,7 +1,7 @@
 {
   "diorama": 2,
   "name": "Townhouse — Minimalist",
-  "exportedAt": "2026-07-25T00:00:00.000Z",
+  "exportedAt": "2026-07-29T00:00:00.000Z",
   "store": {
     "v": 2,
     "floors": [
@@ -251,6 +251,7 @@
             "w": 800,
             "rotation": 270,
             "entity_id": null,
+            "kind": "pocket",
             "label": "Half Bath"
           },
           {
@@ -472,7 +473,7 @@
             "y": 5550,
             "w": 1500,
             "h": 1500,
-            "kind": "stairs",
+            "kind": "stairs_half",
             "stairLinkId": "th-l1l2"
           },
           {
@@ -481,7 +482,7 @@
             "y": 4050,
             "w": 1500,
             "h": 1500,
-            "kind": "stairs",
+            "kind": "stairs_half",
             "rotation": 180,
             "stairLinkId": "th-l2l3"
           },
@@ -679,6 +680,7 @@
             "w": 800,
             "rotation": 270,
             "entity_id": null,
+            "kind": "pocket",
             "label": "Half Bath"
           },
           {
@@ -1227,6 +1229,7 @@
             "w": 800,
             "rotation": 270,
             "entity_id": null,
+            "kind": "pocket",
             "label": "Ensuite"
           }
         ],
@@ -1391,6 +1394,6 @@
     "customObjects": [],
     "people": [],
     "bleShowUnknown": true,
-    "notes": "~1,875 sq ft (174 m²) heated + 256 sq ft garage · 3 floors · 21 rooms — minimalist edition\n\nThe same narrow three-storey townhouse shell and linked switchback stair core,\nfurnished the Scandinavian way: a deliberately small number of low, light-oak\npieces per level, a pale blond wood floor and crisp warm-white walls on every\nfloor, and a lot of intentional empty space. No clutter, no accent-heavy zones —\njust the essentials, so the rooms read calm and the daylight from the front and\nrear facades carries. One resident and a house cat roam the levels.\n\nGROUND — Garage: single storage cabinet (no car). Entry: shoe bench. Flex Room /\n  Office: a single reading chair + ottoman and a bookshelf in the corner, plant,\n  one rug — the rest left open.\nMIDDLE — Living Room: one low sofa + coffee table on a rug, a corner plant. Half\n  Bath off the landing. Dining Room: a compact four-seat table under a pendant.\n  Kitchen: a pared-back run (stove, sink, one counter, corner fridge) — no island.\nTOP — Secondary Bedroom: bed + single nightstand + rug. Hall Bath: vanity + toilet.\n  Laundry Closet: stacked washer + dryer. Primary Bedroom: bed, two nightstands,\n  rug — nothing else. Primary Walk-in Closet: one wardrobe. Primary Ensuite: a\n  slim vanity + walk-in shower."
+    "notes": "~1,875 sq ft (174 m²) heated + 256 sq ft garage · 3 floors · 21 rooms — minimalist edition\n\nThe same narrow three-storey townhouse shell and linked switchback stair core,\nfurnished the Scandinavian way: a deliberately small number of low, light-oak\npieces per level, a pale blond wood floor and crisp warm-white walls on every\nfloor, and a lot of intentional empty space. No clutter, no accent-heavy zones —\njust the essentials, so the rooms read calm and the daylight from the front and\nrear facades carries. One resident and a house cat roam the levels.\n\nGROUND — Garage: single storage cabinet (no car). Entry: shoe bench. Flex Room /\n  Office: a single reading chair + ottoman and a bookshelf in the corner, plant,\n  one rug — the rest left open.\nMIDDLE — Living Room: one low sofa + coffee table on a rug, a corner plant. Half\n  Bath off the landing. Dining Room: a compact four-seat table under a pendant.\n  Kitchen: a pared-back run (stove, sink, one counter, corner fridge) — no island.\nTOP — Secondary Bedroom: bed + single nightstand + rug. Hall Bath: vanity + toilet.\n  Laundry Closet: stacked washer + dryer. Primary Bedroom: bed, two nightstands,\n  rug — nothing else. Primary Walk-in Closet: one wardrobe. Primary Ensuite: a\n  slim vanity + walk-in shower.\n\nShell detail inherited from the base townhouse: pocket doors on both half baths\n  and the primary ensuite, and a switchback pair of half-flights in the stair core."
   }
 }

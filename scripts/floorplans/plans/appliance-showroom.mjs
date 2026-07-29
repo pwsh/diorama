@@ -1,21 +1,27 @@
-// Appliance Showroom — "Watt's Cooking". A FEATURE SHOWCASE, not a house: one
-// 14 × 10 m open retail hall plus a staff restroom and a sales office, laid out
-// as labelled display rows so every appliance family Diorama models is on the
-// floor at once — refrigeration, cooking + dishwashing, laundry, plumbing
-// fixtures, counter-top small appliances, the whole climate/airflow family, a
-// media wall of TVs, and an EV charging bay with a display car.
+// Appliance Showroom — "Watt's Cooking". A FEATURE SHOWCASE, not a house: a
+// 20 × 14 m open retail hall wrapped around four departments — a bath & vanity
+// studio, a sales office, a working mechanical room, and a walk-in lighting
+// gallery — so every appliance, climate, plumbing, mechanical and lighting model
+// Diorama ships is on the floor at once WITHOUT five of each.
 //
-// LAYOUT DISCIPLINE (why the coordinates look so regular): every display row
-// runs east–west with its pieces' backs on a common Y line, and the rows are
-// spaced so the inflated nav footprints (PERSON_R = 170 mm on every side) leave
-// a continuous walkable band between them. Two north–south aisles — one at
-// x ≈ 3300, one at x ≈ 13500 — connect every band, so the whole hall is a single
-// nav region and avatars can reach any display. Nothing is parked in a doorway's
-// 600 mm keep-clear zone.
+// LAYOUT DISCIPLINE (why the coordinates look so regular): each display row runs
+// east–west with its pieces on a common Y line, and consecutive rows are spaced
+// so the inflated nav footprints (PERSON_R = 170 mm on every side) leave a
+// continuous walkable band between them. The hall is one C-shaped nav region
+// wrapping the west service block and the north-east gallery, so an avatar can
+// path from the storefront to any display. Nothing is parked in a door's 600 mm
+// keep-clear zone.
+//
+// ONE OF EACH, NOT FIVE: the earlier build stacked five fridges, four washers
+// and three coffee makers into a 14 × 10 m box. This one keeps a single hero
+// unit per model (two fridges, one range, one dishwasher, one washer/dryer pair
+// plus the stacked column) and spends the reclaimed floor on open aisle, so the
+// lighting gallery has room to show twenty-odd fixture kinds without clutter.
 //
 // Many pieces carry localState 'on' / 'playing' so the showroom reads ALIVE with
 // no Home Assistant attached: in-use LEDs glow, fan blades spin, the mini-split
-// louver opens, one kitchen sink runs, and the media wall plays.
+// louver opens, the kitchen sink runs, the media wall plays, and the whole
+// lighting gallery is lit.
 import { floorplan } from '../lib.mjs';
 
 export const id = 'appliance-showroom';
@@ -25,202 +31,313 @@ export function build() {
   const b = floorplan(id);
   const { floorRect, wall, room, door, win, furn, light, switchFix, roamer, floor, assembleStore, id: nid } = b;
 
-  const W = 14000, D = 10000;
+  const W = 20000, D = 14000;
 
   // ── Shell ────────────────────────────────────────────────────────────────
-  // Exterior rect + a staff block (restroom over office) filling the west wall
-  // from y 4600 up. Three closed loops: the L-shaped hall, restroom, office.
+  // Exterior rect + a west service block (bath studio / sales office /
+  // mechanical room, stacked south to north) + a north-east lighting gallery.
+  // Five closed loops: the C-shaped hall plus those four rooms.
   const walls = [
     wall(floorRect(W, D)),
-    wall([{ x: 0, y: 4600 }, { x: 3000, y: 4600 }]),      // staff block south wall
-    wall([{ x: 3000, y: 4600 }, { x: 3000, y: 10000 }]),  // staff block east wall
-    wall([{ x: 0, y: 6800 }, { x: 3000, y: 6800 }]),      // restroom / office divider
+    wall([{ x: 0, y: 5200 }, { x: 4000, y: 5200 }]),        // service block south wall
+    wall([{ x: 4000, y: 5200 }, { x: 4000, y: 14000 }]),    // service block east wall
+    wall([{ x: 0, y: 8200 }, { x: 4000, y: 8200 }]),        // bath studio / office divider
+    wall([{ x: 0, y: 11200 }, { x: 4000, y: 11200 }]),      // office / mechanical divider
+    wall([{ x: 12800, y: 9200 }, { x: 20000, y: 9200 }]),   // lighting gallery south wall
+    wall([{ x: 12800, y: 9200 }, { x: 12800, y: 14000 }]),  // lighting gallery west wall
   ];
 
   const rooms = [
-    room('Showroom Floor', 8000, 3000),
-    room('Staff Restroom', 1500, 5700),
-    room('Sales Office', 1500, 8400),
+    room('Showroom Floor', 10000, 2600),
+    room('Bath & Vanity Studio', 2000, 6700),
+    room('Sales Office', 2000, 9700),
+    room('Mechanical Room', 2000, 12600),
+    room('Lighting Gallery', 16400, 11600),
   ];
 
+  // Every door kind Diorama models gets a job it would really do in a store:
+  // a double-leaf main entrance, a sliding-glass patio door that IS the patio
+  // door display, a garage delivery bay, a pocket door on the bath studio, a
+  // glazed french pair on the sales office and a barn slider on the plant room.
   const doors = [
-    door(6000, 0, 0, { w: 1600, label: 'Main entrance', doorbellEntity: null }),
-    door(0, 4200, 90, { w: 2400, kind: 'garage', label: 'Delivery bay' }),   // west wall, spans y 1800..4200
-    door(3000, 6300, 90, { w: 800, label: 'Restroom' }),                     // spans y 5500..6300
-    door(3000, 8200, 90, { w: 900, label: 'Sales office' }),                 // spans y 7300..8200
+    door(9100, 0, 0, { w: 1800, kind: 'double', label: 'Main entrance', doorbellEntity: null }),
+    door(5800, 0, 0, { w: 2400, kind: 'sliding_glass', label: 'Patio door display' }),
+    door(0, 4800, 90, { w: 2400, kind: 'garage', label: 'Delivery bay' }),      // west wall, spans y 2400..4800
+    door(4000, 7100, 90, { w: 900, kind: 'pocket', label: 'Bath studio' }),     // spans y 6200..7100
+    door(4000, 10500, 90, { w: 1600, kind: 'french', label: 'Sales office' }),  // spans y 8900..10500
+    door(4000, 13000, 90, { w: 1200, kind: 'sliding', label: 'Mechanical room' }), // spans y 11800..13000
+    door(14200, 9200, 0, { w: 2600, label: 'Lighting gallery archway' }),       // spans x 14200..16800
   ];
 
-  // Storefront glazing: a picture-window run either side of the entrance plus
-  // daylight from the east and north walls over the plumbing display.
+  // Full-height picture glazing across the storefront, sliding clerestories on
+  // the east and north walls, and daylight into the two west-block rooms.
   const windows = [
-    win(2400, 0, 0, { w: 2000, kind: 'picture', sill: 900, height: 1700, label: 'Storefront W' }),
-    win(4700, 0, 0, { w: 1400, kind: 'picture', sill: 900, height: 1700, label: 'Storefront C' }),
-    win(9000, 0, 0, { w: 2000, kind: 'picture', sill: 900, height: 1700, label: 'Storefront E' }),
-    win(11800, 0, 0, { w: 1800, kind: 'picture', sill: 900, height: 1700, label: 'Storefront NE' }),
-    win(14000, 6500, 90, { w: 1800, kind: 'sliding', sill: 1000, height: 1400, label: 'East clerestory' }),
-    win(14000, 8500, 90, { w: 1800, kind: 'sliding', sill: 1000, height: 1400, label: 'East clerestory' }),
-    win(6000, 10000, 0, { w: 2400, kind: 'sliding', sill: 1600, height: 900, label: 'Plumbing wall daylight' }),
+    win(1800, 0, 0, { w: 2600, kind: 'picture', sill: 400, height: 2200, label: 'Storefront W' }),
+    win(4500, 0, 0, { w: 2000, kind: 'picture', sill: 400, height: 2200, label: 'Storefront WC' }),
+    win(12100, 0, 0, { w: 2000, kind: 'picture', sill: 400, height: 2200, label: 'Storefront EC' }),
+    win(15100, 0, 0, { w: 2600, kind: 'picture', sill: 400, height: 2200, label: 'Storefront E' }),
+    win(18200, 0, 0, { w: 2400, kind: 'picture', sill: 400, height: 2200, label: 'Storefront NE' }),
+    win(20000, 3200, 90, { w: 2400, kind: 'sliding', sill: 1600, height: 1000, label: 'East clerestory S' }),
+    win(20000, 6600, 90, { w: 2400, kind: 'sliding', sill: 1600, height: 1000, label: 'East clerestory N' }),
+    win(8000, 14000, 0, { w: 2600, kind: 'sliding', sill: 1800, height: 900, label: 'Plumbing wall daylight' }),
+    win(17000, 14000, 0, { w: 3000, kind: 'sliding', sill: 1800, height: 900, label: 'Gallery clerestory' }),
+    win(0, 6700, 90, { w: 1000, sill: 1400, height: 800, label: 'Bath studio' }),
+    win(0, 10400, 90, { w: 1000, label: 'Sales office' }),
   ];
 
   // ── Counters that host mounted small appliances ──────────────────────────
   // Built first so the mounted pieces can reference their real mountOnId.
-  const smallCounterA = furn('counter', 8300, 3400, { rotation: 0, w: 1800, h: 650, label: 'Small appliances' });
-  const smallCounterB = furn('counter', 10400, 3400, { rotation: 0, w: 1600, h: 650, label: 'Coffee bar' });
-  const wrapCounter = furn('counter', 12400, 1300, { rotation: 0, w: 1600, h: 650, label: 'Order desk' });
+  const applianceBar = furn('counter', 9200, 5900, { rotation: 0, w: 2000, h: 650, label: 'Small-appliance bar' });
+  const orderDesk = furn('counter', 17000, 1800, { rotation: 0, w: 1800, h: 650, label: 'Order desk' });
+  const officeCredenza = furn('counter', 2500, 10800, { rotation: 0, label: 'Office credenza' });
+  const mediaStand = furn('tv_stand', 18900, 7200, { rotation: 90, label: 'Media stand' });
 
-  const oscillatingFan = furn('floor_fan', 4300, 4700, { rotation: 0, label: 'Oscillating pedestal fan', localState: 'on' });
-  oscillatingFan.oscillate = true;
-  const oscillatingFan2 = furn('modern_fan', 5300, 4700, { rotation: 0, label: 'Modern stand fan', localState: 'on' });
-  oscillatingFan2.oscillate = true;
+  const pedestalFan = furn('modern_fan', 9300, 8400, { rotation: 0, label: 'Oscillating stand fan', localState: 'on' });
+  pedestalFan.oscillate = true;
 
   const furniture = [
-    // ── EV bay (west end of the south hall) ───────────────────────────────
-    furn('car', 3300, 1300, { rotation: 90, label: 'Display EV' }),
-    furn('ev_charger', 600, 1300, { rotation: 90, label: 'Home charger' }),
+    // ── EV bay (west end of the storefront band, served by the delivery bay) ─
+    furn('car', 3300, 2400, { rotation: 90, label: 'Display EV' }),
+    furn('ev_charger', 250, 1100, { rotation: 90, label: 'Home charger' }),
 
-    // ── Row A1 · checkout + order desk (y ≈ 1300) ─────────────────────────
-    furn('island', 9600, 1400, { rotation: 0, w: 2600, h: 1100, label: 'Checkout island', color: '#37474f' }),
-    wrapCounter,
-    furn('toaster', 12100, 1300, { rotation: 0, elevation: 900, mountOnId: wrapCounter.id, localState: 'on' }),
-    furn('coffee_maker', 12700, 1300, { rotation: 0, elevation: 900, mountOnId: wrapCounter.id, localState: 'on' }),
+    // ── Front of house · checkout + order desk + media wall (y ≈ 1800) ──────
+    furn('island', 13200, 2000, { rotation: 0, w: 2600, h: 1100, label: 'Checkout island', color: '#37474f' }),
+    orderDesk,
+    furn('toaster', 16500, 1800, { rotation: 0, elevation: 900, mountOnId: orderDesk.id, localState: 'on' }),
+    furn('wall_tv', 19860, 3400, { rotation: 90, elevation: 1000, label: 'Media wall 1', localState: 'playing' }),
+    furn('wall_tv', 19860, 5000, { rotation: 90, elevation: 1000, label: 'Media wall 2', localState: 'playing' }),
+    mediaStand,
+    furn('tv', 18900, 7200, { rotation: 90, elevation: 450, mountOnId: mediaStand.id, label: 'Console TV', localState: 'playing' }),
 
-    // ── Row A2 · cooking + dishwashing (y = 3400) ─────────────────────────
-    furn('stove', 4400, 3400, { rotation: 0, label: 'Slide-in range', localState: 'on' }),
-    furn('stove', 5300, 3400, { rotation: 0, label: 'Induction range' }),
-    furn('dishwasher', 6200, 3400, { rotation: 0, label: 'Dishwasher — quiet', localState: 'on' }),
-    furn('dishwasher', 7000, 3400, { rotation: 0, label: 'Dishwasher — panel-ready' }),
-    smallCounterA,
-    furn('microwave', 7800, 3400, { rotation: 0, elevation: 900, mountOnId: smallCounterA.id, label: 'Countertop microwave' }),
-    furn('toaster', 8400, 3400, { rotation: 0, elevation: 900, mountOnId: smallCounterA.id }),
-    furn('coffee_maker', 8900, 3400, { rotation: 0, elevation: 900, mountOnId: smallCounterA.id, label: 'Drip brewer', localState: 'on' }),
-    smallCounterB,
-    furn('coffee_maker', 10000, 3400, { rotation: 0, elevation: 900, mountOnId: smallCounterB.id, label: 'Espresso machine' }),
-    furn('retro_fan', 10800, 3400, { rotation: 0, elevation: 900, mountOnId: smallCounterB.id, label: 'Retro desk fan', localState: 'on' }),
+    // ── Row 1 · cooking, dishwashing & refrigeration (y = 5900) ─────────────
+    furn('stove', 5300, 5900, { rotation: 0, label: 'Slide-in range', localState: 'on', tempEntity: null }),
+    furn('dishwasher', 6300, 5900, { rotation: 0, label: 'Dishwasher', localState: 'on' }),
+    furn('kitchen_sink', 7300, 5900, { rotation: 0, label: 'Double-bowl kitchen sink', localState: 'on' }),
+    applianceBar,
+    furn('microwave', 8600, 5900, { rotation: 0, elevation: 900, mountOnId: applianceBar.id, label: 'Countertop microwave' }),
+    furn('coffee_maker', 9400, 5900, { rotation: 0, elevation: 900, mountOnId: applianceBar.id, label: 'Drip brewer', localState: 'on' }),
+    furn('retro_fan', 10000, 5900, { rotation: 0, elevation: 900, mountOnId: applianceBar.id, label: 'Retro desk fan', localState: 'on' }),
+    furn('island', 12200, 5900, { rotation: 0, w: 2400, h: 1000, label: 'Kitchen vignette island' }),
+    furn('fridge', 14500, 5900, { rotation: 0, label: 'French door', localState: 'on' }),
+    furn('fridge', 15800, 5900, { rotation: 0, label: 'Beverage centre' }),
 
-    // ── Row A3 · climate & comfort (y = 4700) ─────────────────────────────
-    oscillatingFan,
-    oscillatingFan2,
-    furn('tower_fan', 6200, 4700, { rotation: 0, label: 'Tower fan', localState: 'on' }),
-    furn('bladeless_fan', 7000, 4700, { rotation: 0, label: 'Bladeless fan', localState: 'on' }),
-    furn('portable_ac', 7900, 4700, { rotation: 0, label: 'Portable AC', localState: 'on' }),
-    furn('space_heater', 8800, 4700, { rotation: 0, label: 'Ceramic space heater', localState: 'on' }),
-    furn('floor_fan', 9600, 4700, { rotation: 0, label: 'Shop floor fan' }),
-    furn('tower_fan', 10400, 4700, { rotation: 0, label: 'Bladeless tower' }),
-    furn('portable_ac', 11300, 4700, { rotation: 0, label: 'Portable heat-pump' }),
-    furn('space_heater', 12200, 4700, { rotation: 0, label: 'Radiant heater' }),
+    // ── Row 2 · laundry & portable climate (y = 8400) ───────────────────────
+    furn('washer', 5300, 8400, { rotation: 0, label: 'Front-load washer', localState: 'on' }),
+    furn('dryer', 6100, 8400, { rotation: 0, label: 'Heat-pump dryer', localState: 'on' }),
+    // Stacked column demo: the dryer sits on top of its washer, one footprint.
+    furn('washer', 7200, 8400, { rotation: 0, label: 'Stacked column — washer', localState: 'on' }),
+    furn('dryer', 7200, 8400, { rotation: 0, elevation: 990, label: 'Stacked column — dryer', localState: 'on' }),
+    furn('floor_fan', 8500, 8400, { rotation: 0, label: 'Shop floor fan', localState: 'on' }),
+    pedestalFan,
+    furn('tower_fan', 10000, 8400, { rotation: 0, label: 'Tower fan', localState: 'on' }),
+    furn('bladeless_fan', 10700, 8400, { rotation: 0, label: 'Bladeless fan', localState: 'on' }),
+    furn('portable_ac', 11500, 8400, { rotation: 0, label: 'Portable AC', localState: 'on' }),
+    furn('space_heater', 12300, 8400, { rotation: 0, label: 'Ceramic space heater', localState: 'on' }),
 
-    // ── Row B1 · laundry (y = 6100) ───────────────────────────────────────
-    furn('washer', 4400, 6100, { rotation: 0, label: 'Front-load washer', localState: 'on' }),
-    furn('dryer', 5200, 6100, { rotation: 0, label: 'Heat-pump dryer', localState: 'on' }),
-    furn('washer', 6000, 6100, { rotation: 0, label: 'Top-load washer' }),
-    furn('dryer', 6800, 6100, { rotation: 0, label: 'Vented dryer' }),
-    furn('washer', 7600, 6100, { rotation: 0, label: 'Compact washer' }),
-    // Stacked demo: dryer sits on top of its washer at the same footprint.
-    furn('washer', 8600, 6100, { rotation: 0, label: 'Stacked pair — washer', localState: 'on' }),
-    furn('dryer', 8600, 6100, { rotation: 0, elevation: 990, label: 'Stacked pair — dryer', localState: 'on' }),
+    // ── North arm · wall-hung climate on the back wall (all elevated) ───────
+    furn('mini_split', 5200, 13890, { rotation: 0, elevation: 2100, label: 'Mini-split head', localState: 'on' }),
+    furn('window_ac', 6600, 13830, { rotation: 0, elevation: 900, label: 'Window AC', localState: 'on' }),
+    furn('wall_heater', 7800, 13930, { rotation: 0, elevation: 400, label: 'Wall heater', localState: 'on' }),
 
-    // ── Row B2 · refrigeration (y = 7700) ─────────────────────────────────
-    furn('fridge', 4400, 7700, { rotation: 0, label: 'French door', localState: 'on' }),
-    furn('fridge', 5500, 7700, { rotation: 0, label: 'Side-by-side', localState: 'on' }),
-    furn('fridge', 6600, 7700, { rotation: 0, label: 'Top freezer' }),
-    furn('fridge', 7700, 7700, { rotation: 0, label: 'Counter-depth', localState: 'on' }),
-    furn('fridge', 8800, 7700, { rotation: 0, label: 'Beverage centre' }),
+    // ── North arm · sink wall (y = 13500, daylit by the clerestory) ─────────
+    furn('pedestal_sink', 9400, 13500, { rotation: 0, label: 'Pedestal sink' }),
+    furn('sink', 10300, 13500, { rotation: 0, label: 'Compact vanity' }),
+    furn('utility_sink', 11300, 13500, { rotation: 0, label: 'Utility tub' }),
+    furn('trash_bin', 12200, 13400, { rotation: 0, label: 'Store waste' }),
+    furn('recycle_bin', 12200, 12600, { rotation: 0, label: 'Carton recycling' }),
 
-    // ── Row B3 · plumbing wall (y = 9300, backs to the north wall) ────────
-    furn('kitchen_sink', 4400, 9300, { rotation: 0, label: 'Double-bowl kitchen sink', localState: 'on' }),
-    furn('sink_vanity', 5500, 9300, { rotation: 0, label: 'Vanity sink' }),
-    furn('pedestal_sink', 6400, 9300, { rotation: 0, label: 'Pedestal sink' }),
-    furn('sink', 7200, 9300, { rotation: 0, label: 'Compact vanity' }),
-    furn('utility_sink', 8100, 9300, { rotation: 0, label: 'Utility tub' }),
+    // ── North arm · customer lounge ─────────────────────────────────────────
+    furn('rug', 5900, 11300, { rotation: 0, w: 2600, h: 2200 }),
+    furn('sofa_l_right', 6000, 10600, { rotation: 180, label: 'Lounge sectional' }),
+    furn('coffee_table', 5900, 12100, { rotation: 0 }),
+    furn('plant', 7900, 10400, { rotation: 0 }),
+    furn('plant', 12200, 9900, { rotation: 0 }),
 
-    // ── Wall-hung climate display (north wall, east end — all elevated) ───
-    furn('mini_split', 11000, 9880, { rotation: 180, elevation: 2100, label: 'Mini-split head', localState: 'on' }),
-    furn('window_ac', 12200, 9880, { rotation: 180, elevation: 900, label: 'Window AC', localState: 'on' }),
-    furn('wall_heater', 13200, 9880, { rotation: 180, elevation: 400, label: 'Wall heater', localState: 'on' }),
+    // ── Lighting gallery props (the fixtures themselves are lights) ─────────
+    furn('bookshelf', 13250, 10400, { rotation: 90, label: 'Fixture shelving' }),
+    furn('rug', 14800, 12600, { rotation: 0, w: 2600, h: 1800 }),
+    furn('ottoman', 14800, 12400, { rotation: 0 }),
+    furn('plant', 13300, 13400, { rotation: 0 }),
+    // Landscape-lighting vignette in the gallery's east bay.
+    furn('picnic_table', 18300, 10400, { rotation: 0, label: 'Patio set' }),
+    furn('bush', 19500, 10400, { rotation: 0 }),
+    furn('rock_cluster', 17000, 11800, { rotation: 0 }),
 
-    // ── Media wall (east wall, south hall — mounted, so nav-exempt) ───────
-    furn('wall_tv', 13850, 900, { rotation: 90, elevation: 1000, label: 'Media wall 1', localState: 'playing' }),
-    furn('wall_tv', 13850, 2300, { rotation: 90, elevation: 1000, label: 'Media wall 2', localState: 'playing' }),
-    furn('wall_tv', 13850, 3700, { rotation: 90, elevation: 1000, label: 'Media wall 3', localState: 'playing' }),
+    // ── Bath & Vanity Studio ────────────────────────────────────────────────
+    furn('shower', 900, 6000, { rotation: 0, label: 'Walk-in shower' }),
+    furn('toilet', 2900, 5700, { rotation: 0 }),
+    furn('sink_vanity', 2900, 7300, { rotation: 0, label: 'Vanity sink' }),
+    furn('bathtub', 1200, 7700, { rotation: 0, label: 'Soaking tub' }),
+    furn('towel_warmer', 3940, 7800, { rotation: 90, elevation: 900, label: 'Towel warmer', localState: 'on' }),
+    furn('wall_radiator', 110, 5700, { rotation: 90, elevation: 400, label: 'Wall radiator', localState: 'on' }),
 
-    // ── Waiting corner (north-east of the hall) ───────────────────────────
-    furn('bench', 11500, 6500, { rotation: 0, label: 'Waiting bench' }),
-    furn('plant', 12600, 6500, { rotation: 0 }),
-    furn('rug', 11800, 6900, { rotation: 0, w: 2600, h: 2000 }),
-    furn('plant', 9900, 5900, { rotation: 0 }),
+    // ── Sales Office ────────────────────────────────────────────────────────
+    furn('desk', 1200, 9200, { rotation: 0, label: 'Sales desk' }),
+    furn('chair', 1200, 9900, { rotation: 0 }),
+    officeCredenza,
+    furn('printer_3d', 2500, 10800, { rotation: 0, elevation: 900, mountOnId: officeCredenza.id, label: 'Parts printer', localState: 'on' }),
+    furn('bookshelf', 2900, 8700, { rotation: 0, label: 'Spec binders' }),
+    furn('plant', 3600, 10900, { rotation: 0 }),
 
-    // ── Staff restroom ────────────────────────────────────────────────────
-    furn('toilet', 600, 6300, { rotation: 0 }),
-    furn('pedestal_sink', 1700, 6350, { rotation: 0 }),
-    furn('towel_warmer', 2900, 5400, { rotation: 90, elevation: 900, label: 'Towel warmer', localState: 'on' }),
-
-    // ── Sales office ──────────────────────────────────────────────────────
-    furn('desk', 900, 9200, { rotation: 0, w: 1200, h: 700, label: 'Sales desk 1' }),
-    furn('chair', 900, 8500, { rotation: 180 }),
-    furn('desk', 2300, 9200, { rotation: 0, w: 1200, h: 700, label: 'Sales desk 2' }),
-    furn('chair', 2300, 8500, { rotation: 180 }),
-    furn('bookshelf', 300, 8400, { rotation: 90, label: 'Spec binders' }),
-    furn('plant', 700, 7300, { rotation: 0 }),
+    // ── Mechanical Room — a working plant room AND the display of record ────
+    furn('floor_radiator', 350, 12600, { rotation: 90, label: 'Cast-iron floor radiator', localState: 'on' }),
+    furn('water_heater', 900, 13500, { rotation: 0, label: 'Heat-pump water heater', localState: 'on' }),
+    furn('boiler', 1700, 13500, { rotation: 0, label: 'Condensing boiler', localState: 'on' }),
+    furn('air_handler', 2600, 13500, { rotation: 0, label: 'Air handler', localState: 'on' }),
+    furn('heat_pump', 3450, 13600, { rotation: 0, label: 'Heat-pump outdoor unit', localState: 'on' }),
+    furn('ac_condenser', 1100, 11900, { rotation: 0, label: 'AC condenser' }),
+    furn('sump_pump', 2200, 11700, { rotation: 0, label: 'Sump pump', localState: 'on' }),
+    furn('recirc_pump', 2900, 11700, { rotation: 0, label: 'Recirculation pump', localState: 'on' }),
   ];
 
-  // ── Lighting: continuous LED strips over the rows + spots on the displays ─
+  // ── Lighting ─────────────────────────────────────────────────────────────
+  // Hall: LED strips over the rows, hero spots on each department's end cap.
+  // Gallery: a walk-in catalogue of every fixture kind, indoor and landscape.
   const lights = [
-    light(8000, 1300, { iconKind: 'strip', rotation: 0, length: 5200, label: 'Checkout strip', localState: 'on' }),
-    light(8000, 3400, { iconKind: 'strip', rotation: 0, length: 7000, label: 'Cooking row strip', localState: 'on' }),
-    light(8200, 4700, { iconKind: 'strip', rotation: 0, length: 8000, label: 'Climate row strip', localState: 'on' }),
-    light(6600, 6100, { iconKind: 'strip', rotation: 0, length: 4800, label: 'Laundry row strip', localState: 'on' }),
-    light(6600, 7700, { iconKind: 'strip', rotation: 0, length: 5000, label: 'Refrigeration strip', localState: 'on' }),
-    light(6300, 9300, { iconKind: 'strip', rotation: 0, length: 4400, label: 'Plumbing wall strip', localState: 'on' }),
-    light(4400, 7700, { iconKind: 'spot', label: 'Hero fridge spot', radius: 900, localState: 'on' }),
-    light(4400, 6100, { iconKind: 'spot', label: 'Hero washer spot', radius: 900, localState: 'on' }),
-    light(4400, 3400, { iconKind: 'spot', label: 'Hero range spot', radius: 900, localState: 'on' }),
-    light(4400, 9300, { iconKind: 'spot', label: 'Hero sink spot', radius: 900, localState: 'on' }),
-    light(9600, 1400, { iconKind: 'pendant', label: 'Checkout pendant', localState: 'on' }),
-    light(12400, 1300, { iconKind: 'pendant', label: 'Order desk pendant', localState: 'on' }),
-    light(3300, 1300, { iconKind: 'flood', rotation: 90, label: 'EV bay flood', localState: 'on' }),
-    light(11800, 6900, { iconKind: 'lamp', height: 1500, label: 'Waiting lamp', localState: 'on' }),
-    light(13000, 8000, { iconKind: 'under_cabinet', rotation: 90, length: 2600, label: 'East wall wash' }),
-    light(1500, 8600, { iconKind: 'round', label: 'Office', localState: 'on' }),
-    light(1500, 5900, { iconKind: 'recessed', radius: 600, label: 'Restroom', localState: 'on' }),
-    light(2400, 5900, { iconKind: 'exhaust', label: 'Restroom exhaust', localState: 'on' }),
+    // Hall
+    light(10000, 1300, { iconKind: 'strip', rotation: 0, length: 9000, label: 'Front-of-house strip', localState: 'on' }),
+    light(10500, 5900, { iconKind: 'strip', rotation: 0, length: 11000, label: 'Kitchen row strip', localState: 'on' }),
+    light(8700, 8400, { iconKind: 'strip', rotation: 0, length: 7800, label: 'Laundry & climate strip', localState: 'on' }),
+    light(10000, 3600, { iconKind: 'string', rotation: 0, length: 6000, label: 'Aisle festoon', localState: 'on' }),
+    light(5300, 5900, { iconKind: 'spot', radius: 900, label: 'Hero range spot', localState: 'on' }),
+    light(5300, 8400, { iconKind: 'spot', radius: 900, label: 'Hero laundry spot', localState: 'on' }),
+    light(14500, 5900, { iconKind: 'spot', radius: 900, label: 'Hero fridge spot', localState: 'on' }),
+    light(5300, 5500, { iconKind: 'exhaust', label: 'Range hood exhaust', localState: 'on' }),
+    light(9200, 6250, { iconKind: 'under_cabinet', rotation: 0, length: 1800, label: 'Appliance-bar under-cabinet', localState: 'on' }),
+    light(13200, 2000, { iconKind: 'pendant', label: 'Checkout pendant', localState: 'on' }),
+    light(17000, 1800, { iconKind: 'pendant', label: 'Order desk pendant', localState: 'on' }),
+    light(70, 2400, { iconKind: 'flood', rotation: -90, label: 'EV bay flood', localState: 'on' }),
+    light(10000, 13000, { iconKind: 'strip', rotation: 0, length: 5000, label: 'Sink wall strip', localState: 'on' }),
+    light(5900, 11300, { iconKind: 'round', label: 'Lounge ceiling', localState: 'on' }),
+    light(5900, 12400, { iconKind: 'lamp', height: 1500, label: 'Lounge lamp', localState: 'on' }),
+
+    // Bath & Vanity Studio
+    light(1100, 6400, { iconKind: 'heatlamp', label: 'Bath heat lamp', localState: 'on' }),
+    light(2900, 6400, { iconKind: 'exhaust_light', label: 'Bath exhaust + light', localState: 'on' }),
+    light(70, 5700, { iconKind: 'exhaust_wall', rotation: -90, label: 'Bath wall exhaust', localState: 'on' }),
+
+    // Sales Office
+    light(1900, 9700, { iconKind: 'round', label: 'Office ceiling', localState: 'on' }),
+    light(1200, 8900, { iconKind: 'under_cabinet', rotation: 0, length: 1200, label: 'Desk task light' }),
+
+    // Mechanical Room
+    light(2000, 12400, { iconKind: 'strip', rotation: 0, length: 3000, label: 'Plant room strip', localState: 'on' }),
+    light(2000, 13930, { iconKind: 'exhaust_wall', rotation: 0, label: 'Plant room exhaust', localState: 'on' }),
+
+    // ── Lighting Gallery — the catalogue wall ──────────────────────────────
+    light(13400, 12000, { iconKind: 'bulb', label: 'Bare bulb', localState: 'on' }),
+    light(14400, 12000, { iconKind: 'oval', label: 'Oval flush mount', localState: 'on' }),
+    light(15400, 12000, { iconKind: 'bowl', label: 'Bowl uplight', localState: 'on' }),
+    light(16400, 12000, { iconKind: 'tiered', label: 'Tiered chandelier', localState: 'on' }),
+    light(17400, 12000, { iconKind: 'jar', label: 'Mason-jar pendant', localState: 'on' }),
+    light(18400, 12000, { iconKind: 'round', label: 'Round panel', localState: 'on' }),
+    light(19400, 12000, { iconKind: 'recessed', radius: 600, label: 'Recessed can', localState: 'on' }),
+    light(13400, 13300, { iconKind: 'pendant', label: 'Pendant', localState: 'on' }),
+    light(14700, 13300, { iconKind: 'fan', label: 'Ceiling fan', localState: 'on' }),
+    light(16100, 13300, { iconKind: 'fan_light', label: 'Fan with light', localState: 'on' }),
+    light(17400, 13300, { iconKind: 'lamp', height: 1600, label: 'Floor lamp', localState: 'on' }),
+    light(12920, 11200, { iconKind: 'wall_sconce', rotation: -90, radius: 500, label: 'Wall sconce pair', localState: 'on' }),
+    light(12920, 12600, { iconKind: 'wall_sconce', rotation: -90, radius: 500, label: 'Wall sconce pair', localState: 'on' }),
+    light(19880, 12600, { iconKind: 'sconce', rotation: 90, radius: 500, label: 'Half-dome sconce', localState: 'on' }),
+    light(12850, 9800, { iconKind: 'step', rotation: -90, label: 'Step light', localState: 'on' }),
+    light(12850, 13600, { iconKind: 'step', rotation: -90, label: 'Step light', localState: 'on' }),
+    light(14800, 13725, { iconKind: 'fireplace', rotation: 0, label: 'Hearth vignette', localState: 'on' }),
+    // Landscape lighting, staged on the gallery's grass patch.
+    light(17600, 11500, { iconKind: 'inground', label: 'In-ground uplight', localState: 'on' }),
+    light(19200, 11500, { iconKind: 'inground', label: 'In-ground uplight', localState: 'on' }),
+    light(18300, 11700, { iconKind: 'ground_spot', rotation: 180, label: 'Ground spot', localState: 'on' }),
+    light(19930, 10400, { iconKind: 'flood', rotation: 90, label: 'Outdoor display flood', localState: 'on' }),
   ];
 
   const switches = [
-    switchFix(5800, 200, { rotation: 0, label: 'Entrance bank' }),
-    switchFix(3200, 5900, { rotation: 270, label: 'Restroom' }),
-    switchFix(3200, 8000, { rotation: 270, label: 'Office' }),
-    switchFix(13800, 5200, { rotation: 90, label: 'Display rows' }),
+    switchFix(8600, 70, { rotation: 0, label: 'Entrance bank' }),
+    switchFix(4070, 5600, { rotation: 90, label: 'Bath studio' }),
+    switchFix(4070, 10800, { rotation: 90, label: 'Sales office' }),
+    switchFix(4070, 13500, { rotation: 90, label: 'Mechanical room' }),
+    switchFix(12870, 9800, { rotation: 90, label: 'Lighting gallery' }),
+    switchFix(19930, 5000, { rotation: -90, label: 'Display rows' }),
   ];
 
   // Demo AI-avatar presence sensors: always-on shoppers/staff confined to the
-  // wall loop they sit in (hall / office). Unbound — no HA needed.
+  // wall loop they sit in (hall / office / gallery). Unbound — no HA needed.
   const motionSensors = [
     {
-      id: nid('mo'), x: 7500, y: 5200, heading: 0, fov: 360, range: 6000,
+      id: nid('mo'), x: 9000, y: 4200, heading: 0, fov: 360, range: 7000,
       label: 'Showroom floor presence', entity_id: null, color: '#4fc3f7',
       avatar: true, demo: true, avatarKinds: ['adult', 'professional', 'elder'],
     },
     {
-      id: nid('mo'), x: 10200, y: 2400, heading: 0, fov: 360, range: 5000,
+      id: nid('mo'), x: 15500, y: 3000, heading: 0, fov: 360, range: 6000,
       label: 'Checkout presence', entity_id: null, color: '#ffb74d',
       avatar: true, demo: true, avatarKinds: ['professional', 'teen'],
     },
     {
-      id: nid('mo'), x: 1600, y: 7500, heading: 0, fov: 360, range: 3500,
+      id: nid('mo'), x: 16000, y: 11800, heading: 0, fov: 360, range: 5000,
+      label: 'Lighting gallery presence', entity_id: null, color: '#ce93d8',
+      avatar: true, demo: true, avatarKinds: ['adult', 'child'],
+    },
+    {
+      id: nid('mo'), x: 1900, y: 9700, heading: 0, fov: 360, range: 3500,
       label: 'Sales office presence', entity_id: null, color: '#81c784',
       avatar: true, demo: true, avatarKinds: ['professional', 'adult'],
     },
   ];
 
+  // One unbound mmWave unit aimed up the centre aisle from the storefront —
+  // the retail footfall counter, and the coverage wedge is part of the demo.
+  const sensors = [
+    {
+      id: nid('mm'), x: 10000, y: 300, heading: 0, fov: 120, range: 9000,
+      label: 'Entrance footfall (mmWave)', deviceSlug: null, color: '#4dd0e1',
+      avatarKinds: ['adult', 'professional', 'teen'],
+    },
+  ];
+
   const envSensors = [
-    { id: nid('env'), x: 9900, y: 5300, entity_id: null, kind: 'temperature', label: 'Hall temp', height: 1500 },
-    { id: nid('env'), x: 2300, y: 5200, entity_id: null, kind: 'humidity', label: 'Restroom RH', height: 1500 },
-    { id: nid('env'), x: 12900, y: 4400, entity_id: null, kind: 'co2', label: 'Hall CO₂', height: 1500 },
+    { id: nid('env'), x: 12000, y: 4300, entity_id: null, kind: 'temperature', label: 'Hall temp', height: 1500 },
+    { id: nid('env'), x: 2400, y: 6900, entity_id: null, kind: 'humidity', label: 'Bath studio RH', height: 1500 },
+    { id: nid('env'), x: 17800, y: 8600, entity_id: null, kind: 'co2', label: 'Hall CO₂', height: 1500 },
+    { id: nid('env'), x: 3400, y: 12200, entity_id: null, kind: 'co', label: 'Plant room CO', height: 1500 },
   ];
 
   const safetySensors = [
-    { id: nid('sf'), x: 6800, y: 5400, kind: 'smoke', entity_id: null, label: 'Hall smoke' },
-    { id: nid('sf'), x: 1500, y: 8000, kind: 'smoke', entity_id: null, label: 'Office smoke' },
+    { id: nid('sf'), x: 9000, y: 7200, kind: 'smoke', entity_id: null, label: 'Hall smoke' },
+    { id: nid('sf'), x: 16000, y: 10600, kind: 'smoke', entity_id: null, label: 'Gallery smoke' },
+    { id: nid('sf'), x: 2000, y: 12900, kind: 'gas', entity_id: null, label: 'Boiler gas detector' },
+    { id: nid('sf'), x: 1400, y: 12300, kind: 'leak', entity_id: null, label: 'Plant room leak puck' },
+  ];
+
+  const cameras = [
+    {
+      id: nid('cam'), x: 400, y: 400, rotation: 45, fov: 90, range: 14000, height: 2600,
+      entity_id: null, alertEntity: null, label: 'Sales floor west',
+    },
+    {
+      id: nid('cam'), x: 19600, y: 400, rotation: 315, fov: 90, range: 14000, height: 2600,
+      entity_id: null, alertEntity: null, label: 'Sales floor east',
+    },
+  ];
+
+  // Footfall zone across the entrance vestibule (unbound — display only).
+  const presenceZones = [
+    {
+      id: nid('pz'), name: 'Entrance vestibule', entity_id: null, color: '#26c6da',
+      points: [
+        { x: 8600, y: 300 }, { x: 12200, y: 300 },
+        { x: 12200, y: 2600 }, { x: 8600, y: 2600 },
+      ],
+    },
+  ];
+
+  // Grass patch under the gallery's landscape-lighting vignette.
+  const groundAreas = [
+    {
+      id: nid('ga'), kind: 'grass', name: 'Landscape lighting bed',
+      points: [
+        { x: 16800, y: 9500 }, { x: 19800, y: 9500 },
+        { x: 19800, y: 12400 }, { x: 16800, y: 12400 },
+      ],
+    },
   ];
 
   const look = { floorTex: 'concrete', floorColor: '#b9bcc2', wallColor: '#eef1f4' };
@@ -228,9 +345,90 @@ export function build() {
   const f = floor({
     name: 'Showroom', w: W, d: D,
     walls, rooms, doors, windows, furniture, lights, switches,
-    motionSensors, envSensors, safetySensors,
+    sensors, motionSensors, envSensors, safetySensors, cameras,
+    presenceZones, groundAreas,
     look3d: look,
   });
+
+  // Control fixtures the `floor()` helper doesn't take as a spec key — attached
+  // directly, exactly like garden-center's sprinkler zones and interior-design-
+  // store's rulers.
+  f.thermostats = [
+    {
+      id: nid('th'), x: 4063, y: 7900, rotation: 90, height: 1500,
+      entity_id: null, localState: 'cool', localTemp: 22, label: 'Showroom thermostat',
+    },
+    {
+      id: nid('th'), x: 3937, y: 12200, rotation: -90, height: 1500,
+      entity_id: null, localState: 'heat', localTemp: 19, label: 'Plant room thermostat',
+    },
+  ];
+
+  f.valves = [
+    {
+      id: nid('vl'), x: 1500, y: 12800, rotation: 0, entity_id: null,
+      localState: 'on', label: 'Main water shutoff',
+    },
+  ];
+
+  f.plugs = [
+    { id: nid('pl'), x: 4068, y: 8800, rotation: 90, height: 300, entity_id: null, localState: 'on', label: 'Climate row outlet' },
+    { id: nid('pl'), x: 19933, y: 7900, rotation: -90, height: 300, entity_id: null, localState: 'on', label: 'Media wall outlet' },
+    { id: nid('pl'), x: 12868, y: 11800, rotation: 90, height: 300, entity_id: null, label: 'Gallery outlet' },
+  ];
+
+  // Clock cards need no binding, so they read correctly with no Home Assistant.
+  f.infoCards = [
+    {
+      id: nid('ic'), x: 11600, y: 60, rotation: 0, mount: 'wall',
+      displayMode: 'clock', clockFormat: '12h', entity_id: null,
+      fontScale: 1.4, label: 'Store clock',
+    },
+    {
+      id: nid('ic'), x: 12860, y: 13000, rotation: 90, mount: 'wall',
+      displayMode: 'clock_date', clockFormat: '24h', dateFormat: 'medium',
+      entity_id: null, label: 'Gallery clock',
+    },
+    {
+      id: nid('ic'), x: 2000, y: 11140, rotation: 180, mount: 'wall',
+      displayMode: 'date', dateFormat: 'medium', entity_id: null, label: 'Service log date',
+    },
+  ];
+
+  f.actionButtons = [
+    {
+      id: nid('ab'), x: 11200, y: 65, rotation: 0, wallMount: true,
+      actionKind: 'scene', entity_id: null, icon: '🏪', color: '#ffb74d',
+      label: 'Open the store', localState: 'off',
+    },
+    {
+      id: nid('ab'), x: 12865, y: 10600, rotation: 90, wallMount: true,
+      actionKind: 'scene', entity_id: null, icon: '✨', color: '#7e57c2',
+      label: 'Gallery light show', localState: 'off',
+    },
+  ];
+
+  f.projectors = [
+    {
+      id: nid('pj'), x: 17000, y: 5000, height: 2600, rotation: 90,
+      entity_id: null, localState: 'on', screenId: null, throwRatio: 1.5,
+      beamColor: '#dfe8ff', label: 'Home-theatre projector',
+    },
+  ];
+
+  f.calendarPanels = [
+    {
+      id: nid('cp'), x: 70, y: 8900, rotation: 90, height: 1600,
+      calendarIds: [], label: 'Delivery calendar',
+    },
+  ];
+
+  f.alertBeacons = [
+    {
+      id: nid('al'), x: 2600, y: 12200, height: 2743, entity_id: null,
+      label: 'Plant room annunciator',
+    },
+  ];
 
   const roamers = [
     roamer('Ada', ['professional', 'adult'], { color: '#4dd0e1' }),
@@ -247,45 +445,61 @@ export function build() {
     },
     roamers,
     notes: [
-      '~1,507 sq ft (140 m²) retail hall · 1 floor · 3 rooms — appliance feature showcase',
+      '~3,014 sq ft (280 m²) retail hall · 1 floor · 5 rooms — appliance, mechanical & lighting showcase',
       '',
-      'A 14 × 10 m big-box appliance showroom built to demonstrate EVERY appliance and',
-      'climate model Diorama ships, all on one open floor at once. It is not a house —',
-      'it is a catalogue you can walk through. Display rows run east–west with wide',
-      'aisles between them and two north–south cross aisles, so avatars can path to any',
-      'piece; a staff restroom and a two-desk sales office fill the west wall.',
+      'A 20 × 14 m big-box showroom built to demonstrate the appliance, climate,',
+      'plumbing, mechanical and LIGHTING models Diorama ships — one hero unit per',
+      'model rather than a shelf of duplicates, so most of the floor is open aisle.',
+      'It is not a house; it is a catalogue you can walk through. Display rows run',
+      'east–west across a C-shaped hall that wraps a west service block and a',
+      'walk-in lighting gallery, so avatars can path to any piece.',
       '',
-      'Most units are switched ON via localState with no Home Assistant attached, so the',
-      'hall reads alive out of the box: appliance in-use LEDs pulse, fan blades spin (two',
-      'fans oscillate), the mini-split louver swings open and vents cool air, the space',
-      'heaters glow, the towel warmer heats, one kitchen sink is left running, and the',
-      'media wall plays.',
+      'Most units are switched ON via localState with no Home Assistant attached, so',
+      'the hall reads alive out of the box: appliance in-use LEDs pulse, fan blades',
+      'spin (the stand fan oscillates), the mini-split louver swings open, the space',
+      'heater glows, the towel warmer and radiators heat, the boiler and pumps run,',
+      'the kitchen sink is left running, the media wall plays and the gallery is lit.',
       '',
-      'Display rows, south to north:',
-      'EV bay (west end): a display car nose-to-nose with a home EV charger, served by',
-      '  the delivery-bay garage door in the west wall.',
-      'Checkout row: charcoal checkout island, order desk with a toaster and drip brewer',
-      '  on the counter, and a three-screen wall-mounted TV media wall on the east wall.',
-      'Cooking & Dishwashing: two ranges, two dishwashers, and two counters carrying a',
-      '  countertop microwave, toaster, drip brewer, espresso machine, and a retro fan.',
-      'Climate & Comfort: pedestal fan and modern stand fan (both oscillating), tower and',
-      '  bladeless fans, two portable ACs, two space heaters, and a shop floor fan.',
-      'Laundry: front-load, top-load and compact washers, heat-pump and vented dryers,',
-      '  plus a stacked washer/dryer pair on a single footprint.',
-      'Refrigeration: French door, side-by-side, top freezer, counter-depth and beverage.',
-      'Plumbing wall (north wall): double-bowl kitchen sink, vanity sink, pedestal sink,',
-      '  compact vanity and a utility tub, daylit by a clerestory above.',
-      'Wall-hung climate (north wall, east end): mini-split head, window AC and a wall',
-      '  heater, all mounted clear of the floor.',
+      'Departments:',
+      'Storefront (south): full-height picture glazing either side of a double-leaf',
+      '  main entrance and a sliding-glass patio door that IS the patio-door display.',
+      'EV bay (south-west): a display car nose-on to a home charger, served by the',
+      '  delivery-bay garage door in the west wall.',
+      'Front of house: charcoal checkout island, order desk with a toaster, a',
+      '  two-screen wall-mounted media wall and a console TV on its stand.',
+      'Kitchen row: slide-in range, dishwasher, double-bowl sink, an appliance bar',
+      '  carrying a microwave, drip brewer and retro fan, a kitchen vignette island,',
+      '  and two fridges (French door, beverage centre).',
+      'Laundry & portable climate: a washer/dryer pair, a stacked washer-dryer',
+      '  column on one footprint, and the portable comfort family — shop fan,',
+      '  oscillating stand fan, tower fan, bladeless fan, portable AC, space heater.',
+      'Back wall: mini-split head, window AC and wall heater mounted clear of the',
+      '  floor, plus the sink wall (pedestal, compact vanity, utility tub) daylit by',
+      '  a clerestory, and a customer lounge with sofa, rug, coffee table and lamp.',
       '',
-      'Support spaces: a waiting corner with a bench, rug and plants; a staff restroom',
-      '  (toilet, pedestal sink, towel warmer, exhaust fan); a sales office with two',
-      '  desks and chairs, a spec-binder bookshelf and a plant.',
+      'Rooms off the hall:',
+      'Bath & Vanity Studio (pocket door): walk-in shower, soaking tub, vanity sink,',
+      '  toilet, towel warmer and a wall radiator, under a heat lamp, a combined',
+      '  exhaust-and-light and a wall exhaust fan.',
+      'Sales Office (glazed french doors): desk and chair, credenza with a working',
+      '  3D parts printer, spec-binder shelving, a wall calendar and a date card.',
+      'Mechanical Room (barn slider): the full plant-room family — heat-pump water',
+      '  heater, condensing boiler, air handler, heat-pump outdoor unit, AC',
+      '  condenser, sump and recirculation pumps and a cast-iron floor radiator —',
+      '  with a main-water valve, gas and leak detectors, an alarm beacon and its',
+      '  own thermostat.',
+      'Lighting Gallery (north-east): a walk-in catalogue of fixture kinds — bare',
+      '  bulb, oval, bowl, tiered, mason jar, round panel, recessed can, pendant,',
+      '  ceiling fan, fan-with-light and floor lamp overhead; a wall-sconce pair,',
+      '  a half-dome sconce and two step lights on the walls; a hearth vignette on',
+      '  the back wall; and a landscape bay on a grass patch with in-ground',
+      '  uplights, a ground spot and a flood over a patio set.',
       '',
-      'Sensor kit: three unbound demo AI-avatar presence sensors (showroom floor,',
-      '  checkout, sales office), temperature / humidity / CO₂ env sensors, and two',
-      '  smoke detectors. Lighting is all LED strips over the rows plus hero spots on',
-      '  the end-cap display of each family.',
+      'Control kit (all unbound — display and local-toggle only): two thermostats,',
+      '  three smart plugs, a water valve, two scene buttons, a ceiling projector,',
+      '  three clock/date info cards, a wall calendar, an alert beacon, two security',
+      '  cameras, an entrance presence zone, an mmWave footfall unit, four demo',
+      '  AI-avatar presence sensors, four env sensors and four safety detectors.',
     ].join('\n'),
   });
 }

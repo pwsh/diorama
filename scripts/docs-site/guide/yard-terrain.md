@@ -51,9 +51,17 @@ a sunken patio (use a negative value).
 - Build a **hill** by nesting areas: a large low tier, a smaller higher tier inside it, and so on. Each tier's skirt drops to the tier beneath it.
 - In 2D a raised area draws a contour ring, and the selected area shows its height as a `±N mm` caption.
 
-Figures walk on terrace tops at the right height, with their shadows following
-them up. There is no slope walking — a terrace is a flat step, like a stair
-landing.
+Everything you put on a terrace comes up with it. Figures walk terrace tops at
+the right height with their shadows following them, and free-standing outdoor
+content — trees and yard furniture, ground lights, flagpoles, cameras, robot
+docks, sprinkler heads — sits on the terrace surface rather than floating at the
+old ground level. A chair on a sunken patio is a chair you can sit in, at patio
+height.
+
+A terrace is a **flat step**, like a stair landing — there's no walking up a
+slope. To connect two levels, drop a stairs flight or a **ramp** between them
+and use **⇅ Fit between levels** to size it automatically (see
+[The 3D view](3d-view.html)).
 
 ### Fences, hedges & gates
 
@@ -68,6 +76,12 @@ wall-kind picker (or the Structure tab's variant chips):
 
 All four **block movement** just like a solid wall, so figures walk around them
 and out through your gates.
+
+Fences follow the **ground**, segment by segment — a run crossing a raised
+terrace steps up onto it, and a fence around a yard that sits a storey below the
+house stands on that yard rather than floating at the house's floor level. A
+free-standing full, half, or railing wall out in the yard does the same; walls
+that form part of your house stay with the house.
 
 **Gates** are a door kind. Drop a door onto a fence or hedge run and it becomes
 a **Gate** automatically (a picket-styled swinging panel); you can also set the
@@ -139,9 +153,20 @@ ground paint.
 ### Outdoor furniture & lighting
 
 The furniture catalog has an **Outdoor** category with everything the yard
-needs: trees and pines, bushes, flower beds, a bird bath, a fountain, a swing
-set, lawn chairs (figures really sit in them), a picnic table, a rock cluster,
-and curbside trash and recycle bins.
+needs: bushes, flower beds, a bird bath, a fountain, a swing set, lawn chairs
+(figures really sit in them), a picnic table, a rock cluster, and curbside trash
+and recycle bins.
+
+#### Trees
+
+Seven tree kinds give a yard some variety: the original **tree** and **pine**,
+plus **oak**, **birch**, **palm**, **willow**, and **spruce** — each with its own
+silhouette, canopy, and green.
+
+Every tree also has a **Height (mm)** row in its editor (1–15 m), so a row of
+the same species doesn't look stamped out: raise the one shading the patio,
+keep the ones along the fence line small. Width and depth are separate, so you
+can spread a canopy without making the tree taller.
 
 Two light kinds are made for landscape lighting:
 

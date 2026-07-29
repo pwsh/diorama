@@ -14,7 +14,7 @@ Use the **Floors** section in the sidebar to manage the levels of your home.
 
 - **Add** a floor to build a multi-story home. Each floor has its own walls, rooms, furniture, and devices.
 - **Reorder** floors with the ▲ / ▼ buttons. The list reads like an elevator panel — **the highest story is at the top** — and the order you set is used everywhere: the kiosk floor picker, cross-floor stair links, and the stacking of glass-house ghost floors.
-- **Switch** floors by clicking a row. The view resets so the new floor is framed on screen.
+- **Switch** floors by clicking a row. Your pan and zoom are kept, because every story shares one world coordinate frame — so a bathroom stays under your cursor as you flip between levels. (The view re-frames only when the new floor is a very different size.)
 - **Yard fill** and the "this floor only" look overrides (floor color, texture, wall color) also live here, per floor.
 
 #### Show, peek & hide
@@ -30,7 +30,37 @@ Each floor row has a three-state visibility button you click to cycle:
 | **Hide** | 🙈 | The floor stays fully editable but drops out of the live experience — it disappears from the kiosk floor picker, ghost-floor stacking, and cross-floor tracking. Handy for keeping test iterations of a plan side by side. Hidden rows dim and show a hint. |
 
 Peek shows structure only (walls, no furniture) and works in every mode. In 3D,
-glass-house mode already shows the other floors, so peek is a 2D feature.
+glass-house mode already shows the other floors, so peek is a 2D feature. The
+**Peek floors** layer hides all the underlays at once without disturbing which
+floors are set to peek.
+
+#### Story height: elevation above ground
+
+The ground is a **fixed plane in the world**, and each floor sits at a height
+above it — so selecting a different floor (or turning on glass house) never
+moves the ground out from under your home.
+
+By default that height is worked out for you: the lowest floor sits on the
+ground and each story above it is 3 m higher. To set it yourself, use
+**Elevation above ground (mm)** on the current floor's row:
+
+- Leave it **blank** for automatic stacking (the placeholder shows the value it would use).
+- Type a value for a taller story, a split level, or a low crawl space.
+- Use a **negative** value for a basement. The ground plane is allowed to cut through a floor — that's exactly how a walk-out basement or a half-buried garage looks.
+
+The whole-property grade offset — moving the *surroundings* (grid, neighborhood
+overlay, and yard fill) up or down relative to the house for a raised-foundation
+or hilltop look — is the separate **Ground level (mm)** setting in
+Settings ▸ Display.
+
+#### Binding a floor to a Home Assistant floor
+
+The **Home Assistant floor** dropdown on the current floor's row ties this
+Diorama level to a floor you've defined in Home Assistant. It does one useful
+thing: it scopes the room **area** dropdowns (below) to just that floor's areas,
+so you're picking from "the areas upstairs" rather than every area in the house.
+Offline, or on a Home Assistant with no floors defined, the row shows a hint
+instead.
 
 #### Rotating & moving the whole plan
 
@@ -55,6 +85,17 @@ and mid-edge square handles are always drawn so the affordance is easy to find.
 Sizes snap to the grid, and shrinking stops before it would strand any wall or
 item off the edge (minimum 2 m). Locked items move too, because a boundary edit
 is a change of frame, not a move of individual pieces.
+
+Once the outline is right, **🔒 Lock floor size** hides the drag handles so you
+can't nudge the boundary while you're working inside it.
+
+#### Units
+
+**Imperial units** (in the Floors section, and again in Settings ▸ Display)
+switches every measurement Diorama *shows you* — ruler distances, wall
+dimensions, live drag readouts, geo distances — to feet and inches. The values
+you *type* into structural inputs stay in millimetres, since that's what the
+plan is built in.
 
 ### The placement toolbar
 
@@ -82,7 +123,7 @@ to place. The main tools:
 |------|----------------|
 | Select | Pick, move, rotate, resize, and delete items |
 | Wall | Draw wall segments (click corners, double-click to finish) |
-| Room | Drop a room anchor to name an enclosed space |
+| Delete | Click items to remove them |
 | Door / Window | Openings that snap onto the nearest wall |
 | Furniture | Any furniture kind (chosen from the kind picker) |
 | Light / Switch | Light fixtures and wall switches |
@@ -92,7 +133,7 @@ to place. The main tools:
 | BLE | Bluetooth proxy fixtures for indoor positioning |
 | Camera | Camera fixtures with a field-of-view wedge |
 | Robot | Robot vacuum / lawn mower docks |
-| Safety | Smoke / CO detectors |
+| Safety / Siren | Smoke, CO, gas, and leak detectors, and sirens |
 | Alarm | Alarm keypad wall plates |
 | Ground | Paint outdoor ground coverings (grass, water, and more) |
 | Path | Draw a walk or driveway along its centerline |
@@ -109,6 +150,10 @@ to place. The main tools:
 The yard tools are covered in [Yard & terrain](yard-terrain.html); the bindable
 fixtures in [Devices & bindings](devices.html).
 
+A few things are placed by arming a click from their own sidebar section rather
+than from the tool list — **rooms** ("+ Add room"), **geo landmarks**, and
+**neighborhood exclusion areas**.
+
 A hint appears near the tools when a placement tool is active. Press the
 matching hotkey or click **Select** to stop placing.
 
@@ -117,6 +162,23 @@ matching hotkey or click **Select** to stop placing.
 New walls draw as connected segments — click each corner, then double-click or
 press Enter to finish (Esc cancels). While drawing, angles snap to 15°
 increments unless an endpoint welds to something first.
+
+#### Wall editing preferences
+
+Snapping is helpful until it fights you. A **Wall editing** block in the Tools
+area has a checkbox for each of the three behaviors, so you can turn any of them
+off while you make a fine adjustment:
+
+| Setting | What it does when on |
+|---|---|
+| **15° angle snap** | New wall segments lock to 15° increments. |
+| **Grid snap** | Wall points land on the grid. |
+| **Weld ends** | Endpoints jump onto nearby walls to join corners and T-junctions. |
+
+Or leave them all on and **hold Alt** while drawing or dragging — that suspends
+all three for the duration of that one gesture, including the weld that would
+otherwise happen when you let go. These preferences are remembered on this
+device only; they aren't part of your plan and don't create undo steps.
 
 #### Wall kinds
 
@@ -143,14 +205,54 @@ you move them. They cut a real opening: in 3D the wall builds around the gap,
 and open doors swing, windows tilt or slide, and garage doors roll up.
 
 - **Window kinds**: single, double-hung, casement pair, sliding, and picture — set the kind plus sill and height in the Windows editor. Windows also take **curtains**; see [The 3D view](3d-view.html).
-- **Door kinds**: standard swing, garage (five roll-up slats), or gate (for fences and hedges). Bind a lock entity to show a padlock state, or a doorbell entity to show ring pulses.
+- Bind a lock entity to a door to show a padlock state, or a doorbell entity to show ring pulses.
+
+#### Door kinds
+
+Pick one from the variant chips under the Door card, or from the **Kind**
+dropdown in the Doors editor. Switching kind bumps a still-default opening to a
+sensible width for that kind (a garage door to 2.4 m, a French pair to 1.5 m).
+
+| Kind | How it opens |
+|---|---|
+| **Swing** | The classic hinged panel (the default). |
+| **Sliding** | A barn-style slab hung on a track, sliding across the wall face. |
+| **Pocket** | Slides too, but retracts *into* the wall and vanishes. |
+| **Double swing** | Two mirrored half-width leaves that part from the middle. |
+| **French** | A double pair with glazed leaves. |
+| **Sliding glass** | A wide glazed slider — the patio door. |
+| **Garage** | Five slats that roll up onto a ceiling track, in a taller opening. |
+| **Gate** | A picket-styled swinging panel; doors dropped onto a fence or hedge become gates automatically. |
+
+On the sliding kinds, the door's **hinge** side sets which way the panel
+retracts, so you can flip a slider without redrawing it.
+
+**Where an open door used to be.** An open door is drawn where it actually is —
+which leaves nothing to click on to close it. So every open door also draws a
+**dashed line across its closed position**, and clicking that line closes the
+door. The dashed line is the target in Kiosk mode too.
 
 ### Measuring: rulers & dimensions
 
 ![A floor plan annotated with a ruler between two walls and CAD-style wall dimension lines](img/rulers-dimensions.png)
 
-Both features draw on the **Dimensions** 2D layer, so you can hide all the
-measurement clutter at once.
+Rulers and wall dimensions draw on the **Dimensions** 2D layer, so you can hide
+all the measurement clutter at once. Live readouts while you drag are always on.
+
+#### Live readouts while you draw and drag
+
+You don't have to place a ruler to know how big something is. While you're
+drawing or dragging in edit mode, measurements follow the pointer and disappear
+the moment you let go:
+
+- **Drawing a wall** — the segment you're rubber-banding shows its length, and the segments you've already committed show theirs dimmed.
+- **Dragging a vertex** — of a wall, a ground area, a pool, a void, a presence zone, or an mmWave zone: the adjoining edge lengths update as you move it.
+- **Resizing** — dragging a floor boundary edge, a furniture corner, or a background-image corner shows a live **width × depth**.
+- **Drawing an area or a path** — the same running lengths as a wall.
+
+Readouts use whichever units you've chosen (metric or imperial). Simple moves —
+sliding a piece of furniture, dragging a ruler handle — deliberately show
+nothing, since nothing about them is a dimension.
 
 #### The ruler tool
 
@@ -198,6 +300,21 @@ Room names feed the avatar behavior system, so naming matters:
 - A room whose name contains **kitchen** (any capitalization) unlocks the snack and coffee thought bubbles for people standing in it.
 - A seated person's room decides which TV they can watch.
 
+#### Binding rooms to Home Assistant areas
+
+If you've already organized your entities into **areas** in Home Assistant,
+don't type all those names again. Each room row has an **HA area** dropdown:
+
+- Pick an area and the room **takes its name from the area** whenever you haven't typed one yourself (the name box shows it as a placeholder, so you can still override it).
+- Bind the floor to a **Home Assistant floor** first (see Floors above) and the dropdown narrows to just that floor's areas.
+- **⇄ Match all by name** binds every still-unbound room whose name matches an area on that floor, in one click, and reports what it did.
+
+The binding pays off when you pick entities. Opening the picker for a room's
+**occupancy** sensor, or for an environmental sensor or thermostat placed inside
+that room, starts **filtered to that room's area** — usually a handful of
+entities instead of hundreds. A chip at the top of the picker shows the filter;
+click it to remove it and see everything, and click again to re-apply.
+
 ### Furniture & custom objects
 
 The Furniture tool drops whichever kind is selected in the kind picker, which
@@ -208,6 +325,14 @@ and TVs — a bound entity).
 
 Sittable pieces (chairs, sofas, beds, and the like) become seating anchors that
 avatars actually use; appliances and desks become activity anchors.
+
+Some kinds grow extra controls in their editor — a **tree's height**
+([Yard & terrain](yard-terrain.html)), a **stairs flight's rise** and its "fit
+between levels" button ([The 3D view](3d-view.html)), a fridge's door sensor, a
+TV's screen mode. Pieces marked as a **surface** (counters, tables, TV stands)
+accept small **mountable** pieces on top: drop a toaster near a counter and it
+lands on it, and moving the counter carries it along. Moving a table likewise
+carries the chairs tucked around it.
 
 #### Custom objects (recipes)
 
@@ -238,16 +363,31 @@ way while you're typing in a text field.
 
 ### Layers & presets
 
-The **2D Layers** section turns groups of things on and off — background,
-furniture, appliances, labels, lights, switches, sensors, motion, env, info
-cards, zones, avatars, name labels, geo, battery badges, ground, dimensions,
-neighborhood, flights, and more. Walls, doors, and windows always draw.
+The **2D Layers** section turns groups of things on and off. Every layer is a
+checkbox, grouped into six categories:
 
-- The **activity** layer (off by default) adds warm glow pools where lights are on or motion is firing.
-- A few layers ship **off** by default — the **temperature heat-map** and the **vacuum room map** — so turn them on when you want them.
-- Save your own layer combinations as presets. A built-in **Simple floorplan** preset shows just avatars and activity glow for a clean kiosk look.
+| Category | Layers |
+|---|---|
+| **Labels** | Room & area labels · Object labels · Person name labels · Dimensions · Battery warnings |
+| **Structure & furniture** | Walls · Doors & windows · Furniture · Appliances · Peek floors · Background image · 3D grid |
+| **Ground & areas** | Ground / yard · Zones & halos · Temperature heat-map · Activity glow · Vacuum room map |
+| **Devices** | Lights · Switches · mmWave sensors · Motion sensors · Env sensors · Info cards |
+| **People & presence** | Avatars |
+| **Outside world** | Geo landmarks · Weather effects (3D) · Flights · Neighborhood · Background text |
 
-Layers also drive the 3D scene, and they can be set from a kiosk URL.
+A few distinctions worth knowing:
+
+- **Room & area labels** covers the names of rooms *and* of ground areas and pools — one "what is this space called" switch. **Object labels** covers the name text on fixtures, doors, windows, and furniture. Value readouts (a sensor's reading, an info card's number, a thermostat's temperature) stay with their own fixture layer, since they're state rather than a caption.
+- **Walls** and **Doors & windows** are real layers — turn openings off and they stop being clickable too, so a door can't swallow a click you meant for the room behind it.
+- **Peek floors** hides the onion-skin underlay from other floors without changing those floors' own show / peek / hide setting.
+- **Activity glow** (warm pools where lights are on or motion is firing), the **temperature heat-map**, and the **vacuum room map** ship **off** — they're opt-in views. Everything else is on unless you turn it off.
+
+Save your own combinations as **presets**, and recall them by name. A built-in
+**Simple floorplan** preset shows just walls, rooms, avatars, and activity glow
+for a clean kiosk look.
+
+Layers also drive the 3D scene, they can be set from a kiosk URL, and a Lovelace
+card can pick a preset or its own custom set.
 
 The small floor readout in the bottom-right corner (floor name, sensor and wall
 counts, and the floor's size) can be switched off with **"Show floor info readout"** in Settings ▸ Display.
@@ -257,7 +397,7 @@ counts, and the floor's size) can be switched off with **"Show floor info readou
 - **Zoom** with the mouse wheel (anchored at the cursor).
 - **Pan** with the middle or right mouse button, or hold Space and drag.
 - On a **touch screen**, one finger places or drags, and two fingers pinch to zoom and pan. An intentional edge-swipe from the left still opens the HA sidebar.
-- Reset the view with **Ctrl/Cmd+0** or the **⟳ Reset view** button in the bottom-left corner. The view also resets when you switch floors.
+- Reset the view with **Ctrl/Cmd+0** or the **⟳ Reset view** button in the bottom-left corner. Switching floors keeps where you are — stories share one coordinate frame, so the spot you were looking at stays put.
 
 ### Alignment guides
 

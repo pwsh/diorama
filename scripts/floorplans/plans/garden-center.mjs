@@ -218,6 +218,12 @@ export function build() {
     furn('tree', 4600, 9600, { rotation: 0 }),
     furn('lawn_chair', 1200, 11200, { rotation: 180, label: 'Lounger display' }),
     furn('lawn_chair', 2200, 11200, { rotation: 180, label: 'Lounger display' }),
+    // Specimen stock: balled-and-burlapped birch, priced to move.
+    furn('birch_tree', 4900, 5800, { rotation: 0, label: 'Birch — specimen stock' }),
+    furn('birch_tree', 2100, 7900, { rotation: 0, label: 'Birch — specimen stock' }),
+    // Porch-furniture display beside the patio sets.
+    furn('rocking_chair', 7000, 2500, { rotation: 0, label: 'Porch rocker display' }),
+    furn('rocking_chair', 11200, 1700, { rotation: 0, label: 'Porch rocker display' }),
   ];
 
   const lights = [
@@ -288,6 +294,18 @@ export function build() {
       arcDeg: 180, rotation: 90, radius: 3000, zoneNumber: 3,
       label: 'Zone 3 — west lawn', localState: 'on',
     },
+    {
+      id: nid('spz'), x: 14000, y: 5400, entity_id: null, headKind: 'drip',
+      arcDeg: 360, rotation: 0, radius: 1800, zoneNumber: 4,
+      label: 'Zone 4 — potted stock drip', localState: 'on',
+    },
+  ];
+
+  const valves = [
+    {
+      id: nid('vl'), x: 6250, y: 5100, rotation: 0, entity_id: null,
+      localState: 'on', label: 'Irrigation manifold',
+    },
   ];
 
   const flagpoles = [
@@ -314,6 +332,7 @@ export function build() {
   // repairFloor's explicit field list, so they survive import/load unchanged).
   f.sprinklerZones = sprinklerZones;
   f.flagpoles = flagpoles;
+  f.valves = valves;
 
   const roamers = [
     roamer('Marigold', ['adult', 'elder'], { color: '#7cb342' }),
@@ -368,6 +387,10 @@ export function build() {
       'the shop and delivery gate. Three unbound demo AI-avatar presence sensors (shop,',
       'nursery yard, west lawn) keep customers and staff moving with no Home Assistant',
       'attached.',
+      '',
+      'Retail additions: two balled-and-burlapped birch specimens in the bulk yard, a pair',
+      '  of porch rockers in the patio-furniture display, a fourth (drip) sprinkler zone on',
+      '  the potted stock, and an irrigation manifold valve at the shop yard corner.',
     ].join('\n'),
   });
 }

@@ -95,13 +95,43 @@ Then pick a **source**:
 
 ### Filters & options
 
-- **Radius (nm)** — how far out to search and draw. Default 30, range 5–100.
+- **Radius (nm)** — how far out to search and draw. Default 15, range 5–100.
 - **Poll (s)** — how often to refresh. Default 8, range 5–60. (The cloud feed documents a one-request-per-second limit; don't go below the minimum.)
 - **Min / max altitude (ft)** — leave blank for no filter. Useful for hiding cruising traffic and keeping only the approach path over your house.
-- **Callsign labels** — on by default.
 - **Track the ISS** — on by default; a live dot in the sky, no binding needed.
 
 Busy airspace is capped to the nearest 50 aircraft.
+
+#### Sizing the sky
+
+Two settings decide how big the traffic reads, without changing which aircraft
+you fetch:
+
+- **Draw radius (m)** — how far away, in scene metres, an aircraft sitting at exactly your search radius is drawn (default 300, range 60–1000). Raise it and the traffic genuinely moves out and away; lower it and the sky closes in around the house.
+- **Model size ×** — a plain size multiplier for every aircraft model (0.5–4). Use it when planes read too small from a zoomed-out camera.
+
+#### Labels & markings
+
+- **Callsign labels** — on by default. With them on, a **Label fields** grid picks what each label shows: callsign, registration, type, operator, altitude, speed, climb/descent, squawk, and distance.
+- **Tow banners (small planes)** — a small propeller aircraft with a callsign tows a real fabric banner instead of a label plate. Turn it off for plain labels everywhere.
+- **Status beacons** — a flashing bead on the fuselage: red for an emergency squawk, yellow for aircraft the feed flags as noteworthy, green for military, white for an FAA privacy program.
+- **Dim privacy-flagged aircraft** — on by default. Aircraft enrolled in the FAA's privacy programs are drawn translucent with a 🔒 badge, and an anonymized one shows only its hex code — a courtesy the raw data doesn't enforce for you.
+
+#### Your own glow rules
+
+Want your local medevac helicopter to pulse magenta, or every aircraft from one
+operator to glow? The **Glow rules** editor builds an ordered list of rules,
+each matching on callsign, registration, type, operator, squawk, altitude,
+speed, distance, or the status flags — military, noteworthy, the two FAA
+privacy programs (anonymized and blocked), and emergency — with wildcards
+where you want them.
+
+A match assigns a **color** (or two, for alternating) and an animation:
+**solid**, **flash**, **strobe**, **rotate**, **fade**, **alternate**, or
+**none** to mute a beacon entirely. The first matching rule wins, so order
+matters — reorder rows with ▲ ▼. An emergency squawk always shows the red
+emergency beacon regardless of your rules, and the rules do nothing while
+**Status beacons** is off.
 
 ### What you see
 
@@ -116,6 +146,14 @@ Busy airspace is capped to the nearest 50 aircraft.
 > bounded shell around your home so the traffic stays in frame. The *direction*
 > an aircraft sits in is exact; its size and spacing relative to your house are
 > deliberately not.
+
+### Inspecting an aircraft
+
+**Click any aircraft** — in 3D or on its 2D dart — to open a read-only card with
+its real altitude, speed, distance, bearing, and how old the fix is, plus status
+chips for emergency, military, or privacy flags. It keeps updating while it's
+open and says so plainly when the aircraft leaves the feed. On a touch screen
+the tap target is forgiving, so you don't have to hit a dart exactly.
 
 ### Flight alerts
 

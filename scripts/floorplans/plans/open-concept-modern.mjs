@@ -79,8 +79,9 @@ export function buildBaseGeometry(b) {
     door(6400, 7300, 270, { w: 900, label: 'Pantry → Kitchen' }),
     // Wing B
     door(9250, 0, 0, { w: 1500, label: 'Main Entry', lockEntity: null, doorbellEntity: null }),
-    door(8500, 11000, 0, { w: 1500, label: 'Patio door L' }),
-    door(10000, 11000, 0, { w: 1500, label: 'Patio door R' }),
+    // A 3 m two-panel glass wall onto the covered patio.
+    door(8500, 11000, 0, { w: 1500, kind: 'sliding_glass', label: 'Patio door L' }),
+    door(10000, 11000, 0, { w: 1500, kind: 'sliding_glass', label: 'Patio door R' }),
     door(13600, 8950, 270, { w: 900, label: 'Living → Hall' }),
     // Wing C
     door(14700, 1950, 270, { w: 900, label: 'Office' }),
@@ -200,8 +201,12 @@ export function build() {
     furn('plant', 6900, 15400, { rotation: 0 }),
     furn('tree', 3000, 12000, { rotation: 0 }),
     furn('tree', 1500, 14500, { rotation: 0 }),
+    // Mature specimen trees anchoring the deep west yard.
+    furn('willow_tree', 4800, 14100, { rotation: 0, label: 'Weeping willow' }),
+    furn('birch_tree', 2500, 9700, { rotation: 0, label: 'Paper birch' }),
     furn('trash_bin', 6300, -600, { rotation: 0 }),
     furn('recycle_bin', 7000, -600, { rotation: 0 }),
+    furn('mailbox', 8000, -600, { rotation: 180, label: 'Curbside mailbox' }),
   ];
 
   const lights = [
@@ -285,8 +290,10 @@ export function build() {
       '  reading chair, carpet rug.',
       'Primary Bath: double vanity, toilet, walk-in shower; sconce pair.',
       'Primary Walk-in Closet: two built-in wardrobe runs.',
-      'Patio / Yard: picnic table + lawn chairs on the covered patio, side-yard trees,',
-      '  curbside trash + recycle bins at the front.',
+      'Patio / Yard: picnic table + lawn chairs on the covered patio behind a 3 m',
+      '  two-panel sliding-glass wall, side-yard trees with a mature weeping willow and',
+      '  a paper birch in the deep west yard, curbside trash + recycle bins and a',
+      '  mailbox at the front.',
     ].join('\n'),
   });
 }

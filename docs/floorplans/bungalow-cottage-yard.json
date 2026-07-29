@@ -1,7 +1,7 @@
 {
   "diorama": 2,
   "name": "Bungalow — Cottage + Yard",
-  "exportedAt": "2026-07-25T00:00:00.000Z",
+  "exportedAt": "2026-07-29T00:00:00.000Z",
   "store": {
     "v": 2,
     "floors": [
@@ -747,6 +747,71 @@
             "w": 700,
             "h": 700,
             "kind": "bush"
+          },
+          {
+            "id": "bungalow-cottage-yard-fn60",
+            "x": 11050,
+            "y": 14052,
+            "w": 3000,
+            "h": 3000,
+            "kind": "oak_tree",
+            "label": "Back-yard oak"
+          },
+          {
+            "id": "bungalow-cottage-yard-fn61",
+            "x": 1500,
+            "y": 10000,
+            "w": 2000,
+            "h": 2000,
+            "kind": "spruce_tree",
+            "label": "West-side spruce"
+          },
+          {
+            "id": "bungalow-cottage-yard-fn62",
+            "x": 11200,
+            "y": 1200,
+            "w": 1800,
+            "h": 1800,
+            "kind": "birch_tree",
+            "label": "Front birch"
+          },
+          {
+            "id": "bungalow-cottage-yard-fn63",
+            "x": 14700,
+            "y": 10500,
+            "w": 1800,
+            "h": 1800,
+            "kind": "birch_tree",
+            "label": "East-side birch"
+          },
+          {
+            "id": "bungalow-cottage-yard-fn64",
+            "x": 6700,
+            "y": 400,
+            "w": 250,
+            "h": 350,
+            "kind": "mailbox",
+            "rotation": 180,
+            "label": "Mailbox"
+          },
+          {
+            "id": "bungalow-cottage-yard-fn65",
+            "x": 5900,
+            "y": 1750,
+            "w": 1000,
+            "h": 2400,
+            "kind": "ramp",
+            "label": "Front-walk ramp"
+          },
+          {
+            "id": "bungalow-cottage-yard-fn66",
+            "x": 4200,
+            "y": 13800,
+            "w": 600,
+            "h": 800,
+            "kind": "rocking_chair",
+            "rotation": 180,
+            "label": "Porch rocker"
           }
         ],
         "lights": [
@@ -913,6 +978,7 @@
             "w": 800,
             "rotation": 90,
             "entity_id": null,
+            "kind": "sliding",
             "label": "Mudroom"
           },
           {
@@ -1368,6 +1434,6 @@
     "customObjects": [],
     "people": [],
     "bleShowUnknown": true,
-    "notes": "~997 sq ft (92.6 m²) interior · 1 floor · 13 rooms + landscaped yard\n\nThe Small 2-Bed Bungalow re-skinned as a cozy cottage and set on its own lot.\nThe house itself is identical — front living room, galley kitchen open to an\ninterior breakfast nook and back mudroom, and a two-bedroom private wing off a\ncentral hallway — but dressed in a warmer palette (deeper honey-oak floors, warm\ncream walls) and surrounded on all four sides by a 3-metre yard. A grass lawn\nwraps the house; a concrete front walk runs from the front door out to the\nstreet; a mulch foundation bed lines the front wall with bushes and a flower bed;\ntrees anchor the corners, a bird bath sits in the front lawn, and the back yard\nhas two lawn chairs and a picnic table for outdoor dining.\n\nInterior (unchanged from the base bungalow):\nLiving Room: sofa + TV wall, armchair, coffee table, bookshelf, seating rug, plant.\nKitchen: galley run (sink, dishwasher, fridge, stove + microwave, counter, cabinets).\nDining Nook: interior 4-seat breakfast table with bench.\nMudroom / Laundry: washer + dryer, boot bench.\nPrimary Bedroom: queen bed, nightstands, dresser, reading chair; own closet.\nBathroom: toilet, vanity, tub. Utility / Storage: shelving + walk-through to Bedroom 2.\nBedroom 2: full bed, nightstand, desk, dresser; reach-in + storage closets.\n\nYard:\n  • Grass lawn wrapping the house on all four sides.\n  • Concrete front walk from the front door to the street.\n  • Mulch foundation bed along the front wall with two bushes and a flower bed;\n    a fourth bush west of the walk.\n  • Two shade trees at the front corners, one at the back; a front-lawn bird bath.\n  • Back-yard picnic table with two lawn chairs for outdoor dining."
+    "notes": "~997 sq ft (92.6 m²) interior · 1 floor · 13 rooms + landscaped yard\n\nThe Small 2-Bed Bungalow re-skinned as a cozy cottage and set on its own lot.\nThe house itself is identical — front living room, galley kitchen open to an\ninterior breakfast nook and back mudroom, and a two-bedroom private wing off a\ncentral hallway — but dressed in a warmer palette (deeper honey-oak floors, warm\ncream walls) and surrounded on all four sides by a 3-metre yard. A grass lawn\nwraps the house; a concrete front walk runs from the front door out to the\nstreet; a mulch foundation bed lines the front wall with bushes and a flower bed;\ntrees anchor the corners, a bird bath sits in the front lawn, and the back yard\nhas two lawn chairs and a picnic table for outdoor dining.\n\nInterior (unchanged from the base bungalow):\nLiving Room: sofa + TV wall, armchair, coffee table, bookshelf, seating rug, plant.\nKitchen: galley run (sink, dishwasher, fridge, stove + microwave, counter, cabinets).\nDining Nook: interior 4-seat breakfast table with bench.\nMudroom / Laundry: washer + dryer, boot bench.\nPrimary Bedroom: queen bed, nightstands, dresser, reading chair; own closet.\nBathroom: toilet, vanity, tub. Utility / Storage: shelving + walk-through to Bedroom 2.\nBedroom 2: full bed, nightstand, desk, dresser; reach-in + storage closets.\n\nYard:\n  • Grass lawn wrapping the house on all four sides.\n  • Concrete front walk from the front door to the street.\n  • Mulch foundation bed along the front wall with two bushes and a flower bed;\n    a fourth bush west of the walk.\n  • Two shade trees at the front corners, one at the back; a front-lawn bird bath.\n  • Back-yard picnic table with two lawn chairs for outdoor dining.\n\nYard additions: a back-yard oak, a west-side spruce and two birches (front and east),\n  a curbside mailbox, a step-free ramp up the front walk, and a porch rocker on the\n  back lawn."
   }
 }

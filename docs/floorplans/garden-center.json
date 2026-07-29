@@ -1,7 +1,7 @@
 {
   "diorama": 2,
   "name": "Lawn & Garden Center — The Potting Shed",
-  "exportedAt": "2026-07-25T00:00:00.000Z",
+  "exportedAt": "2026-07-29T00:00:00.000Z",
   "store": {
     "v": 2,
     "floors": [
@@ -702,6 +702,42 @@
             "kind": "lawn_chair",
             "rotation": 180,
             "label": "Lounger display"
+          },
+          {
+            "id": "garden-center-fn60",
+            "x": 4900,
+            "y": 5800,
+            "w": 1800,
+            "h": 1800,
+            "kind": "birch_tree",
+            "label": "Birch — specimen stock"
+          },
+          {
+            "id": "garden-center-fn61",
+            "x": 2100,
+            "y": 7900,
+            "w": 1800,
+            "h": 1800,
+            "kind": "birch_tree",
+            "label": "Birch — specimen stock"
+          },
+          {
+            "id": "garden-center-fn62",
+            "x": 7000,
+            "y": 2500,
+            "w": 600,
+            "h": 800,
+            "kind": "rocking_chair",
+            "label": "Porch rocker display"
+          },
+          {
+            "id": "garden-center-fn63",
+            "x": 11200,
+            "y": 1700,
+            "w": 600,
+            "h": 800,
+            "kind": "rocking_chair",
+            "label": "Porch rocker display"
           }
         ],
         "lights": [
@@ -1497,6 +1533,19 @@
             "zoneNumber": 3,
             "label": "Zone 3 — west lawn",
             "localState": "on"
+          },
+          {
+            "id": "garden-center-spz4",
+            "x": 14000,
+            "y": 5400,
+            "entity_id": null,
+            "headKind": "drip",
+            "arcDeg": 360,
+            "rotation": 0,
+            "radius": 1800,
+            "zoneNumber": 4,
+            "label": "Zone 4 — potted stock drip",
+            "localState": "on"
           }
         ],
         "flagpoles": [
@@ -1507,6 +1556,17 @@
             "flag": "open_sign",
             "height": 6000,
             "label": "OPEN flag"
+          }
+        ],
+        "valves": [
+          {
+            "id": "garden-center-vl1",
+            "x": 6250,
+            "y": 5100,
+            "rotation": 0,
+            "entity_id": null,
+            "localState": "on",
+            "label": "Irrigation manifold"
           }
         ]
       }
@@ -1529,6 +1589,6 @@
     "customObjects": [],
     "people": [],
     "bleShowUnknown": true,
-    "notes": "~310 sq ft shop + ~14,900 sq ft fenced lot · 1 floor · 3 rooms — yard & terrain showcase\n\nA neighbourhood lawn-and-garden centre on a 16 × 12 m corner lot: a compact indoor\nshop in the south-west corner and a big fenced nursery yard wrapping around it.\nThis plan exists to exercise the whole outdoor/terrain arc at once — ground\ncoverings, terraces, path ribbons, fences, gates, hedges, sprinklers, a flagpole\nand the full outdoor furniture family — rather than to model a home.\n\nBoundary: white picket along the street frontage (south and east), solid privacy\nboard along the two back lot lines, a customer gate off the street and a delivery\ngate on the east side. A clipped hedge run divides the shrub display from the\nnursery beds without closing the yard off.\n\nGround: grass over the whole lot, a gravel bulk bay and a paver-sand bay along the\nfrontage, a mulched perennial bed behind the hedge, and a water display pond with\na fountain in it. A two-tier terraced display bed sits mid-yard — a mulch podium\nraised 200 mm with a rock-capped tier raised 450 mm nested inside it, planted with\nannual flower beds and topiary bushes. Two concrete path ribbons (authored as\ncenterlines and buffered into polygons) run from the shop door out to the potting\nshed and from the customer gate up into the yard.\n\nGarden Shop: checkout island on an entry mat, wrap counter, seed & bulb counter,\n  a tool-wall cabinet, two shelving runs for pots and fertiliser, a potting sink\n  and two rows of houseplants under a picture-window frontage.\nNursery Yard: patio-furniture display (picnic table flanked by two lawn chairs),\n  boulder and bulk-stone displays, bird bath, shade and pine trees, a shrub row,\n  eight perennial flower beds in two rows, a swing-set display, and curbside bins.\n  Three sprinkler zones (a 200° rotor over the nursery beds plus two spray heads)\n  and a robot-mower dock keep it maintained; an OPEN flag flies at the frontage.\nPotting Shed: a free-standing 2.6 × 2.2 m shed with a potting bench, a shed sink,\n  seed shelving and a plant, lit by a mason-jar lantern.\n\nLighting leans on the ground light kinds: five flush in-ground path markers along\nthe main ribbon, three aimable ground spots uplighting the shade tree, the pond\nand a pine, a string-light wash over the patio display, and two floodlights on\nthe shop and delivery gate. Three unbound demo AI-avatar presence sensors (shop,\nnursery yard, west lawn) keep customers and staff moving with no Home Assistant\nattached."
+    "notes": "~310 sq ft shop + ~14,900 sq ft fenced lot · 1 floor · 3 rooms — yard & terrain showcase\n\nA neighbourhood lawn-and-garden centre on a 16 × 12 m corner lot: a compact indoor\nshop in the south-west corner and a big fenced nursery yard wrapping around it.\nThis plan exists to exercise the whole outdoor/terrain arc at once — ground\ncoverings, terraces, path ribbons, fences, gates, hedges, sprinklers, a flagpole\nand the full outdoor furniture family — rather than to model a home.\n\nBoundary: white picket along the street frontage (south and east), solid privacy\nboard along the two back lot lines, a customer gate off the street and a delivery\ngate on the east side. A clipped hedge run divides the shrub display from the\nnursery beds without closing the yard off.\n\nGround: grass over the whole lot, a gravel bulk bay and a paver-sand bay along the\nfrontage, a mulched perennial bed behind the hedge, and a water display pond with\na fountain in it. A two-tier terraced display bed sits mid-yard — a mulch podium\nraised 200 mm with a rock-capped tier raised 450 mm nested inside it, planted with\nannual flower beds and topiary bushes. Two concrete path ribbons (authored as\ncenterlines and buffered into polygons) run from the shop door out to the potting\nshed and from the customer gate up into the yard.\n\nGarden Shop: checkout island on an entry mat, wrap counter, seed & bulb counter,\n  a tool-wall cabinet, two shelving runs for pots and fertiliser, a potting sink\n  and two rows of houseplants under a picture-window frontage.\nNursery Yard: patio-furniture display (picnic table flanked by two lawn chairs),\n  boulder and bulk-stone displays, bird bath, shade and pine trees, a shrub row,\n  eight perennial flower beds in two rows, a swing-set display, and curbside bins.\n  Three sprinkler zones (a 200° rotor over the nursery beds plus two spray heads)\n  and a robot-mower dock keep it maintained; an OPEN flag flies at the frontage.\nPotting Shed: a free-standing 2.6 × 2.2 m shed with a potting bench, a shed sink,\n  seed shelving and a plant, lit by a mason-jar lantern.\n\nLighting leans on the ground light kinds: five flush in-ground path markers along\nthe main ribbon, three aimable ground spots uplighting the shade tree, the pond\nand a pine, a string-light wash over the patio display, and two floodlights on\nthe shop and delivery gate. Three unbound demo AI-avatar presence sensors (shop,\nnursery yard, west lawn) keep customers and staff moving with no Home Assistant\nattached.\n\nRetail additions: two balled-and-burlapped birch specimens in the bulk yard, a pair\n  of porch rockers in the patio-furniture display, a fourth (drip) sprinkler zone on\n  the potted stock, and an irrigation manifold valve at the shop yard corner."
   }
 }

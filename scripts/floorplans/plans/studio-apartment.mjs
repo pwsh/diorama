@@ -34,7 +34,7 @@ export function build() {
   const doors = [
     door(4200, 0, 0, { w: 900, label: 'Entry', doorbellEntity: null }),   // main entry (south)
     door(100, 700, 0, { w: 700, label: 'Closet' }),                        // wall C
-    door(1200, 2400, 0, { w: 850, label: 'Bathroom' }),                    // wall D
+    door(1200, 2400, 0, { w: 850, kind: 'pocket', label: 'Bathroom' }),    // wall D — space-saver
     door(2950, 1500, 0, { w: 700, label: 'Utility' }),                     // wall F
   ];
 
@@ -135,6 +135,9 @@ export function build() {
       'Bathroom: bathtub/shower combo, toilet, and a vanity sink; recessed ceiling light.',
       'Entry Closet: reach-in coat closet at the door.',
       'Utility Closet: stacked washer + dryer.',
+      '',
+      'Space-saving detail: the bathroom is on a pocket door — an 850 mm swing arc is the',
+      '  one thing a 451 sq ft studio genuinely cannot afford.',
     ].join('\n'),
   });
 }

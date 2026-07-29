@@ -59,9 +59,9 @@ export function build() {
   ];
 
   const doors1 = [
-    door(5500, 0, 0, { w: 1000, label: 'Front', lockEntity: null, doorbellEntity: null }),
-    door(4650, 600, 270, { w: 900, label: 'Living ↔ Foyer' }),      // cased opening
-    door(7350, 600, 270, { w: 900, label: 'Dining ↔ Foyer' }),      // cased opening
+    door(5500, 0, 0, { w: 1400, kind: 'double', label: 'Front', lockEntity: null, doorbellEntity: null }),
+    door(4650, 600, 270, { w: 1400, kind: 'french', label: 'Living ↔ Foyer' }),   // glazed pair
+    door(7350, 600, 270, { w: 1400, kind: 'french', label: 'Dining ↔ Foyer' }),   // glazed pair
     door(5550, 2400, 0, { w: 1000, label: 'Foyer ↔ Stair' }),       // cased opening
     door(5500, 6600, 0, { w: 1000, label: 'Stair ↔ Back Hall' }),   // cased opening
     door(4650, 7500, 270, { w: 1200, label: 'Family ↔ Hall' }),     // cased opening
@@ -100,10 +100,11 @@ export function build() {
     furn('bookshelf', 200, 900, { rotation: 90 }),
     furn('rug', 2300, 1900, { rotation: 0, w: 2600, h: 1700 }),
     furn('plant', 300, 3900, { rotation: 0 }),
+    // Hall bench moved into the Living Room — the foyer is now pure circulation
+    // between the front doors and the two french-door openings.
+    furn('bench', 4200, 3000, { rotation: 90, w: 800, h: 400 }),
     // Foyer
-    furn('bench', 4900, 1950, { rotation: 90, w: 800, h: 400 }),
     furn('rug', 6000, 1200, { rotation: 0, w: 1200, h: 2000 }),
-    furn('plant', 7150, 2200, { rotation: 0 }),
     // Stair Hall — the flight (first half of the linked stair pair)
     furn('stairs', 6000, 4500, { rotation: 0, stairLinkId: STAIR, label: 'Stairs to 2F' }),
     furn('bench', 4850, 6300, { rotation: 90 }),
@@ -119,6 +120,7 @@ export function build() {
     furn('chair', 9775, 2650, { rotation: 180 }),
     furn('chair', 10600, 2650, { rotation: 180 }),
     furn('cabinet', 11900, 1500, { rotation: 270, label: 'China cabinet' }),
+    furn('plant', 8200, 2200, { rotation: 0 }),
     furn('rug', 9775, 2150, { rotation: 0, w: 2700, h: 1900 }),
     furn('plant', 11950, 3950, { rotation: 0 }),
     // Half Bath
@@ -163,6 +165,8 @@ export function build() {
     furn('trash_bin', 13400, 7000, { rotation: 0 }),
     furn('recycle_bin', 14100, 7000, { rotation: 0 }),
     furn('tree', 15500, 8500, { rotation: 0 }),
+    // Curbside
+    furn('mailbox', 4800, -700, { rotation: 180, label: 'Curbside mailbox' }),
   ];
 
   const lights1 = [
@@ -171,6 +175,8 @@ export function build() {
     light(6000, 1200, { iconKind: 'bulb', label: 'Foyer' }),
     light(6000, 4500, { iconKind: 'bulb', label: 'Stair Hall' }),
     light(6000, 8250, { iconKind: 'bulb', label: 'Back Hall' }),
+    light(4750, 7900, { iconKind: 'wall_sconce', rotation: -90, radius: 500, label: 'Back Hall sconce' }),
+    light(7250, 7900, { iconKind: 'wall_sconce', rotation: 90, radius: 500, label: 'Back Hall sconce' }),
     light(8100, 5000, { iconKind: 'sconce', label: 'Half Bath', radius: 500 }),
     light(10525, 5000, { iconKind: 'bulb', label: 'Mudroom' }),
     light(2325, 7100, { iconKind: 'bulb', label: 'Family Room' }),
@@ -319,7 +325,7 @@ export function build() {
     light(1325, 5000, { iconKind: 'sconce', label: 'Primary Bath', radius: 500 }),
     light(2325, 7800, { iconKind: 'bulb', label: 'Primary Bedroom' }),
     light(1000, 8700, { iconKind: 'lamp', label: 'Primary lamp', height: 1400 }),
-    light(9775, 7800, { iconKind: 'bulb', label: 'Bedroom 4' }),
+    light(9775, 7800, { iconKind: 'fan', label: 'Bedroom 4 fan' }),
   ];
 
   const f2 = floor({
@@ -383,6 +389,12 @@ export function build() {
       'Primary Bathroom: toilet, vanity, tub, corner shower; sconce.',
       'Primary Walk-in Closet: two wardrobe runs + a center dresser.',
       'Bedroom 4: queen bed, two nightstands, dresser, desk, rug.',
+      '',
+      'Millwork detail: a double-leaf front door opens onto the center hall, and matched',
+      '  glazed french pairs flank the foyer into the living and dining rooms (which makes',
+      '  the foyer pure circulation, so the hall bench moved into the living room). A',
+      '  wall-sconce pair lights the back hall, Bedroom 4 gets a bare ceiling fan, and a',
+      '  mailbox stands at the curb by the front walk.',
     ].join('\n'),
   });
 }

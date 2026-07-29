@@ -13,6 +13,7 @@ and so on), and lets you filter by domain or device or search by name. Each row
 shows its parent device as a subtitle.
 
 - **Toggle dispatch** — clicking a bound fixture calls the toggle service that matches the *entity's* domain. So a "switch" fixture bound to a `light.` entity calls the light toggle (and offers the color/brightness modal), not a switch toggle.
+- **Area filtering** — when you've bound a room to a Home Assistant area (see [The 2D editor](editor.html)), the picker for that room's occupancy sensor, or for an environmental sensor or thermostat standing in it, opens **already narrowed to that area**. A chip at the top of the list shows the filter; click it to drop the filter and see everything, or to put it back.
 - **Local state for unbound items** — doors, windows, lights, switches, TVs, and appliances can be controlled even with **no** entity bound. Clicking one flips a local on/off (or playing) state so you can mock up a scene. The sidebar shows a dim `local: on/off` badge you can also click. Binding an entity later takes over; unbinding returns to the last local state.
 - **Kiosk & view modes** — local toggles in kiosk mode are session-only (never written back), and view-only mode makes no changes at all.
 
@@ -108,6 +109,26 @@ accordingly. Unbound, click one to flip it on and off locally.
 - **Heaters** — a **space heater** with a breathing ember coil, a **wall heater** with a rising heat shimmer, and a **towel warmer** whose bars glow up slowly and fade slower still.
 - **Exhaust & heat lamps** are light kinds rather than furniture: a ceiling **heat lamp** with warm red domes, **exhaust (ceiling)** and **exhaust (wall)** vents whose blades spin and louvers open, and **exhaust + light**, where the bound light entity lights the globe and a bound fan entity spins the blades.
 
+### Mechanical & utility equipment
+
+The plant room, the basement, and the side of the house get their own appliance
+kinds — the things that quietly run your home:
+
+- **Water heater**, **boiler**, and **floor** / **wall radiators** — always glow warm when they're running, because that's the only thing they do.
+- **Air handler** and **heat pump** — glow in the color of what they're currently doing: red for heat, blue for cool, white when they're just moving air.
+- **AC condenser** — the outdoor unit, glowing cool with its top fan spinning while it runs.
+- **Sump pump** and **recirculation pump** — water scrolls visibly through them while they're running, and freezes when they stop.
+- **3D printer** — the gantry head sweeps back and forth and the print grows on the bed. Bind a progress sensor and the print height follows the real job; without one it loops through a print for effect.
+
+Bind each to whatever your setup exposes — a `climate.` or `water_heater.`
+entity, a `fan.`, a plain `switch.`, or a `binary_sensor` for something you can
+only observe. A `climate.` unit sitting in heat or cool mode counts as running
+even though its state isn't "on". Clicking one toggles it (or flips it locally
+when nothing is bound).
+
+For these kinds the **glow is the state readout** — they skip the generic green
+in-use light, so you read them by color rather than by an indicator lamp.
+
 ### Sinks & running water
 
 The five sink kinds — **sink**, **vanity sink**, **pedestal sink**, **kitchen sink** (double bowl), and **utility sink** — have open basins, faucets, and real
@@ -149,11 +170,12 @@ The furniture catalog has a **theater** category for a proper setup:
 
 ### Covers: garage doors & blinds
 
-`doorOpenFraction` drives openings proportionally, so a cover that's 40% open
-draws 40% open.
+Openings move **proportionally** to the entity behind them, so a cover reporting
+40% open draws 40% open — swing doors included.
 
 - **Garage doors** — set a door's kind to garage for a five-slat roll-up in a tall opening. Bind a cover entity; the door lifts and folds onto a ceiling track as it opens.
 - **Window blinds** — bind a cover entity to a window for a roller shade that descends from the header.
+- **Sliding and patio doors** — the sliding, pocket, and sliding-glass kinds retract along the wall by the same fraction. All the door kinds are listed in [The 2D editor](editor.html).
 
 ### Door locks & doorbells
 
@@ -256,6 +278,19 @@ Diorama finds the battery sensor that belongs to each device and draws a small
 🔋 badge on mmWave, motion, env, BLE, alarm, safety, robot, and locked-door
 fixtures when the battery drops to 20% or below. The sidebar rows show the
 percentage. Toggle these with the **battery** layer.
+
+### Presence zones
+
+Some presence sensors report **areas**, not points — an Aqara FP2's zones, a
+Frigate camera's zones, a bed or sofa occupancy sensor. Draw the shape those
+report on with the **Presence zone (▱)** tool: click 3–12 corners, then
+double-click or press Enter to finish (Esc cancels).
+
+Bind the zone to a `binary_sensor` and it glows when the sensor is on — an
+outline in 2D and a flat glowing patch in 3D. Unbound zones draw dashed. Select
+a zone to drag its orange corner handles or press **Redraw**; clicking inside it
+just selects it. Zones ride the **Zones & halos** layer, which is also the way to
+stop a large zone from swallowing clicks meant for the fixtures on top of it.
 
 ### Room occupancy
 

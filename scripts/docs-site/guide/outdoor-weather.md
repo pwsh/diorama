@@ -77,18 +77,38 @@ real stars, constellations, planets, and the moon's true position. See
 ### Background text
 
 For a playful touch, write a short message into the world itself with
-**Settings ▸ Display ▸ Background text**. Pick a mode and either type a static
-message or bind an entity to display its live value:
+**Settings ▸ Display ▸ Background text**. Add up to six entries; for each one,
+pick a mode and either type a static message or bind an entity to display its
+live value:
 
-- **Skywriting** — glowing cloud letters drifting high in the sky with the wind.
-- **Banner plane** — a little toy plane towing a readable banner on a slow orbit.
-- **Ground writing** — lettering cut into the ground itself. By default it lands on
-  the widest open patch of yard; point it at a ground area ("Fit to area") and the
-  writing is clipped to that area's real shape and painted through its own surface
-  — grass, concrete, sand, water and the rest each get their own ink.
+- **Skywriting (sky)** — glowing cloud letters drifting high in the sky with the wind.
+- **Banner plane** — a plane towing a readable banner on a slow orbit.
+- **Ground writing** — lettering laid across the ground itself.
+- **Message train** — a toy train circling the property, the message split across its cars. It reads left-to-right from either side, and grows more cars for a longer message (set the maximum).
+- **News chopper** — a toy news helicopter on a tighter, higher orbit, towing its banner from a line below.
 
-Skywriting and the banner hide during heavy storms (they'd read wrong in a
-downpour); ground writing always shows.
+Per-entry options:
+
+- **Entity value** — bind any entity and the writing shows its live state, with prefix, suffix, and unit formatting of your choice.
+- **Aircraft** (banner mode) — tow the banner with any of the eight aircraft silhouettes the flight tracker uses, in civil paint, instead of the classic toy plane.
+- **Model size ×** (0.5–5) — scale just the model or lettering. The flight path, train loop, and orbit stay where they are; this only makes the thing bigger for a zoomed-out camera.
+
+#### Ground writing
+
+Ground writing lands on the widest open patch of yard by default. Point it at a
+ground area with **Fit to area** and the text is clipped to that area's **real
+shape** — not a rectangle over it — and painted through the area's own surface,
+so each covering gets its own ink: mowed green in grass, etched pale in
+concrete, a trace in sand or water.
+
+It normally **follows the camera**, staying turned toward you like a page lying
+on the floor. Uncheck **Follow camera** and set a **Rotation (°)** to pin it
+instead — 0° puts the top of the text toward the top of your 2D plan, and
+increasing values turn it clockwise.
+
+Skywriting, the banner plane, and the chopper hide during heavy storms (they'd
+read wrong in a downpour); ground writing and the train stay. The whole family
+rides the **Background text** layer, so a kiosk view can drop the lot.
 
 ### Geo landmarks & calibration
 
@@ -106,6 +126,19 @@ Landmarks are shared across all floors, not per floor.
 
 A calibrated landmark shows its stored coordinates under its row, and distances
 throughout the geo features follow your imperial/metric setting.
+
+#### When the alignment looks wrong
+
+One badly sampled landmark can rotate everything — north points 25° off and
+every GPS pin lands in the wrong place. Each landmark row helps you find and
+fix it:
+
+- **"off by N m"** — how far that landmark's real-world position lands from where it sits on your plan. The worst offender is flagged in red with a ⚠, which is usually all you need to spot the culprit.
+- **Use in alignment** — uncheck it to keep the pin and its coordinates but drop it from the calculation. Everything re-fits without it immediately; the pin stays visible, dashed and dimmed, captioned "excluded from alignment". This is the escape hatch when one bad sample is dragging the whole plan around.
+- **🎯 Suggested position** — draws a ghost pin where that landmark's coordinates say it *should* sit on your plan, with a dashed line and the distance. **Apply** moves it there in one undo step.
+
+The repair for a mis-sampled pin is usually: exclude it, look at the suggestion,
+apply it, then switch it back on.
 
 #### Importing landmarks from a CSV
 

@@ -1,7 +1,7 @@
 {
   "diorama": 2,
   "name": "Ranch — Smart Home",
-  "exportedAt": "2026-07-25T00:00:00.000Z",
+  "exportedAt": "2026-07-29T00:00:00.000Z",
   "store": {
     "v": 2,
     "floors": [
@@ -876,7 +876,7 @@
           },
           {
             "id": "ranch-smart-home-fn72",
-            "x": 15148,
+            "x": 14300,
             "y": 9500,
             "w": 700,
             "h": 1600,
@@ -971,7 +971,17 @@
           },
           {
             "id": "ranch-smart-home-fn83",
-            "x": 16900,
+            "x": 6400,
+            "y": -500,
+            "w": 250,
+            "h": 350,
+            "kind": "mailbox",
+            "rotation": 180,
+            "label": "Curbside mailbox"
+          },
+          {
+            "id": "ranch-smart-home-fn84",
+            "x": 17400,
             "y": 7800,
             "w": 700,
             "h": 1200,
@@ -979,13 +989,22 @@
             "rotation": 270
           },
           {
-            "id": "ranch-smart-home-fn84",
-            "x": 16900,
+            "id": "ranch-smart-home-fn85",
+            "x": 17400,
             "y": 9100,
             "w": 700,
             "h": 1200,
             "kind": "lawn_chair",
             "rotation": 270
+          },
+          {
+            "id": "ranch-smart-home-fn86",
+            "x": 20200,
+            "y": 8400,
+            "w": 3000,
+            "h": 3000,
+            "kind": "oak_tree",
+            "label": "Back-yard oak"
           }
         ],
         "lights": [
@@ -994,8 +1013,8 @@
             "x": 1700,
             "y": 1900,
             "entity_id": null,
-            "iconKind": "bulb",
-            "label": "Bedroom 2"
+            "iconKind": "fan_light",
+            "label": "Bedroom 2 fan"
           },
           {
             "id": "ranch-smart-home-lt2",
@@ -1010,8 +1029,8 @@
             "x": 1700,
             "y": 5900,
             "entity_id": null,
-            "iconKind": "bulb",
-            "label": "Primary Bedroom"
+            "iconKind": "fan_light",
+            "label": "Primary Bedroom fan"
           },
           {
             "id": "ranch-smart-home-lt4",
@@ -1219,7 +1238,39 @@
             "label": "Patio"
           }
         ],
-        "sensors": [],
+        "sensors": [
+          {
+            "id": "ranch-smart-home-mm1",
+            "x": 8020,
+            "y": 120,
+            "heading": 135,
+            "fov": 120,
+            "range": 9000,
+            "label": "Living Room mmWave",
+            "deviceSlug": null,
+            "color": "#4dd0e1",
+            "avatarKinds": [
+              "adult",
+              "professional",
+              "teen"
+            ]
+          },
+          {
+            "id": "ranch-smart-home-mm2",
+            "x": 3950,
+            "y": 9850,
+            "heading": 180,
+            "fov": 120,
+            "range": 8000,
+            "label": "Corridor mmWave",
+            "deviceSlug": null,
+            "color": "#9575cd",
+            "avatarKinds": [
+              "child",
+              "elder"
+            ]
+          }
+        ],
         "motionSensors": [
           {
             "id": "ranch-smart-home-mo1",
@@ -1475,6 +1526,16 @@
             "rotation": 0,
             "entity_id": null,
             "label": "Garage man-door"
+          },
+          {
+            "id": "ranch-smart-home-dr16",
+            "x": 16000,
+            "y": 9300,
+            "w": 1800,
+            "rotation": 90,
+            "entity_id": null,
+            "kind": "sliding_glass",
+            "label": "Family slider"
           }
         ],
         "windows": [
@@ -1582,18 +1643,6 @@
           },
           {
             "id": "ranch-smart-home-win10",
-            "x": 16000,
-            "y": 8400,
-            "w": 1800,
-            "rotation": 90,
-            "entity_id": null,
-            "sill": 0,
-            "height": 2000,
-            "kind": "sliding",
-            "label": "Family slider"
-          },
-          {
-            "id": "ranch-smart-home-win11",
             "x": 22100,
             "y": 2900,
             "w": 800,
@@ -1758,10 +1807,124 @@
             "label": "Living Room vacuum"
           }
         ],
-        "presenceZones": [],
-        "cameras": [],
+        "presenceZones": [
+          {
+            "id": "ranch-smart-home-pz1",
+            "name": "Living seating",
+            "entity_id": null,
+            "color": "#26c6da",
+            "points": [
+              {
+                "x": 8600,
+                "y": 400
+              },
+              {
+                "x": 15400,
+                "y": 400
+              },
+              {
+                "x": 15400,
+                "y": 3400
+              },
+              {
+                "x": 8600,
+                "y": 3400
+              }
+            ]
+          }
+        ],
+        "cameras": [
+          {
+            "id": "ranch-smart-home-cam1",
+            "x": 15850,
+            "y": 250,
+            "rotation": 225,
+            "fov": 90,
+            "range": 9000,
+            "height": 2400,
+            "entity_id": null,
+            "alertEntity": null,
+            "label": "Living Room camera"
+          }
+        ],
         "groundAreas": [],
-        "voidAreas": []
+        "voidAreas": [],
+        "thermostats": [
+          {
+            "id": "ranch-smart-home-th1",
+            "x": 4400,
+            "y": 4900,
+            "rotation": 90,
+            "height": 1500,
+            "entity_id": null,
+            "localState": "heat_cool",
+            "localTemp": 21,
+            "label": "Hall thermostat"
+          }
+        ],
+        "plugs": [
+          {
+            "id": "ranch-smart-home-pl1",
+            "x": 14900,
+            "y": 120,
+            "rotation": 0,
+            "height": 300,
+            "entity_id": null,
+            "localState": "on",
+            "label": "Living Room outlet"
+          },
+          {
+            "id": "ranch-smart-home-pl2",
+            "x": 12500,
+            "y": 9880,
+            "rotation": 180,
+            "height": 300,
+            "entity_id": null,
+            "label": "Family Room outlet"
+          }
+        ],
+        "valves": [
+          {
+            "id": "ranch-smart-home-vl1",
+            "x": 14600,
+            "y": 5950,
+            "rotation": 0,
+            "entity_id": null,
+            "localState": "off",
+            "label": "Laundry supply valve"
+          }
+        ],
+        "infoCards": [
+          {
+            "id": "ranch-smart-home-ic1",
+            "x": 4420,
+            "y": 7900,
+            "rotation": 90,
+            "mount": "wall",
+            "height": 1500,
+            "displayMode": "clock_date",
+            "clockFormat": "12h",
+            "dateFormat": "medium",
+            "entity_id": null,
+            "label": "Hall clock"
+          }
+        ],
+        "actionButtons": [
+          {
+            "id": "ranch-smart-home-ab1",
+            "x": 6400,
+            "y": 150,
+            "rotation": 0,
+            "height": 1200,
+            "wallMount": true,
+            "actionKind": "scene",
+            "entity_id": null,
+            "icon": "🌙",
+            "color": "#7e57c2",
+            "label": "Good night",
+            "localState": "off"
+          }
+        ]
       }
     ],
     "currentFloorId": "ranch-smart-home-fl1",
@@ -1783,6 +1946,6 @@
     "customObjects": [],
     "people": [],
     "bleShowUnknown": true,
-    "notes": "~1,723 sq ft (160 m²) heated + 400 sq ft garage · 1 floor · 15 rooms · smart-home demo\n\nThe \"Maple Grove\" ranch wired up as a self-contained smart-home showcase. Same\nwalls, rooms, doors, windows, and furniture as the base Ranch plan (shared from\nthe same builder), plus a full sensor + fixture kit — every device UNBOUND so it\ndemos without a live Home Assistant. Demo AI avatars wander the busiest rooms, a\nrobot vacuum patrols the living area, environmental + safety sensors dot the key\nrooms, a fireplace warms the family room, and several accent lights start on. The\ndusk clock-lighting preset lets the always-on lights carry the scene.\n\nSmart-home kit by room:\nLiving Room: demo AI-avatar presence sensor (adult/professional pool), a\n  temperature env sensor, the robot-vacuum dock, and an always-on floor lamp.\nFamily Room: demo AI-avatar presence sensor (teen/athlete pool), a west-wall\n  fireplace light (on) and an always-on sectional lamp.\nCorridor: demo AI-avatar presence sensor (child/elder pool) + a smoke detector\n  covering both bedroom-wing legs.\nKitchen: a CO₂ env sensor (the kitchen has no exterior window — good to monitor)\n  and an always-on under-cabinet LED strip.\nHall Bath: a humidity env sensor.\nGarage: a temperature env sensor + a CO detector near the garage service door\n  (attached-garage CO is the classic risk).\n\nEverything else — the three bedrooms, primary suite, dining, laundry, office nook,\nand garage furnishings — matches the base Ranch plan exactly."
+    "notes": "~1,723 sq ft (160 m²) heated + 400 sq ft garage · 1 floor · 15 rooms · smart-home demo\n\nThe \"Maple Grove\" ranch wired up as a self-contained smart-home showcase. Same\nwalls, rooms, doors, windows, and furniture as the base Ranch plan (shared from\nthe same builder), plus a full sensor + fixture kit — every device UNBOUND so it\ndemos without a live Home Assistant. Demo AI avatars wander the busiest rooms, a\nrobot vacuum patrols the living area, environmental + safety sensors dot the key\nrooms, a fireplace warms the family room, and several accent lights start on. The\ndusk clock-lighting preset lets the always-on lights carry the scene.\n\nSmart-home kit by room:\nLiving Room: demo AI-avatar presence sensor (adult/professional pool), a\n  temperature env sensor, the robot-vacuum dock, and an always-on floor lamp.\nFamily Room: demo AI-avatar presence sensor (teen/athlete pool), a west-wall\n  fireplace light (on) and an always-on sectional lamp.\nCorridor: demo AI-avatar presence sensor (child/elder pool) + a smoke detector\n  covering both bedroom-wing legs.\nKitchen: a CO₂ env sensor (the kitchen has no exterior window — good to monitor)\n  and an always-on under-cabinet LED strip.\nHall Bath: a humidity env sensor.\nGarage: a temperature env sensor + a CO detector near the garage service door\n  (attached-garage CO is the classic risk).\n\nControl + positional kit (also all unbound):\nTwo mmWave units — one in the Living Room north-west corner sweeping the great\n  room, one at the foot of the bedroom corridor covering its full length — with\n  their coverage wedges drawn, plus a presence zone over the living seating group\n  and a camera watching the great room diagonally.\nA hall thermostat between the Bedroom 3 and Hall Bath doors, a clock/date info\n  card further down the same wall, a \"Good night\" scene button beside the front\n  door, smart plugs in the Living and Family rooms, and a laundry supply valve.\n\nEverything else — the three bedrooms, primary suite, dining, laundry, office nook,\nand garage furnishings — matches the base Ranch plan exactly."
   }
 }

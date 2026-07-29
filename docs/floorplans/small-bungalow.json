@@ -1,7 +1,7 @@
 {
   "diorama": 2,
   "name": "Small 2-Bed Bungalow",
-  "exportedAt": "2026-07-25T00:00:00.000Z",
+  "exportedAt": "2026-07-29T00:00:00.000Z",
   "store": {
     "v": 2,
     "floors": [
@@ -816,6 +816,7 @@
             "w": 800,
             "rotation": 90,
             "entity_id": null,
+            "kind": "sliding",
             "label": "Mudroom"
           },
           {
@@ -1138,6 +1139,6 @@
     "customObjects": [],
     "people": [],
     "bleShowUnknown": true,
-    "notes": "~997 sq ft (92.6 m²) · 1 floor · 13 rooms\n\nA tidy 1940s \"minimal traditional\" cottage — a modest single-story starter\nhome. A front living room takes the whole street-facing left half; behind it a\ncompact galley kitchen opens (over pass-throughs, no doors) to an interior\nbreakfast nook and a back mudroom/laundry. A single central hallway serves the\nprivate wing: a primary bedroom with its own closet, a full bath, a walk-through\nutility/storage alcove, and a second bedroom, each with reach-in closets. Warm\nhoney-oak floors and cream plaster-look walls throughout; wet rooms get their\ntile/concrete look from oversized floor-colored rug overlays.\n\nLiving Room: sofa facing the TV wall, upholstered armchair by the side window,\n  coffee table, corner bookshelf, large seating rug, a corner plant.\nKitchen: galley run — sink under the east window, dishwasher, fridge, stove with\n  over-range microwave, base counter and cabinets; pale tile-look floor.\nDining Nook: interior 4-seat breakfast table with a window-side bench, sage rug.\nMudroom / Laundry: washer + dryer at the back door, a boot bench, utility-tile floor.\nPrimary Bedroom: queen bed, two nightstands, dresser, a reading chair by the window.\nPrimary Closet: reach-in wardrobe.\nLinen Closet: hall shelving.\nHallway: a small bench near the linen closet.\nBathroom: toilet, vanity sink, tub along the east wall; seafoam tile-look floor.\nUtility / Storage: storage shelving + a cabinet, the walk-through to Bedroom 2.\nBedroom 2: full bed, nightstand, desk by the east windows, dresser.\nBedroom 2 Closet / Storage Closet: reach-in wardrobe + general storage shelving."
+    "notes": "~997 sq ft (92.6 m²) · 1 floor · 13 rooms\n\nA tidy 1940s \"minimal traditional\" cottage — a modest single-story starter\nhome. A front living room takes the whole street-facing left half; behind it a\ncompact galley kitchen opens (over pass-throughs, no doors) to an interior\nbreakfast nook and a back mudroom/laundry. A single central hallway serves the\nprivate wing: a primary bedroom with its own closet, a full bath, a walk-through\nutility/storage alcove, and a second bedroom, each with reach-in closets. Warm\nhoney-oak floors and cream plaster-look walls throughout; wet rooms get their\ntile/concrete look from oversized floor-colored rug overlays.\n\nLiving Room: sofa facing the TV wall, upholstered armchair by the side window,\n  coffee table, corner bookshelf, large seating rug, a corner plant.\nKitchen: galley run — sink under the east window, dishwasher, fridge, stove with\n  over-range microwave, base counter and cabinets; pale tile-look floor.\nDining Nook: interior 4-seat breakfast table with a window-side bench, sage rug.\nMudroom / Laundry: washer + dryer at the back door, a boot bench, utility-tile floor.\nPrimary Bedroom: queen bed, two nightstands, dresser, a reading chair by the window.\nPrimary Closet: reach-in wardrobe.\nLinen Closet: hall shelving.\nHallway: a small bench near the linen closet.\nBathroom: toilet, vanity sink, tub along the east wall; seafoam tile-look floor.\nUtility / Storage: storage shelving + a cabinet, the walk-through to Bedroom 2.\nBedroom 2: full bed, nightstand, desk by the east windows, dresser.\nBedroom 2 Closet / Storage Closet: reach-in wardrobe + general storage shelving.\n\nPeriod detail: the dining-nook opening into the mudroom/laundry is a barn slider —\n  the wall east of the leaf keeps a full 900 mm for the panel to park on."
   }
 }

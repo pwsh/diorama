@@ -57,7 +57,7 @@ export function buildTownhouseFloors(b) {
     doors: [
       door(650, 0, 0, { w: 2400, kind: 'garage', label: 'Garage' }),
       door(4600, 0, 0, { w: 800, label: 'Entry', lockEntity: null, doorbellEntity: null }),
-      door(4500, 2300, 270, { w: 800, label: 'Half Bath' }),
+      door(4500, 2300, 270, { w: 800, kind: 'pocket', label: 'Half Bath' }),
       door(3600, 5300, 270, { w: 800, label: 'Garage service' }),
       door(3600, 6600, 0, { w: 1200, label: 'Flex archway', localState: 'off' }),
       door(2550, 11000, 0, { w: 900, label: 'Backyard' }),
@@ -91,7 +91,7 @@ export function buildTownhouseFloors(b) {
       room('Kitchen', 3000, 9600),   // "kitchen" substring gates snack/coffee bubbles
     ],
     doors: [
-      door(4500, 600, 270, { w: 800, label: 'Half Bath' }),
+      door(4500, 600, 270, { w: 800, kind: 'pocket', label: 'Half Bath' }),
       door(4900, 3300, 0, { w: 800, label: 'Stair door' }),
       door(4900, 6300, 0, { w: 800, label: 'Stair exit' }),
       door(6000, 6800, 270, { w: 1500, label: 'Balcony' }),
@@ -103,8 +103,8 @@ export function buildTownhouseFloors(b) {
     ],
     stairs: [
       // switchback: down-flight to Ground + up-flight to Top (fill the 3000 mm shaft)
-      furn('stairs', 5250, 5550, { rotation: 0, w: 1500, h: 1500, stairLinkId: 'th-l1l2' }),
-      furn('stairs', 5250, 4050, { rotation: 180, w: 1500, h: 1500, stairLinkId: 'th-l2l3' }),
+      furn('stairs_half', 5250, 5550, { rotation: 0, w: 1500, h: 1500, stairLinkId: 'th-l1l2' }),
+      furn('stairs_half', 5250, 4050, { rotation: 180, w: 1500, h: 1500, stairLinkId: 'th-l2l3' }),
     ],
   };
 
@@ -143,7 +143,7 @@ export function buildTownhouseFloors(b) {
       door(1800, 4200, 270, { w: 800, label: 'Laundry' }),
       door(1650, 6300, 0, { w: 900, label: 'Primary Suite' }),
       door(4200, 7300, 270, { w: 800, label: 'Closet' }),
-      door(4200, 10100, 270, { w: 800, label: 'Ensuite' }),
+      door(4200, 10100, 270, { w: 800, kind: 'pocket', label: 'Ensuite' }),
     ],
     windows: [
       win(1950, 0, 0, { w: 1200, sill: 900, height: 1200, label: 'Secondary Bedroom' }),
@@ -238,6 +238,9 @@ export function build() {
     light(3000, 7300, { iconKind: 'pendant', label: 'Dining' }),
     light(2800, 9800, { iconKind: 'round', label: 'Kitchen' }),
     light(2800, 9300, { iconKind: 'under_cabinet', label: 'Island', rotation: 0, length: 2000 }),
+    // Stair-shaft step lights on the party wall — a 3-storey walk-up wants them.
+    light(5950, 4050, { iconKind: 'step', rotation: -90, label: 'Stair step' }),
+    light(5950, 5550, { iconKind: 'step', rotation: -90, label: 'Stair step' }),
   ];
   const middleSwitches = [
     switchFix(4300, 300, { rotation: 90, label: 'Living' }),
@@ -285,6 +288,7 @@ export function build() {
     light(2100, 8650, { iconKind: 'bulb', label: 'Primary' }),
     light(900, 10400, { iconKind: 'lamp', label: 'Bedside lamp', height: 1400 }),
     light(4700, 9200, { iconKind: 'sconce', label: 'Ensuite', radius: 450 }),
+    light(3000, 4800, { iconKind: 'oval', label: 'Upstairs Hallway' }),
   ];
   const topSwitches = [
     switchFix(1500, 3500, { rotation: 0, label: 'Bedroom' }),
@@ -351,6 +355,11 @@ export function build() {
       '  king bed under the rear windows, two nightstands, dresser, foot-of-bed bench,',
       '  reading chair, rug. Primary Walk-in Closet: two wardrobe runs. Primary Ensuite:',
       '  double vanity, toilet, and a walk-in shower.',
+      '',
+      'Space-saving detail: pocket doors on both half baths and the primary ensuite (a',
+      '  6 m-wide house cannot spare a swing arc), stair-shaft step lights on the party',
+      '  wall, an oval flush mount over the upstairs hallway, and a switchback pair of',
+      '  half-flights in the stair core.',
     ].join('\n'),
   });
 }

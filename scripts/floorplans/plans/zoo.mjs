@@ -134,6 +134,8 @@ export function build() {
     furn('recycle_bin', 15600, 1200, { rotation: 0 }),
     // Picnic lawn.
     furn('picnic_table', 11900, 1600, { rotation: 0 }),
+    furn('palm_tree', 1900, 2000, { rotation: 0, label: 'Plaza palm' }),
+    furn('ramp', 10100, 4700, { rotation: 0, label: 'Spine accessibility ramp' }),
     furn('lawn_chair', 13500, 1600, { rotation: 0 }),
     furn('lawn_chair', 14400, 1600, { rotation: 0 }),
     furn('bird_bath', 15300, 2000, { rotation: 0 }),
@@ -141,7 +143,8 @@ export function build() {
     // Savanna Paddock.
     furn('tree', 2600, 11800, { rotation: 0 }),
     furn('tree', 5400, 12000, { rotation: 0 }),
-    furn('rock_cluster', 4800, 9600, { rotation: 0 }),
+    furn('rock_cluster', 2300, 10500, { rotation: 0 }),  // shifted west to open the browse lawn
+    furn('spruce_tree', 4050, 10500, { rotation: 0, label: 'Savanna shade spruce' }),
     furn('rock_cluster', 2400, 9400, { rotation: 0 }),
     furn('bush', 5500, 9200, { rotation: 0 }),
     furn('bush', 2500, 12300, { rotation: 0 }),
@@ -341,6 +344,10 @@ export function build() {
       '',
       'AVATARS — every animal comes from the built-in base packs (Zoo Animals, Domestic',
       'Animals), which ship loaded and active, so this plan needs no avatar-pack opt-in.',
+      '',
+      'Grounds additions: a palm anchoring the entry plaza, a shade spruce in the savanna',
+      '  browse lawn (the bulk-stone cluster shifted west to make room), and a step-free',
+      '  ramp on the concrete spine between the plaza and the promenade.',
     ].join('\n'),
   });
 }

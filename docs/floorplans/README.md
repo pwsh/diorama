@@ -7,7 +7,7 @@ Settings ▸ Data ▸ Configurations ▸ Import.
 
 | Plan | Floors | Footprint | Summary |
 |---|---|---|---|
-| [Appliance Showroom — Watt’s Cooking](appliance-showroom.json) | 1 | 14000 × 10000 mm | ~1,507 sq ft (140 m²) retail hall · 1 floor · 3 rooms — appliance feature showcase |
+| [Appliance Showroom — Watt’s Cooking](appliance-showroom.json) | 1 | 20000 × 14000 mm | ~3,014 sq ft (280 m²) retail hall · 1 floor · 5 rooms — appliance, mechanical & lighting showcase |
 | [Bungalow — Cottage + Yard](bungalow-cottage-yard.json) | 1 | 15750 × 15500 mm | ~997 sq ft (92.6 m²) interior · 1 floor · 13 rooms + landscaped yard |
 | [Lawn & Garden Center — The Potting Shed](garden-center.json) | 1 | 16000 × 12000 mm | ~310 sq ft shop + ~14,900 sq ft fenced lot · 1 floor · 3 rooms — yard & terrain showcase |
 | [Interior Design Studio — Vignette & Co.](interior-design-store.json) | 1 | 13000 × 11000 mm | ~1,539 sq ft (143 m²) showroom · 1 floor · 6 vignettes — staging & dimensions showcase |

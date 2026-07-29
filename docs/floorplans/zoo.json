@@ -1,7 +1,7 @@
 {
   "diorama": 2,
   "name": "Pocket Zoo — Toon Safari",
-  "exportedAt": "2026-07-25T00:00:00.000Z",
+  "exportedAt": "2026-07-29T00:00:00.000Z",
   "store": {
     "v": 2,
     "floors": [
@@ -281,6 +281,24 @@
           },
           {
             "id": "zoo-fn9",
+            "x": 1900,
+            "y": 2000,
+            "w": 2200,
+            "h": 2200,
+            "kind": "palm_tree",
+            "label": "Plaza palm"
+          },
+          {
+            "id": "zoo-fn10",
+            "x": 10100,
+            "y": 4700,
+            "w": 1000,
+            "h": 2400,
+            "kind": "ramp",
+            "label": "Spine accessibility ramp"
+          },
+          {
+            "id": "zoo-fn11",
             "x": 13500,
             "y": 1600,
             "w": 700,
@@ -288,7 +306,7 @@
             "kind": "lawn_chair"
           },
           {
-            "id": "zoo-fn10",
+            "id": "zoo-fn12",
             "x": 14400,
             "y": 1600,
             "w": 700,
@@ -296,7 +314,7 @@
             "kind": "lawn_chair"
           },
           {
-            "id": "zoo-fn11",
+            "id": "zoo-fn13",
             "x": 15300,
             "y": 2000,
             "w": 450,
@@ -304,7 +322,7 @@
             "kind": "bird_bath"
           },
           {
-            "id": "zoo-fn12",
+            "id": "zoo-fn14",
             "x": 2600,
             "y": 11800,
             "w": 900,
@@ -312,7 +330,7 @@
             "kind": "tree"
           },
           {
-            "id": "zoo-fn13",
+            "id": "zoo-fn15",
             "x": 5400,
             "y": 12000,
             "w": 900,
@@ -320,15 +338,24 @@
             "kind": "tree"
           },
           {
-            "id": "zoo-fn14",
-            "x": 4800,
-            "y": 9600,
+            "id": "zoo-fn16",
+            "x": 2300,
+            "y": 10500,
             "w": 800,
             "h": 600,
             "kind": "rock_cluster"
           },
           {
-            "id": "zoo-fn15",
+            "id": "zoo-fn17",
+            "x": 4050,
+            "y": 10500,
+            "w": 2000,
+            "h": 2000,
+            "kind": "spruce_tree",
+            "label": "Savanna shade spruce"
+          },
+          {
+            "id": "zoo-fn18",
             "x": 2400,
             "y": 9400,
             "w": 800,
@@ -336,7 +363,7 @@
             "kind": "rock_cluster"
           },
           {
-            "id": "zoo-fn16",
+            "id": "zoo-fn19",
             "x": 5500,
             "y": 9200,
             "w": 700,
@@ -344,7 +371,7 @@
             "kind": "bush"
           },
           {
-            "id": "zoo-fn17",
+            "id": "zoo-fn20",
             "x": 2500,
             "y": 12300,
             "w": 700,
@@ -352,7 +379,7 @@
             "kind": "bush"
           },
           {
-            "id": "zoo-fn18",
+            "id": "zoo-fn21",
             "x": 9800,
             "y": 11800,
             "w": 800,
@@ -360,7 +387,7 @@
             "kind": "rock_cluster"
           },
           {
-            "id": "zoo-fn19",
+            "id": "zoo-fn22",
             "x": 8500,
             "y": 12100,
             "w": 800,
@@ -368,7 +395,7 @@
             "kind": "rock_cluster"
           },
           {
-            "id": "zoo-fn20",
+            "id": "zoo-fn23",
             "x": 10400,
             "y": 9400,
             "w": 800,
@@ -377,7 +404,7 @@
             "rotation": 90
           },
           {
-            "id": "zoo-fn21",
+            "id": "zoo-fn24",
             "x": 8300,
             "y": 10600,
             "w": 800,
@@ -385,7 +412,7 @@
             "kind": "pine_tree"
           },
           {
-            "id": "zoo-fn22",
+            "id": "zoo-fn25",
             "x": 10600,
             "y": 12300,
             "w": 700,
@@ -393,7 +420,7 @@
             "kind": "bush"
           },
           {
-            "id": "zoo-fn23",
+            "id": "zoo-fn26",
             "x": 13400,
             "y": 9300,
             "w": 900,
@@ -401,7 +428,7 @@
             "kind": "tree"
           },
           {
-            "id": "zoo-fn24",
+            "id": "zoo-fn27",
             "x": 15700,
             "y": 12100,
             "w": 800,
@@ -409,7 +436,7 @@
             "kind": "pine_tree"
           },
           {
-            "id": "zoo-fn25",
+            "id": "zoo-fn28",
             "x": 13300,
             "y": 12300,
             "w": 800,
@@ -417,7 +444,7 @@
             "kind": "pine_tree"
           },
           {
-            "id": "zoo-fn26",
+            "id": "zoo-fn29",
             "x": 15600,
             "y": 9400,
             "w": 800,
@@ -425,7 +452,7 @@
             "kind": "rock_cluster"
           },
           {
-            "id": "zoo-fn27",
+            "id": "zoo-fn30",
             "x": 15900,
             "y": 10800,
             "w": 700,
@@ -433,7 +460,7 @@
             "kind": "bush"
           },
           {
-            "id": "zoo-fn28",
+            "id": "zoo-fn31",
             "x": 2500,
             "y": 4100,
             "w": 800,
@@ -441,7 +468,7 @@
             "kind": "rock_cluster"
           },
           {
-            "id": "zoo-fn29",
+            "id": "zoo-fn32",
             "x": 4700,
             "y": 4000,
             "w": 800,
@@ -450,7 +477,7 @@
             "rotation": 90
           },
           {
-            "id": "zoo-fn30",
+            "id": "zoo-fn33",
             "x": 4800,
             "y": 5400,
             "w": 450,
@@ -458,7 +485,7 @@
             "kind": "bird_bath"
           },
           {
-            "id": "zoo-fn31",
+            "id": "zoo-fn34",
             "x": 2300,
             "y": 5400,
             "w": 700,
@@ -466,7 +493,7 @@
             "kind": "bush"
           },
           {
-            "id": "zoo-fn32",
+            "id": "zoo-fn35",
             "x": 14500,
             "y": 4200,
             "w": 2400,
@@ -475,7 +502,7 @@
             "label": "Climbing frame"
           },
           {
-            "id": "zoo-fn33",
+            "id": "zoo-fn36",
             "x": 13300,
             "y": 5500,
             "w": 700,
@@ -483,7 +510,7 @@
             "kind": "bush"
           },
           {
-            "id": "zoo-fn34",
+            "id": "zoo-fn37",
             "x": 15800,
             "y": 5500,
             "w": 800,
@@ -491,7 +518,7 @@
             "kind": "rock_cluster"
           },
           {
-            "id": "zoo-fn35",
+            "id": "zoo-fn38",
             "x": 7300,
             "y": 4000,
             "w": 1400,
@@ -500,7 +527,7 @@
             "label": "Keeper desk"
           },
           {
-            "id": "zoo-fn36",
+            "id": "zoo-fn39",
             "x": 7300,
             "y": 4750,
             "w": 500,
@@ -508,7 +535,7 @@
             "kind": "chair"
           },
           {
-            "id": "zoo-fn37",
+            "id": "zoo-fn40",
             "x": 8650,
             "y": 4000,
             "w": 900,
@@ -518,7 +545,7 @@
             "label": "Feed store"
           },
           {
-            "id": "zoo-fn38",
+            "id": "zoo-fn41",
             "x": 6700,
             "y": 4600,
             "w": 800,
@@ -528,7 +555,7 @@
             "label": "Vet manuals"
           },
           {
-            "id": "zoo-fn39",
+            "id": "zoo-fn42",
             "x": 1250,
             "y": 7400,
             "w": 900,
@@ -536,7 +563,7 @@
             "kind": "tree"
           },
           {
-            "id": "zoo-fn40",
+            "id": "zoo-fn43",
             "x": 16850,
             "y": 7400,
             "w": 700,
@@ -544,7 +571,7 @@
             "kind": "bush"
           },
           {
-            "id": "zoo-fn41",
+            "id": "zoo-fn44",
             "x": 11900,
             "y": 7000,
             "w": 900,
@@ -552,7 +579,7 @@
             "kind": "flower_bed"
           },
           {
-            "id": "zoo-fn42",
+            "id": "zoo-fn45",
             "x": 6800,
             "y": 7000,
             "w": 900,
@@ -1593,6 +1620,6 @@
     ],
     "people": [],
     "bleShowUnknown": true,
-    "notes": "252 m² lot (18 × 14 m) · 1 floor · 5 fenced enclosures + keeper hut · mostly outdoor\n\nA pocket zoo built to show off two things at once: outdoor authoring (fences,\ngates, ground paint, yard objects) and CONFINED demo avatars. Each enclosure is a\nclosed fence loop, which makes it a real wall loop and therefore a real Room; a\ndemo motion sensor dropped inside that loop projects an always-on AI animal that\nthe renderer hard-confines to its home room — so the lion stays on the bluff and\nthe penguin stays in the cove, with no scripting at all. Visitors are free-range\nroamers who follow the paths (and, being visitors, occasionally let themselves\nthrough a keeper gate). Because most pens carry a POOL of two or three species,\neach respawn re-rolls which animal is out that day.\n\nLAYOUT — a concrete entry plaza runs the full width of the south edge: ticket\ncounter and stool, benches, bins, a flagpole, and a picnic lawn at the east end.\nA blacktop promenade crosses the middle of the lot with concrete spurs branching\nto every gate, and a north–south spine links the plaza to the promenade. The\nperimeter is a clipped hedge, left OPEN at the entry.\n\nENCLOSURES (each fenced, gated and habitat-painted):\n  • Savanna Paddock — chain-link over sand, acacias and rock outcrops. A giraffe /\n    zebra / elephant herd plus a resident kangaroo (two sensors, two animals).\n  • Big Cat Bluff — chain-link over rock, boulder stacks and a pine. Lion / tiger.\n  • Bear Hollow — chain-link over grass with a spring-fed pond and two pines.\n    Bear / panda.\n  • Penguin Cove — picket fence around a big pool with a rock haul-out ledge and a\n    bird bath. Penguin / hippo.\n  • Primate Island — chain-link over grass with a climbing frame and a mulch\n    border. Monkey / gorilla.\n\nKEEPER HUT — the only enclosed building: desk and chair, a feed-store cabinet, vet\nmanuals on a shelf, windows east and west onto the service alleys, a CO₂ probe and\na smoke detector.\n\nFIXTURES — everything is UNBOUND, so the plan demos with no Home Assistant: an\nentry floodlight, plaza string lights, three promenade lamp posts, ground-spot and\nin-ground uplights on the habitats, a step light on the spine, temperature /\nhumidity / CO₂ / lux env sensors, and two security cameras. The entry flagpole is\na custom object recipe (base + pole + gold finial + flag) carried in the config,\nso the plan also exercises Store.customObjects.\n\nAVATARS — every animal comes from the built-in base packs (Zoo Animals, Domestic\nAnimals), which ship loaded and active, so this plan needs no avatar-pack opt-in."
+    "notes": "252 m² lot (18 × 14 m) · 1 floor · 5 fenced enclosures + keeper hut · mostly outdoor\n\nA pocket zoo built to show off two things at once: outdoor authoring (fences,\ngates, ground paint, yard objects) and CONFINED demo avatars. Each enclosure is a\nclosed fence loop, which makes it a real wall loop and therefore a real Room; a\ndemo motion sensor dropped inside that loop projects an always-on AI animal that\nthe renderer hard-confines to its home room — so the lion stays on the bluff and\nthe penguin stays in the cove, with no scripting at all. Visitors are free-range\nroamers who follow the paths (and, being visitors, occasionally let themselves\nthrough a keeper gate). Because most pens carry a POOL of two or three species,\neach respawn re-rolls which animal is out that day.\n\nLAYOUT — a concrete entry plaza runs the full width of the south edge: ticket\ncounter and stool, benches, bins, a flagpole, and a picnic lawn at the east end.\nA blacktop promenade crosses the middle of the lot with concrete spurs branching\nto every gate, and a north–south spine links the plaza to the promenade. The\nperimeter is a clipped hedge, left OPEN at the entry.\n\nENCLOSURES (each fenced, gated and habitat-painted):\n  • Savanna Paddock — chain-link over sand, acacias and rock outcrops. A giraffe /\n    zebra / elephant herd plus a resident kangaroo (two sensors, two animals).\n  • Big Cat Bluff — chain-link over rock, boulder stacks and a pine. Lion / tiger.\n  • Bear Hollow — chain-link over grass with a spring-fed pond and two pines.\n    Bear / panda.\n  • Penguin Cove — picket fence around a big pool with a rock haul-out ledge and a\n    bird bath. Penguin / hippo.\n  • Primate Island — chain-link over grass with a climbing frame and a mulch\n    border. Monkey / gorilla.\n\nKEEPER HUT — the only enclosed building: desk and chair, a feed-store cabinet, vet\nmanuals on a shelf, windows east and west onto the service alleys, a CO₂ probe and\na smoke detector.\n\nFIXTURES — everything is UNBOUND, so the plan demos with no Home Assistant: an\nentry floodlight, plaza string lights, three promenade lamp posts, ground-spot and\nin-ground uplights on the habitats, a step light on the spine, temperature /\nhumidity / CO₂ / lux env sensors, and two security cameras. The entry flagpole is\na custom object recipe (base + pole + gold finial + flag) carried in the config,\nso the plan also exercises Store.customObjects.\n\nAVATARS — every animal comes from the built-in base packs (Zoo Animals, Domestic\nAnimals), which ship loaded and active, so this plan needs no avatar-pack opt-in.\n\nGrounds additions: a palm anchoring the entry plaza, a shade spruce in the savanna\n  browse lawn (the bulk-stone cluster shifted west to make room), and a step-free\n  ramp on the concrete spine between the plaza and the promenade."
   }
 }

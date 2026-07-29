@@ -80,6 +80,9 @@ export function buildRanchBones(b) {
     door(16700, 0, 0, { w: 2400, kind: 'garage', label: 'Garage bay 1' }),
     door(19400, 0, 0, { w: 2400, kind: 'garage', label: 'Garage bay 2' }),
     door(18550, 6100, 0, { w: 900, label: 'Garage man-door' }),
+    // Family-room patio slider onto the side yard (was authored as a door-height
+    // `sliding` window; it is a real sliding-glass door).
+    door(16000, 9300, 90, { w: 1800, kind: 'sliding_glass', label: 'Family slider' }),
   ];
 
   const windows = [
@@ -92,7 +95,6 @@ export function buildRanchBones(b) {
     win(14100, D, 0, { w: 1200, sill: 800, height: 1200, kind: 'double_hung', label: 'Family rear' }),
     win(0, 1800, 90, { w: 1200, sill: 800, height: 1200, label: 'Bedroom 2 side' }),
     win(0, 5800, 90, { w: 1200, sill: 800, height: 1200, label: 'Primary Bedroom side' }),
-    win(16000, 8400, 90, { w: 1800, sill: 0, height: 2000, kind: 'sliding', label: 'Family slider' }),
     win(22100, 2900, 90, { w: 800, sill: 1200, height: 900, label: 'Garage utility' }),
   ];
 
@@ -184,7 +186,7 @@ export function buildRanchBones(b) {
     furn('coffee_table', 9500, 8600, { rotation: 0 }),
     furn('ottoman', 10200, 9200, { rotation: 0 }),
     furn('bookshelf', 8100, 9700, { rotation: 90 }),
-    furn('exercise_equipment', 15200, 9500, { rotation: 270 }),
+    furn('exercise_equipment', 14300, 9500, { rotation: 270 }),  // clear of the patio slider
     furn('rug', 9700, 8800, { rotation: 0, w: 3000, h: 2200 }),
     furn('plant', 15700, 7300, { rotation: 0 }),
     furn('plant', 8100, 7300, { rotation: 90 }),
@@ -197,14 +199,17 @@ export function buildRanchBones(b) {
     furn('recycle_bin', 15700, -600, { rotation: 0 }),
     furn('tree', 3000, -700, { rotation: 0 }),
     furn('tree', 8500, -700, { rotation: 0 }),
-    furn('lawn_chair', 16900, 7800, { rotation: 270 }),
-    furn('lawn_chair', 16900, 9100, { rotation: 270 }),
+    furn('mailbox', 6400, -500, { rotation: 180, label: 'Curbside mailbox' }),
+    // Patio set pulled clear of the slider's keep-clear zone.
+    furn('lawn_chair', 17400, 7800, { rotation: 270 }),
+    furn('lawn_chair', 17400, 9100, { rotation: 270 }),
+    furn('oak_tree', 20200, 8400, { rotation: 0, label: 'Back-yard oak' }),
   ];
 
   const lights = [
-    light(1700, 1900, { iconKind: 'bulb', label: 'Bedroom 2' }),
+    light(1700, 1900, { iconKind: 'fan_light', label: 'Bedroom 2 fan' }),
     light(6200, 3800, { iconKind: 'bulb', label: 'Bedroom 3' }),
-    light(1700, 5900, { iconKind: 'bulb', label: 'Primary Bedroom' }),
+    light(1700, 5900, { iconKind: 'fan_light', label: 'Primary Bedroom fan' }),
     light(700, 4300, { iconKind: 'lamp', label: 'Primary lamp', height: 1400 }),
     light(11950, 1900, { iconKind: 'bulb', label: 'Living Room' }),
     light(11950, 8500, { iconKind: 'bulb', label: 'Family Room' }),
@@ -287,7 +292,10 @@ export function build() {
       'Family Room: U-sectional, TV on a stand, coffee table, ottoman, bookshelf,',
       '  exercise equipment, rug, plants; ceiling light + sectional lamp.',
       'Garage: storage cabinet, workbench, bin/bike shelving; two LED strip lights.',
-      'Yard: curbside trash + recycle bins, two front-walk trees, backyard lawn chairs.',
+      'Yard: curbside trash + recycle bins, a mailbox and two front-walk trees; the side',
+      '  yard behind the garage has a mature oak and a pair of lawn chairs, reached from',
+      '  the family room through a sliding-glass patio door. Both bedrooms with ceiling',
+      '  fans get fan-with-light fixtures.',
     ].join('\n'),
   });
 }

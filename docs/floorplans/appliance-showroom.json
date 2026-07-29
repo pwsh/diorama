@@ -1,15 +1,15 @@
 {
   "diorama": 2,
   "name": "Appliance Showroom — Watt’s Cooking",
-  "exportedAt": "2026-07-25T00:00:00.000Z",
+  "exportedAt": "2026-07-29T00:00:00.000Z",
   "store": {
     "v": 2,
     "floors": [
       {
         "id": "appliance-showroom-fl1",
         "name": "Showroom",
-        "w": 14000,
-        "d": 10000,
+        "w": 20000,
+        "d": 14000,
         "walls": [
           {
             "id": "appliance-showroom-w1",
@@ -19,16 +19,16 @@
                 "y": 0
               },
               {
-                "x": 14000,
+                "x": 20000,
                 "y": 0
               },
               {
-                "x": 14000,
-                "y": 10000
+                "x": 20000,
+                "y": 14000
               },
               {
                 "x": 0,
-                "y": 10000
+                "y": 14000
               },
               {
                 "x": 0,
@@ -41,11 +41,11 @@
             "points": [
               {
                 "x": 0,
-                "y": 4600
+                "y": 5200
               },
               {
-                "x": 3000,
-                "y": 4600
+                "x": 4000,
+                "y": 5200
               }
             ]
           },
@@ -53,12 +53,12 @@
             "id": "appliance-showroom-w3",
             "points": [
               {
-                "x": 3000,
-                "y": 4600
+                "x": 4000,
+                "y": 5200
               },
               {
-                "x": 3000,
-                "y": 10000
+                "x": 4000,
+                "y": 14000
               }
             ]
           },
@@ -67,11 +67,50 @@
             "points": [
               {
                 "x": 0,
-                "y": 6800
+                "y": 8200
               },
               {
-                "x": 3000,
-                "y": 6800
+                "x": 4000,
+                "y": 8200
+              }
+            ]
+          },
+          {
+            "id": "appliance-showroom-w5",
+            "points": [
+              {
+                "x": 0,
+                "y": 11200
+              },
+              {
+                "x": 4000,
+                "y": 11200
+              }
+            ]
+          },
+          {
+            "id": "appliance-showroom-w6",
+            "points": [
+              {
+                "x": 12800,
+                "y": 9200
+              },
+              {
+                "x": 20000,
+                "y": 9200
+              }
+            ]
+          },
+          {
+            "id": "appliance-showroom-w7",
+            "points": [
+              {
+                "x": 12800,
+                "y": 9200
+              },
+              {
+                "x": 12800,
+                "y": 14000
               }
             ]
           }
@@ -80,7 +119,7 @@
           {
             "id": "appliance-showroom-fn6",
             "x": 3300,
-            "y": 1300,
+            "y": 2400,
             "w": 1850,
             "h": 4800,
             "kind": "car",
@@ -89,8 +128,8 @@
           },
           {
             "id": "appliance-showroom-fn7",
-            "x": 600,
-            "y": 1300,
+            "x": 250,
+            "y": 1100,
             "w": 350,
             "h": 250,
             "kind": "ev_charger",
@@ -99,8 +138,8 @@
           },
           {
             "id": "appliance-showroom-fn8",
-            "x": 9600,
-            "y": 1400,
+            "x": 13200,
+            "y": 2000,
             "w": 2600,
             "h": 1100,
             "kind": "island",
@@ -108,448 +147,29 @@
             "color": "#37474f"
           },
           {
-            "id": "appliance-showroom-fn3",
-            "x": 12400,
-            "y": 1300,
-            "w": 1600,
+            "id": "appliance-showroom-fn2",
+            "x": 17000,
+            "y": 1800,
+            "w": 1800,
             "h": 650,
             "kind": "counter",
             "label": "Order desk"
           },
           {
             "id": "appliance-showroom-fn9",
-            "x": 12100,
-            "y": 1300,
+            "x": 16500,
+            "y": 1800,
             "w": 300,
             "h": 200,
             "kind": "toaster",
             "elevation": 900,
             "localState": "on",
-            "mountOnId": "appliance-showroom-fn3"
+            "mountOnId": "appliance-showroom-fn2"
           },
           {
             "id": "appliance-showroom-fn10",
-            "x": 12700,
-            "y": 1300,
-            "w": 250,
-            "h": 250,
-            "kind": "coffee_maker",
-            "elevation": 900,
-            "localState": "on",
-            "mountOnId": "appliance-showroom-fn3"
-          },
-          {
-            "id": "appliance-showroom-fn11",
-            "x": 4400,
+            "x": 19860,
             "y": 3400,
-            "w": 760,
-            "h": 660,
-            "kind": "stove",
-            "label": "Slide-in range",
-            "localState": "on"
-          },
-          {
-            "id": "appliance-showroom-fn12",
-            "x": 5300,
-            "y": 3400,
-            "w": 760,
-            "h": 660,
-            "kind": "stove",
-            "label": "Induction range"
-          },
-          {
-            "id": "appliance-showroom-fn13",
-            "x": 6200,
-            "y": 3400,
-            "w": 610,
-            "h": 620,
-            "kind": "dishwasher",
-            "label": "Dishwasher — quiet",
-            "localState": "on"
-          },
-          {
-            "id": "appliance-showroom-fn14",
-            "x": 7000,
-            "y": 3400,
-            "w": 610,
-            "h": 620,
-            "kind": "dishwasher",
-            "label": "Dishwasher — panel-ready"
-          },
-          {
-            "id": "appliance-showroom-fn1",
-            "x": 8300,
-            "y": 3400,
-            "w": 1800,
-            "h": 650,
-            "kind": "counter",
-            "label": "Small appliances"
-          },
-          {
-            "id": "appliance-showroom-fn15",
-            "x": 7800,
-            "y": 3400,
-            "w": 520,
-            "h": 390,
-            "kind": "microwave",
-            "elevation": 900,
-            "label": "Countertop microwave",
-            "mountOnId": "appliance-showroom-fn1"
-          },
-          {
-            "id": "appliance-showroom-fn16",
-            "x": 8400,
-            "y": 3400,
-            "w": 300,
-            "h": 200,
-            "kind": "toaster",
-            "elevation": 900,
-            "mountOnId": "appliance-showroom-fn1"
-          },
-          {
-            "id": "appliance-showroom-fn17",
-            "x": 8900,
-            "y": 3400,
-            "w": 250,
-            "h": 250,
-            "kind": "coffee_maker",
-            "elevation": 900,
-            "label": "Drip brewer",
-            "localState": "on",
-            "mountOnId": "appliance-showroom-fn1"
-          },
-          {
-            "id": "appliance-showroom-fn2",
-            "x": 10400,
-            "y": 3400,
-            "w": 1600,
-            "h": 650,
-            "kind": "counter",
-            "label": "Coffee bar"
-          },
-          {
-            "id": "appliance-showroom-fn18",
-            "x": 10000,
-            "y": 3400,
-            "w": 250,
-            "h": 250,
-            "kind": "coffee_maker",
-            "elevation": 900,
-            "label": "Espresso machine",
-            "mountOnId": "appliance-showroom-fn2"
-          },
-          {
-            "id": "appliance-showroom-fn19",
-            "x": 10800,
-            "y": 3400,
-            "w": 350,
-            "h": 300,
-            "kind": "retro_fan",
-            "elevation": 900,
-            "label": "Retro desk fan",
-            "localState": "on",
-            "mountOnId": "appliance-showroom-fn2"
-          },
-          {
-            "id": "appliance-showroom-fn4",
-            "x": 4300,
-            "y": 4700,
-            "w": 450,
-            "h": 450,
-            "kind": "floor_fan",
-            "label": "Oscillating pedestal fan",
-            "localState": "on",
-            "oscillate": true
-          },
-          {
-            "id": "appliance-showroom-fn5",
-            "x": 5300,
-            "y": 4700,
-            "w": 400,
-            "h": 380,
-            "kind": "modern_fan",
-            "label": "Modern stand fan",
-            "localState": "on",
-            "oscillate": true
-          },
-          {
-            "id": "appliance-showroom-fn20",
-            "x": 6200,
-            "y": 4700,
-            "w": 300,
-            "h": 300,
-            "kind": "tower_fan",
-            "label": "Tower fan",
-            "localState": "on"
-          },
-          {
-            "id": "appliance-showroom-fn21",
-            "x": 7000,
-            "y": 4700,
-            "w": 350,
-            "h": 250,
-            "kind": "bladeless_fan",
-            "label": "Bladeless fan",
-            "localState": "on"
-          },
-          {
-            "id": "appliance-showroom-fn22",
-            "x": 7900,
-            "y": 4700,
-            "w": 450,
-            "h": 400,
-            "kind": "portable_ac",
-            "label": "Portable AC",
-            "localState": "on"
-          },
-          {
-            "id": "appliance-showroom-fn23",
-            "x": 8800,
-            "y": 4700,
-            "w": 350,
-            "h": 350,
-            "kind": "space_heater",
-            "label": "Ceramic space heater",
-            "localState": "on"
-          },
-          {
-            "id": "appliance-showroom-fn24",
-            "x": 9600,
-            "y": 4700,
-            "w": 450,
-            "h": 450,
-            "kind": "floor_fan",
-            "label": "Shop floor fan"
-          },
-          {
-            "id": "appliance-showroom-fn25",
-            "x": 10400,
-            "y": 4700,
-            "w": 300,
-            "h": 300,
-            "kind": "tower_fan",
-            "label": "Bladeless tower"
-          },
-          {
-            "id": "appliance-showroom-fn26",
-            "x": 11300,
-            "y": 4700,
-            "w": 450,
-            "h": 400,
-            "kind": "portable_ac",
-            "label": "Portable heat-pump"
-          },
-          {
-            "id": "appliance-showroom-fn27",
-            "x": 12200,
-            "y": 4700,
-            "w": 350,
-            "h": 350,
-            "kind": "space_heater",
-            "label": "Radiant heater"
-          },
-          {
-            "id": "appliance-showroom-fn28",
-            "x": 4400,
-            "y": 6100,
-            "w": 690,
-            "h": 700,
-            "kind": "washer",
-            "label": "Front-load washer",
-            "localState": "on"
-          },
-          {
-            "id": "appliance-showroom-fn29",
-            "x": 5200,
-            "y": 6100,
-            "w": 690,
-            "h": 700,
-            "kind": "dryer",
-            "label": "Heat-pump dryer",
-            "localState": "on"
-          },
-          {
-            "id": "appliance-showroom-fn30",
-            "x": 6000,
-            "y": 6100,
-            "w": 690,
-            "h": 700,
-            "kind": "washer",
-            "label": "Top-load washer"
-          },
-          {
-            "id": "appliance-showroom-fn31",
-            "x": 6800,
-            "y": 6100,
-            "w": 690,
-            "h": 700,
-            "kind": "dryer",
-            "label": "Vented dryer"
-          },
-          {
-            "id": "appliance-showroom-fn32",
-            "x": 7600,
-            "y": 6100,
-            "w": 690,
-            "h": 700,
-            "kind": "washer",
-            "label": "Compact washer"
-          },
-          {
-            "id": "appliance-showroom-fn33",
-            "x": 8600,
-            "y": 6100,
-            "w": 690,
-            "h": 700,
-            "kind": "washer",
-            "label": "Stacked pair — washer",
-            "localState": "on"
-          },
-          {
-            "id": "appliance-showroom-fn34",
-            "x": 8600,
-            "y": 6100,
-            "w": 690,
-            "h": 700,
-            "kind": "dryer",
-            "elevation": 990,
-            "label": "Stacked pair — dryer",
-            "localState": "on"
-          },
-          {
-            "id": "appliance-showroom-fn35",
-            "x": 4400,
-            "y": 7700,
-            "w": 910,
-            "h": 760,
-            "kind": "fridge",
-            "label": "French door",
-            "localState": "on"
-          },
-          {
-            "id": "appliance-showroom-fn36",
-            "x": 5500,
-            "y": 7700,
-            "w": 910,
-            "h": 760,
-            "kind": "fridge",
-            "label": "Side-by-side",
-            "localState": "on"
-          },
-          {
-            "id": "appliance-showroom-fn37",
-            "x": 6600,
-            "y": 7700,
-            "w": 910,
-            "h": 760,
-            "kind": "fridge",
-            "label": "Top freezer"
-          },
-          {
-            "id": "appliance-showroom-fn38",
-            "x": 7700,
-            "y": 7700,
-            "w": 910,
-            "h": 760,
-            "kind": "fridge",
-            "label": "Counter-depth",
-            "localState": "on"
-          },
-          {
-            "id": "appliance-showroom-fn39",
-            "x": 8800,
-            "y": 7700,
-            "w": 910,
-            "h": 760,
-            "kind": "fridge",
-            "label": "Beverage centre"
-          },
-          {
-            "id": "appliance-showroom-fn40",
-            "x": 4400,
-            "y": 9300,
-            "w": 800,
-            "h": 550,
-            "kind": "kitchen_sink",
-            "label": "Double-bowl kitchen sink",
-            "localState": "on"
-          },
-          {
-            "id": "appliance-showroom-fn41",
-            "x": 5500,
-            "y": 9300,
-            "w": 760,
-            "h": 550,
-            "kind": "sink_vanity",
-            "label": "Vanity sink"
-          },
-          {
-            "id": "appliance-showroom-fn42",
-            "x": 6400,
-            "y": 9300,
-            "w": 500,
-            "h": 450,
-            "kind": "pedestal_sink",
-            "label": "Pedestal sink"
-          },
-          {
-            "id": "appliance-showroom-fn43",
-            "x": 7200,
-            "y": 9300,
-            "w": 560,
-            "h": 470,
-            "kind": "sink",
-            "label": "Compact vanity"
-          },
-          {
-            "id": "appliance-showroom-fn44",
-            "x": 8100,
-            "y": 9300,
-            "w": 600,
-            "h": 500,
-            "kind": "utility_sink",
-            "label": "Utility tub"
-          },
-          {
-            "id": "appliance-showroom-fn45",
-            "x": 11000,
-            "y": 9880,
-            "w": 800,
-            "h": 300,
-            "kind": "mini_split",
-            "rotation": 180,
-            "elevation": 2100,
-            "label": "Mini-split head",
-            "localState": "on"
-          },
-          {
-            "id": "appliance-showroom-fn46",
-            "x": 12200,
-            "y": 9880,
-            "w": 600,
-            "h": 400,
-            "kind": "window_ac",
-            "rotation": 180,
-            "elevation": 900,
-            "label": "Window AC",
-            "localState": "on"
-          },
-          {
-            "id": "appliance-showroom-fn47",
-            "x": 13200,
-            "y": 9880,
-            "w": 600,
-            "h": 120,
-            "kind": "wall_heater",
-            "rotation": 180,
-            "elevation": 400,
-            "label": "Wall heater",
-            "localState": "on"
-          },
-          {
-            "id": "appliance-showroom-fn48",
-            "x": 13850,
-            "y": 900,
             "w": 1300,
             "h": 180,
             "kind": "wall_tv",
@@ -559,9 +179,9 @@
             "localState": "playing"
           },
           {
-            "id": "appliance-showroom-fn49",
-            "x": 13850,
-            "y": 2300,
+            "id": "appliance-showroom-fn11",
+            "x": 19860,
+            "y": 5000,
             "w": 1300,
             "h": 180,
             "kind": "wall_tv",
@@ -571,70 +191,451 @@
             "localState": "playing"
           },
           {
-            "id": "appliance-showroom-fn50",
-            "x": 13850,
-            "y": 3700,
-            "w": 1300,
-            "h": 180,
-            "kind": "wall_tv",
+            "id": "appliance-showroom-fn4",
+            "x": 18900,
+            "y": 7200,
+            "w": 1600,
+            "h": 450,
+            "kind": "tv_stand",
             "rotation": 90,
-            "elevation": 1000,
-            "label": "Media wall 3",
-            "localState": "playing"
+            "label": "Media stand"
           },
           {
-            "id": "appliance-showroom-fn51",
-            "x": 11500,
-            "y": 6500,
-            "w": 1500,
-            "h": 400,
-            "kind": "bench",
-            "label": "Waiting bench"
+            "id": "appliance-showroom-fn12",
+            "x": 18900,
+            "y": 7200,
+            "w": 1450,
+            "h": 250,
+            "kind": "tv",
+            "rotation": 90,
+            "elevation": 450,
+            "label": "Console TV",
+            "localState": "playing",
+            "mountOnId": "appliance-showroom-fn4"
           },
           {
-            "id": "appliance-showroom-fn52",
-            "x": 12600,
-            "y": 6500,
+            "id": "appliance-showroom-fn13",
+            "x": 5300,
+            "y": 5900,
+            "w": 760,
+            "h": 660,
+            "kind": "stove",
+            "label": "Slide-in range",
+            "localState": "on",
+            "tempEntity": null
+          },
+          {
+            "id": "appliance-showroom-fn14",
+            "x": 6300,
+            "y": 5900,
+            "w": 610,
+            "h": 620,
+            "kind": "dishwasher",
+            "label": "Dishwasher",
+            "localState": "on"
+          },
+          {
+            "id": "appliance-showroom-fn15",
+            "x": 7300,
+            "y": 5900,
+            "w": 800,
+            "h": 550,
+            "kind": "kitchen_sink",
+            "label": "Double-bowl kitchen sink",
+            "localState": "on"
+          },
+          {
+            "id": "appliance-showroom-fn1",
+            "x": 9200,
+            "y": 5900,
+            "w": 2000,
+            "h": 650,
+            "kind": "counter",
+            "label": "Small-appliance bar"
+          },
+          {
+            "id": "appliance-showroom-fn16",
+            "x": 8600,
+            "y": 5900,
+            "w": 520,
+            "h": 390,
+            "kind": "microwave",
+            "elevation": 900,
+            "label": "Countertop microwave",
+            "mountOnId": "appliance-showroom-fn1"
+          },
+          {
+            "id": "appliance-showroom-fn17",
+            "x": 9400,
+            "y": 5900,
+            "w": 250,
+            "h": 250,
+            "kind": "coffee_maker",
+            "elevation": 900,
+            "label": "Drip brewer",
+            "localState": "on",
+            "mountOnId": "appliance-showroom-fn1"
+          },
+          {
+            "id": "appliance-showroom-fn18",
+            "x": 10000,
+            "y": 5900,
+            "w": 350,
+            "h": 300,
+            "kind": "retro_fan",
+            "elevation": 900,
+            "label": "Retro desk fan",
+            "localState": "on",
+            "mountOnId": "appliance-showroom-fn1"
+          },
+          {
+            "id": "appliance-showroom-fn19",
+            "x": 12200,
+            "y": 5900,
+            "w": 2400,
+            "h": 1000,
+            "kind": "island",
+            "label": "Kitchen vignette island"
+          },
+          {
+            "id": "appliance-showroom-fn20",
+            "x": 14500,
+            "y": 5900,
+            "w": 910,
+            "h": 760,
+            "kind": "fridge",
+            "label": "French door",
+            "localState": "on"
+          },
+          {
+            "id": "appliance-showroom-fn21",
+            "x": 15800,
+            "y": 5900,
+            "w": 910,
+            "h": 760,
+            "kind": "fridge",
+            "label": "Beverage centre"
+          },
+          {
+            "id": "appliance-showroom-fn22",
+            "x": 5300,
+            "y": 8400,
+            "w": 690,
+            "h": 700,
+            "kind": "washer",
+            "label": "Front-load washer",
+            "localState": "on"
+          },
+          {
+            "id": "appliance-showroom-fn23",
+            "x": 6100,
+            "y": 8400,
+            "w": 690,
+            "h": 700,
+            "kind": "dryer",
+            "label": "Heat-pump dryer",
+            "localState": "on"
+          },
+          {
+            "id": "appliance-showroom-fn24",
+            "x": 7200,
+            "y": 8400,
+            "w": 690,
+            "h": 700,
+            "kind": "washer",
+            "label": "Stacked column — washer",
+            "localState": "on"
+          },
+          {
+            "id": "appliance-showroom-fn25",
+            "x": 7200,
+            "y": 8400,
+            "w": 690,
+            "h": 700,
+            "kind": "dryer",
+            "elevation": 990,
+            "label": "Stacked column — dryer",
+            "localState": "on"
+          },
+          {
+            "id": "appliance-showroom-fn26",
+            "x": 8500,
+            "y": 8400,
+            "w": 450,
+            "h": 450,
+            "kind": "floor_fan",
+            "label": "Shop floor fan",
+            "localState": "on"
+          },
+          {
+            "id": "appliance-showroom-fn5",
+            "x": 9300,
+            "y": 8400,
             "w": 400,
-            "h": 400,
-            "kind": "plant"
+            "h": 380,
+            "kind": "modern_fan",
+            "label": "Oscillating stand fan",
+            "localState": "on",
+            "oscillate": true
           },
           {
-            "id": "appliance-showroom-fn53",
-            "x": 11800,
-            "y": 6900,
+            "id": "appliance-showroom-fn27",
+            "x": 10000,
+            "y": 8400,
+            "w": 300,
+            "h": 300,
+            "kind": "tower_fan",
+            "label": "Tower fan",
+            "localState": "on"
+          },
+          {
+            "id": "appliance-showroom-fn28",
+            "x": 10700,
+            "y": 8400,
+            "w": 350,
+            "h": 250,
+            "kind": "bladeless_fan",
+            "label": "Bladeless fan",
+            "localState": "on"
+          },
+          {
+            "id": "appliance-showroom-fn29",
+            "x": 11500,
+            "y": 8400,
+            "w": 450,
+            "h": 400,
+            "kind": "portable_ac",
+            "label": "Portable AC",
+            "localState": "on"
+          },
+          {
+            "id": "appliance-showroom-fn30",
+            "x": 12300,
+            "y": 8400,
+            "w": 350,
+            "h": 350,
+            "kind": "space_heater",
+            "label": "Ceramic space heater",
+            "localState": "on"
+          },
+          {
+            "id": "appliance-showroom-fn31",
+            "x": 5200,
+            "y": 13890,
+            "w": 800,
+            "h": 300,
+            "kind": "mini_split",
+            "elevation": 2100,
+            "label": "Mini-split head",
+            "localState": "on"
+          },
+          {
+            "id": "appliance-showroom-fn32",
+            "x": 6600,
+            "y": 13830,
+            "w": 600,
+            "h": 400,
+            "kind": "window_ac",
+            "elevation": 900,
+            "label": "Window AC",
+            "localState": "on"
+          },
+          {
+            "id": "appliance-showroom-fn33",
+            "x": 7800,
+            "y": 13930,
+            "w": 600,
+            "h": 120,
+            "kind": "wall_heater",
+            "elevation": 400,
+            "label": "Wall heater",
+            "localState": "on"
+          },
+          {
+            "id": "appliance-showroom-fn34",
+            "x": 9400,
+            "y": 13500,
+            "w": 500,
+            "h": 450,
+            "kind": "pedestal_sink",
+            "label": "Pedestal sink"
+          },
+          {
+            "id": "appliance-showroom-fn35",
+            "x": 10300,
+            "y": 13500,
+            "w": 560,
+            "h": 470,
+            "kind": "sink",
+            "label": "Compact vanity"
+          },
+          {
+            "id": "appliance-showroom-fn36",
+            "x": 11300,
+            "y": 13500,
+            "w": 600,
+            "h": 500,
+            "kind": "utility_sink",
+            "label": "Utility tub"
+          },
+          {
+            "id": "appliance-showroom-fn37",
+            "x": 12200,
+            "y": 13400,
+            "w": 600,
+            "h": 700,
+            "kind": "trash_bin",
+            "label": "Store waste"
+          },
+          {
+            "id": "appliance-showroom-fn38",
+            "x": 12200,
+            "y": 12600,
+            "w": 600,
+            "h": 700,
+            "kind": "recycle_bin",
+            "label": "Carton recycling"
+          },
+          {
+            "id": "appliance-showroom-fn39",
+            "x": 5900,
+            "y": 11300,
             "w": 2600,
-            "h": 2000,
+            "h": 2200,
             "kind": "rug"
           },
           {
-            "id": "appliance-showroom-fn54",
-            "x": 9900,
-            "y": 5900,
+            "id": "appliance-showroom-fn40",
+            "x": 6000,
+            "y": 10600,
+            "w": 2600,
+            "h": 1800,
+            "kind": "sofa_l_right",
+            "rotation": 180,
+            "label": "Lounge sectional"
+          },
+          {
+            "id": "appliance-showroom-fn41",
+            "x": 5900,
+            "y": 12100,
+            "w": 1100,
+            "h": 600,
+            "kind": "coffee_table"
+          },
+          {
+            "id": "appliance-showroom-fn42",
+            "x": 7900,
+            "y": 10400,
             "w": 400,
             "h": 400,
             "kind": "plant"
           },
           {
-            "id": "appliance-showroom-fn55",
-            "x": 600,
-            "y": 6300,
+            "id": "appliance-showroom-fn43",
+            "x": 12200,
+            "y": 9900,
+            "w": 400,
+            "h": 400,
+            "kind": "plant"
+          },
+          {
+            "id": "appliance-showroom-fn44",
+            "x": 13250,
+            "y": 10400,
+            "w": 800,
+            "h": 350,
+            "kind": "bookshelf",
+            "rotation": 90,
+            "label": "Fixture shelving"
+          },
+          {
+            "id": "appliance-showroom-fn45",
+            "x": 14800,
+            "y": 12600,
+            "w": 2600,
+            "h": 1800,
+            "kind": "rug"
+          },
+          {
+            "id": "appliance-showroom-fn46",
+            "x": 14800,
+            "y": 12400,
+            "w": 700,
+            "h": 700,
+            "kind": "ottoman"
+          },
+          {
+            "id": "appliance-showroom-fn47",
+            "x": 13300,
+            "y": 13400,
+            "w": 400,
+            "h": 400,
+            "kind": "plant"
+          },
+          {
+            "id": "appliance-showroom-fn48",
+            "x": 18300,
+            "y": 10400,
+            "w": 1800,
+            "h": 1500,
+            "kind": "picnic_table",
+            "label": "Patio set"
+          },
+          {
+            "id": "appliance-showroom-fn49",
+            "x": 19500,
+            "y": 10400,
+            "w": 700,
+            "h": 700,
+            "kind": "bush"
+          },
+          {
+            "id": "appliance-showroom-fn50",
+            "x": 17000,
+            "y": 11800,
+            "w": 800,
+            "h": 600,
+            "kind": "rock_cluster"
+          },
+          {
+            "id": "appliance-showroom-fn51",
+            "x": 900,
+            "y": 6000,
+            "w": 910,
+            "h": 910,
+            "kind": "shower",
+            "label": "Walk-in shower"
+          },
+          {
+            "id": "appliance-showroom-fn52",
+            "x": 2900,
+            "y": 5700,
             "w": 480,
             "h": 700,
             "kind": "toilet"
           },
           {
-            "id": "appliance-showroom-fn56",
-            "x": 1700,
-            "y": 6350,
-            "w": 500,
-            "h": 450,
-            "kind": "pedestal_sink"
+            "id": "appliance-showroom-fn53",
+            "x": 2900,
+            "y": 7300,
+            "w": 760,
+            "h": 550,
+            "kind": "sink_vanity",
+            "label": "Vanity sink"
           },
           {
-            "id": "appliance-showroom-fn57",
-            "x": 2900,
-            "y": 5400,
+            "id": "appliance-showroom-fn54",
+            "x": 1200,
+            "y": 7700,
+            "w": 1520,
+            "h": 760,
+            "kind": "bathtub",
+            "label": "Soaking tub"
+          },
+          {
+            "id": "appliance-showroom-fn55",
+            "x": 3940,
+            "y": 7800,
             "w": 600,
             "h": 120,
             "kind": "towel_warmer",
@@ -644,131 +645,222 @@
             "localState": "on"
           },
           {
-            "id": "appliance-showroom-fn58",
-            "x": 900,
+            "id": "appliance-showroom-fn56",
+            "x": 110,
+            "y": 5700,
+            "w": 800,
+            "h": 110,
+            "kind": "wall_radiator",
+            "rotation": 90,
+            "elevation": 400,
+            "label": "Wall radiator",
+            "localState": "on"
+          },
+          {
+            "id": "appliance-showroom-fn57",
+            "x": 1200,
             "y": 9200,
-            "w": 1200,
+            "w": 1400,
             "h": 700,
             "kind": "desk",
-            "label": "Sales desk 1"
+            "label": "Sales desk"
+          },
+          {
+            "id": "appliance-showroom-fn58",
+            "x": 1200,
+            "y": 9900,
+            "w": 500,
+            "h": 500,
+            "kind": "chair"
+          },
+          {
+            "id": "appliance-showroom-fn3",
+            "x": 2500,
+            "y": 10800,
+            "w": 1800,
+            "h": 650,
+            "kind": "counter",
+            "label": "Office credenza"
           },
           {
             "id": "appliance-showroom-fn59",
-            "x": 900,
-            "y": 8500,
-            "w": 500,
-            "h": 500,
-            "kind": "chair",
-            "rotation": 180
+            "x": 2500,
+            "y": 10800,
+            "w": 420,
+            "h": 420,
+            "kind": "printer_3d",
+            "elevation": 900,
+            "label": "Parts printer",
+            "localState": "on",
+            "mountOnId": "appliance-showroom-fn3"
           },
           {
             "id": "appliance-showroom-fn60",
-            "x": 2300,
-            "y": 9200,
-            "w": 1200,
-            "h": 700,
-            "kind": "desk",
-            "label": "Sales desk 2"
-          },
-          {
-            "id": "appliance-showroom-fn61",
-            "x": 2300,
-            "y": 8500,
-            "w": 500,
-            "h": 500,
-            "kind": "chair",
-            "rotation": 180
-          },
-          {
-            "id": "appliance-showroom-fn62",
-            "x": 300,
-            "y": 8400,
+            "x": 2900,
+            "y": 8700,
             "w": 800,
             "h": 350,
             "kind": "bookshelf",
-            "rotation": 90,
             "label": "Spec binders"
           },
           {
-            "id": "appliance-showroom-fn63",
-            "x": 700,
-            "y": 7300,
+            "id": "appliance-showroom-fn61",
+            "x": 3600,
+            "y": 10900,
             "w": 400,
             "h": 400,
             "kind": "plant"
+          },
+          {
+            "id": "appliance-showroom-fn62",
+            "x": 350,
+            "y": 12600,
+            "w": 1500,
+            "h": 150,
+            "kind": "floor_radiator",
+            "rotation": 90,
+            "label": "Cast-iron floor radiator",
+            "localState": "on"
+          },
+          {
+            "id": "appliance-showroom-fn63",
+            "x": 900,
+            "y": 13500,
+            "w": 560,
+            "h": 560,
+            "kind": "water_heater",
+            "label": "Heat-pump water heater",
+            "localState": "on"
+          },
+          {
+            "id": "appliance-showroom-fn64",
+            "x": 1700,
+            "y": 13500,
+            "w": 600,
+            "h": 650,
+            "kind": "boiler",
+            "label": "Condensing boiler",
+            "localState": "on"
+          },
+          {
+            "id": "appliance-showroom-fn65",
+            "x": 2600,
+            "y": 13500,
+            "w": 600,
+            "h": 750,
+            "kind": "air_handler",
+            "label": "Air handler",
+            "localState": "on"
+          },
+          {
+            "id": "appliance-showroom-fn66",
+            "x": 3450,
+            "y": 13600,
+            "w": 950,
+            "h": 400,
+            "kind": "heat_pump",
+            "label": "Heat-pump outdoor unit",
+            "localState": "on"
+          },
+          {
+            "id": "appliance-showroom-fn67",
+            "x": 1100,
+            "y": 11900,
+            "w": 900,
+            "h": 900,
+            "kind": "ac_condenser",
+            "label": "AC condenser"
+          },
+          {
+            "id": "appliance-showroom-fn68",
+            "x": 2200,
+            "y": 11700,
+            "w": 350,
+            "h": 350,
+            "kind": "sump_pump",
+            "label": "Sump pump",
+            "localState": "on"
+          },
+          {
+            "id": "appliance-showroom-fn69",
+            "x": 2900,
+            "y": 11700,
+            "w": 300,
+            "h": 180,
+            "kind": "recirc_pump",
+            "label": "Recirculation pump",
+            "localState": "on"
           }
         ],
         "lights": [
           {
             "id": "appliance-showroom-lt1",
-            "x": 8000,
+            "x": 10000,
             "y": 1300,
             "entity_id": null,
             "iconKind": "strip",
             "rotation": 0,
-            "length": 5200,
+            "length": 9000,
             "localState": "on",
-            "label": "Checkout strip"
+            "label": "Front-of-house strip"
           },
           {
             "id": "appliance-showroom-lt2",
-            "x": 8000,
-            "y": 3400,
+            "x": 10500,
+            "y": 5900,
             "entity_id": null,
             "iconKind": "strip",
             "rotation": 0,
-            "length": 7000,
+            "length": 11000,
             "localState": "on",
-            "label": "Cooking row strip"
+            "label": "Kitchen row strip"
           },
           {
             "id": "appliance-showroom-lt3",
-            "x": 8200,
-            "y": 4700,
+            "x": 8700,
+            "y": 8400,
             "entity_id": null,
             "iconKind": "strip",
             "rotation": 0,
-            "length": 8000,
+            "length": 7800,
             "localState": "on",
-            "label": "Climate row strip"
+            "label": "Laundry & climate strip"
           },
           {
             "id": "appliance-showroom-lt4",
-            "x": 6600,
-            "y": 6100,
+            "x": 10000,
+            "y": 3600,
             "entity_id": null,
-            "iconKind": "strip",
+            "iconKind": "string",
             "rotation": 0,
-            "length": 4800,
+            "length": 6000,
             "localState": "on",
-            "label": "Laundry row strip"
+            "label": "Aisle festoon"
           },
           {
             "id": "appliance-showroom-lt5",
-            "x": 6600,
-            "y": 7700,
+            "x": 5300,
+            "y": 5900,
             "entity_id": null,
-            "iconKind": "strip",
-            "rotation": 0,
-            "length": 5000,
+            "iconKind": "spot",
+            "radius": 900,
             "localState": "on",
-            "label": "Refrigeration strip"
+            "label": "Hero range spot"
           },
           {
             "id": "appliance-showroom-lt6",
-            "x": 6300,
-            "y": 9300,
+            "x": 5300,
+            "y": 8400,
             "entity_id": null,
-            "iconKind": "strip",
-            "rotation": 0,
-            "length": 4400,
+            "iconKind": "spot",
+            "radius": 900,
             "localState": "on",
-            "label": "Plumbing wall strip"
+            "label": "Hero laundry spot"
           },
           {
             "id": "appliance-showroom-lt7",
-            "x": 4400,
-            "y": 7700,
+            "x": 14500,
+            "y": 5900,
             "entity_id": null,
             "iconKind": "spot",
             "radius": 900,
@@ -777,154 +869,429 @@
           },
           {
             "id": "appliance-showroom-lt8",
-            "x": 4400,
-            "y": 6100,
+            "x": 5300,
+            "y": 5500,
             "entity_id": null,
-            "iconKind": "spot",
-            "radius": 900,
+            "iconKind": "exhaust",
             "localState": "on",
-            "label": "Hero washer spot"
+            "label": "Range hood exhaust"
           },
           {
             "id": "appliance-showroom-lt9",
-            "x": 4400,
-            "y": 3400,
+            "x": 9200,
+            "y": 6250,
             "entity_id": null,
-            "iconKind": "spot",
-            "radius": 900,
+            "iconKind": "under_cabinet",
+            "rotation": 0,
+            "length": 1800,
             "localState": "on",
-            "label": "Hero range spot"
+            "label": "Appliance-bar under-cabinet"
           },
           {
             "id": "appliance-showroom-lt10",
-            "x": 4400,
-            "y": 9300,
-            "entity_id": null,
-            "iconKind": "spot",
-            "radius": 900,
-            "localState": "on",
-            "label": "Hero sink spot"
-          },
-          {
-            "id": "appliance-showroom-lt11",
-            "x": 9600,
-            "y": 1400,
+            "x": 13200,
+            "y": 2000,
             "entity_id": null,
             "iconKind": "pendant",
             "localState": "on",
             "label": "Checkout pendant"
           },
           {
-            "id": "appliance-showroom-lt12",
-            "x": 12400,
-            "y": 1300,
+            "id": "appliance-showroom-lt11",
+            "x": 17000,
+            "y": 1800,
             "entity_id": null,
             "iconKind": "pendant",
             "localState": "on",
             "label": "Order desk pendant"
           },
           {
-            "id": "appliance-showroom-lt13",
-            "x": 3300,
-            "y": 1300,
+            "id": "appliance-showroom-lt12",
+            "x": 70,
+            "y": 2400,
             "entity_id": null,
             "iconKind": "flood",
-            "rotation": 90,
+            "rotation": -90,
             "localState": "on",
             "label": "EV bay flood"
           },
           {
+            "id": "appliance-showroom-lt13",
+            "x": 10000,
+            "y": 13000,
+            "entity_id": null,
+            "iconKind": "strip",
+            "rotation": 0,
+            "length": 5000,
+            "localState": "on",
+            "label": "Sink wall strip"
+          },
+          {
             "id": "appliance-showroom-lt14",
-            "x": 11800,
-            "y": 6900,
+            "x": 5900,
+            "y": 11300,
+            "entity_id": null,
+            "iconKind": "round",
+            "localState": "on",
+            "label": "Lounge ceiling"
+          },
+          {
+            "id": "appliance-showroom-lt15",
+            "x": 5900,
+            "y": 12400,
             "entity_id": null,
             "iconKind": "lamp",
             "height": 1500,
             "localState": "on",
-            "label": "Waiting lamp"
-          },
-          {
-            "id": "appliance-showroom-lt15",
-            "x": 13000,
-            "y": 8000,
-            "entity_id": null,
-            "iconKind": "under_cabinet",
-            "rotation": 90,
-            "length": 2600,
-            "label": "East wall wash"
+            "label": "Lounge lamp"
           },
           {
             "id": "appliance-showroom-lt16",
-            "x": 1500,
-            "y": 8600,
+            "x": 1100,
+            "y": 6400,
             "entity_id": null,
-            "iconKind": "round",
+            "iconKind": "heatlamp",
             "localState": "on",
-            "label": "Office"
+            "label": "Bath heat lamp"
           },
           {
             "id": "appliance-showroom-lt17",
-            "x": 1500,
-            "y": 5900,
+            "x": 2900,
+            "y": 6400,
+            "entity_id": null,
+            "iconKind": "exhaust_light",
+            "localState": "on",
+            "label": "Bath exhaust + light"
+          },
+          {
+            "id": "appliance-showroom-lt18",
+            "x": 70,
+            "y": 5700,
+            "entity_id": null,
+            "iconKind": "exhaust_wall",
+            "rotation": -90,
+            "localState": "on",
+            "label": "Bath wall exhaust"
+          },
+          {
+            "id": "appliance-showroom-lt19",
+            "x": 1900,
+            "y": 9700,
+            "entity_id": null,
+            "iconKind": "round",
+            "localState": "on",
+            "label": "Office ceiling"
+          },
+          {
+            "id": "appliance-showroom-lt20",
+            "x": 1200,
+            "y": 8900,
+            "entity_id": null,
+            "iconKind": "under_cabinet",
+            "rotation": 0,
+            "length": 1200,
+            "label": "Desk task light"
+          },
+          {
+            "id": "appliance-showroom-lt21",
+            "x": 2000,
+            "y": 12400,
+            "entity_id": null,
+            "iconKind": "strip",
+            "rotation": 0,
+            "length": 3000,
+            "localState": "on",
+            "label": "Plant room strip"
+          },
+          {
+            "id": "appliance-showroom-lt22",
+            "x": 2000,
+            "y": 13930,
+            "entity_id": null,
+            "iconKind": "exhaust_wall",
+            "rotation": 0,
+            "localState": "on",
+            "label": "Plant room exhaust"
+          },
+          {
+            "id": "appliance-showroom-lt23",
+            "x": 13400,
+            "y": 12000,
+            "entity_id": null,
+            "iconKind": "bulb",
+            "localState": "on",
+            "label": "Bare bulb"
+          },
+          {
+            "id": "appliance-showroom-lt24",
+            "x": 14400,
+            "y": 12000,
+            "entity_id": null,
+            "iconKind": "oval",
+            "localState": "on",
+            "label": "Oval flush mount"
+          },
+          {
+            "id": "appliance-showroom-lt25",
+            "x": 15400,
+            "y": 12000,
+            "entity_id": null,
+            "iconKind": "bowl",
+            "localState": "on",
+            "label": "Bowl uplight"
+          },
+          {
+            "id": "appliance-showroom-lt26",
+            "x": 16400,
+            "y": 12000,
+            "entity_id": null,
+            "iconKind": "tiered",
+            "localState": "on",
+            "label": "Tiered chandelier"
+          },
+          {
+            "id": "appliance-showroom-lt27",
+            "x": 17400,
+            "y": 12000,
+            "entity_id": null,
+            "iconKind": "jar",
+            "localState": "on",
+            "label": "Mason-jar pendant"
+          },
+          {
+            "id": "appliance-showroom-lt28",
+            "x": 18400,
+            "y": 12000,
+            "entity_id": null,
+            "iconKind": "round",
+            "localState": "on",
+            "label": "Round panel"
+          },
+          {
+            "id": "appliance-showroom-lt29",
+            "x": 19400,
+            "y": 12000,
             "entity_id": null,
             "iconKind": "recessed",
             "radius": 600,
             "localState": "on",
-            "label": "Restroom"
+            "label": "Recessed can"
           },
           {
-            "id": "appliance-showroom-lt18",
-            "x": 2400,
-            "y": 5900,
+            "id": "appliance-showroom-lt30",
+            "x": 13400,
+            "y": 13300,
             "entity_id": null,
-            "iconKind": "exhaust",
+            "iconKind": "pendant",
             "localState": "on",
-            "label": "Restroom exhaust"
+            "label": "Pendant"
+          },
+          {
+            "id": "appliance-showroom-lt31",
+            "x": 14700,
+            "y": 13300,
+            "entity_id": null,
+            "iconKind": "fan",
+            "localState": "on",
+            "label": "Ceiling fan"
+          },
+          {
+            "id": "appliance-showroom-lt32",
+            "x": 16100,
+            "y": 13300,
+            "entity_id": null,
+            "iconKind": "fan_light",
+            "localState": "on",
+            "label": "Fan with light"
+          },
+          {
+            "id": "appliance-showroom-lt33",
+            "x": 17400,
+            "y": 13300,
+            "entity_id": null,
+            "iconKind": "lamp",
+            "height": 1600,
+            "localState": "on",
+            "label": "Floor lamp"
+          },
+          {
+            "id": "appliance-showroom-lt34",
+            "x": 12920,
+            "y": 11200,
+            "entity_id": null,
+            "iconKind": "wall_sconce",
+            "radius": 500,
+            "rotation": -90,
+            "localState": "on",
+            "label": "Wall sconce pair"
+          },
+          {
+            "id": "appliance-showroom-lt35",
+            "x": 12920,
+            "y": 12600,
+            "entity_id": null,
+            "iconKind": "wall_sconce",
+            "radius": 500,
+            "rotation": -90,
+            "localState": "on",
+            "label": "Wall sconce pair"
+          },
+          {
+            "id": "appliance-showroom-lt36",
+            "x": 19880,
+            "y": 12600,
+            "entity_id": null,
+            "iconKind": "sconce",
+            "radius": 500,
+            "rotation": 90,
+            "localState": "on",
+            "label": "Half-dome sconce"
+          },
+          {
+            "id": "appliance-showroom-lt37",
+            "x": 12850,
+            "y": 9800,
+            "entity_id": null,
+            "iconKind": "step",
+            "rotation": -90,
+            "localState": "on",
+            "label": "Step light"
+          },
+          {
+            "id": "appliance-showroom-lt38",
+            "x": 12850,
+            "y": 13600,
+            "entity_id": null,
+            "iconKind": "step",
+            "rotation": -90,
+            "localState": "on",
+            "label": "Step light"
+          },
+          {
+            "id": "appliance-showroom-lt39",
+            "x": 14800,
+            "y": 13725,
+            "entity_id": null,
+            "iconKind": "fireplace",
+            "rotation": 0,
+            "localState": "on",
+            "label": "Hearth vignette"
+          },
+          {
+            "id": "appliance-showroom-lt40",
+            "x": 17600,
+            "y": 11500,
+            "entity_id": null,
+            "iconKind": "inground",
+            "localState": "on",
+            "label": "In-ground uplight"
+          },
+          {
+            "id": "appliance-showroom-lt41",
+            "x": 19200,
+            "y": 11500,
+            "entity_id": null,
+            "iconKind": "inground",
+            "localState": "on",
+            "label": "In-ground uplight"
+          },
+          {
+            "id": "appliance-showroom-lt42",
+            "x": 18300,
+            "y": 11700,
+            "entity_id": null,
+            "iconKind": "ground_spot",
+            "rotation": 180,
+            "localState": "on",
+            "label": "Ground spot"
+          },
+          {
+            "id": "appliance-showroom-lt43",
+            "x": 19930,
+            "y": 10400,
+            "entity_id": null,
+            "iconKind": "flood",
+            "rotation": 90,
+            "localState": "on",
+            "label": "Outdoor display flood"
           }
         ],
         "switches": [
           {
             "id": "appliance-showroom-sw1",
-            "x": 5800,
-            "y": 200,
+            "x": 8600,
+            "y": 70,
             "entity_id": null,
             "rotation": 0,
             "label": "Entrance bank"
           },
           {
             "id": "appliance-showroom-sw2",
-            "x": 3200,
-            "y": 5900,
+            "x": 4070,
+            "y": 5600,
             "entity_id": null,
-            "rotation": 270,
-            "label": "Restroom"
+            "rotation": 90,
+            "label": "Bath studio"
           },
           {
             "id": "appliance-showroom-sw3",
-            "x": 3200,
-            "y": 8000,
+            "x": 4070,
+            "y": 10800,
             "entity_id": null,
-            "rotation": 270,
-            "label": "Office"
+            "rotation": 90,
+            "label": "Sales office"
           },
           {
             "id": "appliance-showroom-sw4",
-            "x": 13800,
-            "y": 5200,
+            "x": 4070,
+            "y": 13500,
             "entity_id": null,
             "rotation": 90,
+            "label": "Mechanical room"
+          },
+          {
+            "id": "appliance-showroom-sw5",
+            "x": 12870,
+            "y": 9800,
+            "entity_id": null,
+            "rotation": 90,
+            "label": "Lighting gallery"
+          },
+          {
+            "id": "appliance-showroom-sw6",
+            "x": 19930,
+            "y": 5000,
+            "entity_id": null,
+            "rotation": -90,
             "label": "Display rows"
           }
         ],
-        "sensors": [],
+        "sensors": [
+          {
+            "id": "appliance-showroom-mm1",
+            "x": 10000,
+            "y": 300,
+            "heading": 0,
+            "fov": 120,
+            "range": 9000,
+            "label": "Entrance footfall (mmWave)",
+            "deviceSlug": null,
+            "color": "#4dd0e1",
+            "avatarKinds": [
+              "adult",
+              "professional",
+              "teen"
+            ]
+          }
+        ],
         "motionSensors": [
           {
             "id": "appliance-showroom-mo1",
-            "x": 7500,
-            "y": 5200,
+            "x": 9000,
+            "y": 4200,
             "heading": 0,
             "fov": 360,
-            "range": 6000,
+            "range": 7000,
             "label": "Showroom floor presence",
             "entity_id": null,
             "color": "#4fc3f7",
@@ -938,11 +1305,11 @@
           },
           {
             "id": "appliance-showroom-mo2",
-            "x": 10200,
-            "y": 2400,
+            "x": 15500,
+            "y": 3000,
             "heading": 0,
             "fov": 360,
-            "range": 5000,
+            "range": 6000,
             "label": "Checkout presence",
             "entity_id": null,
             "color": "#ffb74d",
@@ -955,8 +1322,25 @@
           },
           {
             "id": "appliance-showroom-mo3",
-            "x": 1600,
-            "y": 7500,
+            "x": 16000,
+            "y": 11800,
+            "heading": 0,
+            "fov": 360,
+            "range": 5000,
+            "label": "Lighting gallery presence",
+            "entity_id": null,
+            "color": "#ce93d8",
+            "avatar": true,
+            "demo": true,
+            "avatarKinds": [
+              "adult",
+              "child"
+            ]
+          },
+          {
+            "id": "appliance-showroom-mo4",
+            "x": 1900,
+            "y": 9700,
             "heading": 0,
             "fov": 360,
             "range": 3500,
@@ -1003,8 +1387,8 @@
         "envSensors": [
           {
             "id": "appliance-showroom-env1",
-            "x": 9900,
-            "y": 5300,
+            "x": 12000,
+            "y": 4300,
             "entity_id": null,
             "kind": "temperature",
             "label": "Hall temp",
@@ -1012,20 +1396,29 @@
           },
           {
             "id": "appliance-showroom-env2",
-            "x": 2300,
-            "y": 5200,
+            "x": 2400,
+            "y": 6900,
             "entity_id": null,
             "kind": "humidity",
-            "label": "Restroom RH",
+            "label": "Bath studio RH",
             "height": 1500
           },
           {
             "id": "appliance-showroom-env3",
-            "x": 12900,
-            "y": 4400,
+            "x": 17800,
+            "y": 8600,
             "entity_id": null,
             "kind": "co2",
             "label": "Hall CO₂",
+            "height": 1500
+          },
+          {
+            "id": "appliance-showroom-env4",
+            "x": 3400,
+            "y": 12200,
+            "entity_id": null,
+            "kind": "co",
+            "label": "Plant room CO",
             "height": 1500
           }
         ],
@@ -1037,18 +1430,29 @@
         "doors": [
           {
             "id": "appliance-showroom-dr1",
-            "x": 6000,
+            "x": 9100,
             "y": 0,
-            "w": 1600,
+            "w": 1800,
             "rotation": 0,
             "entity_id": null,
+            "kind": "double",
             "doorbellEntity": null,
             "label": "Main entrance"
           },
           {
             "id": "appliance-showroom-dr2",
+            "x": 5800,
+            "y": 0,
+            "w": 2400,
+            "rotation": 0,
+            "entity_id": null,
+            "kind": "sliding_glass",
+            "label": "Patio door display"
+          },
+          {
+            "id": "appliance-showroom-dr3",
             "x": 0,
-            "y": 4200,
+            "y": 4800,
             "w": 2400,
             "rotation": 90,
             "entity_id": null,
@@ -1056,108 +1460,175 @@
             "label": "Delivery bay"
           },
           {
-            "id": "appliance-showroom-dr3",
-            "x": 3000,
-            "y": 6300,
-            "w": 800,
-            "rotation": 90,
-            "entity_id": null,
-            "label": "Restroom"
-          },
-          {
             "id": "appliance-showroom-dr4",
-            "x": 3000,
-            "y": 8200,
+            "x": 4000,
+            "y": 7100,
             "w": 900,
             "rotation": 90,
             "entity_id": null,
+            "kind": "pocket",
+            "label": "Bath studio"
+          },
+          {
+            "id": "appliance-showroom-dr5",
+            "x": 4000,
+            "y": 10500,
+            "w": 1600,
+            "rotation": 90,
+            "entity_id": null,
+            "kind": "french",
             "label": "Sales office"
+          },
+          {
+            "id": "appliance-showroom-dr6",
+            "x": 4000,
+            "y": 13000,
+            "w": 1200,
+            "rotation": 90,
+            "entity_id": null,
+            "kind": "sliding",
+            "label": "Mechanical room"
+          },
+          {
+            "id": "appliance-showroom-dr7",
+            "x": 14200,
+            "y": 9200,
+            "w": 2600,
+            "rotation": 0,
+            "entity_id": null,
+            "label": "Lighting gallery archway"
           }
         ],
         "windows": [
           {
             "id": "appliance-showroom-win1",
-            "x": 2400,
+            "x": 1800,
             "y": 0,
-            "w": 2000,
+            "w": 2600,
             "rotation": 0,
             "entity_id": null,
-            "sill": 900,
-            "height": 1700,
+            "sill": 400,
+            "height": 2200,
             "kind": "picture",
             "label": "Storefront W"
           },
           {
             "id": "appliance-showroom-win2",
-            "x": 4700,
-            "y": 0,
-            "w": 1400,
-            "rotation": 0,
-            "entity_id": null,
-            "sill": 900,
-            "height": 1700,
-            "kind": "picture",
-            "label": "Storefront C"
-          },
-          {
-            "id": "appliance-showroom-win3",
-            "x": 9000,
+            "x": 4500,
             "y": 0,
             "w": 2000,
             "rotation": 0,
             "entity_id": null,
-            "sill": 900,
-            "height": 1700,
+            "sill": 400,
+            "height": 2200,
+            "kind": "picture",
+            "label": "Storefront WC"
+          },
+          {
+            "id": "appliance-showroom-win3",
+            "x": 12100,
+            "y": 0,
+            "w": 2000,
+            "rotation": 0,
+            "entity_id": null,
+            "sill": 400,
+            "height": 2200,
+            "kind": "picture",
+            "label": "Storefront EC"
+          },
+          {
+            "id": "appliance-showroom-win4",
+            "x": 15100,
+            "y": 0,
+            "w": 2600,
+            "rotation": 0,
+            "entity_id": null,
+            "sill": 400,
+            "height": 2200,
             "kind": "picture",
             "label": "Storefront E"
           },
           {
-            "id": "appliance-showroom-win4",
-            "x": 11800,
+            "id": "appliance-showroom-win5",
+            "x": 18200,
             "y": 0,
-            "w": 1800,
+            "w": 2400,
             "rotation": 0,
             "entity_id": null,
-            "sill": 900,
-            "height": 1700,
+            "sill": 400,
+            "height": 2200,
             "kind": "picture",
             "label": "Storefront NE"
           },
           {
-            "id": "appliance-showroom-win5",
-            "x": 14000,
-            "y": 6500,
-            "w": 1800,
-            "rotation": 90,
-            "entity_id": null,
-            "sill": 1000,
-            "height": 1400,
-            "kind": "sliding",
-            "label": "East clerestory"
-          },
-          {
             "id": "appliance-showroom-win6",
-            "x": 14000,
-            "y": 8500,
-            "w": 1800,
+            "x": 20000,
+            "y": 3200,
+            "w": 2400,
             "rotation": 90,
             "entity_id": null,
-            "sill": 1000,
-            "height": 1400,
+            "sill": 1600,
+            "height": 1000,
             "kind": "sliding",
-            "label": "East clerestory"
+            "label": "East clerestory S"
           },
           {
             "id": "appliance-showroom-win7",
-            "x": 6000,
-            "y": 10000,
+            "x": 20000,
+            "y": 6600,
             "w": 2400,
-            "rotation": 0,
+            "rotation": 90,
             "entity_id": null,
             "sill": 1600,
+            "height": 1000,
+            "kind": "sliding",
+            "label": "East clerestory N"
+          },
+          {
+            "id": "appliance-showroom-win8",
+            "x": 8000,
+            "y": 14000,
+            "w": 2600,
+            "rotation": 0,
+            "entity_id": null,
+            "sill": 1800,
             "height": 900,
             "kind": "sliding",
             "label": "Plumbing wall daylight"
+          },
+          {
+            "id": "appliance-showroom-win9",
+            "x": 17000,
+            "y": 14000,
+            "w": 3000,
+            "rotation": 0,
+            "entity_id": null,
+            "sill": 1800,
+            "height": 900,
+            "kind": "sliding",
+            "label": "Gallery clerestory"
+          },
+          {
+            "id": "appliance-showroom-win10",
+            "x": 0,
+            "y": 6700,
+            "w": 1000,
+            "rotation": 90,
+            "entity_id": null,
+            "sill": 1400,
+            "height": 800,
+            "label": "Bath studio"
+          },
+          {
+            "id": "appliance-showroom-win11",
+            "x": 0,
+            "y": 10400,
+            "w": 1000,
+            "rotation": 90,
+            "entity_id": null,
+            "sill": 900,
+            "height": 800,
+            "label": "Sales office"
           }
         ],
         "bg": null,
@@ -1167,24 +1638,40 @@
             "id": "appliance-showroom-rm1",
             "name": "Showroom Floor",
             "anchor": {
-              "x": 8000,
-              "y": 3000
+              "x": 10000,
+              "y": 2600
             }
           },
           {
             "id": "appliance-showroom-rm2",
-            "name": "Staff Restroom",
+            "name": "Bath & Vanity Studio",
             "anchor": {
-              "x": 1500,
-              "y": 5700
+              "x": 2000,
+              "y": 6700
             }
           },
           {
             "id": "appliance-showroom-rm3",
             "name": "Sales Office",
             "anchor": {
-              "x": 1500,
-              "y": 8400
+              "x": 2000,
+              "y": 9700
+            }
+          },
+          {
+            "id": "appliance-showroom-rm4",
+            "name": "Mechanical Room",
+            "anchor": {
+              "x": 2000,
+              "y": 12600
+            }
+          },
+          {
+            "id": "appliance-showroom-rm5",
+            "name": "Lighting Gallery",
+            "anchor": {
+              "x": 16400,
+              "y": 11600
             }
           }
         ],
@@ -1193,26 +1680,283 @@
         "safetySensors": [
           {
             "id": "appliance-showroom-sf1",
-            "x": 6800,
-            "y": 5400,
+            "x": 9000,
+            "y": 7200,
             "kind": "smoke",
             "entity_id": null,
             "label": "Hall smoke"
           },
           {
             "id": "appliance-showroom-sf2",
-            "x": 1500,
-            "y": 8000,
+            "x": 16000,
+            "y": 10600,
             "kind": "smoke",
             "entity_id": null,
-            "label": "Office smoke"
+            "label": "Gallery smoke"
+          },
+          {
+            "id": "appliance-showroom-sf3",
+            "x": 2000,
+            "y": 12900,
+            "kind": "gas",
+            "entity_id": null,
+            "label": "Boiler gas detector"
+          },
+          {
+            "id": "appliance-showroom-sf4",
+            "x": 1400,
+            "y": 12300,
+            "kind": "leak",
+            "entity_id": null,
+            "label": "Plant room leak puck"
           }
         ],
         "robots": [],
-        "presenceZones": [],
-        "cameras": [],
-        "groundAreas": [],
-        "voidAreas": []
+        "presenceZones": [
+          {
+            "id": "appliance-showroom-pz1",
+            "name": "Entrance vestibule",
+            "entity_id": null,
+            "color": "#26c6da",
+            "points": [
+              {
+                "x": 8600,
+                "y": 300
+              },
+              {
+                "x": 12200,
+                "y": 300
+              },
+              {
+                "x": 12200,
+                "y": 2600
+              },
+              {
+                "x": 8600,
+                "y": 2600
+              }
+            ]
+          }
+        ],
+        "cameras": [
+          {
+            "id": "appliance-showroom-cam1",
+            "x": 400,
+            "y": 400,
+            "rotation": 45,
+            "fov": 90,
+            "range": 14000,
+            "height": 2600,
+            "entity_id": null,
+            "alertEntity": null,
+            "label": "Sales floor west"
+          },
+          {
+            "id": "appliance-showroom-cam2",
+            "x": 19600,
+            "y": 400,
+            "rotation": 315,
+            "fov": 90,
+            "range": 14000,
+            "height": 2600,
+            "entity_id": null,
+            "alertEntity": null,
+            "label": "Sales floor east"
+          }
+        ],
+        "groundAreas": [
+          {
+            "id": "appliance-showroom-ga1",
+            "kind": "grass",
+            "name": "Landscape lighting bed",
+            "points": [
+              {
+                "x": 16800,
+                "y": 9500
+              },
+              {
+                "x": 19800,
+                "y": 9500
+              },
+              {
+                "x": 19800,
+                "y": 12400
+              },
+              {
+                "x": 16800,
+                "y": 12400
+              }
+            ]
+          }
+        ],
+        "voidAreas": [],
+        "thermostats": [
+          {
+            "id": "appliance-showroom-th1",
+            "x": 4063,
+            "y": 7900,
+            "rotation": 90,
+            "height": 1500,
+            "entity_id": null,
+            "localState": "cool",
+            "localTemp": 22,
+            "label": "Showroom thermostat"
+          },
+          {
+            "id": "appliance-showroom-th2",
+            "x": 3937,
+            "y": 12200,
+            "rotation": -90,
+            "height": 1500,
+            "entity_id": null,
+            "localState": "heat",
+            "localTemp": 19,
+            "label": "Plant room thermostat"
+          }
+        ],
+        "valves": [
+          {
+            "id": "appliance-showroom-vl1",
+            "x": 1500,
+            "y": 12800,
+            "rotation": 0,
+            "entity_id": null,
+            "localState": "on",
+            "label": "Main water shutoff"
+          }
+        ],
+        "plugs": [
+          {
+            "id": "appliance-showroom-pl1",
+            "x": 4068,
+            "y": 8800,
+            "rotation": 90,
+            "height": 300,
+            "entity_id": null,
+            "localState": "on",
+            "label": "Climate row outlet"
+          },
+          {
+            "id": "appliance-showroom-pl2",
+            "x": 19933,
+            "y": 7900,
+            "rotation": -90,
+            "height": 300,
+            "entity_id": null,
+            "localState": "on",
+            "label": "Media wall outlet"
+          },
+          {
+            "id": "appliance-showroom-pl3",
+            "x": 12868,
+            "y": 11800,
+            "rotation": 90,
+            "height": 300,
+            "entity_id": null,
+            "label": "Gallery outlet"
+          }
+        ],
+        "infoCards": [
+          {
+            "id": "appliance-showroom-ic1",
+            "x": 11600,
+            "y": 60,
+            "rotation": 0,
+            "mount": "wall",
+            "displayMode": "clock",
+            "clockFormat": "12h",
+            "entity_id": null,
+            "fontScale": 1.4,
+            "label": "Store clock"
+          },
+          {
+            "id": "appliance-showroom-ic2",
+            "x": 12860,
+            "y": 13000,
+            "rotation": 90,
+            "mount": "wall",
+            "displayMode": "clock_date",
+            "clockFormat": "24h",
+            "dateFormat": "medium",
+            "entity_id": null,
+            "label": "Gallery clock"
+          },
+          {
+            "id": "appliance-showroom-ic3",
+            "x": 2000,
+            "y": 11140,
+            "rotation": 180,
+            "mount": "wall",
+            "displayMode": "date",
+            "dateFormat": "medium",
+            "entity_id": null,
+            "label": "Service log date"
+          }
+        ],
+        "actionButtons": [
+          {
+            "id": "appliance-showroom-ab1",
+            "x": 11200,
+            "y": 65,
+            "rotation": 0,
+            "wallMount": true,
+            "actionKind": "scene",
+            "entity_id": null,
+            "icon": "🏪",
+            "color": "#ffb74d",
+            "label": "Open the store",
+            "localState": "off"
+          },
+          {
+            "id": "appliance-showroom-ab2",
+            "x": 12865,
+            "y": 10600,
+            "rotation": 90,
+            "wallMount": true,
+            "actionKind": "scene",
+            "entity_id": null,
+            "icon": "✨",
+            "color": "#7e57c2",
+            "label": "Gallery light show",
+            "localState": "off"
+          }
+        ],
+        "projectors": [
+          {
+            "id": "appliance-showroom-pj1",
+            "x": 17000,
+            "y": 5000,
+            "height": 2600,
+            "rotation": 90,
+            "entity_id": null,
+            "localState": "on",
+            "screenId": null,
+            "throwRatio": 1.5,
+            "beamColor": "#dfe8ff",
+            "label": "Home-theatre projector"
+          }
+        ],
+        "calendarPanels": [
+          {
+            "id": "appliance-showroom-cp1",
+            "x": 70,
+            "y": 8900,
+            "rotation": 90,
+            "height": 1600,
+            "calendarIds": [],
+            "label": "Delivery calendar"
+          }
+        ],
+        "alertBeacons": [
+          {
+            "id": "appliance-showroom-al1",
+            "x": 2600,
+            "y": 12200,
+            "height": 2743,
+            "entity_id": null,
+            "label": "Plant room annunciator"
+          }
+        ]
       }
     ],
     "currentFloorId": "appliance-showroom-fl1",
@@ -1233,6 +1977,6 @@
     "customObjects": [],
     "people": [],
     "bleShowUnknown": true,
-    "notes": "~1,507 sq ft (140 m²) retail hall · 1 floor · 3 rooms — appliance feature showcase\n\nA 14 × 10 m big-box appliance showroom built to demonstrate EVERY appliance and\nclimate model Diorama ships, all on one open floor at once. It is not a house —\nit is a catalogue you can walk through. Display rows run east–west with wide\naisles between them and two north–south cross aisles, so avatars can path to any\npiece; a staff restroom and a two-desk sales office fill the west wall.\n\nMost units are switched ON via localState with no Home Assistant attached, so the\nhall reads alive out of the box: appliance in-use LEDs pulse, fan blades spin (two\nfans oscillate), the mini-split louver swings open and vents cool air, the space\nheaters glow, the towel warmer heats, one kitchen sink is left running, and the\nmedia wall plays.\n\nDisplay rows, south to north:\nEV bay (west end): a display car nose-to-nose with a home EV charger, served by\n  the delivery-bay garage door in the west wall.\nCheckout row: charcoal checkout island, order desk with a toaster and drip brewer\n  on the counter, and a three-screen wall-mounted TV media wall on the east wall.\nCooking & Dishwashing: two ranges, two dishwashers, and two counters carrying a\n  countertop microwave, toaster, drip brewer, espresso machine, and a retro fan.\nClimate & Comfort: pedestal fan and modern stand fan (both oscillating), tower and\n  bladeless fans, two portable ACs, two space heaters, and a shop floor fan.\nLaundry: front-load, top-load and compact washers, heat-pump and vented dryers,\n  plus a stacked washer/dryer pair on a single footprint.\nRefrigeration: French door, side-by-side, top freezer, counter-depth and beverage.\nPlumbing wall (north wall): double-bowl kitchen sink, vanity sink, pedestal sink,\n  compact vanity and a utility tub, daylit by a clerestory above.\nWall-hung climate (north wall, east end): mini-split head, window AC and a wall\n  heater, all mounted clear of the floor.\n\nSupport spaces: a waiting corner with a bench, rug and plants; a staff restroom\n  (toilet, pedestal sink, towel warmer, exhaust fan); a sales office with two\n  desks and chairs, a spec-binder bookshelf and a plant.\n\nSensor kit: three unbound demo AI-avatar presence sensors (showroom floor,\n  checkout, sales office), temperature / humidity / CO₂ env sensors, and two\n  smoke detectors. Lighting is all LED strips over the rows plus hero spots on\n  the end-cap display of each family."
+    "notes": "~3,014 sq ft (280 m²) retail hall · 1 floor · 5 rooms — appliance, mechanical & lighting showcase\n\nA 20 × 14 m big-box showroom built to demonstrate the appliance, climate,\nplumbing, mechanical and LIGHTING models Diorama ships — one hero unit per\nmodel rather than a shelf of duplicates, so most of the floor is open aisle.\nIt is not a house; it is a catalogue you can walk through. Display rows run\neast–west across a C-shaped hall that wraps a west service block and a\nwalk-in lighting gallery, so avatars can path to any piece.\n\nMost units are switched ON via localState with no Home Assistant attached, so\nthe hall reads alive out of the box: appliance in-use LEDs pulse, fan blades\nspin (the stand fan oscillates), the mini-split louver swings open, the space\nheater glows, the towel warmer and radiators heat, the boiler and pumps run,\nthe kitchen sink is left running, the media wall plays and the gallery is lit.\n\nDepartments:\nStorefront (south): full-height picture glazing either side of a double-leaf\n  main entrance and a sliding-glass patio door that IS the patio-door display.\nEV bay (south-west): a display car nose-on to a home charger, served by the\n  delivery-bay garage door in the west wall.\nFront of house: charcoal checkout island, order desk with a toaster, a\n  two-screen wall-mounted media wall and a console TV on its stand.\nKitchen row: slide-in range, dishwasher, double-bowl sink, an appliance bar\n  carrying a microwave, drip brewer and retro fan, a kitchen vignette island,\n  and two fridges (French door, beverage centre).\nLaundry & portable climate: a washer/dryer pair, a stacked washer-dryer\n  column on one footprint, and the portable comfort family — shop fan,\n  oscillating stand fan, tower fan, bladeless fan, portable AC, space heater.\nBack wall: mini-split head, window AC and wall heater mounted clear of the\n  floor, plus the sink wall (pedestal, compact vanity, utility tub) daylit by\n  a clerestory, and a customer lounge with sofa, rug, coffee table and lamp.\n\nRooms off the hall:\nBath & Vanity Studio (pocket door): walk-in shower, soaking tub, vanity sink,\n  toilet, towel warmer and a wall radiator, under a heat lamp, a combined\n  exhaust-and-light and a wall exhaust fan.\nSales Office (glazed french doors): desk and chair, credenza with a working\n  3D parts printer, spec-binder shelving, a wall calendar and a date card.\nMechanical Room (barn slider): the full plant-room family — heat-pump water\n  heater, condensing boiler, air handler, heat-pump outdoor unit, AC\n  condenser, sump and recirculation pumps and a cast-iron floor radiator —\n  with a main-water valve, gas and leak detectors, an alarm beacon and its\n  own thermostat.\nLighting Gallery (north-east): a walk-in catalogue of fixture kinds — bare\n  bulb, oval, bowl, tiered, mason jar, round panel, recessed can, pendant,\n  ceiling fan, fan-with-light and floor lamp overhead; a wall-sconce pair,\n  a half-dome sconce and two step lights on the walls; a hearth vignette on\n  the back wall; and a landscape bay on a grass patch with in-ground\n  uplights, a ground spot and a flood over a patio set.\n\nControl kit (all unbound — display and local-toggle only): two thermostats,\n  three smart plugs, a water valve, two scene buttons, a ceiling projector,\n  three clock/date info cards, a wall calendar, an alert beacon, two security\n  cameras, an entrance presence zone, an mmWave footfall unit, four demo\n  AI-avatar presence sensors, four env sensors and four safety detectors."
   }
 }

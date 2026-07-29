@@ -118,7 +118,7 @@ function buildHome(version, date) {
     ['First-class mmWave radar',
       'Multi-sensor, multi-target HLK-LD2450 tracking with in-place zone and object editing, per-sensor colors, and animated figures that reflect where people actually are.'],
     ['Build it fast, bind anything',
-      'A visual toolbar with real 3D thumbnails for every piece, rulers and CAD dimensions while you draw — then bind lights, switches, fans, media players, sensors, cameras, locks, covers, thermostats, alarm keypads, vacuums and mowers, and click to control.'],
+      'A visual toolbar with real 3D thumbnails for every piece, live dimensions as you drag, rulers and CAD dimension lines — then bind lights, switches, fans, media players, sensors, cameras, locks, covers, thermostats, alarm keypads, vacuums and mowers, and click to control. Bind rooms to your Home Assistant areas and the entity pickers narrow themselves.'],
     ['Know who’s who',
       'A People registry (names, colors, pets), BLE / Bermuda indoor positioning solved from your Bluetooth proxies, and identity fusion that dresses a precise radar figure in a person’s avatar and name label.'],
     ['Your yard, in full',

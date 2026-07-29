@@ -62,6 +62,15 @@ export function build() {
     b.furn('picnic_table', 8100, 13700, { rotation: 0 }),
     b.furn('tree', 13500, 14000, { rotation: 0 }),
     b.furn('bush', 2000, 13500, { rotation: 0 }),
+    // Mature specimen trees, one per yard face.
+    b.furn('oak_tree', 11050, 14000, { rotation: 0, label: 'Back-yard oak' }),
+    b.furn('spruce_tree', 1500, 10000, { rotation: 0, label: 'West-side spruce' }),
+    b.furn('birch_tree', 11200, 1200, { rotation: 0, label: 'Front birch' }),
+    b.furn('birch_tree', 14700, 10500, { rotation: 0, label: 'East-side birch' }),
+    // Curbside mailbox and a step-free ramp up the front walk.
+    b.furn('mailbox', 6700, 400, { rotation: 180, label: 'Mailbox' }),
+    b.furn('ramp', 5900, 1750, { rotation: 0, label: 'Front-walk ramp' }),
+    b.furn('rocking_chair', 4200, 13800, { rotation: 180, label: 'Porch rocker' }),
   ];
 
   const f = b.floor({
@@ -114,6 +123,10 @@ export function build() {
       '    a fourth bush west of the walk.',
       '  • Two shade trees at the front corners, one at the back; a front-lawn bird bath.',
       '  • Back-yard picnic table with two lawn chairs for outdoor dining.',
+      '',
+      'Yard additions: a back-yard oak, a west-side spruce and two birches (front and east),',
+      '  a curbside mailbox, a step-free ramp up the front walk, and a porch rocker on the',
+      '  back lawn.',
     ].join('\n'),
   });
 }

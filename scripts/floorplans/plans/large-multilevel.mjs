@@ -287,7 +287,7 @@ export function build() {
     light(8450, 2100, { iconKind: 'bulb', label: 'Home Office' }),
     light(10950, 2100, { iconKind: 'pendant', label: 'Foyer' }),
     light(13950, 2100, { iconKind: 'bulb', label: 'Living Room' }),
-    light(17450, 2100, { iconKind: 'pendant', label: 'Dining' }),
+    light(17450, 2100, { iconKind: 'bowl', label: 'Dining uplight' }),
     light(8450, 5200, { iconKind: 'bulb', label: 'Pantry' }),
     light(10950, 7000, { iconKind: 'bulb', label: 'Stair Hall' }),
     light(14450, 5000, { iconKind: 'pendant', label: 'Kitchen island' }),
@@ -482,6 +482,7 @@ export function build() {
     light(12950, 2100, { iconKind: 'bulb', label: 'Sitting' }),
     light(15700, 2100, { iconKind: 'bulb', label: 'Bedroom 2' }),
     light(8450, 6100, { iconKind: 'sconce', label: 'Spa Bath', radius: 500 }),
+    light(8900, 6300, { iconKind: 'heatlamp', label: 'Spa Bath heat lamp' }),
     light(10950, 7000, { iconKind: 'bulb', label: 'Stair Hall' }),
     light(15700, 4750, { iconKind: 'sconce', label: 'Upper Hallway', radius: 500 }),
     light(14450, 6900, { iconKind: 'bulb', label: 'Bedroom 3' }),
@@ -559,6 +560,9 @@ export function build() {
       'Hall Bath + Laundry Room: shared bath (toilet/vanity/shower) + washer/dryer/cabinet.',
       'Loft / Bonus Room: sofa, coffee table, bookshelf, reading chair, rug.',
       'Upper Stair Hall: the landing arriving from the main level.',
+      '',
+      'Fixture detail: the dining room hangs a bowl uplight instead of a pendant, and the',
+      '  primary spa bath adds a ceiling heat lamp over the tub.',
     ].join('\n'),
   });
 }

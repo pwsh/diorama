@@ -79,6 +79,11 @@ view3d: Iso       # a saved 3D view name/id (3D only, optional)
 cam: [x,y,z,tx,ty,tz]   # explicit 3D camera pose (3D only, optional)
 compact: false    # hide the overlay chrome; auto-on below ~360px wide
 panelPath: /diorama     # href for the ⤢ "open full panel" link (default /diorama)
+scene:            # 3D-only look overrides for THIS card (optional)
+  glassHouse: true
+  wallCutaway: true
+  cinematicOrbit: true
+  fovV: 45
 ```
 
 | Field | Values | Default | Notes |
@@ -86,11 +91,27 @@ panelPath: /diorama     # href for the ⤢ "open full panel" link (default /dior
 | `view` | `2d` or `3d` | `2d` | 3D loads the renderer only when a 3D card mounts. |
 | `mode` | `kiosk` or `view` | `kiosk` | `edit` is rejected — a card never edits or saves the plan. `view` disables tap-to-control. |
 | `floor` | floor name or id | current/first | Shared across cards on a tab (last-applied wins). |
-| `layers` | preset name/id, `simple`, `full` | plan default | The same presets as the panel's 2D Layers. |
+| `layers` | preset name/id, `simple`, `full`, or an explicit `{layer: true/false}` map | plan default | The same presets as the panel's 2D Layers; the editor's **Custom…** option writes the map form. |
+| `scene` | a map of 3D options | inherits the plan | 3D only, and **card-local** — see below. |
 | `view3d` | saved view name/id | iso framing | 3D only. |
 | `cam` | 6 numbers | — | 3D only; an explicit pose, and it wins over `view3d`. |
 | `compact` | `true` or `false` | auto (below 360 px) | Hides the view-preset bar, reset button, weather chip, and compass. |
 | `panelPath` | url path | `/diorama` | The `url_path` of your `panel_custom` panel, for the ⤢ link. |
+
+### Card-local 3D look
+
+A 3D card can override the plan's scene settings **for itself only**, so a
+dashboard card can be a slowly orbiting glass-house showpiece while the panel
+stays as you left it. In the card's visual editor these appear as
+(inherit) / On / Off dropdowns; in YAML they go under `scene`:
+
+`glassHouse`, `wallCutaway`, `autoFollow`, `cinematicOrbit`, `simsCam`,
+`plumbobs`, and `skyBackdrop`, plus `fovV` (10–120) and `fovH` (10–150).
+
+Anything you leave out is inherited from the plan. 2D cards ignore `scene`
+entirely.
+
+### One shared connection
 
 Every Diorama card on a tab shares **one** live connection, so add as many as
 you like — a 2D card beside a 3D card, several rooms — at no extra cost.

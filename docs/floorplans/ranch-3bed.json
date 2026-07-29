@@ -1,7 +1,7 @@
 {
   "diorama": 2,
   "name": "Ranch — 3 Bed / 2 Bath",
-  "exportedAt": "2026-07-25T00:00:00.000Z",
+  "exportedAt": "2026-07-29T00:00:00.000Z",
   "store": {
     "v": 2,
     "floors": [
@@ -876,7 +876,7 @@
           },
           {
             "id": "ranch-3bed-fn72",
-            "x": 15148,
+            "x": 14300,
             "y": 9500,
             "w": 700,
             "h": 1600,
@@ -971,7 +971,17 @@
           },
           {
             "id": "ranch-3bed-fn83",
-            "x": 16900,
+            "x": 6400,
+            "y": -500,
+            "w": 250,
+            "h": 350,
+            "kind": "mailbox",
+            "rotation": 180,
+            "label": "Curbside mailbox"
+          },
+          {
+            "id": "ranch-3bed-fn84",
+            "x": 17400,
             "y": 7800,
             "w": 700,
             "h": 1200,
@@ -979,13 +989,22 @@
             "rotation": 270
           },
           {
-            "id": "ranch-3bed-fn84",
-            "x": 16900,
+            "id": "ranch-3bed-fn85",
+            "x": 17400,
             "y": 9100,
             "w": 700,
             "h": 1200,
             "kind": "lawn_chair",
             "rotation": 270
+          },
+          {
+            "id": "ranch-3bed-fn86",
+            "x": 20200,
+            "y": 8400,
+            "w": 3000,
+            "h": 3000,
+            "kind": "oak_tree",
+            "label": "Back-yard oak"
           }
         ],
         "lights": [
@@ -994,8 +1013,8 @@
             "x": 1700,
             "y": 1900,
             "entity_id": null,
-            "iconKind": "bulb",
-            "label": "Bedroom 2"
+            "iconKind": "fan_light",
+            "label": "Bedroom 2 fan"
           },
           {
             "id": "ranch-3bed-lt2",
@@ -1010,8 +1029,8 @@
             "x": 1700,
             "y": 5900,
             "entity_id": null,
-            "iconKind": "bulb",
-            "label": "Primary Bedroom"
+            "iconKind": "fan_light",
+            "label": "Primary Bedroom fan"
           },
           {
             "id": "ranch-3bed-lt4",
@@ -1355,6 +1374,16 @@
             "rotation": 0,
             "entity_id": null,
             "label": "Garage man-door"
+          },
+          {
+            "id": "ranch-3bed-dr16",
+            "x": 16000,
+            "y": 9300,
+            "w": 1800,
+            "rotation": 90,
+            "entity_id": null,
+            "kind": "sliding_glass",
+            "label": "Family slider"
           }
         ],
         "windows": [
@@ -1462,18 +1491,6 @@
           },
           {
             "id": "ranch-3bed-win10",
-            "x": 16000,
-            "y": 8400,
-            "w": 1800,
-            "rotation": 90,
-            "entity_id": null,
-            "sill": 0,
-            "height": 2000,
-            "kind": "sliding",
-            "label": "Family slider"
-          },
-          {
-            "id": "ranch-3bed-win11",
             "x": 22100,
             "y": 2900,
             "w": 800,
@@ -1636,6 +1653,6 @@
     "customObjects": [],
     "people": [],
     "bleShowUnknown": true,
-    "notes": "~1,723 sq ft (160 m²) heated + 400 sq ft garage · 1 floor · 15 rooms\n\nA classic single-story American ranch: an open kitchen/dining/family great room\ngrafted onto a traditional center-hall bedroom wing, with an attached two-car\ngarage. Warm oak-look floors, greige walls, carpet simulated with area rugs in\nthe bedrooms. The L-shaped footprint leaves an unbuilt side yard behind the\ngarage that renders as bare ground.\n\nLiving Room: sofa, two armchairs, coffee table, TV on a stand, bookshelf, rug, plant.\nFoyer: entry bench, console table, plant.\nBedroom 2: queen bed, two nightstands, dresser, bookshelf, carpet-tone rug.\nBedroom 3: full bed, nightstand, dresser, student desk, rug.\nPrimary Bedroom: king bed, two nightstands, dresser, foot-of-bed bench, wall TV,\n  rug, plant, and a bedside lamp.\nPrimary Bath: toilet, vanity sink, corner shower; sconce pair.\nPrimary Walk-in Closet: two built-in wardrobe runs.\nHall Bath: toilet, vanity sink, tub/shower combo; sconce pair.\nOffice Nook: desk + chair, bookshelf.\nKitchen: two counter runs, stove, over-range microwave, upper cabinet, island with\n  sink + dishwasher, refrigerator; island pendant + general ceiling light.\nDining: six-seat table, buffet cabinet, rug, plant; pendant over the table.\nLaundry / Mudroom: washer, dryer, storage cabinet, mudroom bench.\nFamily Room: U-sectional, TV on a stand, coffee table, ottoman, bookshelf,\n  exercise equipment, rug, plants; ceiling light + sectional lamp.\nGarage: storage cabinet, workbench, bin/bike shelving; two LED strip lights.\nYard: curbside trash + recycle bins, two front-walk trees, backyard lawn chairs."
+    "notes": "~1,723 sq ft (160 m²) heated + 400 sq ft garage · 1 floor · 15 rooms\n\nA classic single-story American ranch: an open kitchen/dining/family great room\ngrafted onto a traditional center-hall bedroom wing, with an attached two-car\ngarage. Warm oak-look floors, greige walls, carpet simulated with area rugs in\nthe bedrooms. The L-shaped footprint leaves an unbuilt side yard behind the\ngarage that renders as bare ground.\n\nLiving Room: sofa, two armchairs, coffee table, TV on a stand, bookshelf, rug, plant.\nFoyer: entry bench, console table, plant.\nBedroom 2: queen bed, two nightstands, dresser, bookshelf, carpet-tone rug.\nBedroom 3: full bed, nightstand, dresser, student desk, rug.\nPrimary Bedroom: king bed, two nightstands, dresser, foot-of-bed bench, wall TV,\n  rug, plant, and a bedside lamp.\nPrimary Bath: toilet, vanity sink, corner shower; sconce pair.\nPrimary Walk-in Closet: two built-in wardrobe runs.\nHall Bath: toilet, vanity sink, tub/shower combo; sconce pair.\nOffice Nook: desk + chair, bookshelf.\nKitchen: two counter runs, stove, over-range microwave, upper cabinet, island with\n  sink + dishwasher, refrigerator; island pendant + general ceiling light.\nDining: six-seat table, buffet cabinet, rug, plant; pendant over the table.\nLaundry / Mudroom: washer, dryer, storage cabinet, mudroom bench.\nFamily Room: U-sectional, TV on a stand, coffee table, ottoman, bookshelf,\n  exercise equipment, rug, plants; ceiling light + sectional lamp.\nGarage: storage cabinet, workbench, bin/bike shelving; two LED strip lights.\nYard: curbside trash + recycle bins, a mailbox and two front-walk trees; the side\n  yard behind the garage has a mature oak and a pair of lawn chairs, reached from\n  the family room through a sliding-glass patio door. Both bedrooms with ceiling\n  fans get fan-with-light fixtures."
   }
 }

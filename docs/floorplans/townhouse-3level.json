@@ -1,7 +1,7 @@
 {
   "diorama": 2,
   "name": "Townhouse — 3 Level",
-  "exportedAt": "2026-07-25T00:00:00.000Z",
+  "exportedAt": "2026-07-29T00:00:00.000Z",
   "store": {
     "v": 2,
     "floors": [
@@ -342,6 +342,7 @@
             "w": 800,
             "rotation": 270,
             "entity_id": null,
+            "kind": "pocket",
             "label": "Half Bath"
           },
           {
@@ -563,7 +564,7 @@
             "y": 5550,
             "w": 1500,
             "h": 1500,
-            "kind": "stairs",
+            "kind": "stairs_half",
             "stairLinkId": "th-l1l2"
           },
           {
@@ -572,7 +573,7 @@
             "y": 4050,
             "w": 1500,
             "h": 1500,
-            "kind": "stairs",
+            "kind": "stairs_half",
             "rotation": 180,
             "stairLinkId": "th-l2l3"
           },
@@ -884,6 +885,24 @@
             "rotation": 0,
             "length": 2000,
             "label": "Island"
+          },
+          {
+            "id": "townhouse-3level-lt12",
+            "x": 5950,
+            "y": 4050,
+            "entity_id": null,
+            "iconKind": "step",
+            "rotation": -90,
+            "label": "Stair step"
+          },
+          {
+            "id": "townhouse-3level-lt13",
+            "x": 5950,
+            "y": 5550,
+            "entity_id": null,
+            "iconKind": "step",
+            "rotation": -90,
+            "label": "Stair step"
           }
         ],
         "switches": [
@@ -931,6 +950,7 @@
             "w": 800,
             "rotation": 270,
             "entity_id": null,
+            "kind": "pocket",
             "label": "Half Bath"
           },
           {
@@ -1437,7 +1457,7 @@
         ],
         "lights": [
           {
-            "id": "townhouse-3level-lt12",
+            "id": "townhouse-3level-lt14",
             "x": 1950,
             "y": 1650,
             "entity_id": null,
@@ -1445,7 +1465,7 @@
             "label": "Secondary Bedroom"
           },
           {
-            "id": "townhouse-3level-lt13",
+            "id": "townhouse-3level-lt15",
             "x": 4900,
             "y": 900,
             "entity_id": null,
@@ -1454,7 +1474,7 @@
             "label": "Hall Bath"
           },
           {
-            "id": "townhouse-3level-lt14",
+            "id": "townhouse-3level-lt16",
             "x": 900,
             "y": 4200,
             "entity_id": null,
@@ -1462,7 +1482,7 @@
             "label": "Laundry"
           },
           {
-            "id": "townhouse-3level-lt15",
+            "id": "townhouse-3level-lt17",
             "x": 2100,
             "y": 8650,
             "entity_id": null,
@@ -1470,7 +1490,7 @@
             "label": "Primary"
           },
           {
-            "id": "townhouse-3level-lt16",
+            "id": "townhouse-3level-lt18",
             "x": 900,
             "y": 10400,
             "entity_id": null,
@@ -1479,13 +1499,21 @@
             "label": "Bedside lamp"
           },
           {
-            "id": "townhouse-3level-lt17",
+            "id": "townhouse-3level-lt19",
             "x": 4700,
             "y": 9200,
             "entity_id": null,
             "iconKind": "sconce",
             "radius": 450,
             "label": "Ensuite"
+          },
+          {
+            "id": "townhouse-3level-lt20",
+            "x": 3000,
+            "y": 4800,
+            "entity_id": null,
+            "iconKind": "oval",
+            "label": "Upstairs Hallway"
           }
         ],
         "switches": [
@@ -1596,6 +1624,7 @@
             "w": 800,
             "rotation": 270,
             "entity_id": null,
+            "kind": "pocket",
             "label": "Ensuite"
           }
         ],
@@ -1760,6 +1789,6 @@
     "customObjects": [],
     "people": [],
     "bleShowUnknown": true,
-    "notes": "~1,875 sq ft (174 m²) heated + 256 sq ft garage · 3 floors · 21 rooms\n\nA narrow urban infill rowhouse on an identical 6000 × 11000 mm footprint stacked\nthree storeys around a single switchback stair core against the right party wall.\nThe two long walls are windowless party walls shared with the neighbors; all light\nand both exterior doors live on the front (street) and rear (yard) facades. Ground\nis utilitarian (garage + flex office), the Middle is the public level (open\nkitchen/dining/living + balcony), and the Top is private (bedrooms/baths/laundry).\nWood-look floors on the living levels, tile in the wet rooms, sealed concrete tone\nin the garage; walls warm-neutral below, cooler upstairs. Stairs are linked across\nfloors so avatars transit between levels; the Middle floor’s switchback carries\nboth a down-flight and an up-flight.\n\nGROUND — Garage: workbench + storage cabinet (no car modeled). Entry / Foyer: shoe\n  bench + rug by the front door. Half Bath: powder room off the hall. Hallway:\n  runner connecting entry → stair → flex. Stairwell: bottom flight up to Middle.\n  Flex Room / Office: desk + chair under the rear window, bookshelf, plus a casual\n  media zone (sofa, TV on a stand, coffee table, rug).\nMIDDLE — Living Room: sofa + coffee table facing a wall TV on a stand, armchair,\n  rug, and a rear reading nook (chair + ottoman + plant). Half Bath off the stair\n  landing. Stairwell: switchback down-/up-flights. Dining Room: six-seat table.\n  Kitchen: rear-wall run (stove, over-range microwave, dishwasher, sink, two counter\n  runs, corner fridge) + a freestanding island with three stools; door to the\n  cantilevered balcony.\nTOP — Secondary Bedroom: queen bed, two nightstands, dresser, rug. Hall Bath:\n  vanity sink, toilet, tub. Laundry Closet: stacked washer + dryer. Upstairs\n  Hallway: runner. Stairwell: top landing / guarded overlook. Primary Bedroom:\n  king bed under the rear windows, two nightstands, dresser, foot-of-bed bench,\n  reading chair, rug. Primary Walk-in Closet: two wardrobe runs. Primary Ensuite:\n  double vanity, toilet, and a walk-in shower."
+    "notes": "~1,875 sq ft (174 m²) heated + 256 sq ft garage · 3 floors · 21 rooms\n\nA narrow urban infill rowhouse on an identical 6000 × 11000 mm footprint stacked\nthree storeys around a single switchback stair core against the right party wall.\nThe two long walls are windowless party walls shared with the neighbors; all light\nand both exterior doors live on the front (street) and rear (yard) facades. Ground\nis utilitarian (garage + flex office), the Middle is the public level (open\nkitchen/dining/living + balcony), and the Top is private (bedrooms/baths/laundry).\nWood-look floors on the living levels, tile in the wet rooms, sealed concrete tone\nin the garage; walls warm-neutral below, cooler upstairs. Stairs are linked across\nfloors so avatars transit between levels; the Middle floor’s switchback carries\nboth a down-flight and an up-flight.\n\nGROUND — Garage: workbench + storage cabinet (no car modeled). Entry / Foyer: shoe\n  bench + rug by the front door. Half Bath: powder room off the hall. Hallway:\n  runner connecting entry → stair → flex. Stairwell: bottom flight up to Middle.\n  Flex Room / Office: desk + chair under the rear window, bookshelf, plus a casual\n  media zone (sofa, TV on a stand, coffee table, rug).\nMIDDLE — Living Room: sofa + coffee table facing a wall TV on a stand, armchair,\n  rug, and a rear reading nook (chair + ottoman + plant). Half Bath off the stair\n  landing. Stairwell: switchback down-/up-flights. Dining Room: six-seat table.\n  Kitchen: rear-wall run (stove, over-range microwave, dishwasher, sink, two counter\n  runs, corner fridge) + a freestanding island with three stools; door to the\n  cantilevered balcony.\nTOP — Secondary Bedroom: queen bed, two nightstands, dresser, rug. Hall Bath:\n  vanity sink, toilet, tub. Laundry Closet: stacked washer + dryer. Upstairs\n  Hallway: runner. Stairwell: top landing / guarded overlook. Primary Bedroom:\n  king bed under the rear windows, two nightstands, dresser, foot-of-bed bench,\n  reading chair, rug. Primary Walk-in Closet: two wardrobe runs. Primary Ensuite:\n  double vanity, toilet, and a walk-in shower.\n\nSpace-saving detail: pocket doors on both half baths and the primary ensuite (a\n  6 m-wide house cannot spare a swing arc), stair-shaft step lights on the party\n  wall, an oval flush mount over the upstairs hallway, and a switchback pair of\n  half-flights in the stair core."
   }
 }

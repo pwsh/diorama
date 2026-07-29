@@ -72,13 +72,89 @@ export function build() {
     light(8100, 4200, { iconKind: 'under_cabinet', rotation: 90, length: 1600, label: 'Kitchen under-cabinet', localState: 'on' }),
   ];
 
+  // --- Two unbound mmWave units: the whole-room positional tier above the
+  //     binary motion sensors. Living Room north-west corner looking across the
+  //     great room, and the bedroom corridor looking up its full length. ---
+  const sensors = [
+    {
+      id: nid('mm'), x: 8020, y: 120, heading: 135, fov: 120, range: 9000,
+      label: 'Living Room mmWave', deviceSlug: null, color: '#4dd0e1',
+      avatarKinds: ['adult', 'professional', 'teen'],
+    },
+    {
+      id: nid('mm'), x: 3950, y: 9850, heading: 180, fov: 120, range: 8000,
+      label: 'Corridor mmWave', deviceSlug: null, color: '#9575cd',
+      avatarKinds: ['child', 'elder'],
+    },
+  ];
+
+  // --- Presence zone over the living-room seating group (unbound) ---
+  const presenceZones = [
+    {
+      id: nid('pz'), name: 'Living seating', entity_id: null, color: '#26c6da',
+      points: [
+        { x: 8600, y: 400 }, { x: 15400, y: 400 },
+        { x: 15400, y: 3400 }, { x: 8600, y: 3400 },
+      ],
+    },
+  ];
+
+  // --- One camera watching the great room diagonally from the Living Room's
+  //     north-east corner ---
+  const cameras = [
+    {
+      id: nid('cam'), x: 15850, y: 250, rotation: 225, fov: 90, range: 9000,
+      height: 2400, entity_id: null, alertEntity: null, label: 'Living Room camera',
+    },
+  ];
+
   const f = floor({
     name: 'Main Floor', w: bones.W, d: bones.D,
     walls: bones.walls, rooms: bones.rooms, doors: bones.doors, windows: bones.windows,
     furniture: bones.furniture, lights: [...bones.lights, ...extraLights], switches: bones.switches,
-    motionSensors, envSensors, robots, safetySensors,
+    sensors, motionSensors, envSensors, robots, safetySensors, presenceZones, cameras,
     look3d: bones.look3d,
   });
+
+  // Control fixtures lib.mjs's floor() has no spec key for — attached directly
+  // (the garden-center sprinkler-zone pattern); they ride repairFloor's explicit
+  // field list, so they survive import/load unchanged.
+  f.thermostats = [
+    {
+      id: nid('th'), x: 4400, y: 4900, rotation: 90, height: 1500,
+      entity_id: null, localState: 'heat_cool', localTemp: 21,
+      label: 'Hall thermostat',
+    },
+  ];
+
+  f.plugs = [
+    { id: nid('pl'), x: 14900, y: 120, rotation: 0, height: 300, entity_id: null, localState: 'on', label: 'Living Room outlet' },
+    { id: nid('pl'), x: 12500, y: 9880, rotation: 180, height: 300, entity_id: null, label: 'Family Room outlet' },
+  ];
+
+  f.valves = [
+    {
+      id: nid('vl'), x: 14600, y: 5950, rotation: 0, entity_id: null,
+      localState: 'off', label: 'Laundry supply valve',
+    },
+  ];
+
+  // Clock mode needs no binding, so the card reads correctly with no HA.
+  f.infoCards = [
+    {
+      id: nid('ic'), x: 4420, y: 7900, rotation: 90, mount: 'wall', height: 1500,
+      displayMode: 'clock_date', clockFormat: '12h', dateFormat: 'medium',
+      entity_id: null, label: 'Hall clock',
+    },
+  ];
+
+  f.actionButtons = [
+    {
+      id: nid('ab'), x: 6400, y: 150, rotation: 0, height: 1200, wallMount: true,
+      actionKind: 'scene', entity_id: null, icon: '🌙', color: '#7e57c2',
+      label: 'Good night', localState: 'off',
+    },
+  ];
 
   const roamers = [
     roamer('Casey', ['adult', 'professional'], { color: '#4dd0e1' }),
@@ -117,6 +193,15 @@ export function build() {
       'Hall Bath: a humidity env sensor.',
       'Garage: a temperature env sensor + a CO detector near the garage service door',
       '  (attached-garage CO is the classic risk).',
+      '',
+      'Control + positional kit (also all unbound):',
+      'Two mmWave units — one in the Living Room north-west corner sweeping the great',
+      '  room, one at the foot of the bedroom corridor covering its full length — with',
+      '  their coverage wedges drawn, plus a presence zone over the living seating group',
+      '  and a camera watching the great room diagonally.',
+      'A hall thermostat between the Bedroom 3 and Hall Bath doors, a clock/date info',
+      '  card further down the same wall, a "Good night" scene button beside the front',
+      '  door, smart plugs in the Living and Family rooms, and a laundry supply valve.',
       '',
       'Everything else — the three bedrooms, primary suite, dining, laundry, office nook,',
       'and garage furnishings — matches the base Ranch plan exactly.',

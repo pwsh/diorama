@@ -136,6 +136,9 @@ export function build() {
       '  Laundry Closet: stacked washer + dryer. Primary Bedroom: bed, two nightstands,',
       '  rug — nothing else. Primary Walk-in Closet: one wardrobe. Primary Ensuite: a',
       '  slim vanity + walk-in shower.',
+      '',
+      'Shell detail inherited from the base townhouse: pocket doors on both half baths',
+      '  and the primary ensuite, and a switchback pair of half-flights in the stair core.',
     ].join('\n'),
   });
 }

@@ -1,7 +1,7 @@
 {
   "diorama": 2,
   "name": "Large Multilevel — Aldergate",
-  "exportedAt": "2026-07-25T00:00:00.000Z",
+  "exportedAt": "2026-07-29T00:00:00.000Z",
   "store": {
     "v": 2,
     "floors": [
@@ -1636,8 +1636,8 @@
             "x": 17450,
             "y": 2100,
             "entity_id": null,
-            "iconKind": "pendant",
-            "label": "Dining"
+            "iconKind": "bowl",
+            "label": "Dining uplight"
           },
           {
             "id": "large-multilevel-lt18",
@@ -3052,6 +3052,14 @@
           },
           {
             "id": "large-multilevel-lt35",
+            "x": 8900,
+            "y": 6300,
+            "entity_id": null,
+            "iconKind": "heatlamp",
+            "label": "Spa Bath heat lamp"
+          },
+          {
+            "id": "large-multilevel-lt36",
             "x": 10950,
             "y": 7000,
             "entity_id": null,
@@ -3059,7 +3067,7 @@
             "label": "Stair Hall"
           },
           {
-            "id": "large-multilevel-lt36",
+            "id": "large-multilevel-lt37",
             "x": 15700,
             "y": 4750,
             "entity_id": null,
@@ -3068,7 +3076,7 @@
             "label": "Upper Hallway"
           },
           {
-            "id": "large-multilevel-lt37",
+            "id": "large-multilevel-lt38",
             "x": 14450,
             "y": 6900,
             "entity_id": null,
@@ -3076,7 +3084,7 @@
             "label": "Bedroom 3"
           },
           {
-            "id": "large-multilevel-lt38",
+            "id": "large-multilevel-lt39",
             "x": 17950,
             "y": 6350,
             "entity_id": null,
@@ -3085,7 +3093,7 @@
             "label": "Bedroom 3 Bath"
           },
           {
-            "id": "large-multilevel-lt39",
+            "id": "large-multilevel-lt40",
             "x": 15700,
             "y": 9125,
             "entity_id": null,
@@ -3593,6 +3601,6 @@
     "customObjects": [],
     "people": [],
     "bleShowUnknown": true,
-    "notes": "~4,590 sq ft (427 m²) · 3 levels + garage · 46 rooms\n\nA transitional-craftsman luxury spec home stacked three levels high over an\nidentical 19,200 × 9,750 mm footprint so the exterior walls and central stair\ncore line up between floors. A walkout finished basement built for entertaining,\na main level of formal front rooms flowing into an open kitchen/great-room, and\na hotel-quiet upper level of bedrooms. Two stair connections use matching\nstairLinkIds so avatars transit floor to floor: the basement flight lands in the\nmain-level stair hall, and the main flight lands in the upper landing. Oak main\nlevel, carpet-toned bedrooms upstairs, polished concrete downstairs; clock\nlighting shifts the scene day→dusk→night.\n\nBASEMENT (floors[0] — the fun floor)\nHome Theater: wall-mounted screen, U-sectional + ottoman, back-row chairs, AV shelf.\nWet Bar: bar counter with sink, three stools, back-bar cabinet, beverage fridge.\nGuest Bedroom / Bath / Closet: queen bed, nightstands, dresser, rug; en-suite + egress.\nGym / Fitness: treadmill, bike, weight bench, floor mat.\nRec / Game Room: pool table, sofa, coffee table, wall TV, game-storage cabinet, rug.\nMechanical / Storage + Rear Storage: furnace/water-heater stand-ins, shelving cabinets.\nBasement Stair Hall: the physical flight up to the main level.\n\nMAIN LEVEL (floors[1])\nGarage (3-car): storage cabinets + a workbench; three bay doors.\nMudroom / Powder Room / Coat Closet: bench, coat wardrobe, powder vanity + toilet.\nHome Office: desk, chair, bookshelf, rug; front-lit.\nFoyer: console table, bench, runner rug; front door + foyer switch.\nLiving Room + Dining Room: formal front rooms (sofa/chairs/bookshelf; dining table\n  for six + buffet), open archways off the foyer, picture windows to the street.\nPantry: walk-in shelving off the service path.\nKitchen: island, stove, over-range microwave, fridge, sink + dishwasher facing the\n  great room, pantry cabinet, counter coffee maker + toaster; island pendant.\nBreakfast Room: round table with four chairs; pendant + casement window.\nGreat Room: L-sectional, coffee table, ottoman, wall TV flanked by bookshelves, a\n  reading chair, plant, big rug, a fireplace light, and patio doors to the yard.\nMain Stair Hall: the basement landing (west lane) + the flight up to the upper level.\n\nUPPER LEVEL (floors[2])\nPrimary Bedroom + Sitting Area: king bed, nightstands, dresser, end-of-bed bench,\n  big rug; a sitting anteroom with accent chairs, coffee table, bookshelf.\nPrimary Spa Bath + His/Hers Closets: freestanding tub/shower, double vanity, water\n  closet; dual wardrobes + a center island cabinet.\nBedroom 2 (en-suite) + Bedroom 3 (en-suite): beds, nightstands, desks, rugs, private\n  baths + closets.\nBedroom 4 + Bedroom 5: secondary bedrooms over the garage; beds, nightstands,\n  dressers, a study desk, closets.\nHall Bath + Laundry Room: shared bath (toilet/vanity/shower) + washer/dryer/cabinet.\nLoft / Bonus Room: sofa, coffee table, bookshelf, reading chair, rug.\nUpper Stair Hall: the landing arriving from the main level."
+    "notes": "~4,590 sq ft (427 m²) · 3 levels + garage · 46 rooms\n\nA transitional-craftsman luxury spec home stacked three levels high over an\nidentical 19,200 × 9,750 mm footprint so the exterior walls and central stair\ncore line up between floors. A walkout finished basement built for entertaining,\na main level of formal front rooms flowing into an open kitchen/great-room, and\na hotel-quiet upper level of bedrooms. Two stair connections use matching\nstairLinkIds so avatars transit floor to floor: the basement flight lands in the\nmain-level stair hall, and the main flight lands in the upper landing. Oak main\nlevel, carpet-toned bedrooms upstairs, polished concrete downstairs; clock\nlighting shifts the scene day→dusk→night.\n\nBASEMENT (floors[0] — the fun floor)\nHome Theater: wall-mounted screen, U-sectional + ottoman, back-row chairs, AV shelf.\nWet Bar: bar counter with sink, three stools, back-bar cabinet, beverage fridge.\nGuest Bedroom / Bath / Closet: queen bed, nightstands, dresser, rug; en-suite + egress.\nGym / Fitness: treadmill, bike, weight bench, floor mat.\nRec / Game Room: pool table, sofa, coffee table, wall TV, game-storage cabinet, rug.\nMechanical / Storage + Rear Storage: furnace/water-heater stand-ins, shelving cabinets.\nBasement Stair Hall: the physical flight up to the main level.\n\nMAIN LEVEL (floors[1])\nGarage (3-car): storage cabinets + a workbench; three bay doors.\nMudroom / Powder Room / Coat Closet: bench, coat wardrobe, powder vanity + toilet.\nHome Office: desk, chair, bookshelf, rug; front-lit.\nFoyer: console table, bench, runner rug; front door + foyer switch.\nLiving Room + Dining Room: formal front rooms (sofa/chairs/bookshelf; dining table\n  for six + buffet), open archways off the foyer, picture windows to the street.\nPantry: walk-in shelving off the service path.\nKitchen: island, stove, over-range microwave, fridge, sink + dishwasher facing the\n  great room, pantry cabinet, counter coffee maker + toaster; island pendant.\nBreakfast Room: round table with four chairs; pendant + casement window.\nGreat Room: L-sectional, coffee table, ottoman, wall TV flanked by bookshelves, a\n  reading chair, plant, big rug, a fireplace light, and patio doors to the yard.\nMain Stair Hall: the basement landing (west lane) + the flight up to the upper level.\n\nUPPER LEVEL (floors[2])\nPrimary Bedroom + Sitting Area: king bed, nightstands, dresser, end-of-bed bench,\n  big rug; a sitting anteroom with accent chairs, coffee table, bookshelf.\nPrimary Spa Bath + His/Hers Closets: freestanding tub/shower, double vanity, water\n  closet; dual wardrobes + a center island cabinet.\nBedroom 2 (en-suite) + Bedroom 3 (en-suite): beds, nightstands, desks, rugs, private\n  baths + closets.\nBedroom 4 + Bedroom 5: secondary bedrooms over the garage; beds, nightstands,\n  dressers, a study desk, closets.\nHall Bath + Laundry Room: shared bath (toilet/vanity/shower) + washer/dryer/cabinet.\nLoft / Bonus Room: sofa, coffee table, bookshelf, reading chair, rug.\nUpper Stair Hall: the landing arriving from the main level.\n\nFixture detail: the dining room hangs a bowl uplight instead of a pendant, and the\n  primary spa bath adds a ceiling heat lamp over the tub."
   }
 }

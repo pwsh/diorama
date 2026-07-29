@@ -24,9 +24,25 @@ and right.
 - **🎥 Auto-follow** eases the camera to keep the active figures framed — tight on a single person, wide when they're spread out, and a full-floor pose when no one's around. Orbiting by hand pauses it for a few seconds.
 - **🎬 Cinematic orbit** slowly circles the scene (about 78 seconds per revolution) at your current zoom and height. It composes with auto-follow. Together with a saved view and Kiosk mode it makes a fine always-on display.
 
+#### How the camera moves: pivot & panning
+
+By default the camera **always turns around the center of your plan**, and
+panning is off — so however much you orbit, your home stays in the middle of the
+screen and you can never get lost. Two independent toggles change that, on the
+3D bar (📌 and ✋) or as checkboxes in **Settings ▸ Display ▸ Camera**:
+
+| **Lock pivot to plan centre** | **Free movement (pan)** | What you get |
+|---|---|---|
+| On | Off | The default. Drag to orbit around the plan; panning is disabled, and the view eases back home if something nudges it. |
+| On | On | Pan wherever you like — but rotation *still* spins around the plan centre, so you can slide the view off to one side and keep orbiting the house rather than orbiting empty air. |
+| Off | On | Classic free-orbit: rotation pivots wherever you last panned to. |
+
+Auto-follow and cinematic orbit take over the pivot while they're running; your
+own orbit or pan pauses them for a few seconds, as always.
+
 #### Camera settings
 
-**Settings ▸ Display ▸ Camera** holds two options for unusual viewpoints:
+**Settings ▸ Display ▸ Camera** also holds options for unusual viewpoints:
 
 - **Allow orbiting below the horizon** — normally the camera stops level with the floor. Turn this on to drop underneath and look up at your home from below (you'll see the underside of the floor slab, which is the point).
 - **Vertical FOV** — how wide the lens is, in degrees (default 50). Lower is more telephoto and flattens the scene; higher exaggerates depth.
@@ -105,7 +121,8 @@ on the room side of the window shows whether the curtain is drawn.
 
 In Display settings you can set the floor color, floor texture
 (**none**, **wood**, **tile**, or **concrete** — procedurally drawn in the toon
-style), and wall color for the whole home.
+style), and wall color for the whole home. The **2D plan paints the same floor
+color and texture**, at the same scale, so both views read as one home.
 
 #### Per-floor look overrides
 
@@ -129,16 +146,39 @@ Home 3D file into **editable** floors, walls, rooms, and furniture, use the
 structural `.sh3d` importer instead — see
 [Configurations, notes & offline](configurations.html).
 
+### The ground plane
+
+The ground is a **fixed plane in the world**, and your floors sit at heights
+above it. Switching floors — or turning on glass house — moves the camera, never
+the ground: the grade, the yard, and the neighborhood around your house stay
+exactly where they were.
+
+- Each floor's height comes from its **Elevation above ground (mm)** setting, or is stacked automatically at 3 m per story (see [The 2D editor](editor.html)). A negative elevation puts a floor below grade, and the ground is allowed to cut through it — which is how a walk-out basement should look.
+- **Ground level (mm)** in Settings ▸ Display moves the *surroundings* relative to the house: the backdrop grid, the neighborhood overlay, and the yard fill. Negative values drop the yard below the slab for a raised-foundation or hilltop look. Your slab, walls, furniture, and every terrace or pool you've drawn stay put.
+
+Figures, shadows, trees, yard furniture, and outdoor fences all settle onto
+whatever surface is actually under them — the grade, or a terrace on top of it.
+
 ### Ghost floors
 
 When you have more than one floor, the levels you're not currently on can
-appear as faint translucent "ghost" shells stacked at their real heights — this
-is what glass-house mode uses to show the whole building at once. Disabled
+appear as faint translucent "ghost" shells, stacked at their real elevations —
+this is what glass-house mode uses to show the whole building at once. Disabled
 floors are left out of the stack.
 
-### Stairs & multi-level connections
+### Stairs, ramps & multi-level connections
 
 Stairs family pieces build real flights in 3D, and figures use them.
+
+#### Fitting a flight between two levels
+
+A flight doesn't have to be a full storey. Each stairs piece has its own
+controls in the furniture editor:
+
+- **Rise (mm)** — the total height the flight climbs. Diorama works out the tread count from the rise and the piece's depth, so a 200 mm rise builds a single step and a 350 mm rise builds two — exactly what you want for a sunken living room or a step up to a deck.
+- **⇅ Fit between levels** — reads the ground just beyond each end of the piece and sets the rise to match, turning the piece around first if you drew it facing the wrong way. It declines when both ends are at the same height (there's nothing to climb).
+- **Ramp** — a furniture kind of its own: a smooth sloped wedge instead of treads, for accessible entries and garage aprons. Figures walk its slope continuously.
+- **Open underneath** — renders the flight, ramp, or landing as floating slabs with open air below instead of a solid mass. It's purely a look; the walking surface is identical either way.
 
 - **Descending flights** — a stairs piece set below floor level cuts its own stairwell hole and builds treads sinking below the slab. Figures occasionally walk down and "go downstairs," and fresh figures sometimes emerge up from a flight. Railings keep them from popping through the side of the slab.
 - **Floor voids** — draw a "no floor here" polygon with the Void tool to open a hole in the slab (for a stairwell or a double-height space). Figures route around the missing floor and cross it only via a stairs piece that bridges it.

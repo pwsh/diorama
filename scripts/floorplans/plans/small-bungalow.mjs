@@ -83,7 +83,7 @@ export function bungalowGeometry(b, { dx = 0, dy = 0 } = {}) {
   const doors = [
     doorO(2450, 0, 0, { w: 900, label: 'Front door', lockEntity: null, doorbellEntity: null }), // south exterior
     doorO(9750, 3500, 90, { w: 800, label: 'Back door' }),   // east exterior (mudroom)
-    doorO(8500, 3500, 90, { w: 800, label: 'Mudroom' }),     // P3
+    doorO(8500, 3500, 90, { w: 800, kind: 'sliding', label: 'Mudroom' }),  // P3 — barn slider
     doorO(3600, 6600, 90, { w: 800, label: 'Primary Bedroom' }), // P5
     doorO(3600, 8700, 90, { w: 800, label: 'Linen Closet' }),    // P5
     doorO(900, 7900, 0, { w: 800, label: 'Primary Closet' }),    // P9
@@ -247,6 +247,9 @@ export function build() {
       'Utility / Storage: storage shelving + a cabinet, the walk-through to Bedroom 2.',
       'Bedroom 2: full bed, nightstand, desk by the east windows, dresser.',
       'Bedroom 2 Closet / Storage Closet: reach-in wardrobe + general storage shelving.',
+      '',
+      'Period detail: the dining-nook opening into the mudroom/laundry is a barn slider —',
+      '  the wall east of the leaf keeps a full 900 mm for the panel to park on.',
     ].join('\n'),
   });
 }

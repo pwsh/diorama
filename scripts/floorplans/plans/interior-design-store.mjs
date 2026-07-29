@@ -74,7 +74,7 @@ export function build() {
 
   const doors = [
     door(8000, 0, 0, { w: 1600, label: 'Studio entrance', doorbellEntity: null }),
-    door(5600, D, 0, { w: 900, label: 'Service / stock' }),
+    door(5600, D, 0, { w: 900, kind: 'sliding', label: 'Service / stock' }),  // barn slider
   ];
 
   // The window wall: one of each non-default glazing kind, each with a
@@ -309,6 +309,9 @@ export function build() {
       'Three unbound demo AI-avatar presence sensors (living, nook, lounge) keep a browsing',
       'shopper in each of those vignettes; three roamers wander the whole floor. Temperature',
       'and illuminance env sensors and a smoke detector sit on the circulation spine.',
+      '',
+      'Back of house: the stock-room opening on the north wall is a barn slider — the',
+      '  showroom sells the look, so it wears it.',
     ].join('\n'),
   });
 }

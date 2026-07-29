@@ -44,7 +44,14 @@ captured from the REAL built app in offline mode over CDP, driven through the
 `window.__dioramaPlanner` handle), and `docs:demo` (copies `dist/` + floorplan
 envelopes into `docs-site/demo/`), all sharing `scripts/docs-site/shell.mjs`;
 `docs:publish` force-pushes the tree to the `gh-pages` orphan branch (github
-remote only). See `docs/GALLERY.md`. The 12 importable demo floorplan configs
+remote only). See `docs/GALLERY.md`. The 18 importable demo floorplan configs
+(2026-07-29 coverage campaign: ALL 96 furniture kinds, 26/26 light kinds and
+8/8 door kinds are now placed across the library; the appliance showroom is a
+20000×14000 5-zone build incl. a lighting gallery + mechanical room; NB
+`lib.mjs`'s `floor(spec)` has NO spec key for thermostats/valves/plugs/
+infoCards/actionButtons/projectors/pools/calendarPanels/alertBeacons/
+sprinklerZones/flagpoles/rulers — attach them to the returned `f` AFTER
+`floor()`, the pattern 4+ plans now use)
 in `docs/floorplans/*.json` (committed; export-envelope format) are GENERATED —
 edit the builder modules in `scripts/floorplans/plans/*.mjs` and re-run
 `npm run floorplans:build` (validates against the real `geometry.ts`: closed

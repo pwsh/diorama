@@ -1,7 +1,7 @@
 {
   "diorama": 2,
   "name": "Open-Concept Entertainer",
-  "exportedAt": "2026-07-25T00:00:00.000Z",
+  "exportedAt": "2026-07-29T00:00:00.000Z",
   "store": {
     "v": 2,
     "floors": [
@@ -926,6 +926,43 @@
             "w": 600,
             "h": 700,
             "kind": "recycle_bin"
+          },
+          {
+            "id": "open-concept-entertainer-fn74",
+            "x": 8000,
+            "y": -600,
+            "w": 250,
+            "h": 350,
+            "kind": "mailbox",
+            "rotation": 180,
+            "label": "Curbside mailbox"
+          },
+          {
+            "id": "open-concept-entertainer-fn75",
+            "x": 4800,
+            "y": 10200,
+            "w": 3000,
+            "h": 3000,
+            "kind": "oak_tree",
+            "label": "Shade oak"
+          },
+          {
+            "id": "open-concept-entertainer-fn76",
+            "x": 5448,
+            "y": 13300,
+            "w": 1800,
+            "h": 750,
+            "kind": "chaise",
+            "label": "Poolside lounger"
+          },
+          {
+            "id": "open-concept-entertainer-fn77",
+            "x": 5448,
+            "y": 14400,
+            "w": 1800,
+            "h": 750,
+            "kind": "chaise",
+            "label": "Poolside lounger"
           }
         ],
         "lights": [
@@ -1253,6 +1290,7 @@
             "w": 1500,
             "rotation": 0,
             "entity_id": null,
+            "kind": "sliding_glass",
             "label": "Patio door L"
           },
           {
@@ -1262,6 +1300,7 @@
             "w": 1500,
             "rotation": 0,
             "entity_id": null,
+            "kind": "sliding_glass",
             "label": "Patio door R"
           },
           {
@@ -1586,7 +1625,38 @@
         "presenceZones": [],
         "cameras": [],
         "groundAreas": [],
-        "voidAreas": []
+        "voidAreas": [],
+        "pools": [
+          {
+            "id": "open-concept-entertainer-pool1",
+            "name": "Lap pool",
+            "kind": "pool",
+            "depthMm": 1400,
+            "waterColor": "#2fa8c8",
+            "points": [
+              {
+                "x": 700,
+                "y": 12900
+              },
+              {
+                "x": 4800,
+                "y": 12900
+              },
+              {
+                "x": 4800,
+                "y": 15500
+              },
+              {
+                "x": 700,
+                "y": 15500
+              }
+            ],
+            "localState": {
+              "pump": "on",
+              "heater": "on"
+            }
+          }
+        ]
       }
     ],
     "currentFloorId": "open-concept-entertainer-fl1",
@@ -1607,6 +1677,6 @@
     "customObjects": [],
     "people": [],
     "bleShowUnknown": true,
-    "notes": "~2,205 sq ft (204 m²) heated + 441 sq ft garage · 1 floor · 15 rooms — entertainer’s edition\n\nThe same open-concept modern shell, re-furnished for hosting. The center great\nroom is one continuous home-theater lounge: a big wall-mounted TV on a low\ncharcoal media console faces a U-sectional media pit with an ottoman, a coffee\ntable, and a side lounge chaise, all sitting on an oversized dark rug under a\nwarm string-light wash and under-console LED accent. The kitchen island is\ndressed as a bar (three stools, pendant + under-counter accent), the dining zone\nis a compact high-top, and the walk-in pantry doubles as a bar back-stock with a\ncoffee/snack station. Deep walnut floors and moody charcoal walls under a dusk\nlighting preset set the after-dark mood; guest bedrooms and the primary suite\nstay comfortable, and the covered patio is staged for outdoor entertaining with\na sofa, a fountain, and party string lights.\n\nGreat Room (Kitchen / Dining / Living): wall-mounted TV + media console, U-sectional\n  pit with ottoman + coffee table, lounge chaise and plants; bar island with three\n  stools + pendant; high-top dining with four stools. String + under-cabinet accents.\nKitchen: full galley (counter, fridge, stove, over-range microwave, dishwasher).\nWalk-in Pantry: bar back-stock shelving, prep counter, counter coffee maker.\nGarage: beverage fridge + storage; LED strip, front flood.\nLaundry: washer, dryer, utility sink.\nFoyer: entry bench + plant.\nHallway: slim console along the bedroom-wing spine.\nOffice / Den → game / listening room: lounge sofa, coffee table, vinyl shelf,\n  arcade/gear; string lighting.\nBedroom 2 / Bedroom 3 (guest): queen bed, nightstands, dresser, reach-in wardrobe.\nBath 2 (shared): toilet, double vanity, tub/shower; sconce pair.\nPrimary Bedroom: king bed, two nightstands, dresser, lounge chaise, dark rug.\nPrimary Bath: double vanity, toilet, walk-in shower; sconce pair.\nPrimary Walk-in Closet: two built-in wardrobe runs.\nCovered Patio: outdoor sofa + coffee table, fountain, lawn chair; party string lights."
+    "notes": "~2,205 sq ft (204 m²) heated + 441 sq ft garage · 1 floor · 15 rooms — entertainer’s edition\n\nThe same open-concept modern shell, re-furnished for hosting. The center great\nroom is one continuous home-theater lounge: a big wall-mounted TV on a low\ncharcoal media console faces a U-sectional media pit with an ottoman, a coffee\ntable, and a side lounge chaise, all sitting on an oversized dark rug under a\nwarm string-light wash and under-console LED accent. The kitchen island is\ndressed as a bar (three stools, pendant + under-counter accent), the dining zone\nis a compact high-top, and the walk-in pantry doubles as a bar back-stock with a\ncoffee/snack station. Deep walnut floors and moody charcoal walls under a dusk\nlighting preset set the after-dark mood; guest bedrooms and the primary suite\nstay comfortable, and the covered patio is staged for outdoor entertaining with\na sofa, a fountain, and party string lights.\n\nGreat Room (Kitchen / Dining / Living): wall-mounted TV + media console, U-sectional\n  pit with ottoman + coffee table, lounge chaise and plants; bar island with three\n  stools + pendant; high-top dining with four stools. String + under-cabinet accents.\nKitchen: full galley (counter, fridge, stove, over-range microwave, dishwasher).\nWalk-in Pantry: bar back-stock shelving, prep counter, counter coffee maker.\nGarage: beverage fridge + storage; LED strip, front flood.\nLaundry: washer, dryer, utility sink.\nFoyer: entry bench + plant.\nHallway: slim console along the bedroom-wing spine.\nOffice / Den → game / listening room: lounge sofa, coffee table, vinyl shelf,\n  arcade/gear; string lighting.\nBedroom 2 / Bedroom 3 (guest): queen bed, nightstands, dresser, reach-in wardrobe.\nBath 2 (shared): toilet, double vanity, tub/shower; sconce pair.\nPrimary Bedroom: king bed, two nightstands, dresser, lounge chaise, dark rug.\nPrimary Bath: double vanity, toilet, walk-in shower; sconce pair.\nPrimary Walk-in Closet: two built-in wardrobe runs.\nCovered Patio: outdoor sofa + coffee table, fountain, lawn chair; party string\n  lights, reached through a 3 m two-panel sliding-glass wall.\nPool Deck (west yard): a heated in-ground lap pool with its pump running, two\n  poolside loungers along the coping, a shade oak up-yard and a curbside mailbox."
   }
 }
