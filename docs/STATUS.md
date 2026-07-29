@@ -288,6 +288,13 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **TypeScript 7.0.2 (Go-native compiler)** (2026-07-29,
+  user-directed "move to TS7"; unreleased — on main past v0.44.0).
+  Zero code/config changes needed — the v0.42.0 6.x bridge absorbed
+  the alignment as designed. Typecheck 5.5 s → 0.9 s (~6×). tsc
+  remains typecheck-only (Vite/Rolldown produce the shipped bytes),
+  so a checker issue can only ever cost a false error, never a
+  broken build.
 - **Layers overhaul + 2D floor paint** (2026-07-29, user-requested
   ×4; released in v0.44.0). `labels` → "Room & area
   labels" (now gates ground-area/pool names too); NEW `objectLabels`

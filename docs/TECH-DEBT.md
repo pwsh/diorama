@@ -11,7 +11,7 @@ execution.
 |---|---|---|---|
 | vite | 8.0.16 | 8.1.5 | **ACTION** — in-range minor; gated batch with three |
 | three + @types/three | 0.184 | 0.185.1 | **ACTION** — minor, but three lands breaking changes in minors: full renderer-page gate run required |
-| typescript | 5.9.3 | 7.0.2 | **HOLD 7.x** (native-port major, high churn) — **EVALUATE 6.x** as the bridge line; upgrade if the build is clean |
+| typescript | 5.9.3 | 7.0.2 | ~~HOLD 7.x — EVALUATE 6.x~~ **DONE in two steps**: 6.0.3 bridge (v0.42.0, one code fix), then 7.0.2 (2026-07-29, zero changes, typecheck ~6× faster) — the staged path worked exactly as designed |
 | lit / esbuild / gifenc | current | — | No action |
 | CI actions (checkout@v4, setup-node@v4/Node 22, gh-release@v2) | current gen | — | No action |
 
