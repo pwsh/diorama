@@ -1,6 +1,6 @@
 # Project status & pick-up guide
 
-Last updated: 2026-07-28, at **v0.42.0**. This is the single document to
+Last updated: 2026-07-29, at **v0.43.0**. This is the single document to
 read (alongside `CLAUDE.md`) to resume work with full context.
 
 ## Where things stand
@@ -276,6 +276,11 @@ instance.
   → v0.42.0 bridge line (TypeScript 6.0.3 — the last JS-based
   compiler release, staged for the Go-native 7.0; one-line mqtt-ws
   send-typing fix; explicit types/rootDir keys).
+  → v0.43.0 house in order (tech-debt DO-ACTION list complete —
+  bundles hygiene, hitDoor one-resolver, README refresh, localstate
+  16/16, flight-resolver hoist, tree model docs, nav-parity guard
+  catching two real validator divergences; HA floor/area → room
+  binding + area-filtered occupancy/env/thermostat pickers).
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
@@ -284,7 +289,7 @@ instance.
   assistant and then the areas on that floor to defined rooms on the
   plan instead of manually naming… filter to that area by default
   when selecting temperature and occupancy sensors… allow the user
-  to remove the filter"; unreleased — on main past v0.42.0).
+  to remove the filter"; released in v0.43.0).
   Floor.haFloorId + Room.haAreaId; getFloorRegistry/getAreaRegistry
   + additive area_id on devices/entities (all three clients);
   roomLabel naming ladder (typed → area name → placeholder), 3D
@@ -294,7 +299,7 @@ instance.
   area-binding-test.html (AREABIND PASS 71/71); config 60/60, undo
   44/44, rooms 10/10, sensor-focus 14/14 held.
 - **Nav parity guard (tech-debt #10 — list complete)** (2026-07-29;
-  unreleased — on main past v0.42.0). Differential golden test
+  released in v0.43.0). Differential golden test
   `nav-parity-test.html` (NAVPARITY 54/54): renderer `_nav` vs the
   floorplans validator replica, 7 fixtures, cell-for-cell blocked +
   region-label agreement, analytic PERSON_R/WALL_HALF probes,
@@ -303,8 +308,7 @@ instance.
   defs unresolved (resolveFurnitureDef threaded through
   physical.mjs/validate.mjs). FLOORPLANS 399/399 byte-identical;
   terrain 103/103, stairs-fit 78/78 held.
-- **Tech-debt batch A** (2026-07-29, per docs/TECH-DEBT.md; unreleased
-  — on main past v0.42.0). Committed test bundles untracked +
+- **Tech-debt batch A** (2026-07-29, per docs/TECH-DEBT.md; released in v0.43.0). Committed test bundles untracked +
   gitignored (the void-test clean-checkout flake mechanism);
   hitDoor/hitDoorEnd through effectiveState (DOORKINDS 97/97 w/
   restored-bug negative proof); README factual fix (migration DOES
