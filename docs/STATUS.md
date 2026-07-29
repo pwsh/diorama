@@ -1,6 +1,6 @@
 # Project status & pick-up guide
 
-Last updated: 2026-07-29, at **v0.44.0**. This is the single document to
+Last updated: 2026-07-29, at **v0.45.0**. This is the single document to
 read (alongside `CLAUDE.md`) to resume work with full context.
 
 ## Where things stand
@@ -285,13 +285,17 @@ instance.
   objectLabels/openings/peekFloors keys; 6-category layer panel from
   one catalog; 2D floor finally paints look3d/scene3d color+texture
   — a day-one gap, not a regression).
+  → v0.45.0 open house (TypeScript 7.0.2 Go-native — zero changes,
+  typecheck ~6×; docs campaign: 11 guide pages refreshed, showroom
+  rebuilt 20×14 m, 96/96 · 26/26 · 8/8 catalog coverage across 18
+  plans, gallery 675/675 GIFs + 512/512 avatars, 70/70 screenshots,
+  gh-pages published).
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
 - **Docs-site campaign: guide + coverage + full regen + publish**
   (2026-07-29, user-directed with Opus-orchestration/Sonnet-implementation
-  routing; unreleased — on main past v0.44.0, docs-site published
-  separately to gh-pages). Guide: 11 pages refreshed against the
+  routing; released in v0.45.0). Guide: 11 pages refreshed against the
   shipped feature set (10 major gaps closed, 6 stale claims fixed).
   Floorplans: showroom rebuilt 14×10→20×14 m (5 zones, lighting
   gallery, mechanical room), duplication halved; coverage now 96/96
@@ -304,7 +308,7 @@ instance.
   auto-caught + retried), demo bundle 18 plans. Published to
   gh-pages.
 - **TypeScript 7.0.2 (Go-native compiler)** (2026-07-29,
-  user-directed "move to TS7"; unreleased — on main past v0.44.0).
+  user-directed "move to TS7"; released in v0.45.0).
   Zero code/config changes needed — the v0.42.0 6.x bridge absorbed
   the alignment as designed. Typecheck 5.5 s → 0.9 s (~6×). tsc
   remains typecheck-only (Vite/Rolldown produce the shipped bytes),
