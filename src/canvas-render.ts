@@ -3467,7 +3467,8 @@ function drawRooms(ctx: CanvasRenderingContext2D, p: Planner, view: View): void 
   ctx.save();
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   for (const rm of rooms) {
-    const { text, placeholder } = roomLabel(rm);
+    // A room bound to an HA area shows the area's name when nothing was typed.
+    const { text, placeholder } = roomLabel(rm, p.roomAreaName(rm));
     const loop = loopContaining(loops, rm.anchor.x, rm.anchor.y);
     if (loop) {
       // Label at the loop centroid confirms the walls enclose the anchor.

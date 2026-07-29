@@ -130,6 +130,12 @@ export class ZoneEditBar extends LitElement {
 // a discovered Bermuda tracked device rather than an entity).
 export interface PickerDevice { id: string; name: string; subtitle?: string }
 
+// Optional HA-area scoping for the entity picker. Call sites that know which
+// room (and therefore which bound HA area) an entity is being picked FOR pass
+// this so the list opens pre-narrowed to that area's entities. Per-open only —
+// never persisted — and always removable via the header chip's ✕.
+export interface PickerAreaFilter { areaId: string; areaName: string }
+
 @customElement('diorama-entity-picker')
 export class EntityPicker extends LitElement {
   @property({ attribute: false }) planner!: Planner;
@@ -145,6 +151,11 @@ export class EntityPicker extends LitElement {
   // returns a device id. Set via showDevices(); cleared by show() (entity mode).
   @state() private _devices: PickerDevice[] | null = null;
   @state() private _title = 'Pick an entity';
+  // HA-area scope for this open (null = none). `_areaOn` is the live toggle the
+  // header chip's ✕ clears — the filter itself stays so the label reads right
+  // until the picker closes.
+  @state() private _areaFilter: PickerAreaFilter | null = null;
+  @state() private _areaOn = false;
   private _onPick: ((id: string) => void) | null = null;
 
   // Cache loaded once per session: entity_id → device_id, device_id → name.
@@ -156,7 +167,10 @@ export class EntityPicker extends LitElement {
 
   // `domain` accepts a single domain string, an array of allowed domains
   // (multi-domain call sites), or null/'' for all domains.
-  show(domain: string | string[] | null, onPick: (id: string) => void): void {
+  show(
+    domain: string | string[] | null, onPick: (id: string) => void,
+    areaFilter?: PickerAreaFilter | null,
+  ): void {
     if (Array.isArray(domain)) { this._domains = domain; this._domain = ''; }
     else { this._domains = null; this._domain = domain ?? ''; }
     this._onPick = onPick;
@@ -164,8 +178,13 @@ export class EntityPicker extends LitElement {
     this._deviceFilter = '';
     this._devices = null;
     this._title = 'Pick an entity';
+    this._areaFilter = areaFilter ?? null;
+    this._areaOn = !!areaFilter;
     this.open = true;
     void this._loadRegistries();
+    // The area→entity maps live on the Planner (shared with the room labels);
+    // wait for them so the pre-narrowed list isn't briefly empty.
+    if (this._areaOn) void this.planner?.ensureHaAreaRegistry().then(() => this.requestUpdate());
   }
 
   // Device mode: pick from an explicit device list (returns the device id).
@@ -251,6 +270,9 @@ export class EntityPicker extends LitElement {
       if (this._domain && dom !== this._domain) continue;
       const did = this._entityToDevice[id];
       if (this._deviceFilter && did !== this._deviceFilter) continue;
+      // HA-area scope (removable via the header chip).
+      if (this._areaOn && this._areaFilter
+          && this.planner?.entityAreaId(id) !== this._areaFilter.areaId) continue;
       const st = states[id] as HassState;
       const name = String((st.attributes as Record<string, unknown>)?.friendly_name || id);
       const deviceName = did ? this._deviceNames[did] : null;
@@ -266,6 +288,24 @@ export class EntityPicker extends LitElement {
       <div class="modal-ov" @click=${(e: MouseEvent) => { if (e.target === e.currentTarget) this.open = false; }}>
         <div class="modal">
           <h3>Pick an entity<button class="close" @click=${() => this.open = false}>✕</button></h3>
+          ${this._areaFilter ? html`
+            <div style="margin-bottom:6px;font-size:11px">
+              ${this._areaOn ? html`
+                <span style="display:inline-flex;align-items:center;gap:5px;padding:2px 6px;
+                             border:1px solid var(--accent);border-radius:10px;color:var(--accent)"
+                      title="Only entities in this Home Assistant area are listed. Remove to see all.">
+                  Area: ${this._areaFilter.areaName}
+                  <button class="icon-btn" style="font-size:10px;padding:0 2px;line-height:1"
+                          title="Remove the area filter"
+                          @click=${() => { this._areaOn = false; }}>✕</button>
+                </span>
+              ` : html`
+                <button class="btn" style="font-size:10px;padding:2px 6px"
+                        title="Re-apply the area filter"
+                        @click=${() => { this._areaOn = true; }}>
+                  + Filter to area: ${this._areaFilter.areaName}
+                </button>`}
+            </div>` : nothing}
           <div style="display:flex;gap:6px;margin-bottom:6px;flex-wrap:wrap">
             <select .value=${this._domain}
                     @change=${(e: Event) => this._domain = (e.target as HTMLSelectElement).value}

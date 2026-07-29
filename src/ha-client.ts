@@ -26,6 +26,26 @@ export interface HaDevice {
   name: string | null;
   name_by_user: string | null;
   connections?: Array<[string, string]>;
+  area_id?: string | null;     // HA area this device belongs to (area-filtered pickers)
+}
+
+// A floor-registry row (HA 2024.4+ `config/floor_registry/list`). Diorama
+// floors bind to one of these (Floor.haFloorId) so the room ↔ area picker can
+// scope its area list to the story you're editing.
+export interface HaFloorReg {
+  floor_id: string;
+  name: string;
+  level?: number | null;
+  icon?: string | null;
+}
+
+// An area-registry row (`config/area_registry/list`). `floor_id` is present
+// only when the user assigned the area to a floor in HA.
+export interface HaAreaReg {
+  area_id: string;
+  name: string;
+  floor_id?: string | null;
+  icon?: string | null;
 }
 
 // An entity-registry row. Extended additively with the fields Bermuda
@@ -40,6 +60,7 @@ export interface HaEntityReg {
   original_name?: string | null;
   name?: string | null;
   original_device_class?: string | null;   // registry-side device_class (battery-badge sibling resolution)
+  area_id?: string | null;   // entity-level area override; absent ⇒ inherit the device's area
 }
 
 // One normalized point of an entity's history (from getHistory). `ts` is epoch
@@ -123,6 +144,43 @@ export function normalizeRepairs(raw: unknown): RepairIssue[] {
   });
 }
 
+// Normalize a `config/floor_registry/list` result. Rows without a usable
+// floor_id are dropped; a missing name falls back to the id so a dropdown is
+// never blank. Shared by both real clients (never throws).
+export function normalizeFloorRegistry(raw: unknown): HaFloorReg[] {
+  if (!Array.isArray(raw)) return [];
+  const out: HaFloorReg[] = [];
+  for (const r of raw as Array<Record<string, unknown>>) {
+    const id = typeof r?.floor_id === 'string' ? r.floor_id : '';
+    if (!id) continue;
+    out.push({
+      floor_id: id,
+      name: typeof r.name === 'string' && r.name ? r.name : id,
+      level: typeof r.level === 'number' ? r.level : null,
+      icon: typeof r.icon === 'string' ? r.icon : null,
+    });
+  }
+  return out;
+}
+
+// Normalize a `config/area_registry/list` result. Same tolerance as the floor
+// registry; `floor_id` stays null when the area isn't assigned to a floor.
+export function normalizeAreaRegistry(raw: unknown): HaAreaReg[] {
+  if (!Array.isArray(raw)) return [];
+  const out: HaAreaReg[] = [];
+  for (const r of raw as Array<Record<string, unknown>>) {
+    const id = typeof r?.area_id === 'string' ? r.area_id : '';
+    if (!id) continue;
+    out.push({
+      area_id: id,
+      name: typeof r.name === 'string' && r.name ? r.name : id,
+      floor_id: typeof r.floor_id === 'string' ? r.floor_id : null,
+      icon: typeof r.icon === 'string' ? r.icon : null,
+    });
+  }
+  return out;
+}
+
 export interface HaApi {
   states: Record<string, HassState>;
   connect(): void;
@@ -144,6 +202,11 @@ export interface HaApi {
   getCalendarEvents(entityIds: string[], startISO: string, endISO: string): Promise<CalEvent[]>;
   getDevices(): Promise<Array<HaDevice>>;
   getEntityRegistry(): Promise<Array<HaEntityReg>>;
+  // HA floor + area registries (area binding: Floor.haFloorId / Room.haAreaId).
+  // Both resolve to [] on any failure / offline — a missing registry just means
+  // no area binding is offered, never a broken panel.
+  getFloorRegistry(): Promise<Array<HaFloorReg>>;
+  getAreaRegistry(): Promise<Array<HaAreaReg>>;
   // Update an entity-registry entry (e.g. { disabled_by: null } to enable a
   // disabled entity). Resolves true on success.
   updateEntityRegistry(entityId: string, changes: Record<string, unknown>): Promise<boolean>;
@@ -274,8 +337,26 @@ export class HassClient implements HaApi {
         ? (d.connections as unknown[]).filter(c => Array.isArray(c) && c.length === 2)
             .map(c => [String((c as unknown[])[0]), String((c as unknown[])[1])] as [string, string])
         : undefined,
+      area_id: typeof d.area_id === 'string' ? d.area_id : null,
     }));
   }
+
+  async getFloorRegistry(): Promise<Array<HaFloorReg>> {
+    try {
+      const res = await this._send({ type: 'config/floor_registry/list' });
+      if (!res.success || !Array.isArray(res.result)) return [];
+      return normalizeFloorRegistry(res.result);
+    } catch { return []; }
+  }
+
+  async getAreaRegistry(): Promise<Array<HaAreaReg>> {
+    try {
+      const res = await this._send({ type: 'config/area_registry/list' });
+      if (!res.success || !Array.isArray(res.result)) return [];
+      return normalizeAreaRegistry(res.result);
+    } catch { return []; }
+  }
+
   async getEntityRegistry(): Promise<Array<HaEntityReg>> {
     const res = await this._send({ type: 'config/entity_registry/list' });
     if (!res.success || !Array.isArray(res.result)) return [];
@@ -288,6 +369,7 @@ export class HassClient implements HaApi {
       original_name: typeof e.original_name === 'string' ? e.original_name : null,
       name: typeof e.name === 'string' ? e.name : null,
       original_device_class: typeof e.original_device_class === 'string' ? e.original_device_class : null,
+      area_id: typeof e.area_id === 'string' ? e.area_id : null,
     }));
   }
 

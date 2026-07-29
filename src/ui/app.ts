@@ -186,13 +186,15 @@ export class App extends LitElement {
       this._flightModal?.show(hex);
     });
     this.addEventListener('open-entity-picker', e => {
-      const { domain, onPick, devices, title } = (e as CustomEvent).detail as
+      const { domain, onPick, devices, title, areaFilter } = (e as CustomEvent).detail as
         { domain?: string | string[]; onPick: (id: string) => void;
-          devices?: import('./modals.js').PickerDevice[]; title?: string };
+          devices?: import('./modals.js').PickerDevice[]; title?: string;
+          areaFilter?: import('./modals.js').PickerAreaFilter | null };
       // Device-mode detail (a `devices` list) picks a device id; otherwise the
-      // classic entity picker filtered by `domain` (a single domain or a list).
+      // classic entity picker filtered by `domain` (a single domain or a list)
+      // and, optionally, pre-narrowed to a bound room's HA area.
       if (devices) this._entPicker?.showDevices(devices, onPick, title);
-      else this._entPicker?.show(domain ?? '', onPick);
+      else this._entPicker?.show(domain ?? '', onPick, areaFilter ?? null);
     });
     this.addEventListener('open-settings', e => {
       const tab = (e as CustomEvent).detail?.tab as

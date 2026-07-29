@@ -1618,7 +1618,7 @@ The full app runs client-side on the docs site (`pwsh.github.io/diorama/demo/`) 
 Inclusion-zone glow and object-halo glow are computed locally in `canvas-render.ts` from the lerped target positions (point-in-polygon / radius test), **not** from HA's `target_count` / `*_halo_occupied`. Reason: HA's WS push order can race target X/Y updates with count updates, briefly highlighting a zone before the dot has moved. Local testing keeps the glow in sync with what the user sees. The HA-derived counts are still kept on `z.targetCount` for numeric labels.
 
 ### Entity picker
-`<diorama-entity-picker>` pulls HA's `config/device_registry/list` + `config/entity_registry/list` on first open. Lets the user filter by domain (default to the appropriate one for the call site, e.g. `binary_sensor` for motion, `light` for light fixtures), filter by HA device, or search by entity / friendly / device name. Each row shows the parent device name as a subtitle.
+`<diorama-entity-picker>` pulls HA's `config/device_registry/list` + `config/entity_registry/list` on first open. Lets the user filter by domain (default to the appropriate one for the call site, e.g. `binary_sensor` for motion, `light` for light fixtures), filter by HA device, or search by entity / friendly / device name. Each row shows the parent device name as a subtitle. Third scoping axis: an optional per-open `areaFilter` (`PickerAreaFilter`) narrows to one HA area's entities with a removable header chip — see "Rooms" (HA area binding).
 
 ### Toggle dispatch
 `Planner.toggleEntity(entity_id)` reads the domain from the entity_id and calls the matching `<domain>.toggle` (with `homeassistant.toggle` as fallback). This means a "switch" fixture bound to `light.foo` calls `light.toggle`, not `switch.toggle`. `Planner.isLightEntity(entity_id)` is the boolean used by sidebar + dblclick handlers to decide whether to offer the LightConfig modal (color/brightness/temp).
@@ -1849,7 +1849,30 @@ frame across poses, brush at floor level, canopy above the head, eating props
 reaching mouth height, plate level, book facing the reader).
 
 ### Rooms
-`Floor.rooms: Room[]` (`{id, name, anchor}`, persisted via `repairFloor`/`defaultFloor` backfill of `[]`). The anchor is a world-mm point; `resolveRoomForPoint(rooms, loops, x, y)` (geometry.ts) maps it to whichever **live closed wall loop** (`closedWallLoops`) contains it, so room identity survives wall edits. `resolveRoomForPointFuzzy(rooms, loops, x, y, probeMm = 250)` is the boundary-tolerant variant: it tries the exact point, then probes a ring of offsets (order: +y, -y, +x, -x, then the four diagonals) and returns the first room hit — needed because doors, windows, and flush wall-mounted fixtures (switches, fireplaces) sit exactly ON a wall line, which `pointInPolygon` excludes, so an exact resolve would drop them into "No room". The sidebar `_groupByRoom` bucketing uses the **fuzzy** resolver for all item kinds; a boundary item touching two rooms goes to whichever probe lands first (deterministic, acceptable). Created via the sidebar "Rooms" section: **+ Add room** then `placingRoomId` arms a click-to-anchor on the 2D canvas — the room is created **unnamed** (no prompt); `roomLabel(rm)` (geometry.ts) supplies an italic/dimmer "Unnamed room" placeholder until the sidebar input names it, and an anchor outside every loop draws an amber "not enclosed by walls" marker at the anchor in 2D. Labels render centered per loop in 2D and as a `THREE.Sprite` in 3D, both gated by the `labels` layer. Room names feed the activity + bubble systems — a name containing the substring **`kitchen`** (case-insensitive) gates the snack/coffee bubbles, and the seated-person's room scopes TV watching.
+`Floor.rooms: Room[]` (`{id, name, anchor, haAreaId?}`, persisted via `repairFloor`/`defaultFloor` backfill of `[]`).
+**HA floor/area binding (2026-07-29, user-requested)**: `Floor.haFloorId?` (per-floor — in
+`repairFloor`'s explicit field list) binds a Diorama floor to an HA FLOOR-registry entry;
+`Room.haAreaId?` (item-level) binds a room to an HA AREA. HaApi gained
+`getFloorRegistry()`/`getAreaRegistry()` (WS `config/floor_registry|area_registry/list`,
+shared normalizers in ha-client.ts, LocalApi inert `[]`) and ADDITIVE `area_id?` on
+`HaDevice`/`HaEntityReg`. Planner: `ensureHaAreaRegistry()` (idempotent one-flight
+Promise.all over all four registries, emitConfig on completion; invalidated on manual
+refresh), `haFloors()`/`haAreas()` (lazy-kick sync getters), `entityAreaId(id)` (entity
+area_id → device area_id → null, reusing `_entityToDevice`), `roomAreaName(room)`.
+**Naming ladder** — `roomLabel(rm, areaName?)` (optional trailing param, one-arg calls
+byte-identical): typed `name` → bound area's name → "Unnamed room"; binding never
+overwrites `name`. 3D labels thread AT THE three-view CALL SITE (shallow-copied floor with
+resolved room names; an `areaRoomKey` of unnamed+bound rooms folds into `_keyFloor` because
+the registry lands async — configRev alone isn't enough; no-bound path passes the original
+floor by IDENTITY). Sidebar: Floors "Home Assistant floor" dropdown; Rooms per-room "HA
+area" dropdown (scoped to the bound HA floor's areas + the currently-bound off-floor area;
+all areas when unbound), name placeholder shows `<Area> (from area)`, `⇄ Match all by name`
+(case-insensitive, one undo step). **Area-filtered pickers**: `EntityPicker.show(domain,
+onPick, areaFilter?)` — `PickerAreaFilter {areaId, areaName}`, per-open only; header chip
+`Area: <name> ✕` (clearing leaves a re-apply button); wired from room-occupancy,
+env-sensor and thermostat binds (the latter two via `_areaFilterForPoint` fuzzy room
+resolve); unbound room → null = classic behavior. Test `area-binding-test.html`
+(`AREABIND PASS 71/71`). The anchor is a world-mm point; `resolveRoomForPoint(rooms, loops, x, y)` (geometry.ts) maps it to whichever **live closed wall loop** (`closedWallLoops`) contains it, so room identity survives wall edits. `resolveRoomForPointFuzzy(rooms, loops, x, y, probeMm = 250)` is the boundary-tolerant variant: it tries the exact point, then probes a ring of offsets (order: +y, -y, +x, -x, then the four diagonals) and returns the first room hit — needed because doors, windows, and flush wall-mounted fixtures (switches, fireplaces) sit exactly ON a wall line, which `pointInPolygon` excludes, so an exact resolve would drop them into "No room". The sidebar `_groupByRoom` bucketing uses the **fuzzy** resolver for all item kinds; a boundary item touching two rooms goes to whichever probe lands first (deterministic, acceptable). Created via the sidebar "Rooms" section: **+ Add room** then `placingRoomId` arms a click-to-anchor on the 2D canvas — the room is created **unnamed** (no prompt); `roomLabel(rm)` (geometry.ts) supplies an italic/dimmer "Unnamed room" placeholder until the sidebar input names it, and an anchor outside every loop draws an amber "not enclosed by walls" marker at the anchor in 2D. Labels render centered per loop in 2D and as a `THREE.Sprite` in 3D, both gated by the `labels` layer. Room names feed the activity + bubble systems — a name containing the substring **`kitchen`** (case-insensitive) gates the snack/coffee bubbles, and the seated-person's room scopes TV watching.
 
 ### Geo reference (GPS landmarks & lat/lon↔plan — Feature G, phase G1)
 `Store.geo` (`GeoConfig`: `landmarks[]`, `northDeg?`, `boundaryM?` default 30, `accuracyGateM?` default 30) — **store-level (property-wide), NOT per-floor**; added to `Planner._loadFromHa`'s explicit field list (`geo: remote.geo ?? undefined`) or it resets on load. A `GeoLandmark` (`{id, name, x, y, lat?, lon?, accuracy?, sampleCount?, sampledAt?, hidden?}`) is a plan point (world mm) that gets a real-world lat/lon by calibration; absent lat/lon = placed but uncalibrated.

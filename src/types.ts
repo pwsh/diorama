@@ -1000,6 +1000,10 @@ export interface Room {
   anchor: Vec2;   // world-mm point that pins the room to a wall loop
   occupancyEntity?: string | null;  // binary_sensor.* (Frigate zone / FP2 / any occupancy);
                                     // 'on' → the room's wall-loop fills with a warm glow (#1).
+  haAreaId?: string | null;         // bound HA area (config/area_registry). Does NOT overwrite
+                                    // `name` — display resolution is typed name → area name →
+                                    // "Unnamed room" (see roomLabel). Binding also scopes the
+                                    // occupancy / temperature entity pickers to that area.
 }
 
 // FP2-style presence zone (roadmap #5). A user-drawn polygon (world-mm) bound to
@@ -1160,6 +1164,9 @@ export interface Floor {
                             // Resolved by geometry.floorElevationMm against the FULL floors
                             // array (the AUTO value is index-derived). repairFloor passes it
                             // through.
+  haFloorId?: string | null;  // bound HA floor (config/floor_registry). Scopes this floor's
+                              // room→area dropdowns to that HA floor's areas. Absent = unbound
+                              // (every area is offered). repairFloor passes it through.
 }
 
 // Weather source + display config (the "World Outside" arc, Feature W). All

@@ -1,4 +1,5 @@
-import { HassClient, type HaApi, type ForecastRecord } from './ha-client.js';
+import { HassClient, type HaApi, type ForecastRecord,
+         type HaFloorReg, type HaAreaReg } from './ha-client.js';
 import { parseHeadlines, type CalEvent } from './surfaces.js';
 import { SensorDiscovery } from './sensor-discovery.js';
 import { loadStore, saveStore, newId, repairFloor, defaultStore,
@@ -678,6 +679,19 @@ export class Planner extends EventTarget {
   // bound entity id → battery sensor entity id, or null when the device has no
   // battery sibling. `undefined` (absent) = not resolved yet (retry next call).
   private _batteryResolve: Record<string, string | null> = {};
+
+  // ── HA floor / area registries (runtime-only; area binding) ───────────────
+  // Fetched ONCE lazily (first haFloors()/haAreas()/entityAreaId() call after
+  // connect) and again after a manual full refresh. Everything degrades to an
+  // empty list — offline, an older HA without a floor registry, or a fetch
+  // failure all just mean "no areas to bind", never a broken panel.
+  private _haFloorsCache: HaFloorReg[] = [];
+  private _haAreasCache: HaAreaReg[] = [];
+  private _areaNameById: Record<string, string> = {};       // area_id → display name
+  private _entityAreaDirect: Record<string, string> = {};   // entity_id → entity-level area_id
+  private _deviceArea: Record<string, string> = {};         // device_id → area_id
+  private _areaRegLoaded = false;
+  private _areaRegPromise: Promise<void> | null = null;
 
   // ── Identity fusion (runtime-only, phase B3) ──────────────────────────────
   // The matcher's persistent state (pending + committed pairs) plus its rendered
@@ -1582,6 +1596,9 @@ export class Planner extends EventTarget {
     for (const sid of Object.keys(this.discBy)) delete this.discBy[sid];
     await this.hass.refreshStates();
     void this.scanBatteryRegistry();   // registry may have gained/lost battery siblings
+    // Areas can be renamed / reassigned in HA while the panel is open.
+    this.invalidateHaAreaRegistry();
+    void this.ensureHaAreaRegistry();
     this.emitConfig();
   }
 
@@ -4384,6 +4401,103 @@ export class Planner extends EventTarget {
     this._batteryResolve = {};        // invalidate cached resolutions
     this._batteryRegLoaded = true;
     this.emitConfig();                // sidebar battery text + 2D badges re-render
+  }
+
+  // ── HA floor / area registries ────────────────────────────────────────────
+  // Load the floor + area registries plus the entity/device → area maps.
+  // Idempotent: concurrent callers share the one in-flight promise, and a
+  // completed load is a no-op until invalidateHaAreaRegistry() runs. NEVER
+  // throws — every failure path leaves the caches empty. Emits config on
+  // completion so sidebar dropdowns / room labels repaint once data lands.
+  ensureHaAreaRegistry(): Promise<void> {
+    if (this._areaRegLoaded) return Promise.resolve();
+    if (this._areaRegPromise) return this._areaRegPromise;
+    if (!this.hass) return Promise.resolve();
+    const api = this.hass;
+    this._areaRegPromise = (async () => {
+      let floors: HaFloorReg[] = [], areas: HaAreaReg[] = [];
+      let ents: Awaited<ReturnType<HaApi['getEntityRegistry']>> = [];
+      let devs: Awaited<ReturnType<HaApi['getDevices']>> = [];
+      try {
+        [floors, areas, ents, devs] = await Promise.all([
+          api.getFloorRegistry(), api.getAreaRegistry(),
+          api.getEntityRegistry(), api.getDevices(),
+        ]);
+      } catch (err) {
+        console.warn('HA area registry scan failed:', err);
+      }
+      const areaName: Record<string, string> = {};
+      for (const a of areas) areaName[a.area_id] = a.name;
+      const entArea: Record<string, string> = {};
+      for (const e of ents) if (e.area_id) entArea[e.entity_id] = e.area_id;
+      const devArea: Record<string, string> = {};
+      for (const d of devs) if (d.area_id) devArea[d.id] = d.area_id;
+      // The entity→device map also backs entityAreaId's device fallback. Only
+      // fill it when the battery scan hasn't already (it owns the same map).
+      if (!this._batteryRegLoaded) {
+        const e2d: Record<string, string> = {};
+        for (const e of ents) if (e.device_id) e2d[e.entity_id] = e.device_id;
+        this._entityToDevice = e2d;
+      }
+      this._haFloorsCache = floors.slice().sort((a, b) =>
+        (a.level ?? 0) - (b.level ?? 0) || a.name.localeCompare(b.name));
+      this._haAreasCache = areas.slice().sort((a, b) => a.name.localeCompare(b.name));
+      this._areaNameById = areaName;
+      this._entityAreaDirect = entArea;
+      this._deviceArea = devArea;
+      this._areaRegLoaded = true;
+      this._areaRegPromise = null;
+      this.emitConfig();
+    })();
+    return this._areaRegPromise;
+  }
+
+  // Drop the cached registries so the next read re-fetches (manual refresh /
+  // reconnect — HA areas can be renamed or reassigned while the panel is open).
+  invalidateHaAreaRegistry(): void {
+    this._areaRegLoaded = false;
+    this._areaRegPromise = null;
+  }
+
+  // HA floor-registry rows, sorted by `level` then name. Cheap + synchronous —
+  // kicks the one-time fetch on first call and returns [] until it lands.
+  haFloors(): HaFloorReg[] {
+    if (!this._areaRegLoaded) void this.ensureHaAreaRegistry();
+    return this._haFloorsCache;
+  }
+
+  // HA area-registry rows (name-sorted). Same lazy-fetch contract as haFloors.
+  haAreas(): HaAreaReg[] {
+    if (!this._areaRegLoaded) void this.ensureHaAreaRegistry();
+    return this._haAreasCache;
+  }
+
+  // True once the registries have actually been fetched (lets the UI show a
+  // "loading" vs "no areas" distinction instead of a misleading empty list).
+  get haAreaRegistryLoaded(): boolean { return this._areaRegLoaded; }
+
+  // The HA area an entity belongs to: its own registry area_id if set,
+  // otherwise its device's. null when neither (or the registry isn't loaded).
+  entityAreaId(entityId: string | null | undefined): string | null {
+    if (!entityId) return null;
+    if (!this._areaRegLoaded) { void this.ensureHaAreaRegistry(); return null; }
+    const direct = this._entityAreaDirect[entityId];
+    if (direct) return direct;
+    const dev = this._entityToDevice[entityId];
+    return (dev && this._deviceArea[dev]) || null;
+  }
+
+  // Display name of an area id (null when unknown / not loaded).
+  areaName(areaId: string | null | undefined): string | null {
+    if (!areaId) return null;
+    if (!this._areaRegLoaded) { void this.ensureHaAreaRegistry(); return null; }
+    return this._areaNameById[areaId] ?? null;
+  }
+
+  // Display name of the HA area a room is bound to — the middle rung of
+  // roomLabel's resolution ladder. null when unbound / unknown.
+  roomAreaName(rm: { haAreaId?: string | null } | null | undefined): string | null {
+    return this.areaName(rm?.haAreaId);
   }
 
   // Battery % (0..100) for the HA device that owns `entityId`, from a sibling

@@ -9,8 +9,8 @@
 // across both modes).
 
 import type { ConnStatus, HassState } from './types.js';
-import type { HaApi, StateListener, ConnListener, HaDevice, HaEntityReg, HistoryPoint, ForecastRecord } from './ha-client.js';
-import { normalizeHistory, normalizeForecasts, normalizeRepairs } from './ha-client.js';
+import type { HaApi, StateListener, ConnListener, HaDevice, HaEntityReg, HaFloorReg, HaAreaReg, HistoryPoint, ForecastRecord } from './ha-client.js';
+import { normalizeHistory, normalizeForecasts, normalizeRepairs, normalizeFloorRegistry, normalizeAreaRegistry } from './ha-client.js';
 import { normalizeCalendarEvents, type CalEvent } from './surfaces.js';
 import type { NotificationsUpdate, RepairIssue } from './alerts.js';
 
@@ -124,7 +124,24 @@ export class HassPanelAdapter implements HaApi {
           ? (d.connections as unknown[]).filter(c => Array.isArray(c) && c.length === 2)
               .map(c => [String((c as unknown[])[0]), String((c as unknown[])[1])] as [string, string])
           : undefined,
+        area_id: typeof d.area_id === 'string' ? d.area_id : null,
       }));
+    } catch { return []; }
+  }
+
+  async getFloorRegistry(): Promise<Array<HaFloorReg>> {
+    if (!this._conn) return [];
+    try {
+      return normalizeFloorRegistry(
+        await this._conn.sendMessagePromise({ type: 'config/floor_registry/list' }));
+    } catch { return []; }
+  }
+
+  async getAreaRegistry(): Promise<Array<HaAreaReg>> {
+    if (!this._conn) return [];
+    try {
+      return normalizeAreaRegistry(
+        await this._conn.sendMessagePromise({ type: 'config/area_registry/list' }));
     } catch { return []; }
   }
 
@@ -142,6 +159,7 @@ export class HassPanelAdapter implements HaApi {
         original_name: typeof e.original_name === 'string' ? e.original_name : null,
         name: typeof e.name === 'string' ? e.name : null,
         original_device_class: typeof e.original_device_class === 'string' ? e.original_device_class : null,
+        area_id: typeof e.area_id === 'string' ? e.area_id : null,
       }));
     } catch { return []; }
   }

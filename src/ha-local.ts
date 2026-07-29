@@ -7,7 +7,7 @@
 // Lives in the app graph only. NEVER import this into the renderer chunk
 // (three-renderer.js) — it would collapse the lazy 3D code-split.
 
-import type { HaApi, StateListener, ConnListener, HaDevice, HaEntityReg, HistoryPoint, ForecastRecord } from './ha-client.js';
+import type { HaApi, StateListener, ConnListener, HaDevice, HaEntityReg, HaFloorReg, HaAreaReg, HistoryPoint, ForecastRecord } from './ha-client.js';
 import type { CalEvent } from './surfaces.js';
 import type { NotificationsUpdate, RepairIssue } from './alerts.js';
 import type { HassState, ConnStatus } from './types.js';
@@ -80,6 +80,9 @@ export class LocalApi implements HaApi {
   async getCalendarEvents(): Promise<CalEvent[]> { return []; }
   async getDevices(): Promise<Array<HaDevice>> { return []; }
   async getEntityRegistry(): Promise<Array<HaEntityReg>> { return []; }
+  // No HA ⇒ no floors / areas. The area-binding UI degrades to a hint.
+  async getFloorRegistry(): Promise<Array<HaFloorReg>> { return []; }
+  async getAreaRegistry(): Promise<Array<HaAreaReg>> { return []; }
   async updateEntityRegistry(entityId: string, changes: Record<string, unknown>): Promise<boolean> {
     console.debug('[diorama offline] updateEntityRegistry no-op:', entityId, changes);
     return false;

@@ -279,6 +279,20 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **HA floor/area → room binding + area-filtered pickers** (2026-07-29,
+  user-requested: "bind floors to defined parent areas in home
+  assistant and then the areas on that floor to defined rooms on the
+  plan instead of manually naming… filter to that area by default
+  when selecting temperature and occupancy sensors… allow the user
+  to remove the filter"; unreleased — on main past v0.42.0).
+  Floor.haFloorId + Room.haAreaId; getFloorRegistry/getAreaRegistry
+  + additive area_id on devices/entities (all three clients);
+  roomLabel naming ladder (typed → area name → placeholder), 3D
+  threading at the three-view call site; "HA area" dropdowns +
+  "⇄ Match all by name"; EntityPicker areaFilter chip (occupancy /
+  env / thermostat binds, removable + re-appliable). New
+  area-binding-test.html (AREABIND PASS 71/71); config 60/60, undo
+  44/44, rooms 10/10, sensor-focus 14/14 held.
 - **Nav parity guard (tech-debt #10 — list complete)** (2026-07-29;
   unreleased — on main past v0.42.0). Differential golden test
   `nav-parity-test.html` (NAVPARITY 54/54): renderer `_nav` vs the

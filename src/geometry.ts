@@ -506,9 +506,20 @@ export function resolveRoomForPointFuzzy(
 // Display text for a room label. Rooms are created unnamed (placeholder shows
 // immediately so the user sees the loop was detected); `placeholder` lets
 // renderers style the fallback text dimmer / italic.
-export function roomLabel(rm: Room): { text: string; placeholder: boolean } {
+//
+// Resolution order: the user's typed `name` → the bound HA area's name (passed
+// in by the caller — geometry.ts never reaches into the registry) → the
+// placeholder. Binding an area therefore NAMES a room without overwriting
+// anything the user typed. `areaName` is optional so every pre-existing caller
+// (and any stale chunk) keeps today's two-step behaviour verbatim.
+export function roomLabel(
+  rm: Room, areaName?: string | null,
+): { text: string; placeholder: boolean } {
   const t = rm.name.trim();
-  return t ? { text: t, placeholder: false } : { text: 'Unnamed room', placeholder: true };
+  if (t) return { text: t, placeholder: false };
+  const a = (areaName ?? '').trim();
+  if (a) return { text: a, placeholder: false };
+  return { text: 'Unnamed room', placeholder: true };
 }
 
 // ── Wall openings (doors / windows cut gaps into wall segments) ──────────

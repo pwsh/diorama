@@ -331,7 +331,9 @@ export class Sidebar extends LitElement {
     const out: { id: string; label: string; items: T[] }[] = [];
     for (const rm of rooms) {                       // already name-sorted
       const arr = byId.get(rm.id);
-      if (arr && arr.length) out.push({ id: rm.id, label: roomLabel(rm).text, items: arr });
+      if (arr && arr.length) {
+        out.push({ id: rm.id, label: roomLabel(rm, this.planner.roomAreaName(rm)).text, items: arr });
+      }
     }
     if (none.length) out.push({ id: 'none', label: '— No room —', items: none });
     return out;
@@ -529,6 +531,37 @@ export class Sidebar extends LitElement {
   }
 
   // ── Floors section ────────────────────────────────────────────────────
+  // Per-floor "HA floor" bind row (Floors section, current floor only). Binding
+  // an HA floor scopes this floor's room→area dropdowns to that floor's areas.
+  // Offline / an HA without a floor registry shows a dim hint instead.
+  private _haFloorRow(f: Floor) {
+    const p = this.planner;
+    const haFloors = p.haFloors();
+    return html`
+      <div style="display:flex;align-items:center;gap:5px;padding:0 6px 4px 6px"
+           @click=${(e: Event) => e.stopPropagation()}>
+        <span style="color:var(--text-dim);font-size:10px;flex:1"
+              title="Bind this Diorama floor to a Home Assistant floor. Room → area dropdowns are then scoped to that floor's areas.">Home Assistant floor</span>
+        ${haFloors.length === 0
+          ? html`<span style="color:var(--text-dim);font-size:10px;font-style:italic"
+                       data-ha-floor-empty>${p.haAreaRegistryLoaded ? '(no Home Assistant floors)' : 'loading…'}</span>`
+          : html`
+            <select data-ha-floor-select
+                    style="width:130px;background:#111;color:var(--text);border:1px solid var(--border);
+                           border-radius:4px;padding:2px 4px;font-size:11px"
+                    .value=${f.haFloorId ?? ''}
+                    @change=${(e: Event) => {
+                      const v = (e.target as HTMLSelectElement).value;
+                      f.haFloorId = v || undefined;
+                      p.save(); p.emitConfig();
+                    }}>
+              <option value="" ?selected=${!f.haFloorId}>— none —</option>
+              ${haFloors.map(hf => html`
+                <option value=${hf.floor_id} ?selected=${f.haFloorId === hf.floor_id}>${hf.name}</option>`)}
+            </select>`}
+      </div>`;
+  }
+
   private _floorsSection() {
     const p = this.planner;
     const floors = p.store.floors;
@@ -581,7 +614,8 @@ export class Sidebar extends LitElement {
                            f.elevationMm = (v != null && Number.isFinite(v)) ? v : undefined;
                            p.save(); p.emitConfig();
                          }}>
-                </div>` : nothing}`;
+                </div>
+                ${this._haFloorRow(f)}` : nothing}`;
           })}
         </div>
         <div style="display:flex;gap:4px">
@@ -1165,6 +1199,8 @@ export class Sidebar extends LitElement {
       bubbles: true, composed: true,
       detail: {
         domain: 'sensor',
+        // Scoped to the HA area of whichever room this sensor sits in.
+        areaFilter: this._areaFilterForPoint(en.x, en.y),
         onPick: (id: string) => {
           en.entity_id = id;
           this.planner.save();
@@ -1962,6 +1998,8 @@ export class Sidebar extends LitElement {
       bubbles: true, composed: true,
       detail: {
         domain: 'climate',
+        // Scoped to the HA area of whichever room this thermostat sits in.
+        areaFilter: this._areaFilterForPoint(t.x, t.y),
         onPick: (id: string) => {
           t.entity_id = id;
           this.planner.save();
@@ -4004,7 +4042,20 @@ export class Sidebar extends LitElement {
     // Resolve wall loops once to flag anchors that fall outside every room.
     const loops = rooms.length ? closedWallLoops(f.walls ?? []) : [];
     const upd = (mut: () => void) => { mut(); p.save(); p.emitConfig(); };
+    const areas = p.haAreas();
     return this._section('rooms', 'Rooms', () => html`
+        ${areas.length && f.haFloorId ? html`
+          <div style="display:flex;align-items:center;gap:6px;padding:2px 0 6px 0">
+            <button class="btn" style="font-size:10px;padding:2px 6px" data-match-areas
+                    title="Bind every unbound room whose name matches an area on this Home Assistant floor"
+                    @click=${() => this._matchRoomsToAreas()}>⇄ Match all by name</button>
+            ${this._areaMatchNote ? html`
+              <span style="flex:1;font-size:10px;color:var(--text-dim)" data-match-note>
+                ${this._areaMatchNote}
+                <button class="icon-btn" style="font-size:10px;padding:0 2px"
+                        @click=${() => { this._areaMatchNote = ''; }}>✕</button>
+              </span>` : nothing}
+          </div>` : nothing}
         ${placing ? html`
           <div style="display:flex;align-items:center;gap:6px;font-size:11px;
                       color:var(--text-dim);padding:4px 0">
@@ -4021,12 +4072,13 @@ export class Sidebar extends LitElement {
         ${rooms.map(rm => {
           const inside = loopContaining(loops, rm.anchor.x, rm.anchor.y) !== null;
           const occ = rm.occupancyEntity && p.hass?.states?.[rm.occupancyEntity]?.state === 'on';
+          const areaNm = p.roomAreaName(rm);
           return html`
             <div class="sensor-item" style="cursor:default;gap:4px">
               ${rm.occupancyEntity ? html`<span title="${occ ? 'Occupied' : 'Not occupied'}"
                      style="color:${occ ? '#66bb6a' : 'var(--text-dim)'};font-size:12px">●</span>` : nothing}
-              <input type="text" .value=${rm.name} style="flex:1;min-width:0"
-                     placeholder="Room name…"
+              <input type="text" .value=${rm.name} style="flex:1;min-width:0" data-room-name-for=${rm.id}
+                     placeholder=${areaNm ? `${areaNm} (from area)` : 'Room name…'}
                      @input=${(e: Event) => upd(() => { rm.name = (e.target as HTMLInputElement).value; })}>
               ${!inside ? html`<span class="badge" title="Anchor is outside every wall loop"
                                      style="color:#ffb74d">⚠ not inside walls</span>` : nothing}
@@ -4034,6 +4086,26 @@ export class Sidebar extends LitElement {
                       @click=${() => { p.placingRoomId = rm.id; p.maybeCloseSidebarForPlacement(); p.emitConfig(); }}>📍</button>
               <button class="icon-btn" title="Delete"
                       @click=${() => this._deleteRoom(rm.id)}>✕</button>
+            </div>
+            <div class="row" style="gap:4px;margin:0 0 2px 0">
+              <label style="font-size:10px"
+                     title="Bind this room to a Home Assistant area. The area's name is used when no name is typed, and the occupancy / temperature entity pickers open scoped to it.">HA area</label>
+              ${this._areaOptions(f, rm).length === 0
+                ? html`<span style="flex:1;font-size:10px;color:var(--text-dim);font-style:italic" data-room-area-empty>
+                    ${p.haAreaRegistryLoaded ? '(no Home Assistant areas)' : 'loading…'}</span>`
+                : html`
+                  <select style="flex:1;min-width:0;background:#111;color:var(--text);border:1px solid var(--border);
+                                 border-radius:4px;padding:2px 4px;font-size:11px"
+                          data-room-area-for=${rm.id}
+                          .value=${rm.haAreaId ?? ''}
+                          @change=${(e: Event) => {
+                            const v = (e.target as HTMLSelectElement).value;
+                            upd(() => { rm.haAreaId = v || undefined; });
+                          }}>
+                    <option value="" ?selected=${!rm.haAreaId}>— none —</option>
+                    ${this._areaOptions(f, rm).map(a => html`
+                      <option value=${a.area_id} ?selected=${rm.haAreaId === a.area_id}>${a.name}</option>`)}
+                  </select>`}
             </div>
             <div class="row" style="gap:4px;margin:0 0 4px 0">
               <label style="font-size:10px" title="Frigate zone / FP2 / any occupancy binary_sensor">Occupancy</label>
@@ -4062,13 +4134,75 @@ export class Sidebar extends LitElement {
     this.planner.save(); this.planner.emitConfig();
   }
 
+  // Result line for the "Match all by name" action (dismissible).
+  @state() private _areaMatchNote = '';
+
+  // The HA areas offered for one room's dropdown. When the FLOOR is bound to an
+  // HA floor the list is scoped to that floor's areas; a room already bound to
+  // an off-floor area keeps its own entry so an existing bind never silently
+  // vanishes from the list. An unbound floor offers every area.
+  private _areaOptions(f: Floor, rm: Room | null) {
+    const areas = this.planner.haAreas();
+    if (!f.haFloorId) return areas;
+    const scoped = areas.filter(a => a.floor_id === f.haFloorId);
+    const cur = rm?.haAreaId;
+    if (cur && !scoped.some(a => a.area_id === cur)) {
+      const off = areas.find(a => a.area_id === cur);
+      if (off) return [...scoped, off];
+    }
+    return scoped;
+  }
+
+  // Bind every UNBOUND room whose displayed name case-insensitively equals an
+  // area name on the bound HA floor. One save() ⇒ one undo step. Already-bound
+  // rooms are never touched.
+  private _matchRoomsToAreas(): void {
+    const p = this.planner;
+    const f = p.floor();
+    const opts = this._areaOptions(f, null);
+    const byName = new Map<string, string>();
+    for (const a of opts) byName.set(a.name.trim().toLowerCase(), a.area_id);
+    let n = 0;
+    for (const rm of f.rooms ?? []) {
+      if (rm.haAreaId) continue;
+      const key = rm.name.trim().toLowerCase();
+      if (!key) continue;
+      const id = byName.get(key);
+      if (!id) continue;
+      rm.haAreaId = id;
+      n++;
+    }
+    if (n) { p.save(); p.emitConfig(); }
+    this._areaMatchNote = n ? `Bound ${n} room${n === 1 ? '' : 's'} by name.`
+                            : 'No unbound room names matched an area.';
+  }
+
+  // Area scope for an entity picker opened FOR a room (occupancy) — null when
+  // the room isn't area-bound or the area name isn't known yet.
+  private _areaFilterForRoom(rm: Room | null | undefined) {
+    const name = this.planner.roomAreaName(rm);
+    return (rm?.haAreaId && name) ? { areaId: rm.haAreaId, areaName: name } : null;
+  }
+
+  // Area scope for a picker opened for a PLACED fixture: fuzzy-resolve the
+  // fixture's plan position to a room (same rule the sidebar's room grouping
+  // uses), then take that room's bound area. Null when no fit — today's
+  // unfiltered behaviour.
+  private _areaFilterForPoint(x: number, y: number) {
+    const { loops, rooms } = this._roomGroupsCtx();
+    if (!rooms.length) return null;
+    return this._areaFilterForRoom(resolveRoomForPointFuzzy(rooms, loops, x, y));
+  }
+
   // Room occupancy binding (#1): any binary_sensor whose 'on' state means the
   // room is occupied (Frigate zone occupancy, Aqara FP2, generic PIR, …).
+  // Scoped to the room's bound HA area when there is one (removable in-picker).
   private _pickRoomOccupancy(rm: Room): void {
     this.dispatchEvent(new CustomEvent('open-entity-picker', {
       bubbles: true, composed: true,
       detail: {
         domain: 'binary_sensor',
+        areaFilter: this._areaFilterForRoom(rm),
         onPick: (id: string) => {
           rm.occupancyEntity = id;
           this.planner.save();

@@ -1,0 +1,513 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>AREABIND …</title>
+<style>
+  body { margin:0; background:#0d1116; color:#cfd8dc; font:13px/1.5 sans-serif; padding:14px; }
+  h1 { font-size:15px; margin:0 0 10px; }
+  h2 { font-size:12px; margin:12px 0 4px; color:#90caf9; }
+  #summary { font-size:14px; font-weight:bold; margin:10px 0; padding:8px 10px; border-radius:5px; }
+  .okbg { background:#12331f; color:#69f0ae; } .badbg { background:#3a1414; color:#ff8a80; }
+  .row { display:flex; justify-content:space-between; gap:10px; padding:2px 0; border-bottom:1px solid #1c2530; }
+  .pass { color:#69f0ae; } .fail { color:#ff5252; }
+  .name { color:#90caf9; } .extra { color:#ffd54f; font-size:11px; }
+  #mount { position:absolute; left:-4000px; top:0; }
+</style>
+<h1>HA floor / area binding — registries, room naming, area-filtered pickers</h1>
+<div id="summary">Running…</div>
+<div id="rows"></div>
+<div id="mount"></div>
+
+<!-- Harness build (from the repo root; NEVER reuse stale bundles). Needs a WIDE
+     viewport — the sidebar renders its editors the same either way, but the
+     sensor-focus recipe's autofocus guard keys off 900 px:
+       H=/tmp/diorama-harness-area
+       rm -rf "$H"; mkdir -p "$H"; cp -r dist/* "$H"/
+       cp test-pages/area-binding-test.html "$H"/
+       T=$(mktemp -d); cp -r src/* "$T"/; cp tsconfig.json "$T"/
+       cp test-pages/fake-avatar-store.ts "$T"/avatar-store.ts
+       cp test-pages/area-binding-entry.ts "$T"/area-binding-entry.ts
+       npx esbuild "$T"/area-binding-entry.ts --bundle --format=esm --tsconfig="$T"/tsconfig.json \
+         --alias:lit=$PWD/node_modules/lit/index.js \
+         --alias:lit/decorators.js=$PWD/node_modules/lit/decorators.js \
+         --outfile="$H"/area.mod.js
+       (cd "$H" && python3 -m http.server 8842 &)
+       google-chrome --headless=new --disable-gpu --use-angle=swiftshader \
+         --enable-unsafe-swiftshader --window-size=1300,1000 \
+         --virtual-time-budget=40000 --dump-dom \
+         "http://localhost:8842/area-binding-test.html" | grep -o "<title>[^<]*"  -->
+<script type="module">
+  const V = '?v=' + Date.now();
+  const { Planner, LocalApi, roomLabel, repairFloor } = await import('./area.mod.js' + V);
+
+  const results = [];
+  let section = '';
+  const ok = (name, cond, extra = '') =>
+    results.push({ name: (section ? section + ' ' : '') + name, pass: !!cond, extra: String(extra) });
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  async function waitFor(cond, tries = 600) {
+    for (let i = 0; i < tries; i++) { if (cond()) return true; await sleep(4); }
+    return !!cond();
+  }
+  // setTimeout-based frame wait — rAF is unreliable under headless virtual time.
+  const frames = async n => { for (let i = 0; i < n; i++) await sleep(20); };
+  const clone = x => JSON.parse(JSON.stringify(x));
+
+  // ── Fixture registries ────────────────────────────────────────────────────
+  // Two HA floors; four areas (three on the ground floor, one upstairs).
+  const HA_FLOORS = [
+    { floor_id: 'ground', name: 'Ground Floor', level: 0 },
+    { floor_id: 'upper',  name: 'Upstairs',     level: 1 },
+  ];
+  const HA_AREAS = [
+    { area_id: 'a_kitchen', name: 'Kitchen',     floor_id: 'ground' },
+    { area_id: 'a_living',  name: 'Living Room', floor_id: 'ground' },
+    { area_id: 'a_office',  name: 'Office',      floor_id: 'ground' },
+    { area_id: 'a_bed',     name: 'Bedroom',     floor_id: 'upper'  },
+  ];
+  // Entity registry: one entity carries its OWN area_id, one inherits from its
+  // device, one has neither (device with no area), one is unregistered.
+  const HA_ENTS = [
+    { entity_id: 'binary_sensor.kitchen_motion', device_id: 'dev_k', area_id: 'a_kitchen' },
+    { entity_id: 'binary_sensor.living_motion',  device_id: 'dev_l', area_id: null },
+    { entity_id: 'sensor.kitchen_temp',          device_id: 'dev_k', area_id: null },
+    { entity_id: 'sensor.living_temp',           device_id: 'dev_l', area_id: null },
+    { entity_id: 'sensor.orphan_temp',           device_id: 'dev_o', area_id: null },
+    { entity_id: 'climate.kitchen_hvac',         device_id: 'dev_k', area_id: null },
+    { entity_id: 'climate.upstairs_hvac',        device_id: 'dev_b', area_id: 'a_bed' },
+    // entity-level area OVERRIDES the device's area (dev_l is Living Room)
+    { entity_id: 'sensor.moved_probe',           device_id: 'dev_l', area_id: 'a_office' },
+  ];
+  const HA_DEVS = [
+    { id: 'dev_k', name: 'Kitchen Hub',  name_by_user: null, area_id: 'a_kitchen' },
+    { id: 'dev_l', name: 'Living Hub',   name_by_user: null, area_id: 'a_living' },
+    { id: 'dev_b', name: 'Bedroom Hub',  name_by_user: null, area_id: null },
+    { id: 'dev_o', name: 'Orphan Hub',   name_by_user: null, area_id: null },
+  ];
+  const STATES = {};
+  for (const e of HA_ENTS) {
+    STATES[e.entity_id] = { entity_id: e.entity_id, state: 'off',
+      attributes: { friendly_name: e.entity_id.split('.')[1] }, last_updated: '' };
+  }
+  // One entity with NO registry row at all (states-only) — must never match an area.
+  STATES['binary_sensor.unregistered'] = { entity_id: 'binary_sensor.unregistered',
+    state: 'off', attributes: { friendly_name: 'unregistered' }, last_updated: '' };
+
+  // ── Fake HaApi over a Map (the config-test seam), plus the new registries ──
+  class FakeHa {
+    constructor(seed) {
+      this.map = new Map();
+      for (const [k, v] of Object.entries(seed || {})) this.map.set(k, clone(v));
+      this.states = clone(STATES);
+      this._s = []; this._c = [];
+      this.calls = { floors: 0, areas: 0, ents: 0, devs: 0 };
+    }
+    connect() { for (const cb of this._c) cb('connected'); for (const cb of this._s) cb(this.states, undefined); }
+    onState(fn) { this._s.push(fn); } onConn(fn) { this._c.push(fn); }
+    callService() { return Promise.resolve(); }
+    async getHistory() { return {}; } async getWeatherForecasts() { return null; }
+    async getCalendarEvents() { return []; }
+    async getDevices() { this.calls.devs++; return clone(HA_DEVS); }
+    async getEntityRegistry() { this.calls.ents++; return clone(HA_ENTS); }
+    async getFloorRegistry() { this.calls.floors++; return clone(HA_FLOORS); }
+    async getAreaRegistry() { this.calls.areas++; return clone(HA_AREAS); }
+    async updateEntityRegistry() { return true; }
+    async getUserData(k) { return this.map.has(k) ? clone(this.map.get(k)) : null; }
+    async setUserData(k, v) { this.map.set(k, clone(v)); return true; }
+    async refreshStates() {}
+    async subscribeMqtt() { return () => {}; } async publishMqtt() {}
+    async subscribePersistentNotifications() { return () => {}; }
+    async listRepairsIssues() { return []; } async ignoreRepairsIssue() { return false; }
+  }
+
+  const mkFloor = (over = {}) => ({
+    id: 'f1', name: 'Home', w: 12000, d: 12000, walls: [], furniture: [],
+    lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    bleProxies: [], doors: [], windows: [], rooms: [], thermostats: [],
+    bg: null, ...over });
+  const mkSeed = (floors) => ({ v: 2, floors, currentFloorId: floors[0].id,
+    activeSensorId: null, coverage: true, imperial: false, showDetails: false,
+    useRawTargets: false });
+
+  async function mkPlanner(seed, api) {
+    localStorage.clear();
+    const ha = api ?? new FakeHa({ diorama: seed });
+    const p = new Planner(); p.connectWith(ha);
+    await waitFor(() => p.configIndex !== null);
+    return { p, ha };
+  }
+
+  // A square room loop so anchors + fixture positions resolve to real rooms.
+  const rect = (id, x0, y0, x1, y1) => ({
+    id, kind: 'full',
+    points: [{ x: x0, y: y0 }, { x: x1, y: y0 }, { x: x1, y: y1 }, { x: x0, y: y1 }, { x: x0, y: y0 }],
+  });
+
+  try {
+    // ═══ A. HaApi surface + cache ══════════════════════════════════════════
+    section = 'A';
+    {
+      const { p, ha } = await mkPlanner(mkSeed([mkFloor()]));
+      // First read kicks the lazy fetch and returns [] until it lands.
+      ok('A1 haFloors() empty before the fetch resolves', p.haFloors().length === 0,
+         `${p.haFloors().length}`);
+      ok('A2 registry reported not-loaded initially', p.haAreaRegistryLoaded === false,
+         `${p.haAreaRegistryLoaded}`);
+      await p.ensureHaAreaRegistry();
+      ok('A3 haFloors() returns the fake floor registry', p.haFloors().length === 2,
+         JSON.stringify(p.haFloors().map(f => f.floor_id)));
+      ok('A4 floors sorted by level', p.haFloors()[0].floor_id === 'ground',
+         p.haFloors()[0]?.floor_id);
+      ok('A5 haAreas() returns 4 areas, name-sorted',
+         p.haAreas().length === 4 && p.haAreas()[0].name === 'Bedroom',
+         JSON.stringify(p.haAreas().map(a => a.name)));
+      ok('A6 haAreaRegistryLoaded flips true', p.haAreaRegistryLoaded === true, `${p.haAreaRegistryLoaded}`);
+      // Cache: two more reads must not refetch.
+      const before = { ...ha.calls };
+      p.haFloors(); p.haAreas(); p.entityAreaId('sensor.kitchen_temp');
+      await p.ensureHaAreaRegistry();
+      ok('A7 cached — one floor-registry fetch across many reads',
+         ha.calls.floors === before.floors && ha.calls.floors === 1, `floors=${ha.calls.floors}`);
+      ok('A8 cached — one area-registry fetch', ha.calls.areas === 1, `areas=${ha.calls.areas}`);
+      // Invalidate → next read refetches.
+      p.invalidateHaAreaRegistry();
+      await p.ensureHaAreaRegistry();
+      ok('A9 invalidate forces a refetch', ha.calls.areas === 2, `areas=${ha.calls.areas}`);
+      ok('A10 areaName() resolves an id', p.areaName('a_living') === 'Living Room', p.areaName('a_living'));
+      ok('A11 areaName() null for an unknown id', p.areaName('nope') === null, `${p.areaName('nope')}`);
+      ok('A12 areaName(null) is null', p.areaName(null) === null, `${p.areaName(null)}`);
+    }
+
+    // ═══ B. entityAreaId resolution ════════════════════════════════════════
+    section = 'B';
+    {
+      const { p } = await mkPlanner(mkSeed([mkFloor()]));
+      await p.ensureHaAreaRegistry();
+      ok('B1 entity-level area_id wins',
+         p.entityAreaId('binary_sensor.kitchen_motion') === 'a_kitchen',
+         `${p.entityAreaId('binary_sensor.kitchen_motion')}`);
+      ok('B2 entity-level area OVERRIDES the device area',
+         p.entityAreaId('sensor.moved_probe') === 'a_office',
+         `${p.entityAreaId('sensor.moved_probe')} (device dev_l is a_living)`);
+      ok('B3 falls back to the device area',
+         p.entityAreaId('sensor.living_temp') === 'a_living',
+         `${p.entityAreaId('sensor.living_temp')}`);
+      ok('B4 null when neither entity nor device has an area',
+         p.entityAreaId('sensor.orphan_temp') === null,
+         `${p.entityAreaId('sensor.orphan_temp')}`);
+      ok('B5 null for an unregistered entity',
+         p.entityAreaId('binary_sensor.unregistered') === null,
+         `${p.entityAreaId('binary_sensor.unregistered')}`);
+      ok('B6 null for a null id', p.entityAreaId(null) === null, `${p.entityAreaId(null)}`);
+      ok('B7 device with no area falls through',
+         p.entityAreaId('climate.upstairs_hvac') === 'a_bed',
+         `${p.entityAreaId('climate.upstairs_hvac')} (entity-level; dev_b has none)`);
+    }
+
+    // ═══ C. Persistence + roomLabel resolution matrix ══════════════════════
+    section = 'C';
+    {
+      // (c1) repairFloor keeps haFloorId in its explicit field list.
+      const rf = repairFloor({ id: 'x', name: 'X', w: 100, d: 100, haFloorId: 'ground' });
+      ok('C1 repairFloor passes haFloorId through', rf.haFloorId === 'ground', `${rf.haFloorId}`);
+      const rf2 = repairFloor({ id: 'x', name: 'X', w: 100, d: 100 });
+      ok('C2 repairFloor leaves haFloorId undefined when absent',
+         rf2.haFloorId === undefined, `${rf2.haFloorId}`);
+
+      // (c3) full store round-trip through the real save/load path.
+      const seed = mkSeed([mkFloor({
+        rooms: [{ id: 'r1', name: '', anchor: { x: 2000, y: 2000 } }] })]);
+      const { p, ha } = await mkPlanner(seed);
+      p.floor().haFloorId = 'ground';
+      p.floor().rooms[0].haAreaId = 'a_kitchen';
+      p.save();
+      await p.saveConfigNow();
+      // New Planner over the SAME storage map (localStorage cleared inside).
+      const p2 = new Planner(); p2.connectWith(ha);
+      await waitFor(() => p2.configIndex !== null);
+      await waitFor(() => (p2.floor().rooms ?? []).length > 0);
+      ok('C3 Floor.haFloorId survives a store round-trip',
+         p2.floor().haFloorId === 'ground', `${p2.floor().haFloorId}`);
+      ok('C4 Room.haAreaId survives a store round-trip',
+         p2.floor().rooms[0].haAreaId === 'a_kitchen', `${p2.floor().rooms[0].haAreaId}`);
+
+      // (c5..c9) roomLabel resolution ladder (pure).
+      const typed = { id: 'r', name: 'Den', anchor: { x: 0, y: 0 }, haAreaId: 'a_kitchen' };
+      const bound = { id: 'r', name: '',    anchor: { x: 0, y: 0 }, haAreaId: 'a_kitchen' };
+      const bare  = { id: 'r', name: '',    anchor: { x: 0, y: 0 } };
+      ok('C5 typed name wins over the area name',
+         roomLabel(typed, 'Kitchen').text === 'Den' && roomLabel(typed, 'Kitchen').placeholder === false,
+         roomLabel(typed, 'Kitchen').text);
+      ok('C6 area name fills in for an unnamed room',
+         roomLabel(bound, 'Kitchen').text === 'Kitchen' && roomLabel(bound, 'Kitchen').placeholder === false,
+         roomLabel(bound, 'Kitchen').text);
+      ok('C7 placeholder when neither name nor area',
+         roomLabel(bare, null).text === 'Unnamed room' && roomLabel(bare, null).placeholder === true,
+         roomLabel(bare, null).text);
+      ok('C8 legacy one-arg call is unchanged',
+         roomLabel(bare).text === 'Unnamed room' && roomLabel(typed).text === 'Den',
+         `${roomLabel(bare).text} / ${roomLabel(typed).text}`);
+      ok('C9 blank/whitespace area name falls to the placeholder',
+         roomLabel(bare, '   ').text === 'Unnamed room', roomLabel(bare, '   ').text);
+
+      // (c10) planner.roomAreaName is the registry rung the renderers use.
+      await p2.ensureHaAreaRegistry();
+      ok('C10 roomAreaName resolves the bound area',
+         p2.roomAreaName(p2.floor().rooms[0]) === 'Kitchen',
+         `${p2.roomAreaName(p2.floor().rooms[0])}`);
+      ok('C11 roomAreaName null for an unbound room',
+         p2.roomAreaName({ id: 'z', name: '', anchor: { x: 0, y: 0 } }) === null,
+         `${p2.roomAreaName({ id: 'z', name: '', anchor: { x: 0, y: 0 } })}`);
+      ok('C12 roomAreaName tolerates null', p2.roomAreaName(null) === null, `${p2.roomAreaName(null)}`);
+    }
+
+    // ═══ D + E + F. Sidebar dropdowns, match-by-name, picker filter ════════
+    // One mounted sidebar + picker drives the rest.
+    section = 'D';
+    const walls = [rect('w1', 500, 500, 5000, 5000), rect('w2', 6000, 500, 10000, 5000)];
+    const rooms = [
+      { id: 'r_kitchen', name: 'Kitchen', anchor: { x: 2000, y: 2000 } },
+      { id: 'r_living',  name: 'Living Room', anchor: { x: 8000, y: 2000 } },
+    ];
+    const { p: P } = await mkPlanner(mkSeed([mkFloor({ walls, rooms: clone(rooms),
+      envSensors: [{ id: 'e1', x: 2000, y: 2500, entity_id: null, label: 'Temp' }],
+      thermostats: [{ id: 't1', x: 8000, y: 2500, entity_id: null, label: 'Stat' }] })]));
+    await P.ensureHaAreaRegistry();
+
+    const mount = document.getElementById('mount');
+    const c2d = document.createElement('diorama-canvas-2d');
+    c2d.planner = P; c2d.style.cssText = 'display:block;width:400px;height:300px';
+    mount.appendChild(c2d);
+    const sb = document.createElement('diorama-sidebar');
+    sb.planner = P;
+    mount.appendChild(sb);
+    const picker = document.createElement('diorama-entity-picker');
+    picker.planner = P;
+    mount.appendChild(picker);
+    // Mirror app.ts's open-entity-picker → picker.show(domain, onPick, areaFilter).
+    let lastDetail = null;
+    mount.addEventListener('open-entity-picker', e => {
+      lastDetail = e.detail;
+      picker.show(e.detail.domain ?? '', e.detail.onPick, e.detail.areaFilter ?? null);
+    });
+    await sb.updateComplete; await picker.updateComplete; await frames(3);
+
+    const areaSel = id => sb.querySelector(`select[data-room-area-for="${id}"]`);
+    const optVals = sel => sel ? [...sel.querySelectorAll('option')].map(o => o.value) : null;
+
+    // (d1) Floor UNBOUND → every area is offered.
+    ok('D1 unbound floor offers every area',
+       JSON.stringify(optVals(areaSel('r_kitchen'))) ===
+         JSON.stringify(['', 'a_bed', 'a_kitchen', 'a_living', 'a_office']),
+       JSON.stringify(optVals(areaSel('r_kitchen'))));
+
+    // (d2) HA-floor dropdown exists and writes Floor.haFloorId.
+    const floorSel = sb.querySelector('select[data-ha-floor-select]');
+    ok('D2 HA floor dropdown lists both HA floors',
+       JSON.stringify(optVals(floorSel)) === JSON.stringify(['', 'ground', 'upper']),
+       JSON.stringify(optVals(floorSel)));
+    floorSel.value = 'ground';
+    floorSel.dispatchEvent(new Event('change'));
+    await frames(3);
+    ok('D3 picking an HA floor writes Floor.haFloorId',
+       P.floor().haFloorId === 'ground', `${P.floor().haFloorId}`);
+
+    // (d4) Now the room dropdowns are scoped to the ground floor's areas.
+    ok('D4 bound floor scopes areas to that HA floor',
+       JSON.stringify(optVals(areaSel('r_kitchen'))) ===
+         JSON.stringify(['', 'a_kitchen', 'a_living', 'a_office']),
+       JSON.stringify(optVals(areaSel('r_kitchen'))));
+
+    // (d5) An existing OFF-floor bind is still listed (never silently vanishes).
+    P.floor().rooms[1].haAreaId = 'a_bed';   // upstairs area on a ground-floor plan
+    P.emitConfig(); await frames(3);
+    ok('D5 an off-floor bound area stays in its own room list',
+       (optVals(areaSel('r_living')) ?? []).includes('a_bed'),
+       JSON.stringify(optVals(areaSel('r_living'))));
+    ok('D6 the off-floor area does NOT leak into other rooms',
+       !(optVals(areaSel('r_kitchen')) ?? []).includes('a_bed'),
+       JSON.stringify(optVals(areaSel('r_kitchen'))));
+
+    // (d7) The room area <select> writes haAreaId.
+    const ks = areaSel('r_kitchen');
+    ks.value = 'a_kitchen'; ks.dispatchEvent(new Event('change'));
+    await frames(3);
+    ok('D7 picking an area writes Room.haAreaId',
+       P.floor().rooms[0].haAreaId === 'a_kitchen', `${P.floor().rooms[0].haAreaId}`);
+
+    // (d8) An unnamed bound room shows the area name as its input placeholder.
+    P.floor().rooms[0].name = '';
+    P.emitConfig(); await frames(3);
+    const nameInput = sb.querySelector('input[data-room-name-for="r_kitchen"]');
+    ok('D8 unnamed bound room placeholders the area name',
+       (nameInput?.placeholder ?? '').includes('Kitchen'), nameInput?.placeholder);
+    P.floor().rooms[0].name = 'Kitchen';   // restore for E
+    P.floor().rooms[0].haAreaId = undefined;
+    P.floor().rooms[1].haAreaId = undefined;
+    P.emitConfig(); await frames(2);
+
+    // ═══ E. "Match all by name" ════════════════════════════════════════════
+    section = 'E';
+    {
+      // Three unbound rooms: two match an area name, one doesn't; plus one
+      // already bound to a DIFFERENT area (must stay untouched).
+      P.floor().rooms = [
+        { id: 'r_kitchen', name: 'Kitchen',     anchor: { x: 2000, y: 2000 } },
+        { id: 'r_living',  name: 'living room', anchor: { x: 8000, y: 2000 } },  // case-insensitive
+        // Anchored OUTSIDE both wall rects on purpose: one room per loop, so the
+        // fixture-position → room resolve in F is unambiguous.
+        { id: 'r_attic',   name: 'Attic',       anchor: { x: 11000, y: 8000 } },  // no such area
+        { id: 'r_pinned',  name: 'Office',      anchor: { x: 11000, y: 10500 }, haAreaId: 'a_living' },
+      ];
+      // save() first so the pre-match state IS the undo baseline (the fixture
+      // above mutates the store directly, which never snapshots).
+      P.save(); P.emitConfig(); await frames(3);
+      const revBefore = P.configRev;
+      const btn = sb.querySelector('button[data-match-areas]');
+      ok('E1 the match button renders once the floor is bound', !!btn, btn ? 'found' : 'missing');
+      btn.click();
+      await frames(3);
+      const byId = id => P.floor().rooms.find(r => r.id === id);
+      ok('E2 exact name match binds', byId('r_kitchen').haAreaId === 'a_kitchen',
+         `${byId('r_kitchen').haAreaId}`);
+      ok('E3 match is case-insensitive', byId('r_living').haAreaId === 'a_living',
+         `${byId('r_living').haAreaId}`);
+      ok('E4 a non-matching name stays unbound', byId('r_attic').haAreaId == null,
+         `${byId('r_attic').haAreaId}`);
+      ok('E5 an already-bound room is untouched', byId('r_pinned').haAreaId === 'a_living',
+         `${byId('r_pinned').haAreaId}`);
+      ok('E6 config bumped once', P.configRev === revBefore + 1, `${revBefore} → ${P.configRev}`);
+      ok('E7 exactly one undo step', P.canUndo === true, `canUndo=${P.canUndo}`);
+      P.undo(); await frames(2);
+      ok('E8 ONE undo restores every binding',
+         P.floor().rooms.every(r => r.id === 'r_pinned' ? r.haAreaId === 'a_living' : r.haAreaId == null),
+         JSON.stringify(P.floor().rooms.map(r => `${r.id}:${r.haAreaId}`)));
+      ok('E9 the room set itself is unchanged by the round-trip',
+         P.floor().rooms.length === 4 && P.floor().rooms.map(r => r.id).join() ===
+           'r_kitchen,r_living,r_attic,r_pinned',
+         JSON.stringify(P.floor().rooms.map(r => r.id)));
+      // Redo restores all four bindings at once — proof the match was ONE step.
+      P.redo(); await frames(3);
+      ok('E10 one redo re-applies every binding at once',
+         byId('r_kitchen').haAreaId === 'a_kitchen' && byId('r_living').haAreaId === 'a_living'
+           && byId('r_attic').haAreaId == null && byId('r_pinned').haAreaId === 'a_living',
+         JSON.stringify(P.floor().rooms.map(r => `${r.id}:${r.haAreaId}`)));
+    }
+
+    // ═══ F. Area-filtered entity picker ════════════════════════════════════
+    section = 'F';
+    {
+      const eids = () => [...picker.querySelectorAll('.entity-list .eid')].map(n => n.textContent.trim());
+      const chip = () => picker.querySelector('.modal [title*="Home Assistant area"]');
+
+      // (f1) Room occupancy — the room is direct (no fuzzy resolve).
+      sb._pickRoomOccupancy(P.floor().rooms.find(r => r.id === 'r_kitchen'));
+      await picker.updateComplete; await frames(3);
+      ok('F1 occupancy picker carries the room area in its payload',
+         lastDetail?.areaFilter?.areaId === 'a_kitchen' && lastDetail?.areaFilter?.areaName === 'Kitchen',
+         JSON.stringify(lastDetail?.areaFilter));
+      ok('F2 list is narrowed to that area',
+         JSON.stringify(eids()) === JSON.stringify(['binary_sensor.kitchen_motion']),
+         JSON.stringify(eids()));
+      ok('F3 the area chip is shown', !!chip(), chip() ? chip().textContent.trim() : 'missing');
+      // ✕ clears the filter → the full binary_sensor list comes back.
+      chip().querySelector('button').click();
+      await picker.updateComplete; await frames(2);
+      const all = eids();
+      ok('F4 ✕ clears the filter (full list returns)',
+         all.length === 3 && all.includes('binary_sensor.living_motion')
+           && all.includes('binary_sensor.unregistered'),
+         JSON.stringify(all));
+      picker.open = false; await frames(1);
+
+      // (f5) Env sensor — the room resolves from the SENSOR'S plan position.
+      lastDetail = null;
+      sb._pickEnvEntity(P.floor().envSensors[0]);
+      await picker.updateComplete; await frames(3);
+      ok('F5 env picker resolves the room from the fixture position',
+         lastDetail?.areaFilter?.areaId === 'a_kitchen', JSON.stringify(lastDetail?.areaFilter));
+      ok('F6 env list narrowed (device-inherited area counts)',
+         JSON.stringify(eids()) === JSON.stringify(['sensor.kitchen_temp']),
+         JSON.stringify(eids()));
+      picker.open = false; await frames(1);
+
+      // (f7) Thermostat — same fuzzy resolve, Living Room this time.
+      lastDetail = null;
+      sb._pickThermostatEntity(P.floor().thermostats[0]);
+      await picker.updateComplete; await frames(3);
+      ok('F7 thermostat picker resolves its own room',
+         lastDetail?.areaFilter?.areaId === 'a_living', JSON.stringify(lastDetail?.areaFilter));
+      ok('F8 thermostat list narrowed to the Living Room climate entities',
+         eids().length === 0, JSON.stringify(eids()) + ' (no climate.* in a_living)');
+      // Removing the filter restores every climate entity.
+      chip().querySelector('button').click();
+      await picker.updateComplete; await frames(2);
+      ok('F9 ✕ restores the unfiltered climate list',
+         eids().length === 2 && eids().includes('climate.kitchen_hvac'), JSON.stringify(eids()));
+      picker.open = false; await frames(1);
+
+      // (f10) An UNBOUND room ⇒ no filter at all (today's behaviour).
+      lastDetail = null;
+      sb._pickRoomOccupancy(P.floor().rooms.find(r => r.id === 'r_attic'));
+      await picker.updateComplete; await frames(3);
+      ok('F10 unbound room sends no area filter', lastDetail?.areaFilter === null,
+         JSON.stringify(lastDetail?.areaFilter));
+      ok('F11 unfiltered picker shows no chip', !chip(), chip() ? 'chip present' : 'none');
+      ok('F12 unfiltered list is the full domain', eids().length === 3, JSON.stringify(eids()));
+      picker.open = false; await frames(1);
+    }
+
+    // ═══ G. Offline (LocalApi) ═════════════════════════════════════════════
+    section = 'G';
+    {
+      localStorage.clear();
+      const p = new Planner();
+      p.connectWith(new LocalApi());
+      await waitFor(() => p.configIndex !== null);
+      await p.ensureHaAreaRegistry();
+      ok('G1 LocalApi floor registry is empty', p.haFloors().length === 0, `${p.haFloors().length}`);
+      ok('G2 LocalApi area registry is empty', p.haAreas().length === 0, `${p.haAreas().length}`);
+      ok('G3 registry still reports loaded (not stuck "loading")',
+         p.haAreaRegistryLoaded === true, `${p.haAreaRegistryLoaded}`);
+      ok('G4 entityAreaId is null offline', p.entityAreaId('sensor.anything') === null,
+         `${p.entityAreaId('sensor.anything')}`);
+      ok('G5 roomAreaName is null offline',
+         p.roomAreaName({ id: 'r', name: '', anchor: { x: 0, y: 0 }, haAreaId: 'a_kitchen' }) === null,
+         'null');
+      // The sidebar must render the "no areas" hints rather than a blank select.
+      p.floor().rooms = [{ id: 'r1', name: '', anchor: { x: 100, y: 100 } }];
+      p.emitConfig();
+      const sb2 = document.createElement('diorama-sidebar');
+      sb2.planner = p;
+      mount.appendChild(sb2);
+      await sb2.updateComplete; await frames(3);
+      ok('G6 offline shows the no-HA-floors hint',
+         !!sb2.querySelector('[data-ha-floor-empty]'),
+         sb2.querySelector('[data-ha-floor-empty]')?.textContent?.trim() ?? 'missing');
+      ok('G7 offline shows the no-HA-areas hint per room',
+         !!sb2.querySelector('[data-room-area-empty]'),
+         sb2.querySelector('[data-room-area-empty]')?.textContent?.trim() ?? 'missing');
+      ok('G8 no area <select> is rendered offline',
+         !sb2.querySelector('select[data-room-area-for]'), 'none');
+      ok('G9 the match-by-name button is absent offline',
+         !sb2.querySelector('button[data-match-areas]'), 'absent');
+      ok('G10 unnamed room still labels as the placeholder offline',
+         roomLabel(p.floor().rooms[0], p.roomAreaName(p.floor().rooms[0])).text === 'Unnamed room',
+         roomLabel(p.floor().rooms[0], p.roomAreaName(p.floor().rooms[0])).text);
+      sb2.remove();
+    }
+  } catch (err) {
+    section = '';
+    ok('unhandled error', false, (err && (err.stack || err.message)) || String(err));
+  }
+
+  const passed = results.filter(r => r.pass).length;
+  const total = results.length;
+  document.getElementById('rows').innerHTML = results.map(r =>
+    `<div class="row"><span class="name">${r.name}</span>` +
+    `<span class="${r.pass ? 'pass' : 'fail'}">${r.pass ? 'PASS' : 'FAIL'}` +
+    `${r.extra ? ` <span class="extra">${r.extra}</span>` : ''}</span></div>`).join('');
+  const s = document.getElementById('summary');
+  s.textContent = `${passed}/${total} passed`;
+  s.className = passed === total ? 'okbg' : 'badbg';
+  document.title = `AREABIND ${passed === total ? 'PASS' : 'FAIL'} ${passed}/${total}`;
+</script>

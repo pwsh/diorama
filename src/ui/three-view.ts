@@ -1129,16 +1129,34 @@ export class ThreeView extends LitElement {
       // that can change it (a scene3d edit, an elevationMm edit, a floor
       // reorder) and a floor switch clears the key outright — the term documents
       // the dependency and makes it immune to a future non-configRev path.
+      // HA-area room naming: an unnamed room bound to an area displays that
+      // area's name. The renderer's label builder takes rooms straight off the
+      // floor, so the resolution happens HERE (the registry lives on the
+      // Planner, not in the lazy 3D chunk) — a shallow copy carrying resolved
+      // names. `areaRoomKey` folds the resolved text into _keyFloor because the
+      // registry lands asynchronously; a rebind rides configRev anyway.
+      const areaRoomKey = (f.rooms ?? [])
+        .filter(rm => !rm.name.trim() && rm.haAreaId)
+        .map(rm => `${rm.id}:${p.roomAreaName(rm) ?? ''}`).join(',');
       const keyFloor = `${p.configRev}|${effPreset}|${effGroundMm}|` +
         `${layers.furniture !== false}|${layers.appliances !== false}|` +
         `${layers.bg !== false}|${layers.walls !== false}|` +
         `${layers.grid !== false}|` +
-        `${layers.labels !== false}|${applianceKey}|${roomOccKey}|${selCustomId}`;
+        `${layers.labels !== false}|${applianceKey}|${roomOccKey}|${selCustomId}|${areaRoomKey}`;
       if (keyFloor !== this._keyFloor) {
         this._keyFloor = keyFloor;
+        // Only copy when an area name actually supplies a label — the untouched
+        // path stays byte-identical (same Floor object identity).
+        let fBuild = f;
+        if (areaRoomKey) {
+          fBuild = { ...f, rooms: (f.rooms ?? []).map(rm => {
+            const an = (!rm.name.trim() && rm.haAreaId) ? p.roomAreaName(rm) : null;
+            return an ? { ...rm, name: an } : rm;
+          }) };
+        }
         // customObjects edits bump configRev (via emitConfig) → keyFloor flips
         // → the placed recipe instance rebuilds as its own live preview.
-        r.updateFloor(f, scMerged, layers, p.store.customObjects,
+        r.updateFloor(fBuild, scMerged, layers, p.store.customObjects,
                       id => states[id] || null, selCustomId || null,
                       fuId => p.applianceJustFinished({ id: fuId }));
       }
