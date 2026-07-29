@@ -1550,6 +1550,25 @@ switch). `curtain.entityId` is config-path; state hashed into `_keyDoors`
 (coverEntity idiom). 2D: interior curtain tick (solid closed / dashed open).
 Sidebar Windows editor "Curtain" sub-block. Test `curtain-test.html` (25/25).
 
+### Wall editing preferences (angle/grid/weld toggles + Alt free placement, 2026-07-28)
+Three DEVICE-LOCAL prefs (localStorage `diorama:wall:angleSnap`/`:gridSnap`/`:weld`, absent =
+ON — joins the `diorama:moveStep`/`diorama:view`/`diorama:sidebar:collapsed` device-local
+family; runtime `Planner.wallAngleSnap`/`wallGridSnap`/`wallWeld` + setters that persist +
+`emitConfig` but NEVER `save()` — deliberately outside the undo choke point; toggling is
+store-byte-identical, test-pinned). Gating is centralized in the exported
+`resolveWallPoint(p, prev, next, raw, free)` (canvas-interact; `snapVertex15` then
+`snap(_, WALL_GRID_MM = 10)` — **wall vertices always used a 10 mm grid, NOT the 100 mm
+GRID_MM**, now named) called identically by draw-mousemove (sets `p.cursor`), draw-click
+commit, and the `wallv` drag — so the live-dims rubber-band chip and the commit agree BY
+CONSTRUCTION (the cursor previously missed the 10 mm quantization). `free = e.altKey`:
+**holding Alt suspends all three for the gesture** (mouseup gained an optional trailing
+event param so release-time weld sees it; touch paths pass none = snaps ON, tablets use the
+checkboxes). All three `connectWallEnds` sites gate on `wallWeld && !alt`. Untouched:
+`snapOpeningToWall`, fixture wall-snaps/ganging, door/window rotate 15°, zone editor
+`snapVertex15`, non-wall grid placement (pinned OFF-state test). Sidebar Tools section hosts
+an always-visible "Wall editing" row (3 checkboxes + the Alt hint) under the wall-kind
+picker. Test `wall-edit-test.html` (`WALLEDIT PASS 55/55`).
+
 ### Wall endpoint welding
 `connectWallEnds` (canvas-interact) welds a wall's endpoints within 250 mm onto other walls — endpoint-to-endpoint (corner joins, preferred) or onto the closest point anywhere along a segment (T-junctions), plus a wall's own far endpoint (closing room loops). LOCKED walls are still valid weld **targets** (`bestWeldTarget` no longer skips them — being snapped ONTO doesn't mutate them, so an invisible room-divider can weld onto a locked structural wall); the locked wall just can't be a weld **source** (the `wall.locked` guard in `connectWallEnds` / the drag flow keeps it put). Runs after vertex drags and draw-finish (per-endpoint weld) and after whole-wall moves (single-delta translate so the shape isn't distorted). Welding wins over the 15° angle snap at connection points.
 

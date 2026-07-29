@@ -441,6 +441,20 @@ export type BgTextResolved = {
 };
 
 // Single-source-of-truth Planner. Lit components subscribe via addEventListener.
+// ── Wall-editing preference storage (device-local) ───────────────────────────
+// Three independent toggles persisted in localStorage ONLY — never the Store,
+// so they cost nothing in HA sync / undo. Absent key = ON (today's behavior).
+export const WALL_PREF_ANGLE = 'diorama:wall:angleSnap';
+export const WALL_PREF_GRID = 'diorama:wall:gridSnap';
+export const WALL_PREF_WELD = 'diorama:wall:weld';
+
+function readWallPref(key: string): boolean {
+  try { return localStorage.getItem(key) !== '0'; } catch { return true; }
+}
+function writeWallPref(key: string, on: boolean): void {
+  try { localStorage.setItem(key, on ? '1' : '0'); } catch { /* private-mode Safari throws */ }
+}
+
 export class Planner extends EventTarget {
   store: Store;
   hass: HaApi | null = null;
@@ -470,6 +484,19 @@ export class Planner extends EventTarget {
     return '2d';
   })();
   tool: Tool = 'select';
+  // Wall-editing preferences — DEVICE-LOCAL, runtime only. These are editing
+  // ERGONOMICS, not plan data: they never enter the Store, so they never sync
+  // to HA and never push an undo snapshot (same precedent as
+  // localStorage['diorama:moveStep'] / ['diorama:view']). Absent key = ON, so
+  // an existing install behaves exactly as before.
+  //   wallAngleSnap — the 15° angle lock while drawing / dragging wall points
+  //   wallGridSnap  — the WALL_GRID_MM quantization of wall points
+  //   wallWeld      — connectWallEnds endpoint welding on release / draw finish
+  // Holding Alt on the driving pointer event overrides all three momentarily
+  // (see canvas-interact's `free` flag).
+  wallAngleSnap = readWallPref(WALL_PREF_ANGLE);
+  wallGridSnap = readWallPref(WALL_PREF_GRID);
+  wallWeld = readWallPref(WALL_PREF_WELD);
   cursor: Vec2 | null = null;
   drag: Drag | null = null;
   dragJustEnded = false;
@@ -6149,6 +6176,20 @@ export class Planner extends EventTarget {
     // Persist per-device so re-entering the panel restores the last view.
     try { localStorage.setItem('diorama:view', v); } catch { /* private-mode Safari throws */ }
     this.emitConfig();
+  }
+
+  // ── Wall-editing preferences ───────────────────────────────────────────
+  // Persist device-local + emitConfig so the sidebar checkbox re-renders.
+  // Deliberately NO save(): these are not store state, so they must never
+  // dirty the config, sync to HA, or push an undo snapshot.
+  setWallAngleSnap(on: boolean): void {
+    this.wallAngleSnap = on; writeWallPref(WALL_PREF_ANGLE, on); this.emitConfig();
+  }
+  setWallGridSnap(on: boolean): void {
+    this.wallGridSnap = on; writeWallPref(WALL_PREF_GRID, on); this.emitConfig();
+  }
+  setWallWeld(on: boolean): void {
+    this.wallWeld = on; writeWallPref(WALL_PREF_WELD, on); this.emitConfig();
   }
 
   // Toggle whatever entity is bound — chooses the correct domain service

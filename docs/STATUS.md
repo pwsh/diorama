@@ -268,6 +268,18 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Wall editing prefs: snap toggles + Alt free placement**
+  (2026-07-28, user-requested: "an on/off method to disable the 15
+  degree lock and the automatic linking of walls at corners or some
+  other method to make fine adjustments"; unreleased — on main past
+  v0.39.0). Device-local `diorama:wall:*` prefs (angle snap / 10 mm
+  wall grid / weld, absent = ON, never in the store or undo);
+  centralized `resolveWallPoint` so the live-dims chip and the
+  commit agree by construction; holding Alt suspends all three for
+  a gesture (incl. release-time weld); "Wall editing" checkbox row
+  in Tools. New wall-edit-test.html (WALLEDIT PASS 55/55);
+  sensor-focus 14/14, ruler-dims 107/107, undo 44/44, rooms 10/10,
+  wallsnap 36/36 held.
 - **Five new door kinds + open-door closed-span hint** (2026-07-28,
   user-requested: "create more door types. Sliding, pocket, double
   swing, french, sliding glass" + "open doors need a dashed line

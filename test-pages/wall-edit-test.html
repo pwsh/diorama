@@ -1,0 +1,476 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>WALLEDIT …</title>
+<style>
+  body { margin:0; background:#0d1116; color:#cfd8dc; font:13px/1.5 sans-serif; padding:14px; }
+  h1 { font-size:15px; margin:0 0 10px; }
+  #summary { font-size:14px; font-weight:bold; margin:10px 0; padding:8px 10px; border-radius:5px; }
+  .okbg { background:#12331f; color:#69f0ae; } .badbg { background:#3a1414; color:#ff8a80; }
+  .row { display:flex; justify-content:space-between; gap:10px; padding:2px 0; border-bottom:1px solid #1c2530; }
+  .pass { color:#69f0ae; } .fail { color:#ff5252; }
+  .name { color:#90caf9; } .extra { color:#ffd54f; font-size:11px; }
+  #stage { position:fixed; left:0; top:0; width:900px; height:700px; opacity:0; pointer-events:none; }
+</style>
+<h1>Wall editing preferences — 15° angle lock / grid snap / endpoint weld + Alt override</h1>
+<div id="summary">Running…</div>
+<div id="rows"></div>
+<canvas id="stage" width="900" height="700"></canvas>
+
+<!-- Drives the REAL Planner + the REAL canvas-interact wall flows (bundled)
+     over an in-page fake HaApi (the undo-test / config-test seam). Build:
+       T=$(mktemp -d); cp -r src/* "$T"/
+       cp test-pages/fake-avatar-store.ts "$T"/avatar-store.ts
+       printf "export { Planner } from './planner.js';\nexport * from './canvas-interact.js';\nexport { liveDimChips } from './canvas-render.js';\nexport { snap, distMM } from './geometry.js';\n" > "$T"/walledit-entry.ts
+       npx esbuild "$T"/walledit-entry.ts --bundle --format=esm --outfile=<harness>/walledit.mod.js
+     Run headless (serve over http — Chrome blocks dynamic module imports on file://):
+       (cd <harness> && python3 -m http.server <port> &)
+       node scratchpad/title-probe.mjs http://localhost:<port>/wall-edit-test.html -->
+<script type="module">
+  const V = '?v=' + Date.now();
+  const M = await import('./walledit.mod.js' + V);
+  const {
+    Planner, liveDimChips, distMM,
+    onCanvasMouseDown, onCanvasMouseMove, onCanvasMouseUp, onCanvasClick, onCanvasDblClick,
+    resolveWallPoint, WALL_GRID_MM,
+  } = M;
+
+  const results = [];
+  const ok = (name, cond, extra = '') => results.push({ name, pass: !!cond, extra: String(extra) });
+  const near = (a, b, eps = 1e-6) => Math.abs(a - b) <= eps;
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  async function waitFor(cond, tries = 600) {
+    for (let i = 0; i < tries; i++) { if (cond()) return true; await sleep(4); }
+    return !!cond();
+  }
+  const clone = x => JSON.parse(JSON.stringify(x));
+
+  // ── Fake HaApi over a Map (same seam as undo-test) ─────────────────────────
+  class FakeHa {
+    constructor(seed) {
+      this.map = new Map();
+      for (const [k, v] of Object.entries(seed || {})) this.map.set(k, clone(v));
+      this.states = {};
+      this._stateCbs = []; this._connCbs = [];
+    }
+    connect() {
+      for (const cb of this._connCbs) cb('connected');
+      for (const cb of this._stateCbs) cb(this.states, undefined);
+    }
+    onState(fn) { this._stateCbs.push(fn); }
+    onConn(fn) { this._connCbs.push(fn); }
+    callService() { return Promise.resolve(); }
+    async getHistory() { return {}; }
+    async getWeatherForecasts() { return null; }
+    async getDevices() { return []; }
+    async getEntityRegistry() { return []; }
+    async updateEntityRegistry() { return true; }
+    async getUserData(key) { return this.map.has(key) ? clone(this.map.get(key)) : null; }
+    async setUserData(key, value) { this.map.set(key, clone(value)); return true; }
+    async refreshStates() {}
+  }
+
+  function floor(id, name, extra = {}) {
+    return {
+      id, name, w: 12000, d: 10000,
+      walls: [], furniture: [], lights: [], switches: [], sensors: [], motionSensors: [],
+      roamers: [], envSensors: [], doors: [], windows: [], bg: null, rooms: [], bleProxies: [],
+      alarmPanels: [], safetySensors: [], robots: [], presenceZones: [], cameras: [],
+      groundAreas: [], voidAreas: [], ...extra,
+    };
+  }
+  const makeStore = (floors, extra = {}) => ({
+    v: 2, floors, currentFloorId: floors[0].id, activeSensorId: null,
+    coverage: true, imperial: false, showDetails: false, useRawTargets: false, ...extra,
+  });
+
+  const LEGACY = 'diorama';
+  const WK = ['diorama:wall:angleSnap', 'diorama:wall:gridSnap', 'diorama:wall:weld'];
+  function clearWallPrefs() { for (const k of WK) localStorage.removeItem(k); }
+  async function freshPlanner(store) {
+    localStorage.removeItem('diorama:store:v1');
+    localStorage.removeItem('diorama:configs');
+    // The prefs are device-local, so a previous block's toggle would otherwise
+    // leak into the next planner — each case opts in explicitly.
+    clearWallPrefs();
+    const p = new Planner();
+    p.connectWith(new FakeHa({ [LEGACY]: store }));
+    await waitFor(() => p.configIndex !== null && p.store.floors[0].id === store.floors[0].id);
+    return p;
+  }
+
+  // ── Canvas / view plumbing ────────────────────────────────────────────────
+  const canvas = document.getElementById('stage');
+  const view = { ox: 40, oy: 620, scale: 0.05 };  // 1 mm = 0.05 px
+  const rect = canvas.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  // Inverse of canvas-render.pxToMm, so an event lands on an exact mm point.
+  const evAt = (mx, my, opts = {}) => ({
+    clientX: rect.left + (mx * view.scale + view.ox) / dpr,
+    clientY: rect.top + (view.oy - my * view.scale) / dpr,
+    altKey: !!opts.alt, shiftKey: false, ctrlKey: false, metaKey: false,
+    button: opts.button ?? 0, buttons: 1,
+    preventDefault() {}, stopPropagation() {},
+  });
+  // Round-trip check: the harness itself must be exact enough that "raw mm
+  // preserved" assertions mean something.
+  {
+    const e = evAt(3456.7, 2345.6);
+    const back = { x: ((e.clientX - rect.left) * dpr - view.ox) / view.scale,
+                   y: (view.oy - (e.clientY - rect.top) * dpr) / view.scale };
+    ok('harness: evAt round-trips mm', near(back.x, 3456.7, 1e-6) && near(back.y, 2345.6, 1e-6),
+       `${back.x.toFixed(6)},${back.y.toFixed(6)}`);
+  }
+
+  // Draw a 2-vertex wall from `a` to `b`: move (preview) → click, move → click,
+  // then dblclick to finish. Returns the committed wall + the rubber-band chip
+  // length observed just before the second click.
+  function drawWall(p, a, b, opts = {}) {
+    p.setTool('wall');
+    onCanvasMouseMove(p, canvas, view, evAt(a.x, a.y, opts));
+    onCanvasClick(p, canvas, view, evAt(a.x, a.y, opts));
+    onCanvasMouseMove(p, canvas, view, evAt(b.x, b.y, opts));
+    const chips = liveDimChips(p);
+    const rubberLen = p.cursor ? distMM(p.drawingWall.points[p.drawingWall.points.length - 1], p.cursor) : NaN;
+    onCanvasClick(p, canvas, view, evAt(b.x, b.y, opts));
+    onCanvasDblClick(p, canvas, view, evAt(b.x, b.y, opts));
+    const f = p.floor();
+    return { wall: f.walls[f.walls.length - 1], rubberLen, chips };
+  }
+  const angOf = (w) => {
+    const a = w.points[0], b = w.points[1];
+    let d = Math.atan2(b.y - a.y, b.x - a.x) * 180 / Math.PI;
+    return ((d % 360) + 360) % 360;
+  };
+  const isGrid = (v) => near(v / WALL_GRID_MM, Math.round(v / WALL_GRID_MM), 1e-9);
+
+  try {
+    clearWallPrefs();
+
+    // ── (1) Defaults: absent keys = all ON ──────────────────────────────────
+    {
+      const p = await freshPlanner(makeStore([floor('f1', 'Home')]));
+      ok('1: angle snap defaults ON', p.wallAngleSnap === true, String(p.wallAngleSnap));
+      ok('1: grid snap defaults ON', p.wallGridSnap === true, String(p.wallGridSnap));
+      ok('1: weld defaults ON', p.wallWeld === true, String(p.wallWeld));
+    }
+
+    // ── (2) Angle snap: ON snaps to a 15° multiple, OFF keeps raw, Alt frees ─
+    // Target ≈52°: from (1000,1000) toward (1000+2000·cos52, 1000+2000·sin52).
+    const A = { x: 1000, y: 1000 };
+    const rad52 = 52 * Math.PI / 180;
+    const B52 = { x: A.x + 2000 * Math.cos(rad52), y: A.y + 2000 * Math.sin(rad52) };
+    {
+      const p = await freshPlanner(makeStore([floor('f1', 'Home')]));
+      const { wall } = drawWall(p, A, B52);
+      const deg = angOf(wall);
+      ok('2: angle snap ON → 45° (nearest 15° step to 52°)', near(deg, 45, 0.35), deg.toFixed(3));
+      ok('2: snapped angle is a 15° multiple', near(deg / 15, Math.round(deg / 15), 0.03), deg.toFixed(3));
+    }
+    {
+      const p = await freshPlanner(makeStore([floor('f1', 'Home')]));
+      p.setWallAngleSnap(false);
+      const { wall } = drawWall(p, A, B52);
+      const deg = angOf(wall);
+      ok('2: angle snap OFF → raw ~52°', near(deg, 52, 0.35), deg.toFixed(3));
+      ok('2: OFF is NOT a 15° multiple', !near(deg / 15, Math.round(deg / 15), 0.03), deg.toFixed(3));
+    }
+    {
+      const p = await freshPlanner(makeStore([floor('f1', 'Home')]));  // snap ON
+      const { wall } = drawWall(p, A, B52, { alt: true });
+      const deg = angOf(wall);
+      ok('2: Alt held with snap ON → raw ~52°', near(deg, 52, 1e-6), deg.toFixed(6));
+      ok('2: Alt did not persist the pref', p.wallAngleSnap === true, String(p.wallAngleSnap));
+    }
+
+    // ── (3) Grid snap: ON quantizes wall points, OFF preserves raw mm ────────
+    const RAW = { x: 1234.5, y: 2345.6 };
+    const RAW2 = { x: 4321.7, y: 2345.6 };  // same y ⇒ 0°, so the angle lock is a no-op
+    {
+      const p = await freshPlanner(makeStore([floor('f1', 'Home')]));
+      const { wall } = drawWall(p, RAW, RAW2);
+      ok('3: grid ON → both points on the wall grid',
+         wall.points.every(pt => isGrid(pt.x) && isGrid(pt.y)),
+         JSON.stringify(wall.points));
+      ok('3: grid ON → first point rounded to 1230/2350',
+         near(wall.points[0].x, 1230) && near(wall.points[0].y, 2350),
+         `${wall.points[0].x},${wall.points[0].y}`);
+    }
+    {
+      const p = await freshPlanner(makeStore([floor('f1', 'Home')]));
+      p.setWallGridSnap(false);
+      const { wall } = drawWall(p, RAW, RAW2);
+      ok('3: grid OFF → raw mm preserved on point 0',
+         near(wall.points[0].x, RAW.x, 1e-6) && near(wall.points[0].y, RAW.y, 1e-6),
+         `${wall.points[0].x},${wall.points[0].y}`);
+      ok('3: grid OFF → raw mm preserved on point 1',
+         near(wall.points[1].x, RAW2.x, 1e-6), String(wall.points[1].x));
+    }
+    {
+      const p = await freshPlanner(makeStore([floor('f1', 'Home')]));  // grid ON
+      const { wall } = drawWall(p, RAW, RAW2, { alt: true });
+      ok('3: Alt overrides grid ON → raw mm preserved',
+         near(wall.points[0].x, RAW.x, 1e-6) && near(wall.points[0].y, RAW.y, 1e-6),
+         `${wall.points[0].x},${wall.points[0].y}`);
+      ok('3: Alt did not persist the grid pref', p.wallGridSnap === true, String(p.wallGridSnap));
+    }
+
+    // ── (4) resolveWallPoint is the shared law (unit level) ─────────────────
+    {
+      const p = await freshPlanner(makeStore([floor('f1', 'Home')]));
+      const prev = { x: 0, y: 0 };
+      const rawPt = { x: 1234.5, y: 987.6 };
+      const on = resolveWallPoint(p, prev, null, rawPt, false);
+      const free = resolveWallPoint(p, prev, null, rawPt, true);
+      ok('4: helper ON → gridded', isGrid(on.x) && isGrid(on.y), `${on.x},${on.y}`);
+      ok('4: helper free → identity', near(free.x, rawPt.x, 1e-9) && near(free.y, rawPt.y, 1e-9),
+         `${free.x},${free.y}`);
+      p.setWallAngleSnap(false); p.setWallGridSnap(false);
+      const off = resolveWallPoint(p, prev, null, rawPt, false);
+      ok('4: both prefs OFF == free', near(off.x, free.x, 1e-9) && near(off.y, free.y, 1e-9),
+         `${off.x},${off.y}`);
+      ok('4: first vertex (no prev) still grids',
+         (() => { p.setWallGridSnap(true); const v = resolveWallPoint(p, null, null, rawPt, false);
+                  return isGrid(v.x) && isGrid(v.y); })(), '');
+    }
+
+    // ── (5) Live-dim chip agrees with the committed segment ─────────────────
+    {
+      const p = await freshPlanner(makeStore([floor('f1', 'Home')]));
+      const { wall, rubberLen, chips } = drawWall(p, A, B52);
+      const committed = distMM(wall.points[0], wall.points[1]);
+      ok('5: snap ON → rubber-band length == committed length',
+         near(rubberLen, committed, 1e-6), `${rubberLen.toFixed(4)} vs ${committed.toFixed(4)}`);
+      ok('5: a live-dim chip existed during the draw', chips.length >= 1, String(chips.length));
+      // The rubber chip is the LAST seg chip pushed by the draw-latch block.
+      const chipTxt = chips[chips.length - 1]?.text ?? '';
+      ok('5: chip text matches committed length',
+         chipTxt === `${(committed / 10).toFixed(1)} cm` || chipTxt.includes('m'),
+         `${chipTxt} (len ${committed.toFixed(1)}mm)`);
+    }
+    {
+      const p = await freshPlanner(makeStore([floor('f1', 'Home')]));
+      const { wall, rubberLen } = drawWall(p, A, B52, { alt: true });
+      const committed = distMM(wall.points[0], wall.points[1]);
+      ok('5: Alt → rubber-band length == committed length',
+         near(rubberLen, committed, 1e-6), `${rubberLen.toFixed(4)} vs ${committed.toFixed(4)}`);
+      ok('5: Alt → both equal the RAW 2000 mm drag', near(committed, 2000, 1e-6), committed.toFixed(6));
+    }
+    {
+      // Angle snap ON shortens/lengthens nothing about the AGREEMENT, but the
+      // snapped length must differ from raw (proof the chip tracks the snap).
+      const p = await freshPlanner(makeStore([floor('f1', 'Home')]));
+      const { wall, rubberLen } = drawWall(p, A, B52);
+      const committed = distMM(wall.points[0], wall.points[1]);
+      ok('5: snapped length differs from the raw 2000 mm', !near(committed, 2000, 0.5),
+         committed.toFixed(3));
+      ok('5: and the chip still agrees', near(rubberLen, committed, 1e-6), '');
+    }
+
+    // ── (6) Weld on a wall-vertex drag release ──────────────────────────────
+    // Existing wall W1 ends at (5000,5000). Drag W2's endpoint to 200 mm away.
+    const weldSetup = () => makeStore([floor('f1', 'Home', {
+      walls: [
+        { id: 'w1', points: [{ x: 5000, y: 2000 }, { x: 5000, y: 5000 }], kind: 'full' },
+        { id: 'w2', points: [{ x: 8000, y: 8000 }, { x: 7000, y: 7000 }], kind: 'full' },
+      ],
+    })]);
+    const DRAG_TO = { x: 5000, y: 5200 };  // 200 mm from w1's (5000,5000) endpoint
+    // Weld cases isolate welding from the angle lock: with the 15° snap on, the
+    // dragged vertex would slide along its neighbour's ray and land somewhere
+    // other than the drop point, which muddies "did it weld?".
+    const weldPlanner = async () => {
+      const p = await freshPlanner(weldSetup());
+      p.setWallAngleSnap(false);
+      return p;
+    };
+
+    function dragVertex(p, wallId, idx, to, opts = {}) {
+      const f = p.floor();
+      const w = f.walls.find(x => x.id === wallId);
+      p.setTool('select');
+      onCanvasMouseDown(p, canvas, view, evAt(w.points[idx].x, w.points[idx].y));
+      const started = p.drag?.kind === 'wallv' && p.drag.wallId === wallId && p.drag.idx === idx;
+      onCanvasMouseMove(p, canvas, view, evAt(to.x, to.y, opts));
+      onCanvasMouseUp(p, canvas, evAt(to.x, to.y, opts));
+      return { started, w: p.floor().walls.find(x => x.id === wallId) };
+    }
+
+    {
+      const p = await weldPlanner();
+      const { started, w } = dragVertex(p, 'w2', 1, DRAG_TO);
+      ok('6: wallv drag started', started, String(p.drag));
+      ok('6: weld ON → endpoint snapped onto (5000,5000)',
+         near(w.points[1].x, 5000) && near(w.points[1].y, 5000),
+         `${w.points[1].x},${w.points[1].y}`);
+    }
+    {
+      const p = await weldPlanner();
+      p.setWallWeld(false);
+      const { w } = dragVertex(p, 'w2', 1, DRAG_TO);
+      ok('6: weld OFF → endpoint stays at the drop (5000,5200)',
+         near(w.points[1].x, 5000, 1e-6) && near(w.points[1].y, 5200, 1e-6),
+         `${w.points[1].x},${w.points[1].y}`);
+    }
+    {
+      const p = await weldPlanner();  // weld ON
+      const OFFGRID = { x: 5003.7, y: 5202.4 };  // 203 mm from w1's endpoint
+      const { w } = dragVertex(p, 'w2', 1, OFFGRID, { alt: true });
+      ok('6: Alt at mouseup → no weld',
+         Math.abs(w.points[1].y - 5000) > 100, `${w.points[1].x},${w.points[1].y}`);
+      ok('6: Alt at mouseup → no grid re-snap either (raw mm kept)',
+         near(w.points[1].x, OFFGRID.x, 1e-6) && near(w.points[1].y, OFFGRID.y, 1e-6),
+         `${w.points[1].x},${w.points[1].y}`);
+    }
+    {
+      // Same drop WITHOUT Alt welds — isolating Alt as the only difference.
+      const p = await weldPlanner();
+      const { w } = dragVertex(p, 'w2', 1, { x: 5003.7, y: 5202.4 });
+      ok('6: same off-grid drop without Alt → welds + grids',
+         near(w.points[1].x, 5000) && near(w.points[1].y, 5000),
+         `${w.points[1].x},${w.points[1].y}`);
+    }
+    {
+      // State round-trip: OFF → ON re-enables welding for the same gap.
+      const p = await weldPlanner();
+      p.setWallWeld(false);
+      dragVertex(p, 'w2', 1, { x: 5000, y: 5400 });
+      p.setWallWeld(true);
+      const { w } = dragVertex(p, 'w2', 1, DRAG_TO);
+      ok('6: OFF → ON round-trip welds again',
+         near(w.points[1].x, 5000) && near(w.points[1].y, 5000),
+         `${w.points[1].x},${w.points[1].y}`);
+    }
+
+    // ── (7) Weld on the wall-draw finish (dblclick) ─────────────────────────
+    {
+      const p = await weldPlanner();
+      const { wall } = drawWall(p, { x: 5150, y: 5100 }, { x: 9000, y: 5100 });
+      ok('7: draw finish welds the start endpoint onto (5000,5000)',
+         near(wall.points[0].x, 5000) && near(wall.points[0].y, 5000),
+         `${wall.points[0].x},${wall.points[0].y}`);
+    }
+    {
+      const p = await weldPlanner();
+      p.setWallWeld(false);
+      const { wall } = drawWall(p, { x: 5150, y: 5100 }, { x: 9000, y: 5100 });
+      ok('7: weld OFF → draw finish leaves the endpoint put',
+         near(wall.points[0].x, 5150) && near(wall.points[0].y, 5100),
+         `${wall.points[0].x},${wall.points[0].y}`);
+    }
+    {
+      const p = await weldPlanner();
+      const { wall } = drawWall(p, { x: 5150, y: 5100 }, { x: 9000, y: 5100 }, { alt: true });
+      ok('7: Alt on the finishing dblclick → no weld',
+         near(wall.points[0].x, 5150) && near(wall.points[0].y, 5100),
+         `${wall.points[0].x},${wall.points[0].y}`);
+    }
+
+    // ── (8) Weld on a whole-wall move release ───────────────────────────────
+    function dragWallBody(p, wallId, from, to, opts = {}) {
+      p.setTool('select');
+      onCanvasMouseDown(p, canvas, view, evAt(from.x, from.y));
+      const started = p.drag?.kind === 'wallMove';
+      onCanvasMouseMove(p, canvas, view, evAt(to.x, to.y, opts));
+      onCanvasMouseUp(p, canvas, evAt(to.x, to.y, opts));
+      return { started, w: p.floor().walls.find(x => x.id === wallId) };
+    }
+    {
+      // w2 midpoint (7500,7500) moved so its (7000,7000) end lands 200 mm from
+      // w1's (5000,5000) endpoint.
+      const p = await weldPlanner();
+      const { started, w } = dragWallBody(p, 'w2', { x: 7500, y: 7500 },
+        { x: 7500 - 2000, y: 7500 - 2200 });
+      ok('8: wallMove drag started', started, '');
+      ok('8: weld ON → wall translated onto (5000,5000)',
+         near(w.points[1].x, 5000) && near(w.points[1].y, 5000),
+         `${w.points[1].x},${w.points[1].y}`);
+    }
+    {
+      const p = await weldPlanner();
+      p.setWallWeld(false);
+      const { w } = dragWallBody(p, 'w2', { x: 7500, y: 7500 }, { x: 5500, y: 5300 });
+      ok('8: weld OFF → wall stays where it was dropped',
+         Math.abs(w.points[1].y - 5000) > 100, `${w.points[1].x},${w.points[1].y}`);
+    }
+    {
+      const p = await weldPlanner();
+      const { w } = dragWallBody(p, 'w2', { x: 7500, y: 7500 }, { x: 5500, y: 5300 }, { alt: true });
+      ok('8: Alt at mouseup → wallMove does not weld',
+         Math.abs(w.points[1].y - 5000) > 100, `${w.points[1].x},${w.points[1].y}`);
+    }
+
+    // ── (9) Persistence: setters write localStorage; a fresh Planner reads ──
+    {
+      clearWallPrefs();
+      const p = await freshPlanner(makeStore([floor('f1', 'Home')]));
+      p.setWallAngleSnap(false); p.setWallGridSnap(false); p.setWallWeld(false);
+      ok('9: angleSnap persisted as 0', localStorage.getItem('diorama:wall:angleSnap') === '0',
+         String(localStorage.getItem('diorama:wall:angleSnap')));
+      ok('9: gridSnap persisted as 0', localStorage.getItem('diorama:wall:gridSnap') === '0', '');
+      ok('9: weld persisted as 0', localStorage.getItem('diorama:wall:weld') === '0', '');
+      const p2 = new Planner();
+      ok('9: fresh Planner reads all three back OFF',
+         p2.wallAngleSnap === false && p2.wallGridSnap === false && p2.wallWeld === false,
+         `${p2.wallAngleSnap}/${p2.wallGridSnap}/${p2.wallWeld}`);
+      p.setWallAngleSnap(true);
+      const p3 = new Planner();
+      ok('9: re-enable round-trips', p3.wallAngleSnap === true && p3.wallGridSnap === false,
+         `${p3.wallAngleSnap}/${p3.wallGridSnap}`);
+      clearWallPrefs();
+      const p4 = new Planner();
+      ok('9: cleared keys → back to all ON',
+         p4.wallAngleSnap && p4.wallGridSnap && p4.wallWeld, '');
+    }
+
+    // ── (10) Prefs never dirty the store (no undo step, byte-identical) ─────
+    {
+      clearWallPrefs();
+      const p = await freshPlanner(makeStore([floor('f1', 'Home')]));
+      const before = JSON.stringify(p.store);
+      const undoBefore = p.canUndo, redoBefore = p.canRedo;
+      let cfgEvents = 0;
+      p.addEventListener('config', () => { cfgEvents++; });
+      p.setWallAngleSnap(false); p.setWallGridSnap(false); p.setWallWeld(false);
+      ok('10: store byte-identical after toggling all three',
+         JSON.stringify(p.store) === before, '');
+      ok('10: canUndo unchanged', p.canUndo === undoBefore, `${undoBefore}→${p.canUndo}`);
+      ok('10: canRedo unchanged', p.canRedo === redoBefore, `${redoBefore}→${p.canRedo}`);
+      ok('10: undo stack still empty', p._undoStack.length === 0, String(p._undoStack.length));
+      ok('10: each setter emitted config (UI refresh)', cfgEvents === 3, String(cfgEvents));
+      ok('10: prefs are not Store fields',
+         !('wallAngleSnap' in p.store) && !('wallGridSnap' in p.store) && !('wallWeld' in p.store), '');
+    }
+
+    // ── (11) Scope: non-wall snapping untouched by the prefs ────────────────
+    {
+      clearWallPrefs();
+      const p = await freshPlanner(makeStore([floor('f1', 'Home')]));
+      p.setWallGridSnap(false); p.setWallAngleSnap(false); p.setWallWeld(false);
+      p.setTool('motion');
+      onCanvasClick(p, canvas, view, evAt(1234.5, 2345.6));
+      const m = p.floor().motionSensors[0];
+      ok('11: motion fixture still grid-snapped with wall prefs OFF',
+         m && near(m.x / 10, Math.round(m.x / 10)) && near(m.y / 10, Math.round(m.y / 10)),
+         m ? `${m.x},${m.y}` : 'none');
+      p.setTool('furniture');
+      onCanvasClick(p, canvas, view, evAt(3456.7, 4567.8));
+      const fu = p.floor().furniture[0];
+      ok('11: furniture drop still grid-snapped',
+         fu && near(fu.x / 10, Math.round(fu.x / 10)) && near(fu.y / 10, Math.round(fu.y / 10)),
+         fu ? `${fu.x},${fu.y}` : 'none');
+    }
+
+    clearWallPrefs();
+  } catch (err) {
+    ok('FATAL', false, String(err && err.stack || err));
+  }
+
+  const passed = results.filter(r => r.pass).length;
+  document.getElementById('rows').innerHTML = results.map(r =>
+    `<div class="row"><span class="name">${r.name}</span>` +
+    `<span class="${r.pass ? 'pass' : 'fail'}">${r.pass ? 'PASS' : 'FAIL'} <span class="extra">${r.extra}</span></span></div>`).join('');
+  const s = document.getElementById('summary');
+  s.textContent = `${passed}/${results.length} passed`;
+  s.className = passed === results.length ? 'okbg' : 'badbg';
+  document.title = `WALLEDIT ${passed === results.length ? 'PASS' : 'FAIL'} ${passed}/${results.length}`;
+</script>

@@ -397,14 +397,16 @@ export class Canvas2D extends LitElement {
     }
   }
 
-  private _onUp = () => {
+  private _onUp = (e?: Event) => {
     if (this._panFrom) {
       this._panFrom = null;
       this._panEnded = true;
       this._canvas.style.cursor = 'default';
       return;
     }
-    onCanvasMouseUp(this.planner, this._canvas);
+    // Pass the event so release-time wall behavior (grid re-snap + endpoint
+    // weld) can honour a held Alt. Touch releases pass nothing (no modifiers).
+    onCanvasMouseUp(this.planner, this._canvas, e as MouseEvent | undefined);
   };
 
   private _onKey = (e: KeyboardEvent) => {

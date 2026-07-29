@@ -395,6 +395,28 @@ export function connectWallEnds(
   return changed;
 }
 
+// ── Wall point resolution (angle lock + grid quantization) ──────────────────
+// Wall vertices have always been quantized to 10 mm (finer than the 100 mm
+// GRID_MM used for free-placed fixtures) after the 15° angle lock.
+export const WALL_GRID_MM = 10;
+
+// THE single place a raw cursor becomes a wall vertex. Both snaps are gated by
+// their device-local preference and both are bypassed while `free` (Alt held)
+// is true. The mousemove cursor PREVIEW and the click COMMIT call this with the
+// same inputs, so the live-dimension chip measures exactly the point that would
+// be committed — the chip and the commit can't diverge by construction.
+// `prev`/`next` are the vertex's neighbours (a draw passes prev only; a middle
+// vertex drag passes both so BOTH its segments stay on-angle).
+export function resolveWallPoint(
+  p: Planner, prev: Vec2 | null, next: Vec2 | null, raw: Vec2, free: boolean,
+): Vec2 {
+  const angled = (!free && p.wallAngleSnap && (prev || next))
+    ? snapVertex15(prev, next, raw) : raw;
+  return (!free && p.wallGridSnap)
+    ? { x: snap(angled.x, WALL_GRID_MM), y: snap(angled.y, WALL_GRID_MM) }
+    : { x: angled.x, y: angled.y };
+}
+
 // Open the alarm control modal for a panel id (bubbles to app.ts). Used from
 // both the edit click-vs-drag path and the kiosk click branch.
 function openAlarmModal(canvas: HTMLCanvasElement, id: string): void {
@@ -850,13 +872,16 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
 
 export function onCanvasMouseMove(p: Planner, canvas: HTMLCanvasElement, view: View, e: MouseEvent): void {
   const raw = pxToMm(canvas, view, e);
-  // While drawing a wall and at least one vertex is placed, snap the live
-  // cursor preview to a 15° increment from the previous vertex so the
-  // segment angle matches what gets committed on click.
+  // While the wall tool is armed, resolve the live cursor preview through the
+  // SAME helper the click commit uses (15° angle lock off the previous vertex,
+  // then the 10 mm quantization — each gated by its preference, both bypassed
+  // while Alt is held), so the rubber band + its live-dimension chip show
+  // exactly the segment that would be committed.
   let mm = raw;
-  if (p.tool === 'wall' && p.drawingWall && p.drawingWall.points.length >= 1) {
-    const prev = p.drawingWall.points[p.drawingWall.points.length - 1];
-    mm = snapVertex15(prev, null, raw);
+  if (p.tool === 'wall') {
+    const pts = p.drawingWall?.points;
+    const prev = pts && pts.length ? pts[pts.length - 1] : null;
+    mm = resolveWallPoint(p, prev, null, raw, e.altKey);
   }
   p.cursor = mm;
 
@@ -1151,11 +1176,11 @@ export function onCanvasMouseMove(p: Planner, canvas: HTMLCanvasElement, view: V
           // Hold 15° increments while editing, same as drawing: an endpoint
           // snaps its one segment's angle (length follows the cursor); a
           // middle vertex intersects both neighbors' snapped rays so BOTH
-          // segments stay on-angle.
+          // segments stay on-angle. Both snaps go through resolveWallPoint, so
+          // the preferences + the Alt override apply exactly as in a draw.
           const prev = drag.idx > 0 ? w.points[drag.idx - 1] : null;
           const next = drag.idx < w.points.length - 1 ? w.points[drag.idx + 1] : null;
-          const sv = snapVertex15(prev, next, mm);
-          w.points[drag.idx] = { x: snap(sv.x, 10), y: snap(sv.y, 10) };
+          w.points[drag.idx] = resolveWallPoint(p, prev, next, mm, e.altKey);
         }
         break;
       }
@@ -1420,8 +1445,12 @@ export function onCanvasMouseMove(p: Planner, canvas: HTMLCanvasElement, view: V
   } else { canvas.style.cursor = 'crosshair'; }
 }
 
-export function onCanvasMouseUp(p: Planner, canvas: HTMLCanvasElement): void {
+// `e` is the driving mouseup (absent on the touch path, which has no modifier
+// keys): holding Alt at RELEASE suppresses the wall grid re-snap + endpoint
+// welding for that drop, exactly as it does mid-drag.
+export function onCanvasMouseUp(p: Planner, canvas: HTMLCanvasElement, e?: MouseEvent): void {
   if (!p.drag) return;
+  const free = !!e?.altKey;
   const f = p.floor();
   const sa = p.activeSensor();
   const drag = p.drag;
@@ -1674,8 +1703,10 @@ export function onCanvasMouseUp(p: Planner, canvas: HTMLCanvasElement): void {
   } else if (drag.kind === 'wallv') {
     const w = f.walls.find(x => x.id === drag.wallId);
     if (w) {
-      w.points = w.points.map(pt => ({ x: snap(pt.x, 10), y: snap(pt.y, 10) }));
-      connectWallEnds(f, w);
+      if (p.wallGridSnap && !free) {
+        w.points = w.points.map(pt => ({ x: snap(pt.x, WALL_GRID_MM), y: snap(pt.y, WALL_GRID_MM) }));
+      }
+      if (p.wallWeld && !free) connectWallEnds(f, w);
     }
     p.save();
   } else if (drag.kind === 'fixture') {
@@ -1708,7 +1739,7 @@ export function onCanvasMouseUp(p: Planner, canvas: HTMLCanvasElement): void {
     }
   } else if (drag.kind === 'wallMove') {
     const w = f.walls.find(x => x.id === drag.wallId);
-    if (w) connectWallEnds(f, w, true);
+    if (w && p.wallWeld && !free) connectWallEnds(f, w, true);
     p.save();
   } else if (drag.kind === 'furnMove' || drag.kind === 'furnCorner') {
     const piece = f.furniture[drag.idx];
@@ -2350,17 +2381,14 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
     return;
   }
   if (p.tool === 'wall') {
-    // First vertex: free placement. Subsequent vertices snap to a 15°
-    // increment from the previous vertex via snapVertex15 (preserves cursor
-    // distance along the snapped ray).
-    let v: Vec2;
-    if (!p.drawingWall || p.drawingWall.points.length === 0) {
-      v = { x: snap(mm.x, 10), y: snap(mm.y, 10) };
-    } else {
-      const prev = p.drawingWall.points[p.drawingWall.points.length - 1];
-      const snapped = snapVertex15(prev, null, mm);
-      v = { x: snap(snapped.x, 10), y: snap(snapped.y, 10) };
-    }
+    // First vertex: no angle reference, so only the grid snap applies.
+    // Subsequent vertices snap to a 15° increment from the previous vertex
+    // (preserving cursor distance along the snapped ray) then to the grid —
+    // both via resolveWallPoint, the same call the mousemove preview makes, so
+    // the committed vertex equals the previewed one. Alt bypasses both.
+    const pts0 = p.drawingWall?.points;
+    const prev = pts0 && pts0.length ? pts0[pts0.length - 1] : null;
+    const v: Vec2 = resolveWallPoint(p, prev, null, mm, e.altKey);
     if (!p.drawingWall) p.drawingWall = { points: [v] };
     else p.drawingWall.points.push(v);
     p.emitConfig();
@@ -2754,7 +2782,8 @@ export function onCanvasDblClick(p: Planner, canvas: HTMLCanvasElement, view: Vi
     p.drawingWall.id = newId('w');
     const fl = p.floor();
     fl.walls.push({ ...(p.drawingWall as { id: string; points: Vec2[] }), kind: p.pendingWallKind });
-    connectWallEnds(fl, fl.walls[fl.walls.length - 1]);
+    // Endpoint welding is a preference; Alt on the finishing dblclick skips it.
+    if (p.wallWeld && !e.altKey) connectWallEnds(fl, fl.walls[fl.walls.length - 1]);
     p.drawingWall = null;
     p.save();
     p.setTool('select');

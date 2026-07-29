@@ -448,6 +448,7 @@ export class Sidebar extends LitElement {
               </select>
             </div>
           ` : nothing}
+          ${this._wallEditPrefs()}
           ${p.tool === 'furniture' ? html`
             <div class="row" style="margin-top:6px">
               <label>Type</label>
@@ -688,6 +689,33 @@ export class Sidebar extends LitElement {
   };
 
   // ── Tool hint ─────────────────────────────────────────────────────────
+  // Wall-editing preferences: 15° angle lock, wall-point grid snap, endpoint
+  // welding. DEVICE-LOCAL (localStorage, never the store), so toggling them
+  // costs no undo step and never syncs. Shown whenever the Tools section is
+  // open — NOT only under the Wall tool — because welding also fires from
+  // Select-mode wall drags.
+  private _wallEditPrefs() {
+    const p = this.planner;
+    const cb = (label: string, on: boolean, set: (v: boolean) => void) => html`
+      <label style="display:flex;align-items:center;gap:5px;font-size:11px;cursor:pointer">
+        <input type="checkbox" .checked=${on}
+               @change=${(e: Event) => { set((e.target as HTMLInputElement).checked); this.requestUpdate(); }}>
+        ${label}
+      </label>`;
+    return html`
+      <div style="margin-top:8px;padding-top:6px;border-top:1px solid var(--border)">
+        <div style="font-size:10px;color:var(--text-dim);margin-bottom:4px">Wall editing</div>
+        <div style="display:flex;flex-direction:column;gap:3px">
+          ${cb('15° angle snap', p.wallAngleSnap, v => p.setWallAngleSnap(v))}
+          ${cb('Grid snap', p.wallGridSnap, v => p.setWallGridSnap(v))}
+          ${cb('Weld ends', p.wallWeld, v => p.setWallWeld(v))}
+        </div>
+        <div style="color:var(--text-dim);font-size:10px;margin-top:4px;font-style:italic;line-height:1.4">
+          Hold Alt while drawing/dragging for free placement.
+        </div>
+      </div>`;
+  }
+
   private _toolHint(tool: Tool): string {
     switch (tool) {
       case 'wall': return 'Click to add vertices. Double-click to finish. (Tip: in Select mode, double-click a wall to cycle full → half → railing → invisible.)';
