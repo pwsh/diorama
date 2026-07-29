@@ -268,6 +268,17 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Live drag dimension readouts** (2026-07-28, user-requested: "when
+  resizing objects or drawing walls or other areas, show the
+  dimensions… in real time until releasing the anchor"; unreleased —
+  on main past v0.39.0). Pure `liveDimChips(p)` + `drawLiveDims`
+  (last in drawAll, edit-only): fmtLen imperial/metric chips during
+  wall draw (rubber band + dimmed committed), wall/polygon/LD2450
+  vertex drags, floor-edge + furniture-corner + bg-corner resizes
+  (W × D), all draw latches; ruler/env/move drags deliberately
+  skipped; two old ad-hoc readouts consolidated in. ruler-dims-test
+  63→104 (RULERDIMS PASS 104/104); sensor-focus 14/14,
+  action-button 32/32 held.
 - **Stairs family "open underneath" option** (2026-07-28,
   user-requested: "add a stair option to be open underneath and not
   closed off"; released in v0.39.0).

@@ -339,6 +339,9 @@ export function drawAll(ctx: CanvasRenderingContext2D, p: Planner, view: View,
   if (on(L.dimensions)) { drawWallDimensions(ctx, p, view); drawRulers(ctx, p, view); }
   drawAlignGuides(ctx, p, view);
   drawFloorEditHandles(ctx, p, view);
+  // Live dimension readouts for the in-flight drag / draw latch — LAST, over
+  // everything, edit mode only, and gone the moment the anchor is released.
+  drawLiveDims(ctx, p, view);
 }
 
 // Live aircraft (ADS-B, roadmap P4). Display-only — no hit test, nothing
@@ -623,20 +626,8 @@ function drawFloorEditHandles(ctx: CanvasRenderingContext2D, p: Planner, view: V
     else if (dragging === 'top') { ctx.moveTo(left, topS); ctx.lineTo(right, topS); }
     else { ctx.moveTo(left, botS); ctx.lineTo(right, botS); }
     ctx.stroke();
-    const label = `${fmtLen(f.w, p.store.imperial)} × ${fmtLen(f.d, p.store.imperial)}`;
-    ctx.font = `${12 * dpr}px sans-serif`;
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    let lx = midX, ly = midY;
-    const off = 18 * dpr;
-    if (dragging === 'left') lx = left + off * 3;
-    else if (dragging === 'right') lx = right - off * 3;
-    else if (dragging === 'top') ly = topS + off;
-    else ly = botS - off;
-    const tw = ctx.measureText(label).width + 10 * dpr;
-    ctx.fillStyle = 'rgba(0,0,0,0.78)';
-    ctx.fillRect(lx - tw / 2, ly - 9 * dpr, tw, 18 * dpr);
-    ctx.fillStyle = '#ffd54f';
-    ctx.fillText(label, lx, ly);
+    // The live `W × D` readout itself comes from the single live-dimension
+    // site (liveDimChips / drawLiveDims, end of drawAll).
   }
   ctx.restore();
 }
@@ -990,9 +981,10 @@ const RULER_COLOR = '#ffb74d';   // orange, matches the vertex-handle affordance
 // A dark distance chip centered at a px point (screen-fixed size), optionally
 // rotated so it reads along a dimension line (upside-down text is flipped).
 function drawDimChip(ctx: CanvasRenderingContext2D, dpr: number, px: number, py: number,
-                     text: string, color: string, angle = 0, big = false): void {
+                     text: string, color: string, angle = 0, big = false, alpha = 1): void {
   const fs = (big ? 12 : 11) * dpr;
   ctx.save();
+  if (alpha !== 1) ctx.globalAlpha = alpha;
   ctx.translate(px, py);
   let a = angle;
   if (a > Math.PI / 2) a -= Math.PI; else if (a < -Math.PI / 2) a += Math.PI;
@@ -1006,6 +998,187 @@ function drawDimChip(ctx: CanvasRenderingContext2D, dpr: number, px: number, py:
   ctx.strokeRect(-w / 2, -h / 2, w, h);
   ctx.fillStyle = '#fff';
   ctx.fillText(text, 0, 0);
+  ctx.restore();
+}
+
+// ── Live dimension readouts (in-flight drags / draw latches) ───────────────
+// One chip family, one draw site. While an EDIT-mode interaction that changes a
+// SIZE is in flight — drawing a wall / area, dragging a vertex, resizing a piece
+// or the floor rect — the affected lengths are shown as screen-space chips
+// formatted with the SAME `fmtLen` the ruler + wall-dimension overlays use, so
+// metric / imperial always agree. Nothing persists: the chips exist only while
+// `p.drag` / a `drawing*` latch is set, and vanish on release.
+//
+// `liveDimChips` is the pure computation (world-mm anchors + text); `drawLiveDims`
+// is the dumb painter. Keeping them split is what makes the behavior testable
+// without a canvas.
+export interface LiveDimChip {
+  x: number;        // anchor, world mm
+  y: number;        // anchor, world mm
+  text: string;     // already formatted via fmtLen (respects store.imperial)
+  dim?: boolean;    // context (already-committed) rather than the live edge
+}
+
+const LIVE_DIM_COLOR = '#90caf9';   // matches the wall/structure dimension family
+
+// Chips for whatever size-changing interaction is currently in flight. Empty
+// outside edit mode and whenever nothing is being drawn / resized.
+//
+// DELIBERATE SKIPS: pure MOVE drags (furniture, fixtures, whole walls, zone
+// moves, bg move) — moving isn't resizing; rotate drags — no length changes;
+// `rulerEnd` — the ruler already paints its own live measurement chip;
+// `envResize` — that handle scales a screen-space chip by a unitless factor,
+// not a physical dimension.
+export function liveDimChips(p: Planner): LiveDimChip[] {
+  const out: LiveDimChip[] = [];
+  if (p.uiMode !== 'edit') return out;
+  const f = p.floor();
+  const imp = p.store.imperial;
+  const seg = (a: Vec2, b: Vec2, dim?: boolean) => {
+    out.push({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, text: fmtLen(distMM(a, b), imp), dim });
+  };
+  // Two edges adjoining vertex `i` of a polygon (`closed` wraps; an open
+  // polyline just skips the missing side). n < 3 closed = one edge only.
+  const adjoining = (pts: Vec2[], i: number, closed: boolean) => {
+    const n = pts.length;
+    if (n < 2 || !pts[i]) return;
+    const prev = i > 0 ? i - 1 : (closed && n > 2 ? n - 1 : -1);
+    const next = i < n - 1 ? i + 1 : (closed && n > 2 ? 0 : -1);
+    if (prev >= 0) seg(pts[prev], pts[i]);
+    if (next >= 0) seg(pts[i], pts[next]);
+  };
+  // Rubber-band edge of a draw latch: last committed point → live cursor.
+  const rubber = (pts: Vec2[] | undefined) => {
+    if (p.cursor && pts && pts.length) seg(pts[pts.length - 1], p.cursor);
+  };
+  const box = (cx: number, cy: number, w: number, h: number) => {
+    out.push({ x: cx, y: cy, text: `${fmtLen(w, imp)} × ${fmtLen(h, imp)}` });
+  };
+
+  // ── Draw latches ────────────────────────────────────────────────────────
+  const dw = p.drawingWall;
+  if (dw?.points.length) {
+    // Committed segments stay visible but dimmed; the rubber band is live.
+    for (let i = 0; i < dw.points.length - 1; i++) seg(dw.points[i], dw.points[i + 1], true);
+    rubber(dw.points);
+  }
+  rubber(p.drawingPresenceZone?.points);
+  rubber(p.drawingGroundArea?.points);
+  rubber(p.drawingVoidArea?.points);
+  rubber(p.drawingPoolArea?.points);
+  rubber(p.drawingPath?.points);
+  rubber(p.drawingExclusion?.points);
+  // LD2450 zone editor: verts + mousePos are SENSOR-LOCAL mm (distance is
+  // rotation-invariant, so only the chip anchor needs mapping to world).
+  const ez = p.editZone;
+  if (ez?.mousePos && ez.verts.length) {
+    const sa = p.activeSensor();
+    if (sa) {
+      const a = ez.verts[ez.verts.length - 1], b = ez.mousePos;
+      const wpt = localToWorld(sa, (a.x + b.x) / 2, (a.y + b.y) / 2);
+      out.push({ x: wpt.x, y: wpt.y, text: fmtLen(distMM(a, b), imp) });
+    }
+  }
+
+  // ── In-flight drags ─────────────────────────────────────────────────────
+  const d = p.drag;
+  if (!d) return out;
+  switch (d.kind) {
+    case 'wallv': {
+      const w = f.walls.find(x => x.id === d.wallId);
+      if (w) {
+        // Every segment of the dragged wall; the two the vertex touches read
+        // full-strength, the rest stay as dimmed context.
+        for (let i = 0; i < w.points.length - 1; i++) {
+          seg(w.points[i], w.points[i + 1], i !== d.idx && i !== d.idx - 1);
+        }
+      }
+      break;
+    }
+    case 'floorEdge': {
+      // W × D at the dragged edge's midpoint (world +Y up ⇒ 'top' is y = d).
+      const mx = d.edge === 'left' ? 0 : d.edge === 'right' ? f.w : f.w / 2;
+      const my = d.edge === 'bottom' ? 0 : d.edge === 'top' ? f.d : f.d / 2;
+      box(mx, my, f.w, f.d);
+      break;
+    }
+    case 'furnCorner': {
+      const it = f.furniture[d.idx];
+      if (it) box(it.x, it.y, it.w, it.h);
+      break;
+    }
+    case 'bgCorner': {
+      const bg = f.bg;
+      if (bg) box(bg.x, bg.y, bg.w, bg.h);
+      break;
+    }
+    case 'pzoneVert': {
+      const z = (f.presenceZones ?? []).find(x => x.id === d.id);
+      if (z) adjoining(z.points, d.idx, true);
+      break;
+    }
+    case 'groundVert': {
+      const g = (f.groundAreas ?? []).find(x => x.id === d.id);
+      if (g) adjoining(g.points, d.idx, true);
+      break;
+    }
+    case 'voidVert': {
+      const v = (f.voidAreas ?? []).find(x => x.id === d.id);
+      if (v) adjoining(v.points, d.idx, true);
+      break;
+    }
+    case 'poolVert': {
+      const pl = (f.pools ?? []).find(x => x.id === d.id);
+      if (pl) adjoining(pl.points, d.idx, true);
+      break;
+    }
+    case 'pathVert': {
+      // The centerline is an OPEN polyline — no wrap-around edge.
+      const g = (f.groundAreas ?? []).find(x => x.id === d.id);
+      if (g?.path) adjoining(g.path.centerline, d.idx, false);
+      break;
+    }
+    case 'vert': {
+      const sa = p.activeSensor();
+      const zs = sa ? p.zonesBy[sa.id] : null;
+      const zone = zs ? (d.prefix === 'iz' ? zs.inclusion : zs.filter)[d.zi] : null;
+      if (sa && zone) {
+        const pts = zone.vertices;
+        const n = pts.length;
+        if (n >= 2 && pts[d.vi]) {
+          const push = (a: Vec2, b: Vec2) => {
+            const wpt = localToWorld(sa, (a.x + b.x) / 2, (a.y + b.y) / 2);
+            out.push({ x: wpt.x, y: wpt.y, text: fmtLen(distMM(a, b), imp) });
+          };
+          const prev = d.vi > 0 ? d.vi - 1 : (n > 2 ? n - 1 : -1);
+          const next = d.vi < n - 1 ? d.vi + 1 : (n > 2 ? 0 : -1);
+          if (prev >= 0) push(pts[prev], pts[d.vi]);
+          if (next >= 0) push(pts[d.vi], pts[next]);
+        }
+      }
+      break;
+    }
+    default: break;
+  }
+  return out;
+}
+
+// Dumb painter for `liveDimChips` — screen-space chips, never scaled by zoom,
+// never rotated (they must stay readable at any drag angle), clamped a few px
+// inside the canvas so an off-screen anchor still reports.
+function drawLiveDims(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
+  const chips = liveDimChips(p);
+  if (!chips.length) return;
+  const dpr = window.devicePixelRatio || 1;
+  const cw = ctx.canvas.width, ch = ctx.canvas.height;
+  const mx = 44 * dpr, my = 14 * dpr;
+  ctx.save();
+  for (const c of chips) {
+    const pt = mmToPx(view, c.x, c.y);
+    const px = Math.max(mx, Math.min(cw - mx, pt.x));
+    const py = Math.max(my, Math.min(ch - my, pt.y));
+    drawDimChip(ctx, dpr, px, py, c.text, LIVE_DIM_COLOR, 0, false, c.dim ? 0.5 : 1);
+  }
   ctx.restore();
 }
 
@@ -3443,21 +3616,8 @@ function drawWalls(ctx: CanvasRenderingContext2D, p: Planner, view: View): void 
         ctx.strokeRect(pt.x - 4, pt.y - 4, 8, 8);
       }
     }
-    if (p.drag?.kind === 'wallv' && p.drag.wallId === w.id) {
-      ctx.fillStyle = '#90caf9'; ctx.font = `${10 * dpr}px sans-serif`;
-      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      for (let i = 0; i < w.points.length - 1; i++) {
-        const a2 = w.points[i], b2 = w.points[i + 1];
-        const mid = mmToPx(view, (a2.x + b2.x) / 2, (a2.y + b2.y) / 2);
-        const len = distMM(a2, b2);
-        const txt = fmtLen(len, p.store.imperial);
-        const w2 = ctx.measureText(txt).width + 6;
-        ctx.fillStyle = 'rgba(0,0,0,0.7)';
-        ctx.fillRect(mid.x - w2 / 2, mid.y - 9, w2, 18);
-        ctx.fillStyle = '#90caf9';
-        ctx.fillText(txt, mid.x, mid.y + 1);
-      }
-    }
+    // (Wall-vertex drag length chips moved to the single live-dimension site —
+    // see liveDimChips / drawLiveDims at the end of drawAll.)
   }
   // In-progress wall
   if (p.drawingWall?.points.length) {

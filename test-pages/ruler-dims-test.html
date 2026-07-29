@@ -23,6 +23,7 @@
        T=$(mktemp -d); cp -r src/* "$T"/
        cp test-pages/fake-avatar-store.ts "$T"/avatar-store.ts
        npx esbuild "$T"/planner.ts --bundle --format=esm --outfile="$H"/planner.mod.js
+       npx esbuild "$T"/canvas-render.ts --bundle --format=esm --outfile="$H"/canvas-render.mod.js
      Run headless (serve over http — Chrome blocks dynamic module imports on file://):
        (cd "$H" && python3 -m http.server 8795 &)
        google-chrome --headless=new --disable-gpu --use-angle=swiftshader \
@@ -33,8 +34,12 @@
   const G = await import('./geometry.mod.js' + V);
   const { segSegDistance, polylineClosestPair, wallClearance, furnitureClearance,
           resolveRulerEnds, rulerSetLength, outerWallSegments, wallDimSide,
-          structureExtents, closedWallLoops } = G;
+          structureExtents, closedWallLoops, fmtLen } = G;
   const { Planner } = await import('./planner.mod.js' + V);
+  // Live dimension chips: pure computation (liveDimChips) + the real painter
+  // through drawAll. canvas-render imports Planner TYPE-only, so the bundle is
+  // standalone and reads the planner instance as plain state.
+  const { liveDimChips, drawAll, computeView } = await import('./canvas-render.mod.js' + V);
 
   const results = [];
   const ok = (name, cond, extra = '') => results.push({ name, pass: !!cond, extra: String(extra) });
@@ -311,6 +316,175 @@
       ok('10G markNewlyPlaced heats selection', pd.selectionHot === true, pd.selectionHot);
       await pd.newConfig('t2');
       ok('10H load clears newlyPlacedFocus', pd.newlyPlacedFocus === null, `${pd.newlyPlacedFocus}`);
+    }
+
+    // ═══ 11. Live dimension chips (in-flight drags / draw latches) ═══
+    document.getElementById('rows').insertAdjacentHTML('beforeend', '<h2>11. live dimension chips</h2>');
+    {
+      const texts = cs => cs.map(c => c.text);
+      const live = cs => cs.filter(c => !c.dim);
+      const dimmed = cs => cs.filter(c => c.dim);
+
+      // 11A. nothing in flight → no chips at all.
+      const p0 = await mkPlanner([baseFloor()]);
+      ok('11A idle → no chips', liveDimChips(p0).length === 0, liveDimChips(p0).length);
+
+      // 11B/C. wall draw latch: committed segments dimmed, rubber band live.
+      const pw = await mkPlanner([baseFloor()]);
+      pw.setTool('wall');
+      pw.drawingWall = { points: [P(0,0), P(3000,0)] };
+      pw.cursor = P(3000, 4000);
+      const cw = liveDimChips(pw);
+      ok('11B wall draw → 2 chips (1 committed + rubber band)', cw.length === 2, texts(cw).join(' | '));
+      ok('11B committed segment dimmed', dimmed(cw).length === 1 && dimmed(cw)[0].text === '3 m 0.0 cm', texts(dimmed(cw)).join());
+      ok('11B rubber band live + metric', live(cw).length === 1 && live(cw)[0].text === '4 m 0.0 cm', texts(live(cw)).join());
+      ok('11B chip anchored at segment midpoint',
+        near(live(cw)[0].x, 3000) && near(live(cw)[0].y, 2000), `${live(cw)[0].x},${live(cw)[0].y}`);
+      // same geometry, imperial → ft/in, from the SAME fmtLen
+      pw.store.imperial = true;
+      const cwI = liveDimChips(pw);
+      ok('11C imperial rubber band reads ft/in',
+        live(cwI)[0].text === fmtLen(4000, true) && /'/.test(live(cwI)[0].text), live(cwI)[0].text);
+      ok('11C imperial committed reads ft/in', dimmed(cwI)[0].text === fmtLen(3000, true), dimmed(cwI)[0].text);
+      pw.store.imperial = false;
+      // no cursor yet (first click not yet moved) → only the committed chip
+      pw.cursor = null;
+      ok('11C no cursor → rubber band suppressed', liveDimChips(pw).length === 1, liveDimChips(pw).length);
+
+      // 11D. wall VERTEX drag: every segment reported, the two adjoining live.
+      const pv = await mkPlanner([baseFloor({ walls: [{ id:'w1', points:[P(0,0), P(2000,0), P(2000,1000), P(2000,4000)] }] })]);
+      pv.drag = { kind:'wallv', wallId:'w1', idx:1, startMm:P(2000,0), startPts:[] };
+      const cv = liveDimChips(pv);
+      ok('11D wallv → one chip per segment', cv.length === 3, texts(cv).join(' | '));
+      ok('11D adjoining segments live', live(cv).length === 2, texts(live(cv)).join(' | '));
+      ok('11D far segment dimmed', dimmed(cv).length === 1 && dimmed(cv)[0].text === '3 m 0.0 cm', texts(dimmed(cv)).join());
+
+      // 11E. floor EDGE drag → one W × D chip at the dragged edge midpoint.
+      const pf = await mkPlanner([baseFloor({ w: 8000, d: 5000 })]);
+      pf.drag = { kind:'floorEdge', edge:'right', startClient:P(0,0), startScale:1,
+                  startW:8000, startD:5000, startBbox:null, applied:P(0,0) };
+      const cf = liveDimChips(pf);
+      ok('11E floorEdge → single W × D chip', cf.length === 1, texts(cf).join());
+      ok('11E floor chip text', cf[0].text === `${fmtLen(8000,false)} × ${fmtLen(5000,false)}`, cf[0].text);
+      ok('11E right-edge anchor', near(cf[0].x, 8000) && near(cf[0].y, 2500), `${cf[0].x},${cf[0].y}`);
+      pf.store.imperial = true;
+      ok('11E floor chip imperial', liveDimChips(pf)[0].text === `${fmtLen(8000,true)} × ${fmtLen(5000,true)}`, liveDimChips(pf)[0].text);
+      pf.store.imperial = false;
+      pf.drag.edge = 'top';
+      ok('11E top-edge anchor (world +Y up)', near(liveDimChips(pf)[0].y, 5000), liveDimChips(pf)[0].y);
+
+      // 11F. ground-area vertex drag → the two adjoining polygon edges (closed).
+      const pg = await mkPlanner([baseFloor({
+        groundAreas: [{ id:'g1', kind:'grass', points:[P(0,0), P(2000,0), P(2000,2000), P(0,2000)] }],
+      })]);
+      pg.drag = { kind:'groundVert', id:'g1', idx:1, startMm:P(2000,0), startPts:[] };
+      const cg = liveDimChips(pg);
+      ok('11F groundVert → 2 adjoining edges', cg.length === 2 && live(cg).length === 2, texts(cg).join(' | '));
+      ok('11F both edges 2 m', cg.every(c => c.text === '2 m 0.0 cm'), texts(cg).join(' | '));
+      // wrap-around: dragging vertex 0 still gets the closing edge
+      pg.drag.idx = 0;
+      ok('11F vertex 0 wraps to the closing edge', liveDimChips(pg).length === 2, liveDimChips(pg).length);
+
+      // 11G. ground-area DRAW latch → rubber band only.
+      const pgd = await mkPlanner([baseFloor()]);
+      pgd.drawingGroundArea = { points: [P(0,0), P(1000,0)] };
+      pgd.cursor = P(1000, 2500);
+      const cgd = liveDimChips(pgd);
+      ok('11G ground draw → 1 rubber-band chip', cgd.length === 1 && cgd[0].text === '2 m 50.0 cm', texts(cgd).join());
+
+      // 11H. path centerline vertex (OPEN polyline — no wrap) + path draw latch.
+      const pp = await mkPlanner([baseFloor({
+        groundAreas: [{ id:'pa', kind:'concrete', points:[P(0,0),P(1,0),P(1,1)],
+                        path:{ centerline:[P(0,0), P(3000,0), P(3000,1500)], width:1000 } }],
+      })]);
+      pp.drag = { kind:'pathVert', id:'pa', idx:2, startMm:P(3000,1500), startPts:[] };
+      ok('11H pathVert at the END → 1 edge (open polyline)', liveDimChips(pp).length === 1, liveDimChips(pp).length);
+      pp.drag.idx = 1;
+      ok('11H pathVert in the middle → 2 edges', liveDimChips(pp).length === 2, liveDimChips(pp).length);
+      pp.drag = null;
+      pp.drawingPath = { points: [P(0,0)] }; pp.cursor = P(0, 1200);
+      ok('11H path draw rubber band', liveDimChips(pp).length === 1 && liveDimChips(pp)[0].text === '1 m 20.0 cm', texts(liveDimChips(pp)).join());
+
+      // 11I. remaining polygon latches + vertex kinds (pool / void / pzone / exclusion).
+      const pmisc = await mkPlanner([baseFloor({
+        pools: [{ id:'po', kind:'pool', points:[P(0,0),P(1000,0),P(1000,1000),P(0,1000)] }],
+        voidAreas: [{ id:'vo', points:[P(0,0),P(500,0),P(500,500)] }],
+        presenceZones: [{ id:'pz', points:[P(0,0),P(700,0),P(700,700)] }],
+      })]);
+      pmisc.drag = { kind:'poolVert', id:'po', idx:0, startMm:P(0,0), startPts:[] };
+      ok('11I poolVert → 2 edges', liveDimChips(pmisc).length === 2, liveDimChips(pmisc).length);
+      pmisc.drag = { kind:'voidVert', id:'vo', idx:0, startMm:P(0,0), startPts:[] };
+      ok('11I voidVert → 2 edges', liveDimChips(pmisc).length === 2, liveDimChips(pmisc).length);
+      pmisc.drag = { kind:'pzoneVert', id:'pz', idx:1, startMm:P(700,0), startPts:[] };
+      ok('11I pzoneVert → 2 edges', liveDimChips(pmisc).length === 2, liveDimChips(pmisc).length);
+      pmisc.drag = null;
+      pmisc.drawingPoolArea = { points:[P(0,0)] }; pmisc.cursor = P(2000,0);
+      ok('11I pool draw rubber band', liveDimChips(pmisc).length === 1 && liveDimChips(pmisc)[0].text === '2 m 0.0 cm', '');
+      pmisc.drawingPoolArea = null;
+      pmisc.drawingVoidArea = { points:[P(0,0)] };
+      ok('11I void draw rubber band', liveDimChips(pmisc).length === 1, liveDimChips(pmisc).length);
+      pmisc.drawingVoidArea = null;
+      pmisc.drawingPresenceZone = { points:[P(0,0)] };
+      ok('11I pzone draw rubber band', liveDimChips(pmisc).length === 1, liveDimChips(pmisc).length);
+      pmisc.drawingPresenceZone = null;
+      pmisc.drawingExclusion = { points:[P(0,0)] };
+      ok('11I exclusion draw rubber band', liveDimChips(pmisc).length === 1, liveDimChips(pmisc).length);
+      pmisc.drawingExclusion = null;
+      ok('11I latches cleared → no chips', liveDimChips(pmisc).length === 0, liveDimChips(pmisc).length);
+
+      // 11J. furniture corner RESIZE → W × D; a plain MOVE reports nothing.
+      const pfu = await mkPlanner([baseFloor({
+        furniture: [{ id:'fu', x:1000, y:1000, w:1600, h:800, kind:'block' }],
+      })]);
+      pfu.drag = { kind:'furnCorner', idx:0, anchor:P(200,600) };
+      const cfu = liveDimChips(pfu);
+      ok('11J furnCorner → W × D chip',
+        cfu.length === 1 && cfu[0].text === `${fmtLen(1600,false)} × ${fmtLen(800,false)}`, texts(cfu).join());
+      ok('11J furnCorner anchored at the piece center', near(cfu[0].x,1000) && near(cfu[0].y,1000), `${cfu[0].x},${cfu[0].y}`);
+      pfu.drag = { kind:'furnMove', idx:0, startMm:P(0,0), start:P(1000,1000) };
+      ok('11J furnMove (move ≠ resize) → no chips', liveDimChips(pfu).length === 0, liveDimChips(pfu).length);
+
+      // 11K. deliberate skips: ruler ends (self-rendering) + env scale (unitless).
+      const psk = await mkPlanner([baseFloor({
+        envSensors: [{ id:'e1', x:500, y:500, kind:'temperature' }],
+      })]);
+      const rid = psk.addRuler({ kind:'point', x:0, y:0 }, { kind:'point', x:1000, y:0 });
+      psk.drag = { kind:'rulerEnd', rulerId:rid, end:'b' };
+      ok('11K rulerEnd skipped (ruler paints its own chip)', liveDimChips(psk).length === 0, liveDimChips(psk).length);
+      psk.drag = { kind:'envResize', id:'e1', startDist:100, startScale:1 };
+      ok('11K envResize skipped (unitless scale)', liveDimChips(psk).length === 0, liveDimChips(psk).length);
+
+      // 11L. non-edit modes never report, even mid-drag.
+      const pk = await mkPlanner([baseFloor({ w: 8000, d: 5000 })]);
+      pk.drag = { kind:'floorEdge', edge:'right', startClient:P(0,0), startScale:1,
+                  startW:8000, startD:5000, startBbox:null, applied:P(0,0) };
+      ok('11L edit mode reports', liveDimChips(pk).length === 1, liveDimChips(pk).length);
+      pk.setUiMode('kiosk');
+      ok('11L kiosk → no chips', liveDimChips(pk).length === 0, liveDimChips(pk).length);
+      pk.setUiMode('view');
+      ok('11L view → no chips', liveDimChips(pk).length === 0, liveDimChips(pk).length);
+
+      // 11M. drawAll actually PAINTS the chips (and paints nothing extra idle).
+      const pr = await mkPlanner([baseFloor({ w: 8000, d: 5000 })]);
+      const cvs = document.createElement('canvas'); cvs.width = 600; cvs.height = 400;
+      const ctx = cvs.getContext('2d', { willReadFrequently: true });
+      const view = computeView(cvs, 8000, 5000, null, 1);
+      const inkCount = () => {
+        const d = ctx.getImageData(0, 0, cvs.width, cvs.height).data;
+        let n = 0;
+        for (let i = 0; i < d.length; i += 4) if (d[i] > 200 && d[i+1] > 200 && d[i+2] > 200) n++;
+        return n;   // white chip TEXT pixels
+      };
+      drawAll(ctx, pr, view, null);
+      const idleInk = inkCount();
+      pr.drag = { kind:'floorEdge', edge:'right', startClient:P(0,0), startScale:1,
+                  startW:8000, startD:5000, startBbox:null, applied:P(0,0) };
+      drawAll(ctx, pr, view, null);
+      const dragInk = inkCount();
+      ok('11M drawAll paints a chip while dragging', dragInk > idleInk + 20, `${idleInk} → ${dragInk}`);
+      pr.drag = null;
+      drawAll(ctx, pr, view, null);
+      ok('11M chip vanishes on release', inkCount() === idleInk, `${inkCount()} vs ${idleInk}`);
     }
   } catch (err) {
     ok('unhandled error', false, (err && (err.stack || err.message)) || String(err));
