@@ -1,6 +1,6 @@
 # Project status & pick-up guide
 
-Last updated: 2026-07-29, at **v0.43.0**. This is the single document to
+Last updated: 2026-07-29, at **v0.44.0**. This is the single document to
 read (alongside `CLAUDE.md`) to resume work with full context.
 
 ## Where things stand
@@ -281,11 +281,15 @@ instance.
   16/16, flight-resolver hoist, tree model docs, nav-parity guard
   catching two real validator divergences; HA floor/area → room
   binding + area-filtered occupancy/env/thermostat pickers).
+  → v0.44.0 need to know (labels layer covers area/pool names; NEW
+  objectLabels/openings/peekFloors keys; 6-category layer panel from
+  one catalog; 2D floor finally paints look3d/scene3d color+texture
+  — a day-one gap, not a regression).
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
 - **Layers overhaul + 2D floor paint** (2026-07-29, user-requested
-  ×4; unreleased — on main past v0.43.0). `labels` → "Room & area
+  ×4; released in v0.44.0). `labels` → "Room & area
   labels" (now gates ground-area/pool names too); NEW `objectLabels`
   (fixture/door/window/furniture NAME text — value readouts stay
   with their fixture layers; fixtureCaption keeps state badges),
