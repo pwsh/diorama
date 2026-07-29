@@ -3828,16 +3828,22 @@ function drawDoors(ctx: CanvasRenderingContext2D, p: Planner, view: View): void 
     const openEnd = doorEndpoint(d, openDelta);
     const cep = mmToPx(view, closedEnd.x, closedEnd.y);
     const oep = mmToPx(view, openEnd.x, openEnd.y);
-    // Faded swing arc between closed and open. `openDelta` is in world
-    // screen-CW degrees; canvas frame is the same screen-CW sense for X but
-    // Y is flipped, so the canvas angular delta is `-openDelta * π/180`.
+    // Faded swing arc between closed and open. `openDelta` is world screen-CW
+    // degrees, and a doorEndpoint offset lands at CANVAS angle +rotation
+    // (world (cos r, −sin r) → canvas (cos r, +sin r) through mmToCanvas's
+    // y-flip) — so the canvas delta is `+openDelta`, the SAME sign, ending
+    // exactly at `oep`. (The old `−openDelta` mirrored the dashed hint to the
+    // wrong side of the panel — user-reported.) Sweep the SIGNED 90° from the
+    // closed panel with the anticlockwise flag rather than min→max endpoints:
+    // min/max drew the long 270° way round whenever the two angles straddled
+    // the atan2 ±π seam.
     const rPx = d.w * view.scale;
     const closedA = Math.atan2(cep.y - hinge.y, cep.x - hinge.x);
-    const openA = closedA + (-openDelta * Math.PI / 180);
+    const openA = closedA + openDelta * Math.PI / 180;
     ctx.strokeStyle = 'rgba(144,164,174,0.35)';
     ctx.setLineDash([3, 3]); ctx.lineWidth = 1;
     ctx.beginPath();
-    ctx.arc(hinge.x, hinge.y, rPx, Math.min(closedA, openA), Math.max(closedA, openA));
+    ctx.arc(hinge.x, hinge.y, rPx, closedA, openA, openDelta < 0);
     ctx.stroke(); ctx.setLineDash([]);
     // Active panel
     const endPt = isOpen ? oep : cep;

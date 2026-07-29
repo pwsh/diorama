@@ -39,7 +39,7 @@
   // Live dimension chips: pure computation (liveDimChips) + the real painter
   // through drawAll. canvas-render imports Planner TYPE-only, so the bundle is
   // standalone and reads the planner instance as plain state.
-  const { liveDimChips, drawAll, computeView } = await import('./canvas-render.mod.js' + V);
+  const { liveDimChips, drawAll, computeView, mmToPx } = await import('./canvas-render.mod.js' + V);
 
   const results = [];
   const ok = (name, cond, extra = '') => results.push({ name, pass: !!cond, extra: String(extra) });
@@ -485,6 +485,81 @@
       pr.drag = null;
       drawAll(ctx, pr, view, null);
       ok('11M chip vanishes on release', inkCount() === idleInk, `${inkCount()} vs ${idleInk}`);
+    }
+
+    // ══ (12) door swing dashed arc — drawn on the TRUE opening side ═════════
+    // User-reported: the dashed hint mirrored the swing (−openDelta in canvas
+    // space, where doorEndpoint offsets land at +rotation), and the min→max
+    // arc endpoints drew the long 270° way round across the atan2 ±π seam.
+    // Diff a door-less render against a with-door render and classify the
+    // changed pixels around the hinge by canvas angle.
+    {
+      const mkP = async (doors) => {
+        const fl = baseFloor({ w: 8000, d: 5000 });
+        fl.doors = doors;
+        return await mkPlanner([fl]);
+      };
+      const cvs = document.createElement('canvas'); cvs.width = 600; cvs.height = 400;
+      const ctx = cvs.getContext('2d', { willReadFrequently: true });
+      const view = computeView(cvs, 8000, 5000, null, 1);
+      const snap = () => ctx.getImageData(0, 0, cvs.width, cvs.height).data.slice();
+      // Diff pixels near the swing-arc radius, bucketed by canvas angle (deg,
+      // atan2 y-down) about the hinge; the panel/hinge/handle are excluded by
+      // the caller's angle windows.
+      const arcDiff = (base, hx, hy, rPx, a0, a1) => {
+        const d = ctx.getImageData(0, 0, cvs.width, cvs.height).data;
+        let n = 0;
+        for (let y = 0; y < cvs.height; y++) for (let x = 0; x < cvs.width; x++) {
+          const i = (y * cvs.width + x) * 4;
+          if (d[i] === base[i] && d[i+1] === base[i+1] && d[i+2] === base[i+2]) continue;
+          const dx = x - hx, dy = y - hy, dist = Math.hypot(dx, dy);
+          if (Math.abs(dist - rPx) > 5) continue;
+          let a = Math.atan2(dy, dx) * 180 / Math.PI;
+          const inWin = (lo, hi) => {
+            // window may wrap past ±180
+            let aa = a; if (hi > 180 && aa < 0) aa += 360;
+            return aa >= lo && aa <= hi;
+          };
+          if (inWin(a0, a1)) n++;
+        }
+        return n;
+      };
+      const P12 = await mkP([]);
+      drawAll(ctx, P12, view, null);
+      const base12 = snap();
+
+      // Right-hinge (default) door at rotation 0: panel → canvas angle 0
+      // (screen right); openDelta −90 ⇒ the true open endpoint is at canvas
+      // −90° (screen UP). The dashed arc must live in the UPPER quadrant.
+      const dr = { id: 'd1', x: 4000, y: 2500, w: 1000, rotation: 0 };
+      const Pr = await mkP([dr]);
+      drawAll(ctx, Pr, view, null);
+      const h1 = mmToPx(view, 4000, 2500);
+      const r1 = 1000 * view.scale;
+      const upper = arcDiff(base12, h1.x, h1.y, r1, -80, -10);
+      const lower = arcDiff(base12, h1.x, h1.y, r1, 10, 80);
+      ok('12A right-hinge arc sweeps to the open side (screen-up)', upper > 6 && lower === 0,
+         `upper=${upper} lower=${lower}`);
+
+      // Left hinge: openDelta +90 ⇒ open endpoint at canvas +90° (screen DOWN).
+      const dl = { id: 'd2', x: 4000, y: 2500, w: 1000, rotation: 0, hinge: 'left' };
+      const Pl = await mkP([dl]);
+      drawAll(ctx, Pl, view, null);
+      const upperL = arcDiff(base12, h1.x, h1.y, r1, -80, -10);
+      const lowerL = arcDiff(base12, h1.x, h1.y, r1, 10, 80);
+      ok('12B left-hinge arc sweeps screen-down', lowerL > 6 && upperL === 0,
+         `upper=${upperL} lower=${lowerL}`);
+
+      // ±π seam: left hinge at rotation 135° → closedA 135°, openA 225°. The
+      // 90° sweep passes through 180° (canvas left); the old min→max endpoints
+      // drew the 270° complement through 0° (canvas right) instead.
+      const ds = { id: 'd3', x: 4000, y: 2500, w: 1000, rotation: 135, hinge: 'left' };
+      const Ps = await mkP([ds]);
+      drawAll(ctx, Ps, view, null);
+      const seam = arcDiff(base12, h1.x, h1.y, r1, 150, 215);   // around 180°, wrapping
+      const wrongWay = arcDiff(base12, h1.x, h1.y, r1, -30, 30); // around 0°
+      ok('12C seam-straddling arc takes the short way (through 180°)', seam > 6 && wrongWay === 0,
+         `seam=${seam} wrongWay=${wrongWay}`);
     }
   } catch (err) {
     ok('unhandled error', false, (err && (err.stack || err.message)) || String(err));

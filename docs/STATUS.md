@@ -268,6 +268,16 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Door swing dashed arc fixed** (2026-07-28, user-reported: "the
+  door opening dashed line… is not always correctly representing the
+  direction the door opens"; unreleased — on main past v0.39.0). Two
+  bugs in one: the canvas delta negated `openDelta` (mirrored hint —
+  doorEndpoint offsets land at +rotation in canvas space through the
+  y-flip), and min→max arc endpoints drew the 270° complement across
+  the atan2 ±π seam. Now a signed 90° sweep from the closed panel
+  with the anticlockwise flag. 3D swing + 2D open panel were always
+  correct. ruler-dims-test 104→107 (§12 pixel-classification pins:
+  right/left hinge + seam case).
 - **Tree species + adjustable height** (2026-07-28, user-requested:
   "add more tree species models and allow adjusting the height of the
   trees"; unreleased — on main past v0.39.0). Five new outdoor kinds
