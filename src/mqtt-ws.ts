@@ -385,7 +385,10 @@ export class MqttWsClient {
   }
 
   private _send(bytes: Uint8Array): void {
-    try { this._ws?.send(bytes); } catch { /* socket not open */ }
+    // Every packet is built over a plain ArrayBuffer (`new Uint8Array(n)`);
+    // TS 6's dom lib narrows WebSocket.send to ArrayBufferView<ArrayBuffer>,
+    // so restate that fact here rather than re-typing every encoder.
+    try { this._ws?.send(bytes as Uint8Array<ArrayBuffer>); } catch { /* socket not open */ }
   }
   private _nextId(): number {
     const id = this._packetId;

@@ -276,6 +276,20 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **TypeScript 6.0.3 (the 5.9→7.0 bridge line)** (2026-07-28,
+  user-requested evaluation; unreleased — on main past v0.41.0).
+  Research + empirical trial both green: 6.0 is the LAST JS-based
+  compiler release, aligned with the Go-native 7.0's defaults;
+  every 6.0 breaking change was already satisfied by our tsconfig
+  (Bundler resolution, ESNext module, strict, Lit's
+  experimentalDecorators + useDefineForClassFields:false untouched
+  by 6.0). ONE code fix repo-wide: mqtt-ws `_send` restates
+  `Uint8Array<ArrayBuffer>` for TS 6's narrowed WebSocket.send
+  (MQTTCODEC 45/45 held). Explicit `types: []` + `rootDir: "src"`
+  added as 7.0-forward documentation of the new defaults. 7.x held
+  until the native port matures (`ignoreDeprecations` dies there —
+  6.x is the sanctioned staging ground). Details in the TS section
+  of docs/TECH-DEBT.md execution log.
 - **Dependency bump + tech-debt audit** (2026-07-28, user-requested;
   released in v0.41.0). vite 8.0.16→8.1.5 + three/
   @types/three 0.184→0.185.1 as one gated batch — typecheck/build/
