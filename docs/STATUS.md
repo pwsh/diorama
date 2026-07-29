@@ -1,6 +1,6 @@
 # Project status & pick-up guide
 
-Last updated: 2026-07-28, at **v0.39.0**. This is the single document to
+Last updated: 2026-07-28, at **v0.40.0**. This is the single document to
 read (alongside `CLAUDE.md`) to resume work with full context.
 
 ## Where things stand
@@ -265,14 +265,18 @@ instance.
   walls gone; Furniture.stairsOpen "Open underneath" floating slabs
   w/ bit-identical top surfaces; ground-writing faceCamera toggle +
   static rotationDeg via pure bgGroundFixedYaw).
+  → v0.40.0 measure twice (live drag dimension chips via
+  liveDimChips; five tree species + Furniture.ht tree height; door
+  swing-arc side/seam fix; five new door kinds + open-door
+  closed-span hint + closed-span hitDoor; wall editing prefs —
+  angle/grid/weld toggles + Alt free placement).
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
 - **Wall editing prefs: snap toggles + Alt free placement**
   (2026-07-28, user-requested: "an on/off method to disable the 15
   degree lock and the automatic linking of walls at corners or some
-  other method to make fine adjustments"; unreleased — on main past
-  v0.39.0). Device-local `diorama:wall:*` prefs (angle snap / 10 mm
+  other method to make fine adjustments"; released in v0.40.0). Device-local `diorama:wall:*` prefs (angle snap / 10 mm
   wall grid / weld, absent = ON, never in the store or undo);
   centralized `resolveWallPoint` so the live-dims chip and the
   commit agree by construction; holding Alt suspends all three for
@@ -284,7 +288,7 @@ instance.
   user-requested: "create more door types. Sliding, pocket, double
   swing, french, sliding glass" + "open doors need a dashed line
   showing the closed door position… so users know where to click to
-  close them"; unreleased — on main past v0.39.0). Door.kind grows to
+  close them"; released in v0.40.0). Door.kind grows to
   eight; hinge doubles as slide side on sliding kinds;
   doorDefaultWidth kind-switch bump; shared addLockBolts; toolbar
   variant row lists all eight; every open door draws a dashed
@@ -295,7 +299,7 @@ instance.
   25/25, ruler-dims 107/107, lockoven 31/31 held.
 - **Door swing dashed arc fixed** (2026-07-28, user-reported: "the
   door opening dashed line… is not always correctly representing the
-  direction the door opens"; unreleased — on main past v0.39.0). Two
+  direction the door opens"; released in v0.40.0). Two
   bugs in one: the canvas delta negated `openDelta` (mirrored hint —
   doorEndpoint offsets land at +rotation in canvas space through the
   y-flip), and min→max arc endpoints drew the 270° complement across
@@ -305,7 +309,7 @@ instance.
   right/left hinge + seam case).
 - **Tree species + adjustable height** (2026-07-28, user-requested:
   "add more tree species models and allow adjusting the height of the
-  trees"; unreleased — on main past v0.39.0). Five new outdoor kinds
+  trees"; released in v0.40.0). Five new outdoor kinds
   (oak/birch/palm/willow/spruce, parametric in W/D/HT, toon +
   outlines + blob shadows, 2D glyphs); `TREE_KINDS`/`isTreeKind` +
   `treeHeightMm` — `Furniture.ht` now shared by two disjoint
@@ -315,8 +319,7 @@ instance.
   toolbar 42/42, stairs-fit 78/78, floorplans 399/399 held.
 - **Live drag dimension readouts** (2026-07-28, user-requested: "when
   resizing objects or drawing walls or other areas, show the
-  dimensions… in real time until releasing the anchor"; unreleased —
-  on main past v0.39.0). Pure `liveDimChips(p)` + `drawLiveDims`
+  dimensions… in real time until releasing the anchor"; released in v0.40.0). Pure `liveDimChips(p)` + `drawLiveDims`
   (last in drawAll, edit-only): fmtLen imperial/metric chips during
   wall draw (rubber band + dimmed committed), wall/polygon/LD2450
   vertex drags, floor-edge + furniture-corner + bg-corner resizes
