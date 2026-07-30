@@ -16,7 +16,7 @@
 //     --alias:lit/decorators.js=$PWD/node_modules/lit/decorators.js \
 //     --outfile=<harness>/layers2d.mod.js
 export { Planner } from './planner.js';
-export { drawAll, computeView, mmToPx } from './canvas-render.js';
+export { drawAll, computeView, mmToPx, fixtureCaption } from './canvas-render.js';
 export { hitDoor, hitWindow, openingsVisible } from './canvas-hit.js';
 export {
   LAYER_DEFS, LAYER_CATS, SIMPLE_LAYERS, DEFAULT_OFF_LAYERS,

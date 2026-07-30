@@ -40,6 +40,12 @@ export const LAYER_DEFS: LayerDef[] = [
   // Deliberately NOT value readouts (env readings, info-card values, thermostat
   // temps, W chips): those convey STATE and stay under the fixture's own layer.
   { key: 'objectLabels', label: 'Object labels', cat: 'labels' },
+  // `openingStatus` is the STATE half of the door/window pill (OPEN / closed /
+  // NN%) — the one exception to "state readouts live under the fixture's own
+  // layer", because doors and windows have no readout of their own and users
+  // asked to mute the chatter without losing the names. 2D-only: the 3D scene
+  // draws door/window state as GEOMETRY (swing angle, slats, panes), never text.
+  { key: 'openingStatus', label: 'Door & window status', cat: 'labels' },
   { key: 'nameLabels', label: 'Person name labels', cat: 'labels' },
   { key: 'dimensions', label: 'Dimensions', cat: 'labels' },
   { key: 'battery', label: 'Battery warnings', cat: 'labels' },

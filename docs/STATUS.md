@@ -293,6 +293,17 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Door & window status layer switch** (2026-07-30, user-requested:
+  "a visibility switch for the open/closed status on doors and
+  windows needs added under labels"; unreleased — on main past
+  v0.45.0). `Layers2D.openingStatus` (Labels category, absent = ON):
+  gates the OPEN/closed/% badges on all 8 door kinds + windows via
+  `fixtureCaption`'s new `showBadge` param (one pure composition
+  rule, 4-way matrix tested); both objectLabels + openingStatus off
+  = no pill; other fixtures' badges deliberately unaffected; also
+  fixed a degenerate empty pill on unbound openings. layers2d-test
+  47→67 (LAYERS2D PASS 67/67); ruler-dims 107/107, door-kinds
+  97/97 held.
 - **Docs-site campaign: guide + coverage + full regen + publish**
   (2026-07-29, user-directed with Opus-orchestration/Sonnet-implementation
   routing; released in v0.45.0). Guide: 11 pages refreshed against the
@@ -327,7 +338,7 @@ instance.
   drawFloor had a hard-coded fill since day one; now paints
   look3d/scene3d floorColor + deterministic 800 mm-scale
   wood/tile/concrete pattern tiles matching the 3D repeat scale.
-  New layers2d-test.html (LAYERS2D PASS 47/47); ruler-dims 107/107,
+  New layers2d-test.html (LAYERS2D PASS 67/67); ruler-dims 107/107,
   sensor-focus 14/14, area-binding 71/71, toolbar 42/42, card
   92/92, door-kinds 97/97, flights-ui 271/271 held.
 - **HA floor/area → room binding + area-filtered pickers** (2026-07-29,

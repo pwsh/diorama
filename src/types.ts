@@ -1577,6 +1577,7 @@ export interface Layers2D {
   walls?: boolean;      // wall bodies (2D strokes + 3D meshes); doors/windows stay
   labels?: boolean;     // room + AREA name labels (2D room text/ground-area/pool names + 3D room billboards)
   objectLabels?: boolean; // NAME/caption text on fixtures + structural items (2D); default ON. State/value readouts are NOT names and stay under each item's own layer.
+  openingStatus?: boolean; // OPEN/closed/NN% STATE badge on the door + window pills (2D only — 3D has no door/window status text); default ON. Scoped to openings: other fixtures' state badges stay under their own layers.
   openings?: boolean;   // doors + windows (2D glyphs/pills + the 3D _doorGroup, which also carries curtains + deadbolts); default ON
   peekFloors?: boolean; // onion-skin wall outlines of other floors flagged peek2d (2D); default ON
   furniture?: boolean;  // non-appliance furniture (appliances ride their own key)

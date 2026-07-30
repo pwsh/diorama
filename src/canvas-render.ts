@@ -67,15 +67,33 @@ function objectLabelsOn(p: Planner): boolean {
   return p.store.layers2d?.objectLabels !== false;
 }
 
+// ── `openingStatus` layer (absent = ON) ─────────────────────────────────────
+// Gates ONLY the STATE badge on the door + window pills (`OPEN` / `closed` /
+// `NN%`) — the name half stays under `objectLabels`, so the two compose into a
+// 4-way matrix (see fixtureCaption). Deliberately scoped to openings: every
+// other fixture's state badge stays under that fixture's own layer. 2D-only —
+// the 3D scene expresses door/window state as GEOMETRY (swing angle, garage
+// slats, tilted panes), never as text, so there is no 3D counterpart to gate.
+function openingStatusOn(p: Planner): boolean {
+  return p.store.layers2d?.openingStatus !== false;
+}
+
 // Compose a fixture caption from its NAME and its optional STATE badge under the
 // objectLabels layer. With names hidden the badge survives on its own (`Porch ·
 // armed away` → `armed away`); with no badge at all the caption disappears
 // entirely. Returns '' when nothing should be drawn.
-function fixtureCaption(showNames: boolean, name: string, badge?: string | null): string {
-  const b = (badge ?? '').trim();
+//
+// `showBadge` (default true — every caller but the door/window pills leaves it
+// alone) is the second, independent switch behind the `openingStatus` layer:
+//   names ✓ badge ✓ → `Front · OPEN`      names ✗ badge ✓ → `OPEN`
+//   names ✓ badge ✗ → `Front`             names ✗ badge ✗ → ''  (no pill at all)
+function fixtureCaption(showNames: boolean, name: string, badge?: string | null,
+                        showBadge = true): string {
+  const b = showBadge ? (badge ?? '').trim() : '';
   if (!showNames) return b;
   return b ? `${name} · ${b}` : name;
 }
+export { fixtureCaption };
 
 // Per-sink 2D fill level (0..1), eased toward 1 while the sink runs and 0 when
 // off (mirrors the 3D _sinkFill blend, but 2D has no renderer state — track it
@@ -3911,6 +3929,7 @@ function drawPeekFloors(ctx: CanvasRenderingContext2D, p: Planner, view: View): 
 
 function drawDoors(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
   const names = objectLabelsOn(p);
+  const status = openingStatusOn(p);
   const dpr = window.devicePixelRatio || 1;
   const f = p.floor();
   if (!f.doors) return;
@@ -3967,7 +3986,7 @@ function drawDoors(ctx: CanvasRenderingContext2D, p: Planner, view: View): void 
       const pctN = Math.round(frac * 100);
       const stateStr = !st ? ''
         : isOpen ? (pct ? (pctN >= 99 ? 'OPEN' : `${pctN}%`) : 'OPEN') : 'closed';
-      const txt = fixtureCaption(names, d.label?.trim() || fallback, stateStr);
+      const txt = fixtureCaption(names, d.label?.trim() || fallback, stateStr, status);
       if (!txt) return;
       ctx.font = `${10 * dpr}px sans-serif`;
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
@@ -4182,7 +4201,9 @@ function drawDoors(ctx: CanvasRenderingContext2D, p: Planner, view: View): void 
     // Label + state pill
     const pillX = (hinge.x + endPt.x) / 2;
     const pillY = (hinge.y + endPt.y) / 2 - 12 * dpr;
-    const txt = fixtureCaption(names, d.label?.trim() || 'Door', st ? (isOpen ? 'OPEN' : 'closed') : '');
+    const txt = fixtureCaption(names, d.label?.trim() || 'Door',
+                               st ? (isOpen ? 'OPEN' : 'closed') : '', status);
+    if (!txt) continue;
     ctx.font = `${10 * dpr}px sans-serif`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     const tw = ctx.measureText(txt).width + 8 * dpr;
@@ -4231,6 +4252,7 @@ function drawDoorbellPulses(ctx: CanvasRenderingContext2D, p: Planner, view: Vie
 
 function drawWindows(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
   const names = objectLabelsOn(p);
+  const status = openingStatusOn(p);
   const dpr = window.devicePixelRatio || 1;
   const f = p.floor();
   if (!f.windows) return;
@@ -4316,7 +4338,9 @@ function drawWindows(ctx: CanvasRenderingContext2D, p: Planner, view: View): voi
     ctx.beginPath(); ctx.arc(c.x, c.y, 4 * dpr, 0, 2 * Math.PI);
     ctx.fill(); ctx.stroke();
     // Label + state pill
-    const txt = fixtureCaption(names, w.label?.trim() || 'Window', st ? (isOpen ? 'OPEN' : 'closed') : '');
+    const txt = fixtureCaption(names, w.label?.trim() || 'Window',
+                               st ? (isOpen ? 'OPEN' : 'closed') : '', status);
+    if (!txt) continue;
     ctx.font = `${10 * dpr}px sans-serif`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     const tw = ctx.measureText(txt).width + 8 * dpr;

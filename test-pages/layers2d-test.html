@@ -38,7 +38,7 @@
 <script type="module">
   const V = '?v=' + Date.now();
   const M = await import('./layers2d.mod.js' + V);
-  const { Planner, drawAll, computeView, mmToPx, hitDoor, hitWindow,
+  const { Planner, drawAll, computeView, mmToPx, fixtureCaption, hitDoor, hitWindow,
           LAYER_DEFS, LAYER_CATS, SIMPLE_LAYERS, DEFAULT_OFF_LAYERS,
           layerIsOn, layerDefsByCat } = M;
 
@@ -419,6 +419,149 @@
          labelTexts.includes('Object labels') && labelTexts.includes('Doors & windows') &&
          labelTexts.includes('Peek floors') && labelTexts.includes('Room & area labels'), '');
       sb.remove();
+    }
+
+    // ═══ 7. `openingStatus` — the door/window OPEN/closed badge ══════════════
+    // The STATE half of the opening pill, split from the NAME half (objectLabels)
+    // so the two compose into a 4-way matrix. 2D-only: 3D says door state with
+    // GEOMETRY (swing angle / slats / panes), so there is nothing to gate there.
+    sec('7. openingStatus layer (door + window state badge)');
+    {
+      // 7.1 — the pure composition rule (the ONE place the matrix lives).
+      ok('7A names ✓ badge ✓ → "Front · OPEN"',
+         fixtureCaption(true, 'Front', 'OPEN', true) === 'Front · OPEN',
+         fixtureCaption(true, 'Front', 'OPEN', true));
+      ok('7A names ✗ badge ✓ → "OPEN"',
+         fixtureCaption(false, 'Front', 'OPEN', true) === 'OPEN',
+         fixtureCaption(false, 'Front', 'OPEN', true));
+      ok('7A names ✓ badge ✗ → "Front"',
+         fixtureCaption(true, 'Front', 'OPEN', false) === 'Front',
+         fixtureCaption(true, 'Front', 'OPEN', false));
+      ok('7A names ✗ badge ✗ → "" (no pill at all)',
+         fixtureCaption(false, 'Front', 'OPEN', false) === '',
+         JSON.stringify(fixtureCaption(false, 'Front', 'OPEN', false)));
+      ok('7B showBadge defaults TRUE (every non-opening caller is unchanged)',
+         fixtureCaption(true, 'Porch', 'armed away') === 'Porch · armed away' &&
+         fixtureCaption(false, 'Porch', 'armed away') === 'armed away',
+         fixtureCaption(true, 'Porch', 'armed away'));
+      ok('7B a badge-less caption is the bare name either way',
+         fixtureCaption(true, 'Front', '', true) === 'Front' &&
+         fixtureCaption(true, 'Front', null, false) === 'Front', '');
+
+      // 7.2 — the catalog entry + its opt-out default.
+      const osDef = LAYER_DEFS.find(d => d.key === 'openingStatus');
+      ok('7C openingStatus is in the catalog under Labels',
+         osDef?.cat === 'labels' && osDef?.label === 'Door & window status',
+         `${osDef?.cat} / ${osDef?.label}`);
+      ok('7C openingStatus defaults ON (opt-out, like its siblings)',
+         layerIsOn({}, 'openingStatus') === true &&
+         layerIsOn({ openingStatus: false }, 'openingStatus') === false &&
+         !DEFAULT_OFF_LAYERS.includes('openingStatus'), '');
+      ok('7C SIMPLE_LAYERS leaves it absent (old presets byte-identical)',
+         SIMPLE_LAYERS.openingStatus === undefined, JSON.stringify(SIMPLE_LAYERS.openingStatus));
+
+      // 7.3 — pixel truth over a swing door (OPEN), a garage door (40 %) and a
+      // window (OPEN). Deliberately wall-free: every pill then lands on plain
+      // floor, so the pill PLATE is the only near-black paint in its box.
+      const p = await mkPlanner([baseFloor({
+        doors: [
+          { id: 'd1', x: 1500, y: 1200, w: 800, rotation: 0, label: 'Front', localState: 'on' },
+          { id: 'd2', x: 4200, y: 3200, w: 2400, rotation: 0, kind: 'garage',
+            label: 'Bay', entity_id: 'cover.garage' },
+        ],
+        windows: [{ id: 'wi1', x: 1800, y: 4800, w: 1200, rotation: 0,
+                    label: 'Bath', localState: 'on' }],
+      })]);
+      p.hass.states['cover.garage'] = { entity_id: 'cover.garage', state: 'open',
+        attributes: { current_position: 40 } };
+      const { ctx } = mkCanvas();
+      const v = paint(ctx, p);
+      const pbox = (wx, wy, w = 170, h = 90) => {
+        const s = mmToPx(v, wx, wy); return [s.x - w / 2, s.y - h / 2, w, h];
+      };
+      const swingBox = pbox(1500, 1200);
+      const garageBox = pbox(4200 + 1200, 3200);   // pill sits at the span midpoint
+      const winBox = pbox(1800, 4800);
+      // The pill PLATE: rgba(0,0,0,0.7) over the default floor #101820 → (5,7,10).
+      // Nothing else in these boxes is that dark (the glyphs are saturated
+      // strokes, the floor is (16,24,32)), so this count IS the pill's area.
+      function plate(ctx2, x, y, w, h) {
+        x = Math.max(0, Math.round(x)); y = Math.max(0, Math.round(y));
+        w = Math.min(CW - x, Math.round(w)); h = Math.min(CH - y, Math.round(h));
+        const d = ctx2.getImageData(x, y, w, h).data;
+        let n = 0;
+        for (let i = 0; i < d.length; i += 4) if (d[i] <= 10 && d[i+1] <= 12 && d[i+2] <= 16) n++;
+        return n;
+      }
+      const bothOn = snap(ctx);
+      const plateOn = [plate(ctx, ...swingBox), plate(ctx, ...garageBox), plate(ctx, ...winBox)];
+      ok('7D all three openings paint a pill by default',
+         plateOn.every(n => n > 100), plateOn.join('/'));
+
+      // status OFF, names ON → the NAME survives, the badge goes.
+      setLayers(p, { openingStatus: false });
+      paint(ctx, p);
+      const statusOff = snap(ctx);
+      const plateNameOnly = [plate(ctx, ...swingBox), plate(ctx, ...garageBox), plate(ctx, ...winBox)];
+      ok('7E status OFF shrinks the swing-door pill but keeps it (name stays)',
+         plateNameOnly[0] > 50 && plateNameOnly[0] < plateOn[0],
+         `${plateOn[0]} → ${plateNameOnly[0]}`);
+      ok('7E status OFF drops the garage % badge, keeps the name',
+         plateNameOnly[1] > 50 && plateNameOnly[1] < plateOn[1],
+         `${plateOn[1]} → ${plateNameOnly[1]}`);
+      ok('7E status OFF drops the window OPEN badge, keeps the name',
+         plateNameOnly[2] > 50 && plateNameOnly[2] < plateOn[2],
+         `${plateOn[2]} → ${plateNameOnly[2]}`);
+      // Only the three pills moved — the swing arc / slats / panes are geometry.
+      const perPill = boxDiff(bothOn, statusOff, ...swingBox)
+                    + boxDiff(bothOn, statusOff, ...garageBox)
+                    + boxDiff(bothOn, statusOff, ...winBox);
+      ok('7F nothing but the pills changed (glyphs are untouched)',
+         diffPixels(bothOn, statusOff) === perPill && perPill > 0,
+         `${diffPixels(bothOn, statusOff)} total vs ${perPill} in the pill boxes`);
+
+      // names OFF, status ON → the badge survives alone (today's objectLabels rule).
+      setLayers(p, { objectLabels: false });
+      paint(ctx, p);
+      const plateBadgeOnly = [plate(ctx, ...swingBox), plate(ctx, ...garageBox), plate(ctx, ...winBox)];
+      ok('7G names OFF + status ON keeps a badge-only pill',
+         plateBadgeOnly.every((n, i) => n > 50 && n < plateOn[i]), plateBadgeOnly.join('/'));
+
+      // both OFF → no pill at all.
+      setLayers(p, { objectLabels: false, openingStatus: false });
+      paint(ctx, p);
+      const neither = snap(ctx);
+      ok('7H both OFF paints NO pill on any opening',
+         [swingBox, garageBox, winBox].every(b => plate(ctx, ...b) === 0),
+         [swingBox, garageBox, winBox].map(b => plate(ctx, ...b)).join('/'));
+      ok('7H the openings themselves still draw (only text went)',
+         diffPixels(neither, bothOn) > 0 &&
+         diffPixels(neither, bothOn) === boxDiff(neither, bothOn, ...swingBox)
+                                      + boxDiff(neither, bothOn, ...garageBox)
+                                      + boxDiff(neither, bothOn, ...winBox),
+         diffPixels(neither, bothOn));
+
+      // Absent key = today. (An old preset carries no openingStatus at all.)
+      setLayers(p, undefined);
+      paint(ctx, p);
+      ok('7I absent openingStatus restores the full pills (byte-identical)',
+         diffPixels(bothOn, snap(ctx)) === 0, diffPixels(bothOn, snap(ctx)));
+      setLayers(p, { objectLabels: true });
+      paint(ctx, p);
+      ok('7I an explicit objectLabels-only preset is byte-identical too',
+         diffPixels(bothOn, snap(ctx)) === 0, diffPixels(bothOn, snap(ctx)));
+
+      // Scope guard: the key is doors + windows ONLY. An alarm panel's state
+      // badge belongs to its own fixture layer and must ignore openingStatus.
+      const p2 = await mkPlanner([baseFloor({
+        alarmPanels: [{ id: 'a1', x: 4000, y: 3000, rotation: 0, label: 'Keypad' }],
+      })]);
+      const { ctx: ctx2 } = mkCanvas();
+      paint(ctx2, p2); const alarmOn = snap(ctx2);
+      setLayers(p2, { openingStatus: false });
+      paint(ctx2, p2);
+      ok('7J openingStatus leaves other fixtures’ state badges alone',
+         diffPixels(alarmOn, snap(ctx2)) === 0, diffPixels(alarmOn, snap(ctx2)));
     }
   } catch (err) {
     ok('harness threw', false, (err && err.stack) || String(err));
