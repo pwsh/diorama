@@ -132,6 +132,7 @@ const WINDOW_KINDS: { id: WindowKind; label: string }[] = [
   { id: 'single', label: 'Single' }, { id: 'double_hung', label: 'Double-hung' },
   { id: 'casement_pair', label: 'Casement' }, { id: 'sliding', label: 'Sliding' },
   { id: 'picture', label: 'Picture' },
+  { id: 'bay', label: 'Bay' }, { id: 'bay_bench', label: 'Bay + seat' },
 ];
 
 // TOOLS fixture list → the "Controls & Sensors" tab. (mmWave/motion/env/... —

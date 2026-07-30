@@ -239,6 +239,34 @@
     ok('curtain_2d_frac_ok', !threw, '');
   }
 
+  // === 9. Bay windows: curtains are N/A and must be GATED OFF ===============
+  // A drape hung across a bay would slice through the angled returns, so the
+  // bay kinds skip the whole curtain build — including the closed-curtain glass
+  // opacification (a bay's glass stays at the ordinary 0.16 closed clarity).
+  for (const bk of ['bay', 'bay_bench']) {
+    const wb = [{ id: 'cb', x: 6000, y: wallY, w: 1800, rotation: 0, entity_id: null,
+                  kind: bk, curtain: { style: 'split' }, curtainPos: 0 }];
+    let threw = null;
+    try { build(wb); } catch (e) { threw = e; }
+    ok(`bay_curtain_no_throw_${bk}`, threw === null, threw ? String(threw.message) : '');
+    const grp = r._doorGroup.children[0];
+    ok(`bay_no_curtain_panels_${bk}`, curtainGroups(grp).length === 0, String(curtainGroups(grp).length));
+    let rods = 0; grp.traverse(o => { if (o.userData?.kind === 'curtainRod') rods++; });
+    ok(`bay_no_curtain_rod_${bk}`, rods === 0, String(rods));
+    ok(`bay_glass_not_opacified_${bk}`, near(panes(grp)[0].material.opacity, 0.16, 1e-6),
+       panes(grp)[0].material.opacity.toFixed(3));
+    // The bay itself still built its three panes.
+    ok(`bay_still_three_panes_${bk}`, panes(grp).length === 3, String(panes(grp).length));
+  }
+  // A NON-bay window in the same scene keeps its curtains (no over-broad gate).
+  {
+    const wn = [{ id: 'cn', x: 6000, y: wallY, w: 1400, rotation: 0, entity_id: null,
+                  kind: 'single', curtain: { style: 'split' }, curtainPos: 0 }];
+    build(wn);
+    ok('nonbay_curtain_still_built', curtainGroups(r._doorGroup.children[0]).length === 2,
+       String(curtainGroups(r._doorGroup.children[0]).length));
+  }
+
   const pass = results.every(x => x.startsWith('ok'));
   const n = results.length, pc = results.filter(x => x.startsWith('ok')).length;
   document.title = `CURTAIN ${pass ? 'PASS' : 'FAIL'} ${pc}/${n} ${results.join(' ')}`;

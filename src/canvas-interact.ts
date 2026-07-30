@@ -1,4 +1,4 @@
-import { snap, snapVertex15, distMM, worldToLocal, localToWorld, FURNITURE_KINDS, furnitureCorners, furnitureLocalToWorld, furnitureWorldToLocal, resolveFurnitureDef, resolveFurnitureWallCollision, resolveSeatTableCollision, seatBelongsToTable, snapStepLightToSurface, snapFireplaceToWall, snapFloodlightToWall, snapExhaustToWall, snapSwitchToWall, snapAlarmToWall, snapCalendarToWall, snapThermostatToWall, snapPlugToWall, snapInfoCardToWall, snapActionButtonToWall, isBinKind, isSinkKind, defaultFurnitureElevation, nearestAlign, envScale, ENV_SCALE_MIN, ENV_SCALE_MAX, GRID_MM, floorContentBbox, resolveFloorEdgeDrag, DOOR_DEFAULT_W, doorDefaultWidth } from './geometry.js';
+import { snap, snapVertex15, distMM, worldToLocal, localToWorld, FURNITURE_KINDS, furnitureCorners, furnitureLocalToWorld, furnitureWorldToLocal, resolveFurnitureDef, resolveFurnitureWallCollision, resolveSeatTableCollision, seatBelongsToTable, snapStepLightToSurface, snapFireplaceToWall, snapFloodlightToWall, snapExhaustToWall, snapSwitchToWall, snapAlarmToWall, snapCalendarToWall, snapThermostatToWall, snapPlugToWall, snapInfoCardToWall, snapActionButtonToWall, isBinKind, isSinkKind, defaultFurnitureElevation, nearestAlign, envScale, ENV_SCALE_MIN, ENV_SCALE_MAX, GRID_MM, floorContentBbox, resolveFloorEdgeDrag, DOOR_DEFAULT_W, doorDefaultWidth, windowDefaultWidth } from './geometry.js';
 import { newId } from './storage.js';
 import {
   pxToMm, type View,
@@ -2466,9 +2466,10 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
                 entity_id: null; label: string; kind?: WindowKind } = {
       id: newId('wn'),
       x: snap(mm.x, 10), y: snap(mm.y, 10),
-      w: 1000, rotation: 0, entity_id: null, label: '',
+      w: windowDefaultWidth(p.pendingWindowKind), rotation: 0, entity_id: null, label: '',
     };
     // Visual toolbar can pre-pick a window kind; default 'single' = classic.
+    // A bay drops WIDER (windowDefaultWidth) so its three-pane splay reads.
     if (p.pendingWindowKind && p.pendingWindowKind !== 'single') wn.kind = p.pendingWindowKind;
     snapOpeningToWall(f, wn);
     f.windows.push(wn);

@@ -457,9 +457,10 @@ function verifyRefs(subjects) {
 }
 
 // ── hand-maintained-list guard ─────────────────────────────────────────────────
-// capture-main.ts's LIGHT_KINDS array and safety-kind loop are hand-typed lists
-// that are supposed to mirror src/types.ts's `LightIconKind` / `SafetyKind`
-// unions, but capture-main.ts is NEVER type-checked: it lives outside
+// capture-main.ts's LIGHT_KINDS array and its safety / door / window kind loops
+// are hand-typed lists that are supposed to mirror src/types.ts's
+// `LightIconKind` / `SafetyKind` / `DoorKind` / `WindowKind` unions, but
+// capture-main.ts is NEVER type-checked: it lives outside
 // tsconfig.json's `include: ["src"]`, and esbuild (its only compile step, run
 // below) transpiles TS syntax without verifying types at all. So a future kind
 // added to either union with no matching row in capture-main.ts would silently
@@ -479,6 +480,11 @@ function verifyHandMaintainedLists(subjects) {
   const checks = [
     { subjectType: 'light', typeName: 'LightIconKind' },
     { subjectType: 'safety', typeName: 'SafetyKind' },
+    // The doors + windows page enumerates its kinds by hand too — same guard,
+    // so adding a DoorKind / WindowKind without a capture subject fails loudly
+    // instead of silently shipping a gallery page missing the new kind.
+    { subjectType: 'door', typeName: 'DoorKind' },
+    { subjectType: 'window', typeName: 'WindowKind' },
   ];
   for (const { subjectType, typeName } of checks) {
     const expected = countTypeUnionMembers(typeName);

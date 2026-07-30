@@ -458,12 +458,17 @@ export interface PlugFixture {
 // binary_sensor) that erupts into a spinning police-style light-bar sweep +
 // expanding rings while 'on' (sounding); clicking a bound siren TOGGLES it
 // (siren.toggle / switch.toggle), unbound flips localState like the Test button.
-export type SafetyKind = 'smoke' | 'co' | 'gas' | 'leak' | 'siren';
+// glass_break = acoustic glass-break detector: a small SQUARE plate (wall or
+// ceiling, mounted at the detector height like the other ceiling family) with a
+// microphone grille, cool blue-violet accent. Alarming adds the shared expanding
+// rings PLUS a spiky "shatter" star burst so it reads distinctly from the round
+// smoke/CO/gas beacons at a glance.
+export type SafetyKind = 'smoke' | 'co' | 'gas' | 'leak' | 'siren' | 'glass_break';
 
 export interface SafetySensor {
   id: string;
   x: number; y: number;
-  kind: SafetyKind;           // smoke/co/gas/siren = ceiling beacon; leak = floor puck + puddle
+  kind: SafetyKind;           // smoke/co/gas/siren/glass_break = ceiling family; leak = floor puck + puddle
   entity_id: string | null;   // detectors: binary_sensor.* ('on'=ALARM); siren: siren.*/switch.*/binary_sensor
   localState?: string;        // unbound manual trigger: 'on' = alarming/sounding; inert once bound
   label?: string;
@@ -730,7 +735,13 @@ export interface Door {
 }
 
 // Window glazing style. `single` reproduces the legacy one-pane look.
-export type WindowKind = 'single' | 'double_hung' | 'casement_pair' | 'sliding' | 'picture';
+// bay / bay_bench PROJECT OUTWARD from the wall face: a three-pane assembly
+// (centre pane parallel to the wall + two ~35° angled returns), a solid base
+// board from the floor up to the sill, and a head/roof board. `bay_bench` adds
+// an interior cushioned window seat at the sill — registered as a real SitSpot
+// (id `win:<windowId>:0`) so the standard dwell/claim/sit machinery applies.
+export type WindowKind = 'single' | 'double_hung' | 'casement_pair' | 'sliding' | 'picture'
+  | 'bay' | 'bay_bench';
 
 // Per-window interior curtain treatment (display-only openness). Distinct from
 // Window.coverEntity (a roller shade that DESCENDS from the header) — curtains

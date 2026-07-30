@@ -296,6 +296,22 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Glass-break sensor + leak puddle curve + gate fence gaps + bay
+  windows** (2026-07-30, user-requested ×4; unreleased — on main past
+  v0.46.0). SafetyKind + glass_break (square mic plate, shatter-star
+  alarm; capture guard extended to Door/Window kinds too). Leak
+  puddle: growth existed but was linear-from-zero + the gallery GIF
+  captured a fixed size — now shared sqrt ease-out
+  leakPuddleGrow/RadiusMm (18 % floor) + capSafety age ramp. Gates:
+  picket/chainlink built full-segment IGNORING wallCutsForSegment
+  and hedge's crown bridged its gap — all four fence kinds now build
+  per solid sub-interval (real gate posts) + 2D marks respect cuts.
+  WindowKind + bay/bay_bench: 3-pane outward projection
+  (bayProjectSign loop-probe; splay ≤45°; kind-aware
+  sill/height/width defaults; curtains gated off), bay_bench = a
+  real window-seat SitSpot (win:<id>:0 — SitSpots no longer
+  furniture-only). window-test 15→53, curtain 25→36, fence-gate
+  37→58, livefeatures 19→33; nine baselines held.
 - **Plan wall-intersection sweep + showroom lighting + orientation-gated
   interactions + tend_plant pose** (2026-07-30, user-reported ×4;
   unreleased — on main past v0.46.0). Zero-tolerance audit: 5 real

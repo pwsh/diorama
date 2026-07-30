@@ -161,6 +161,82 @@
     let hasPlane = false;
     r._safetyGroup.children[0].traverse(o => { if (o.isMesh && o.geometry?.type === 'PlaneGeometry') hasPlane = true; });
     assert('dry leak detector has no puddle', !hasPlane);
+
+    // ── Driven alarm AGE (the gallery-capture / deterministic path) ─────────
+    // The puddle grew off performance.now() only, so a capture (or any short
+    // observation) saw an essentially fixed-size patch — the "doesn't spread"
+    // report. updateSafetySensors now takes an optional leak-age provider;
+    // drive it and assert a strictly increasing radius over the grow window.
+    const wet = [{ id: 'lk1', x: 2500, y: 2500, kind: 'leak', entity_id: null, localState: 'on' }];
+    const atAge = (ageS) => {
+      r.updateSafetySensors(wet, () => null, () => ageS);
+      return puddleWidth().w;
+    };
+    const w0 = atAge(0), w15 = atAge(15), w30 = atAge(30), w60 = atAge(60);
+    assert('leak puddle spreads over the grow window (0 < 15 s < 30 s)',
+      w0 > 0 && w15 > w0 * 1.4 && w30 > w15, `t0=${w0 | 0} t15=${w15 | 0} t30=${w30 | 0}`);
+    assert('leak puddle starts at a VISIBLE size (not a zero-width patch)',
+      w0 >= 2 * 600 * 0.15, `t0=${w0 | 0}`);
+    assert('leak puddle reaches the full radius at leakGrowSec and clamps',
+      Math.abs(w30 - 2 * 600) < 1 && Math.abs(w60 - w30) < 1e-6, `t30=${w30 | 0} t60=${w60 | 0}`);
+    // The internal clock still drives when NO provider is passed (real app).
+    r.updateSafetySensors(wet, () => null);
+    const wClock = puddleWidth().w;
+    assert('leak puddle falls back to the internal clock without a provider',
+      wClock > 0, String(wClock | 0));
+  }
+
+  // ── glass_break: SQUARE acoustic mic plate + shatter burst (#1) ──────────
+  function testGlassBreak() {
+    const floor = {
+      id: 'fgb', name: 'GB', w: 6000, d: 5000,
+      walls: [], furniture: [], lights: [], switches: [], sensors: [],
+      motionSensors: [], envSensors: [], doors: [], windows: [], bg: null,
+      model3d: null, look3d: null, rooms: [],
+      safetySensors: [
+        { id: 'gb_idle', x: 1500, y: 2000, kind: 'glass_break', entity_id: null },
+        { id: 'gb_alarm', x: 4500, y: 2000, kind: 'glass_break', entity_id: null, localState: 'on' },
+        { id: 'sm_alarm', x: 3000, y: 3500, kind: 'smoke', entity_id: null, localState: 'on' },
+      ],
+    };
+    r.updateFloor(floor, { preset: 'day' });
+    r.updateSafetySensors(floor.safetySensors, () => null);
+    const g = r._safetyGroup;
+    const idle = g.children[0], alarm = g.children[1], smoke = g.children[2];
+    const meshes = (grp, pred) => { const a = []; grp.traverse(o => { if (o.isMesh && (!pred || pred(o))) a.push(o); }); return a; };
+    assert('glass-break mounts at ceiling height like the other detectors',
+      idle.position.y > 2000, `y=${Math.round(idle.position.y)}`);
+    // SQUARE plate, not a round puck — the silhouette IS the differentiator.
+    const plate = meshes(idle, o => o.geometry?.type === 'BoxGeometry' &&
+      Math.abs(o.geometry.parameters.width - o.geometry.parameters.depth) < 1 &&
+      o.geometry.parameters.height < 60)[0];
+    assert('glass-break body is a square plate (BoxGeometry, not a cylinder)', !!plate,
+      plate ? `${plate.geometry.parameters.width}mm` : 'none');
+    assert('smoke detector is still a round disc (CylinderGeometry)',
+      meshes(smoke, o => o.geometry?.type === 'CylinderGeometry').length > 0);
+    // Mic grille: several thin slot bars across the underside.
+    const slots = meshes(idle, o => o.geometry?.type === 'BoxGeometry' &&
+      o.geometry.parameters.height <= 12);
+    assert('glass-break plate has a mic grille (slot bars)', slots.length >= 4, String(slots.length));
+    // Cool blue-violet accent (b > r > g) distinguishes it from red/amber kinds.
+    const led = meshes(idle, o => o.geometry?.type === 'SphereGeometry')[0];
+    const c = led.material.emissive ?? led.material.color;
+    assert('glass-break reads blue-violet, not red/amber', !!led, led ? 'led' : 'none');
+    // ALARMING adds SPIKY shatter rings (low thetaSegments) on top of the round ones.
+    const rings = meshes(alarm, o => o.geometry?.type === 'RingGeometry');
+    const spiky = rings.filter(o => o.geometry.parameters.thetaSegments <= 10);
+    const round = rings.filter(o => o.geometry.parameters.thetaSegments > 10);
+    assert('alarming glass-break bursts spiky shatter rings', spiky.length >= 2,
+      `spiky=${spiky.length} round=${round.length}`);
+    assert('alarming glass-break also keeps the shared expanding rings', round.length >= 3,
+      String(round.length));
+    assert('idle glass-break has NO rings', meshes(idle, o => o.geometry?.type === 'RingGeometry').length === 0);
+    assert('smoke alarm has no SPIKY rings (glass-break is distinct)',
+      meshes(smoke, o => o.geometry?.type === 'RingGeometry' && o.geometry.parameters.thetaSegments <= 10).length === 0);
+    // Clickable like every other detector.
+    let tagged = false;
+    idle.traverse(o => { if (o.userData?.kind === 'safety' && o.userData.fixtureId === 'gb_idle') tagged = true; });
+    assert('glass-break meshes tagged kind=safety', tagged);
   }
 
   // ── gas detector: ceiling beacon like CO (#2) ────────────────────────────
@@ -245,6 +321,7 @@
   if (test === 'glass' || test === 'all') testGlass();
   if (test === 'leak' || test === 'all') testLeak();
   if (test === 'gas' || test === 'all') testGas();
+  if (test === 'glassbreak' || test === 'all') testGlassBreak();
   if (test === 'envkind' || test === 'all') testEnvKind();
   if (test === 'roomocc' || test === 'all') testRoomOccupancy();
 

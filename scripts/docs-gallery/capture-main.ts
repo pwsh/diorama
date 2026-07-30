@@ -458,7 +458,14 @@ function capSafety(sub: Subject, o: CapOpts): string {
   else orbitCam([0, 2500, 0], 2700, -14, Math.PI * 0.85);
   return runCapture(N, gifPx, fps, 40, (i) => {
     const alarm = i > N * 0.18;
-    R.updateSafetySensors(f.safetySensors, stateOf({ 'binary_sensor.safety': { state: alarm ? 'on' : 'off', attributes: {} } }));
+    // The leak puddle grows over SAFETY_DEFAULTS.leakGrowSec (30 s) of WALL
+    // CLOCK. A capture is a couple of seconds long, so the internal clock left
+    // the GIF showing an essentially fixed-size patch ("doesn't spread"). Drive
+    // the alarm AGE explicitly instead: ramp 0 → the full grow window across
+    // the alarming frames so the GIF shows the whole spread.
+    const t01 = alarm ? (i - N * 0.18) / Math.max(1, N - 1 - N * 0.18) : 0;
+    const ageOf = isLeak ? () => t01 * 30 : undefined;
+    R.updateSafetySensors(f.safetySensors, stateOf({ 'binary_sensor.safety': { state: alarm ? 'on' : 'off', attributes: {} } }), ageOf);
   });
 }
 
@@ -513,7 +520,10 @@ function capOpening(sub: Subject, o: CapOpts): string {
   const wallKind = (!isWindow && sub.id === 'gate') ? 'fence_picket' : 'full';
   f.walls = [{ id: 'wb', kind: wallKind, points: [{ x: 500, y: 2000 }, { x: 5500, y: 2000 }] }];
   if (isWindow) {
-    f.windows = [{ id: 'w', x: 3000, y: 2000, w: 1600, rotation: 0, entity_id: 'cover.demo', kind: sub.id }];
+    // A bay needs its wider natural opening for the three-pane splay to read
+    // (mirrors geometry.ts's windowDefaultWidth); every other kind keeps 1600.
+    const ww = sub.id.startsWith('bay') ? 1800 : 1600;
+    f.windows = [{ id: 'w', x: 3000, y: 2000, w: ww, rotation: 0, entity_id: 'cover.demo', kind: sub.id }];
   } else {
     // Per-kind natural span (mirrors geometry.ts's doorDefaultWidth): garage is
     // wide, double-leaf/glass-slider kinds are medium, everything else is a
@@ -714,11 +724,14 @@ function buildCatalog(): any {
   for (const [kind, def] of Object.entries(ENV_KINDS)) {
     push({ type: 'env', id: kind, page: 'sensors', group: 'Environment', label: `${def.glyph} ${kind}`, notes: def.warn != null ? `warn ${def.warn} / danger ${def.danger}` : 'live reading', gif: `media/sensors/env_${safeId(kind)}.gif`, meta: { glyph: def.glyph } });
   }
-  for (const sk of ['smoke', 'co', 'gas', 'leak', 'siren']) {
-    const label = sk === 'siren' ? 'Siren beacon' : `${sk.toUpperCase()} detector`;
+  for (const sk of ['smoke', 'co', 'gas', 'leak', 'siren', 'glass_break']) {
+    const label = sk === 'siren' ? 'Siren beacon'
+      : sk === 'glass_break' ? 'Glass-break detector'
+        : `${sk.toUpperCase()} detector`;
     const notes = sk === 'leak' ? 'floor puck → spreading puddle'
       : sk === 'siren' ? 'idle → rotating beacon + strobe'
-        : 'idle → alarm rings';
+        : sk === 'glass_break' ? 'mic plate → shatter burst'
+          : 'idle → alarm rings';
     push({ type: 'safety', id: sk, page: 'sensors', group: 'Safety', label, notes, gif: `media/sensors/safety_${sk}.gif`, meta: {} });
   }
   for (const bk of ['trash_bin', 'recycle_bin']) {
@@ -736,7 +749,8 @@ function buildCatalog(): any {
   };
   const DOOR_KINDS = ['swing', 'garage', 'gate', 'sliding', 'pocket', 'double', 'french', 'sliding_glass'];
   for (const dk of DOOR_KINDS) push({ type: 'door', id: dk, page: 'doors-windows', group: 'Doors', label: DOOR_LABEL[dk], notes: dk === 'gate' ? 'picket gate on a fence run · open → close' : 'open → close', gif: `media/doors-windows/door_${dk}.gif`, meta: {} });
-  for (const wk of ['single', 'double_hung', 'casement_pair', 'sliding', 'picture']) push({ type: 'window', id: wk, page: 'doors-windows', group: 'Windows', label: wk.replace(/_/g, ' '), notes: 'open → close', gif: `media/doors-windows/window_${safeId(wk)}.gif`, meta: {} });
+  const WINDOW_KINDS_CAP = ['single', 'double_hung', 'casement_pair', 'sliding', 'picture', 'bay', 'bay_bench'];
+  for (const wk of WINDOW_KINDS_CAP) push({ type: 'window', id: wk, page: 'doors-windows', group: 'Windows', label: wk.replace(/_/g, ' '), notes: wk.startsWith('bay') ? 'projecting bay · open → close' : 'open → close', gif: `media/doors-windows/window_${safeId(wk)}.gif`, meta: {} });
 
   // Robots.
   for (const rk of ['vacuum', 'mower']) push({ type: 'robot', id: rk, page: 'robots', group: 'Robots', label: rk === 'vacuum' ? 'Robot vacuum' : 'Lawn mower', notes: 'dock + roam + LED states', gif: `media/robots/${rk}.gif`, meta: {} });

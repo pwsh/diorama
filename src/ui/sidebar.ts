@@ -31,7 +31,7 @@ import {
   flagpoleHoistFraction,
   GROUND_KINDS, groundAreaColor,
   poolWaterColor, poolDepthMm, poolRaisedMm,
-  FURNITURE_KINDS, furnitureKind, resolveFurnitureDef, WINDOW_DEFAULTS,
+  FURNITURE_KINDS, furnitureKind, resolveFurnitureDef, windowSillMm, windowGlassHMm, windowDefaultWidth,
   isDroopPlant, PLANT_MOISTURE_DEFAULT_THRESHOLD,
   ENV_KINDS, ENV_DEFAULTS, ENV_SCALE_MIN, ENV_SCALE_MAX,
   envKindOf, envColor, envValueText, envHeight, envScale,
@@ -104,6 +104,8 @@ const WINDOW_KINDS: { id: WindowKind; label: string }[] = [
   { id: 'casement_pair', label: 'Casement pair' },
   { id: 'sliding',       label: 'Sliding' },
   { id: 'picture',       label: 'Picture (fixed)' },
+  { id: 'bay',           label: 'Bay (projecting)' },
+  { id: 'bay_bench',     label: 'Bay + window seat' },
 ];
 
 const TOOLS: { id: Tool; label: string }[] = [
@@ -2025,8 +2027,9 @@ export class Sidebar extends LitElement {
     const st = p.effectiveState(s);
     const alarming = st?.state === 'on';
     const dfl = kind === 'co' ? 'CO' : kind === 'gas' ? 'Gas' : kind === 'leak' ? 'Leak'
-              : kind === 'siren' ? 'Siren' : 'Smoke';
-    const badge = alarming ? (kind === 'leak' ? 'LEAK' : kind === 'siren' ? 'SOUNDING' : 'ALARM')
+              : kind === 'siren' ? 'Siren' : kind === 'glass_break' ? 'Glass break' : 'Smoke';
+    const badge = alarming ? (kind === 'leak' ? 'LEAK' : kind === 'siren' ? 'SOUNDING'
+                              : kind === 'glass_break' ? 'BREAK' : 'ALARM')
                            : (st ? (kind === 'leak' ? 'dry' : kind === 'siren' ? 'idle' : 'ok')
                                  : (s.entity_id ? '—' : 'unbound'));
     return html`
@@ -2056,6 +2059,7 @@ export class Sidebar extends LitElement {
             <option value="gas">Gas</option>
             <option value="leak">Leak (floor / water)</option>
             <option value="siren">Siren / alert beacon</option>
+            <option value="glass_break">Glass break (acoustic)</option>
           </select>
         </div>
         <div class="row"><label>Label</label>
@@ -4739,7 +4743,11 @@ export class Sidebar extends LitElement {
         </div>
         <div class="row"><label>Type</label>
           <select @change=${(e: Event) => upd(() => {
-                    w.kind = (e.target as HTMLSelectElement).value as WindowKind;
+                    const k = (e.target as HTMLSelectElement).value as WindowKind;
+                    // Switching to/from a bay bumps a still-default width to the
+                    // new kind's default (the door Kind dropdown's idiom).
+                    if (w.w === windowDefaultWidth(w.kind)) w.w = windowDefaultWidth(k);
+                    w.kind = k;
                   })}>
             ${WINDOW_KINDS.map(k => html`
               <option value=${k.id} ?selected=${(w.kind ?? 'single') === k.id}>${k.label}</option>`)}
@@ -4747,18 +4755,18 @@ export class Sidebar extends LitElement {
         </div>
         <div class="row"><label>Sill (mm)</label>
           <input type="number" min="0" max="2400" step="50"
-                 .value=${String(Math.round(w.sill ?? WINDOW_DEFAULTS.sill))}
+                 .value=${String(Math.round(windowSillMm(w)))}
                  @input=${(e: Event) => upd(() => {
                    const v = parseFloat((e.target as HTMLInputElement).value);
-                   w.sill = isFinite(v) ? Math.max(0, Math.min(2400, v)) : WINDOW_DEFAULTS.sill;
+                   w.sill = isFinite(v) ? Math.max(0, Math.min(2400, v)) : windowSillMm({ kind: w.kind });
                  })}>
         </div>
         <div class="row"><label>Height (mm)</label>
           <input type="number" min="200" max="2600" step="50"
-                 .value=${String(Math.round(w.height ?? WINDOW_DEFAULTS.height))}
+                 .value=${String(Math.round(windowGlassHMm(w)))}
                  @input=${(e: Event) => upd(() => {
                    const v = parseFloat((e.target as HTMLInputElement).value);
-                   w.height = isFinite(v) ? Math.max(200, Math.min(2600, v)) : WINDOW_DEFAULTS.height;
+                   w.height = isFinite(v) ? Math.max(200, Math.min(2600, v)) : windowGlassHMm({ kind: w.kind });
                  })}>
         </div>
         <div class="row"><label>HA entity</label>

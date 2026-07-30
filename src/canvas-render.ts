@@ -8,7 +8,7 @@ import {
   THERMO_DEFAULTS, hvacModeColor, hvacActionColor, hvacActionActive, hvacAirflow, HVAC_VENT_COLORS,
   climateTempUnit, fmtTempNum,
   actionButtonSize, actionButtonColor, actionButtonIcon,
-  safetyColor, safetyGlyph, safetyIsFloor, SAFETY_DEFAULTS,
+  safetyColor, safetyGlyph, safetyIsFloor, safetyIsPlate, SAFETY_DEFAULTS, leakPuddleRadiusMm,
   robotGlyph, robotColor, robotProgress, ROBOT_DEFAULTS,
   presenceZoneColor, cameraFov, cameraRange, cameraStateColor, cameraColor,
   projectorProjecting, projectorAim, projectorBeamColor, projectorThrow, screenCenterHeight, biasLightColor,
@@ -26,7 +26,7 @@ import {
   isVehicleKind, evStatusOf, evStatusColor, evChargePercent, carChargeState,
   isStairsKind, stairChipArrow, stairsRiseMm, stairsTreadCount, FURNITURE_KINDS,
   doorEndpoint, doorOpenDeltaDeg, doorOpenFraction, doorSpanCenter, doorSlideDir,
-  windowEndpoints, wallCutsForSegment, wallKind,
+  windowEndpoints, wallCutsForSegment, wallKind, isBayWindowKind, bayProjectSign, bayPlan,
   ENV_KINDS, envKindOf, envColor, envValueText, envScale,
   infoCardText, infoCardRule, infoCardScale, infoCardMount,
   closedWallLoops, loopContaining, roomLabel,
@@ -1921,9 +1921,10 @@ function drawSafetySensors(ctx: CanvasRenderingContext2D, p: Planner, view: View
       if (alarming) {
         if (!_leakAlarmStart.has(s.id)) _leakAlarmStart.set(s.id, t);
         const started = _leakAlarmStart.get(s.id)!;
-        const grow = Math.min(1, (t - started) / SAFETY_DEFAULTS.leakGrowSec);
         const pulse = 0.5 + 0.5 * Math.sin(t * 2.5);
-        const puddleMm = SAFETY_DEFAULTS.leakMaxRadiusMm * grow;
+        // Shared ease-out curve with the 3D decal (geometry.leakPuddleRadiusMm)
+        // so the two views can never spread at different rates.
+        const puddleMm = leakPuddleRadiusMm(t - started);
         const prx = Math.max(rPx * 1.2, puddleMm * view.scale);
         ctx.save();
         // Spreading water ellipse (alpha pulses gently — W3 puddle idiom).
@@ -2029,6 +2030,83 @@ function drawSafetySensors(ctx: CanvasRenderingContext2D, p: Planner, view: View
       ctx.fillStyle = alarming ? hexToRgba(col, 1) : '#cfd8dc';
       ctx.fillText(txt, c.x, by + 1 * dpr);
       drawBatteryBadge(ctx, p, s.entity_id, c.x + rPx * 0.8, c.y - rPx * 0.8);
+      continue;
+    }
+
+    // ── Glass-break detector: SQUARE acoustic mic plate ──
+    // Rounded square + grille slots + corner LED (blue-violet), so it never
+    // reads as one of the round smoke/CO/gas pucks. Alarming adds the shared
+    // rings PLUS a spiky shatter star (the 2D twin of the 3D shard burst).
+    if (safetyIsPlate(kind)) {
+      const half = rPx * 1.05;
+      if (alarming) {
+        const pulse = 0.5 + 0.5 * Math.sin(t * 6);
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(c.x, c.y, rPx * 2.4, 0, 2 * Math.PI);
+        ctx.fillStyle = hexToRgba(col, 0.16 + 0.2 * pulse);
+        ctx.fill();
+        // Shatter star: an 8-point spiky outline snapping outward.
+        for (let k = 0; k < 2; k++) {
+          const ph = (t * 2.6 + k / 2) % 1;
+          const rr = rPx * (0.9 + ph * 3.4);
+          ctx.beginPath();
+          for (let v = 0; v < 16; v++) {
+            const ang = (v / 16) * 2 * Math.PI + ph * 0.9;
+            const rad = rr * (v % 2 === 0 ? 1 : 0.42);
+            const px = c.x + Math.cos(ang) * rad, py = c.y + Math.sin(ang) * rad;
+            if (v === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+          }
+          ctx.closePath();
+          ctx.lineWidth = Math.max(1.2, 2 * dpr) * (1 - ph);
+          ctx.strokeStyle = hexToRgba(col, 0.8 * (1 - ph));
+          ctx.stroke();
+        }
+        // Shared expanding rings.
+        for (let k = 0; k < 3; k++) {
+          const ph = (t * 1.4 + k / 3) % 1;
+          const rr = rPx * (1 + ph * 3.2);
+          ctx.beginPath();
+          ctx.arc(c.x, c.y, rr, 0, 2 * Math.PI);
+          ctx.lineWidth = Math.max(1.2, 2 * dpr) * (1 - ph);
+          ctx.strokeStyle = hexToRgba(col, 0.55 * (1 - ph));
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+      ctx.save();
+      // Plate body (square with softened corners).
+      const rad = Math.max(2, half * 0.22);
+      ctx.beginPath();
+      if (typeof ctx.roundRect === 'function') ctx.roundRect(c.x - half, c.y - half, half * 2, half * 2, rad);
+      else ctx.rect(c.x - half, c.y - half, half * 2, half * 2);
+      ctx.fillStyle = alarming ? hexToRgba(col, 0.9) : 'rgba(236,239,241,0.95)';
+      ctx.fill();
+      ctx.lineWidth = selected ? 2.5 : 1.5;
+      ctx.strokeStyle = selected ? '#fff' : hexToRgba(col, 0.9);
+      ctx.stroke();
+      // Mic grille: 3 slot bars across the plate.
+      ctx.strokeStyle = alarming ? 'rgba(255,255,255,0.9)' : hexToRgba(col, 0.75);
+      ctx.lineWidth = Math.max(1, half * 0.16);
+      for (let k = -1; k <= 1; k++) {
+        const gy = c.y + k * half * 0.45;
+        ctx.beginPath();
+        ctx.moveTo(c.x - half * 0.55, gy); ctx.lineTo(c.x + half * 0.55, gy);
+        ctx.stroke();
+      }
+      ctx.restore();
+      const label = s.label?.trim() || 'Glass break';
+      const badge = alarming ? 'BREAK' : (st ? 'ok' : (s.entity_id ? '—' : 'unbound'));
+      const txt = fixtureCaption(names, label, badge);
+      ctx.font = `${10 * dpr}px sans-serif`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+      const tw = ctx.measureText(txt).width + 8 * dpr;
+      const by = c.y + half + 4 * dpr;
+      ctx.fillStyle = 'rgba(0,0,0,0.7)';
+      ctx.fillRect(c.x - tw / 2, by, tw, 13 * dpr);
+      ctx.fillStyle = alarming ? hexToRgba(col, 1) : '#cfd8dc';
+      ctx.fillText(txt, c.x, by + 1 * dpr);
+      drawBatteryBadge(ctx, p, s.entity_id, c.x + half * 0.8, c.y - half * 0.8);
       continue;
     }
 
@@ -3717,11 +3795,16 @@ function drawWalls(ctx: CanvasRenderingContext2D, p: Planner, view: View): void 
         const p2 = mmToPx(view, A.x + ux * sv.t1, A.y + uy * sv.t1);
         ctx.beginPath(); ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y); ctx.stroke();
       }
+      // A run's decorative marks must respect the SAME cut intervals the base
+      // stroke does — running the balusters / pickets / mesh hatch through a
+      // gate's span made the gap invisible (the line broke, the slats didn't).
+      const inSolid = (t: number) => solids.some(sv => t >= sv.t0 && t <= sv.t1);
       // Railings get baluster tick marks across the line.
       if (kind === 'railing') {
         const tickHalf = Math.max(3, wallW * 0.45);
         const nx = -uy, ny = ux;
         for (let t = 400; t < L; t += 500) {
+          if (!inSolid(t)) continue;
           const c1 = mmToPx(view, A.x + ux * t + nx * 0, A.y + uy * t);
           ctx.beginPath();
           ctx.moveTo(c1.x - ny * tickHalf, c1.y - nx * tickHalf);
@@ -3735,6 +3818,7 @@ function drawWalls(ctx: CanvasRenderingContext2D, p: Planner, view: View): void 
         const nx = -uy, ny = ux;
         ctx.lineWidth = Math.max(1, wallW * 0.15);
         for (let t = 100; t < L; t += 160) {
+          if (!inSolid(t)) continue;
           const c1 = mmToPx(view, A.x + ux * t, A.y + uy * t);
           ctx.beginPath();
           ctx.moveTo(c1.x - ny * tickHalf, c1.y - nx * tickHalf);
@@ -3753,6 +3837,7 @@ function drawWalls(ctx: CanvasRenderingContext2D, p: Planner, view: View): void 
         ctx.lineWidth = 1;
         // Sample every 180 mm; draw an X (two crossed short diagonals).
         for (let t = 90; t < L; t += 180) {
+          if (!inSolid(t)) continue;
           const c1 = mmToPx(view, A.x + ux * t, A.y + uy * t);
           const d1x = (sux + snx) * h * 0.5, d1y = (suy + sny) * h * 0.5;
           const d2x = (sux - snx) * h * 0.5, d2y = (suy - sny) * h * 0.5;
@@ -4256,6 +4341,10 @@ function drawWindows(ctx: CanvasRenderingContext2D, p: Planner, view: View): voi
   const dpr = window.devicePixelRatio || 1;
   const f = p.floor();
   if (!f.windows) return;
+  // Bay windows need the closed wall loops to resolve which side is exterior.
+  // Computed at most ONCE per frame, and only when a bay is actually present.
+  let bayLoops: Vec2[][] | null = null;
+  const loopsForBay = () => (bayLoops ??= closedWallLoops(f.walls ?? []));
   for (const w of f.windows) {
     const st = p.effectiveState(w);
     const isOpen = st?.state === 'on';
@@ -4275,6 +4364,36 @@ function drawWindows(ctx: CanvasRenderingContext2D, p: Planner, view: View): voi
     ctx.strokeStyle = isOpen ? 'rgba(102,187,106,0.45)' : 'rgba(187,222,251,0.55)';
     ctx.lineWidth = 2;
     ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+    // ── Bay: a protruding trapezoid notch OUTSIDE the wall line ─────────────
+    // Same plan the 3D builder extrudes (bayPlan) on the same exterior side
+    // (bayProjectSign), so the plan symbol and the model can never disagree.
+    if (isBayWindowKind(w.kind)) {
+      const sgn = bayProjectSign(w, loopsForBay());
+      const plan = bayPlan(w.w);
+      const th = (w.rotation || 0) * Math.PI / 180;
+      // World along-wall unit (a→b) and the local +Z world normal (sin θ, cos θ).
+      const aux = Math.cos(th), auy = -Math.sin(th);
+      const nx = Math.sin(th) * sgn, ny = Math.cos(th) * sgn;
+      const pt = (along: number, out: number) =>
+        mmToPx(view, w.x + aux * along + nx * out, w.y + auy * along + ny * out);
+      const c0 = pt(-w.w / 2, 0), c1 = pt(-plan.centerW / 2, plan.depth);
+      const c2 = pt(plan.centerW / 2, plan.depth), c3 = pt(w.w / 2, 0);
+      ctx.beginPath();
+      ctx.moveTo(c0.x, c0.y); ctx.lineTo(c1.x, c1.y);
+      ctx.lineTo(c2.x, c2.y); ctx.lineTo(c3.x, c3.y);
+      ctx.fillStyle = isOpen ? 'rgba(102,187,106,0.14)' : 'rgba(100,181,246,0.14)';
+      ctx.fill();
+      ctx.strokeStyle = color; ctx.lineWidth = 2;
+      ctx.stroke();
+      // bay_bench: a cushion bar across the projection, inside the notch.
+      if (w.kind === 'bay_bench') {
+        const b0 = pt(-plan.centerW / 2 * 0.92, plan.depth * 0.45);
+        const b1 = pt(plan.centerW / 2 * 0.92, plan.depth * 0.45);
+        ctx.strokeStyle = 'rgba(201,143,116,0.95)';
+        ctx.lineWidth = Math.max(3, 140 * view.scale);
+        ctx.beginPath(); ctx.moveTo(b0.x, b0.y); ctx.lineTo(b1.x, b1.y); ctx.stroke();
+      }
+    }
     // Open indicator: short perpendicular dashed line off the midpoint into +Y world.
     if (isOpen) {
       const mid = mmToPx(view, w.x, w.y);

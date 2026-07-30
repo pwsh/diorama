@@ -3,7 +3,7 @@
 import type { Vec2, Sensor, BgImage, LightIconKind, FurnitureKind, EnvKind, WallKind,
   ActivityKind, ObjectRecipe, Furniture, Room, Floor, SafetyKind, GroundKind, GroundArea,
   InfoCard, InfoCardMount, ActionKind, SprinklerHeadKind, Pool,
-  Wall, Ruler, RulerEnd, DoorKind } from './types.js';
+  Wall, Ruler, RulerEnd, DoorKind, WindowKind } from './types.js';
 import { formatEntityValue, formatClock, evalRules, ruleMatches, relTimeText,
   type HassStateLike, type ClockMode, type ValueRule } from './value-rules.js';
 
@@ -535,6 +535,67 @@ export function doorSpanCenter(d: { x: number; y: number; w: number; rotation: n
 // `height` = glass height (the 3D header derives as sill + height). Shared by the
 // 3D wall cut and the pane builder so the solid runs and the glass line up.
 export const WINDOW_DEFAULTS = { sill: 900, height: 800 };
+// Bay windows (kind 'bay' / 'bay_bench') read best sitting LOWER and TALLER than
+// a punched opening: the bay's own base board runs floor→sill, and for
+// `bay_bench` that sill IS the bench seat, so it must land at real seat height.
+// `sideFrac` = each angled return's along-wall run as a fraction of the opening
+// width; the projection depth is capped at `depth` AND at that run, so the
+// returns always splay at ≤45° from the wall (a real bay reads 30–45°).
+export const BAY_WINDOW_DEFAULTS = { sill: 450, height: 1500, w: 1800, depth: 600, sideFrac: 0.28 };
+// Resolved bay plan for an opening of width W: how far each return runs along
+// the wall, the projection depth, and the resulting centre-pane width.
+export function bayPlan(W: number): { sideRun: number; depth: number; centerW: number; angleDeg: number } {
+  const sideRun = Math.max(120, W * BAY_WINDOW_DEFAULTS.sideFrac);
+  const depth = Math.min(BAY_WINDOW_DEFAULTS.depth, sideRun);
+  return {
+    sideRun, depth,
+    centerW: Math.max(200, W - 2 * sideRun),
+    angleDeg: Math.atan2(depth, sideRun) * 180 / Math.PI,
+  };
+}
+export function isBayWindowKind(kind: WindowKind | undefined): boolean {
+  return kind === 'bay' || kind === 'bay_bench';
+}
+// Kind-aware sill / glass-height resolution. Every consumer (the wall cut, the
+// 3D pane builder, the sidebar inputs) routes through these so a bay can never
+// be cut at one height and glazed at another.
+export function windowSillMm(w: { kind?: WindowKind; sill?: number }): number {
+  return w.sill ?? (isBayWindowKind(w.kind) ? BAY_WINDOW_DEFAULTS.sill : WINDOW_DEFAULTS.sill);
+}
+export function windowGlassHMm(w: { kind?: WindowKind; height?: number }): number {
+  return w.height ?? (isBayWindowKind(w.kind) ? BAY_WINDOW_DEFAULTS.height : WINDOW_DEFAULTS.height);
+}
+// Default pane length for a NEWLY placed window of `kind` (the doorDefaultWidth
+// idiom). A bay needs a wide opening for its three-pane splay to read.
+export function windowDefaultWidth(kind: WindowKind | undefined): number {
+  return isBayWindowKind(kind) ? BAY_WINDOW_DEFAULTS.w : 1000;
+}
+
+// Which side of a window's wall does a BAY project toward? Returns the sign of
+// the window's LOCAL Z axis to build the bay on: +1 = local +Z, −1 = local −Z.
+//
+// Local +Z is the INTERIOR face by convention — roller shades and curtain rods
+// hang there — so a bay must project the OTHER way. When closed wall loops are
+// available we resolve it honestly: probe both normals and pick the side that
+// falls OUTSIDE every loop (outdoors). When nothing decides it (open plan, a
+// free-standing wall, no loops at all) we fall back to −1, the side opposite
+// the interior face. World normal for local +Z is (sin θ, cos θ).
+export function bayProjectSign(
+  w: { x: number; y: number; rotation: number },
+  loops: Vec2[][] | null | undefined,
+  probeMm = 700,
+): 1 | -1 {
+  const th = (w.rotation || 0) * Math.PI / 180;
+  const nx = Math.sin(th), ny = Math.cos(th);
+  if (loops && loops.length) {
+    const inside = (sx: number, sy: number) => loops.some(lp => pointInPolygon(sx, sy, lp));
+    const plusIn = inside(w.x + nx * probeMm, w.y + ny * probeMm);
+    const minusIn = inside(w.x - nx * probeMm, w.y - ny * probeMm);
+    if (minusIn && !plusIn) return 1;    // −Z is the room ⇒ project +Z
+    if (plusIn && !minusIn) return -1;   // +Z is the room ⇒ project −Z
+  }
+  return -1;
+}
 
 // A window cut also carries its sill/height so the 3D wall builder can size the
 // sub-sill and header runs per-window (doors leave these undefined). A door cut
@@ -548,7 +609,7 @@ export interface WallOpeningCut { t0: number; t1: number; kind: 'door' | 'window
 export function wallCutsForSegment(
   a: Vec2, b: Vec2,
   doors: { x: number; y: number; w: number; rotation: number; kind?: DoorKind }[],
-  windows: { x: number; y: number; w: number; sill?: number; height?: number }[],
+  windows: { x: number; y: number; w: number; sill?: number; height?: number; kind?: WindowKind }[],
   tol = 150,
 ): { solids: { t0: number; t1: number }[]; openings: WallOpeningCut[] } {
   const dx = b.x - a.x, dy = b.y - a.y;
@@ -569,7 +630,12 @@ export function wallCutsForSegment(
     const c = doorSpanCenter(d);
     collect(c.x, c.y, d.w, 'door', d.kind === 'garage' ? { head: GARAGE_DOOR_H } : undefined);
   }
-  for (const w of windows) collect(w.x, w.y, w.w, 'window', { sill: w.sill, height: w.height });
+  // Resolve sill/height through the KIND-AWARE helpers (a bay is cut lower and
+  // taller than a punched opening) so the wall cut can never disagree with the
+  // pane builder. For every non-bay window these resolve to WINDOW_DEFAULTS —
+  // the same values the 3D builder's SILL_TOP / WINDOW_GLASS_H fallbacks used.
+  for (const w of windows)
+    collect(w.x, w.y, w.w, 'window', { sill: windowSillMm(w), height: windowGlassHMm(w) });
   if (!openings.length) return { solids: [{ t0: 0, t1: len }], openings };
   const sorted = [...openings].sort((c1, c2) => c1.t0 - c2.t0);
   const solids: { t0: number; t1: number }[] = [];
@@ -1489,6 +1555,7 @@ export function safetyColor(kind: SafetyKind): string {
     case 'gas': return '#c0ca33';   // amber-green
     case 'leak': return '#42a5f5';  // water blue
     case 'siren': return '#2979ff'; // emergency blue
+    case 'glass_break': return '#7e6bf5';  // cool blue-violet (acoustic)
     default: return '#ef5350';      // smoke red
   }
 }
@@ -1498,11 +1565,32 @@ export function safetyGlyph(kind: SafetyKind): string {
     case 'gas': return 'GAS';
     case 'leak': return '💧';
     case 'siren': return '📢';
+    case 'glass_break': return 'GB';
     default: return '';
   }
 }
-// leak sits on the floor; smoke/co/gas/siren hang from the ceiling.
+// leak sits on the floor; smoke/co/gas/siren/glass_break mount at ceiling height.
 export function safetyIsFloor(kind: SafetyKind): boolean { return kind === 'leak'; }
+// glass-break is a SQUARE mic plate (not a round beacon puck) — shared 2D + 3D
+// so the two views can never disagree about the silhouette.
+export function safetyIsPlate(kind: SafetyKind): boolean { return kind === 'glass_break'; }
+
+// ── Leak puddle growth (shared 2D + 3D) ────────────────────────────────────
+// `ageS` = seconds since the leak alarm STARTED. Growth is deliberately
+// EASE-OUT (sqrt), not linear: a linear 30 s ramp spends its first seconds
+// invisibly small, which read as "the puddle never spreads". The curve also
+// starts at a visible floor (LEAK_PUDDLE_MIN of the max radius) so the wet
+// patch appears immediately and then visibly creeps outward to the full radius
+// at SAFETY_DEFAULTS.leakGrowSec.
+export const LEAK_PUDDLE_MIN = 0.18;
+export function leakPuddleGrow(ageS: number): number {
+  const t = Math.max(0, Math.min(1, (isFinite(ageS) ? ageS : 0) / SAFETY_DEFAULTS.leakGrowSec));
+  return Math.sqrt(t);
+}
+export function leakPuddleRadiusMm(ageS: number): number {
+  const g = leakPuddleGrow(ageS);
+  return SAFETY_DEFAULTS.leakMaxRadiusMm * (LEAK_PUDDLE_MIN + (1 - LEAK_PUDDLE_MIN) * g);
+}
 // siren is a controllable alert beacon (togglable), distinct from the passive
 // detectors — clicking it toggles the bound entity / flips localState.
 export function safetyIsSiren(kind: SafetyKind): boolean { return kind === 'siren'; }

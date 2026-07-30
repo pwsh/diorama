@@ -23,7 +23,7 @@ import {
   calendarHeight, CALENDAR_DEFAULTS, CALENDAR_PLATE_DEPTH_MM,
   thermostatHeight, THERMO_DEFAULTS, THERMO_PLATE_DEPTH_MM, hvacModeColor, hvacAirflow, HVAC_VENT_COLORS,
   lockGlyphColor, lockGlyphTransitional,
-  safetyColor, safetyIsFloor, SAFETY_DEFAULTS,
+  safetyColor, safetyIsFloor, safetyIsPlate, SAFETY_DEFAULTS, leakPuddleRadiusMm,
   powerGlowScale,
   // NOTE: alert-beacon helpers imported from ./alerts.js just below.
   robotColor, robotLedColor, ROBOT_DEFAULTS,
@@ -88,7 +88,7 @@ interface RobotRig {
   progressGroup: THREE.Group;       // toggled visible on/off by source presence
   progressMats: THREE.MeshToonMaterial[]; // ordered fill segments (strip L→R / ring CW)
 }
-import { wallCutsForSegment, WINDOW_DEFAULTS, closedWallLoops, wallSegmentInLoops, doorSpanCenter, wallKind, WALL_KINDS, furnitureLocalToWorld, furnitureWorldToLocal, pointInPolygon as pip, centroid, loopContaining, resolveRoomForPoint, roomLabel, intersectLoopWithRect, polygonArea, heatmapColor, groundAreaSkirtBase, poolWaterColor, poolDepthMm, poolRaisedMm, poolHeaterState, poolPumpOn, poolLightOn, poolRimY, poolBasinFloorY, poolWaterSurfaceY, POOL_COPING_COLOR, POOL_HEAT_GLOW, type RoomTemp } from './geometry.js';
+import { wallCutsForSegment, WINDOW_DEFAULTS, isBayWindowKind, windowSillMm, windowGlassHMm, bayProjectSign, bayPlan, closedWallLoops, wallSegmentInLoops, doorSpanCenter, wallKind, WALL_KINDS, furnitureLocalToWorld, furnitureWorldToLocal, pointInPolygon as pip, centroid, loopContaining, resolveRoomForPoint, roomLabel, intersectLoopWithRect, polygonArea, heatmapColor, groundAreaSkirtBase, poolWaterColor, poolDepthMm, poolRaisedMm, poolHeaterState, poolPumpOn, poolLightOn, poolRimY, poolBasinFloorY, poolWaterSurfaceY, POOL_COPING_COLOR, POOL_HEAT_GLOW, type RoomTemp } from './geometry.js';
 import { visibilityToFogDensity, moonPhaseFraction, type WeatherNow } from './weather.js';
 import { skySnapshot, moonAltAz, capSampleAltAz, satAltAz } from './sky-astro.js';
 // flights.ts is deliberately zero-import (three-free) and shared by BOTH the app
@@ -5556,58 +5556,70 @@ export class ThreeDRenderer {
           for (let k = 1; k < nBal; k++) bar((len * k) / nBal, 28, 100, kindH - 60, 28);
           continue;
         }
-        if (kind === 'fence_picket') {
-          // Picket fence: top + bottom rails + posts (~1800 mm pitch) + flat
-          // narrow pickets (~100 mm pitch), wood tone. See-through composite —
-          // NOT cutaway-enrolled.
-          const woodMat = this._mat({
-            color: scene3d?.wallColor ? hexToInt(scene3d.wallColor) : 0xb98a52,
-          });
-          const bar = (t: number, w2: number, y0: number, y1: number, d2 = 40) => {
-            const m = new THREE.Mesh(new THREE.BoxGeometry(d2, y1 - y0, w2), woodMat);
-            const p = this._w(a.x + ux * t, a.y + uy * t, bY + (y0 + y1) / 2);
-            m.position.set(p.x, p.y, p.z);
-            m.rotation.y = angle;
-            group.add(m);
-          };
-          bar(len / 2, len, kindH - 220, kindH - 140, 30);   // top rail
-          bar(len / 2, len, 200, 280, 30);                    // bottom rail
-          const nPosts = Math.max(1, Math.round(len / 1800));
-          for (let k = 0; k <= nPosts; k++) bar((len * k) / nPosts, 90, 0, kindH, 90);
-          const nPick = Math.max(1, Math.floor(len / 100));
-          for (let k = 0; k < nPick; k++) bar((len * (k + 0.5)) / nPick, 55, 0, kindH - 40, 22);
-          continue;
-        }
-        if (kind === 'fence_chainlink') {
-          // Chain-link: thin posts + a semi-transparent diamond-mesh plane per
-          // segment (flat MeshBasicMaterial, DoubleSide — pinned decision 4).
-          const postMat = this._mat({ color: 0x9aa0a6, metalness: 0.4, roughness: 0.5 });
-          const post = (t: number) => {
-            const m = new THREE.Mesh(new THREE.CylinderGeometry(28, 28, kindH, 8), postMat);
-            const p = this._w(a.x + ux * t, a.y + uy * t, bY + kindH / 2);
-            m.position.set(p.x, p.y, p.z);
-            group.add(m);
-          };
-          const nPosts = Math.max(1, Math.round(len / 2400));
-          for (let k = 0; k <= nPosts; k++) post((len * k) / nPosts);
-          const meshTex = this._fenceMeshTexture();
-          const planeGeo = new THREE.PlaneGeometry(len, kindH);
-          // Scale the plane's own UVs (0..1) so the SHARED texture tiles ~150 mm
-          // diamonds via RepeatWrapping — never touch meshTex.repeat (it's shared
-          // across every chain-link segment and the last write would win).
-          const uv = planeGeo.attributes.uv;
-          for (let k = 0; k < uv.count; k++) uv.setXY(k, uv.getX(k) * len / 150, uv.getY(k) * kindH / 150);
-          uv.needsUpdate = true;
-          const meshMat = new THREE.MeshBasicMaterial({
-            map: meshTex, transparent: true, opacity: 0.55, side: THREE.DoubleSide,
-            depthWrite: false,
-          });
-          const plane = new THREE.Mesh(planeGeo, meshMat);
-          const pc = this._w(a.x + ux * (len / 2), a.y + uy * (len / 2), bY + kindH / 2);
-          plane.position.set(pc.x, pc.y, pc.z);
-          plane.rotation.y = Math.atan2(-uy, -ux);   // face broadside along the run
-          plane.userData.outlineSkip = true;
-          group.add(plane);
+        // See-through fence composites (picket / chain-link) are built PER SOLID
+        // SUB-INTERVAL, not across the whole segment: a gate (or any door/window)
+        // must leave a real hole in the fence line, exactly like the solid
+        // extrusion path does for privacy/hedge. Building them full-length ran
+        // the rails, pickets, posts and mesh plane straight THROUGH the gate.
+        // Note posts are placed per-run, so both sides of a gap get a gate post.
+        if (kind === 'fence_picket' || kind === 'fence_chainlink') {
+          const { solids: fenceRuns } = wallCutsForSegment(a, b, f.doors ?? [], f.windows ?? []);
+          for (const run of fenceRuns) {
+            const rLen = run.t1 - run.t0;
+            if (rLen < 60) continue;    // sliver between abutting openings
+            const t0 = run.t0;
+            if (kind === 'fence_picket') {
+              // Picket fence: top + bottom rails + posts (~1800 mm pitch) + flat
+              // narrow pickets (~100 mm pitch), wood tone. See-through composite —
+              // NOT cutaway-enrolled.
+              const woodMat = this._mat({
+                color: scene3d?.wallColor ? hexToInt(scene3d.wallColor) : 0xb98a52,
+              });
+              const bar = (t: number, w2: number, y0: number, y1: number, d2 = 40) => {
+                const m = new THREE.Mesh(new THREE.BoxGeometry(d2, y1 - y0, w2), woodMat);
+                const p = this._w(a.x + ux * (t0 + t), a.y + uy * (t0 + t), bY + (y0 + y1) / 2);
+                m.position.set(p.x, p.y, p.z);
+                m.rotation.y = angle;
+                group.add(m);
+              };
+              bar(rLen / 2, rLen, kindH - 220, kindH - 140, 30);   // top rail
+              bar(rLen / 2, rLen, 200, 280, 30);                    // bottom rail
+              const nPosts = Math.max(1, Math.round(rLen / 1800));
+              for (let k = 0; k <= nPosts; k++) bar((rLen * k) / nPosts, 90, 0, kindH, 90);
+              const nPick = Math.max(1, Math.floor(rLen / 100));
+              for (let k = 0; k < nPick; k++) bar((rLen * (k + 0.5)) / nPick, 55, 0, kindH - 40, 22);
+            } else {
+              // Chain-link: thin posts + a semi-transparent diamond-mesh plane per
+              // RUN (flat MeshBasicMaterial, DoubleSide — pinned decision 4).
+              const postMat = this._mat({ color: 0x9aa0a6, metalness: 0.4, roughness: 0.5 });
+              const post = (t: number) => {
+                const m = new THREE.Mesh(new THREE.CylinderGeometry(28, 28, kindH, 8), postMat);
+                const p = this._w(a.x + ux * (t0 + t), a.y + uy * (t0 + t), bY + kindH / 2);
+                m.position.set(p.x, p.y, p.z);
+                group.add(m);
+              };
+              const nPosts = Math.max(1, Math.round(rLen / 2400));
+              for (let k = 0; k <= nPosts; k++) post((rLen * k) / nPosts);
+              const meshTex = this._fenceMeshTexture();
+              const planeGeo = new THREE.PlaneGeometry(rLen, kindH);
+              // Scale the plane's own UVs (0..1) so the SHARED texture tiles ~150 mm
+              // diamonds via RepeatWrapping — never touch meshTex.repeat (it's shared
+              // across every chain-link segment and the last write would win).
+              const uv = planeGeo.attributes.uv;
+              for (let k = 0; k < uv.count; k++) uv.setXY(k, uv.getX(k) * rLen / 150, uv.getY(k) * kindH / 150);
+              uv.needsUpdate = true;
+              const meshMat = new THREE.MeshBasicMaterial({
+                map: meshTex, transparent: true, opacity: 0.55, side: THREE.DoubleSide,
+                depthWrite: false,
+              });
+              const plane = new THREE.Mesh(planeGeo, meshMat);
+              const pc = this._w(a.x + ux * (t0 + rLen / 2), a.y + uy * (t0 + rLen / 2), bY + kindH / 2);
+              plane.position.set(pc.x, pc.y, pc.z);
+              plane.rotation.y = Math.atan2(-uy, -ux);   // face broadside along the run
+              plane.userData.outlineSkip = true;
+              group.add(plane);
+            }
+          }
           continue;
         }
         // Build the solid wall for this segment as ONE extruded prism whose 2D
@@ -5637,14 +5649,23 @@ export class ThreeDRenderer {
         if (isHedge) {
           // Trimmed-shrub crown: a slightly-narrower green box stacked over the
           // run so the hedge reads as a clipped rounded top rather than a slab.
-          const crown = new THREE.Mesh(
-            new THREE.BoxGeometry(segThick - 90, 260, len),
-            segMatFor());
-          const cp = this._w(a.x + ux * (len / 2), a.y + uy * (len / 2), bY + kindH - 60);
-          crown.position.set(cp.x, cp.y, cp.z);
-          crown.rotation.y = angle;
-          crown.userData.outlineSkip = true;
-          group.add(crown);
+          // Built PER SOLID SUB-INTERVAL — a full-length crown bridged straight
+          // over a gate's gap (the extrusion below it was already notched), so
+          // the hedge read as unbroken from any normal camera height.
+          const { solids: hedgeRuns } = wallCutsForSegment(a, b, f.doors ?? [], f.windows ?? []);
+          for (const run of hedgeRuns) {
+            const rLen = run.t1 - run.t0;
+            if (rLen < 60) continue;
+            const crown = new THREE.Mesh(
+              new THREE.BoxGeometry(segThick - 90, 260, rLen),
+              segMatFor());
+            const ct = run.t0 + rLen / 2;
+            const cp = this._w(a.x + ux * ct, a.y + uy * ct, bY + kindH - 60);
+            crown.position.set(cp.x, cp.y, cp.z);
+            crown.rotation.y = angle;
+            crown.userData.outlineSkip = true;
+            group.add(crown);
+          }
         }
       }
       this._shadowFlags(group);
@@ -6213,7 +6234,12 @@ export class ThreeDRenderer {
     // whose 600-mm-inset point falls inside a closed wall loop (floor-center
     // fallback when neither/both). Window world normal for the pane (local ±Z)
     // is ±(sin wr, cos wr); the matching scene normal is ±(−sin wr, cos wr).
-    const gazeWins = [...(f.windows ?? [])].sort((a, b) => b.w - a.w).slice(0, 6);
+    // A `bay_bench` is EXCLUDED: it registers a real window-seat SitSpot below,
+    // and a standing gaze anchor at the same spot would win the position blend
+    // (the `anchor` branch precedes `spot` in updateTargets) — the rig would
+    // claim the cushion but stand in front of it.
+    const gazeWins = [...(f.windows ?? [])].filter(w => w.kind !== 'bay_bench')
+      .sort((a, b) => b.w - a.w).slice(0, 6);
     const GAZE_IN = 600;
     for (const w of gazeWins) {
       const wr = (w.rotation ?? 0) * Math.PI / 180;
@@ -6238,6 +6264,40 @@ export class ThreeDRenderer {
         roomId: resolveRoomForPoint(rooms, loops, aw.x, aw.y)?.id ?? null,
         hasEntity: false,
         frontNx: null, frontNz: null,   // radial: the anchor IS the interior spot
+      });
+    }
+
+    // (3) Bay-window BENCH seats (WindowKind 'bay_bench'). The bay projects
+    // outward, so its cushion sits in the projection — but the sitter faces
+    // INTO the room (back to the glass), which is what the standard sit
+    // machinery expects: front normal toward the interior, approach staging
+    // inside the room. Registered here (not in _buildWindows) because
+    // `_sitSpots` is owned by updateFloor and reset at the top of it.
+    for (const w of f.windows ?? []) {
+      if (w.kind !== 'bay_bench') continue;
+      const wr = (w.rotation ?? 0) * Math.PI / 180;
+      const s = bayProjectSign(w, loops);          // +1/−1: local-Z side the bay projects to
+      const plan = bayPlan(w.w);
+      // Scene direction of window-local +Z is (−sin wr, cos wr).
+      const zx = -Math.sin(wr), zz = Math.cos(wr);
+      const wp = this._w(w.x, w.y, 0);
+      const off = s * plan.depth / 2;              // cushion centre, inside the bay
+      const sx = wp.x + zx * off, sz = wp.z + zz * off;
+      // Front (where the sitter looks / is approached from) = the INTERIOR side.
+      const fNx = -s * zx, fNz = -s * zz;
+      const APPROACH = 500;
+      const ax = sx + fNx * APPROACH, az = sz + fNz * APPROACH;
+      const aw = this._sceneToWorld(ax, az);
+      this._sitSpots.push({
+        id: `win:${w.id}:0`,
+        x: sx, z: sz,
+        seatY: windowSillMm(w) + this._openingBaseY(w.x, w.y),
+        facing: Math.atan2(-fNx, -fNz),
+        r: 650,
+        frontNx: fNx, frontNz: fNz,
+        approachX: ax, approachZ: az,
+        roomId: resolveRoomForPoint(rooms, loops, aw.x, aw.y)?.id ?? null,
+        soft: true,                 // cushioned seat — a pet curls up on it
       });
     }
 
@@ -7553,15 +7613,19 @@ export class ThreeDRenderer {
       // window interpolates. Drives glass clarity (fresh-air read when ajar).
       const openFrac = doorOpenFraction(st);
       const kind = w.kind ?? 'single';
-      const sill = w.sill ?? WINDOW_DEFAULTS.sill;      // bottom of glass
-      const glassH = w.height ?? WINDOW_DEFAULTS.height; // glass height
+      const bayKind = isBayWindowKind(kind);
+      const sill = windowSillMm(w);        // bottom of glass (bay defaults lower)
+      const glassH = windowGlassHMm(w);    // glass height (bay defaults taller)
       const W = w.w;
       // Glass opacity: 0.16 closed → 0.08 open. A CLOSED interior curtain reads as
       // blocked daylight — the glass behind it goes near-opaque (the opaque curtain
       // panel covers it anyway; this is the honest occlusion cue, no light system).
-      const curtainFrac = w.curtain ? this._resolveCurtainFrac(w, stateOf) : 1;
+      // Curtains are N/A inside a bay (a drape would slice through the angled
+      // returns), so a bay never resolves a curtain fraction either — its glass
+      // keeps the ordinary open/closed clarity.
+      const curtainFrac = (w.curtain && !bayKind) ? this._resolveCurtainFrac(w, stateOf) : 1;
       let glassOpacity = 0.16 - 0.08 * openFrac;
-      if (w.curtain && curtainFrac < 0.15) glassOpacity = Math.max(glassOpacity, 0.42);
+      if (w.curtain && !bayKind && curtainFrac < 0.15) glassOpacity = Math.max(glassOpacity, 0.42);
       const mat = glassMat(glassOpacity);
       const cy = sill + glassH / 2;                     // vertical center of glazing
       // Pane center group at (w.x, w.y); rotation matches wall axis.
@@ -7621,6 +7685,85 @@ export class ThreeDRenderer {
           grp.add(left, right, mull);
           break;
         }
+        case 'bay':
+        case 'bay_bench': {
+          // ── Bay window: a three-pane assembly PROJECTING out of the wall ──
+          // Plan (window-local XZ, wall plane at z = 0):
+          //     (−W/2,0) ──side── (−Wc/2, s·D) ──centre── (Wc/2, s·D) ──side── (W/2,0)
+          // `s` is the projection sign from bayProjectSign: the wall normal that
+          // lands OUTSIDE every closed wall loop, falling back to local −Z (the
+          // side opposite the interior face, where shades + curtain rods hang).
+          const s = bayProjectSign(w, this._wallLoops);
+          const plan = bayPlan(W);
+          const D = plan.depth * s;              // signed projection
+          const halfC = plan.centerW / 2;
+          const sideLen = Math.hypot(plan.sideRun, plan.depth);
+          const headY = sill + glassH;
+          // Opaque casework: knee wall below the glass, head board above, both
+          // THICKER than the panes so no face is ever coplanar with glass.
+          const woodMat = this._mat({ color: 0xbfc6cc, roughness: 0.7, metalness: 0.05 });
+          const CASE_T = 110;
+          // One face (knee wall / head board / glass pane) of the three-sided bay.
+          const face = (cx: number, cz: number, len: number, ry: number,
+                        y0: number, y1: number, thick: number, m: THREE.Material,
+                        tag?: string) => {
+            const mesh = new THREE.Mesh(new THREE.BoxGeometry(len, y1 - y0, thick), m);
+            mesh.position.set(cx, (y0 + y1) / 2, cz);
+            mesh.rotation.y = ry;
+            if (tag) mesh.userData = { ...mesh.userData, [tag]: true };
+            grp.add(mesh);
+            return mesh;
+          };
+          // Each face: [centre x, centre z, length, y-rotation].
+          const faces: [number, number, number, number][] = [
+            [0, D, plan.centerW, 0],                                   // centre pane
+            [-(W / 2 + halfC) / 2, D / 2, sideLen,
+              Math.atan2(-D, (W - plan.centerW) / 2)],                 // left return
+            [(W / 2 + halfC) / 2, D / 2, sideLen,
+              Math.atan2(-D, -(W - plan.centerW) / 2)],                // right return
+          ];
+          faces.forEach(([fx, fz, flen, fry], i) => {
+            face(fx, fz, flen, fry, 0, sill, CASE_T, woodMat);                    // knee wall
+            face(fx, fz, flen, fry, headY, headY + 160, CASE_T, woodMat);         // head board
+            const pane = face(fx, fz, flen - 60, fry, sill + 20, headY - 20, PANE_T, mat, 'bayPane');
+            // The CENTRE pane is the operable one (awning): it tilts out into the
+            // bay when open, exactly like the `single` kind's sash. The angled
+            // returns are fixed glazing.
+            if (i === 0 && isOpen) {
+              pane.rotation.x = -s * Math.PI / 7;
+              pane.position.z = D + s * PANE_T * 1.4;
+            }
+          });
+          // Vertical corner posts at the two wall junctions + the two bay corners.
+          for (const [px, pz] of [[-W / 2, 0], [-halfC, D], [halfC, D], [W / 2, 0]] as [number, number][]) {
+            const post = new THREE.Mesh(new THREE.BoxGeometry(90, headY + 160, 130), frameMat);
+            post.position.set(px, (headY + 160) / 2, pz);
+            grp.add(post);
+          }
+          // Overhanging flat roof over the whole projection.
+          const roof = new THREE.Mesh(
+            new THREE.BoxGeometry(W + 160, 110, Math.abs(D) + 180), woodMat);
+          roof.position.set(0, headY + 215, D / 2);
+          grp.add(roof);
+          if (kind === 'bay_bench') {
+            // Interior window seat: support box + cushion whose TOP lands exactly
+            // at the sill, so the SitSpot registered in updateFloor (seatY = sill)
+            // and the visible cushion can never drift apart.
+            const benchW = W - 180, benchD = Math.abs(D) - 60;
+            const benchZ = D / 2;
+            const support = new THREE.Mesh(
+              new THREE.BoxGeometry(benchW, Math.max(60, sill - 80), benchD), woodMat);
+            support.position.set(0, Math.max(60, sill - 80) / 2, benchZ);
+            grp.add(support);
+            const cushion = new THREE.Mesh(
+              new THREE.BoxGeometry(benchW - 40, 80, benchD - 40),
+              this._mat({ color: 0xc98f74, roughness: 0.9 }));
+            cushion.position.set(0, sill - 40, benchZ);
+            cushion.userData = { bayBench: true };
+            grp.add(cushion);
+          }
+          break;
+        }
         default: {  // 'single' — legacy one pane; tilts outward when open
           const p = glass(W, glassH); p.position.set(0, cy, 0);
           if (isOpen) { p.rotation.x = -Math.PI / 6; p.position.z = PANE_T; }
@@ -7655,7 +7798,7 @@ export class ThreeDRenderer {
       // gathered, 0 = CLOSED/covering) resolves from the bound cover/binary/switch
       // entity or the unbound curtainPos slider; panels gather toward their anchored
       // edge via the eased blend in _advanceCurtains (survives rebuilds).
-      if (w.curtain) {
+      if (w.curtain && !bayKind) {
         const cur = w.curtain;
         const style = cur.style;
         const frac = curtainFrac;
@@ -11474,7 +11617,12 @@ export class ThreeDRenderer {
   // the detector. Rebuilt under _keySafety normally; three-view forces a
   // per-frame rebuild while ANY detector on the floor is alarming (the fireplace
   // idiom) so the pulse animates. Rides the sensors layer.
-  updateSafetySensors(items: SafetySensor[], stateProvider: StateProvider): void {
+  // `leakAgeS` (optional, stale-caller safe) OVERRIDES the internal alarm-onset
+  // clock for a leak detector: seconds since that leak started. The gallery
+  // capture + tests drive it so the puddle spread is deterministic instead of
+  // depending on how long the capture happened to take in wall-clock terms.
+  updateSafetySensors(items: SafetySensor[], stateProvider: StateProvider,
+                      leakAgeS?: (fixtureId: string) => number | null | undefined): void {
     if (!this._scene) return;
     this._clearGroup(this._safetyGroup);
     const nowS = performance.now() / 1000;
@@ -11505,9 +11653,13 @@ export class ThreeDRenderer {
         grp.add(puck);
         if (alarming) {
           if (this._leakAlarmStart[s.id] == null) this._leakAlarmStart[s.id] = nowS;
-          const grow = Math.min(1, (nowS - this._leakAlarmStart[s.id]) / SAFETY_DEFAULTS.leakGrowSec);
+          const driven = leakAgeS?.(s.id);
+          const ageS = driven != null && isFinite(driven)
+            ? driven : nowS - this._leakAlarmStart[s.id];
           const pulse = 0.5 + 0.5 * Math.sin(nowS * 2.5);
-          const rr = SAFETY_DEFAULTS.leakMaxRadiusMm * grow;
+          // Shared ease-out curve (2D draws the same one) — starts at a visible
+          // wet patch and visibly creeps out to the full radius over leakGrowSec.
+          const rr = leakPuddleRadiusMm(ageS);
           // Flat translucent blue ellipse decal on the floor (shared _puddleTex —
           // never disposed per-fixture; _clearGroup leaves shared maps alone).
           const puddle = new THREE.Mesh(
@@ -11585,6 +11737,87 @@ export class ThreeDRenderer {
             ring.userData = { outlineSkip: true };
             grp.add(ring);
           }
+        }
+        this._safetyGroup.add(grp);
+        continue;
+      }
+
+      // ── Glass-break detector: SQUARE acoustic mic plate ──
+      // Deliberately not a round puck: a flat square plate with a microphone
+      // grille (parallel slot bars) + a corner LED, cool blue-violet. Alarming
+      // adds the shared expanding rings PLUS a spiky "shatter" star burst (a
+      // low-segment RingGeometry reads as shards) so it's distinguishable from
+      // the smoke/CO/gas beacons even at a glance. No new per-frame system —
+      // the whole group rebuilds each frame while alarming (the safety idiom).
+      if (safetyIsPlate(kind)) {
+        const grp = new THREE.Group();
+        const pl = this._w(s.x, s.y, ceiling - 60);
+        grp.position.set(pl.x, pl.y, pl.z);
+        const side = discR * 1.7;
+        const plate = new THREE.Mesh(
+          new THREE.BoxGeometry(side, 44, side),
+          this._mat({ color: alarming ? col : 0xeceff1, roughness: 0.6, metalness: 0.05,
+                      emissive: alarming ? col : 0x000000, emissiveIntensity: alarming ? 0.5 : 0 }));
+        plate.userData = ud;
+        grp.add(plate);
+        // Mic grille: 4 recessed slot bars across the underside (into the room).
+        const grilleMat = this._mat({ color: alarming ? 0xffffff : 0x546e7a,
+                                      emissive: alarming ? col : 0x000000,
+                                      emissiveIntensity: alarming ? 0.7 : 0 });
+        for (let k = 0; k < 4; k++) {
+          const slot = new THREE.Mesh(
+            new THREE.BoxGeometry(side * 0.66, 10, side * 0.09), grilleMat);
+          slot.position.set(0, -25, (k - 1.5) * side * 0.17);
+          slot.userData = { outlineSkip: true };
+          grp.add(slot);
+        }
+        // Corner status LED.
+        const led = new THREE.Mesh(
+          new THREE.SphereGeometry(discR * 0.17, 12, 10),
+          this._mat({ color: alarming ? col : 0x37474f,
+                      emissive: alarming ? col : 0x0a0d10,
+                      emissiveIntensity: alarming ? 1.0 : 0.25 }));
+        led.position.set(side * 0.32, -24, side * 0.32);
+        led.userData = { ...ud, outlineSkip: true };
+        grp.add(led);
+        if (alarming) {
+          const pulse = 0.5 + 0.5 * Math.sin(nowS * 6);
+          // Shatter burst: a SPIKY low-segment ring (8 segments → an 8-point
+          // star silhouette) snapping outward on a fast cycle — the "glass just
+          // broke" tell. Distinct from the smooth round detector rings below.
+          for (let k = 0; k < 2; k++) {
+            const ph = (nowS * 2.6 + k / 2) % 1;
+            const rr = discR * (0.9 + ph * 3.4);
+            const shard = new THREE.Mesh(
+              new THREE.RingGeometry(rr * 0.34, rr, 8, 1),
+              this._mat({ color: col, emissive: col, emissiveIntensity: 1.0,
+                          transparent: true, opacity: 0.55 * (1 - ph), side: THREE.DoubleSide }));
+            shard.rotation.x = -Math.PI / 2;
+            shard.rotation.z = ph * 0.9 + k * 0.4;    // spin so shards read as scattering
+            shard.position.set(0, -60 - ph * 240, 0);
+            shard.userData = { outlineSkip: true };
+            grp.add(shard);
+          }
+          // The shared expanding rings (same idiom as smoke/CO/gas).
+          for (let k = 0; k < 3; k++) {
+            const ph = (nowS * 1.4 + k / 3) % 1;
+            const rr = discR * (1 + ph * 4);
+            const ring = new THREE.Mesh(
+              new THREE.RingGeometry(rr * 0.86, rr, 28),
+              this._mat({ color: col, emissive: col, emissiveIntensity: 0.8,
+                          transparent: true, opacity: 0.45 * (1 - ph), side: THREE.DoubleSide }));
+            ring.rotation.x = -Math.PI / 2;
+            ring.position.set(0, -70 - ph * 520, 0);
+            ring.userData = { outlineSkip: true };
+            grp.add(ring);
+          }
+          const glow = new THREE.Mesh(
+            new THREE.SphereGeometry(discR * (0.9 + 0.2 * pulse), 16, 12),
+            this._mat({ color: col, emissive: col, emissiveIntensity: 0.6 + 0.6 * pulse,
+                        transparent: true, opacity: 0.2 + 0.18 * pulse }));
+          glow.position.set(0, -50, 0);
+          glow.userData = { outlineSkip: true };
+          grp.add(glow);
         }
         this._safetyGroup.add(grp);
         continue;

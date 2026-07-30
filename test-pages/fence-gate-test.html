@@ -5,9 +5,18 @@
 <div id="c"></div>
 <!--
   Batch T2 boundaries: fence WallKinds (picket/privacy/chainlink) + hedge +
-  Door.kind 'gate'. Pure WALL_KINDS via geometry.mod.js (esbuild bundle like
-  covers-test); renderer via the built three-renderer chunk.
-    npx esbuild src/geometry.ts --bundle --format=esm --outfile=<harness>/geometry.mod.js
+  Door.kind 'gate' — including §10/§11: a gate must leave a REAL GAP in the
+  fence line in BOTH views. Pure WALL_KINDS via geometry.mod.js; renderer via
+  the built three-renderer chunk; the 2D pixel band via the real Planner + ONE
+  COMBINED canvas bundle (the door-kinds-test / flights-ui-test precedent).
+    npm run build
+    H=<harness>; rm -rf "$H"; mkdir -p "$H"; cp -r dist/* "$H"/
+    cp test-pages/fence-gate-test.html "$H"/
+    npx esbuild src/geometry.ts --bundle --format=esm --outfile="$H"/geometry.mod.js
+    T=$(mktemp -d); cp -r src/* "$T"/; cp test-pages/fake-avatar-store.ts "$T"/avatar-store.ts
+    printf "export * from './canvas-render.js';\nexport * from './canvas-hit.js';\n" > "$T"/canvas2d-entry.ts
+    npx esbuild "$T"/planner.ts        --bundle --format=esm --outfile="$H"/planner.mod.js
+    npx esbuild "$T"/canvas2d-entry.ts --bundle --format=esm --outfile="$H"/canvas-render.mod.js
 -->
 <script type="module">
  try {
@@ -200,6 +209,133 @@
     ok('grade_zero_identical', Math.abs(baseYOf(groupAt(6000, 4000))) < 1
        && ys.has(550) && ys.has(920) && r._doorGroup.children[0].position.y === 0,
        [...ys].sort((a, b) => a - b).join(','));
+  }
+
+  // === 10. A gate leaves a REAL GAP in every fence kind ===================
+  // Reported bug: the gate rendered but the fence ran straight through it.
+  // picket + chain-link were built full-length (rails / pickets / posts / mesh
+  // plane ignored the cut intervals), and the hedge's crown box bridged over
+  // the gap its own extrusion had correctly punched. 2D had the twin bug: the
+  // base stroke broke but the decorative slat / hatch marks ran through.
+  {
+    // Hinge x=5550, w=900, rotation 0 → doorSpanCenter = 6000, so the OPENING
+    // is world x 5550..6450 (the hinge is one edge of the span, not its centre).
+    const GAP_X0 = 5550, GAP_X1 = 6450;               // gate span in world x
+    const gapGate = { id: 'gg', x: 5550, y: wallY, w: 900, rotation: 0, kind: 'gate', entity_id: null };
+    // World-x extent of a mesh, accounting for the scene X-mirror in _w.
+    // Scene x = fw/2 − world x, so a scene-x interval maps back by negation.
+    const FW = 12000;
+    const worldSpanX = (m) => {
+      m.geometry.computeBoundingBox();
+      const bb = m.geometry.boundingBox.clone();
+      m.updateMatrixWorld(true);
+      bb.applyMatrix4(m.matrixWorld);
+      return [FW / 2 - bb.max.x, FW / 2 - bb.min.x];      // [lo, hi] in world x
+    };
+    // Does any real (non-outline) mesh SPAN the whole gate opening?
+    const spansGate = (grp) => {
+      let spans = false, worst = null;
+      grp.traverse(o => {
+        if (!o.isMesh || o.userData?.outline) return;
+        const [lo, hi] = worldSpanX(o);
+        if (lo <= GAP_X0 + 1 && hi >= GAP_X1 - 1) { spans = true; worst = `${lo | 0}..${hi | 0}`; }
+      });
+      return worst ?? (spans ? 'yes' : null);
+    };
+    // How much of the gate opening's MIDDLE is free of fence geometry: sample
+    // the span centre and assert nothing sits within ±300 mm of it.
+    const midClear = (grp) => {
+      let clear = true;
+      const mid = (GAP_X0 + GAP_X1) / 2;
+      grp.traverse(o => {
+        if (!o.isMesh || o.userData?.outline) return;
+        const [lo, hi] = worldSpanX(o);
+        if (lo < mid + 300 && hi > mid - 300) clear = false;
+      });
+      return clear;
+    };
+    for (const kind of ['fence_picket', 'fence_privacy', 'fence_chainlink', 'hedge']) {
+      // No gate → the run is continuous (the control: the assertions below only
+      // mean something if the un-gated fence DOES cross the same interval).
+      r.updateFloor(mkFloor(fence(kind)), scene3d);
+      const solidGrp = r._floorGroup.children.find(c => c.type === 'Group' && c.children.length);
+      ok(`gap_control_${kind}`, !midClear(solidGrp));
+      // With a gate → nothing crosses the opening.
+      r.updateFloor(mkFloor(fence(kind), [gapGate]), scene3d);
+      const grp = r._floorGroup.children.find(c => c.type === 'Group' && c.children.length);
+      ok(`gap_no_span_${kind}`, spansGate(grp) === null, String(spansGate(grp)));
+      ok(`gap_mid_clear_${kind}`, midClear(grp));
+    }
+    // The gate PANEL itself still builds (the gap is a hole for the gate, not a
+    // hole with nothing in it) and still swings.
+    r.updateFloor(mkFloor(fence('fence_picket'), [gapGate]), scene3d);
+    r.updateDoorsWindows([gapGate], [], () => null);
+    ok('gap_gate_panel_present', r._doorGroup.children.length === 1);
+  }
+
+  // === 11. 2D: the gate gap is REAL PIXELS, not just a broken base stroke ==
+  // The 2D twin of the same bug: drawWalls stroked only the solid sub-intervals,
+  // but the picket slat ticks / chain-link hatch marks were sampled across the
+  // WHOLE segment, so they painted straight over the gate's gap. Compare the
+  // gap band against the identical scene with NO wall: any fence pixel in the
+  // opening shows up as a difference.
+  {
+    const { Planner } = await import('./planner.mod.js?v=' + Date.now());
+    const C2D = await import('./canvas-render.mod.js?v=' + Date.now());
+    const { drawAll, computeView, mmToPx } = C2D;
+    const sleep = ms => new Promise(res => setTimeout(res, ms));
+    const waitFor = async (cond, tries = 600) => {
+      for (let i = 0; i < tries; i++) { if (cond()) return true; await sleep(4); } return false;
+    };
+    class FakeHa {
+      constructor(seed) { this.map = new Map(Object.entries(seed || {})); this.states = {}; this._s = []; this._c = []; }
+      connect() { for (const cb of this._c) cb('connected'); for (const cb of this._s) cb(this.states, undefined); }
+      onState(fn) { this._s.push(fn); } onConn(fn) { this._c.push(fn); }
+      callService() { return Promise.resolve(); }
+      async getHistory() { return {}; } async getWeatherForecasts() { return null; }
+      async getDevices() { return []; } async getEntityRegistry() { return []; } async updateEntityRegistry() { return true; }
+      async getUserData(k) { return this.map.has(k) ? JSON.parse(JSON.stringify(this.map.get(k))) : null; }
+      async setUserData(k, v) { this.map.set(k, JSON.parse(JSON.stringify(v))); return true; }
+      async refreshStates() {} async subscribeMqtt() { return () => {}; } async publishMqtt() {}
+    }
+    localStorage.removeItem('diorama:store:v1'); localStorage.removeItem('diorama:configs');
+    const seedFloor = { id: 'f1', name: 'Yard', w: 12000, d: 5000,
+      walls: [{ id: 'w1', kind: 'fence_picket', points: [{ x: 500, y: wallY }, { x: 11500, y: wallY }] }],
+      furniture: [], lights: [], switches: [], sensors: [], motionSensors: [],
+      envSensors: [], bleProxies: [], doors: [], windows: [], rooms: [], bg: null };
+    const P = new Planner();
+    P.connectWith(new FakeHa({ diorama: { v: 2, floors: [seedFloor], currentFloorId: 'f1',
+      activeSensorId: null, coverage: false, imperial: false, showDetails: false, useRawTargets: false } }));
+    await waitFor(() => P.configIndex !== null);
+    const cvs = document.createElement('canvas'); cvs.width = 900; cvs.height = 500;
+    const ctx2 = cvs.getContext('2d', { willReadFrequently: true });
+    const view2 = computeView(cvs, 12000, 5000, null, 1);
+    const gate2 = { id: 'g2d', x: 5550, y: wallY, w: 900, rotation: 0, kind: 'gate', entity_id: null, label: '' };
+    const paint = (kind, doors) => {
+      const f = P.floor();
+      f.walls = kind ? [{ id: 'w1', kind, points: [{ x: 500, y: wallY }, { x: 11500, y: wallY }] }] : [];
+      f.doors = doors;
+      drawAll(ctx2, P, view2, null);
+      return ctx2.getImageData(0, 0, cvs.width, cvs.height).data.slice();
+    };
+    // Pixel band across the MIDDLE of the gate opening (world x 5700..6300),
+    // ±6 px of the wall line — inside the opening, clear of the end posts.
+    const b0 = mmToPx(view2, 5700, wallY), b1 = mmToPx(view2, 6300, wallY);
+    const bandDiff = (a, b) => {
+      let nDiff = 0;
+      for (let yy = Math.round(b0.y) - 6; yy <= Math.round(b0.y) + 6; yy++)
+        for (let xx = Math.round(b0.x); xx <= Math.round(b1.x); xx++) {
+          const i = (yy * cvs.width + xx) * 4;
+          if (a[i] !== b[i] || a[i + 1] !== b[i + 1] || a[i + 2] !== b[i + 2]) nDiff++;
+        }
+      return nDiff;
+    };
+    for (const kind of ['fence_picket', 'fence_privacy', 'fence_chainlink', 'hedge']) {
+      const control = bandDiff(paint(kind, []), paint(null, []));
+      const gated = bandDiff(paint(kind, [gate2]), paint(null, [gate2]));
+      ok(`gap2d_control_${kind}`, control > 20, String(control));
+      ok(`gap2d_clear_${kind}`, gated === 0, String(gated));
+    }
   }
 
   const n = results.length, pcount = results.filter(x => x.startsWith('ok')).length;
