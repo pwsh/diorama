@@ -4654,6 +4654,46 @@ function drawFurniture(ctx: CanvasRenderingContext2D, p: Planner, view: View,
         ctx.restore();
       }
     }
+    // Bathtub / shower / toilet running-water hints (2D analogues of the 3D
+    // fill / spray / flush). Same `_sink2dFill` eased-level map (2D has no
+    // renderer state), same run source — the entity / local state; the 3D
+    // avatar-triggered runs aren't visible to 2D.
+    if (piece.kind === 'bathtub' || piece.kind === 'shower' || piece.kind === 'toilet') {
+      const running = (() => { const s = p.effectiveState(piece)?.state; return s === 'on' || s === 'playing'; })();
+      const rec = _sink2dFill.get(piece.id) ?? { v: 0, t: now };
+      const dt = Math.max(0, Math.min(0.1, now - rec.t));
+      // Tub fills/drains slowly; shower + toilet snap (they are not levels).
+      const tau = piece.kind === 'bathtub' ? (running ? 4.0 : 3.3) : 0.3;
+      rec.v += ((running ? 1 : 0) - rec.v) * (1 - Math.exp(-dt / tau));
+      rec.t = now;
+      _sink2dFill.set(piece.id, rec);
+      ctx.save();
+      if (piece.kind === 'bathtub' && rec.v > 0.02) {
+        ctx.fillStyle = `rgba(74,168,216,${(0.12 + 0.40 * rec.v).toFixed(3)})`;
+        ctx.fillRect(-halfW * 0.80, -halfH * 0.80, halfW * 1.60, halfH * 1.60 * rec.v);
+      } else if (piece.kind === 'shower' && rec.v > 0.02) {
+        // Concentric spray rings pulsing outward from the head (3D head is at
+        // +0.3·W / +0.3·D → canvas (+0.6·halfW, −0.6·halfH)).
+        const hx = halfW * 0.6, hy = -halfH * 0.6;
+        ctx.strokeStyle = `rgba(150,215,240,${(0.75 * rec.v).toFixed(3)})`;
+        ctx.lineWidth = Math.max(1, 1.5 * dpr);
+        for (let i = 0; i < 3; i++) {
+          const f = ((now * 1.5) + i / 3) % 1;
+          ctx.beginPath();
+          ctx.arc(hx, hy, Math.min(halfW, halfH) * (0.15 + 0.7 * f), 0, 2 * Math.PI);
+          ctx.stroke();
+        }
+      } else if (piece.kind === 'toilet' && rec.v > 0.02) {
+        // Flush swirl: a rotating arc in the bowl (bowl sits at −0.12·D → +y).
+        const cy = halfH * 0.24, rr = Math.min(halfW, halfH) * 0.42;
+        ctx.strokeStyle = `rgba(110,195,232,${(0.9 * rec.v).toFixed(3)})`;
+        ctx.lineWidth = Math.max(1.5, 2 * dpr);
+        const a0 = (now * 5) % (2 * Math.PI);
+        ctx.beginPath(); ctx.arc(0, cy, rr, a0, a0 + Math.PI * 1.2); ctx.stroke();
+        ctx.beginPath(); ctx.arc(0, cy, rr * 0.55, a0 + Math.PI, a0 + Math.PI * 2.1); ctx.stroke();
+      }
+      ctx.restore();
+    }
     // Fridge open-door wedge (amber): a mini door-swing arc at the front-right
     // corner (the 3D hinge is on the +X edge). Front = canvas-Y +halfH.
     if (doorOpen) {
@@ -5873,13 +5913,24 @@ export function drawFurniturePrimitiveLocal(
       ctx.strokeStyle = extra?.mailLidOpen ? '#ffb74d' : '#90a4ae';
       ctx.lineWidth = extra?.mailLidOpen ? 2.5 : 1.5;
       ctx.beginPath(); ctx.moveTo(x + 3, y + h * 0.7); ctx.lineTo(x + w - 3, y + h * 0.7); ctx.stroke();
-      // Post dot (center) + the flag on the +X (right) side.
-      const flagX = x + w + 2, flagBaseY = y + h * 0.5;
-      ctx.strokeStyle = '#455a64'; ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.moveTo(flagX, flagBaseY); ctx.lineTo(flagX, flagBaseY + (extra?.mailFlagUp ? -halfH * 0.9 : halfH * 0.4)); ctx.stroke();
-      ctx.fillStyle = extra?.mailFlagUp ? '#e53935' : '#9e9e9e';
-      const ftY = flagBaseY + (extra?.mailFlagUp ? -halfH * 0.9 : halfH * 0.4);
-      ctx.fillRect(flagX, ftY, Math.max(6, halfW * 0.5), Math.max(5, halfH * 0.35));
+      // Signal flag on the +X (right) side, matching the 3D geometry: the arm
+      // hinges on the side face near the FRONT (bottom edge here) and swings in
+      // the side plane between REAR-pointing (UP) and straight-DOWN.
+      //   UP   → in plan the arm+paddle run along the side toward the REAR (top).
+      //   DOWN → the arm points out of the plan, so it foreshortens to a stub at
+      //          the pivot. (A plan view genuinely cannot show "down" as length.)
+      const flagX = x + w + 2, flagPivotY = y + h * 0.80;
+      const flagUp2d = extra?.mailFlagUp === true;
+      ctx.strokeStyle = flagUp2d ? '#e53935' : '#78909c';
+      ctx.lineWidth = flagUp2d ? 3 : 2;
+      ctx.beginPath();
+      ctx.moveTo(flagX, flagPivotY);
+      ctx.lineTo(flagX, flagUp2d ? y + h * 0.08 : flagPivotY - Math.max(3, halfH * 0.12));
+      ctx.stroke();
+      // Pivot marker (always) + the paddle body along the rear half when raised.
+      ctx.fillStyle = flagUp2d ? '#e53935' : '#9e9e9e';
+      ctx.beginPath(); ctx.arc(flagX, flagPivotY, Math.max(1.6, halfW * 0.12), 0, 2 * Math.PI); ctx.fill();
+      if (flagUp2d) ctx.fillRect(flagX, y + h * 0.08, Math.max(3, halfW * 0.22), h * 0.42);
       if (ghost) { /* mailbox is never ghosted; kept for signature symmetry */ }
       break;
     }

@@ -10,7 +10,7 @@ import {
   lightHeight, lightRadius, lightIntensity, lightIconKind, lightRotation, lightLength, lightTilt,
   switchHeight, switchRotation, switchSize,
   motionColor, motionIntensity, hexToInt, bleProxyHeight, BLE_PROXY_DEFAULTS,
-  furnitureDef, resolveFurnitureDef, furnitureColor, furnitureCat, isBinKind, binStateIsFull, isSpeakerKind, isSinkKind, isRiserKind, doorOpenDeltaDeg,
+  furnitureDef, resolveFurnitureDef, furnitureColor, furnitureCat, isBinKind, binStateIsFull, isSpeakerKind, isSinkKind, isWetBathKind, isRiserKind, doorOpenDeltaDeg,
   hasFunctionalFront, frontVectorPlan,
   isClimateApplianceKind, isBladedFanKind, climateApplianceRun,
   isMechanicalApplianceKind, isPumpKind, mechanicalRun, mechanicalGlowColor, type MechanicalRun,
@@ -2259,8 +2259,42 @@ export class ThreeDRenderer {
   // reset in updateFloor + clearTransientGroups.
   private _bathtubs: {
     fuId: string; wx: number; wy: number; fill: THREE.Mesh; emptyY: number; fullY: number;
+    stream?: THREE.Object3D;
   }[] = [];
   private _bathtubFill: Record<string, number> = {};
+  // Shower spray rigs. Each `shower` piece builds ONE small THREE.Points cloud
+  // (PointsMaterial + the shared rain-droplet texture — the sprinkler/fountain
+  // exemption from the toon factory) falling from the head to the pan, plus a
+  // flat splash ring on the pan. Both are built ALWAYS and gated per-frame by an
+  // eased 0..1 run blend keyed by fixture id (survives _keyFloor rebuilds, the
+  // sink/plant idiom); the droplet buffer is recycled in place — zero alloc after
+  // build. A shower RUNS off its effectiveState (bound switch/binary_sensor /
+  // unbound localState → entityOn) OR while a rig is engaged in a `shower`/
+  // `bathe` activity anchored to it, OR dwells nearby (RAW positions only —
+  // anti-feedback, exactly like the sink's wash_hands trigger).
+  private _showers: {
+    fuId: string; wx: number; wy: number;
+    points: THREE.Points; mat: THREE.PointsMaterial; ring: THREE.Mesh;
+    pos: Float32Array; count: number;
+    headY: number; panY: number; cx: number; cz: number; spread: number;
+  }[] = [];
+  private _showerRun: Record<string, number> = {};
+  private _SHOWER_FALL = 2600;   // mm/s droplet fall speed
+  // Toilet flush ONE-SHOTS. Unlike every other water fixture this is not a
+  // sustained level but a ~4 s scripted event: the bowl water swirls + dips,
+  // then refills and settles. `_toiletFlush[fuId]` is the SECONDS REMAINING
+  // (absent/0 = at rest); it is armed by a rising edge of the fixture's run
+  // state OR by a rig FINISHING its `toilet` engagement (flush after use), both
+  // edge-detected against the prev maps below. Keyed by fixture id so a
+  // _keyFloor rebuild mid-flush resumes rather than restarting.
+  private _toilets: {
+    fuId: string; wx: number; wy: number; water: THREE.Mesh;
+    baseY: number; baseSX: number; baseSZ: number;
+  }[] = [];
+  private _toiletFlush: Record<string, number> = {};
+  private _toiletPrevOn: Record<string, boolean> = {};
+  private _toiletPrevOcc: Record<string, boolean> = {};
+  private _TOILET_FLUSH_S = 4;
   // Swing-set seats (furniture-polish batch). Each swingset seat is a pivot
   // Group hinged at the crossbar; while OCCUPIED (a rig claims the seat's
   // SitSpot, sit > 0.5) it pendulums ±~15° at ~0.4 Hz, eased in/out by a
@@ -3314,6 +3348,12 @@ export class ThreeDRenderer {
     // disposed with _floorGroup).
     this._bathtubs = [];
     this._bathtubFill = {};
+    this._showers = [];
+    this._showerRun = {};
+    this._toilets = [];
+    this._toiletFlush = {};
+    this._toiletPrevOn = {};
+    this._toiletPrevOcc = {};
     this._swings = [];
     this._swingBlend = {};
     this._swingOffset = {};
@@ -5693,6 +5733,11 @@ export class ThreeDRenderer {
     // blend maps persist (keyed by fixture id / spot id) so a _keyFloor rebuild
     // re-applies the current fill / swing / flag state without a pop.
     this._bathtubs = [];
+    // Shower spray clouds + toilet bowl rigs are rebuilt here; their run blend /
+    // flush countdown / edge-detector maps persist (keyed by fixture id) so a
+    // _keyFloor rebuild resumes a running shower or a mid-flush toilet.
+    this._showers = [];
+    this._toilets = [];
     this._swings = [];
     this._mailFlags = [];
     this._speakerPulses = [];
@@ -5919,12 +5964,13 @@ export class ThreeDRenderer {
           });
         }
       }
-      // Sinks (and bathtubs) are click-toggle like appliances/TVs: reuse the
-      // 'media' click path (click → toggleEntity when bound, else flip localState
-      // = run/stop the water; the sink/tub bind dblclick is guarded in
-      // three-view). Tagged regardless of binding so an unbound piece can be
-      // turned on locally.
-      if (isSinkKind(fu.kind) || fu.kind === 'bathtub') {
+      // Every WET bathroom piece (sinks / bathtub / shower / toilet) is
+      // click-toggle like appliances/TVs: reuse the 'media' click path (click →
+      // toggleEntity when bound, else flip localState = run/stop the water; the
+      // toilet's localState is a self-clearing one-shot, see Planner.toggleItem).
+      // The switch/binary_sensor bind dblclick is guarded in three-view. Tagged
+      // regardless of binding so an unbound piece can be run locally.
+      if (isWetBathKind(fu.kind)) {
         grp.userData = { ...grp.userData, kind: 'media', entity_id: fu.entity_id ?? null, fixtureId: fu.id };
         this._mediaClickables.push(grp);
       }
@@ -9352,6 +9398,16 @@ export class ThreeDRenderer {
         const wd = new THREE.Mesh(new THREE.CylinderGeometry(innerR * 0.62, innerR * 0.62, 8, 16), water);
         wd.scale.z = 1.25; wd.position.set(0, bowlTopY - cavDepth + 42, bowlZ);
         wd.userData = { outlineSkip: true, toiletWater: true }; grp.add(wd);
+        // Flush ONE-SHOT rig: the bowl water disc swirls (rotation.y), dips and
+        // shrinks, then refills — a ~4 s scripted event driven by
+        // _advanceToilets, NOT a sustained level. Registered even when unbound
+        // (an unbound click arms the same one-shot via localState). Re-apply any
+        // in-flight flush so a _keyFloor rebuild mid-flush resumes.
+        const toiletId = fu.id ?? `wc_${Math.round(fu.x)}_${Math.round(fu.y)}`;
+        this._toilets.push({
+          fuId: toiletId, wx: fu.x, wy: fu.y, water: wd,
+          baseY: wd.position.y, baseSX: wd.scale.x, baseSZ: wd.scale.z,
+        });
         addCyl(W * 0.46, W * 0.44, 40, porcelain, 0, bowlTopY + 20, bowlZ, 18);  // seat ring
         addBox(W * 0.96, 360, D * 0.28, porcelain, 0, HT - 180, D / 2 - D * 0.14);  // tank
         // UPRIGHT open lid: a rounded panel stood vertical against the tank front,
@@ -9555,22 +9611,77 @@ export class ThreeDRenderer {
         fill.visible = curFill > 0.02;
         fill.userData = { outlineSkip: true };
         grp.add(fill);
-        this._bathtubs.push({ fuId: tubId, wx: fu.x, wy: fu.y, fill, emptyY, fullY });
-        // Faucet at one end (+X, front corner).
+        // Faucet at one end (+X, front corner) + a translucent stream column
+        // dropping from the spout into the basin, shown only while RUNNING
+        // (toggled in _advanceBathtubs — the sink stream idiom).
         const bSteel = this._mat({ color: 0xb8c0c6, metalness: 0.8, roughness: 0.3 });
-        addCyl(14, 16, 130, bSteel, W / 2 - 70, cavTopY + 60, -D / 2 + wallT + 40, 10);
+        const spoutX = W / 2 - 70, spoutZ = -D / 2 + wallT + 40, spoutY = cavTopY + 60;
+        addCyl(14, 16, 130, bSteel, spoutX, spoutY, spoutZ, 10);
+        const streamTop = spoutY - 65, streamLen = Math.max(40, streamTop - (emptyY + 10));
+        const streamMat = this._mat({
+          color: 0xbfe6f7, roughness: 0.1, metalness: 0.0,
+          transparent: true, opacity: 0.55, depthWrite: false,
+        });
+        const tubStream = new THREE.Mesh(new THREE.CylinderGeometry(16, 13, streamLen, 8), streamMat);
+        tubStream.position.set(spoutX, streamTop - streamLen / 2, spoutZ);
+        tubStream.userData = { outlineSkip: true, tubStream: true };
+        tubStream.visible = false;
+        grp.add(tubStream);
+        this._bathtubs.push({ fuId: tubId, wx: fu.x, wy: fu.y, fill, emptyY, fullY, stream: tubStream });
         break;
       }
       case 'shower': {
-        addBox(W, 80, D, porcelain, 0, 40, 0);  // base pan
+        const panY = 80;
+        addBox(W, panY, D, porcelain, 0, panY / 2, 0);  // base pan
         // Glass on the two front-facing sides (leave back corner walls open).
-        addBox(W, HT - 80, 12, glass, 0, 80 + (HT - 80) / 2, -D / 2 + 6);
-        addBox(12, HT - 80, D, glass, -W / 2 + 6, 80 + (HT - 80) / 2, 0);
+        addBox(W, HT - panY, 12, glass, 0, panY + (HT - panY) / 2, -D / 2 + 6);
+        addBox(12, HT - panY, D, glass, -W / 2 + 6, panY + (HT - panY) / 2, 0);
         const headArm = this._mat({ color: 0xb9c2c9, metalness: 0.8, roughness: 0.3 });
-        addCyl(12, 12, 250, headArm, W * 0.3, HT - 200, D * 0.3, 8);
+        const hx = W * 0.3, hz = D * 0.3;
+        addCyl(12, 12, 250, headArm, hx, HT - 200, hz, 8);
         const head = new THREE.Mesh(new THREE.SphereGeometry(55, 12, 10), headArm);
-        head.position.set(W * 0.3, HT - 320, D * 0.3);
+        head.position.set(hx, HT - 320, hz);
         grp.add(head);
+        // ── Falling spray (run-gated, eased) ─────────────────────────────────
+        // A THREE.Points cloud recycling head → pan inside the stall footprint,
+        // plus a flat splash ring on the pan. Both are built ALWAYS; visibility +
+        // opacity ride the eased `_showerRun` blend in _advanceShowers, so the
+        // water can fade in/out without a rebuild.
+        const headY = HT - 360, spread = Math.min(W, D) * 0.34;
+        const dropCount = 34;
+        const dpos = new Float32Array(dropCount * 3);
+        for (let i = 0; i < dropCount; i++) {
+          const j = i * 3, a = Math.random() * Math.PI * 2, rr = Math.sqrt(Math.random()) * spread;
+          dpos[j] = hx + Math.cos(a) * rr;
+          dpos[j + 1] = panY + Math.random() * (headY - panY);   // pre-filled column
+          dpos[j + 2] = hz + Math.sin(a) * rr;
+        }
+        const dgeo = new THREE.BufferGeometry();
+        dgeo.setAttribute('position', new THREE.BufferAttribute(dpos, 3));
+        const dmat = new THREE.PointsMaterial({
+          map: this._rainTexture(), size: 70, color: 0xd6efff,
+          transparent: true, opacity: 0, depthWrite: false, sizeAttenuation: true,
+        });
+        const dpts = new THREE.Points(dgeo, dmat);
+        dpts.userData.outlineSkip = true;
+        dpts.frustumCulled = false;
+        dpts.renderOrder = 3;
+        dpts.visible = false;
+        grp.add(dpts);
+        const ringMat = this._mat({
+          color: 0x8fd3f0, roughness: 0.15, metalness: 0.0,
+          transparent: true, opacity: 0.0, depthWrite: false,
+        });
+        const ring = new THREE.Mesh(new THREE.CylinderGeometry(spread * 1.7, spread * 1.7, 6, 20), ringMat);
+        ring.position.set(hx, panY + 6, hz);
+        ring.userData = { outlineSkip: true, showerRing: true };
+        ring.visible = false;
+        grp.add(ring);
+        const showerId = fu.id ?? `sh_${Math.round(fu.x)}_${Math.round(fu.y)}`;
+        this._showers.push({
+          fuId: showerId, wx: fu.x, wy: fu.y, points: dpts, mat: dmat, ring,
+          pos: dpos, count: dropCount, headY, panY: panY + 8, cx: hx, cz: hz, spread,
+        });
         break;
       }
       // ── extra appliances (front = -Z) ──
@@ -10390,26 +10501,42 @@ export class ThreeDRenderer {
         lid.position.set(0, boxH * 0.43, 0);
         lidHinge.add(lid);
         grp.add(lidHinge);
-        // Red flag on the +X side. Authored in the WAITING/UP orientation (pole
-        // along +Y, panel extending +Z off the pole top). The arm hinges about X:
-        //   UP   (flagEntity 'on')  → rotation.x = 0        → pole vertical, flag flying.
-        //   DOWN (default / delivered) → rotation.x = π/2   → pole HORIZONTAL, panel
-        //        (local +Z) rotates to world -Y = HANGS DOWN toward the ground.
+        // Red signal flag on the +X SIDE face (user-specified geometry):
+        //   • the paddle plane is ALWAYS parallel to that side face — the paddle
+        //     is thin in X, and the arm's only rotation is about the X axis, so
+        //     nothing it does can ever tip the paddle out of the x ≈ const plane.
+        //   • the pivot sits on the side face near the FRONT (front = local −Z).
+        //   • UP   (flagEntity 'on') → the arm points at the REAR: horizontal,
+        //     along local +Z. Authored pose, rotation.x = 0.
+        //   • DOWN (default) → the arm points STRAIGHT DOWN (world −Y).
+        // Rx(π/2) maps local +Z → −Y, so the existing blend mapping
+        // rotation.x = (π/2)·(1−blend) already spans exactly those two poses
+        // (blend 1 = up/rear, blend 0 = down) — only the AUTHORED geometry
+        // changes (the arm was authored along +Y before, which gave a vertical
+        // "up" and a rearward "down": both poses inverted).
         // The eased blend is driven in _advanceMailFlags; here we seed + apply the
         // persisted value (survives _keyFloor rebuilds — a fresh fixture seeds to
         // its target so the first render is already correct).
         const up = opts?.mailFlagUp === true;
         const flagArm = new THREE.Group();
-        flagArm.position.set(W / 2 + 6, boxTopY - boxH * 0.2, 0);
+        const flagPivotZ = -D * 0.30;                        // on the side, near the front
+        flagArm.position.set(W / 2 + 6, boxTopY - boxH * 0.2, flagPivotZ);
         const flagMat = this._mat({ color: up ? 0xe53935 : 0xc62828, roughness: 0.7 });
-        const poleLen = boxH * 1.05;
-        const post = new THREE.Mesh(new THREE.CylinderGeometry(10, 10, poleLen, 8), flagMat);
-        post.position.y = poleLen / 2; flagArm.add(post);
-        // Flag panel: wide in X, thin in Y, extending +Z from near the pole top.
-        // When the pole lays horizontal (DOWN), local +Z → world −Y so it hangs.
-        const flagDrop = boxH * 0.6, flagW = D * 0.34;
-        const flag = new THREE.Mesh(new THREE.BoxGeometry(flagW, 12, flagDrop), flagMat);
-        flag.position.set(0, poleLen - 30, flagDrop / 2 + 6); flagArm.add(flag);
+        // Arm: a cylinder laid along local +Z (Rx(π/2) turns the +Y cylinder axis
+        // into +Z), reaching from the pivot back toward the rear face.
+        const armLen = D * 0.72;
+        const post = new THREE.Mesh(new THREE.CylinderGeometry(9, 9, armLen, 8), flagMat);
+        post.rotation.x = Math.PI / 2; post.position.z = armLen / 2;
+        flagArm.add(post);
+        // Paddle: THIN IN X (plane ∥ the side face), standing up off the arm and
+        // running along it. Offset outboard in X so it never shares a face with
+        // the arm cylinder (the coincident-face gotcha).
+        const padLen = armLen * 0.62, padH = boxH * 0.55, padT = 12;
+        const flag = new THREE.Mesh(new THREE.BoxGeometry(padT, padH, padLen), flagMat);
+        flag.position.set(12, padH / 2, armLen - padLen / 2 - 8);
+        flag.userData = { mailFlagPaddle: true };
+        flagArm.add(flag);
+        flagArm.userData = { mailFlagArm: true, armLen };
         const flagId = fu.id ?? `mb_${Math.round(fu.x)}_${Math.round(fu.y)}`;
         if (this._mailFlagBlend[flagId] === undefined) this._mailFlagBlend[flagId] = up ? 1 : 0;
         const fblend = this._mailFlagBlend[flagId];
@@ -19103,6 +19230,8 @@ export class ThreeDRenderer {
     // switch/binary_sensor / unbound localState → entityOn, OR a rig engaged in a
     // `bathe` activity / dwelling), drains when off. Slower than sinks.
     this._advanceBathtubs(targets, entityOn, frameDt);
+    this._advanceShowers(targets, entityOn, frameDt);
+    this._advanceToilets(entityOn, frameDt);
 
     // ── Swing seats (furniture-polish): pendulum each occupied swing (a rig
     // claims its SitSpot, sit > 0.5) ±~15° at ~0.4 Hz, eased in/out; publishes
@@ -19305,6 +19434,108 @@ export class ThreeDRenderer {
       this._bathtubFill[tub.fuId] = next;
       tub.fill.position.y = tub.emptyY + (tub.fullY - tub.emptyY) * next;
       tub.fill.visible = next > 0.02;
+      if (tub.stream) tub.stream.visible = running;
+    }
+  }
+
+  // Per-frame shower spray. A shower RUNS when its effectiveState is on (bound
+  // switch/binary_sensor / unbound localState → entityOn) OR a rig is engaged in
+  // a `shower`/`bathe` activity anchored to it OR dwells (>1.2 s, RAW pos)
+  // within ~1.1 m — the sink idiom (anti-feedback, raw positions only). The run
+  // blend is keyed by fixture id (survives _keyFloor) and eases opacity in/out
+  // (τ ≈ 0.35 s) so the water never pops. Droplets recycle head → pan in place;
+  // zero alloc after build.
+  private _advanceShowers(targets: TargetWorld[], entityOn: Record<string, boolean>, dt: number): void {
+    if (!this._showers.length) return;
+    const bathingFu = new Set<string>();
+    for (const key in this._humanoids) {
+      const h = this._humanoids[key];
+      if (h.activityAnchor && h.act > 0.1 &&
+          (h.activityAnchor.kind === 'shower' || h.activityAnchor.kind === 'bathe'))
+        bathingFu.add(h.activityAnchor.furnitureId);
+    }
+    const PROX2 = 1100 * 1100;
+    const alpha = 1 - Math.exp(-dt / 0.35);
+    const fall = this._SHOWER_FALL * Math.max(0, Math.min(0.2, dt));
+    for (const sh of this._showers) {
+      let running = entityOn[sh.fuId] === true || bathingFu.has(sh.fuId);
+      if (!running) {
+        for (const t of targets) {
+          const dx = t.x - sh.wx, dy = t.y - sh.wy;
+          if (dx * dx + dy * dy > PROX2) continue;
+          const h = this._humanoids[t.key];
+          if (h && !h.quad && h.dwell > 1.2) { running = true; break; }
+        }
+      }
+      const cur = this._showerRun[sh.fuId] ?? 0;
+      const next = cur + ((running ? 1 : 0) - cur) * alpha;
+      this._showerRun[sh.fuId] = next;
+      const on = next > 0.02;
+      sh.points.visible = on;
+      sh.ring.visible = on;
+      sh.mat.opacity = 0.9 * next;
+      (sh.ring.material as THREE.MeshToonMaterial).opacity = 0.3 * next;
+      if (!on) continue;
+      const p = sh.pos;
+      for (let i = 0; i < sh.count; i++) {
+        const j = i * 3;
+        p[j + 1] -= fall;
+        if (p[j + 1] <= sh.panY) {                      // recycle at the head
+          const a = Math.random() * Math.PI * 2, rr = Math.sqrt(Math.random()) * sh.spread;
+          p[j] = sh.cx + Math.cos(a) * rr;
+          // Jitter the respawn height by up to one fall step. Respawning at
+          // EXACTLY headY quantizes every droplet onto y = headY − k·fall, so
+          // with a steady frame dt the whole cloud collapses into a few visible
+          // horizontal BANDS instead of a continuous stream.
+          p[j + 1] = sh.headY - Math.random() * Math.max(60, fall);
+          p[j + 2] = sh.cz + Math.sin(a) * rr;
+        }
+      }
+      (sh.points.geometry.getAttribute('position') as THREE.BufferAttribute).needsUpdate = true;
+    }
+  }
+
+  // Per-frame toilet flush ONE-SHOT (~4 s). Unlike the sink/tub/shower this is
+  // an EVENT, not a level: armed on a RISING edge of the fixture's run state
+  // (bound entity on / unbound localState 'on' — the Planner clears an unbound
+  // one back to 'off' after the same window) or on a rig FINISHING its `toilet`
+  // engagement (flush after use). While the countdown runs the bowl water
+  // swirls, dips + shrinks, then refills and settles. Countdown + edge maps are
+  // keyed by fixture id so a _keyFloor rebuild mid-flush RESUMES. Zero alloc.
+  private _advanceToilets(entityOn: Record<string, boolean>, dt: number): void {
+    if (!this._toilets.length) return;
+    const busy = new Set<string>();
+    for (const key in this._humanoids) {
+      const h = this._humanoids[key];
+      if (h.activity === 'toilet' && h.activityAnchor) busy.add(h.activityAnchor.furnitureId);
+      if (h.sitSpotId && h.sit > 0.5) busy.add(h.sitSpotId.split(':')[0]);
+    }
+    for (const wc of this._toilets) {
+      const on = entityOn[wc.fuId] === true;
+      const occ = busy.has(wc.fuId);
+      const rearmOn = on && !this._toiletPrevOn[wc.fuId];
+      const rearmOcc = !occ && this._toiletPrevOcc[wc.fuId] === true;
+      this._toiletPrevOn[wc.fuId] = on;
+      this._toiletPrevOcc[wc.fuId] = occ;
+      let left = this._toiletFlush[wc.fuId] ?? 0;
+      if ((rearmOn || rearmOcc) && left <= 0) left = this._TOILET_FLUSH_S;
+      if (left <= 0) {
+        if (this._toiletFlush[wc.fuId] !== undefined) {   // settle back to rest once
+          delete this._toiletFlush[wc.fuId];
+          wc.water.position.y = wc.baseY;
+          wc.water.scale.set(wc.baseSX, wc.water.scale.y, wc.baseSZ);
+          wc.water.rotation.y = 0;
+        }
+        continue;
+      }
+      left = Math.max(0, left - dt);
+      this._toiletFlush[wc.fuId] = left;
+      const u = 1 - left / this._TOILET_FLUSH_S;          // 0 → 1 progress
+      // Drain 0→0.30, hold low 0.30→0.45, refill 0.45→1.
+      const e = u < 0.30 ? u / 0.30 : u < 0.45 ? 1 : Math.max(0, 1 - (u - 0.45) / 0.55);
+      wc.water.position.y = wc.baseY - 34 * e;
+      wc.water.scale.set(wc.baseSX * (1 - 0.32 * e), wc.water.scale.y, wc.baseSZ * (1 - 0.32 * e));
+      wc.water.rotation.y += (2 + 9 * e) * dt;            // swirl, fastest at the dip
     }
   }
 
@@ -19345,8 +19576,11 @@ export class ThreeDRenderer {
 
   // Per-frame mailbox flag. Ease each arm's 0→1 blend (τ ≈ 0.25 s) toward UP
   // (flag sensor 'on') / DOWN, applying rotation.x = (π/2)·(1−blend): blend 1 =
-  // up (pole vertical, flag flying), blend 0 = down (pole horizontal, panel
-  // hanging). Blend keyed by fixture id (survives _keyFloor). Zero alloc.
+  // UP (arm horizontal along local +Z = pointing at the box REAR), blend 0 =
+  // DOWN (Rx(π/2) maps +Z → −Y, arm straight down). The paddle is thin in X, and
+  // X is the rotation axis, so the paddle plane stays parallel to the mailbox's
+  // side face in every pose. Blend keyed by fixture id (survives _keyFloor).
+  // Zero alloc.
   private _advanceMailFlags(dt: number): void {
     if (!this._mailFlags.length) return;
     const alpha = 1 - Math.exp(-dt / 0.25);

@@ -1892,14 +1892,18 @@ export function segCrossesSolidWall(
 // floor rect (0..w × 0..d) but OUTSIDE every closed wall loop, ordered
 // boustrophedon (alternate rows reversed). Empty → the caller orbits an ellipse
 // ring. Pure — shared by Planner._mowerWaypoints and its test page.
+// `rowCell` (defaults to `cell`, so every legacy caller is byte-identical) is the
+// ROW pitch — the perpendicular spacing between consecutive sweep lanes. It must
+// be ≥ 2·MOWER_KINEMATICS.turnRadiusMm for a car-like mower to complete the
+// row-end U-turn as ONE continuous arc; the Planner passes MOWER_ROW_MM.
 export function mowerSweepWaypoints(
   walls: { points: Vec2[]; kind?: WallKind }[],
-  w: number, d: number, cell = 800, margin = 300,
+  w: number, d: number, cell = 800, margin = 300, rowCell = cell,
 ): Vec2[] {
   const loops = closedWallLoops(walls);
   const wps: Vec2[] = [];
   let row = 0;
-  for (let gy = margin; gy <= d - margin; gy += cell, row++) {
+  for (let gy = margin; gy <= d - margin; gy += rowCell, row++) {
     const cells: Vec2[] = [];
     for (let gx = margin; gx <= w - margin; gx += cell) {
       let inside = false;
@@ -1910,6 +1914,99 @@ export function mowerSweepWaypoints(
     for (const c of cells) wps.push(c);
   }
   return wps;
+}
+
+// ── Robot mower kinematics (car-like bicycle model) ─────────────────────────
+// A robot MOWER is a wheeled vehicle, not a hovering puck: it can only travel
+// along its own heading and turn at a bounded rate. The vacuum keeps the old
+// point-chasing controller (a round puck genuinely does pivot in place) — this
+// model is the mower branch ONLY.
+//
+// State: (x, y, heading θ, speed v). Per step:
+//   • bearing error  e = wrap(atan2(ty−y, tx−x) − θ)
+//   • target speed   v* = max(minSpeed, maxSpeed·max(0,cos e)) — slow into a
+//     turn, floor so it never stalls mid-arc — additionally capped by an
+//     arrival ramp so it eases onto the dock instead of overshooting.
+//   • v  ← v accel-limited toward v*
+//   • ω  = clamp(steerGain·e, ±v/turnRadiusMm)  — the turn-RATE bound is what
+//     makes the minimum turning circle exactly `turnRadiusMm` at any speed.
+//   • θ ← θ + ω·dt, then  (x,y) += v·dt·(cos θ, sin θ)   ← STRICTLY along θ.
+// The position update never uses the target direction, so lateral (strafing)
+// displacement is identically zero — the property the tests pin.
+export const MOWER_KINEMATICS = {
+  maxSpeedMm: ROBOT_DEFAULTS.mower.speed,   // mm/s cruising (0.42 m/s)
+  minSpeedMm: 100,      // mm/s floor — 0.10 m/s, never stalls mid-turn
+  accelMm: 700,         // mm/s² speed ramp (both directions)
+  turnRadiusMm: 500,    // tightest turning circle radius
+  steerGain: 2.4,       // rad/s of yaw rate per rad of bearing error
+  arriveMm: 420,        // waypoint capture radius
+  brakeMm: 900,         // start easing speed down inside this range of a STOP goal
+};
+// Row pitch for the simulated boustrophedon sweep: ≥ 2·turnRadiusMm (1000 mm)
+// so the row-end 180° reversal fits as one continuous arc instead of an instant
+// heading flip. 1200 leaves headroom for the approach/exit tangents.
+export const MOWER_ROW_MM = 1200;
+
+// Wrap an angle into (−π, π].
+export function wrapAngle(a: number): number {
+  let x = (a + Math.PI) % (2 * Math.PI);
+  if (x <= 0) x += 2 * Math.PI;
+  return x - Math.PI;
+}
+
+export interface BicycleState { x: number; y: number; heading: number; speed: number }
+
+// Advance one bicycle-model step toward (tx, ty). `stop` = the target is a
+// parking spot (dock / hold): speed ramps to 0 on arrival instead of cruising
+// through. Returns the post-step state MUTATED IN PLACE (zero alloc) plus the
+// applied yaw rate so callers/tests can inspect it. Pure apart from the mutation.
+export function stepBicycle(
+  s: BicycleState, tx: number, ty: number, dt: number,
+  opts?: { maxSpeed?: number; stop?: boolean; k?: typeof MOWER_KINEMATICS },
+): { omega: number; dist: number; err: number } {
+  const K = opts?.k ?? MOWER_KINEMATICS;
+  const h = Math.max(0, Math.min(0.2, dt));            // clamp a tab-resume gap
+  const dx = tx - s.x, dy = ty - s.y;
+  const dist = Math.hypot(dx, dy);
+  const err = dist > 1 ? wrapAngle(Math.atan2(dy, dx) - s.heading) : 0;
+  const maxV = Math.max(0, opts?.maxSpeed ?? K.maxSpeedMm);
+  // Speed shaping: full when aligned, floored while turning; a STOP goal also
+  // brakes linearly inside `brakeMm` and commands 0 at the capture radius.
+  let want = Math.max(Math.min(K.minSpeedMm, maxV), maxV * Math.max(0, Math.cos(err)));
+  if (opts?.stop) {
+    if (dist <= K.arriveMm) want = 0;
+    else want = Math.min(want, maxV * Math.min(1, dist / K.brakeMm));
+  }
+  const dv = want - s.speed, lim = K.accelMm * h;
+  s.speed += Math.max(-lim, Math.min(lim, dv));
+  if (s.speed < 0) s.speed = 0;
+  // Steering: bounded yaw rate ⇒ turning radius ≥ turnRadiusMm at any speed.
+  const wMax = s.speed / K.turnRadiusMm;
+  let omega = Math.max(-wMax, Math.min(wMax, K.steerGain * err));
+  // A goal INSIDE the tightest turning circle can never be reached by steering
+  // toward it (the arc orbits around it forever). Hold the wheel straight until
+  // it falls outside, then turn in — exactly what a car does after overshooting
+  // a driveway. Without this the mower endlessly circles a nearby waypoint.
+  if (dist < 2 * K.turnRadiusMm && Math.abs(err) > 1.3) omega = 0;
+  s.heading = wrapAngle(s.heading + omega * h);
+  const step = s.speed * h;
+  s.x += Math.cos(s.heading) * step;
+  s.y += Math.sin(s.heading) * step;
+  return { omega, dist, err };
+}
+
+// Should the mower advance past this sweep waypoint? Either it is inside the
+// capture radius, or it has been PASSED (behind us and inside the turning
+// circle, so steering back would just loop) — the latter keeps rows smooth
+// instead of sprawling a circle at every clipped corner.
+export function mowerWaypointReached(
+  s: { x: number; y: number; heading: number }, tx: number, ty: number,
+  k: typeof MOWER_KINEMATICS = MOWER_KINEMATICS,
+): boolean {
+  const dx = tx - s.x, dy = ty - s.y, d = Math.hypot(dx, dy);
+  if (d <= k.arriveMm) return true;
+  return d < 2 * k.turnRadiusMm &&
+         Math.abs(wrapAngle(Math.atan2(dy, dx) - s.heading)) > Math.PI / 2;
 }
 
 // Nearest candidate coordinate to `v` within `tol` (else null). Drives the
@@ -2764,6 +2861,17 @@ export function snapExhaustToWall(
 export function isSinkKind(kind: FurnitureKind | undefined): boolean {
   return kind === 'sink' || kind === 'sink_vanity' || kind === 'pedestal_sink' ||
          kind === 'kitchen_sink' || kind === 'utility_sink';
+}
+// Every "wet" bathroom piece that carries a WATER ANIMATION driven by its run
+// state: the five sink kinds + the bathtub (fill/drain), the shower (falling
+// spray) and the toilet (flush one-shot). This is the single predicate behind
+//   • the three-view appliance-state hash (so a bound/local flip rebuilds),
+//   • the 'media' raycast click tag + the switch/binary_sensor dblclick binder,
+//   • the 2D click-to-run paths and water hints,
+// so those four surfaces can never drift apart. `isSinkKind` stays the narrower
+// basin-only test (fill plane + faucet stream geometry).
+export function isWetBathKind(kind: FurnitureKind | undefined): boolean {
+  return isSinkKind(kind) || kind === 'bathtub' || kind === 'shower' || kind === 'toilet';
 }
 export function binStateIsFull(state: string | null | undefined): boolean {
   return state === 'on' || state === 'full';

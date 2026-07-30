@@ -296,6 +296,20 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Mower car kinematics + mailbox flag + bathroom water**
+  (2026-07-30, user-reported ×3; unreleased — on main past v0.46.0).
+  Mower: pure stepBicycle bicycle model (turn radius 500, cruise
+  420, strict along-heading motion, U-turn rows at MOWER_ROW_MM
+  1200, inside-circle wheel-straight rule); vacuum byte-identical
+  (LCG-pinned probes). Mailbox flag rebuilt per user spec: side-face
+  pivot rotating about X only — paddle parallel to the side by
+  construction, up→rear, down→down. Bathroom: isWetBathKind unifies
+  sinks+tub+shower+toilet (click tags, binder, appliance hash);
+  shower spray + splash ring, tub faucet stream, toilet 4 s
+  edge-triggered flush one-shot (save-free self-clearing
+  localState); gallery bathwater twins (<kind>-running) for all 8.
+  New bath-water-test 62/62; robot 71→96, vehicle-mail 26→39;
+  sink 48/48, furniture-polish 28/28 held.
 - **Glass-break sensor + leak puddle curve + gate fence gaps + bay
   windows** (2026-07-30, user-requested ×4; unreleased — on main past
   v0.46.0). SafetyKind + glass_break (square mic plate, shatter-star

@@ -1107,7 +1107,13 @@ The **`vehicle` cat** (new; `furnitureCat` optgroup "Vehicle / garage") groups
   sensor) > 0 → floating count badge (2D chip + 3D `_makeTextSprite`, freed by
   the `_floorGroup` `_disposeSpriteMaps` pairing) + the flag raised; `flagEntity`
   (binary_sensor lid) `'on'` tilts the lid open (build-time). Zero/unbound =
-  plain closed mailbox, flag down, no badge.
+  plain closed mailbox, flag down, no badge. **Flag geometry (2026-07-30,
+  user-specified)**: arm+paddle in a pivot group on the +X SIDE face near the
+  front, arm authored along local +Z, pivot rotates about X only — so the
+  paddle plane stays PARALLEL to the side in every pose by construction; UP =
+  arm toward the REAR (+Z), DOWN = `Rx(π/2)` = straight down (the old build
+  authored the arm along +Y — both poses inverted). Tags
+  `userData.mailFlagArm`/`mailFlagPaddle`.
 - **Hash + keys**: three-view's appliance-state hash predicate widened to
   `isVehicleKind || ev_charger || mailbox || evCharger || mailCount`; it folds
   the car presence (`on`), ev status+power bucket, and mail count+lid states so
@@ -1524,7 +1530,7 @@ Test page `stair-link-test.html`.
 - **Bubble tail centering**: the bubble sprite's TAIL TIP anchors at head center via `spr.center` (position.x = 0; cloud body floats up-right); lying-pose repin + dispose lifecycle untouched; name label unaffected.
 
 ### Robot vacuum & lawn mower fixtures
-`RobotFixture` (`Floor.robots`, repairFloor + defaultFloor backfill `[]`; tool `robot` 🤖, sidebar `_section('robots', …)`): the placed x/y is the DOCK. Kind `vacuum` binds `vacuum.*` (VacuumActivity), `mower` binds `lawn_mower.*` (LawnMowerActivity) + optional GPS: `trackerEntity` (device_tracker with latitude/longitude attrs + optional `direction` heading — Mammotion `<name>_gps` shape; its gps_accuracy is hard-coded 0, never draw accuracy rings) OR `latEntity`+`lonEntity` sensor pair (tracker wins). All bound ids config-path in `_isSlowEntity`. **Movement controller lives in the PLANNER** (`Planner.stepRobots(dt)`, advanced from the 2D RAF right after `stepLerp`; `Planner.robotStates` is the single source of truth read by BOTH `drawRobots` (2D) and three-view→`updateRobotRigs` (3D) — a robot moves even if 3D was never opened). Steering is **straight-line LOS with wall avoidance, NOT A***: goals validated/re-picked against the pure `segCrossesSolidWall` (geometry.ts — wall runs minus door/window openings via `wallCutsForSegment`; invisible walls passable). Vacuum roams indoor goals ~0.30 m/s with a serpentine wiggle; mower in **GPS mode** (bound + `geoFit()` quality ≠ none) eases to `latLonToPlan`-projected, boundary-clamped fixes, else **simulated** boustrophedon over cells outside all wall loops (`mowerSweepWaypoints`, ellipse-ring fallback when loops fill the rect). Unbound = autonomous demo (run 90–180 s → return → dock 60–120 s, hash-desynced; runs in kiosk/view). Click (2D + 3D `userData.kind='robot'`): bound → `vacuum.return_to_base`/`lawn_mower.dock` when active else `vacuum.start`/`lawn_mower.start_mowing`; unbound → flip run↔return. LED/state palette via `robotLedColor` (cleaning/mowing green + spin/bob, returning blue, docked amber breathing, paused amber, idle dim, error red blink). 3D: docks build under `_keyRobots`; rigs are persistent per-frame objects (`_robotRigs`, `_robotRigGroup`) mutated in place like humanoids; both ride the **sensors** layer. Test page `robot-test.html` (`ROBOT PASS 24/24`).
+`RobotFixture` (`Floor.robots`, repairFloor + defaultFloor backfill `[]`; tool `robot` 🤖, sidebar `_section('robots', …)`): the placed x/y is the DOCK. Kind `vacuum` binds `vacuum.*` (VacuumActivity), `mower` binds `lawn_mower.*` (LawnMowerActivity) + optional GPS: `trackerEntity` (device_tracker with latitude/longitude attrs + optional `direction` heading — Mammotion `<name>_gps` shape; its gps_accuracy is hard-coded 0, never draw accuracy rings) OR `latEntity`+`lonEntity` sensor pair (tracker wins). All bound ids config-path in `_isSlowEntity`. **Movement controller lives in the PLANNER** (`Planner.stepRobots(dt)`, advanced from the 2D RAF right after `stepLerp`; `Planner.robotStates` is the single source of truth read by BOTH `drawRobots` (2D) and three-view→`updateRobotRigs` (3D) — a robot moves even if 3D was never opened). Steering: the VACUUM is **straight-line LOS with wall avoidance, NOT A*** (goals validated/re-picked against the pure `segCrossesSolidWall`; serpentine wiggle ~0.30 m/s — byte-identical pins in robot-test). **The MOWER is a BICYCLE MODEL (2026-07-30, user-reported "needs to move more like a car")**: pure `stepBicycle`/`mowerWaypointReached`/`wrapAngle` + `MOWER_KINEMATICS` (geometry.ts — cruise 420 = ROBOT_DEFAULTS.mower.speed, floor 100, `turnRadiusMm` 500, `ω = clamp(k·err, ±v/R)`, accel 700, brake-to-park on `stop` targets); position advances STRICTLY along heading (never strafes), `RobotState.speed` added; EVERY branch (GPS chase, dock return, sweep, ellipse) routes through it; row pitch = `MOWER_ROW_MM` 1200 (≥2R) via `mowerSweepWaypoints`' trailing optional `rowCell` (legacy calls byte-identical); waypoints advance on pass-by; **inside-the-turning-circle goals hold the wheel straight until the target falls outside** (else the arc orbits forever); renderers read the kinematic `rs.heading` for free. GPS mode: the projected fix is the carrot under the same kinematics; mower in **GPS mode** (bound + `geoFit()` quality ≠ none), else **simulated** boustrophedon over cells outside all wall loops (ellipse-ring fallback when loops fill the rect). Unbound = autonomous demo (run 90–180 s → return → dock 60–120 s, hash-desynced; runs in kiosk/view). Click (2D + 3D `userData.kind='robot'`): bound → `vacuum.return_to_base`/`lawn_mower.dock` when active else `vacuum.start`/`lawn_mower.start_mowing`; unbound → flip run↔return. LED/state palette via `robotLedColor` (cleaning/mowing green + spin/bob, returning blue, docked amber breathing, paused amber, idle dim, error red blink). 3D: docks build under `_keyRobots`; rigs are persistent per-frame objects (`_robotRigs`, `_robotRigGroup`) mutated in place like humanoids; both ride the **sensors** layer. Test page `robot-test.html` (`ROBOT PASS 96/96`).
 
 ### Smoke / CO detector fixtures
 `SafetySensor` (`Floor.safetySensors`, repairFloor + defaultFloor backfill `[]`) — ceiling-mounted detector, kind `smoke` (red) / `co` (amber), bound to a binary_sensor ('on' = ALARM). Standard canvas-fixture recipe: tool `safety` (⚠️ Smoke/CO; free placement, NO wall snap), `drawSafetySensors` (2D disc; alarming → expanding pulse rings + halo, `performance.now()`-based), `hitSafetySensor`, drag kind `safety`, sidebar `_section('safety', 'Smoke / CO', …)` (kind dropdown, bind, Test button — disabled when bound), 3D `_safetyGroup` (ceiling disc at 2743 + LED; alarming → emissive glow + 3 expanding flat rings) riding the **sensors** layer under `_keySafety` — which three-view **forces every frame while any detector alarms** (the fireplace idiom; ring animation needs per-frame rebuild). Unbound: clicking the detector (2D + 3D, `userData.kind='safety'`) or the sidebar Test button flips `localState` (manual trigger); bound detectors are display-only. Bound ids are config-path in `_isSlowEntity`.
@@ -1797,6 +1803,26 @@ Eleven `FurnitureKind`s + four `LightIconKind`s, all state-animated:
   Glyphs: ♨ ❊ ⊛ ❈. three-view appliance hash gained a `clim` term
   (hvac_action/percentage/direction). Test `climate-appliance-test.html`
   (64/64).
+
+### Bath water (2026-07-30 — shower spray / tub stream / toilet flush + gallery pairs)
+**`isWetBathKind`** (geometry.ts: the 5 sinks + bathtub + shower + toilet) is now THE single
+predicate behind the three-view appliance hash, the `'media'` click tag, the dblclick binder
+(`['switch','binary_sensor']` — no `button` for the toilet: no steady state for the edge
+detector) and the sidebar bind domains (`isSinkKind` stays the narrower basin-geometry test).
+**Shower**: 34-pt Points spray (shared `_rainTexture()`) head→pan + splash ring, built always,
+gated per frame by the eased `_showerRun` blend (τ 0.35 s, survives `_keyFloor`); runs on
+entityOn OR an anchored shower/bathe rig OR a >1.2 s dwell within 1.1 m (raw positions);
+recycle Y jittered (exact-headY respawn banded visibly under steady dt). **Bathtub** gained
+the faucet stream mesh (fill plane pre-existed). **Toilet**: ~4 s flush ONE-SHOT
+(swirl/drain/hold/refill), EDGE-triggered — run-state rising edge or a rig finishing its
+`toilet` engagement; **`toggleItem`'s toilet branch is a save-free self-clearing one-shot**
+(`localState 'on'` + emitConfig, `TOILET_FLUSH_MS` 4300 timer flips it back — the store never
+records a half-flush, no undo snapshot; re-click mid-flush is a no-op). **Gallery**: subject
+type `bathwater` + `capBathWater` — every isWetBathKind piece emits `<kind>` + `<kind>-running`
+twins on its BASE page (kitchen_sink-running lands on Appliances); toilet capture primes the
+off state then flips (the capSafety age-ramp precedent); the hand-list guard is unaffected
+(furniture counts unguarded by design). Test `bath-water-test.html` (`BATHWATER PASS 62/62`);
+vehicle-mail 39/39, robot 96/96.
 
 ### Sinks v2 (basins, running water, fill/drain)
 Five sink kinds (`isSinkKind`, geometry.ts): `sink` (compact vanity),

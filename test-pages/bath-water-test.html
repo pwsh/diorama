@@ -1,0 +1,334 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>bath-water test</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<script type="module">
+  // Bathroom water animations — the shower / bathtub / toilet siblings of the
+  // Sinks v2 pattern (registered rigs + a per-fixture blend map that SURVIVES
+  // _keyFloor rebuilds + a per-frame zero-alloc advance + a 'media' click tag).
+  //   shower  — a THREE.Points spray falling head → pan + a splash ring, gated by
+  //             an eased run blend (entityOn / anchored shower|bathe rig / dwell)
+  //   bathtub — the existing fill plane PLUS a faucet stream shown while running
+  //   toilet  — a ~4 s FLUSH ONE-SHOT (swirl + dip + refill) armed on a RISING
+  //             edge of the run state; the unbound localState that arms it is
+  //             cleared by Planner.toggleItem's own timer (session-only)
+  //   predicate — isWetBathKind is the ONE gate behind the three-view appliance
+  //             hash, the click tag, the dblclick binder and the 2D paths
+  //
+  //   Bundles this page needs next to it in the harness dir:
+  //     npx esbuild src/geometry.ts --bundle --format=esm --outfile=<h>/geometry.mod.js
+  //     npx esbuild src/planner.ts  --bundle --format=esm --outfile=<h>/planner.mod.js
+  //   plus a fresh `npm run build` dist copied to <h>/assets/.
+  const mod = await import('./assets/three-renderer.js?v=' + Date.now());
+  const geo = await import('./geometry.mod.js?v=' + Date.now());
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+
+  const results = [];
+  const assert = (name, cond, detail = '') => results.push(`${cond ? 'PASS' : 'FAIL'} ${name}${detail ? ' (' + detail + ')' : ''}`);
+  const findByFixtureId = (grp, id) => {
+    let found = null;
+    grp.traverse(o => { if (!found && o.userData && o.userData.fixtureId === id) found = o; });
+    return found;
+  };
+  const findFlag = (g, key) => { let f = null; g.traverse(o => { if (!f && o.userData && o.userData[key]) f = o; }); return f; };
+  const pointsIn = (g) => { const out = []; g.traverse(o => { if (o.isPoints) out.push(o); }); return out; };
+
+  const K = geo.FURNITURE_KINDS;
+  const baseFloor = (furniture) => ({
+    id: 'f1', name: 'F', w: 9000, d: 7000,
+    walls: [], furniture: furniture || [], lights: [], switches: [],
+    sensors: [], motionSensors: [], envSensors: [], doors: [], windows: [],
+    bg: null, model3d: null, look3d: null, rooms: [],
+  });
+  const build = (furniture, states) => {
+    r.updateFloor(baseFloor(furniture), { preset: 'day' }, undefined, undefined, id => (states && states[id]) || null);
+  };
+  // Deterministic advance: pin performance.now so updateTargets' frameDt is
+  // exactly `stepS` per call (the sink-test idiom). updateTargets clamps at 0.1 s.
+  let _clock = 1000;
+  const realNow = performance.now.bind(performance);
+  performance.now = () => _clock;
+  const advance = (frames, stepS, ctx) => {
+    for (let i = 0; i < frames; i++) { _clock += stepS * 1000; r.updateTargets([], ctx); }
+  };
+  const ctxOn = (id) => ({ entityOn: { [id]: true }, roomNames: {}, timeBucket: 'day' });
+  const ctxOff = (id) => ({ entityOn: { [id]: false }, roomNames: {}, timeBucket: 'day' });
+
+  // ── pure predicate ────────────────────────────────────────────────────────
+  function testPredicate() {
+    const WET = ['sink', 'sink_vanity', 'pedestal_sink', 'kitchen_sink', 'utility_sink', 'bathtub', 'shower', 'toilet'];
+    assert('isWetBathKind true for every wet bathroom kind',
+      WET.every(k => geo.isWetBathKind(k)), WET.filter(k => !geo.isWetBathKind(k)).join(',') || 'ok');
+    assert('isWetBathKind is a superset of isSinkKind',
+      ['sink', 'sink_vanity', 'pedestal_sink', 'kitchen_sink', 'utility_sink'].every(k => geo.isSinkKind(k) && geo.isWetBathKind(k)));
+    assert('isWetBathKind adds exactly bathtub/shower/toilet over the sinks',
+      ['bathtub', 'shower', 'toilet'].every(k => geo.isWetBathKind(k) && !geo.isSinkKind(k)));
+    assert('isWetBathKind false for dry pieces',
+      !geo.isWetBathKind('table') && !geo.isWetBathKind('fridge') && !geo.isWetBathKind('tv') && !geo.isWetBathKind(undefined));
+    // The three-view appliance-state hash gates on this predicate, then folds the
+    // resolved state into its per-piece term. Mirror that expression here so the
+    // "a run-state flip rebuilds the floor" contract is pinned even though the
+    // hash itself lives in the (non-renderer) three-view module.
+    const hashTerm = (kind, state) => (geo.isWetBathKind(kind) ? `${kind}:${state}` : '');
+    assert('appliance-hash predicate: a wet piece contributes a state term',
+      hashTerm('shower', 'off') !== '' && hashTerm('toilet', 'off') !== '');
+    assert('appliance-hash predicate: the term FLIPS with the run state',
+      hashTerm('shower', 'off') !== hashTerm('shower', 'on') &&
+      hashTerm('toilet', 'off') !== hashTerm('toilet', 'on') &&
+      hashTerm('bathtub', 'off') !== hashTerm('bathtub', 'on'));
+    assert('appliance-hash predicate: a dry piece still contributes nothing',
+      hashTerm('table', 'on') === '' && hashTerm('table', 'off') === '');
+  }
+
+  // ── click tags (raycast kind tags on all four new/changed kinds) ──────────
+  function testClickTags() {
+    const kinds = ['shower', 'toilet', 'bathtub', 'sink'];
+    const furn = kinds.map((k, i) => ({ id: 'ct_' + k, x: 1200 + i * 1600, y: 1400, w: K[k].w, h: K[k].h, kind: k }));
+    build(furn, {});
+    for (const k of kinds) {
+      const g = findByFixtureId(r._floorGroup, 'ct_' + k);
+      assert(`${k}: click-tagged 'media' (unbound too)`,
+        !!g && g.userData.kind === 'media' && g.userData.entity_id === null,
+        g ? `kind=${g.userData.kind}` : 'no group');
+      assert(`${k}: registered in the raycast clickable list`,
+        r._mediaClickables.some(o => o.userData && o.userData.fixtureId === 'ct_' + k));
+    }
+  }
+
+  // ── shower: build + run-gated spray ──────────────────────────────────────
+  function testShower() {
+    build([{ id: 'sh1', x: 2000, y: 2000, w: K.shower.w, h: K.shower.h, kind: 'shower' }], {});
+    const g = findByFixtureId(r._floorGroup, 'sh1');
+    assert('shower: registered in _showers', r._showers.length === 1, `count=${r._showers.length}`);
+    const rig = r._showers[0];
+    const pts = pointsIn(g);
+    assert('shower: builds a THREE.Points spray cloud', pts.length === 1 && pts[0].geometry.getAttribute('position').count > 10,
+      `points=${pts.length}`);
+    assert('shower: the spray material is a PointsMaterial (toon-factory exemption)',
+      rig.mat && rig.mat.isPointsMaterial === true);
+    assert('shower: builds a splash ring on the pan', !!findFlag(g, 'showerRing'));
+    assert('shower: spray + ring are outline-skipped', pts[0].userData.outlineSkip === true &&
+      findFlag(g, 'showerRing').userData.outlineSkip === true);
+    assert('shower: spray hidden before any advance (idle)', pts[0].visible === false && rig.mat.opacity === 0);
+
+    // OFF for a while → still hidden.
+    advance(10, 0.05, ctxOff('sh1'));
+    assert('shower: stays hidden while off', pts[0].visible === false, `blend=${(r._showerRun.sh1 ?? 0).toFixed(3)}`);
+
+    // ON → the cloud appears and the blend eases up.
+    advance(30, 0.05, ctxOn('sh1'));
+    assert('shower: running shows the spray cloud', pts[0].visible === true && rig.mat.opacity > 0.5,
+      `opacity=${rig.mat.opacity.toFixed(2)}`);
+    assert('shower: running shows the splash ring', rig.ring.visible === true && rig.ring.material.opacity > 0.1,
+      `ringOpacity=${rig.ring.material.opacity.toFixed(3)}`);
+    // Droplets fall between two advances (mean Y decreases; recycled ones jump up).
+    const pos = rig.points.geometry.getAttribute('position');
+    const before = [];
+    for (let i = 0; i < rig.count; i++) before.push(pos.getY(i));
+    advance(1, 0.02, ctxOn('sh1'));
+    let fell = 0, recycled = 0;
+    for (let i = 0; i < rig.count; i++) {
+      const now = pos.getY(i);
+      if (now < before[i] - 1) fell++;
+      else if (now > before[i]) recycled++;
+    }
+    assert('shower: droplets fall between two advances', fell >= rig.count - recycled - 1 && fell > 0,
+      `fell=${fell} recycled=${recycled} of ${rig.count}`);
+    assert('shower: every droplet stays inside the head → pan band',
+      (() => { for (let i = 0; i < rig.count; i++) { const y = pos.getY(i); if (y < rig.panY - 60 || y > rig.headY + 1) return false; } return true; })(),
+      `pan=${rig.panY.toFixed(0)} head=${rig.headY.toFixed(0)}`);
+    assert('shower: the spray never dips below the pan (no water on the slab)',
+      rig.panY > 0);
+
+    // OFF → eases out and hides.
+    advance(60, 0.05, ctxOff('sh1'));
+    assert('shower: turning off fades the spray away', pts[0].visible === false && rig.mat.opacity < 0.02,
+      `blend=${(r._showerRun.sh1 ?? 0).toFixed(4)}`);
+  }
+
+  // ── shower: run blend survives a _keyFloor rebuild ───────────────────────
+  function testShowerRebuild() {
+    build([{ id: 'sh2', x: 2000, y: 2000, w: K.shower.w, h: K.shower.h, kind: 'shower' }], {});
+    advance(24, 0.05, ctxOn('sh2'));
+    const mid = r._showerRun.sh2;
+    assert('shower: run blend accumulated before rebuild', mid > 0.5, `blend=${mid.toFixed(3)}`);
+    build([{ id: 'sh2', x: 2000, y: 2000, w: K.shower.w, h: K.shower.h, kind: 'shower' }], {});
+    assert('shower: run blend persists across the rebuild (keyed by fixture id)',
+      Math.abs((r._showerRun.sh2 ?? 0) - mid) < 1e-9, `after=${(r._showerRun.sh2 ?? 0).toFixed(3)}`);
+    advance(1, 0.02, ctxOn('sh2'));
+    assert('shower: the rebuilt cloud resumes visible (no pop to empty)',
+      r._showers[0].points.visible === true && r._showers[0].mat.opacity > 0.4,
+      `opacity=${r._showers[0].mat.opacity.toFixed(2)}`);
+  }
+
+  // ── bathtub: fill rises + faucet stream ──────────────────────────────────
+  function testBathtub() {
+    build([{ id: 'tb1', x: 2500, y: 2500, w: K.bathtub.w, h: K.bathtub.h, kind: 'bathtub' }], {});
+    const g = findByFixtureId(r._floorGroup, 'tb1');
+    assert('bathtub: registered in _bathtubs', r._bathtubs.length === 1, `count=${r._bathtubs.length}`);
+    const tub = r._bathtubs[0];
+    assert('bathtub: builds a faucet stream mesh', !!tub.stream && !!findFlag(g, 'tubStream'));
+    assert('bathtub: stream hidden + basin empty before any advance',
+      tub.stream.visible === false && tub.fill.visible === false);
+
+    advance(20, 0.1, ctxOn('tb1'));
+    const y1 = tub.fill.position.y, f1 = r._bathtubFill.tb1;
+    assert('bathtub: running shows the faucet stream', tub.stream.visible === true);
+    assert('bathtub: running raises the fill plane between two advance timestamps',
+      y1 > tub.emptyY + 1 && tub.fill.visible === true, `y=${y1.toFixed(0)} emptyY=${tub.emptyY.toFixed(0)}`);
+    advance(20, 0.1, ctxOn('tb1'));
+    const y2 = tub.fill.position.y;
+    assert('bathtub: the level keeps rising (monotonic while filling)',
+      y2 > y1 + 1, `y1=${y1.toFixed(0)} y2=${y2.toFixed(0)}`);
+    assert('bathtub: the level stays below the rim (fullY cap)',
+      y2 <= tub.fullY + 1e-6, `y=${y2.toFixed(0)} fullY=${tub.fullY.toFixed(0)}`);
+
+    advance(60, 0.1, ctxOff('tb1'));
+    assert('bathtub: turning off hides the stream', tub.stream.visible === false);
+    assert('bathtub: turning off drains the level back down',
+      tub.fill.position.y < y2 - 1 && (r._bathtubFill.tb1 ?? 1) < f1,
+      `fill=${(r._bathtubFill.tb1 ?? 0).toFixed(3)} was=${f1.toFixed(3)}`);
+  }
+
+  // ── toilet: flush ONE-SHOT ───────────────────────────────────────────────
+  function testToilet() {
+    build([{ id: 'wc1', x: 3000, y: 3000, w: K.toilet.w, h: K.toilet.h, kind: 'toilet' }], {});
+    const g = findByFixtureId(r._floorGroup, 'wc1');
+    assert('toilet: registered in _toilets', r._toilets.length === 1, `count=${r._toilets.length}`);
+    const wc = r._toilets[0];
+    assert('toilet: the bowl water disc is the flush rig', wc.water === findFlag(g, 'toiletWater'));
+
+    // Prime the edge detector LOW, then confirm nothing is flushing at rest.
+    advance(4, 0.1, ctxOff('wc1'));
+    assert('toilet: idle — no flush armed', r._toiletFlush.wc1 === undefined);
+    assert('toilet: idle — water sits at its rest level',
+      Math.abs(wc.water.position.y - wc.baseY) < 1e-9);
+
+    // RISING edge arms the one-shot.
+    advance(1, 0.1, ctxOn('wc1'));
+    assert('toilet: a rising run-state edge arms the ~4 s flush',
+      (r._toiletFlush.wc1 ?? 0) > 3.5, `left=${(r._toiletFlush.wc1 ?? 0).toFixed(2)}`);
+    const spin0 = wc.water.rotation.y;
+    advance(8, 0.1, ctxOn('wc1'));   // ~0.9 s in → the drain phase
+    assert('toilet: the bowl water dips during the flush',
+      wc.water.position.y < wc.baseY - 5, `y=${wc.water.position.y.toFixed(1)} base=${wc.baseY.toFixed(1)}`);
+    assert('toilet: the bowl water shrinks as it drains',
+      wc.water.scale.x < wc.baseSX - 0.05, `sx=${wc.water.scale.x.toFixed(3)}`);
+    assert('toilet: the bowl water swirls', wc.water.rotation.y > spin0 + 0.5,
+      `Δ=${(wc.water.rotation.y - spin0).toFixed(2)} rad`);
+    // Holding the state ON must NOT re-arm (edge-triggered, not level-triggered).
+    const leftMid = r._toiletFlush.wc1;
+    advance(5, 0.1, ctxOn('wc1'));
+    assert('toilet: holding the state ON does not restart the one-shot',
+      (r._toiletFlush.wc1 ?? 0) < leftMid - 0.4, `left=${(r._toiletFlush.wc1 ?? 0).toFixed(2)} was=${leftMid.toFixed(2)}`);
+
+    // Run out the window → it self-clears and settles back to rest.
+    advance(40, 0.1, ctxOn('wc1'));
+    assert('toilet: the one-shot ends after ~4 s and clears itself',
+      r._toiletFlush.wc1 === undefined);
+    assert('toilet: the water settles back to its rest level + scale',
+      Math.abs(wc.water.position.y - wc.baseY) < 1e-9 &&
+      Math.abs(wc.water.scale.x - wc.baseSX) < 1e-9 &&
+      Math.abs(wc.water.scale.z - wc.baseSZ) < 1e-9,
+      `y=${wc.water.position.y.toFixed(1)} sx=${wc.water.scale.x.toFixed(3)}`);
+
+    // A NEW rising edge (off → on) arms it again.
+    advance(3, 0.1, ctxOff('wc1'));
+    advance(1, 0.1, ctxOn('wc1'));
+    assert('toilet: a fresh rising edge re-arms the flush',
+      (r._toiletFlush.wc1 ?? 0) > 3.5, `left=${(r._toiletFlush.wc1 ?? 0).toFixed(2)}`);
+    advance(50, 0.1, ctxOff('wc1'));   // let it finish so later sections start clean
+  }
+
+  // ── toilet flush blend survives a rebuild ────────────────────────────────
+  function testToiletRebuild() {
+    build([{ id: 'wc2', x: 3000, y: 3000, w: K.toilet.w, h: K.toilet.h, kind: 'toilet' }], {});
+    advance(2, 0.1, ctxOff('wc2'));
+    advance(6, 0.1, ctxOn('wc2'));
+    const mid = r._toiletFlush.wc2;
+    assert('toilet: flush countdown running before rebuild', mid > 0 && mid < 4, `left=${(mid ?? 0).toFixed(2)}`);
+    build([{ id: 'wc2', x: 3000, y: 3000, w: K.toilet.w, h: K.toilet.h, kind: 'toilet' }], {});
+    assert('toilet: the countdown survives a _keyFloor rebuild (resumes, not restarts)',
+      Math.abs((r._toiletFlush.wc2 ?? 0) - mid) < 1e-9, `after=${(r._toiletFlush.wc2 ?? 0).toFixed(2)}`);
+    advance(60, 0.1, ctxOff('wc2'));
+  }
+
+  // ── Planner: the unbound toilet one-shot clears itself (session-only) ────
+  async function testPlannerOneShot() {
+    try {
+      const { Planner, TOILET_FLUSH_MS } = await import('./planner.mod.js?v=' + Date.now());
+      assert('planner: TOILET_FLUSH_MS outlasts the renderer 4 s one-shot',
+        TOILET_FLUSH_MS >= 4000, `ms=${TOILET_FLUSH_MS}`);
+      const p = new Planner();
+      const wc = { id: 'wc_p', x: 1000, y: 1000, w: 400, h: 700, kind: 'toilet' };
+      p.floor().furniture = [wc];
+      let saves = 0; const realSave = p.save.bind(p); p.save = () => { saves++; realSave(); };
+      p.toggleItem(wc);
+      assert('planner: clicking an unbound toilet sets localState on', wc.localState === 'on');
+      assert('planner: the flush one-shot NEVER calls save() (session-only, no undo step)', saves === 0, `saves=${saves}`);
+      p.toggleItem(wc);
+      assert('planner: re-clicking mid-flush is a no-op (the timer owns the window)',
+        wc.localState === 'on' && saves === 0);
+      // Wait out the real timer.
+      performance.now = realNow;                    // the renderer clock stub is done
+      await new Promise(res => setTimeout(res, TOILET_FLUSH_MS + 400));
+      assert('planner: the one-shot clears localState back to off by itself',
+        wc.localState === 'off', `localState=${wc.localState}`);
+      assert('planner: clearing the one-shot also never persisted', saves === 0, `saves=${saves}`);
+      // View mode still refuses.
+      p.uiMode = 'view';
+      const wc2 = { id: 'wc_v', x: 1, y: 1, w: 400, h: 700, kind: 'toilet' };
+      p.toggleItem(wc2);
+      assert('planner: view mode refuses the flush', wc2.localState === undefined);
+    } catch (e) {
+      assert('planner one-shot tests threw', false, String(e && e.message || e));
+    }
+  }
+
+  // ── 2D: the running-water hints draw without throwing ────────────────────
+  async function test2d() {
+    try {
+      const cr = await import('./canvas-render.mod.js?v=' + Date.now());
+      const cv = document.createElement('canvas');
+      cv.width = 400; cv.height = 400;
+      const c2 = cv.getContext('2d');
+      let threw = '';
+      for (const kind of ['shower', 'bathtub', 'toilet', 'sink']) {
+        for (const local of [undefined, 'on']) {
+          const piece = { id: `d_${kind}_${local}`, x: 200, y: 200, w: K[kind].w, h: K[kind].h, kind, localState: local };
+          const fake = { effectiveState: (it) => (it.localState ? { state: it.localState, attributes: {} } : null), hass: { states: {} } };
+          try {
+            c2.save(); c2.translate(200, 200);
+            cr.drawFurniturePrimitiveLocal(c2, piece, K[kind].w / 2, K[kind].h / 2, [], false, {});
+            c2.restore();
+          } catch (e) { threw = `${kind}/${local}: ${e && e.message}`; }
+          void fake;
+        }
+      }
+      assert('2D: every bathroom primitive draws without throwing', threw === '', threw);
+    } catch (e) {
+      assert('2D tests threw', false, String(e && e.message || e));
+    }
+  }
+
+  testPredicate();
+  testClickTags();
+  testShower();
+  testShowerRebuild();
+  testBathtub();
+  testToilet();
+  testToiletRebuild();
+  await test2d();
+  await testPlannerOneShot();
+  performance.now = realNow;
+
+  const pass = results.filter(x => x.startsWith('PASS')).length;
+  const fails = results.filter(x => x.startsWith('FAIL'));
+  document.title = fails.length
+    ? `BATHWATER FAIL ${pass}/${results.length} :: ${fails.slice(0, 4).join(' | ')}`
+    : `BATHWATER PASS ${pass}/${results.length}`;
+  document.body.insertAdjacentHTML('beforeend',
+    `<pre style="color:#ddd;font:12px/1.5 monospace;padding:8px">${results.join('\n')}</pre>`);
+</script>

@@ -5,6 +5,7 @@ import { SensorDiscovery } from './sensor-discovery.js';
 import { loadStore, saveStore, newId, repairFloor, defaultStore,
          cfgBodyKey, loadConfigsCache, saveConfigsCache } from './storage.js';
 import { slugToName, normMac, localToWorld, segCrossesSolidWall, mowerSweepWaypoints,
+         MOWER_KINEMATICS, MOWER_ROW_MM, stepBicycle, mowerWaypointReached, wrapAngle,
          ROBOT_DEFAULTS, robotLedColor, parseVacuumPosition, vacuumRawToWorld,
          vacuumRawHeadingRad, isStairsKind, logicLightState, actionButtonKind,
          furnitureKind, normalizeLockState, valveIsOpen, cameraColor, slugifyFrigateName,
@@ -12,7 +13,8 @@ import { slugToName, normMac, localToWorld, segCrossesSolidWall, mowerSweepWaypo
          bufferPolyline, PATH_DEFAULT_WIDTH, poolHeaterState, poolPumpOn,
          rotPointDeg, floorContentBbox, GRID_MM, rulerSetLength,
          furnitureLocalToWorld, furnitureDef, resolveItemGroundMm, STAIRS_MIN_RISE_MM,
-         type LockGlyphState, type RoomTemp, type TempSample } from './geometry.js';
+         type LockGlyphState, type RoomTemp, type TempSample,
+         type BicycleState } from './geometry.js';
 import { solveHomography, applyHomography } from './homography.js';
 import { stepFusion, newFusionState, DEFAULT_FUSION_CFG,
          type FusionState, type FusionCand } from './fusion.js';
@@ -313,7 +315,13 @@ export interface RobotState {
   wpDir: 1 | -1;              // mower sweep direction (ping-pong)
   ellipseAng: number;         // mower fallback ellipse-orbit angle
   goalTimer: number;          // vacuum goal re-pick countdown
+  speed: number;              // mm/s — MOWER kinematic velocity (bicycle model);
+                              //   unused by the vacuum branch (point-chaser)
 }
+
+// Unbound-toilet flush window (ms). Slightly longer than the renderer's 4 s
+// one-shot so the animation always completes before localState clears.
+export const TOILET_FLUSH_MS = 4300;
 
 // Sentinel for Planner.placingRoomId meaning "create a new room at the next
 // canvas click" (vs an existing room id = re-place that room's anchor).
@@ -6346,18 +6354,42 @@ export class Planner extends EventTarget {
   // hash configRev rebuild) and save() — but save() no-ops outside edit mode, so
   // a kiosk device's local toggles are SESSION-ONLY (never written back to HA or
   // even localStorage). View mode makes no changes at all.
-  toggleItem(item: { entity_id?: string | null; localState?: string; logic?: Light['logic'] }): void {
+  toggleItem(item: { entity_id?: string | null; localState?: string; logic?: Light['logic'];
+                     kind?: string; id?: string }): void {
     if (this.uiMode === 'view') return;  // visualization only — no control
     // Logical-state lights are READ-ONLY computed displays — clicking one must not
     // toggle anything (its state is derived; see effectiveState). No-op here so
     // every click path (2D, 3D, kiosk) inherits the guard.
     if (item.logic?.entityId) return;
     if (item.entity_id) { this.toggleEntity(item.entity_id); return; }
+    // A TOILET is not a sustained state — it is a ~4 s FLUSH ONE-SHOT. An unbound
+    // click sets localState 'on' (the rising edge the renderer's _advanceToilets
+    // detects) and a timer clears it back to 'off'. Deliberately session-only:
+    // NEITHER write calls save(), so the store never records a half-flushed
+    // toilet, no undo snapshot is pushed, and nothing syncs to HA — emitConfig
+    // alone drives the 3D rebuild + 2D repaint. Re-clicking mid-flush is a no-op
+    // (the timer owns the window) rather than an early cancel.
+    if (item.kind === 'toilet') {
+      if (item.localState === 'on') return;
+      item.localState = 'on';
+      this.emitConfig();
+      const key = item.id ?? '';
+      const prev = this._toiletFlushTimers[key];
+      if (prev) clearTimeout(prev);
+      this._toiletFlushTimers[key] = setTimeout(() => {
+        delete this._toiletFlushTimers[key];
+        item.localState = 'off';
+        this.emitConfig();
+      }, TOILET_FLUSH_MS);
+      return;
+    }
     const on = item.localState === 'on' || item.localState === 'playing';
     item.localState = on ? 'off' : 'on';
     this.save();        // no-op outside edit → kiosk local toggles are session-only
     this.emitConfig();  // bumps configRev → 3D dirty keys rebuild; sidebar re-renders
   }
+  // Pending unbound-toilet flush resets (runtime-only, keyed by fixture id).
+  private _toiletFlushTimers: Record<string, ReturnType<typeof setTimeout>> = {};
 
   // Session-only actuation by a SYNTHETIC avatar (an `ai` presence/demo rig or a
   // `roam` roamer) that walked up to an UNBOUND interactive device and "used" it.
@@ -6945,7 +6977,7 @@ export class Planner extends EventTarget {
       activity: 'docked', led: robotLedColor('docked'),
       goalX: r.x, goalY: r.y,
       demoPhase: 'dock', demoTimer: 15 + (h % 60),   // start parked, then run
-      wpIdx: 0, wpDir: 1, ellipseAng: (h % 628) / 100, goalTimer: 0,
+      wpIdx: 0, wpDir: 1, ellipseAng: (h % 628) / 100, goalTimer: 0, speed: 0,
     };
   }
 
@@ -6978,7 +7010,9 @@ export class Planner extends EventTarget {
   private _mowerWaypoints(f: Floor): Vec2[] {
     const key = `${f.id}:${this.configRev}`;
     if (this._robotWpCache?.key === key) return this._robotWpCache.wps;
-    const wps = mowerSweepWaypoints(f.walls, f.w, f.d);
+    // Row pitch = MOWER_ROW_MM (≥ 2·turn radius) so the car-like row-end U-turn
+    // fits as one continuous arc; the along-row cell pitch keeps its default.
+    const wps = mowerSweepWaypoints(f.walls, f.w, f.d, 800, 300, MOWER_ROW_MM);
     this._robotWpCache = { key, wps };
     return wps;
   }
@@ -7121,43 +7155,69 @@ export class Planner extends EventTarget {
     }
   }
 
+  // MOWER = a CAR, not a puck (user-reported: "needs to move more like a car and
+  // not the vacuum"). Every branch below — GPS chase, dock return, boustrophedon
+  // sweep, ellipse fallback — routes through the SAME pure bicycle integrator
+  // (geometry.stepBicycle): position advances strictly along `rs.heading`, which
+  // itself only ever turns at a bounded yaw rate (min turning circle
+  // MOWER_KINEMATICS.turnRadiusMm). Nothing here may write rs.x/rs.y directly or
+  // snap rs.heading from a motion vector — that would reintroduce strafing.
+  // `rs.speed` carries the kinematic velocity across frames (seeded 0 on spawn).
   private _stepMower(r: RobotFixture, rs: RobotState, f: Floor, act: string, dt: number): void {
-    const spd = ROBOT_DEFAULTS.mower.speed;
-    // GPS reality (when calibrated + a fix exists) overrides the sim while working.
+    const K = MOWER_KINEMATICS;
+    const bs: BicycleState = { x: rs.x, y: rs.y, heading: rs.heading, speed: rs.speed ?? 0 };
+    const commit = () => { rs.x = bs.x; rs.y = bs.y; rs.heading = bs.heading; rs.speed = bs.speed; };
+    // GPS reality (when calibrated + a fix exists) overrides the sim while
+    // working. The projected fix is the CARROT — the mower drives to it under the
+    // same kinematics (faster cap so it can close a stale gap), so heading still
+    // turns at the bounded rate rather than snapping. When it is essentially ON
+    // the fix, a tracker-reported travel direction (if any) becomes the steering
+    // target instead of a meaningless sub-mm bearing.
     const gps = (act === 'mowing' || act === 'returning') ? this._mowerGps(r) : null;
     if (gps) {
-      const px = rs.x, py = rs.y;
-      const dx = gps.x - rs.x, dy = gps.y - rs.y, d = Math.hypot(dx, dy);
-      if (d > 1) { const step = Math.min(spd * 3 * dt, d); rs.x += dx / d * step; rs.y += dy / d * step; }
-      if (gps.headingRad != null) rs.heading = gps.headingRad;
-      else { const vx = rs.x - px, vy = rs.y - py; if (Math.hypot(vx, vy) > 1) rs.heading = Math.atan2(vy, vx); }
+      const d = Math.hypot(gps.x - rs.x, gps.y - rs.y);
+      if (d > K.arriveMm || gps.headingRad == null) {
+        stepBicycle(bs, gps.x, gps.y, dt, { maxSpeed: K.maxSpeedMm * 2.5, stop: true });
+      } else {
+        // Hold station on the fix, easing the yaw toward the reported heading.
+        const wMax = Math.max(K.minSpeedMm, bs.speed) / K.turnRadiusMm;
+        const e = wrapAngle(gps.headingRad - bs.heading);
+        const h = Math.max(0, Math.min(0.2, dt));
+        bs.heading = wrapAngle(bs.heading + Math.max(-wMax * h, Math.min(wMax * h, K.steerGain * e * h)));
+        bs.speed = Math.max(0, bs.speed - K.accelMm * h);
+      }
+      commit();
       return;
     }
     if (act === 'docked' || act === 'returning') {
-      const dx = r.x - rs.x, dy = r.y - rs.y, d = Math.hypot(dx, dy);
-      if (d > 1) { const step = Math.min(spd * dt, d); rs.x += dx / d * step; rs.y += dy / d * step; rs.heading = Math.atan2(dy, dx); }
-      if (act === 'returning' && !r.entity_id && d < 150) { rs.demoPhase = 'dock'; rs.demoTimer = 60 + Math.random() * 60; }
+      stepBicycle(bs, r.x, r.y, dt, { stop: true });
+      commit();
+      if (act === 'returning' && !r.entity_id && Math.hypot(r.x - rs.x, r.y - rs.y) < K.arriveMm) {
+        rs.demoPhase = 'dock'; rs.demoTimer = 60 + Math.random() * 60;
+      }
       return;
     }
-    // Simulated mowing: sweep outdoor waypoints (boustrophedon), else orbit a ring.
+    // Simulated mowing: sweep outdoor waypoints (boustrophedon at MOWER_ROW_MM
+    // row pitch so a row-end U-turn fits one arc), else orbit a ring. The
+    // waypoint cursor advances on capture OR on pass-by (mowerWaypointReached),
+    // so a clipped corner never makes the mower loop back on itself.
     const wps = this._mowerWaypoints(f);
     if (wps.length >= 2) {
       let g = wps[Math.max(0, Math.min(wps.length - 1, rs.wpIdx))];
-      if (Math.hypot(g.x - rs.x, g.y - rs.y) < 300) {
+      if (mowerWaypointReached(rs, g.x, g.y)) {
         rs.wpIdx += rs.wpDir;
         if (rs.wpIdx >= wps.length) { rs.wpIdx = wps.length - 1; rs.wpDir = -1; }
         else if (rs.wpIdx < 0) { rs.wpIdx = 0; rs.wpDir = 1; }
         g = wps[rs.wpIdx];
       }
-      const dx = g.x - rs.x, dy = g.y - rs.y, d = Math.hypot(dx, dy);
-      if (d > 1) { const step = Math.min(spd * dt, d); rs.x += dx / d * step; rs.y += dy / d * step; rs.heading = Math.atan2(dy, dx); }
+      stepBicycle(bs, g.x, g.y, dt);
     } else {
-      rs.ellipseAng += (spd / Math.max(1, Math.max(f.w, f.d))) * dt;
+      rs.ellipseAng += (K.maxSpeedMm / Math.max(1, Math.max(f.w, f.d))) * dt;
       const a = f.w / 2 + 900, b = f.d / 2 + 900;
       const gx = f.w / 2 + a * Math.cos(rs.ellipseAng), gy = f.d / 2 + b * Math.sin(rs.ellipseAng);
-      const dx = gx - rs.x, dy = gy - rs.y, d = Math.hypot(dx, dy);
-      if (d > 1) { const step = Math.min(spd * dt, d); rs.x += dx / d * step; rs.y += dy / d * step; rs.heading = Math.atan2(dy, dx); }
+      stepBicycle(bs, gx, gy, dt);
     }
+    commit();
   }
 
   // ── Object write fence (ack window: HA echoes back our value, suppress overwrite) ─

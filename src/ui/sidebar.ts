@@ -37,7 +37,7 @@ import {
   envKindOf, envColor, envValueText, envHeight, envScale,
   INFO_CARD_MOUNT_DEFAULTS, INFO_CARD_SCALE_MIN, INFO_CARD_SCALE_MAX,
   infoCardText, infoCardMount, infoCardHeight, infoCardW, infoCardH, infoCardScale,
-  furnitureCat, type FurnitureCat, isBinKind, isSinkKind, isVehicleKind, isStairsKind, STAIRS_MIN_RISE_MM, isClimateApplianceKind, isBladedFanKind,
+  furnitureCat, type FurnitureCat, isBinKind, isWetBathKind, isVehicleKind, isStairsKind, STAIRS_MIN_RISE_MM, isClimateApplianceKind, isBladedFanKind,
   isTreeKind, TREE_MIN_HEIGHT_MM, TREE_MAX_HEIGHT_MM,
   isMechanicalApplianceKind, mechanicalBindDomains, mechanicalRun,
   closedWallLoops, loopContaining, resolveRoomForPointFuzzy, roomLabel,
@@ -5622,8 +5622,9 @@ export class Sidebar extends LitElement {
     const domain = furnitureKind(piece) === 'tv' ? 'media_player'
       : isBinKind(piece.kind) ? 'binary_sensor'   // bins: 'on'/'full' = full
       : isVehicleKind(piece.kind) ? 'binary_sensor'   // car: presence 'on' = in bay
-      : isSinkKind(piece.kind) ? ['switch', 'binary_sensor']   // sink: faucet on-state
-      : piece.kind === 'bathtub' ? ['switch', 'binary_sensor']   // bathtub: in-use state
+      // Wet bathroom pieces (sinks / bathtub / shower / toilet): the water run
+      // state — a faucet/valve switch or an in-use / occupancy binary_sensor.
+      : isWetBathKind(piece.kind) ? ['switch', 'binary_sensor']
       : isClimateApplianceKind(piece.kind)   // AC/fans: climate/fan/switch; heaters: climate/switch
         ? (climateHeater ? ['climate', 'switch'] : ['climate', 'fan', 'switch'])
       // Mechanical/utility plant: per-kind domain list (water_heater/climate/

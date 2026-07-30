@@ -6,7 +6,7 @@ import { customElement } from './define.js';
 // startup path never downloads it.
 import type { ThreeDRenderer, ZoneWorld, HaloWorld, TargetWorld, ActivityContext,
   InteractiveItem, GpsPinWorld, GpsLandmarkWorld, GeoEventWorld, WeatherFxState, VacMapEntry } from '../three-renderer.js';
-import { localToWorld, transformVerts, pointInPolygon, sensorColor, hexToInt, motionColor, lightIconKind, furnitureKind, resolveFurnitureDef, furnitureCat, isBinKind, isSpeakerKind, isSinkKind, isVehicleKind, isClimateApplianceKind, isMechanicalApplianceKind, mechanicalBindDomains, isBladedFanKind, isStairsKind, alarmStateColor, valveOpenness, sprinklerRunning, sprinklerHeadKind, sprinklerArcDeg, sprinklerRadius, sprinklerRotation, flagpoleHoistFraction, doorSpanCenter, isDroopPlant, plantThirsty, PLANT_MOISTURE_DEFAULT_THRESHOLD, hasFunctionalFront, frontVectorPlan } from '../geometry.js';
+import { localToWorld, transformVerts, pointInPolygon, sensorColor, hexToInt, motionColor, lightIconKind, furnitureKind, resolveFurnitureDef, furnitureCat, isBinKind, isSpeakerKind, isWetBathKind, isVehicleKind, isClimateApplianceKind, isMechanicalApplianceKind, mechanicalBindDomains, isBladedFanKind, isStairsKind, alarmStateColor, valveOpenness, sprinklerRunning, sprinklerHeadKind, sprinklerArcDeg, sprinklerRadius, sprinklerRotation, flagpoleHoistFraction, doorSpanCenter, isDroopPlant, plantThirsty, PLANT_MOISTURE_DEFAULT_THRESHOLD, hasFunctionalFront, frontVectorPlan } from '../geometry.js';
 import { compass8, fmtDistanceM } from '../geo.js';
 import { resolveNorth, markerScaleOf } from '../compass.js';
 import { parseNowPlaying, isMediaPlayerId } from '../geometry.js';
@@ -456,10 +456,11 @@ export class ThreeView extends LitElement {
           }
           return;
         }
-        // Sinks + bathtubs reuse the 'media' click tag (single click runs/stops
-        // the water). Dblclick binds a switch/binary_sensor (in-use state), not
-        // media.
-        if (fu0 && (isSinkKind(fu0.kind) || fu0.kind === 'bathtub')) {
+        // Wet bathroom pieces (sinks / bathtub / shower / toilet) reuse the
+        // 'media' click tag (single click runs/stops the water — for the toilet,
+        // fires the flush one-shot). Dblclick binds a switch/binary_sensor
+        // (in-use / occupancy state), never a media_player.
+        if (fu0 && isWetBathKind(fu0.kind)) {
           if (p.uiMode === 'edit' && !entity_id) {
             this.dispatchEvent(new CustomEvent('open-entity-picker', {
               bubbles: true, composed: true,
@@ -1036,7 +1037,7 @@ export class ThreeView extends LitElement {
         // itself is per-frame). Unbound plants with no demo toggle never qualify.
         const isPlant = isDroopPlant(fu, p.store.customObjects) &&
           (!!fu.moistureEntity || fu.plantDemoThirsty !== undefined);
-        if (furnitureCat(def) !== 'appliance' && !isBinKind(fu.kind) && !isSpeakerKind(fu.kind) && !isSinkKind(fu.kind) && fu.kind !== 'bathtub' && !hasEvMail && !isPlant && !isClimateApplianceKind(fu.kind)) return '';
+        if (furnitureCat(def) !== 'appliance' && !isBinKind(fu.kind) && !isSpeakerKind(fu.kind) && !isWetBathKind(fu.kind) && !hasEvMail && !isPlant && !isClimateApplianceKind(fu.kind)) return '';
         const on = p.effectiveState(fu)?.state ?? '-';
         const door = fu.doorEntity ? stOf(fu.doorEntity) : '';
         // Per-device power glow (#8): bucket the live power reading to 50 W so the

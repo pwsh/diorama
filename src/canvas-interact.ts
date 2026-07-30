@@ -1,4 +1,4 @@
-import { snap, snapVertex15, distMM, worldToLocal, localToWorld, FURNITURE_KINDS, furnitureCorners, furnitureLocalToWorld, furnitureWorldToLocal, resolveFurnitureDef, resolveFurnitureWallCollision, resolveSeatTableCollision, seatBelongsToTable, snapStepLightToSurface, snapFireplaceToWall, snapFloodlightToWall, snapExhaustToWall, snapSwitchToWall, snapAlarmToWall, snapCalendarToWall, snapThermostatToWall, snapPlugToWall, snapInfoCardToWall, snapActionButtonToWall, isBinKind, isSinkKind, defaultFurnitureElevation, nearestAlign, envScale, ENV_SCALE_MIN, ENV_SCALE_MAX, GRID_MM, floorContentBbox, resolveFloorEdgeDrag, DOOR_DEFAULT_W, doorDefaultWidth, windowDefaultWidth } from './geometry.js';
+import { snap, snapVertex15, distMM, worldToLocal, localToWorld, FURNITURE_KINDS, furnitureCorners, furnitureLocalToWorld, furnitureWorldToLocal, resolveFurnitureDef, resolveFurnitureWallCollision, resolveSeatTableCollision, seatBelongsToTable, snapStepLightToSurface, snapFireplaceToWall, snapFloodlightToWall, snapExhaustToWall, snapSwitchToWall, snapAlarmToWall, snapCalendarToWall, snapThermostatToWall, snapPlugToWall, snapInfoCardToWall, snapActionButtonToWall, isBinKind, isWetBathKind, defaultFurnitureElevation, nearestAlign, envScale, ENV_SCALE_MIN, ENV_SCALE_MAX, GRID_MM, floorContentBbox, resolveFloorEdgeDrag, DOOR_DEFAULT_W, doorDefaultWidth, windowDefaultWidth } from './geometry.js';
 import { newId } from './storage.js';
 import {
   pxToMm, type View,
@@ -1752,9 +1752,10 @@ export function onCanvasMouseUp(p: Planner, canvas: HTMLCanvasElement, e?: Mouse
       // Curbside bins: a barely-moved click toggles full/empty (bound entity or
       // unbound localState) instead of nudging the piece.
       const binClick = drag.kind === 'furnMove' && isBinKind(piece.kind) && barelyMoved;
-      // Sinks: a barely-moved click runs/stops the water (bound entity or unbound
-      // localState) instead of nudging the piece.
-      const sinkClick = drag.kind === 'furnMove' && isSinkKind(piece.kind) && barelyMoved;
+      // Wet bathroom pieces (sinks / bathtub / shower / toilet): a barely-moved
+      // click runs/stops the water — for the toilet it fires the flush one-shot
+      // (bound entity or unbound localState) instead of nudging the piece.
+      const sinkClick = drag.kind === 'furnMove' && isWetBathKind(piece.kind) && barelyMoved;
       if (stoveClick && drag.kind === 'furnMove') {
         piece.x = drag.start.x; piece.y = drag.start.y;
         piece.doorOpen = !piece.doorOpen;
@@ -1916,8 +1917,8 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
     }
     // Bins → toggle full/empty (session-only in kiosk; save() no-ops).
     if (fu2 && isBinKind(fu2.item.kind)) { p.toggleItem(fu2.item); return; }
-    // Sinks → run/stop the water (session-only in kiosk; save() no-ops).
-    if (fu2 && isSinkKind(fu2.item.kind)) { p.toggleItem(fu2.item); return; }
+    // Wet bathroom pieces → run/stop the water / flush (session-only in kiosk).
+    if (fu2 && isWetBathKind(fu2.item.kind)) { p.toggleItem(fu2.item); return; }
     // Live aircraft → open the detail card (low priority, after all fixtures).
     if (tryOpenFlightInfo(p, canvas, view, mm)) return;
     // Valetudo room segment → tap-to-clean (lowest priority, after all fixtures).

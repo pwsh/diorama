@@ -18,7 +18,7 @@
 import { GIFEncoder, quantize, applyPalette } from 'gifenc';
 import { AVATAR_PACK_MANIFEST } from '../../src/avatar-packs/manifest.js';
 import {
-  FURNITURE_KINDS, furnitureCat, ENV_KINDS, envValueText, robotLedColor,
+  FURNITURE_KINDS, furnitureCat, isWetBathKind, ENV_KINDS, envValueText, robotLedColor,
 } from '../../src/geometry.js';
 import type { LightIconKind } from '../../src/types.js';
 
@@ -214,6 +214,53 @@ function capFurniture(sub: Subject, o: CapOpts): string {
   const radius = maxdim * 1.5 + ht * 0.9 + 1400;
   return runCapture(N, gifPx, fps, 33, (i) => {
     orbitCam(target, radius, 20, (i / N) * Math.PI * 2);
+  });
+}
+
+// Wet bathroom piece, WATER RUNNING — the `-running` twin of the plain
+// (idle) turntable subject every isWetBathKind piece also gets. The water lives
+// in the per-frame advances inside updateTargets (_advanceSinks /
+// _advanceBathtubs / _advanceShowers / _advanceToilets), all driven off the
+// ActivityContext `entityOn` map, so the capture just holds `entityOn.it = true`
+// each tick and lets the fake clock run.
+//
+// The TOILET is the odd one out: its flush is a ~4 s ONE-SHOT armed by a RISING
+// edge of the run state (not a sustained level). It gets warm-up frames with the
+// state OFF so the edge detector is primed low, then the capture frames turn it
+// on — the capSafety precedent for driving a time-dependent effect explicitly.
+// updateTargets clamps its own frame dt to 100 ms, so dtMs is 100 for the level/
+// one-shot kinds: the whole 4 s flush / a good chunk of the tub fill fits inside
+// a normal GIF frame budget without a sub-stepping loop.
+function capBathWater(sub: Subject, o: CapOpts): string {
+  const kind = String(sub.meta.kind);
+  const isToilet = kind === 'toilet', isTub = kind === 'bathtub', isShower = kind === 'shower';
+  const gifPx = o.size ?? 400;
+  const N = o.frames ?? (isToilet ? 46 : isTub ? 45 : 34);
+  const fps = o.fps ?? 12;
+  const dtMs = isShower ? 60 : 100;
+  const { w, h, ht } = sub.meta;
+  const f = baseFloor(6000, 6000);
+  // Unbound + localState 'on' seeds the BUILD-time state; the per-frame ctx below
+  // is what actually drives the water (and, for the toilet, the rising edge).
+  f.furniture = [{
+    id: 'it', x: f.w / 2, y: f.d / 2, w, h, kind, rotation: 0,
+    entity_id: null, localState: isToilet ? null : 'on',
+  }];
+  R.updateFloor(f, DAY, undefined, undefined, nullState);
+  const maxdim = Math.max(w, h);
+  // Water sits INSIDE the piece, so frame it from a little above (toilet bowl /
+  // tub basin / shower pan all read best looking down into them).
+  const target: [number, number, number] = [0, Math.min(ht * 0.45, 750), 0];
+  const radius = maxdim * 1.35 + ht * 0.8 + 1100;
+  const elev = isShower ? 16 : 30;
+  const ctxOn = { entityOn: { it: true }, roomNames: {}, timeBucket: 'day' };
+  const ctxOff = { entityOn: { it: false }, roomNames: {}, timeBucket: 'day' };
+  return runCapture(N, gifPx, fps, dtMs, (i) => {
+    orbitCam(target, radius, elev, (i / N) * Math.PI * 2 * (isToilet ? 0.45 : 1));
+    R.updateTargets([], ctxOn);
+  }, isToilet ? 3 : 2, (i) => {
+    orbitCam(target, radius, elev, 0);
+    R.updateTargets([], isToilet ? ctxOff : ctxOn);
   });
 }
 
@@ -629,6 +676,7 @@ function captureSubject(sub: Subject, o: CapOpts): string {
   switch (sub.type) {
     case 'furniture': return capFurniture(sub, o);
     case 'appliance': return capAppliance(sub, o);
+    case 'bathwater': return capBathWater(sub, o);
     case 'light': return capLight(sub, o);
     case 'switch': return capSwitch(sub, o);
     case 'alarm': return capAlarm(sub, o);
@@ -700,6 +748,28 @@ function buildCatalog(): any {
       gif: `media/${page}/${safeId(kind)}.gif`,
       meta: { id: kind, w: def.w, h: def.h, ht: def.ht, cat, seat: def.seat ?? null, activity: def.activity ?? null },
     });
+    // Wet bathroom pieces are documented as a PAIR: the plain subject above is
+    // the idle piece, plus a `<kind>-running` twin showing the water animation
+    // (fill / spray / flush). The predicate is imported from geometry.ts, so the
+    // pair set can never drift from the renderer's. The twin keeps its base
+    // subject's PAGE (kitchen_sink is an appliance, so it pairs on the
+    // appliances page) and carries its own subject type, which the
+    // hand-maintained-list guard in generate.mjs does not enumerate (it only
+    // cross-checks light / safety / door / window against src/types.ts unions),
+    // so the guard arithmetic is untouched.
+    if (isWetBathKind(kind as never)) {
+      const wnote = kind === 'toilet' ? 'flush one-shot (swirl → refill)'
+        : kind === 'shower' ? 'running spray + splash ring'
+          : kind === 'bathtub' ? 'filling (faucet stream + rising level)'
+            : 'running faucet + filling basin';
+      push({
+        type: 'bathwater', id: `${kind}-running`, page,
+        group: CAT_TITLE[cat] ?? cat, label: `${def.label} — running`,
+        notes: wnote,
+        gif: `media/${page}/${safeId(kind)}-running.gif`,
+        meta: { id: kind, kind, w: def.w, h: def.h, ht: def.ht, cat },
+      });
+    }
   }
 
   // Lighting.

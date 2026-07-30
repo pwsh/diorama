@@ -34,6 +34,7 @@
     import {
       segCrossesSolidWall, mowerSweepWaypoints, segmentsIntersect,
       pointInPolygon, closedWallLoops, robotLedColor, robotProgress, ROBOT_DEFAULTS,
+      MOWER_KINEMATICS, MOWER_ROW_MM, stepBicycle, mowerWaypointReached, wrapAngle,
       parseVacuumPosition, vacuumRawToWorld, vacuumRawHeadingRad, solveVacuumDockOffset,
       hexToInt,
     } from './geometry.mod.js';
@@ -379,6 +380,165 @@
       ok('2D drawAll with robot + progress does not throw', !threw);
     } catch (e) {
       ok('planner/2D tests threw', false, String(e && e.message || e));
+    }
+
+    // ── Mower CAR KINEMATICS (bicycle model) ─────────────────────────────────
+    // The mower is a wheeled vehicle, not a puck: position advances STRICTLY
+    // along its own heading, and the heading turns at a bounded rate (min
+    // turning circle MOWER_KINEMATICS.turnRadiusMm). Asserted first on the pure
+    // integrator, then end-to-end on the REAL Planner._stepMower.
+    {
+      const K = MOWER_KINEMATICS;
+      ok('MOWER_ROW_MM ≥ 2 · turnRadiusMm (a row-end U-turn fits one arc)',
+         MOWER_ROW_MM >= 2 * K.turnRadiusMm, `row=${MOWER_ROW_MM} 2R=${2 * K.turnRadiusMm}`);
+      ok('wrapAngle normalizes into (−π, π]',
+         Math.abs(wrapAngle(3 * Math.PI) - Math.PI) < 1e-9 &&
+         Math.abs(wrapAngle(-3 * Math.PI) - Math.PI) < 1e-9 &&
+         Math.abs(wrapAngle(0.4) - 0.4) < 1e-12);
+
+      // Pure integrator: 400 steps chasing a target that is deliberately BEHIND
+      // and off to the side, so the whole envelope (max steer, speed shaping,
+      // the unreachable-inside-the-circle escape) is exercised.
+      const st = { x: 0, y: 0, heading: 0, speed: 0 };
+      let maxLat = 0, omegaViol = 0, maxDTheta = 0, overSpeed = 0;
+      const dtK = 0.05;
+      for (let i = 0; i < 400; i++) {
+        const tx = 3000 * Math.cos(i * 0.017) - 1500, ty = 2500 * Math.sin(i * 0.017);
+        const px = st.x, py = st.y, ph = st.heading;
+        const { omega } = stepBicycle(st, tx, ty, dtK);
+        // Displacement must be parallel to the POST-step heading (no strafing):
+        // the perpendicular component is identically zero by construction.
+        const dx = st.x - px, dy = st.y - py;
+        const lat = Math.abs(dx * -Math.sin(st.heading) + dy * Math.cos(st.heading));
+        if (lat > maxLat) maxLat = lat;
+        // Bounded yaw rate ⇒ |ω| ≤ v / R_MIN.
+        if (Math.abs(omega) > st.speed / K.turnRadiusMm + 1e-9) omegaViol++;
+        const dth = Math.abs(wrapAngle(st.heading - ph));
+        if (dth > maxDTheta) maxDTheta = dth;
+        if (st.speed > K.maxSpeedMm + 1e-9) overSpeed++;
+      }
+      ok('pure: displacement is parallel to heading (|lateral| < 1 mm/step)',
+         maxLat < 1, `maxLat=${maxLat.toExponential(2)} mm`);
+      ok('pure: |ω| ≤ v / turnRadiusMm every step', omegaViol === 0, `violations=${omegaViol}`);
+      ok('pure: speed never exceeds maxSpeedMm', overSpeed === 0, `violations=${overSpeed}`);
+      ok('pure: per-step heading change stays bounded (no instant flips)',
+         maxDTheta <= (K.maxSpeedMm / K.turnRadiusMm) * dtK + 1e-9,
+         `maxΔθ=${maxDTheta.toFixed(4)} cap=${((K.maxSpeedMm / K.turnRadiusMm) * dtK).toFixed(4)}`);
+      // Speed shaping: slow into a big heading error, cruise when aligned.
+      const sTurn = { x: 0, y: 0, heading: 0, speed: K.maxSpeedMm };
+      for (let i = 0; i < 20; i++) stepBicycle(sTurn, -4000, 0, 0.05);   // target dead astern
+      const sStraight = { x: 0, y: 0, heading: 0, speed: 0 };
+      for (let i = 0; i < 40; i++) stepBicycle(sStraight, 40000, 0, 0.05);
+      ok('pure: aligned run reaches (near) full speed',
+         sStraight.speed > K.maxSpeedMm * 0.95, `v=${sStraight.speed.toFixed(0)}`);
+      ok('pure: a hard turn slows the mower but never stalls it',
+         sTurn.speed < K.maxSpeedMm * 0.9 && sTurn.speed >= K.minSpeedMm - 1e-6,
+         `v=${sTurn.speed.toFixed(0)} floor=${K.minSpeedMm}`);
+      // Turning circle: full-lock from rest never curls tighter than turnRadiusMm.
+      const sArc = { x: 0, y: 0, heading: 0, speed: K.maxSpeedMm };
+      let tightest = Infinity;
+      for (let i = 0; i < 300; i++) {
+        const v0 = sArc.speed;
+        const { omega } = stepBicycle(sArc, sArc.x - 10, sArc.y + 1, 0.05);  // permanent hard-left demand
+        if (Math.abs(omega) > 1e-6) tightest = Math.min(tightest, v0 / Math.abs(omega));
+      }
+      ok('pure: tightest achieved radius ≥ turnRadiusMm',
+         tightest >= K.turnRadiusMm - 1, `r=${isFinite(tightest) ? tightest.toFixed(1) : 'n/a'}`);
+      // Waypoint advance: captured inside arriveMm, and passed-by behind us.
+      ok('mowerWaypointReached: inside the capture radius',
+         mowerWaypointReached({ x: 0, y: 0, heading: 0 }, K.arriveMm * 0.5, 0) === true);
+      ok('mowerWaypointReached: ahead + far = not reached',
+         mowerWaypointReached({ x: 0, y: 0, heading: 0 }, 3000, 0) === false);
+      ok('mowerWaypointReached: passed by (behind, inside the turning circle)',
+         mowerWaypointReached({ x: 0, y: 0, heading: 0 }, -600, 0) === true);
+      ok('mowerWaypointReached: behind but FAR = still chase it (wide loop)',
+         mowerWaypointReached({ x: 0, y: 0, heading: 0 }, -4000, 0) === false);
+      // Row pitch plumbed into the sweep generator (default call unchanged).
+      const wpsDefault = mowerSweepWaypoints([], 6000, 6000);
+      const wpsRow = mowerSweepWaypoints([], 6000, 6000, 800, 300, MOWER_ROW_MM);
+      const rowYs = (w) => [...new Set(w.map(p => p.y))].sort((a, b) => a - b);
+      const yD = rowYs(wpsDefault), yR = rowYs(wpsRow);
+      ok('sweep: default rowCell keeps the legacy 800 mm pitch',
+         yD.length > 1 && yD[1] - yD[0] === 800, `pitch=${yD[1] - yD[0]}`);
+      ok('sweep: explicit rowCell widens the row pitch to MOWER_ROW_MM',
+         yR.length > 1 && yR[1] - yR[0] === MOWER_ROW_MM, `pitch=${yR[1] - yR[0]}`);
+      ok('sweep: along-row cell pitch is untouched by rowCell',
+         [...new Set(wpsRow.filter(p => p.y === yR[0]).map(p => p.x))].length ===
+         [...new Set(wpsDefault.filter(p => p.y === yD[0]).map(p => p.x))].length);
+    }
+
+    // ── Real Planner: mower drives car-like; vacuum branch byte-identical ─────
+    try {
+      const { Planner } = await import('./planner.mod.js?v=' + Date.now());
+      const K = MOWER_KINEMATICS;
+      // Mower: 40 s of simulated mowing over an empty yard.
+      const pm = new Planner();
+      const fm = pm.floor();
+      fm.w = 12000; fm.d = 9000; fm.walls = [];
+      fm.robots = [{ id: 'm1', kind: 'mower', x: 800, y: 800 }];
+      pm.stepRobots(0.05);
+      const rm = pm.robotStates.m1;
+      rm.demoPhase = 'run'; rm.demoTimer = 99999;
+      let mLat = 0, mOmegaViol = 0, mMaxD = 0, travelled = 0;
+      const seenRows = new Set();
+      for (let i = 0; i < 800; i++) {
+        const px = rm.x, py = rm.y, ph = rm.heading, pv = rm.speed;
+        pm.stepRobots(0.05);
+        const dx = rm.x - px, dy = rm.y - py;
+        travelled += Math.hypot(dx, dy);
+        mLat = Math.max(mLat, Math.abs(dx * -Math.sin(rm.heading) + dy * Math.cos(rm.heading)));
+        const dth = Math.abs(wrapAngle(rm.heading - ph));
+        mMaxD = Math.max(mMaxD, dth);
+        if (dth > (Math.max(rm.speed, pv) / K.turnRadiusMm) * 0.05 + 1e-6) mOmegaViol++;
+        seenRows.add(Math.round(rm.y / MOWER_ROW_MM));
+      }
+      ok('planner mower: motion is parallel to heading (|lateral| < 1 mm/step)',
+         mLat < 1, `maxLat=${mLat.toExponential(2)} mm`);
+      ok('planner mower: yaw rate never exceeds v / turnRadiusMm',
+         mOmegaViol === 0, `violations=${mOmegaViol}`);
+      ok('planner mower: heading is continuous across row ends (no instant flips)',
+         mMaxD <= (K.maxSpeedMm / K.turnRadiusMm) * 0.05 + 1e-6,
+         `maxΔθ=${mMaxD.toFixed(4)} rad/step`);
+      ok('planner mower: actually covers ground over 40 s',
+         travelled > 8000, `travelled=${Math.round(travelled)} mm`);
+      ok('planner mower: sweeps more than one row', seenRows.size >= 2, `rows=${seenRows.size}`);
+      ok('planner mower: cruises near max speed while mowing',
+         rm.speed > K.minSpeedMm, `v=${rm.speed.toFixed(0)}`);
+      // Dock return converges + parks (speed → 0 inside the capture radius).
+      // 900 steps = 45 s: comfortably past the ~30 s drive home, and short of the
+      // ≥60 s docked dwell after which the unbound demo cycle sets off again.
+      rm.demoPhase = 'return'; rm.demoTimer = 99999;
+      for (let i = 0; i < 900; i++) pm.stepRobots(0.05);
+      const dDock = Math.hypot(rm.x - 800, rm.y - 800);
+      ok('planner mower: returns to the dock and parks',
+         dDock < K.arriveMm + 50 && rm.speed < 5,
+         `dist=${Math.round(dDock)} v=${rm.speed.toFixed(1)}`);
+
+      // Vacuum branch pin: the point-chasing controller is UNTOUCHED by the
+      // mower rewrite. Two probe positions captured from the pre-change build
+      // (deterministic LCG seeded over Math.random) must reproduce EXACTLY.
+      const rngSave = Math.random;
+      let rngS = 987654321;
+      Math.random = () => ((rngS = (rngS * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+      const pv2 = new Planner();
+      const fv = pv2.floor();
+      fv.w = 8000; fv.d = 6000; fv.walls = [];
+      fv.robots = [{ id: 'v1', kind: 'vacuum', x: 900, y: 900 }];
+      pv2.stepRobots(0.05);
+      const rv = pv2.robotStates.v1;
+      rv.demoPhase = 'run'; rv.demoTimer = 9999; rv.goalTimer = 0;
+      const probes = [];
+      for (let i = 0; i < 900; i++) {
+        pv2.stepRobots(0.05);
+        if (i === 299 || i === 899) probes.push(`${rv.x.toFixed(3)},${rv.y.toFixed(3)},${rv.heading.toFixed(5)}`);
+      }
+      Math.random = rngSave;
+      ok('vacuum branch unchanged: probe @15 s matches the baseline capture',
+         probes[0] === '4052.987,3121.044,0.86032', probes[0]);
+      ok('vacuum branch unchanged: probe @45 s matches the baseline capture',
+         probes[1] === '4403.483,4189.805,0.97709', probes[1]);
+    } catch (e) {
+      ok('planner mower/vacuum kinematics tests threw', false, String(e && e.message || e));
     }
 
     // ── run + report ─────────────────────────────────────────────────────────

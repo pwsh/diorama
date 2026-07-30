@@ -115,9 +115,11 @@
   }
 
   // ── mailbox: badge + flag + lid (furniture-polish reconciliation) ─────────
-  // New semantics: flagEntity 'on' = outgoing-mail WAITING → flag STRAIGHT UP
-  // (rotation.x ~ 0); otherwise the flag rests DOWN (pole horizontal → rotation.x
-  // ~ π/2). count > 0 shows only the BADGE and never raises the flag. The lid is
+  // New semantics: flagEntity 'on' = outgoing-mail WAITING → flag UP, i.e. the
+  // arm horizontal pointing at the box REAR (rotation.x ~ 0); otherwise it rests
+  // DOWN, arm straight down (rotation.x ~ π/2) — and the paddle plane stays
+  // PARALLEL to the mailbox side face in both poses (asserted in world geometry
+  // below). count > 0 shows only the BADGE and never raises the flag. The lid is
   // built CLOSED always. The blend is seeded to its target on first build so a
   // fresh scene renders the correct pose without advancing.
   function testMailbox() {
@@ -147,10 +149,72 @@
     assert('count 0 shows NO badge sprite', sprites(gEmpty).length === 0, `sprites=${sprites(gEmpty).length}`);
     assert('unbound mailbox shows NO badge sprite', sprites(gUnb).length === 0);
     assert('flag sensor on raises the flag STRAIGHT UP (rotation.x ~ 0)', flagUp && Math.abs(flagUp.rotation.x) < 0.02, flagUp ? `rx=${flagUp.rotation.x.toFixed(2)}` : '');
-    assert('count > 0 alone does NOT raise the flag (rests DOWN, rotation.x ~ π/2)', flagCount && flagCount.rotation.x > 1.4, flagCount ? `rx=${flagCount.rotation.x.toFixed(2)}` : '');
-    assert('no flag signal rests the flag DOWN (pole horizontal, rotation.x > 1.4)', flagE && flagE.rotation.x > 1.4, flagE ? `rx=${flagE.rotation.x.toFixed(2)}` : '');
+    assert('count > 0 alone does NOT raise the flag (rests DOWN, arm rotation.x ~ π/2)', flagCount && flagCount.rotation.x > 1.4, flagCount ? `rx=${flagCount.rotation.x.toFixed(2)}` : '');
+    assert('no flag signal rests the flag DOWN (arm rotation.x > 1.4)', flagE && flagE.rotation.x > 1.4, flagE ? `rx=${flagE.rotation.x.toFixed(2)}` : '');
     assert('unbound rests the flag DOWN', flagU && flagU.rotation.x > 1.4);
     assert('lid stays CLOSED (lidHinge.rotation.x ~ 0)', lidUp && Math.abs(lidUp.rotation.x) < 0.02, lidUp ? `rx=${lidUp.rotation.x.toFixed(2)}` : '');
+
+    // ── Flag GEOMETRY (user-specified, world-measured) ─────────────────────
+    // The paddle plane must stay PARALLEL to the mailbox's side face in every
+    // pose, the pivot must sit ON that side face near the FRONT, and the arm
+    // must point at the REAR when up / straight DOWN when down. Measured in the
+    // furniture group's own frame (so the scene's X mirror + piece yaw drop out).
+    r._scene.updateMatrixWorld(true);
+    const findFlag = (g, key) => { let f = null; g.traverse(o => { if (!f && o.userData && o.userData[key]) f = o; }); return f; };
+    // A scratch Vector3 borrowed off a real object (avoids importing three).
+    const vec = (src, x, y, z) => { const t = src.position.clone(); t.set(x, y, z); return t; };
+    const inFrame = (g, obj, x, y, z) => g.worldToLocal(obj.localToWorld(vec(obj, x, y, z)));
+    const axisIn = (g, obj, x, y, z) => {
+      const o0 = inFrame(g, obj, 0, 0, 0), o1 = inFrame(g, obj, x, y, z);
+      const dx = o1.x - o0.x, dy = o1.y - o0.y, dz = o1.z - o0.z;
+      const n = Math.hypot(dx, dy, dz) || 1;
+      return { x: dx / n, y: dy / n, z: dz / n };
+    };
+    const MB_W = 250, MB_D = 350;
+    for (const [name, g, wantUp] of [['UP', gUp, true], ['DOWN', gEmpty, false]]) {
+      const arm = findFlag(g, 'mailFlagArm'), pad = findFlag(g, 'mailFlagPaddle');
+      if (!arm || !pad) { assert(`mailbox ${name}: flag arm + paddle present`, false); continue; }
+      assert(`mailbox ${name}: flag arm + paddle present`, true);
+      // 1. Paddle plane ∥ the side face: its THIN axis (local X) is the side
+      //    normal (piece-local ±X) — |n·X̂| ≈ 1, and it has no Y/Z component.
+      const n = axisIn(g, pad, 1, 0, 0);
+      assert(`mailbox ${name}: paddle plane is parallel to the side face (normal = side normal)`,
+        Math.abs(Math.abs(n.x) - 1) < 1e-6, `n=(${n.x.toFixed(4)},${n.y.toFixed(4)},${n.z.toFixed(4)})`);
+      // 2. Paddle centre lies OUTBOARD on that side plane — same x in both poses
+      //    (rotation about X cannot move it off the side).
+      const c = inFrame(g, pad, 0, 0, 0);
+      assert(`mailbox ${name}: paddle centre sits on the +X side face (x > W/2)`,
+        c.x > MB_W / 2, `x=${c.x.toFixed(1)} halfW=${MB_W / 2}`);
+      // 3. Pivot on the side, near the FRONT (front = local −Z ⇒ pivot z < 0).
+      const piv = inFrame(g, arm, 0, 0, 0);
+      assert(`mailbox ${name}: pivot is on the side face near the FRONT (z < 0)`,
+        piv.x > MB_W / 2 && piv.z < 0 && piv.z > -MB_D / 2,
+        `pivot=(${piv.x.toFixed(1)},${piv.y.toFixed(1)},${piv.z.toFixed(1)})`);
+      // 4. Arm direction: UP → +Z (rear, horizontal); DOWN → −Y (straight down).
+      const dir = axisIn(g, arm, 0, 0, 1);
+      if (wantUp) {
+        assert('mailbox UP: arm points at the REAR (+Z), horizontal',
+          dir.z > 0.999 && Math.abs(dir.y) < 0.03 && Math.abs(dir.x) < 1e-6,
+          `dir=(${dir.x.toFixed(3)},${dir.y.toFixed(3)},${dir.z.toFixed(3)})`);
+        const tip = inFrame(g, arm, 0, 0, arm.userData.armLen);
+        assert('mailbox UP: the arm reaches back toward the rear face without overshooting it',
+          tip.z > piv.z && tip.z <= MB_D / 2 + 1, `tipZ=${tip.z.toFixed(1)} rear=${MB_D / 2}`);
+      } else {
+        assert('mailbox DOWN: arm points STRAIGHT DOWN (−Y)',
+          dir.y < -0.999 && Math.abs(dir.z) < 0.03 && Math.abs(dir.x) < 1e-6,
+          `dir=(${dir.x.toFixed(3)},${dir.y.toFixed(3)},${dir.z.toFixed(3)})`);
+        const tip = inFrame(g, arm, 0, 0, arm.userData.armLen);
+        assert('mailbox DOWN: the arm tip hangs below its pivot',
+          tip.y < piv.y - 100, `tipY=${tip.y.toFixed(1)} pivotY=${piv.y.toFixed(1)}`);
+      }
+    }
+    // 5. The paddle's side-offset is IDENTICAL up vs down (pivot on the plane).
+    {
+      const pu = findFlag(gUp, 'mailFlagPaddle'), pd = findFlag(gEmpty, 'mailFlagPaddle');
+      const xu = inFrame(gUp, pu, 0, 0, 0).x, xd = inFrame(gEmpty, pd, 0, 0, 0).x;
+      assert('mailbox: paddle stays on the same side plane in both poses',
+        Math.abs(xu - xd) < 1e-6, `up=${xu.toFixed(3)} down=${xd.toFixed(3)}`);
+    }
   }
 
   // ── dispose probe: badge CanvasTexture freed on rebuild ──────────────────
