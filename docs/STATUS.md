@@ -1,6 +1,6 @@
 # Project status & pick-up guide
 
-Last updated: 2026-07-29, at **v0.45.0**. This is the single document to
+Last updated: 2026-07-30, at **v0.46.0**. This is the single document to
 read (alongside `CLAUDE.md`) to resume work with full context.
 
 ## Where things stand
@@ -290,13 +290,15 @@ instance.
   rebuilt 20×14 m, 96/96 · 26/26 · 8/8 catalog coverage across 18
   plans, gallery 675/675 GIFs + 512/512 avatars, 70/70 screenshots,
   gh-pages published).
+  → v0.46.0 status report (openingStatus layer switch — door/window
+  OPEN/closed/% badges under Labels, fixtureCaption showBadge
+  4-way matrix, empty-pill fix).
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
 - **Door & window status layer switch** (2026-07-30, user-requested:
   "a visibility switch for the open/closed status on doors and
-  windows needs added under labels"; unreleased — on main past
-  v0.45.0). `Layers2D.openingStatus` (Labels category, absent = ON):
+  windows needs added under labels"; released in v0.46.0). `Layers2D.openingStatus` (Labels category, absent = ON):
   gates the OPEN/closed/% badges on all 8 door kinds + windows via
   `fixtureCaption`'s new `showBadge` param (one pure composition
   rule, 4-way matrix tested); both objectLabels + openingStatus off
