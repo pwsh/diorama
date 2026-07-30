@@ -1,7 +1,7 @@
 {
   "diorama": 2,
   "name": "Appliance Showroom — Watt’s Cooking",
-  "exportedAt": "2026-07-29T00:00:00.000Z",
+  "exportedAt": "2026-07-30T00:00:00.000Z",
   "store": {
     "v": 2,
     "floors": [
@@ -849,16 +849,6 @@
           },
           {
             "id": "appliance-showroom-lt6",
-            "x": 5300,
-            "y": 8400,
-            "entity_id": null,
-            "iconKind": "spot",
-            "radius": 900,
-            "localState": "on",
-            "label": "Hero laundry spot"
-          },
-          {
-            "id": "appliance-showroom-lt7",
             "x": 14500,
             "y": 5900,
             "entity_id": null,
@@ -868,27 +858,7 @@
             "label": "Hero fridge spot"
           },
           {
-            "id": "appliance-showroom-lt8",
-            "x": 5300,
-            "y": 5500,
-            "entity_id": null,
-            "iconKind": "exhaust",
-            "localState": "on",
-            "label": "Range hood exhaust"
-          },
-          {
-            "id": "appliance-showroom-lt9",
-            "x": 9200,
-            "y": 6250,
-            "entity_id": null,
-            "iconKind": "under_cabinet",
-            "rotation": 0,
-            "length": 1800,
-            "localState": "on",
-            "label": "Appliance-bar under-cabinet"
-          },
-          {
-            "id": "appliance-showroom-lt10",
+            "id": "appliance-showroom-lt7",
             "x": 13200,
             "y": 2000,
             "entity_id": null,
@@ -897,7 +867,7 @@
             "label": "Checkout pendant"
           },
           {
-            "id": "appliance-showroom-lt11",
+            "id": "appliance-showroom-lt8",
             "x": 17000,
             "y": 1800,
             "entity_id": null,
@@ -906,17 +876,7 @@
             "label": "Order desk pendant"
           },
           {
-            "id": "appliance-showroom-lt12",
-            "x": 70,
-            "y": 2400,
-            "entity_id": null,
-            "iconKind": "flood",
-            "rotation": -90,
-            "localState": "on",
-            "label": "EV bay flood"
-          },
-          {
-            "id": "appliance-showroom-lt13",
+            "id": "appliance-showroom-lt9",
             "x": 10000,
             "y": 13000,
             "entity_id": null,
@@ -927,7 +887,7 @@
             "label": "Sink wall strip"
           },
           {
-            "id": "appliance-showroom-lt14",
+            "id": "appliance-showroom-lt10",
             "x": 5900,
             "y": 11300,
             "entity_id": null,
@@ -936,13 +896,50 @@
             "label": "Lounge ceiling"
           },
           {
+            "id": "appliance-showroom-lt11",
+            "x": 5300,
+            "y": 8400,
+            "entity_id": null,
+            "iconKind": "spot",
+            "radius": 900,
+            "label": "Hero laundry spot"
+          },
+          {
+            "id": "appliance-showroom-lt12",
+            "x": 5300,
+            "y": 5500,
+            "entity_id": null,
+            "iconKind": "exhaust",
+            "localState": "on",
+            "label": "Range hood exhaust"
+          },
+          {
+            "id": "appliance-showroom-lt13",
+            "x": 9200,
+            "y": 6250,
+            "entity_id": null,
+            "iconKind": "under_cabinet",
+            "rotation": 0,
+            "length": 1800,
+            "localState": "on",
+            "label": "Appliance-bar under-cabinet"
+          },
+          {
+            "id": "appliance-showroom-lt14",
+            "x": 70,
+            "y": 2400,
+            "entity_id": null,
+            "iconKind": "flood",
+            "rotation": 270,
+            "label": "EV bay flood"
+          },
+          {
             "id": "appliance-showroom-lt15",
             "x": 5900,
             "y": 12400,
             "entity_id": null,
             "iconKind": "lamp",
             "height": 1500,
-            "localState": "on",
             "label": "Lounge lamp"
           },
           {
@@ -951,7 +948,6 @@
             "y": 6400,
             "entity_id": null,
             "iconKind": "heatlamp",
-            "localState": "on",
             "label": "Bath heat lamp"
           },
           {
@@ -969,7 +965,7 @@
             "y": 5700,
             "entity_id": null,
             "iconKind": "exhaust_wall",
-            "rotation": -90,
+            "rotation": 270,
             "localState": "on",
             "label": "Bath wall exhaust"
           },
@@ -1009,7 +1005,6 @@
             "y": 13930,
             "entity_id": null,
             "iconKind": "exhaust_wall",
-            "rotation": 0,
             "localState": "on",
             "label": "Plant room exhaust"
           },
@@ -1019,7 +1014,6 @@
             "y": 12000,
             "entity_id": null,
             "iconKind": "bulb",
-            "localState": "on",
             "label": "Bare bulb"
           },
           {
@@ -1028,7 +1022,6 @@
             "y": 12000,
             "entity_id": null,
             "iconKind": "oval",
-            "localState": "on",
             "label": "Oval flush mount"
           },
           {
@@ -1037,7 +1030,6 @@
             "y": 12000,
             "entity_id": null,
             "iconKind": "bowl",
-            "localState": "on",
             "label": "Bowl uplight"
           },
           {
@@ -1046,7 +1038,6 @@
             "y": 12000,
             "entity_id": null,
             "iconKind": "tiered",
-            "localState": "on",
             "label": "Tiered chandelier"
           },
           {
@@ -1055,7 +1046,6 @@
             "y": 12000,
             "entity_id": null,
             "iconKind": "jar",
-            "localState": "on",
             "label": "Mason-jar pendant"
           },
           {
@@ -1064,7 +1054,6 @@
             "y": 12000,
             "entity_id": null,
             "iconKind": "round",
-            "localState": "on",
             "label": "Round panel"
           },
           {
@@ -1074,7 +1063,6 @@
             "entity_id": null,
             "iconKind": "recessed",
             "radius": 600,
-            "localState": "on",
             "label": "Recessed can"
           },
           {
@@ -1083,7 +1071,6 @@
             "y": 13300,
             "entity_id": null,
             "iconKind": "pendant",
-            "localState": "on",
             "label": "Pendant"
           },
           {
@@ -1092,7 +1079,6 @@
             "y": 13300,
             "entity_id": null,
             "iconKind": "fan",
-            "localState": "on",
             "label": "Ceiling fan"
           },
           {
@@ -1101,7 +1087,6 @@
             "y": 13300,
             "entity_id": null,
             "iconKind": "fan_light",
-            "localState": "on",
             "label": "Fan with light"
           },
           {
@@ -1111,7 +1096,6 @@
             "entity_id": null,
             "iconKind": "lamp",
             "height": 1600,
-            "localState": "on",
             "label": "Floor lamp"
           },
           {
@@ -1122,7 +1106,6 @@
             "iconKind": "wall_sconce",
             "radius": 500,
             "rotation": -90,
-            "localState": "on",
             "label": "Wall sconce pair"
           },
           {
@@ -1133,7 +1116,6 @@
             "iconKind": "wall_sconce",
             "radius": 500,
             "rotation": -90,
-            "localState": "on",
             "label": "Wall sconce pair"
           },
           {
@@ -1144,7 +1126,6 @@
             "iconKind": "sconce",
             "radius": 500,
             "rotation": 90,
-            "localState": "on",
             "label": "Half-dome sconce"
           },
           {
@@ -1154,7 +1135,6 @@
             "entity_id": null,
             "iconKind": "step",
             "rotation": -90,
-            "localState": "on",
             "label": "Step light"
           },
           {
@@ -1164,7 +1144,6 @@
             "entity_id": null,
             "iconKind": "step",
             "rotation": -90,
-            "localState": "on",
             "label": "Step light"
           },
           {
@@ -1173,8 +1152,6 @@
             "y": 13725,
             "entity_id": null,
             "iconKind": "fireplace",
-            "rotation": 0,
-            "localState": "on",
             "label": "Hearth vignette"
           },
           {
@@ -1183,7 +1160,6 @@
             "y": 11500,
             "entity_id": null,
             "iconKind": "inground",
-            "localState": "on",
             "label": "In-ground uplight"
           },
           {
@@ -1192,7 +1168,6 @@
             "y": 11500,
             "entity_id": null,
             "iconKind": "inground",
-            "localState": "on",
             "label": "In-ground uplight"
           },
           {
@@ -1202,7 +1177,6 @@
             "entity_id": null,
             "iconKind": "ground_spot",
             "rotation": 180,
-            "localState": "on",
             "label": "Ground spot"
           },
           {
@@ -1212,7 +1186,6 @@
             "entity_id": null,
             "iconKind": "flood",
             "rotation": 90,
-            "localState": "on",
             "label": "Outdoor display flood"
           }
         ],
@@ -1977,6 +1950,6 @@
     "customObjects": [],
     "people": [],
     "bleShowUnknown": true,
-    "notes": "~3,014 sq ft (280 m²) retail hall · 1 floor · 5 rooms — appliance, mechanical & lighting showcase\n\nA 20 × 14 m big-box showroom built to demonstrate the appliance, climate,\nplumbing, mechanical and LIGHTING models Diorama ships — one hero unit per\nmodel rather than a shelf of duplicates, so most of the floor is open aisle.\nIt is not a house; it is a catalogue you can walk through. Display rows run\neast–west across a C-shaped hall that wraps a west service block and a\nwalk-in lighting gallery, so avatars can path to any piece.\n\nMost units are switched ON via localState with no Home Assistant attached, so\nthe hall reads alive out of the box: appliance in-use LEDs pulse, fan blades\nspin (the stand fan oscillates), the mini-split louver swings open, the space\nheater glows, the towel warmer and radiators heat, the boiler and pumps run,\nthe kitchen sink is left running, the media wall plays and the gallery is lit.\n\nDepartments:\nStorefront (south): full-height picture glazing either side of a double-leaf\n  main entrance and a sliding-glass patio door that IS the patio-door display.\nEV bay (south-west): a display car nose-on to a home charger, served by the\n  delivery-bay garage door in the west wall.\nFront of house: charcoal checkout island, order desk with a toaster, a\n  two-screen wall-mounted media wall and a console TV on its stand.\nKitchen row: slide-in range, dishwasher, double-bowl sink, an appliance bar\n  carrying a microwave, drip brewer and retro fan, a kitchen vignette island,\n  and two fridges (French door, beverage centre).\nLaundry & portable climate: a washer/dryer pair, a stacked washer-dryer\n  column on one footprint, and the portable comfort family — shop fan,\n  oscillating stand fan, tower fan, bladeless fan, portable AC, space heater.\nBack wall: mini-split head, window AC and wall heater mounted clear of the\n  floor, plus the sink wall (pedestal, compact vanity, utility tub) daylit by\n  a clerestory, and a customer lounge with sofa, rug, coffee table and lamp.\n\nRooms off the hall:\nBath & Vanity Studio (pocket door): walk-in shower, soaking tub, vanity sink,\n  toilet, towel warmer and a wall radiator, under a heat lamp, a combined\n  exhaust-and-light and a wall exhaust fan.\nSales Office (glazed french doors): desk and chair, credenza with a working\n  3D parts printer, spec-binder shelving, a wall calendar and a date card.\nMechanical Room (barn slider): the full plant-room family — heat-pump water\n  heater, condensing boiler, air handler, heat-pump outdoor unit, AC\n  condenser, sump and recirculation pumps and a cast-iron floor radiator —\n  with a main-water valve, gas and leak detectors, an alarm beacon and its\n  own thermostat.\nLighting Gallery (north-east): a walk-in catalogue of fixture kinds — bare\n  bulb, oval, bowl, tiered, mason jar, round panel, recessed can, pendant,\n  ceiling fan, fan-with-light and floor lamp overhead; a wall-sconce pair,\n  a half-dome sconce and two step lights on the walls; a hearth vignette on\n  the back wall; and a landscape bay on a grass patch with in-ground\n  uplights, a ground spot and a flood over a patio set.\n\nControl kit (all unbound — display and local-toggle only): two thermostats,\n  three smart plugs, a water valve, two scene buttons, a ceiling projector,\n  three clock/date info cards, a wall calendar, an alert beacon, two security\n  cameras, an entrance presence zone, an mmWave footfall unit, four demo\n  AI-avatar presence sensors, four env sensors and four safety detectors."
+    "notes": "~3,014 sq ft (280 m²) retail hall · 1 floor · 5 rooms — appliance, mechanical & lighting showcase\n\nA 20 × 14 m big-box showroom built to demonstrate the appliance, climate,\nplumbing, mechanical and LIGHTING models Diorama ships — one hero unit per\nmodel rather than a shelf of duplicates, so most of the floor is open aisle.\nIt is not a house; it is a catalogue you can walk through. Display rows run\neast–west across a C-shaped hall that wraps a west service block and a\nwalk-in lighting gallery, so avatars can path to any piece.\n\nMost units are switched ON via localState with no Home Assistant attached, so\nthe hall reads alive out of the box: appliance in-use LEDs pulse, fan blades\nspin (the stand fan oscillates), the mini-split louver swings open, the space\nheater glows, the towel warmer and radiators heat, the boiler and pumps run,\nthe kitchen sink is left running and the media wall plays. The LIGHTS are the\nexception: only the twelve architectural fixtures load on (and no two of their\nfloor pools overlap, which would flicker), while the lighting gallery loads\ndark — those fixtures are products, so switch one on to see it work.\n\nDepartments:\nStorefront (south): full-height picture glazing either side of a double-leaf\n  main entrance and a sliding-glass patio door that IS the patio-door display.\nEV bay (south-west): a display car nose-on to a home charger, served by the\n  delivery-bay garage door in the west wall.\nFront of house: charcoal checkout island, order desk with a toaster, a\n  two-screen wall-mounted media wall and a console TV on its stand.\nKitchen row: slide-in range, dishwasher, double-bowl sink, an appliance bar\n  carrying a microwave, drip brewer and retro fan, a kitchen vignette island,\n  and two fridges (French door, beverage centre).\nLaundry & portable climate: a washer/dryer pair, a stacked washer-dryer\n  column on one footprint, and the portable comfort family — shop fan,\n  oscillating stand fan, tower fan, bladeless fan, portable AC, space heater.\nBack wall: mini-split head, window AC and wall heater mounted clear of the\n  floor, plus the sink wall (pedestal, compact vanity, utility tub) daylit by\n  a clerestory, and a customer lounge with sofa, rug, coffee table and lamp.\n\nRooms off the hall:\nBath & Vanity Studio (pocket door): walk-in shower, soaking tub, vanity sink,\n  toilet, towel warmer and a wall radiator, under a heat lamp, a combined\n  exhaust-and-light and a wall exhaust fan.\nSales Office (glazed french doors): desk and chair, credenza with a working\n  3D parts printer, spec-binder shelving, a wall calendar and a date card.\nMechanical Room (barn slider): the full plant-room family — heat-pump water\n  heater, condensing boiler, air handler, heat-pump outdoor unit, AC\n  condenser, sump and recirculation pumps and a cast-iron floor radiator —\n  with a main-water valve, gas and leak detectors, an alarm beacon and its\n  own thermostat.\nLighting Gallery (north-east): a walk-in catalogue of fixture kinds — bare\n  bulb, oval, bowl, tiered, mason jar, round panel, recessed can, pendant,\n  ceiling fan, fan-with-light and floor lamp overhead; a wall-sconce pair,\n  a half-dome sconce and two step lights on the walls; a hearth vignette on\n  the back wall; and a landscape bay on a grass patch with in-ground\n  uplights, a ground spot and a flood over a patio set.\n\nControl kit (all unbound — display and local-toggle only): two thermostats,\n  three smart plugs, a water valve, two scene buttons, a ceiling projector,\n  three clock/date info cards, a wall calendar, an alert beacon, two security\n  cameras, an entrance presence zone, an mmWave footfall unit, four demo\n  AI-avatar presence sensors, four env sensors and four safety detectors."
   }
 }

@@ -4,7 +4,7 @@
 // validatePlan returns a { pass, checks } report.
 import { loadGeom } from './geom.mjs';
 import {
-  doorwayBlockers, wallOverlaps, roomRegions, seatAlignment,
+  doorwayBlockers, wallOverlaps, roomRegions, seatAlignment, lightWallOverlaps,
   DOOR_CLEAR, SEAT_FACE_TOL_DEG, MIN_STANDING_CELLS,
 } from './physical.mjs';
 
@@ -147,6 +147,11 @@ export function validatePlan(env, geom) {
     // 12. Seats at a table/desk face it (±SEAT_FACE_TOL_DEG) and don't lap it.
     const sa = seatAlignment(f, geom);
     ok(sa.length === 0, `${tag}: table seats aligned (±${SEAT_FACE_TOL_DEG}°)` + (sa.length ? ` — bad: ${sa.join('; ')}` : ''));
+
+    // 13. Bodied LIGHT fixtures (fireplace fireboxes) must not sit inside a
+    //     wall. Check 10 only sees furniture; the settle pass wall-snaps these.
+    const lo = lightWallOverlaps(f, geom);
+    ok(lo.length === 0, `${tag}: no light fixture overlaps a wall` + (lo.length ? ` — overlapping: ${lo.join('; ')}` : ''));
   }
 
   // 7. Multi-floor: stairs stairLinkId pairs match exactly across floors.

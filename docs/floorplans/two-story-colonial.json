@@ -1,7 +1,7 @@
 {
   "diorama": 2,
   "name": "Two-Story Colonial",
-  "exportedAt": "2026-07-29T00:00:00.000Z",
+  "exportedAt": "2026-07-30T00:00:00.000Z",
   "store": {
     "v": 2,
     "floors": [
@@ -791,11 +791,11 @@
           },
           {
             "id": "two-story-colonial-lt12",
-            "x": 200,
+            "x": 275,
             "y": 6750,
             "entity_id": null,
             "iconKind": "fireplace",
-            "rotation": 90,
+            "rotation": 270,
             "label": "Fireplace"
           },
           {

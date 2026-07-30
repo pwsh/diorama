@@ -1,7 +1,7 @@
 {
   "diorama": 2,
   "name": "Large Multilevel — Aldergate",
-  "exportedAt": "2026-07-29T00:00:00.000Z",
+  "exportedAt": "2026-07-30T00:00:00.000Z",
   "store": {
     "v": 2,
     "floors": [
@@ -1690,10 +1690,9 @@
           {
             "id": "large-multilevel-lt24",
             "x": 14000,
-            "y": 9700,
+            "y": 9475,
             "entity_id": null,
             "iconKind": "fireplace",
-            "rotation": 0,
             "label": "Fireplace"
           }
         ],

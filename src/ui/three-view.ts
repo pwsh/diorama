@@ -6,7 +6,7 @@ import { customElement } from './define.js';
 // startup path never downloads it.
 import type { ThreeDRenderer, ZoneWorld, HaloWorld, TargetWorld, ActivityContext,
   InteractiveItem, GpsPinWorld, GpsLandmarkWorld, GeoEventWorld, WeatherFxState, VacMapEntry } from '../three-renderer.js';
-import { localToWorld, transformVerts, pointInPolygon, sensorColor, hexToInt, motionColor, lightIconKind, furnitureKind, resolveFurnitureDef, furnitureCat, isBinKind, isSpeakerKind, isSinkKind, isVehicleKind, isClimateApplianceKind, isMechanicalApplianceKind, mechanicalBindDomains, isBladedFanKind, isStairsKind, alarmStateColor, valveOpenness, sprinklerRunning, sprinklerHeadKind, sprinklerArcDeg, sprinklerRadius, sprinklerRotation, flagpoleHoistFraction, doorSpanCenter, isDroopPlant, plantThirsty, PLANT_MOISTURE_DEFAULT_THRESHOLD } from '../geometry.js';
+import { localToWorld, transformVerts, pointInPolygon, sensorColor, hexToInt, motionColor, lightIconKind, furnitureKind, resolveFurnitureDef, furnitureCat, isBinKind, isSpeakerKind, isSinkKind, isVehicleKind, isClimateApplianceKind, isMechanicalApplianceKind, mechanicalBindDomains, isBladedFanKind, isStairsKind, alarmStateColor, valveOpenness, sprinklerRunning, sprinklerHeadKind, sprinklerArcDeg, sprinklerRadius, sprinklerRotation, flagpoleHoistFraction, doorSpanCenter, isDroopPlant, plantThirsty, PLANT_MOISTURE_DEFAULT_THRESHOLD, hasFunctionalFront, frontVectorPlan } from '../geometry.js';
 import { compass8, fmtDistanceM } from '../geo.js';
 import { resolveNorth, markerScaleOf } from '../compass.js';
 import { parseNowPlaying, isMediaPlayerId } from '../geometry.js';
@@ -2206,8 +2206,13 @@ export class ThreeView extends LitElement {
       for (const fu of f.furniture) {
         const def = resolveFurnitureDef(fu, p.store.customObjects);
         if (furnitureCat(def) !== 'appliance') continue;   // fridge/stove/dishwasher/washer/dryer/microwave/tv
+        // Oriented pieces carry their functional-front normal so the AI
+        // controller walks up to the FRONT and only reaches from there (a fridge
+        // must not be opened from behind). Symmetric kinds leave it undefined.
+        const front = hasFunctionalFront(def) ? frontVectorPlan(fu.rotation) : null;
         interactive.push({ id: 'F' + fu.id, x: fu.x, y: fu.y, ctrl: 'media', fkind: furnitureKind(fu),
-          bound: fu.entity_id != null, on: entityOn[fu.id] === true });
+          bound: fu.entity_id != null, on: entityOn[fu.id] === true,
+          ...(front ? { fnx: front.x, fny: front.y } : {}) });
       }
       const ctx: ActivityContext = { entityOn, roomNames, timeBucket: resolveTimeBucket(states), weather, recentTriggers, eventTriggers, doorSensorOpen, fireplaceOn,
         interactive, avatarInteract: p.store.avatarInteractions !== false,

@@ -1,7 +1,7 @@
 {
   "diorama": 2,
   "name": "Open-Concept Entertainer",
-  "exportedAt": "2026-07-29T00:00:00.000Z",
+  "exportedAt": "2026-07-30T00:00:00.000Z",
   "store": {
     "v": 2,
     "floors": [
@@ -1154,10 +1154,11 @@
           {
             "id": "open-concept-entertainer-lt22",
             "x": 1700,
-            "y": 300,
+            "y": 70,
             "entity_id": null,
             "iconKind": "flood",
-            "label": "Garage front"
+            "label": "Garage front",
+            "rotation": 180
           }
         ],
         "switches": [

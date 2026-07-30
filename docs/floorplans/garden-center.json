@@ -1,7 +1,7 @@
 {
   "diorama": 2,
   "name": "Lawn & Garden Center — The Potting Shed",
-  "exportedAt": "2026-07-29T00:00:00.000Z",
+  "exportedAt": "2026-07-30T00:00:00.000Z",
   "store": {
     "v": 2,
     "floors": [
@@ -866,11 +866,11 @@
           },
           {
             "id": "garden-center-lt14",
-            "x": 6200,
+            "x": 6070,
             "y": 4700,
             "entity_id": null,
             "iconKind": "flood",
-            "rotation": 180,
+            "rotation": 270,
             "localState": "on",
             "label": "Yard flood"
           },

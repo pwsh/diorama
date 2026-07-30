@@ -2779,6 +2779,44 @@ export function resolveFurnitureDef(f: Furniture, customObjects?: ObjectRecipe[]
   return furnitureDef(f);
 }
 
+// ── Functional front (approach side) ─────────────────────────────────────────
+//
+// A piece has a FUNCTIONAL FRONT when one face is the working face: a fridge
+// door, an oven, a TV screen, a desk knee-hole, a washer drum. Those pieces must
+// be approached from that side — an avatar that walks up to the BACK of a fridge
+// and plays the "peer into the fridge" pose clips straight through the carcass
+// (user-reported).
+//
+// The signal ALREADY EXISTS in the kind table: `frontArrow` gates the 2D front
+// chevron and is authored `false` on exactly the pieces that have no meaningful
+// front (blocks, rugs, tables, plants, trees, bins, ottomans, stools, fountains,
+// wall plates). Default (absent) = true. So `frontArrow !== false` IS the
+// orientation predicate — reuse it rather than growing a second, divergent list.
+//
+// Front direction is **local −Z** (the documented convention shared by the 2D
+// chevron, the SitSpot entry normal and humanoid facing), which in the WORLD
+// PLAN frame is (−sin r, −cos r) for a screen-CW rotation r.
+export function hasFunctionalFront(def: FurnitureKindDef | null | undefined): boolean {
+  return !!def && def.frontArrow !== false;
+}
+
+/** Unit vector of a piece's functional front (local −Z) in the world PLAN frame. */
+export function frontVectorPlan(rotationDeg: number | undefined): Vec2 {
+  const r = (rotationDeg ?? 0) * Math.PI / 180;
+  return { x: -Math.sin(r), y: -Math.cos(r) };
+}
+
+/**
+ * Is (px, py) on the FRONT side of the piece at (cx, cy)? Signed distance from
+ * the piece's lateral mid-plane along the front normal, compared to `marginMm`
+ * (0 = the plane itself; a positive margin demands genuine clearance).
+ */
+export function inFrontHalfspace(cx: number, cy: number, rotationDeg: number | undefined,
+                                 px: number, py: number, marginMm = 0): boolean {
+  const f = frontVectorPlan(rotationDeg);
+  return (px - cx) * f.x + (py - cy) * f.y > marginMm;
+}
+
 // ── Tree species & per-piece height ───────────────────────────────────────────
 // Every tree kind (NOT `bush` — a shrub is not a tree, and its build has no
 // trunk/canopy split to scale). Membership grants exactly one thing: the

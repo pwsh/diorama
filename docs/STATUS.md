@@ -296,6 +296,24 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Plan wall-intersection sweep + showroom lighting + orientation-gated
+  interactions + tend_plant pose** (2026-07-30, user-reported ×4;
+  unreleased — on main past v0.46.0). Zero-tolerance audit: 5 real
+  intersections that PASSED check 10 (stacked dryers hiding behind
+  the blanket elevation exemption — now depth-gated at
+  WALL_MOUNT_MAX_DEPTH 300; fireplaces invisible to the check — new
+  check 13 lights-vs-walls + settleLights() running the real snap
+  fns; 399→425 checks). Showroom loads 17/43 lights ON (pairwise
+  pool-overlap-free set proven; gallery products OFF) — the
+  overlapping translucent pools were the reported flicker.
+  Orientation gate: hasFunctionalFront/frontVectorPlan/
+  inFrontHalfspace; anchor capture + stand point (old code computed
+  the BACK — sign bug), appliance-door proximity, AI goals + fire
+  gate all front-halfspace-gated; symmetric pieces stay radial.
+  tend_plant rebuilt: static lean + one-arm tending, no pelvis
+  motion. New orient-interact-test (ORIENT PASS 23/23); FLOORPLANS
+  425/425; AVINTERACT 26/26, PROPS 99/99, terrain/stairs-fit/
+  nav-parity/costume/climate/mechanical/sink baselines held.
 - **Door & window status layer switch** (2026-07-30, user-requested:
   "a visibility switch for the open/closed status on doors and
   windows needs added under labels"; released in v0.46.0). `Layers2D.openingStatus` (Labels category, absent = ON):

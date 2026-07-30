@@ -20,8 +20,10 @@
 //
 // Many pieces carry localState 'on' / 'playing' so the showroom reads ALIVE with
 // no Home Assistant attached: in-use LEDs glow, fan blades spin, the mini-split
-// louver opens, the kitchen sink runs, the media wall plays, and the whole
-// lighting gallery is lit.
+// louver opens, the kitchen sink runs and the media wall plays. LIGHTING is the
+// deliberate exception — only the 12 architectural fixtures load on, with no two
+// floor pools overlapping, and the gallery's display fixtures load OFF (see the
+// load-state note over `lights`).
 import { floorplan } from '../lib.mjs';
 
 export const id = 'appliance-showroom';
@@ -193,26 +195,52 @@ export function build() {
   // ── Lighting ─────────────────────────────────────────────────────────────
   // Hall: LED strips over the rows, hero spots on each department's end cap.
   // Gallery: a walk-in catalogue of every fixture kind, indoor and landscape.
+  //
+  // LOAD STATE — deliberately sparse. An ON light draws a translucent floor-pool
+  // decal (a CircleGeometry of `lightRadius` at y≈3, depthWrite:false). Two ON
+  // pools that OVERLAP are coplanar transparent surfaces with no depth tie-break,
+  // so the renderer's transparent sort flips between them frame to frame and the
+  // lit patch visibly crawls/flickers — with 41 of 42 fixtures loading ON this
+  // room was a field of overlapping decals. The rule now:
+  //
+  //   1. Only ARCHITECTURAL / general lighting loads ON — the hall strips, the
+  //      aisle festoon, one hero spot per department end cap, the two pendants
+  //      and one ceiling fixture per side room. That's 12 fixtures, enough that
+  //      the whole plan reads lit.
+  //   2. NO two ON pool-casting fixtures may overlap: pairwise centre distance
+  //      must exceed r1 + r2 (r = the authored `radius`, else lightRadius's 900
+  //      default). The closest pair here is Front-of-house ↔ Aisle festoon at
+  //      2300 mm vs 1800 mm of pool — 500 mm of daylight. Pool-SKIPPING kinds
+  //      (sconce / wall_sconce / under_cabinet / fan / exhaust* / inground /
+  //      ground_spot) cannot z-fight and are free to load ON.
+  //   3. The whole Lighting Gallery loads OFF. Those fixtures are PRODUCTS on
+  //      display — a visitor (or a demo avatar) switches one on to see it, which
+  //      is the point of the department; ganging all 22 on at once both flickers
+  //      and reads as noise.
   const lights = [
-    // Hall
+    // Hall — general lighting (ON, non-overlapping pools)
     light(10000, 1300, { iconKind: 'strip', rotation: 0, length: 9000, label: 'Front-of-house strip', localState: 'on' }),
     light(10500, 5900, { iconKind: 'strip', rotation: 0, length: 11000, label: 'Kitchen row strip', localState: 'on' }),
     light(8700, 8400, { iconKind: 'strip', rotation: 0, length: 7800, label: 'Laundry & climate strip', localState: 'on' }),
     light(10000, 3600, { iconKind: 'string', rotation: 0, length: 6000, label: 'Aisle festoon', localState: 'on' }),
     light(5300, 5900, { iconKind: 'spot', radius: 900, label: 'Hero range spot', localState: 'on' }),
-    light(5300, 8400, { iconKind: 'spot', radius: 900, label: 'Hero laundry spot', localState: 'on' }),
     light(14500, 5900, { iconKind: 'spot', radius: 900, label: 'Hero fridge spot', localState: 'on' }),
-    light(5300, 5500, { iconKind: 'exhaust', label: 'Range hood exhaust', localState: 'on' }),
-    light(9200, 6250, { iconKind: 'under_cabinet', rotation: 0, length: 1800, label: 'Appliance-bar under-cabinet', localState: 'on' }),
     light(13200, 2000, { iconKind: 'pendant', label: 'Checkout pendant', localState: 'on' }),
     light(17000, 1800, { iconKind: 'pendant', label: 'Order desk pendant', localState: 'on' }),
-    light(70, 2400, { iconKind: 'flood', rotation: -90, label: 'EV bay flood', localState: 'on' }),
     light(10000, 13000, { iconKind: 'strip', rotation: 0, length: 5000, label: 'Sink wall strip', localState: 'on' }),
     light(5900, 11300, { iconKind: 'round', label: 'Lounge ceiling', localState: 'on' }),
-    light(5900, 12400, { iconKind: 'lamp', height: 1500, label: 'Lounge lamp', localState: 'on' }),
+    // Hall — accents that load OFF (their pools would lap a general fixture) or
+    // cast no pool at all.
+    light(5300, 8400, { iconKind: 'spot', radius: 900, label: 'Hero laundry spot' }),
+    light(5300, 5500, { iconKind: 'exhaust', label: 'Range hood exhaust', localState: 'on' }),   // no pool
+    light(9200, 6250, { iconKind: 'under_cabinet', rotation: 0, length: 1800, label: 'Appliance-bar under-cabinet', localState: 'on' }),  // no pool
+    light(70, 2400, { iconKind: 'flood', rotation: -90, label: 'EV bay flood' }),
+    light(5900, 12400, { iconKind: 'lamp', height: 1500, label: 'Lounge lamp' }),
 
-    // Bath & Vanity Studio
-    light(1100, 6400, { iconKind: 'heatlamp', label: 'Bath heat lamp', localState: 'on' }),
+    // Bath & Vanity Studio — the combined exhaust-and-light casts no floor pool,
+    // so it lights the room without joining the decal pile; the heat lamp (a red
+    // pool right beside it) stays off.
+    light(1100, 6400, { iconKind: 'heatlamp', label: 'Bath heat lamp' }),
     light(2900, 6400, { iconKind: 'exhaust_light', label: 'Bath exhaust + light', localState: 'on' }),
     light(70, 5700, { iconKind: 'exhaust_wall', rotation: -90, label: 'Bath wall exhaust', localState: 'on' }),
 
@@ -224,29 +252,29 @@ export function build() {
     light(2000, 12400, { iconKind: 'strip', rotation: 0, length: 3000, label: 'Plant room strip', localState: 'on' }),
     light(2000, 13930, { iconKind: 'exhaust_wall', rotation: 0, label: 'Plant room exhaust', localState: 'on' }),
 
-    // ── Lighting Gallery — the catalogue wall ──────────────────────────────
-    light(13400, 12000, { iconKind: 'bulb', label: 'Bare bulb', localState: 'on' }),
-    light(14400, 12000, { iconKind: 'oval', label: 'Oval flush mount', localState: 'on' }),
-    light(15400, 12000, { iconKind: 'bowl', label: 'Bowl uplight', localState: 'on' }),
-    light(16400, 12000, { iconKind: 'tiered', label: 'Tiered chandelier', localState: 'on' }),
-    light(17400, 12000, { iconKind: 'jar', label: 'Mason-jar pendant', localState: 'on' }),
-    light(18400, 12000, { iconKind: 'round', label: 'Round panel', localState: 'on' }),
-    light(19400, 12000, { iconKind: 'recessed', radius: 600, label: 'Recessed can', localState: 'on' }),
-    light(13400, 13300, { iconKind: 'pendant', label: 'Pendant', localState: 'on' }),
-    light(14700, 13300, { iconKind: 'fan', label: 'Ceiling fan', localState: 'on' }),
-    light(16100, 13300, { iconKind: 'fan_light', label: 'Fan with light', localState: 'on' }),
-    light(17400, 13300, { iconKind: 'lamp', height: 1600, label: 'Floor lamp', localState: 'on' }),
-    light(12920, 11200, { iconKind: 'wall_sconce', rotation: -90, radius: 500, label: 'Wall sconce pair', localState: 'on' }),
-    light(12920, 12600, { iconKind: 'wall_sconce', rotation: -90, radius: 500, label: 'Wall sconce pair', localState: 'on' }),
-    light(19880, 12600, { iconKind: 'sconce', rotation: 90, radius: 500, label: 'Half-dome sconce', localState: 'on' }),
-    light(12850, 9800, { iconKind: 'step', rotation: -90, label: 'Step light', localState: 'on' }),
-    light(12850, 13600, { iconKind: 'step', rotation: -90, label: 'Step light', localState: 'on' }),
-    light(14800, 13725, { iconKind: 'fireplace', rotation: 0, label: 'Hearth vignette', localState: 'on' }),
+    // ── Lighting Gallery — the catalogue wall. ALL OFF at load (see note 3). ──
+    light(13400, 12000, { iconKind: 'bulb', label: 'Bare bulb' }),
+    light(14400, 12000, { iconKind: 'oval', label: 'Oval flush mount' }),
+    light(15400, 12000, { iconKind: 'bowl', label: 'Bowl uplight' }),
+    light(16400, 12000, { iconKind: 'tiered', label: 'Tiered chandelier' }),
+    light(17400, 12000, { iconKind: 'jar', label: 'Mason-jar pendant' }),
+    light(18400, 12000, { iconKind: 'round', label: 'Round panel' }),
+    light(19400, 12000, { iconKind: 'recessed', radius: 600, label: 'Recessed can' }),
+    light(13400, 13300, { iconKind: 'pendant', label: 'Pendant' }),
+    light(14700, 13300, { iconKind: 'fan', label: 'Ceiling fan' }),
+    light(16100, 13300, { iconKind: 'fan_light', label: 'Fan with light' }),
+    light(17400, 13300, { iconKind: 'lamp', height: 1600, label: 'Floor lamp' }),
+    light(12920, 11200, { iconKind: 'wall_sconce', rotation: -90, radius: 500, label: 'Wall sconce pair' }),
+    light(12920, 12600, { iconKind: 'wall_sconce', rotation: -90, radius: 500, label: 'Wall sconce pair' }),
+    light(19880, 12600, { iconKind: 'sconce', rotation: 90, radius: 500, label: 'Half-dome sconce' }),
+    light(12850, 9800, { iconKind: 'step', rotation: -90, label: 'Step light' }),
+    light(12850, 13600, { iconKind: 'step', rotation: -90, label: 'Step light' }),
+    light(14800, 13725, { iconKind: 'fireplace', rotation: 0, label: 'Hearth vignette' }),
     // Landscape lighting, staged on the gallery's grass patch.
-    light(17600, 11500, { iconKind: 'inground', label: 'In-ground uplight', localState: 'on' }),
-    light(19200, 11500, { iconKind: 'inground', label: 'In-ground uplight', localState: 'on' }),
-    light(18300, 11700, { iconKind: 'ground_spot', rotation: 180, label: 'Ground spot', localState: 'on' }),
-    light(19930, 10400, { iconKind: 'flood', rotation: 90, label: 'Outdoor display flood', localState: 'on' }),
+    light(17600, 11500, { iconKind: 'inground', label: 'In-ground uplight' }),
+    light(19200, 11500, { iconKind: 'inground', label: 'In-ground uplight' }),
+    light(18300, 11700, { iconKind: 'ground_spot', rotation: 180, label: 'Ground spot' }),
+    light(19930, 10400, { iconKind: 'flood', rotation: 90, label: 'Outdoor display flood' }),
   ];
 
   const switches = [
@@ -458,7 +486,10 @@ export function build() {
       'the hall reads alive out of the box: appliance in-use LEDs pulse, fan blades',
       'spin (the stand fan oscillates), the mini-split louver swings open, the space',
       'heater glows, the towel warmer and radiators heat, the boiler and pumps run,',
-      'the kitchen sink is left running, the media wall plays and the gallery is lit.',
+      'the kitchen sink is left running and the media wall plays. The LIGHTS are the',
+      'exception: only the twelve architectural fixtures load on (and no two of their',
+      'floor pools overlap, which would flicker), while the lighting gallery loads',
+      'dark — those fixtures are products, so switch one on to see it work.',
       '',
       'Departments:',
       'Storefront (south): full-height picture glazing either side of a double-leaf',

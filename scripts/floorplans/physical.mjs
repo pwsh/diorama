@@ -152,22 +152,61 @@ export function doorwayBlockers(f, geom, customObjects) {
 
 /** Kinds that legitimately sit ON / against a wall plane and may lap it. */
 const WALL_HUGGING_KINDS = new Set([
-  'wall_tv', 'wall_heater', 'towel_warmer', 'mini_split', 'window_ac',
-  'shower', 'ev_charger',
+  'wall_tv', 'wall_heater', 'wall_radiator', 'towel_warmer', 'mini_split',
+  'window_ac', 'shower', 'ev_charger',
 ]);
+
+// An ELEVATED piece is only excused from the wall test when it is shallow
+// enough to READ as a wall-mounted plate (a flat TV, a radiator panel). A deep
+// elevated body — a stacked dryer at elevation 990, 700 mm front-to-back — is
+// free-standing volume at head height and sinks visibly into the wall, so the
+// old blanket `elevation >= 300` pass let real intersections through (found by
+// the strict audit: 2 stacked dryers, 100 / 50 mm deep). Wall-plane KINDS keep
+// their own exemption above regardless of depth (a window AC is 400 deep by
+// definition — it lives IN the wall).
+export const WALL_MOUNT_MAX_DEPTH = 300;
+// A rug is 5 mm of cloth on the floor: lapping a wall is invisible while the
+// overlap stays inside the wall's own 100 mm volume. Past that it pokes out the
+// far face into the next room, which IS an artifact.
+export const RUG_OVERLAP_TOL = 2 * WALL_HALF;
 
 /** Should this piece keep clear of solid walls? (shared by check + settle) */
 export function wallCollidable(fu, geom) {
   const def = geom.FURNITURE_KINDS[fu.kind ?? 'block'];
   if (!def) return false;
-  if ((fu.elevation ?? 0) >= 300) return false;      // wall-hung / counter-top
   if (def.mountable) return false;                   // rides a surface host
   if (WALL_HUGGING_KINDS.has(fu.kind)) return false; // built into the wall plane
+  // Shallow + elevated = a wall-mounted plate; deep + elevated is still a body.
+  if ((fu.elevation ?? 0) >= 300 && (fu.h ?? def.h) <= WALL_MOUNT_MAX_DEPTH) return false;
   // Stairs are structure, not an obstacle — a flight legitimately runs from wall
   // face to wall face inside its shaft (and _buildNav treats it as terrain).
   if (geom.isStairsKind ? geom.isStairsKind(fu.kind) : false) return false;
-  if (def.rug) return false;                         // flat floor covering
+  if (def.rug) return false;                         // flat floor covering (see rugWallOverlaps)
   return true;
+}
+
+/** A solid wall run as an OBB polygon: `len` along its axis, 100 mm thick. */
+export function wallRunPoly(r) {
+  const dx = r.b.x - r.a.x, dy = r.b.y - r.a.y;
+  const len = Math.hypot(dx, dy) || 1;
+  const ux = dx / len, uy = dy / len;
+  const mx = (r.a.x + r.b.x) / 2, my = (r.a.y + r.b.y) / 2;
+  return [
+    { x: mx + ux * len / 2 - uy * -WALL_HALF, y: my + uy * len / 2 + ux * -WALL_HALF },
+    { x: mx + ux * len / 2 - uy * WALL_HALF, y: my + uy * len / 2 + ux * WALL_HALF },
+    { x: mx - ux * len / 2 - uy * WALL_HALF, y: my - uy * len / 2 + ux * WALL_HALF },
+    { x: mx - ux * len / 2 - uy * -WALL_HALF, y: my - uy * len / 2 + ux * -WALL_HALF },
+  ];
+}
+
+/** Deepest penetration of one footprint rect into any solid wall run (mm). */
+export function worstWallPenetration(poly, runs) {
+  let worst = 0;
+  for (const r of runs) {
+    const pen = convexPenetration(poly, wallRunPoly(r));
+    if (pen > worst) worst = pen;
+  }
+  return worst;
 }
 
 export function wallOverlaps(f, geom) {
@@ -175,24 +214,47 @@ export function wallOverlaps(f, geom) {
   const bad = [];
   for (const fu of (f.furniture ?? [])) {
     if (!wallCollidable(fu, geom)) continue;
-    const poly = rectCorners(fu.x, fu.y, fu.w, fu.h, fu.rotation);
-    let worst = 0;
-    for (const r of runs) {
-      const dx = r.b.x - r.a.x, dy = r.b.y - r.a.y;
-      const len = Math.hypot(dx, dy) || 1;
-      const ux = dx / len, uy = dy / len;
-      const mx = (r.a.x + r.b.x) / 2, my = (r.a.y + r.b.y) / 2;
-      // Wall run as an OBB: len along its axis, 100 mm thick.
-      const wallPoly = [
-        { x: mx + ux * len / 2 - uy * -WALL_HALF, y: my + uy * len / 2 + ux * -WALL_HALF },
-        { x: mx + ux * len / 2 - uy * WALL_HALF, y: my + uy * len / 2 + ux * WALL_HALF },
-        { x: mx - ux * len / 2 - uy * WALL_HALF, y: my - uy * len / 2 + ux * WALL_HALF },
-        { x: mx - ux * len / 2 - uy * -WALL_HALF, y: my - uy * len / 2 + ux * -WALL_HALF },
-      ];
-      const pen = convexPenetration(poly, wallPoly);
-      if (pen > worst) worst = pen;
-    }
+    const worst = worstWallPenetration(rectCorners(fu.x, fu.y, fu.w, fu.h, fu.rotation), runs);
     if (worst > WALL_OVERLAP_TOL) bad.push(`${fname(fu)}(${fu.id}) ${fmt(worst)}mm`);
+  }
+  // Rugs are exempt from the body test but may not cross CLEAR THROUGH a wall.
+  for (const fu of (f.furniture ?? [])) {
+    if (!geom.FURNITURE_KINDS[fu.kind ?? 'block']?.rug) continue;
+    const worst = worstWallPenetration(rectCorners(fu.x, fu.y, fu.w, fu.h, fu.rotation), runs);
+    if (worst > RUG_OVERLAP_TOL) bad.push(`${fname(fu)}(${fu.id}) rug through wall ${fmt(worst)}mm`);
+  }
+  return bad;
+}
+
+// ── 2b. LIGHT fixtures with a real 3D body vs solid walls ───────────────────
+//
+// Check 10 covers FURNITURE only, so a `fireplace` LightIconKind — a 1000×450
+// masonry firebox, the biggest single volume any light fixture builds — could
+// sit clean through a wall and nothing complained (the strict audit found three
+// such fireplaces, one of them facing its opening INTO the wall). The app snaps
+// a dropped fireplace flush (snapFireplaceToWall: back on the wall face,
+// opening into the room) and `floor()`'s settle pass now does the same at build
+// time, so a compliant plan penetrates 0 mm.
+//
+// The other bodied light kinds — sconce / flood / exhaust_wall — are wall
+// PLATES whose whole point is to occupy the wall plane, exactly like
+// WALL_HUGGING_KINDS furniture, so they are deliberately not listed.
+export const LIGHT_BODY_FOOTPRINT = {
+  fireplace: { w: 1000, d: 450 },   // three-renderer W2 × D2
+};
+export const LIGHT_WALL_OVERLAP_TOL = 5;   // mm — rounding only; the snap is exact
+
+export function lightWallOverlaps(f, geom) {
+  const runs = solidWallRuns(f, geom);
+  const bad = [];
+  for (const l of (f.lights ?? [])) {
+    const body = LIGHT_BODY_FOOTPRINT[geom.lightIconKind(l)];
+    if (!body) continue;
+    const worst = worstWallPenetration(
+      rectCorners(l.x, l.y, body.w, body.d, l.rotation), runs);
+    if (worst > LIGHT_WALL_OVERLAP_TOL) {
+      bad.push(`${l.label || geom.lightIconKind(l)}(${l.id}) ${fmt(worst)}mm`);
+    }
   }
   return bad;
 }

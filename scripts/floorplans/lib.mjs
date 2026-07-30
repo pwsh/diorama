@@ -147,6 +147,33 @@ function settleWalls(spec) {
   }
 }
 
+// 3. wall-fixture snap — the LIGHT kinds the app locks onto a wall on drop
+//    (fireplace / floodlight / wall exhaust) are run through the REAL
+//    geometry.ts snap functions, so a plan author writes the round "on the west
+//    wall" coordinate and gets the flush pose the renderer expects: back on the
+//    wall face, front (local −Z) into the room. Without this a hand-placed
+//    fireplace could sit clear through the wall with its opening facing OUT —
+//    the strict wall audit found exactly that in three plans. No-ops when no
+//    wall is within the snap reach (500 mm), so a free-standing fireplace in the
+//    middle of a room is left alone.
+function settleLights(spec) {
+  const { snapFireplaceToWall, snapFloodlightToWall, snapExhaustToWall } = GEOM;
+  const walls = spec.walls ?? [];
+  if (!walls.length) return;
+  for (const l of (spec.lights ?? [])) {
+    const snapped = !!(snapFireplaceToWall?.(l, walls) | snapFloodlightToWall?.(l, walls)
+                       | snapExhaustToWall?.(l, walls));
+    // atan2 yields −0 / −90 style floats; normalize to a stable 0..360 integer
+    // when the wall is axis-aligned so the committed JSON stays byte-identical.
+    // ONLY for a light the snap actually touched — never rewrite an untouched
+    // fixture's authored rotation.
+    if (snapped && typeof l.rotation === 'number') {
+      const r = (Math.round(l.rotation * 1e6) / 1e6 + 360) % 360;
+      if (r === 0) delete l.rotation; else l.rotation = Number.isInteger(r) ? r : Number(r.toFixed(4));
+    }
+  }
+}
+
 /**
  * Create a plan builder bound to `planId`. Returns all authoring helpers with a
  * shared, deterministic id counter. Call once per plan `build()`.
@@ -298,7 +325,9 @@ export function floorplan(planId) {
     const fid = id('fl');
     // Walls first (so seats measure against a host's FINAL position), then
     // seats, then walls again in case a tuck pushed a chair into a wall.
-    if (GEOM && spec.settle !== false) { settleWalls(spec); settleSeats(spec); settleWalls(spec); }
+    if (GEOM && spec.settle !== false) {
+      settleWalls(spec); settleSeats(spec); settleWalls(spec); settleLights(spec);
+    }
     return {
       id: fid, name: spec.name ?? `Floor ${counts.fl}`,
       w: spec.w, d: spec.d,

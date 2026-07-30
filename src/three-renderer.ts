@@ -11,6 +11,7 @@ import {
   switchHeight, switchRotation, switchSize,
   motionColor, motionIntensity, hexToInt, bleProxyHeight, BLE_PROXY_DEFAULTS,
   furnitureDef, resolveFurnitureDef, furnitureColor, furnitureCat, isBinKind, binStateIsFull, isSpeakerKind, isSinkKind, isRiserKind, doorOpenDeltaDeg,
+  hasFunctionalFront, frontVectorPlan,
   isClimateApplianceKind, isBladedFanKind, climateApplianceRun,
   isMechanicalApplianceKind, isPumpKind, mechanicalRun, mechanicalGlowColor, type MechanicalRun,
   plantThirsty, PLANT_MOISTURE_DEFAULT_THRESHOLD,
@@ -464,6 +465,13 @@ export interface InteractiveItem {
   fkind?: string;      // furniture kind (media/appliance) OR 'fireplace' for a fireplace light
   bound: boolean;      // has a bound HA entity → contemplate only, never actuate
   on: boolean;         // resolved effectiveState is on/playing
+  // OPTIONAL (stale-chunk safe — absent = the old radial behavior): the piece's
+  // FUNCTIONAL-FRONT unit vector in the world PLAN frame, set only for oriented
+  // furniture (`hasFunctionalFront`). When present the AI controller walks to a
+  // point IN FRONT of the device and only fires the toggle from that side, so a
+  // rig never reaches into the back of a fridge. Wall fixtures (lights /
+  // switches) are left undefined: their back is inside the wall, unreachable.
+  fnx?: number; fny?: number;
 }
 
 // A transient "flash then decay" event with no persistent state — the generic
@@ -526,6 +534,14 @@ interface ActivityAnchor {
   kind: ExtActivityKind;
   roomId: string | null;
   hasEntity: boolean;   // furniture has a bound HA entity (gates entity-driven kinds)
+  // Scene-XZ unit normal out the piece's FUNCTIONAL FRONT (local −Z), for
+  // anchors on a piece that HAS one (`frontArrow !== false`). Capture is then
+  // gated to the front halfspace, so a rig can't engage a fridge / oven / desk
+  // from behind and clip through it — the SitSpot front-only-entry rule
+  // (frontNx/frontNz) applied to the standing-activity system. Null on a
+  // symmetric piece (plant, picnic table) and on the ambient anchors
+  // (warm_hands / gaze_window), which stay radial.
+  frontNx: number | null; frontNz: number | null;
   // Ambient idle activities only: the LIGHT fixture id whose ON state gates a
   // `warm_hands` (lit-fireplace) anchor per frame (checked from ctx.fireplaceOn,
   // NOT baked at build so the anchor deactivates the instant the fire goes out).
@@ -1671,6 +1687,11 @@ const PHASE4_ACTIVITIES: ReadonlySet<ExtActivityKind> = new Set<ExtActivityKind>
 const ENTITY_GATED_ACTIVITIES: ReadonlySet<ExtActivityKind> = new Set<ExtActivityKind>([
   'load_dishwasher', 'make_coffee',
 ]);
+// How far IN FRONT of an oriented interactive device the AI controller aims its
+// walk goal (mm). Matches the activity-anchor stand-off idea — far enough that
+// the nav snap lands on a cell on the front side rather than wrapping around
+// the piece. The reach still targets the device itself.
+const INTERACT_FRONT_STANDOFF = 700;
 
 export class ThreeDRenderer {
   loaded = false;
@@ -2177,6 +2198,12 @@ export class ThreeDRenderer {
   private _applianceDoors: {
     fuId: string; pivot: THREE.Object3D; axis: 'x' | 'y'; openAngle: number;
     wx: number; wy: number; unbound: boolean; hasDoorSensor: boolean; forceOpen?: boolean;
+    // Functional-front unit vector in the WORLD PLAN frame (local −Z). The
+    // proximity trigger only fires for a rig standing on the FRONT side — a
+    // fridge door must not swing open because someone walked behind it (the
+    // pose/door then clip through the carcass). Null for a piece with no
+    // meaningful front (`frontArrow: false`), which keeps the radial behavior.
+    fnx: number | null; fny: number | null;
   }[] = [];
   private _applianceDoorBlend: Record<string, number> = {};
   // Window curtain panels (Window.curtain). Each panel gathers (scales toward a
@@ -5819,12 +5846,14 @@ export class ThreeDRenderer {
       if (doorSink.length) {
         const unbound = fu.entity_id == null;
         const hasDoorSensor = fu.doorEntity != null;
+        const front = hasFunctionalFront(def0) ? frontVectorPlan(fu.rotation) : null;
         for (const dp of doorSink) {
           const blend = this._applianceDoorBlend[fu.id] ?? 0;
           dp.pivot.rotation[dp.axis] = dp.openAngle * blend;
           this._applianceDoors.push({
             fuId: fu.id, pivot: dp.pivot, axis: dp.axis, openAngle: dp.openAngle,
             wx: fu.x, wy: fu.y, unbound, hasDoorSensor, forceOpen: fu.doorOpen === true,
+            fnx: front ? front.x : null, fny: front ? front.y : null,
           });
         }
       }
@@ -6097,13 +6126,27 @@ export class ThreeDRenderer {
       // (dwell triggers wire these up in a later phase).
       if (def.activity) {
         const a = this._w(fu.x, fu.y, 0);
+        // The piece's yaw in scene terms. Its FUNCTIONAL FRONT is local −Z —
+        // the same convention the SitSpot normal, the 2D chevron and humanoid
+        // facing use — which in scene XZ is (−sin yaw, −cos yaw).
+        const yaw = -((fu.rotation || 0) * Math.PI / 180);
+        const fNx = -Math.sin(yaw), fNz = -Math.cos(yaw);
+        const oriented = hasFunctionalFront(def);
         this._activityAnchors.push({
           furnitureId: fu.id, x: a.x, z: a.z,
           r: Math.max(fu.w, fu.h) / 2 + 350,
-          facing: -((fu.rotation || 0) * Math.PI / 180),
-          // Stand in FRONT of the piece (+facing = local +Z / world +Y depth
-          // axis), clear of its front face (fu.h/2) plus a body's half-width.
+          // `facing` is the rig's YAW at the stand point (body-forward is local
+          // −Z, so yaw θ looks along (−sin θ, −cos θ)). The stand point is
+          // anchor + (sin facing, cos facing)·standOff, so facing = yaw + π puts
+          // the rig OUT THE FRONT FACE looking back at the piece. The original
+          // yaw (no +π) placed it out the BACK — an avatar peering into a fridge
+          // from behind it, straight through the carcass and usually into a wall
+          // (user-reported). Every furniture builder puts its working face on
+          // local −Z, so this is the right side for symmetric pieces too.
+          facing: yaw + Math.PI,
+          // Clear of the front face (fu.h/2) plus a body's half-width.
           standOff: fu.h / 2 + 340,
+          frontNx: oriented ? fNx : null, frontNz: oriented ? fNz : null,
           kind: def.activity,
           roomId,
           // A local control state counts as a state source (entity-gated
@@ -6159,6 +6202,9 @@ export class ThreeDRenderer {
         standOff: 0, kind: 'warm_hands',
         roomId: resolveRoomForPoint(rooms, loops, aw.x, aw.y)?.id ?? null,
         hasEntity: l.entity_id != null || l.localState != null,
+        // Radial: the anchor point is ALREADY the standing spot in front of the
+        // firebox (standOff 0), so there is no back side to guard against.
+        frontNx: null, frontNz: null,
         lightId: l.id,
       });
     }
@@ -6191,6 +6237,7 @@ export class ThreeDRenderer {
         facing: Math.atan2(dsx, dsz), standOff: 0, kind: 'gaze_window',
         roomId: resolveRoomForPoint(rooms, loops, aw.x, aw.y)?.id ?? null,
         hasEntity: false,
+        frontNx: null, frontNz: null,   // radial: the anchor IS the interior spot
       });
     }
 
@@ -16990,9 +17037,19 @@ export class ThreeDRenderer {
           ai.interactFired = true;
           if (h && !h.quad) {
             const now = performance.now() / 1000;
+            // Both cooldowns arm regardless (the rig committed to the trip and
+            // must not immediately re-target the same device), but the TOGGLE
+            // only fires when the rig actually ended up on the device's front
+            // side. A nav snap can still park it behind an oriented piece in a
+            // tight spot; reaching through the back of a fridge to open it is
+            // exactly what this gate exists to prevent.
             this._itemInteractAt[ai.interactId] = now;   // per-item 90 s cooldown
             ai.nextInteractAt = now + 45;                 // per-rig 45 s cooldown
-            if (this._onAvatarInteract) this._onAvatarInteract(ai.interactId);
+            const it = this._interactiveItems.find(i => i.id === ai.interactId);
+            const front = it && it.fnx != null && it.fny != null
+              ? (ai.x - it.x) * it.fnx + (ai.y - it.y) * it.fny > 0
+              : true;
+            if (front && this._onAvatarInteract) this._onAvatarInteract(ai.interactId);
           }
         }
         if (ai.interactT >= 1.3) {
@@ -17147,7 +17204,16 @@ export class ThreeDRenderer {
         });
         if (cands.length) {
           const it = cands[(this._interactRng() * cands.length) | 0];
-          gx = it.x; gy = it.y;
+          // Walk to a point IN FRONT of an oriented device (fridge / oven / TV),
+          // not to its centre — the goal snap would otherwise settle the rig on
+          // whichever walkable cell is nearest, frequently BEHIND the piece,
+          // and the reach one-shot would poke through its back. The stand-off
+          // matches the activity-anchor rule (a body's half-width clear of the
+          // face). Un-oriented devices (wall switches, lamps) keep the centre.
+          const off = it.fnx != null && it.fny != null ? INTERACT_FRONT_STANDOFF : 0;
+          gx = it.x + (it.fnx ?? 0) * off; gy = it.y + (it.fny ?? 0) * off;
+          // The DEVICE position stays the facing/reach target; only the walk
+          // goal is offset.
           ai.interactId = it.id; ai.interactX = it.x; ai.interactY = it.y;
         }
       }
@@ -17176,7 +17242,15 @@ export class ThreeDRenderer {
         if (loop && !pip(w.x, w.y, loop)) return;
         cands.push(w);
       };
-      for (const a of this._activityAnchors) consider(a.x, a.z);
+      // Aim at the anchor's STAND POINT, not the piece centre: that is where the
+      // pose blend parks the rig, and (since the stand offset runs out the
+      // functional front) it is the side the capture gate accepts. Targeting the
+      // centre let the goal snap to whichever free cell was nearest — often
+      // BEHIND an oriented appliance, where the rig can no longer engage.
+      // standOff is 0 for the ambient anchors, so those are unchanged.
+      for (const a of this._activityAnchors) {
+        consider(a.x + Math.sin(a.facing) * a.standOff, a.z + Math.cos(a.facing) * a.standOff);
+      }
       for (const sp of this._sitSpots) consider(sp.x, sp.z);
       if (cands.length) { const c = cands[(Math.random() * cands.length) | 0]; gx = c.x; gy = c.y; }
     }
@@ -17637,6 +17711,13 @@ export class ThreeDRenderer {
           if (ENTITY_GATED_ACTIVITIES.has(a.kind) && a.hasEntity && !entityOn[a.furnitureId]) continue;
           // Dark fireplace → its warm-hands anchor is inert this frame.
           if (a.kind === 'warm_hands' && !(a.lightId != null && fireplaceOn[a.lightId] === true)) continue;
+          // FRONT-ONLY ENTRY for a piece with a functional front (the standing
+          // analogue of the SitSpot rule). The blend walks the rig from its nav
+          // position to the stand point in FRONT of the piece, so capturing it
+          // from behind would drag it straight THROUGH the fridge / oven / desk.
+          // Symmetric pieces (frontNx null) and the ambient anchors stay radial.
+          if (a.frontNx !== null && a.frontNz !== null &&
+              (p.x - a.x) * a.frontNx + (p.z - a.z) * a.frontNz <= 0) continue;
           bd = dA; best = a;
         }
         if (best) { h.activityAnchor = best; wantAct = true; }
@@ -17677,9 +17758,10 @@ export class ThreeDRenderer {
       }
 
       // Stand point: OFFSET from the anchor center along +facing so the figure
-      // stands beside the appliance and looks back at it (body-forward is
-      // local -Z; with yaw = anchor.facing the figure looks toward the anchor
-      // from the (sinθ, cosθ) side). standOff ≈ 45% of the footprint radius.
+      // stands clear of the piece and looks back at it (body-forward is local
+      // -Z; with yaw = anchor.facing the figure looks toward the anchor from the
+      // (sinθ, cosθ) side). Furniture anchors set facing = pieceYaw + π, so that
+      // side IS the piece's functional front — never its back.
       let standX = p.x, standZ = p.z;
       if (anchor) {
         const standOff = anchor.standOff;
@@ -18042,10 +18124,25 @@ export class ThreeDRenderer {
             pLean = -0.1;
             break;
           case 'tend_plant': {
-            // Light crouch + reach, with a slow 2 s lean cycle over the leaves.
-            pLHip = pRHip = 0.3; pLKnee = pRKnee = -0.3;
-            pLSh = pRSh = 0.5; pLEl = pREl = 0.6;
-            pLean = -0.15 + Math.sin(now * Math.PI) * 0.05;
+            // Gardening read: a STATIC stoop with one working arm.
+            //
+            // The original pose animated the ROOT PITCH (`pLean = −0.15 +
+            // sin(now·π)·0.05`) and held both arms still. Root pitch rotates the
+            // whole rig about its base, so a 0.5 Hz ±0.05 rad cycle swung the
+            // PELVIS ~±40 mm fore-and-aft — and with the arms frozen that hip
+            // rock was the only motion the eye had to read. Against a low plant
+            // it looked obscene, not horticultural (user-reported).
+            //
+            // Now: the lean and the stoop are constant (a gardener holds their
+            // posture), and ALL the motion lives in one arm — right shoulder +
+            // elbow working over the foliage while the left hand rests at the
+            // hip. Nothing rhythmic touches the pelvis.
+            const tend = Math.sin(now * 1.6 + h.idleOffset);
+            pLHip = pRHip = 0.18; pLKnee = pRKnee = -0.18;   // light, steady stoop
+            pRSh = 0.95 + tend * 0.20;                        // working arm, down-forward
+            pREl = 0.80 + tend * 0.35;                        // forearm does the tending
+            pLSh = 0.12; pLEl = 0.55;                         // idle hand near the hip
+            pLean = -0.22;                                    // STATIC forward lean
             break;
           }
           case 'warm_hands': {
@@ -18862,6 +18959,11 @@ export class ThreeDRenderer {
           for (const t of targets) {                                // case c (dwell)
             const dx = t.x - d.wx, dy = t.y - d.wy;
             if (dx * dx + dy * dy > PROX2) continue;
+            // FRONT-ONLY for an oriented piece: a rig behind / beside a fridge
+            // must not pop its door (the panel would sweep through the carcass
+            // and the rig would appear to use it from the back). Symmetric
+            // pieces (fnx null) keep the plain radial trigger.
+            if (d.fnx !== null && d.fny !== null && dx * d.fnx + dy * d.fny <= 0) continue;
             const h = this._humanoids[t.key];
             if (h && !h.quad && h.dwell > 1.2) { openTarget = true; break; }
           }

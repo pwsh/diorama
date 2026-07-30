@@ -1,0 +1,269 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>orient interact test</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<!-- Needs only the built dist/ renderer chunk:
+       cp -r dist/* "$H"/ ; cp test-pages/orient-interact-test.html "$H"/
+     Serve $H and open this page. Title carries `ORIENT PASS n/n`. -->
+<script type="module">
+  // ORIENTATION-GATED AVATAR INTERACTIONS + the tend_plant pose.
+  //
+  // Every piece whose def keeps the 2D front chevron (`frontArrow !== false`)
+  // has a FUNCTIONAL FRONT at local −Z. Avatars must only engage such a piece
+  // from that side; approaching a fridge from behind used to open its door and
+  // drag the rig through the carcass (user-reported). Pieces authored
+  // `frontArrow: false` (plant, table, rug, bin) are symmetric and stay radial.
+  //
+  // Sections:
+  //   A  appliance-door proximity trigger — front opens, behind does not
+  //   B  standing-activity anchor capture — front captures, behind does not
+  //   C  symmetric piece (plant) still captures from ANY side
+  //   D  AI interaction goal lands in the item's front halfspace
+  //   E  AI fire gate — the toggle only fires from the front
+  //   F  tend_plant pose: the pelvis holds still while the working arm moves
+  //   G  browse_bookshelf pose: pelvis likewise static (regression pin)
+  const mod = await import('./assets/three-renderer.js?v=' + Date.now());
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+
+  const results = [];
+  const check = (name, cond, extra = '') => results.push({ name, pass: !!cond, extra });
+
+  const FW = 12000, FD = 6000;
+  // Plan-frame functional front of a piece at screen-CW `rot` (local −Z).
+  const front = (rot) => {
+    const a = (rot || 0) * Math.PI / 180;
+    return { x: -Math.sin(a), y: -Math.cos(a) };
+  };
+  // World position of a THREE object without importing three (matrixWorld[12..14]).
+  const wpos = (o) => { o.updateWorldMatrix(true, false); const e = o.matrixWorld.elements;
+                        return { x: e[12], y: e[13], z: e[14] }; };
+  const range = (arr, k) => Math.max(...arr.map(p => p[k])) - Math.min(...arr.map(p => p[k]));
+  // Working HAND, not the elbow pivot: browse_bookshelf drives the ELBOW angle,
+  // which leaves the elbow group itself stationary. Take the lowest-hanging
+  // descendant of the elbow chain — the forearm tip / hand.
+  const handPos = (h) => {
+    h.rightElbow.updateWorldMatrix(true, true);
+    let best = null, bestY = Infinity;
+    h.rightElbow.traverse((o) => {
+      if (o === h.rightElbow) return;
+      const p = wpos(o);
+      if (p.y < bestY) { bestY = p.y; best = p; }
+    });
+    return best ?? wpos(h.rightElbow);
+  };
+
+  // Fridge (ORIENTED, rotation 0 ⇒ front points −Y), plant (SYMMETRIC),
+  // bookshelf (oriented, for the pose pin). Wide-open room, no seats, no stairs.
+  const FRIDGE = { id: 'fridge', x: 4000, y: 3000, w: 910, h: 760, kind: 'fridge', rotation: 0 };
+  const PLANT  = { id: 'plant',  x: 8000, y: 3000, w: 400, h: 400, kind: 'plant',  rotation: 0 };
+  const SHELF  = { id: 'shelf',  x: 10500, y: 3000, w: 800, h: 350, kind: 'bookshelf', rotation: 0 };
+  const floor = {
+    id: 'f1', name: 'Room', w: FW, d: FD,
+    walls: [{ id: 'perim', points: [{x:200,y:200},{x:11800,y:200},{x:11800,y:5800},{x:200,y:5800},{x:200,y:200}] }],
+    furniture: [FRIDGE, PLANT, SHELF],
+    lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [], windows: [], bg: null, model3d: null, look3d: null,
+    rooms: [{ id: 'rm1', name: 'Room', anchor: { x: 6000, y: 1000 } }],
+  };
+  const SC = { preset: 'day', floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6' };
+  r.updateFloor(floor, SC);
+  r.applyViewPreset('top');
+
+  const realNow = performance.now.bind(performance);
+  let fakeNow = realNow();
+  performance.now = () => fakeNow;
+  const DT = 16.7;
+  const ctx = { entityOn: {}, roomNames: { rm1: 'Room' }, timeBucket: 'day' };
+  const step = (targets, c = ctx) => { fakeNow += DT; r.updateTargets(targets, c); };
+  const secs = (n) => Math.round(n * 1000 / DT);
+  // Drop every rig + door/anchor state so each scenario starts clean.
+  const reset = () => {
+    for (const k of Object.keys(r._humanoids)) r._disposeHumanoid(r._humanoids[k]);
+    r._humanoids = {}; r._aiState = {};
+    r._applianceDoorBlend = {};
+    r.updateFloor(floor, SC);          // re-register doors/anchors with a 0 blend
+  };
+  const hold = (key, x, y, t) => { for (let i = 0; i < secs(t); i++) step([{ key, x, y, color: 0x4fc3f7 }]); };
+
+  // ── A. Appliance-door proximity trigger ──────────────────────────────────
+  // Both positions are 950 mm from the fridge centre: inside the 1100 mm
+  // proximity radius but OUTSIDE the 805 mm activity-anchor radius, so this
+  // isolates the dwell trigger from the anchor trigger.
+  {
+    reset();
+    hold('rFront', FRIDGE.x, FRIDGE.y - 950, 4);
+    const openFront = r._applianceDoorBlend[FRIDGE.id] ?? 0;
+    check('A front rig opens the fridge door', openFront > 0.8, `blend=${openFront.toFixed(3)}`);
+
+    reset();
+    hold('rBack', FRIDGE.x, FRIDGE.y + 950, 4);
+    const openBack = r._applianceDoorBlend[FRIDGE.id] ?? 0;
+    check('A rig BEHIND never opens the door', openBack < 0.02, `blend=${openBack.toFixed(3)}`);
+  }
+
+  // ── B. Standing-activity anchor capture (oriented piece) ─────────────────
+  // 700 mm from centre — inside the fridge anchor's 805 mm radius.
+  {
+    reset();
+    hold('aFront', FRIDGE.x, FRIDGE.y - 700, 5);
+    const hF = r._humanoids['aFront'];
+    check('B front rig captures forage_fridge',
+      !!hF?.activityAnchor && hF.activityAnchor.furnitureId === FRIDGE.id && hF.act > 0.8,
+      `anchor=${hF?.activityAnchor?.furnitureId} act=${hF?.act?.toFixed(2)}`);
+    // The stand point it eases to must be on the FRONT side of the piece.
+    const a = hF.activityAnchor;
+    const sx = a.x + Math.sin(a.facing) * a.standOff, sz = a.z + Math.cos(a.facing) * a.standOff;
+    // scene → world (the _w mirror): wx = fw/2 − sx, wy = sz + fd/2.
+    const swx = FW / 2 - sx, swy = sz + FD / 2;
+    const f = front(FRIDGE.rotation);
+    const dot = (swx - FRIDGE.x) * f.x + (swy - FRIDGE.y) * f.y;
+    check('B stand point is in FRONT of the piece', dot > 0,
+      `stand=(${Math.round(swx)},${Math.round(swy)}) dot=${Math.round(dot)}`);
+
+    reset();
+    hold('aBack', FRIDGE.x, FRIDGE.y + 700, 5);
+    const hB = r._humanoids['aBack'];
+    check('B rig BEHIND never captures the anchor',
+      !hB?.activityAnchor && (hB?.act ?? 0) < 0.02,
+      `anchor=${hB?.activityAnchor?.furnitureId} act=${hB?.act?.toFixed(2)}`);
+  }
+
+  // ── C. Symmetric piece (plant, frontArrow:false) stays RADIAL ────────────
+  {
+    reset();
+    hold('pFront', PLANT.x, PLANT.y - 420, 5);
+    const hF = r._humanoids['pFront'];
+    check('C plant captures from the front', hF?.activityAnchor?.furnitureId === PLANT.id,
+      `anchor=${hF?.activityAnchor?.furnitureId}`);
+    reset();
+    hold('pBack', PLANT.x, PLANT.y + 420, 5);
+    const hB = r._humanoids['pBack'];
+    check('C plant ALSO captures from behind (symmetric)',
+      hB?.activityAnchor?.furnitureId === PLANT.id, `anchor=${hB?.activityAnchor?.furnitureId}`);
+    // And the anchor carries no front normal at all.
+    const pa = r._activityAnchors.find(x => x.furnitureId === PLANT.id);
+    const fa = r._activityAnchors.find(x => x.furnitureId === FRIDGE.id);
+    check('C symmetric anchor has no front normal', pa && pa.frontNx === null && pa.frontNz === null);
+    check('C oriented anchor HAS a front normal', fa && fa.frontNx !== null && fa.frontNz !== null,
+      `fn=(${fa?.frontNx?.toFixed(2)},${fa?.frontNz?.toFixed(2)})`);
+  }
+
+  // ── D. AI interaction goal lands in the item's front halfspace ───────────
+  {
+    reset();
+    const f = front(FRIDGE.rotation);
+    const ITEM = { id: 'F' + FRIDGE.id, x: FRIDGE.x, y: FRIDGE.y, ctrl: 'media', fkind: 'fridge',
+                   bound: false, on: false, fnx: f.x, fny: f.y };
+    const PLAIN = { id: 'Sa', x: 6000, y: 1500, ctrl: 'switch', bound: false, on: false };
+    const aiCtx = Object.assign({}, ctx, { interactive: [ITEM], avatarInteract: true });
+    r.setInteractRng(() => 0);
+    r._itemInteractAt = {};
+    const KEY = 'ai_x';
+    // Spawn the AI rig well in front of the fridge so its region/loop match.
+    step([{ key: KEY, x: 4000, y: 1200, color: 0x4fc3f7, ai: true }], aiCtx);
+    const ai = r._aiState[KEY];
+    ai.nextInteractAt = 0;
+    r._aiPickGoal(ai);
+    check('D targets the oriented device', ai.interactId === ITEM.id, `id=${ai.interactId}`);
+    const gd = (ai.goalX - ITEM.x) * f.x + (ai.goalY - ITEM.y) * f.y;
+    check('D goal is in the FRONT halfspace', gd > 0,
+      `goal=(${Math.round(ai.goalX)},${Math.round(ai.goalY)}) dot=${Math.round(gd)}`);
+    check('D reach target stays the DEVICE itself',
+      ai.interactX === ITEM.x && ai.interactY === ITEM.y, `(${ai.interactX},${ai.interactY})`);
+    // A device with no front normal keeps the plain centre goal (radial).
+    const plainCtx = Object.assign({}, ctx, { interactive: [PLAIN], avatarInteract: true });
+    r._itemInteractAt = {}; ai.nextInteractAt = 0;
+    step([{ key: KEY, x: 6000, y: 2600, color: 0x4fc3f7, ai: true }], plainCtx);
+    r._aiPickGoal(ai);
+    check('D un-oriented device still targeted radially', ai.interactId === PLAIN.id, `id=${ai.interactId}`);
+  }
+
+  // ── E. Fire gate — the toggle only fires from the front ──────────────────
+  {
+    const f = front(FRIDGE.rotation);
+    const ITEM = { id: 'F' + FRIDGE.id, x: FRIDGE.x, y: FRIDGE.y, ctrl: 'media', fkind: 'fridge',
+                   bound: false, on: false, fnx: f.x, fny: f.y };
+    const aiCtx = Object.assign({}, ctx, { interactive: [ITEM], avatarInteract: true });
+    const runFire = (rigX, rigY) => {
+      reset();
+      const fired = [];
+      r.onAvatarInteract((id) => fired.push(id));
+      r._itemInteractAt = {};
+      const KEY = 'ai_f';
+      step([{ key: KEY, x: rigX, y: rigY, color: 0x4fc3f7, ai: true }], aiCtx);
+      const ai = r._aiState[KEY];
+      // Force the arrival branch: the rig IS at the device, holding the dwell.
+      ai.x = rigX; ai.y = rigY; ai.path = null; ai.state = 'idle';
+      ai.interactId = ITEM.id; ai.interactX = ITEM.x; ai.interactY = ITEM.y;
+      ai.interactT = 0; ai.interactFired = false;
+      for (let i = 0; i < secs(1.0); i++) {
+        step([{ key: KEY, x: ai.x, y: ai.y, color: 0x4fc3f7, ai: true }], aiCtx);
+        if (ai.interactFired) break;
+      }
+      return { fired, ai };
+    };
+    const inFront = runFire(FRIDGE.x, FRIDGE.y - 900);
+    check('E fires from the front', inFront.fired.length === 1 && inFront.fired[0] === ITEM.id,
+      `fired=${JSON.stringify(inFront.fired)}`);
+    const behind = runFire(FRIDGE.x, FRIDGE.y + 900);
+    check('E never fires from behind', behind.fired.length === 0, `fired=${JSON.stringify(behind.fired)}`);
+    check('E behind still arms the cooldowns (no retry storm)',
+      typeof r._itemInteractAt[ITEM.id] === 'number' && behind.ai.nextInteractAt > 0,
+      `item=${r._itemInteractAt[ITEM.id]} rig=${behind.ai.nextInteractAt}`);
+    r.onAvatarInteract(null);
+  }
+
+  // ── F. tend_plant pose — pelvis still, working arm moving ────────────────
+  // The old pose animated the ROOT PITCH (±0.05 rad at 0.5 Hz) with both arms
+  // frozen, so the PELVIS swung ~±40 mm and nothing else moved. The new pose
+  // holds the lean constant and drives one shoulder/elbow instead.
+  const posePelvisArm = (key, x, y, wantActivity) => {
+    reset();
+    hold(key, x, y, 6);                       // settle + engage
+    const h = r._humanoids[key];
+    const hips = [], arm = [];
+    for (let i = 0; i < secs(5); i++) {       // ≥ 1 full cycle of any pose LFO
+      step([{ key, x, y, color: 0x4fc3f7 }]);
+      hips.push(wpos(h.leftHip));
+      arm.push(handPos(h));
+    }
+    return {
+      activity: h.activity, act: h.act,
+      hipX: range(hips, 'x'), hipY: range(hips, 'y'), hipZ: range(hips, 'z'),
+      armX: range(arm, 'x'), armY: range(arm, 'y'), armZ: range(arm, 'z'),
+    };
+  };
+  {
+    const m = posePelvisArm('poseP', PLANT.x, PLANT.y - 420, 'tend_plant');
+    check('F engaged tend_plant', m.activity === 'tend_plant' && m.act > 0.95,
+      `activity=${m.activity} act=${m.act.toFixed(2)}`);
+    const hipMove = Math.max(m.hipX, m.hipY, m.hipZ);
+    check('F pelvis does NOT oscillate', hipMove < 6,
+      `hip travel ${hipMove.toFixed(2)}mm (x${m.hipX.toFixed(2)} y${m.hipY.toFixed(2)} z${m.hipZ.toFixed(2)})`);
+    const armMove = Math.max(m.armX, m.armY, m.armZ);
+    check('F the working arm DOES move', armMove > 40, `arm travel ${armMove.toFixed(1)}mm`);
+    check('F arm motion dominates hip motion', armMove > hipMove * 8,
+      `arm=${armMove.toFixed(1)} hip=${hipMove.toFixed(2)}`);
+  }
+
+  // ── G. browse_bookshelf — same pin (its lean was already static) ─────────
+  {
+    const m = posePelvisArm('poseB', SHELF.x, SHELF.y - 600, 'browse_bookshelf');
+    check('G engaged browse_bookshelf', m.activity === 'browse_bookshelf' && m.act > 0.95,
+      `activity=${m.activity} act=${m.act.toFixed(2)}`);
+    const hipMove = Math.max(m.hipX, m.hipY, m.hipZ);
+    check('G pelvis does NOT oscillate', hipMove < 6, `hip travel ${hipMove.toFixed(2)}mm`);
+    check('G the reading arm DOES move', Math.max(m.armX, m.armY, m.armZ) > 20,
+      `arm travel ${Math.max(m.armX, m.armY, m.armZ).toFixed(1)}mm`);
+  }
+
+  performance.now = realNow;
+  const passed = results.filter(x => x.pass).length;
+  const total = results.length;
+  const fails = results.filter(x => !x.pass).map(x => `${x.name} [${x.extra}]`);
+  window.__RESULT__ = { passed, total, results };
+  document.title = `ORIENT ${passed === total ? 'PASS' : 'FAIL'} ${passed}/${total}` +
+    (fails.length ? ` | FAILS: ${fails.join(' ; ')}` : '');
+</script>
