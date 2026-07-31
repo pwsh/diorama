@@ -582,6 +582,49 @@
         rec.alphas.includes(0.45) && rec.strokes.includes(CR.FLIGHT_BEACON_COLORS.ladd));
       p.flightsNow = [];
 
+      // ── 11a-1b. 2D banded speed echo (FlightsConfig.speedViz) ─────────────
+      // The plan view echoes the 3D band language minimally: nothing at band 1,
+      // one dash at band 2, two at band 3, a gradient tail stroke at 4–5. It
+      // shares flightSpeedBand with the renderer, so a contrail and a pair of
+      // dashes can never describe the same aircraft.
+      section('2D banded speed echo');
+      // Canvas re-serializes a colour string (rgba gains spaces), so match the
+      // dash stroke by pattern rather than by the literal the source wrote.
+      const DASH = /^rgba\(203,\s*213,\s*225/;
+      const dashes = () => rec.strokes.filter(s => DASH.test(s)).length;
+      const tails = () => rec.strokes.filter(s => /CanvasGradient/.test(s)).length;
+      const at2d = (gsKt, extra = {}) => {
+        p.flightsNow = [fpOf({ hex: 'spd001', callsign: 'SPD1', gsKt,
+          lat: 40.05, lon: -75.05, ...extra })];
+        draw2d();
+      };
+      p.store.flights = { enabled: true, source: 'cloud', iss: false };
+      at2d(20, { category: 'A7' });                    // 37 km/h — hover
+      ok('2D band 1 draws no speed echo (the absence is the cue)',
+        dashes() === 0 && tails() === 0, `${dashes()} dashes, ${tails()} tails`);
+      at2d(60);                                        // 111 km/h
+      ok('2D band 2 draws exactly one dash', dashes() === 1, String(dashes()));
+      at2d(150);                                       // 278 km/h
+      ok('2D band 3 draws two dashes', dashes() === 2, String(dashes()));
+      at2d(300);                                       // 556 km/h
+      ok('2D band 4 draws a gradient tail stroke instead of dashes',
+        tails() === 1 && dashes() === 0, `${dashes()} dashes, ${tails()} tails`);
+      at2d(450);                                       // 833 km/h
+      ok('2D band 5 draws the tail too', tails() === 1, String(tails()));
+      // A speed-less aircraft falls back through the SAME archetype table the
+      // renderer uses, so the two views cannot disagree.
+      at2d(null, { category: 'A7' });
+      ok('2D falls back to the archetype band when the feed carries no speed',
+        dashes() === 0 && tails() === 0, `${dashes()}/${tails()}`);
+      at2d(null, { typeCode: 'B738' });
+      ok('…and a jet with no speed still reads as fast', tails() === 1, String(tails()));
+      p.store.flights = { enabled: true, source: 'cloud', iss: false, speedViz: false };
+      at2d(450);
+      ok('speedViz:false draws no echo at all',
+        dashes() === 0 && tails() === 0, `${dashes()}/${tails()}`);
+      p.store.flights = { enabled: true, source: 'cloud', iss: false };
+      p.flightsNow = [];
+
       // ── 11a-2. 2D glow rules (docs/research/flight-glow-rules.md §5) ───────
       // The 2D ring reads the SAME pure resolver + envelope the 3D rigs do, so
       // a rule can never colour one view and not the other. `performance.now`
@@ -912,6 +955,48 @@
         numFor('Radius (nm)').value, String(p2.store.flights.radiusNm ?? 15));
       eq('…and leaves modelScale alone', p2.store.flights.modelScale, undefined);
       await typeIn(numFor('Draw radius (m)'), 300);
+
+      // Height scale × — the INDEPENDENT vertical multiplier, right beside the
+      // draw radius (the pair a user reaches for together: "farther" vs "lower").
+      const hsIn = numFor('Height scale ×');
+      ok('“Height scale ×” input rendered', !!hsIn);
+      eq('height-scale input shows the default 1', hsIn && hsIn.value, '1');
+      await typeIn(hsIn, 0.5);
+      eq('typing a height scale writes the store', p2.store.flights.verticalScale, 0.5);
+      eq('…and the input reflects it', numFor('Height scale ×').value, '0.5');
+      await typeIn(numFor('Height scale ×'), 9);
+      eq('an out-of-range height scale is clamped to 2', p2.store.flights.verticalScale, 2);
+      await typeIn(numFor('Height scale ×'), 0.01);
+      eq('…and a too-small one to 0.2', p2.store.flights.verticalScale, 0.2);
+      await typeIn(numFor('Height scale ×'), 1);
+      eq('back to 1 clears the field', p2.store.flights.verticalScale, undefined);
+      eq('…and the input falls back to the default', numFor('Height scale ×').value, '1');
+      // The two shell knobs are genuinely independent — editing one must not
+      // touch the other (that independence IS the feature).
+      await typeIn(numFor('Height scale ×'), 0.6);
+      eq('editing the height scale leaves the draw radius alone',
+        p2.store.flights.shellRadiusM, undefined);
+      await typeIn(numFor('Draw radius (m)'), 500);
+      eq('editing the draw radius leaves the height scale alone',
+        p2.store.flights.verticalScale, 0.6);
+      await typeIn(numFor('Draw radius (m)'), 300);
+      await typeIn(numFor('Height scale ×'), 1);
+
+      // Speed effects — an opt-OUT checkbox in the labels/beacons group.
+      const svCb = cbFor('Speed effects');
+      ok('“Speed effects” checkbox rendered', !!svCb);
+      ok('speed effects default to ON (absent = on)',
+        svCb.checked === true && p2.store.flights.speedViz === undefined);
+      await flip(svCb, false);
+      eq('unchecking writes speedViz false', p2.store.flights.speedViz, false);
+      ok('…and the checkbox reflects it', cbFor('Speed effects').checked === false);
+      await flip(cbFor('Speed effects'), true);
+      eq('re-checking writes speedViz true', p2.store.flights.speedViz, true);
+      // It is independent of the beacon master gate it sits beside.
+      await flip(cbFor('Status beacons'), false);
+      ok('turning beacons off leaves speed effects on',
+        p2.store.flights.beacons === false && p2.store.flights.speedViz === true);
+      await flip(cbFor('Status beacons'), true);
 
       // ── 12a. Glow rules editor (flight-glow-rules.md §6.4) ─────────────────
       // Collapsed summary rows + an ✎-expanded criteria form, every write going

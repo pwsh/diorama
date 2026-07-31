@@ -63,6 +63,7 @@ import { normalizeAircraftList, flightBearingDistance, MAX_AIRCRAFT,
          sanitizeFlightGlowRules, FLIGHTS_DEFAULT_RADIUS_NM,
          FLIGHT_SHELL_DEFAULT_RADIUS_M, FLIGHT_SHELL_MIN_RADIUS_M,
          FLIGHT_SHELL_MAX_RADIUS_M,
+         flightVerticalScale, FLIGHT_VSCALE_DEFAULT,
          type FlightPoint, type IssNow } from './flights.js';
 import { fetchLocalAircraft, fetchAirplanesLive, fetchIssNow } from './adsb-sources.js';
 // The ONE satellite alt/az routine (the renderer's sky uses the same function —
@@ -5512,6 +5513,15 @@ export class Planner extends EventTarget {
         : FLIGHT_SHELL_DEFAULT_RADIUS_M;
       this.store.flights.shellRadiusM =
         n === FLIGHT_SHELL_DEFAULT_RADIUS_M ? undefined : n;
+    }
+    // Vertical (height) scale: the SAME discipline again — clamp 0.2..2 through
+    // the pure resolver both renderers use, and normalize exactly 1 (or anything
+    // unusable) back to undefined so the stored config stays minimal and the
+    // default path is byte-identical.
+    const vs = this.store.flights.verticalScale;
+    if (vs !== undefined) {
+      const n = flightVerticalScale(vs);
+      this.store.flights.verticalScale = n === FLIGHT_VSCALE_DEFAULT ? undefined : n;
     }
     // Same discipline for the user glow rules (docs/research/flight-glow-rules.md
     // §6.3): unknown patterns / unusable colours drop the rule, numeric criteria

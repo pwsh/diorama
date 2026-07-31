@@ -1370,6 +1370,20 @@ export interface FlightsConfig {
   // apparent sizes are unchanged. `setFlights` normalizes exactly-300 back to
   // undefined (the modelScale idiom).
   shellRadiusM?: number;
+  // Display-HEIGHT multiplier, deliberately INDEPENDENT of shellRadiusM
+  // (default 1, clamp 0.2..2 — FLIGHT_VSCALE_* / flightVerticalScale in
+  // src/flights.ts owns the resolution + clamp). Composed at the single place
+  // display height is composed (`flightDisplayAltitudeMm`), AFTER the
+  // elevation-true cap and BEFORE the ABSOLUTE clearMm property-clearance
+  // floor — so lowering high-altitude traffic toward the horizon never brings
+  // it horizontally closer and can never drop an aircraft onto the house.
+  // `setFlights` normalizes exactly-1 back to undefined (the modelScale idiom).
+  verticalScale?: number;
+  // Banded visual speed indicator: trails / contrails / rotor blur / motion
+  // lines / afterburner + ghost multiples, keyed to the aircraft's ground-speed
+  // band (flightSpeedBand in src/flights.ts, 5 bands with hysteresis). ABSENT =
+  // ON; false builds none of it and costs nothing per frame.
+  speedViz?: boolean;
   // Towed banners on small piston singles with a callsign (the bg tow-plane
   // idiom). Charming but busy over a dense feed — ABSENT = ON (today's
   // behavior); false swaps those aircraft back onto the ordinary label plate.

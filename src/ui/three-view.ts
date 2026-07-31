@@ -1810,6 +1810,15 @@ export class ThreeView extends LitElement {
                           // (already in _keyFlights) covers an edit; no new
                           // dirty-key input.
                           shellMm: flightShellMm(flCfg?.shellRadiusM),
+                          // Display-HEIGHT multiplier + the banded speed
+                          // visualisation. Both config-path, so configRev —
+                          // already in _keyFlights — covers an edit; no new
+                          // dirty-key input. A live rig EASES onto a changed
+                          // height scale (the poll-correction path), and the
+                          // speed bands are resolved renderer-side at POLL
+                          // cadence, never per frame.
+                          verticalScale: flCfg?.verticalScale,
+                          speedViz: flCfg?.speedViz,
                           // User glow rules (docs/research/flight-glow-rules.md).
                           // Config-path like every other opt here, so configRev
                           // — already in the key — covers an edit; no new

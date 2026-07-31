@@ -1572,6 +1572,43 @@
         p.setFlights(f => { f.radiusNm = 34; });
         ok('11q: an unrelated setFlights leaves shellRadiusM intact',
           p.store.flights.shellRadiusM === 450, String(p.store.flights.shellRadiusM));
+        // verticalScale — the SAME store-boundary discipline once more (clamp
+        // 0.2..2 here, exactly-1 clears to undefined).
+        ok('11q: verticalScale absent by default',
+          p.store.flights.verticalScale === undefined, String(p.store.flights.verticalScale));
+        p.setFlights(f => { f.verticalScale = 0.5; });
+        ok('11q: setFlights keeps an in-range height scale',
+          p.store.flights.verticalScale === 0.5, String(p.store.flights.verticalScale));
+        p.setFlights(f => { f.verticalScale = 0.01; });
+        ok('11q: setFlights clamps a too-small height scale up to 0.2',
+          p.store.flights.verticalScale === 0.2, String(p.store.flights.verticalScale));
+        p.setFlights(f => { f.verticalScale = 9; });
+        ok('11q: setFlights clamps a too-large height scale down to 2',
+          p.store.flights.verticalScale === 2, String(p.store.flights.verticalScale));
+        p.setFlights(f => { f.verticalScale = 1; });
+        ok('11q: exactly 1 height scale normalizes to undefined',
+          p.store.flights.verticalScale === undefined, String(p.store.flights.verticalScale));
+        p.setFlights(f => { f.verticalScale = NaN; });
+        ok('11q: a non-finite height scale falls back to the default (undefined)',
+          p.store.flights.verticalScale === undefined, String(p.store.flights.verticalScale));
+        p.setFlights(f => { f.verticalScale = -2; });
+        ok('11q: a negative height scale falls back to the default (undefined)',
+          p.store.flights.verticalScale === undefined, String(p.store.flights.verticalScale));
+        p.setFlights(f => { f.verticalScale = 0.6; });
+        p.setFlights(f => { f.radiusNm = 35; });
+        ok('11q: an unrelated setFlights leaves verticalScale intact',
+          p.store.flights.verticalScale === 0.6, String(p.store.flights.verticalScale));
+        p.setFlights(f => { f.verticalScale = undefined; });
+        // speedViz is a plain opt-out boolean — no sanitizer, so the only
+        // contract is that it round-trips and that absent means ON.
+        ok('11q: speedViz absent by default',
+          p.store.flights.speedViz === undefined, String(p.store.flights.speedViz));
+        p.setFlights(f => { f.speedViz = false; });
+        ok('11q: speedViz round-trips false',
+          p.store.flights.speedViz === false, String(p.store.flights.speedViz));
+        p.setFlights(f => { f.speedViz = true; });
+        ok('11q: speedViz round-trips true',
+          p.store.flights.speedViz === true, String(p.store.flights.speedViz));
         p.setFlights(f => { f.beacons = false; f.privacyDim = false; });
         await p.saveConfigNow();
         const saved = stub.peek('diorama-cfg-default');
@@ -2483,6 +2520,226 @@
         JSON.stringify(S(once)) === JSON.stringify(once), JSON.stringify(once));
       ok('25: the sanitized shape is JSON-round-trippable (store-safe)',
         JSON.stringify(S(JSON.parse(JSON.stringify(once)))) === JSON.stringify(once));
+    }
+
+    // ── 26. Banded speed indicator (flightSpeedBand) ─────────────────────────
+    // Five bands over 60 / 200 / 450 / 700 km/h with ±15 km/h hysteresis, plus
+    // the archetype fallback for a feed carrying no ground speed.
+    {
+      const B = F.flightSpeedBand;
+      ok('26: thresholds are the pinned 60/200/450/700',
+        JSON.stringify(Array.from(F.FLIGHT_SPEED_THRESHOLDS_KMH)) === '[60,200,450,700]',
+        JSON.stringify(Array.from(F.FLIGHT_SPEED_THRESHOLDS_KMH)));
+      ok('26: hysteresis margin is 15 km/h', F.FLIGHT_BAND_HYSTERESIS_KMH === 15);
+
+      // Stateless ladder — every band, and both sides of every edge.
+      ok('26: 0 km/h → band 1', B(0) === 1);
+      ok('26: 59.9 → band 1', B(59.9) === 1);
+      ok('26: exactly 60 → band 2 (edge is inclusive-low)', B(60) === 2);
+      ok('26: 199.9 → band 2', B(199.9) === 2);
+      ok('26: exactly 200 → band 3', B(200) === 3);
+      ok('26: 449.9 → band 3', B(449.9) === 3);
+      ok('26: exactly 450 → band 4', B(450) === 4);
+      ok('26: 699.9 → band 4', B(699.9) === 4);
+      ok('26: exactly 700 → band 5', B(700) === 5);
+      ok('26: 2000 → band 5 (saturates)', B(2000) === 5);
+
+      // Hysteresis UP: leaving a band upward needs the edge + 15.
+      ok('26: hysteresis up — 205 with prev 2 holds band 2', B(205, 2) === 2);
+      ok('26: hysteresis up — 214.9 with prev 2 still holds', B(214.9, 2) === 2);
+      ok('26: hysteresis up — 215 with prev 2 advances to 3', B(215, 2) === 3);
+      ok('26: hysteresis up — 70 with prev 1 holds band 1', B(70, 1) === 1);
+      ok('26: hysteresis up — 75 with prev 1 advances to 2', B(75, 1) === 2);
+      ok('26: hysteresis up — 710 with prev 4 holds band 4', B(710, 4) === 4);
+      ok('26: hysteresis up — 715 with prev 4 advances to 5', B(715, 4) === 5);
+
+      // Hysteresis DOWN: dropping out of a band needs its lower edge − 15.
+      ok('26: hysteresis down — 195 with prev 3 holds band 3', B(195, 3) === 3);
+      ok('26: hysteresis down — 185.1 with prev 3 still holds', B(185.1, 3) === 3);
+      ok('26: hysteresis down — 185 with prev 3 drops to 2', B(185, 3) === 2);
+      ok('26: hysteresis down — 690 with prev 5 holds band 5', B(690, 5) === 5);
+      ok('26: hysteresis down — 685 with prev 5 drops to 4', B(685, 5) === 4);
+      ok('26: hysteresis down — 50 with prev 2 holds band 2', B(50, 2) === 2);
+      ok('26: hysteresis down — 45 with prev 2 drops to 1', B(45, 2) === 1);
+
+      // A band-5 rig has no upper edge, a band-1 rig no lower one — neither
+      // branch may throw or wander.
+      ok('26: prev 5 cannot advance further', B(5000, 5) === 5);
+      ok('26: prev 1 cannot drop further', B(0, 1) === 1);
+      // Same band in, same band out — the guard that makes this a rebuild key.
+      ok('26: prev equal to the raw band is idempotent',
+        [1, 2, 3, 4, 5].every(b => B([30, 120, 300, 600, 900][b - 1], b) === b));
+      // A big jump crosses several bands at once (no stepping).
+      ok('26: a jump from band 1 to band 5 resolves in one step', B(900, 1) === 5);
+      ok('26: a jump from band 5 to band 1 resolves in one step', B(10, 5) === 1);
+      // Hysteresis cannot oscillate: a value inside the dead band round-trips.
+      ok('26: 205 km/h is stable under repeated resolution from either side',
+        B(205, B(205, 2)) === 2 && B(205, B(205, 3)) === 3);
+
+      // Fallback: no usable speed → the archetype's regime.
+      ok('26: null speed + heli → band 1', B(null, null, 'heli') === 1);
+      ok('26: null speed + ga-high → band 2', B(null, null, 'ga-high') === 2);
+      ok('26: null speed + ga-low → band 2', B(null, null, 'ga-low') === 2);
+      ok('26: null speed + turboprop → band 3', B(null, null, 'turboprop') === 3);
+      ok('26: null speed + twin-prop → band 3', B(null, null, 'twin-prop') === 3);
+      ok('26: null speed + narrowbody → band 4', B(null, null, 'narrowbody') === 4);
+      ok('26: null speed + widebody → band 4', B(null, null, 'widebody') === 4);
+      ok('26: null speed + bizjet → band 4', B(null, null, 'bizjet') === 4);
+      ok('26: null speed + unknown archetype → the narrowbody default (4)',
+        B(null, null, 'not-an-archetype') === 4 && B(null) === 4);
+      ok('26: undefined / NaN / negative speed all take the fallback',
+        B(undefined, null, 'heli') === 1 && B(NaN, null, 'heli') === 1
+        && B(-5, null, 'heli') === 1);
+      ok('26: a garbage-typed speed takes the fallback', B('fast', null, 'heli') === 1);
+      ok('26: the fallback IGNORES prevBand (it cannot oscillate, so it settles)',
+        B(null, 5, 'heli') === 1);
+      ok('26: every archetype in the table maps to a real band',
+        Object.values(F.FLIGHT_BAND_FALLBACK).every(b => b >= 1 && b <= 5));
+
+      // FlightPoint convenience — knots → km/h through the SAME resolver.
+      const fpS = (gsKt, extra = {}) => ({ hex: 'x', callsign: null, lat: 0, lon: 0,
+        altFt: 1000, gsKt, trackDeg: null, vertRateFpm: null, category: null,
+        seenPosS: null, military: false, reg: null, typeCode: null, typeDesc: null,
+        operator: null, emergency: null, squawk: null, interesting: false,
+        pia: false, ladd: false, ...extra });
+      ok('26: KT_TO_KMH is the exact nautical-mile conversion', F.KT_TO_KMH === 1.852);
+      ok('26: 20 kt (37 km/h) → band 1', F.flightPointSpeedBand(fpS(20)) === 1);
+      ok('26: 60 kt (111 km/h) → band 2', F.flightPointSpeedBand(fpS(60)) === 2);
+      ok('26: 150 kt (278 km/h) → band 3', F.flightPointSpeedBand(fpS(150)) === 3);
+      ok('26: 300 kt (556 km/h) → band 4', F.flightPointSpeedBand(fpS(300)) === 4);
+      ok('26: 450 kt (833 km/h) → band 5', F.flightPointSpeedBand(fpS(450)) === 5);
+      ok('26: a null gsKt takes the archetype fallback',
+        F.flightPointSpeedBand(fpS(null), null, 'heli') === 1);
+      ok('26: prevBand threads through the convenience wrapper',
+        F.flightPointSpeedBand(fpS(111), 3) === 3          // 205 km/h, inside the dead band
+        && F.flightPointSpeedBand(fpS(120), 2) === 3);      // 222 km/h, past 200 + 15
+
+      // Real-fixture sanity: the LAX capture's airborne traffic bands sensibly.
+      {
+        const live = F.normalizeAircraftList(LAX);
+        const bands = live.map(a =>
+          F.flightPointSpeedBand(a, null, AT.aircraftArchetype(a.typeCode, a.category)));
+        ok('26: every real aircraft resolves to a band in 1..5',
+          bands.every(b => Number.isInteger(b) && b >= 1 && b <= 5));
+        ok('26: the real capture spans more than one band',
+          new Set(bands).size >= 2, `bands=${[...new Set(bands)].sort().join(',')}`);
+      }
+    }
+
+    // ── 27. Independent vertical (height) scale ──────────────────────────────
+    // verticalScale multiplies the DISPLAY HEIGHT only, is applied BEFORE the
+    // absolute clearMm floor, and never touches the horizontal shell.
+    {
+      const CLEAR = F.FLIGHT_SHELL.clearMm;
+      ok('27: clamp window is 0.2..2 with default 1',
+        F.FLIGHT_VSCALE_MIN === 0.2 && F.FLIGHT_VSCALE_MAX === 2
+        && F.FLIGHT_VSCALE_DEFAULT === 1);
+      ok('27: flightVerticalScale clamps + defaults',
+        F.flightVerticalScale(0.05) === 0.2 && F.flightVerticalScale(9) === 2
+        && F.flightVerticalScale(undefined) === 1 && F.flightVerticalScale(NaN) === 1
+        && F.flightVerticalScale(-1) === 1 && F.flightVerticalScale(0.75) === 0.75);
+
+      // Byte-identity: the absent / explicit-1 paths reproduce the shipped
+      // composition EXACTLY, at the authored reference shell and at the default.
+      {
+        const grid = [];
+        for (const alt of [0, 800, 2000, 9000, 20000, 38000, 51000]) {
+          for (const d of [0.3, 2, 6.5, 10, 15, 30]) {
+            for (const shell of [F.FLIGHT_SHELL_BASE_MM, F.flightShellMm(), F.flightShellMm(1000)]) {
+              const r = F.compressRadiusMm(d, 15, shell);
+              grid.push([F.flightDisplayAltitudeMm(alt, d, r, shell),
+                         F.flightDisplayAltitudeMm(alt, d, r, shell, 1)]);
+            }
+          }
+        }
+        ok('27: an explicit verticalScale of 1 is byte-identical to omitting it',
+          grid.every(([a, b]) => a === b), `n=${grid.length}`);
+        ok('27: the FB reference wrapper is unaffected too',
+          FB.flightDisplayAltitudeMm(30000, 8, 40000) ===
+          F.flightDisplayAltitudeMm(30000, 8, 40000, F.FLIGHT_SHELL_BASE_MM, 1));
+      }
+
+      // 0.5 halves the composed height wherever the result stays ABOVE the floor.
+      {
+        const shell = F.flightShellMm();
+        let checked = 0, halved = 0;
+        for (const alt of [12000, 20000, 30000, 40000]) {
+          for (const d of [0.5, 1, 2, 4]) {
+            const r = F.compressRadiusMm(d, 15, shell);
+            const full = F.flightDisplayAltitudeMm(alt, d, r, shell, 1);
+            const half = F.flightDisplayAltitudeMm(alt, d, r, shell, 0.5);
+            if (full / 2 > CLEAR) { checked++; if (Math.abs(half - full / 2) < 1e-6) halved++; }
+          }
+        }
+        ok('27: 0.5 exactly halves dispY everywhere the floor is not engaged',
+          checked > 0 && halved === checked, `${halved}/${checked}`);
+      }
+
+      // The floor is ABSOLUTE and applied AFTER the scale: no scale, however
+      // small, can put an aircraft below the property-clearance height.
+      {
+        const shell = F.flightShellMm();
+        const r = F.compressRadiusMm(10, 15, shell);
+        const lows = [0.2, 0.3, 0.5, 0.75].map(v =>
+          F.flightDisplayAltitudeMm(35000, 10, r, shell, v));
+        ok('27: dispY never drops below clearMm at any scale',
+          lows.every(y => y >= CLEAR - 1e-9), lows.map(y => Math.round(y)).join(','));
+        ok('27: the floor is unscaled — an already-floored aircraft is unchanged by scaling',
+          F.flightDisplayAltitudeMm(400, 14, r, shell, 0.2) === CLEAR
+          && F.flightDisplayAltitudeMm(400, 14, r, shell, 1) === CLEAR);
+        ok('27: scaling is monotonic (never inverts the ordering of two scales)',
+          [0.2, 0.5, 1, 1.5, 2].every((v, i, a) => i === 0
+            || F.flightDisplayAltitudeMm(35000, 4, r, shell, v)
+               >= F.flightDisplayAltitudeMm(35000, 4, r, shell, a[i - 1])));
+        ok('27: 2 exactly doubles a height clear of the floor',
+          Math.abs(F.flightDisplayAltitudeMm(35000, 1, r, shell, 2)
+                   - 2 * F.flightDisplayAltitudeMm(35000, 1, r, shell, 1)) < 1e-6);
+      }
+
+      // The HORIZONTAL shell is untouched — the whole point of the feature.
+      {
+        const fp = { hex: 'v1', callsign: null, lat: 40.15, lon: -75.1, altFt: 33000,
+          gsKt: 420, trackDeg: 90, vertRateFpm: 0, category: 'A3', seenPosS: 0,
+          military: false, reg: null, typeCode: 'B738', typeDesc: null, operator: null,
+          emergency: null, squawk: null, interesting: false, pia: false, ladd: false };
+        const a = F.flightDisplayPos(fp, 40, -75, 0, 15, F.flightShellMm(), 1);
+        const b = F.flightDisplayPos(fp, 40, -75, 0, 15, F.flightShellMm(), 0.4);
+        ok('27: planX / planY / distNm / bearing are bit-identical across scales',
+          a.planX === b.planX && a.planY === b.planY
+          && a.distNm === b.distNm && a.bearingRad === b.bearingRad);
+        ok('27: only dispY moves, and downward', b.dispY < a.dispY,
+          `${Math.round(a.dispY)} → ${Math.round(b.dispY)}`);
+        ok('27: the display elevation ANGLE falls with the scale',
+          Math.atan2(b.dispY, Math.hypot(b.planX, b.planY))
+            < Math.atan2(a.dispY, Math.hypot(a.planX, a.planY)));
+        ok('27: flightDisplayPos with no scale argument equals scale 1',
+          JSON.stringify(F.flightDisplayPos(fp, 40, -75, 0, 15, F.flightShellMm()))
+            === JSON.stringify(a));
+      }
+
+      // Frustum reach: it must GROW with a scale above 1 (the band genuinely
+      // reaches higher) and must NOT shrink below it (the radial term dominates).
+      {
+        const shell = F.flightShellMm();
+        const base = F.flightShellReachMm(shell);
+        ok('27: reach at scale 1 equals the shipped reach',
+          F.flightShellReachMm(shell, 1) === base && F.flightShellReachMm(shell) === base);
+        ok('27: reach is unchanged for scales at or below 1',
+          F.flightShellReachMm(shell, 0.5) === base
+          && F.flightShellReachMm(shell, 0.2) === base);
+        ok('27: reach grows for a scale above 1',
+          F.flightShellReachMm(shell, 2) > base * 1.2,
+          `${Math.round(base)} → ${Math.round(F.flightShellReachMm(shell, 2))}`);
+        const s = shell / F.FLIGHT_SHELL_BASE_MM;
+        near('27: reach at scale 2 is hypot(rMax, 2·yMax) × the shell factor',
+          F.flightShellReachMm(shell, 2),
+          s * Math.hypot(F.FLIGHT_SHELL.rMaxMm, F.FLIGHT_SHELL.yMaxMm * 2), 1e-6);
+        ok('27: reach still bounds the tallest drawable point at max scale',
+          F.flightShellReachMm(F.flightShellMm(1000), 2)
+            >= F.flightDisplayAltitudeMm(45000, 0.1,
+                 F.compressRadiusMm(0.1, 15, F.flightShellMm(1000)),
+                 F.flightShellMm(1000), 2));
+      }
     }
   } catch (err) {
     ok('HARNESS threw', false, String(err && err.stack || err));

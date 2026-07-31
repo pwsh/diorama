@@ -304,6 +304,20 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Flight speed visualization + independent height scale**
+  (2026-07-31, user-requested ×2, Sonnet-researched then
+  Opus-implemented; unreleased — on main past v0.47.0). Five
+  research-backed speed bands (<60 hover: no trail + rotor blur +
+  hunt jitter; 60–200 short comet; 200–450 longer comet + motion
+  lines; 450–700 white contrail ribbon; 700+ afterburner + ghosts +
+  band-entry vapor flash) behind FlightsConfig.speedViz;
+  display-path ring-buffer trails (kink-free under poll
+  corrections); scene-level _flightVizGroup; 2D dash/tail echo via
+  the shared flightSpeedBand resolver (hysteresis + archetype
+  fallback). FlightsConfig.verticalScale (0.2–2) scales dispY only
+  — clearance floor absolute post-scale, horizontal untouched,
+  reach gains max(1, vs). flights 602→686, render 393→475, ui
+  271→295; terrain + neighborhood-render held.
 - **Sidebar polish wave 2** (2026-07-30, user-directed ×8; released in v0.47.0). Floor lifecycle (add/rename/resize/delete
   w/ named confirm, last-floor guarded) moved to Settings ▸ "Floor
   Plan" (data tab renamed, slug unchanged); size-lock UI removed

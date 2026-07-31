@@ -101,7 +101,9 @@ import {
   resolveFlightGlow, flightGlowFrame, sanitizeFlightGlowRules,
   flightFieldText, flightLabelLines, flightIdentifier,
   flightIdentitySuppressed, flightPrivacyDimmed,
+  flightPointSpeedBand, flightVerticalScale,
   type FlightPoint, type IssNow, type FlightGlowPattern, type FlightGlowRule,
+  type FlightSpeedBand,
 } from './flights.js';
 // aircraft-types.ts is likewise pure/zero-import (the same shared-chunk
 // discipline as flights.ts + avatars.ts) — the 8-archetype silhouette table.
@@ -800,6 +802,28 @@ interface FlightRig {
   spin: number;                     // accumulated prop/rotor angle
   fade: number;                     // 1 alive; ramps to 0 while dying, then disposed
   dying: boolean;
+  // ── Banded speed visualisation (flightSpeedBand) ─────────────────────────
+  // `speedBand` 0 = nothing built (feature off, or not yet resolved); 1..5 = the
+  // live band, and the ONE rebuild guard — the _syncFlightBeacon idiom, so a
+  // poll that resolves the same band touches nothing.
+  speedBand: FlightSpeedBand | 0;
+  viz: THREE.Group;                 // world-frame effects (trail/contrail), under _flightVizGroup
+  // Per-rig ring buffer of eased DISPLAY positions, allocated ONCE at rig build
+  // and refilled in place forever. Time-sampled (FLIGHT_TRAIL_DT), which is what
+  // makes trail LENGTH a speed cue rather than a frame-rate artifact.
+  trail: Float32Array;              // FLIGHT_TRAIL_SLOTS × (x,y,z)
+  trailHead: number;                // next slot to write
+  trailCount: number;               // samples held (≤ FLIGHT_TRAIL_SLOTS)
+  trailAcc: number;                 // seconds since the last sample
+  trailLine: THREE.Line | null;     // bands 2/3 — fading comet polyline
+  ribbon: THREE.Mesh | null;        // bands 4/5 — widening, fading contrail
+  propDiscs: THREE.Mesh[];          // bands 1/2 — rotor / prop blur discs
+  motionLines: THREE.Mesh[];        // band 3 — cartoon streaks behind the tail
+  burners: THREE.Mesh[];            // band 5 — additive afterburner strips
+  ghosts: THREE.Mesh[];             // band 5 — 2 faded silhouette multiples
+  vapor: THREE.Sprite | null;       // band 5 — one-shot vapor-cone flash
+  vaporT: number;                   // seconds remaining on that one-shot
+  vizPhase: number;                 // per-rig accumulator (NEVER the absolute clock)
 }
 // Re-derived here rather than imported so flights.ts stays zero-import; the
 // values are the same sphere/nm/degree constants it uses (asserted equal by
@@ -820,6 +844,48 @@ const FLIGHT_PITCH_MAX = 0.12;       // rad at ±6000 fpm — a hint, not a stun
 // four default colours — which are FLIGHT_DEFAULT_BEACON in flights.ts, and the
 // `flash` pattern's 1.2 Hz rate lives beside them in `flightGlowFrame`.
 const FLIGHT_PRIVACY_OPACITY = 0.45; // PIA/LADD courtesy dim (research §4.2)
+
+// ── Banded speed visualisation ────────────────────────────────────────────
+// One effect SET per band (flights.ts's flightSpeedBand owns the thresholds +
+// hysteresis). Everything here obeys the same four rules:
+//   • geometry is allocated ONCE per band change and refilled in place — the
+//     per-frame advance writes attribute buffers and opacities, never `new`s;
+//   • every material carries `fog:false` (an aircraft is a sky object past the
+//     weather FogExp2 falloff — the whole flight family's exemption) and
+//     `depthWrite:false` + `outlineSkip`;
+//   • effects draw at FLIGHT_VIZ_RENDER_ORDER, BELOW the label sprite and the
+//     status beacon (both default renderOrder 0), so a trail can never paint
+//     over the readable parts of a rig;
+//   • trail/contrail geometry lives in the rig's `viz` group, parented to the
+//     scene-level _flightVizGroup (which copies _flightsGroup's transform),
+//     because the model assembly carries the aircraft's yaw/pitch AND the
+//     distance-compensated scale, either of which would smear a world-space
+//     path — and because _flightsGroup is a RAYCAST root, where a trail has no
+//     business being a click target. Effects that genuinely belong to the
+//     airframe (blur disc, motion lines, burners, ghosts, vapor flash) are
+//     children of the assembly and ride it.
+const FLIGHT_TRAIL_SLOTS = 20;       // ring-buffer depth (≈3 s of history)
+const FLIGHT_TRAIL_DT = 0.15;        // s between samples — TIME-based on purpose
+const FLIGHT_TAIL_PTS: Readonly<Record<number, number>> = { 2: 4, 3: 8 };
+const FLIGHT_RIBBON_PTS = 12;        // contrail spine samples (→ 24 verts)
+const FLIGHT_VIZ_RENDER_ORDER = -2;
+const FLIGHT_VAPOR_S = 0.8;          // one-shot vapor-cone flash duration
+// Band 1 station-keeping wobble: a hovering rig has NO trail (the absence is the
+// cue), so a little drift + yaw hunt is what sells "holding position" instead of
+// "frozen". Applied to the DRAWN transform only — never to rig.cur*, which the
+// trail samples, so it can never feed back into the path.
+const FLIGHT_HOVER_BOB_MM = 60;
+const FLIGHT_HOVER_DRIFT_MM = 35;
+const FLIGHT_HOVER_YAW_RAD = 0.05;
+// Ribbon scratch — module-level like the two-handed-prop `_thp*` vectors, so the
+// per-frame refill allocates nothing.
+const _fvzP = new THREE.Vector3();
+const _fvzD = new THREE.Vector3();
+const _fvzV = new THREE.Vector3();
+const _fvzS = new THREE.Vector3();
+// Gathered spine points (oldest → newest). Sized for the LONGEST consumer, the
+// contrail; the 4/8-point comet tails use a prefix of it.
+const _fvzSpine = new Float32Array(FLIGHT_RIBBON_PTS * 3);
 // Airframes with enough flank + spine to carry TWO markings (operator broadside,
 // identification along the top). Everything not listed — the GA singles and the
 // helicopter — is a small airframe and keeps the single flank marking.
@@ -2027,6 +2093,11 @@ export class ThreeDRenderer {
   // clearTransientGroups (a floor switch re-anchors it on the next update
   // instead of tearing every rig down), only in destroy().
   private _flightsGroup = new THREE.Group();
+  // World-frame band effects (comet tails, contrails) — a SIBLING of the rig
+  // group, sharing its transform exactly. It is deliberately NOT nested under
+  // _flightsGroup: that group is a raycast root (an aircraft is clickable), and
+  // a trail must never be a click target or a child of the yawed/scaled rig.
+  private _flightVizGroup = new THREE.Group();
   private _flightRigs = new Map<string, FlightRig>();
   private _flightsOrigin: { lat: number; lon: number } | null = null;
   private _flightsTheta = 0;             // geo θ (true north → plan), radians
@@ -2048,6 +2119,15 @@ export class ThreeDRenderer {
   // similarity factor every flight-geometry call is scaled by. Stale-chunk
   // default = the same 300 m default flights.ts resolves for an absent config.
   private _flightShellMm = flightShellMm();
+  // FlightsConfig.verticalScale — the display-HEIGHT multiplier, composed only
+  // inside flightDisplayAltitudeMm (via _flightScenePos) so the horizontal shell
+  // is untouched. Stale-chunk default 1 = the shipped geometry exactly.
+  private _flightVerticalScale = 1;
+  // FlightsConfig.speedViz (absent = ON). False builds no band effects at all
+  // and makes _advanceFlightViz a single early-return.
+  private _flightsSpeedViz = true;
+  private _flightBlurTex: THREE.CanvasTexture | null = null;    // shared; freed in destroy()
+  private _flightBurnerTex: THREE.CanvasTexture | null = null;  // shared; freed in destroy()
   private _beaconGlowTex: THREE.CanvasTexture | null = null;   // shared; freed in destroy()
   private _v3flight = new THREE.Vector3();   // scratch — _advanceFlights allocates nothing
   // Scratch for _raycastFlightNear (screen-space aircraft pick): world pos,
@@ -2592,7 +2672,7 @@ export class ThreeDRenderer {
                     this._neighborhoodGroup,
                     this._transitGroup,
                     this._gpsGroup, this._compassGroup, this._weatherGroup, this._skyGroup,
-                    this._flightsGroup, this._issGroup,
+                    this._flightsGroup, this._flightVizGroup, this._issGroup,
                     this._bgTextGroup, this._pulseGroup, this._nowPlayingGroup);
 
     this._controls = new OrbitControls(this._camera, this._renderer.domElement);
@@ -5216,6 +5296,7 @@ export class ThreeDRenderer {
     // Live aircraft + the ISS ride their own layer (default on; the FEATURE is
     // opt-in via store.flights.enabled, so an absent flag leaks nothing).
     this._flightsGroup.visible = v.flights !== false;
+    this._flightVizGroup.visible = v.flights !== false;
     this._issGroup.visible = v.flights !== false;
     // A hidden shell must not hold the camera frustum open (and unhiding it must
     // re-widen immediately, before the next updateFlights).
@@ -13988,7 +14069,8 @@ export class ThreeDRenderer {
                 anchorScene: { x: number; z: number },
                 opts?: { labelFields?: string[]; beacons?: boolean; privacyDim?: boolean;
                          banners?: boolean; modelScale?: number;
-                         glowRules?: FlightGlowRule[]; shellMm?: number }): void {
+                         glowRules?: FlightGlowRule[]; shellMm?: number;
+                         verticalScale?: number; speedViz?: boolean }): void {
     this._flightsOrigin = origin;
     this._flightsTheta = isFinite(thetaRad) ? thetaRad : 0;
     this._flightsRadius = isFinite(radiusNm) && radiusNm > 0 ? radiusNm : FLIGHTS_DEFAULT_RADIUS_NM;
@@ -14012,6 +14094,13 @@ export class ThreeDRenderer {
     // even across a mixed-version module pair.
     this._flightShellMm = flightShellMm(opts?.shellMm != null
       ? opts.shellMm / 1000 : undefined);
+    // Height scale (FlightsConfig.verticalScale). Absent / garbage → 1. A LIVE
+    // rig picks the new factor up on the very next frame and EASES onto it —
+    // _flightScenePos recomputes the target height each tick and _advanceFlights
+    // glides cur* toward it, so a settings edit reads as a correction, never a
+    // jump cut (the poll-correction discipline, reused for free).
+    this._flightVerticalScale = flightVerticalScale(opts?.verticalScale);
+    this._flightsSpeedViz = opts?.speedViz !== false;
     // Anchor Y = the EFFECTIVE ground level, not the slab: the display shell
     // (including the FLIGHT_SHELL.clearMm property-clearance floor) is measured
     // from the GROUND, so an aircraft keeps a constant height above grade and
@@ -14020,6 +14109,9 @@ export class ThreeDRenderer {
     // re-run on every floor switch and on any configRev bump, both of which also
     // re-key updateFlights), so no extra plumbing is needed.
     this._flightsGroup.position.set(anchorScene?.x ?? 0, this._groundLevel, anchorScene?.z ?? 0);
+    // The effects layer shares the rig group's frame exactly — trail samples are
+    // stored in that frame, so the two must never drift apart.
+    this._flightVizGroup.position.copy(this._flightsGroup.position);
 
     const seen = new Set<string>();
     if (origin) {
@@ -14050,8 +14142,11 @@ export class ThreeDRenderer {
     // Scales with the user's shell radius: ≈342,383 mm at the 300 m default,
     // ≈1,141,275 mm at the 1,000 m maximum — both far inside CAM_FAR_CEIL
     // (13.5e6). Flights still deliberately do NOT raise controls.maxDistance.
+    // verticalScale > 1 genuinely raises the band above the authored corner, so
+    // it rides the reach too (flightShellReachMm takes max(1, vs) — lowering the
+    // band can never shrink the radius-dominated requirement).
     this._recordFrustumReq('flights',
-      live ? flightShellReachMm(this._flightShellMm) : null);
+      live ? flightShellReachMm(this._flightShellMm, this._flightVerticalScale) : null);
   }
 
   // Fold one poll fix into a live rig: real position + dead-reckoning rates +
@@ -14084,6 +14179,7 @@ export class ThreeDRenderer {
     }
     this._syncFlightLabel(rig, fp);
     this._syncFlightBeacon(rig, fp);
+    this._syncFlightSpeedViz(rig, fp);
   }
 
   // Privacy courtesy (research §4.2): the data source deliberately does NOT
@@ -14201,6 +14297,458 @@ export class ThreeDRenderer {
     g.fillStyle = grd; g.fillRect(0, 0, 64, 64);
     this._beaconGlowTex = new THREE.CanvasTexture(c);
     return this._beaconGlowTex;
+  }
+
+  // ── Banded speed visualisation ──────────────────────────────────────────
+  // Resolve this aircraft's speed band and, when it CHANGES, rebuild only the
+  // band-specific bits (the _syncFlightBeacon guard idiom — a poll that resolves
+  // the same band touches nothing). Runs at POLL cadence, never per frame;
+  // `flightSpeedBand`'s ±15 km/h hysteresis means an aircraft sitting on a
+  // threshold cannot rebuild its effect set several times a minute.
+  //
+  // The rig's CURRENT band is fed back in as `prevBand`, so the hysteresis is
+  // stateful exactly where state exists. The 2D canvas keeps none and asks
+  // statelessly — a dash count that flickers for one frame is invisible, a 3D
+  // rebuild is not.
+  private _syncFlightSpeedViz(rig: FlightRig, fp: FlightPoint): void {
+    if (!this._flightsSpeedViz) {
+      if (rig.speedBand !== 0) this._clearFlightViz(rig);
+      return;
+    }
+    const prev = rig.speedBand === 0 ? null : rig.speedBand;
+    const band = flightPointSpeedBand(fp, prev, rig.archetype);
+    if (band === rig.speedBand) return;
+    // The vapor-cone flash marks a TRANSITION into band 5, not the steady state
+    // — a rig that spawns already supersonic-ish (prev === null) never flashes.
+    const entered5 = band === 5 && prev !== null && prev < 5;
+    this._clearFlightViz(rig);
+    rig.speedBand = band;
+    this._buildFlightViz(rig, band);
+    if (entered5) this._startFlightVapor(rig);
+  }
+
+  // Build one band's effect set. Everything allocated here is allocated ONCE per
+  // band change; the per-frame advance only refills buffers and writes opacities.
+  private _buildFlightViz(rig: FlightRig, band: FlightSpeedBand): void {
+    const M = this._flightArchetypeMetrics(rig.archetype);
+    // Bands 1–2: the rotor / prop reads as a translucent blur disc rather than
+    // two visibly-spinning blades. Band 1 shows it strongly (a hovering machine
+    // IS its rotor disc); band 2 only hints at it.
+    if (band <= 2) this._buildFlightPropDiscs(rig, band === 1 ? 0.34 : 0.18);
+    // Band 1 deliberately gets NO trail: the ABSENCE is the hover cue (the
+    // station-keeping bob/yaw-hunt in _advanceFlights carries the rest).
+    const tailPts = FLIGHT_TAIL_PTS[band];
+    if (tailPts) this._buildFlightTrailLine(rig, tailPts);
+    if (band === 3) this._buildFlightMotionLines(rig, M);
+    // Band 4 REPLACES the comet tail with a proper contrail; band 5 keeps it and
+    // adds the burner + ghost multiples on top.
+    if (band >= 4) this._buildFlightRibbon(rig, M);
+    if (band === 5) {
+      this._buildFlightBurners(rig, M);
+      this._buildFlightGhosts(rig, M);
+    }
+  }
+
+  // Tear down every band-specific object, in BOTH frames (airframe-attached and
+  // world-frame). Shared CanvasTextures are never touched — Material.dispose()
+  // does not free maps, which is exactly what keeps _flightBlurTex /
+  // _flightBurnerTex / _beaconGlowTex renderer-lifetime.
+  private _clearFlightViz(rig: FlightRig): void {
+    const drop = (m: THREE.Mesh) => {
+      m.parent?.remove(m);
+      m.geometry.dispose();
+      const mat = m.material;
+      if (Array.isArray(mat)) mat.forEach(x => x.dispose()); else mat.dispose();
+    };
+    for (const m of rig.propDiscs) drop(m);
+    for (const m of rig.motionLines) drop(m);
+    for (const m of rig.burners) drop(m);
+    for (const m of rig.ghosts) drop(m);
+    rig.propDiscs.length = 0; rig.motionLines.length = 0;
+    rig.burners.length = 0; rig.ghosts.length = 0;
+    if (rig.vapor) {
+      rig.vapor.parent?.remove(rig.vapor);
+      (rig.vapor.material as THREE.SpriteMaterial).dispose();   // map is SHARED
+      rig.vapor = null;
+    }
+    rig.vaporT = 0;
+    if (rig.trailLine) {
+      rig.viz.remove(rig.trailLine);
+      rig.trailLine.geometry.dispose();
+      (rig.trailLine.material as THREE.Material).dispose();
+      rig.trailLine = null;
+    }
+    if (rig.ribbon) {
+      rig.viz.remove(rig.ribbon);
+      rig.ribbon.geometry.dispose();
+      (rig.ribbon.material as THREE.Material).dispose();
+      rig.ribbon = null;
+    }
+    rig.speedBand = 0;
+  }
+
+  // Rotor / propeller blur disc — a soft radial-gradient quad parented to the
+  // spinning prop group itself, so it needs no per-frame transform and its own
+  // rotation is invisible (the gradient is radially symmetric). The main rotor
+  // disc lies HORIZONTAL (the rotor turns about Y); a propeller disc lies in the
+  // XY plane like the blades it replaces.
+  private _buildFlightPropDiscs(rig: FlightRig, opacity: number): void {
+    for (const p of rig.props) {
+      const r = typeof p.userData?.propR === 'number' ? p.userData.propR as number : 0;
+      if (!(r > 0)) continue;
+      const disc = new THREE.Mesh(
+        new THREE.CircleGeometry(r, 24),
+        new THREE.MeshBasicMaterial({
+          map: this._flightBlurTexture(), color: 0xdfe7f0, transparent: true,
+          opacity, depthWrite: false, side: THREE.DoubleSide, fog: false,
+        }));
+      if (p.userData?.mainRotor) disc.rotation.x = -Math.PI / 2;
+      disc.renderOrder = FLIGHT_VIZ_RENDER_ORDER;
+      disc.userData.outlineSkip = true;
+      disc.userData.propBlur = true;
+      disc.userData.baseOpacity = opacity;
+      p.add(disc);
+      rig.propDiscs.push(disc);
+    }
+  }
+
+  // Comet tail (bands 2–3): a fading additive polyline over the display-position
+  // history. `vertexColors` + AdditiveBlending is how the per-point fade is
+  // expressed — a LineBasicMaterial has one opacity for the whole line, but an
+  // additive line's BRIGHTNESS ramp reads as an alpha ramp against any sky.
+  // frustumCulled off because the buffer is rewritten in place every frame and a
+  // stale bounding sphere would cull a perfectly visible tail.
+  private _buildFlightTrailLine(rig: FlightRig, pts: number): void {
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pts * 3), 3));
+    geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(pts * 3), 3));
+    geo.setDrawRange(0, 0);
+    const line = new THREE.Line(geo, new THREE.LineBasicMaterial({
+      vertexColors: true, transparent: true, opacity: 1,
+      blending: THREE.AdditiveBlending, depthWrite: false, fog: false,
+    }));
+    line.frustumCulled = false;
+    line.renderOrder = FLIGHT_VIZ_RENDER_ORDER;
+    line.userData.outlineSkip = true;
+    line.userData.flightTrail = true;
+    rig.viz.add(line);
+    rig.trailLine = line;
+  }
+
+  // Contrail (bands 4–5): a billboarded triangle strip over the same history,
+  // widening toward the tail and fading 0 → peak → 0 along its length. Indices
+  // are built once; the per-frame refill writes positions + vertex colours only.
+  private _buildFlightRibbon(rig: FlightRig, M: { fusHalfW: number }): void {
+    const N = FLIGHT_RIBBON_PTS;
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(N * 2 * 3), 3));
+    geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(N * 2 * 3), 3));
+    const idx = new Uint16Array((N - 1) * 6);
+    for (let i = 0; i < N - 1; i++) {
+      const a = i * 2, o = i * 6;
+      idx[o] = a; idx[o + 1] = a + 1; idx[o + 2] = a + 2;
+      idx[o + 3] = a + 1; idx[o + 4] = a + 3; idx[o + 5] = a + 2;
+    }
+    geo.setIndex(new THREE.BufferAttribute(idx, 1));
+    geo.setDrawRange(0, 0);
+    const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+      vertexColors: true, transparent: true, opacity: 0.55, side: THREE.DoubleSide,
+      blending: THREE.AdditiveBlending, depthWrite: false, fog: false,
+    }));
+    mesh.frustumCulled = false;
+    mesh.renderOrder = FLIGHT_VIZ_RENDER_ORDER;
+    mesh.userData.outlineSkip = true;
+    mesh.userData.flightContrail = true;
+    // Base half-widths at rig scale 1; the refill multiplies by the live display
+    // scale so a rim aircraft's contrail grows with its model.
+    mesh.userData.wNear = M.fusHalfW * 0.85;
+    mesh.userData.wFar = M.fusHalfW * 4.5;
+    rig.viz.add(mesh);
+    rig.ribbon = mesh;
+  }
+
+  // Cartoon motion lines (band 3): two thin additive strips flicking past the
+  // tailplane. Each carries its OWN material so the pair can flicker out of
+  // phase — the whole point of the effect is that it reads as hand-drawn.
+  private _buildFlightMotionLines(rig: FlightRig,
+                                  M: { fusHalfW: number; fusLen: number; idY: number }): void {
+    for (const sx of [-1, 1] as const) {
+      // Baked into the GEOMETRY (rotateX) rather than mesh.rotation, so the
+      // strip's axis can never depend on Euler order.
+      const geo = new THREE.PlaneGeometry(56, M.fusLen * 0.42);
+      geo.rotateX(Math.PI / 2);                    // length now runs along +Z (aft)
+      const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+        color: 0xcfe0f2, transparent: true, opacity: 0.45, side: THREE.DoubleSide,
+        blending: THREE.AdditiveBlending, depthWrite: false, fog: false,
+      }));
+      m.position.set(sx * (M.fusHalfW + 230), M.idY + 60, M.fusLen * 0.62);
+      m.renderOrder = FLIGHT_VIZ_RENDER_ORDER;
+      m.userData.outlineSkip = true;
+      m.userData.motionLine = true;
+      rig.asm.add(m);
+      rig.motionLines.push(m);
+    }
+  }
+
+  // Afterburner (band 5): a warm additive tapered strip behind each engine — the
+  // sun-glow-texture technique, as two CROSSED planes so it reads from any
+  // azimuth without a per-frame billboard. Both planes bake their orientation
+  // into the geometry (rotateX / rotateZ), so each is a plain identity-rotation
+  // mesh and the per-frame flicker is a single opacity write.
+  private _buildFlightBurners(rig: FlightRig,
+                              M: { fusHalfW: number; fusLen: number; idY: number }): void {
+    const pods: THREE.Object3D[] = [];
+    rig.asm.traverse(o => { if (o.userData?.nacelle) pods.push(o); });
+    const spots = pods.length
+      ? pods.slice(0, 2).map(p => ({ x: p.position.x, y: p.position.y, z: p.position.z + 300 }))
+      : [{ x: 0, y: M.idY, z: M.fusLen * 0.5 }];
+    const len = M.fusLen * 0.5, w = M.fusHalfW * 1.2;
+    for (const s of spots) {
+      for (const roll of [0, Math.PI / 2]) {
+        const geo = new THREE.PlaneGeometry(w, len);
+        geo.rotateX(Math.PI / 2);                  // length → +Z (trailing aft)
+        if (roll) geo.rotateZ(roll);               // the crossed partner
+        geo.translate(0, 0, len / 2);
+        const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+          map: this._flightBurnerTexture(), color: 0xffffff, transparent: true,
+          opacity: 0.8, side: THREE.DoubleSide, blending: THREE.AdditiveBlending,
+          depthWrite: false, fog: false,
+        }));
+        m.position.set(s.x, s.y, s.z);
+        m.renderOrder = FLIGHT_VIZ_RENDER_ORDER;
+        m.userData.outlineSkip = true;
+        m.userData.afterburner = true;
+        rig.asm.add(m);
+        rig.burners.push(m);
+      }
+    }
+  }
+
+  // Ghost multiples (band 5): two faded, simplified silhouette copies trailing
+  // the airframe. They are children of the ASSEMBLY at fixed +Z lags — local +Z
+  // is directly aft of the nose (−Z), which is the display path to within the
+  // aircraft's own turn rate, and being attached costs no per-frame transform.
+  // Band 5 is rare in a real feed, so the two extra draws are bounded by design.
+  private _buildFlightGhosts(rig: FlightRig,
+                             M: { fusHalfW: number; fusLen: number }): void {
+    const lag = [0.95, 1.8], op = [0.26, 0.14], sc = [0.94, 0.84];
+    for (let i = 0; i < 2; i++) {
+      const g = new THREE.Mesh(
+        new THREE.BoxGeometry(M.fusHalfW * 1.7, M.fusHalfW * 1.5, M.fusLen * 0.8),
+        new THREE.MeshBasicMaterial({
+          color: 0xb8c6d8, transparent: true, opacity: op[i],
+          depthWrite: false, fog: false,
+        }));
+      g.position.set(0, 0, M.fusLen * lag[i]);
+      g.scale.setScalar(sc[i]);
+      g.renderOrder = FLIGHT_VIZ_RENDER_ORDER;
+      g.userData.outlineSkip = true;
+      g.userData.flightGhost = true;
+      g.userData.baseOpacity = op[i];
+      rig.asm.add(g);
+      rig.ghosts.push(g);
+    }
+  }
+
+  // One-shot vapor-cone flash on ENTERING band 5 — a translucent white ellipsoid
+  // that spikes and decays over FLIGHT_VAPOR_S, then disposes itself. It marks
+  // the transition, so it must never re-arm while the rig simply STAYS fast.
+  private _startFlightVapor(rig: FlightRig): void {
+    const M = this._flightArchetypeMetrics(rig.archetype);
+    const spr = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: this._beaconGlowTexture(), color: 0xffffff, transparent: true,
+      opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending, fog: false,
+    }));
+    spr.position.set(0, 0, M.fusLen * 0.15);
+    spr.scale.set(M.fusHalfW * 5, M.fusHalfW * 3.4, 1);
+    spr.renderOrder = FLIGHT_VIZ_RENDER_ORDER;
+    spr.userData.outlineSkip = true;
+    spr.userData.sharedMap = true;              // _beaconGlowTex is renderer-lifetime
+    spr.userData.vaporFlash = true;
+    rig.asm.add(spr);
+    rig.vapor = spr;
+    rig.vaporT = FLIGHT_VAPOR_S;
+  }
+
+  // Shared soft radial disc for rotor / prop blur — built once, freed only in
+  // destroy(), like _blobTex / _beaconGlowTex. The bright rim at ~0.9 r is the
+  // blade-tip arc a real blurred disc shows.
+  private _flightBlurTexture(): THREE.CanvasTexture {
+    if (this._flightBlurTex) return this._flightBlurTex;
+    const c = document.createElement('canvas'); c.width = c.height = 64;
+    const g = c.getContext('2d')!;
+    const grd = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+    grd.addColorStop(0, 'rgba(255,255,255,0.30)');
+    grd.addColorStop(0.55, 'rgba(255,255,255,0.16)');
+    grd.addColorStop(0.88, 'rgba(255,255,255,0.34)');
+    grd.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = grd; g.fillRect(0, 0, 64, 64);
+    this._flightBlurTex = new THREE.CanvasTexture(c);
+    return this._flightBlurTex;
+  }
+
+  // Shared warm afterburner gradient: hot core at the NEAR (engine) end fading
+  // out aft, with soft lateral edges applied as an alpha mask. Canvas row 0 is
+  // v = 1 under three.js's default flipY, so the hot end is painted at the
+  // BOTTOM of the canvas, which is v = 0 — the end the geometry puts at z = 0.
+  private _flightBurnerTexture(): THREE.CanvasTexture {
+    if (this._flightBurnerTex) return this._flightBurnerTex;
+    const c = document.createElement('canvas'); c.width = 32; c.height = 64;
+    const g = c.getContext('2d')!;
+    const v = g.createLinearGradient(0, 64, 0, 0);        // bottom (hot) → top (cool)
+    v.addColorStop(0, 'rgba(255,246,214,0.95)');
+    v.addColorStop(0.2, 'rgba(255,196,96,0.75)');
+    v.addColorStop(0.55, 'rgba(255,126,48,0.35)');
+    v.addColorStop(1, 'rgba(255,90,30,0)');
+    g.fillStyle = v; g.fillRect(0, 0, 32, 64);
+    g.globalCompositeOperation = 'destination-in';        // soft lateral taper
+    const h = g.createLinearGradient(0, 0, 32, 0);
+    h.addColorStop(0, 'rgba(255,255,255,0)');
+    h.addColorStop(0.5, 'rgba(255,255,255,1)');
+    h.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = h; g.fillRect(0, 0, 32, 64);
+    this._flightBurnerTex = new THREE.CanvasTexture(c);
+    return this._flightBurnerTex;
+  }
+
+  // Record one DISPLAY position into the ring buffer. Sampled on a fixed ~150 ms
+  // wall-clock cadence AFTER the eased display correction is applied, which is
+  // what makes trail LENGTH a genuine speed cue (a per-frame sample would encode
+  // frame rate instead) and makes a poll correction impossible to kink: the path
+  // is built from the very positions the mesh was drawn at.
+  private _pushFlightTrail(rig: FlightRig): void {
+    const i = rig.trailHead * 3;
+    rig.trail[i] = rig.curX; rig.trail[i + 1] = rig.curY; rig.trail[i + 2] = rig.curZ;
+    rig.trailHead = (rig.trailHead + 1) % FLIGHT_TRAIL_SLOTS;
+    if (rig.trailCount < FLIGHT_TRAIL_SLOTS) rig.trailCount++;
+  }
+
+  // Gather up to `k` spine points, OLDEST first, with the live eased position as
+  // the newest — so the effect stays welded to the aircraft between samples
+  // instead of lagging up to 150 ms behind it. Returns the count written.
+  private _flightSpine(rig: FlightRig, k: number, out: Float32Array): number {
+    const have = Math.min(rig.trailCount, k - 1);
+    let n = 0;
+    for (let i = have; i >= 1; i--) {
+      const s = ((rig.trailHead - i + FLIGHT_TRAIL_SLOTS) % FLIGHT_TRAIL_SLOTS) * 3;
+      out[n * 3] = rig.trail[s]; out[n * 3 + 1] = rig.trail[s + 1]; out[n * 3 + 2] = rig.trail[s + 2];
+      n++;
+    }
+    out[n * 3] = rig.curX; out[n * 3 + 1] = rig.curY; out[n * 3 + 2] = rig.curZ;
+    return n + 1;
+  }
+
+  // Per-frame band effects for ONE rig. Zero allocation: attribute buffers are
+  // refilled in place and every other write is a scalar onto an existing
+  // material. Inert (one branch) when the feature is off or no band is built.
+  private _advanceFlightViz(rig: FlightRig, dt: number): void {
+    if (rig.speedBand === 0) return;
+    rig.vizPhase += dt;
+    const ph = rig.vizPhase, fade = rig.fade;
+
+    if (rig.trailLine || rig.ribbon) {
+      rig.trailAcc += dt;
+      if (rig.trailAcc >= FLIGHT_TRAIL_DT) { rig.trailAcc = 0; this._pushFlightTrail(rig); }
+      if (rig.trailLine) this._refillFlightTail(rig);
+      if (rig.ribbon) this._refillFlightRibbon(rig);
+    }
+    for (let i = 0; i < rig.motionLines.length; i++) {
+      const m = rig.motionLines[i].material as THREE.MeshBasicMaterial;
+      m.opacity = fade * (0.22 + 0.32 * Math.abs(Math.sin(ph * 9 + i * 1.7)));
+    }
+    for (let i = 0; i < rig.burners.length; i++) {
+      const m = rig.burners[i].material as THREE.MeshBasicMaterial;
+      m.opacity = fade * (0.62 + 0.28 * Math.sin(ph * 17 + i * 0.9) * Math.sin(ph * 6.3));
+    }
+    for (let i = 0; i < rig.ghosts.length; i++) {
+      const m = rig.ghosts[i].material as THREE.MeshBasicMaterial;
+      const base = (rig.ghosts[i].userData.baseOpacity as number) ?? 0.2;
+      m.opacity = fade * base * (0.82 + 0.18 * Math.sin(ph * 12 + i * 2.1));
+    }
+    for (const d of rig.propDiscs) {
+      const m = d.material as THREE.MeshBasicMaterial;
+      m.opacity = fade * ((d.userData.baseOpacity as number) ?? 0.3);
+    }
+    if (rig.vapor) {
+      rig.vaporT -= dt;
+      if (rig.vaporT <= 0) {
+        rig.vapor.parent?.remove(rig.vapor);
+        (rig.vapor.material as THREE.SpriteMaterial).dispose();   // map is SHARED
+        rig.vapor = null; rig.vaporT = 0;
+      } else {
+        const e = 1 - rig.vaporT / FLIGHT_VAPOR_S;                // 0 → 1 over its life
+        const env = Math.sin(Math.PI * e);                        // spike, then decay
+        const M = this._flightArchetypeMetrics(rig.archetype);
+        (rig.vapor.material as THREE.SpriteMaterial).opacity = 0.85 * env * fade;
+        rig.vapor.scale.set(M.fusHalfW * 5 * (1 + 0.9 * e),
+                            M.fusHalfW * 3.4 * (1 + 0.9 * e), 1);
+      }
+    }
+  }
+
+  private _refillFlightTail(rig: FlightRig): void {
+    const line = rig.trailLine!;
+    const geo = line.geometry as THREE.BufferGeometry;
+    const pAttr = geo.attributes.position as THREE.BufferAttribute;
+    const cAttr = geo.attributes.color as THREE.BufferAttribute;
+    const pos = pAttr.array as Float32Array, col = cAttr.array as Float32Array;
+    const k = pos.length / 3;
+    const n = this._flightSpine(rig, k, _fvzSpine);
+    if (n < 2) { geo.setDrawRange(0, 0); return; }
+    for (let i = 0; i < n; i++) {
+      pos[i * 3] = _fvzSpine[i * 3];
+      pos[i * 3 + 1] = _fvzSpine[i * 3 + 1];
+      pos[i * 3 + 2] = _fvzSpine[i * 3 + 2];
+      // Brightness ramps toward the aircraft (i = n−1); additive, so this IS the
+      // alpha ramp. The exponent keeps the far end genuinely faint.
+      const w = Math.pow((i + 1) / n, 1.6) * rig.fade;
+      col[i * 3] = 0.78 * w; col[i * 3 + 1] = 0.86 * w; col[i * 3 + 2] = 0.98 * w;
+    }
+    geo.setDrawRange(0, n);
+    pAttr.needsUpdate = true; cAttr.needsUpdate = true;
+  }
+
+  private _refillFlightRibbon(rig: FlightRig): void {
+    const mesh = rig.ribbon!;
+    const geo = mesh.geometry as THREE.BufferGeometry;
+    const pAttr = geo.attributes.position as THREE.BufferAttribute;
+    const cAttr = geo.attributes.color as THREE.BufferAttribute;
+    const pos = pAttr.array as Float32Array, col = cAttr.array as Float32Array;
+    const n = this._flightSpine(rig, FLIGHT_RIBBON_PTS, _fvzSpine);
+    if (n < 2) { geo.setDrawRange(0, 0); return; }
+    // Camera in the flight group's own frame (that group carries a pure
+    // translation, so a subtraction is the whole transform).
+    if (this._camera) {
+      _fvzV.copy(this._camera.position).sub(this._flightsGroup.position);
+    } else _fvzV.set(0, 1e6, 0);
+    const camX = _fvzV.x, camY = _fvzV.y, camZ = _fvzV.z;
+    const scale = this._flightRigScale(rig);
+    const wNear = (mesh.userData.wNear as number) * scale;
+    const wFar = (mesh.userData.wFar as number) * scale;
+    for (let i = 0; i < n; i++) {
+      _fvzP.set(_fvzSpine[i * 3], _fvzSpine[i * 3 + 1], _fvzSpine[i * 3 + 2]);
+      // Local tangent from the neighbouring samples (one-sided at the ends).
+      const a = Math.max(0, i - 1), b = Math.min(n - 1, i + 1);
+      _fvzD.set(_fvzSpine[b * 3] - _fvzSpine[a * 3],
+                _fvzSpine[b * 3 + 1] - _fvzSpine[a * 3 + 1],
+                _fvzSpine[b * 3 + 2] - _fvzSpine[a * 3 + 2]);
+      _fvzV.set(camX - _fvzP.x, camY - _fvzP.y, camZ - _fvzP.z);
+      _fvzS.crossVectors(_fvzD, _fvzV);
+      if (_fvzS.lengthSq() < 1e-9) _fvzS.set(1, 0, 0); else _fvzS.normalize();
+      const t = i / (n - 1);                    // 0 = oldest (tail end), 1 = aircraft
+      const half = (wFar + (wNear - wFar) * t) * 0.5;
+      const alpha = Math.sin(Math.PI * t) * rig.fade;    // 0 → peak → 0
+      const o = i * 6;
+      pos[o] = _fvzP.x + _fvzS.x * half;
+      pos[o + 1] = _fvzP.y + _fvzS.y * half;
+      pos[o + 2] = _fvzP.z + _fvzS.z * half;
+      pos[o + 3] = _fvzP.x - _fvzS.x * half;
+      pos[o + 4] = _fvzP.y - _fvzS.y * half;
+      pos[o + 5] = _fvzP.z - _fvzS.z * half;
+      for (let j = 0; j < 6; j++) col[o + j] = alpha;    // soft white
+    }
+    geo.setDrawRange(0, (n - 1) * 6);
+    pAttr.needsUpdate = true; cAttr.needsUpdate = true;
   }
 
   // One label FIELD, and the plate's two lines. Both resolve in flights.ts —
@@ -14458,6 +15006,12 @@ export class ThreeDRenderer {
     built.asm.rotation.order = 'YXZ';
     this._tagFlightAsm(built.asm, fp.hex);
     this._flightsGroup.add(built.asm);
+    // World-frame effect group (never a child of the assembly), so trail
+    // geometry written in display coordinates is not re-transformed by the
+    // aircraft's yaw / pitch / distance scale — and so it stays out of the
+    // aircraft raycast root.
+    const viz = new THREE.Group();
+    this._flightVizGroup.add(viz);
     const rig: FlightRig = {
       hex: fp.hex, asm: built.asm, kind: legacyModelKind(archetype), archetype,
       military: fp.military, dim,
@@ -14473,6 +15027,11 @@ export class ThreeDRenderer {
       vertRateFpm: fp.vertRateFpm ?? 0,
       curX: 0, curY: 0, curZ: 0, yaw: 0, yawInit: false,
       spin: 0, fade: 1, dying: false,
+      speedBand: 0, viz,
+      trail: new Float32Array(FLIGHT_TRAIL_SLOTS * 3),
+      trailHead: 0, trailCount: 0, trailAcc: 0,
+      trailLine: null, ribbon: null, propDiscs: [], motionLines: [],
+      burners: [], ghosts: [], vapor: null, vaporT: 0, vizPhase: 0,
     };
     // A FRESH rig snaps onto its display position (no glide-in from the anchor);
     // every later poll correction eases.
@@ -14497,6 +15056,12 @@ export class ThreeDRenderer {
     this._removeFlightIdPlanes(rig);
     const hadBeacon = rig.glowKey;
     this._removeFlightBeacon(rig);
+    // Band effects FIRST: the airframe-attached ones are children of the old
+    // assembly, which is about to be cleared out from under them. Tearing them
+    // down here (rather than letting _clearGroup take them) keeps the rig's
+    // references honest and lets the next poll rebuild them against the NEW
+    // archetype's metrics — speedBand 0 forces exactly that.
+    this._clearFlightViz(rig);
     this._disposeSpriteMaps(rig.asm);
     this._clearGroup(rig.asm);
     this._flightsGroup.remove(rig.asm);
@@ -14557,14 +15122,17 @@ export class ThreeDRenderer {
     // so this inline can never drift from the pure flightDisplayPos the 2D
     // canvas draws with — flights-render-test asserts the two agree.
     return out.set(-(c * e - s * n) * r,
-                   flightDisplayAltitudeMm(altFt, distNm, r, this._flightShellMm),
+                   flightDisplayAltitudeMm(altFt, distNm, r, this._flightShellMm,
+                                           this._flightVerticalScale),
                    (s * e + c * n) * r);
   }
 
   private _disposeFlightRig(rig: FlightRig): void {
+    this._clearFlightViz(rig);             // band effects (both frames)
     this._disposeSpriteMaps(rig.asm);      // per-rig label + banner CanvasTextures
     this._clearGroup(rig.asm);
     this._flightsGroup.remove(rig.asm);
+    this._flightVizGroup.remove(rig.viz);
     this._flightRigs.delete(rig.hex);
   }
 
@@ -14692,6 +15260,8 @@ export class ThreeDRenderer {
       }
       g.position.set(x, y, z);
       g.userData.outlineSkip = true; g.userData.propDisc = true;
+      // Blade half-span — the radius the band-1/2 blur disc is built at.
+      g.userData.propR = blade / 2;
       asm.add(g); props.push(g); return g;
     };
     const nose = (r: number, len: number, m: THREE.Material, z: number) => {
@@ -14834,6 +15404,7 @@ export class ThreeDRenderer {
       }
       rotor.position.set(0, 900, -200);
       rotor.userData.outlineSkip = true; rotor.userData.mainRotor = true;
+      rotor.userData.propR = 1300;               // blade half-span (2600 mm rotor)
       asm.add(rotor); props.push(rotor);
       const mast = new THREE.Mesh(new THREE.CylinderGeometry(36, 36, 300, 8), dark);
       mast.position.set(0, 740, -200); asm.add(mast);
@@ -14906,6 +15477,17 @@ export class ThreeDRenderer {
         // −cos p), so POSITIVE rotation.x is nose UP → climb takes the + sign.
         rig.asm.rotation.x =
           Math.max(-1, Math.min(1, rig.vertRateFpm / 6000)) * FLIGHT_PITCH_MAX;
+        // Band 1 (hover): station-keeping bob + drift + a slow yaw hunt, layered
+        // on the DRAWN transform only. rig.cur* — which the trail samples and the
+        // ease targets — is deliberately untouched, so the wobble can never feed
+        // back into the path or accumulate.
+        if (rig.speedBand === 1) {
+          const p = rig.vizPhase;
+          rig.asm.position.y += Math.sin(p * 1.7) * FLIGHT_HOVER_BOB_MM;
+          rig.asm.position.x += Math.sin(p * 0.9 + 1.3) * FLIGHT_HOVER_DRIFT_MM;
+          rig.asm.position.z += Math.cos(p * 0.7) * FLIGHT_HOVER_DRIFT_MM;
+          rig.asm.rotation.y += Math.sin(p * 0.6) * FLIGHT_HOVER_YAW_RAD;
+        }
         rig.asm.scale.setScalar(this._flightRigScale(rig));
         if (rig.label) (rig.label.material as THREE.SpriteMaterial).opacity = rig.fade;
         if (rig.propRate > 0) {
@@ -14939,6 +15521,10 @@ export class ThreeDRenderer {
             (rig.beaconGlow.material as THREE.SpriteMaterial).color.copy(rig.glowCur);
           }
         }
+        // Banded speed effects — trail sampling + refill, flickers, one-shots.
+        // Runs AFTER the display ease above, so the trail is built from exactly
+        // the positions the mesh was drawn at (kink-free by construction).
+        this._advanceFlightViz(rig, dt);
       }
     }
     this._advanceIss(dt);
@@ -21987,7 +22573,7 @@ export class ThreeDRenderer {
       this._alarmGroup, this._calendarGroup, this._thermoGroup, this._safetyGroup, this._alertGroup, this._robotGroup, this._robotRigGroup,
       this._cameraGroup, this._projGroup, this._valveGroup, this._plugGroup, this._camAlertGroup, this._pzoneGroup, this._groundGroup, this._poolGroup, this._sprinklerGroup, this._flagpoleGroup, this._heatmapGroup,
       this._lightGroup, this._switchGroup, this._targetGroup, this._gpsGroup, this._compassGroup, this._weatherGroup,
-      this._skyGroup, this._flightsGroup, this._issGroup,
+      this._skyGroup, this._flightsGroup, this._flightVizGroup, this._issGroup,
       this._bgTextGroup, this._pulseGroup, this._nowPlayingGroup, this._neighborhoodGroup,
     ]) {
       this._disposeSpriteMaps(g);
@@ -22049,6 +22635,8 @@ export class ThreeDRenderer {
     // Phase 3 sky prop textures (shared, built once — freed only here).
     this._sunGlowTex?.dispose(); this._sunGlowTex = null;
     this._beaconGlowTex?.dispose(); this._beaconGlowTex = null;   // flight status beacons
+    this._flightBlurTex?.dispose(); this._flightBlurTex = null;   // rotor/prop blur discs
+    this._flightBurnerTex?.dispose(); this._flightBurnerTex = null;  // afterburner strips
     this._starTex?.dispose(); this._starTex = null;
     for (const t of Object.values(this._moonTexCache)) t?.dispose();
     this._moonTexCache = {};

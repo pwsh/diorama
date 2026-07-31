@@ -1387,6 +1387,21 @@ export class SettingsDrawer extends LitElement {
               Scene distance the search radius maps onto — larger spreads traffic deeper toward the horizon.
             </div>
             <div class="row" style="align-items:center">
+              <label style="font-size:12px;color:var(--text);flex:1"
+                     title="Multiplies the display HEIGHT only (0.2–2, default 1). The horizontal shell is untouched, so traffic drops toward the horizon without moving any closer to the house. Aircraft can never be lowered onto the property — an absolute clearance floor is applied after the scale.">Height scale ×</label>
+              <input type="number" min="0.2" max="2" step="0.1"
+                     .value=${String(cfg.verticalScale ?? 1)}
+                     @change=${(e: Event) => set(f => {
+                       const v = Number((e.target as HTMLInputElement).value);
+                       // setFlights clamps 0.2..2 + normalizes 1 → undefined.
+                       f.verticalScale = isFinite(v) ? v : 1;
+                     })}
+                     style="width:80px">
+            </div>
+            <div style="font-size:10px;color:var(--text-dim);margin:-2px 0 4px;line-height:1.35">
+              Lower high-altitude traffic without bringing it closer.
+            </div>
+            <div class="row" style="align-items:center">
               <label style="font-size:12px;color:var(--text);flex:1" title="Poll cadence. airplanes.live documents a 1 request/second limit.">Poll (s)</label>
               <input type="number" min="5" max="60" step="1" .value=${String(cfg.pollSeconds ?? 8)}
                      @change=${(e: Event) => set(f => { f.pollSeconds = numOrUndef((e.target as HTMLInputElement).value, 5, 60) ?? 8; })}
@@ -1424,6 +1439,12 @@ export class SettingsDrawer extends LitElement {
               <input type="checkbox" .checked=${cfg.beacons !== false}
                      @change=${(e: Event) => set(f => { f.beacons = (e.target as HTMLInputElement).checked; })}>
               <span style="flex:1">Status beacons</span>
+            </label>
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text)"
+                   title="Speed reads at a glance: a hovering machine shows a rotor blur and no trail, faster aircraft grow a comet tail, then a contrail, and the fastest add an afterburner glow with ghost multiples. Off builds none of it.">
+              <input type="checkbox" .checked=${cfg.speedViz !== false}
+                     @change=${(e: Event) => set(f => { f.speedViz = (e.target as HTMLInputElement).checked; })}>
+              <span style="flex:1">Speed effects</span>
             </label>
             <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text)"
                    title="PIA / LADD are FAA privacy programs the ADS-B source deliberately does not enforce. Dim those aircraft (and hide a PIA aircraft's identity) as a courtesy — off shows everything in full.">

@@ -46,8 +46,14 @@ import {
   flightDisplayPos, flightShellMm, sanitizeLabelFields,
   resolveFlightGlow, flightGlowFrame, lerpHexColor, FLIGHT_DEFAULT_BEACON,
   FLIGHT_LABEL_FIELDS_DEFAULT, FLIGHTS_DEFAULT_RADIUS_NM, type FlightPoint,
-  flightFieldText, flightLabelLines,
+  flightFieldText, flightLabelLines, flightPointSpeedBand,
 } from './flights.js';
+// aircraft-types.ts is pure + zero-import like flights.ts. Imported HERE only so
+// the 2D speed echo resolves the archetype fallback (used when the feed carries
+// no ground speed) through the very same table the 3D rig does — otherwise a
+// speed-less turboprop could show band-2 dashes on the plan and a band-3 tail in
+// the scene. Type-table only; nothing three.js-shaped comes with it.
+import { aircraftArchetype } from './aircraft-types.js';
 // The label-text resolvers live in flights.ts (pure, shared with three-renderer
 // so the 2D line and the 3D plate can never drift — they used to be mirrored
 // copies here). Re-exported because the flights-ui test page consumes them off
@@ -441,6 +447,16 @@ function drawFlights(ctx: CanvasRenderingContext2D, p: Planner, view: View): voi
   // shell must resolve it identically (both go through flightShellMm), or a
   // dot and its rig would sit at different distances from the house.
   const shellMm = flightShellMm(cfg.shellRadiusM);
+  // Display-HEIGHT scale: 2D shows no height, but flightDisplayPos must still be
+  // called with it so the two views resolve ONE geometry call the same way (and
+  // so a future 2D consumer of dispY can never silently disagree with the shell).
+  const vScale = cfg.verticalScale;
+  // Banded speed indicator (flightSpeedBand). The 2D echo is deliberately
+  // minimal — dashes behind the dart — but it reads the SAME resolver the 3D
+  // rigs do, so a plane with a contrail can never show band-2 dashes here.
+  // Stateless (no prevBand): this canvas keeps no per-aircraft state, and a dash
+  // count flickering for one frame at a threshold is invisible.
+  const speedViz = cfg.speedViz !== false;
   const showLabels = cfg.showLabels !== false;
   const fields = sanitizeLabelFields(cfg.labelFields) ?? FLIGHT_LABEL_FIELDS_DEFAULT;
   const beaconsOn = cfg.beacons !== false;
@@ -455,7 +471,7 @@ function drawFlights(ctx: CanvasRenderingContext2D, p: Planner, view: View): voi
   const tSec = performance.now() / 1000;
   ctx.save();
   for (const fp of list) {
-    const d = flightDisplayPos(fp, origin.lat, origin.lon, theta, radiusNm, shellMm);
+    const d = flightDisplayPos(fp, origin.lat, origin.lon, theta, radiusNm, shellMm, vScale);
     const wx = ax + d.planX, wy = ay + d.planY;
     const pt = mmToPx(view, wx, wy);
     // Publish the pick target: the dart plus a comfortable touch margin (the
@@ -477,6 +493,43 @@ function drawFlights(ctx: CanvasRenderingContext2D, p: Planner, view: View): voi
     ctx.translate(pt.x, pt.y);
     ctx.rotate(a);
     ctx.globalAlpha = dim ? 0.45 : 1;
+    // ── Banded speed echo ────────────────────────────────────────────────────
+    // Drawn FIRST, in the rotated glyph frame where +Y is directly astern, so
+    // the dart paints over its own trail. Band 1 draws nothing — the absence is
+    // the hover cue in 2D exactly as it is in 3D.
+    if (speedViz) {
+      const band = flightPointSpeedBand(fp, null, aircraftArchetype(fp.typeCode, fp.category));
+      if (band >= 2) {
+        ctx.save();
+        ctx.lineCap = 'round';
+        if (band <= 3) {
+          // 1 dash (band 2) / 2 dashes (band 3) — the cartoon speed-line echo.
+          for (let i = 0; i < band - 1; i++) {
+            const y0 = R * (1.25 + i * 0.9);
+            ctx.globalAlpha = (dim ? 0.45 : 1) * (0.6 - i * 0.18);
+            ctx.strokeStyle = 'rgba(203,213,225,0.9)';
+            ctx.lineWidth = 1.6 * dpr;
+            ctx.beginPath(); ctx.moveTo(0, y0); ctx.lineTo(0, y0 + R * 0.55); ctx.stroke();
+          }
+        } else {
+          // Bands 4–5: the contrail's 2D analog — one short fading tail stroke,
+          // longer at band 5, which also gets the warm afterburner dot.
+          const len = R * (band === 5 ? 4.2 : 3);
+          const grd = ctx.createLinearGradient(0, R * 0.9, 0, R * 0.9 + len);
+          grd.addColorStop(0, 'rgba(226,238,252,0.7)');
+          grd.addColorStop(1, 'rgba(226,238,252,0)');
+          ctx.strokeStyle = grd;
+          ctx.lineWidth = 2.4 * dpr;
+          ctx.beginPath(); ctx.moveTo(0, R * 0.9); ctx.lineTo(0, R * 0.9 + len); ctx.stroke();
+          if (band === 5) {
+            ctx.globalAlpha = (dim ? 0.45 : 1) * 0.85;
+            ctx.fillStyle = 'rgba(255,176,84,0.95)';
+            ctx.beginPath(); ctx.arc(0, R * 1.1, R * 0.3, 0, Math.PI * 2); ctx.fill();
+          }
+        }
+        ctx.restore();
+      }
+    }
     ctx.beginPath();
     ctx.moveTo(0, -R);                       // nose
     ctx.lineTo(R * 0.62, R * 0.58);          // right tail

@@ -339,7 +339,7 @@ headroom is dead-reckoning slack past the rim (the planner filters d > radiusNm)
 radius falls back to `FLIGHTS_DEFAULT_RADIUS_NM`. Plus
 `compressAltitudeMm` (log 2 500–**66 000** mm band over 0–45 000 ft) — **but the two curves are NOT
 independent**: `flightDisplayAltitudeMm(altFt, distNm, rMm)` (the ONE place display height is
-composed) caps the log curve at the TRUE elevation angle, `dispY = max(clearMm,
+composed) caps the log curve at the TRUE elevation angle, `dispY = max(clearMm, verticalScale ×
 min(compressAltitudeMm(alt), r·altM/distM))`. Under the piecewise-linear mapping the cap's
 algebra is simple: on the sub-midpoint branch (r ∝ d) `dispY_elev = shell·0.75·altM/(NM_M·R)` —
 EXACTLY constant in d (test-asserted, spread ~2e-11 mm), rising only above the midpoint —
@@ -417,7 +417,7 @@ exported from flights.ts and consumed by the planner (query + filter), both rend
 compression knee K) and the Settings input, so the shell can never disagree with the aircraft
 actually fetched; clamp stays 5–100, stored `radiusNm` untouched. Plus `flightBearingDistance`/
 `flightDisplayPos` (plan-frame mm relative to the HOME anchor). **`src/aircraft-types.ts`** (pure,
-zero-import, lands only in the RENDERER chunk): `AircraftArchetype` (8: `ga-high`/`ga-low`/
+zero-import; since 2026-07-31 ALSO imported by canvas-render for the shared speed-band archetype fallback — a few KB in the startup bundle, the three.js split untouched): `AircraftArchetype` (8: `ga-high`/`ga-low`/
 `twin-prop`/`turboprop`/`narrowbody`/`widebody`/`bizjet`/`heli`), `TYPE_ARCHETYPE` (184 ICAO type
 designators — CRJ/ERJ135-145 are BIZJET geometry (rear pods + T-tail), E-Jets narrowbody, PC-12/
 King Air low-wing), `aircraftArchetype(typeCode, category)` (table first, then the category
@@ -507,6 +507,32 @@ poll, min/max alt filters, "Callsign labels" + a 9-checkbox "Label fields" grid 
 gated behind "Callsign labels") + "Status beacons" + "Dim privacy-flagged aircraft" + "Track the
 ISS", alerts sub-group — the watch-list normalizes in `setFlights` (trim/uppercase), and
 `setFlights` sanitizes `labelFields`, not the UI, so imports get the same shape).
+**Speed visualization + vertical scale (2026-07-31, user-requested, research-backed).**
+`FlightsConfig.speedViz?` (absent = ON; "Speed effects" checkbox): pure
+`flightSpeedBand(gsKmh, prevBand?, archetype?)` (flights.ts — thresholds 60/200/450/700 km/h,
+±15 edge-directional hysteresis; null speed → `FLIGHT_BAND_FALLBACK` by archetype, default 4,
+prevBand-independent so it can't oscillate; `flightPointSpeedBand` wraps kt→km/h). Five bands,
+each a KIND change: 1 = NO trail + rotor/prop blur disc + station-keeping bob/yaw-hunt; 2 =
+dim disc + 4-pt comet Line; 3 = 8-pt comet + 2 flickering motion-line planes; 4 = widening
+white CONTRAIL ribbon (replaces the tail); 5 = ribbon + additive afterburner strips + 2 ghost
+silhouettes (+Z-lagged children — local +Z IS the display path to within turn rate) + a
+one-shot vapor-cone flash on band ENTRY. Trails ride a per-rig Float32Array(20×3) ring buffer
+of DISPLAY positions sampled every 0.15 s AFTER the ease (kink-free under poll corrections by
+construction — test-pinned max segment angle <30° under a forced correction); attributes
+sized once, `setDrawRange` + in-place refills, zero per-frame alloc; band changes rebuild only
+band bits (`_syncFlightSpeedViz`). **Effects live in the scene-level `_flightVizGroup`**
+(copies `_flightsGroup`'s transform; NOT nested — `_flightsGroup` is a raycast root and its
+children.length is a rig-count test surface; rides the flights layer, NOT in
+clearTransientGroups, disposed in destroy()); shared `_flightBlurTex`/`_flightBurnerTex`
+destroy()-only; everything `fog:false`, renderOrder −2 (below label/beacon). 2D echo in
+`drawFlights` (0/1/2 dashes / gradient tail / tail + warm dot) via the SAME resolver.
+`FlightsConfig.verticalScale?` (0.2–2, default 1, exactly-1 → undefined): composed ONLY in
+`flightDisplayAltitudeMm`'s trailing param (`max(clearMm, raw × vs)` — the clearance floor is
+ABSOLUTE and post-scale; planX/planY bit-identical across scales), threaded through
+`flightDisplayPos` + `_flightScenePos` so 2D/3D can't diverge; rigs EASE onto a changed
+scale; `flightShellReachMm(shellMm, vs)` uses `max(1, vs)` (at vs 2 the band reaches
+~178 383·s — under-requesting drags the far clip through the traffic band, the neighborhood
+far-plane lesson). Settings: "Height scale ×" under "Draw radius (m)".
 **Display + inspection wave.** `FlightsConfig.banners?` (absent = ON) makes the piston tow-banner
 optional (`updateFlights` opts, stale-chunk-safe; "Tow banners (small planes)" under the labels
 master). **Fuselage lettering follows real livery**: `_flightFuselageText` puts the OPERATOR on
@@ -569,15 +595,15 @@ new dirty-key input. 2D `drawFlights` calls the same pair (`solid`+colorB = two 
 call `resolveFlightGlow`, never re-derive locally. Settings ▸ Flight tracking "Glow rules"
 editor (collapsed summary rows, ✎ expand, ▲▼ reorder — order materially changes behaviour).
 **Attribution**: "Flight data © airplanes.live" joins the fixed bottom-left chip (stacked with the
-OSM line) whenever cloud + enabled + data. Tests: `flights-test.html` (`FLIGHTS PASS 602/602` —
+OSM line) whenever cloud + enabled + data. Tests: `flights-test.html` (`FLIGHTS PASS 686/686` —
 fixture = a REAL 94-aircraft airplanes.live LAX capture; incl. the live-path emit matrix, the
 archetype golden matrix, the emergency-alert lifecycle, the shell-rescale golden/property suite,
 and §6e's draw-radius clamp matrix + similarity law — the pre-existing derivation goldens run
-through an `FB` wrapper that pins `shellMm` to FLIGHT_SHELL_BASE_MM and stay byte-identical), `flights-render-test.html` (`FLIGHTSRENDER PASS 393/393` — heading/pitch signs asserted
+through an `FB` wrapper that pins `shellMm` to FLIGHT_SHELL_BASE_MM and stay byte-identical), `flights-render-test.html` (`FLIGHTSRENDER PASS 475/475` — heading/pitch signs asserted
 via `getWorldDirection`; archetype geometry, livery text layout, beacon priority/gating, privacy
 dim, in-place rebuild, distance scale, fog exemption, flight raycast, §4d's non-default-shell
 position/scale/frustum parity), `flights-ui-test.html`
-(`FLIGHTSUI 271/271` — settings round-trips, flight modal matrix, 2D hit routing; alert-center
+(`FLIGHTSUI 295/295` — settings round-trips, flight modal matrix, 2D hit routing; alert-center
 67/67 stays green).
 
 ### Geo reference & GPS device pins (World Outside, Feature G)

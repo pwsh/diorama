@@ -787,10 +787,43 @@ export const FLIGHT_SHELL_REACH_MM =
 // The same reach for a shell of the given rim, i.e. the base reach × s. At the
 // 300 m default that is ≈342,383 mm; at the 1,000 m maximum ≈1,141,275 mm —
 // both comfortably inside the renderer's CAM_FAR_CEIL (13.5e6 mm).
-export function flightShellReachMm(shellMm: number = flightShellMm()): number {
+// `verticalScale` (FlightsConfig.verticalScale, resolved by flightVerticalScale)
+// multiplies the display HEIGHT, so a shell driven above 1 genuinely reaches
+// higher than the authored (rMaxMm × yMaxMm) corner and the frustum requirement
+// must grow with it — the governing invariant is `far ≥ camDist + 1.25·req +
+// 30000`, measured FROM THE CAMERA, so under-requesting drags the far-clip
+// boundary in through the traffic band (the same failure the neighborhood
+// overlay hit on zoom-out). `max(1, vs)` because LOWERING the band never
+// shrinks the RADIAL term, which dominates the reach — a smaller request there
+// would buy nothing and could only under-serve a rim aircraft.
+export function flightShellReachMm(shellMm: number = flightShellMm(),
+                                   verticalScale = 1): number {
   const s = (isFinite(shellMm) && shellMm > 0 ? shellMm : flightShellMm())
     / FLIGHT_SHELL_BASE_MM;
-  return s * FLIGHT_SHELL_REACH_MM;
+  const vs = Math.max(1, flightVerticalScale(verticalScale));
+  return vs === 1
+    ? s * FLIGHT_SHELL_REACH_MM                      // byte-identical default
+    : s * Math.hypot(FLIGHT_SHELL.rMaxMm, FLIGHT_SHELL.yMaxMm * vs);
+}
+
+// ── Independent vertical (height) scale ────────────────────────────────────
+// FlightsConfig.verticalScale — a display-height multiplier that is DELIBERATELY
+// independent of the horizontal shell: the whole point is to bring high-altitude
+// traffic DOWN toward the horizon band without pulling it any closer to the
+// house. The horizontal mapping (compressRadiusMm) is untouched, so bearing and
+// distance read exactly as before; only the height above the shell floor moves.
+//
+// Composed at the ONE place display height is composed — flightDisplayAltitudeMm
+// — and AFTER the elevation-true cap but BEFORE the clearMm floor, which stays
+// ABSOLUTE (see that function). Absent / garbage → 1, so a stale caller and a
+// hand-edited config both reproduce the shipped geometry exactly.
+export const FLIGHT_VSCALE_MIN = 0.2;
+export const FLIGHT_VSCALE_MAX = 2;
+export const FLIGHT_VSCALE_DEFAULT = 1;
+
+export function flightVerticalScale(v?: number | null): number {
+  const n = typeof v === 'number' && isFinite(v) && v > 0 ? v : FLIGHT_VSCALE_DEFAULT;
+  return Math.min(FLIGHT_VSCALE_MAX, Math.max(FLIGHT_VSCALE_MIN, n));
 }
 
 // Horizontal compression: RADIUS-ANCHORED PIECEWISE-LINEAR mapping. The shell
@@ -961,16 +994,28 @@ const TWO_PI = Math.PI * 2;
 // term because `rMm` does — so dispY is `s ×` the base dispY *except* where the
 // ABSOLUTE clearMm floor engages. There the display elevation angle gets
 // shallower on a bigger shell, which is the correct far-off-in-the-sky read.
+//
+// ── verticalScale (FlightsConfig.verticalScale) ────────────────────────────
+// The trailing optional multiplier is applied to the composed height and NOTHING
+// else — the radial mapping never sees it, so lowering the band drops traffic
+// toward the horizon without bringing it one millimetre closer to the house.
+// ORDER IS LOAD-BEARING: the scale multiplies the elevation-capped curve, and
+// the ABSOLUTE clearMm floor is applied AFTER it, so a scaled-down aircraft can
+// never be pushed into (or below) the property. Scaling UP simply raises the
+// band; the floor is then irrelevant. Absent = 1 ⇒ byte-identical to the
+// shipped composition for every existing caller.
 export function flightDisplayAltitudeMm(
   altFt: number, distNm: number, rMm: number, shellMm: number = flightShellMm(),
+  verticalScale = 1,
 ): number {
   const altM = (isFinite(altFt) ? altFt : 0) * FT_M;
   // distM floored at 1 m so an aircraft sitting exactly on the origin (r = 0
   // anyway) can never divide by zero.
   const distM = Math.max((isFinite(distNm) && distNm > 0 ? distNm : 0) * NM_M, 1);
   const r = isFinite(rMm) && rMm > 0 ? rMm : 0;
-  return Math.max(FLIGHT_SHELL.clearMm,
-                  Math.min(compressAltitudeMm(altFt, shellMm), r * (altM / distM)));
+  const vs = flightVerticalScale(verticalScale);
+  const raw = Math.min(compressAltitudeMm(altFt, shellMm), r * (altM / distM));
+  return Math.max(FLIGHT_SHELL.clearMm, raw * vs);
 }
 
 // True bearing + great-circle-ish distance from the home origin to an aircraft.
@@ -1004,9 +1049,13 @@ export function flightBearingDistance(
 // whole result as a similarity: planX / planY / dispY are all exactly `s ×`
 // their 120 m-reference values, except where dispY's absolute clearMm floor
 // engages. Absent = the 300 m default.
+//
+// `verticalScale` rides through to flightDisplayAltitudeMm and touches ONLY
+// dispY — planX / planY are untouched by construction, which is exactly the
+// "lower it without bringing it closer" contract.
 export function flightDisplayPos(
   fp: FlightPoint, originLat: number, originLon: number, thetaRad: number, radiusNm: number,
-  shellMm: number = flightShellMm(),
+  shellMm: number = flightShellMm(), verticalScale = 1,
 ): { planX: number; planY: number; dispY: number; distNm: number; bearingRad: number } {
   const { bearingRad, distNm } = flightBearingDistance(originLat, originLon, fp.lat, fp.lon);
   const e = Math.sin(bearingRad), n = Math.cos(bearingRad);   // unit geo vector
@@ -1015,9 +1064,98 @@ export function flightDisplayPos(
   return {
     planX: (c * e - s * n) * r,
     planY: (s * e + c * n) * r,
-    dispY: flightDisplayAltitudeMm(fp.altFt, distNm, r, shellMm),
+    dispY: flightDisplayAltitudeMm(fp.altFt, distNm, r, shellMm, verticalScale),
     distNm, bearingRad,
   };
+}
+
+// ── Banded visual speed indicator ──────────────────────────────────────────
+// Ground speed → one of FIVE display bands, each with its own visual language
+// (hover / short comet tail / medium tail + motion lines / contrail / contrail +
+// afterburner + ghosts). A BAND rather than a continuous curve on purpose: the
+// display shell is decorative and deliberately not to scale, so a band is an
+// honest "roughly this fast" read that also lets each tier own a distinct,
+// cheap, buildable effect set instead of one parameter smeared across all of
+// them. Pure + zero-import like everything else here; the renderer and the 2D
+// canvas both call it, so a dart and its rig can never disagree about a band.
+export type FlightSpeedBand = 1 | 2 | 3 | 4 | 5;
+
+// Band UPPER edges in km/h — band n covers [T[n−2], T[n−1]).
+//   1 <60      hover / rotorcraft / very slow
+//   2 60–200   light piston
+//   3 200–450  turboprop / fast piston
+//   4 450–700  jet cruise
+//   5 700+     high-subsonic and above
+export const FLIGHT_SPEED_THRESHOLDS_KMH = [60, 200, 450, 700] as const;
+
+// Boundary-flicker guard (the codebase's hysteresis idiom): a live aircraft
+// hovering ON a threshold would otherwise rebuild its whole effect set several
+// times a minute. The band only changes once the speed clears the edge it is
+// leaving by this margin, in whichever direction it is moving.
+export const FLIGHT_BAND_HYSTERESIS_KMH = 15;
+
+export const KT_TO_KMH = 1.852;
+
+// Fallback when the feed carries NO usable ground speed (a Mode-S-only or
+// position-only target). An archetype implies a cruise regime well enough to
+// pick a plausible band — far better than defaulting everything to "hover" (no
+// trail at all) or to band 5 (afterburners on a Cessna). Anything unrecognized
+// falls to 4, matching aircraftArchetype's own narrowbody default.
+export const FLIGHT_BAND_FALLBACK: Readonly<Record<string, FlightSpeedBand>> = {
+  'heli': 1,
+  'ga-high': 2, 'ga-low': 2,
+  'turboprop': 3, 'twin-prop': 3,
+  'narrowbody': 4, 'widebody': 4, 'bizjet': 4,
+};
+export const FLIGHT_BAND_FALLBACK_DEFAULT: FlightSpeedBand = 4;
+
+function rawSpeedBand(kmh: number): FlightSpeedBand {
+  let b = 1;
+  for (const t of FLIGHT_SPEED_THRESHOLDS_KMH) if (kmh >= t) b++;
+  return b as FlightSpeedBand;
+}
+
+// Resolve a display band. `prevBand` (the rig's current band) engages the
+// hysteresis; omit it for a stateless read (the 2D canvas keeps no per-aircraft
+// state, so it always asks statelessly — a dash count flickering for one frame
+// at a boundary is invisible, whereas a 3D effect REBUILD is not).
+// `archetype` is only consulted when the speed is unusable.
+export function flightSpeedBand(
+  gsKmh: number | null | undefined,
+  prevBand?: FlightSpeedBand | null,
+  archetype?: string | null,
+): FlightSpeedBand {
+  if (typeof gsKmh !== 'number' || !isFinite(gsKmh) || gsKmh < 0) {
+    // Deterministic per archetype, so it cannot oscillate — no hysteresis needed
+    // and `prevBand` is deliberately ignored (a rig that LOSES its speed field
+    // settles onto its airframe's regime rather than freezing on a stale band).
+    return (archetype != null && FLIGHT_BAND_FALLBACK[archetype])
+      || FLIGHT_BAND_FALLBACK_DEFAULT;
+  }
+  const raw = rawSpeedBand(gsKmh);
+  if (prevBand == null || raw === prevBand) return raw;
+  const T = FLIGHT_SPEED_THRESHOLDS_KMH;
+  if (raw > prevBand) {
+    // Leaving prevBand UPWARD: clear its upper edge by the margin. (prevBand 5
+    // has no upper edge and can never take this branch.)
+    const upper = T[prevBand - 1];
+    return upper != null && gsKmh >= upper + FLIGHT_BAND_HYSTERESIS_KMH ? raw : prevBand;
+  }
+  // Leaving prevBand DOWNWARD: drop below its lower edge by the margin.
+  const lower = T[prevBand - 2];
+  return lower != null && gsKmh <= lower - FLIGHT_BAND_HYSTERESIS_KMH ? raw : prevBand;
+}
+
+// Convenience for callers holding a FlightPoint: knots → km/h, with the
+// archetype fallback threaded through. `gsKt` is null on a surprising share of
+// live traffic, which is exactly what FLIGHT_BAND_FALLBACK is for.
+export function flightPointSpeedBand(
+  fp: { gsKt?: number | null }, prevBand?: FlightSpeedBand | null,
+  archetype?: string | null,
+): FlightSpeedBand {
+  const kt = fp?.gsKt;
+  const kmh = typeof kt === 'number' && isFinite(kt) && kt >= 0 ? kt * KT_TO_KMH : null;
+  return flightSpeedBand(kmh, prevBand, archetype);
 }
 
 // ── ISS ────────────────────────────────────────────────────────────────────

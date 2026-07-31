@@ -1725,6 +1725,381 @@
     upd([]); step(1, 3);
   }
 
+  // ── 26. Banded speed visualisation (FlightsConfig.speedViz) ────────────────
+  // Five bands (flights.ts's flightSpeedBand) each own a distinct effect set.
+  // The renderer resolves the band ITSELF from the FlightPoint at POLL cadence
+  // and rebuilds only on a change; everything per-frame is buffer refills and
+  // opacity writes.
+  {
+    upd([]); step(1, 3);
+    // Ground speed in KNOTS; the band thresholds are km/h (kt × 1.852).
+    const SP = (hex, gsKt, extra = {}) => FP({
+      hex, gsKt, trackDeg: 90, lat: OLAT + 0.12, lon: OLON + 0.12, altFt: 9000, ...extra });
+    const bandOf = h => rig(h).speedBand;
+    const trailPts = h => {
+      const l = rig(h).trailLine;
+      return l ? l.geometry.attributes.position.count : 0;
+    };
+
+    // (a) band 1 — hover: rotor blur disc, and deliberately NO trail geometry.
+    upd([SP('sv1', 20, { category: 'A7' })]);          // A7 → helicopter
+    {
+      const g = rig('sv1');
+      ok('26a: a hovering aircraft resolves to band 1', bandOf('sv1') === 1, `band=${bandOf('sv1')}`);
+      ok('26a: band 1 builds a rotor blur disc', g.propDiscs.length >= 1,
+         `n=${g.propDiscs.length}`);
+      ok('26a: the rotor disc is HORIZONTAL (the rotor turns about Y)',
+         Math.abs(g.propDiscs[0].rotation.x + Math.PI / 2) < 1e-6);
+      ok('26a: band 1 builds NO trail geometry (the absence IS the hover cue)',
+         g.trailLine === null && g.ribbon === null);
+      ok('26a: band 1 has no contrail, burners or ghosts',
+         g.burners.length === 0 && g.ghosts.length === 0 && g.motionLines.length === 0);
+      // Station-keeping wobble rides the DRAWN transform, never rig.cur*.
+      const cx = g.curX, cy = g.curY;
+      step(0.1, 6);
+      ok('26a: the hover jitter moves the drawn position off the eased one',
+         Math.abs(g.asm.position.y - g.curY) > 1e-6 || Math.abs(g.asm.position.x - g.curX) > 1e-6,
+         `dy=${(g.asm.position.y - g.curY).toFixed(2)}`);
+      ok('26a: …and does NOT feed back into the eased path',
+         Math.abs(g.curX - cx) < 60 && Math.abs(g.curY - cy) < 60);
+      ok('26a: the jitter stays bounded (a wobble, not a drift)',
+         Math.abs(g.asm.position.y - g.curY) <= 61 && Math.abs(g.asm.position.x - g.curX) <= 36);
+    }
+
+    // (b) band 2 — short comet tail (4 points) + a dimmer prop blur.
+    upd([]); step(1, 3);
+    upd([SP('sv2', 60, { category: 'A1' })]);          // 111 km/h, GA single
+    {
+      const g = rig('sv2');
+      ok('26b: 60 kt resolves to band 2', bandOf('sv2') === 2, `band=${bandOf('sv2')}`);
+      ok('26b: band 2 builds a 4-point comet tail', trailPts('sv2') === 4, `pts=${trailPts('sv2')}`);
+      ok('26b: band 2 keeps a (dimmer) prop blur disc', g.propDiscs.length >= 1);
+      ok('26b: the band-2 disc is dimmer than the band-1 one',
+         g.propDiscs[0].userData.baseOpacity < 0.34,
+         String(g.propDiscs[0].userData.baseOpacity));
+      ok('26b: band 2 has no contrail', g.ribbon === null);
+      step(0.2, 6);
+      const line = g.trailLine;
+      ok('26b: the tail draws once history exists',
+         line.geometry.drawRange.count >= 2, `n=${line.geometry.drawRange.count}`);
+      ok('26b: the tail never draws more points than it allocated',
+         line.geometry.drawRange.count <= 4);
+      ok('26b: the tail is additive + depth-write-free (it must not occlude)',
+         line.material.blending === mod.THREE?.AdditiveBlending
+           || line.material.transparent === true,
+         'transparent=' + line.material.transparent);
+      ok('26b: the newest tail point IS the live display position',
+         (() => {
+           const a = line.geometry.attributes.position.array;
+           const n = line.geometry.drawRange.count;
+           // Float32 attribute storage vs the rig's float64 state — 1 mm at
+           // ~100 m offsets is the storage precision, not a lag.
+           return Math.abs(a[(n - 1) * 3] - g.curX) < 1
+             && Math.abs(a[(n - 1) * 3 + 2] - g.curZ) < 1;
+         })());
+      ok('26b: the tail brightness ramps toward the aircraft (the fade)',
+         (() => {
+           const c = line.geometry.attributes.color.array;
+           const n = line.geometry.drawRange.count;
+           return c[(n - 1) * 3 + 2] > c[2];
+         })());
+    }
+
+    // (c) band 3 — medium tail (8 points) + two motion-line strips.
+    upd([]); step(1, 3);
+    upd([SP('sv3', 150)]);                              // 278 km/h
+    {
+      const g = rig('sv3');
+      ok('26c: 150 kt resolves to band 3', bandOf('sv3') === 3, `band=${bandOf('sv3')}`);
+      ok('26c: band 3 builds an 8-point comet tail', trailPts('sv3') === 8, `pts=${trailPts('sv3')}`);
+      ok('26c: band 3 builds exactly 2 motion-line strips', g.motionLines.length === 2);
+      ok('26c: the motion lines sit BEHIND the airframe (+Z is aft of the −Z nose)',
+         g.motionLines.every(m => m.position.z > 0));
+      ok('26c: the motion lines are mirrored across the fuselage',
+         Math.abs(g.motionLines[0].position.x + g.motionLines[1].position.x) < 1e-6);
+      ok('26c: band 3 has no contrail, burners or ghosts',
+         g.ribbon === null && g.burners.length === 0 && g.ghosts.length === 0);
+      const o0 = g.motionLines[0].material.opacity;
+      step(0.05, 3);
+      ok('26c: the motion lines flicker per frame',
+         Math.abs(g.motionLines[0].material.opacity - o0) > 1e-6);
+    }
+
+    // (d) band 4 — the comet tail is REPLACED by a contrail ribbon.
+    upd([]); step(1, 3);
+    upd([SP('sv4', 300)]);                              // 556 km/h
+    {
+      const g = rig('sv4');
+      ok('26d: 300 kt resolves to band 4', bandOf('sv4') === 4, `band=${bandOf('sv4')}`);
+      ok('26d: band 4 builds a contrail ribbon', g.ribbon !== null);
+      ok('26d: …and REPLACES the comet tail (not both)', g.trailLine === null);
+      ok('26d: the ribbon is an indexed strip over 12 spine samples',
+         g.ribbon.geometry.attributes.position.count === 24
+         && g.ribbon.geometry.index.count === 11 * 6,
+         `${g.ribbon.geometry.attributes.position.count} verts`);
+      ok('26d: band 4 has no burners or ghosts (those are band 5)',
+         g.burners.length === 0 && g.ghosts.length === 0);
+      step(0.2, 8);
+      ok('26d: the ribbon draws once history exists',
+         g.ribbon.geometry.drawRange.count >= 6, `idx=${g.ribbon.geometry.drawRange.count}`);
+      ok('26d: the ribbon alpha ramps 0 → peak → 0 along its length',
+         (() => {
+           const c = g.ribbon.geometry.attributes.color.array;
+           const n = g.ribbon.geometry.drawRange.count / 6 + 1;
+           const mid = Math.floor(n / 2);
+           return c[0] < c[mid * 6] && c[(n - 1) * 6] < c[mid * 6];
+         })());
+      ok('26d: the ribbon widens toward the tail',
+         (() => {
+           const a = g.ribbon.geometry.attributes.position.array;
+           const n = g.ribbon.geometry.drawRange.count / 6 + 1;
+           const w = i => Math.hypot(a[i * 6] - a[i * 6 + 3], a[i * 6 + 1] - a[i * 6 + 4],
+                                     a[i * 6 + 2] - a[i * 6 + 5]);
+           return w(0) > w(n - 1);
+         })(), 'far end wider than the aircraft end');
+    }
+
+    // (e) band 5 — contrail + afterburner + 2 ghosts, and a ONE-SHOT vapor
+    // flash on ENTERING the band (never in steady state).
+    upd([]); step(1, 3);
+    upd([SP('sv5', 300)]); step(0.2, 4);                // start in band 4…
+    ok('26e: the rig starts in band 4', bandOf('sv5') === 4);
+    ok('26e: a rig that has never been band 5 has no vapor flash', rig('sv5').vapor === null);
+    upd([SP('sv5', 450)]);                              // …then cross into band 5
+    {
+      const g = rig('sv5');
+      ok('26e: 450 kt resolves to band 5', bandOf('sv5') === 5, `band=${bandOf('sv5')}`);
+      ok('26e: band 5 keeps the contrail ribbon', g.ribbon !== null);
+      ok('26e: band 5 builds afterburner strips', g.burners.length >= 2, `n=${g.burners.length}`);
+      ok('26e: the burners trail aft of their engines (+Z)',
+         g.burners.every(b => b.position.z > 0));
+      ok('26e: band 5 builds exactly 2 ghost multiples', g.ghosts.length === 2);
+      ok('26e: the ghosts sit at increasing lags behind the airframe',
+         g.ghosts[0].position.z > 0 && g.ghosts[1].position.z > g.ghosts[0].position.z);
+      ok('26e: the second ghost is fainter than the first',
+         g.ghosts[1].material.opacity < g.ghosts[0].material.opacity);
+      ok('26e: crossing INTO band 5 fires the one-shot vapor flash', g.vapor !== null);
+      step(0.15);
+      const peak = g.vapor && g.vapor.material.opacity;
+      ok('26e: the flash spikes to a visible opacity', peak > 0.05, `op=${(peak ?? 0).toFixed(3)}`);
+      step(0.15, 6);                                    // total > FLIGHT_VAPOR_S (0.8 s)
+      ok('26e: …and decays away, disposing itself', g.vapor === null);
+      // Staying fast must NOT re-arm it.
+      upd([SP('sv5', 460)]);
+      ok('26e: staying in band 5 does not re-arm the flash',
+         g.vapor === null && bandOf('sv5') === 5);
+      const bo = g.burners[0].material.opacity;
+      step(0.05, 3);
+      ok('26e: the burners flicker per frame',
+         Math.abs(g.burners[0].material.opacity - bo) > 1e-6);
+    }
+
+    // (f) hysteresis is live on the rig: a speed inside the dead band must NOT
+    // rebuild the effect set (the whole point of the guard).
+    {
+      const before = rig('sv5').ribbon;
+      upd([SP('sv5', 372)]);                            // 689 km/h — inside 700 − 15
+      ok('26f: a speed inside the dead band holds the band', bandOf('sv5') === 5);
+      ok('26f: …and does not rebuild the ribbon', rig('sv5').ribbon === before);
+      upd([SP('sv5', 369)]);                            // 683 km/h — past the margin
+      ok('26f: clearing the margin drops the band', bandOf('sv5') === 4);
+      ok('26f: dropping out of band 5 tears down burners + ghosts',
+         rig('sv5').burners.length === 0 && rig('sv5').ghosts.length === 0);
+    }
+
+    // (g) trail rides the DISPLAY position: a poll CORRECTION must not kink it.
+    upd([]); step(1, 3);
+    {
+      const straight = t => SP('kink', 300, {
+        lat: OLAT + 0.10, lon: OLON + 0.10 + t * 0.004, altFt: 20000 });
+      upd([straight(0)]);
+      for (let i = 0; i < 12; i++) { upd([straight(i)]); step(0.15); }
+      // A deliberately LARGE correction — the kind that would jump-cut a naive
+      // trail that sampled the raw fix instead of the eased display position.
+      upd([SP('kink', 300, { lat: OLAT + 0.13, lon: OLON + 0.17, altFt: 20000 })]);
+      for (let i = 0; i < 12; i++) step(0.15);
+      const g = rig('kink');
+      const a = g.ribbon.geometry.attributes.position.array;
+      const n = g.ribbon.geometry.drawRange.count / 6 + 1;
+      // Spine point i is the midpoint of its two ribbon vertices.
+      const pt = i => [(a[i * 6] + a[i * 6 + 3]) / 2, (a[i * 6 + 1] + a[i * 6 + 4]) / 2,
+                       (a[i * 6 + 2] + a[i * 6 + 5]) / 2];
+      let maxTurn = 0, segs = 0;
+      for (let i = 1; i + 1 < n; i++) {
+        const p0 = pt(i - 1), p1 = pt(i), p2 = pt(i + 1);
+        const u = [p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]];
+        const v = [p2[0] - p1[0], p2[1] - p1[1], p2[2] - p1[2]];
+        const lu = Math.hypot(...u), lv = Math.hypot(...v);
+        if (lu < 1e-6 || lv < 1e-6) continue;
+        const d = (u[0] * v[0] + u[1] * v[1] + u[2] * v[2]) / (lu * lv);
+        maxTurn = Math.max(maxTurn, Math.acos(Math.max(-1, Math.min(1, d))));
+        segs++;
+      }
+      ok('26g: the trail has real segments to measure', segs >= 4, `segs=${segs}`);
+      ok('26g: no kink — every consecutive turn stays under 30°',
+         maxTurn < Math.PI / 6, `max=${(maxTurn * 180 / Math.PI).toFixed(1)}°`);
+    }
+
+    // (h) effects must never paint over the readable parts of a rig.
+    upd([]); step(1, 3);
+    upd([SP('ord', 300, { interesting: true, callsign: 'ORD1' })]); step(0.2, 4);
+    {
+      const g = rig('ord');
+      ok('26h: the label + beacon exist to compare against',
+         g.label !== null && g.beacon !== null);
+      ok('26h: the contrail renders BELOW the label sprite',
+         g.ribbon.renderOrder < g.label.renderOrder);
+      ok('26h: …and below the status beacon',
+         g.ribbon.renderOrder < g.beacon.renderOrder
+         && g.ribbon.renderOrder < g.beaconGlow.renderOrder);
+      ok('26h: every band effect is outline-skipped (no inverted-hull shells)',
+         g.ribbon.userData.outlineSkip === true);
+      ok('26h: every band effect is fog-exempt (aircraft are sky objects)',
+         g.ribbon.material.fog === false);
+      ok('26h: band effects are not depth-writers', g.ribbon.material.depthWrite === false);
+    }
+
+    // (i) the trail lives OUTSIDE the rig assembly — it must not inherit the
+    // aircraft's yaw/scale, and must not become a click target.
+    {
+      const g = rig('ord');
+      ok('26i: the trail is parented to the effects layer, not the assembly',
+         g.ribbon.parent === g.viz && g.viz.parent === r._flightVizGroup);
+      ok('26i: the effects layer shares the rig group transform exactly',
+         r._flightVizGroup.position.equals(r._flightsGroup.position));
+      ok('26i: the effects layer is NOT the aircraft raycast root',
+         r._flightVizGroup !== r._flightsGroup
+         && r._flightsGroup.children.every(c => c !== g.viz));
+      ok('26i: the rig group still holds exactly one child per aircraft',
+         r._flightsGroup.children.length === r._flightRigs.size,
+         `${r._flightsGroup.children.length} vs ${r._flightRigs.size}`);
+    }
+
+    // (j) disposal: a vanished rig takes its effects with it.
+    upd([]); step(1, 3);
+    ok('26j: a disposed rig removes its effects group too',
+       r._flightVizGroup.children.length === 0,
+       `n=${r._flightVizGroup.children.length}`);
+
+    // (k) speedViz:false builds nothing at all, and toggling back rebuilds.
+    upd([SP('off1', 300)], { opts: { speedViz: false } });
+    {
+      const g = rig('off1');
+      ok('26k: speedViz:false resolves no band', g.speedBand === 0);
+      ok('26k: speedViz:false builds no trail, ribbon, burners, ghosts or discs',
+         g.trailLine === null && g.ribbon === null && g.burners.length === 0
+         && g.ghosts.length === 0 && g.propDiscs.length === 0
+         && g.motionLines.length === 0 && g.vapor === null);
+      step(0.2, 6);
+      ok('26k: …and stays inert across frames', g.ribbon === null && g.speedBand === 0);
+      ok('26k: the effects layer stays empty', r._flightVizGroup.children.length === 1
+         && r._flightVizGroup.children[0].children.length === 0);
+      upd([SP('off1', 300)]);                            // opts absent = ON
+      ok('26k: an absent speedViz flag means ON (stale-chunk safe)',
+         rig('off1').speedBand === 4 && rig('off1').ribbon !== null);
+      upd([SP('off1', 300)], { opts: { speedViz: false } });
+      ok('26k: turning it back off tears the effects down',
+         rig('off1').ribbon === null && rig('off1').speedBand === 0);
+    }
+    upd([]); step(1, 3);
+  }
+
+  // ── 27. Independent vertical (height) scale (opts.verticalScale) ───────────
+  // Composed ONLY at the display-height site, so 2D and 3D read one geometry
+  // call. The horizontal shell must not move at all.
+  {
+    upd([]); step(1, 3);
+    const VS_FP = FP({ hex: 'vs1', lat: OLAT + 0.22, lon: OLON - 0.18, altFt: 34000 });
+    const expectVS = (fp, vs, shellMm = SHELL0) => {
+      const d = F.flightDisplayPos(fp, OLAT, OLON, 0, RAD_NM, shellMm, vs);
+      return { x: -d.planX, y: d.dispY, z: d.planY };
+    };
+
+    upd([VS_FP], { opts: { verticalScale: 0.5 } });
+    {
+      const got = rig('vs1').asm.position, want = expectVS(VS_FP, 0.5);
+      ok('27: the rig snaps to the pure module\'s scaled height (2D/3D parity)',
+         Math.abs(got.x - want.x) < 1 && Math.abs(got.y - want.y) < 1
+         && Math.abs(got.z - want.z) < 1,
+         `got y=${got.y.toFixed(1)} want ${want.y.toFixed(1)}`);
+      const full = expectPos(VS_FP);
+      // The renderer's inline reaches the same plan offsets a different way
+      // (unit vector vs an atan2 round-trip), so this is the §4d parity
+      // tolerance, not a bit compare — the POINT is that the height scale moved
+      // neither coordinate at all.
+      ok('27: the HORIZONTAL position is untouched by the height scale',
+         Math.abs(got.x + F.flightDisplayPos(VS_FP, OLAT, OLON, 0, RAD_NM, SHELL0, 0.5).planX) < 0.001
+         && Math.abs(got.x - full.x) < 0.001 && Math.abs(got.z - full.z) < 0.001,
+         `dx=${(got.x - full.x).toExponential(2)} dz=${(got.z - full.z).toExponential(2)}`);
+      ok('27: …while the height genuinely dropped', got.y < full.y - 1,
+         `${full.y.toFixed(0)} → ${got.y.toFixed(0)}`);
+    }
+
+    // The zero-alloc inline must mirror the pure function at a non-default scale
+    // — the same single-sourcing parity §4d pins for the shell radius.
+    {
+      let parity = true;
+      for (const [lat, lon, alt] of [[OLAT + 0.4, OLON + 0.05, 3000],
+                                     [OLAT - 0.3, OLON - 0.5, 41000], [OLAT, OLON, 800]]) {
+        const w = expectVS(FP({ lat, lon, altFt: alt }), 0.5);
+        const g = r._flightScenePos(lat, lon, alt, r._v3flight);
+        if (Math.abs(g.x - w.x) > 0.001 || Math.abs(g.y - w.y) > 0.001
+          || Math.abs(g.z - w.z) > 0.001) parity = false;
+      }
+      ok('27: _flightScenePos == flightDisplayPos at a non-default height scale', parity);
+    }
+
+    // A LIVE rig EASES onto a changed scale (a settings edit is a correction).
+    {
+      const before = rig('vs1').asm.position.y;
+      upd([VS_FP], { opts: { verticalScale: 1.6 } });
+      step(0.05, 2);
+      const mid = rig('vs1').asm.position.y;
+      const target = expectVS(VS_FP, 1.6).y;
+      ok('27: a live rig eases toward a changed height scale, never snaps',
+         mid > before + 1e-6 && mid < target - 1,
+         `${before.toFixed(0)} → ${mid.toFixed(0)} (target ${target.toFixed(0)})`);
+      step(0.5, 90);
+      ok('27: …and converges on it',
+         Math.abs(rig('vs1').asm.position.y - target) < 1,
+         `${rig('vs1').asm.position.y.toFixed(1)} want ${target.toFixed(1)}`);
+    }
+
+    // The frustum requirement grows with a scale above 1, and is untouched below.
+    {
+      upd([VS_FP], { opts: { verticalScale: 1 } });
+      const base = r._frustumReqFlights;
+      upd([VS_FP], { opts: { verticalScale: 0.4 } });
+      ok('27: a height scale below 1 leaves the frustum reach alone',
+         r._frustumReqFlights === base, `${base} vs ${r._frustumReqFlights}`);
+      upd([VS_FP], { opts: { verticalScale: 2 } });
+      ok('27: a height scale above 1 widens the frustum reach',
+         r._frustumReqFlights > base * 1.2,
+         `${Math.round(base)} → ${Math.round(r._frustumReqFlights)}`);
+      near('27: the widened reach matches flightShellReachMm(shell, 2)',
+           r._frustumReqFlights, F.flightShellReachMm(SHELL0, 2), 1);
+      upd([]); step(1, 3);
+      ok('27: an empty shell drops the requirement entirely',
+         r._frustumReqFlights === null, String(r._frustumReqFlights));
+    }
+
+    // Absent = 1 = the shipped geometry, exactly (stale-chunk safety).
+    {
+      upd([VS_FP]);
+      const noOpt = rig('vs1').asm.position.clone();
+      upd([]); step(1, 3);
+      upd([VS_FP], { opts: { verticalScale: 1 } });
+      const one = rig('vs1').asm.position.clone();
+      ok('27: an absent verticalScale is byte-identical to an explicit 1',
+         noOpt.equals(one), `${noOpt.y} vs ${one.y}`);
+      upd([]); step(1, 3);
+      upd([VS_FP], { opts: { verticalScale: NaN } });
+      ok('27: a garbage verticalScale falls back to 1',
+         rig('vs1').asm.position.equals(one));
+    }
+    upd([]); step(1, 3);
+  }
+
   // ── report ─────────────────────────────────────────────────────────────────
   const pass = tests.filter(t => t.ok).length;
   const fail = tests.length - pass;
