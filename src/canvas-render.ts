@@ -604,7 +604,9 @@ function drawFloorEditHandles(ctx: CanvasRenderingContext2D, p: Planner, view: V
   if (p.uiMode !== 'edit' || p.tool !== 'select') return;
   const dpr = window.devicePixelRatio || 1;
   const f = p.floor();
-  if (f.boundsLocked) return;   // canvas-layout editing locked → no anchors
+  // `f.boundsLocked` is no longer consulted: its toggle was removed with the
+  // sidebar floor-size controls, so a stored lock would hide these handles
+  // permanently. See the matching note in canvas-interact's mousedown.
   const dragging = p.drag?.kind === 'floorEdge' ? p.drag.edge : null;
   const a = mmToPx(view, 0, 0);       // world (0,0) → screen bottom-left
   const b = mmToPx(view, f.w, f.d);   // world (w,d) → screen top-right

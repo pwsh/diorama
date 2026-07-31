@@ -12,7 +12,8 @@
   h2 { font-size:12px; color:#80cbc4; margin:14px 0 4px; }
   #mount { position:absolute; left:-4000px; top:0; width:1200px; }
 </style>
-<h1>Sidebar organisation — floor picker / floor tools / collapse-all / section order / hotkey switch</h1>
+<h1>Sidebar organisation — floor picker / floor tools / collapse-all / section order / hotkey switch /
+   glass headers / armed tool hints / Settings ▸ Floor Plan</h1>
 <div id="summary">Running…</div>
 <div id="rows"></div>
 <div id="mount"></div>
@@ -86,9 +87,11 @@
     try { return new Set(JSON.parse(localStorage.getItem('diorama:sidebar:collapsed') || '[]')); }
     catch { return new Set(); }
   };
-  // Titles of every .section in DOM order (the floor picker's <h3> has no arrow).
+  // Titles of every .section in DOM order. Section headers no longer carry a ▸
+  // glyph (the emboss/deboss relief on the glass pill encodes the state), so
+  // this is a plain textContent read.
   const sectionTitles = sb => [...sb.querySelectorAll('.section')]
-    .map(s => (s.querySelector('h3')?.textContent || '').replace('▸', '').trim());
+    .map(s => (s.querySelector('h3')?.textContent || '').trim());
 
   let p, sb;
   try {
@@ -133,7 +136,12 @@
     ok('B3 floor picker header is not collapsible',
        !!pickerH3 && !pickerH3.classList.contains('collapsible-header'),
        pickerH3 ? pickerH3.className : 'missing');
-    ok('B4 "+ Add floor" lives in the picker', !!sb.querySelector('[data-floor-select] [data-add-floor]'));
+    // "+ Add floor" MOVED to Settings ▸ Floor Plan (see section K) — the picker
+    // is switch-only now and points at where the lifecycle controls went.
+    ok('B4 "+ Add floor" is GONE from the sidebar', !sb.querySelector('[data-add-floor]'));
+    ok('B4b the picker says where floor lifecycle lives',
+       (sb.querySelector('[data-floor-select]')?.textContent || '').includes('Settings ▸ Floor Plan'),
+       (sb.querySelector('[data-floor-select]')?.textContent || '').trim().slice(-60));
     // Display order = highest story first (floorsDisplayOrder).
     ok('B5 rows are display-ordered (highest story first)',
        rows[0].getAttribute('data-floor-row') === 'f2' &&
@@ -150,9 +158,14 @@
     ok('C1 Floor tools holds the order buttons',
        !!sb.querySelector('[data-floor-up]') && !!sb.querySelector('[data-floor-down]'));
     ok('C2 Floor tools holds the visibility cycle', !!sb.querySelector('[data-floor-vis]'));
-    ok('C3 Floor tools holds edit/delete + elevation + HA floor',
-       !!sb.querySelector('[data-edit-floor]') && !!sb.querySelector('[data-del-floor]') &&
-       !!sb.querySelector('[data-floor-elev]'));
+    ok('C3 Floor tools holds elevation + HA floor', !!sb.querySelector('[data-floor-elev]'));
+    // Size / name / delete moved OFF the sidebar entirely (directive 1).
+    ok('C3b no ✎ Size / name launcher on the sidebar', !sb.querySelector('[data-edit-floor]'));
+    ok('C3c no 🗑 delete-floor button on the sidebar', !sb.querySelector('[data-del-floor]'));
+    ok('C3d no "Lock floor size" row on the sidebar',
+       !(sb.textContent || '').includes('Lock floor size'));
+    ok('C3e Imperial units moved off Floor tools',
+       !(sb.textContent || '').includes('Imperial units'));
     // moveFloor: f1 is index 0 → ▲ Up moves it to index 1.
     const spyMove = []; const realMove = p.moveFloor.bind(p);
     p.moveFloor = (id, d) => { spyMove.push([id, d]); return realMove(id, d); };
@@ -201,7 +214,7 @@
     ok('D3 Tools grid is gone while collapsed',
        sb.querySelectorAll('.tool-cat').length === 0, sb.querySelectorAll('.tool-cat').length);
     ok('D4 the floor picker survives collapse-all',
-       sb.querySelectorAll('[data-floor-row]').length === 2 && !!sb.querySelector('[data-add-floor]'),
+       sb.querySelectorAll('[data-floor-row]').length === 2,
        sb.querySelectorAll('[data-floor-row]').length);
     ok('D5 section headers all still render (only bodies hide)',
        sectionTitles(sb).length === before, `${sectionTitles(sb).length} vs ${before}`);
@@ -427,6 +440,154 @@
     ok('I3 the master switch closes it', p.tool === 'select', p.tool);
     p.setHotkeysEnabled(true);
     header.click(); await frames(2);
+
+    // ── J: collapse-all placement, glass headers, armed tool hints ───────
+    // J1 the collapse/expand row now sits DIRECTLY below the floor picker
+    // (directive 2) — i.e. before "Floor tools", not after it.
+    {
+      const kids = [...sb.firstElementChild.children];
+      const iPicker = kids.findIndex(k => k.hasAttribute('data-floor-select'));
+      const iCollapse = kids.findIndex(k => k.querySelector?.('[data-collapse-all]'));
+      const iTools = kids.findIndex(k => (k.querySelector('h3')?.textContent || '').trim() === 'Floor tools');
+      ok('J1 collapse/expand row sits directly after the floor picker',
+         iPicker >= 0 && iCollapse === iPicker + 1 && iTools === iCollapse + 1,
+         `picker=${iPicker} collapse=${iCollapse} tools=${iTools}`);
+    }
+    // J2/J3 section headers are toggles carrying aria-expanded; the ▸ glyph is gone.
+    {
+      const h = [...sb.querySelectorAll('h3.collapsible-header')];
+      ok('J2 every section header carries aria-expanded',
+         h.length > 5 && h.every(x => x.getAttribute('aria-expanded') === 'true' ||
+                                       x.getAttribute('aria-expanded') === 'false'),
+         `${h.length} headers`);
+      ok('J3 no ▸ arrow glyph left in section headers',
+         h.every(x => !x.textContent.includes('▸')) &&
+         sb.querySelectorAll('h3.collapsible-header .collapse-arrow').length === 0,
+         sb.querySelectorAll('h3.collapsible-header .collapse-arrow').length);
+      const tools = h.find(x => x.textContent.trim() === 'Tools');
+      const was = tools.getAttribute('aria-expanded');
+      tools.click(); await frames(2);
+      const now = [...sb.querySelectorAll('h3.collapsible-header')]
+        .find(x => x.textContent.trim() === 'Tools');
+      ok('J4 aria-expanded flips on toggle', now.getAttribute('aria-expanded') !== was,
+         `${was} → ${now.getAttribute('aria-expanded')}`);
+      ok('J5 the .open class tracks it (drives the deboss relief)',
+         now.classList.contains('open') === (now.getAttribute('aria-expanded') === 'true'),
+         now.className);
+      now.click(); await frames(2);
+      // The pinned picker heading is a CAPTION (flat glass, never a toggle).
+      const ph = sb.querySelector('[data-floor-select] h3');
+      ok('J6 picker heading is the flat caption variant, not a toggle',
+         ph.classList.contains('section-caption') && !ph.classList.contains('collapsible-header'),
+         ph.className);
+      ok('J7 tool-group captions take the caption variant too',
+         [...sb.querySelectorAll('.tool-cat')].every(c => c.classList.contains('section-caption')),
+         sb.querySelectorAll('.tool-cat.section-caption').length);
+    }
+    // J8-J11 the tool hint NAMES the armed variant (directive 5).
+    p.setTool('furniture');
+    p.pendingCustomObjectId = null;
+    p.pendingFurnitureKind = 'oak_tree';
+    p.emitConfig(); await frames(3);
+    // Read the HINT BLOCK only: the Type dropdown lists every kind label, so a
+    // whole-sidebar textContent match would pass no matter what is armed.
+    const hint = () => (sb.querySelector('[data-tool-hint]')?.textContent || '').replace(/\s+/g, ' ');
+    {
+      const txt = hint();
+      ok('J8 furniture hint names the armed kind', txt.includes('Oak tree'), txt.slice(0, 70));
+      ok('J9 …and its real footprint (not a hard-coded 600 × 600)',
+         txt.includes('3000 × 3000 mm') && !txt.includes('600 × 600 mm piece'), txt.slice(0, 70));
+      ok('J10 …and explains the visual picker concretely',
+         txt.includes('visual picker') && txt.includes('category tab'), txt.slice(-90));
+    }
+    p.pendingFurnitureKind = 'chair'; p.emitConfig(); await frames(3);
+    ok('J11 the hint tracks a variant change',
+       hint().includes('Chair') && !hint().includes('Oak tree'), hint().slice(0, 60));
+    p.setTool('light'); p.pendingLightKind = 'fireplace'; p.emitConfig(); await frames(3);
+    ok('J12 light hint names the armed fixture style', hint().includes('Fireplace'), hint().slice(0, 60));
+    p.setTool('door'); p.pendingDoorKind = 'garage'; p.emitConfig(); await frames(3);
+    ok('J13 door hint names the armed variant', hint().includes('Garage door'), hint().slice(0, 60));
+    p.setTool('window'); p.pendingWindowKind = 'bay'; p.emitConfig(); await frames(3);
+    ok('J14 window hint names the armed variant', hint().includes('Bay (projecting)'), hint().slice(0, 60));
+    p.setTool('ground'); p.pendingGroundKind = 'blacktop'; p.emitConfig(); await frames(3);
+    ok('J15 ground hint names the armed covering', hint().includes('Blacktop'), hint().slice(0, 60));
+    p.setTool('select'); await frames(2);
+
+    // ── K: Settings ▸ Floor Plan owns the floor lifecycle ────────────────
+    // (`drawer` was created in section G and is still mounted.)
+    drawer.show('data');            // slug UNCHANGED — only the label moved
+    await drawer.updateComplete; await frames(2);
+    const tabLabels = [...drawer.querySelectorAll('button')].map(b => b.textContent.trim());
+    ok('K1 the tab is labelled "Floor Plan"', tabLabels.includes('Floor Plan'), tabLabels.slice(0, 8).join('|'));
+    ok('K2 …and no longer labelled "Data"', !tabLabels.includes('Data'));
+    ok('K3 the "data" slug still opens it (event/URL compat)',
+       !!drawer.querySelector('[data-floors-block]'));
+    let fRows = [...drawer.querySelectorAll('[data-floor-edit-row]')];
+    ok('K4 one edit row per floor, display-ordered (highest story first)',
+       fRows.length === 2 && fRows[0].getAttribute('data-floor-edit-row') === 'f2' &&
+       fRows[1].getAttribute('data-floor-edit-row') === 'f1',
+       fRows.map(r => r.getAttribute('data-floor-edit-row')).join(','));
+    // Rename.
+    const nameIn = drawer.querySelector('[data-floor-name-for="f1"]');
+    nameIn.value = 'Main';
+    nameIn.dispatchEvent(new Event('change'));
+    await frames(2);
+    ok('K5 the name input renames the floor',
+       p.store.floors.find(f => f.id === 'f1').name === 'Main',
+       p.store.floors.find(f => f.id === 'f1').name);
+    // Resize.
+    const wIn = drawer.querySelector('[data-floor-w-for="f1"]');
+    wIn.value = '9000'; wIn.dispatchEvent(new Event('change')); await frames(2);
+    const dIn = drawer.querySelector('[data-floor-d-for="f1"]');
+    dIn.value = '7000'; dIn.dispatchEvent(new Event('change')); await frames(2);
+    ok('K6 the W/D inputs resize the floor',
+       p.store.floors.find(f => f.id === 'f1').w === 9000 &&
+       p.store.floors.find(f => f.id === 'f1').d === 7000,
+       `${p.store.floors.find(f => f.id === 'f1').w}×${p.store.floors.find(f => f.id === 'f1').d}`);
+    ok('K7 …and the sidebar picker reflects it',
+       (sb.querySelector('[data-floor-row="f1"]')?.textContent || '').includes('Main'),
+       sb.querySelector('[data-floor-row="f1"]')?.textContent?.trim());
+    // Add.
+    drawer.querySelector('[data-add-floor]').click();
+    await frames(3);
+    ok('K8 "+ Add floor" adds a floor', p.store.floors.length === 3, p.store.floors.length);
+    ok('K9 …and the new floor gets an edit row',
+       drawer.querySelectorAll('[data-floor-edit-row]').length === 3,
+       drawer.querySelectorAll('[data-floor-edit-row]').length);
+    // Delete — CONFIRM required. Stub window.confirm.
+    const realConfirm = window.confirm;
+    let confirmMsg = '';
+    const newId = p.store.floors[p.store.floors.length - 1].id;
+    window.confirm = m => { confirmMsg = m; return false; };
+    drawer.querySelector(`[data-floor-del-for="${newId}"]`).click();
+    await frames(3);
+    ok('K10 delete PROMPTS and names the floor',
+       /Delete floor "/.test(confirmMsg) && confirmMsg.includes('everything on it'), confirmMsg);
+    ok('K11 cancelling the prompt keeps the floor', p.store.floors.length === 3, p.store.floors.length);
+    window.confirm = () => true;
+    drawer.querySelector(`[data-floor-del-for="${newId}"]`).click();
+    await frames(3);
+    ok('K12 accepting deletes the floor',
+       p.store.floors.length === 2 && !p.store.floors.some(f => f.id === newId),
+       p.store.floors.map(f => f.id).join(','));
+    // Last-floor guard.
+    p.deleteFloor(p.store.floors[1].id);
+    await frames(3);
+    ok('K13 one floor left', p.store.floors.length === 1, p.store.floors.length);
+    const lastId = p.store.floors[0].id;
+    const delBtn = drawer.querySelector(`[data-floor-del-for="${lastId}"]`);
+    ok('K14 the last floor’s delete button is disabled', delBtn.disabled === true, delBtn.disabled);
+    delBtn.click(); await frames(2);
+    ok('K15 …and clicking it deletes nothing', p.store.floors.length === 1, p.store.floors.length);
+    window.confirm = realConfirm;
+    // Imperial moved to Display (directive 3).
+    drawer.show('display'); await drawer.updateComplete; await frames(2);
+    const imp = drawer.querySelector('[data-imperial-toggle]');
+    ok('K16 Settings ▸ Display has the imperial checkbox', !!imp);
+    imp.checked = true; imp.dispatchEvent(new Event('change')); await frames(2);
+    ok('K17 the checkbox drives store.imperial', p.store.imperial === true, p.store.imperial);
+    imp.checked = false; imp.dispatchEvent(new Event('change')); await frames(2);
+    ok('K18 …both ways', p.store.imperial === false, p.store.imperial);
   } catch (err) {
     ok('harness threw', false, (err && (err.stack || err.message)) || String(err));
   }

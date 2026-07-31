@@ -856,8 +856,13 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
   // Floor boundary edge — lowest priority (after every item hit, before the
   // canvas-2d pan fallback). Drag to resize the canvas space; left/bottom edges
   // also reposition the plan (see resolveFloorEdgeDrag / translateFloorContent).
-  // boundsLocked hides the handles and disables the drag entirely.
-  const fe = p.floor().boundsLocked ? null : hitFloorEdge(p.floor(), view, mm);
+  // NOTE: the legacy `Floor.boundsLocked` flag is deliberately NOT consulted
+  // any more. Its only UI (the sidebar "Lock floor size" toggle) was removed
+  // when floor sizing moved into Settings ▸ Floor Plan, so honouring a stored
+  // flag would strand an already-locked floor with no way to unlock it. The
+  // field stays in the store/type (harmless, still round-trips) but gates
+  // nothing; edge-drag resize is always available in edit + Select mode.
+  const fe = hitFloorEdge(p.floor(), view, mm);
   if (fe) {
     const f = p.floor();
     p.drag = {
@@ -1437,7 +1442,7 @@ export function onCanvasMouseMove(p: Planner, canvas: HTMLCanvasElement, view: V
     else if (hitFurniture(p, mm) || hitWall(p, mm) || hitSensor(p, view, mm)) canvas.style.cursor = 'grab';
     else if (hitBgBody(p, mm)) canvas.style.cursor = 'grab';
     else {
-      const fe = p.floor().boundsLocked ? null : hitFloorEdge(p.floor(), view, mm);
+      const fe = hitFloorEdge(p.floor(), view, mm);   // boundsLocked no longer gates (see mousedown)
       canvas.style.cursor = fe
         ? ((fe === 'left' || fe === 'right') ? 'ew-resize' : 'ns-resize')
         : 'default';

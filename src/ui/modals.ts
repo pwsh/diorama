@@ -2,7 +2,7 @@ import { LitElement, html, nothing } from 'lit';
 import { property, state } from 'lit/decorators.js';
 import { customElement } from './define.js';
 import { finishZoneEdit, cancelZoneEdit } from '../canvas-interact.js';
-import { alarmStateColor, hvacModeColor, climateFeature, CLIMATE_FEATURE, climateTempUnit, fmtTempNum, clampSetpoint, resolvePivotMode } from '../geometry.js';
+import { alarmStateColor, hvacModeColor, climateFeature, CLIMATE_FEATURE, climateTempUnit, fmtTempNum, clampSetpoint, resolvePivotMode, floorsDisplayOrder } from '../geometry.js';
 import { CONDITION_GLYPH, CONDITION_LABEL, tempText, weatherEffectEnabled, worstAlertSeverity } from '../weather.js';
 import { listPacks, getPack, packEffectiveState, resolveDef } from '../avatars.js';
 import { OFFLINE_FLAG_KEY } from '../ha-local.js';
@@ -1106,6 +1106,10 @@ export function summarizeGlowCriteria(c: FlightGlowCriteria | undefined): string
 }
 
 // ── Settings drawer ──────────────────────────────────────────────────────
+// NB the 'data' slug is the STABLE key (URL/event callers pass `{tab:'data'}`);
+// only its user-facing LABEL is "Floor Plan" — the tab now owns floor
+// lifecycle (add / rename / resize / delete) as well as the configuration
+// registry, so "Data" undersold it.
 type SettingsTab = 'connection' | 'display' | 'weather' | 'avatars' | 'integrations' | 'data';
 
 @customElement('diorama-settings-drawer')
@@ -1155,7 +1159,7 @@ export class SettingsDrawer extends LitElement {
     // Kiosk/view: only the Connection tab is available.
     const tabs: Array<[SettingsTab, string]> = edit
       ? [['connection', 'Connection'], ['display', 'Display'], ['weather', 'Weather'],
-         ['avatars', 'Avatars'], ['integrations', 'Integrations'], ['data', 'Data']]
+         ['avatars', 'Avatars'], ['integrations', 'Integrations'], ['data', 'Floor Plan']]
       : [['connection', 'Connection']];
     const tab: SettingsTab = tabs.some(t => t[0] === this._tab) ? this._tab : 'connection';
     return html`
@@ -2032,6 +2036,14 @@ export class SettingsDrawer extends LitElement {
                style="width:36px;height:24px;padding:0;border:1px solid var(--border);background:#111"
                @input=${(e: Event) => upd(() => { p.store.scene3d!.wallColor = (e.target as HTMLInputElement).value; })}>
       </div>
+      <div class="row" title="Show all lengths and distances in feet / inches instead of millimetres. This is a synced store setting, not a per-device one.">
+        <label>Imperial units</label>
+        <input type="checkbox" data-imperial-toggle .checked=${!!p.store.imperial}
+               @change=${(e: Event) => {
+                 p.store.imperial = (e.target as HTMLInputElement).checked;
+                 p.save(); p.emitConfig();
+               }}>
+      </div>
       <div class="row" title="Height of the SURROUNDINGS (backdrop grid, neighborhood overlay, yard fill) relative to the floor slab. Negative = ground below a raised foundation.">
         <label>Ground level (mm)</label>
         <input type="number" step="50" min="-10000" max="10000" style="width:80px"
@@ -2750,7 +2762,81 @@ export class SettingsDrawer extends LitElement {
     `;
   }
 
-  // ── Data tab (Configurations + export/import) ───────────────────────────
+  // ── Floors block (Floor Plan tab) ───────────────────────────────────────
+  // Floor LIFECYCLE lives here, not on the sidebar: adding / renaming /
+  // resizing / deleting a floor is a rare, destructive, whole-plan operation
+  // and does not belong next to the everyday floor SWITCHER. The sidebar's
+  // "Floor tools" section keeps the per-floor knobs that ARE everyday work
+  // (elevation, HA-floor bind, story order, visibility, rotate / move, 3D look).
+  //
+  // Rows are display-ordered (highest story first — floorsDisplayOrder), which
+  // matches the sidebar picker. Name / W / D commit on `change` (blur or Enter)
+  // through Planner.saveFloorEdit, i.e. one undo step per edit.
+  private _floorsBlock() {
+    const p = this.planner;
+    const floors = p.store.floors;
+    const only = floors.length <= 1;
+    const commit = (f: Floor, name: string, w: number, d: number) =>
+      p.saveFloorEdit(f.id, name.trim() || 'Floor', Math.max(1000, Math.round(w) || f.w),
+                      Math.max(1000, Math.round(d) || f.d));
+    return html`
+      <h3 style="font-size:12px;margin:0 0 8px">Floors</h3>
+      <div data-floors-block style="display:flex;flex-direction:column;gap:6px;margin-bottom:8px">
+        ${floorsDisplayOrder(floors).map(f => html`
+          <div data-floor-edit-row=${f.id}
+               style="display:flex;align-items:center;gap:6px;padding:6px;border-radius:6px;
+                      border:1px solid ${f.id === p.store.currentFloorId ? 'var(--accent)' : 'var(--border)'};
+                      background:#111">
+            <input type="text" data-floor-name-for=${f.id} .value=${f.name}
+                   title="Floor name"
+                   style="flex:1 1 auto;min-width:60px;padding:3px 5px;background:#0c0c14;
+                          border:1px solid var(--border);border-radius:3px;color:var(--text);font-size:12px"
+                   @change=${(e: Event) => commit(f, (e.target as HTMLInputElement).value, f.w, f.d)}>
+            <input type="number" data-floor-w-for=${f.id} min="1000" step="100" .value=${String(Math.round(f.w))}
+                   title="Width (mm)"
+                   style="width:74px;flex:0 0 auto;padding:3px 5px;background:#0c0c14;text-align:right;
+                          border:1px solid var(--border);border-radius:3px;color:var(--text);font-size:11px"
+                   @change=${(e: Event) => commit(f, f.name, Number((e.target as HTMLInputElement).value), f.d)}>
+            <span style="color:var(--text-dim);font-size:11px">×</span>
+            <input type="number" data-floor-d-for=${f.id} min="1000" step="100" .value=${String(Math.round(f.d))}
+                   title="Depth (mm)"
+                   style="width:74px;flex:0 0 auto;padding:3px 5px;background:#0c0c14;text-align:right;
+                          border:1px solid var(--border);border-radius:3px;color:var(--text);font-size:11px"
+                   @change=${(e: Event) => commit(f, f.name, f.w, Number((e.target as HTMLInputElement).value))}>
+            <button class="btn danger" data-floor-del-for=${f.id} ?disabled=${only}
+                    style="flex:0 0 auto;padding:3px 7px"
+                    title=${only ? 'At least one floor is required' : `Delete "${f.name}"`}
+                    @click=${() => this._deleteFloor(f)}>🗑</button>
+          </div>`)}
+      </div>
+      <button class="btn" style="width:100%" data-add-floor
+              title="Add a new floor above the current top story"
+              @click=${this._addFloor}>+ Add floor</button>
+      <div style="font-size:10px;color:var(--text-dim);line-height:1.3;margin:6px 0 14px">
+        Sizes are in millimetres (the floor rect is <code>0 … W × 0 … D</code>). You can also
+        drag the floor's edges directly on the 2D canvas. Story order, elevation, visibility
+        and the rotate / move-plan nudges live in the sidebar's <strong>Floor tools</strong>.
+      </div>
+    `;
+  }
+
+  private _addFloor = () => {
+    const p = this.planner;
+    const base = p.floor();
+    p.saveFloorEdit(null, `Floor ${p.store.floors.length + 1}`, base?.w ?? 8000, base?.d ?? 6000);
+  };
+
+  // Deleting a floor takes everything on it. Name the floor in the prompt so a
+  // mis-click on the wrong row is obvious, and refuse the last floor outright
+  // (deleteFloor guards this too — the button is also disabled).
+  private _deleteFloor(f: Floor): void {
+    const p = this.planner;
+    if (p.store.floors.length <= 1) return;
+    if (!confirm(`Delete floor "${f.name}" and everything on it? This cannot be undone.`)) return;
+    p.deleteFloor(f.id);
+  }
+
+  // ── Floor Plan tab (Floors + Configurations + export/import) ────────────
   private _dataTab() {
     const p = this.planner;
     const configs = p.listConfigs();
@@ -2758,6 +2844,7 @@ export class SettingsDrawer extends LitElement {
     const savedAt = p.lastSavedAt;
     const only = configs.length <= 1;
     return html`
+      ${this._floorsBlock()}
       <h3 style="font-size:12px;margin:0 0 8px">Configurations</h3>
       <select style="width:100%;margin-bottom:8px" @change=${this._onSelectConfig}
               title="Switch the active configuration">

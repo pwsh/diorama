@@ -296,6 +296,19 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Sidebar polish wave 2** (2026-07-30, user-directed ×8; unreleased
+  — on main past v0.46.0). Floor lifecycle (add/rename/resize/delete
+  w/ named confirm, last-floor guarded) moved to Settings ▸ "Floor
+  Plan" (data tab renamed, slug unchanged); size-lock UI removed
+  (boundsLocked now gates nothing — commented); imperial → Settings
+  ▸ Display; collapse-all row directly under the floor picker; peek
+  button one-line fix (block-level SVG was the wrap); tool hints
+  name the armed variant (5 tools + switch); glass emboss/deboss
+  section headers replacing the ▸ arrow (aria-expanded + keyboard
+  toggle; captions flat; room-groups keep ▸);
+  <diorama-floor-modal> orphaned (inert, noted follow-up).
+  sidebar-org-test 103→141; layers2d/sensor-focus/wall-edit/
+  area-binding held.
 - **Sidebar reorganization + hotkey master switch** (2026-07-30,
   user-directed ×8; unreleased — on main past v0.46.0). Pinned
   non-collapsible compact floor picker (no row buttons) → NEW

@@ -203,9 +203,14 @@ export class Sidebar extends LitElement {
   }
 
   // "Peek" tri-state glyph: a see-no-evil monkey with one eye peeking between its
-  // fingers (no such emoji exists). currentColor-friendly, readable at ~14 px.
+  // fingers (no such emoji exists). currentColor-friendly, readable at ~13 px.
+  // `flex:0 0 auto` + the host button being an inline-flex row keeps the SVG on
+  // the SAME line as its caption: a bare display:block SVG is a block-level box,
+  // which wrapped the "Peek" state onto a second line at phone widths (the other
+  // two states are pure text and never did) — the reported bug.
   private _peekGlyph() {
-    return html`<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" style="display:block">
+    return html`<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"
+                     style="display:block;flex:0 0 auto">
       <circle cx="3.2" cy="7.5" r="2.1" fill="currentColor"/>
       <circle cx="12.8" cy="7.5" r="2.1" fill="currentColor"/>
       <circle cx="8" cy="8" r="5.6" fill="currentColor"/>
@@ -258,10 +263,14 @@ export class Sidebar extends LitElement {
     return html`
       <div class="section" style=${opts?.style ?? nothing} id=${opts?.id ?? nothing}>
         <h3 class="collapsible-header ${collapsed ? '' : 'open'}"
+            role="button" tabindex="0" aria-expanded=${collapsed ? 'false' : 'true'}
+            title=${collapsed ? 'Collapsed — click to expand' : 'Expanded — click to collapse'}
             style=${collapsed ? 'margin-bottom:0' : nothing}
+            @keydown=${(e: KeyboardEvent) => {
+              if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); this._toggleCollapsed(slug); }
+            }}
             @click=${() => this._toggleCollapsed(slug)}>
           <span style="flex:1">${title}</span>
-          <span class="collapse-arrow">▸</span>
         </h3>
         ${collapsed ? nothing : body()}
       </div>
@@ -374,7 +383,8 @@ export class Sidebar extends LitElement {
   // case — render no header and no toggle. `key` scopes the collapse state.
   private _roomGroupHeader(label: string, key: string, collapsed: boolean) {
     return label
-      ? html`<div class="collapsible-header"
+      ? html`<div class="collapsible-header" role="button" tabindex="0"
+                  aria-expanded=${collapsed ? 'false' : 'true'}
                   style="font-size:10px;color:var(--text-dim);text-transform:uppercase;
                          letter-spacing:0.06em;padding:6px 0 2px;opacity:0.85"
                   @click=${() => this._toggleCollapsed(key)}>
@@ -448,8 +458,8 @@ export class Sidebar extends LitElement {
                   background:var(--surface);overflow-y:auto;overflow-x:hidden;
                   display:flex;flex-direction:column;height:100%;min-height:0">
         ${this._floorSelect()}
-        ${this._floorToolsSection()}
         ${this._collapseAllRow()}
+        ${this._floorToolsSection()}
         ${this._layers2dSection()}
         ${this._dimensionsSection()}
         ${this._rulersSection()}
@@ -539,12 +549,14 @@ export class Sidebar extends LitElement {
   // visibility (show / peek / hide) buttons moved into "Floor tools" below,
   // where they act on the CURRENT floor; the state still shows here passively
   // as a dim "(peek)" / "(disabled)" suffix so nothing became invisible.
+  // Floor LIFECYCLE (add / rename / resize / delete) is deliberately NOT here:
+  // it lives in Settings ▸ Floor Plan, off the main view.
   private _floorSelect() {
     const p = this.planner;
     const floors = p.store.floors;
     return html`
       <div class="section" data-floor-select>
-        <h3 style="display:flex;align-items:center">
+        <h3 class="section-caption" style="display:flex;align-items:center">
           <span style="flex:1">Floors</span>
         </h3>
         <div style="display:flex;flex-direction:column;gap:3px;margin-bottom:6px">
@@ -566,8 +578,9 @@ export class Sidebar extends LitElement {
               </div>`;
           })}
         </div>
-        <button class="btn" style="width:100%" title="New floor" data-add-floor
-                @click=${this._openNewFloor}>+ Add floor</button>
+        <div style="color:var(--text-dim);font-size:10px;line-height:1.35">
+          Add, rename, resize or delete floors in <strong style="color:var(--text)">Settings ▸ Floor Plan</strong>.
+        </div>
       </div>
     `;
   }
@@ -587,12 +600,6 @@ export class Sidebar extends LitElement {
         <div style="color:var(--text-dim);font-size:10px;margin:-2px 0 6px">
           Acting on <strong style="color:var(--text)">${f.name}</strong>
         </div>
-        <div style="display:flex;gap:4px">
-          <button class="btn" style="flex:1" title="Edit floor size / name" data-edit-floor
-                  @click=${this._openEditFloor}>✎ Size / name</button>
-          <button class="btn danger" title="Delete current floor" data-del-floor
-                  @click=${this._delFloor}>🗑</button>
-        </div>
         <div class="row" style="margin-top:6px">
           <label title="Move this floor up or down the story stack. The list above is ordered highest story first.">Order</label>
           <button class="btn btn-sm" style="flex:1" title="Move up a story" data-floor-up
@@ -604,7 +611,9 @@ export class Sidebar extends LitElement {
         </div>
         <div class="row">
           <label title="Show / Peek / Hide this floor">Visibility</label>
-          <button class="btn btn-sm" style="flex:1" data-floor-vis
+          <button class="btn btn-sm" data-floor-vis
+                  style="flex:1;display:inline-flex;align-items:center;justify-content:center;
+                         gap:4px;white-space:nowrap;min-height:24px;line-height:1"
                   title=${state === 'show'
                     ? 'Shown — enabled. Click to Peek (draw this floor’s outline as a reference underlay on other floors)'
                     : state === 'peek'
@@ -678,24 +687,6 @@ export class Sidebar extends LitElement {
             Moves all content on this floor (mm are structural units). One undo step per click.
           </div>
         </div>
-        <label class="row" style="padding:0;margin-top:8px"
-               title="Show all dimensions in feet / inches instead of millimetres">
-          <span style="color:var(--text-dim);font-size:11px;flex:1">Imperial units</span>
-          <span class="mini-toggle">
-            <input type="checkbox" .checked=${p.store.imperial}
-                   @change=${(e: Event) => { p.store.imperial = (e.target as HTMLInputElement).checked; p.save(); p.emitConfig(); }}>
-            <span></span>
-          </span>
-        </label>
-        <label class="row" style="padding:0"
-               title="Lock the canvas-layout / floor-size editing — hides the boundary drag anchors">
-          <span style="color:var(--text-dim);font-size:11px;flex:1">🔒 Lock floor size</span>
-          <span class="mini-toggle">
-            <input type="checkbox" .checked=${!!p.floor().boundsLocked}
-                   @change=${(e: Event) => { p.floor().boundsLocked = (e.target as HTMLInputElement).checked || undefined; p.save(); p.emitConfig(); }}>
-            <span></span>
-          </span>
-        </label>
         <details style="margin-top:8px">
           <summary style="cursor:pointer;font-size:11px;color:var(--text-dim);padding:2px 0">
             This floor's 3D look (overrides global)
@@ -752,9 +743,11 @@ export class Sidebar extends LitElement {
   private _toolsSection() {
     const p = this.planner;
     const groups = this._toolGroups();
+    // Group captions take the FLAT glass variant (tint, no relief): they are
+    // labels, not toggles, so they must never read as collapsed/expanded.
     const cap = (t: string) => html`
-      <div class="tool-cat" style="font-size:10px;text-transform:uppercase;letter-spacing:0.06em;
-                  color:var(--text-dim);opacity:0.6;margin:8px 0 2px 0">${t}</div>`;
+      <div class="tool-cat section-caption" style="font-size:10px;text-transform:uppercase;
+                  letter-spacing:0.06em;color:var(--text-dim);opacity:0.75;margin:8px 0 3px 0">${t}</div>`;
     return this._section('tools', 'Tools', () => html`
       ${groups.map(g => html`
         ${cap(g.label)}
@@ -817,43 +810,23 @@ export class Sidebar extends LitElement {
           </div>
         ` : nothing}
       `)}
-      <div style="border-top:1px solid var(--border);margin-top:8px;padding-top:6px;
+      <div data-tool-hint style="border-top:1px solid var(--border);margin-top:8px;padding-top:6px;
                   color:var(--text-dim);font-size:10px;line-height:1.4">
         ${this._toolHint(p.tool)}
       </div>
       <div style="color:var(--text-dim);font-size:10px;margin-top:6px;line-height:1.4;font-style:italic">
-        Tip: the visual picker in the bottom toolbar shows live previews of every item.
+        Tip: the bar along the bottom of the screen is the <em>visual picker</em> — category
+        tabs across the top, then a row of cards showing a live 3D preview of each item, and
+        a chip row underneath for that item's variants (door / window / wall / light / ground
+        kinds). Clicking a card both arms the tool and selects the variant.
         Rooms, geo landmarks and neighborhood exclusions are armed from their own sections.
         ${p.hotkeysEnabled ? nothing : html`<br>Keyboard shortcuts are OFF (Settings ▸ Display).`}
       </div>
     `);
   }
 
-  private _openNewFloor = () => {
-    this.dispatchEvent(new CustomEvent('open-floor-modal', {
-      bubbles: true, composed: true, detail: { floor: null },
-    }));
-  };
-  private _openEditFloor = () => {
-    this.dispatchEvent(new CustomEvent('open-floor-modal', {
-      bubbles: true, composed: true, detail: { floor: this.planner.floor() as Floor },
-    }));
-  };
-  private _delFloor = () => {
-    const p = this.planner;
-    const f = p.floor();
-    if (p.store.floors.length <= 1) { alert('At least one floor is required.'); return; }
-    if (confirm('Export a backup before deleting?')) {
-      const blob = new Blob([JSON.stringify(p.store, null, 2)], { type: 'application/json' });
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
-      a.download = `floor-plan-${new Date().toISOString().slice(0, 10)}.json`;
-      a.click();
-      URL.revokeObjectURL(a.href);
-    }
-    if (!confirm(`Delete floor "${f.name}"? This cannot be undone.`)) return;
-    p.deleteFloor(f.id);
-  };
+  // Floor lifecycle (new / rename / resize / delete) moved OFF the sidebar into
+  // Settings ▸ Floor Plan — see SettingsDrawer._floorsBlock.
 
   // ── Tool hint ─────────────────────────────────────────────────────────
   // Wall-editing preferences: 15° angle lock, wall-point grid snap, endpoint
@@ -883,7 +856,81 @@ export class Sidebar extends LitElement {
       </div>`;
   }
 
-  private _toolHint(tool: Tool): string {
+  // Human labels for the door variants the bottom toolbar can arm. The Doors
+  // editor spells the same set out inline in its <select>; this map exists so
+  // the tool hint can NAME the armed variant.
+  private static readonly DOOR_KIND_LABELS: Record<string, string> = {
+    swing: 'Swing door', garage: 'Garage door', gate: 'Gate',
+    sliding: 'Sliding door', pocket: 'Pocket door', double: 'Double swing door',
+    french: 'French doors', sliding_glass: 'Sliding glass door',
+  };
+
+  // A hint for a tool that carries an ARMED VARIANT: name the exact thing the
+  // next click will drop (a bare "Click to drop a 600 × 600 mm piece" told the
+  // user nothing about which piece was armed — the reported gap), then say
+  // precisely where to change it.
+  private _armedHint(what: unknown, where: unknown) {
+    return html`
+      <div><strong style="color:var(--text)">Click to place:</strong> ${what}</div>
+      <div style="margin-top:3px">${where}</div>`;
+  }
+
+  private _toolHint(tool: Tool): unknown {
+    const p = this.planner;
+    switch (tool) {
+      case 'furniture': {
+        const rec = p.pendingCustomObjectId
+          ? (p.store.customObjects ?? []).find(o => o.id === p.pendingCustomObjectId) ?? null
+          : null;
+        const def = rec ?? FURNITURE_KINDS[p.pendingFurnitureKind];
+        const name = rec ? (rec.label?.trim() || 'Custom object')
+                         : (def?.label ?? p.pendingFurnitureKind);
+        const dims = def ? ` (${Math.round(def.w)} × ${Math.round(def.h)} mm footprint)` : '';
+        return this._armedHint(
+          html`<strong style="color:var(--text)">${name}</strong>${dims}${rec ? ' — custom object' : ''}`,
+          html`To place something else, open the <strong style="color:var(--text)">visual picker</strong>
+               in the bar along the bottom of the screen: pick a category tab
+               (Seating, Tables, Appliances, Outdoor, …), then click a card — every
+               card is a live 3D preview of the real piece. The “Type” dropdown just
+               above is the same catalogue as a plain list.`);
+      }
+      case 'light': {
+        const k = LIGHT_KINDS.find(x => x.id === p.pendingLightKind);
+        return this._armedHint(
+          html`${k?.glyph ?? '💡'} <strong style="color:var(--text)">${k?.label ?? p.pendingLightKind}</strong> light`,
+          html`Change the fixture style in the bottom <strong style="color:var(--text)">visual picker</strong>
+               (Lights tab → the chip row under the cards), or per-fixture in the
+               Lights section. Bind it to an entity from its editor.`);
+      }
+      case 'door': {
+        const label = Sidebar.DOOR_KIND_LABELS[p.pendingDoorKind] ?? p.pendingDoorKind;
+        return this._armedHint(
+          html`<strong style="color:var(--text)">${label}</strong> — hinge lands at the click, and it snaps onto the nearest wall`,
+          html`Change the variant in the bottom <strong style="color:var(--text)">visual picker</strong>
+               (Structure tab → the chip row), or with the Kind dropdown on the placed
+               door. Drag its end to rotate; bind a binary_sensor / cover to animate it.`);
+      }
+      case 'window': {
+        const label = WINDOW_KINDS.find(x => x.id === p.pendingWindowKind)?.label ?? p.pendingWindowKind;
+        return this._armedHint(
+          html`<strong style="color:var(--text)">${label}</strong> window — centred on the click, snaps onto the nearest wall`,
+          html`Change the variant in the bottom <strong style="color:var(--text)">visual picker</strong>
+               (Structure tab → the chip row), or with the Kind dropdown on the placed
+               window. Sill height, glass height and curtains live in its editor.`);
+      }
+      case 'ground': {
+        const label = GROUND_KINDS[p.pendingGroundKind]?.label ?? p.pendingGroundKind;
+        return this._armedHint(
+          html`<strong style="color:var(--text)">${label}</strong> ground area — click to add polygon vertices, double-click (or Enter) to finish (3–20 pts). ESC cancels.`,
+          html`Change the covering in the bottom <strong style="color:var(--text)">visual picker</strong>
+               (Ground tab → the chip row), or with the Kind dropdown in the Ground &amp;
+               Yard section. Set an elevation there to make it a terrace.`);
+      }
+      default: return this._staticToolHint(tool);
+    }
+  }
+
+  private _staticToolHint(tool: Tool): string {
     switch (tool) {
       case 'wall': return 'Click to add vertices. Double-click to finish. (Tip: in Select mode, double-click a wall to cycle full → half → railing → invisible.)';
       case 'sensor': return 'Click the canvas to drop a mmWave positional sensor.';
@@ -905,16 +952,11 @@ export class Sidebar extends LitElement {
       case 'flagpole': return 'Click to plant a flagpole in the yard. Pick a flag design, height, and (optionally) bind a percent/cover entity to raise/lower it (half-mast toggle otherwise). The flag waves in 3D.';
       case 'plug': return 'Click to drop a smart plug / outlet (snaps to a wall). Bind a switch.*/light.* load + an optional power sensor; clicking it toggles the outlet.';
       case 'pzone': return 'Click to add polygon vertices; double-click (or Enter) to finish (≥3 pts). Bind a binary_sensor (FP2 zone / occupancy) — the zone glows when occupied. ESC cancels.';
-      case 'ground': return 'Click to add polygon vertices; double-click (or Enter) to finish (3–20 pts). Paints a ground covering (grass/rock/water/…) under the plan. ESC cancels.';
       case 'path': return 'Click to add centerline points; double-click (or Enter) to finish (2+ pts). Builds a constant-width path/driveway ribbon (kind defaults to concrete). Edit the width + drag the centerline handles afterward; "Detach shape" converts it to a plain polygon. ESC cancels.';
       case 'pool': return 'Click to add polygon vertices; double-click (or Enter) to finish (3–20 pts). Drops a pool/spa water body — a sunken basin with bindable heater/pump/light/chemistry. Avatars path around it. ESC cancels.';
       case 'void': return 'Click to add polygon vertices; double-click (or Enter) to finish (3–12 pts). Cuts a hole in the floor (stairwell / atrium) — avatars route around it unless a stair bridges it. ESC cancels.';
       case 'ruler': return 'Click two points to measure the distance. Click a wall or furniture piece to anchor an end to it — the ruler stays locked to it as it moves. Point ends drag; enter an exact length in the Rulers panel. ESC cancels a half-placed ruler.';
-      case 'furniture': return 'Click to drop a 600 × 600 mm piece.';
-      case 'light': return 'Click to drop a light. Bind via the active panel.';
-      case 'switch': return 'Click to drop a switch. Bind via the active panel.';
-      case 'door': return 'Click to drop a door (hinge at click). Drag the end to rotate; bind to a binary_sensor.';
-      case 'window': return 'Click to drop a window (center at click). Drag an end to rotate; bind to a binary_sensor.';
+      case 'switch': return 'Click to drop a switch (snaps flush to the nearest wall and gangs with its neighbours). Bind it from the Fixtures section.';
       case 'delete': return 'Click anything to delete.';
       default: return 'Drag to move. Pull a corner/vertex to resize. Drag the orange dot to rotate.';
     }

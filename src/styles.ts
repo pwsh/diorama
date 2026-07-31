@@ -82,6 +82,52 @@ diorama-sidebar .section select { max-width: 100%; }
 .collapsible-header { display: flex; align-items: center; gap: 4px; cursor: pointer; user-select: none; }
 .collapse-arrow { font-size: 10px; transition: transform 0.15s; }
 .collapsible-header.open .collapse-arrow { transform: rotate(90deg); }
+
+/* ── Section headers: glass pill whose RELIEF encodes the collapse state ──
+   The <h3> IS the toggle, so its state is carried by the surface itself:
+     collapsed = EMBOSSED (raised cap — light from above, drop shadow below)
+     expanded  = DEBOSSED (pressed into the panel — inset shadow, dark rim)
+   That relief REPLACED the old ▸ arrow glyph (the header carries
+   aria-expanded for assistive tech instead).
+
+   NB backdrop-filter is declared as a progressive enhancement only and
+   currently renders NOTHING: the sidebar paints an opaque var(--surface)
+   behind these pills, and blurring a flat colour is a no-op. The visible
+   "glass" is entirely the layered translucent gradient + hairline border +
+   highlight/shadow stack below — that is deliberate, not a fallback bug. */
+h3.collapsible-header {
+  padding: 7px 10px; border-radius: 9px; margin: 0 0 8px;
+  color: var(--text-dim);
+  background: linear-gradient(180deg, rgba(255,255,255,0.115) 0%,
+              rgba(255,255,255,0.035) 48%, rgba(0,0,0,0.14) 100%);
+  border: 1px solid rgba(255,255,255,0.13);
+  box-shadow: 0 2px 5px rgba(0,0,0,0.5),
+              inset 0 1px 0 rgba(255,255,255,0.24),
+              inset 0 -2px 3px rgba(0,0,0,0.3);
+  backdrop-filter: blur(6px) saturate(1.25);
+  -webkit-backdrop-filter: blur(6px) saturate(1.25);
+  transition: background 0.15s, box-shadow 0.15s, color 0.15s, border-color 0.15s;
+}
+h3.collapsible-header:hover { color: var(--text); border-color: rgba(255,255,255,0.22); }
+h3.collapsible-header.open {
+  color: var(--text);
+  background: linear-gradient(180deg, rgba(0,0,0,0.36) 0%,
+              rgba(0,0,0,0.16) 60%, rgba(255,255,255,0.055) 100%);
+  border: 1px solid rgba(0,0,0,0.5);
+  box-shadow: inset 0 3px 6px rgba(0,0,0,0.62),
+              inset 0 -1px 0 rgba(255,255,255,0.09),
+              0 1px 0 rgba(255,255,255,0.05);
+}
+/* Caption variant — the same glass tint with NO relief, for headings that are
+   NOT toggles (the pinned floor picker, the tool-group captions). Keeping
+   relief exclusive to toggles is what makes the emboss/deboss cue readable. */
+.section-caption {
+  padding: 6px 10px; border-radius: 8px;
+  background: linear-gradient(180deg, rgba(255,255,255,0.038), rgba(255,255,255,0.008));
+  border: 1px solid rgba(255,255,255,0.05);
+  backdrop-filter: blur(6px) saturate(1.15);
+  -webkit-backdrop-filter: blur(6px) saturate(1.15);
+}
 .sensor-item { display: flex; align-items: center; gap: 6px; padding: 5px 2px;
                border-bottom: 1px solid var(--border); cursor: pointer; }
 .sensor-item:hover { background: rgba(255,255,255,0.04); }
