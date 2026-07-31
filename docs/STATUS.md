@@ -296,6 +296,20 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Sidebar reorganization + hotkey master switch** (2026-07-30,
+  user-directed ×8; unreleased — on main past v0.46.0). Pinned
+  non-collapsible compact floor picker (no row buttons) → NEW
+  collapsible "Floor tools" section (all per-floor controls incl.
+  relocated reorder ▲▼ + visibility cycle) → Collapse all/Expand
+  all row (SECTION_SLUGS, top-level only, picker exempt) → Layers →
+  Dimensions → Rulers → Tools grouped into 5 captioned categories
+  (TOOL_GROUPS + "Other" safety net). Hotkey leak root-caused as
+  STRUCTURAL (focus drops to body after clicking non-focusable UI —
+  plain keys legitimately live); device-local
+  Planner.hotkeysEnabled master switch (Settings ▸ Display Input
+  block) kills tool letters/Delete/arrows, keeps Ctrl+Z/Y/0, Esc,
+  Enter, Space. New sidebar-org-test 103/103; layers2d 67/67,
+  sensor-focus 14/14, wall-edit 55/55, area-binding 71/71 held.
 - **Mower car kinematics + mailbox flag + bathroom water**
   (2026-07-30, user-reported ×3; unreleased — on main past v0.46.0).
   Mower: pure stepBicycle bicycle model (turn radius 500, cruise

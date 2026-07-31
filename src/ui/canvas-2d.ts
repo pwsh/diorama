@@ -450,6 +450,17 @@ export class Canvas2D extends LitElement {
     if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || e.key === 'Y')) {
       e.preventDefault(); p.redo(); return;
     }
+    // ── Plain-key bindings below this line ────────────────────────────────
+    // Everything from here on is triggered by a BARE key (arrows, Delete /
+    // Backspace, the tool letters/digits), which is exactly the class of
+    // binding that misfires when focus quietly falls back to <body> mid-typing
+    // (a Lit re-render replacing the focused input, a tap on a non-focusable
+    // header, Tab out of a field…). `hotkeysEnabled` (device-local pref,
+    // Settings ▸ Display) switches the whole class off. Modifier combos
+    // (undo/redo/reset-view), Escape, Enter and the Space pan-hold are ABOVE
+    // this line and stay live either way — none of them can fire a tool pick or
+    // a deletion from a stray keystroke.
+    if (!p.hotkeysEnabled) return;
     // Arrow keys nudge the ACTIVE furniture piece by 25 mm (100 with Shift) in
     // world mm. This is the manual escape hatch to fine-position a piece (e.g.
     // away from a wall), so it deliberately does NOT run the drag-time

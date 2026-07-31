@@ -143,6 +143,35 @@ const TOOLS: { id: Tool; label: string }[] = [
   { id: 'delete', label: 'Delete' },
 ];
 
+// Tool-grid grouping (display only — arming still goes through p.setTool, so
+// semantics are untouched). EVERY id in TOOLS must appear in exactly one group:
+// `_toolGroups()` asserts that at render time and appends any stray id to a
+// trailing "Other" group, so adding a tool can never make it unreachable.
+const TOOL_GROUPS: { label: string; tools: Tool[] }[] = [
+  { label: 'Select & edit', tools: ['select', 'delete'] },
+  { label: 'Structure', tools: ['wall', 'door', 'window', 'ruler'] },
+  { label: 'Areas & ground', tools: ['ground', 'path', 'pool', 'void', 'pzone'] },
+  { label: 'Devices & sensors', tools: [
+    'sensor', 'motion', 'env', 'bleproxy', 'camera', 'safety', 'alarm', 'thermostat',
+    'valve', 'plug', 'projector', 'sprinkler', 'robot', 'alertbeacon', 'calendar',
+    'action', 'infocard',
+  ] },
+  { label: 'Furniture & decor', tools: ['furniture', 'light', 'switch', 'flagpole'] },
+];
+
+// Every collapsible section slug, in render order. The Collapse-all / Expand-all
+// buttons write exactly these keys (NOT the `<slug>/<roomId>` room-group
+// sub-keys — those keep their own state). Stale entries in a persisted collapsed
+// set are harmless, so a removed slug needs no migration.
+const SECTION_SLUGS: string[] = [
+  'floortools', 'layers', 'dimensions', 'rulers', 'tools',
+  'sensors', 'motion', 'env', 'info', 'actions', 'ble', 'alarm', 'calendar',
+  'thermostats', 'safety', 'alertbeacons', 'robots', 'cameras', 'projectors',
+  'valves', 'sprinklers', 'flagpoles', 'plugs', 'pzones', 'ground', 'pools',
+  'voids', 'people', 'roamers', 'doors', 'windows', 'furniture', 'custom',
+  'rooms', 'fixtures', 'geo', 'neighborhood', 'model3d', 'bg',
+];
+
 @customElement('diorama-sidebar')
 export class Sidebar extends LitElement {
   @property({ attribute: false }) planner!: Planner;
@@ -418,71 +447,13 @@ export class Sidebar extends LitElement {
       <div style="width:250px;flex-shrink:0;border-right:1px solid var(--border);
                   background:var(--surface);overflow-y:auto;overflow-x:hidden;
                   display:flex;flex-direction:column;height:100%;min-height:0">
-        ${this._floorsSection()}
-        ${this._section('tools', 'Tools', () => html`
-          <div style="display:flex;flex-wrap:wrap;gap:4px">
-            ${TOOLS.map(t => html`
-              <button class="btn ${p.tool === t.id ? 'active' : ''}"
-                      @click=${() => p.setTool(t.id)}>${t.label}</button>
-            `)}
-          </div>
-          <div style="color:var(--text-dim);font-size:10px;margin-top:6px;line-height:1.4;font-style:italic">
-            Tip: the visual picker in the bottom toolbar shows live previews of every item.
-          </div>
-          <div style="color:var(--text-dim);font-size:10px;margin-top:4px;line-height:1.4">
-            ${this._toolHint(p.tool)}
-          </div>
-          ${p.tool === 'wall' ? html`
-            <div class="row" style="margin-top:6px">
-              <label>Wall type</label>
-              <select .value=${p.pendingWallKind}
-                      @change=${(e: Event) => {
-                        p.pendingWallKind =
-                          (e.target as HTMLSelectElement).value as import('../types.js').WallKind;
-                        this.requestUpdate();
-                      }}>
-                <option value="full">Full wall (9 ft)</option>
-                <option value="half">Half wall</option>
-                <option value="railing">Railing / banister (3 ft)</option>
-                <option value="invisible">Invisible (floor boundary)</option>
-                <option value="fence_picket">Picket fence</option>
-                <option value="fence_privacy">Privacy fence</option>
-                <option value="fence_chainlink">Chain-link fence</option>
-                <option value="hedge">Hedge</option>
-              </select>
-            </div>
-          ` : nothing}
-          ${this._wallEditPrefs()}
-          ${p.tool === 'furniture' ? html`
-            <div class="row" style="margin-top:6px">
-              <label>Type</label>
-              <select .value=${p.pendingCustomObjectId ? 'custom:' + p.pendingCustomObjectId : p.pendingFurnitureKind}
-                      @change=${(e: Event) => {
-                        const v = (e.target as HTMLSelectElement).value;
-                        if (v.startsWith('custom:')) p.pendingCustomObjectId = v.slice(7);
-                        else { p.pendingFurnitureKind = v as FurnitureKind; p.pendingCustomObjectId = null; }
-                        this.requestUpdate();
-                      }}>
-                ${this._kindOptions(p.pendingCustomObjectId ? 'custom:' + p.pendingCustomObjectId : p.pendingFurnitureKind)}
-              </select>
-            </div>
-          ` : nothing}
-          ${p.floor().walls.length ? html`
-            <div class="row" style="margin-top:6px">
-              <label>Walls</label>
-              <button class="btn" style="font-size:10px;padding:2px 6px;flex:1"
-                      title="Toggle canvas lock for every wall on this floor"
-                      @click=${() => {
-                        const f = p.floor();
-                        const lockAll = f.walls.some(w => !w.locked);
-                        f.walls.forEach(w => { w.locked = lockAll; });
-                        p.save(); p.emitConfig();
-                      }}>
-                ${p.floor().walls.every(w => w.locked) ? '🔓 Unlock all walls' : '🔒 Lock all walls'}
-              </button>
-            </div>
-          ` : nothing}
-        `)}
+        ${this._floorSelect()}
+        ${this._floorToolsSection()}
+        ${this._collapseAllRow()}
+        ${this._layers2dSection()}
+        ${this._dimensionsSection()}
+        ${this._rulersSection()}
+        ${this._toolsSection()}
 
         ${this._section('sensors', 'mmWave Sensors on this floor', () => html`
           ${f.sensors.length === 0
@@ -520,10 +491,7 @@ export class Sidebar extends LitElement {
         ${this._furnitureSection()}
         ${this._customObjectsSection()}
         ${this._roomsSection()}
-        ${this._rulersSection()}
-        ${this._dimensionsSection()}
         ${this._fixturesSection()}
-        ${this._layers2dSection()}
         ${this._geoSection()}
         ${this._neighborhoodSection()}
         ${this._model3dSection()}
@@ -564,17 +532,28 @@ export class Sidebar extends LitElement {
       </div>`;
   }
 
-  private _floorsSection() {
+  // ── Floor selection (NON-collapsible) ─────────────────────────────────
+  // Deliberately NOT a `_section`: the floor picker is the sidebar's anchor and
+  // must always be visible (it is also exempt from Collapse all). Rows are
+  // COMPACT — click to switch, nothing else. The per-floor ordering (▲▼) and
+  // visibility (show / peek / hide) buttons moved into "Floor tools" below,
+  // where they act on the CURRENT floor; the state still shows here passively
+  // as a dim "(peek)" / "(disabled)" suffix so nothing became invisible.
+  private _floorSelect() {
     const p = this.planner;
     const floors = p.store.floors;
-    return this._section('floors', 'Floors', () => html`
+    return html`
+      <div class="section" data-floor-select>
+        <h3 style="display:flex;align-items:center">
+          <span style="flex:1">Floors</span>
+        </h3>
         <div style="display:flex;flex-direction:column;gap:3px;margin-bottom:6px">
           ${floorsDisplayOrder(floors).map((f) => {
             const cur = f.id === p.store.currentFloorId;
-            const arrIdx = floors.indexOf(f);
             const state: 'hide' | 'peek' | 'show' = f.disabled ? 'hide' : f.peek2d ? 'peek' : 'show';
             return html`
-              <div style="display:flex;align-items:center;gap:3px;padding:5px 6px;border-radius:5px;
+              <div data-floor-row=${f.id}
+                   style="display:flex;align-items:center;gap:3px;padding:4px 6px;border-radius:5px;
                           cursor:pointer;opacity:${f.disabled ? '0.5' : '1'};
                           background:${cur ? 'var(--accent)' : '#1a1a1a'};
                           border:1px solid ${cur ? 'var(--accent)' : 'var(--border)'}"
@@ -584,47 +563,75 @@ export class Sidebar extends LitElement {
                     state === 'hide' ? html`<span style="color:var(--text-dim)"> (disabled)</span>`
                       : state === 'peek' ? html`<span style="color:var(--text-dim)"> (peek)</span>` : nothing}
                 </span>
-                <button class="btn btn-sm" title="Move up a story" ?disabled=${arrIdx === floors.length - 1}
-                        @click=${(e: Event) => { e.stopPropagation(); p.moveFloor(f.id, 1); }}>▲</button>
-                <button class="btn btn-sm" title="Move down a story" ?disabled=${arrIdx === 0}
-                        @click=${(e: Event) => { e.stopPropagation(); p.moveFloor(f.id, -1); }}>▼</button>
-                <button class="btn btn-sm"
-                        title=${state === 'show'
-                          ? 'Shown — enabled. Click to Peek (draw this floor’s outline as a reference underlay on other floors)'
-                          : state === 'peek'
-                            ? 'Peek — outline drawn as a 2D reference underlay on other floors. Click to Hide (disable)'
-                            : 'Hidden — disabled (out of kiosk/view picker, glass-house stack, BLE solve). Click to Show'}
-                        @click=${(e: Event) => { e.stopPropagation(); p.cycleFloorVisibility(f.id); }}>
-                  ${state === 'show' ? '👁' : state === 'peek' ? this._peekGlyph() : '🙈'}
-                </button>
-              </div>
-              ${cur ? html`
-                <div style="display:flex;align-items:center;gap:5px;padding:0 6px 2px 6px">
-                  <span style="color:var(--text-dim);font-size:10px;flex:1"
-                        title="Height of this floor's slab above the WORLD GROUND PLANE. The ground plane is fixed — floors sit relative to it — so selecting a floor (or glass house) never moves the ground. Negative = below grade; the ground plane may bisect a floor. Blank = auto (story order × 3000 mm).">Elevation above ground (mm)</span>
-                  <input type="number" step="100"
-                         style="width:82px;background:#111;color:var(--text);border:1px solid var(--border);
-                                border-radius:4px;padding:2px 4px;font-size:11px"
-                         placeholder=${`auto: ${floorElevationMm(floors, f.id)}`}
-                         .value=${f.elevationMm == null ? '' : String(f.elevationMm)}
-                         @click=${(e: Event) => e.stopPropagation()}
-                         @change=${(e: Event) => {
-                           const raw = (e.target as HTMLInputElement).value.trim();
-                           const v = raw === '' ? undefined : Number(raw);
-                           // Blank (or garbage) clears back to AUTO; any finite
-                           // value — negative included — pins the slab.
-                           f.elevationMm = (v != null && Number.isFinite(v)) ? v : undefined;
-                           p.save(); p.emitConfig();
-                         }}>
-                </div>
-                ${this._haFloorRow(f)}` : nothing}`;
+              </div>`;
           })}
         </div>
-        <div style="display:flex;gap:4px">
-          <button class="btn" style="flex:1" title="New floor" @click=${this._openNewFloor}>+ Floor</button>
-          <button class="btn" title="Edit floor size / name" @click=${this._openEditFloor}>✎</button>
-          <button class="btn danger" title="Delete current floor" @click=${this._delFloor}>🗑</button>
+        <button class="btn" style="width:100%" title="New floor" data-add-floor
+                @click=${this._openNewFloor}>+ Add floor</button>
+      </div>
+    `;
+  }
+
+  // ── Floor tools (collapsible) ─────────────────────────────────────────
+  // Everything that acts on the CURRENT floor, split out of the old combined
+  // "Floors" section so the picker above can stay slim. Nothing was dropped in
+  // the split: the reorder (▲▼) and visibility-cycle buttons that used to sit on
+  // every floor row are here as explicit rows targeting the current floor.
+  private _floorToolsSection() {
+    const p = this.planner;
+    const floors = p.store.floors;
+    const f = p.floor();
+    const arrIdx = floors.indexOf(f);
+    const state: 'hide' | 'peek' | 'show' = f.disabled ? 'hide' : f.peek2d ? 'peek' : 'show';
+    return this._section('floortools', 'Floor tools', () => html`
+        <div style="color:var(--text-dim);font-size:10px;margin:-2px 0 6px">
+          Acting on <strong style="color:var(--text)">${f.name}</strong>
         </div>
+        <div style="display:flex;gap:4px">
+          <button class="btn" style="flex:1" title="Edit floor size / name" data-edit-floor
+                  @click=${this._openEditFloor}>✎ Size / name</button>
+          <button class="btn danger" title="Delete current floor" data-del-floor
+                  @click=${this._delFloor}>🗑</button>
+        </div>
+        <div class="row" style="margin-top:6px">
+          <label title="Move this floor up or down the story stack. The list above is ordered highest story first.">Order</label>
+          <button class="btn btn-sm" style="flex:1" title="Move up a story" data-floor-up
+                  ?disabled=${arrIdx === floors.length - 1}
+                  @click=${() => p.moveFloor(f.id, 1)}>▲ Up</button>
+          <button class="btn btn-sm" style="flex:1" title="Move down a story" data-floor-down
+                  ?disabled=${arrIdx === 0}
+                  @click=${() => p.moveFloor(f.id, -1)}>▼ Down</button>
+        </div>
+        <div class="row">
+          <label title="Show / Peek / Hide this floor">Visibility</label>
+          <button class="btn btn-sm" style="flex:1" data-floor-vis
+                  title=${state === 'show'
+                    ? 'Shown — enabled. Click to Peek (draw this floor’s outline as a reference underlay on other floors)'
+                    : state === 'peek'
+                      ? 'Peek — outline drawn as a 2D reference underlay on other floors. Click to Hide (disable)'
+                      : 'Hidden — disabled (out of kiosk/view picker, glass-house stack, BLE solve). Click to Show'}
+                  @click=${() => p.cycleFloorVisibility(f.id)}>
+            ${state === 'show' ? html`👁 Shown` : state === 'peek' ? html`${this._peekGlyph()} Peek` : html`🙈 Hidden`}
+          </button>
+        </div>
+        <div style="display:flex;align-items:center;gap:5px;padding:2px 6px 4px 6px">
+          <span style="color:var(--text-dim);font-size:10px;flex:1"
+                title="Height of this floor's slab above the WORLD GROUND PLANE. The ground plane is fixed — floors sit relative to it — so selecting a floor (or glass house) never moves the ground. Negative = below grade; the ground plane may bisect a floor. Blank = auto (story order × 3000 mm).">Elevation above ground (mm)</span>
+          <input type="number" step="100" data-floor-elev
+                 style="width:82px;background:#111;color:var(--text);border:1px solid var(--border);
+                        border-radius:4px;padding:2px 4px;font-size:11px"
+                 placeholder=${`auto: ${floorElevationMm(floors, f.id)}`}
+                 .value=${f.elevationMm == null ? '' : String(f.elevationMm)}
+                 @change=${(e: Event) => {
+                   const raw = (e.target as HTMLInputElement).value.trim();
+                   const v = raw === '' ? undefined : Number(raw);
+                   // Blank (or garbage) clears back to AUTO; any finite
+                   // value — negative included — pins the slab.
+                   f.elevationMm = (v != null && Number.isFinite(v)) ? v : undefined;
+                   p.save(); p.emitConfig();
+                 }}>
+        </div>
+        ${this._haFloorRow(f)}
         <div style="margin-top:8px">
           <div style="color:var(--text-dim);font-size:11px;margin-bottom:3px">Rotate plan (set a new top)</div>
           <div style="display:flex;gap:4px">
@@ -695,6 +702,130 @@ export class Sidebar extends LitElement {
           </summary>
           ${this._floorLookOverrides(p.store.scene3d ?? {})}
         </details>
+    `);
+  }
+
+  // Collapse all / Expand all. Writes exactly the top-level SECTION_SLUGS into
+  // the device-local collapsed set (room-group sub-keys keep their own state);
+  // the floor picker above is not a section, so it is never affected.
+  private _collapseAllRow() {
+    const allCollapsed = SECTION_SLUGS.every(s => this._collapsed.has(s));
+    const setAll = (collapse: boolean) => {
+      for (const s of SECTION_SLUGS) {
+        if (collapse) this._collapsed.add(s); else this._collapsed.delete(s);
+      }
+      this._persistCollapsed();
+      this.requestUpdate();
+    };
+    return html`
+      <div style="display:flex;gap:4px;padding:8px 12px;border-bottom:1px solid var(--border)">
+        <button class="btn btn-sm ${allCollapsed ? 'active' : ''}" style="flex:1"
+                data-collapse-all title="Collapse every section below (the floor list stays)"
+                @click=${() => setAll(true)}>⌃ Collapse all</button>
+        <button class="btn btn-sm" style="flex:1"
+                data-expand-all title="Expand every section below"
+                @click=${() => setAll(false)}>⌄ Expand all</button>
+      </div>
+    `;
+  }
+
+  // Resolve TOOL_GROUPS against TOOLS so a newly added tool can never fall out
+  // of the grid: anything not listed in a group lands in a trailing "Other".
+  private _toolGroups(): { label: string; items: { id: Tool; label: string }[] }[] {
+    const byId = new Map(TOOLS.map(t => [t.id, t]));
+    const seen = new Set<Tool>();
+    const out = TOOL_GROUPS.map(g => {
+      const items = g.tools.map(id => { seen.add(id); return byId.get(id); })
+        .filter((t): t is { id: Tool; label: string } => !!t);
+      return { label: g.label, items };
+    }).filter(g => g.items.length > 0);
+    const rest = TOOLS.filter(t => !seen.has(t.id));
+    if (rest.length) out.push({ label: 'Other', items: rest });
+    return out;
+  }
+
+  // ── Tools ─────────────────────────────────────────────────────────────
+  // Grouped tool grid (Select & edit / Structure / Areas & ground / Devices &
+  // sensors / Furniture & decor). Each group's contextual extras hang off the
+  // group they belong to: the wall-kind picker + wall-editing prefs + bulk wall
+  // lock under Structure, the furniture-kind picker under Furniture & decor.
+  private _toolsSection() {
+    const p = this.planner;
+    const groups = this._toolGroups();
+    const cap = (t: string) => html`
+      <div class="tool-cat" style="font-size:10px;text-transform:uppercase;letter-spacing:0.06em;
+                  color:var(--text-dim);opacity:0.6;margin:8px 0 2px 0">${t}</div>`;
+    return this._section('tools', 'Tools', () => html`
+      ${groups.map(g => html`
+        ${cap(g.label)}
+        <div style="display:flex;flex-wrap:wrap;gap:4px">
+          ${g.items.map(t => html`
+            <button class="btn ${p.tool === t.id ? 'active' : ''}"
+                    @click=${() => p.setTool(t.id)}>${t.label}</button>
+          `)}
+        </div>
+        ${g.label === 'Structure' ? html`
+          ${p.tool === 'wall' ? html`
+            <div class="row" style="margin-top:6px">
+              <label>Wall type</label>
+              <select .value=${p.pendingWallKind}
+                      @change=${(e: Event) => {
+                        p.pendingWallKind =
+                          (e.target as HTMLSelectElement).value as import('../types.js').WallKind;
+                        this.requestUpdate();
+                      }}>
+                <option value="full">Full wall (9 ft)</option>
+                <option value="half">Half wall</option>
+                <option value="railing">Railing / banister (3 ft)</option>
+                <option value="invisible">Invisible (floor boundary)</option>
+                <option value="fence_picket">Picket fence</option>
+                <option value="fence_privacy">Privacy fence</option>
+                <option value="fence_chainlink">Chain-link fence</option>
+                <option value="hedge">Hedge</option>
+              </select>
+            </div>
+          ` : nothing}
+          ${this._wallEditPrefs()}
+          ${p.floor().walls.length ? html`
+            <div class="row" style="margin-top:6px">
+              <label>Walls</label>
+              <button class="btn" style="font-size:10px;padding:2px 6px;flex:1"
+                      title="Toggle canvas lock for every wall on this floor"
+                      @click=${() => {
+                        const f = p.floor();
+                        const lockAll = f.walls.some(w => !w.locked);
+                        f.walls.forEach(w => { w.locked = lockAll; });
+                        p.save(); p.emitConfig();
+                      }}>
+                ${p.floor().walls.every(w => w.locked) ? '🔓 Unlock all walls' : '🔒 Lock all walls'}
+              </button>
+            </div>
+          ` : nothing}
+        ` : nothing}
+        ${g.label === 'Furniture & decor' && p.tool === 'furniture' ? html`
+          <div class="row" style="margin-top:6px">
+            <label>Type</label>
+            <select .value=${p.pendingCustomObjectId ? 'custom:' + p.pendingCustomObjectId : p.pendingFurnitureKind}
+                    @change=${(e: Event) => {
+                      const v = (e.target as HTMLSelectElement).value;
+                      if (v.startsWith('custom:')) p.pendingCustomObjectId = v.slice(7);
+                      else { p.pendingFurnitureKind = v as FurnitureKind; p.pendingCustomObjectId = null; }
+                      this.requestUpdate();
+                    }}>
+              ${this._kindOptions(p.pendingCustomObjectId ? 'custom:' + p.pendingCustomObjectId : p.pendingFurnitureKind)}
+            </select>
+          </div>
+        ` : nothing}
+      `)}
+      <div style="border-top:1px solid var(--border);margin-top:8px;padding-top:6px;
+                  color:var(--text-dim);font-size:10px;line-height:1.4">
+        ${this._toolHint(p.tool)}
+      </div>
+      <div style="color:var(--text-dim);font-size:10px;margin-top:6px;line-height:1.4;font-style:italic">
+        Tip: the visual picker in the bottom toolbar shows live previews of every item.
+        Rooms, geo landmarks and neighborhood exclusions are armed from their own sections.
+        ${p.hotkeysEnabled ? nothing : html`<br>Keyboard shortcuts are OFF (Settings ▸ Display).`}
+      </div>
     `);
   }
 

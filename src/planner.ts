@@ -456,6 +456,13 @@ export type BgTextResolved = {
 export const WALL_PREF_ANGLE = 'diorama:wall:angleSnap';
 export const WALL_PREF_GRID = 'diorama:wall:gridSnap';
 export const WALL_PREF_WELD = 'diorama:wall:weld';
+// Keyboard shortcuts master switch — same device-local storage discipline as the
+// wall prefs above (absent key = ON = today's behavior). OFF kills every PLAIN
+// key binding (tool letters/digits, Delete/Backspace, arrow nudges) because
+// those are the ones that fire when focus silently lands on <body> mid-typing;
+// modifier combos (Ctrl/Cmd+Z / +Y / +0), Escape, Enter and the Space pan-hold
+// stay live — see canvas-2d._onKey.
+export const HOTKEY_PREF = 'diorama:hotkeys';
 
 function readWallPref(key: string): boolean {
   try { return localStorage.getItem(key) !== '0'; } catch { return true; }
@@ -506,6 +513,9 @@ export class Planner extends EventTarget {
   wallAngleSnap = readWallPref(WALL_PREF_ANGLE);
   wallGridSnap = readWallPref(WALL_PREF_GRID);
   wallWeld = readWallPref(WALL_PREF_WELD);
+  // Keyboard-shortcut master switch (device-local, same discipline as the wall
+  // prefs). Absent = ON. See HOTKEY_PREF for exactly which keys it gates.
+  hotkeysEnabled = readWallPref(HOTKEY_PREF);
   cursor: Vec2 | null = null;
   drag: Drag | null = null;
   dragJustEnded = false;
@@ -6312,6 +6322,15 @@ export class Planner extends EventTarget {
   }
   setWallWeld(on: boolean): void {
     this.wallWeld = on; writeWallPref(WALL_PREF_WELD, on); this.emitConfig();
+  }
+
+  // Keyboard-shortcut master switch (same device-local, no-save discipline).
+  // OFF disables every PLAIN-key binding in canvas-2d._onKey — the ones that can
+  // fire when focus quietly falls back to <body> in the middle of a typing
+  // session (user-reported: "tool selection still keeps inadvertently happening
+  // when typing"). Modifier combos, Escape, Enter and the Space pan-hold live on.
+  setHotkeysEnabled(on: boolean): void {
+    this.hotkeysEnabled = on; writeWallPref(HOTKEY_PREF, on); this.emitConfig();
   }
 
   // Toggle whatever entity is bound — chooses the correct domain service

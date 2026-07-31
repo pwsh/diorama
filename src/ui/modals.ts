@@ -2056,6 +2056,14 @@ export class SettingsDrawer extends LitElement {
         v => { p.store.scene3d!.skyBackdrop = v; },
         'Gradient sky dome + sun / moon / stars behind the scene (default on when weather is configured)')}
       <div style="border-top:1px solid var(--border);margin:10px 0 0;padding-top:8px">
+        <div style="font-weight:600;font-size:11px;margin-bottom:4px">Input</div>
+        <div class="row">
+          <label title="Single-key canvas shortcuts: the tool letters/digits (1–8, m), Delete / Backspace on the current selection, and the arrow-key furniture nudge. Turn OFF if tools switch or items vanish while you type — focus can silently fall back to the page body mid-edit. Ctrl/Cmd+Z undo, Ctrl/Cmd+0 reset view, Escape, Enter and the Space pan-hold keep working either way. Stored on this device only.">Keyboard shortcuts (tool hotkeys, Delete, arrows)</label>
+          <input type="checkbox" data-hotkeys-toggle .checked=${p.hotkeysEnabled}
+                 @change=${(e: Event) => p.setHotkeysEnabled((e.target as HTMLInputElement).checked)}>
+        </div>
+      </div>
+      <div style="border-top:1px solid var(--border);margin:10px 0 0;padding-top:8px">
         <div style="font-weight:600;font-size:11px;margin-bottom:4px">Camera</div>
         ${check('Lock pivot to plan centre', resolvePivotMode(sc).locked,
           v => {

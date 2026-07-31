@@ -1,0 +1,447 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>SIDEBARORG …</title>
+<style>
+  body { margin:0; background:#0d1116; color:#cfd8dc; font:13px/1.5 sans-serif; padding:14px; }
+  h1 { font-size:15px; margin:0 0 10px; }
+  #summary { font-size:14px; font-weight:bold; margin:10px 0; padding:8px 10px; border-radius:5px; }
+  .okbg { background:#12331f; color:#69f0ae; } .badbg { background:#3a1414; color:#ff8a80; }
+  .row { display:flex; justify-content:space-between; gap:10px; padding:2px 0; border-bottom:1px solid #1c2530; }
+  .pass { color:#69f0ae; } .fail { color:#ff5252; }
+  .name { color:#90caf9; } .extra { color:#ffd54f; font-size:11px; }
+  h2 { font-size:12px; color:#80cbc4; margin:14px 0 4px; }
+  #mount { position:absolute; left:-4000px; top:0; width:1200px; }
+</style>
+<h1>Sidebar organisation — floor picker / floor tools / collapse-all / section order / hotkey switch</h1>
+<div id="summary">Running…</div>
+<div id="rows"></div>
+<div id="mount"></div>
+
+<!-- Harness build (from the repo root; NEVER reuse stale bundles). Shares the
+     layers2d bundle (it already exports the real Planner and side-imports the
+     real sidebar + modals + canvas-2d from ONE entry — separate bundles would
+     each get their own Planner module identity). Needs a WIDE viewport:
+       npm run build
+       H=/tmp/diorama-harness-sidebarorg
+       rm -rf "$H"; mkdir -p "$H"; cp -r dist/* "$H"/
+       cp test-pages/sidebar-org-test.html "$H"/
+       T=$(mktemp -d); cp -r src/* "$T"/; cp tsconfig.json "$T"/
+       cp test-pages/fake-avatar-store.ts "$T"/avatar-store.ts
+       cp test-pages/layers2d-entry.ts    "$T"/layers2d-entry.ts
+       npx esbuild "$T"/layers2d-entry.ts --bundle --format=esm --tsconfig="$T"/tsconfig.json \
+         --alias:lit=$PWD/node_modules/lit/index.js \
+         --alias:lit/decorators.js=$PWD/node_modules/lit/decorators.js \
+         --define:__DIORAMA_VERSION__='"test"' \
+         --outfile="$H"/layers2d.mod.js
+     (the --define is required here but NOT for layers2d-test.html: this page
+      OPENS the settings drawer, whose footer prints the compiled-in version.)
+       (cd "$H" && python3 -m http.server 8932 &)
+       google-chrome --headless=new --disable-gpu --use-angle=swiftshader \
+         --enable-unsafe-swiftshader --window-size=1200,900 \
+         --virtual-time-budget=40000 --dump-dom \
+         "http://localhost:8932/sidebar-org-test.html" | grep -o "<title>[^<]*"  -->
+<script type="module">
+  const V = '?v=' + Date.now();
+  const { Planner } = await import('./layers2d.mod.js' + V);
+
+  const results = [];
+  const ok = (name, cond, extra = '') => results.push({ name, pass: !!cond, extra: String(extra) });
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const frames = async n => { for (let i = 0; i < n; i++) await sleep(20); };
+  async function waitFor(cond, tries = 400) {
+    for (let i = 0; i < tries; i++) { if (cond()) return true; await sleep(8); }
+    return !!cond();
+  }
+
+  class FakeHa {
+    constructor(seed) { this.map = new Map(); for (const [k, v] of Object.entries(seed || {})) this.map.set(k, JSON.parse(JSON.stringify(v))); this.states = {}; this._s = []; this._c = []; }
+    connect() { for (const cb of this._c) cb('connected'); for (const cb of this._s) cb(this.states, undefined); }
+    onState(fn) { this._s.push(fn); } onConn(fn) { this._c.push(fn); }
+    callService() { return Promise.resolve(); }
+    async getHistory() { return {}; } async getWeatherForecasts() { return null; }
+    async getDevices() { return []; } async getEntityRegistry() { return []; }
+    async getAreaRegistry() { return []; } async getFloorRegistry() { return []; }
+    async updateEntityRegistry() { return true; }
+    async getUserData(k) { return this.map.has(k) ? JSON.parse(JSON.stringify(this.map.get(k))) : null; }
+    async setUserData(k, v) { this.map.set(k, JSON.parse(JSON.stringify(v))); return true; }
+    async refreshStates() {} async subscribeMqtt() { return () => {}; } async publishMqtt() {}
+    async listRepairsIssues() { return []; } async subscribePersistentNotifications() { return () => {}; }
+    async getCalendarEvents() { return {}; }
+  }
+  const floor = (id, name) => ({ id, name, w: 12000, d: 10000, walls: [], furniture: [],
+    lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [], bleProxies: [],
+    doors: [], windows: [], rooms: [], groundAreas: [], bg: null });
+  async function mkPlanner(nFloors = 2) {
+    localStorage.clear();
+    const floors = [];
+    for (let i = 0; i < nFloors; i++) floors.push(floor('f' + (i + 1), 'Floor ' + (i + 1)));
+    const seed = { v: 2, floors, currentFloorId: 'f1', activeSensorId: null,
+      coverage: true, imperial: false, showDetails: false, useRawTargets: false };
+    const p = new Planner(); p.connectWith(new FakeHa({ diorama: seed }));
+    await waitFor(() => p.configIndex !== null);
+    return p;
+  }
+  const mkSensor = (id, label) => ({ id, x: 1000, y: 1000, heading: 0, fov: 60, range: 6000, label, deviceSlug: null });
+  const collapsedSet = () => {
+    try { return new Set(JSON.parse(localStorage.getItem('diorama:sidebar:collapsed') || '[]')); }
+    catch { return new Set(); }
+  };
+  // Titles of every .section in DOM order (the floor picker's <h3> has no arrow).
+  const sectionTitles = sb => [...sb.querySelectorAll('.section')]
+    .map(s => (s.querySelector('h3')?.textContent || '').replace('▸', '').trim());
+
+  let p, sb;
+  try {
+    ok('viewport wide enough (>=900)', window.innerWidth >= 900, `innerWidth=${window.innerWidth}`);
+    p = await mkPlanner(2);
+    // canvas-2d owns the window keydown listener the hotkey gate lives in.
+    const c2d = document.createElement('diorama-canvas-2d');
+    c2d.planner = p;
+    c2d.style.cssText = 'display:block;width:400px;height:300px';
+    document.getElementById('mount').appendChild(c2d);
+    sb = document.createElement('diorama-sidebar');
+    sb.planner = p;
+    document.getElementById('mount').appendChild(sb);
+    await sb.updateComplete;
+    await frames(2);
+
+    // ── A: pinned section order ──────────────────────────────────────────
+    const titles = sectionTitles(sb);
+    const want = ['Floors', 'Floor tools', 'Layers', 'Dimensions', 'Rulers', 'Tools'];
+    ok('A1 first six sections match the pinned order',
+       want.every((w, i) => titles[i] === w), `${titles.slice(0, 8).join(' | ')}`);
+    ok('A2 mmWave sensors follows Tools', titles[6] === 'mmWave Sensors on this floor', titles[6]);
+    // Layers / Dimensions / Rulers appear EXACTLY once (moved, not duplicated).
+    for (const t of ['Layers', 'Dimensions', 'Rulers', 'Tools', 'Floors', 'Floor tools']) {
+      ok(`A3 "${t}" appears exactly once`, titles.filter(x => x === t).length === 1,
+         titles.filter(x => x === t).length);
+    }
+    // Every other section still renders (nothing lost in the reshuffle).
+    // (Item sections with an empty list render `nothing` — pre-existing — so
+    // this checks the always-present tail of the sidebar survived the reshuffle.)
+    for (const t of ['Rooms', 'Custom Objects', 'GPS / Geo', 'Neighborhood', 'Background']) {
+      ok(`A4 section still present: ${t}`, titles.some(x => x.startsWith(t)), titles.join(' | '));
+    }
+
+    // ── B: compact floor rows, non-collapsible picker ────────────────────
+    const rows = [...sb.querySelectorAll('[data-floor-row]')];
+    ok('B1 one row per floor', rows.length === 2, rows.length);
+    ok('B2 floor rows carry NO buttons (no ▲▼ / 👁)',
+       rows.every(r => r.querySelectorAll('button').length === 0),
+       rows.map(r => r.querySelectorAll('button').length).join(','));
+    const pickerH3 = sb.querySelector('[data-floor-select] h3');
+    ok('B3 floor picker header is not collapsible',
+       !!pickerH3 && !pickerH3.classList.contains('collapsible-header'),
+       pickerH3 ? pickerH3.className : 'missing');
+    ok('B4 "+ Add floor" lives in the picker', !!sb.querySelector('[data-floor-select] [data-add-floor]'));
+    // Display order = highest story first (floorsDisplayOrder).
+    ok('B5 rows are display-ordered (highest story first)',
+       rows[0].getAttribute('data-floor-row') === 'f2' &&
+       rows[1].getAttribute('data-floor-row') === 'f1',
+       rows.map(r => r.getAttribute('data-floor-row')).join(','));
+    // Clicking a row switches floors.
+    rows[0].click();
+    await frames(2);
+    ok('B6 clicking a row switches floor', p.store.currentFloorId === 'f2', p.store.currentFloorId);
+    p.switchFloor('f1'); await frames(2);
+
+    // ── C: relocated per-floor controls live in Floor tools and WORK ─────
+    const inTools = sel => sb.querySelector(`[data-floor-tools-marker] ${sel}`) || sb.querySelector(sel);
+    ok('C1 Floor tools holds the order buttons',
+       !!sb.querySelector('[data-floor-up]') && !!sb.querySelector('[data-floor-down]'));
+    ok('C2 Floor tools holds the visibility cycle', !!sb.querySelector('[data-floor-vis]'));
+    ok('C3 Floor tools holds edit/delete + elevation + HA floor',
+       !!sb.querySelector('[data-edit-floor]') && !!sb.querySelector('[data-del-floor]') &&
+       !!sb.querySelector('[data-floor-elev]'));
+    // moveFloor: f1 is index 0 → ▲ Up moves it to index 1.
+    const spyMove = []; const realMove = p.moveFloor.bind(p);
+    p.moveFloor = (id, d) => { spyMove.push([id, d]); return realMove(id, d); };
+    sb.querySelector('[data-floor-up]').click();
+    await frames(2);
+    ok('C4 ▲ Up calls moveFloor(current, +1)',
+       spyMove.length === 1 && spyMove[0][0] === 'f1' && spyMove[0][1] === 1, JSON.stringify(spyMove));
+    ok('C5 store order actually changed', p.store.floors.map(f => f.id).join(',') === 'f2,f1',
+       p.store.floors.map(f => f.id).join(','));
+    sb.querySelector('[data-floor-down]').click();
+    await frames(2);
+    ok('C6 ▼ Down restores order', p.store.floors.map(f => f.id).join(',') === 'f1,f2',
+       p.store.floors.map(f => f.id).join(','));
+    // Visibility cycle: show → peek → hide → show.
+    const spyVis = []; const realVis = p.cycleFloorVisibility.bind(p);
+    p.cycleFloorVisibility = id => { spyVis.push(id); return realVis(id); };
+    sb.querySelector('[data-floor-vis]').click(); await frames(2);
+    ok('C7 visibility button calls cycleFloorVisibility(current)',
+       spyVis.length === 1 && spyVis[0] === 'f1', JSON.stringify(spyVis));
+    ok('C8 first cycle → peek', p.floor().peek2d === true && !p.floor().disabled,
+       `peek=${p.floor().peek2d} disabled=${p.floor().disabled}`);
+    sb.querySelector('[data-floor-vis]').click(); await frames(2);
+    ok('C9 second cycle → hidden', p.floor().disabled === true && !p.floor().peek2d,
+       `peek=${p.floor().peek2d} disabled=${p.floor().disabled}`);
+    sb.querySelector('[data-floor-vis]').click(); await frames(2);
+    ok('C10 third cycle → shown', !p.floor().disabled && !p.floor().peek2d,
+       `peek=${p.floor().peek2d} disabled=${p.floor().disabled}`);
+    // The picker still SHOWS the state passively.
+    p.cycleFloorVisibility('f1'); await frames(2);
+    ok('C11 picker row still shows the (peek) state',
+       (sb.querySelector('[data-floor-row="f1"]')?.textContent || '').includes('peek'),
+       sb.querySelector('[data-floor-row="f1"]')?.textContent?.trim());
+    p.cycleFloorVisibility('f1'); p.cycleFloorVisibility('f1'); await frames(2);
+
+    // ── D: collapse all / expand all ─────────────────────────────────────
+    const before = sectionTitles(sb).length;
+    sb.querySelector('[data-collapse-all]').click();
+    await frames(3);
+    const set = collapsedSet();
+    const missing = ['floortools', 'layers', 'dimensions', 'rulers', 'tools', 'sensors',
+                     'furniture', 'rooms', 'fixtures', 'geo', 'bg'].filter(s => !set.has(s));
+    ok('D1 collapse-all writes every section slug', missing.length === 0, `missing=${missing.join(',')}`);
+    ok('D2 collapsed bodies are not rendered',
+       !sb.querySelector('[data-floor-elev]') && !sb.querySelector('[data-collapse-all]') === false,
+       `elev=${!!sb.querySelector('[data-floor-elev]')}`);
+    ok('D3 Tools grid is gone while collapsed',
+       sb.querySelectorAll('.tool-cat').length === 0, sb.querySelectorAll('.tool-cat').length);
+    ok('D4 the floor picker survives collapse-all',
+       sb.querySelectorAll('[data-floor-row]').length === 2 && !!sb.querySelector('[data-add-floor]'),
+       sb.querySelectorAll('[data-floor-row]').length);
+    ok('D5 section headers all still render (only bodies hide)',
+       sectionTitles(sb).length === before, `${sectionTitles(sb).length} vs ${before}`);
+    ok('D6 collapse/expand row itself stays reachable', !!sb.querySelector('[data-expand-all]'));
+    sb.querySelector('[data-expand-all]').click();
+    await frames(3);
+    const set2 = collapsedSet();
+    ok('D7 expand-all clears every section slug',
+       ['floortools', 'layers', 'tools', 'sensors', 'bg'].every(s => !set2.has(s)),
+       [...set2].join(','));
+    ok('D8 bodies render again', !!sb.querySelector('[data-floor-elev]') &&
+       sb.querySelectorAll('.tool-cat').length > 0, sb.querySelectorAll('.tool-cat').length);
+    // Room-group sub-keys are NOT touched by either button.
+    localStorage.setItem('diorama:sidebar:collapsed', JSON.stringify(['sensors/none']));
+    sb._collapsed = new Set(['sensors/none']);
+    sb.requestUpdate(); await frames(2);
+    sb.querySelector('[data-collapse-all]').click(); await frames(2);
+    ok('D9 collapse-all leaves room-group sub-keys alone', collapsedSet().has('sensors/none'),
+       [...collapsedSet()].filter(x => x.includes('/')).join(','));
+    sb.querySelector('[data-expand-all]').click(); await frames(2);
+    ok('D10 expand-all leaves room-group sub-keys alone', collapsedSet().has('sensors/none'),
+       [...collapsedSet()].filter(x => x.includes('/')).join(','));
+
+    // ── E: auto-expand still fires after a collapse-all ──────────────────
+    sb.querySelector('[data-collapse-all]').click();
+    await frames(3);
+    ok('E1 sensors collapsed before the selection', collapsedSet().has('sensors'));
+    p.floor().sensors.push(mkSensor('s1', 'Sensor 1'));
+    p.setActiveSensor('s1');
+    p.emitConfig();
+    await frames(3);
+    ok('E2 selecting a sensor auto-expands ONLY that section',
+       !collapsedSet().has('sensors') && collapsedSet().has('tools'),
+       `sensors=${collapsedSet().has('sensors')} tools=${collapsedSet().has('tools')}`);
+    ok('E3 the sensor editor is in the DOM', !!sb.querySelector('input[data-label-for="s1"]'));
+    sb.querySelector('[data-expand-all]').click(); await frames(3);
+
+    // ── F: Tools grouping ────────────────────────────────────────────────
+    const caps = [...sb.querySelectorAll('.tool-cat')].map(e => e.textContent.trim());
+    ok('F1 five tool groups, in order',
+       caps.join('|') === 'Select & edit|Structure|Areas & ground|Devices & sensors|Furniture & decor',
+       caps.join('|'));
+    // Every tool button from the flat list is still reachable exactly once.
+    const toolsSection = [...sb.querySelectorAll('.section')].find(
+      s => (s.querySelector('h3')?.textContent || '').includes('Tools'));
+    const btns = [...toolsSection.querySelectorAll('button')].map(b => b.textContent.trim());
+    for (const label of ['Select', 'Delete', 'Wall', 'Door', 'Window', '📏 Ruler', '▨ Ground area',
+                         '〰 Path / drive', '🏊 Pool / spa', '🕳 Floor void', '▱ Presence zone',
+                         'mmWave', 'Motion', 'Env', 'BLE', '📷 Camera', '⚠️ Safety/Siren', '🚨 Alarm',
+                         '🌡 Thermostat', '🚰 Valve', '🔌 Plug', '📽 Projector', '🚿 Sprinkler',
+                         '🤖 Robot', '🔔 Alert beacon', '📅 Calendar', '🔘 Action', '🔢 Info',
+                         'Furn', 'Light', 'Switch', '🚩 Flagpole']) {
+      ok(`F2 tool reachable: ${label}`, btns.filter(b => b === label).length === 1,
+         btns.filter(b => b === label).length);
+    }
+    ok('F3 no "Other" fallback group (every tool is categorised)', !caps.includes('Other'), caps.join('|'));
+    // Wall-editing prefs moved WITH the Structure group and still render.
+    ok('F4 wall-editing prefs still in Tools',
+       (toolsSection.textContent || '').includes('Wall editing'));
+    // Contextual pickers still appear under their group.
+    p.setTool('wall'); await frames(2);
+    ok('F5 wall-kind picker shows under the Wall tool',
+       (sb.textContent || '').includes('Full wall (9 ft)'));
+    p.setTool('furniture'); await frames(2);
+    ok('F6 furniture-kind picker shows under the Furniture tool',
+       !!sb.querySelector('.section select option[value^="custom:"]') ||
+       (sb.textContent || '').includes('Appliances'));
+    p.setTool('select'); await frames(2);
+
+    // ── G: keyboard-shortcut master switch ───────────────────────────────
+    document.body.focus?.();
+    if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+    ok('G1 default is ON (absent pref)', p.hotkeysEnabled === true, p.hotkeysEnabled);
+    p.setTool('select');
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'm' }));
+    await frames(1);
+    ok('G2 with hotkeys ON, "m" picks the Motion tool', p.tool === 'motion', p.tool);
+    p.setTool('select');
+    p.setHotkeysEnabled(false);
+    await frames(2);
+    ok('G3 pref persists device-local', localStorage.getItem('diorama:hotkeys') === '0',
+       localStorage.getItem('diorama:hotkeys'));
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'm' }));
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: '2' }));
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'w' }));
+    await frames(1);
+    ok('G4 with hotkeys OFF, plain tool keys are dead', p.tool === 'select', p.tool);
+    // Delete on a HOT selection must not fire.
+    p.floor().groundAreas = p.floor().groundAreas ?? [];
+    p.floor().groundAreas.push({ id: 'g1', kind: 'grass',
+      points: [{ x: 500, y: 500 }, { x: 3000, y: 500 }, { x: 1500, y: 3000 }] });
+    p.store.activeSensorId = null;
+    p.setActiveGroundArea('g1');
+    p.markSelectionHot();
+    ok('G5 selection is hot', p.selectionHot === true, p.selectionHot);
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete' }));
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Backspace' }));
+    await frames(1);
+    ok('G6 with hotkeys OFF, Delete does NOT delete a hot selection',
+       (p.floor().groundAreas ?? []).some(g => g.id === 'g1'),
+       `areas=${(p.floor().groundAreas ?? []).length}`);
+    // Arrow nudge is a plain key too.
+    p.floor().furniture.push({ id: 'fu1', kind: 'table', x: 2000, y: 2000, w: 600, h: 600, rotation: 0 });
+    p.activeFurnitureId = 'fu1';
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight' }));
+    await frames(1);
+    ok('G7 with hotkeys OFF, arrow nudge is dead',
+       p.floor().furniture.find(f => f.id === 'fu1').x === 2000,
+       p.floor().furniture.find(f => f.id === 'fu1').x);
+    // Modifier combos + Escape stay LIVE.
+    const undosBefore = p.canUndo;
+    p.store.imperial = true; p.save();       // one undo snapshot
+    await frames(1);
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', ctrlKey: true }));
+    await frames(1);
+    ok('G8 with hotkeys OFF, Ctrl+Z still undoes', p.store.imperial === false,
+       `imperial=${p.store.imperial} canUndo(before)=${undosBefore}`);
+    p.drawingWall = { points: [{ x: 0, y: 0 }] };
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    await frames(1);
+    ok('G9 with hotkeys OFF, Escape still cancels a draw latch', p.drawingWall === null, `${p.drawingWall}`);
+    // Re-enabling restores today's behavior.
+    p.setHotkeysEnabled(true);
+    await frames(2);
+    ok('G10 re-enabling clears the pref', localStorage.getItem('diorama:hotkeys') === '1',
+       localStorage.getItem('diorama:hotkeys'));
+    p.setTool('select');
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'm' }));
+    await frames(1);
+    ok('G11 hotkeys work again once re-enabled', p.tool === 'motion', p.tool);
+    p.setTool('select');
+    // The Tools hint calls it out while OFF.
+    p.setHotkeysEnabled(false); await frames(2);
+    ok('G12 Tools hint mentions the OFF state',
+       (sb.textContent || '').includes('Keyboard shortcuts are OFF'));
+    p.setHotkeysEnabled(true); await frames(2);
+
+    // Settings ▸ Display exposes the toggle.
+    const drawer = document.createElement('diorama-settings-drawer');
+    drawer.planner = p;
+    document.getElementById('mount').appendChild(drawer);
+    drawer.show('display');
+    await drawer.updateComplete;
+    await frames(2);
+    const cbx = drawer.querySelector('[data-hotkeys-toggle]');
+    ok('G13 Settings ▸ Display has the hotkeys checkbox', !!cbx, cbx ? 'found' : 'missing');
+    if (cbx) {
+      cbx.checked = false;
+      cbx.dispatchEvent(new Event('change'));
+      await frames(2);
+      ok('G14 the checkbox drives the pref', p.hotkeysEnabled === false, p.hotkeysEnabled);
+      cbx.checked = true; cbx.dispatchEvent(new Event('change'));
+      await frames(2);
+    }
+    p.setHotkeysEnabled(true);
+
+    // ── H: the guard that already existed — typing in a field ────────────
+    // isEditableTarget covers INPUT / TEXTAREA / SELECT / contentEditable, and
+    // every Diorama custom element renders to LIGHT DOM, so `e.target` at the
+    // window listener really is the focused control (no shadow retargeting).
+    p.setTool('select');
+    const probe = document.createElement('input');
+    document.getElementById('mount').appendChild(probe);
+    probe.focus();
+    probe.dispatchEvent(new KeyboardEvent('keydown', { key: 'm', bubbles: true }));
+    await frames(1);
+    ok('H1 keydown inside an <input> never picks a tool', p.tool === 'select', p.tool);
+    const sel = document.createElement('select');
+    document.getElementById('mount').appendChild(sel);
+    sel.focus();
+    sel.dispatchEvent(new KeyboardEvent('keydown', { key: 'm', bubbles: true }));
+    await frames(1);
+    ok('H2 keydown inside a <select> never picks a tool', p.tool === 'select', p.tool);
+    probe.remove(); sel.remove();
+
+    // Focus-retention probe: does a sidebar re-render triggered by typing throw
+    // focus back to <body> (which WOULD make the next keystroke a tool pick)?
+    p.floor().rooms.push({ id: 'r1', name: 'Kitchen', anchor: { x: 3000, y: 3000 } });
+    p.emitConfig();
+    await frames(3);
+    const roomInput = sb.querySelector('input[data-room-name-for="r1"]');
+    ok('H3 room-name input rendered', !!roomInput);
+    if (roomInput) {
+      roomInput.focus();
+      roomInput.value = 'Kitchenette';
+      roomInput.dispatchEvent(new Event('input', { bubbles: true }));   // → save + emitConfig
+      await frames(3);
+      ok('H4 typing keeps focus in the field across the re-render',
+         document.activeElement === roomInput,
+         document.activeElement ? (document.activeElement.tagName + '/' +
+           (document.activeElement.getAttribute?.('data-room-name-for') ?? '')) : 'null');
+      // …and the very next keystroke therefore still hits the guarded path.
+      p.setTool('select');
+      roomInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'm', bubbles: true }));
+      await frames(1);
+      ok('H5 next keystroke after a re-render still guarded', p.tool === 'select', p.tool);
+      roomInput.blur();
+    }
+
+    // ── I: WHY the master switch is needed (the leak isEditableTarget can't
+    // see). Every Diorama element is light DOM and every form control is
+    // covered, so a keystroke aimed AT a field is safe (H1/H2/H5). The real
+    // path is focus legitimately LEAVING the field: clicking any non-focusable
+    // sidebar surface (a section header, a list row, the canvas) drops focus to
+    // <body>, and from there every plain key is a live binding again — the user
+    // is still "typing" but the keystrokes are now hotkeys. Nothing in
+    // `e.target` distinguishes that from an intentional shortcut.
+    p.setTool('select');
+    const header = sb.querySelector('.collapsible-header');
+    header.click();                                  // collapses a section, focus → body
+    await frames(2);
+    ok('I1 clicking a section header leaves focus on <body>',
+       document.activeElement === document.body || document.activeElement === null,
+       document.activeElement ? document.activeElement.tagName : 'null');
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'm' }));
+    await frames(1);
+    ok('I2 …and a plain key then DOES pick a tool (hotkeys ON) — the reported leak',
+       p.tool === 'motion', p.tool);
+    p.setTool('select');
+    p.setHotkeysEnabled(false);
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'm' }));
+    await frames(1);
+    ok('I3 the master switch closes it', p.tool === 'select', p.tool);
+    p.setHotkeysEnabled(true);
+    header.click(); await frames(2);
+  } catch (err) {
+    ok('harness threw', false, (err && (err.stack || err.message)) || String(err));
+  }
+
+  const passN = results.filter(r => r.pass).length;
+  const rows2 = document.getElementById('rows');
+  for (const r of results) {
+    rows2.insertAdjacentHTML('beforeend',
+      `<div class="row"><span class="name">${r.name}</span>` +
+      `<span class="${r.pass ? 'pass' : 'fail'}">${r.pass ? 'PASS' : 'FAIL'}` +
+      `${r.extra ? ` <span class="extra">${r.extra}</span>` : ''}</span></div>`);
+  }
+  const good = passN === results.length;
+  const sum = document.getElementById('summary');
+  sum.className = good ? 'okbg' : 'badbg';
+  sum.textContent = `SIDEBARORG ${good ? 'PASS' : 'FAIL'} ${passN}/${results.length}`;
+  document.title = `SIDEBARORG ${good ? 'PASS' : 'FAIL'} ${passN}/${results.length}`;
+</script>
