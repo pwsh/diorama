@@ -1,6 +1,6 @@
 # Project status & pick-up guide
 
-Last updated: 2026-07-31, at **v0.48.0**. This is the single document to
+Last updated: 2026-07-31, at **v0.49.0**. This is the single document to
 read (alongside `CLAUDE.md`) to resume work with full context.
 
 ## Where things stand
@@ -306,13 +306,17 @@ instance.
   ground writing true overlay everywhere w/ surface-derived ink;
   left-anchored 40px toolbar handle, one-line mmWave title,
   6px collapsed-pill rhythm).
+  → v0.49.0 steady on (flight feed-latency guard — stale fixes
+  absorbed by speed trim, plane never slides backwards; forward-only
+  ease backstop; contrail min-segment gate + arc-length ramp — no
+  more fold-back or flag-flap).
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
 - **Flight feed-latency guard + contrail conditioning** (2026-07-31,
   user-reported "flapping like a flag… tail coming back and
   bisecting the fuselage… the plane body also moves backwards";
-  unreleased — on main past v0.48.0). Reproduced with numbers:
+  released in v0.49.0). Reproduced with numbers:
   6 s-stale cloud fixes dragged the display −29 mm/frame backwards
   (hairpin dot −1.0, 198 folded samples/run); separately the
   newest spine segment was structurally zero every 0.15 s push →
