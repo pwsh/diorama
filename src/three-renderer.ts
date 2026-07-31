@@ -887,6 +887,22 @@ const FLIGHT_GHOST_GAP_MM = 180;
 const FLIGHT_HOVER_BOB_MM = 60;
 const FLIGHT_HOVER_DRIFT_MM = 35;
 const FLIGHT_HOVER_YAW_RAD = 0.05;
+// Feed-latency guard. A poll fix carries the position the aircraft held when the
+// receiver SAW it — routinely seconds ago on a cloud feed — so it habitually
+// lands BEHIND the point the rig has already dead-reckoned to. See
+// _applyFlightFix: the along-track part of a behind-us fix is dropped back onto
+// the reckoned position and the excess is bled off by trimming the reckoning
+// speed over ~half a minute, never below TRIM_MIN of the reported ground speed
+// (a trim is a slower aircraft; a jump cut is a REVERSING one).
+const FLIGHT_LAG_ABSORB_S = 30;
+const FLIGHT_LAG_TRIM_MIN = 0.8;
+// Spine conditioning. A trail point that lands within a hair of its predecessor
+// carries no direction, and every ribbon perpendicular is a cross product with
+// the segment tangent — so a sub-millimetre segment is a degenerate frame where
+// the strip snaps to its fallback axis. Model mm at scale 1, like every other
+// figure here; a real band-4 sample step is ~85 mm, so this drops only genuine
+// degeneracy.
+const FLIGHT_SPINE_MIN_SEG_MM = 6;
 // Ribbon scratch — module-level like the two-handed-prop `_thp*` vectors, so the
 // per-frame refill allocates nothing.
 const _fvzP = new THREE.Vector3();
@@ -897,6 +913,9 @@ const _fvzT = new THREE.Vector3();   // tail-exit anchor (_flightTailAnchor)
 // Gathered spine points (oldest → newest). Sized for the LONGEST consumer, the
 // contrail; the 4/8-point comet tails use a prefix of it.
 const _fvzSpine = new Float32Array(FLIGHT_RIBBON_PTS * 3);
+// Cumulative arc length along that spine — the ribbon's width/alpha ramp is
+// parameterised by DISTANCE, not sample index (see _refillFlightRibbon).
+const _fvzCum = new Float32Array(FLIGHT_RIBBON_PTS);
 // Airframes with enough flank + spine to carry TWO markings (operator broadside,
 // identification along the top). Everything not listed — the GA singles and the
 // helicopter — is a small airframe and keeps the single flank marking.
@@ -14223,7 +14242,41 @@ export class ThreeDRenderer {
     if (rig.archetype !== wantArch || rig.military !== fp.military || rig.dim !== wantDim) {
       this._rebuildFlightModel(rig, wantArch, fp.military, wantDim);
     }
-    rig.lat = fp.lat; rig.lon = fp.lon; rig.altFt = fp.altFt;
+    // ── Feed-latency guard (user-reported: "the plane body also moves
+    // backwards", and with it the folded, flapping contrail) ────────────────
+    // The fix is where the aircraft WAS when the receiver saw it, so it lands
+    // behind the reckoned position by roughly latency × ground speed. Easing
+    // the display onto it drags the model backwards along its own track — and
+    // drags every trail with it, because the tail-exit head then retreats into
+    // its own history: the spine hairpins and the contrail runs forward through
+    // the fuselage before extending aft. (Measured on a 6 s-stale 290 kt fix:
+    // −29 mm/frame for ~2 s, and one exact −1.0 segment reversal walking back
+    // through the ring buffer, at all eight compass headings.)
+    //
+    // A fix that lands behind is therefore read as what it is — a stale sample,
+    // not a manoeuvre. Its CROSS-track and altitude components are taken
+    // verbatim (those are exactly what dead reckoning cannot know); its
+    // along-track component is dropped back onto the reckoned position, and the
+    // excess is bled off by TRIMMING the reckoning speed over the next half
+    // minute, which keeps a systematic ground-speed error from letting the
+    // display run away while never reversing it. Forward fixes are untouched,
+    // as is any rig that is not reckoning (no gs/track, or its first fix).
+    let fixLat = fp.lat, fixLon = fp.lon, trim = 1;
+    const trkRad = fp.trackDeg != null ? fp.trackDeg * FLIGHT_DEG : rig.trackRad;
+    const gsMs = fp.gsKt == null ? 0 : fp.gsKt * FLIGHT_NM_M / 3600;
+    if (trkRad != null && gsMs > 0 && (rig.latPerS !== 0 || rig.lonPerS !== 0)) {
+      const cosR = Math.max(0.02, Math.abs(Math.cos(rig.lat * FLIGHT_DEG)));
+      const de = (fixLon - rig.lon) * FLIGHT_M_PER_DEG * cosR;   // metres east
+      const dn = (fixLat - rig.lat) * FLIGHT_M_PER_DEG;          // metres north
+      const along = de * Math.sin(trkRad) + dn * Math.cos(trkRad);
+      if (along < 0) {
+        const back = -along;                                     // metres behind
+        fixLat += (back * Math.cos(trkRad)) / FLIGHT_M_PER_DEG;
+        fixLon += (back * Math.sin(trkRad)) / (FLIGHT_M_PER_DEG * cosR);
+        trim = Math.max(FLIGHT_LAG_TRIM_MIN, 1 - back / (gsMs * FLIGHT_LAG_ABSORB_S));
+      }
+    }
+    rig.lat = fixLat; rig.lon = fixLon; rig.altFt = fp.altFt;
     rig.vertRateFpm = fp.vertRateFpm ?? 0;
     rig.trackRad = fp.trackDeg == null ? null : fp.trackDeg * FLIGHT_DEG;
     // Ground speed (kt) along the track → deg/s. Missing gs OR track = no dead
@@ -14231,7 +14284,7 @@ export class ThreeDRenderer {
     if (fp.gsKt == null || fp.trackDeg == null) {
       rig.latPerS = 0; rig.lonPerS = 0;
     } else {
-      const ms = fp.gsKt * FLIGHT_NM_M / 3600;
+      const ms = gsMs * trim;
       const tr = fp.trackDeg * FLIGHT_DEG;
       const cosLat = Math.max(0.02, Math.abs(Math.cos(fp.lat * FLIGHT_DEG)));
       rig.latPerS = (ms * Math.cos(tr)) / FLIGHT_M_PER_DEG;
@@ -14736,15 +14789,38 @@ export class ThreeDRenderer {
   // samples instead of lagging up to 150 ms behind it. Every point is a tail
   // position (that is what the ring buffer holds), so the spine is the tail's
   // path, not the centre's. Returns the count written.
+  //
+  // Points closer together than FLIGHT_SPINE_MIN_SEG_MM (at the live display
+  // scale) are DROPPED, because a segment with no length has no direction and
+  // every downstream perpendicular is a cross product with the segment tangent.
+  // The worst offender was structural rather than rare: the ring buffer is
+  // written from the very same tail anchor the head is read from, so on every
+  // 0.15 s push frame the final segment was EXACTLY zero — the head edge of the
+  // ribbon flipped by more than 25° on 21 % of frames, which is the reported
+  // "flapping like a flag". The head itself is never the point that gives way
+  // (it must stay welded to the tail exit); the accepted samples behind it are.
   private _flightSpine(rig: FlightRig, k: number, out: Float32Array): number {
+    const minSeg = FLIGHT_SPINE_MIN_SEG_MM * this._flightRigScale(rig);
+    const min2 = minSeg * minSeg;
     const have = Math.min(rig.trailCount, k - 1);
     let n = 0;
     for (let i = have; i >= 1; i--) {
       const s = ((rig.trailHead - i + FLIGHT_TRAIL_SLOTS) % FLIGHT_TRAIL_SLOTS) * 3;
-      out[n * 3] = rig.trail[s]; out[n * 3 + 1] = rig.trail[s + 1]; out[n * 3 + 2] = rig.trail[s + 2];
+      const x = rig.trail[s], y = rig.trail[s + 1], z = rig.trail[s + 2];
+      if (n > 0) {
+        const dx = x - out[n * 3 - 3], dy = y - out[n * 3 - 2], dz = z - out[n * 3 - 1];
+        if (dx * dx + dy * dy + dz * dz < min2) continue;
+      }
+      out[n * 3] = x; out[n * 3 + 1] = y; out[n * 3 + 2] = z;
       n++;
     }
     this._flightTailAnchor(rig, _fvzT);
+    while (n > 0) {
+      const dx = _fvzT.x - out[n * 3 - 3], dy = _fvzT.y - out[n * 3 - 2],
+            dz = _fvzT.z - out[n * 3 - 1];
+      if (dx * dx + dy * dy + dz * dz >= min2) break;
+      n--;
+    }
     out[n * 3] = _fvzT.x; out[n * 3 + 1] = _fvzT.y; out[n * 3 + 2] = _fvzT.z;
     return n + 1;
   }
@@ -14836,6 +14912,23 @@ export class ThreeDRenderer {
     const scale = this._flightRigScale(rig);
     const wNear = (mesh.userData.wNear as number) * scale;
     const wFar = (mesh.userData.wFar as number) * scale;
+    // Cumulative arc length, so the width and alpha ramps are parameterised by
+    // DISTANCE rather than by sample index. Index parameterisation slides the
+    // whole profile one slot toward the aircraft on every 0.15 s push (and
+    // slides it unevenly whenever the conditioning gate drops a point), which
+    // reads as the ribbon breathing in and out — measured as a ~95 mm jump of a
+    // fixed spine index per push. By arc length a given point of the sky keeps
+    // the width and alpha it had last frame.
+    let total = 0;
+    _fvzCum[0] = 0;
+    for (let i = 1; i < n; i++) {
+      const dx = _fvzSpine[i * 3] - _fvzSpine[i * 3 - 3];
+      const dy = _fvzSpine[i * 3 + 1] - _fvzSpine[i * 3 - 2];
+      const dz = _fvzSpine[i * 3 + 2] - _fvzSpine[i * 3 - 1];
+      total += Math.sqrt(dx * dx + dy * dy + dz * dz);
+      _fvzCum[i] = total;
+    }
+    let pSx = 1, pSy = 0, pSz = 0;              // last well-conditioned edge
     for (let i = 0; i < n; i++) {
       _fvzP.set(_fvzSpine[i * 3], _fvzSpine[i * 3 + 1], _fvzSpine[i * 3 + 2]);
       // Local tangent from the neighbouring samples (one-sided at the ends).
@@ -14845,8 +14938,12 @@ export class ThreeDRenderer {
                 _fvzSpine[b * 3 + 2] - _fvzSpine[a * 3 + 2]);
       _fvzV.set(camX - _fvzP.x, camY - _fvzP.y, camZ - _fvzP.z);
       _fvzS.crossVectors(_fvzD, _fvzV);
-      if (_fvzS.lengthSq() < 1e-9) _fvzS.set(1, 0, 0); else _fvzS.normalize();
-      const t = i / (n - 1);                    // 0 = oldest (tail end), 1 = aircraft
+      // Carry the previous point's edge through a degenerate cross product
+      // rather than snapping to a world axis: a one-frame axis flip IS the flap.
+      if (_fvzS.lengthSq() < 1e-9) _fvzS.set(pSx, pSy, pSz); else _fvzS.normalize();
+      pSx = _fvzS.x; pSy = _fvzS.y; pSz = _fvzS.z;
+      // 0 = oldest (tail end), 1 = aircraft — by arc length (see above).
+      const t = total > 1e-6 ? _fvzCum[i] / total : i / (n - 1);
       const half = (wFar + (wNear - wFar) * t) * 0.5;
       const alpha = Math.sin(Math.PI * t) * rig.fade;    // 0 → peak → 0
       const o = i * 6;
@@ -15573,9 +15670,27 @@ export class ThreeDRenderer {
         rig.lat += rig.latPerS * dt;
         rig.lon += rig.lonPerS * dt;
         this._flightScenePos(rig.lat, rig.lon, rig.altFt, this._v3flight);
-        rig.curX += (this._v3flight.x - rig.curX) * kPos;
         rig.curY += (this._v3flight.y - rig.curY) * kPos;
-        rig.curZ += (this._v3flight.z - rig.curZ) * kPos;
+        const eX = this._v3flight.x - rig.curX, eZ = this._v3flight.z - rig.curZ;
+        // Forward-only along track. _applyFlightFix already refuses to place the
+        // TARGET behind us, so this is the structural backstop for everything
+        // else that can move a target (a draw-radius edit, a re-calibrated geo
+        // θ, the radial compression curve): a reckoning aircraft may glide,
+        // slow or hold, but it may never retreat — which is what keeps the
+        // trail spine monotonic by construction rather than by luck. Byte-for-
+        // byte the shipped ease whenever the correction points forward, and
+        // wholly inert for a rig with no gs/track to define "forward".
+        const reckoning = rig.yawInit && (rig.latPerS !== 0 || rig.lonPerS !== 0);
+        // Nose is local −Z, whose world direction under R_y(yaw) is (−sin, −cos).
+        const fX = -Math.sin(rig.yaw), fZ = -Math.cos(rig.yaw);
+        const along = eX * fX + eZ * fZ;
+        if (reckoning && along < 0) {
+          rig.curX += (eX - along * fX) * kPos;   // cross-track only
+          rig.curZ += (eZ - along * fZ) * kPos;
+        } else {
+          rig.curX += eX * kPos;
+          rig.curZ += eZ * kPos;
+        }
         rig.asm.position.set(rig.curX, rig.curY, rig.curZ);
         // Heading: true track → geo unit (e,n) → plan via θ → scene velocity
         // (−planX, +planY). Nose is local −Z, whose world dir under R_y(φ) is

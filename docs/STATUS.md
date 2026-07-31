@@ -309,6 +309,22 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Flight feed-latency guard + contrail conditioning** (2026-07-31,
+  user-reported "flapping like a flag… tail coming back and
+  bisecting the fuselage… the plane body also moves backwards";
+  unreleased — on main past v0.48.0). Reproduced with numbers:
+  6 s-stale cloud fixes dragged the display −29 mm/frame backwards
+  (hairpin dot −1.0, 198 folded samples/run); separately the
+  newest spine segment was structurally zero every 0.15 s push →
+  degenerate perpendicular snapped to world-X 6.7×/s = the flap.
+  Fixes: _applyFlightFix latency guard (behind-us fix = stale —
+  cross-track/altitude verbatim, along-track absorbed by a
+  reckoning-speed trim, never a backward slide); forward-only
+  along-track ease backstop; 6 mm min-segment spine gate;
+  arc-length ribbon ramp + previous-rib degenerate fallback.
+  After: 0 backward steps, 0 folds, vertex jitter 95→3.4 mm.
+  flights-render 501→513 (§26n); flights 686/686, ui 295/295,
+  nbhd-render 95/95, terrain 103/103 held.
 - **Flight trail tail-exit anchoring** (2026-07-31, user-reported
   "bisecting the plane 2/3 of the way back"; released in v0.48.0). All trailing effects anchor at the tail exit:
   `_flightTailAnchor` (aftZ + 140 mm gap, × rigScale, along the

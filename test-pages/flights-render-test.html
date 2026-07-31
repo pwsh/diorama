@@ -2215,6 +2215,196 @@
              return mn >= M.fusLen / 2 * sc - 2;
            })());
       }
+
+      // ── 26n: feed latency must never reverse the aircraft ────────────────
+      // User-reported: "the ribbon contrail is flapping like a flag and the
+      // tail of the ribbon is coming back and bisecting the fuselage", plus
+      // "the plane body also moves backwards when this happens". Both are ONE
+      // defect. A cloud ADS-B fix is the position the receiver SAW seconds ago,
+      // so a poll habitually lands BEHIND the dead-reckoned point; easing the
+      // display onto it dragged the model backwards along its own track, and
+      // the tail-exit head retreated into its own ring-buffer history — the
+      // spine hairpinned (an exact −1.0 segment reversal walking back through
+      // the buffer, measured at all eight headings) so the contrail ran forward
+      // through the fuselage before extending aft. Reproduced at 16 ms frames,
+      // 8 s polls and a 6 s-stale feed; the guard lives in _applyFlightFix
+      // (drop the along-track part of a behind-us fix, bleed the excess off
+      // with a speed trim) with a forward-only backstop in the display ease.
+      upd([]); step(1, 3);
+      {
+        const M_PER_DEG = 111320, NM_M = 1852, DEG = Math.PI / 180;
+        // Where a track-following aircraft really is `secs` after (lat, lon).
+        const advLL = (lat, lon, trk, gs, secs) => {
+          const ms = gs * NM_M / 3600, t = trk * DEG;
+          const cl = Math.max(0.02, Math.abs(Math.cos(lat * DEG)));
+          return { lat: lat + (ms * Math.cos(t)) / M_PER_DEG * secs,
+                   lon: lon + (ms * Math.sin(t)) / (M_PER_DEG * cl) * secs };
+        };
+        const spineOf = (g, k) => {
+          const a = new Float32Array(k * 3), n = r._flightSpine(g, k, a), p = [];
+          for (let i = 0; i < n; i++) p.push([a[i * 3], a[i * 3 + 1], a[i * 3 + 2]]);
+          return p;
+        };
+        const ribVerts = g => {
+          const a = g.ribbon.geometry.attributes.position.array;
+          const n = g.ribbon.geometry.drawRange.count / 6 + 1, o = [];
+          for (let i = 0; i < n; i++) {
+            o.push([a[i * 6], a[i * 6 + 1], a[i * 6 + 2]]);
+            o.push([a[i * 6 + 3], a[i * 6 + 4], a[i * 6 + 5]]);
+          }
+          return o;
+        };
+        const HDGS = [0, 45, 90, 135, 180, 225, 270, 315];
+        const GS = 290, LAG = 6, DT = 0.016;
+        let worstBack = 0, worstDot = 1, folds = 0, aheadFrames = 0;
+        let worstJump = 0, degSegs = 0, badPerp = 0, minSegSeen = Infinity;
+        for (const hdg of HDGS) {
+          upd([]); step(1, 3);
+          const hex = 'lag' + hdg;
+          const base = { lat: OLAT + 0.05, lon: OLON + 0.05 };
+          const fix = ll => SP(hex, GS, { lat: ll.lat, lon: ll.lon, altFt: 21000,
+                                          trackDeg: hdg });
+          upd([fix(base)]);
+          let t = 0, lastPoll = 0, prevVerts = null;
+          for (let f = 0; f < Math.round(15 / DT); f++) {
+            t += DT;
+            if (t - lastPoll >= 8) {          // realistic poll cadence…
+              lastPoll = t;                   // …reporting a LAG-second-old fix
+              upd([fix(advLL(base.lat, base.lon, hdg, GS, t - LAG))]);
+            }
+            const g = rig(hex);
+            const bx = g.curX, bz = g.curZ;
+            step(DT);
+            // (a) the model may glide, slow or hold — never retreat.
+            const fx = -Math.sin(g.yaw), fz = -Math.cos(g.yaw);
+            const along = (g.curX - bx) * fx + (g.curZ - bz) * fz;
+            if (along < worstBack) worstBack = along;
+            // A rig younger than its first trail sample draws nothing yet (draw
+            // range 0) — there is no geometry to measure until it does.
+            if (!g.ribbon || g.ribbon.geometry.drawRange.count === 0) continue;
+            const sp = spineOf(g, 12);
+            for (let i = 0; i + 1 < sp.length; i++) {
+              const L = Math.hypot(sp[i + 1][0] - sp[i][0], sp[i + 1][1] - sp[i][1],
+                                   sp[i + 1][2] - sp[i][2]);
+              if (L < minSegSeen) minSegSeen = L;
+              if (L < 1) degSegs++;
+            }
+            // (b) spine monotonicity: consecutive segments never double back.
+            for (let i = 0; i + 2 < sp.length; i++) {
+              const ax = sp[i + 1][0] - sp[i][0], az = sp[i + 1][2] - sp[i][2];
+              const cx = sp[i + 2][0] - sp[i + 1][0], cz = sp[i + 2][2] - sp[i + 1][2];
+              const la = Math.hypot(ax, az), lb = Math.hypot(cx, cz);
+              if (la > 1e-6 && lb > 1e-6) {
+                const d = (ax * cx + az * cz) / (la * lb);
+                if (d < worstDot) worstDot = d;
+                if (d < 0) folds++;
+              }
+            }
+            // (c) the head stays AFT of the model centre at every heading.
+            const head = sp[sp.length - 1];
+            const ax = Math.sin(g.yaw), az = Math.cos(g.yaw);
+            if ((head[0] - g.curX) * ax + (head[2] - g.curZ) * az <= 0) aheadFrames++;
+            // (d) no flapping: bounded per-frame motion of every vertex except
+            // the head weld (which legitimately advances with the aircraft).
+            const vs = ribVerts(g);
+            if (prevVerts && prevVerts.length === vs.length) {
+              for (let i = 0; i < vs.length - 2; i++) {
+                const d = Math.hypot(vs[i][0] - prevVerts[i][0],
+                                     vs[i][1] - prevVerts[i][1],
+                                     vs[i][2] - prevVerts[i][2]);
+                if (d > worstJump) worstJump = d;
+              }
+            }
+            prevVerts = vs;
+            // (e) every ribbon rib is a real, unit-conditioned perpendicular.
+            for (let i = 0; i < vs.length; i += 2) {
+              const w = Math.hypot(vs[i][0] - vs[i + 1][0], vs[i][1] - vs[i + 1][1],
+                                   vs[i][2] - vs[i + 1][2]);
+              if (!(w > 0)) badPerp++;
+            }
+          }
+        }
+        ok('26n: a stale poll never slides the aircraft backwards along track',
+           worstBack >= 0, `worst along-track step = ${worstBack.toFixed(2)} mm/frame`);
+        ok('26n: the trail spine never doubles back (no hairpin through the model)',
+           folds === 0 && worstDot > 0,
+           `folds=${folds} minSegmentDot=${worstDot.toFixed(3)}`);
+        ok('26n: the spine head stays aft of the aircraft at every heading',
+           aheadFrames === 0, `aheadFrames=${aheadFrames}`);
+        ok('26n: no degenerate spine segment survives the conditioning gate',
+           degSegs === 0, `sub-mm segments=${degSegs}, min=${minSegSeen.toFixed(2)}mm`);
+        ok('26n: the contrail does not flap — bounded per-frame vertex motion',
+           worstJump < 40, `worst non-head vertex step = ${worstJump.toFixed(1)}mm`);
+        ok('26n: every ribbon rib keeps a real width (no collapsed perpendicular)',
+           badPerp === 0, `collapsed=${badPerp}`);
+
+        // A behind-us fix is absorbed, not obeyed: the reckoning speed is
+        // trimmed (never below FLIGHT_LAG_TRIM_MIN of the reported gs) instead
+        // of the display being yanked back.
+        upd([]); step(1, 3);
+        {
+          const hex = 'trim1', base = { lat: OLAT + 0.05, lon: OLON + 0.05 };
+          const fix = ll => SP(hex, 290, { lat: ll.lat, lon: ll.lon, altFt: 21000,
+                                           trackDeg: 90 });
+          upd([fix(base)]);
+          step(DT, Math.round(8 / DT));
+          const g = rig(hex);
+          const fullRate = Math.hypot(g.latPerS, g.lonPerS);
+          const reckoned = { lat: g.lat, lon: g.lon };
+          upd([fix(advLL(base.lat, base.lon, 90, 290, 8 - LAG))]);   // 6 s stale
+          const trimmed = Math.hypot(g.latPerS, g.lonPerS);
+          ok('26n: a stale fix keeps the reckoned along-track position',
+             Math.abs(g.lon - reckoned.lon) < 1e-9 && Math.abs(g.lat - reckoned.lat) < 1e-9,
+             `Δlon=${(g.lon - reckoned.lon).toExponential(2)}`);
+          ok('26n: …and is absorbed by a speed trim, not a jump cut',
+             trimmed < fullRate && trimmed >= fullRate * 0.79,
+             `${trimmed.toExponential(3)} vs ${fullRate.toExponential(3)}`);
+          // A fix that lands AHEAD (the ordinary case) is applied verbatim.
+          const ahead = advLL(g.lat, g.lon, 90, 290, 4);
+          upd([fix(ahead)]);
+          ok('26n: a forward fix is still applied verbatim',
+             Math.abs(g.lon - ahead.lon) < 1e-12 && Math.abs(g.lat - ahead.lat) < 1e-12);
+          ok('26n: …and restores the untrimmed reckoning rate',
+             Math.abs(Math.hypot(g.latPerS, g.lonPerS) - fullRate) < fullRate * 1e-9);
+        }
+
+        // Distant / slow rigs: the same conditioning must hold where display
+        // travel per 150 ms sample is a fraction of a millimetre — the other
+        // way a perpendicular goes degenerate and the strip snaps to an axis.
+        upd([]); step(1, 3);
+        {
+          const hex = 'far1';
+          upd([SP(hex, 300, { lat: OLAT + 0.02, lon: OLON + 0.02, altFt: 35000,
+                              trackDeg: 90 })]);
+          step(DT, Math.round(6 / DT));
+          const g = rig(hex);
+          const sp = spineOf(g, 12);
+          let mn = Infinity;
+          for (let i = 0; i + 1 < sp.length; i++) {
+            mn = Math.min(mn, Math.hypot(sp[i + 1][0] - sp[i][0],
+                                         sp[i + 1][1] - sp[i][1],
+                                         sp[i + 1][2] - sp[i][2]));
+          }
+          ok('26n: a distant rig\'s spine respects the minimum segment length',
+             sp.length >= 2 && mn >= 6 * r._flightRigScale(g) - 1e-6,
+             `min=${mn.toFixed(2)}mm n=${sp.length}`);
+          // Head edge direction is frame-stable across a push boundary.
+          let prevU = null, flips = 0;
+          for (let f = 0; f < Math.round(1.5 / DT); f++) {
+            step(DT);
+            const a = g.ribbon.geometry.attributes.position.array;
+            const i = g.ribbon.geometry.drawRange.count / 6;
+            const sx = a[i * 6] - a[i * 6 + 3], sy = a[i * 6 + 1] - a[i * 6 + 4],
+                  sz = a[i * 6 + 2] - a[i * 6 + 5];
+            const L = Math.hypot(sx, sy, sz);
+            const u = [sx / L, sy / L, sz / L];
+            if (prevU && u[0] * prevU[0] + u[1] * prevU[1] + u[2] * prevU[2] < 0.9) flips++;
+            prevU = u;
+          }
+          ok('26n: the head rib never flips axis between frames', flips === 0,
+             `flips=${flips}`);
+        }
+      }
     }
 
     upd([]); step(1, 3);

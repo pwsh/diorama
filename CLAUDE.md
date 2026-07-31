@@ -470,7 +470,7 @@ identity + white beacon. Config plumbing rides an optional trailing `updateFligh
 (stale-chunk safe; labelFields/beacons/privacyDim are config-path → `configRev` already covers
 them, no new dirty-key inputs). `_advanceFlights(dt)` (from
 `_animate`, zero-alloc): dead reckoning in REAL space (per-rig `latPerS/lonPerS` from gs/track),
-display pos eased τ≈1.5 s (poll corrections glide), yaw shortest-arc τ≈0.3 s — `rotation.y =
+display pos eased τ≈1.5 s (poll corrections glide — FORWARD-ONLY along-track for a reckoning rig since 2026-07-31: `_applyFlightFix`'s FEED-LATENCY GUARD reads a fix landing BEHIND the reckoned position as stale, not a manoeuvre — cross-track+altitude apply verbatim, the negative along-track component is absorbed by a reckoning-speed TRIM (FLIGHT_LAG_ABSORB_S 30, floor 0.8) so the plane never slides backwards; `_advanceFlights` clamps the ease forward-only as the structural backstop; `_flightSpine` gains a 6 mm-min-segment conditioning gate + the ribbon ramp is ARC-LENGTH-parameterised with degenerate cross products carrying the previous rib — the flag-flap was a structurally zero final segment every push frame), yaw shortest-arc τ≈0.3 s — `rotation.y =
 atan2(px, −py)`, the SAME convention as the bg tow-plane's tangent formula; `rotation.order='YXZ'`
 (XYZ would bank a climbing turn); pitch `clamp(vertRate/6000)·0.12`; prop/rotor spin accumulates
 per-rig (never the absolute clock — fresh rigs would pop phase); removal = 0.8 s scale-out then
@@ -517,7 +517,7 @@ dim disc + 4-pt comet Line; 3 = 8-pt comet + 2 flickering motion-line planes; 4 
 white CONTRAIL ribbon (replaces the tail); 5 = ribbon + additive afterburner strips + 2 ghost
 silhouettes (+Z-lagged children — local +Z IS the display path to within turn rate) + a
 one-shot vapor-cone flash on band ENTRY. Trails ride a per-rig Float32Array(20×3) ring buffer
-of DISPLAY positions sampled every 0.15 s AFTER the ease (kink-free under poll corrections by
+of DISPLAY positions sampled every 0.15 s AFTER the ease (kink-free — NOT by sampling cadence alone: see the 2026-07-31 latency guard below; originally claimed by
 construction — test-pinned max segment angle <30° under a forced correction). **Tail-exit
 anchoring (2026-07-31 bisection fix, user-reported)**: EVERY spine sample — ring-buffer writes
 AND the live head — goes through `_flightTailAnchor` = the eased display position pushed aft
@@ -608,7 +608,7 @@ OSM line) whenever cloud + enabled + data. Tests: `flights-test.html` (`FLIGHTS 
 fixture = a REAL 94-aircraft airplanes.live LAX capture; incl. the live-path emit matrix, the
 archetype golden matrix, the emergency-alert lifecycle, the shell-rescale golden/property suite,
 and §6e's draw-radius clamp matrix + similarity law — the pre-existing derivation goldens run
-through an `FB` wrapper that pins `shellMm` to FLIGHT_SHELL_BASE_MM and stay byte-identical), `flights-render-test.html` (`FLIGHTSRENDER PASS 501/501` — heading/pitch signs asserted
+through an `FB` wrapper that pins `shellMm` to FLIGHT_SHELL_BASE_MM and stay byte-identical), `flights-render-test.html` (`FLIGHTSRENDER PASS 513/513` — heading/pitch signs asserted
 via `getWorldDirection`; archetype geometry, livery text layout, beacon priority/gating, privacy
 dim, in-place rebuild, distance scale, fog exemption, flight raycast, §4d's non-default-shell
 position/scale/frustum parity), `flights-ui-test.html`
