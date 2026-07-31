@@ -304,6 +304,18 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Flight trail tail-exit anchoring** (2026-07-31, user-reported
+  "bisecting the plane 2/3 of the way back"; unreleased — on main
+  past v0.47.0). All trailing effects anchor at the tail exit:
+  `_flightTailAnchor` (aftZ + 140 mm gap, × rigScale, along the
+  eased yaw/pitch) applied to ring-buffer writes AND the live head
+  (pushed-offset — live-head-only leaves old samples inside the
+  model at sub-airframe sample travel); new `aftZ` per archetype =
+  rear-most drawn extent (heli tail rotor ≫ fusLen/2); motion
+  lines, burner nozzle standoff (pod-aware) and ghost lags rebased;
+  2D dashes verified already clear. flights-render 475→501 w/
+  negative controls; flights 686/686, ui 295/295, bgtext-multi
+  246/246 held.
 - **Ground writing: true overlay everywhere** (2026-07-31,
   user-reported "still rendering as a box with text inside it";
   unreleased — on main past v0.47.0). The AUTO margin-strip path

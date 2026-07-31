@@ -518,7 +518,16 @@ white CONTRAIL ribbon (replaces the tail); 5 = ribbon + additive afterburner str
 silhouettes (+Z-lagged children — local +Z IS the display path to within turn rate) + a
 one-shot vapor-cone flash on band ENTRY. Trails ride a per-rig Float32Array(20×3) ring buffer
 of DISPLAY positions sampled every 0.15 s AFTER the ease (kink-free under poll corrections by
-construction — test-pinned max segment angle <30° under a forced correction); attributes
+construction — test-pinned max segment angle <30° under a forced correction). **Tail-exit
+anchoring (2026-07-31 bisection fix, user-reported)**: EVERY spine sample — ring-buffer writes
+AND the live head — goes through `_flightTailAnchor` = the eased display position pushed aft
+by `(metrics.aftZ + FLIGHT_TAIL_GAP_MM 140) × rigScale` along the SAME eased yaw+pitch the
+assembly rotates with (pushed-offset, NOT live-head-only — sub-airframe per-sample travel
+would leave old samples inside the model); **`aftZ`** on `_flightArchetypeMetrics` = the
+rear-most DRAWN extent per archetype (the heli's tail rotor ≫ fusLen/2), which also rebases
+the band-3 motion lines, the burner nozzle standoff (pod-length aware) and the ghost lags;
+negative-controlled in flights-render §26l/26m (offset forced to 0 fails exactly the 8
+invariant pins); attributes
 sized once, `setDrawRange` + in-place refills, zero per-frame alloc; band changes rebuild only
 band bits (`_syncFlightSpeedViz`). **Effects live in the scene-level `_flightVizGroup`**
 (copies `_flightsGroup`'s transform; NOT nested — `_flightsGroup` is a raycast root and its
@@ -599,7 +608,7 @@ OSM line) whenever cloud + enabled + data. Tests: `flights-test.html` (`FLIGHTS 
 fixture = a REAL 94-aircraft airplanes.live LAX capture; incl. the live-path emit matrix, the
 archetype golden matrix, the emergency-alert lifecycle, the shell-rescale golden/property suite,
 and §6e's draw-radius clamp matrix + similarity law — the pre-existing derivation goldens run
-through an `FB` wrapper that pins `shellMm` to FLIGHT_SHELL_BASE_MM and stay byte-identical), `flights-render-test.html` (`FLIGHTSRENDER PASS 475/475` — heading/pitch signs asserted
+through an `FB` wrapper that pins `shellMm` to FLIGHT_SHELL_BASE_MM and stay byte-identical), `flights-render-test.html` (`FLIGHTSRENDER PASS 501/501` — heading/pitch signs asserted
 via `getWorldDirection`; archetype geometry, livery text layout, beacon priority/gating, privacy
 dim, in-place rebuild, distance scale, fog exemption, flight raycast, §4d's non-default-shell
 position/scale/frustum parity), `flights-ui-test.html`

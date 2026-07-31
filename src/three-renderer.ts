@@ -870,6 +870,16 @@ const FLIGHT_TAIL_PTS: Readonly<Record<number, number>> = { 2: 4, 3: 8 };
 const FLIGHT_RIBBON_PTS = 12;        // contrail spine samples (→ 24 verts)
 const FLIGHT_VIZ_RENDER_ORDER = -2;
 const FLIGHT_VAPOR_S = 0.8;          // one-shot vapor-cone flash duration
+// Clearance behind the rear-most drawn surface (metrics.aftZ) at which every
+// TRAILING effect starts. `rig.cur*` is the assembly ORIGIN, which sits
+// mid-fuselage — anchoring a spine there ran the contrail and the comet tails
+// straight through the airframe (user-reported at 290 kt / 560 kt, bands 4–5:
+// "bisecting the plane 2/3 of the way back in the body"). Model mm at scale 1;
+// every consumer multiplies by the live display scale.
+const FLIGHT_TAIL_GAP_MM = 140;
+// Ghost multiples (band 5) clear the same anchor, then step aft by this share of
+// the fuselage length — the second sits a full airframe behind the first.
+const FLIGHT_GHOST_GAP_MM = 180;
 // Band 1 station-keeping wobble: a hovering rig has NO trail (the absence is the
 // cue), so a little drift + yaw hunt is what sells "holding position" instead of
 // "frozen". Applied to the DRAWN transform only — never to rig.cur*, which the
@@ -883,6 +893,7 @@ const _fvzP = new THREE.Vector3();
 const _fvzD = new THREE.Vector3();
 const _fvzV = new THREE.Vector3();
 const _fvzS = new THREE.Vector3();
+const _fvzT = new THREE.Vector3();   // tail-exit anchor (_flightTailAnchor)
 // Gathered spine points (oldest → newest). Sized for the LONGEST consumer, the
 // contrail; the 4/8-point comet tails use a prefix of it.
 const _fvzSpine = new Float32Array(FLIGHT_RIBBON_PTS * 3);
@@ -14520,17 +14531,24 @@ export class ThreeDRenderer {
   // tailplane. Each carries its OWN material so the pair can flicker out of
   // phase — the whole point of the effect is that it reads as hand-drawn.
   private _buildFlightMotionLines(rig: FlightRig,
-                                  M: { fusHalfW: number; fusLen: number; idY: number }): void {
+                                  M: { fusHalfW: number; fusLen: number; idY: number;
+                                       aftZ: number }): void {
+    // The strip's FRONT edge clears the tail exit (aftZ + gap), so the streak
+    // flicks past the tail instead of overlapping the aft fuselage — the old
+    // fusLen·0.62 centre put its leading edge at fusLen·0.41, level with the
+    // stabilizer, and only the lateral offset kept it off the body.
+    const len = M.fusLen * 0.42;
     for (const sx of [-1, 1] as const) {
       // Baked into the GEOMETRY (rotateX) rather than mesh.rotation, so the
       // strip's axis can never depend on Euler order.
-      const geo = new THREE.PlaneGeometry(56, M.fusLen * 0.42);
+      const geo = new THREE.PlaneGeometry(56, len);
       geo.rotateX(Math.PI / 2);                    // length now runs along +Z (aft)
       const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
         color: 0xcfe0f2, transparent: true, opacity: 0.45, side: THREE.DoubleSide,
         blending: THREE.AdditiveBlending, depthWrite: false, fog: false,
       }));
-      m.position.set(sx * (M.fusHalfW + 230), M.idY + 60, M.fusLen * 0.62);
+      m.position.set(sx * (M.fusHalfW + 230), M.idY + 60,
+                     M.aftZ + FLIGHT_TAIL_GAP_MM + len / 2);
       m.renderOrder = FLIGHT_VIZ_RENDER_ORDER;
       m.userData.outlineSkip = true;
       m.userData.motionLine = true;
@@ -14545,12 +14563,20 @@ export class ThreeDRenderer {
   // into the geometry (rotateX / rotateZ), so each is a plain identity-rotation
   // mesh and the per-frame flicker is a single opacity write.
   private _buildFlightBurners(rig: FlightRig,
-                              M: { fusHalfW: number; fusLen: number; idY: number }): void {
+                              M: { fusHalfW: number; fusLen: number; idY: number;
+                                   aftZ: number }): void {
     const pods: THREE.Object3D[] = [];
     rig.asm.traverse(o => { if (o.userData?.nacelle) pods.push(o); });
+    // A plume starts at the NOZZLE — the pod's own rear face (its length is
+    // stamped on the nacelle at build) plus a small standoff, NOT a flat +300
+    // that a 660 mm widebody pod swallowed. Nacelle-less airframes fall back to
+    // the tail exit, never the assembly origin.
     const spots = pods.length
-      ? pods.slice(0, 2).map(p => ({ x: p.position.x, y: p.position.y, z: p.position.z + 300 }))
-      : [{ x: 0, y: M.idY, z: M.fusLen * 0.5 }];
+      ? pods.slice(0, 2).map(p => ({
+        x: p.position.x, y: p.position.y,
+        z: p.position.z + ((p.userData?.podLen as number ?? 0) / 2) + 60,
+      }))
+      : [{ x: 0, y: M.idY, z: M.aftZ }];
     const len = M.fusLen * 0.5, w = M.fusHalfW * 1.2;
     for (const s of spots) {
       for (const roll of [0, Math.PI / 2]) {
@@ -14579,16 +14605,23 @@ export class ThreeDRenderer {
   // aircraft's own turn rate, and being attached costs no per-frame transform.
   // Band 5 is rare in a real feed, so the two extra draws are bounded by design.
   private _buildFlightGhosts(rig: FlightRig,
-                             M: { fusHalfW: number; fusLen: number }): void {
-    const lag = [0.95, 1.8], op = [0.26, 0.14], sc = [0.94, 0.84];
+                             M: { fusHalfW: number; fusLen: number; aftZ: number }): void {
+    const op = [0.26, 0.14], sc = [0.94, 0.84];
+    // Lags measured from the TAIL EXIT, so the FIRST ghost's front face clears
+    // the airframe by FLIGHT_GHOST_GAP_MM on EVERY archetype. The old flat
+    // `fusLen · 0.95` centre made that clearance incidental and silhouette-
+    // dependent — a bizjet's leading face landed 30 mm off its T-tail — because
+    // it was measured from the assembly origin rather than from the tail.
+    const step = [0, M.fusLen * 0.85];
     for (let i = 0; i < 2; i++) {
+      const halfD = M.fusLen * 0.4 * sc[i];        // scale() shrinks about the centre
       const g = new THREE.Mesh(
         new THREE.BoxGeometry(M.fusHalfW * 1.7, M.fusHalfW * 1.5, M.fusLen * 0.8),
         new THREE.MeshBasicMaterial({
           color: 0xb8c6d8, transparent: true, opacity: op[i],
           depthWrite: false, fog: false,
         }));
-      g.position.set(0, 0, M.fusLen * lag[i]);
+      g.position.set(0, 0, M.aftZ + FLIGHT_GHOST_GAP_MM + step[i] + halfD);
       g.scale.setScalar(sc[i]);
       g.renderOrder = FLIGHT_VIZ_RENDER_ORDER;
       g.userData.outlineSkip = true;
@@ -14660,21 +14693,49 @@ export class ThreeDRenderer {
     return this._flightBurnerTex;
   }
 
-  // Record one DISPLAY position into the ring buffer. Sampled on a fixed ~150 ms
-  // wall-clock cadence AFTER the eased display correction is applied, which is
-  // what makes trail LENGTH a genuine speed cue (a per-frame sample would encode
-  // frame rate instead) and makes a poll correction impossible to kink: the path
-  // is built from the very positions the mesh was drawn at.
+  // Record one TAIL-EXIT position into the ring buffer (see _flightTailAnchor —
+  // NOT the display position, which is the assembly origin). Sampled on a fixed
+  // ~150 ms wall-clock cadence AFTER the eased display correction is applied,
+  // which is what makes trail LENGTH a genuine speed cue (a per-frame sample
+  // would encode frame rate instead) and makes a poll correction impossible to
+  // kink: the path is built from the very transform the mesh was drawn with.
   private _pushFlightTrail(rig: FlightRig): void {
+    this._flightTailAnchor(rig, _fvzT);
     const i = rig.trailHead * 3;
-    rig.trail[i] = rig.curX; rig.trail[i + 1] = rig.curY; rig.trail[i + 2] = rig.curZ;
+    rig.trail[i] = _fvzT.x; rig.trail[i + 1] = _fvzT.y; rig.trail[i + 2] = _fvzT.z;
     rig.trailHead = (rig.trailHead + 1) % FLIGHT_TRAIL_SLOTS;
     if (rig.trailCount < FLIGHT_TRAIL_SLOTS) rig.trailCount++;
   }
 
-  // Gather up to `k` spine points, OLDEST first, with the live eased position as
-  // the newest — so the effect stays welded to the aircraft between samples
-  // instead of lagging up to 150 ms behind it. Returns the count written.
+  // The TAIL-EXIT anchor, in the flight group's frame: the eased display
+  // position pushed AFT along the airframe's own axis by `aftZ + gap` at the
+  // live display scale. This is what the ring buffer stores and what the spine's
+  // newest point is, so the whole path is the TAIL's history — a trail can never
+  // reach forward into the fuselage, at any sample age (the alternative, offsetting
+  // only the live head, leaves the second-newest sample inside the model whenever
+  // the aircraft's display travel per 150 ms sample is shorter than the airframe).
+  //
+  // Direction comes from the SAME eased `yaw` (and drawn pitch) the assembly is
+  // rotated with — not from the last two samples, which are degenerate on a young
+  // buffer and noisy at low display speeds — so the anchor swings smoothly through
+  // a heading change instead of snapping. Local +Z under R_y(yaw)·R_x(pitch) is
+  // (sin yaw·cos p, −sin p, cos yaw·cos p); nose-up pitch drops the tail, which is
+  // the sign the assembly draws. Zero allocation (module scratch, like _fvzP).
+  private _flightTailAnchor(rig: FlightRig, out: THREE.Vector3): THREE.Vector3 {
+    const off = (this._flightArchetypeMetrics(rig.archetype).aftZ + FLIGHT_TAIL_GAP_MM)
+      * this._flightRigScale(rig);
+    const p = rig.asm.rotation.x, cp = Math.cos(p);
+    return out.set(
+      rig.curX + Math.sin(rig.yaw) * cp * off,
+      rig.curY - Math.sin(p) * off,
+      rig.curZ + Math.cos(rig.yaw) * cp * off);
+  }
+
+  // Gather up to `k` spine points, OLDEST first, with the LIVE tail-exit anchor
+  // as the newest — so the effect stays welded to the aircraft's tail between
+  // samples instead of lagging up to 150 ms behind it. Every point is a tail
+  // position (that is what the ring buffer holds), so the spine is the tail's
+  // path, not the centre's. Returns the count written.
   private _flightSpine(rig: FlightRig, k: number, out: Float32Array): number {
     const have = Math.min(rig.trailCount, k - 1);
     let n = 0;
@@ -14683,7 +14744,8 @@ export class ThreeDRenderer {
       out[n * 3] = rig.trail[s]; out[n * 3 + 1] = rig.trail[s + 1]; out[n * 3 + 2] = rig.trail[s + 2];
       n++;
     }
-    out[n * 3] = rig.curX; out[n * 3 + 1] = rig.curY; out[n * 3 + 2] = rig.curZ;
+    this._flightTailAnchor(rig, _fvzT);
+    out[n * 3] = _fvzT.x; out[n * 3 + 1] = _fvzT.y; out[n * 3 + 2] = _fvzT.z;
     return n + 1;
   }
 
@@ -15201,50 +15263,60 @@ export class ThreeDRenderer {
   // Only the large-fuselage archetypes ever use them (FLIGHT_BIG_FUSELAGE), but
   // every case carries plausible values so a future layout change can't read
   // undefined.
+  // `aftZ` is the REAR-MOST drawn extent of the silhouette in model +Z — the
+  // fin/stabilizer box (or the helicopter's tail boom + rotor), measured off
+  // _buildAircraftModel, NOT `fusLen / 2`: every fixed-wing tail sits a little
+  // aft of the fuselage box, and the helicopter's "fuselage" is only its cabin
+  // bubble (its boom reaches ~1.6× fusLen/2). It is the anchor every TRAILING
+  // effect starts from — trail/contrail spine, motion lines, ghosts — so none of
+  // them can emanate from the assembly ORIGIN, which sits mid-fuselage.
   private _flightArchetypeMetrics(a: AircraftArchetype): {
     fusLen: number; fusHalfW: number; idY: number; idZ: number; idH: number;
     beaconY: number; beaconZ: number; labelY: number;
-    topY: number; topZ: number; topH: number; topLen: number;
+    topY: number; topZ: number; topH: number; topLen: number; aftZ: number;
   } {
     switch (a) {
       case 'ga-high':
+        // Fin box: z 760, depth 900·0.44 ⇒ rear face 958.
         return { fusLen: 1700, fusHalfW: 160, idY: 0, idZ: 120, idH: 170,
                  beaconY: 240, beaconZ: 420, labelY: 950,
-                 topY: 158, topZ: 300, topH: 250, topLen: 600 };
+                 topY: 158, topZ: 300, topH: 250, topLen: 600, aftZ: 960 };
       case 'ga-low':
         return { fusLen: 1700, fusHalfW: 150, idY: 0, idZ: 120, idH: 160,
                  beaconY: 220, beaconZ: 300, labelY: 950,
-                 topY: 143, topZ: 300, topH: 235, topLen: 600 };
+                 topY: 143, topZ: 300, topH: 235, topLen: 600, aftZ: 960 };
       case 'twin-prop':
         // Clear run: aft of the cockpit glass (ends z −140), forward of the fin
         // root (starts z 660).
         return { fusLen: 2000, fusHalfW: 170, idY: 10, idZ: 140, idH: 180,
                  beaconY: 250, beaconZ: 400, labelY: 1050,
-                 topY: 168, topZ: 250, topH: 260, topLen: 780 };
+                 topY: 168, topZ: 250, topH: 260, topLen: 780, aftZ: 1100 };
       case 'turboprop':
         // The tightest spine on the board: HIGH wing over z −340…220, fin root
         // at z 816. The lettering lives in the gap between them.
         return { fusLen: 2400, fusHalfW: 190, idY: 10, idZ: 120, idH: 200,
                  beaconY: 260, beaconZ: 560, labelY: 1250,
-                 topY: 188, topZ: 510, topH: 250, topLen: 580 };
+                 topY: 188, topZ: 510, topH: 250, topLen: 580, aftZ: 1345 };
       case 'widebody':
         return { fusLen: 3200, fusHalfW: 220, idY: 30, idZ: -260, idH: 260,
                  beaconY: 300, beaconZ: 380, labelY: 1450,
-                 topY: 228, topZ: -150, topH: 340, topLen: 1850 };
+                 topY: 228, topZ: -150, topH: 340, topLen: 1850, aftZ: 1630 };
       case 'bizjet':
         return { fusLen: 1900, fusHalfW: 145, idY: 10, idZ: -180, idH: 160,
                  beaconY: 210, beaconZ: 200, labelY: 1000,
-                 topY: 153, topZ: -200, topH: 220, topLen: 1050 };
+                 topY: 153, topZ: -200, topH: 220, topLen: 1050, aftZ: 1060 };
       case 'heli':
         // fusHalfW clears the 430 mm cabin sphere (the "fuselage" here is the
         // bubble); the beacon rides the fin tip, the real-world position.
+        // aftZ is the TAIL-ROTOR disc (z 1230, 550 mm blades about X ⇒ 1505),
+        // far aft of fusLen/2 = 800: the cabin bubble is the only "fuselage".
         return { fusLen: 1600, fusHalfW: 450, idY: 480, idZ: -320, idH: 250,
                  beaconY: 920, beaconZ: 1180, labelY: 1300,
-                 topY: 640, topZ: 500, topH: 220, topLen: 700 };
+                 topY: 640, topZ: 500, topH: 220, topLen: 700, aftZ: 1505 };
       default:   // narrowbody
         return { fusLen: 2400, fusHalfW: 170, idY: 20, idZ: -220, idH: 210,
                  beaconY: 240, beaconZ: 340, labelY: 1200,
-                 topY: 178, topZ: -100, topH: 260, topLen: 1350 };
+                 topY: 178, topZ: -100, topH: 260, topLen: 1350, aftZ: 1230 };
     }
   }
 
@@ -15295,6 +15367,7 @@ export class ThreeDRenderer {
       p.position.set(x, y, z);
       p.userData.outlineSkip = true;
       p.userData.nacelle = where;
+      p.userData.podLen = len;          // the band-5 plume starts at THIS pod's nozzle
       asm.add(p); return p;
     };
     // A spinning propeller disc (about local Z, the flight axis).
