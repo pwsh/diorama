@@ -1,6 +1,6 @@
 # Project status & pick-up guide
 
-Last updated: 2026-07-30, at **v0.46.0**. This is the single document to
+Last updated: 2026-07-31, at **v0.47.0**. This is the single document to
 read (alongside `CLAUDE.md`) to resume work with full context.
 
 ## Where things stand
@@ -293,11 +293,18 @@ instance.
   → v0.46.0 status report (openingStatus layer switch — door/window
   OPEN/closed/% badges under Labels, fixtureCaption showBadge
   4-way matrix, empty-pill fix).
+  → v0.47.0 spit and polish (plan wall-intersection sweep + validator
+  check 13 + showroom 17/43 lights; orientation-gated avatar
+  interactions + tend_plant pose; glass-break sensor, spreading leak
+  puddle, gate fence gaps, bay/bay_bench windows; mower bicycle
+  model, mailbox flag spec, bathroom water set + gallery twins;
+  sidebar reorg (Floor tools, collapse-all, grouped Tools, hotkey
+  master switch) + polish wave 2 (Floor Plan settings tab, glass
+  emboss/deboss headers, armed-variant tool hints)).
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
-- **Sidebar polish wave 2** (2026-07-30, user-directed ×8; unreleased
-  — on main past v0.46.0). Floor lifecycle (add/rename/resize/delete
+- **Sidebar polish wave 2** (2026-07-30, user-directed ×8; released in v0.47.0). Floor lifecycle (add/rename/resize/delete
   w/ named confirm, last-floor guarded) moved to Settings ▸ "Floor
   Plan" (data tab renamed, slug unchanged); size-lock UI removed
   (boundsLocked now gates nothing — commented); imperial → Settings
@@ -310,7 +317,7 @@ instance.
   sidebar-org-test 103→141; layers2d/sensor-focus/wall-edit/
   area-binding held.
 - **Sidebar reorganization + hotkey master switch** (2026-07-30,
-  user-directed ×8; unreleased — on main past v0.46.0). Pinned
+  user-directed ×8; released in v0.47.0). Pinned
   non-collapsible compact floor picker (no row buttons) → NEW
   collapsible "Floor tools" section (all per-floor controls incl.
   relocated reorder ▲▼ + visibility cycle) → Collapse all/Expand
@@ -324,7 +331,7 @@ instance.
   Enter, Space. New sidebar-org-test 103/103; layers2d 67/67,
   sensor-focus 14/14, wall-edit 55/55, area-binding 71/71 held.
 - **Mower car kinematics + mailbox flag + bathroom water**
-  (2026-07-30, user-reported ×3; unreleased — on main past v0.46.0).
+  (2026-07-30, user-reported ×3; released in v0.47.0).
   Mower: pure stepBicycle bicycle model (turn radius 500, cruise
   420, strict along-heading motion, U-turn rows at MOWER_ROW_MM
   1200, inside-circle wheel-straight rule); vacuum byte-identical
@@ -338,8 +345,7 @@ instance.
   New bath-water-test 62/62; robot 71→96, vehicle-mail 26→39;
   sink 48/48, furniture-polish 28/28 held.
 - **Glass-break sensor + leak puddle curve + gate fence gaps + bay
-  windows** (2026-07-30, user-requested ×4; unreleased — on main past
-  v0.46.0). SafetyKind + glass_break (square mic plate, shatter-star
+  windows** (2026-07-30, user-requested ×4; released in v0.47.0). SafetyKind + glass_break (square mic plate, shatter-star
   alarm; capture guard extended to Door/Window kinds too). Leak
   puddle: growth existed but was linear-from-zero + the gallery GIF
   captured a fixed size — now shared sqrt ease-out
@@ -355,7 +361,7 @@ instance.
   37→58, livefeatures 19→33; nine baselines held.
 - **Plan wall-intersection sweep + showroom lighting + orientation-gated
   interactions + tend_plant pose** (2026-07-30, user-reported ×4;
-  unreleased — on main past v0.46.0). Zero-tolerance audit: 5 real
+  released in v0.47.0). Zero-tolerance audit: 5 real
   intersections that PASSED check 10 (stacked dryers hiding behind
   the blanket elevation exemption — now depth-gated at
   WALL_MOUNT_MAX_DEPTH 300; fireplaces invisible to the check — new
