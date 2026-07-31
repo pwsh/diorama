@@ -304,6 +304,19 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Ground writing: true overlay everywhere** (2026-07-31,
+  user-reported "still rendering as a box with text inside it";
+  unreleased — on main past v0.47.0). The AUTO margin-strip path
+  (the last opaque painter) is now letters-only transparent — the
+  surface beneath is the backdrop in every mode; ink resolves from
+  the ground beneath (containing area kind → yardFill → grass) via
+  updateBgTexts' optional ground arg; all 7 ink pairs audited
+  boxless — blacktop chalk-inverted (near-black on near-black
+  failed); pure bgGroundInkKey folded into the grass entry hash so
+  yard-paint edits re-ink without configRev; no drop shadow (reads
+  as smudge; two-tone relief is the contrast). bgtext-multi
+  229→246, bgtext 29→30; terrain 103/103, flights-render 475/475
+  held.
 - **UI polish: toolbar handle + heading + spacing** (2026-07-31,
   user-directed ×3; unreleased — on main past v0.47.0). Bottom
   toolbar collapse handle left-anchored + 40×40 touch target

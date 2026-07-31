@@ -13,7 +13,7 @@ import { parseNowPlaying, isMediaPlayerId } from '../geometry.js';
 import { robotProgress } from '../geometry.js';
 import { poolWaterColor } from '../geometry.js';
 import { floorsUnionCenter, resolvePivotMode } from '../geometry.js';
-import { floorElevationMm, resolveGroundLevelMm } from '../geometry.js';
+import { floorElevationMm, resolveGroundLevelMm, bgGroundInkKey } from '../geometry.js';
 import { resolveScreenContent } from '../surfaces.js';
 import { resolveScenePreset, resolveTimeBucket } from '../time-of-day.js';
 import { conditionIntensity, weatherEffectEnabled, worstAlertSeverity } from '../weather.js';
@@ -1745,6 +1745,16 @@ export class ThreeView extends LitElement {
       // from rebuilding the rigs and snapping the plane/train back to their
       // build angle. Legit rebuilds still resume mid-course via the renderer's
       // persistent _bgTextPhase, but a rebuild is no longer free of cost.
+      // Ground writing has no backdrop of its own — its ink is resolved from the
+      // surface under the decal (containing GroundArea → yardFill → grass), so a
+      // yard-paint edit must repaint it. Hash the ground COARSELY (kind + 100 mm
+      // bbox per area + the yardFill kind) and fold it into the GRASS entries
+      // only: the same term also covers an area-bound decal whose GroundArea
+      // changed kind, which the grassAreaId + rect terms could never see. Skipped
+      // entirely when no entry writes on the ground, so the per-tick cost is zero
+      // for every other config — and still NO configRev, so unrelated churn keeps
+      // leaving the rigs alone.
+      const bgGroundKey = bgEntries.some(e => e.mode === 'grass') ? bgGroundInkKey(f) : '';
       const keyBgText = `${f.id}|${f.w | 0}x${f.d | 0}|${bgStorm ? 's' : '-'}|${groundLevelMm}|${wallHash}|`
         + `${bgTextOn ? 'v' : 'h'}|`
         + bgEntries.map(e => {
@@ -1760,11 +1770,13 @@ export class ThreeView extends LitElement {
             // pre-feature key already was for the fields it didn't have.
             return `${e.id}:${e.mode}:${e.text}:${e.maxCars ?? ''}:${e.aircraft ?? ''}`
               + `:${e.scale ?? ''}:${e.grassAreaId ?? ''}:${ga}`
-              + `:${e.faceCamera === false ? 'f' : ''}:${e.rotationDeg ?? ''}`;
+              + `:${e.faceCamera === false ? 'f' : ''}:${e.rotationDeg ?? ''}`
+              + (e.mode === 'grass' ? `:${bgGroundKey}` : '');
           }).join('|');
       if (keyBgText !== this._keyBgText) {
         this._keyBgText = keyBgText;
-        r.updateBgTexts(bgEntries, bgStorm, fx.windBearingPlanRad ?? 0, fx.windKmh);
+        r.updateBgTexts(bgEntries, bgStorm, fx.windBearingPlanRad ?? 0, fx.windKmh,
+                        { areas: f.groundAreas, yardFill: f.yardFill });
       }
 
       // Live aircraft (ADS-B) + the ISS — roadmap P4. Poll data lives on the

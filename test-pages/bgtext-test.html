@@ -138,6 +138,17 @@
   const grassMesh = r._bgTextGroup.children[0];
   ok('grass texture painted (readback)', grassMesh.material.map && painted(grassMesh.material.map) > 1000,
      `lit=${grassMesh.material.map ? painted(grassMesh.material.map) : 0}`);
+  // Ground writing is an OVERLAY on the yard, never a box of lawn with text in
+  // it: the canvas has no background at all and the material is transparent, so
+  // whatever the decal lies on IS the backdrop.
+  {
+    const gcv = grassMesh.material.map.image;
+    const ga = (x, y) => gcv.getContext('2d').getImageData(x, y, 1, 1).data[3];
+    ok('grass decal has NO backdrop (canvas corners transparent + material transparent)',
+       ga(0, 0) === 0 && ga(gcv.width - 1, gcv.height - 1) === 0 &&
+       grassMesh.material.transparent === true,
+       `a=${ga(0, 0)}/${ga(gcv.width - 1, gcv.height - 1)} t=${grassMesh.material.transparent}`);
+  }
 
   // ── OFF: nothing renders ──
   r.updateBgText('IGNORED', 'off', false, 0, 0);

@@ -2465,26 +2465,57 @@ export const GROUND_KINDS: Record<GroundKind, { label: string; color: string; op
   sand:     { label: 'Sand',     color: '#d8c69a' },
   water:    { label: 'Water',    color: '#3d7bb8', opacity: 0.85 },
 };
-// Ink for GROUND WRITING (BgTextEntry mode 'grass') aimed at a user-chosen
-// GroundArea. That path paints the lettering onto a TRANSPARENT canvas so the
-// area's OWN patch material shows through — "use the material of the area" —
-// which means the ink is the only thing carrying contrast and has to read
-// against each surface. `fill` is the cut/engraved letter body, `stroke` the
-// lighter relief edge behind it (the mowed-lawn pair is the shipped grass one,
-// kept bit-identical so a grass area looks exactly like the auto placement).
-// Pure data; the auto margin-strip placement never consults it (it still paints
-// its own opaque mowed-grass backdrop).
+// Ink for GROUND WRITING (BgTextEntry mode 'grass'). BOTH placements — the
+// user-chosen GroundArea and the automatic yard margin strip — paint the
+// lettering onto a fully TRANSPARENT canvas so whatever surface lies under the
+// decal (the area's patch, the yardFill, the bare lawn) IS the backdrop. The
+// writing never brings a background of its own, so the ink is the only thing
+// carrying contrast and has to read against each surface unaided. `fill` is the
+// cut/engraved letter body, `stroke` the relief edge painted behind it (offset
+// down-right) — the pair is a two-tone relief, so on every kind at least one of
+// the two contrasts strongly with the material beneath. The mowed-lawn pair is
+// the shipped grass one, kept bit-identical.
 export const GROUND_TEXT_INK: Record<GroundKind, { fill: string; stroke: string }> = {
   grass:    { fill: '#31521d', stroke: '#7bab52' },   // dark cut / light mow relief
   rock:     { fill: '#3c4249', stroke: '#c3c9cf' },   // slate etch / pale chip
   concrete: { fill: '#4a4a4f', stroke: '#e6e6ea' },   // charcoal etch / light grey
-  blacktop: { fill: '#15181b', stroke: '#9aa1a8' },   // near-black / grey chalk
+  // Blacktop is the ONE kind whose relief is inverted: a near-black letter body
+  // on a near-black surface (#2e3236) has no backdrop left to separate it now
+  // that the box is gone, so blacktop reads as CHALK — a pale letter body over a
+  // darker relief edge. Every other kind keeps dark-cut / light-relief.
+  blacktop: { fill: '#d3d8dd', stroke: '#0e1113' },   // chalk body / near-black relief
   mulch:    { fill: '#33200f', stroke: '#b58a58' },   // dark bark / tan
   sand:     { fill: '#8a6f3c', stroke: '#f4e8c6' },   // wet-sand groove / dry crest
   water:    { fill: '#0f3459', stroke: '#a8e2ff' },   // deep blue / pale cyan
 };
 export function groundTextInk(k: GroundKind): { fill: string; stroke: string } {
   return GROUND_TEXT_INK[k] ?? GROUND_TEXT_INK.grass;
+}
+// Dirty-key term for GROUND WRITING ink. The decal has no backdrop, so its ink
+// is resolved from whatever is painted under it (containing GroundArea kind →
+// yardFill → grass) — which means a yard-paint edit must repaint the writing,
+// while three-view's _keyBgText deliberately carries NO configRev (unrelated
+// config churn must never rebuild the bg-text rigs and snap the plane/train back
+// to their build angle). This is that middle ground: a COARSE hash of exactly
+// the inputs the ink resolution consumes — each area's kind + its bbox rounded
+// to 100 mm, plus the floor's yardFill kind. Moving an area within 100 mm or
+// editing anything else on the floor leaves it untouched. Pure + total.
+export function bgGroundInkKey(
+  floor: { yardFill?: GroundKind; groundAreas?: { kind: GroundKind; points?: Vec2[] }[] },
+): string {
+  const parts: string[] = [];
+  for (const a of floor.groundAreas ?? []) {
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const p of a.points ?? []) {
+      if (p.x < x0) x0 = p.x;
+      if (p.x > x1) x1 = p.x;
+      if (p.y < y0) y0 = p.y;
+      if (p.y > y1) y1 = p.y;
+    }
+    const r = (v: number) => (isFinite(v) ? Math.round(v / 100) : 'n');
+    parts.push(`${a.kind}@${r(x0)},${r(y0)},${r(x1)},${r(y1)}`);
+  }
+  return `${floor.yardFill ?? '-'};${parts.join(',')}`;
 }
 export function groundKindLabel(k: GroundKind): string { return GROUND_KINDS[k]?.label ?? k; }
 export function groundAreaColor(g: { kind: GroundKind }): string { return GROUND_KINDS[g.kind]?.color ?? '#4c7a34'; }

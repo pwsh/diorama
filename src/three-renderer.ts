@@ -2164,6 +2164,14 @@ export class ThreeDRenderer {
   private _bgRigs: BgRig[] = [];
   private _bgWindRad = 0;                             // wind blow-toward (plan/scene rad); drives sky drift
   private _bgWindKmh = 0;
+  // Ground context for AUTO-placed ground writing (updateBgTexts' optional last
+  // arg): the ground areas + yardFill of the floor the decal is written on, so
+  // _bgGroundKindAt can pick the ink for the surface under the strip. null = a
+  // stale/absent caller → the 'grass' fallback.
+  private _bgGroundCtx: {
+    areas?: { points?: { x: number; y: number }[]; kind?: GroundKind }[];
+    yardFill?: GroundKind;
+  } | null = null;
   // ── Legacy single-rig mirrors (kept for bgtext-test back-compat) ──
   private _bgSkySprite: THREE.Sprite | null = null;  // first sky rig's billboard
   private _bgBannerAsm: THREE.Group | null = null;    // first banner rig's plane+banner
@@ -13021,7 +13029,17 @@ export class ThreeDRenderer {
                   // absent = follow the camera, i.e. the shipped behaviour).
                   faceCamera?: boolean; rotationDeg?: number;
                 }[],
-                storm: boolean, windRad = 0, windKmh = 0): void {
+                storm: boolean, windRad = 0, windKmh = 0,
+                // Ground context for AUTO-placed ground writing: the surface
+                // under the chosen margin strip decides the ink (the writing has
+                // no backdrop of its own). OPTIONAL + stale-chunk-safe — a
+                // three-view that predates this sends nothing and the ink falls
+                // back to 'grass', i.e. the shipped mowed-lawn palette.
+                ground?: {
+                  areas?: { points?: { x: number; y: number }[]; kind?: GroundKind }[];
+                  yardFill?: GroundKind;
+                }): void {
+    this._bgGroundCtx = ground ?? null;
     this._disposeSpriteMaps(this._bgTextGroup);
     this._clearGroup(this._bgTextGroup);
     this._bgRigs = [];
@@ -13321,8 +13339,11 @@ export class ThreeDRenderer {
   //    (it would swing out of its area), so the camera-facing behaviour moves
   //    into the TEXTURE (see the UV square below + _advanceBgGrass).
   //  • AUTO (no area, or a stale planner sending only a rect): the widest open
-  //    yard margin strip (successive entries take the next strip via `slot`),
-  //    drawn exactly as shipped — opaque mowed-grass PlaneGeometry, mesh yaw.
+  //    yard margin strip (successive entries take the next strip via `slot`) as
+  //    a PlaneGeometry with MESH yaw — but the texture is transparent here too,
+  //    so the writing is an OVERLAY on the yard rather than a box of lawn with
+  //    text inside it. Its ink comes from the surface actually under the strip
+  //    centre (_bgGroundKindAt: containing GroundArea → yardFill → grass).
   //
   // Either way the text word-wraps to the target aspect and picks the largest
   // font that fits (min-font floor + ellipsis trim).
@@ -13338,10 +13359,17 @@ export class ThreeDRenderer {
     const poly = (area?.points && area.points.length >= 3) ? area.points : null;
     if (poly) return this._seedGrassYaw(
       this._buildBgGroundPoly(text, i, place, poly, area!.kind ?? 'grass', sc), fixedYaw);
-    const gtex = this._makeGrassTextTexture(text, place.w / place.h);
+    // Ink follows the ground beneath: an explicit area kind (a stale planner may
+    // send a rect + kind with no polygon) else whatever is painted under the
+    // chosen strip centre.
+    const kind = area?.kind ?? this._bgGroundKindAt(place.cx, place.cy);
+    const gtex = this._makeGrassTextTexture(text, place.w / place.h, kind);
     const mesh = new THREE.Mesh(
       new THREE.PlaneGeometry(place.w, place.h),
-      new THREE.MeshBasicMaterial({ map: gtex, fog: false, depthWrite: false }));
+      new THREE.MeshBasicMaterial({
+        map: gtex, fog: false, depthWrite: false,
+        transparent: true,                  // the yard/ground under it shows through
+      }));
     // Flat on the lawn, but READABLE from wherever the camera is: the decal
     // spins about its own vertical axis (_advanceBgGrass). Euler order 'YXZ'
     // makes rotation = Ry(yaw)·Rx(−π/2), i.e. the yaw is applied in the PARENT
@@ -13475,24 +13503,7 @@ export class ThreeDRenderer {
     cv.width = N; cv.height = N;
     const iw = N * Math.min(1, Math.max(0.05, innerW / S));
     const ih = N * Math.min(1, Math.max(0.05, innerH / S));
-    const pad = Math.round(Math.min(iw, ih) * 0.08);
-    const fit = this._fitLawnText(g, text, Math.max(20, iw - pad * 2),
-                                          Math.max(20, ih - pad * 2));
-    const ink = groundTextInk(kind);
-    const fs = fit.fs * sc, lineH = fit.lineH * sc;
-    g.font = `800 ${fs}px system-ui, "Segoe UI", sans-serif`;
-    g.textAlign = 'center'; g.textBaseline = 'middle';
-    let y = (N - fit.lines.length * lineH) / 2 + lineH / 2;
-    for (const line of fit.lines) {
-      g.lineWidth = Math.max(3, 10 * sc); g.strokeStyle = ink.stroke;
-      g.strokeText(line, N / 2 + 4 * sc, y + 6 * sc);
-      g.fillStyle = ink.fill;
-      g.fillText(line, N / 2, y + 2 * sc);
-      y += lineH;
-    }
-    // Transparent 1 px frame (ClampToEdge safety at large `sc`).
-    g.clearRect(0, 0, N, 1); g.clearRect(0, N - 1, N, 1);
-    g.clearRect(0, 0, 1, N); g.clearRect(N - 1, 0, 1, N);
+    this._paintGroundText(g, N, N, text, iw, ih, kind, sc);
     const tex = new THREE.CanvasTexture(cv);
     tex.colorSpace = THREE.SRGBColorSpace;
     tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
@@ -13500,35 +13511,81 @@ export class ThreeDRenderer {
     return tex;
   }
 
-  // Multi-line lawn-relief text baked to a CanvasTexture at the target aspect
-  // (w/h of the decal rect). Word-wraps + picks the LARGEST font whose wrapped
-  // lines all fit the padded rect; below a min-font floor it wraps at the floor
-  // and trims the overflow with an ellipsis. Deterministic (no Math.random). Same
-  // mowed-into-the-lawn palette as the legacy single-line grass painter.
-  private _makeGrassTextTexture(text: string, aspect: number): THREE.CanvasTexture {
+  // Multi-line ground-writing text for the AUTO margin-strip placement, baked to
+  // a CanvasTexture at the target aspect (w/h of the decal rect — the mesh, not
+  // the texture, carries the camera-facing yaw here, so a non-square canvas is
+  // safe). Like the area-bound path the background is fully TRANSPARENT: the
+  // decal is an OVERLAY on whatever the strip lies on, never a box with its own
+  // mowed-lawn backdrop (that opaque painter is retired). `kind` is the surface
+  // resolved under the strip centre (_bgGroundKindAt), so the ink matches the
+  // landscaping it is written on. Deterministic (no Math.random).
+  private _makeGrassTextTexture(text: string, aspect: number,
+                                kind: GroundKind = 'grass'): THREE.CanvasTexture {
     const cv = document.createElement('canvas');
     const g = cv.getContext('2d')!;
     const H = 512;
     const W = Math.max(160, Math.round(H * Math.max(0.1, aspect)));
     cv.width = W; cv.height = H;
-    const pad = Math.round(Math.min(W, H) * 0.08);
-    const { fs, lineH, lines } = this._fitLawnText(g, text, W - pad * 2, H - pad * 2);
-    // Paint: grass base + per-line mow highlight (lighter) over darker cut.
-    g.font = `800 ${fs}px system-ui, "Segoe UI", sans-serif`;
-    g.fillStyle = '#4f7a34'; g.fillRect(0, 0, W, H);
-    g.textAlign = 'center'; g.textBaseline = 'middle';
-    const totalH = lines.length * lineH;
-    let y = (H - totalH) / 2 + lineH / 2;
-    for (const line of lines) {
-      g.lineWidth = 10; g.strokeStyle = '#7bab52';
-      g.strokeText(line, W / 2 + 4, y + 6);
-      g.fillStyle = '#31521d';
-      g.fillText(line, W / 2, y + 2);
-      y += lineH;
-    }
+    // The size knob scales the MESH on this path (see _buildBgGrass), so the
+    // painted text is always fitted at sc = 1.
+    this._paintGroundText(g, W, H, text, W, H, kind, 1);
     const tex = new THREE.CanvasTexture(cv);
     tex.colorSpace = THREE.SRGBColorSpace;
     return tex;
+  }
+
+  // Shared ground-writing painter for BOTH placements (area polygon + auto
+  // margin strip). Paints ONLY the lettering, on a fully TRANSPARENT canvas, in
+  // the surface's own two-tone ink (groundTextInk): the relief stroke offset
+  // down-right, the letter body over it. That double draw IS the contrast
+  // mechanism — there is no backdrop and deliberately no drop shadow (a blurred
+  // dark aura would read as a smudge on the landscaping and would tint the
+  // decal's average colour away from the material it is written on).
+  //   cw/ch     — canvas size (px)
+  //   innerW/H  — the rect the text block is fitted into, in canvas px
+  //   sc        — per-entry size knob applied to the FONT (area path only; the
+  //               auto path scales its mesh instead and passes 1)
+  // Border pixels are cleared so ClampToEdge can only ever repeat transparency.
+  private _paintGroundText(g: CanvasRenderingContext2D, cw: number, ch: number,
+                           text: string, innerW: number, innerH: number,
+                           kind: GroundKind, sc: number): void {
+    g.clearRect(0, 0, cw, ch);
+    const pad = Math.round(Math.min(innerW, innerH) * 0.08);
+    const fit = this._fitLawnText(g, text, Math.max(20, innerW - pad * 2),
+                                           Math.max(20, innerH - pad * 2));
+    const ink = groundTextInk(kind);
+    const fs = fit.fs * sc, lineH = fit.lineH * sc;
+    g.font = `800 ${fs}px system-ui, "Segoe UI", sans-serif`;
+    g.textAlign = 'center'; g.textBaseline = 'middle';
+    let y = (ch - fit.lines.length * lineH) / 2 + lineH / 2;
+    for (const line of fit.lines) {
+      g.lineWidth = Math.max(3, 10 * sc); g.strokeStyle = ink.stroke;
+      g.strokeText(line, cw / 2 + 4 * sc, y + 6 * sc);
+      g.fillStyle = ink.fill;
+      g.fillText(line, cw / 2, y + 2 * sc);
+      y += lineH;
+    }
+    // Transparent 1 px frame (ClampToEdge safety at large `sc`).
+    g.clearRect(0, 0, cw, 1); g.clearRect(0, ch - 1, cw, 1);
+    g.clearRect(0, 0, 1, ch); g.clearRect(cw - 1, 0, 1, ch);
+  }
+
+  // The ground kind under a plan point, for ground-writing ink. Priority:
+  // (a) the LAST-drawn GroundArea polygon containing the point (later areas
+  // paint over earlier ones), (b) the floor's yardFill, (c) 'grass' — the
+  // legacy lawn assumption, which is also what a stale three-view that sends no
+  // ground context gets, so the writing keeps its shipped mowed-green ink.
+  private _bgGroundKindAt(x: number, y: number): GroundKind {
+    const ctx = this._bgGroundCtx;
+    const areas = ctx?.areas;
+    if (areas) {
+      for (let i = areas.length - 1; i >= 0; i--) {
+        const a = areas[i];
+        const pts = a?.points;
+        if (pts && pts.length >= 3 && pip(x, y, pts)) return a.kind ?? 'grass';
+      }
+    }
+    return ctx?.yardFill ?? 'grass';
   }
 
   // Shared text fitter for both ground-writing painters: greedy word wrap +
@@ -13787,7 +13844,12 @@ export class ThreeDRenderer {
   // Bake a message into a CanvasTexture styled per mode. DETERMINISTIC (no
   // Math.random — sky per-letter wobble is hash-based) so a given text always
   // paints identically. Freed on rebuild via _disposeSpriteMaps + _clearGroup.
-  private _makeBgTextTexture(text: string, mode: BgTextMode): THREE.CanvasTexture {
+  //
+  // AIRBORNE modes only. Ground writing ('grass') goes through _paintGroundText
+  // (transparent, per-surface ink) — the opaque mowed-lawn painter this function
+  // used to carry for that mode is RETIRED: ground writing must never bring its
+  // own background.
+  private _makeBgTextTexture(text: string, mode: 'sky' | 'banner'): THREE.CanvasTexture {
     const cv = document.createElement('canvas');
     const g = cv.getContext('2d')!;
     const txt = (text || '').slice(0, 40) || ' ';
@@ -13832,19 +13894,6 @@ export class ThreeDRenderer {
       g.fillRect(0, 0, cv.width, 12); g.fillRect(0, cv.height - 12, cv.width, 12);
       g.fillStyle = '#fff7e6'; g.textAlign = 'center'; g.textBaseline = 'middle';
       g.fillText(txt, cv.width / 2, cv.height / 2 + 4);
-    } else {
-      // grass — mowed-into-the-lawn relief: grass-green base + lighter/darker strokes.
-      const font = '800 130px system-ui, "Segoe UI", sans-serif';
-      g.font = font;
-      const tw = Math.ceil(g.measureText(txt).width);
-      const pad = 70;
-      cv.width = tw + pad * 2; cv.height = 240;
-      g.font = font; g.textAlign = 'center'; g.textBaseline = 'middle';
-      g.fillStyle = '#4f7a34'; g.fillRect(0, 0, cv.width, cv.height);    // base grass
-      g.lineWidth = 10; g.strokeStyle = '#7bab52';                       // mow highlight
-      g.strokeText(txt, cv.width / 2 + 4, cv.height / 2 + 6);
-      g.fillStyle = '#31521d';                                           // darker cut
-      g.fillText(txt, cv.width / 2, cv.height / 2 + 2);
     }
     const tex = new THREE.CanvasTexture(cv);
     tex.colorSpace = THREE.SRGBColorSpace;

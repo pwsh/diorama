@@ -20,6 +20,8 @@
 
     npx esbuild src/value-rules.ts --bundle --format=esm \
       --outfile=<harness>/value-rules.mod.js         (unused here; kept for bgtext-test)
+    npx esbuild src/geometry.ts --bundle --format=esm \
+      --outfile=<harness>/geometry.mod.js            (pure bgGroundInkKey matrix)
     T=$(mktemp -d); cp -r src/* "$T"/; cp test-pages/fake-avatar-store.ts "$T"/avatar-store.ts
     npx esbuild "$T"/planner.ts --bundle --format=esm --outfile=<harness>/planner.mod.js
 
@@ -30,6 +32,7 @@
   const V = '?v=' + Date.now();
   const mod = await import('./assets/three-renderer.js' + V);
   const { Planner } = await import('./planner.mod.js' + V);
+  const G = await import('./geometry.mod.js' + V);
   const THREE_DoubleSide = 2;   // THREE.DoubleSide constant (avoid a three import)
 
   const r = new mod.ThreeDRenderer(document.getElementById('c'));
@@ -500,8 +503,9 @@
      `far=${r._camera.far}`);
 
   // ════════════ GRASS: multi-line reflow + target area (bug 4) ════════════
-  // Count contiguous horizontal text-ink bands: the grass base is #4f7a34
-  // (r=79); the dark cut #31521d (r=49) marks glyph rows → r < 62 = text ink.
+  // Count contiguous horizontal text-ink bands. Ground writing carries NO
+  // background on either placement now, so "ink" is simply a non-transparent
+  // pixel (it used to be "darker than the opaque #4f7a34 grass base").
   const rowBands = (cv) => {
     const g = cv.getContext('2d');
     const d = g.getImageData(0, 0, cv.width, cv.height).data;
@@ -509,8 +513,7 @@
     for (let y = 0; y < cv.height; y++) {
       let ink = false;
       for (let x = 0; x < cv.width; x++) {
-        const i = (y * cv.width + x) * 4;
-        if (d[i] < 62 && d[i + 2] < 45) { ink = true; break; }   // darker than grass base
+        if (d[(y * cv.width + x) * 4 + 3] > 40) { ink = true; break; }   // painted glyph
       }
       if (ink && !inBand) { bands++; inBand = true; } else if (!ink) inBand = false;
     }
@@ -1376,8 +1379,12 @@
        Math.abs(rigL.grassMesh.geometry.parameters.width - 3000) < 1 &&
        !rigL.grassTexRot,
        `type=${rigL.grassMesh.geometry.type} texRot=${rigL.grassTexRot}`);
-    ok('…with the opaque mowed-grass backdrop (canvas corner NOT transparent)',
-       alphaAt(rigL.grassMesh.material.map.image, 0, 0) === 255);
+    // …but NOT with a backdrop: ground writing never paints a box of its own on
+    // either placement (this pin used to assert an OPAQUE mowed-grass corner).
+    ok('…and STILL has no backdrop (legacy-plane canvas corner transparent)',
+       alphaAt(rigL.grassMesh.material.map.image, 0, 0) === 0 &&
+       rigL.grassMesh.material.transparent === true,
+       `a=${alphaAt(rigL.grassMesh.material.map.image, 0, 0)} t=${rigL.grassMesh.material.transparent}`);
     placeCam2(rigL.grassMesh, 1.1); step(300);
     ok('…and still yaws the MESH, not the texture',
        Math.abs(rigL.grassMesh.rotation.y) > 0.05 && rigL.grassMesh.material.map.rotation === 0,
@@ -1389,6 +1396,139 @@
                     false, 0, 0);
     ok('a degenerate 2-point polygon falls back to the legacy plane',
        r._bgRigs.find(x => x.mode === 'grass').grassMesh.geometry.type === 'PlaneGeometry');
+  }
+
+  // ══════ AUTO placement: an OVERLAY on the ground, never a box of lawn ══════
+  // User report: "the grass writing is still rendering as a box with text inside
+  // it… it should render as an overlay on the ground it is over and not generate
+  // its own background… contrast slightly to the ground colour". So the auto
+  // margin-strip decal paints ONLY lettering on a transparent canvas (the
+  // area-bound path already did), and its ink comes from the surface actually
+  // under the strip: a containing GroundArea wins, else Floor.yardFill, else the
+  // legacy grass palette (which is also what a stale three-view sending no
+  // ground context gets).
+  {
+    const inkOf = (cv) => {
+      const d = cv.getContext('2d').getImageData(0, 0, cv.width, cv.height).data;
+      let n = 0, R = 0, G2 = 0, B = 0;
+      for (let i = 0; i < d.length; i += 4)
+        if (d[i + 3] > 40) { n++; R += d[i]; G2 += d[i + 1]; B += d[i + 2]; }
+      return { n, r: R / Math.max(1, n), g: G2 / Math.max(1, n), b: B / Math.max(1, n),
+               total: cv.width * cv.height };
+    };
+    const aAt = (cv, x, y) => cv.getContext('2d').getImageData(x, y, 1, 1).data[3];
+    const auto = (ground) => {
+      r.updateBgTexts([{ id: 'autoInk', mode: 'grass', text: 'BACK YARD' }], false, 0, 0, ground);
+      const rig = r._bgRigs.find(x => x.mode === 'grass');
+      return { rig, mesh: rig.grassMesh, cv: rig.grassMesh.material.map.image };
+    };
+
+    // ── no background, on the AUTO path (the reported bug) ─────────────────
+    const a0 = auto(undefined);
+    const cv0 = a0.cv;
+    ok('AUTO ground writing has NO backdrop (all four canvas corners transparent)',
+       aAt(cv0, 0, 0) === 0 && aAt(cv0, cv0.width - 1, 0) === 0 &&
+       aAt(cv0, 0, cv0.height - 1) === 0 && aAt(cv0, cv0.width - 1, cv0.height - 1) === 0,
+       `a=${aAt(cv0, 0, 0)}/${aAt(cv0, cv0.width - 1, 0)}/` +
+       `${aAt(cv0, 0, cv0.height - 1)}/${aAt(cv0, cv0.width - 1, cv0.height - 1)}`);
+    ok('AUTO decal material is transparent (the yard shows through)',
+       a0.mesh.material.transparent === true);
+    const ink0 = inkOf(cv0);
+    ok('AUTO canvas paints only the lettering (mostly transparent)',
+       ink0.n > 200 && ink0.n < ink0.total * 0.5, `ink=${ink0.n}/${ink0.total}`);
+    ok('AUTO with no ground context keeps the legacy grass ink (green-dominant)',
+       ink0.g > ink0.r + 10 && ink0.g > ink0.b + 10,
+       `(${ink0.r | 0},${ink0.g | 0},${ink0.b | 0})`);
+
+    // The strip the auto placement chose — build ground fixtures around it.
+    const gi = r._bgGrassInfo;
+    const boxAround = (c, kind, pad = 400) => ({
+      kind,
+      points: [
+        { x: c.cx - c.w / 2 - pad, y: c.cy - c.h / 2 - pad },
+        { x: c.cx + c.w / 2 + pad, y: c.cy - c.h / 2 - pad },
+        { x: c.cx + c.w / 2 + pad, y: c.cy + c.h / 2 + pad },
+        { x: c.cx - c.w / 2 - pad, y: c.cy + c.h / 2 + pad },
+      ],
+    });
+    const farBox = (kind) => ({
+      kind,
+      points: [{ x: -9000, y: -9000 }, { x: -8000, y: -9000 },
+               { x: -8000, y: -8000 }, { x: -9000, y: -8000 }],
+    });
+
+    // Channel biases discriminate the palettes: a two-tone ink averages both of
+    // its stops, so absolute channels are close between kinds — the SHAPE of the
+    // colour (green-over-red / blue-over-red) is what identifies the surface.
+    const greenBias = (k) => k.g - (k.r + k.b) / 2;
+    const blueBias = (k) => k.b - k.r;
+
+    // ── yardFill drives the ink when no area covers the strip ──────────────
+    const inkYF = inkOf(auto({ yardFill: 'concrete' }).cv);
+    ok('AUTO ink follows Floor.yardFill (concrete → neutral grey, not green)',
+       Math.abs(inkYF.r - inkYF.g) < 25 && Math.abs(inkYF.g - inkYF.b) < 25 &&
+       greenBias(inkYF) < 10 && greenBias(ink0) > 30,
+       `concrete=(${inkYF.r | 0},${inkYF.g | 0},${inkYF.b | 0}) gBias=${greenBias(inkYF).toFixed(0)} | ` +
+       `grass=(${ink0.r | 0},${ink0.g | 0},${ink0.b | 0}) gBias=${greenBias(ink0).toFixed(0)}`);
+
+    // ── a CONTAINING ground area beats the yardFill ────────────────────────
+    const inkArea = inkOf(auto({ areas: [boxAround(gi, 'water')], yardFill: 'concrete' }).cv);
+    ok('AUTO ink: a GroundArea containing the strip WINS over yardFill (water → blue)',
+       blueBias(inkArea) > 40 && blueBias(inkYF) < 20,
+       `area=(${inkArea.r | 0},${inkArea.g | 0},${inkArea.b | 0}) bBias=${blueBias(inkArea).toFixed(0)} | ` +
+       `yardFill bBias=${blueBias(inkYF).toFixed(0)}`);
+    // …and containment is real: an area elsewhere on the floor must not tint it.
+    const inkFar = inkOf(auto({ areas: [farBox('water')], yardFill: 'concrete' }).cv);
+    ok('AUTO ink: a NON-containing ground area is ignored (falls back to yardFill)',
+       Math.abs(inkFar.r - inkYF.r) < 2 && Math.abs(inkFar.b - inkYF.b) < 2,
+       `far=(${inkFar.r | 0},${inkFar.g | 0},${inkFar.b | 0})`);
+    // Last-drawn area wins where two overlap (later paint covers earlier paint).
+    const inkTop = inkOf(auto({ areas: [boxAround(gi, 'water'), boxAround(gi, 'concrete')] }).cv);
+    ok('AUTO ink: the LAST-drawn overlapping area wins (concrete over water)',
+       blueBias(inkTop) < 20 && blueBias(inkArea) > 40,
+       `top=(${inkTop.r | 0},${inkTop.g | 0},${inkTop.b | 0}) bBias=${blueBias(inkTop).toFixed(0)}`);
+
+    // ── blacktop reads as CHALK (the one inverted GROUND_TEXT_INK pair) ─────
+    const inkBt = inkOf(auto({ yardFill: 'blacktop' }).cv);
+    // Blacktop's material is #2e3236 (luma ≈ 50). With no backdrop a near-black
+    // letter body would vanish, so blacktop paints a PALE body over a dark relief.
+    const luma = (k) => 0.2126 * k.r + 0.7152 * k.g + 0.0722 * k.b;
+    ok('blacktop ink is chalk-light (legible straight on #2e3236, no backdrop)',
+       luma(inkBt) > 90, `luma=${luma(inkBt).toFixed(0)} (${inkBt.r | 0},${inkBt.g | 0},${inkBt.b | 0})`);
+
+    // ── the size knob still scales the MESH here (regression) ──────────────
+    r.updateBgTexts([{ id: 'autoInk', mode: 'grass', text: 'BIG', scale: 2 }], false, 0, 0,
+                    { yardFill: 'sand' });
+    ok('AUTO placement still scales the MESH with a ground context (regression)',
+       r._bgRigs.find(x => x.mode === 'grass').grassMesh.scale.x === 2);
+    r.updateBgTexts([], false, 0, 0);
+  }
+
+  // ══════ ground-ink DIRTY-KEY term (three-view's _keyBgText fold) ══════
+  // _keyBgText carries NO configRev by design, so a yard-paint edit would never
+  // repaint the writing on its own. bgGroundInkKey is the coarse term three-view
+  // folds into every GRASS entry to close exactly that hole — and nothing wider.
+  {
+    const K = G.bgGroundInkKey;
+    const area = (kind, x = 1000, y = 1000) => ({
+      kind, points: [{ x, y }, { x: x + 2000, y }, { x: x + 2000, y: y + 2000 }, { x, y: y + 2000 }],
+    });
+    ok('INKKEY empty floor is stable', K({}) === K({ groundAreas: [] }), `${K({})}`);
+    ok('INKKEY yardFill edit changes the key',
+       K({ yardFill: 'grass' }) !== K({ yardFill: 'concrete' }),
+       `${K({ yardFill: 'grass' })} vs ${K({ yardFill: 'concrete' })}`);
+    ok('INKKEY an area KIND edit changes the key',
+       K({ groundAreas: [area('grass')] }) !== K({ groundAreas: [area('water')] }));
+    ok('INKKEY moving an area changes the key',
+       K({ groundAreas: [area('grass')] }) !== K({ groundAreas: [area('grass', 5000, 1000)] }));
+    ok('INKKEY is COARSE — a sub-100 mm nudge does not churn the rigs',
+       K({ groundAreas: [area('grass')] }) === K({ groundAreas: [area('grass', 1010, 1000)] }));
+    ok('INKKEY ignores everything else on the floor (adding a wall/furniture cannot bump it)',
+       K({ yardFill: 'sand', groundAreas: [area('rock')], w: 1, walls: [{}], furniture: [{}] })
+       === K({ yardFill: 'sand', groundAreas: [area('rock')] }));
+    ok('INKKEY tolerates a point-less area (never throws)',
+       typeof K({ groundAreas: [{ kind: 'grass' }] }) === 'string',
+       K({ groundAreas: [{ kind: 'grass' }] }));
   }
 
   // ════════════ ground writing: STATIC ROTATION (faceCamera:false) ════════════
