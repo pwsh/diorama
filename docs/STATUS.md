@@ -313,6 +313,19 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **View persistence + boot-framing fix** (2026-07-31, user-reported
+  "after a hard refresh the scene is zoomed in a lot"; unreleased —
+  on main past v0.49.0). Root cause: the 3D camera was NEVER framed
+  — a hard-coded ~10.8 m constructor pose served every load
+  (_applyUrlTemplate returns with no cam/view3d; iso was only the
+  named-view fallback); bigger plans read more zoomed-in. New pure
+  src/view-persist.ts (resolveBootPose ladder: URL > posed latch
+  via new cameraGestures() > saved pose > iso/sims; 20 s reframe
+  latch on floor-dims change). Device-local diorama:view2d/cam3d
+  (config+floor keyed, throttled, bounds-validated, opt-in
+  Planner.viewPersist — cards stay false; kiosk tablets restore).
+  resetView clears 2D entry. New view-persist-test 82/82; camera
+  60→66; floors-view 86/86, card 92/92, sensor-focus 14/14 held.
 - **Flight feed-latency guard + contrail conditioning** (2026-07-31,
   user-reported "flapping like a flag… tail coming back and
   bisecting the fuselage… the plane body also moves backwards";

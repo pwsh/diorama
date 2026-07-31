@@ -16,6 +16,8 @@ import { slugToName, normMac, localToWorld, segCrossesSolidWall, mowerSweepWaypo
          type LockGlyphState, type RoomTemp, type TempSample,
          type BicycleState } from './geometry.js';
 import { solveHomography, applyHomography } from './homography.js';
+import { viewCenterFitsFloor as _viewCenterFitsFloor,
+         browserViewStorage, loadView2d, saveView2d } from './view-persist.js';
 import { stepFusion, newFusionState, DEFAULT_FUSION_CFG,
          type FusionState, type FusionCand } from './fusion.js';
 import { buildAlertFeed, alertCenterEnabled, isAlertDomain,
@@ -337,23 +339,13 @@ export const NEW_LANDMARK = '__new_landmark__';
 // 2D peek machinery depends on identical world coords landing at identical
 // positions — so a floor switch does NOT change the coordinate frame; floors
 // differ only in rect SIZE. That's why `switchFloor` retains pan/zoom.
-
-// How far outside the new floor's `0..w × 0..d` rect a retained 2D `viewCenter`
-// may land before it's considered stale. Inflated by this fraction of the
-// LARGER dimension on every side, so a modestly-offset centre survives but a
-// centre from a wildly different plan can't strand the user on blank canvas.
-export const VIEW_RETAIN_MARGIN_FRAC = 0.5;
-
-/**
- * Does a retained 2D pan centre still make sense on a floor of `w × d` mm?
- * True while it lies inside the floor rect inflated by
- * `VIEW_RETAIN_MARGIN_FRAC · max(w, d)` on every side.
- */
-export function viewCenterFitsFloor(w: number, d: number, cx: number, cy: number): boolean {
-  if (!Number.isFinite(cx) || !Number.isFinite(cy)) return false;
-  const m = VIEW_RETAIN_MARGIN_FRAC * Math.max(w, d);
-  return cx >= -m && cx <= w + m && cy >= -m && cy <= d + m;
-}
+//
+// `VIEW_RETAIN_MARGIN_FRAC` + `viewCenterFitsFloor` MOVED to `view-persist.ts`
+// (zero-import) so the same guard governs BOTH the live floor-switch retention
+// and the reload-time restore — one constant, one predicate. Re-exported here
+// because that's where every existing caller (and floors-view-test) imports
+// them from.
+export { VIEW_RETAIN_MARGIN_FRAC, viewCenterFitsFloor } from './view-persist.js';
 
 /**
  * Scene-space translation that keeps the 3D camera looking at the SAME WORLD
@@ -1070,11 +1062,22 @@ export class Planner extends EventTarget {
     }
   }
 
-  // 2D view pan/zoom — runtime only, reset on reload.
+  // 2D view pan/zoom — runtime only; RESTORED from the device-local store on
+  // load when `viewPersist` is on (see view-persist.ts).
   // viewCenter is the world-mm point shown at canvas center; zoom is the
   // multiplier on top of fit-to-canvas scale.
   viewCenter: { x: number; y: number } | null = null; // null = auto-fit center
   zoom = 1;
+
+  // Device-local viewport persistence opt-in (2D pan/zoom + 3D camera pose).
+  // The APP sets this true for its one Planner (app.ts, every launch path —
+  // including panel adoption and kiosk/view modes: localStorage is device-local
+  // and NOT gated by `save()`'s edit-mode rule, so a wall tablet comes back
+  // where it was). Lovelace CARDS deliberately leave it FALSE: several cards
+  // share ONE kiosk Planner, they are framed by their own `cam:` / `view3d:`
+  // config, and none of them should inherit — or clobber — the panel's saved
+  // viewport. Runtime-only, never persisted into the Store.
+  viewPersist = false;
 
   private _lastDevKey: string | null = null;
   private _initialSyncDone = false;
@@ -1899,6 +1902,17 @@ export class Planner extends EventTarget {
       this.newlyPlacedFocus = null;
       this.viewCenter = null;
       this.zoom = 1;
+      // Device-local viewport restore. Runs AFTER the reset above (so a miss
+      // leaves the classic fit-to-canvas default) and only for the config +
+      // floor the entry was written for — which is exactly why a config
+      // switch / new / import needs no invalidation: those all mint a new
+      // `activeConfigId`, so the stored entry simply can't match. Every caller
+      // of _applyLoadedStore sets `activeConfigId` BEFORE calling.
+      if (this.viewPersist) {
+        const vf = this.floor();
+        const sv = vf && loadView2d(browserViewStorage(), this.activeConfigId, vf.id, vf.w, vf.d);
+        if (sv) { this.viewCenter = { x: sv.cx, y: sv.cy }; this.zoom = sv.zoom; }
+      }
       this.drag = null;
       this.editZone = null;
       this.drawingWall = null;
@@ -6562,6 +6576,13 @@ export class Planner extends EventTarget {
   resetView(): void {
     this.viewCenter = null;
     this.zoom = 1;
+    // Reset means RESET: drop the device-local saved 2D viewport too, so the
+    // next reload starts from fit-to-canvas rather than resurrecting the pan
+    // the user just discarded. Scoped to 2D on purpose — this only ever resets
+    // `viewCenter`/`zoom`, the 3D camera is untouched, and the 3D writer would
+    // re-save the (unchanged) live pose within its throttle window anyway. The
+    // 3D "reset" affordance is the view bar's Iso button.
+    if (this.viewPersist) saveView2d(browserViewStorage(), null);
     this.emitConfig();
   }
 
@@ -6795,7 +6816,7 @@ export class Planner extends EventTarget {
     // is never left staring at blank canvas. A different CONFIG genuinely is a
     // different plan — those paths (_applyLoadedStore) still reset.
     const nf = this.store.floors.find(x => x.id === id);
-    if (this.viewCenter && (!nf || !viewCenterFitsFloor(nf.w, nf.d, this.viewCenter.x, this.viewCenter.y))) {
+    if (this.viewCenter && (!nf || !_viewCenterFitsFloor(nf.w, nf.d, this.viewCenter.x, this.viewCenter.y))) {
       this.viewCenter = null;
       this.zoom = 1;
     }

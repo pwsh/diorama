@@ -391,6 +391,51 @@
      near(azOf(cam.position), az3, 1e-12), `d=${(azOf(cam.position) - az3).toExponential(1)}`);
   r.setCameraPivot(true, false, 0, 0);
 
+  // 13. cameraGestures() — the "the user has posed the camera" signal three-view
+  // uses to disarm its boot re-framing latch. It must count BOTH OrbitControls'
+  // own gestures AND the custom locked-pivot rotate (which surrenders
+  // OrbitControls' rotate, so its 'start' never fires for that drag).
+  ok('gestures: cameraGestures() is exposed', typeof r.cameraGestures === 'function');
+  const g0 = r.cameraGestures();
+  r._controls.dispatchEvent({ type: 'start' });
+  ok('gestures: an OrbitControls gesture increments the counter',
+     r.cameraGestures() === g0 + 1, `${g0} → ${r.cameraGestures()}`);
+  // The custom rotate only runs in locked+free; drive one real pointer drag.
+  r.setCameraPivot(true, true, PX, PZ);
+  const g1 = r.cameraGestures();
+  pev('pointerdown', 11, 500, 300); pev('pointermove', 11, 560, 300); pev('pointerup', 11, 560, 300);
+  ok('gestures: the custom locked-pivot rotate also counts',
+     r.cameraGestures() === g1 + 1, `${g1} → ${r.cameraGestures()}`);
+  const g2 = r.cameraGestures();
+  r.applyViewPreset('iso');
+  r.setCameraView([1000, 2000, 3000], [0, 0, 0]);
+  ok('gestures: programmatic poses (presets / saved views / boot framing) do NOT count',
+     r.cameraGestures() === g2, `${g2} → ${r.cameraGestures()}`);
+  r.setCameraPivot(true, false, 0, 0);
+
+  // 14. The boot framing the fix relies on: applyViewPreset('iso') frames off
+  // the CURRENT floor rect, so a bigger plan is viewed from further out. The
+  // renderer's constructor pose (0, 9000, −6000) is rect-independent — that is
+  // precisely what read as "zoomed in a lot" on any house bigger than ~8 m.
+  const isoDist = () => {
+    r.applyViewPreset('iso');
+    return Math.hypot(cam.position.x - ctrl.target.x,
+                      cam.position.y - ctrl.target.y,
+                      cam.position.z - ctrl.target.z);
+  };
+  // Both rects stay under controls.maxDistance (45000) so the ratio is clean —
+  // `setCameraView` runs controls.update(), which WOULD clamp a longer pull-back.
+  const smallD = isoDist();                                  // floor is 10000 × 8000
+  const bigFloor = { ...floor, w: 20000, d: 16000 };
+  r.updateFloor(bigFloor, { preset: 'day', floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6' });
+  const bigD = isoDist();
+  ok('boot framing: iso distance scales with the floor rect',
+     near(bigD / smallD, 2, 1e-6), `${smallD.toFixed(0)} → ${bigD.toFixed(0)}`);
+  const CTOR_DIST = Math.hypot(0, 9000, -6000);              // the old fixed boot pose
+  ok('boot framing: the old fixed constructor pose was much closer than iso on a big plan',
+     bigD > CTOR_DIST * 3, `iso=${bigD.toFixed(0)} ctor=${CTOR_DIST.toFixed(0)}`);
+  r.updateFloor(floor, { preset: 'day', floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6' });
+
   // ── report ────────────────────────────────────────────────────────────────
   const pass = tests.filter(t => t.ok).length, total = tests.length;
   const allPass = pass === total;

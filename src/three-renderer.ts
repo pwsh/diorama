@@ -2736,6 +2736,8 @@ export class ThreeDRenderer {
     // finishes, not 6 s after it began).
     this._controls.addEventListener('start', () => {
       this._followPauseUntil = performance.now() / 1000 + 6;
+      // The user is posing the camera by hand — see `cameraGestures()`.
+      this._camGestures++;
     });
     this._controls.addEventListener('end', () => {
       this._followPauseUntil = performance.now() / 1000 + 6;
@@ -3564,6 +3566,14 @@ export class ThreeDRenderer {
   }
 
   // ── Camera views ────────────────────────────────────────────────────────
+  // Count of manual camera gestures (orbit / dolly / pan, plus the custom
+  // locked-pivot rotate that bypasses OrbitControls). three-view watches this
+  // to know the user has POSED the view, which disarms the boot re-framing
+  // latch — the camera must never be yanked back to the default framing under
+  // someone's hands. Monotonic; only ever compared against 0 / a prior read.
+  private _camGestures = 0;
+  cameraGestures(): number { return this._camGestures; }
+
   cameraView(): { pos: [number, number, number]; target: [number, number, number] } | null {
     if (!this._camera || !this._controls) return null;
     const p = this._camera.position, t = this._controls.target;
@@ -23102,6 +23112,10 @@ export class ThreeDRenderer {
       this._pivotRotX = e.clientX; this._pivotRotY = e.clientY;
       this._pivotRotPivotY = this._controls ? this._controls.target.y : 0;
       this._followPauseUntil = performance.now() / 1000 + 6;
+      // Locked+free mode surrenders OrbitControls' rotate, so its 'start' never
+      // fires for this gesture — count it here or the boot re-framing latch
+      // would think the user never touched the camera.
+      this._camGestures++;
     });
     dom.addEventListener('pointermove', e => {
       if (this._pivotRotId !== e.pointerId || this._pivotRotAbort || !eligible()) return;

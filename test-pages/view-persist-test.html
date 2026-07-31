@@ -1,0 +1,484 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>VIEWPERSIST …</title>
+<style>
+  body { margin:0; background:#0d1116; color:#cfd8dc; font:13px/1.5 sans-serif; padding:14px; }
+  h1 { font-size:15px; margin:0 0 10px; }
+  #summary { font-size:14px; font-weight:bold; margin:10px 0; padding:8px 10px; border-radius:5px; }
+  .okbg { background:#12331f; color:#69f0ae; } .badbg { background:#3a1414; color:#ff8a80; }
+  .row { display:flex; justify-content:space-between; gap:10px; padding:2px 0; border-bottom:1px solid #1c2530; }
+  .pass { color:#69f0ae; } .fail { color:#ff5252; }
+  .name { color:#90caf9; } .extra { color:#ffd54f; font-size:11px; }
+  h2 { font-size:12px; color:#80cbc4; margin:14px 0 4px; }
+</style>
+<h1>Device-local viewport retention + boot camera framing — pure module + real Planner</h1>
+<div id="summary">Running…</div>
+<div id="rows"></div>
+
+<!-- Harness build (from the repo root; NEVER reuse stale bundles). This page
+     imports only the two bundles below — no built dist/ required:
+       H=/tmp/diorama-harness-viewpersist
+       rm -rf "$H"; mkdir -p "$H"
+       cp test-pages/view-persist-test.html "$H"/
+       npx esbuild src/view-persist.ts --format=esm --outfile="$H"/view-persist.mod.js
+       T=$(mktemp -d); cp -r src/* "$T"/; cp tsconfig.json "$T"/
+       cp test-pages/fake-avatar-store.ts "$T"/avatar-store.ts
+       npx esbuild "$T"/planner.ts --bundle --format=esm --outfile="$H"/planner.mod.js
+       # §6 drives the REAL <diorama-three-view>, so it needs the lit + three
+       # aliases (the card-test recipe); esbuild inlines the lazy renderer import.
+       printf "export { Planner } from '../planner.js';\nimport './three-view.js';\n" > "$T"/ui/vp-entry.ts
+       npx esbuild "$T"/ui/vp-entry.ts --bundle --format=esm --tsconfig="$T"/tsconfig.json \
+         --alias:lit=$PWD/node_modules/lit/index.js \
+         --alias:lit/decorators.js=$PWD/node_modules/lit/decorators.js \
+         --alias:three=$PWD/node_modules/three/build/three.module.js \
+         --alias:three/examples/jsm/controls/OrbitControls.js=$PWD/node_modules/three/examples/jsm/controls/OrbitControls.js \
+         --alias:three/examples/jsm/loaders/OBJLoader.js=$PWD/node_modules/three/examples/jsm/loaders/OBJLoader.js \
+         --alias:three/examples/jsm/loaders/MTLLoader.js=$PWD/node_modules/three/examples/jsm/loaders/MTLLoader.js \
+         --outfile="$H"/viewpersist.mod.js
+     Run headless (serve over http — Chrome blocks dynamic module imports on file://);
+     needs a GL context: --enable-unsafe-swiftshader.
+       (cd "$H" && python3 -m http.server 8823 &)
+       google-chrome --headless=new --disable-gpu --enable-unsafe-swiftshader \
+         --virtual-time-budget=30000 --dump-dom \
+         "http://localhost:8823/view-persist-test.html" | grep -o "<title>[^<]*"  -->
+<script type="module">
+  const V = '?v=' + Date.now();
+  const VP = await import('./view-persist.mod.js' + V);
+  const {
+    VIEW2D_KEY, VIEW3D_KEY, VIEW_RETAIN_MARGIN_FRAC,
+    viewCenterFitsFloor, camTargetFitsFloor,
+    parseSavedView2d, parseSavedCam3d,
+    loadView2d, saveView2d, loadCam3d, saveCam3d,
+    resolveBootPose, browserViewStorage,
+  } = VP;
+  const { Planner } = await import('./planner.mod.js' + V);
+
+  const results = [];
+  const ok = (name, cond, extra = '') => results.push({ name, pass: !!cond, extra: String(extra) });
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  async function waitFor(cond, tries = 800) {
+    for (let i = 0; i < tries; i++) { if (cond()) return true; await sleep(4); }
+    return !!cond();
+  }
+
+  // Map-backed ViewStorage fake (deterministic, isolated from localStorage).
+  const fakeStore = () => {
+    const m = new Map();
+    return {
+      m,
+      getItem: k => (m.has(k) ? m.get(k) : null),
+      setItem: (k, v) => m.set(k, v),
+      removeItem: k => m.delete(k),
+    };
+  };
+
+  try {
+    // ── 1. floor-fit guards ────────────────────────────────────────────────
+    ok('1a margin frac is 0.5 (shared with switchFloor retention)', VIEW_RETAIN_MARGIN_FRAC === 0.5, VIEW_RETAIN_MARGIN_FRAC);
+    ok('1b centre inside the rect fits', viewCenterFitsFloor(10000, 8000, 5000, 4000));
+    // margin = 0.5 * max(w,d) = 5000
+    ok('1c centre just inside the inflated rect fits', viewCenterFitsFloor(10000, 8000, -4999, 4000));
+    ok('1d centre past the margin is rejected', !viewCenterFitsFloor(10000, 8000, -5001, 4000));
+    ok('1e non-finite centre is rejected', !viewCenterFitsFloor(10000, 8000, NaN, 4000));
+    // 3D: scene x/z run ±fw/2, ±fd/2 about the origin, same 5000 margin.
+    ok('1f cam target at the scene origin fits', camTargetFitsFloor(10000, 8000, 0, 0));
+    ok('1g cam target just inside fits', camTargetFitsFloor(10000, 8000, 9999, 8999),
+       'limits 10000 / 9000');
+    ok('1h cam target past the margin is rejected', !camTargetFitsFloor(10000, 8000, 10001, 0));
+    ok('1i cam target past the margin in z is rejected', !camTargetFitsFloor(10000, 8000, 0, -9001));
+    ok('1j non-finite cam target is rejected', !camTargetFitsFloor(10000, 8000, 0, Infinity));
+
+    // ── 2. parse / validate ────────────────────────────────────────────────
+    const good2d = { configId: 'c1', floorId: 'f1', cx: 100, cy: 200, zoom: 1.5 };
+    ok('2a valid 2D entry parses', JSON.stringify(parseSavedView2d(JSON.stringify(good2d))) === JSON.stringify(good2d));
+    ok('2b null raw → null', parseSavedView2d(null) === null);
+    ok('2c empty raw → null', parseSavedView2d('') === null);
+    ok('2d garbage JSON → null', parseSavedView2d('{nope') === null);
+    ok('2e non-object JSON → null', parseSavedView2d('42') === null);
+    ok('2f missing configId → null', parseSavedView2d(JSON.stringify({ ...good2d, configId: '' })) === null);
+    ok('2g missing floorId → null', parseSavedView2d(JSON.stringify({ ...good2d, floorId: undefined })) === null);
+    ok('2h non-finite cx → null', parseSavedView2d('{"configId":"c1","floorId":"f1","cx":null,"cy":2,"zoom":1}') === null);
+    ok('2i NaN cy → null', parseSavedView2d(JSON.stringify({ ...good2d, cy: NaN })) === null,
+       'NaN serializes to null — still rejected');
+    ok('2j zoom below clamp → null', parseSavedView2d(JSON.stringify({ ...good2d, zoom: 0.05 })) === null);
+    ok('2k zoom above clamp → null', parseSavedView2d(JSON.stringify({ ...good2d, zoom: 21 })) === null);
+    ok('2l zoom at the clamp edges is accepted',
+       !!parseSavedView2d(JSON.stringify({ ...good2d, zoom: 0.1 })) &&
+       !!parseSavedView2d(JSON.stringify({ ...good2d, zoom: 20 })));
+
+    const good3d = { configId: 'c1', floorId: 'f1', pos: [-8100, 8100, -8100], target: [0, 0, 0] };
+    ok('2m valid 3D entry parses', JSON.stringify(parseSavedCam3d(JSON.stringify(good3d))) === JSON.stringify(good3d));
+    ok('2n short pos vector → null', parseSavedCam3d(JSON.stringify({ ...good3d, pos: [1, 2] })) === null);
+    ok('2o non-numeric pos member → null', parseSavedCam3d('{"configId":"c1","floorId":"f1","pos":[1,"2",3],"target":[0,0,0]}') === null);
+    ok('2p non-finite pos member → null', parseSavedCam3d(JSON.stringify({ ...good3d, pos: [1, Infinity, 3] })) === null);
+    ok('2q missing target → null', parseSavedCam3d(JSON.stringify({ configId: 'c1', floorId: 'f1', pos: [1, 2, 3] })) === null);
+    ok('2r degenerate pose (camera ON its target) → null',
+       parseSavedCam3d(JSON.stringify({ ...good3d, pos: [0, 0.5, 0] })) === null);
+    ok('2s garbage 3D JSON → null', parseSavedCam3d('[[[') === null);
+
+    // ── 3. load / save through the storage seam ────────────────────────────
+    {
+      const s = fakeStore();
+      ok('3a load from an empty store → null', loadView2d(s, 'c1', 'f1', 10000, 8000) === null);
+      saveView2d(s, good2d);
+      ok('3b round-trip: matching config + floor restores',
+         JSON.stringify(loadView2d(s, 'c1', 'f1', 10000, 8000)) === JSON.stringify({ cx: 100, cy: 200, zoom: 1.5 }));
+      ok('3c config mismatch → null', loadView2d(s, 'OTHER', 'f1', 10000, 8000) === null);
+      ok('3d floor mismatch → null', loadView2d(s, 'c1', 'OTHER', 10000, 8000) === null);
+      // A tiny floor puts the stored centre outside the inflated rect.
+      ok('3e bounds guard rejects a centre from a much bigger plan',
+         loadView2d(s, 'c1', 'f1', 20, 20) === null);
+      saveView2d(s, null);
+      ok('3f saveView2d(null) removes the entry', !s.m.has(VIEW2D_KEY) && loadView2d(s, 'c1', 'f1', 10000, 8000) === null);
+
+      saveCam3d(s, good3d);
+      ok('3g 3D round-trip restores the exact pose',
+         JSON.stringify(loadCam3d(s, 'c1', 'f1', 10000, 8000)) === JSON.stringify({ pos: good3d.pos, target: good3d.target }));
+      ok('3h 3D config mismatch → null', loadCam3d(s, 'zz', 'f1', 10000, 8000) === null);
+      ok('3i 3D floor mismatch → null', loadCam3d(s, 'c1', 'zz', 10000, 8000) === null);
+      saveCam3d(s, { ...good3d, target: [40000, 0, 0] });
+      ok('3j 3D bounds guard rejects a far-off target', loadCam3d(s, 'c1', 'f1', 10000, 8000) === null);
+      saveCam3d(s, null);
+      ok('3k saveCam3d(null) removes the entry', !s.m.has(VIEW3D_KEY));
+      // Corrupt payload in storage must not throw or resurrect anything.
+      s.m.set(VIEW3D_KEY, 'not json');
+      ok('3l corrupt stored payload → null (no throw)', loadCam3d(s, 'c1', 'f1', 10000, 8000) === null);
+    }
+    {
+      // A storage that throws on every access (Safari private mode) is tolerated.
+      const boom = {
+        getItem() { throw new Error('nope'); },
+        setItem() { throw new Error('nope'); },
+        removeItem() { throw new Error('nope'); },
+      };
+      let threw = false;
+      try {
+        loadView2d(boom, 'c1', 'f1', 1000, 1000);
+        loadCam3d(boom, 'c1', 'f1', 1000, 1000);
+        saveView2d(boom, good2d);
+        saveCam3d(boom, good3d);
+      } catch { threw = true; }
+      ok('3m a throwing storage never propagates', !threw);
+      ok('3n a null storage is inert', loadView2d(null, 'c1', 'f1', 1, 1) === null);
+      let threw2 = false;
+      try { saveView2d(null, good2d); saveCam3d(undefined, good3d); } catch { threw2 = true; }
+      ok('3o saving to a null storage is inert', !threw2);
+      ok('3p browserViewStorage() resolves in a browser', browserViewStorage() != null);
+    }
+
+    // ── 4. boot-pose precedence + re-framing latch ─────────────────────────
+    const base = {
+      hasTemplate: false, userPosed: false, saved: null,
+      floorKey: 'f1|8000|6000', framedKey: '',
+      elapsedMs: 0, windowMs: 20000, simsDefault: false,
+    };
+    const savedPose = { pos: [1, 2, 3], target: [0, 600, 0] };
+    {
+      // Precedence 1: a URL/card cam= or view3d= template beats everything.
+      const d = resolveBootPose({ ...base, hasTemplate: true, saved: savedPose });
+      ok('4a template wins over a saved pose (nothing applied, latch closed)',
+         d.restore === null && d.framePreset === null && d.done === true);
+      const d2 = resolveBootPose({ ...base, hasTemplate: true });
+      ok('4b template also suppresses the default framing',
+         d2.framePreset === null && d2.done === true);
+    }
+    {
+      // Precedence 2: an interaction closes the latch — never yank the camera.
+      const d = resolveBootPose({ ...base, userPosed: true, saved: savedPose });
+      ok('4c a posed camera is never re-posed (even with a saved pose waiting)',
+         d.restore === null && d.framePreset === null && d.done === true);
+      const d2 = resolveBootPose({ ...base, userPosed: true, framedKey: 'f1|1|1' });
+      ok('4d a posed camera suppresses the dim-change re-frame',
+         d2.framePreset === null && d2.done === true);
+    }
+    {
+      // Precedence 3: a saved pose beats the default framing, and closes the latch.
+      const d = resolveBootPose({ ...base, saved: savedPose });
+      ok('4e saved pose wins over the default framing',
+         d.restore === savedPose && d.framePreset === null && d.done === true);
+    }
+    {
+      // Precedence 4: default framing, re-applied while the rect changes.
+      const d1 = resolveBootPose({ ...base });
+      ok('4f no template / pose / saved → frame iso against the current rect',
+         d1.framePreset === 'iso' && d1.framedKey === 'f1|8000|6000' && d1.done === false);
+      const d2 = resolveBootPose({ ...base, framedKey: d1.framedKey });
+      ok('4g same rect on the next tick → no re-frame (one-shot per rect)',
+         d2.framePreset === null && d2.done === false);
+      // The async store lands with a 4× bigger floor: re-frame.
+      const d3 = resolveBootPose({ ...base, framedKey: d1.framedKey, floorKey: 'f1|32000|24000' });
+      ok('4h the store arriving with a bigger rect re-frames',
+         d3.framePreset === 'iso' && d3.framedKey === 'f1|32000|24000');
+      // …but not once the user has posed the camera.
+      const d4 = resolveBootPose({ ...base, framedKey: d1.framedKey, floorKey: 'f1|32000|24000', userPosed: true });
+      ok('4i …unless the user posed the camera first (no re-frame)',
+         d4.framePreset === null && d4.done === true);
+      // A floor SWITCH inside the window re-frames too (nothing was posed).
+      const d5 = resolveBootPose({ ...base, framedKey: d1.framedKey, floorKey: 'f2|8000|6000' });
+      ok('4j a floor change inside the window re-frames', d5.framePreset === 'iso' && d5.framedKey === 'f2|8000|6000');
+    }
+    {
+      // The window bounds the latch so a long-lived session never re-frames.
+      const d = resolveBootPose({ ...base, elapsedMs: 20001 });
+      ok('4k past the window the latch closes (framing once on the way out)',
+         d.framePreset === 'iso' && d.done === true);
+      const d2 = resolveBootPose({ ...base, framedKey: base.floorKey, elapsedMs: 20001 });
+      ok('4l past the window with nothing to do → idle + closed',
+         d2.framePreset === null && d2.done === true);
+      const d3 = resolveBootPose({ ...base, elapsedMs: 19999 });
+      ok('4m just inside the window keeps the latch armed', d3.done === false);
+    }
+    {
+      const d = resolveBootPose({ ...base, simsDefault: true });
+      ok('4n a card forcing Sims cam frames the dimetric preset instead of iso',
+         d.framePreset === 'sims');
+      const d2 = resolveBootPose({ ...base, simsDefault: true, saved: savedPose });
+      ok('4o …but a saved pose still wins over it', d2.restore === savedPose && d2.framePreset === null);
+    }
+
+    // ── 5. real Planner: viewPersist gating, restore, reset ────────────────
+    const mkFloor = (id, name, w = 10000, d = 8000) => ({
+      id, name, w, d, walls: [], furniture: [], lights: [], switches: [], sensors: [],
+      motionSensors: [], roamers: [], envSensors: [], doors: [], windows: [], bg: null,
+      rooms: [], bleProxies: [], alarmPanels: [], calendarPanels: [], thermostats: [],
+      safetySensors: [], robots: [], alertBeacons: [], presenceZones: [], cameras: [],
+      projectors: [], valves: [], plugs: [], groundAreas: [], pools: [], sprinklerZones: [],
+      voidAreas: [], infoCards: [], actionButtons: [], flagpoles: [], rulers: [],
+    });
+    class FakeHa {
+      constructor(seed) {
+        this.map = new Map();
+        for (const [k, v] of Object.entries(seed || {})) this.map.set(k, JSON.parse(JSON.stringify(v)));
+        this.states = {};
+      }
+      connect() { setTimeout(() => { this._conn?.('connected'); this._st?.({}, undefined); }, 0); }
+      onState(cb) { this._st = cb; }
+      onConn(cb) { this._conn = cb; }
+      async getUserData(k) { return this.map.has(k) ? JSON.parse(JSON.stringify(this.map.get(k))) : null; }
+      async setUserData(k, v) { this.map.set(k, JSON.parse(JSON.stringify(v))); }
+      async getDevices() { return []; }
+      async getEntityRegistry() { return []; }
+      async callService() {}
+      async getHistory() { return []; }
+      async getWeatherForecasts() { return null; }
+      async getCalendarEvents() { return []; }
+      async listRepairsIssues() { return []; }
+      async subscribePersistentNotifications() { return () => {}; }
+      async subscribeMqtt() { return () => {}; }
+      async publishMqtt() {}
+      async updateEntityRegistry() {}
+      async refreshStates() {}
+    }
+    const seedFor = (floors, currentFloorId) => ({
+      'diorama-configs': { version: 1, activeId: 'cfgA', configs: [{ id: 'cfgA', name: 'A', updatedAt: 1 }] },
+      'diorama-cfg-cfgA': { v: 2, floors, currentFloorId },
+    });
+    const bootPlanner = async (persist, seed) => {
+      const p = new Planner();
+      p.viewPersist = persist;
+      p.connectWith(new FakeHa(seed));
+      await waitFor(() => p.configIndex !== null);
+      return p;
+    };
+
+    // Real localStorage is what the Planner reads (browserViewStorage()).
+    const LS = window.localStorage;
+    const writeLs = (key, obj) => LS.setItem(key, JSON.stringify(obj));
+
+    {
+      LS.removeItem(VIEW2D_KEY); LS.removeItem(VIEW3D_KEY);
+      const p = await bootPlanner(true, seedFor([mkFloor('f1', 'One')], 'f1'));
+      ok('5a no saved entry → boots unpanned (classic fit-to-canvas)',
+         p.viewCenter === null && p.zoom === 1, `${JSON.stringify(p.viewCenter)},${p.zoom}`);
+      ok('5b activeConfigId resolved before the restore ran', p.activeConfigId === 'cfgA');
+    }
+    {
+      writeLs(VIEW2D_KEY, { configId: 'cfgA', floorId: 'f1', cx: 3210, cy: 1234, zoom: 2.25 });
+      const p = await bootPlanner(true, seedFor([mkFloor('f1', 'One')], 'f1'));
+      ok('5c matching saved 2D viewport is restored on load',
+         p.viewCenter && p.viewCenter.x === 3210 && p.viewCenter.y === 1234 && p.zoom === 2.25,
+         `${JSON.stringify(p.viewCenter)},${p.zoom}`);
+    }
+    {
+      writeLs(VIEW2D_KEY, { configId: 'cfgA', floorId: 'f1', cx: 3210, cy: 1234, zoom: 2.25 });
+      const p = await bootPlanner(false, seedFor([mkFloor('f1', 'One')], 'f1'));
+      ok('5d viewPersist=false (a Lovelace card) never restores',
+         p.viewCenter === null && p.zoom === 1, `${JSON.stringify(p.viewCenter)}`);
+    }
+    {
+      // Entry belongs to another floor of the same config.
+      writeLs(VIEW2D_KEY, { configId: 'cfgA', floorId: 'f2', cx: 3210, cy: 1234, zoom: 2.25 });
+      const p = await bootPlanner(true, seedFor([mkFloor('f1', 'One')], 'f1'));
+      ok('5e floor mismatch → no restore', p.viewCenter === null, `${JSON.stringify(p.viewCenter)}`);
+    }
+    {
+      writeLs(VIEW2D_KEY, { configId: 'OTHER', floorId: 'f1', cx: 3210, cy: 1234, zoom: 2.25 });
+      const p = await bootPlanner(true, seedFor([mkFloor('f1', 'One')], 'f1'));
+      ok('5f config mismatch → no restore (a different plan)', p.viewCenter === null);
+    }
+    {
+      // Out of the inflated rect for a 10000×8000 floor (margin 5000).
+      writeLs(VIEW2D_KEY, { configId: 'cfgA', floorId: 'f1', cx: 99999, cy: 0, zoom: 1.4 });
+      const p = await bootPlanner(true, seedFor([mkFloor('f1', 'One')], 'f1'));
+      ok('5g out-of-bounds saved centre is rejected (viewCenterFitsFloor guard)',
+         p.viewCenter === null && p.zoom === 1);
+    }
+    {
+      writeLs(VIEW2D_KEY, { configId: 'cfgA', floorId: 'f1', cx: 1, cy: 2, zoom: 3 });
+      const p = await bootPlanner(true, seedFor([mkFloor('f1', 'One')], 'f1'));
+      ok('5h malformed-free precondition: restored', p.viewCenter !== null);
+      LS.setItem(VIEW3D_KEY, JSON.stringify({ configId: 'cfgA', floorId: 'f1', pos: [1, 2, 3], target: [0, 0, 0] }));
+      p.resetView();
+      ok('5i resetView() resets the live view', p.viewCenter === null && p.zoom === 1);
+      ok('5j resetView() drops the saved 2D entry ("reset means reset")', LS.getItem(VIEW2D_KEY) === null);
+      // Deliberately 2D-scoped: resetView only touches viewCenter/zoom, and the
+      // 3D writer would re-save the (unchanged) live camera within its throttle
+      // window anyway — clearing it would be theatre.
+      ok('5k resetView() leaves the saved 3D pose alone (2D-scoped by design)',
+         LS.getItem(VIEW3D_KEY) !== null);
+      LS.removeItem(VIEW3D_KEY);
+    }
+    {
+      // A card's shared Planner must never clobber the panel's saved entries.
+      writeLs(VIEW2D_KEY, { configId: 'cfgA', floorId: 'f1', cx: 7, cy: 8, zoom: 1.1 });
+      const p = await bootPlanner(false, seedFor([mkFloor('f1', 'One')], 'f1'));
+      p.resetView();
+      ok('5l viewPersist=false: resetView leaves stored entries alone',
+         LS.getItem(VIEW2D_KEY) !== null);
+      LS.removeItem(VIEW2D_KEY);
+    }
+    {
+      // Floor-switch retention is unchanged by the move of viewCenterFitsFloor.
+      const p = await bootPlanner(true, seedFor([mkFloor('f1', 'One'), mkFloor('f2', 'Two')], 'f1'));
+      p.viewCenter = { x: 5000, y: 4000 }; p.zoom = 1.8;
+      p.switchFloor('f2');
+      ok('5m switchFloor still RETAINS an in-range pan/zoom',
+         p.viewCenter && p.viewCenter.x === 5000 && p.zoom === 1.8, `${JSON.stringify(p.viewCenter)},${p.zoom}`);
+      p.viewCenter = { x: 999999, y: 4000 };
+      p.switchFloor('f1');
+      ok('5n switchFloor still RESETS an out-of-range pan', p.viewCenter === null && p.zoom === 1);
+      LS.removeItem(VIEW2D_KEY); LS.removeItem(VIEW3D_KEY);
+    }
+    // ── 6. integration: the REAL <diorama-three-view> boot pose ────────────
+    // The pure matrix above proves the POLICY; this proves the WIRING — that a
+    // freshly mounted 3D view no longer sits on the renderer's rect-independent
+    // constructor pose (0, 9000, −6000), which is the reported bug.
+    {
+      const { Planner: P2 } = await import('./viewpersist.mod.js' + V);
+      const CTOR_DIST = Math.hypot(0, 9000, -6000);   // ≈ 10817 mm, rect-independent
+      const stage = document.createElement('div');
+      stage.style.cssText = 'position:fixed;left:-4000px;top:0;width:900px;height:600px';
+      document.body.appendChild(stage);
+
+      const mount = async (planner) => {
+        const host = document.createElement('div');
+        host.style.cssText = 'position:relative;width:900px;height:600px';
+        stage.appendChild(host);
+        const el = document.createElement('diorama-three-view');
+        el.planner = planner;
+        host.appendChild(el);
+        await waitFor(() => el._renderer && el._renderer.loaded, 1500);
+        await waitFor(() => el._bootPoseDone || (el._bootFramedKey !== ''), 1500);
+        await sleep(120);   // a few ticks so the pose has certainly been applied
+        return el;
+      };
+      const dist = (v) => Math.hypot(v.pos[0] - v.target[0], v.pos[1] - v.target[1], v.pos[2] - v.target[2]);
+
+      // 6a. No saved pose, no template → framed on the REAL 20 m rect.
+      LS.removeItem(VIEW3D_KEY);
+      {
+        const p = new P2();
+        p.viewPersist = true;
+        p.connectWith(new FakeHa(seedFor([mkFloor('f1', 'Big', 20000, 16000)], 'f1')));
+        await waitFor(() => p.configIndex !== null);
+        const el = await mount(p);
+        const v = el._renderer.cameraView();
+        // iso for a 20000×16000 rect: d = 20000·1.35, |pos| = d·0.75·√3 ≈ 35074.
+        ok('6a boot frames the real floor rect, not the fixed constructor pose',
+           v && Math.abs(dist(v) - 35074) < 400, v ? dist(v).toFixed(0) : 'no pose');
+        ok('6b …which is far further out than the old constructor pose',
+           v && dist(v) > CTOR_DIST * 3, `${v ? dist(v).toFixed(0) : '?'} vs ${CTOR_DIST.toFixed(0)}`);
+        ok('6c the boot latch closed after restoring/framing or is still armed in-window',
+           el._bootFramedKey === 'f1|20000|16000', el._bootFramedKey);
+        // The pose is written back device-locally.
+        await sleep(1400);
+        const stored = parseSavedCam3d(LS.getItem(VIEW3D_KEY));
+        ok('6d the live pose is persisted device-locally',
+           !!stored && stored.floorId === 'f1' && stored.configId === 'cfgA',
+           stored ? `${stored.configId}/${stored.floorId}` : 'none');
+        el.remove();
+      }
+
+      // 6e. A saved pose for this config+floor is restored verbatim.
+      {
+        const pose = { configId: 'cfgA', floorId: 'f1', pos: [4000, 3000, 5000], target: [0, 600, 0] };
+        LS.setItem(VIEW3D_KEY, JSON.stringify(pose));
+        const p = new P2();
+        p.viewPersist = true;
+        p.connectWith(new FakeHa(seedFor([mkFloor('f1', 'Big', 20000, 16000)], 'f1')));
+        await waitFor(() => p.configIndex !== null);
+        const el = await mount(p);
+        const v = el._renderer.cameraView();
+        ok('6e a saved pose for this config + floor is restored verbatim',
+           v && Math.abs(v.pos[0] - 4000) < 1 && Math.abs(v.pos[1] - 3000) < 1 &&
+                Math.abs(v.pos[2] - 5000) < 1 && Math.abs(v.target[1] - 600) < 1,
+           v ? JSON.stringify(v.pos) : 'no pose');
+        el.remove();
+      }
+
+      // 6f. viewPersist=false (a Lovelace card) ignores the stored pose and
+      //     still gets the corrected default framing.
+      {
+        LS.setItem(VIEW3D_KEY, JSON.stringify(
+          { configId: 'cfgA', floorId: 'f1', pos: [4000, 3000, 5000], target: [0, 600, 0] }));
+        const p = new P2();
+        p.viewPersist = false;
+        p.connectWith(new FakeHa(seedFor([mkFloor('f1', 'Big', 20000, 16000)], 'f1')));
+        await waitFor(() => p.configIndex !== null);
+        const el = await mount(p);
+        const v = el._renderer.cameraView();
+        ok('6f viewPersist=false ignores the stored pose…',
+           v && Math.abs(v.pos[0] - 4000) > 100, v ? JSON.stringify(v.pos.map(Math.round)) : 'no pose');
+        ok('6g …but still gets the corrected default framing',
+           v && Math.abs(dist(v) - 35074) < 400, v ? dist(v).toFixed(0) : 'no pose');
+        el.remove();
+      }
+
+      // 6h. A URL / card `cam=` template beats the saved pose (kiosk links).
+      {
+        LS.setItem(VIEW3D_KEY, JSON.stringify(
+          { configId: 'cfgA', floorId: 'f1', pos: [4000, 3000, 5000], target: [0, 600, 0] }));
+        const p = new P2();
+        p.viewPersist = true;
+        p.connectWith(new FakeHa(seedFor([mkFloor('f1', 'Big', 20000, 16000)], 'f1')));
+        await waitFor(() => p.configIndex !== null);
+        p.urlTemplate = { cam: [11000, 9000, 12000, 0, 0, 0] };
+        const el = await mount(p);
+        const v = el._renderer.cameraView();
+        ok('6h a URL/card cam= template wins over the saved pose',
+           v && Math.abs(v.pos[0] - 11000) < 1 && Math.abs(v.pos[2] - 12000) < 1,
+           v ? JSON.stringify(v.pos.map(Math.round)) : 'no pose');
+        el.remove();
+      }
+      LS.removeItem(VIEW3D_KEY);
+      stage.remove();
+    }
+  } catch (err) {
+    ok('unhandled error', false, (err && (err.stack || err.message)) || String(err));
+  }
+
+  const passN = results.filter(r => r.pass).length;
+  const failN = results.length - passN;
+  const rows = document.getElementById('rows');
+  for (const r of results) {
+    rows.insertAdjacentHTML('beforeend',
+      `<div class="row"><span class="name">${r.name}</span>` +
+      `<span class="${r.pass ? 'pass' : 'fail'}">${r.pass ? 'PASS' : 'FAIL'}` +
+      `${r.extra ? ` <span class="extra">${r.extra}</span>` : ''}</span></div>`);
+  }
+  const sum = document.getElementById('summary');
+  sum.textContent = `VIEWPERSIST ${failN === 0 ? 'PASS' : 'FAIL'} ${passN}/${results.length}`;
+  sum.className = failN === 0 ? 'okbg' : 'badbg';
+  document.title = `VIEWPERSIST ${failN === 0 ? 'PASS' : 'FAIL'} ${passN}/${results.length}` +
+    (failN ? ' | ' + results.filter(r => !r.pass).map(r => r.name).join(' · ') : '');
+</script>

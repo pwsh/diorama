@@ -7,6 +7,7 @@ import {
   onCanvasMouseDown, onCanvasMouseMove, onCanvasMouseUp,
   onCanvasClick, onCanvasDblClick, finishZoneEdit, cancelZoneEdit,
 } from '../canvas-interact.js';
+import { browserViewStorage, saveView2d } from '../view-persist.js';
 import type { Planner } from '../planner.js';
 
 @customElement('diorama-canvas-2d')
@@ -128,7 +129,39 @@ export class Canvas2D extends LitElement {
 
   private _resetView = () => {
     this.planner.resetView();
+    // resetView() dropped the stored entry; forget the signature too so the
+    // NEXT pan writes even if it happens to land on the same numbers.
+    this._persistSig = '';
   };
+
+  // Throttled device-local write of the 2D viewport (`Planner.viewPersist`
+  // only — cards opt out, see the flag's comment). Driven from the RAF instead
+  // of the individual gesture handlers so it covers wheel, mouse pan, pinch,
+  // one-finger pan, floor switches and window resizes in ONE place; the
+  // rounded-signature compare makes a still view free. Only a REAL pan/zoom is
+  // written — `viewCenter === null` is the fit-to-canvas default and there is
+  // nothing to remember (dropping the entry is `resetView`'s job alone, so a
+  // floor switch can't silently erase another floor's saved viewport).
+  private static readonly PERSIST_MS = 1200;
+  private _persistAt = 0;
+  private _persistSig = '';
+
+  private _persistView(): void {
+    const p = this.planner;
+    // configIndex null → `activeConfigId` is still the pre-load placeholder.
+    if (!p.viewPersist || !p.configIndex) return;
+    const vc = p.viewCenter;
+    if (!vc) return;
+    const now = performance.now();
+    if (now - this._persistAt < Canvas2D.PERSIST_MS) return;
+    this._persistAt = now;
+    const f = p.floor();
+    const sig = `${p.activeConfigId}|${f.id}|${Math.round(vc.x)}|${Math.round(vc.y)}|${p.zoom.toFixed(3)}`;
+    if (sig === this._persistSig) return;
+    this._persistSig = sig;
+    saveView2d(browserViewStorage(),
+      { configId: p.activeConfigId, floorId: f.id, cx: vc.x, cy: vc.y, zoom: p.zoom });
+  }
 
   // Convert canvas-pixel point (scaled by dpr) to world mm using current view.
   private _pxPointToMm(canvasX: number, canvasY: number): { x: number; y: number } {
@@ -532,6 +565,7 @@ export class Canvas2D extends LitElement {
           this._resize();
         }
         this._recomputeView();
+        this._persistView();
         const bgImg = this._ensureBg();
         if (this._ctx) drawAll(this._ctx, this.planner, this._view, bgImg);
       } catch (err) {

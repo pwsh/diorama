@@ -41,6 +41,10 @@ export class App extends LitElement {
   // appended (i.e. before connectedCallback) so the token auto-launch skips.
   adoptPlanner(p: Planner): void {
     this._planner = p;
+    // The panel owns ONE Planner per tab: remember its viewport device-locally
+    // (localStorage — NOT the synced store), in every uiMode. See
+    // Planner.viewPersist / src/view-persist.ts.
+    p.viewPersist = true;
     try { (window as unknown as { __dioramaPlanner?: Planner }).__dioramaPlanner = p; } catch { /* ignore */ }
     this._planner.addEventListener('config', () => this.requestUpdate());
     this._connected = true;
@@ -212,6 +216,7 @@ export class App extends LitElement {
   private _launch(url: string, token: string): void {
     this._planner = new Planner();
     try { (window as unknown as { __dioramaPlanner?: Planner }).__dioramaPlanner = this._planner; } catch { /* ignore */ }
+    this._planner.viewPersist = true;   // device-local viewport retention (see adoptPlanner)
     this._planner.connect(url, token);
     this._planner.addEventListener('conn', () => {
       if (this._planner?.conn === 'auth_invalid') {
@@ -232,6 +237,7 @@ export class App extends LitElement {
   private _launchOffline(): void {
     this._planner = new Planner();
     try { (window as unknown as { __dioramaPlanner?: Planner }).__dioramaPlanner = this._planner; } catch { /* ignore */ }
+    this._planner.viewPersist = true;   // device-local viewport retention (see adoptPlanner)
     this._planner.connectWith(new LocalApi());
     this._planner.addEventListener('config', () => this.requestUpdate());
     this._connected = true;

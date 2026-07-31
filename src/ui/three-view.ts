@@ -23,6 +23,7 @@ import { loadModel } from '../model-store.js';
 import { newId } from '../storage.js';
 import type { Planner } from '../planner.js';
 import { floorSwitchCameraDelta } from '../planner.js';
+import { browserViewStorage, loadCam3d, saveCam3d, resolveBootPose } from '../view-persist.js';
 import type { Scene3D } from '../types.js';
 
 @customElement('diorama-three-view')
@@ -72,7 +73,7 @@ export class ThreeView extends LitElement {
       <button title=${title}
               style="font-size:10px;padding:3px 7px;background:#1c2733;border:1px solid #33465a;
                      border-radius:3px;color:#cfd8dc;cursor:pointer"
-              @click=${() => this._renderer?.applyViewPreset(k)}>${label}</button>`;
+              @click=${() => { this._markPosed(); this._renderer?.applyViewPreset(k); }}>${label}</button>`;
     return html`
       <div id="three-area" style="position:absolute;inset:0"></div>
       ${this.compact ? nothing : html`
@@ -127,7 +128,7 @@ export class ThreeView extends LitElement {
                   @change=${(e: Event) => {
                     const id = (e.target as HTMLSelectElement).value;
                     const v = (p.store.views3d ?? []).find(x => x.id === id);
-                    if (v) this._renderer?.setCameraView(v.pos, v.target);
+                    if (v) { this._markPosed(); this._renderer?.setCameraView(v.pos, v.target); }
                     (e.target as HTMLSelectElement).value = '';
                   }}>
             <option value="">Saved…</option>
@@ -154,7 +155,7 @@ export class ThreeView extends LitElement {
   // 45°-azimuth snap; second click releases the snap (leaving the pose alone).
   private _toggleSimsCam(): void {
     this._simsCamOn = !this._simsCamOn;
-    if (this._simsCamOn) this._renderer?.applyViewPreset('sims');
+    if (this._simsCamOn) { this._markPosed(); this._renderer?.applyViewPreset('sims'); }
     this._renderer?.setSimsCam(this._simsCamOn);
     this.requestUpdate();
   }
@@ -605,6 +606,12 @@ export class ThreeView extends LitElement {
     super.disconnectedCallback();
     if (this._raf) cancelAnimationFrame(this._raf);
     this._raf = 0;
+    // Final (un-throttled) pose write before the renderer goes away, so a
+    // 3D→2D switch or a card detach doesn't lose up to PERSIST_MS of framing.
+    if (this._renderer?.loaded && this.planner) {
+      try { this._persistCam3d(this._renderer, this.planner, this.planner.floor(), true); }
+      catch { /* teardown must never throw */ }
+    }
     this._ro?.disconnect();
     this._renderer?.destroy();
     this._renderer = null;
@@ -656,6 +663,106 @@ export class ThreeView extends LitElement {
       this._renderer.applyViewPreset('iso');
       this._tplPending = false;
     }
+  }
+
+  // ── Boot camera pose + device-local retention ─────────────────────────────
+  //
+  // THE BUG this fixes: the renderer's constructor parks the camera at a FIXED
+  // `(0, 9000, -6000)` looking at the origin, and nothing ever re-framed it —
+  // `_applyUrlTemplate` bails immediately when there is no `cam=` / `view3d=`
+  // (the `applyViewPreset('iso')` in it is only the fallback for a NAMED view
+  // that never resolved). So every reload landed on a pose whose distance
+  // (~10.8 m) is independent of the plan: on a 20 m house the Iso framing is
+  // ~3× further out, which is exactly the reported "zoomed in a lot".
+  //
+  // PRECEDENCE (highest first):
+  //   1. URL / card `cam=` or `view3d=`  — kiosk links must keep working, so
+  //      the whole block below goes inert the moment a template exists.
+  //   2. The device-local saved pose for THIS config + floor (`viewPersist`).
+  //   3. The default framing (`iso`, or `sims` when a card forced Sims cam),
+  //      computed against the REAL floor rect.
+  //
+  // (3) is a LATCH, not a one-shot: `Planner.store` is served from the
+  // localStorage cache first and replaced when HA's authoritative body lands,
+  // so the floor rect can change out from under the first framing. While the
+  // user has not posed the camera and the boot window is open, a changed rect
+  // re-frames. Any manual gesture (`cameraGestures()`) or a view-bar / saved-
+  // view / Sims click (`_markPosed`) closes the latch immediately — the camera
+  // is never yanked out from under someone's hands.
+  private static readonly BOOT_REFRAME_MS = 20000;
+  private _bootPoseDone = false;
+  private _bootStart = 0;
+  private _bootFramedKey = '';   // `${floorId}|${w}|${d}` the default framing used
+  private _savedProbeKey = '';   // `${configId}|${floorKey}` already looked up in storage
+  private _userPosed = false;
+
+  /** Close the boot re-framing latch: the user has explicitly posed the view. */
+  private _markPosed(): void { this._userPosed = true; this._bootPoseDone = true; }
+
+  private _applyBootPose(r: ThreeDRenderer, p: Planner,
+                         f: import('../types.js').Floor): void {
+    if (this._bootPoseDone) return;
+    if (!this._bootStart) this._bootStart = performance.now();
+    // Stale-chunk safe: an older renderer chunk has no cameraGestures().
+    if ((r.cameraGestures?.() ?? 0) > 0) this._userPosed = true;
+    // The saved pose is only consulted once the config registry has loaded —
+    // `activeConfigId` is a placeholder until then, and restoring against it
+    // could hand one config's pose to another. Until it lands, the default
+    // framing below keeps the view correct.
+    const tpl = p.urlTemplate;
+    // Probe storage at most ONCE per (config, floor rect) — a miss must not
+    // re-parse localStorage on every frame of the boot window.
+    const probeKey = `${p.activeConfigId}|${f.id}|${f.w}|${f.d}`;
+    let saved: { pos: [number, number, number]; target: [number, number, number] } | null = null;
+    if (p.viewPersist && p.configIndex && !tpl.cam && !tpl.view3d && probeKey !== this._savedProbeKey) {
+      this._savedProbeKey = probeKey;
+      saved = loadCam3d(browserViewStorage(), p.activeConfigId, f.id, f.w, f.d);
+    }
+    const dec = resolveBootPose({
+      hasTemplate: !!(tpl.cam || tpl.view3d),
+      userPosed: this._userPosed,
+      saved,
+      floorKey: `${f.id}|${f.w}|${f.d}`,
+      framedKey: this._bootFramedKey,
+      elapsedMs: performance.now() - this._bootStart,
+      windowMs: ThreeView.BOOT_REFRAME_MS,
+      simsDefault: this.simsCamOverride === true,
+    });
+    this._bootFramedKey = dec.framedKey;
+    if (dec.restore) r.setCameraView(dec.restore.pos, dec.restore.target);
+    // Framed AFTER every update* in the tick, so the renderer's `_fw`/`_fd` are
+    // already this floor's and even the FIRST frame lands on the real rect.
+    else if (dec.framePreset) r.applyViewPreset(dec.framePreset);
+    if (dec.done) this._bootPoseDone = true;
+  }
+
+  // Throttled write of the current camera pose (device-local, `viewPersist`
+  // only — see Planner.viewPersist for why cards opt out). Rides the existing
+  // per-tick `cameraView()` read, writes at most every PERSIST_MS and only when
+  // the rounded pose actually changed, so a still camera costs one comparison.
+  // Skipped while auto-follow / cinematic orbit drive the camera: those are
+  // machine poses that re-establish themselves on load, and persisting them
+  // would mean a localStorage write every throttle window, forever.
+  private static readonly PERSIST_MS = 1200;
+  private _persistAt = 0;
+  private _persistSig = '';
+
+  private _persistCam3d(r: ThreeDRenderer, p: Planner,
+                        f: import('../types.js').Floor, force = false): void {
+    if (!p.viewPersist || !p.configIndex) return;
+    const sc = this._sc3();
+    if (sc?.autoFollow || sc?.cinematicOrbit) return;
+    const now = performance.now();
+    if (!force && now - this._persistAt < ThreeView.PERSIST_MS) return;
+    this._persistAt = now;
+    const v = r.cameraView();
+    if (!v) return;
+    const rd = (n: number): number => Math.round(n);
+    const sig = `${p.activeConfigId}|${f.id}|${v.pos.map(rd).join(',')}|${v.target.map(rd).join(',')}`;
+    if (sig === this._persistSig) return;
+    this._persistSig = sig;
+    saveCam3d(browserViewStorage(),
+      { configId: p.activeConfigId, floorId: f.id, pos: v.pos, target: v.target });
   }
 
   // Thin wrapper over the shared resolver (src/time-of-day.ts) — kept so the
@@ -2242,6 +2349,12 @@ export class ThreeView extends LitElement {
         props: p.store.avatarProps !== false };
       // Targets every frame — persistent rigs mutate in place (no rebuild).
       r.updateTargets(targets, ctx);
+
+      // Camera LAST: the boot framing calls applyViewPreset, which frames off
+      // the renderer's `_fw`/`_fd` — set by the updateFloor above, so running
+      // here means even the very FIRST frame is framed on the real rect.
+      this._applyBootPose(r, p, f);
+      this._persistCam3d(r, p, f);
   }
 
   // ── Imported 3D model sync ────────────────────────────────────────────
